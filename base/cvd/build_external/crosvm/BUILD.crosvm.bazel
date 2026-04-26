@@ -1,0 +1,105 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_python//python:defs.bzl", "py_binary")
+
+package(
+    default_visibility = [
+        "@//:android_cuttlefish",
+    ],
+)
+
+genrule(
+    name = "crosvm_gpu_display_wayland_protocol_linux_dmabuf_unstable_v1_impl",
+    srcs = ["gpu_display/protocol/linux-dmabuf-unstable-v1.xml"],
+    outs = ["linux-dmabuf-unstable-v1.c"],
+    cmd = "$(location @wayland//:wayland_scanner) -s private-code < $(SRCS) > $(OUTS)",
+    tools = ["@wayland//:wayland_scanner"],
+)
+
+genrule(
+    name = "crosvm_gpu_display_wayland_protocol_linux_dmabuf_unstable_server_header",
+    srcs = ["gpu_display/protocol/linux-dmabuf-unstable-v1.xml"],
+    outs = ["linux-dmabuf-unstable-v1-server-protocol.h"],
+    cmd = "$(location @wayland//:wayland_scanner) -s server-header < $(SRCS) > $(OUTS)",
+    tools = ["@wayland//:wayland_scanner"],
+)
+
+genrule(
+    name = "crosvm_gpu_display_wayland_protocol_virtio_gpu_metadata_impl",
+    srcs = ["gpu_display/protocol/virtio-gpu-metadata-v1.xml"],
+    outs = ["virtio-gpu-metadata-v1.c"],
+    cmd = "$(location @wayland//:wayland_scanner) -s private-code < $(SRCS) > $(OUTS)",
+    tools = ["@wayland//:wayland_scanner"],
+)
+
+genrule(
+    name = "crosvm_gpu_display_wayland_protocol_virtio_gpu_metadata_server_header",
+    srcs = ["gpu_display/protocol/virtio-gpu-metadata-v1.xml"],
+    outs = ["virtio-gpu-metadata-v1-server-protocol.h"],
+    cmd = "$(location @wayland//:wayland_scanner) -s server-header < $(SRCS) > $(OUTS)",
+    tools = ["@wayland//:wayland_scanner"],
+)
+
+genrule(
+    name = "crosvm_gpu_display_wayland_protocol_xdg_shell_impl",
+    srcs = ["gpu_display/protocol/xdg-shell.xml"],
+    outs = ["xdg-shell.c"],
+    cmd = "$(location @wayland//:wayland_scanner) -s private-code < $(SRCS) > $(OUTS)",
+    tools = ["@wayland//:wayland_scanner"],
+)
+
+genrule(
+    name = "crosvm_gpu_display_wayland_protocol_xdg_shell_server_header",
+    srcs = ["gpu_display/protocol/xdg-shell.xml"],
+    outs = ["xdg-shell-server-protocol.h"],
+    cmd = "$(location @wayland//:wayland_scanner) -s server-header < $(SRCS) > $(OUTS)",
+    tools = ["@wayland//:wayland_scanner"],
+)
+
+cc_library(
+    name = "crosvm_gpu_display_wayland_protocols",
+    srcs = [
+        ":crosvm_gpu_display_wayland_protocol_linux_dmabuf_unstable_v1_impl",
+        ":crosvm_gpu_display_wayland_protocol_virtio_gpu_metadata_impl",
+        ":crosvm_gpu_display_wayland_protocol_xdg_shell_impl",
+    ],
+    hdrs = [
+        ":crosvm_gpu_display_wayland_protocol_linux_dmabuf_unstable_server_header",
+        ":crosvm_gpu_display_wayland_protocol_virtio_gpu_metadata_server_header",
+        ":crosvm_gpu_display_wayland_protocol_xdg_shell_server_header",
+    ],
+    includes = [
+        ".",
+    ],
+    deps = [
+        "@wayland//:wayland_server",
+    ],
+    copts = [
+        "-Wno-unused-function",
+    ],
+)
+
+py_binary(
+    name = "compile_seccomp_policy",
+    srcs = [
+        "third_party/minijail/tools/arch.py",
+        "third_party/minijail/tools/bpf.py",
+        "third_party/minijail/tools/compile_seccomp_policy.py",
+        "third_party/minijail/tools/compiler.py",
+        "third_party/minijail/tools/parser.py",
+    ],
+    precompile = "enabled",
+    imports = ["third_party/minijail/tools"],
+)
+
+# see https://www.github.com/bazel-contrib/rules_python/issues/2544
+
+filegroup(
+    name = "compile_seccomp_policy_zip",
+    srcs = [":compile_seccomp_policy"],
+    output_group = "python_zip_file",
+)
+
+filegroup(
+    name = "minijail_sources",
+    srcs = glob(["third_party/minijail/**"]),
+)

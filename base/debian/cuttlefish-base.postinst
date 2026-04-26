@@ -1,0 +1,33 @@
+#!/bin/sh
+
+set -e
+
+case "$1" in
+    (configure)
+    # unlink if it's a symlink
+    if [ -L /var/empty ]; then
+        unlink /var/empty
+    fi
+    # delete if it's a file
+    if [ -f /var/empty ]; then
+        rm -rf /var/empty
+    fi
+    # guarantees it's a directory
+    mkdir -p /var/empty
+    if ! getent group cvdnetwork > /dev/null 2>&1
+    then
+        addgroup --system cvdnetwork
+    fi
+
+    # Create the kvm group when running inside a docker container.
+    if test -f /.dockerenv && ( ! getent group kvm > /dev/null 2>&1 )
+    then
+        addgroup --system kvm
+    fi
+
+    setcap cap_net_admin,cap_net_bind_service,cap_net_raw=+ep \
+        /usr/lib/cuttlefish-common/bin/cvdalloc
+    ;;
+esac
+
+#DEBHELPER#

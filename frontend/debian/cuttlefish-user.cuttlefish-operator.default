@@ -1,0 +1,24 @@
+# defaults for cuttlefish-operator
+
+# The network address to listen on for both HTTP and HTTPS.
+# Defaults to all ip addresses.
+operator_listen_address=0.0.0.0
+#
+# The port on which the operator server should listen on for plain HTTP.
+# Defaults to 1080.
+# operator_http_port=
+#
+# The port on which the operator server should listen on for HTTPS.
+# Serve over http only when not provided.
+operator_https_port=1443
+#
+# The directory where the TLS certificate needed to establish the HTTPS
+# communication lives.
+# Defaults to "/etc/cuttlefish-common/operator/cert".
+# operator_tls_cert_dir=
+#
+# Where web UI in the application is from
+# If it isn't empty, the application uses web UI from the url,
+# else, it uses web pages which is generated during the build
+# Defaults to ""
+# operator_webui_url=

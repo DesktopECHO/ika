@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Track-tip configuration: revision="main" follows the ika repo's main
+    branch. Tagged release builds should replace this with a specific commit
+    SHA or tag (`revision="refs/tags/vX.Y"`) so the bundle is reproducible.
+    The STRICT_RELEASE=1 gate in write_release_metadata.py fails the build if
+    a release input is still floating.
+-->
+<manifest>
+  <remote name="desktopecho" fetch="https://github.com/DesktopECHO" />
+
+  <project
+      path="vendor/ika"
+      name="ika"
+      remote="desktopecho"
+      revision="main">
+    <linkfile src="lineageos" dest="vendor/lineage_desktop" />
+  </project>
+</manifest>

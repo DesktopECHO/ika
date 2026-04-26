@@ -1,0 +1,48 @@
+# Patch application order. Each line is "<project> <patch>" with no whitespace
+# inside either field. Externals come first so dependent framework/Launcher3
+# patches see the modified headers/exports.
+external/google-highway patches/external-google-highway.patch
+external/skia patches/external-skia.patch
+external/XMP-Toolkit-SDK patches/external-XMP-Toolkit-SDK.patch
+art patches/art.patch
+device/google/cuttlefish patches/device-google-cuttlefish.patch
+frameworks/av patches/frameworks-av.patch
+# frameworks/base is patched twice on purpose: the first patch is the generic
+# desktop framework changes (DesktopExperienceFlags, SettingsProvider seed, QS
+# changes); the second is the native-bridge-only changes (NativeLibraryHelper,
+# PackageAbiHelperImpl). They touch disjoint files, so order is not critical,
+# but keep them as separate patches so the native-bridge work can be reverted
+# independently when chasing an AOSP rebase.
+frameworks/base patches/frameworks-base.patch
+frameworks/base patches/frameworks-base-native-bridge.patch
+system/core patches/system-core.patch
+system/sepolicy patches/system-sepolicy.patch
+packages/apps/Launcher3 patches/packages-apps-Launcher3.patch
+# Supplementary show-desktop proxy patch — applies on top of the main
+# Launcher3 patch and keeps the small SystemUiProxy wrapper isolated from the
+# large base patch's other SystemUiProxy hunks.
+packages/apps/Launcher3 patches/packages-apps-Launcher3-show-desktop-proxy.patch
+# Supplementary dynamic-display patch — applies on top of the main Launcher3
+# patch. Delivers R1 (IDP recompute on display resize), Fix 2a (push fresh
+# DP into the all-apps grid), Fix 2d (taskbar popup anchored above the bar
+# with WindowManager.currentWindowMetrics-based maxY clamping), Fix 2e (re-
+# enable taskbar recreate on screen-size / orientation changes for desktop
+# displays only), and Fix 2f (taskbar fullscreen window size from live
+# WindowMetrics, not cached DeviceProfile). Kept separate so the dynamic-
+# display logic can be reverted independently when chasing an upstream
+# rebase of the main Launcher3 patch.
+packages/apps/Launcher3 patches/packages-apps-Launcher3-dynamic-display.patch
+# Supplementary visual-effects patch — applies on top of the main Launcher3
+# patch and keeps desktop polish toggles isolated from behavior fixes.
+packages/apps/Launcher3 patches/packages-apps-Launcher3-visual-effects.patch
+# Supplementary taskbar-deep-shortcuts patch — applies on top of the main
+# Launcher3 patch. Single-hunk fix that unstubs app deep shortcuts in the
+# taskbar long-press popup (upstream TaskbarPopupController forces them to 0
+# for DISPLAY_TASKBAR icons; the data path actually works).
+packages/apps/Launcher3 patches/packages-apps-Launcher3-taskbar-deep-shortcuts.patch
+# Supplementary live-bounds patch — applies on top of the taskbar popup/deep
+# shortcut fixes and keeps runtime taskbar placement tied to WindowMetrics
+# instead of stale DeviceProfile screen dimensions.
+packages/apps/Launcher3 patches/packages-apps-Launcher3-live-display-bounds.patch
+vendor/lineage patches/vendor-lineage.patch
+build/release patches/build-release.patch

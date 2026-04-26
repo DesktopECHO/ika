@@ -1,0 +1,98 @@
+//
+// Copyright (C) 2025 The Android Open Source Project
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#pragma once
+
+#include <functional>
+#include <map>
+#include <optional>
+#include <ostream>
+#include <set>
+#include <string>
+#include <string_view>
+
+#include "cuttlefish/host/libs/zip/libzip_cc/archive.h"
+
+#include "cuttlefish/host/libs/config/fetcher_config.h"
+#include "cuttlefish/host/libs/config/file_source.h"
+#include "cuttlefish/pretty/pretty.h"
+#include "cuttlefish/pretty/struct.h"
+#include "cuttlefish/result/result.h"
+
+namespace cuttlefish {
+
+/**
+ * An archive that was downloaded by `cvd fetch` or created by a build system
+ * runnning locally.
+ *
+ * The archive may be partially or completely extracted, and the archive may
+ * have been deleted as part of the fetch process, leaving only extracted files.
+ */
+class BuildArchive {
+ public:
+  static Result<BuildArchive> FromFetcherConfig(const FetcherConfig&,
+                                                FileSource,
+                                                std::string_view archive_name);
+  static Result<BuildArchive> FromZip(ReadableZip);
+  static Result<BuildArchive> FromZipPath(const std::string&);
+
+  /**
+   * Returns the filenames of the members held in the archive.
+   *
+   * If a subset of the archive members were extracted and the archive was
+   * deleted, this may be incomplete.
+   */
+  const std::set<std::string, std::less<void>>& Members() const;
+
+  /**
+   * Returns the file path to a member of the archive, extracted on the
+   * filesystem. If the member is not already extracted and the archive is
+   * present, it will extract the file into `extract_dir`.
+   *
+   * Error conditions:
+   *
+   * - The archive does not have a member called `member_name`.
+   * - The file needed to be extracted, but `extract_dir` was not present.
+   * - There was a failure to extract the file member.
+   */
+  Result<std::string> MemberFilepath(
+      std::string_view member_name,
+      std::optional<std::string_view> extract_dir);
+
+  Result<std::string> MemberContents(std::string_view name);
+
+  friend PrettyStruct Pretty(const BuildArchive&, PrettyAdlPlaceholder unused);
+
+ private:
+  BuildArchive(std::optional<FileSource>,
+               std::map<std::string, std::string, std::less<void>>,
+               std::set<std::string, std::less<void>>,
+               std::optional<ReadableZip>);
+
+  std::optional<FileSource> source_;
+  std::map<std::string, std::string, std::less<void>> extracted_;
+  std::set<std::string, std::less<void>> members_;
+  std::optional<ReadableZip> zip_file_;
+};
+
+// For libfmt
+std::string format_as(const BuildArchive&);
+
+std::ostream& operator<<(std::ostream&, const BuildArchive&);
+
+PrettyStruct Pretty(const BuildArchive&,
+                    PrettyAdlPlaceholder unused = PrettyAdlPlaceholder());
+
+}  // namespace cuttlefish

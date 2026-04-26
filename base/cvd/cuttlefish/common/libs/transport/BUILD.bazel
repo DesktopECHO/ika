@@ -1,0 +1,23 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_library(
+    name = "transport",
+    srcs = [
+        "channel.cpp",
+        "channel_sharedfd.cpp",
+    ],
+    hdrs = [
+        "channel.h",
+        "channel_sharedfd.h",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+    ],
+)

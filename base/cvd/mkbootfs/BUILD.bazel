@@ -1,0 +1,19 @@
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cc_binary(
+    name = "mkbootfs",
+    srcs = [
+        "mkbootfs.cpp",
+    ],
+    copts = ["-std=gnu++17"],
+    includes = ["include"],
+    deps = [
+        "//android:log_header",
+        "//libbase",
+        "@android_system_core//:libcutils",
+    ],
+)

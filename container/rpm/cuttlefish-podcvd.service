@@ -1,0 +1,14 @@
+[Unit]
+Description=Cuttlefish podcvd networking preparation
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/sysconfig/cuttlefish-podcvd
+ExecStart=/usr/libexec/cuttlefish/cuttlefish-podcvd start
+ExecStop=/usr/libexec/cuttlefish/cuttlefish-podcvd stop
+
+[Install]
+WantedBy=multi-user.target

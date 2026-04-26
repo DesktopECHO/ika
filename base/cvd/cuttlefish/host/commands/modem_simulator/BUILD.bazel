@@ -1,0 +1,273 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary", "cf_cc_library", "cf_cc_test")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+exports_files(glob(["etc/**"]))
+
+cf_cc_library(
+    name = "channel_monitor",
+    srcs = ["channel_monitor.cpp"],
+    hdrs = ["channel_monitor.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/host/commands/modem_simulator:client",
+        "//cuttlefish/host/commands/modem_simulator:virtual_modem_simulator",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "client",
+    srcs = ["client.cc"],
+    hdrs = ["client.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_library(
+    name = "command_parser",
+    srcs = ["command_parser.cpp"],
+    hdrs = ["command_parser.h"],
+    deps = [
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_test(
+    name = "command_parser_test",
+    srcs = ["unittest/command_parser_test.cpp"],
+    deps = [
+        "//cuttlefish/host/commands/modem_simulator:command_parser",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cf_cc_library(
+    name = "data_service",
+    srcs = ["data_service.cpp"],
+    hdrs = ["data_service.h"],
+    deps = [
+        "//cuttlefish/host/commands/modem_simulator:device_config",
+        "//cuttlefish/host/commands/modem_simulator:modem_service",
+        "//libbase",
+    ],
+)
+
+cf_cc_library(
+    name = "device_config",
+    srcs = ["cf_device_config.cpp"],
+    hdrs = ["device_config.h"],
+    deps = [
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+    ],
+)
+
+cf_cc_library(
+    name = "misc_service",
+    srcs = ["misc_service.cpp"],
+    hdrs = ["misc_service.h"],
+    deps = [
+        "//cuttlefish/host/commands/modem_simulator:device_config",
+        "//cuttlefish/host/commands/modem_simulator:modem_service",
+    ],
+)
+
+cf_cc_library(
+    name = "modem_service",
+    srcs = ["modem_service.cpp"],
+    hdrs = ["modem_service.h"],
+    deps = [
+        "//cuttlefish/host/commands/modem_simulator:channel_monitor",
+        "//cuttlefish/host/commands/modem_simulator:command_parser",
+        "//cuttlefish/host/commands/modem_simulator:device_config",
+        "//cuttlefish/host/commands/modem_simulator:thread_looper",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_library(
+    name = "modem_simulator_class",
+    srcs = ["modem_simulator.cpp"],
+    hdrs = ["modem_simulator.h"],
+    deps = [
+        "//cuttlefish/host/commands/modem_simulator:channel_monitor",
+        "//cuttlefish/host/commands/modem_simulator:data_service",
+        "//cuttlefish/host/commands/modem_simulator:misc_service",
+        "//cuttlefish/host/commands/modem_simulator:modem_service",
+        "//cuttlefish/host/commands/modem_simulator:modem_simulator_lib",
+        "//cuttlefish/host/commands/modem_simulator:nvram_config",
+        "//cuttlefish/host/commands/modem_simulator:sup_service",
+        "//cuttlefish/host/commands/modem_simulator:thread_looper",
+        "//cuttlefish/host/commands/modem_simulator:virtual_modem_simulator",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_library(
+    name = "modem_simulator_lib",
+    srcs = [
+        "call_service.cpp",
+        "network_service.cpp",
+        "sim_service.cpp",
+        "sms_service.cpp",
+        "stk_service.cpp",
+    ],
+    hdrs = [
+        "call_service.h",
+        "network_service.h",
+        "sim_service.h",
+        "sms_service.h",
+        "stk_service.h",
+    ],
+    clang_tidy_enabled = False,  # TODO(b/405163202): Enable back once migration is completed.
+    copts = [
+        "-Wall",
+        "-Werror",
+        "-Wno-unused-const-variable",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/commands/modem_simulator:channel_monitor",
+        "//cuttlefish/host/commands/modem_simulator:client",
+        "//cuttlefish/host/commands/modem_simulator:command_parser",
+        "//cuttlefish/host/commands/modem_simulator:data_service",
+        "//cuttlefish/host/commands/modem_simulator:device_config",
+        "//cuttlefish/host/commands/modem_simulator:misc_service",
+        "//cuttlefish/host/commands/modem_simulator:modem_service",
+        "//cuttlefish/host/commands/modem_simulator:modem_technology",
+        "//cuttlefish/host/commands/modem_simulator:network_service_constants",
+        "//cuttlefish/host/commands/modem_simulator:nvram_config",
+        "//cuttlefish/host/commands/modem_simulator:pdu_parser",
+        "//cuttlefish/host/commands/modem_simulator:sup_service",
+        "//cuttlefish/host/commands/modem_simulator:thread_looper",
+        "//cuttlefish/host/commands/modem_simulator:virtual_modem_simulator",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@jsoncpp",
+        "@tinyxml2",
+    ],
+)
+
+cf_cc_binary(
+    name = "modem_simulator",
+    srcs = [
+        "main.cpp",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:tee_logging",
+        "//cuttlefish/host/commands/modem_simulator:modem_simulator_class",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/strings",
+        "@fmt",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "modem_technology",
+    hdrs = ["modem_technology.h"],
+)
+
+cf_cc_library(
+    name = "network_service_constants",
+    hdrs = ["network_service_constants.h"],
+)
+
+cf_cc_library(
+    name = "nvram_config",
+    srcs = ["nvram_config.cpp"],
+    hdrs = ["nvram_config.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/commands/modem_simulator:device_config",
+        "//cuttlefish/host/commands/modem_simulator:modem_technology",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@jsoncpp",
+    ],
+)
+
+cf_cc_library(
+    name = "pdu_parser",
+    srcs = ["pdu_parser.cpp"],
+    hdrs = ["pdu_parser.h"],
+)
+
+cf_cc_test(
+    name = "pdu_parser_test",
+    srcs = ["unittest/pdu_parser_test.cpp"],
+    deps = [
+        "//cuttlefish/host/commands/modem_simulator:pdu_parser",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cf_cc_test(
+    name = "service_test",
+    srcs = [
+        "unittest/iccfile.h",
+        "unittest/service_test.cpp",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/modem_simulator:channel_monitor",
+        "//cuttlefish/host/commands/modem_simulator:device_config",
+        "//cuttlefish/host/commands/modem_simulator:modem_simulator_class",
+        "//cuttlefish/host/commands/modem_simulator:modem_simulator_lib",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings",
+        "@gflags",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cf_cc_library(
+    name = "sup_service",
+    srcs = ["sup_service.cpp"],
+    hdrs = ["sup_service.h"],
+    deps = [
+        "//cuttlefish/host/commands/modem_simulator:modem_service",
+    ],
+)
+
+cf_cc_library(
+    name = "thread_looper",
+    srcs = ["thread_looper.cpp"],
+    hdrs = ["thread_looper.h"],
+    deps = [
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
+    ],
+)
+
+cf_cc_library(
+    name = "virtual_modem_simulator",
+    hdrs = ["virtual_modem_simulator.h"],
+    deps = [
+        "//cuttlefish/host/commands/modem_simulator:client",
+    ],
+)

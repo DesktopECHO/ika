@@ -1,0 +1,73 @@
+load("@grpc//bazel:cc_grpc_library.bzl", "cc_grpc_library")
+load("@protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
+load("@protobuf//bazel:proto_library.bzl", "proto_library")
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_binary(
+    name = "casimir_control_server",
+    srcs = [
+        "main.cpp",
+    ],
+    deps = [
+        ":libcasimir",
+        ":libcasimir_control_server",
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/host/libs/command_util",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings",
+        "@gflags",
+        "@grpc",
+        "@grpc//:grpc++",
+        "@grpc//:grpc++_reflection",
+        "@protobuf//:empty_cc_proto",
+    ],
+)
+
+cf_cc_library(
+    name = "libcasimir",
+    srcs = [
+        "casimir_controller.cpp",
+        "crc.cpp",
+        "hex.cpp",
+    ],
+    hdrs = [
+        "casimir_controller.h",
+        "crc.h",
+        "hex.h",
+        # TODO: b/416777029 - stop using a copy of these two files
+        "packet_runtime.h",
+        "rf_packets.h",
+    ],
+    deps = [
+        ":libcasimir_control_server",
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/result",
+    ],
+)
+
+proto_library(
+    name = "casimir_control_server_proto",
+    srcs = ["casimir_control.proto"],
+    deps = ["@protobuf//:empty_proto"],
+)
+
+cc_proto_library(
+    name = "casimir_control_server_cc_proto",
+    deps = [":casimir_control_server_proto"],
+)
+
+cc_grpc_library(
+    name = "libcasimir_control_server",
+    srcs = [":casimir_control_server_proto"],
+    grpc_only = True,
+    deps = [
+        ":casimir_control_server_cc_proto",
+        "@grpc//:grpc++",
+    ],
+)

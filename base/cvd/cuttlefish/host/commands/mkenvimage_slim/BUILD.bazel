@@ -1,0 +1,20 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+exports_files([".clang-tidy"])
+
+cf_cc_binary(
+    name = "mkenvimage_slim",
+    srcs = ["mkenvimage_slim.cc"],
+    deps = [
+        "//cuttlefish/common/libs/utils:tee_logging",
+        "//cuttlefish/host/libs/config:mkenvimage_slim",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@gflags",
+    ],
+)

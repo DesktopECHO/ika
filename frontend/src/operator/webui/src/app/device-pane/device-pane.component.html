@@ -1,0 +1,63 @@
+<div
+  class="list-pane-title"
+  style="margin: 10% auto; position: relative; text-align: center"
+  >
+  Devices
+  <span id="refresh-list" title="Refresh list" (click)="onRefresh()"
+    >&#8635;</span
+    >
+  </div>
+  <div>
+    <section class="device-list">
+      <ul class="groups">
+        @for (group of deviceGroups | async; track group) {
+          <li>
+            <div class="group-name"> {{ group.displayName }} </div>
+            <ul class="devices">
+              @for (device of group.devices; track device) {
+                <li class="device-entry" >
+                  <mat-slide-toggle
+                    color="primary"
+                    [checked]="displaysService.isVisibleDevice(device.device_id)"
+                    (change)="displaysService.toggleVisibility(device.device_id)"
+                    >
+                    {{ device.name }} ( {{ device.device_id }} )
+                  </mat-slide-toggle>
+                  <button mat-icon-button class="menu" title="menu">
+                    <mat-icon>more_vert</mat-icon>
+                  </button>
+                </li>
+              }
+            </ul>
+          </li>
+        }
+        @if (legacyDevices | async; as devices) {
+          @if (devices.length > 0) {
+            <li>
+              <div class="group-name"> This Host </div>
+              <ul class="devices">
+                @for (device of devices; track device) {
+                  <li class="device-entry" >
+                    <mat-slide-toggle
+                      color="primary"
+                      [checked]="displaysService.isVisibleDevice(device.device_id)"
+                      (change)="displaysService.toggleVisibility(device.device_id)"
+                      >{{ device.device_id }}</mat-slide-toggle
+                      >
+                      <button mat-icon-button class="menu" title="menu">
+                        <mat-icon>more_vert</mat-icon>
+                      </button>
+                    </li>
+                  }
+                </ul>
+              </li>
+            }
+          }
+        </ul>
+      </section>
+    </div>
+    <div>
+      <button mat-raised-button class="show-all" (click)="showAll()">
+        Show All
+      </button>
+    </div>

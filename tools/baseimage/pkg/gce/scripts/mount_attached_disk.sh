@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+
+# Copyright (C) 2025 The Android Open Source Project
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Mount attached disk at `/mnt/image` (the argument).
+set -o errexit -o nounset -o pipefail
+
+MOUNTPOINT=$1
+
+sudo mkdir -p ${MOUNTPOINT}
+if [ -b /dev/sdb1 ]; then
+  sudo mount /dev/sdb1 ${MOUNTPOINT}
+elif [ -b /dev/nvme0n2p1 ]; then
+  sudo mount /dev/nvme0n2p1 ${MOUNTPOINT}
+else
+  echo "failed to find source block device"
+  exit 1
+fi
+sudo mount -t sysfs none ${MOUNTPOINT}/sys
+sudo mount -t proc none ${MOUNTPOINT}/proc
+sudo mount --bind /boot/efi ${MOUNTPOINT}/boot/efi
+sudo mount --bind /dev/ ${MOUNTPOINT}/dev
+sudo mount --bind /dev/pts ${MOUNTPOINT}/dev/pts
+sudo mount --bind /run ${MOUNTPOINT}/run
+# Some guest images do not ship a resolv.conf inside the mounted root.
+if [ ! -f ${MOUNTPOINT}/etc/resolv.conf ]; then
+  sudo cp /etc/resolv.conf ${MOUNTPOINT}/etc/
+fi

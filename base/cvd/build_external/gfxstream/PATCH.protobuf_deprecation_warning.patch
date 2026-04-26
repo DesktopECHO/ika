@@ -1,0 +1,12 @@
+diff --git a/build_variables.bzl b/build_variables.bzl
+index c9ccf1453..f44524b7f 100644
+--- a/build_variables.bzl
++++ b/build_variables.bzl
+@@ -27,6 +27,7 @@ GFXSTREAM_HOST_COPTS = GFXSTREAM_COMMON_COPTS + [
+     "@platforms//os:windows": [
+         "/EHs-c-",
+     ],
++    "@platforms//os:linux": ["-Wno-deprecated-declarations"],
+     "//conditions:default": [
+         "-fno-exceptions",
+     ],

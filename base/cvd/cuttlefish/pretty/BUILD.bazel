@@ -1,0 +1,185 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library", "cf_cc_test")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_library(
+    name = "container",
+    srcs = ["container.cc"],
+    hdrs = ["container.h"],
+    deps = [
+        "//cuttlefish/pretty",
+        "//cuttlefish/pretty:numeric",
+        "//cuttlefish/pretty:string",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:str_format",
+    ],
+)
+
+cf_cc_test(
+    name = "container_test",
+    srcs = ["container_test.cc"],
+    deps = [
+        "//cuttlefish/pretty:container",
+        "@abseil-cpp//absl/strings",
+        "@fmt",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cf_cc_library(
+    name = "json",
+    srcs = ["json.cc"],
+    hdrs = ["json.h"],
+    deps = [
+        "//cuttlefish/pretty",
+        "@jsoncpp",
+    ],
+)
+
+cf_cc_test(
+    name = "json_test",
+    srcs = ["json_test.cc"],
+    deps = [
+        "//cuttlefish/pretty:json",
+        "@abseil-cpp//absl/strings",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "@jsoncpp",
+    ],
+)
+
+cf_cc_library(
+    name = "map",
+    hdrs = ["map.h"],
+    deps = [
+        "//cuttlefish/pretty",
+        "//cuttlefish/pretty:container",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "numeric",
+    srcs = ["numeric.cc"],
+    hdrs = ["numeric.h"],
+    deps = [
+        "//cuttlefish/pretty",
+    ],
+)
+
+cf_cc_library(
+    name = "optional",
+    hdrs = ["optional.h"],
+    deps = [
+        "//cuttlefish/pretty",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "pair",
+    hdrs = ["pair.h"],
+    deps = [
+        "//cuttlefish/pretty",
+        "//cuttlefish/pretty:struct",
+    ],
+)
+
+cf_cc_library(
+    name = "pretty",
+    hdrs = ["pretty.h"],
+)
+
+cf_cc_test(
+    name = "pretty_test",
+    srcs = ["pretty_test.cc"],
+    deps = [
+        "//cuttlefish/pretty",
+        "//cuttlefish/pretty:map",
+        "//cuttlefish/pretty:optional",
+        "//cuttlefish/pretty:string",
+        "//cuttlefish/pretty:struct",
+        "//cuttlefish/pretty:unique_ptr",
+        "//cuttlefish/pretty:vector",
+        "@abseil-cpp//absl/strings",
+        "@fmt",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cf_cc_library(
+    name = "result",
+    hdrs = ["result.h"],
+    deps = [
+        "//cuttlefish/pretty",
+        "//cuttlefish/result",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "set",
+    hdrs = ["set.h"],
+    deps = [
+        "//cuttlefish/pretty",
+        "//cuttlefish/pretty:container",
+    ],
+)
+
+cf_cc_library(
+    name = "string",
+    srcs = ["string.cc"],
+    hdrs = ["string.h"],
+    deps = [
+        "//cuttlefish/pretty",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "struct",
+    srcs = ["struct.cc"],
+    hdrs = ["struct.h"],
+    deps = [
+        "//cuttlefish/pretty",
+        "//cuttlefish/pretty:numeric",
+        "//cuttlefish/pretty:string",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:str_format",
+    ],
+)
+
+cf_cc_test(
+    name = "struct_test",
+    srcs = ["struct_test.cc"],
+    deps = [
+        "//cuttlefish/pretty:string",
+        "//cuttlefish/pretty:struct",
+        "@abseil-cpp//absl/strings",
+        "@fmt",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cf_cc_library(
+    name = "unique_ptr",
+    hdrs = ["unique_ptr.h"],
+    deps = [
+        "//cuttlefish/pretty",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "vector",
+    hdrs = ["vector.h"],
+    deps = [
+        "//cuttlefish/pretty",
+        "//cuttlefish/pretty:container",
+    ],
+)

@@ -1,0 +1,363 @@
+#
+#  Copyright (C) 2025 The Android Open Source Project
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#       http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_library(
+    name = "android_efi_loader",
+    srcs = ["android_efi_loader.cc"],
+    hdrs = ["android_efi_loader.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd/flags:flag_base",
+        "//cuttlefish/host/commands/assemble_cvd/flags:system_image_dir",
+        "//cuttlefish/host/commands/assemble_cvd/flags:vm_manager",
+        "//cuttlefish/host/libs/config:vmm_mode",
+        "@abseil-cpp//absl/strings",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "blank_data_image_mb",
+    srcs = ["blank_data_image_mb.cc"],
+    hdrs = ["blank_data_image_mb.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd:guest_config",
+        "//cuttlefish/host/commands/assemble_cvd/flags:flag_base",
+        "//cuttlefish/host/commands/assemble_cvd/flags:from_gflags",
+        "//cuttlefish/result",
+        "//libbase",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "boot_image",
+    srcs = ["boot_image.cc"],
+    hdrs = ["boot_image.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd/android_build:android_builds",
+        "//cuttlefish/host/commands/assemble_cvd/flags:flag_base",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "bootloader",
+    srcs = ["bootloader.cc"],
+    hdrs = ["bootloader.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd:guest_config",
+        "//cuttlefish/host/commands/assemble_cvd/flags:system_image_dir",
+        "//cuttlefish/host/commands/assemble_cvd/flags:vm_manager",
+        "//cuttlefish/host/libs/config:config_utils",
+        "//cuttlefish/host/libs/config:vmm_mode",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+        "@fmt",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "build_super_image",
+    srcs = ["build_super_image.cc"],
+    hdrs = ["build_super_image.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd/flags:flag_base",
+        "//cuttlefish/host/commands/assemble_cvd/flags:from_gflags",
+        "//cuttlefish/result",
+        "//libbase",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "cpus",
+    srcs = ["cpus.cc"],
+    hdrs = ["cpus.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd/flags:flag_base",
+        "//cuttlefish/host/commands/assemble_cvd/flags:from_gflags",
+        "//cuttlefish/result",
+        "//libbase",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "daemon",
+    srcs = ["daemon.cc"],
+    hdrs = ["daemon.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd/flags:flag_base",
+        "//cuttlefish/host/commands/assemble_cvd/flags:from_gflags",
+        "//cuttlefish/result",
+        "//libbase",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "data_policy",
+    srcs = ["data_policy.cc"],
+    hdrs = ["data_policy.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd/flags:flag_base",
+        "//cuttlefish/host/commands/assemble_cvd/flags:from_gflags",
+        "//cuttlefish/host/libs/config:data_image_policy",
+        "//cuttlefish/result",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "display_proto",
+    srcs = ["display_proto.cc"],
+    hdrs = ["display_proto.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:base64",
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd:launch_cvd_cc_proto",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/result",
+        "@fmt",
+        "@gflags",
+        "@protobuf",
+    ],
+)
+
+cf_cc_library(
+    name = "extra_kernel_cmdline",
+    srcs = ["extra_kernel_cmdline.cc"],
+    hdrs = ["extra_kernel_cmdline.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd/flags:flag_base",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "flag_base",
+    srcs = ["flag_base.cc"],
+    hdrs = ["flag_base.h"],
+    deps = [
+        "//cuttlefish/result",
+        "//libbase",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "from_gflags",
+    srcs = ["from_gflags.cc"],
+    hdrs = ["from_gflags.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/host/commands/assemble_cvd/flags:flag_base",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "gpu_mode",
+    srcs = ["gpu_mode.cc"],
+    hdrs = ["gpu_mode.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd/flags:flag_base",
+        "//cuttlefish/host/commands/assemble_cvd/flags:from_gflags",
+        "//cuttlefish/host/libs/config:gpu_mode",
+        "//cuttlefish/result",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "guest_enforce_security",
+    srcs = ["guest_enforce_security.cc"],
+    hdrs = ["guest_enforce_security.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd/flags:flag_base",
+        "//cuttlefish/host/commands/assemble_cvd/flags:from_gflags",
+        "//cuttlefish/result",
+        "@fmt",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "initramfs_path",
+    srcs = ["initramfs_path.cc"],
+    hdrs = ["initramfs_path.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/libs/config:fetcher_config",
+        "//cuttlefish/host/libs/config:fetcher_configs",
+        "//cuttlefish/host/libs/config:file_source",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "kernel_path",
+    srcs = ["kernel_path.cc"],
+    hdrs = ["kernel_path.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/libs/config:fetcher_config",
+        "//cuttlefish/host/libs/config:fetcher_configs",
+        "//cuttlefish/host/libs/config:file_source",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "mcu_config_path",
+    srcs = ["mcu_config_path.cc"],
+    hdrs = ["mcu_config_path.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:json",
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/libs/config:config_utils",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+        "@gflags",
+        "@jsoncpp",
+    ],
+)
+
+cf_cc_library(
+    name = "memory_mb",
+    srcs = ["memory_mb.cc"],
+    hdrs = ["memory_mb.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd/flags:flag_base",
+        "//cuttlefish/host/commands/assemble_cvd/flags:from_gflags",
+        "//cuttlefish/result",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "restart_subprocesses",
+    srcs = ["restart_subprocesses.cc"],
+    hdrs = ["restart_subprocesses.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd/flags:flag_base",
+        "//cuttlefish/host/commands/assemble_cvd/flags:from_gflags",
+        "//cuttlefish/result",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "super_image",
+    srcs = ["super_image.cc"],
+    hdrs = ["super_image.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd/flags:system_image_dir",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "system_image_dir",
+    srcs = ["system_image_dir.cc"],
+    hdrs = ["system_image_dir.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd/flags:flag_base",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "use_cvdalloc",
+    srcs = ["use_cvdalloc.cc"],
+    hdrs = ["use_cvdalloc.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd/flags:flag_base",
+        "//cuttlefish/host/commands/assemble_cvd/flags:from_gflags",
+        "//cuttlefish/host/libs/config/defaults",
+        "//cuttlefish/result",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "vendor_boot_image",
+    srcs = ["vendor_boot_image.cc"],
+    hdrs = ["vendor_boot_image.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd/flags:system_image_dir",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "vm_manager",
+    srcs = ["vm_manager.cc"],
+    hdrs = ["vm_manager.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd:guest_config",
+        "//cuttlefish/host/libs/config:vmm_mode",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+        "@gflags",
+    ],
+)

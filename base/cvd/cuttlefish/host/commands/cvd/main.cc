@@ -1,0 +1,255 @@
+/*
+ * Copyright (C) 2021 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include <stdlib.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+#include <iostream>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
+
+#include <android-base/file.h>
+#include "absl/cleanup/cleanup.h"
+#include "absl/strings/str_split.h"
+#include <fmt/format.h>
+#include "absl/log/log.h"
+
+#include "cuttlefish/common/libs/utils/environment.h"
+#include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/common/libs/utils/flag_parser.h"
+#include "cuttlefish/common/libs/utils/subprocess.h"
+#include "cuttlefish/common/libs/utils/tee_logging.h"
+#include "cuttlefish/host/commands/cvd/cvd.h"
+#include "cuttlefish/host/commands/cvd/utils/common.h"
+#include "cuttlefish/host/commands/cvd/version/version.h"
+#include "cuttlefish/host/libs/vm_manager/host_configuration.h"
+#include "cuttlefish/posix/strerror.h"
+// TODO(315772518) Re-enable once metrics send is reenabled
+// #include "cuttlefish/host/commands/cvd/metrics/cvd_metrics_api.h"
+
+extern char** environ;
+
+namespace cuttlefish {
+namespace {
+
+/**
+ * Extracts --verbosity value if ever exist in the entire commandline args
+ *
+ * Note that this will also pick up from the subtool arguments:
+ *  e.g. cvd start --verbosity=DEBUG
+ *
+ */
+LogSeverity CvdVerbosityOption(cvd_common::Args& all_args) {
+  std::string verbosity_flag_value;
+  std::vector<Flag> verbosity_flag{
+      GflagsCompatFlag("verbosity", verbosity_flag_value)};
+  if (!ConsumeFlags(verbosity_flag, all_args).ok()) {
+    LOG(ERROR) << "Verbosity flag parsing failed, so use the default value.";
+    return LogSeverity::Info;
+  }
+  if (verbosity_flag_value.empty()) {
+    return LogSeverity::Info;
+  }
+  Result<LogSeverity> to_severity_res = ToSeverity(verbosity_flag_value);
+  if (!to_severity_res.ok()) {
+    return LogSeverity::Info;
+  }
+  LogSeverity verbosity = *to_severity_res;
+  // Set environment variables to the requested verbosity for subcommands and
+  // subprocesses to use.
+  if (int res = setenv(kConsoleSeverityEnvVar, verbosity_flag_value.c_str(), 1);
+      res) {
+    PLOG(ERROR) << "Failed to set console log severity environment variable";
+  }
+  if (int res = setenv(kFileSeverityEnvVar, verbosity_flag_value.c_str(), 1);
+      res) {
+    PLOG(ERROR) << "Failed to set file log severity environment variable";
+  }
+  return verbosity;
+}
+
+Result<void> EnsureCvdDirectoriesExist() {
+  // This is accessed by all users.
+  CF_EXPECT(EnsureDirectoryExists(CvdDir(), 0777));
+  // This is where the instance database resides.
+  CF_EXPECT(EnsureDirectoryExists(PerUserDir(), 0750));
+
+  return {};
+}
+
+
+/**
+ * Increase the file descriptor limit for this process and its descendants.
+ *
+ * Crosvm tends to use many file descriptors, especially when running in sandbox
+ * mode, sometimes exceeding the default limit.
+ */
+void IncreaseFileLimit() {
+  struct rlimit old_lim;
+  // Get old limits
+  if (getrlimit(RLIMIT_NOFILE, &old_lim) != 0) {
+    LOG(WARNING) << "Unable to get file limit (" << StrError(errno)
+                 << "), virtual devices may not work properly if the limit is "
+                    "set too low";
+    return;
+  }
+  VLOG(1) << "Old limits -> soft limit= " << old_lim.rlim_cur << "\t"
+          << " hard limit= " << old_lim.rlim_max;
+  // Set new value
+  old_lim.rlim_cur = old_lim.rlim_max;
+  // Set limits
+  if (setrlimit(RLIMIT_NOFILE, &old_lim) != 0) {
+    LOG(WARNING) << "Unable to set file limit (" << StrError(errno)
+                 << "), virtual devices may not work properly if the limit is "
+                    "set too low";
+  }
+}
+
+Result<void> CvdMain(cvd_common::Args all_args) {
+  if (!isatty(0)) {
+    LOG(INFO) << GetVersionIds().ToString();
+  }
+  CF_EXPECT(EnsureCvdDirectoriesExist());
+
+  CF_EXPECT(!all_args.empty());
+
+  auto env = EnvpToMap(environ);
+  // TODO(315772518) Re-enable once metrics send is skipped in a env
+  // without network support
+  // CvdMetrics::SendCvdMetrics(all_args);
+
+  if (android::base::Basename(all_args[0]) == "fetch_cvd") {
+    // Convert `fetch_cvd args...` into `cvd fetch args...`
+    all_args[0] = "fetch";
+    all_args.insert(all_args.begin(), "cvd");
+  }
+
+  IncreaseFileLimit();
+
+  InstanceDatabase instance_db(InstanceDatabasePath());
+  InstanceLockFileManager instance_lockfile_manager(InstanceLocksPath());
+  InstanceManager instance_manager(instance_lockfile_manager, instance_db);
+  Cvd cvd(instance_manager, instance_lockfile_manager);
+  if (android::base::Basename(all_args[0]) == "cvd") {
+    CF_EXPECT(cvd.HandleCvdCommand(all_args, env));
+    return {};
+  }
+  CF_EXPECT(cvd.HandleCommand(all_args, env, {}));
+
+  return {};
+}
+
+/**
+ * Returns the URL as a colored string
+ *
+ * If stderr is not terminal, no color.
+ * If stderr is a tty, tries to use ".deb" file color
+ * If .deb is not available in LS_COLORS, uses .zip
+ * color. If none are available, use a default color that
+ * is red.
+ */
+std::string ColoredUrl(const std::string& url) {
+  if (!isatty(STDERR_FILENO)) {
+    return url;
+  }
+  std::string coloring_prefix = "\033[01;31m";
+  std::string output;
+  auto ls_colors = StringFromEnv("LS_COLORS", "");
+  std::vector<std::string_view> colors_vec = absl::StrSplit(ls_colors, ':', absl::SkipEmpty());
+  std::unordered_map<std::string, std::string> colors;
+  for (const auto& color_entry : colors_vec) {
+    std::vector<std::string_view> tokenized =
+        absl::StrSplit(color_entry, '=', absl::SkipEmpty());
+    if (tokenized.size() != 2) {
+      continue;
+    }
+    colors.emplace(tokenized.front(), tokenized.back());
+  }
+
+  absl::Cleanup return_action = [&coloring_prefix, url, &output]() {
+    static constexpr char kRestoreColor[] = "\033[0m";
+    output = fmt::format("{}{}{}", coloring_prefix, url, kRestoreColor);
+  };
+  auto deb_color_itr = colors.find("*.deb");
+  auto zip_color_itr = colors.find("*.zip");
+  if (deb_color_itr == colors.end() && zip_color_itr == colors.end()) {
+    return output;
+  }
+  coloring_prefix = fmt::format(
+      "{}{}m", "\033[",
+      (deb_color_itr == colors.end() ? colors["*.zip"] : colors["*.deb"]));
+  return output;
+}
+
+bool ValidateHostConfiguration() {
+  // Validate the host before attempting to access directories.
+  std::vector<std::string> config_commands;
+  bool valid = vm_manager::ValidateHostConfiguration(&config_commands);
+  if (!valid) {
+    std::cerr << "Validation of host configuration failed." << std::endl;
+    std::cerr << "Execute the following commands:" << std::endl;
+    for (const auto& cmd : config_commands) {
+      std::cerr << "    " << cmd << std::endl;
+    }
+    std::cerr << "NOTE: Reboot for changes to take effect"
+              << std::endl;
+  }
+  return valid;
+}
+
+}  // namespace
+}  // namespace cuttlefish
+
+int main(int argc, char** argv) {
+  srand(time(NULL));
+
+  cuttlefish::cvd_common::Args all_args = cuttlefish::ArgsToVec(argc, argv);
+  cuttlefish::LogSeverity verbosity =
+      cuttlefish::CvdVerbosityOption(all_args);
+  // set verbosity for this process
+  cuttlefish::MetadataLevel metadata_level =
+      isatty(0) ? cuttlefish::MetadataLevel::ONLY_MESSAGE
+                : cuttlefish::MetadataLevel::FULL;
+  cuttlefish::LogToStderr("", metadata_level, verbosity);
+
+  if (!cuttlefish::ValidateHostConfiguration()) {
+    return -1;
+  }
+  auto result = cuttlefish::CvdMain(std::move(all_args));
+  if (result.ok()) {
+    return 0;
+  } else {
+    // TODO: we should not print the stack trace, instead, we should rely on
+    // each handler to print the error message directly in the client's
+    // std::cerr. We print the stack trace only in the verbose mode.
+    std::cerr << result.error().FormatForEnv(isatty(STDERR_FILENO))
+              << std::endl;
+    // TODO(kwstephenkim): better coloring
+    constexpr char kUserReminder[] =
+        R"(    If the error above is unclear, please copy the text and `cvd version` output into an issue at:)";
+    constexpr char kCuttlefishBugUrl[] = "http://go/cuttlefish-bug";
+    std::cerr << std::endl << kUserReminder << std::endl;
+    std::cerr << "        " << cuttlefish::ColoredUrl(kCuttlefishBugUrl)
+              << std::endl
+              << std::endl;
+    return -1;
+  }
+}

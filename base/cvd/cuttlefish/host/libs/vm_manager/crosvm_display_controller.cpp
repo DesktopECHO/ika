@@ -1,0 +1,118 @@
+/*
+ * Copyright (C) 2025 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "cuttlefish/host/libs/vm_manager/crosvm_display_controller.h"
+
+#include <cstddef>
+#include <string>
+#include <vector>
+
+#include "absl/strings/str_join.h"
+#include "absl/log/log.h"
+
+#include "cuttlefish/common/libs/utils/subprocess.h"
+#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
+#include "cuttlefish/host/libs/config/cuttlefish_config.h"
+#include "cuttlefish/result/result.h"
+
+namespace cuttlefish {
+namespace vm_manager {
+
+Result<CrosvmDisplayController> GetCrosvmDisplayController() {
+  const CuttlefishConfig* config = CF_EXPECT(CuttlefishConfig::Get());
+
+  CF_EXPECT(VmManagerIsCrosvm(*config),
+            "CrosvmDisplayController is only for crosvm");
+
+  return CrosvmDisplayController(config);
+}
+
+Result<int> CrosvmDisplayController::Add(
+    const int instance_num,
+    const std::vector<CuttlefishConfig::DisplayConfig>& display_configs) const {
+  std::vector<std::string> command_args;
+  command_args.push_back("add-displays");
+
+  for (const auto& display_config : display_configs) {
+    const std::string w = std::to_string(display_config.width);
+    const std::string h = std::to_string(display_config.height);
+    const std::string dpi = std::to_string(display_config.dpi);
+    const std::string rr = std::to_string(display_config.refresh_rate_hz);
+
+    const std::string add_display_flag =
+        "--gpu-display=" + absl::StrJoin(
+                               std::vector<std::string>{
+                                   "mode=windowed[" + w + "," + h + "]",
+                                   "dpi=[" + dpi + "," + dpi + "]",
+                                   "refresh-rate=" + rr,
+                               },
+                               ",");
+
+    command_args.push_back(add_display_flag);
+  }
+
+  return RunCrosvmDisplayCommand(instance_num, command_args, NULL);
+}
+
+Result<int> CrosvmDisplayController::Remove(
+    const int instance_num, const std::vector<std::string> display_ids) const {
+  std::vector<std::string> command_args;
+  command_args.push_back("remove-displays");
+
+  for (const auto& display_id : display_ids) {
+    command_args.push_back("--display-id=" + display_id);
+  }
+
+  return RunCrosvmDisplayCommand(instance_num, command_args, NULL);
+}
+
+Result<std::string> CrosvmDisplayController::List(const int instance_num) {
+  std::string out;
+  CF_EXPECT(RunCrosvmDisplayCommand(instance_num, {"list-displays"}, &out));
+  return out;
+}
+
+Result<int> CrosvmDisplayController::RunCrosvmDisplayCommand(
+    const int instance_num, const std::vector<std::string>& args,
+    std::string* stdout_str) const {
+  // TODO(b/260649774): Consistent executable API for selecting an instance
+  const CuttlefishConfig::InstanceSpecific instance =
+      config_->ForInstance(instance_num);
+
+  const std::string crosvm_binary_path = instance.crosvm_binary();
+  const std::string crosvm_control_path = instance.CrosvmSocketPath();
+
+  Command command(crosvm_binary_path);
+  command.AddParameter("gpu");
+  for (const std::string& arg : args) {
+    command.AddParameter(arg);
+  }
+  command.AddParameter(crosvm_control_path);
+
+  Result<std::string> res = RunAndCaptureStdout(std::move(command));
+  if (res.ok()) {
+    if (stdout_str != nullptr) {
+      *stdout_str = std::move(*res);
+    }
+    return 0;
+  } else {
+    LOG(ERROR) << "Failed to run crosvm display command:\n" << res.error();
+    return 0;
+  }
+}
+
+}  // namespace vm_manager
+}  // namespace cuttlefish

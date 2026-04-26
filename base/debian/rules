@@ -1,0 +1,111 @@
+#!/usr/bin/make -f
+
+# Start build by executing:
+# $ debuild --prepend-path /usr/local/bin -i -us -uc
+
+# Uncomment this line out to make installation process more chatty.
+# Keep it on until we know there's no outstanding problems with installation.
+# export DH_VERBOSE=1
+
+include /usr/share/dpkg/buildflags.mk
+
+# Retrieve bazel's view of the current compilation_mode
+compilation_mode :=
+default_compilation_mode := \
+  $(shell cd cvd; \
+          bazel build //:build_compilation_mode_txt >/dev/null 2>&1; \
+	  cat bazel-bin/build/compilation_mode.txt)
+$(if $(default_compilation_mode),,$(error Bazel install is broken))
+
+filters := $(if $(filter noopt,${DEB_BUILD_OPTIONS}),-O%,)
+ifneq (${filters},)
+  # If DEB_BUILD_OPTIONS=noopt is set, assume the user wants debug symbol
+  # packages and no optimization. Override bazel defaults, if necessary.
+  ifneq (${default_compilation_mode},dbg)
+    compilation_mode := --compilation_mode=dbg
+  endif
+else
+  ifeq (${default_compilation_mode},fastbuild)
+    filters := -g -O%
+  endif
+  ifeq (${default_compilation_mode},dbg)
+    filters := -O%
+  endif
+  ifeq (${default_compilation_mode},opt)
+    filters :=
+  endif
+endif
+
+# Convert dpkg-buildflags to bazel flags, filtering out debug and optimization
+# flags as necessary
+conlyopts := $(foreach flag,${CFLAGS},$(if $(filter ${filters},${flag}),,--conlyopt="${flag}"))
+cxxopts   := $(foreach flag,${CXXFLAGS},$(if $(filter ${filters},${flag}),,--cxxopt="${flag}"))
+linkopts  := $(foreach flag,${LDFLAGS},--linkopt="${flag}")
+
+# Force llvm.ld to use sha1 build-id instead of blake3
+linkopts  += --linkopt="-Wl,--build-id=sha1"
+
+ifeq ($(filter ${filters},-g),)
+# When debug packaging is enabled, tell bazel not to strip debuginfo
+copts := --strip=never
+# Clang defaults to emitting dwarf-5, which at the time of writing the debug
+# symbol handing in debuild does not like, so limit it to dwarf-4.
+copts += --copt="-gdwarf-4"
+endif
+
+cuttlefish_common := debian/cuttlefish-base/usr/lib/cuttlefish-common
+cuttlefish_integration := debian/cuttlefish-integration/usr/bin
+cuttlefish_metrics := debian/cuttlefish-metrics/usr/lib/cuttlefish-metrics
+
+disk_cache_arg :=
+ifneq ($(strip ${BAZEL_DISK_CACHE_DIR}),)
+  disk_cache_arg := --disk_cache="${BAZEL_DISK_CACHE_DIR}"
+endif
+
+remote_cache_arg :=
+ifneq ($(strip ${BAZEL_REMOTE_CACHE}),)
+  remote_cache_arg := --google_default_credentials --remote_cache="${BAZEL_REMOTE_CACHE}/${BAZEL_CACHE_VERSION}"
+endif
+
+%:
+	dh $@ --with=config-package
+
+.PHONY: override_dh_installinit
+override_dh_installinit:
+	dh_installinit --name=cuttlefish-host-resources
+	dh_installinit --name=cuttlefish-defaults
+	dh_installinit
+
+# the `--workspace_status_command` flag path depends on the current working directory of base/cvd
+.PHONY: override_dh_auto_build
+override_dh_auto_build:
+	cd cvd && ./tools/ensure_crosvm_git_mirror.sh && bazel build ${remote_cache_arg} ${disk_cache_arg} ${compilation_mode} ${conlyopts} ${copts} ${cxxopts} ${linkopts} -c opt 'cuttlefish/package:cvd' 'cuttlefish/package:defaults' 'cuttlefish/package:metrics' --spawn_strategy=local --workspace_status_command=../stamp_helper.sh --build_tag_filters=-clang-tidy
+	dh_auto_build
+
+# Only generate optimized DWARF if debug is enabled
+.PHONY: override_dh_dwz
+override_dh_dwz:
+	$(if $(filter ${filters},-g),,dh_dwz)
+
+# Only generate dbgsym package if debug is enabled
+.PHONY: override_dh_strip
+override_dh_strip:
+	dh_strip $(if $(filter ${filters},-g),--no-automatic-dbgsym,)
+
+# Remove bazel metadata during installation
+.PHONY: override_dh_install
+override_dh_install:
+	dh_install
+	rm -rf ${cuttlefish_common}/bin/cvd.repo_mapping
+	rm -rf ${cuttlefish_common}/bin/cvd.runfiles*
+	rm -rf ${cuttlefish_integration}/defaults.repo_mapping
+	rm -rf ${cuttlefish_integration}/defaults.runfiles*
+	rm -rf ${cuttlefish_metrics}/bin/cvd.repo_mapping
+	rm -rf ${cuttlefish_metrics}/bin/cvd.runfiles*
+
+# Repair output files bazel actions made executable
+.PHONY: override_dh_fixperms
+override_dh_fixperms:
+	dh_fixperms
+	chmod -x ${cuttlefish_common}/bin/*.json
+	find ${cuttlefish_common}/etc -type f -exec chmod -x '{}' ';'

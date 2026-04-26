@@ -1,0 +1,20 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_test")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_test(
+    name = "cvd_import_locations_unittests",
+    srcs = [
+        "gpx_parser_test.cc",
+        "kml_parser_test.cc",
+    ],
+    deps = [
+        "//cuttlefish/host/libs/location",
+        "//cuttlefish/host/libs/location:string_parse",
+        "//libbase",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)

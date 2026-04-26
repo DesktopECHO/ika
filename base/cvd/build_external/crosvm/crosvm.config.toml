@@ -1,0 +1,6 @@
+[patch.crates-io]
+# this needs to be at parity with MODULE.bazel
+audio_streams = { git = "https://chromium.googlesource.com/crosvm/crosvm", rev = "02e797273075c089cf075e7acb4d549323a167fb" }
+libcras = { git = "https://chromium.googlesource.com/crosvm/crosvm", rev = "02e797273075c089cf075e7acb4d549323a167fb" }
+# this needs to be at parity with the crosvm submodule third_party/minijail
+minijail = { git = "https://chromium.googlesource.com/chromiumos/platform/minijail", rev = "bfd22f25fd2302fe4ae5121d80c836e0f124e742" }

@@ -1,0 +1,30 @@
+From: Daniel Milisic <dmilisic@desktopecho.com>
+Date: Fri, 3 Apr 2026 18:00:00 -0300
+Subject: [PATCH] Remove unused global grpc ClientContext
+
+The pinned netsim revision already uses per-stream ClientContext instances,
+but it still leaves behind an unused namespace-scope ClientContext object.
+On this aarch64 Fedora build, netsimd is crashing in the corresponding
+global constructor before normal daemon startup.
+
+Drop the stale global so netsimd no longer needs to run grpc::ClientContext
+construction during static initialization.
+---
+ src/backend/grpc_client.cc | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/src/backend/grpc_client.cc b/src/backend/grpc_client.cc
+index ff43e8f2..6031585b 100644
+--- a/src/backend/grpc_client.cc
++++ b/src/backend/grpc_client.cc
+@@ -52,7 +52,6 @@ std::unordered_map<uint32_t, grpc::ClientContext> contexts_;
+ // Single connection to a server with multiple StreamPackets calls
+ std::string server_;
+ std::shared_ptr<grpc::Channel> channel_;
+-grpc::ClientContext context_;
+ std::unique_ptr<netsim::packet::PacketStreamer::Stub> stub_;
+ 
+ // Call the StreamPackets RPC on server.
+-- 
+2.49.0
+

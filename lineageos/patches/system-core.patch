@@ -1,0 +1,18 @@
+Patch summary:
+Carry the host-provided boot timezone into Android's persistent timezone
+setting so the VM starts in the user's expected timezone. This keeps first boot
+and reset flows aligned with the host without requiring a manual Settings trip
+inside the guest.
+
+diff --git a/rootdir/init.rc b/rootdir/init.rc
+index 92dcdd013..ae91d0255 100644
+--- a/rootdir/init.rc
++++ b/rootdir/init.rc
+@@ -1391,3 +1391,7 @@ on property:sys.snapshotctl.map=requested
+ on property:sys.snapshotctl.unmap=requested
+     exec - root root system -- /system/bin/snapshotctl unmap
+     setprop sys.snapshotctl.unmap "finished"
++
++# Copy the host-supplied boot timezone into Android's persistent setting.
++on property:ro.boot.timezone=*
++    setprop persist.sys.timezone ${ro.boot.timezone}

@@ -1,0 +1,130 @@
+Patch summary:
+Add Lineage-side desktop product plumbing. This is where the desktop product
+ties into Lineage build conventions: optional app exclusions, clean launcher
+workspace overlays, and defaults that do not naturally belong in AOSP device or
+framework projects.
+
+The patch keeps product policy close to the Lineage vendor layer, so the AOSP
+framework/device patches can stay focused on behavior and hardware contracts.
+It also makes it easier to adjust packaged apps and overlay defaults without
+rebasing the core desktop shell changes.
+
+diff --git a/config/common.mk b/config/common.mk
+index b961788f..26d724b7 100644
+--- a/config/common.mk
++++ b/config/common.mk
+@@ -142,15 +142,23 @@ PRODUCT_PACKAGES += \
+ # Lineage packages
+ ifeq ($(PRODUCT_IS_ATV),)
+ PRODUCT_PACKAGES += \
+-    ExactCalculator \
+-    Jelly
++    ExactCalculator
++
++ifneq ($(strip $(LINEAGE_SKIP_JELLY)),true)
++PRODUCT_PACKAGES += \
++    Jelly
++endif
+ endif
+ 
+ ifeq ($(PRODUCT_IS_AUTOMOTIVE),)
+ PRODUCT_PACKAGES += \
+-    LineageParts \
++    LineageParts
++
++ifneq ($(strip $(LINEAGE_SKIP_SETUPWIZARD)),true)
++PRODUCT_PACKAGES += \
+     LineageSetupWizard
+ endif
++endif
+ 
+ PRODUCT_PACKAGES += \
+     LineageSettingsProvider \
+diff --git a/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_2x2.xml b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_2x2.xml
+new file mode 100644
+index 00000000..6fab484a
+--- /dev/null
++++ b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_2x2.xml
+@@ -0,0 +1,2 @@
++<?xml version="1.0" encoding="utf-8"?>
++<favorites xmlns:launcher="http://schemas.android.com/apk/res-auto/com.android.launcher3" />
+diff --git a/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_3x3.xml b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_3x3.xml
+new file mode 100644
+index 00000000..6fab484a
+--- /dev/null
++++ b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_3x3.xml
+@@ -0,0 +1,2 @@
++<?xml version="1.0" encoding="utf-8"?>
++<favorites xmlns:launcher="http://schemas.android.com/apk/res-auto/com.android.launcher3" />
+diff --git a/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_4x5.xml b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_4x5.xml
+new file mode 100644
+index 00000000..6fab484a
+--- /dev/null
++++ b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_4x5.xml
+@@ -0,0 +1,2 @@
++<?xml version="1.0" encoding="utf-8"?>
++<favorites xmlns:launcher="http://schemas.android.com/apk/res-auto/com.android.launcher3" />
+diff --git a/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_5x5.xml b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_5x5.xml
+new file mode 100644
+index 00000000..6fab484a
+--- /dev/null
++++ b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_5x5.xml
+@@ -0,0 +1,2 @@
++<?xml version="1.0" encoding="utf-8"?>
++<favorites xmlns:launcher="http://schemas.android.com/apk/res-auto/com.android.launcher3" />
+diff --git a/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_5x6.xml b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_5x6.xml
+new file mode 100644
+index 00000000..6fab484a
+--- /dev/null
++++ b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_5x6.xml
+@@ -0,0 +1,2 @@
++<?xml version="1.0" encoding="utf-8"?>
++<favorites xmlns:launcher="http://schemas.android.com/apk/res-auto/com.android.launcher3" />
+diff --git a/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_5x7.xml b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_5x7.xml
+new file mode 100644
+index 00000000..6fab484a
+--- /dev/null
++++ b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_5x7.xml
+@@ -0,0 +1,2 @@
++<?xml version="1.0" encoding="utf-8"?>
++<favorites xmlns:launcher="http://schemas.android.com/apk/res-auto/com.android.launcher3" />
+diff --git a/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_5x8.xml b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_5x8.xml
+new file mode 100644
+index 00000000..6fab484a
+--- /dev/null
++++ b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_5x8.xml
+@@ -0,0 +1,2 @@
++<?xml version="1.0" encoding="utf-8"?>
++<favorites xmlns:launcher="http://schemas.android.com/apk/res-auto/com.android.launcher3" />
+diff --git a/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_6x5.xml b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_6x5.xml
+new file mode 100644
+index 00000000..6fab484a
+--- /dev/null
++++ b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_6x5.xml
+@@ -0,0 +1,2 @@
++<?xml version="1.0" encoding="utf-8"?>
++<favorites xmlns:launcher="http://schemas.android.com/apk/res-auto/com.android.launcher3" />
+diff --git a/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_6x6.xml b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_6x6.xml
+new file mode 100644
+index 00000000..6fab484a
+--- /dev/null
++++ b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_6x6.xml
+@@ -0,0 +1,2 @@
++<?xml version="1.0" encoding="utf-8"?>
++<favorites xmlns:launcher="http://schemas.android.com/apk/res-auto/com.android.launcher3" />
+diff --git a/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_7x3.xml b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_7x3.xml
+new file mode 100644
+index 00000000..6fab484a
+--- /dev/null
++++ b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_7x3.xml
+@@ -0,0 +1,2 @@
++<?xml version="1.0" encoding="utf-8"?>
++<favorites xmlns:launcher="http://schemas.android.com/apk/res-auto/com.android.launcher3" />
+diff --git a/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_8x3.xml b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_8x3.xml
+new file mode 100644
+index 00000000..6fab484a
+--- /dev/null
++++ b/overlay/rro_packages/Launcher3Overlay/res/xml/default_workspace_8x3.xml
+@@ -0,0 +1,2 @@
++<?xml version="1.0" encoding="utf-8"?>
++<favorites xmlns:launcher="http://schemas.android.com/apk/res-auto/com.android.launcher3" />

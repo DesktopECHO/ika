@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.lineageos.desktop.overlay.connectivity">
+
+    <application android:hasCode="false" />
+
+    <overlay
+        android:targetPackage="com.android.connectivity.resources"
+        android:targetName="ServiceConnectivityResourcesConfig"
+        android:isStatic="true"
+        android:priority="200" />
+</manifest>

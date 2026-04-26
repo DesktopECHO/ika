@@ -1,0 +1,270 @@
+diff -ruN /tmp/webrtc_patch_old/common_audio/fir_filter_factory.cc /tmp/webrtc_patch_new/common_audio/fir_filter_factory.cc
+--- common_audio/fir_filter_factory.cc
++++ common_audio/fir_filter_factory.cc
+@@ -17,7 +17,9 @@
+ #if defined(WEBRTC_HAS_NEON)
+ #include "common_audio/fir_filter_neon.h"
+ #elif defined(WEBRTC_ARCH_X86_FAMILY)
++#if defined(WEBRTC_ENABLE_AVX2)
+ #include "common_audio/fir_filter_avx2.h"
++#endif
+ #include "common_audio/fir_filter_sse.h"
+ #include "system_wrappers/include/cpu_features_wrapper.h"  // kSSE2, WebRtc_G...
+ #endif
+@@ -35,11 +37,14 @@
+   FIRFilter* filter = nullptr;
+ // If we know the minimum architecture at compile time, avoid CPU detection.
+ #if defined(WEBRTC_ARCH_X86_FAMILY)
++#if defined(WEBRTC_ENABLE_AVX2)
+   // x86 CPU detection required.
+   if (GetCPUInfo(kAVX2)) {
+     filter =
+         new FIRFilterAVX2(coefficients, coefficients_length, max_input_length);
+-  } else if (GetCPUInfo(kSSE2)) {
++  } else
++#endif
++  if (GetCPUInfo(kSSE2)) {
+     filter =
+         new FIRFilterSSE2(coefficients, coefficients_length, max_input_length);
+   } else {
+diff -ruN /tmp/webrtc_patch_old/common_audio/resampler/sinc_resampler.cc /tmp/webrtc_patch_new/common_audio/resampler/sinc_resampler.cc
+--- common_audio/resampler/sinc_resampler.cc
++++ common_audio/resampler/sinc_resampler.cc
+@@ -126,10 +126,13 @@
+ #if defined(WEBRTC_HAS_NEON)
+   convolve_proc_ = Convolve_NEON;
+ #elif defined(WEBRTC_ARCH_X86_FAMILY)
++#if defined(WEBRTC_ENABLE_AVX2)
+   // Using AVX2 instead of SSE2 when AVX2/FMA3 supported.
+   if (GetCPUInfo(kAVX2) && GetCPUInfo(kFMA3))
+     convolve_proc_ = Convolve_AVX2;
+-  else if (GetCPUInfo(kSSE2))
++  else
++#endif
++  if (GetCPUInfo(kSSE2))
+     convolve_proc_ = Convolve_SSE;
+   else
+     convolve_proc_ = Convolve_C;
+diff -ruN /tmp/webrtc_patch_old/modules/audio_processing/aec3/adaptive_fir_filter.cc /tmp/webrtc_patch_new/modules/audio_processing/aec3/adaptive_fir_filter.cc
+--- modules/audio_processing/aec3/adaptive_fir_filter.cc
++++ modules/audio_processing/aec3/adaptive_fir_filter.cc
+@@ -560,10 +560,12 @@
+     case Aec3Optimization::kSse2:
+       aec3::ApplyFilter_Sse2(render_buffer, current_size_partitions_, H_, S);
+       break;
++#if defined(WEBRTC_ENABLE_AVX2)
+     case Aec3Optimization::kAvx2:
+       aec3::ApplyFilter_Avx2(render_buffer, current_size_partitions_, H_, S);
+       break;
+ #endif
++#endif
+ #if defined(WEBRTC_HAS_NEON)
+     case Aec3Optimization::kNeon:
+       aec3::ApplyFilter_Neon(render_buffer, current_size_partitions_, H_, S);
+@@ -604,10 +606,12 @@
+     case Aec3Optimization::kSse2:
+       aec3::ComputeFrequencyResponse_Sse2(current_size_partitions_, H_, H2);
+       break;
++#if defined(WEBRTC_ENABLE_AVX2)
+     case Aec3Optimization::kAvx2:
+       aec3::ComputeFrequencyResponse_Avx2(current_size_partitions_, H_, H2);
+       break;
+ #endif
++#endif
+ #if defined(WEBRTC_HAS_NEON)
+     case Aec3Optimization::kNeon:
+       aec3::ComputeFrequencyResponse_Neon(current_size_partitions_, H_, H2);
+@@ -630,11 +634,13 @@
+       aec3::AdaptPartitions_Sse2(render_buffer, G, current_size_partitions_,
+                                  &H_);
+       break;
++#if defined(WEBRTC_ENABLE_AVX2)
+     case Aec3Optimization::kAvx2:
+       aec3::AdaptPartitions_Avx2(render_buffer, G, current_size_partitions_,
+                                  &H_);
+       break;
+ #endif
++#endif
+ #if defined(WEBRTC_HAS_NEON)
+     case Aec3Optimization::kNeon:
+       aec3::AdaptPartitions_Neon(render_buffer, G, current_size_partitions_,
+diff -ruN /tmp/webrtc_patch_old/modules/audio_processing/aec3/adaptive_fir_filter_erl.cc /tmp/webrtc_patch_new/modules/audio_processing/aec3/adaptive_fir_filter_erl.cc
+--- modules/audio_processing/aec3/adaptive_fir_filter_erl.cc
++++ modules/audio_processing/aec3/adaptive_fir_filter_erl.cc
+@@ -85,10 +85,12 @@
+     case Aec3Optimization::kSse2:
+       aec3::ErlComputer_SSE2(H2, erl);
+       break;
++#if defined(WEBRTC_ENABLE_AVX2)
+     case Aec3Optimization::kAvx2:
+       aec3::ErlComputer_AVX2(H2, erl);
+       break;
+ #endif
++#endif
+ #if defined(WEBRTC_HAS_NEON)
+     case Aec3Optimization::kNeon:
+       aec3::ErlComputer_NEON(H2, erl);
+diff -ruN /tmp/webrtc_patch_old/modules/audio_processing/aec3/aec3_common.cc /tmp/webrtc_patch_new/modules/audio_processing/aec3/aec3_common.cc
+--- modules/audio_processing/aec3/aec3_common.cc
++++ modules/audio_processing/aec3/aec3_common.cc
+@@ -20,9 +20,12 @@
+ 
+ Aec3Optimization DetectOptimization() {
+ #if defined(WEBRTC_ARCH_X86_FAMILY)
++#if defined(WEBRTC_ENABLE_AVX2)
+   if (GetCPUInfo(kAVX2) != 0) {
+     return Aec3Optimization::kAvx2;
+-  } else if (GetCPUInfo(kSSE2) != 0) {
++  } else
++#endif
++  if (GetCPUInfo(kSSE2) != 0) {
+     return Aec3Optimization::kSse2;
+   }
+ #endif
+diff -ruN /tmp/webrtc_patch_old/modules/audio_processing/aec3/fft_data.h /tmp/webrtc_patch_new/modules/audio_processing/aec3/fft_data.h
+--- modules/audio_processing/aec3/fft_data.h
++++ modules/audio_processing/aec3/fft_data.h
+@@ -41,7 +41,9 @@
+   }
+ 
+   // Computes the power spectrum of the data.
++#if defined(WEBRTC_ARCH_X86_FAMILY) && defined(WEBRTC_ENABLE_AVX2)
+   void SpectrumAVX2(rtc::ArrayView<float> power_spectrum) const;
++#endif
+ 
+   // Computes the power spectrum of the data.
+   void Spectrum(Aec3Optimization optimization,
+@@ -63,10 +65,12 @@
+         power_spectrum[kFftLengthBy2] = re[kFftLengthBy2] * re[kFftLengthBy2] +
+                                         im[kFftLengthBy2] * im[kFftLengthBy2];
+       } break;
++#if defined(WEBRTC_ENABLE_AVX2)
+       case Aec3Optimization::kAvx2:
+         SpectrumAVX2(power_spectrum);
+         break;
+ #endif
++#endif
+       default:
+         std::transform(re.begin(), re.end(), im.begin(), power_spectrum.begin(),
+                        [](float a, float b) { return a * a + b * b; });
+diff -ruN /tmp/webrtc_patch_old/modules/audio_processing/aec3/matched_filter.cc /tmp/webrtc_patch_new/modules/audio_processing/aec3/matched_filter.cc
+--- modules/audio_processing/aec3/matched_filter.cc
++++ modules/audio_processing/aec3/matched_filter.cc
+@@ -769,6 +769,7 @@
+             filters_[n], &filters_updated, &error_sum, compute_pre_echo,
+             instantaneous_accumulated_error_, scratch_memory_);
+         break;
++#if defined(WEBRTC_ENABLE_AVX2)
+       case Aec3Optimization::kAvx2:
+         aec3::MatchedFilterCore_AVX2(
+             x_start_index, x2_sum_threshold, smoothing, render_buffer.buffer, y,
+@@ -776,6 +777,7 @@
+             instantaneous_accumulated_error_, scratch_memory_);
+         break;
+ #endif
++#endif
+ #if defined(WEBRTC_HAS_NEON)
+       case Aec3Optimization::kNeon:
+         aec3::MatchedFilterCore_NEON(
+diff -ruN /tmp/webrtc_patch_old/modules/audio_processing/aec3/vector_math.h /tmp/webrtc_patch_new/modules/audio_processing/aec3/vector_math.h
+--- modules/audio_processing/aec3/vector_math.h
++++ modules/audio_processing/aec3/vector_math.h
+@@ -40,7 +40,9 @@
+       : optimization_(optimization) {}
+ 
+   // Elementwise square root.
++#if defined(WEBRTC_ARCH_X86_FAMILY) && defined(WEBRTC_ENABLE_AVX2)
+   void SqrtAVX2(rtc::ArrayView<float> x);
++#endif
+   void Sqrt(rtc::ArrayView<float> x) {
+     switch (optimization_) {
+ #if defined(WEBRTC_ARCH_X86_FAMILY)
+@@ -59,10 +61,12 @@
+           x[j] = sqrtf(x[j]);
+         }
+       } break;
++#if defined(WEBRTC_ENABLE_AVX2)
+       case Aec3Optimization::kAvx2:
+         SqrtAVX2(x);
+         break;
+ #endif
++#endif
+ #if defined(WEBRTC_HAS_NEON)
+       case Aec3Optimization::kNeon: {
+         const int x_size = static_cast<int>(x.size());
+@@ -114,9 +118,11 @@
+   }
+ 
+   // Elementwise vector multiplication z = x * y.
++#if defined(WEBRTC_ARCH_X86_FAMILY) && defined(WEBRTC_ENABLE_AVX2)
+   void MultiplyAVX2(rtc::ArrayView<const float> x,
+                     rtc::ArrayView<const float> y,
+                     rtc::ArrayView<float> z);
++#endif
+   void Multiply(rtc::ArrayView<const float> x,
+                 rtc::ArrayView<const float> y,
+                 rtc::ArrayView<float> z) {
+@@ -140,10 +146,12 @@
+           z[j] = x[j] * y[j];
+         }
+       } break;
++#if defined(WEBRTC_ENABLE_AVX2)
+       case Aec3Optimization::kAvx2:
+         MultiplyAVX2(x, y, z);
+         break;
+ #endif
++#endif
+ #if defined(WEBRTC_HAS_NEON)
+       case Aec3Optimization::kNeon: {
+         const int x_size = static_cast<int>(x.size());
+@@ -169,7 +177,9 @@
+   }
+ 
+   // Elementwise vector accumulation z += x.
++#if defined(WEBRTC_ARCH_X86_FAMILY) && defined(WEBRTC_ENABLE_AVX2)
+   void AccumulateAVX2(rtc::ArrayView<const float> x, rtc::ArrayView<float> z);
++#endif
+   void Accumulate(rtc::ArrayView<const float> x, rtc::ArrayView<float> z) {
+     RTC_DCHECK_EQ(z.size(), x.size());
+     switch (optimization_) {
+@@ -190,10 +200,12 @@
+           z[j] += x[j];
+         }
+       } break;
++#if defined(WEBRTC_ENABLE_AVX2)
+       case Aec3Optimization::kAvx2:
+         AccumulateAVX2(x, z);
+         break;
+ #endif
++#endif
+ #if defined(WEBRTC_HAS_NEON)
+       case Aec3Optimization::kNeon: {
+         const int x_size = static_cast<int>(x.size());
+diff -ruN /tmp/webrtc_patch_old/modules/audio_processing/agc2/rnn_vad/vector_math.h /tmp/webrtc_patch_new/modules/audio_processing/agc2/rnn_vad/vector_math.h
+--- modules/audio_processing/agc2/rnn_vad/vector_math.h
++++ modules/audio_processing/agc2/rnn_vad/vector_math.h
+@@ -44,9 +44,12 @@
+                    rtc::ArrayView<const float> y) const {
+     RTC_DCHECK_EQ(x.size(), y.size());
+ #if defined(WEBRTC_ARCH_X86_FAMILY)
++#if defined(WEBRTC_ENABLE_AVX2)
+     if (cpu_features_.avx2) {
+       return DotProductAvx2(x, y);
+-    } else if (cpu_features_.sse2) {
++    } else
++#endif
++    if (cpu_features_.sse2) {
+       __m128 accumulator = _mm_setzero_ps();
+       constexpr int kBlockSizeLog2 = 2;
+       constexpr int kBlockSize = 1 << kBlockSizeLog2;
+@@ -102,8 +105,10 @@
+   }
+ 
+  private:
++#if defined(WEBRTC_ARCH_X86_FAMILY) && defined(WEBRTC_ENABLE_AVX2)
+   float DotProductAvx2(rtc::ArrayView<const float> x,
+                        rtc::ArrayView<const float> y) const;
++#endif
+ 
+   const AvailableCpuFeatures cpu_features_;
+ };

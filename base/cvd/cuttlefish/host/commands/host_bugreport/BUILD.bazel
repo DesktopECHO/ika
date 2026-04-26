@@ -1,0 +1,27 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_binary(
+    name = "cvd_internal_host_bugreport",
+    srcs = ["main.cc"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:environment",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/common/libs/utils:tee_logging",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/zip:zip_file",
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
+        "@fmt",
+        "@gflags",
+        "@zlib",
+    ],
+)

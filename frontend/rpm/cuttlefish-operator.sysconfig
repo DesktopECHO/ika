@@ -1,0 +1,10 @@
+# Listen on all addresses by default.
+operator_listen_address=0.0.0.0
+
+# Serve HTTPS by default.
+operator_https_port=1443
+
+# Optional overrides.
+#operator_http_port=
+#operator_tls_cert_dir=
+#operator_webui_url=

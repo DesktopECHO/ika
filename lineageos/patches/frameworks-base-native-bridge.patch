@@ -1,0 +1,212 @@
+Patch summary:
+Support x86-to-ARM native bridge installs by forcing translated APK native
+libraries to be extracted as real files when the selected ABI is bridged. Some
+apps are marked as not requiring native library extraction, which is fine for
+normal same-ISA execution but unreliable for translated ARM-on-x86 execution.
+
+This patch keeps the normal package manager ABI selection flow intact and adds
+the special extraction path only after a bridged ABI has been selected. That
+keeps native apps on the existing fast path while making translated apps usable.
+
+diff --git a/core/java/com/android/internal/content/NativeLibraryHelper.java b/core/java/com/android/internal/content/NativeLibraryHelper.java
+index d219a00a257c..a007eeb20241 100644
+--- a/core/java/com/android/internal/content/NativeLibraryHelper.java
++++ b/core/java/com/android/internal/content/NativeLibraryHelper.java
+@@ -214,9 +214,16 @@ public class NativeLibraryHelper {
+      *         error code from that class if not
+      */
+     public static int copyNativeBinaries(Handle handle, File sharedLibraryDir, String abi) {
++        return copyNativeBinaries(handle, sharedLibraryDir, abi,
++                false /* forceExtractNativeLibs */);
++    }
++
++    public static int copyNativeBinaries(Handle handle, File sharedLibraryDir, String abi,
++            boolean forceExtractNativeLibs) {
+         for (long apkHandle : handle.apkHandles) {
+             int res = nativeCopyNativeBinaries(apkHandle, sharedLibraryDir.getPath(), abi,
+-                    handle.extractNativeLibs, handle.debuggable, handle.pageSizeCompatDisabled);
++                    handle.extractNativeLibs || forceExtractNativeLibs, handle.debuggable,
++                    handle.pageSizeCompatDisabled);
+             if (res != INSTALL_SUCCEEDED) {
+                 return res;
+             }
+@@ -337,6 +344,13 @@ public class NativeLibraryHelper {
+ 
+     public static int copyNativeBinariesForSupportedAbi(Handle handle, File libraryRoot,
+             String[] abiList, boolean useIsaSubdir, boolean isIncremental) throws IOException {
++        return copyNativeBinariesForSupportedAbi(handle, libraryRoot, abiList, useIsaSubdir,
++                isIncremental, false /* forceExtractNativeLibs */);
++    }
++
++    public static int copyNativeBinariesForSupportedAbi(Handle handle, File libraryRoot,
++            String[] abiList, boolean useIsaSubdir, boolean isIncremental,
++            boolean forceExtractNativeLibs) throws IOException {
+         /*
+          * If this is an internal application or our nativeLibraryPath points to
+          * the app-lib directory, unpack the libraries if necessary.
+@@ -361,7 +375,8 @@ public class NativeLibraryHelper {
+ 
+         if (isIncremental) {
+             int res =
+-                    incrementalConfigureNativeBinariesForSupportedAbi(handle, subDir, supportedAbi);
++                    incrementalConfigureNativeBinariesForSupportedAbi(handle, subDir, supportedAbi,
++                            forceExtractNativeLibs);
+             if (res != PackageManager.INSTALL_SUCCEEDED) {
+                 // TODO(b/133435829): the caller of this function expects that we return the index
+                 // to the supported ABI. However, any non-negative integer can be a valid index.
+@@ -380,7 +395,7 @@ public class NativeLibraryHelper {
+ 
+         // Even if extractNativeLibs is false, we still need to check if the native libs in the APK
+         // are valid. This is done in the native code.
+-        int copyRet = copyNativeBinaries(handle, subDir, supportedAbi);
++        int copyRet = copyNativeBinaries(handle, subDir, supportedAbi, forceExtractNativeLibs);
+         if (copyRet != PackageManager.INSTALL_SUCCEEDED) {
+             return copyRet;
+         }
+@@ -549,7 +564,7 @@ public class NativeLibraryHelper {
+      * @return Integer code if installation succeeds or fails.
+      */
+     private static int incrementalConfigureNativeBinariesForSupportedAbi(Handle handle,
+-            File libSubDir, String abi) {
++            File libSubDir, String abi, boolean forceExtractNativeLibs) {
+         final String[] apkPaths = handle.apkPaths;
+         if (apkPaths == null || apkPaths.length == 0) {
+             Slog.e(TAG, "No apks to extract native libraries from.");
+@@ -578,7 +593,7 @@ public class NativeLibraryHelper {
+ 
+         for (int i = 0; i < apkPaths.length; i++) {
+             if (!incrementalStorage.configureNativeBinaries(apkPaths[i], libRelativeDir, abi,
+-                    handle.extractNativeLibs)) {
++                    handle.extractNativeLibs || forceExtractNativeLibs)) {
+                 return PackageManager.INSTALL_FAILED_INTERNAL_ERROR;
+             }
+         }
+diff --git a/services/core/java/com/android/server/pm/PackageAbiHelperImpl.java b/services/core/java/com/android/server/pm/PackageAbiHelperImpl.java
+index 639d02ca42b0..93792c93e128 100644
+--- a/services/core/java/com/android/server/pm/PackageAbiHelperImpl.java
++++ b/services/core/java/com/android/server/pm/PackageAbiHelperImpl.java
+@@ -344,6 +344,57 @@ final class PackageAbiHelperImpl implements PackageAbiHelper {
+         return sNativelySupported64BitAbis;
+     }
+ 
++    private static boolean isTranslatedAbi(@Nullable String abi) {
++        if (TextUtils.isEmpty(abi)) {
++            return false;
++        }
++
++        final String isa = VMRuntime.getInstructionSet(abi);
++        return !TextUtils.isEmpty(SystemProperties.get("ro.dalvik.vm.isa." + isa));
++    }
++
++    private static int maybeCopyTranslatedNativeBinaries(
++            NativeLibraryHelper.Handle handle, File nativeLibraryRoot, String[] supportedAbis,
++            boolean useIsaSpecificSubdirs, boolean onIncremental, int abi) throws IOException {
++        if (abi < 0 || !isTranslatedAbi(supportedAbis[abi])) {
++            return abi;
++        }
++
++        // Native bridge app libraries must be real files; APK zip paths are unsafe for translated
++        // guest linkers.
++        Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "copyTranslatedNativeBinaries");
++        try {
++            final int copyRet = NativeLibraryHelper.copyNativeBinariesForSupportedAbi(
++                    handle, nativeLibraryRoot, new String[]{supportedAbis[abi]},
++                    useIsaSpecificSubdirs, onIncremental, true /* forceExtractNativeLibs */);
++            return copyRet >= 0 ? abi : copyRet;
++        } finally {
++            Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
++        }
++    }
++
++    private static int copyNativeBinariesForSupportedAbi(
++            NativeLibraryHelper.Handle handle, File nativeLibraryRoot, String[] supportedAbis,
++            boolean useIsaSpecificSubdirs, boolean onIncremental) throws IOException {
++        Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "copyNativeBinaries");
++        try {
++            return NativeLibraryHelper.copyNativeBinariesForSupportedAbi(handle,
++                    nativeLibraryRoot, supportedAbis, useIsaSpecificSubdirs, onIncremental);
++        } finally {
++            Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
++        }
++    }
++
++    private static int findSupportedAbi(
++            NativeLibraryHelper.Handle handle, String[] supportedAbis) {
++        Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "findSupportedAbi");
++        try {
++            return NativeLibraryHelper.findSupportedAbi(handle, supportedAbis);
++        } finally {
++            Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
++        }
++    }
++
+     @Override
+     @SuppressWarnings("AndroidFrameworkCompatChange") // the check is before the apk is installed
+     public Pair<Abis, NativeLibraryPaths> derivePackageAbi(AndroidPackage pkg, boolean isSystemApp,
+@@ -402,16 +453,13 @@ final class PackageAbiHelperImpl implements PackageAbiHelper {
+                 int abi64 = PackageManager.NO_NATIVE_LIBRARIES;
+                 if (systemSupports32BitAbi) {
+                     if (extractLibs) {
+-                        Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "copyNativeBinaries");
+-                        abi32 = NativeLibraryHelper.copyNativeBinariesForSupportedAbi(handle,
+-                                nativeLibraryRoot, supported32BitAbis,
+-                                useIsaSpecificSubdirs, onIncremental);
++                        abi32 = copyNativeBinariesForSupportedAbi(handle, nativeLibraryRoot,
++                                supported32BitAbis, useIsaSpecificSubdirs, onIncremental);
+                     } else {
+-                        Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "findSupportedAbi");
+-                        abi32 = NativeLibraryHelper.findSupportedAbi(
+-                                handle, supported32BitAbis);
++                        abi32 = findSupportedAbi(handle, supported32BitAbis);
++                        abi32 = maybeCopyTranslatedNativeBinaries(handle, nativeLibraryRoot,
++                                supported32BitAbis, useIsaSpecificSubdirs, onIncremental, abi32);
+                     }
+-                    Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
+                 }
+ 
+                 // Shared library native code should be in the APK zip aligned
+@@ -426,16 +474,13 @@ final class PackageAbiHelperImpl implements PackageAbiHelper {
+ 
+                 if (systemSupports64BitAbi) {
+                     if (extractLibs) {
+-                        Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "copyNativeBinaries");
+-                        abi64 = NativeLibraryHelper.copyNativeBinariesForSupportedAbi(handle,
+-                                nativeLibraryRoot, supported64BitAbis,
+-                                useIsaSpecificSubdirs, onIncremental);
++                        abi64 = copyNativeBinariesForSupportedAbi(handle, nativeLibraryRoot,
++                                supported64BitAbis, useIsaSpecificSubdirs, onIncremental);
+                     } else {
+-                        Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "findSupportedAbi");
+-                        abi64 = NativeLibraryHelper.findSupportedAbi(
+-                                handle, supported64BitAbis);
++                        abi64 = findSupportedAbi(handle, supported64BitAbis);
++                        abi64 = maybeCopyTranslatedNativeBinaries(handle, nativeLibraryRoot,
++                                supported64BitAbis, useIsaSpecificSubdirs, onIncremental, abi64);
+                     }
+-                    Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
+                 }
+ 
+                 maybeThrowExceptionForMultiArchCopy(
+@@ -491,16 +536,15 @@ final class PackageAbiHelperImpl implements PackageAbiHelper {
+                     }
+                 }
+ 
+-                final int copyRet;
++                int copyRet;
+                 if (extractLibs) {
+-                    Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "copyNativeBinaries");
+-                    copyRet = NativeLibraryHelper.copyNativeBinariesForSupportedAbi(handle,
+-                            nativeLibraryRoot, abiList, useIsaSpecificSubdirs, onIncremental);
++                    copyRet = copyNativeBinariesForSupportedAbi(handle, nativeLibraryRoot, abiList,
++                            useIsaSpecificSubdirs, onIncremental);
+                 } else {
+-                    Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "findSupportedAbi");
+-                    copyRet = NativeLibraryHelper.findSupportedAbi(handle, abiList);
++                    copyRet = findSupportedAbi(handle, abiList);
++                    copyRet = maybeCopyTranslatedNativeBinaries(handle, nativeLibraryRoot,
++                            abiList, useIsaSpecificSubdirs, onIncremental, copyRet);
+                 }
+-                Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
+ 
+                 if (copyRet < 0 && copyRet != PackageManager.NO_NATIVE_LIBRARIES) {
+                     throw new PackageManagerException(INSTALL_FAILED_INTERNAL_ERROR,

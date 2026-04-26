@@ -1,0 +1,30 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_library(
+    name = "oemlock",
+    srcs = ["oemlock.cpp"],
+    hdrs = ["oemlock.h"],
+    deps = [
+        "//cuttlefish/host/commands/secure_env/storage",
+        "//cuttlefish/result",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
+    ],
+)
+
+cf_cc_library(
+    name = "oemlock_responder",
+    srcs = ["oemlock_responder.cpp"],
+    hdrs = ["oemlock_responder.h"],
+    deps = [
+        "//cuttlefish/common/libs/security:oemlock",
+        "//cuttlefish/common/libs/transport",
+        "//cuttlefish/host/commands/secure_env/oemlock",
+        "//cuttlefish/result",
+        "@abseil-cpp//absl/log",
+    ],
+)

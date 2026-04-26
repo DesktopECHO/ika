@@ -1,0 +1,87 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+load("//:build_variables.bzl", "COPTS")
+
+package(
+    default_visibility = [
+        "//:android_cuttlefish",
+        "@android_system_core//:__subpackages__",
+        "@android_system_extras//:__subpackages__",
+        "@e2fsprogs//:__subpackages__",
+        "@f2fs_tools//:__subpackages__",
+        "@wmediumd//:__subpackages__",
+    ],
+)
+
+# This file needs to change the signature of strerror_r exposed
+# by a system header by defining a feature macro, which requires
+# header modules to be disabled.
+cc_library(
+    name = "libbase_posix_strerror",
+    srcs = [
+        "posix_strerror_r.cpp",
+    ],
+    copts = ["-D_POSIX_C_SOURCE=200112"],
+    features = ["-use_header_modules"],
+    visibility = ["//visibility:private"],
+)
+
+cc_library(
+    name = "libbase",
+    srcs = [
+        "cmsg.cpp",
+        "errors_unix.cpp",
+        "file.cpp",
+        "hex.cpp",
+        "include/logging_splitters.h",
+        "logging.cpp",
+        "mapped_file.cpp",
+        "parsebool.cpp",
+        "parsenetaddress.cpp",
+        "properties.cpp",
+        "stringprintf.cpp",
+        "strings.cpp",
+        "threads.cpp",
+    ],
+    hdrs = [
+        "include/android-base/cmsg.h",
+        "include/android-base/collections.h",
+        "include/android-base/endian.h",
+        "include/android-base/errno_restorer.h",
+        "include/android-base/errors.h",
+        "include/android-base/expected.h",
+        "include/android-base/file.h",
+        "include/android-base/format.h",
+        "include/android-base/hex.h",
+        "include/android-base/logging.h",
+        "include/android-base/macros.h",
+        "include/android-base/mapped_file.h",
+        "include/android-base/memory.h",
+        "include/android-base/no_destructor.h",
+        "include/android-base/off64_t.h",
+        "include/android-base/parsebool.h",
+        "include/android-base/parsedouble.h",
+        "include/android-base/parseint.h",
+        "include/android-base/parsenetaddress.h",
+        "include/android-base/properties.h",
+        "include/android-base/result.h",
+        "include/android-base/scopeguard.h",
+        "include/android-base/stringprintf.h",
+        "include/android-base/strings.h",
+        "include/android-base/thread_annotations.h",
+        "include/android-base/threads.h",
+        "include/android-base/unique_fd.h",
+        "include/android-base/utf8.h",
+    ],
+    copts = COPTS + [
+        "-Wno-vla-cxx-extension",
+        "-Wno-c99-designator",
+        "-Wno-thread-safety-attributes",
+    ],
+    includes = ["include"],
+    deps = [
+        ":libbase_posix_strerror",
+        "//android:log_header",
+        "@fmt",
+    ],
+)

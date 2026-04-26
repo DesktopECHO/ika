@@ -1,0 +1,360 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_library(
+    name = "access_kregistry",
+    srcs = ["access_kregistry.cc"],
+    hdrs = ["access_kregistry.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/libs/config:config_instance_derived",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:data_image",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "android_composite_disk_config",
+    srcs = ["android_composite_disk_config.cc"],
+    hdrs = ["android_composite_disk_config.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/commands/assemble_cvd/android_build",
+        "//cuttlefish/host/commands/assemble_cvd/disk:image_file",
+        "//cuttlefish/host/commands/assemble_cvd/flags:build_super_image",
+        "//cuttlefish/host/commands/assemble_cvd/flags:system_image_dir",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/image_aggregator",
+        "//cuttlefish/host/libs/image_aggregator:gpt_type_guid",
+        "//cuttlefish/host/libs/image_aggregator:super_builder",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "ap_composite_disk",
+    srcs = ["ap_composite_disk.cc"],
+    hdrs = ["ap_composite_disk.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/commands/assemble_cvd:assemble_cvd_flags",
+        "//cuttlefish/host/commands/assemble_cvd:disk_builder",
+        "//cuttlefish/host/libs/config:ap_boot_flow",
+        "//cuttlefish/host/libs/config:boot_flow",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/image_aggregator",
+    ],
+)
+
+cf_cc_library(
+    name = "bootloader_present",
+    srcs = ["bootloader_present.cc"],
+    hdrs = ["bootloader_present.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "chromeos_composite_disk",
+    srcs = ["chromeos_composite_disk.cc"],
+    hdrs = ["chromeos_composite_disk.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/commands/assemble_cvd/disk:chromeos_state",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/image_aggregator",
+        "//cuttlefish/host/libs/image_aggregator:gpt_type_guid",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_library(
+    name = "chromeos_state",
+    srcs = ["chromeos_state.cc"],
+    hdrs = ["chromeos_state.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/libs/config:boot_flow",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:data_image",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "efi_loader",
+    srcs = ["efi_loader.cc"],
+    hdrs = ["efi_loader.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd/disk:image_file",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/result:result_type",
+    ],
+)
+
+cf_cc_library(
+    name = "factory_reset_protected",
+    srcs = ["factory_reset_protected.cc"],
+    hdrs = ["factory_reset_protected.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:data_image",
+        "//cuttlefish/host/libs/image_aggregator",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "fuchsia_composite_disk",
+    srcs = ["fuchsia_composite_disk.cc"],
+    hdrs = ["fuchsia_composite_disk.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/image_aggregator",
+        "//cuttlefish/host/libs/image_aggregator:gpt_type_guid",
+    ],
+)
+
+cf_cc_library(
+    name = "gem5_image_unpacker",
+    srcs = ["gem5_image_unpacker.cpp"],
+    hdrs = ["gem5_image_unpacker.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/commands/assemble_cvd:boot_image_utils",
+        "//cuttlefish/host/commands/assemble_cvd/flags:boot_image",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_library(
+    name = "generate_persistent_bootconfig",
+    srcs = ["generate_persistent_bootconfig.cpp"],
+    hdrs = ["generate_persistent_bootconfig.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/key_equals_value",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:size_utils",
+        "//cuttlefish/host/commands/assemble_cvd:bootconfig_args",
+        "//cuttlefish/host/commands/assemble_cvd/boot_image:vendor_boot_image",
+        "//cuttlefish/host/libs/avb",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:data_image",
+        "//cuttlefish/host/libs/image_aggregator",
+        "//cuttlefish/io:shared_fd",
+        "//cuttlefish/io:string",
+        "//cuttlefish/result",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_library(
+    name = "generate_persistent_vbmeta",
+    srcs = ["generate_persistent_vbmeta.cpp"],
+    hdrs = ["generate_persistent_vbmeta.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/commands/assemble_cvd:boot_config",
+        "//cuttlefish/host/commands/assemble_cvd:boot_image_utils",
+        "//cuttlefish/host/commands/assemble_cvd/disk:generate_persistent_bootconfig",
+        "//cuttlefish/host/libs/avb",
+        "//cuttlefish/host/libs/config:ap_boot_flow",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/image_aggregator",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "hwcomposer_pmem",
+    srcs = ["hwcomposer_pmem.cc"],
+    hdrs = ["hwcomposer_pmem.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/libs/config:config_instance_derived",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:data_image",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "image_file",
+    hdrs = ["image_file.h"],
+    deps = [
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "initialize_instance_composite_disk",
+    srcs = ["initialize_instance_composite_disk.cc"],
+    hdrs = ["initialize_instance_composite_disk.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/commands/assemble_cvd:assemble_cvd_flags",
+        "//cuttlefish/host/commands/assemble_cvd:boot_config",
+        "//cuttlefish/host/commands/assemble_cvd:disk_builder",
+        "//cuttlefish/host/commands/assemble_cvd/disk:factory_reset_protected",
+        "//cuttlefish/host/commands/assemble_cvd/disk:generate_persistent_bootconfig",
+        "//cuttlefish/host/commands/assemble_cvd/disk:generate_persistent_vbmeta",
+        "//cuttlefish/host/libs/config:ap_boot_flow",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/image_aggregator",
+        "//cuttlefish/host/libs/vm_manager",
+        "//cuttlefish/result",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "kernel_ramdisk_repacker",
+    srcs = ["kernel_ramdisk_repacker.cpp"],
+    hdrs = ["kernel_ramdisk_repacker.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/commands/assemble_cvd:boot_image_utils",
+        "//cuttlefish/host/commands/assemble_cvd:vendor_dlkm_utils",
+        "//cuttlefish/host/commands/assemble_cvd/disk:image_file",
+        "//cuttlefish/host/commands/assemble_cvd/flags:boot_image",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_library(
+    name = "linux_composite_disk",
+    srcs = ["linux_composite_disk.cc"],
+    hdrs = ["linux_composite_disk.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/image_aggregator",
+        "//cuttlefish/host/libs/image_aggregator:gpt_type_guid",
+    ],
+)
+
+cf_cc_library(
+    name = "metadata_image",
+    srcs = ["metadata_image.cc"],
+    hdrs = ["metadata_image.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/commands/assemble_cvd/disk:image_file",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:data_image",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "misc_image",
+    srcs = ["misc_image.cc"],
+    hdrs = ["misc_image.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/commands/assemble_cvd/disk:image_file",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:data_image",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "os_composite_disk",
+    srcs = ["os_composite_disk.cc"],
+    hdrs = ["os_composite_disk.h"],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:assemble_cvd_flags",
+        "//cuttlefish/host/commands/assemble_cvd:disk_builder",
+        "//cuttlefish/host/commands/assemble_cvd/android_build",
+        "//cuttlefish/host/commands/assemble_cvd/disk:android_composite_disk_config",
+        "//cuttlefish/host/commands/assemble_cvd/disk:chromeos_composite_disk",
+        "//cuttlefish/host/commands/assemble_cvd/disk:chromeos_state",
+        "//cuttlefish/host/commands/assemble_cvd/disk:fuchsia_composite_disk",
+        "//cuttlefish/host/commands/assemble_cvd/disk:image_file",
+        "//cuttlefish/host/commands/assemble_cvd/disk:linux_composite_disk",
+        "//cuttlefish/host/commands/assemble_cvd/flags:system_image_dir",
+        "//cuttlefish/host/libs/config:boot_flow",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/image_aggregator",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "pflash",
+    srcs = ["pflash.cc"],
+    hdrs = ["pflash.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/libs/config:config_instance_derived",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:data_image",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "pstore",
+    srcs = ["pstore.cc"],
+    hdrs = ["pstore.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/libs/config:config_instance_derived",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:data_image",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "sd_card",
+    srcs = ["sd_card.cc"],
+    hdrs = ["sd_card.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:data_image",
+        "//cuttlefish/host/libs/image_aggregator:qcow2",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "vbmeta_enforce_minimum_size",
+    srcs = ["vbmeta_enforce_minimum_size.cc"],
+    hdrs = ["vbmeta_enforce_minimum_size.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/libs/avb",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/result",
+    ],
+)

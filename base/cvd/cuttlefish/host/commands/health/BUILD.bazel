@@ -1,0 +1,21 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_binary(
+    name = "health",
+    srcs = [
+        "health.cpp",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/common/libs/utils:subprocess_managed_stdio",
+        "//cuttlefish/common/libs/utils:tee_logging",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@gflags",
+    ],
+)

@@ -1,0 +1,23 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_binary(
+    name = "cvd_update_location",
+    srcs = [
+        "main.cc",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/utils:tee_logging",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/location",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
+        "@gflags",
+        "@grpc",
+        "@grpc//:grpc++",
+    ],
+)

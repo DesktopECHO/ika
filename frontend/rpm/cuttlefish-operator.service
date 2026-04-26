@@ -1,0 +1,18 @@
+[Unit]
+Description=Cuttlefish operator service
+After=network-online.target cuttlefish-host-resources.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=_cutf-operator
+Group=cvdnetwork
+SupplementaryGroups=video render
+EnvironmentFile=-/etc/sysconfig/cuttlefish-operator
+WorkingDirectory=/usr/share/cuttlefish-common/operator
+ExecStartPre=+/usr/libexec/cuttlefish/cuttlefish-operator-prepare
+ExecStart=/usr/libexec/cuttlefish/cuttlefish-operator
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

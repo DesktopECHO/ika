@@ -1,0 +1,300 @@
+#include "icon.h"
+
+#include <assert.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavutil/avutil.h>
+#include <libavutil/pixdesc.h>
+#include <libavutil/pixfmt.h>
+#include <SDL3/SDL.h>
+
+#include "config.h"
+#include "util/env.h"
+#include "util/file.h"
+#include "util/log.h"
+
+#define SCRCPY_DEFAULT_ICON_DIR PREFIX "/share/icons/hicolor/256x256/apps"
+
+static char *
+get_icon_path(const char *filename) {
+    char *icon_path;
+
+    char *icon_dir = sc_get_env("SCRCPY_ICON_DIR");
+    if (icon_dir) {
+        // if the envvar is set, use it
+        icon_path = sc_file_build_path(icon_dir, filename);
+        free(icon_dir);
+        if (!icon_path) {
+            LOG_OOM();
+            return NULL;
+        }
+        LOGD("Using icon from SCRCPY_ICON_DIR: %s", icon_path);
+        return icon_path;
+    }
+
+#ifndef PORTABLE
+    icon_path = sc_file_build_path(SCRCPY_DEFAULT_ICON_DIR, filename);
+    if (!icon_path) {
+        LOG_OOM();
+        return NULL;
+    }
+    LOGD("Using icon: %s", icon_path);
+#else
+    icon_path = sc_file_get_local_path(filename);
+    if (!icon_path) {
+        LOGE("Could not get icon path");
+        return NULL;
+    }
+    LOGD("Using icon (portable): %s", icon_path);
+#endif
+
+    return icon_path;
+}
+
+static AVFrame *
+decode_image(const char *path) {
+    AVFrame *result = NULL;
+
+    AVFormatContext *ctx = avformat_alloc_context();
+    if (!ctx) {
+        LOG_OOM();
+        return NULL;
+    }
+
+    if (avformat_open_input(&ctx, path, NULL, NULL) < 0) {
+        LOGE("Could not open icon image: %s", path);
+        goto free_ctx;
+    }
+
+    if (avformat_find_stream_info(ctx, NULL) < 0) {
+        LOGE("Could not find image stream info");
+        goto close_input;
+    }
+
+
+// In ffmpeg/doc/APIchanges:
+// 2021-04-27 - 46dac8cf3d - lavf 59.0.100 - avformat.h
+//   av_find_best_stream now uses a const AVCodec ** parameter
+//   for the returned decoder.
+#if LIBAVFORMAT_VERSION_INT >= AV_VERSION_INT(59, 0, 100)
+    const AVCodec *codec;
+#else
+    AVCodec *codec;
+#endif
+
+    int stream =
+        av_find_best_stream(ctx, AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
+    if (stream < 0 ) {
+        LOGE("Could not find best image stream");
+        goto close_input;
+    }
+
+    AVCodecParameters *params = ctx->streams[stream]->codecpar;
+
+    AVCodecContext *codec_ctx = avcodec_alloc_context3(codec);
+    if (!codec_ctx) {
+        LOG_OOM();
+        goto close_input;
+    }
+
+    if (avcodec_parameters_to_context(codec_ctx, params) < 0) {
+        LOGE("Could not fill codec context");
+        goto free_codec_ctx;
+    }
+
+    if (avcodec_open2(codec_ctx, codec, NULL) < 0) {
+        LOGE("Could not open image codec");
+        goto free_codec_ctx;
+    }
+
+    AVFrame *frame = av_frame_alloc();
+    if (!frame) {
+        LOG_OOM();
+        goto free_codec_ctx;
+    }
+
+    AVPacket *packet = av_packet_alloc();
+    if (!packet) {
+        LOG_OOM();
+        av_frame_free(&frame);
+        goto free_codec_ctx;
+    }
+
+    if (av_read_frame(ctx, packet) < 0) {
+        LOGE("Could not read frame");
+        av_packet_free(&packet);
+        av_frame_free(&frame);
+        goto free_codec_ctx;
+    }
+
+    int ret;
+    if ((ret = avcodec_send_packet(codec_ctx, packet)) < 0) {
+        LOGE("Could not send icon packet: %d", ret);
+        av_packet_free(&packet);
+        av_frame_free(&frame);
+        goto free_codec_ctx;
+    }
+
+    if ((ret = avcodec_receive_frame(codec_ctx, frame)) != 0) {
+        LOGE("Could not receive icon frame: %d", ret);
+        av_packet_free(&packet);
+        av_frame_free(&frame);
+        goto free_codec_ctx;
+    }
+
+    av_packet_free(&packet);
+
+    result = frame;
+
+free_codec_ctx:
+    avcodec_free_context(&codec_ctx);
+close_input:
+    avformat_close_input(&ctx);
+free_ctx:
+    avformat_free_context(ctx);
+
+    return result;
+}
+
+static SDL_PixelFormat
+to_sdl_pixel_format(enum AVPixelFormat fmt) {
+    switch (fmt) {
+        case AV_PIX_FMT_RGB24: return SDL_PIXELFORMAT_RGB24;
+        case AV_PIX_FMT_BGR24: return SDL_PIXELFORMAT_BGR24;
+        case AV_PIX_FMT_ARGB: return SDL_PIXELFORMAT_ARGB32;
+        case AV_PIX_FMT_RGBA: return SDL_PIXELFORMAT_RGBA32;
+        case AV_PIX_FMT_ABGR: return SDL_PIXELFORMAT_ABGR32;
+        case AV_PIX_FMT_BGRA: return SDL_PIXELFORMAT_BGRA32;
+        case AV_PIX_FMT_RGB565BE: return SDL_PIXELFORMAT_RGB565;
+        case AV_PIX_FMT_RGB555BE: return SDL_PIXELFORMAT_XRGB1555;
+        case AV_PIX_FMT_BGR565BE: return SDL_PIXELFORMAT_BGR565;
+        case AV_PIX_FMT_BGR555BE: return SDL_PIXELFORMAT_XBGR1555;
+        case AV_PIX_FMT_RGB444BE: return SDL_PIXELFORMAT_XRGB4444;
+        case AV_PIX_FMT_BGR444BE: return SDL_PIXELFORMAT_XBGR4444;
+        case AV_PIX_FMT_PAL8: return SDL_PIXELFORMAT_INDEX8;
+        default: return SDL_PIXELFORMAT_UNKNOWN;
+    }
+}
+
+static SDL_Surface *
+sc_icon_load_from_full_path(const char *path) {
+    AVFrame *frame = decode_image(path);
+    if (!frame) {
+        return NULL;
+    }
+
+    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(frame->format);
+    if (!desc) {
+        LOGE("Could not get icon format descriptor");
+        goto error;
+    }
+
+    bool is_packed = !(desc->flags & AV_PIX_FMT_FLAG_PLANAR);
+    if (!is_packed) {
+        LOGE("Could not load non-packed icon");
+        goto error;
+    }
+
+    SDL_PixelFormat format = to_sdl_pixel_format(frame->format);
+    if (format == SDL_PIXELFORMAT_UNKNOWN) {
+        LOGE("Unsupported icon pixel format: %s (%d)", desc->name,
+                                                       frame->format);
+        goto error;
+    }
+
+    SDL_Surface *surface =
+        SDL_CreateSurfaceFrom(frame->width, frame->height, format,
+                              frame->data[0], frame->linesize[0]);
+
+    if (!surface) {
+        LOGE("Could not create icon surface");
+        goto error;
+    }
+
+    if (frame->format == AV_PIX_FMT_PAL8) {
+        // Initialize the SDL palette
+        uint8_t *data = frame->data[1];
+        SDL_Color colors[256];
+        for (int i = 0; i < 256; ++i) {
+            SDL_Color *color = &colors[i];
+
+            // The palette is transported in AVFrame.data[1], is 1024 bytes
+            // long (256 4-byte entries) and is formatted the same as in
+            // AV_PIX_FMT_RGB32 described above (i.e., it is also
+            // endian-specific).
+            // <https://ffmpeg.org/doxygen/4.1/pixfmt_8h.html#a9a8e335cf3be472042bc9f0cf80cd4c5>
+#if SDL_BYTEORDER == SDL_BIG_ENDIAN
+            color->a = data[i * 4];
+            color->r = data[i * 4 + 1];
+            color->g = data[i * 4 + 2];
+            color->b = data[i * 4 + 3];
+#else
+            color->a = data[i * 4 + 3];
+            color->r = data[i * 4 + 2];
+            color->g = data[i * 4 + 1];
+            color->b = data[i * 4];
+#endif
+        }
+
+        SDL_Palette *palette = SDL_CreateSurfacePalette(surface);
+        if (!palette) {
+            LOGE("Could not create palette");
+            SDL_DestroySurface(surface);
+            goto error;
+        }
+
+        bool ok = SDL_SetPaletteColors(palette, colors, 0, 256);
+        if (!ok) {
+            LOGE("Could not set palette colors");
+            SDL_DestroySurface(surface);
+            goto error;
+        }
+    }
+
+    SDL_PropertiesID props = SDL_GetSurfaceProperties(surface);
+    if (!props) {
+        LOGE("Could not get surface properties: %s", SDL_GetError());
+        SDL_DestroySurface(surface);
+        goto error;
+    }
+
+    // frame owns the data
+    bool ok = SDL_SetPointerProperty(props, "sc_frame", frame);
+    if (!ok) {
+        LOGE("Could not set pointer property: %s", SDL_GetError());
+        SDL_DestroySurface(surface);
+        goto error;
+    }
+
+    return surface;
+
+error:
+    av_frame_free(&frame);
+    return NULL;
+}
+
+SDL_Surface *
+sc_icon_load(const char *filename) {
+    char *icon_path = get_icon_path(filename);
+    if (!icon_path) {
+        return NULL;
+    }
+
+    SDL_Surface *icon = sc_icon_load_from_full_path(icon_path);
+    free(icon_path);
+    return icon;
+}
+
+void
+sc_icon_destroy(SDL_Surface *icon) {
+    SDL_PropertiesID props = SDL_GetSurfaceProperties(icon);
+    assert(props);
+    AVFrame *frame = SDL_GetPointerProperty(props, "sc_frame", NULL);
+    assert(frame);
+    av_frame_free(&frame);
+    SDL_DestroySurface(icon);
+}

@@ -1,0 +1,217 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_library(
+    name = "enabled",
+    srcs = [
+        "enabled.cc",
+    ],
+    hdrs = [
+        "enabled.h",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+    ],
+)
+
+cf_cc_library(
+    name = "event_type",
+    srcs = [
+        "event_type.cc",
+    ],
+    hdrs = [
+        "event_type.h",
+    ],
+)
+
+cf_cc_library(
+    name = "flag_metrics",
+    srcs = [
+        "flag_metrics.cc",
+    ],
+    hdrs = [
+        "flag_metrics.h",
+    ],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd/flags:cpus",
+        "//cuttlefish/host/commands/assemble_cvd/flags:daemon",
+        "//cuttlefish/host/commands/assemble_cvd/flags:data_policy",
+        "//cuttlefish/host/commands/assemble_cvd/flags:extra_kernel_cmdline",
+        "//cuttlefish/host/commands/assemble_cvd/flags:gpu_mode",
+        "//cuttlefish/host/commands/assemble_cvd/flags:guest_enforce_security",
+        "//cuttlefish/host/commands/assemble_cvd/flags:memory_mb",
+        "//cuttlefish/host/commands/assemble_cvd/flags:restart_subprocesses",
+        "//cuttlefish/host/commands/assemble_cvd/flags:system_image_dir",
+        "//cuttlefish/host/libs/config:data_image_policy",
+        "//cuttlefish/host/libs/config:gpu_mode",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "guest_metrics",
+    srcs = [
+        "guest_metrics.cc",
+    ],
+    hdrs = [
+        "guest_metrics.h",
+    ],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:boot_image_utils",
+        "//cuttlefish/result",
+        "@fmt",
+    ],
+)
+
+cf_cc_library(
+    name = "metrics",
+    srcs = [
+        "metrics_receiver.cc",
+    ],
+    hdrs = [
+        "metrics_receiver.h",
+    ],
+    deps = [
+        ":metrics_headers",
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:tee_logging",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/msg_queue",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@fruit",
+        "@gflags",
+        "@jsoncpp",
+    ],
+)
+
+cf_cc_library(
+    name = "metrics_conversion",
+    srcs = [
+        "metrics_conversion.cc",
+    ],
+    hdrs = [
+        "metrics_conversion.h",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/utils:host_info",
+        "//cuttlefish/host/libs/config:data_image_policy",
+        "//cuttlefish/host/libs/config:gpu_mode",
+        "//cuttlefish/host/libs/metrics:event_type",
+        "//cuttlefish/host/libs/metrics:flag_metrics",
+        "//cuttlefish/host/libs/metrics:guest_metrics",
+        "//external_proto:cf_flags_cc_proto",
+        "//external_proto:cf_guest_cc_proto",
+        "//external_proto:cf_host_cc_proto",
+        "//external_proto:cf_log_cc_proto",
+        "//external_proto:cf_metrics_event_v2_cc_proto",
+        "@fmt",
+        "@protobuf//:timestamp_cc_proto",
+    ],
+)
+
+cf_cc_library(
+    name = "metrics_environment",
+    srcs = [
+        "metrics_environment.cc",
+    ],
+    hdrs = [
+        "metrics_environment.h",
+    ],
+)
+
+cf_cc_library(
+    name = "metrics_headers",
+    hdrs = [
+        "metrics_configs.h",
+        "metrics_defs.h",
+    ],
+)
+
+cf_cc_library(
+    name = "metrics_orchestration",
+    srcs = [
+        "metrics_orchestration.cc",
+    ],
+    hdrs = [
+        "metrics_orchestration.h",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:host_info",
+        "//cuttlefish/common/libs/utils:tee_logging",
+        "//cuttlefish/host/commands/cvd/instances",
+        "//cuttlefish/host/commands/cvd/version",
+        "//cuttlefish/host/libs/metrics:enabled",
+        "//cuttlefish/host/libs/metrics:event_type",
+        "//cuttlefish/host/libs/metrics:flag_metrics",
+        "//cuttlefish/host/libs/metrics:guest_metrics",
+        "//cuttlefish/host/libs/metrics:metrics_conversion",
+        "//cuttlefish/host/libs/metrics:metrics_transmitter",
+        "//cuttlefish/host/libs/metrics:metrics_writer",
+        "//cuttlefish/host/libs/metrics:session_id",
+        "//cuttlefish/result",
+        "//external_proto:cf_log_cc_proto",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings",
+        "@fmt",
+    ],
+)
+
+cf_cc_library(
+    name = "metrics_transmitter",
+    srcs = [
+        "metrics_transmitter.cc",
+    ],
+    hdrs = [
+        "metrics_transmitter.h",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/utils:base64",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/common/libs/utils:subprocess_managed_stdio",
+        "//cuttlefish/host/libs/metrics:metrics_environment",
+        "//cuttlefish/result",
+        "//external_proto:cf_log_cc_proto",
+    ],
+)
+
+cf_cc_library(
+    name = "metrics_writer",
+    srcs = [
+        "metrics_writer.cc",
+    ],
+    hdrs = [
+        "metrics_writer.h",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:random",
+        "//cuttlefish/host/libs/metrics:event_type",
+        "//cuttlefish/result",
+        "//external_proto:cf_log_cc_proto",
+        "@fmt",
+        "@protobuf",
+    ],
+)
+
+cf_cc_library(
+    name = "session_id",
+    srcs = [
+        "session_id.cc",
+    ],
+    hdrs = [
+        "session_id.h",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:uuid",
+        "//cuttlefish/result",
+        "@fmt",
+    ],
+)

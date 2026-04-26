@@ -1,0 +1,34 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_library(
+    name = "rename",
+    srcs = ["rename.cc"],
+    hdrs = ["rename.h"],
+    deps = [
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "strerror",
+    srcs = ["strerror.cc"],
+    hdrs = ["strerror.h"],
+    deps = [
+        "@abseil-cpp//absl/status",
+    ],
+)
+
+cf_cc_library(
+    name = "symlink",
+    srcs = ["symlink.cc"],
+    hdrs = ["symlink.h"],
+    deps = [
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result",
+    ],
+)

@@ -1,0 +1,54 @@
+From 5682514cd720a61c7e6ed2d0a5a88f8f23719480 Mon Sep 17 00:00:00 2001
+From: HONG Yifan <elsk@google.com>
+Date: Fri, 18 Jul 2025 23:19:24 +0000
+Subject: [PATCH 2/5] Use pdlc from pdl-compiler crate.
+
+pdlc might not be installed on the host system.
+---
+ BUILD | 14 ++++++++++----
+ 1 file changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/BUILD b/BUILD
+index 5113e18..cce0c5d 100644
+--- a/BUILD
++++ b/BUILD
+@@ -31,24 +31,30 @@ cc_proto_library(
+     deps = [":rootcanal_proto"],
+ )
+ 
++alias(
++    name = "pdlc",
++    actual = "@crates//:pdl-compiler__pdlc",
++)
++
+ genrule(
+     name = "lmp_packets_rs",
+-    cmd = "pdlc --output-format rust_legacy $(location rust/lmp_packets.pdl) > $(location lmp_packets.rs)",
++    cmd = "$(location :pdlc) --output-format rust_legacy $(location rust/lmp_packets.pdl) > $(location lmp_packets.rs)",
+     outs = ["lmp_packets.rs"],
+     srcs = ["rust/lmp_packets.pdl"],
++    tools = [":pdlc"],
+ )
+ 
+ genrule(
+     name = "llcp_packets_rs",
+-    cmd = "pdlc --output-format rust_legacy $(location rust/llcp_packets.pdl) > $(location llcp_packets.rs)",
++    cmd = "$(location :pdlc) --output-format rust_legacy $(location rust/llcp_packets.pdl) > $(location llcp_packets.rs)",
+     outs = ["llcp_packets.rs"],
+     srcs = ["rust/llcp_packets.pdl"],
++    tools = [":pdlc"],
+ )
+ 
+ genrule(
+     name = "hci_packets_rs",
+-    cmd = "pdlc --output-format rust_legacy $(location //packets:hci_packets.pdl) > $(location hci_packets.rs)",
++    cmd = "$(location :pdlc) --output-format rust_legacy $(location //packets:hci_packets.pdl) > $(location hci_packets.rs)",
+     outs = ["hci_packets.rs"],
+     srcs = ["//packets:hci_packets.pdl"],
+     visibility = ["//visibility:public"],
++    tools = [":pdlc"],
+ )
+ 
+ rust_static_library(
+-- 
+2.51.0.rc1.167.g924127e9c0-goog

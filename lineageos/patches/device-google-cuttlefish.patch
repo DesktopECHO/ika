@@ -1,0 +1,573 @@
+Patch summary:
+Add the Cuttlefish device-side foundation for LineageOS Desktop products. This
+includes desktop product entries, PC-style feature declarations, batteryless VM
+health behavior, graphics/property plumbing, and vendor overlay placement needed
+by the desktop images.
+
+The goal is to make the guest identify and behave like a desktop virtual
+machine rather than a resized phone or tablet. That means removing mobile-only
+assumptions where the host is responsible for the hardware experience, while
+preserving the Cuttlefish pieces still needed for boot, graphics, and packaging.
+
+diff --git a/AndroidProducts.mk b/AndroidProducts.mk
+index ff5f2cc46..173663686 100644
+--- a/AndroidProducts.mk
++++ b/AndroidProducts.mk
+@@ -20,6 +20,7 @@ PRODUCT_MAKEFILES := \
+ 	aosp_cf_arm64_phone:$(LOCAL_DIR)/vsoc_arm64/phone/aosp_cf.mk \
+ 	aosp_cf_arm64_phone_vendor:$(LOCAL_DIR)/vsoc_arm64/phone/aosp_cf_vendor.mk \
+ 	aosp_cf_arm64_phone_pgagnostic:$(LOCAL_DIR)/vsoc_arm64_pgagnostic/phone/aosp_cf.mk \
++	aosp_cf_arm64_desktop_pgagnostic:$(LOCAL_DIR)/vsoc_arm64_pgagnostic/desktop/aosp_cf.mk \
+ 	aosp_cf_arm64_phone_fullmte:$(LOCAL_DIR)/vsoc_arm64_only/phone/aosp_cf_fullmte.mk \
+ 	aosp_cf_arm64_phone_hwasan:$(LOCAL_DIR)/vsoc_arm64/phone/aosp_cf_hwasan.mk \
+ 	aosp_cf_arm64_only_phone:$(LOCAL_DIR)/vsoc_arm64_only/phone/aosp_cf.mk \
+@@ -39,6 +40,7 @@ PRODUCT_MAKEFILES := \
+ 	aosp_cf_x86_64_auto_portrait:$(LOCAL_DIR)/vsoc_x86_64_only/auto_portrait/aosp_cf.mk \
+ 	aosp_cf_x86_64_pc:$(LOCAL_DIR)/vsoc_x86_64_only/pc/aosp_cf.mk \
+ 	aosp_cf_x86_64_phone:$(LOCAL_DIR)/vsoc_x86_64/phone/aosp_cf.mk \
++	aosp_cf_x86_64_desktop_sandybridge:$(LOCAL_DIR)/vsoc_x86_64_sandybridge/desktop/aosp_cf.mk \
+ 	aosp_cf_x86_64_phone_soong_system:$(LOCAL_DIR)/vsoc_x86_64/phone/aosp_cf_soong_system.mk \
+ 	aosp_cf_x86_64_phone_vendor:$(LOCAL_DIR)/vsoc_x86_64/phone/aosp_cf_vendor.mk \
+ 	aosp_cf_x86_64_ssi:$(LOCAL_DIR)/vsoc_x86_64/phone/aosp_cf_ssi.mk \
+@@ -58,9 +60,11 @@ PRODUCT_MAKEFILES := \
+ COMMON_LUNCH_CHOICES := \
+ 	aosp_cf_arm64_auto-trunk_staging-userdebug \
+ 	aosp_cf_arm64_phone-trunk_staging-userdebug \
++	aosp_cf_arm64_desktop_pgagnostic-trunk_staging-userdebug \
+ 	aosp_cf_riscv64_phone-trunk_staging-userdebug \
+ 	aosp_cf_x86_64_only_phone_hsum-trunk_staging-userdebug \
+ 	aosp_cf_x86_64_pc-trunk_staging-userdebug \
++	aosp_cf_x86_64_desktop_sandybridge-trunk_staging-userdebug \
+ 	aosp_cf_x86_64_phone-trunk_staging-userdebug \
+ 	aosp_cf_x86_64_foldable-trunk_staging-userdebug \
+ 	aosp_cf_x86_64_auto-trunk_staging-userdebug \
+diff --git a/guest/hals/health/health-aidl.cpp b/guest/hals/health/health-aidl.cpp
+index 3c9ef7449..4176b5a24 100644
+--- a/guest/hals/health/health-aidl.cpp
++++ b/guest/hals/health/health-aidl.cpp
+@@ -61,21 +61,12 @@ class HealthImpl : public Health {
+ 
+ void HealthImpl::UpdateHealthInfo(HealthInfo* health_info) {
+   health_info->chargerAcOnline = true;
+-  health_info->chargerUsbOnline = true;
++  health_info->chargerUsbOnline = false;
+   health_info->chargerWirelessOnline = false;
+-  health_info->maxChargingCurrentMicroamps = 500000;
+-  health_info->maxChargingVoltageMicrovolts = 5000000;
+-  health_info->batteryStatus = BatteryStatus::CHARGING;
+-  health_info->batteryHealth = BatteryHealth::GOOD;
+-  health_info->batteryPresent = true;
+-  health_info->batteryLevel = 85;
+-  health_info->batteryVoltageMillivolts = 3600;
+-  health_info->batteryTemperatureTenthsCelsius = 250;
+-  health_info->batteryCurrentMicroamps = 400000;
+-  health_info->batteryCycleCount = 32;
+-  health_info->batteryFullChargeUah = 4000000;
+-  health_info->batteryChargeCounterUah = 1900000;
+-  health_info->batteryTechnology = "Li-ion";
++  health_info->batteryStatus = BatteryStatus::UNKNOWN;
++  health_info->batteryHealth = BatteryHealth::UNKNOWN;
++  health_info->batteryPresent = false;
++  health_info->batteryLevel = 0;
+ }
+ 
+ ScopedAStatus HealthImpl::getChargeCounterUah(int32_t* out) {
+diff --git a/host/commands/assemble_cvd/flags.cc b/host/commands/assemble_cvd/flags.cc
+index 978df685d..ef1ed0b6e 100644
+--- a/host/commands/assemble_cvd/flags.cc
++++ b/host/commands/assemble_cvd/flags.cc
+@@ -2475,11 +2475,7 @@ Result<std::vector<GuestConfig>> GetGuestConfigAndSetDefaults() {
+               "all instance target_arch should be same");
+   }
+   if (FLAGS_vm_manager == "") {
+-    if (IsHostCompatible(guest_configs[0].target_arch)) {
+-      FLAGS_vm_manager = ToString(VmmMode::kCrosvm);
+-    } else {
+-      FLAGS_vm_manager = ToString(VmmMode::kQemu);
+-    }
++    FLAGS_vm_manager = ToString(VmmMode::kCrosvm);
+   }
+ 
+   std::vector<std::string> vm_manager_vec =
+diff --git a/shared/desktop/android-info.txt b/shared/desktop/android-info.txt
+new file mode 100644
+index 000000000..26ed0b937
+--- /dev/null
++++ b/shared/desktop/android-info.txt
+@@ -0,0 +1,2 @@
++gfxstream=supported
++gfxstream_gl_program_binary_link_status=supported
+diff --git a/shared/desktop/device_vendor.mk b/shared/desktop/device_vendor.mk
+index 067d0f323..2835ed013 100644
+--- a/shared/desktop/device_vendor.mk
++++ b/shared/desktop/device_vendor.mk
+@@ -33,6 +33,15 @@ $(call inherit-product, device/google/cuttlefish/shared/sensors/device_vendor.mk
+ $(call inherit-product, device/google/cuttlefish/shared/virgl/device_vendor.mk)
+ $(call inherit-product, device/google/cuttlefish/shared/device.mk)
+ 
++# Desktop devices expose the PC feature contract instead of a tablet/handheld feature set.
++PRODUCT_COPY_FILES += \
++    frameworks/native/data/etc/pc_core_hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/pc_core_hardware.xml
++
++PRODUCT_PACKAGES += \
++    desktop_excluded_cellular_hardware_features.prebuilt.xml
++
+ # Loads the camera HAL and which set of cameras is required.
+ $(call inherit-product, device/google/cuttlefish/shared/camera/device_vendor.mk)
+ $(call inherit-product, device/google/cuttlefish/shared/camera/config/standard.mk)
++
++TARGET_BOARD_INFO_FILE ?= device/google/cuttlefish/shared/desktop/android-info.txt
+diff --git a/shared/desktop/sepolicy/gscd.te b/shared/desktop/sepolicy/gscd.te
+deleted file mode 100644
+index 06630e9fd..000000000
+--- a/shared/desktop/sepolicy/gscd.te
++++ /dev/null
+@@ -1,4 +0,0 @@
+-# Cuttlefish-specific policy for the GSC daemon (gscd)
+-
+-# Allow gscd to communicate with the Ti50 host_emulation daemon via virtio-console
+-allow gscd ti50_char_device:chr_file rw_file_perms;
+diff --git a/shared/graphics/sepolicy/property.te b/shared/graphics/sepolicy/property.te
+new file mode 100644
+index 000000000..a2c6d4c78
+--- /dev/null
++++ b/shared/graphics/sepolicy/property.te
+@@ -0,0 +1 @@
++vendor_public_prop(vendor_graphics_debug_prop)
+diff --git a/shared/graphics/sepolicy/property_contexts b/shared/graphics/sepolicy/property_contexts
+index 4af2db17c..2312d08f5 100644
+--- a/shared/graphics/sepolicy/property_contexts
++++ b/shared/graphics/sepolicy/property_contexts
+@@ -4,6 +4,8 @@ ro.boot.hardware.gralloc u:object_r:vendor_graphics_config_prop:s0 exact string
+ ro.boot.hardware.hwcomposer u:object_r:vendor_graphics_config_prop:s0 exact string
+ ro.boot.hardware.vulkan u:object_r:vendor_graphics_config_prop:s0 exact string
+ ro.boot.lcd_density u:object_r:vendor_graphics_config_prop:s0 exact int
++vendor.mesa. u:object_r:vendor_graphics_debug_prop:s0 prefix string
++vendor.minigbm.debug u:object_r:vendor_graphics_debug_prop:s0 exact string
+ ro.vendor.hwcomposer.display_finder_mode  u:object_r:vendor_hwcomposer_prop:s0 exact string
+ ro.vendor.hwcomposer.display_framebuffer_format u:object_r:vendor_hwcomposer_prop:s0 exact string
+ ro.vendor.hwcomposer.mode  u:object_r:vendor_hwcomposer_prop:s0 exact string
+diff --git a/shared/overlays/SettingsProvider/Android.bp b/shared/overlays/SettingsProvider/Android.bp
+index 6ee5aac76..e5d6c48c4 100644
+--- a/shared/overlays/SettingsProvider/Android.bp
++++ b/shared/overlays/SettingsProvider/Android.bp
+@@ -19,6 +19,6 @@ package {
+ 
+ runtime_resource_overlay {
+     name: "cuttlefish_overlay_settings_provider",
+-    soc_specific: true,
++    vendor: true,
+     sdk_version: "current",
+ }
+diff --git a/shared/overlays/core/Android.bp b/shared/overlays/core/Android.bp
+index d194959f0..05f1ace3e 100644
+--- a/shared/overlays/core/Android.bp
++++ b/shared/overlays/core/Android.bp
+@@ -19,6 +19,6 @@ package {
+ 
+ runtime_resource_overlay {
+     name: "cuttlefish_overlay_frameworks_base_core",
+-    soc_specific: true,
++    vendor: true,
+     sdk_version: "current",
+ }
+diff --git a/shared/overlays/core/res/values/config.xml b/shared/overlays/core/res/values/config.xml
+index cd86d5fcc..cc280aa19 100644
+--- a/shared/overlays/core/res/values/config.xml
++++ b/shared/overlays/core/res/values/config.xml
+@@ -76,4 +76,4 @@
+     <string name="config_satellite_emergency_handover_intent_action">com.google.android.apps.stargate.ACTION_ESOS_QUESTIONNAIRE</string>
+     <!-- The intent action to handle esp loopback eSOS messaging. -->
+     <string name="config_satellite_test_with_esp_replies_intent_action">com.google.android.apps.stargate.ACTION_ESOS_QUESTIONNAIRE_TEST_WITH_ESP_REPLIES</string>
+-</resources>
+\ No newline at end of file
++</resources>
+diff --git a/shared/sepolicy/system_ext/private/set_adb.te b/shared/sepolicy/system_ext/private/set_adb.te
+index e66a3fa73..3048390b9 100644
+--- a/shared/sepolicy/system_ext/private/set_adb.te
++++ b/shared/sepolicy/system_ext/private/set_adb.te
+@@ -9,3 +9,13 @@ allow set_adb servicemanager:binder call;
+ allow set_adb settings_service:service_manager find;
+ allow set_adb system_server:binder { call transfer };
+ allow system_server set_adb:binder call;
++set_prop(set_adb, log_tag_prop)
++
++# Allow locksettings for first-boot provisioning
++allow set_adb lock_settings_service:service_manager find;
++
++# Allow `cmd window size` / `cmd window density` and Fix 2b's `am force-stop`
++# from cvd_display_resize.sh, which runs under this domain via seclabel in
++# cvd_display_resize.rc.
++allow set_adb window_service:service_manager find;
++allow set_adb activity_service:service_manager find;
+diff --git a/shared/set_adb/set_adb.sh b/shared/set_adb/set_adb.sh
+index 67aece73f..931e14695 100644
+--- a/shared/set_adb/set_adb.sh
++++ b/shared/set_adb/set_adb.sh
+@@ -1,2 +1,63 @@
+ #!/system/bin/sh
+-settings put global adb_enabled 1
++
++put_global() {
++    settings put global "$1" "$2" >/dev/null 2>&1
++}
++
++put_secure() {
++    settings put secure "$1" "$2" >/dev/null 2>&1
++}
++
++put_system() {
++    settings put system "$1" "$2" >/dev/null 2>&1
++}
++
++put_global adb_enabled 1
++setprop log.tag.GLF S
++setprop log.tag.libEGL S
++
++# Desktop-mode contract. These are intentionally re-applied each boot because this product is
++# desktop-only; drifting back into phone/tablet behavior makes Launcher and WM unstable.
++# hidden_api_policy=0 disables non-SDK API enforcement so apps like Firefox (Gecko calls
++# MessageQueue.next() via JNI from a non-platform domain) and Termux can run. With policy=1
++# Gecko's main-loop hook is blocked, the renderer aborts inside google-breakpad, and Firefox
++# enters a restart loop. Standard LineageOS uses 0 for app-compatibility reasons.
++put_global hidden_api_policy 0
++put_global enable_freeform_support 1
++put_global force_resizable_activities 1
++put_global enable_non_resizable_multi_window 1
++put_global override_desktop_mode_features 1
++put_global override_desktop_experience_features 1
++put_global force_desktop_mode_on_external_displays 1
++put_global stay_on_while_plugged_in 3
++put_secure user_setup_complete 1
++put_secure long_press_timeout 350
++put_system accelerometer_rotation 0
++put_system show_ime_with_hard_keyboard 0
++
++# Desktop windowing policy syspropsmust survive a user `setprop` clearing them; reassert each
++# boot. These mirror desktop_windowing_policy.mk values; the sysprop wins over the resource
++# default and is what the smoke test asserts.
++setprop persist.wm.debug.enter_desktop_by_default_on_freeform_display true
++setprop persist.wm.debug.force_desktop_first_on_default_display_for_testing true
++
++# Keep crash evidence in logcat/dropbox but avoid modal crash-report loops on the desktop.
++put_global send_action_app_error 0
++put_global show_first_crash_dialog 0
++put_global show_restart_in_crash_dialog 0
++put_global show_mute_in_crash_dialog 1
++put_secure anr_show_background 0
++put_secure show_first_crash_dialog_dev_option 0
++
++# First-boot provisioning. Use a desktop-specific sentinel because SettingsProvider overlays may
++# seed device_provisioned=1 before this service runs.
++if [ "$(settings get global lineage_desktop_provisioned)" != "1" ]; then
++    put_global device_provisioned 1
++    put_global auto_time_zone 0
++    locksettings set-disabled true
++    # User-mutable preferences are seeded once and then left alone, so a subsequent change in
++    # Settings is not clobbered on the next reboot. (R15)
++    put_system pointer_speed 2
++    put_system screen_off_timeout 2147483647
++    put_global lineage_desktop_provisioned 1
++fi
+diff --git a/shared/x86_16kb/android-info.txt b/shared/x86_16kb/android-info.txt
+index cc7213392..f5555d460 100644
+--- a/shared/x86_16kb/android-info.txt
++++ b/shared/x86_16kb/android-info.txt
+@@ -1,2 +1,3 @@
+ config=phone
+-gfxstream=unsupported
++gfxstream=supported
++gfxstream_gl_program_binary_link_status=supported
+diff --git a/vsoc_arm64_pgagnostic/BoardConfig.mk b/vsoc_arm64_pgagnostic/BoardConfig.mk
+index 04affcab6..651f0aa5a 100644
+--- a/vsoc_arm64_pgagnostic/BoardConfig.mk
++++ b/vsoc_arm64_pgagnostic/BoardConfig.mk
+@@ -20,9 +20,9 @@
+ 
+ TARGET_BOARD_PLATFORM := vsoc_arm64
+ TARGET_ARCH := arm64
+-TARGET_ARCH_VARIANT := armv8-a
++TARGET_ARCH_VARIANT := armv8-5a
+ TARGET_CPU_ABI := arm64-v8a
+-TARGET_CPU_VARIANT := cortex-a53
++TARGET_CPU_VARIANT := generic
+ 
+ # Use 16K page size kernel
+ TARGET_KERNEL_ARCH ?= arm64
+@@ -31,7 +31,7 @@ TARGET_KERNEL_PATH ?= $(SYSTEM_DLKM_SRC)/kernel-$(TARGET_KERNEL_USE)
+ KERNEL_MODULES_PATH ?= \
+     kernel/prebuilts/common-modules/virtual-device/$(TARGET_KERNEL_USE)/$(subst _,-,$(TARGET_KERNEL_ARCH))/16k
+ 
+-TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE := ext4
++TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE := f2fs
+ TARGET_RO_FILE_SYSTEM_TYPE := ext4
+ 
+ BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
+diff --git a/vsoc_arm64_pgagnostic/desktop/aosp_cf.mk b/vsoc_arm64_pgagnostic/desktop/aosp_cf.mk
+new file mode 100644
+index 000000000..5ef2f3b56
+--- /dev/null
++++ b/vsoc_arm64_pgagnostic/desktop/aosp_cf.mk
+@@ -0,0 +1,86 @@
++#
++# Copyright (C) 2026 The Android Open Source Project
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++#
++
++#
++# arm64 page-size agnostic desktop target for Cuttlefish
++#
++
++#
++# All components inherited here go to system image (same as GSI system)
++#
++$(call inherit-product, $(SRC_TARGET_DIR)/product/core_64_bit_only.mk)
++$(call inherit-product, $(SRC_TARGET_DIR)/product/generic_system.mk)
++
++PRODUCT_ENFORCE_ARTIFACT_PATH_REQUIREMENTS := relaxed
++
++#
++# All components inherited here go to system_ext image (same as GSI system_ext)
++#
++$(call inherit-product, $(SRC_TARGET_DIR)/product/handheld_system_ext.mk)
++
++#
++# All components inherited here go to product image (same as GSI product)
++# Keep the non-telephony product surface while avoiding phone-only packages.
++#
++$(call inherit-product, $(SRC_TARGET_DIR)/product/handheld_product.mk)
++
++# Default AOSP sounds
++ifeq ($(LINEAGE_BUILD),)
++$(call inherit-product-if-exists, frameworks/base/data/sounds/AllAudio.mk)
++endif
++
++PRODUCT_PRODUCT_PROPERTIES += \
++    ro.config.ringtone?=Ring_Synth_04.ogg \
++    ro.config.notification_sound?=pixiedust.ogg \
++    ro.com.android.dataroaming?=true
++
++PRODUCT_PACKAGES += \
++    initial-package-stopped-states-aosp.xml \
++    PhotoTable \
++    preinstalled-packages-platform-aosp-product.xml \
++    ThemePicker
++
++#
++# All components inherited here go to vendor image
++#
++$(call inherit-product, device/google/cuttlefish/shared/desktop/device_vendor.mk)
++
++#
++# Special settings for the target
++#
++$(call inherit-product, device/google/cuttlefish/vsoc_arm64/bootloader.mk)
++
++# Exclude features that are not available on AOSP devices.
++PRODUCT_COPY_FILES += \
++    frameworks/native/data/etc/aosp_excluded_hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/aosp_excluded_hardware.xml
++
++PRODUCT_NAME := aosp_cf_arm64_desktop_pgagnostic
++PRODUCT_DEVICE := vsoc_arm64_pgagnostic
++PRODUCT_MANUFACTURER := DesktopECHO
++PRODUCT_MODEL := Cuttlefish arm64 desktop 64-bit only pgagnostic
++PRODUCT_MAX_PAGE_SIZE_SUPPORTED := 16384
++PRODUCT_NO_BIONIC_PAGE_SIZE_MACRO := true
++
++PRODUCT_VENDOR_PROPERTIES += \
++    ro.soc.manufacturer=$(PRODUCT_MANUFACTURER) \
++    ro.soc.model=$(PRODUCT_DEVICE)
++
++PRODUCT_16K_DEVELOPER_OPTION := true
++
++TARGET_BOOTS_16K := true
++
++# Ignore all Android.mk files
++PRODUCT_IGNORE_ALL_ANDROIDMK := true
+diff --git a/vsoc_x86_64_pgagnostic/BoardConfig.mk b/vsoc_x86_64_pgagnostic/BoardConfig.mk
+index 0d17ce85a..03597bc5a 100644
+--- a/vsoc_x86_64_pgagnostic/BoardConfig.mk
++++ b/vsoc_x86_64_pgagnostic/BoardConfig.mk
+@@ -34,9 +34,6 @@ TARGET_KERNEL_PATH ?= $(SYSTEM_DLKM_SRC)/kernel-$(TARGET_KERNEL_USE)
+ KERNEL_MODULES_PATH ?= \
+     kernel/prebuilts/common-modules/virtual-device/$(TARGET_KERNEL_USE)/$(subst _,-,$(TARGET_KERNEL_ARCH))
+ 
+-# Emulate 16KB page size
+-BOARD_KERNEL_CMDLINE += page_shift=14
+-
+ TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE := ext4
+ TARGET_RO_FILE_SYSTEM_TYPE := ext4
+ 
+@@ -57,6 +54,3 @@ AUDIOSERVER_MULTILIB := first
+ ifneq ($(BOARD_IS_AUTOMOTIVE), true)
+ -include device/google/cuttlefish/shared/virgl/BoardConfig.mk
+ endif
+-
+-# Override for gfxstream support
+-TARGET_BOARD_INFO_FILE := device/google/cuttlefish/shared/x86_16kb/android-info.txt
+diff --git a/vsoc_x86_64_sandybridge/BoardConfig.mk b/vsoc_x86_64_sandybridge/BoardConfig.mk
+new file mode 100644
+index 000000000..fb1c2783f
+--- /dev/null
++++ b/vsoc_x86_64_sandybridge/BoardConfig.mk
+@@ -0,0 +1,60 @@
++#
++# Copyright 2026 The Android Open-Source Project
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++#
++
++#
++# x86_64 Sandy Bridge compatible target for Cuttlefish
++#
++
++TARGET_BOARD_PLATFORM := vsoc_x86_64
++TARGET_ARCH := x86_64
++TARGET_ARCH_VARIANT := sandybridge
++TARGET_CPU_ABI := x86_64
++TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE := f2fs
++
++TARGET_2ND_ARCH := x86
++TARGET_2ND_CPU_ABI := x86
++TARGET_2ND_ARCH_VARIANT := sandybridge
++
++TARGET_NATIVE_BRIDGE_ARCH := arm64
++TARGET_NATIVE_BRIDGE_ARCH_VARIANT := armv8-a
++TARGET_NATIVE_BRIDGE_CPU_VARIANT := generic
++TARGET_NATIVE_BRIDGE_ABI := arm64-v8a
++
++TARGET_NATIVE_BRIDGE_2ND_ARCH := arm
++TARGET_NATIVE_BRIDGE_2ND_ARCH_VARIANT := armv7-a-neon
++TARGET_NATIVE_BRIDGE_2ND_CPU_VARIANT := generic
++TARGET_NATIVE_BRIDGE_2ND_ABI := armeabi-v7a armeabi
++
++# Native bridge uses Google's ndk_translation ELF prebuilts.
++ifeq ($(USE_NDK_TRANSLATION_BINARY),true)
++BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true
++endif
++
++-include device/google/cuttlefish/shared/BoardConfig.mk
++-include device/google/cuttlefish/shared/bluetooth/BoardConfig.mk
++-include device/google/cuttlefish/shared/camera/BoardConfig.mk
++-include device/google/cuttlefish/shared/gnss/BoardConfig.mk
++-include device/google/cuttlefish/shared/graphics/BoardConfig.mk
++-include device/google/cuttlefish/shared/identity/BoardConfig.mk
++-include device/google/cuttlefish/shared/reboot_escrow/BoardConfig.mk
++-include device/google/cuttlefish/shared/sensors/BoardConfig.mk
++-include device/google/cuttlefish/shared/swiftshader/BoardConfig.mk
++-include device/google/cuttlefish/shared/telephony/BoardConfig.mk
++-include device/google/cuttlefish/shared/vibrator/BoardConfig.mk
++
++ifneq ($(BOARD_IS_AUTOMOTIVE), true)
++-include device/google/cuttlefish/shared/virgl/BoardConfig.mk
++endif
+diff --git a/vsoc_x86_64_sandybridge/desktop/aosp_cf.mk b/vsoc_x86_64_sandybridge/desktop/aosp_cf.mk
+new file mode 100644
+index 000000000..b8785171f
+--- /dev/null
++++ b/vsoc_x86_64_sandybridge/desktop/aosp_cf.mk
+@@ -0,0 +1,83 @@
++#
++# Copyright (C) 2026 The Android Open Source Project
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++#
++
++#
++# x86_64 Sandy Bridge compatible desktop target for Cuttlefish
++#
++
++#
++# All components inherited here go to system image (same as GSI system)
++#
++$(call inherit-product, $(SRC_TARGET_DIR)/product/core_64_bit_only.mk)
++$(call inherit-product, $(SRC_TARGET_DIR)/product/generic_system.mk)
++
++PRODUCT_ENFORCE_ARTIFACT_PATH_REQUIREMENTS := relaxed
++
++#
++# All components inherited here go to system_ext image (same as GSI system_ext)
++#
++$(call inherit-product, $(SRC_TARGET_DIR)/product/handheld_system_ext.mk)
++
++#
++# All components inherited here go to product image (same as GSI product)
++# Keep the non-telephony product surface while avoiding phone-only packages.
++#
++$(call inherit-product, $(SRC_TARGET_DIR)/product/handheld_product.mk)
++
++# Default AOSP sounds
++ifeq ($(LINEAGE_BUILD),)
++$(call inherit-product-if-exists, frameworks/base/data/sounds/AllAudio.mk)
++endif
++
++PRODUCT_PRODUCT_PROPERTIES += \
++    ro.config.ringtone?=Ring_Synth_04.ogg \
++    ro.config.notification_sound?=pixiedust.ogg \
++    ro.com.android.dataroaming?=true
++
++PRODUCT_PACKAGES += \
++    initial-package-stopped-states-aosp.xml \
++    PhotoTable \
++    preinstalled-packages-platform-aosp-product.xml \
++    ThemePicker
++
++#
++# All components inherited here go to vendor image
++#
++$(call inherit-product, device/google/cuttlefish/shared/desktop/device_vendor.mk)
++
++# Nested virtualization support
++$(call inherit-product, packages/modules/Virtualization/apex/product_packages.mk)
++
++#
++# Special settings for the target
++#
++$(call inherit-product, device/google/cuttlefish/vsoc_x86_64/bootloader.mk)
++
++# Exclude features that are not available on AOSP devices.
++PRODUCT_COPY_FILES += \
++    frameworks/native/data/etc/aosp_excluded_hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/aosp_excluded_hardware.xml
++
++PRODUCT_NAME := aosp_cf_x86_64_desktop_sandybridge
++PRODUCT_DEVICE := vsoc_x86_64_sandybridge
++PRODUCT_MANUFACTURER := DesktopECHO
++PRODUCT_MODEL := Cuttlefish x86_64 desktop (Sandy Bridge Compatible)
++
++PRODUCT_VENDOR_PROPERTIES += \
++    ro.soc.manufacturer=$(PRODUCT_MANUFACTURER) \
++    ro.soc.model=$(PRODUCT_DEVICE)
++
++# Ignore all Android.mk files
++PRODUCT_IGNORE_ALL_ANDROIDMK := true

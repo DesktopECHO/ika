@@ -1,0 +1,28 @@
+From 8ec995be7741af0d5239858acb988c90184ef9bf Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Sat, 18 Apr 2026 20:15:00 -0300
+Subject: [PATCH 6/6] Pin and patch pdl crates
+
+---
+--- a/MODULE.bazel
++++ b/MODULE.bazel
+@@ -38,9 +38,14 @@
+ crate.spec(package = "num-integer", version = "0.1.45")
+ crate.spec(package = "num-traits", version = "0.2.14")
+ crate.spec(package = "paste", version = "1.0.4")
+-crate.spec(package = "pdl-compiler", version = "0.5.0")
+-crate.annotation(crate = "pdl-compiler", gen_binaries = ["pdlc"])
+-crate.spec(package = "pdl-runtime", version = "0.5.0")
++crate.spec(package = "pdl-compiler", version = "=0.5.0")
++crate.annotation(
++    crate = "pdl-compiler",
++    gen_binaries = ["pdlc"],
++    patch_args = ["-p1"],
++    patches = ["@@//build_external/rootcanal:PATCH.pdl-compiler-compat.patch"],
++)
++crate.spec(package = "pdl-runtime", version = "=0.5.0")
+ crate.spec(package = "pin-utils", version = "0.1.0")
+ crate.spec(package = "rand", version = "0.8.3")
+ crate.spec(package = "thiserror", version = "1.0.23")
+-- 
+2.51.0

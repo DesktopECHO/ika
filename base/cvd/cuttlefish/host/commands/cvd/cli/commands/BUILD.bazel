@@ -1,0 +1,451 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+exports_files([
+    ".clang-tidy",
+    "cmd_list.cpp",
+    "cmd_list.h",
+    "create.cpp",
+    "create.h",
+    "help.cpp",
+    "help.h",
+    "load_configs.cpp",
+    "load_configs.h",
+])
+
+cf_cc_library(
+    name = "bugreport",
+    srcs = ["bugreport.cpp"],
+    hdrs = ["bugreport.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/common/libs/utils:users",
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:interruptible_terminal",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli:utils",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/cli/selector",
+        "//cuttlefish/host/commands/cvd/instances",
+        "//cuttlefish/host/commands/cvd/utils",
+        "//cuttlefish/host/libs/zip:zip_file",
+        "//cuttlefish/host/libs/zip/libzip_cc:archive",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings",
+        "@fmt",
+    ],
+)
+
+cf_cc_library(
+    name = "cache",
+    srcs = ["cache.cpp"],
+    hdrs = ["cache.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/host/commands/cvd/cache",
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/utils",
+        "//cuttlefish/result",
+        "//libbase",
+        "@fmt",
+        "@jsoncpp",
+    ],
+)
+
+cf_cc_library(
+    name = "clear",
+    srcs = ["clear.cpp"],
+    hdrs = ["clear.h"],
+    deps = [
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/instances",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "command_handler",
+    srcs = ["command_handler.cpp"],
+    hdrs = ["command_handler.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:contains",
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "display",
+    srcs = ["display.cpp"],
+    hdrs = ["display.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:contains",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/common/libs/utils:users",
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli:utils",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/cli/selector",
+        "//cuttlefish/host/commands/cvd/instances",
+        "//cuttlefish/host/commands/cvd/utils",
+        "//cuttlefish/result",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "env",
+    srcs = ["env.cpp"],
+    hdrs = ["env.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli:utils",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/cli/selector",
+        "//cuttlefish/host/commands/cvd/instances",
+        "//cuttlefish/host/commands/cvd/utils",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+        "@fmt",
+    ],
+)
+
+cf_cc_library(
+    name = "fetch",
+    srcs = ["fetch.cpp"],
+    hdrs = ["fetch.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:tee_logging",
+        "//cuttlefish/host/commands/cvd/cache",
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/fetch:fetch_cvd",
+        "//cuttlefish/host/commands/cvd/fetch:fetch_cvd_parser",
+        "//cuttlefish/host/commands/cvd/utils",
+        "//cuttlefish/host/commands/cvd/utils:common",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@fmt",
+    ],
+)
+
+cf_cc_library(
+    name = "fleet",
+    srcs = ["fleet.cpp"],
+    hdrs = ["fleet.h"],
+    deps = [
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/instances",
+        "//cuttlefish/result",
+        "//libbase",
+        "@jsoncpp",
+    ],
+)
+
+cf_cc_library(
+    name = "host_tool_target",
+    srcs = ["host_tool_target.cpp"],
+    hdrs = ["host_tool_target.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/common/libs/utils:subprocess_managed_stdio",
+        "//cuttlefish/host/commands/cvd/utils",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+        "@fmt",
+    ],
+)
+
+cf_cc_library(
+    name = "lint",
+    srcs = ["lint.cpp"],
+    hdrs = ["lint.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/cli/parser:load_configs_parser",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "login",
+    srcs = ["login.cpp"],
+    hdrs = ["login.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:environment",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/libs/web:oauth2_consent",
+        "//cuttlefish/host/libs/web/http_client",
+        "//cuttlefish/host/libs/web/http_client:curl_global_init",
+        "//cuttlefish/host/libs/web/http_client:curl_http_client",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+        "@zlib",
+    ],
+)
+
+cf_cc_library(
+    name = "noop",
+    srcs = ["noop.cpp"],
+    hdrs = ["noop.h"],
+    deps = [
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/result",
+        "@fmt",
+    ],
+)
+
+cf_cc_library(
+    name = "power_btn",
+    srcs = ["power_btn.cpp"],
+    hdrs = ["power_btn.h"],
+    deps = [
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/cli/selector",
+        "//cuttlefish/host/commands/cvd/instances",
+        "//cuttlefish/result",
+        "//libbase",
+        "@fmt",
+    ],
+)
+
+cf_cc_library(
+    name = "powerwash",
+    srcs = ["powerwash.cpp"],
+    hdrs = ["powerwash.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/cli/selector",
+        "//cuttlefish/host/commands/cvd/instances",
+        "//cuttlefish/result",
+        "//libbase",
+        "@fmt",
+    ],
+)
+
+cf_cc_library(
+    name = "screen_recording",
+    srcs = ["screen_recording.cpp"],
+    hdrs = ["screen_recording.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/cli/selector",
+        "//cuttlefish/host/commands/cvd/instances",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@fmt",
+        "@jsoncpp",
+    ],
+)
+
+cf_cc_library(
+    name = "remove",
+    srcs = ["remove.cpp"],
+    hdrs = ["remove.h"],
+    deps = [
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli:utils",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/cli/selector",
+        "//cuttlefish/host/commands/cvd/instances",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_library(
+    name = "reset",
+    srcs = ["reset.cpp"],
+    hdrs = ["reset.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/instances",
+        "//cuttlefish/host/commands/cvd/utils",
+        "//cuttlefish/result",
+        "//libbase",
+    ],
+)
+
+cf_cc_library(
+    name = "restart",
+    srcs = ["restart.cpp"],
+    hdrs = ["restart.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/cli/selector",
+        "//cuttlefish/host/commands/cvd/instances",
+        "//cuttlefish/result",
+        "//libbase",
+        "@fmt",
+    ],
+)
+
+cf_cc_library(
+    name = "snapshot",
+    srcs = ["snapshot.cpp"],
+    hdrs = ["snapshot.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli:utils",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/cli/commands:host_tool_target",
+        "//cuttlefish/host/commands/cvd/cli/selector",
+        "//cuttlefish/host/commands/cvd/instances",
+        "//cuttlefish/host/commands/cvd/utils",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_library(
+    name = "start",
+    srcs = ["start.cpp"],
+    hdrs = ["start.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:contains",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/common/libs/utils:json",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/common/libs/utils:users",
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli:utils",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/cli/commands:host_tool_target",
+        "//cuttlefish/host/commands/cvd/cli/selector",
+        "//cuttlefish/host/commands/cvd/fetch:substitute",
+        "//cuttlefish/host/commands/cvd/instances",
+        "//cuttlefish/host/commands/cvd/instances:cvd_persistent_data",
+        "//cuttlefish/host/commands/cvd/instances:stop",
+        "//cuttlefish/host/commands/cvd/instances/lock",
+        "//cuttlefish/host/commands/cvd/utils",
+        "//cuttlefish/host/libs/config:config_constants",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/metrics:metrics_orchestration",
+        "//cuttlefish/posix:symlink",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings",
+        "@fmt",
+    ],
+)
+
+cf_cc_library(
+    name = "status",
+    srcs = ["status.cpp"],
+    hdrs = ["status.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli:utils",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/cli/selector",
+        "//cuttlefish/host/commands/cvd/instances",
+        "//cuttlefish/host/libs/config:config_constants",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+        "@fmt",
+        "@jsoncpp",
+    ],
+)
+
+cf_cc_library(
+    name = "stop",
+    srcs = ["stop.cpp"],
+    hdrs = ["stop.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli:utils",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/cli/commands:host_tool_target",
+        "//cuttlefish/host/commands/cvd/cli/selector",
+        "//cuttlefish/host/commands/cvd/instances",
+        "//cuttlefish/host/commands/cvd/utils",
+        "//cuttlefish/host/libs/metrics:metrics_orchestration",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "version",
+    srcs = ["version.cpp"],
+    hdrs = ["version.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/common/libs/utils:proto",
+        "//cuttlefish/host/commands/cvd/cli:command_request",
+        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
+        "//cuttlefish/host/commands/cvd/utils",
+        "//cuttlefish/host/commands/cvd/version",
+        "//cuttlefish/result",
+        "@fmt",
+        "@jsoncpp",
+    ],
+)

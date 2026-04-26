@@ -1,0 +1,13 @@
+[Unit]
+Description=Cuttlefish host networking resources
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/cuttlefish/cuttlefish-host-resources start
+ExecStop=/usr/libexec/cuttlefish/cuttlefish-host-resources stop
+
+[Install]
+WantedBy=multi-user.target

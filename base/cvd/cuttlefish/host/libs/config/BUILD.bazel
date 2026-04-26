@@ -1,0 +1,474 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+exports_files([".clang-tidy"])
+
+cf_cc_library(
+    name = "ap_boot_flow",
+    hdrs = ["ap_boot_flow.h"],
+)
+
+cf_cc_library(
+    name = "boot_flow",
+    hdrs = ["boot_flow.h"],
+)
+
+cf_cc_library(
+    name = "config_constants",
+    hdrs = ["config_constants.h"],
+)
+
+cf_cc_library(
+    name = "config_flag",
+    srcs = ["config_flag.cpp"],
+    hdrs = ["config_flag.h"],
+    deps = [
+        "//cuttlefish/common/libs/key_equals_value",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/common/libs/utils:json",
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/commands/assemble_cvd/flags:system_image_dir",
+        "//cuttlefish/host/libs/config:config_utils",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings",
+        "@fmt",
+        "@fruit",
+        "@gflags",
+        "@jsoncpp",
+    ],
+)
+
+cf_cc_library(
+    name = "config_fragment",
+    hdrs = ["config_fragment.h"],
+    deps = ["@jsoncpp"],
+)
+
+cf_cc_library(
+    name = "config_instance_derived",
+    srcs = ["config_instance_derived.cc"],
+    hdrs = ["config_instance_derived.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+    ],
+)
+
+cf_cc_library(
+    name = "config_utils",
+    srcs = ["config_utils.cpp"],
+    hdrs = ["config_utils.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:contains",
+        "//cuttlefish/common/libs/utils:environment",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:host_info",
+        "//cuttlefish/common/libs/utils:in_sandbox",
+        "//cuttlefish/common/libs/utils:random",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/libs/config:config_constants",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "custom_actions",
+    srcs = ["custom_actions.cpp"],
+    hdrs = ["custom_actions.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/common/libs/utils:json",
+        "//cuttlefish/host/libs/config:config_flag",
+        "//cuttlefish/host/libs/config:config_fragment",
+        "//cuttlefish/host/libs/config:config_utils",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/strings",
+        "@fruit",
+        "@jsoncpp",
+    ],
+)
+
+cf_cc_library(
+    name = "cuttlefish_config",
+    srcs = [
+        "cuttlefish_config.cpp",
+        "cuttlefish_config_environment.cpp",
+        "cuttlefish_config_instance.cpp",
+    ],
+    hdrs = ["cuttlefish_config.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:device_type",
+        "//cuttlefish/common/libs/utils:environment",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:flags_validator",
+        "//cuttlefish/common/libs/utils:host_info",
+        "//cuttlefish/host/commands/assemble_cvd:guest_config_cc_proto",
+        "//cuttlefish/host/libs/config:ap_boot_flow",
+        "//cuttlefish/host/libs/config:boot_flow",
+        "//cuttlefish/host/libs/config:config_constants",
+        "//cuttlefish/host/libs/config:config_fragment",
+        "//cuttlefish/host/libs/config:config_utils",
+        "//cuttlefish/host/libs/config:data_image_policy",
+        "//cuttlefish/host/libs/config:external_network_mode",
+        "//cuttlefish/host/libs/config:gpu_mode",
+        "//cuttlefish/host/libs/config:guest_hwui_renderer",
+        "//cuttlefish/host/libs/config:guest_renderer_preload",
+        "//cuttlefish/host/libs/config:secure_hals",
+        "//cuttlefish/host/libs/config:vmm_mode",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/strings",
+        "@fmt",
+        "@jsoncpp",
+        "@protobuf",
+        "@protobuf//src/google/protobuf/io",
+    ],
+)
+
+cf_cc_library(
+    name = "data_image",
+    srcs = ["data_image.cpp"],
+    hdrs = ["data_image.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:host_info",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/common/libs/utils:subprocess_managed_stdio",
+        "//cuttlefish/host/libs/config:ap_boot_flow",
+        "//cuttlefish/host/libs/config:boot_flow",
+        "//cuttlefish/host/libs/config:config_utils",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:data_image_policy",
+        "//cuttlefish/host/libs/config:esp",
+        "//cuttlefish/host/libs/config:openwrt_args",
+        "//cuttlefish/host/libs/config/esp:make_fat_image",
+        "//cuttlefish/host/libs/image_aggregator:mbr",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_library(
+    name = "data_image_policy",
+    srcs = [
+        "data_image_policy.cc",
+    ],
+    hdrs = [
+        "data_image_policy.h",
+    ],
+)
+
+cf_cc_library(
+    name = "display",
+    srcs = ["display.cpp"],
+    hdrs = ["display.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:contains",
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "esp",
+    srcs = ["esp.cpp"],
+    hdrs = ["esp.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:host_info",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/libs/config/esp:esp_builder",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "external_network_mode",
+    srcs = ["external_network_mode.cc"],
+    hdrs = ["external_network_mode.h"],
+    deps = [
+        "//cuttlefish/result",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "build_archive",
+    srcs = ["build_archive.cc"],
+    hdrs = ["build_archive.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/libs/config:fetcher_config",
+        "//cuttlefish/host/libs/config:file_source",
+        "//cuttlefish/host/libs/zip:zip_file",
+        "//cuttlefish/host/libs/zip/libzip_cc:archive",
+        "//cuttlefish/host/libs/zip/libzip_cc:readable_source",
+        "//cuttlefish/io",
+        "//cuttlefish/io:string",
+        "//cuttlefish/pretty",
+        "//cuttlefish/pretty:map",
+        "//cuttlefish/pretty:optional",
+        "//cuttlefish/pretty:set",
+        "//cuttlefish/pretty:struct",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:str_format",
+        "@fmt",
+    ],
+)
+
+cf_cc_library(
+    name = "fetcher_config",
+    srcs = ["fetcher_config.cpp"],
+    hdrs = ["fetcher_config.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/libs/config:file_source",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings",
+        "@jsoncpp",
+    ],
+)
+
+cf_cc_library(
+    name = "fetcher_configs",
+    srcs = ["fetcher_configs.cc"],
+    hdrs = ["fetcher_configs.h"],
+    deps = [
+        "//cuttlefish/host/libs/config:fetcher_config",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/types:span",
+    ],
+)
+
+cf_cc_library(
+    name = "file_source",
+    srcs = ["file_source.cc"],
+    hdrs = ["file_source.h"],
+    deps = [
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "gpu_mode",
+    srcs = [
+        "gpu_mode.cc",
+    ],
+    hdrs = [
+        "gpu_mode.h",
+    ],
+    deps = [
+        "//cuttlefish/result",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "guest_hwui_renderer",
+    srcs = ["guest_hwui_renderer.cc"],
+    hdrs = ["guest_hwui_renderer.h"],
+    deps = [
+        "//cuttlefish/result",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "guest_os",
+    srcs = ["guest_os.cc"],
+    hdrs = ["guest_os.h"],
+    deps = [
+        "//cuttlefish/host/libs/config:boot_flow",
+    ],
+)
+
+cf_cc_library(
+    name = "guest_renderer_preload",
+    srcs = ["guest_renderer_preload.cc"],
+    hdrs = ["guest_renderer_preload.h"],
+    deps = [
+        "//cuttlefish/result",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "host_tools_version",
+    srcs = ["host_tools_version.cpp"],
+    hdrs = ["host_tools_version.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/libs/config:config_utils",
+        "//libbase",
+        "@abseil-cpp//absl/log:check",
+        "@zlib",
+    ],
+)
+
+cf_cc_library(
+    name = "instance_nums",
+    srcs = ["instance_nums.cpp"],
+    hdrs = ["instance_nums.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:contains",
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/host/libs/config:config_utils",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "kernel_args",
+    srcs = ["kernel_args.cpp"],
+    hdrs = ["kernel_args.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:host_info",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+    ],
+)
+
+cf_cc_library(
+    name = "known_paths",
+    srcs = ["known_paths.cpp"],
+    hdrs = ["known_paths.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/libs/config:config_utils",
+    ],
+)
+
+cf_cc_library(
+    name = "log_string_to_dir",
+    srcs = ["log_string_to_dir.cc"],
+    hdrs = ["log_string_to_dir.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/result",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "logging",
+    srcs = ["logging.cpp"],
+    hdrs = ["logging.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:tee_logging",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//libbase",
+        "@abseil-cpp//absl/log:check",
+        "@fmt",
+    ],
+)
+
+cf_cc_library(
+    name = "mkenvimage_slim",
+    srcs = ["mkenvimage_slim.cc"],
+    hdrs = ["mkenvimage_slim.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+        "@zlib",
+    ],
+)
+
+cf_cc_library(
+    name = "openwrt_args",
+    srcs = ["openwrt_args.cpp"],
+    hdrs = ["openwrt_args.h"],
+    deps = [
+        "//cuttlefish/host/commands/cvdalloc:interface",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "secure_hals",
+    srcs = ["secure_hals.cpp"],
+    hdrs = ["secure_hals.h"],
+    deps = [
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/base:no_destructor",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "touchpad",
+    srcs = ["touchpad.cpp"],
+    hdrs = ["touchpad.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:contains",
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "vmm_mode",
+    srcs = ["vmm_mode.cc"],
+    hdrs = ["vmm_mode.h"],
+    deps = [
+        "//cuttlefish/result",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "camera",
+    srcs = ["camera.cpp"],
+    hdrs = ["camera.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:contains",
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+    ],
+)

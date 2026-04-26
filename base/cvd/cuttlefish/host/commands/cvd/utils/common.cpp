@@ -1,0 +1,144 @@
+/*
+ * Copyright (C) 2022 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "cuttlefish/host/commands/cvd/utils/common.h"
+
+#include <ostream>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+
+#include <android-base/file.h>
+#include "absl/strings/strip.h"
+#include "absl/strings/str_format.h"
+
+#include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/host/libs/config/config_utils.h"
+#include "cuttlefish/result/result.h"
+
+namespace cuttlefish {
+
+namespace {
+
+constexpr char kDefaultCvdDir[] = "/var/tmp/cvd";
+constexpr char kPreviousDefaultCvdDir[] = "/tmp/cvd";
+
+bool ShouldUsePreviousCvdLocation() {
+  // Don't use the old one if the new one already exists
+  if (DirectoryExists(kDefaultCvdDir)) {
+    return false;
+  }
+  // Check the locks directory. Even if /tmp/cvd exists it would only be a
+  // problem if an instance exists, but existing instances would have their
+  // corresponding lock file.
+  // It's still possible for a long running cvd create command to have started
+  // before cvd was updated and not yet gotten to create the instance lock file,
+  // in which case it will wrongfully create it under /tmp. If that happens it
+  // can only be addressed by manually killing the running instance and deleting
+  // /tmp/cvd, or just rebooting. This is hopefully unlikely to occur since cvd
+  // would have to be updated at the same time the first cvd load command after
+  // the last boot runs.
+  const std::string old_locks_path =
+      fmt::format("{}/{}", kPreviousDefaultCvdDir, "lock");
+  if (!DirectoryExists(old_locks_path)) {
+    return false;
+  }
+  Result<bool> is_empty_res = IsDirectoryEmpty(old_locks_path);
+  return is_empty_res.ok() && !is_empty_res.value();
+}
+
+}  // namespace
+
+/*
+ * Most branches read the kAndroidHostOut environment variable, but a few read
+ * kAndroidSoongHostOut instead. Cvd will set both variables for the subtools
+ * to the first value it finds:
+ * - envs[kAndroidHostOut] if variable is set
+ * - envs[kAndroidSoongHostOut] if variable is set
+ * - envs["HOME"] if envs["HOME"] + "/bin/cvd_internal_start" exists.
+ * - current working directory
+ */
+Result<std::string> AndroidHostPath(const cvd_common::Envs& envs) {
+  auto it = envs.find(kAndroidHostOut);
+  if (it != envs.end() && IsValidAndroidHostOutPath(it->second)) {
+    return it->second;
+  }
+  it = envs.find(kAndroidSoongHostOut);
+  if (it != envs.end() && IsValidAndroidHostOutPath(it->second)) {
+    return it->second;
+  }
+  it = envs.find("HOME");
+  if (it != envs.end() && IsValidAndroidHostOutPath(it->second)) {
+    return it->second;
+  }
+  auto current_dir = CurrentDirectory();
+  CF_EXPECT(IsValidAndroidHostOutPath(current_dir),
+            "Unable to find a valid host tool directory.");
+  return current_dir;
+}
+
+template <typename T>
+std::ostream& operator<<(std::ostream& out, const std::vector<T>& v) {
+  if (v.empty()) {
+    out << "{}";
+    return out;
+  }
+  if (v.size() == 1) {
+    out << "{" << v.front() << "}";
+    return out;
+  }
+  out << "{";
+  for (size_t i = 0; i != v.size() - 1; i++) {
+    out << v.at(i) << ", ";
+  }
+  out << v.back() << "}";
+  return out;
+}
+
+std::string CvdDir() {
+  if (ShouldUsePreviousCvdLocation()) {
+    return kPreviousDefaultCvdDir;
+  }
+  return kDefaultCvdDir;
+}
+
+std::string PerUserDir() { return fmt::format("{}/{}", CvdDir(), getuid()); }
+
+std::string PerUserCacheDir() { return fmt::format("{}/cache", PerUserDir()); }
+
+std::string InstanceDatabasePath() {
+  return fmt::format("{}/instance_database.binpb", PerUserDir());
+}
+
+std::string InstanceLocksPath() {
+  return absl::StrFormat("%s/%s/", CvdDir(), "lock");
+}
+
+Result<std::string> GroupDirFromHome(std::string_view dir) {
+  std::string per_user_dir = PerUserDir();
+  // Just in case it has a / at the end, ignore result
+  while (absl::ConsumeSuffix(&dir, "/")) {
+  }
+  CF_EXPECTF(absl::ConsumeSuffix(&dir, "/home"),
+             "Unexpected group home directory: {}", dir);
+  return std::string(dir);
+}
+
+std::string AssemblyDirFromHome(const std::string& group_home_dir) {
+  return group_home_dir + "/cuttlefish/assembly";
+}
+
+}  // namespace cuttlefish

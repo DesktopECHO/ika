@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.lineageos.desktop.overlay.networkstack">
+
+    <overlay
+        android:isStatic="true"
+        android:priority="201"
+        android:targetPackage="com.android.networkstack"
+        android:targetName="NetworkStackConfig" />
+</manifest>

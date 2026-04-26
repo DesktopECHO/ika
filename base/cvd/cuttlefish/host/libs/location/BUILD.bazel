@@ -1,0 +1,44 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_library(
+    name = "location",
+    srcs = [
+        "GnssClient.cpp",
+        "GpxParser.cpp",
+        "KmlParser.cpp",
+    ],
+    hdrs = [
+        "GnssClient.h",
+        "GpsFix.h",
+        "GpxParser.h",
+        "KmlParser.h",
+    ],
+    # `layering_check` conflicts with the combination of the clang prebuilt and
+    # the cmake build rules used for @libxml2.
+    features = ["-layering_check"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:environment",
+        "//cuttlefish/host/commands/gnss_grpc_proxy:libcvd_gnss_grpc_proxy",
+        "//cuttlefish/host/libs/location:string_parse",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@grpc",
+        "@grpc//:grpc++",
+        "@grpc//:grpc++_reflection",
+        "@jsoncpp",
+        "@libxml2",
+        "@protobuf",
+    ],
+)
+
+cf_cc_library(
+    name = "string_parse",
+    srcs = ["StringParse.cpp"],
+    hdrs = ["StringParse.h"],
+)

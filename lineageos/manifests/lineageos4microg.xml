@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Track-tip configuration: revision="master" follows lineageos4microg's
+    master branch. Tagged release builds should pin to a specific commit SHA
+    so vendor/partner_gms is byte-stable across rebuilds. The microG APK
+    versions themselves are pinned separately via MICROG_*_RELEASE.
+-->
+<manifest>
+  <remote
+      name="lineageos4microg"
+      fetch="https://github.com/lineageos4microg" />
+
+  <project
+      path="vendor/partner_gms"
+      name="android_vendor_partner_gms"
+      remote="lineageos4microg"
+      revision="master" />
+</manifest>

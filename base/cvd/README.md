@@ -1,0 +1,43 @@
+# Developing `cvd`
+
+`cvd` is a command line tool that is the interface to running Cuttlefish host
+executables from AOSP. In this fork it is shipped through the
+`cuttlefish-base` host package, but it can also be compiled and run on its
+own.
+
+## Compiling and running
+
+Run the following commands from the `base/cvd` directory:
+
+```sh
+bazel run cuttlefish/package:cvd -- reset -y
+```
+
+## Running the unit tests
+
+Run from `base/cvd`:
+
+```sh
+bazel test '...'
+```
+
+## Autocompletion with `compile_commands.json`
+
+Run from `base/cvd`:
+
+```sh
+bazel run @hedron_compile_commands//:refresh_all
+```
+
+creates a `compile_commands.json` file which text editors / LSP servers can use
+to implement autocompletion and cross references. This is a one-shot command and
+the file will become stale if new source or header files are added.
+
+## Fixing missing standard library modules when building
+
+```sh
+bazel clean --expunge
+```
+
+The expunge flag also clears `bazel` cache information related to your toolchain
+and external to the repository.

@@ -1,0 +1,25 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_library(
+    name = "confui_sign",
+    srcs = [
+        "confui_sign.cpp",
+    ],
+    hdrs = [
+        "confui_sign.h",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_library(
+    name = "oemlock",
+    hdrs = ["oemlock.h"],
+)

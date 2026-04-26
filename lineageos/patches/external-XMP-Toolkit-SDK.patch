@@ -1,0 +1,26 @@
+Patch summary:
+Expose XMP Toolkit SDK libraries to vendor modules that need image metadata
+support in the desktop camera/vendor stack. This is a build-surface change only:
+it makes the existing modules available across the vendor boundary without
+changing their implementation.
+
+diff --git a/Android.bp b/Android.bp
+index cce5062..037d831 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -16,6 +16,7 @@ license {
+ cc_library {
+     name: "zuid_md5",
+     host_supported: true,
++    vendor_available: true,
+     sdk_version: "current",
+     stl: "c++_shared",
+     target: {
+@@ -37,6 +38,7 @@ cc_library {
+ cc_library {
+     name: "xmp_toolkit_sdk",
+     host_supported: true,
++    vendor_available: true,
+     sdk_version: "current",
+     stl: "c++_shared",
+     export_include_dirs: [

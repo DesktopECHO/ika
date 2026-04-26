@@ -1,0 +1,114 @@
+Patch summary:
+Raise the software AVC codec limits enough for high-resolution desktop capture
+and playback paths used by the VM. Desktop windows and host displays can exceed
+phone/tablet-era software encoder assumptions, especially when capturing large
+surfaces or streaming a full desktop-sized framebuffer.
+
+The patch adjusts advertised codec capabilities and matching encoder limits
+together, so framework capability checks and actual software codec behavior stay
+aligned.
+
+diff --git a/media/codec2/components/avc/C2SoftAvcEnc.cpp b/media/codec2/components/avc/C2SoftAvcEnc.cpp
+index 1e7b275d2f..f5f405510a 100644
+--- a/media/codec2/components/avc/C2SoftAvcEnc.cpp
++++ b/media/codec2/components/avc/C2SoftAvcEnc.cpp
+@@ -109,8 +109,8 @@ public:
+                 DefineParam(mSize, C2_PARAMKEY_PICTURE_SIZE)
+                 .withDefault(new C2StreamPictureSizeInfo::input(0u, 16, 16))
+                 .withFields({
+-                    C2F(mSize, width).inRange(2, 2560, 2),
+-                    C2F(mSize, height).inRange(2, 2560, 2),
++                    C2F(mSize, width).inRange(2, 4096, 2),
++                    C2F(mSize, height).inRange(2, 4096, 2),
+                 })
+                 .withSetter(SizeSetter)
+                 .build());
+@@ -166,7 +166,7 @@ public:
+         addParameter(
+                 DefineParam(mBitrate, C2_PARAMKEY_BITRATE)
+                 .withDefault(new C2StreamBitrateInfo::output(0u, 64000))
+-                .withFields({C2F(mBitrate, value).inRange(4096, 12000000)})
++                .withFields({C2F(mBitrate, value).inRange(4096, 240000000)})
+                 .withSetter(BitrateSetter)
+                 .build());
+ 
+@@ -208,6 +208,7 @@ public:
+                         LEVEL_AVC_4_1,
+                         LEVEL_AVC_4_2,
+                         LEVEL_AVC_5,
++                        LEVEL_AVC_5_1,
+                     }),
+                 })
+                 .withSetter(ProfileLevelSetter, mSize, mFrameRate, mBitrate)
+@@ -334,6 +335,7 @@ public:
+             { LEVEL_AVC_4_1, 245760,  8192,  50000000 },
+             { LEVEL_AVC_4_2, 522240,  8704,  50000000 },
+             { LEVEL_AVC_5,   589824, 22080, 135000000 },
++            { LEVEL_AVC_5_1, 983040, 36864, 240000000 },
+         };
+ 
+         uint64_t mbs = uint64_t((size.v.width + 15) / 16) * ((size.v.height + 15) / 16);
+@@ -371,9 +373,9 @@ public:
+                 needsUpdate = true;
+             }
+         }
+-        if (!found || me.v.level > LEVEL_AVC_5) {
++        if (!found || me.v.level > LEVEL_AVC_5_1) {
+             // We set to the highest supported level.
+-            me.set().level = LEVEL_AVC_5;
++            me.set().level = LEVEL_AVC_5_1;
+         }
+ 
+         return C2R::Ok();
+@@ -526,6 +528,7 @@ public:
+             { LEVEL_AVC_4_1, 41 },
+             { LEVEL_AVC_4_2, 42 },
+             { LEVEL_AVC_5,   50 },
++            { LEVEL_AVC_5_1, 51 },
+         };
+         for (const Level &level : levels) {
+             if (mProfileLevel->level == level.c2Level) {
+diff --git a/media/libstagefright/data/media_codecs_google_c2_video.xml b/media/libstagefright/data/media_codecs_google_c2_video.xml
+index 2fb2d5947b..3bcb94ac4e 100644
+--- a/media/libstagefright/data/media_codecs_google_c2_video.xml
++++ b/media/libstagefright/data/media_codecs_google_c2_video.xml
+@@ -116,13 +116,13 @@
+         </MediaCodec>
+         <MediaCodec name="c2.android.avc.encoder" type="video/avc">
+             <Alias name="OMX.google.h264.encoder" />
+-            <!-- profiles and levels:  ProfileBaseline : Level41 -->
+-            <Limit name="size" min="16x16" max="2048x2048" />
++            <!-- profiles and levels:  ProfileBaseline : Level51 -->
++            <Limit name="size" min="16x16" max="4096x2304" />
+             <Limit name="alignment" value="2x2" />
+             <Limit name="block-size" value="16x16" />
+-            <Limit name="block-count" range="1-8192" /> <!-- max 2048x1024 -->
+-            <Limit name="blocks-per-second" range="1-245760" />
+-            <Limit name="bitrate" range="1-12000000" />
++            <Limit name="block-count" range="1-36864" /> <!-- max 4096x2304 -->
++            <Limit name="blocks-per-second" range="1-2073600" />
++            <Limit name="bitrate" range="1-240000000" />
+             <Feature name="intra-refresh" />
+         </MediaCodec>
+         <MediaCodec name="c2.android.hevc.encoder" type="video/hevc">
+diff --git a/media/libstagefright/data/media_codecs_sw.xml b/media/libstagefright/data/media_codecs_sw.xml
+index 475048c5db..fea2a6d9a8 100644
+--- a/media/libstagefright/data/media_codecs_sw.xml
++++ b/media/libstagefright/data/media_codecs_sw.xml
+@@ -344,11 +344,11 @@
+             <Limit name="alignment" value="2x2" />
+             <Limit name="block-size" value="16x16" />
+             <Variant name="!slow-cpu">
+-                <Limit name="size" min="16x16" max="2048x2048" />
+-                <!-- profiles and levels:  ProfileBaseline : Level41 -->
+-                <Limit name="block-count" range="1-8192" /> <!-- max 2048x1024 -->
+-                <Limit name="blocks-per-second" range="1-245760" />
+-                <Limit name="bitrate" range="1-12000000" />
++                <Limit name="size" min="16x16" max="4096x2304" />
++                <!-- profiles and levels:  ProfileBaseline : Level51 -->
++                <Limit name="block-count" range="1-36864" /> <!-- max 4096x2304 -->
++                <Limit name="blocks-per-second" range="1-2073600" />
++                <Limit name="bitrate" range="1-240000000" />
+             </Variant>
+             <Variant name="slow-cpu">
+                 <Limit name="size" min="16x16" max="1808x1808" />

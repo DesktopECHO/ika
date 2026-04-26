@@ -1,0 +1,609 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_library(
+    name = "auto_cmd",
+    hdrs = ["auto_cmd.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:type_name",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+        "//libbase",
+        "@fruit",
+    ],
+)
+
+cf_cc_library(
+    name = "automotive_proxy",
+    srcs = ["automotive_proxy.cpp"],
+    hdrs = ["automotive_proxy.h"],
+    deps = [
+        "//cuttlefish/host/libs/config:config_utils",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+    ],
+)
+
+cf_cc_library(
+    name = "bluetooth_connector",
+    srcs = ["bluetooth_connector.cpp"],
+    hdrs = ["bluetooth_connector.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "casimir",
+    srcs = ["casimir.cpp"],
+    hdrs = ["casimir.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/commands/run_cvd/launch:log_tee_creator",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "casimir_control_server",
+    srcs = ["casimir_control_server.cpp"],
+    hdrs = ["casimir_control_server.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/commands/run_cvd/launch:grpc_socket_creator",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "enable_multitouch",
+    srcs = ["enable_multitouch.cpp"],
+    hdrs = ["enable_multitouch.h"],
+    deps = [
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:guest_os",
+    ],
+)
+
+cf_cc_library(
+    name = "console_forwarder",
+    srcs = ["console_forwarder.cpp"],
+    hdrs = ["console_forwarder.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/libs/config:config_instance_derived",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "control_env_proxy_server",
+    srcs = ["control_env_proxy_server.cpp"],
+    hdrs = ["control_env_proxy_server.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/commands/run_cvd/launch:grpc_socket_creator",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+        "@fruit",
+    ],
+)
+
+cf_cc_library(
+    name = "cvdalloc",
+    srcs = ["cvdalloc.cpp"],
+    hdrs = ["cvdalloc.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/commands/cvdalloc:privilege",
+        "//cuttlefish/host/commands/cvdalloc:sem",
+        "//cuttlefish/host/libs/command_util",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/host/libs/vm_manager",
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@fruit",
+    ],
+)
+
+cf_cc_library(
+    name = "echo_server",
+    srcs = ["echo_server.cpp"],
+    hdrs = ["echo_server.h"],
+    deps = [
+        "//cuttlefish/host/commands/run_cvd/launch:grpc_socket_creator",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+    ],
+)
+
+cf_cc_library(
+    name = "gnss_grpc_proxy",
+    srcs = ["gnss_grpc_proxy.cpp"],
+    hdrs = ["gnss_grpc_proxy.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:in_sandbox",
+        "//cuttlefish/host/commands/run_cvd/launch:grpc_socket_creator",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "grpc_socket_creator",
+    srcs = ["grpc_socket_creator.cpp"],
+    hdrs = ["grpc_socket_creator.h"],
+    deps = [
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "@fruit",
+    ],
+)
+
+cf_cc_library(
+    name = "kernel_log_monitor",
+    srcs = ["kernel_log_monitor.cpp"],
+    hdrs = ["kernel_log_monitor.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/commands/run_cvd:reporting",
+        "//cuttlefish/host/libs/config:config_instance_derived",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/config:logging",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/host/libs/feature:inject",
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log:check",
+        "@fruit",
+    ],
+)
+
+cf_cc_library(
+    name = "log_tee_creator",
+    srcs = ["log_tee_creator.cpp"],
+    hdrs = ["log_tee_creator.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/libs/config:config_utils",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/result",
+        "@fruit",
+    ],
+)
+
+cf_cc_library(
+    name = "logcat_receiver",
+    srcs = ["logcat_receiver.cpp"],
+    hdrs = ["logcat_receiver.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/libs/config:config_instance_derived",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "mcu",
+    srcs = ["mcu.cpp"],
+    hdrs = ["mcu.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/common/libs/utils:wait_for_file",
+        "//cuttlefish/host/commands/run_cvd/launch:log_tee_creator",
+        "//cuttlefish/host/libs/config:config_utils",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/host/libs/vm_manager",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/strings",
+        "@fruit",
+        "@jsoncpp",
+    ],
+)
+
+cf_cc_library(
+    name = "metrics",
+    srcs = ["metrics.cpp"],
+    hdrs = ["metrics.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+    ],
+)
+
+cf_cc_library(
+    name = "modem",
+    srcs = ["modem.cpp"],
+    hdrs = ["modem.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_library(
+    name = "netsim_server",
+    srcs = ["netsim_server.cpp"],
+    hdrs = ["netsim_server.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/libs/config:config_utils",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+        "@fruit",
+    ],
+)
+
+cf_cc_library(
+    name = "nfc_connector",
+    srcs = ["nfc_connector.cpp"],
+    hdrs = ["nfc_connector.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "open_wrt",
+    srcs = ["open_wrt.cpp"],
+    hdrs = ["open_wrt.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:json",
+        "//cuttlefish/host/commands/run_cvd/launch:cvdalloc",
+        "//cuttlefish/host/commands/run_cvd/launch:log_tee_creator",
+        "//cuttlefish/host/commands/run_cvd/launch:wmediumd_server",
+        "//cuttlefish/host/libs/command_util",
+        "//cuttlefish/host/libs/config:ap_boot_flow",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:openwrt_args",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/host/libs/vm_manager",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@fruit",
+    ],
+)
+
+cf_cc_library(
+    name = "openwrt_control_server",
+    srcs = ["openwrt_control_server.cpp"],
+    hdrs = ["openwrt_control_server.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/commands/run_cvd/launch:grpc_socket_creator",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+        "@fruit",
+    ],
+)
+
+cf_cc_library(
+    name = "pica",
+    srcs = ["pica.cpp"],
+    hdrs = ["pica.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/commands/run_cvd/launch:log_tee_creator",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "root_canal",
+    srcs = ["root_canal.cpp"],
+    hdrs = ["root_canal.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/commands/run_cvd/launch:log_tee_creator",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+        "@fruit",
+    ],
+)
+
+cf_cc_library(
+    name = "screen_recording_server",
+    srcs = ["screen_recording_server.cpp"],
+    hdrs = ["screen_recording_server.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/commands/run_cvd/launch:grpc_socket_creator",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "secure_env",
+    srcs = ["secure_env.cpp"],
+    hdrs = ["secure_env.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/commands/run_cvd/launch:snapshot_control_files",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/config:secure_hals",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "sensors_simulator",
+    srcs = ["sensors_simulator.cpp"],
+    hdrs = ["sensors_simulator.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/commands/run_cvd/launch:sensors_socket_pair",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "sensors_socket_pair",
+    srcs = ["sensors_socket_pair.cpp"],
+    hdrs = ["sensors_socket_pair.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "snapshot_control_files",
+    srcs = ["snapshot_control_files.cpp"],
+    hdrs = ["snapshot_control_files.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+        "@fruit",
+    ],
+)
+
+cf_cc_library(
+    name = "streamer",
+    srcs = ["streamer.cpp"],
+    hdrs = ["streamer.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/commands/run_cvd:reporting",
+        "//cuttlefish/host/commands/run_cvd/launch:enable_multitouch",
+        "//cuttlefish/host/commands/run_cvd/launch:sensors_socket_pair",
+        "//cuttlefish/host/commands/run_cvd/launch:vhost_input_devices",
+        "//cuttlefish/host/commands/run_cvd/launch:webrtc_controller",
+        "//cuttlefish/host/libs/config:config_utils",
+        "//cuttlefish/host/libs/config:custom_actions",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:gpu_mode",
+        "//cuttlefish/host/libs/config:guest_os",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@fmt",
+        "@fruit",
+    ],
+)
+
+cf_cc_library(
+    name = "ti50_emulator",
+    srcs = ["ti50_emulator.cpp"],
+    hdrs = ["ti50_emulator.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:socket2socket_proxy",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/common/libs/utils:wait_for_unix_socket",
+        "//cuttlefish/host/commands/run_cvd/launch:log_tee_creator",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/host/libs/vm_manager",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@fruit",
+        "@jsoncpp",
+    ],
+)
+
+cf_cc_library(
+    name = "tombstone_receiver",
+    srcs = ["tombstone_receiver.cpp"],
+    hdrs = ["tombstone_receiver.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_library(
+    name = "uwb_connector",
+    srcs = ["uwb_connector.cpp"],
+    hdrs = ["uwb_connector.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/libs/config:config_utils",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "vhal_proxy_server",
+    srcs = ["vhal_proxy_server.cpp"],
+    hdrs = ["vhal_proxy_server.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/host/libs/vhal_proxy_server",
+        "@fmt",
+    ],
+)
+
+cf_cc_library(
+    name = "vhost_device_vsock",
+    srcs = ["vhost_device_vsock.cpp"],
+    hdrs = ["vhost_device_vsock.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:environment",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/common/libs/utils:wait_for_unix_socket",
+        "//cuttlefish/host/commands/run_cvd/launch:log_tee_creator",
+        "//cuttlefish/host/libs/config:config_utils",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/host/libs/vm_manager",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@fmt",
+        "@fruit",
+    ],
+)
+
+cf_cc_library(
+    name = "vhost_input_devices",
+    srcs = ["vhost_input_devices.cpp"],
+    hdrs = ["input_connections_provider.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/commands/run_cvd/launch:enable_multitouch",
+        "//cuttlefish/host/commands/run_cvd/launch:log_tee_creator",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:guest_os",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+        "//libbase",
+        "@fmt",
+        "@fruit",
+    ],
+)
+
+cf_cc_library(
+    name = "webrtc_controller",
+    srcs = ["webrtc_controller.cpp"],
+    hdrs = ["webrtc_controller.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/host/frontend/webrtc:libcuttlefish_webrtc_command_channel",
+        "//cuttlefish/host/frontend/webrtc:libcuttlefish_webrtc_commands_proto",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@fruit",
+        "@googleapis//google/rpc:code_cc_proto",
+        "@googleapis//google/rpc:status_cc_proto",
+    ],
+)
+
+cf_cc_library(
+    name = "wmediumd_server",
+    srcs = ["wmediumd_server.cpp"],
+    hdrs = ["wmediumd_server.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/common/libs/utils:wait_for_unix_socket",
+        "//cuttlefish/host/commands/run_cvd/launch:grpc_socket_creator",
+        "//cuttlefish/host/commands/run_cvd/launch:log_tee_creator",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/host/libs/vm_manager",
+        "//cuttlefish/result",
+        "@fruit",
+    ],
+)

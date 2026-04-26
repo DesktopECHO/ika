@@ -1,0 +1,42 @@
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(
+    default_visibility = [
+        "@//:android_cuttlefish",
+        "@crosvm//:__subpackages__",
+        "@wayland_protocols_freedesktop//:__subpackages__",
+    ],
+)
+
+filegroup(
+    name = "wayland_scanner",
+    srcs = [
+        "bin/wayland-scanner",
+    ],
+)
+
+filegroup(
+    name = "wayland_core_protocol",
+    srcs = [
+        "share/wayland/wayland.xml",
+    ],
+)
+
+cc_import(
+    name = "wayland_server_shared",
+    shared_library = "lib64/libwayland-server.so",
+)
+
+cc_library(
+    name = "wayland_server",
+    hdrs = [
+        "include/wayland-server-core.h",
+        "include/wayland-server-protocol.h",
+        "include/wayland-server.h",
+        "include/wayland-util.h",
+        "include/wayland-version.h",
+    ],
+    strip_include_prefix = "include",
+    deps = [":wayland_server_shared"],
+)

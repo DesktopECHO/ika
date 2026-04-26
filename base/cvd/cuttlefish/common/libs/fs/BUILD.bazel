@@ -1,0 +1,66 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library", "cf_cc_test")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_library(
+    name = "epoll",
+    srcs = ["epoll.cpp"],
+    hdrs = ["epoll.h"],
+    target_compatible_with = [
+        "@platforms//os:linux",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "fs",
+    srcs = [
+        "shared_buf.cc",
+        "shared_fd.cpp",
+    ],
+    hdrs = [
+        "shared_buf.h",
+        "shared_fd.h",
+        "shared_select.h",
+    ],
+    linkopts = select({
+        "@platforms//os:linux": ["-lrt"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//cuttlefish/common/libs/utils:environment",
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
+        "@fmt",
+    ],
+)
+
+cf_cc_test(
+    name = "fs_test",
+    srcs = [
+        "shared_fd_test.cpp",
+    ],
+    deps = [
+        ":fs",
+        "//libbase",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cf_cc_library(
+    name = "shared_fd_stream",
+    srcs = ["shared_fd_stream.cpp"],
+    hdrs = ["shared_fd_stream.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+    ],
+)

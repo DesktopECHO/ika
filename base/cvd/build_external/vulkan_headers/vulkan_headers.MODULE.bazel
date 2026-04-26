@@ -1,0 +1,7 @@
+new_local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
+
+new_local_repository(
+    name = "vulkan_headers",
+    build_file = "@//build_external/vulkan_headers:BUILD.vulkan_headers.bazel",
+    path = "/usr",
+)

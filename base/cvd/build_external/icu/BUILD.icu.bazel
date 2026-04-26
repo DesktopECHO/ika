@@ -1,0 +1,39 @@
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(
+    default_visibility = ["@//:android_cuttlefish"],
+)
+
+cc_import(
+    name = "icuuc_shared",
+    shared_library = "lib64/libicuuc.so",
+)
+
+cc_library(
+    name = "headers",
+    hdrs = glob([
+        "include/unicode/*.h",
+    ]),
+    strip_include_prefix = "include",
+    deps = [":icuuc_shared"],
+)
+
+cc_library(
+    name = "utypes",
+    hdrs = [
+        "include/unicode/utypes.h",
+    ],
+    strip_include_prefix = "include",
+    deps = [":icuuc_shared"],
+)
+
+cc_library(
+    name = "schriter",
+    hdrs = [
+        "include/unicode/schriter.h",
+        "include/unicode/unistr.h",
+    ],
+    strip_include_prefix = "include",
+    deps = [":utypes"],
+)

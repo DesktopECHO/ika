@@ -1,0 +1,66 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_library(
+    name = "interface",
+    srcs = [
+        "interface.cpp",
+    ],
+    hdrs = ["interface.h"],
+    deps = [
+        "@abseil-cpp//absl/strings:str_format",
+    ],
+)
+
+cf_cc_library(
+    name = "sem",
+    srcs = [
+        "sem.cpp",
+    ],
+    hdrs = ["sem.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/host/libs/command_util",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "privilege",
+    srcs = [
+        "privilege.cpp",
+        "privilege.h",
+    ],
+    hdrs = ["privilege.h"],
+    deps = [
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_binary(
+    name = "cvdalloc",
+    srcs = [
+        "cvdalloc.cpp",
+    ],
+    deps = [
+        ":interface",
+        ":privilege",
+        ":sem",
+        "//allocd:alloc_utils",
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/cleanup:cleanup",
+        "@abseil-cpp//absl/flags:flag",
+        "@abseil-cpp//absl/flags:parse",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings:str_format",
+    ],
+)

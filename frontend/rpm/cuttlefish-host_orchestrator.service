@@ -1,0 +1,18 @@
+[Unit]
+Description=Cuttlefish host orchestrator service
+After=network-online.target cuttlefish-host-resources.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=httpcvd
+Group=httpcvd
+SupplementaryGroups=cvdnetwork kvm video render
+EnvironmentFile=-/etc/sysconfig/cuttlefish-host_orchestrator
+WorkingDirectory=/usr/share/cuttlefish-common/operator
+ExecStartPre=+/usr/libexec/cuttlefish/cuttlefish-host_orchestrator-prepare
+ExecStart=/usr/libexec/cuttlefish/cuttlefish-host_orchestrator
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

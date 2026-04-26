@@ -1,0 +1,13 @@
+git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+
+git_repository(
+    name = "libwebrtc",
+    commit = "ff76f1ca486bde62111c5dc8ed05afa8105ac6aa",
+    build_file = "@//build_external/libwebrtc:BUILD.libwebrtc.bazel",
+    remote = "https://webrtc.googlesource.com/src/",
+    patches = [
+        "@//build_external/libwebrtc:PATCH.third_party_libyuv.patch",
+        "@//build_external/libwebrtc:PATCH.absl_nonnull_compat.patch",
+        "@//build_external/libwebrtc:PATCH.optional_avx2_dispatch.patch",
+    ],
+)

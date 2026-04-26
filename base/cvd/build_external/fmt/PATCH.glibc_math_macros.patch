@@ -1,0 +1,29 @@
+diff --git a/include/fmt/format.h b/include/fmt/format.h
+index cd00164..1fda7cd 100644
+--- a/include/fmt/format.h
++++ b/include/fmt/format.h
+@@ -43,6 +43,24 @@
+ #ifndef FMT_MODULE
+ #  include <cmath>    // std::signbit
+ #  include <cstddef>  // std::byte
++
++// glibc may expose these as macros, which breaks qualified libc++ calls such
++// as std::isfinite by macro-expanding them into std::__builtin_isfinite.
++#  ifdef isfinite
++#    undef isfinite
++#  endif
++#  ifdef isnan
++#    undef isnan
++#  endif
++#  ifdef isinf
++#    undef isinf
++#  endif
++#  ifdef signbit
++#    undef signbit
++#  endif
++#  ifdef fpclassify
++#    undef fpclassify
++#  endif
+ #  include <cstdint>  // uint32_t
+ #  include <cstdlib>  // std::malloc, std::free
+ #  include <cstring>  // std::memcpy

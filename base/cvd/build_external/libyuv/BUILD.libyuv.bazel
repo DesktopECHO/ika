@@ -1,0 +1,35 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+cc_library(
+    name = "libyuv",
+    srcs = glob(
+        ["source/*.cc"],
+        exclude = [
+            "source/*neon*.cc",
+            "source/*sve*.cc",
+            "source/*sme*.cc",
+        ]
+    ) + select({
+        "@platforms//cpu:arm64": glob(["source/*neon*.cc"]),
+        "//conditions:default": [],
+    }),
+    hdrs = glob([
+        "include/libyuv/*.h",
+        "include/libyuv.h",
+    ]),
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+)
+
+cc_test(
+    name = "libyuv_test",
+    srcs = glob([
+        "unit_test/*.cc",
+        "unit_test/*.h",
+    ]),
+    deps = [
+        ":libyuv",
+        "@googletest//:gtest_main",
+    ],
+)

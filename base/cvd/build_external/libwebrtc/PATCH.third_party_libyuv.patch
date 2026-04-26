@@ -1,0 +1,219 @@
+diff --git api/video/i010_buffer.cc api/video/i010_buffer.cc
+index 32507febed..24887602b9 100644
+--- api/video/i010_buffer.cc
++++ api/video/i010_buffer.cc
+@@ -14,8 +14,8 @@
+ #include "api/make_ref_counted.h"
+ #include "api/video/i420_buffer.h"
+ #include "rtc_base/checks.h"
+-#include "third_party/libyuv/include/libyuv/convert.h"
+-#include "third_party/libyuv/include/libyuv/scale.h"
++#include "libyuv/convert.h"
++#include "libyuv/scale.h"
+ 
+ // Aligning pointer to 64 bytes for improved performance, e.g. use SIMD.
+ static const int kBufferAlignment = 64;
+diff --git api/video/i210_buffer.cc api/video/i210_buffer.cc
+index d3cd68d366..39abcc3cd2 100644
+--- api/video/i210_buffer.cc
++++ api/video/i210_buffer.cc
+@@ -15,8 +15,8 @@
+ #include "api/video/i420_buffer.h"
+ #include "api/video/i422_buffer.h"
+ #include "rtc_base/checks.h"
+-#include "third_party/libyuv/include/libyuv/convert.h"
+-#include "third_party/libyuv/include/libyuv/scale.h"
++#include "libyuv/convert.h"
++#include "libyuv/scale.h"
+ 
+ // Aligning pointer to 64 bytes for improved performance, e.g. use SIMD.
+ static const int kBufferAlignment = 64;
+diff --git api/video/i410_buffer.cc api/video/i410_buffer.cc
+index 9f19d8c0f5..ec8c2a3ebf 100644
+--- api/video/i410_buffer.cc
++++ api/video/i410_buffer.cc
+@@ -16,9 +16,9 @@
+ #include "api/make_ref_counted.h"
+ #include "api/video/i420_buffer.h"
+ #include "rtc_base/checks.h"
+-#include "third_party/libyuv/include/libyuv/convert.h"
+-#include "third_party/libyuv/include/libyuv/planar_functions.h"
+-#include "third_party/libyuv/include/libyuv/scale.h"
++#include "libyuv/convert.h"
++#include "libyuv/planar_functions.h"
++#include "libyuv/scale.h"
+ 
+ // Aligning pointer to 64 bytes for improved performance, e.g. use SIMD.
+ static const int kBufferAlignment = 64;
+diff --git api/video/i420_buffer.cc api/video/i420_buffer.cc
+index bf7fc06ee9..d245fa361e 100644
+--- api/video/i420_buffer.cc
++++ api/video/i420_buffer.cc
+@@ -16,9 +16,9 @@
+ 
+ #include "api/make_ref_counted.h"
+ #include "rtc_base/checks.h"
+-#include "third_party/libyuv/include/libyuv/convert.h"
+-#include "third_party/libyuv/include/libyuv/planar_functions.h"
+-#include "third_party/libyuv/include/libyuv/scale.h"
++#include "libyuv/convert.h"
++#include "libyuv/planar_functions.h"
++#include "libyuv/scale.h"
+ 
+ // Aligning pointer to 64 bytes for improved performance, e.g. use SIMD.
+ static const int kBufferAlignment = 64;
+diff --git api/video/i422_buffer.cc api/video/i422_buffer.cc
+index c7fc50e272..b5eb3f452c 100644
+--- api/video/i422_buffer.cc
++++ api/video/i422_buffer.cc
+@@ -17,9 +17,9 @@
+ #include "api/make_ref_counted.h"
+ #include "api/video/i420_buffer.h"
+ #include "rtc_base/checks.h"
+-#include "third_party/libyuv/include/libyuv/convert.h"
+-#include "third_party/libyuv/include/libyuv/planar_functions.h"
+-#include "third_party/libyuv/include/libyuv/scale.h"
++#include "libyuv/convert.h"
++#include "libyuv/planar_functions.h"
++#include "libyuv/scale.h"
+ 
+ // Aligning pointer to 64 bytes for improved performance, e.g. use SIMD.
+ static const int kBufferAlignment = 64;
+diff --git api/video/i444_buffer.cc api/video/i444_buffer.cc
+index 98e892308f..28d380a218 100644
+--- api/video/i444_buffer.cc
++++ api/video/i444_buffer.cc
+@@ -17,9 +17,9 @@
+ #include "api/make_ref_counted.h"
+ #include "api/video/i420_buffer.h"
+ #include "rtc_base/checks.h"
+-#include "third_party/libyuv/include/libyuv/convert.h"
+-#include "third_party/libyuv/include/libyuv/planar_functions.h"
+-#include "third_party/libyuv/include/libyuv/scale.h"
++#include "libyuv/convert.h"
++#include "libyuv/planar_functions.h"
++#include "libyuv/scale.h"
+ 
+ // Aligning pointer to 64 bytes for improved performance, e.g. use SIMD.
+ static const int kBufferAlignment = 64;
+diff --git api/video/nv12_buffer.cc api/video/nv12_buffer.cc
+index ca9dcd8677..45f81f2788 100644
+--- api/video/nv12_buffer.cc
++++ api/video/nv12_buffer.cc
+@@ -13,8 +13,8 @@
+ #include "api/make_ref_counted.h"
+ #include "api/video/i420_buffer.h"
+ #include "rtc_base/checks.h"
+-#include "third_party/libyuv/include/libyuv/convert.h"
+-#include "third_party/libyuv/include/libyuv/scale.h"
++#include "libyuv/convert.h"
++#include "libyuv/scale.h"
+ 
+ namespace webrtc {
+ 
+diff --git common_video/libyuv/webrtc_libyuv.cc common_video/libyuv/webrtc_libyuv.cc
+index 14e2d22612..1f374f267d 100644
+--- common_video/libyuv/webrtc_libyuv.cc
++++ common_video/libyuv/webrtc_libyuv.cc
+@@ -15,7 +15,7 @@
+ #include "api/video/i420_buffer.h"
+ #include "common_video/include/video_frame_buffer.h"
+ #include "rtc_base/checks.h"
+-#include "third_party/libyuv/include/libyuv.h"
++#include "libyuv.h"
+ 
+ namespace webrtc {
+ 
+diff --git common_video/video_frame_buffer.cc common_video/video_frame_buffer.cc
+index d57330c652..e3f2687f51 100644
+--- common_video/video_frame_buffer.cc
++++ common_video/video_frame_buffer.cc
+@@ -12,7 +12,7 @@
+ #include "api/make_ref_counted.h"
+ #include "api/video/i420_buffer.h"
+ #include "rtc_base/checks.h"
+-#include "third_party/libyuv/include/libyuv/convert.h"
++#include "libyuv/convert.h"
+ 
+ namespace webrtc {
+ 
+diff --git modules/video_capture/video_capture_impl.cc modules/video_capture/video_capture_impl.cc
+index 234c2e131e..23f404ff5c 100644
+--- modules/video_capture/video_capture_impl.cc
++++ modules/video_capture/video_capture_impl.cc
+@@ -20,7 +20,7 @@
+ #include "rtc_base/logging.h"
+ #include "rtc_base/time_utils.h"
+ #include "rtc_base/trace_event.h"
+-#include "third_party/libyuv/include/libyuv.h"
++#include "libyuv.h"
+ 
+ namespace webrtc {
+ namespace videocapturemodule {
+diff --git modules/video_coding/codecs/h264/h264_encoder_impl.cc modules/video_coding/codecs/h264/h264_encoder_impl.cc
+index 3d9d6290a7..e6e5e7ed56 100644
+--- modules/video_coding/codecs/h264/h264_encoder_impl.cc
++++ modules/video_coding/codecs/h264/h264_encoder_impl.cc
+@@ -29,8 +29,8 @@
+ #include "rtc_base/logging.h"
+ #include "rtc_base/time_utils.h"
+ #include "system_wrappers/include/metrics.h"
+-#include "third_party/libyuv/include/libyuv/convert.h"
+-#include "third_party/libyuv/include/libyuv/scale.h"
++#include "libyuv/convert.h"
++#include "libyuv/scale.h"
+ #include "third_party/openh264/src/codec/api/wels/codec_api.h"
+ #include "third_party/openh264/src/codec/api/wels/codec_app_def.h"
+ #include "third_party/openh264/src/codec/api/wels/codec_def.h"
+diff --git modules/video_coding/codecs/vp8/libvpx_vp8_decoder.cc modules/video_coding/codecs/vp8/libvpx_vp8_decoder.cc
+index 1ac71899ee..2d15592d84 100644
+--- modules/video_coding/codecs/vp8/libvpx_vp8_decoder.cc
++++ modules/video_coding/codecs/vp8/libvpx_vp8_decoder.cc
+@@ -30,7 +30,7 @@
+ #include "rtc_base/time_utils.h"
+ #include "system_wrappers/include/field_trial.h"
+ #include "system_wrappers/include/metrics.h"
+-#include "third_party/libyuv/include/libyuv/convert.h"
++#include "libyuv/convert.h"
+ #include "vpx/vp8.h"
+ #include "vpx/vp8dx.h"
+ #include "vpx/vpx_decoder.h"
+diff --git modules/video_coding/codecs/vp8/libvpx_vp8_encoder.cc modules/video_coding/codecs/vp8/libvpx_vp8_encoder.cc
+index 52ef6231ea..eb53ecc392 100644
+--- modules/video_coding/codecs/vp8/libvpx_vp8_encoder.cc
++++ modules/video_coding/codecs/vp8/libvpx_vp8_encoder.cc
+@@ -41,7 +41,7 @@
+ #include "rtc_base/logging.h"
+ #include "rtc_base/trace_event.h"
+ #include "system_wrappers/include/field_trial.h"
+-#include "third_party/libyuv/include/libyuv/scale.h"
++#include "libyuv/scale.h"
+ #include "vpx/vp8cx.h"
+
+ #if (defined(WEBRTC_ARCH_ARM) || defined(WEBRTC_ARCH_ARM64)) && \
+diff --git modules/video_coding/codecs/vp9/libvpx_vp9_decoder.cc modules/video_coding/codecs/vp9/libvpx_vp9_decoder.cc
+index 997139df06..e2acbdb84a 100644
+--- modules/video_coding/codecs/vp9/libvpx_vp9_decoder.cc
++++ modules/video_coding/codecs/vp9/libvpx_vp9_decoder.cc
+@@ -23,7 +23,7 @@
+ #include "modules/video_coding/utility/vp9_uncompressed_header_parser.h"
+ #include "rtc_base/checks.h"
+ #include "rtc_base/logging.h"
+-#include "third_party/libyuv/include/libyuv/convert.h"
++#include "libyuv/convert.h"
+ #include "vpx/vp8dx.h"
+ #include "vpx/vpx_decoder.h"
+ 
+diff --git modules/video_coding/codecs/vp9/libvpx_vp9_encoder.cc modules/video_coding/codecs/vp9/libvpx_vp9_encoder.cc
+index 4c27f4ce22..2ffd77da3a 100644
+--- modules/video_coding/codecs/vp9/libvpx_vp9_encoder.cc
++++ modules/video_coding/codecs/vp9/libvpx_vp9_encoder.cc
+@@ -40,7 +40,7 @@
+ #include "rtc_base/strings/string_builder.h"
+ #include "rtc_base/time_utils.h"
+ #include "rtc_base/trace_event.h"
+-#include "third_party/libyuv/include/libyuv/convert.h"
++#include "libyuv/convert.h"
+ #include "vpx/vp8cx.h"
+ #include "vpx/vpx_encoder.h"
+ 

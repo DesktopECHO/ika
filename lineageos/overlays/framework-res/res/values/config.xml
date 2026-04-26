@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <bool name="config_isDesktopModeSupported">true</bool>
+    <bool name="config_canInternalDisplayHostDesktops">true</bool>
+    <bool name="config_enterDesktopByDefaultOnFreeformDisplay">true</bool>
+    <bool name="config_dragToMaximizeInDesktopMode">true</bool>
+    <bool name="config_showHomeBehindDesktop">true</bool>
+    <bool name="config_disableLockscreenByDefault">true</bool>
+
+    <!-- Make freeform / multi-window / per-display focus product-owned instead
+         of relying on the Cuttlefish base. Closes the implicit contract the
+         desktop smoke test asserts: features must exist on every desktop image,
+         not just when Cuttlefish happens to default to them. -->
+    <bool name="config_freeformWindowManagement">true</bool>
+    <bool name="config_supportsMultiWindow">true</bool>
+    <bool name="config_supportsSplitScreenMultiWindow">true</bool>
+    <bool name="config_perDisplayFocusEnabled">true</bool>
+
+    <bool name="config_batterySaverSupported">false</bool>
+    <bool name="config_showNavigationBar">true</bool>
+    <bool name="config_navBarCanMove">false</bool>
+    <bool name="config_supportAutoRotation">false</bool>
+    <bool name="config_voice_capable">false</bool>
+    <bool name="config_sms_capable">false</bool>
+    <bool name="config_mobile_data_capable">false</bool>
+    <bool name="config_user_notification_of_restrictied_mobile_access">false</bool>
+    <integer name="config_num_physical_slots">0</integer>
+    <bool name="config_enable_emergency_call_while_sim_locked">false</bool>
+    <bool name="config_emergencyGestureEnabled">false</bool>
+    <bool name="config_battery_percentage_setting_available">false</bool>
+</resources>

@@ -1,0 +1,12 @@
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+exports_files(["extract-vmlinux.sh"])
+
+sh_binary(
+    name = "extract-vmlinux",
+    srcs = ["extract-vmlinux.sh"],
+)

@@ -1,0 +1,63 @@
+/*
+ * Copyright (C) 2019 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+
+#pragma once
+
+#include <stdint.h>
+#include <map>
+
+#include <android-base/unique_fd.h>
+
+#include <wayland-server-core.h>
+
+namespace wayland {
+
+struct DmabufPlane {
+  android::base::unique_fd fd;
+  uint32_t plane = 0;
+  uint32_t offset = 0;
+  uint32_t stride = 0;
+  uint32_t modifier_hi = 0;
+  uint32_t modifier_lo = 0;
+};
+
+struct DmabufParams {
+  DmabufParams() = default;
+
+  DmabufParams(const DmabufParams& rhs) = delete;
+  DmabufParams& operator=(const DmabufParams& rhs) = delete;
+
+  DmabufParams(DmabufParams&& rhs) = default;
+  DmabufParams& operator=(DmabufParams&& rhs) = default;
+
+  std::map<int32_t, DmabufPlane> planes;
+};
+
+struct Dmabuf {
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t format = 0;
+  uint32_t flags = 0;
+  DmabufParams params;
+};
+
+// Binds the dmabuf interface to the given wayland server.
+void BindDmabufInterface(wl_display* display);
+
+bool IsDmabufResource(struct wl_resource* resource);
+
+}  // namespace wayland

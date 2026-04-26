@@ -1,0 +1,15 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_library(
+    name = "concurrency",
+    hdrs = [
+        "multiplexer.h",
+        "semaphore.h",
+        "thread_safe_queue.h",
+    ],
+    deps = ["@abseil-cpp//absl/log:check"],
+)

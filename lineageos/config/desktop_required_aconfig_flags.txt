@@ -1,0 +1,30 @@
+# package/name entries expected to be ENABLED for LineageOS Desktop.
+#
+# This list is valid against the LineageOS 23.2 / AOSP-25 aconfig tree. Some
+# entries (notably form_factor_based_desktop_first_switch) are AOSP flags that
+# may be renamed or retired in a future rev; revalidate on every uprev.
+com.android.window.flags/enable_desktop_windowing_mode
+com.android.window.flags/enable_desktop_windowing_transitions
+com.android.window.flags/enable_desktop_windowing_persistence
+com.android.window.flags/enable_desktop_taskbar_on_freeform_displays
+com.android.window.flags/enable_desktop_windowing_taskbar_running_apps
+com.android.window.flags/enable_windowing_edge_drag_resize
+com.android.window.flags/enable_windowing_scaled_resizing
+com.android.window.flags/enable_windowing_dynamic_initial_bounds
+com.android.window.flags/universal_resizable_by_default
+com.android.window.flags/enter_desktop_by_default_on_freeform_displays
+com.android.window.flags/form_factor_based_desktop_first_switch
+com.android.window.flags/show_home_behind_desktop
+com.android.window.flags/enable_multiple_desktops_backend
+com.android.window.flags/enable_multiple_desktops_frontend
+com.android.window.flags/enable_minimize_button
+com.android.window.flags/enable_themed_app_headers
+com.android.window.flags/skip_compat_ui_education_in_desktop_mode
+com.android.launcher3/enable_large_desktop_windowing_tile
+com.android.launcher3/enable_scalability_for_desktop_experience
+# Desktop visual-polish flags enabled by build-release.patch.
+# Listed here so a regression that drops or disables them fails the build
+# validator instead of silently turning the polish off.
+com.android.launcher3/blurred_home_animation
+com.android.launcher3/enable_overview_desktop_tile_wallpaper_background
+com.android.systemui/status_bar_for_desktop

@@ -1,0 +1,353 @@
+//
+// Copyright (C) 2019 The Android Open Source Project
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include <iostream>
+#include <optional>
+#include <sstream>
+#include <unordered_set>
+
+#include <android-base/file.h>
+#include "absl/base/no_destructor.h"
+#include "absl/strings/str_split.h"
+#include <fmt/format.h>
+#include <gflags/gflags.h>
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/strings/match.h"
+
+#include "cuttlefish/common/libs/fs/shared_fd.h"
+#include "cuttlefish/common/libs/utils/environment.h"
+#include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/common/libs/utils/flag_parser.h"
+#include "cuttlefish/common/libs/utils/subprocess.h"
+#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
+#include "cuttlefish/common/libs/utils/tee_logging.h"
+#include "cuttlefish/host/commands/start/filesystem_explorer.h"
+#include "cuttlefish/host/commands/start/flag_forwarder.h"
+#include "cuttlefish/host/commands/start/override_bool_arg.h"
+#include "cuttlefish/host/commands/start/start_flags.h"
+#include "cuttlefish/host/commands/start/validate_metrics_confirmation.h"
+#include "cuttlefish/host/libs/config/config_constants.h"
+#include "cuttlefish/host/libs/config/config_utils.h"
+#include "cuttlefish/host/libs/config/cuttlefish_config.h"
+#include "cuttlefish/host/libs/config/fetcher_config.h"
+#include "cuttlefish/host/libs/config/host_tools_version.h"
+#include "cuttlefish/host/libs/config/instance_nums.h"
+#include "cuttlefish/posix/symlink.h"
+
+namespace cuttlefish {
+namespace {
+
+using absl::NoDestructor;
+
+// NOTE: "/bin" appended to certain return values to match the return value of
+// android::base::GetExecutableDirectory
+std::string GetHostToolPath() {
+  std::optional<std::string> opt_path = StringFromEnv("ANDROID_HOST_OUT");
+  if (opt_path && IsValidAndroidHostOutPath(*opt_path)) {
+    return *opt_path + "/bin";
+  }
+  opt_path = StringFromEnv("HOME");
+  if (opt_path && IsValidAndroidHostOutPath(*opt_path)) {
+    return *opt_path + "/bin";
+  }
+  std::string path = CurrentDirectory();
+  if (IsValidAndroidHostOutPath(path)) {
+    return path + "/bin";
+  }
+  // default to previous behavior
+  path = android::base::GetExecutableDirectory();
+  if (!IsValidAndroidHostOutPath(path)) {
+    LOG(WARNING) << "Could not find obvious host tool path from environment "
+                    "variables HOME, ANDROID_HOST_OUT, or the current working "
+                    "directory.  Falling back to executable directory at: "
+                 << path;
+  }
+  return path;
+}
+
+std::string SubtoolPath(const std::string& subtool_base) {
+  std::string host_tool_path = GetHostToolPath();
+  std::stringstream subtool_path_stream;
+  subtool_path_stream << host_tool_path << "/" << subtool_base;
+  auto subtool_path = subtool_path_stream.str();
+  if (host_tool_path.empty() || !FileExists(subtool_path)) {
+    return HostBinaryPath(subtool_base);
+  }
+  return subtool_path;
+}
+
+std::string AssemblerPath() { return SubtoolPath("assemble_cvd"); }
+std::string RunnerPath() { return SubtoolPath("run_cvd"); }
+
+int InvokeAssembler(const std::string& assembler_stdin,
+                    std::string& assembler_stdout,
+                    const std::vector<std::string>& argv) {
+  Command assemble_cmd(AssemblerPath());
+  for (const auto& arg : argv) {
+    assemble_cmd.AddParameter(arg);
+  }
+  return RunWithManagedStdio(std::move(assemble_cmd), &assembler_stdin,
+                             &assembler_stdout, nullptr);
+}
+
+Subprocess StartRunner(SharedFD runner_stdin,
+                       const CuttlefishConfig::InstanceSpecific& instance,
+                       const std::vector<std::string>& argv) {
+  Command run_cmd(RunnerPath());
+  for (const auto& arg : argv) {
+    run_cmd.AddParameter(arg);
+  }
+  run_cmd.RedirectStdIO(Subprocess::StdIOChannel::kStdIn, runner_stdin);
+  run_cmd.SetWorkingDirectory(instance.instance_dir());
+  return run_cmd.Start();
+}
+
+std::string WriteFiles(FetcherConfig fetcher_config) {
+  std::stringstream output_streambuf;
+  for (const auto& file : fetcher_config.get_cvd_files()) {
+    output_streambuf << file.first << "\n";
+  }
+  return output_streambuf.str();
+}
+
+bool HostToolsUpdated() {
+  if (CuttlefishConfig::ConfigExists()) {
+    auto config = CuttlefishConfig::Get();
+    if (config) {
+      auto current_tools = HostToolsCrc();
+      auto last_tools = config->host_tools_version();
+      return current_tools != last_tools;
+    }
+  }
+  return true;
+}
+
+// Hash table for all bool flag names
+// Used to find bool flag and convert "flag"/"noflag" to "--flag=value"
+// This is the solution for vectorize bool flags in gFlags
+
+const std::unordered_set<std::string>& BoolFlags() {
+  static const NoDestructor<std::unordered_set<std::string>> bool_flags({
+      "chromeos_boot",
+      "console",
+      "daemon",
+      "enable_audio",
+      "enable_bootanimation",
+      "enable_gpu_udmabuf",
+      "enable_gpu_vhost_user",
+      "enable_kernel_log",
+      "enable_minimal_mode",
+      "enable_modem_simulator",
+      "enable_sandbox",
+      "enable_usb",
+      "enable_virtiofs",
+      "experimental_build_super_image",
+      "fail_fast",
+      "guest_enforce_security",
+      "kgdb",
+      "pause_in_bootloader",
+      "prefer_performance_cores",
+      "record_screen",
+      "restart_subprocesses",
+      "smt",
+      "start_gnss_proxy",
+      "start_webrtc",
+      "use_cvdalloc",
+      "use_random_serial",
+      "use_sdcard",
+      "vhost_net",
+      "vhost_user_block",
+      "vhost_user_vsock",
+  });
+  return *bool_flags;
+}
+
+Result<void> LinkLogs2InstanceDir(
+    const std::string& config_path, const CuttlefishConfig& config,
+    const CuttlefishConfig::InstanceSpecific& instance) {
+  CF_EXPECT(EnsureDirectoryExists(instance.PerInstanceLogPath("")));
+
+  CF_EXPECT(Symlink(config_path, instance.PerInstanceLogPath(
+                                     android::base::Basename(config_path))));
+
+  std::string assemble_cvd_logs = config.AssemblyPath("assemble_cvd.log");
+  if (FileExists(assemble_cvd_logs)) {
+    CF_EXPECT(Symlink(assemble_cvd_logs,
+                      instance.PerInstanceLogPath("assemble_cvd.log")));
+  }
+
+  std::string images_dir = instance.images_dir();
+  std::string fetch_log = fmt::format("{}/{}", images_dir, "fetch.log");
+  if (!FileExists(fetch_log)) {
+    // The fetch.log file can be in the same directory as the downloaded
+    // instances or its parent directory if --target_subdirectory was used.
+    fetch_log =
+        fmt::format("{}/{}", android::base::Dirname(images_dir), "fetch.log");
+  }
+  if (FileExists(fetch_log)) {
+    CF_EXPECT(Symlink(AbsolutePath(fetch_log),
+                      instance.PerInstanceLogPath("fetch.log")));
+  }
+
+  return {};
+}
+
+int CvdInternalStartMain(int argc, char** argv) {
+  LogToStderr();
+  std::vector<std::string> args(argv + 1, argv + argc);
+
+  std::vector<std::string> assemble_args;
+  std::string image_dir;
+  std::vector<std::string> args_copy = args;
+  auto parse_res = ConsumeFlags(
+      {GflagsCompatFlag("system_image_dir", image_dir)}, args_copy);
+
+  if (!parse_res.ok()) {
+    LOG(ERROR) << "Error extracting system_image_dir from args: "
+               << parse_res.error();
+    return -1;
+  } else if (!image_dir.empty()) {
+    LOG(INFO) << "Using system_image_dir of: " << image_dir;
+    assemble_args = {"--system_image_dir=" + image_dir};
+  }
+
+  std::vector<std::vector<std::string>> spargs = {assemble_args, {}};
+  FlagForwarder forwarder({AssemblerPath(), RunnerPath()}, spargs);
+
+  // Used to find bool flag and convert "flag"/"noflag" to "--flag=value"
+  // This is the solution for vectorize bool flags in gFlags
+  args = OverrideBoolArg(std::move(args), BoolFlags());
+  for (int i = 1; i < argc; i++) {
+    argv[i] = args[i - 1].data();  // args[] start from 0
+  }
+
+  gflags::ParseCommandLineNonHelpFlags(&argc, &argv, false);
+
+  forwarder.UpdateFlagDefaults();
+
+  gflags::HandleCommandLineHelpFlags();
+
+  setenv("CF_CONSOLE_SEVERITY", FLAGS_verbosity.c_str(), /* replace */ false);
+  setenv("CF_FILE_SEVERITY", FLAGS_file_verbosity.c_str(), /* replace */ false);
+
+  auto use_metrics = FLAGS_report_anonymous_usage_stats;
+  FLAGS_report_anonymous_usage_stats = ValidateMetricsConfirmation(use_metrics);
+
+  if (FLAGS_track_host_tools_crc) {
+    // TODO(b/159068082) Make decisions based on this value in assemble_cvd
+    LOG(INFO) << "Host changed from last run: " << HostToolsUpdated();
+  }
+
+  auto instance_nums = InstanceNumsCalculator().FromGlobalGflags().Calculate();
+  if (!instance_nums.ok()) {
+    LOG(ERROR) << instance_nums.error();
+    abort();
+  }
+
+  // TODO(schuffelen): Lift instance id assumptions in sandboxing
+
+  if (CuttlefishConfig::ConfigExists()) {
+    auto previous_config = CuttlefishConfig::Get();
+    CHECK(previous_config);
+    CHECK(!previous_config->Instances().empty());
+    auto previous_instance = previous_config->Instances()[0];
+    const auto& disks = previous_instance.virtual_disk_paths();
+    auto overlay = previous_instance.PerInstancePath("overlay.img");
+    auto used_overlay =
+        std::find(disks.begin(), disks.end(), overlay) != disks.end();
+    CHECK(used_overlay == FLAGS_use_overlay)
+        << "Cannot transition between different values of --use_overlay "
+        << "(Previous = " << used_overlay << ", current = " << FLAGS_use_overlay
+        << "). To fix this, delete \"" << previous_config->root_dir()
+        << "\" and any image files.";
+  }
+
+  CHECK(!instance_nums->empty()) << "Expected at least one instance";
+  auto instance_num_str = std::to_string(*instance_nums->begin());
+  setenv(kCuttlefishInstanceEnvVarName, instance_num_str.c_str(),
+         /* overwrite */ 1);
+
+#if defined(__BIONIC__)
+  // These environment variables are needed in case when Bionic is used.
+  // b/171754977
+  setenv("ANDROID_DATA", DefaultHostArtifactsPath("").c_str(),
+         /* overwrite */ 0);
+  setenv("ANDROID_TZDATA_ROOT", DefaultHostArtifactsPath("").c_str(),
+         /* overwrite */ 0);
+  setenv("ANDROID_ROOT", DefaultHostArtifactsPath("").c_str(),
+         /* overwrite */ 0);
+#endif
+
+  auto assembler_input = WriteFiles(AvailableFilesReport());
+  std::string assembler_output;
+  auto assemble_ret =
+      InvokeAssembler(assembler_input, assembler_output,
+                      forwarder.ArgvForSubprocess(AssemblerPath(), args));
+
+  if (assemble_ret != 0) {
+    LOG(ERROR) << "assemble_cvd returned " << assemble_ret;
+    return assemble_ret;
+  } else {
+    VLOG(0) << "assemble_cvd exited successfully.";
+  }
+
+  std::string conf_path;
+  for (std::string_view line :
+       absl::StrSplit(assembler_output, '\n', absl::SkipEmpty())) {
+    if (absl::EndsWith(line, "cuttlefish_config.json")) {
+      conf_path = line;
+    }
+  }
+  CHECK(!conf_path.empty()) << "could not find config";
+  auto config = CuttlefishConfig::GetFromFile(conf_path);
+  CHECK(config) << "Could not load config object";
+  setenv(kCuttlefishConfigEnvVarName, conf_path.c_str(), /* overwrite */ true);
+
+  std::vector<Subprocess> runners;
+  for (const auto& instance : config->Instances()) {
+    Result<void> link_res = LinkLogs2InstanceDir(conf_path, *config, instance);
+    if (!link_res.ok()) {
+      LOG(ERROR) << "Failed to link logs to instance dir: " << link_res.error();
+    }
+    SharedFD runner_stdin = SharedFD::Open("/dev/null", O_RDONLY);
+    CHECK(runner_stdin->IsOpen()) << runner_stdin->StrError();
+    setenv(kCuttlefishInstanceEnvVarName, instance.id().c_str(),
+           /* overwrite */ 1);
+
+    auto run_proc = StartRunner(std::move(runner_stdin), instance,
+                                forwarder.ArgvForSubprocess(RunnerPath()));
+    runners.push_back(std::move(run_proc));
+  }
+
+  bool run_cvd_failure = false;
+  for (auto& run_proc : runners) {
+    auto run_ret = run_proc.Wait();
+    if (run_ret != 0) {
+      run_cvd_failure = true;
+      LOG(ERROR) << "run_cvd returned " << run_ret;
+    } else {
+      VLOG(0) << "run_cvd exited successfully.";
+    }
+  }
+  return run_cvd_failure ? -1 : 0;
+}
+
+}  // namespace
+}  // namespace cuttlefish
+
+int main(int argc, char** argv) {
+  return cuttlefish::CvdInternalStartMain(argc, argv);
+}

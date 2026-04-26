@@ -1,0 +1,11 @@
+# Listen on all addresses by default.
+orchestrator_listen_address=0.0.0.0
+
+# Defaults to the nginx proxy target port.
+orchestrator_http_port=2081
+orchestrator_cvd_artifacts_dir=/var/lib/cuttlefish-common
+
+# Optional overrides.
+#orchestrator_android_build_url=
+#operator_http_port=
+#build_api_credentials_use_gce_metadata=

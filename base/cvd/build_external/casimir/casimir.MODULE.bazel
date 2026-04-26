@@ -1,0 +1,55 @@
+casimir_crates = use_extension(
+    "@rules_rust//crate_universe:extensions.bzl",
+    "crate",
+    isolate = True,
+)
+casimir_crates.spec(
+    package = "grpcio-sys",
+    version = "0.13.0",
+    features = ["openssl"],
+)
+casimir_crates.annotation(
+    crate = "grpcio-sys",
+    gen_build_script = "off",
+    deps = [
+        ":grpc_wrap",
+        "@@//build_external/grpcio-sys:gpr_log_stub",
+    ],
+    rustc_env = {
+        "BINDING_PATH": "$(execpath bindings/bindings.rs)",
+    },
+    version = "0.13.0",
+    additive_build_file_content = """
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "grpc_wrap",
+    srcs = [
+        "grpc_wrap.cc",
+        "@@//build_external/grpcio-sys:gpr_assert",
+    ],
+    copts = [
+        "-include",
+        "$(execpath @@//build_external/grpcio-sys:gpr_assert)",
+    ],
+    deps = ["@@//build_external/grpcio-sys:grpc_wrap_deps"],
+)
+""",
+)
+casimir_crates.from_cargo(
+    name = "casimir_crates",
+    manifests = [
+        "@casimir//:Cargo.toml",
+    ],
+    host_tools = "@rust_host_tools_nightly",
+)
+use_repo(casimir_crates, "casimir_crates")
+
+git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+
+git_repository(
+    name = "casimir",
+    build_file = "@//build_external/casimir:BUILD.casimir.bazel",
+    commit = "f785e9275ee5ed85f98e7b850783ca0559ee1799",
+    remote = "https://github.com/google/casimir",
+)

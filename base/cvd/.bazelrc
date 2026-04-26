@@ -1,0 +1,70 @@
+common --vendor_dir=vendor_src
+common --experimental_isolated_extension_usages
+
+build --build_tag_filters=-clang_tidy,-clang-tidy
+build --copt=-fdiagnostics-color=always
+build --output_filter='^//((?!(external/libarchive|external/libevent|external/rules_flex|external/rules_m4):).)*$'
+build --test_output=errors
+build --test_summary=terse
+
+# Match go/ubsan for always-enabled features
+# Docs: https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html
+
+# Out-of-bounds access into a statically sized array.
+build:dbg --copt=-fsanitize=array-bounds
+build:dbg --linkopt=-fsanitize=array-bounds
+build:fastbuild --copt=-fsanitize=array-bounds
+build:fastbuild --linkopt=-fsanitize=array-bounds
+
+# Use of a misaligned pointer or creation of a misaligned reference. Also
+# sanitizes assume_aligned-like attributes.
+build:dbg --copt=-fsanitize=alignment
+build:dbg --linkopt=-fsanitize=alignment
+build:fastbuild --copt=-fsanitize=alignment
+build:fastbuild --linkopt=-fsanitize=alignment
+
+# Load of a value of an enumerated type which is not in the range of
+# representable values for that enumerated type.
+build:dbg --copt=-fsanitize=enum
+build:dbg --linkopt=-fsanitize=enum
+build:fastbuild --copt=-fsanitize=enum
+build:fastbuild --linkopt=-fsanitize=enum
+
+# Conversion to, from, or between floating-point types which would overflow the
+# destination. Because the range of representable values for all floating-point
+# types supported by Clang is [-inf, +inf], the only cases detected are
+# conversions from floating point to integer types.
+build:dbg --copt=-fsanitize=float-cast-overflow
+build:dbg --linkopt=-fsanitize=float-cast-overflow
+build:fastbuild --copt=-fsanitize=float-cast-overflow
+build:fastbuild --linkopt=-fsanitize=float-cast-overflow
+
+# Use of a null pointer or creation of a null reference.
+build:dbg --copt=-fsanitize=null
+build:dbg --linkopt=-fsanitize=null
+build:fastbuild --copt=-fsanitize=null
+build:fastbuild --linkopt=-fsanitize=null
+
+# In C++, reaching the end of a value-returning function without returning a value.
+build:dbg --copt=-fsanitize=return
+build:dbg --linkopt=-fsanitize=return
+build:fastbuild --copt=-fsanitize=return
+build:fastbuild --linkopt=-fsanitize=return
+
+# Returning null pointer from a function which is declared to never return null.
+build:dbg--copt=-fsanitize=returns-nonnull-attribute
+build:dbg --linkopt=-fsanitize=returns-nonnull-attribute
+build:fastbuild--copt=-fsanitize=returns-nonnull-attribute
+build:fastbuild --linkopt=-fsanitize=returns-nonnull-attribute
+
+# If control flow reaches an unreachable program point.
+build:dbg --copt=-fsanitize=unreachable
+build:dbg --linkopt=-fsanitize=unreachable
+build:fastbuild --copt=-fsanitize=unreachable
+build:fastbuild --linkopt=-fsanitize=unreachable
+
+# A variable-length array whose bound does not evaluate to a positive value.
+build:dbg --copt=-fsanitize=vla-bound
+build:dbg --linkopt=-fsanitize=vla-bound
+build:fastbuild --copt=-fsanitize=vla-bound
+build:fastbuild --linkopt=-fsanitize=vla-bound

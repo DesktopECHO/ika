@@ -1,0 +1,64 @@
+# Container image for running CF instances in the server.
+# Container image includes HO(Host Orchestrator) inside,
+# so it could execute CF instance with API in HO.
+
+ARG BUILD_OPTION=prod
+
+
+FROM fedora:43 AS runner-base
+
+# Expose Operator Port (HTTP:1080, HTTPS:1443)
+EXPOSE 1080 1443
+# Expose HO(Host Orchestrator) Port (HTTP:2080, HTTPS:2443)
+EXPOSE 2080 2443
+# Expose WebRTC Port
+EXPOSE 15550-15560
+# Expose ADB Port
+# Corresponding ADB port for CF instance is, 6520+instance_num-1.
+EXPOSE 6520-6620
+# to make sure this file always exist
+RUN touch /.dockerenv
+
+USER root
+WORKDIR /root
+RUN set -x
+RUN dnf -y upgrade --refresh
+RUN dnf -y install \
+    ca-certificates \
+    curl \
+    mesa-dri-drivers \
+    nginx \
+    sudo \
+    systemd
+RUN update-ca-trust
+
+COPY ./container/guest/run_services.sh /root/
+RUN chmod +x /root/run_services.sh
+
+
+FROM runner-base AS runner-dev
+
+COPY cuttlefish-*.rpm /root/rpm/
+RUN dnf -y install \
+    /root/rpm/cuttlefish-base-*.rpm \
+    /root/rpm/cuttlefish-user-*.rpm \
+    /root/rpm/cuttlefish-orchestration-*.rpm
+
+
+FROM runner-base AS runner-prod
+
+ARG REPO
+RUN dnf -y install dnf-plugins-core
+RUN curl -fsSL https://us-yum.pkg.dev/doc/repo-signing-key.gpg -o /etc/pki/rpm-gpg/RPM-GPG-KEY-android-cuttlefish
+RUN printf '[android-cuttlefish]\nname=android-cuttlefish\nbaseurl=https://us-yum.pkg.dev/projects/android-cuttlefish-artifacts/%s\nenabled=1\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-android-cuttlefish\n' "$REPO" > /etc/yum.repos.d/android-cuttlefish.repo
+RUN dnf -y install \
+    cuttlefish-base \
+    cuttlefish-user \
+    cuttlefish-orchestration
+
+
+FROM runner-${BUILD_OPTION} AS runner
+
+RUN usermod -aG kvm root
+RUN usermod -aG cvdnetwork root
+ENTRYPOINT ["/root/run_services.sh"]

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Captive portal probe endpoints. LineageOS Desktop deliberately routes
+    connectivity checks through grapheneos.network instead of Google's
+    connectivitycheck.gstatic.com so a stock image without GMS does not
+    contact Google servers during first-boot connectivity validation.
+-->
+<resources>
+    <string name="default_captive_portal_http_url" translatable="false">http://connectivitycheck.grapheneos.network/generate_204</string>
+    <string name="default_captive_portal_https_url" translatable="false">https://connectivitycheck.grapheneos.network/generate_204</string>
+    <string-array name="default_captive_portal_fallback_urls" translatable="false">
+        <item>http://connectivitycheck.grapheneos.network/generate_204</item>
+    </string-array>
+</resources>

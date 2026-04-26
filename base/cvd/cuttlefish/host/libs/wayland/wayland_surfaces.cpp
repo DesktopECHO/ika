@@ -1,0 +1,111 @@
+/*
+ * Copyright (C) 2020 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "cuttlefish/host/libs/wayland/wayland_surfaces.h"
+
+#include <stdint.h>
+
+#include <mutex>
+
+#include <drm/drm_fourcc.h>
+#include <wayland-server-protocol.h>
+
+#include "cuttlefish/host/libs/wayland/wayland_surface.h"
+
+namespace wayland {
+
+void Surfaces::SetFrameCallback(FrameCallback callback) {
+  std::unique_lock<std::mutex> lock(callback_mutex_);
+  callback_.emplace(std::move(callback));
+}
+
+void Surfaces::SetDmabufFrameCallback(DmabufFrameCallback callback) {
+  std::unique_lock<std::mutex> lock(callback_mutex_);
+  dmabuf_callback_.emplace(std::move(callback));
+}
+
+void Surfaces::SetDisplayEventCallback(DisplayEventCallback callback) {
+  std::unique_lock<std::mutex> lock(callback_mutex_);
+  event_callback_.emplace(std::move(callback));
+}
+
+void Surfaces::SetFramesAreRGBA(bool frames_are_rgba) {
+  frames_are_rgba_ = frames_are_rgba;
+}
+
+void Surfaces::HandleSurfaceFrame(uint32_t display_number, uint32_t frame_width,
+                                  uint32_t frame_height,
+                                  uint32_t frame_fourcc_format,
+                                  uint32_t frame_stride_bytes,
+                                  uint8_t* frame_bytes) {
+  if (frames_are_rgba_) {
+    frame_fourcc_format = DRM_FORMAT_ABGR8888;
+  }
+
+  std::unique_lock<std::mutex> lock(callback_mutex_);
+
+  if (callback_) {
+    (callback_.value())(display_number, frame_width, frame_height,
+                        frame_fourcc_format, frame_stride_bytes, frame_bytes);
+  }
+}
+
+bool Surfaces::HandleSurfaceDmabufFrame(
+    uint32_t display_number, uint32_t frame_width, uint32_t frame_height,
+    uint32_t frame_fourcc_format, int dmabuf_fd, uint32_t offset,
+    uint32_t stride_bytes, uint32_t modifier_hi, uint32_t modifier_lo) {
+  if (frames_are_rgba_) {
+    frame_fourcc_format = DRM_FORMAT_ABGR8888;
+  }
+
+  std::unique_lock<std::mutex> lock(callback_mutex_);
+
+  if (dmabuf_callback_) {
+    return (dmabuf_callback_.value())(
+        display_number, frame_width, frame_height, frame_fourcc_format,
+        dmabuf_fd, offset, stride_bytes, modifier_hi, modifier_lo);
+  }
+
+  return false;
+}
+
+void Surfaces::HandleSurfaceCreated(uint32_t display_number,
+                                    uint32_t display_width,
+                                    uint32_t display_height) {
+  const DisplayEvent event{DisplayCreatedEvent{
+      .display_number = display_number,
+      .display_width = display_width,
+      .display_height = display_height,
+  }};
+
+  std::unique_lock<std::mutex> lock(callback_mutex_);
+  if (event_callback_) {
+    (event_callback_.value())(event);
+  }
+}
+
+void Surfaces::HandleSurfaceDestroyed(uint32_t display_number) {
+  const DisplayEvent event{DisplayDestroyedEvent{
+      .display_number = display_number,
+  }};
+
+  std::unique_lock<std::mutex> lock(callback_mutex_);
+  if (event_callback_) {
+    (event_callback_.value())(event);
+  }
+}
+
+}  // namespace wayland

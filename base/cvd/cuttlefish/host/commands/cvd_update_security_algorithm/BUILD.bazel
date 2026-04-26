@@ -1,0 +1,46 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary", "cf_cc_library", "cf_cc_test")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_binary(
+    name = "cvd_update_security_algorithm",
+    srcs = [
+        "main.cc",
+    ],
+    deps = [
+        ":libcvd_update_security_algorithm_builder",
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:tee_logging",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "libcvd_update_security_algorithm_builder",
+    srcs = [
+        "update_security_algorithm_command_builder.cc",
+    ],
+    hdrs = [
+        "update_security_algorithm_command_builder.h",
+    ],
+    deps = [
+        "@fmt",
+    ],
+)
+
+cf_cc_test(
+    name = "cvd_update_security_algorithm_test",
+    srcs = [
+        "unittest/update_security_algorithm_command_builder_test.cc",
+    ],
+    deps = [
+        ":libcvd_update_security_algorithm_builder",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)

@@ -1,0 +1,27 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!--
+    Seed file for /data/system/display_settings.xml. AOSP's
+    DisplayWindowSettingsProvider reads /vendor/etc/display_settings.xml (and
+    falls back to /data/system/display_settings.xml on user-data) at first
+    boot. We ship the default-display entry pre-configured for desktop /
+    freeform windowing keyed to the Cuttlefish stable uniqueId.
+
+    `windowingMode` 5 = WINDOWING_MODE_FREEFORM (frameworks/base/core/java/
+    android/app/WindowConfiguration.java).
+    `shouldShowSystemDecors` keeps the system bars, IME, and decor host
+    rendered on this display so freeform windows have a caption bar.
+
+    DPI is intentionally NOT set here. The host-side launcher (/usr/bin/ika)
+    is the authoritative source for display density and selects the value
+    appropriate to the Cuttlefish host window size; setting `forcedDensity`
+    here would override whatever the launcher computes.
+-->
+<display-settings>
+    <config identifier="1" />
+    <display
+        name="local:0"
+        windowingMode="5"
+        shouldShowSystemDecors="true"
+        shouldShowIme="true"
+        ignoreOrientationRequest="true" />
+</display-settings>

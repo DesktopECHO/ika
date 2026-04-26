@@ -1,0 +1,153 @@
+--- a/build.rs
++++ b/build.rs
+@@ -3,17 +3,110 @@
+ // found in the LICENSE file.
+ 
+ use std::env;
+-
+-use pkg_config::Error;
+-
+-pub type PkgConfigResult<T> = std::result::Result<T, Error>;
+-
+-fn gbm() -> PkgConfigResult<()> {
+-    pkg_config::probe_library("gbm")?;
+-    Ok(())
+-}
+-
+-fn virglrenderer() -> PkgConfigResult<()> {
++use std::error::Error as StdError;
++use std::fs;
++use std::fs::File;
++use std::io;
++use std::io::Write;
++use std::path::Path;
++use std::path::PathBuf;
++use std::process::Command;
++
++pub type BuildResult<T> = std::result::Result<T, Box<dyn StdError>>;
++
++fn is_native_build() -> bool {
++    env::var("HOST").unwrap() == env::var("TARGET").unwrap()
++}
++
++fn get_cross_compile_prefix() -> String {
++    if is_native_build() {
++        return String::new();
++    }
++
++    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
++    let os = env::var("CARGO_CFG_TARGET_OS").unwrap();
++    let env_name = env::var("CARGO_CFG_TARGET_ENV").unwrap();
++    format!("{}-{}-{}-", arch, os, env_name)
++}
++
++fn find_minigbm_root() -> io::Result<PathBuf> {
++    // With build_script_rundir=".", cwd is the Bazel exec root. The minigbm
++    // repo is added as build_script_data under external/* with a canonical
++    // name that may vary across Bazel versions.
++    let cwd = env::current_dir()?;
++    let external = cwd.join("external");
++    if external.is_dir() {
++        for entry in fs::read_dir(&external)? {
++            let candidate = entry?.path();
++            if candidate.join("Makefile").exists() && candidate.join("gbm.h").exists() {
++                return Ok(candidate);
++            }
++        }
++    }
++    Err(io::Error::new(
++        io::ErrorKind::NotFound,
++        "could not locate minigbm root under external/*",
++    ))
++}
++
++fn env_prepend_pkg_config_path(new_path: &Path) -> io::Result<()> {
++    const KEY: &str = "PKG_CONFIG_PATH";
++    let new_path_string = new_path
++        .to_str()
++        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path must be UTF-8"))?;
++    if let Ok(original_value) = env::var(KEY) {
++        env::set_var(KEY, format!("{}:{}", new_path_string, original_value));
++    } else {
++        env::set_var(KEY, new_path);
++    };
++    Ok(())
++}
++
++fn build_and_probe_minigbm(out_dir: &Path) -> BuildResult<()> {
++    let source_dir = find_minigbm_root()?;
++    let pkgconfig_file = out_dir.join("gbm.pc");
++
++    println!("cargo:rerun-if-changed={}", source_dir.display());
++
++    let make_flags = env::var("CARGO_MAKEFLAGS").unwrap_or_default();
++    let status = Command::new("make")
++        .env("MAKEFLAGS", make_flags)
++        .env("VERBOSE", "1")
++        .env("CROSS_COMPILE", get_cross_compile_prefix())
++        .env("PKG_CONFIG", "pkg-config")
++        .arg(format!("OUT={}", out_dir.display()))
++        .arg("CC_STATIC_LIBRARY(libminigbm.pie.a)")
++        .current_dir(&source_dir)
++        .status()?;
++    if !status.success() {
++        return Err(format!("make failed with status: {}", status).into());
++    }
++
++    fs::copy(source_dir.join("gbm.h"), out_dir.join("gbm.h"))?;
++    fs::copy(
++        source_dir.join("minigbm_helpers.h"),
++        out_dir.join("minigbm_helpers.h"),
++    )?;
++    fs::copy(out_dir.join("libminigbm.pie.a"), out_dir.join("libgbm.a"))?;
++
++    let mut conf = File::create(&pkgconfig_file)?;
++    writeln!(conf, "prefix={}", out_dir.display())?;
++    writeln!(conf, "includedir=${{prefix}}")?;
++    writeln!(conf, "libdir=${{prefix}}")?;
++    writeln!(conf, "Name: libgbm")?;
++    writeln!(conf, "Description: A small gbm implementation")?;
++    writeln!(conf, "Version: 18.0.0")?;
++    writeln!(conf, "Cflags: -I${{includedir}}")?;
++    writeln!(conf, "Libs: -L${{libdir}} -lgbm")?;
++    writeln!(conf, "Requires.private: libdrm >= 2.4.50")?;
++
++    env_prepend_pkg_config_path(out_dir)?;
++    let mut config = pkg_config::Config::new();
++    config.statik(true).probe("gbm")?;
++    Ok(())
++}
++
++fn virglrenderer() -> BuildResult<()> {
+     let lib = pkg_config::Config::new()
+         .atleast_version("1.0.0")
+         .probe("virglrenderer")?;
+@@ -23,7 +116,7 @@
+     Ok(())
+ }
+ 
+-fn gfxstream() -> PkgConfigResult<()> {
++fn gfxstream() -> BuildResult<()> {
+     let mut gfxstream_path_env_override =
+         // We use the unrecommended PROFILE environment variable here, because the Windows
+         // downstream can set debug = true for the release profile to keep the symbol files.
+@@ -77,7 +170,7 @@
+     }
+ }
+ 
+-fn main() -> PkgConfigResult<()> {
++fn main() -> BuildResult<()> {
+     println!("cargo:rustc-check-cfg=cfg(fence_passing_option1)");
+     println!("cargo:rustc-check-cfg=cfg(gfxstream_unstable)");
+     println!("cargo:rustc-check-cfg=cfg(virgl_renderer_unstable)");
+@@ -94,7 +187,9 @@
+     }
+ 
+     if env::var("CARGO_FEATURE_GBM").is_ok() {
+-        gbm()?;
++        let out_dir = PathBuf::from(env::var("OUT_DIR")?).join("minigbm");
++        fs::create_dir_all(&out_dir)?;
++        build_and_probe_minigbm(&out_dir)?;
+     }
+ 
+     if env::var("CARGO_FEATURE_GFXSTREAM").is_ok()

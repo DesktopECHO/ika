@@ -1,0 +1,108 @@
+#cloud-config
+
+hostname: fedora1
+
+users:
+  - default
+  - name: vsoc-01
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: users, video, dialout, audio
+    lock_passwd: false
+    passwd: "$6$rounds=4096$OoOhTi2nlaaRIPU4$53NOQih8JJdmyNg3hvEo41jtxpz94QtPG9IXbBmsyFgU6Fl0NLT8WlRv3kXP86jgp.1D3rXbKtG88YZ9V7dvF0"
+
+packages:
+  - git
+  - lvm2
+
+growpart:
+  mode: auto
+  devices:
+    - /dev/vda1
+    - /dev/sda1
+
+write_files:
+  - path: /root/after_install_1.sh
+    permissions: '0755'
+    owner: root:root
+    content: |
+      #!/bin/sh
+
+      dnf -y upgrade --refresh
+
+      # Install necessary packages
+      dnf install -y \
+        ca-certificates \
+        curl \
+        ebtables \
+        git \
+        gnupg2 \
+        iptables-nft \
+        moby-engine \
+        NetworkManager \
+        pciutils \
+        p7zip \
+        python3 \
+        unzip \
+        wget
+
+      # Adjust user groups
+      usermod -aG kvm vsoc-01
+      usermod -aG render vsoc-01 || true
+      usermod -aG video vsoc-01
+
+      # Install nVidia or AMD GPU driver
+      nvidia_gpu=$(lspci | grep -i nvidia)
+      amd_gpu=$(lspci | grep VGA | grep AMD)
+      if [ x"$amd_gpu" != x"" ]; then
+        echo "AMD GPU detected — skipping GPU driver installation."
+      elif [ x"$nvidia_gpu" != x"" ] && [ "$(uname -m)" = "x86_64" ]; then
+        # Install nvidia driver
+        dnf install -y akmod-nvidia nvidia-driver nvidia-modprobe || true
+      fi
+
+      # Install Android Cuttlefish packages
+      curl -fsSL --retry 7 --retry-all-errors https://us-yum.pkg.dev/doc/repo-signing-key.gpg -o /etc/pki/rpm-gpg/RPM-GPG-KEY-android-cuttlefish
+      cat >/etc/yum.repos.d/android-cuttlefish.repo <<'EOF'
+      [android-cuttlefish]
+      name=android-cuttlefish
+      baseurl=https://us-yum.pkg.dev/projects/android-cuttlefish-artifacts/android-cuttlefish
+      enabled=1
+      gpgcheck=1
+      gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-android-cuttlefish
+      EOF
+      dnf makecache
+      dnf install -y cuttlefish-base cuttlefish-user cuttlefish-orchestration
+      usermod -aG cvdnetwork vsoc-01
+
+      # Install gigabyte package
+      dnf install -y cuttlefish-integration-gigabyte-arm64
+
+      # Extra tools
+      cd /root
+      git clone https://github.com/matthuisman/gdrivedl.git
+      cd -
+
+      # Network-manager workaround
+      rm -f '/etc/NetworkManager/system-connections/Wired connection 1'
+      systemctl enable --now NetworkManager
+
+      # Install Docker container
+      systemctl enable --now docker
+      usermod -aG docker vsoc-01
+
+      # Install nvidia-container-toolkit only on supported NVIDIA hosts.
+      if [ x"$nvidia_gpu" != x"" ] && [ "$(uname -m)" = "x86_64" ]; then
+        dnf install -y nvidia-container-toolkit || true
+      fi
+
+      # restart NTP server
+      systemctl restart ntpsec
+  - path: /etc/ssh/sshd_config.d/99-cloud-init-cuttlefish-gigamp.conf
+    permissions: '0644'
+    content: |
+      PasswordAuthentication yes
+
+runcmd:
+  - /root/after_install_1.sh >> /var/log/custom-startup.log
+  - echo "VM successful" >> /var/log/custom-startup.log

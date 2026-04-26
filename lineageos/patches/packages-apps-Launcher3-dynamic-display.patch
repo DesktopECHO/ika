@@ -1,0 +1,275 @@
+From: LineageOS Desktop Project <noreply@local>
+Subject: [PATCH] Launcher3: refresh IDP and recreate taskbar on display change
+
+Patch summary:
+Refresh Launcher3's cached device profile after primary display size or
+density changes, and let the taskbar recreate itself across those changes so
+the bar's window and contents track host resize events. The host window can
+change size at runtime, and stale invariant profiles or stale taskbar window
+attrs show up as wrongly sized app drawers and invisible taskbars.
+
+Fix 2a: after the IDP refresh, push the new DeviceProfile into the all-apps
+container. The IDP refresh notifies its registered listeners (the Launcher
+activity, the DeviceProfile cache, the workspace), but
+ActivityAllAppsContainerView caches its per-row count via setAppsPerRow()
+inside onDeviceProfileChanged() and that callback is not on the IDP listener
+chain. Without this explicit push, the workspace and taskbar recompute on
+display resize but the all-apps grid renders with the per-row count from the
+geometry that was in effect when the all-apps view was first laid out
+(symptom: a narrow vertical strip of icons after dragging the scrcpy window
+smaller).
+
+Fix 2d: anchor the taskbar long-press popup against the taskbar bar's top
+edge AND clamp against live window bounds. Two related bugs combined to send
+the popup to the top of the screen:
+  (a) PopupContainerWithArrow.getTaskbarTargetObjectLocation() used
+      BaseDragLayer.getDescendantRectRelativeToSelf(originalView, ...), which
+      returns the icon's layout rect. The taskbar parents its icons at the
+      top of the drag layer and renders them at the bottom via a translation
+      that the layout-rect walk does not reflect, so the anchor landed where
+      the icon would be if the taskbar were not translated.
+  (b) PopupContainerWithArrow.getCurrentDisplaySize() read dragLayer.height
+      to compute maxY for clamping. The taskbar drag layer is wrap_content
+      and reports height=0 during the popup's measure pass (before it
+      expands around the popup), so preferredY got clamped down to minY=0
+      regardless of where the anchor actually was.
+Symptom: long-pressing a taskbar icon opened the popup at the top of the
+screen rather than just above the bar, especially obvious when the popup is
+tall enough that the bogus clamp can fire. Fix (a) by recomposing the target
+rect from originalView.getLocationOnScreen() and the DeviceProfile-derived
+taskbar height/bottomMargin; fix (b) by preferring WindowManager.current-
+WindowMetrics over the wrap_content drag-layer size in getCurrentDisplaySize.
+Result: popup hovers immediately above the bar with the existing
+TASKBAR_POPUP_EXTRA_VERTICAL_OFFSET_PX gap, regardless of icon position.
+
+Fix 2e: let CONFIG_ORIENTATION, CONFIG_SCREEN_SIZE, CONFIG_SCREEN_LAYOUT, and
+CONFIG_SMALLEST_SCREEN_SIZE recreate the taskbar only on the desktop product
+where the host window can resize dynamically. Upstream masks these bits to keep
+the taskbar window alive across rotations on phones, so preserve that behavior
+outside desktop/freeform displays. On desktop, the taskbar window's mAttrs
+(notably the fillx<N> height) is baked in at window-create time. Without a
+recreate, two rapid host-window resizes leave the window stuck at an
+intermediate size, the bar's contents fail to lay out for the new geometry, and
+the bar visually disappears even though the window remains visible to
+WindowManager. Letting the normal recreate path fire for desktop displays means
+the new taskbar comes up with mAttrs derived from the (R1-refreshed) DP and is
+guaranteed to match the current screen.
+
+Fix 2f: when TaskbarActivityContext.setTaskbarWindowSize is called with the
+MATCH_PARENT sentinel (popup open, all-apps open, etc.), read the current
+window bounds from WindowManager.getCurrentWindowMetrics() instead of the
+cached mDeviceProfile.getDeviceProperties().getHeightPx(). The DP can lag a
+host-window resize by one configuration change; using live currentWindow-
+Metrics means the taskbar window's mAttrs height matches the current screen
+the moment a fullscreen layout is requested. Same idiom as Fix 2d's
+getCurrentDisplaySize change, applied at the window-attrs level so the
+follow-up live-display-bounds patch can extract both into a reusable
+ActivityContext.getLiveDisplayBounds() getter.
+
+This patch is kept separate from the main Launcher3 desktop patch because it
+is a focused rebase-sensitive fix: it touches the configuration-change path,
+the InvariantDeviceProfile refresh surface, the taskbar popup anchor and
+clamp paths, the taskbar recreate-trigger surface, and the taskbar window-
+size helper, while leaving the broader desktop shell behavior in the main
+patch.
+
+Applies on top of packages-apps-Launcher3.patch.
+
+diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarManagerImpl.java b/quickstep/src/com/android/launcher3/taskbar/TaskbarManagerImpl.java
+index 93d40b7e7e..c374fc63fe 100644
+--- a/quickstep/src/com/android/launcher3/taskbar/TaskbarManagerImpl.java
++++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarManagerImpl.java
+@@ -154,16 +154,23 @@
+      * This includes all the configurations defined in Launcher's manifest entry and
+      * ActivityController#filterConfigChanges
+      */
++    // Fix 2e: let desktop/freeform displays recreate the taskbar on dynamic
++    // size/orientation changes, then mask these bits again below for
++    // non-desktop displays. Upstream suppresses them to keep the taskbar window
++    // alive across rotations on phones; on desktop the taskbar's mAttrs
++    // (notably the fillx<N> height) is baked in at window-create time.
+     private static final int SKIP_RECREATE_CONFIG_CHANGES = ActivityInfo.CONFIG_WINDOW_CONFIGURATION
+             | ActivityInfo.CONFIG_KEYBOARD
+             | ActivityInfo.CONFIG_KEYBOARD_HIDDEN
+             | ActivityInfo.CONFIG_MCC
+             | ActivityInfo.CONFIG_MNC
+-            | ActivityInfo.CONFIG_NAVIGATION
+-            | ActivityInfo.CONFIG_ORIENTATION
+-            | ActivityInfo.CONFIG_SCREEN_SIZE
+-            | ActivityInfo.CONFIG_SCREEN_LAYOUT
+-            | ActivityInfo.CONFIG_SMALLEST_SCREEN_SIZE;
++            | ActivityInfo.CONFIG_NAVIGATION;
++
++    private static final int DESKTOP_DYNAMIC_DISPLAY_CONFIG_CHANGES =
++            ActivityInfo.CONFIG_ORIENTATION
++                    | ActivityInfo.CONFIG_SCREEN_SIZE
++                    | ActivityInfo.CONFIG_SCREEN_LAYOUT
++                    | ActivityInfo.CONFIG_SMALLEST_SCREEN_SIZE;
+
+     private static final Uri USER_SETUP_COMPLETE_URI = Settings.Secure.getUriFor(
+             Settings.Secure.USER_SETUP_COMPLETE);
+@@ -1547,6 +1554,33 @@
+                 }
+                 DeviceProfile dp = getDeviceProfile(displayId);
+                 int configDiff = mOldConfig.diff(newConfig) & ~SKIP_RECREATE_CONFIG_CHANGES;
++                boolean isDesktopDynamicDisplay = displayId == mPrimaryDisplayId
++                        && com.android.launcher3.util.DisplayController
++                                .showDesktopTaskbarForFreeformDisplay(mPrimaryWindowContext);
++                if (!isDesktopDynamicDisplay) {
++                    configDiff &= ~DESKTOP_DYNAMIC_DISPLAY_CONFIG_CHANGES;
++                }
++                boolean displayMetricsChanged =
++                        mOldConfig.screenWidthDp != newConfig.screenWidthDp
++                                || mOldConfig.screenHeightDp != newConfig.screenHeightDp
++                                || mOldConfig.smallestScreenWidthDp
++                                        != newConfig.smallestScreenWidthDp
++                                || mOldConfig.densityDpi != newConfig.densityDpi
++                                || (configDiff
++                                        & (ActivityInfo.CONFIG_DENSITY
++                                                | ActivityInfo.CONFIG_SCREEN_SIZE
++                                                | ActivityInfo.CONFIG_SCREEN_LAYOUT
++                                                | ActivityInfo.CONFIG_SMALLEST_SCREEN_SIZE)) != 0;
++                if (isDesktopDynamicDisplay && (displayMetricsChanged || dp == null)) {
++                    LauncherAppState.getIDP(mPrimaryWindowContext).refreshAfterDisplayChange();
++                    dp = getDeviceProfile(displayId);
++                    // Fix 2a: push the refreshed DP into the all-apps container so its
++                    // per-row count tracks the new geometry, not the cached one.
++                    Launcher launcher = Launcher.ACTIVITY_TRACKER.getCreatedContext();
++                    if (launcher != null && dp != null && launcher.getAppsView() != null) {
++                        launcher.getAppsView().onDeviceProfileChanged(dp);
++                    }
++                }
+
+                 if ((configDiff & ActivityInfo.CONFIG_UI_MODE) != 0) {
+                     debugTaskbarManager("onConfigurationChanged: theme changed", displayId);
+diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarActivityContext.java b/quickstep/src/com/android/launcher3/taskbar/TaskbarActivityContext.java
+index 59dada3c3c..bd9f8e1f3f 100644
+--- a/quickstep/src/com/android/launcher3/taskbar/TaskbarActivityContext.java
++++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarActivityContext.java
+@@ -1445,7 +1445,7 @@
+             return;
+         }
+         if (size == MATCH_PARENT) {
+-            size = mDeviceProfile.getDeviceProperties().getHeightPx();
++            size = getCurrentFullscreenTaskbarWindowSize(landscapePhoneButtonNav);
+         } else {
+             mLastRequestedNonFullscreenSize = size;
+             if (mIsFullscreen || mIsTaskbarSizeFrozenForAnimatingBubble) {
+@@ -1475,6 +1475,17 @@
+         notifyUpdateLayoutParams();
+     }
+
++    private int getCurrentFullscreenTaskbarWindowSize(boolean landscapePhoneButtonNav) {
++        Rect currentBounds = mWindowManager.getCurrentWindowMetrics().getBounds();
++        int currentSize = landscapePhoneButtonNav ? currentBounds.width() : currentBounds.height();
++        if (currentSize > 0) {
++            return currentSize;
++        }
++        return landscapePhoneButtonNav
++                ? mDeviceProfile.getDeviceProperties().getWidthPx()
++                : mDeviceProfile.getDeviceProperties().getHeightPx();
++    }
++
+     /**
+      * Returns the default size (in most cases height, but in 3-button phone mode, width) of the
+      * window, including the static corner radii above taskbar.
+diff --git a/src/com/android/launcher3/InvariantDeviceProfile.java b/src/com/android/launcher3/InvariantDeviceProfile.java
+index 814f5823f8..a41b67ec35 100644
+--- a/src/com/android/launcher3/InvariantDeviceProfile.java
++++ b/src/com/android/launcher3/InvariantDeviceProfile.java
+@@ -394,6 +394,10 @@
+         initGrid(mPrefs.get(GRID_NAME));
+     }
+
++    public void refreshAfterDisplayChange() {
++        onConfigChanged();
++    }
++
+     private void initGridForDisplayOption(Info displayInfo, DisplayOption displayOption) {
+         Context context = displayInfo.context;
+         enableTwoLinesInAllApps = Flags.enableTwolineToggle()
+diff --git a/src/com/android/launcher3/popup/PopupContainerWithArrow.kt b/src/com/android/launcher3/popup/PopupContainerWithArrow.kt
+index 27979620fa..a4981a958c 100644
+--- a/src/com/android/launcher3/popup/PopupContainerWithArrow.kt
++++ b/src/com/android/launcher3/popup/PopupContainerWithArrow.kt
+@@ -26,6 +26,7 @@ import android.view.MotionEvent
+ import android.view.View
+ import android.view.View.OnClickListener
+ import android.view.ViewGroup
++import android.view.WindowManager
+ import android.widget.ImageView
+ import androidx.annotation.LayoutRes
+ import com.android.launcher3.BubbleTextView
+@@ -346,29 +346,41 @@
+     }
+
+     private fun getTaskbarTargetObjectLocation(outPos: Rect) {
+-        val fullBounds = Rect()
+-        popupContainer.getDescendantRectRelativeToSelf(originalView, fullBounds)
++        // Fix 2d: anchor the popup against the taskbar bar's top edge, not the
++        // icon's layout-rect top. The taskbar drag layer is laid out as
++        // wrap_content, so popupContainer.height is 0 during the popup's
++        // measure pass (before the dragLayer expands around the popup). The
++        // taskbar also parents its icons at the top of the drag layer and
++        // renders them at the bottom via a translation that
++        // getDescendantRectRelativeToSelf does not reflect either.
++        // Compose the rect from the icon's screen-relative horizontal position
++        // (for centering on the clicked icon), live window metrics, and the
++        // current taskbar profile height/margin. Keep the vertical coordinates
++        // in the drag layer's logical display coordinate space; the taskbar
++        // content may report a screen Y offset equal to the bar's top edge, and
++        // subtracting that offset collapses the target top back to 0. Result:
++        // popup hovers immediately above the bar with the existing
++        // TASKBAR_POPUP_EXTRA_VERTICAL_OFFSET_PX gap.
++        val iconScreenPos = IntArray(2)
++        originalView.getLocationOnScreen(iconScreenPos)
++        val containerScreenPos = IntArray(2)
++        popupContainer.getLocationOnScreen(containerScreenPos)
+         val iconBounds = Rect()
+         originalIcon.getIconBounds(iconBounds)
++        val dp = mActivityContext?.deviceProfile
++        val screenHeight = getCurrentDisplaySize(popupContainer).y
++        val taskbarHeight = dp?.taskbarProfile?.height ?: originalView.height
++        val taskbarBottomMargin = dp?.taskbarProfile?.bottomMargin ?: 0
++        val taskbarTopInContainer = screenHeight - taskbarHeight - taskbarBottomMargin
++        val bottomInContainer = screenHeight - taskbarBottomMargin
++        val leftInContainer = iconScreenPos[0] - containerScreenPos[0]
+
+         outPos.set(
+-            fullBounds.left + iconBounds.left,
+-            fullBounds.top + iconBounds.top,
+-            fullBounds.left + iconBounds.right,
+-            fullBounds.top + iconBounds.bottom,
++            leftInContainer + iconBounds.left,
++            taskbarTopInContainer,
++            leftInContainer + iconBounds.right,
++            bottomInContainer,
+         )
+-
+-        val visibleBounds = Rect()
+-        if (originalView.getLocalVisibleRect(visibleBounds)) {
+-            val visibleRect =
+-                Rect(
+-                    fullBounds.left + visibleBounds.left,
+-                    fullBounds.top + visibleBounds.top,
+-                    fullBounds.left + visibleBounds.right,
+-                    fullBounds.top + visibleBounds.bottom,
+-                )
+-            outPos.intersect(visibleRect)
+-        }
+     }
+
+     override fun orientAboutObject() {
+@@ -439,6 +452,12 @@
+     }
+
+     private fun getCurrentDisplaySize(dragLayer: InsettableFrameLayout): Point {
++        val windowBounds =
++            context.getSystemService(WindowManager::class.java)?.currentWindowMetrics?.bounds
++        if (windowBounds != null && windowBounds.width() > 0 && windowBounds.height() > 0) {
++            return Point(windowBounds.width(), windowBounds.height())
++        }
++
+         val deviceProperties = mActivityContext?.deviceProfile?.deviceProperties
+         val displaySize =
+             Point(

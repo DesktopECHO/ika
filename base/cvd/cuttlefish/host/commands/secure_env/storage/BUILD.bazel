@@ -1,0 +1,29 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_library(
+    name = "insecure_json_storage",
+    srcs = ["insecure_json_storage.cpp"],
+    hdrs = ["insecure_json_storage.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:base64",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:json",
+        "//cuttlefish/host/commands/secure_env/storage",
+        "//cuttlefish/result",
+        "//libbase",
+        "@jsoncpp",
+    ],
+)
+
+cf_cc_library(
+    name = "storage",
+    srcs = ["storage.cpp"],
+    hdrs = ["storage.h"],
+    deps = [
+        "//cuttlefish/result",
+    ],
+)

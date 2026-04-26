@@ -1,0 +1,55 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary", "cf_cc_library", "cf_cc_test")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_binary(
+    name = "cvd_send_sms",
+    srcs = [
+        "main.cc",
+    ],
+    deps = [
+        ":libcvd_send_sms",
+        "//cuttlefish/common/libs/fs",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "libcvd_send_sms",
+    srcs = [
+        "pdu_format_builder.cc",
+        "sms_sender.cc",
+    ],
+    hdrs = [
+        "pdu_format_builder.h",
+        "sms_sender.h",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@system_icu//:headers",
+        "@system_icu//:schriter",
+        "@system_icu//:utypes",
+    ],
+)
+
+cf_cc_test(
+    name = "libcvd_send_sms_test",
+    srcs = [
+        "unittest/pdu_format_builder_test.cc",
+        "unittest/sms_sender_test.cc",
+    ],
+    deps = [
+        ":libcvd_send_sms",
+        "//cuttlefish/common/libs/fs",
+        "//libbase",
+        "@abseil-cpp//absl/log:check",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)

@@ -1,0 +1,72 @@
+load("@protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
+load("@protobuf//bazel:proto_library.bzl", "proto_library")
+load("//:build_variables.bzl", "COPTS")
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+proto_library(
+    name = "graphics_detector_proto",
+    srcs = ["graphics_detector.proto"],
+)
+
+cc_proto_library(
+    name = "graphics_detector_cc_proto",
+    deps = [":graphics_detector_proto"],
+)
+
+cf_cc_binary(
+    name = "graphics_detector",
+    srcs = [
+        "egl.cpp",
+        "egl.h",
+        "egl_funcs.h",
+        "expected.h",
+        "gles.cpp",
+        "gles.h",
+        "gles_funcs.h",
+        "graphics_detector.cpp",
+        "graphics_detector.h",
+        "graphics_detector_gl.cpp",
+        "graphics_detector_gl.h",
+        "graphics_detector_vk.cpp",
+        "graphics_detector_vk.h",
+        "graphics_detector_vk_external_memory_host.cpp",
+        "graphics_detector_vk_external_memory_host.h",
+        "graphics_detector_vk_precision_qualifiers_on_yuv_samplers.cpp",
+        "graphics_detector_vk_precision_qualifiers_on_yuv_samplers.h",
+        "image.cpp",
+        "image.h",
+        "lib.cpp",
+        "lib.h",
+        "main.cpp",
+        "subprocess.cpp",
+        "subprocess.h",
+        "vulkan.cpp",
+        "vulkan.h",
+    ],
+    clang_tidy_enabled = False,
+    copts = COPTS + [
+        "-DVULKAN_HPP_ASSERT_ON_RESULT=",
+        "-DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1",
+        "-DVULKAN_HPP_ENABLE_DYNAMIC_LOADER_TOOL=1",
+        "-DVULKAN_HPP_NO_CONSTRUCTORS=1",
+        "-DVULKAN_HPP_NO_EXCEPTIONS=1",
+        "-DVULKAN_HPP_RAII_NO_EXCEPTIONS=1",
+        "-Wno-module-import-in-extern-c",
+    ],
+    deps = [
+        ":graphics_detector_cc_proto",
+        "//cuttlefish/host/graphics_detector/shaders:graphics_detector_shaders",
+        "@abseil-cpp//absl/log",
+        "@egl_headers",
+        "@opengl_headers//:GLES2_headers",
+        "@opengl_headers//:GLES3_headers",
+        "@opengl_headers//:GLES_headers",
+        "@protobuf",
+        "@vulkan_headers",
+        "@vulkan_headers//:vulkan_hpp",
+    ],
+)

@@ -1,0 +1,53 @@
+load("@grpc//bazel:cc_grpc_library.bzl", "cc_grpc_library")
+load("@protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
+load("@protobuf//bazel:proto_library.bzl", "proto_library")
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+proto_library(
+    name = "screen_recording_server_proto",
+    srcs = ["screen_recording.proto"],
+    deps = ["@protobuf//:empty_proto"],
+)
+
+cc_proto_library(
+    name = "screen_recording_server_cc_proto",
+    deps = [":screen_recording_server_proto"],
+)
+
+cc_grpc_library(
+    name = "libscreen_recording_server",
+    srcs = [":screen_recording_server_proto"],
+    grpc_only = True,
+    deps = [
+        ":screen_recording_server_cc_proto",
+        "@grpc//:grpc++",
+    ],
+)
+
+cf_cc_binary(
+    name = "screen_recording_server",
+    srcs = [
+        "main.cpp",
+    ],
+    deps = [
+        ":libscreen_recording_server",
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/host/libs/command_util",
+        "//cuttlefish/host/libs/command_util:libcuttlefish_run_cvd_proto",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:logging",
+        "//cuttlefish/host/libs/screen_recording_controls",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@gflags",
+        "@grpc",
+        "@grpc//:grpc++",
+        "@grpc//:grpc++_reflection",
+        "@protobuf//:empty_cc_proto",
+    ],
+)

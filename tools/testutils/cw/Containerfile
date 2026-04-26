@@ -1,0 +1,30 @@
+FROM fedora:43 AS base
+
+ENV OVERRIDE_BAZEL_WRAPPER_DOWNLOAD_DIR=/tmp/cw_bazel
+
+RUN dnf -y upgrade --refresh
+RUN dnf -y install sudo systemd systemd-journal-remote nginx jq android-tools
+
+RUN groupadd kvm
+COPY tools/testutils/cw/setup.service /etc/systemd/system/setup.service
+RUN systemctl enable setup
+
+FROM base AS with_bazel
+
+RUN --mount=source=.,target=/mnt,type=bind \
+  /mnt/tools/buildutils/installbazel.sh
+
+FROM with_bazel AS with_cuttlefish_packages
+
+RUN --mount=source=.,target=/mnt,type=bind dnf -y install \
+  /mnt/cuttlefish-base-*.rpm \
+  /mnt/cuttlefish-metrics-*.rpm \
+  /mnt/cuttlefish-user-*.rpm \
+  /mnt/cuttlefish-orchestration-*.rpm
+
+FROM with_cuttlefish_packages
+
+RUN useradd -m "testrunner"
+
+CMD [ "/usr/sbin/init" ]
+

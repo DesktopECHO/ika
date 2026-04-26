@@ -1,0 +1,571 @@
+From: LineageOS Desktop Project <noreply@local>
+Subject: [PATCH] Launcher3: use live taskbar display bounds for placement
+
+Patch summary:
+Extend the WindowManager.currentWindowMetrics idiom that the dynamic-display
+patch introduced ad-hoc in two spots (Fix 2d's getCurrentDisplaySize and
+Fix 2f's setTaskbarWindowSize) into a reusable
+TaskbarActivityContext.getLiveDisplayBounds(), and route the rest of the
+taskbar's placement / clamping / touch-region / bubble code paths through it.
+Dynamic desktop displays can resize without DeviceProfile being a perfect
+source of live window truth — keep DeviceProfile for intended layout sizes
+(icon grid, font scale, etc.), but for runtime placement decisions on
+dynamic desktop displays, prefer live window bounds so resize lag does not
+mis-place popups, overlay windows, the all-apps view, bottom-edge swipe
+regions, or bubbles. The PopupContainerWithArrow.getCurrentDisplaySize hunk
+in dynamic-display.patch is replaced here with a call through the new getter;
+the WindowManager import added there is no longer needed and is removed.
+
+Also keep bubbles aligned with the taskbar when the taskbar is forced to stay
+at the screen edge on desktop/freeform displays. Without this, Launcher can be
+in NORMAL/HOME while desktop tasks are still visible, so the bubble stash
+controller chooses the home/hotseat Y target and lifts the bubble bar under
+the expanded bubble window instead of leaving it on the taskbar.
+
+Applies on top of packages-apps-Launcher3-dynamic-display.patch (whose
+WindowManager-based helpers this patch generalizes) and
+packages-apps-Launcher3-taskbar-deep-shortcuts.patch.
+
+diff --git a/quickstep/src/com/android/launcher3/taskbar/BaseTaskbarContext.java b/quickstep/src/com/android/launcher3/taskbar/BaseTaskbarContext.java
+--- a/quickstep/src/com/android/launcher3/taskbar/BaseTaskbarContext.java
++++ b/quickstep/src/com/android/launcher3/taskbar/BaseTaskbarContext.java
+@@ -19,6 +19,7 @@
+ import android.content.Intent;
+ import android.content.pm.ShortcutInfo;
+ import android.graphics.Point;
++import android.graphics.Rect;
+ import android.os.UserHandle;
+ import android.view.LayoutInflater;
+ 
+@@ -105,6 +106,12 @@
+     public abstract Point getScreenSize();
+ 
+     /**
++     * Returns live display/window bounds for placement, clamping, and touch-region decisions.
++     */
++    @Override
++    public abstract Rect getLiveDisplayBounds();
++
++    /**
+      * Returns display height.
+      */
+     public abstract int getDisplayHeight();
+diff --git a/quickstep/src/com/android/launcher3/taskbar/LauncherTaskbarUIController.java b/quickstep/src/com/android/launcher3/taskbar/LauncherTaskbarUIController.java
+--- a/quickstep/src/com/android/launcher3/taskbar/LauncherTaskbarUIController.java
++++ b/quickstep/src/com/android/launcher3/taskbar/LauncherTaskbarUIController.java
+@@ -34,7 +34,7 @@
+ import android.animation.Animator;
+ import android.animation.AnimatorSet;
+ import android.animation.ValueAnimator;
+-import android.graphics.Point;
++import android.graphics.Rect;
+ import android.os.SystemProperties;
+ import android.util.DisplayMetrics;
+ import android.window.RemoteTransition;
+@@ -564,14 +564,15 @@
+ 
+     @Override
+     protected void toggleAllApps(boolean focusSearch) {
+-        Point screenSize = mControllers.taskbarActivityContext.getScreenSize();
++        Rect displayBounds = mControllers.taskbarActivityContext.getLiveDisplayBounds();
+         DisplayMetrics metrics = mControllers.taskbarActivityContext.getResources()
+                 .getDisplayMetrics();
+         final boolean shouldUseLauncherAllApps = shouldUseLauncherAllApps(
+                 isLauncherResumed() && isLauncherTopResumedActivity(),
+                 mControllers.taskbarActivityContext.showDesktopTaskbarForFreeformDisplay(),
+                 mTaskbarLauncherStateController.isInOverviewUi(),
+-                isDesktopSizedDisplay(screenSize.x, screenSize.y, metrics.densityDpi));
++                isDesktopSizedDisplay(displayBounds.width(), displayBounds.height(),
++                        metrics.densityDpi));
+         if (shouldUseLauncherAllApps) {
+             mLauncher.toggleAllApps(focusSearch);
+             return;
+diff --git a/quickstep/src/com/android/launcher3/taskbar/NavbarButtonsViewController.java b/quickstep/src/com/android/launcher3/taskbar/NavbarButtonsViewController.java
+--- a/quickstep/src/com/android/launcher3/taskbar/NavbarButtonsViewController.java
++++ b/quickstep/src/com/android/launcher3/taskbar/NavbarButtonsViewController.java
+@@ -1379,6 +1379,10 @@
+     private int getNavBarTranslationX(BubbleBarLocation location) {
+         boolean isNavbarOnRight = location.isOnLeft(mNavButtonsView.isLayoutRtl());
+         DeviceProfile dp = mContext.getDeviceProfile();
++        int displayWidth = mContext.getLiveDisplayBounds().width();
++        if (displayWidth <= 0) {
++            displayWidth = dp.getDeviceProperties().getWidthPx();
++        }
+         float navBarTargetStartX;
+         if (!mContext.isUserSetupComplete()) {
+             // Skip additional translations on the nav bar container while in SUW layout
+@@ -1388,7 +1392,7 @@
+             // If the taskbar is start aligned the navigation bar is aligned to the start or end of
+             // the container, depending on the bubble bar location
+             if (isNavbarOnRight) {
+-                navBarTargetStartX = dp.getDeviceProperties().getWidthPx() - navBarSpacing - mNavButtonContainer.getWidth();
++                navBarTargetStartX = displayWidth - navBarSpacing - mNavButtonContainer.getWidth();
+             } else {
+                 navBarTargetStartX = navBarSpacing;
+             }
+@@ -1401,7 +1405,7 @@
+             if (isNavbarOnRight) {
+                 if (mNavButtonsView.isLayoutRtl()) {
+                     float taskBarEnd = taskbarBounds.right;
+-                    navBarTargetStartX = (dp.getDeviceProperties().getWidthPx() + taskBarEnd - navbarWidth) / 2;
++                    navBarTargetStartX = (displayWidth + taskBarEnd - navbarWidth) / 2;
+                 } else {
+                     navBarTargetStartX = mNavButtonContainer.getLeft();
+                 }
+diff --git a/quickstep/src/com/android/launcher3/taskbar/OverflownAppsContainerView.kt b/quickstep/src/com/android/launcher3/taskbar/OverflownAppsContainerView.kt
+--- a/quickstep/src/com/android/launcher3/taskbar/OverflownAppsContainerView.kt
++++ b/quickstep/src/com/android/launcher3/taskbar/OverflownAppsContainerView.kt
+@@ -23,6 +23,7 @@
+ import android.widget.LinearLayout
+ import androidx.core.view.updatePadding
+ import com.android.launcher3.BubbleTextView
++import com.android.launcher3.InsettableFrameLayout
+ import com.android.launcher3.R
+ import com.android.launcher3.model.data.ItemInfo
+ import com.android.launcher3.model.data.WorkspaceItemInfo
+@@ -101,4 +102,8 @@
+     override fun getTargetObjectLocation(outPos: Rect?) {
+         popupContainer.getDescendantRectRelativeToSelf(overflowIcon, outPos)
+     }
++
++    override fun getMaxVisibleBottom(dragLayer: InsettableFrameLayout, insets: Rect): Int {
++        return mActivityContext.liveDisplayBounds.height() - insets.bottom
++    }
+ }
+diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarActivityContext.java b/quickstep/src/com/android/launcher3/taskbar/TaskbarActivityContext.java
+--- a/quickstep/src/com/android/launcher3/taskbar/TaskbarActivityContext.java
++++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarActivityContext.java
+@@ -305,6 +305,9 @@
+         mSysUiProxy = sysUiProxy;
+         mPrimaryDisplayId = primaryDisplayId;
+         mWindowContext = windowContext;
++        // Views and live-bounds consumers below need current window metrics during construction.
++        Context c = getApplicationContext();
++        mWindowManager = mWindowContext.getSystemService(WindowManager.class);
+         applyDeviceProfile(launcherDp);
+         mTaskbarSpecsEvaluator = new TaskbarSpecsEvaluator(
+                 this,
+@@ -317,10 +320,6 @@
+         mIsSafeModeEnabled = TraceHelper.allowIpcs("isSafeMode",
+                 () -> getPackageManager().isSafeMode());
+ 
+-        // Get display and corners first, as views might use them in constructor.
+-        Context c = getApplicationContext();
+-        mWindowManager = c.getSystemService(WindowManager.class);
+-
+         // Inflate views.
+         boolean isTransientTaskbar = isTransientTaskbar();
+         int taskbarLayout = isTransientTaskbar ? R.layout.transient_taskbar : R.layout.taskbar;
+@@ -496,6 +495,16 @@
+     }
+ 
+     @Override
++    public Rect getLiveDisplayBounds() {
++        Rect currentBounds = mWindowManager.getCurrentWindowMetrics().getBounds();
++        if (!currentBounds.isEmpty()) {
++            return new Rect(currentBounds);
++        }
++        Point screenSize = getScreenSize();
++        return new Rect(0, 0, screenSize.x, screenSize.y);
++    }
++
++    @Override
+     public int getDisplayHeight() {
+         return DisplayController.INSTANCE.get(this).getInfo().currentSize.y;
+     }
+@@ -535,6 +544,7 @@
+                 .withDimensionsOverride(overrideProvider).build();
+         if (refactorTaskbarUiState()) {
+             mTaskbarUiState.setDeviceProfile(mDeviceProfile);
++            mTaskbarUiState.setLiveDisplayBounds(getLiveDisplayBounds());
+         }
+ 
+         if (isTransientTaskbar()) {
+@@ -1475,7 +1485,7 @@
+     }
+ 
+     private int getCurrentFullscreenTaskbarWindowSize(boolean landscapePhoneButtonNav) {
+-        Rect currentBounds = mWindowManager.getCurrentWindowMetrics().getBounds();
++        Rect currentBounds = getLiveDisplayBounds();
+         int currentSize = landscapePhoneButtonNav ? currentBounds.width() : currentBounds.height();
+         if (currentSize > 0) {
+             return currentSize;
+diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarDividerPopupView.kt b/quickstep/src/com/android/launcher3/taskbar/TaskbarDividerPopupView.kt
+--- a/quickstep/src/com/android/launcher3/taskbar/TaskbarDividerPopupView.kt
++++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarDividerPopupView.kt
+@@ -33,6 +33,7 @@
+ import androidx.core.view.postDelayed
+ import com.android.app.animation.Interpolators.EMPHASIZED_ACCELERATE
+ import com.android.launcher3.Flags
++import com.android.launcher3.InsettableFrameLayout
+ import com.android.launcher3.LauncherPrefs
+ import com.android.launcher3.R
+ import com.android.launcher3.popup.ArrowPopup
+@@ -110,6 +111,10 @@
+         popupContainer.getDescendantRectRelativeToSelf(dividerView, outPos)
+     }
+ 
++    override fun getMaxVisibleBottom(dragLayer: InsettableFrameLayout, insets: Rect): Int {
++        return taskbarActivityContext.liveDisplayBounds.height() - insets.bottom
++    }
++
+     @SuppressLint("UseSwitchCompatOrMaterialCode", "ClickableViewAccessibility")
+     override fun onFinishInflate() {
+         super.onFinishInflate()
+@@ -154,7 +159,10 @@
+         x =
+             if (Flags.showTaskbarPinningPopupFromAnywhere()) {
+                 val xForCenterAlignment = horizontalPosition - measuredWidth / 2f
+-                val maxX = popupContainer.getWidth() - measuredWidth - minPaddingFromScreenEdge
++                val displayWidth =
++                    taskbarActivityContext.liveDisplayBounds.width().takeIf { it > 0 }
++                        ?: popupContainer.getWidth()
++                val maxX = displayWidth - measuredWidth - minPaddingFromScreenEdge
+                 when {
+                     // Left-aligned popup and its arrow pointing to the event position if there is
+                     // not enough space to center it.
+diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarInsetsController.kt b/quickstep/src/com/android/launcher3/taskbar/TaskbarInsetsController.kt
+--- a/quickstep/src/com/android/launcher3/taskbar/TaskbarInsetsController.kt
++++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarInsetsController.kt
+@@ -187,7 +187,7 @@
+                 // only add the taskbar touch region if not on home
+                 val bottom = windowLayoutParams.height
+                 val top = bottom - taskbarTouchableHeight
+-                val right = context.deviceProfile.deviceProperties.widthPx
++                val right = context.liveDisplayBounds.width()
+                 defaultTouchableRegion.addBoundsToRegion(Rect(/* left= */ 0, top, right, bottom))
+             }
+ 
+diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarLauncherStateController.java b/quickstep/src/com/android/launcher3/taskbar/TaskbarLauncherStateController.java
+--- a/quickstep/src/com/android/launcher3/taskbar/TaskbarLauncherStateController.java
++++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarLauncherStateController.java
+@@ -546,10 +546,12 @@
+             if (mControllers.taskbarActivityContext.isDestroyed()) {
+                 return;
+             }
+-            // Show the bubble bar when on launcher home (hotseat icons visible) or in overview
++            // Show the bubble bar when on launcher home (hotseat icons visible) or in overview.
++            // If the taskbar is forced to stay at the screen edge, such as in desktop/freeform
++            // mode, keep bubbles aligned with the taskbar instead of the home hotseat.
+             boolean onOverview = isInLauncher && mLauncherState == LauncherState.OVERVIEW;
+             boolean hotseatIconsVisible = isInLauncher && mLauncherState.areElementsVisible(
+-                    mLauncherUiState, HOTSEAT_ICONS);
++                    mLauncherUiState, HOTSEAT_ICONS) && isTaskbarAlignedWithHotseat();
+             BubbleLauncherState state = onOverview
+                     ? BubbleLauncherState.OVERVIEW
+                     : hotseatIconsVisible
+diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarStashViaTouchController.kt b/quickstep/src/com/android/launcher3/taskbar/TaskbarStashViaTouchController.kt
+--- a/quickstep/src/com/android/launcher3/taskbar/TaskbarStashViaTouchController.kt
++++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarStashViaTouchController.kt
+@@ -69,8 +69,7 @@
+                 ResourceUtils.NAVBAR_BOTTOM_GESTURE_SIZE,
+                 activity.resources,
+             )
+-        gestureHeightYThreshold =
+-            (activity.deviceProfile.deviceProperties.heightPx - gestureHeight).toFloat()
++        gestureHeightYThreshold = (activity.liveDisplayBounds.height() - gestureHeight).toFloat()
+     }
+ 
+     private fun createSwipeListener() =
+diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarUiState.kt b/quickstep/src/com/android/launcher3/taskbar/TaskbarUiState.kt
+--- a/quickstep/src/com/android/launcher3/taskbar/TaskbarUiState.kt
++++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarUiState.kt
+@@ -86,6 +86,7 @@
+     private var _navbarFloatingRotationButtonsBounds = ImmutableRect.EMPTY_RECT
+ 
+     private var _deviceProfile = DeviceProfile.DEFAULT_DEVICE_PROFILE
++    private var _liveDisplayBounds = ImmutableRect.EMPTY_RECT
+ 
+     fun setHasBubble(hasBubbles: Boolean) {
+         _hasBubblesRef.diffAndDispatch(hasBubbles)
+@@ -150,7 +151,13 @@
+         if (!_isStashedHandlerViewVisible) {
+             return false
+         }
+-        val top = _deviceProfile.deviceProperties.heightPx - _stashedBubbleBarHeightPx
++        val displayBottom =
++            if (!_liveDisplayBounds.isEmpty()) {
++                _liveDisplayBounds.bottom
++            } else {
++                _deviceProfile.deviceProperties.heightPx
++            }
++        val top = displayBottom - _stashedBubbleBarHeightPx
+         val x = ev.rawX
+         val y = ev.rawY
+         return y >= top && x >= _stashedHandlerViewRect.left && x <= _stashedHandlerViewRect.right
+@@ -199,4 +206,8 @@
+     fun setDeviceProfile(dp: DeviceProfile) {
+         _deviceProfile = dp
+     }
++
++    fun setLiveDisplayBounds(bounds: Rect) {
++        _liveDisplayBounds = ImmutableRect.from(bounds)
++    }
+ }
+diff --git a/quickstep/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsContainerView.java b/quickstep/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsContainerView.java
+--- a/quickstep/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsContainerView.java
++++ b/quickstep/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsContainerView.java
+@@ -181,7 +181,7 @@
+     private int getAvailableDrawerWidthPx(DeviceProfile dp) {
+         int width = getWidth();
+         if (mActivityContext.showDesktopTaskbarForFreeformDisplay()) {
+-            int screenWidth = mActivityContext.getScreenSize().x;
++            int screenWidth = mActivityContext.getLiveDisplayBounds().width();
+             if (screenWidth > 0) {
+                 width = screenWidth;
+             }
+diff --git a/quickstep/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsController.java b/quickstep/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsController.java
+--- a/quickstep/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsController.java
++++ b/quickstep/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsController.java
+@@ -19,7 +19,7 @@
+ import static com.android.launcher3.taskbar.TaskbarDesktopExperienceFlags.enableCustomHeightForAllAppsOnCd;
+ 
+ import android.content.res.Resources;
+-import android.graphics.Point;
++import android.graphics.Rect;
+ import android.view.Gravity;
+ import android.view.View;
+ 
+@@ -237,11 +237,11 @@
+ 
+     private void applyDisplaySizedAllAppsLayout() {
+         DeviceProfile dp = mOverlayContext.getDeviceProfile();
+-        Point screenSize = mOverlayContext.getScreenSize();
+-        int width = screenSize.x > 0 ? screenSize.x
+-                : dp.getDeviceProperties().getAvailableWidthPx();
+-        int height = screenSize.y > 0 ? screenSize.y
++        Rect displayBounds = mOverlayContext.getLiveDisplayBounds();
++        int width = displayBounds.width() > 0 ? displayBounds.width()
++                : dp.getDeviceProperties().getAvailableWidthPx();
++        int height = displayBounds.height() > 0 ? displayBounds.height()
+                 : dp.getDeviceProperties().getAvailableHeightPx();
+ 
+         BaseDragLayer.LayoutParams lp =
+                 (BaseDragLayer.LayoutParams) mSlideInView.getLayoutParams();
+@@ -252,9 +255,9 @@
+         if (mOverlayContext.showDesktopTaskbarForFreeformDisplay()) {
+             return true;
+         }
+-        Point screenSize = mOverlayContext.getScreenSize();
+-        return screenSize.x >= DESKTOP_SIZED_DISPLAY_MIN_SIZE_PX
+-                && screenSize.y >= DESKTOP_SIZED_DISPLAY_MIN_SIZE_PX;
++        Rect displayBounds = mOverlayContext.getLiveDisplayBounds();
++        return displayBounds.width() >= DESKTOP_SIZED_DISPLAY_MIN_SIZE_PX
++                && displayBounds.height() >= DESKTOP_SIZED_DISPLAY_MIN_SIZE_PX;
+     }
+ 
+     private void cleanUpOverlay() {
+diff --git a/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarSwipeController.kt b/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarSwipeController.kt
+--- a/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarSwipeController.kt
++++ b/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarSwipeController.kt
+@@ -211,7 +211,7 @@
+                     taskbarActivityContext.deviceProfile,
+                 )
+             maxOverscroll =
+-                taskbarActivityContext.deviceProfile.deviceProperties.heightPx - unstashThreshold
++                taskbarActivityContext.liveDisplayBounds.height() - unstashThreshold
+         }
+     }
+ }
+diff --git a/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarViewController.java b/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarViewController.java
+--- a/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarViewController.java
++++ b/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarViewController.java
+@@ -705,7 +705,7 @@
+         if (!isBubbleBarVisible()) return false;
+         final Rect bounds = getBubbleBarBounds();
+         final int bubbleBarTopOnScreen =
+-                mActivity.getScreenSize().y - mBarView.getTopToScreenBottom();
++                mActivity.getLiveDisplayBounds().bottom - mBarView.getTopToScreenBottom();
+         final float x = event.getX();
+         return event.getRawY() >= bubbleBarTopOnScreen && x >= bounds.left && x <= bounds.right;
+     }
+diff --git a/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleControllers.java b/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleControllers.java
+--- a/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleControllers.java
++++ b/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleControllers.java
+@@ -158,5 +158,6 @@
+     /** Dumps bubble controllers state. */
+     public void dump(PrintWriter pw) {
+         bubbleBarViewController.dump(pw);
++        bubbleStashController.dump(pw);
+     }
+ }
+diff --git a/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleStashedHandleViewController.java b/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleStashedHandleViewController.java
+--- a/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleStashedHandleViewController.java
++++ b/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleStashedHandleViewController.java
+@@ -367,8 +367,7 @@
+ 
+         // the bounds of the handle only include the visible part, so we check that the Y coordinate
+         // is anywhere within the stashed height of bubble bar (same as taskbar stashed height).
+-        final int top = mActivity.getDeviceProfile().getDeviceProperties().getHeightPx()
+-                - mStashedBubbleBarHeight;
++        final int top = mActivity.getLiveDisplayBounds().bottom - mStashedBubbleBarHeight;
+         final float x = ev.getRawX();
+         return ev.getRawY() >= top && x >= mStashedHandleBounds.left
+                 && x <= mStashedHandleBounds.right;
+diff --git a/quickstep/src/com/android/launcher3/taskbar/overlay/TaskbarOverlayContext.java b/quickstep/src/com/android/launcher3/taskbar/overlay/TaskbarOverlayContext.java
+--- a/quickstep/src/com/android/launcher3/taskbar/overlay/TaskbarOverlayContext.java
++++ b/quickstep/src/com/android/launcher3/taskbar/overlay/TaskbarOverlayContext.java
+@@ -19,6 +19,7 @@
+ 
+ import android.content.Context;
+ import android.graphics.Point;
++import android.graphics.Rect;
+ import android.view.View;
+ import android.widget.FrameLayout;
+ 
+@@ -222,6 +223,11 @@
+     }
+ 
+     @Override
++    public Rect getLiveDisplayBounds() {
++        return mTaskbarContext.getLiveDisplayBounds();
++    }
++
++    @Override
+     public int getDisplayHeight() {
+         return mTaskbarContext.getDisplayHeight();
+     }
+diff --git a/quickstep/src/com/android/launcher3/taskbar/overlay/TaskbarOverlayController.java b/quickstep/src/com/android/launcher3/taskbar/overlay/TaskbarOverlayController.java
+--- a/quickstep/src/com/android/launcher3/taskbar/overlay/TaskbarOverlayController.java
++++ b/quickstep/src/com/android/launcher3/taskbar/overlay/TaskbarOverlayController.java
+@@ -28,7 +28,7 @@
+ import android.annotation.SuppressLint;
+ import android.content.Context;
+ import android.graphics.PixelFormat;
+-import android.graphics.Point;
++import android.graphics.Rect;
+ import android.gui.EarlyWakeupInfo;
+ import android.os.Binder;
+ import android.os.Trace;
+@@ -261,8 +261,9 @@
+     }
+ 
+     private void updateLayoutParamsForCurrentDisplay() {
+-        Point screenSize = mTaskbarContext.getScreenSize();
+-        mLayoutParams.width = screenSize.x > 0 ? screenSize.x : ViewGroup.LayoutParams.MATCH_PARENT;
+-        mLayoutParams.height = screenSize.y > 0 ? screenSize.y
++        Rect displayBounds = mTaskbarContext.getLiveDisplayBounds();
++        mLayoutParams.width = displayBounds.width() > 0 ? displayBounds.width()
++                : ViewGroup.LayoutParams.MATCH_PARENT;
++        mLayoutParams.height = displayBounds.height() > 0 ? displayBounds.height()
+                 : ViewGroup.LayoutParams.MATCH_PARENT;
+         mLayoutParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+     }
+diff --git a/quickstep/src/com/android/quickstep/inputconsumers/TaskbarUnstashInputConsumer.java b/quickstep/src/com/android/quickstep/inputconsumers/TaskbarUnstashInputConsumer.java
+--- a/quickstep/src/com/android/quickstep/inputconsumers/TaskbarUnstashInputConsumer.java
++++ b/quickstep/src/com/android/quickstep/inputconsumers/TaskbarUnstashInputConsumer.java
+@@ -119,8 +119,7 @@
+                         taskbarActivityContext.getDeviceProfile());
+ 
+         mTaskbarNavThresholdY =
+-                taskbarActivityContext.getDeviceProfile().getDeviceProperties().getHeightPx()
+-                        - mTaskbarNavThreshold;
++                taskbarActivityContext.getLiveDisplayBounds().height() - mTaskbarNavThreshold;
+         mIsTaskbarAllAppsOpen = mTaskbarActivityContext.isTaskbarAllAppsOpen();
+ 
+         mTaskbarSlowVelocityYThreshold =
+@@ -296,12 +295,14 @@
+     }
+ 
+     private void updateHoveredTaskbarState(int x, int y) {
+-        DeviceProfile dp = mTaskbarActivityContext.getDeviceProfile();
++        Rect displayBounds = mTaskbarActivityContext.getLiveDisplayBounds();
++        int displayWidth = displayBounds.width();
++        int displayHeight = displayBounds.height();
+         mBottomEdgeBounds.set(
+-                (dp.getDeviceProperties().getWidthPx() - (int) mUnstashArea) / 2,
+-                dp.getDeviceProperties().getHeightPx() - mStashedTaskbarBottomEdge,
+-                (int) (((dp.getDeviceProperties().getWidthPx() - mUnstashArea) / 2) + mUnstashArea),
+-                dp.getDeviceProperties().getHeightPx());
++                (displayWidth - (int) mUnstashArea) / 2,
++                displayHeight - mStashedTaskbarBottomEdge,
++                (int) (((displayWidth - mUnstashArea) / 2) + mUnstashArea),
++                displayHeight);
+ 
+         if (mBottomEdgeBounds.contains(x, y)) {
+             // start a single unstash timeout if hovering bottom edge under the hinted taskbar.
+@@ -323,12 +324,12 @@
+     private void updateUnhoveredTaskbarState(int x, int y, int displayId) {
+         sUnstashHandler.removeCallbacksAndMessages(null);
+ 
+-        DeviceProfile dp = mTaskbarActivityContext.getDeviceProfile();
++        Rect displayBounds = mTaskbarActivityContext.getLiveDisplayBounds();
+         mBottomEdgeBounds.set(
+                 0,
+-                dp.getDeviceProperties().getHeightPx() - mBottomScreenEdge,
+-                dp.getDeviceProperties().getWidthPx(),
+-                dp.getDeviceProperties().getHeightPx());
++                displayBounds.height() - mBottomScreenEdge,
++                displayBounds.width(),
++                displayBounds.height());
+ 
+         if (cursorHotCorner() && mDisplayManager != null) {
+             Display display = mDisplayManager.getDisplay(displayId);
+@@ -365,12 +366,14 @@
+             return false;
+         }
+         DeviceProfile dp = mTaskbarActivityContext.getDeviceProfile();
++        Rect displayBounds = mTaskbarActivityContext.getLiveDisplayBounds();
++        int displayWidth = displayBounds.width();
++        int displayHeight = displayBounds.height();
+         mStashedTaskbarHandleBounds.set(
+-                (dp.getDeviceProperties().getWidthPx() - (int) mUnstashArea) / 2,
+-                dp.getDeviceProperties().getHeightPx()
+-                        - dp.getTaskbarProfile().getStashedTaskbarHeight(),
+-                (int) (((dp.getDeviceProperties().getWidthPx() - mUnstashArea) / 2) + mUnstashArea),
+-                dp.getDeviceProperties().getHeightPx());
++                (displayWidth - (int) mUnstashArea) / 2,
++                displayHeight - dp.getTaskbarProfile().getStashedTaskbarHeight(),
++                (int) (((displayWidth - mUnstashArea) / 2) + mUnstashArea),
++                displayHeight);
+         return mStashedTaskbarHandleBounds.contains(x, y);
+     }
+ 
+diff --git a/src/com/android/launcher3/popup/PopupContainerWithArrow.kt b/src/com/android/launcher3/popup/PopupContainerWithArrow.kt
+--- a/src/com/android/launcher3/popup/PopupContainerWithArrow.kt
++++ b/src/com/android/launcher3/popup/PopupContainerWithArrow.kt
+@@ -28,7 +28,6 @@
+ import android.view.View
+ import android.view.View.OnClickListener
+ import android.view.ViewGroup
+-import android.view.WindowManager
+ import android.widget.ImageView
+ import androidx.annotation.LayoutRes
+ import com.android.launcher3.BubbleTextView
+@@ -432,10 +431,9 @@
+     }
+ 
+     private fun getCurrentDisplaySize(dragLayer: InsettableFrameLayout): Point {
+-        val windowBounds =
+-            context.getSystemService(WindowManager::class.java)?.currentWindowMetrics?.bounds
+-        if (windowBounds != null && windowBounds.width() > 0 && windowBounds.height() > 0) {
+-            return Point(windowBounds.width(), windowBounds.height())
++        val liveBounds = mActivityContext?.liveDisplayBounds
++        if (liveBounds != null && liveBounds.width() > 0 && liveBounds.height() > 0) {
++            return Point(liveBounds.width(), liveBounds.height())
+         }
+ 
+         val deviceProperties = mActivityContext?.deviceProfile?.deviceProperties
+diff --git a/src/com/android/launcher3/views/ActivityContext.java b/src/com/android/launcher3/views/ActivityContext.java
+--- a/src/com/android/launcher3/views/ActivityContext.java
++++ b/src/com/android/launcher3/views/ActivityContext.java
+@@ -125,6 +125,19 @@
+     }
+ 
+     /**
++     * Returns the current display/window bounds for live geometry decisions.
++     *
++     * <p>Contexts with direct access to WindowManager should override this with
++     * WindowMetrics-backed bounds. The default falls back to DeviceProfile, which is appropriate for
++     * regular launcher layout but may be stale during dynamic host-window resize.
++     */
++    default Rect getLiveDisplayBounds() {
++        DeviceProfile dp = getDeviceProfile();
++        return new Rect(0, 0, dp.getDeviceProperties().getWidthPx(),
++                dp.getDeviceProperties().getHeightPx());
++    }
++
++    /**
+      * After calling {@link #getFolderBoundingBox()}, we calculate a (left, top) position for a
+      * Folder of size width x height to be within those bounds. However, the chosen position may
+      * not be visually ideal (e.g. uncanny valley of centeredness), so here's a chance to update it.

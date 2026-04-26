@@ -1,0 +1,1844 @@
+Patch summary:
+Apply the framework and SystemUI desktop contract. This patch gathers the
+platform-level behavior that makes the guest act like a desktop VM: desktop-mode
+defaults, freeform/window behavior, Quick Settings cleanup, display power
+behavior, storage reporting, status bar/shade adjustments, and other VM-facing
+framework defaults.
+
+Most of the changes are about replacing phone assumptions with desktop ones.
+The guest has no useful battery saver, flashlight, wallet, auto-rotate, or
+screen-sleep affordance, and its display/window model is host-driven. Keeping
+that policy in the framework layer gives Launcher and the product overlays a
+stable desktop contract to build on.
+
+diff --git a/core/java/android/os/storage/StorageManager.java b/core/java/android/os/storage/StorageManager.java
+index e2ef800b5744..9c7da80abd41 100644
+--- a/core/java/android/os/storage/StorageManager.java
++++ b/core/java/android/os/storage/StorageManager.java
+@@ -1394,15 +1394,16 @@ public class StorageManager {
+ 
+     /** @hide */
+     public static Pair<String, Long> getPrimaryStoragePathAndSize() {
+-        return Pair.create(null,
+-                FileUtils.roundStorageSize(Environment.getDataDirectory().getTotalSpace()
+-                        + Environment.getRootDirectory().getTotalSpace()));
++        return Pair.create(null, getRoundedDataDirectorySize());
+     }
+ 
+     /** @hide */
+     public long getPrimaryStorageSize() {
+-        return FileUtils.roundStorageSize(Environment.getDataDirectory().getTotalSpace()
+-                + Environment.getRootDirectory().getTotalSpace());
++        return getRoundedDataDirectorySize();
++    }
++
++    private static long getRoundedDataDirectorySize() {
++        return FileUtils.roundStorageSize(Environment.getDataDirectory().getTotalSpace());
+     }
+ 
+     /** @hide */
+diff --git a/core/java/android/window/DesktopExperienceFlags.java b/core/java/android/window/DesktopExperienceFlags.java
+index 2ff6784c5970..ef5170ec93d7 100644
+--- a/core/java/android/window/DesktopExperienceFlags.java
++++ b/core/java/android/window/DesktopExperienceFlags.java
+@@ -229,7 +229,7 @@ public enum DesktopExperienceFlags {
+     ENABLE_MULTIDISPLAY_TRACKPAD_BACK_GESTURE(Flags::enableMultidisplayTrackpadBackGesture, true,
+             Flags.FLAG_ENABLE_MULTIDISPLAY_TRACKPAD_BACK_GESTURE),
+     ENABLE_MULTIPLE_DESKTOPS_ACTIVATION_IN_DESKTOP_FIRST_DISPLAYS(
+-            Flags::enableMultipleDesktopsDefaultActivationInDesktopFirstDisplays, false,
++            Flags::enableMultipleDesktopsDefaultActivationInDesktopFirstDisplays, true,
+             Flags.FLAG_ENABLE_MULTIPLE_DESKTOPS_DEFAULT_ACTIVATION_IN_DESKTOP_FIRST_DISPLAYS),
+     ENABLE_MULTIPLE_DESKTOPS_BACKEND(Flags::enableMultipleDesktopsBackend, true,
+             Flags.FLAG_ENABLE_MULTIPLE_DESKTOPS_BACKEND),
+@@ -545,16 +545,29 @@ public enum DesktopExperienceFlags {
+ 
+     /** Returns whether the toggle is overridden by the relevant system property.. */
+     private static boolean isToggleOverriddenBySystem() {
++        final Context context = getApplicationContext();
++        final boolean allowDesktopOverrideOnDesktopSupportedBuild =
++                supportsPropertyBackedToggleOverride(context);
++
+         // We never override if display content mode management is enabled (except when desktop
+         // mode dev option is enabled on the device, which indicates that the device only supports
+         // desktop mode) or if the desktop experience dev option is not enabled in the build.
+         if ((enableDisplayContentModeManagement() && (!isDesktopModeDevOptionSupported()))
+-                || !Flags.showDesktopExperienceDevOption()) {
++                && !allowDesktopOverrideOnDesktopSupportedBuild) {
++            return false;
++        }
++        if (!Flags.showDesktopExperienceDevOption()
++                && !allowDesktopOverrideOnDesktopSupportedBuild) {
+             return false;
+         }
+         return SystemProperties.getBoolean(SYSTEM_PROPERTY_NAME, false);
+     }
+ 
++    private static boolean supportsPropertyBackedToggleOverride(@Nullable Context context) {
++        return context != null
++                && context.getResources().getBoolean(R.bool.config_isDesktopModeSupported);
++    }
++
+     private static boolean isDesktopModeDevOptionSupported() {
+         Context context = getApplicationContext();
+         if (context == null) {
+@@ -564,4 +577,3 @@ public enum DesktopExperienceFlags {
+         return context.getResources().getBoolean(R.bool.config_isDesktopModeDevOptionSupported);
+     }
+ }
+-
+diff --git a/core/java/android/window/DesktopModeFlags.java b/core/java/android/window/DesktopModeFlags.java
+index f61ad32de59c..8c898d259134 100644
+--- a/core/java/android/window/DesktopModeFlags.java
++++ b/core/java/android/window/DesktopModeFlags.java
+@@ -16,6 +16,8 @@
+ 
+ package android.window;
+ 
++import static android.content.pm.PackageManager.FEATURE_PC;
++
+ import android.annotation.Nullable;
+ import android.content.ContentResolver;
+ import android.content.Context;
+@@ -254,7 +256,14 @@ public enum DesktopModeFlags {
+      *  Returns {@link ToggleOverride} from Settings.Global set by toggle.
+      */
+     private static ToggleOverride getToggleOverrideFromSystem() {
+-        if (Flags.showDesktopExperienceDevOption()) {
++        final ToggleOverride explicitOverride = getExplicitToggleOverrideFromSettings();
++        if (explicitOverride != ToggleOverride.OVERRIDE_UNSET) {
++            return explicitOverride;
++        }
++
++        final Context context = DesktopExperienceFlags.getApplicationContext();
++        if (Flags.showDesktopExperienceDevOption()
++                || supportsDesktopExperienceOverrideOnPcBuild(context)) {
+             if (DesktopExperienceFlags.getToggleOverride()) {
+                 return ToggleOverride.OVERRIDE_ON;
+             }
+@@ -262,7 +271,6 @@ public enum DesktopModeFlags {
+         }
+ 
+         if (Flags.showDesktopWindowingDevOption()) {
+-            final Context context = DesktopExperienceFlags.getApplicationContext();
+             if (context == null) {
+                 Log.w(TAG, "Could not get the current application.");
+                 return ToggleOverride.OVERRIDE_UNSET;
+@@ -272,17 +280,63 @@ public enum DesktopModeFlags {
+                 Log.w(TAG, "Could not get the content resolver for the application.");
+                 return ToggleOverride.OVERRIDE_UNSET;
+             }
+-            int settingValue = Settings.Global.getInt(
+-                    contentResolver,
+-                    Settings.Global.DEVELOPMENT_OVERRIDE_DESKTOP_MODE_FEATURES,
+-                    ToggleOverride.OVERRIDE_UNSET.getSetting()
+-            );
+-            return ToggleOverride.fromSetting(settingValue, ToggleOverride.OVERRIDE_UNSET);
++            try {
++                int settingValue = Settings.Global.getInt(
++                        contentResolver,
++                        Settings.Global.DEVELOPMENT_OVERRIDE_DESKTOP_MODE_FEATURES,
++                        ToggleOverride.OVERRIDE_UNSET.getSetting()
++                );
++                return ToggleOverride.fromSetting(settingValue, ToggleOverride.OVERRIDE_UNSET);
++            } catch (RuntimeException e) {
++                Log.w(TAG, "Desktop mode override setting unavailable during startup.", e);
++                return ToggleOverride.OVERRIDE_UNSET;
++            }
+         }
+ 
+         return ToggleOverride.OVERRIDE_UNSET;
+     }
+ 
++    private static ToggleOverride getExplicitToggleOverrideFromSettings() {
++        final Context context = DesktopExperienceFlags.getApplicationContext();
++        if (context == null
++                || !context.getPackageManager().hasSystemFeature(FEATURE_PC)) {
++            return ToggleOverride.OVERRIDE_UNSET;
++        }
++
++        final ContentResolver contentResolver = context.getContentResolver();
++        if (contentResolver == null) {
++            return ToggleOverride.OVERRIDE_UNSET;
++        }
++
++        try {
++            final ToggleOverride modeOverride = ToggleOverride.fromSetting(
++                    Settings.Global.getInt(
++                            contentResolver,
++                            Settings.Global.DEVELOPMENT_OVERRIDE_DESKTOP_MODE_FEATURES,
++                            ToggleOverride.OVERRIDE_UNSET.getSetting()),
++                    ToggleOverride.OVERRIDE_UNSET);
++            if (modeOverride != ToggleOverride.OVERRIDE_UNSET) {
++                return modeOverride;
++            }
++
++            return ToggleOverride.fromSetting(
++                    Settings.Global.getInt(
++                            contentResolver,
++                            Settings.Global.DEVELOPMENT_OVERRIDE_DESKTOP_EXPERIENCE_FEATURES,
++                            ToggleOverride.OVERRIDE_UNSET.getSetting()),
++                    ToggleOverride.OVERRIDE_UNSET);
++        } catch (RuntimeException e) {
++            Log.w(TAG, "Desktop override settings unavailable during startup.", e);
++            return ToggleOverride.OVERRIDE_UNSET;
++        }
++    }
++
++    private static boolean supportsDesktopExperienceOverrideOnPcBuild(
++            @Nullable Context context) {
++        return context != null
++                && context.getPackageManager().hasSystemFeature(FEATURE_PC);
++    }
++
+     /** Override state of desktop mode developer option toggle. */
+     public enum ToggleOverride {
+         OVERRIDE_UNSET,
+diff --git a/core/res/AndroidManifest.xml b/core/res/AndroidManifest.xml
+index 769c3d3110df..e4f7942140f0 100644
+--- a/core/res/AndroidManifest.xml
++++ b/core/res/AndroidManifest.xml
+@@ -2117,6 +2117,12 @@
+         android:description="@string/permdesc_accessLocationExtraCommands"
+         android:protectionLevel="normal" />
+ 
++    <!-- @hide Allows an application to spoof its package signature.
++         Required by microG GmsCore to present as Google Play Services.
++    <p>Not for use by third-party applications. -->
++    <permission android:name="android.permission.FAKE_PACKAGE_SIGNATURE"
++        android:protectionLevel="signature|privileged" />
++
+     <!-- Allows an application to install a location provider into the Location Manager.
+     <p>Not for use by third-party applications. -->
+     <permission android:name="android.permission.INSTALL_LOCATION_PROVIDER"
+diff --git a/core/tests/coretests/src/android/window/DesktopExperienceFlagsTest.java b/core/tests/coretests/src/android/window/DesktopExperienceFlagsTest.java
+index 2c97c6601d7a..f6b6c5b6c63f 100644
+--- a/core/tests/coretests/src/android/window/DesktopExperienceFlagsTest.java
++++ b/core/tests/coretests/src/android/window/DesktopExperienceFlagsTest.java
+@@ -167,6 +167,18 @@ public class DesktopExperienceFlagsTest {
+         assertThat(mNotOverriddenLocalFlag.isTrue()).isFalse();
+     }
+ 
++    @Test
++    @DisableFlags(FLAG_SHOW_DESKTOP_EXPERIENCE_DEV_OPTION)
++    public void isTrue_hiddenDevOption_syspropOverrideOn_desktopSupported_featureFlagOff_returnsTrue()
++            throws Exception {
++        setDesktopModeSupported(true);
++        mLocalFlagValue = false;
++        setSysProp(DesktopExperienceFlags.SYSTEM_PROPERTY_NAME, OVERRIDE_ON_SETTING);
++
++        assertThat(mOverriddenLocalFlag.isTrue()).isTrue();
++        assertThat(mNotOverriddenLocalFlag.isTrue()).isFalse();
++    }
++
+     private void setSysProp(String name, String value) throws Exception {
+         if (!mInitialSyspropValues.containsKey(name)) {
+             String initialValue = mUiDevice.executeShellCommand("getprop " + name).trim();
+diff --git a/core/tests/coretests/src/android/window/DesktopModeFlagsTest.java b/core/tests/coretests/src/android/window/DesktopModeFlagsTest.java
+index 03af9267e7f8..89392c1d4f6d 100644
+--- a/core/tests/coretests/src/android/window/DesktopModeFlagsTest.java
++++ b/core/tests/coretests/src/android/window/DesktopModeFlagsTest.java
+@@ -16,6 +16,7 @@
+ 
+ package android.window;
+ 
++import static android.content.pm.PackageManager.FEATURE_PC;
+ import static android.window.DesktopModeFlags.ENABLE_DESKTOP_WINDOWING_MODE;
+ import static android.window.DesktopModeFlags.ToggleOverride.OVERRIDE_OFF;
+ import static android.window.DesktopModeFlags.ToggleOverride.OVERRIDE_ON;
+@@ -39,6 +40,7 @@ import android.annotation.Nullable;
+ import android.app.ActivityThread;
+ import android.content.ContentResolver;
+ import android.content.Context;
++import android.content.pm.PackageManager;
+ import android.content.res.Resources;
+ import android.platform.test.annotations.DisableFlags;
+ import android.platform.test.annotations.EnableFlags;
+@@ -102,6 +104,7 @@ public class DesktopModeFlagsTest {
+     private static final int OVERRIDE_UNSET_SETTING = -1;
+ 
+     private Context mMockContext;
++    private PackageManager mMockPackageManager;
+     private Resources mMockResources;
+     private boolean mIsDesktopModeSupported;
+ 
+@@ -112,9 +115,12 @@ public class DesktopModeFlagsTest {
+     @Before
+     public void setUp() throws Exception {
+         mMockContext = spy(ActivityThread.currentApplication());
++        mMockPackageManager = spy(mMockContext.getPackageManager());
+         mMockResources = spy(mMockContext.getResources());
++        when(mMockContext.getPackageManager()).thenReturn(mMockPackageManager);
+         when(mMockContext.getResources()).thenReturn(mMockResources);
+         setDesktopModeSupported(false);
++        setPcFeature(false);
+ 
+         // Set the application context to the mock one
+         Field cachedToggleOverride =
+@@ -429,6 +435,37 @@ public class DesktopModeFlagsTest {
+         assertThat(DesktopModeFlags.isDesktopModeForcedEnabled()).isFalse();
+     }
+ 
++    @Test
++    @DisableFlags({
++            FLAG_ENABLE_DESKTOP_WINDOWING_MODE,
++            FLAG_SHOW_DESKTOP_EXPERIENCE_DEV_OPTION,
++            FLAG_SHOW_DESKTOP_WINDOWING_DEV_OPTION
++    })
++    public void isTrue_explicitOverrideOn_pcBuildWithoutDevOptions_enablesDesktop()
++            throws Exception {
++        setDesktopModeSupported(true);
++        setPcFeature(true);
++        setOverride(OVERRIDE_ON_SETTING);
++
++        assertThat(ENABLE_DESKTOP_WINDOWING_MODE.isTrue()).isTrue();
++        assertThat(DesktopModeFlags.isDesktopModeForcedEnabled()).isTrue();
++    }
++
++    @Test
++    @EnableFlags(FLAG_ENABLE_DESKTOP_WINDOWING_MODE)
++    @DisableFlags({
++            FLAG_SHOW_DESKTOP_EXPERIENCE_DEV_OPTION,
++            FLAG_SHOW_DESKTOP_WINDOWING_DEV_OPTION
++    })
++    public void isTrue_explicitOverrideOff_pcBuildWithoutDevOptions_disablesDesktop()
++            throws Exception {
++        setPcFeature(true);
++        setOverride(OVERRIDE_OFF_SETTING);
++
++        assertThat(ENABLE_DESKTOP_WINDOWING_MODE.isTrue()).isFalse();
++        assertThat(DesktopModeFlags.isDesktopModeForcedEnabled()).isFalse();
++    }
++
+     @Test
+     public void fromSetting_validInt_returnsToggleOverride() {
+         assertThat(fromSetting(0, OVERRIDE_UNSET)).isEqualTo(OVERRIDE_OFF);
+@@ -521,4 +558,8 @@ public class DesktopModeFlagsTest {
+                 eq(R.bool.config_isDesktopModeSupported));
+         mIsDesktopModeSupported = isSupported;
+     }
++
++    private void setPcFeature(boolean hasPcFeature) {
++        doReturn(hasPcFeature).when(mMockPackageManager).hasSystemFeature(FEATURE_PC);
++    }
+ }
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopMode.java b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopMode.java
+index 735695025df2..a28b291791a1 100644
+--- a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopMode.java
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopMode.java
+@@ -74,6 +74,9 @@ public interface DesktopMode {
+     void toggleFocusedTaskFullscreenState(
+             int displayId, DesktopModeTransitionSource transitionSource);
+ 
++    /** Called when requested to toggle between showing the desktop and restoring desktop apps. */
++    default void toggleShowDesktop(int displayId) {}
++
+     /**
+      * Register a listener that will receive callbacks about desktop-first state. Once it's
+      * registered, the listener immediately receives the current state.
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/IDesktopMode.aidl b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/IDesktopMode.aidl
+--- a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/IDesktopMode.aidl
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/IDesktopMode.aidl
+@@ -54,5 +54,8 @@ interface IDesktopMode {
+     void showDesktopApps(int displayId, in RemoteTransition remoteTransition,
+             int taskIdToReorderToFront, in DesktopModeTransitionSource transitionSource);
+-
++
++    /** Toggle between showing the desktop and restoring previously visible desktop apps. */
++    oneway void toggleShowDesktop(int displayId);
++
+     /** @deprecated use {@link #showDesktopApps} instead. */
+     void stashDesktopApps(int displayId);
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopTasksController.kt b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopTasksController.kt
+index b6fd5fc459a5..b589540602c6 100644
+--- a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopTasksController.kt
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopTasksController.kt
+@@ -273,6 +273,7 @@ class DesktopTasksController(
+ 
+     private val desktopMode: DesktopModeImpl
+     private var visualIndicator: DesktopModeVisualIndicator? = null
++    private val showDesktopTaskIdsByDisplay = mutableMapOf<Int, List<Int>>()
+     private val desktopModeShellCommandHandler: DesktopModeShellCommandHandler =
+         DesktopModeShellCommandHandler(this, focusTransitionObserver)
+     private val latencyTracker: LatencyTracker
+@@ -434,6 +435,27 @@ class DesktopTasksController(
+         )
+     }
+ 
++    /** Toggles between showing the desktop and restoring the previously visible desktop tasks. */
++    fun toggleShowDesktop(displayId: Int, userId: Int = shellController.currentUserId) {
++        if (displayId == INVALID_DISPLAY || !desktopState.isDesktopModeSupportedOnDisplay(displayId)) {
++            return
++        }
++
++        showDesktopTaskIdsByDisplay.remove(displayId)?.let { taskIds ->
++            restoreShownDesktopTasks(displayId, userId, taskIds)
++            return
++        }
++
++        val repository = userRepositories.getProfile(userId)
++        val visibleTaskIds = repository.getExpandedTasksOrdered(displayId)
++        if (visibleTaskIds.isEmpty()) {
++            restoreMinimizedDesktopTasks(displayId, userId)
++            return
++        }
++
++        showDesktop(displayId, visibleTaskIds)
++    }
++
+     /** Returns whether the given display has an active desk. */
+     @JvmOverloads
+     fun isAnyDeskActive(displayId: Int, userId: Int = shellController.currentUserId): Boolean =
+@@ -3237,6 +3259,49 @@ class DesktopTasksController(
+         return taskIdToMinimize
+     }
+ 
++    private fun showDesktop(displayId: Int, visibleTaskIds: List<Int>) {
++        val wct = WindowContainerTransaction()
++        visibleTaskIds.forEach { taskId ->
++            shellTaskOrganizer.getRunningTaskInfo(taskId)?.let { task ->
++                wct.reorder(task.token, /* onTop= */ false)
++            }
++        }
++        moveHomeTaskToTop(displayId, wct)
++        if (wct.isEmpty) return
++
++        showDesktopTaskIdsByDisplay[displayId] = visibleTaskIds
++        transitions.startTransition(TRANSIT_TO_FRONT, wct, /* handler= */ null)
++    }
++
++    private fun restoreShownDesktopTasks(displayId: Int, userId: Int, taskIds: List<Int>) {
++        val repository = userRepositories.getProfile(userId)
++        val wct = WindowContainerTransaction()
++        taskIds.asReversed().forEach { taskId ->
++            shellTaskOrganizer.getRunningTaskInfo(taskId)?.let { task ->
++                addMoveTaskToFrontChanges(wct, repository.getDeskIdForTask(task.taskId), task)
++            }
++        }
++        if (!wct.isEmpty) {
++            transitions.startTransition(TRANSIT_TO_FRONT, wct, /* handler= */ null)
++        }
++    }
++
++    private fun restoreMinimizedDesktopTasks(displayId: Int, userId: Int) {
++        userRepositories
++            .getProfile(userId)
++            .getMinimizedTasks(displayId)
++            .toList()
++            .asReversed()
++            .forEach { taskId ->
++                moveTaskToFront(
++                    taskId = taskId,
++                    userId = userId,
++                    remoteTransition = null,
++                    unminimizeReason = UnminimizeReason.UNKNOWN,
++                )
++            }
++    }
++
+     private fun moveHomeTaskToTop(displayId: Int, wct: WindowContainerTransaction) {
+         logV("moveHomeTaskToTop in displayId=%d", displayId)
+         getHomeTask(displayId)?.let { homeTask ->
+@@ -3434,6 +3499,15 @@ class DesktopTasksController(
+             exitReason,
+         )
+         if (!willExitDesktop) return null
++        if (shouldKeepDeskActiveOnDesktopFirstDisplay(displayId, shouldEndUpAtHome, exitReason)) {
++            logD(
++                "performDesktopExitCleanUp keeping desk active on desktop-first displayId=%d " +
++                    "exitReason=%s",
++                displayId,
++                exitReason,
++            )
++            return null
++        }
+         if (
+             !skipUpdatingExitDesktopListener &&
+                 // Replaced by |IDesktopTaskListener#onActiveDeskChanged|.
+@@ -3484,6 +3558,21 @@ class DesktopTasksController(
+         }
+     }
+ 
++    /**
++     * Desktop-first displays should keep the active desk alive when Home/Overview surfaces so Home
++     * can remain desktop chrome instead of collapsing the whole desktop session.
++     */
++    private fun shouldKeepDeskActiveOnDesktopFirstDisplay(
++        displayId: Int,
++        shouldEndUpAtHome: Boolean,
++        exitReason: ExitReason,
++    ): Boolean {
++        return DesktopExperienceFlags.ENABLE_MULTIPLE_DESKTOPS_BACKEND.isTrue &&
++            shouldEndUpAtHome &&
++            exitReason == ExitReason.RETURN_HOME_OR_OVERVIEW &&
++            rootTaskDisplayAreaOrganizer.isDisplayDesktopFirst(displayId)
++    }
++
+     fun releaseVisualIndicator() {
+         visualIndicator?.releaseVisualIndicator()
+         visualIndicator = null
+@@ -5945,11 +6034,7 @@ class DesktopTasksController(
+         when (indicatorType) {
+             IndicatorType.TO_FULLSCREEN_INDICATOR -> {
+                 val shouldMaximizeWhenDragToTopEdge =
+-                    if (DesktopExperienceFlags.ENABLE_DESKTOP_FIRST_BASED_DRAG_TO_MAXIMIZE.isTrue)
+-                        rootTaskDisplayAreaOrganizer.isDisplayDesktopFirst(
+-                            motionEvent.getDisplayId()
+-                        )
+-                    else desktopConfig.shouldMaximizeWhenDragToTopEdge
++                    desktopConfig.shouldMaximizeWhenDragToTopEdge
+                 if (shouldMaximizeWhenDragToTopEdge) {
+                     dragToMaximizeDesktopTask(taskInfo, taskSurface, currentDragBounds, motionEvent)
+                 } else {
+@@ -6534,6 +6619,13 @@ class DesktopTasksController(
+             }
+         }
+ 
++        override fun toggleShowDesktop(displayId: Int) {
++            logV("toggleShowDesktop")
++            mainExecutor.execute {
++                this@DesktopTasksController.toggleShowDesktop(displayId = displayId)
++            }
++        }
++
+         override fun registerDesktopFirstListener(listener: DesktopFirstListener) {
+             logV("registerDesktopFirstListener")
+             if (desktopFirstListenerManager.isEmpty) {
+@@ -6847,7 +6939,13 @@ class DesktopTasksController(
+                 )
+             }
+         }
+-
++
++        override fun toggleShowDesktop(displayId: Int) {
++            executeRemoteCallWithTaskPermission(controller, "toggleShowDesktop") { c ->
++                c.toggleShowDesktop(displayId)
++            }
++        }
++
+         override fun showDesktopApp(
+             taskId: Int,
+             remoteTransition: RemoteTransition?,
+diff --git a/libs/WindowManager/Shell/tests/unittest/src/com/android/wm/shell/desktopmode/DesktopTasksControllerTest.kt b/libs/WindowManager/Shell/tests/unittest/src/com/android/wm/shell/desktopmode/DesktopTasksControllerTest.kt
+index 12bfb4e93d46..b54ba39cfb47 100644
+--- a/libs/WindowManager/Shell/tests/unittest/src/com/android/wm/shell/desktopmode/DesktopTasksControllerTest.kt
++++ b/libs/WindowManager/Shell/tests/unittest/src/com/android/wm/shell/desktopmode/DesktopTasksControllerTest.kt
+@@ -9248,7 +9248,7 @@ class DesktopTasksControllerTest(flags: FlagsParameterization) : ShellTestCase()
+ 
+     @Test
+     @EnableFlags(Flags.FLAG_ENABLE_DESKTOP_FIRST_BASED_DRAG_TO_MAXIMIZE)
+-    fun onDesktopDragEnd_fullscreenIndicator_dragToMaximize() {
++    fun onDesktopDragEnd_fullscreenIndicator_dragToExitDesktop_desktopFirstEnabled() {
+         val task = setUpFreeformTask(bounds = Rect(0, 0, 100, 100))
+         val spyController = spy(controller)
+         val mockSurface = mock(SurfaceControl::class.java)
+@@ -9260,6 +9260,7 @@ class DesktopTasksControllerTest(flags: FlagsParameterization) : ShellTestCase()
+         whenever(mockDisplayLayout.getStableBounds(any())).thenAnswer { i ->
+             (i.arguments.first() as Rect).set(STABLE_BOUNDS)
+         }
++        desktopConfig.shouldMaximizeWhenDragToTopEdge = false
+         whenever(spyController.getVisualIndicator()).thenReturn(desktopModeVisualIndicator)
+         whenever(desktopModeVisualIndicator.updateIndicatorType(any(), anyOrNull()))
+             .thenReturn(DesktopModeVisualIndicator.IndicatorType.TO_FULLSCREEN_INDICATOR)
+@@ -9286,10 +9287,53 @@ class DesktopTasksControllerTest(flags: FlagsParameterization) : ShellTestCase()
+             motionEvent,
+         )
+ 
+-        // Assert bounds set to stable bounds
++        val wct = getLatestExitDesktopWct()
++        assertThat(wct.changes[task.token.asBinder()]?.windowingMode)
++            .isEqualTo(WINDOWING_MODE_UNDEFINED)
++    }
++
++    @Test
++    @EnableFlags(Flags.FLAG_ENABLE_DESKTOP_FIRST_BASED_DRAG_TO_MAXIMIZE)
++    fun onDesktopDragEnd_fullscreenIndicator_dragToMaximize_usesConfigFallback() {
++        val task = setUpFreeformTask(bounds = Rect(0, 0, 100, 100))
++        val spyController = spy(controller)
++        val mockSurface = mock(SurfaceControl::class.java)
++        val mockDisplayLayout = mock(DisplayLayout::class.java)
++        val tda = rootTaskDisplayAreaOrganizer.getDisplayAreaInfo(DEFAULT_DISPLAY)!!
++        tda.configuration.windowConfiguration.windowingMode = WINDOWING_MODE_FULLSCREEN
++        whenever(displayController.getDisplayLayout(task.displayId)).thenReturn(mockDisplayLayout)
++        whenever(mockDisplayLayout.stableInsets()).thenReturn(Rect(0, 100, 2000, 2000))
++        whenever(mockDisplayLayout.getStableBounds(any())).thenAnswer { i ->
++            (i.arguments.first() as Rect).set(STABLE_BOUNDS)
++        }
++        desktopConfig.shouldMaximizeWhenDragToTopEdge = true
++        whenever(spyController.getVisualIndicator()).thenReturn(desktopModeVisualIndicator)
++        whenever(desktopModeVisualIndicator.updateIndicatorType(any(), anyOrNull()))
++            .thenReturn(DesktopModeVisualIndicator.IndicatorType.TO_FULLSCREEN_INDICATOR)
++        whenever(motionEvent.displayId).thenReturn(DEFAULT_DISPLAY)
++
++        val currentDragBounds = Rect(100, 50, 500, 1000)
++        spyController.onDragPositioningMove(
++            task,
++            mockSurface,
++            DEFAULT_DISPLAY,
++            200f,
++            10f,
++            Rect(100, 200, 500, 1000),
++        )
++        spyController.onDragPositioningEnd(
++            task,
++            mockSurface,
++            DEFAULT_DISPLAY,
++            inputCoordinate = PointF(200f, 300f),
++            currentDragBounds,
++            validDragArea = Rect(0, 50, 2000, 2000),
++            dragStartBounds = Rect(),
++            motionEvent,
++        )
++
+         val wct = getLatestToggleResizeDesktopTaskWct(currentDragBounds)
+         assertThat(findBoundsChange(wct, task)).isEqualTo(STABLE_BOUNDS)
+-        // Assert event is properly logged
+         verify(desktopModeEventLogger, times(1))
+             .logTaskResizingStarted(
+                 resizeTrigger = ResizeTrigger.DRAG_TO_TOP_RESIZE_TRIGGER,
+@@ -9326,6 +9370,7 @@ class DesktopTasksControllerTest(flags: FlagsParameterization) : ShellTestCase()
+         whenever(mockDisplayLayout.getStableBounds(any())).thenAnswer { i ->
+             (i.arguments.first() as Rect).set(STABLE_BOUNDS)
+         }
++        desktopConfig.shouldMaximizeWhenDragToTopEdge = true
+         whenever(spyController.getVisualIndicator()).thenReturn(desktopModeVisualIndicator)
+         whenever(desktopModeVisualIndicator.updateIndicatorType(any(), anyOrNull()))
+             .thenReturn(DesktopModeVisualIndicator.IndicatorType.TO_FULLSCREEN_INDICATOR)
+@@ -11065,6 +11110,24 @@ class DesktopTasksControllerTest(flags: FlagsParameterization) : ShellTestCase()
+             )
+     }
+ 
++    @Test
++    @EnableFlags(Flags.FLAG_ENABLE_MULTIPLE_DESKTOPS_BACKEND)
++    fun handleRequest_homeTask_activeDesk_desktopFirst_keepsDeskActive() {
++        rootTaskDisplayAreaOrganizer.setDesktopFirst(DEFAULT_DISPLAY)
++        taskRepository.setActiveDesk(DEFAULT_DISPLAY, deskId = 0)
++        val home = createHomeTask(DEFAULT_DISPLAY, userId = taskRepository.userId)
++
++        val transition = Binder()
++        val result = controller.handleRequest(transition, createTransition(home))
++
++        assertNotNull(result)
++        verify(desksOrganizer, never()).deactivateDesk(result, deskId = 0)
++        verify(desksTransitionsObserver, never())
++            .addPendingTransition(
++                argThat { t -> t.token == transition && t is DeskTransition.DeactivateDesk }
++            )
++    }
++
+     @Test
+     @EnableFlags(Flags.FLAG_ENABLE_MULTIPLE_DESKTOPS_BACKEND)
+     fun handleRequest_homeTask_closing_notHandled() {
+@@ -11978,6 +12041,29 @@ class DesktopTasksControllerTest(flags: FlagsParameterization) : ShellTestCase()
+             )
+     }
+ 
++    @Test
++    @EnableFlags(Flags.FLAG_ENABLE_MULTIPLE_DESKTOPS_BACKEND)
++    fun onRecentsInDesktopAnimationFinishing_deskStillActive_desktopFirst_keepsDeskActive() {
++        rootTaskDisplayAreaOrganizer.setDesktopFirst(DEFAULT_DISPLAY)
++        val deskId = 0
++        taskRepository.setActiveDesk(DEFAULT_DISPLAY, deskId)
++
++        val transition = Binder()
++        val finishWct = WindowContainerTransaction()
++        controller.onRecentsInDesktopAnimationFinishing(
++            transition = transition,
++            finishWct = finishWct,
++            returnToApp = false,
++            activeDeskIdOnRecentsStart = deskId,
++        )
++
++        verify(desksOrganizer, never()).deactivateDesk(finishWct, deskId)
++        verify(desksTransitionsObserver, never())
++            .addPendingTransition(
++                argThat { t -> t.token == transition && t is DeskTransition.DeactivateDesk }
++            )
++    }
++
+     @Test
+     @EnableFlags(Flags.FLAG_ENABLE_MULTIPLE_DESKTOPS_BACKEND)
+     fun onRecentsInDesktopAnimationFinishing_deskStillActive_notReturningToDesk_doesNotBringUpWallpaperOrHome() {
+diff --git a/packages/SettingsLib/src/com/android/settingslib/deviceinfo/PrivateStorageInfo.java b/packages/SettingsLib/src/com/android/settingslib/deviceinfo/PrivateStorageInfo.java
+index 39dfe0ef6620..e986b2d2cc9f 100644
+--- a/packages/SettingsLib/src/com/android/settingslib/deviceinfo/PrivateStorageInfo.java
++++ b/packages/SettingsLib/src/com/android/settingslib/deviceinfo/PrivateStorageInfo.java
+@@ -42,6 +42,22 @@ public class PrivateStorageInfo {
+         final Context context = AppGlobals.getInitialApplication();
+         final StorageStatsManager stats = context.getSystemService(StorageStatsManager.class);
+ 
++        // Prefer the internal data partition only, instead of summing all private volumes.
++        for (VolumeInfo info : sm.getVolumes()) {
++            if (info.getType() == VolumeInfo.TYPE_PRIVATE
++                    && info.isMountedReadable()
++                    && VolumeInfo.ID_PRIVATE_INTERNAL.equals(info.getId())) {
++                try {
++                    return new PrivateStorageInfo(
++                            sm.getFreeBytes(stats, info), sm.getTotalBytes(stats, info));
++                } catch (IOException e) {
++                    Log.w(TAG, e);
++                    return new PrivateStorageInfo(0, 0);
++                }
++            }
++        }
++
++        // Fallback for unexpected devices where the internal private volume is unavailable.
+         long privateFreeBytes = 0;
+         long privateTotalBytes = 0;
+         for (VolumeInfo info : sm.getVolumes()) {
+diff --git a/packages/SystemUI/multivalentTests/src/com/android/systemui/keyguard/domain/interactor/KeyguardTouchHandlingInteractorTest.kt b/packages/SystemUI/multivalentTests/src/com/android/systemui/keyguard/domain/interactor/KeyguardTouchHandlingInteractorTest.kt
+index 84216613f9a9..863276959791 100644
+--- a/packages/SystemUI/multivalentTests/src/com/android/systemui/keyguard/domain/interactor/KeyguardTouchHandlingInteractorTest.kt
++++ b/packages/SystemUI/multivalentTests/src/com/android/systemui/keyguard/domain/interactor/KeyguardTouchHandlingInteractorTest.kt
+@@ -18,7 +18,6 @@
+ package com.android.systemui.keyguard.domain.interactor
+ 
+ import android.content.Intent
+-import android.os.PowerManager
+ import android.platform.test.annotations.DisableFlags
+ import android.platform.test.annotations.EnableFlags
+ import android.provider.Settings
+@@ -45,6 +44,7 @@ import com.android.systemui.res.R
+ import com.android.systemui.scene.domain.interactor.SceneInteractor
+ import com.android.systemui.scene.domain.interactor.sceneInteractor
+ import com.android.systemui.securelockdevice.domain.interactor.secureLockDeviceInteractor
++import com.android.systemui.shade.ShadeController
+ import com.android.systemui.shade.pulsingGestureListener
+ import com.android.systemui.shared.settings.data.repository.SecureSettingsRepository
+ import com.android.systemui.statusbar.phone.StatusBarKeyguardViewManager
+@@ -54,7 +54,6 @@ import com.android.systemui.testKosmos
+ import com.android.systemui.util.mockito.mock
+ import com.android.systemui.util.mockito.whenever
+ import com.android.systemui.util.settings.data.repository.userAwareSecureSettingsRepository
+-import com.android.systemui.util.time.fakeSystemClock
+ import com.google.common.truth.Truth.assertThat
+ import kotlinx.coroutines.runBlocking
+ import kotlinx.coroutines.test.TestScope
+@@ -66,7 +65,6 @@ import org.junit.Before
+ import org.junit.Test
+ import org.junit.runner.RunWith
+ import org.mockito.ArgumentMatchers.anyInt
+-import org.mockito.ArgumentMatchers.anyLong
+ import org.mockito.Mock
+ import org.mockito.Mockito.never
+ import org.mockito.Mockito.verify
+@@ -92,7 +90,7 @@ class KeyguardTouchHandlingInteractorTest : SysuiTestCase() {
+     private lateinit var sceneInteractor: SceneInteractor
+     private lateinit var statusBarKeyguardViewManager: StatusBarKeyguardViewManager
+ 
+-    @Mock private lateinit var powerManager: PowerManager
++    @Mock private lateinit var shadeController: ShadeController
+ 
+     @Before
+     fun setUp() {
+@@ -404,7 +402,7 @@ class KeyguardTouchHandlingInteractorTest : SysuiTestCase() {
+             underTest.onDoubleClick()
+ 
+             assertThat(isEnabled).isTrue()
+-            verify(powerManager).goToSleep(anyLong())
++            verify(shadeController).animateExpandShade()
+         }
+     }
+ 
+@@ -419,7 +417,7 @@ class KeyguardTouchHandlingInteractorTest : SysuiTestCase() {
+             underTest.onDoubleClick()
+ 
+             assertThat(isEnabled).isFalse()
+-            verify(powerManager, never()).goToSleep(anyLong())
++            verify(shadeController, never()).animateExpandShade()
+         }
+     }
+ 
+@@ -441,8 +439,7 @@ class KeyguardTouchHandlingInteractorTest : SysuiTestCase() {
+                 deviceEntryInteractor = kosmos.deviceEntryInteractor,
+                 powerInteractor = kosmos.powerInteractor,
+                 secureSettingsRepository = secureSettingsRepository,
+-                powerManager = powerManager,
+-                systemClock = kosmos.fakeSystemClock,
++                shadeController = shadeController,
+                 pointerDeviceRepository = kosmos.pointerDeviceRepository,
+                 secureLockDeviceInteractor = { kosmos.secureLockDeviceInteractor },
+             )
+diff --git a/packages/SystemUI/multivalentTests/src/com/android/systemui/shade/NotificationPanelViewControllerBaseTest.java b/packages/SystemUI/multivalentTests/src/com/android/systemui/shade/NotificationPanelViewControllerBaseTest.java
+index 873f680b347a..b7ad7b743d82 100644
+--- a/packages/SystemUI/multivalentTests/src/com/android/systemui/shade/NotificationPanelViewControllerBaseTest.java
++++ b/packages/SystemUI/multivalentTests/src/com/android/systemui/shade/NotificationPanelViewControllerBaseTest.java
+@@ -235,6 +235,7 @@ public class NotificationPanelViewControllerBaseTest extends SysuiTestCase {
+     @Mock protected NavigationModeController mNavigationModeController;
+     @Mock protected NavigationBarController mNavigationBarController;
+     @Mock protected QuickSettingsControllerImpl mQsController;
++    @Mock protected ShadeController mShadeController;
+     @Mock protected ShadeHeaderController mShadeHeaderController;
+     @Mock protected TapAgainViewController mTapAgainViewController;
+     @Mock protected KeyguardIndicationController mKeyguardIndicationController;
+@@ -524,7 +525,7 @@ public class NotificationPanelViewControllerBaseTest extends SysuiTestCase {
+                 mStatusBarStateController,
+                 mNotificationShadeWindowController,
+                 mDozeLog, mDozeParameters, mCommandQueue, mVibratorHelper,
+-                mLatencyTracker, mPowerManager, mAccessibilityManager, 0, mUpdateMonitor,
++                mLatencyTracker, mAccessibilityManager, 0, mUpdateMonitor,
+                 mMetricsLogger,
+                 mShadeLog,
+                 mConfigurationController,
+@@ -547,6 +548,7 @@ public class NotificationPanelViewControllerBaseTest extends SysuiTestCase {
+                 mQsController,
+                 mFragmentService,
+                 mStatusBarService,
++                mContext.getContentResolver(),
+                 mShadeHeaderController,
+                 mScreenOffAnimationController,
+                 mLockscreenGestureLogger,
+@@ -581,6 +583,7 @@ public class NotificationPanelViewControllerBaseTest extends SysuiTestCase {
+                 new BlurConfig(0f, 0f),
+                 () -> mKosmos.getFakeShadeDisplaysRepository(),
+                 mWindowRootViewBlurInteractor,
++                mShadeController,
+                 mContext);
+         mNotificationPanelViewController.initDependencies(
+                 mCentralSurfaces,
+diff --git a/packages/SystemUI/res/drawable/qs_media_volume_progress_drawable.xml b/packages/SystemUI/res/drawable/qs_media_volume_progress_drawable.xml
+new file mode 100644
+index 000000000000..9323ac1fcdc5
+--- /dev/null
++++ b/packages/SystemUI/res/drawable/qs_media_volume_progress_drawable.xml
+@@ -0,0 +1,38 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++  ~ Copyright (C) 2026 The Android Open Source Project
++  ~
++  ~ Licensed under the Apache License, Version 2.0 (the "License");
++  ~ you may not use this file except in compliance with the License.
++  ~ You may obtain a copy of the License at
++  ~
++  ~      http://www.apache.org/licenses/LICENSE-2.0
++  ~
++  ~ Unless required by applicable law or agreed to in writing, software
++  ~ distributed under the License is distributed on an "AS IS" BASIS,
++  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++  ~ See the License for the specific language governing permissions and
++  ~ limitations under the License.
++  -->
++<layer-list xmlns:android="http://schemas.android.com/apk/res/android"
++    android:paddingMode="stack">
++    <item
++        android:id="@android:id/background"
++        android:gravity="center_vertical|fill_horizontal">
++        <inset
++            android:insetLeft="@dimen/rounded_slider_track_inset"
++            android:insetRight="@dimen/rounded_slider_track_inset">
++            <shape>
++                <size android:height="@dimen/rounded_slider_track_width" />
++                <corners android:radius="@dimen/rounded_slider_track_corner_radius" />
++                <solid android:color="@color/brightness_slider_track" />
++            </shape>
++        </inset>
++    </item>
++    <item
++        android:id="@android:id/progress"
++        android:gravity="center_vertical|fill_horizontal">
++        <com.android.systemui.util.BrightnessProgressDrawable
++            android:drawable="@drawable/qs_media_volume_progress_full_drawable" />
++    </item>
++</layer-list>
+diff --git a/packages/SystemUI/res/drawable/qs_media_volume_progress_full_drawable.xml b/packages/SystemUI/res/drawable/qs_media_volume_progress_full_drawable.xml
+new file mode 100644
+index 000000000000..37ae1e354ca8
+--- /dev/null
++++ b/packages/SystemUI/res/drawable/qs_media_volume_progress_full_drawable.xml
+@@ -0,0 +1,46 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++  ~ Copyright (C) 2026 The Android Open Source Project
++  ~
++  ~ Licensed under the Apache License, Version 2.0 (the "License");
++  ~ you may not use this file except in compliance with the License.
++  ~ You may obtain a copy of the License at
++  ~
++  ~      http://www.apache.org/licenses/LICENSE-2.0
++  ~
++  ~ Unless required by applicable law or agreed to in writing, software
++  ~ distributed under the License is distributed on an "AS IS" BASIS,
++  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++  ~ See the License for the specific language governing permissions and
++  ~ limitations under the License.
++  -->
++
++<layer-list xmlns:android="http://schemas.android.com/apk/res/android"
++    android:autoMirrored="true">
++    <item
++        android:id="@+id/slider_foreground"
++        android:height="@dimen/rounded_slider_height">
++        <shape>
++            <size android:height="@dimen/rounded_slider_height" />
++            <solid android:color="?attr/shadeActive" />
++            <corners android:radius="@dimen/rounded_slider_corner_radius" />
++        </shape>
++    </item>
++    <item>
++        <shape>
++            <corners android:radius="@dimen/rounded_slider_corner_radius" />
++            <size android:height="@dimen/rounded_slider_height" />
++            <solid android:color="@color/brightness_slider_overlay_color" />
++        </shape>
++    </item>
++    <item
++        android:id="@+id/slider_icon"
++        android:gravity="center_vertical|right"
++        android:height="@dimen/rounded_slider_icon_size"
++        android:width="@dimen/rounded_slider_icon_size"
++        android:right="@dimen/rounded_slider_icon_inset">
++        <com.android.systemui.util.AlphaTintDrawableWrapper
++            android:drawable="@drawable/ic_volume_media"
++            android:tint="?attr/onShadeActive" />
++    </item>
++</layer-list>
+diff --git a/packages/SystemUI/res/values/config.xml b/packages/SystemUI/res/values/config.xml
+index e0bc1ec0e01a..0c3f3bfe8d47 100644
+--- a/packages/SystemUI/res/values/config.xml
++++ b/packages/SystemUI/res/values/config.xml
+@@ -102,12 +102,12 @@
+ 
+     <!-- The default tiles to display in QuickSettings -->
+     <string name="quick_settings_tiles_default" translatable="false">
+-        internet,bt,flashlight,dnd,alarm,airplane,controls,wallet,rotation,battery,cast,screenrecord,mictoggle,cameratoggle,custom(com.android.permissioncontroller/.permission.service.v33.SafetyCenterQsTileService)
++        internet,bt,dnd,alarm,airplane,cast,screenrecord,mictoggle,cameratoggle,custom(com.android.permissioncontroller/.permission.service.v33.SafetyCenterQsTileService)
+     </string>
+ 
+     <!-- The default tiles to display in QuickSettings with the new UI -->
+     <string name="quick_settings_tiles_new_default" translatable="false">
+-        internet,bt,dnd,cast,flashlight,airplane,rotation,wallet,alarm,controls,screenrecord,battery
++        internet,bt,dnd,cast,airplane,alarm,screenrecord
+     </string>
+ 
+     <!-- The class path of the Safety Quick Settings Tile -->
+@@ -120,7 +120,7 @@
+ 
+     <!-- Tiles native to System UI. Order should match "quick_settings_tiles_default" -->
+     <string name="quick_settings_tiles_stock" translatable="false">
+-        internet,wifi,cell,bt,flashlight,dnd,modes_dnd,alarm,airplane,nfc,controls,wallet,rotation,battery,cast,screenrecord,mictoggle,cameratoggle,location,hotspot,inversion,saver,dark,work,night,reverse,reduce_brightness,qr_code_scanner,onehanded,color_correction,dream,font_scaling,record_issue,hearing_devices,notes,desktopeffects,ambient_display,aod,caffeine,heads_up,powershare,profiles,reading_mode,sync,usb_tether,vpn
++        internet,wifi,cell,bt,dnd,modes_dnd,alarm,airplane,nfc,cast,screenrecord,mictoggle,cameratoggle,location,hotspot,inversion,saver,dark,work,night,reverse,reduce_brightness,qr_code_scanner,onehanded,color_correction,dream,font_scaling,record_issue,hearing_devices,notes,desktopeffects,ambient_display,aod,caffeine,heads_up,powershare,profiles,reading_mode,sync,usb_tether,vpn
+     </string>
+ 
+     <!-- The tiles to display in QuickSettings -->
+@@ -594,6 +594,12 @@
+     <!-- Whether to show extra battery saver confirmation dialog. -->
+     <bool name="config_extra_battery_saver_confirmation">false</bool>
+ 
++    <!-- Whether SystemUI should show battery indicators in status and shade surfaces. -->
++    <bool name="config_showBatteryUi">true</bool>
++
++    <!-- Whether the QS slider should control media volume instead of display brightness. -->
++    <bool name="config_useQsMediaVolumeSlider">false</bool>
++
+     <!-- A path representing a shield. Will sometimes be displayed with the battery icon when
+          needed. This path is a 10px wide and 13px tall. -->
+     <string name="config_batterymeterShieldPath" translatable="false">
+diff --git a/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java b/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java
+index f0b13820de46..0ad8b88ffba2 100644
+--- a/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java
++++ b/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java
+@@ -63,7 +63,6 @@ import android.os.IBinder;
+ import android.os.IRemoteCallback;
+ import android.os.Looper;
+ import android.os.PatternMatcher;
+-import android.os.PowerManager;
+ import android.os.RemoteException;
+ import android.os.SystemClock;
+ import android.os.Trace;
+@@ -115,6 +114,7 @@ import com.android.systemui.scene.domain.interactor.SceneInteractor;
+ import com.android.systemui.scene.shared.flag.SceneContainerFlag;
+ import com.android.systemui.settings.DisplayTracker;
+ import com.android.systemui.settings.UserTracker;
++import com.android.systemui.shade.ShadeController;
+ import com.android.systemui.shade.ShadeViewController;
+ import com.android.systemui.shade.display.StatusBarTouchShadeDisplayPolicy;
+ import com.android.systemui.shade.domain.interactor.ShadeInteractor;
+@@ -199,6 +199,7 @@ public class LauncherProxyService implements CallbackController<LauncherProxyLis
+     private final BroadcastDispatcher mBroadcastDispatcher;
+     private final BackAnimation mBackAnimation;
+ 
++    private final ShadeController mShadeController;
+     private final DesktopState mDesktopState;
+ 
+     private ILauncherProxy mLauncherProxy;
+@@ -529,9 +530,11 @@ public class LauncherProxyService implements CallbackController<LauncherProxyLis
+         public void onSleepEvent(MotionEvent event) {
+             verifyCallerAndClearCallingIdentity("onSleepEvent", () -> {
+                 mHandler.post(() -> {
+-                    mContext.getSystemService(PowerManager.class)
+-                            .goToSleep(event.getEventTime());
+-                    event.recycle();
++                    try {
++                        mShadeController.animateExpandShade();
++                    } finally {
++                        event.recycle();
++                    }
+                 });
+             });
+         }
+@@ -815,6 +818,7 @@ public class LauncherProxyService implements CallbackController<LauncherProxyLis
+             Optional<BackAnimation> backAnimation,
+             ProcessWrapper processWrapper,
+             DisplayRepository displayRepository,
++            ShadeController shadeController,
+             DesktopState desktopState,
+             HeadlessSystemUserMode headlessSystemUserMode
+     ) {
+@@ -860,6 +864,7 @@ public class LauncherProxyService implements CallbackController<LauncherProxyLis
+         mUnfoldTransitionProgressForwarder = unfoldTransitionProgressForwarder;
+         mBroadcastDispatcher = broadcastDispatcher;
+         mBackAnimation = backAnimation.orElse(null);
++        mShadeController = shadeController;
+         mDesktopState = desktopState;
+ 
+         if (!KeyguardWmStateRefactor.isEnabled()) {
+diff --git a/packages/SystemUI/src/com/android/systemui/battery/BatteryMeterViewController.java b/packages/SystemUI/src/com/android/systemui/battery/BatteryMeterViewController.java
+index fcf51051940c..7116a9e2a331 100644
+--- a/packages/SystemUI/src/com/android/systemui/battery/BatteryMeterViewController.java
++++ b/packages/SystemUI/src/com/android/systemui/battery/BatteryMeterViewController.java
+@@ -34,6 +34,7 @@ import com.android.systemui.dagger.SysUISingleton;
+ import com.android.systemui.dagger.qualifiers.Main;
+ import com.android.systemui.flags.FeatureFlags;
+ import com.android.systemui.flags.Flags;
++import com.android.systemui.res.R;
+ import com.android.systemui.settings.UserTracker;
+ import com.android.systemui.statusbar.phone.StatusBarLocation;
+ import com.android.systemui.statusbar.phone.ui.StatusBarIconController;
+@@ -162,6 +163,9 @@ public class BatteryMeterViewController extends ViewController<BatteryMeterView>
+ 
+     @Override
+     protected void onViewAttached() {
++        if (!getResources().getBoolean(R.bool.config_showBatteryUi)) {
++            mView.setVisibility(View.GONE);
++        }
+         mConfigurationController.addCallback(mConfigurationListener);
+         subscribeForTunerUpdates();
+         mBatteryController.addCallback(mBatteryStateChangeCallback);
+diff --git a/packages/SystemUI/src/com/android/systemui/keyguard/domain/interactor/KeyguardTouchHandlingInteractor.kt b/packages/SystemUI/src/com/android/systemui/keyguard/domain/interactor/KeyguardTouchHandlingInteractor.kt
+index 1228cb6e123b..69d1708549bc 100644
+--- a/packages/SystemUI/src/com/android/systemui/keyguard/domain/interactor/KeyguardTouchHandlingInteractor.kt
++++ b/packages/SystemUI/src/com/android/systemui/keyguard/domain/interactor/KeyguardTouchHandlingInteractor.kt
+@@ -21,7 +21,6 @@ import android.content.Context
+ import android.content.Intent
+ import android.content.IntentFilter
+ import android.graphics.Rect
+-import android.os.PowerManager
+ import android.provider.Settings
+ import android.view.accessibility.AccessibilityManager
+ import androidx.annotation.VisibleForTesting
+@@ -42,11 +41,11 @@ import com.android.systemui.res.R
+ import com.android.systemui.scene.shared.flag.SceneContainerFlag
+ import com.android.systemui.securelockdevice.domain.interactor.SecureLockDeviceInteractor
+ import com.android.systemui.shade.PulsingGestureListener
++import com.android.systemui.shade.ShadeController
+ import com.android.systemui.shade.ShadeDisplayAware
+ import com.android.systemui.shared.settings.data.repository.SecureSettingsRepository
+ import com.android.systemui.statusbar.phone.StatusBarKeyguardViewManager
+ import com.android.systemui.statusbar.policy.AccessibilityManagerWrapper
+-import com.android.systemui.util.time.SystemClock
+ import dagger.Lazy
+ import javax.inject.Inject
+ import kotlinx.coroutines.CoroutineScope
+@@ -82,8 +81,7 @@ constructor(
+     private val deviceEntryInteractor: DeviceEntryInteractor,
+     private val powerInteractor: PowerInteractor,
+     private val secureSettingsRepository: SecureSettingsRepository,
+-    private val powerManager: PowerManager,
+-    private val systemClock: SystemClock,
++    private val shadeController: ShadeController,
+     private val pointerDeviceRepository: PointerDeviceRepository,
+     secureLockDeviceInteractor: Lazy<SecureLockDeviceInteractor>,
+ ) {
+@@ -252,7 +250,7 @@ constructor(
+     /** Notifies that the lockscreen has been double clicked. */
+     fun onDoubleClick() {
+         if (isDoubleTapHandlingEnabled.value) {
+-            powerManager.goToSleep(systemClock.uptimeMillis())
++            shadeController.animateExpandShade()
+         } else {
+             pulsingGestureListener.onDoubleTapEvent()
+         }
+diff --git a/packages/SystemUI/src/com/android/systemui/qs/QSMediaVolumeController.java b/packages/SystemUI/src/com/android/systemui/qs/QSMediaVolumeController.java
+new file mode 100644
+index 000000000000..42eb18b50abf
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/qs/QSMediaVolumeController.java
+@@ -0,0 +1,120 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.qs;
++
++import android.content.Context;
++import android.database.ContentObserver;
++import android.media.AudioManager;
++import android.os.Handler;
++import android.os.Looper;
++import android.os.UserHandle;
++import android.provider.Settings;
++
++import com.android.systemui.settings.brightness.ToggleSlider;
++
++/**
++ * Binds the QS slider UI to media stream volume.
++ */
++final class QSMediaVolumeController {
++    private final Context mContext;
++    private final AudioManager mAudioManager;
++    private final ToggleSlider mSlider;
++    private final ContentObserver mVolumeObserver;
++
++    private boolean mListening;
++    private boolean mUpdatingSlider;
++    private int mMinVolume;
++    private int mMaxVolume;
++
++    private final ToggleSlider.Listener mSliderListener;
++
++    QSMediaVolumeController(Context context, ToggleSlider slider) {
++        mContext = context;
++        mAudioManager = context.getSystemService(AudioManager.class);
++        mSlider = slider;
++        mSliderListener =
++                (tracking, value, stopTracking) -> {
++                    if (mUpdatingSlider) {
++                        return;
++                    }
++                    final int target = clamp(value + mMinVolume, mMinVolume, mMaxVolume);
++                    if (target != mAudioManager.getStreamVolume(AudioManager.STREAM_MUSIC)) {
++                        mAudioManager.setStreamVolume(
++                                AudioManager.STREAM_MUSIC,
++                                target,
++                                /* flags= */ 0);
++                    }
++                    if (stopTracking) {
++                        syncSliderWithCurrentVolume();
++                    }
++                };
++        mVolumeObserver =
++                new ContentObserver(new Handler(Looper.getMainLooper())) {
++                    @Override
++                    public void onChange(boolean selfChange) {
++                        syncSliderWithCurrentVolume();
++                    }
++                };
++        syncSliderWithCurrentVolume();
++    }
++
++    void registerCallbacks() {
++        if (mListening) {
++            return;
++        }
++        mListening = true;
++        mSlider.setOnChangedListener(mSliderListener);
++        mContext.getContentResolver()
++                .registerContentObserver(
++                        Settings.System.getUriFor(Settings.System.VOLUME_MUSIC),
++                        false,
++                        mVolumeObserver,
++                        UserHandle.USER_ALL);
++        syncSliderWithCurrentVolume();
++    }
++
++    void unregisterCallbacks() {
++        if (!mListening) {
++            return;
++        }
++        mListening = false;
++        mSlider.setOnChangedListener(null);
++        mContext.getContentResolver().unregisterContentObserver(mVolumeObserver);
++    }
++
++    void checkRestrictionAndSetEnabled() {
++        mSlider.showView();
++    }
++
++    private void syncSliderWithCurrentVolume() {
++        updateBounds();
++        final int currentVolume = mAudioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
++        mUpdatingSlider = true;
++        mSlider.setValue(clamp(currentVolume - mMinVolume, 0, mSlider.getMax()));
++        mUpdatingSlider = false;
++    }
++
++    private void updateBounds() {
++        mMinVolume = mAudioManager.getStreamMinVolume(AudioManager.STREAM_MUSIC);
++        mMaxVolume = mAudioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
++        mSlider.setMax(Math.max(0, mMaxVolume - mMinVolume));
++    }
++
++    private static int clamp(int value, int min, int max) {
++        return Math.max(min, Math.min(max, value));
++    }
++}
+diff --git a/packages/SystemUI/src/com/android/systemui/qs/QSPanelController.java b/packages/SystemUI/src/com/android/systemui/qs/QSPanelController.java
+index fddef2ed6194..40e7beac2de6 100644
+--- a/packages/SystemUI/src/com/android/systemui/qs/QSPanelController.java
++++ b/packages/SystemUI/src/com/android/systemui/qs/QSPanelController.java
+@@ -23,6 +23,7 @@ import static com.android.systemui.qs.dagger.QSScopeModule.QS_USING_MEDIA_PLAYER
+ 
+ import android.view.MotionEvent;
+ import android.view.View;
++import android.widget.SeekBar;
+ 
+ import androidx.annotation.Nullable;
+ 
+@@ -43,6 +44,7 @@ import com.android.systemui.settings.brightness.BrightnessController;
+ import com.android.systemui.settings.brightness.BrightnessMirrorHandler;
+ import com.android.systemui.settings.brightness.BrightnessSliderController;
+ import com.android.systemui.settings.brightness.MirrorController;
++import com.android.systemui.settings.brightness.ToggleSeekBar;
+ import com.android.systemui.shade.ShadeDisplayAware;
+ import com.android.systemui.statusbar.phone.StatusBarKeyguardViewManager;
+ import com.android.systemui.statusbar.policy.ConfigurationController;
+@@ -61,7 +63,6 @@ import javax.inject.Provider;
+  */
+ @QSScope
+ public class QSPanelController extends QSPanelControllerBase<QSPanel> {
+-
+     private final TunerService mTunerService;
+     private final QSCustomizerController mQsCustomizerController;
+     private final QSTileRevealController.Factory mQsTileRevealControllerFactory;
+@@ -69,6 +70,7 @@ public class QSPanelController extends QSPanelControllerBase<QSPanel> {
+     private BrightnessController mBrightnessController;
+     private BrightnessSliderController mBrightnessSliderController;
+     private BrightnessMirrorHandler mBrightnessMirrorHandler;
++    private QSMediaVolumeController mMediaVolumeController;
+     private final StatusBarKeyguardViewManager mStatusBarKeyguardViewManager;
+     private boolean mListening;
+ 
+@@ -77,6 +79,7 @@ public class QSPanelController extends QSPanelControllerBase<QSPanel> {
+     private int mLastDensity;
+     private final BrightnessSliderController.Factory mBrightnessSliderControllerFactory;
+     private final BrightnessController.Factory mBrightnessControllerFactory;
++    private final boolean mUseMediaVolumeSlider;
+ 
+     protected final MediaCarouselInteractor mMediaCarouselInteractor;
+ 
+@@ -114,12 +117,22 @@ public class QSPanelController extends QSPanelControllerBase<QSPanel> {
+         mFalsingManager = falsingManager;
+         mBrightnessSliderControllerFactory = brightnessSliderFactory;
+         mBrightnessControllerFactory = brightnessControllerFactory;
++        mUseMediaVolumeSlider = getContext().getResources().getBoolean(
++                com.android.systemui.res.R.bool.config_useQsMediaVolumeSlider);
+ 
+         mBrightnessSliderController = brightnessSliderFactory.create(getContext(), mView);
++        if (mUseMediaVolumeSlider) {
++            configureSliderForMediaVolume(mBrightnessSliderController.getRootView());
++        }
+         mView.setBrightnessView(mBrightnessSliderController.getRootView());
+ 
+-        mBrightnessController = brightnessControllerFactory.create(mBrightnessSliderController);
+-        mBrightnessMirrorHandler = new BrightnessMirrorHandler(mBrightnessController);
++        if (mUseMediaVolumeSlider) {
++            mMediaVolumeController =
++                    new QSMediaVolumeController(getContext(), mBrightnessSliderController);
++        } else {
++            mBrightnessController = brightnessControllerFactory.create(mBrightnessSliderController);
++            mBrightnessMirrorHandler = new BrightnessMirrorHandler(mBrightnessController);
++        }
+         mStatusBarKeyguardViewManager = statusBarKeyguardViewManager;
+         mLastDensity = view.getResources().getConfiguration().densityDpi;
+         mSceneContainerEnabled = SceneContainerFlag.isEnabled();
+@@ -154,7 +167,9 @@ public class QSPanelController extends QSPanelControllerBase<QSPanel> {
+             refreshAllTiles();
+         }
+         switchTileLayout(true);
+-        mBrightnessMirrorHandler.onQsPanelAttached();
++        if (!mUseMediaVolumeSlider) {
++            mBrightnessMirrorHandler.onQsPanelAttached();
++        }
+         PagedTileLayout pagedTileLayout= ((PagedTileLayout) mView.getOrCreateTileLayout());
+         pagedTileLayout.setOnTouchListener(mTileLayoutTouchListener);
+         maybeReinflateBrightnessSlider();
+@@ -169,7 +184,9 @@ public class QSPanelController extends QSPanelControllerBase<QSPanel> {
+     @Override
+     protected void onViewDetached() {
+         mTunerService.removeTunable(mView);
+-        mBrightnessMirrorHandler.onQsPanelDettached();
++        if (!mUseMediaVolumeSlider) {
++            mBrightnessMirrorHandler.onQsPanelDettached();
++        }
+         super.onViewDetached();
+     }
+ 
+@@ -191,15 +208,31 @@ public class QSPanelController extends QSPanelControllerBase<QSPanel> {
+     }
+ 
+     private void reinflateBrightnessSlider() {
+-        mBrightnessController.unregisterCallbacks();
++        if (mUseMediaVolumeSlider) {
++            mMediaVolumeController.unregisterCallbacks();
++        } else {
++            mBrightnessController.unregisterCallbacks();
++        }
+         mBrightnessSliderController =
+                 mBrightnessSliderControllerFactory.create(getContext(), mView);
++        if (mUseMediaVolumeSlider) {
++            configureSliderForMediaVolume(mBrightnessSliderController.getRootView());
++        }
+         mView.setBrightnessView(mBrightnessSliderController.getRootView());
+-        mBrightnessController = mBrightnessControllerFactory.create(mBrightnessSliderController);
+-        mBrightnessMirrorHandler.setBrightnessController(mBrightnessController);
++        if (mUseMediaVolumeSlider) {
++            mMediaVolumeController =
++                    new QSMediaVolumeController(getContext(), mBrightnessSliderController);
++        } else {
++            mBrightnessController = mBrightnessControllerFactory.create(mBrightnessSliderController);
++            mBrightnessMirrorHandler.setBrightnessController(mBrightnessController);
++        }
+         mBrightnessSliderController.init();
+         if (mListening) {
+-            mBrightnessController.registerCallbacks();
++            if (mUseMediaVolumeSlider) {
++                mMediaVolumeController.registerCallbacks();
++            } else {
++                mBrightnessController.registerCallbacks();
++            }
+         }
+     }
+ 
+@@ -225,15 +258,25 @@ public class QSPanelController extends QSPanelControllerBase<QSPanel> {
+             // Set the listening as soon as the QS fragment starts listening regardless of the
+             //expansion, so it will update the current brightness before the slider is visible.
+             if (listening) {
+-                mBrightnessController.registerCallbacks();
++                if (mUseMediaVolumeSlider) {
++                    mMediaVolumeController.registerCallbacks();
++                } else {
++                    mBrightnessController.registerCallbacks();
++                }
+             } else {
+-                mBrightnessController.unregisterCallbacks();
++                if (mUseMediaVolumeSlider) {
++                    mMediaVolumeController.unregisterCallbacks();
++                } else {
++                    mBrightnessController.unregisterCallbacks();
++                }
+             }
+         }
+     }
+ 
+     public void setBrightnessMirror(@Nullable MirrorController brightnessMirrorController) {
+-        mBrightnessMirrorHandler.setController(brightnessMirrorController);
++        if (!mUseMediaVolumeSlider) {
++            mBrightnessMirrorHandler.setController(brightnessMirrorController);
++        }
+     }
+ 
+     /** Update appearance of QSPanel. */
+@@ -243,10 +286,33 @@ public class QSPanelController extends QSPanelControllerBase<QSPanel> {
+ 
+     /** Update state of all tiles. */
+     public void refreshAllTiles() {
+-        mBrightnessController.checkRestrictionAndSetEnabled();
++        if (mUseMediaVolumeSlider) {
++            mMediaVolumeController.checkRestrictionAndSetEnabled();
++        } else {
++            mBrightnessController.checkRestrictionAndSetEnabled();
++        }
+         super.refreshAllTiles();
+     }
+ 
++    private void configureSliderForMediaVolume(View sliderRoot) {
++        sliderRoot.setContentDescription(
++                getContext().getString(com.android.systemui.res.R.string.stream_music));
++        SeekBar seekBar = sliderRoot.findViewById(com.android.systemui.res.R.id.slider);
++        if (seekBar != null) {
++            seekBar.setProgressDrawable(
++                    getContext()
++                            .getDrawable(
++                                    com.android.systemui.res.R.drawable
++                                            .qs_media_volume_progress_drawable));
++            if (seekBar instanceof ToggleSeekBar) {
++                ((ToggleSeekBar) seekBar)
++                        .setAccessibilityLabel(
++                                getContext()
++                                        .getString(com.android.systemui.res.R.string.stream_music));
++            }
++        }
++    }
++
+     /** Start customizing the Quick Settings. */
+     public void showEdit(View view) {
+         view.post(() -> {
+@@ -308,4 +374,3 @@ public class QSPanelController extends QSPanelControllerBase<QSPanel> {
+         return mView.getBottom();
+     }
+ }
+-
+diff --git a/packages/SystemUI/src/com/android/systemui/qs/composefragment/QSFragmentCompose.kt b/packages/SystemUI/src/com/android/systemui/qs/composefragment/QSFragmentCompose.kt
+index 84ee87b427be..d2bb3e0f3c1e 100644
+--- a/packages/SystemUI/src/com/android/systemui/qs/composefragment/QSFragmentCompose.kt
++++ b/packages/SystemUI/src/com/android/systemui/qs/composefragment/QSFragmentCompose.kt
+@@ -978,8 +978,7 @@ constructor(
+         ) {
+             AlwaysDarkMode {
+                 BrightnessSliderContainer(
+-                    viewModel =
+-                        viewModel.containerViewModel.brightnessSliderViewModel,
++                    viewModel = viewModel.containerViewModel.brightnessSliderViewModel,
+                     containerColors =
+                         ContainerColors(
+                             Color.Transparent,
+diff --git a/packages/SystemUI/src/com/android/systemui/shade/NotificationPanelViewController.java b/packages/SystemUI/src/com/android/systemui/shade/NotificationPanelViewController.java
+index 7f4965936a0a..e28367856235 100644
+--- a/packages/SystemUI/src/com/android/systemui/shade/NotificationPanelViewController.java
++++ b/packages/SystemUI/src/com/android/systemui/shade/NotificationPanelViewController.java
+@@ -66,7 +66,6 @@ import android.graphics.Shader;
+ import android.os.Build;
+ import android.os.Bundle;
+ import android.os.Handler;
+-import android.os.PowerManager;
+ import android.os.Trace;
+ import android.util.IndentingPrintWriter;
+ import android.util.Log;
+@@ -295,7 +294,7 @@ public final class NotificationPanelViewController implements
+     private final ShadeHeadsUpChangedListener mOnHeadsUpChangedListener =
+             new ShadeHeadsUpChangedListener();
+     private final ConfigurationListener mConfigurationListener = new ConfigurationListener();
+-    private final ContentObserver mDoubleTapToSleepObserver;
++    private final ContentObserver mDoubleTapNotificationAreaObserver;
+     private final StatusBarStateListener mStatusBarStateListener = new StatusBarStateListener();
+     private final NotificationPanelView mView;
+     private final VibratorHelper mVibratorHelper;
+@@ -304,7 +303,6 @@ public final class NotificationPanelViewController implements
+     private final ConfigurationController mConfigurationController;
+     private final Provider<FlingAnimationUtils.Builder> mFlingAnimationUtilsBuilder;
+     private final NotificationStackScrollLayoutController mNotificationStackScrollLayoutController;
+-    private final PowerManager mPowerManager;
+     private final AccessibilityManager mAccessibilityManager;
+     private final NotificationWakeUpCoordinator mWakeUpCoordinator;
+     private final PulseExpansionHandler mPulseExpansionHandler;
+@@ -478,11 +476,12 @@ public final class NotificationPanelViewController implements
+     private final SysUiState mSysUiState;
+     private final SysUIStateDisplaysInteractor mSysUIStateDisplaysInteractor;
+     private final Lazy<ShadeDisplaysRepository> mShadeDisplaysRepository;
++    private final ShadeController mShadeController;
+     private final NotificationShadeDepthController mDepthController;
+     private final NavigationBarController mNavigationBarController;
+     private final int mDisplayId;
+-    private boolean mDoubleTapToSleepEnabled;
+-    private GestureDetector mDoubleTapGesture;
++    private boolean mDoubleTapNotificationAreaEnabled;
++    private GestureDetector mExpandNotificationAreaGesture;
+ 
+     private final KeyguardIndicationController mKeyguardIndicationController;
+     private int mHeadsUpInset;
+@@ -603,7 +602,6 @@ public final class NotificationPanelViewController implements
+             CommandQueue commandQueue,
+             VibratorHelper vibratorHelper,
+             LatencyTracker latencyTracker,
+-            PowerManager powerManager,
+             AccessibilityManager accessibilityManager,
+             @DisplayId int displayId,
+             KeyguardUpdateMonitor keyguardUpdateMonitor,
+@@ -666,6 +664,7 @@ public final class NotificationPanelViewController implements
+             BlurConfig blurConfig,
+             Lazy<ShadeDisplaysRepository> shadeDisplaysRepository,
+             WindowRootViewBlurInteractor windowRootViewBlurInteractor,
++            ShadeController shadeController,
+             Context context) {
+         mBlurConfig = blurConfig;
+         mWindowRootViewBlurInteractor = windowRootViewBlurInteractor;
+@@ -753,6 +752,7 @@ public final class NotificationPanelViewController implements
+         mKeyguardStatusBarViewComponentFactory = keyguardStatusBarViewComponentFactory;
+         mDepthController = notificationShadeDepthController;
+         mContentResolver = contentResolver;
++        mShadeController = shadeController;
+         mFragmentService = fragmentService;
+         mStatusBarService = statusBarService;
+         mSplitShadeStateController = splitShadeStateController;
+@@ -762,7 +762,6 @@ public final class NotificationPanelViewController implements
+         mShadeHeaderController = shadeHeaderController;
+         mAnimateBack = predictiveBackAnimateShade();
+         mFalsingCollector = falsingCollector;
+-        mPowerManager = powerManager;
+         mWakeUpCoordinator = coordinator;
+         mMainDispatcher = mainDispatcher;
+         mAccessibilityManager = accessibilityManager;
+@@ -788,20 +787,17 @@ public final class NotificationPanelViewController implements
+         quickSettingsController.setFlingQsWithoutClickListener(this::onFlingQsWithoutClick);
+         quickSettingsController.setExpansionHeightSetToMaxListener(this::onExpansionHeightSetToMax);
+         shadeExpansionStateManager.addStateListener(this::onPanelStateChanged);
+-        mDoubleTapGesture = new GestureDetector(context,
++        mExpandNotificationAreaGesture = new GestureDetector(context,
+                 new GestureDetector.SimpleOnGestureListener() {
+             @Override
+             public boolean onDoubleTap(MotionEvent e) {
+-                if (mPowerManager != null) {
+-                    mPowerManager.goToSleep(e.getEventTime());
+-                }
+-                return true;
++                return expandNotificationArea();
+             }
+         });
+-        mDoubleTapToSleepObserver = new ContentObserver(handler) {
++        mDoubleTapNotificationAreaObserver = new ContentObserver(handler) {
+             @Override
+             public void onChange(boolean selfChange) {
+-                mDoubleTapToSleepEnabled = LineageSettings.System.getInt(mContentResolver,
++                mDoubleTapNotificationAreaEnabled = LineageSettings.System.getInt(mContentResolver,
+                         LineageSettings.System.DOUBLE_TAP_SLEEP_GESTURE,
+                         mResources.getBoolean(org.lineageos.platform.internal.R.bool.
+                                 config_dt2sGestureEnabledByDefault) ? 1 : 0) != 0;
+@@ -2783,6 +2779,11 @@ public final class NotificationPanelViewController implements
+         return mTouchHandler;
+     }
+ 
++    private boolean expandNotificationArea() {
++        mShadeController.animateExpandShade();
++        return true;
++    }
++
+     @Override
+     public void updateSystemUiStateFlags() {
+         if (SysUiState.DEBUG) {
+@@ -3716,8 +3717,8 @@ public final class NotificationPanelViewController implements
+             mConfigurationController.addCallback(mConfigurationListener);
+             mContentResolver.registerContentObserver(LineageSettings.System.getUriFor(
+                     LineageSettings.System.DOUBLE_TAP_SLEEP_GESTURE), false,
+-                    mDoubleTapToSleepObserver);
+-            mDoubleTapToSleepObserver.onChange(true);
++                    mDoubleTapNotificationAreaObserver);
++            mDoubleTapNotificationAreaObserver.onChange(true);
+             // Theme might have changed between inflating this view and attaching it to the
+             // window, so
+             // force a call to onThemeChanged
+@@ -3728,7 +3729,7 @@ public final class NotificationPanelViewController implements
+ 
+         @Override
+         public void onViewDetachedFromWindow(View v) {
+-            mContentResolver.unregisterContentObserver(mDoubleTapToSleepObserver);
++            mContentResolver.unregisterContentObserver(mDoubleTapNotificationAreaObserver);
+             mFragmentService.getFragmentHostManager(mView)
+                     .removeTagListener(QS.TAG, mQsController.getQsFragmentListener());
+             mStatusBarStateController.removeCallback(mStatusBarStateListener);
+@@ -4060,8 +4061,8 @@ public final class NotificationPanelViewController implements
+                 return false;
+             }
+ 
+-            if (mDoubleTapToSleepEnabled && !mPulsing && !mDozing) {
+-                mDoubleTapGesture.onTouchEvent(event);
++            if (mDoubleTapNotificationAreaEnabled && !mPulsing && !mDozing) {
++                mExpandNotificationAreaGesture.onTouchEvent(event);
+             }
+ 
+             // Make sure the next touch won't the blocked after the current ends.
+diff --git a/packages/SystemUI/src/com/android/systemui/shade/QQSGestureListener.kt b/packages/SystemUI/src/com/android/systemui/shade/QQSGestureListener.kt
+index 1d241dec4f71..30faec5e2b83 100644
+--- a/packages/SystemUI/src/com/android/systemui/shade/QQSGestureListener.kt
++++ b/packages/SystemUI/src/com/android/systemui/shade/QQSGestureListener.kt
+@@ -18,7 +18,6 @@ package com.android.systemui.shade
+ 
+ import android.content.Context
+ import android.database.ContentObserver
+-import android.os.PowerManager
+ import android.view.GestureDetector
+ import android.view.MotionEvent
+ import com.android.systemui.dagger.SysUISingleton
+@@ -33,48 +32,46 @@ import javax.inject.Inject
+ class QQSGestureListener @Inject constructor(
+         private val context: Context,
+         private val falsingManager: FalsingManager,
+-        private val powerManager: PowerManager,
+         private val statusBarStateController: StatusBarStateController,
+         private val centralSurfaces: CentralSurfaces,
++        private val shadeController: ShadeController,
+ ) : GestureDetector.SimpleOnGestureListener() {
+ 
+-    private var doubleTapToSleepEnabled = false
+-    private val quickQsOffsetHeight: Int
++    private var doubleTapNotificationAreaEnabled = false
++    private val quickQsOffsetHeight: Int =
++            context.resources.getDimensionPixelSize(
++                    com.android.internal.R.dimen.quick_qs_offset_height)
+ 
+     init {
+         val contentObserver = object : ContentObserver(null) {
+             override fun onChange(selfChange: Boolean) {
+-                doubleTapToSleepEnabled = LineageSettings.System.getInt(
+-                        context.contentResolver, LineageSettings.System.DOUBLE_TAP_SLEEP_GESTURE,
++                doubleTapNotificationAreaEnabled = LineageSettings.System.getInt(
++                        context.contentResolver,
++                        LineageSettings.System.DOUBLE_TAP_SLEEP_GESTURE,
+                         if (context.resources.getBoolean(org.lineageos.platform.internal.
+                                 R.bool.config_dt2sGestureEnabledByDefault)) 1 else 0) != 0
+             }
+         }
+         context.contentResolver.registerContentObserver(
+                 LineageSettings.System.getUriFor(LineageSettings.System.DOUBLE_TAP_SLEEP_GESTURE),
+-                false, contentObserver)
++                false,
++                contentObserver)
+         contentObserver.onChange(true)
+-
+-        quickQsOffsetHeight = context.resources.getDimensionPixelSize(
+-                com.android.internal.R.dimen.quick_qs_offset_height)
+     }
+ 
+     override fun onDoubleTapEvent(e: MotionEvent): Boolean {
+-        // Go to sleep when double tapping the QQS status bar
+-        // or lockscreen (keyguard showing, but not bouncer)
+         if (
+             e.actionMasked == MotionEvent.ACTION_UP &&
+                 !statusBarStateController.isDozing &&
+-                doubleTapToSleepEnabled &&
++                doubleTapNotificationAreaEnabled &&
+                 (e.getY() < quickQsOffsetHeight ||
+                     statusBarStateController.getState() == StatusBarState.KEYGUARD &&
+                         !centralSurfaces.isBouncerShowing()) &&
+                 !falsingManager.isFalseDoubleTap
+         ) {
+-            powerManager.goToSleep(e.getEventTime())
++            shadeController.animateExpandShade()
+             return true
+         }
+         return false
+     }
+-
+ }
+diff --git a/packages/SystemUI/src/com/android/systemui/shade/ShadeHeaderController.kt b/packages/SystemUI/src/com/android/systemui/shade/ShadeHeaderController.kt
+index 5ab6a267de20..769271e3a619 100644
+--- a/packages/SystemUI/src/com/android/systemui/shade/ShadeHeaderController.kt
++++ b/packages/SystemUI/src/com/android/systemui/shade/ShadeHeaderController.kt
+@@ -380,24 +380,26 @@ constructor(
+             // battery settings same as in QS icons
+             batteryMeterViewController.ignoreTunerUpdates()
+ 
+-            batteryIcon.isVisible = true
+-            batteryIcon.updateColors(
+-                fgColor, /* foreground */
+-                bgColor, /* background */
+-                fgColor, /* single tone (current default) */
+-            )
++            batteryIcon.isVisible = header.resources.getBoolean(R.bool.config_showBatteryUi)
++            if (batteryIcon.isVisible) {
++                batteryIcon.updateColors(
++                    fgColor, /* foreground */
++                    bgColor, /* background */
++                    fgColor, /* single tone (current default) */
++                )
++            }
+         } else {
+             // Configure the correct margins for the system icon container
+             val statusIcons = mView.requireViewById<AlphaOptimizedLinearLayout>(R.id.statusIcons)
+             SystemStatusIconsLayoutHelper.configurePaddingForNewStatusBarIcons(statusIcons)
++            if (header.resources.getBoolean(R.bool.config_showBatteryUi)) {
++                val batteryComposeView = createBatteryComposeView()
++                mView.requireViewById<ViewGroup>(R.id.hover_system_icons_container).apply {
++                    addView(batteryComposeView, -1)
++                }
+ 
+-            // Configure the compose battery view
+-            val batteryComposeView = createBatteryComposeView()
+-            mView.requireViewById<ViewGroup>(R.id.hover_system_icons_container).apply {
+-                addView(batteryComposeView, -1)
++                batteryComposeView.setOnClickListener { launchBatteryActivity() }
+             }
+-
+-            batteryComposeView.setOnClickListener { launchBatteryActivity() }
+         }
+ 
+         carrierIconSlots =
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/phone/KeyguardStatusBarViewController.java b/packages/SystemUI/src/com/android/systemui/statusbar/phone/KeyguardStatusBarViewController.java
+index b3bf60b3c6cc..25e2377c91a9 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/phone/KeyguardStatusBarViewController.java
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/phone/KeyguardStatusBarViewController.java
+@@ -533,10 +533,12 @@ public class KeyguardStatusBarViewController extends ViewController<KeyguardStat
+             collectFlow(mView, mKeyguardInteractor.primaryBouncerShowing, x -> updateViewState());
+         }
+         if (NewStatusBarIcons.isEnabled()) {
+-            if (!SceneContainerFlag.isEnabled()) {
+-                mBatteryComposeView = createAndBindComposeBattery();
++            if (mContext.getResources().getBoolean(R.bool.config_showBatteryUi)) {
++                if (!SceneContainerFlag.isEnabled()) {
++                    mBatteryComposeView = createAndBindComposeBattery();
++                }
++                mSystemIconsContainer.addView(mBatteryComposeView, -1);
+             }
+-            mSystemIconsContainer.addView(mBatteryComposeView, -1);
+             // Set the margins for the system icons appropriately
+             AlphaOptimizedLinearLayout systemIcons =
+                     mSystemIconsContainer.findViewById(R.id.statusIcons);
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/battery/ui/binder/UnifiedBatteryViewBinder.kt b/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/battery/ui/binder/UnifiedBatteryViewBinder.kt
+index 59890d9129b5..2081677f1a3a 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/battery/ui/binder/UnifiedBatteryViewBinder.kt
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/battery/ui/binder/UnifiedBatteryViewBinder.kt
+@@ -31,6 +31,7 @@ import com.android.compose.theme.PlatformTheme
+ import com.android.systemui.compose.modifiers.sysuiResTag
+ import com.android.systemui.lifecycle.rememberViewModel
+ import com.android.systemui.lifecycle.repeatWhenAttached
++import com.android.systemui.res.R
+ import com.android.systemui.scene.shared.flag.SceneContainerFlag
+ import com.android.systemui.statusbar.phone.domain.interactor.IsAreaDark
+ import com.android.systemui.statusbar.pipeline.battery.ui.composable.BatteryWithPercent
+@@ -49,7 +50,7 @@ object UnifiedBatteryViewBinder {
+         view.repeatWhenAttached {
+             repeatOnLifecycle(Lifecycle.State.STARTED) {
+                 view.apply {
+-                    isVisible = true
++                    isVisible = resources.getBoolean(R.bool.config_showBatteryUi)
+                     setViewCompositionStrategy(
+                         if (SceneContainerFlag.isEnabled) {
+                             ViewCompositionStrategy.Default
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt b/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt
+index 23e715dccde8..3c178dc8d74e 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt
+@@ -553,6 +553,8 @@ private fun addBatteryComposable(
+     phoneStatusBarView: PhoneStatusBarView,
+     statusBarViewModel: HomeStatusBarViewModel,
+ ) {
++    if (!phoneStatusBarView.resources.getBoolean(R.bool.config_showBatteryUi)) return
++
+     val batteryComposeView =
+         ComposeView(phoneStatusBarView.context).apply {
+             setContent {
+@@ -574,7 +576,10 @@ private fun addBatteryComposable(
+                         }
+                     BatteryWithPercent(
+                         modifier =
+-                            Modifier.sysUiResTagContainer().wrapContentWidth(),
++                            Modifier
++                                .sysUiResTagContainer()
++                                .height(height)
++                                .wrapContentWidth(),
+                         viewModel = viewModel,
+                         isDarkProvider = { statusBarViewModel.areaDark },
+                         showPercent = viewModel.isBatteryPercentSettingEnabled,
+diff --git a/packages/SystemUI/tests/src/com/android/systemui/LauncherProxyServiceTest.kt b/packages/SystemUI/tests/src/com/android/systemui/LauncherProxyServiceTest.kt
+index 089f79d2a7db..33fbd13f448e 100644
+--- a/packages/SystemUI/tests/src/com/android/systemui/LauncherProxyServiceTest.kt
++++ b/packages/SystemUI/tests/src/com/android/systemui/LauncherProxyServiceTest.kt
+@@ -54,6 +54,7 @@ import com.android.systemui.recents.ScreenPinningRequest
+ import com.android.systemui.scene.domain.interactor.SceneInteractor
+ import com.android.systemui.settings.FakeDisplayTracker
+ import com.android.systemui.settings.UserTracker
++import com.android.systemui.shade.ShadeController
+ import com.android.systemui.shade.ShadeViewController
+ import com.android.systemui.shade.display.StatusBarTouchShadeDisplayPolicy
+ import com.android.systemui.shade.domain.interactor.shadeInteractor
+@@ -131,6 +132,7 @@ class LauncherProxyServiceTest : SysuiTestCase() {
+     @Mock private lateinit var commandQueue: CommandQueue
+     @Mock private lateinit var shellInterface: ShellInterface
+     @Mock private lateinit var navBarController: NavigationBarController
++    @Mock private lateinit var shadeController: ShadeController
+     @Mock private lateinit var shadeViewController: ShadeViewController
+     @Mock private lateinit var sceneInteractor: SceneInteractor
+     @Mock private lateinit var screenPinningRequest: ScreenPinningRequest
+@@ -496,6 +498,7 @@ class LauncherProxyServiceTest : SysuiTestCase() {
+             backAnimation,
+             processWrapper,
+             kosmos.displayRepository,
++            shadeController,
+             desktopState,
+             fakeHeadlessSystemUserMode,
+         )
+diff --git a/packages/SystemUI/tests/utils/src/com/android/systemui/keyguard/domain/interactor/KeyguardLongPressInteractorKosmos.kt b/packages/SystemUI/tests/utils/src/com/android/systemui/keyguard/domain/interactor/KeyguardLongPressInteractorKosmos.kt
+index b4df2bab6852..bba2dd6a3fb3 100644
+--- a/packages/SystemUI/tests/utils/src/com/android/systemui/keyguard/domain/interactor/KeyguardLongPressInteractorKosmos.kt
++++ b/packages/SystemUI/tests/utils/src/com/android/systemui/keyguard/domain/interactor/KeyguardLongPressInteractorKosmos.kt
+@@ -17,7 +17,6 @@
+ package com.android.systemui.keyguard.domain.interactor
+ 
+ import android.content.applicationContext
+-import android.os.powerManager
+ import android.view.accessibility.accessibilityManagerWrapper
+ import com.android.internal.logging.uiEventLogger
+ import com.android.systemui.broadcast.broadcastDispatcher
+@@ -29,10 +28,10 @@ import com.android.systemui.kosmos.Kosmos
+ import com.android.systemui.kosmos.applicationCoroutineScope
+ import com.android.systemui.power.domain.interactor.powerInteractor
+ import com.android.systemui.securelockdevice.domain.interactor.secureLockDeviceInteractor
++import com.android.systemui.shade.shadeController
+ import com.android.systemui.shade.pulsingGestureListener
+ import com.android.systemui.statusbar.phone.statusBarKeyguardViewManager
+ import com.android.systemui.util.settings.data.repository.userAwareSecureSettingsRepository
+-import com.android.systemui.util.time.fakeSystemClock
+ 
+ val Kosmos.keyguardTouchHandlingInteractor by
+     Kosmos.Fixture {
+@@ -50,8 +49,7 @@ val Kosmos.keyguardTouchHandlingInteractor by
+             powerInteractor = powerInteractor,
+             deviceEntryInteractor = deviceEntryInteractor,
+             secureSettingsRepository = userAwareSecureSettingsRepository,
+-            powerManager = powerManager,
+-            systemClock = fakeSystemClock,
++            shadeController = shadeController,
+             pointerDeviceRepository = pointerDeviceRepository,
+             secureLockDeviceInteractor = { secureLockDeviceInteractor },
+         )
+diff --git a/services/core/java/com/android/server/pm/ComputerEngine.java b/services/core/java/com/android/server/pm/ComputerEngine.java
+index 1cc02de121f8..4777c0b94277 100644
+--- a/services/core/java/com/android/server/pm/ComputerEngine.java
++++ b/services/core/java/com/android/server/pm/ComputerEngine.java
+@@ -1526,6 +1526,25 @@ public class ComputerEngine implements Computer {
+         return Optional.of(fakeSignature);
+     }
+ 
++    private SigningDetails getEffectiveSigningDetails(AndroidPackage p) {
++        Optional<Signature> fakeSignature = generateFakeSignature(p);
++        if (!fakeSignature.isPresent()) {
++            return p.getSigningDetails();
++        }
++        Signature[] sigs = new Signature[]{fakeSignature.get()};
++        try {
++            return new SigningDetails(
++                    sigs,
++                    SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
++                    SigningDetails.toSigningKeys(sigs),
++                    null
++            );
++        } catch (CertificateException e) {
++            Slog.e(TAG, "Failed to build fake SigningDetails for MicroG: ", e);
++            return p.getSigningDetails();
++        }
++    }
++
+     public final PackageInfo generatePackageInfo(PackageStateInternal ps,
+             @PackageManager.PackageInfoFlagsBits long flags, int userId) {
+         if (!mUserManager.exists(userId)) return null;
+@@ -4235,7 +4254,7 @@ public class ComputerEngine implements Computer {
+                 || shouldFilterApplicationIncludingUninstalled(ps2, callingUid, userId)) {
+             return PackageManager.SIGNATURE_UNKNOWN_PACKAGE;
+         }
+-        return checkSignaturesInternal(p1.getSigningDetails(), p2.getSigningDetails());
++        return checkSignaturesInternal(getEffectiveSigningDetails(p1), getEffectiveSigningDetails(p2));
+     }
+ 
+     @Override
+diff --git a/services/core/java/com/android/server/wm/LaunchParamsUtil.java b/services/core/java/com/android/server/wm/LaunchParamsUtil.java
+index 13df10cba055..031753be0302 100644
+--- a/services/core/java/com/android/server/wm/LaunchParamsUtil.java
++++ b/services/core/java/com/android/server/wm/LaunchParamsUtil.java
+@@ -45,12 +45,12 @@ class LaunchParamsUtil {
+     private static final String TAG = TAG_WITH_CLASS_NAME ? "LaunchParamsUtil" : TAG_ATM;
+     private static final boolean DEBUG = false;
+ 
+-    // Screen size of Nexus 5x
+-    static final int DEFAULT_PORTRAIT_FREEFORM_WIDTH_DP = 412;
+-    static final int DEFAULT_PORTRAIT_FREEFORM_HEIGHT_DP = 732;
++    // Default freeform window size for desktop mode.
++    static final int DEFAULT_PORTRAIT_FREEFORM_WIDTH_DP = 600;
++    static final int DEFAULT_PORTRAIT_FREEFORM_HEIGHT_DP = 850;
+ 
+-    // One of the most common tablet sizes that are small enough to fit in most large screens.
+-    private static final int DEFAULT_LANDSCAPE_FREEFORM_WIDTH_DP = 1064;
++    // Landscape default: comfortable desktop window, roughly 16:10.
++    private static final int DEFAULT_LANDSCAPE_FREEFORM_WIDTH_DP = 960;
+     private static final int DEFAULT_LANDSCAPE_FREEFORM_HEIGHT_DP = 600;
+ 
+     private static final int DISPLAY_EDGE_OFFSET_DP = 27;

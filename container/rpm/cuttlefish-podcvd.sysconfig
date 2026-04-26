@@ -1,0 +1,2 @@
+# CIDR routed to rootless Cuttlefish container instances.
+#podcvd_cidr=192.168.80.0/24

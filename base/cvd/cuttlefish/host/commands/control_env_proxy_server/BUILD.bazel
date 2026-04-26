@@ -1,0 +1,46 @@
+load("@grpc//bazel:cc_grpc_library.bzl", "cc_grpc_library")
+load("@protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
+load("@protobuf//bazel:proto_library.bzl", "proto_library")
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+proto_library(
+    name = "control_env_proxy_server_proto",
+    srcs = ["control_env_proxy.proto"],
+    deps = ["@protobuf//:empty_proto"],
+)
+
+cc_proto_library(
+    name = "control_env_proxy_server_cc_proto",
+    deps = [":control_env_proxy_server_proto"],
+)
+
+cc_grpc_library(
+    name = "libcontrol_env_proxy_server",
+    srcs = [":control_env_proxy_server_proto"],
+    grpc_only = True,
+    deps = [
+        ":control_env_proxy_server_cc_proto",
+        "@grpc//:grpc++",
+    ],
+)
+
+cf_cc_binary(
+    name = "control_env_proxy_server",
+    srcs = [
+        "main.cpp",
+    ],
+    deps = [
+        ":libcontrol_env_proxy_server",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/libs/control_env",
+        "@gflags",
+        "@grpc",
+        "@grpc//:grpc++",
+        "@grpc//:grpc++_reflection",
+        "@jsoncpp",
+    ],
+)

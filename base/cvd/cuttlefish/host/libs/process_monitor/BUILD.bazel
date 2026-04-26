@@ -1,0 +1,28 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_library(
+    name = "process_monitor",
+    srcs = [
+        "process_monitor.cc",
+    ],
+    hdrs = [
+        "process_monitor.h",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/transport",
+        "//cuttlefish/common/libs/utils:contains",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/libs/command_util",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings",
+    ],
+)

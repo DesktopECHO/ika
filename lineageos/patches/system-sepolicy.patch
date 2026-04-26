@@ -1,0 +1,22 @@
+Patch summary:
+Add minimal desktop SELinux policy for expected VM behavior. The policy quiets
+known benign denials from optional services and legacy probes, and allows
+shell-driven display-density checks used by host-side desktop testing.
+
+This patch does not broaden app privileges for normal desktop use; it documents
+and permits only the small set of behaviors the VM is expected to perform.
+
+diff --git a/private/lineage_desktop.te b/private/lineage_desktop.te
+new file mode 100644
+index 000000000..a3500ff34
+--- /dev/null
++++ b/private/lineage_desktop.te
+@@ -0,0 +1,8 @@
++# Desktop builds intentionally keep optional stats bootstrap and legacy app probes
++# denied; avoid noisy AVCs without granting the underlying access.
++dontaudit domain statsbootstrap_service:service_manager find;
++dontaudit untrusted_app_all self:netlink_route_socket nlmsg_readpriv;
++dontaudit untrusted_app_all mnt_sdcard_file:lnk_file read;
++
++# Host-driven tests query the Cuttlefish density property through shell tools.
++get_prop(shell, qemu_sf_lcd_density_prop)

@@ -1,0 +1,372 @@
+#!/bin/sh
+#
+### BEGIN INIT INFO
+# Provides: cuttlefish-host-resources
+# Required-Start: $network $remote_fs
+# Required-Stop: $network $remote_fs
+# Default-Start: 2 3 4 5
+# Default-Stop: 0 1 6
+# Short-Description: Set up initial cuttlefish environment
+# Description: This script sets up the initial cuttlefist environment,
+#              optionally booting a default cuttlefish release.
+### END INIT INFO
+#
+# Copyright (C) 2017 The Android Open Source Project
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Make sure calls to this script get redirected to systemctl when
+# using systemd
+
+# some system may not support bridge type by default
+modprobe bridge
+
+. /lib/lsb/init-functions
+
+if [ -f /etc/default/cuttlefish-host-resources ]; then
+    . /etc/default/cuttlefish-host-resources
+fi
+
+num_cvd_accounts=${num_cvd_accounts:-10}
+wifi_bridge_interface=${bridge_interface:-cvd-wbr}
+ethernet_bridge_interface=${bridge_interface:-cvd-ebr}
+ipv4_bridge=${ipv4_bridge:-1}
+ipv6_bridge=${ipv4_bridge:-1}
+dns_servers=${dns_servers:-8.8.8.8,8.8.4.4}
+dns6_servers=${dns6_servers:-2001:4860:4860::8888,2001:4860:4860::8844}
+
+if [ -z ${bridge_interface} ]; then
+  create_bridges=1
+fi
+
+# Newer distros prefer nft, but broute is not supported, so use
+# the legacy ebtables instead
+ebtables=$(which ebtables-legacy)
+# If there's no ebtables-legacy, it's probably an older distro,
+# and ebtables should support broute directly
+ebtables=${ebtables:-ebtables}
+# Similarly for iptables
+iptables=$(which iptables-legacy)
+iptables=${iptables:-iptables}
+
+# Make sure these directories exist, since they are used multiple times
+mkdir -p /run /var/run
+
+# Start DHCP server on an interface
+# $1 = interface to bind to
+# $2 = listen address (IPv4 gateway)
+# $3 = dhcp_range ("a.b.c.d,w.x.y.z")
+# $4 = IPv6 address prefix ("a:b::")
+# $5 = IPv6 address prefix length
+start_dnsmasq() {
+    if [ -n "${4}" -a -n "${5}" ]; then
+        ipv6_args="--dhcp-range=${4},ra-stateless,${5} --enable-ra"
+    else
+        ipv6_args=""
+    fi
+    dnsmasq \
+      --port=0 \
+      --strict-order \
+      --except-interface=lo \
+      --interface="${1}" \
+      --listen-address="${2}" \
+      --bind-interfaces \
+      --dhcp-range="${3}" \
+      --dhcp-option="option:dns-server,${dns_servers}" \
+      --dhcp-option="option6:dns-server,${dns6_servers}" \
+      --conf-file="" \
+      --pid-file=/var/run/cuttlefish-dnsmasq-"${1}".pid \
+      --dhcp-leasefile=/var/run/cuttlefish-dnsmasq-"${1}".leases \
+      --dhcp-no-override \
+      ${ipv6_args}
+}
+
+# Stop DHCP server on an interface
+# $1 = interface to stop on
+stop_dnsmasq() {
+    if [ -f /var/run/cuttlefish-dnsmasq-"${1}".pid ]; then
+        kill $(cat /var/run/cuttlefish-dnsmasq-"${1}".pid)
+        rm -f /var/run/cuttlefish-dnsmasq-"${1}".pid
+        rm -f /var/run/cuttlefish-dnsmasq-"${1}".leases
+    fi
+}
+
+# Create a tap interface (with no address)
+# $1 = tap name
+create_tap() {
+    ip tuntap add dev "${1}" mode tap group cvdnetwork vnet_hdr
+    ip link set dev "${1}" up
+}
+
+# Destroy a tap interface
+# $1 = tap name
+destroy_tap() {
+    ip link set dev "${1}" down
+    ip link delete "${1}"
+}
+
+# Create a tap interface
+# The tap device will have the IP address and DHCP server running on it, and
+# it will be added to a bridge with no address (for routing).
+# $1 = tap interface name
+# $2 = ip address base ("a.b.c")
+# $3 = interface index within ip address base
+# $4 = IPv6 prefix ("a:b::")
+# $5 = IPv6 prefix length
+create_interface() {
+    tap="${1}"
+    gateway="${2}.$((4*$3 - 3))"
+    netmask="/30"
+    network="${2}.$((4*$3 - 4))${netmask}"
+    ipv6_prefix="${4}"
+    ipv6_prefix_length="${5}"
+
+    create_tap "${tap}"
+    ip addr add "${gateway}${netmask}" broadcast + dev "${tap}"
+    if [ -n "${ipv6_prefix}" -a -n "${ipv6_prefix_length}" ]; then
+        ip -6 addr add "${ipv6_prefix}1/${ipv6_prefix_length}" dev "${tap}"
+    fi
+    "${iptables}" -t nat -A POSTROUTING -s "${network}" -j MASQUERADE
+}
+
+# Destroy a tap interface
+# $1 = tap interface name
+# $2 = ip address base ("a.b.c")
+# $3 = interface index within ip address base
+# $4 = IPv6 prefix ("a:b::")
+# $5 = IPv6 prefix length
+destroy_interface() {
+    tap="${1}"
+    gateway="${2}.$((4*$3 - 3))"
+    netmask="/30"
+    network="${2}.$((4*$3 - 4))${netmask}"
+    ipv6_prefix="${4}"
+    ipv6_prefix_length="${5}"
+
+    "${iptables}" -t nat -D POSTROUTING -s "${network}" -j MASQUERADE
+    ip addr del "${gateway}${netmask}" dev "${tap}"
+    if [ -n "${ipv6_prefix}" -a -n "${ipv6_prefix_length}" ]; then
+        ip -6 addr del "${ipv6_prefix}1/${ipv6_prefix_length}" dev "${tap}"
+    fi
+    destroy_tap "${tap}"
+}
+
+# Create many tap devices on a single bridge (wifi or ethernet)
+# $1 = IPv4 address base ("a.b.c")
+# $2 = bridge interface name
+# $3 = tap base name
+# $4 = IPv6 prefix ("a:b::")
+# $5 = IPv6 prefix length
+create_bridged_interfaces() {
+    if [ "${create_bridges}" = "1" ]; then
+        ip link add name "${2}" type bridge forward_delay 0 stp_state 0
+        ip link set dev "${2}" up
+
+        echo 0 > /proc/sys/net/ipv6/conf/${2}/disable_ipv6
+        echo 0 > /proc/sys/net/ipv6/conf/${2}/addr_gen_mode
+        echo 1 > /proc/sys/net/ipv6/conf/${2}/autoconf
+    fi
+    for i in $(seq ${num_cvd_accounts}); do
+        tap="$(printf ${3}-%02d $i)"
+        create_tap "${tap}"
+        ip link set dev "${tap}" master "${2}"
+        if [ "${create_bridges}" != "1" ]; then
+            if [ "$ipv4_bridge" != "1" ]; then
+                $ebtables -t broute -A BROUTING -p ipv4 --in-if  "${tap}" -j DROP
+                $ebtables -t filter -A FORWARD  -p ipv4 --out-if "${tap}" -j DROP
+            fi
+            if [ "$ipv6_bridge" != "1" ]; then
+                $ebtables -t broute -A BROUTING -p ipv6 --in-if  "${tap}" -j DROP
+                $ebtables -t filter -A FORWARD  -p ipv6 --out-if "${tap}" -j DROP
+            fi
+        fi
+    done
+    if [ "${create_bridges}" = "1" ]; then
+        gateway="${1}.1"
+        netmask="/24"
+        network="${1}.0${netmask}"
+        dhcp_range="${1}.2,${1}.255"
+        ipv6_prefix="${4}"
+        ipv6_prefix_length="${5}"
+        ip addr add "${gateway}${netmask}" broadcast + dev "${2}"
+        if [ -n "${ipv6_prefix}" -a -n "${ipv6_prefix_length}" ]; then
+            ip -6 addr add "${ipv6_prefix}1/${ipv6_prefix_length}" dev "${2}"
+        fi
+        start_dnsmasq \
+          "${2}" "${gateway}" "${dhcp_range}" \
+          "${ipv6_prefix}" "${ipv6_prefix_length}"
+        "${iptables}" -t nat -A POSTROUTING -s "${network}" -j MASQUERADE
+    fi
+}
+
+# Destroy many tap devices and a single bridge (wifi or ethernet)
+# $1 = ip address base ("a.b.c")
+# $2 = bridge interface name
+# $3 = tap base name
+# $4 = IPv6 prefix ("a:b::")
+# $5 = IPv6 prefix length
+destroy_bridged_interfaces() {
+    if [ "${create_bridges}" = "1" ]; then
+        gateway="${1}.1"
+        netmask="/24"
+        network="${1}.0${netmask}"
+        ipv6_prefix="${4}"
+        ipv6_prefix_length="${5}"
+        "${iptables}" -t nat -D POSTROUTING -s "${network}" -j MASQUERADE
+        stop_dnsmasq "${2}"
+        if [ -n "${ipv6_prefix}" -a -n "${ipv6_prefix_length}" ]; then
+            ip -6 addr del "${ipv6_prefix}1/${ipv6_prefix_length}" dev "${2}"
+        fi
+        ip addr del "${gateway}${netmask}" dev "${2}"
+    fi
+    for i in $(seq ${num_cvd_accounts}); do
+        tap="$(printf ${3}-%02d $i)"
+        if [ "${create_bridges}" != "1" ]; then
+            if [ "$ipv4_bridge" != "1" ]; then
+                $ebtables -t filter -D FORWARD  -p ipv4 --out-if "${tap}" -j DROP
+                $ebtables -t broute -D BROUTING -p ipv4 --in-if  "${tap}" -j DROP
+            fi
+            if [ "$ipv6_bridge" != "1" ]; then
+                $ebtables -t filter -D FORWARD  -p ipv6 --out-if "${tap}" -j DROP
+                $ebtables -t broute -D BROUTING -p ipv6 --in-if  "${tap}" -j DROP
+            fi
+        fi
+        destroy_tap "${tap}"
+    done
+    if [ "${create_bridges}" = "1" ]; then
+        ip link set dev "${2}" down
+        ip link delete "${2}"
+    fi
+}
+
+start() {
+    # Enable ip forwarding
+    echo 1 > /proc/sys/net/ipv4/ip_forward
+    echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
+
+    # Ethernet
+    # 192.168.98.X for cvd-ebr and cvd-etap-XX
+    create_bridged_interfaces \
+      192.168.98 "${ethernet_bridge_interface}" cvd-etap \
+      "${ethernet_ipv6_prefix}" "${ethernet_ipv6_prefix_length}"
+
+    # Mobile Network
+    # 192.168.97.X from cvd-mtap-01 to cvd-mtap-64
+    # 192.168.93.X from cvd-mtap-65 to cvd-mtap-128
+    for i in $(seq ${num_cvd_accounts}); do
+        tap="$(printf cvd-mtap-%02d $i)"
+        if [ $i -lt 65 ]; then
+            create_interface $tap 192.168.97 $i
+        elif [ $i -lt 129 ]; then
+            create_interface $tap 192.168.93 $(($i - 64))
+        fi
+    done
+
+    # Wireless Network
+    # cvd-wbr and cvd-wtap-XX for legacy wireless network without distinguished
+    # subnet between tap interfaces, cvd-wifiap-XX with distinguished subnet for
+    # running several OpenWRT instances simultaneously.
+    # 192.168.96.X for cvd-wbr and cvd-wtap-XX
+    # 192.168.94.X from cvd-wifiap-01 to cvd-wifiap-64
+    # 192.168.95.X from cvd-wifiap-65 to cvd-wifiap-128
+    create_bridged_interfaces \
+      192.168.96 "${wifi_bridge_interface}" cvd-wtap \
+      "${wifi_ipv6_prefix}" "${wifi_ipv6_prefix_length}"
+    for i in $(seq ${num_cvd_accounts}); do
+        tap="$(printf cvd-wifiap-%02d $i)"
+        if [ $i -lt 65 ]; then
+            create_interface $tap 192.168.94 $i
+        elif [ $i -lt 129 ]; then
+            create_interface $tap 192.168.95 $(($i - 64))
+        fi
+    done
+
+    # When running inside a privileged container, set the ownership and access
+    # of these device nodes.
+    if test -f /.dockerenv; then
+        chown root:kvm /dev/kvm
+        chown root:cvdnetwork /dev/vhost-net
+        chown root:cvdnetwork /dev/vhost-vsock
+        chmod ug+rw /dev/kvm
+        chmod ug+rw /dev/vhost-net
+        chmod ug+rw /dev/vhost-vsock
+    fi
+
+    # Try to preload the Nvidia modeset kernel module.
+    /usr/bin/nvidia-modprobe --modeset || /bin/true
+}
+
+stop() {
+    # Ethernet
+    destroy_bridged_interfaces \
+      192.168.98 "${ethernet_bridge_interface}" cvd-etap \
+      "${ethernet_ipv6_prefix}" "${ethernet_ipv6_prefix_length}"
+
+    # Mobile Network
+    for i in $(seq ${num_cvd_accounts}); do
+        tap="$(printf cvd-mtap-%02d $i)"
+        if [ $i -lt 65 ]; then
+            destroy_interface $tap 192.168.97 $i
+        elif [ $i -lt 129 ]; then
+            destroy_interface $tap 192.168.93 $(($i - 64))
+        fi
+    done
+
+    # Wireless Network
+    destroy_bridged_interfaces \
+      192.168.96 "${wifi_bridge_interface}" cvd-wtap \
+      "${wifi_ipv6_prefix}" "${wifi_ipv6_prefix_length}"
+    for i in $(seq ${num_cvd_accounts}); do
+        tap="$(printf cvd-wifiap-%02d $i)"
+        if [ $i -lt 65 ]; then
+            destroy_interface $tap 192.168.94 $i
+        elif [ $i -lt 129 ]; then
+            destroy_interface $tap 192.168.95 $(($i - 64))
+        fi
+    done
+}
+
+usage() {
+    echo $0: start\|stop
+}
+
+if test $# != 1; then
+    usage
+fi
+case "$1" in
+    --help)
+        usage 0
+        ;;
+    start|stop)
+        "$1"
+        ;;
+    restart)
+        stop && start
+        ;;
+    condrestart|try-restart)
+        stop && start
+        ;;
+    reload|force-reload)
+        # Nothing to do; we reread configuration on each invocation
+        ;;
+    status)
+        rh_status
+        ;;
+    shutdown)
+        stop
+        ;;
+    *)
+        usage
+        ;;
+esac
+exit $RETVAL

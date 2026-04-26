@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<zone target="ACCEPT">
+  <short>Cuttlefish</short>
+  <description>Trusted zone for Cuttlefish Android virtual device bridge interfaces. Allows DHCP (UDP port 67) and other traffic required for guest networking on cvd-pi-ebr and cvd-pi-wbr.</description>
+  <interface name="cvd-pi-ebr"/>
+  <interface name="cvd-pi-wbr"/>
+</zone>

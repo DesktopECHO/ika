@@ -1,0 +1,23 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+package(
+    default_visibility = [
+        "@//:android_cuttlefish",
+    ],
+)
+
+py_library(
+    name = "mako",
+    srcs = glob(
+        [
+            "mako/*.py",
+            "mako/ext/*.py",
+        ],
+        exclude = [
+            "mako/ext/pygmentplugin.py",
+        ],
+    ),
+    deps = [
+        "@markupsafe",
+    ],
+)

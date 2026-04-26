@@ -1,0 +1,29 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(
+    default_visibility = ["@//:android_cuttlefish"],
+)
+
+cc_library(
+    name = "vulkan_headers",
+    hdrs = glob([
+        "include/vulkan/*.h",
+        "include/vk_video/*.h",
+    ]),
+    strip_include_prefix = "include",
+)
+
+cc_library(
+    name = "vulkan_hpp",
+    textual_hdrs = glob([
+        "include/vulkan/*.hpp",
+    ]),
+    strip_include_prefix = "include",
+)
+
+filegroup(
+    name = "vulkan_xml",
+    srcs = [
+        "share/vulkan/registry/vk.xml",
+    ],
+)

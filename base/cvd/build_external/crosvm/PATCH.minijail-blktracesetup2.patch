@@ -1,0 +1,12 @@
+diff --git a/third_party/minijail/gen_constants-inl.h b/third_party/minijail/gen_constants-inl.h
+index 936e78c..567f9bf 100644
+--- a/third_party/minijail/gen_constants-inl.h
++++ b/third_party/minijail/gen_constants-inl.h
+@@ -28,6 +28,7 @@
+  * build errors on such broken systems.
+  */
+ #undef BLKTRACESETUP
++#undef BLKTRACESETUP2
+ #undef FS_IOC_FIEMAP
+ 
+ /* The old glibc bundled with the Android host toolchain is missing some ioctl

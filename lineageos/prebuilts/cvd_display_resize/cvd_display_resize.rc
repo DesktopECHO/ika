@@ -1,0 +1,22 @@
+# LineageOS Desktop: host-window resize listener.
+#
+# Installed by common_desktop_mode_only.mk via PRODUCT_COPY_FILES into
+# /system_ext/etc/init/, which init imports automatically.
+#
+# Runs under the existing set_adb SELinux domain — set_adb.te in
+# patches/device-google-cuttlefish.patch already allows talking to
+# system_server, settings_service, and (with the small extra rule added by
+# that patch) window_service.
+
+service cvd_display_resize /system_ext/bin/cvd_display_resize.sh ${vendor.cuttlefish.display.size} ${vendor.cuttlefish.display.dpi}
+    user system
+    group system shell
+    seclabel u:r:set_adb:s0
+    oneshot
+    disabled
+
+on property:vendor.cuttlefish.display.size=*
+    start cvd_display_resize
+
+on property:vendor.cuttlefish.display.dpi=*
+    start cvd_display_resize

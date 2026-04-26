@@ -1,0 +1,159 @@
+diff --git a/disk/src/composite.rs b/disk/src/composite.rs
+index acecd85c04..3e7ec8aa58 100644
+--- a/disk/src/composite.rs
++++ b/disk/src/composite.rs
+@@ -4,6 +4,8 @@
+ 
+ use std::cmp::max;
+ use std::cmp::min;
++use std::collections::hash_map::Entry;
++use std::collections::HashMap;
+ use std::collections::HashSet;
+ use std::convert::TryInto;
+ use std::fs::File;
+@@ -133,6 +135,49 @@ impl ComponentDiskPart {
+     }
+ }
+ 
++#[derive(Clone, Debug, Eq, Hash, PartialEq)]
++struct OpenComponentDiskKey {
++    path: PathBuf,
++    is_read_only: bool,
++    is_sparse_file: bool,
++    is_overlapped: bool,
++    is_direct: bool,
++    lock: bool,
++    depth: u32,
++}
++
++fn open_component_disk(
++    key: OpenComponentDiskKey,
++    cache: &mut HashMap<OpenComponentDiskKey, Box<dyn DiskFile>>,
++) -> Result<Box<dyn DiskFile>> {
++    match cache.entry(key.clone()) {
++        Entry::Occupied(entry) => match entry.get().try_clone() {
++            Ok(disk) => Ok(disk),
++            Err(_) => open_component_disk_uncached(key),
++        },
++        Entry::Vacant(entry) => {
++            let disk = open_component_disk_uncached(key)?;
++            if let Ok(cloned_disk) = disk.try_clone() {
++                entry.insert(cloned_disk);
++            }
++            Ok(disk)
++        }
++    }
++}
++
++fn open_component_disk_uncached(key: OpenComponentDiskKey) -> Result<Box<dyn DiskFile>> {
++    open_disk_file(DiskFileParams {
++        path: key.path,
++        is_read_only: key.is_read_only,
++        is_sparse_file: key.is_sparse_file,
++        is_overlapped: key.is_overlapped,
++        is_direct: key.is_direct,
++        lock: key.lock,
++        depth: key.depth,
++    })
++    .map_err(|e| Error::DiskError(Box::new(e)))
++}
++
+ /// Represents a composite virtual disk made out of multiple component files. This is described on
+ /// disk by a protocol buffer file that lists out the component file locations and their offsets
+ /// and lengths on the virtual disk. The spaces covered by the component disks must be contiguous
+@@ -203,6 +248,7 @@ impl CompositeDiskFile {
+         if proto.version > COMPOSITE_DISK_VERSION {
+             return Err(Error::UnknownVersion(proto.version));
+         }
++        let mut component_disk_cache = HashMap::new();
+         let mut disks: Vec<ComponentDiskPart> = proto
+             .component_disks
+             .iter()
+@@ -224,17 +270,19 @@ impl CompositeDiskFile {
+                 //         part (the proto does not have fields for it).
+                 //    (b)  this override of sorts always matches the correct user intent.
+                 Ok(ComponentDiskPart {
+-                    file: open_disk_file(DiskFileParams {
+-                        path: path.to_owned(),
+-                        is_read_only: !writable,
+-                        is_sparse_file: params.is_sparse_file && writable,
+-                        // TODO: Should pass `params.is_overlapped` through here. Needs testing.
+-                        is_overlapped: false,
+-                        is_direct: params.is_direct,
+-                        lock: params.lock,
+-                        depth: params.depth + 1,
+-                    })
+-                    .map_err(|e| Error::DiskError(Box::new(e)))?,
++                    file: open_component_disk(
++                        OpenComponentDiskKey {
++                            path: path.to_owned(),
++                            is_read_only: !writable,
++                            is_sparse_file: params.is_sparse_file && writable,
++                            // TODO: Should pass `params.is_overlapped` through here. Needs testing.
++                            is_overlapped: false,
++                            is_direct: params.is_direct,
++                            lock: params.lock,
++                            depth: params.depth + 1,
++                        },
++                        &mut component_disk_cache,
++                    )?,
+                     offset: disk.offset,
+                     length: 0, // Assigned later
+                     file_offset: disk.file_offset,
+@@ -848,7 +896,7 @@ mod tests {
+     use std::matches;
+ 
+     use base::AsRawDescriptor;
+-    use tempfile::tempfile;
++    use tempfile::{tempfile, NamedTempFile};
+ 
+     use super::*;
+ 
+@@ -1637,4 +1685,47 @@ mod tests {
+         );
+         assert!(matches!(result, Err(Error::DuplicatePartitionLabel(label)) if label == "label"));
+     }
++
++    #[test]
++    fn from_file_allows_duplicate_locked_component_paths() {
++        let component = NamedTempFile::new().unwrap();
++        component.as_file().set_len(8192).unwrap();
++
++        let mut composite_proto = CompositeDisk::new();
++        composite_proto.version = COMPOSITE_DISK_VERSION;
++        composite_proto.component_disks.push(ComponentDisk {
++            file_path: component.path().to_str().unwrap().to_string(),
++            offset: 0,
++            read_write_capability: ReadWriteCapability::READ_WRITE.into(),
++            ..ComponentDisk::new()
++        });
++        composite_proto.component_disks.push(ComponentDisk {
++            file_path: component.path().to_str().unwrap().to_string(),
++            offset: 4096,
++            read_write_capability: ReadWriteCapability::READ_WRITE.into(),
++            ..ComponentDisk::new()
++        });
++        composite_proto.length = 8192;
++
++        let mut composite_image = tempfile().unwrap();
++        composite_image.write_all(CDISK_MAGIC.as_bytes()).unwrap();
++        composite_proto
++            .write_to_writer(&mut composite_image)
++            .unwrap();
++        composite_image.rewind().unwrap();
++
++        CompositeDiskFile::from_file(
++            composite_image,
++            DiskFileParams {
++                path: "/foo".into(),
++                is_read_only: false,
++                is_sparse_file: false,
++                is_overlapped: false,
++                is_direct: false,
++                lock: true,
++                depth: 0,
++            },
++        )
++        .unwrap();
++    }
+ }

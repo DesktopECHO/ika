@@ -1,0 +1,10 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+runtime_resource_overlay {
+    name: "LineageDesktopConnectivityOverlay",
+    resource_dirs: ["res"],
+    product_specific: true,
+    sdk_version: "current",
+}

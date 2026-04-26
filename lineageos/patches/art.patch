@@ -1,0 +1,81 @@
+Patch summary:
+Keep native-bridge loader namespaces from advertising APK-embedded native
+library paths. The x86 desktop image can run ARM apps through the native
+bridge, but translated guest linkers are much more reliable when the selected
+libraries are real extracted files instead of `apk.zip!/lib/...` paths.
+
+This patch leaves the normal native app namespace behavior alone and only
+filters search paths for bridged namespaces. The intent is to make translated
+apps load predictably without weakening namespace isolation for regular apps.
+
+diff --git a/libnativeloader/native_loader_namespace.cpp b/libnativeloader/native_loader_namespace.cpp
+index e19789f961..c3080d1e55 100644
+--- a/libnativeloader/native_loader_namespace.cpp
++++ b/libnativeloader/native_loader_namespace.cpp
+@@ -23,6 +23,8 @@
+ #include <dlfcn.h>
+ 
+ #include <functional>
++#include <string>
++#include <vector>
+ 
+ #include <android-base/strings.h>
+ #include <log/log.h>
+@@ -39,6 +41,16 @@ namespace {
+ constexpr const char* kDefaultNamespaceName = "default";
+ constexpr const char* kSystemNamespaceName = "system";
+ 
++std::string RemoveApkZipLibraryPaths(const std::string& search_paths) {
++  std::vector<std::string> kept_paths;
++  for (const std::string& path : android::base::Split(search_paths, ":")) {
++    if (path.find("!/lib/") == std::string::npos) {
++      kept_paths.push_back(path);
++    }
++  }
++  return android::base::Join(kept_paths, ":");
++}
++
+ std::string GetLinkerError(bool is_bridged) {
+   const char* msg = is_bridged ? NativeBridgeGetError() : dlerror();
+   if (msg == nullptr) {
+@@ -99,6 +111,15 @@ Result<NativeLoaderNamespace> NativeLoaderNamespace::Create(
+     is_bridged = NativeBridgeIsPathSupported(search_paths.c_str());
+   }
+ 
++  const std::string namespace_search_paths =
++      is_bridged ? RemoveApkZipLibraryPaths(search_paths) : search_paths;
++  if (is_bridged && namespace_search_paths != search_paths) {
++    ALOGD("Removed APK zip library paths from bridged namespace %s: %s -> %s",
++          name.c_str(),
++          search_paths.c_str(),
++          namespace_search_paths.c_str());
++  }
++
+   // Fall back to the system namespace if no parent is set.
+   Result<NativeLoaderNamespace> system_ns = GetSystemNamespace(is_bridged);
+   if (!system_ns.ok()) {
+@@ -126,21 +147,21 @@ Result<NativeLoaderNamespace> NativeLoaderNamespace::Create(
+ 
+   if (!is_bridged) {
+     android_namespace_t* raw =
+-        android_create_namespace(name.c_str(), nullptr, search_paths.c_str(), type,
++        android_create_namespace(name.c_str(), nullptr, namespace_search_paths.c_str(), type,
+                                  permitted_paths.c_str(), effective_parent.ToRawAndroidNamespace());
+     if (raw != nullptr) {
+       return NativeLoaderNamespace(name, raw);
+     }
+   } else {
+     native_bridge_namespace_t* raw = NativeBridgeCreateNamespace(
+-        name.c_str(), nullptr, search_paths.c_str(), type, permitted_paths.c_str(),
++        name.c_str(), nullptr, namespace_search_paths.c_str(), type, permitted_paths.c_str(),
+         effective_parent.ToRawNativeBridgeNamespace());
+     if (raw != nullptr) {
+       return NativeLoaderNamespace(name, raw);
+     }
+   }
+   return Errorf("failed to create {} namespace name:{}, search_paths:{}, permitted_paths:{}",
+-                is_bridged ? "bridged" : "native", name, search_paths, permitted_paths);
++                is_bridged ? "bridged" : "native", name, namespace_search_paths, permitted_paths);
+ }
+ 
+ Result<void> NativeLoaderNamespace::Link(const NativeLoaderNamespace* target,

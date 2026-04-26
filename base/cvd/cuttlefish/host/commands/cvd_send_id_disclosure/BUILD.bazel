@@ -1,0 +1,46 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary", "cf_cc_library", "cf_cc_test")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_binary(
+    name = "cvd_send_id_disclosure",
+    srcs = [
+        "main.cc",
+    ],
+    deps = [
+        ":libcvd_id_disclosure_builder",
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:tee_logging",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "libcvd_id_disclosure_builder",
+    srcs = [
+        "cellular_identifier_disclosure_command_builder.cc",
+    ],
+    hdrs = [
+        "cellular_identifier_disclosure_command_builder.h",
+    ],
+    deps = [
+        "@fmt",
+    ],
+)
+
+cf_cc_test(
+    name = "cvd_send_id_disclosure_test",
+    srcs = [
+        "unittest/cellular_identifier_disclosure_command_builder_test.cc",
+    ],
+    deps = [
+        ":libcvd_id_disclosure_builder",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)

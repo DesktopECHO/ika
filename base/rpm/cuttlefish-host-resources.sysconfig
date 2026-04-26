@@ -1,0 +1,23 @@
+# Maximum number of concurrent CVDs runnable on this machine.
+#num_cvd_accounts=10
+
+# Preconfigured bridge interface to use for both Wi-Fi and ethernet tap devices.
+#bridge_interface=
+
+# Explicit bridge names when bridge_interface is not set.
+#wifi_bridge_interface=cvd-wbr
+#ethernet_bridge_interface=cvd-ebr
+
+# Bridge IPv4 and IPv6 traffic when attaching to an existing bridge.
+#ipv4_bridge=1
+#ipv6_bridge=1
+
+# DNS servers exposed through the managed dnsmasq instances.
+#dns_servers=8.8.8.8,8.8.4.4
+#dns6_servers=2001:4860:4860::8888,2001:4860:4860::8844
+
+# Optional IPv6 prefixes for the managed bridges.
+#wifi_ipv6_prefix=
+#wifi_ipv6_prefix_length=
+#ethernet_ipv6_prefix=
+#ethernet_ipv6_prefix_length=

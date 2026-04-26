@@ -1,0 +1,2 @@
+[Accounts]
+groups = wheel,adm,dialout,cdrom,audio,video,plugdev,cvdnetwork,kvm,render

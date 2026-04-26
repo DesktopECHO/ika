@@ -1,0 +1,61 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_binary(
+    name = "cvd_internal_start",
+    srcs = [
+        "filesystem_explorer.cc",
+        "filesystem_explorer.h",
+        "flag_forwarder.cc",
+        "flag_forwarder.h",
+        "main.cc",
+        "override_bool_arg.cpp",
+        "override_bool_arg.h",
+        "validate_metrics_confirmation.cpp",
+        "validate_metrics_confirmation.h",
+    ],
+    # `layering_check` conflicts with the combination of the clang prebuilt and
+    # the cmake build rules used for @libxml2.
+    features = ["-layering_check"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:environment",
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/common/libs/utils:subprocess_managed_stdio",
+        "//cuttlefish/common/libs/utils:tee_logging",
+        "//cuttlefish/host/commands/start:start_flags",
+        "//cuttlefish/host/libs/config:config_constants",
+        "//cuttlefish/host/libs/config:fetcher_config",
+        "//cuttlefish/host/libs/config:host_tools_version",
+        "//cuttlefish/host/libs/config:instance_nums",
+        "//cuttlefish/host/libs/vm_manager",
+        "//libbase",
+        "@abseil-cpp//absl/base:no_destructor",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/strings",
+        "@gflags",
+        "@jsoncpp",
+        "@libxml2",
+    ],
+)
+
+cf_cc_library(
+    name = "start_flags",
+    srcs = [
+        "start_flags.cpp",
+    ],
+    hdrs = [
+        "start_flags.h",
+    ],
+    deps = [
+        "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
+        "@gflags",
+    ],
+    # required for the gflags `DEFINE`s when included in other targets
+    alwayslink = 1,
+)

@@ -1,0 +1,21 @@
+FROM fedora:43 AS base
+
+RUN dnf -y upgrade --refresh
+RUN dnf -y install \
+    cmake \
+    curl \
+    gcc-c++ \
+    git \
+    golang \
+    npm \
+    rpm-build \
+    rpmdevtools \
+    rsync \
+    sudo \
+    systemd-rpm-macros \
+    which
+
+COPY ./tools/buildutils/installbazel.sh /installbazel.sh
+RUN /installbazel.sh && rm /installbazel.sh
+
+ENTRYPOINT ["tools/buildutils/cw/entrypoint.sh"]

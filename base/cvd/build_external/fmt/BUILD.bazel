@@ -1,0 +1,4 @@
+exports_files(
+    ["PATCH.glibc_math_macros.patch"],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,134 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library", "cf_cc_test")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+exports_files([".clang-tidy"])
+
+cf_cc_library(
+    name = "buffered_zip_source",
+    srcs = ["buffered_zip_source.cc"],
+    hdrs = ["buffered_zip_source.h"],
+    deps = [
+        "//cuttlefish/host/libs/zip/libzip_cc:seekable_source",
+        "//cuttlefish/host/libs/zip/libzip_cc:source_callback",
+        "//cuttlefish/io",
+        "//cuttlefish/io:length",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_test(
+    name = "buffered_zip_source_test",
+    srcs = ["buffered_zip_source_test.cc"],
+    deps = [
+        "//cuttlefish/host/libs/zip:buffered_zip_source",
+        "//cuttlefish/host/libs/zip/libzip_cc:seekable_source",
+        "//cuttlefish/host/libs/zip/libzip_cc:writable_source",
+        "//cuttlefish/io:in_memory",
+        "//cuttlefish/result",
+        "//cuttlefish/result:result_matchers",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cf_cc_library(
+    name = "cached_zip_source",
+    srcs = ["cached_zip_source.cc"],
+    hdrs = ["cached_zip_source.h"],
+    deps = [
+        "//cuttlefish/host/libs/zip/libzip_cc:seekable_source",
+        "//cuttlefish/host/libs/zip/libzip_cc:source_callback",
+        "//cuttlefish/host/libs/zip/libzip_cc:stat",
+        "//cuttlefish/io",
+        "//cuttlefish/io:lazily_loaded_file",
+        "//cuttlefish/result",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_test(
+    name = "cached_zip_source_test",
+    srcs = ["cached_zip_source_test.cc"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/host/libs/zip:cached_zip_source",
+        "//cuttlefish/host/libs/zip:zip_string",
+        "//cuttlefish/host/libs/zip/libzip_cc:seekable_source",
+        "//cuttlefish/result",
+        "//cuttlefish/result:result_matchers",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cf_cc_library(
+    name = "remote_zip",
+    srcs = ["remote_zip.cc"],
+    hdrs = ["remote_zip.h"],
+    deps = [
+        "//cuttlefish/host/libs/web/http_client",
+        "//cuttlefish/host/libs/zip/libzip_cc:seekable_source",
+        "//cuttlefish/host/libs/zip/libzip_cc:source_callback",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings",
+        "@fmt",
+    ],
+)
+
+cf_cc_test(
+    name = "remote_zip_test",
+    srcs = ["remote_zip_test.cc"],
+    deps = [
+        "//cuttlefish/host/libs/web/http_client",
+        "//cuttlefish/host/libs/web/http_client:fake_http_client",
+        "//cuttlefish/host/libs/zip:remote_zip",
+        "//cuttlefish/host/libs/zip:zip_string",
+        "//cuttlefish/host/libs/zip/libzip_cc:archive",
+        "//cuttlefish/host/libs/zip/libzip_cc:seekable_source",
+        "//cuttlefish/io",
+        "//cuttlefish/io:string",
+        "//cuttlefish/result",
+        "//cuttlefish/result:result_matchers",
+        "@abseil-cpp//absl/strings",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cf_cc_library(
+    name = "zip_file",
+    srcs = ["zip_file.cc"],
+    hdrs = ["zip_file.h"],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/libs/zip/libzip_cc:archive",
+        "//cuttlefish/host/libs/zip/libzip_cc:readable_source",
+        "//cuttlefish/host/libs/zip/libzip_cc:stat",
+        "//cuttlefish/host/libs/zip/libzip_cc:writable_source",
+        "//cuttlefish/io",
+        "//cuttlefish/io:copy",
+        "//cuttlefish/io:native_filesystem",
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "zip_string",
+    srcs = ["zip_string.cc"],
+    hdrs = ["zip_string.h"],
+    deps = [
+        "//cuttlefish/host/libs/zip/libzip_cc:archive",
+        "//cuttlefish/host/libs/zip/libzip_cc:readable_source",
+        "//cuttlefish/host/libs/zip/libzip_cc:writable_source",
+        "//cuttlefish/io:string",
+        "//cuttlefish/result",
+    ],
+)

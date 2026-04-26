@@ -1,0 +1,121 @@
+Source: cuttlefish-common
+Maintainer: Cuttlefish Team <cloud-android-ext@google.com>
+Section: misc
+Priority: optional
+Build-Depends: bazel [amd64],
+               cmake,
+               config-package-dev,
+               debhelper-compat (= 12),
+               dh-exec,
+               git,
+               libaom-dev,
+               libclang-dev,
+               libcurl4-openssl-dev,
+               libavdevice-dev,
+               libfmt-dev,
+               libgflags-dev,
+               libgoogle-glog-dev,
+               libgtest-dev,
+               libjsoncpp-dev,
+               liblzma-dev,
+               libopus-dev,
+               libprotobuf-c-dev,
+               libprotobuf-dev,
+               libsrtp2-dev,
+               libssl-dev,
+               libswscale-dev,
+               libvirglrenderer-dev,
+               libxml2-dev,
+               libz3-dev,
+               pkgconf,
+               protobuf-compiler,
+               uuid-dev,
+               xxd
+Standards-Version: 4.5.0
+Rules-Requires-Root: no
+
+Package: cuttlefish-base
+Architecture: any
+Depends: adduser,
+         binfmt-support [arm64],
+         bridge-utils,
+         curl,
+         dnsmasq-base,
+         ebtables-legacy | ebtables,
+         grub-efi-arm64-bin [arm64],
+         grub-efi-amd64-bin [!arm64],
+         iproute2,
+         iptables,
+         libarchive-tools | bsdtar,
+         libcap2-bin,
+         libcurl4,
+         libdrm2,
+         libfdt1,
+         libfmt-dev,
+         libgflags-dev,
+         libgl1,
+         libjsoncpp-dev,
+         liblzma5,
+         libprotobuf-dev,
+         libsrtp2-1,
+         libssl-dev,
+         libvirglrenderer1,
+         libwayland-client0,
+         libwayland-server0,
+         libx11-6,
+         libxext6,
+         libxml2-dev,
+         libz3-4,
+         net-tools,
+         openssl,
+         opus-tools,
+         python3,
+         qemu-user-static [arm64],
+         xdg-utils,
+         ${misc:Depends},
+         ${shlibs:Depends}
+Pre-Depends: ${misc:Pre-Depends}
+Breaks: cuttlefish-common (<= 0.9.24)
+Description: Cuttlefish Android Virtual Device companion package
+ Contains set of tools and binaries required to boot up and manage
+ Cuttlefish Android Virtual Device that are used in all deployments.
+
+Package: cuttlefish-common
+Architecture: any
+Depends: cuttlefish-base,
+         cuttlefish-user,
+         cuttlefish-defaults,
+         ${misc:Depends}
+Pre-Depends: ${misc:Pre-Depends}
+Description: Cuttlefish Android Virtual Device companion package
+ Metapackage ensuring all packages needed to run and interact with
+ Cuttlefish device are installed.
+
+Package: cuttlefish-integration
+Architecture: any
+Depends: cuttlefish-base,
+         qemu-system-arm (>= 2.8.0),
+         qemu-system-x86 (>= 2.8.0),
+         qemu-system-misc (>= 2.8.0),
+         ${misc:Depends}
+Pre-Depends: ${misc:Pre-Depends}
+Conflicts: ${diverted-files}
+Provides: ${diverted-files}
+Description: Utilities for Android cuttlefish devices in the cloud
+ Configuration and utilities for Android cuttlefish devices running on
+ Google Compute Engine. Not intended for use on developer machines.
+
+Package: cuttlefish-defaults
+Architecture: any
+Build-Depends: bazel [amd64],
+               dh-exec
+Depends: cuttlefish-base,
+Description: May potentially enable new or experimental cuttlefish
+ features before being enabled by default.
+
+Package: cuttlefish-metrics
+Architecture: any
+Depends: cuttlefish-base,
+         ${misc:Depends}
+Pre-Depends: ${misc:Pre-Depends}
+Description: Enables metrics transmissions to Google.

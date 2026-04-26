@@ -1,0 +1,55 @@
+//
+// Copyright (C) 2025 The Android Open Source Project
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#pragma once
+
+#include <memory>
+#include <string>
+
+#include "cuttlefish/host/commands/assemble_cvd/android_build/android_build.h"
+#include "cuttlefish/host/libs/config/fetcher_config.h"
+#include "cuttlefish/host/libs/config/file_source.h"
+#include "cuttlefish/pretty/pretty.h"
+#include "cuttlefish/pretty/struct.h"
+#include "cuttlefish/result/result.h"
+
+namespace cuttlefish {
+
+struct AndroidBuildKey {
+  explicit AndroidBuildKey(std::string, const FetcherConfig&, FileSource);
+
+  std::string system_image_dir;
+  const FetcherConfig* fetcher_config;
+  FileSource source;
+};
+
+bool operator<(const AndroidBuildKey&, const AndroidBuildKey&);
+
+Result<std::unique_ptr<AndroidBuild>> IdentifyAndroidBuild(
+    const std::string& system_image_dir, const FetcherConfig& config,
+    FileSource source);
+
+Result<std::unique_ptr<AndroidBuild>> IdentifyAndroidBuild(
+    const AndroidBuildKey&);
+
+// For libfmt
+std::string format_as(const AndroidBuildKey&);
+
+std::ostream& operator<<(std::ostream&, const AndroidBuildKey&);
+
+PrettyStruct Pretty(const AndroidBuildKey&,
+                    PrettyAdlPlaceholder unused = PrettyAdlPlaceholder());
+
+}  // namespace cuttlefish

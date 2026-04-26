@@ -1,0 +1,3 @@
+# Write static defaults only when the given metadata key/value pair matches.
+# Example: static_defaults_when=project/project-id=my-gce-project
+#static_defaults_when=

@@ -1,0 +1,35 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_library(
+    name = "fastboot",
+    srcs = [
+        "config.cpp",
+        "data.cpp",
+        "flags.cpp",
+        "launch.cpp",
+    ],
+    hdrs = [
+        "fastboot.h",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/commands/kernel_log_monitor:kernel_log_monitor_utils",
+        "//cuttlefish/host/libs/config:boot_flow",
+        "//cuttlefish/host/libs/config:config_flag",
+        "//cuttlefish/host/libs/config:config_fragment",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@fruit",
+        "@gflags",
+        "@jsoncpp",
+    ],
+)

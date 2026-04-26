@@ -1,0 +1,59 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_library(
+    name = "libsensors_simulator",
+    srcs = [
+        "sensors_simulator.cpp",
+    ],
+    hdrs = [
+        "sensors_simulator.h",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/sensors",
+        "//libbase",
+        "@libeigen",
+    ],
+)
+
+cf_cc_library(
+    name = "libsensors_hal_proxy",
+    srcs = [
+        "sensors_hal_proxy.cpp",
+    ],
+    hdrs = [
+        "sensors_hal_proxy.h",
+    ],
+    deps = [
+        ":libsensors_simulator",
+        "//cuttlefish/common/libs/sensors",
+        "//cuttlefish/common/libs/transport",
+        "//cuttlefish/common/libs/utils:device_type",
+        "//cuttlefish/host/commands/kernel_log_monitor:kernel_log_monitor_utils",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
+        "@libeigen",
+    ],
+)
+
+cf_cc_binary(
+    name = "sensors_simulator",
+    srcs = [
+        "main.cpp",
+    ],
+    deps = [
+        ":libsensors_hal_proxy",
+        ":libsensors_simulator",
+        "//cuttlefish/common/libs/transport",
+        "//cuttlefish/common/libs/utils:device_type",
+        "//cuttlefish/host/libs/config:logging",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@gflags",
+        "@libeigen",
+    ],
+)

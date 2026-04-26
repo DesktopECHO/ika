@@ -1,0 +1,30 @@
+load("//:build_variables.bzl", "COPTS")
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_library(
+    name = "lock",
+    srcs = [
+        "instance_lock.cpp",
+        "lock_file.cpp",
+    ],
+    hdrs = [
+        "instance_lock.h",
+        "lock_file.h",
+    ],
+    copts = COPTS + ["-Werror=sign-compare"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:contains",
+        "//cuttlefish/common/libs/utils:environment",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/host/commands/cvd/utils:common",
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+    ],
+)

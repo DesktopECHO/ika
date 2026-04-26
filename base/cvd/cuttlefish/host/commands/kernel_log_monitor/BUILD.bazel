@@ -1,0 +1,51 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+exports_files([".clang-tidy"])
+
+cf_cc_binary(
+    name = "kernel_log_monitor",
+    srcs = [
+        "main.cc",
+    ],
+    deps = [
+        ":kernel_log_monitor_utils",
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/host/libs/config:config_instance_derived",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/config:logging",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/strings",
+        "@gflags",
+        "@jsoncpp",
+    ],
+)
+
+cf_cc_library(
+    name = "kernel_log_monitor_utils",
+    srcs = [
+        "kernel_log_server.cc",
+        "utils.cc",
+    ],
+    hdrs = [
+        "kernel_log_server.h",
+        "utils.h",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:json",
+        "//cuttlefish/host/libs/config:config_constants",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings",
+        "@jsoncpp",
+    ],
+)

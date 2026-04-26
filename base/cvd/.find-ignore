@@ -1,0 +1,1 @@
+# Keep vendored Cuttlefish host sources out of Android module discovery.

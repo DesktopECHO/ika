@@ -1,0 +1,67 @@
+Patch summary:
+Set release aconfig defaults needed by the desktop build. Quick Settings stays
+on the known-good non-Compose path because the desktop QS customizations target
+the classic implementation, including the tile removals and panel interaction
+behavior used by this VM.
+
+This also enables Launcher3 desktop visual-effect flags in the generated
+release flag sets. Keeping those values here makes the behavior reproducible
+across both trunk staging and BP4A-style builds instead of depending on runtime
+flag edits after first boot.
+
+diff --git a/aconfig/bp4a/com.android.launcher3/blurred_home_animation_flag_values.textproto b/aconfig/bp4a/com.android.launcher3/blurred_home_animation_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/bp4a/com.android.launcher3/blurred_home_animation_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.launcher3"
++  name: "blurred_home_animation"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.launcher3/enable_overview_desktop_tile_wallpaper_background_flag_values.textproto b/aconfig/bp4a/com.android.launcher3/enable_overview_desktop_tile_wallpaper_background_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/bp4a/com.android.launcher3/enable_overview_desktop_tile_wallpaper_background_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.launcher3"
++  name: "enable_overview_desktop_tile_wallpaper_background"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/trunk_staging/com.android.launcher3/blurred_home_animation_flag_values.textproto b/aconfig/trunk_staging/com.android.launcher3/blurred_home_animation_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/trunk_staging/com.android.launcher3/blurred_home_animation_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.launcher3"
++  name: "blurred_home_animation"
++  state: ENABLED
++  permission: READ_WRITE
++}
+diff --git a/aconfig/trunk_staging/com.android.launcher3/enable_overview_desktop_tile_wallpaper_background_flag_values.textproto b/aconfig/trunk_staging/com.android.launcher3/enable_overview_desktop_tile_wallpaper_background_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/trunk_staging/com.android.launcher3/enable_overview_desktop_tile_wallpaper_background_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.launcher3"
++  name: "enable_overview_desktop_tile_wallpaper_background"
++  state: ENABLED
++  permission: READ_WRITE
++}
+diff --git a/aconfig/trunk_staging/com.android.systemui/qs_ui_refactor_compose_fragment_flag_values.textproto b/aconfig/trunk_staging/com.android.systemui/qs_ui_refactor_compose_fragment_flag_values.textproto
+index 22f6c87ee..dcaaa919c 100644
+--- a/aconfig/trunk_staging/com.android.systemui/qs_ui_refactor_compose_fragment_flag_values.textproto
++++ b/aconfig/trunk_staging/com.android.systemui/qs_ui_refactor_compose_fragment_flag_values.textproto
+@@ -1,6 +1,6 @@
+ flag_value {
+   package: "com.android.systemui"
+   name: "qs_ui_refactor_compose_fragment"
+-  state: ENABLED
++  state: DISABLED
+   permission: READ_WRITE
+ }

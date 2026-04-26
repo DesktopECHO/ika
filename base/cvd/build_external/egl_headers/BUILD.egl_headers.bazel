@@ -1,0 +1,17 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(
+    default_visibility = [
+        "@//:android_cuttlefish",
+        "@opengl_headers//:__subpackages__",
+    ],
+)
+
+cc_library(
+    name = "egl_headers",
+    hdrs = glob([
+        "include/EGL/*.h",
+        "include/KHR/*.h",
+    ]),
+    strip_include_prefix = "include",
+)

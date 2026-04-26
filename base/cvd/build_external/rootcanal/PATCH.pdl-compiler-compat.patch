@@ -1,0 +1,93 @@
+diff --git a/src/backends/common/alignment.rs b/src/backends/common/alignment.rs
+--- a/src/backends/common/alignment.rs	2006-07-23 22:21:28.000000000 -0300
++++ b/src/backends/common/alignment.rs	2026-04-18 20:10:44.716553754 -0300
+@@ -105,7 +105,7 @@
+         if !self.is_aligned() {
+             panic!("sized bytes must start at a byte boundary")
+         }
+-        if !width.is_multiple_of(8) {
++        if width % 8 != 0 {
+             panic!("width must be byte-divisible")
+         }
+         if width > Self::MAX_CHUNK_WIDTH {
+@@ -129,7 +129,7 @@
+     }
+ 
+     fn try_commit_staged_chunk(&mut self) {
+-        if self.staged_width != 0 && self.staged_width.is_multiple_of(8) {
++        if self.staged_width != 0 && self.staged_width % 8 == 0 {
+             self.chunks.push(Chunk::Bitpack {
+                 fields: self.staged_fields.drain(..).collect(),
+                 width: mem::replace(&mut self.staged_width, 0),
+diff --git a/src/backends/rust/decoder.rs b/src/backends/rust/decoder.rs
+--- a/src/backends/rust/decoder.rs	2006-07-23 22:21:28.000000000 -0300
++++ b/src/backends/rust/decoder.rs	2026-04-18 20:10:44.716646504 -0300
+@@ -140,7 +140,7 @@
+     fn add_bit_field(&mut self, field: &'a ast::Field) {
+         self.chunk.push(BitField { shift: self.shift, field });
+         self.shift += self.schema.field_size(field.key).static_().unwrap();
+-        if !self.shift.is_multiple_of(8) {
++        if self.shift % 8 != 0 {
+             return;
+         }
+ 
+diff --git a/src/backends/rust/encoder.rs b/src/backends/rust/encoder.rs
+--- a/src/backends/rust/encoder.rs	2006-07-23 22:21:28.000000000 -0300
++++ b/src/backends/rust/encoder.rs	2026-04-18 20:10:44.716724504 -0300
+@@ -474,7 +474,7 @@
+         }
+ 
+         self.bit_shift += width;
+-        if self.bit_shift.is_multiple_of(8) {
++        if self.bit_shift % 8 == 0 {
+             self.pack_bit_fields()
+         }
+     }
+diff --git a/src/backends/rust/test.rs b/src/backends/rust/test.rs
+--- a/src/backends/rust/test.rs	2006-07-23 22:21:28.000000000 -0300
++++ b/src/backends/rust/test.rs	2026-04-18 20:10:44.716767338 -0300
+@@ -24,7 +24,7 @@
+ ///
+ /// The string `"80038302"` becomes `vec![0x80, 0x03, 0x83, 0x02]`.
+ fn hexadecimal_to_vec(hex: &str) -> proc_macro2::TokenStream {
+-    assert!(hex.len().is_multiple_of(2), "Expects an even number of hex digits");
++    assert!(hex.len() % 2 == 0, "Expects an even number of hex digits");
+     let bytes = hex.as_bytes().chunks_exact(2).map(|chunk| {
+         let number = format!("0x{}", std::str::from_utf8(chunk).unwrap());
+         syn::parse_str::<syn::LitInt>(&number).unwrap()
+diff --git a/src/backends/rust_legacy/parser.rs b/src/backends/rust_legacy/parser.rs
+--- a/src/backends/rust_legacy/parser.rs	2006-07-23 22:21:28.000000000 -0300
++++ b/src/backends/rust_legacy/parser.rs	2026-04-18 20:10:44.716837421 -0300
+@@ -144,7 +144,7 @@
+     fn add_bit_field(&mut self, field: &'a ast::Field) {
+         self.chunk.push(BitField { shift: self.shift, field });
+         self.shift += self.schema.field_size(field.key).static_().unwrap();
+-        if !self.shift.is_multiple_of(8) {
++        if self.shift % 8 != 0 {
+             return;
+         }
+ 
+diff --git a/src/backends/rust_legacy/serializer.rs b/src/backends/rust_legacy/serializer.rs
+--- a/src/backends/rust_legacy/serializer.rs	2006-07-23 22:21:28.000000000 -0300
++++ b/src/backends/rust_legacy/serializer.rs	2026-04-18 20:10:44.716896171 -0300
+@@ -321,7 +321,7 @@
+         }
+ 
+         self.shift += width;
+-        if self.shift.is_multiple_of(8) {
++        if self.shift % 8 == 0 {
+             self.pack_bit_fields()
+         }
+     }
+diff --git a/src/backends/rust_legacy/test.rs b/src/backends/rust_legacy/test.rs
+--- a/src/backends/rust_legacy/test.rs	2006-07-23 22:21:28.000000000 -0300
++++ b/src/backends/rust_legacy/test.rs	2026-04-18 20:10:44.716936421 -0300
+@@ -37,7 +37,7 @@
+ ///
+ /// The string `"80038302"` becomes `vec![0x80, 0x03, 0x83, 0x02]`.
+ fn hexadecimal_to_vec(hex: &str) -> proc_macro2::TokenStream {
+-    assert!(hex.len().is_multiple_of(2), "Expects an even number of hex digits");
++    assert!(hex.len() % 2 == 0, "Expects an even number of hex digits");
+     let bytes = hex.as_bytes().chunks_exact(2).map(|chunk| {
+         let number = format!("0x{}", std::str::from_utf8(chunk).unwrap());
+         syn::parse_str::<syn::LitInt>(&number).unwrap()

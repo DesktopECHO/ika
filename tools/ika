@@ -1,0 +1,1170 @@
+#!/usr/bin/bash
+
+# DPI is calculated automatically. Set manually by uncommenting the next line:
+# export IKADPI=144
+
+set -euo pipefail
+exec 3>&1
+
+SCRIPT_NAME="$(basename "$0")"
+PACKAGED_CVD_HOST_OUT="/usr/lib/cuttlefish-common"
+DEFAULT_CVD_PRODUCT_OUT="/usr/share/cuttlefish-common/lineageos"
+PACKAGED_SCRCPY_BIN="/usr/lib/cuttlefish-common/bin/scrcpy"
+PACKAGED_SCRCPY_SERVER="/usr/lib/cuttlefish-common/share/scrcpy/scrcpy-server"
+PACKAGED_GETCHROMIUM_BIN="/usr/lib/cuttlefish-common/bin/getchromium"
+SCRCPY_ICON_DIR_DEFAULT="/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps"
+
+# Checks if a flag was supplied by the user in the arguments
+user_supplied_flag() {
+  local flag="$1"
+  shift
+  local arg
+  for arg in "$@"; do
+    case "${arg}" in
+      --${flag}=*|--${flag}|-${flag}=*|-${flag})
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+stop_startup_packaged_scrcpy() {
+  local pid
+  local exe_path
+  local deadline
+  local found_match="false"
+
+  while read -r pid; do
+    [[ -n "${pid}" ]] || continue
+
+    exe_path="$(readlink -f "/proc/${pid}/exe" 2>/dev/null || true)"
+    [[ "${exe_path}" == "${PACKAGED_SCRCPY_BIN}" ]] || continue
+
+    if [[ "${found_match}" != "true" ]]; then
+      printf '[%s] stopping existing packaged scrcpy session\n' "${SCRIPT_NAME}" >&2
+      found_match="true"
+    fi
+
+    kill "${pid}" >/dev/null 2>&1 || true
+
+    deadline=$((SECONDS + 5))
+    while kill -0 "${pid}" >/dev/null 2>&1; do
+      if (( SECONDS >= deadline )); then
+        printf '[%s] packaged scrcpy pid %s did not exit cleanly; forcing termination\n' "${SCRIPT_NAME}" "${pid}" >&2
+        kill -9 "${pid}" >/dev/null 2>&1 || true
+        sleep 0.5
+        break
+      fi
+      sleep 0.2
+    done
+  done < <(pgrep -u "${UID}" -x scrcpy || true)
+}
+
+count_performance_cores() {
+  performance_core_ids | wc -l
+}
+
+performance_core_ids() {
+  local max_cap
+  local path
+  local cap
+  local cpu
+  max_cap="$(cat /sys/devices/system/cpu/cpu*/cpu_capacity 2>/dev/null | sort -n | tail -1)"
+  [[ -n "${max_cap}" ]] || return 0
+
+  for path in /sys/devices/system/cpu/cpu[0-9]*/cpu_capacity; do
+    [[ -r "${path}" ]] || continue
+    cap="$(<"${path}")"
+    [[ "${cap}" == "${max_cap}" ]] || continue
+    cpu="${path%/cpu_capacity}"
+    cpu="${cpu##*/cpu}"
+    printf '%s\n' "${cpu}"
+  done | sort -n
+}
+
+reserved_host_core_list() {
+  local -a cores=()
+  local count
+  mapfile -t cores < <(performance_core_ids)
+  count="${#cores[@]}"
+  (( count > 2 )) || return 0
+  printf '%s,%s\n' "${cores[count - 2]}" "${cores[count - 1]}"
+}
+
+default_guest_cpus() {
+  local perf_cores
+  perf_cores="$(count_performance_cores)"
+  perf_cores="${perf_cores//[!0-9]/}"
+
+  if [[ -z "${perf_cores}" ]] || (( perf_cores <= 0 )); then
+    echo 2
+    return
+  fi
+
+  if (( perf_cores > 2 )); then
+    echo $((perf_cores - 2))
+  else
+    echo 1
+  fi
+}
+
+# ============================================================================
+# Compute Configuration Defaults (passed to cvd_internal_start)
+# ============================================================================
+declare -A CVD_COMPUTE_DEFAULTS=(
+  [cpus]="$(default_guest_cpus)"
+  [memory_mb]="4096"
+  [prefer_performance_cores]="true"
+  [enable_bootanimation]="false"
+)
+
+# ============================================================================
+# GPU Configuration Defaults (passed to cvd_internal_start)
+# ============================================================================
+declare -A CVD_GPU_DEFAULTS=(
+  [gpu_mode]="gfxstream"
+  [gpu_vhost_user_mode]="off"
+  # The Asahi crosvm/gfxstream path currently logs repeated ResourceMapBlob
+  # failures with udmabuf enabled, so keep it opt-in until that path works.
+  [enable_gpu_udmabuf]="false"
+  [use_cvdalloc]="true"
+)
+
+# ============================================================================
+# Network Configuration Defaults (passed to cvd_internal_start)
+# ============================================================================
+declare -A CVD_NETWORK_DEFAULTS=(
+  [vhost_net]="true"
+  [vhost_user_vsock]="false"
+  [enable_wifi]="false"
+  [enable_modem_simulator]="false"
+  [enable_host_uwb]="false"
+  [netsim_bt]="true"
+  [netsim_uwb]="false"
+)
+
+# ============================================================================
+# Reporting Configuration Defaults (passed to cvd_internal_start)
+# ============================================================================
+declare -A CVD_REPORT_DEFAULTS=(
+  [report_anonymous_usage_stats]="n"
+)
+
+# ============================================================================
+# Boot & Logging Configuration Defaults (internal use only)
+# ============================================================================
+declare -A CVD_BOOT_DEFAULTS=(
+  [boot_message]="VIRTUAL_DEVICE_BOOT_COMPLETED"
+  [boot_timeout_sec]="120"
+)
+
+# ============================================================================
+# Launcher Lifecycle Defaults (passed to cvd_internal_start)
+# ============================================================================
+declare -A CVD_LAUNCHER_DEFAULTS=(
+  [daemon]="true"
+)
+
+# ============================================================================
+# Overlay Configuration Defaults (internal use only)
+# ============================================================================
+declare -A CVD_OVERLAY_DEFAULTS=(
+  [use_overlay]="true"
+  [use_sdcard]="false"
+)
+
+CVD_DEFAULT_ARG_MAPS=(
+  CVD_COMPUTE_DEFAULTS
+  CVD_GPU_DEFAULTS
+  CVD_NETWORK_DEFAULTS
+  CVD_REPORT_DEFAULTS
+  CVD_OVERLAY_DEFAULTS
+  CVD_LAUNCHER_DEFAULTS
+)
+
+# Convenience variables
+CVD_GPU_MODE="${CVD_GPU_DEFAULTS[gpu_mode]}"
+: "${CVD_BOOT_MESSAGE:=${CVD_BOOT_DEFAULTS[boot_message]}}"
+: "${CVD_BOOT_TIMEOUT_SEC:=${CVD_BOOT_DEFAULTS[boot_timeout_sec]}}"
+
+# ============================================================================
+# Environment Paths
+# ============================================================================
+: "${CVD_HOST_OUT:=${PACKAGED_CVD_HOST_OUT}}"
+: "${CVD_PRODUCT_OUT:=${DEFAULT_CVD_PRODUCT_OUT}}"
+: "${CVD_HOME_DIR:=${HOME}/ika}"
+mkdir -p "${CVD_HOME_DIR}"
+START_LOG_FILE="${CVD_HOME_DIR}/ikastart.log"
+SCRCPY_LOG_FILE="${CVD_HOME_DIR}/scrcpy.log"
+CVD_BIN="${CVD_HOST_OUT}/bin/cvd_internal_start"
+CVD_CLI_BIN="${CVD_HOST_OUT}/bin/cvd"
+CVD_STOP_BIN="${CVD_HOST_OUT}/bin/cvd_internal_stop"
+CVD_INSTANCE_DIR="${CVD_HOME_DIR}/cuttlefish/instances/cvd-1"
+CVD_LAUNCHER_LOG="${CVD_INSTANCE_DIR}/logs/launcher.log"
+CVD_CONFIG_PATH="${CVD_INSTANCE_DIR}/cuttlefish_config.json"
+SCRCPY_BIN="${PACKAGED_SCRCPY_BIN}"
+SCRCPY_SERVER_PATH_OVERRIDE=""
+if [[ -f "${PACKAGED_SCRCPY_SERVER}" ]]; then
+  SCRCPY_SERVER_PATH_OVERRIDE="${PACKAGED_SCRCPY_SERVER}"
+fi
+SCRCPY_DPI_FLAG=""
+
+CVD_PROCESS_REGEX='(^|/)(cvd_internal_start|launch_cvd|run_cvd|crosvm|process_restarter|socket_vsock_proxy|wmediumd|webRTC)([[:space:]]|$)'
+
+log() {
+  printf '[%s] %s\n' "${SCRIPT_NAME}" "$*" >&2
+}
+
+die() {
+  log "error: $*"
+  if [[ -n "${CONSOLE_FAILURE_MESSAGE:-}" ]]; then
+    printf '%s\n' "${CONSOLE_FAILURE_MESSAGE}" >&3
+  fi
+  exit 1
+}
+
+respond() {
+  printf '%s\n' "$*"
+}
+
+respond_console() {
+  printf '%s\n' "$*" >&3
+}
+
+confirm_reset() {
+  local reply
+
+  printf 'WARNING: This will "Factory Reset" your Android virtual device, type "Y" to continue. ' >&3
+  if ! IFS= read -r -n 1 reply; then
+    printf '\n' >&3
+    respond_console "Reset aborted."
+    return 1
+  fi
+  printf '\n' >&3
+
+  if [[ "${reply}" != "Y" && "${reply}" != "y" ]]; then
+    respond_console "Reset aborted."
+    return 1
+  fi
+
+  return 0
+}
+
+parse_start_options() {
+  local -n fullscreen_mode_ref="$1"
+  local -n start_args_ref="$2"
+  shift 2
+
+  fullscreen_mode_ref="false"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -f|--fullscreen)
+        fullscreen_mode_ref="true"
+        shift
+        ;;
+      *)
+        start_args_ref+=("$1")
+        shift
+        ;;
+    esac
+  done
+}
+
+console_notify() {
+  local action="$1"
+  local elapsed_sec="$2"
+  printf 'Android virtual device %s in %ss.\n' "${action}" "${elapsed_sec}" >&3
+}
+
+run_timed_operation() {
+  local action="$1"
+  shift
+
+  local start_epoch
+  local elapsed_sec
+
+  start_epoch="$(date +%s)"
+  "$@"
+  elapsed_sec="$(( $(date +%s) - start_epoch ))"
+
+  console_notify "${action}" "${elapsed_sec}"
+}
+
+redirect_start_logs() {
+  mkdir -p "$(dirname "${START_LOG_FILE}")"
+  : > "${START_LOG_FILE}"
+  exec >"${START_LOG_FILE}" 2>&1
+}
+
+usage() {
+  local output_fd="${1:-1}"
+  cat >&"${output_fd}" <<EOF
+
+Usage:
+
+  ${SCRIPT_NAME} start [-f|--fullscreen] [--setting=arg] ...
+  ${SCRIPT_NAME} stop
+  ${SCRIPT_NAME} restart [-f|--fullscreen] ...
+  ${SCRIPT_NAME} reset [Delete everything and start fresh]
+
+Example:
+
+  ${SCRIPT_NAME} start --cpus=2 --memory_mb=2048 --dpi=240 --fullscreen
+
+EOF
+}
+
+shell_join() {
+  local joined
+  printf -v joined '%q ' "$@"
+  printf '%s' "${joined% }"
+}
+
+latest_launcher_log_message() {
+  local launcher_log="$1"
+  local min_mtime="$2"
+  local pattern="$3"
+  local log_mtime
+
+  [[ -f "${launcher_log}" ]] || return 1
+
+  log_mtime="$(stat -c '%Y' "${launcher_log}" 2>/dev/null || echo 0)"
+  [[ "${log_mtime}" -ge "${min_mtime}" ]] || return 1
+
+  grep -F "${pattern}" "${launcher_log}" | tail -n 1 || true
+}
+
+maybe_respond_crosvm_command() {
+  local launcher_log="$1"
+  local min_mtime="$2"
+  local line
+  local command
+
+  line="$(latest_launcher_log_message "${launcher_log}" "${min_mtime}" "crosvm launch command:")"
+  [[ -n "${line}" ]] || return 1
+
+  command="${line#*"crosvm launch command: "}"
+  respond "[${SCRIPT_NAME}] crosvm launch command: ${command}"
+  return 0
+}
+
+emit_launch_command() {
+  local launch_command
+  local -a env_args=(env)
+
+  append_cvd_env_args env_args
+
+  launch_command="$(
+    shell_join \
+      "${env_args[@]}" \
+      "${CVD_BIN}" \
+      "$@"
+  )"
+
+  log "launch command: cd $(printf '%q' "${CVD_PRODUCT_OUT}") && ${launch_command}"
+}
+
+resolve_scrcpy_dpi() {
+  local explicit_dpi="${1:-}"
+  local size
+  local width
+  local dpi
+
+  if [[ -n "${explicit_dpi}" ]]; then
+    printf '%s\n' "${explicit_dpi}"
+    return 0
+  fi
+
+  if [[ "${IKADPI:-}" =~ ^[0-9]+$ ]] && (( IKADPI >= 72 && IKADPI <= 1200 )); then
+    printf '%s\n' "${IKADPI}"
+    return 0
+  fi
+
+  size="$(host_display_size || true)"
+  if [[ ! "${size}" =~ ^([0-9]+)x[0-9]+$ ]]; then
+    die "could not determine host display width for automatic DPI"
+  fi
+
+  # Heuristic: DPI = native display width / 12. Lands exactly on AOSP density
+  # buckets at common monitor widths:
+  #
+  #     1440  -> 120 (ldpi)
+  #     1920  -> 160 (mdpi)        1080p
+  #     2880  -> 240 (hdpi)        1440p / 2.5K
+  #     3840  -> 320 (xhdpi)       4K
+  #     5760  -> 480 (xxhdpi)
+  #     7680  -> 640 (xxxhdpi)     8K
+  #
+  # Clamp to the 72 / 640 AOSP density-bucket range to keep pathological
+  # display sizes (very narrow, very wide) from producing unusable values.
+  width="${BASH_REMATCH[1]}"
+  dpi=$(( width / 12 ))
+  if (( dpi < 72 )); then
+    dpi=72
+  elif (( dpi > 640 )); then
+    dpi=640
+  fi
+
+  printf '%s\n' "${dpi}"
+}
+
+split_start_args() {
+  local -n args_array="$1"
+  local -n scrcpy_dpi_ref="$2"
+  shift 2
+  local dpi_user_supplied="false"
+
+  scrcpy_dpi_ref=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dpi=*)
+        scrcpy_dpi_ref="${1#*=}"
+        dpi_user_supplied="true"
+        args_array+=("$1")
+        shift
+        ;;
+      --dpi)
+        args_array+=("$1")
+        shift
+        [[ $# -gt 0 ]] || die "--dpi requires a value"
+        scrcpy_dpi_ref="$1"
+        dpi_user_supplied="true"
+        args_array+=("$1")
+        shift
+        ;;
+      *)
+        args_array+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  scrcpy_dpi_ref="$(resolve_scrcpy_dpi "${scrcpy_dpi_ref}")"
+  if [[ "${dpi_user_supplied}" != "true" ]]; then
+    args_array+=("--dpi=${scrcpy_dpi_ref}")
+  fi
+}
+
+host_display_size() {
+  command -v wayland-info >/dev/null 2>&1 || return 1
+
+  wayland-info 2>/dev/null | awk '
+    /^[[:space:]]*mode:/ {
+      in_mode = 1
+      width = 0
+      height = 0
+      next
+    }
+    in_mode {
+      if (match($0, /width:[[:space:]]*([0-9]+)/, w)) {
+        width = w[1]
+      }
+      if (match($0, /height:[[:space:]]*([0-9]+)/, h)) {
+        height = h[1]
+      }
+      if ($0 ~ /flags:/) {
+        if ($0 ~ /current/ && width && height) {
+          area = width * height
+          if (area > best_area) {
+            best_area = area
+            best_width = width
+            best_height = height
+          }
+        }
+        in_mode = 0
+      }
+    }
+    END {
+      if (best_width && best_height) {
+        printf "%sx%s\n", best_width, best_height
+      }
+    }
+  '
+}
+
+has_display_size_override() {
+  local flag
+
+  for flag in display display0 display1 display2 display3 \
+              displays_textproto displays_binproto x_res y_res; do
+    if user_supplied_flag "${flag}" "$@"; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+current_scrcpy_dpi() {
+  if [[ "${SCRCPY_DPI_FLAG}" =~ ^--dpi=([0-9]+)$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  else
+    printf 'unknown\n'
+  fi
+}
+
+append_default_display_arg() {
+  local -n args_array="$1"
+  local dpi="$2"
+  shift 2
+  local size
+  local width
+  local height
+
+  if has_display_size_override "$@"; then
+    return 0
+  fi
+
+  size="$(host_display_size || true)"
+  if [[ ! "${size}" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+    log "could not determine host display size; leaving Cuttlefish display defaults unchanged"
+    return 0
+  fi
+
+  width="${BASH_REMATCH[1]}"
+  height="${BASH_REMATCH[2]}"
+  if (( width <= 0 || width > 65535 || height <= 0 || height > 65535 )); then
+    log "ignoring invalid host display size: ${size}"
+    return 0
+  fi
+
+  args_array+=("--display=width=${width},height=${height},dpi=${dpi},refresh_rate_hz=60")
+  log "display ceiling: ${width}x${height}/${dpi}"
+}
+
+require_executable() {
+  local path="$1"
+  local label="$2"
+  [[ -x "${path}" ]] || die "${label} not found or not executable: ${path}"
+}
+
+apply_default_args() {
+  local -n config_map="$1"
+  local -n args_array="$2"
+  shift 2
+  local key value
+
+  for key in "${!config_map[@]}"; do
+    if ! user_supplied_flag "${key}" "$@"; then
+      value="${config_map[${key}]}"
+      # Handle special case for report_anonymous_usage_stats which uses single dash
+      if [[ "${key}" == "report_anonymous_usage_stats" ]]; then
+        args_array+=("-${key}=${value}")
+      else
+        args_array+=("--${key}=${value}")
+      fi
+    fi
+  done
+}
+
+apply_start_default_args() {
+  local args_array_name="$1"
+  shift
+  local config_map
+
+  for config_map in "${CVD_DEFAULT_ARG_MAPS[@]}"; do
+    apply_default_args "${config_map}" "${args_array_name}" "$@"
+  done
+}
+
+append_host_timezone_arg() {
+  local -n args_array="$1"
+  local tz
+
+  tz="$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')"
+  [[ -n "${tz}" ]] || return 0
+
+  args_array+=("--extra_bootconfig_args=androidboot.timezone=\"${tz}\"")
+  log "timezone: ${tz}"
+}
+
+append_cvd_env_args() {
+  local -n env_args_ref="$1"
+  local config_path="${2:-}"
+
+  env_args_ref+=(
+    "HOME=${CVD_HOME_DIR}"
+    "ANDROID_HOST_OUT=${CVD_HOST_OUT}"
+    "ANDROID_SOONG_HOST_OUT=${CVD_HOST_OUT}"
+    "ANDROID_PRODUCT_OUT=${CVD_PRODUCT_OUT}"
+  )
+
+  if [[ -n "${config_path}" ]]; then
+    env_args_ref+=("CUTTLEFISH_CONFIG_FILE=${config_path}")
+  fi
+}
+
+run_with_cvd_env() {
+  local config_path=""
+  local -a env_args=(env)
+
+  if [[ "${1:-}" == "--config" ]]; then
+    config_path="${2:-}"
+    shift 2
+  fi
+
+  append_cvd_env_args env_args "${config_path}"
+  "${env_args[@]}" "$@"
+}
+
+has_session_group() {
+  id -nG | tr ' ' '\n' | grep -Fxq "$1"
+}
+
+has_configured_group() {
+  id -nG "${USER}" | tr ' ' '\n' | grep -Fxq "$1"
+}
+
+check_required_groups() {
+  local -a required_groups=(kvm video render cvdnetwork)
+  local -a missing_groups=()
+  local -a inactive_groups=()
+  local -a add_groups=()
+  local group
+
+  for group in "${required_groups[@]}"; do
+    if getent group "${group}" >/dev/null 2>&1 && ! has_session_group "${group}"; then
+      missing_groups+=("${group}")
+      if has_configured_group "${group}"; then
+        inactive_groups+=("${group}")
+      else
+        add_groups+=("${group}")
+      fi
+    fi
+  done
+
+  if [[ "${#missing_groups[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  cat <<EOF
+[${SCRIPT_NAME}] error: current shell is missing required groups.
+
+Active groups:
+  $(id -nG)
+
+Missing groups:
+  ${missing_groups[*]}
+
+EOF
+
+  if [[ "${#add_groups[@]}" -gt 0 ]]; then
+    cat <<EOF
+To add the missing account membership:
+  pkexec /usr/libexec/cuttlefish/cuttlefish-add-user-to-groups
+
+EOF
+  fi
+
+  if [[ "${#inactive_groups[@]}" -gt 0 ]]; then
+    cat <<EOF
+Configured on the account but not active in this login session:
+  ${inactive_groups[*]}
+
+EOF
+  fi
+
+  cat <<EOF
+
+Log out fully and back in after updating group membership.
+EOF
+  exit 1
+}
+
+resolve_adb_serial() {
+  local adb_ip_and_port
+  local adb_port
+
+  if [[ -f "${CVD_CONFIG_PATH}" ]]; then
+    adb_ip_and_port="$(grep -oE '"adb_ip_and_port"[[:space:]]*:[[:space:]]*"[^"]+"' "${CVD_CONFIG_PATH}" | head -n1 | sed -E 's/.*"([^"]+)"$/\1/' || true)"
+    if [[ -n "${adb_ip_and_port}" ]]; then
+      printf '%s\n' "${adb_ip_and_port}"
+      return 0
+    fi
+
+    adb_port="$(grep -oE '"adb_host_port"[[:space:]]*:[[:space:]]*[0-9]+' "${CVD_CONFIG_PATH}" | head -n1 | grep -oE '[0-9]+$' || true)"
+    if [[ -n "${adb_port}" ]]; then
+      printf '0.0.0.0:%s\n' "${adb_port}"
+      return 0
+    fi
+  fi
+
+  printf '0.0.0.0:6520\n'
+}
+
+resolve_cuttlefish_frames_socket() {
+  local frame_sock_path=""
+  local socket_path
+
+  if [[ -f "${CVD_CONFIG_PATH}" ]]; then
+    frame_sock_path="$(grep -oE '"frame_sock_path"[[:space:]]*:[[:space:]]*"[^"]+"' "${CVD_CONFIG_PATH}" | head -n1 | sed -E 's/.*"([^"]+)"$/\1/' || true)"
+  fi
+
+  if [[ -n "${frame_sock_path}" ]]; then
+    socket_path="$(dirname "${frame_sock_path}")/ika_frames.sock"
+  else
+    socket_path="/tmp/cf_avd_${UID}/cvd-1/internal/ika_frames.sock"
+  fi
+
+  printf '%s\n' "${socket_path}"
+}
+
+has_live_cvd_processes() {
+  pgrep -f "${CVD_PROCESS_REGEX}" >/dev/null 2>&1
+}
+
+stop_dnsmasq() {
+  local pid_file
+  for pid_file in /var/tmp/cvd/cuttlefish-dnsmasq-*.pid /var/run/cuttlefish-dnsmasq-*.pid; do
+    [[ -f "${pid_file}" ]] || continue
+    kill "$(cat "${pid_file}")" 2>/dev/null || true
+    rm -f "${pid_file}"
+    rm -f "${pid_file%.pid}.leases"
+  done
+  pkill -f 'dnsmasq.*cvd-' 2>/dev/null || true
+}
+
+cleanup_user_processes() {
+  local -a pids=()
+  local pid
+
+  while read -r pid; do
+    [[ -n "${pid}" ]] || continue
+    [[ "${pid}" == "$$" ]] && continue
+    pids+=("${pid}")
+  done < <(pgrep -f "${CVD_PROCESS_REGEX}" || true)
+
+  if [[ "${#pids[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  mapfile -t pids < <(printf '%s\n' "${pids[@]}" | sort -u)
+  log "stopping leftover Cuttlefish processes: ${pids[*]}"
+  kill "${pids[@]}" 2>/dev/null || true
+  sleep 1
+  kill -9 "${pids[@]}" 2>/dev/null || true
+}
+
+within_deadline() {
+  local deadline="$1"
+  [[ "${deadline}" -eq 0 || ${SECONDS} -lt ${deadline} ]]
+}
+
+make_deadline() {
+  local timeout_sec="$1"
+  if [[ "${timeout_sec}" -gt 0 ]]; then
+    printf '%s\n' "$((SECONDS + timeout_sec))"
+  else
+    printf '0\n'
+  fi
+}
+
+wait_for_boot() {
+  local launcher_log="$1"
+  local deadline="$2"
+  local min_mtime="${3:-0}"
+  local min_offset="${4:-0}"
+  local crosvm_command_reported="false"
+
+  while within_deadline "${deadline}"; do
+    if [[ -f "${launcher_log}" ]]; then
+      local log_mtime
+      log_mtime="$(stat -c '%Y' "${launcher_log}" 2>/dev/null || echo 0)"
+      if [[ "${crosvm_command_reported}" != "true" ]]; then
+        if maybe_respond_crosvm_command "${launcher_log}" "${min_mtime}"; then
+          crosvm_command_reported="true"
+        fi
+      fi
+      if [[ "${log_mtime}" -ge "${min_mtime}" ]] &&
+         launcher_log_contains_message_since_offset "${launcher_log}" "${CVD_BOOT_MESSAGE}" "${min_offset}"; then
+        return 0
+      fi
+    fi
+    if ! has_live_cvd_processes; then
+      return 1
+    fi
+    sleep 0.5
+  done
+
+  return 1
+}
+
+launcher_log_contains_message_since_offset() {
+  local launcher_log="$1"
+  local message="$2"
+  local min_offset="${3:-0}"
+  local file_size
+  local effective_offset
+
+  [[ -f "${launcher_log}" ]] || return 1
+
+  file_size="$(stat -c '%s' "${launcher_log}" 2>/dev/null || echo 0)"
+  effective_offset="${min_offset}"
+
+  # launcher.log can be rotated/truncated during startup; if the saved offset
+  # points past EOF, reset to the current file start so new messages are visible.
+  if [[ "${effective_offset}" -gt "${file_size}" ]]; then
+    effective_offset=0
+  fi
+
+  tail -c "+$((effective_offset + 1))" "${launcher_log}" 2>/dev/null | grep -Fq "${message}"
+}
+
+pin_host_frontend_processes() {
+  local host_core_list="$1"
+  local pid
+  [[ -n "${host_core_list}" ]] || return 0
+  command -v taskset >/dev/null 2>&1 || return 0
+
+  while read -r pid; do
+    [[ -n "${pid}" ]] || continue
+    taskset -apc "${host_core_list}" "${pid}" >/dev/null 2>&1 || true
+  done < <(pgrep -u "${UID}" -x webRTC || true)
+}
+
+ensure_chromium_before_scrcpy() {
+  local adb_serial="$1"
+  local pm_output
+
+  # Only proceed if the device positively confirms org.chromium.chrome is
+  # missing. Any ambiguous state (adb error, empty output, etc.) means we
+  # must NOT auto-install — getchromium is a destructive provisioning step.
+  if ! pm_output="$(adb -s "${adb_serial}" shell pm list packages 2>/dev/null)" \
+      || [[ -z "${pm_output}" ]]; then
+    log "Could not confirm Chromium install state via adb; skipping getchromium."
+    return 0
+  fi
+
+  if grep -Fxq "package:org.chromium.chrome" <<<"${pm_output}"; then
+    return 0
+  fi
+
+  if [[ ! -x "${PACKAGED_GETCHROMIUM_BIN}" ]]; then
+    log "Chromium is not installed and ${PACKAGED_GETCHROMIUM_BIN} is unavailable; continuing to scrcpy."
+    return 0
+  fi
+
+  log "Chromium confirmed missing; running getchromium before scrcpy."
+  if ! ANDROID_SERIAL="${adb_serial}" "${PACKAGED_GETCHROMIUM_BIN}" >&3 2>&3; then
+    log "getchromium failed; continuing to scrcpy."
+  fi
+}
+
+start_scrcpy_with_retries() {
+  local adb_serial="$1"
+  local fullscreen_mode="${2:-false}"
+  local attempt=1
+  local max_attempts=5
+  local cuttlefish_frames_socket
+  local scrcpy_log="${SCRCPY_LOG_FILE}"
+  local host_core_list
+  local -a scrcpy_env=()
+  local -a scrcpy_cmd=(
+    "${SCRCPY_BIN}"
+    -s "${adb_serial}"
+  )
+  cuttlefish_frames_socket="$(resolve_cuttlefish_frames_socket)"
+  if [[ -n "${SCRCPY_DPI_FLAG}" ]]; then
+    scrcpy_cmd+=("${SCRCPY_DPI_FLAG}")
+  fi
+  scrcpy_cmd+=(
+    --force-adb-forward
+    --cuttlefish-frames-socket="${cuttlefish_frames_socket}"
+    --render-driver=opengl
+    --window-borderless
+    --audio-buffer=80
+    --audio-output-buffer=10
+    --audio-codec=raw
+    --mouse-bind=+hsn:b+++
+  )
+
+  if [[ -d "${SCRCPY_ICON_DIR_DEFAULT}" ]]; then
+    scrcpy_env+=("SCRCPY_ICON_DIR=${SCRCPY_ICON_DIR_DEFAULT}")
+  fi
+
+  if [[ -n "${SCRCPY_SERVER_PATH_OVERRIDE}" && -f "${SCRCPY_SERVER_PATH_OVERRIDE}" ]]; then
+    scrcpy_env+=("SCRCPY_SERVER_PATH=${SCRCPY_SERVER_PATH_OVERRIDE}")
+  fi
+
+  if [[ "${#scrcpy_env[@]}" -gt 0 ]]; then
+    scrcpy_cmd=(
+      env
+      "${scrcpy_env[@]}"
+      "${scrcpy_cmd[@]}"
+    )
+  fi
+
+  host_core_list="$(reserved_host_core_list)"
+  if [[ -n "${host_core_list}" ]] && command -v taskset >/dev/null 2>&1; then
+    log "pinning direct console to host performance cores: ${host_core_list}"
+    pin_host_frontend_processes "${host_core_list}"
+    scrcpy_cmd=(taskset -c "${host_core_list}" "${scrcpy_cmd[@]}")
+  fi
+
+  mkdir -p "$(dirname "${scrcpy_log}")"
+  : > "${scrcpy_log}"
+
+  ensure_chromium_before_scrcpy "${adb_serial}"
+
+  while [[ "${attempt}" -le "${max_attempts}" ]]; do
+    log "starting scrcpy for ${adb_serial} (attempt ${attempt})"
+    if [[ "${fullscreen_mode}" == "true" ]]; then
+      setsid --fork "${scrcpy_cmd[@]}" --fullscreen </dev/null >>"${scrcpy_log}" 2>&1 &
+    else
+      setsid --fork "${scrcpy_cmd[@]}" </dev/null >>"${scrcpy_log}" 2>&1 &
+    fi
+    disown || true
+
+    sleep 1.5
+    if pgrep -x scrcpy >/dev/null 2>&1; then
+      return 0
+    fi
+
+    log "scrcpy exited quickly; retrying."
+    attempt=$((attempt + 1))
+    if [[ "${attempt}" -le "${max_attempts}" ]]; then
+      sleep 1
+    fi
+  done
+
+  log "unable to keep scrcpy running after ${max_attempts} attempts."
+  return 1
+}
+
+schedule_scrcpy_when_launcher_ready() {
+  local adb_serial="$1"
+  local launcher_log="$2"
+  local fullscreen_mode="${3:-false}"
+  local min_log_offset="${4:-0}"
+
+  (
+    while has_live_cvd_processes; do
+      if launcher_log_contains_message_since_offset "${launcher_log}" "${CVD_BOOT_MESSAGE}" "${min_log_offset}"; then
+        break
+      fi
+      sleep 0.5
+    done
+
+    if ! has_live_cvd_processes; then
+      log "deferred scrcpy watcher stopped because Cuttlefish exited before ${CVD_BOOT_MESSAGE}."
+      exit 0
+    fi
+    start_scrcpy_with_retries "${adb_serial}" "${fullscreen_mode}" || true
+  ) &
+
+  disown || true
+  log "scheduled scrcpy launch when launcher logs ${CVD_BOOT_MESSAGE}"
+}
+
+maybe_start_scrcpy() {
+  local adb_serial="$1"
+  local launcher_log="$2"
+  local fullscreen_mode="${3:-false}"
+  local min_log_offset="${4:-0}"
+
+  if [[ ! -x "${SCRCPY_BIN}" ]]; then
+    log "scrcpy not found at ${SCRCPY_BIN}; skipping client launch."
+    return 0
+  fi
+
+  if launcher_log_contains_message_since_offset "${launcher_log}" "${CVD_BOOT_MESSAGE}" "${min_log_offset}"; then
+    log "launcher already contains ${CVD_BOOT_MESSAGE}; starting scrcpy immediately."
+    start_scrcpy_with_retries "${adb_serial}" "${fullscreen_mode}" || true
+    return 0
+  fi
+
+  log "launcher has not yet logged ${CVD_BOOT_MESSAGE}; deferring scrcpy launch."
+  schedule_scrcpy_when_launcher_ready "${adb_serial}" "${launcher_log}" "${fullscreen_mode}" "${min_log_offset}"
+  return 0
+}
+
+log_start_context() {
+  local launcher_log="$1"
+  shift
+  local scrcpy_dpi
+  scrcpy_dpi="$(current_scrcpy_dpi)"
+
+  log "starting Cuttlefish with $(basename "${CVD_BIN}") at ${scrcpy_dpi} DPI"
+  printf '[%s] starting Cuttlefish with %s at %s DPI\n' \
+    "${SCRIPT_NAME}" "$(basename "${CVD_BIN}")" "${scrcpy_dpi}" >&3
+  log "HOME=${CVD_HOME_DIR}"
+  log "ANDROID_HOST_OUT=${CVD_HOST_OUT}"
+  log "ANDROID_PRODUCT_OUT=${CVD_PRODUCT_OUT}"
+  log "gpu_mode=${CVD_GPU_MODE}"
+  log "launcher_log=${launcher_log}"
+  emit_launch_command "$@"
+}
+
+start_cvd() {
+  local fullscreen_mode="${1:-false}"
+  shift || true
+  local -a args=()
+  local launcher_log
+  local adb_serial
+  local boot_deadline
+  local start_epoch
+  local launcher_log_offset="0"
+  local scrcpy_dpi
+
+  require_executable "${CVD_BIN}" "cvd launcher"
+  check_required_groups
+  launcher_log="${CVD_LAUNCHER_LOG}"
+  adb_serial="$(resolve_adb_serial)"
+  start_epoch="$(date +%s)"
+  split_start_args args scrcpy_dpi "$@"
+  SCRCPY_DPI_FLAG="--dpi=${scrcpy_dpi}"
+
+  if has_live_cvd_processes; then
+    log "Cuttlefish is already running under ${CVD_HOME_DIR}"
+    respond_console "Instance running, local console will restart"
+    respond "Android virtual device running"
+    start_scrcpy_with_retries "${adb_serial}" "${fullscreen_mode}" || true
+    return 0
+  fi
+
+  if [[ -f "${launcher_log}" ]]; then
+    launcher_log_offset="$(stat -c '%s' "${launcher_log}" 2>/dev/null || echo 0)"
+  fi
+
+  apply_start_default_args args "$@"
+  append_default_display_arg args "${scrcpy_dpi}" "$@"
+  append_host_timezone_arg args
+
+  log_start_context "${launcher_log}" "${args[@]}"
+
+  (
+    cd "${CVD_PRODUCT_OUT}"
+    run_with_cvd_env "${CVD_BIN}" "${args[@]}"
+  ) &
+
+  log "launcher pid: $!"
+
+  boot_deadline="$(make_deadline "${CVD_BOOT_TIMEOUT_SEC}")"
+  if ! wait_for_boot "${launcher_log}" "${boot_deadline}" "${start_epoch}" "${launcher_log_offset}"; then
+    if [[ -f "${launcher_log}" ]]; then
+      tail -n 80 "${launcher_log}" >&2 || true
+    fi
+    die "Cuttlefish did not reach boot completion"
+  fi
+
+  log "boot completed after seeing: ${CVD_BOOT_MESSAGE}"
+  respond "Android virtual device running"
+  maybe_start_scrcpy "${adb_serial}" "${launcher_log}" "${fullscreen_mode}" "${launcher_log_offset}" || true
+
+}
+
+stop_cvd_internal() {
+  local clear_instance_dirs="${1:-false}"
+  shift || true
+  local stop_action="stopping Cuttlefish"
+  local stop_ok="false"
+  local -a run_with_args=()
+  local -a stop_args=()
+
+  if [[ "${clear_instance_dirs}" == "true" ]]; then
+    stop_action="stopping Cuttlefish and clearing instance dirs"
+    stop_args+=("--clear_instance_dirs")
+  fi
+  stop_args+=("$@")
+
+  require_executable "${CVD_STOP_BIN}" "cvd stop helper"
+
+  if [[ -f "${CVD_CONFIG_PATH}" ]]; then
+    run_with_args+=(--config "${CVD_CONFIG_PATH}")
+  fi
+
+  log "${stop_action} with $(basename "${CVD_STOP_BIN}")"
+
+  if run_with_cvd_env "${run_with_args[@]}" "${CVD_STOP_BIN}" "${stop_args[@]}"; then
+    stop_ok="true"
+  else
+    log "primary stop helper returned non-zero"
+  fi
+
+  if [[ "${stop_ok}" != "true" ]]; then
+    log "retrying stop via $(basename "${CVD_CLI_BIN}") stop"
+    run_with_cvd_env "${CVD_CLI_BIN}" stop "${stop_args[@]}" && stop_ok="true" || true
+  fi
+
+  if [[ "${clear_instance_dirs}" == "true" ]]; then
+    run_with_cvd_env "${CVD_CLI_BIN}" clear >/dev/null 2>&1 || true
+  fi
+
+  stop_dnsmasq
+  cleanup_user_processes
+
+  if has_live_cvd_processes; then
+    die "Cuttlefish processes are still running after stop attempt"
+  fi
+
+  if [[ "${stop_ok}" != "true" ]]; then
+    log "stop helper reported no active device; no live Cuttlefish processes remain"
+  fi
+
+  respond "Android virtual device stopped."
+}
+
+exec_start_command() {
+  local fullscreen_mode="$1"
+  shift
+
+  if [[ "${fullscreen_mode}" == "true" ]]; then
+    exec "$0" start --fullscreen "$@"
+  fi
+
+  exec "$0" start "$@"
+}
+
+main() {
+  local command="${1:-help}"
+  local fullscreen_mode
+  local -a start_args
+
+  case "${command}" in
+    start)
+      CONSOLE_FAILURE_MESSAGE="Startup Failed."
+      stop_startup_packaged_scrcpy
+      redirect_start_logs
+      shift
+      start_args=()
+      parse_start_options fullscreen_mode start_args "$@"
+      run_timed_operation "started" start_cvd "${fullscreen_mode}" "${start_args[@]}"
+      ;;
+    stop)
+      shift
+      stop_cvd_internal false "$@"
+      ;;
+    reset)
+      shift
+      confirm_reset || exit 1
+      stop_cvd_internal true "$@"
+      ;;
+    restart)
+      shift
+      start_args=()
+      parse_start_options fullscreen_mode start_args "$@"
+      stop_cvd_internal false
+      sleep 0.5
+      exec_start_command "${fullscreen_mode}" "${start_args[@]}"
+      ;;
+    status)
+      if has_live_cvd_processes; then
+        respond "Android virtual device running."
+      else
+        respond "Android virtual device not running."
+      fi
+      ;;
+    help|-h|--help)
+      usage
+      ;;
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

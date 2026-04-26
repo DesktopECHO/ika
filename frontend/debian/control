@@ -1,0 +1,36 @@
+Source: cuttlefish-frontend
+Maintainer: Cuttlefish Team <cloud-android-ext@google.com>
+Section: misc
+Priority: optional
+Build-Depends: config-package-dev,
+               curl,
+               debhelper-compat (= 12),
+               golang (>= 2:1.13~) | golang-1.13,
+               libprotobuf-dev,
+               protobuf-compiler,
+Standards-Version: 4.5.0
+Rules-Requires-Root: no
+
+Package: cuttlefish-user
+Architecture: any
+Depends: cuttlefish-base,
+         adduser,
+         openssl,
+         ${misc:Depends},
+         ${shlibs:Depends}
+Pre-Depends: ${misc:Pre-Depends}
+Description: Cuttlefish Android Virtual Device companion package
+ Contains the host signaling server supporting multi-device flows
+ over WebRTC.
+
+Package: cuttlefish-orchestration
+Architecture: any
+Depends: cuttlefish-user,
+         adduser,
+         openssl,
+         nginx,
+         systemd-journal-remote,
+         ${misc:Depends}
+Pre-Depends: ${misc:Pre-Depends}
+Description: Cuttlefish Android Virtual Device companion package
+ Contains the host orchestrator.

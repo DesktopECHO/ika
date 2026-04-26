@@ -1,0 +1,52 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_cc_binary(
+    name = "secure_env",
+    srcs = ["secure_env_only_oemlock.cpp"],
+    deps = [
+        ":suspend_resume_handler",
+        ":worker_thread_loop_body",
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/transport",
+        "//cuttlefish/host/commands/kernel_log_monitor:kernel_log_monitor_utils",
+        "//cuttlefish/host/commands/secure_env/oemlock",
+        "//cuttlefish/host/commands/secure_env/oemlock:oemlock_responder",
+        "//cuttlefish/host/commands/secure_env/storage:insecure_json_storage",
+        "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/config:logging",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
+        "@gflags",
+    ],
+)
+
+cf_cc_library(
+    name = "suspend_resume_handler",
+    srcs = ["suspend_resume_handler.cpp"],
+    hdrs = ["suspend_resume_handler.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/host/libs/command_util",
+        "//cuttlefish/result",
+        "//libbase",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_library(
+    name = "worker_thread_loop_body",
+    srcs = ["worker_thread_loop_body.cpp"],
+    hdrs = ["worker_thread_loop_body.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/host/commands/secure_env:suspend_resume_handler",
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result",
+        "@abseil-cpp//absl/log",
+    ],
+)

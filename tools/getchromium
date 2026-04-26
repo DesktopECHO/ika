@@ -1,0 +1,331 @@
+#!/usr/bin/python3
+import subprocess
+import requests
+import zipfile
+import os
+import re
+import sys
+import shutil
+import time
+import xml.etree.ElementTree as ET
+
+STORAGE_URL = "https://commondatastorage.googleapis.com/chromium-browser-snapshots"
+DOWNLOAD_CACHE_DIR = "/tmp"
+DOWNLOAD_BASENAME = "chrome-android-desktop"
+ARCH_DETECT_ATTEMPTS = 10
+ARCH_DETECT_RETRY_SECONDS = 1
+CHROME_PACKAGE = "org.chromium.chrome"
+CHROME_COMMAND_LINE_FILES = (
+    "/data/local/chrome-command-line",
+    "/data/local/tmp/chrome-command-line",
+)
+BROWSER_APK_PRIORITY = (
+    "Chromium.apk",
+    "ChromePublic.apk",
+    "MonochromePublic.apk",
+)
+BROWSER_APK_NAME_MARKERS = ("Chromium", "Chrome", "Monochrome")
+EXCLUDED_APK_NAME_MARKERS = ("ContentShell", "Test", "Instrumentation", "WebView")
+STOCK_BROWSER_PACKAGES = (
+    "org.lineageos.jelly",
+    "com.android.browser",
+    "org.chromium.content_shell_apk",
+    "org.chromium.webview_shell",
+)
+UI_DUMP_PATH = "/sdcard/chromium-provision-ui.xml"
+FIRST_RUN_SIGNED_OUT_TEXT = "Stay signed out"
+DEFAULT_BROWSER_CANCEL_TEXT = "Cancel"
+
+def run_adb(args):
+    try:
+        result = subprocess.run(["adb"] + args, capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        print(f"!!! ADB Error: {e.stderr}")
+        sys.exit(1)
+    except FileNotFoundError:
+        print("!!! Error: ADB not found. Ensure android-tools is installed.")
+        sys.exit(1)
+
+def run_adb_best_effort(args):
+    try:
+        subprocess.run(["adb"] + args, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        print("!!! Error: ADB not found. Ensure android-tools is installed.")
+        sys.exit(1)
+
+def run_adb_optional(args):
+    try:
+        return subprocess.run(["adb"] + args, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        print("!!! Error: ADB not found. Ensure android-tools is installed.")
+        sys.exit(1)
+
+def set_chromium_default_browser():
+    print("      Setting Chromium as the default browser...")
+    verify_chromium_installed()
+    for package_name in STOCK_BROWSER_PACKAGES:
+        run_adb_best_effort(
+            [
+                "shell",
+                "cmd",
+                "role",
+                "remove-role-holder",
+                "--user",
+                "0",
+                "android.app.role.BROWSER",
+                package_name,
+                "0",
+            ]
+        )
+    run_adb(
+        [
+            "shell",
+            "cmd",
+            "role",
+            "add-role-holder",
+            "--user",
+            "0",
+            "android.app.role.BROWSER",
+            CHROME_PACKAGE,
+            "0",
+        ]
+    )
+
+def disable_stock_browsers():
+    print("      Disabling stock browser...")
+    for package_name in STOCK_BROWSER_PACKAGES:
+        run_adb_best_effort(["shell", "pm", "disable-user", "--user", "0", package_name])
+
+def verify_chromium_installed():
+    result = run_adb_optional(["shell", "pm", "path", CHROME_PACKAGE])
+    if result.returncode == 0 and result.stdout.strip():
+        return
+
+    print(f"!!! Error: {CHROME_PACKAGE} was not installed by the selected APK.")
+    sys.exit(1)
+
+def is_browser_candidate(apk):
+    apk_name = os.path.basename(apk)
+    if any(marker in apk_name for marker in EXCLUDED_APK_NAME_MARKERS):
+        return False
+    return any(marker in apk_name for marker in BROWSER_APK_NAME_MARKERS)
+
+def parse_bounds(bounds):
+    match = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", bounds or "")
+    if not match:
+        return None
+
+    left, top, right, bottom = (int(group) for group in match.groups())
+    return ((left + right) // 2, (top + bottom) // 2)
+
+def find_ui_text_center(text):
+    dump_result = run_adb_optional(["shell", "uiautomator", "dump", UI_DUMP_PATH])
+    if dump_result.returncode != 0:
+        return None
+
+    xml_result = run_adb_optional(["exec-out", "cat", UI_DUMP_PATH])
+    if xml_result.returncode != 0:
+        return None
+
+    try:
+        root = ET.fromstring(xml_result.stdout)
+    except ET.ParseError:
+        return None
+
+    for node in root.iter("node"):
+        if node.attrib.get("text") == text:
+            return parse_bounds(node.attrib.get("bounds"))
+
+    return None
+
+def tap_ui_text(text, timeout_seconds):
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        center = find_ui_text_center(text)
+        if center:
+            x, y = center
+            run_adb(["shell", "input", "tap", str(x), str(y)])
+            return True
+        time.sleep(1)
+
+    return False
+
+def provision_chromium_first_run():
+    run_adb_best_effort(["shell", "am", "force-stop", CHROME_PACKAGE])
+    run_adb(["shell", "monkey", "-p", CHROME_PACKAGE, "-c", "android.intent.category.LAUNCHER", "1"])
+
+    if tap_ui_text(FIRST_RUN_SIGNED_OUT_TEXT, 20):
+        print("      Finalizing setup...")
+        if tap_ui_text(DEFAULT_BROWSER_CANCEL_TEXT, 10):
+            print("      Dismissed default-browser prompt.")
+        return
+
+    print("      No Chromium first-run prompt detected.")
+
+def chromium_snapshot_prefix_for_abi(abi):
+    if "arm64" in abi:
+        return "AndroidDesktop_arm64"
+    if "x86_64" in abi:
+        return "AndroidDesktop_x64"
+    return None
+
+def get_config():
+    sys.stdout.write("[1/5] Detecting device architecture... ")
+    sys.stdout.flush()
+    abi = ""
+    last_error = ""
+    prefix = None
+
+    for attempt in range(ARCH_DETECT_ATTEMPTS):
+        result = run_adb_optional(["shell", "getprop", "ro.product.cpu.abi"])
+        if result.returncode == 0:
+            abi = result.stdout.strip()
+            prefix = chromium_snapshot_prefix_for_abi(abi)
+            if prefix:
+                break
+        else:
+            last_error = result.stderr.strip() or result.stdout.strip()
+
+        if attempt < ARCH_DETECT_ATTEMPTS - 1:
+            time.sleep(ARCH_DETECT_RETRY_SECONDS)
+
+    if not prefix:
+        print(f"!!! Error: Could not detect supported device architecture after {ARCH_DETECT_ATTEMPTS} attempts.")
+        if abi:
+            print(f"      Last ABI: {abi}")
+        elif last_error:
+            print(f"      Last error: {last_error}")
+        sys.exit(1)
+    
+    print(prefix)
+    sys.stdout.write(f"[2/5] Fetching latest revision for {prefix}... ")
+    sys.stdout.flush()
+    
+    r = requests.get(f"{STORAGE_URL}/{prefix}/LAST_CHANGE")
+    r.raise_for_status()
+    revision = r.text.strip()
+    print(revision)
+    
+    return prefix, revision
+
+def cached_zip_path(prefix, revision):
+    return os.path.join(
+        DOWNLOAD_CACHE_DIR,
+        f"{DOWNLOAD_BASENAME}-{prefix}-{revision}.zip",
+    )
+
+def download_zip_if_needed(download_url, zip_path, revision):
+    if os.path.exists(zip_path):
+        try:
+            with zipfile.ZipFile(zip_path, "r") as z:
+                bad_file = z.testzip()
+            if bad_file is None:
+                print(f"[3/5] Using cached build {revision}: {zip_path}")
+                return
+            print(f"[3/5] Cached zip is corrupt at {bad_file}; re-downloading.")
+        except zipfile.BadZipFile:
+            print("[3/5] Cached zip is invalid; re-downloading.")
+
+    os.makedirs(os.path.dirname(zip_path), exist_ok=True)
+    partial_zip = f"{zip_path}.part"
+
+    sys.stdout.write(f"[3/5] Downloading build {revision}")
+    sys.stdout.flush()
+    with requests.get(download_url, stream=True) as r:
+        r.raise_for_status()
+        total_bytes = int(r.headers.get("content-length", "0"))
+        next_progress_percent = 5
+        downloaded_bytes = 0
+        with open(partial_zip, 'wb') as f:
+            for chunk in r.iter_content(chunk_size=1024*1024):
+                if not chunk:
+                    continue
+                f.write(chunk)
+                downloaded_bytes += len(chunk)
+                if total_bytes > 0:
+                    progress_percent = downloaded_bytes * 100 // total_bytes
+                    while progress_percent >= next_progress_percent:
+                        sys.stdout.write(".")
+                        sys.stdout.flush()
+                        next_progress_percent += 5
+                else:
+                    sys.stdout.write(".")
+                    sys.stdout.flush()
+    os.replace(partial_zip, zip_path)
+    print(f" done: {zip_path}")
+
+def main():
+    extracted_dir = "/tmp/chrome_extracted_content"
+    
+    try:
+        prefix, revision = get_config()
+        download_url = f"{STORAGE_URL}/{prefix}/{revision}/chrome-android-desktop.zip"
+        temp_zip = cached_zip_path(prefix, revision)
+        download_zip_if_needed(download_url, temp_zip, revision)
+
+        if os.path.isdir(extracted_dir):
+            shutil.rmtree(extracted_dir)
+        os.makedirs(extracted_dir)
+
+        with zipfile.ZipFile(temp_zip, 'r') as z:
+            z.extractall(extracted_dir)
+
+            all_apks = []
+            for root, _, files in os.walk(extracted_dir):
+                for file in files:
+                    if file.endswith(".apk"):
+                        all_apks.append(os.path.join(root, file))
+
+            # Logic to find the "Real" Browser APK. ContentShell is an APK,
+            # but it is not a browser role candidate.
+            filtered_apks = [apk for apk in all_apks if is_browser_candidate(apk)]
+
+            # 1. Prefer the unbranded APK, which avoids ChromePublic's Google
+            # account first-run path when the snapshot includes both APKs.
+            target_apk = None
+            for preferred_apk in BROWSER_APK_PRIORITY:
+                for apk in filtered_apks:
+                    if os.path.basename(apk) == preferred_apk:
+                        target_apk = apk
+                        break
+                if target_apk:
+                    break
+
+            # 2. Fallback to the first browser-like APK found.
+            if not target_apk and filtered_apks:
+                target_apk = filtered_apks[0]
+
+        if not target_apk:
+            print("!!! Error: Could not find the correct browser APK in the package.")
+            print(f"      Found files: {all_apks}")
+            return
+
+        print(f"[4/5] Selected APK {os.path.basename(target_apk)} from {len(all_apks)} APK(s)")
+
+        sys.stdout.write("[5/5] Installing to device... ")
+        sys.stdout.flush()
+        # -r: replace, -d: allow downgrade, -g: grant all permissions
+        install_output = run_adb(["install", "-r", "-d", "-g", target_apk])
+        install_lines = install_output.splitlines()
+        if install_lines and install_lines[-1] == "Success":
+            print("Success")
+        else:
+            print("done")
+            if install_output:
+                print(f"      {install_output}")
+        verify_chromium_installed()
+        set_chromium_default_browser()
+        disable_stock_browsers()
+        provision_chromium_first_run()
+        print("      Installation Successful!")
+
+    except Exception as e:
+        print(f"\n!!! An unexpected error occurred: {e}")
+    
+    finally:
+        if os.path.isdir(extracted_dir):
+            shutil.rmtree(extracted_dir)
+
+if __name__ == "__main__":
+    main()
