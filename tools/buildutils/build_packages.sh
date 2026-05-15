@@ -112,7 +112,9 @@ function install_rpm_build_dependencies() {
     libavformat-free-devel \
     libavutil-free-devel \
     libswresample-free-devel \
-    libusb1-devel
+    libusb1-devel \
+    vulkan-headers \
+    libicu-devel
 
   # Runtime tools needed during rpmbuild
   run_as_root dnf -y install \
@@ -122,6 +124,41 @@ function install_rpm_build_dependencies() {
 REPO_DIR="$(realpath "$(dirname "$0")/../..")"
 INSTALL_BAZEL="$(dirname "$0")/installbazel.sh"
 BUILD_PACKAGE="$(dirname "$0")/build_package.sh"
+
+function rpm_package_name() {
+  local rpm_path="$1"
+  local rpm_name
+
+  if rpm_name="$(rpm -qp --queryformat '%{NAME}' "${rpm_path}" 2>/dev/null)"; then
+    echo "${rpm_name}"
+    return
+  fi
+
+  basename "${rpm_path}" | sed -E 's/-[0-9][^-]*-[^-]+\.([^.]+\.)?rpm$//'
+}
+
+function organize_rpms() {
+  local rpms_root="${REPO_DIR}/rpmbuild/RPMS"
+
+  shopt -s nullglob
+  for arch_dir in "${rpms_root}"/*; do
+    [[ -d "${arch_dir}" ]] || continue
+
+    local extras_dir="${arch_dir}/extras"
+    mkdir -p "${extras_dir}"
+
+    local rpm_path
+    for rpm_path in "${arch_dir}"/*.rpm; do
+      case "$(rpm_package_name "${rpm_path}")" in
+        ika-base|ika-lineageos|ika-scrcpy)
+          ;;
+        *)
+          mv -f -- "${rpm_path}" "${extras_dir}/"
+          ;;
+      esac
+    done
+  done
+}
 
 init_root_cmd
 install_rpm_build_dependencies
@@ -137,3 +174,4 @@ fi
 # Builds all RPM specs under base/rpm and frontend/rpm unless excluded.
 "${BUILD_PACKAGE}" "$@" "${REPO_DIR}/base"
 "${BUILD_PACKAGE}" "$@" "${REPO_DIR}/frontend"
+organize_rpms

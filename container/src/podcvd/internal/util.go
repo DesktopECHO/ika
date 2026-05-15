@@ -41,14 +41,21 @@ func Ipv4AddressesByGroupNames(ccm libcfcontainer.CuttlefishContainerManager, al
 		),
 		All: allContainers,
 	}
-	containers, err := ccm.GetClient().ContainerList(context.Background(), opts)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list containers: %w", err)
+	var containers []container.Summary
+	var lastErr error
+	for retryCount := 0; retryCount < 10; retryCount++ {
+		containers, lastErr = ccm.GetClient().ContainerList(context.Background(), opts)
+		if lastErr == nil {
+			break
+		}
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", lastErr)
 	}
 	groupNameIpAddrMap := make(map[string]string)
 	clientID := os.Getenv(envClientID)
 	for _, container := range containers {
-		if clientID != "" {
+		if !allContainers && clientID != "" {
 			if val, exists := container.Labels[labelClientID]; exists && val != clientID {
 				continue
 			}

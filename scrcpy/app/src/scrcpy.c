@@ -809,6 +809,11 @@ aoa_complete:
             .camera = options->video_source == SC_VIDEO_SOURCE_CAMERA,
             .flex_display = options->flex_display,
             .resize_display_using_pixel_size = cuttlefish_video,
+            .cuttlefish_frames_socket = cuttlefish_video
+                                      ? options->cuttlefish_frames_socket
+                                      : NULL,
+            .cuttlefish_display_id = options->display_id,
+            .flex_display_dpi = options->flex_display_dpi,
             .controller = controller,
             .fp = fp,
             .kp = kp,
@@ -837,6 +842,10 @@ aoa_complete:
             goto end;
         }
         screen_initialized = true;
+
+        if (controller_initialized) {
+            sc_controller_set_screen(&s->controller, &s->screen);
+        }
 
         if (cuttlefish_video) {
             if (!sc_cuttlefish_frame_source_init(&s->cuttlefish_frame_source,

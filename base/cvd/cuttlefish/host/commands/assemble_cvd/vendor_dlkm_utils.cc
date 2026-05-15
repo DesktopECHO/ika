@@ -26,10 +26,10 @@
 #include <vector>
 
 #include "absl/log/log.h"
+#include "absl/strings/ascii.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 #include "android-base/file.h"
-#include "android-base/strings.h"
 #include "fmt/format.h"
 
 #include "cuttlefish/common/libs/fs/shared_buf.h"
@@ -45,7 +45,6 @@
 #include "cuttlefish/host/libs/config/config_utils.h"
 #include "cuttlefish/host/libs/config/known_paths.h"
 #include "cuttlefish/io/shared_fd.h"
-#include "cuttlefish/posix/strerror.h"
 
 namespace cuttlefish {
 
@@ -61,19 +60,18 @@ constexpr size_t RoundUp(size_t a, size_t divisor) {
 
 template <typename Container>
 bool WriteLinesToFile(const Container& lines, const std::string& path) {
-  android::base::unique_fd fd(
-      open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0640));
-  if (!fd.ok()) {
+  SharedFD fd = SharedFD::Open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0640);
+  if (!fd->IsOpen()) {
     PLOG(ERROR) << "Failed to open " << path;
     return false;
   }
   for (const auto& line : lines) {
-    if (!android::base::WriteFully(fd, line.data(), line.size())) {
+    if (WriteAll(fd, line) != line.size()) {
       PLOG(ERROR) << "Failed to write to " << path;
       return false;
     }
     const char c = '\n';
-    if (write(fd.get(), &c, 1) != 1) {
+    if (fd->Write(&c, 1) != 1) {
       PLOG(ERROR) << "Failed to write to " << path;
       return false;
     }
@@ -85,12 +83,13 @@ bool WriteLinesToFile(const Container& lines, const std::string& path) {
 Result<void> WriteFsConfig(const std::string& output_path,
                            const std::string& fs_root,
                            const std::string& mount_point) {
-  android::base::unique_fd fd(open(
-      output_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644));
-  CF_EXPECTF(fd.ok(), "Couldn't open '{}': '{}'", output_path, StrError(errno));
+  SharedFD fd = SharedFD::Open(output_path,
+                               O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+  CF_EXPECTF(fd->IsOpen(), "Couldn't open '{}': '{}'", output_path,
+             fd->StrError());
   static constexpr std::string_view kBeginning =
       " 0 0 755 selabel=u:object_r:rootfs:s0 capabilities=0x0\n";
-  CF_EXPECTF(android::base::WriteStringToFd(kBeginning, fd),
+  CF_EXPECTF(WriteAll(fd, kBeginning) == kBeginning.size(),
              "Failed to write to '{}'", output_path);
   Result<void> res = WalkDirectory(
       fs_root,
@@ -101,10 +100,10 @@ Result<void> WriteFsConfig(const std::string& output_path,
         const std::string fs_context = DirectoryExists(file_path)
                                            ? " 0 0 755 capabilities=0x0\n"
                                            : " 0 0 644 capabilities=0x0\n";
-        CF_EXPECTF(android::base::WriteStringToFd(
-                       mount_point + "/" + filename + fs_context, fd),
+        std::string to_write = mount_point + "/" + filename + fs_context;
+        CF_EXPECTF(WriteAll(fd, to_write) == to_write.size(),
                    "Failed to write to '{}': '{}'", output_path,
-                   StrError(errno));
+                   fd->StrError());
         return {};
       });
   CF_EXPECT(std::move(res));
@@ -235,7 +234,7 @@ bool WriteDepsToFile(
 std::map<std::string, std::vector<std::string>> LoadModuleDeps(
     const std::string& filename) {
   std::map<std::string, std::vector<std::string>> dependency_map;
-  const auto dep_str = android::base::Trim(ReadFile(filename));
+  const std::string dep_str(absl::StripAsciiWhitespace(ReadFile(filename)));
   const std::vector<std::string_view> dep_lines = absl::StrSplit(dep_str, "\n");
   for (const auto& line : dep_lines) {
     const auto mod_name = line.substr(0, line.find(":"));
@@ -435,7 +434,7 @@ Result<void> SplitRamdiskModules(const std::string& ramdisk_path,
   std::string module_load_file =
       CF_EXPECT(FindFile(ramdisk_stage_dir, "modules.load"),
                 "Failed to find modules.dep file in input ramdisk");
-  module_load_file = android::base::Trim(module_load_file);
+  module_load_file = std::string(absl::StripAsciiWhitespace(module_load_file));
 
   CF_EXPECTF(!module_load_file.empty(),
              "Failed to find modules.dep file in input ramdisk '{}'",

@@ -42,20 +42,39 @@ using vm_manager::QemuManager;
 namespace {
 
 static constexpr std::string_view kLegacyBoardBootconfigKeysShared[] = {
-  "androidboot.hardware",
-  "androidboot.vendor.apex.com.google.emulated.camera.provider.hal",
-  "kernel.vmw_vsock_virtio_transport_common.virtio_transport_max_vsock_pkt_buf_size",
+    "androidboot.hardware",
+    "androidboot.vendor.apex.com.google.emulated.camera.provider.hal",
+    "kernel.vmw_vsock_virtio_transport_common.virtio_transport_max_vsock_pkt_"
+    "buf_size",
 };
 
 static constexpr std::string_view kLegacyBoardBootconfigKeysAuto[] = {
-  "androidboot.cuttlefish_service_bluetooth_checker",
-  "androidboot.hibernation_resume_device",
+    "androidboot.cuttlefish_service_bluetooth_checker",
+    "androidboot.hibernation_resume_device",
+
+    // Used by `sdv_ivi_cf` targets.
+    "androidboot.sdv.rpc.interface",
+    "androidboot.sdv.telemetry.enabled",
 };
 
 static constexpr std::string_view kLegacyBoardBootconfigKeysMinidroid[] = {
-  "androidboot.adb.enabled",
-  "androidboot.init_rc",
-  "androidboot.microdroid.debuggable",
+    "androidboot.adb.enabled",
+    "androidboot.init_rc",
+    "androidboot.microdroid.debuggable",
+};
+
+static constexpr std::string_view kLegacyBoardBootconfigKeysSdvCore[] = {
+    "androidboot.adb.enabled",
+    "androidboot.init_rc",
+    "androidboot.microdroid.debuggable",
+    "androidboot.sdv.health_monitor.agent_startup_timeout_sec",
+    "androidboot.sdv.max_bundles_management_threads",
+    "androidboot.sdv.oem_metadata_device",
+    "androidboot.sdv.oem_slot_a_device",
+    "androidboot.sdv.oem_slot_b_device",
+    "androidboot.sdv.rpc.interface",
+    "androidboot.sdv.telemetry.enabled",
+    "androidboot.sdv.telemetry.enabled:",
 };
 
 template <typename T>
@@ -107,13 +126,19 @@ Result<void> ValidateBoardBootconfigKeys(
     allowed_args.insert(allowed_args.end(),
                         std::begin(kLegacyBoardBootconfigKeysMinidroid),
                         std::end(kLegacyBoardBootconfigKeysMinidroid));
+  } else if (type == cuttlefish::DeviceType::Unknown) {
+    // Sdv core targets don't define device type yet.
+    allowed_args.insert(allowed_args.end(),
+                        std::begin(kLegacyBoardBootconfigKeysSdvCore),
+                        std::end(kLegacyBoardBootconfigKeysSdvCore));
   }
 
   for (auto iter = args.begin(); iter != args.end(); iter++) {
     CF_EXPECTF(Contains(allowed_args, iter->first),
-               "Error: detected new `BOARD_BOOTCONFIG` key: \"{}\"!!! Please "
+               "Error: detected new `BOARD_BOOTCONFIG` key: \"{}\" for device "
+               "type: \"{}\"!!! Please "
                "add new bootconfig args to the `cvd` launcher.",
-               iter->first);
+               iter->first, static_cast<int>(type));
   }
 
   return {};
@@ -303,9 +328,16 @@ Result<std::unordered_map<std::string, std::string>> BootconfigArgsFromConfig(
             // Camera configs is only populated for virtio-media host camera
             // devices. The V4L2 Camera HAL implementation would handle all
             // (possibly multiple) host cameras devices.
-        instance.camera_configs().empty()
+        instance.media_configs().empty()
             ? "com.google.emulated.camera.provider.hal"
             : "com.google.emulated.camera.provider.hal.v4l2";
+  }
+
+  if (instance.device_type() == cuttlefish::DeviceType::Auto) {
+    if (!builtin_bootconfig_args.count("androidboot.cuttlefish_service_bluetooth_checker")) {
+      // # TODO (b/405655265) Remove once the BT issue is fixed
+      bootconfig_args["androidboot.cuttlefish_service_bluetooth_checker"] = "false";
+    }
   }
 
   if (!instance.vcpu_config_path().empty()) {

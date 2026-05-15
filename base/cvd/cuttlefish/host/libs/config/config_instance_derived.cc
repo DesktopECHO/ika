@@ -42,12 +42,20 @@ std::string ConsolePipePrefix(const CuttlefishConfig::InstanceSpecific& ins) {
   return AbsolutePath(ins.PerInstanceInternalPath("console"));
 }
 
+std::string GamepadSocketPath(const CuttlefishConfig::InstanceSpecific& ins) {
+  return ins.PerInstanceInternalUdsPath("gamepad.sock");
+}
+
 std::string HwcomposerPmemPath(const CuttlefishConfig::InstanceSpecific& ins) {
   return AbsolutePath(ins.PerInstanceInternalPath("hwcomposer-pmem"));
 }
 
 std::string KernelLogPipeName(const CuttlefishConfig::InstanceSpecific& ins) {
   return AbsolutePath(ins.PerInstanceInternalPath("kernel-log-pipe"));
+}
+
+std::string KeyboardSocketPath(const CuttlefishConfig::InstanceSpecific& ins) {
+  return ins.PerInstanceInternalUdsPath("keyboard.sock");
 }
 
 std::string LauncherMonitorSocketPath(
@@ -63,12 +71,24 @@ std::string LogcatPipeName(const CuttlefishConfig::InstanceSpecific& ins) {
   return AbsolutePath(ins.PerInstanceInternalPath("logcat-pipe"));
 }
 
+std::string MouseSocketPath(const CuttlefishConfig::InstanceSpecific& ins) {
+  return ins.PerInstanceInternalUdsPath("mouse.sock");
+}
+
 std::string PflashPath(const CuttlefishConfig::InstanceSpecific& ins) {
   return AbsolutePath(ins.PerInstancePath("pflash.img"));
 }
 
 std::string PstorePath(const CuttlefishConfig::InstanceSpecific& ins) {
   return AbsolutePath(ins.PerInstancePath("pstore"));
+}
+
+std::string RotarySocketPath(const CuttlefishConfig::InstanceSpecific& ins) {
+  return ins.PerInstanceInternalUdsPath("rotary.sock");
+}
+
+std::string SwitchesSocketPath(const CuttlefishConfig::InstanceSpecific& ins) {
+  return ins.PerInstanceInternalUdsPath("switches.sock");
 }
 
 std::string RestoreAdbdPipeName(const CuttlefishConfig::InstanceSpecific& ins) {

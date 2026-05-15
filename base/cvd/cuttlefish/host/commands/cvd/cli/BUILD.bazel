@@ -35,8 +35,6 @@ cf_cc_test(
     deps = [
         "//cuttlefish/host/commands/cvd/cli:frontline_parser",
         "//cuttlefish/result:result_matchers",
-        "@googletest//:gtest",
-        "@googletest//:gtest_main",
     ],
 )
 
@@ -59,7 +57,6 @@ cf_cc_library(
     srcs = [
         "command_sequence.cpp",
         "request_context.cpp",
-        "//cuttlefish/host/commands/cvd/cli/commands:cmd_list.cpp",
         "//cuttlefish/host/commands/cvd/cli/commands:create.cpp",
         "//cuttlefish/host/commands/cvd/cli/commands:help.cpp",
         "//cuttlefish/host/commands/cvd/cli/commands:load_configs.cpp",
@@ -67,7 +64,6 @@ cf_cc_library(
     hdrs = [
         "command_sequence.h",
         "request_context.h",
-        "//cuttlefish/host/commands/cvd/cli/commands:cmd_list.h",
         "//cuttlefish/host/commands/cvd/cli/commands:create.h",
         "//cuttlefish/host/commands/cvd/cli/commands:help.h",
         "//cuttlefish/host/commands/cvd/cli/commands:load_configs.h",
@@ -93,7 +89,6 @@ cf_cc_library(
         "//cuttlefish/host/commands/cvd/cli/commands:host_tool_target",
         "//cuttlefish/host/commands/cvd/cli/commands:lint",
         "//cuttlefish/host/commands/cvd/cli/commands:login",
-        "//cuttlefish/host/commands/cvd/cli/commands:noop",
         "//cuttlefish/host/commands/cvd/cli/commands:power_btn",
         "//cuttlefish/host/commands/cvd/cli/commands:powerwash",
         "//cuttlefish/host/commands/cvd/cli/commands:remove",
@@ -113,7 +108,7 @@ cf_cc_library(
         "//cuttlefish/host/commands/cvd/instances:cvd_persistent_data",
         "//cuttlefish/host/commands/cvd/instances/lock",
         "//cuttlefish/host/commands/cvd/utils",
-        "//cuttlefish/host/libs/metrics:metrics_orchestration",
+        "//cuttlefish/host/libs/metrics:device_metrics_orchestration",
         "//cuttlefish/posix:strerror",
         "//cuttlefish/posix:symlink",
         "//cuttlefish/result",

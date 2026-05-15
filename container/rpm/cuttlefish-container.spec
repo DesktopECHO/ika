@@ -1,6 +1,6 @@
 Name:           ika-container
-Version:        1.51.0
-Release:        2%{?dist}
+Version:        1.53.0
+Release:        1%{?dist}
 Summary:        Container-oriented Cuttlefish tools for Fedora
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish
@@ -36,7 +36,8 @@ Cuttlefish instances inside rootless containers.
 
 %build
 pushd container/src/podcvd
-go build -v -buildmode=pie -ldflags="-w" ./cmd/podcvd
+go build -v -buildmode=pie -ldflags="-w -X github.com/google/android-cuttlefish/container/src/podcvd/internal.imageName=localhost/cuttlefish-orchestration:latest" ./cmd/podcvd
+go build -v -buildmode=pie -ldflags="-w" ./cmd/cuttlefish_mcp_server
 popd
 
 %install
@@ -44,6 +45,8 @@ rm -rf %{buildroot}
 
 install -Dpm0755 container/debian/cuttlefish-podcvd-prerequisites.sh %{buildroot}/usr/lib/cuttlefish-common/bin/cuttlefish-podcvd-prerequisites.sh
 install -Dpm0755 container/src/podcvd/podcvd %{buildroot}/usr/lib/cuttlefish-common/bin/podcvd
+install -Dpm0755 container/src/podcvd/cuttlefish_mcp_server %{buildroot}/usr/lib/cuttlefish-podcvd/cuttlefish-mcp-server/cuttlefish_mcp_server
+install -Dpm0644 container/src/podcvd/gemini-extension.json %{buildroot}/usr/lib/cuttlefish-podcvd/cuttlefish-mcp-server/gemini-extension.json
 install -Dpm0644 container/rpm/cuttlefish-podcvd.service %{buildroot}/usr/lib/systemd/system/cuttlefish-podcvd.service
 install -Dpm0755 container/rpm/cuttlefish-podcvd.sh %{buildroot}/usr/libexec/cuttlefish/cuttlefish-podcvd
 install -Dpm0644 container/rpm/cuttlefish-podcvd.sysconfig %{buildroot}/etc/sysconfig/cuttlefish-podcvd
@@ -65,10 +68,14 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /etc/sysconfig/cuttlefish-podcvd
 /usr/lib/cuttlefish-common/bin/cuttlefish-podcvd-prerequisites.sh
 /usr/lib/cuttlefish-common/bin/podcvd
+/usr/lib/cuttlefish-podcvd/cuttlefish-mcp-server
 /usr/lib/systemd/system/cuttlefish-podcvd.service
 /usr/libexec/cuttlefish/cuttlefish-podcvd
 
 %changelog
+* Tue May 19 2026 DesktopECHO <tv@441.surf> - 1.53.0-1
+- Rebase Fedora packaging onto android-cuttlefish 1.53.0
+
 * Mon Apr 20 2026 Daniel Milisic <dmilisic@desktopecho.com> - 1.51.0-4
 - Rebase Fedora packaging onto android-cuttlefish 1.51.0
 

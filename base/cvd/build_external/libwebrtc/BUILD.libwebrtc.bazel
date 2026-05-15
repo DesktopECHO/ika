@@ -1195,6 +1195,11 @@ cc_library(
             "common_audio/third_party/ooura/fft_size_128/ooura_fft_sse2.cc",
             "common_audio/third_party/spl_sqrt_floor/spl_sqrt_floor.c",
         ],
+        "@platforms//cpu:riscv64": [
+            "common_audio/signal_processing/complex_bit_reverse.c",
+            "common_audio/signal_processing/filter_ar_fast_q12.c",
+            "common_audio/third_party/spl_sqrt_floor/spl_sqrt_floor.c",
+        ],
         "//conditions:default": [],
     }),
     hdrs = [

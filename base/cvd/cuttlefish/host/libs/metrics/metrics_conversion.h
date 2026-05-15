@@ -21,21 +21,17 @@
 #include <vector>
 
 #include "cuttlefish/common/libs/utils/host_info.h"
-#include "cuttlefish/host/libs/metrics/event_type.h"
-#include "cuttlefish/host/libs/metrics/flag_metrics.h"
 #include "cuttlefish/host/libs/metrics/guest_metrics.h"
 #include "external_proto/cf_log.pb.h"
 
 namespace cuttlefish {
 
 struct MetricsData {
-  EventType event_type;
   std::string session_id;
   std::string cf_common_version;
   std::chrono::milliseconds now;
   HostInfo host_metrics;
   std::vector<GuestMetrics> guest_metrics;
-  std::vector<FlagMetrics> flag_metrics;
 };
 
 logs::proto::wireless::android::cuttlefish::CuttlefishLogEvent

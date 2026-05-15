@@ -1857,24 +1857,8 @@ std::string CuttlefishConfig::InstanceSpecific::touch_socket_path(
   return PerInstanceInternalUdsPath(name);
 }
 
-std::string CuttlefishConfig::InstanceSpecific::mouse_socket_path() const {
-  return PerInstanceInternalUdsPath("mouse.sock");
-}
-
-std::string CuttlefishConfig::InstanceSpecific::gamepad_socket_path() const {
-  return PerInstanceInternalUdsPath("gamepad.sock");
-}
-
-std::string CuttlefishConfig::InstanceSpecific::rotary_socket_path() const {
-  return PerInstanceInternalUdsPath("rotary.sock");
-}
-
-std::string CuttlefishConfig::InstanceSpecific::keyboard_socket_path() const {
-  return PerInstanceInternalUdsPath("keyboard.sock");
-}
-
-std::string CuttlefishConfig::InstanceSpecific::switches_socket_path() const {
-  return PerInstanceInternalUdsPath("switches.sock");
+std::string CuttlefishConfig::InstanceSpecific::media_socket_path(int index) const {
+  return PerInstanceInternalUdsPath(absl::StrCat("media_", index, ".sock"));
 }
 
 static constexpr char kFrameSockPath[] = "frame_sock_path";
@@ -1941,31 +1925,31 @@ CuttlefishConfig::InstanceSpecific::audio_settings() const {
   return audio_settings;
 }
 
-static constexpr char kCameraConfigs[] = "camera_configs";
-static constexpr char kCameraType[] = "type";
-std::vector<CuttlefishConfig::CameraConfig>
-CuttlefishConfig::InstanceSpecific::camera_configs() const {
-  std::vector<CameraConfig> configs;
-  for (auto& json : (*Dictionary())[kCameraConfigs]) {
-    CameraConfig config = {};
+static constexpr char kMediaConfigs[] = "media_configs";
+static constexpr char kMediaType[] = "type";
+std::vector<CuttlefishConfig::MediaConfig>
+CuttlefishConfig::InstanceSpecific::media_configs() const {
+  std::vector<MediaConfig> configs;
+  for (auto& json : (*Dictionary())[kMediaConfigs]) {
+    MediaConfig config = {};
     config.type =
-        static_cast<CuttlefishConfig::CameraType>(json[kCameraType].asInt());
+        static_cast<CuttlefishConfig::MediaType>(json[kMediaType].asInt());
     configs.emplace_back(config);
   }
   return configs;
 }
 
-void CuttlefishConfig::MutableInstanceSpecific::set_camera_configs(
-    const std::vector<CameraConfig>& configs) {
+void CuttlefishConfig::MutableInstanceSpecific::set_media_configs(
+    const std::vector<MediaConfig>& configs) {
   Json::Value configs_json(Json::arrayValue);
 
-  for (const CameraConfig& config : configs) {
+  for (const MediaConfig& config : configs) {
     Json::Value json(Json::objectValue);
-    json[kCameraType] = static_cast<int>(config.type);
+    json[kMediaType] = static_cast<int>(config.type);
     configs_json.append(json);
   }
 
-  (*Dictionary())[kCameraConfigs] = configs_json;
+  (*Dictionary())[kMediaConfigs] = configs_json;
 }
 
 std::string CuttlefishConfig::InstanceSpecific::PerInstancePath(

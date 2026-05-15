@@ -288,7 +288,13 @@ func (cli *CLI) groupFromCmdOutput(cmdOut []byte) (*Group, error) {
 }
 
 func (cli *CLI) buildCmd(bin string, args ...string) *exec.Cmd {
-	return cli.execContext(context.TODO(), bin, args...)
+	cmd := cli.execContext(context.TODO(), bin, args...)
+	// to be read by `cvd` for metrics
+	cmd.Env = append(cmd.Env, "CVD_INVOKER=host_orchestrator")
+	// setting `Env` to a value other than `nil` overrides using the existing
+	// environment for the command, so copy it along
+	cmd.Env = append(cmd.Env, os.Environ()...)
+	return cmd
 }
 
 func (cli *CLI) runCmd(cmd *exec.Cmd) ([]byte, error) {
@@ -370,6 +376,13 @@ func (i *Instance) ADBSerial() string {
 	return i.instance.ADBSerial
 }
 
+func (i *Instance) ADBPort() uint32 {
+	if i.instance == nil {
+		panic("Lazy loaded instance is not yet initialized")
+	}
+	return i.instance.ADBPort
+}
+
 type DisplayAddOpts struct {
 	Width         int
 	Height        int
@@ -435,6 +448,13 @@ func (i *Instance) PowerBtn() error {
 func (i *Instance) PowerWash() error {
 	args := i.selectorArgs()
 	args = append(args, "powerwash")
+	_, err := i.cli.exec(CVDBin, args...)
+	return err
+}
+
+func (i *Instance) Restart() error {
+	args := i.selectorArgs()
+	args = append(args, "restart")
 	_, err := i.cli.exec(CVDBin, args...)
 	return err
 }

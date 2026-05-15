@@ -30,6 +30,25 @@
 
 namespace cuttlefish {
 namespace vm_manager {
+namespace {
+
+std::string CrosvmGpuDisplayFlag(
+    const CuttlefishConfig::DisplayConfig& display_config) {
+  const std::string w = std::to_string(display_config.width);
+  const std::string h = std::to_string(display_config.height);
+  const std::string dpi = std::to_string(display_config.dpi);
+  const std::string rr = std::to_string(display_config.refresh_rate_hz);
+
+  return "--gpu-display=" + absl::StrJoin(
+                                std::vector<std::string>{
+                                    "mode=windowed[" + w + "," + h + "]",
+                                    "dpi=[" + dpi + "," + dpi + "]",
+                                    "refresh-rate=" + rr,
+                                },
+                                ",");
+}
+
+}  // namespace
 
 Result<CrosvmDisplayController> GetCrosvmDisplayController() {
   const CuttlefishConfig* config = CF_EXPECT(CuttlefishConfig::Get());
@@ -47,21 +66,7 @@ Result<int> CrosvmDisplayController::Add(
   command_args.push_back("add-displays");
 
   for (const auto& display_config : display_configs) {
-    const std::string w = std::to_string(display_config.width);
-    const std::string h = std::to_string(display_config.height);
-    const std::string dpi = std::to_string(display_config.dpi);
-    const std::string rr = std::to_string(display_config.refresh_rate_hz);
-
-    const std::string add_display_flag =
-        "--gpu-display=" + absl::StrJoin(
-                               std::vector<std::string>{
-                                   "mode=windowed[" + w + "," + h + "]",
-                                   "dpi=[" + dpi + "," + dpi + "]",
-                                   "refresh-rate=" + rr,
-                               },
-                               ",");
-
-    command_args.push_back(add_display_flag);
+    command_args.push_back(CrosvmGpuDisplayFlag(display_config));
   }
 
   return RunCrosvmDisplayCommand(instance_num, command_args, NULL);
@@ -75,6 +80,17 @@ Result<int> CrosvmDisplayController::Remove(
   for (const auto& display_id : display_ids) {
     command_args.push_back("--display-id=" + display_id);
   }
+
+  return RunCrosvmDisplayCommand(instance_num, command_args, NULL);
+}
+
+Result<int> CrosvmDisplayController::Resize(
+    const int instance_num, const std::string& display_id,
+    const CuttlefishConfig::DisplayConfig& display_config) const {
+  std::vector<std::string> command_args;
+  command_args.push_back("resize-display");
+  command_args.push_back("--display-id=" + display_id);
+  command_args.push_back(CrosvmGpuDisplayFlag(display_config));
 
   return RunCrosvmDisplayCommand(instance_num, command_args, NULL);
 }
@@ -110,7 +126,7 @@ Result<int> CrosvmDisplayController::RunCrosvmDisplayCommand(
     return 0;
   } else {
     LOG(ERROR) << "Failed to run crosvm display command:\n" << res.error();
-    return 0;
+    return 1;
   }
 }
 

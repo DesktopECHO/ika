@@ -4,6 +4,10 @@ set -euo pipefail
 
 readonly CROSVM_REMOTE_PRIMARY="https://chromium.googlesource.com/crosvm/crosvm"
 readonly CROSVM_REMOTE_FALLBACK="https://github.com/google/crosvm.git"
+readonly MINIJAIL_REMOTE_PRIMARY="https://chromium.googlesource.com/chromiumos/platform/minijail"
+# Keep this at parity with crosvm's third_party/minijail submodule.
+readonly MINIJAIL_CROSVM_REV="7845d89927a82dbdcdee6276837cd0978f69ba19"
+readonly MINIJAIL_CROSVM_REF="refs/heads/main"
 readonly ANDROID_SYSTEM_CORE_REMOTE="https://android.googlesource.com/platform/system/core"
 readonly ANDROID_SYSTEM_EXTRAS_REMOTE="https://android.googlesource.com/platform/system/extras"
 
@@ -121,11 +125,44 @@ ensure_mirror() {
   configure_rewrite "${mirror_path}" "${primary_remote}" "${fallback_remote}"
 }
 
+ensure_minijail_mirror() {
+  local mirror_path="${MIRROR_ROOT}/minijail.git"
+  local local_branch="refs/heads/ika-crosvm-minijail-${MINIJAIL_CROSVM_REV:0:12}"
+
+  mkdir -p "${MIRROR_ROOT}"
+
+  if ! git -C "${mirror_path}" rev-parse --git-dir >/dev/null 2>&1; then
+    if [[ -e "${mirror_path}" ]]; then
+      local broken_path="${mirror_path}.broken.$(date +%s)"
+      echo "Moving invalid minijail mirror aside: ${mirror_path} -> ${broken_path}" >&2
+      mv "${mirror_path}" "${broken_path}"
+    fi
+
+    echo "Creating local minijail git mirror at ${mirror_path}" >&2
+    git_clean init --bare "${mirror_path}"
+  fi
+
+  ensure_remote_origin "${mirror_path}" "${MINIJAIL_REMOTE_PRIMARY}"
+
+  if ! git_clean -C "${mirror_path}" cat-file -e "${MINIJAIL_CROSVM_REV}^{commit}" >/dev/null 2>&1; then
+    echo "Fetching pinned minijail revision ${MINIJAIL_CROSVM_REV} into ${mirror_path}" >&2
+    retry_command "fetch pinned minijail revision from ${MINIJAIL_REMOTE_PRIMARY}" \
+      git_clean -C "${mirror_path}" fetch origin \
+        "${MINIJAIL_CROSVM_REF}:${MINIJAIL_CROSVM_REF}"
+  fi
+
+  git_clean -C "${mirror_path}" update-ref "${local_branch}" "${MINIJAIL_CROSVM_REV}"
+  configure_rewrite "${mirror_path}" \
+    "${MINIJAIL_REMOTE_PRIMARY}" \
+    "${MINIJAIL_REMOTE_PRIMARY}/"
+}
+
 main() {
   mkdir -p "$(dirname "${GIT_CONFIG_PATH}")"
   rm -f "${GIT_CONFIG_PATH}"
 
   ensure_mirror "crosvm" "${CROSVM_REMOTE_PRIMARY}" "${CROSVM_REMOTE_FALLBACK}"
+  ensure_minijail_mirror
   ensure_mirror "android_system_core" "${ANDROID_SYSTEM_CORE_REMOTE}"
   ensure_mirror "android_system_extras" "${ANDROID_SYSTEM_EXTRAS_REMOTE}"
 }

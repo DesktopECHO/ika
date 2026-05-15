@@ -293,7 +293,7 @@ check_desktop_flags() {
     # Surface diagnostics directly so callers can see which flag is missing,
     # not just that "validation failed".
     local checker_output
-    if ! checker_output="$("$checker" 2>&1)"; then
+    if ! checker_output="$("$checker" "$android_root" 2>&1)"; then
       fail "required desktop aconfig flags are not all enabled:"
       printf '%s\n' "$checker_output" >&2
     fi

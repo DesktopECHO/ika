@@ -1,18 +1,14 @@
 <img width="2480" height="2064" alt="Screenshot From 2026-04-01 22-30-37" src="https://github.com/user-attachments/assets/24e59e40-5dfd-45c2-9d69-ed64f1155c6c" />
 
-# Android Cuttlefish+CrosVM for Fedora Asahi Remix
+# イカ (Ika, /ee-kah/)
 
-This repository is a fork of
-[google/android-cuttlefish](https://github.com/google/android-cuttlefish), adapted for RPM-based distributions like Fedora Asahi Remix. 
+This project originally started as an effort to get [Cuttlefish](https://source.android.com/setup/create/cuttlefish) (Google's Android Virtual Device built on Debian tooling) running on [Fedora Asahi Remix](https://asahilinux.org/), so the project was given the name **ika (イカ)**, the Japanese word for cuttlefish (or squid).
 
-[Cuttlefish](https://source.android.com/setup/create/cuttlefish) is a
-configurable Android Virtual Device (AVD) that runs on Linux x86_64 and
-aarch64 hosts as well as Google Compute Engine.
+The repository is a fork of [google/android-cuttlefish](https://github.com/google/android-cuttlefish), adapted for RPM-based distributions like Fedora Asahi Remix.  [Cuttlefish](https://source.android.com/setup/create/cuttlefish) is a configurable Android Virtual Device (AVD) that runs on Linux x86_64 and aarch64 hosts as well as Google Compute Engine.
 
 ## Quick start
 
-The build is two phases — ROM then RPMs — and the RPM phase needs the ROM
-phase's output. Run them in order:
+First build the LineageOS ROM for your target architechecture (x86-64 or Apple Silicon) then build Cuttlefish, CrosVM, and Ika-scrcpy RPMs:
 
 ```bash
 # 1. Clone
@@ -32,23 +28,25 @@ cd ika
 #    built the other arch, cuttlefish-lineageos is silently skipped here.
 ./tools/buildutils/build_packages.sh
 
-# 4. Install the host packages and the bundled LineageOS tree
+# 4. Install the host packages and the bundled LineageOS tree.
+#    cuttlefish-base's %post detects your logged-in user and adds it to the
+#    required kvm / cvdnetwork / render / video groups automatically.
 sudo dnf install \
-  ./rpmbuild/RPMS/*/cuttlefish-base-*.rpm \
-  ./rpmbuild/RPMS/*/cuttlefish-user-*.rpm \
-  ./rpmbuild/RPMS/*/cuttlefish-lineageos-*.rpm
+  ./rpmbuild/RPMS/*/ika-base-*.rpm \
+  ./rpmbuild/RPMS/*/ika-scrcpy-*.rpm \
+  ./rpmbuild/RPMS/*/ika-lineageos-*.rpm
 
-# 5. Add yourself to the required groups and reboot
-sudo usermod -aG kvm,cvdnetwork,render,video "$USER"
+# 5. Reboot.
+#    Required so group memberships, limits, udev rules, and Cuttlefish host
+#    resources are picked up cleanly. Logging out is not enough.
 sudo reboot
 
 # 6. Launch
 ika start
 ```
 
-A few seconds after the virtual device is started, `scrcpy` will automatically
-open. Alternatively, visit `https://localhost:8443` in a browser to view the
-WebRTC virtual device console.
+A few seconds after the virtual device starts, the bundled `ika` viewer
+opens automatically against the running Cuttlefish instance.
 
 ### Rebuilding one phase
 
@@ -85,7 +83,7 @@ ika status
 ika stop
 
 # Restart with new launch arguments
-ika restart --gpu_mode=guest_swiftshader --cpus=8 --memory_mb=8192
+ika restart --gpu_mode=gfxstream --cpus=8 --memory_mb=8192
 
 # Show the built-in usage text
 ika help
@@ -102,10 +100,12 @@ By default `ika` uses:
 - host tools from `/usr/lib/cuttlefish-common`
 - the packaged LineageOS tree from `/usr/share/cuttlefish-common/lineageos`
 - instance state under `~/ika`
+- `gfxstream` GPU acceleration
 - host Bluetooth, with Wi-Fi, netsim, and UWB disabled unless you override them
 
-For this Fedora Asahi workflow, `guest_swiftshader` is the documented GPU mode
-to pass when launching the VM.
+`gfxstream` is the preferred GPU mode for the packaged workflow. Use
+`guest_swiftshader` only as a troubleshooting fallback when host GPU
+acceleration is not usable.
 
 ## Fedora RPM packages
 
@@ -127,17 +127,24 @@ For the local Fedora/Asahi workflow, `cuttlefish-base`, `cuttlefish-user`, and
 
 ## Notes
 
-On ARM64 Asahi Linux, `guest_swiftshader` is the safe documented GPU mode for
-the packaged workflow in this fork.
+On ARM64 Asahi Linux, this fork keeps `gfxstream` as the forward path. The
+Cuttlefish/crosvm integration carries host-specific workarounds where needed;
+`guest_swiftshader` remains a fallback for isolating host GPU issues.
 
 `ika` expects your login session to be in `kvm`, `cvdnetwork`, `render`, and
-`video`. Log out fully and back in after changing group membership.
+`video`. The `cuttlefish-base` RPM adds the installing user to these groups
+in its `%post` hook, but the active session, its PAM resource limits, and
+the live `/dev/kvm` udev permissions don't pick up the new state without a
+reboot — see step 5 of the Quick start for the full list of what's deferred.
 
 Bazel is installed automatically through Bazelisk by
 [`tools/buildutils/installbazel.sh`](tools/buildutils/installbazel.sh).
 
-The networking helper uses `nftables` when `ebtables` is not installed, which
-matches the default on Asahi Fedora systems.
+The networking helper uses `nftables` exclusively — both the host-side
+bridge/NAT setup in `cuttlefish-host-resources.sh` and the per-user
+`cvdalloc` daemon manage their rules via native `nft` commands against a
+shared `ip cuttlefish` table. iptables (and `iptables-nft`) and ebtables
+are no longer runtime dependencies.
 
 ## Google Compute Engine
 

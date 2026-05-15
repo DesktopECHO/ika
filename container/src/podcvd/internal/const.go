@@ -14,9 +14,9 @@
 
 package internal
 
-// TODO(seungjaeyoo): Propagate these constant values from the debian package wrapping podcvd.
+var imageName = "us-docker.pkg.dev/android-cuttlefish-artifacts/cuttlefish-orchestration/cuttlefish-orchestration:nightly"
+
 const (
-	imageName         = "us-docker.pkg.dev/android-cuttlefish-artifacts/cuttlefish-orchestration/cuttlefish-orchestration:nightly"
 	portOperatorHttps = 1443
 	ifName            = "podcvd"
 )
@@ -26,6 +26,7 @@ const (
 	labelClientID        = "client_id"
 	labelGroupName       = "group_name"
 	labelCreatedBy       = "created_by"
+	labelAttemptID       = "attempt_id"
 	valueCreatedBy       = "podcvd"
 	ToolingContainerName = "tooling"
 )

@@ -1,6 +1,6 @@
 Name:           ika-integration-gigabyte-arm64
-Version:        1.51.0
-Release:        2%{?dist}
+Version:        1.53.0
+Release:        1%{?dist}
 Summary:        Gigabyte Ampere integration package for Cuttlefish on Fedora
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish
@@ -52,6 +52,9 @@ install -Dpm0644 cuttlefish-integration-gigabyte-arm64/etc/ntpsec/ntp.d/google-t
 /usr/share/cuttlefish-integration-gigabyte-arm64
 
 %changelog
+* Tue May 19 2026 DesktopECHO <tv@441.surf> - 1.53.0-1
+- Rebase Fedora packaging onto android-cuttlefish 1.53.0
+
 * Mon Apr 20 2026 Daniel Milisic <dmilisic@desktopecho.com> - 1.51.0-4
 - Rebase Fedora packaging onto android-cuttlefish 1.51.0
 

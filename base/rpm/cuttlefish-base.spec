@@ -1,6 +1,6 @@
 Name:           ika-base
-Version:        1.51.0
-Release:        2%{?dist}
+Version:        1.53.0
+Release:        1%{?dist}
 Summary:        Cuttlefish Android Virtual Device host packages for Fedora
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish
@@ -51,7 +51,6 @@ Requires:       bsdtar
 Requires:       curl
 Requires:       dnsmasq
 Requires:       iproute
-Requires:       iptables-nft
 Requires:       libcap
 Requires:       libdrm
 Requires:       libX11
@@ -69,7 +68,6 @@ Requires:       virglrenderer
 Requires:       wayland-utils
 Requires:       xdg-utils
 Requires:       xz-libs
-Recommends:     ebtables
 
 Requires(post): /usr/sbin/groupadd
 Requires(post): /usr/sbin/usermod
@@ -263,6 +261,7 @@ install -Dpm0755 base/rpm/cuttlefish-host-resources.sh %{buildroot}/usr/libexec/
 install -Dpm0755 base/rpm/cuttlefish-add-user-to-groups.sh %{buildroot}/usr/libexec/cuttlefish/cuttlefish-add-user-to-groups
 install -Dpm0644 base/rpm/cuttlefish-host-resources.sysconfig %{buildroot}/etc/sysconfig/cuttlefish-host-resources
 install -Dpm0644 base/rpm/cuttlefish.xml %{buildroot}/etc/firewalld/zones/cuttlefish.xml
+install -Dpm0644 base/rpm/cuttlefish-tmpfiles.conf %{buildroot}/usr/lib/tmpfiles.d/cuttlefish.conf
 
 install -Dpm0644 base/rpm/71-cuttlefish-integration.rules %{buildroot}/usr/lib/udev/rules.d/71-cuttlefish-integration.rules
 install -Dpm0644 base/host/packages/cuttlefish-integration/etc/modprobe.d/cuttlefish-integration.conf %{buildroot}/etc/modprobe.d/cuttlefish-integration.conf
@@ -292,6 +291,7 @@ if ! getent group kvm >/dev/null 2>&1; then
   groupadd -r kvm >/dev/null 2>&1 || :
 fi
 mkdir -p /var/empty
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/cuttlefish.conf >/dev/null 2>&1 || :
 setcap cap_net_admin,cap_net_bind_service,cap_net_raw=+ep /usr/lib/cuttlefish-common/bin/cvdalloc >/dev/null 2>&1 || :
 /usr/sbin/sysctl --system >/dev/null 2>&1 || :
 /usr/libexec/cuttlefish/cuttlefish-add-user-to-groups || :
@@ -369,6 +369,7 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /etc/security/limits.d/1_cuttlefish.conf
 /etc/sysconfig/cuttlefish-host-resources
 /usr/lib/systemd/system/cuttlefish-host-resources.service
+/usr/lib/tmpfiles.d/cuttlefish.conf
 /usr/lib/udev/rules.d/70-cuttlefish-base.rules
 /usr/libexec/cuttlefish/cuttlefish-host-resources
 /usr/libexec/cuttlefish/cuttlefish-add-user-to-groups
@@ -397,6 +398,15 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/lib/cuttlefish-metrics
 
 %changelog
+* Tue May 19 2026 DesktopECHO <tv@441.surf> - 1.53.0-1
+- Rebase Fedora packaging onto android-cuttlefish 1.53.0
+
+* Mon May 18 2026 DesktopECHO <tv@441.surf> - 1.51.0-5
+- Create /var/tmp/cvd via tmpfiles.d (mode 1770, root:cvdnetwork) so
+  cvdalloc dnsmasq can write pid/lease files without requiring cvd CLI
+- Persist net.ipv6.conf.all.forwarding=1 in sysctl.d alongside ipv4
+- Increase ika boot timeout from 120s to 180s for software-rendering hosts
+
 * Mon Apr 20 2026 Daniel Milisic <dmilisic@desktopecho.com> - 1.51.0-4
 - Rebase Fedora packaging onto android-cuttlefish 1.51.0
 

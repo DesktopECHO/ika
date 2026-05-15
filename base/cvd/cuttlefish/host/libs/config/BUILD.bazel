@@ -36,7 +36,6 @@ cf_cc_library(
         "//cuttlefish/host/libs/config:cuttlefish_config",
         "//cuttlefish/host/libs/feature",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/strings",
         "@fmt",
@@ -95,7 +94,6 @@ cf_cc_library(
         "//cuttlefish/host/libs/config:cuttlefish_config",
         "//cuttlefish/host/libs/feature",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/log:check",
         "@abseil-cpp//absl/strings",
@@ -460,9 +458,9 @@ cf_cc_library(
 )
 
 cf_cc_library(
-    name = "camera",
-    srcs = ["camera.cpp"],
-    hdrs = ["camera.h"],
+    name = "media",
+    srcs = ["media.cpp"],
+    hdrs = ["media.h"],
     deps = [
         "//cuttlefish/common/libs/utils:contains",
         "//cuttlefish/common/libs/utils:flag_parser",

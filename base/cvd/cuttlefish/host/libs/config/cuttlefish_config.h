@@ -113,14 +113,14 @@ class CuttlefishConfig {
     static TouchpadConfig Deserialize(const Json::Value& config_json);
   };
 
-  enum class CameraType {
+  enum class MediaType {
     kUnknown = 0,
-    kV4l2Emulated,
+    kV4l2EmulatedCamera,
     kV4l2Proxy,
   };
 
-  struct CameraConfig {
-    CameraType type;
+  struct MediaConfig {
+    MediaType type;
   };
 
   void set_secure_hals(const std::set<SecureHal>&);
@@ -352,11 +352,8 @@ class CuttlefishConfig {
     std::string instance_internal_uds_dir() const;
 
     std::string touch_socket_path(int touch_dev_idx) const;
-    std::string mouse_socket_path() const;
-    std::string gamepad_socket_path() const;
-    std::string rotary_socket_path() const;
-    std::string keyboard_socket_path() const;
-    std::string switches_socket_path() const;
+
+    std::string media_socket_path(int index) const;
 
     std::string launcher_log_path() const;
 
@@ -599,7 +596,7 @@ class CuttlefishConfig {
 
     bool enable_tap_devices() const;
 
-    std::vector<CameraConfig> camera_configs() const;
+    std::vector<MediaConfig> media_configs() const;
   };
 
   // A view into an existing CuttlefishConfig object for a particular instance.
@@ -825,7 +822,7 @@ class CuttlefishConfig {
 
     void set_enable_tap_devices(bool);
 
-    void set_camera_configs(const std::vector<CameraConfig>& configs);
+    void set_media_configs(const std::vector<MediaConfig>& configs);
 
    private:
     void SetPath(const std::string& key, const std::string& path);

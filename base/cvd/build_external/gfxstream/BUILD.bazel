@@ -5,5 +5,5 @@ package(
 )
 
 exports_files([
-    "PATCH.protobuf_deprecation_warning.patch",
+    "PATCH.gfxstream.build_variables.patch",
 ])

@@ -51,7 +51,7 @@
 #include "cuttlefish/host/commands/cvd/instances/instance_manager.h"
 #include "cuttlefish/host/commands/cvd/instances/local_instance_group.h"
 #include "cuttlefish/host/commands/cvd/utils/common.h"
-#include "cuttlefish/host/libs/metrics/metrics_orchestration.h"
+#include "cuttlefish/host/libs/metrics/device_metrics_orchestration.h"
 #include "cuttlefish/posix/strerror.h"
 #include "cuttlefish/posix/symlink.h"
 #include "cuttlefish/result/result.h"
@@ -265,13 +265,23 @@ Result<void> CvdCreateCommandHandler::CreateSymlinks(
   for (const auto& instance : group.Instances()) {
     // later on, we link cuttlefish_runtime to cuttlefish_runtime.smallest_id
     smallest_id = std::min(smallest_id, instance.id());
-    const std::string instance_home_dir = fmt::format(
+    std::string instance_home_dir = fmt::format(
         "{}/cuttlefish/instances/cvd-{}", group.HomeDir(), instance.id());
+    if(!FileExists(instance_home_dir)) {
+      // Legacy launchers create cuttlefish_runtime.{$ID}
+      instance_home_dir = fmt::format(
+          "{}/cuttlefish_runtime.{}", group.HomeDir(), instance.id());
+    }
     CF_EXPECT(EnsureSymlink(instance_home_dir,
                             fmt::format("{}/cuttlefish_runtime.{}",
                                         system_wide_home, instance.id())));
-    CF_EXPECT(EnsureSymlink(group.HomeDir() + "/cuttlefish",
-                            system_wide_home + "/cuttlefish"));
+    std::string cuttlefish_home_dir = group.HomeDir() + "/cuttlefish";
+    if(FileExists(cuttlefish_home_dir)) {
+      // Legacy Cuttlefish launchers don't create this directory so no need to
+      // create a corresponding symlink in that case.
+      CF_EXPECT(EnsureSymlink(cuttlefish_home_dir,
+                              system_wide_home + "/cuttlefish"));
+    }
   }
   // create cuttlefish_runtime to cuttlefish_runtime.id
   CF_EXPECT_NE(std::numeric_limits<unsigned>::max(), smallest_id,

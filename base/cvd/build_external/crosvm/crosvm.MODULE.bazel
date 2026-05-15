@@ -1,6 +1,6 @@
 # this needs to be at parity with with build_external/crosvm/crosvm.config.toml
 CROSVM_REMOTE = "https://chromium.googlesource.com/crosvm/crosvm"
-CROSVM_REV = "02e797273075c089cf075e7acb4d549323a167fb"
+CROSVM_REV = "61714b1799ad477846027fe48b875ad62f38f4e4"
 MINIGBM_REMOTE = "https://chromium.googlesource.com/chromiumos/platform/minigbm"
 MINIGBM_REV = "9ccd5b3051a666a5c98582e36961e591e7b0784a"
 
@@ -59,6 +59,8 @@ crosvm_bin.annotation(
     patch_args = ["-p1"],
     patches = [
         "@//build_external/crosvm:PATCH.crosvm-composite-duplicate-components.patch",
+        "@//build_external/crosvm:PATCH.crosvm-resize-display.patch",
+        "@//build_external/crosvm:PATCH.crosvm-disable-gfxstream-vulkan-apple-16k.patch",
     ],
     deps = [
         "@@//:gfxstream_backend_import",
@@ -81,6 +83,33 @@ crosvm_bin.annotation(
 )
 
 crosvm_bin.annotation(
+    crate = "mesa3d_util",
+    patch_args = ["-p1"],
+    patches = ["@//build_external/crosvm:PATCH.mesa3d_util-upstream-main-20260520.patch"],
+)
+
+crosvm_bin.annotation(
+    crate = "rustix",
+    # Latest mesa3d_util uses rustix::thread::futex for cross-domain atomic
+    # memory sentinels.
+    crate_features = ["thread"],
+)
+
+crosvm_bin.annotation(
+    crate = "linux-raw-sys",
+    # rustix's thread feature pulls in prctl constants.
+    crate_features = ["prctl"],
+)
+
+crosvm_bin.annotation(
+    crate = "devices",
+    patch_args = ["-p1"],
+    patches = [
+        "@//build_external/crosvm:PATCH.crosvm-resize-display-devices.patch",
+    ],
+)
+
+crosvm_bin.annotation(
     crate = "rutabaga_gfx",
     deps = [
         "@@//:gfxstream_backend_import",
@@ -100,7 +129,10 @@ crosvm_bin.annotation(
         "CROSVM_USE_SYSTEM_VIRGLRENDERER": "1",
     },
     patch_args = ["-p1"],
-    patches = ["@//build_external/crosvm:PATCH.rutabaga_gfx_build_rs.patch"],
+    patches = [
+        "@//build_external/crosvm:PATCH.rutabaga_gfx_build_rs.patch",
+        "@//build_external/crosvm:PATCH.rutabaga_gfx-upstream-main-20260520.patch",
+    ],
 )
 
 crosvm_bin.annotation(
@@ -135,6 +167,12 @@ crosvm_bin.annotation(
     patches = ["@//build_external/crosvm:PATCH.proto_build_tools.patch"],
 )
 
+crosvm_bin.annotation(
+    crate = "vm_control",
+    patch_args = ["-p1"],
+    patches = ["@//build_external/crosvm:PATCH.crosvm-resize-display-vm-control.patch"],
+)
+
 crosvm_bin.from_specs(
     name = "crosvm_bin",
     cargo_config = "@//build_external/crosvm:crosvm.config.toml",
@@ -156,8 +194,8 @@ git_repository(
     patch_strip = 1,
     patches = [
         "@//build_external/crosvm:PATCH.crosvm-composite-duplicate-components.patch",
+        "@//build_external/crosvm:PATCH.crosvm-resize-display.patch",
         "@//build_external/crosvm:PATCH.minijail-sys_common_mk.patch",
-        "@//build_external/crosvm:PATCH.minijail-blktracesetup2.patch",
     ],
 )
 

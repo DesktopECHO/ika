@@ -15,6 +15,11 @@ enum sc_device_msg_type {
     DEVICE_MSG_TYPE_CLIPBOARD,
     DEVICE_MSG_TYPE_ACK_CLIPBOARD,
     DEVICE_MSG_TYPE_UHID_OUTPUT,
+    // Sent by the device when the guest display has finished a requested
+    // resize and is ready to be presented to the user (no letterbox cascade
+    // in flight). Lets the client drop its stretched preview immediately
+    // instead of relying on host-side heuristics.
+    DEVICE_MSG_TYPE_DISPLAY_READY,
 };
 
 struct sc_device_msg {
@@ -31,6 +36,11 @@ struct sc_device_msg {
             uint16_t size;
             uint8_t *data; // owned, to be freed by free()
         } uhid_output;
+        struct {
+            uint32_t display_id;
+            uint16_t width;
+            uint16_t height;
+        } display_ready;
     };
 };
 

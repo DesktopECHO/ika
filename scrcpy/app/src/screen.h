@@ -23,6 +23,7 @@
 #include "trait/key_processor.h"
 #include "trait/frame_sink.h"
 #include "trait/mouse_processor.h"
+#include "util/process.h"
 #include "util/tick.h"
 
 #ifdef __APPLE__
@@ -84,6 +85,12 @@ struct sc_screen {
     // Deduplicate resize requests while dpi-driven resizing is active.
     struct sc_size last_requested_display_size;
     bool resize_display_using_pixel_size;
+    const char *cuttlefish_frames_socket;
+    uint32_t cuttlefish_display_id;
+    uint16_t flex_display_dpi;
+    uint16_t launch_display_dpi;    // flex_display_dpi at init, for DPI ratio
+    float initial_display_scale;    // host display scale at init, for DPI ratio
+    sc_pid cuttlefish_resize_pid;   // async resize child, reaped before next spawn
     sc_tick last_resize_request_tick;
     bool initial_window_show_deferred;
     struct sc_size initial_display_size;
@@ -91,7 +98,26 @@ struct sc_screen {
     SDL_TimerID initial_window_show_timer; // protected by mutex
     bool transient_stretch;
     sc_tick last_resize_event_tick;
+    // Set on the first frame that matches last_requested_display_size after a
+    // resize. Used to hold the stretched preview through Android's post-resize
+    // redraw cascade; cleared whenever a non-matching frame arrives or a new
+    // resize starts.
+    sc_tick first_matching_frame_tick;
+    // Hash of a sparse pixel sample of the most recently-received raw frame,
+    // and the tick at which it last changed. Used to decide when Android has
+    // finished its post-resize recomposting and we can swap to the new
+    // texture: while the cascade is in flight pixels keep changing; once it
+    // settles the hash stops changing and we know it's safe.
+    uint64_t frame_content_hash;
+    sc_tick frame_content_changed_tick;
+    // Set when stability is signalled (DISPLAY_READY ack or fallback) and
+    // the blur begins its fade-out. transient_stretch is already false at
+    // this point; the texture has been swapped to the new content, but the
+    // blur ghost overlay decays from full to zero over
+    // FLEX_DISPLAY_BLUR_FADE_DURATION starting at this tick.
+    sc_tick blur_fade_start_tick;
     SDL_TimerID resize_settle_timer; // protected by mutex
+    SDL_TimerID blur_fade_timer; // protected by mutex
     bool hotspot_button_down;
     bool hotspot_press_started_in_hotspot;
     bool hotspot_dragged;
@@ -156,6 +182,9 @@ struct sc_screen_params {
     bool camera;
     bool flex_display;
     bool resize_display_using_pixel_size;
+    const char *cuttlefish_frames_socket;
+    uint32_t cuttlefish_display_id;
+    uint16_t flex_display_dpi;
 
     struct sc_controller *controller;
     struct sc_file_pusher *fp;
@@ -298,5 +327,15 @@ sc_screen_convert_drawable_to_input_coords(struct sc_screen *screen,
 // otherwise.
 void
 sc_screen_hidpi_scale_coords(struct sc_screen *screen, int32_t *x, int32_t *y);
+
+// Handler for DEVICE_MSG_TYPE_DISPLAY_READY. Called on the main thread after
+// the receiver forwards the device-side signal that the guest has finished a
+// resize. Clears transient_stretch (skipping the host-side hash heuristics)
+// and re-uploads the most recent frame so the new content is on screen
+// immediately. display_id, width, height are reported by the device for the
+// client to sanity-check against its last request.
+void
+sc_screen_on_display_ready(struct sc_screen *screen, uint32_t display_id,
+                           uint16_t width, uint16_t height);
 
 #endif

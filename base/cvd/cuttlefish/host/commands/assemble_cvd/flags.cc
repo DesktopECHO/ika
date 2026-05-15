@@ -75,9 +75,9 @@
 #include "cuttlefish/host/commands/assemble_cvd/flags/use_cvdalloc.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/vendor_boot_image.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/vm_manager.h"
-#include "cuttlefish/host/commands/assemble_cvd/camera.h"
 #include "cuttlefish/host/commands/assemble_cvd/graphics_flags.h"
 #include "cuttlefish/host/commands/assemble_cvd/guest_config.h"
+#include "cuttlefish/host/commands/assemble_cvd/media.h"
 #include "cuttlefish/host/commands/assemble_cvd/network_flags.h"
 #include "cuttlefish/host/commands/assemble_cvd/touchpad.h"
 #include "cuttlefish/host/commands/cvdalloc/interface.h"
@@ -840,6 +840,11 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
 
     instance.set_audio_output_streams_count(
         guest_configs[instance_index].output_audio_streams_count);
+    const std::optional<::cuttlefish::config::Audio>& audio_settings =
+        guest_configs[instance_index].audio_settings;
+    if (audio_settings.has_value()) {
+      instance.set_audio_settings(audio_settings.value());
+    }
 
     // jcardsim
     instance.set_enable_jcard_simulator(
@@ -1307,11 +1312,11 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
 
     instance.set_enable_tap_devices(enable_tap_devices_vec[instance_index]);
 
-    auto cameras_configs_bindings = injector.getMultibindings<CamerasConfigs>();
-    CF_EXPECT_EQ(cameras_configs_bindings.size(), 1,
+    auto media_configs_bindings = injector.getMultibindings<MediaConfigs>();
+    CF_EXPECT_EQ(media_configs_bindings.size(), 1,
                  "Expected a single binding?");
-    auto camera_configs = cameras_configs_bindings[0]->GetConfigs();
-    instance.set_camera_configs(camera_configs);
+    auto media_configs = media_configs_bindings[0]->GetConfigs();
+    instance.set_media_configs(media_configs);
 
     instance_index++;
   }  // end of num_instances loop

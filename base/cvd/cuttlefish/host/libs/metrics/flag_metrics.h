@@ -17,10 +17,10 @@
 #pragma once
 
 #include <string>
-#include <vector>
 
 #include "cuttlefish/host/libs/config/data_image_policy.h"
 #include "cuttlefish/host/libs/config/gpu_mode.h"
+#include "cuttlefish/host/libs/metrics/parsed_flags.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -37,7 +37,7 @@ struct FlagMetrics {
   bool system_image_dir_specified;
 };
 
-// depends on gflags::ParseCommandLineFlags being called previously
-Result<std::vector<FlagMetrics>> GetFlagMetrics(int guest_count);
+Result<FlagMetrics> GetFlagMetrics(const ParsedFlags& parsed_flags,
+                                   int guest_index);
 
 }  // namespace cuttlefish

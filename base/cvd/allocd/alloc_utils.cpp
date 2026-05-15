@@ -145,7 +145,7 @@ bool CreateMobileIface(std::string_view name, uint16_t id,
     DestroyIface(name);
   }
 
-  if (!IptableConfig(network, true).ok()) {
+  if (!NftConfig(network, true).ok()) {
     DestroyGateway(name, gateway, netmask);
     DestroyIface(name);
     return false;
@@ -165,7 +165,7 @@ bool DestroyMobileIface(std::string_view name, uint16_t id,
   auto gateway = MobileGatewayName(ipaddr, id);
   auto network = MobileNetworkName(ipaddr, netmask, id);
 
-  IptableConfig(network, false);
+  NftConfig(network, false);
   DestroyGateway(name, gateway, netmask);
   return DestroyIface(name);
 }
@@ -276,7 +276,7 @@ bool SetupBridgeGateway(std::string_view bridge_name,
   FirewallAddTrustedInterface(bridge_name);
   config.has_firewall = true;
 
-  auto ret = IptableConfig(network, true).ok();
+  auto ret = NftConfig(network, true).ok();
   if (!ret) {
     CleanupBridgeGateway(bridge_name, ipaddr, config);
     LOG(WARNING) << "Failed to setup ip tables";
@@ -293,7 +293,7 @@ void CleanupBridgeGateway(std::string_view name, std::string_view ipaddr,
   auto dhcp_range = absl::StrFormat("%s.2,%s.255", ipaddr, ipaddr);
 
   if (config.has_iptable) {
-    IptableConfig(network, false);
+    NftConfig(network, false);
   }
 
   if (config.has_firewall) {

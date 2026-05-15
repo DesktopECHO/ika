@@ -1,0 +1,13 @@
+diff --git a/crypto/internal.h b/crypto/internal.h
+index 3f3682dbf..19c83b72e 100644
+--- a/crypto/internal.h
++++ b/crypto/internal.h
+@@ -1049,7 +1049,7 @@ static inline void *OPENSSL_memchr(const void *s, int c, size_t n) {
+     return NULL;
+   }
+ 
+-  return memchr(s, c, n);
++  return (void *)memchr(s, c, n);
+ }
+ 
+ #endif  // __cplusplus

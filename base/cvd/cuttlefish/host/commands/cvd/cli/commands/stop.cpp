@@ -36,7 +36,7 @@
 #include "cuttlefish/host/commands/cvd/cli/utils.h"
 #include "cuttlefish/host/commands/cvd/instances/instance_manager.h"
 #include "cuttlefish/host/commands/cvd/utils/common.h"
-#include "cuttlefish/host/libs/metrics/metrics_orchestration.h"
+#include "cuttlefish/host/libs/metrics/device_metrics_orchestration.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -83,6 +83,7 @@ class CvdStopCommandHandler : public CvdCommandHandler {
   cvd_common::Args CmdList() const override { return {"stop", "stop_cvd"}; }
   Result<std::string> SummaryHelp() const override;
   bool ShouldInterceptHelp() const override { return true; }
+  bool RequiresDeviceExists() const override { return true; }
   Result<std::string> DetailedHelp(std::vector<std::string>&) const override;
 
  private:

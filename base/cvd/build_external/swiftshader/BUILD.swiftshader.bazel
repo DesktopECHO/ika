@@ -6,6 +6,7 @@ load("@//:build_variables.bzl", "COPTS")
 package(
     default_visibility = [
         "@//:android_cuttlefish",
+        "@mesa//:__subpackages__",
     ],
 )
 
@@ -1445,6 +1446,10 @@ cc_library(
             "third_party/llvm-16.0/llvm/lib/Target/X86/X86TileConfig.cpp",
             "third_party/llvm-16.0/llvm/lib/Target/X86/X86VZeroUpper.cpp",
             "third_party/llvm-16.0/llvm/lib/Target/X86/X86WinEHState.cpp",
+        ],
+        "@platforms//cpu:riscv64": [
+            # No arch-specific LLVM JIT backend sources for riscv64.
+            # SwiftShader will build but JIT compilation will not be available.
         ],
     }),
     hdrs = glob([

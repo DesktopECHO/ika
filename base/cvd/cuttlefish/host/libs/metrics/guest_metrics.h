@@ -21,6 +21,9 @@
 #include <string_view>
 #include <vector>
 
+#include "cuttlefish/host/libs/metrics/device_event_type.h"
+#include "cuttlefish/host/libs/metrics/flag_metrics.h"
+#include "cuttlefish/host/libs/metrics/parsed_flags.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -32,12 +35,16 @@ struct GuestInfo {
 
 struct Guests {
   std::string host_artifacts;
+  DeviceEventType event_type;
+  ParsedFlags parsed_flags;
   std::vector<GuestInfo> guest_infos;
 };
 
 struct GuestMetrics {
   uint32_t instance_id;
   std::string os_version;
+  DeviceEventType event_type;
+  FlagMetrics flag_metrics;
 };
 
 Result<std::vector<GuestMetrics>> GetGuestMetrics(const Guests& guests);

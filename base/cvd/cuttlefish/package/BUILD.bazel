@@ -11,6 +11,7 @@ package_files(
         "cuttlefish-common/bin/aarch64-linux-gnu/libmem_overrides.so": "cuttlefish-common/bin/libmem_overrides.so",
         "cuttlefish-common/bin/aarch64-linux-gnu/libvk_swiftshader.so": "cuttlefish-common/bin/libvk_swiftshader.so",
         "cuttlefish-common/bin/x86_64-linux-gnu/gfxstream_graphics_detector": "cuttlefish-common/bin/graphics_detector",
+        "cuttlefish-common/lib64/vulkan.lvp.so": "cuttlefish-common/bin/libvk_lavapipe.so",
         "cuttlefish-common/lib64/vulkan.pastel.so": "cuttlefish-common/bin/libvk_swiftshader.so",
     },
     package_file_to_src = {
@@ -53,6 +54,7 @@ package_files(
         "cuttlefish-common/bin/kernel_log_monitor": "//cuttlefish/host/commands/kernel_log_monitor",
         "cuttlefish-common/bin/libmem_overrides.so": "//cuttlefish/host/graphics/mem_overrides:libmem_overrides.so",
         "cuttlefish-common/bin/libgfxstream_backend.so": "@gfxstream//host:gfxstream_backend",
+        "cuttlefish-common/bin/libvk_lavapipe.so": "@mesa//:vk_lavapipe",
         "cuttlefish-common/bin/libvk_swiftshader.so": "@swiftshader//:vk_swiftshader",
         "cuttlefish-common/bin/log_tee": "//cuttlefish/host/commands/log_tee",
         "cuttlefish-common/bin/logcat_receiver": "//cuttlefish/host/commands/logcat_receiver",
@@ -96,6 +98,7 @@ package_files(
         "cuttlefish-common/bin/tombstone_receiver": "//cuttlefish/host/commands/tombstone_receiver",
         "cuttlefish-common/bin/unpack_bootimg.py": "@mkbootimg//:unpack_bootimg.py",
         "cuttlefish-common/bin/aarch64-linux-gnu/vk_swiftshader_icd.json": "//cuttlefish/host/graphics/vulkan:vk_swiftshader_icd",
+        "cuttlefish-common/bin/vhu_media_simple_device": "//cuttlefish/host/commands/vhost_user_media/simple_device:simple_device",
         "cuttlefish-common/bin/vk_lavapipe_icd.json": "//cuttlefish/host/graphics/vulkan:vk_lavapipe_icd",
         "cuttlefish-common/bin/vk_swiftshader_icd.json": "//cuttlefish/host/graphics/vulkan:vk_swiftshader_icd",
         "cuttlefish-common/usr/share/vulkan/icd.d/vk_lavapipe_icd.cf.json": "//cuttlefish/host/graphics/vulkan:vk_lavapipe_icd",

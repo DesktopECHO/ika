@@ -26,11 +26,17 @@ shell_get() {
 
 echo "[desktop] feature contract"
 features="$(shell_get pm list features)"
-# Desktop products must expose freeform window management and the PC feature.
-grep -q 'android.software.freeform_window_management' <<<"$features" || \
+# Desktop products must expose freeform window management and a tablet-like
+# touch surface for app store compatibility, without the Play-visible PC feature.
+grep -qx 'feature:android.software.freeform_window_management' <<<"$features" || \
   fail "missing android.software.freeform_window_management"
-grep -q 'android.hardware.type.pc' <<<"$features" || \
-  fail "missing android.hardware.type.pc"
+grep -qx 'feature:android.hardware.touchscreen' <<<"$features" || \
+  fail "missing android.hardware.touchscreen"
+grep -qx 'feature:android.hardware.touchscreen.multitouch.distinct' <<<"$features" || \
+  fail "missing android.hardware.touchscreen.multitouch.distinct"
+if grep -qx 'feature:android.hardware.type.pc' <<<"$features"; then
+  fail "android.hardware.type.pc is present (Play treats this as a desktop/PC device)"
+fi
 # Desktop products must NOT advertise phone-only features.
 if grep -q 'android.hardware.telephony' <<<"$features"; then
   fail "android.hardware.telephony is present (desktop has no cellular hardware)"

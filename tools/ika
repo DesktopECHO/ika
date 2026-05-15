@@ -125,9 +125,7 @@ declare -A CVD_COMPUTE_DEFAULTS=(
 declare -A CVD_GPU_DEFAULTS=(
   [gpu_mode]="gfxstream"
   [gpu_vhost_user_mode]="off"
-  # The Asahi crosvm/gfxstream path currently logs repeated ResourceMapBlob
-  # failures with udmabuf enabled, so keep it opt-in until that path works.
-  [enable_gpu_udmabuf]="false"
+  [enable_gpu_udmabuf]="true"
   [use_cvdalloc]="true"
 )
 
@@ -377,7 +375,7 @@ resolve_scrcpy_dpi() {
     return 0
   fi
 
-  if [[ "${IKADPI:-}" =~ ^[0-9]+$ ]] && (( IKADPI >= 72 && IKADPI <= 1200 )); then
+  if [[ "${IKADPI:-}" =~ ^[0-9]+$ ]]; then
     printf '%s\n' "${IKADPI}"
     return 0
   fi
@@ -387,25 +385,10 @@ resolve_scrcpy_dpi() {
     die "could not determine host display width for automatic DPI"
   fi
 
-  # Heuristic: DPI = native display width / 12. Lands exactly on AOSP density
-  # buckets at common monitor widths:
-  #
-  #     1440  -> 120 (ldpi)
-  #     1920  -> 160 (mdpi)        1080p
-  #     2880  -> 240 (hdpi)        1440p / 2.5K
-  #     3840  -> 320 (xhdpi)       4K
-  #     5760  -> 480 (xxhdpi)
-  #     7680  -> 640 (xxxhdpi)     8K
-  #
-  # Clamp to the 72 / 640 AOSP density-bucket range to keep pathological
-  # display sizes (very narrow, very wide) from producing unusable values.
+  # Heuristic: DPI = (native display width / 10)
   width="${BASH_REMATCH[1]}"
-  dpi=$(( width / 12 ))
-  if (( dpi < 72 )); then
-    dpi=72
-  elif (( dpi > 640 )); then
-    dpi=640
-  fi
+  dpi=$(( width / 10 - 24 ))
+  dpi=$(( dpi / 8 * 8 ))
 
   printf '%s\n' "${dpi}"
 }
@@ -883,6 +866,20 @@ start_scrcpy_with_retries() {
 
   if [[ -d "${SCRCPY_ICON_DIR_DEFAULT}" ]]; then
     scrcpy_env+=("SCRCPY_ICON_DIR=${SCRCPY_ICON_DIR_DEFAULT}")
+  fi
+
+  if [[ -x "${CVD_CLI_BIN}" ]]; then
+    scrcpy_env+=("IKA_CVD_BIN=${CVD_CLI_BIN}")
+  fi
+
+  # scrcpy spawns `adb` to push the server jar and open the shell. Point it
+  # at the cuttlefish-bundled adb explicitly so it doesn't rely on PATH —
+  # on a stock Asahi system there's no /usr/bin/adb, and even where there
+  # is one we want the cuttlefish version that's known to match the rest
+  # of the cvd-host_package.
+  local packaged_adb="${PACKAGED_CVD_HOST_OUT}/bin/adb"
+  if [[ -x "${packaged_adb}" ]]; then
+    scrcpy_env+=("ADB=${packaged_adb}")
   fi
 
   if [[ -n "${SCRCPY_SERVER_PATH_OVERRIDE}" && -f "${SCRCPY_SERVER_PATH_OVERRIDE}" ]]; then

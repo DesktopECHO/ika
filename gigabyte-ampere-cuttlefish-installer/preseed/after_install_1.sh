@@ -34,6 +34,9 @@ has_backports=$(apt-cache policy | grep "${DEBIAN_DISTRIBUTION}-backports")
 if [ x"$has_backports" != x"" ]; then
     apt install -y -t "${DEBIAN_DISTRIBUTION}-backports" linux-headers-arm64
     apt install -y -t "${DEBIAN_DISTRIBUTION}-backports" linux-image-arm64
+else
+    apt install -y linux-headers-arm64
+    apt install -y linux-image-arm64
 fi
 
 # Install nVidia or AMD GPU driver
@@ -64,16 +67,42 @@ fi
 # End of Install kernel
 
 # Install android cuttlefish packages
+#DEPLOY_CHANNEL=
+#DEPLOY_VERSION=
 curl -fsSL --retry 7 --retry-all-errors https://us-apt.pkg.dev/doc/repo-signing-key.gpg -o /etc/apt/trusted.gpg.d/artifact-registry.asc
 chmod a+r /etc/apt/trusted.gpg.d/artifact-registry.asc
-echo "deb https://us-apt.pkg.dev/projects/android-cuttlefish-artifacts android-cuttlefish main" \
-    | tee -a /etc/apt/sources.list.d/artifact-registry.list
+if [ x"${DEPLOY_CHANNEL}" = x"nightly" ]; then
+    echo "deb https://us-apt.pkg.dev/projects/android-cuttlefish-artifacts android-cuttlefish-nightly main" \
+        | tee -a /etc/apt/sources.list.d/artifact-registry.list
+elif [ x"${DEPLOY_CHANNEL}" = x"unstable" ]; then
+    echo "deb https://us-apt.pkg.dev/projects/android-cuttlefish-artifacts android-cuttlefish-unstable main" \
+        | tee -a /etc/apt/sources.list.d/artifact-registry.list
+else
+    echo "deb https://us-apt.pkg.dev/projects/android-cuttlefish-artifacts android-cuttlefish main" \
+        | tee -a /etc/apt/sources.list.d/artifact-registry.list
+fi
+
 apt-get update
-apt-get install -y cuttlefish-base cuttlefish-user cuttlefish-orchestration -t android-cuttlefish
+
+if [ x"${DEPLOY_CHANNEL}" = x"stable" ]; then
+    apt-get install -y cuttlefish-base="${DEPLOY_VERSION}" cuttlefish-user="${DEPLOY_VERSION}" cuttlefish-orchestration="${DEPLOY_VERSION}" -t android-cuttlefish
+    apt-mark hold cuttlefish-base cuttlefish-user cuttlefish-orchestration
+elif [ x"${DEPLOY_CHANNEL}" != x"" ]; then
+    apt-get install -y cuttlefish-base="${DEPLOY_VERSION}" cuttlefish-user="${DEPLOY_VERSION}" cuttlefish-orchestration="${DEPLOY_VERSION}" -t android-cuttlefish-"${DEPLOY_CHANNEL}"
+    apt-mark hold cuttlefish-base cuttlefish-user cuttlefish-orchestration
+else
+    apt-get install -y cuttlefish-base cuttlefish-user cuttlefish-orchestration -t android-cuttlefish
+fi
+
 adduser vsoc-01 cvdnetwork
 
 # Install gigabyte package
-apt -o Apt::Get::Assume-Yes=true -o APT::Color=0 -o DPkgPM::Progress-Fancy=0 -o Acquire::Retries=5 install cuttlefish-integration-gigabyte-arm64
+if [ x"${DEPLOY_CHANNEL}" != x"" ]; then
+    apt -o Apt::Get::Assume-Yes=true -o APT::Color=0 -o DPkgPM::Progress-Fancy=0 -o Acquire::Retries=5 install cuttlefish-integration-gigabyte-arm64="${DEPLOY_VERSION}"
+    apt-mark hold cuttlefish-integration-gigabyte-arm64
+else
+    apt -o Apt::Get::Assume-Yes=true -o APT::Color=0 -o DPkgPM::Progress-Fancy=0 -o Acquire::Retries=5 install cuttlefish-integration-gigabyte-arm64
+fi
 
 # Extra tools
 cd /root

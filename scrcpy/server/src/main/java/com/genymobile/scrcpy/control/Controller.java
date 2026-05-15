@@ -18,11 +18,14 @@ import com.genymobile.scrcpy.video.ScreenCapture;
 import com.genymobile.scrcpy.video.SurfaceCapture;
 import com.genymobile.scrcpy.video.VirtualDisplayListener;
 import com.genymobile.scrcpy.wrappers.ClipboardManager;
+import com.genymobile.scrcpy.wrappers.DisplayManager;
 import com.genymobile.scrcpy.wrappers.InputManager;
 import com.genymobile.scrcpy.wrappers.ServiceManager;
 
 import android.content.Intent;
 import android.os.Build;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.SystemClock;
 import android.util.Pair;
 import android.view.InputDevice;
@@ -109,6 +112,15 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     private SurfaceCapture surfaceCapture;
     private Size lastPrimaryDisplaySizeRequest;
     private int lastPrimaryDisplayDpiRequest;
+
+    // DEVICE_MSG_TYPE_DISPLAY_READY plumbing. Listener registered at start,
+    // unregistered at stop. pendingDisplayReadySize is set when we apply a
+    // resize and cleared when the listener observes the display reaching
+    // that size (at which point we send DISPLAY_READY to the client).
+    private DisplayManager.DisplayListenerHandle displayReadyListenerHandle;
+    private HandlerThread displayReadyHandlerThread;
+    private final Object displayReadyLock = new Object();
+    private Size pendingDisplayReadySize;
 
     public Controller(ControlChannel controlChannel, CleanUp cleanUp, Options options) {
         this.displayId = options.getDisplayId();
@@ -234,6 +246,10 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
 
     @Override
     public void start(TerminationListener listener) {
+        if (flexDisplay && displayId == 0) {
+            startDisplayReadyListener();
+        }
+
         thread = new Thread(() -> {
             try {
                 control();
@@ -251,8 +267,68 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         sender.start();
     }
 
+    private void startDisplayReadyListener() {
+        displayReadyHandlerThread = new HandlerThread("scrcpy-display-ready");
+        displayReadyHandlerThread.start();
+        Handler handler = new Handler(displayReadyHandlerThread.getLooper());
+        displayReadyListenerHandle = ServiceManager.getDisplayManager().registerDisplayListener(eventDisplayId -> {
+            if (eventDisplayId != displayId) {
+                return;
+            }
+            Size pending;
+            synchronized (displayReadyLock) {
+                pending = pendingDisplayReadySize;
+            }
+            if (pending == null) {
+                return;
+            }
+            DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(displayId);
+            if (info == null) {
+                return;
+            }
+            Size current = info.getSize();
+            if (!pending.equals(current)) {
+                // Display reached an intermediate or unrelated size. Keep
+                // waiting; the next onDisplayChanged should resolve to the
+                // requested size.
+                return;
+            }
+            synchronized (displayReadyLock) {
+                if (pendingDisplayReadySize != pending) {
+                    // A new resize was issued after this one. Drop the ack
+                    // for the old request; the new listener fire will catch
+                    // the new size.
+                    return;
+                }
+                pendingDisplayReadySize = null;
+            }
+            DeviceMessage msg = DeviceMessage.createDisplayReady(displayId,
+                    pending.getWidth(), pending.getHeight());
+            sender.send(msg);
+            if (Ln.isEnabled(Ln.Level.VERBOSE)) {
+                Ln.v("Sent DISPLAY_READY for display " + displayId + " at "
+                        + pending.getWidth() + "x" + pending.getHeight());
+            }
+        }, handler);
+    }
+
+    private void stopDisplayReadyListener() {
+        if (displayReadyListenerHandle != null) {
+            ServiceManager.getDisplayManager().unregisterDisplayListener(displayReadyListenerHandle);
+            displayReadyListenerHandle = null;
+        }
+        if (displayReadyHandlerThread != null) {
+            displayReadyHandlerThread.quitSafely();
+            displayReadyHandlerThread = null;
+        }
+        synchronized (displayReadyLock) {
+            pendingDisplayReadySize = null;
+        }
+    }
+
     @Override
     public void stop() {
+        stopDisplayReadyListener();
         if (thread != null) {
             thread.interrupt();
         }
@@ -800,25 +876,26 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
             nd.setDisplaySize(width, height, dpi);
         } else if ((surfaceCapture instanceof ScreenCapture || surfaceCapture == null)
                 && flexDisplay && displayId == 0) {
-            // Many encoders require dimensions aligned to at least 8 pixels.
-            // Apply the same normalization before updating display 0 to avoid
-            // immediate size coercion by the encoder.
             if (width <= 0 || height <= 0) {
                 Ln.w("Primary display resize ignored: invalid size " + width
                         + "x" + height);
                 return;
             }
-            int alignedWidth = alignUp(Math.max(width, PRIMARY_DISPLAY_MIN_WIDTH),
-                    DISPLAY_SIZE_ALIGNMENT);
-            int alignedHeight = alignUp(Math.max(height, PRIMARY_DISPLAY_MIN_HEIGHT),
-                    DISPLAY_SIZE_ALIGNMENT);
-
-            if (alignedWidth != width || alignedHeight != height) {
-                Ln.v("Align primary display resize " + width + "x" + height
-                        + " -> " + alignedWidth + "x" + alignedHeight);
+            int finalWidth = Math.max(width, PRIMARY_DISPLAY_MIN_WIDTH);
+            int finalHeight = Math.max(height, PRIMARY_DISPLAY_MIN_HEIGHT);
+            if (surfaceCapture instanceof ScreenCapture) {
+                // Many encoders require dimensions aligned to at least 8 pixels.
+                int alignedWidth = alignUp(finalWidth, DISPLAY_SIZE_ALIGNMENT);
+                int alignedHeight = alignUp(finalHeight, DISPLAY_SIZE_ALIGNMENT);
+                if (alignedWidth != finalWidth || alignedHeight != finalHeight) {
+                    Ln.v("Align primary display resize " + width + "x" + height
+                            + " -> " + alignedWidth + "x" + alignedHeight);
+                }
+                finalWidth = alignedWidth;
+                finalHeight = alignedHeight;
             }
 
-            Size requestedSize = new Size(alignedWidth, alignedHeight);
+            Size requestedSize = new Size(finalWidth, finalHeight);
             if (requestedSize.equals(lastPrimaryDisplaySizeRequest)
                     && dpi == lastPrimaryDisplayDpiRequest) {
                 return;
@@ -831,6 +908,13 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
                     requestedDpi)) {
                 lastPrimaryDisplaySizeRequest = requestedSize;
                 lastPrimaryDisplayDpiRequest = dpi;
+                // Arm the DisplayListener to send DISPLAY_READY once the
+                // display surface actually reaches this size. Overwriting
+                // any in-flight pending size is intentional: the latest
+                // request is the only one the client cares about.
+                synchronized (displayReadyLock) {
+                    pendingDisplayReadySize = requestedSize;
+                }
             } else {
                 Ln.w("Primary display resize failed");
             }

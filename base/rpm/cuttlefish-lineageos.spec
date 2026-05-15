@@ -4,7 +4,7 @@ Release:        2%{?dist}
 Summary:        LineageOS for Cuttlefish host
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish
-Source0:        android-cuttlefish-1.51.0.tar.gz
+Source0:        android-cuttlefish-1.53.0.tar.gz
 ExclusiveArch:  aarch64 x86_64
 %global debug_package %{nil}
 %global __debug_install_post %{nil}
@@ -27,7 +27,7 @@ Provides:       cuttlefish-lineageos = %{version}-%{release}
 Obsoletes:      cuttlefish-lineageos < %{version}-%{release}
 
 %prep
-%autosetup -n android-cuttlefish-1.51.0
+%autosetup -n android-cuttlefish-1.53.0
 
 %install
 rm -rf %{buildroot}

@@ -52,6 +52,13 @@ sc_controller_configure(struct sc_controller *controller,
                         struct sc_acksync *acksync,
                         struct sc_uhid_devices *uhid_devices);
 
+// Late-bound. Screen is created after the controller; this hooks it up so
+// DEVICE_MSG_TYPE_DISPLAY_READY messages from the receiver thread can be
+// dispatched to it.
+void
+sc_controller_set_screen(struct sc_controller *controller,
+                         struct sc_screen *screen);
+
 void
 sc_controller_destroy(struct sc_controller *controller);
 

@@ -13,13 +13,14 @@ update_microg_prebuilts="${UPDATE_MICROG_PREBUILTS:-1}"
 include_x86_arm_native_bridge="${INCLUDE_X86_ARM_NATIVE_BRIDGE:-1}"
 update_native_bridge_prebuilts="${UPDATE_NATIVE_BRIDGE_PREBUILTS:-1}"
 validate_build_inputs="${VALIDATE_BUILD_INPUTS:-1}"
+strict_bundle_validation="${STRICT_BUNDLE_VALIDATION:-0}"
 resume_build="${RESUME_BUILD:-0}"
 force_rebuild="${FORCE_REBUILD:-0}"
 if [[ -n "${WORKSPACE+x}" ]]; then
   workspace="$WORKSPACE"
   workspace_defaulted=0
 else
-  workspace="$HOME/lineageos-desktop-23.2"
+  workspace="$overlay_dir/src"
   workspace_defaulted=1
 fi
 output_dir="${OUTPUT_DIR:-$ika_root}"
@@ -28,13 +29,8 @@ repo_install_path="${REPO_INSTALL_PATH:-/usr/local/bin/repo}"
 repo_cmd="repo"
 auto_install_deps="${AUTO_INSTALL_DEPS:-1}"
 reset_patched_projects="${RESET_PATCHED_PROJECTS:-auto}"
-if [[ -n "${JOBS:-}" ]]; then
-  jobs="$JOBS"
-elif command -v nproc >/dev/null 2>&1; then
-  jobs="$(nproc)"
-else
-  jobs=8
-fi
+anonymous_git_config_home="$workspace/.lineage-desktop-anonymous-config"
+anonymous_git_config="$anonymous_git_config_home/git/config"
 
 usage() {
   cat <<'EOF'
@@ -46,10 +42,19 @@ lineageos-x86_64/ under the ika project root.
 
 Environment:
   WORKSPACE             Android source checkout to create or reuse.
-                        Default: $HOME/lineageos-desktop-23.2
+                        Default: ika/lineageos/src
   OUTPUT_DIR            Parent directory for the lineageos-<arch>/ bundle
                         directories. Default: the ika project root.
-  JOBS                  Parallel jobs for repo sync and m. Default: nproc
+  JOBS                  Parallel jobs for repo sync and m. Default: reserve
+                        4 GiB RAM, then one job per 3.5 GiB physical+virtual
+                        RAM, capped at available logical CPU count.
+  NINJA_HIGHMEM_NUM_JOBS
+                        Soong high-memory pool jobs. Default: same 4 GiB RAM
+                        reserve, then one job per 16 GiB physical+virtual RAM,
+                        capped by JOBS.
+  Temporary zram       Hosts with less than 48 GiB RAM get a build-scoped zram
+                        swap device sized to 75% of physical RAM. It is removed
+                        automatically when the script exits.
   LINEAGE_BRANCH        LineageOS branch. Default: lineage-23.2
   ANDROID_MANIFEST_URL  Manifest repository. Default: LineageOS/android.git
   MANIFEST_URL          Fallback overlay manifest URL.
@@ -67,6 +72,13 @@ Environment:
   VALIDATE_BUILD_INPUTS
                         Run build-time source, prebuilt, userdata, and desktop
                         policy checks before compiling. Default: 1
+  STRICT_BUNDLE_VALIDATION
+                        Fail the build if package_cvd_bundle has to normalize
+                        any etc/cvd_config/*.json preset (empty / unparseable
+                        / non-object). Default 0 silently rewrites bad presets
+                        to {} with a log line so the bundle is launchable;
+                        set to 1 in CI / release builds to surface a corrupt
+                        Soong prebuilt instead of papering over it. Default: 0
   RESUME_BUILD          Reuse checkpointed setup, build, and package phases
                         from an interrupted run when their inputs match. A
                         completed run closes its build/package checkpoints, so
@@ -110,27 +122,7 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
-confirm() {
-  local prompt="$1"
-  local reply
-
-  if [[ "${ASSUME_YES:-0}" == "1" || "${YES:-0}" == "1" ]]; then
-    return 0
-  fi
-
-  [[ -t 0 ]] || return 1
-
-  printf '%s [y/N] ' "$prompt" >&2
-  read -r reply
-  case "$reply" in
-    y|Y|yes|YES|Yes)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
+source "$script_dir/build_jobs.sh"
 
 enabled() {
   case "$1" in
@@ -168,28 +160,37 @@ package_for_command() {
     apt:git) printf '%s\n' git ;;
     apt:git-lfs) printf '%s\n' git-lfs ;;
     apt:install|apt:mktemp|apt:readlink) printf '%s\n' coreutils ;;
+    apt:modprobe) printf '%s\n' kmod ;;
+    apt:mkswap|apt:swapoff|apt:swapon|apt:zramctl) printf '%s\n' util-linux ;;
     apt:python3) printf '%s\n' python3 ;;
     apt:rsync) printf '%s\n' rsync ;;
     apt:tar) printf '%s\n' tar ;;
     apt:curl) printf '%s\n' curl ;;
+    apt:adb) printf '%s\n' adb ;;
     dnf:awk) printf '%s\n' gawk ;;
     dnf:find) printf '%s\n' findutils ;;
     dnf:git) printf '%s\n' git ;;
     dnf:git-lfs) printf '%s\n' git-lfs ;;
     dnf:install|dnf:mktemp|dnf:readlink) printf '%s\n' coreutils ;;
+    dnf:modprobe) printf '%s\n' kmod ;;
+    dnf:mkswap|dnf:swapoff|dnf:swapon|dnf:zramctl) printf '%s\n' util-linux ;;
     dnf:python3) printf '%s\n' python3 ;;
     dnf:rsync) printf '%s\n' rsync ;;
     dnf:tar) printf '%s\n' tar ;;
     dnf:curl) printf '%s\n' curl ;;
+    dnf:adb) printf '%s\n' android-tools ;;
     pacman:awk) printf '%s\n' gawk ;;
     pacman:find) printf '%s\n' findutils ;;
     pacman:git) printf '%s\n' git ;;
     pacman:git-lfs) printf '%s\n' git-lfs ;;
     pacman:install|pacman:mktemp|pacman:readlink) printf '%s\n' coreutils ;;
+    pacman:modprobe) printf '%s\n' kmod ;;
+    pacman:mkswap|pacman:swapoff|pacman:swapon|pacman:zramctl) printf '%s\n' util-linux ;;
     pacman:python3) printf '%s\n' python ;;
     pacman:rsync) printf '%s\n' rsync ;;
     pacman:tar) printf '%s\n' tar ;;
     pacman:curl) printf '%s\n' curl ;;
+    pacman:adb) printf '%s\n' android-tools ;;
     *) return 1 ;;
   esac
 }
@@ -274,7 +275,7 @@ download_file() {
 }
 
 ensure_host_commands() {
-  local -a required=(git git-lfs python3 tar awk find readlink rsync install mktemp)
+  local -a required=(git git-lfs python3 tar awk find readlink rsync install mktemp adb)
   local -a missing=()
   local cmd
 
@@ -295,6 +296,82 @@ ensure_host_commands() {
     die "missing required host tools: ${missing[*]}"
 
   ensure_downloader
+}
+
+temp_zram_device=""
+
+ensure_temp_zram_commands() {
+  local -a required=(modprobe mkswap swapoff swapon zramctl)
+  local -a missing=()
+  local cmd
+
+  for cmd in "${required[@]}"; do
+    command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+  done
+
+  if (( ${#missing[@]} > 0 )); then
+    install_missing_commands "${missing[@]}" || true
+  fi
+
+  missing=()
+  for cmd in "${required[@]}"; do
+    command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+  done
+
+  (( ${#missing[@]} == 0 )) || \
+    die "missing required zram tools: ${missing[*]}"
+}
+
+format_kib_as_gib() {
+  local kib="$1"
+  awk -v kib="$kib" 'BEGIN { printf "%.1f GiB", kib / 1024 / 1024 }'
+}
+
+setup_temp_zram_if_needed() {
+  local mem_kib threshold_kib zram_kib zram_size dev
+
+  mem_kib="$(physical_memory_total_kib)"
+  if [[ ! "$mem_kib" =~ ^[0-9]+$ || "$mem_kib" -le 0 ]]; then
+    log "could not determine host RAM; skipping temporary zram setup"
+    return 0
+  fi
+
+  threshold_kib=$((48 * 1024 * 1024))
+  if (( mem_kib >= threshold_kib )); then
+    log "host RAM is $(format_kib_as_gib "$mem_kib"); temporary zram not needed"
+    return 0
+  fi
+
+  ensure_temp_zram_commands
+
+  # Load zram if it is not already available. zramctl will allocate a free
+  # device below, so this does not touch any existing system zram swap.
+  if [[ ! -e /sys/class/zram-control && ! -d /sys/block/zram0 ]]; then
+    run_privileged modprobe zram || \
+      die "failed to load zram kernel module"
+  fi
+
+  zram_kib=$((mem_kib * 3 / 4))
+  zram_size="${zram_kib}K"
+  dev="$(run_privileged zramctl --find --size "$zram_size")" || \
+    die "failed to create temporary zram device"
+  temp_zram_device="$dev"
+
+  run_privileged mkswap "$temp_zram_device" >/dev/null || \
+    die "failed to initialize temporary zram swap at $temp_zram_device"
+  run_privileged swapon "$temp_zram_device" || \
+    die "failed to enable temporary zram swap at $temp_zram_device"
+
+  log "created temporary zram swap $temp_zram_device ($(format_kib_as_gib "$zram_kib"), 75% of host RAM)"
+}
+
+cleanup_temp_zram() {
+  [[ -n "$temp_zram_device" ]] || return 0
+
+  log "removing temporary zram swap $temp_zram_device"
+  run_privileged swapoff "$temp_zram_device" >/dev/null 2>&1 || true
+  run_privileged zramctl --reset "$temp_zram_device" >/dev/null 2>&1 || true
+  temp_zram_device=""
 }
 
 validate_zip_file() {
@@ -326,12 +403,9 @@ ensure_repo_command() {
 
   ensure_downloader
 
-  if ! confirm "repo is not installed. Download it and sudo install to $repo_install_path?"; then
-    die "repo is required; install it to $repo_install_path and run the script again"
-  fi
-
   local tmp_repo
   tmp_repo="$(mktemp)"
+  log "repo is not installed; downloading from $repo_tool_url"
   download_file "$repo_tool_url" "$tmp_repo"
 
   log "installing repo to $repo_install_path"
@@ -348,6 +422,62 @@ ensure_repo_command() {
   else
     die "repo was installed but is not executable at $repo_install_path"
   fi
+}
+
+ensure_anonymous_git_config() {
+  mkdir -p "${anonymous_git_config%/*}"
+  cat > "$anonymous_git_config" <<'EOF'
+[color]
+	ui = auto
+[user]
+	name = LineageOS Desktop Builder
+	email = builder@localhost
+[url "https://github.com/"]
+	insteadOf = git@github.com:
+	insteadOf = ssh://git@github.com/
+	insteadOf = ssh://git@github.com:22/
+	insteadOf = git://github.com/
+EOF
+}
+
+run_anonymous_git_network() {
+  XDG_CONFIG_HOME="$anonymous_git_config_home" \
+    REPO_CONFIG_DIR="$anonymous_git_config_home" \
+    GIT_CONFIG_GLOBAL="$anonymous_git_config" \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_TERMINAL_PROMPT=0 \
+    GCM_INTERACTIVE=never \
+    GIT_ASKPASS=/bin/false \
+    SSH_ASKPASS=/bin/false \
+    GIT_SSH_COMMAND="ssh -o BatchMode=yes" \
+    "$@"
+}
+
+canonical_workspace_path() {
+  mkdir -p "$workspace"
+  (cd "$workspace" && pwd -P)
+}
+
+cleanup_workspace_path_metadata() {
+  local current marker previous
+  current="$(canonical_workspace_path)"
+  marker="$workspace/.lineage-desktop-workspace-path"
+  previous=""
+
+  if [[ -f "$marker" ]]; then
+    previous="$(<"$marker")"
+  fi
+
+  if [[ -n "$previous" && "$previous" != "$current" ]]; then
+    log "workspace moved from $previous to $current; removing stale generated path metadata"
+    rm -rf "$workspace/out/soong"
+    if [[ -d "$workspace/.repo" ]]; then
+      find "$workspace/.repo" -type f -name FETCH_HEAD -delete 2>/dev/null || true
+      find "$workspace/.repo" -type d -name logs -prune -exec rm -rf {} + 2>/dev/null || true
+    fi
+  fi
+
+  printf '%s\n' "$current" > "$marker"
 }
 
 normalize_targets() {
@@ -488,40 +618,19 @@ repo_sync_sources() {
   cd "$workspace"
 
   log "initializing LineageOS source at $workspace"
-  "$repo_cmd" init -u "$android_manifest_url" -b "$lineage_branch"
+  run_anonymous_git_network "$repo_cmd" init -u "$android_manifest_url" -b "$lineage_branch"
 
   install_manifest
   reset_patched_projects_for_sync
 
   log "syncing source tree"
-  "$repo_cmd" sync -c --fail-fast -j"$jobs"
+  run_anonymous_git_network "$repo_cmd" sync -c --fail-fast -j"$jobs"
 }
 
 sync_webview_lfs_prebuilts() {
-  local -a webview_projects=(
-    external/chromium-webview/prebuilt/arm
-    external/chromium-webview/prebuilt/arm64
-    external/chromium-webview/prebuilt/x86
-    external/chromium-webview/prebuilt/x86_64
-  )
-
-  need_cmd git-lfs
-
-  local project project_dir apk
-  for project in "${webview_projects[@]}"; do
-    project_dir="$workspace/$project"
-    apk="$project_dir/webview.apk"
-    [[ -d "$project_dir" ]] || die "missing WebView prebuilt project: $project"
-
-    log "syncing Git LFS objects: $project"
-    git -C "$project_dir" lfs pull
-
-    [[ -f "$apk" ]] || die "missing WebView prebuilt APK: $apk"
-    if head -c 128 "$apk" | grep -q 'git-lfs.github.com/spec'; then
-      die "WebView prebuilt is still a Git LFS pointer: $apk"
-    fi
-    validate_zip_file "$apk" || die "invalid WebView prebuilt APK: $apk"
-  done
+  local sync_script="$overlay_dir/scripts/sync_webview_lfs_prebuilts.sh"
+  [[ -x "$sync_script" ]] || die "missing WebView LFS sync script: $sync_script"
+  run_anonymous_git_network "$sync_script" "$workspace" all
 }
 
 repair_webview_intermediates() {
@@ -564,6 +673,7 @@ apply_local_overlay() {
   rsync -a --delete \
     --exclude='.git' \
     --exclude='out' \
+    --exclude='src' \
     --exclude='prebuilts/native_bridge/Android.bp' \
     --exclude='prebuilts/native_bridge/manifest.json' \
     --exclude='prebuilts/native_bridge/system' \
@@ -633,6 +743,19 @@ repair_soong_zero_byte_objects() {
   local intermediates="$workspace/out/soong/.intermediates"
   [[ -d "$intermediates" ]] || return 0
 
+  local -a bad_key_outputs=()
+  mapfile -t bad_key_outputs < <(
+    find "$intermediates/device/google/cuttlefish/build" \
+      -type f \
+      -name 'cvd_avb_testkey_rsa*.pem' \
+      -size 0 \
+      -print 2>/dev/null || true
+  )
+  if (( ${#bad_key_outputs[@]} > 0 )); then
+    log "removing ${#bad_key_outputs[@]} zero-size AVB key intermediate(s)"
+    rm -f "${bad_key_outputs[@]}"
+  fi
+
   local -a bad_objects
   mapfile -t bad_objects < <(find "$intermediates" -type f -name '*.o' -size 0 -print)
   (( ${#bad_objects[@]} == 0 )) && return 0
@@ -664,9 +787,11 @@ repair_zero_size_host_outputs() {
       "$dir"/bin/* \
       "$dir"/lib/*.so \
       "$dir"/lib64/*.so \
+      "$dir"/etc/cvd_avb_testkey_rsa*.pem \
       "$dir"/cvd-host_package/bin/* \
       "$dir"/cvd-host_package/lib/*.so \
-      "$dir"/cvd-host_package/lib64/*.so; do
+      "$dir"/cvd-host_package/lib64/*.so \
+      "$dir"/cvd-host_package/etc/cvd_avb_testkey_rsa*.pem; do
       [[ -f "$path" && ! -s "$path" ]] || continue
       bad_outputs+=("$path")
     done
@@ -676,6 +801,23 @@ repair_zero_size_host_outputs() {
 
   log "removing ${#bad_outputs[@]} zero-size host output(s)"
   rm -f "${bad_outputs[@]}"
+}
+
+repair_zero_size_host_script_output() {
+  local module_subdir="$1"
+  local artifact="$2"
+  local module_dir="$workspace/out/soong/.intermediates/$module_subdir"
+
+  [[ -d "$module_dir" ]] || return 0
+
+  local -a bad_outputs=()
+  mapfile -t bad_outputs < <(
+    find "$module_dir" -type f -name "$artifact" -size 0 -print 2>/dev/null || true
+  )
+  (( ${#bad_outputs[@]} == 0 )) && return 0
+
+  log "removing stale zero-size host script output: $artifact"
+  rm -rf "$module_dir"
 }
 
 is_elf_file() {
@@ -729,6 +871,9 @@ repair_corrupt_host_elf() {
 
 repair_corrupt_host_tools() {
   repair_zero_size_host_outputs
+  repair_zero_size_host_script_output external/crosvm/cuttlefish/common_crosvm crosvm
+  repair_zero_size_host_script_output device/google/cuttlefish_prebuilts/extract-ikconfig extract-ikconfig
+  repair_zero_size_host_script_output device/google/cuttlefish_prebuilts/extract-vmlinux extract-vmlinux
   repair_corrupt_host_elf lpmake system/extras/partition_tools/lpmake
   repair_corrupt_host_elf fs_config build/make/tools/fs_config/fs_config
   repair_corrupt_host_elf care_map_generator bootable/recovery/update_verifier/care_map_generator
@@ -742,6 +887,49 @@ repair_corrupt_host_tools() {
   repair_corrupt_host_elf liblog.so system/logging/liblog/liblog
   repair_corrupt_host_elf libcutils.so system/core/libcutils/libcutils
   repair_corrupt_host_elf libc++.so prebuilts/clang/host/linux-x86/libc++
+}
+
+repair_zero_size_fstab_outputs() {
+  local product="$1"
+  local product_out="$2"
+  [[ -d "$product_out" ]] || return 0
+
+  local -a bad_fstabs=()
+  mapfile -t bad_fstabs < <(
+    find "$product_out" \
+      \( -path '*/vendor_ramdisk/first_stage_ramdisk/system/etc/fstab.cf.*' \
+         -o -path '*/VENDOR_BOOT/RAMDISK/first_stage_ramdisk/system/etc/fstab.cf.*' \
+      \) \
+      -type f \
+      -size 0 \
+      -print 2>/dev/null || true
+  )
+  (( ${#bad_fstabs[@]} == 0 )) && return 0
+
+  log "removing ${#bad_fstabs[@]} zero-size vendor-ramdisk fstab output(s)"
+  rm -f "${bad_fstabs[@]}"
+  rm -f "$product_out/vendor_boot.img"
+  rm -f \
+    "$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip" \
+    "$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip.list" \
+    "$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip.list.list"
+}
+
+validate_fstab_file() {
+  local path="$1"
+
+  [[ -s "$path" ]] || die "missing or empty fstab: $path"
+  grep -q '/data f2fs' "$path" || die "fstab does not mount /data as f2fs: $path"
+  grep -q 'fileencryption=aes-256-xts:aes-256-hctr2' "$path" || \
+    die "fstab does not use HCTR2 filename encryption: $path"
+}
+
+validate_cvd_target_fstabs() {
+  local product_out="$1"
+
+  validate_fstab_file "$product_out/vendor/etc/fstab.cf.f2fs.hctr2"
+  validate_fstab_file \
+    "$product_out/vendor_ramdisk/first_stage_ramdisk/system/etc/fstab.cf.f2fs.hctr2"
 }
 
 resume_enabled() {
@@ -793,7 +981,7 @@ for name in (
 add("workspace", str(workspace))
 add("targets", "\n".join(targets))
 
-excluded_dirs = {".git", "out", "__pycache__"}
+excluded_dirs = {".git", "out", "src", "__pycache__"}
 excluded_prefixes = {
     Path("prebuilts/native_bridge/system"),
 }
@@ -813,6 +1001,11 @@ for root, dirs, files in os.walk(overlay_dir):
         if any(rel_path.is_relative_to(prefix) for prefix in excluded_prefixes):
             continue
         add("overlay-file", rel_path.as_posix())
+        if path.is_symlink():
+            add("overlay-symlink", os.readlink(path))
+            continue
+        if not path.is_file():
+            continue
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
@@ -1045,6 +1238,103 @@ valid_targz_archive() {
   tar -tzf "$path" >/dev/null 2>&1
 }
 
+critical_host_package_zero_entries() {
+  local host_package="$1"
+
+  tar -tzvf "$host_package" 2>/dev/null | awk '
+    $1 ~ /^-/ && $3 == 0 {
+      name = $6
+      sub(/^\.\//, "", name)
+      if (name == "bin/crosvm" ||
+          name == "bin/extract-ikconfig" ||
+          name == "bin/extract-vmlinux") {
+        print name
+      }
+    }
+  '
+}
+
+cvd_host_package_critical_tools_complete() {
+  local host_package="$1"
+  [[ -f "$host_package" && -s "$host_package" ]] || return 1
+
+  local bad_entries
+  bad_entries="$(critical_host_package_zero_entries "$host_package")" || return 1
+  [[ -z "$bad_entries" ]]
+}
+
+repair_zero_size_cvd_host_package() {
+  local host_package="$1"
+  [[ -f "$host_package" ]] || return 0
+
+  local bad_entries
+  bad_entries="$(critical_host_package_zero_entries "$host_package")" || return 0
+  [[ -n "$bad_entries" ]] || return 0
+
+  log "removing Cuttlefish host package with zero-size critical tool(s): ${bad_entries//$'\n'/, }"
+  rm -f "$host_package" "${host_package%.tar.gz}.stamp"
+  rm -rf "${host_package%.tar.gz}"
+}
+
+valid_pem_private_key() {
+  local path="$1"
+  [[ -s "$path" ]] && grep -q 'BEGIN RSA PRIVATE KEY' "$path"
+}
+
+rom_avb_private_key() {
+  local bits="$1"
+  local key="$workspace/external/avb/test/data/testkey_rsa${bits}.pem"
+
+  [[ -f "$key" ]] || die "missing ROM AVB test private key: $key"
+  valid_pem_private_key "$key" || die "invalid ROM AVB test private key: $key"
+  printf '%s\n' "$key"
+}
+
+repair_cvd_host_package_avb_keys() {
+  local host_package="$1"
+  local tmp_dir tmp_package bits src dest repaired=0
+
+  valid_targz_archive "$host_package" || \
+    die "invalid Cuttlefish host package: $host_package"
+
+  tmp_dir="$(mktemp -d)"
+  if ! tar -xzf "$host_package" -C "$tmp_dir"; then
+    rm -rf "$tmp_dir"
+    die "failed to extract Cuttlefish host package: $host_package"
+  fi
+
+  mkdir -p "$tmp_dir/etc"
+  for bits in 2048 4096; do
+    src="$(rom_avb_private_key "$bits")"
+    dest="$tmp_dir/etc/cvd_avb_testkey_rsa${bits}.pem"
+    if valid_pem_private_key "$dest"; then
+      continue
+    fi
+    log "repairing $(basename "$host_package"): etc/cvd_avb_testkey_rsa${bits}.pem"
+    install -m 0644 "$src" "$dest"
+    repaired=1
+  done
+
+  if (( repaired )); then
+    tmp_package="${host_package}.tmp"
+    if ! tar -czf "$tmp_package" -C "$tmp_dir" .; then
+      rm -rf "$tmp_dir"
+      rm -f "$tmp_package"
+      die "failed to rewrite Cuttlefish host package: $host_package"
+    fi
+    mv "$tmp_package" "$host_package"
+  fi
+
+  for bits in 2048 4096; do
+    dest="$tmp_dir/etc/cvd_avb_testkey_rsa${bits}.pem"
+    valid_pem_private_key "$dest" || {
+      rm -rf "$tmp_dir"
+      die "Cuttlefish host package still has an invalid AVB key: $host_package:etc/cvd_avb_testkey_rsa${bits}.pem"
+    }
+  done
+  rm -rf "$tmp_dir"
+}
+
 valid_zip_container() {
   local path="$1"
   [[ -f "$path" && -s "$path" ]] || return 1
@@ -1083,6 +1373,7 @@ built_target_outputs_complete() {
 
   [[ -d "$product_out" ]] || return 1
   valid_targz_archive "$host_package" || return 1
+  cvd_host_package_critical_tools_complete "$host_package" || return 1
 
   local target_files="$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip"
   valid_zip_container "$target_files" || return 1
@@ -1189,13 +1480,44 @@ package_cvd_bundle() {
 
   tar -xzf "$host_package" -C "$bundle_dir" --exclude='bin' --exclude='lib64'
 
-  # Upstream cvd-host_package.tar.gz ships several etc/cvd_config/*.json files
-  # as zero-byte stubs. assemble_cvd treats a 0-byte file as a JSON parse error
-  # and refuses to launch. Replace empty stubs with an empty JSON object so the
-  # parser accepts them as "no overrides".
+  # assemble_cvd requires every etc/cvd_config/*.json preset it might select
+  # (via --config=... or via android-info.txt) to be a JSON object; it aborts
+  # on the first preset that is empty, unparseable, or non-object. Upstream's
+  # cvd-host_package.tar.gz ships several of these as zero-byte stubs.
+  # Normalize anything that is not a valid object to {} so the launcher
+  # treats it as "no overrides", and log each replacement so future bundle
+  # issues surface in the build log instead of going silently.
   if [[ -d "$bundle_dir/etc/cvd_config" ]]; then
-    find "$bundle_dir/etc/cvd_config" -maxdepth 1 -type f -name '*.json' -empty \
-      -exec sh -c 'printf "{}\n" > "$1"' _ {} \;
+    local normalize_status=0
+    STRICT_BUNDLE_VALIDATION="$strict_bundle_validation" \
+      python3 - "$bundle_dir/etc/cvd_config" <<'PY' || normalize_status=$?
+import json, os, pathlib, sys
+cfg_dir = pathlib.Path(sys.argv[1])
+strict = os.environ.get("STRICT_BUNDLE_VALIDATION", "0") == "1"
+rewritten = []
+for p in sorted(cfg_dir.glob("*.json")):
+    try:
+        ok = isinstance(json.loads(p.read_text(encoding="utf-8")), dict)
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        ok = False
+    if ok:
+        continue
+    p.write_text("{}\n", encoding="utf-8")
+    rewritten.append(p.name)
+    print(f"[lineage-desktop] normalized cvd_config preset to {{}}: {p.name}",
+          file=sys.stderr)
+if rewritten and strict:
+    print(
+        "[lineage-desktop] STRICT_BUNDLE_VALIDATION=1: refusing to ship a bundle "
+        f"with {len(rewritten)} corrupt cvd_config preset(s): "
+        + ", ".join(rewritten),
+        file=sys.stderr,
+    )
+    sys.exit(1)
+PY
+    if (( normalize_status != 0 )); then
+      die "etc/cvd_config normalization failed in strict mode for $bundle_name"
+    fi
   fi
   write_fetcher_config "$bundle_dir" "${thin_files[@]}"
   write_release_metadata "$bundle_dir" "$arch" "$product" "$product_out" "${thin_files[@]}"
@@ -1264,6 +1586,8 @@ build_target() {
   log "building $product"
   repair_soong_zero_byte_objects
   repair_corrupt_host_tools
+  repair_zero_size_fstab_outputs "$product" "$product_out"
+  repair_zero_size_cvd_host_package "$host_package"
 
   if [[ "$arch" == "x86_64" ]]; then
     if enabled "$include_x86_arm_native_bridge"; then
@@ -1313,9 +1637,12 @@ build_target() {
       -j"$jobs"
     built_target_outputs_complete "$product" "$product_out" "$host_package" "${thin_files[@]}" || \
       die "build completed but expected outputs are missing for $product"
+    validate_cvd_target_fstabs "$product_out"
     mark_resume_checkpoint "build-$arch"
   fi
 
+  validate_cvd_target_fstabs "$product_out"
+  repair_cvd_host_package_avb_keys "$host_package"
   package_cvd_bundle "$arch" "$product" "$product_out" "$host_package" "$bundle_name" "${thin_files[@]}"
   bundle_dir_complete "$output_dir/$bundle_name" "${thin_files[@]}" || \
     die "packaging completed but $bundle_name/ is incomplete"
@@ -1323,6 +1650,8 @@ build_target() {
 }
 
 main() {
+  trap 'status=$?; cleanup_temp_zram; exit "$status"' EXIT
+
   case "${1:-}" in
     -h|--help|help)
       usage
@@ -1331,7 +1660,12 @@ main() {
   esac
 
   ensure_host_commands
+  setup_temp_zram_if_needed
+  set_build_jobs
+  log "using $jobs parallel build jobs ($highmem_jobs high-memory jobs)"
   ensure_repo_command
+  ensure_anonymous_git_config
+  cleanup_workspace_path_metadata
 
   local -a targets
   mapfile -t targets < <(normalize_targets "$@")

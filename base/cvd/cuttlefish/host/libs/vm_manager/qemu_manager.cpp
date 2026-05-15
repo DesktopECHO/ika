@@ -762,12 +762,14 @@ Result<std::vector<MonitorCommand>> QemuManager::StartCommands(
 
   // device padding for unsupported "switches" input
   qemu_cmd.AddParameter("-chardev");
-  qemu_cmd.AddParameter("socket,path=", instance.switches_socket_path(), ",id=switches0");
+  qemu_cmd.AddParameter("socket,path=", SwitchesSocketPath(instance),
+                        ",id=switches0");
   qemu_cmd.AddParameter("-device");
   qemu_cmd.AddParameter("vhost-user-input-pci,chardev=switches0");
 
   qemu_cmd.AddParameter("-chardev");
-  qemu_cmd.AddParameter("socket,path=", instance.rotary_socket_path(), ",id=rotary0");
+  qemu_cmd.AddParameter("socket,path=", RotarySocketPath(instance),
+                        ",id=rotary0");
   qemu_cmd.AddParameter("-device");
   qemu_cmd.AddParameter("vhost-user-input-pci,chardev=rotary0");
 

@@ -8,6 +8,7 @@
 .*/settings.json
 /lineageos-arm64
 /lineageos-x86_64
+/lineageos/src
 /.cache
 androguard.db-wal
 androguard.db-shm

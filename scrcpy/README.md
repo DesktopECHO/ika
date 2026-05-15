@@ -1,225 +1,108 @@
-**This GitHub repo (<https://github.com/Genymobile/scrcpy>) is the only official
-source for the project. Do not download releases from random websites, even if
-their name contains `scrcpy`.**
+# ika-scrcpy
 
-# scrcpy (v3.3.4)
+This is a fork of [scrcpy](https://github.com/Genymobile/scrcpy) used as the display system for the [ika](https://github.com/DesktopECHO/ika) project — a Cuttlefish (Android Virtual Device) host for Fedora Asahi Remix and other RPM-based distributions.
 
-<img src="app/data/icon.svg" width="128" height="128" alt="scrcpy" align="right" />
+The fork replaces scrcpy's normal ADB/USB video path with a direct Unix socket connection to the Cuttlefish frame server, removing the Android device dependency entirely. The result is a native desktop window that shows the Cuttlefish display at full render resolution and resizes the virtual hardware display dynamically as the window is resized.
 
-_pronounced "**scr**een **c**o**py**"_
+---
 
-This application mirrors Android devices (video and audio) connected via USB or
-[TCP/IP](doc/connection.md#tcpip-wireless) and allows control using the
-computer's keyboard and mouse. It does not require _root_ access or an app
-installed on the device. It works on _Linux_, _Windows_, and _macOS_.
+## How it differs from upstream scrcpy
 
-![screenshot](assets/screenshot-debian-600.jpg)
+### 1. New video source: `cuttlefish-wayland`
 
-It focuses on:
-
- - **lightness**: native, displays only the device screen
- - **performance**: 30~120fps, depending on the device
- - **quality**: 1920×1080 or above
- - **low latency**: [35~70ms][lowlatency]
- - **low startup time**: ~1 second to display the first image
- - **non-intrusiveness**: nothing is left installed on the Android device
- - **user benefits**: no account, no ads, no internet required
- - **freedom**: free and open source software
-
-[lowlatency]: https://github.com/Genymobile/scrcpy/pull/646
-
-Its features include:
- - [audio forwarding](doc/audio.md) (Android 11+)
- - [recording](doc/recording.md)
- - [virtual display](doc/virtual_display.md)
- - mirroring with [Android device screen off](doc/device.md#turn-screen-off)
- - [copy-paste](doc/control.md#copy-paste) in both directions
- - [configurable quality](doc/video.md)
- - [camera mirroring](doc/camera.md) (Android 12+)
- - [mirroring as a webcam (V4L2)](doc/v4l2.md) (Linux-only)
- - physical [keyboard][hid-keyboard] and [mouse][hid-mouse] simulation (HID)
- - [gamepad](doc/gamepad.md) support
- - [OTG mode](doc/otg.md)
- - and more…
-
-[hid-keyboard]: doc/keyboard.md#physical-keyboard-simulation
-[hid-mouse]: doc/mouse.md#physical-mouse-simulation
-
-## Prerequisites
-
-The Android device requires at least API 21 (Android 5.0).
-
-[Audio forwarding](doc/audio.md) is supported for API >= 30 (Android 11+).
-
-Make sure you [enabled USB debugging][enable-adb] on your device(s).
-
-[enable-adb]: https://developer.android.com/studio/debug/dev-options#enable
-
-On some devices (especially Xiaomi), you might get the following error:
+Pass `--video-source=cuttlefish-wayland` together with `--cuttlefish-frames-socket=PATH` to bypass the ADB/USB/TCP connection path and receive raw frames directly from Cuttlefish.
 
 ```
-Injecting input events requires the caller (or the source of the instrumentation, if any) to have the INJECT_EVENTS permission.
+ika-scrcpy --video-source=cuttlefish-wayland \
+           --cuttlefish-frames-socket=/run/cuttlefish/cvd-1/display_0 \
+           --display-id=0
 ```
 
-In that case, you need to enable [an additional option][control] `USB debugging
-(Security Settings)` (this is an item different from `USB debugging`) to control
-it using a keyboard and mouse. Rebooting the device is necessary once this
-option is set.
+In this mode no Android device is needed on the host — the scrcpy server APK is not pushed or launched.
 
-[control]: https://github.com/Genymobile/scrcpy/issues/70#issuecomment-373286323
+### 2. `cuttlefish_frame_source` — dedicated frame reader thread
 
-Note that USB debugging is not required to run scrcpy in [OTG mode](doc/otg.md).
+The new source file `app/src/cuttlefish_frame_source.c` owns a background thread that:
 
+1. Connects to the Cuttlefish frame Unix socket.
+2. Reads a two-field common header (magic + version) from each message, using `recvmsg` so ancillary file descriptors (DMA-BUF fds) can be received in the same call.
+3. Dispatches to the appropriate handler based on the magic value.
+4. Auto-reconnects with a 250 ms back-off if the socket drops.
 
-## Get the app
+### 3. Three frame delivery modes
 
- - [Linux](doc/linux.md)
- - [Windows](doc/windows.md) (read [how to run](doc/windows.md#run))
- - [macOS](doc/macos.md)
+The Cuttlefish frame server can send frames via three different transports. All use little-endian 32-bit magic values that spell **IKA** + a type letter:
 
+| Magic | ASCII | Transport |
+|-------|-------|-----------|
+| `0x46414b49` | `IKAF` | Raw inline pixels — pixel data follows the header inline on the socket |
+| `0x44414b49` | `IKAD` | DMA-BUF — a GPU buffer file descriptor is passed via `SCM_RIGHTS` ancillary data; no pixel copy |
+| `0x53414b49` | `IKAS` | Shared-memory init — an fd for a shared memory region is passed via `SCM_RIGHTS`; the client `mmap`s it |
+| `0x4e414b49` | `IKAN` | Shared-memory notify — tells the client which slot in the pre-mapped region holds the new frame |
 
-## Must-know tips
+Each header carries width, height, a DRM FourCC (e.g. `XR24`, `AB24`) for pixel format, stride in bytes, and a display number. Frames addressed to a display number other than the configured `--display-id` are silently discarded.
 
- - [Reducing resolution](doc/video.md#size) may greatly improve performance
-   (`scrcpy -m1024`)
- - [_Right-click_](doc/mouse.md#mouse-bindings) triggers `BACK`
- - [_Middle-click_](doc/mouse.md#mouse-bindings) triggers `HOME`
- - <kbd>Alt</kbd>+<kbd>f</kbd> toggles [fullscreen](doc/window.md#fullscreen)
- - There are many other [shortcuts](doc/shortcuts.md)
+Pixel formats are translated from DRM FourCCs to SDL3 `SDL_PixelFormat` values before being handed to the renderer.
 
+### 4. `--flex-display` — live display resize
 
-## Usage examples
+When `--flex-display` (or `--flex-display=DPI`) is passed, ika-scrcpy tells the Cuttlefish virtual hardware to resize its display whenever the window is resized.
 
-There are a lot of options, [documented](#user-documentation) in separate pages.
-Here are just some common examples.
+The resize is issued by spawning `cvd display resize` as a child process:
 
- - Capture the screen in H.265 (better quality), limit the size to 1920, limit
-   the frame rate to 60fps, disable audio, and control the device by simulating
-   a physical keyboard:
+```
+cvd display resize \
+    --instance_num=<N> \
+    --display_id=<ID> \
+    --display=width=<W>,height=<H>,dpi=<DPI>,refresh_rate_hz=60
+```
 
-    ```bash
-    scrcpy --video-codec=h265 --max-size=1920 --max-fps=60 --no-audio --keyboard=uhid
-    scrcpy --video-codec=h265 -m1920 --max-fps=60 --no-audio -K  # short version
-    ```
+The instance number `N` is parsed from the socket path by scanning for the pattern `cvd-N`. The `cvd` binary path defaults to `/usr/lib/cuttlefish-common/bin/cvd` and can be overridden with the `IKA_CVD_BIN` environment variable.
 
- - Start VLC in a new virtual display (separate from the device display):
+Resize requests are throttled: a new resize is not sent until 1 second has elapsed with no further window-resize activity (`RAW_FRAME_RESIZE_STILL_DELAY`), and rapid successive requests are rate-limited to at most one every 33 ms (`RAW_FRAME_RESIZE_ACTIVE_MIN_INTERVAL`). Only one resize child process runs at a time; any still-running child is reaped before a new one is spawned.
 
-    ```bash
-    scrcpy --new-display=1920x1080 --start-app=org.videolan.vlc
-    ```
+For raw-frame paths (DMA-BUF and shared memory), the resize target is the renderer output size so that HiDPI desktop scaling does not upscale already-rendered content. For encoded video paths, it is the logical window size, rounded down to the nearest 8 pixels to satisfy codec macroblock alignment.
 
- - Record the device camera in H.265 at 1920x1080 (and microphone) to an MP4
-   file:
+### 5. Blur fade during resize transitions
 
-    ```bash
-    scrcpy --video-source=camera --video-codec=h265 --camera-size=1920x1080 --record=file.mp4
-    ```
+While a flex-display resize is in flight, the screen is in `transient_stretch` mode. During this period:
 
- - Capture the device front camera and expose it as a webcam on the computer (on
-   Linux):
+- The old GPU texture is held and stretched to fill the window.
+- 28 ghost copies of the texture are composited at low alpha and staggered pixel offsets to produce a soft-blur effect without a shader pass.
+- When the Cuttlefish device confirms the new size is active (via the `DISPLAY_READY` device message), `transient_stretch` is cleared and the blur fades out linearly over 250 ms (`FLEX_DISPLAY_BLUR_FADE_DURATION`).
+- A fallback timer fires if `DISPLAY_READY` never arrives.
 
-    ```bash
-    scrcpy --video-source=camera --camera-size=1920x1080 --camera-facing=front --v4l2-sink=/dev/video2 --no-playback
-    ```
+The result is a smooth visual transition rather than a jarring jump when the window is resized.
 
- - Control the device without mirroring by simulating a physical keyboard and
-   mouse (USB debugging not required):
+### 6. `DISPLAY_READY` device message
 
-    ```bash
-    scrcpy --otg
-    ```
+The scrcpy server (running on the Android side inside Cuttlefish) sends a `DISPLAY_READY` message when the display subsystem has settled at the new dimensions. The client-side handler `sc_screen_on_display_ready()` matches the reported size against the most recently requested size; if they agree, `transient_stretch` is cleared and the blur fade begins.
 
- - Control the device using gamepad controllers plugged into the computer:
+### 7. Raw frame buffer pool
 
-    ```bash
-    scrcpy --gamepad=uhid
-    scrcpy -G  # short version
-    ```
+To avoid repeated `malloc`/`free` calls for inline raw frames, a pool of four reusable pixel buffers (`SC_RAW_FRAME_BUFFER_POOL_SIZE`) is maintained in `sc_screen`. The pool evicts the smallest entry when all slots are full and a larger allocation is needed.
 
-## User documentation
+---
 
-The application provides a lot of features and configuration options. They are
-documented in the following pages:
+## Relevant CLI options
 
- - [Connection](doc/connection.md)
- - [Video](doc/video.md)
- - [Audio](doc/audio.md)
- - [Control](doc/control.md)
- - [Keyboard](doc/keyboard.md)
- - [Mouse](doc/mouse.md)
- - [Gamepad](doc/gamepad.md)
- - [Device](doc/device.md)
- - [Window](doc/window.md)
- - [Recording](doc/recording.md)
- - [Virtual display](doc/virtual_display.md)
- - [Tunnels](doc/tunnels.md)
- - [OTG](doc/otg.md)
- - [Camera](doc/camera.md)
- - [Video4Linux](doc/v4l2.md)
- - [Shortcuts](doc/shortcuts.md)
+| Option | Description |
+|--------|-------------|
+| `--video-source=cuttlefish-wayland` | Use the Cuttlefish frame socket instead of ADB |
+| `--cuttlefish-frames-socket=PATH` | Path to the Cuttlefish display Unix socket |
+| `--display-id=N` | Which Cuttlefish display to show (default 0) |
+| `--flex-display[=DPI]` | Enable live window-to-display resize; optional DPI override (default 320) |
 
+---
 
-## Resources
+## Environment variables
 
- - [FAQ](FAQ.md)
- - [Translations][wiki] (not necessarily up to date)
- - [Build instructions](doc/build.md)
- - [Developers](doc/develop.md)
+| Variable | Description |
+|----------|-------------|
+| `IKA_CVD_BIN` | Override the path to the `cvd` binary used for display resize (default `/usr/lib/cuttlefish-common/bin/cvd`) |
 
-[wiki]: https://github.com/Genymobile/scrcpy/wiki
+---
 
+## What is not changed
 
-## Articles
-
-- [Introducing scrcpy][article-intro]
-- [Scrcpy now works wirelessly][article-tcpip]
-- [Scrcpy 2.0, with audio][article-scrcpy2]
-
-[article-intro]: https://blog.rom1v.com/2018/03/introducing-scrcpy/
-[article-tcpip]: https://www.genymotion.com/blog/open-source-project-scrcpy-now-works-wirelessly/
-[article-scrcpy2]: https://blog.rom1v.com/2023/03/scrcpy-2-0-with-audio/
-
-## Contact
-
-You can open an [issue] for bug reports, feature requests or general questions.
-
-For bug reports, please read the [FAQ](FAQ.md) first, you might find a solution
-to your problem immediately.
-
-[issue]: https://github.com/Genymobile/scrcpy/issues
-
-You can also use:
-
- - Reddit: [`r/scrcpy`](https://www.reddit.com/r/scrcpy)
- - BlueSky: [`@scrcpy.bsky.social`](https://bsky.app/profile/scrcpy.bsky.social)
- - Twitter: [`@scrcpy_app`](https://twitter.com/scrcpy_app)
-
-
-## Donate
-
-I'm [@rom1v](https://github.com/rom1v), the author and maintainer of _scrcpy_.
-
-If you appreciate this application, you can [support my open source
-work][donate]:
- - [GitHub Sponsors](https://github.com/sponsors/rom1v)
- - [Liberapay](https://liberapay.com/rom1v/)
- - [PayPal](https://paypal.me/rom2v)
-
-[donate]: https://blog.rom1v.com/about/#support-my-open-source-work
-
-## License
-
-    Copyright (C) 2018 Genymobile
-    Copyright (C) 2018-2026 Romain Vimont
-
-    Licensed under the Apache License, Version 2.0 (the "License");
-    you may not use this file except in compliance with the License.
-    You may obtain a copy of the License at
-
-        http://www.apache.org/licenses/LICENSE-2.0
-
-    Unless required by applicable law or agreed to in writing, software
-    distributed under the License is distributed on an "AS IS" BASIS,
-    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-    See the License for the specific language governing permissions and
-    limitations under the License.
+All upstream scrcpy features (ADB mirroring, audio forwarding, camera, HID input, recording, virtual displays, etc.) are preserved. The Cuttlefish path is a purely additive code path selected by `--video-source=cuttlefish-wayland`; all other `--video-source` values follow the unchanged upstream logic.

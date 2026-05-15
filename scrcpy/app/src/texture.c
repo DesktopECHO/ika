@@ -124,9 +124,9 @@ sc_texture_destroy_current_texture(struct sc_texture *tex) {
 }
 
 static void
-sc_texture_set_nearest_scale(SDL_Texture *texture) {
-    if (!SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST)) {
-        LOGW("Could not set nearest texture scaling: %s", SDL_GetError());
+sc_texture_set_linear_scale(SDL_Texture *texture) {
+    if (!SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_LINEAR)) {
+        LOGW("Could not set linear texture scaling: %s", SDL_GetError());
     }
 }
 
@@ -520,7 +520,7 @@ sc_texture_set_from_raw_frame(struct sc_texture *tex, struct sc_size size,
             LOGD("Could not create raw frame texture: %s", SDL_GetError());
             return false;
         }
-        sc_texture_set_nearest_scale(tex->texture);
+        sc_texture_set_linear_scale(tex->texture);
 
         tex->texture_size = size;
         tex->texture_type = SC_TEXTURE_TYPE_RAW_FRAME;
@@ -774,8 +774,8 @@ sc_texture_set_from_dmabuf_frame(struct sc_texture *tex, struct sc_size size,
     }
 
     tex->gl.BindTexture(GL_TEXTURE_2D, gl_texture);
-    tex->gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    tex->gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    tex->gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    tex->gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     tex->gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     tex->gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     image_target_texture(GL_TEXTURE_2D, (GLeglImageOES) image);
@@ -815,7 +815,7 @@ sc_texture_set_from_dmabuf_frame(struct sc_texture *tex, struct sc_size size,
         sc_texture_destroy_dmabuf_temp_import(display, image, gl_texture);
         return false;
     }
-    sc_texture_set_nearest_scale(texture);
+    sc_texture_set_linear_scale(texture);
 
     struct sc_dmabuf_texture_cache_entry *entry =
         sc_texture_get_dmabuf_cache_slot(tex);

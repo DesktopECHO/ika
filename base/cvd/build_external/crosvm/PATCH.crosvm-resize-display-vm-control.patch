@@ -1,0 +1,48 @@
+diff --git a/src/client.rs b/src/client.rs
+index 219c1f4ea..5b2891ba4 100644
+--- a/src/client.rs
++++ b/src/client.rs
+@@ -16,6 +16,7 @@ use thiserror::Error;
+ pub use crate::gpu::do_gpu_display_add;
+ pub use crate::gpu::do_gpu_display_list;
+ pub use crate::gpu::do_gpu_display_remove;
++pub use crate::gpu::do_gpu_display_resize;
+ pub use crate::gpu::do_gpu_set_display_mouse_mode;
+ pub use crate::gpu::ModifyGpuResult;
+ pub use crate::sys::handle_request;
+diff --git a/src/gpu.rs b/src/gpu.rs
+index f6eb523811..42e0b9aaf3 100644
+--- a/src/gpu.rs
++++ b/src/gpu.rs
+@@ -126,6 +126,10 @@ pub enum GpuControlCommand {
+     RemoveDisplays {
+         display_ids: Vec<u32>,
+     },
++    ResizeDisplay {
++        display_id: u32,
++        display: DisplayParameters,
++    },
+     SetDisplayMouseMode {
+         display_id: u32,
+         mouse_mode: MouseMode,
+@@ -234,6 +238,20 @@ pub fn do_gpu_display_remove<T: AsRef<Path> + std::fmt::Debug>(
+         .into()
+ }
+ 
++pub fn do_gpu_display_resize<T: AsRef<Path> + std::fmt::Debug>(
++    control_socket_path: T,
++    display_id: u32,
++    display: DisplayParameters,
++) -> ModifyGpuResult {
++    let request = VmRequest::GpuCommand(GpuControlCommand::ResizeDisplay {
++        display_id,
++        display,
++    });
++    handle_request(&request, control_socket_path)
++        .map_err(|_| ModifyGpuError::SocketFailed)?
++        .into()
++}
++
+ pub fn do_gpu_set_display_mouse_mode<T: AsRef<Path> + std::fmt::Debug>(
+     control_socket_path: T,
+     display_id: u32,

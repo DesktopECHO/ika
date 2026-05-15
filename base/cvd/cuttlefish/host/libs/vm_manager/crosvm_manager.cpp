@@ -63,6 +63,12 @@ namespace vm_manager {
 
 namespace {
 
+#if defined(__aarch64__)
+constexpr bool kUseFixedGpuBlobMapping = true;
+#else
+constexpr bool kUseFixedGpuBlobMapping = false;
+#endif
+
 Result<std::optional<std::string>> PreferPerformanceCoresAffinity(
     const CuttlefishConfig::InstanceSpecific& instance) {
   static constexpr char kCpuSysfsRoot[] = "/sys/devices/system/cpu";
@@ -289,6 +295,8 @@ Result<std::string> HostSwiftShaderIcdPathForArch() {
 
 Result<std::string> HostLavapipeIcdPathForArch() {
   switch (HostArch()) {
+    case Arch::Arm64:
+      return std::string("/usr/share/vulkan/icd.d/lvp_icd.aarch64.json");
     case Arch::X86:
     case Arch::X86_64:
       return HostUsrSharePath("vulkan/icd.d/vk_lavapipe_icd.cf.json");
@@ -401,6 +409,9 @@ Result<VhostUserDeviceCommands> BuildVhostUserGpu(
   gpu_params_json["surfaceless"] = true;
   gpu_params_json["external-blob"] = instance.enable_gpu_external_blob();
   gpu_params_json["system-blob"] = instance.enable_gpu_system_blob();
+  if (kUseFixedGpuBlobMapping && IsGfxstreamMode(gpu_mode)) {
+    gpu_params_json["fixed-blob-mapping"] = true;
+  }
   if (!instance.gpu_renderer_features().empty()) {
     gpu_params_json["renderer-features"] = instance.gpu_renderer_features();
   }
@@ -500,13 +511,17 @@ Result<void> ConfigureGpu(const CuttlefishConfig& config, Command* crosvm_cmd) {
       !gpu_renderer_features.empty()
           ? ",renderer-features=\"" + gpu_renderer_features + "\""
           : "";
+  const std::string gpu_fixed_blob_mapping_param =
+      kUseFixedGpuBlobMapping && IsGfxstreamMode(gpu_mode)
+          ? ",fixed-blob-mapping=true"
+          : "";
 
   const std::string gpu_common_string =
       fmt::format(",pci-address=00:{:0>2x}.0", VmManager::kGpuPciSlotNum) +
       gpu_udmabuf_string + gpu_pci_bar_size;
   const std::string gpu_common_3d_string =
       gpu_common_string + ",egl=true,surfaceless=true,glx=false" + gles_string +
-      gpu_renderer_features_param;
+      gpu_renderer_features_param + gpu_fixed_blob_mapping_param;
 
   std::string gpu_displays_string = "";
   if (instance.hwcomposer() != kHwComposerNone) {
@@ -742,14 +757,14 @@ Result<std::vector<MonitorCommand>> CrosvmManager::StartCommands(
       crosvm_cmd.AddVhostUser("input", instance.touch_socket_path(touch_idx));
     }
     if (instance.enable_mouse()) {
-      crosvm_cmd.AddVhostUser("input", instance.mouse_socket_path());
+      crosvm_cmd.AddVhostUser("input", MouseSocketPath(instance));
     }
     if (instance.enable_gamepad()) {
-      crosvm_cmd.AddVhostUser("input", instance.gamepad_socket_path());
+      crosvm_cmd.AddVhostUser("input", GamepadSocketPath(instance));
     }
-    crosvm_cmd.AddVhostUser("input", instance.rotary_socket_path());
-    crosvm_cmd.AddVhostUser("input", instance.keyboard_socket_path());
-    crosvm_cmd.AddVhostUser("input", instance.switches_socket_path());
+    crosvm_cmd.AddVhostUser("input", RotarySocketPath(instance));
+    crosvm_cmd.AddVhostUser("input", KeyboardSocketPath(instance));
+    crosvm_cmd.AddVhostUser("input", SwitchesSocketPath(instance));
   }
 
 #ifdef __linux__
@@ -1023,10 +1038,11 @@ Result<std::vector<MonitorCommand>> CrosvmManager::StartCommands(
     crosvm_cmd.Cmd().AddParameter("--pflash=", PflashPath(instance));
   }
 
-  for (const auto& config : instance.camera_configs()) {
-    if (config.type == CuttlefishConfig::CameraType::kV4l2Emulated) {
-      crosvm_cmd.Cmd().AddParameter("--simple-media-device");
-    } else if (config.type == CuttlefishConfig::CameraType::kV4l2Proxy) {
+  for (int index = 0; index < instance.media_configs().size(); index++) {
+    auto config = instance.media_configs()[index];
+    if (config.type == CuttlefishConfig::MediaType::kV4l2EmulatedCamera) {
+      crosvm_cmd.Cmd().AddParameter("--vhost-user=type=media,socket=", instance.media_socket_path(index));
+    } else if (config.type == CuttlefishConfig::MediaType::kV4l2Proxy) {
       crosvm_cmd.Cmd().AddParameter("--v4l2-proxy=", "/dev/video0");
     }
   }

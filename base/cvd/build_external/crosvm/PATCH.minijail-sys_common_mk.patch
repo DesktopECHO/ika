@@ -8,5 +8,5 @@ index 03e886c..2a011fc 100644
    -Werror -Wformat=2 -fno-strict-aliasing  \
 +  -Wno-unused-command-line-argument \
    $(SSP_CFLAGS) -O1
- CXXFLAGS += $(COMMON_CFLAGS) $(COMMON_CFLAGS-$(CXXDRIVER)) -std=gnu++20 \
+ CXXFLAGS += $(COMMON_CFLAGS) $(COMMON_CFLAGS-$(CXXDRIVER)) -std=gnu++23 \
    -fvisibility-inlines-hidden

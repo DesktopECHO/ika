@@ -10,12 +10,11 @@ This document compares how upstream Cuttlefish drives an Android virtual display
 | Host front-end | `webRTC` browser viewer (HTML/JS) | scrcpy with `--cuttlefish-frames-socket=…` |
 | Window resize | Client scales frames; guest display geometry is static | Client signals server; **guest display geometry actually changes** |
 | Resize event flow | none (visual scale only) | SDL → scrcpy client → `TYPE_RESIZE_DISPLAY` → scrcpy server → `Device.setDisplaySizeAndDensity` → `WindowManagerService.setForcedDisplaySize` → DisplayManager listeners |
-| DPI selection | Static at launch (`--display=…,dpi=…`) | Computed from host width (`width / 12`), clamped 72–640 by default; user can override 72–1200 |
+| DPI selection | Static at launch (`--display=…,dpi=…`) | Computed from host width; user can override with `--dpi` or `IKADPI` |
 | Input transport | WebRTC data channel | scrcpy `UInput` injection |
 | Audio transport | WebRTC media stream | scrcpy raw audio with low-latency buffer settings |
 | Multi-display / hotplug | `cvd_display add/remove/resize` CLI | Same CLI is available; ika does not currently drive it |
-| GPU path | varies (host, gfxstream, virgl) | `gpu_mode=gfxstream`, `gpu_vhost_user_mode=off`, `use_cvdalloc=true` |
-| Boot animation | enabled by default | disabled (`enable_bootanimation=false`) |
+| GPU path | varies (host, gfxstream, virgl) | `gpu_mode=gfxstream`, `enable_gpu_udmabuf=true`, `gpu_vhost_user_mode=off`, `use_cvdalloc=true` |
 | CPU pinning | none | host frontend pinned to last two performance cores |
 
 ## 1. Frame transport
@@ -48,13 +47,7 @@ The guest's primary `DisplayInfo` actually updates. Launcher3's `DisplayControll
 
 **Upstream:** DPI is chosen once by the human starting Cuttlefish and baked into the `--display=…,dpi=N` flag. No automatic relationship to host hardware.
 
-**ika:** DPI is derived from the host monitor's pixel width at launch ([tools/ika#resolve_scrcpy_dpi](../../tools/ika)):
-
-```text
-DPI = native_display_width / 12
-```
-
-clamped to the AOSP density-bucket range 72–640. The formula lands exactly on standard buckets at common monitor widths (1920→160, 2880→240, 3840→320, 5760→480, 7680→640), which keeps Android's bitmap-asset selection clean. A user can override with `IKADPI=<value>` for 72–1200, useful for HiDPI accessibility setups.
+**ika:** DPI is derived from the host's display at launch, a user can override with `--dpi=<value>` or `IKADPI=<value>`
 
 DPI does **not** change when the scrcpy window is resized — only resolution changes. Content gets larger or smaller in absolute screen pixels, the same way a desktop monitor behaves when its viewport shrinks. If a different DPI is needed for a different host monitor, restart ika.
 
@@ -81,22 +74,12 @@ ika sets:
 ```text
 gpu_mode=gfxstream
 gpu_vhost_user_mode=off
-enable_gpu_udmabuf=false        # Asahi crosvm path is unstable with udmabuf
+enable_gpu_udmabuf=true         # zero-copy virtio-gpu path when supported
 use_cvdalloc=true
 enable_bootanimation=false      # skip the dancing-bug splash
 prefer_performance_cores=true
 ```
 
-It also reserves the host's last two performance cores for the scrcpy / webRTC frontend (`taskset -c <p-1,p-2> scrcpy …`). Upstream Cuttlefish leaves GPU mode / boot animation / scheduling to user configuration.
-
-## Why ika diverges
-
-Upstream Cuttlefish is built primarily for **CI testing of Android changes**: every Android engineer needs a way to bring up a known-good virtual device and exercise it. A browser-tab front-end and a static display geometry are right for that use case — the device is being tested against a fixed spec, not driven as a daily-use desktop.
-
-LineageOS Desktop is built for a different use case: an Android-based desktop OS that the user actually sits in front of. That use case needs:
-- A native window with frame-perfect input and low audio latency (→ scrcpy + Unix socket frame channel)
-- A display geometry that actually responds to window resizes (→ scrcpy `flex_display` + R1 IDP recompute)
-- A DPI that matches the host monitor without manual configuration (→ width/12 heuristic in ika)
-- Boot/lifecycle/scheduling defaults that favor interactive responsiveness (→ no boot animation, performance-core pinning)
-
-The upstream contracts that don't need to change (the `cvd_internal_start` CLI, the `cvd_display` hotplug CLI, the underlying crosvm + gfxstream stack) are reused unmodified. The divergence is concentrated at the front-end transport and the resize event path, which is where the desktop UX actually lives.
+`gfxstream` is the primary path going forward. `guest_swiftshader` is useful as
+a diagnostic fallback because it removes host GPU acceleration from the equation,
+but it is not the normal performance target for this product.

@@ -36,6 +36,7 @@
 #include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/commands/run_cvd/launch/enable_multitouch.h"
 #include "cuttlefish/host/commands/run_cvd/launch/log_tee_creator.h"
+#include "cuttlefish/host/libs/config/config_instance_derived.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/config/known_paths.h"
 #include "cuttlefish/host/libs/feature/command_source.h"
@@ -280,24 +281,22 @@ class VhostInputDevices : public CommandSource,
   std::string Name() const override { return "VhostInputDevices"; }
   std::unordered_set<SetupFeature*> Dependencies() const override { return {}; }
   Result<void> ResultSetup() override {
-    rotary_sockets_ =
-        CF_EXPECT(NewDeviceSockets(instance_.rotary_socket_path()),
-                  "Failed to setup sockets for rotary device");
+    rotary_sockets_ = CF_EXPECT(NewDeviceSockets(RotarySocketPath(instance_)),
+                                "Failed to setup sockets for rotary device");
     if (instance_.enable_mouse()) {
-      mouse_sockets_ =
-          CF_EXPECT(NewDeviceSockets(instance_.mouse_socket_path()),
-                    "Failed to setup sockets for mouse device");
+      mouse_sockets_ = CF_EXPECT(NewDeviceSockets(MouseSocketPath(instance_)),
+                                 "Failed to setup sockets for mouse device");
     }
     if (instance_.enable_gamepad()) {
       gamepad_sockets_ =
-          CF_EXPECT(NewDeviceSockets(instance_.gamepad_socket_path()),
+          CF_EXPECT(NewDeviceSockets(GamepadSocketPath(instance_)),
                     "Failed to setup sockets for gamepad device");
     }
     keyboard_sockets_ =
-        CF_EXPECT(NewDeviceSockets(instance_.keyboard_socket_path()),
+        CF_EXPECT(NewDeviceSockets(KeyboardSocketPath(instance_)),
                   "Failed to setup sockets for keyboard device");
     switches_sockets_ =
-        CF_EXPECT(NewDeviceSockets(instance_.switches_socket_path()),
+        CF_EXPECT(NewDeviceSockets(SwitchesSocketPath(instance_)),
                   "Failed to setup sockets for switches device");
     touchscreen_sockets_.reserve(instance_.display_configs().size());
     for (int i = 0; i < instance_.display_configs().size(); ++i) {

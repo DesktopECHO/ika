@@ -65,7 +65,7 @@
 #include "cuttlefish/host/commands/cvd/utils/subprocess_waiter.h"
 #include "cuttlefish/host/libs/config/config_constants.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
-#include "cuttlefish/host/libs/metrics/metrics_orchestration.h"
+#include "cuttlefish/host/libs/metrics/device_metrics_orchestration.h"
 #include "cuttlefish/posix/symlink.h"
 #include "cuttlefish/result/result.h"
 
@@ -255,6 +255,7 @@ class CvdStartCommandHandler : public CvdCommandHandler {
   // TODO(b/315027339): Swap to true.  Will likely need to add `cvd::Request` as
   // a parameter of DetailedHelp to match current implementation
   bool ShouldInterceptHelp() const override { return false; }
+  bool RequiresDeviceExists() const override { return true; }
   Result<std::string> DetailedHelp(std::vector<std::string>&) const override {
     return "Run cvd start --help for the full help text.";
   }

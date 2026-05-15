@@ -4,6 +4,10 @@ This matrix tracks apps by desktop behavior, architecture, graphics path, and
 runtime dependencies. Keep it updated when a crash is fixed, a new native bridge
 payload is adopted, or an app changes major versions.
 
+The desktop ROM intentionally presents a tablet-like, non-telephony feature set
+to package managers. Do not expose `android.hardware.type.pc`; Play treats that
+as a desktop/PC device and filters some phone/tablet apps before install.
+
 Status values:
 
 - `supported`: Expected to work in release images.

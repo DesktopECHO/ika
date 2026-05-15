@@ -3,6 +3,7 @@ load("@rules_python//python:defs.bzl", "py_library")
 package(
     default_visibility = [
         "@//:android_cuttlefish",
+        "@mesa//:__subpackages__",
     ],
 )
 

@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 namespace cuttlefish {
 
@@ -32,11 +33,19 @@ struct AudioStreamSettings {
     Capture,
   };
 
+  struct VolumeControl {
+    uint32_t min = 0;
+    uint32_t max = 100;
+    uint32_t step = 1;
+  };
+
   uint8_t id = 0;
   AudioChannelsLayout channels_layout = AudioChannelsLayout::Stereo;
   Direction direction = Direction::Playback;
-};
 
+  bool has_mute_control = false;
+  std::optional<VolumeControl> master_volume_control;
+};
 
 struct AudioMixerSettings {
   AudioChannelsLayout channels_layout = AudioChannelsLayout::Stereo;

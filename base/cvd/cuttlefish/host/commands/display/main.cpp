@@ -51,6 +51,8 @@ Commands:(cvd display help <subcommand> for more information):
 
     remove: Disconnects and removes displays.
 
+    resize: Resizes an existing display.
+
     screenshot: Screenshots the contents of a given display.
 )";
 
@@ -82,6 +84,16 @@ usage: cvd display remove \\
         --display=<display id> ...
 )";
 
+static const char kResizeUsage[] =
+    R"(
+
+Resizes an existing display on the given virtual device.
+
+usage: cvd display resize \\
+        --display_id=<display id> \\
+        --display=width=1280,height=800,dpi=320,refresh_rate_hz=60
+)";
+
 static const char kScreenshotUsage[] =
     R"(
 Screenshots the contents of a given display.
@@ -110,6 +122,7 @@ Result<int> DoHelp(std::vector<std::string>& args) {
           {"add", kAddUsage},
           {"list", kListUsage},
           {"remove", kRemoveUsage},
+          {"resize", kResizeUsage},
           {"screenshot", kScreenshotUsage},
       });
 
@@ -180,6 +193,45 @@ Result<int> DoRemove(std::vector<std::string>& args) {
   return CF_EXPECT(crosvm_display.Remove(instance_num, displays));
 }
 
+Result<int> DoResize(std::vector<std::string>& args) {
+  const int instance_num = CF_EXPECT(GetInstanceNum(args));
+
+  int display_id = 0;
+  std::string display_config_flag;
+  const std::vector<Flag> resize_display_flags = {
+      GflagsCompatFlag("display_id", display_id)
+          .Help("Display id of a display to resize."),
+      GflagsCompatFlag(kDisplayFlag, display_config_flag).Help(kDisplayHelp),
+  };
+  auto parse_res = ConsumeFlags(resize_display_flags, args);
+  if (!parse_res.ok()) {
+    std::cerr << parse_res.error() << std::endl;
+    std::cerr << "Failed to parse flags. Usage:" << std::endl;
+    std::cerr << kResizeUsage << std::endl;
+    return 1;
+  }
+
+  if (display_config_flag.empty()) {
+    std::cerr << "Must specify a display configuration. Usage:" << std::endl;
+    std::cerr << kResizeUsage << std::endl;
+    return 1;
+  }
+  if (display_id < 0) {
+    std::cerr << "Display id must be non-negative. Usage:" << std::endl;
+    std::cerr << kResizeUsage << std::endl;
+    return 1;
+  }
+
+  auto display_config = CF_EXPECT(ParseDisplayConfig(display_config_flag));
+  CF_EXPECT(display_config.has_value(),
+            "Must specify a display configuration. Usage:" << kResizeUsage);
+
+  auto crosvm_display = CF_EXPECT(vm_manager::GetCrosvmDisplayController());
+  return CF_EXPECT(crosvm_display.Resize(instance_num,
+                                         std::to_string(display_id),
+                                         *display_config));
+}
+
 Result<int> DoScreenshot(std::vector<std::string>& args) {
   const int instance_num = CF_EXPECT(GetInstanceNum(args));
 
@@ -235,6 +287,7 @@ int DisplayMain(int argc, char** argv) {
       {"list", DoList},              //
       {"help", DoHelp},              //
       {"remove", DoRemove},          //
+      {"resize", DoResize},          //
       {"screenshot", DoScreenshot},  //
   };
 

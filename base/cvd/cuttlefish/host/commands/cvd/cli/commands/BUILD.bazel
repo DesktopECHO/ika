@@ -6,8 +6,6 @@ package(
 
 exports_files([
     ".clang-tidy",
-    "cmd_list.cpp",
-    "cmd_list.h",
     "create.cpp",
     "create.h",
     "help.cpp",
@@ -219,19 +217,6 @@ cf_cc_library(
 )
 
 cf_cc_library(
-    name = "noop",
-    srcs = ["noop.cpp"],
-    hdrs = ["noop.h"],
-    deps = [
-        "//cuttlefish/host/commands/cvd/cli:command_request",
-        "//cuttlefish/host/commands/cvd/cli:types",
-        "//cuttlefish/host/commands/cvd/cli/commands:command_handler",
-        "//cuttlefish/result",
-        "@fmt",
-    ],
-)
-
-cf_cc_library(
     name = "power_btn",
     srcs = ["power_btn.cpp"],
     hdrs = ["power_btn.h"],
@@ -380,7 +365,7 @@ cf_cc_library(
         "//cuttlefish/host/commands/cvd/utils",
         "//cuttlefish/host/libs/config:config_constants",
         "//cuttlefish/host/libs/config:cuttlefish_config",
-        "//cuttlefish/host/libs/metrics:metrics_orchestration",
+        "//cuttlefish/host/libs/metrics:device_metrics_orchestration",
         "//cuttlefish/posix:symlink",
         "//cuttlefish/result",
         "//libbase",
@@ -425,7 +410,7 @@ cf_cc_library(
         "//cuttlefish/host/commands/cvd/cli/selector",
         "//cuttlefish/host/commands/cvd/instances",
         "//cuttlefish/host/commands/cvd/utils",
-        "//cuttlefish/host/libs/metrics:metrics_orchestration",
+        "//cuttlefish/host/libs/metrics:device_metrics_orchestration",
         "//cuttlefish/result",
         "//libbase",
         "@abseil-cpp//absl/strings",

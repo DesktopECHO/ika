@@ -1,0 +1,517 @@
+diff -Naur mesa_old/atomic_memory_sentinel.rs mesa_new/atomic_memory_sentinel.rs
+--- mesa_old/atomic_memory_sentinel.rs	1969-12-31 20:00:00.000000000 -0400
++++ mesa_new/atomic_memory_sentinel.rs	2026-05-20 15:46:57.582870981 -0300
+@@ -0,0 +1,88 @@
++// Copyright 2026 Red Hat, Inc.
++// SPDX-License-Identifier: MIT
++
++//! AtomicMemorySentinel - Cross-platform atomic memory synchronization primitive.
++//!
++//! Provides access to futex and WaitOnAddress-like APIs for atomic memory operations.
++
++use std::mem::size_of;
++use std::sync::atomic::{AtomicU32, Ordering};
++
++use crate::sys::platform::atomic_memory_sentinel;
++use crate::MappedRegion;
++use crate::MemoryMapping;
++use crate::MesaError;
++use crate::MesaResult;
++
++/// A sentinel that provides access to atomic memory.
++/// Safe to share across threads.
++pub struct AtomicMemorySentinel {
++    _memory_mapping: MemoryMapping,
++    atomic_ptr: *mut u32,
++}
++
++// SAFETY: AtomicMemorySentinel can be sent across threads.
++unsafe impl Send for AtomicMemorySentinel {}
++// SAFETY: AtomicMemorySentinel can be shared across threads.
++unsafe impl Sync for AtomicMemorySentinel {}
++
++impl AtomicMemorySentinel {
++    /// Create a new AtomicMemorySentinel from a memory mapping.
++    pub fn new(memory_mapping: MemoryMapping) -> MesaResult<Self> {
++        if memory_mapping.size() < size_of::<u32>() {
++            return Err(MesaError::WithContext(
++                "memory mapping too small for AtomicU32",
++            ));
++        }
++
++        let atomic_ptr = memory_mapping.as_ptr() as *mut u32;
++
++        Ok(Self {
++            _memory_mapping: memory_mapping,
++            atomic_ptr,
++        })
++    }
++
++    /// Signal that the atomic memory has changed.
++    ///
++    /// This will wake up waiters on this sentinel.
++    pub fn signal(&self) -> MesaResult<()> {
++        // SAFETY: self.atomic_ptr is valid for the lifetime of the MemoryMapping,
++        // properly aligned, and we have exclusive ownership via the MemoryMapping.
++        let atomic_val = unsafe { AtomicU32::from_ptr(self.atomic_ptr) };
++        atomic_memory_sentinel::wake_bitset(atomic_val, i32::MAX, 1);
++        Ok(())
++    }
++
++    /// Load the current value from atomic memory.
++    pub fn load(&self) -> u32 {
++        // SAFETY: self.atomic_ptr is valid for the lifetime of the MemoryMapping,
++        // properly aligned, and we have exclusive ownership via the MemoryMapping.
++        let atomic_val = unsafe { AtomicU32::from_ptr(self.atomic_ptr) };
++        atomic_val.load(Ordering::SeqCst)
++    }
++
++    /// Store a value to atomic memory.
++    pub fn store(&self, val: u32) {
++        // SAFETY: self.atomic_ptr is valid for the lifetime of the MemoryMapping,
++        // properly aligned, and we have exclusive ownership via the MemoryMapping.
++        let atomic_val = unsafe { AtomicU32::from_ptr(self.atomic_ptr) };
++        atomic_val.store(val, Ordering::SeqCst);
++    }
++
++    /// Wake all threads waiting on this sentinel.
++    pub fn wake_all(&self) {
++        // SAFETY: self.atomic_ptr is valid for the lifetime of the MemoryMapping,
++        // properly aligned, and we have exclusive ownership via the MemoryMapping.
++        let atomic_val = unsafe { AtomicU32::from_ptr(self.atomic_ptr) };
++        atomic_memory_sentinel::wake_all(atomic_val);
++    }
++
++    /// Blocks until the value changes from `val` or is woken up.
++    pub fn wait(&self, val: u32) {
++        // SAFETY: self.atomic_ptr is valid for the lifetime of the MemoryMapping,
++        // properly aligned, and we have exclusive ownership via the MemoryMapping.
++        let atomic_val = unsafe { AtomicU32::from_ptr(self.atomic_ptr) };
++        atomic_memory_sentinel::wait_bitset(atomic_val, val, 1);
++    }
++}
+diff -Naur mesa_old/defines.rs mesa_new/defines.rs
+--- mesa_old/defines.rs	2026-05-20 15:46:57.390091433 -0300
++++ mesa_new/defines.rs	2026-05-20 15:46:57.576972606 -0300
+@@ -88,6 +88,8 @@
+     Unknown,
+     Memory(u32, u32), // (size, handle_type)
+     WritePipe,
++    Event,
++    Socket(TubeType),
+ }
+ 
+ /// # Safety
+diff -Naur mesa_old/lib.rs mesa_new/lib.rs
+--- mesa_old/lib.rs	2026-05-20 15:46:57.393092517 -0300
++++ mesa_new/lib.rs	2026-05-20 15:46:57.569932811 -0300
+@@ -1,6 +1,7 @@
+ // Copyright 2025 Google
+ // SPDX-License-Identifier: MIT
+ 
++mod atomic_memory_sentinel;
+ mod bytestream;
+ mod defines;
+ mod descriptor;
+@@ -9,6 +10,7 @@
+ mod shm;
+ mod sys;
+ 
++pub use atomic_memory_sentinel::AtomicMemorySentinel;
+ pub use bytestream::Reader;
+ pub use bytestream::Writer;
+ pub use defines::*;
+diff -Naur mesa_old/sys/linux/atomic_memory_sentinel.rs mesa_new/sys/linux/atomic_memory_sentinel.rs
+--- mesa_old/sys/linux/atomic_memory_sentinel.rs	1969-12-31 20:00:00.000000000 -0400
++++ mesa_new/sys/linux/atomic_memory_sentinel.rs	2026-05-20 15:46:57.561652809 -0300
+@@ -0,0 +1,40 @@
++// Copyright 2026 Red Hat, Inc.
++// SPDX-License-Identifier: MIT
++
++//! Linux futex wrappers for cross-domain synchronization.
++
++use std::num::NonZeroU32;
++use std::sync::atomic::AtomicU32;
++
++use rustix::thread::futex;
++
++/// Wait on a futex with a bitset mask.
++///
++/// Blocks until the futex is woken up or the value changes from `val`.
++pub fn wait_bitset(atomic_val: &AtomicU32, val: u32, bitset: u32) {
++    let flags = futex::Flags::PRIVATE;
++    let timeout = None;
++    let val3 = NonZeroU32::new(bitset).unwrap_or(NonZeroU32::new(1).unwrap());
++
++    // Ignore errors - futex::wait_bitset returns an error if the value
++    // has already changed or if interrupted, both are expected
++    let _ = futex::wait_bitset(atomic_val, flags, val, timeout, val3);
++}
++
++/// Wake threads waiting on a futex with a bitset mask.
++///
++/// Only wakes threads whose bitset matches the provided mask.
++pub fn wake_bitset(atomic_val: &AtomicU32, val: i32, bitset: u32) {
++    let flags = futex::Flags::PRIVATE;
++    let val_u32 = if val < 0 { i32::MAX as u32 } else { val as u32 };
++    let val3 = NonZeroU32::new(bitset).unwrap_or(NonZeroU32::new(1).unwrap());
++
++    let _ = futex::wake_bitset(atomic_val, flags, val_u32, val3);
++}
++
++/// Wake all threads waiting on a futex.
++pub fn wake_all(atomic_val: &AtomicU32) {
++    let flags = futex::Flags::PRIVATE;
++    // u32::MAX means wake all waiters
++    let _ = futex::wake(atomic_val, flags, u32::MAX);
++}
+diff -Naur mesa_old/sys/linux/descriptor.rs mesa_new/sys/linux/descriptor.rs
+--- mesa_old/sys/linux/descriptor.rs	2026-05-20 15:46:57.463490495 -0300
++++ mesa_new/sys/linux/descriptor.rs	2026-05-20 15:46:57.559043607 -0300
+@@ -1,8 +1,8 @@
+ // Copyright 2025 Google
+ // SPDX-License-Identifier: MIT
+ 
+-use std::fs::File;
+ use std::fs::read_link;
++use std::fs::File;
+ use std::io::Error;
+ use std::io::ErrorKind;
+ use std::io::Result;
+@@ -14,17 +14,28 @@
+ use std::os::unix::io::IntoRawFd;
+ use std::os::unix::io::RawFd;
+ 
++use rustix::fs::fcntl_get_seals;
+ use rustix::fs::fcntl_getfl;
++use rustix::fs::fstat;
+ use rustix::fs::seek;
++use rustix::fs::FileType;
+ use rustix::fs::OFlags;
++use rustix::fs::SealFlags;
+ use rustix::fs::SeekFrom;
++use rustix::io::Errno;
++use rustix::net::sockopt::socket_type;
++use rustix::net::SocketType;
+ 
+ use crate::descriptor::AsRawDescriptor;
+ use crate::descriptor::FromRawDescriptor;
+ use crate::descriptor::IntoRawDescriptor;
+ use crate::DescriptorType;
++use crate::TubeType;
+ use crate::MESA_HANDLE_TYPE_MEM_DMABUF;
+ use crate::MESA_HANDLE_TYPE_MEM_SHM;
++use crate::MESA_MAP_ACCESS_READ;
++use crate::MESA_MAP_ACCESS_RW;
++use crate::MESA_MAP_ACCESS_WRITE;
+ 
+ pub type RawDescriptor = RawFd;
+ pub const DEFAULT_RAW_DESCRIPTOR: RawDescriptor = -1;
+@@ -41,6 +52,28 @@
+     }
+ 
+     pub fn determine_type(&self) -> Result<DescriptorType> {
++        // Check for eventfd first (not seekable, special symlink)
++        if let Ok(fd_path) = read_link(format!("/proc/self/fd/{}", self.as_raw_descriptor())) {
++            let path_str = fd_path.to_string_lossy();
++            if path_str.starts_with("anon_inode:[eventfd]") {
++                return Ok(DescriptorType::Event);
++            }
++        }
++
++        if let Ok(fd_stat) = fstat(&self.owned) {
++            let fd_type = FileType::from_raw_mode(fd_stat.st_mode);
++            if fd_type == FileType::Socket {
++                return Ok(DescriptorType::Socket(match socket_type(&self.owned)? {
++                    SocketType::SEQPACKET => TubeType::Packet,
++                    SocketType::STREAM => TubeType::Stream,
++                    ty => {
++                        log::warn!("Unsupported socket type {ty:?}");
++                        return Err(Error::from(ErrorKind::Unsupported));
++                    }
++                }));
++            }
++        }
++
+         match seek(&self.owned, SeekFrom::End(0)) {
+             Ok(seek_size) => {
+                 let size: u32 = seek_size
+@@ -61,6 +94,26 @@
+         }
+     }
+ 
++    pub fn determine_map_access_mode(&self) -> Result<u32> {
++        let flags = fcntl_getfl(&self.owned)?;
++        let mut access = match flags & OFlags::ACCMODE {
++            OFlags::RDONLY => MESA_MAP_ACCESS_READ,
++            OFlags::WRONLY => MESA_MAP_ACCESS_WRITE,
++            OFlags::RDWR => MESA_MAP_ACCESS_RW,
++            _ => return Err(Error::from(ErrorKind::Unsupported)),
++        };
++        // Access mode can be RDWR, but a write seal would still prevent RW mappings!
++        let seals = match fcntl_get_seals(&self.owned) {
++            Ok(seals) => seals,
++            Err(Errno::INVAL) => SealFlags::empty(), // It's fine if the file does not support sealing
++            Err(err) => return Err(err.into()),
++        };
++        if seals.contains(SealFlags::WRITE) || seals.contains(SealFlags::FUTURE_WRITE) {
++            access &= !MESA_MAP_ACCESS_WRITE;
++        }
++        Ok(access)
++    }
++
+     fn get_memory_handle_type(&self) -> Result<u32> {
+         let fd_path = read_link(format!("/proc/self/fd/{}", self.as_raw_descriptor()))
+             .map_err(|_| Error::from(ErrorKind::Unsupported))?;
+diff -Naur mesa_old/sys/linux/event.rs mesa_new/sys/linux/event.rs
+--- mesa_old/sys/linux/event.rs	2026-05-20 15:46:57.453939770 -0300
++++ mesa_new/sys/linux/event.rs	2026-05-20 15:46:57.556171824 -0300
+@@ -27,14 +27,19 @@
+         })
+     }
+ 
+-    pub fn signal(&mut self) -> MesaResult<()> {
+-        let _ = write(&self.descriptor, &1u64.to_ne_bytes())?;
++    pub fn add(&mut self, value: u64) -> MesaResult<()> {
++        let _ = write(&self.descriptor, &value.to_le_bytes())?;
+         Ok(())
+     }
+ 
+-    pub fn wait(&self) -> MesaResult<()> {
+-        read(&self.descriptor, &mut 1u64.to_ne_bytes())?;
+-        Ok(())
++    pub fn signal(&mut self) -> MesaResult<()> {
++        self.add(1)
++    }
++
++    pub fn wait(&mut self) -> MesaResult<u64> {
++        let mut buf = [0; 8];
++        read(&self.descriptor, &mut buf)?;
++        Ok(u64::from_le_bytes(buf))
+     }
+ 
+     pub fn try_clone(&self) -> MesaResult<Event> {
+diff -Naur mesa_old/sys/linux/mod.rs mesa_new/sys/linux/mod.rs
+--- mesa_old/sys/linux/mod.rs	2026-05-20 15:46:57.456299898 -0300
++++ mesa_new/sys/linux/mod.rs	2026-05-20 15:46:57.550247090 -0300
+@@ -1,6 +1,7 @@
+ // Copyright 2025 Google
+ // SPDX-License-Identifier: MIT
+ 
++pub mod atomic_memory_sentinel;
+ pub mod descriptor;
+ pub mod event;
+ pub mod memory_mapping;
+diff -Naur mesa_old/sys/linux/tube.rs mesa_new/sys/linux/tube.rs
+--- mesa_old/sys/linux/tube.rs	2026-05-20 15:46:57.451416889 -0300
++++ mesa_new/sys/linux/tube.rs	2026-05-20 15:46:57.541539851 -0300
+@@ -17,6 +17,7 @@
+ use rustix::net::recvmsg;
+ use rustix::net::sendmsg;
+ use rustix::net::socket_with;
++use rustix::net::sockopt::socket_type;
+ use rustix::net::AddressFamily;
+ use rustix::net::RecvAncillaryBuffer;
+ use rustix::net::RecvAncillaryMessage;
+@@ -41,6 +42,19 @@
+     socket: OwnedDescriptor,
+ }
+ 
++impl TryFrom<OwnedDescriptor> for Tube {
++    type Error = MesaError;
++
++    fn try_from(socket: OwnedDescriptor) -> Result<Self, Self::Error> {
++        let ty = socket_type(&socket)?;
++        if ty == SocketType::SEQPACKET || ty == SocketType::STREAM {
++            Ok(Tube { socket })
++        } else {
++            Err(MesaError::Unsupported)
++        }
++    }
++}
++
+ impl Tube {
+     pub fn new<P: AsRef<Path> + Arg>(path: P, kind: TubeType) -> MesaResult<Tube> {
+         let socket = match kind {
+diff -Naur mesa_old/sys/stub/atomic_memory_sentinel.rs mesa_new/sys/stub/atomic_memory_sentinel.rs
+--- mesa_old/sys/stub/atomic_memory_sentinel.rs	1969-12-31 20:00:00.000000000 -0400
++++ mesa_new/sys/stub/atomic_memory_sentinel.rs	2026-05-20 15:46:57.532147693 -0300
+@@ -0,0 +1,24 @@
++// Copyright 2026 Red Hat, Inc.
++// SPDX-License-Identifier: MIT
++
++//! Stub atomic memory synchronization implementation.
++//!
++//! The Linux backend uses futexes for atomic memory synchronization.
++//! This stub implementation allows compilation on platforms without native support.
++
++use std::sync::atomic::AtomicU32;
++
++/// Stub implementation - no-op on non-Linux platforms.
++pub fn wait_bitset(_atomic_val: &AtomicU32, _val: u32, _bitset: u32) {
++    // No-op: atomic memory synchronization not implemented on this platform
++}
++
++/// Stub implementation - no-op on non-Linux platforms.
++pub fn wake_bitset(_atomic_val: &AtomicU32, _val: i32, _bitset: u32) {
++    // No-op: atomic memory synchronization not implemented on this platform
++}
++
++/// Stub implementation - no-op on non-Linux platforms.
++pub fn wake_all(_atomic_val: &AtomicU32) {
++    // No-op: atomic memory synchronization not implemented on this platform
++}
+diff -Naur mesa_old/sys/stub/descriptor.rs mesa_new/sys/stub/descriptor.rs
+--- mesa_old/sys/stub/descriptor.rs	2026-05-20 15:46:57.442972491 -0300
++++ mesa_new/sys/stub/descriptor.rs	2026-05-20 15:46:57.529098949 -0300
+@@ -34,6 +34,10 @@
+     pub fn determine_type(&self) -> Result<DescriptorType> {
+         Err(Error::from(ErrorKind::Unsupported))
+     }
++
++    pub fn determine_map_access_mode(&self) -> Result<u32> {
++        Err(Error::from(ErrorKind::Unsupported))
++    }
+ }
+ 
+ impl AsRawDescriptor for OwnedDescriptor {
+diff -Naur mesa_old/sys/stub/event.rs mesa_new/sys/stub/event.rs
+--- mesa_old/sys/stub/event.rs	2026-05-20 15:46:57.431368923 -0300
++++ mesa_new/sys/stub/event.rs	2026-05-20 15:46:57.526631111 -0300
+@@ -14,11 +14,15 @@
+         Err(MesaError::Unsupported)
+     }
+ 
++    pub fn add(&mut self, value: u64) -> MesaResult<()> {
++        Err(MesaError::Unsupported)
++    }
++
+     pub fn signal(&mut self) -> MesaResult<()> {
+         Err(MesaError::Unsupported)
+     }
+ 
+-    pub fn wait(&self) -> MesaResult<()> {
++    pub fn wait(&mut self) -> MesaResult<u64> {
+         Err(MesaError::Unsupported)
+     }
+ 
+diff -Naur mesa_old/sys/stub/mod.rs mesa_new/sys/stub/mod.rs
+--- mesa_old/sys/stub/mod.rs	2026-05-20 15:46:57.434050330 -0300
++++ mesa_new/sys/stub/mod.rs	2026-05-20 15:46:57.519707973 -0300
+@@ -1,6 +1,7 @@
+ // Copyright 2025 Google
+ // SPDX-License-Identifier: MIT
+ 
++pub mod atomic_memory_sentinel;
+ pub mod descriptor;
+ pub mod event;
+ pub mod memory_mapping;
+diff -Naur mesa_old/sys/stub/tube.rs mesa_new/sys/stub/tube.rs
+--- mesa_old/sys/stub/tube.rs	2026-05-20 15:46:57.428201297 -0300
++++ mesa_new/sys/stub/tube.rs	2026-05-20 15:46:57.510759523 -0300
+@@ -12,6 +12,14 @@
+ pub struct Tube;
+ pub struct Listener;
+ 
++impl TryFrom<OwnedDescriptor> for Tube {
++    type Error = MesaError;
++
++    fn try_from(_socket: OwnedDescriptor) -> Result<Self, Self::Error> {
++        Err(MesaError::Unsupported)
++    }
++}
++
+ impl Tube {
+     pub fn new<P: AsRef<Path>>(_path: P, _kind: TubeType) -> MesaResult<Tube> {
+         Err(MesaError::Unsupported)
+diff -Naur mesa_old/sys/windows/atomic_memory_sentinel.rs mesa_new/sys/windows/atomic_memory_sentinel.rs
+--- mesa_old/sys/windows/atomic_memory_sentinel.rs	1969-12-31 20:00:00.000000000 -0400
++++ mesa_new/sys/windows/atomic_memory_sentinel.rs	2026-05-20 15:46:57.505743917 -0300
+@@ -0,0 +1,24 @@
++// Copyright 2026 Red Hat, Inc.
++// SPDX-License-Identifier: MIT
++
++//! Stub atomic memory synchronization implementation for Windows.
++//!
++//! The Linux backend uses futexes for atomic memory synchronization.
++//! This stub implementation allows compilation on Windows without native support.
++
++use std::sync::atomic::AtomicU32;
++
++/// Stub implementation - no-op on Windows.
++pub fn wait_bitset(_atomic_val: &AtomicU32, _val: u32, _bitset: u32) {
++    // No-op: atomic memory synchronization not implemented on this platform
++}
++
++/// Stub implementation - no-op on Windows.
++pub fn wake_bitset(_atomic_val: &AtomicU32, _val: i32, _bitset: u32) {
++    // No-op: atomic memory synchronization not implemented on this platform
++}
++
++/// Stub implementation - no-op on Windows.
++pub fn wake_all(_atomic_val: &AtomicU32) {
++    // No-op: atomic memory synchronization not implemented on this platform
++}
+diff -Naur mesa_old/sys/windows/descriptor.rs mesa_new/sys/windows/descriptor.rs
+--- mesa_old/sys/windows/descriptor.rs	2026-05-20 15:46:57.416478046 -0300
++++ mesa_new/sys/windows/descriptor.rs	2026-05-20 15:46:57.503123735 -0300
+@@ -34,6 +34,10 @@
+     pub fn determine_type(&self) -> Result<DescriptorType> {
+         Err(Error::from(ErrorKind::Unsupported))
+     }
++
++    pub fn determine_map_access_mode(&self) -> Result<u32> {
++        Err(Error::from(ErrorKind::Unsupported))
++    }
+ }
+ 
+ impl AsRawDescriptor for OwnedDescriptor {
+diff -Naur mesa_old/sys/windows/event.rs mesa_new/sys/windows/event.rs
+--- mesa_old/sys/windows/event.rs	2026-05-20 15:46:57.405017956 -0300
++++ mesa_new/sys/windows/event.rs	2026-05-20 15:46:57.500395380 -0300
+@@ -14,11 +14,15 @@
+         Err(MesaError::Unsupported)
+     }
+ 
++    pub fn add(&mut self, value: u64) -> MesaResult<()> {
++        Err(MesaError::Unsupported)
++    }
++
+     pub fn signal(&mut self) -> MesaResult<()> {
+         Err(MesaError::Unsupported)
+     }
+ 
+-    pub fn wait(&self) -> MesaResult<()> {
++    pub fn wait(&mut self) -> MesaResult<u64> {
+         Err(MesaError::Unsupported)
+     }
+ 
+diff -Naur mesa_old/sys/windows/mod.rs mesa_new/sys/windows/mod.rs
+--- mesa_old/sys/windows/mod.rs	2026-05-20 15:46:57.408016796 -0300
++++ mesa_new/sys/windows/mod.rs	2026-05-20 15:46:57.493769026 -0300
+@@ -1,6 +1,7 @@
+ // Copyright 2025 Google
+ // SPDX-License-Identifier: MIT
+ 
++pub mod atomic_memory_sentinel;
+ pub mod descriptor;
+ pub mod event;
+ pub mod memory_mapping;
+diff -Naur mesa_old/sys/windows/tube.rs mesa_new/sys/windows/tube.rs
+--- mesa_old/sys/windows/tube.rs	2026-05-20 15:46:57.402156102 -0300
++++ mesa_new/sys/windows/tube.rs	2026-05-20 15:46:57.485243235 -0300
+@@ -12,6 +12,14 @@
+ pub struct Tube;
+ pub struct Listener;
+ 
++impl TryFrom<OwnedDescriptor> for Tube {
++    type Error = MesaError;
++
++    fn try_from(_socket: OwnedDescriptor) -> Result<Self, Self::Error> {
++        Err(MesaError::Unsupported)
++    }
++}
++
+ impl Tube {
+     pub fn new<P: AsRef<Path>>(_path: P, _kind: TubeType) -> MesaResult<Tube> {
+         Err(MesaError::Unsupported)

@@ -46,6 +46,8 @@ runtime contract:
   split selection
 - setup wizard, lockscreen, mobile data, battery UI, UWB, and Thread radios are
   disabled for the desktop profile
+- the Play-visible hardware profile stays tablet-like and non-telephony; desktop
+  mode is enabled by resources/properties instead of `android.hardware.type.pc`
 - ARM64 and x86-64 share the same desktop overlays, provisioning, userdata
   format, and taskbar behavior; native bridge support is the x86-64-only
   architecture addition
@@ -75,7 +77,6 @@ From a Linux build host:
 git clone https://github.com/DesktopECHO/ika.git
 cd ika
 
-WORKSPACE="$HOME/lineageos-desktop-23.2" \
 ./lineageos/scripts/build_lineageos_desktop.sh
 ```
 
@@ -93,11 +94,15 @@ userdata remains the default 8 GiB f2fs image, microG and WebView APKs are valid
 zip files, and the x86-64 native bridge payload is complete. Set
 `VALIDATE_BUILD_INPUTS=0` only for local experiments.
 
-If `repo` is not installed, the script asks before downloading it and using
-`sudo install` to copy it to `/usr/local/bin/repo`. It also attempts to install
+If `repo` is not installed, the script downloads it and uses `sudo install` to
+copy it to `/usr/local/bin/repo`. It also attempts to install
 missing basic host tools such as `git`, `git-lfs`, `python3`, `rsync`, `curl`,
 and `tar` with `apt`, `dnf`, or `pacman` when available. Set
 `AUTO_INSTALL_DEPS=0` to make missing tools a hard error instead.
+Git network operations run with a build-local git config that enables repo
+color output, sets a local builder identity, and rewrites common GitHub SSH/git
+remotes to anonymous HTTPS, so public sources can sync without a GitHub account
+or SSH key.
 
 Final Cuttlefish-ready bundles are written as directories at the ika repo
 root:
@@ -149,9 +154,10 @@ VALIDATE_BUILD_INPUTS=1
 ```
 
 The `WORKSPACE` directory is created if needed and reused on later runs. The
-default workspace is treated as script-managed, so patched source projects are
-reset before each `repo sync` and then patched again. For a custom workspace,
-set `RESET_PATCHED_PROJECTS=1` if you want the same cleanup behavior.
+default workspace is `ika/lineageos/src` and is treated as script-managed, so
+patched source projects are reset before each `repo sync` and then patched
+again. For a custom workspace, set `RESET_PATCHED_PROJECTS=1` if you want the
+same cleanup behavior.
 
 `INCLUDE_MICROG=1` is the default product behavior. It syncs
 `vendor/partner_gms` from the lineageos4microg manifest and includes GmsCore,
@@ -234,6 +240,14 @@ scripts remain available:
 ```bash
 vendor/lineage_desktop/scripts/rebuild_cf_desktop_arm64.sh
 vendor/lineage_desktop/scripts/rebuild_cf_desktop_x86_64.sh
+```
+
+From the ika checkout, those helpers also use the default source tree at
+`lineageos/src`:
+
+```bash
+lineageos/scripts/rebuild_cf_desktop_arm64.sh
+lineageos/scripts/rebuild_cf_desktop_x86_64.sh
 ```
 
 The x86-64 helper also refreshes the native bridge payload unless

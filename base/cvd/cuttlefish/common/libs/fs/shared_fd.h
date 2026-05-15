@@ -36,7 +36,6 @@
 
 #include <chrono>
 #include <memory>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -368,7 +367,7 @@ class FileInstance {
   template <typename... Args>
   ssize_t SendFileDescriptors(const void* buf, size_t len, Args&&... sent_fds) {
     std::vector<int> fds;
-    android::base::Append(fds, std::forward<int>(sent_fds->fd_)...);
+    (fds.push_back(sent_fds->fd_), ...);
     errno = 0;
     auto ret = android::base::SendFileDescriptorVector(fd_, buf, len, fds);
     errno_ = errno;

@@ -1,0 +1,67 @@
+--- a/src/crosvm/gpu_config.rs
++++ b/src/crosvm/gpu_config.rs
+@@ -7,6 +7,8 @@
+ use devices::virtio::GpuDisplayMode;
+ use devices::virtio::GpuDisplayParameters;
+ use devices::virtio::GpuParameters;
++use rutabaga_gfx::RUTABAGA_CAPSET_GFXSTREAM_GLES;
++use rutabaga_gfx::RUTABAGA_CAPSET_GFXSTREAM_VULKAN;
+ 
+ use crate::crosvm::cmdline::FixedGpuParameters;
+ use crate::crosvm::config::Config;
+@@ -18,6 +20,8 @@
+         warn!("'width' and 'height' in '--gpu' are deprecated; please use `displays=[...]`");
+     }
+ 
++    maybe_disable_gfxstream_vulkan_on_apple_16k(&mut gpu_params);
++
+     match (
+         gpu_params.__width_compat.take(),
+         gpu_params.__height_compat.take(),
+@@ -37,6 +41,46 @@
+     Ok(FixedGpuParameters(gpu_params))
+ }
+ 
++fn maybe_disable_gfxstream_vulkan_on_apple_16k(gpu_params: &mut GpuParameters) {
++    let gfxstream_vulkan_mask = 1u64 << RUTABAGA_CAPSET_GFXSTREAM_VULKAN;
++    let gfxstream_gles_mask = 1u64 << RUTABAGA_CAPSET_GFXSTREAM_GLES;
++
++    if gpu_params.capset_mask & gfxstream_vulkan_mask == 0
++        || gpu_params.capset_mask & gfxstream_gles_mask == 0
++        || !is_apple_silicon_16k_host()
++    {
++        return;
++    }
++
++    gpu_params.capset_mask &= !gfxstream_vulkan_mask;
++    gpu_params.use_vulkan = Some(false);
++    warn!(
++        "disabling gfxstream-vulkan on Apple Silicon 16K-page host; keeping gfxstream GLES"
++    );
++}
++
++fn is_apple_silicon_16k_host() -> bool {
++    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
++    {
++        if base::pagesize() <= 4096 {
++            return false;
++        }
++
++        std::fs::read("/proc/device-tree/compatible")
++            .map(|compatible| {
++                compatible
++                    .split(|byte| *byte == 0)
++                    .any(|entry| entry.starts_with(b"apple,"))
++            })
++            .unwrap_or(false)
++    }
++
++    #[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
++    {
++        false
++    }
++}
++
+ pub(crate) fn validate_gpu_config(cfg: &mut Config) -> Result<(), String> {
+     if let Some(gpu_parameters) = cfg.gpu_parameters.as_mut() {
+         if !gpu_parameters.pci_bar_size.is_power_of_two() {
