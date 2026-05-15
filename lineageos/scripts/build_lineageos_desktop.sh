@@ -1269,13 +1269,28 @@ package_cvd_bundle() {
 
   tar -xzf "$host_package" -C "$bundle_dir" --exclude='bin' --exclude='lib64'
 
-  # Upstream cvd-host_package.tar.gz ships several etc/cvd_config/*.json files
-  # as zero-byte stubs. assemble_cvd treats a 0-byte file as a JSON parse error
-  # and refuses to launch. Replace empty stubs with an empty JSON object so the
-  # parser accepts them as "no overrides".
+  # assemble_cvd requires every etc/cvd_config/*.json preset it might select
+  # (via --config=... or via android-info.txt) to be a JSON object; it aborts
+  # on the first preset that is empty, unparseable, or non-object. Upstream's
+  # cvd-host_package.tar.gz ships several of these as zero-byte stubs.
+  # Normalize anything that is not a valid object to {} so the launcher
+  # treats it as "no overrides", and log each replacement so future bundle
+  # issues surface in the build log instead of going silently.
   if [[ -d "$bundle_dir/etc/cvd_config" ]]; then
-    find "$bundle_dir/etc/cvd_config" -maxdepth 1 -type f -name '*.json' -empty \
-      -exec sh -c 'printf "{}\n" > "$1"' _ {} \;
+    python3 - "$bundle_dir/etc/cvd_config" <<'PY'
+import json, pathlib, sys
+cfg_dir = pathlib.Path(sys.argv[1])
+for p in sorted(cfg_dir.glob("*.json")):
+    try:
+        ok = isinstance(json.loads(p.read_text(encoding="utf-8")), dict)
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        ok = False
+    if ok:
+        continue
+    p.write_text("{}\n", encoding="utf-8")
+    print(f"[lineage-desktop] normalized cvd_config preset to {{}}: {p.name}",
+          file=sys.stderr)
+PY
   fi
   write_fetcher_config "$bundle_dir" "${thin_files[@]}"
   write_release_metadata "$bundle_dir" "$arch" "$product" "$product_out" "${thin_files[@]}"
