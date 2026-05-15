@@ -17,6 +17,8 @@ BuildRequires:  libavutil-free-devel
 BuildRequires:  libswresample-free-devel
 BuildRequires:  SDL3-devel
 BuildRequires:  libusb1-devel
+BuildRequires:  vulkan-headers
+BuildRequires:  libicu-devel
 
 Requires:       ika-base
 Requires:       libavcodec-free

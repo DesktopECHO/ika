@@ -1,0 +1,157 @@
+diff --git a/devices/src/virtio/gpu/virtio_gpu.rs b/devices/src/virtio/gpu/virtio_gpu.rs
+index 524417b7d1..dccecdc283 100644
+--- a/devices/src/virtio/gpu/virtio_gpu.rs
++++ b/devices/src/virtio/gpu/virtio_gpu.rs
+@@ -735,6 +735,24 @@ impl VirtioGpu {
+         GpuControlResult::DisplaysUpdated
+     }
+ 
++    fn resize_display(
++        &mut self,
++        display_id: u32,
++        display_params: DisplayParameters,
++    ) -> GpuControlResult {
++        match self.scanouts.get_mut(&display_id) {
++            Some(scanout) => {
++                let (width, height) = display_params.get_virtual_display_size();
++                scanout.width = width;
++                scanout.height = height;
++                scanout.display_params = Some(display_params);
++                self.scanouts_updated.store(true, Ordering::Relaxed);
++                GpuControlResult::DisplaysUpdated
++            }
++            None => GpuControlResult::NoSuchDisplay { display_id },
++        }
++    }
++
+     fn set_display_mouse_mode(
+         &mut self,
+         display_id: u32,
+@@ -755,6 +773,10 @@ impl VirtioGpu {
+             GpuControlCommand::AddDisplays { displays } => self.add_displays(displays),
+             GpuControlCommand::ListDisplays => self.list_displays(),
+             GpuControlCommand::RemoveDisplays { display_ids } => self.remove_displays(display_ids),
++            GpuControlCommand::ResizeDisplay {
++                display_id,
++                display,
++            } => self.resize_display(display_id, display),
+             GpuControlCommand::SetDisplayMouseMode {
+                 display_id,
+                 mouse_mode,
+diff --git a/src/crosvm/cmdline.rs b/src/crosvm/cmdline.rs
+index e9543877be..27aef83c32 100644
+--- a/src/crosvm/cmdline.rs
++++ b/src/crosvm/cmdline.rs
+@@ -588,6 +588,7 @@ pub enum GpuSubCommand {
+     AddDisplays(GpuAddDisplaysCommand),
+     ListDisplays(GpuListDisplaysCommand),
+     RemoveDisplays(GpuRemoveDisplaysCommand),
++    ResizeDisplay(GpuResizeDisplayCommand),
+     SetDisplayMouseMode(GpuSetDisplayMouseModeCommand),
+ }
+ 
+@@ -628,6 +629,22 @@ pub struct GpuRemoveDisplaysCommand {
+     pub socket_path: String,
+ }
+ 
++#[cfg(feature = "gpu")]
++#[derive(FromArgs)]
++/// Resize an existing display attached to the GPU device.
++#[argh(subcommand, name = "resize-display")]
++pub struct GpuResizeDisplayCommand {
++    #[argh(option)]
++    /// display id
++    pub display_id: u32,
++    #[argh(option)]
++    /// display
++    pub gpu_display: GpuDisplayParameters,
++    #[argh(positional, arg_name = "VM_SOCKET")]
++    /// VM Socket path
++    pub socket_path: String,
++}
++
+ #[cfg(feature = "gpu")]
+ #[derive(FromArgs)]
+ /// Sets the mouse mode of a display attached to the GPU device.
+diff --git a/vm_control/src/client.rs b/vm_control/src/client.rs
+index ab7eb87604..e8b43ac2b9 100644
+--- a/vm_control/src/client.rs
++++ b/vm_control/src/client.rs
+@@ -19,6 +19,8 @@ pub use crate::gpu::do_gpu_display_list;
+ #[cfg(feature = "gpu")]
+ pub use crate::gpu::do_gpu_display_remove;
+ #[cfg(feature = "gpu")]
++pub use crate::gpu::do_gpu_display_resize;
++#[cfg(feature = "gpu")]
+ pub use crate::gpu::do_gpu_set_display_mouse_mode;
+ #[cfg(feature = "gpu")]
+ pub use crate::gpu::ModifyGpuResult;
+diff --git a/src/main.rs b/src/main.rs
+index 0d8fb8449f..b09b030eab 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -64,6 +64,8 @@ use vm_control::client::do_gpu_display_list;
+ #[cfg(feature = "gpu")]
+ use vm_control::client::do_gpu_display_remove;
+ #[cfg(feature = "gpu")]
++use vm_control::client::do_gpu_display_resize;
++#[cfg(feature = "gpu")]
+ use vm_control::client::do_gpu_set_display_mouse_mode;
+ use vm_control::client::do_modify_battery;
+ #[cfg(feature = "pci-hotplug")]
+@@ -597,6 +599,11 @@ fn gpu_display_remove(cmd: cmdline::GpuRemoveDisplaysCommand) -> ModifyGpuResult
+     do_gpu_display_remove(cmd.socket_path, cmd.display_id)
+ }
+ 
++#[cfg(feature = "gpu")]
++fn gpu_display_resize(cmd: cmdline::GpuResizeDisplayCommand) -> ModifyGpuResult {
++    do_gpu_display_resize(cmd.socket_path, cmd.display_id, cmd.gpu_display)
++}
++
+ #[cfg(feature = "gpu")]
+ fn gpu_set_display_mouse_mode(cmd: cmdline::GpuSetDisplayMouseModeCommand) -> ModifyGpuResult {
+     do_gpu_set_display_mouse_mode(cmd.socket_path, cmd.display_id, cmd.mouse_mode)
+@@ -608,6 +615,7 @@ fn modify_gpu(cmd: cmdline::GpuCommand) -> std::result::Result<(), ()> {
+         cmdline::GpuSubCommand::AddDisplays(cmd) => gpu_display_add(cmd),
+         cmdline::GpuSubCommand::ListDisplays(cmd) => gpu_display_list(cmd),
+         cmdline::GpuSubCommand::RemoveDisplays(cmd) => gpu_display_remove(cmd),
++        cmdline::GpuSubCommand::ResizeDisplay(cmd) => gpu_display_resize(cmd),
+         cmdline::GpuSubCommand::SetDisplayMouseMode(cmd) => gpu_set_display_mouse_mode(cmd),
+     };
+     match result {
+diff --git a/vm_control/src/gpu.rs b/vm_control/src/gpu.rs
+index f6eb523811..42e0b9aaf3 100644
+--- a/vm_control/src/gpu.rs
++++ b/vm_control/src/gpu.rs
+@@ -126,6 +126,10 @@ pub enum GpuControlCommand {
+     RemoveDisplays {
+         display_ids: Vec<u32>,
+     },
++    ResizeDisplay {
++        display_id: u32,
++        display: DisplayParameters,
++    },
+     SetDisplayMouseMode {
+         display_id: u32,
+         mouse_mode: MouseMode,
+@@ -234,6 +238,20 @@ pub fn do_gpu_display_remove<T: AsRef<Path> + std::fmt::Debug>(
+         .into()
+ }
+ 
++pub fn do_gpu_display_resize<T: AsRef<Path> + std::fmt::Debug>(
++    control_socket_path: T,
++    display_id: u32,
++    display: DisplayParameters,
++) -> ModifyGpuResult {
++    let request = VmRequest::GpuCommand(GpuControlCommand::ResizeDisplay {
++        display_id,
++        display,
++    });
++    handle_request(&request, control_socket_path)
++        .map_err(|_| ModifyGpuError::SocketFailed)?
++        .into()
++}
++
+ pub fn do_gpu_set_display_mouse_mode<T: AsRef<Path> + std::fmt::Debug>(
+     control_socket_path: T,
+     display_id: u32,

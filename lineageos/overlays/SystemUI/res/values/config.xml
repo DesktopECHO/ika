@@ -7,8 +7,8 @@
     <string name="config_navBarLayoutQuickstep" translatable="false">left[1W],back[1WC];;contextual[1WC],right[.1W]</string>
     <string name="config_navBarLayoutHandle" translatable="false">left[1W],back[70AC];;ime_switcher[70AC],right[.1W]</string>
 
-    <!-- Default Quick Settings tile order, with telephony/SIM/airplane tiles removed
-         (no cellular hardware on the desktop products). -->
-    <string name="quick_settings_tiles_default" translatable="false">wifi,bt,dnd,flashlight,rotation,battery,cast,screenrecord,mictoggle,cameratoggle,location,hotspot,inversion,saver,dark,work,night,reduce_brightness,onehanded,color_correction,dream,font_scaling,desktop_effects</string>
-    <string name="quick_settings_tiles" translatable="false">wifi,bt,dnd,flashlight,rotation,battery,cast,screenrecord,mictoggle,cameratoggle</string>
+    <!-- Default Quick Settings tile order, with phone-only/VM-irrelevant tiles removed. -->
+    <string name="quick_settings_tiles_default" translatable="false">wifi,bt,dnd,cast,screenrecord,mictoggle,cameratoggle,location,hotspot,inversion,saver,dark,work,night,onehanded,color_correction,font_scaling,desktop_effects</string>
+    <string name="quick_settings_tiles" translatable="false">wifi,bt,dnd,cast,screenrecord,mictoggle,cameratoggle</string>
+    <string name="quick_settings_tiles_unavailable" translatable="false">flashlight,rotation,battery,reduce_brightness,dream</string>
 </resources>

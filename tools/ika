@@ -885,6 +885,10 @@ start_scrcpy_with_retries() {
     scrcpy_env+=("SCRCPY_ICON_DIR=${SCRCPY_ICON_DIR_DEFAULT}")
   fi
 
+  if [[ -x "${CVD_CLI_BIN}" ]]; then
+    scrcpy_env+=("IKA_CVD_BIN=${CVD_CLI_BIN}")
+  fi
+
   if [[ -n "${SCRCPY_SERVER_PATH_OVERRIDE}" && -f "${SCRCPY_SERVER_PATH_OVERRIDE}" ]]; then
     scrcpy_env+=("SCRCPY_SERVER_PATH=${SCRCPY_SERVER_PATH_OVERRIDE}")
   fi

@@ -1,0 +1,40 @@
+diff --git a/src/virtio/gpu/virtio_gpu.rs b/src/virtio/gpu/virtio_gpu.rs
+index 524417b7d1..dccecdc283 100644
+--- a/src/virtio/gpu/virtio_gpu.rs
++++ b/src/virtio/gpu/virtio_gpu.rs
+@@ -735,6 +735,24 @@ impl VirtioGpu {
+         GpuControlResult::DisplaysUpdated
+     }
+ 
++    fn resize_display(
++        &mut self,
++        display_id: u32,
++        display_params: DisplayParameters,
++    ) -> GpuControlResult {
++        match self.scanouts.get_mut(&display_id) {
++            Some(scanout) => {
++                let (width, height) = display_params.get_virtual_display_size();
++                scanout.width = width;
++                scanout.height = height;
++                scanout.display_params = Some(display_params);
++                self.scanouts_updated.store(true, Ordering::Relaxed);
++                GpuControlResult::DisplaysUpdated
++            }
++            None => GpuControlResult::NoSuchDisplay { display_id },
++        }
++    }
++
+     fn set_display_mouse_mode(
+         &mut self,
+         display_id: u32,
+@@ -755,6 +773,10 @@ impl VirtioGpu {
+             GpuControlCommand::AddDisplays { displays } => self.add_displays(displays),
+             GpuControlCommand::ListDisplays => self.list_displays(),
+             GpuControlCommand::RemoveDisplays { display_ids } => self.remove_displays(display_ids),
++            GpuControlCommand::ResizeDisplay {
++                display_id,
++                display,
++            } => self.resize_display(display_id, display),
+             GpuControlCommand::SetDisplayMouseMode {
+                 display_id,
+                 mouse_mode,

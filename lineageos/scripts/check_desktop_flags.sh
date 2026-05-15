@@ -13,7 +13,16 @@ set -euo pipefail
 #                                 it in build/release/aconfig/trunk_staging/<pkg>/
 #                                 <flag>_flag_values.textproto.
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+if (( $# > 1 )); then
+  printf 'Usage: %s [ANDROID_ROOT]\n' "${0##*/}" >&2
+  exit 2
+fi
+
+if (( $# == 1 )); then
+  repo_root="$(cd "$1" && pwd)"
+else
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+fi
 flags_file="$repo_root/vendor/lineage_desktop/config/desktop_required_aconfig_flags.txt"
 release_dir="$repo_root/build/release/aconfig/trunk_staging"
 

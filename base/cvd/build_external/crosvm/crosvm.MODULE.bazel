@@ -59,6 +59,7 @@ crosvm_bin.annotation(
     patch_args = ["-p1"],
     patches = [
         "@//build_external/crosvm:PATCH.crosvm-composite-duplicate-components.patch",
+        "@//build_external/crosvm:PATCH.crosvm-resize-display.patch",
     ],
     deps = [
         "@@//:gfxstream_backend_import",
@@ -78,6 +79,12 @@ crosvm_bin.annotation(
         # libavcodec/libavutil/libswscale headers in the Bazel sandbox.
         "BINDGEN_EXTRA_CLANG_ARGS": "-I/usr/include/ffmpeg",
     },
+)
+
+crosvm_bin.annotation(
+    crate = "devices",
+    patch_args = ["-p1"],
+    patches = ["@//build_external/crosvm:PATCH.crosvm-resize-display-devices.patch"],
 )
 
 crosvm_bin.annotation(
@@ -135,6 +142,12 @@ crosvm_bin.annotation(
     patches = ["@//build_external/crosvm:PATCH.proto_build_tools.patch"],
 )
 
+crosvm_bin.annotation(
+    crate = "vm_control",
+    patch_args = ["-p1"],
+    patches = ["@//build_external/crosvm:PATCH.crosvm-resize-display-vm-control.patch"],
+)
+
 crosvm_bin.from_specs(
     name = "crosvm_bin",
     cargo_config = "@//build_external/crosvm:crosvm.config.toml",
@@ -156,6 +169,7 @@ git_repository(
     patch_strip = 1,
     patches = [
         "@//build_external/crosvm:PATCH.crosvm-composite-duplicate-components.patch",
+        "@//build_external/crosvm:PATCH.crosvm-resize-display.patch",
         "@//build_external/crosvm:PATCH.minijail-sys_common_mk.patch",
         "@//build_external/crosvm:PATCH.minijail-blktracesetup2.patch",
     ],

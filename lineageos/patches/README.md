@@ -1,0 +1,43 @@
+# LineageOS Desktop Patch Set
+
+This directory contains source patches applied by
+`../scripts/apply_source_patches.sh` and by the ROM build flow. The canonical
+application order is `series`; keep this README in the same order so rebases can
+quickly answer what each patch is supposed to preserve.
+
+Most patches carry a short `Patch summary:` header as well. This file is the
+cross-project index.
+
+## Patches In Apply Order
+
+| Patch | Project | Purpose |
+| --- | --- | --- |
+| [`external-google-highway.patch`](external-google-highway.patch) | `external/google-highway` | Marks `libhwy` as `vendor_available` so vendor-side desktop graphics/camera modules can depend on the upstream SIMD helper library instead of carrying a duplicate shim. |
+| [`external-skia.patch`](external-skia.patch) | `external/skia` | Marks `libskia_skcms` as `vendor_available` so vendor modules can use Skia color-management support needed by the desktop graphics/camera stack. |
+| [`external-XMP-Toolkit-SDK.patch`](external-XMP-Toolkit-SDK.patch) | `external/XMP-Toolkit-SDK` | Marks XMP Toolkit SDK libraries as `vendor_available` so vendor image-metadata users can link them across the vendor boundary. |
+| [`art.patch`](art.patch) | `art` | Makes native-bridge namespaces drop APK-embedded `apk.zip!/lib/...` search paths. ARM apps running through x86 native bridge are more reliable when translated libraries are extracted as real files. |
+| [`device-google-cuttlefish.patch`](device-google-cuttlefish.patch) | `device/google/cuttlefish` | Adds the Cuttlefish device foundation for desktop products: desktop product entries, PC feature declarations, batteryless health behavior, graphics property plumbing, desktop boot defaults, ADB/provisioning setup, and x86_64 Sandy Bridge/native-bridge product config. |
+| [`frameworks-av.patch`](frameworks-av.patch) | `frameworks/av` | Raises software AVC encoder advertised and actual limits to support high-resolution desktop capture/playback, including larger sizes, higher bitrate, and AVC level 5.1. |
+| [`frameworks-base.patch`](frameworks-base.patch) | `frameworks/base` | Applies the main platform and SystemUI desktop contract: desktop/freeform defaults, show-desktop shell plumbing, QS cleanup/blocklisting plus the desktop media-volume slider, storage reporting tweaks, display/power behavior, double-tap shade toggling, status bar/shade adjustments, microG permission support, and tests for the framework behavior. |
+| [`frameworks-base-native-bridge.patch`](frameworks-base-native-bridge.patch) | `frameworks/base` | Adjusts package/native-library handling for x86-to-ARM native bridge installs so bridged APK native libraries are extracted as real files after ABI selection, while preserving normal native app behavior. |
+| [`system-core.patch`](system-core.patch) | `system/core` | Copies the host-supplied `ro.boot.timezone` into `persist.sys.timezone` during init so the guest boots with the host timezone. |
+| [`system-sepolicy.patch`](system-sepolicy.patch) | `system/sepolicy` | Adds minimal desktop SELinux policy for expected VM behavior, including quieting known benign denials and allowing shell display-density property checks used by host tests. |
+| [`packages-apps-Launcher3.patch`](packages-apps-Launcher3.patch) | `packages/apps/Launcher3` | Converts Launcher3/Quickstep into the primary desktop shell: taskbar-first navigation, desktop app drawer behavior, taskbar context menus, pinning, bubbles integration, freeform launch coordination, responsive device profiles, and broad test coverage. |
+| [`packages-apps-Launcher3-show-desktop-proxy.patch`](packages-apps-Launcher3-show-desktop-proxy.patch) | `packages/apps/Launcher3` | Adds the small `SystemUiProxy.toggleShowDesktop()` wrapper used by the taskbar show-desktop control. Kept separate from the main Launcher3 patch to reduce rebase conflicts in `SystemUiProxy.kt`. |
+| [`packages-apps-Launcher3-dynamic-display.patch`](packages-apps-Launcher3-dynamic-display.patch) | `packages/apps/Launcher3` | Refreshes Launcher3 invariant/device profiles and recreates taskbar state when the host-resizable display changes size or density. Also fixes all-apps grid refresh, taskbar popup anchoring/clamping, and fullscreen taskbar window sizing against live `WindowMetrics`. |
+| [`packages-apps-Launcher3-visual-effects.patch`](packages-apps-Launcher3-visual-effects.patch) | `packages/apps/Launcher3` | Adds the desktop taskbar translucency behavior and tests, isolated from functional taskbar changes so the visual polish can be reviewed or reverted independently. |
+| [`packages-apps-Launcher3-taskbar-deep-shortcuts.patch`](packages-apps-Launcher3-taskbar-deep-shortcuts.patch) | `packages/apps/Launcher3` | Enables app-declared deep shortcuts in taskbar long-press menus by removing the upstream taskbar-only suppression. This restores entries such as browser "New tab" actions. |
+| [`packages-apps-Launcher3-live-display-bounds.patch`](packages-apps-Launcher3-live-display-bounds.patch) | `packages/apps/Launcher3` | Adds and migrates runtime taskbar placement to live display bounds from `WindowManager.currentWindowMetrics`. This keeps popup clamps, overlay sizes, bottom-edge touch regions, and bubble/taskbar placement correct after host display resizes. |
+| [`vendor-lineage.patch`](vendor-lineage.patch) | `vendor/lineage` | Adds Lineage-side desktop product plumbing: optional app exclusions, empty launcher workspace overlays, and desktop defaults that belong in the Lineage vendor layer rather than AOSP framework/device projects. |
+| [`build-release.patch`](build-release.patch) | `build/release` | Sets release aconfig defaults for desktop builds: keeps SystemUI Quick Settings on the classic implementation and enables Launcher3 desktop visual-effect flags in generated release flag sets. |
+
+## Maintenance Notes
+
+- Add new patches to `series`; the build scripts use that file as the source of
+  truth for project and order.
+- Keep broad platform behavior in `frameworks-base.patch`, native-bridge package
+  manager behavior in `frameworks-base-native-bridge.patch`, and Launcher3
+  follow-up fixes in separate supplementary patches when doing so makes rebases
+  easier.
+- If a patch exists only to avoid a rebase conflict, say that in both the patch
+  header and this README.

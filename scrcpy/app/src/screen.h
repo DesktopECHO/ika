@@ -84,6 +84,9 @@ struct sc_screen {
     // Deduplicate resize requests while dpi-driven resizing is active.
     struct sc_size last_requested_display_size;
     bool resize_display_using_pixel_size;
+    const char *cuttlefish_frames_socket;
+    uint32_t cuttlefish_display_id;
+    uint16_t flex_display_dpi;
     sc_tick last_resize_request_tick;
     bool initial_window_show_deferred;
     struct sc_size initial_display_size;
@@ -156,6 +159,9 @@ struct sc_screen_params {
     bool camera;
     bool flex_display;
     bool resize_display_using_pixel_size;
+    const char *cuttlefish_frames_socket;
+    uint32_t cuttlefish_display_id;
+    uint16_t flex_display_dpi;
 
     struct sc_controller *controller;
     struct sc_file_pusher *fp;

@@ -16,6 +16,8 @@
 #pragma once
 
 #include <string>
+#include <vector>
+
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/result/result.h"
 
@@ -30,6 +32,9 @@ class CrosvmDisplayController {
                       display_configs) const;
   Result<int> Remove(const int instance_num,
                      const std::vector<std::string> display_ids) const;
+  Result<int> Resize(const int instance_num, const std::string& display_id,
+                     const CuttlefishConfig::DisplayConfig& display_config)
+      const;
   Result<std::string> List(const int instance_num);
 
  private:

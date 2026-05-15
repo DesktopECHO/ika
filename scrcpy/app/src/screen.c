@@ -1,6 +1,7 @@
 #include "screen.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #ifndef _WIN32
@@ -12,6 +13,7 @@
 #include "icon.h"
 #include "options.h"
 #include "util/log.h"
+#include "util/process.h"
 #include "util/sdl.h"
 
 #define DISPLAY_MARGINS 96
@@ -398,6 +400,9 @@ sc_screen_update_content_rect(struct sc_screen *screen) {
 static void
 sc_screen_maybe_request_display_resize(struct sc_screen *screen, bool force);
 static void
+sc_screen_resize_cuttlefish_physical_display(struct sc_screen *screen,
+                                             uint16_t width, uint16_t height);
+static void
 sc_screen_note_raw_frame_resize_activity(struct sc_screen *screen);
 static void
 sc_screen_show_prepared_window(struct sc_screen *screen);
@@ -671,6 +676,83 @@ end:
     }
 }
 
+static unsigned
+sc_screen_parse_cuttlefish_instance(const char *socket_path) {
+    if (!socket_path) {
+        return 1;
+    }
+
+    const char *p = socket_path;
+    while ((p = strstr(p, "cvd-"))) {
+        p += 4;
+        char *end = NULL;
+        unsigned long instance = strtoul(p, &end, 10);
+        if (end != p && instance > 0 && instance <= 9999) {
+            return (unsigned) instance;
+        }
+    }
+
+    return 1;
+}
+
+static const char *
+sc_screen_get_cvd_bin(void) {
+    const char *cvd_bin = getenv("IKA_CVD_BIN");
+    if (cvd_bin && *cvd_bin) {
+        return cvd_bin;
+    }
+
+    return "/usr/lib/cuttlefish-common/bin/cvd";
+}
+
+static void
+sc_screen_resize_cuttlefish_physical_display(struct sc_screen *screen,
+                                             uint16_t width, uint16_t height) {
+    if (!screen->cuttlefish_frames_socket) {
+        return;
+    }
+
+    unsigned instance =
+        sc_screen_parse_cuttlefish_instance(screen->cuttlefish_frames_socket);
+    uint16_t dpi = screen->flex_display_dpi ? screen->flex_display_dpi : 320;
+
+    char instance_arg[32];
+    char display_id_arg[32];
+    char display_arg[128];
+    snprintf(instance_arg, sizeof(instance_arg), "--instance_num=%u", instance);
+    snprintf(display_id_arg, sizeof(display_id_arg), "--display_id=%" PRIu32,
+             screen->cuttlefish_display_id);
+    snprintf(display_arg, sizeof(display_arg),
+             "--display=width=%" PRIu16 ",height=%" PRIu16
+             ",dpi=%" PRIu16 ",refresh_rate_hz=60",
+             width, height, dpi);
+
+    const char *const argv[] = {
+        sc_screen_get_cvd_bin(),
+        "display",
+        "resize",
+        instance_arg,
+        display_id_arg,
+        display_arg,
+        NULL,
+    };
+
+    sc_pid pid;
+    enum sc_process_result result =
+        sc_process_execute(argv, &pid, SC_PROCESS_NO_STDOUT
+                                      | SC_PROCESS_NO_STDERR);
+    if (result != SC_PROCESS_SUCCESS) {
+        LOGD("Could not execute Cuttlefish physical display resize");
+        return;
+    }
+
+    sc_exit_code exit_code = sc_process_wait(pid, true);
+    if (exit_code != 0) {
+        LOGD("Cuttlefish physical display resize failed with code %"
+             SC_PRIexitcode, exit_code);
+    }
+}
+
 static void
 sc_screen_maybe_request_display_resize(struct sc_screen *screen, bool force) {
     if (!screen->flex_display || screen->disconnected) {
@@ -720,6 +802,10 @@ sc_screen_maybe_request_display_resize(struct sc_screen *screen, bool force) {
     screen->last_requested_display_size.width = width;
     screen->last_requested_display_size.height = height;
     screen->last_resize_request_tick = now;
+
+    if (screen->resize_display_using_pixel_size) {
+        sc_screen_resize_cuttlefish_physical_display(screen, width, height);
+    }
 
     LOGV("resize_display(%" PRIu16 ", %" PRIu16 ")", width, height);
     sc_controller_resize_display(screen->controller, width, height);
@@ -1448,6 +1534,9 @@ sc_screen_init(struct sc_screen *screen,
     screen->flex_display = params->flex_display;
     screen->resize_display_using_pixel_size =
         params->resize_display_using_pixel_size;
+    screen->cuttlefish_frames_socket = params->cuttlefish_frames_socket;
+    screen->cuttlefish_display_id = params->cuttlefish_display_id;
+    screen->flex_display_dpi = params->flex_display_dpi;
     screen->last_requested_display_size.width = 0;
     screen->last_requested_display_size.height = 0;
     screen->last_resize_request_tick = 0;

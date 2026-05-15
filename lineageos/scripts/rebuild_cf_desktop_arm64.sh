@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$script_dir/../src/build/envsetup.sh" ]]; then
+  repo_root="$(cd "$script_dir/../src" && pwd)"
+elif [[ -f "$script_dir/../../../build/envsetup.sh" ]]; then
+  repo_root="$(cd "$script_dir/../../.." && pwd)"
+else
+  printf '[lineage-desktop] error: missing Android source tree; expected %s or an in-tree vendor/lineage_desktop checkout\n' \
+    "$script_dir/../src" >&2
+  exit 1
+fi
+source "$script_dir/build_jobs.sh"
 # Output staging directory. Defaults to a per-user temp under the workspace so
 # the script works without /home/zero hardcoding; override with OUTPUT_DIR.
 output_dir="${OUTPUT_DIR:-$repo_root/out/lineage_desktop_bundles}"
@@ -19,6 +29,7 @@ cd "$repo_root"
 unset LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE || true
 unset USE_NDK_TRANSLATION_BINARY || true
 
+vendor/lineage_desktop/scripts/sync_webview_lfs_prebuilts.sh "$repo_root" arm64
 vendor/lineage_desktop/scripts/validate_build_inputs.sh "$repo_root" arm64
 
 set +u
@@ -26,6 +37,10 @@ source build/envsetup.sh
 lunch lineage_desktop_cf_arm64_pgagnostic trunk_staging userdebug
 set -eo pipefail
 set -u
+
+set_build_jobs
+printf '[lineage-desktop] using %s parallel build jobs (%s high-memory jobs)\n' \
+  "$jobs" "$highmem_jobs"
 
 m hosttar \
   bootimage \
@@ -40,7 +55,7 @@ m hosttar \
   vbmetaimage \
   vbmetasystemimage \
   target-files-package \
-  -j"$(nproc)"
+  -j"$jobs"
 
 mkdir -p "$bundle_dir"
 

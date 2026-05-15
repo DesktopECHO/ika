@@ -32,23 +32,25 @@ cd ika
 #    built the other arch, cuttlefish-lineageos is silently skipped here.
 ./tools/buildutils/build_packages.sh
 
-# 4. Install the host packages and the bundled LineageOS tree
+# 4. Install the host packages and the bundled LineageOS tree.
+#    cuttlefish-base's %post detects your logged-in user and adds it to the
+#    required kvm / cvdnetwork / render / video groups automatically.
 sudo dnf install \
-  ./rpmbuild/RPMS/*/cuttlefish-base-*.rpm \
-  ./rpmbuild/RPMS/*/cuttlefish-user-*.rpm \
-  ./rpmbuild/RPMS/*/cuttlefish-lineageos-*.rpm
+  ./rpmbuild/RPMS/*/ika-base-*.rpm \
+  ./rpmbuild/RPMS/*/ika-scrcpy-*.rpm \
+  ./rpmbuild/RPMS/*/ika-lineageos-*.rpm
 
-# 5. Add yourself to the required groups and reboot
-sudo usermod -aG kvm,cvdnetwork,render,video "$USER"
+# 5. Reboot.
+#    Required so group memberships, limits, udev rules, and Cuttlefish host
+#    resources are picked up cleanly. Logging out is not enough.
 sudo reboot
 
 # 6. Launch
 ika start
 ```
 
-A few seconds after the virtual device is started, `scrcpy` will automatically
-open. Alternatively, visit `https://localhost:8443` in a browser to view the
-WebRTC virtual device console.
+A few seconds after the virtual device starts, the bundled `ika` viewer
+opens automatically against the running Cuttlefish instance.
 
 ### Rebuilding one phase
 
@@ -131,7 +133,10 @@ On ARM64 Asahi Linux, `guest_swiftshader` is the safe documented GPU mode for
 the packaged workflow in this fork.
 
 `ika` expects your login session to be in `kvm`, `cvdnetwork`, `render`, and
-`video`. Log out fully and back in after changing group membership.
+`video`. The `cuttlefish-base` RPM adds the installing user to these groups
+in its `%post` hook, but the active session, its PAM resource limits, and
+the live `/dev/kvm` udev permissions don't pick up the new state without a
+reboot — see step 5 of the Quick start for the full list of what's deferred.
 
 Bazel is installed automatically through Bazelisk by
 [`tools/buildutils/installbazel.sh`](tools/buildutils/installbazel.sh).

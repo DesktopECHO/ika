@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$script_dir/../src/build/envsetup.sh" ]]; then
+  repo_root="$(cd "$script_dir/../src" && pwd)"
+elif [[ -f "$script_dir/../../../build/envsetup.sh" ]]; then
+  repo_root="$(cd "$script_dir/../../.." && pwd)"
+else
+  printf '[lineage-desktop] error: missing Android source tree; expected %s or an in-tree vendor/lineage_desktop checkout\n' \
+    "$script_dir/../src" >&2
+  exit 1
+fi
+source "$script_dir/build_jobs.sh"
 output_dir="${OUTPUT_DIR:-$repo_root/out/lineage_desktop_bundles}"
 bundle_dir="$output_dir/cvd-desktop-x86_64"
 thin_dir="$output_dir/cvd-desktop-x86_64-slim"
@@ -45,6 +55,7 @@ else
   unset USE_NDK_TRANSLATION_BINARY || true
 fi
 
+vendor/lineage_desktop/scripts/sync_webview_lfs_prebuilts.sh "$repo_root" x86_64
 vendor/lineage_desktop/scripts/validate_build_inputs.sh "$repo_root" x86_64
 
 set +u
@@ -52,6 +63,10 @@ source build/envsetup.sh
 lunch lineage_desktop_cf_x86_64 trunk_staging userdebug
 set -eo pipefail
 set -u
+
+set_build_jobs
+printf '[lineage-desktop] using %s parallel build jobs (%s high-memory jobs)\n' \
+  "$jobs" "$highmem_jobs"
 
 m hosttar \
   bootimage \
@@ -66,7 +81,7 @@ m hosttar \
   vbmetaimage \
   vbmetasystemimage \
   target-files-package \
-  -j"$(nproc)"
+  -j"$jobs"
 
 rm -rf "$bundle_dir"
 mkdir -p "$bundle_dir"

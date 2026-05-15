@@ -112,7 +112,9 @@ function install_rpm_build_dependencies() {
     libavformat-free-devel \
     libavutil-free-devel \
     libswresample-free-devel \
-    libusb1-devel
+    libusb1-devel \
+    vulkan-headers \
+    libicu-devel
 
   # Runtime tools needed during rpmbuild
   run_as_root dnf -y install \

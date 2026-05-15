@@ -19,7 +19,7 @@ if [[ -n "${WORKSPACE+x}" ]]; then
   workspace="$WORKSPACE"
   workspace_defaulted=0
 else
-  workspace="$HOME/lineageos-desktop-23.2"
+  workspace="$overlay_dir/src"
   workspace_defaulted=1
 fi
 output_dir="${OUTPUT_DIR:-$ika_root}"
@@ -28,13 +28,8 @@ repo_install_path="${REPO_INSTALL_PATH:-/usr/local/bin/repo}"
 repo_cmd="repo"
 auto_install_deps="${AUTO_INSTALL_DEPS:-1}"
 reset_patched_projects="${RESET_PATCHED_PROJECTS:-auto}"
-if [[ -n "${JOBS:-}" ]]; then
-  jobs="$JOBS"
-elif command -v nproc >/dev/null 2>&1; then
-  jobs="$(nproc)"
-else
-  jobs=8
-fi
+anonymous_git_config_home="$workspace/.lineage-desktop-anonymous-config"
+anonymous_git_config="$anonymous_git_config_home/git/config"
 
 usage() {
   cat <<'EOF'
@@ -46,10 +41,19 @@ lineageos-x86_64/ under the ika project root.
 
 Environment:
   WORKSPACE             Android source checkout to create or reuse.
-                        Default: $HOME/lineageos-desktop-23.2
+                        Default: ika/lineageos/src
   OUTPUT_DIR            Parent directory for the lineageos-<arch>/ bundle
                         directories. Default: the ika project root.
-  JOBS                  Parallel jobs for repo sync and m. Default: nproc
+  JOBS                  Parallel jobs for repo sync and m. Default: reserve
+                        4 GiB RAM, then one job per 3.5 GiB physical+virtual
+                        RAM, capped at available logical CPU count.
+  NINJA_HIGHMEM_NUM_JOBS
+                        Soong high-memory pool jobs. Default: same 4 GiB RAM
+                        reserve, then one job per 16 GiB physical+virtual RAM,
+                        capped by JOBS.
+  Temporary zram       Hosts with less than 48 GiB RAM get a build-scoped zram
+                        swap device sized to 75% of physical RAM. It is removed
+                        automatically when the script exits.
   LINEAGE_BRANCH        LineageOS branch. Default: lineage-23.2
   ANDROID_MANIFEST_URL  Manifest repository. Default: LineageOS/android.git
   MANIFEST_URL          Fallback overlay manifest URL.
@@ -110,27 +114,7 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
-confirm() {
-  local prompt="$1"
-  local reply
-
-  if [[ "${ASSUME_YES:-0}" == "1" || "${YES:-0}" == "1" ]]; then
-    return 0
-  fi
-
-  [[ -t 0 ]] || return 1
-
-  printf '%s [y/N] ' "$prompt" >&2
-  read -r reply
-  case "$reply" in
-    y|Y|yes|YES|Yes)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
+source "$script_dir/build_jobs.sh"
 
 enabled() {
   case "$1" in
@@ -168,28 +152,37 @@ package_for_command() {
     apt:git) printf '%s\n' git ;;
     apt:git-lfs) printf '%s\n' git-lfs ;;
     apt:install|apt:mktemp|apt:readlink) printf '%s\n' coreutils ;;
+    apt:modprobe) printf '%s\n' kmod ;;
+    apt:mkswap|apt:swapoff|apt:swapon|apt:zramctl) printf '%s\n' util-linux ;;
     apt:python3) printf '%s\n' python3 ;;
     apt:rsync) printf '%s\n' rsync ;;
     apt:tar) printf '%s\n' tar ;;
     apt:curl) printf '%s\n' curl ;;
+    apt:adb) printf '%s\n' adb ;;
     dnf:awk) printf '%s\n' gawk ;;
     dnf:find) printf '%s\n' findutils ;;
     dnf:git) printf '%s\n' git ;;
     dnf:git-lfs) printf '%s\n' git-lfs ;;
     dnf:install|dnf:mktemp|dnf:readlink) printf '%s\n' coreutils ;;
+    dnf:modprobe) printf '%s\n' kmod ;;
+    dnf:mkswap|dnf:swapoff|dnf:swapon|dnf:zramctl) printf '%s\n' util-linux ;;
     dnf:python3) printf '%s\n' python3 ;;
     dnf:rsync) printf '%s\n' rsync ;;
     dnf:tar) printf '%s\n' tar ;;
     dnf:curl) printf '%s\n' curl ;;
+    dnf:adb) printf '%s\n' android-tools ;;
     pacman:awk) printf '%s\n' gawk ;;
     pacman:find) printf '%s\n' findutils ;;
     pacman:git) printf '%s\n' git ;;
     pacman:git-lfs) printf '%s\n' git-lfs ;;
     pacman:install|pacman:mktemp|pacman:readlink) printf '%s\n' coreutils ;;
+    pacman:modprobe) printf '%s\n' kmod ;;
+    pacman:mkswap|pacman:swapoff|pacman:swapon|pacman:zramctl) printf '%s\n' util-linux ;;
     pacman:python3) printf '%s\n' python ;;
     pacman:rsync) printf '%s\n' rsync ;;
     pacman:tar) printf '%s\n' tar ;;
     pacman:curl) printf '%s\n' curl ;;
+    pacman:adb) printf '%s\n' android-tools ;;
     *) return 1 ;;
   esac
 }
@@ -274,7 +267,7 @@ download_file() {
 }
 
 ensure_host_commands() {
-  local -a required=(git git-lfs python3 tar awk find readlink rsync install mktemp)
+  local -a required=(git git-lfs python3 tar awk find readlink rsync install mktemp adb)
   local -a missing=()
   local cmd
 
@@ -295,6 +288,82 @@ ensure_host_commands() {
     die "missing required host tools: ${missing[*]}"
 
   ensure_downloader
+}
+
+temp_zram_device=""
+
+ensure_temp_zram_commands() {
+  local -a required=(modprobe mkswap swapoff swapon zramctl)
+  local -a missing=()
+  local cmd
+
+  for cmd in "${required[@]}"; do
+    command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+  done
+
+  if (( ${#missing[@]} > 0 )); then
+    install_missing_commands "${missing[@]}" || true
+  fi
+
+  missing=()
+  for cmd in "${required[@]}"; do
+    command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+  done
+
+  (( ${#missing[@]} == 0 )) || \
+    die "missing required zram tools: ${missing[*]}"
+}
+
+format_kib_as_gib() {
+  local kib="$1"
+  awk -v kib="$kib" 'BEGIN { printf "%.1f GiB", kib / 1024 / 1024 }'
+}
+
+setup_temp_zram_if_needed() {
+  local mem_kib threshold_kib zram_kib zram_size dev
+
+  mem_kib="$(physical_memory_total_kib)"
+  if [[ ! "$mem_kib" =~ ^[0-9]+$ || "$mem_kib" -le 0 ]]; then
+    log "could not determine host RAM; skipping temporary zram setup"
+    return 0
+  fi
+
+  threshold_kib=$((48 * 1024 * 1024))
+  if (( mem_kib >= threshold_kib )); then
+    log "host RAM is $(format_kib_as_gib "$mem_kib"); temporary zram not needed"
+    return 0
+  fi
+
+  ensure_temp_zram_commands
+
+  # Load zram if it is not already available. zramctl will allocate a free
+  # device below, so this does not touch any existing system zram swap.
+  if [[ ! -e /sys/class/zram-control && ! -d /sys/block/zram0 ]]; then
+    run_privileged modprobe zram || \
+      die "failed to load zram kernel module"
+  fi
+
+  zram_kib=$((mem_kib * 3 / 4))
+  zram_size="${zram_kib}K"
+  dev="$(run_privileged zramctl --find --size "$zram_size")" || \
+    die "failed to create temporary zram device"
+  temp_zram_device="$dev"
+
+  run_privileged mkswap "$temp_zram_device" >/dev/null || \
+    die "failed to initialize temporary zram swap at $temp_zram_device"
+  run_privileged swapon "$temp_zram_device" || \
+    die "failed to enable temporary zram swap at $temp_zram_device"
+
+  log "created temporary zram swap $temp_zram_device ($(format_kib_as_gib "$zram_kib"), 75% of host RAM)"
+}
+
+cleanup_temp_zram() {
+  [[ -n "$temp_zram_device" ]] || return 0
+
+  log "removing temporary zram swap $temp_zram_device"
+  run_privileged swapoff "$temp_zram_device" >/dev/null 2>&1 || true
+  run_privileged zramctl --reset "$temp_zram_device" >/dev/null 2>&1 || true
+  temp_zram_device=""
 }
 
 validate_zip_file() {
@@ -326,12 +395,9 @@ ensure_repo_command() {
 
   ensure_downloader
 
-  if ! confirm "repo is not installed. Download it and sudo install to $repo_install_path?"; then
-    die "repo is required; install it to $repo_install_path and run the script again"
-  fi
-
   local tmp_repo
   tmp_repo="$(mktemp)"
+  log "repo is not installed; downloading from $repo_tool_url"
   download_file "$repo_tool_url" "$tmp_repo"
 
   log "installing repo to $repo_install_path"
@@ -348,6 +414,35 @@ ensure_repo_command() {
   else
     die "repo was installed but is not executable at $repo_install_path"
   fi
+}
+
+ensure_anonymous_git_config() {
+  mkdir -p "${anonymous_git_config%/*}"
+  cat > "$anonymous_git_config" <<'EOF'
+[color]
+	ui = auto
+[user]
+	name = LineageOS Desktop Builder
+	email = builder@localhost
+[url "https://github.com/"]
+	insteadOf = git@github.com:
+	insteadOf = ssh://git@github.com/
+	insteadOf = ssh://git@github.com:22/
+	insteadOf = git://github.com/
+EOF
+}
+
+run_anonymous_git_network() {
+  XDG_CONFIG_HOME="$anonymous_git_config_home" \
+    REPO_CONFIG_DIR="$anonymous_git_config_home" \
+    GIT_CONFIG_GLOBAL="$anonymous_git_config" \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_TERMINAL_PROMPT=0 \
+    GCM_INTERACTIVE=never \
+    GIT_ASKPASS=/bin/false \
+    SSH_ASKPASS=/bin/false \
+    GIT_SSH_COMMAND="ssh -o BatchMode=yes" \
+    "$@"
 }
 
 normalize_targets() {
@@ -488,40 +583,19 @@ repo_sync_sources() {
   cd "$workspace"
 
   log "initializing LineageOS source at $workspace"
-  "$repo_cmd" init -u "$android_manifest_url" -b "$lineage_branch"
+  run_anonymous_git_network "$repo_cmd" init -u "$android_manifest_url" -b "$lineage_branch"
 
   install_manifest
   reset_patched_projects_for_sync
 
   log "syncing source tree"
-  "$repo_cmd" sync -c --fail-fast -j"$jobs"
+  run_anonymous_git_network "$repo_cmd" sync -c --fail-fast -j"$jobs"
 }
 
 sync_webview_lfs_prebuilts() {
-  local -a webview_projects=(
-    external/chromium-webview/prebuilt/arm
-    external/chromium-webview/prebuilt/arm64
-    external/chromium-webview/prebuilt/x86
-    external/chromium-webview/prebuilt/x86_64
-  )
-
-  need_cmd git-lfs
-
-  local project project_dir apk
-  for project in "${webview_projects[@]}"; do
-    project_dir="$workspace/$project"
-    apk="$project_dir/webview.apk"
-    [[ -d "$project_dir" ]] || die "missing WebView prebuilt project: $project"
-
-    log "syncing Git LFS objects: $project"
-    git -C "$project_dir" lfs pull
-
-    [[ -f "$apk" ]] || die "missing WebView prebuilt APK: $apk"
-    if head -c 128 "$apk" | grep -q 'git-lfs.github.com/spec'; then
-      die "WebView prebuilt is still a Git LFS pointer: $apk"
-    fi
-    validate_zip_file "$apk" || die "invalid WebView prebuilt APK: $apk"
-  done
+  local sync_script="$overlay_dir/scripts/sync_webview_lfs_prebuilts.sh"
+  [[ -x "$sync_script" ]] || die "missing WebView LFS sync script: $sync_script"
+  run_anonymous_git_network "$sync_script" "$workspace" all
 }
 
 repair_webview_intermediates() {
@@ -564,6 +638,7 @@ apply_local_overlay() {
   rsync -a --delete \
     --exclude='.git' \
     --exclude='out' \
+    --exclude='src' \
     --exclude='prebuilts/native_bridge/Android.bp' \
     --exclude='prebuilts/native_bridge/manifest.json' \
     --exclude='prebuilts/native_bridge/system' \
@@ -793,7 +868,7 @@ for name in (
 add("workspace", str(workspace))
 add("targets", "\n".join(targets))
 
-excluded_dirs = {".git", "out", "__pycache__"}
+excluded_dirs = {".git", "out", "src", "__pycache__"}
 excluded_prefixes = {
     Path("prebuilts/native_bridge/system"),
 }
@@ -813,6 +888,11 @@ for root, dirs, files in os.walk(overlay_dir):
         if any(rel_path.is_relative_to(prefix) for prefix in excluded_prefixes):
             continue
         add("overlay-file", rel_path.as_posix())
+        if path.is_symlink():
+            add("overlay-symlink", os.readlink(path))
+            continue
+        if not path.is_file():
+            continue
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
@@ -1323,6 +1403,8 @@ build_target() {
 }
 
 main() {
+  trap 'status=$?; cleanup_temp_zram; exit "$status"' EXIT
+
   case "${1:-}" in
     -h|--help|help)
       usage
@@ -1331,7 +1413,11 @@ main() {
   esac
 
   ensure_host_commands
+  setup_temp_zram_if_needed
+  set_build_jobs
+  log "using $jobs parallel build jobs ($highmem_jobs high-memory jobs)"
   ensure_repo_command
+  ensure_anonymous_git_config
 
   local -a targets
   mapfile -t targets < <(normalize_targets "$@")
