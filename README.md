@@ -1,13 +1,10 @@
 <img width="2480" height="2064" alt="Screenshot From 2026-04-01 22-30-37" src="https://github.com/user-attachments/assets/24e59e40-5dfd-45c2-9d69-ed64f1155c6c" />
 
-# Android Cuttlefish+CrosVM for Fedora Asahi Remix
+# イカ (Ika, /ee-kah/)
 
-This repository is a fork of
-[google/android-cuttlefish](https://github.com/google/android-cuttlefish), adapted for RPM-based distributions like Fedora Asahi Remix. 
+This project originally started as an effort to get [Cuttlefish](https://source.android.com/setup/create/cuttlefish) (Google's Android Virtual Device built on Debian tooling) running on [Fedora Asahi Remix](https://asahilinux.org/), so the project was given the name **ika (イカ)**, the Japanese word for cuttlefish (or squid).
 
-[Cuttlefish](https://source.android.com/setup/create/cuttlefish) is a
-configurable Android Virtual Device (AVD) that runs on Linux x86_64 and
-aarch64 hosts as well as Google Compute Engine.
+The repository is a fork of [google/android-cuttlefish](https://github.com/google/android-cuttlefish), adapted for RPM-based distributions like Fedora Asahi Remix.  [Cuttlefish](https://source.android.com/setup/create/cuttlefish) is a configurable Android Virtual Device (AVD) that runs on Linux x86_64 and aarch64 hosts as well as Google Compute Engine.
 
 ## Quick start
 
