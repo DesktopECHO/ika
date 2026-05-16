@@ -234,11 +234,36 @@ Result<void> CreateBridge(std::string_view name) {
   return {};
 }
 
-Result<void> IptableConfig(std::string_view network, bool add) {
-  // TODO: Use NETLINK_NETFILTER.
-  CF_EXPECT(Execute({"iptables", "-t", "nat", add ? "-A" : "-D", "POSTROUTING",
-                     "-s", std::string(network), "-j", "MASQUERADE"}) == 0,
-            "IptableConfig");
+namespace {
+// Idempotent: `nft add table/set/chain` returns success if the object exists.
+// The masquerade rule itself is NOT idempotent on `add rule`, so we detect
+// it by listing the chain and grep-ing the rule's stable signature; only
+// emit `add rule` when absent. cvdalloc runs with ambient capabilities, so
+// the nft helpers we exec inherit CAP_NET_ADMIN the same way `iptables` did.
+// TODO: Use NETLINK_NETFILTER directly to remove the CLI dependency entirely.
+Result<void> NftEnsureTopology() {
+  (void)Execute({"nft", "add", "table", "ip", "cuttlefish"});
+  (void)Execute({"nft", "add", "set", "ip", "cuttlefish", "nat_sources",
+                 "{ type ipv4_addr; flags interval; }"});
+  (void)Execute({"nft", "add", "chain", "ip", "cuttlefish", "postrouting",
+                 "{ type nat hook postrouting priority 100; policy accept; }"});
+  if (Execute({"sh", "-c",
+               "nft list chain ip cuttlefish postrouting 2>/dev/null | "
+               "grep -q 'ip saddr @nat_sources masquerade'"}) != 0) {
+    (void)Execute({"nft", "add", "rule", "ip", "cuttlefish", "postrouting",
+                   "ip", "saddr", "@nat_sources", "masquerade"});
+  }
+  return {};
+}
+}  // namespace
+
+Result<void> NftConfig(std::string_view network, bool add) {
+  CF_EXPECT(NftEnsureTopology());
+  const std::string element =
+      std::string("{ ") + std::string(network) + " }";
+  CF_EXPECT(Execute({"nft", add ? "add" : "delete", "element", "ip",
+                     "cuttlefish", "nat_sources", element}) == 0,
+            "NftConfig");
   return {};
 }
 

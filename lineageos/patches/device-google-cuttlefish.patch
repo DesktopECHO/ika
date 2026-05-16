@@ -8,6 +8,8 @@ The goal is to make the guest identify and behave like a desktop virtual
 machine rather than a resized phone or tablet. That means removing mobile-only
 assumptions where the host is responsible for the hardware experience, while
 preserving the Cuttlefish pieces still needed for boot, graphics, and packaging.
+Host-side AVB key lookup is also pointed at the ROM/product bundle first, so
+the ROM owns its signing keys and empty host placeholders cannot shadow them.
 
 diff --git a/AndroidProducts.mk b/AndroidProducts.mk
 index ff5f2cc46..173663686 100644
@@ -395,6 +397,57 @@ index 000000000..5ef2f3b56
 +
 +# Ignore all Android.mk files
 +PRODUCT_IGNORE_ALL_ANDROIDMK := true
+diff --git a/host/libs/config/known_paths.cpp b/host/libs/config/known_paths.cpp
+index 7c13c08ab..0aeb14282 100644
+--- a/host/libs/config/known_paths.cpp
++++ b/host/libs/config/known_paths.cpp
+@@ -16,6 +16,7 @@
+ 
+ #include "host/libs/config/known_paths.h"
+ 
++#include "common/libs/utils/files.h"
+ #include "host/libs/config/config_utils.h"
+ 
+ namespace cuttlefish {
+@@ -136,18 +137,38 @@ std::string StopCvdBinary() { return HostBinaryPath("stop_cvd"); }
+ std::string TcpConnectorBinary() { return HostBinaryPath("tcp_connector"); }
+ 
+ std::string TestKeyRsa2048() {
++  const std::string product_path =
++      DefaultGuestImagePath("/etc/cvd_avb_testkey_rsa2048.pem");
++  if (FileHasContent(product_path)) {
++    return product_path;
++  }
+   return DefaultHostArtifactsPath("etc/cvd_avb_testkey_rsa2048.pem");
+ }
+ 
+ std::string TestKeyRsa4096() {
++  const std::string product_path =
++      DefaultGuestImagePath("/etc/cvd_avb_testkey_rsa4096.pem");
++  if (FileHasContent(product_path)) {
++    return product_path;
++  }
+   return DefaultHostArtifactsPath("etc/cvd_avb_testkey_rsa4096.pem");
+ }
+ 
+ std::string TestPubKeyRsa2048() {
++  const std::string product_path =
++      DefaultGuestImagePath("/etc/cvd_rsa2048.avbpubkey");
++  if (FileHasContent(product_path)) {
++    return product_path;
++  }
+   return DefaultHostArtifactsPath("etc/cvd_rsa2048.avbpubkey");
+ }
+ 
+ std::string TestPubKeyRsa4096() {
++  const std::string product_path =
++      DefaultGuestImagePath("/etc/cvd_rsa4096.avbpubkey");
++  if (FileHasContent(product_path)) {
++    return product_path;
++  }
+   return DefaultHostArtifactsPath("etc/cvd_rsa4096.avbpubkey");
+ }
+ 
 diff --git a/vsoc_x86_64_pgagnostic/BoardConfig.mk b/vsoc_x86_64_pgagnostic/BoardConfig.mk
 index 0d17ce85a..03597bc5a 100644
 --- a/vsoc_x86_64_pgagnostic/BoardConfig.mk

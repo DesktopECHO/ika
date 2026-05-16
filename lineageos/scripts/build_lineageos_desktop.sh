@@ -716,6 +716,19 @@ repair_soong_zero_byte_objects() {
   local intermediates="$workspace/out/soong/.intermediates"
   [[ -d "$intermediates" ]] || return 0
 
+  local -a bad_key_outputs=()
+  mapfile -t bad_key_outputs < <(
+    find "$intermediates/device/google/cuttlefish/build" \
+      -type f \
+      -name 'cvd_avb_testkey_rsa*.pem' \
+      -size 0 \
+      -print 2>/dev/null || true
+  )
+  if (( ${#bad_key_outputs[@]} > 0 )); then
+    log "removing ${#bad_key_outputs[@]} zero-size AVB key intermediate(s)"
+    rm -f "${bad_key_outputs[@]}"
+  fi
+
   local -a bad_objects
   mapfile -t bad_objects < <(find "$intermediates" -type f -name '*.o' -size 0 -print)
   (( ${#bad_objects[@]} == 0 )) && return 0
@@ -747,9 +760,11 @@ repair_zero_size_host_outputs() {
       "$dir"/bin/* \
       "$dir"/lib/*.so \
       "$dir"/lib64/*.so \
+      "$dir"/etc/cvd_avb_testkey_rsa*.pem \
       "$dir"/cvd-host_package/bin/* \
       "$dir"/cvd-host_package/lib/*.so \
-      "$dir"/cvd-host_package/lib64/*.so; do
+      "$dir"/cvd-host_package/lib64/*.so \
+      "$dir"/cvd-host_package/etc/cvd_avb_testkey_rsa*.pem; do
       [[ -f "$path" && ! -s "$path" ]] || continue
       bad_outputs+=("$path")
     done
@@ -1133,6 +1148,65 @@ valid_targz_archive() {
   tar -tzf "$path" >/dev/null 2>&1
 }
 
+valid_pem_private_key() {
+  local path="$1"
+  [[ -s "$path" ]] && grep -q 'BEGIN RSA PRIVATE KEY' "$path"
+}
+
+rom_avb_private_key() {
+  local bits="$1"
+  local key="$workspace/external/avb/test/data/testkey_rsa${bits}.pem"
+
+  [[ -f "$key" ]] || die "missing ROM AVB test private key: $key"
+  valid_pem_private_key "$key" || die "invalid ROM AVB test private key: $key"
+  printf '%s\n' "$key"
+}
+
+repair_cvd_host_package_avb_keys() {
+  local host_package="$1"
+  local tmp_dir tmp_package bits src dest repaired=0
+
+  valid_targz_archive "$host_package" || \
+    die "invalid Cuttlefish host package: $host_package"
+
+  tmp_dir="$(mktemp -d)"
+  if ! tar -xzf "$host_package" -C "$tmp_dir"; then
+    rm -rf "$tmp_dir"
+    die "failed to extract Cuttlefish host package: $host_package"
+  fi
+
+  mkdir -p "$tmp_dir/etc"
+  for bits in 2048 4096; do
+    src="$(rom_avb_private_key "$bits")"
+    dest="$tmp_dir/etc/cvd_avb_testkey_rsa${bits}.pem"
+    if valid_pem_private_key "$dest"; then
+      continue
+    fi
+    log "repairing $(basename "$host_package"): etc/cvd_avb_testkey_rsa${bits}.pem"
+    install -m 0644 "$src" "$dest"
+    repaired=1
+  done
+
+  if (( repaired )); then
+    tmp_package="${host_package}.tmp"
+    if ! tar -czf "$tmp_package" -C "$tmp_dir" .; then
+      rm -rf "$tmp_dir"
+      rm -f "$tmp_package"
+      die "failed to rewrite Cuttlefish host package: $host_package"
+    fi
+    mv "$tmp_package" "$host_package"
+  fi
+
+  for bits in 2048 4096; do
+    dest="$tmp_dir/etc/cvd_avb_testkey_rsa${bits}.pem"
+    valid_pem_private_key "$dest" || {
+      rm -rf "$tmp_dir"
+      die "Cuttlefish host package still has an invalid AVB key: $host_package:etc/cvd_avb_testkey_rsa${bits}.pem"
+    }
+  done
+  rm -rf "$tmp_dir"
+}
+
 valid_zip_container() {
   local path="$1"
   [[ -f "$path" && -s "$path" ]] || return 1
@@ -1435,6 +1509,7 @@ build_target() {
     mark_resume_checkpoint "build-$arch"
   fi
 
+  repair_cvd_host_package_avb_keys "$host_package"
   package_cvd_bundle "$arch" "$product" "$product_out" "$host_package" "$bundle_name" "${thin_files[@]}"
   bundle_dir_complete "$output_dir/$bundle_name" "${thin_files[@]}" || \
     die "packaging completed but $bundle_name/ is incomplete"

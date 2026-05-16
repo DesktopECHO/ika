@@ -37,7 +37,10 @@ Result<bool> BridgeInUse(std::string_view name);
 Result<bool> BridgeExists(std::string_view name);
 Result<bool> BridgeInUse(std::string_view name);
 Result<void> CreateBridge(std::string_view name);
-Result<void> IptableConfig(std::string_view network, bool add);
+// NAT-masquerade a source CIDR for a Cuttlefish bridge/tap. Implemented via
+// the native `nft` CLI against the `ip cuttlefish` table (see alloc_iproute2.cpp
+// or alloc_netlink.cpp). iptables/iptables-nft are no longer invoked.
+Result<void> NftConfig(std::string_view network, bool add);
 // Configure firewalld to allow/disallow traffic on an interface.
 // No-ops if firewalld is not installed or not running.
 void FirewallAddTrustedInterface(std::string_view interface_name);

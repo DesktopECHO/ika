@@ -138,8 +138,11 @@ reboot — see step 5 of the Quick start for the full list of what's deferred.
 Bazel is installed automatically through Bazelisk by
 [`tools/buildutils/installbazel.sh`](tools/buildutils/installbazel.sh).
 
-The networking helper uses `nftables` when `ebtables` is not installed, which
-matches the default on Asahi Fedora systems.
+The networking helper uses `nftables` exclusively — both the host-side
+bridge/NAT setup in `cuttlefish-host-resources.sh` and the per-user
+`cvdalloc` daemon manage their rules via native `nft` commands against a
+shared `ip cuttlefish` table. iptables (and `iptables-nft`) and ebtables
+are no longer runtime dependencies.
 
 ## Google Compute Engine
 

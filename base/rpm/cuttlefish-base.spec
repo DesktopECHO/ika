@@ -51,7 +51,6 @@ Requires:       bsdtar
 Requires:       curl
 Requires:       dnsmasq
 Requires:       iproute
-Requires:       iptables-nft
 Requires:       libcap
 Requires:       libdrm
 Requires:       libX11
@@ -69,7 +68,6 @@ Requires:       virglrenderer
 Requires:       wayland-utils
 Requires:       xdg-utils
 Requires:       xz-libs
-Recommends:     ebtables
 
 Requires(post): /usr/sbin/groupadd
 Requires(post): /usr/sbin/usermod
