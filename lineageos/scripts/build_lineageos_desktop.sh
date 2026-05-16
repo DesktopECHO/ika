@@ -13,6 +13,7 @@ update_microg_prebuilts="${UPDATE_MICROG_PREBUILTS:-1}"
 include_x86_arm_native_bridge="${INCLUDE_X86_ARM_NATIVE_BRIDGE:-1}"
 update_native_bridge_prebuilts="${UPDATE_NATIVE_BRIDGE_PREBUILTS:-1}"
 validate_build_inputs="${VALIDATE_BUILD_INPUTS:-1}"
+strict_bundle_validation="${STRICT_BUNDLE_VALIDATION:-0}"
 resume_build="${RESUME_BUILD:-0}"
 force_rebuild="${FORCE_REBUILD:-0}"
 if [[ -n "${WORKSPACE+x}" ]]; then
@@ -71,6 +72,13 @@ Environment:
   VALIDATE_BUILD_INPUTS
                         Run build-time source, prebuilt, userdata, and desktop
                         policy checks before compiling. Default: 1
+  STRICT_BUNDLE_VALIDATION
+                        Fail the build if package_cvd_bundle has to normalize
+                        any etc/cvd_config/*.json preset (empty / unparseable
+                        / non-object). Default 0 silently rewrites bad presets
+                        to {} with a log line so the bundle is launchable;
+                        set to 1 in CI / release builds to surface a corrupt
+                        Soong prebuilt instead of papering over it. Default: 0
   RESUME_BUILD          Reuse checkpointed setup, build, and package phases
                         from an interrupted run when their inputs match. A
                         completed run closes its build/package checkpoints, so
@@ -1277,9 +1285,13 @@ package_cvd_bundle() {
   # treats it as "no overrides", and log each replacement so future bundle
   # issues surface in the build log instead of going silently.
   if [[ -d "$bundle_dir/etc/cvd_config" ]]; then
-    python3 - "$bundle_dir/etc/cvd_config" <<'PY'
-import json, pathlib, sys
+    local normalize_status=0
+    STRICT_BUNDLE_VALIDATION="$strict_bundle_validation" \
+      python3 - "$bundle_dir/etc/cvd_config" <<'PY' || normalize_status=$?
+import json, os, pathlib, sys
 cfg_dir = pathlib.Path(sys.argv[1])
+strict = os.environ.get("STRICT_BUNDLE_VALIDATION", "0") == "1"
+rewritten = []
 for p in sorted(cfg_dir.glob("*.json")):
     try:
         ok = isinstance(json.loads(p.read_text(encoding="utf-8")), dict)
@@ -1288,9 +1300,21 @@ for p in sorted(cfg_dir.glob("*.json")):
     if ok:
         continue
     p.write_text("{}\n", encoding="utf-8")
+    rewritten.append(p.name)
     print(f"[lineage-desktop] normalized cvd_config preset to {{}}: {p.name}",
           file=sys.stderr)
+if rewritten and strict:
+    print(
+        "[lineage-desktop] STRICT_BUNDLE_VALIDATION=1: refusing to ship a bundle "
+        f"with {len(rewritten)} corrupt cvd_config preset(s): "
+        + ", ".join(rewritten),
+        file=sys.stderr,
+    )
+    sys.exit(1)
 PY
+    if (( normalize_status != 0 )); then
+      die "etc/cvd_config normalization failed in strict mode for $bundle_name"
+    fi
   fi
   write_fetcher_config "$bundle_dir" "${thin_files[@]}"
   write_release_metadata "$bundle_dir" "$arch" "$product" "$product_out" "${thin_files[@]}"
