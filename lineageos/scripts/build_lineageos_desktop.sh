@@ -776,6 +776,23 @@ repair_zero_size_host_outputs() {
   rm -f "${bad_outputs[@]}"
 }
 
+repair_zero_size_host_script_output() {
+  local module_subdir="$1"
+  local artifact="$2"
+  local module_dir="$workspace/out/soong/.intermediates/$module_subdir"
+
+  [[ -d "$module_dir" ]] || return 0
+
+  local -a bad_outputs=()
+  mapfile -t bad_outputs < <(
+    find "$module_dir" -type f -name "$artifact" -size 0 -print 2>/dev/null || true
+  )
+  (( ${#bad_outputs[@]} == 0 )) && return 0
+
+  log "removing stale zero-size host script output: $artifact"
+  rm -rf "$module_dir"
+}
+
 is_elf_file() {
   local path="$1"
   local magic
@@ -827,6 +844,9 @@ repair_corrupt_host_elf() {
 
 repair_corrupt_host_tools() {
   repair_zero_size_host_outputs
+  repair_zero_size_host_script_output external/crosvm/cuttlefish/common_crosvm crosvm
+  repair_zero_size_host_script_output device/google/cuttlefish_prebuilts/extract-ikconfig extract-ikconfig
+  repair_zero_size_host_script_output device/google/cuttlefish_prebuilts/extract-vmlinux extract-vmlinux
   repair_corrupt_host_elf lpmake system/extras/partition_tools/lpmake
   repair_corrupt_host_elf fs_config build/make/tools/fs_config/fs_config
   repair_corrupt_host_elf care_map_generator bootable/recovery/update_verifier/care_map_generator
@@ -840,6 +860,49 @@ repair_corrupt_host_tools() {
   repair_corrupt_host_elf liblog.so system/logging/liblog/liblog
   repair_corrupt_host_elf libcutils.so system/core/libcutils/libcutils
   repair_corrupt_host_elf libc++.so prebuilts/clang/host/linux-x86/libc++
+}
+
+repair_zero_size_fstab_outputs() {
+  local product="$1"
+  local product_out="$2"
+  [[ -d "$product_out" ]] || return 0
+
+  local -a bad_fstabs=()
+  mapfile -t bad_fstabs < <(
+    find "$product_out" \
+      \( -path '*/vendor_ramdisk/first_stage_ramdisk/system/etc/fstab.cf.*' \
+         -o -path '*/VENDOR_BOOT/RAMDISK/first_stage_ramdisk/system/etc/fstab.cf.*' \
+      \) \
+      -type f \
+      -size 0 \
+      -print 2>/dev/null || true
+  )
+  (( ${#bad_fstabs[@]} == 0 )) && return 0
+
+  log "removing ${#bad_fstabs[@]} zero-size vendor-ramdisk fstab output(s)"
+  rm -f "${bad_fstabs[@]}"
+  rm -f "$product_out/vendor_boot.img"
+  rm -f \
+    "$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip" \
+    "$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip.list" \
+    "$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip.list.list"
+}
+
+validate_fstab_file() {
+  local path="$1"
+
+  [[ -s "$path" ]] || die "missing or empty fstab: $path"
+  grep -q '/data f2fs' "$path" || die "fstab does not mount /data as f2fs: $path"
+  grep -q 'fileencryption=aes-256-xts:aes-256-hctr2' "$path" || \
+    die "fstab does not use HCTR2 filename encryption: $path"
+}
+
+validate_cvd_target_fstabs() {
+  local product_out="$1"
+
+  validate_fstab_file "$product_out/vendor/etc/fstab.cf.f2fs.hctr2"
+  validate_fstab_file \
+    "$product_out/vendor_ramdisk/first_stage_ramdisk/system/etc/fstab.cf.f2fs.hctr2"
 }
 
 resume_enabled() {
@@ -1148,6 +1211,44 @@ valid_targz_archive() {
   tar -tzf "$path" >/dev/null 2>&1
 }
 
+critical_host_package_zero_entries() {
+  local host_package="$1"
+
+  tar -tzvf "$host_package" 2>/dev/null | awk '
+    $1 ~ /^-/ && $3 == 0 {
+      name = $6
+      sub(/^\.\//, "", name)
+      if (name == "bin/crosvm" ||
+          name == "bin/extract-ikconfig" ||
+          name == "bin/extract-vmlinux") {
+        print name
+      }
+    }
+  '
+}
+
+cvd_host_package_critical_tools_complete() {
+  local host_package="$1"
+  [[ -f "$host_package" && -s "$host_package" ]] || return 1
+
+  local bad_entries
+  bad_entries="$(critical_host_package_zero_entries "$host_package")" || return 1
+  [[ -z "$bad_entries" ]]
+}
+
+repair_zero_size_cvd_host_package() {
+  local host_package="$1"
+  [[ -f "$host_package" ]] || return 0
+
+  local bad_entries
+  bad_entries="$(critical_host_package_zero_entries "$host_package")" || return 0
+  [[ -n "$bad_entries" ]] || return 0
+
+  log "removing Cuttlefish host package with zero-size critical tool(s): ${bad_entries//$'\n'/, }"
+  rm -f "$host_package" "${host_package%.tar.gz}.stamp"
+  rm -rf "${host_package%.tar.gz}"
+}
+
 valid_pem_private_key() {
   local path="$1"
   [[ -s "$path" ]] && grep -q 'BEGIN RSA PRIVATE KEY' "$path"
@@ -1245,6 +1346,7 @@ built_target_outputs_complete() {
 
   [[ -d "$product_out" ]] || return 1
   valid_targz_archive "$host_package" || return 1
+  cvd_host_package_critical_tools_complete "$host_package" || return 1
 
   local target_files="$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip"
   valid_zip_container "$target_files" || return 1
@@ -1457,6 +1559,8 @@ build_target() {
   log "building $product"
   repair_soong_zero_byte_objects
   repair_corrupt_host_tools
+  repair_zero_size_fstab_outputs "$product" "$product_out"
+  repair_zero_size_cvd_host_package "$host_package"
 
   if [[ "$arch" == "x86_64" ]]; then
     if enabled "$include_x86_arm_native_bridge"; then
@@ -1506,9 +1610,11 @@ build_target() {
       -j"$jobs"
     built_target_outputs_complete "$product" "$product_out" "$host_package" "${thin_files[@]}" || \
       die "build completed but expected outputs are missing for $product"
+    validate_cvd_target_fstabs "$product_out"
     mark_resume_checkpoint "build-$arch"
   fi
 
+  validate_cvd_target_fstabs "$product_out"
   repair_cvd_host_package_avb_keys "$host_package"
   package_cvd_bundle "$arch" "$product" "$product_out" "$host_package" "$bundle_name" "${thin_files[@]}"
   bundle_dir_complete "$output_dir/$bundle_name" "${thin_files[@]}" || \
