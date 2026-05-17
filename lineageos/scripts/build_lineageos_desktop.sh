@@ -453,6 +453,33 @@ run_anonymous_git_network() {
     "$@"
 }
 
+canonical_workspace_path() {
+  mkdir -p "$workspace"
+  (cd "$workspace" && pwd -P)
+}
+
+cleanup_workspace_path_metadata() {
+  local current marker previous
+  current="$(canonical_workspace_path)"
+  marker="$workspace/.lineage-desktop-workspace-path"
+  previous=""
+
+  if [[ -f "$marker" ]]; then
+    previous="$(<"$marker")"
+  fi
+
+  if [[ -n "$previous" && "$previous" != "$current" ]]; then
+    log "workspace moved from $previous to $current; removing stale generated path metadata"
+    rm -rf "$workspace/out/soong"
+    if [[ -d "$workspace/.repo" ]]; then
+      find "$workspace/.repo" -type f -name FETCH_HEAD -delete 2>/dev/null || true
+      find "$workspace/.repo" -type d -name logs -prune -exec rm -rf {} + 2>/dev/null || true
+    fi
+  fi
+
+  printf '%s\n' "$current" > "$marker"
+}
+
 normalize_targets() {
   if (( $# == 0 )); then
     printf '%s\n' arm64 x86_64
@@ -1638,6 +1665,7 @@ main() {
   log "using $jobs parallel build jobs ($highmem_jobs high-memory jobs)"
   ensure_repo_command
   ensure_anonymous_git_config
+  cleanup_workspace_path_metadata
 
   local -a targets
   mapfile -t targets < <(normalize_targets "$@")

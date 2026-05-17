@@ -214,6 +214,33 @@ index 769c3d3110df..e4f7942140f0 100644
      <!-- Allows an application to install a location provider into the Location Manager.
      <p>Not for use by third-party applications. -->
      <permission android:name="android.permission.INSTALL_LOCATION_PROVIDER"
+diff --git a/core/res/res/values/config.xml b/core/res/res/values/config.xml
+index fbe4c3280e49..6be578727562 100644
+--- a/core/res/res/values/config.xml
++++ b/core/res/res/values/config.xml
+@@ -575,6 +575,10 @@
+          docked if the dock is configured to enable the accelerometer. -->
+     <bool name="config_supportAutoRotation">true</bool>
+ 
++    <!-- If true, WindowManager keeps display rotation fixed at the natural rotation.
++         This is intended for desktop products where the host owns display geometry. -->
++    <bool name="config_lineageDesktopFreezeDisplayRotation">false</bool>
++
+     <!-- If true, allows rotation resolver service to help resolve screen rotation. -->
+     <bool name="config_allowRotationResolver">true</bool>
+ 
+diff --git a/core/res/res/values/symbols.xml b/core/res/res/values/symbols.xml
+index 819b7cc28e5a..089c370ab196 100644
+--- a/core/res/res/values/symbols.xml
++++ b/core/res/res/values/symbols.xml
+@@ -1884,6 +1884,7 @@
+   <java-symbol type="integer" name="config_motionPredictionOffsetNanos" />
+   <java-symbol type="bool" name="config_showNavigationBar" />
+   <java-symbol type="bool" name="config_supportAutoRotation" />
++  <java-symbol type="bool" name="config_lineageDesktopFreezeDisplayRotation" />
+   <java-symbol type="bool" name="config_allowRotationResolver" />
+   <java-symbol type="bool" name="config_dockedStackDividerFreeSnapMode" />
+   <java-symbol type="dimen" name="docked_stack_divider_thickness" />
 diff --git a/core/tests/coretests/src/android/window/DesktopExperienceFlagsTest.java b/core/tests/coretests/src/android/window/DesktopExperienceFlagsTest.java
 index 2c97c6601d7a..f6b6c5b6c63f 100644
 --- a/core/tests/coretests/src/android/window/DesktopExperienceFlagsTest.java
@@ -2024,3 +2051,58 @@ index 13df10cba055..031753be0302 100644
      private static final int DEFAULT_LANDSCAPE_FREEFORM_HEIGHT_DP = 600;
  
      private static final int DISPLAY_EDGE_OFFSET_DP = 27;
+diff --git a/services/core/java/com/android/server/wm/DisplayRotation.java b/services/core/java/com/android/server/wm/DisplayRotation.java
+index 1a70d3a6867b..1a2d992cf433 100644
+--- a/services/core/java/com/android/server/wm/DisplayRotation.java
++++ b/services/core/java/com/android/server/wm/DisplayRotation.java
+@@ -124,6 +124,7 @@ public class DisplayRotation {
+ 
+     public final boolean isDefaultDisplay;
+     private final boolean mSupportAutoRotation;
++    private final boolean mLineageDesktopFreezeDisplayRotation;
+     private final boolean mAllowRotationResolver;
+     private final int mLidOpenRotation;
+     private final int mCarDockRotation;
+@@ -261,6 +262,9 @@ public class DisplayRotation {
+         mCompatPolicyForImmersiveApps = initImmersiveAppCompatPolicy(service, displayContent);
+ 
+         mSupportAutoRotation = isAutoRotateSupported(mContext);
++        mLineageDesktopFreezeDisplayRotation =
++                mContext.getResources().getBoolean(
++                        R.bool.config_lineageDesktopFreezeDisplayRotation);
+         mAllowRotationResolver =
+                 mContext.getResources().getBoolean(R.bool.config_allowRotationResolver);
+         mLidOpenRotation = readRotation(R.integer.config_lidOpenRotation);
+@@ -268,7 +272,9 @@ public class DisplayRotation {
+         mDeskDockRotation = readRotation(R.integer.config_deskDockRotation);
+         mUndockedHdmiRotation = readRotation(R.integer.config_undockedHdmiRotation);
+ 
+-        int defaultRotation = readDefaultDisplayRotation(displayAddress, displayContent);
++        int defaultRotation = mLineageDesktopFreezeDisplayRotation
++                ? Surface.ROTATION_0
++                : readDefaultDisplayRotation(displayAddress, displayContent);
+         mRotation = defaultRotation;
+ 
+         mDisplayRotationCoordinator = displayRotationCoordinator;
+@@ -852,6 +858,9 @@ public class DisplayRotation {
+     }
+ 
+     boolean isRotationFrozen() {
++        if (mLineageDesktopFreezeDisplayRotation) {
++            return true;
++        }
+         if (!isDefaultDisplay) {
+             return mUserRotationMode == WindowManagerPolicy.USER_ROTATION_LOCKED;
+         }
+@@ -1109,6 +1118,11 @@ public class DisplayRotation {
+                 mUserRotationMode == WindowManagerPolicy.USER_ROTATION_LOCKED
+                         ? "USER_ROTATION_LOCKED" : "");
+ 
++        if (mLineageDesktopFreezeDisplayRotation) {
++            mLastSensorRotation = -1;
++            return Surface.ROTATION_0;
++        }
++
+         if (isFixedToUserRotation()) {
+             return mUserRotation;
+         }

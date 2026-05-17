@@ -20,6 +20,7 @@
     <bool name="config_showNavigationBar">true</bool>
     <bool name="config_navBarCanMove">false</bool>
     <bool name="config_supportAutoRotation">false</bool>
+    <bool name="config_lineageDesktopFreezeDisplayRotation">true</bool>
     <bool name="config_voice_capable">false</bool>
     <bool name="config_sms_capable">false</bool>
     <bool name="config_mobile_data_capable">false</bool>
