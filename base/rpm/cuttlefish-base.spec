@@ -261,6 +261,7 @@ install -Dpm0755 base/rpm/cuttlefish-host-resources.sh %{buildroot}/usr/libexec/
 install -Dpm0755 base/rpm/cuttlefish-add-user-to-groups.sh %{buildroot}/usr/libexec/cuttlefish/cuttlefish-add-user-to-groups
 install -Dpm0644 base/rpm/cuttlefish-host-resources.sysconfig %{buildroot}/etc/sysconfig/cuttlefish-host-resources
 install -Dpm0644 base/rpm/cuttlefish.xml %{buildroot}/etc/firewalld/zones/cuttlefish.xml
+install -Dpm0644 base/rpm/cuttlefish-tmpfiles.conf %{buildroot}/usr/lib/tmpfiles.d/cuttlefish.conf
 
 install -Dpm0644 base/rpm/71-cuttlefish-integration.rules %{buildroot}/usr/lib/udev/rules.d/71-cuttlefish-integration.rules
 install -Dpm0644 base/host/packages/cuttlefish-integration/etc/modprobe.d/cuttlefish-integration.conf %{buildroot}/etc/modprobe.d/cuttlefish-integration.conf
@@ -290,6 +291,7 @@ if ! getent group kvm >/dev/null 2>&1; then
   groupadd -r kvm >/dev/null 2>&1 || :
 fi
 mkdir -p /var/empty
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/cuttlefish.conf >/dev/null 2>&1 || :
 setcap cap_net_admin,cap_net_bind_service,cap_net_raw=+ep /usr/lib/cuttlefish-common/bin/cvdalloc >/dev/null 2>&1 || :
 /usr/sbin/sysctl --system >/dev/null 2>&1 || :
 /usr/libexec/cuttlefish/cuttlefish-add-user-to-groups || :
@@ -367,6 +369,7 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /etc/security/limits.d/1_cuttlefish.conf
 /etc/sysconfig/cuttlefish-host-resources
 /usr/lib/systemd/system/cuttlefish-host-resources.service
+/usr/lib/tmpfiles.d/cuttlefish.conf
 /usr/lib/udev/rules.d/70-cuttlefish-base.rules
 /usr/libexec/cuttlefish/cuttlefish-host-resources
 /usr/libexec/cuttlefish/cuttlefish-add-user-to-groups
