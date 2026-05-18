@@ -2088,7 +2088,9 @@ index 1a70d3a6867b..1a2d992cf433 100644
      }
  
      boolean isRotationFrozen() {
-+        if (mLineageDesktopFreezeDisplayRotation) {
++        if (mLineageDesktopFreezeDisplayRotation
++                || android.os.SystemProperties.getBoolean(
++                        "debug.ika.freeze_rotation", false)) {
 +            return true;
 +        }
          if (!isDefaultDisplay) {
@@ -2098,7 +2100,9 @@ index 1a70d3a6867b..1a2d992cf433 100644
                  mUserRotationMode == WindowManagerPolicy.USER_ROTATION_LOCKED
                          ? "USER_ROTATION_LOCKED" : "");
  
-+        if (mLineageDesktopFreezeDisplayRotation) {
++        if (mLineageDesktopFreezeDisplayRotation
++                || android.os.SystemProperties.getBoolean(
++                        "debug.ika.freeze_rotation", false)) {
 +            mLastSensorRotation = -1;
 +            return Surface.ROTATION_0;
 +        }

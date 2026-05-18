@@ -368,10 +368,9 @@ sc_screen_update_content_rect(struct sc_screen *screen) {
         if (screen->resize_display_using_pixel_size
                 && screen->last_requested_display_size.width
                 && screen->last_requested_display_size.height) {
-            // Direct Display requests the guest size in render-output pixels,
-            // then rounds down to the server's 8-pixel alignment. Keep the
-            // rendered frame at exactly that aligned size so windowed HiDPI
-            // sessions do not stretch a few extra compositor pixels.
+            // Direct Display requests the guest size in render-output pixels
+            // with no codec alignment applied. Keep the rendered frame at
+            // exactly that size so the rect and the frame are always 1:1.
             struct sc_size requested_size =
                 get_oriented_size(screen->last_requested_display_size,
                                   screen->orientation);
@@ -671,7 +670,10 @@ end:
     sc_screen_render_window_border(screen);
     sc_sdl_render_present(renderer);
     if (screen->window_shown) {
-        // Safety net for compositors/backends that miss resize events.
+        // Secondary backstop: some Wayland compositors swallow resize events.
+        // SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED covers the primary DPI path;
+        // this catches any residual misses. Returns immediately (O(1)) when
+        // the window size hasn't changed since the last request.
         sc_screen_maybe_request_display_resize(screen, false);
     }
 }
@@ -737,6 +739,12 @@ sc_screen_resize_cuttlefish_physical_display(struct sc_screen *screen,
         NULL,
     };
 
+    // Reap any still-running resize child before spawning a new one.
+    if (screen->cuttlefish_resize_pid != SC_PROCESS_NONE) {
+        sc_process_close(screen->cuttlefish_resize_pid);
+        screen->cuttlefish_resize_pid = SC_PROCESS_NONE;
+    }
+
     sc_pid pid;
     enum sc_process_result result =
         sc_process_execute(argv, &pid, SC_PROCESS_NO_STDOUT
@@ -746,11 +754,9 @@ sc_screen_resize_cuttlefish_physical_display(struct sc_screen *screen,
         return;
     }
 
-    sc_exit_code exit_code = sc_process_wait(pid, true);
-    if (exit_code != 0) {
-        LOGD("Cuttlefish physical display resize failed with code %"
-             SC_PRIexitcode, exit_code);
-    }
+    // Don't block — let the resize command run concurrently with incoming
+    // frames. The pid is reaped at the next resize call or in destroy().
+    screen->cuttlefish_resize_pid = pid;
 }
 
 static void
@@ -779,9 +785,13 @@ sc_screen_maybe_request_display_resize(struct sc_screen *screen, bool force) {
         height = tmp;
     }
 
-    // Keep client and server normalization consistent.
-    width &= ~7;
-    height &= ~7;
+    // For encoded video the server rounds up to the codec's macroblock
+    // alignment; pre-round down here so both sides agree. Raw-frame paths
+    // (resize_display_using_pixel_size) have no encoder, so pass as-is.
+    if (!screen->resize_display_using_pixel_size) {
+        width &= ~7;
+        height &= ~7;
+    }
     if (!width || !height) {
         return;
     }
@@ -1537,6 +1547,9 @@ sc_screen_init(struct sc_screen *screen,
     screen->cuttlefish_frames_socket = params->cuttlefish_frames_socket;
     screen->cuttlefish_display_id = params->cuttlefish_display_id;
     screen->flex_display_dpi = params->flex_display_dpi;
+    screen->launch_display_dpi = params->flex_display_dpi;
+    screen->initial_display_scale = 1.0f;
+    screen->cuttlefish_resize_pid = SC_PROCESS_NONE;
     screen->last_requested_display_size.width = 0;
     screen->last_requested_display_size.height = 0;
     screen->last_resize_request_tick = 0;
@@ -1635,6 +1648,16 @@ sc_screen_init(struct sc_screen *screen,
     if (!SDL_SetWindowMinimumSize(screen->window, SC_WINDOW_MIN_WIDTH,
                                   SC_WINDOW_MIN_HEIGHT)) {
         LOGW("Could not set window minimum size: %s", SDL_GetError());
+    }
+
+    if (screen->flex_display && screen->launch_display_dpi) {
+        SDL_DisplayID disp = SDL_GetDisplayForWindow(screen->window);
+        if (disp) {
+            float scale = SDL_GetDisplayContentScale(disp);
+            if (scale > 0.0f) {
+                screen->initial_display_scale = scale;
+            }
+        }
     }
 
     if (!SDL_SetWindowHitTest(screen->window, sc_screen_window_hit_test,
@@ -1920,6 +1943,9 @@ sc_screen_destroy(struct sc_screen *screen) {
     if (screen->resize_settle_timer) {
         SDL_RemoveTimer(screen->resize_settle_timer);
     }
+    if (screen->cuttlefish_resize_pid != SC_PROCESS_NONE) {
+        sc_process_close(screen->cuttlefish_resize_pid);
+    }
     sc_screen_raw_frame_clear(screen, true);
     sc_screen_raw_frame_clear(screen, false);
     for (size_t i = 0; i < SC_RAW_FRAME_BUFFER_POOL_SIZE; ++i) {
@@ -2188,10 +2214,17 @@ sc_screen_apply_raw_frame(struct sc_screen *screen) {
     struct sc_size new_frame_size = screen->raw_frame.is_dmabuf
                                   ? screen->raw_frame.size
                                   : raw_view.size;
-    if (screen->flex_display
-            && screen->transient_stretch
-            && sc_screen_resize_blur_hold_elapsed(screen, sc_tick_now())) {
-        screen->transient_stretch = false;
+    if (screen->flex_display && screen->transient_stretch) {
+        uint16_t req_w = screen->last_requested_display_size.width;
+        uint16_t req_h = screen->last_requested_display_size.height;
+        bool frame_matched = req_w && req_h
+            && new_frame_size.width == req_w
+            && new_frame_size.height == req_h;
+        // Exit blur immediately when the first frame at the requested
+        // dimensions arrives; fall back to the timer if it takes too long.
+        if (frame_matched || sc_screen_resize_blur_hold_elapsed(screen, sc_tick_now())) {
+            screen->transient_stretch = false;
+        }
     }
 
     if (screen->frame_size.width != new_frame_size.width
@@ -2617,6 +2650,29 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
                 return;
             }
             break;
+        case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+            // Window moved to a display with a different content scale (DPI
+            // ratio). Recompute flex_display_dpi proportionally and force an
+            // immediate resize so Android's font/icon density stays correct.
+            if (screen->flex_display && screen->launch_display_dpi
+                    && screen->initial_display_scale > 0.0f) {
+                SDL_DisplayID disp = SDL_GetDisplayForWindow(screen->window);
+                if (disp) {
+                    float new_scale = SDL_GetDisplayContentScale(disp);
+                    if (new_scale > 0.0f) {
+                        float ratio = new_scale / screen->initial_display_scale;
+                        uint16_t new_dpi =
+                            (uint16_t)(screen->launch_display_dpi * ratio + 0.5f);
+                        if (new_dpi < 1) new_dpi = 1;
+                        screen->flex_display_dpi = new_dpi;
+                        LOGD("Display scale changed (%.2f→%.2f), DPI %u→%u",
+                             screen->initial_display_scale, new_scale,
+                             screen->launch_display_dpi, new_dpi);
+                        sc_screen_maybe_request_display_resize(screen, true);
+                    }
+                }
+            }
+            return;
 // If defined, then the actions are already performed by the event watcher
 #ifndef CONTINUOUS_RESIZING_WORKAROUND
         case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:

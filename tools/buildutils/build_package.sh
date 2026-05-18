@@ -337,6 +337,7 @@ mkdir -p \
   "${RPMBUILD_TOPDIR}/RPMS" \
   "${RPMBUILD_TOPDIR}/SOURCES" \
   "${RPMBUILD_TOPDIR}/SPECS" \
+  "${RPMBUILD_TOPDIR}/SRPMS" \
   "${RPMBUILD_WORK_ROOT}"
 
 refresh_source_tarball_if_needed
@@ -397,9 +398,10 @@ for spec in "${specs[@]}"; do
     --define "_topdir ${RPMBUILD_TOPDIR}" \
     --define "_sourcedir ${RPMBUILD_TOPDIR}/SOURCES" \
     --define "_rpmdir ${RPMBUILD_TOPDIR}/RPMS" \
+    --define "_srcrpmdir ${RPMBUILD_TOPDIR}/SRPMS" \
     --define "_builddir ${spec_workdir}/BUILD" \
     --define "_buildrootdir ${spec_workdir}/BUILDROOT" \
-    -bb "${spec}"
+    -ba "${spec}"
 done
 popd
 

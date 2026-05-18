@@ -1,6 +1,6 @@
 Name:           ika-base
 Version:        1.51.0
-Release:        2%{?dist}
+Release:        5%{?dist}
 Summary:        Cuttlefish Android Virtual Device host packages for Fedora
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish
@@ -398,6 +398,12 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/lib/cuttlefish-metrics
 
 %changelog
+* Sun May 18 2026 DesktopECHO <tv@441.surf> - 1.51.0-5
+- Create /var/tmp/cvd via tmpfiles.d (mode 1770, root:cvdnetwork) so
+  cvdalloc dnsmasq can write pid/lease files without requiring cvd CLI
+- Persist net.ipv6.conf.all.forwarding=1 in sysctl.d alongside ipv4
+- Increase ika boot timeout from 120s to 180s for software-rendering hosts
+
 * Mon Apr 20 2026 Daniel Milisic <dmilisic@desktopecho.com> - 1.51.0-4
 - Rebase Fedora packaging onto android-cuttlefish 1.51.0
 

@@ -23,6 +23,7 @@
 #include "trait/key_processor.h"
 #include "trait/frame_sink.h"
 #include "trait/mouse_processor.h"
+#include "util/process.h"
 #include "util/tick.h"
 
 #ifdef __APPLE__
@@ -87,6 +88,9 @@ struct sc_screen {
     const char *cuttlefish_frames_socket;
     uint32_t cuttlefish_display_id;
     uint16_t flex_display_dpi;
+    uint16_t launch_display_dpi;    // flex_display_dpi at init, for DPI ratio
+    float initial_display_scale;    // host display scale at init, for DPI ratio
+    sc_pid cuttlefish_resize_pid;   // async resize child, reaped before next spawn
     sc_tick last_resize_request_tick;
     bool initial_window_show_deferred;
     struct sc_size initial_display_size;

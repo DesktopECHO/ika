@@ -800,25 +800,26 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
             nd.setDisplaySize(width, height, dpi);
         } else if ((surfaceCapture instanceof ScreenCapture || surfaceCapture == null)
                 && flexDisplay && displayId == 0) {
-            // Many encoders require dimensions aligned to at least 8 pixels.
-            // Apply the same normalization before updating display 0 to avoid
-            // immediate size coercion by the encoder.
             if (width <= 0 || height <= 0) {
                 Ln.w("Primary display resize ignored: invalid size " + width
                         + "x" + height);
                 return;
             }
-            int alignedWidth = alignUp(Math.max(width, PRIMARY_DISPLAY_MIN_WIDTH),
-                    DISPLAY_SIZE_ALIGNMENT);
-            int alignedHeight = alignUp(Math.max(height, PRIMARY_DISPLAY_MIN_HEIGHT),
-                    DISPLAY_SIZE_ALIGNMENT);
-
-            if (alignedWidth != width || alignedHeight != height) {
-                Ln.v("Align primary display resize " + width + "x" + height
-                        + " -> " + alignedWidth + "x" + alignedHeight);
+            int finalWidth = Math.max(width, PRIMARY_DISPLAY_MIN_WIDTH);
+            int finalHeight = Math.max(height, PRIMARY_DISPLAY_MIN_HEIGHT);
+            if (surfaceCapture instanceof ScreenCapture) {
+                // Many encoders require dimensions aligned to at least 8 pixels.
+                int alignedWidth = alignUp(finalWidth, DISPLAY_SIZE_ALIGNMENT);
+                int alignedHeight = alignUp(finalHeight, DISPLAY_SIZE_ALIGNMENT);
+                if (alignedWidth != finalWidth || alignedHeight != finalHeight) {
+                    Ln.v("Align primary display resize " + width + "x" + height
+                            + " -> " + alignedWidth + "x" + alignedHeight);
+                }
+                finalWidth = alignedWidth;
+                finalHeight = alignedHeight;
             }
 
-            Size requestedSize = new Size(alignedWidth, alignedHeight);
+            Size requestedSize = new Size(finalWidth, finalHeight);
             if (requestedSize.equals(lastPrimaryDisplaySizeRequest)
                     && dpi == lastPrimaryDisplayDpiRequest) {
                 return;
