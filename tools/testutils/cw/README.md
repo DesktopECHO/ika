@@ -15,10 +15,10 @@ sudo setfacl -m "u:$(whoami):rw" /dev/vhost-vsock
 
 ## Build the image
 
-The build image command must be run at the root of the `android-cuttlefish` repo directory.
+The build image command must be run at the root of the `ika` repo directory.
 
-Image creation expects cuttlefish RPM packages: `cuttlefish-base-*.rpm`,
-`cuttlefish-user-*.rpm` and `cuttlefish-orchestration-*.rpm` in the
+Image creation expects ika RPM packages: `ika-base-*.rpm`,
+`ika-metrics-*.rpm`, `ika-user-*.rpm`, and `ika-orchestration-*.rpm` in the
 current directory.
 
 ```
@@ -29,7 +29,7 @@ podman build \
 ```
 
 ## Run the container
-The run container command must be run at the root of the `android-cuttlefish` repo directory.
+The run container command must be run at the root of the `ika` repo directory.
 
 ```
 mkdir -p /tmp/cw_bazel && \

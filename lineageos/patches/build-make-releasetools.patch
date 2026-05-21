@@ -1,0 +1,73 @@
+Patch summary:
+Keep target-files signing from crashing on embedded OTA zips that do not need
+boot OTA regeneration, and preserve a signed 16K boot image when present.
+
+Recent releasetools detects embedded payload OTA zips inside target_files and
+passes them through SignOtaPackage. For Cuttlefish page-size boot OTAs,
+RegenerateBootOTA can intentionally decide that no regenerated OTA is needed
+(for example the non-incremental 16K boot OTA), but it used to leave the temp
+OTA file empty. SignOtaPackage then opened that empty file as a zip and aborted
+with zipfile.BadZipFile.
+
+When regeneration is skipped, copy the original embedded OTA into the temp file
+so the normal payload-signing path still has a valid OTA zip to process.
+
+Also re-sign IMAGES/boot_16k.img and write it into the signed target-files zip.
+The normal boot image is regenerated during signing, but the 16K alternate boot
+image can otherwise be skipped because it is not named IMAGES/boot.img.
+
+diff --git a/tools/releasetools/sign_target_files_apks.py b/tools/releasetools/sign_target_files_apks.py
+index 73c4b50ce3..b78ae25bee 100755
+--- a/tools/releasetools/sign_target_files_apks.py
++++ b/tools/releasetools/sign_target_files_apks.py
+@@ -655,5 +655,13 @@ def RegenerateKernelPartitions(input_tf_zip: zipfile.ZipFile, output_tf_zip: zip
+     common.ZipWrite(output_tf_zip, boot_image, "IMAGES/boot.img",
+                     compress_type=zipfile.ZIP_STORED)
++  boot_16k_image = os.path.join(unzip_dir, "IMAGES", "boot_16k.img")
++  if os.path.exists(boot_16k_image):
++    signed_boot_16k_image = common.MakeTempFile()
++    shutil.copy(boot_16k_image, signed_boot_16k_image)
++    common._SignBootableImage(signed_boot_16k_image, "boot.img", "boot", misc_info)
++    common.ZipWrite(output_tf_zip, signed_boot_16k_image, "IMAGES/boot_16k.img",
++                    compress_type=zipfile.ZIP_STORED)
++
+   if misc_info.get("has_dtbo") == "true":
+     add_img_to_target_files.AddDtbo(output_tf_zip)
+   return unzip_dir
+@@ -660,6 +668,13 @@ def RegenerateKernelPartitions(input_tf_zip: zipfile.ZipFile, output_tf_zip: zip
+ 
+ 
+ def RegenerateBootOTA(input_tf_zip: zipfile.ZipFile, filename, input_ota):
++  def CopyOriginalOta():
++    input_ota.seek(0)
++    input_ota.truncate()
++    with input_tf_zip.open(filename, "r") as in_fp:
++      shutil.copyfileobj(in_fp, input_ota)
++    input_ota.flush()
++
+   with input_tf_zip.open(filename, "r") as in_fp:
+     payload = update_payload.Payload(in_fp)
+   is_incremental = any([part.HasField('old_partition_info')
+@@ -667,12 +682,14 @@ def RegenerateBootOTA(input_tf_zip: zipfile.ZipFile, filename, input_ota):
+   is_boot_ota = filename.startswith(
+       "VENDOR/boot_otas/") or filename.startswith("SYSTEM/boot_otas/")
+   if not is_boot_ota:
++    CopyOriginalOta()
+     return
+   is_4k_boot_ota = filename in [
+       "VENDOR/boot_otas/boot_ota_4k.zip", "SYSTEM/boot_otas/boot_ota_4k.zip"]
+   # Only 4K boot image is re-generated, so if 16K boot ota isn't incremental,
+   # we do not need to re-generate
+   if not is_4k_boot_ota and not is_incremental:
++    CopyOriginalOta()
+     return
+ 
+   timestamp = str(payload.manifest.max_timestamp)
+@@ -681,6 +698,7 @@ def RegenerateBootOTA(input_tf_zip: zipfile.ZipFile, filename, input_ota):
+   signed_boot_image = os.path.join(unzip_dir, "IMAGES", "boot.img")
+   if not os.path.exists(signed_boot_image):
+     logger.warn("Need to re-generate boot OTA {} but failed to get signed boot image. 16K dev option will be impacted, after rolling back to 4K user would need to sideload/flash their device to continue receiving OTAs.")
++    CopyOriginalOta()
+     return
+   signed_dtbo_image = os.path.join(unzip_dir, "IMAGES", "dtbo.img")
+   if "dtbo" in partitions and not os.path.exists(signed_dtbo_image):

@@ -1,6 +1,10 @@
 The Debian Package cuttlefish-integration-gigabyte-arm64
 ----------------------------
 
+Note: this is the original Debian packaging note from upstream Cuttlefish. This
+fork also carries Fedora RPM packaging for `ika-integration-gigabyte-arm64`
+under `rpm/`.
+
 This is the package for Google's Gigabyte Ampere project.
 The purpose of this package is to be used on Gigabye Ampere server
 for running cuttlefish. Other platform doesn't need this package.

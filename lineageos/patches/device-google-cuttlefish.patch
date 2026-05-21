@@ -10,6 +10,9 @@ assumptions where the host is responsible for the hardware experience, while
 preserving the Cuttlefish pieces still needed for boot, graphics, and packaging.
 Host-side AVB key lookup is also pointed at the ROM/product bundle first, so
 the ROM owns its signing keys and empty host placeholders cannot shadow them.
+Desktop SELinux extensions cover expected graphics debug-property reads and
+host-driven shell helpers so normal boot, scrcpy, and resize/provisioning flows
+do not leave avoidable enforcing-mode denials behind.
 
 diff --git a/AndroidProducts.mk b/AndroidProducts.mk
 index ff5f2cc46..173663686 100644
@@ -151,6 +154,25 @@ index 4af2db17c..2312d08f5 100644
  ro.vendor.hwcomposer.display_finder_mode  u:object_r:vendor_hwcomposer_prop:s0 exact string
  ro.vendor.hwcomposer.display_framebuffer_format u:object_r:vendor_hwcomposer_prop:s0 exact string
  ro.vendor.hwcomposer.mode  u:object_r:vendor_hwcomposer_prop:s0 exact string
+diff --git a/shared/graphics/sepolicy/hal_graphics_allocator_default.te b/shared/graphics/sepolicy/hal_graphics_allocator_default.te
+new file mode 100644
+index 000000000..15d057768
+--- /dev/null
++++ b/shared/graphics/sepolicy/hal_graphics_allocator_default.te
+@@ -0,0 +1 @@
++get_prop(hal_graphics_allocator_default, vendor_graphics_debug_prop)
+diff --git a/shared/graphics/sepolicy/hal_graphics_composer.te b/shared/graphics/sepolicy/hal_graphics_composer.te
+index de1900f5f..7530e23e6 100644
+--- a/shared/graphics/sepolicy/hal_graphics_composer.te
++++ b/shared/graphics/sepolicy/hal_graphics_composer.te
+@@ -2,6 +2,7 @@ allow hal_graphics_composer_server hal_graphics_allocator_default_tmpfs:file read
+ allow hal_graphics_composer_server self:{ socket vsock_socket } create_socket_perms_no_ioctl;
+ 
+ get_prop(hal_graphics_composer_server, vendor_hwcomposer_prop)
++get_prop(hal_graphics_composer_server, vendor_graphics_debug_prop)
+ 
+ # Persistent memory for some hwcomposer configuration.
+ type hal_graphics_composer_pmem_device, dev_type;
 diff --git a/shared/overlays/SettingsProvider/Android.bp b/shared/overlays/SettingsProvider/Android.bp
 index 6ee5aac76..e5d6c48c4 100644
 --- a/shared/overlays/SettingsProvider/Android.bp
@@ -190,10 +212,12 @@ diff --git a/shared/sepolicy/system_ext/private/set_adb.te b/shared/sepolicy/sys
 index e66a3fa73..3048390b9 100644
 --- a/shared/sepolicy/system_ext/private/set_adb.te
 +++ b/shared/sepolicy/system_ext/private/set_adb.te
-@@ -9,3 +9,13 @@ allow set_adb servicemanager:binder call;
+@@ -9,3 +9,19 @@ allow set_adb servicemanager:binder call;
  allow set_adb settings_service:service_manager find;
  allow set_adb system_server:binder { call transfer };
  allow system_server set_adb:binder call;
++allow system_server set_adb:fd use;
++allow system_server set_adb:fifo_file write;
 +set_prop(set_adb, log_tag_prop)
 +
 +# Allow locksettings for first-boot provisioning
@@ -204,11 +228,77 @@ index e66a3fa73..3048390b9 100644
 +# cvd_display_resize.rc.
 +allow set_adb window_service:service_manager find;
 +allow set_adb activity_service:service_manager find;
++
++# Allow `cmd appops set` so set_adb.sh can grant microG GmsCore the
++# SYSTEM_ALERT_WINDOW appop on boot.
++allow set_adb appops_service:service_manager find;
+diff --git a/shared/sepolicy/vendor/google/system_app.te b/shared/sepolicy/vendor/google/system_app.te
+index 4677e9807..de5ab6dd8 100644
+--- a/shared/sepolicy/vendor/google/system_app.te
++++ b/shared/sepolicy/vendor/google/system_app.te
+@@ -1,3 +1,5 @@
+ # WLC
+ allow system_app hal_wireless_charger_service:service_manager find;
+ binder_call(system_app, hal_wireless_charger)
++
++get_prop(system_app, vendor_graphics_debug_prop)
+diff --git a/shared/sepolicy/vendor/init.te b/shared/sepolicy/vendor/init.te
+index 203bf5fc8..f7f1c1e91 100644
+--- a/shared/sepolicy/vendor/init.te
++++ b/shared/sepolicy/vendor/init.te
+@@ -19,6 +19,9 @@ allow init boot_block_device:lnk_file relabelto;
+ # init needs to tune block device
+ allow init sysfs_devices_block:file w_file_perms;
+ 
++# init writes bootreceiver trace event toggles under this tracefs instance.
++allow init debugfs_bootreceiver_tracing:dir write;
++
+ # /mnt/sdcard -> /storage/self/primary symlink is deprecated. Ignore attempts to
+ # create it. This denial is fixed in core policy in Android R aosp/943799.
+ dontaudit init tmpfs:lnk_file create;
+diff --git a/shared/sepolicy/vendor/shell.te b/shared/sepolicy/vendor/shell.te
+index 5b97180de..06a02fe22 100644
+--- a/shared/sepolicy/vendor/shell.te
++++ b/shared/sepolicy/vendor/shell.te
+@@ -1,4 +1,5 @@
+ allow shell serial_device:chr_file { getattr ioctl read write };
++allow shell idmap_exec:file rx_file_perms;
+ 
+ # b/303346666
+ dontaudit shell adbd:{ socket vsock_socket } rw_socket_perms_no_ioctl;
+diff --git a/shared/sepolicy/vendor/surfaceflinger.te b/shared/sepolicy/vendor/surfaceflinger.te
+index ffd04b70a..141ca75d6 100644
+--- a/shared/sepolicy/vendor/surfaceflinger.te
++++ b/shared/sepolicy/vendor/surfaceflinger.te
+@@ -1,2 +1,4 @@
+ allow surfaceflinger hal_graphics_composer_default:dir search;
+ allow surfaceflinger hal_graphics_composer_default:file r_file_perms;
++
++get_prop(surfaceflinger, vendor_graphics_debug_prop)
+diff --git a/shared/sepolicy/vendor/system_server.te b/shared/sepolicy/vendor/system_server.te
+index 7d0ceaad7..926cfa742 100644
+--- a/shared/sepolicy/vendor/system_server.te
++++ b/shared/sepolicy/vendor/system_server.te
+@@ -1,2 +1,4 @@
+ # Cuttlefish is still using the legacy wifi HAL (pre-HIDL)
+ get_prop(system_server, wifi_hal_prop)
++
++allow system_server shell:unix_stream_socket getopt;
+diff --git a/shared/sepolicy/vendor/te_macros b/shared/sepolicy/vendor/te_macros
+index c4f26eb0c..773933614 100644
+--- a/shared/sepolicy/vendor/te_macros
++++ b/shared/sepolicy/vendor/te_macros
+@@ -6,4 +6,5 @@ allow $1 gpu_device:dir { open read search };
+ allow $1 gpu_device:chr_file { getattr ioctl map open read write };
+ allow $1 graphics_device:chr_file { getattr };
+ allow $1 sysfs_gpu:file { getattr open read };
++get_prop($1, vendor_graphics_debug_prop)
+ ')
 diff --git a/shared/set_adb/set_adb.sh b/shared/set_adb/set_adb.sh
 index 67aece73f..931e14695 100644
 --- a/shared/set_adb/set_adb.sh
 +++ b/shared/set_adb/set_adb.sh
-@@ -1,2 +1,63 @@
+@@ -1,2 +1,64 @@
  #!/system/bin/sh
 -settings put global adb_enabled 1
 +
@@ -247,11 +337,12 @@ index 67aece73f..931e14695 100644
 +put_system accelerometer_rotation 0
 +put_system show_ime_with_hard_keyboard 0
 +
-+# Desktop windowing policy syspropsmust survive a user `setprop` clearing them; reassert each
-+# boot. These mirror desktop_windowing_policy.mk values; the sysprop wins over the resource
-+# default and is what the smoke test asserts.
-+setprop persist.wm.debug.enter_desktop_by_default_on_freeform_display true
-+setprop persist.wm.debug.force_desktop_first_on_default_display_for_testing true
++# microG GmsCore overlay appop. SYSTEM_ALERT_WINDOW is auto-granted to preinstalled apps but the
++# matching appop defaults to MODE_DEFAULT, which Settings.canDrawOverlays() treats as denied. That
++# makes microG's self-check report overlay permission as unchecked and can suppress pop-ups, push
++# notifications, and background sync. Re-assert MODE_ALLOWED each boot; the command is a no-op when
++# com.google.android.gms is absent (INCLUDE_MICROG=0).
++cmd appops set com.google.android.gms SYSTEM_ALERT_WINDOW allow >/dev/null 2>&1
 +
 +# Keep crash evidence in logcat/dropbox but avoid modal crash-report loops on the desktop.
 +put_global send_action_app_error 0

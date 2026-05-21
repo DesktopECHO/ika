@@ -2,7 +2,7 @@ git_override(
     module_name = "rootcanal",
     # Waiting on it to be registered on BCR:
     #   https://github.com/bazelbuild/bazel-central-registry/issues/5249
-    commit = "459df948f35015f615d8e8f08172783ffa331a98",
+    commit = "39d127f60747402c1fc07a067fcadabd1232b793",
     remote = "https://github.com/google/rootcanal.git",
     init_submodules = True,
     patch_strip = 1,

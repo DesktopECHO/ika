@@ -1813,7 +1813,7 @@ index 7f4965936a0a..6b464d466c64 100644
      private final AccessibilityManager mAccessibilityManager;
      private final NotificationWakeUpCoordinator mWakeUpCoordinator;
      private final PulseExpansionHandler mPulseExpansionHandler;
-@@ -478,11 +476,12 @@ public final class NotificationPanelViewController implements
+@@ -478,11 +476,13 @@ public final class NotificationPanelViewController implements
      private final SysUiState mSysUiState;
      private final SysUIStateDisplaysInteractor mSysUIStateDisplaysInteractor;
      private final Lazy<ShadeDisplaysRepository> mShadeDisplaysRepository;
@@ -1824,11 +1824,12 @@ index 7f4965936a0a..6b464d466c64 100644
 -    private boolean mDoubleTapToSleepEnabled;
 -    private GestureDetector mDoubleTapGesture;
 +    private boolean mDoubleTapNotificationAreaEnabled;
++    private boolean mExpandNotificationAreaGestureHandled;
 +    private GestureDetector mExpandNotificationAreaGesture;
  
      private final KeyguardIndicationController mKeyguardIndicationController;
      private int mHeadsUpInset;
-@@ -603,7 +602,6 @@ public final class NotificationPanelViewController implements
+@@ -603,7 +603,6 @@ public final class NotificationPanelViewController implements
              CommandQueue commandQueue,
              VibratorHelper vibratorHelper,
              LatencyTracker latencyTracker,
@@ -1836,7 +1837,7 @@ index 7f4965936a0a..6b464d466c64 100644
              AccessibilityManager accessibilityManager,
              @DisplayId int displayId,
              KeyguardUpdateMonitor keyguardUpdateMonitor,
-@@ -666,6 +664,7 @@ public final class NotificationPanelViewController implements
+@@ -666,6 +665,7 @@ public final class NotificationPanelViewController implements
              BlurConfig blurConfig,
              Lazy<ShadeDisplaysRepository> shadeDisplaysRepository,
              WindowRootViewBlurInteractor windowRootViewBlurInteractor,
@@ -1844,7 +1845,7 @@ index 7f4965936a0a..6b464d466c64 100644
              Context context) {
          mBlurConfig = blurConfig;
          mWindowRootViewBlurInteractor = windowRootViewBlurInteractor;
-@@ -753,6 +752,7 @@ public final class NotificationPanelViewController implements
+@@ -753,6 +753,7 @@ public final class NotificationPanelViewController implements
          mKeyguardStatusBarViewComponentFactory = keyguardStatusBarViewComponentFactory;
          mDepthController = notificationShadeDepthController;
          mContentResolver = contentResolver;
@@ -1852,7 +1853,7 @@ index 7f4965936a0a..6b464d466c64 100644
          mFragmentService = fragmentService;
          mStatusBarService = statusBarService;
          mSplitShadeStateController = splitShadeStateController;
-@@ -762,7 +762,6 @@ public final class NotificationPanelViewController implements
+@@ -762,7 +763,6 @@ public final class NotificationPanelViewController implements
          mShadeHeaderController = shadeHeaderController;
          mAnimateBack = predictiveBackAnimateShade();
          mFalsingCollector = falsingCollector;
@@ -1860,7 +1861,7 @@ index 7f4965936a0a..6b464d466c64 100644
          mWakeUpCoordinator = coordinator;
          mMainDispatcher = mainDispatcher;
          mAccessibilityManager = accessibilityManager;
-@@ -788,20 +787,17 @@ public final class NotificationPanelViewController implements
+@@ -788,20 +788,17 @@ public final class NotificationPanelViewController implements
          quickSettingsController.setFlingQsWithoutClickListener(this::onFlingQsWithoutClick);
          quickSettingsController.setExpansionHeightSetToMaxListener(this::onExpansionHeightSetToMax);
          shadeExpansionStateManager.addStateListener(this::onPanelStateChanged);
@@ -1873,7 +1874,7 @@ index 7f4965936a0a..6b464d466c64 100644
 -                    mPowerManager.goToSleep(e.getEventTime());
 -                }
 -                return true;
-+                return toggleNotificationArea();
++                return expandNotificationAreaOrBack();
              }
          });
 -        mDoubleTapToSleepObserver = new ContentObserver(handler) {
@@ -1885,23 +1886,34 @@ index 7f4965936a0a..6b464d466c64 100644
                          LineageSettings.System.DOUBLE_TAP_SLEEP_GESTURE,
                          mResources.getBoolean(org.lineageos.platform.internal.R.bool.
                                  config_dt2sGestureEnabledByDefault) ? 1 : 0) != 0;
-@@ -2783,6 +2779,15 @@ public final class NotificationPanelViewController implements
+@@ -2783,6 +2780,26 @@ public final class NotificationPanelViewController implements
          return mTouchHandler;
      }
  
-+    private boolean toggleNotificationArea() {
++    private boolean expandNotificationAreaOrBack() {
 +        if (isPanelExpanded() || mShadeController.isExpandedVisible()) {
-+            mShadeController.animateCollapseShade();
++            rollUpNotificationArea();
 +        } else {
 +            mShadeController.animateExpandShade();
 +        }
 +        return true;
 +    }
 +
++    private void rollUpNotificationArea() {
++        if (mQsController.isCustomizing()) {
++            mQsController.closeQsCustomizer();
++        } else if (mQsController.getExpanded()) {
++            animateCollapseQs(false);
++        } else if (canBeCollapsed()) {
++            onBackPressed();
++            mShadeController.animateCollapseShade();
++        }
++    }
++
      @Override
      public void updateSystemUiStateFlags() {
          if (SysUiState.DEBUG) {
-@@ -3716,8 +3721,8 @@ public final class NotificationPanelViewController implements
+@@ -3716,8 +3733,8 @@ public final class NotificationPanelViewController implements
              mConfigurationController.addCallback(mConfigurationListener);
              mContentResolver.registerContentObserver(LineageSettings.System.getUriFor(
                      LineageSettings.System.DOUBLE_TAP_SLEEP_GESTURE), false,
@@ -1912,7 +1924,7 @@ index 7f4965936a0a..6b464d466c64 100644
              // Theme might have changed between inflating this view and attaching it to the
              // window, so
              // force a call to onThemeChanged
-@@ -3728,7 +3733,7 @@ public final class NotificationPanelViewController implements
+@@ -3728,7 +3745,7 @@ public final class NotificationPanelViewController implements
  
          @Override
          public void onViewDetachedFromWindow(View v) {
@@ -1921,14 +1933,23 @@ index 7f4965936a0a..6b464d466c64 100644
              mFragmentService.getFragmentHostManager(mView)
                      .removeTagListener(QS.TAG, mQsController.getQsFragmentListener());
              mStatusBarStateController.removeCallback(mStatusBarStateListener);
-@@ -4060,8 +4065,8 @@ public final class NotificationPanelViewController implements
+@@ -4060,8 +4077,17 @@ public final class NotificationPanelViewController implements
                  return false;
              }
  
 -            if (mDoubleTapToSleepEnabled && !mPulsing && !mDozing) {
 -                mDoubleTapGesture.onTouchEvent(event);
 +            if (mDoubleTapNotificationAreaEnabled && !mPulsing && !mDozing) {
-+                mExpandNotificationAreaGesture.onTouchEvent(event);
++                if (mExpandNotificationAreaGesture.onTouchEvent(event)) {
++                    mExpandNotificationAreaGestureHandled = true;
++                }
++                if (mExpandNotificationAreaGestureHandled) {
++                    if (event.getActionMasked() == MotionEvent.ACTION_UP
++                            || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
++                        mExpandNotificationAreaGestureHandled = false;
++                    }
++                    return true;
++                }
              }
  
              // Make sure the next touch won't the blocked after the current ends.
@@ -1936,7 +1957,7 @@ diff --git a/packages/SystemUI/src/com/android/systemui/shade/QQSGestureListener
 index 1d241dec4f71..a0e5de139192 100644
 --- a/packages/SystemUI/src/com/android/systemui/shade/QQSGestureListener.kt
 +++ b/packages/SystemUI/src/com/android/systemui/shade/QQSGestureListener.kt
-@@ -18,12 +18,12 @@ package com.android.systemui.shade
+@@ -18,12 +18,13 @@ package com.android.systemui.shade
  
  import android.content.Context
  import android.database.ContentObserver
@@ -1947,18 +1968,21 @@ index 1d241dec4f71..a0e5de139192 100644
  import com.android.systemui.plugins.FalsingManager
  import com.android.systemui.plugins.statusbar.StatusBarStateController
 +import com.android.systemui.shade.domain.interactor.PanelExpansionInteractor
++import com.android.systemui.shade.domain.interactor.ShadeBackActionInteractor
  import com.android.systemui.statusbar.StatusBarState
  import com.android.systemui.statusbar.phone.CentralSurfaces
  import lineageos.providers.LineageSettings
-@@ -33,48 +33,56 @@ import javax.inject.Inject
+@@ -33,48 +34,70 @@ import javax.inject.Inject
  class QQSGestureListener @Inject constructor(
          private val context: Context,
          private val falsingManager: FalsingManager,
 -        private val powerManager: PowerManager,
          private val statusBarStateController: StatusBarStateController,
 +        private val panelExpansionInteractor: PanelExpansionInteractor,
++        private val quickSettingsController: QuickSettingsController,
          private val centralSurfaces: CentralSurfaces,
 +        private val shadeController: ShadeController,
++        private val shadeBackActionInteractor: ShadeBackActionInteractor,
  ) : GestureDetector.SimpleOnGestureListener() {
  
 -    private var doubleTapToSleepEnabled = false
@@ -2005,18 +2029,30 @@ index 1d241dec4f71..a0e5de139192 100644
                  !falsingManager.isFalseDoubleTap
          ) {
 -            powerManager.goToSleep(e.getEventTime())
-+            toggleNotificationArea()
++            expandNotificationAreaOrBack()
              return true
          }
          return false
      }
  
 +    @Suppress("DEPRECATION")
-+    private fun toggleNotificationArea() {
++    private fun expandNotificationAreaOrBack() {
 +        if (panelExpansionInteractor.isPanelExpanded || shadeController.isExpandedVisible) {
-+            shadeController.animateCollapseShade()
++            rollUpNotificationArea()
 +        } else {
 +            shadeController.animateExpandShade()
++        }
++    }
++
++    @Suppress("DEPRECATION")
++    private fun rollUpNotificationArea() {
++        if (quickSettingsController.isCustomizing) {
++            quickSettingsController.closeQsCustomizer()
++        } else if (quickSettingsController.expanded) {
++            shadeBackActionInteractor.animateCollapseQs(false)
++        } else if (shadeBackActionInteractor.canBeCollapsed()) {
++            shadeBackActionInteractor.onBackPressed()
++            shadeController.animateCollapseShade()
 +        }
 +    }
  }
@@ -2344,3 +2380,21 @@ index e6d3b0505cb2..7723811dc2ea 100644
          }
          if (mIsCustomHeaderGesture || mIsResizeGesture) {
              // The event will be handled by the custom window below or pilfered by resize
+diff --git a/services/core/java/com/android/server/pm/ScanPackageUtils.java b/services/core/java/com/android/server/pm/ScanPackageUtils.java
+index b7ae043d66ee..abc70ba892a6 100644
+--- a/services/core/java/com/android/server/pm/ScanPackageUtils.java
++++ b/services/core/java/com/android/server/pm/ScanPackageUtils.java
+@@ -441,10 +441,10 @@ public class ScanPackageUtils {
+                 pkgSetting.setPageSizeAppCompatFlags(parsedPackage.getPageSizeAppCompatFlags());
+             }
+
+-            // 16 KB is only support for 64 bit ABIs and for apps which are being installed
+-            // Check alignment. System, Apex and Platform packages should be page-agnostic now
++            // 16 KB is only supported for 64 bit ABIs. Apex and Platform packages are built
++            // page-agnostic by AOSP, but system /product/priv-app prebuilts (e.g. microG GmsCore)
++            // ship third-party native libs that may still be 4 KB-only, so include system apps.
+             if ((Build.SUPPORTED_64_BIT_ABIS.length > 0)
+-                    && !isSystemApp
+                     && !isApex
+                     && !isPlatformPackage) {
+                 NativeLibraryHelper.AlignmentResult res =

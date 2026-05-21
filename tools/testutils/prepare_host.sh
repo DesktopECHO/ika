@@ -5,10 +5,17 @@ set -e -x
 function install_pkgs() {
   local pkgdir="$1"
   shift
+  shopt -s nullglob
   for pkg in "$@"; do
-        echo "Installing package: ${pkg}"
-        sudo dnf install -y "${pkgdir}/${pkg}"-*.rpm
+    local rpm_paths=("${pkgdir}/${pkg}"-*.rpm "${pkgdir}/extras/${pkg}"-*.rpm)
+    if [[ "${#rpm_paths[@]}" -eq 0 ]]; then
+      echo "Missing package: ${pkg} under ${pkgdir} or ${pkgdir}/extras" >&2
+      exit 1
+    fi
+    echo "Installing package: ${pkg}"
+    sudo dnf install -y "${rpm_paths[@]}"
   done
+  shopt -u nullglob
 }
 
 function check_service_started() {
@@ -77,7 +84,7 @@ if [[ "${PKG_DIR}" == "" ]] || ! [[ -d "${PKG_DIR}" ]]; then
   exit 1
 fi
 
-install_pkgs "${PKG_DIR}" cuttlefish-base cuttlefish-metrics cuttlefish-user
+install_pkgs "${PKG_DIR}" ika-base ika-metrics ika-user
 
 maybe_check_service_started cuttlefish-host-resources
 load_kernel_modules kvm vhost-vsock vhost-net bridge

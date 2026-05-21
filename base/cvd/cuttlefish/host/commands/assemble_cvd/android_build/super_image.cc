@@ -48,6 +48,19 @@
 namespace cuttlefish {
 namespace {
 
+bool IsAndroidSparseImage(const std::string& path) {
+  static constexpr uint32_t kAndroidSparseMagic = 0xed26ff3a;
+
+  SharedFD fd = SharedFD::Open(path, O_RDONLY);
+  if (!fd->IsOpen()) {
+    return false;
+  }
+
+  uint32_t magic = 0;
+  ssize_t bytes_read = fd->Read(&magic, sizeof(magic));
+  return bytes_read == sizeof(magic) && magic == kAndroidSparseMagic;
+}
+
 bool HasSlotSuffix(const std::string_view name) {
   return absl::EndsWith(name, "_a") || absl::EndsWith(name, "_b");
 }
@@ -228,6 +241,9 @@ Result<std::unique_ptr<android::fs_mgr::LpMetadata>> SuperImageFromAndroidBuild(
   if (path = build.ImageFile(kSuperEmpty); path.ok()) {
     metadata = android::fs_mgr::ReadFromImageFile(*path);
   } else if (path = build.ImageFile(kSuper); path.ok()) {
+    if (IsAndroidSparseImage(*path)) {
+      return CF_ERRF("Skipping sparse super image metadata probe for '{}'", *path);
+    }
     metadata = android::fs_mgr::ReadMetadata(*path, 0);
   } else {
     return CF_ERR("No super.img or super_empty.img could be found");

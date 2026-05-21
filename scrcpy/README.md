@@ -2,7 +2,7 @@
 
 This is a fork of [scrcpy](https://github.com/Genymobile/scrcpy) used as the display system for the [ika](https://github.com/DesktopECHO/ika) project — a Cuttlefish (Android Virtual Device) host for Fedora Asahi Remix and other RPM-based distributions.
 
-The fork replaces scrcpy's normal ADB/USB video path with a direct Unix socket connection to the Cuttlefish frame server, removing the Android device dependency entirely. The result is a native desktop window that shows the Cuttlefish display at full render resolution and resizes the virtual hardware display dynamically as the window is resized.
+The fork replaces scrcpy's normal encoded video path with a direct Unix socket connection to the Cuttlefish frame server. Control, audio, clipboard, and `DISPLAY_READY` settle acknowledgements still use the normal scrcpy server path over ADB. The result is a native desktop window that shows the Cuttlefish display at full render resolution and resizes the virtual hardware display dynamically as the window is resized.
 
 ---
 
@@ -18,7 +18,10 @@ ika-scrcpy --video-source=cuttlefish-wayland \
            --display-id=0
 ```
 
-In this mode no Android device is needed on the host — the scrcpy server APK is not pushed or launched.
+Passing `--cuttlefish-frames-socket=PATH` is enough to select this mode; the
+explicit `--video-source=cuttlefish-wayland` flag is optional. The Android-side
+scrcpy server is still launched for control, audio, clipboard, and resize-settle
+messages, but it does not encode or stream display frames.
 
 ### 2. `cuttlefish_frame_source` — dedicated frame reader thread
 
@@ -44,9 +47,9 @@ Each header carries width, height, a DRM FourCC (e.g. `XR24`, `AB24`) for pixel 
 
 Pixel formats are translated from DRM FourCCs to SDL3 `SDL_PixelFormat` values before being handed to the renderer.
 
-### 4. `--flex-display` — live display resize
+### 4. `--flex-display` / `--dpi` — live display resize
 
-When `--flex-display` (or `--flex-display=DPI`) is passed, ika-scrcpy tells the Cuttlefish virtual hardware to resize its display whenever the window is resized.
+When `--flex-display`, `--flex-display=DPI`, or the ika alias `--dpi=DPI` is passed, ika-scrcpy tells the Cuttlefish virtual hardware to resize its display whenever the window is resized.
 
 The resize is issued by spawning `cvd display resize` as a child process:
 
@@ -91,7 +94,7 @@ To avoid repeated `malloc`/`free` calls for inline raw frames, a pool of four re
 | `--video-source=cuttlefish-wayland` | Use the Cuttlefish frame socket instead of ADB |
 | `--cuttlefish-frames-socket=PATH` | Path to the Cuttlefish display Unix socket |
 | `--display-id=N` | Which Cuttlefish display to show (default 0) |
-| `--flex-display[=DPI]` | Enable live window-to-display resize; optional DPI override (default 320) |
+| `--flex-display[=DPI]` / `--dpi=DPI` | Enable live window-to-display resize; optional DPI override (default 320 when not supplied by `ika`) |
 
 ---
 
@@ -105,4 +108,4 @@ To avoid repeated `malloc`/`free` calls for inline raw frames, a pool of four re
 
 ## What is not changed
 
-All upstream scrcpy features (ADB mirroring, audio forwarding, camera, HID input, recording, virtual displays, etc.) are preserved. The Cuttlefish path is a purely additive code path selected by `--video-source=cuttlefish-wayland`; all other `--video-source` values follow the unchanged upstream logic.
+All upstream scrcpy features (ADB mirroring, audio forwarding, camera, HID input, recording, virtual displays, etc.) are preserved. The Cuttlefish frame path is a purely additive video path selected by `--cuttlefish-frames-socket=PATH` or `--video-source=cuttlefish-wayland`; all other `--video-source` values follow the upstream logic.

@@ -2,7 +2,7 @@
 
 `cvd` is a command line tool that is the interface to running Cuttlefish host
 executables from AOSP. In this fork it is shipped through the
-`cuttlefish-base` host package, but it can also be compiled and run on its
+`ika-base` host package, but it can also be compiled and run on its
 own.
 
 ## Compiling and running

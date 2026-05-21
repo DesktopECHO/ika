@@ -21,27 +21,51 @@ docker build \
 The run container command must be run at the root of this repository checkout.
 
 Built RPMs are written under `rpmbuild/RPMS/`.
+The container entrypoint builds as the UID/GID that owns the mounted checkout,
+so generated files are not left owned by root on the host.
 
 ### base
 
 ```
-docker run -v=$PWD:/mnt/build -w /mnt/build android-cuttlefish-build:latest base
+docker run \
+  -e HOST_UID=$(id -u) \
+  -e HOST_GID=$(id -g) \
+  -v=$PWD:/mnt/build \
+  -w /mnt/build \
+  android-cuttlefish-build:latest base
 ```
 
 Persist bazel cache among executions.
 
 ```
-docker run -v=$HOME/.cache/bazel:/root/.cache/bazel  -v=$PWD:/mnt/build -w /mnt/build  android-cuttlefish-build:latest base
+mkdir -p out/cuttlefish-bazel
+docker run \
+  -e HOST_UID=$(id -u) \
+  -e HOST_GID=$(id -g) \
+  -e CUTTLEFISH_BAZEL_CACHE_ROOT=/mnt/build/out/cuttlefish-bazel \
+  -v=$PWD:/mnt/build \
+  -w /mnt/build \
+  android-cuttlefish-build:latest base
 ```
 
 ### container
 
 ```
-docker run -v=$PWD:/mnt/build -w /mnt/build android-cuttlefish-build:latest container
+docker run \
+  -e HOST_UID=$(id -u) \
+  -e HOST_GID=$(id -g) \
+  -v=$PWD:/mnt/build \
+  -w /mnt/build \
+  android-cuttlefish-build:latest container
 ```
 
 ### frontend
 
 ```
-docker run -v=$PWD:/mnt/build -w /mnt/build android-cuttlefish-build:latest frontend
+docker run \
+  -e HOST_UID=$(id -u) \
+  -e HOST_GID=$(id -g) \
+  -v=$PWD:/mnt/build \
+  -w /mnt/build \
+  android-cuttlefish-build:latest frontend
 ```

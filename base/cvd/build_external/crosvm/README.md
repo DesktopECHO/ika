@@ -4,12 +4,15 @@ Patches applied to upstream [crosvm](https://chromium.googlesource.com/crosvm/cr
 
 ## Patches
 
-### Behavioral / feature patches
+### gfxstream Vulkan policy
 
-#### `PATCH.crosvm-disable-gfxstream-vulkan-apple-16k.patch`
-- **Targets:** `crosvm_bin` (binary). File: `src/crosvm/gpu_config.rs`.
-- **What it does:** Auto-detects an Apple Silicon Linux host (aarch64 + `pagesize() > 4096` + `/proc/device-tree/compatible` containing `apple,`) and, on such hosts, clears the `gfxstream-vulkan` bit from `GpuParameters::capset_mask` and forces `use_vulkan = false`. The `gfxstream-gles` capset is left intact.
-- **Why:** On Asahi (16 KiB-page aarch64), the gfxstream-vulkan blob path hits a chain of alignment and `VmMemorySource` incompatibilities (`VmMemorySource::Vulkan is not compatible with fixed mapping into prepared memory region`, plus host KVM `EINVAL`s on `KVM_SET_USER_MEMORY_REGION`). Disabling the Vulkan capset and falling back to GLES sidesteps that path entirely until the upstream fixes (`b/323368701`) land.
+Gfxstream Vulkan is controlled by the packaged `ika` launcher instead:
+`ika start --gfxstream-vulkan=auto|off|on` maps to Cuttlefish
+`--gpu_context_types=...` when `--gpu_mode=gfxstream` is used. The default
+`auto` policy disables gfxstream Vulkan only on Apple Silicon hosts with
+16 KiB pages and leaves x86_64 behavior unchanged.
+
+### Behavioral / feature patches
 
 #### `PATCH.crosvm-composite-duplicate-components.patch`
 - **Targets:** `crosvm_bin` and the source `git_repository`. File: `disk/src/composite.rs`.
@@ -71,7 +74,7 @@ See `crosvm.MODULE.bazel`. The relevant blocks:
 
 | Target | Patches |
 |---|---|
-| `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-resize-display`, `crosvm-disable-gfxstream-vulkan-apple-16k` |
+| `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-resize-display` |
 | `crosvm_bin.annotation(crate = "mesa3d_util")` | `mesa3d_util-upstream-main-20260520` |
 | `crosvm_bin.annotation(crate = "devices")` | `crosvm-resize-display-devices` |
 | `crosvm_bin.annotation(crate = "rutabaga_gfx")` | `rutabaga_gfx_build_rs`, `rutabaga_gfx-upstream-main-20260520` |

@@ -9,8 +9,8 @@ interfere host environment of each other.
 
 ## User setup guide
 
-Execute following commands to register the yum repository containing
-`cuttlefish-podcvd` package on your machine.
+Execute following commands to register the upstream yum repository containing
+the `cuttlefish-podcvd` package on your machine.
 ```
 sudo curl -fsSL https://us-yum.pkg.dev/doc/repo-signing-key.gpg -o /etc/pki/rpm-gpg/RPM-GPG-KEY-android-cuttlefish
 sudo tee /etc/yum.repos.d/android-cuttlefish.repo > /dev/null <<'EOF'
@@ -24,15 +24,16 @@ EOF
 sudo dnf makecache
 ```
 
-Execute following commands to install `cuttlefish-podcvd` and setup your
-machine.
+Execute following commands to install `cuttlefish-podcvd` and set up your
+machine from the upstream repository.
 ```
 sudo dnf install cuttlefish-podcvd
 /usr/lib/cuttlefish-common/bin/cuttlefish-podcvd-prerequisites.sh
 ```
 
 Now it's available to execute `podcvd help` or `podcvd create` as you could
-execute `cvd help` or `cvd create` after installing `cuttlefish-base`.
+execute `cvd help` or `cvd create` after installing `cuttlefish-base` from
+upstream or `ika-base` from this fork.
 
 ## Development guide
 
@@ -40,10 +41,10 @@ execute `cvd help` or `cvd create` after installing `cuttlefish-base`.
 
 Execute `go build ./cmd/podcvd` from `container/src/podcvd` directory.
 
-### Manually build cuttlefish-podcvd RPM
+### Manually build the podcvd RPM
 
-[tools/buildutils/cw/README.md#container](/tools/buildutils/cw/README.md#container)
-describes how to build `cuttlefish-podcvd` RPM.
+[tools/buildutils/cw/README.md#container](../../../tools/buildutils/cw/README.md#container)
+describes how to build the local `ika-podcvd` RPM.
 
-Execute `sudo dnf install ./cuttlefish-podcvd-*.rpm` to install it on your
+Execute `sudo dnf install ./ika-podcvd-*.rpm` to install it on your
 machine.

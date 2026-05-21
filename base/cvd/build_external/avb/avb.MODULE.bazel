@@ -3,6 +3,6 @@ git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "g
 git_repository(
     name = "avb",
     build_file = "@//build_external/avb:BUILD.avb.bazel",
-    commit = "761178607206f4cb2af79ed9eec52d8cbd814adb",
+    commit = "a06971682bd7a1ee8048a57fc0a0df04353cf66b",
     remote = "https://android.googlesource.com/platform/external/avb",
 )

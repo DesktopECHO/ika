@@ -45,7 +45,7 @@
 #define RAW_FRAME_RESIZE_ACTIVE_MIN_INTERVAL SC_TICK_FROM_MS(33)
 #define SC_WINDOW_MIN_WIDTH 540
 #define SC_WINDOW_MIN_HEIGHT 540
-#define SC_WINDOW_RESIZE_BORDER 12
+#define SC_WINDOW_RESIZE_BORDER 8
 #define SC_WINDOW_DRAG_REGION_WIDTH 150
 #define SC_WINDOW_DRAG_REGION_HEIGHT 28
 #define SC_WINDOW_DRAG_HOLD_THRESHOLD SC_TICK_FROM_MS(220)
@@ -56,14 +56,18 @@
 //   _OFFSET — pixel step between ghost rings. Larger = wider, softer blur.
 //   _ALPHA  — per-ghost alpha (0-255) at full intensity. Scaled down as the
 //             fade decays so the blur softly disappears.
-#define FLEX_DISPLAY_BLUR_OFFSET 5.0f
-#define FLEX_DISPLAY_BLUR_ALPHA 12
+#define FLEX_DISPLAY_BLUR_OFFSET 8.0f
+#define FLEX_DISPLAY_BLUR_ALPHA 10
+// Blur fade-in duration while the resize is unsettled. This ramps the ghost
+// overlay in gradually instead of snapping to full blur as soon as the window
+// changes size.
+#define FLEX_DISPLAY_BLUR_FADE_IN_DURATION SC_TICK_FROM_MS(125)
 // Blur fade-out duration. When stability is signalled (DISPLAY_READY arrives
-// or the fallback fires), the blur ghost intensity decays linearly from 1.0
-// to 0.0 over this period rather than snapping off in one frame. The
-// underlying texture has already been swapped to the new content by the
-// time the fade begins, so the fade reveals the new content sharpening up.
-#define FLEX_DISPLAY_BLUR_FADE_DURATION SC_TICK_FROM_MS(250)
+// or the fallback fires), the blur ghost intensity decays linearly to 0.0 over
+// this period rather than snapping off in one frame. The underlying texture has
+// already been swapped to the new content by the time the fade begins, so the
+// fade reveals the new content sharpening up.
+#define FLEX_DISPLAY_BLUR_FADE_OUT_DURATION SC_TICK_FROM_MS(125)
 // Tick interval driving the fade animation; ~60 Hz is enough for a smooth
 // linear ramp without burning CPU.
 #define FLEX_DISPLAY_BLUR_FADE_INTERVAL_MS 16
@@ -468,7 +472,11 @@ sc_screen_start_blur_fade(struct sc_screen *screen);
 static void
 sc_screen_stop_blur_fade(struct sc_screen *screen);
 static float
+sc_screen_blur_fade_in_intensity(struct sc_screen *screen);
+static float
 sc_screen_blur_intensity(struct sc_screen *screen);
+static void
+sc_screen_start_blur_animation_timer(struct sc_screen *screen);
 
 static bool
 sc_screen_should_hold_resize_preview(struct sc_screen *screen) {
@@ -552,11 +560,11 @@ sc_screen_render_texture(struct sc_screen *screen, const SDL_FRect *geometry) {
                                     NULL, flip);
 }
 
-// Renders the texture stretched to full window with 28 low-alpha ghost
-// copies overlaid at small offsets. Ghost alpha is FLEX_DISPLAY_BLUR_ALPHA
-// scaled by `intensity` (0.0-1.0). intensity = 1.0 during the held phase;
-// intensity decays from 1.0 to 0.0 over FLEX_DISPLAY_BLUR_FADE_DURATION
-// when the fade is in progress.
+// Renders the texture stretched to full window with 28 low-alpha ghost copies
+// overlaid at small offsets. Ghost alpha is FLEX_DISPLAY_BLUR_ALPHA scaled by
+// `intensity` (0.0-1.0). During the held phase, intensity ramps up over
+// FLEX_DISPLAY_BLUR_FADE_IN_DURATION; once stability fires, it decays to 0.0
+// over FLEX_DISPLAY_BLUR_FADE_OUT_DURATION.
 static bool
 sc_screen_render_blurred_stretch(struct sc_screen *screen,
                                  const SDL_FRect *geometry,
@@ -639,16 +647,36 @@ sc_screen_render_window_border(struct sc_screen *screen) {
         return;
     }
 
-    SDL_SetRenderDrawColor(screen->renderer, 0x40, 0x40, 0x40, 0xff);
-    for (int i = 0; i < border_thickness; ++i) {
-        SDL_FRect rect = {
-            .x = i + 0.5f,
-            .y = i + 0.5f,
-            .w = render_size.width - (2 * i + 1.f),
-            .h = render_size.height - (2 * i + 1.f),
-        };
-        SDL_RenderRect(screen->renderer, &rect);
-    }
+    SDL_SetRenderDrawColor(screen->renderer, 0x33, 0x33, 0x33, 0xff);
+    const float t = border_thickness;
+    SDL_FRect top = {
+        .x = 0,
+        .y = 0,
+        .w = render_size.width,
+        .h = t,
+    };
+    SDL_FRect bottom = {
+        .x = 0,
+        .y = render_size.height - t,
+        .w = render_size.width,
+        .h = t,
+    };
+    SDL_FRect left = {
+        .x = 0,
+        .y = t,
+        .w = t,
+        .h = render_size.height - 2 * t,
+    };
+    SDL_FRect right = {
+        .x = render_size.width - t,
+        .y = t,
+        .w = t,
+        .h = render_size.height - 2 * t,
+    };
+    SDL_RenderFillRect(screen->renderer, &top);
+    SDL_RenderFillRect(screen->renderer, &bottom);
+    SDL_RenderFillRect(screen->renderer, &left);
+    SDL_RenderFillRect(screen->renderer, &right);
 }
 
 // render the texture to the renderer
@@ -694,12 +722,15 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
     if (screen->flex_display
             && (screen->transient_stretch || screen->blur_fade_start_tick)) {
         float intensity = screen->transient_stretch
-                        ? 1.0f
+                        ? sc_screen_blur_fade_in_intensity(screen)
                         : sc_screen_blur_intensity(screen);
         if (intensity <= 0.0f) {
-            // Fade completed since the last render — finalize and drop
-            // through to sharp render.
-            sc_screen_stop_blur_fade(screen);
+            // Fade-out completed since the last render — finalize and drop
+            // through to sharp render. During fade-in, intensity may be 0 on
+            // the first frame; keep the animation timer alive in that case.
+            if (screen->blur_fade_start_tick) {
+                sc_screen_stop_blur_fade(screen);
+            }
             ok = sc_screen_render_texture(screen, geometry);
         } else {
             ok = sc_screen_render_blurred_stretch(screen, geometry,
@@ -927,11 +958,18 @@ sc_screen_on_resize(struct sc_screen *screen) {
     if (screen->window_shown) {
         sc_screen_note_raw_frame_resize_activity(screen);
         if (screen->flex_display) {
-            // Cancel any in-flight fade so the blur snaps back to full
-            // intensity for the new drag.
-            sc_screen_stop_blur_fade(screen);
+            // Cancel any in-flight fade-out before starting a new blur
+            // fade-in for this resize.
+            if (screen->blur_fade_start_tick) {
+                sc_screen_stop_blur_fade(screen);
+            }
+            sc_tick now = sc_tick_now();
+            if (!screen->transient_stretch) {
+                screen->blur_fade_in_start_tick = now;
+                sc_screen_start_blur_animation_timer(screen);
+            }
             screen->transient_stretch = true;
-            screen->last_resize_event_tick = sc_tick_now();
+            screen->last_resize_event_tick = now;
             screen->first_matching_frame_tick = 0;
             sc_screen_schedule_resize_settle(screen);
         }
@@ -1001,33 +1039,58 @@ sc_screen_resize_settle_timer(void *userdata, SDL_TimerID timerID,
 }
 
 static float
+sc_screen_blur_fade_in_intensity(struct sc_screen *screen) {
+    if (!screen->blur_fade_in_start_tick) {
+        return 1.0f;
+    }
+    sc_tick elapsed = sc_tick_now() - screen->blur_fade_in_start_tick;
+    if (elapsed >= FLEX_DISPLAY_BLUR_FADE_IN_DURATION) {
+        return 1.0f;
+    }
+    return (float) elapsed / (float) FLEX_DISPLAY_BLUR_FADE_IN_DURATION;
+}
+
+static float
 sc_screen_blur_intensity(struct sc_screen *screen) {
     if (!screen->blur_fade_start_tick) {
         return 0.0f;
     }
     sc_tick elapsed = sc_tick_now() - screen->blur_fade_start_tick;
-    if (elapsed >= FLEX_DISPLAY_BLUR_FADE_DURATION) {
+    if (elapsed >= FLEX_DISPLAY_BLUR_FADE_OUT_DURATION) {
         return 0.0f;
     }
-    return 1.0f - (float) elapsed / (float) FLEX_DISPLAY_BLUR_FADE_DURATION;
+    float fade = 1.0f - (float) elapsed
+                       / (float) FLEX_DISPLAY_BLUR_FADE_OUT_DURATION;
+    return screen->blur_fade_start_intensity * fade;
 }
 
 static Uint32 SDLCALL
 sc_screen_blur_fade_timer(void *userdata, SDL_TimerID timerID,
                           Uint32 interval) {
     struct sc_screen *screen = userdata;
+    bool push_event = false;
     bool keep_firing = false;
 
     sc_mutex_lock(&screen->mutex);
-    if (screen->blur_fade_timer == timerID && screen->blur_fade_start_tick) {
-        keep_firing = true;
+    if (screen->blur_fade_timer == timerID) {
+        if (screen->blur_fade_start_tick) {
+            push_event = true;
+            keep_firing = true;
+        } else if (screen->transient_stretch
+                && screen->blur_fade_in_start_tick) {
+            push_event = true;
+            keep_firing = sc_tick_now() - screen->blur_fade_in_start_tick
+                        < FLEX_DISPLAY_BLUR_FADE_IN_DURATION;
+        }
     }
     sc_mutex_unlock(&screen->mutex);
 
-    if (keep_firing) {
+    if (push_event) {
         bool ok = sc_push_event(SC_EVENT_BLUR_FADE_TICK);
         (void) ok;
-        return interval;
+        if (keep_firing) {
+            return interval;
+        }
     }
 
     sc_mutex_lock(&screen->mutex);
@@ -1043,6 +1106,7 @@ sc_screen_stop_blur_fade(struct sc_screen *screen) {
     SDL_TimerID old_timer;
 
     screen->blur_fade_start_tick = 0;
+    screen->blur_fade_start_intensity = 0.0f;
 
     sc_mutex_lock(&screen->mutex);
     old_timer = screen->blur_fade_timer;
@@ -1055,12 +1119,7 @@ sc_screen_stop_blur_fade(struct sc_screen *screen) {
 }
 
 static void
-sc_screen_start_blur_fade(struct sc_screen *screen) {
-    if (!screen->flex_display || screen->blur_fade_start_tick) {
-        return;
-    }
-    screen->blur_fade_start_tick = sc_tick_now();
-
+sc_screen_start_blur_animation_timer(struct sc_screen *screen) {
     SDL_TimerID new_timer = SDL_AddTimer(FLEX_DISPLAY_BLUR_FADE_INTERVAL_MS,
                                          sc_screen_blur_fade_timer, screen);
     SDL_TimerID old_timer;
@@ -1072,6 +1131,18 @@ sc_screen_start_blur_fade(struct sc_screen *screen) {
     if (old_timer) {
         SDL_RemoveTimer(old_timer);
     }
+}
+
+static void
+sc_screen_start_blur_fade(struct sc_screen *screen) {
+    if (!screen->flex_display || screen->blur_fade_start_tick) {
+        return;
+    }
+    screen->blur_fade_start_intensity =
+        sc_screen_blur_fade_in_intensity(screen);
+    screen->blur_fade_in_start_tick = 0;
+    screen->blur_fade_start_tick = sc_tick_now();
+    sc_screen_start_blur_animation_timer(screen);
 }
 
 #if defined(__APPLE__) || defined(_WIN32)
@@ -1688,7 +1759,9 @@ sc_screen_init(struct sc_screen *screen,
     screen->first_matching_frame_tick = 0;
     screen->frame_content_hash = 0;
     screen->frame_content_changed_tick = 0;
+    screen->blur_fade_in_start_tick = 0;
     screen->blur_fade_start_tick = 0;
+    screen->blur_fade_start_intensity = 0.0f;
     screen->resize_settle_timer = 0;
     screen->blur_fade_timer = 0;
     screen->last_raw_frame_render_tick = 0;
@@ -2784,6 +2857,10 @@ sc_screen_on_resize_settled(struct sc_screen *screen) {
     sc_screen_maybe_request_display_resize(screen, true);
     if (sc_screen_snap_window_to_requested_pixel_size(screen)) {
         screen->last_resize_event_tick = now;
+        if (!screen->transient_stretch) {
+            screen->blur_fade_in_start_tick = now;
+            sc_screen_start_blur_animation_timer(screen);
+        }
         screen->transient_stretch = true;
         sc_screen_schedule_resize_settle(screen);
         return;

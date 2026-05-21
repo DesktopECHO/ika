@@ -22,8 +22,8 @@ sudo bash tools/buildutils/installbazel.sh
 # Validate NVIDIA driver installation.
 nvidia-smi
 
-rpm -q cuttlefish-base
-cvd_version=$(rpm -q --qf '%{VERSION}\n' cuttlefish-base)
+rpm -q ika-base
+cvd_version=$(rpm -q --qf '%{VERSION}\n' ika-base)
 echo "cvd version: ${cvd_version}"
 major=$(echo -n "${cvd_version}" | cut -d "." -f1)
 minor=$(echo -n "${cvd_version}" | cut -d "." -f2)

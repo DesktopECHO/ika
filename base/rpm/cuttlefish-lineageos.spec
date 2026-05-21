@@ -1,6 +1,6 @@
 Name:           ika-lineageos
 Version:        20260420
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        LineageOS for Cuttlefish host
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish
@@ -79,5 +79,8 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Sun May 24 2026 DesktopECHO <tv@441.surf> - 20260420-3
+- Bump generated RPM release to revision 3
+
 * Tue Mar 31 2026 Daniel Milisic <dmilisic@desktopecho.com> - 20260401-1
 - Package LineageOS as standalone RPM

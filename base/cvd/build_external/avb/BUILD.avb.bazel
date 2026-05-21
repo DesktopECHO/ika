@@ -24,6 +24,8 @@ cc_library(
         "libavb/avb_hashtree_descriptor.h",
         "libavb/avb_kernel_cmdline_descriptor.c",
         "libavb/avb_kernel_cmdline_descriptor.h",
+        "libavb/avb_mldsa.c",
+        "libavb/avb_mldsa.h",
         "libavb/avb_ops.h",
         "libavb/avb_property_descriptor.c",
         "libavb/avb_property_descriptor.h",
@@ -41,6 +43,7 @@ cc_library(
         "libavb/avb_version.c",
         "libavb/avb_version.h",
         "libavb/boringssl/avb_crypto_ops_impl.h",
+        "libavb/boringssl/mldsa.c",
         "libavb/boringssl/sha.c",
     ],
     includes = [

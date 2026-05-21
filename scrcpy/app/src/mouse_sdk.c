@@ -78,7 +78,10 @@ sc_mouse_processor_process_mouse_motion(struct sc_mouse_processor *mp,
     };
 
     if (!sc_controller_push_msg(m->controller, &msg)) {
-        LOGW("Could not request 'inject mouse motion event'");
+        // Mouse motion events fire at hundreds of Hz; a dropped one is
+        // expected if the control queue is full and not actionable for the
+        // user. Silently drop to keep the log clean.
+        (void) 0;
     }
 }
 

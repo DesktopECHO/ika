@@ -1,8 +1,9 @@
 # Container images
 
 We provide container images with installed Cuttlefish RPM packages inside,
-including `cuttlefish-base`, `cuttlefish-user`, and
-`cuttlefish-orchestration`.
+including `ika-base`, `ika-user`, and `ika-orchestration` for local dev
+builds. The upstream `stable`, `unstable`, and `nightly` modes still pull the
+Google-hosted `cuttlefish-*` packages from Artifact Registry.
 Currently it's available for x86_64 and ARM64 architectures.
 
 ## Download docker image
@@ -26,13 +27,13 @@ Please refer to [tools/buildutils/cw/README.md](../tools/buildutils/cw/README.md
 for containerized RPM builds, or use `./tools/buildutils/build_packages.sh`
 from the repo root.
 
-The dev container build copies `cuttlefish-*.rpm` from the repository root,
+The dev container build copies local `ika-*.rpm` files from the repository root,
 so stage the RPMs there before building the image:
 
 ```bash
-cp ./rpmbuild/RPMS/*/cuttlefish-base-*.rpm .
-cp ./rpmbuild/RPMS/*/cuttlefish-user-*.rpm .
-cp ./rpmbuild/RPMS/*/cuttlefish-orchestration-*.rpm .
+cp ./rpmbuild/RPMS/*/ika-base-*.rpm .
+cp ./rpmbuild/RPMS/*/extras/ika-user-*.rpm .
+cp ./rpmbuild/RPMS/*/extras/ika-orchestration-*.rpm .
 ```
 
 The `stable`, `unstable`, and `nightly` modes fetch packages from the
@@ -43,7 +44,7 @@ configured package repository and do not require local RPM files.
 Please run below command to build docker image manually.
 
 ```bash
-cd /path/to/asahi-cuttlefish
+cd /path/to/ika
 container/image/image-builder.sh -m dev -c docker
 ```
 
@@ -61,7 +62,7 @@ cuttlefish-orchestration latest 0123456789ab   2 minutes ago    690MB
 Please run below command to build podman image manually.
 
 ```bash
-cd /path/to/asahi-cuttlefish
+cd /path/to/ika
 sudo container/image/image-builder.sh -m dev -c podman
 ```
 

@@ -1,0 +1,20 @@
+Patch summary:
+Quiet an expected desktop/freeform input-window correction. Task input sinks can
+arrive with a token even though the input channel is intentionally absent; the
+dispatcher already self-heals by releasing the channel. Keep the correction but
+stop treating the common desktop path as an error.
+
+diff --git a/services/inputflinger/dispatcher/InputDispatcher.cpp b/services/inputflinger/dispatcher/InputDispatcher.cpp
+--- a/services/inputflinger/dispatcher/InputDispatcher.cpp
++++ b/services/inputflinger/dispatcher/InputDispatcher.cpp
+@@ -5542,8 +5542,8 @@ void InputDispatcher::setInputWindowsLocked(
+         // Ensure all tokens are null if the window has feature NO_INPUT_CHANNEL
+         const bool noInputWindow = info.inputConfig.test(WindowInfo::InputConfig::NO_INPUT_CHANNEL);
+         if (noInputWindow && window->getToken() != nullptr) {
+-            ALOGE("%s has feature NO_INPUT_WINDOW, but a non-null token. Clearing",
+-                  window->getName().c_str());
++            ALOGV("%s has feature NO_INPUT_WINDOW, but a non-null token. Clearing",
++                  window->getName().c_str());
+             window->releaseChannel();
+         }
+ 

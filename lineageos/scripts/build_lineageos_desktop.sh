@@ -79,6 +79,9 @@ Environment:
                         to {} with a log line so the bundle is launchable;
                         set to 1 in CI / release builds to surface a corrupt
                         Soong prebuilt instead of papering over it. Default: 0
+  STRICT_APEX_SIGNING   Fail target-files signing if any shipped APEX lacks a
+                        matching container and payload key in ANDROID_CERTS_DIR.
+                        Default: 1
   RESUME_BUILD          Reuse checkpointed setup, build, and package phases
                         from an interrupted run when their inputs match. A
                         completed run closes its build/package checkpoints, so
@@ -123,6 +126,7 @@ need_cmd() {
 }
 
 source "$script_dir/build_jobs.sh"
+source "$script_dir/signing_common.sh"
 
 enabled() {
   case "$1" in
@@ -391,6 +395,47 @@ except zipfile.BadZipFile as exc:
 
 if bad_member:
     raise SystemExit(f"{path}: corrupt zip member {bad_member}")
+PY
+}
+
+desktop_launcher_target_files_exclusive() {
+  local target_files_zip="$1"
+  [[ -f "$target_files_zip" && -s "$target_files_zip" ]] || return 1
+
+  python3 - "$target_files_zip" <<'PY'
+import sys
+import zipfile
+
+target_files = sys.argv[1]
+required = "SYSTEM_EXT/priv-app/Launcher3QuickStep/Launcher3QuickStep.apk"
+stale_prefixes = (
+    "SYSTEM_EXT/priv-app/Launcher3/",
+    "SYSTEM_EXT/priv-app/Launcher3Go/",
+    "SYSTEM_EXT/priv-app/Launcher3QuickStepGo/",
+    "SYSTEM_OTHER/system_ext/priv-app/Launcher3/",
+    "SYSTEM_OTHER/system_ext/priv-app/Launcher3Go/",
+    "SYSTEM_OTHER/system_ext/priv-app/Launcher3QuickStepGo/",
+)
+stale_product_overlays = (
+    "PRODUCT/overlay/Launcher3__",
+    "PRODUCT/overlay/Launcher3Go__",
+    "PRODUCT/overlay/Launcher3QuickStepGo__",
+)
+
+try:
+    with zipfile.ZipFile(target_files) as archive:
+        names = set(archive.namelist())
+except zipfile.BadZipFile:
+    raise SystemExit(1)
+
+if required not in names:
+    raise SystemExit(1)
+
+for name in names:
+    if any(name.startswith(prefix) for prefix in stale_prefixes):
+        raise SystemExit(1)
+    if any(name.startswith(prefix) for prefix in stale_product_overlays):
+        raise SystemExit(1)
 PY
 }
 
@@ -913,6 +958,61 @@ repair_zero_size_fstab_outputs() {
     "$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip" \
     "$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip.list" \
     "$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip.list.list"
+  rm -rf "$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files"
+}
+
+remove_stale_launcher3_outputs() {
+  local product="$1"
+  local product_out="$2"
+  [[ -d "$product_out" ]] || return 0
+
+  local -a stale_paths=(
+    "$product_out/system_ext/priv-app/Launcher3"
+    "$product_out/system_ext/priv-app/Launcher3Go"
+    "$product_out/system_ext/priv-app/Launcher3QuickStepGo"
+    "$product_out/system_other/system_ext/priv-app/Launcher3"
+    "$product_out/system_other/system_ext/priv-app/Launcher3Go"
+    "$product_out/system_other/system_ext/priv-app/Launcher3QuickStepGo"
+    "$product_out/product/overlay/Launcher3__${product}__auto_generated_rro_product.apk"
+    "$product_out/product/overlay/Launcher3Go__${product}__auto_generated_rro_product.apk"
+    "$product_out/product/overlay/Launcher3QuickStepGo__${product}__auto_generated_rro_product.apk"
+    "$product_out/dexpreopt_config/Launcher3_dexpreopt.config"
+    "$product_out/dexpreopt_config/Launcher3Go_dexpreopt.config"
+    "$product_out/dexpreopt_config/Launcher3QuickStepGo_dexpreopt.config"
+  )
+  local -a found=()
+  local path
+
+  for path in "${stale_paths[@]}"; do
+    [[ -e "$path" ]] && found+=("$path")
+  done
+
+  (( ${#found[@]} == 0 )) && return 0
+
+  log "removing stale non-QuickStep Launcher3 output(s)"
+  rm -rf "${found[@]}"
+  rm -f \
+    "$product_out/system_ext.img" \
+    "$product_out/super.img" \
+    "$product_out/vbmeta.img" \
+    "$product_out/vbmeta_system.img" \
+    "$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip" \
+    "$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip.list" \
+    "$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip.list.list" \
+    "$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files-signed.zip"
+  rm -rf "$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files"
+  rm -rf "$product_out/obj/PACKAGING/signed_images"
+}
+
+desktop_launcher_outputs_exclusive() {
+  local product_out="$1"
+  local target_files_zip="$2"
+
+  [[ -f "$product_out/system_ext/priv-app/Launcher3QuickStep/Launcher3QuickStep.apk" ]] || return 1
+  [[ ! -e "$product_out/system_ext/priv-app/Launcher3/Launcher3.apk" ]] || return 1
+  [[ ! -e "$product_out/system_ext/priv-app/Launcher3Go/Launcher3Go.apk" ]] || return 1
+  [[ ! -e "$product_out/system_ext/priv-app/Launcher3QuickStepGo/Launcher3QuickStepGo.apk" ]] || return 1
+  desktop_launcher_target_files_exclusive "$target_files_zip"
 }
 
 validate_fstab_file() {
@@ -1051,22 +1151,146 @@ mark_resume_checkpoint() {
   printf '%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$(resume_checkpoint_path "$name")"
 }
 
+signing_inputs_signature() {
+  local target_files_zip="$1"
+
+  python3 - "$overlay_dir" "$ANDROID_CERTS_DIR" "$target_files_zip" "${STRICT_APEX_SIGNING:-1}" <<'PY'
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+import sys
+
+overlay_dir = Path(sys.argv[1])
+cert_dir = Path(sys.argv[2])
+target_files = Path(sys.argv[3])
+strict_apex_signing = sys.argv[4]
+
+digest = hashlib.sha256()
+
+def add(label: str, value: str) -> None:
+    digest.update(label.encode())
+    digest.update(b"\0")
+    digest.update(value.encode())
+    digest.update(b"\0")
+
+def add_file(label: str, path: Path) -> None:
+    add(label, str(path))
+    if not path.exists():
+        add(label + "-missing", "1")
+        return
+    if path.is_symlink():
+        add(label + "-symlink", path.readlink().as_posix())
+        return
+    if not path.is_file():
+        add(label + "-non-file", "1")
+        return
+    stat = path.stat()
+    add(label + "-size", str(stat.st_size))
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+
+add("strict-apex-signing", strict_apex_signing)
+add("android-certs-dir", str(cert_dir))
+
+for rel in (
+    "scripts/sign_target_files.sh",
+    "scripts/signing_common.sh",
+    "scripts/generate_signing_keys.sh",
+    "patches/build-make-releasetools.patch",
+    "patches/series",
+):
+    add_file("signing-input", overlay_dir / rel)
+
+if target_files.exists():
+    stat = target_files.stat()
+    add("target-files", str(target_files))
+    add("target-files-size", str(stat.st_size))
+    add("target-files-mtime-ns", str(stat.st_mtime_ns))
+else:
+    add("target-files-missing", str(target_files))
+
+if cert_dir.exists():
+    for path in sorted(cert_dir.iterdir()):
+        name = path.name
+        if name.endswith(".pk8") or name.endswith(".pem"):
+            add_file("signing-key", path)
+else:
+    add("android-certs-missing", str(cert_dir))
+
+print(digest.hexdigest())
+PY
+}
+
+signing_stamp_path() {
+  local signed_images_dir="$1"
+  printf '%s/.lineage_desktop_signing_inputs.sha256\n' "$signed_images_dir"
+}
+
+signing_outputs_current() {
+  local signed_target_files_zip="$1"
+  local signed_images_dir="$2"
+  local target_files_zip="$3"
+  local expected_signature="$4"
+  local stamp
+
+  [[ -n "$expected_signature" ]] || return 1
+  [[ -f "$target_files_zip" ]] || return 1
+  [[ -f "$signed_target_files_zip" && -d "$signed_images_dir" ]] || return 1
+  [[ "$signed_target_files_zip" -nt "$target_files_zip" ]] || return 1
+  [[ -f "$signed_images_dir/vbmeta.img" ]] || return 1
+  [[ -f "$signed_images_dir/super.img" ]] || return 1
+  [[ -f "$signed_images_dir/misc_info.txt" ]] || return 1
+  desktop_launcher_target_files_exclusive "$signed_target_files_zip" || return 1
+
+  stamp="$(signing_stamp_path "$signed_images_dir")"
+  [[ -f "$stamp" ]] || return 1
+  [[ "$(<"$stamp")" == "$expected_signature" ]]
+}
+
+write_signing_inputs_stamp() {
+  local signed_images_dir="$1"
+  local signature="$2"
+  printf '%s\n' "$signature" > "$(signing_stamp_path "$signed_images_dir")"
+}
+
+bundle_images_current() {
+  local bundle_dir="$1"
+  local product_out="$2"
+  local signed_images_dir="$3"
+  shift 3
+
+  local f src dest
+  for f in "$@"; do
+    dest="$bundle_dir/$f"
+    [[ -f "$dest" ]] || return 1
+    src="$signed_images_dir/$f"
+    [[ -f "$src" ]] || src="$product_out/$f"
+    [[ -f "$src" ]] || continue
+    [[ ! "$src" -nt "$dest" ]] || return 1
+  done
+}
+
 reset_closed_or_legacy_target_checkpoints() {
   local checkpoint_dir
   checkpoint_dir="$(resume_checkpoint_dir)"
   mkdir -p "$checkpoint_dir"
 
   if enabled "$force_rebuild"; then
-    rm -f "$checkpoint_dir"/build-*.done "$checkpoint_dir"/package-*.done \
+    rm -f "$checkpoint_dir"/build-*.done "$checkpoint_dir"/sign-*.done \
+      "$checkpoint_dir"/package-*.done \
       "$checkpoint_dir/complete.done" "$checkpoint_dir/run.started"
   elif [[ -f "$checkpoint_dir/complete.done" ]]; then
     log "resume: previous build/package checkpoint session completed; starting a fresh one"
-    rm -f "$checkpoint_dir"/build-*.done "$checkpoint_dir"/package-*.done \
+    rm -f "$checkpoint_dir"/build-*.done "$checkpoint_dir"/sign-*.done \
+      "$checkpoint_dir"/package-*.done \
       "$checkpoint_dir/complete.done" "$checkpoint_dir/run.started"
   elif [[ ! -f "$checkpoint_dir/run.started" ]]; then
     # Older checkpoint directories did not track session lifetime, so build and
     # package checkpoints from them may point at arbitrarily old product images.
-    rm -f "$checkpoint_dir"/build-*.done "$checkpoint_dir"/package-*.done
+    rm -f "$checkpoint_dir"/build-*.done "$checkpoint_dir"/sign-*.done \
+      "$checkpoint_dir"/package-*.done
   fi
 
   [[ -f "$checkpoint_dir/run.started" ]] || \
@@ -1377,6 +1601,7 @@ built_target_outputs_complete() {
 
   local target_files="$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip"
   valid_zip_container "$target_files" || return 1
+  desktop_launcher_outputs_exclusive "$product_out" "$target_files" || return 1
 
   local f
   for f in "$@"; do
@@ -1395,7 +1620,10 @@ remove_packaged_target_outputs() {
     "$host_package" \
     "$target_files_dir/${product}-target_files.zip" \
     "$target_files_dir/${product}-target_files.zip.list" \
-    "$target_files_dir/${product}-target_files.zip.list.list"
+    "$target_files_dir/${product}-target_files.zip.list.list" \
+    "$target_files_dir/${product}-target_files-signed.zip"
+  rm -rf "$target_files_dir/${product}-target_files"
+  rm -rf "$product_out/obj/PACKAGING/signed_images"
 
   local f
   for f in "$@"; do
@@ -1455,8 +1683,9 @@ package_cvd_bundle() {
   local product="$2"
   local product_out="$3"
   local host_package="$4"
-  local bundle_name="$5"
-  shift 5
+  local signed_images_dir="$5"
+  local bundle_name="$6"
+  shift 6
 
   local bundle_dir="$output_dir/$bundle_name"
   local -a thin_files=("$@")
@@ -1468,10 +1697,20 @@ package_cvd_bundle() {
   rm -rf "$bundle_dir"
   mkdir -p "$bundle_dir"
 
-  local f copied=0
+  # For each bundle file prefer the release-key-signed image emitted into
+  # $signed_images_dir by sign_target_files.sh. Files that aren't shipped
+  # inside the target-files.zip IMAGES/ tree (kernel binaries, dtb.img,
+  # vendor-bootconfig.img, android-info.txt, misc_info.txt, ...) fall back
+  # to the original $product_out path so the bundle still includes them.
+  local f src copied=0
   for f in "${thin_files[@]}"; do
-    if [[ -f "$product_out/$f" ]]; then
-      install -m 0644 "$product_out/$f" "$bundle_dir/$f"
+    src="$signed_images_dir/$f"
+    if [[ "$f" == "super.img" && -f "$signed_images_dir/vbmeta.img" && ! -f "$src" ]]; then
+      die "signed vbmeta exists but signed super.img is missing in $signed_images_dir"
+    fi
+    [[ -f "$src" ]] || src="$product_out/$f"
+    if [[ -f "$src" ]]; then
+      install -m 0644 "$src" "$bundle_dir/$f"
       copied=$((copied + 1))
     fi
   done
@@ -1587,6 +1826,7 @@ build_target() {
   repair_soong_zero_byte_objects
   repair_corrupt_host_tools
   repair_zero_size_fstab_outputs "$product" "$product_out"
+  remove_stale_launcher3_outputs "$product" "$product_out"
   repair_zero_size_cvd_host_package "$host_package"
 
   if [[ "$arch" == "x86_64" ]]; then
@@ -1599,7 +1839,17 @@ build_target() {
     fi
   fi
 
+  local target_files_zip="$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip"
+  local signed_target_files_zip="${target_files_zip%.zip}-signed.zip"
+  local signed_images_dir="$product_out/obj/PACKAGING/signed_images"
+  local signing_signature=""
+  if [[ -f "$target_files_zip" ]]; then
+    signing_signature="$(signing_inputs_signature "$target_files_zip")"
+  fi
+
   if resume_checkpoint_done "package-$arch" && \
+      signing_outputs_current "$signed_target_files_zip" "$signed_images_dir" "$target_files_zip" "$signing_signature" && \
+      bundle_images_current "$output_dir/$bundle_name" "$product_out" "$signed_images_dir" "${thin_files[@]}" && \
       bundle_dir_complete "$output_dir/$bundle_name" "${thin_files[@]}"; then
     log "resume: skipping $product; $bundle_name/ is already complete"
     return 0
@@ -1634,16 +1884,37 @@ build_target() {
       vbmetaimage \
       vbmetasystemimage \
       target-files-package \
+      otatools \
       -j"$jobs"
     built_target_outputs_complete "$product" "$product_out" "$host_package" "${thin_files[@]}" || \
       die "build completed but expected outputs are missing for $product"
+    desktop_launcher_outputs_exclusive "$product_out" "$target_files_zip" || \
+      die "$product target-files still include non-QuickStep Launcher3 artifacts"
     validate_cvd_target_fstabs "$product_out"
     mark_resume_checkpoint "build-$arch"
   fi
 
   validate_cvd_target_fstabs "$product_out"
+  desktop_launcher_outputs_exclusive "$product_out" "$target_files_zip" || \
+    die "$product target-files still include non-QuickStep Launcher3 artifacts"
   repair_cvd_host_package_avb_keys "$host_package"
-  package_cvd_bundle "$arch" "$product" "$product_out" "$host_package" "$bundle_name" "${thin_files[@]}"
+
+  signing_signature="$(signing_inputs_signature "$target_files_zip")"
+
+  if resume_checkpoint_done "sign-$arch" \
+      && signing_outputs_current "$signed_target_files_zip" "$signed_images_dir" "$target_files_zip" "$signing_signature"; then
+    log "resume: using existing signed target-files for $product"
+  else
+    log "signing $product target-files"
+    "$script_dir/sign_target_files.sh" \
+      "$target_files_zip" \
+      "$signed_target_files_zip" \
+      "$signed_images_dir"
+    write_signing_inputs_stamp "$signed_images_dir" "$signing_signature"
+    mark_resume_checkpoint "sign-$arch"
+  fi
+
+  package_cvd_bundle "$arch" "$product" "$product_out" "$host_package" "$signed_images_dir" "$bundle_name" "${thin_files[@]}"
   bundle_dir_complete "$output_dir/$bundle_name" "${thin_files[@]}" || \
     die "packaging completed but $bundle_name/ is incomplete"
   mark_resume_checkpoint "package-$arch"
@@ -1660,6 +1931,7 @@ main() {
   esac
 
   ensure_host_commands
+  ensure_signing_keys
   setup_temp_zram_if_needed
   set_build_jobs
   log "using $jobs parallel build jobs ($highmem_jobs high-memory jobs)"

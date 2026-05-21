@@ -19,6 +19,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #include <string>
 #include <string_view>
@@ -174,6 +175,19 @@ Result<void> CreateBlankExt4Image(std::string_view image, int num_mb) {
   return {};
 }
 
+Result<void> CreateBlankF2fsImage(std::string_view image, int num_mb) {
+  CF_EXPECT(CreateBlankEmptyImage(image, num_mb));
+
+  const long page_size = sysconf(_SC_PAGESIZE);
+  CF_EXPECT(page_size > 0, "Could not determine host page size");
+
+  CF_EXPECT_EQ(
+      Execute({HostBinaryPath("make_f2fs"), "-g", "android", "-f", "-b",
+               std::to_string(page_size), "-l", "data", std::string(image)}),
+      0);
+  return {};
+}
+
 Result<void> CreateBlankSdcardImage(std::string_view image, int num_mb) {
   off_t image_size_bytes = static_cast<off_t>(num_mb) << 20;
   // Reserve 1MB in the image for the MBR and padding, to simulate what
@@ -213,10 +227,17 @@ Result<void> InitializeDataImage(
       CF_EXPECT(instance.blank_data_image_mb() != 0,
                 "Expected `-blank_data_image_mb` to be set for "
                 "image creation.");
-      CF_EXPECTF(CreateBlankEmptyImage(instance.new_data_image(),
-                                       instance.blank_data_image_mb()),
-                 "Failed to create a blank image at '{}' with size '{}'",
-                 instance.new_data_image(), instance.blank_data_image_mb());
+      if (instance.userdata_format() == "f2fs") {
+        CF_EXPECTF(CreateBlankF2fsImage(instance.new_data_image(),
+                                        instance.blank_data_image_mb()),
+                   "Failed to create a f2fs image at '{}' with size '{}'",
+                   instance.new_data_image(), instance.blank_data_image_mb());
+      } else {
+        CF_EXPECTF(CreateBlankEmptyImage(instance.new_data_image(),
+                                         instance.blank_data_image_mb()),
+                   "Failed to create a blank image at '{}' with size '{}'",
+                   instance.new_data_image(), instance.blank_data_image_mb());
+      }
       return {};
     }
     case DataImageAction::kResizeImage: {

@@ -110,12 +110,15 @@ struct sc_screen {
     // settles the hash stops changing and we know it's safe.
     uint64_t frame_content_hash;
     sc_tick frame_content_changed_tick;
+    // Set when the resize hold begins, so the blur ghost overlay can ramp in
+    // gradually during transient_stretch instead of snapping to full strength.
+    sc_tick blur_fade_in_start_tick;
     // Set when stability is signalled (DISPLAY_READY ack or fallback) and
     // the blur begins its fade-out. transient_stretch is already false at
     // this point; the texture has been swapped to the new content, but the
-    // blur ghost overlay decays from full to zero over
-    // FLEX_DISPLAY_BLUR_FADE_DURATION starting at this tick.
+    // blur ghost overlay decays from blur_fade_start_intensity to zero.
     sc_tick blur_fade_start_tick;
+    float blur_fade_start_intensity;
     SDL_TimerID resize_settle_timer; // protected by mutex
     SDL_TimerID blur_fade_timer; // protected by mutex
     bool hotspot_button_down;

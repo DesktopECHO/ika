@@ -1,0 +1,35 @@
+Patch summary:
+Quiet expected Launcher3 display-cache rebuild logs during host-driven desktop
+resize. The cache is immediately invalidated and rebuilt, which is normal for
+Ika's dynamic display path, so keep the diagnostics only for debug builds.
+
+diff --git a/src/com/android/launcher3/util/DisplayController.java b/src/com/android/launcher3/util/DisplayController.java
+--- a/src/com/android/launcher3/util/DisplayController.java
++++ b/src/com/android/launcher3/util/DisplayController.java
+@@ -508,16 +508,20 @@ public class DisplayController {
+ 
+             realBounds = wmProxy.getRealBounds(displayInfoContext, displayInfo);
+             if (cachedValue == null) {
+-                // Unexpected normalizedDisplayInfo is found, recreate the cache
+-                FileLog.e(TAG, "Unexpected normalizedDisplayInfo found, invalidating cache: "
+-                        + normalizedDisplayInfo);
+-                FileLog.e(TAG, "(Invalid Cache) perDisplayBounds : " + mPerDisplayBounds);
++                if (DEBUG) {
++                    // Unexpected normalizedDisplayInfo is found, recreate the cache.
++                    Log.d(TAG, "Unexpected normalizedDisplayInfo found, invalidating cache: "
++                            + normalizedDisplayInfo);
++                    Log.d(TAG, "(Invalid Cache) perDisplayBounds : " + mPerDisplayBounds);
++                }
+                 mPerDisplayBounds.clear();
+                 mPerDisplayBounds.putAll(wmProxy.estimateInternalDisplayBounds(displayInfoContext));
+                 cachedValue = getCurrentBounds();
+                 if (cachedValue == null) {
+-                    FileLog.e(TAG, "normalizedDisplayInfo not found in estimation: "
+-                            + normalizedDisplayInfo);
++                    if (DEBUG) {
++                        Log.d(TAG, "normalizedDisplayInfo not found in estimation: "
++                                + normalizedDisplayInfo);
++                    }
+                     supportedBounds.add(realBounds);
+                 }
+             }

@@ -1,1 +1,2 @@
-last_import: 51a838e6af144b1ae7f6bd5ba28305ef5f376aaa
+source_repo: https://github.com/google/android-cuttlefish.git
+last_import: 56f558e85812fef48c404e43de31ce015ce274a8

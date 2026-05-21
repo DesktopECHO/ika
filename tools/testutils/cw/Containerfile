@@ -17,10 +17,10 @@ RUN --mount=source=.,target=/mnt,type=bind \
 FROM with_bazel AS with_cuttlefish_packages
 
 RUN --mount=source=.,target=/mnt,type=bind dnf -y install \
-  /mnt/cuttlefish-base-*.rpm \
-  /mnt/cuttlefish-metrics-*.rpm \
-  /mnt/cuttlefish-user-*.rpm \
-  /mnt/cuttlefish-orchestration-*.rpm
+  /mnt/ika-base-*.rpm \
+  /mnt/ika-metrics-*.rpm \
+  /mnt/ika-user-*.rpm \
+  /mnt/ika-orchestration-*.rpm
 
 FROM with_cuttlefish_packages
 
@@ -33,4 +33,3 @@ RUN usermod -aG kvm testrunner
 RUN usermod -aG cvdnetwork testrunner
 
 CMD [ "/usr/sbin/init" ]
-

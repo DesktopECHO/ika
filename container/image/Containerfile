@@ -38,11 +38,11 @@ RUN chmod +x /root/run_services.sh
 
 FROM runner-base AS runner-dev
 
-COPY cuttlefish-*.rpm /root/rpm/
+COPY ika-*.rpm /root/rpm/
 RUN dnf -y install \
-    /root/rpm/cuttlefish-base-*.rpm \
-    /root/rpm/cuttlefish-user-*.rpm \
-    /root/rpm/cuttlefish-orchestration-*.rpm
+    /root/rpm/ika-base-*.rpm \
+    /root/rpm/ika-user-*.rpm \
+    /root/rpm/ika-orchestration-*.rpm
 
 
 FROM runner-base AS runner-prod

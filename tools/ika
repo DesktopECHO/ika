@@ -33,18 +33,12 @@ stop_startup_packaged_scrcpy() {
   local pid
   local exe_path
   local deadline
-  local found_match="false"
 
   while read -r pid; do
     [[ -n "${pid}" ]] || continue
 
     exe_path="$(readlink -f "/proc/${pid}/exe" 2>/dev/null || true)"
     [[ "${exe_path}" == "${PACKAGED_SCRCPY_BIN}" ]] || continue
-
-    if [[ "${found_match}" != "true" ]]; then
-      printf '[%s] stopping existing packaged scrcpy session\n' "${SCRIPT_NAME}" >&2
-      found_match="true"
-    fi
 
     kill "${pid}" >/dev/null 2>&1 || true
 
@@ -153,7 +147,6 @@ declare -A CVD_REPORT_DEFAULTS=(
 # Boot & Logging Configuration Defaults (internal use only)
 # ============================================================================
 declare -A CVD_BOOT_DEFAULTS=(
-  [boot_message]="VIRTUAL_DEVICE_BOOT_COMPLETED"
   [boot_timeout_sec]="120"
 )
 
@@ -183,7 +176,6 @@ CVD_DEFAULT_ARG_MAPS=(
 
 # Convenience variables
 CVD_GPU_MODE="${CVD_GPU_DEFAULTS[gpu_mode]}"
-: "${CVD_BOOT_MESSAGE:=${CVD_BOOT_DEFAULTS[boot_message]}}"
 : "${CVD_BOOT_TIMEOUT_SEC:=${CVD_BOOT_DEFAULTS[boot_timeout_sec]}}"
 
 # ============================================================================
@@ -201,12 +193,18 @@ CVD_STOP_BIN="${CVD_HOST_OUT}/bin/cvd_internal_stop"
 CVD_INSTANCE_DIR="${CVD_HOME_DIR}/cuttlefish/instances/cvd-1"
 CVD_LAUNCHER_LOG="${CVD_INSTANCE_DIR}/logs/launcher.log"
 CVD_CONFIG_PATH="${CVD_INSTANCE_DIR}/cuttlefish_config.json"
+CHROMIUM_INSTALL_STAMP="${CVD_HOME_DIR}/chromium-installed-cvd-1"
 SCRCPY_BIN="${PACKAGED_SCRCPY_BIN}"
 SCRCPY_SERVER_PATH_OVERRIDE=""
 if [[ -f "${PACKAGED_SCRCPY_SERVER}" ]]; then
   SCRCPY_SERVER_PATH_OVERRIDE="${PACKAGED_SCRCPY_SERVER}"
 fi
 SCRCPY_DPI_FLAG=""
+GFXSTREAM_VULKAN_MODE="${IKA_GFXSTREAM_VULKAN:-auto}"
+GFXSTREAM_GLES_CONTEXT_TYPES="gfxstream-gles:gfxstream-composer"
+GFXSTREAM_VULKAN_CONTEXT_TYPES="gfxstream-gles:gfxstream-vulkan:gfxstream-composer"
+CVD_GRAPHICS_DRIVER_MESSAGE=""
+CVD_DATA_STORAGE_MESSAGE=""
 
 CVD_PROCESS_REGEX='(^|/)(cvd_internal_start|launch_cvd|run_cvd|crosvm|process_restarter|socket_vsock_proxy|wmediumd|webRTC)([[:space:]]|$)'
 
@@ -220,6 +218,25 @@ die() {
     printf '%s\n' "${CONSOLE_FAILURE_MESSAGE}" >&3
   fi
   exit 1
+}
+
+normalize_gfxstream_vulkan_mode() {
+  local mode="${1,,}"
+
+  case "${mode}" in
+    ""|auto)
+      echo "auto"
+      ;;
+    1|true|yes|on|enable|enabled)
+      echo "on"
+      ;;
+    0|false|no|off|disable|disabled)
+      echo "off"
+      ;;
+    *)
+      die "invalid gfxstream Vulkan mode '${1}' (expected auto, on, or off)"
+      ;;
+  esac
 }
 
 respond() {
@@ -249,6 +266,16 @@ confirm_reset() {
   return 0
 }
 
+normalize_userdata_gb() {
+  local data_gb="$1"
+
+  if [[ ! "${data_gb}" =~ ^[1-9][0-9]*$ ]]; then
+    die "USERDATA_GB must be a positive whole number of gigabytes"
+  fi
+
+  printf '%s\n' "${data_gb}"
+}
+
 parse_start_options() {
   local -n fullscreen_mode_ref="$1"
   local -n start_args_ref="$2"
@@ -262,6 +289,30 @@ parse_start_options() {
         fullscreen_mode_ref="true"
         shift
         ;;
+      --gfxstream-vulkan=*)
+        GFXSTREAM_VULKAN_MODE="$(normalize_gfxstream_vulkan_mode "${1#*=}")"
+        export IKA_GFXSTREAM_VULKAN="${GFXSTREAM_VULKAN_MODE}"
+        shift
+        ;;
+      --gfxstream-vulkan)
+        shift
+        [[ $# -gt 0 ]] || die "--gfxstream-vulkan requires a value: auto, on, or off"
+        GFXSTREAM_VULKAN_MODE="$(normalize_gfxstream_vulkan_mode "$1")"
+        export IKA_GFXSTREAM_VULKAN="${GFXSTREAM_VULKAN_MODE}"
+        shift
+        ;;
+      --userdata_gb=*)
+        USERDATA_GB="$(normalize_userdata_gb "${1#*=}")"
+        export USERDATA_GB
+        shift
+        ;;
+      --userdata_gb)
+        shift
+        [[ $# -gt 0 ]] || die "--userdata_gb requires a value"
+        USERDATA_GB="$(normalize_userdata_gb "$1")"
+        export USERDATA_GB
+        shift
+        ;;
       *)
         start_args_ref+=("$1")
         shift
@@ -273,6 +324,15 @@ parse_start_options() {
 console_notify() {
   local action="$1"
   local elapsed_sec="$2"
+  local launcher_log_path
+  if [[ "${action}" == "started" ]]; then
+    launcher_log_path="${CVD_LAUNCHER_LOG}"
+    if [[ "${launcher_log_path}" == "${HOME}/"* ]]; then
+      launcher_log_path="~/${launcher_log_path#"${HOME}/"}"
+    fi
+    printf 'Device online in %ss: %s\n' "${elapsed_sec}" "${launcher_log_path}" >&3
+    return 0
+  fi
   printf 'Android virtual device %s in %ss.\n' "${action}" "${elapsed_sec}" >&3
 }
 
@@ -302,14 +362,31 @@ usage() {
 
 Usage:
 
-  ${SCRIPT_NAME} start [-f|--fullscreen] [--setting=arg] ...
+  ${SCRIPT_NAME} start [-f|--fullscreen] [--gfxstream-vulkan=auto|on|off] [--userdata_gb=GB] [--setting=arg] ...
   ${SCRIPT_NAME} stop
-  ${SCRIPT_NAME} restart [-f|--fullscreen] ...
+  ${SCRIPT_NAME} restart [-f|--fullscreen] [--gfxstream-vulkan=auto|on|off] [--userdata_gb=GB] ...
   ${SCRIPT_NAME} reset [Delete everything and start fresh]
 
 Example:
 
   ${SCRIPT_NAME} start --cpus=2 --memory_mb=2048 --dpi=240 --fullscreen
+  ${SCRIPT_NAME} start --userdata_gb=32
+  ${SCRIPT_NAME} restart --gfxstream-vulkan=on
+
+Environment:
+
+  IKA_GFXSTREAM_VULKAN
+                         auto, on, or off. auto disables gfxstream Vulkan
+                         only on Apple Silicon 16K-page hosts or when the
+                         primary host Vulkan device is llvmpipe; on forces
+                         GLES+Vulkan; off forces GLES-only gfxstream.
+  USERDATA_GB            Size of a newly created userdata image, in GB.
+  IKA_SCRCPY_EXTRA_ARGS  Extra whitespace-separated args appended to scrcpy
+                         (example: --keyboard=uhid --no-clipboard-autosync)
+  IKA_SCRCPY_VIDEO_SOURCE
+                         auto, encoded, or raw. auto and raw use Cuttlefish
+                         frames for both windowed and fullscreen sessions;
+                         encoded uses ADB display capture.
 
 EOF
 }
@@ -518,10 +595,172 @@ append_default_display_arg() {
   log "display ceiling: ${width}x${height}/${dpi}"
 }
 
+is_apple_silicon_16k_host() {
+  local arch
+  local page_size
+
+  arch="$(uname -m 2>/dev/null || true)"
+  [[ "${arch}" == "aarch64" || "${arch}" == "arm64" ]] || return 1
+
+  page_size="$(getconf PAGESIZE 2>/dev/null || getconf PAGE_SIZE 2>/dev/null || echo 0)"
+  [[ "${page_size}" =~ ^[0-9]+$ ]] || return 1
+  (( page_size > 4096 )) || return 1
+
+  [[ -r /proc/device-tree/compatible ]] || return 1
+  tr '\0' '\n' < /proc/device-tree/compatible 2>/dev/null | grep -q '^apple,'
+}
+
+primary_vulkan_device_is_llvmpipe() {
+  local summary
+  local primary_device
+
+  command -v vulkaninfo >/dev/null 2>&1 || return 1
+
+  summary="$(vulkaninfo --summary 2>/dev/null || true)"
+  [[ -n "${summary}" ]] || return 1
+
+  primary_device="$(
+    awk '
+      /^GPU[0-9]+:/ {
+        if (seen) {
+          exit
+        }
+        seen = 1
+        next
+      }
+      seen {
+        print
+      }
+    ' <<<"${summary}"
+  )"
+  [[ -n "${primary_device}" ]] || return 1
+
+  grep -Eiq '(^[[:space:]]*(deviceName|driverName|driverID)[[:space:]]*=.*llvmpipe|DRIVER_ID_MESA_LLVMPIPE)' <<<"${primary_device}"
+}
+
+start_gpu_mode_value() {
+  local mode=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --gpu_mode=*)
+        mode="${1#*=}"
+        ;;
+      -gpu_mode=*)
+        mode="${1#*=}"
+        ;;
+      --gpu_mode|-gpu_mode)
+        shift
+        [[ $# -gt 0 ]] || die "--gpu_mode requires a value"
+        mode="$1"
+        ;;
+    esac
+    shift || true
+  done
+
+  printf '%s\n' "${mode:-${CVD_GPU_DEFAULTS[gpu_mode]}}"
+}
+
+append_gfxstream_vulkan_args() {
+  local -n args_array="$1"
+  shift
+  local mode
+  local selected_mode
+  local gpu_mode
+  local vulkan_decision
+
+  mode="$(normalize_gfxstream_vulkan_mode "${GFXSTREAM_VULKAN_MODE}")"
+  GFXSTREAM_VULKAN_MODE="${mode}"
+
+  gpu_mode="$(start_gpu_mode_value "$@")"
+  CVD_GPU_MODE="${gpu_mode}"
+  if [[ "${gpu_mode}" != "gfxstream" ]]; then
+    CVD_GRAPHICS_DRIVER_MESSAGE="gpu_mode=${gpu_mode} (gfxstream-vulkan=${mode} ignored)"
+    log "gfxstream-vulkan=${mode} has no effect with gpu_mode=${gpu_mode}"
+    return 0
+  fi
+
+  if user_supplied_flag "gpu_context_types" "$@"; then
+    CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (user gpu_context_types; gfxstream-vulkan=${mode} not applied)"
+    log "using user supplied gpu_context_types; gfxstream-vulkan=${mode} not applied"
+    return 0
+  fi
+
+  selected_mode="${mode}"
+  vulkan_decision="gfxstream-vulkan=${mode}"
+  if [[ "${selected_mode}" == "auto" ]]; then
+    if is_apple_silicon_16k_host; then
+      selected_mode="off"
+      vulkan_decision="gfxstream-vulkan=auto -> off (Apple Silicon 16K host)"
+    elif primary_vulkan_device_is_llvmpipe; then
+      selected_mode="off"
+      vulkan_decision="gfxstream-vulkan=auto -> off (primary Vulkan device is llvmpipe)"
+    else
+      CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (Defaults; vulkan=auto)"
+      log "gfxstream-vulkan=auto; leaving Cuttlefish gfxstream defaults"
+      return 0
+    fi
+  fi
+
+  case "${selected_mode}" in
+    off)
+      args_array+=("--gpu_context_types=${GFXSTREAM_GLES_CONTEXT_TYPES}")
+      CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (GLES-only)"
+      log "${vulkan_decision}; context-types=${GFXSTREAM_GLES_CONTEXT_TYPES}"
+      ;;
+    on)
+      args_array+=("--gpu_context_types=${GFXSTREAM_VULKAN_CONTEXT_TYPES}")
+      CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (GLES+Vulkan; ${vulkan_decision})"
+      log "${vulkan_decision}; context-types=${GFXSTREAM_VULKAN_CONTEXT_TYPES}"
+      ;;
+  esac
+}
+
 require_executable() {
   local path="$1"
   local label="$2"
   [[ -x "${path}" ]] || die "${label} not found or not executable: ${path}"
+}
+
+instance_has_userdata_state() {
+  [[ -e "${CVD_INSTANCE_DIR}/overlay.img" || -e "${CVD_INSTANCE_DIR}/userdata.img" ]]
+}
+
+append_data_storage_args() {
+  local -n args_array="$1"
+  shift
+  local data_gb="${USERDATA_GB:-}"
+  local data_mb
+  local explicit_data_policy="false"
+  local explicit_data_size="false"
+
+  [[ -n "${data_gb}" ]] || return 0
+
+  data_gb="$(normalize_userdata_gb "${data_gb}")"
+  data_mb=$((data_gb * 1024))
+
+  if user_supplied_flag "data_policy" "$@"; then
+    explicit_data_policy="true"
+  fi
+  if user_supplied_flag "blank_data_image_mb" "$@"; then
+    explicit_data_size="true"
+  fi
+
+  if [[ "${explicit_data_policy}" != "true" ]] && instance_has_userdata_state; then
+    CVD_DATA_STORAGE_MESSAGE="Ignored userdata resize; you must reset the instance first: 'ika reset'"
+    log "USERDATA_GB=${data_gb} requested, but existing userdata state is present; run '${SCRIPT_NAME} reset' before the next start to apply it."
+    return 0
+  fi
+
+  if [[ "${explicit_data_policy}" != "true" ]]; then
+    args_array+=("--data_policy=always_create")
+  fi
+  if [[ "${explicit_data_size}" != "true" ]]; then
+    args_array+=("--blank_data_image_mb=${data_mb}")
+  fi
+
+  CVD_DATA_STORAGE_MESSAGE="Resizing userdata to ${data_gb} GB"
+  log "userdata storage: ${data_mb} MB"
 }
 
 apply_default_args() {
@@ -591,6 +830,19 @@ run_with_cvd_env() {
 
   append_cvd_env_args env_args "${config_path}"
   "${env_args[@]}" "$@"
+}
+
+run_stop_helper() {
+  local -a statuses
+
+  set +e
+  set +o pipefail
+  run_with_cvd_env "$@" 2>&1 | grep -v -Fx "Requesting stop"
+  statuses=("${PIPESTATUS[@]}")
+  set -o pipefail
+  set -e
+
+  return "${statuses[0]}"
 }
 
 has_session_group() {
@@ -745,11 +997,19 @@ make_deadline() {
   fi
 }
 
+adb_boot_completed() {
+  local adb_serial="$1"
+  local boot_completed
+
+  boot_completed="$(adb -s "${adb_serial}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+  [[ "${boot_completed}" == "1" ]]
+}
+
 wait_for_boot() {
   local launcher_log="$1"
   local deadline="$2"
   local min_mtime="${3:-0}"
-  local min_offset="${4:-0}"
+  local adb_serial="$4"
   local crosvm_command_reported="false"
 
   while within_deadline "${deadline}"; do
@@ -761,10 +1021,9 @@ wait_for_boot() {
           crosvm_command_reported="true"
         fi
       fi
-      if [[ "${log_mtime}" -ge "${min_mtime}" ]] &&
-         launcher_log_contains_message_since_offset "${launcher_log}" "${CVD_BOOT_MESSAGE}" "${min_offset}"; then
-        return 0
-      fi
+    fi
+    if adb_boot_completed "${adb_serial}"; then
+      return 0
     fi
     if ! has_live_cvd_processes; then
       return 1
@@ -773,27 +1032,6 @@ wait_for_boot() {
   done
 
   return 1
-}
-
-launcher_log_contains_message_since_offset() {
-  local launcher_log="$1"
-  local message="$2"
-  local min_offset="${3:-0}"
-  local file_size
-  local effective_offset
-
-  [[ -f "${launcher_log}" ]] || return 1
-
-  file_size="$(stat -c '%s' "${launcher_log}" 2>/dev/null || echo 0)"
-  effective_offset="${min_offset}"
-
-  # launcher.log can be rotated/truncated during startup; if the saved offset
-  # points past EOF, reset to the current file start so new messages are visible.
-  if [[ "${effective_offset}" -gt "${file_size}" ]]; then
-    effective_offset=0
-  fi
-
-  tail -c "+$((effective_offset + 1))" "${launcher_log}" 2>/dev/null | grep -Fq "${message}"
 }
 
 pin_host_frontend_processes() {
@@ -810,28 +1048,23 @@ pin_host_frontend_processes() {
 
 ensure_chromium_before_scrcpy() {
   local adb_serial="$1"
-  local pm_output
 
-  # Only proceed if the device positively confirms org.chromium.chrome is
-  # missing. Any ambiguous state (adb error, empty output, etc.) means we
-  # must NOT auto-install — getchromium is a destructive provisioning step.
-  if ! pm_output="$(adb -s "${adb_serial}" shell pm list packages 2>/dev/null)" \
-      || [[ -z "${pm_output}" ]]; then
-    log "Could not confirm Chromium install state via adb; skipping getchromium."
-    return 0
-  fi
-
-  if grep -Fxq "package:org.chromium.chrome" <<<"${pm_output}"; then
+  if [[ -f "${CHROMIUM_INSTALL_STAMP}" ]] \
+      && grep -F "Preserving: ${CVD_INSTANCE_DIR}/overlay.img" "${CVD_LAUNCHER_LOG}" >/dev/null 2>&1; then
+    log "Chromium install stamp found and Cuttlefish preserved overlay.img; skipping getchromium."
     return 0
   fi
 
   if [[ ! -x "${PACKAGED_GETCHROMIUM_BIN}" ]]; then
-    log "Chromium is not installed and ${PACKAGED_GETCHROMIUM_BIN} is unavailable; continuing to scrcpy."
+    log "${PACKAGED_GETCHROMIUM_BIN} is unavailable; continuing to scrcpy."
     return 0
   fi
 
-  log "Chromium confirmed missing; running getchromium before scrcpy."
-  if ! ANDROID_SERIAL="${adb_serial}" "${PACKAGED_GETCHROMIUM_BIN}" >&3 2>&3; then
+  if ANDROID_SERIAL="${adb_serial}" IKA_CHROMIUM_STAMP="${CHROMIUM_INSTALL_STAMP}" "${PACKAGED_GETCHROMIUM_BIN}" >&3 2>&3; then
+    mkdir -p "$(dirname "${CHROMIUM_INSTALL_STAMP}")"
+    : > "${CHROMIUM_INSTALL_STAMP}"
+    log "getchromium completed."
+  else
     log "getchromium failed; continuing to scrcpy."
   fi
 }
@@ -843,26 +1076,62 @@ start_scrcpy_with_retries() {
   local max_attempts=5
   local cuttlefish_frames_socket
   local scrcpy_log="${SCRCPY_LOG_FILE}"
+  local scrcpy_video_source="${IKA_SCRCPY_VIDEO_SOURCE:-auto}"
+  local use_cuttlefish_frames=true
   local host_core_list
   local -a scrcpy_env=()
+  local -a scrcpy_extra_args=()
   local -a scrcpy_cmd=(
     "${SCRCPY_BIN}"
     -s "${adb_serial}"
   )
-  cuttlefish_frames_socket="$(resolve_cuttlefish_frames_socket)"
+
+  case "${scrcpy_video_source}" in
+    auto|"")
+      use_cuttlefish_frames=true
+      ;;
+    raw|cuttlefish|cuttlefish-frames)
+      use_cuttlefish_frames=true
+      ;;
+    encoded|adb|display)
+      use_cuttlefish_frames=false
+      ;;
+    *)
+      log "unknown IKA_SCRCPY_VIDEO_SOURCE='${scrcpy_video_source}', using raw Cuttlefish frames"
+      use_cuttlefish_frames=true
+      ;;
+  esac
+
   if [[ -n "${SCRCPY_DPI_FLAG}" ]]; then
     scrcpy_cmd+=("${SCRCPY_DPI_FLAG}")
   fi
   scrcpy_cmd+=(
     --force-adb-forward
-    --cuttlefish-frames-socket="${cuttlefish_frames_socket}"
     --render-driver=opengl
     --window-borderless
     --audio-buffer=80
     --audio-output-buffer=10
     --audio-codec=raw
+    --keyboard=uhid
+    --gamepad=uhid
     --mouse-bind=+hsn:b+++
   )
+
+  if [[ "${use_cuttlefish_frames}" == "true" ]]; then
+    cuttlefish_frames_socket="$(resolve_cuttlefish_frames_socket)"
+    scrcpy_cmd+=(--cuttlefish-frames-socket="${cuttlefish_frames_socket}")
+    log "scrcpy video source: raw Cuttlefish frames (${cuttlefish_frames_socket})"
+  else
+    log "scrcpy video source: encoded display capture"
+  fi
+
+  if [[ -n "${IKA_SCRCPY_EXTRA_ARGS:-}" ]]; then
+    read -r -a scrcpy_extra_args <<<"${IKA_SCRCPY_EXTRA_ARGS}"
+    if [[ "${#scrcpy_extra_args[@]}" -gt 0 ]]; then
+      log "using extra scrcpy args: $(shell_join "${scrcpy_extra_args[@]}")"
+      scrcpy_cmd+=("${scrcpy_extra_args[@]}")
+    fi
+  fi
 
   if [[ -d "${SCRCPY_ICON_DIR_DEFAULT}" ]]; then
     scrcpy_env+=("SCRCPY_ICON_DIR=${SCRCPY_ICON_DIR_DEFAULT}")
@@ -933,48 +1202,44 @@ start_scrcpy_with_retries() {
 
 schedule_scrcpy_when_launcher_ready() {
   local adb_serial="$1"
-  local launcher_log="$2"
-  local fullscreen_mode="${3:-false}"
-  local min_log_offset="${4:-0}"
+  local fullscreen_mode="${2:-false}"
 
   (
     while has_live_cvd_processes; do
-      if launcher_log_contains_message_since_offset "${launcher_log}" "${CVD_BOOT_MESSAGE}" "${min_log_offset}"; then
+      if adb_boot_completed "${adb_serial}"; then
         break
       fi
       sleep 0.5
     done
 
     if ! has_live_cvd_processes; then
-      log "deferred scrcpy watcher stopped because Cuttlefish exited before ${CVD_BOOT_MESSAGE}."
+      log "deferred scrcpy watcher stopped because Cuttlefish exited before sys.boot_completed=1."
       exit 0
     fi
     start_scrcpy_with_retries "${adb_serial}" "${fullscreen_mode}" || true
   ) &
 
   disown || true
-  log "scheduled scrcpy launch when launcher logs ${CVD_BOOT_MESSAGE}"
+  log "scheduled scrcpy launch when adb reports sys.boot_completed=1"
 }
 
 maybe_start_scrcpy() {
   local adb_serial="$1"
-  local launcher_log="$2"
-  local fullscreen_mode="${3:-false}"
-  local min_log_offset="${4:-0}"
+  local fullscreen_mode="${2:-false}"
 
   if [[ ! -x "${SCRCPY_BIN}" ]]; then
     log "scrcpy not found at ${SCRCPY_BIN}; skipping client launch."
     return 0
   fi
 
-  if launcher_log_contains_message_since_offset "${launcher_log}" "${CVD_BOOT_MESSAGE}" "${min_log_offset}"; then
-    log "launcher already contains ${CVD_BOOT_MESSAGE}; starting scrcpy immediately."
+  if adb_boot_completed "${adb_serial}"; then
+    log "adb reports sys.boot_completed=1; starting scrcpy immediately."
     start_scrcpy_with_retries "${adb_serial}" "${fullscreen_mode}" || true
     return 0
   fi
 
-  log "launcher has not yet logged ${CVD_BOOT_MESSAGE}; deferring scrcpy launch."
-  schedule_scrcpy_when_launcher_ready "${adb_serial}" "${launcher_log}" "${fullscreen_mode}" "${min_log_offset}"
+  log "adb has not reported sys.boot_completed=1; deferring scrcpy launch."
+  schedule_scrcpy_when_launcher_ready "${adb_serial}" "${fullscreen_mode}"
   return 0
 }
 
@@ -982,11 +1247,20 @@ log_start_context() {
   local launcher_log="$1"
   shift
   local scrcpy_dpi
+  local start_message
   scrcpy_dpi="$(current_scrcpy_dpi)"
 
-  log "starting Cuttlefish with $(basename "${CVD_BIN}") at ${scrcpy_dpi} DPI"
-  printf '[%s] starting Cuttlefish with %s at %s DPI\n' \
-    "${SCRIPT_NAME}" "$(basename "${CVD_BIN}")" "${scrcpy_dpi}" >&3
+  start_message="Starting Cuttlefish."
+  if [[ -n "${CVD_GRAPHICS_DRIVER_MESSAGE}" ]]; then
+    start_message+=" GPU: ${CVD_GRAPHICS_DRIVER_MESSAGE}"
+  fi
+  start_message+=" ${scrcpy_dpi} DPI"
+  log "${start_message}"
+  printf '%s\n' "${start_message}" >&3
+  if [[ -n "${CVD_DATA_STORAGE_MESSAGE}" ]]; then
+    log "${CVD_DATA_STORAGE_MESSAGE}"
+    printf '%s\n' "${CVD_DATA_STORAGE_MESSAGE}" >&3
+  fi
   log "HOME=${CVD_HOME_DIR}"
   log "ANDROID_HOST_OUT=${CVD_HOST_OUT}"
   log "ANDROID_PRODUCT_OUT=${CVD_PRODUCT_OUT}"
@@ -1002,9 +1276,10 @@ start_cvd() {
   local launcher_log
   local adb_serial
   local boot_deadline
+  local launcher_pid
   local start_epoch
-  local launcher_log_offset="0"
   local scrcpy_dpi
+  local -a cvd_env_args=(env)
 
   require_executable "${CVD_BIN}" "cvd launcher"
   check_required_groups
@@ -1016,53 +1291,56 @@ start_cvd() {
 
   if has_live_cvd_processes; then
     log "Cuttlefish is already running under ${CVD_HOME_DIR}"
-    respond_console "Instance running, local console will restart"
+    if [[ -n "${USERDATA_GB:-}" ]]; then
+      respond_console "Ignored userdata resize; you must reset the instance first: 'ika reset'"
+    else
+      respond_console "Instance already running, local console will be restarted"
+    fi
     respond "Android virtual device running"
-    start_scrcpy_with_retries "${adb_serial}" "${fullscreen_mode}" || true
+    maybe_start_scrcpy "${adb_serial}" "${fullscreen_mode}" || true
     return 0
   fi
 
-  if [[ -f "${launcher_log}" ]]; then
-    launcher_log_offset="$(stat -c '%s' "${launcher_log}" 2>/dev/null || echo 0)"
-  fi
-
   apply_start_default_args args "$@"
+  append_data_storage_args args "$@"
+  append_gfxstream_vulkan_args args "$@"
   append_default_display_arg args "${scrcpy_dpi}" "$@"
   append_host_timezone_arg args
+  append_cvd_env_args cvd_env_args
 
   log_start_context "${launcher_log}" "${args[@]}"
 
   (
     cd "${CVD_PRODUCT_OUT}"
-    run_with_cvd_env "${CVD_BIN}" "${args[@]}"
+    exec "${cvd_env_args[@]}" "${CVD_BIN}" "${args[@]}"
   ) &
+  launcher_pid="$!"
+  disown "${launcher_pid}" || true
 
-  log "launcher pid: $!"
+  log "launcher pid: ${launcher_pid}"
 
   boot_deadline="$(make_deadline "${CVD_BOOT_TIMEOUT_SEC}")"
-  if ! wait_for_boot "${launcher_log}" "${boot_deadline}" "${start_epoch}" "${launcher_log_offset}"; then
+  if ! wait_for_boot "${launcher_log}" "${boot_deadline}" "${start_epoch}" "${adb_serial}"; then
     if [[ -f "${launcher_log}" ]]; then
       tail -n 80 "${launcher_log}" >&2 || true
     fi
     die "Cuttlefish did not reach boot completion"
   fi
 
-  log "boot completed after seeing: ${CVD_BOOT_MESSAGE}"
+  log "boot completed after seeing: adb sys.boot_completed=1"
   respond "Android virtual device running"
-  maybe_start_scrcpy "${adb_serial}" "${launcher_log}" "${fullscreen_mode}" "${launcher_log_offset}" || true
+  maybe_start_scrcpy "${adb_serial}" "${fullscreen_mode}" || true
 
 }
 
 stop_cvd_internal() {
   local clear_instance_dirs="${1:-false}"
   shift || true
-  local stop_action="stopping Cuttlefish"
   local stop_ok="false"
   local -a run_with_args=()
   local -a stop_args=()
 
   if [[ "${clear_instance_dirs}" == "true" ]]; then
-    stop_action="stopping Cuttlefish and clearing instance dirs"
     stop_args+=("--clear_instance_dirs")
   fi
   stop_args+=("$@")
@@ -1073,9 +1351,7 @@ stop_cvd_internal() {
     run_with_args+=(--config "${CVD_CONFIG_PATH}")
   fi
 
-  log "${stop_action} with $(basename "${CVD_STOP_BIN}")"
-
-  if run_with_cvd_env "${run_with_args[@]}" "${CVD_STOP_BIN}" "${stop_args[@]}"; then
+  if run_stop_helper "${run_with_args[@]}" "${CVD_STOP_BIN}" "${stop_args[@]}"; then
     stop_ok="true"
   else
     log "primary stop helper returned non-zero"
@@ -1088,6 +1364,7 @@ stop_cvd_internal() {
 
   if [[ "${clear_instance_dirs}" == "true" ]]; then
     run_with_cvd_env "${CVD_CLI_BIN}" clear >/dev/null 2>&1 || true
+    rm -f "${CHROMIUM_INSTALL_STAMP}"
   fi
 
   stop_dnsmasq
@@ -1101,7 +1378,6 @@ stop_cvd_internal() {
     log "stop helper reported no active device; no live Cuttlefish processes remain"
   fi
 
-  respond "Android virtual device stopped."
 }
 
 exec_start_command() {

@@ -536,9 +536,11 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         pointer.setPressure(pressure);
 
         int source;
-        boolean activeSecondaryButtons = ((actionButton | buttons) & ~MotionEvent.BUTTON_PRIMARY) != 0;
-        if (pointerId == POINTER_ID_MOUSE && (action == MotionEvent.ACTION_HOVER_MOVE || activeSecondaryButtons)) {
-            // real mouse event, or event incompatible with a finger
+        boolean mousePointer = pointerId == POINTER_ID_MOUSE;
+        boolean mouseButtonEvent = actionButton != 0 || buttons != 0;
+        if (mousePointer && (action == MotionEvent.ACTION_HOVER_MOVE || mouseButtonEvent)) {
+            // Real mouse event. Keep primary clicks as SOURCE_MOUSE too, because desktop
+            // apps such as Chromium route tab-strip clicks through mouse-only caption logic.
             pointerProperties[pointerIndex].toolType = MotionEvent.TOOL_TYPE_MOUSE;
             source = InputDevice.SOURCE_MOUSE;
             pointer.setUp(buttons == 0);

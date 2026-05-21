@@ -2,7 +2,7 @@
 CROSVM_REMOTE = "https://chromium.googlesource.com/crosvm/crosvm"
 CROSVM_REV = "61714b1799ad477846027fe48b875ad62f38f4e4"
 MINIGBM_REMOTE = "https://chromium.googlesource.com/chromiumos/platform/minigbm"
-MINIGBM_REV = "9ccd5b3051a666a5c98582e36961e591e7b0784a"
+MINIGBM_REV = "73b49a8d28ac4c142603c95e2c3acd249c489183"
 
 # note that this won't use the same source checkout as the git_repository directive below
 #
@@ -60,7 +60,6 @@ crosvm_bin.annotation(
     patches = [
         "@//build_external/crosvm:PATCH.crosvm-composite-duplicate-components.patch",
         "@//build_external/crosvm:PATCH.crosvm-resize-display.patch",
-        "@//build_external/crosvm:PATCH.crosvm-disable-gfxstream-vulkan-apple-16k.patch",
     ],
     deps = [
         "@@//:gfxstream_backend_import",

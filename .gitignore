@@ -1,7 +1,5 @@
 .DS_Store
 /aosp
-/android-sdk-cache
-/build-scrcpy-server
 /rpmbuild
 /toolchain
 *.lock
@@ -21,3 +19,4 @@ cvd-phone-slim.tar
 !/lineageos/prebuilts/native_bridge/.gitignore
 !/lineageos/prebuilts/native_bridge/README.md
 
+/out/

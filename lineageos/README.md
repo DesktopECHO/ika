@@ -2,7 +2,7 @@
 
 LineageOS Desktop is a desktop-mode-only product layer for LineageOS 23.2 running in the Cuttlefish Android emulator. It is designed to be applied over an official LineageOS checkout with a local manifest.
 
-This document covers **phase 1** of the ika build: producing the LineageOS Desktop ROM. Phase 2 (host Cuttlefish RPMs that bundle the ROM into `/usr/share/cuttlefish-common/lineageos`) is documented in the project [README.md](../README.md). For the full end-to-end flow, start there.
+This document covers **phase 1** of the ika build: producing the LineageOS Desktop ROM. Phase 2 (host Cuttlefish RPMs, including `ika-lineageos`, which bundles the ROM into `/usr/share/cuttlefish-common/lineageos`) is documented in the project [README.md](../README.md). For the full end-to-end flow, start there.
 
 This directory contains the product profile, overlays, manifests, validation scripts, and source-level patches that this phase applies to a LineageOS 23.2 source checkout.
 
@@ -69,6 +69,18 @@ Additional project docs:
 - `docs/app-compatibility.md` tracks app support by architecture/runtime
 - `docs/release-process.md` documents release inputs and output metadata
 
+## Host Requirements
+
+Building this ROM is a full LineageOS source build and is resource-intensive:
+
+- **RAM:** 32 GB minimum. Linking `system.img` and the ART/Soong build graph
+  can use most of this; less than 32 GB will OOM or thrash.
+- **Storage:** 500 GB minimum of free space. The synced source tree, ccache,
+  and build intermediates for both ARM64 and x86-64 targets land in this
+  range; a single-target build is smaller but still well over 200 GB.
+- **CPU:** any modern x86-64 or ARM64 Linux host. More cores shorten the
+  build proportionally; `JOBS` defaults to `nproc`.
+
 ## One-Command Build
 
 From a Linux build host:
@@ -80,7 +92,7 @@ cd ika
 ./lineageos/scripts/build_lineageos_desktop.sh
 ```
 
-The resulting `lineageos-arm64/` and `lineageos-x86_64/` directories at the ika repo root are picked up by the `cuttlefish-lineageos` RPM in phase 2.
+The resulting `lineageos-arm64/` and `lineageos-x86_64/` directories at the ika repo root are picked up by the `ika-lineageos` RPM in phase 2.
 
 The script downloads LineageOS 23.2, installs this overlay and the microG
 partner manifest as local manifests, syncs official LineageOS sources, overlays
@@ -93,6 +105,14 @@ that source patches are applied, required desktop aconfig flags are enabled,
 userdata remains the default 8 GiB f2fs image, microG and WebView APKs are valid
 zip files, and the x86-64 native bridge payload is complete. Set
 `VALIDATE_BUILD_INPUTS=0` only for local experiments.
+
+The build signs target-files and extracted images before packaging the final
+Cuttlefish bundles. Signing keys live in `ANDROID_CERTS_DIR` (default:
+`~/.android-certs`). On a new clone, `signing_common.sh` runs
+`tools/buildutils/setup_keys.sh`, which prompts once for a certificate identity,
+writes it to `~/.config/ika/signing.conf`, and generates any missing APK/APEX
+keys. `STRICT_APEX_SIGNING=1` and `STRICT_PRESIGNED_ALLOWLIST=1` are the
+defaults; relax them only for local debugging.
 
 If `repo` is not installed, the script downloads it and uses `sudo install` to
 copy it to `/usr/local/bin/repo`. It also attempts to install
@@ -112,7 +132,7 @@ ika/lineageos-arm64/
 ika/lineageos-x86_64/
 ```
 
-The `cuttlefish-lineageos` RPM built by `tools/buildutils/build_packages.sh`
+The `ika-lineageos` RPM built by `tools/buildutils/build_packages.sh`
 picks up the bundle matching the build host's architecture from that
 location. Each bundle includes `build-info.json`, `build-info.txt`, and, when
 `repo` can produce it, `source-manifest.xml`. These files record image
@@ -125,8 +145,8 @@ bundles somewhere other than the ika repo root.
 To build only one architecture:
 
 ```bash
-scripts/build_lineageos_desktop.sh arm64
-scripts/build_lineageos_desktop.sh x86_64
+./lineageos/scripts/build_lineageos_desktop.sh arm64
+./lineageos/scripts/build_lineageos_desktop.sh x86_64
 ```
 
 Useful environment overrides:

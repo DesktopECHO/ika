@@ -69,6 +69,23 @@ constexpr bool kUseFixedGpuBlobMapping = true;
 constexpr bool kUseFixedGpuBlobMapping = false;
 #endif
 
+constexpr char kCuttlefishDefaultGpuContextTypes[] =
+    "gfxstream-vulkan:cross-domain:gfxstream-composer";
+constexpr char kGfxstreamContextTypes[] =
+    "gfxstream-gles:gfxstream-vulkan:gfxstream-composer";
+constexpr char kGfxstreamVhostContextTypes[] = "gfxstream-gles:gfxstream-vulkan";
+
+std::string GfxstreamContextTypes(
+    const CuttlefishConfig::InstanceSpecific& instance,
+    const std::string& default_context_types) {
+  const std::string& requested_context_types = instance.gpu_context_types();
+  if (!requested_context_types.empty() &&
+      requested_context_types != kCuttlefishDefaultGpuContextTypes) {
+    return requested_context_types;
+  }
+  return default_context_types;
+}
+
 Result<std::optional<std::string>> PreferPerformanceCoresAffinity(
     const CuttlefishConfig::InstanceSpecific& instance) {
   static constexpr char kCpuSysfsRoot[] = "/sys/devices/system/cpu";
@@ -397,7 +414,8 @@ Result<VhostUserDeviceCommands> BuildVhostUserGpu(
   if (gpu_mode == GpuMode::GuestSwiftshader) {
     gpu_params_json["backend"] = "2D";
   } else if (gpu_mode == GpuMode::Gfxstream) {
-    gpu_params_json["context-types"] = "gfxstream-gles:gfxstream-vulkan";
+    gpu_params_json["context-types"] =
+        GfxstreamContextTypes(instance, kGfxstreamVhostContextTypes);
     gpu_params_json["egl"] = true;
     gpu_params_json["gles"] = true;
   } else if (IsGfxstreamGuestAngleMode(gpu_mode)) {
@@ -556,7 +574,8 @@ Result<void> ConfigureGpu(const CuttlefishConfig& config, Command* crosvm_cmd) {
   } else if (gpu_mode == GpuMode::Gfxstream) {
     crosvm_cmd->AddParameter(
         "--gpu=", gpu_displays_string,
-        "context-types=gfxstream-gles:gfxstream-vulkan:gfxstream-composer",
+        "context-types=" +
+            GfxstreamContextTypes(instance, kGfxstreamContextTypes),
         gpu_common_3d_string);
   } else if (IsGfxstreamGuestAngleMode(gpu_mode)) {
     crosvm_cmd->AddParameter(

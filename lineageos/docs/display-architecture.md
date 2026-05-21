@@ -9,7 +9,7 @@ This document compares how upstream Cuttlefish drives an Android virtual display
 | Frame transport | WebRTC over network | Unix domain socket → scrcpy native window |
 | Host front-end | `webRTC` browser viewer (HTML/JS) | scrcpy with `--cuttlefish-frames-socket=…` |
 | Window resize | Client scales frames; guest display geometry is static | Client signals server; **guest display geometry actually changes** |
-| Resize event flow | none (visual scale only) | SDL → scrcpy client → `TYPE_RESIZE_DISPLAY` → scrcpy server → `Device.setDisplaySizeAndDensity` → `WindowManagerService.setForcedDisplaySize` → DisplayManager listeners |
+| Resize event flow | none (visual scale only) | SDL -> ika-scrcpy client -> `cvd display resize` for raw frames, plus `TYPE_RESIZE_DISPLAY`/`DISPLAY_READY` for settle tracking -> DisplayManager listeners |
 | DPI selection | Static at launch (`--display=…,dpi=…`) | Computed from host width; user can override with `--dpi` or `IKADPI` |
 | Input transport | WebRTC data channel | scrcpy `UInput` injection |
 | Audio transport | WebRTC media stream | scrcpy raw audio with low-latency buffer settings |
@@ -37,19 +37,24 @@ To change the device geometry at runtime, upstream requires either:
 **ika:** the scrcpy fork has a `flex_display` mode that:
 1. Catches SDL window-resize events ([scrcpy/app/src/screen.c#sc_screen_on_resize_settled](../../scrcpy/app/src/screen.c)).
 2. Debounces via `FLEX_DISPLAY_RESIZE_SETTLE_DELAY` so a continuous drag doesn't spam control messages.
-3. Sends `TYPE_RESIZE_DISPLAY` with the new pixel size (8-pixel aligned) to the scrcpy server.
-4. The server's [Controller.setDisplaySize](../../scrcpy/server/src/main/java/com/genymobile/scrcpy/control/Controller.java) calls `Device.setDisplaySizeAndDensity(displayId, size, dpi)` — the same path `adb shell wm size` uses.
-5. The framework then propagates the change through `WindowManagerService.setForcedDisplaySize` → `LogicalDisplayMapper.setDisplayInfoOverrideFromWindowManagerLocked` → `EVENT_DISPLAY_BASIC_CHANGED` → every registered `DisplayManager.DisplayListener`.
+3. For raw Cuttlefish frames, spawns `cvd display resize` with the new physical
+   display size and the current ika DPI. For encoded fallback display capture,
+   sends `TYPE_RESIZE_DISPLAY` to the scrcpy server, which calls
+   `Device.setDisplaySizeAndDensity(displayId, size, dpi)`.
+4. The raw-frame path also sends `TYPE_RESIZE_DISPLAY` so the Android-side
+   control path can report `DISPLAY_READY` when the display settles.
+5. The framework propagates the display change through DisplayManager listeners
+   and normal configuration updates.
 
-The guest's primary `DisplayInfo` actually updates. Launcher3's `DisplayController` sees the change, and the supplementary R1 patch ([patches/packages-apps-Launcher3-dynamic-display.patch](../patches/packages-apps-Launcher3-dynamic-display.patch)) forces `InvariantDeviceProfile.onConfigChanged(...)` so the workspace grid, hotseat columns, and all-apps layout recompute. End result: the launcher reflows like a real desktop, and freeform tasks are positioned against the new display bounds.
+The guest's primary `DisplayInfo` actually updates. Launcher3's `DisplayController` sees the change, and [packages-apps-Launcher3-dynamic-display.patch](../patches/packages-apps-Launcher3-dynamic-display.patch) refreshes the cached invariant/device profile so the workspace grid, hotseat columns, and all-apps layout recompute. [packages-apps-Launcher3-live-display-bounds.patch](../patches/packages-apps-Launcher3-live-display-bounds.patch) keeps placement and popup decisions tied to live window bounds. End result: the launcher reflows like a real desktop, and freeform tasks are positioned against the new display bounds.
 
 ## 3. DPI policy
 
 **Upstream:** DPI is chosen once by the human starting Cuttlefish and baked into the `--display=…,dpi=N` flag. No automatic relationship to host hardware.
 
-**ika:** DPI is derived from the host's display at launch, a user can override with `--dpi=<value>` or `IKADPI=<value>`
+**ika:** DPI is derived from the host's display at launch; a user can override it with `--dpi=<value>` or `IKADPI=<value>`.
 
-DPI does **not** change when the scrcpy window is resized — only resolution changes. Content gets larger or smaller in absolute screen pixels, the same way a desktop monitor behaves when its viewport shrinks. If a different DPI is needed for a different host monitor, restart ika.
+DPI does **not** change when the scrcpy window is resized — only resolution changes. Content gets larger or smaller in absolute screen pixels, the same way a desktop monitor behaves when its viewport shrinks. If a different DPI is needed for a different host monitor, restart ika or pass a new `--dpi` value.
 
 ## 4. Input transport
 

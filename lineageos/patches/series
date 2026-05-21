@@ -2,11 +2,13 @@
 # inside either field. Externals come first so dependent framework/Launcher3
 # patches see the modified headers/exports.
 external/google-highway patches/external-google-highway.patch
+external/minigbm patches/external-minigbm.patch
 external/skia patches/external-skia.patch
 external/XMP-Toolkit-SDK patches/external-XMP-Toolkit-SDK.patch
 art patches/art.patch
 device/google/cuttlefish patches/device-google-cuttlefish.patch
 frameworks/av patches/frameworks-av.patch
+frameworks/native patches/frameworks-native-logspam.patch
 # frameworks/base is patched twice on purpose: the first patch is the generic
 # desktop framework changes (DesktopExperienceFlags, SettingsProvider seed, QS
 # changes); the second is the native-bridge-only changes (NativeLibraryHelper,
@@ -15,6 +17,7 @@ frameworks/av patches/frameworks-av.patch
 # independently when chasing an AOSP rebase.
 frameworks/base patches/frameworks-base.patch
 frameworks/base patches/frameworks-base-native-bridge.patch
+frameworks/base patches/frameworks-base-logspam.patch
 system/core patches/system-core.patch
 system/sepolicy patches/system-sepolicy.patch
 packages/apps/Launcher3 patches/packages-apps-Launcher3.patch
@@ -44,5 +47,9 @@ packages/apps/Launcher3 patches/packages-apps-Launcher3-taskbar-deep-shortcuts.p
 # shortcut fixes and keeps runtime taskbar placement tied to WindowMetrics
 # instead of stale DeviceProfile screen dimensions.
 packages/apps/Launcher3 patches/packages-apps-Launcher3-live-display-bounds.patch
+# Supplementary logspam cleanup — keeps expected dynamic-display cache rebuild
+# diagnostics out of normal error logs.
+packages/apps/Launcher3 patches/packages-apps-Launcher3-logspam.patch
 vendor/lineage patches/vendor-lineage.patch
+build/make patches/build-make-releasetools.patch
 build/release patches/build-release.patch

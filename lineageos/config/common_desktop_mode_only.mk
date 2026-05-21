@@ -13,6 +13,15 @@ WITH_GMS := true
 
 $(call inherit-product, vendor/lineage/config/common_full_tablet_wifionly.mk)
 
+# The desktop shell depends on QuickStep for the taskbar, recents, and
+# QUICKSTEP_SERVICE binding. Plain Launcher3 uses the same package name and can
+# shadow Launcher3QuickStep if stale or inherited artifacts make it into the
+# image.
+PRODUCT_PACKAGES := $(filter-out Launcher3 Launcher3Go Launcher3QuickStepGo,$(PRODUCT_PACKAGES))
+PRODUCT_DEXPREOPT_SPEED_APPS := $(filter-out Launcher3 Launcher3Go Launcher3QuickStepGo,$(PRODUCT_DEXPREOPT_SPEED_APPS))
+PRODUCT_PACKAGES += Launcher3QuickStep
+PRODUCT_DEXPREOPT_SPEED_APPS += Launcher3QuickStep
+
 # Override the tablet-flavored characteristics inherited from the wifi-only base.
 # The desktop image is not a tablet; leaving PRODUCT_CHARACTERISTICS=tablet biases
 # Launcher3 grid selection, font scale, and several SystemUI assets toward tablet

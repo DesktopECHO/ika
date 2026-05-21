@@ -376,6 +376,7 @@ cc_library(
     strip_include_prefix = "misc",
     deps = [
         ":libext2_com_err",
+        ":libext2_e2p",
         ":libext2_quota",
         ":libext2fs",
         "@//build_external/e2fsprogs:e2fsprogs_config",

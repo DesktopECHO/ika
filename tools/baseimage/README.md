@@ -32,7 +32,7 @@ go run ./cmd/create_gce_base_image \
   -image-name <base_image_name>
 ```
 
-## Step 3. Create image with cuttlefish RPM packages installed.
+## Step 3. Create image with ika RPM packages installed.
 
 Run these `go run ./cmd/...` commands from the `tools/baseimage` directory.
 
@@ -42,9 +42,9 @@ go run ./cmd/gce_install_cuttlefish_packages \
   -source-image-project <project> \
   -source-image <base_image_name> \
   -image-name <output_image_name> \
-  -rpm <path/to/cuttlefish-base-rpm> \
-  -rpm <path/to/cuttlefish-user-rpm> \
-  -rpm <path/to/cuttlefish-orchestration-rpm>
+  -rpm <path/to/ika-base-rpm> \
+  -rpm <path/to/ika-user-rpm> \
+  -rpm <path/to/ika-orchestration-rpm>
 ```
 
 ## Step 4. Validate output image

@@ -3,7 +3,19 @@
 set -e -x
 
 readonly SKIP_RPM_BUILD_DEPENDENCIES="${SKIP_RPM_BUILD_DEPENDENCIES:-false}"
+readonly ALLOW_ROOT_RPM_BUILD="${ALLOW_ROOT_RPM_BUILD:-false}"
 declare -a ROOT_CMD=()
+
+function refuse_root_rpm_build() {
+  if [[ "$(id -u)" -ne 0 || "${ALLOW_ROOT_RPM_BUILD}" == "true" ]]; then
+    return
+  fi
+
+  >&2 echo "Do not run this package build as root."
+  >&2 echo "Run it as your normal user; this script will use sudo only for dependency installation."
+  >&2 echo "Set ALLOW_ROOT_RPM_BUILD=true only for a disposable build tree."
+  exit 1
+}
 
 function init_root_cmd() {
   if [[ "$(id -u)" -eq 0 ]]; then
@@ -44,7 +56,7 @@ function install_rpm_build_dependencies() {
 
   if ! can_run_as_root; then
     >&2 echo "Cannot install RPM build dependencies without root privileges."
-    >&2 echo "Run in an interactive terminal with sudo, run as root, or set SKIP_RPM_BUILD_DEPENDENCIES=true if dependencies are already installed."
+    >&2 echo "Run in an interactive terminal with sudo access, or set SKIP_RPM_BUILD_DEPENDENCIES=true if dependencies are already installed."
     exit 1
   fi
 
@@ -160,6 +172,7 @@ function organize_rpms() {
   done
 }
 
+refuse_root_rpm_build
 init_root_cmd
 install_rpm_build_dependencies
 if ! command -v bazel >/dev/null 2>&1; then

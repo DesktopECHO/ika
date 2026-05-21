@@ -1,6 +1,6 @@
 Name:           ika-base
 Version:        1.53.0
-Release:        1%{?dist}
+Release:        3%{?dist}
 Summary:        Cuttlefish Android Virtual Device host packages for Fedora
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish
@@ -58,6 +58,7 @@ Requires:       libXext
 Requires:       mesa-libgbm
 Requires:       mesa-libGL
 Requires:       mesa-vulkan-drivers
+Requires:       vulkan-tools
 Requires:       net-tools
 Requires:       NetworkManager
 Requires:       nftables
@@ -160,8 +161,9 @@ fi
 readonly package_output_root="base/cvd/bazel-out/${bazel_arch}-opt/bin/cuttlefish/package"
 pushd base/cvd
 # Keep download/build caches persistent across rpmbuild runs so external
-# repositories are fetched once and then reused on slow connections.
-BAZEL_CACHE_ROOT="${CUTTLEFISH_BAZEL_CACHE_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/cuttlefish-bazel}"
+# repositories are fetched once and then reused on slow connections. Keep the
+# default under the repo checkout instead of the user's home cache.
+BAZEL_CACHE_ROOT="${CUTTLEFISH_BAZEL_CACHE_ROOT:-%{_topdir}/../out/cuttlefish-bazel}"
 BAZEL_OUTPUT_USER_ROOT="${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$BAZEL_CACHE_ROOT/output_user_root}"
 BAZEL_REPOSITORY_CACHE="$BAZEL_CACHE_ROOT/repository"
 BAZEL_DISK_CACHE="$BAZEL_CACHE_ROOT/disk"
@@ -267,7 +269,6 @@ install -Dpm0644 base/rpm/71-cuttlefish-integration.rules %{buildroot}/usr/lib/u
 install -Dpm0644 base/host/packages/cuttlefish-integration/etc/modprobe.d/cuttlefish-integration.conf %{buildroot}/etc/modprobe.d/cuttlefish-integration.conf
 install -Dpm0644 base/host/packages/cuttlefish-integration/etc/rsyslog.d/91-cuttlefish.conf %{buildroot}/etc/rsyslog.d/91-cuttlefish.conf
 install -Dpm0644 base/host/packages/cuttlefish-integration/etc/ssh/sshd_config.cuttlefish %{buildroot}/etc/ssh/sshd_config.d/cuttlefish.conf
-install -Dpm0644 base/rpm/instance_configs.cfg.template %{buildroot}/etc/sysconfig/instance_configs.cfg.template
 install -Dpm0644 base/rpm/cuttlefish-defaults.service %{buildroot}/usr/lib/systemd/system/cuttlefish-defaults.service
 install -Dpm0755 base/rpm/cuttlefish-defaults.sh %{buildroot}/usr/libexec/cuttlefish/cuttlefish-defaults
 install -Dpm0644 base/rpm/cuttlefish-integration.sysconfig %{buildroot}/etc/sysconfig/cuttlefish-integration
@@ -282,6 +283,12 @@ ln -sfn ../graphics_detector %{buildroot}/usr/lib/cuttlefish-common/bin/aarch64-
 ln -sfn ../libvk_swiftshader.so %{buildroot}/usr/lib/cuttlefish-common/bin/aarch64-linux-gnu/libvk_swiftshader.so
 ln -sfn ../graphics_detector %{buildroot}/usr/lib/cuttlefish-common/bin/x86_64-linux-gnu/gfxstream_graphics_detector
 ln -sfn ../bin/libvk_swiftshader.so %{buildroot}/usr/lib/cuttlefish-common/lib64/vulkan.pastel.so
+
+# Expose cvd on PATH to match upstream's /usr/bin/cvd symlink (Debian
+# cuttlefish-base.links). Upstream docs and tooling assume `cvd` is invokable
+# directly; without this symlink only the ika wrapper finds it.
+install -d %{buildroot}/usr/bin
+ln -sfn /usr/lib/cuttlefish-common/bin/cvd %{buildroot}/usr/bin/cvd
 
 %post
 if ! getent group cvdnetwork >/dev/null 2>&1; then
@@ -360,6 +367,7 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 %files
 %license LICENSE
 /bin/ika
+/usr/bin/cvd
 /usr/lib/cuttlefish-common
 %config(noreplace) /etc/firewalld/zones/cuttlefish.xml
 /etc/NetworkManager/conf.d/99-cuttlefish.conf
@@ -383,7 +391,6 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /etc/modprobe.d/cuttlefish-integration.conf
 /etc/rsyslog.d/91-cuttlefish.conf
 /etc/ssh/sshd_config.d/cuttlefish.conf
-/etc/sysconfig/instance_configs.cfg.template
 /usr/lib/udev/rules.d/71-cuttlefish-integration.rules
 
 %files -n ika-defaults
@@ -398,6 +405,9 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/lib/cuttlefish-metrics
 
 %changelog
+* Sun May 24 2026 DesktopECHO <tv@441.surf> - 1.53.0-3
+- Bump generated RPM release to revision 3
+
 * Tue May 19 2026 DesktopECHO <tv@441.surf> - 1.53.0-1
 - Rebase Fedora packaging onto android-cuttlefish 1.53.0
 

@@ -20,7 +20,6 @@ go install github.com/swaggo/swag/cmd/swag@latest
 Generate updated documentation
 
 ```
-# run in `android-cuttlefish/frontend/src/host_orchestrator` directory
+# run in `frontend/src/host_orchestrator` from this checkout
 $(go env GOPATH)/bin/swag init --outputTypes yaml
 ```
-

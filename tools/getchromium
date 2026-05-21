@@ -13,12 +13,15 @@ STORAGE_URL = "https://commondatastorage.googleapis.com/chromium-browser-snapsho
 DOWNLOAD_CACHE_DIR = "/tmp"
 DOWNLOAD_BASENAME = "chrome-android-desktop"
 ARCH_DETECT_ATTEMPTS = 10
-ARCH_DETECT_RETRY_SECONDS = 1
+ARCH_DETECT_RETRY_SECONDS = 0.5
+INSTALLED_CHECK_ATTEMPTS = 10
+INSTALLED_CHECK_RETRY_SECONDS = 0.5
 CHROME_PACKAGE = "org.chromium.chrome"
 CHROME_COMMAND_LINE_FILES = (
     "/data/local/chrome-command-line",
     "/data/local/tmp/chrome-command-line",
 )
+CHROMIUM_STAMP = os.environ.get("IKA_CHROMIUM_STAMP", "")
 BROWSER_APK_PRIORITY = (
     "Chromium.apk",
     "ChromePublic.apk",
@@ -62,7 +65,7 @@ def run_adb_optional(args):
         sys.exit(1)
 
 def set_chromium_default_browser():
-    print("      Setting Chromium as the default browser...")
+    print("Setting Chromium as the default browser...")
     verify_chromium_installed()
     for package_name in STOCK_BROWSER_PACKAGES:
         run_adb_best_effort(
@@ -93,7 +96,6 @@ def set_chromium_default_browser():
     )
 
 def disable_stock_browsers():
-    print("      Disabling stock browser...")
     for package_name in STOCK_BROWSER_PACKAGES:
         run_adb_best_effort(["shell", "pm", "disable-user", "--user", "0", package_name])
 
@@ -104,6 +106,26 @@ def verify_chromium_installed():
 
     print(f"!!! Error: {CHROME_PACKAGE} was not installed by the selected APK.")
     sys.exit(1)
+
+def chromium_installed(wait=False):
+    attempts = INSTALLED_CHECK_ATTEMPTS if wait else 1
+    for attempt in range(attempts):
+        result = run_adb_optional(["shell", "pm", "path", CHROME_PACKAGE])
+        if result.returncode == 0 and result.stdout.strip():
+            return True
+        if attempt < attempts - 1:
+            time.sleep(INSTALLED_CHECK_RETRY_SECONDS)
+    return False
+
+def write_chromium_stamp():
+    if not CHROMIUM_STAMP:
+        return
+
+    stamp_dir = os.path.dirname(CHROMIUM_STAMP)
+    if stamp_dir:
+        os.makedirs(stamp_dir, exist_ok=True)
+    with open(CHROMIUM_STAMP, "w", encoding="utf-8") as stamp_file:
+        stamp_file.write(f"{CHROME_PACKAGE}\n")
 
 def is_browser_candidate(apk):
     apk_name = os.path.basename(apk)
@@ -156,12 +178,12 @@ def provision_chromium_first_run():
     run_adb(["shell", "monkey", "-p", CHROME_PACKAGE, "-c", "android.intent.category.LAUNCHER", "1"])
 
     if tap_ui_text(FIRST_RUN_SIGNED_OUT_TEXT, 20):
-        print("      Finalizing setup...")
+        print("Finalizing setup...")
         if tap_ui_text(DEFAULT_BROWSER_CANCEL_TEXT, 10):
-            print("      Dismissed default-browser prompt.")
+            print("Dismissed default-browser prompt.")
         return
 
-    print("      No Chromium first-run prompt detected.")
+    print("No Chromium first-run prompt detected.")
 
 def chromium_snapshot_prefix_for_abi(abi):
     if "arm64" in abi:
@@ -171,7 +193,7 @@ def chromium_snapshot_prefix_for_abi(abi):
     return None
 
 def get_config():
-    sys.stdout.write("[1/5] Detecting device architecture... ")
+    sys.stdout.write("Detecting device architecture... ")
     sys.stdout.flush()
     abi = ""
     last_error = ""
@@ -193,13 +215,13 @@ def get_config():
     if not prefix:
         print(f"!!! Error: Could not detect supported device architecture after {ARCH_DETECT_ATTEMPTS} attempts.")
         if abi:
-            print(f"      Last ABI: {abi}")
+            print(f"Last ABI: {abi}")
         elif last_error:
-            print(f"      Last error: {last_error}")
+            print(f"Last error: {last_error}")
         sys.exit(1)
     
     print(prefix)
-    sys.stdout.write(f"[2/5] Fetching latest revision for {prefix}... ")
+    sys.stdout.write(f"Fetching latest revision for {prefix}... ")
     sys.stdout.flush()
     
     r = requests.get(f"{STORAGE_URL}/{prefix}/LAST_CHANGE")
@@ -221,16 +243,16 @@ def download_zip_if_needed(download_url, zip_path, revision):
             with zipfile.ZipFile(zip_path, "r") as z:
                 bad_file = z.testzip()
             if bad_file is None:
-                print(f"[3/5] Using cached build {revision}: {zip_path}")
+                print(f"Using cached build {revision}: {zip_path}")
                 return
-            print(f"[3/5] Cached zip is corrupt at {bad_file}; re-downloading.")
+            print(f"Cached zip is corrupt at {bad_file}; re-downloading.")
         except zipfile.BadZipFile:
-            print("[3/5] Cached zip is invalid; re-downloading.")
+            print("Cached zip is invalid; re-downloading.")
 
     os.makedirs(os.path.dirname(zip_path), exist_ok=True)
     partial_zip = f"{zip_path}.part"
 
-    sys.stdout.write(f"[3/5] Downloading build {revision}")
+    sys.stdout.write("Downloading")
     sys.stdout.flush()
     with requests.get(download_url, stream=True) as r:
         r.raise_for_status()
@@ -259,6 +281,11 @@ def main():
     extracted_dir = "/tmp/chrome_extracted_content"
     
     try:
+        if chromium_installed(wait=True):
+            write_chromium_stamp()
+            return
+
+        print("Chromium first-run, install will take a moment.")
         prefix, revision = get_config()
         download_url = f"{STORAGE_URL}/{prefix}/{revision}/chrome-android-desktop.zip"
         temp_zip = cached_zip_path(prefix, revision)
@@ -298,12 +325,12 @@ def main():
 
         if not target_apk:
             print("!!! Error: Could not find the correct browser APK in the package.")
-            print(f"      Found files: {all_apks}")
+            print(f"Found files: {all_apks}")
             return
 
-        print(f"[4/5] Selected APK {os.path.basename(target_apk)} from {len(all_apks)} APK(s)")
+        print(f"Selected APK {os.path.basename(target_apk)} from {len(all_apks)} APK(s)")
 
-        sys.stdout.write("[5/5] Installing to device... ")
+        sys.stdout.write("Installing to device... ")
         sys.stdout.flush()
         # -r: replace, -d: allow downgrade, -g: grant all permissions
         install_output = run_adb(["install", "-r", "-d", "-g", target_apk])
@@ -313,12 +340,13 @@ def main():
         else:
             print("done")
             if install_output:
-                print(f"      {install_output}")
+                print(install_output)
         verify_chromium_installed()
+        write_chromium_stamp()
         set_chromium_default_browser()
         disable_stock_browsers()
         provision_chromium_first_run()
-        print("      Installation Successful!")
+        print("Installation Successful!")
 
     except Exception as e:
         print(f"\n!!! An unexpected error occurred: {e}")

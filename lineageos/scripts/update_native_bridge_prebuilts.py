@@ -82,6 +82,9 @@ cc_library_shared {
     header_libs: [
         "libberberis_guest_abi_arm64_headers",
     ],
+    whole_static_libs: [
+        "libberberis_proxy_loader",
+    ],
     shared_libs: [
         "liblog",
         "libndk_translation",
@@ -330,7 +333,7 @@ def extract_filesystem_image(android_root, image_path, dest, tmp_dir):
         dest.mkdir(parents=True, exist_ok=True)
         # debugfs parses the -R argument as its own command language; quote the
         # destination path so spaces or shell metacharacters in the cache dir
-        # (e.g. XDG_CACHE_HOME containing a space) don't mis-target the dump.
+        # don't mis-target the dump.
         escaped_dest = str(dest).replace('\\', '\\\\').replace('"', '\\"')
         run_capture_on_error(
             [debugfs, "-R", f'rdump / "{escaped_dest}"', image_path]
@@ -526,7 +529,9 @@ def update_from_sdk(
         "sdk_package_sha256": file_digest(package_path, "sha256"),
     }
 
-    with tempfile.TemporaryDirectory(prefix="lineage-native-bridge.") as tmp_name:
+    extract_tmp_parent = android_root / "out"
+    extract_tmp_parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="lineage-native-bridge.", dir=extract_tmp_parent) as tmp_name:
         tmp_dir = Path(tmp_name)
         image = extract_system_image_from_zip(android_root, package_path, tmp_dir)
         extracted_system = tmp_dir / "system-root"
@@ -535,11 +540,7 @@ def update_from_sdk(
 
 
 def parse_args():
-    cache_default = (
-        Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-        / "lineage-desktop"
-        / "native_bridge"
-    )
+    cache_dir_env = os.environ.get("NATIVE_BRIDGE_CACHE_DIR")
 
     parser = argparse.ArgumentParser(
         description="Install Google NDK translation native bridge prebuilts for the x86-64 product."
@@ -573,8 +574,8 @@ def parse_args():
     parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=Path(os.environ.get("NATIVE_BRIDGE_CACHE_DIR", cache_default)),
-        help="Download cache directory.",
+        default=Path(cache_dir_env) if cache_dir_env else None,
+        help="Download cache directory. Default: out/lineage-desktop/native_bridge under the Android source root.",
     )
     parser.add_argument(
         "--output-dir",
@@ -588,6 +589,11 @@ def parse_args():
 def main():
     args = parse_args()
     android_root = Path(args.android_root).resolve()
+    cache_dir = args.cache_dir
+    if cache_dir is None:
+        cache_dir = android_root / "out" / "lineage-desktop" / "native_bridge"
+    else:
+        cache_dir = cache_dir.expanduser().resolve()
     output_dir = args.output_dir
     if output_dir is None:
         output_dir = (
@@ -614,7 +620,7 @@ def main():
                 args.sdk_package,
                 args.sdk_package_sha1,
                 args.sdk_package_sha256,
-                args.cache_dir.expanduser().resolve(),
+                cache_dir,
             )
     except (
         OSError,
