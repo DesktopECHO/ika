@@ -93,9 +93,9 @@ ika restart --gpu_mode=gfxstream --cpus=8 --memory_mb=8192
 # Temporarily enable gfxstream Vulkan on Apple Silicon for testing
 ika restart --gfxstream-vulkan=on
 
-# Use a 32 GiB userdata image on first start after reset
+# Use a 128 GiB userdata image on first start after reset
 ika reset
-ika start --userdata_gb=32
+ika start --userdata_gb=128
 
 # Show the built-in usage text
 ika help
@@ -112,6 +112,7 @@ By default `ika` uses:
 - host tools from `/usr/lib/cuttlefish-common`
 - the packaged LineageOS tree from `/usr/share/cuttlefish-common/lineageos`
 - instance state under `~/ika`
+- a 64 GiB thin-provisioned f2fs userdata image
 - `gfxstream` GPU acceleration
 - host Bluetooth, with Wi-Fi, netsim, and UWB disabled unless you override them
 
@@ -119,7 +120,7 @@ By default `ika` uses:
 `guest_swiftshader` only as a troubleshooting fallback when host GPU
 acceleration is not usable.
 
-Set `USERDATA_GB` or pass `--userdata_gb=32` to choose the size, in gigabytes,
+Set `USERDATA_GB` or pass `--userdata_gb=128` to choose the size, in gigabytes,
 of a newly created userdata image. Existing userdata is preserved, so apply a
 new size by resetting first and then starting with the override.
 

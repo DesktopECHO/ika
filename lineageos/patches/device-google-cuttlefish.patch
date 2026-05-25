@@ -1,11 +1,11 @@
 Patch summary:
 Add the Cuttlefish device-side foundation for LineageOS Desktop products. This
-includes desktop product entries, PC-style feature declarations, batteryless VM
+includes desktop product entries, tablet-compatible feature declarations, batteryless VM
 health behavior, graphics/property plumbing, and vendor overlay placement needed
 by the desktop images.
 
-The goal is to make the guest identify and behave like a desktop virtual
-machine rather than a resized phone or tablet. That means removing mobile-only
+The goal is to make the guest identify like a tablet-compatible desktop virtual
+machine rather than a phone or Play-visible PC. That means removing mobile-only
 assumptions where the host is responsible for the hardware experience, while
 preserving the Cuttlefish pieces still needed for boot, graphics, and packaging.
 Host-side AVB key lookup is also pointed at the ROM/product bundle first, so
@@ -13,6 +13,8 @@ the ROM owns its signing keys and empty host placeholders cannot shadow them.
 Desktop SELinux extensions cover expected graphics debug-property reads and
 host-driven shell helpers so normal boot, scrcpy, and resize/provisioning flows
 do not leave avoidable enforcing-mode denials behind.
+Userdata stays f2fs and sparse/thin-provisioned, with the default size raised
+to 64 GiB.
 
 diff --git a/AndroidProducts.mk b/AndroidProducts.mk
 index ff5f2cc46..173663686 100644
@@ -94,12 +96,39 @@ index 978df685d..ef1ed0b6e 100644
    }
  
    std::vector<std::string> vm_manager_vec =
+diff --git a/host/commands/assemble_cvd/flags_defaults.h b/host/commands/assemble_cvd/flags_defaults.h
+index 8416f0f40..437b56902 100644
+--- a/host/commands/assemble_cvd/flags_defaults.h
++++ b/host/commands/assemble_cvd/flags_defaults.h
+@@ -134,7 +134,7 @@
+ // Policy default parameters
+ #define CF_DEFAULTS_DATA_POLICY "use_existing"
+ #define CF_DEFAULTS_USERDATA_FORMAT USERDATA_FILE_SYSTEM_TYPE
+-#define CF_DEFAULTS_BLANK_DATA_IMAGE_MB "8192"
++#define CF_DEFAULTS_BLANK_DATA_IMAGE_MB "65536"
+ 
+ // Graphics default parameters
+ #define CF_DEFAULTS_HWCOMPOSER cuttlefish::kHwComposerAuto
+diff --git a/shared/device.mk b/shared/device.mk
+index b31638ad7..c9b0a1302 100644
+--- a/shared/device.mk
++++ b/shared/device.mk
+@@ -45,7 +45,7 @@ PRODUCT_FS_COMPRESSION := 1
+ TARGET_RO_FILE_SYSTEM_TYPE ?= erofs
+ BOARD_EROFS_COMPRESS_HINTS := device/google/cuttlefish/shared/erofs_compress_hints.txt
+ TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE ?= f2fs
+-TARGET_USERDATAIMAGE_PARTITION_SIZE ?= 8589934592
++TARGET_USERDATAIMAGE_PARTITION_SIZE ?= 68719476736
+ 
+ TARGET_VULKAN_SUPPORT ?= true
+ 
 diff --git a/shared/desktop/android-info.txt b/shared/desktop/android-info.txt
 new file mode 100644
-index 000000000..26ed0b937
+index 000000000..fcd665dc4
 --- /dev/null
 +++ b/shared/desktop/android-info.txt
-@@ -0,0 +1,2 @@
+@@ -0,0 +1,3 @@
++config=tablet
 +gfxstream=supported
 +gfxstream_gl_program_binary_link_status=supported
 diff --git a/shared/desktop/device_vendor.mk b/shared/desktop/device_vendor.mk
@@ -319,7 +348,7 @@ index 67aece73f..931e14695 100644
 +setprop log.tag.libEGL S
 +
 +# Desktop-mode contract. These are intentionally re-applied each boot because this product is
-+# desktop-only; drifting back into phone/tablet behavior makes Launcher and WM unstable.
++# desktop-only; drifting back into handheld windowing behavior makes Launcher and WM unstable.
 +# hidden_api_policy=0 disables non-SDK API enforcement so apps like Firefox (Gecko calls
 +# MessageQueue.next() via JNI from a non-platform domain) and Termux can run. With policy=1
 +# Gecko's main-loop hook is blocked, the renderer aborts inside google-breakpad, and Firefox

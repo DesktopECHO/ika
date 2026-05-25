@@ -1015,6 +1015,13 @@ desktop_launcher_outputs_exclusive() {
   desktop_launcher_target_files_exclusive "$target_files_zip"
 }
 
+desktop_android_info_selects_tablet() {
+  local android_info="$1"
+
+  [[ -f "$android_info" ]] || return 1
+  grep -Eq '^[[:space:]]*config=tablet[[:space:]]*$' "$android_info"
+}
+
 validate_fstab_file() {
   local path="$1"
 
@@ -1587,6 +1594,8 @@ bundle_dir_complete() {
   for member in "build-info.json" "build-info.txt" "$@"; do
     [[ -e "$bundle_dir/$member" ]] || return 1
   done
+
+  desktop_android_info_selects_tablet "$bundle_dir/android-info.txt"
 }
 
 built_target_outputs_complete() {
@@ -1602,6 +1611,7 @@ built_target_outputs_complete() {
   local target_files="$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip"
   valid_zip_container "$target_files" || return 1
   desktop_launcher_outputs_exclusive "$product_out" "$target_files" || return 1
+  desktop_android_info_selects_tablet "$product_out/android-info.txt" || return 1
 
   local f
   for f in "$@"; do
@@ -1716,6 +1726,8 @@ package_cvd_bundle() {
   done
 
   (( copied > 0 )) || die "no image files were copied from $product_out"
+  desktop_android_info_selects_tablet "$bundle_dir/android-info.txt" || \
+    die "$bundle_name/android-info.txt does not select config=tablet"
 
   tar -xzf "$host_package" -C "$bundle_dir" --exclude='bin' --exclude='lib64'
 

@@ -192,8 +192,8 @@ check_userdata_policy() {
   require_file "$arm_board"
   require_file "$x86_board"
 
-  grep -Eq '^[[:space:]]*TARGET_USERDATAIMAGE_PARTITION_SIZE[[:space:]]*\?=[[:space:]]*8589934592[[:space:]]*$' "$shared_device" || \
-    fail "userdata size is not the expected 8 GiB default in $shared_device"
+  grep -Eq '^[[:space:]]*TARGET_USERDATAIMAGE_PARTITION_SIZE[[:space:]]*\?=[[:space:]]*68719476736[[:space:]]*$' "$shared_device" || \
+    fail "userdata size is not the expected 64 GiB default in $shared_device"
   grep -Eq '^[[:space:]]*TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE[[:space:]]*:=[[:space:]]*f2fs[[:space:]]*$' "$arm_board" || \
     fail "ARM64 userdata is not f2fs in $arm_board"
   grep -Eq '^[[:space:]]*TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE[[:space:]]*:=[[:space:]]*f2fs[[:space:]]*$' "$x86_board" || \
@@ -303,8 +303,9 @@ check_desktop_flags() {
 }
 
 # Negative checks: assert phone-flavored defaults are NOT present in the
-# desktop overlay or its inherited base. These guards keep the desktop
-# contract enforced under rebases that might re-introduce phone surfaces.
+# desktop overlay or its inherited base. These guards keep the tablet-shaped
+# app compatibility surface enforced under rebases that might re-introduce
+# phone surfaces.
 #
 # Note on `set -e` interaction: every grep below uses `if grep ...; then`
 # (not `grep && fail`) so that a "no match" exit code (1) is consumed by the
@@ -314,11 +315,22 @@ check_no_phone_defaults() {
   local product_mk
   product_mk="$overlay_dir/config/common_desktop_mode_only.mk"
 
-  if grep -Eq '^[[:space:]]*PRODUCT_CHARACTERISTICS[[:space:]]*:?=[[:space:]]*tablet' "$product_mk"; then
-    fail "PRODUCT_CHARACTERISTICS=tablet appears in $product_mk (desktop must not be a tablet)"
+  if ! grep -Eq '^[[:space:]]*PRODUCT_CHARACTERISTICS[[:space:]]*:?=[[:space:]]*tablet' "$product_mk"; then
+    fail "PRODUCT_CHARACTERISTICS=tablet is missing in $product_mk"
   fi
   if grep -Eq '^[[:space:]]*PRODUCT_CHARACTERISTICS[[:space:]]*:?=[[:space:]]*phone' "$product_mk"; then
     fail "PRODUCT_CHARACTERISTICS=phone appears in $product_mk"
+  fi
+
+  local desktop_android_info="$android_root/device/google/cuttlefish/shared/desktop/android-info.txt"
+  local desktop_device_vendor="$android_root/device/google/cuttlefish/shared/desktop/device_vendor.mk"
+  require_file "$desktop_android_info"
+  require_file "$desktop_device_vendor"
+  if ! grep -Eq '^[[:space:]]*config=tablet[[:space:]]*$' "$desktop_android_info"; then
+    fail "desktop Cuttlefish android-info.txt does not select config=tablet"
+  fi
+  if ! grep -Eq '^[[:space:]]*TARGET_BOARD_INFO_FILE[[:space:]]*\?=[[:space:]]*device/google/cuttlefish/shared/desktop/android-info\.txt[[:space:]]*$' "$desktop_device_vendor"; then
+    fail "desktop device_vendor.mk does not point TARGET_BOARD_INFO_FILE at shared/desktop/android-info.txt"
   fi
 
   local framework_res="$overlay_dir/overlays/framework-res/res/values/config.xml"

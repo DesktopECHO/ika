@@ -18,7 +18,7 @@ lunch lineage_desktop_cf_x86_64-trunk_staging-userdebug
 (The space-separated form `lunch lineage_desktop_cf_arm64_pgagnostic trunk_staging userdebug` also works.)
 
 This product targets Apple Silicon and x86-64 CPUs running in the Cuttlefish emulator.
-Both targets use Cuttlefish's default 8 GiB thin-provisioned f2fs userdata image.
+Both targets use Cuttlefish's default 64 GiB thin-provisioned f2fs userdata image.
 
 ## Source Layout
 
@@ -38,16 +38,16 @@ without requiring separate fork branches.
 
 ## Desktop Contract
 
-The desktop products intentionally keep phone/tablet behaviors out of the
-runtime contract:
+The desktop products split app compatibility identity from windowing behavior:
 
+- Android and app stores see a tablet-shaped, Wi-Fi-only, non-telephony device
 - desktop/freeform mode is re-applied at boot
 - taskbar clicks focus, restore, or open desktop windows instead of entering
   split selection
 - setup wizard, lockscreen, mobile data, battery UI, UWB, and Thread radios are
   disabled for the desktop profile
-- the Play-visible hardware profile stays tablet-like and non-telephony; desktop
-  mode is enabled by resources/properties instead of `android.hardware.type.pc`
+- desktop mode is enabled by resources/properties instead of
+  `android.hardware.type.pc`, which Play treats as a PC/desktop device
 - ARM64 and x86-64 share the same desktop overlays, provisioning, userdata
   format, and taskbar behavior; native bridge support is the x86-64-only
   architecture addition
@@ -102,7 +102,7 @@ both Cuttlefish products.
 
 Before compiling, the script runs `scripts/validate_build_inputs.sh` to verify
 that source patches are applied, required desktop aconfig flags are enabled,
-userdata remains the default 8 GiB f2fs image, microG and WebView APKs are valid
+userdata remains the default 64 GiB f2fs image, microG and WebView APKs are valid
 zip files, and the x86-64 native bridge payload is complete. Set
 `VALIDATE_BUILD_INPUTS=0` only for local experiments.
 

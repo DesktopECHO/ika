@@ -1,8 +1,8 @@
 # Desktop Windowing Policy
 
-LineageOS Desktop is a desktop-mode-only product. Phone and tablet behaviors
-that are useful on handheld devices are treated as compatibility fallbacks, not
-as primary UI.
+LineageOS Desktop is a desktop-mode-only tablet product. Tablet identity is part
+of app compatibility; handheld launcher and windowing behaviors are treated as
+compatibility fallbacks, not as primary UI.
 
 Runtime rules:
 

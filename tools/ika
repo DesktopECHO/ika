@@ -370,7 +370,7 @@ Usage:
 Example:
 
   ${SCRIPT_NAME} start --cpus=2 --memory_mb=2048 --dpi=240 --fullscreen
-  ${SCRIPT_NAME} start --userdata_gb=32
+  ${SCRIPT_NAME} start --userdata_gb=128
   ${SCRIPT_NAME} restart --gfxstream-vulkan=on
 
 Environment:

@@ -28,6 +28,12 @@ echo "[desktop] feature contract"
 features="$(shell_get pm list features)"
 # Desktop products must expose freeform window management and a tablet-like
 # touch surface for app store compatibility, without the Play-visible PC feature.
+characteristics="$(shell_get getprop ro.build.characteristics || true)"
+echo "  ro.build.characteristics=$characteristics"
+case ",$characteristics," in
+  *,tablet,*) ;;
+  *) fail "ro.build.characteristics does not include tablet (was: $characteristics)" ;;
+esac
 grep -qx 'feature:android.software.freeform_window_management' <<<"$features" || \
   fail "missing android.software.freeform_window_management"
 grep -qx 'feature:android.hardware.touchscreen' <<<"$features" || \

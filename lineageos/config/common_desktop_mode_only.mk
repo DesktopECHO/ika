@@ -22,11 +22,10 @@ PRODUCT_DEXPREOPT_SPEED_APPS := $(filter-out Launcher3 Launcher3Go Launcher3Quic
 PRODUCT_PACKAGES += Launcher3QuickStep
 PRODUCT_DEXPREOPT_SPEED_APPS += Launcher3QuickStep
 
-# Override the tablet-flavored characteristics inherited from the wifi-only base.
-# The desktop image is not a tablet; leaving PRODUCT_CHARACTERISTICS=tablet biases
-# Launcher3 grid selection, font scale, and several SystemUI assets toward tablet
-# defaults that the desktop overlays then have to undo one by one.
-PRODUCT_CHARACTERISTICS := default
+# Keep the app compatibility surface tablet-shaped. Desktop behavior is layered
+# on top via the windowing overlays/settings below, but app stores and many apps
+# key their phone/tablet choice from ro.build.characteristics.
+PRODUCT_CHARACTERISTICS := tablet
 
 TARGET_FORCE_OTA_PACKAGE := true
 TARGET_DISABLE_EPPE := true

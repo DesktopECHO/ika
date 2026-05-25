@@ -127,12 +127,22 @@ image_src() {
   fi
 }
 
+require_tablet_android_info() {
+  local path="$1"
+  if ! grep -Eq '^[[:space:]]*config=tablet[[:space:]]*$' "$path"; then
+    printf '[lineage-desktop] error: %s does not select config=tablet\n' "$path" >&2
+    exit 1
+  fi
+}
+
+rm -rf "$bundle_dir"
 mkdir -p "$bundle_dir"
 
 for f in "${bundle_files[@]}"; do
   src="$(image_src "$f")"
   [[ -f "$src" ]] && install -m 0644 "$src" "$bundle_dir/$f"
 done
+require_tablet_android_info "$bundle_dir/android-info.txt"
 
 install -m 0644 "$host_package" "$bundle_dir/cvd-host_package.tar.gz"
 tar -xzf "$host_package" -C "$bundle_dir" --exclude='bin' --exclude='lib64'
@@ -144,6 +154,7 @@ for f in "${thin_files[@]}"; do
   src="$(image_src "$f")"
   [[ -f "$src" ]] && install -m 0644 "$src" "$thin_dir/$f"
 done
+require_tablet_android_info "$thin_dir/android-info.txt"
 
 tar -xzf "$host_package" -C "$thin_dir" --exclude='bin' --exclude='lib64'
 
