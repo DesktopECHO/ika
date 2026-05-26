@@ -19,15 +19,18 @@ import com.genymobile.scrcpy.video.SurfaceCapture;
 import com.genymobile.scrcpy.video.VirtualDisplayListener;
 import com.genymobile.scrcpy.wrappers.ClipboardManager;
 import com.genymobile.scrcpy.wrappers.DisplayManager;
+import com.genymobile.scrcpy.wrappers.DisplayWindowListener;
 import com.genymobile.scrcpy.wrappers.InputManager;
 import com.genymobile.scrcpy.wrappers.ServiceManager;
 
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.SystemClock;
 import android.util.Pair;
+import android.view.IDisplayWindowListener;
 import android.view.InputDevice;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
@@ -73,6 +76,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     private static final int PRIMARY_DISPLAY_MIN_WIDTH = 540;
     private static final int PRIMARY_DISPLAY_MIN_HEIGHT = 540;
     private static final int DISPLAY_SIZE_ALIGNMENT = 8;
+    private static final long DISPLAY_READY_STABLE_DELAY_MS = 50;
 
     // control_msg.h values of the pointerId field in inject_touch_event message
     private static final int POINTER_ID_MOUSE = -1;
@@ -114,13 +118,19 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     private int lastPrimaryDisplayDpiRequest;
 
     // DEVICE_MSG_TYPE_DISPLAY_READY plumbing. Listener registered at start,
-    // unregistered at stop. pendingDisplayReadySize is set when we apply a
-    // resize and cleared when the listener observes the display reaching
-    // that size (at which point we send DISPLAY_READY to the client).
+    // unregistered at stop. pendingDisplayReadySize is armed before applying a
+    // resize and cleared when the display reaches that size (at which point we
+    // send DISPLAY_READY to the client).
     private DisplayManager.DisplayListenerHandle displayReadyListenerHandle;
     private HandlerThread displayReadyHandlerThread;
+    private Handler displayReadyHandler;
+    private IDisplayWindowListener displayReadyWindowListener;
     private final Object displayReadyLock = new Object();
     private Size pendingDisplayReadySize;
+    private long pendingDisplayReadyGeneration;
+    private boolean pendingDisplayReadyDisplayInfoReached;
+    private boolean pendingDisplayReadyWindowConfigSeen;
+    private boolean displayReadyUseWindowConfig;
 
     public Controller(ControlChannel controlChannel, CleanUp cleanUp, Options options) {
         this.displayId = options.getDisplayId();
@@ -270,46 +280,152 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     private void startDisplayReadyListener() {
         displayReadyHandlerThread = new HandlerThread("scrcpy-display-ready");
         displayReadyHandlerThread.start();
-        Handler handler = new Handler(displayReadyHandlerThread.getLooper());
+        displayReadyHandler = new Handler(displayReadyHandlerThread.getLooper());
         displayReadyListenerHandle = ServiceManager.getDisplayManager().registerDisplayListener(eventDisplayId -> {
             if (eventDisplayId != displayId) {
                 return;
             }
-            Size pending;
-            synchronized (displayReadyLock) {
-                pending = pendingDisplayReadySize;
+            if (Ln.isEnabled(Ln.Level.VERBOSE)) {
+                Ln.v("DISPLAY_READY: onDisplayChanged(" + eventDisplayId + ")");
             }
+            noteDisplayReadySignal(false);
+        }, displayReadyHandler);
+
+        displayReadyWindowListener = new DisplayWindowListener() {
+            @Override
+            public void onDisplayConfigurationChanged(int eventDisplayId,
+                    Configuration newConfig) {
+                if (eventDisplayId != displayId) {
+                    return;
+                }
+                if (Ln.isEnabled(Ln.Level.VERBOSE)) {
+                    Ln.v("DISPLAY_READY: onDisplayConfigurationChanged("
+                            + eventDisplayId + ")");
+                }
+                noteDisplayReadySignal(true);
+            }
+        };
+
+        int[] wmDisplays = ServiceManager.getWindowManager()
+                .registerDisplayWindowListener(displayReadyWindowListener);
+        displayReadyUseWindowConfig = wmDisplays != null;
+        if (!displayReadyUseWindowConfig) {
+            displayReadyWindowListener = null;
+            Ln.w("DISPLAY_READY: WindowManager listener unavailable");
+        }
+    }
+
+    private void armPendingDisplayReady(Size requestedSize,
+            boolean requireWindowConfig) {
+        synchronized (displayReadyLock) {
+            pendingDisplayReadySize = requestedSize;
+            pendingDisplayReadyGeneration++;
+            pendingDisplayReadyDisplayInfoReached = false;
+            pendingDisplayReadyWindowConfigSeen =
+                    !displayReadyUseWindowConfig || !requireWindowConfig;
+        }
+    }
+
+    private void clearPendingDisplayReady(Size requestedSize) {
+        synchronized (displayReadyLock) {
+            if (requestedSize.equals(pendingDisplayReadySize)) {
+                pendingDisplayReadySize = null;
+                pendingDisplayReadyGeneration++;
+                pendingDisplayReadyDisplayInfoReached = false;
+                pendingDisplayReadyWindowConfigSeen = false;
+            }
+        }
+    }
+
+    private void noteDisplayReadySignal(boolean windowConfigSeen) {
+        Size pending;
+        long generation;
+        synchronized (displayReadyLock) {
+            pending = pendingDisplayReadySize;
             if (pending == null) {
                 return;
             }
-            DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(displayId);
-            if (info == null) {
-                return;
+            generation = pendingDisplayReadyGeneration;
+            if (windowConfigSeen && displayReadyUseWindowConfig) {
+                pendingDisplayReadyWindowConfigSeen = true;
             }
-            Size current = info.getSize();
-            if (!pending.equals(current)) {
-                // Display reached an intermediate or unrelated size. Keep
-                // waiting; the next onDisplayChanged should resolve to the
-                // requested size.
-                return;
-            }
+        }
+        checkDisplayReadyReached(pending, generation);
+    }
+
+    private void checkDisplayReadyReached(Size pending, long generation) {
+        DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(displayId);
+        if (info == null) {
+            return;
+        }
+        Size current = info.getSize();
+        if (pending.equals(current)) {
             synchronized (displayReadyLock) {
-                if (pendingDisplayReadySize != pending) {
-                    // A new resize was issued after this one. Drop the ack
-                    // for the old request; the new listener fire will catch
-                    // the new size.
+                if (pendingDisplayReadyGeneration != generation
+                        || !pending.equals(pendingDisplayReadySize)) {
                     return;
                 }
-                pendingDisplayReadySize = null;
+                pendingDisplayReadyDisplayInfoReached = true;
             }
-            DeviceMessage msg = DeviceMessage.createDisplayReady(displayId,
-                    pending.getWidth(), pending.getHeight());
-            sender.send(msg);
-            if (Ln.isEnabled(Ln.Level.VERBOSE)) {
-                Ln.v("Sent DISPLAY_READY for display " + displayId + " at "
-                        + pending.getWidth() + "x" + pending.getHeight());
+        } else {
+            // Display reached an intermediate or unrelated size. Keep waiting;
+            // the next onDisplayChanged should resolve to the requested size.
+            return;
+        }
+
+        boolean ready;
+        synchronized (displayReadyLock) {
+            ready = pendingDisplayReadyGeneration == generation
+                    && pending.equals(pendingDisplayReadySize)
+                    && pendingDisplayReadyDisplayInfoReached
+                    && pendingDisplayReadyWindowConfigSeen;
+        }
+        if (ready) {
+            Handler handler = displayReadyHandler;
+            if (handler == null) {
+                return;
             }
-        }, handler);
+            handler.postDelayed(
+                    () -> sendDisplayReadyIfStable(pending, generation),
+                    DISPLAY_READY_STABLE_DELAY_MS);
+        }
+    }
+
+    private void sendDisplayReadyIfStable(Size pending, long generation) {
+        synchronized (displayReadyLock) {
+            if (pendingDisplayReadyGeneration != generation
+                    || !pending.equals(pendingDisplayReadySize)
+                    || !pendingDisplayReadyDisplayInfoReached
+                    || !pendingDisplayReadyWindowConfigSeen) {
+                return;
+            }
+        }
+
+        DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(displayId);
+        if (info == null || !pending.equals(info.getSize())) {
+            return;
+        }
+
+        synchronized (displayReadyLock) {
+            if (pendingDisplayReadyGeneration != generation
+                    || !pending.equals(pendingDisplayReadySize)
+                    || !pendingDisplayReadyDisplayInfoReached
+                    || !pendingDisplayReadyWindowConfigSeen) {
+                return;
+            }
+            pendingDisplayReadySize = null;
+            pendingDisplayReadyGeneration++;
+            pendingDisplayReadyDisplayInfoReached = false;
+            pendingDisplayReadyWindowConfigSeen = false;
+        }
+
+        DeviceMessage msg = DeviceMessage.createDisplayReady(displayId,
+                pending.getWidth(), pending.getHeight());
+        sender.send(msg);
+        if (Ln.isEnabled(Ln.Level.VERBOSE)) {
+            Ln.v("Sent DISPLAY_READY for display " + displayId + " at "
+                    + pending.getWidth() + "x" + pending.getHeight());
+        }
     }
 
     private void stopDisplayReadyListener() {
@@ -317,12 +433,22 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
             ServiceManager.getDisplayManager().unregisterDisplayListener(displayReadyListenerHandle);
             displayReadyListenerHandle = null;
         }
+        if (displayReadyWindowListener != null) {
+            ServiceManager.getWindowManager()
+                    .unregisterDisplayWindowListener(displayReadyWindowListener);
+            displayReadyWindowListener = null;
+        }
         if (displayReadyHandlerThread != null) {
             displayReadyHandlerThread.quitSafely();
             displayReadyHandlerThread = null;
         }
+        displayReadyHandler = null;
+        displayReadyUseWindowConfig = false;
         synchronized (displayReadyLock) {
             pendingDisplayReadySize = null;
+            pendingDisplayReadyGeneration++;
+            pendingDisplayReadyDisplayInfoReached = false;
+            pendingDisplayReadyWindowConfigSeen = false;
         }
     }
 
@@ -900,24 +1026,24 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
             Size requestedSize = new Size(finalWidth, finalHeight);
             if (requestedSize.equals(lastPrimaryDisplaySizeRequest)
                     && dpi == lastPrimaryDisplayDpiRequest) {
+                armPendingDisplayReady(requestedSize, false);
+                noteDisplayReadySignal(false);
                 return;
             }
 
             Ln.i("Resize primary display to " + requestedSize.getWidth() + "x"
                     + requestedSize.getHeight() + "/" + dpi);
             int requestedDpi = dpi != lastPrimaryDisplayDpiRequest ? dpi : 0;
+            // Arm the DisplayListener before applying the resize so it cannot
+            // miss a synchronous display-changed callback from wm size.
+            armPendingDisplayReady(requestedSize, true);
             if (Device.setDisplaySizeAndDensity(displayId, requestedSize,
                     requestedDpi)) {
                 lastPrimaryDisplaySizeRequest = requestedSize;
                 lastPrimaryDisplayDpiRequest = dpi;
-                // Arm the DisplayListener to send DISPLAY_READY once the
-                // display surface actually reaches this size. Overwriting
-                // any in-flight pending size is intentional: the latest
-                // request is the only one the client cares about.
-                synchronized (displayReadyLock) {
-                    pendingDisplayReadySize = requestedSize;
-                }
+                noteDisplayReadySignal(false);
             } else {
+                clearPendingDisplayReady(requestedSize);
                 Ln.w("Primary display resize failed");
             }
         } else {

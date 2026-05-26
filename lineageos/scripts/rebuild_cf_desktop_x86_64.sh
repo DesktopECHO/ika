@@ -62,9 +62,36 @@ bundle_dir="$output_dir/cvd-desktop-$arch"
 thin_dir="$output_dir/cvd-desktop-$arch-slim"
 product_out="$repo_root/out/target/product/$product_out_subdir"
 host_package="$repo_root/out/host/$host_out_subdir/cvd-host_package.tar.gz"
+overlay_dir="$(cd "$script_dir/.." && pwd)"
 
 mkdir -p "$output_dir"
 cd "$repo_root"
+
+apply_local_overlay() {
+  local dest="$repo_root/vendor/lineage_desktop"
+
+  if [[ -L "$dest" ]]; then
+    dest="$(readlink -f "$dest")"
+  fi
+  mkdir -p "$dest"
+
+  local src_real dest_real
+  src_real="$(cd "$overlay_dir" && pwd -P)"
+  dest_real="$(cd "$dest" && pwd -P)"
+  if [[ "$src_real" == "$dest_real" ]]; then
+    return 0
+  fi
+
+  printf '[lineage-desktop] applying local overlay from %s\n' "$overlay_dir"
+  rsync -a --delete \
+    --exclude='.git' \
+    --exclude='out' \
+    --exclude='src' \
+    --exclude='prebuilts/native_bridge/Android.bp' \
+    --exclude='prebuilts/native_bridge/manifest.json' \
+    --exclude='prebuilts/native_bridge/system' \
+    "$overlay_dir"/ "$dest"/
+}
 
 repair_soong_zero_byte_objects() {
   local intermediates="$repo_root/out/soong/.intermediates"
@@ -89,6 +116,9 @@ repair_soong_zero_byte_objects() {
 }
 
 repair_soong_zero_byte_objects
+
+apply_local_overlay
+vendor/lineage_desktop/scripts/apply_source_patches.sh "$repo_root"
 
 # x86 ARM native bridge: enabled by default; opt out with
 # INCLUDE_X86_ARM_NATIVE_BRIDGE=0 to disable arm64 binary translation.

@@ -669,7 +669,7 @@ sc_cuttlefish_frame_source_init(struct sc_cuttlefish_frame_source *source,
 bool
 sc_cuttlefish_frame_source_start(struct sc_cuttlefish_frame_source *source) {
     return sc_thread_create(&source->thread, run_cuttlefish_frame_source,
-                            "cuttlefish-frame-source", source);
+                            "cf-frame-src", source);
 }
 
 void

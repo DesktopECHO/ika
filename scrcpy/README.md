@@ -62,7 +62,7 @@ cvd display resize \
 
 The instance number `N` is parsed from the socket path by scanning for the pattern `cvd-N`. The `cvd` binary path defaults to `/usr/lib/cuttlefish-common/bin/cvd` and can be overridden with the `IKA_CVD_BIN` environment variable.
 
-Resize requests are throttled: a new resize is not sent until 1 second has elapsed with no further window-resize activity (`RAW_FRAME_RESIZE_STILL_DELAY`), and rapid successive requests are rate-limited to at most one every 33 ms (`RAW_FRAME_RESIZE_ACTIVE_MIN_INTERVAL`). Only one resize child process runs at a time; any still-running child is reaped before a new one is spawned.
+Display resize requests are rate-limited by `FLEX_DISPLAY_REQUEST_MIN_INTERVAL`. Separately, raw-frame rendering is throttled for `RAW_FRAME_RESIZE_THROTTLE_WINDOW` after window-resize activity, with redraws limited by `RAW_FRAME_RESIZE_RENDER_INTERVAL`. Only one resize child process runs at a time; any still-running child is reaped before a new one is spawned.
 
 For raw-frame paths (DMA-BUF and shared memory), the resize target is the renderer output size so that HiDPI desktop scaling does not upscale already-rendered content. For encoded video paths, it is the logical window size, rounded down to the nearest 8 pixels to satisfy codec macroblock alignment.
 
@@ -70,16 +70,15 @@ For raw-frame paths (DMA-BUF and shared memory), the resize target is the render
 
 While a flex-display resize is in flight, the screen is in `transient_stretch` mode. During this period:
 
-- The old GPU texture is held and stretched to fill the window.
-- 28 ghost copies of the texture are composited at low alpha and staggered pixel offsets to produce a soft-blur effect without a shader pass.
-- When the Cuttlefish device confirms the new size is active (via the `DISPLAY_READY` device message), `transient_stretch` is cleared and the blur fades out linearly over 250 ms (`FLEX_DISPLAY_BLUR_FADE_DURATION`).
-- A fallback timer fires if `DISPLAY_READY` never arrives.
+- A resize preview texture is captured from the current live texture crop, stretched to fill the window, and blurred.
+- Jittered ghost copies of the preview are composited at low alpha and staggered fractional pixel offsets to produce a soft-blur effect without a shader pass.
+- When the Cuttlefish device confirms the new size is active (via the `DISPLAY_READY` device message), the host window has not resized for the settle delay, and a raw frame newer than the current display resize request has arrived, `transient_stretch` is cleared. The final live frame is drawn underneath while the preview texture stays opaque briefly, then crossfades out.
 
 The result is a smooth visual transition rather than a jarring jump when the window is resized.
 
 ### 6. `DISPLAY_READY` device message
 
-The scrcpy server (running on the Android side inside Cuttlefish) sends a `DISPLAY_READY` message when the display subsystem has settled at the new dimensions. The client-side handler `sc_screen_on_display_ready()` matches the reported size against the most recently requested size; if they agree, `transient_stretch` is cleared and the blur fade begins.
+The scrcpy server (running on the Android side inside Cuttlefish) sends a `DISPLAY_READY` message when the display subsystem has reached the requested dimensions and WindowManager has reported a display-window configuration update for that resize. The client-side handler `sc_screen_on_display_ready()` matches the reported size against the most recently requested size, then releases `transient_stretch` only after the host window has also been quiet for `FLEX_DISPLAY_RESIZE_QUIET_DELAY` and a raw frame newer than the current display resize request has arrived. If that frame arrived before `DISPLAY_READY`, the client waits up to `FLEX_DISPLAY_POST_READY_FRAME_GRACE` before accepting it.
 
 ### 7. Raw frame buffer pool
 

@@ -112,7 +112,7 @@ By default `ika` uses:
 - host tools from `/usr/lib/cuttlefish-common`
 - the packaged LineageOS tree from `/usr/share/cuttlefish-common/lineageos`
 - instance state under `~/ika`
-- a 64 GiB thin-provisioned f2fs userdata image
+- a 62 GiB thin-provisioned f2fs userdata image
 - `gfxstream` GPU acceleration
 - host Bluetooth, with Wi-Fi, netsim, and UWB disabled unless you override them
 

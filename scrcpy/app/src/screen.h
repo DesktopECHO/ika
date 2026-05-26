@@ -97,26 +97,24 @@ struct sc_screen {
     sc_tick initial_window_prepare_tick;
     SDL_TimerID initial_window_show_timer; // protected by mutex
     bool transient_stretch;
+    struct sc_size transient_stretch_source_size;
+    SDL_Texture *resize_preview_texture;
+    struct sc_size resize_preview_size;
     sc_tick last_resize_event_tick;
-    // Set on the first frame that matches last_requested_display_size after a
-    // resize. Used to hold the stretched preview through Android's post-resize
-    // redraw cascade; cleared whenever a non-matching frame arrives or a new
-    // resize starts.
-    sc_tick first_matching_frame_tick;
-    // Hash of a sparse pixel sample of the most recently-received raw frame,
-    // and the tick at which it last changed. Used to decide when Android has
-    // finished its post-resize recomposting and we can swap to the new
-    // texture: while the cascade is in flight pixels keep changing; once it
-    // settles the hash stops changing and we know it's safe.
-    uint64_t frame_content_hash;
-    sc_tick frame_content_changed_tick;
+    // Set once the device reports DISPLAY_READY for last_requested_display_size.
+    // The stretched preview is released only after this is true, the host
+    // window has been quiet for FLEX_DISPLAY_RESIZE_QUIET_DELAY, and a raw
+    // frame newer than the current display resize request has arrived.
+    bool display_ready;
+    sc_tick display_ready_tick;
+    bool display_ready_raw_frame;
     // Set when the resize hold begins, so the blur ghost overlay can ramp in
     // gradually during transient_stretch instead of snapping to full strength.
     sc_tick blur_fade_in_start_tick;
-    // Set when stability is signalled (DISPLAY_READY ack or fallback) and
-    // the blur begins its fade-out. transient_stretch is already false at
-    // this point; the texture has been swapped to the new content, but the
-    // blur ghost overlay decays from blur_fade_start_intensity to zero.
+    // Set when the resize hold releases and the blur begins its fade-out.
+    // transient_stretch is already false at this point; the texture has been
+    // swapped to the new content, but the blur ghost overlay decays from
+    // blur_fade_start_intensity to zero.
     sc_tick blur_fade_start_tick;
     float blur_fade_start_intensity;
     SDL_TimerID resize_settle_timer; // protected by mutex
@@ -159,6 +157,7 @@ struct sc_screen {
         uint32_t offset;
         uint32_t modifier_hi;
         uint32_t modifier_lo;
+        sc_tick received_tick;
         bool is_dmabuf;
         bool owns_pixels;
     } pending_raw_frame, raw_frame;
@@ -333,10 +332,11 @@ sc_screen_hidpi_scale_coords(struct sc_screen *screen, int32_t *x, int32_t *y);
 
 // Handler for DEVICE_MSG_TYPE_DISPLAY_READY. Called on the main thread after
 // the receiver forwards the device-side signal that the guest has finished a
-// resize. Clears transient_stretch (skipping the host-side hash heuristics)
-// and re-uploads the most recent frame so the new content is on screen
-// immediately. display_id, width, height are reported by the device for the
-// client to sanity-check against its last request.
+// resize. transient_stretch only clears once this signal has arrived and the
+// host window has not resized for the settle delay and a raw frame newer than
+// the current display resize request has arrived. display_id, width, height are
+// reported by the device for the client to sanity-check against its last
+// request.
 void
 sc_screen_on_display_ready(struct sc_screen *screen, uint32_t display_id,
                            uint16_t width, uint16_t height);

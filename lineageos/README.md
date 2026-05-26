@@ -18,7 +18,7 @@ lunch lineage_desktop_cf_x86_64-trunk_staging-userdebug
 (The space-separated form `lunch lineage_desktop_cf_arm64_pgagnostic trunk_staging userdebug` also works.)
 
 This product targets Apple Silicon and x86-64 CPUs running in the Cuttlefish emulator.
-Both targets use Cuttlefish's default 64 GiB thin-provisioned f2fs userdata image.
+Both targets use Cuttlefish's default 62 GiB thin-provisioned f2fs userdata image.
 
 ## Source Layout
 
@@ -102,7 +102,7 @@ both Cuttlefish products.
 
 Before compiling, the script runs `scripts/validate_build_inputs.sh` to verify
 that source patches are applied, required desktop aconfig flags are enabled,
-userdata remains the default 64 GiB f2fs image, microG and WebView APKs are valid
+userdata remains the default 62 GiB f2fs image, microG and WebView APKs are valid
 zip files, and the x86-64 native bridge payload is complete. Set
 `VALIDATE_BUILD_INPUTS=0` only for local experiments.
 

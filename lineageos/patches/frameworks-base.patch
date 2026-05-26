@@ -15,6 +15,18 @@ Keeping that policy in the framework layer gives Launcher and the product
 overlays a stable desktop contract to build on.
 
 
+diff --git a/data/etc/com.android.systemui.xml b/data/etc/com.android.systemui.xml
+index b632df559ff8..75eb6b58e4cd 100644
+--- a/data/etc/com.android.systemui.xml
++++ b/data/etc/com.android.systemui.xml
+@@ -34,6 +34,7 @@
+         <permission name="android.permission.LOCATION_HARDWARE"/>
+         <permission name="android.permission.MANAGE_DEBUGGING"/>
+         <permission name="android.permission.MANAGE_GAME_MODE" />
++        <permission name="android.permission.MANAGE_ACTIVITY_TASKS"/>
+         <permission name="android.permission.MANAGE_SECURE_LOCK_DEVICE"/>
+         <permission name="android.permission.MANAGE_SENSOR_PRIVACY"/>
+         <permission name="android.permission.MANAGE_USB"/>
 diff --git a/core/java/android/os/storage/StorageManager.java b/core/java/android/os/storage/StorageManager.java
 index e2ef800b5744..9c7da80abd41 100644
 --- a/core/java/android/os/storage/StorageManager.java
@@ -2348,38 +2360,148 @@ index 1a70d3a6867b..1a2d992cf433 100644
              return mUserRotation;
          }
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/windowdecor/DesktopModeTouchEventListener.java b/libs/WindowManager/Shell/src/com/android/wm/shell/windowdecor/DesktopModeTouchEventListener.java
-index e6d3b0505cb2..7723811dc2ea 100644
+index e6d3b0505cb2..c4104bdffe30 100644
 --- a/libs/WindowManager/Shell/src/com/android/wm/shell/windowdecor/DesktopModeTouchEventListener.java
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/windowdecor/DesktopModeTouchEventListener.java
-@@ -16,6 +16,7 @@
- 
- package com.android.wm.shell.windowdecor;
- 
+@@ -19,2 +19,3 @@
 +import static android.view.InputDevice.SOURCE_MOUSE;
  import static android.view.InputDevice.SOURCE_TOUCHSCREEN;
  import static android.view.MotionEvent.ACTION_CANCEL;
- import static android.view.MotionEvent.ACTION_HOVER_ENTER;
-@@ -315,14 +316,14 @@ public class DesktopModeTouchEventListener
-             v.getLocationInWindow(viewLocation);
-             mIsResizeGesture = decoration.shouldResizeListenerHandleEvent(e,
-                     new Point(viewLocation[0], viewLocation[1]));
-+            final boolean mouseSource = (e.getSource() & SOURCE_MOUSE) == SOURCE_MOUSE;
-             // The caption window may be a spy window when the caption background is
--            // transparent, which means events will fall through to the app window. Make
--            // sure to cancel these events if they do not happen in the intersection of the
--            // customizable region and what the app reported as exclusion areas, because
--            // the drag-move or other caption gestures should take priority outside those
--            // regions.
-+            // transparent, which means events will fall through to the app window. Touch input
-+            // still needs the app-reported exclusion region so system drag gestures keep priority.
-+            // Mouse clicks in the customizable caption region should go to custom app chrome even
-+            // when the app did not report that region, such as Chromium's tab strip.
+@@ -82,4 +83,6 @@ public class DesktopModeTouchEventListener
+     private static final boolean DEBUG_MOTION_EVENTS = SystemProperties.getBoolean(
+             "persist.wm.debug.window_decoration_motion_events_debug", false);
+-
++    private static final boolean DISABLE_MOUSE_CUSTOM_CAPTION_GESTURES = SystemProperties.getBoolean(
++            "persist.wm.disable_mouse_custom_caption_gestures", true);
++
+     private final @NonNull Context mContext;
+@@ -268,4 +271,5 @@ public class DesktopModeTouchEventListener
+         final ActivityManager.RunningTaskInfo taskInfo = decoration.getTaskInfo();
+         final boolean touchscreenSource =
+                 (e.getSource() & SOURCE_TOUCHSCREEN) == SOURCE_TOUCHSCREEN;
++        final boolean mouseSource = (e.getSource() & SOURCE_MOUSE) == SOURCE_MOUSE;
+         // Disable long click during events from a non-touchscreen source
+@@ -322,4 +326,5 @@ public class DesktopModeTouchEventListener
+             // regions.
              mIsCustomHeaderGesture = downInCustomizableCaptionRegion
 -                    && downInExclusionRegion && isTransparentCaption;
-+                    && (downInExclusionRegion || mouseSource) && isTransparentCaption;
++                    && downInExclusionRegion && isTransparentCaption
++                    && (!mouseSource || !DISABLE_MOUSE_CUSTOM_CAPTION_GESTURES);
          }
-         if (mIsCustomHeaderGesture || mIsResizeGesture) {
-             // The event will be handled by the custom window below or pilfered by resize
+@@ -331,16 +336,24 @@ public class DesktopModeTouchEventListener
+                     viewName, mIsCustomHeaderGesture, mIsResizeGesture);
+             return false;
+         }
+-        // Pilfer so that windows below receive cancellations for this gesture.
+-        pilferPointers(v);
+         if (isUpOrCancel) {
+             // Gesture is finished, reset state.
+             mIsCustomHeaderGesture = false;
+             mIsResizeGesture = false;
+         }
+-        if (isAppHandle) {
+-            return mHandleDragDetector.onMotionEvent(v, e);
+-        } else {
+-            return mHeaderDragDetector.onMotionEvent(v, e);
++        // The caption can be a spy window when its background is transparent, which
++        // lets input flow to the app below. Pilfering is what stops the app from
++        // continuing to receive the gesture, and we defer it to the moment the drag
++        // detector confirms the gesture has exceeded touch slop (see
++        // DragDetector#isDragInProgress). Touch custom-header/exclusion gestures above
++        // remain app-owned so dragging a browser tab can still tear it out, while mouse
++        // defaults to system caption handling to preserve expected window dragging.
++        final DragDetector dragDetector =
++                isAppHandle ? mHandleDragDetector : mHeaderDragDetector;
++        final boolean wasDragInProgress = dragDetector.isDragInProgress();
++        final boolean handled = dragDetector.onMotionEvent(v, e);
++        if (!wasDragInProgress && dragDetector.isDragInProgress()) {
++            pilferPointers(v);
+         }
++        return handled;
+     }
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/windowdecor/DragDetector.java b/libs/WindowManager/Shell/src/com/android/wm/shell/windowdecor/DragDetector.java
+index c3cb084e06d8..41969fccd7f4 100644
+--- a/libs/WindowManager/Shell/src/com/android/wm/shell/windowdecor/DragDetector.java
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/windowdecor/DragDetector.java
+@@ -16,7 +16,6 @@
+ 
+ package com.android.wm.shell.windowdecor;
+ 
+-import static android.view.InputDevice.SOURCE_TOUCHSCREEN;
+ import static android.view.MotionEvent.ACTION_CANCEL;
+ import static android.view.MotionEvent.ACTION_DOWN;
+ import static android.view.MotionEvent.ACTION_HOVER_ENTER;
+@@ -95,13 +94,11 @@ public class DragDetector {
+             return false;
+         }
+ 
+-        final boolean isTouchScreen =
+-                (ev.getSource() & SOURCE_TOUCHSCREEN) == SOURCE_TOUCHSCREEN;
+-        if (!isTouchScreen) {
+-            // Only touches generate noisy moves, so mouse/trackpad events don't need to filtered
+-            // to take the slop threshold into consideration.
+-            return mEventHandler.handleMotionEvent(v, ev);
+-        }
++        // Apply touch slop to all sources (touch and mouse). Callers can observe the
++        // moment the gesture is recognised as a drag via isDragInProgress, which is
++        // useful for spy windows that want to defer pilfering pointers until a real
++        // drag begins so that short clicks can still reach the underlying app
++        // (e.g. clicking a tab in Chromium's tab strip).
+         switch (ev.getActionMasked()) {
+             case ACTION_DOWN: {
+                 mDragPointerId = ev.getPointerId(0);
+@@ -200,6 +197,15 @@ public class DragDetector {
+         mTouchSlop = touchSlop;
+     }
+ 
++    /**
++     * @return whether the detector has recognised the in-flight gesture as a drag.
++     * Transitions from {@code false} to {@code true} the first time a MOVE event
++     * exceeds the touch slop threshold (and the hold-to-drag duration, if any).
++     */
++    boolean isDragInProgress() {
++        return mIsDragEvent;
++    }
++
+     private void resetState() {
+         mIsDragEvent = false;
+         mInputDownPoint.set(0, 0);
+diff --git a/libs/WindowManager/Shell/tests/unittest/src/com/android/wm/shell/windowdecor/DragDetectorTest.kt b/libs/WindowManager/Shell/tests/unittest/src/com/android/wm/shell/windowdecor/DragDetectorTest.kt
+index ce4327c2437e..2873c13680f9 100644
+--- a/libs/WindowManager/Shell/tests/unittest/src/com/android/wm/shell/windowdecor/DragDetectorTest.kt
++++ b/libs/WindowManager/Shell/tests/unittest/src/com/android/wm/shell/windowdecor/DragDetectorTest.kt
+@@ -171,7 +171,7 @@ class DragDetectorTest : ShellTestCase() {
+     }
+ 
+     @Test
+-    fun testMoveInSlop_mouse_passesDownMoveAndUp() {
++    fun testMoveInSlop_mouse_passesDownAndUp() {
+         val dragDetector = createDragDetector()
+         `when`(
+                 eventHandler.handleMotionEvent(
+@@ -196,19 +196,16 @@ class DragDetectorTest : ShellTestCase() {
+             )
+ 
+         val newX = X + SLOP - 1
+-        assertTrue(
++        assertFalse(
+             dragDetector.onMotionEvent(
+                 createMotionEvent(MotionEvent.ACTION_MOVE, newX, Y, isTouch = false)
+             )
+         )
+-        verify(eventHandler)
++        verify(eventHandler, never())
+             .handleMotionEvent(
+                 any(),
+                 argThat {
+-                    return@argThat it.action == MotionEvent.ACTION_MOVE &&
+-                        it.x == newX &&
+-                        it.y == Y &&
+-                        it.source == InputDevice.SOURCE_MOUSE
++                    return@argThat it.action == MotionEvent.ACTION_MOVE
+                 },
+             )
+ 
 diff --git a/services/core/java/com/android/server/pm/ScanPackageUtils.java b/services/core/java/com/android/server/pm/ScanPackageUtils.java
 index b7ae043d66ee..abc70ba892a6 100644
 --- a/services/core/java/com/android/server/pm/ScanPackageUtils.java

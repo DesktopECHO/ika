@@ -192,8 +192,8 @@ check_userdata_policy() {
   require_file "$arm_board"
   require_file "$x86_board"
 
-  grep -Eq '^[[:space:]]*TARGET_USERDATAIMAGE_PARTITION_SIZE[[:space:]]*\?=[[:space:]]*68719476736[[:space:]]*$' "$shared_device" || \
-    fail "userdata size is not the expected 64 GiB default in $shared_device"
+  grep -Eq '^[[:space:]]*TARGET_USERDATAIMAGE_PARTITION_SIZE[[:space:]]*\?=[[:space:]]*66571993088[[:space:]]*$' "$shared_device" || \
+    fail "userdata size is not the expected 62 GiB default in $shared_device"
   grep -Eq '^[[:space:]]*TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE[[:space:]]*:=[[:space:]]*f2fs[[:space:]]*$' "$arm_board" || \
     fail "ARM64 userdata is not f2fs in $arm_board"
   grep -Eq '^[[:space:]]*TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE[[:space:]]*:=[[:space:]]*f2fs[[:space:]]*$' "$x86_board" || \
