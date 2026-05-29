@@ -1,14 +1,15 @@
 Patch summary:
-Turn Launcher3/Quickstep into the desktop shell. This patch owns the bulk of the
-user-facing desktop behavior: taskbar-first navigation, desktop app drawer
-behavior, taskbar context menus, pinning and bubbles integration, freeform window
-coordination, responsive device profiles, and tests for those interactions.
+Turn Launcher3/Quickstep into the desktop shell. This consolidated patch owns
+the user-facing desktop behavior: taskbar-first navigation, desktop app drawer
+behavior, taskbar context menus, pinning and bubbles integration, freeform
+window coordination, responsive device profiles, dynamic display refresh,
+show-desktop plumbing, taskbar popup/live-bounds fixes, visual effects,
+deep shortcuts, log cleanup, and tests for those interactions.
 
 The guiding idea is that the taskbar is the primary desktop control surface.
 The app drawer should open from the taskbar start button, context menus should
 anchor to the item the user clicked, apps should work in freeform windows, and
-layout should remain sane as the VM display changes shape. Lower-level dynamic
-display refresh and visual-effect tweaks live in separate add-on patches.
+layout should remain sane as the VM display changes shape.
 
 diff --git a/Android.bp b/Android.bp
 index 25ce37b8d1..c27854caba 100644
@@ -67,15 +68,40 @@ index 05e1bf4d30..1ae821f2ec 100644
          removeAllViews();
          applyPredictionApps();
      }
+diff --git a/quickstep/src/com/android/launcher3/taskbar/BaseTaskbarContext.java b/quickstep/src/com/android/launcher3/taskbar/BaseTaskbarContext.java
+index 48ffafe786..0e94a1ccef 100644
+--- a/quickstep/src/com/android/launcher3/taskbar/BaseTaskbarContext.java
++++ b/quickstep/src/com/android/launcher3/taskbar/BaseTaskbarContext.java
+@@ -19,6 +19,7 @@ import android.content.Context;
+ import android.content.Intent;
+ import android.content.pm.ShortcutInfo;
+ import android.graphics.Point;
++import android.graphics.Rect;
+ import android.os.UserHandle;
+ import android.view.LayoutInflater;
+ 
+@@ -104,6 +105,12 @@ public abstract class BaseTaskbarContext extends BaseContext
+      */
+     public abstract Point getScreenSize();
+ 
++    /**
++     * Returns live display/window bounds for placement, clamping, and touch-region decisions.
++     */
++    @Override
++    public abstract Rect getLiveDisplayBounds();
++
+     /**
+      * Returns display height.
+      */
 diff --git a/quickstep/src/com/android/launcher3/taskbar/LauncherTaskbarUIController.java b/quickstep/src/com/android/launcher3/taskbar/LauncherTaskbarUIController.java
-index 72716023e2..af84d0afa4 100644
+index 72716023e2..a28ed74e69 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/LauncherTaskbarUIController.java
 +++ b/quickstep/src/com/android/launcher3/taskbar/LauncherTaskbarUIController.java
 @@ -34,11 +34,14 @@ import static com.android.quickstep.interaction.AllSetActivity.ALL_SET_SWIPE_THR
  import android.animation.Animator;
  import android.animation.AnimatorSet;
  import android.animation.ValueAnimator;
-+import android.graphics.Point;
++import android.graphics.Rect;
  import android.os.SystemProperties;
 +import android.util.DisplayMetrics;
  import android.window.RemoteTransition;
@@ -94,7 +120,7 @@ index 72716023e2..af84d0afa4 100644
  
      public static final int MINUS_ONE_PAGE_PROGRESS_INDEX = 0;
      public static final int ALL_APPS_PAGE_PROGRESS_INDEX = 1;
-@@ -560,16 +564,62 @@ public class LauncherTaskbarUIController extends TaskbarUIController {
+@@ -560,16 +564,63 @@ public class LauncherTaskbarUIController extends TaskbarUIController {
  
      @Override
      protected void toggleAllApps(boolean focusSearch) {
@@ -102,14 +128,15 @@ index 72716023e2..af84d0afa4 100644
 -                && !mTaskbarLauncherStateController.isInOverviewUi()
 -                && isLauncherTopResumedActivity();
 -        if (canToggleHomeAllApps) {
-+        Point screenSize = mControllers.taskbarActivityContext.getScreenSize();
++        Rect displayBounds = mControllers.taskbarActivityContext.getLiveDisplayBounds();
 +        DisplayMetrics metrics = mControllers.taskbarActivityContext.getResources()
 +                .getDisplayMetrics();
 +        final boolean shouldUseLauncherAllApps = shouldUseLauncherAllApps(
 +                isLauncherResumed() && isLauncherTopResumedActivity(),
 +                mControllers.taskbarActivityContext.showDesktopTaskbarForFreeformDisplay(),
 +                mTaskbarLauncherStateController.isInOverviewUi(),
-+                isDesktopSizedDisplay(screenSize.x, screenSize.y, metrics.densityDpi));
++                isDesktopSizedDisplay(displayBounds.width(), displayBounds.height(),
++                        metrics.densityDpi));
 +        if (shouldUseLauncherAllApps) {
              mLauncher.toggleAllApps(focusSearch);
              return;
@@ -162,7 +189,7 @@ index 72716023e2..af84d0afa4 100644
          if (refactorTaskbarUiState()) {
              final boolean ret = mLauncherUiState.isResumed();
 diff --git a/quickstep/src/com/android/launcher3/taskbar/NavbarButtonsViewController.java b/quickstep/src/com/android/launcher3/taskbar/NavbarButtonsViewController.java
-index bd2fe9a990..441907caad 100644
+index bd2fe9a990..64aab16f22 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/NavbarButtonsViewController.java
 +++ b/quickstep/src/com/android/launcher3/taskbar/NavbarButtonsViewController.java
 @@ -321,6 +321,10 @@ public class NavbarButtonsViewController implements TaskbarControllers.LoggableT
@@ -262,7 +289,7 @@ index bd2fe9a990..441907caad 100644
          int finalX = getNavBarTranslationX(location);
          Animator teleportAnimator = BarsLocationAnimatorHelper
                  .getTeleportAnimatorForNavButtons(location, mNavButtonContainer, finalX);
-@@ -1327,6 +1359,23 @@ public class NavbarButtonsViewController implements TaskbarControllers.LoggableT
+@@ -1327,9 +1359,30 @@ public class NavbarButtonsViewController implements TaskbarControllers.LoggableT
          }
      }
  
@@ -286,7 +313,32 @@ index bd2fe9a990..441907caad 100644
      private int getNavBarTranslationX(BubbleBarLocation location) {
          boolean isNavbarOnRight = location.isOnLeft(mNavButtonsView.isLayoutRtl());
          DeviceProfile dp = mContext.getDeviceProfile();
-@@ -1382,6 +1431,8 @@ public class NavbarButtonsViewController implements TaskbarControllers.LoggableT
++        int displayWidth = mContext.getLiveDisplayBounds().width();
++        if (displayWidth <= 0) {
++            displayWidth = dp.getDeviceProperties().getWidthPx();
++        }
+         float navBarTargetStartX;
+         if (!mContext.isUserSetupComplete()) {
+             // Skip additional translations on the nav bar container while in SUW layout
+@@ -1339,7 +1392,7 @@ public class NavbarButtonsViewController implements TaskbarControllers.LoggableT
+             // If the taskbar is start aligned the navigation bar is aligned to the start or end of
+             // the container, depending on the bubble bar location
+             if (isNavbarOnRight) {
+-                navBarTargetStartX = dp.getDeviceProperties().getWidthPx() - navBarSpacing - mNavButtonContainer.getWidth();
++                navBarTargetStartX = displayWidth - navBarSpacing - mNavButtonContainer.getWidth();
+             } else {
+                 navBarTargetStartX = navBarSpacing;
+             }
+@@ -1352,7 +1405,7 @@ public class NavbarButtonsViewController implements TaskbarControllers.LoggableT
+             if (isNavbarOnRight) {
+                 if (mNavButtonsView.isLayoutRtl()) {
+                     float taskBarEnd = taskbarBounds.right;
+-                    navBarTargetStartX = (dp.getDeviceProperties().getWidthPx() + taskBarEnd - navbarWidth) / 2;
++                    navBarTargetStartX = (displayWidth + taskBarEnd - navbarWidth) / 2;
+                 } else {
+                     navBarTargetStartX = mNavButtonContainer.getLeft();
+                 }
+@@ -1382,6 +1435,8 @@ public class NavbarButtonsViewController implements TaskbarControllers.LoggableT
                          .bubbleBarViewController.getBubbleBarLocation();
              }
              onBubbleBarLocationUpdated(mBubbleBarTargetLocation);
@@ -295,8 +347,29 @@ index bd2fe9a990..441907caad 100644
          }
      }
  
+diff --git a/quickstep/src/com/android/launcher3/taskbar/OverflownAppsContainerView.kt b/quickstep/src/com/android/launcher3/taskbar/OverflownAppsContainerView.kt
+index 93c8870a6e..3898d96598 100644
+--- a/quickstep/src/com/android/launcher3/taskbar/OverflownAppsContainerView.kt
++++ b/quickstep/src/com/android/launcher3/taskbar/OverflownAppsContainerView.kt
+@@ -23,6 +23,7 @@ import android.view.View
+ import android.widget.LinearLayout
+ import androidx.core.view.updatePadding
+ import com.android.launcher3.BubbleTextView
++import com.android.launcher3.InsettableFrameLayout
+ import com.android.launcher3.R
+ import com.android.launcher3.model.data.ItemInfo
+ import com.android.launcher3.model.data.WorkspaceItemInfo
+@@ -101,4 +102,8 @@ constructor(context: Context, attrs: AttributeSet? = null, defStyleAttr: Int = 0
+     override fun getTargetObjectLocation(outPos: Rect?) {
+         popupContainer.getDescendantRectRelativeToSelf(overflowIcon, outPos)
+     }
++
++    override fun getMaxVisibleBottom(dragLayer: InsettableFrameLayout, insets: Rect): Int {
++        return mActivityContext.liveDisplayBounds.height() - insets.bottom
++    }
+ }
 diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarActivityContext.java b/quickstep/src/com/android/launcher3/taskbar/TaskbarActivityContext.java
-index 3ff0bf39fc..59dada3c3c 100644
+index 3ff0bf39fc..5fdaf4db74 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/TaskbarActivityContext.java
 +++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarActivityContext.java
 @@ -39,6 +39,7 @@ import static com.android.launcher3.config.FeatureFlags.enableTaskbarPinning;
@@ -307,7 +380,53 @@ index 3ff0bf39fc..59dada3c3c 100644
  import static com.android.launcher3.taskbar.TaskbarDesktopExperienceFlags.enableAutoStashConnectedDisplayTaskbar;
  import static com.android.launcher3.taskbar.TaskbarManagerImpl.ENABLE_TASKBAR_URI;
  import static com.android.launcher3.taskbar.TaskbarManagerImpl.NAVIGATION_BAR_HINT_URI;
-@@ -649,6 +650,9 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
+@@ -304,6 +305,9 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
+         mSysUiProxy = sysUiProxy;
+         mPrimaryDisplayId = primaryDisplayId;
+         mWindowContext = windowContext;
++        // Views and live-bounds consumers below need current window metrics during construction.
++        Context c = getApplicationContext();
++        mWindowManager = mWindowContext.getSystemService(WindowManager.class);
+         applyDeviceProfile(launcherDp);
+         mTaskbarSpecsEvaluator = new TaskbarSpecsEvaluator(
+                 this,
+@@ -316,10 +320,6 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
+         mIsSafeModeEnabled = TraceHelper.allowIpcs("isSafeMode",
+                 () -> getPackageManager().isSafeMode());
+ 
+-        // Get display and corners first, as views might use them in constructor.
+-        Context c = getApplicationContext();
+-        mWindowManager = c.getSystemService(WindowManager.class);
+-
+         // Inflate views.
+         boolean isTransientTaskbar = isTransientTaskbar();
+         int taskbarLayout = isTransientTaskbar ? R.layout.transient_taskbar : R.layout.taskbar;
+@@ -494,6 +494,16 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
+         return DisplayController.INSTANCE.get(this).getInfo().currentSize;
+     }
+ 
++    @Override
++    public Rect getLiveDisplayBounds() {
++        Rect currentBounds = mWindowManager.getCurrentWindowMetrics().getBounds();
++        if (!currentBounds.isEmpty()) {
++            return new Rect(currentBounds);
++        }
++        Point screenSize = getScreenSize();
++        return new Rect(0, 0, screenSize.x, screenSize.y);
++    }
++
+     @Override
+     public int getDisplayHeight() {
+         return DisplayController.INSTANCE.get(this).getInfo().currentSize.y;
+@@ -534,6 +544,7 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
+                 .withDimensionsOverride(overrideProvider).build();
+         if (refactorTaskbarUiState()) {
+             mTaskbarUiState.setDeviceProfile(mDeviceProfile);
++            mTaskbarUiState.setLiveDisplayBounds(getLiveDisplayBounds());
+         }
+ 
+         if (isTransientTaskbar()) {
+@@ -649,6 +660,9 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
                  !SettingsCache.INSTANCE.get(this).getValue(ENABLE_TASKBAR_URI)) {
              return true;
          }
@@ -317,7 +436,7 @@ index 3ff0bf39fc..59dada3c3c 100644
          return mDeviceProfile.getDeviceProperties().isPhone() && !mDeviceProfile.isTaskbarPresent;
      }
  
-@@ -885,7 +889,17 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
+@@ -885,7 +899,17 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
  
      /** Returns whether taskbar should start align. */
      public boolean shouldStartAlignTaskbar() {
@@ -336,7 +455,34 @@ index 3ff0bf39fc..59dada3c3c 100644
      }
  
      public boolean isGestureNav() {
-@@ -1693,7 +1707,14 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
+@@ -1430,7 +1454,7 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
+             return;
+         }
+         if (size == MATCH_PARENT) {
+-            size = mDeviceProfile.getDeviceProperties().getHeightPx();
++            size = getCurrentFullscreenTaskbarWindowSize(landscapePhoneButtonNav);
+         } else {
+             mLastRequestedNonFullscreenSize = size;
+             if (mIsFullscreen || mIsTaskbarSizeFrozenForAnimatingBubble) {
+@@ -1460,6 +1484,17 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
+         notifyUpdateLayoutParams();
+     }
+ 
++    private int getCurrentFullscreenTaskbarWindowSize(boolean landscapePhoneButtonNav) {
++        Rect currentBounds = getLiveDisplayBounds();
++        int currentSize = landscapePhoneButtonNav ? currentBounds.width() : currentBounds.height();
++        if (currentSize > 0) {
++            return currentSize;
++        }
++        return landscapePhoneButtonNav
++                ? mDeviceProfile.getDeviceProperties().getWidthPx()
++                : mDeviceProfile.getDeviceProperties().getHeightPx();
++    }
++
+     /**
+      * Returns the default size (in most cases height, but in 3-button phone mode, width) of the
+      * window, including the static corner radii above taskbar.
+@@ -1693,7 +1728,14 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
              expandFolder((FolderIcon) view);
          } else if (tag instanceof AppPairInfo api) {
              // Tapping an app pair icon on Taskbar
@@ -352,7 +498,7 @@ index 3ff0bf39fc..59dada3c3c 100644
                  Toast.makeText(this, "Unable to split with an app pair. Select another app.",
                          Toast.LENGTH_SHORT).show();
              } else {
-@@ -1706,6 +1727,7 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
+@@ -1706,6 +1748,7 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
              Task task = null;
              if (DesktopExperienceFlags.ENABLE_TASKBAR_RUNNING_TASKS_IN_SPLITSCREEN_SELECT_BUGFIX
                          .isTrue()
@@ -360,7 +506,7 @@ index 3ff0bf39fc..59dada3c3c 100644
                      && recents != null && recents.isSplitSelectionActive()
                      && (task = getControllers().taskbarRecentAppsController.getDesktopTaskWithId(
                                  info.getTaskId())) != null) {
-@@ -1731,7 +1753,8 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
+@@ -1731,7 +1774,8 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
              // Tapping a launchable icon on Taskbar
              WorkspaceItemInfo info = (WorkspaceItemInfo) tag;
              if (!info.isDisabled() || !ItemClickHandler.handleDisabledItemClicked(info, this)) {
@@ -370,7 +516,7 @@ index 3ff0bf39fc..59dada3c3c 100644
                      // If we are selecting a second app for split, launch the split tasks
                      taskbarUIController.triggerSecondAppForSplit(info, info.intent, view);
                  } else {
-@@ -1792,7 +1815,8 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
+@@ -1792,7 +1836,8 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
          } else if (tag instanceof AppInfo) {
              // Tapping an item in AllApps
              AppInfo info = (AppInfo) tag;
@@ -380,7 +526,7 @@ index 3ff0bf39fc..59dada3c3c 100644
                  // If we are selecting a second app for split, launch the split tasks
                  taskbarUIController.triggerSecondAppForSplit(info, info.intent, view);
              } else {
-@@ -1837,12 +1861,25 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
+@@ -1837,12 +1882,25 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
              return;
          }
  
@@ -407,7 +553,7 @@ index 3ff0bf39fc..59dada3c3c 100644
                  taskbarUIController.moveRunningTaskToSplitSelection(singleTask.getTask(), null,
                          startingView);
                  return;
-@@ -1871,6 +1908,12 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
+@@ -1871,6 +1929,12 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
          mControllers.uiController.launchSplitTasks((SplitTask) task, remoteTransition);
      }
  
@@ -420,7 +566,7 @@ index 3ff0bf39fc..59dada3c3c 100644
      /** Returns whether the given task is minimized and can be unminimized. */
      public boolean canUnminimizeDesktopTask(int taskId) {
          BubbleTextView.RunningAppState runningAppState =
-@@ -2335,10 +2378,19 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
+@@ -2335,10 +2399,19 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
      }
  
      public void showPopupMenuForIcon(BubbleTextView btv) {
@@ -482,7 +628,7 @@ index 8a28c0cc94..0f88ac308a 100644
      }
  }
 diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarBackgroundRenderer.kt b/quickstep/src/com/android/launcher3/taskbar/TaskbarBackgroundRenderer.kt
-index 6c12159a48..8e6b54a26a 100644
+index 6c12159a48..13231a39f9 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/TaskbarBackgroundRenderer.kt
 +++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarBackgroundRenderer.kt
 @@ -22,6 +22,7 @@ import android.graphics.Color
@@ -493,49 +639,142 @@ index 6c12159a48..8e6b54a26a 100644
  import com.android.app.animation.Interpolators
  import com.android.launcher3.Flags
  import com.android.launcher3.R
-@@ -174,6 +175,10 @@ class TaskbarBackgroundRenderer(private val context: TaskbarActivityContext) {
-             canvas.drawRect(0f, 0f, canvas.width.toFloat(), persistentTaskbarHeight, paint)
-         }
+@@ -35,6 +36,7 @@ import com.android.launcher3.taskbar.TaskbarPinningController.Companion.PINNING_
+ import com.android.launcher3.taskbar.Utilities.getShapedTaskbarRadius
+ import com.android.launcher3.util.SettingsCache
+ import kotlin.math.min
++import kotlin.math.roundToInt
  
-+        if (!shouldDrawRoundedCornersAboveTaskbar() || cornerRadius <= 0f) {
-+            return
-+        }
-+
-         // Draw the inverted rounded corners above the taskbar.
-         canvas.translate(0f, -cornerRadius)
-         canvas.drawPath(invertedLeftCornerPath, paint)
-@@ -182,6 +187,14 @@ class TaskbarBackgroundRenderer(private val context: TaskbarActivityContext) {
-         canvas.drawPath(invertedRightCornerPath, paint)
+ /** Helps draw the taskbar background, made up of a rectangle plus two inverted rounded corners. */
+ class TaskbarBackgroundRenderer(private val context: TaskbarActivityContext) {
+@@ -162,24 +164,49 @@ class TaskbarBackgroundRenderer(private val context: TaskbarActivityContext) {
      }
  
+     private fun drawPersistentBackground(canvas: Canvas) {
+-        if (isAnimatingPinning || isAnimatingPersistentTaskbar) {
+-            val persistentTaskbarHeight = maxPersistentTaskbarHeight * backgroundProgress
+-            canvas.translate(0f, canvas.height - persistentTaskbarHeight)
+-            // Draw the background behind taskbar content.
+-            canvas.drawRect(0f, 0f, canvas.width.toFloat(), persistentTaskbarHeight, paint)
+-        } else {
+-            val persistentTaskbarHeight = min(maxPersistentTaskbarHeight, backgroundHeight)
+-            canvas.translate(0f, canvas.height - persistentTaskbarHeight)
+-            // Draw the background behind taskbar content.
+-            canvas.drawRect(0f, 0f, canvas.width.toFloat(), persistentTaskbarHeight, paint)
++        val originalAlpha = paint.alpha
++        if (shouldUseTranslucentTaskbarBackground()) {
++            paint.alpha = (originalAlpha * DESKTOP_TASKBAR_BACKGROUND_ALPHA_MULTIPLIER).roundToInt()
++        }
++        try {
++            if (isAnimatingPinning || isAnimatingPersistentTaskbar) {
++                val persistentTaskbarHeight = maxPersistentTaskbarHeight * backgroundProgress
++                canvas.translate(0f, canvas.height - persistentTaskbarHeight)
++                // Draw the background behind taskbar content.
++                canvas.drawRect(0f, 0f, canvas.width.toFloat(), persistentTaskbarHeight, paint)
++            } else {
++                val persistentTaskbarHeight = min(maxPersistentTaskbarHeight, backgroundHeight)
++                canvas.translate(0f, canvas.height - persistentTaskbarHeight)
++                // Draw the background behind taskbar content.
++                canvas.drawRect(0f, 0f, canvas.width.toFloat(), persistentTaskbarHeight, paint)
++            }
++
++            if (!shouldDrawRoundedCornersAboveTaskbar() || cornerRadius <= 0f) {
++                return
++            }
++
++            // Draw the inverted rounded corners above the taskbar.
++            canvas.translate(0f, -cornerRadius)
++            canvas.drawPath(invertedLeftCornerPath, paint)
++            canvas.translate(0f, cornerRadius)
++            canvas.translate(canvas.width - cornerRadius, -cornerRadius)
++            canvas.drawPath(invertedRightCornerPath, paint)
++        } finally {
++            paint.alpha = originalAlpha
+         }
++    }
+ 
+-        // Draw the inverted rounded corners above the taskbar.
+-        canvas.translate(0f, -cornerRadius)
+-        canvas.drawPath(invertedLeftCornerPath, paint)
+-        canvas.translate(0f, cornerRadius)
+-        canvas.translate(canvas.width - cornerRadius, -cornerRadius)
+-        canvas.drawPath(invertedRightCornerPath, paint)
 +    @VisibleForTesting
 +    fun shouldDrawRoundedCornersAboveTaskbar(): Boolean {
-+        return shouldDrawRoundedCornersAboveTaskbar(
-+            context.showDesktopTaskbarForFreeformDisplay(),
-+            context.showLockedTaskbarOnHome(),
-+        )
++        return shouldDrawRoundedCornersAboveTaskbar(context.showLockedTaskbarOnHome())
 +    }
 +
++    @VisibleForTesting
++    fun shouldUseTranslucentTaskbarBackground(): Boolean {
++        return shouldUseTranslucentTaskbarBackground(
++            context.showDesktopTaskbarForFreeformDisplay(),
++            context.isTaskbarShowingDesktopTasks(),
++        )
+     }
+ 
      private fun drawTransientBackground(canvas: Canvas) {
-         val res = context.resources
-         val transientTaskbarHeight = maxTransientTaskbarHeight * (1f - backgroundProgress)
-@@ -283,5 +296,14 @@ class TaskbarBackgroundRenderer(private val context: TaskbarActivityContext) {
+@@ -280,8 +307,24 @@ class TaskbarBackgroundRenderer(private val context: TaskbarActivityContext) {
+ 
+     companion object {
+         const val MAX_ROUNDNESS = 1f
++        private const val DESKTOP_TASKBAR_BACKGROUND_ALPHA_MULTIPLIER = 0.9f
          private const val STROKE_ALPHA = 51
          private const val DARK_THEME_SHADOW_ALPHA = 51f
          private const val LIGHT_THEME_SHADOW_ALPHA = 25f
 +
 +        @JvmStatic
 +        @VisibleForTesting
-+        fun shouldDrawRoundedCornersAboveTaskbar(
++        fun shouldDrawRoundedCornersAboveTaskbar(showLockedTaskbarOnHome: Boolean): Boolean {
++            return !showLockedTaskbarOnHome
++        }
++
++        @JvmStatic
++        @VisibleForTesting
++        fun shouldUseTranslucentTaskbarBackground(
 +            showDesktopTaskbarForFreeformDisplay: Boolean,
-+            showLockedTaskbarOnHome: Boolean,
++            isTaskbarShowingDesktopTasks: Boolean,
 +        ): Boolean {
-+            return !showDesktopTaskbarForFreeformDisplay && !showLockedTaskbarOnHome
++            return showDesktopTaskbarForFreeformDisplay || isTaskbarShowingDesktopTasks
 +        }
      }
  }
+diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarDividerPopupView.kt b/quickstep/src/com/android/launcher3/taskbar/TaskbarDividerPopupView.kt
+index 3ae06abea4..8edbb91882 100644
+--- a/quickstep/src/com/android/launcher3/taskbar/TaskbarDividerPopupView.kt
++++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarDividerPopupView.kt
+@@ -33,6 +33,7 @@ import androidx.core.content.res.ResourcesCompat
+ import androidx.core.view.postDelayed
+ import com.android.app.animation.Interpolators.EMPHASIZED_ACCELERATE
+ import com.android.launcher3.Flags
++import com.android.launcher3.InsettableFrameLayout
+ import com.android.launcher3.LauncherPrefs
+ import com.android.launcher3.R
+ import com.android.launcher3.popup.ArrowPopup
+@@ -110,6 +111,10 @@ constructor(context: Context, attrs: AttributeSet? = null, defStyleAttr: Int = 0
+         popupContainer.getDescendantRectRelativeToSelf(dividerView, outPos)
+     }
+ 
++    override fun getMaxVisibleBottom(dragLayer: InsettableFrameLayout, insets: Rect): Int {
++        return taskbarActivityContext.liveDisplayBounds.height() - insets.bottom
++    }
++
+     @SuppressLint("UseSwitchCompatOrMaterialCode", "ClickableViewAccessibility")
+     override fun onFinishInflate() {
+         super.onFinishInflate()
+@@ -154,7 +159,10 @@ constructor(context: Context, attrs: AttributeSet? = null, defStyleAttr: Int = 0
+         x =
+             if (Flags.showTaskbarPinningPopupFromAnywhere()) {
+                 val xForCenterAlignment = horizontalPosition - measuredWidth / 2f
+-                val maxX = popupContainer.getWidth() - measuredWidth - minPaddingFromScreenEdge
++                val displayWidth =
++                    taskbarActivityContext.liveDisplayBounds.width().takeIf { it > 0 }
++                        ?: popupContainer.getWidth()
++                val maxX = displayWidth - measuredWidth - minPaddingFromScreenEdge
+                 when {
+                     // Left-aligned popup and its arrow pointing to the event position if there is
+                     // not enough space to center it.
 diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarInsetsController.kt b/quickstep/src/com/android/launcher3/taskbar/TaskbarInsetsController.kt
-index 0c8326072f..cff7773299 100644
+index 0c8326072f..a00f2afd0e 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/TaskbarInsetsController.kt
 +++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarInsetsController.kt
 @@ -74,6 +74,20 @@ class TaskbarInsetsController(val context: TaskbarActivityContext) : LoggableTas
@@ -575,6 +814,15 @@ index 0c8326072f..cff7773299 100644
                      FLAG_INSETS_ROUNDED_CORNER
                  } else {
                      0
+@@ -166,7 +187,7 @@ class TaskbarInsetsController(val context: TaskbarActivityContext) : LoggableTas
+                 // only add the taskbar touch region if not on home
+                 val bottom = windowLayoutParams.height
+                 val top = bottom - taskbarTouchableHeight
+-                val right = context.deviceProfile.deviceProperties.widthPx
++                val right = context.liveDisplayBounds.width()
+                 defaultTouchableRegion.addBoundsToRegion(Rect(/* left= */ 0, top, right, bottom))
+             }
+ 
 @@ -407,6 +428,11 @@ class TaskbarInsetsController(val context: TaskbarActivityContext) : LoggableTas
              touchableInsets = TOUCHABLE_INSETS_REGION
              debugTouchableRegion.lastSetTouchableReason = ICONS_INVISIBLE
@@ -587,8 +835,27 @@ index 0c8326072f..cff7773299 100644
          // Always have nav buttons be touchable
          controllers.navbarButtonsViewController.addVisibleButtonsRegion(
              context.dragLayer,
+diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarLauncherStateController.java b/quickstep/src/com/android/launcher3/taskbar/TaskbarLauncherStateController.java
+index 61540f07bc..d3da644421 100644
+--- a/quickstep/src/com/android/launcher3/taskbar/TaskbarLauncherStateController.java
++++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarLauncherStateController.java
+@@ -546,10 +546,12 @@ public class TaskbarLauncherStateController {
+             if (mControllers.taskbarActivityContext.isDestroyed()) {
+                 return;
+             }
+-            // Show the bubble bar when on launcher home (hotseat icons visible) or in overview
++            // Show the bubble bar when on launcher home (hotseat icons visible) or in overview.
++            // If the taskbar is forced to stay at the screen edge, such as in desktop/freeform
++            // mode, keep bubbles aligned with the taskbar instead of the home hotseat.
+             boolean onOverview = isInLauncher && mLauncherState == LauncherState.OVERVIEW;
+             boolean hotseatIconsVisible = isInLauncher && mLauncherState.areElementsVisible(
+-                    mLauncherUiState, HOTSEAT_ICONS);
++                    mLauncherUiState, HOTSEAT_ICONS) && isTaskbarAlignedWithHotseat();
+             BubbleLauncherState state = onOverview
+                     ? BubbleLauncherState.OVERVIEW
+                     : hotseatIconsVisible
 diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarManagerImpl.java b/quickstep/src/com/android/launcher3/taskbar/TaskbarManagerImpl.java
-index 5ed45bb8bd..93d40b7e7e 100644
+index 5ed45bb8bd..d256dfcd7f 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/TaskbarManagerImpl.java
 +++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarManagerImpl.java
 @@ -74,6 +74,7 @@ import android.util.SparseBooleanArray;
@@ -616,7 +883,36 @@ index 5ed45bb8bd..93d40b7e7e 100644
  import kotlinx.coroutines.CoroutineDispatcher;
  
  import java.io.PrintWriter;
-@@ -171,14 +171,11 @@ public class TaskbarManagerImpl implements DisplayDecorationListener {
+@@ -154,16 +154,23 @@ public class TaskbarManagerImpl implements DisplayDecorationListener {
+      * This includes all the configurations defined in Launcher's manifest entry and
+      * ActivityController#filterConfigChanges
+      */
++    // Fix 2e: let desktop/freeform displays recreate the taskbar on dynamic
++    // size/orientation changes, then mask these bits again below for
++    // non-desktop displays. Upstream suppresses them to keep the taskbar window
++    // alive across rotations on phones; on desktop the taskbar's mAttrs
++    // (notably the fillx<N> height) is baked in at window-create time.
+     private static final int SKIP_RECREATE_CONFIG_CHANGES = ActivityInfo.CONFIG_WINDOW_CONFIGURATION
+             | ActivityInfo.CONFIG_KEYBOARD
+             | ActivityInfo.CONFIG_KEYBOARD_HIDDEN
+             | ActivityInfo.CONFIG_MCC
+             | ActivityInfo.CONFIG_MNC
+-            | ActivityInfo.CONFIG_NAVIGATION
+-            | ActivityInfo.CONFIG_ORIENTATION
+-            | ActivityInfo.CONFIG_SCREEN_SIZE
+-            | ActivityInfo.CONFIG_SCREEN_LAYOUT
+-            | ActivityInfo.CONFIG_SMALLEST_SCREEN_SIZE;
++            | ActivityInfo.CONFIG_NAVIGATION;
++
++    private static final int DESKTOP_DYNAMIC_DISPLAY_CONFIG_CHANGES =
++            ActivityInfo.CONFIG_ORIENTATION
++                    | ActivityInfo.CONFIG_SCREEN_SIZE
++                    | ActivityInfo.CONFIG_SCREEN_LAYOUT
++                    | ActivityInfo.CONFIG_SMALLEST_SCREEN_SIZE;
+ 
+     private static final Uri USER_SETUP_COMPLETE_URI = Settings.Secure.getUriFor(
+             Settings.Secure.USER_SETUP_COMPLETE);
+@@ -171,14 +178,11 @@ public class TaskbarManagerImpl implements DisplayDecorationListener {
      private static final Uri NAV_BAR_KIDS_MODE = Settings.Secure.getUriFor(
              Settings.Secure.NAV_BAR_KIDS_MODE);
  
@@ -634,7 +930,7 @@ index 5ed45bb8bd..93d40b7e7e 100644
  
      public static final LooperExecutor TASKBAR_UI_THREAD =
              new LooperExecutor("TASKBAR_UI_THREAD", THREAD_PRIORITY_FOREGROUND);
-@@ -1545,6 +1542,9 @@ public class TaskbarManagerImpl implements DisplayDecorationListener {
+@@ -1545,8 +1549,38 @@ public class TaskbarManagerImpl implements DisplayDecorationListener {
                          "onConfigurationChanged: " + newConfig);
                  debugTaskbarManager("onConfigurationChanged: " + newConfig, displayId);
  
@@ -643,8 +939,37 @@ index 5ed45bb8bd..93d40b7e7e 100644
 +                }
                  DeviceProfile dp = getDeviceProfile(displayId);
                  int configDiff = mOldConfig.diff(newConfig) & ~SKIP_RECREATE_CONFIG_CHANGES;
++                boolean isDesktopDynamicDisplay = displayId == mPrimaryDisplayId
++                        && com.android.launcher3.util.DisplayController
++                                .showDesktopTaskbarForFreeformDisplay(mPrimaryWindowContext);
++                if (!isDesktopDynamicDisplay) {
++                    configDiff &= ~DESKTOP_DYNAMIC_DISPLAY_CONFIG_CHANGES;
++                }
++                boolean displayMetricsChanged =
++                        mOldConfig.screenWidthDp != newConfig.screenWidthDp
++                                || mOldConfig.screenHeightDp != newConfig.screenHeightDp
++                                || mOldConfig.smallestScreenWidthDp
++                                        != newConfig.smallestScreenWidthDp
++                                || mOldConfig.densityDpi != newConfig.densityDpi
++                                || (configDiff
++                                        & (ActivityInfo.CONFIG_DENSITY
++                                                | ActivityInfo.CONFIG_SCREEN_SIZE
++                                                | ActivityInfo.CONFIG_SCREEN_LAYOUT
++                                                | ActivityInfo.CONFIG_SMALLEST_SCREEN_SIZE)) != 0;
++                if (isDesktopDynamicDisplay && (displayMetricsChanged || dp == null)) {
++                    LauncherAppState.getIDP(mPrimaryWindowContext).refreshAfterDisplayChange();
++                    dp = getDeviceProfile(displayId);
++                    // Fix 2a: push the refreshed DP into the all-apps container so its
++                    // per-row count tracks the new geometry, not the cached one.
++                    Launcher launcher = Launcher.ACTIVITY_TRACKER.getCreatedContext();
++                    if (launcher != null && dp != null && launcher.getAppsView() != null) {
++                        launcher.getAppsView().onDeviceProfileChanged(dp);
++                    }
++                }
  
-@@ -1571,13 +1571,9 @@ public class TaskbarManagerImpl implements DisplayDecorationListener {
+                 if ((configDiff & ActivityInfo.CONFIG_UI_MODE) != 0) {
+                     debugTaskbarManager("onConfigurationChanged: theme changed", displayId);
+@@ -1571,13 +1605,9 @@ public class TaskbarManagerImpl implements DisplayDecorationListener {
                                  "onConfigurationChanged: isTaskbarEnabled(dp)=False | "
                                          + "destroyTaskbarForDisplay");
                          destroyTaskbarForDisplay(displayId);
@@ -660,7 +985,7 @@ index 5ed45bb8bd..93d40b7e7e 100644
                      }
                  } else {
                      taskbar.onConfigurationChanged(configDiff);
-@@ -1689,6 +1685,12 @@ public class TaskbarManagerImpl implements DisplayDecorationListener {
+@@ -1689,6 +1719,12 @@ public class TaskbarManagerImpl implements DisplayDecorationListener {
                  // The motion events can be outside the view bounds of task bar, and hence
                  // manually dispatching them to the drag layer here.
                  TaskbarActivityContext taskbar = getTaskbarForDisplay(displayId);
@@ -673,7 +998,7 @@ index 5ed45bb8bd..93d40b7e7e 100644
                  if (taskbar != null && taskbar.getDragLayer().isAttachedToWindow()) {
                      return taskbar.getDragLayer().dispatchTouchEvent(ev);
                  }
-@@ -1704,6 +1706,66 @@ public class TaskbarManagerImpl implements DisplayDecorationListener {
+@@ -1704,6 +1740,66 @@ public class TaskbarManagerImpl implements DisplayDecorationListener {
          return displayId == mPrimaryDisplayId;
      }
  
@@ -769,10 +1094,11 @@ index 17f56de857..79d1687123 100644
              ItemInfo[] hotseatItemInfos,
              List<GroupTask> recentTasks,
 diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarNavButtonController.java b/quickstep/src/com/android/launcher3/taskbar/TaskbarNavButtonController.java
-index c42dd515f0..d2d2c9213d 100644
+index c42dd515f0..63dba36f9b 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/TaskbarNavButtonController.java
 +++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarNavButtonController.java
-@@ -142,5 +142,11 @@ public class TaskbarNavButtonController implements TaskbarControllers.LoggableTa
+@@ -140,6 +140,12 @@ public class TaskbarNavButtonController implements TaskbarControllers.LoggableTa
+ 
      public void onButtonClick(@TaskbarButton int buttonType, View view) {
          if (buttonType == BUTTON_SPACE) {
 +            if (mControllers != null
@@ -784,7 +1110,7 @@ index c42dd515f0..d2d2c9213d 100644
              return;
          }
          if (mLastSentBackAction == ACTION_DOWN) {
-@@ -375,6 +375,12 @@ public class TaskbarNavButtonController implements TaskbarControllers.LoggableTa
+@@ -375,6 +381,12 @@ public class TaskbarNavButtonController implements TaskbarControllers.LoggableTa
              mSystemUiProxy.updateContextualEduStats(/* isTrackpadGesture= */ false,
                      GestureType.BACK);
          }
@@ -798,7 +1124,7 @@ index c42dd515f0..d2d2c9213d 100644
          mLastSentBackAction = keyEvent != null ? keyEvent.getAction() : ACTION_UP;
      }
 diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarPopupController.java b/quickstep/src/com/android/launcher3/taskbar/TaskbarPopupController.java
-index 9ba7f85850..f20c4cbddc 100644
+index 9ba7f85850..ee1e4afa18 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/TaskbarPopupController.java
 +++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarPopupController.java
 @@ -42,11 +42,11 @@ import com.android.launcher3.AbstractFloatingView;
@@ -826,7 +1152,7 @@ index 9ba7f85850..f20c4cbddc 100644
  
          ItemInfo itemInfo = null;
          if (icon.getTag() instanceof ItemInfo item && ShortcutUtil.supportsShortcuts(item)) {
-@@ -227,8 +222,14 @@ public class TaskbarPopupController implements TaskbarControllers.LoggableTaskba
+@@ -227,6 +222,11 @@ public class TaskbarPopupController implements TaskbarControllers.LoggableTaskba
              return null;
          }
  
@@ -836,13 +1162,9 @@ index 9ba7f85850..f20c4cbddc 100644
 +        mContext.onTaskbarPopupOpening();
 +
          PopupContainerWithArrow<BaseTaskbarContext> container;
--        int deepShortcutCount = mContext.getActivityComponent()
-+        boolean isTaskbarIcon = icon.getIconDisplay() == BubbleTextView.DISPLAY_TASKBAR;
-+        int deepShortcutCount = isTaskbarIcon ? 0 : mContext.getActivityComponent()
+         int deepShortcutCount = mContext.getActivityComponent()
                  .getPopupDataProvider().getShortcutCountForItem(itemInfo);
-         // TODO(b/198438631): add support for INSTALL shortcut factory
-         final ItemInfo finalInfo = itemInfo;
-@@ -258,14 +259,39 @@ public class TaskbarPopupController implements TaskbarControllers.LoggableTaskba
+@@ -258,14 +258,39 @@ public class TaskbarPopupController implements TaskbarControllers.LoggableTaskba
          // Make focusable to receive back events
          context.onPopupVisibilityChanged(true);
          container.addOnCloseCallback(() -> {
@@ -884,11 +1206,25 @@ index 9ba7f85850..f20c4cbddc 100644
      @Override
      public void dismiss() {
  
-@@ -499,4 +525,3 @@ public class TaskbarPopupController implements TaskbarControllers.LoggableTaskba
+@@ -499,4 +524,3 @@ public class TaskbarPopupController implements TaskbarControllers.LoggableTaskba
          }
      }
  }
 -
+diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarStashViaTouchController.kt b/quickstep/src/com/android/launcher3/taskbar/TaskbarStashViaTouchController.kt
+index fd259223d2..c03aa627e0 100644
+--- a/quickstep/src/com/android/launcher3/taskbar/TaskbarStashViaTouchController.kt
++++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarStashViaTouchController.kt
+@@ -69,8 +69,7 @@ class TaskbarStashViaTouchController(val controllers: TaskbarControllers) : Touc
+                 ResourceUtils.NAVBAR_BOTTOM_GESTURE_SIZE,
+                 activity.resources,
+             )
+-        gestureHeightYThreshold =
+-            (activity.deviceProfile.deviceProperties.heightPx - gestureHeight).toFloat()
++        gestureHeightYThreshold = (activity.liveDisplayBounds.height() - gestureHeight).toFloat()
+     }
+ 
+     private fun createSwipeListener() =
 diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarUIController.java b/quickstep/src/com/android/launcher3/taskbar/TaskbarUIController.java
 index 2d572bd024..6b7648f16b 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/TaskbarUIController.java
@@ -982,8 +1318,44 @@ index 2d572bd024..6b7648f16b 100644
          recents.getSplitSelectController().findLastActiveTasksAndRunCallback(
                  Collections.singletonList(info.getResolvedTargetInfo()),
                  false /* findExactPairMatch */,
+diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarUiState.kt b/quickstep/src/com/android/launcher3/taskbar/TaskbarUiState.kt
+index 6bbaeb707f..7249a47299 100644
+--- a/quickstep/src/com/android/launcher3/taskbar/TaskbarUiState.kt
++++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarUiState.kt
+@@ -86,6 +86,7 @@ class TaskbarUiState {
+     private var _navbarFloatingRotationButtonsBounds = ImmutableRect.EMPTY_RECT
+ 
+     private var _deviceProfile = DeviceProfile.DEFAULT_DEVICE_PROFILE
++    private var _liveDisplayBounds = ImmutableRect.EMPTY_RECT
+ 
+     fun setHasBubble(hasBubbles: Boolean) {
+         _hasBubblesRef.diffAndDispatch(hasBubbles)
+@@ -150,7 +151,13 @@ class TaskbarUiState {
+         if (!_isStashedHandlerViewVisible) {
+             return false
+         }
+-        val top = _deviceProfile.deviceProperties.heightPx - _stashedBubbleBarHeightPx
++        val displayBottom =
++            if (!_liveDisplayBounds.isEmpty()) {
++                _liveDisplayBounds.bottom
++            } else {
++                _deviceProfile.deviceProperties.heightPx
++            }
++        val top = displayBottom - _stashedBubbleBarHeightPx
+         val x = ev.rawX
+         val y = ev.rawY
+         return y >= top && x >= _stashedHandlerViewRect.left && x <= _stashedHandlerViewRect.right
+@@ -199,4 +206,8 @@ class TaskbarUiState {
+     fun setDeviceProfile(dp: DeviceProfile) {
+         _deviceProfile = dp
+     }
++
++    fun setLiveDisplayBounds(bounds: Rect) {
++        _liveDisplayBounds = ImmutableRect.from(bounds)
++    }
+ }
 diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarView.java b/quickstep/src/com/android/launcher3/taskbar/TaskbarView.java
-index 09ff7322bb..6231aa0ba4 100644
+index 09ff7322bb..ccb4f6b352 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/TaskbarView.java
 +++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarView.java
 @@ -34,10 +34,10 @@ import android.content.res.Resources;
@@ -1075,13 +1447,12 @@ index 09ff7322bb..6231aa0ba4 100644
 -                    && (event.getButtonState() & MotionEvent.BUTTON_SECONDARY) != 0
 -                    && v instanceof BubbleTextView) {
 -                mActivityContext.showPopupMenuForIcon((BubbleTextView) v);
--                return true;
 +            if (isSecondaryClickAction(event)) {
 +                mActiveSecondaryClickTarget = v;
 +                return maybeShowPopupMenuForIcon(v, event.getEventTime());
 +            }
 +            if (consumeSecondaryClickGesture(v, event)) {
-+                return true;
+                 return true;
              }
              return false;
          });
@@ -1197,7 +1568,7 @@ index 09ff7322bb..6231aa0ba4 100644
       * Sets OnHoverListener for the given view.
       */
 diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarViewCallbacks.java b/quickstep/src/com/android/launcher3/taskbar/TaskbarViewCallbacks.java
-index a03940e0e0..abca88f592 100644
+index a03940e0e0..e28b9a5e8a 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/TaskbarViewCallbacks.java
 +++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarViewCallbacks.java
 @@ -25,7 +25,6 @@ import android.annotation.SuppressLint;
@@ -1208,7 +1579,7 @@ index a03940e0e0..abca88f592 100644
  import android.view.MotionEvent;
  import android.view.View;
  
-@@ -88,24 +87,41 @@ public class TaskbarViewCallbacks {
+@@ -88,7 +87,23 @@ public class TaskbarViewCallbacks {
  
      @SuppressLint("ClickableViewAccessibility")
      public View.OnTouchListener getTaskbarTouchListener() {
@@ -1233,11 +1604,7 @@ index a03940e0e0..abca88f592 100644
      }
  
      public View.OnLongClickListener getTaskbarDividerLongClickListener() {
-         return v -> {
-             mControllers.taskbarPinningController.showPinningView(v, getDividerCenterX());
-             return true;
-         };
-     }
+@@ -100,12 +115,13 @@ public class TaskbarViewCallbacks {
  
      public View.OnTouchListener getTaskbarDividerRightClickListener() {
          return (v, event) -> {
@@ -1265,7 +1632,7 @@ index a03940e0e0..abca88f592 100644
              }
              return true;
 diff --git a/quickstep/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsContainerView.java b/quickstep/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsContainerView.java
-index a46845affa..da6803b526 100644
+index a46845affa..6e47ab7200 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsContainerView.java
 +++ b/quickstep/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsContainerView.java
 @@ -15,12 +15,19 @@
@@ -1425,7 +1792,7 @@ index a46845affa..da6803b526 100644
 +    private int getAvailableDrawerWidthPx(DeviceProfile dp) {
 +        int width = getWidth();
 +        if (mActivityContext.showDesktopTaskbarForFreeformDisplay()) {
-+            int screenWidth = mActivityContext.getScreenSize().x;
++            int screenWidth = mActivityContext.getLiveDisplayBounds().width();
 +            if (screenWidth > 0) {
 +                width = screenWidth;
 +            }
@@ -1478,14 +1845,14 @@ index a46845affa..da6803b526 100644
          void onInvalidateHeader();
      }
 diff --git a/quickstep/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsController.java b/quickstep/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsController.java
-index e4b0fa8e3e..c69934b72f 100644
+index e4b0fa8e3e..49d170671c 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsController.java
 +++ b/quickstep/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsController.java
 @@ -19,6 +19,7 @@ import static com.android.launcher3.model.data.AppInfo.EMPTY_ARRAY;
  import static com.android.launcher3.taskbar.TaskbarDesktopExperienceFlags.enableCustomHeightForAllAppsOnCd;
  
  import android.content.res.Resources;
-+import android.graphics.Point;
++import android.graphics.Rect;
  import android.view.Gravity;
  import android.view.View;
  
@@ -1522,10 +1889,10 @@ index e4b0fa8e3e..c69934b72f 100644
  
 +    private void applyDisplaySizedAllAppsLayout() {
 +        DeviceProfile dp = mOverlayContext.getDeviceProfile();
-+        Point screenSize = mOverlayContext.getScreenSize();
-+        int width = screenSize.x > 0 ? screenSize.x
++        Rect displayBounds = mOverlayContext.getLiveDisplayBounds();
++        int width = displayBounds.width() > 0 ? displayBounds.width()
 +                : dp.getDeviceProperties().getAvailableWidthPx();
-+        int height = screenSize.y > 0 ? screenSize.y
++        int height = displayBounds.height() > 0 ? displayBounds.height()
 +                : dp.getDeviceProperties().getAvailableHeightPx();
 +
 +        BaseDragLayer.LayoutParams lp =
@@ -1540,9 +1907,9 @@ index e4b0fa8e3e..c69934b72f 100644
 +        if (mOverlayContext.showDesktopTaskbarForFreeformDisplay()) {
 +            return true;
 +        }
-+        Point screenSize = mOverlayContext.getScreenSize();
-+        return screenSize.x >= DESKTOP_SIZED_DISPLAY_MIN_SIZE_PX
-+                && screenSize.y >= DESKTOP_SIZED_DISPLAY_MIN_SIZE_PX;
++        Rect displayBounds = mOverlayContext.getLiveDisplayBounds();
++        return displayBounds.width() >= DESKTOP_SIZED_DISPLAY_MIN_SIZE_PX
++                && displayBounds.height() >= DESKTOP_SIZED_DISPLAY_MIN_SIZE_PX;
 +    }
 +
      private void cleanUpOverlay() {
@@ -1593,6 +1960,19 @@ index 985f1fa4af..16513d40cb 100644
          // Saves bubble bar state
          mSharedState.bubbleBarExpanded = mBubbleBarViewController.isExpanded();
          mSharedState.bubbleBarStashed = mBubbleStashController.isStashed();
+diff --git a/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarSwipeController.kt b/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarSwipeController.kt
+index cdf90dd7c2..1ed1cc4507 100644
+--- a/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarSwipeController.kt
++++ b/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarSwipeController.kt
+@@ -211,7 +211,7 @@ class BubbleBarSwipeController {
+                     taskbarActivityContext.deviceProfile,
+                 )
+             maxOverscroll =
+-                taskbarActivityContext.deviceProfile.deviceProperties.heightPx - unstashThreshold
++                taskbarActivityContext.liveDisplayBounds.height() - unstashThreshold
+         }
+     }
+ }
 diff --git a/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarView.java b/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarView.java
 index 088e310983..24c125b98e 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarView.java
@@ -1673,6 +2053,44 @@ index 088e310983..24c125b98e 100644
          }
          return originalMargin;
      }
+diff --git a/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarViewController.java b/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarViewController.java
+index f7269f067d..5356dda757 100644
+--- a/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarViewController.java
++++ b/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleBarViewController.java
+@@ -705,7 +705,7 @@ public class BubbleBarViewController {
+         if (!isBubbleBarVisible()) return false;
+         final Rect bounds = getBubbleBarBounds();
+         final int bubbleBarTopOnScreen =
+-                mActivity.getScreenSize().y - mBarView.getTopToScreenBottom();
++                mActivity.getLiveDisplayBounds().bottom - mBarView.getTopToScreenBottom();
+         final float x = event.getX();
+         return event.getRawY() >= bubbleBarTopOnScreen && x >= bounds.left && x <= bounds.right;
+     }
+diff --git a/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleControllers.java b/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleControllers.java
+index c817397651..41a63d570e 100644
+--- a/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleControllers.java
++++ b/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleControllers.java
+@@ -158,5 +158,6 @@ public class BubbleControllers {
+     /** Dumps bubble controllers state. */
+     public void dump(PrintWriter pw) {
+         bubbleBarViewController.dump(pw);
++        bubbleStashController.dump(pw);
+     }
+ }
+diff --git a/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleStashedHandleViewController.java b/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleStashedHandleViewController.java
+index 2a0c216343..c7e11cc8e7 100644
+--- a/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleStashedHandleViewController.java
++++ b/quickstep/src/com/android/launcher3/taskbar/bubbles/BubbleStashedHandleViewController.java
+@@ -367,8 +367,7 @@ public class BubbleStashedHandleViewController {
+ 
+         // the bounds of the handle only include the visible part, so we check that the Y coordinate
+         // is anywhere within the stashed height of bubble bar (same as taskbar stashed height).
+-        final int top = mActivity.getDeviceProfile().getDeviceProperties().getHeightPx()
+-                - mStashedBubbleBarHeight;
++        final int top = mActivity.getLiveDisplayBounds().bottom - mStashedBubbleBarHeight;
+         final float x = ev.getRawX();
+         return ev.getRawY() >= top && x >= mStashedHandleBounds.left
+                 && x <= mStashedHandleBounds.right;
 diff --git a/quickstep/src/com/android/launcher3/taskbar/navbutton/AbstractNavButtonLayoutter.kt b/quickstep/src/com/android/launcher3/taskbar/navbutton/AbstractNavButtonLayoutter.kt
 index 35beef236e..f0978b6606 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/navbutton/AbstractNavButtonLayoutter.kt
@@ -1836,10 +2254,16 @@ index 22c8d37d30..210c506a8d 100644
              val contextualButtonWidth =
                  resources.getDimensionPixelSize(R.dimen.taskbar_contextual_button_width)
 diff --git a/quickstep/src/com/android/launcher3/taskbar/overlay/TaskbarOverlayContext.java b/quickstep/src/com/android/launcher3/taskbar/overlay/TaskbarOverlayContext.java
-index 567c81442a..a26909dbbd 100644
+index 567c81442a..41a73c24f2 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/overlay/TaskbarOverlayContext.java
 +++ b/quickstep/src/com/android/launcher3/taskbar/overlay/TaskbarOverlayContext.java
-@@ -24,6 +24,7 @@ import android.widget.FrameLayout;
+@@ -19,11 +19,13 @@ import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
+ 
+ import android.content.Context;
+ import android.graphics.Point;
++import android.graphics.Rect;
+ import android.view.View;
+ import android.widget.FrameLayout;
  
  import androidx.annotation.Nullable;
  
@@ -1847,7 +2271,7 @@ index 567c81442a..a26909dbbd 100644
  import com.android.launcher3.DeviceProfile;
  import com.android.launcher3.Flags;
  import com.android.launcher3.InsettableFrameLayout.LayoutParams;
-@@ -166,6 +167,15 @@ public class TaskbarOverlayContext extends BaseTaskbarContext {
+@@ -166,6 +168,15 @@ public class TaskbarOverlayContext extends BaseTaskbarContext {
          return mDragController::startDragOnLongClick;
      }
  
@@ -1863,15 +2287,27 @@ index 567c81442a..a26909dbbd 100644
      @Override
      public void startSplitSelection(SplitSelectSource splitSelectSource) {
          mUiController.startSplitSelection(splitSelectSource);
+@@ -211,6 +222,11 @@ public class TaskbarOverlayContext extends BaseTaskbarContext {
+         return mTaskbarContext.getScreenSize();
+     }
+ 
++    @Override
++    public Rect getLiveDisplayBounds() {
++        return mTaskbarContext.getLiveDisplayBounds();
++    }
++
+     @Override
+     public int getDisplayHeight() {
+         return mTaskbarContext.getDisplayHeight();
 diff --git a/quickstep/src/com/android/launcher3/taskbar/overlay/TaskbarOverlayController.java b/quickstep/src/com/android/launcher3/taskbar/overlay/TaskbarOverlayController.java
-index 5a8bf9620e..2d64c5314e 100644
+index 5a8bf9620e..7b26fb5402 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/overlay/TaskbarOverlayController.java
 +++ b/quickstep/src/com/android/launcher3/taskbar/overlay/TaskbarOverlayController.java
 @@ -28,6 +28,7 @@ import static com.android.launcher3.LauncherState.ALL_APPS;
  import android.annotation.SuppressLint;
  import android.content.Context;
  import android.graphics.PixelFormat;
-+import android.graphics.Point;
++import android.graphics.Rect;
  import android.gui.EarlyWakeupInfo;
  import android.os.Binder;
  import android.os.Trace;
@@ -1917,14 +2353,15 @@ index 5a8bf9620e..2d64c5314e 100644
      /** Updates {@link deviceprofile} instance for Taskbar's overlay window. */
      public void updateLauncherDeviceProfile(DeviceProfile dp) {
          mLauncherDeviceProfile = dp;
-@@ -242,6 +261,14 @@ public final class TaskbarOverlayController {
+@@ -242,6 +261,15 @@ public final class TaskbarOverlayController {
          return layoutParams;
      }
  
 +    private void updateLayoutParamsForCurrentDisplay() {
-+        Point screenSize = mTaskbarContext.getScreenSize();
-+        mLayoutParams.width = screenSize.x > 0 ? screenSize.x : ViewGroup.LayoutParams.MATCH_PARENT;
-+        mLayoutParams.height = screenSize.y > 0 ? screenSize.y
++        Rect displayBounds = mTaskbarContext.getLiveDisplayBounds();
++        mLayoutParams.width = displayBounds.width() > 0 ? displayBounds.width()
++                : ViewGroup.LayoutParams.MATCH_PARENT;
++        mLayoutParams.height = displayBounds.height() > 0 ? displayBounds.height()
 +                : ViewGroup.LayoutParams.MATCH_PARENT;
 +        mLayoutParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
 +    }
@@ -2277,7 +2714,7 @@ index 22055821fa..1546df2a36 100644
      protected StateAnimationConfig getConfigForStates(
              LauncherState fromState, LauncherState toState) {
 diff --git a/quickstep/src/com/android/quickstep/SystemUiProxy.kt b/quickstep/src/com/android/quickstep/SystemUiProxy.kt
-index 3dd1ca0cff..e15a98c729 100644
+index 3dd1ca0cff..1411b59fb4 100644
 --- a/quickstep/src/com/android/quickstep/SystemUiProxy.kt
 +++ b/quickstep/src/com/android/quickstep/SystemUiProxy.kt
 @@ -666,6 +666,18 @@ class SystemUiProxy @Inject constructor(
@@ -2299,6 +2736,90 @@ index 3dd1ca0cff..e15a98c729 100644
      /**
       * Tells SysUI to show the bubble with the provided key.
       *
+@@ -1300,6 +1312,12 @@ class SystemUiProxy @Inject constructor(
+             )
+         }
+ 
++    /** Toggle between showing the desktop and restoring previously visible desktop apps. */
++    fun toggleShowDesktop(displayId: Int) =
++        executeWithErrorLog({ "Failed call toggleShowDesktop" }) {
++            desktopMode?.toggleShowDesktop(displayId)
++        }
++
+     /** If task with the given id is on the desktop, bring it to front */
+     fun showDesktopApp(
+         taskId: Int,
+diff --git a/quickstep/src/com/android/quickstep/inputconsumers/TaskbarUnstashInputConsumer.java b/quickstep/src/com/android/quickstep/inputconsumers/TaskbarUnstashInputConsumer.java
+index cc1c66909c..e88b8cadbc 100644
+--- a/quickstep/src/com/android/quickstep/inputconsumers/TaskbarUnstashInputConsumer.java
++++ b/quickstep/src/com/android/quickstep/inputconsumers/TaskbarUnstashInputConsumer.java
+@@ -119,8 +119,7 @@ public class TaskbarUnstashInputConsumer extends DelegateInputConsumer {
+                         taskbarActivityContext.getDeviceProfile());
+ 
+         mTaskbarNavThresholdY =
+-                taskbarActivityContext.getDeviceProfile().getDeviceProperties().getHeightPx()
+-                        - mTaskbarNavThreshold;
++                taskbarActivityContext.getLiveDisplayBounds().height() - mTaskbarNavThreshold;
+         mIsTaskbarAllAppsOpen = mTaskbarActivityContext.isTaskbarAllAppsOpen();
+ 
+         mTaskbarSlowVelocityYThreshold =
+@@ -296,12 +295,14 @@ public class TaskbarUnstashInputConsumer extends DelegateInputConsumer {
+     }
+ 
+     private void updateHoveredTaskbarState(int x, int y) {
+-        DeviceProfile dp = mTaskbarActivityContext.getDeviceProfile();
++        Rect displayBounds = mTaskbarActivityContext.getLiveDisplayBounds();
++        int displayWidth = displayBounds.width();
++        int displayHeight = displayBounds.height();
+         mBottomEdgeBounds.set(
+-                (dp.getDeviceProperties().getWidthPx() - (int) mUnstashArea) / 2,
+-                dp.getDeviceProperties().getHeightPx() - mStashedTaskbarBottomEdge,
+-                (int) (((dp.getDeviceProperties().getWidthPx() - mUnstashArea) / 2) + mUnstashArea),
+-                dp.getDeviceProperties().getHeightPx());
++                (displayWidth - (int) mUnstashArea) / 2,
++                displayHeight - mStashedTaskbarBottomEdge,
++                (int) (((displayWidth - mUnstashArea) / 2) + mUnstashArea),
++                displayHeight);
+ 
+         if (mBottomEdgeBounds.contains(x, y)) {
+             // start a single unstash timeout if hovering bottom edge under the hinted taskbar.
+@@ -323,12 +324,12 @@ public class TaskbarUnstashInputConsumer extends DelegateInputConsumer {
+     private void updateUnhoveredTaskbarState(int x, int y, int displayId) {
+         sUnstashHandler.removeCallbacksAndMessages(null);
+ 
+-        DeviceProfile dp = mTaskbarActivityContext.getDeviceProfile();
++        Rect displayBounds = mTaskbarActivityContext.getLiveDisplayBounds();
+         mBottomEdgeBounds.set(
+                 0,
+-                dp.getDeviceProperties().getHeightPx() - mBottomScreenEdge,
+-                dp.getDeviceProperties().getWidthPx(),
+-                dp.getDeviceProperties().getHeightPx());
++                displayBounds.height() - mBottomScreenEdge,
++                displayBounds.width(),
++                displayBounds.height());
+ 
+         if (cursorHotCorner() && mDisplayManager != null) {
+             Display display = mDisplayManager.getDisplay(displayId);
+@@ -365,12 +366,14 @@ public class TaskbarUnstashInputConsumer extends DelegateInputConsumer {
+             return false;
+         }
+         DeviceProfile dp = mTaskbarActivityContext.getDeviceProfile();
++        Rect displayBounds = mTaskbarActivityContext.getLiveDisplayBounds();
++        int displayWidth = displayBounds.width();
++        int displayHeight = displayBounds.height();
+         mStashedTaskbarHandleBounds.set(
+-                (dp.getDeviceProperties().getWidthPx() - (int) mUnstashArea) / 2,
+-                dp.getDeviceProperties().getHeightPx()
+-                        - dp.getTaskbarProfile().getStashedTaskbarHeight(),
+-                (int) (((dp.getDeviceProperties().getWidthPx() - mUnstashArea) / 2) + mUnstashArea),
+-                dp.getDeviceProperties().getHeightPx());
++                (displayWidth - (int) mUnstashArea) / 2,
++                displayHeight - dp.getTaskbarProfile().getStashedTaskbarHeight(),
++                (int) (((displayWidth - mUnstashArea) / 2) + mUnstashArea),
++                displayHeight);
+         return mStashedTaskbarHandleBounds.contains(x, y);
+     }
+ 
 diff --git a/quickstep/src/com/android/quickstep/util/SplitSelectDataHolder.kt b/quickstep/src/com/android/quickstep/util/SplitSelectDataHolder.kt
 index 6c36df5845..7626bf8d46 100644
 --- a/quickstep/src/com/android/quickstep/util/SplitSelectDataHolder.kt
@@ -2413,163 +2934,6 @@ index 111c99b53a..1ffbc0df6a 100644
          }
  
          RectF secondTaskStartingBounds = new RectF();
-diff --git a/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/LauncherTaskbarUIControllerTest.kt b/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/LauncherTaskbarUIControllerTest.kt
-new file mode 100644
-index 0000000000..22b793161d
---- /dev/null
-+++ b/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/LauncherTaskbarUIControllerTest.kt
-@@ -0,0 +1,151 @@
-+/*
-+ * Copyright (C) 2026 The Android Open Source Project
-+ *
-+ * Licensed under the Apache License, Version 2.0 (the "License");
-+ * you may not use this file except in compliance with the License.
-+ * You may obtain a copy of the License at
-+ *
-+ *      http://www.apache.org/licenses/LICENSE-2.0
-+ *
-+ * Unless required by applicable law or agreed to in writing, software
-+ * distributed under the License is distributed on an "AS IS" BASIS,
-+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-+ * See the License for the specific language governing permissions and
-+ * limitations under the License.
-+ */
-+
-+package com.android.launcher3.taskbar
-+
-+import androidx.test.ext.junit.runners.AndroidJUnit4
-+import com.android.launcher3.LauncherState
-+import com.google.common.truth.Truth.assertThat
-+import org.junit.Test
-+import org.junit.runner.RunWith
-+
-+@RunWith(AndroidJUnit4::class)
-+class LauncherTaskbarUIControllerTest {
-+
-+    @Test
-+    fun shouldUseLauncherAllApps_desktopTaskbar_returnsFalse() {
-+        assertThat(
-+                LauncherTaskbarUIController.shouldUseLauncherAllApps(
-+                    canToggleHomeAllApps = true,
-+                    showDesktopTaskbarForFreeformDisplay = true,
-+                    isInOverviewUi = false,
-+                    isDesktopSizedDisplay = false,
-+                )
-+            )
-+            .isFalse()
-+    }
-+
-+    @Test
-+    fun shouldUseLauncherAllApps_launcherHome_returnsTrue() {
-+        assertThat(
-+                LauncherTaskbarUIController.shouldUseLauncherAllApps(
-+                    canToggleHomeAllApps = true,
-+                    showDesktopTaskbarForFreeformDisplay = false,
-+                    isInOverviewUi = false,
-+                    isDesktopSizedDisplay = false,
-+                )
-+            )
-+            .isTrue()
-+    }
-+
-+    @Test
-+    fun shouldUseLauncherAllApps_overview_returnsFalse() {
-+        assertThat(
-+                LauncherTaskbarUIController.shouldUseLauncherAllApps(
-+                    canToggleHomeAllApps = true,
-+                    showDesktopTaskbarForFreeformDisplay = false,
-+                    isInOverviewUi = true,
-+                    isDesktopSizedDisplay = false,
-+                )
-+            )
-+            .isFalse()
-+    }
-+
-+    @Test
-+    fun shouldUseLauncherAllApps_desktopSizedDisplay_returnsFalse() {
-+        assertThat(
-+                LauncherTaskbarUIController.shouldUseLauncherAllApps(
-+                    canToggleHomeAllApps = true,
-+                    showDesktopTaskbarForFreeformDisplay = false,
-+                    isInOverviewUi = false,
-+                    isDesktopSizedDisplay = true,
-+                )
-+            )
-+            .isFalse()
-+    }
-+
-+    @Test
-+    fun isDesktopSizedDisplay_minimumSizeAtLeast540px_returnsTrue() {
-+        assertThat(
-+                LauncherTaskbarUIController.isDesktopSizedDisplay(
-+                    widthPx = 540,
-+                    heightPx = 540,
-+                    densityDpi = 160,
-+                )
-+            )
-+            .isTrue()
-+    }
-+
-+    @Test
-+    fun isDesktopSizedDisplay_dimensionBelowMinimum_returnsFalse() {
-+        assertThat(
-+                LauncherTaskbarUIController.isDesktopSizedDisplay(
-+                    widthPx = 539,
-+                    heightPx = 1920,
-+                    densityDpi = 440,
-+                )
-+            )
-+            .isFalse()
-+    }
-+
-+    @Test
-+    fun shouldHandleLauncherBackForDesktopHome_allAppsVisible_returnsTrue() {
-+        assertThat(
-+                LauncherTaskbarUIController.shouldHandleLauncherBackForDesktopHome(
-+                    showDesktopTaskbarForFreeformDisplay = true,
-+                    isHomeVisible = true,
-+                    launcherState = LauncherState.ALL_APPS,
-+                )
-+            )
-+            .isTrue()
-+    }
-+
-+    @Test
-+    fun shouldHandleLauncherBackForDesktopHome_overviewVisible_returnsTrue() {
-+        assertThat(
-+                LauncherTaskbarUIController.shouldHandleLauncherBackForDesktopHome(
-+                    showDesktopTaskbarForFreeformDisplay = true,
-+                    isHomeVisible = true,
-+                    launcherState = LauncherState.OVERVIEW,
-+                )
-+            )
-+            .isTrue()
-+    }
-+
-+    @Test
-+    fun shouldHandleLauncherBackForDesktopHome_homeHidden_returnsFalse() {
-+        assertThat(
-+                LauncherTaskbarUIController.shouldHandleLauncherBackForDesktopHome(
-+                    showDesktopTaskbarForFreeformDisplay = true,
-+                    isHomeVisible = false,
-+                    launcherState = LauncherState.ALL_APPS,
-+                )
-+            )
-+            .isFalse()
-+    }
-+
-+    @Test
-+    fun shouldHandleLauncherBackForDesktopHome_normalState_returnsFalse() {
-+        assertThat(
-+                LauncherTaskbarUIController.shouldHandleLauncherBackForDesktopHome(
-+                    showDesktopTaskbarForFreeformDisplay = true,
-+                    isHomeVisible = true,
-+                    launcherState = LauncherState.NORMAL,
-+                )
-+            )
-+            .isFalse()
-+    }
-+}
 diff --git a/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/NavbarButtonsViewControllerTest.kt b/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/NavbarButtonsViewControllerTest.kt
 index 38c21f6034..a9a6fc2fdd 100644
 --- a/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/NavbarButtonsViewControllerTest.kt
@@ -2856,71 +3220,6 @@ index 38c21f6034..a9a6fc2fdd 100644
 +        assertThat(navButtonsContainer.translationX).isEqualTo(0f)
 +    }
  }
-diff --git a/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/TaskbarBackgroundRendererTest.kt b/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/TaskbarBackgroundRendererTest.kt
-new file mode 100644
-index 0000000000..6d2450bf70
---- /dev/null
-+++ b/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/TaskbarBackgroundRendererTest.kt
-@@ -0,0 +1,59 @@
-+/*
-+ * Copyright (C) 2026 The Android Open Source Project
-+ *
-+ * Licensed under the Apache License, Version 2.0 (the "License");
-+ * you may not use this file except in compliance with the License.
-+ * You may obtain a copy of the License at
-+ *
-+ *      http://www.apache.org/licenses/LICENSE-2.0
-+ *
-+ * Unless required by applicable law or agreed to in writing, software
-+ * distributed under the License is distributed on an "AS IS" BASIS,
-+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-+ * See the License for the specific language governing permissions and
-+ * limitations under the License.
-+ */
-+
-+package com.android.launcher3.taskbar
-+
-+import androidx.test.ext.junit.runners.AndroidJUnit4
-+import com.google.common.truth.Truth.assertThat
-+import org.junit.Test
-+import org.junit.runner.RunWith
-+
-+@RunWith(AndroidJUnit4::class)
-+class TaskbarBackgroundRendererTest {
-+
-+    @Test
-+    fun shouldDrawRoundedCornersAboveTaskbar_desktopTaskbar_returnsFalse() {
-+        assertThat(
-+                TaskbarBackgroundRenderer.shouldDrawRoundedCornersAboveTaskbar(
-+                    showDesktopTaskbarForFreeformDisplay = true,
-+                    showLockedTaskbarOnHome = false,
-+                )
-+            )
-+            .isFalse()
-+    }
-+
-+    @Test
-+    fun shouldDrawRoundedCornersAboveTaskbar_lockedHomeTaskbar_returnsFalse() {
-+        assertThat(
-+                TaskbarBackgroundRenderer.shouldDrawRoundedCornersAboveTaskbar(
-+                    showDesktopTaskbarForFreeformDisplay = false,
-+                    showLockedTaskbarOnHome = true,
-+                )
-+            )
-+            .isFalse()
-+    }
-+
-+    @Test
-+    fun shouldDrawRoundedCornersAboveTaskbar_tabletTaskbar_returnsTrue() {
-+        assertThat(
-+                TaskbarBackgroundRenderer.shouldDrawRoundedCornersAboveTaskbar(
-+                    showDesktopTaskbarForFreeformDisplay = false,
-+                    showLockedTaskbarOnHome = false,
-+                )
-+            )
-+            .isTrue()
-+    }
-+}
 diff --git a/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/TaskbarInsetsControllerTest.kt b/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/TaskbarInsetsControllerTest.kt
 index db04163dcb..3d9b5ec064 100644
 --- a/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/TaskbarInsetsControllerTest.kt
@@ -3089,70 +3388,19 @@ index 27e40ceb26..3eefef8b1f 100644
 +        assertThat(resizedDeviceProfile.deviceProperties.heightPx).isEqualTo(1440)
 +    }
  }
-diff --git a/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/TaskbarModelCallbacksTest.kt b/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/TaskbarModelCallbacksTest.kt
-new file mode 100644
-index 0000000000..6083719907
---- /dev/null
-+++ b/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/TaskbarModelCallbacksTest.kt
-@@ -0,0 +1,46 @@
-+/*
-+ * Copyright (C) 2026 The Android Open Source Project
-+ *
-+ * Licensed under the Apache License, Version 2.0 (the "License");
-+ * you may not use this file except in compliance with the License.
-+ * You may obtain a copy of the License at
-+ *
-+ *      http://www.apache.org/licenses/LICENSE-2.0
-+ *
-+ * Unless required by applicable law or agreed to in writing, software
-+ * distributed under the License is distributed on an "AS IS" BASIS,
-+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-+ * See the License for the specific language governing permissions and
-+ * limitations under the License.
-+ */
-+
-+package com.android.launcher3.taskbar
-+
-+import androidx.test.ext.junit.runners.AndroidJUnit4
-+import com.google.common.truth.Truth.assertThat
-+import org.junit.Test
-+import org.junit.runner.RunWith
-+
-+@RunWith(AndroidJUnit4::class)
-+class TaskbarModelCallbacksTest {
-+
-+    @Test
-+    fun shouldFillTaskbarWithHotseatPredictions_desktopTaskbar_returnsFalse() {
-+        assertThat(
-+                TaskbarModelCallbacks.shouldFillTaskbarWithHotseatPredictions(
-+                    showDesktopTaskbarForFreeformDisplay = true
-+                )
-+            )
-+            .isFalse()
-+    }
-+
-+    @Test
-+    fun shouldFillTaskbarWithHotseatPredictions_nonDesktopTaskbar_returnsTrue() {
-+        assertThat(
-+                TaskbarModelCallbacks.shouldFillTaskbarWithHotseatPredictions(
-+                    showDesktopTaskbarForFreeformDisplay = false
-+                )
-+            )
-+            .isTrue()
-+    }
-+}
 diff --git a/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/TaskbarNavButtonControllerTest.java b/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/TaskbarNavButtonControllerTest.java
-index 67743a7872..6c34485335 100644
+index 67743a7872..93a3959835 100644
 --- a/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/TaskbarNavButtonControllerTest.java
 +++ b/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/TaskbarNavButtonControllerTest.java
-@@ -13,5 +13,6 @@ import static com.android.launcher3.taskbar.TaskbarNavButtonController.BUTTON_BA
+@@ -13,6 +13,7 @@ import static com.android.launcher3.taskbar.TaskbarNavButtonController.BUTTON_BA
  import static com.android.launcher3.taskbar.TaskbarNavButtonController.BUTTON_HOME;
  import static com.android.launcher3.taskbar.TaskbarNavButtonController.BUTTON_IME_SWITCH;
  import static com.android.launcher3.taskbar.TaskbarNavButtonController.BUTTON_RECENTS;
 +import static com.android.launcher3.taskbar.TaskbarNavButtonController.BUTTON_SPACE;
  import static com.android.launcher3.taskbar.TaskbarNavButtonController.SCREEN_PIN_LONG_PRESS_THRESHOLD;
  import static com.android.systemui.shared.system.QuickStepContract.SYSUI_STATE_SCREEN_PINNING;
-@@ -24,6 +24,7 @@ import static org.mockito.ArgumentMatchers.any;
+ 
+@@ -24,6 +25,7 @@ import static org.mockito.ArgumentMatchers.any;
  import static org.mockito.ArgumentMatchers.anyInt;
  import static org.mockito.ArgumentMatchers.eq;
  import static org.mockito.Mockito.doReturn;
@@ -3160,7 +3408,7 @@ index 67743a7872..6c34485335 100644
  import static org.mockito.Mockito.never;
  import static org.mockito.Mockito.times;
  import static org.mockito.Mockito.verify;
-@@ -117,6 +118,7 @@ public class TaskbarNavButtonControllerTest {
+@@ -117,6 +119,7 @@ public class TaskbarNavButtonControllerTest {
          when(mockTaskbarControllers.getSharedState()).thenReturn(mockSharedState);
          doReturn(mockStatsLogManager).when(mockTaskbarActivityContext).getStatsLogManager();
          when(mockTaskbarActivityContext.getDisplayId()).thenReturn(DISPLAY_ID);
@@ -3168,7 +3416,7 @@ index 67743a7872..6c34485335 100644
          mNavButtonController = new TaskbarNavButtonController(
                  DISPLAY_ID,
                  mCallbacks,
-@@ -139,6 +141,36 @@ public class TaskbarNavButtonControllerTest {
+@@ -139,6 +142,36 @@ public class TaskbarNavButtonControllerTest {
                  .updateContextualEduStats(/* isTrackpad= */ eq(false), eq(GestureType.BACK));
      }
  
@@ -3308,372 +3556,6 @@ index aa6457dfbb..57a61ec3a7 100644
      @Test
      @Ignore("b/435259563")
      fun testUpdateItems_desktopMode_hotseatItem_noDividerAfterDesktopModeChange() {
-diff --git a/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsContainerViewTest.kt b/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsContainerViewTest.kt
-new file mode 100644
-index 0000000000..e81f7a0c36
---- /dev/null
-+++ b/quickstep/tests/multivalentTests/src/com/android/launcher3/taskbar/allapps/TaskbarAllAppsContainerViewTest.kt
-@@ -0,0 +1,84 @@
-+/*
-+ * Copyright (C) 2026 The Android Open Source Project
-+ *
-+ * Licensed under the Apache License, Version 2.0 (the "License");
-+ * you may not use this file except in compliance with the License.
-+ * You may obtain a copy of the License at
-+ *
-+ *      http://www.apache.org/licenses/LICENSE-2.0
-+ *
-+ * Unless required by applicable law or agreed to in writing, software
-+ * distributed under the License is distributed on an "AS IS" BASIS,
-+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-+ * See the License for the specific language governing permissions and
-+ * limitations under the License.
-+ */
-+
-+package com.android.launcher3.taskbar.allapps
-+
-+import com.google.common.truth.Truth.assertThat
-+import org.junit.Test
-+
-+class TaskbarAllAppsContainerViewTest {
-+
-+    @Test
-+    fun responsiveDesktopColumns_scaleWithDrawerWidth() {
-+        assertThat(TaskbarAllAppsContainerView.getResponsiveDesktopTaskbarColumns(319f, 6))
-+            .isEqualTo(2)
-+        assertThat(TaskbarAllAppsContainerView.getResponsiveDesktopTaskbarColumns(336f, 6))
-+            .isEqualTo(3)
-+        assertThat(TaskbarAllAppsContainerView.getResponsiveDesktopTaskbarColumns(360f, 6))
-+            .isEqualTo(3)
-+        assertThat(TaskbarAllAppsContainerView.getResponsiveDesktopTaskbarColumns(420f, 6))
-+            .isEqualTo(3)
-+        assertThat(TaskbarAllAppsContainerView.getResponsiveDesktopTaskbarColumns(640f, 6))
-+            .isEqualTo(4)
-+        assertThat(TaskbarAllAppsContainerView.getResponsiveDesktopTaskbarColumns(820f, 6))
-+            .isEqualTo(5)
-+        assertThat(TaskbarAllAppsContainerView.getResponsiveDesktopTaskbarColumns(900f, 6))
-+            .isEqualTo(6)
-+    }
-+
-+    @Test
-+    fun responsiveDesktopColumns_respectsConfiguredMaximum() {
-+        assertThat(TaskbarAllAppsContainerView.getResponsiveDesktopTaskbarColumns(319f, 2))
-+            .isEqualTo(2)
-+        assertThat(TaskbarAllAppsContainerView.getResponsiveDesktopTaskbarColumns(900f, 5))
-+            .isEqualTo(5)
-+    }
-+
-+    @Test
-+    fun responsiveDesktopSidePadding_keepsSmallWindowsAlmostFullWidth() {
-+        val sidePadding =
-+            TaskbarAllAppsContainerView.getResponsiveDesktopTaskbarSidePaddingPx(360, 1f)
-+
-+        assertThat(sidePadding).isEqualTo(12)
-+        assertThat(
-+            TaskbarAllAppsContainerView.getResponsiveDesktopTaskbarColumns(
-+                360f - sidePadding * 2,
-+                6,
-+            )
-+        )
-+            .isEqualTo(3)
-+    }
-+
-+    @Test
-+    fun responsiveDesktopSearchMargin_keepsSearchBoxInsideDrawerEdges() {
-+        val drawerSidePadding =
-+            TaskbarAllAppsContainerView.getResponsiveDesktopTaskbarSidePaddingPx(360, 1f)
-+        val searchSideMargin =
-+            TaskbarAllAppsContainerView.getResponsiveDesktopTaskbarSearchSideMarginPx(1f)
-+
-+        assertThat(drawerSidePadding).isEqualTo(12)
-+        assertThat(searchSideMargin).isEqualTo(16)
-+        assertThat(360 - (drawerSidePadding + searchSideMargin) * 2).isEqualTo(304)
-+    }
-+
-+    @Test
-+    fun responsiveDesktopSidePadding_capsAtQuarterWidth() {
-+        assertThat(TaskbarAllAppsContainerView.getResponsiveDesktopTaskbarSidePaddingPx(1200, 1f))
-+            .isEqualTo(300)
-+        assertThat(TaskbarAllAppsContainerView.getResponsiveDesktopTaskbarSidePaddingPx(2000, 1f))
-+            .isEqualTo(500)
-+    }
-+}
-diff --git a/quickstep/tests/multivalentTests/src/com/android/launcher3/uioverrides/QuickstepLauncherTest.kt b/quickstep/tests/multivalentTests/src/com/android/launcher3/uioverrides/QuickstepLauncherTest.kt
-new file mode 100644
-index 0000000000..603e20f722
---- /dev/null
-+++ b/quickstep/tests/multivalentTests/src/com/android/launcher3/uioverrides/QuickstepLauncherTest.kt
-@@ -0,0 +1,167 @@
-+/*
-+ * Copyright (C) 2026 The Android Open Source Project
-+ *
-+ * Licensed under the Apache License, Version 2.0 (the "License");
-+ * you may not use this file except in compliance with the License.
-+ * You may obtain a copy of the License at
-+ *
-+ *      http://www.apache.org/licenses/LICENSE-2.0
-+ *
-+ * Unless required by applicable law or agreed to in writing, software
-+ * distributed under the License is distributed on an "AS IS" BASIS,
-+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-+ * See the License for the specific language governing permissions and
-+ * limitations under the License.
-+ */
-+
-+package com.android.launcher3.uioverrides
-+
-+import android.content.Intent
-+import androidx.test.ext.junit.runners.AndroidJUnit4
-+import androidx.test.filters.SmallTest
-+import com.android.launcher3.LauncherSettings.Favorites.CONTAINER_DESKTOP
-+import com.android.launcher3.LauncherSettings.Favorites.CONTAINER_HOTSEAT
-+import com.android.launcher3.LauncherState
-+import com.android.launcher3.WorkspaceLayoutManager.FIRST_SCREEN_ID
-+import com.android.launcher3.model.data.WorkspaceItemInfo
-+import org.junit.Assert.assertFalse
-+import org.junit.Assert.assertTrue
-+import org.junit.Test
-+import org.junit.runner.RunWith
-+
-+@SmallTest
-+@RunWith(AndroidJUnit4::class)
-+class QuickstepLauncherTest {
-+
-+    @Test
-+    fun shouldHideHomeBehindDesktopOnResume_returnsTrueForHome() {
-+        assertTrue(
-+            QuickstepLauncher.shouldHideHomeBehindDesktopOnResume(
-+                /* shouldShowHomeBehindDesktop= */ true,
-+                LauncherState.NORMAL,
-+                /* targetState= */ null,
-+            )
-+        )
-+    }
-+
-+    @Test
-+    fun shouldHideHomeBehindDesktopOnResume_returnsFalseWhileOpeningAllApps() {
-+        assertFalse(
-+            QuickstepLauncher.shouldHideHomeBehindDesktopOnResume(
-+                /* shouldShowHomeBehindDesktop= */ true,
-+                LauncherState.NORMAL,
-+                LauncherState.ALL_APPS,
-+            )
-+        )
-+    }
-+
-+    @Test
-+    fun shouldHideHomeBehindDesktopOnResume_returnsFalseWhenAlreadyBackground() {
-+        assertFalse(
-+            QuickstepLauncher.shouldHideHomeBehindDesktopOnResume(
-+                /* shouldShowHomeBehindDesktop= */ true,
-+                LauncherState.BACKGROUND_APP,
-+                /* targetState= */ null,
-+            )
-+        )
-+    }
-+
-+    @Test
-+    fun shouldRemoveLegacyDesktopWorkspaceItem_returnsTrueForBrowserPackageOnDesktop() {
-+        val item =
-+            WorkspaceItemInfo().apply {
-+                container = CONTAINER_DESKTOP
-+                screenId = FIRST_SCREEN_ID
-+                intent = Intent(Intent.ACTION_MAIN).setPackage("org.lineageos.jelly")
-+            }
-+
-+        assertTrue(
-+            QuickstepLauncher.shouldRemoveLegacyDesktopWorkspaceItem(
-+                item,
-+                "org.lineageos.jelly",
-+            )
-+        )
-+    }
-+
-+    @Test
-+    fun shouldRemoveLegacyDesktopWorkspaceItem_returnsFalseForHotseatBrowserPackage() {
-+        val item =
-+            WorkspaceItemInfo().apply {
-+                container = CONTAINER_HOTSEAT
-+                intent = Intent(Intent.ACTION_MAIN).setPackage("org.lineageos.jelly")
-+            }
-+
-+        assertFalse(
-+            QuickstepLauncher.shouldRemoveLegacyDesktopWorkspaceItem(
-+                item,
-+                "org.lineageos.jelly",
-+            )
-+        )
-+    }
-+
-+    @Test
-+    fun shouldRemoveLegacyDesktopWorkspaceItem_returnsTrueForLegacyBrowserIntent() {
-+        val item =
-+            WorkspaceItemInfo().apply {
-+                container = CONTAINER_DESKTOP
-+                screenId = FIRST_SCREEN_ID
-+                intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_BROWSER)
-+            }
-+
-+        assertTrue(
-+            QuickstepLauncher.shouldRemoveLegacyDesktopWorkspaceItem(
-+                item,
-+                /* defaultBrowserPackage= */ null,
-+            )
-+        )
-+    }
-+
-+    @Test
-+    fun shouldRemoveLegacyDesktopWorkspaceItem_returnsTrueForNonPrimaryDesktopScreen() {
-+        val item =
-+            WorkspaceItemInfo().apply {
-+                container = CONTAINER_DESKTOP
-+                screenId = FIRST_SCREEN_ID + 1
-+                intent = Intent(Intent.ACTION_MAIN).setPackage("com.android.settings")
-+            }
-+
-+        assertTrue(
-+            QuickstepLauncher.shouldRemoveLegacyDesktopWorkspaceItem(
-+                item,
-+                /* defaultBrowserPackage= */ null,
-+            )
-+        )
-+    }
-+
-+    @Test
-+    fun isDesktopTaskbarBrowserHotseatItem_returnsTrueForBrowserPackageInHotseat() {
-+        val item =
-+            WorkspaceItemInfo().apply {
-+                container = CONTAINER_HOTSEAT
-+                intent = Intent(Intent.ACTION_MAIN).setPackage("org.lineageos.jelly")
-+            }
-+
-+        assertTrue(
-+            QuickstepLauncher.isDesktopTaskbarBrowserHotseatItem(
-+                item,
-+                "org.lineageos.jelly",
-+            )
-+        )
-+    }
-+
-+    @Test
-+    fun isDesktopTaskbarBrowserHotseatItem_returnsFalseForNonBrowserHotseatItem() {
-+        val item =
-+            WorkspaceItemInfo().apply {
-+                container = CONTAINER_HOTSEAT
-+                intent = Intent(Intent.ACTION_MAIN).setPackage("com.android.settings")
-+            }
-+
-+        assertFalse(
-+            QuickstepLauncher.isDesktopTaskbarBrowserHotseatItem(
-+                item,
-+                "org.lineageos.jelly",
-+            )
-+        )
-+    }
-+}
-diff --git a/quickstep/tests/multivalentTests/src/com/android/quickstep/SystemUiProxyTest.kt b/quickstep/tests/multivalentTests/src/com/android/quickstep/SystemUiProxyTest.kt
-new file mode 100644
-index 0000000000..4519a1f832
---- /dev/null
-+++ b/quickstep/tests/multivalentTests/src/com/android/quickstep/SystemUiProxyTest.kt
-@@ -0,0 +1,97 @@
-+/*
-+ * Copyright (C) 2026 The Android Open Source Project
-+ *
-+ * Licensed under the Apache License, Version 2.0 (the "License");
-+ * you may not use this file except in compliance with the License.
-+ * You may obtain a copy of the License at
-+ *
-+ *      http://www.apache.org/licenses/LICENSE-2.0
-+ *
-+ * Unless required by applicable law or agreed to in writing, software
-+ * distributed under the License is distributed on an "AS IS" BASIS,
-+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-+ * See the License for the specific language governing permissions and
-+ * limitations under the License.
-+ */
-+package com.android.quickstep
-+
-+import androidx.test.core.app.ApplicationProvider
-+import androidx.test.ext.junit.runners.AndroidJUnit4
-+import androidx.test.filters.SmallTest
-+import androidx.test.platform.app.InstrumentationRegistry.getInstrumentation
-+import com.android.launcher3.util.Executors.MAIN_EXECUTOR
-+import com.android.launcher3.util.Executors.UI_HELPER_EXECUTOR
-+import com.android.wm.shell.bubbles.IBubbles
-+import com.android.wm.shell.bubbles.IBubblesListener
-+import org.junit.Test
-+import org.junit.runner.RunWith
-+import org.mockito.kotlin.mock
-+import org.mockito.kotlin.never
-+import org.mockito.kotlin.verify
-+
-+/** Tests listener ownership behavior in [SystemUiProxy]. */
-+@SmallTest
-+@RunWith(AndroidJUnit4::class)
-+class SystemUiProxyTest {
-+
-+    @Test
-+    fun clearBubblesListener_ignoresStaleListener() {
-+        val bubbles = mock<IBubbles>()
-+        val listenerA = mock<IBubblesListener>()
-+        val listenerB = mock<IBubblesListener>()
-+        val proxy = newProxyWithBubbles(bubbles)
-+
-+        getInstrumentation().runOnMainSync {
-+            proxy.setBubblesListener(listenerA)
-+            proxy.setBubblesListener(listenerB)
-+            proxy.clearBubblesListener(listenerA)
-+        }
-+
-+        verify(bubbles).registerBubbleListener(listenerA)
-+        verify(bubbles).unregisterBubbleListener(listenerA)
-+        verify(bubbles).registerBubbleListener(listenerB)
-+        verify(bubbles, never()).unregisterBubbleListener(listenerB)
-+    }
-+
-+    @Test
-+    fun clearBubblesListener_unregistersActiveListener() {
-+        val bubbles = mock<IBubbles>()
-+        val listener = mock<IBubblesListener>()
-+        val proxy = newProxyWithBubbles(bubbles)
-+
-+        getInstrumentation().runOnMainSync {
-+            proxy.setBubblesListener(listener)
-+            proxy.clearBubblesListener(listener)
-+        }
-+
-+        verify(bubbles).registerBubbleListener(listener)
-+        verify(bubbles).unregisterBubbleListener(listener)
-+    }
-+
-+    private fun newProxyWithBubbles(bubbles: IBubbles): SystemUiProxy {
-+        val proxy =
-+            SystemUiProxy(
-+                ApplicationProvider.getApplicationContext(),
-+                MAIN_EXECUTOR,
-+                UI_HELPER_EXECUTOR,
-+            )
-+        getInstrumentation().runOnMainSync {
-+            proxy.setProxy(
-+                null,
-+                null,
-+                bubbles,
-+                null,
-+                null,
-+                null,
-+                null,
-+                null,
-+                null,
-+                null,
-+                null,
-+                null,
-+                null,
-+            )
-+        }
-+        return proxy
-+    }
-+}
 diff --git a/quickstep/tests/multivalentTests/src/com/android/quickstep/logging/SettingsChangeLoggerTest.kt b/quickstep/tests/multivalentTests/src/com/android/quickstep/logging/SettingsChangeLoggerTest.kt
 index fced2cb7eb..e4319cf7c1 100644
 --- a/quickstep/tests/multivalentTests/src/com/android/quickstep/logging/SettingsChangeLoggerTest.kt
@@ -3705,27 +3587,6 @@ index fced2cb7eb..e4319cf7c1 100644
              .isTrue()
          assertThat(capturedEvents.any { it.id == LAUNCHER_ALL_APPS_SUGGESTIONS_ENABLED.id })
              .isTrue()
-diff --git a/res/xml/all_apps_sizes_6x5.xml b/res/xml/all_apps_sizes_6x5.xml
-new file mode 100644
-index 0000000000..1aee4b2710
---- /dev/null
-+++ b/res/xml/all_apps_sizes_6x5.xml
-@@ -0,0 +1,15 @@
-+<?xml version="1.0" encoding="utf-8"?>
-+<!-- Desktop/freeform displays keep the desktop shell, but narrow windows need fewer columns. -->
-+<all-apps-sizes xmlns:launcher="http://schemas.android.com/apk/res-auto">
-+    <AllAppsSize
-+        launcher:minDeviceWidthDp="0"
-+        launcher:allAppsColumns="4" />
-+
-+    <AllAppsSize
-+        launcher:minDeviceWidthDp="700"
-+        launcher:allAppsColumns="5" />
-+
-+    <AllAppsSize
-+        launcher:minDeviceWidthDp="1600"
-+        launcher:allAppsColumns="6" />
-+</all-apps-sizes>
 diff --git a/res/xml/default_workspace_4x5.xml b/res/xml/default_workspace_4x5.xml
 index 40c0344009..b8d6d05907 100644
 --- a/res/xml/default_workspace_4x5.xml
@@ -4213,7 +4074,7 @@ index ce25f40ce6..edd18a2be0 100644
      public boolean shouldShowAllAppsOnSheet() {
          return mDeviceProperties.isTablet() || Flags.allAppsSheetForHandheld();
 diff --git a/src/com/android/launcher3/InvariantDeviceProfile.java b/src/com/android/launcher3/InvariantDeviceProfile.java
-index b1e32f450d..814f5823f8 100644
+index b1e32f450d..a41b67ec35 100644
 --- a/src/com/android/launcher3/InvariantDeviceProfile.java
 +++ b/src/com/android/launcher3/InvariantDeviceProfile.java
 @@ -134,6 +134,12 @@ public class InvariantDeviceProfile {
@@ -4229,7 +4090,18 @@ index b1e32f450d..814f5823f8 100644
  
      // Used for arrays to specify different sizes (e.g. border spaces, width/height) in different
      // constraints
-@@ -397,8 +403,11 @@ public class InvariantDeviceProfile {
+@@ -388,6 +394,10 @@ public class InvariantDeviceProfile {
+         initGrid(mPrefs.get(GRID_NAME));
+     }
+ 
++    public void refreshAfterDisplayChange() {
++        onConfigChanged();
++    }
++
+     private void initGridForDisplayOption(Info displayInfo, DisplayOption displayOption) {
+         Context context = displayInfo.context;
+         enableTwoLinesInAllApps = Flags.enableTwolineToggle()
+@@ -397,8 +407,11 @@ public class InvariantDeviceProfile {
  
          DisplayMetrics metrics = context.getResources().getDisplayMetrics();
          GridOption closestProfile = displayOption.grid;
@@ -4243,7 +4115,7 @@ index b1e32f450d..814f5823f8 100644
          numSearchContainerColumns = closestProfile.numSearchContainerColumns;
          dbFile = closestProfile.dbFile;
          gridType = closestProfile.gridType;
-@@ -523,6 +532,28 @@ public class InvariantDeviceProfile {
+@@ -523,6 +536,28 @@ public class InvariantDeviceProfile {
                      deviceProfile.recalculateHotseatWidthAndBorderSpace();
                  });
      }
@@ -4272,7 +4144,7 @@ index b1e32f450d..814f5823f8 100644
  
      DeviceProfile.Builder newDPBuilder(Info info) {
          return new DeviceProfile.Builder(this, info, mWMProxy);
-@@ -1390,6 +1421,14 @@ public class InvariantDeviceProfile {
+@@ -1390,6 +1425,14 @@ public class InvariantDeviceProfile {
          final float mMinDeviceHeightPx;
          final String mDbFile;
          final int mDefaultLayoutId;
@@ -4927,7 +4799,7 @@ index 56c4fb184c..4919cdd3d6 100644
  
      @Override
 diff --git a/src/com/android/launcher3/popup/PopupContainerWithArrow.kt b/src/com/android/launcher3/popup/PopupContainerWithArrow.kt
-index 8a7b875257..27979620fa 100644
+index 8a7b875257..f6c57890e3 100644
 --- a/src/com/android/launcher3/popup/PopupContainerWithArrow.kt
 +++ b/src/com/android/launcher3/popup/PopupContainerWithArrow.kt
 @@ -18,6 +18,7 @@ package com.android.launcher3.popup
@@ -4965,7 +4837,7 @@ index 8a7b875257..27979620fa 100644
      }
  
      /** Animates and loads shortcuts on background thread for this popup container */
-@@ -319,8 +324,108 @@ private constructor(
+@@ -319,8 +324,125 @@ private constructor(
      }
  
      override fun getTargetObjectLocation(outPos: Rect) {
@@ -4992,29 +4864,41 @@ index 8a7b875257..27979620fa 100644
 +    }
 +
 +    private fun getTaskbarTargetObjectLocation(outPos: Rect) {
-+        val fullBounds = Rect()
-+        popupContainer.getDescendantRectRelativeToSelf(originalView, fullBounds)
++        // Fix 2d: anchor the popup against the taskbar bar's top edge, not the
++        // icon's layout-rect top. The taskbar drag layer is laid out as
++        // wrap_content, so popupContainer.height is 0 during the popup's
++        // measure pass (before the dragLayer expands around the popup). The
++        // taskbar also parents its icons at the top of the drag layer and
++        // renders them at the bottom via a translation that
++        // getDescendantRectRelativeToSelf does not reflect either.
++        // Compose the rect from the icon's screen-relative horizontal position
++        // (for centering on the clicked icon), live window metrics, and the
++        // current taskbar profile height/margin. Keep the vertical coordinates
++        // in the drag layer's logical display coordinate space; the taskbar
++        // content may report a screen Y offset equal to the bar's top edge, and
++        // subtracting that offset collapses the target top back to 0. Result:
++        // popup hovers immediately above the bar with the existing
++        // TASKBAR_POPUP_EXTRA_VERTICAL_OFFSET_PX gap.
++        val iconScreenPos = IntArray(2)
++        originalView.getLocationOnScreen(iconScreenPos)
++        val containerScreenPos = IntArray(2)
++        popupContainer.getLocationOnScreen(containerScreenPos)
 +        val iconBounds = Rect()
 +        originalIcon.getIconBounds(iconBounds)
++        val dp = mActivityContext?.deviceProfile
++        val screenHeight = getCurrentDisplaySize(popupContainer).y
++        val taskbarHeight = dp?.taskbarProfile?.height ?: originalView.height
++        val taskbarBottomMargin = dp?.taskbarProfile?.bottomMargin ?: 0
++        val taskbarTopInContainer = screenHeight - taskbarHeight - taskbarBottomMargin
++        val bottomInContainer = screenHeight - taskbarBottomMargin
++        val leftInContainer = iconScreenPos[0] - containerScreenPos[0]
 +
 +        outPos.set(
-+            fullBounds.left + iconBounds.left,
-+            fullBounds.top + iconBounds.top,
-+            fullBounds.left + iconBounds.right,
-+            fullBounds.top + iconBounds.bottom,
++            leftInContainer + iconBounds.left,
++            taskbarTopInContainer,
++            leftInContainer + iconBounds.right,
++            bottomInContainer,
 +        )
-+
-+        val visibleBounds = Rect()
-+        if (originalView.getLocalVisibleRect(visibleBounds)) {
-+            val visibleRect =
-+                Rect(
-+                    fullBounds.left + visibleBounds.left,
-+                    fullBounds.top + visibleBounds.top,
-+                    fullBounds.left + visibleBounds.right,
-+                    fullBounds.top + visibleBounds.bottom,
-+                )
-+            outPos.intersect(visibleRect)
-+        }
 +    }
 +
 +    override fun orientAboutObject() {
@@ -5065,6 +4949,11 @@ index 8a7b875257..27979620fa 100644
 +    }
 +
 +    private fun getCurrentDisplaySize(dragLayer: InsettableFrameLayout): Point {
++        val liveBounds = mActivityContext?.liveDisplayBounds
++        if (liveBounds != null && liveBounds.width() > 0 && liveBounds.height() > 0) {
++            return Point(liveBounds.width(), liveBounds.height())
++        }
++
 +        val deviceProperties = mActivityContext?.deviceProfile?.deviceProperties
 +        val displaySize =
 +            Point(
@@ -5075,7 +4964,7 @@ index 8a7b875257..27979620fa 100644
      }
  
      private fun updateHiddenShortcuts() {
-@@ -440,6 +545,7 @@ private constructor(
+@@ -440,6 +562,7 @@ private constructor(
      }
  
      companion object {
@@ -5083,46 +4972,6 @@ index 8a7b875257..27979620fa 100644
          private const val SHORTCUT_COLLAPSE_THRESHOLD = 6
  
          /** Returns true if we can show the container. */
-diff --git a/src/com/android/launcher3/taskbar/TaskbarSettingsUris.java b/src/com/android/launcher3/taskbar/TaskbarSettingsUris.java
-new file mode 100644
-index 0000000000..fbbae9c5a1
---- /dev/null
-+++ b/src/com/android/launcher3/taskbar/TaskbarSettingsUris.java
-@@ -0,0 +1,34 @@
-+/*
-+ * Copyright (C) 2026 The Android Open Source Project
-+ *
-+ * Licensed under the Apache License, Version 2.0 (the "License");
-+ * you may not use this file except in compliance with the License.
-+ * You may obtain a copy of the License at
-+ *
-+ *      http://www.apache.org/licenses/LICENSE-2.0
-+ *
-+ * Unless required by applicable law or agreed to in writing, software
-+ * distributed under the License is distributed on an "AS IS" BASIS,
-+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-+ * See the License for the specific language governing permissions and
-+ * limitations under the License.
-+ */
-+
-+package com.android.launcher3.taskbar;
-+
-+import android.net.Uri;
-+
-+import lineageos.providers.LineageSettings;
-+
-+/** Shared accessors for Lineage taskbar setting URIs used by base and quickstep Launcher code. */
-+public final class TaskbarSettingsUris {
-+
-+    public static final Uri ENABLE_TASKBAR_URI = LineageSettings.System.getUriFor(
-+            LineageSettings.System.ENABLE_TASKBAR);
-+    public static final Uri NAVIGATION_BAR_HINT_URI = LineageSettings.System.getUriFor(
-+            LineageSettings.System.NAVIGATION_BAR_HINT);
-+    public static final Uri FORCE_SHOW_NAVBAR_URI = LineageSettings.System.getUriFor(
-+            LineageSettings.System.FORCE_SHOW_NAVBAR);
-+
-+    private TaskbarSettingsUris() { }
-+}
 diff --git a/src/com/android/launcher3/touch/AllAppsSwipeController.java b/src/com/android/launcher3/touch/AllAppsSwipeController.java
 index 24beb7c7c3..569627759e 100644
 --- a/src/com/android/launcher3/touch/AllAppsSwipeController.java
@@ -5177,10 +5026,37 @@ index 24beb7c7c3..569627759e 100644
      protected float initCurrentAnimation() {
          float range = getShiftRange();
 diff --git a/src/com/android/launcher3/util/DisplayController.java b/src/com/android/launcher3/util/DisplayController.java
-index 7ee8b181c1..493b6f6c6e 100644
+index 7ee8b181c1..aa5c5f9aca 100644
 --- a/src/com/android/launcher3/util/DisplayController.java
 +++ b/src/com/android/launcher3/util/DisplayController.java
-@@ -554,11 +554,23 @@ public class DisplayController {
+@@ -508,16 +508,20 @@ public class DisplayController {
+ 
+             realBounds = wmProxy.getRealBounds(displayInfoContext, displayInfo);
+             if (cachedValue == null) {
+-                // Unexpected normalizedDisplayInfo is found, recreate the cache
+-                FileLog.e(TAG, "Unexpected normalizedDisplayInfo found, invalidating cache: "
+-                        + normalizedDisplayInfo);
+-                FileLog.e(TAG, "(Invalid Cache) perDisplayBounds : " + mPerDisplayBounds);
++                if (DEBUG) {
++                    // Unexpected normalizedDisplayInfo is found, recreate the cache.
++                    Log.d(TAG, "Unexpected normalizedDisplayInfo found, invalidating cache: "
++                            + normalizedDisplayInfo);
++                    Log.d(TAG, "(Invalid Cache) perDisplayBounds : " + mPerDisplayBounds);
++                }
+                 mPerDisplayBounds.clear();
+                 mPerDisplayBounds.putAll(wmProxy.estimateInternalDisplayBounds(displayInfoContext));
+                 cachedValue = getCurrentBounds();
+                 if (cachedValue == null) {
+-                    FileLog.e(TAG, "normalizedDisplayInfo not found in estimation: "
+-                            + normalizedDisplayInfo);
++                    if (DEBUG) {
++                        Log.d(TAG, "normalizedDisplayInfo not found in estimation: "
++                                + normalizedDisplayInfo);
++                    }
+                     supportedBounds.add(realBounds);
+                 }
+             }
+@@ -554,11 +558,23 @@ public class DisplayController {
              return mIsInDesktopFirstMode;
          }
  
@@ -5246,10 +5122,30 @@ index 56b85545a0..c792590ef2 100644
  
          // Use the status bar height resources because current system API to get the status bar
 diff --git a/src/com/android/launcher3/views/ActivityContext.java b/src/com/android/launcher3/views/ActivityContext.java
-index f8cba752b8..6c5e3524f9 100644
+index f8cba752b8..14aa013f1b 100644
 --- a/src/com/android/launcher3/views/ActivityContext.java
 +++ b/src/com/android/launcher3/views/ActivityContext.java
-@@ -330,6 +330,11 @@ public interface ActivityContext extends SavedStateRegistryOwner {
+@@ -124,6 +124,19 @@ public interface ActivityContext extends SavedStateRegistryOwner {
+         return getDeviceProfile().getAbsoluteOpenFolderBounds();
+     }
+ 
++    /**
++     * Returns the current display/window bounds for live geometry decisions.
++     *
++     * <p>Contexts with direct access to WindowManager should override this with
++     * WindowMetrics-backed bounds. The default falls back to DeviceProfile, which is appropriate for
++     * regular launcher layout but may be stale during dynamic host-window resize.
++     */
++    default Rect getLiveDisplayBounds() {
++        DeviceProfile dp = getDeviceProfile();
++        return new Rect(0, 0, dp.getDeviceProperties().getWidthPx(),
++                dp.getDeviceProperties().getHeightPx());
++    }
++
+     /**
+      * After calling {@link #getFolderBoundingBox()}, we calculate a (left, top) position for a
+      * Folder of size width x height to be within those bounds. However, the chosen position may
+@@ -330,6 +343,11 @@ public interface ActivityContext extends SavedStateRegistryOwner {
          return v -> false;
      }
  
@@ -5261,104 +5157,6 @@ index f8cba752b8..6c5e3524f9 100644
      default DotInfo getDotInfoForItem(ItemInfo info) {
          return getActivityComponent().getPopupDataProvider().getDotInfoForItem(info);
      }
-diff --git a/tests/multivalentTests/src/com/android/launcher3/AllAppsColumnSelectionTest.kt b/tests/multivalentTests/src/com/android/launcher3/AllAppsColumnSelectionTest.kt
-new file mode 100644
-index 0000000000..98dc177c16
---- /dev/null
-+++ b/tests/multivalentTests/src/com/android/launcher3/AllAppsColumnSelectionTest.kt
-@@ -0,0 +1,92 @@
-+/*
-+ * Copyright (C) 2026 The Android Open Source Project
-+ *
-+ * Licensed under the Apache License, Version 2.0 (the "License");
-+ * you may not use this file except in compliance with the License.
-+ * You may obtain a copy of the License at
-+ *
-+ *      http://www.apache.org/licenses/LICENSE-2.0
-+ *
-+ * Unless required by applicable law or agreed to in writing, software
-+ * distributed under the License is distributed on an "AS IS" BASIS,
-+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-+ * See the License for the specific language governing permissions and
-+ * limitations under the License.
-+ */
-+
-+package com.android.launcher3
-+
-+import android.platform.test.annotations.EnableFlags
-+import androidx.test.ext.junit.runners.AndroidJUnit4
-+import androidx.test.filters.SmallTest
-+import com.google.common.truth.Truth.assertThat
-+import org.junit.Test
-+import org.junit.runner.RunWith
-+
-+@SmallTest
-+@RunWith(AndroidJUnit4::class)
-+class AllAppsColumnSelectionTest : AbstractDeviceProfileTest() {
-+
-+    @Test
-+    @EnableFlags(Flags.FLAG_ENABLE_SCALABILITY_FOR_DESKTOP_EXPERIENCE)
-+    fun desktopSmallWindow_usesFewerAllAppsColumns() {
-+        initializeVarsForDesktop(
-+            DeviceSpec(
-+                naturalSize = Pair(1536, 849),
-+                densityDpi = 160,
-+                statusBarNaturalPx = 0,
-+                statusBarRotatedPx = 0,
-+                gesturePx = 0,
-+                cutoutPx = 0,
-+            ),
-+            isLandscape = true,
-+        )
-+
-+        val dp = context.appComponent.idp.getDeviceProfile(context)
-+
-+        assertThat(context.appComponent.idp.numColumns).isEqualTo(10)
-+        assertThat(context.appComponent.idp.numRows).isEqualTo(5)
-+        assertThat(dp.numShownAllAppsColumns).isEqualTo(5)
-+    }
-+
-+    @Test
-+    @EnableFlags(Flags.FLAG_ENABLE_SCALABILITY_FOR_DESKTOP_EXPERIENCE)
-+    fun desktopLargeWindow_keepsTabletAllAppsColumns() {
-+        initializeVarsForDesktop(
-+            DeviceSpec(
-+                naturalSize = Pair(1663, 1205),
-+                densityDpi = 160,
-+                statusBarNaturalPx = 0,
-+                statusBarRotatedPx = 0,
-+                gesturePx = 0,
-+                cutoutPx = 0,
-+            ),
-+            isLandscape = true,
-+        )
-+
-+        val dp = context.appComponent.idp.getDeviceProfile(context)
-+
-+        assertThat(context.appComponent.idp.numColumns).isEqualTo(10)
-+        assertThat(context.appComponent.idp.numRows).isEqualTo(7)
-+        assertThat(dp.numShownAllAppsColumns).isEqualTo(6)
-+    }
-+
-+    @Test
-+    @EnableFlags(Flags.FLAG_ENABLE_SCALABILITY_FOR_DESKTOP_EXPERIENCE)
-+    fun desktopVeryLargeWindow_capsWorkspaceGrid() {
-+        initializeVarsForDesktop(
-+            DeviceSpec(
-+                naturalSize = Pair(3840, 2160),
-+                densityDpi = 160,
-+                statusBarNaturalPx = 0,
-+                statusBarRotatedPx = 0,
-+                gesturePx = 0,
-+                cutoutPx = 0,
-+            ),
-+            isLandscape = true,
-+        )
-+
-+        assertThat(context.appComponent.idp.numColumns).isEqualTo(22)
-+        assertThat(context.appComponent.idp.numRows).isEqualTo(11)
-+    }
-+}
 diff --git a/tests/multivalentTests/src/com/android/launcher3/util/DisplayControllerTest.kt b/tests/multivalentTests/src/com/android/launcher3/util/DisplayControllerTest.kt
 index c437badab9..22fcfa3d48 100644
 --- a/tests/multivalentTests/src/com/android/launcher3/util/DisplayControllerTest.kt

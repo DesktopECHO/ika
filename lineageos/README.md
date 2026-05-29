@@ -78,8 +78,37 @@ Building this ROM is a full LineageOS source build and is resource-intensive:
 - **Storage:** 500 GB minimum of free space. The synced source tree, ccache,
   and build intermediates for both ARM64 and x86-64 targets land in this
   range; a single-target build is smaller but still well over 200 GB.
-- **CPU:** any modern x86-64 or ARM64 Linux host. More cores shorten the
-  build proportionally; `JOBS` defaults to `nproc`.
+- **CPU:** x86-64 Linux is the upstream-supported AOSP build host. ARM64
+  Fedora Asahi hosts work for this project when x86-64 Linux host-tool
+  emulation is installed; more cores shorten the build proportionally, and
+  `JOBS` defaults to `nproc`.
+
+### ARM64 Build Hosts
+
+Current AOSP and LineageOS branches still execute x86-64 Linux host prebuilts
+during source builds, even when the target product is ARM64. On Fedora Asahi,
+install FEX and its rootfs before running the ROM build:
+
+```bash
+sudo dnf install -y fex-emu fex-emu-rootfs-fedora muvm
+```
+
+`binfmt-dispatcher` is installed by default on Fedora Asahi and routes x86-64
+ELF execution through FEX. On Apple Silicon's 16 KiB-page kernels, `muvm` gives
+FEX a compatible 4 KiB-page environment for those Android prebuilts.
+
+The build script checks this before syncing sources by running a tiny x86-64
+ELF probe. If the probe fails, it prints the package command above instead of
+letting the Android build fail later in Soong. For local use on an ARM64 host,
+build the ARM64 Cuttlefish product:
+
+```bash
+./lineageos/scripts/build_lineageos_desktop.sh arm64
+```
+
+The default `all` target still builds both ARM64 and x86-64 release bundles,
+but the x86-64 target is mainly useful when producing packages for x86-64
+hosts.
 
 ## One-Command Build
 

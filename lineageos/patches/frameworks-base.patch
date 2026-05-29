@@ -2,8 +2,8 @@ Patch summary:
 Apply the framework and SystemUI desktop contract. This patch gathers the
 platform-level behavior that makes the guest act like a desktop VM: desktop-mode
 defaults, freeform/window behavior, display power behavior, storage reporting,
-status bar/shade adjustments, Quick Settings desktop cleanup, and other
-VM-facing framework defaults.
+keyguard clock suppression, status bar/shade adjustments, Quick Settings
+desktop cleanup, and other VM-facing framework defaults.
 
 Most of the changes are about replacing phone assumptions with desktop ones.
 The guest has no useful battery saver, flashlight, wallet, auto-rotate, or
@@ -2520,3 +2520,36 @@ index b7ae043d66ee..abc70ba892a6 100644
                      && !isApex
                      && !isPlatformPackage) {
                  NativeLibraryHelper.AlignmentResult res =
+diff --git a/packages/SystemUI/res/values/bools.xml b/packages/SystemUI/res/values/bools.xml
+index 76e9e372ed7e..9a977856d325 100644
+--- a/packages/SystemUI/res/values/bools.xml
++++ b/packages/SystemUI/res/values/bools.xml
+@@ -64,5 +64,8 @@
+      False here because large clock used by default, unless otherwise specified -->
+     <bool name="force_small_clock_on_lockscreen">false</bool>
+-
++
++    <!-- Hide the keyguard clock for desktop builds where lockscreen is disabled by default. -->
++    <bool name="lineage_desktop_hide_keyguard_clock">false</bool>
++
+     <!--  True when small screen (<sw600dp) is landscape. -->
+     <bool name="is_small_screen_landscape">false</bool>
+diff --git a/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/ClockSection.kt b/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/ClockSection.kt
+index 7baddb8700a6..4ba3a61f7e89 100644
+--- a/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/ClockSection.kt
++++ b/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/ClockSection.kt
+@@ -111,5 +111,14 @@ constructor(
+     ): ConstraintSet {
+         // Add constraint between rootView and clockContainer
+         applyDefaultConstraints(constraintSet)
++        if (context.resources.getBoolean(R.bool.lineage_desktop_hide_keyguard_clock)) {
++            return constraintSet.apply {
++                setVisibility(clock.smallClock.layout.views, GONE)
++                setVisibility(clock.largeClock.layout.views, GONE)
++                setAlpha(clock.smallClock.layout.views, 0F)
++                setAlpha(clock.largeClock.layout.views, 0F)
++            }
++        }
++
+         getNonTargetClockFace(clock).applyConstraints(constraintSet)
+         getTargetClockFace(clock).applyConstraints(constraintSet)

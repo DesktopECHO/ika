@@ -1,0 +1,14 @@
+diff --git a/Android.bp b/Android.bp
+index a1e9799..571e051 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -19,6 +19,9 @@ prebuilt_build_tool {
+         x86_64: {
+             enabled: true,
+         },
++        arm64: {
++            enabled: true,
++        },
+     },
+     target: {
+         linux: {

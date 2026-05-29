@@ -85,6 +85,64 @@ target_enabled() {
   return 1
 }
 
+host_is_arm64() {
+  case "$(uname -m)" in
+    aarch64|arm64)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+is_source_root_patch_project() {
+  [[ "$1" == "." ]]
+}
+
+patch_project_dir() {
+  local project="$1"
+  if is_source_root_patch_project "$project"; then
+    printf '%s\n' "$android_root"
+  else
+    printf '%s/%s\n' "$android_root" "$project"
+  fi
+}
+
+patch_project_label() {
+  local project="$1"
+  if is_source_root_patch_project "$project"; then
+    printf '%s\n' "source root"
+  else
+    printf '%s\n' "$project"
+  fi
+}
+
+git_apply_for_patch_project() {
+  local project="$1"
+  shift
+
+  if is_source_root_patch_project "$project"; then
+    GIT_CEILING_DIRECTORIES="$(dirname "$android_root")" \
+      git -C "$android_root" apply "$@"
+  else
+    git -C "$(patch_project_dir "$project")" apply "$@"
+  fi
+}
+
+check_single_patch_applied() {
+  local project="$1"
+  local patch="$2"
+  local patch_path project_label
+
+  patch_path="$overlay_dir/$patch"
+  project_label="$(patch_project_label "$project")"
+
+  if ! git_apply_for_patch_project "$project" --check --reverse --whitespace=nowarn "$patch_path" >/dev/null 2>&1; then
+    fail "patch is not applied cleanly to $project_label: $patch"
+  fi
+}
+
 check_patch_series() {
   local series="$overlay_dir/patches/series"
   require_file "$series"
@@ -106,11 +164,16 @@ check_patch_series() {
       continue
     fi
 
-    project_dir="$android_root/$project"
+    project_dir="$(patch_project_dir "$project")"
     patch_path="$overlay_dir/$patch"
 
     require_file "$patch_path"
-    if [[ ! -d "$project_dir/.git" ]]; then
+    if is_source_root_patch_project "$project"; then
+      if [[ ! -d "$project_dir" ]]; then
+        fail "patched source root is missing: $project_dir"
+        continue
+      fi
+    elif [[ ! -d "$project_dir/.git" ]]; then
       fail "patched project is missing or not a git checkout: $project"
       continue
     fi
@@ -125,14 +188,19 @@ check_patch_series() {
   done < "$series"
 
   for project in "${projects[@]}"; do
-    project_dir="$android_root/$project"
+    project_dir="$(patch_project_dir "$project")"
+
+    if is_source_root_patch_project "$project"; then
+      while IFS= read -r patch; do
+        [[ -n "$patch" ]] || continue
+        check_single_patch_applied "$project" "$patch"
+      done <<<"${project_patch_list[$project]}"
+      continue
+    fi
 
     if (( ${project_patch_count[$project]} == 1 )); then
       patch="${project_patch_list[$project]%$'\n'}"
-      patch_path="$overlay_dir/$patch"
-      if ! git -C "$project_dir" apply --check --reverse "$patch_path" >/dev/null 2>&1; then
-        fail "patch is not applied cleanly to $project: $patch"
-      fi
+      check_single_patch_applied "$project" "$patch"
       continue
     fi
 
@@ -200,10 +268,270 @@ check_userdata_policy() {
     fail "x86-64 userdata is not f2fs in $x86_board"
 
   if grep -R --include='*.mk' --include='BoardConfig*.mk' \
+      --exclude-dir='.git' --exclude-dir='out' --exclude-dir='src' \
       -E '^[[:space:]]*TARGET_USERDATAIMAGE_PARTITION_SIZE[[:space:]]*:=' \
       "$overlay_dir" >/dev/null 2>&1; then
     fail "overlay contains a hard userdata partition size override"
   fi
+}
+
+check_unscoped_x86_flags() {
+  case "${VALIDATE_X86_FLAGS:-1}" in
+    0|false|no|off)
+      log "x86 flag validation skipped by VALIDATE_X86_FLAGS=0"
+      return 0
+      ;;
+  esac
+
+  local project_list="$android_root/.repo/project.list"
+  require_file "$project_list"
+  [[ -f "$project_list" ]] || return 0
+
+  log "checking for unscoped x86-only compiler flags"
+  local checker_output
+  if ! checker_output="$(python3 - "$android_root" "$project_list" 2>&1 <<'PY'
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
+import re
+import subprocess
+import sys
+
+android_root = Path(sys.argv[1])
+project_list = Path(sys.argv[2])
+
+x86_flag_re = re.compile(
+    r'(?<![A-Za-z0-9_])'
+    r'-m(?:'
+    r'sse[0-9.]*|ssse3|mmx|avx[A-Za-z0-9.]*|aes|pclmul|popcnt|'
+    r'xsave(?:opt|c)?|f16c|fma|rtm|bmi2?|lzcnt|movbe|cx16|sha'
+    r')'
+    r'(?![A-Za-z0-9_.-])'
+)
+git_grep_x86_flag_re = (
+    r'-m(sse[0-9.]*|ssse3|mmx|avx[A-Za-z0-9.]*|aes|pclmul|popcnt|'
+    r'xsave(opt|c)?|f16c|fma|rtm|bmi2?|lzcnt|movbe|cx16|sha)'
+)
+bp_label_re = re.compile(r'([A-Za-z0-9_]+)\s*:\s*\{')
+make_assign_re = re.compile(r'\s*([A-Za-z0-9_.$(){}+-]+)\s*(?::=|\+=|=)\s*(.*)')
+make_if_re = re.compile(r'\s*(ifn?eq|ifdef|ifndef)\b(.*)')
+make_else_re = re.compile(r'\s*else\b')
+make_endif_re = re.compile(r'\s*endif\b')
+
+
+def strip_bp_comment(line: str) -> str:
+    # Android.bp files do not need x86-flag strings inside comments checked.
+    return line.split("//", 1)[0]
+
+
+def strip_make_comment(line: str) -> str:
+    escaped = False
+    for index, char in enumerate(line):
+        if char == "\\" and not escaped:
+            escaped = True
+            continue
+        if char == "#" and not escaped:
+            return line[:index]
+        escaped = False
+    return line
+
+
+def x86_context(text: str) -> bool:
+    lowered = text.lower()
+    return any(token in lowered for token in ("x86", "i386", "i486", "i586", "i686"))
+
+
+def is_build_file(path: Path) -> bool:
+    name = path.name
+    return name.endswith(".bp") or name.endswith(".mk") or name.startswith("BoardConfig")
+
+
+def grep_project(project: str) -> list[Path]:
+    project_dir = android_root / project
+    if not (project_dir / ".git").exists():
+        return []
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(project_dir),
+                "grep",
+                "-l",
+                "-I",
+                "-E",
+                git_grep_x86_flag_re,
+                "--",
+                "*.bp",
+                "*.mk",
+                "BoardConfig*",
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return []
+    if result.returncode not in (0, 1):
+        return []
+
+    paths = []
+    for raw in result.stdout.splitlines():
+        rel = raw.decode("utf-8", "surrogateescape")
+        path = project_dir / rel
+        if path.is_file() and is_build_file(path):
+            paths.append(path)
+    return paths
+
+
+def x86_flag_jobs() -> int:
+    raw = os.environ.get("VALIDATE_X86_FLAGS_JOBS")
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            return 1
+    return max(1, min(8, os.cpu_count() or 4))
+
+
+def iter_candidate_files():
+    projects = [
+        line.strip()
+        for line in project_list.read_text(encoding="utf-8", errors="ignore").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    seen: set[Path] = set()
+    with ThreadPoolExecutor(max_workers=x86_flag_jobs()) as executor:
+        futures = [executor.submit(grep_project, project) for project in projects]
+        for future in as_completed(futures):
+            for path in future.result():
+                if path in seen:
+                    continue
+                seen.add(path)
+                yield path
+
+
+def check_bp(path: Path, rel_path: str, bad: list[str]) -> None:
+    stack: list[str | None] = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return
+
+    path_is_x86_scoped = x86_context(rel_path)
+    for lineno, line in enumerate(lines, 1):
+        code = strip_bp_comment(line)
+        labels = list(bp_label_re.finditer(code))
+        for match in labels:
+            stack.append(match.group(1))
+        stack.extend([None] * max(0, code.count("{") - len(labels)))
+
+        if x86_flag_re.search(code):
+            scoped = path_is_x86_scoped or any(label and x86_context(label) for label in stack)
+            if not scoped:
+                bad.append(f"{rel_path}:{lineno}: x86-only compiler flag is not under an x86/x86_64 scope: {line.strip()}")
+
+        for _ in range(code.count("}")):
+            if stack:
+                stack.pop()
+
+
+def check_make(path: Path, rel_path: str, bad: list[str]) -> None:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return
+
+    path_is_x86_scoped = x86_context(rel_path)
+    condition_stack: list[str] = []
+    current_var = ""
+
+    for lineno, line in enumerate(lines, 1):
+        code = strip_make_comment(line).rstrip()
+        if make_endif_re.match(code):
+            if condition_stack:
+                condition_stack.pop()
+        elif make_else_re.match(code):
+            pass
+        else:
+            if_match = make_if_re.match(code)
+            if if_match:
+                condition_stack.append(code)
+
+        assign = make_assign_re.match(code)
+        if assign:
+            current_var = assign.group(1)
+
+        if x86_flag_re.search(code):
+            context = " ".join([rel_path, current_var, *condition_stack[-4:]])
+            if not (path_is_x86_scoped or x86_context(context)):
+                bad.append(f"{rel_path}:{lineno}: x86-only compiler flag is not under an x86/x86_64 scope: {line.strip()}")
+
+        if not code.endswith("\\") and not assign:
+            current_var = ""
+
+
+bad: list[str] = []
+for path in iter_candidate_files():
+    try:
+        rel_path = path.relative_to(android_root).as_posix()
+    except ValueError:
+        rel_path = str(path)
+    if path.name.endswith(".bp"):
+        check_bp(path, rel_path, bad)
+    else:
+        check_make(path, rel_path, bad)
+
+if bad:
+    print("unscoped x86-only compiler flags found; move these under x86/x86_64 target/arch scopes:", file=sys.stderr)
+    for item in bad[:80]:
+        print(item, file=sys.stderr)
+    if len(bad) > 80:
+        print(f"... {len(bad) - 80} more", file=sys.stderr)
+    raise SystemExit(1)
+PY
+)"; then
+    fail "$checker_output"
+  else
+  log "x86 flag validation ok"
+  fi
+}
+
+check_arm64_clang_compat() {
+  host_is_arm64 || return 0
+  target_enabled arm64 || return 0
+
+  local arm64_root="$android_root/prebuilts/clang/host/linux-arm64"
+  local x86_root="$android_root/prebuilts/clang/host/linux-x86"
+  local clang_dir payload found=0
+
+  [[ -d "$arm64_root" ]] || {
+    fail "missing ARM64 Clang prebuilt directory: $arm64_root"
+    return 0
+  }
+  [[ -d "$x86_root" ]] || {
+    fail "missing linux-x86 Clang metadata directory: $x86_root"
+    return 0
+  }
+
+  for clang_dir in "$arm64_root"/clang-r*; do
+    [[ -d "$clang_dir" ]] || continue
+    found=1
+    payload="${clang_dir##*/}"
+
+    require_file "$clang_dir/bin/clang"
+    require_file "$clang_dir/include/c++/v1/string"
+    require_file "$clang_dir/android_libc++/platform/aarch64/include/c++/v1/__config_site"
+
+    if [[ ! -e "$x86_root/$payload" ]]; then
+      fail "missing ARM64 Clang Soong compatibility path: prebuilts/clang/host/linux-x86/$payload"
+      continue
+    fi
+    require_file "$x86_root/$payload/include/c++/v1/string"
+    require_file "$x86_root/$payload/android_libc++/platform/aarch64/include/c++/v1/__config_site"
+  done
+
+  (( found )) || fail "no clang-r* payload found in $arm64_root"
 }
 
 check_microg_prebuilts() {
@@ -398,6 +726,8 @@ android_root="$(cd "$1" && pwd)"
 shift
 mapfile -t targets < <(normalize_targets "$@")
 
+check_unscoped_x86_flags
+check_arm64_clang_compat
 check_patch_series
 check_userdata_policy
 check_microg_prebuilts

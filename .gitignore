@@ -20,3 +20,4 @@ cvd-phone-slim.tar
 !/lineageos/prebuilts/native_bridge/README.md
 
 /out/
+buildtime.txt

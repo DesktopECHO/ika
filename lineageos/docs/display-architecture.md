@@ -46,7 +46,7 @@ To change the device geometry at runtime, upstream requires either:
 5. The framework propagates the display change through DisplayManager listeners
    and normal configuration updates.
 
-The guest's primary `DisplayInfo` actually updates. Launcher3's `DisplayController` sees the change, and [packages-apps-Launcher3-dynamic-display.patch](../patches/packages-apps-Launcher3-dynamic-display.patch) refreshes the cached invariant/device profile so the workspace grid, hotseat columns, and all-apps layout recompute. [packages-apps-Launcher3-live-display-bounds.patch](../patches/packages-apps-Launcher3-live-display-bounds.patch) keeps placement and popup decisions tied to live window bounds. End result: the launcher reflows like a real desktop, and freeform tasks are positioned against the new display bounds.
+The guest's primary `DisplayInfo` actually updates. Launcher3's `DisplayController` sees the change, and [packages-apps-Launcher3.patch](../patches/packages-apps-Launcher3.patch) refreshes the cached invariant/device profile so the workspace grid, hotseat columns, and all-apps layout recompute. The same patch keeps placement and popup decisions tied to live window bounds. End result: the launcher reflows like a real desktop, and freeform tasks are positioned against the new display bounds.
 
 ## 3. DPI policy
 

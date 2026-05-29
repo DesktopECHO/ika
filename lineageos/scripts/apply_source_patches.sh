@@ -28,12 +28,49 @@ die() {
 
 [[ -f "$series_file" ]] || die "missing patch series: $series_file"
 
+is_source_root_project() {
+  [[ "$1" == "." ]]
+}
+
+project_dir_for_series_entry() {
+  local project="$1"
+  if is_source_root_project "$project"; then
+    printf '%s\n' "$repo_root"
+  else
+    printf '%s/%s\n' "$repo_root" "$project"
+  fi
+}
+
+project_label_for_series_entry() {
+  local project="$1"
+  if is_source_root_project "$project"; then
+    printf '%s\n' "source root"
+  else
+    printf '%s\n' "$project"
+  fi
+}
+
+git_apply_for_series_entry() {
+  local project="$1"
+  shift
+
+  if is_source_root_project "$project"; then
+    GIT_CEILING_DIRECTORIES="$(dirname "$repo_root")" \
+      git -C "$repo_root" apply "$@"
+  else
+    git -C "$(project_dir_for_series_entry "$project")" apply "$@"
+  fi
+}
+
 patch_series_already_applied() {
   local project="$1"
   local patch_list="$2"
-  local project_dir="$repo_root/$project"
+  local project_dir
   local tmp_dir tmp_worktree combined_patch patch patch_file
   local applied=1
+
+  is_source_root_project "$project" && return 1
+  project_dir="$(project_dir_for_series_entry "$project")"
 
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/lineage-patch-apply.XXXXXX")" || return 1
   tmp_worktree="$tmp_dir/worktree"
@@ -69,20 +106,22 @@ patch_series_already_applied() {
 apply_patch_file() {
   local project="$1"
   local patch="$2"
-  local project_dir="$repo_root/$project"
   local patch_file="$overlay_dir/$patch"
+  local project_label
 
-  if git -C "$project_dir" apply --reverse --check "$patch_file" >/dev/null 2>&1; then
-    log "already applied: $project"
+  project_label="$(project_label_for_series_entry "$project")"
+
+  if git_apply_for_series_entry "$project" --reverse --check --whitespace=nowarn "$patch_file" >/dev/null 2>&1; then
+    log "already applied: $project_label"
     return
   fi
 
-  if ! git -C "$project_dir" apply --check --whitespace=nowarn "$patch_file" >/dev/null; then
-    die "patch does not apply cleanly to $project: $patch"
+  if ! git_apply_for_series_entry "$project" --check --whitespace=nowarn "$patch_file" >/dev/null; then
+    die "patch does not apply cleanly to $project_label: $patch"
   fi
 
-  log "applying: $project"
-  git -C "$project_dir" apply --whitespace=nowarn "$patch_file"
+  log "applying: $project_label"
+  git_apply_for_series_entry "$project" --whitespace=nowarn "$patch_file"
 }
 
 declare -a projects=()
@@ -102,10 +141,14 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -n "${project:-}" && -n "${patch:-}" && -z "${extra:-}" ]] || \
     die "invalid patch series line: $line"
 
-  project_dir="$repo_root/$project"
+  project_dir="$(project_dir_for_series_entry "$project")"
   patch_file="$overlay_dir/$patch"
 
-  [[ -d "$project_dir/.git" ]] || die "missing git project: $project"
+  if is_source_root_project "$project"; then
+    [[ -d "$project_dir" ]] || die "missing source root: $project_dir"
+  else
+    [[ -d "$project_dir/.git" ]] || die "missing git project: $project"
+  fi
   [[ -f "$patch_file" ]] || die "missing patch file: $patch"
 
   if [[ -z "${seen_projects[$project]:-}" ]]; then

@@ -1,0 +1,408 @@
+diff --git a/android/arch.go b/android/arch.go
+index 318ab4513..f63895b14 100644
+--- a/android/arch.go
++++ b/android/arch.go
+@@ -1653,6 +1653,18 @@ func decodeTargetProductVariables(config *config) (map[OsType][]Target, error) {
+ 			}
+ 		}
+ 
++		for _, existingTarget := range targets[target.os] {
++			if existingTarget.Arch.ArchType == arch.ArchType &&
++				existingTarget.Arch.ArchVariant == arch.ArchVariant &&
++				existingTarget.Arch.CpuVariant == arch.CpuVariant &&
++				slices.Equal(existingTarget.Arch.Abi, arch.Abi) &&
++				existingTarget.NativeBridge == target.nativeBridgeEnabled &&
++				existingTarget.NativeBridgeHostArchName == nativeBridgeHostArchNameStr &&
++				existingTarget.NativeBridgeRelativePath == nativeBridgeRelativePathStr {
++				return
++			}
++		}
++
+ 		targets[target.os] = append(targets[target.os],
+ 			Target{
+ 				Os:                       target.os,
+@@ -1671,6 +1683,11 @@ func decodeTargetProductVariables(config *config) (map[OsType][]Target, error) {
+ 	// The primary host target, which must always exist.
+ 	addTarget(targetConfig{os: config.BuildOS, archName: *variables.HostArch, nativeBridgeEnabled: NativeBridgeDisabled})
+ 
++	if config.BuildOS == LinuxMusl && config.BuildArch == Arm64 &&
++		config.Getenv("ANDROID_RUST_X86_PROC_MACRO_FALLBACK") == "1" {
++		addTarget(targetConfig{os: config.BuildOS, archName: "x86_64", nativeBridgeEnabled: NativeBridgeDisabled})
++	}
++
+ 	// An optional secondary host target.
+ 	if variables.HostSecondaryArch != nil && *variables.HostSecondaryArch != "" {
+ 		addTarget(targetConfig{os: config.BuildOS, archName: *variables.HostSecondaryArch, nativeBridgeEnabled: NativeBridgeDisabled})
+diff --git a/android/paths.go b/android/paths.go
+index cbd2ab435..49fa65261 100644
+--- a/android/paths.go
++++ b/android/paths.go
+@@ -2052,8 +2052,14 @@ func pathForInstall(ctx PathContext, os OsType, arch ArchType, partition string,
+ 		// Let's keep using x86 for the existing cases until we have a need to support
+ 		// other architectures.
+ 		archName := arch.String()
+-		if os.Class == Host && (arch == X86_64 || arch == Common) {
++		if os.Class == Host && arch == X86_64 {
+ 			archName = "x86"
++		} else if os.Class == Host && arch == Common {
++			if ctx.Config().BuildArch == Arm64 {
++				archName = "arm64"
++			} else {
++				archName = "x86"
++			}
+ 		}
+ 		partitionPaths = []string{"host", osName + "-" + archName, partition}
+ 	}
+diff --git a/cc/config/global.go b/cc/config/global.go
+index 4d7bd3c92..7e75bac2a 100644
+--- a/cc/config/global.go
++++ b/cc/config/global.go
+@@ -549,7 +549,7 @@ func init() {
+ 
+ 	pctx.StaticVariable("ClangPath", "${ClangBase}/${HostPrebuiltTag}/${ClangVersion}")
+ 	pctx.StaticVariable("ClangBin", "${ClangPath}/bin")
+-	pctx.StaticVariable("ClangAsanLibDir", "${ClangBase}/linux-x86/${ClangVersion}/lib/clang/${ClangShortVersion}/lib/linux")
++	pctx.StaticVariable("ClangAsanLibDir", "${ClangBase}/${HostPrebuiltTag}/${ClangVersion}/lib/clang/${ClangShortVersion}/lib/linux")
+ 
+ 	pctx.StaticVariable("WarningAllowedProjects", strings.Join(WarningAllowedProjects, " "))
+ 
+diff --git a/finder/finder.go b/finder/finder.go
+index 054ccd639..afa087fe1 100644
+--- a/finder/finder.go
++++ b/finder/finder.go
+@@ -166,7 +166,14 @@ type Finder struct {
+ 	nodes        pathMap
+ }
+ 
+-var defaultNumThreads = runtime.NumCPU() * 2
++func defaultFinderNumThreads() int {
++	if os.Getenv("ANDROID_BUILD_SERIAL_FINDER") == "1" {
++		return 1
++	}
++	return runtime.NumCPU() * 2
++}
++
++var defaultNumThreads = defaultFinderNumThreads()
+ 
+ // New creates a new Finder for use
+ func New(cacheParams CacheParams, filesystem fs.FileSystem,
+diff --git a/finder/fs/fs.go b/finder/fs/fs.go
+index d2e3e4ab0..570ed8cb7 100644
+--- a/finder/fs/fs.go
++++ b/finder/fs/fs.go
+@@ -105,6 +105,32 @@ func (osFs) Stat(path string) (stats os.FileInfo, err error) {
+ }
+ 
+ func (osFs) ReadDir(path string) (contents []DirEntryInfo, err error) {
++	if os.Getenv("ANDROID_BUILD_SERIAL_FINDER") == "1" {
++		entries, err := os.ReadDir(path)
++		if err != nil {
++			return nil, err
++		}
++		for _, entry := range entries {
++			mode := entry.Type()
++			if mode == 0 {
++				info, infoErr := entry.Info()
++				if infoErr != nil {
++					if os.IsNotExist(infoErr) {
++						continue
++					}
++					return contents, infoErr
++				}
++				mode = info.Mode() & (os.ModeType | os.ModeCharDevice)
++			}
++			contents = append(contents, &dirEntryInfo{
++				name:       entry.Name(),
++				mode:       mode,
++				modeExists: true,
++			})
++		}
++		return contents, nil
++	}
++
+ 	entries, err := readdir(path)
+ 	if err != nil {
+ 		return nil, err
+diff --git a/java/config/config.go b/java/config/config.go
+index 2b539abd7..34de11258 100644
+--- a/java/config/config.go
++++ b/java/config/config.go
+@@ -135,6 +135,10 @@ func init() {
+ 		// This is set up and guaranteed by soong_ui
+ 		return ctx.Config().Getenv("ANDROID_JAVA_HOME")
+ 	})
++	pctx.VariableFunc("Java8Home", func(ctx android.PackageVarContext) string {
++		// This is set up by soong_ui, which may fall back to the x86 JDK8 jars on ARM64.
++		return ctx.Config().Getenv("ANDROID_JAVA8_HOME")
++	})
+ 	pctx.VariableFunc("JlinkVersion", func(ctx android.PackageVarContext) string {
+ 		if override := ctx.Config().Getenv("OVERRIDE_JLINK_VERSION_NUMBER"); override != "" {
+ 			return override
+diff --git a/java/config/makevars.go b/java/config/makevars.go
+index 649b6c58f..6a58c2204 100644
+--- a/java/config/makevars.go
++++ b/java/config/makevars.go
+@@ -33,7 +33,7 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
+ 	ctx.Strict("LEGACY_CORE_PLATFORM_SYSTEM_MODULES", LegacyCorePlatformSystemModules)
+ 
+ 	ctx.Strict("ANDROID_JAVA_HOME", "${JavaHome}")
+-	ctx.Strict("ANDROID_JAVA8_HOME", "prebuilts/jdk/jdk8/${hostPrebuiltTag}")
++	ctx.Strict("ANDROID_JAVA8_HOME", "${Java8Home}")
+ 	ctx.Strict("ANDROID_JAVA_TOOLCHAIN", "${JavaToolchain}")
+ 	ctx.Strict("JAVA", "${JavaCmd} ${JavaVmFlags}")
+ 	ctx.Strict("JAVAC", "${JavacCmd} ${JavacVmFlags}")
+diff --git a/rust/bindgen.go b/rust/bindgen.go
+index 81b77e85b..3ec8a170a 100644
+--- a/rust/bindgen.go
++++ b/rust/bindgen.go
+@@ -45,6 +45,9 @@ var (
+ 	//TODO(b/160803703) Use a prebuilt bindgen instead of the built bindgen.
+ 	_ = pctx.HostBinToolVariable("bindgenCmd", "bindgen")
+ 	_ = pctx.VariableFunc("bindgenHostPrebuiltTag", func(ctx android.PackageVarContext) string {
++		if ctx.Config().BuildArch == android.Arm64 && ctx.Config().Getenv("LLVM_BINDGEN_PREBUILTS_VERSION") != "" {
++			return "linux-arm64"
++		}
+ 		if ctx.Config().UseHostMusl() {
+ 			// This is a hack to use the glibc bindgen binary until we have a musl version checked in.
+ 			return "linux-x86"
+@@ -53,6 +56,9 @@ var (
+ 		}
+ 	})
+ 	_ = pctx.VariableFunc("bindgenClangLibdir", func(ctx android.PackageVarContext) string {
++		if ctx.Config().BuildArch == android.Arm64 && ctx.Config().Getenv("LLVM_BINDGEN_PREBUILTS_VERSION") != "" {
++			return "lib/"
++		}
+ 		if ctx.Config().UseHostMusl() {
+ 			return "musl/lib/"
+ 		} else {
+diff --git a/rust/compiler.go b/rust/compiler.go
+index 631843528..8bbc994ab 100644
+--- a/rust/compiler.go
++++ b/rust/compiler.go
+@@ -392,7 +392,8 @@ func cfgsToFlags(cfgs []string) []string {
+ }
+ 
+ func (compiler *baseCompiler) features(ctx ModuleContext) []string {
+-	return compiler.Properties.Features.GetOrDefault(ctx, nil)
++	features := compiler.Properties.Features.GetOrDefault(ctx, nil)
++	return filterArm64MuslProcMacroFeatures(ctx, compiler.crateName(), features)
+ }
+ 
+ func (compiler *baseCompiler) featuresToFlags(ctx ModuleContext) []string {
+@@ -430,13 +431,45 @@ func CommonDefaultCfgFlags(flags Flags, vendor bool, product bool) Flags {
+ func (compiler *baseCompiler) cfgFlags(ctx ModuleContext, flags Flags) Flags {
+ 	flags = CommonDefaultCfgFlags(flags, ctx.RustModule().InVendor(), ctx.RustModule().InProduct())
+ 
+-	cfgFlags := cfgsToFlags(compiler.Properties.Cfgs.GetOrDefault(ctx, nil))
++	cfgs := filterArm64MuslProcMacroCfgs(ctx, compiler.crateName(), compiler.Properties.Cfgs.GetOrDefault(ctx, nil))
++	cfgFlags := cfgsToFlags(cfgs)
+ 	flags.RustFlags = append(flags.RustFlags, cfgFlags...)
+ 	flags.RustdocFlags = append(flags.RustdocFlags, cfgFlags...)
+ 
+ 	return flags
+ }
+ 
++func filterArm64MuslProcMacroFeatures(ctx ModuleContext, crateName string, features []string) []string {
++	if arm64MuslProcMacroFallback(ctx) && arm64MuslProcMacroFeatureCrate(crateName) {
++		return android.RemoveListFromList(features, []string{"proc-macro"})
++	}
++	return features
++}
++
++func filterArm64MuslProcMacroCfgs(ctx ModuleContext, crateName string, cfgs []string) []string {
++	if arm64MuslProcMacroFallback(ctx) && crateName == "proc_macro2" {
++		return android.RemoveListFromList(cfgs, []string{
++			"proc_macro_span",
++			"proc_macro_span_file",
++			"proc_macro_span_location",
++			"wrap_proc_macro",
++		})
++	}
++	return cfgs
++}
++
++func arm64MuslProcMacroFallback(ctx ModuleContext) bool {
++	return ctx.Target().Os == android.LinuxMusl && ctx.Target().Arch.ArchType == android.Arm64
++}
++
++func arm64MuslProcMacroFeatureCrate(crateName string) bool {
++	switch crateName {
++	case "proc_macro2", "quote", "syn", "synstructure":
++		return true
++	}
++	return false
++}
++
+ func CommonDefaultFlags(ctx android.ModuleContext, toolchain config.Toolchain, flags Flags) Flags {
+ 	flags.GlobalRustFlags = append(flags.GlobalRustFlags, config.GlobalRustFlags...)
+ 	flags.GlobalRustFlags = append(flags.GlobalRustFlags, toolchain.ToolchainRustFlags())
+@@ -543,7 +576,7 @@ func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
+ 		for _, stdlib := range config.Stdlibs {
+ 			// If we're building for the build host, use the prebuilt stdlibs, unless the host
+ 			// is linux_bionic which doesn't have prebuilts.
+-			if ctx.Host() && !ctx.Target().HostCross && ctx.Target().Os != android.LinuxBionic {
++			if usePrebuiltStdlib(ctx) {
+ 				stdlib = "prebuilt_" + stdlib
+ 			}
+ 			deps.Stdlibs = append(deps.Stdlibs, stdlib)
+@@ -559,6 +592,20 @@ func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
+ 	return deps
+ }
+ 
++func usePrebuiltStdlib(ctx DepsContext) bool {
++	if !ctx.Host() || ctx.Target().Os == android.LinuxBionic {
++		return false
++	}
++	if !ctx.Target().HostCross {
++		return !(ctx.Target().Os == android.LinuxMusl && ctx.Target().Arch.ArchType == android.Arm64)
++	}
++	return ctx.Config().BuildArch == android.Arm64 &&
++		ctx.Config().UseHostMusl() &&
++		ctx.Config().IsEnvTrue("ANDROID_RUST_X86_PROC_MACRO_FALLBACK") &&
++		ctx.Target().Os == android.LinuxMusl &&
++		ctx.Target().Arch.ArchType == android.X86_64
++}
++
+ func bionicDeps(ctx DepsContext, deps Deps, static bool) Deps {
+ 	bionicLibs := []string{}
+ 	bionicLibs = append(bionicLibs, "liblog")
+diff --git a/rust/library.go b/rust/library.go
+index fc0cafa0c..0045dcfb9 100644
+--- a/rust/library.go
++++ b/rust/library.go
+@@ -618,8 +618,7 @@ func (library *libraryDecorator) cfgFlags(ctx ModuleContext, flags Flags) Flags
+ 	flags = library.baseCompiler.cfgFlags(ctx, flags)
+ 	flags = CommonLibraryCfgFlags(ctx, flags)
+ 
+-	cfgs := library.baseCompiler.Properties.Cfgs.GetOrDefault(ctx, nil)
+-
++	cfgs := filterArm64MuslProcMacroCfgs(ctx, library.baseCompiler.crateName(), library.baseCompiler.Properties.Cfgs.GetOrDefault(ctx, nil))
+ 	cfgFlags := cfgsToFlags(cfgs)
+ 
+ 	flags.RustFlags = append(flags.RustFlags, cfgFlags...)
+diff --git a/rust/prebuilt.go b/rust/prebuilt.go
+index b7db742f5..e24fd3647 100644
+--- a/rust/prebuilt.go
++++ b/rust/prebuilt.go
+@@ -50,7 +50,7 @@ type prebuiltProcMacroDecorator struct {
+ }
+ 
+ func PrebuiltProcMacroFactory() android.Module {
+-	module, _ := NewPrebuiltProcMacro(android.HostSupportedNoCross)
++	module, _ := NewPrebuiltProcMacro(android.HostSupported)
+ 	return module.Init()
+ }
+ 
+diff --git a/rust/proc_macro.go b/rust/proc_macro.go
+index 568f82faf..f95fd9224 100644
+--- a/rust/proc_macro.go
++++ b/rust/proc_macro.go
+@@ -40,7 +40,7 @@ var _ compiler = (*procMacroDecorator)(nil)
+ var _ exportedFlagsProducer = (*procMacroDecorator)(nil)
+ 
+ func ProcMacroFactory() android.Module {
+-	module, _ := NewProcMacro(android.HostSupportedNoCross)
++	module, _ := NewProcMacro(android.HostSupported)
+ 	return module.Init()
+ }
+ 
+diff --git a/rust/rust.go b/rust/rust.go
+index 80a823162..b3010285c 100644
+--- a/rust/rust.go
++++ b/rust/rust.go
+@@ -2234,8 +2234,19 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
+ 
+ 	actx.AddVariationDependencies(nil, dataBinDepTag, deps.DataBins...)
+ 
+-	// proc_macros are compiler plugins, and so we need the host arch variant as a dependendcy.
+-	actx.AddFarVariationDependencies(ctx.Config().BuildOSTarget.Variations(), procMacroDepTag, deps.ProcMacros...)
++	// proc_macros are compiler plugins, and so we need the rustc host arch variant
++	// as a dependency. On ARM64 Linux, Android still ships only the x86_64 musl
++	// Rust compiler prebuilt, so procedural macros must match that compiler.
++	procMacroVariations := ctx.Config().BuildOSTarget.Variations()
++	if ctx.Config().BuildArch == android.Arm64 &&
++		ctx.Config().UseHostMusl() &&
++		ctx.Config().IsEnvTrue("ANDROID_RUST_X86_PROC_MACRO_FALLBACK") {
++		procMacroVariations = []blueprint.Variation{
++			{Mutator: "os", Variation: android.LinuxMusl.String()},
++			{Mutator: "arch", Variation: android.X86_64.String()},
++		}
++	}
++	actx.AddFarVariationDependencies(procMacroVariations, procMacroDepTag, deps.ProcMacros...)
+ 
+ 	mod.afdo.addDep(ctx, actx)
+ }
+diff --git a/test_suites/test_suites.go b/test_suites/test_suites.go
+index 9b7961ee0..38d61a750 100644
+--- a/test_suites/test_suites.go
++++ b/test_suites/test_suites.go
+@@ -1050,6 +1050,32 @@ func buildSharedReport(
+ 
+ func addJdkToZip(ctx android.SingletonContext, command *android.RuleBuilderCommand, subdir string) {
+ 	jdkHome := filepath.Dir(ctx.Config().Getenv("ANDROID_JAVA_HOME")) + "/linux-x86"
++	if filepath.IsAbs(jdkHome) {
++		top := android.AbsSrcDirForExistingUseCases()
++		rel, err := filepath.Rel(top, jdkHome)
++		if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
++			candidates := []string{
++				filepath.Join("prebuilts", "jdk", "jdk21", "linux-x86"),
++				filepath.Join("prebuilts", "jdk", "jdk25", "linux-x86"),
++			}
++			if strings.Contains(ctx.Config().Getenv("ANDROID_JAVA_HOME"), "25") {
++				candidates[0], candidates[1] = candidates[1], candidates[0]
++			}
++			jdkHome = ""
++			for _, candidate := range candidates {
++				if android.ExistentPathForSource(ctx, candidate).Valid() {
++					jdkHome = candidate
++					break
++				}
++			}
++			if jdkHome == "" {
++				ctx.Errorf("Could not find a source-tree JDK prebuilt for compatibility test suite packaging")
++				return
++			}
++		} else {
++			jdkHome = rel
++		}
++	}
+ 	glob := jdkHome + "/**/*"
+ 	files, err := ctx.GlobWithDeps(glob, nil)
+ 	if err != nil {
+diff --git a/ui/build/config.go b/ui/build/config.go
+index 1d793ad45..a48c8c29e 100644
+--- a/ui/build/config.go
++++ b/ui/build/config.go
+@@ -563,6 +563,16 @@ func newConfig(ctx Context, isDumpVar bool, args ...string) Config {
+ func ConfigJavaEnvironment(ctx Context, config *configImpl) {
+ 	// Configure Java-related variables, including adding it to $PATH
+ 	java8Home := filepath.Join("prebuilts/jdk/jdk8", config.HostPrebuiltTag())
++	if runtime.GOOS == "linux" && runtime.GOARCH == "arm64" {
++		// The JDK8 bootclasspath jars are architecture-independent, and some
++		// branches do not carry a linux-arm64 copy of the legacy JDK8 prebuilt.
++		if _, err := os.Stat(filepath.Join(java8Home, "jre/lib/rt.jar")); err != nil {
++			x86Java8Home := filepath.Join("prebuilts/jdk/jdk8", "linux-x86")
++			if _, err := os.Stat(filepath.Join(x86Java8Home, "jre/lib/rt.jar")); err == nil {
++				java8Home = x86Java8Home
++			}
++		}
++	}
+ 	java21Home := filepath.Join("prebuilts/jdk/jdk21", config.HostPrebuiltTag())
+ 	java25Home := filepath.Join("prebuilts/jdk/jdk25", config.HostPrebuiltTag())
+ 	javaHome := func() string {
+diff --git a/ui/build/soong.go b/ui/build/soong.go
+index c9b303c5b..0337bf5e5 100644
+--- a/ui/build/soong.go
++++ b/ui/build/soong.go
+@@ -241,6 +241,11 @@ func (pb PrimaryBuilderFactory) primaryBuilderInvocation(config Config) bootstra
+ 		// https://github.com/golang/proposal/blob/master/design/24543-non-cooperative-preemption.md
+ 		invocationEnv["GODEBUG"] = "asyncpreemptoff=1"
+ 	}
++	for _, name := range []string{"GOMEMLIMIT", "GOGC", "GOMAXPROCS", "GOTRACEBACK"} {
++		if value := os.Getenv(name); value != "" {
++			invocationEnv[name] = value
++		}
++	}
+ 
+ 	var allArgs []string
+ 	allArgs = append(allArgs, pb.specificArgs...)

@@ -1,0 +1,18 @@
+diff --git a/third_party/boost/Android.bp b/third_party/boost/Android.bp
+index e43dfdaf..09646d93 100644
+--- a/third_party/boost/Android.bp
++++ b/third_party/boost/Android.bp
+@@ -42,7 +42,7 @@ cc_defaults {
+         "-msse4.1",
+       ],
+     },
+-    musl:  {
++    linux_musl_x86_64:  {
+       cflags: [
+         "-msse4.1",
+       ],
+@@ -2134,4 +2134,3 @@ cc_library {
+     "variant/src/**/*.c",
+   ],
+ }
+-

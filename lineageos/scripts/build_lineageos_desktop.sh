@@ -24,9 +24,49 @@ else
   workspace_defaulted=1
 fi
 output_dir="${OUTPUT_DIR:-$ika_root}"
+buildtime_log_path="${BUILDTIME_LOG_PATH:-$ika_root/buildtime.txt}"
 repo_tool_url="${REPO_TOOL_URL:-https://storage.googleapis.com/git-repo-downloads/repo}"
 repo_install_path="${REPO_INSTALL_PATH:-/usr/local/bin/repo}"
 repo_cmd="repo"
+repo_sync_attempts="${REPO_SYNC_ATTEMPTS:-9}"
+repo_sync_retry_fetches="${REPO_SYNC_RETRY_FETCHES:-9}"
+repo_sync_quiet="${REPO_SYNC_QUIET:-}"
+jobs_was_set=0
+[[ -n "${JOBS:-}" ]] && jobs_was_set=1
+ninja_highmem_jobs_was_set=0
+[[ -n "${NINJA_HIGHMEM_NUM_JOBS:-}" ]] && ninja_highmem_jobs_was_set=1
+arm64_go_prebuilt_git_url="${ARM64_GO_PREBUILT_GIT_URL:-https://android.googlesource.com/platform/prebuilts/go/linux-arm64}"
+arm64_go_prebuilt_git_ref="${ARM64_GO_PREBUILT_GIT_REF:-mirror-goog-llvm-r596125-release}"
+clang_prebuilt_git_ref="${CLANG_PREBUILT_GIT_REF:-mirror-goog-llvm-r596125-release}"
+clang_prebuilt_version="${CLANG_PREBUILT_VERSION:-clang-r584948b}"
+linux_arm64_clang_prebuilt_git_url="${ARM64_CLANG_PREBUILT_GIT_URL:-https://android.googlesource.com/platform/prebuilts/clang/host/linux-arm64}"
+linux_arm64_clang_prebuilt_git_ref="${ARM64_CLANG_PREBUILT_GIT_REF:-$clang_prebuilt_git_ref}"
+linux_arm64_clang_prebuilt_version="${ARM64_CLANG_PREBUILT_VERSION:-$clang_prebuilt_version}"
+linux_x86_clang_prebuilt_git_url="${X86_CLANG_PREBUILT_GIT_URL:-https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86}"
+linux_x86_clang_prebuilt_git_ref="${X86_CLANG_PREBUILT_GIT_REF:-$clang_prebuilt_git_ref}"
+linux_x86_clang_prebuilt_version="${X86_CLANG_PREBUILT_VERSION:-$clang_prebuilt_version}"
+arm64_cmake_prebuilt_git_url="${ARM64_CMAKE_PREBUILT_GIT_URL:-https://android.googlesource.com/platform/prebuilts/cmake/linux-arm64}"
+arm64_cmake_prebuilt_git_ref="${ARM64_CMAKE_PREBUILT_GIT_REF:-mirror-goog-llvm-r596125-release}"
+arm64_jdk21_prebuilt_url="${ARM64_JDK21_PREBUILT_URL:-https://api.adoptium.net/v3/binary/latest/21/ga/linux/aarch64/jdk/hotspot/normal/eclipse}"
+arm64_jobs="${ARM64_JOBS:-4}"
+arm64_job_retry_list="${ARM64_JOB_RETRY_LIST:-}"
+arm64_muvm_mem_mib="${ARM64_MUVM_MEM_MIB:-32768}"
+arm64_soong_gomemlimit_was_set=0
+[[ -n "${ARM64_SOONG_GOMEMLIMIT:-}" ]] && arm64_soong_gomemlimit_was_set=1
+arm64_soong_gomemlimit="${ARM64_SOONG_GOMEMLIMIT:-2GiB}"
+arm64_soong_gomemlimit_retry_list="${ARM64_SOONG_GOMEMLIMIT_RETRY_LIST:-}"
+arm64_soong_gogc="${ARM64_SOONG_GOGC:-25}"
+arm64_soong_gomaxprocs_was_set=0
+[[ -n "${ARM64_SOONG_GOMAXPROCS:-}" ]] && arm64_soong_gomaxprocs_was_set=1
+arm64_soong_gomaxprocs="${ARM64_SOONG_GOMAXPROCS:-4}"
+arm64_godebug="${ARM64_GODEBUG:-asyncpreemptoff=1}"
+arm64_thinlto_use_mlgo="${ARM64_THINLTO_USE_MLGO:-false}"
+arm64_ninja_highmem_jobs="${ARM64_NINJA_HIGHMEM_JOBS:-1}"
+arm64_android_java_home="${ARM64_ANDROID_JAVA_HOME:-}"
+linux_arm64_llvm_prebuilts_version=""
+linux_arm64_llvm_release_version=""
+linux_x86_llvm_prebuilts_version=""
+linux_x86_llvm_release_version=""
 auto_install_deps="${AUTO_INSTALL_DEPS:-1}"
 reset_patched_projects="${RESET_PATCHED_PROJECTS:-auto}"
 anonymous_git_config_home="$workspace/.lineage-desktop-anonymous-config"
@@ -45,6 +85,9 @@ Environment:
                         Default: ika/lineageos/src
   OUTPUT_DIR            Parent directory for the lineageos-<arch>/ bundle
                         directories. Default: the ika project root.
+  BUILDTIME_LOG_PATH    TSV ledger for each ROM build target with start time,
+                        finish time, duration, architecture, and success or
+                        failure. Default: ika/buildtime.txt.
   JOBS                  Parallel jobs for repo sync and m. Default: reserve
                         4 GiB RAM, then one job per 3.5 GiB physical+virtual
                         RAM, capped at available logical CPU count.
@@ -52,8 +95,9 @@ Environment:
                         Soong high-memory pool jobs. Default: same 4 GiB RAM
                         reserve, then one job per 16 GiB physical+virtual RAM,
                         capped by JOBS.
-  Temporary zram       Hosts with less than 48 GiB RAM get a build-scoped zram
-                        swap device sized to 75% of physical RAM. It is removed
+  Temporary zram       Builds get zram swap sized to twice physical RAM, capped
+                        at 32 GiB, and prioritized above existing swap devices.
+                        Build-created zram is removed
                         automatically when the script exits.
   LINEAGE_BRANCH        LineageOS branch. Default: lineage-23.2
   ANDROID_MANIFEST_URL  Manifest repository. Default: LineageOS/android.git
@@ -79,6 +123,9 @@ Environment:
                         to {} with a log line so the bundle is launchable;
                         set to 1 in CI / release builds to surface a corrupt
                         Soong prebuilt instead of papering over it. Default: 0
+  SELINUX_WORKSPACE_TYPE
+                        SELinux type applied to checkout paths before builds.
+                        Use none to disable. Default: src_t
   STRICT_APEX_SIGNING   Fail target-files signing if any shipped APEX lacks a
                         matching container and payload key in ANDROID_CERTS_DIR.
                         Default: 1
@@ -104,8 +151,97 @@ Environment:
                         Default: latest
   REPO_INSTALL_PATH     Install path used if repo is missing.
                         Default: /usr/local/bin/repo
+  REPO_SYNC_ATTEMPTS    Top-level repo sync attempts. Default: 9
+  REPO_SYNC_RETRY_FETCHES
+                        Per-project repo fetch retries. Default: 9
+  REPO_SYNC_QUIET       Pass --quiet to repo sync. Default: auto, enabled on
+                        ARM64 hosts to avoid Python progress-output EAGAIN
+                        failures seen under emulated host tool setups.
+  ARM64_GO_PREBUILT_GIT_URL
+                        AOSP Go linux-arm64 prebuilt repo used to bootstrap
+                        Soong when this branch lacks prebuilts/go/linux-arm64.
+                        Default: platform/prebuilts/go/linux-arm64.
+  ARM64_GO_PREBUILT_GIT_REF
+                        Branch/tag/ref for ARM64_GO_PREBUILT_GIT_URL.
+                        Default: mirror-goog-llvm-r596125-release.
+  CLANG_PREBUILT_GIT_REF
+                        Shared default Clang prebuilt branch/tag/ref for all
+                        ROM targets. Default:
+                        mirror-goog-llvm-r596125-release.
+  CLANG_PREBUILT_VERSION
+                        Shared default clang-r* payload for all ROM targets.
+                        Default: clang-r584948b.
+  ARM64_CLANG_PREBUILT_GIT_URL
+                        AOSP Clang linux-arm64 prebuilt repo used on ARM64
+                        hosts. Default:
+                        platform/prebuilts/clang/host/linux-arm64.
+  ARM64_CLANG_PREBUILT_GIT_REF
+                        Branch/tag/ref for ARM64_CLANG_PREBUILT_GIT_URL.
+                        Default: CLANG_PREBUILT_GIT_REF.
+  ARM64_CLANG_PREBUILT_VERSION
+                        clang-r* payload used from ARM64_CLANG_PREBUILT_GIT_URL.
+                        Default: CLANG_PREBUILT_VERSION.
+  X86_CLANG_PREBUILT_GIT_URL
+                        AOSP Clang linux-x86 prebuilt repo used to pin x86
+                        builds to the same LLVM release as ARM64 builds.
+                        Default: platform/prebuilts/clang/host/linux-x86.
+  X86_CLANG_PREBUILT_GIT_REF
+                        Branch/tag/ref for X86_CLANG_PREBUILT_GIT_URL.
+                        Default: CLANG_PREBUILT_GIT_REF.
+  X86_CLANG_PREBUILT_VERSION
+                        clang-r* payload used from X86_CLANG_PREBUILT_GIT_URL.
+                        Default: CLANG_PREBUILT_VERSION.
+  ARM64_CMAKE_PREBUILT_GIT_URL
+                        AOSP CMake linux-arm64 prebuilt repo used on ARM64
+                        hosts. Default: platform/prebuilts/cmake/linux-arm64.
+  ARM64_CMAKE_PREBUILT_GIT_REF
+                        Branch/tag/ref for ARM64_CMAKE_PREBUILT_GIT_URL.
+                        Default: mirror-goog-llvm-r596125-release.
+  ARM64_JDK21_PREBUILT_URL
+                        Native Linux ARM64 JDK 21 tarball used when this branch
+                        lacks prebuilts/jdk/jdk21/linux-arm64. Default:
+                        Adoptium Temurin JDK 21 API URL.
+  ARM64_JOBS            Default parallel build jobs on ARM64 hosts when JOBS is
+                        unset. Tuned for a 16 GiB M1 Mac. Default: 4
+  ARM64_JOB_RETRY_LIST  Space-separated ARM64 job counts to try if a faster
+                        attempt fails from memory/process pressure. Default:
+                        ARM64_JOBS, then lower counts down to 1.
+  ARM64_MUVM_MEM_MIB    Memory passed to muvm on ARM64 hosts. Default: 32768.
+                        This intentionally exceeds physical RAM on a 16 GiB
+                        M1 Mac; host zram is enabled first and backs the 4 KiB
+                        guest when Soong graph generation crosses 16 GiB.
+  ARM64_SOONG_GOMEMLIMIT
+                        Go memory limit passed into Soong on ARM64 hosts.
+                        Default: 3GiB
+  ARM64_SOONG_GOMEMLIMIT_RETRY_LIST
+                        Space-separated Soong Go memory limits to try after
+                        resource-pressure failures. Default: ARM64_SOONG_GOMEMLIMIT,
+                        then lower limits down to 1GiB.
+  ARM64_SOONG_GOMAXPROCS
+                        Go scheduler threads for Soong graph generation on
+                        ARM64 hosts. Default: 4, capped to retry job count
+                        unless explicitly set.
+  ARM64_GODEBUG         Go runtime flags passed into ARM64/muvm builds.
+                        Default: asyncpreemptoff=1
+  ARM64_THINLTO_USE_MLGO
+                        Enables Soong ThinLTO MLGO linker advisors inside
+                        ARM64/muvm builds. Default: false, because current
+                        Linux ARM64 Clang prebuilts can emit ARM64 code
+                        natively here but do not ship every release advisor
+                        model expected by this branch.
+  ARM64_NINJA_HIGHMEM_JOBS
+                        High-memory Ninja pool jobs inside muvm on ARM64.
+                        Default: 1
+  ARM64_ANDROID_JAVA_HOME
+                        System JDK to use when the source tree lacks an ARM64
+                        JDK prebuilt. Default: auto-detect from javac.
   AUTO_INSTALL_DEPS     Install missing basic host tools with apt/dnf/pacman
                         when possible. Default: 1
+  ARM64 host emulation  Current AOSP/LineageOS branches still rely on
+                        some x86-64 Linux host prebuilts and need a 4 KiB page
+                        guest for them. On ARM64 Fedora Asahi hosts install:
+                        sudo dnf install -y fex-emu fex-emu-rootfs-fedora muvm
+                        The script runs the Android build under muvm on ARM64.
   RESET_PATCHED_PROJECTS
                         Reset patched source projects before repo sync.
                         Default: auto for script-managed workspaces
@@ -119,6 +255,71 @@ log() {
 die() {
   printf '[lineage-desktop] error: %s\n' "$*" >&2
   exit 1
+}
+
+active_build_arch=""
+active_build_start_epoch=""
+active_build_start_time=""
+
+buildtime_now() {
+  date '+%Y-%m-%dT%H:%M:%S%z'
+}
+
+ensure_buildtime_log() {
+  local log_dir
+  log_dir="$(dirname "$buildtime_log_path")" || return 0
+  mkdir -p "$log_dir" || return 0
+  if [[ ! -s "$buildtime_log_path" ]]; then
+    printf '%-24s  %-24s  %10s  %-8s  %s\n' \
+      start end duration arch status >>"$buildtime_log_path" || true
+  fi
+}
+
+record_buildtime_start() {
+  local arch="$1"
+
+  active_build_arch="$arch"
+  active_build_start_epoch="$(date '+%s')"
+  active_build_start_time="$(buildtime_now)"
+}
+
+record_buildtime_finish() {
+  local status="$1"
+  [[ -n "$active_build_arch" ]] || return 0
+
+  local finish_epoch finish_time duration duration_tenths duration_hrs arch start_time
+  arch="$active_build_arch"
+  start_time="$active_build_start_time"
+  finish_epoch="$(date '+%s')"
+  finish_time="$(buildtime_now)"
+  duration=$(( finish_epoch - active_build_start_epoch ))
+  duration_tenths=$(( (duration * 10 + 1800) / 3600 ))
+  duration_hrs="$(( duration_tenths / 10 )).$(( duration_tenths % 10 ))"
+
+  ensure_buildtime_log
+  printf '%-24s  %-24s  %10s  %-8s  %s\n' \
+    "$start_time" \
+    "$finish_time" \
+    "$duration_hrs" \
+    "$arch" \
+    "$status" >>"$buildtime_log_path" || true
+
+  active_build_arch=""
+  active_build_start_epoch=""
+  active_build_start_time=""
+}
+
+cleanup_on_exit() {
+  local status=$?
+  if [[ -n "$active_build_arch" ]]; then
+    if (( status == 0 )); then
+      record_buildtime_finish success || true
+    else
+      record_buildtime_finish failure || true
+    fi
+  fi
+  cleanup_temp_zram || true
+  exit "$status"
 }
 
 need_cmd() {
@@ -163,8 +364,13 @@ package_for_command() {
     apt:find) printf '%s\n' findutils ;;
     apt:git) printf '%s\n' git ;;
     apt:git-lfs) printf '%s\n' git-lfs ;;
+    apt:go) printf '%s\n' golang-go ;;
+    apt:javac) printf '%s\n' openjdk-21-jdk ;;
     apt:install|apt:mktemp|apt:readlink) printf '%s\n' coreutils ;;
     apt:modprobe) printf '%s\n' kmod ;;
+    apt:prlimit) printf '%s\n' util-linux ;;
+    apt:restorecon) printf '%s\n' policycoreutils ;;
+    apt:semanage) printf '%s\n' policycoreutils-python-utils ;;
     apt:mkswap|apt:swapoff|apt:swapon|apt:zramctl) printf '%s\n' util-linux ;;
     apt:python3) printf '%s\n' python3 ;;
     apt:rsync) printf '%s\n' rsync ;;
@@ -175,26 +381,43 @@ package_for_command() {
     dnf:find) printf '%s\n' findutils ;;
     dnf:git) printf '%s\n' git ;;
     dnf:git-lfs) printf '%s\n' git-lfs ;;
+    dnf:go) printf '%s\n' golang ;;
+    dnf:javac) printf '%s\n' java-25-openjdk-devel ;;
     dnf:install|dnf:mktemp|dnf:readlink) printf '%s\n' coreutils ;;
     dnf:modprobe) printf '%s\n' kmod ;;
+    dnf:prlimit) printf '%s\n' util-linux ;;
+    dnf:restorecon) printf '%s\n' policycoreutils ;;
+    dnf:semanage) printf '%s\n' policycoreutils-python-utils ;;
     dnf:mkswap|dnf:swapoff|dnf:swapon|dnf:zramctl) printf '%s\n' util-linux ;;
     dnf:python3) printf '%s\n' python3 ;;
     dnf:rsync) printf '%s\n' rsync ;;
     dnf:tar) printf '%s\n' tar ;;
     dnf:curl) printf '%s\n' curl ;;
     dnf:adb) printf '%s\n' android-tools ;;
+    dnf:FEXInterpreter) printf '%s\n' fex-emu ;;
+    dnf:muvm) printf '%s\n' muvm ;;
+    dnf:binfmt-dispatcher) printf '%s\n' binfmt-dispatcher ;;
+    dnf:qemu-x86_64) printf '%s\n' qemu-user ;;
+    dnf:qemu-x86_64-static) printf '%s\n' qemu-user-static-x86 ;;
     pacman:awk) printf '%s\n' gawk ;;
     pacman:find) printf '%s\n' findutils ;;
     pacman:git) printf '%s\n' git ;;
     pacman:git-lfs) printf '%s\n' git-lfs ;;
+    pacman:go) printf '%s\n' go ;;
+    pacman:javac) printf '%s\n' jdk-openjdk ;;
     pacman:install|pacman:mktemp|pacman:readlink) printf '%s\n' coreutils ;;
     pacman:modprobe) printf '%s\n' kmod ;;
+    pacman:prlimit) printf '%s\n' util-linux ;;
+    pacman:restorecon) printf '%s\n' policycoreutils ;;
+    pacman:semanage) printf '%s\n' policycoreutils ;;
     pacman:mkswap|pacman:swapoff|pacman:swapon|pacman:zramctl) printf '%s\n' util-linux ;;
     pacman:python3) printf '%s\n' python ;;
     pacman:rsync) printf '%s\n' rsync ;;
     pacman:tar) printf '%s\n' tar ;;
     pacman:curl) printf '%s\n' curl ;;
     pacman:adb) printf '%s\n' android-tools ;;
+    pacman:qemu-x86_64) printf '%s\n' qemu-user ;;
+    pacman:qemu-x86_64-static) printf '%s\n' qemu-user-static ;;
     *) return 1 ;;
   esac
 }
@@ -302,6 +525,313 @@ ensure_host_commands() {
   ensure_downloader
 }
 
+host_is_arm64() {
+  case "$(uname -m)" in
+    aarch64|arm64)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+reload_binfmt_misc() {
+  if command -v systemctl >/dev/null 2>&1; then
+    run_privileged systemctl restart systemd-binfmt.service >/dev/null 2>&1 || true
+  fi
+}
+
+install_arm64_x86_64_emulation_packages() {
+  local pm
+  pm="$(detect_package_manager)" || return 1
+
+  case "$pm" in
+    dnf)
+      install_packages "$pm" binfmt-dispatcher fex-emu fex-emu-rootfs-fedora muvm
+      ;;
+    apt)
+      install_packages "$pm" qemu-user-static binfmt-support
+      ;;
+    pacman)
+      install_packages "$pm" qemu-user-static
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+arm64_x86_64_emulation_hint() {
+  local pm="${1:-}"
+
+  case "$pm" in
+    dnf)
+      printf '%s\n' "sudo dnf install -y fex-emu fex-emu-rootfs-fedora muvm"
+      ;;
+    apt)
+      printf '%s\n' "sudo apt-get install -y qemu-user-static binfmt-support"
+      ;;
+    pacman)
+      printf '%s\n' "sudo pacman -Sy --needed qemu-user-static"
+      ;;
+    *)
+      printf '%s\n' "install FEX or qemu-user-static and enable binfmt_misc for x86-64 ELF files"
+      ;;
+  esac
+}
+
+ensure_arm64_host_x86_64_emulation() {
+  host_is_arm64 || return 0
+
+  local pm
+  pm="$(detect_package_manager 2>/dev/null || true)"
+
+  log "ARM64 build host detected; checking x86-64 host-tool emulation"
+  if [[ "$pm" == "dnf" ]] && ! fedora_asahi_fex_ready; then
+    if [[ "$auto_install_deps" == "1" ]]; then
+      install_arm64_x86_64_emulation_packages || true
+      reload_binfmt_misc
+      reset_host_x86_64_elf_probe_cache
+    fi
+
+    if ! fedora_asahi_fex_ready; then
+      local hint
+      hint="$(arm64_x86_64_emulation_hint "$pm")"
+      die "this ARM64 host is missing Fedora Asahi FEX support for x86-64 Android host prebuilts. Install it and rerun: $hint"
+    fi
+  fi
+
+  local page_size
+  page_size="$(host_page_size)"
+  if [[ "$pm" == "dnf" && "$page_size" != "4096" && "$(command -v muvm 2>/dev/null || true)" != "" ]]; then
+    log "muvm is available; ARM64 build will run in a 4 KiB-page guest"
+    return 0
+  fi
+
+  if host_can_run_x86_64_elf; then
+    log "x86-64 host-tool emulation is working"
+    return 0
+  fi
+
+  if [[ "$auto_install_deps" == "1" ]]; then
+    install_arm64_x86_64_emulation_packages || true
+    reload_binfmt_misc
+    reset_host_x86_64_elf_probe_cache
+    if host_can_run_x86_64_elf; then
+      log "x86-64 host-tool emulation is working"
+      return 0
+    fi
+  fi
+
+  local hint
+  hint="$(arm64_x86_64_emulation_hint "$pm")"
+
+  if [[ "$pm" == "dnf" && "$page_size" != "4096" ]]; then
+    die "this ARM64 host cannot run x86-64 Android host prebuilts. Install Fedora Asahi FEX support and rerun: $hint"
+  fi
+
+  die "this ARM64 host cannot run x86-64 Android host prebuilts. $hint"
+}
+
+selinux_label_type() {
+  local path="$1"
+  [[ -e "$path" ]] || return 1
+
+  ls -Zd "$path" 2>/dev/null | awk '{print $1}' | awk -F: '{print $3}'
+}
+
+regex_escape() {
+  sed -e 's/[][\\.^$*+?{}|()]/\\&/g' <<<"$1"
+}
+
+ensure_selinux_fcontext() {
+  local path="$1"
+  local type="$2"
+  local escaped regex
+
+  command -v semanage >/dev/null 2>&1 || install_missing_commands semanage || true
+  if command -v semanage >/dev/null 2>&1; then
+    escaped="$(regex_escape "$path")"
+    regex="${escaped}(/.*)?"
+    run_privileged semanage fcontext -a -t "$type" "$regex" >/dev/null 2>&1 || \
+      run_privileged semanage fcontext -m -t "$type" "$regex" >/dev/null 2>&1 || \
+      die "failed to configure SELinux fcontext for $path"
+  fi
+}
+
+ensure_workspace_selinux_contexts() {
+  command -v getenforce >/dev/null 2>&1 || return 0
+  [[ "$(getenforce 2>/dev/null || true)" != "Disabled" ]] || return 0
+
+  local workspace_type="${SELINUX_WORKSPACE_TYPE:-src_t}"
+  [[ -n "$workspace_type" && "$workspace_type" != "none" ]] || return 0
+  local -a relabel_paths=()
+  local current_type
+
+  current_type="$(selinux_label_type "$ika_root" || true)"
+  if [[ "$current_type" != "$workspace_type" ]]; then
+    relabel_paths+=("$ika_root")
+  fi
+
+  current_type="$(selinux_label_type "$workspace" || true)"
+  if [[ -e "$workspace" && "$workspace" != "$ika_root" &&
+      "$current_type" != "$workspace_type" ]]; then
+    relabel_paths+=("$workspace")
+  fi
+  (( ${#relabel_paths[@]} > 0 )) || return 0
+
+  log "repairing SELinux labels for workspace access ($workspace_type)"
+  local path
+  for path in "${relabel_paths[@]}"; do
+    ensure_selinux_fcontext "$path" "$workspace_type"
+  done
+  if command -v semanage >/dev/null 2>&1; then
+    command -v restorecon >/dev/null 2>&1 || install_missing_commands restorecon || true
+    command -v restorecon >/dev/null 2>&1 || \
+      die "SELinux fcontext configured for ${relabel_paths[*]}, but restorecon is missing"
+    run_privileged restorecon -R "${relabel_paths[@]}" || \
+      die "failed to restore SELinux labels; run: sudo restorecon -R ${relabel_paths[*]}"
+  else
+    run_privileged chcon -R -t "$workspace_type" "${relabel_paths[@]}" || \
+      die "failed to set SELinux labels; run: sudo chcon -R -t $workspace_type ${relabel_paths[*]}"
+  fi
+}
+
+configure_arm64_job_limits() {
+  host_is_arm64 || return 0
+
+  if (( jobs_was_set == 0 )); then
+    if [[ ! "$arm64_jobs" =~ ^[0-9]+$ || "$arm64_jobs" -le 0 ]]; then
+      build_jobs_fail "invalid ARM64_JOBS value '$arm64_jobs'; expected a positive integer"
+      return 1
+    fi
+    jobs="$arm64_jobs"
+  fi
+
+  if (( ninja_highmem_jobs_was_set == 1 )); then
+    arm64_ninja_highmem_jobs="$highmem_jobs"
+  else
+    if [[ ! "$arm64_ninja_highmem_jobs" =~ ^[0-9]+$ || "$arm64_ninja_highmem_jobs" -le 0 ]]; then
+      build_jobs_fail \
+        "invalid ARM64_NINJA_HIGHMEM_JOBS value '$arm64_ninja_highmem_jobs'; expected a positive integer"
+      return 1
+    fi
+    highmem_jobs="$arm64_ninja_highmem_jobs"
+    export NINJA_HIGHMEM_NUM_JOBS="$highmem_jobs"
+  fi
+
+  if [[ ! "$arm64_soong_gomaxprocs" =~ ^[0-9]+$ || "$arm64_soong_gomaxprocs" -le 0 ]]; then
+    build_jobs_fail \
+      "invalid ARM64_SOONG_GOMAXPROCS value '$arm64_soong_gomaxprocs'; expected a positive integer"
+    return 1
+  fi
+}
+
+arm64_build_job_attempts() {
+  local primary_jobs="$1"
+  local candidate seen=" "
+
+  if [[ -n "$arm64_job_retry_list" ]]; then
+    for candidate in $arm64_job_retry_list; do
+      if [[ ! "$candidate" =~ ^[0-9]+$ || "$candidate" -le 0 ]]; then
+        build_jobs_fail "invalid ARM64_JOB_RETRY_LIST value '$candidate'; expected positive integers"
+        return 1
+      fi
+      if [[ "$seen" != *" $candidate "* ]]; then
+        printf '%s\n' "$candidate"
+        seen+="$candidate "
+      fi
+    done
+    return 0
+  fi
+
+  printf '%s\n' "$primary_jobs"
+  seen+="$primary_jobs "
+  if (( jobs_was_set == 0 )); then
+    for candidate in 3 2 1; do
+      if (( candidate < primary_jobs )) && [[ "$seen" != *" $candidate "* ]]; then
+        printf '%s\n' "$candidate"
+        seen+="$candidate "
+      fi
+    done
+  fi
+}
+
+arm64_validate_gomemlimit() {
+  local value="$1"
+  if [[ "$value" == "off" || "$value" =~ ^[0-9]+([KMGTPE]i?B|B)?$ ]]; then
+    return 0
+  fi
+
+  build_jobs_fail "invalid ARM64_SOONG_GOMEMLIMIT value '$value'; expected e.g. 3GiB, 2048MiB, bytes, or off"
+  return 1
+}
+
+arm64_soong_gomemlimit_attempts() {
+  local primary_limit="$1"
+  local candidate seen=" "
+
+  if [[ -n "$arm64_soong_gomemlimit_retry_list" ]]; then
+    for candidate in $arm64_soong_gomemlimit_retry_list; do
+      arm64_validate_gomemlimit "$candidate" || return 1
+      if [[ "$seen" != *" $candidate "* ]]; then
+        printf '%s\n' "$candidate"
+        seen+="$candidate "
+      fi
+    done
+    return 0
+  fi
+
+  arm64_validate_gomemlimit "$primary_limit" || return 1
+  printf '%s\n' "$primary_limit"
+  seen+="$primary_limit "
+
+  if (( arm64_soong_gomemlimit_was_set == 0 )); then
+    for candidate in 2GiB 1536MiB 1GiB; do
+      if [[ "$seen" != *" $candidate "* ]]; then
+        printf '%s\n' "$candidate"
+        seen+="$candidate "
+      fi
+    done
+  fi
+}
+
+arm64_build_attempts() {
+  local primary_jobs="$1"
+  local primary_gomemlimit="$2"
+  local -a job_attempts=()
+  local -a gomemlimit_attempts=()
+  local attempt_jobs attempt_gomemlimit
+
+  mapfile -t job_attempts < <(arm64_build_job_attempts "$primary_jobs")
+  mapfile -t gomemlimit_attempts < <(arm64_soong_gomemlimit_attempts "$primary_gomemlimit")
+
+  for attempt_jobs in "${job_attempts[@]}"; do
+    for attempt_gomemlimit in "${gomemlimit_attempts[@]}"; do
+      printf '%s %s\n' "$attempt_jobs" "$attempt_gomemlimit"
+    done
+  done
+}
+
+arm64_log_looks_resource_limited() {
+  local log_file="$1"
+  [[ -s "$log_file" ]] || return 1
+
+  if grep -Eqi \
+    '(^|[^[:alpha:]])killed([^[:alpha:]]|$)|cannot allocate memory|out of memory|std::bad_alloc|resource temporarily unavailable|failed to create new os thread|fatal error: runtime: out of memory' \
+    "$log_file"; then
+    return 0
+  fi
+
+  if grep -Eq 'FAILED: out/soong/build\..*\.ninja|soong bootstrap failed with: exit status 1' "$log_file" && \
+      ! grep -Eqi '(^|[^[:alpha:]])error:' "$log_file"; then
+    return 0
+  fi
+
+  return 1
+}
+
 temp_zram_device=""
 
 ensure_temp_zram_commands() {
@@ -331,8 +861,87 @@ format_kib_as_gib() {
   awk -v kib="$kib" 'BEGIN { printf "%.1f GiB", kib / 1024 / 1024 }'
 }
 
+swap_priority_for_device() {
+  local dev="$1"
+  awk -v dev="$dev" 'NR > 1 && $1 == dev { print $5; found=1; exit } END { if (!found) print "" }' \
+    /proc/swaps 2>/dev/null || true
+}
+
+max_swap_priority() {
+  awk '
+    NR > 1 && $5 ~ /^-?[0-9]+$/ {
+      if (!found || $5 > max) {
+        max=$5
+        found=1
+      }
+    }
+    END {
+      if (found) print max
+      else print -2
+    }
+  ' /proc/swaps 2>/dev/null || printf '%s\n' -2
+}
+
+max_non_zram_swap_priority() {
+  awk '
+    NR > 1 && $1 !~ /^\/dev\/zram[0-9]+$/ && $5 ~ /^-?[0-9]+$/ {
+      if (!found || $5 > max) {
+        max=$5
+        found=1
+      }
+    }
+    END {
+      if (found) print max
+      else print -2
+    }
+  ' /proc/swaps 2>/dev/null || printf '%s\n' -2
+}
+
+next_swap_priority() {
+  local max priority
+  max="$(max_swap_priority)"
+  [[ "$max" =~ ^-?[0-9]+$ ]] || max=-2
+  priority=$((max + 1))
+  (( priority < 100 )) && priority=100
+  (( priority > 32767 )) && priority=32767
+  printf '%s\n' "$priority"
+}
+
+zram_device_size_kib() {
+  local dev="$1"
+  local base="${dev##*/}"
+  local disksize="/sys/block/$base/disksize"
+  local bytes
+
+  [[ -r "$disksize" ]] || return 1
+  bytes="$(<"$disksize")"
+  [[ "$bytes" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' $(((bytes + 1023) / 1024))
+}
+
+adequate_zram_swap_device() {
+  local target_kib="$1"
+  local non_zram_max dev priority size_kib
+
+  non_zram_max="$(max_non_zram_swap_priority)"
+  [[ "$non_zram_max" =~ ^-?[0-9]+$ ]] || non_zram_max=-2
+
+  while read -r dev; do
+    [[ -n "$dev" ]] || continue
+    priority="$(swap_priority_for_device "$dev")"
+    size_kib="$(zram_device_size_kib "$dev" || true)"
+    [[ "$priority" =~ ^-?[0-9]+$ && "$size_kib" =~ ^[0-9]+$ ]] || continue
+    if (( size_kib >= target_kib && priority > non_zram_max )); then
+      printf '%s\n' "$dev"
+      return 0
+    fi
+  done < <(awk 'NR > 1 && $1 ~ /^\/dev\/zram[0-9]+$/ { print $1 }' /proc/swaps 2>/dev/null || true)
+
+  return 1
+}
+
 setup_temp_zram_if_needed() {
-  local mem_kib threshold_kib zram_kib zram_size dev
+  local mem_kib max_zram_kib zram_kib zram_size dev existing_zram zram_priority
 
   mem_kib="$(physical_memory_total_kib)"
   if [[ ! "$mem_kib" =~ ^[0-9]+$ || "$mem_kib" -le 0 ]]; then
@@ -340,9 +949,13 @@ setup_temp_zram_if_needed() {
     return 0
   fi
 
-  threshold_kib=$((48 * 1024 * 1024))
-  if (( mem_kib >= threshold_kib )); then
-    log "host RAM is $(format_kib_as_gib "$mem_kib"); temporary zram not needed"
+  max_zram_kib=$((32 * 1024 * 1024))
+  zram_kib=$((mem_kib * 2))
+  (( zram_kib > max_zram_kib )) && zram_kib="$max_zram_kib"
+
+  existing_zram="$(adequate_zram_swap_device "$zram_kib" || true)"
+  if [[ -n "$existing_zram" ]]; then
+    log "existing zram swap $existing_zram already matches build sizing and priority"
     return 0
   fi
 
@@ -355,18 +968,18 @@ setup_temp_zram_if_needed() {
       die "failed to load zram kernel module"
   fi
 
-  zram_kib=$((mem_kib * 3 / 4))
   zram_size="${zram_kib}K"
+  zram_priority="$(next_swap_priority)"
   dev="$(run_privileged zramctl --find --size "$zram_size")" || \
     die "failed to create temporary zram device"
   temp_zram_device="$dev"
 
   run_privileged mkswap "$temp_zram_device" >/dev/null || \
     die "failed to initialize temporary zram swap at $temp_zram_device"
-  run_privileged swapon "$temp_zram_device" || \
+  run_privileged swapon --priority "$zram_priority" "$temp_zram_device" || \
     die "failed to enable temporary zram swap at $temp_zram_device"
 
-  log "created temporary zram swap $temp_zram_device ($(format_kib_as_gib "$zram_kib"), 75% of host RAM)"
+  log "created temporary zram swap $temp_zram_device ($(format_kib_as_gib "$zram_kib"), twice host RAM capped at 32 GiB, priority $zram_priority)"
 }
 
 cleanup_temp_zram() {
@@ -586,12 +1199,32 @@ should_reset_patched_projects() {
       return 1
       ;;
     auto)
+      if enabled "$resume_build"; then
+        return 1
+      fi
       [[ -f "$workspace/.lineage-desktop-managed" ]]
       ;;
     *)
       die "invalid RESET_PATCHED_PROJECTS=$reset_patched_projects; use auto, 1, or 0"
       ;;
   esac
+}
+
+reset_generated_overlay_project_for_sync() {
+  local project_dir="$workspace/vendor/ika"
+  [[ -d "$project_dir/.git" ]] || return 0
+  [[ -f "$workspace/.lineage-desktop-managed" ]] || return 0
+
+  local project_real overlay_real
+  project_real="$(cd "$project_dir" && pwd -P)"
+  overlay_real="$(cd "$overlay_dir" && pwd -P)"
+  case "$overlay_real" in
+    "$project_real"|"$project_real"/*)
+      return 0
+      ;;
+  esac
+
+  safe_reset_project "$project_dir" "vendor/ika"
 }
 
 project_has_local_work() {
@@ -626,20 +1259,86 @@ safe_reset_project() {
   git -C "$project_dir" clean -fd
 }
 
+is_source_root_patch_project() {
+  [[ "$1" == "." ]]
+}
+
+source_root_patch_paths() {
+  local patch_file="$1"
+  awk '
+    /^diff --git / {
+      for (i = 3; i <= 4; i++) {
+        path = $i
+        sub(/^[ab]\//, "", path)
+        if (path != "/dev/null") {
+          print path
+        }
+      }
+    }
+  ' "$patch_file" | sort -u
+}
+
+project_dir_for_source_root_patch_path() {
+  local path="$1"
+  local dir
+
+  [[ -n "$path" && "$path" != /* ]] || return 1
+
+  dir="$workspace/$path"
+  [[ -d "$dir" ]] || dir="$(dirname "$dir")"
+
+  while [[ "$dir" != "$workspace" && "$dir" == "$workspace"* ]]; do
+    if [[ -d "$dir/.git" || -f "$dir/.git" || -L "$dir/.git" ]]; then
+      printf '%s\n' "$dir"
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+
+  return 1
+}
+
+reset_projects_touched_by_source_root_patch() {
+  local patch_file="$1"
+  local path project_dir label
+  declare -A seen_project_dirs=()
+
+  [[ -f "$patch_file" ]] || return 0
+
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    project_dir="$(project_dir_for_source_root_patch_path "$path" || true)"
+    [[ -n "$project_dir" && -z "${seen_project_dirs[$project_dir]:-}" ]] || continue
+    seen_project_dirs[$project_dir]=1
+    label="${project_dir#$workspace/}"
+    safe_reset_project "$project_dir" "$label"
+  done < <(source_root_patch_paths "$patch_file")
+}
+
 reset_patched_projects_for_sync() {
   local series_file="$overlay_dir/patches/series"
   [[ -f "$series_file" ]] || return 0
   should_reset_patched_projects || return 0
 
   if [[ -d "$workspace/vendor/ika/.git" ]]; then
-    safe_reset_project "$workspace/vendor/ika" "vendor/ika"
+    local vendor_ika_real overlay_real
+    vendor_ika_real="$(cd "$workspace/vendor/ika" && pwd -P)"
+    overlay_real="$(cd "$overlay_dir" && pwd -P)"
+    case "$overlay_real" in
+      "$vendor_ika_real"|"$vendor_ika_real"/*)
+        log "skipping reset of vendor/ika because it is the local overlay repository"
+        ;;
+      *)
+        safe_reset_project "$workspace/vendor/ika" "vendor/ika"
+        ;;
+    esac
   fi
 
   if enabled "$include_microg" && [[ -d "$workspace/vendor/partner_gms/.git" ]]; then
     safe_reset_project "$workspace/vendor/partner_gms" "vendor/partner_gms"
   fi
 
-  local line project patch extra project_dir
+  local line project patch extra project_dir patch_file
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -n "${line//[[:space:]]/}" ]] || continue
     [[ "${line:0:1}" == "#" ]] && continue
@@ -647,11 +1346,65 @@ reset_patched_projects_for_sync() {
     read -r project patch extra <<<"$line"
     [[ -n "${project:-}" && -z "${extra:-}" ]] || continue
 
+    patch_file="$overlay_dir/$patch"
+    if is_source_root_patch_project "$project"; then
+      reset_projects_touched_by_source_root_patch "$patch_file"
+      continue
+    fi
+
     project_dir="$workspace/$project"
     [[ -d "$project_dir/.git" ]] || continue
 
     safe_reset_project "$project_dir" "$project"
   done < "$series_file"
+}
+
+repair_incomplete_repo_git_stores() {
+  [[ -d "$workspace/.repo" ]] || return 0
+
+  local -a roots=()
+  [[ -d "$workspace/.repo/projects" ]] && roots+=("$workspace/.repo/projects")
+  [[ -d "$workspace/.repo/project-objects" ]] && roots+=("$workspace/.repo/project-objects")
+  (( ${#roots[@]} > 0 )) || return 0
+
+  local -a broken=()
+  local gitdir
+  while IFS= read -r -d '' gitdir; do
+    if [[ ! -f "$gitdir/HEAD" || ! -e "$gitdir/objects" ]]; then
+      broken+=("$gitdir")
+    fi
+  done < <(find "${roots[@]}" -type d -name '*.git' -print0)
+
+  (( ${#broken[@]} > 0 )) || return 0
+
+  log "removing ${#broken[@]} incomplete repo git store(s) left by an interrupted sync"
+  for gitdir in "${broken[@]}"; do
+    log "removing ${gitdir#$workspace/}"
+    rm -rf -- "$gitdir"
+  done
+}
+
+repair_stale_repo_git_locks() {
+  [[ -d "$workspace/.repo" ]] || return 0
+
+  local -a roots=()
+  [[ -d "$workspace/.repo/projects" ]] && roots+=("$workspace/.repo/projects")
+  [[ -d "$workspace/.repo/project-objects" ]] && roots+=("$workspace/.repo/project-objects")
+  (( ${#roots[@]} > 0 )) || return 0
+
+  local -a locks=()
+  local lock
+  while IFS= read -r -d '' lock; do
+    locks+=("$lock")
+  done < <(find "${roots[@]}" -type f -name '*.lock' -print0)
+
+  (( ${#locks[@]} > 0 )) || return 0
+
+  log "removing ${#locks[@]} stale repo git lock file(s) left by an interrupted sync"
+  for lock in "${locks[@]}"; do
+    log "removing ${lock#$workspace/}"
+    rm -f -- "$lock"
+  done
 }
 
 repo_sync_sources() {
@@ -666,10 +1419,50 @@ repo_sync_sources() {
   run_anonymous_git_network "$repo_cmd" init -u "$android_manifest_url" -b "$lineage_branch"
 
   install_manifest
+  reset_generated_overlay_project_for_sync
   reset_patched_projects_for_sync
+  repair_incomplete_repo_git_stores
+  repair_stale_repo_git_locks
 
-  log "syncing source tree"
-  run_anonymous_git_network "$repo_cmd" sync -c --fail-fast -j"$jobs"
+  [[ "$repo_sync_attempts" =~ ^[0-9]+$ && "$repo_sync_attempts" -gt 0 ]] ||
+    die "REPO_SYNC_ATTEMPTS must be a positive integer"
+  [[ "$repo_sync_retry_fetches" =~ ^[0-9]+$ ]] ||
+    die "REPO_SYNC_RETRY_FETCHES must be a non-negative integer"
+
+  local quiet="$repo_sync_quiet"
+  if [[ -z "$quiet" ]]; then
+    if host_is_arm64; then
+      quiet=1
+    else
+      quiet=0
+    fi
+  fi
+
+  local -a sync_args=(sync -c --fail-fast -j"$jobs")
+  if (( repo_sync_retry_fetches > 0 )); then
+    sync_args+=(--retry-fetches="$repo_sync_retry_fetches")
+  fi
+  if enabled "$quiet"; then
+    sync_args+=(--quiet)
+  fi
+
+  local attempt=1
+  while :; do
+    log "syncing source tree (attempt $attempt/$repo_sync_attempts)"
+    if run_anonymous_git_network "$repo_cmd" "${sync_args[@]}"; then
+      return 0
+    fi
+
+    if (( attempt >= repo_sync_attempts )); then
+      return 1
+    fi
+
+    repair_incomplete_repo_git_stores
+    repair_stale_repo_git_locks
+    attempt=$((attempt + 1))
+    log "repo sync failed; retrying in 10 seconds"
+    sleep 10
+  done
 }
 
 sync_webview_lfs_prebuilts() {
@@ -725,6 +1518,38 @@ apply_local_overlay() {
     "$overlay_dir"/ "$dest"/
 }
 
+local_overlay_dest_path() {
+  local dest="$workspace/vendor/lineage_desktop"
+
+  if [[ -L "$dest" ]]; then
+    readlink -f "$dest"
+  elif [[ -d "$workspace/vendor/ika" && ! -e "$dest" ]]; then
+    printf '%s\n' "$workspace/vendor/ika/lineageos"
+  else
+    printf '%s\n' "$dest"
+  fi
+}
+
+local_overlay_rsync_differs() {
+  local dest="$1"
+  local changes
+
+  command -v rsync >/dev/null 2>&1 || return 0
+  [[ -d "$dest" ]] || return 0
+
+  changes="$(
+    rsync -ain --delete \
+      --exclude='.git' \
+      --exclude='out' \
+      --exclude='src' \
+      --exclude='prebuilts/native_bridge/Android.bp' \
+      --exclude='prebuilts/native_bridge/manifest.json' \
+      --exclude='prebuilts/native_bridge/system' \
+      "$overlay_dir"/ "$dest"/
+  )"
+  [[ -n "$changes" ]]
+}
+
 ensure_vendor_ika_soong_pruning() {
   local marker="$workspace/vendor/ika/base/cvd/.find-ignore"
 
@@ -774,6 +1599,914 @@ update_native_bridge_prebuilts_for_targets() {
   "$update_script" "$workspace"
 }
 
+ensure_arm64_go_prebuilt() {
+  host_is_arm64 || return 0
+  [[ -x "$workspace/prebuilts/go/linux-arm64/bin/go" ]] && return 0
+  [[ -x "$workspace/prebuilts/go/linux-x86/bin/go" ]] || return 0
+
+  local cache_dir tmp_dir dest_dir
+  cache_dir="$workspace/out/lineage-desktop/go-prebuilts"
+  dest_dir="$workspace/prebuilts/go/linux-arm64"
+
+  mkdir -p "$cache_dir"
+  tmp_dir="$(mktemp -d "$cache_dir/linux-arm64.XXXXXX")"
+  log "cloning ARM64 Go prebuilt: $arm64_go_prebuilt_git_url ($arm64_go_prebuilt_git_ref)"
+  git clone --depth=1 --branch "$arm64_go_prebuilt_git_ref" \
+    "$arm64_go_prebuilt_git_url" "$tmp_dir"
+  [[ -x "$tmp_dir/bin/go" && -f "$tmp_dir/pkg/linux_arm64/fmt.a" ]] || {
+    rm -rf "$tmp_dir"
+    die "ARM64 Go prebuilt is incomplete: $arm64_go_prebuilt_git_url@$arm64_go_prebuilt_git_ref"
+  }
+
+  rm -rf "$dest_dir.tmp" "$dest_dir"
+  mkdir -p "${dest_dir%/*}"
+  mv "$tmp_dir" "$dest_dir.tmp"
+  mv "$dest_dir.tmp" "$dest_dir"
+
+  log "installed ARM64 Go prebuilt at ${dest_dir#$workspace/}"
+}
+
+clang_payload_dir() {
+  local dest="$1"
+  find "$dest" -maxdepth 1 -mindepth 1 -type d -name 'clang-r*' \
+    -exec test -x '{}/bin/clang' ';' -print 2>/dev/null | sort | tail -n 1
+}
+
+clang_payload_name_from_metadata() {
+  local dest="$1"
+  [[ -f "$dest/Android.bp" ]] || return 1
+  sed -n 's/.*"\(clang-r[^"]*\)".*/\1/p' "$dest/Android.bp" | sort -V | tail -n 1
+}
+
+clang_release_version() {
+  local clang_dir="$1"
+  find "$clang_dir/lib/clang" -maxdepth 1 -mindepth 1 -type d \
+    -printf '%f\n' 2>/dev/null | sort -V | tail -n 1
+}
+
+set_clang_version_vars() {
+  local host_tag="$1"
+  local clang_dir="$2"
+  local prebuilt_version release_version
+
+  prebuilt_version="${clang_dir##*/}"
+  release_version="$(clang_release_version "$clang_dir")"
+  [[ -n "$release_version" ]] || \
+    die "failed to detect LLVM release version under ${clang_dir#$workspace/}"
+
+  case "$host_tag" in
+    linux-arm64)
+      linux_arm64_llvm_prebuilts_version="$prebuilt_version"
+      linux_arm64_llvm_release_version="$release_version"
+      ;;
+    linux-x86)
+      linux_x86_llvm_prebuilts_version="$prebuilt_version"
+      linux_x86_llvm_release_version="$release_version"
+      ;;
+    *)
+      die "internal error: unsupported Clang host tag $host_tag"
+      ;;
+  esac
+}
+
+clang_marker_file() {
+  local dest="$1"
+  printf '%s\n' "$dest/.lineage-desktop-clang-prebuilt"
+}
+
+clang_marker_value() {
+  local marker="$1"
+  local key="$2"
+  sed -n "s/^$key=//p" "$marker" 2>/dev/null | tail -n 1
+}
+
+clang_cached_commit() {
+  local dest="$1"
+  local payload_name="$2"
+  local git_url="$3"
+  local git_ref="$4"
+  local marker commit
+
+  marker="$(clang_marker_file "$dest")"
+  [[ -f "$marker" ]] || return 1
+  [[ "$(clang_marker_value "$marker" url)" == "$git_url" ]] || return 1
+  [[ "$(clang_marker_value "$marker" ref)" == "$git_ref" ]] || return 1
+  [[ "$(clang_marker_value "$marker" payload)" == "$payload_name" ]] || return 1
+  commit="$(clang_marker_value "$marker" commit)"
+  [[ -n "$commit" ]] || return 1
+  git -C "$dest" cat-file -e "$commit^{commit}" 2>/dev/null || return 1
+  printf '%s\n' "$commit"
+}
+
+clang_exclude_payload() {
+  local dest="$1"
+  local payload_name="$2"
+  local git_dir exclude_file pattern
+
+  git_dir="$(git -C "$dest" rev-parse --git-dir 2>/dev/null)" || return 0
+  [[ "$git_dir" = /* ]] || git_dir="$dest/$git_dir"
+  exclude_file="$git_dir/info/exclude"
+  mkdir -p "${exclude_file%/*}"
+  touch "$exclude_file"
+  for pattern in "/$payload_name/" "/$payload_name.tmp/" "/.lineage-desktop-clang-prebuilt"; do
+    grep -qxF "$pattern" "$exclude_file" || printf '%s\n' "$pattern" >>"$exclude_file"
+  done
+}
+
+clang_write_marker() {
+  local dest="$1"
+  local payload_name="$2"
+  local commit="$3"
+  local git_url="$4"
+  local git_ref="$5"
+  local marker
+
+  marker="$(clang_marker_file "$dest")"
+  cat >"$marker" <<EOF
+url=$git_url
+ref=$git_ref
+payload=$payload_name
+commit=$commit
+EOF
+}
+
+clang_payload_name_from_ref() {
+  local dest="$1"
+  local ref="$2"
+
+  git -C "$dest" ls-tree --name-only "$ref" \
+    | grep -E '^clang-r[[:alnum:]_.-]*$' \
+    | sort \
+    | tail -n 1 || true
+}
+
+extract_clang_payload_from_ref() {
+  local dest="$1"
+  local ref="$2"
+  local payload_name="$3"
+
+  rm -rf "$dest/$payload_name.tmp" "$dest/$payload_name"
+  mkdir -p "$dest/$payload_name.tmp"
+  git -C "$dest" archive "$ref" "$payload_name" \
+    | tar -x -C "$dest/$payload_name.tmp" --strip-components=1
+  mv "$dest/$payload_name.tmp" "$dest/$payload_name"
+}
+
+clone_clang_prebuilt_repo() {
+  local host_tag="$1"
+  local dest="$2"
+  local git_url="$3"
+  local git_ref="$4"
+  local payload_name="${5:-}"
+  local cache_dir tmp_dir clang_dir
+
+  cache_dir="$workspace/out/lineage-desktop/clang-prebuilts"
+  mkdir -p "$cache_dir"
+  tmp_dir="$(mktemp -d "$cache_dir/$host_tag.XXXXXX")"
+  log "cloning $host_tag Clang prebuilt: $git_url ($git_ref)"
+  git clone --depth=1 --branch "$git_ref" "$git_url" "$tmp_dir"
+
+  if [[ -n "$payload_name" ]]; then
+    clang_dir="$tmp_dir/$payload_name"
+  else
+    clang_dir="$(clang_payload_dir "$tmp_dir")"
+  fi
+  [[ -n "$clang_dir" ]] || {
+    rm -rf "$tmp_dir"
+    die "$host_tag Clang prebuilt is incomplete: $git_url@$git_ref"
+  }
+  [[ -x "$clang_dir/bin/clang" ]] || {
+    rm -rf "$tmp_dir"
+    die "$host_tag Clang prebuilt branch is missing requested payload: $git_url@$git_ref:$payload_name"
+  }
+
+  rm -rf "$dest.tmp" "$dest"
+  mkdir -p "${dest%/*}"
+  mv "$tmp_dir" "$dest.tmp"
+  mv "$dest.tmp" "$dest"
+  printf '%s\n' "$dest/${clang_dir##*/}"
+}
+
+linux_arm64_clang_payload_dir() {
+  clang_payload_dir "$workspace/prebuilts/clang/host/linux-arm64"
+}
+
+set_linux_arm64_clang_version_vars() {
+  local clang_dir="$1"
+  set_clang_version_vars linux-arm64 "$clang_dir"
+}
+
+ensure_linux_arm64_clang_prebuilt() {
+  host_is_arm64 || return 0
+
+  local dest="$workspace/prebuilts/clang/host/linux-arm64"
+  local clang_dir
+
+  if [[ -f "$dest/.lineage-desktop-clang-overlay" || -L "$dest" ]]; then
+    rm -rf "$dest"
+  fi
+
+  if [[ -x "$dest/$linux_arm64_clang_prebuilt_version/bin/clang" ]]; then
+    clang_dir="$dest/$linux_arm64_clang_prebuilt_version"
+  fi
+  if [[ -n "$clang_dir" ]]; then
+    set_linux_arm64_clang_version_vars "$clang_dir"
+    log "using ARM64 Clang prebuilt ${dest#$workspace/}/$linux_arm64_llvm_prebuilts_version"
+    return 0
+  fi
+
+  clang_dir="$(clone_clang_prebuilt_repo linux-arm64 "$dest" \
+    "$linux_arm64_clang_prebuilt_git_url" \
+    "$linux_arm64_clang_prebuilt_git_ref" \
+    "$linux_arm64_clang_prebuilt_version")"
+  set_linux_arm64_clang_version_vars "$clang_dir"
+
+  log "installed ARM64 Clang prebuilt at ${dest#$workspace/}/$linux_arm64_llvm_prebuilts_version"
+}
+
+linux_x86_clang_payload_dir() {
+  clang_payload_dir "$workspace/prebuilts/clang/host/linux-x86"
+}
+
+linux_x86_clang_payload_name_from_metadata() {
+  local dest="$1"
+  clang_payload_name_from_metadata "$dest"
+}
+
+linux_x86_clang_marker_file() {
+  local dest="$1"
+  clang_marker_file "$dest"
+}
+
+linux_x86_clang_marker_value() {
+  local marker="$1"
+  local key="$2"
+  clang_marker_value "$marker" "$key"
+}
+
+linux_x86_clang_cached_commit() {
+  local dest="$1"
+  local payload_name="$2"
+  clang_cached_commit "$dest" "$payload_name" \
+    "$linux_x86_clang_prebuilt_git_url" \
+    "$linux_x86_clang_prebuilt_git_ref"
+}
+
+linux_x86_clang_exclude_payload() {
+  local dest="$1"
+  local payload_name="$2"
+  clang_exclude_payload "$dest" "$payload_name"
+}
+
+linux_x86_clang_write_marker() {
+  local dest="$1"
+  local payload_name="$2"
+  local commit="$3"
+  clang_write_marker "$dest" "$payload_name" "$commit" \
+    "$linux_x86_clang_prebuilt_git_url" \
+    "$linux_x86_clang_prebuilt_git_ref"
+}
+
+set_linux_x86_clang_version_vars() {
+  local clang_dir="$1"
+  set_clang_version_vars linux-x86 "$clang_dir"
+}
+
+ensure_linux_x86_clang_soong_compat() {
+  local clang_dir="$1"
+  local lib_dir="$clang_dir/lib"
+
+  if [[ ! -e "$lib_dir/libc++.so" ]]; then
+    [[ -f "$lib_dir/x86_64-unknown-linux-gnu/libc++.so" ]] || \
+      die "missing x86_64 glibc libc++ in ${clang_dir#$workspace/}"
+    ln -s "x86_64-unknown-linux-gnu/libc++.so" "$lib_dir/libc++.so"
+  fi
+}
+
+linux_x86_clang_soong_metadata_is_compatible() {
+  local dest="$1"
+
+  grep -Fq '../i386-unknown-linux-gnu' "$dest/soong/clangprebuilts.go" && \
+    grep -Fq '../x86_64-unknown-linux-gnu' "$dest/soong/clangprebuilts.go"
+}
+
+sync_linux_x86_clang_soong_metadata() {
+  local dest="$1"
+  local ref="$2"
+
+  mkdir -p "$dest/soong"
+  git -C "$dest" show "$ref:Android.bp" >"$dest/Android.bp"
+  git -C "$dest" show "$ref:soong/clangprebuilts.go" >"$dest/soong/clangprebuilts.go"
+  if linux_x86_clang_soong_metadata_is_compatible "$dest"; then
+    return 0
+  fi
+
+  die "x86 Clang metadata from $ref is incompatible with the pinned Clang prebuilt"
+}
+
+ensure_linux_x86_clang_prebuilt() {
+  host_is_arm64 && return 0
+
+  local dest="$workspace/prebuilts/clang/host/linux-x86"
+  local clang_dir payload_name cached_commit fetched_commit
+
+  if git -C "$dest" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    payload_name="$linux_x86_clang_prebuilt_version"
+    [[ -n "$payload_name" ]] || \
+      payload_name="$(linux_x86_clang_marker_value "$(linux_x86_clang_marker_file "$dest")" payload || true)"
+    [[ -n "$payload_name" ]] || payload_name="$(linux_x86_clang_payload_name_from_metadata "$dest" || true)"
+    if [[ -n "$payload_name" && -x "$dest/$payload_name/bin/clang" ]]; then
+      cached_commit="$(linux_x86_clang_cached_commit "$dest" "$payload_name" || true)"
+      if [[ -n "$cached_commit" ]] && git -C "$dest" cat-file -e "$cached_commit^{commit}" 2>/dev/null; then
+        log "using cached x86 Clang prebuilt ${dest#$workspace/}/$payload_name"
+        sync_linux_x86_clang_soong_metadata "$dest" "$cached_commit"
+        linux_x86_clang_exclude_payload "$dest" "$payload_name"
+        linux_x86_clang_write_marker "$dest" "$payload_name" "$cached_commit"
+        clang_dir="$dest/$payload_name"
+        set_linux_x86_clang_version_vars "$clang_dir"
+        ensure_linux_x86_clang_soong_compat "$clang_dir"
+        return 0
+      fi
+    fi
+
+    log "syncing x86 Clang prebuilt: $linux_x86_clang_prebuilt_git_url ($linux_x86_clang_prebuilt_git_ref)"
+    git -C "$dest" fetch --depth=1 "$linux_x86_clang_prebuilt_git_url" "$linux_x86_clang_prebuilt_git_ref"
+    fetched_commit="$(git -C "$dest" rev-parse FETCH_HEAD)"
+    if [[ -z "$payload_name" ]]; then
+      payload_name="$(clang_payload_name_from_ref "$dest" FETCH_HEAD)"
+    elif ! git -C "$dest" cat-file -e "FETCH_HEAD:$payload_name/bin/clang" 2>/dev/null; then
+      die "x86 Clang prebuilt branch is missing requested payload: $linux_x86_clang_prebuilt_git_url@$linux_x86_clang_prebuilt_git_ref:$payload_name"
+    fi
+    [[ -n "$payload_name" ]] || \
+      die "x86 Clang prebuilt branch has no clang-r* payload: $linux_x86_clang_prebuilt_git_url@$linux_x86_clang_prebuilt_git_ref"
+    extract_clang_payload_from_ref "$dest" FETCH_HEAD "$payload_name"
+    sync_linux_x86_clang_soong_metadata "$dest" FETCH_HEAD
+    clang_dir="$dest/$payload_name"
+  elif [[ ! -e "$dest" ]]; then
+    clang_dir="$(clone_clang_prebuilt_repo linux-x86 "$dest" \
+      "$linux_x86_clang_prebuilt_git_url" \
+      "$linux_x86_clang_prebuilt_git_ref" \
+      "$linux_x86_clang_prebuilt_version")"
+    fetched_commit="$(git -C "$dest" rev-parse HEAD)"
+    sync_linux_x86_clang_soong_metadata "$dest" HEAD
+  else
+    die "cannot install pinned x86 Clang prebuilt over existing non-git path: ${dest#$workspace/}"
+  fi
+
+  [[ -n "$clang_dir" ]] || \
+    die "x86 Clang prebuilt is incomplete: $linux_x86_clang_prebuilt_git_url@$linux_x86_clang_prebuilt_git_ref"
+  set_linux_x86_clang_version_vars "$clang_dir"
+  ensure_linux_x86_clang_soong_compat "$clang_dir"
+  if [[ -n "${fetched_commit:-}" ]]; then
+    linux_x86_clang_exclude_payload "$dest" "$linux_x86_llvm_prebuilts_version"
+    linux_x86_clang_write_marker "$dest" "$linux_x86_llvm_prebuilts_version" "$fetched_commit"
+  fi
+
+  log "using x86 Clang prebuilt ${dest#$workspace/}/$linux_x86_llvm_prebuilts_version"
+}
+
+ensure_linux_arm64_clang_soong_compat() {
+  host_is_arm64 || return 0
+  [[ -n "$linux_arm64_llvm_prebuilts_version" ]] || die "ARM64 Clang version has not been detected"
+
+  local arm64_dir="$workspace/prebuilts/clang/host/linux-arm64/$linux_arm64_llvm_prebuilts_version"
+  local compat_dir="$workspace/prebuilts/clang/host/linux-x86/$linux_arm64_llvm_prebuilts_version"
+  local expected_target="../linux-arm64/$linux_arm64_llvm_prebuilts_version"
+  local lib_dir="$arm64_dir/lib"
+
+  [[ -x "$arm64_dir/bin/clang" ]] || \
+    die "missing ARM64 Clang payload: ${arm64_dir#$workspace/}"
+
+  mkdir -p "${compat_dir%/*}"
+  if [[ -L "$compat_dir" ]]; then
+    if [[ "$(readlink "$compat_dir")" != "$expected_target" ]]; then
+      rm -f "$compat_dir"
+    fi
+  elif [[ -e "$compat_dir" ]]; then
+    die "cannot create ARM64 Clang Soong compatibility link over existing path: ${compat_dir#$workspace/}"
+  fi
+  [[ -e "$compat_dir" ]] || ln -s "$expected_target" "$compat_dir"
+  [[ -f "$compat_dir/include/c++/v1/string" ]] || \
+    die "ARM64 Clang Soong compatibility path is missing libc++ headers: ${compat_dir#$workspace/}/include/c++/v1/string"
+  [[ -f "$compat_dir/android_libc++/platform/aarch64/include/c++/v1/__config_site" ]] || \
+    die "ARM64 Clang Soong compatibility path is missing Android libc++ headers: ${compat_dir#$workspace/}/android_libc++/platform/aarch64/include/c++/v1/__config_site"
+
+  if [[ ! -e "$lib_dir/libc++.so" ]]; then
+    [[ -f "$lib_dir/aarch64-unknown-linux-musl/libc++.so" ]] || \
+      die "missing ARM64 libc++ in ${arm64_dir#$workspace/}"
+    ln -s "aarch64-unknown-linux-musl/libc++.so" "$lib_dir/libc++.so"
+  fi
+
+  mkdir -p "$lib_dir/x86_64-unknown-linux-gnu"
+  if [[ ! -e "$lib_dir/x86_64-unknown-linux-gnu/libc++.so" ]]; then
+    [[ -f "$lib_dir/x86_64-unknown-linux-musl/libc++.so" ]] || \
+      die "missing x86_64 musl libc++ in ${arm64_dir#$workspace/}"
+    ln -s "../x86_64-unknown-linux-musl/libc++.so" \
+      "$lib_dir/x86_64-unknown-linux-gnu/libc++.so"
+  fi
+
+  log "linked ARM64 Clang Soong compatibility path ${compat_dir#$workspace/} -> $expected_target"
+}
+
+ensure_arm64_native_cmake_prebuilt() {
+  host_is_arm64 || return 0
+
+  local dest="$workspace/prebuilts/cmake/linux-arm64"
+  local cache_dir tmp_dir
+
+  if [[ -L "$dest" ]]; then
+    rm -f "$dest"
+  fi
+
+  if [[ -x "$dest/bin/cmake" ]]; then
+    log "using ARM64 CMake prebuilt at ${dest#$workspace/}"
+    return 0
+  fi
+
+  cache_dir="$workspace/out/lineage-desktop/cmake-prebuilts"
+  mkdir -p "$cache_dir"
+  tmp_dir="$(mktemp -d "$cache_dir/linux-arm64.XXXXXX")"
+  log "cloning ARM64 CMake prebuilt: $arm64_cmake_prebuilt_git_url ($arm64_cmake_prebuilt_git_ref)"
+  git clone --depth=1 --branch "$arm64_cmake_prebuilt_git_ref" \
+    "$arm64_cmake_prebuilt_git_url" "$tmp_dir" || {
+      rm -rf "$tmp_dir"
+      log "warning: failed to clone ARM64 CMake prebuilt; falling back to x86-64 CMake under emulation"
+      return 0
+    }
+
+  if [[ ! -x "$tmp_dir/bin/cmake" ]]; then
+    rm -rf "$tmp_dir"
+    log "warning: ARM64 CMake prebuilt is incomplete; falling back to x86-64 CMake under emulation"
+    return 0
+  fi
+
+  rm -rf "$dest.tmp" "$dest"
+  mkdir -p "${dest%/*}"
+  mv "$tmp_dir" "$dest.tmp"
+  mv "$dest.tmp" "$dest"
+
+  log "installed ARM64 CMake prebuilt at ${dest#$workspace/}"
+}
+
+ensure_arm64_native_jdk21_prebuilt() {
+  host_is_arm64 || return 0
+
+  local dest="$workspace/prebuilts/jdk/jdk21/linux-arm64"
+  local cache_dir archive tmp_dir extract_dir version
+
+  if [[ -x "$dest/bin/javac" && -x "$dest/bin/jlink" && -f "$dest/jmods/java.base.jmod" ]]; then
+    version="$("$dest/bin/jlink" --version 2>/dev/null || true)"
+    if [[ "$version" == 21.* ]]; then
+      log "using ARM64 JDK 21 prebuilt at ${dest#$workspace/} ($version)"
+      return 0
+    fi
+    log "warning: ignoring ARM64 JDK prebuilt with unexpected jlink version '$version'"
+  fi
+
+  cache_dir="$workspace/out/lineage-desktop/jdk21-prebuilts"
+  archive="$cache_dir/jdk21-linux-arm64.tar.gz"
+  mkdir -p "$cache_dir"
+
+  if [[ ! -s "$archive" ]]; then
+    log "downloading ARM64 JDK 21 prebuilt: $arm64_jdk21_prebuilt_url"
+    curl -fL --retry 5 --retry-delay 5 \
+      "$arm64_jdk21_prebuilt_url" -o "$archive.tmp"
+    mv "$archive.tmp" "$archive"
+  fi
+
+  tmp_dir="$(mktemp -d "$cache_dir/linux-arm64.XXXXXX")"
+  extract_dir="$tmp_dir/extract"
+  mkdir -p "$extract_dir"
+  tar -xzf "$archive" -C "$extract_dir" --strip-components=1 || {
+    rm -rf "$tmp_dir" "$archive"
+    die "failed to extract ARM64 JDK 21 prebuilt archive"
+  }
+
+  [[ -x "$extract_dir/bin/javac" && -x "$extract_dir/bin/jlink" && -f "$extract_dir/jmods/java.base.jmod" ]] || {
+    rm -rf "$tmp_dir" "$archive"
+    die "ARM64 JDK 21 prebuilt archive is incomplete: $arm64_jdk21_prebuilt_url"
+  }
+
+  version="$("$extract_dir/bin/jlink" --version 2>/dev/null || true)"
+  [[ "$version" == 21.* ]] || {
+    rm -rf "$tmp_dir" "$archive"
+    die "ARM64 JDK prebuilt has unexpected jlink version '$version'; expected 21.x"
+  }
+
+  rm -rf "$dest.tmp" "$dest"
+  mkdir -p "${dest%/*}"
+  touch "$extract_dir/.lineage-desktop-jdk-overlay"
+  mv "$extract_dir" "$dest.tmp"
+  mv "$dest.tmp" "$dest"
+  rm -rf "$tmp_dir"
+
+  log "installed ARM64 JDK 21 prebuilt at ${dest#$workspace/} ($version)"
+}
+
+ensure_arm64_prebuilt_link() {
+  local dest="$1"
+  local src="$2"
+
+  host_is_arm64 || return 0
+  [[ -e "$dest" ]] && return 0
+  [[ -e "$src" ]] || die "missing source prebuilt for ARM64 host link: ${src#$workspace/}"
+
+  mkdir -p "${dest%/*}"
+  ln -sfn "$(basename "$src")" "$dest"
+  log "linked ARM64 host prebuilt ${dest#$workspace/} -> $(basename "$src")"
+}
+
+ensure_optional_arm64_prebuilt_link() {
+  local dest="$1"
+  local src="$2"
+
+  host_is_arm64 || return 0
+  [[ -e "$src" ]] || return 0
+  ensure_arm64_prebuilt_link "$dest" "$src"
+}
+
+ensure_arm64_clang_prebuilt_overlay() {
+  host_is_arm64 || return 0
+
+  local dest="$workspace/prebuilts/clang/host/linux-arm64"
+  local src="$workspace/prebuilts/clang/host/linux-x86"
+  [[ -d "$src" ]] || die "missing source prebuilt for ARM64 host clang overlay: ${src#$workspace/}"
+
+  if [[ -f "$dest/.lineage-desktop-clang-overlay" ]]; then
+    rm -rf "$dest"
+  elif [[ -L "$dest" ]]; then
+    rm -f "$dest"
+  elif [[ -e "$dest" ]]; then
+    return 0
+  fi
+
+  mkdir -p "$dest"
+  touch "$dest/.lineage-desktop-clang-overlay"
+
+  local entry item name base configured=0
+  for entry in "$src"/*; do
+    [[ -e "$entry" ]] || continue
+    name="${entry##*/}"
+    if [[ "$name" == clang-r* && -d "$entry/bin" ]]; then
+      configured=1
+      mkdir -p "$dest/$name/bin"
+
+      for item in "$entry"/*; do
+        base="${item##*/}"
+        [[ "$base" == "bin" ]] && continue
+        ln -s "../../linux-x86/$name/$base" "$dest/$name/$base"
+      done
+
+      for item in "$entry/bin"/*; do
+        base="${item##*/}"
+        ln -s "../../../linux-x86/$name/bin/$base" "$dest/$name/bin/$base"
+      done
+
+      rm -f "$dest/$name/bin/clang" "$dest/$name/bin/clang++"
+      ln -s clang-real "$dest/$name/bin/clang"
+      ln -s clang-real "$dest/$name/bin/clang++"
+    else
+      ln -s "../linux-x86/$name" "$dest/$name"
+    fi
+  done
+
+  (( configured > 0 )) || die "failed to find clang-r* payloads under ${src#$workspace/}"
+  log "created ARM64 clang prebuilt overlay at ${dest#$workspace/}"
+}
+
+detect_arm64_android_java_home() {
+  if [[ -n "$arm64_android_java_home" ]]; then
+    printf '%s\n' "$arm64_android_java_home"
+    return 0
+  fi
+
+  if [[ -n "${OVERRIDE_ANDROID_JAVA_HOME:-}" ]]; then
+    printf '%s\n' "$OVERRIDE_ANDROID_JAVA_HOME"
+    return 0
+  fi
+
+  if [[ -n "${JAVA_HOME:-}" && -x "$JAVA_HOME/bin/javac" ]]; then
+    printf '%s\n' "$JAVA_HOME"
+    return 0
+  fi
+
+  local javac_path
+  javac_path="$(command -v javac 2>/dev/null || true)"
+  [[ -n "$javac_path" ]] || return 1
+  javac_path="$(readlink -f "$javac_path")"
+  printf '%s\n' "$(cd "$(dirname "$javac_path")/.." && pwd -P)"
+}
+
+arm64_android_java_home_for_build() {
+  host_is_arm64 || return 1
+  if [[ -x "$workspace/prebuilts/jdk/jdk21/linux-arm64/bin/javac" ]]; then
+    return 1
+  fi
+
+  if ! command -v javac >/dev/null 2>&1 && [[ -z "$arm64_android_java_home" && -z "${OVERRIDE_ANDROID_JAVA_HOME:-}" ]]; then
+    install_missing_commands javac || true
+  fi
+
+  detect_arm64_android_java_home || \
+    die "ARM64 host needs JDK 21 because this branch lacks an ARM64 JDK prebuilt; set ARM64_JDK21_PREBUILT_URL or ARM64_ANDROID_JAVA_HOME"
+}
+
+raise_open_file_limit_for_muvm() {
+  host_is_arm64 || return 0
+  command -v prlimit >/dev/null 2>&1 || install_missing_commands prlimit || true
+  command -v prlimit >/dev/null 2>&1 || {
+    log "warning: prlimit not found; continuing with the current open-file limit"
+    return 0
+  }
+
+  if run_privileged prlimit --pid "$$" --nofile=1048576:1048576 >/dev/null 2>&1; then
+    log "raised host open-file limit for muvm"
+  else
+    log "warning: failed to raise host open-file limit for muvm; continuing"
+  fi
+}
+
+active_llvm_prebuilts_version() {
+  if host_is_arm64; then
+    printf '%s\n' "$linux_arm64_llvm_prebuilts_version"
+  else
+    printf '%s\n' "$linux_x86_llvm_prebuilts_version"
+  fi
+}
+
+active_llvm_release_version() {
+  if host_is_arm64; then
+    printf '%s\n' "$linux_arm64_llvm_release_version"
+  else
+    printf '%s\n' "$linux_x86_llvm_release_version"
+  fi
+}
+
+export_active_llvm_env() {
+  local prebuilts_version release_version
+
+  prebuilts_version="$(active_llvm_prebuilts_version)"
+  release_version="$(active_llvm_release_version)"
+  if [[ -n "$prebuilts_version" ]]; then
+    export LLVM_PREBUILTS_VERSION="$prebuilts_version"
+    export LLVM_BINDGEN_PREBUILTS_VERSION="$prebuilts_version"
+  fi
+  if [[ -n "$release_version" ]]; then
+    export LLVM_RELEASE_VERSION="$release_version"
+  fi
+}
+
+active_llvm_export_lines() {
+  local prebuilts_version release_version value_q
+
+  prebuilts_version="$(active_llvm_prebuilts_version)"
+  release_version="$(active_llvm_release_version)"
+  if [[ -n "$prebuilts_version" ]]; then
+    printf -v value_q '%q' "$prebuilts_version"
+    printf 'export LLVM_PREBUILTS_VERSION=%s\n' "$value_q"
+    printf 'export LLVM_BINDGEN_PREBUILTS_VERSION=%s\n' "$value_q"
+  fi
+  if [[ -n "$release_version" ]]; then
+    printf -v value_q '%q' "$release_version"
+    printf 'export LLVM_RELEASE_VERSION=%s\n' "$value_q"
+  fi
+}
+
+configure_arm64_host_build() {
+  host_is_arm64 || return 0
+
+  ensure_arm64_go_prebuilt
+  command -v muvm >/dev/null 2>&1 || \
+    die "ARM64 host needs muvm to run the Android build in a 4 KiB-page guest"
+  [[ -d "$workspace/prebuilts/build-tools/linux-arm64" ]] || \
+    die "missing ARM64 build tools prebuilt: prebuilts/build-tools/linux-arm64"
+  [[ -x "$workspace/prebuilts/go/linux-arm64/bin/go" ]] || \
+    die "missing ARM64 Go prebuilt: prebuilts/go/linux-arm64"
+
+  ensure_arm64_prebuilt_link \
+    "$workspace/prebuilts/rust/linux-arm64" \
+    "$workspace/prebuilts/rust/linux-x86"
+  ensure_linux_arm64_clang_prebuilt
+  ensure_linux_arm64_clang_soong_compat
+  ensure_arm64_prebuilt_link \
+    "$workspace/prebuilts/clang-tools/linux-arm64" \
+    "$workspace/prebuilts/clang-tools/linux-x86"
+  ensure_arm64_native_cmake_prebuilt
+  ensure_arm64_native_jdk21_prebuilt
+
+  local rel
+  for rel in \
+    prebuilts/asuite/acloud \
+    prebuilts/asuite/aidegen \
+    prebuilts/asuite/atest \
+    prebuilts/clang/kernel \
+    prebuilts/extract-tools \
+    prebuilts/gcc \
+    prebuilts/kernel-build-tools \
+    prebuilts/misc \
+    prebuilts/tools-lineage; do
+    ensure_optional_arm64_prebuilt_link \
+      "$workspace/$rel/linux-arm64" \
+      "$workspace/$rel/linux-x86"
+  done
+
+  arm64_android_java_home_for_build >/dev/null || true
+  raise_open_file_limit_for_muvm
+}
+
+precompute_muvm_module_paths() {
+  local product="$1"
+  host_is_arm64 || return 0
+
+  local java_home
+  java_home="$(arm64_android_java_home_for_build || true)"
+
+  log "precomputing Android module path lists for $product"
+  (
+    cd "$workspace"
+    export ANDROID_BUILD_SERIAL_FINDER=1
+    export ANDROID_RUST_X86_PROC_MACRO_FALLBACK=1
+    export THINLTO_USE_MLGO="$arm64_thinlto_use_mlgo"
+    export_active_llvm_env
+    if [[ -n "$java_home" ]]; then
+      export OVERRIDE_ANDROID_JAVA_HOME="$java_home"
+    fi
+    set +u
+    source build/envsetup.sh
+    lunch "$product" trunk_staging userdebug >/dev/null
+  )
+}
+
+shell_quote_join() {
+  local quoted="" part q
+  for part in "$@"; do
+    printf -v q '%q' "$part"
+    quoted+="${quoted:+ }$q"
+  done
+  printf '%s\n' "$quoted"
+}
+
+sanitize_build_log_output() {
+  sed -u \
+    -e 's/ERROR init_or_kernel//g' \
+    -e 's/\[missing newline\] //g' \
+    -e 's/\[missing newline\]//g'
+}
+
+run_build_muvm() {
+  local product="$1"
+  shift
+
+  local workspace_q product_q highmem_jobs_q thinlto_use_mlgo_q goals_q command
+  local extra_exports="" value_q java_home
+  local llvm_prebuilts_version llvm_release_version
+  printf -v workspace_q '%q' "$workspace"
+  printf -v product_q '%q' "$product"
+  printf -v highmem_jobs_q '%q' "$arm64_ninja_highmem_jobs"
+  printf -v thinlto_use_mlgo_q '%q' "$arm64_thinlto_use_mlgo"
+  goals_q="$(shell_quote_join "$@")"
+  java_home="$(arm64_android_java_home_for_build || true)"
+  llvm_prebuilts_version="$(active_llvm_prebuilts_version)"
+  llvm_release_version="$(active_llvm_release_version)"
+
+  if [[ -n "${LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE+x}" ]]; then
+    printf -v value_q '%q' "$LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE"
+    extra_exports+="export LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE=$value_q"$'\n'
+  fi
+  if [[ -n "${USE_NDK_TRANSLATION_BINARY+x}" ]]; then
+    printf -v value_q '%q' "$USE_NDK_TRANSLATION_BINARY"
+    extra_exports+="export USE_NDK_TRANSLATION_BINARY=$value_q"$'\n'
+  fi
+  if [[ -n "$java_home" ]]; then
+    printf -v value_q '%q' "$java_home"
+    extra_exports+="export OVERRIDE_ANDROID_JAVA_HOME=$value_q"$'\n'
+  fi
+  extra_exports+="$(active_llvm_export_lines)"
+
+  ensure_linux_arm64_clang_soong_compat
+  precompute_muvm_module_paths "$product"
+  raise_open_file_limit_for_muvm
+
+  local -a build_attempts=()
+  mapfile -t build_attempts < <(arm64_build_attempts "$jobs" "$arm64_soong_gomemlimit")
+
+  local attempt attempt_jobs attempt_jobs_q attempt_gomemlimit attempt_gomemlimit_q
+  local attempt_gomaxprocs attempt_gomaxprocs_q
+  local attempt_gomemlimit_label attempt_log status last_status=1
+  for attempt in "${build_attempts[@]}"; do
+    read -r attempt_jobs attempt_gomemlimit <<< "$attempt"
+    printf -v attempt_jobs_q '%q' "$attempt_jobs"
+    printf -v attempt_gomemlimit_q '%q' "$attempt_gomemlimit"
+    attempt_gomaxprocs="$arm64_soong_gomaxprocs"
+    if (( arm64_soong_gomaxprocs_was_set == 0 && attempt_jobs < attempt_gomaxprocs )); then
+      attempt_gomaxprocs="$attempt_jobs"
+    fi
+    printf -v attempt_gomaxprocs_q '%q' "$attempt_gomaxprocs"
+    command=$(cat <<EOF
+set -eo pipefail
+set +u
+export ANDROID_BUILD_SERIAL_FINDER=1
+export _SOONG_INTERNAL_NO_FINDER=1
+export ANDROID_RUST_X86_PROC_MACRO_FALLBACK=1
+export GOMEMLIMIT=$attempt_gomemlimit_q
+export GOGC=$arm64_soong_gogc
+export GOMAXPROCS=$attempt_gomaxprocs_q
+export GODEBUG=$arm64_godebug
+export GOTRACEBACK=all
+export NINJA_HIGHMEM_NUM_JOBS=$highmem_jobs_q
+export THINLTO_USE_MLGO=$thinlto_use_mlgo_q
+$extra_exports
+cd $workspace_q
+source build/envsetup.sh
+lunch $product_q trunk_staging userdebug
+if [[ "\${TARGET_PRODUCT:-}" != $product_q ]]; then
+  printf '[lineage-desktop] error: lunch did not set TARGET_PRODUCT=%s (got %s)\n' $product_q "\${TARGET_PRODUCT:-}" >&2
+  exit 1
+fi
+set -eo pipefail
+set -u
+m $goals_q -j$attempt_jobs_q
+EOF
+    )
+
+    mkdir -p "$workspace/out/lineage-desktop"
+    attempt_gomemlimit_label="${attempt_gomemlimit//[^[:alnum:]._-]/_}"
+    attempt_log="$workspace/out/lineage-desktop/build-${product}-j${attempt_jobs}-g${attempt_gomemlimit_label}-p${attempt_gomaxprocs}.log"
+    log "running $product build inside muvm (${arm64_muvm_mem_mib} MiB, $attempt_jobs jobs, $arm64_ninja_highmem_jobs high-memory job, Soong GOMEMLIMIT=$attempt_gomemlimit, GOMAXPROCS=$attempt_gomaxprocs, ThinLTO MLGO=$arm64_thinlto_use_mlgo)"
+    set +e
+    muvm --mem="$arm64_muvm_mem_mib" \
+      -e ANDROID_BUILD_SERIAL_FINDER=1 \
+      -e _SOONG_INTERNAL_NO_FINDER=1 \
+      -e ANDROID_RUST_X86_PROC_MACRO_FALLBACK=1 \
+      -e GOMEMLIMIT="$attempt_gomemlimit" \
+      -e GOGC="$arm64_soong_gogc" \
+      -e GOMAXPROCS="$attempt_gomaxprocs" \
+      -e GODEBUG="$arm64_godebug" \
+      -e GOTRACEBACK=all \
+      -e THINLTO_USE_MLGO="$arm64_thinlto_use_mlgo" \
+      -e LLVM_PREBUILTS_VERSION="$llvm_prebuilts_version" \
+      -e LLVM_RELEASE_VERSION="$llvm_release_version" \
+      -e LLVM_BINDGEN_PREBUILTS_VERSION="$llvm_prebuilts_version" \
+      -- bash -lc "$command" 2>&1 | sanitize_build_log_output | tee "$attempt_log"
+    status="${PIPESTATUS[0]}"
+    set -e
+
+    if (( status == 0 )); then
+      jobs="$attempt_jobs"
+      arm64_soong_gomemlimit="$attempt_gomemlimit"
+      return 0
+    fi
+
+    last_status="$status"
+    if (( status == 137 )); then
+      log "$product build exited with status 137; treating it as ARM64 resource pressure"
+    elif ! arm64_log_looks_resource_limited "$attempt_log"; then
+      return "$status"
+    fi
+
+    remove_soong_graph_state "$product" \
+      "failed ARM64 attempt with $attempt_jobs jobs, Soong GOMEMLIMIT=$attempt_gomemlimit, and GOMAXPROCS=$attempt_gomaxprocs"
+    log "$product build failed under ARM64 resource pressure with $attempt_jobs jobs, Soong GOMEMLIMIT=$attempt_gomemlimit, and GOMAXPROCS=$attempt_gomaxprocs; retrying lower if available"
+  done
+
+  return "$last_status"
+}
+
+run_build_native() {
+  local product="$1"
+  local status
+  shift
+
+  export_active_llvm_env
+
+  set +u
+  source build/envsetup.sh
+  lunch "$product" trunk_staging userdebug || die "lunch $product failed"
+  [[ "${TARGET_PRODUCT:-}" == "$product" ]] || \
+    die "lunch did not set TARGET_PRODUCT=$product (got '${TARGET_PRODUCT:-}')"
+  # envsetup.sh and lunch both call `set +u` and may toggle other -o options;
+  # re-assert the strict shell flags before running the long build.
+  set -eo pipefail
+  set -u
+
+  set +e
+  m "$@" -j"$jobs" 2>&1 | sanitize_build_log_output
+  status="${PIPESTATUS[0]}"
+  set -e
+  return "$status"
+}
+
+run_lunch_and_make() {
+  local product="$1"
+  shift
+
+  if host_is_arm64; then
+    run_build_muvm "$product" "$@"
+  else
+    run_build_native "$product" "$@"
+  fi
+}
+
 validate_build_inputs_for_targets() {
   enabled "$validate_build_inputs" || return 0
 
@@ -818,6 +2551,52 @@ repair_soong_zero_byte_objects() {
     log "removing stale Soong module output: $dir"
     rm -rf "$dir"
   done
+}
+
+remove_soong_graph_state() {
+  local product="$1"
+  local reason="$2"
+  local out_soong="$workspace/out/soong"
+  local prefix="build.${product}"
+
+  [[ -d "$out_soong" ]] || return 0
+
+  log "removing stale Soong graph state for $product: $reason"
+  find "$out_soong" -maxdepth 1 -type f \( \
+    -name "${prefix}.ninja" -o \
+    -name "${prefix}.ninja.*" -o \
+    -name "${prefix}.*.ninja" \
+  \) -delete 2>/dev/null || true
+}
+
+repair_stale_soong_graph_state() {
+  local product="$1"
+  local out_soong="$workspace/out/soong"
+  local prefix="build.${product}"
+  local final_ninja="$out_soong/${prefix}.ninja"
+  local globs="$final_ninja.globs"
+  local globs_time="$final_ninja.globs_time"
+  local -a graph_parts=()
+
+  [[ -d "$out_soong" ]] || return 0
+
+  mapfile -t graph_parts < <(
+    find "$out_soong" -maxdepth 1 -type f \( \
+      -name "${prefix}.ninja" -o \
+      -name "${prefix}.ninja.*" -o \
+      -name "${prefix}.*.ninja" \
+    \) -print 2>/dev/null || true
+  )
+
+  if [[ -e "$globs" && ! -e "$globs_time" ]]; then
+    remove_soong_graph_state "$product" "missing glob timestamp"
+  elif [[ -f "$final_ninja" && -f "$globs_time" && "$globs_time" -nt "$final_ninja" ]]; then
+    remove_soong_graph_state "$product" "interrupted graph regeneration"
+  elif [[ -f "$final_ninja" && ! -s "$final_ninja" ]]; then
+    remove_soong_graph_state "$product" "zero-size generated ninja"
+  elif [[ ! -f "$final_ninja" && ${#graph_parts[@]} -gt 0 ]]; then
+    remove_soong_graph_state "$product" "incomplete generated ninja"
+  fi
 }
 
 repair_zero_size_host_outputs() {
@@ -1075,6 +2854,11 @@ for name in (
     "UPDATE_NATIVE_BRIDGE_PREBUILTS",
     "VALIDATE_BUILD_INPUTS",
     "RESET_PATCHED_PROJECTS",
+    "CLANG_PREBUILT_GIT_REF",
+    "ARM64_CLANG_PREBUILT_GIT_URL",
+    "ARM64_CLANG_PREBUILT_GIT_REF",
+    "X86_CLANG_PREBUILT_GIT_URL",
+    "X86_CLANG_PREBUILT_GIT_REF",
     "NATIVE_BRIDGE_SOURCE_DIR",
     "NATIVE_BRIDGE_SDK_PACKAGE",
     "NATIVE_BRIDGE_SDK_PACKAGE_SHA1",
@@ -1357,8 +3141,19 @@ webview_lfs_prebuilts_ready() {
 }
 
 local_overlay_ready() {
+  local dest
+  dest="$(local_overlay_dest_path)"
+
+  [[ -e "$workspace/vendor/lineage_desktop" ]] || return 1
   [[ -e "$workspace/vendor/lineage_desktop/scripts/apply_source_patches.sh" ]] || return 1
   [[ -e "$workspace/vendor/lineage_desktop/patches/series" ]] || return 1
+
+  local src_real dest_real
+  src_real="$(cd "$overlay_dir" && pwd -P)"
+  dest_real="$(cd "$dest" && pwd -P)" || return 1
+  [[ "$src_real" == "$dest_real" ]] && return 0
+
+  ! local_overlay_rsync_differs "$dest"
 }
 
 vendor_ika_soong_pruning_ready() {
@@ -1381,8 +3176,13 @@ source_patches_applied() {
 
     project_dir="$workspace/$project"
     patch_file="$workspace/vendor/lineage_desktop/$patch"
-    [[ -d "$project_dir/.git" && -f "$patch_file" ]] || return 1
-    git -C "$project_dir" apply --reverse --check "$patch_file" >/dev/null 2>&1 || return 1
+    if is_source_root_patch_project "$project"; then
+      project_dir="$workspace"
+      [[ -d "$project_dir" && -f "$patch_file" ]] || return 1
+    else
+      [[ -d "$project_dir/.git" && -f "$patch_file" ]] || return 1
+    fi
+    git -C "$project_dir" apply --reverse --check --whitespace=nowarn "$patch_file" >/dev/null 2>&1 || return 1
   done < "$series_file"
 }
 
@@ -1454,7 +3254,7 @@ resume_checkpoint_still_valid() {
     native-bridge-prebuilts)
       native_bridge_prebuilts_ready_for_targets "$@"
       ;;
-    build-input-validation)
+    build-input-validation|build-input-validation-*)
       validate_build_inputs_for_targets "$@"
       ;;
     *)
@@ -1776,66 +3576,100 @@ PY
   du -sh "$bundle_dir"
 }
 
-build_target() {
-  local arch="$1"
-  local product product_out host_package bundle_name
-  local -a thin_files
+host_output_tag() {
+  if host_is_arm64; then
+    printf '%s\n' linux-arm64
+  elif [[ "$(uname -s)" == "Darwin" ]]; then
+    printf '%s\n' darwin-x86
+  else
+    printf '%s\n' linux-x86
+  fi
+}
 
-  case "$arch" in
+target_product() {
+  case "$1" in
+    arm64) printf '%s\n' lineage_desktop_cf_arm64_pgagnostic ;;
+    x86_64) printf '%s\n' lineage_desktop_cf_x86_64 ;;
+    *) die "internal error: unsupported target $1" ;;
+  esac
+}
+
+target_product_out() {
+  case "$1" in
+    arm64) printf '%s\n' "$workspace/out/target/product/vsoc_arm64_pgagnostic" ;;
+    x86_64) printf '%s\n' "$workspace/out/target/product/vsoc_x86_64_sandybridge" ;;
+    *) die "internal error: unsupported target $1" ;;
+  esac
+}
+
+target_bundle_name() {
+  case "$1" in
+    arm64) printf '%s\n' lineageos-arm64 ;;
+    x86_64) printf '%s\n' lineageos-x86_64 ;;
+    *) die "internal error: unsupported target $1" ;;
+  esac
+}
+
+target_thin_files() {
+  case "$1" in
     arm64)
-      product="lineage_desktop_cf_arm64_pgagnostic"
-      product_out="$workspace/out/target/product/vsoc_arm64_pgagnostic"
-      host_package="$workspace/out/host/linux_musl-arm64/cvd-host_package.tar.gz"
-      bundle_name="lineageos-arm64"
-      thin_files=(
-        android-info.txt
-        misc_info.txt
-        super.img
-        boot.img
-        boot_16k.img
-        init_boot.img
-        vendor_boot.img
-        vbmeta.img
-        vbmeta_system.img
-        vbmeta_vendor_dlkm.img
-        vbmeta_system_dlkm.img
-        userdata.img
-        kernel_16k
-        ramdisk_16k.img
-        dtb.img
+      printf '%s\n' \
+        android-info.txt \
+        misc_info.txt \
+        super.img \
+        boot.img \
+        boot_16k.img \
+        init_boot.img \
+        vendor_boot.img \
+        vbmeta.img \
+        vbmeta_system.img \
+        vbmeta_vendor_dlkm.img \
+        vbmeta_system_dlkm.img \
+        userdata.img \
+        kernel_16k \
+        ramdisk_16k.img \
+        dtb.img \
         vendor-bootconfig.img
-      )
       ;;
     x86_64)
-      product="lineage_desktop_cf_x86_64"
-      product_out="$workspace/out/target/product/vsoc_x86_64_sandybridge"
-      host_package="$workspace/out/host/linux-x86/cvd-host_package.tar.gz"
-      bundle_name="lineageos-x86_64"
-      thin_files=(
-        android-info.txt
-        misc_info.txt
-        super.img
-        boot.img
-        init_boot.img
-        vendor_boot.img
-        vbmeta.img
-        vbmeta_system.img
-        vbmeta_vendor_dlkm.img
-        vbmeta_system_dlkm.img
-        userdata.img
-        kernel
-        ramdisk.img
+      printf '%s\n' \
+        android-info.txt \
+        misc_info.txt \
+        super.img \
+        boot.img \
+        init_boot.img \
+        vendor_boot.img \
+        vbmeta.img \
+        vbmeta_system.img \
+        vbmeta_vendor_dlkm.img \
+        vbmeta_system_dlkm.img \
+        userdata.img \
+        kernel \
+        ramdisk.img \
         vendor-bootconfig.img
-      )
       ;;
     *)
-      die "internal error: unsupported arch $arch"
+      die "internal error: unsupported target $1"
       ;;
   esac
+}
+
+build_target() {
+  local arch="$1"
+  local product product_out host_package bundle_name host_tag
+  local -a thin_files
+
+  host_tag="$(host_output_tag)"
+  product="$(target_product "$arch")"
+  product_out="$(target_product_out "$arch")"
+  host_package="$workspace/out/host/$host_tag/cvd-host_package.tar.gz"
+  bundle_name="$(target_bundle_name "$arch")"
+  mapfile -t thin_files < <(target_thin_files "$arch")
 
   cd "$workspace"
   log "building $product"
   repair_soong_zero_byte_objects
+  repair_stale_soong_graph_state "$product"
   repair_corrupt_host_tools
   repair_zero_size_fstab_outputs "$product" "$product_out"
   remove_stale_launcher3_outputs "$product" "$product_out"
@@ -1873,17 +3707,8 @@ build_target() {
   else
     remove_packaged_target_outputs "$product" "$product_out" "$host_package" "${thin_files[@]}"
 
-    set +u
-    source build/envsetup.sh
-    lunch "$product" trunk_staging userdebug || die "lunch $product failed"
-    [[ "${TARGET_PRODUCT:-}" == "$product" ]] || \
-      die "lunch did not set TARGET_PRODUCT=$product (got '${TARGET_PRODUCT:-}')"
-    # envsetup.sh and lunch both call `set +u` and may toggle other -o options;
-    # re-assert the strict shell flags before running the long build.
-    set -eo pipefail
-    set -u
-
-    m hosttar \
+    run_lunch_and_make "$product" \
+      hosttar \
       bootimage \
       vendorbootimage \
       initbootimage \
@@ -1933,7 +3758,7 @@ build_target() {
 }
 
 main() {
-  trap 'status=$?; cleanup_temp_zram; exit "$status"' EXIT
+  trap cleanup_on_exit EXIT
 
   case "${1:-}" in
     -h|--help|help)
@@ -1943,13 +3768,16 @@ main() {
   esac
 
   ensure_host_commands
+  ensure_arm64_host_x86_64_emulation
   ensure_signing_keys
   setup_temp_zram_if_needed
   set_build_jobs
+  configure_arm64_job_limits
   log "using $jobs parallel build jobs ($highmem_jobs high-memory jobs)"
   ensure_repo_command
   ensure_anonymous_git_config
   cleanup_workspace_path_metadata
+  ensure_workspace_selinux_contexts
 
   local -a targets
   mapfile -t targets < <(normalize_targets "$@")
@@ -1962,14 +3790,24 @@ main() {
   repair_webview_intermediates
   run_checkpointed_step local-overlay "local overlay application" apply_local_overlay
   run_checkpointed_step vendor-ika-soong-pruning "vendored Cuttlefish Soong pruning" ensure_vendor_ika_soong_pruning
+  ensure_linux_x86_clang_prebuilt
   run_checkpointed_step source-patches "source patches" apply_source_patches
   run_checkpointed_step microg-prebuilts "microG prebuilt refresh" update_microg_prebuilts
-  run_checkpointed_step native-bridge-prebuilts "native bridge prebuilt refresh" update_native_bridge_prebuilts_for_targets "${targets[@]}"
-  run_checkpointed_step build-input-validation "build input validation" validate_build_inputs_for_targets "${targets[@]}"
+  configure_arm64_host_build
 
   local target
   for target in "${targets[@]}"; do
+    if [[ "$target" == "x86_64" ]]; then
+      run_checkpointed_step native-bridge-prebuilts \
+        "x86-64 native bridge prebuilt refresh" \
+        update_native_bridge_prebuilts_for_targets x86_64
+    fi
+    run_checkpointed_step "build-input-validation-$target" \
+      "build input validation for $target" \
+      validate_build_inputs_for_targets "$target"
+    record_buildtime_start "$target"
     build_target "$target"
+    record_buildtime_finish success
   done
 
   mark_resume_checkpoint complete
@@ -1977,10 +3815,7 @@ main() {
   log "done"
   log "output directory: $output_dir"
   for target in "${targets[@]}"; do
-    case "$target" in
-      arm64)  log "  -> $output_dir/lineageos-arm64/" ;;
-      x86_64) log "  -> $output_dir/lineageos-x86_64/" ;;
-    esac
+    log "  -> $output_dir/$(target_bundle_name "$target")/"
   done
 }
 
