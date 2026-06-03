@@ -2,7 +2,8 @@ Patch summary:
 Consolidate LineageOS Desktop Clang 22 compatibility fixes across Android source projects.
 This patch keeps external libraries, bionic, Trusty, device/goldfish,
 hardware/ril, and frameworks/native building with Clang 22 diagnostics that
-are promoted to errors in the desktop ROM build.
+are promoted to errors in the desktop ROM build. It also keeps Trusty's direct
+Rust invocations aligned with Soong's Rust bootstrap environment.
 
 diff --git a/external/musl/Android.bp b/external/musl/Android.bp
 index f8ed9cff..693732cf 100644
@@ -671,10 +672,41 @@ index 73f24ab16..6527fbd95 100644
  };
  
  static const int length_of_year[2] = { 365, 366 };
+diff --git a/trusty/vendor/google/aosp/scripts/Android.bp b/trusty/vendor/google/aosp/scripts/Android.bp
+index 4f0805a..b3f9a40 100644
+--- a/trusty/vendor/google/aosp/scripts/Android.bp
++++ b/trusty/vendor/google/aosp/scripts/Android.bp
+@@ -172,6 +172,7 @@ genrule_defaults {
+         "aidl_rust_glue",
+         "aprotoc",
+         "build_trusty",
++        "dtc",
+         "trusty_metrics_atoms_protoc_plugin",
+     ],
+     keep_gendir: true,
+@@ -179,7 +180,7 @@ genrule_defaults {
+ 
+ genrule_cmd_template = "(mkdir -p $(genDir)/build-root && " +
+     "cp -t . external/trusty/lk/makefile trusty/vendor/google/aosp/lk_inc.mk && " +
+-    "AIDL_TOOL=$(location aidl) " +
++    "TRUSTY_SOONG_DTC_PREBUILT=$(location dtc) AIDL_TOOL=$(location aidl) " +
+     "AIDL_RUST_GLUE_TOOL=$(location aidl_rust_glue) PROTOC_TOOL=$(location aprotoc) " +
+     "PROTOC_PLUGIN_BINARY=$(location trusty_metrics_atoms_protoc_plugin) TRUSTY_SKIP_DOCS=true " +
+     "BUILDDATE=\"$$(date --date=@$$(cat $(build_date_file)))\" " +
+@@ -410,7 +411,7 @@ prebuilt_etc {
+ // Trusty TEE image with Widevine OPK TA
+ genrule_tee_cmd_template = "(mkdir -p $(genDir)/build-root && " +
+     "cp -t . external/trusty/lk/makefile trusty/vendor/google/aosp/lk_inc.mk && " +
+-    "AIDL_TOOL=$(location aidl) " +
++    "TRUSTY_SOONG_DTC_PREBUILT=$(location dtc) AIDL_TOOL=$(location aidl) " +
+     "AIDL_RUST_GLUE_TOOL=$(location aidl_rust_glue) PROTOC_TOOL=$(location aprotoc) " +
+     "PROTOC_PLUGIN_BINARY=$(location trusty_metrics_atoms_protoc_plugin) " +
+     "QEMU_PREBUILTS_DIR=$(location trusty_qemu_system_aarch64) " +
 diff --git a/trusty/vendor/google/aosp/scripts/envsetup.sh b/trusty/vendor/google/aosp/scripts/envsetup.sh
+index d069c85..c1894fc 100644
 --- a/trusty/vendor/google/aosp/scripts/envsetup.sh
 +++ b/trusty/vendor/google/aosp/scripts/envsetup.sh
-@@ -27,11 +27,10 @@ gettop() {
+@@ -29,39 +29,68 @@ gettop() {
  }
  
  if [ -z ${TRUSTY_BUILD_CLANG_VERSION} ]; then
@@ -689,6 +721,85 @@ diff --git a/trusty/vendor/google/aosp/scripts/envsetup.sh b/trusty/vendor/googl
  if [ -z ${TRUSTY_BUILD_RUST_VERSION} ]; then
      TRUSTY_BUILD_RUST_VERSION=1.88.0
  fi
+ export TRUSTY_TOP=$(gettop)
++case "$(uname -m)" in
++    aarch64|arm64)
++        TRUSTY_HOST_PREBUILT_TAG=linux-arm64
++        TRUSTY_RUST_HOST_TRIPLE=aarch64-unknown-linux-musl
++        TRUSTY_CLANG_HOST_SYSROOT=${TRUSTY_TOP}/prebuilts/build-tools/sysroots/aarch64-unknown-linux-musl
++        TRUSTY_CLANG_HOST_SEARCHDIR=${TRUSTY_TOP}/prebuilts/clang/host/linux-arm64/${TRUSTY_BUILD_CLANG_VERSION}/lib/aarch64-unknown-linux-musl
++        TRUSTY_CLANG_HOST_LDDIRS="${TRUSTY_CLANG_HOST_SEARCHDIR}"
++        TRUSTY_CLANG_HOST_TARGET_FLAGS="--target=aarch64-unknown-linux-musl"
++        TRUSTY_CLANG_HOST_LINK_FLAGS="${TRUSTY_CLANG_HOST_TARGET_FLAGS} --rtlib=compiler-rt --unwindlib=libunwind"
++        TRUSTY_CLANG_HOST_RUST_LINK_ARGS="-B ${TRUSTY_TOP}/prebuilts/clang/host/linux-arm64/${TRUSTY_BUILD_CLANG_VERSION}/bin -fuse-ld=lld"
++        TRUSTY_DTC_PREBUILT=${TRUSTY_SOONG_DTC_PREBUILT:-${TRUSTY_TOP}/tools/out/bin/dtc}
++        ;;
++    *)
++        TRUSTY_HOST_PREBUILT_TAG=linux-x86
++        TRUSTY_RUST_HOST_TRIPLE=x86_64-unknown-linux-gnu
++        CLANG_GCC_TOOLCHAIN=${TRUSTY_TOP}/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
++        TRUSTY_CLANG_HOST_SYSROOT=${CLANG_GCC_TOOLCHAIN}/sysroot
++        TRUSTY_CLANG_HOST_SEARCHDIR=${CLANG_GCC_TOOLCHAIN}/lib/gcc/x86_64-linux/4.8.3
++        TRUSTY_CLANG_HOST_LDDIRS="${CLANG_GCC_TOOLCHAIN}/lib/gcc/x86_64-linux/4.8.3 ${CLANG_GCC_TOOLCHAIN}/x86_64-linux/lib64"
++        ;;
++esac
+ # b/432074538: clang-r547379's linker often crashes while linking Hafnium
+ if [ "${TRUSTY_BUILD_CLANG_VERSION}" = "clang-r547379" ]; then
+     HAFNIUM_BUILD_CLANG_VERSION=clang-r563880
+-    export HAFNIUM_CLANG_BINDIR=${TRUSTY_TOP}/prebuilts/clang/host/linux-x86/${HAFNIUM_BUILD_CLANG_VERSION}/bin
++    export HAFNIUM_CLANG_BINDIR=${TRUSTY_TOP}/prebuilts/clang/host/${TRUSTY_HOST_PREBUILT_TAG}/${HAFNIUM_BUILD_CLANG_VERSION}/bin
+ fi
+-export CLANG_BINDIR=${TRUSTY_TOP}/prebuilts/clang/host/linux-x86/${TRUSTY_BUILD_CLANG_VERSION}/bin
++export CLANG_BINDIR=${TRUSTY_TOP}/prebuilts/clang/host/${TRUSTY_HOST_PREBUILT_TAG}/${TRUSTY_BUILD_CLANG_VERSION}/bin
+ export CLANG_HOST_LIBDIR=${CLANG_BINDIR}/../lib
+-export CLANG_GCC_TOOLCHAIN=${TRUSTY_TOP}/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
+-export CLANG_HOST_SYSROOT=${CLANG_GCC_TOOLCHAIN}/sysroot
+-export CLANG_HOST_SEARCHDIR=${CLANG_GCC_TOOLCHAIN}/lib/gcc/x86_64-linux/4.8.3
+-export CLANG_HOST_LDDIRS="${CLANG_GCC_TOOLCHAIN}/lib/gcc/x86_64-linux/4.8.3 ${CLANG_GCC_TOOLCHAIN}/x86_64-linux/lib64"
+-export CLANG_TOOLS_BINDIR=${TRUSTY_TOP}/prebuilts/clang-tools/linux-x86/bin
+-export LINUX_CLANG_BINDIR=${TRUSTY_TOP}/prebuilts/clang/host/linux-x86/${TRUSTY_BUILD_CLANG_VERSION}/bin
+-export RUST_BINDIR=${TRUSTY_TOP}/prebuilts/rust/linux-x86/${TRUSTY_BUILD_RUST_VERSION}/bin
+-export RUST_HOST_LIBDIR=${RUST_BINDIR}/../lib/rustlib/x86_64-unknown-linux-gnu/lib
++export CLANG_GCC_TOOLCHAIN=${CLANG_GCC_TOOLCHAIN:-}
++export CLANG_HOST_SYSROOT=${TRUSTY_CLANG_HOST_SYSROOT}
++export CLANG_HOST_SEARCHDIR=${TRUSTY_CLANG_HOST_SEARCHDIR}
++export CLANG_HOST_LDDIRS="${TRUSTY_CLANG_HOST_LDDIRS}"
++export CLANG_HOST_TARGET_FLAGS="${TRUSTY_CLANG_HOST_TARGET_FLAGS:-}"
++export CLANG_HOST_LINK_FLAGS="${TRUSTY_CLANG_HOST_LINK_FLAGS:-}"
++if [ -n "${TRUSTY_CLANG_HOST_RUST_LINK_ARGS:-}" ]; then
++    export GLOBAL_HOST_RUST_LINK_ARGS="${TRUSTY_CLANG_HOST_RUST_LINK_ARGS}"
++fi
++if [ -n "${TRUSTY_DTC_PREBUILT:-}" ]; then
++    export DTC_PREBUILT="${TRUSTY_DTC_PREBUILT}"
++fi
++export CLANG_TOOLS_BINDIR=${TRUSTY_TOP}/prebuilts/clang-tools/${TRUSTY_HOST_PREBUILT_TAG}/bin
++export LINUX_CLANG_BINDIR=${TRUSTY_TOP}/prebuilts/clang/host/${TRUSTY_HOST_PREBUILT_TAG}/${TRUSTY_BUILD_CLANG_VERSION}/bin
++export RUST_BINDIR=${TRUSTY_TOP}/prebuilts/rust/${TRUSTY_HOST_PREBUILT_TAG}/${TRUSTY_BUILD_RUST_VERSION}/bin
++export RUST_HOST_LIBDIR=${RUST_BINDIR}/../lib/rustlib/${TRUSTY_RUST_HOST_TRIPLE}/lib
++export RUSTC_BOOTSTRAP="${RUSTC_BOOTSTRAP:-1}"
+ export ARCH_arm_TOOLCHAIN_PREFIX=${CLANG_BINDIR}/llvm-
+ export ARCH_arm64_TOOLCHAIN_PREFIX=${CLANG_BINDIR}/llvm-
+ export ARCH_x86_64_TOOLCHAIN_PREFIX=${CLANG_BINDIR}/llvm-
+ export ARCH_x86_TOOLCHAIN_PREFIX=${CLANG_BINDIR}/llvm-
+-export BUILDTOOLS_BINDIR=${TRUSTY_TOP}/prebuilts/build-tools/linux-x86/bin
++export BUILDTOOLS_BINDIR=${TRUSTY_TOP}/prebuilts/build-tools/${TRUSTY_HOST_PREBUILT_TAG}/bin
+ export BUILDTOOLS_COMMON=${TRUSTY_TOP}/prebuilts/build-tools/common
+ export PY3=$BUILDTOOLS_BINDIR/py3-cmd
+-export PATH_TOOLS_BINDIR=${TRUSTY_TOP}/prebuilts/build-tools/path/linux-x86
+-export LINUX_BUILD_TOOLS=${TRUSTY_TOP}/prebuilts/kernel-build-tools/linux-x86
++export PATH_TOOLS_BINDIR=${TRUSTY_TOP}/prebuilts/build-tools/path/${TRUSTY_HOST_PREBUILT_TAG}
++export LINUX_BUILD_TOOLS=${TRUSTY_TOP}/prebuilts/kernel-build-tools/${TRUSTY_HOST_PREBUILT_TAG}
+ 
+ SOONG_UI=$TRUSTY_TOP/build/soong/soong_ui.bash
+ if [ -f "$SOONG_UI" ]; then
+@@ -93,5 +109,5 @@ export PYTHONPATH
+ 
+ # Bindgen uses clang and libclang at runtime, so we need to tell it where to
+ # look for these tools.
+-export BINDGEN_CLANG_PATH=${TRUSTY_TOP}/prebuilts/clang/host/linux-x86/${TRUSTY_BUILD_CLANG_VERSION}/bin/clang
+-export BINDGEN_LIBCLANG_PATH=${TRUSTY_TOP}/prebuilts/clang/host/linux-x86/${TRUSTY_BUILD_CLANG_VERSION}/lib
++export BINDGEN_CLANG_PATH=${TRUSTY_TOP}/prebuilts/clang/host/${TRUSTY_HOST_PREBUILT_TAG}/${TRUSTY_BUILD_CLANG_VERSION}/bin/clang
++export BINDGEN_LIBCLANG_PATH=${TRUSTY_TOP}/prebuilts/clang/host/${TRUSTY_HOST_PREBUILT_TAG}/${TRUSTY_BUILD_CLANG_VERSION}/lib
 diff --git a/device/generic/goldfish/hals/hwc3/Display.cpp b/device/generic/goldfish/hals/hwc3/Display.cpp
 index 08b7a46a..c58f94af 100644
 --- a/device/generic/goldfish/hals/hwc3/Display.cpp

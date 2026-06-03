@@ -1,0 +1,19 @@
+Patch summary:
+Store checkfc's getopt result in an int.
+getopt() returns int and uses -1 as the end-of-options sentinel. ARM64 treats
+plain char as unsigned, so storing that sentinel in char turns it into 255 and
+the parser falls through to usage() after valid arguments. x86 hosts happen to
+work because plain char is signed there.
+
+diff --git a/tools/checkfc.c b/tools/checkfc.c
+--- a/tools/checkfc.c
++++ b/tools/checkfc.c
+@@ -384,7 +384,7 @@ int main(int argc, char **argv)
+   bool allow_empty = false;
+   bool compare = false;
+   bool test_data = false;
+-  char c;
++  int c;
+ 
+   filemode mode = filemode_file_contexts;
+ 

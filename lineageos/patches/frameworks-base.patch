@@ -14,6 +14,11 @@ placement, and VM-irrelevant QS tiles can be blocklisted by product resources.
 Keeping that policy in the framework layer gives Launcher and the product
 overlays a stable desktop contract to build on.
 
+Also reduce benign desktop VM framework logspam. Recents cleanup can run before
+the per-user recent task/image directories have been created on a fresh userdata
+image; create or treat those directories as empty instead of logging repeated
+errors.
+
 
 diff --git a/data/etc/com.android.systemui.xml b/data/etc/com.android.systemui.xml
 index b632df559ff8..75eb6b58e4cd 100644
@@ -2553,3 +2558,34 @@ index 7baddb8700a6..4ba3a61f7e89 100644
 +
          getNonTargetClockFace(clock).applyConstraints(constraintSet)
          getTargetClockFace(clock).applyConstraints(constraintSet)
+diff --git a/services/core/java/com/android/server/wm/TaskPersister.java b/services/core/java/com/android/server/wm/TaskPersister.java
+--- a/services/core/java/com/android/server/wm/TaskPersister.java
++++ b/services/core/java/com/android/server/wm/TaskPersister.java
+@@ -505,12 +505,25 @@ public class TaskPersister implements PersisterQueue.Listener {
+             candidateUserIds = mRecentTasks.usersWithRecentsLoadedLocked();
+         }
+         for (int userId : candidateUserIds) {
+-            removeObsoleteFiles(persistentTaskIds, getUserImagesDir(userId).listFiles());
+-            removeObsoleteFiles(persistentTaskIds, getUserTasksDir(userId).listFiles());
++            removeObsoleteFiles(persistentTaskIds, listFilesOrEmpty(getUserImagesDir(userId)));
++            removeObsoleteFiles(persistentTaskIds, listFilesOrEmpty(getUserTasksDir(userId)));
+         }
+     }
+
++    private static File[] listFilesOrEmpty(File dir) {
++        if (!dir.isDirectory() && !dir.mkdirs()) {
++            Slog.w(TAG, "Unable to create recents directory: " + dir);
++            return new File[0];
++        }
++        final File[] files = dir.listFiles();
++        if (files == null) {
++            Slog.w(TAG, "Unable to list recents directory: " + dir);
++            return new File[0];
++        }
++        return files;
++    }
++
+     static Bitmap restoreImage(String filename) {
+         if (DEBUG) Slog.d(TAG, "restoreImage: restoring " + filename);
+         return BitmapFactory.decodeFile(filename);
+     }

@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# This validator lives in scripts/lib/ but is invoked as a standalone executable
+# (not sourced). script_dir is .../scripts/lib; the overlay root is two levels up.
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-overlay_dir="$(cd "$script_dir/.." && pwd)"
+overlay_dir="$(cd "$script_dir/../.." && pwd)"
+
+source "$script_dir/common.sh"
+source "$script_dir/patch_series.sh"
 
 usage() {
   cat <<'EOF'
@@ -27,24 +32,21 @@ require_file() {
   [[ -f "$1" ]] || fail "missing file: $1"
 }
 
-validate_zip_file() {
-  local zip_file="$1"
+require_arm64_elf() {
+  local path="$1"
+  local label="$2"
 
-  python3 - "$zip_file" <<'PY'
-from pathlib import Path
-import sys
-import zipfile
-
-path = Path(sys.argv[1])
-try:
-    with zipfile.ZipFile(path) as archive:
-        bad_member = archive.testzip()
-except zipfile.BadZipFile as exc:
-    raise SystemExit(f"{path}: {exc}")
-
-if bad_member:
-    raise SystemExit(f"{path}: corrupt zip member {bad_member}")
-PY
+  require_file "$path"
+  [[ -x "$path" ]] || fail "$label is not executable: $path"
+  if command -v readelf >/dev/null 2>&1; then
+    readelf -h "$path" 2>/dev/null | grep -Eq 'Machine:[[:space:]]+AArch64' || \
+      fail "$label is not an ARM64 ELF executable: $path"
+  elif command -v file >/dev/null 2>&1; then
+    file -Lb "$path" 2>/dev/null | grep -Eiq 'aarch64|arm64|AArch64' || \
+      fail "$label is not an ARM64 executable: $path"
+  else
+    fail "cannot verify ARM64 executable architecture for $label; install readelf or file"
+  fi
 }
 
 normalize_targets() {
@@ -85,60 +87,15 @@ target_enabled() {
   return 1
 }
 
-host_is_arm64() {
-  case "$(uname -m)" in
-    aarch64|arm64)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-is_source_root_patch_project() {
-  [[ "$1" == "." ]]
-}
-
-patch_project_dir() {
-  local project="$1"
-  if is_source_root_patch_project "$project"; then
-    printf '%s\n' "$android_root"
-  else
-    printf '%s/%s\n' "$android_root" "$project"
-  fi
-}
-
-patch_project_label() {
-  local project="$1"
-  if is_source_root_patch_project "$project"; then
-    printf '%s\n' "source root"
-  else
-    printf '%s\n' "$project"
-  fi
-}
-
-git_apply_for_patch_project() {
-  local project="$1"
-  shift
-
-  if is_source_root_patch_project "$project"; then
-    GIT_CEILING_DIRECTORIES="$(dirname "$android_root")" \
-      git -C "$android_root" apply "$@"
-  else
-    git -C "$(patch_project_dir "$project")" apply "$@"
-  fi
-}
-
 check_single_patch_applied() {
   local project="$1"
   local patch="$2"
   local patch_path project_label
 
   patch_path="$overlay_dir/$patch"
-  project_label="$(patch_project_label "$project")"
+  project_label="$(patch_series_project_label "$project")"
 
-  if ! git_apply_for_patch_project "$project" --check --reverse --whitespace=nowarn "$patch_path" >/dev/null 2>&1; then
+  if ! patch_series_git_apply "$android_root" "$project" --check --reverse --whitespace=nowarn "$patch_path" >/dev/null 2>&1; then
     fail "patch is not applied cleanly to $project_label: $patch"
   fi
 }
@@ -164,11 +121,11 @@ check_patch_series() {
       continue
     fi
 
-    project_dir="$(patch_project_dir "$project")"
+    project_dir="$(patch_series_project_dir "$android_root" "$project")"
     patch_path="$overlay_dir/$patch"
 
     require_file "$patch_path"
-    if is_source_root_patch_project "$project"; then
+    if patch_series_is_source_root "$project"; then
       if [[ ! -d "$project_dir" ]]; then
         fail "patched source root is missing: $project_dir"
         continue
@@ -188,9 +145,9 @@ check_patch_series() {
   done < "$series"
 
   for project in "${projects[@]}"; do
-    project_dir="$(patch_project_dir "$project")"
+    project_dir="$(patch_series_project_dir "$android_root" "$project")"
 
-    if is_source_root_patch_project "$project"; then
+    if patch_series_is_source_root "$project"; then
       while IFS= read -r patch; do
         [[ -n "$patch" ]] || continue
         check_single_patch_applied "$project" "$patch"
@@ -211,44 +168,138 @@ check_patch_series() {
 check_project_patch_series() {
   local project="$1"
   local patch_list="$2"
-  local project_dir="$android_root/$project"
-  local tmp_dir tmp_worktree combined_patch patch patch_path
-  local ok=1
 
-  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/lineage-patch-validate.XXXXXX")" || {
-    fail "could not create temporary directory for patch validation"
-    return
-  }
-  tmp_worktree="$tmp_dir/worktree"
-  combined_patch="$tmp_dir/combined.patch"
+  # patch_series_already_applied (lib/patch_series.sh) builds the project's
+  # combined diff in a throwaway worktree and confirms it reverse-applies to the
+  # live tree -- the same check this used to inline. It is a quiet predicate, so
+  # a failure here is reported as a single "not cleanly applied" rather than the
+  # former per-patch granularity; the pass/fail outcome is unchanged.
+  patch_series_already_applied "$android_root" "$overlay_dir" "$project" "$patch_list" || \
+    fail "patch series is not applied cleanly to $project"
+}
 
-  if ! git -C "$project_dir" worktree add --detach --quiet "$tmp_worktree" HEAD >/dev/null 2>&1; then
-    fail "could not create temporary worktree for $project"
-    rm -rf "$tmp_dir"
-    return
+check_patched_xml_resource_references() {
+  local series="$overlay_dir/patches/series"
+  require_file "$series"
+  [[ -f "$series" ]] || return 0
+
+  log "checking patched XML resource references"
+  local checker_output
+  if ! checker_output="$(python3 - "$android_root" "$overlay_dir" "$series" 2>&1 <<'PY'
+from pathlib import Path
+import re
+import sys
+
+android_root = Path(sys.argv[1])
+overlay_dir = Path(sys.argv[2])
+series = Path(sys.argv[3])
+
+diff_re = re.compile(r"^diff --git a/(.+?) b/(.+)$")
+xml_ref_re = re.compile(r"@xml/([A-Za-z0-9_.]+)")
+
+
+def is_source_root_project(project: str) -> bool:
+    return project == "."
+
+
+def project_dir(project: str) -> Path:
+    return android_root if is_source_root_project(project) else android_root / project
+
+
+def changed_xml_files(project: str, patch_rel: str) -> set[Path]:
+    patch_path = overlay_dir / patch_rel
+    root = project_dir(project)
+    changed: set[Path] = set()
+    try:
+        lines = patch_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError as exc:
+        raise SystemExit(f"failed to read patch {patch_rel}: {exc}")
+
+    for line in lines:
+        match = diff_re.match(line)
+        if not match:
+            continue
+        rel = match.group(2)
+        if rel == "/dev/null":
+            continue
+        if not rel.endswith(".xml"):
+            continue
+        parts = Path(rel).parts
+        if "res" not in parts:
+            continue
+        path = root / rel
+        if path.is_file():
+            changed.add(path)
+    return changed
+
+
+def xml_resource_names(root: Path) -> set[str]:
+    res_dir = root / "res"
+    names: set[str] = set()
+    if not res_dir.is_dir():
+        return names
+    for xml_dir in res_dir.glob("xml*"):
+        if not xml_dir.is_dir():
+            continue
+        for path in xml_dir.glob("*.xml"):
+            names.add(path.stem)
+    return names
+
+
+def iter_series_entries():
+    for raw in series.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        yield parts[0], parts[1]
+
+
+bad: list[str] = []
+patched_files: dict[Path, set[Path]] = {}
+
+for project, patch_rel in iter_series_entries():
+    root = project_dir(project)
+    files = changed_xml_files(project, patch_rel)
+    if files:
+        patched_files.setdefault(root, set()).update(files)
+
+for root, files in patched_files.items():
+    known_xml = xml_resource_names(root)
+    if not known_xml:
+        continue
+    for path in sorted(files):
+        try:
+            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except OSError:
+            continue
+        try:
+            display_path = path.relative_to(android_root).as_posix()
+        except ValueError:
+            display_path = path.as_posix()
+        for lineno, line in enumerate(lines, 1):
+            for ref in xml_ref_re.findall(line):
+                if ref not in known_xml:
+                    bad.append(
+                        f"{display_path}:{lineno}: missing local @xml/{ref} "
+                        f"(expected res/xml*/{ref}.xml)"
+                    )
+
+if bad:
+    print("patched XML files reference missing local XML resources:", file=sys.stderr)
+    for item in bad[:80]:
+        print(item, file=sys.stderr)
+    if len(bad) > 80:
+        print(f"... {len(bad) - 80} more", file=sys.stderr)
+    raise SystemExit(1)
+PY
+)"; then
+    fail "$checker_output"
+  else
+    log "patched XML resource references ok"
   fi
-
-  while IFS= read -r patch; do
-    [[ -n "$patch" ]] || continue
-    patch_path="$overlay_dir/$patch"
-    if ! git -C "$tmp_worktree" apply --index --whitespace=nowarn "$patch_path" >/dev/null 2>&1; then
-      fail "patch series does not apply cleanly to $project at $patch"
-      ok=0
-      break
-    fi
-  done <<<"$patch_list"
-
-  if (( ok )); then
-    git -C "$tmp_worktree" diff --cached --binary HEAD -- > "$combined_patch"
-    if [[ ! -s "$combined_patch" ]]; then
-      fail "patch series produced no changes for $project"
-    elif ! git -C "$project_dir" apply --check --reverse "$combined_patch" >/dev/null 2>&1; then
-      fail "patch series is not applied cleanly to $project"
-    fi
-  fi
-
-  git -C "$project_dir" worktree remove --force "$tmp_worktree" >/dev/null 2>&1 || rm -rf "$tmp_worktree"
-  rm -rf "$tmp_dir"
 }
 
 check_userdata_policy() {
@@ -260,8 +311,8 @@ check_userdata_policy() {
   require_file "$arm_board"
   require_file "$x86_board"
 
-  grep -Eq '^[[:space:]]*TARGET_USERDATAIMAGE_PARTITION_SIZE[[:space:]]*\?=[[:space:]]*66571993088[[:space:]]*$' "$shared_device" || \
-    fail "userdata size is not the expected 62 GiB default in $shared_device"
+  grep -Eq '^[[:space:]]*TARGET_USERDATAIMAGE_PARTITION_SIZE[[:space:]]*\?=[[:space:]]*65498251264[[:space:]]*$' "$shared_device" || \
+    fail "userdata size is not the expected 61 GiB default in $shared_device"
   grep -Eq '^[[:space:]]*TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE[[:space:]]*:=[[:space:]]*f2fs[[:space:]]*$' "$arm_board" || \
     fail "ARM64 userdata is not f2fs in $arm_board"
   grep -Eq '^[[:space:]]*TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE[[:space:]]*:=[[:space:]]*f2fs[[:space:]]*$' "$x86_board" || \
@@ -497,41 +548,205 @@ PY
   fi
 }
 
+check_bison_genrules() {
+  case "${VALIDATE_BISON_GENRULES:-1}" in
+    0|false|no|off)
+      log "Bison genrule validation skipped by VALIDATE_BISON_GENRULES=0"
+      return 0
+      ;;
+  esac
+
+  log "checking Bison genrules for packaged data-dir wiring"
+
+  local bp rel line_no line
+  while IFS= read -r -d '' bp; do
+    rel="${bp#$android_root/}"
+    while IFS=: read -r line_no line; do
+      [[ "$line" == *'BISON_PKGDATADIR'* ]] && continue
+      fail "Bison genrule does not set BISON_PKGDATADIR: $rel:$line_no"
+    done < <(grep -nF '$(location bison)' "$bp" || true)
+  done < <(
+    find "$android_root" \
+      -path "$android_root/.repo" -prune -o \
+      -path "$android_root/out" -prune -o \
+      -type f -name Android.bp -print0
+  )
+}
+
+check_trusty_arm64_host_link_config() {
+  host_is_arm64 || return 0
+  target_enabled arm64 || return 0
+
+  case "${VALIDATE_TRUSTY_ARM64_HOST_LINK:-1}" in
+    0|false|no|off)
+      log "Trusty ARM64 host link validation skipped by VALIDATE_TRUSTY_ARM64_HOST_LINK=0"
+      return 0
+      ;;
+  esac
+
+  log "checking Trusty ARM64 host link configuration"
+
+  local envsetup lk_engine kernel_compile kernel_host_test kernel_host_tool
+  envsetup="$android_root/trusty/vendor/google/aosp/scripts/envsetup.sh"
+  lk_engine="$android_root/external/trusty/lk/engine.mk"
+  kernel_compile="$android_root/trusty/kernel/make/generic_compile.mk"
+  kernel_host_test="$android_root/trusty/kernel/make/host_test.mk"
+  kernel_host_tool="$android_root/trusty/kernel/make/host_tool.mk"
+
+  require_file "$envsetup"
+  require_file "$lk_engine"
+  require_file "$kernel_compile"
+  require_file "$kernel_host_test"
+  require_file "$kernel_host_tool"
+
+  grep -Fq 'TRUSTY_HOST_PREBUILT_TAG=linux-arm64' "$envsetup" || \
+    fail "Trusty envsetup does not select linux-arm64 host prebuilts on ARM64: ${envsetup#$android_root/}"
+  grep -Fq 'TRUSTY_RUST_HOST_TRIPLE=aarch64-unknown-linux-musl' "$envsetup" || \
+    fail "Trusty envsetup does not select the ARM64 Rust host triple: ${envsetup#$android_root/}"
+  grep -Fq 'TRUSTY_CLANG_HOST_TARGET_FLAGS="--target=aarch64-unknown-linux-musl"' "$envsetup" || \
+    fail "Trusty envsetup does not set ARM64 Clang host target flags: ${envsetup#$android_root/}"
+  grep -Fq 'TRUSTY_CLANG_HOST_LINK_FLAGS="${TRUSTY_CLANG_HOST_TARGET_FLAGS} --rtlib=compiler-rt --unwindlib=libunwind"' "$envsetup" || \
+    fail "Trusty envsetup does not set ARM64 Clang runtime link flags: ${envsetup#$android_root/}"
+  grep -Fq 'TRUSTY_CLANG_HOST_RUST_LINK_ARGS="-B ${TRUSTY_TOP}/prebuilts/clang/host/linux-arm64/${TRUSTY_BUILD_CLANG_VERSION}/bin -fuse-ld=lld"' "$envsetup" || \
+    fail "Trusty envsetup does not set ARM64 Rust host linker args: ${envsetup#$android_root/}"
+  grep -Fq 'export GLOBAL_HOST_RUST_LINK_ARGS="${TRUSTY_CLANG_HOST_RUST_LINK_ARGS}"' "$envsetup" || \
+    fail "Trusty envsetup does not export Rust host linker args for proc-macro links: ${envsetup#$android_root/}"
+
+  grep -Fq 'GLOBAL_HOST_RUST_LINK_ARGS ?= -B $(CLANG_BINDIR) -B $(CLANG_HOST_SEARCHDIR) \' "$lk_engine" || \
+    fail "Trusty lk does not preserve default Rust host linker args with ?=: ${lk_engine#$android_root/}"
+  grep -Fq 'TOOLCHAIN_DEFINES += CLANG_HOST_TARGET_FLAGS=' "$lk_engine" || \
+    fail "Trusty lk toolchain config does not track CLANG_HOST_TARGET_FLAGS: ${lk_engine#$android_root/}"
+  grep -Fq 'TOOLCHAIN_DEFINES += CLANG_HOST_LINK_FLAGS=' "$lk_engine" || \
+    fail "Trusty lk toolchain config does not track CLANG_HOST_LINK_FLAGS: ${lk_engine#$android_root/}"
+  grep -Fq 'GENERIC_FLAGS += $(CLANG_HOST_TARGET_FLAGS) --sysroot $(CLANG_HOST_SYSROOT)' "$kernel_compile" || \
+    fail "Trusty kernel host compiles do not use CLANG_HOST_TARGET_FLAGS: ${kernel_compile#$android_root/}"
+  grep -Fq 'HOST_LDFLAGS := $(CLANG_HOST_LINK_FLAGS) -B$(CLANG_BINDIR) -B$(CLANG_HOST_SEARCHDIR) \' "$kernel_host_test" || \
+    fail "Trusty kernel host tests do not use CLANG_HOST_LINK_FLAGS: ${kernel_host_test#$android_root/}"
+  grep -Fq 'HOST_LDFLAGS += $(CLANG_HOST_LINK_FLAGS) -B$(CLANG_BINDIR) -B$(CLANG_HOST_SEARCHDIR) \' "$kernel_host_tool" || \
+    fail "Trusty kernel host tools do not use CLANG_HOST_LINK_FLAGS: ${kernel_host_tool#$android_root/}"
+}
+
 check_arm64_clang_compat() {
   host_is_arm64 || return 0
   target_enabled arm64 || return 0
 
   local arm64_root="$android_root/prebuilts/clang/host/linux-arm64"
-  local x86_root="$android_root/prebuilts/clang/host/linux-x86"
-  local clang_dir payload found=0
+  local clang_bp="$arm64_root/Android.bp"
+  local trusty_bp="$android_root/trusty/vendor/google/aosp/scripts/Android.bp"
+  local module="trusty_dirgroup_prebuilts_clang_host_linux-arm64"
+  local clang_dir listed_payload found=0
 
   [[ -d "$arm64_root" ]] || {
     fail "missing ARM64 Clang prebuilt directory: $arm64_root"
     return 0
   }
-  [[ -d "$x86_root" ]] || {
-    fail "missing linux-x86 Clang metadata directory: $x86_root"
-    return 0
-  }
+  [[ ! -L "$arm64_root" ]] || \
+    fail "ARM64 Clang prebuilt directory must be real, not a symlink: prebuilts/clang/host/linux-arm64 -> $(readlink "$arm64_root")"
 
   for clang_dir in "$arm64_root"/clang-r*; do
     [[ -d "$clang_dir" ]] || continue
     found=1
-    payload="${clang_dir##*/}"
 
-    require_file "$clang_dir/bin/clang"
+    require_arm64_elf "$clang_dir/bin/clang" "ARM64 Clang"
+    require_arm64_elf "$clang_dir/bin/clang++" "ARM64 Clang++"
     require_file "$clang_dir/include/c++/v1/string"
     require_file "$clang_dir/android_libc++/platform/aarch64/include/c++/v1/__config_site"
-
-    if [[ ! -e "$x86_root/$payload" ]]; then
-      fail "missing ARM64 Clang Soong compatibility path: prebuilts/clang/host/linux-x86/$payload"
-      continue
-    fi
-    require_file "$x86_root/$payload/include/c++/v1/string"
-    require_file "$x86_root/$payload/android_libc++/platform/aarch64/include/c++/v1/__config_site"
   done
 
   (( found )) || fail "no clang-r* payload found in $arm64_root"
+
+  require_file "$clang_bp"
+  grep -Fq "name: \"$module\"" "$clang_bp" || \
+    fail "ARM64 Clang prebuilt is missing Trusty dirgroup module: ${clang_bp#$android_root/}"
+  listed_payload="$(sed -n 's/.*dirs: \["\(clang-r[^"]*\)"\].*/\1/p' "$clang_bp" | tail -n 1)"
+  [[ -n "$listed_payload" && -d "$arm64_root/$listed_payload" ]] || \
+    fail "ARM64 Clang Trusty dirgroup points at a missing payload: ${clang_bp#$android_root/}"
+  grep -Fqx "        \":$module\"," "$trusty_bp" || \
+    fail "Trusty sandbox inputs are missing ARM64 Clang dirgroup: ${trusty_bp#$android_root/}"
+}
+
+check_arm64_native_host_prebuilts() {
+  host_is_arm64 || return 0
+  target_enabled arm64 || return 0
+
+  local rust_version rust_root rustc clang_tools_root tool
+  rust_version="$(rust_prebuilt_version "$android_root")"
+  [[ -n "$rust_version" ]] || {
+    fail "failed to detect Rust prebuilt version"
+    return 0
+  }
+
+  rust_root="$android_root/prebuilts/rust/linux-arm64"
+  if [[ -L "$rust_root" ]]; then
+    fail "ARM64 Rust prebuilt must be real, not a symlink: prebuilts/rust/linux-arm64 -> $(readlink "$rust_root")"
+  fi
+  rustc="$rust_root/$rust_version/bin/rustc"
+  require_arm64_elf "$rustc" "ARM64 Rust rustc"
+  for triple in aarch64-unknown-linux-gnu aarch64-unknown-linux-musl; do
+    [[ -d "$rust_root/$rust_version/lib/rustlib/$triple/lib" ]] || \
+      fail "ARM64 Rust prebuilt is missing $triple stdlib: $rust_root/$rust_version"
+  done
+
+  require_arm64_elf "$android_root/prebuilts/go/linux-arm64/bin/go" "ARM64 Go"
+  require_arm64_elf "$android_root/prebuilts/build-tools/linux-arm64/bin/ninja" "ARM64 Ninja"
+  require_arm64_elf "$android_root/prebuilts/cmake/linux-arm64/bin/cmake" "ARM64 CMake"
+  require_arm64_elf "$android_root/prebuilts/jdk/jdk21/linux-arm64/bin/javac" "ARM64 JDK 21 javac"
+  require_arm64_elf "$android_root/prebuilts/jdk/jdk21/linux-arm64/bin/jlink" "ARM64 JDK 21 jlink"
+  require_file "$android_root/prebuilts/jdk/jdk8/linux-arm64/jre/lib/rt.jar"
+
+  clang_tools_root="$android_root/prebuilts/clang-tools/linux-arm64"
+  if [[ -L "$clang_tools_root" ]]; then
+    fail "ARM64 clang-tools prebuilt must be real, not a symlink: prebuilts/clang-tools/linux-arm64 -> $(readlink "$clang_tools_root")"
+  fi
+  for tool in bindgen cxx_extractor header-abi-diff header-abi-dumper header-abi-linker ide_query_cc_analyzer proto_metadata_plugin protoc_extractor; do
+    [[ -e "$clang_tools_root/bin/$tool" ]] || continue
+    require_arm64_elf "$clang_tools_root/bin/$tool" "ARM64 clang-tools $tool"
+  done
+  require_arm64_elf "$clang_tools_root/bin/header-abi-dumper" "ARM64 clang-tools header-abi-dumper"
+}
+
+check_arm64_bootanimation_mogrify() {
+  host_is_arm64 || return 0
+  target_enabled arm64 || return 0
+
+  case "${VALIDATE_BOOTANIMATION_MOGRIFY:-1}" in
+    0|false|no|off)
+      log "bootanimation mogrify validation skipped by VALIDATE_BOOTANIMATION_MOGRIFY=0"
+      return 0
+      ;;
+  esac
+
+  log "checking ARM64 host bootanimation mogrify fallback"
+
+  local script prebuilt
+  script="$android_root/vendor/lineage/bootanimation/gen-bootanimation.sh"
+  prebuilt="$android_root/prebuilts/tools-lineage/linux-x86/bin/mogrify"
+
+  require_file "$script"
+  require_file "$prebuilt"
+
+  if [[ -f "$prebuilt" ]] && ! readelf -h "$prebuilt" 2>/dev/null | grep -Eq 'Machine:[[:space:]]+AArch64'; then
+    grep -Fq 'resolve_mogrify()' "$script" || \
+      fail "bootanimation script does not fall back from the x86 mogrify prebuilt: ${script#$android_root/}"
+    command -v mogrify >/dev/null 2>&1 || \
+      fail "ARM64 host bootanimation fallback requires native mogrify; install ImageMagick"
+  fi
+}
+
+check_no_arm64_x86_prebuilt_substitutions() {
+  host_is_arm64 || return 0
+  target_enabled arm64 || return 0
+
+  local link target
+  while IFS= read -r link; do
+    [[ "$(basename "$link")" == "linux-arm64" ]] || continue
+    target="$(readlink "$link")"
+    case "$target" in
+      *linux-x86*|*x86_64*|*x86-64*)
+        fail "ARM64 prebuilt path points at an x86 prebuilt: ${link#$android_root/} -> $target"
+        ;;
+    esac
+  done < <(find "$android_root/prebuilts" -path '*linux-arm64*' -type l -print 2>/dev/null)
 }
 
 check_microg_prebuilts() {
@@ -727,8 +942,14 @@ shift
 mapfile -t targets < <(normalize_targets "$@")
 
 check_unscoped_x86_flags
+check_bison_genrules
+check_trusty_arm64_host_link_config
 check_arm64_clang_compat
+check_arm64_native_host_prebuilts
+check_arm64_bootanimation_mogrify
+check_no_arm64_x86_prebuilt_substitutions
 check_patch_series
+check_patched_xml_resource_references
 check_userdata_policy
 check_microg_prebuilts
 check_webview_prebuilts

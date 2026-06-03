@@ -3880,18 +3880,10 @@ index d17491edd3..f8cd059aac 100644
      <!-- [space] [space] [space] [space] [space] -->
  
 diff --git a/res/xml/device_profiles.xml b/res/xml/device_profiles.xml
-index c931b013fe..6873aca661 100644
+index c931b013fe..0f79a78066 100644
 --- a/res/xml/device_profiles.xml
 +++ b/res/xml/device_profiles.xml
-@@ -281,6 +281,7 @@
-         launcher:isScalable="true"
-         launcher:inlineNavButtonsEndSpacing="@dimen/taskbar_button_margin_6_5"
-         launcher:devicePaddingId="@xml/paddings_6x5"
-+        launcher:allAppsSizeSpecsId="@xml/all_apps_sizes_6x5"
-         launcher:dbFile="launcher_6_by_5.db"
-         launcher:defaultLayoutId="@xml/default_workspace_6x5"
-         launcher:deviceCategory="tablet" >
-@@ -384,4 +385,4 @@
+@@ -384,4 +384,4 @@
  
      </grid-option>
  
@@ -4972,6 +4964,47 @@ index 8a7b875257..f6c57890e3 100644
          private const val SHORTCUT_COLLAPSE_THRESHOLD = 6
  
          /** Returns true if we can show the container. */
+diff --git a/src/com/android/launcher3/taskbar/TaskbarSettingsUris.java b/src/com/android/launcher3/taskbar/TaskbarSettingsUris.java
+new file mode 100644
+index 0000000000..cf34fed710
+--- /dev/null
++++ b/src/com/android/launcher3/taskbar/TaskbarSettingsUris.java
+@@ -0,0 +1,35 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.launcher3.taskbar;
++
++import android.net.Uri;
++
++import lineageos.providers.LineageSettings;
++
++public final class TaskbarSettingsUris {
++    public static final Uri ENABLE_TASKBAR_URI = LineageSettings.System.getUriFor(
++            LineageSettings.System.ENABLE_TASKBAR);
++
++    public static final Uri NAVIGATION_BAR_HINT_URI = LineageSettings.System.getUriFor(
++            LineageSettings.System.NAVIGATION_BAR_HINT);
++
++    public static final Uri FORCE_SHOW_NAVBAR_URI = LineageSettings.System.getUriFor(
++            LineageSettings.System.FORCE_SHOW_NAVBAR);
++
++    private TaskbarSettingsUris() {
++    }
++}
 diff --git a/src/com/android/launcher3/touch/AllAppsSwipeController.java b/src/com/android/launcher3/touch/AllAppsSwipeController.java
 index 24beb7c7c3..569627759e 100644
 --- a/src/com/android/launcher3/touch/AllAppsSwipeController.java

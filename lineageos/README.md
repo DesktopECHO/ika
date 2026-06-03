@@ -18,7 +18,7 @@ lunch lineage_desktop_cf_x86_64-trunk_staging-userdebug
 (The space-separated form `lunch lineage_desktop_cf_arm64_pgagnostic trunk_staging userdebug` also works.)
 
 This product targets Apple Silicon and x86-64 CPUs running in the Cuttlefish emulator.
-Both targets use Cuttlefish's default 62 GiB thin-provisioned f2fs userdata image.
+Both targets use Cuttlefish's default ~64 GB thin-provisioned f2fs userdata image.
 
 ## Source Layout
 
@@ -79,28 +79,26 @@ Building this ROM is a full LineageOS source build and is resource-intensive:
   and build intermediates for both ARM64 and x86-64 targets land in this
   range; a single-target build is smaller but still well over 200 GB.
 - **CPU:** x86-64 Linux is the upstream-supported AOSP build host. ARM64
-  Fedora Asahi hosts work for this project when x86-64 Linux host-tool
-  emulation is installed; more cores shorten the build proportionally, and
-  `JOBS` defaults to `nproc`.
+  Fedora Asahi hosts are supported by this project with ARM64 host prebuilts
+  only; more cores shorten the build proportionally, and `JOBS` defaults to
+  `nproc`.
 
 ### ARM64 Build Hosts
 
-Current AOSP and LineageOS branches still execute x86-64 Linux host prebuilts
-during source builds, even when the target product is ARM64. On Fedora Asahi,
-install FEX and its rootfs before running the ROM build:
+ARM64 host builds require real `linux-arm64` prebuilts for host tools. The
+build script refuses symlinked `linux-x86` substitutions. Clang-tools are
+pulled from AOSP's `platform/prebuilts/clang-tools` `mirror-goog-main-prebuilts`
+branch by default; provide the remaining ARM64 Rust, CMake, JDK, Go, Clang, and
+build-tools prebuilts before building. The Rust prebuilt must include both
+`aarch64-unknown-linux-gnu` and `aarch64-unknown-linux-musl` stdlibs. On Apple
+Silicon's 16 KiB-page kernels, install `muvm` so the build can run in a
+4 KiB-page guest:
 
 ```bash
-sudo dnf install -y fex-emu fex-emu-rootfs-fedora muvm
+sudo dnf install -y muvm
 ```
 
-`binfmt-dispatcher` is installed by default on Fedora Asahi and routes x86-64
-ELF execution through FEX. On Apple Silicon's 16 KiB-page kernels, `muvm` gives
-FEX a compatible 4 KiB-page environment for those Android prebuilts.
-
-The build script checks this before syncing sources by running a tiny x86-64
-ELF probe. If the probe fails, it prints the package command above instead of
-letting the Android build fail later in Soong. For local use on an ARM64 host,
-build the ARM64 Cuttlefish product:
+For local use on an ARM64 host, build the ARM64 Cuttlefish product:
 
 ```bash
 ./lineageos/scripts/build_lineageos_desktop.sh arm64
@@ -129,10 +127,11 @@ the local `lineage_desktop` tree, applies the patches in `patches/`, refreshes
 the microG prebuilts, installs the x86-64 ARM native bridge payload, and builds
 both Cuttlefish products.
 
-Before compiling, the script runs `scripts/validate_build_inputs.sh` to verify
+Before compiling, the script runs `scripts/lib/validate_build_inputs.sh` to verify
 that source patches are applied, required desktop aconfig flags are enabled,
-userdata remains the default 62 GiB f2fs image, microG and WebView APKs are valid
-zip files, and the x86-64 native bridge payload is complete. Set
+patched XML files do not reference missing local XML resources, userdata remains
+the default ~64 GB f2fs image, microG and WebView APKs are valid zip files, and
+the x86-64 native bridge payload is complete. Set
 `VALIDATE_BUILD_INPUTS=0` only for local experiments.
 
 The build signs target-files and extracted images before packaging the final
@@ -299,14 +298,20 @@ lineageos/scripts/rebuild_cf_desktop_arm64.sh
 lineageos/scripts/rebuild_cf_desktop_x86_64.sh
 ```
 
-The x86-64 helper also refreshes the native bridge payload unless
-`INCLUDE_X86_ARM_NATIVE_BRIDGE=0` is set.
+These are thin wrappers around `build_lineageos_desktop.sh` run with `REBUILD=1`,
+which reuses the existing tree (skips repo sync and source patching) and then
+builds, signs, and bundles exactly as a full run. Override with `SKIP_SYNC=0` /
+`SKIP_PATCH=0` to re-enable either step. The x86-64 helper still refreshes the
+native bridge payload unless `INCLUDE_X86_ARM_NATIVE_BRIDGE=0` is set, and the
+host/target matrix is enforced (x86-64 builds on x86-64 hosts only; arm64 builds
+on x86-64 and arm64 hosts).
 
-Those development helpers write to:
+They write the Cuttlefish bundle into the same per-arch directories as a full
+build:
 
 ```text
-/home/zero/temp/lineageos-desktop-arm64.tar
-/home/zero/temp/lineageos-desktop-x86_64.tar
+lineageos-arm64/
+lineageos-x86_64/
 ```
 
 ## Validation
@@ -314,7 +319,7 @@ Those development helpers write to:
 Before building from an already-synced checkout:
 
 ```bash
-vendor/lineage_desktop/scripts/validate_build_inputs.sh "$PWD" arm64 x86_64
+vendor/lineage_desktop/scripts/lib/validate_build_inputs.sh "$PWD" arm64 x86_64
 ```
 
 This checks release inputs without needing a booted device.

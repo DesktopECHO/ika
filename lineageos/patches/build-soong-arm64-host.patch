@@ -1,5 +1,5 @@
 diff --git a/android/arch.go b/android/arch.go
-index 318ab4513..f63895b14 100644
+index 318ab4513..eb1d74686 100644
 --- a/android/arch.go
 +++ b/android/arch.go
 @@ -1653,6 +1653,18 @@ func decodeTargetProductVariables(config *config) (map[OsType][]Target, error) {
@@ -21,18 +21,6 @@ index 318ab4513..f63895b14 100644
  		targets[target.os] = append(targets[target.os],
  			Target{
  				Os:                       target.os,
-@@ -1671,6 +1683,11 @@ func decodeTargetProductVariables(config *config) (map[OsType][]Target, error) {
- 	// The primary host target, which must always exist.
- 	addTarget(targetConfig{os: config.BuildOS, archName: *variables.HostArch, nativeBridgeEnabled: NativeBridgeDisabled})
- 
-+	if config.BuildOS == LinuxMusl && config.BuildArch == Arm64 &&
-+		config.Getenv("ANDROID_RUST_X86_PROC_MACRO_FALLBACK") == "1" {
-+		addTarget(targetConfig{os: config.BuildOS, archName: "x86_64", nativeBridgeEnabled: NativeBridgeDisabled})
-+	}
-+
- 	// An optional secondary host target.
- 	if variables.HostSecondaryArch != nil && *variables.HostSecondaryArch != "" {
- 		addTarget(targetConfig{os: config.BuildOS, archName: *variables.HostSecondaryArch, nativeBridgeEnabled: NativeBridgeDisabled})
 diff --git a/android/paths.go b/android/paths.go
 index cbd2ab435..49fa65261 100644
 --- a/android/paths.go
@@ -124,7 +112,7 @@ index d2e3e4ab0..570ed8cb7 100644
  	if err != nil {
  		return nil, err
 diff --git a/java/config/config.go b/java/config/config.go
-index 2b539abd7..34de11258 100644
+index 2b539abd7..61e3a148c 100644
 --- a/java/config/config.go
 +++ b/java/config/config.go
 @@ -135,6 +135,10 @@ func init() {
@@ -132,7 +120,7 @@ index 2b539abd7..34de11258 100644
  		return ctx.Config().Getenv("ANDROID_JAVA_HOME")
  	})
 +	pctx.VariableFunc("Java8Home", func(ctx android.PackageVarContext) string {
-+		// This is set up by soong_ui, which may fall back to the x86 JDK8 jars on ARM64.
++		// This is set up by soong_ui for the active host prebuilt tag.
 +		return ctx.Config().Getenv("ANDROID_JAVA8_HOME")
 +	})
  	pctx.VariableFunc("JlinkVersion", func(ctx android.PackageVarContext) string {
@@ -151,15 +139,47 @@ index 649b6c58f..6a58c2204 100644
  	ctx.Strict("ANDROID_JAVA_TOOLCHAIN", "${JavaToolchain}")
  	ctx.Strict("JAVA", "${JavaCmd} ${JavaVmFlags}")
  	ctx.Strict("JAVAC", "${JavacCmd} ${JavacVmFlags}")
+diff --git a/rust/binary.go b/rust/binary.go
+index 87e616172..28cb7b50a 100644
+--- a/rust/binary.go
++++ b/rust/binary.go
+@@ -75,7 +75,7 @@ func NewRustBinary(hod android.HostOrDeviceSupported) (*Module, *binaryDecorator
+ func (binary *binaryDecorator) begin(ctx BaseModuleContext) {
+ 	binary.baseCompiler.begin(ctx)
+ 
+-	if ctx.Os().Linux() && ctx.Host() && ctx.toolchain().Musl() {
++	if ctx.Os().Linux() && ctx.Host() && (ctx.toolchain().Musl() || linuxMuslArm64HostCross(ctx)) {
+ 		// Unless explicitly specified otherwise, host static binaries are built statically
+ 		// if HostStaticBinaries is true for the product configuration.
+ 		// In Rust however this is only supported for musl targets.
+@@ -84,7 +84,8 @@ func (binary *binaryDecorator) begin(ctx BaseModuleContext) {
+ 		}
+ 	}
+ 
+-	if ctx.Darwin() || ctx.Windows() || (ctx.Os().Linux() && ctx.Host() && ctx.toolchain().Glibc()) {
++	if ctx.Darwin() || ctx.Windows() ||
++		(ctx.Os().Linux() && ctx.Host() && ctx.toolchain().Glibc() && !linuxMuslArm64HostCross(ctx)) {
+ 		// Static executables are not supported on Darwin, Linux glibc, or Windows
+ 		binary.Properties.Static_executable = nil
+ 	}
+@@ -122,7 +123,7 @@ func (binary *binaryDecorator) compilerDeps(ctx DepsContext, deps Deps) Deps {
+ 			deps.CrtBegin = []string{"crtbegin_dynamic"}
+ 		}
+ 		deps.CrtEnd = []string{"crtend_android"}
+-	} else if ctx.Os() == android.LinuxMusl {
++	} else if linuxMuslArm64HostCross(ctx) || (ctx.Os() == android.LinuxMusl && !ctx.toolchain().Glibc()) {
+ 		deps = muslDeps(ctx, deps, static)
+ 		if static {
+ 			deps.CrtBegin = []string{"libc_musl_crtbegin_static"}
 diff --git a/rust/bindgen.go b/rust/bindgen.go
-index 81b77e85b..3ec8a170a 100644
+index 81b77e85b..78183e81e 100644
 --- a/rust/bindgen.go
 +++ b/rust/bindgen.go
 @@ -45,6 +45,9 @@ var (
  	//TODO(b/160803703) Use a prebuilt bindgen instead of the built bindgen.
  	_ = pctx.HostBinToolVariable("bindgenCmd", "bindgen")
  	_ = pctx.VariableFunc("bindgenHostPrebuiltTag", func(ctx android.PackageVarContext) string {
-+		if ctx.Config().BuildArch == android.Arm64 && ctx.Config().Getenv("LLVM_BINDGEN_PREBUILTS_VERSION") != "" {
++		if ctx.Config().BuildArch == android.Arm64 {
 +			return "linux-arm64"
 +		}
  		if ctx.Config().UseHostMusl() {
@@ -169,117 +189,199 @@ index 81b77e85b..3ec8a170a 100644
  		}
  	})
  	_ = pctx.VariableFunc("bindgenClangLibdir", func(ctx android.PackageVarContext) string {
-+		if ctx.Config().BuildArch == android.Arm64 && ctx.Config().Getenv("LLVM_BINDGEN_PREBUILTS_VERSION") != "" {
++		if ctx.Config().BuildArch == android.Arm64 {
 +			return "lib/"
 +		}
  		if ctx.Config().UseHostMusl() {
  			return "musl/lib/"
  		} else {
+@@ -399,6 +405,8 @@ func (b *bindgenDecorator) SourceProviderDeps(ctx DepsContext, deps Deps) Deps {
+ 	if ctx.toolchain().Bionic() && !ctx.RustModule().compiler.noStdlibs() {
+ 		deps = bionicDeps(ctx, deps, false)
+ 	} else if ctx.Os() == android.LinuxMusl {
++		// bindgen parses C/C++ for the musl cc host, so it needs musl libc headers
++		// regardless of the (gnu) rust toolchain identity; muslDeps supplies them.
+ 		deps = muslDeps(ctx, deps, false)
+ 	}
+ 
+diff --git a/rust/builder.go b/rust/builder.go
+index 298098335..5f7eb22ed 100644
+--- a/rust/builder.go
++++ b/rust/builder.go
+@@ -143,7 +143,7 @@ func getTransformProperties(ctx ModuleContext, crateType string) transformProper
+ 	return transformProperties{
+ 		crateName:       module.CrateName(),
+ 		is64Bit:         ctx.toolchain().Is64Bit(),
+-		targetTriple:    ctx.toolchain().RustTriple(),
++		targetTriple:    rustTargetTriple(ctx, ctx.toolchain()),
+ 		bootstrap:       module.Bootstrap(),
+ 		inRecovery:      module.InRecovery(),
+ 		inRamdisk:       module.InRamdisk(),
+@@ -204,7 +204,7 @@ func TransformRlibstoStaticlib(ctx android.ModuleContext, mainSrc android.Path,
+ 		// already set to the module name.
+ 		crateName:       "generated_rust_staticlib",
+ 		is64Bit:         toolchain.Is64Bit(),
+-		targetTriple:    toolchain.RustTriple(),
++		targetTriple:    rustTargetTriple(ctx, toolchain),
+ 		bootstrap:       mod.Bootstrap(),
+ 		inRecovery:      mod.InRecovery(),
+ 		inRamdisk:       mod.InRamdisk(),
 diff --git a/rust/compiler.go b/rust/compiler.go
-index 631843528..8bbc994ab 100644
+index 631843528..9d93b94ee 100644
 --- a/rust/compiler.go
 +++ b/rust/compiler.go
-@@ -392,7 +392,8 @@ func cfgsToFlags(cfgs []string) []string {
- }
- 
- func (compiler *baseCompiler) features(ctx ModuleContext) []string {
--	return compiler.Properties.Features.GetOrDefault(ctx, nil)
-+	features := compiler.Properties.Features.GetOrDefault(ctx, nil)
-+	return filterArm64MuslProcMacroFeatures(ctx, compiler.crateName(), features)
- }
- 
- func (compiler *baseCompiler) featuresToFlags(ctx ModuleContext) []string {
-@@ -430,13 +431,45 @@ func CommonDefaultCfgFlags(flags Flags, vendor bool, product bool) Flags {
- func (compiler *baseCompiler) cfgFlags(ctx ModuleContext, flags Flags) Flags {
- 	flags = CommonDefaultCfgFlags(flags, ctx.RustModule().InVendor(), ctx.RustModule().InProduct())
- 
--	cfgFlags := cfgsToFlags(compiler.Properties.Cfgs.GetOrDefault(ctx, nil))
-+	cfgs := filterArm64MuslProcMacroCfgs(ctx, compiler.crateName(), compiler.Properties.Cfgs.GetOrDefault(ctx, nil))
-+	cfgFlags := cfgsToFlags(cfgs)
- 	flags.RustFlags = append(flags.RustFlags, cfgFlags...)
- 	flags.RustdocFlags = append(flags.RustdocFlags, cfgFlags...)
- 
+@@ -437,6 +437,25 @@ func (compiler *baseCompiler) cfgFlags(ctx ModuleContext, flags Flags) Flags {
  	return flags
  }
  
-+func filterArm64MuslProcMacroFeatures(ctx ModuleContext, crateName string, features []string) []string {
-+	if arm64MuslProcMacroFallback(ctx) && arm64MuslProcMacroFeatureCrate(crateName) {
-+		return android.RemoveListFromList(features, []string{"proc-macro"})
-+	}
-+	return features
++type linuxMuslArm64Context interface {
++	Host() bool
++	Os() android.OsType
++	Arch() android.Arch
++	Target() android.Target
 +}
 +
-+func filterArm64MuslProcMacroCfgs(ctx ModuleContext, crateName string, cfgs []string) []string {
-+	if arm64MuslProcMacroFallback(ctx) && crateName == "proc_macro2" {
-+		return android.RemoveListFromList(cfgs, []string{
-+			"proc_macro_span",
-+			"proc_macro_span_file",
-+			"proc_macro_span_location",
-+			"wrap_proc_macro",
-+		})
-+	}
-+	return cfgs
++func linuxMuslArm64HostCross(ctx linuxMuslArm64Context) bool {
++	return ctx.Host() && ctx.Os() == android.LinuxMusl &&
++		ctx.Arch().ArchType == android.Arm64 && ctx.Target().HostCross
 +}
 +
-+func arm64MuslProcMacroFallback(ctx ModuleContext) bool {
-+	return ctx.Target().Os == android.LinuxMusl && ctx.Target().Arch.ArchType == android.Arm64
-+}
-+
-+func arm64MuslProcMacroFeatureCrate(crateName string) bool {
-+	switch crateName {
-+	case "proc_macro2", "quote", "syn", "synstructure":
-+		return true
++func rustTargetTriple(ctx android.ModuleContext, toolchain config.Toolchain) string {
++	if linuxMuslArm64HostCross(ctx) {
++		return "aarch64-unknown-linux-musl"
 +	}
-+	return false
++	return toolchain.RustTriple()
 +}
 +
  func CommonDefaultFlags(ctx android.ModuleContext, toolchain config.Toolchain, flags Flags) Flags {
  	flags.GlobalRustFlags = append(flags.GlobalRustFlags, config.GlobalRustFlags...)
  	flags.GlobalRustFlags = append(flags.GlobalRustFlags, toolchain.ToolchainRustFlags())
-@@ -543,7 +576,7 @@ func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
- 		for _, stdlib := range config.Stdlibs {
- 			// If we're building for the build host, use the prebuilt stdlibs, unless the host
- 			// is linux_bionic which doesn't have prebuilts.
--			if ctx.Host() && !ctx.Target().HostCross && ctx.Target().Os != android.LinuxBionic {
-+			if usePrebuiltStdlib(ctx) {
- 				stdlib = "prebuilt_" + stdlib
- 			}
- 			deps.Stdlibs = append(deps.Stdlibs, stdlib)
-@@ -559,6 +592,20 @@ func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
+@@ -447,7 +466,13 @@ func CommonDefaultFlags(ctx android.ModuleContext, toolchain config.Toolchain, f
+ 		flags.LinkFlags = append(flags.LinkFlags, cc.RpathFlags(ctx)...)
+ 	}
+ 
+-	if ctx.Os() == android.Linux {
++	if linuxMuslArm64HostCross(ctx) {
++		// Native ARM64 hosts keep the GNU Rust ABI so rustc can load proc macros.
++		// Cross-host ARM64 artifacts are linked by cc as musl and must match that ABI.
++		flags.GlobalRustFlags = append(flags.GlobalRustFlags, config.LinuxRustFlags...)
++		flags.GlobalRustFlags = append(flags.GlobalRustFlags, config.LinuxMuslRustFlags...)
++		flags.GlobalLinkFlags = append(flags.GlobalLinkFlags, config.LinuxRustMuslLinkFlags...)
++	} else if ctx.Os() == android.Linux || (ctx.Host() && ctx.Os().Linux() && toolchain.Glibc()) {
+ 		// Add -lc, -lrt, -ldl, -lpthread, -lm and -lgcc_s to glibc builds to match
+ 		// the default behavior of device builds.
+ 		flags.RustFlags = append(flags.RustFlags, config.LinuxHostGlobalRustFlags...)
+@@ -591,6 +616,12 @@ func muslDeps(ctx DepsContext, deps Deps, static bool) Deps {
+ 		deps.StaticLibs = append(deps.StaticLibs, libRuntimeBuiltins)
+ 	}
+ 
++	// LineageOS: bindgen on a musl host needs the musl libc headers (the generated
++	// bits/ headers and android/include's sys/cdefs.h) on clang's include path.
++	// libc_musl is a shared-lib dep whose exports don't reach SourceProviders like
++	// bindgen, so add the musl header libs explicitly.
++	deps.HeaderLibs = append(deps.HeaderLibs, "libc_musl_public_headers", "libc_musl_arch_headers")
++
  	return deps
  }
  
-+func usePrebuiltStdlib(ctx DepsContext) bool {
-+	if !ctx.Host() || ctx.Target().Os == android.LinuxBionic {
-+		return false
+diff --git a/rust/config/arm_linux_host.go b/rust/config/arm_linux_host.go
+index 6e7593204..a334527a4 100644
+--- a/rust/config/arm_linux_host.go
++++ b/rust/config/arm_linux_host.go
+@@ -21,10 +21,18 @@ import (
+ )
+ 
+ var (
+-	linuxArmRustflags   = []string{}
+-	linuxArmLinkflags   = []string{}
+-	linuxArm64Rustflags = []string{}
+-	linuxArm64Linkflags = []string{}
++	linuxArmRustflags        = []string{}
++	linuxArmLinkflags        = []string{}
++	linuxArm64Rustflags      = []string{}
++	linuxArm64Linkflags      = []string{}
++	linuxArm64GlibcLinkflags = []string{
++		"-Wl,-z,noexecstack",
++		"-Wl,-z,relro",
++		"-Wl,-z,now",
++		"-Wl,--no-undefined-version",
++		"-Wl,--compress-debug-sections=zstd",
++		"-Wl,--build-id=md5",
 +	}
-+	if !ctx.Target().HostCross {
-+		return !(ctx.Target().Os == android.LinuxMusl && ctx.Target().Arch.ArchType == android.Arm64)
-+	}
-+	return ctx.Config().BuildArch == android.Arm64 &&
-+		ctx.Config().UseHostMusl() &&
-+		ctx.Config().IsEnvTrue("ANDROID_RUST_X86_PROC_MACRO_FALLBACK") &&
-+		ctx.Target().Os == android.LinuxMusl &&
-+		ctx.Target().Arch.ArchType == android.X86_64
+ )
+ 
+ func init() {
+@@ -35,6 +43,7 @@ func init() {
+ 	pctx.StaticVariable("LinuxToolchainArmLinkFlags", strings.Join(linuxArmLinkflags, " "))
+ 	pctx.StaticVariable("LinuxToolchainArm64RustFlags", strings.Join(linuxArm64Rustflags, " "))
+ 	pctx.StaticVariable("LinuxToolchainArm64LinkFlags", strings.Join(linuxArm64Linkflags, " "))
++	pctx.StaticVariable("LinuxToolchainArm64GlibcLinkFlags", strings.Join(linuxArm64GlibcLinkflags, " "))
+ }
+ 
+ // Base 64-bit linux rust toolchain
+@@ -64,22 +73,30 @@ func (t *toolchainLinuxArm64) ToolchainRustFlags() string {
+ 	return "${config.LinuxToolchainRustFlags} ${config.LinuxToolchainArm64RustFlags}"
+ }
+ 
+-// Specialization of the 64-bit linux rust toolchain for musl.  Adds the musl rust triple and
+-// linker flags to avoid using the host sysroot.
++// Specialization of the 64-bit linux rust toolchain for ARM64 hosts.
++//
++// Soong uses LinuxMusl variants for ARM64 Linux host modules, but the ARM64
++// Rust compiler we run is a GNU-host toolchain. Keep the Rust triple and
++// stdlib ABI aligned with rustc so proc macros can be loaded by the compiler.
+ type toolchainLinuxMuslArm64 struct {
+ 	toolchainLinuxArm64
+ }
+ 
+ func (t *toolchainLinuxMuslArm64) RustTriple() string {
+-	return "aarch64-unknown-linux-musl"
++	return "aarch64-unknown-linux-gnu"
+ }
+ 
+ func (t *toolchainLinuxMuslArm64) ToolchainLinkFlags() string {
+-	return t.toolchainLinuxArm64.ToolchainLinkFlags() + " " + "${config.LinuxMuslToolchainLinkFlags}"
++	return "${config.LinuxToolchainArm64GlibcLinkFlags} ${cc_config.LinuxArm64Ldflags} " +
++		"${config.LinuxToolchainLinkFlags} ${config.LinuxToolchainArm64LinkFlags}"
+ }
+ 
+ func (t *toolchainLinuxMuslArm64) ToolchainRustFlags() string {
+-	return t.toolchainLinuxArm64.ToolchainRustFlags() + " " + "${config.LinuxMuslToolchainRustFlags}"
++	return "${config.LinuxToolchainArm64RustFlags}"
 +}
 +
- func bionicDeps(ctx DepsContext, deps Deps, static bool) Deps {
- 	bionicLibs := []string{}
- 	bionicLibs = append(bionicLibs, "liblog")
++func (t *toolchainLinuxMuslArm64) Glibc() bool {
++	return true
+ }
+ 
+ func linuxMuslArm64ToolchainFactory(arch android.Arch) Toolchain {
+diff --git a/rust/config/global.go b/rust/config/global.go
+index c8044356b..69839020f 100644
+--- a/rust/config/global.go
++++ b/rust/config/global.go
+@@ -177,6 +177,9 @@ func init() {
+ 
+ func HostPrebuiltTag(config android.Config) string {
+ 	if config.UseHostMusl() {
++		if config.BuildArch == android.Arm64 {
++			return "linux-arm64"
++		}
+ 		return "linux-musl-x86"
+ 	} else {
+ 		return config.PrebuiltOS()
 diff --git a/rust/library.go b/rust/library.go
-index fc0cafa0c..0045dcfb9 100644
+index fc0cafa0c..a518c9d88 100644
 --- a/rust/library.go
 +++ b/rust/library.go
-@@ -618,8 +618,7 @@ func (library *libraryDecorator) cfgFlags(ctx ModuleContext, flags Flags) Flags
- 	flags = library.baseCompiler.cfgFlags(ctx, flags)
- 	flags = CommonLibraryCfgFlags(ctx, flags)
- 
--	cfgs := library.baseCompiler.Properties.Cfgs.GetOrDefault(ctx, nil)
--
-+	cfgs := filterArm64MuslProcMacroCfgs(ctx, library.baseCompiler.crateName(), library.baseCompiler.Properties.Cfgs.GetOrDefault(ctx, nil))
- 	cfgFlags := cfgsToFlags(cfgs)
- 
- 	flags.RustFlags = append(flags.RustFlags, cfgFlags...)
+@@ -595,7 +595,7 @@ func (library *libraryDecorator) compilerDeps(ctx DepsContext, deps Deps) Deps {
+ 			deps = bionicDeps(ctx, deps, false)
+ 			deps.CrtBegin = []string{"crtbegin_so"}
+ 			deps.CrtEnd = []string{"crtend_so"}
+-		} else if ctx.Os() == android.LinuxMusl {
++		} else if linuxMuslArm64HostCross(ctx) || (ctx.Os() == android.LinuxMusl && !ctx.toolchain().Glibc()) {
+ 			deps = muslDeps(ctx, deps, false)
+ 			deps.CrtBegin = []string{"libc_musl_crtbegin_so"}
+ 			deps.CrtEnd = []string{"libc_musl_crtend_so"}
 diff --git a/rust/prebuilt.go b/rust/prebuilt.go
 index b7db742f5..e24fd3647 100644
 --- a/rust/prebuilt.go
@@ -306,47 +408,44 @@ index 568f82faf..f95fd9224 100644
  	return module.Init()
  }
  
-diff --git a/rust/rust.go b/rust/rust.go
-index 80a823162..b3010285c 100644
---- a/rust/rust.go
-+++ b/rust/rust.go
-@@ -2234,8 +2234,19 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
+diff --git a/scripts/rustc_wrapper.sh b/scripts/rustc_wrapper.sh
+index 6a249243a..24dfa8cd1 100644
+--- a/scripts/rustc_wrapper.sh
++++ b/scripts/rustc_wrapper.sh
+@@ -33,6 +33,15 @@ fi
  
- 	actx.AddVariationDependencies(nil, dataBinDepTag, deps.DataBins...)
- 
--	// proc_macros are compiler plugins, and so we need the host arch variant as a dependendcy.
--	actx.AddFarVariationDependencies(ctx.Config().BuildOSTarget.Variations(), procMacroDepTag, deps.ProcMacros...)
-+	// proc_macros are compiler plugins, and so we need the rustc host arch variant
-+	// as a dependency. On ARM64 Linux, Android still ships only the x86_64 musl
-+	// Rust compiler prebuilt, so procedural macros must match that compiler.
-+	procMacroVariations := ctx.Config().BuildOSTarget.Variations()
-+	if ctx.Config().BuildArch == android.Arm64 &&
-+		ctx.Config().UseHostMusl() &&
-+		ctx.Config().IsEnvTrue("ANDROID_RUST_X86_PROC_MACRO_FALLBACK") {
-+		procMacroVariations = []blueprint.Variation{
-+			{Mutator: "os", Variation: android.LinuxMusl.String()},
-+			{Mutator: "arch", Variation: android.X86_64.String()},
-+		}
-+	}
-+	actx.AddFarVariationDependencies(procMacroVariations, procMacroDepTag, deps.ProcMacros...)
- 
- 	mod.afdo.addDep(ctx, actx)
- }
+ exec_path=$1
+ shift
++
++case "$exec_path" in
++  *prebuilts/rust/linux-arm64/*/bin/rustc|\
++  *prebuilts/rust/linux-arm64/*/bin/clippy-driver|\
++  *prebuilts/rust/linux-arm64/*/bin/rustdoc)
++    export RUSTC_BOOTSTRAP="${RUSTC_BOOTSTRAP:-1}"
++    ;;
++esac
++
+ $exec_path "$@"
+ # Loop through arguments and determine if we emitted a dep file.
+ # If so do some post-processing on it.
 diff --git a/test_suites/test_suites.go b/test_suites/test_suites.go
-index 9b7961ee0..38d61a750 100644
+index 9b7961ee0..9aabb425e 100644
 --- a/test_suites/test_suites.go
 +++ b/test_suites/test_suites.go
-@@ -1050,6 +1050,32 @@ func buildSharedReport(
+@@ -1049,7 +1049,34 @@ func buildSharedReport(
+ }
  
  func addJdkToZip(ctx android.SingletonContext, command *android.RuleBuilderCommand, subdir string) {
- 	jdkHome := filepath.Dir(ctx.Config().Getenv("ANDROID_JAVA_HOME")) + "/linux-x86"
+-	jdkHome := filepath.Dir(ctx.Config().Getenv("ANDROID_JAVA_HOME")) + "/linux-x86"
++	hostPrebuiltTag := ctx.Config().PrebuiltOS()
++	jdkHome := filepath.Join(filepath.Dir(ctx.Config().Getenv("ANDROID_JAVA_HOME")), hostPrebuiltTag)
 +	if filepath.IsAbs(jdkHome) {
 +		top := android.AbsSrcDirForExistingUseCases()
 +		rel, err := filepath.Rel(top, jdkHome)
 +		if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
 +			candidates := []string{
-+				filepath.Join("prebuilts", "jdk", "jdk21", "linux-x86"),
-+				filepath.Join("prebuilts", "jdk", "jdk25", "linux-x86"),
++				filepath.Join("prebuilts", "jdk", "jdk21", hostPrebuiltTag),
++				filepath.Join("prebuilts", "jdk", "jdk25", hostPrebuiltTag),
 +			}
 +			if strings.Contains(ctx.Config().Getenv("ANDROID_JAVA_HOME"), "25") {
 +				candidates[0], candidates[1] = candidates[1], candidates[0]
@@ -369,29 +468,8 @@ index 9b7961ee0..38d61a750 100644
  	glob := jdkHome + "/**/*"
  	files, err := ctx.GlobWithDeps(glob, nil)
  	if err != nil {
-diff --git a/ui/build/config.go b/ui/build/config.go
-index 1d793ad45..a48c8c29e 100644
---- a/ui/build/config.go
-+++ b/ui/build/config.go
-@@ -563,6 +563,16 @@ func newConfig(ctx Context, isDumpVar bool, args ...string) Config {
- func ConfigJavaEnvironment(ctx Context, config *configImpl) {
- 	// Configure Java-related variables, including adding it to $PATH
- 	java8Home := filepath.Join("prebuilts/jdk/jdk8", config.HostPrebuiltTag())
-+	if runtime.GOOS == "linux" && runtime.GOARCH == "arm64" {
-+		// The JDK8 bootclasspath jars are architecture-independent, and some
-+		// branches do not carry a linux-arm64 copy of the legacy JDK8 prebuilt.
-+		if _, err := os.Stat(filepath.Join(java8Home, "jre/lib/rt.jar")); err != nil {
-+			x86Java8Home := filepath.Join("prebuilts/jdk/jdk8", "linux-x86")
-+			if _, err := os.Stat(filepath.Join(x86Java8Home, "jre/lib/rt.jar")); err == nil {
-+				java8Home = x86Java8Home
-+			}
-+		}
-+	}
- 	java21Home := filepath.Join("prebuilts/jdk/jdk21", config.HostPrebuiltTag())
- 	java25Home := filepath.Join("prebuilts/jdk/jdk25", config.HostPrebuiltTag())
- 	javaHome := func() string {
 diff --git a/ui/build/soong.go b/ui/build/soong.go
-index c9b303c5b..0337bf5e5 100644
+index c9b303c5b..d29955029 100644
 --- a/ui/build/soong.go
 +++ b/ui/build/soong.go
 @@ -241,6 +241,11 @@ func (pb PrimaryBuilderFactory) primaryBuilderInvocation(config Config) bootstra
@@ -406,3 +484,42 @@ index c9b303c5b..0337bf5e5 100644
  
  	var allArgs []string
  	allArgs = append(allArgs, pb.specificArgs...)
+diff --git a/cmd/dir_to_depfile/dir_to_depfile.go b/cmd/dir_to_depfile/dir_to_depfile.go
+index afc3d027c..d16d49cdc 100644
+--- a/cmd/dir_to_depfile/dir_to_depfile.go
++++ b/cmd/dir_to_depfile/dir_to_depfile.go
+@@ -23,6 +23,7 @@ import (
+ 	"log"
+ 	"os"
+ 	"path/filepath"
++	"strings"
+ 
+ 	"android/soong/makedeps"
+ )
+@@ -73,8 +74,26 @@ func collectDirectoryDeps(dir string) (deps []string, err error) {
+ 		if err != nil {
+ 			return err
+ 		}
++		if shouldSkipDep(path, d) {
++			if d.IsDir() {
++				return filepath.SkipDir
++			}
++			return nil
++		}
+ 		deps = append(deps, path)
+ 		return nil
+ 	})
+ 	return deps, err
+ }
++
++func shouldSkipDep(path string, d fs.DirEntry) bool {
++	name := d.Name()
++	if name == ".git" {
++		return true
++	}
++
++	// Trusty dir_srcs bind-mount prebuilt toolchains into nsjail, but tracking
++	// every file in those immutable trees creates oversized Ninja deps records.
++	depPath := filepath.ToSlash(path)
++	return depPath == "prebuilts" || strings.HasPrefix(depPath, "prebuilts/")
++}

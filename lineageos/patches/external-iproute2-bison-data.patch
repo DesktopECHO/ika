@@ -1,0 +1,21 @@
+diff --git a/tc/Android.bp b/tc/Android.bp
+--- a/tc/Android.bp
++++ b/tc/Android.bp
+@@ -41,7 +41,7 @@ genrule {
+ 
+ genrule {
+     name: "emp_ematch.yacc.c",
+-    cmd: "M4=$(location m4) $(location bison) -y --output=$(genDir)/emp_ematch.yacc.c $(in)",
++    cmd: "BISON_PKGDATADIR=$$(dirname $$(dirname $$(dirname $(location bison))))/common/bison M4=$(location m4) $(location bison) -y --output=$(genDir)/emp_ematch.yacc.c $(in)",
+     out: ["emp_ematch.yacc.c"],
+     srcs: ["emp_ematch.y"],
+     tools: [
+@@ -54,7 +54,7 @@ genrule {
+     name: "emp_ematch.yacc.h",
+     // bison --defines outputs an extra file in addition to outputting the parser,
+     // so we still use --output to ensure the unused file is still in genDir.
+-    cmd: "M4=$(location m4) $(location bison) -y --defines=$(genDir)/emp_ematch.yacc.h --output=$(genDir)/unused $(in)",
++    cmd: "BISON_PKGDATADIR=$$(dirname $$(dirname $$(dirname $(location bison))))/common/bison M4=$(location m4) $(location bison) -y --defines=$(genDir)/emp_ematch.yacc.h --output=$(genDir)/unused $(in)",
+     out: ["emp_ematch.yacc.h"],
+     srcs: ["emp_ematch.y"],
+     tools: [

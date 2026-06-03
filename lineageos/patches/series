@@ -4,9 +4,16 @@
 # patches see the modified headers/exports.
 external/google-highway patches/external-google-highway.patch
 . patches/clang22.patch
+external/trusty/lk patches/external-trusty-lk-arm64-host-rust-link.patch
+external/trusty/lk patches/external-trusty-lk-host-target-config.patch
+trusty/kernel patches/trusty-kernel-arm64-host-dtc.patch
+trusty/kernel patches/trusty-kernel-arm64-host-clang-target.patch
 external/libpcap patches/external-libpcap-bison-data.patch
 external/one-true-awk patches/external-one-true-awk-bison-data.patch
+external/iproute2 patches/external-iproute2-bison-data.patch
+external/mesa3d patches/external-mesa3d-bison-data.patch
 prebuilts/rust patches/prebuilts-rust-x86-musl-stdlib.patch
+external/musl patches/external-musl-lfs64-compat.patch
 external/rust/android-crates-io patches/external-rust-android-crates-io-arm64-host-cross.patch
 external/cronet patches/external-cronet-arm64-host-cross.patch
 external/sdv/vsomeip patches/external-sdv-vsomeip-arm64-host-cross.patch
@@ -25,15 +32,18 @@ frameworks/native patches/frameworks-native-logspam.patch
 # independently when chasing an AOSP rebase.
 frameworks/base patches/frameworks-base.patch
 frameworks/base patches/frameworks-base-native-bridge.patch
-frameworks/base patches/frameworks-base-logspam.patch
 system/core patches/system-core.patch
 system/sepolicy patches/system-sepolicy.patch
+system/sepolicy patches/system-sepolicy-checkfc-arm64-getopt.patch
 packages/apps/Launcher3 patches/packages-apps-Launcher3.patch
 vendor/lineage patches/vendor-lineage.patch
+vendor/lineage patches/vendor-lineage-arm64-host-kernel-tools.patch
+vendor/lineage patches/vendor-lineage-arm64-host-mogrify.patch
 build/soong patches/build-soong-arm64-host.patch
 build/make patches/build-make-arm64-host.patch
 prebuilts/build-tools patches/prebuilts-build-tools-arm64-host.patch
 prebuilts/jdk/jdk21 patches/prebuilts-jdk21-arm64-host.patch
+trusty/user/base patches/trusty-user-base-arm64-host-boringssl.patch
 frameworks/libs/binary_translation patches/frameworks-libs-binary-translation-arm64-host.patch
 build/make patches/build-make-releasetools.patch
 build/release patches/build-release.patch

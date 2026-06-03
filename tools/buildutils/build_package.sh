@@ -237,7 +237,7 @@ function refresh_source_tarball_if_needed() {
   trap 'rm -f "${tmp_manifest}" "${tmp_source_tarball}"' RETURN
 
   local scrcpy_server_dest="${REPO_DIR}/scrcpy/scrcpy-server"
-  local scrcpy_server_build_helper="${REPO_DIR}/tools/build_scrcpy_server_aarch64.sh"
+  local scrcpy_server_build_helper="${REPO_DIR}/tools/buildutils/build_scrcpy_server_aarch64.sh"
   local local_scrcpy_server="${REPO_DIR}/out/build-scrcpy-server/scrcpy-server"
 
   # Only prepare the scrcpy-server when the scrcpy spec is actually being built.

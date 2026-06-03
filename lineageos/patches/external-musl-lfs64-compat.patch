@@ -1,0 +1,202 @@
+diff --git a/Android.bp b/Android.bp
+index f8ed9cff..be83a8a7 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -19,6 +19,7 @@ license {
+ 
+ cc_library_headers {
+     name: "libc_musl_arch_headers",
++    visibility: ["//visibility:public"],
+     host_supported: true,
+     device_supported: false,
+     system_shared_libs: [],
+@@ -68,6 +69,7 @@ cc_library_headers {
+ 
+ cc_library_headers {
+     name: "libc_musl_public_headers",
++    visibility: ["//visibility:public"],
+     host_supported: true,
+     device_supported: false,
+     system_shared_libs: [],
+diff --git a/src/dirent/readdir.c b/src/dirent/readdir.c
+index 5a03b363..9116ff22 100644
+--- a/src/dirent/readdir.c
++++ b/src/dirent/readdir.c
+@@ -25,3 +25,8 @@ struct dirent *readdir(DIR *dir)
+ 	dir->tell = de->d_off;
+ 	return de;
+ }
++
++/* LineageOS: restore LFS64 alias symbol removed in musl 1.2.4 (GNU Rust std host shim).
++   musl exposes readdir64 only as a header macro; #undef it to define the real weak symbol. */
++#undef readdir64
++extern __typeof(readdir) readdir64 __attribute__((__weak__, __alias__("readdir")));
+diff --git a/src/fcntl/open.c b/src/fcntl/open.c
+index 4c3c8275..f0eaa24d 100644
+--- a/src/fcntl/open.c
++++ b/src/fcntl/open.c
+@@ -19,3 +19,8 @@ int open(const char *filename, int flags, ...)
+ 
+ 	return __syscall_ret(fd);
+ }
++
++/* LineageOS: restore LFS64 alias symbol removed in musl 1.2.4 (GNU Rust std host shim).
++   musl exposes open64 only as a header macro; #undef it to define the real weak symbol. */
++#undef open64
++extern __typeof(open) open64 __attribute__((__weak__, __alias__("open")));
+diff --git a/src/fcntl/openat.c b/src/fcntl/openat.c
+index 83a9e0d0..af863fdb 100644
+--- a/src/fcntl/openat.c
++++ b/src/fcntl/openat.c
+@@ -15,3 +15,8 @@ int openat(int fd, const char *filename, int flags, ...)
+ 
+ 	return syscall_cp(SYS_openat, fd, filename, flags|O_LARGEFILE, mode);
+ }
++
++/* LineageOS: restore LFS64 alias symbol removed in musl 1.2.4 (GNU Rust std host shim).
++   musl exposes openat64 only as a header macro; #undef it to define the real weak symbol. */
++#undef openat64
++extern __typeof(openat) openat64 __attribute__((__weak__, __alias__("openat")));
+diff --git a/src/linux/sendfile.c b/src/linux/sendfile.c
+index fc1577d3..3ae3b9fe 100644
+--- a/src/linux/sendfile.c
++++ b/src/linux/sendfile.c
+@@ -5,3 +5,8 @@ ssize_t sendfile(int out_fd, int in_fd, off_t *ofs, size_t count)
+ {
+ 	return syscall(SYS_sendfile, out_fd, in_fd, ofs, count);
+ }
++
++/* LineageOS: restore LFS64 alias symbol removed in musl 1.2.4 (GNU Rust std host shim).
++   musl exposes sendfile64 only as a header macro; #undef it to define the real weak symbol. */
++#undef sendfile64
++extern __typeof(sendfile) sendfile64 __attribute__((__weak__, __alias__("sendfile")));
+diff --git a/src/mman/mmap.c b/src/mman/mmap.c
+index 43e5e029..7948ca45 100644
+--- a/src/mman/mmap.c
++++ b/src/mman/mmap.c
+@@ -37,3 +37,8 @@ void *__mmap(void *start, size_t len, int prot, int flags, int fd, off_t off)
+ }
+ 
+ weak_alias(__mmap, mmap);
++
++/* LineageOS: restore LFS64 alias symbol removed in musl 1.2.4 (GNU Rust std host shim).
++   musl exposes mmap64 only as a header macro; #undef it to define the real weak symbol. */
++#undef mmap64
++extern __typeof(mmap) mmap64 __attribute__((__weak__, __alias__("mmap")));
+diff --git a/src/network/res_init.c b/src/network/res_init.c
+index 5dba9dfc..f61df255 100644
+--- a/src/network/res_init.c
++++ b/src/network/res_init.c
+@@ -4,3 +4,8 @@ int res_init()
+ {
+ 	return 0;
+ }
++
++/* LineageOS: glibc symbols the GNU Rust std references that musl lacks. */
++extern __typeof(res_init) __res_init __attribute__((__weak__, __alias__("res_init")));
++
++__attribute__((__weak__)) const char *gnu_get_libc_version(void) { return "2.38"; }
+diff --git a/src/stat/fstat.c b/src/stat/fstat.c
+index fd28b8ac..e17adbcc 100644
+--- a/src/stat/fstat.c
++++ b/src/stat/fstat.c
+@@ -11,3 +11,8 @@ int __fstat(int fd, struct stat *st)
+ }
+ 
+ weak_alias(__fstat, fstat);
++
++/* LineageOS: restore LFS64 alias symbol removed in musl 1.2.4 (GNU Rust std host shim).
++   musl exposes fstat64 only as a header macro; #undef it to define the real weak symbol. */
++#undef fstat64
++extern __typeof(fstat) fstat64 __attribute__((__weak__, __alias__("fstat")));
+diff --git a/src/stat/fstatat.c b/src/stat/fstatat.c
+index 9eed063b..9002dc14 100644
+--- a/src/stat/fstatat.c
++++ b/src/stat/fstatat.c
+@@ -152,3 +152,8 @@ int __fstatat(int fd, const char *restrict path, struct stat *restrict st, int f
+ }
+ 
+ weak_alias(__fstatat, fstatat);
++
++/* LineageOS: restore LFS64 alias symbol removed in musl 1.2.4 (GNU Rust std host shim).
++   musl exposes fstatat64 only as a header macro; #undef it to define the real weak symbol. */
++#undef fstatat64
++extern __typeof(fstatat) fstatat64 __attribute__((__weak__, __alias__("fstatat")));
+diff --git a/src/stat/lstat.c b/src/stat/lstat.c
+index 6822fcae..bafe1482 100644
+--- a/src/stat/lstat.c
++++ b/src/stat/lstat.c
+@@ -5,3 +5,8 @@ int lstat(const char *restrict path, struct stat *restrict buf)
+ {
+ 	return fstatat(AT_FDCWD, path, buf, AT_SYMLINK_NOFOLLOW);
+ }
++
++/* LineageOS: restore LFS64 alias symbol removed in musl 1.2.4 (GNU Rust std host shim).
++   musl exposes lstat64 only as a header macro; #undef it to define the real weak symbol. */
++#undef lstat64
++extern __typeof(lstat) lstat64 __attribute__((__weak__, __alias__("lstat")));
+diff --git a/src/stat/stat.c b/src/stat/stat.c
+index 23570e7a..9feaf2cd 100644
+--- a/src/stat/stat.c
++++ b/src/stat/stat.c
+@@ -5,3 +5,8 @@ int stat(const char *restrict path, struct stat *restrict buf)
+ {
+ 	return fstatat(AT_FDCWD, path, buf, 0);
+ }
++
++/* LineageOS: restore LFS64 alias symbol removed in musl 1.2.4 (GNU Rust std host shim).
++   musl exposes stat64 only as a header macro; #undef it to define the real weak symbol. */
++#undef stat64
++extern __typeof(stat) stat64 __attribute__((__weak__, __alias__("stat")));
+diff --git a/src/unistd/ftruncate.c b/src/unistd/ftruncate.c
+index 54ff34bc..c8345d80 100644
+--- a/src/unistd/ftruncate.c
++++ b/src/unistd/ftruncate.c
+@@ -5,3 +5,8 @@ int ftruncate(int fd, off_t length)
+ {
+ 	return syscall(SYS_ftruncate, fd, __SYSCALL_LL_O(length));
+ }
++
++/* LineageOS: restore LFS64 alias symbol removed in musl 1.2.4 (GNU Rust std host shim).
++   musl exposes ftruncate64 only as a header macro; #undef it to define the real weak symbol. */
++#undef ftruncate64
++extern __typeof(ftruncate) ftruncate64 __attribute__((__weak__, __alias__("ftruncate")));
+diff --git a/src/unistd/lseek.c b/src/unistd/lseek.c
+index f5b66682..60b1f6fc 100644
+--- a/src/unistd/lseek.c
++++ b/src/unistd/lseek.c
+@@ -12,3 +12,8 @@ off_t __lseek(int fd, off_t offset, int whence)
+ }
+ 
+ weak_alias(__lseek, lseek);
++
++/* LineageOS: restore LFS64 alias symbol removed in musl 1.2.4 (GNU Rust std host shim).
++   musl exposes lseek64 only as a header macro; #undef it to define the real weak symbol. */
++#undef lseek64
++extern __typeof(lseek) lseek64 __attribute__((__weak__, __alias__("lseek")));
+diff --git a/src/unistd/pread.c b/src/unistd/pread.c
+index b03fb0ad..933e2ad1 100644
+--- a/src/unistd/pread.c
++++ b/src/unistd/pread.c
+@@ -5,3 +5,8 @@ ssize_t pread(int fd, void *buf, size_t size, off_t ofs)
+ {
+ 	return syscall_cp(SYS_pread, fd, buf, size, __SYSCALL_LL_PRW(ofs));
+ }
++
++/* LineageOS: restore LFS64 alias symbol removed in musl 1.2.4 (GNU Rust std host shim).
++   musl exposes pread64 only as a header macro; #undef it to define the real weak symbol. */
++#undef pread64
++extern __typeof(pread) pread64 __attribute__((__weak__, __alias__("pread")));
+diff --git a/src/unistd/pwrite.c b/src/unistd/pwrite.c
+index a008b3ec..e6435d3e 100644
+--- a/src/unistd/pwrite.c
++++ b/src/unistd/pwrite.c
+@@ -16,3 +16,8 @@ ssize_t pwrite(int fd, const void *buf, size_t size, off_t ofs)
+ 		return __syscall_ret(-EOPNOTSUPP);
+ 	return syscall_cp(SYS_pwrite, fd, buf, size, __SYSCALL_LL_PRW(ofs));
+ }
++
++/* LineageOS: restore LFS64 alias symbol removed in musl 1.2.4 (GNU Rust std host shim).
++   musl exposes pwrite64 only as a header macro; #undef it to define the real weak symbol. */
++#undef pwrite64
++extern __typeof(pwrite) pwrite64 __attribute__((__weak__, __alias__("pwrite")));
