@@ -408,8 +408,8 @@ setup_temp_zram_if_needed() {
   # Target a fixed physical+zram total: create exactly enough zram to reach
   # ZRAM_TARGET_TOTAL_GIB. Hosts with >= ZRAM_SKIP_ABOVE_GIB physical RAM get
   # none. Sizes are GiB (binary), consistent with format_kib_as_gib.
-  target_total_gib="${ZRAM_TARGET_TOTAL_GIB:-48}"
-  skip_above_gib="${ZRAM_SKIP_ABOVE_GIB:-44}"
+  target_total_gib="${ZRAM_TARGET_TOTAL_GIB:-40}"
+  skip_above_gib="${ZRAM_SKIP_ABOVE_GIB:-36}"
   [[ "$target_total_gib" =~ ^[0-9]+$ && "$target_total_gib" -gt 0 ]] || \
     die "invalid ZRAM_TARGET_TOTAL_GIB value '$target_total_gib'; expected a positive integer"
   [[ "$skip_above_gib" =~ ^[0-9]+$ && "$skip_above_gib" -gt 0 ]] || \

@@ -164,7 +164,9 @@ checksums, overlay commit state, microG APK checksums, WebView APK checksums,
 and x86-64 native bridge metadata.
 
 Override the destination with `OUTPUT_DIR=/some/other/dir` if you want the
-bundles somewhere other than the ika repo root.
+bundles somewhere other than the ika repo root. Signed target-files staging also
+uses `OUTPUT_DIR`, so point it at a filesystem with enough free space for the
+final signing and bundle extraction steps.
 
 To build only one architecture:
 

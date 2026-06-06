@@ -223,6 +223,29 @@ remove_packaged_target_outputs() {
   done
 }
 
+remove_target_image_outputs_for_headroom() {
+  local product_out="$1"
+  [[ -d "$product_out" ]] || return 0
+
+  rm -f \
+    "$product_out/system.img" \
+    "$product_out/system_ext.img" \
+    "$product_out/product.img" \
+    "$product_out/vendor.img" \
+    "$product_out/system_other.img" \
+    "$product_out/odm.img" \
+    "$product_out/odm_dlkm.img" \
+    "$product_out/system_dlkm.img" \
+    "$product_out/vendor_dlkm.img"
+  rm -f \
+    "$product_out"/obj/PACKAGING/system_intermediates/*.img \
+    "$product_out"/obj/PACKAGING/system_ext_intermediates/*.img \
+    "$product_out"/obj/PACKAGING/product_intermediates/*.img \
+    "$product_out"/obj/PACKAGING/vendor_intermediates/*.img
+  find "$workspace/out/soong/.intermediates/device/google/cuttlefish/build/cvd-host_package" \
+    -type f -name package.tar.gz -delete 2>/dev/null || true
+}
+
 write_fetcher_config() {
   local bundle_dir="$1"
   shift
@@ -357,4 +380,3 @@ PY
 
   du -sh "$bundle_dir"
 }
-

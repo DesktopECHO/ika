@@ -54,20 +54,36 @@ repair_soong_zero_byte_objects() {
   done
 }
 
-remove_soong_graph_state() {
+remove_generated_ninja_state() {
   local product="$1"
   local reason="$2"
+  local out_dir="$workspace/out"
   local out_soong="$workspace/out/soong"
   local prefix="build.${product}"
 
-  [[ -d "$out_soong" ]] || return 0
+  [[ -d "$out_dir" ]] || return 0
 
-  log "removing stale Soong graph state for $product: $reason"
+  log "removing generated Ninja/Kati state for $product: $reason"
+  rm -f "$out_dir/.ninja_deps" "$out_dir/.ninja_log"
+  find "$out_dir" -maxdepth 1 -type f \( \
+    -name "build-${product}.ninja" -o \
+    -name "build-${product}-*.ninja" -o \
+    -name ".kati_stamp-${product}" -o \
+    -name ".kati_stamp-${product}-*" \
+  \) -delete 2>/dev/null || true
+
+  [[ -d "$out_soong" ]] || return 0
   find "$out_soong" -maxdepth 1 -type f \( \
     -name "${prefix}.ninja" -o \
     -name "${prefix}.ninja.*" -o \
-    -name "${prefix}.*.ninja" \
+    -name "${prefix}.*.ninja" -o \
+    -name "Android-${product}.mk" -o \
+    -name "late-${product}.mk" \
   \) -delete 2>/dev/null || true
+}
+
+remove_soong_graph_state() {
+  remove_generated_ninja_state "$1" "$2"
 }
 
 repair_stale_soong_graph_state() {
@@ -204,4 +220,3 @@ validate_cvd_target_fstabs() {
   validate_fstab_file \
     "$product_out/vendor_ramdisk/first_stage_ramdisk/system/etc/fstab.cf.f2fs.hctr2"
 }
-

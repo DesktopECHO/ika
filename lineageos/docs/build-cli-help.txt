@@ -14,7 +14,8 @@ Environment:
   WORKSPACE             Android source checkout to create or reuse.
                         Default: ika/lineageos/src
   OUTPUT_DIR            Parent directory for the lineageos-<arch>/ bundle
-                        directories. Default: the ika project root.
+                        directories and signed target-files staging.
+                        Default: the ika project root.
   BUILDTIME_LOG_PATH    TSV ledger for each ROM build target with start time,
                         finish time, duration, architecture, and success or
                         failure. Default: ika/buildtimes.log.
@@ -24,9 +25,9 @@ Environment:
                         Soong high-memory pool jobs. Default: one job per
                         32 GiB of RAM, minimum 1 and capped at JOBS.
   Temporary zram       Builds get zram swap sized to reach a fixed physical+zram
-                        total (ZRAM_TARGET_TOTAL_GIB, default 48 GiB), prioritized
+                        total (ZRAM_TARGET_TOTAL_GIB, default 40 GiB), prioritized
                         above existing swap. Hosts with ZRAM_SKIP_ABOVE_GIB
-                        (default 44 GiB) physical RAM or more get none.
+                        (default 36 GiB) physical RAM or more get none.
                         Build-created zram is removed automatically on exit.
   ZRAM_COMP_ALGORITHM   Compression algorithm for build-created zram. Default:
                         zstd (higher ratio, more usable RAM, paid on otherwise
@@ -177,7 +178,7 @@ Environment:
                         Default: 4194304.
   ARM64_SOONG_GOMEMLIMIT
                         Go memory limit passed into Soong on ARM64 hosts.
-                        Default: 2GiB
+                        Default: 6GiB
   ARM64_SOONG_GOMEMLIMIT_RETRY_LIST
                         Space-separated Soong Go memory limits to try after
                         resource-pressure failures. Default: ARM64_SOONG_GOMEMLIMIT,
@@ -188,6 +189,8 @@ Environment:
                         unless explicitly set.
   ARM64_GODEBUG         Go runtime flags passed into ARM64 native builds.
                         Default: asyncpreemptoff=1
+  ARM64_SOONG_GOGC      Go GC target percentage passed into Soong on ARM64
+                        hosts. Default: 100
   ARM64_THINLTO_USE_MLGO
                         Enables Soong ThinLTO MLGO linker advisors inside ARM64
                         native builds. Default: false, because current

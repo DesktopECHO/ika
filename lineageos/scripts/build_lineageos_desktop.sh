@@ -64,9 +64,9 @@ arm64_job_retry_list="${ARM64_JOB_RETRY_LIST:-}"
 arm64_nofile_limit="${ARM64_NOFILE_LIMIT:-4194304}"
 arm64_soong_gomemlimit_was_set=0
 [[ -n "${ARM64_SOONG_GOMEMLIMIT:-}" ]] && arm64_soong_gomemlimit_was_set=1
-arm64_soong_gomemlimit="${ARM64_SOONG_GOMEMLIMIT:-2GiB}"
+arm64_soong_gomemlimit="${ARM64_SOONG_GOMEMLIMIT:-6GiB}"
 arm64_soong_gomemlimit_retry_list="${ARM64_SOONG_GOMEMLIMIT_RETRY_LIST:-}"
-arm64_soong_gogc="${ARM64_SOONG_GOGC:-25}"
+arm64_soong_gogc="${ARM64_SOONG_GOGC:-100}"
 arm64_soong_gomaxprocs_was_set=0
 [[ -n "${ARM64_SOONG_GOMAXPROCS:-}" ]] && arm64_soong_gomaxprocs_was_set=1
 arm64_soong_gomaxprocs="${ARM64_SOONG_GOMAXPROCS:-4}"
@@ -247,6 +247,22 @@ normalize_targets() {
 # target_thin_files are defined in lib/target_common.sh (sourced near the top),
 # shared with the standalone rebuild helpers.
 
+prepare_target_output_headroom() {
+  local arch="$1"
+  local product product_out host_package host_tag
+  local -a thin_files
+
+  host_tag="$(target_host_tag "$arch")"
+  product="$(target_product "$arch")"
+  product_out="$(target_product_out "$arch")"
+  host_package="$workspace/out/host/$host_tag/cvd-host_package.tar.gz"
+  mapfile -t thin_files < <(target_thin_files "$arch")
+
+  remove_generated_ninja_state "$product" "pre-build headroom cleanup"
+  remove_packaged_target_outputs "$product" "$product_out" "$host_package" "${thin_files[@]}"
+  remove_target_image_outputs_for_headroom "$product_out"
+}
+
 build_target() {
   local arch="$1"
   local product product_out host_package bundle_name host_tag
@@ -278,9 +294,11 @@ build_target() {
   fi
 
   local target_files_zip="$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip"
-  local signed_target_files_zip="${target_files_zip%.zip}-signed.zip"
-  local signed_images_dir="$product_out/obj/PACKAGING/signed_images"
+  local signed_artifacts_dir="$output_dir/.lineage-desktop/signed/$product"
+  local signed_target_files_zip="$signed_artifacts_dir/${product}-target_files-signed.zip"
+  local signed_images_dir="$signed_artifacts_dir/signed_images"
   remove_packaged_target_outputs "$product" "$product_out" "$host_package" "${thin_files[@]}"
+  rm -rf "$signed_artifacts_dir"
 
   run_lunch_and_make "$product" \
     hosttar \
@@ -349,6 +367,9 @@ main() {
     done
   fi
   mkdir -p "$output_dir"
+  for target in "${targets[@]}"; do
+    prepare_target_output_headroom "$target"
+  done
 
   if enabled "$skip_sync"; then
     log "skipping repo sync (REBUILD/SKIP_SYNC); reusing existing source tree"
@@ -368,6 +389,7 @@ main() {
   fi
   update_microg_prebuilts
   configure_arm64_host_build
+  cleanup_arm64_prebuilt_download_caches
 
   local target
   for target in "${targets[@]}"; do
