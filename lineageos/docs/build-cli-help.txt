@@ -18,13 +18,11 @@ Environment:
   BUILDTIME_LOG_PATH    TSV ledger for each ROM build target with start time,
                         finish time, duration, architecture, and success or
                         failure. Default: ika/buildtimes.log.
-  JOBS                  Parallel jobs for repo sync and m. Default: reserve
-                        4 GiB RAM, then one job per 3.5 GiB physical+virtual
-                        RAM, capped at available logical CPU count.
+  JOBS                  Parallel jobs for repo sync and m. Default: logical CPU
+                        count minus 2, minimum 1.
   NINJA_HIGHMEM_NUM_JOBS
-                        Soong high-memory pool jobs. Default: same 4 GiB RAM
-                        reserve, then one job per 16 GiB physical+virtual RAM,
-                        capped by JOBS.
+                        Soong high-memory pool jobs. Default: one job per
+                        32 GiB of RAM, minimum 1 and capped at JOBS.
   Temporary zram       Builds get zram swap sized to reach a fixed physical+zram
                         total (ZRAM_TARGET_TOTAL_GIB, default 48 GiB), prioritized
                         above existing swap. Hosts with ZRAM_SKIP_ABOVE_GIB
@@ -97,7 +95,7 @@ Environment:
                         Per-project repo fetch retries. Default: 9
   REPO_SYNC_QUIET       Pass --quiet to repo sync. Default: auto, enabled on
                         ARM64 hosts to keep Python repo sync output conservative
-                        inside the muvm guest.
+                        during ARM64 host syncs.
   ARM64_GO_PREBUILT_GIT_URL
                         AOSP Go linux-arm64 prebuilt repo used to bootstrap
                         Soong when this branch lacks prebuilts/go/linux-arm64.
@@ -171,23 +169,11 @@ Environment:
                         Native Linux ARM64 JDK 21 tarball used when this branch
                         lacks prebuilts/jdk/jdk21/linux-arm64. Default:
                         Adoptium Temurin JDK 21 API URL.
-  ARM64_JOBS            Default parallel build jobs on ARM64 hosts when JOBS is
-                        unset. Tuned for a 16 GiB M1 Mac. Default: 4
   ARM64_JOB_RETRY_LIST  Space-separated ARM64 job counts to try if a faster
                         attempt fails from memory/process pressure. Default:
-                        ARM64_JOBS, then lower counts down to 1.
-  ARM64_MUVM_MEM_MIB    Memory passed to muvm on ARM64 hosts. Default: 32768.
-                        This intentionally exceeds physical RAM on a 16 GiB
-                        M1 Mac; host zram is enabled first and backs the 4 KiB
-                        guest when Soong graph generation crosses 16 GiB.
-  ARM64_MUVM_CPU_LIST   CPU list passed to muvm -c on ARM64 hosts. Default: all
-                        logical host cores (e.g. 0-9 on a 10-core host) -- the
-                        ARM64_JOBS cap still bounds concurrent compilers, so the
-                        extra cores only speed Soong analysis and zram threads.
-                        Pin a subset (e.g. perf cores 0-3 on an M1) or set empty
-                        to defer to muvm's own default.
-  ARM64_MUVM_NOFILE_LIMIT
-                        Host open-file limit requested before starting muvm.
+                        selected job count, then lower counts down to 1.
+  ARM64_NOFILE_LIMIT    Host open-file limit requested before native ARM64
+                        builds.
                         Default: 4194304.
   ARM64_SOONG_GOMEMLIMIT
                         Go memory limit passed into Soong on ARM64 hosts.
@@ -200,26 +186,21 @@ Environment:
                         Go scheduler threads for Soong graph generation on
                         ARM64 hosts. Default: 4, capped to retry job count
                         unless explicitly set.
-  ARM64_GODEBUG         Go runtime flags passed into ARM64/muvm builds.
+  ARM64_GODEBUG         Go runtime flags passed into ARM64 native builds.
                         Default: asyncpreemptoff=1
   ARM64_THINLTO_USE_MLGO
-                        Enables Soong ThinLTO MLGO linker advisors inside
-                        ARM64/muvm builds. Default: false, because current
+                        Enables Soong ThinLTO MLGO linker advisors inside ARM64
+                        native builds. Default: false, because current
                         Linux ARM64 Clang prebuilts can emit ARM64 code
                         natively here but do not ship every release advisor
                         model expected by this branch.
-  ARM64_NINJA_HIGHMEM_JOBS
-                        High-memory Ninja pool jobs inside muvm on ARM64.
-                        Default: 1
   ARM64_ANDROID_JAVA_HOME
                         System JDK to use when the source tree lacks an ARM64
                         JDK prebuilt. Default: auto-detect from javac.
   AUTO_INSTALL_DEPS     Install missing basic host tools with apt/dnf/pacman
                         when possible. Default: 1
-  ARM64 4K guest        ARM64 hosts build with ARM64 prebuilts only. On
-                        Apple Silicon's 16 KiB-page kernels, install muvm so
-                        the Android build can run in a 4 KiB-page guest:
-                        sudo dnf install -y muvm
+  ARM64 native hosts    ARM64 hosts build natively with ARM64 prebuilts only,
+                        including on Apple Silicon's 16 KiB-page kernels.
   RESET_PATCHED_PROJECTS
                         Reset patched source projects before repo sync.
                         Default: auto for script-managed workspaces

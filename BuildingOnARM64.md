@@ -29,9 +29,9 @@ layers**:
    host prebuilts (Clang, Go, Rust, JDK, CMake, build-tools) and *exports* the
    env vars those patches read — failing fast if anything is missing.
 
-Neither layer works without the other — the custom `ANDROID_BUILD_SERIAL_FINDER`
-env var (read only by a patch, set only by the script; see §4.1) is the clearest
-proof they were co-designed.
+Neither layer works without the other: the source patches provide ARM64 host
+awareness, and the scripts provide the ARM64 prebuilts and environment those
+patches expect.
 
 ---
 
@@ -43,15 +43,12 @@ proof they were co-designed.
 | `arm64` ROM | ✅ (cross) | ✅ (native) |
 
 - x86_64 ROMs can only be built on an x86_64 host — enforced in
-  [build_lineageos_desktop.sh](lineageos/scripts/build_lineageos_desktop.sh#L352-L357)
+  [build_lineageos_desktop.sh](lineageos/scripts/build_lineageos_desktop.sh)
   and the ELF arch checks in
-  [signing_common.sh](lineageos/scripts/signing_common.sh#L79-L113).
-- The ARM64 Android build runs inside a **`muvm` 4 KiB-page guest**. Apple
-  Silicon runs 16 KiB pages, but AOSP host ELFs (prebuilts + the host tools Soong
-  builds then re-executes) align `PT_LOAD` segments to 4 KiB (`0x1000`) while a
-  16 KiB kernel needs `ALIGN ≥ 0x4000` to map them — so they **segfault before
-  `main()`** ([Asahi: Broken Software](https://asahilinux.org/docs/sw/broken-software/)).
-  muvm provides a 4 KiB VM; `configure_arm64_host_build` dies if `muvm` is absent.
+  [signing_common.sh](lineageos/scripts/signing_common.sh).
+- ARM64 host builds run **natively** with real `linux-arm64` host prebuilts.
+  The build scripts refuse symlinked `linux-x86` substitutions and log the host
+  page size, but they no longer wrap the Android build in a guest VM.
 
 ---
 
@@ -59,12 +56,11 @@ proof they were co-designed.
 
 The build engine provisions most prebuilts itself, but the host must supply:
 
-- **`muvm`** — the 4 KiB-page guest the build runs in (see §2); build dies without it.
 - Network **throughout the build** — ARM64 host prebuilts (Clang, Go, Rust, JDK,
   CMake, clang-tools) are fetched from `android.googlesource.com` at setup, and
   partial-clone fetches blobs on demand during compile.
-- A high open-file limit — `raise_open_file_limit_for_muvm` bumps it
-  (`ARM64_MUVM_NOFILE_LIMIT`, default `4194304`).
+- A high open-file limit — `raise_arm64_open_file_limit` bumps it
+  (`ARM64_NOFILE_LIMIT`, default `4194304`).
 - JDK — if no `javac` is on PATH and no ARM64 JDK prebuilt can be fetched, the
   build dies asking for `ARM64_JDK21_PREBUILT_URL` / `ARM64_ANDROID_JAVA_HOME`.
 
@@ -118,15 +114,7 @@ Four themes:
    flags → glibc link flags, `Glibc()` → `true` — keeping the stdlib ABI aligned
    with `rustc` so **proc-macros load** (a wrong-ABI proc-macro can't be
    dlopened by the compiler).
-4. **Build-infra robustness inside the muvm guest.**
-   - `finder/finder.go` + `finder/fs/fs.go` — the `ANDROID_BUILD_SERIAL_FINDER=1`
-     escape hatch (read **only** here; set **only** by the build script). It (a)
-     drops Soong's source-tree scanner from `NumCPU*2` threads to **1**, and (b)
-     swaps the custom `readdir` for stdlib `os.ReadDir`, stat-ing each entry when
-     `d_type` is `DT_UNKNOWN`. virtiofs in the muvm guest returns `DT_UNKNOWN`, so
-     without the stat fallback the finder misclassifies dirs as files and skips
-     `Android.bp`/`.mk` → spurious "build file not found". Correctness over speed,
-     ARM64-only; x86_64 keeps the fast parallel finder.
+4. **Build-infra robustness on ARM64 hosts.**
    - `cmd/dir_to_depfile/dir_to_depfile.go` — skip `.git` and `prebuilts/` when
      collecting Trusty `dir_srcs` deps, so nsjail-bind-mounted toolchain trees
      don't blow up Ninja's deps records. *(This was the most recent ARM64 change,
@@ -166,13 +154,12 @@ which is why they must be updated together.
 ## 5. Runtime orchestration
 
 `configure_arm64_host_build` in
-[build_exec.sh](lineageos/scripts/lib/build_exec.sh#L255-L281) is the other half
+[build_exec.sh](lineageos/scripts/lib/build_exec.sh) is the other half
 of the contract. It runs only on ARM64 hosts and provisions exactly what the
 patches assume, dying fast if anything is missing:
 
 ```
 ensure_arm64_go_prebuilt                       # prebuilts/go/linux-arm64
-muvm present?                                   # else die
 prebuilts/build-tools/linux-arm64 + ninja      # else die
 ensure_arm64_rust_prebuilt / tool_bridges      # GNU rustc host toolchain
 ensure_linux_arm64_clang_prebuilt / _ready     # fetch + verify ARM64 Clang (§6)
@@ -182,14 +169,13 @@ ensure_arm64_clang_tools_prebuilt
 ensure_arm64_native_cmake_prebuilt
 ensure_arm64_native_jdk21_prebuilt / jdk8      # feeds ANDROID_JAVA*_HOME
 ensure_no_arm64_x86_prebuilt_substitutions     # guard against x86 shadowing
-raise_open_file_limit_for_muvm
+raise_arm64_open_file_limit
 ```
 
 ### The patch ⇄ runtime contract
 
 | Patch expects (reads) | Script provides (sets) |
 |---|---|
-| `ANDROID_BUILD_SERIAL_FINDER=1` in `finder/*` | exported in [build_exec.sh:293](lineageos/scripts/lib/build_exec.sh#L293), :411, :441 |
 | `ANDROID_JAVA8_HOME = ${Java8Home}` | JDK 8/21 prebuilts + `OVERRIDE_ANDROID_JAVA_HOME` |
 | `linux-arm64` host Clang via `HostPrebuiltTag` | `ensure_linux_arm64_clang_prebuilt` / `_ready` |
 | `prebuilts/build-tools/linux-arm64` enabled | hard `die` if `…/bin/ninja` missing |
@@ -197,10 +183,9 @@ raise_open_file_limit_for_muvm
 | arm64 install paths not shadowed by x86 | `ensure_no_arm64_x86_prebuilt_substitutions` |
 
 Relevant env knobs (defaults in the header of
-[build_lineageos_desktop.sh](lineageos/scripts/build_lineageos_desktop.sh#L42-L83)):
-`ARM64_JOBS`, `ARM64_MUVM_MEM_MIB`, `ARM64_MUVM_CPU_LIST`,
-`ARM64_MUVM_NOFILE_LIMIT`, `ARM64_SOONG_GOMEMLIMIT`, `ARM64_SOONG_GOMAXPROCS`,
-`ARM64_NINJA_HIGHMEM_JOBS`, `ARM64_JDK21_PREBUILT_URL`, `ARM64_ANDROID_JAVA_HOME`.
+[build_lineageos_desktop.sh](lineageos/scripts/build_lineageos_desktop.sh)):
+`ARM64_NOFILE_LIMIT`, `ARM64_SOONG_GOMEMLIMIT`, `ARM64_SOONG_GOMAXPROCS`,
+`ARM64_JDK21_PREBUILT_URL`, `ARM64_ANDROID_JAVA_HOME`.
 
 ---
 
@@ -262,7 +247,7 @@ later means re-checking `clang22.patch` against the new diagnostics.
 ## 7. Building
 
 ```bash
-# Native ARM64 ROM on an ARM64 host (needs muvm)
+# Native ARM64 ROM on an ARM64 host
 ./lineageos/scripts/build_lineageos_desktop.sh arm64
 
 # Incremental rebuild (skip sync + patch, reuse the tree)
@@ -278,25 +263,23 @@ status). A successful ARM64 run lands the bundle in `lineageos-arm64/`.
 
 | Symptom | Likely cause / fix |
 |---|---|
-| `ARM64 host needs muvm…` | Install `muvm`; the Android build must run in a 4 KiB-page guest. |
 | `missing ARM64 build tools prebuilt` / `…ninja` | Setup couldn't fetch `prebuilts/build-tools/linux-arm64`; check network to `android.googlesource.com`. |
 | `ARM64 host needs JDK 21…` | No `javac` and no fetchable JDK; set `ARM64_JDK21_PREBUILT_URL` or `ARM64_ANDROID_JAVA_HOME`. |
 | Clang 22 diagnostic errors in a new project after a rebase | `clang22.patch` needs a new `-Wno-…`/rewrite for that project. |
 | Rust proc-macro fails to load / ABI mismatch | The soong/make musl⇄glibc split (§4.3) drifted; verify `arm_linux_host.go` still maps the Rust triple to `…-gnu`. |
 | `refusing to use non-ARM64 Clang payload on ARM64 host` | A stale/real x86 Clang is sitting in the x86 path; remove it so the overlay (§6.2) can be rebuilt. |
 | Oversized Ninja deps / slow Trusty dep scan | The `dir_to_depfile` skip (§4.1) — ensure `build-soong-arm64-host.patch` is fully applied. |
-| Finder hangs/races under the guest | Confirm `ANDROID_BUILD_SERIAL_FINDER=1` is exported (it is by `configure_arm64_host_build`). |
 
 ---
 
 ## 9. Reference map & external resources
 
 In-tree:
-- Engine: [build_lineageos_desktop.sh](lineageos/scripts/build_lineageos_desktop.sh) · ARM64 setup: [build_exec.sh](lineageos/scripts/lib/build_exec.sh#L255) · prebuilts: [prebuilts.sh](lineageos/scripts/lib/prebuilts.sh)
+- Engine: [build_lineageos_desktop.sh](lineageos/scripts/build_lineageos_desktop.sh) · ARM64 setup: [build_exec.sh](lineageos/scripts/lib/build_exec.sh) · prebuilts: [prebuilts.sh](lineageos/scripts/lib/prebuilts.sh)
 - Patches: [apply_source_patches.sh](lineageos/scripts/apply_source_patches.sh) · [patches/series](lineageos/patches/series) · [patches/README.md](lineageos/patches/README.md)
-- Arch enforcement: [signing_common.sh](lineageos/scripts/signing_common.sh#L79)
+- Arch enforcement: [signing_common.sh](lineageos/scripts/signing_common.sh)
 
 External (there is no official Google support for ARM64 build hosts — all WIP/community):
 - Theory: [Enabling aarch64 as an Android build host](https://jsteward.moe/aarch64-build-host.html) · [C/C++ toolchain for aarch64](https://jsteward.moe/toolchain-for-android.html)
 - Toolchains: [AOSP prebuilts (Git at Google)](https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/) · [build-aosp-clang-for-arm64](https://github.com/tomxi1997/build-aosp-clang-for-arm64)
-- Apple Silicon page-size layer: [Asahi: Broken Software](https://asahilinux.org/docs/sw/broken-software/) · [containers/libkrun (muvm)](https://github.com/containers/libkrun) · [AOSP 16 KB pages](https://source.android.com/docs/core/architecture/16kb-page-size/16kb)
+- Apple Silicon page-size context: [Asahi: Broken Software](https://asahilinux.org/docs/sw/broken-software/) · [AOSP 16 KB pages](https://source.android.com/docs/core/architecture/16kb-page-size/16kb)

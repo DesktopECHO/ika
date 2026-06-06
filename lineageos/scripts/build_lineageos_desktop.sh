@@ -37,8 +37,6 @@ repo_sync_retry_fetches="${REPO_SYNC_RETRY_FETCHES:-9}"
 repo_sync_quiet="${REPO_SYNC_QUIET:-}"
 jobs_was_set=0
 [[ -n "${JOBS:-}" ]] && jobs_was_set=1
-ninja_highmem_jobs_was_set=0
-[[ -n "${NINJA_HIGHMEM_NUM_JOBS:-}" ]] && ninja_highmem_jobs_was_set=1
 arm64_go_prebuilt_git_url="${ARM64_GO_PREBUILT_GIT_URL:-https://android.googlesource.com/platform/prebuilts/go/linux-arm64}"
 arm64_go_prebuilt_git_ref="${ARM64_GO_PREBUILT_GIT_REF:-mirror-goog-llvm-r596125-release}"
 arm64_rust_prebuilt_dir="${ARM64_RUST_PREBUILT_DIR:-}"
@@ -62,13 +60,8 @@ arm64_cmake_prebuilt_git_url="${ARM64_CMAKE_PREBUILT_GIT_URL:-https://android.go
 arm64_cmake_prebuilt_git_ref="${ARM64_CMAKE_PREBUILT_GIT_REF:-mirror-goog-llvm-r596125-release}"
 arm64_jdk21_prebuilt_url="${ARM64_JDK21_PREBUILT_URL:-https://api.adoptium.net/v3/binary/latest/21/ga/linux/aarch64/jdk/hotspot/normal/eclipse}"
 arm64_jdk8_prebuilt_url="${ARM64_JDK8_PREBUILT_URL:-https://api.adoptium.net/v3/binary/latest/8/ga/linux/aarch64/jdk/hotspot/normal/eclipse}"
-arm64_jobs="${ARM64_JOBS:-4}"
 arm64_job_retry_list="${ARM64_JOB_RETRY_LIST:-}"
-arm64_muvm_mem_mib="${ARM64_MUVM_MEM_MIB:-32768}"
-arm64_muvm_cpu_list_was_set=0
-[[ -n "${ARM64_MUVM_CPU_LIST+x}" ]] && arm64_muvm_cpu_list_was_set=1
-arm64_muvm_cpu_list="${ARM64_MUVM_CPU_LIST:-}"
-arm64_muvm_nofile_limit="${ARM64_MUVM_NOFILE_LIMIT:-4194304}"
+arm64_nofile_limit="${ARM64_NOFILE_LIMIT:-4194304}"
 arm64_soong_gomemlimit_was_set=0
 [[ -n "${ARM64_SOONG_GOMEMLIMIT:-}" ]] && arm64_soong_gomemlimit_was_set=1
 arm64_soong_gomemlimit="${ARM64_SOONG_GOMEMLIMIT:-2GiB}"
@@ -79,7 +72,6 @@ arm64_soong_gomaxprocs_was_set=0
 arm64_soong_gomaxprocs="${ARM64_SOONG_GOMAXPROCS:-4}"
 arm64_godebug="${ARM64_GODEBUG:-asyncpreemptoff=1}"
 arm64_thinlto_use_mlgo="${ARM64_THINLTO_USE_MLGO:-false}"
-arm64_ninja_highmem_jobs="${ARM64_NINJA_HIGHMEM_JOBS:-1}"
 arm64_android_java_home="${ARM64_ANDROID_JAVA_HOME:-}"
 linux_arm64_llvm_prebuilts_version=""
 linux_arm64_llvm_release_version=""
@@ -335,11 +327,11 @@ main() {
   esac
 
   ensure_host_commands
-  ensure_arm64_4k_guest
+  ensure_arm64_native_host
   ensure_signing_keys
   setup_temp_zram_if_needed
   set_build_jobs
-  configure_arm64_job_limits
+  configure_arm64_soong_limits
   log "using $jobs parallel build jobs ($highmem_jobs high-memory jobs)"
   configure_ccache
   ensure_repo_command

@@ -54,63 +54,45 @@ index 4d7bd3c92..7e75bac2a 100644
  
  	pctx.StaticVariable("WarningAllowedProjects", strings.Join(WarningAllowedProjects, " "))
  
-diff --git a/finder/finder.go b/finder/finder.go
-index 054ccd639..afa087fe1 100644
---- a/finder/finder.go
-+++ b/finder/finder.go
-@@ -166,7 +166,14 @@ type Finder struct {
- 	nodes        pathMap
- }
+diff --git a/cmd/dir_to_depfile/dir_to_depfile.go b/cmd/dir_to_depfile/dir_to_depfile.go
+index afc3d027c..d16d49cdc 100644
+--- a/cmd/dir_to_depfile/dir_to_depfile.go
++++ b/cmd/dir_to_depfile/dir_to_depfile.go
+@@ -23,6 +23,7 @@ import (
+ 	"log"
+ 	"os"
+ 	"path/filepath"
++	"strings"
  
--var defaultNumThreads = runtime.NumCPU() * 2
-+func defaultFinderNumThreads() int {
-+	if os.Getenv("ANDROID_BUILD_SERIAL_FINDER") == "1" {
-+		return 1
-+	}
-+	return runtime.NumCPU() * 2
-+}
-+
-+var defaultNumThreads = defaultFinderNumThreads()
- 
- // New creates a new Finder for use
- func New(cacheParams CacheParams, filesystem fs.FileSystem,
-diff --git a/finder/fs/fs.go b/finder/fs/fs.go
-index d2e3e4ab0..570ed8cb7 100644
---- a/finder/fs/fs.go
-+++ b/finder/fs/fs.go
-@@ -105,6 +105,32 @@ func (osFs) Stat(path string) (stats os.FileInfo, err error) {
- }
- 
- func (osFs) ReadDir(path string) (contents []DirEntryInfo, err error) {
-+	if os.Getenv("ANDROID_BUILD_SERIAL_FINDER") == "1" {
-+		entries, err := os.ReadDir(path)
-+		if err != nil {
-+			return nil, err
-+		}
-+		for _, entry := range entries {
-+			mode := entry.Type()
-+			if mode == 0 {
-+				info, infoErr := entry.Info()
-+				if infoErr != nil {
-+					if os.IsNotExist(infoErr) {
-+						continue
-+					}
-+					return contents, infoErr
-+				}
-+				mode = info.Mode() & (os.ModeType | os.ModeCharDevice)
+ 	"android/soong/makedeps"
+ )
+@@ -73,8 +74,26 @@ func collectDirectoryDeps(dir string) (deps []string, err error) {
+ 		if err != nil {
+ 			return err
+ 		}
++		if shouldSkipDep(path, d) {
++			if d.IsDir() {
++				return filepath.SkipDir
 +			}
-+			contents = append(contents, &dirEntryInfo{
-+				name:       entry.Name(),
-+				mode:       mode,
-+				modeExists: true,
-+			})
++			return nil
 +		}
-+		return contents, nil
+ 		deps = append(deps, path)
+ 		return nil
+ 	})
+ 	return deps, err
+ }
++
++func shouldSkipDep(path string, d fs.DirEntry) bool {
++	name := d.Name()
++	if name == ".git" {
++		return true
 +	}
 +
- 	entries, err := readdir(path)
- 	if err != nil {
- 		return nil, err
++	// Trusty dir_srcs bind-mount prebuilt toolchains into nsjail, but tracking
++	// every file in those immutable trees creates oversized Ninja deps records.
++	depPath := filepath.ToSlash(path)
++	return depPath == "prebuilts" || strings.HasPrefix(depPath, "prebuilts/")
++}
 diff --git a/java/config/config.go b/java/config/config.go
 index 2b539abd7..61e3a148c 100644
 --- a/java/config/config.go
@@ -468,8 +450,89 @@ index 9b7961ee0..9aabb425e 100644
  	glob := jdkHome + "/**/*"
  	files, err := ctx.GlobWithDeps(glob, nil)
  	if err != nil {
+diff --git a/ui/build/config.go b/ui/build/config.go
+index 1d793ad45..a96bd6285 100644
+--- a/ui/build/config.go
++++ b/ui/build/config.go
+@@ -1835,6 +1835,10 @@ func (c *configImpl) KatiBin() string {
+ }
+ 
+ func (c *configImpl) NinjaBin() string {
++	if override, ok := c.environ.Get("ANDROID_BUILD_NINJA"); ok && override != "" {
++		return override
++	}
++
+ 	binName := "ninja"
+ 	if c.UseABFS() {
+ 		binName = "ninjago"
+@@ -1842,6 +1846,11 @@ func (c *configImpl) NinjaBin() string {
+ 	return c.PrebuiltBuildTool(binName)
+ }
+ 
++func (c *configImpl) ClassicExternalNinja() bool {
++	override, ok := c.environ.Get("ANDROID_BUILD_NINJA")
++	return ok && override != "" && c.environ.IsEnvTrue("ANDROID_BUILD_CLASSIC_NINJA")
++}
++
+ func (c *configImpl) N2Bin() string {
+ 	path := c.PrebuiltBuildTool("n2")
+ 	// Use musl instead of glibc because glibc on the build server is old and has bugs
+diff --git a/ui/build/ninja.go b/ui/build/ninja.go
+index 2b31024d4..9d9fe0588 100644
+--- a/ui/build/ninja.go
++++ b/ui/build/ninja.go
+@@ -83,14 +83,23 @@ func runNinja(ctx Context, config Config, ninjaArgs []string) {
+ 	default:
+ 		// NINJA_NINJA or NINJA_NINJAGO.
+ 		executable = config.NinjaBin()
+-		args = []string{
+-			"-d", "keepdepfile",
+-			"-d", "keeprsp",
+-			"-d", "stats",
+-			"--frontend_file", fifo,
+-			"-o", "usesphonyoutputs=yes",
+-			"-w", "dupbuild=err",
+-			"-w", "missingdepfile=err",
++		if config.ClassicExternalNinja() {
++			args = []string{
++				"-d", "keepdepfile",
++				"-d", "keeprsp",
++				"-d", "stats",
++				"-w", "dupbuild=err",
++			}
++		} else {
++			args = []string{
++				"-d", "keepdepfile",
++				"-d", "keeprsp",
++				"-d", "stats",
++				"--frontend_file", fifo,
++				"-o", "usesphonyoutputs=yes",
++				"-w", "dupbuild=err",
++				"-w", "missingdepfile=err",
++			}
+ 		}
+ 	}
+ 	args = append(args, ninjaArgs...)
+@@ -111,7 +120,7 @@ func runNinja(ctx Context, config Config, ninjaArgs []string) {
+ 	if !config.BuildBrokenMissingOutputs() {
+ 		// Missing outputs will be treated as errors.
+ 		// BUILD_BROKEN_MISSING_OUTPUTS can be used to bypass this check.
+-		if config.ninjaCommand != NINJA_N2 {
++		if config.ninjaCommand != NINJA_N2 && !config.ClassicExternalNinja() {
+ 			args = append(args,
+ 				"-w", "missingoutfile=err",
+ 			)
+@@ -129,7 +138,7 @@ func runNinja(ctx Context, config Config, ninjaArgs []string) {
+ 	}
+ 
+ 	// TODO(b/346806126): implement this for the other ninjaCommand values.
+-	if config.ninjaCommand == NINJA_NINJA {
++	if config.ninjaCommand == NINJA_NINJA && !config.ClassicExternalNinja() {
+ 		switch config.NinjaWeightListSource() {
+ 		case NINJA_LOG:
+ 			cmd.Args = append(cmd.Args, "-o", "usesninjalogasweightlist=yes")
 diff --git a/ui/build/soong.go b/ui/build/soong.go
-index c9b303c5b..d29955029 100644
+index c9b303c5b..e8db9f12c 100644
 --- a/ui/build/soong.go
 +++ b/ui/build/soong.go
 @@ -241,6 +241,11 @@ func (pb PrimaryBuilderFactory) primaryBuilderInvocation(config Config) bootstra
@@ -484,42 +547,42 @@ index c9b303c5b..d29955029 100644
  
  	var allArgs []string
  	allArgs = append(allArgs, pb.specificArgs...)
-diff --git a/cmd/dir_to_depfile/dir_to_depfile.go b/cmd/dir_to_depfile/dir_to_depfile.go
-index afc3d027c..d16d49cdc 100644
---- a/cmd/dir_to_depfile/dir_to_depfile.go
-+++ b/cmd/dir_to_depfile/dir_to_depfile.go
-@@ -23,6 +23,7 @@ import (
- 	"log"
- 	"os"
- 	"path/filepath"
-+	"strings"
+@@ -666,17 +671,27 @@ func runSoong(ctx Context, config Config, enforceNoSoongOutput bool) {
+ 			default:
+ 				// NINJA_NINJA is the default.
+ 				ninjaCmd = config.NinjaBin()
+-				ninjaArgs = []string{
+-					"-d", "keepdepfile",
+-					"-d", "stats",
+-					"-o", "usesphonyoutputs=yes",
+-					"-o", "preremoveoutputs=yes",
+-					"-w", "dupbuild=err",
+-					"-w", "outputdir=err",
+-					"-w", "missingoutfile=err",
+-					"-j", strconv.Itoa(config.Parallel()),
+-					"--frontend_file", fifo,
+-					"-f", filepath.Join(config.SoongOutDir(), "bootstrap.ninja"),
++				if config.ClassicExternalNinja() {
++					ninjaArgs = []string{
++						"-d", "keepdepfile",
++						"-d", "stats",
++						"-w", "dupbuild=err",
++						"-j", strconv.Itoa(config.Parallel()),
++						"-f", filepath.Join(config.SoongOutDir(), "bootstrap.ninja"),
++					}
++				} else {
++					ninjaArgs = []string{
++						"-d", "keepdepfile",
++						"-d", "stats",
++						"-o", "usesphonyoutputs=yes",
++						"-o", "preremoveoutputs=yes",
++						"-w", "dupbuild=err",
++						"-w", "outputdir=err",
++						"-w", "missingoutfile=err",
++						"-j", strconv.Itoa(config.Parallel()),
++						"--frontend_file", fifo,
++						"-f", filepath.Join(config.SoongOutDir(), "bootstrap.ninja"),
++					}
+ 				}
+ 			}
  
- 	"android/soong/makedeps"
- )
-@@ -73,8 +74,26 @@ func collectDirectoryDeps(dir string) (deps []string, err error) {
- 		if err != nil {
- 			return err
- 		}
-+		if shouldSkipDep(path, d) {
-+			if d.IsDir() {
-+				return filepath.SkipDir
-+			}
-+			return nil
-+		}
- 		deps = append(deps, path)
- 		return nil
- 	})
- 	return deps, err
- }
-+
-+func shouldSkipDep(path string, d fs.DirEntry) bool {
-+	name := d.Name()
-+	if name == ".git" {
-+		return true
-+	}
-+
-+	// Trusty dir_srcs bind-mount prebuilt toolchains into nsjail, but tracking
-+	// every file in those immutable trees creates oversized Ninja deps records.
-+	depPath := filepath.ToSlash(path)
-+	return depPath == "prebuilts" || strings.HasPrefix(depPath, "prebuilts/")
-+}
