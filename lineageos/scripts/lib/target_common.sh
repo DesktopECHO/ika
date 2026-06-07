@@ -16,15 +16,18 @@ if ! declare -F die >/dev/null 2>&1; then
   }
 fi
 
-# Cuttlefish host package tuple, keyed on the TARGET arch -- NOT the build host.
-# arm64 ships the musl host package (there is no arm64 Rust musl prebuilt, so
-# that tree carries the glibc-payload arm64 toolchain); x86_64 ships the glibc
-# host package. Host-independent: an arm64 ROM cross-built on x86_64 still
-# packages linux_musl-arm64. Keying this on the build host silently packages the
-# wrong Cuttlefish host tools into the release bundle, so keep it target-keyed.
+# Cuttlefish host package tuple. x86_64 targets package the local linux-x86
+# host tools. arm64 targets package ARM64 host tools, but the output tag differs
+# by build host: native ARM64 builds emit linux-arm64, while x86_64 hosts
+# cross-building the ARM64 bundle emit linux_musl-arm64.
 target_host_tag() {
   case "$1" in
-    arm64) printf '%s\n' linux_musl-arm64 ;;
+    arm64)
+      case "$(uname -m)" in
+        aarch64|arm64) printf '%s\n' linux-arm64 ;;
+        *) printf '%s\n' linux_musl-arm64 ;;
+      esac
+      ;;
     x86_64) printf '%s\n' linux-x86 ;;
     *) die "internal error: unsupported target $1" ;;
   esac

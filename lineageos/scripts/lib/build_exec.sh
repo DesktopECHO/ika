@@ -1,49 +1,16 @@
 #!/usr/bin/env bash
-# Build execution for the LineageOS Desktop build engine: ARM64 job/memory limit
-# tuning, active-LLVM env export, muvm guest orchestration (run_build_muvm) and
-# native execution (run_build_native), and the lunch+make dispatch. Source only
-# (defines functions). Relies on engine globals + core primitives at call time.
+# Build execution for the LineageOS Desktop build engine: ARM64 memory limit
+# tuning, active-LLVM env export, native execution, and the lunch+make dispatch.
+# Source only (defines functions). Relies on engine globals + core primitives at
+# call time.
 
-configure_arm64_job_limits() {
+configure_arm64_soong_limits() {
   host_is_arm64 || return 0
-
-  if (( jobs_was_set == 0 )); then
-    if [[ ! "$arm64_jobs" =~ ^[0-9]+$ || "$arm64_jobs" -le 0 ]]; then
-      build_jobs_fail "invalid ARM64_JOBS value '$arm64_jobs'; expected a positive integer"
-      return 1
-    fi
-    jobs="$arm64_jobs"
-  fi
-
-  if (( ninja_highmem_jobs_was_set == 1 )); then
-    arm64_ninja_highmem_jobs="$highmem_jobs"
-  else
-    if [[ ! "$arm64_ninja_highmem_jobs" =~ ^[0-9]+$ || "$arm64_ninja_highmem_jobs" -le 0 ]]; then
-      build_jobs_fail \
-        "invalid ARM64_NINJA_HIGHMEM_JOBS value '$arm64_ninja_highmem_jobs'; expected a positive integer"
-      return 1
-    fi
-    highmem_jobs="$arm64_ninja_highmem_jobs"
-    export NINJA_HIGHMEM_NUM_JOBS="$highmem_jobs"
-  fi
 
   if [[ ! "$arm64_soong_gomaxprocs" =~ ^[0-9]+$ || "$arm64_soong_gomaxprocs" -le 0 ]]; then
     build_jobs_fail \
       "invalid ARM64_SOONG_GOMAXPROCS value '$arm64_soong_gomaxprocs'; expected a positive integer"
     return 1
-  fi
-
-  # Default the muvm guest to all logical host cores. ARM64_JOBS still caps how
-  # many memory-hungry compilers run at once, so handing the guest the otherwise
-  # idle cores speeds the Soong analysis phase and zram (de)compression threads
-  # without raising peak RSS. Set ARM64_MUVM_CPU_LIST to pin (e.g. perf cores
-  # "0-3" on an M1, or "" to defer to muvm's own default).
-  if (( arm64_muvm_cpu_list_was_set == 0 )) && [[ -z "$arm64_muvm_cpu_list" ]]; then
-    local total_cpus
-    total_cpus="$(logical_cpu_count)"
-    if [[ "$total_cpus" =~ ^[0-9]+$ && "$total_cpus" -gt 0 ]]; then
-      arm64_muvm_cpu_list="0-$((total_cpus - 1))"
-    fi
   fi
 }
 
@@ -174,36 +141,36 @@ arm64_log_looks_resource_limited() {
   return 1
 }
 
-raise_open_file_limit_for_muvm() {
+raise_arm64_open_file_limit() {
   host_is_arm64 || return 0
-  [[ -n "$arm64_muvm_nofile_limit" ]] || return 0
-  [[ "$arm64_muvm_nofile_limit" =~ ^[0-9]+$ ]] || \
-    die "ARM64_MUVM_NOFILE_LIMIT must be a numeric limit or empty to skip"
+  [[ -n "$arm64_nofile_limit" ]] || return 0
+  [[ "$arm64_nofile_limit" =~ ^[0-9]+$ ]] || \
+    die "ARM64_NOFILE_LIMIT must be a numeric limit or empty to skip"
 
   local current_soft current_hard
   current_soft="$(ulimit -Sn)"
   current_hard="$(ulimit -Hn)"
-  if nofile_limit_at_least "$current_soft" "$arm64_muvm_nofile_limit" && \
-     nofile_limit_at_least "$current_hard" "$arm64_muvm_nofile_limit"; then
-    log "host open-file limit for muvm already ${current_soft}:${current_hard}"
+  if nofile_limit_at_least "$current_soft" "$arm64_nofile_limit" && \
+     nofile_limit_at_least "$current_hard" "$arm64_nofile_limit"; then
+    log "host open-file limit already ${current_soft}:${current_hard}"
     return 0
   fi
 
   command -v prlimit >/dev/null 2>&1 || install_missing_commands prlimit || true
   command -v prlimit >/dev/null 2>&1 || \
-    die "ARM64 host needs prlimit to raise the open-file limit for muvm"
+    die "ARM64 host needs prlimit to raise the open-file limit"
 
-  if run_privileged prlimit --pid "$$" --nofile="${arm64_muvm_nofile_limit}:${arm64_muvm_nofile_limit}" >/dev/null 2>&1; then
+  if run_privileged prlimit --pid "$$" --nofile="${arm64_nofile_limit}:${arm64_nofile_limit}" >/dev/null 2>&1; then
     current_soft="$(ulimit -Sn)"
     current_hard="$(ulimit -Hn)"
-    if nofile_limit_at_least "$current_soft" "$arm64_muvm_nofile_limit" && \
-       nofile_limit_at_least "$current_hard" "$arm64_muvm_nofile_limit"; then
-      log "raised host open-file limit for muvm to ${current_soft}:${current_hard}"
+    if nofile_limit_at_least "$current_soft" "$arm64_nofile_limit" && \
+       nofile_limit_at_least "$current_hard" "$arm64_nofile_limit"; then
+      log "raised host open-file limit to ${current_soft}:${current_hard}"
       return 0
     fi
   fi
 
-  die "failed to raise host open-file limit for muvm to $arm64_muvm_nofile_limit; current limit is ${current_soft}:${current_hard}"
+  die "failed to raise host open-file limit to $arm64_nofile_limit; current limit is ${current_soft}:${current_hard}"
 }
 
 active_llvm_prebuilts_version() {
@@ -236,28 +203,34 @@ export_active_llvm_env() {
   fi
 }
 
-active_llvm_export_lines() {
-  local prebuilts_version release_version value_q
+configure_arm64_ninja_runner() {
+  host_is_arm64 || return 0
 
-  prebuilts_version="$(active_llvm_prebuilts_version)"
-  release_version="$(active_llvm_release_version)"
-  if [[ -n "$prebuilts_version" ]]; then
-    printf -v value_q '%q' "$prebuilts_version"
-    printf 'export LLVM_PREBUILTS_VERSION=%s\n' "$value_q"
-    printf 'export LLVM_BINDGEN_PREBUILTS_VERSION=%s\n' "$value_q"
+  unset ANDROID_BUILD_NINJA
+  unset ANDROID_BUILD_CLASSIC_NINJA
+
+  local prebuilt_ninja page_size
+  prebuilt_ninja="$workspace/prebuilts/build-tools/linux-arm64/bin/ninja"
+  page_size="$(getconf PAGESIZE 2>/dev/null || true)"
+  if [[ -n "$page_size" && "$page_size" != "4096" ]]; then
+    log "ARM64 host page size is $page_size; using system Ninja fallback without probing the prebuilt Ninja"
+  elif [[ -x "$prebuilt_ninja" ]]; then
+    return 0
   fi
-  if [[ -n "$release_version" ]]; then
-    printf -v value_q '%q' "$release_version"
-    printf 'export LLVM_RELEASE_VERSION=%s\n' "$value_q"
-  fi
+
+  command -v ninja >/dev/null 2>&1 || install_missing_commands ninja || true
+  command -v ninja >/dev/null 2>&1 || \
+    die "ARM64 prebuilt Ninja cannot run on this host; install a system ninja package"
+
+  export ANDROID_BUILD_NINJA="$(command -v ninja)"
+  export ANDROID_BUILD_CLASSIC_NINJA=1
+  log "ARM64 prebuilt Ninja cannot run on this host; using system Ninja at $ANDROID_BUILD_NINJA"
 }
 
 configure_arm64_host_build() {
   host_is_arm64 || return 0
 
   ensure_arm64_go_prebuilt
-  command -v muvm >/dev/null 2>&1 || \
-    die "ARM64 host needs muvm to run the Android build in a 4 KiB-page guest"
   [[ -d "$workspace/prebuilts/build-tools/linux-arm64" ]] || \
     die "missing ARM64 build tools prebuilt: prebuilts/build-tools/linux-arm64"
   require_arm64_prebuilt_executable "$workspace/prebuilts/build-tools/linux-arm64/bin/ninja" "ARM64 Ninja"
@@ -277,203 +250,12 @@ configure_arm64_host_build() {
   ensure_no_arm64_x86_prebuilt_substitutions
 
   arm64_android_java_home_for_build >/dev/null || true
-  raise_open_file_limit_for_muvm
-}
-
-precompute_muvm_module_paths() {
-  local product="$1"
-  host_is_arm64 || return 0
-
-  local java_home
-  java_home="$(arm64_android_java_home_for_build || true)"
-
-  log "precomputing Android module path lists for $product"
-  (
-    cd "$workspace"
-    export ANDROID_BUILD_SERIAL_FINDER=1
-    export THINLTO_USE_MLGO="$arm64_thinlto_use_mlgo"
-    export_active_llvm_env
-    if [[ -n "$java_home" ]]; then
-      export OVERRIDE_ANDROID_JAVA_HOME="$java_home"
-    fi
-    set +u
-    source build/envsetup.sh
-    lunch "$product" trunk_staging userdebug >/dev/null
-  )
-}
-
-shell_quote_join() {
-  local quoted="" part q
-  for part in "$@"; do
-    printf -v q '%q' "$part"
-    quoted+="${quoted:+ }$q"
-  done
-  printf '%s\n' "$quoted"
+  raise_arm64_open_file_limit
+  configure_arm64_ninja_runner
 }
 
 sanitize_build_log_output() {
   sed -u 's/ERROR init_or_kernel] \[missing newline\]/PING/g'
-}
-
-run_build_muvm() {
-  local product="$1"
-  shift
-
-  local workspace_q product_q highmem_jobs_q thinlto_use_mlgo_q goals_q command nofile_limit_q
-  local extra_exports="" value_q java_home
-  local llvm_prebuilts_version llvm_release_version
-  printf -v workspace_q '%q' "$workspace"
-  printf -v product_q '%q' "$product"
-  printf -v highmem_jobs_q '%q' "$arm64_ninja_highmem_jobs"
-  printf -v thinlto_use_mlgo_q '%q' "$arm64_thinlto_use_mlgo"
-  printf -v nofile_limit_q '%q' "$arm64_muvm_nofile_limit"
-  goals_q="$(shell_quote_join "$@")"
-  java_home="$(arm64_android_java_home_for_build || true)"
-  llvm_prebuilts_version="$(active_llvm_prebuilts_version)"
-  llvm_release_version="$(active_llvm_release_version)"
-
-  if [[ -n "${LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE+x}" ]]; then
-    printf -v value_q '%q' "$LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE"
-    extra_exports+="export LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE=$value_q"$'\n'
-  fi
-  if [[ -n "${USE_NDK_TRANSLATION_BINARY+x}" ]]; then
-    printf -v value_q '%q' "$USE_NDK_TRANSLATION_BINARY"
-    extra_exports+="export USE_NDK_TRANSLATION_BINARY=$value_q"$'\n'
-  fi
-  if [[ -n "$java_home" ]]; then
-    printf -v value_q '%q' "$java_home"
-    extra_exports+="export OVERRIDE_ANDROID_JAVA_HOME=$value_q"$'\n'
-  fi
-  if [[ "${USE_CCACHE:-}" == "1" ]]; then
-    extra_exports+="export USE_CCACHE=1"$'\n'
-    printf -v value_q '%q' "${CCACHE_DIR:-}"
-    extra_exports+="export CCACHE_DIR=$value_q"$'\n'
-    printf -v value_q '%q' "${CCACHE_EXEC:-}"
-    extra_exports+="export CCACHE_EXEC=$value_q"$'\n'
-  fi
-  extra_exports+="$(active_llvm_export_lines)"
-
-  ensure_linux_arm64_clang_ready
-  precompute_muvm_module_paths "$product"
-  raise_open_file_limit_for_muvm
-
-  local -a build_attempts=()
-  mapfile -t build_attempts < <(arm64_build_attempts "$jobs" "$arm64_soong_gomemlimit")
-
-  local attempt attempt_jobs attempt_jobs_q attempt_gomemlimit attempt_gomemlimit_q
-  local attempt_gomaxprocs attempt_gomaxprocs_q
-  local attempt_gomemlimit_label attempt_log status last_status=1
-  local -a muvm_args=(--mem="$arm64_muvm_mem_mib")
-  if [[ -n "$arm64_muvm_cpu_list" ]]; then
-    muvm_args+=(-c "$arm64_muvm_cpu_list")
-  fi
-  for attempt in "${build_attempts[@]}"; do
-    read -r attempt_jobs attempt_gomemlimit <<< "$attempt"
-    printf -v attempt_jobs_q '%q' "$attempt_jobs"
-    printf -v attempt_gomemlimit_q '%q' "$attempt_gomemlimit"
-    attempt_gomaxprocs="$arm64_soong_gomaxprocs"
-    if (( arm64_soong_gomaxprocs_was_set == 0 && attempt_jobs < attempt_gomaxprocs )); then
-      attempt_gomaxprocs="$attempt_jobs"
-    fi
-    printf -v attempt_gomaxprocs_q '%q' "$attempt_gomaxprocs"
-    command=$(cat <<EOF
-set -eo pipefail
-set +u
-muvm_nofile_limit=$nofile_limit_q
-guest_nofile_limit_at_least() {
-  local value="\$1"
-  local minimum="\$2"
-  [[ "\$value" == "unlimited" ]] && return 0
-  [[ "\$value" =~ ^[0-9]+$ ]] || return 1
-  [[ "\$minimum" =~ ^[0-9]+$ ]] || return 1
-  (( value >= minimum ))
-}
-if [[ -n "\$muvm_nofile_limit" ]]; then
-  guest_nofile_soft="\$(ulimit -Sn)"
-  guest_nofile_hard="\$(ulimit -Hn)"
-  if guest_nofile_limit_at_least "\$guest_nofile_soft" "\$muvm_nofile_limit" && \
-     guest_nofile_limit_at_least "\$guest_nofile_hard" "\$muvm_nofile_limit"; then
-    printf '[lineage-desktop] muvm guest open-file limit is %s:%s\n' "\$guest_nofile_soft" "\$guest_nofile_hard"
-  elif guest_nofile_limit_at_least "\$guest_nofile_hard" "\$muvm_nofile_limit"; then
-    ulimit -Sn "\$muvm_nofile_limit"
-    guest_nofile_soft="\$(ulimit -Sn)"
-    guest_nofile_hard="\$(ulimit -Hn)"
-    if guest_nofile_limit_at_least "\$guest_nofile_soft" "\$muvm_nofile_limit"; then
-      printf '[lineage-desktop] raised muvm guest open-file limit to %s:%s\n' "\$guest_nofile_soft" "\$guest_nofile_hard"
-    else
-      printf '[lineage-desktop] error: failed to raise muvm guest open-file soft limit to %s (got %s:%s)\n' "\$muvm_nofile_limit" "\$guest_nofile_soft" "\$guest_nofile_hard" >&2
-      exit 1
-    fi
-  else
-    printf '[lineage-desktop] warning: muvm guest open-file hard limit is %s, below requested %s; host muvm process limit was raised before launch\n' "\$guest_nofile_hard" "\$muvm_nofile_limit" >&2
-  fi
-fi
-export ANDROID_BUILD_SERIAL_FINDER=1
-export _SOONG_INTERNAL_NO_FINDER=1
-export GOMEMLIMIT=$attempt_gomemlimit_q
-export GOGC=$arm64_soong_gogc
-export GOMAXPROCS=$attempt_gomaxprocs_q
-export GODEBUG=$arm64_godebug
-export GOTRACEBACK=all
-export RUSTC_BOOTSTRAP=1
-export NINJA_HIGHMEM_NUM_JOBS=$highmem_jobs_q
-export THINLTO_USE_MLGO=$thinlto_use_mlgo_q
-$extra_exports
-cd $workspace_q
-source build/envsetup.sh
-lunch $product_q trunk_staging userdebug
-if [[ "\${TARGET_PRODUCT:-}" != $product_q ]]; then
-  printf '[lineage-desktop] error: lunch did not set TARGET_PRODUCT=%s (got %s)\n' $product_q "\${TARGET_PRODUCT:-}" >&2
-  exit 1
-fi
-set -eo pipefail
-set -u
-m $goals_q -j$attempt_jobs_q
-EOF
-    )
-
-    mkdir -p "$workspace/out/lineage-desktop"
-    attempt_gomemlimit_label="${attempt_gomemlimit//[^[:alnum:]._-]/_}"
-    attempt_log="$workspace/out/lineage-desktop/build-${product}-j${attempt_jobs}-g${attempt_gomemlimit_label}-p${attempt_gomaxprocs}.log"
-    log "running $product build inside muvm (${arm64_muvm_mem_mib} MiB, CPU list ${arm64_muvm_cpu_list:-default}, $attempt_jobs jobs, $arm64_ninja_highmem_jobs high-memory job, Soong GOMEMLIMIT=$attempt_gomemlimit, GOMAXPROCS=$attempt_gomaxprocs, ThinLTO MLGO=$arm64_thinlto_use_mlgo)"
-    set +e
-    muvm "${muvm_args[@]}" \
-      -e ANDROID_BUILD_SERIAL_FINDER=1 \
-      -e _SOONG_INTERNAL_NO_FINDER=1 \
-      -e GOMEMLIMIT="$attempt_gomemlimit" \
-      -e GOGC="$arm64_soong_gogc" \
-      -e GOMAXPROCS="$attempt_gomaxprocs" \
-      -e GODEBUG="$arm64_godebug" \
-      -e GOTRACEBACK=all \
-      -e RUSTC_BOOTSTRAP=1 \
-      -e THINLTO_USE_MLGO="$arm64_thinlto_use_mlgo" \
-      -e LLVM_PREBUILTS_VERSION="$llvm_prebuilts_version" \
-      -e LLVM_RELEASE_VERSION="$llvm_release_version" \
-      -e LLVM_BINDGEN_PREBUILTS_VERSION="$llvm_prebuilts_version" \
-      -- bash -lc "$command" 2>&1 | sanitize_build_log_output | tee "$attempt_log"
-    status="${PIPESTATUS[0]}"
-    set -e
-
-    if (( status == 0 )); then
-      jobs="$attempt_jobs"
-      arm64_soong_gomemlimit="$attempt_gomemlimit"
-      return 0
-    fi
-
-    last_status="$status"
-    dump_soong_failure_logs "$product"
-    if (( status == 137 )); then
-      log "$product build exited with status 137; treating it as ARM64 resource pressure"
-    elif ! arm64_log_looks_resource_limited "$attempt_log"; then
-      return "$status"
-    fi
-
-    remove_soong_graph_state "$product" \
-      "failed ARM64 attempt with $attempt_jobs jobs, Soong GOMEMLIMIT=$attempt_gomemlimit, and GOMAXPROCS=$attempt_gomaxprocs"
-    log "$product build failed under ARM64 resource pressure with $attempt_jobs jobs, Soong GOMEMLIMIT=$attempt_gomemlimit, and GOMAXPROCS=$attempt_gomaxprocs; retrying lower if available"
-  done
-
-  return "$last_status"
 }
 
 # On a build failure, Soong/Ninja write the concise failed-action detail to
@@ -520,12 +302,89 @@ run_build_native() {
   return "$status"
 }
 
+run_build_arm64_native() {
+  local product="$1"
+  shift
+
+  ensure_linux_arm64_clang_ready
+  raise_arm64_open_file_limit
+  configure_arm64_ninja_runner
+
+  local -a build_attempts=()
+  mapfile -t build_attempts < <(arm64_build_attempts "$jobs" "$arm64_soong_gomemlimit")
+
+  local attempt attempt_jobs attempt_gomemlimit attempt_gomaxprocs
+  local attempt_gomemlimit_label attempt_log status last_status=1 java_home
+  java_home="$(arm64_android_java_home_for_build || true)"
+
+  for attempt in "${build_attempts[@]}"; do
+    read -r attempt_jobs attempt_gomemlimit <<< "$attempt"
+    attempt_gomaxprocs="$arm64_soong_gomaxprocs"
+    if (( arm64_soong_gomaxprocs_was_set == 0 && attempt_jobs < attempt_gomaxprocs )); then
+      attempt_gomaxprocs="$attempt_jobs"
+    fi
+
+    mkdir -p "$workspace/out/lineage-desktop"
+    attempt_gomemlimit_label="${attempt_gomemlimit//[^[:alnum:]._-]/_}"
+    attempt_log="$workspace/out/lineage-desktop/build-${product}-native-j${attempt_jobs}-g${attempt_gomemlimit_label}-p${attempt_gomaxprocs}.log"
+    log "running $product build natively on ARM64 ($attempt_jobs jobs, $highmem_jobs high-memory jobs, Soong GOMEMLIMIT=$attempt_gomemlimit, GOMAXPROCS=$attempt_gomaxprocs, ThinLTO MLGO=$arm64_thinlto_use_mlgo)"
+
+    export GOMEMLIMIT="$attempt_gomemlimit"
+    export GOGC="$arm64_soong_gogc"
+    export GOMAXPROCS="$attempt_gomaxprocs"
+    export GODEBUG="$arm64_godebug"
+    export GOTRACEBACK=all
+    export RUSTC_BOOTSTRAP=1
+    export ANDROID_BUILD_NINJA="${ANDROID_BUILD_NINJA:-}"
+    export ANDROID_BUILD_CLASSIC_NINJA="${ANDROID_BUILD_CLASSIC_NINJA:-}"
+    export NINJA_HIGHMEM_NUM_JOBS="$highmem_jobs"
+    export THINLTO_USE_MLGO="$arm64_thinlto_use_mlgo"
+    export_active_llvm_env
+    if [[ -n "$java_home" ]]; then
+      export OVERRIDE_ANDROID_JAVA_HOME="$java_home"
+    fi
+
+    set +u
+    source build/envsetup.sh
+    lunch "$product" trunk_staging userdebug || die "lunch $product failed"
+    [[ "${TARGET_PRODUCT:-}" == "$product" ]] || \
+      die "lunch did not set TARGET_PRODUCT=$product (got '${TARGET_PRODUCT:-}')"
+    set -eo pipefail
+    set -u
+
+    set +e
+    m "$@" -j"$attempt_jobs" 2>&1 | sanitize_build_log_output | tee "$attempt_log"
+    status="${PIPESTATUS[0]}"
+    set -e
+
+    if (( status == 0 )); then
+      jobs="$attempt_jobs"
+      arm64_soong_gomemlimit="$attempt_gomemlimit"
+      return 0
+    fi
+
+    last_status="$status"
+    dump_soong_failure_logs "$product"
+    if (( status == 137 )); then
+      log "$product build exited with status 137; treating it as ARM64 resource pressure"
+    elif ! arm64_log_looks_resource_limited "$attempt_log"; then
+      return "$status"
+    fi
+
+    remove_soong_graph_state "$product" \
+      "failed native ARM64 attempt with $attempt_jobs jobs, Soong GOMEMLIMIT=$attempt_gomemlimit, and GOMAXPROCS=$attempt_gomaxprocs"
+    log "$product build failed under ARM64 resource pressure with $attempt_jobs jobs, Soong GOMEMLIMIT=$attempt_gomemlimit, and GOMAXPROCS=$attempt_gomaxprocs; retrying lower if available"
+  done
+
+  return "$last_status"
+}
+
 run_lunch_and_make() {
   local product="$1"
   shift
 
   if host_is_arm64; then
-    run_build_muvm "$product" "$@"
+    run_build_arm64_native "$product" "$@"
   else
     run_build_native "$product" "$@"
   fi

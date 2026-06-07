@@ -669,7 +669,7 @@ check_arm64_native_host_prebuilts() {
   host_is_arm64 || return 0
   target_enabled arm64 || return 0
 
-  local rust_version rust_root rustc clang_tools_root tool
+  local rust_version rust_root rustc clang_tools_root tool ninja_path page_size
   rust_version="$(rust_prebuilt_version "$android_root")"
   [[ -n "$rust_version" ]] || {
     fail "failed to detect Rust prebuilt version"
@@ -688,7 +688,16 @@ check_arm64_native_host_prebuilts() {
   done
 
   require_arm64_elf "$android_root/prebuilts/go/linux-arm64/bin/go" "ARM64 Go"
-  require_arm64_elf "$android_root/prebuilts/build-tools/linux-arm64/bin/ninja" "ARM64 Ninja"
+  ninja_path="$android_root/prebuilts/build-tools/linux-arm64/bin/ninja"
+  require_arm64_elf "$ninja_path" "ARM64 Ninja"
+  page_size="$(getconf PAGESIZE 2>/dev/null || true)"
+  if [[ -n "$page_size" && "$page_size" != "4096" ]]; then
+    if command -v ninja >/dev/null 2>&1; then
+      log "ARM64 host page size is $page_size; system Ninja fallback is available"
+    else
+      fail "ARM64 host page size is $page_size; install a system ninja package for the native ARM64 fallback"
+    fi
+  fi
   require_arm64_elf "$android_root/prebuilts/cmake/linux-arm64/bin/cmake" "ARM64 CMake"
   require_arm64_elf "$android_root/prebuilts/jdk/jdk21/linux-arm64/bin/javac" "ARM64 JDK 21 javac"
   require_arm64_elf "$android_root/prebuilts/jdk/jdk21/linux-arm64/bin/jlink" "ARM64 JDK 21 jlink"

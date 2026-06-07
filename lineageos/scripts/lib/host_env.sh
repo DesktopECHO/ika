@@ -32,6 +32,7 @@ package_for_command() {
     apt:lz4) printf '%s\n' lz4 ;;
     apt:mogrify) printf '%s\n' imagemagick ;;
     apt:modprobe) printf '%s\n' kmod ;;
+    apt:ninja) printf '%s\n' ninja-build ;;
     apt:pahole) printf '%s\n' dwarves ;;
     apt:prlimit) printf '%s\n' util-linux ;;
     apt:restorecon) printf '%s\n' policycoreutils ;;
@@ -55,6 +56,7 @@ package_for_command() {
     dnf:lz4) printf '%s\n' lz4 ;;
     dnf:mogrify) printf '%s\n' ImageMagick ;;
     dnf:modprobe) printf '%s\n' kmod ;;
+    dnf:ninja) printf '%s\n' ninja-build ;;
     dnf:pahole) printf '%s\n' dwarves ;;
     dnf:prlimit) printf '%s\n' util-linux ;;
     dnf:restorecon) printf '%s\n' policycoreutils ;;
@@ -67,7 +69,6 @@ package_for_command() {
     dnf:curl) printf '%s\n' curl ;;
     dnf:ccache) printf '%s\n' ccache ;;
     dnf:adb) printf '%s\n' android-tools ;;
-    dnf:muvm) printf '%s\n' muvm ;;
     pacman:awk) printf '%s\n' gawk ;;
     pacman:find) printf '%s\n' findutils ;;
     pacman:file) printf '%s\n' file ;;
@@ -79,6 +80,7 @@ package_for_command() {
     pacman:lz4) printf '%s\n' lz4 ;;
     pacman:mogrify) printf '%s\n' imagemagick ;;
     pacman:modprobe) printf '%s\n' kmod ;;
+    pacman:ninja) printf '%s\n' ninja ;;
     pacman:pahole) printf '%s\n' dwarves ;;
     pacman:prlimit) printf '%s\n' util-linux ;;
     pacman:restorecon) printf '%s\n' policycoreutils ;;
@@ -211,19 +213,15 @@ ensure_host_commands() {
   ensure_downloader
 }
 
-ensure_arm64_4k_guest() {
+ensure_arm64_native_host() {
   host_is_arm64 || return 0
-
-  command -v muvm >/dev/null 2>&1 || install_missing_commands muvm || true
-  command -v muvm >/dev/null 2>&1 || \
-    die "ARM64 host builds run in a 4 KiB-page muvm guest; install muvm and rerun"
 
   local page_size
   page_size="$(host_page_size)"
   if [[ "$page_size" != "4096" ]]; then
-    log "ARM64 host page size is $page_size; Android build will run in a 4 KiB-page muvm guest"
+    log "ARM64 host page size is $page_size; building natively with ARM64 prebuilts"
   else
-    log "ARM64 host build will run in muvm with ARM64 prebuilts"
+    log "ARM64 host build will run natively with ARM64 prebuilts"
   fi
 }
 
@@ -410,8 +408,8 @@ setup_temp_zram_if_needed() {
   # Target a fixed physical+zram total: create exactly enough zram to reach
   # ZRAM_TARGET_TOTAL_GIB. Hosts with >= ZRAM_SKIP_ABOVE_GIB physical RAM get
   # none. Sizes are GiB (binary), consistent with format_kib_as_gib.
-  target_total_gib="${ZRAM_TARGET_TOTAL_GIB:-48}"
-  skip_above_gib="${ZRAM_SKIP_ABOVE_GIB:-44}"
+  target_total_gib="${ZRAM_TARGET_TOTAL_GIB:-40}"
+  skip_above_gib="${ZRAM_SKIP_ABOVE_GIB:-36}"
   [[ "$target_total_gib" =~ ^[0-9]+$ && "$target_total_gib" -gt 0 ]] || \
     die "invalid ZRAM_TARGET_TOTAL_GIB value '$target_total_gib'; expected a positive integer"
   [[ "$skip_above_gib" =~ ^[0-9]+$ && "$skip_above_gib" -gt 0 ]] || \

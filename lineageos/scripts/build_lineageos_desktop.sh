@@ -37,8 +37,6 @@ repo_sync_retry_fetches="${REPO_SYNC_RETRY_FETCHES:-9}"
 repo_sync_quiet="${REPO_SYNC_QUIET:-}"
 jobs_was_set=0
 [[ -n "${JOBS:-}" ]] && jobs_was_set=1
-ninja_highmem_jobs_was_set=0
-[[ -n "${NINJA_HIGHMEM_NUM_JOBS:-}" ]] && ninja_highmem_jobs_was_set=1
 arm64_go_prebuilt_git_url="${ARM64_GO_PREBUILT_GIT_URL:-https://android.googlesource.com/platform/prebuilts/go/linux-arm64}"
 arm64_go_prebuilt_git_ref="${ARM64_GO_PREBUILT_GIT_REF:-mirror-goog-llvm-r596125-release}"
 arm64_rust_prebuilt_dir="${ARM64_RUST_PREBUILT_DIR:-}"
@@ -62,24 +60,18 @@ arm64_cmake_prebuilt_git_url="${ARM64_CMAKE_PREBUILT_GIT_URL:-https://android.go
 arm64_cmake_prebuilt_git_ref="${ARM64_CMAKE_PREBUILT_GIT_REF:-mirror-goog-llvm-r596125-release}"
 arm64_jdk21_prebuilt_url="${ARM64_JDK21_PREBUILT_URL:-https://api.adoptium.net/v3/binary/latest/21/ga/linux/aarch64/jdk/hotspot/normal/eclipse}"
 arm64_jdk8_prebuilt_url="${ARM64_JDK8_PREBUILT_URL:-https://api.adoptium.net/v3/binary/latest/8/ga/linux/aarch64/jdk/hotspot/normal/eclipse}"
-arm64_jobs="${ARM64_JOBS:-4}"
 arm64_job_retry_list="${ARM64_JOB_RETRY_LIST:-}"
-arm64_muvm_mem_mib="${ARM64_MUVM_MEM_MIB:-32768}"
-arm64_muvm_cpu_list_was_set=0
-[[ -n "${ARM64_MUVM_CPU_LIST+x}" ]] && arm64_muvm_cpu_list_was_set=1
-arm64_muvm_cpu_list="${ARM64_MUVM_CPU_LIST:-}"
-arm64_muvm_nofile_limit="${ARM64_MUVM_NOFILE_LIMIT:-4194304}"
+arm64_nofile_limit="${ARM64_NOFILE_LIMIT:-4194304}"
 arm64_soong_gomemlimit_was_set=0
 [[ -n "${ARM64_SOONG_GOMEMLIMIT:-}" ]] && arm64_soong_gomemlimit_was_set=1
-arm64_soong_gomemlimit="${ARM64_SOONG_GOMEMLIMIT:-2GiB}"
+arm64_soong_gomemlimit="${ARM64_SOONG_GOMEMLIMIT:-6GiB}"
 arm64_soong_gomemlimit_retry_list="${ARM64_SOONG_GOMEMLIMIT_RETRY_LIST:-}"
-arm64_soong_gogc="${ARM64_SOONG_GOGC:-25}"
+arm64_soong_gogc="${ARM64_SOONG_GOGC:-100}"
 arm64_soong_gomaxprocs_was_set=0
 [[ -n "${ARM64_SOONG_GOMAXPROCS:-}" ]] && arm64_soong_gomaxprocs_was_set=1
 arm64_soong_gomaxprocs="${ARM64_SOONG_GOMAXPROCS:-4}"
 arm64_godebug="${ARM64_GODEBUG:-asyncpreemptoff=1}"
 arm64_thinlto_use_mlgo="${ARM64_THINLTO_USE_MLGO:-false}"
-arm64_ninja_highmem_jobs="${ARM64_NINJA_HIGHMEM_JOBS:-1}"
 arm64_android_java_home="${ARM64_ANDROID_JAVA_HOME:-}"
 linux_arm64_llvm_prebuilts_version=""
 linux_arm64_llvm_release_version=""
@@ -255,6 +247,22 @@ normalize_targets() {
 # target_thin_files are defined in lib/target_common.sh (sourced near the top),
 # shared with the standalone rebuild helpers.
 
+prepare_target_output_headroom() {
+  local arch="$1"
+  local product product_out host_package host_tag
+  local -a thin_files
+
+  host_tag="$(target_host_tag "$arch")"
+  product="$(target_product "$arch")"
+  product_out="$(target_product_out "$arch")"
+  host_package="$workspace/out/host/$host_tag/cvd-host_package.tar.gz"
+  mapfile -t thin_files < <(target_thin_files "$arch")
+
+  remove_generated_ninja_state "$product" "pre-build headroom cleanup"
+  remove_packaged_target_outputs "$product" "$product_out" "$host_package" "${thin_files[@]}"
+  remove_target_image_outputs_for_headroom "$product_out"
+}
+
 build_target() {
   local arch="$1"
   local product product_out host_package bundle_name host_tag
@@ -286,9 +294,11 @@ build_target() {
   fi
 
   local target_files_zip="$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip"
-  local signed_target_files_zip="${target_files_zip%.zip}-signed.zip"
-  local signed_images_dir="$product_out/obj/PACKAGING/signed_images"
+  local signed_artifacts_dir="$output_dir/.lineage-desktop/signed/$product"
+  local signed_target_files_zip="$signed_artifacts_dir/${product}-target_files-signed.zip"
+  local signed_images_dir="$signed_artifacts_dir/signed_images"
   remove_packaged_target_outputs "$product" "$product_out" "$host_package" "${thin_files[@]}"
+  rm -rf "$signed_artifacts_dir"
 
   run_lunch_and_make "$product" \
     hosttar \
@@ -335,11 +345,11 @@ main() {
   esac
 
   ensure_host_commands
-  ensure_arm64_4k_guest
+  ensure_arm64_native_host
   ensure_signing_keys
   setup_temp_zram_if_needed
   set_build_jobs
-  configure_arm64_job_limits
+  configure_arm64_soong_limits
   log "using $jobs parallel build jobs ($highmem_jobs high-memory jobs)"
   configure_ccache
   ensure_repo_command
@@ -357,6 +367,9 @@ main() {
     done
   fi
   mkdir -p "$output_dir"
+  for target in "${targets[@]}"; do
+    prepare_target_output_headroom "$target"
+  done
 
   if enabled "$skip_sync"; then
     log "skipping repo sync (REBUILD/SKIP_SYNC); reusing existing source tree"
@@ -376,6 +389,7 @@ main() {
   fi
   update_microg_prebuilts
   configure_arm64_host_build
+  cleanup_arm64_prebuilt_download_caches
 
   local target
   for target in "${targets[@]}"; do

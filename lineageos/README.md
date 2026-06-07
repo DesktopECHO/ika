@@ -81,7 +81,7 @@ Building this ROM is a full LineageOS source build and is resource-intensive:
 - **CPU:** x86-64 Linux is the upstream-supported AOSP build host. ARM64
   Fedora Asahi hosts are supported by this project with ARM64 host prebuilts
   only; more cores shorten the build proportionally, and `JOBS` defaults to
-  `nproc`.
+  the logical CPU count minus 2, with a minimum of 1.
 
 ### ARM64 Build Hosts
 
@@ -90,13 +90,9 @@ build script refuses symlinked `linux-x86` substitutions. Clang-tools are
 pulled from AOSP's `platform/prebuilts/clang-tools` `mirror-goog-main-prebuilts`
 branch by default; provide the remaining ARM64 Rust, CMake, JDK, Go, Clang, and
 build-tools prebuilts before building. The Rust prebuilt must include both
-`aarch64-unknown-linux-gnu` and `aarch64-unknown-linux-musl` stdlibs. On Apple
-Silicon's 16 KiB-page kernels, install `muvm` so the build can run in a
-4 KiB-page guest:
-
-```bash
-sudo dnf install -y muvm
-```
+`aarch64-unknown-linux-gnu` and `aarch64-unknown-linux-musl` stdlibs. ARM64
+host builds run natively with the ARM64 prebuilts prepared by the build script,
+including on Apple Silicon's 16 KiB-page kernels.
 
 For local use on an ARM64 host, build the ARM64 Cuttlefish product:
 
@@ -168,7 +164,9 @@ checksums, overlay commit state, microG APK checksums, WebView APK checksums,
 and x86-64 native bridge metadata.
 
 Override the destination with `OUTPUT_DIR=/some/other/dir` if you want the
-bundles somewhere other than the ika repo root.
+bundles somewhere other than the ika repo root. Signed target-files staging also
+uses `OUTPUT_DIR`, so point it at a filesystem with enough free space for the
+final signing and bundle extraction steps.
 
 To build only one architecture:
 

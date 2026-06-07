@@ -33,71 +33,34 @@ physical_memory_total_kib() {
   awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo 2>/dev/null || true
 }
 
-memory_total_kib() {
-  awk '
-    /^MemTotal:/ { mem = $2 }
-    /^SwapTotal:/ { swap = $2 }
-    END {
-      total = mem + swap
-      if (total > 0) {
-        print total
-      }
-    }
-  ' /proc/meminfo 2>/dev/null || true
-}
-
-memory_reserve_kib() {
-  local mem_kib="$1"
-
-  if [[ ! "$mem_kib" =~ ^[0-9]+$ || "$mem_kib" -le 0 ]]; then
-    printf '%s\n' 0
-    return 0
-  fi
-
-  printf '%s\n' $((4 * 1024 * 1024))
-}
-
-memory_limited_job_count() {
-  local mib_per_job="${1:-3584}"
-  local mem_kib reserve_kib usable_kib jobs
-
-  mem_kib="$(memory_total_kib)"
-  if [[ "$mem_kib" =~ ^[0-9]+$ && "$mem_kib" -gt 0 ]]; then
-    reserve_kib="$(memory_reserve_kib "$mem_kib")"
-    usable_kib=$((mem_kib - reserve_kib))
-    (( usable_kib > 0 )) || usable_kib=0
-    jobs=$(( usable_kib / (mib_per_job * 1024) ))
-    (( jobs > 0 )) || jobs=1
-    printf '%s\n' "$jobs"
-  else
-    printf '%s\n' 1
-  fi
-}
-
 default_job_count() {
-  local memory_jobs cpu_jobs jobs
+  local cpu_jobs jobs
 
-  memory_jobs="$(memory_limited_job_count)"
   cpu_jobs="$(logical_cpu_count)"
-  jobs="$memory_jobs"
-  if (( cpu_jobs < jobs )); then
-    jobs="$cpu_jobs"
-  fi
+  jobs=$((cpu_jobs - 2))
   (( jobs > 0 )) || jobs=1
   printf '%s\n' "$jobs"
 }
 
 default_highmem_job_count() {
   local max_jobs="$1"
-  local mib_per_job="${2:-16384}"
-  local memory_jobs
+  local memory_kib highmem_jobs
+  local kib_per_highmem_job=$((32 * 1024 * 1024))
 
-  memory_jobs="$(memory_limited_job_count "$mib_per_job")"
-  if (( memory_jobs > max_jobs )); then
-    memory_jobs="$max_jobs"
+  if [[ ! "$max_jobs" =~ ^[0-9]+$ || "$max_jobs" -lt 1 ]]; then
+    max_jobs=1
   fi
-  (( memory_jobs > 0 )) || memory_jobs=1
-  printf '%s\n' "$memory_jobs"
+
+  memory_kib="$(physical_memory_total_kib)"
+  if [[ "$memory_kib" =~ ^[0-9]+$ && "$memory_kib" -gt 0 ]]; then
+    highmem_jobs=$((memory_kib / kib_per_highmem_job))
+  else
+    highmem_jobs=1
+  fi
+
+  (( highmem_jobs > 0 )) || highmem_jobs=1
+  (( highmem_jobs <= max_jobs )) || highmem_jobs="$max_jobs"
+  printf '%s\n' "$highmem_jobs"
 }
 
 build_jobs_fail() {
@@ -129,7 +92,7 @@ set_build_jobs() {
       return 1
     fi
   else
-    highmem_jobs="$(default_highmem_job_count "$jobs" 16384)"
+    highmem_jobs="$(default_highmem_job_count "$jobs")"
   fi
 
   export NINJA_HIGHMEM_NUM_JOBS="$highmem_jobs"

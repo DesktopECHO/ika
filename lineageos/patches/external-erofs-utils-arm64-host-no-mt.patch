@@ -1,0 +1,36 @@
+Patch summary:
+Build native ARM64 host mkfs.erofs without EROFS multithreading.
+
+During target-files signing on native ARM64 hosts, mkfs.erofs can wedge while
+rebuilding lz4hc-compressed partition images: the process remains alive with its
+worker threads asleep on futex waits, no CPU use, and no output I/O progress.
+
+Disable EROFS_MT_ENABLED only for ARM64 host variants. This removes the
+threaded compression and dfops paths from the native ARM64 host mkfs.erofs
+binary, including the linux_musl_arm64 variant copied to out/host/linux-arm64.
+x86 hosts keep the upstream multithreaded default.
+
+diff --git a/Android.bp b/Android.bp
+index 7ca293f..fc5f1cf 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -80,6 +80,19 @@ cc_defaults {
+         "-DHAVE_SYSCONF",
+         "-DEROFS_MT_ENABLED",
+     ],
++
++    target: {
++        linux_arm64: {
++            cflags: [
++                "-UEROFS_MT_ENABLED",
++            ],
++        },
++        linux_musl_arm64: {
++            cflags: [
++                "-UEROFS_MT_ENABLED",
++            ],
++        },
++    },
+ }
+ 
+ cc_defaults {

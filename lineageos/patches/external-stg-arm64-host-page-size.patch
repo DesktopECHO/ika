@@ -1,0 +1,16 @@
+diff --git a/Android.bp b/Android.bp
+index 77bc654..3a0939f 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -55,6 +55,11 @@ cc_defaults {
+     ],
+     compile_multilib: "64",
+     target: {
++        linux_musl_arm64: {
++            exclude_static_libs: [
++                "libjemalloc5",
++            ],
++        },
+         darwin: {
+             enabled: false,
+         },

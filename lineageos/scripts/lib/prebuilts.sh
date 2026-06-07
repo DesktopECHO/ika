@@ -1007,6 +1007,18 @@ install_arm64_rust_from_upstream_dist() {
   rm -rf "$install_dir"
 }
 
+cleanup_arm64_prebuilt_download_caches() {
+  host_is_arm64 || return 0
+
+  rm -rf \
+    "$workspace/out/lineage-desktop/arm64-prebuilts" \
+    "$workspace/out/lineage-desktop/go-prebuilts" \
+    "$workspace/out/lineage-desktop/clang-prebuilts" \
+    "$workspace/out/lineage-desktop/cmake-prebuilts" \
+    "$workspace/out/lineage-desktop/jdk21-prebuilts" \
+    "$workspace/out/lineage-desktop/jdk8-prebuilts"
+}
+
 ensure_arm64_rust_prebuilt() {
   host_is_arm64 || return 0
 
