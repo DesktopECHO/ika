@@ -199,6 +199,18 @@ enabled() {
   esac
 }
 
+# Route all build/signing temp to a disk-backed dir under the build out/ tree
+# (the same large filesystem the rest of the build uses), never the host's
+# default /tmp. On stock Asahi/ARM64 hosts /tmp is a small RAM-backed tmpfs;
+# the signing step (sign_target_files_apks) extracts the multi-GB target-files
+# zip into TMPDIR and otherwise exhausts it (and host RAM), dying with
+# "OSError: [Errno 122] Quota exceeded". Set unconditionally.
+configure_tmpdir() {
+  export TMPDIR="$workspace/out/tmp"
+  mkdir -p "$TMPDIR" || die "could not create build TMPDIR: $TMPDIR"
+  log "using disk-backed TMPDIR=$TMPDIR"
+}
+
 temp_zram_device=""
 
 normalize_targets() {
@@ -346,6 +358,7 @@ main() {
 
   ensure_host_commands
   ensure_arm64_native_host
+  configure_tmpdir
   ensure_signing_keys
   setup_temp_zram_if_needed
   set_build_jobs
