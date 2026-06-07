@@ -12,6 +12,7 @@ external/libpcap patches/external-libpcap-bison-data.patch
 external/one-true-awk patches/external-one-true-awk-bison-data.patch
 external/iproute2 patches/external-iproute2-bison-data.patch
 external/mesa3d patches/external-mesa3d-bison-data.patch
+external/erofs-utils patches/external-erofs-utils-arm64-host-no-mt.patch
 external/stg patches/external-stg-arm64-host-page-size.patch
 prebuilts/rust patches/prebuilts-rust-x86-musl-stdlib.patch
 external/musl patches/external-musl-lfs64-compat.patch
