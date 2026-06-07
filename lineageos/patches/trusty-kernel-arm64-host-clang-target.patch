@@ -1,0 +1,50 @@
+Patch summary:
+Let Trusty host tools and tests use an env-provided Clang host target.
+ARM64 host builds use the musl sysroot and ARM64 musl compiler-rt prebuilts,
+but Clang's default host triple is aarch64-unknown-linux-gnu. Thread optional
+target flags into host compiles and optional link/runtime flags into host links
+so ASan-enabled host tests resolve the checked-in ARM64 musl runtimes. Depend on
+toolchain.config so incremental builds rebuild stale host objects when those
+flags change. x86 hosts leave the variables empty and keep the existing linker
+defaults.
+
+diff --git a/make/generic_compile.mk b/make/generic_compile.mk
+index bef406b..b136f32 100644
+--- a/make/generic_compile.mk
++++ b/make/generic_compile.mk
+@@ -43,7 +43,8 @@ ifeq ($(GENERIC_OBJ_DIR), )
+ $(error GENERIC_OBJ_DIR must be specified)
+ endif
+ 
+-GENERIC_FLAGS += --sysroot $(CLANG_HOST_SYSROOT)
++GENERIC_FLAGS += $(CLANG_HOST_TARGET_FLAGS) --sysroot $(CLANG_HOST_SYSROOT)
++GENERIC_SRCDEPS += $(TOOLCHAIN_CONFIG)
+ 
+ # Group the source files so we can differ the flags between C, C++, and assembly.
+ GENERIC_C_SRCS := $(filter %.c,$(GENERIC_SRCS))
+diff --git a/make/host_test.mk b/make/host_test.mk
+index 9244786..432e3aa 100644
+--- a/make/host_test.mk
++++ b/make/host_test.mk
+@@ -49,7 +49,7 @@ HOST_TEST_BUILDDIR := $(TRUSTY_TOP_LEVEL_BUILDDIR)
+ endif
+ 
+ # We should use the prebuilt linker rather than the host linker
+-HOST_LDFLAGS := -B$(CLANG_BINDIR) -B$(CLANG_HOST_SEARCHDIR) \
++HOST_LDFLAGS := $(CLANG_HOST_LINK_FLAGS) -B$(CLANG_BINDIR) -B$(CLANG_HOST_SEARCHDIR) \
+ 	$(foreach dir,$(CLANG_HOST_LDDIRS),-L$(dir)) --sysroot=$(CLANG_HOST_SYSROOT) -fuse-ld=lld
+ 
+ HOST_CC := $(CLANG_BINDIR)/clang
+diff --git a/make/host_tool.mk b/make/host_tool.mk
+index 0921464..11989b1 100644
+--- a/make/host_tool.mk
++++ b/make/host_tool.mk
+@@ -58,7 +58,7 @@ HOST_LDFLAGS += -lpthread
+ endif
+ 
+ # We should use the prebuilt linker rather than the host linker
+-HOST_LDFLAGS += -B$(CLANG_BINDIR) -B$(CLANG_HOST_SEARCHDIR) \
++HOST_LDFLAGS += $(CLANG_HOST_LINK_FLAGS) -B$(CLANG_BINDIR) -B$(CLANG_HOST_SEARCHDIR) \
+ 	$(foreach dir,$(CLANG_HOST_LDDIRS),-L$(dir)) --sysroot=$(CLANG_HOST_SYSROOT) -fuse-ld=lld
+ 
+ # When using clang, we need to always use the prebuilt libc++ library

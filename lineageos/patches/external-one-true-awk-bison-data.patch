@@ -1,0 +1,22 @@
+diff --git a/Android.bp b/Android.bp
+index 8e8cc0d..8ad00ee 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -53,7 +53,7 @@ cc_library_host_static {
+ 
+ genrule {
+     name: "awkgram.tab.c",
+-    cmd: "M4=$(location m4) $(location bison) -y --no-lines --output=$(genDir)/awkgram.tab.c $(in)",
++    cmd: "BISON_PKGDATADIR=$$(dirname $$(dirname $$(dirname $(location bison))))/common/bison M4=$(location m4) $(location bison) -y --no-lines --output=$(genDir)/awkgram.tab.c $(in)",
+     out: ["awkgram.tab.c"],
+     srcs: ["awkgram.y"],
+     tools: [
+@@ -64,7 +64,7 @@ genrule {
+     name: "awkgram.tab.h",
+     // bison --defines outputs an extra file in addition to outputting the parser,
+     // so we still use --output to ensure the unused file is still in genDir.
+-    cmd: "M4=$(location m4) $(location bison) -y --no-lines --defines=$(genDir)/awkgram.tab.h --output=$(genDir)/unused $(in)",
++    cmd: "BISON_PKGDATADIR=$$(dirname $$(dirname $$(dirname $(location bison))))/common/bison M4=$(location m4) $(location bison) -y --no-lines --defines=$(genDir)/awkgram.tab.h --output=$(genDir)/unused $(in)",
+     out: ["awkgram.tab.h"],
+     srcs: ["awkgram.y"],
+     tools: [

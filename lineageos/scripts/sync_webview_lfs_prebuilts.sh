@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$script_dir/lib/common.sh"
+
 usage() {
   cat <<'EOF'
 Usage: sync_webview_lfs_prebuilts.sh ANDROID_ROOT [arm|arm64|x86|x86_64|all]...
@@ -17,26 +20,6 @@ log() {
 die() {
   printf '[lineage-desktop] error: %s\n' "$*" >&2
   exit 1
-}
-
-validate_zip_file() {
-  local zip_file="$1"
-
-  python3 - "$zip_file" <<'PY'
-from pathlib import Path
-import sys
-import zipfile
-
-path = Path(sys.argv[1])
-try:
-    with zipfile.ZipFile(path) as archive:
-        bad_member = archive.testzip()
-except zipfile.BadZipFile as exc:
-    raise SystemExit(f"{path}: {exc}")
-
-if bad_member:
-    raise SystemExit(f"{path}: corrupt zip member {bad_member}")
-PY
 }
 
 normalize_arches() {

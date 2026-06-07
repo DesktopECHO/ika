@@ -48,6 +48,17 @@ function run_as_root() {
   fi
 }
 
+function drop_root_cmd() {
+  if [[ "$(id -u)" -eq 0 || "${#ROOT_CMD[@]}" -eq 0 ]]; then
+    return
+  fi
+
+  if [[ "${ROOT_CMD[0]}" == "sudo" ]]; then
+    sudo -k || true
+  fi
+  ROOT_CMD=()
+}
+
 function install_rpm_build_dependencies() {
   if [[ "${SKIP_RPM_BUILD_DEPENDENCIES}" == "true" ]]; then
     echo "Skipping RPM build dependency installation (SKIP_RPM_BUILD_DEPENDENCIES=true)"
@@ -130,7 +141,8 @@ function install_rpm_build_dependencies() {
 
   # Runtime tools needed during rpmbuild
   run_as_root dnf -y install \
-    rsync
+    rsync \
+    pigz
 }
 
 REPO_DIR="$(realpath "$(dirname "$0")/../..")"
@@ -172,8 +184,22 @@ function organize_rpms() {
   done
 }
 
+# Two concurrent runs share ${REPO_DIR}/rpmbuild and corrupt each other's
+# source extraction mid-build (a second run re-stages SOURCES while the first
+# is still building from it). Serialize with a non-blocking advisory lock held
+# for the lifetime of this process (released automatically on exit).
+readonly BUILD_PACKAGES_LOCK="${REPO_DIR}/rpmbuild/.build_packages.lock"
+mkdir -p "$(dirname "${BUILD_PACKAGES_LOCK}")"
+exec 9>"${BUILD_PACKAGES_LOCK}"
+if ! flock -n 9; then
+  >&2 echo "Another build_packages.sh is already running for ${REPO_DIR}"
+  >&2 echo "(lock: ${BUILD_PACKAGES_LOCK}). Wait for it to finish or stop it first."
+  exit 1
+fi
+
 refuse_root_rpm_build
 init_root_cmd
+trap drop_root_cmd EXIT
 install_rpm_build_dependencies
 if ! command -v bazel >/dev/null 2>&1; then
   if ! can_run_as_root; then
@@ -183,6 +209,7 @@ if ! command -v bazel >/dev/null 2>&1; then
   fi
   run_as_root "${INSTALL_BAZEL}"
 fi
+drop_root_cmd
 
 # Builds all RPM specs under base/rpm and frontend/rpm unless excluded.
 "${BUILD_PACKAGE}" "$@" "${REPO_DIR}/base"

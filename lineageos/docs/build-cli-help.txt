@@ -1,0 +1,209 @@
+Usage: build_lineageos_desktop.sh [all|arm64|x86_64]...
+
+Build LineageOS Desktop from a clean LineageOS 23.2 checkout and write
+Cuttlefish-ready bundles into the directories lineageos-arm64/ and
+lineageos-x86_64/ under the ika project root.
+
+Host support: arm64 ROMs build on both x86_64 and arm64 hosts; x86_64 ROMs build
+on x86_64 hosts only. With no target argument, the script builds only the ROM
+matching the build host (arm64 on arm64, x86_64 on x86_64). The `all` target
+builds every ROM supported by the host. On an arm64 host, an explicit x86_64
+target is rejected.
+
+Environment:
+  WORKSPACE             Android source checkout to create or reuse.
+                        Default: ika/lineageos/src
+  OUTPUT_DIR            Parent directory for the lineageos-<arch>/ bundle
+                        directories and signed target-files staging.
+                        Default: the ika project root.
+  BUILDTIME_LOG_PATH    TSV ledger for each ROM build target with start time,
+                        finish time, duration, architecture, and success or
+                        failure. Default: ika/buildtimes.log.
+  JOBS                  Parallel jobs for repo sync and m. Default: logical CPU
+                        count minus 2, minimum 1.
+  NINJA_HIGHMEM_NUM_JOBS
+                        Soong high-memory pool jobs. Default: one job per
+                        32 GiB of RAM, minimum 1 and capped at JOBS.
+  Temporary zram       Builds get zram swap sized to reach a fixed physical+zram
+                        total (ZRAM_TARGET_TOTAL_GIB, default 40 GiB), prioritized
+                        above existing swap. Hosts with ZRAM_SKIP_ABOVE_GIB
+                        (default 36 GiB) physical RAM or more get none.
+                        Build-created zram is removed automatically on exit.
+  ZRAM_COMP_ALGORITHM   Compression algorithm for build-created zram. Default:
+                        zstd (higher ratio, more usable RAM, paid on otherwise
+                        idle cores). Falls back to the kernel default if the
+                        algorithm is unavailable. Empty uses the kernel default.
+  CCACHE_ENABLED        Enable ccache for the build (Soong honors USE_CCACHE for
+                        C/C++). Speeds up repeat/incremental builds; a clean
+                        first build sees ~no benefit. Default: 1
+  CCACHE_DIR            ccache directory. Default: $HOME/.ccache
+  CCACHE_MAX_SIZE       ccache size cap (ccache -M). Default: 50G
+  LINEAGE_BRANCH        LineageOS branch. Default: lineage-23.2
+  ANDROID_MANIFEST_URL  Manifest repository. Default: LineageOS/android.git
+  MANIFEST_URL          Fallback overlay manifest URL.
+  INCLUDE_MICROG        Sync vendor/partner_gms and include microG packages.
+                        Default: 1
+  UPDATE_MICROG_PREBUILTS
+                        Refresh GmsCore, FakeStore, and GsfProxy from official
+                        microG GitHub releases before building. Default: 1
+  INCLUDE_X86_ARM_NATIVE_BRIDGE
+                        Enable ARM64 native bridge support for the x86-64 ROM.
+                        Default: 1
+  UPDATE_NATIVE_BRIDGE_PREBUILTS
+                        Download/extract the Google NDK translation payload for
+                        x86-64 builds before building. Default: 1
+  VALIDATE_BUILD_INPUTS
+                        Run build-time source, ARM64 host prebuilt/toolchain,
+                        userdata, and desktop policy checks before compiling.
+                        Default: 1
+  STRICT_BUNDLE_VALIDATION
+                        Fail the build if package_cvd_bundle has to normalize
+                        any etc/cvd_config/*.json preset (empty / unparseable
+                        / non-object). Default 0 silently rewrites bad presets
+                        to {} with a log line so the bundle is launchable;
+                        set to 1 in CI / release builds to surface a corrupt
+                        Soong prebuilt instead of papering over it. Default: 0
+  SELINUX_WORKSPACE_TYPE
+                        SELinux type applied to checkout paths before builds.
+                        Use none to disable. Default: src_t
+  STRICT_APEX_SIGNING   Fail target-files signing if any shipped APEX lacks a
+                        matching container and payload key in ANDROID_CERTS_DIR.
+                        Default: 1
+  REBUILD               Reuse the existing source tree: skip repo sync and
+                        source patching, then build/sign/package. Equivalent to
+                        SKIP_SYNC=1 SKIP_PATCH=1. Default: 0
+  SKIP_SYNC             Skip the repo sync step (reuse the checked-out tree).
+                        Default: value of REBUILD
+  SKIP_PATCH            Skip applying source patches (reuse the patched tree).
+                        Default: value of REBUILD
+  NATIVE_BRIDGE_SOURCE_DIR
+                        Use an already-extracted Android system image root for
+                        native bridge prebuilts instead of downloading one.
+  NATIVE_BRIDGE_SDK_PACKAGE
+                        Android SDK system image zip path or URL used for the
+                        native bridge payload.
+  NATIVE_BRIDGE_SDK_PACKAGE_SHA1
+                        Expected SHA1 for the SDK package. Empty skips checking.
+  MICROG_GMSCORE_RELEASE
+                        microg/GmsCore release tag, or latest. Default: latest
+  MICROG_GSFPROXY_RELEASE
+                        GsfProxy microG F-Droid version name/code, or latest.
+                        Default: latest
+  REPO_INSTALL_PATH     Install path used if repo is missing.
+                        Default: /usr/local/bin/repo
+  REPO_SYNC_ATTEMPTS    Top-level repo sync attempts. Default: 9
+  REPO_SYNC_RETRY_FETCHES
+                        Per-project repo fetch retries. Default: 9
+  REPO_SYNC_QUIET       Pass --quiet to repo sync. Default: auto, enabled on
+                        ARM64 hosts to keep Python repo sync output conservative
+                        during ARM64 host syncs.
+  ARM64_GO_PREBUILT_GIT_URL
+                        AOSP Go linux-arm64 prebuilt repo used to bootstrap
+                        Soong when this branch lacks prebuilts/go/linux-arm64.
+                        Default: platform/prebuilts/go/linux-arm64.
+  ARM64_GO_PREBUILT_GIT_REF
+                        Branch/tag/ref for ARM64_GO_PREBUILT_GIT_URL.
+                        Default: mirror-goog-llvm-r596125-release.
+  ARM64_RUST_PREBUILT_DIR
+                        Local directory containing a real ARM64 Rust prebuilt,
+                        either as the linux-arm64 directory itself or with a
+                        linux-arm64/ child. Used on ARM64 hosts before archive
+                        or git inputs.
+  ARM64_RUST_PREBUILT_ARCHIVE
+                        Local path or URL to a tar/zip archive containing the
+                        real prebuilts/rust/linux-arm64 payload. AOSP does not
+                        currently ship this directory in platform/prebuilts/rust.
+  ARM64_RUST_PREBUILT_GIT_URL
+                        Optional git repo containing the real Rust linux-arm64
+                        payload. Leave unset when ARM64_RUST_PREBUILT_DIR or
+                        ARM64_RUST_PREBUILT_ARCHIVE is used.
+  ARM64_RUST_PREBUILT_GIT_REF
+                        Optional branch/tag/ref for ARM64_RUST_PREBUILT_GIT_URL.
+  CLANG_PREBUILT_GIT_REF
+                        Shared default Clang prebuilt branch/tag/ref for all
+                        ROM targets. Default:
+                        mirror-goog-llvm-r596125-release.
+  CLANG_PREBUILT_VERSION
+                        Shared default clang-r* payload for all ROM targets.
+                        Default: clang-r584948b.
+  ARM64_CLANG_PREBUILT_GIT_URL
+                        AOSP Clang linux-arm64 prebuilt repo used on ARM64
+                        hosts. Default:
+                        platform/prebuilts/clang/host/linux-arm64.
+  ARM64_CLANG_PREBUILT_GIT_REF
+                        Branch/tag/ref for ARM64_CLANG_PREBUILT_GIT_URL.
+                        Default: CLANG_PREBUILT_GIT_REF.
+  ARM64_CLANG_PREBUILT_VERSION
+                        clang-r* payload used from ARM64_CLANG_PREBUILT_GIT_URL.
+                        Default: CLANG_PREBUILT_VERSION.
+  X86_CLANG_PREBUILT_GIT_URL
+                        AOSP Clang linux-x86 prebuilt repo used to pin x86
+                        builds to the same LLVM release as ARM64 builds.
+                        Default: platform/prebuilts/clang/host/linux-x86.
+  X86_CLANG_PREBUILT_GIT_REF
+                        Branch/tag/ref for X86_CLANG_PREBUILT_GIT_URL.
+                        Default: CLANG_PREBUILT_GIT_REF.
+  X86_CLANG_PREBUILT_VERSION
+                        clang-r* payload used from X86_CLANG_PREBUILT_GIT_URL.
+                        Default: CLANG_PREBUILT_VERSION.
+  ARM64_CLANG_TOOLS_PREBUILT_DIR
+                        Local directory containing a real ARM64 clang-tools
+                        prebuilt, either as the linux-arm64 directory itself or
+                        with a linux-arm64/ child. Used on ARM64 hosts before
+                        archive or git inputs.
+  ARM64_CLANG_TOOLS_PREBUILT_ARCHIVE
+                        Local path or URL to a tar/zip archive containing the
+                        real prebuilts/clang-tools/linux-arm64 payload.
+  ARM64_CLANG_TOOLS_PREBUILT_GIT_URL
+                        Git repo containing the real clang-tools linux-arm64
+                        payload. Default: platform/prebuilts/clang-tools.
+  ARM64_CLANG_TOOLS_PREBUILT_GIT_REF
+                        Branch/tag/ref for ARM64_CLANG_TOOLS_PREBUILT_GIT_URL.
+                        Default: mirror-goog-main-prebuilts.
+  ARM64_CMAKE_PREBUILT_GIT_URL
+                        AOSP CMake linux-arm64 prebuilt repo used on ARM64
+                        hosts. Default: platform/prebuilts/cmake/linux-arm64.
+  ARM64_CMAKE_PREBUILT_GIT_REF
+                        Branch/tag/ref for ARM64_CMAKE_PREBUILT_GIT_URL.
+                        Default: mirror-goog-llvm-r596125-release.
+  ARM64_JDK21_PREBUILT_URL
+                        Native Linux ARM64 JDK 21 tarball used when this branch
+                        lacks prebuilts/jdk/jdk21/linux-arm64. Default:
+                        Adoptium Temurin JDK 21 API URL.
+  ARM64_JOB_RETRY_LIST  Space-separated ARM64 job counts to try if a faster
+                        attempt fails from memory/process pressure. Default:
+                        selected job count, then lower counts down to 1.
+  ARM64_NOFILE_LIMIT    Host open-file limit requested before native ARM64
+                        builds.
+                        Default: 4194304.
+  ARM64_SOONG_GOMEMLIMIT
+                        Go memory limit passed into Soong on ARM64 hosts.
+                        Default: 6GiB
+  ARM64_SOONG_GOMEMLIMIT_RETRY_LIST
+                        Space-separated Soong Go memory limits to try after
+                        resource-pressure failures. Default: ARM64_SOONG_GOMEMLIMIT,
+                        then lower limits down to 1GiB.
+  ARM64_SOONG_GOMAXPROCS
+                        Go scheduler threads for Soong graph generation on
+                        ARM64 hosts. Default: 4, capped to retry job count
+                        unless explicitly set.
+  ARM64_GODEBUG         Go runtime flags passed into ARM64 native builds.
+                        Default: asyncpreemptoff=1
+  ARM64_SOONG_GOGC      Go GC target percentage passed into Soong on ARM64
+                        hosts. Default: 100
+  ARM64_THINLTO_USE_MLGO
+                        Enables Soong ThinLTO MLGO linker advisors inside ARM64
+                        native builds. Default: false, because current
+                        Linux ARM64 Clang prebuilts can emit ARM64 code
+                        natively here but do not ship every release advisor
+                        model expected by this branch.
+  ARM64_ANDROID_JAVA_HOME
+                        System JDK to use when the source tree lacks an ARM64
+                        JDK prebuilt. Default: auto-detect from javac.
+  AUTO_INSTALL_DEPS     Install missing basic host tools with apt/dnf/pacman
+                        when possible. Default: 1
+  ARM64 native hosts    ARM64 hosts build natively with ARM64 prebuilts only,
+                        including on Apple Silicon's 16 KiB-page kernels.
+  RESET_PATCHED_PROJECTS
+                        Reset patched source projects before repo sync.
+                        Default: auto for script-managed workspaces

@@ -1,0 +1,850 @@
+Patch summary:
+Consolidate LineageOS Desktop Clang 22 compatibility fixes across Android source projects.
+This patch keeps external libraries, bionic, Trusty, device/goldfish,
+hardware/ril, and frameworks/native building with Clang 22 diagnostics that
+are promoted to errors in the desktop ROM build. It also keeps Trusty's direct
+Rust invocations aligned with Soong's Rust bootstrap environment.
+
+diff --git a/external/musl/Android.bp b/external/musl/Android.bp
+index f8ed9cff..693732cf 100644
+--- a/external/musl/Android.bp
++++ b/external/musl/Android.bp
+@@ -134,6 +134,7 @@ cc_defaults {
+         "-Wno-parentheses",
+         "-Wno-shift-op-parentheses",
+         "-Wno-string-plus-int",
++        "-Wno-unterminated-string-initialization",
+         "-Wno-unused-parameter",
+     ],
+ 
+
+diff --git a/external/musl/src/stdio/vfprintf.c b/external/musl/src/stdio/vfprintf.c
+index 360d723a..4dfeb014 100644
+--- a/external/musl/src/stdio/vfprintf.c
++++ b/external/musl/src/stdio/vfprintf.c
+@@ -147,7 +147,8 @@ static void pad(FILE *f, char c, int w, int l, int fl)
+ }
+ 
+ static const char xdigits[16] = {
+-	"0123456789ABCDEF"
++	'0', '1', '2', '3', '4', '5', '6', '7',
++	'8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
+ };
+ 
+ static char *fmt_x(uintmax_t x, char *s, int lower)
+diff --git a/external/icu/Android.bp b/external/icu/Android.bp
+index bc47e0102..9bb2f5616 100644
+--- a/external/icu/Android.bp
++++ b/external/icu/Android.bp
+@@ -67,6 +67,7 @@ cc_defaults {
+         "-Wno-deprecated-declarations",
+         "-Wno-unused-parameter",
+         "-Wno-unused-const-variable",
++        "-Wno-unnecessary-virtual-specifier",
+         "-Wno-unneeded-internal-declaration",
+         "-DUCONFIG_USE_ML_PHRASE_BREAKING=1",
+     ],
+diff --git a/external/icu/android_icu4j/libcore_bridge/src/native/Android.bp b/external/icu/android_icu4j/libcore_bridge/src/native/Android.bp
+index dfc41b9ff..9e39d6cf9 100644
+--- a/external/icu/android_icu4j/libcore_bridge/src/native/Android.bp
++++ b/external/icu/android_icu4j/libcore_bridge/src/native/Android.bp
+@@ -49,6 +49,7 @@ cc_library_shared {
+         "-Wall",
+         "-Wextra",
+         "-Werror",
++        "-Wno-unnecessary-virtual-specifier",
+     ],
+     cppflags: ["-DU_USING_ICU_NAMESPACE=0"],
+     target: {
+diff --git a/external/protobuf/Android.bp b/external/protobuf/Android.bp
+--- a/external/protobuf/Android.bp
++++ b/external/protobuf/Android.bp
+@@ -48,6 +48,7 @@ cc_defaults {
+         "-Wno-unused-function",
+         "-Wno-unused-parameter",
+         "-Wno-error=user-defined-warnings",
++        "-Wno-unnecessary-virtual-specifier",
+     ],
+     target: {
+         windows: {
+diff --git a/external/llvm/Android.bp b/external/llvm/Android.bp
+--- a/external/llvm/Android.bp
++++ b/external/llvm/Android.bp
+@@ -74,6 +74,7 @@ llvm_defaults {
+         "-Wno-implicit-fallthrough",
+         "-Wno-non-c-typedef-for-linkage",
+         "-Wno-nontrivial-memcall",
++        "-Wno-unnecessary-virtual-specifier",
+         "-Wno-range-loop-construct",
+         "-Wno-maybe-uninitialized",
+         "-Wno-missing-field-initializers",
+diff --git a/external/googletest/googletest/include/gtest/gtest-printers.h b/external/googletest/googletest/include/gtest/gtest-printers.h
+--- a/external/googletest/googletest/include/gtest/gtest-printers.h
++++ b/external/googletest/googletest/include/gtest/gtest-printers.h
+@@ -527,11 +527,11 @@ GTEST_API_ void PrintTo(wchar_t wc, ::std::ostream* os);
+ 
+ GTEST_API_ void PrintTo(char32_t c, ::std::ostream* os);
+ inline void PrintTo(char16_t c, ::std::ostream* os) {
+-  PrintTo(ImplicitCast_<char32_t>(c), os);
++  PrintTo(static_cast<char32_t>(c), os);
+ }
+ #ifdef __cpp_lib_char8_t
+ inline void PrintTo(char8_t c, ::std::ostream* os) {
+-  PrintTo(ImplicitCast_<char32_t>(c), os);
++  PrintTo(static_cast<char32_t>(c), os);
+ }
+ #endif
+ 
+diff --git a/external/abseil-cpp/absl/strings/string_view.h b/external/abseil-cpp/absl/strings/string_view.h
+index 9a1933b6..7a40da34 100644
+--- a/external/abseil-cpp/absl/strings/string_view.h
++++ b/external/abseil-cpp/absl/strings/string_view.h
+@@ -757,7 +757,8 @@ inline string_view ClippedSubstr(string_view s, size_t pos,
+ // This function should be used where an `absl::string_view` can be created from
+ // a possibly-null pointer.
+ constexpr string_view NullSafeStringView(const char* absl_nullable p) {
+-  return p ? string_view(p) : string_view();
++  return p == nullptr ? string_view()
++                      : string_view(p, string_view::traits_type::length(p));
+ }
+ 
+ ABSL_NAMESPACE_END
+diff --git a/external/swiftshader/src/Android.bp b/external/swiftshader/src/Android.bp
+index 3d56a27d4..c3206486c 100644
+--- a/external/swiftshader/src/Android.bp
++++ b/external/swiftshader/src/Android.bp
+@@ -46,8 +46,9 @@ cc_defaults {
+ 
+     cflags: [
+         "-DREACTOR_ANONYMOUS_MMAP_NAME=swiftshader_jit",
+-        "-Wno-unused-parameter",
+         "-Wno-implicit-fallthrough",
++        "-Wno-unnecessary-virtual-specifier",
++        "-Wno-unused-parameter",
+     ],
+ 
+     static_libs: [
+diff --git a/external/swiftshader/third_party/llvm-16.0/Android.bp b/external/swiftshader/third_party/llvm-16.0/Android.bp
+index aaf033182..1c3128328 100644
+--- a/external/swiftshader/third_party/llvm-16.0/Android.bp
++++ b/external/swiftshader/third_party/llvm-16.0/Android.bp
+@@ -1520,6 +1520,7 @@ cc_defaults {
+         "-Wno-ignored-qualifiers",
+         "-Wno-implicit-fallthrough",
+         "-Wno-nontrivial-memcall",
++        "-Wno-unnecessary-virtual-specifier",
+         "-Wno-unreachable-code-loop-increment",
+         "-Wno-unused-parameter",
+         "-Wno-unused-variable",
+diff --git a/external/swiftshader/third_party/llvm-16.0/llvm/include/llvm/IR/ConstantFolder.h b/external/swiftshader/third_party/llvm-16.0/llvm/include/llvm/IR/ConstantFolder.h
+index 82c07d47a..1680eddfa 100644
+--- a/external/swiftshader/third_party/llvm-16.0/llvm/include/llvm/IR/ConstantFolder.h
++++ b/external/swiftshader/third_party/llvm-16.0/llvm/include/llvm/IR/ConstantFolder.h
+@@ -28,7 +28,7 @@ namespace llvm {
+ 
+ /// ConstantFolder - Create constants with minimum, target independent, folding.
+ class ConstantFolder final : public IRBuilderFolder {
+-  virtual void anchor();
++  void anchor();
+ 
+ public:
+   explicit ConstantFolder() = default;
+diff --git a/external/mesa3d/src/gallium/auxiliary/driver_trace/tr_dump.c b/external/mesa3d/src/gallium/auxiliary/driver_trace/tr_dump.c
+index 45d1920eaef..395d3ddd683 100644
+--- a/external/mesa3d/src/gallium/auxiliary/driver_trace/tr_dump.c
++++ b/external/mesa3d/src/gallium/auxiliary/driver_trace/tr_dump.c
+@@ -479,7 +479,10 @@ void trace_dump_float(double value)
+ void trace_dump_bytes(const void *data,
+                       size_t size)
+ {
+-   static const char hex_table[16] = "0123456789ABCDEF";
++   static const char hex_table[16] = {
++      '0', '1', '2', '3', '4', '5', '6', '7',
++      '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
++   };
+    const uint8_t *p = data;
+    size_t i;
+ 
+diff --git a/external/mesa3d/src/panfrost/midgard/disassemble.c b/external/mesa3d/src/panfrost/midgard/disassemble.c
+index 45315e38b2b..a5f686f5bac 100644
+--- a/external/mesa3d/src/panfrost/midgard/disassemble.c
++++ b/external/mesa3d/src/panfrost/midgard/disassemble.c
+@@ -338,7 +338,10 @@ print_quad_word(FILE *fp, const uint32_t *words, unsigned tabs)
+    fprintf(fp, "\n");
+ }
+ 
+-static const char components[16] = "xyzwefghijklmnop";
++static const char components[16] = {
++   'x', 'y', 'z', 'w', 'e', 'f', 'g', 'h',
++   'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p',
++};
+ 
+ static int
+ bits_for_mode(midgard_reg_mode mode)
+diff --git a/external/mesa3d/src/panfrost/midgard/midgard_print.c b/external/mesa3d/src/panfrost/midgard/midgard_print.c
+index 8fc817af9e9..e5d2030ecea 100644
+--- a/external/mesa3d/src/panfrost/midgard/midgard_print.c
++++ b/external/mesa3d/src/panfrost/midgard/midgard_print.c
+@@ -60,7 +60,10 @@ mir_print_index(int source)
+    }
+ }
+ 
+-static const char components[16] = "xyzwefghijklmnop";
++static const char components[16] = {
++   'x', 'y', 'z', 'w', 'e', 'f', 'g', 'h',
++   'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p',
++};
+ 
+ static void
+ mir_print_mask(unsigned mask)
+diff --git a/external/curl/lib/request.c b/external/curl/lib/request.c
+index 0d9b23ef0c..969bdcd135 100644
+--- a/external/curl/lib/request.c
++++ b/external/curl/lib/request.c
+@@ -308,7 +308,7 @@ static CURLcode req_flush(struct Curl_easy *data)
+   }
+ 
+   if(data->req.eos_read && !data->req.eos_sent) {
+-    char tmp;
++    char tmp = '\0';
+     size_t nwritten;
+     result = xfer_send(data, &tmp, 0, 0, &nwritten);
+     if(result)
+diff --git a/external/libxml2/iso8859x.inc b/external/libxml2/iso8859x.inc
+index f8d6b310f..ea9bd7b71 100644
+--- a/external/libxml2/iso8859x.inc
++++ b/external/libxml2/iso8859x.inc
+@@ -572,7 +572,7 @@ static const unsigned short xmlunicodetable_ISO8859_14 [128] = {
+     0x00f8, 0x00f9, 0x00fa, 0x00fb, 0x00fc, 0x00fd, 0x0177, 0x00ff,
+ };
+ 
+-static const unsigned char xmltranscodetable_ISO8859_14 [48 + 10 * 64] = {
++static const unsigned char xmltranscodetable_ISO8859_14 [48 + 10 * 64 + 1] = {
+     "\x00\x00\x01\x09\x04\x07\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+     "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+     "\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+@@ -637,7 +637,7 @@ static const unsigned short xmlunicodetable_ISO8859_15 [128] = {
+     0x00f8, 0x00f9, 0x00fa, 0x00fb, 0x00fc, 0x00fd, 0x00fe, 0x00ff,
+ };
+ 
+-static const unsigned char xmltranscodetable_ISO8859_15 [48 + 6 * 64] = {
++static const unsigned char xmltranscodetable_ISO8859_15 [48 + 6 * 64 + 1] = {
+     "\x00\x00\x01\x05\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+     "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+     "\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+@@ -686,7 +686,7 @@ static const unsigned short xmlunicodetable_ISO8859_16 [128] = {
+     0x0171, 0x00f9, 0x00fa, 0x00fb, 0x00fc, 0x0119, 0x021b, 0x00ff,
+ };
+ 
+-static const unsigned char xmltranscodetable_ISO8859_16 [48 + 9 * 64] = {
++static const unsigned char xmltranscodetable_ISO8859_16 [48 + 9 * 64 + 1] = {
+     "\x00\x00\x01\x08\x02\x03\x00\x00\x07\x00\x00\x00\x00\x00\x00\x00"
+     "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+     "\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+@@ -727,4 +727,3 @@ static const unsigned char xmltranscodetable_ISO8859_16 [48 + 9 * 64] = {
+     "\xe0\xe1\xe2\x00\xe4\x00\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef"
+     "\x00\x00\xf2\xf3\xf4\x00\xf6\x00\x00\xf9\xfa\xfb\xfc\x00\x00\xff"
+ };
+-
+diff --git a/external/libfuse/lib/fuse.c b/external/libfuse/lib/fuse.c
+index 86171689..0e7cc857 100644
+--- a/external/libfuse/lib/fuse.c
++++ b/external/libfuse/lib/fuse.c
+@@ -2633,7 +2633,7 @@ static void fuse_lib_lookup(fuse_req_t req, fuse_ino_t parent,
+ 			    const char *name)
+ {
+ 	struct fuse *f = req_fuse_prepare(req);
+-	struct fuse_entry_param e;
++	struct fuse_entry_param e = { 0 };
+ 	char *path;
+ 	int err;
+ 	struct node *dot = NULL;
+diff --git a/external/mdnsresponder/mDNSCore/DNSCommon.c b/external/mdnsresponder/mDNSCore/DNSCommon.c
+index b75c128..73f9a83 100644
+--- a/external/mdnsresponder/mDNSCore/DNSCommon.c
++++ b/external/mdnsresponder/mDNSCore/DNSCommon.c
+@@ -707,7 +707,7 @@ mDNSexport mDNSu8 *ConstructServiceName(domainname *const fqdn,
+ 				const mDNSu8 *s2 = s1 + 1 + s1[0];
+ 				if (s2[0] && s2[0] < 0x40 && s2[1+s2[0]] == 0)	// and we have three and only three labels
+ 					{
+-					static const mDNSu8 SubTypeLabel[5] = "\x04_sub";
++					static const mDNSu8 SubTypeLabel[5] = { 0x04, '_', 's', 'u', 'b' };
+ 					src = s0;									// Copy the first label
+ 					len = *src;
+ 					for (i=0; i <= len;                      i++) *dst++ = *src++;
+diff --git a/external/bpftool/src/btf_dumper.c b/external/bpftool/src/btf_dumper.c
+index 527fe86..9399527 100644
+--- a/external/bpftool/src/btf_dumper.c
++++ b/external/bpftool/src/btf_dumper.c
+@@ -38,7 +38,7 @@ static int dump_prog_id_as_func_ptr(const struct btf_dumper *d,
+ 	__u32 info_len = sizeof(info);
+ 	const char *prog_name = NULL;
+ 	struct btf *prog_btf = NULL;
+-	struct bpf_func_info finfo;
++	struct bpf_func_info finfo = {};
+ 	__u32 finfo_rec_size;
+ 	char prog_str[1024];
+ 	int err;
+diff --git a/external/bpftool/src/prog.c b/external/bpftool/src/prog.c
+index 9cb42a3..650bb3d 100644
+--- a/external/bpftool/src/prog.c
++++ b/external/bpftool/src/prog.c
+@@ -2192,7 +2192,7 @@ static void profile_print_readings(void)
+ 
+ static char *profile_target_name(int tgt_fd)
+ {
+-	struct bpf_func_info func_info;
++	struct bpf_func_info func_info = {};
+ 	struct bpf_prog_info info = {};
+ 	__u32 info_len = sizeof(info);
+ 	const struct btf_type *t;
+diff --git a/external/openssh/chacha.c b/external/openssh/chacha.c
+index a84c25ea..b470ec0c 100644
+--- a/external/openssh/chacha.c
++++ b/external/openssh/chacha.c
+@@ -49,8 +49,14 @@ typedef struct chacha_ctx chacha_ctx;
+   a = PLUS(a,b); d = ROTATE(XOR(d,a), 8); \
+   c = PLUS(c,d); b = ROTATE(XOR(b,c), 7);
+ 
+-static const char sigma[16] = "expand 32-byte k";
+-static const char tau[16] = "expand 16-byte k";
++static const char sigma[16] = {
++  'e', 'x', 'p', 'a', 'n', 'd', ' ', '3',
++  '2', '-', 'b', 'y', 't', 'e', ' ', 'k'
++};
++static const char tau[16] = {
++  'e', 'x', 'p', 'a', 'n', 'd', ' ', '1',
++  '6', '-', 'b', 'y', 't', 'e', ' ', 'k'
++};
+ 
+ void
+ chacha_keysetup(chacha_ctx *x,const u8 *k,u32 kbits)
+diff --git a/external/openssh/openbsd-compat/bcrypt_pbkdf.c b/external/openssh/openbsd-compat/bcrypt_pbkdf.c
+index 5a22ba3b..5e9f1736 100644
+--- a/external/openssh/openbsd-compat/bcrypt_pbkdf.c
++++ b/external/openssh/openbsd-compat/bcrypt_pbkdf.c
+@@ -73,8 +73,12 @@ static void
+ bcrypt_hash(uint8_t *sha2pass, uint8_t *sha2salt, uint8_t *out)
+ {
+ 	blf_ctx state;
+-	uint8_t ciphertext[BCRYPT_HASHSIZE] =
+-	    "OxychromaticBlowfishSwatDynamite";
++	uint8_t ciphertext[BCRYPT_HASHSIZE] = {
++	    'O', 'x', 'y', 'c', 'h', 'r', 'o', 'm',
++	    'a', 't', 'i', 'c', 'B', 'l', 'o', 'w',
++	    'f', 'i', 's', 'h', 'S', 'w', 'a', 't',
++	    'D', 'y', 'n', 'a', 'm', 'i', 't', 'e'
++	};
+ 	uint32_t cdata[BCRYPT_WORDS];
+ 	int i;
+ 	uint16_t j;
+diff --git a/external/openssh/openbsd-compat/chacha_private.h b/external/openssh/openbsd-compat/chacha_private.h
+index cdcb7856..40977a3a 100644
+--- a/external/openssh/openbsd-compat/chacha_private.h
++++ b/external/openssh/openbsd-compat/chacha_private.h
+@@ -50,8 +50,14 @@ typedef struct
+   a = PLUS(a,b); d = ROTATE(XOR(d,a), 8); \
+   c = PLUS(c,d); b = ROTATE(XOR(b,c), 7);
+ 
+-static const char sigma[16] = "expand 32-byte k";
+-static const char tau[16] = "expand 16-byte k";
++static const char sigma[16] = {
++	'e', 'x', 'p', 'a', 'n', 'd', ' ', '3',
++	'2', '-', 'b', 'y', 't', 'e', ' ', 'k'
++};
++static const char tau[16] = {
++	'e', 'x', 'p', 'a', 'n', 'd', ' ', '1',
++	'6', '-', 'b', 'y', 't', 'e', ' ', 'k'
++};
+ 
+ static void
+ chacha_keysetup(chacha_ctx *x,const u8 *k,u32 kbits)
+diff --git a/external/dnsmasq/src/dnsmasq.c b/external/dnsmasq/src/dnsmasq.c
+index 46d15ee..1006be0 100644
+--- a/external/dnsmasq/src/dnsmasq.c
++++ b/external/dnsmasq/src/dnsmasq.c
+@@ -350,7 +350,7 @@ int main(int argc, char** argv) {
+ 
+     if (!(daemon->options & OPT_DEBUG) && getuid() == 0) {
+         int bad_capabilities = 0;
+-        gid_t unused;
++        gid_t unused = 0;
+ 
+         /* remove all supplimentary groups */
+         if (gp && (setgroups(0, &unused) == -1 || setgid(gp->gr_gid) == -1)) {
+diff --git a/external/dnsmasq/src/helper.c b/external/dnsmasq/src/helper.c
+index 3e414b2..c6ae746 100644
+--- a/external/dnsmasq/src/helper.c
++++ b/external/dnsmasq/src/helper.c
+@@ -75,7 +75,7 @@ int create_helper(int event_fd, int err_fd, uid_t uid, gid_t gid, long max_fd) {
+     sigaction(SIGALRM, &sigact, NULL);
+ 
+     if (!(daemon->options & OPT_DEBUG) && uid != 0) {
+-        gid_t unused;
++        gid_t unused = 0;
+         if (setgroups(0, &unused) == -1 || setgid(gid) == -1 || setuid(uid) == -1) {
+             if (daemon->options & OPT_NO_FORK) /* send error to daemon process if no-fork */
+                 send_event(event_fd, EVENT_HUSER_ERR, errno);
+diff --git a/external/fsck_msdos/dir.c b/external/fsck_msdos/dir.c
+index 19516d8..f9c9f1f 100644
+--- a/external/fsck_msdos/dir.c
++++ b/external/fsck_msdos/dir.c
+@@ -463,8 +463,12 @@ checksize(struct fat_descriptor *fat, u_char *p, struct dosDirEntry *dir)
+ 	return FSOK;
+ }
+ 
+-static const u_char dot_name[11]    = ".          ";
+-static const u_char dotdot_name[11] = "..         ";
++static const u_char dot_name[11]    = {
++	'.', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '
++};
++static const u_char dotdot_name[11] = {
++	'.', '.', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '
++};
+ 
+ /*
+  * Basic sanity check if the subdirectory have good '.' and '..' entries,
+diff --git a/external/open-dice/src/utils.c b/external/open-dice/src/utils.c
+--- a/external/open-dice/src/utils.c
++++ b/external/open-dice/src/utils.c
+@@ -18,7 +18,10 @@
+ 
+ void DiceHexEncode(const uint8_t* in, size_t num_bytes, void* out,
+                    size_t out_size) {
+-  const uint8_t kHexMap[16] = "0123456789abcdef";
++  const uint8_t kHexMap[16] = {
++      '0', '1', '2', '3', '4', '5', '6', '7',
++      '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
++  };
+   size_t in_pos = 0;
+   size_t out_pos = 0;
+   uint8_t* out_bytes = out;
+diff --git a/external/flatbuffers/include/flatbuffers/util.h b/external/flatbuffers/include/flatbuffers/util.h
+--- a/external/flatbuffers/include/flatbuffers/util.h
++++ b/external/flatbuffers/include/flatbuffers/util.h
+@@ -224,6 +224,11 @@ inline std::string NumToStringImplWrapper(T t, const char *fmt, int digits) {
+     #define __strtoll_impl(s, pe, b) _strtoi64_l(s, pe, b, ClassicLocale::Get())
+     #define __strtod_impl(s, pe) _strtod_l(s, pe, ClassicLocale::Get())
+     #define __strtof_impl(s, pe) _strtof_l(s, pe, ClassicLocale::Get())
++  #elif defined(ANDROID_HOST_MUSL)
++    #define __strtoull_impl(s, pe, b) strtoull(s, pe, b)
++    #define __strtoll_impl(s, pe, b) strtoll(s, pe, b)
++    #define __strtod_impl(s, pe) strtod_l(s, pe, ClassicLocale::Get())
++    #define __strtof_impl(s, pe) strtof_l(s, pe, ClassicLocale::Get())
+   #else
+     #define __strtoull_impl(s, pe, b) strtoull_l(s, pe, b, ClassicLocale::Get())
+     #define __strtoll_impl(s, pe, b) strtoll_l(s, pe, b, ClassicLocale::Get())
+diff --git a/external/federated-compute/fcp/jni/jni_util.h b/external/federated-compute/fcp/jni/jni_util.h
+index fada6f1..673643c 100644
+--- a/external/federated-compute/fcp/jni/jni_util.h
++++ b/external/federated-compute/fcp/jni/jni_util.h
+@@ -47,7 +47,7 @@ class ScopedJniEnv final {
+     }
+   }
+ 
+-  virtual ~ScopedJniEnv() {
++  ~ScopedJniEnv() {
+     if (is_attached_) {
+       (void)jvm_->DetachCurrentThread();
+     }
+diff --git a/external/pdfium/core/fxcrt/utf16.h b/external/pdfium/core/fxcrt/utf16.h
+index 73f2c763f..8b2f0565f 100644
+--- a/external/pdfium/core/fxcrt/utf16.h
++++ b/external/pdfium/core/fxcrt/utf16.h
+@@ -14,6 +14,8 @@ inline constexpr int kSurrogateBits = 10;
+ 
+ // A bitmask for the suffix of a UTF-16 surrogate.
+ inline constexpr char16_t kSurrogateMask = (1 << kSurrogateBits) - 1;
++inline constexpr char32_t kSurrogateMaskForCodePoint =
++    static_cast<char32_t>(kSurrogateMask);
+ 
+ // The first supplementary code point, `U+10000`.
+ inline constexpr char32_t kMinimumSupplementaryCodePoint = 0x10000;
+@@ -21,7 +23,8 @@ inline constexpr char32_t kMinimumSupplementaryCodePoint = 0x10000;
+ // The last supplementary code point, `U+10FFFF`.
+ inline constexpr char32_t kMaximumSupplementaryCodePoint =
+     kMinimumSupplementaryCodePoint +
+-    (kSurrogateMask << kSurrogateBits | kSurrogateMask);
++    (kSurrogateMaskForCodePoint << kSurrogateBits |
++     kSurrogateMaskForCodePoint);
+ 
+ // The first UTF-16 high surrogate code unit, `U+D800`.
+ inline constexpr char16_t kMinimumHighSurrogateCodeUnit = 0xd800;
+@@ -47,14 +50,14 @@ constexpr bool IsSupplementary(char32_t code_point) {
+ 
+ // Returns `true` if `code_point` is a UTF-16 high surrogate.
+ constexpr bool IsHighSurrogate(char32_t code_point) {
+-  return code_point >= kMinimumHighSurrogateCodeUnit &&
+-         code_point <= kMaximumHighSurrogateCodeUnit;
++  return code_point >= static_cast<char32_t>(kMinimumHighSurrogateCodeUnit) &&
++         code_point <= static_cast<char32_t>(kMaximumHighSurrogateCodeUnit);
+ }
+ 
+ // Returns `true` if `code_point` is a UTF-16 low surrogate.
+ constexpr bool IsLowSurrogate(char32_t code_point) {
+-  return code_point >= kMinimumLowSurrogateCodeUnit &&
+-         code_point <= kMaximumLowSurrogateCodeUnit;
++  return code_point >= static_cast<char32_t>(kMinimumLowSurrogateCodeUnit) &&
++         code_point <= static_cast<char32_t>(kMaximumLowSurrogateCodeUnit);
+ }
+ 
+ // A UTF-16 surrogate pair.
+@@ -88,13 +91,15 @@ class SurrogatePair final {
+  private:
+   static constexpr char16_t GetHighSurrogate(char32_t code_point) {
+     code_point -= kMinimumSupplementaryCodePoint;
+-    char16_t code_unit = (code_point >> kSurrogateBits) & kSurrogateMask;
++    char16_t code_unit = static_cast<char16_t>(
++        (code_point >> kSurrogateBits) & kSurrogateMaskForCodePoint);
+     return kMinimumHighSurrogateCodeUnit | code_unit;
+   }
+ 
+   static constexpr char16_t GetLowSurrogate(char32_t code_point) {
+     code_point -= kMinimumSupplementaryCodePoint;
+-    char16_t code_unit = code_point & kSurrogateMask;
++    char16_t code_unit =
++        static_cast<char16_t>(code_point & kSurrogateMaskForCodePoint);
+     return kMinimumLowSurrogateCodeUnit | code_unit;
+   }
+ 
+diff --git a/external/libevent/evutil.c b/external/libevent/evutil.c
+index 9817f08..a63c0b8 100644
+--- a/external/libevent/evutil.c
++++ b/external/libevent/evutil.c
+@@ -2531,8 +2531,9 @@ evutil_memclear_(void *mem, size_t len)
+ int
+ evutil_sockaddr_is_loopback_(const struct sockaddr *addr)
+ {
+-	static const char LOOPBACK_S6[16] =
+-	    "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\1";
++	static const char LOOPBACK_S6[16] = {
++	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
++	};
+ 	if (addr->sa_family == AF_INET) {
+ 		struct sockaddr_in *sin = (struct sockaddr_in *)addr;
+ 		return (ntohl(sin->sin_addr.s_addr) & 0xff000000) == 0x7f000000;
+diff --git a/external/libsrtp2/srtp/ekt.c b/external/libsrtp2/srtp/ekt.c
+index f09dc58..9b4a51f 100644
+--- a/external/libsrtp2/srtp/ekt.c
++++ b/external/libsrtp2/srtp/ekt.c
+@@ -171,7 +171,7 @@ srtp_err_status_t srtp_stream_init_from_ekt(srtp_stream_t stream,
+ {
+     srtp_err_status_t err;
+     const uint8_t *master_key;
+-    srtp_policy_t srtp_policy;
++    srtp_policy_t srtp_policy = { 0 };
+     uint32_t roc;
+ 
+     /*
+diff --git a/external/webrtc/modules/audio_coding/codecs/ilbc/ilbc.c b/external/webrtc/modules/audio_coding/codecs/ilbc/ilbc.c
+index ba6c3e46c3..997c450f8c 100644
+--- a/external/webrtc/modules/audio_coding/codecs/ilbc/ilbc.c
++++ b/external/webrtc/modules/audio_coding/codecs/ilbc/ilbc.c
+@@ -256,7 +256,7 @@ size_t WebRtcIlbcfix_DecodePlc(IlbcDecoderInstance* iLBCdec_inst,
+                                int16_t* decoded,
+                                size_t noOfLostFrames) {
+   size_t i;
+-  uint16_t dummy;
++  uint16_t dummy = 0;
+ 
+   for (i=0;i<noOfLostFrames;i++) {
+     // PLC decoding shouldn't fail, because there is no external input data
+diff --git a/external/webrtc/modules/rtp_rtcp/source/rtcp_sender.h b/external/webrtc/modules/rtp_rtcp/source/rtcp_sender.h
+index 8f51e7947d..e552e3da1d 100644
+--- a/external/webrtc/modules/rtp_rtcp/source/rtcp_sender.h
++++ b/external/webrtc/modules/rtp_rtcp/source/rtcp_sender.h
+@@ -109,7 +109,7 @@ class RTCPSender final {
+   RTCPSender(const RTCPSender&) = delete;
+   RTCPSender& operator=(const RTCPSender&) = delete;
+ 
+-  virtual ~RTCPSender();
++  ~RTCPSender();
+ 
+   RtcpMode Status() const RTC_LOCKS_EXCLUDED(mutex_rtcp_sender_);
+   void SetRTCPStatus(RtcpMode method) RTC_LOCKS_EXCLUDED(mutex_rtcp_sender_);
+diff --git a/external/webrtc/rtc_base/platform_thread.h b/external/webrtc/rtc_base/platform_thread.h
+index 3ab2761f43..37040f18d7 100644
+--- a/external/webrtc/rtc_base/platform_thread.h
++++ b/external/webrtc/rtc_base/platform_thread.h
+@@ -67,7 +67,7 @@ class PlatformThread final {
+   // For a PlatformThread that's been spawned joinable, the destructor suspends
+   // the calling thread until the created thread exits unless the thread has
+   // already exited.
+-  virtual ~PlatformThread();
++  ~PlatformThread();
+ 
+   // Finalizes any allocated resources.
+   // For a PlatformThread that's been spawned joinable, Finalize() suspends
+diff --git a/external/fmtlib/include/fmt/format.h b/external/fmtlib/include/fmt/format.h
+index ffe4fe09..da88b0cf 100644
+--- a/external/fmtlib/include/fmt/format.h
++++ b/external/fmtlib/include/fmt/format.h
+@@ -44,6 +44,7 @@
+ #  include <cmath>             // std::signbit
+ #  include <cstddef>           // std::byte
+ #  include <cstdint>           // uint32_t
++#  include <cstdlib>           // std::malloc, std::free
+ #  include <cstring>           // std::memcpy
+ #  include <initializer_list>  // std::initializer_list
+ #  include <limits>            // std::numeric_limits
+@@ -805,12 +806,12 @@ template <typename T> struct allocator {
+ 
+   T* allocate(size_t n) {
+     FMT_ASSERT(n <= max_value<size_t>() / sizeof(T), "");
+-    T* p = static_cast<T*>(malloc(n * sizeof(T)));
++    T* p = static_cast<T*>(std::malloc(n * sizeof(T)));
+     if (!p) FMT_THROW(std::bad_alloc());
+     return p;
+   }
+ 
+-  void deallocate(T* p, size_t) { free(p); }
++  void deallocate(T* p, size_t) { std::free(p); }
+ };
+ 
+ }  // namespace detail
+diff --git a/bionic/libc/bionic/iconv.cpp b/bionic/libc/bionic/iconv.cpp
+index 5bff50a27..a35f4eb81 100644
+--- a/bionic/libc/bionic/iconv.cpp
++++ b/bionic/libc/bionic/iconv.cpp
+@@ -247,7 +247,7 @@ struct __iconv_t {
+       case UTF_16_LE: {
+         bool swap = (dst_encoding == UTF_16_BE);
+         if (wc < 0x10000) {  // BMP.
+-          Out16(buf, wc, swap);
++          Out16(buf, static_cast<char16_t>(wc), swap);
+         } else {  // Supplementary plane; output surrogate pair.
+           wc -= 0x10000;
+           char16_t hi = 0xd800 | (wc >> 10);
+diff --git a/bionic/libc/upstream-openbsd/lib/libc/crypt/chacha_private.h b/bionic/libc/upstream-openbsd/lib/libc/crypt/chacha_private.h
+index b0427b6b3..af80f3f4c 100644
+--- a/bionic/libc/upstream-openbsd/lib/libc/crypt/chacha_private.h
++++ b/bionic/libc/upstream-openbsd/lib/libc/crypt/chacha_private.h
+@@ -48,8 +48,14 @@ typedef struct
+   a = PLUS(a,b); d = ROTATE(XOR(d,a), 8); \
+   c = PLUS(c,d); b = ROTATE(XOR(b,c), 7);
+ 
+-static const char sigma[16] = "expand 32-byte k";
+-static const char tau[16] = "expand 16-byte k";
++static const char sigma[16] = {
++  'e', 'x', 'p', 'a', 'n', 'd', ' ', '3',
++  '2', '-', 'b', 'y', 't', 'e', ' ', 'k',
++};
++static const char tau[16] = {
++  'e', 'x', 'p', 'a', 'n', 'd', ' ', '1',
++  '6', '-', 'b', 'y', 't', 'e', ' ', 'k',
++};
+ 
+ static void
+ chacha_keysetup(chacha_ctx *x,const u8 *k,u32 kbits)
+diff --git a/bionic/libc/bionic/time64.c b/bionic/libc/bionic/time64.c
+index 73f24ab16..6527fbd95 100644
+--- a/bionic/libc/bionic/time64.c
++++ b/bionic/libc/bionic/time64.c
+@@ -93,12 +93,28 @@ static const int julian_days_by_month[2][12] = {
+ };
+ 
+ static char const wday_name[7][3] = {
+-    "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
++    {'S', 'u', 'n'},
++    {'M', 'o', 'n'},
++    {'T', 'u', 'e'},
++    {'W', 'e', 'd'},
++    {'T', 'h', 'u'},
++    {'F', 'r', 'i'},
++    {'S', 'a', 't'},
+ };
+ 
+ static char const mon_name[12][3] = {
+-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
++    {'J', 'a', 'n'},
++    {'F', 'e', 'b'},
++    {'M', 'a', 'r'},
++    {'A', 'p', 'r'},
++    {'M', 'a', 'y'},
++    {'J', 'u', 'n'},
++    {'J', 'u', 'l'},
++    {'A', 'u', 'g'},
++    {'S', 'e', 'p'},
++    {'O', 'c', 't'},
++    {'N', 'o', 'v'},
++    {'D', 'e', 'c'},
+ };
+ 
+ static const int length_of_year[2] = { 365, 366 };
+diff --git a/trusty/vendor/google/aosp/scripts/Android.bp b/trusty/vendor/google/aosp/scripts/Android.bp
+index 4f0805a..b3f9a40 100644
+--- a/trusty/vendor/google/aosp/scripts/Android.bp
++++ b/trusty/vendor/google/aosp/scripts/Android.bp
+@@ -172,6 +172,7 @@ genrule_defaults {
+         "aidl_rust_glue",
+         "aprotoc",
+         "build_trusty",
++        "dtc",
+         "trusty_metrics_atoms_protoc_plugin",
+     ],
+     keep_gendir: true,
+@@ -179,7 +180,7 @@ genrule_defaults {
+ 
+ genrule_cmd_template = "(mkdir -p $(genDir)/build-root && " +
+     "cp -t . external/trusty/lk/makefile trusty/vendor/google/aosp/lk_inc.mk && " +
+-    "AIDL_TOOL=$(location aidl) " +
++    "TRUSTY_SOONG_DTC_PREBUILT=$(location dtc) AIDL_TOOL=$(location aidl) " +
+     "AIDL_RUST_GLUE_TOOL=$(location aidl_rust_glue) PROTOC_TOOL=$(location aprotoc) " +
+     "PROTOC_PLUGIN_BINARY=$(location trusty_metrics_atoms_protoc_plugin) TRUSTY_SKIP_DOCS=true " +
+     "BUILDDATE=\"$$(date --date=@$$(cat $(build_date_file)))\" " +
+@@ -410,7 +411,7 @@ prebuilt_etc {
+ // Trusty TEE image with Widevine OPK TA
+ genrule_tee_cmd_template = "(mkdir -p $(genDir)/build-root && " +
+     "cp -t . external/trusty/lk/makefile trusty/vendor/google/aosp/lk_inc.mk && " +
+-    "AIDL_TOOL=$(location aidl) " +
++    "TRUSTY_SOONG_DTC_PREBUILT=$(location dtc) AIDL_TOOL=$(location aidl) " +
+     "AIDL_RUST_GLUE_TOOL=$(location aidl_rust_glue) PROTOC_TOOL=$(location aprotoc) " +
+     "PROTOC_PLUGIN_BINARY=$(location trusty_metrics_atoms_protoc_plugin) " +
+     "QEMU_PREBUILTS_DIR=$(location trusty_qemu_system_aarch64) " +
+diff --git a/trusty/vendor/google/aosp/scripts/envsetup.sh b/trusty/vendor/google/aosp/scripts/envsetup.sh
+index d069c85..c1894fc 100644
+--- a/trusty/vendor/google/aosp/scripts/envsetup.sh
++++ b/trusty/vendor/google/aosp/scripts/envsetup.sh
+@@ -29,39 +29,68 @@ gettop() {
+ }
+ 
+ if [ -z ${TRUSTY_BUILD_CLANG_VERSION} ]; then
+-    # NOTE: clang-r563880 reports clang version 21.0.0 whereas Rust 1.87.0 was
+-    # built with LLVM version: 20.1.1 but the two releases are close in time and
+-    # thus expected to be compatible.
+-    TRUSTY_BUILD_CLANG_VERSION=clang-r563880
++    # Keep Trusty on the same Clang 22 prebuilt as the rest of the desktop ROM
++    # build. This path is also what Soong exposes inside Trusty's nsjail.
++    TRUSTY_BUILD_CLANG_VERSION=clang-r584948b
+ fi
+ if [ -z ${TRUSTY_BUILD_RUST_VERSION} ]; then
+     TRUSTY_BUILD_RUST_VERSION=1.88.0
+ fi
+ export TRUSTY_TOP=$(gettop)
++case "$(uname -m)" in
++    aarch64|arm64)
++        TRUSTY_HOST_PREBUILT_TAG=linux-arm64
++        TRUSTY_RUST_HOST_TRIPLE=aarch64-unknown-linux-musl
++        TRUSTY_CLANG_HOST_SYSROOT=${TRUSTY_TOP}/prebuilts/build-tools/sysroots/aarch64-unknown-linux-musl
++        TRUSTY_CLANG_HOST_SEARCHDIR=${TRUSTY_TOP}/prebuilts/clang/host/linux-arm64/${TRUSTY_BUILD_CLANG_VERSION}/lib/aarch64-unknown-linux-musl
++        TRUSTY_CLANG_HOST_LDDIRS="${TRUSTY_CLANG_HOST_SEARCHDIR}"
++        TRUSTY_CLANG_HOST_TARGET_FLAGS="--target=aarch64-unknown-linux-musl"
++        TRUSTY_CLANG_HOST_LINK_FLAGS="${TRUSTY_CLANG_HOST_TARGET_FLAGS} --rtlib=compiler-rt --unwindlib=libunwind"
++        TRUSTY_CLANG_HOST_RUST_LINK_ARGS="-B ${TRUSTY_TOP}/prebuilts/clang/host/linux-arm64/${TRUSTY_BUILD_CLANG_VERSION}/bin -fuse-ld=lld"
++        TRUSTY_DTC_PREBUILT=${TRUSTY_SOONG_DTC_PREBUILT:-${TRUSTY_TOP}/tools/out/bin/dtc}
++        ;;
++    *)
++        TRUSTY_HOST_PREBUILT_TAG=linux-x86
++        TRUSTY_RUST_HOST_TRIPLE=x86_64-unknown-linux-gnu
++        CLANG_GCC_TOOLCHAIN=${TRUSTY_TOP}/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
++        TRUSTY_CLANG_HOST_SYSROOT=${CLANG_GCC_TOOLCHAIN}/sysroot
++        TRUSTY_CLANG_HOST_SEARCHDIR=${CLANG_GCC_TOOLCHAIN}/lib/gcc/x86_64-linux/4.8.3
++        TRUSTY_CLANG_HOST_LDDIRS="${CLANG_GCC_TOOLCHAIN}/lib/gcc/x86_64-linux/4.8.3 ${CLANG_GCC_TOOLCHAIN}/x86_64-linux/lib64"
++        ;;
++esac
+ # b/432074538: clang-r547379's linker often crashes while linking Hafnium
+ if [ "${TRUSTY_BUILD_CLANG_VERSION}" = "clang-r547379" ]; then
+     HAFNIUM_BUILD_CLANG_VERSION=clang-r563880
+-    export HAFNIUM_CLANG_BINDIR=${TRUSTY_TOP}/prebuilts/clang/host/linux-x86/${HAFNIUM_BUILD_CLANG_VERSION}/bin
++    export HAFNIUM_CLANG_BINDIR=${TRUSTY_TOP}/prebuilts/clang/host/${TRUSTY_HOST_PREBUILT_TAG}/${HAFNIUM_BUILD_CLANG_VERSION}/bin
+ fi
+-export CLANG_BINDIR=${TRUSTY_TOP}/prebuilts/clang/host/linux-x86/${TRUSTY_BUILD_CLANG_VERSION}/bin
++export CLANG_BINDIR=${TRUSTY_TOP}/prebuilts/clang/host/${TRUSTY_HOST_PREBUILT_TAG}/${TRUSTY_BUILD_CLANG_VERSION}/bin
+ export CLANG_HOST_LIBDIR=${CLANG_BINDIR}/../lib
+-export CLANG_GCC_TOOLCHAIN=${TRUSTY_TOP}/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
+-export CLANG_HOST_SYSROOT=${CLANG_GCC_TOOLCHAIN}/sysroot
+-export CLANG_HOST_SEARCHDIR=${CLANG_GCC_TOOLCHAIN}/lib/gcc/x86_64-linux/4.8.3
+-export CLANG_HOST_LDDIRS="${CLANG_GCC_TOOLCHAIN}/lib/gcc/x86_64-linux/4.8.3 ${CLANG_GCC_TOOLCHAIN}/x86_64-linux/lib64"
+-export CLANG_TOOLS_BINDIR=${TRUSTY_TOP}/prebuilts/clang-tools/linux-x86/bin
+-export LINUX_CLANG_BINDIR=${TRUSTY_TOP}/prebuilts/clang/host/linux-x86/${TRUSTY_BUILD_CLANG_VERSION}/bin
+-export RUST_BINDIR=${TRUSTY_TOP}/prebuilts/rust/linux-x86/${TRUSTY_BUILD_RUST_VERSION}/bin
+-export RUST_HOST_LIBDIR=${RUST_BINDIR}/../lib/rustlib/x86_64-unknown-linux-gnu/lib
++export CLANG_GCC_TOOLCHAIN=${CLANG_GCC_TOOLCHAIN:-}
++export CLANG_HOST_SYSROOT=${TRUSTY_CLANG_HOST_SYSROOT}
++export CLANG_HOST_SEARCHDIR=${TRUSTY_CLANG_HOST_SEARCHDIR}
++export CLANG_HOST_LDDIRS="${TRUSTY_CLANG_HOST_LDDIRS}"
++export CLANG_HOST_TARGET_FLAGS="${TRUSTY_CLANG_HOST_TARGET_FLAGS:-}"
++export CLANG_HOST_LINK_FLAGS="${TRUSTY_CLANG_HOST_LINK_FLAGS:-}"
++if [ -n "${TRUSTY_CLANG_HOST_RUST_LINK_ARGS:-}" ]; then
++    export GLOBAL_HOST_RUST_LINK_ARGS="${TRUSTY_CLANG_HOST_RUST_LINK_ARGS}"
++fi
++if [ -n "${TRUSTY_DTC_PREBUILT:-}" ]; then
++    export DTC_PREBUILT="${TRUSTY_DTC_PREBUILT}"
++fi
++export CLANG_TOOLS_BINDIR=${TRUSTY_TOP}/prebuilts/clang-tools/${TRUSTY_HOST_PREBUILT_TAG}/bin
++export LINUX_CLANG_BINDIR=${TRUSTY_TOP}/prebuilts/clang/host/${TRUSTY_HOST_PREBUILT_TAG}/${TRUSTY_BUILD_CLANG_VERSION}/bin
++export RUST_BINDIR=${TRUSTY_TOP}/prebuilts/rust/${TRUSTY_HOST_PREBUILT_TAG}/${TRUSTY_BUILD_RUST_VERSION}/bin
++export RUST_HOST_LIBDIR=${RUST_BINDIR}/../lib/rustlib/${TRUSTY_RUST_HOST_TRIPLE}/lib
++export RUSTC_BOOTSTRAP="${RUSTC_BOOTSTRAP:-1}"
+ export ARCH_arm_TOOLCHAIN_PREFIX=${CLANG_BINDIR}/llvm-
+ export ARCH_arm64_TOOLCHAIN_PREFIX=${CLANG_BINDIR}/llvm-
+ export ARCH_x86_64_TOOLCHAIN_PREFIX=${CLANG_BINDIR}/llvm-
+ export ARCH_x86_TOOLCHAIN_PREFIX=${CLANG_BINDIR}/llvm-
+-export BUILDTOOLS_BINDIR=${TRUSTY_TOP}/prebuilts/build-tools/linux-x86/bin
++export BUILDTOOLS_BINDIR=${TRUSTY_TOP}/prebuilts/build-tools/${TRUSTY_HOST_PREBUILT_TAG}/bin
+ export BUILDTOOLS_COMMON=${TRUSTY_TOP}/prebuilts/build-tools/common
+ export PY3=$BUILDTOOLS_BINDIR/py3-cmd
+-export PATH_TOOLS_BINDIR=${TRUSTY_TOP}/prebuilts/build-tools/path/linux-x86
+-export LINUX_BUILD_TOOLS=${TRUSTY_TOP}/prebuilts/kernel-build-tools/linux-x86
++export PATH_TOOLS_BINDIR=${TRUSTY_TOP}/prebuilts/build-tools/path/${TRUSTY_HOST_PREBUILT_TAG}
++export LINUX_BUILD_TOOLS=${TRUSTY_TOP}/prebuilts/kernel-build-tools/${TRUSTY_HOST_PREBUILT_TAG}
+ 
+ SOONG_UI=$TRUSTY_TOP/build/soong/soong_ui.bash
+ if [ -f "$SOONG_UI" ]; then
+@@ -93,5 +109,5 @@ export PYTHONPATH
+ 
+ # Bindgen uses clang and libclang at runtime, so we need to tell it where to
+ # look for these tools.
+-export BINDGEN_CLANG_PATH=${TRUSTY_TOP}/prebuilts/clang/host/linux-x86/${TRUSTY_BUILD_CLANG_VERSION}/bin/clang
+-export BINDGEN_LIBCLANG_PATH=${TRUSTY_TOP}/prebuilts/clang/host/linux-x86/${TRUSTY_BUILD_CLANG_VERSION}/lib
++export BINDGEN_CLANG_PATH=${TRUSTY_TOP}/prebuilts/clang/host/${TRUSTY_HOST_PREBUILT_TAG}/${TRUSTY_BUILD_CLANG_VERSION}/bin/clang
++export BINDGEN_LIBCLANG_PATH=${TRUSTY_TOP}/prebuilts/clang/host/${TRUSTY_HOST_PREBUILT_TAG}/${TRUSTY_BUILD_CLANG_VERSION}/lib
+diff --git a/device/generic/goldfish/hals/hwc3/Display.cpp b/device/generic/goldfish/hals/hwc3/Display.cpp
+index 08b7a46a..c58f94af 100644
+--- a/device/generic/goldfish/hals/hwc3/Display.cpp
++++ b/device/generic/goldfish/hals/hwc3/Display.cpp
+@@ -1000,8 +1000,9 @@ void Display::setLegacyEdid() {
+             // Update the name to EMU_display_<mID>
+             mEdid[size - 3] = '0' + (uint8_t)mId;
+             // Update the checksum byte
+-            uint8_t checksum = -(uint8_t)std::accumulate(mEdid.data(), mEdid.data() + size - 1,
+-                                                         static_cast<uint8_t>(0));
++            const uint8_t checksumSum = std::accumulate(mEdid.data(), mEdid.data() + size - 1,
++                                                        static_cast<uint8_t>(0));
++            uint8_t checksum = static_cast<uint8_t>(-static_cast<int>(checksumSum));
+             mEdid[size - 1] = checksum;
+             break;
+         }
+diff --git a/hardware/ril/reference-ril/reference-ril.c b/hardware/ril/reference-ril/reference-ril.c
+index b2c4270..c82c3df 100644
+--- a/hardware/ril/reference-ril/reference-ril.c
++++ b/hardware/ril/reference-ril/reference-ril.c
+@@ -555,6 +555,8 @@ static void requestCallSelection(
+             break;
+         default:
+             assert(0);
++            RIL_onRequestComplete(t, RIL_E_REQUEST_NOT_SUPPORTED, NULL, 0);
++            return;
+     }
+     at_send_command(atCommand, NULL);
+     // Success or failure is ignored by the upper layer here.
+diff --git a/frameworks/native/services/surfaceflinger/CompositionEngine/include/compositionengine/impl/Output.h b/frameworks/native/services/surfaceflinger/CompositionEngine/include/compositionengine/impl/Output.h
+index 5a4cfcd389..bfef4e153b 100644
+--- a/frameworks/native/services/surfaceflinger/CompositionEngine/include/compositionengine/impl/Output.h
++++ b/frameworks/native/services/surfaceflinger/CompositionEngine/include/compositionengine/impl/Output.h
+@@ -280,10 +280,10 @@ std::shared_ptr<BaseOutput> createOutputTemplated(const CompositionEngine& compo
+             return result;
+         }
+ 
+-        // Note: This is declared as a private virtual non-override so it can be
+-        // an override implementation in the unit tests, but otherwise is not an
+-        // accessible override for the normal implementation.
+-        virtual void injectOutputLayerForTest(std::unique_ptr<OutputLayer> outputLayer) {
++        // Note: This intentionally omits `override`: unit tests can supply a
++        // BaseOutput with a private pure virtual hook of this signature, while
++        // the normal implementation keeps it as an inaccessible helper.
++        void injectOutputLayerForTest(std::unique_ptr<OutputLayer> outputLayer) {
+             mCurrentOutputLayersOrderedByZ.emplace_back(std::move(outputLayer));
+         }
+ 

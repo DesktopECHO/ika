@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRCPY_DIR="$ROOT_DIR/scrcpy"
 BUILD_DIR="${BUILD_DIR:-$ROOT_DIR/out/build-scrcpy-server}"
 ANDROID_CACHE_DIR="${ANDROID_CACHE_DIR:-$ROOT_DIR/out/android-sdk-cache}"

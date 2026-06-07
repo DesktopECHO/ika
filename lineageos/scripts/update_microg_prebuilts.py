@@ -17,6 +17,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from xml.dom import pulldom
 
 
@@ -44,6 +45,7 @@ def _is_transient_exception(exc):
             http.client.RemoteDisconnected,
             ConnectionError,
             TimeoutError,
+            zipfile.BadZipFile,
         ),
     )
 
@@ -128,6 +130,10 @@ def download(url, dest):
             with urllib.request.urlopen(request, timeout=120) as response:
                 with open(tmp, "wb") as output:
                     shutil.copyfileobj(response, output)
+            with zipfile.ZipFile(tmp) as archive:
+                bad_member = archive.testzip()
+            if bad_member is not None:
+                raise zipfile.BadZipFile(f"corrupt zip member: {bad_member}")
             tmp.replace(dest)
         finally:
             try:

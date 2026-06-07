@@ -11,7 +11,7 @@ Before building:
    `NATIVE_BRIDGE_SOURCE_DIR` to a vetted extracted payload.
 4. Run the one-command build script from a clean or script-managed workspace.
 
-The build script runs `scripts/validate_build_inputs.sh` before compiling. It
+The build script runs `scripts/lib/validate_build_inputs.sh` before compiling. It
 checks patch application state, userdata policy, required microG APKs, WebView
 prebuilts, native bridge files for x86-64, and required desktop aconfig flags.
 

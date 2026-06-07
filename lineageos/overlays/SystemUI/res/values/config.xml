@@ -2,6 +2,7 @@
 <resources>
     <bool name="config_showBatteryUi">false</bool>
     <bool name="config_useQsMediaVolumeSlider">true</bool>
+    <bool name="lineage_desktop_hide_keyguard_clock">true</bool>
 
     <string name="config_navBarLayout" translatable="false">left[1W],back[1WC];;recent[1WC],right[.1W]</string>
     <string name="config_navBarLayoutQuickstep" translatable="false">left[1W],back[1WC];;contextual[1WC],right[.1W]</string>

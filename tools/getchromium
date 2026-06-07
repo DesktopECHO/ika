@@ -12,6 +12,8 @@ import xml.etree.ElementTree as ET
 STORAGE_URL = "https://commondatastorage.googleapis.com/chromium-browser-snapshots"
 DOWNLOAD_CACHE_DIR = "/tmp"
 DOWNLOAD_BASENAME = "chrome-android-desktop"
+DOWNLOAD_PROGRESS_DOT_PERCENT = 10
+DOWNLOAD_PROGRESS_UNKNOWN_CHUNKS = 2
 ARCH_DETECT_ATTEMPTS = 10
 ARCH_DETECT_RETRY_SECONDS = 0.5
 INSTALLED_CHECK_ATTEMPTS = 10
@@ -257,21 +259,23 @@ def download_zip_if_needed(download_url, zip_path, revision):
     with requests.get(download_url, stream=True) as r:
         r.raise_for_status()
         total_bytes = int(r.headers.get("content-length", "0"))
-        next_progress_percent = 5
+        next_progress_percent = DOWNLOAD_PROGRESS_DOT_PERCENT
         downloaded_bytes = 0
+        downloaded_chunks = 0
         with open(partial_zip, 'wb') as f:
             for chunk in r.iter_content(chunk_size=1024*1024):
                 if not chunk:
                     continue
                 f.write(chunk)
                 downloaded_bytes += len(chunk)
+                downloaded_chunks += 1
                 if total_bytes > 0:
                     progress_percent = downloaded_bytes * 100 // total_bytes
                     while progress_percent >= next_progress_percent:
                         sys.stdout.write(".")
                         sys.stdout.flush()
-                        next_progress_percent += 5
-                else:
+                        next_progress_percent += DOWNLOAD_PROGRESS_DOT_PERCENT
+                elif downloaded_chunks % DOWNLOAD_PROGRESS_UNKNOWN_CHUNKS == 0:
                     sys.stdout.write(".")
                     sys.stdout.flush()
     os.replace(partial_zip, zip_path)

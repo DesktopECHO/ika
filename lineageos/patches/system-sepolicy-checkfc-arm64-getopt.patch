@@ -1,0 +1,68 @@
+Patch summary:
+Store SELinux host-tool getopt results in an int.
+getopt() and getopt_long() return int and use -1 as the end-of-options
+sentinel. ARM64 treats plain char as unsigned, so storing that sentinel in char
+turns it into 255 and the parser falls through to usage() after valid
+arguments. x86 hosts happen to work because plain char is signed there.
+
+diff --git a/tools/checkfc.c b/tools/checkfc.c
+--- a/tools/checkfc.c
++++ b/tools/checkfc.c
+@@ -384,7 +384,7 @@ int main(int argc, char **argv)
+   bool allow_empty = false;
+   bool compare = false;
+   bool test_data = false;
+-  char c;
++  int c;
+ 
+   filemode mode = filemode_file_contexts;
+ 
+diff --git a/tools/sepolicy-analyze/attribute.c b/tools/sepolicy-analyze/attribute.c
+--- a/tools/sepolicy-analyze/attribute.c
++++ b/tools/sepolicy-analyze/attribute.c
+@@ -75,7 +75,7 @@ int attribute_func (int argc, char **argv, policydb_t *policydb) {
+     int rc = -1;
+     int list = 0;
+     int reverse = 0;
+-    char ch;
++    int ch;
+ 
+     struct option attribute_options[] = {
+         {"list", no_argument, NULL, 'l'},
+diff --git a/tools/sepolicy-analyze/neverallow.c b/tools/sepolicy-analyze/neverallow.c
+--- a/tools/sepolicy-analyze/neverallow.c
++++ b/tools/sepolicy-analyze/neverallow.c
+@@ -493,7 +493,7 @@ static int check_neverallows_string(policydb_t *policydb, char *string, size_t l
+ 
+ int neverallow_func (int argc, char **argv, policydb_t *policydb) {
+     char *rules = 0, *file = 0;
+-    char ch;
++    int ch;
+ 
+     struct option neverallow_options[] = {
+         {"debug", no_argument, NULL, 'd'},
+diff --git a/tools/sepolicy-analyze/typecmp.c b/tools/sepolicy-analyze/typecmp.c
+--- a/tools/sepolicy-analyze/typecmp.c
++++ b/tools/sepolicy-analyze/typecmp.c
+@@ -272,7 +272,8 @@ static int analyze_types(policydb_t * policydb, char diff, char equiv)
+ }
+ 
+ int typecmp_func (int argc, char **argv, policydb_t *policydb) {
+-    char ch, diff = 0, equiv = 0;
++    int ch;
++    char diff = 0, equiv = 0;
+ 
+     struct option typecmp_options[] = {
+         {"diff", no_argument, NULL, 'd'},
+diff --git a/tools/sepolicy-check.c b/tools/sepolicy-check.c
+--- a/tools/sepolicy-check.c
++++ b/tools/sepolicy-check.c
+@@ -236,7 +236,7 @@ int main(int argc, char **argv)
+ 	policydb_t policydb;
+ 	struct policy_file pf;
+ 	sidtab_t sidtab;
+-	char ch;
++	int ch;
+ 	int match = 1;
+ 
+ 	struct option long_options[] = {

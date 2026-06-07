@@ -12,7 +12,7 @@ process and CLA requirements in the upstream repository.
 Useful local checks:
 
 ```bash
-./lineageos/scripts/validate_build_inputs.sh ./lineageos/src
+./lineageos/scripts/lib/validate_build_inputs.sh ./lineageos/src
 ./tools/buildutils/build_packages.sh
 ```
 

@@ -1,0 +1,243 @@
+diff --git a/crates/bindgen-cli/Android.bp b/crates/bindgen-cli/Android.bp
+index 3021cc229..3ab1bdfa5 100644
+--- a/crates/bindgen-cli/Android.bp
++++ b/crates/bindgen-cli/Android.bp
+@@ -15,7 +15,7 @@ license {
+ 
+ rust_binary_host {
+     name: "bindgen",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     crate_name: "bindgen",
+     cargo_env_compat: true,
+     cargo_pkg_version: "0.72.0",
+diff --git a/crates/bindgen/Android.bp b/crates/bindgen/Android.bp
+index a89de047d..1d11c2fe3 100644
+--- a/crates/bindgen/Android.bp
++++ b/crates/bindgen/Android.bp
+@@ -22,7 +22,7 @@ genrule {
+ 
+ rust_library_host {
+     name: "libbindgen",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     crate_name: "bindgen",
+     cargo_env_compat: true,
+     cargo_pkg_version: "0.72.1",
+diff --git a/crates/bindgen/android/bindgen_cmd/Android.bp b/crates/bindgen/android/bindgen_cmd/Android.bp
+index 24566138c..a14ab7118 100644
+--- a/crates/bindgen/android/bindgen_cmd/Android.bp
++++ b/crates/bindgen/android/bindgen_cmd/Android.bp
+@@ -9,7 +9,7 @@ package {
+ 
+ rust_library_host {
+     name: "libbindgen_cmd",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     crate_name: "bindgen_cmd",
+     srcs: ["src/lib.rs"],
+     edition: "2018",
+diff --git a/crates/darling/Android.bp b/crates/darling/Android.bp
+index 2fe227fbb..21333d3e7 100644
+--- a/crates/darling/Android.bp
++++ b/crates/darling/Android.bp
+@@ -751,7 +751,7 @@ rust_test_host {
+ 
+ rust_library_host {
+     name: "libdarling",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     crate_name: "darling",
+     cargo_env_compat: true,
+     cargo_pkg_version: "0.21.2",
+diff --git a/crates/darling_core/Android.bp b/crates/darling_core/Android.bp
+index 0a2df5935..b5b15afa9 100644
+--- a/crates/darling_core/Android.bp
++++ b/crates/darling_core/Android.bp
+@@ -15,7 +15,7 @@ license {
+ 
+ rust_library_host {
+     name: "libdarling_core",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     crate_name: "darling_core",
+     cargo_env_compat: true,
+     cargo_pkg_version: "0.21.2",
+diff --git a/crates/derive_builder_core/Android.bp b/crates/derive_builder_core/Android.bp
+index 61e448711..08a4beb06 100644
+--- a/crates/derive_builder_core/Android.bp
++++ b/crates/derive_builder_core/Android.bp
+@@ -15,7 +15,7 @@ license {
+ 
+ rust_library_host {
+     name: "libderive_builder_core",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     crate_name: "derive_builder_core",
+     cargo_env_compat: true,
+     cargo_pkg_version: "0.20.2",
+diff --git a/crates/diplomat_core/Android.bp b/crates/diplomat_core/Android.bp
+index c56be9677..092962277 100644
+--- a/crates/diplomat_core/Android.bp
++++ b/crates/diplomat_core/Android.bp
+@@ -15,7 +15,7 @@ license {
+ 
+ rust_library_host {
+     name: "libdiplomat_core",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     crate_name: "diplomat_core",
+     cargo_env_compat: true,
+     cargo_pkg_version: "0.12.1",
+diff --git a/crates/libbpf-sys/Android.bp b/crates/libbpf-sys/Android.bp
+index c24e625c6..dec896d7b 100644
+--- a/crates/libbpf-sys/Android.bp
++++ b/crates/libbpf-sys/Android.bp
+@@ -31,7 +31,7 @@ rust_library {
+ 
+ rust_binary_host {
+     name: "libbpf_bindgen_build",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     srcs: ["android/build.rs"],
+     rustlibs: [
+         "libbindgen",
+diff --git a/crates/libsqlite3-sys/android/Android.bp b/crates/libsqlite3-sys/android/Android.bp
+index 2398e4774..98f7ad672 100644
+--- a/crates/libsqlite3-sys/android/Android.bp
++++ b/crates/libsqlite3-sys/android/Android.bp
+@@ -11,7 +11,7 @@ package {
+ 
+ rust_binary_host {
+     name: "sqlite3_bindgen_build",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     srcs: ["build.rs"],
+     rustlibs: [
+         "libbindgen",
+diff --git a/crates/litrs/Android.bp b/crates/litrs/Android.bp
+index 2b8d9d2dd..9b11e3fed 100644
+--- a/crates/litrs/Android.bp
++++ b/crates/litrs/Android.bp
+@@ -15,7 +15,7 @@ license {
+ 
+ rust_library_host {
+     name: "liblitrs",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     crate_name: "litrs",
+     cargo_env_compat: true,
+     cargo_pkg_version: "0.5.1",
+diff --git a/crates/pdl-compiler/Android.bp b/crates/pdl-compiler/Android.bp
+index 7a436f4f2..0e984aebb 100644
+--- a/crates/pdl-compiler/Android.bp
++++ b/crates/pdl-compiler/Android.bp
+@@ -15,7 +15,7 @@ license {
+ 
+ rust_library_host {
+     name: "libpdl_compiler",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     crate_name: "pdl_compiler",
+     cargo_env_compat: true,
+     cargo_pkg_version: "0.3.3",
+@@ -43,7 +43,7 @@ rust_library_host {
+ 
+ rust_binary_host {
+     name: "pdlc",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     crate_name: "pdlc",
+     cargo_env_compat: true,
+     cargo_pkg_version: "0.3.3",
+diff --git a/crates/pest_generator/Android.bp b/crates/pest_generator/Android.bp
+index e3e726373..d1f167844 100644
+--- a/crates/pest_generator/Android.bp
++++ b/crates/pest_generator/Android.bp
+@@ -15,7 +15,7 @@ license {
+ 
+ rust_library_host {
+     name: "libpest_generator",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     crate_name: "pest_generator",
+     cargo_env_compat: true,
+     cargo_pkg_version: "2.8.1",
+diff --git a/crates/prettyplease/Android.bp b/crates/prettyplease/Android.bp
+index 66b57d105..24bf457a3 100644
+--- a/crates/prettyplease/Android.bp
++++ b/crates/prettyplease/Android.bp
+@@ -15,7 +15,7 @@ license {
+ 
+ rust_library_host {
+     name: "libprettyplease",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     crate_name: "prettyplease",
+     cargo_env_compat: true,
+     cargo_pkg_version: "0.2.37",
+diff --git a/crates/proc-macro2/Android.bp b/crates/proc-macro2/Android.bp
+index f869edb88..cfbd78f73 100644
+--- a/crates/proc-macro2/Android.bp
++++ b/crates/proc-macro2/Android.bp
+@@ -15,7 +15,7 @@ license {
+ 
+ rust_library_host {
+     name: "libproc_macro2",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     crate_name: "proc_macro2",
+     cargo_env_compat: true,
+     cargo_pkg_version: "1.0.101",
+diff --git a/crates/quote/Android.bp b/crates/quote/Android.bp
+index c7922d1ff..cdf56305f 100644
+--- a/crates/quote/Android.bp
++++ b/crates/quote/Android.bp
+@@ -15,7 +15,7 @@ license {
+ 
+ rust_library_host {
+     name: "libquote",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     crate_name: "quote",
+     cargo_env_compat: true,
+     cargo_pkg_version: "1.0.40",
+diff --git a/crates/syn-mid/Android.bp b/crates/syn-mid/Android.bp
+index 1e9093667..54be90e50 100644
+--- a/crates/syn-mid/Android.bp
++++ b/crates/syn-mid/Android.bp
+@@ -15,7 +15,7 @@ license {
+ 
+ rust_library_host {
+     name: "libsyn_mid",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     crate_name: "syn_mid",
+     cargo_env_compat: true,
+     cargo_pkg_version: "0.6.0",
+diff --git a/crates/syn/Android.bp b/crates/syn/Android.bp
+index 1b9def78f..f7e148876 100644
+--- a/crates/syn/Android.bp
++++ b/crates/syn/Android.bp
+@@ -15,7 +15,7 @@ license {
+ 
+ rust_library_host {
+     name: "libsyn",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     crate_name: "syn",
+     cargo_env_compat: true,
+     cargo_pkg_version: "2.0.106",
+diff --git a/crates/synstructure/Android.bp b/crates/synstructure/Android.bp
+index 8ecf11ecf..2573873cc 100644
+--- a/crates/synstructure/Android.bp
++++ b/crates/synstructure/Android.bp
+@@ -15,7 +15,7 @@ license {
+ 
+ rust_library_host {
+     name: "libsynstructure",
+-    host_cross_supported: false,
++    host_cross_supported: true,
+     crate_name: "synstructure",
+     cargo_env_compat: true,
+     cargo_pkg_version: "0.13.2",

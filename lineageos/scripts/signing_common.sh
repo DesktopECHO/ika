@@ -11,6 +11,16 @@ _signing_common_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SETUP_KEYS_SCRIPT="$_signing_common_dir/../../tools/buildutils/setup_keys.sh"
 GENERATE_KEYS_SCRIPT="$_signing_common_dir/generate_signing_keys.sh"
 
+host_page_size() {
+  local page_size
+  page_size="$(getconf PAGE_SIZE 2>/dev/null || true)"
+  if [[ "$page_size" =~ ^[0-9]+$ && "$page_size" -gt 0 ]]; then
+    printf '%s\n' "$page_size"
+  else
+    printf '%s\n' 0
+  fi
+}
+
 # require_signing_keys
 # Aborts the caller (exit 1) if the release key isn't present. Used by the
 # rebuild scripts to fail fast and point the user at the bootstrap rather
@@ -60,7 +70,7 @@ host_tool_matches_machine() {
   local candidate="$1"
   local description machine
 
-  command -v file >/dev/null 2>&1 || return 0
+  command -v file >/dev/null 2>&1 || return 1
   description="$(file -b "$candidate" 2>/dev/null || true)"
 
   # Shell/Python wrapper tools are architecture-neutral.
@@ -85,7 +95,7 @@ host_tool_matches_machine() {
 # out/host/*/bin/ built by `m otatools`. Cuttlefish builds may also produce
 # foreign-architecture host-package tools (for example linux_musl-arm64 on an
 # x86_64 builder), so prefer the native host output and skip incompatible ELF
-# binaries during fallback.
+# binaries during the final search.
 find_signing_tool() {
   local name="$1"
   local repo_root="$2"
