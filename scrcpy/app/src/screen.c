@@ -16,58 +16,40 @@
 #include "util/process.h"
 #include "util/sdl.h"
 
-#define DISPLAY_MARGINS 96
-#define FLEX_DISPLAY_RESIZE_MIN_INTERVAL SC_TICK_FROM_MS(250)
-#define FLEX_DISPLAY_RESIZE_SETTLE_DELAY SC_TICK_FROM_MS(100)
-// Absolute ceiling on how long we keep displaying the held (pre-resize)
-// texture stretched into the new window after the last resize event. The
-// device-side DISPLAY_READY message is the primary signal; this fallback
-// only fires if that message doesn't arrive (hung surface, dropped
-// connection, server-side bug). 1 s is enough room for the normal ack to
-// land first and short enough that a failure mode isn't painful.
-#define FLEX_DISPLAY_POST_RESIZE_HOLD_MAX SC_TICK_FROM_MS(1000)
-// Absolute ceiling on the post-match hold, in case Android keeps repainting
-// indefinitely (live wallpaper, animations). Beyond this we accept whatever
-// frame is current and swap. Kept under the from-drag-end ceiling so it can
-// actually fire on its own when first-match comes in fast.
-#define FLEX_DISPLAY_POST_MATCH_HOLD_MAX SC_TICK_FROM_MS(800)
-// Required period of unchanged frame content (sparse pixel hash) before we
-// declare Android's recomposting complete and swap to the new texture.
-#define FLEX_DISPLAY_FRAME_STABILITY_WINDOW SC_TICK_FROM_MS(100)
-// Minimum hold time after the first matching-size frame arrives, regardless
-// of content-stability. Guarantees Android has time to start its cascade
-// even if the very first matching frame happens to hash-match the held
-// texture (which would otherwise fire stability instantly).
-#define FLEX_DISPLAY_MIN_HOLD_AFTER_MATCH SC_TICK_FROM_MS(200)
-#define FLEX_DISPLAY_SIZE_MATCH_TOLERANCE 16
-#define FLEX_DISPLAY_INITIAL_SHOW_MAX_DELAY SC_TICK_FROM_MS(350)
-#define RAW_FRAME_RESIZE_STILL_DELAY SC_TICK_FROM_MS(1000)
-#define RAW_FRAME_RESIZE_ACTIVE_MIN_INTERVAL SC_TICK_FROM_MS(33)
+#define DISPLAY_MARGIN_PX 96
+#define FLEX_DISPLAY_REQUEST_MIN_INTERVAL SC_TICK_FROM_MS(250)
+#define FLEX_DISPLAY_RESIZE_QUIET_DELAY SC_TICK_FROM_MS(150)
+#define FLEX_DISPLAY_POST_READY_FRAME_GRACE SC_TICK_FROM_MS(150)
+#define FLEX_DISPLAY_INITIAL_SHOW_TIMEOUT SC_TICK_FROM_MS(350)
+#define RAW_FRAME_RESIZE_THROTTLE_WINDOW SC_TICK_FROM_MS(1000)
+#define RAW_FRAME_RESIZE_RENDER_INTERVAL SC_TICK_FROM_MS(33)
 #define SC_WINDOW_MIN_WIDTH 540
 #define SC_WINDOW_MIN_HEIGHT 540
 #define SC_WINDOW_RESIZE_BORDER 8
-#define SC_WINDOW_DRAG_REGION_WIDTH 150
-#define SC_WINDOW_DRAG_REGION_HEIGHT 28
-#define SC_WINDOW_DRAG_HOLD_THRESHOLD SC_TICK_FROM_MS(220)
-#define SC_WINDOW_HOTSPOT_CLICK_MOVE_THRESHOLD 8.0f
-// Blur effect parameters: 28 ghost copies of the texture drawn at low alpha
-// and small pixel offsets, producing a cheap soft-blur look without a real
-// shader pass.
-//   _OFFSET — pixel step between ghost rings. Larger = wider, softer blur.
-//   _ALPHA  — per-ghost alpha (0-255) at full intensity. Scaled down as the
-//             fade decays so the blur softly disappears.
-#define FLEX_DISPLAY_BLUR_OFFSET 8.0f
-#define FLEX_DISPLAY_BLUR_ALPHA 10
+#define SC_WINDOW_DRAG_HOTSPOT_WIDTH 150
+#define SC_WINDOW_DRAG_HOTSPOT_HEIGHT 28
+#define SC_WINDOW_DRAG_HOLD_DELAY SC_TICK_FROM_MS(220)
+#define SC_WINDOW_CLICK_MOVE_TOLERANCE 8.0f
+// Blur effect parameters: jittered ghost copies of the texture drawn at low
+// alpha and fractional pixel offsets, producing a cheap soft-blur look without
+// a real shader pass.
+//   _STEP  - pixel scale for the sample offsets. Larger = wider blur.
+//   _ALPHA - per-ghost alpha (0-255) at full intensity. Scaled down as the
+//            fade decays so the blur softly disappears.
+#define FLEX_DISPLAY_BLUR_STEP 1.55f
+#define FLEX_DISPLAY_BLUR_ALPHA 4
 // Blur fade-in duration while the resize is unsettled. This ramps the ghost
 // overlay in gradually instead of snapping to full blur as soon as the window
 // changes size.
 #define FLEX_DISPLAY_BLUR_FADE_IN_DURATION SC_TICK_FROM_MS(125)
-// Blur fade-out duration. When stability is signalled (DISPLAY_READY arrives
-// or the fallback fires), the blur ghost intensity decays linearly to 0.0 over
-// this period rather than snapping off in one frame. The underlying texture has
-// already been swapped to the new content by the time the fade begins, so the
-// fade reveals the new content sharpening up.
-#define FLEX_DISPLAY_BLUR_FADE_OUT_DURATION SC_TICK_FROM_MS(125)
+// Keep the captured preview fully opaque for a brief moment after release so
+// a one-frame transitional live buffer is not revealed underneath the fade.
+#define FLEX_DISPLAY_PREVIEW_REVEAL_DELAY SC_TICK_FROM_MS(250)
+// Blur fade-out duration. When the resize hold releases, the blur ghost intensity
+// decays linearly to 0.0 over this period rather than snapping off in one
+// frame. The underlying texture has already been swapped to the new content by
+// the time the fade begins, so the fade reveals the new content sharpening up.
+#define FLEX_DISPLAY_BLUR_FADE_OUT_DURATION SC_TICK_FROM_MS(250)
 // Tick interval driving the fade animation; ~60 Hz is enough for a smooth
 // linear ramp without burning CPU.
 #define FLEX_DISPLAY_BLUR_FADE_INTERVAL_MS 16
@@ -110,8 +92,8 @@ is_windowed(struct sc_screen *screen) {
 static inline bool
 sc_screen_is_drag_hotspot(float x, float y) {
     return x >= 0 && y >= 0
-        && x < SC_WINDOW_DRAG_REGION_WIDTH
-        && y < SC_WINDOW_DRAG_REGION_HEIGHT;
+        && x < SC_WINDOW_DRAG_HOTSPOT_WIDTH
+        && y < SC_WINDOW_DRAG_HOTSPOT_HEIGHT;
 }
 
 static void
@@ -141,7 +123,7 @@ sc_screen_poll_hotspot_state(struct sc_screen *screen) {
     // Long press in hotspot is treated as drag.
     if (!screen->hotspot_dragged) {
         sc_tick now = sc_tick_now();
-        if (now - screen->hotspot_press_tick > SC_WINDOW_DRAG_HOLD_THRESHOLD) {
+        if (now - screen->hotspot_press_tick > SC_WINDOW_DRAG_HOLD_DELAY) {
             screen->hotspot_dragged = true;
         }
     }
@@ -242,8 +224,8 @@ get_preferred_display_bounds(struct sc_size *bounds) {
         return false;
     }
 
-    bounds->width = MAX(0, rect.w - DISPLAY_MARGINS);
-    bounds->height = MAX(0, rect.h - DISPLAY_MARGINS);
+    bounds->width = MAX(0, rect.w - DISPLAY_MARGIN_PX);
+    bounds->height = MAX(0, rect.h - DISPLAY_MARGIN_PX);
     return true;
 }
 
@@ -477,26 +459,73 @@ static float
 sc_screen_blur_intensity(struct sc_screen *screen);
 static void
 sc_screen_start_blur_animation_timer(struct sc_screen *screen);
+static bool
+sc_screen_render_texture(struct sc_screen *screen, const SDL_FRect *geometry);
+static void
+sc_screen_destroy_resize_preview(struct sc_screen *screen);
+static bool
+sc_screen_capture_resize_preview(struct sc_screen *screen);
+static bool
+sc_screen_render_resize_preview(struct sc_screen *screen,
+                                const SDL_FRect *geometry,
+                                float alpha,
+                                float intensity);
+static void
+sc_screen_note_display_ready_raw_frame(struct sc_screen *screen);
+static bool
+sc_screen_try_release_resize_hold(struct sc_screen *screen);
 
 static bool
-sc_screen_should_hold_resize_preview(struct sc_screen *screen) {
-    // Hold the existing GPU texture across the entire transient_stretch
-    // phase. Cascade letterbox bars and partial-repaint frames must never
-    // reach the texture: that texture is stretched across the new window
-    // every frame, and any bar inside it would be plainly visible. We swap
-    // only when stability detection clears transient_stretch.
+sc_screen_should_hold_resize(struct sc_screen *screen) {
+    // Keep the last uploaded texture frozen while Android catches up. Incoming
+    // frames stay on the CPU side and cannot pollute the blurred resize image.
     return screen->window_shown
         && screen->flex_display
         && screen->transient_stretch
         && screen->tex.texture;
 }
 
+static Uint32
+sc_screen_resize_quiet_remaining_ms(struct sc_screen *screen, sc_tick now) {
+    if (!screen->last_resize_event_tick) {
+        return 0;
+    }
+
+    sc_tick elapsed = now - screen->last_resize_event_tick;
+    if (elapsed >= FLEX_DISPLAY_RESIZE_QUIET_DELAY) {
+        return 0;
+    }
+
+    Uint32 remaining_ms =
+        SC_TICK_TO_MS(FLEX_DISPLAY_RESIZE_QUIET_DELAY - elapsed);
+    return remaining_ms ? remaining_ms : 1;
+}
+
 static bool
-sc_screen_resize_hold_elapsed(struct sc_screen *screen, sc_tick now) {
-    return !screen->last_resize_event_tick
-        || now - screen->last_resize_event_tick
-                >= FLEX_DISPLAY_RESIZE_SETTLE_DELAY
-                    + FLEX_DISPLAY_POST_RESIZE_HOLD_MAX;
+sc_screen_compute_raw_frame_source_rect(struct sc_size frame_size,
+                                        struct sc_size source_size,
+                                        SDL_FRect *rect) {
+    if (!frame_size.width || !frame_size.height
+            || !source_size.width || !source_size.height) {
+        return false;
+    }
+
+    float frame_ar = (float) frame_size.width / frame_size.height;
+    float source_ar = (float) source_size.width / source_size.height;
+
+    rect->x = 0;
+    rect->y = 0;
+    rect->w = frame_size.width;
+    rect->h = frame_size.height;
+    if (source_ar > frame_ar) {
+        rect->h = rect->w / source_ar;
+        rect->y = (frame_size.height - rect->h) / 2.f;
+    } else if (source_ar < frame_ar) {
+        rect->w = rect->h * source_ar;
+        rect->x = (frame_size.width - rect->w) / 2.f;
+    }
+
+    return rect->w > 0 && rect->h > 0;
 }
 
 static bool
@@ -507,31 +536,21 @@ sc_screen_render_texture(struct sc_screen *screen, const SDL_FRect *geometry) {
     SDL_FRect srcrect;
     const SDL_FRect *src = NULL;
 
-    if (!screen->transient_stretch
-            && screen->raw_frame_source_open
+    if (screen->raw_frame_source_open
             && screen->flex_display
-            && screen->last_requested_display_size.width
-            && screen->last_requested_display_size.height
             && screen->frame_size.width
             && screen->frame_size.height) {
-        float frame_ar =
-            (float) screen->frame_size.width / screen->frame_size.height;
-        float requested_ar =
-            (float) screen->last_requested_display_size.width
-                    / screen->last_requested_display_size.height;
-
-        srcrect.x = 0;
-        srcrect.y = 0;
-        srcrect.w = screen->frame_size.width;
-        srcrect.h = screen->frame_size.height;
-        if (requested_ar > frame_ar) {
-            srcrect.h = srcrect.w / requested_ar;
-            srcrect.y = (screen->frame_size.height - srcrect.h) / 2.f;
-        } else if (requested_ar < frame_ar) {
-            srcrect.w = srcrect.h * requested_ar;
-            srcrect.x = (screen->frame_size.width - srcrect.w) / 2.f;
+        struct sc_size source_size = screen->transient_stretch
+                                   ? screen->transient_stretch_source_size
+                                   : screen->last_requested_display_size;
+        if (!source_size.width || !source_size.height) {
+            source_size = screen->last_requested_display_size;
         }
-        src = &srcrect;
+
+        if (sc_screen_compute_raw_frame_source_rect(screen->frame_size,
+                                                   source_size, &srcrect)) {
+            src = &srcrect;
+        }
     }
 
     if (orientation == SC_ORIENTATION_0) {
@@ -560,11 +579,88 @@ sc_screen_render_texture(struct sc_screen *screen, const SDL_FRect *geometry) {
                                     NULL, flip);
 }
 
-// Renders the texture stretched to full window with 28 low-alpha ghost copies
-// overlaid at small offsets. Ghost alpha is FLEX_DISPLAY_BLUR_ALPHA scaled by
-// `intensity` (0.0-1.0). During the held phase, intensity ramps up over
-// FLEX_DISPLAY_BLUR_FADE_IN_DURATION; once stability fires, it decays to 0.0
-// over FLEX_DISPLAY_BLUR_FADE_OUT_DURATION.
+static void
+sc_screen_destroy_resize_preview(struct sc_screen *screen) {
+    if (screen->resize_preview_texture) {
+        SDL_DestroyTexture(screen->resize_preview_texture);
+        screen->resize_preview_texture = NULL;
+    }
+    screen->resize_preview_size.width = 0;
+    screen->resize_preview_size.height = 0;
+}
+
+static bool
+sc_screen_capture_resize_preview(struct sc_screen *screen) {
+    sc_screen_destroy_resize_preview(screen);
+
+    if (!screen->tex.texture
+            || !screen->frame_size.width
+            || !screen->frame_size.height) {
+        return false;
+    }
+
+    struct sc_size source_size = screen->last_requested_display_size;
+    if (!source_size.width || !source_size.height) {
+        source_size = screen->frame_size;
+    }
+    if (!source_size.width || !source_size.height) {
+        return false;
+    }
+
+    struct sc_size preview_size =
+        get_oriented_size(source_size, screen->orientation);
+    if (!preview_size.width || !preview_size.height) {
+        return false;
+    }
+
+    SDL_Texture *preview =
+        SDL_CreateTexture(screen->renderer, SDL_PIXELFORMAT_RGBA8888,
+                          SDL_TEXTUREACCESS_TARGET,
+                          preview_size.width, preview_size.height);
+    if (!preview) {
+        LOGW("Could not create resize preview texture: %s", SDL_GetError());
+        return false;
+    }
+
+    SDL_SetTextureScaleMode(preview, SDL_SCALEMODE_LINEAR);
+    SDL_SetTextureBlendMode(preview, SDL_BLENDMODE_BLEND);
+
+    SDL_Texture *previous_target = SDL_GetRenderTarget(screen->renderer);
+    if (!SDL_SetRenderTarget(screen->renderer, preview)) {
+        LOGW("Could not set resize preview target: %s", SDL_GetError());
+        SDL_DestroyTexture(preview);
+        return false;
+    }
+
+    SDL_SetRenderDrawColor(screen->renderer, 0, 0, 0, 0xff);
+    sc_sdl_render_clear(screen->renderer);
+    SDL_FRect dst = {
+        .x = 0,
+        .y = 0,
+        .w = preview_size.width,
+        .h = preview_size.height,
+    };
+    bool ok = sc_screen_render_texture(screen, &dst);
+
+    if (!SDL_SetRenderTarget(screen->renderer, previous_target)) {
+        LOGW("Could not restore render target: %s", SDL_GetError());
+    }
+
+    if (!ok) {
+        SDL_DestroyTexture(preview);
+        return false;
+    }
+
+    screen->resize_preview_texture = preview;
+    screen->resize_preview_size = preview_size;
+    screen->transient_stretch_source_size = source_size;
+    return true;
+}
+
+// Renders the current texture with low-alpha ghost copies overlaid at small,
+// jittered offsets. During resize, the texture is stretched to the window and
+// blurred in; after release, the newly uploaded texture is blurred out to full
+// quality.
 static bool
 sc_screen_render_blurred_stretch(struct sc_screen *screen,
                                  const SDL_FRect *geometry,
@@ -593,26 +689,127 @@ sc_screen_render_blurred_stretch(struct sc_screen *screen,
         return ok;
     }
 
-    static const int offsets[][2] = {
-        // ring 1 (±1)
-        {-1, -1}, { 0, -1}, { 1, -1},
-        {-1,  0},           { 1,  0},
-        {-1,  1}, { 0,  1}, { 1,  1},
-        // ring 2 (±2)
-        {-2, -2}, { 0, -2}, { 2, -2},
-        {-2,  0},           { 2,  0},
-        {-2,  2}, { 0,  2}, { 2,  2},
-        // ring 3 (cross + near-diagonals at ±3)
-        {-3,  0}, { 3,  0}, { 0, -3}, { 0,  3},
-        {-3, -1}, {-3,  1}, { 3, -1}, { 3,  1},
-        {-1, -3}, { 1, -3}, {-1,  3}, { 1,  3},
+    static const SDL_FPoint offsets[] = {
+        {-0.6f, -0.9f}, { 0.4f, -1.0f}, { 1.0f, -0.4f},
+        { 0.9f,  0.6f}, { 0.0f,  1.1f}, {-1.0f,  0.5f},
+        {-1.1f, -0.2f}, {-0.2f, -1.3f},
+
+        {-1.8f, -1.5f}, {-0.8f, -2.1f}, { 0.6f, -2.2f},
+        { 1.7f, -1.4f}, { 2.2f, -0.3f}, { 2.0f,  1.0f},
+        { 0.9f,  2.0f}, {-0.4f,  2.3f}, {-1.6f,  1.6f},
+        {-2.2f,  0.4f}, {-2.0f, -0.8f}, {-1.1f, -2.4f},
+
+        {-3.3f, -2.2f}, {-2.1f, -3.0f}, {-0.7f, -3.5f},
+        { 0.9f, -3.4f}, { 2.4f, -2.5f}, { 3.3f, -1.2f},
+        { 3.5f,  0.5f}, { 2.8f,  1.9f}, { 1.4f,  3.1f},
+        {-0.2f,  3.6f}, {-1.8f,  3.0f}, {-3.0f,  1.9f},
+        {-3.6f,  0.3f}, {-3.2f, -1.1f}, {-2.6f, -2.7f},
+        { 0.1f, -4.0f},
+
+        {-4.8f, -3.0f}, {-3.4f, -4.3f}, {-1.7f, -5.0f},
+        { 0.3f, -5.3f}, { 2.2f, -4.7f}, { 3.9f, -3.5f},
+        { 5.0f, -1.7f}, { 5.3f,  0.3f}, { 4.6f,  2.2f},
+        { 3.2f,  3.9f}, { 1.3f,  5.1f}, {-0.7f,  5.3f},
+        {-2.6f,  4.5f}, {-4.2f,  3.2f}, {-5.1f,  1.3f},
+        {-5.2f, -0.7f}, {-4.4f, -2.5f}, {-2.8f, -4.6f},
     };
 
+    float step = FLEX_DISPLAY_BLUR_STEP * intensity;
     for (size_t i = 0; i < ARRAY_LEN(offsets); ++i) {
         SDL_FRect rect = *geometry;
-        rect.x += offsets[i][0] * FLEX_DISPLAY_BLUR_OFFSET;
-        rect.y += offsets[i][1] * FLEX_DISPLAY_BLUR_OFFSET;
+        rect.x += offsets[i].x * step;
+        rect.y += offsets[i].y * step;
         ok &= sc_screen_render_texture(screen, &rect);
+    }
+
+    if (got_alpha) {
+        SDL_SetTextureAlphaMod(texture, previous_alpha);
+    } else {
+        SDL_SetTextureAlphaMod(texture, 255);
+    }
+    if (got_blend_mode) {
+        SDL_SetTextureBlendMode(texture, previous_blend_mode);
+    } else {
+        SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_NONE);
+    }
+
+    return ok;
+}
+
+static bool
+sc_screen_render_resize_preview(struct sc_screen *screen,
+                                const SDL_FRect *geometry,
+                                float alpha,
+                                float intensity) {
+    SDL_Texture *texture = screen->resize_preview_texture;
+    if (!texture || alpha <= 0.0f) {
+        return true;
+    }
+
+    if (alpha > 1.0f) {
+        alpha = 1.0f;
+    }
+    if (intensity < 0.0f) {
+        intensity = 0.0f;
+    } else if (intensity > 1.0f) {
+        intensity = 1.0f;
+    }
+
+    SDL_BlendMode previous_blend_mode = SDL_BLENDMODE_BLEND;
+    bool got_blend_mode = SDL_GetTextureBlendMode(texture,
+                                                  &previous_blend_mode);
+    Uint8 previous_alpha = 255;
+    bool got_alpha = SDL_GetTextureAlphaMod(texture, &previous_alpha);
+
+    bool ok = SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+    Uint8 base_alpha = (Uint8) (255.0f * alpha + 0.5f);
+    ok &= SDL_SetTextureAlphaMod(texture, base_alpha);
+    if (ok) {
+        ok &= SDL_RenderTexture(screen->renderer, texture, NULL, geometry);
+    }
+
+    if (ok && intensity > 0.0f) {
+        int scaled =
+            (int) (FLEX_DISPLAY_BLUR_ALPHA * intensity * alpha + 0.5f);
+        if (scaled < 1) {
+            scaled = 1;
+        }
+        Uint8 ghost_alpha = (Uint8) scaled;
+
+        ok &= SDL_SetTextureAlphaMod(texture, ghost_alpha);
+
+        static const SDL_FPoint offsets[] = {
+            {-0.6f, -0.9f}, { 0.4f, -1.0f}, { 1.0f, -0.4f},
+            { 0.9f,  0.6f}, { 0.0f,  1.1f}, {-1.0f,  0.5f},
+            {-1.1f, -0.2f}, {-0.2f, -1.3f},
+
+            {-1.8f, -1.5f}, {-0.8f, -2.1f}, { 0.6f, -2.2f},
+            { 1.7f, -1.4f}, { 2.2f, -0.3f}, { 2.0f,  1.0f},
+            { 0.9f,  2.0f}, {-0.4f,  2.3f}, {-1.6f,  1.6f},
+            {-2.2f,  0.4f}, {-2.0f, -0.8f}, {-1.1f, -2.4f},
+
+            {-3.3f, -2.2f}, {-2.1f, -3.0f}, {-0.7f, -3.5f},
+            { 0.9f, -3.4f}, { 2.4f, -2.5f}, { 3.3f, -1.2f},
+            { 3.5f,  0.5f}, { 2.8f,  1.9f}, { 1.4f,  3.1f},
+            {-0.2f,  3.6f}, {-1.8f,  3.0f}, {-3.0f,  1.9f},
+            {-3.6f,  0.3f}, {-3.2f, -1.1f}, {-2.6f, -2.7f},
+            { 0.1f, -4.0f},
+
+            {-4.8f, -3.0f}, {-3.4f, -4.3f}, {-1.7f, -5.0f},
+            { 0.3f, -5.3f}, { 2.2f, -4.7f}, { 3.9f, -3.5f},
+            { 5.0f, -1.7f}, { 5.3f,  0.3f}, { 4.6f,  2.2f},
+            { 3.2f,  3.9f}, { 1.3f,  5.1f}, {-0.7f,  5.3f},
+            {-2.6f,  4.5f}, {-4.2f,  3.2f}, {-5.1f,  1.3f},
+            {-5.2f, -0.7f}, {-4.4f, -2.5f}, {-2.8f, -4.6f},
+        };
+
+        float step = FLEX_DISPLAY_BLUR_STEP * intensity;
+        for (size_t i = 0; i < ARRAY_LEN(offsets); ++i) {
+            SDL_FRect rect = *geometry;
+            rect.x += offsets[i].x * step;
+            rect.y += offsets[i].y * step;
+            ok &= SDL_RenderTexture(screen->renderer, texture, NULL, &rect);
+        }
     }
 
     if (got_alpha) {
@@ -712,32 +909,41 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
         goto end;
     }
 
-    // Blur is rendered when either the held phase is active OR a fade-out
-    // is in progress. transient_stretch=true keeps screen->rect at
-    // full_window so the held texture is stretched without bars. Once
-    // stability fires, transient_stretch flips false (texture upload can
-    // happen) but blur_fade_start_tick is set, so the new texture is
-    // drawn with the blur ghosts decaying to zero over the fade duration.
+    // During resize, draw a captured preview texture if available. Once the
+    // live frame catches up, the preview fades out over the final frame so
+    // the content transition is a crossfade instead of a hard swap.
     SDL_FRect *geometry = &screen->rect;
-    if (screen->flex_display
-            && (screen->transient_stretch || screen->blur_fade_start_tick)) {
-        float intensity = screen->transient_stretch
-                        ? sc_screen_blur_fade_in_intensity(screen)
-                        : sc_screen_blur_intensity(screen);
-        if (intensity <= 0.0f) {
-            // Fade-out completed since the last render — finalize and drop
-            // through to sharp render. During fade-in, intensity may be 0 on
-            // the first frame; keep the animation timer alive in that case.
-            if (screen->blur_fade_start_tick) {
-                sc_screen_stop_blur_fade(screen);
-            }
-            ok = sc_screen_render_texture(screen, geometry);
-        } else {
-            ok = sc_screen_render_blurred_stretch(screen, geometry,
-                                                  intensity);
-        }
+    if (screen->flex_display && screen->transient_stretch
+            && screen->resize_preview_texture) {
+        ok = sc_screen_render_resize_preview(
+                screen, geometry, 1.0f,
+                sc_screen_blur_fade_in_intensity(screen));
     } else {
         ok = sc_screen_render_texture(screen, geometry);
+        if (ok && screen->flex_display && screen->blur_fade_start_tick
+                && screen->resize_preview_texture) {
+            float intensity = sc_screen_blur_intensity(screen);
+            if (intensity <= 0.0f) {
+                sc_screen_stop_blur_fade(screen);
+            } else {
+                ok &= sc_screen_render_resize_preview(screen, geometry,
+                                                      intensity, intensity);
+            }
+        } else if (screen->flex_display
+                && (screen->transient_stretch
+                    || screen->blur_fade_start_tick)) {
+            float intensity = screen->transient_stretch
+                            ? sc_screen_blur_fade_in_intensity(screen)
+                            : sc_screen_blur_intensity(screen);
+            if (intensity <= 0.0f) {
+                if (screen->blur_fade_start_tick) {
+                    sc_screen_stop_blur_fade(screen);
+                }
+            } else {
+                ok &= sc_screen_render_blurred_stretch(screen, geometry,
+                                                       intensity);
+            }
+        }
     }
 
     if (!ok) {
@@ -874,22 +1080,30 @@ sc_screen_maybe_request_display_resize(struct sc_screen *screen, bool force) {
         return;
     }
 
+    sc_tick now = sc_tick_now();
     if (screen->last_requested_display_size.width == width
             && screen->last_requested_display_size.height == height) {
+        if (screen->transient_stretch && !screen->display_ready) {
+            screen->display_ready = true;
+            screen->display_ready_tick = now;
+            screen->display_ready_raw_frame = false;
+        }
         return;
     }
 
-    sc_tick now = sc_tick_now();
     if (!force
             && screen->last_resize_request_tick
             && now - screen->last_resize_request_tick
-                    < FLEX_DISPLAY_RESIZE_MIN_INTERVAL) {
+                    < FLEX_DISPLAY_REQUEST_MIN_INTERVAL) {
         return;
     }
 
     screen->last_requested_display_size.width = width;
     screen->last_requested_display_size.height = height;
     screen->last_resize_request_tick = now;
+    screen->display_ready = false;
+    screen->display_ready_tick = 0;
+    screen->display_ready_raw_frame = false;
 
     if (screen->resize_display_using_pixel_size) {
         sc_screen_resize_cuttlefish_physical_display(screen, width, height);
@@ -966,11 +1180,17 @@ sc_screen_on_resize(struct sc_screen *screen) {
             sc_tick now = sc_tick_now();
             if (!screen->transient_stretch) {
                 screen->blur_fade_in_start_tick = now;
+                if (!sc_screen_capture_resize_preview(screen)) {
+                    screen->transient_stretch_source_size =
+                        screen->last_requested_display_size.width
+                        && screen->last_requested_display_size.height
+                            ? screen->last_requested_display_size
+                            : screen->frame_size;
+                }
                 sc_screen_start_blur_animation_timer(screen);
             }
             screen->transient_stretch = true;
             screen->last_resize_event_tick = now;
-            screen->first_matching_frame_tick = 0;
             sc_screen_schedule_resize_settle(screen);
         }
         sc_screen_render(screen, true);
@@ -986,7 +1206,7 @@ sc_screen_take_resize_settle_timer_locked(struct sc_screen *screen) {
 
 static void
 sc_screen_schedule_resize_settle(struct sc_screen *screen) {
-    Uint32 delay_ms = SC_TICK_TO_MS(FLEX_DISPLAY_RESIZE_SETTLE_DELAY);
+    Uint32 delay_ms = SC_TICK_TO_MS(FLEX_DISPLAY_RESIZE_QUIET_DELAY);
     if (!delay_ms) {
         delay_ms = 1;
     }
@@ -1056,6 +1276,11 @@ sc_screen_blur_intensity(struct sc_screen *screen) {
         return 0.0f;
     }
     sc_tick elapsed = sc_tick_now() - screen->blur_fade_start_tick;
+    if (elapsed < FLEX_DISPLAY_PREVIEW_REVEAL_DELAY) {
+        return screen->blur_fade_start_intensity;
+    }
+
+    elapsed -= FLEX_DISPLAY_PREVIEW_REVEAL_DELAY;
     if (elapsed >= FLEX_DISPLAY_BLUR_FADE_OUT_DURATION) {
         return 0.0f;
     }
@@ -1399,13 +1624,13 @@ sc_screen_should_throttle_raw_frame_locked(struct sc_screen *screen,
     }
 
     bool resize_active = now - screen->last_raw_frame_resize_tick
-            < RAW_FRAME_RESIZE_STILL_DELAY;
+            < RAW_FRAME_RESIZE_THROTTLE_WINDOW;
     if (!resize_active) {
         return false;
     }
 
     return now - screen->last_raw_frame_render_tick
-            < RAW_FRAME_RESIZE_ACTIVE_MIN_INTERVAL;
+            < RAW_FRAME_RESIZE_RENDER_INTERVAL;
 }
 
 static Uint32
@@ -1413,7 +1638,7 @@ sc_screen_raw_frame_throttle_delay_ms_locked(struct sc_screen *screen,
                                              sc_tick now) {
     sc_tick deadline =
         screen->last_raw_frame_render_tick
-        + RAW_FRAME_RESIZE_ACTIVE_MIN_INTERVAL;
+        + RAW_FRAME_RESIZE_RENDER_INTERVAL;
     sc_tick delay = deadline > now ? deadline - now : SC_TICK_FROM_MS(1);
     Uint32 delay_ms = SC_TICK_TO_MS(delay);
     return delay_ms ? delay_ms : 1;
@@ -1480,7 +1705,7 @@ sc_screen_schedule_initial_window_show_timer(struct sc_screen *screen) {
     }
 
     screen->initial_window_show_timer =
-        SDL_AddTimer(SC_TICK_TO_MS(FLEX_DISPLAY_INITIAL_SHOW_MAX_DELAY),
+        SDL_AddTimer(SC_TICK_TO_MS(FLEX_DISPLAY_INITIAL_SHOW_TIMEOUT),
                      sc_screen_initial_window_show_timer, screen);
     sc_mutex_unlock(&screen->mutex);
 }
@@ -1565,6 +1790,7 @@ sc_screen_push_raw_frame(struct sc_screen *screen, uint32_t display_number,
     screen->pending_raw_frame.pixels = pixels;
     screen->pending_raw_frame.size_bytes = size_bytes;
     screen->pending_raw_frame.dmabuf_fd = -1;
+    screen->pending_raw_frame.received_tick = now;
     screen->pending_raw_frame.is_dmabuf = false;
     screen->pending_raw_frame.owns_pixels = owns_pixels;
     screen->pending_raw_frame_available = true;
@@ -1629,6 +1855,7 @@ sc_screen_push_dmabuf_frame(struct sc_screen *screen, uint32_t display_number,
     bool push_raw_frame_event = false;
 
     sc_mutex_lock(&screen->mutex);
+    sc_tick now = sc_tick_now();
     previous_skipped = screen->pending_raw_frame_available;
     if (previous_skipped) {
         sc_screen_raw_frame_clear(screen, true);
@@ -1646,6 +1873,7 @@ sc_screen_push_dmabuf_frame(struct sc_screen *screen, uint32_t display_number,
     screen->pending_raw_frame.offset = offset;
     screen->pending_raw_frame.modifier_hi = modifier_hi;
     screen->pending_raw_frame.modifier_lo = modifier_lo;
+    screen->pending_raw_frame.received_tick = now;
     screen->pending_raw_frame.is_dmabuf = true;
     screen->pending_raw_frame.owns_pixels = false;
     screen->pending_raw_frame_available = true;
@@ -1755,10 +1983,15 @@ sc_screen_init(struct sc_screen *screen,
     screen->initial_window_prepare_tick = 0;
     screen->initial_window_show_timer = 0;
     screen->transient_stretch = false;
+    screen->transient_stretch_source_size.width = 0;
+    screen->transient_stretch_source_size.height = 0;
+    screen->resize_preview_texture = NULL;
+    screen->resize_preview_size.width = 0;
+    screen->resize_preview_size.height = 0;
     screen->last_resize_event_tick = 0;
-    screen->first_matching_frame_tick = 0;
-    screen->frame_content_hash = 0;
-    screen->frame_content_changed_tick = 0;
+    screen->display_ready = false;
+    screen->display_ready_tick = 0;
+    screen->display_ready_raw_frame = false;
     screen->blur_fade_in_start_tick = 0;
     screen->blur_fade_start_tick = 0;
     screen->blur_fade_start_intensity = 0.0f;
@@ -2135,6 +2368,7 @@ sc_screen_destroy(struct sc_screen *screen) {
     if (screen->disconnect_started) {
         sc_disconnect_destroy(&screen->disconnect);
     }
+    sc_screen_destroy_resize_preview(screen);
     sc_texture_destroy(&screen->tex);
     av_frame_free(&screen->frame);
     if (screen->raw_frame_refresh_timer) {
@@ -2316,233 +2550,22 @@ sc_screen_update_frame(struct sc_screen *screen) {
     return sc_screen_apply_frame(screen, can_resize);
 }
 
-struct sc_raw_frame_view {
-    struct sc_size size;
-    const uint8_t *pixels;
-    uint32_t stride;
-    uint32_t offset;
-};
-
-static bool
-sc_screen_get_raw_frame_crop(struct sc_screen *screen,
-                             struct sc_size frame_size,
-                             uint32_t bytes_per_pixel,
-                             SDL_Rect *crop) {
-    crop->x = 0;
-    crop->y = 0;
-    crop->w = frame_size.width;
-    crop->h = frame_size.height;
-
-    if (!screen->flex_display
-            || !screen->last_requested_display_size.width
-            || !screen->last_requested_display_size.height
-            || !frame_size.width || !frame_size.height) {
-        return true;
-    }
-
-    float frame_ar = (float) frame_size.width / frame_size.height;
-    float requested_ar =
-        (float) screen->last_requested_display_size.width
-                / screen->last_requested_display_size.height;
-
-    if (requested_ar > frame_ar) {
-        crop->h = (int) ((float) crop->w / requested_ar);
-        crop->y = ((int) frame_size.height - crop->h) / 2;
-    } else if (requested_ar < frame_ar) {
-        crop->w = (int) ((float) crop->h * requested_ar);
-        crop->x = ((int) frame_size.width - crop->w) / 2;
-    }
-
-    if (crop->w <= 0 || crop->h <= 0) {
-        return false;
-    }
-
-    // Keep packed 32-bit uploads naturally aligned.
-    if (bytes_per_pixel == 4) {
-        crop->x &= ~1;
-        crop->w &= ~1;
-    }
-
-    return crop->w > 0 && crop->h > 0;
-}
-
-static bool
-sc_screen_get_raw_frame_upload_view(struct sc_screen *screen,
-                                    struct sc_raw_frame_view *view) {
-    uint32_t bytes_per_pixel = SDL_BYTESPERPIXEL(screen->raw_frame.format);
-    if (!bytes_per_pixel) {
-        return false;
-    }
-
-    SDL_Rect crop;
-    if (!sc_screen_get_raw_frame_crop(screen, screen->raw_frame.size,
-                                      bytes_per_pixel, &crop)) {
-        return false;
-    }
-
-    const uint8_t *pixels = screen->raw_frame.pixels
-                          + (size_t) crop.y * screen->raw_frame.stride
-                          + (size_t) crop.x * bytes_per_pixel;
-
-    struct sc_size crop_size = {
-        .width = crop.w,
-        .height = crop.h,
-    };
-
-    view->size = crop_size;
-    view->pixels = pixels;
-    view->stride = screen->raw_frame.stride;
-    view->offset = (size_t) crop.y * screen->raw_frame.stride
-                 + (size_t) crop.x * bytes_per_pixel;
-    return true;
-}
-
-// Sparse pixel-sample hash of a raw frame. Used to detect when Android has
-// finished recomposting after a resize: while the cascade is in flight,
-// sampled pixels keep changing (taskbar slide, residual letterbox bars,
-// SystemUI re-layout); once it settles, the hash stops changing.
-static uint64_t
-sc_screen_compute_raw_frame_hash(const struct sc_raw_frame_view *view,
-                                 uint32_t bytes_per_pixel) {
-    if (!view->pixels || !bytes_per_pixel
-            || view->size.width < 2 || view->size.height < 2) {
-        return 0;
-    }
-
-    // 16 sample positions in a 4x4 grid, evenly spread to cover both edges
-    // (where letterbox bars live) and interior (where content variability
-    // lives during a cascade).
-    static const float positions[][2] = {
-        {0.04f, 0.04f}, {0.36f, 0.04f}, {0.64f, 0.04f}, {0.96f, 0.04f},
-        {0.04f, 0.36f}, {0.36f, 0.36f}, {0.64f, 0.36f}, {0.96f, 0.36f},
-        {0.04f, 0.64f}, {0.36f, 0.64f}, {0.64f, 0.64f}, {0.96f, 0.64f},
-        {0.04f, 0.96f}, {0.36f, 0.96f}, {0.64f, 0.96f}, {0.96f, 0.96f},
-    };
-
-    uint32_t w = view->size.width;
-    uint32_t h = view->size.height;
-    uint64_t hash = 0xcbf29ce484222325ULL; // FNV-1a offset basis
-
-    for (size_t i = 0; i < ARRAY_LEN(positions); ++i) {
-        uint32_t x = (uint32_t) (positions[i][0] * (float) (w - 1));
-        uint32_t y = (uint32_t) (positions[i][1] * (float) (h - 1));
-        const uint8_t *p = view->pixels
-                         + (size_t) y * view->stride
-                         + (size_t) x * bytes_per_pixel;
-        for (uint32_t b = 0; b < bytes_per_pixel; ++b) {
-            hash ^= (uint64_t) p[b];
-            hash *= 0x100000001b3ULL; // FNV-1a prime
-        }
-    }
-    return hash;
-}
-
 static bool
 sc_screen_apply_raw_frame(struct sc_screen *screen) {
     assert(screen->video);
 
     sc_fps_counter_add_rendered_frame(&screen->fps_counter);
 
-    struct sc_raw_frame_view raw_view = {};
-    if (!screen->raw_frame.is_dmabuf
-            && !sc_screen_get_raw_frame_upload_view(screen, &raw_view)) {
-        return false;
-    }
+    struct sc_size new_frame_size = screen->raw_frame.size;
+    sc_screen_note_display_ready_raw_frame(screen);
 
-    struct sc_size new_frame_size = screen->raw_frame.is_dmabuf
-                                  ? screen->raw_frame.size
-                                  : raw_view.size;
-    // Stability tracking runs before the hold check so cascade detection
-    // continues to drive even while we're holding the texture. If the
-    // tracking decides to start the fade, the hold predicate switches off
-    // for the rest of this call and we proceed to upload the latest frame.
-    if (screen->flex_display && screen->transient_stretch) {
-        uint16_t req_w = screen->last_requested_display_size.width;
-        uint16_t req_h = screen->last_requested_display_size.height;
-        bool frame_matched = req_w && req_h
-            && new_frame_size.width == req_w
-            && new_frame_size.height == req_h;
-        sc_tick now = sc_tick_now();
-
-        // Hash the incoming frame's content (raw path only — dmabuf would
-        // require an expensive GPU readback). If the hash changed, the
-        // recomposting is still in flight; if it has been stable for the
-        // window below, we can fade.
-        if (!screen->raw_frame.is_dmabuf) {
-            uint32_t bpp = SDL_BYTESPERPIXEL(screen->raw_frame.format);
-            uint64_t hash = sc_screen_compute_raw_frame_hash(&raw_view, bpp);
-            if (hash != screen->frame_content_hash) {
-                screen->frame_content_hash = hash;
-                screen->frame_content_changed_tick = now;
-            }
+    // Hold the last uploaded texture across the entire transient_stretch phase.
+    // incoming frame data stays on the CPU side; when the hold lifts, this
+    // same call proceeds to upload the latest frame.
+    if (sc_screen_should_hold_resize(screen)) {
+        if (sc_screen_try_release_resize_hold(screen)) {
+            return true;
         }
-
-        if (!frame_matched) {
-            // Transitional frame still showing the pre-resize geometry; the
-            // guest's redraw cascade is not done. Restart the countdown.
-            screen->first_matching_frame_tick = 0;
-        } else if (!screen->first_matching_frame_tick) {
-            // First matching frame: encoder has caught up, but the guest UI
-            // cascade (taskbar slide, edge fills, residual letterbox bars
-            // while WindowManager finishes layout) is likely still in flight.
-            // Stay blurred and start the stabilization countdown.
-            screen->first_matching_frame_tick = now;
-        }
-
-        // Stabilization signal: prefer content-stability when available; fall
-        // back to the post-match time cap so the blur cannot hang forever on
-        // live wallpaper, animations, or the dmabuf path where we don't hash.
-        // Either way, the min-hold gate must pass first so Android has
-        // guaranteed time for its cascade to both start AND finish.
-        sc_tick since_match = screen->first_matching_frame_tick
-                            ? now - screen->first_matching_frame_tick
-                            : 0;
-        bool min_hold_elapsed = screen->first_matching_frame_tick
-            && since_match >= FLEX_DISPLAY_MIN_HOLD_AFTER_MATCH;
-        bool content_stable = screen->frame_content_changed_tick
-            && now - screen->frame_content_changed_tick
-                    >= FLEX_DISPLAY_FRAME_STABILITY_WINDOW;
-        bool post_match_cap_hit = screen->first_matching_frame_tick
-            && since_match >= FLEX_DISPLAY_POST_MATCH_HOLD_MAX;
-        bool stabilized = min_hold_elapsed
-            && (content_stable || post_match_cap_hit);
-
-        if (stabilized || sc_screen_resize_hold_elapsed(screen, now)) {
-            // Cascade complete (or hard timeout). Drop transient_stretch so
-            // the new content can be uploaded, then kick off the blur fade
-            // so the blur softly disappears instead of snapping.
-            screen->transient_stretch = false;
-            screen->first_matching_frame_tick = 0;
-            sc_screen_start_blur_fade(screen);
-        } else if (screen->first_matching_frame_tick) {
-            // Wake the safety-net timer at whichever check could clear the
-            // hold first: min-hold expiry, content-stability deadline, or
-            // post-match cap. Without this, the hold could persist past
-            // stability if no new frames arrive to drive the check.
-            sc_tick min_hold_tick = screen->first_matching_frame_tick
-                                  + FLEX_DISPLAY_MIN_HOLD_AFTER_MATCH;
-            sc_tick stab_tick = screen->frame_content_changed_tick
-                              + FLEX_DISPLAY_FRAME_STABILITY_WINDOW;
-            sc_tick match_cap_tick = screen->first_matching_frame_tick
-                              + FLEX_DISPLAY_POST_MATCH_HOLD_MAX;
-            sc_tick next = match_cap_tick;
-            if (!min_hold_elapsed && min_hold_tick < next) {
-                next = min_hold_tick;
-            } else if (screen->frame_content_changed_tick && stab_tick < next) {
-                next = stab_tick;
-            }
-            sc_tick delay = next > now ? next - now : 1;
-            Uint32 delay_ms = SC_TICK_TO_MS(delay);
-            sc_screen_schedule_resize_settle_after(screen,
-                                                   delay_ms ? delay_ms : 1);
-        }
-    }
-
-    // Hold the GPU texture across the entire transient_stretch phase. The
-    // incoming frame data stays on the CPU side; when the hold lifts (i.e.
-    // when stability detection above clears transient_stretch), this same
-    // call proceeds to upload the latest frame which is now cascade-clean.
-    if (sc_screen_should_hold_resize_preview(screen)) {
         sc_mutex_lock(&screen->mutex);
         screen->last_raw_frame_render_tick = sc_tick_now();
         sc_mutex_unlock(&screen->mutex);
@@ -2572,10 +2595,10 @@ sc_screen_apply_raw_frame(struct sc_screen *screen) {
                                               screen->raw_frame.modifier_hi,
                                               screen->raw_frame.modifier_lo);
     } else {
-        ok = sc_texture_set_from_raw_frame(&screen->tex, raw_view.size,
+        ok = sc_texture_set_from_raw_frame(&screen->tex, screen->raw_frame.size,
                                            screen->raw_frame.format,
-                                           raw_view.pixels,
-                                           raw_view.stride);
+                                           screen->raw_frame.pixels,
+                                           screen->raw_frame.stride);
     }
     if (!ok) {
         return false;
@@ -2587,22 +2610,16 @@ sc_screen_apply_raw_frame(struct sc_screen *screen) {
 
     if (!screen->window_shown && screen->initial_window_show_deferred) {
         struct sc_size source_size = screen->raw_frame.size;
-        int dw = (int) source_size.width
-               - (int) screen->initial_display_size.width;
-        int dh = (int) source_size.height
-               - (int) screen->initial_display_size.height;
-        int abs_dw = dw >= 0 ? dw : -dw;
-        int abs_dh = dh >= 0 ? dh : -dh;
         sc_tick now = sc_tick_now();
         bool size_caught_up =
             screen->initial_display_size.width
             && screen->initial_display_size.height
-            && abs_dw <= FLEX_DISPLAY_SIZE_MATCH_TOLERANCE
-            && abs_dh <= FLEX_DISPLAY_SIZE_MATCH_TOLERANCE;
+            && source_size.width == screen->initial_display_size.width
+            && source_size.height == screen->initial_display_size.height;
         bool wait_expired =
             screen->initial_window_prepare_tick
             && now - screen->initial_window_prepare_tick
-                    >= FLEX_DISPLAY_INITIAL_SHOW_MAX_DELAY;
+                    >= FLEX_DISPLAY_INITIAL_SHOW_TIMEOUT;
 
         if (size_caught_up || wait_expired) {
             sc_screen_show_prepared_window(screen);
@@ -2616,6 +2633,85 @@ sc_screen_apply_raw_frame(struct sc_screen *screen) {
     }
 
     sc_screen_render(screen, false);
+    return true;
+}
+
+static void
+sc_screen_release_resize_hold(struct sc_screen *screen) {
+    screen->transient_stretch = false;
+    screen->transient_stretch_source_size.width = 0;
+    screen->transient_stretch_source_size.height = 0;
+    screen->display_ready = false;
+    screen->display_ready_tick = 0;
+    screen->display_ready_raw_frame = false;
+    // Order matters: start the fade first so the very next render (driven by
+    // apply_raw_frame) already paints the new texture with the blur overlay.
+    sc_screen_start_blur_fade(screen);
+    sc_screen_apply_raw_frame(screen);
+}
+
+static void
+sc_screen_note_display_ready_raw_frame(struct sc_screen *screen) {
+    if (!screen->transient_stretch
+            || !screen->display_ready
+            || screen->display_ready_raw_frame
+            || !screen->display_ready_tick
+            || !screen->raw_frame.received_tick) {
+        return;
+    }
+
+    sc_tick freshness_tick = screen->last_resize_request_tick
+                           ? screen->last_resize_request_tick
+                           : screen->display_ready_tick;
+    if (screen->raw_frame.received_tick <= freshness_tick) {
+        return;
+    }
+
+    bool post_ready_frame =
+        screen->raw_frame.received_tick > screen->display_ready_tick;
+    if (!post_ready_frame) {
+        sc_tick now = sc_tick_now();
+        sc_tick elapsed = now - screen->display_ready_tick;
+        if (elapsed < FLEX_DISPLAY_POST_READY_FRAME_GRACE) {
+            Uint32 delay_ms =
+                SC_TICK_TO_MS(FLEX_DISPLAY_POST_READY_FRAME_GRACE - elapsed);
+            sc_screen_schedule_resize_settle_after(screen,
+                                                   delay_ms ? delay_ms : 1);
+            return;
+        }
+    }
+
+    screen->display_ready_raw_frame = true;
+    if (sc_get_log_level() <= SC_LOG_LEVEL_VERBOSE) {
+        LOGV("Resize hold has current-resize raw frame %ux%u",
+             screen->raw_frame.size.width, screen->raw_frame.size.height);
+    }
+}
+
+static bool
+sc_screen_try_release_resize_hold(struct sc_screen *screen) {
+    if (!screen->transient_stretch || !screen->display_ready) {
+        return false;
+    }
+
+    if (!screen->display_ready_raw_frame) {
+        sc_screen_note_display_ready_raw_frame(screen);
+    }
+
+    Uint32 quiet_remaining_ms =
+        sc_screen_resize_quiet_remaining_ms(screen, sc_tick_now());
+    if (quiet_remaining_ms) {
+        sc_screen_schedule_resize_settle_after(screen, quiet_remaining_ms);
+        return false;
+    }
+
+    if (screen->raw_frame_source_open
+            && !screen->display_ready_raw_frame) {
+        sc_screen_force_raw_frame_refresh(screen);
+        return false;
+    }
+
+    sc_screen_release_resize_hold(screen);
     return true;
 }
 
@@ -2847,10 +2943,10 @@ sc_screen_on_resize_settled(struct sc_screen *screen) {
     }
 
     sc_tick now = sc_tick_now();
-    if (screen->last_resize_event_tick
-            && now - screen->last_resize_event_tick
-                    < FLEX_DISPLAY_RESIZE_SETTLE_DELAY) {
-        sc_screen_schedule_resize_settle(screen);
+    Uint32 quiet_remaining_ms =
+        sc_screen_resize_quiet_remaining_ms(screen, now);
+    if (quiet_remaining_ms) {
+        sc_screen_schedule_resize_settle_after(screen, quiet_remaining_ms);
         return;
     }
 
@@ -2859,6 +2955,13 @@ sc_screen_on_resize_settled(struct sc_screen *screen) {
         screen->last_resize_event_tick = now;
         if (!screen->transient_stretch) {
             screen->blur_fade_in_start_tick = now;
+            if (!sc_screen_capture_resize_preview(screen)) {
+                screen->transient_stretch_source_size =
+                    screen->last_requested_display_size.width
+                    && screen->last_requested_display_size.height
+                        ? screen->last_requested_display_size
+                        : screen->frame_size;
+            }
             sc_screen_start_blur_animation_timer(screen);
         }
         screen->transient_stretch = true;
@@ -2868,64 +2971,8 @@ sc_screen_on_resize_settled(struct sc_screen *screen) {
 
     sc_screen_force_raw_frame_refresh(screen);
 
-    if (screen->transient_stretch) {
-        sc_tick hold_end_tick =
-            screen->last_resize_event_tick
-            + FLEX_DISPLAY_RESIZE_SETTLE_DELAY
-            + FLEX_DISPLAY_POST_RESIZE_HOLD_MAX;
-        sc_tick since_match = screen->first_matching_frame_tick
-                            ? now - screen->first_matching_frame_tick
-                            : 0;
-        bool min_hold_elapsed = screen->first_matching_frame_tick
-            && since_match >= FLEX_DISPLAY_MIN_HOLD_AFTER_MATCH;
-        bool content_stable = screen->frame_content_changed_tick
-            && now - screen->frame_content_changed_tick
-                    >= FLEX_DISPLAY_FRAME_STABILITY_WINDOW;
-        bool post_match_cap_hit = screen->first_matching_frame_tick
-            && since_match >= FLEX_DISPLAY_POST_MATCH_HOLD_MAX;
-        bool stabilized = min_hold_elapsed
-            && (content_stable || post_match_cap_hit);
-        if (stabilized || !screen->last_resize_event_tick
-                       || now >= hold_end_tick) {
-            screen->transient_stretch = false;
-            screen->first_matching_frame_tick = 0;
-            // Order matters: start the fade first so the very next render
-            // (driven by apply_raw_frame) already paints the new texture
-            // with the blur overlay rather than sharp. Otherwise the user
-            // sees a one-frame flash of unblurred new content between the
-            // swap and the first fade tick.
-            sc_screen_start_blur_fade(screen);
-            sc_screen_apply_raw_frame(screen);
-            return;
-        } else {
-            // Reschedule for whichever deadline fires first: hard timeout,
-            // min-hold expiry, content-stability deadline, or post-match cap.
-            sc_tick next_check = hold_end_tick;
-            if (screen->first_matching_frame_tick) {
-                sc_tick match_cap = screen->first_matching_frame_tick
-                                  + FLEX_DISPLAY_POST_MATCH_HOLD_MAX;
-                if (match_cap < next_check) {
-                    next_check = match_cap;
-                }
-                if (!min_hold_elapsed) {
-                    sc_tick min_hold = screen->first_matching_frame_tick
-                                     + FLEX_DISPLAY_MIN_HOLD_AFTER_MATCH;
-                    if (min_hold < next_check) {
-                        next_check = min_hold;
-                    }
-                } else if (screen->frame_content_changed_tick) {
-                    sc_tick stab = screen->frame_content_changed_tick
-                                 + FLEX_DISPLAY_FRAME_STABILITY_WINDOW;
-                    if (stab < next_check) {
-                        next_check = stab;
-                    }
-                }
-            }
-            sc_tick delay = next_check > now ? next_check - now : 1;
-            Uint32 delay_ms = SC_TICK_TO_MS(delay);
-            sc_screen_schedule_resize_settle_after(screen,
-                                                   delay_ms ? delay_ms : 1);
-        }
+    if (sc_screen_try_release_resize_hold(screen)) {
+        return;
     }
 
     sc_screen_render(screen, true);
@@ -2955,14 +3002,23 @@ sc_screen_on_display_ready(struct sc_screen *screen, uint32_t display_id,
         return;
     }
 
-    // Drop the hold and force the most-recently-received raw frame onto
-    // the GPU. Start the fade first so the apply_raw_frame render call
-    // already paints with the blur overlay (avoiding a one-frame flash of
-    // sharp content before the fade kicks in).
-    screen->transient_stretch = false;
-    screen->first_matching_frame_tick = 0;
-    sc_screen_start_blur_fade(screen);
-    sc_screen_apply_raw_frame(screen);
+    screen->display_ready = true;
+    screen->display_ready_tick = sc_tick_now();
+    screen->display_ready_raw_frame = false;
+    sc_screen_note_display_ready_raw_frame(screen);
+
+    Uint32 quiet_remaining_ms =
+        sc_screen_resize_quiet_remaining_ms(screen,
+                                            screen->display_ready_tick);
+    if (quiet_remaining_ms) {
+        sc_screen_schedule_resize_settle_after(screen, quiet_remaining_ms);
+        return;
+    }
+
+    sc_screen_force_raw_frame_refresh(screen);
+    if (!sc_screen_try_release_resize_hold(screen)) {
+        sc_screen_render(screen, true);
+    }
 }
 
 void
@@ -3023,8 +3079,8 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
                 if (dy < 0) {
                     dy = -dy;
                 }
-                if (dx > SC_WINDOW_HOTSPOT_CLICK_MOVE_THRESHOLD
-                        || dy > SC_WINDOW_HOTSPOT_CLICK_MOVE_THRESHOLD) {
+                if (dx > SC_WINDOW_CLICK_MOVE_TOLERANCE
+                        || dy > SC_WINDOW_CLICK_MOVE_TOLERANCE) {
                     screen->maximized_hotspot_press_pending = false;
                 }
             }
@@ -3052,7 +3108,7 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
                 screen->maximized_hotspot_press_pending = false;
                 sc_tick elapsed = sc_tick_now()
                         - screen->maximized_hotspot_press_tick;
-                if (elapsed <= SC_WINDOW_DRAG_HOLD_THRESHOLD) {
+                if (elapsed <= SC_WINDOW_DRAG_HOLD_DELAY) {
                     if (!SDL_RestoreWindow(screen->window)) {
                         LOGW("Could not restore window: %s", SDL_GetError());
                     }

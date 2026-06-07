@@ -14,4 +14,4 @@ $(call inherit-product, vendor/lineage_desktop/config/x86_arm_native_bridge.mk)
 PRODUCT_NAME := lineage_desktop_cf_x86_64
 PRODUCT_BRAND := LineageOS
 PRODUCT_MANUFACTURER := DesktopECHO
-PRODUCT_MODEL := Ika virtual desktop for x86-64
+PRODUCT_MODEL := Ika LineageOS desktop (x86-64)

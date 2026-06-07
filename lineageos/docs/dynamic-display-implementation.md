@@ -48,20 +48,12 @@ the helper, which fans property writes into `cmd window size` and
 
 ## Launcher And Taskbar Handling
 
-The patch series contains the runtime Launcher3 work needed for resize:
-
-- `packages-apps-Launcher3.patch` owns the desktop taskbar, taskbar all-apps,
-  responsive desktop profiles, and desktop-large-screen behavior.
-- `packages-apps-Launcher3-dynamic-display.patch` refreshes Launcher3's cached
-  invariant/device profile after primary display metric changes, pushes the new
-  device profile into all-apps, and lets desktop taskbar windows recreate when
-  size/layout config changes arrive.
-- `packages-apps-Launcher3-live-display-bounds.patch` routes popup placement,
-  overlay sizing, touch regions, bubble placement, and taskbar fullscreen window
-  sizing through live `WindowManager.currentWindowMetrics()` bounds instead of
-  stale cached `DeviceProfile` dimensions.
-- `packages-apps-Launcher3-logspam.patch` keeps expected dynamic-display cache
-  rebuild diagnostics behind debug logging.
+`packages-apps-Launcher3.patch` contains the runtime Launcher3 work needed for
+resize: desktop taskbar behavior, taskbar all-apps, responsive desktop profiles,
+desktop-large-screen handling, invariant/device profile refresh after primary
+display metric changes, all-apps profile updates, taskbar window recreation on
+size/layout config changes, live `WindowManager.currentWindowMetrics()` bounds
+for placement and sizing, and debug-only dynamic-display cache rebuild logs.
 
 ## Product Wiring
 

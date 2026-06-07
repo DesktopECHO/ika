@@ -1,0 +1,40 @@
+diff --git a/intrinsics/Android.bp b/intrinsics/Android.bp
+index 2b1f4df8..5abfe78e 100644
+--- a/intrinsics/Android.bp
++++ b/intrinsics/Android.bp
+@@ -269,7 +269,7 @@ cc_defaults {
+     // Note: build system would pick the build OS variant.
+     // Usually that's 64-bit version thus we can only support 64bit version here.
+     // Currently none of Android builds that we care about used 32bit version of host tools.
+-    defaults: ["berberis_defaults_64"],
++    defaults: ["berberis_all_hosts_defaults_64"],
+     host_supported: true,
+     header_libs: ["libberberis_intrinsics_headers"],
+     // Note: since this tool is used in genrule, it has to be buildable and
+@@ -425,7 +425,7 @@ cc_library_headers {
+ 
+ cc_library_headers {
+     name: "libberberis_macro_assembler_headers_all_to_x86_64",
+-    defaults: ["berberis_defaults_64"],
++    defaults: ["berberis_all_hosts_defaults_64"],
+     host_supported: true,
+     export_include_dirs: [
+         "all_to_x86_32_or_x86_64/include",
+@@ -443,7 +443,7 @@ cc_library_headers {
+ 
+ cc_library_headers {
+     name: "libberberis_macro_assembler_headers_riscv64_to_x86_64",
+-    defaults: ["berberis_defaults_64"],
++    defaults: ["berberis_all_hosts_defaults_64"],
+     host_supported: true,
+     export_include_dirs: [
+         "riscv64_to_all/include",
+@@ -465,7 +465,7 @@ cc_library_headers {
+ 
+ cc_library_static {
+     name: "libberberis_macro_assembler_riscv64_to_x86_64",
+-    defaults: ["berberis_defaults_64"],
++    defaults: ["berberis_all_hosts_defaults_64"],
+     host_supported: true,
+     srcs: ["riscv64_to_x86_64/constants_pool.cc"],
+     header_libs: [

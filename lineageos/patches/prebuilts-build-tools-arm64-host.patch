@@ -1,0 +1,88 @@
+diff --git a/Android.bp b/Android.bp
+index 7f4f67c..3a54a7f 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -84,6 +84,9 @@ prebuilt_build_tool {
+         x86_64: {
+             enabled: true,
+         },
++        arm64: {
++            enabled: true,
++        },
+     },
+     target: {
+         darwin: {
+@@ -94,6 +97,10 @@ prebuilt_build_tool {
+             src: "linux-x86/bin/bison",
+             deps: ["linux-x86/lib64/libc++.so"],
+         },
++        linux_musl_arm64: {
++            src: "linux-arm64/bin/bison",
++            deps: ["linux-arm64/lib64/libc_musl.so"],
++        },
+     },
+ }
+ 
+@@ -105,6 +112,9 @@ prebuilt_build_tool {
+         x86_64: {
+             enabled: true,
+         },
++        arm64: {
++            enabled: true,
++        },
+     },
+     licenses: ["prebuilts_build-tools_flex_license"],
+     target: {
+@@ -114,6 +124,10 @@ prebuilt_build_tool {
+         linux: {
+             src: "linux-x86/bin/flex",
+         },
++        linux_musl_arm64: {
++            src: "linux-arm64/bin/flex",
++            deps: ["linux-arm64/lib64/libc_musl.so"],
++        },
+     },
+ }
+ 
+@@ -125,6 +139,9 @@ prebuilt_build_tool {
+         x86_64: {
+             enabled: true,
+         },
++        arm64: {
++            enabled: true,
++        },
+     },
+     licenses: ["prebuilts_build-tools_gnu_license"],
+     target: {
+@@ -134,6 +151,10 @@ prebuilt_build_tool {
+         linux: {
+             src: "linux-x86/bin/m4",
+         },
++        linux_musl_arm64: {
++            src: "linux-arm64/bin/m4",
++            deps: ["linux-arm64/lib64/libc_musl.so"],
++        },
+     },
+ }
+ 
+@@ -144,6 +165,9 @@ prebuilt_build_tool {
+         x86_64: {
+             enabled: true,
+         },
++        arm64: {
++            enabled: true,
++        },
+     },
+     target: {
+         darwin: {
+@@ -152,6 +176,10 @@ prebuilt_build_tool {
+         linux: {
+             src: "linux-x86/bin/make",
+         },
++        linux_musl_arm64: {
++            src: "linux-arm64/bin/make",
++            deps: ["linux-arm64/lib64/libc_musl.so"],
++        },
+     },
+     visibility: ["//vendor:__subpackages__"],
+ }

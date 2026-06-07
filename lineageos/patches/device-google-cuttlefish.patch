@@ -14,7 +14,7 @@ Desktop SELinux extensions cover expected graphics debug-property reads and
 host-driven shell helpers so normal boot, scrcpy, and resize/provisioning flows
 do not leave avoidable enforcing-mode denials behind.
 Userdata stays f2fs and sparse/thin-provisioned, with the default size raised
-to 64 GiB.
+to 61 GiB.
 
 diff --git a/AndroidProducts.mk b/AndroidProducts.mk
 index ff5f2cc46..173663686 100644
@@ -118,7 +118,7 @@ index b31638ad7..c9b0a1302 100644
  BOARD_EROFS_COMPRESS_HINTS := device/google/cuttlefish/shared/erofs_compress_hints.txt
  TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE ?= f2fs
 -TARGET_USERDATAIMAGE_PARTITION_SIZE ?= 8589934592
-+TARGET_USERDATAIMAGE_PARTITION_SIZE ?= 68719476736
++TARGET_USERDATAIMAGE_PARTITION_SIZE ?= 65498251264
  
  TARGET_VULKAN_SUPPORT ?= true
  
@@ -411,7 +411,7 @@ index 04affcab6..651f0aa5a 100644
  TARGET_BOARD_PLATFORM := vsoc_arm64
  TARGET_ARCH := arm64
 -TARGET_ARCH_VARIANT := armv8-a
-+TARGET_ARCH_VARIANT := armv8-5a
++TARGET_ARCH_VARIANT := armv8-2a
  TARGET_CPU_ABI := arm64-v8a
 -TARGET_CPU_VARIANT := cortex-a53
 +TARGET_CPU_VARIANT := generic

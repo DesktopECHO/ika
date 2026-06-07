@@ -16,9 +16,8 @@ enum sc_device_msg_type {
     DEVICE_MSG_TYPE_ACK_CLIPBOARD,
     DEVICE_MSG_TYPE_UHID_OUTPUT,
     // Sent by the device when the guest display has finished a requested
-    // resize and is ready to be presented to the user (no letterbox cascade
-    // in flight). Lets the client drop its stretched preview immediately
-    // instead of relying on host-side heuristics.
+    // resize. The client uses this with the host-side resize quiet period to
+    // decide when to drop its stretched preview.
     DEVICE_MSG_TYPE_DISPLAY_READY,
 };
 

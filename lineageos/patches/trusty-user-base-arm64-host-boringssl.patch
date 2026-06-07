@@ -1,0 +1,29 @@
+Patch summary: Permit Trusty host BoringSSL builds on Linux ARM64 hosts.
+
+Trusty's host-side BoringSSL archive is built with the active host Clang and
+sysroot, but its make rule rejected every host except x86_64 before compiling.
+Allow aarch64 as well so ARM64 Linux hosts can build the same host archive while
+preserving the existing x86_64 path and rejecting unsupported host architectures.
+
+diff --git a/host/boringssl/rules.mk b/host/boringssl/rules.mk
+index a81bae7..0d9558b 100644
+--- a/host/boringssl/rules.mk
++++ b/host/boringssl/rules.mk
+@@ -18,8 +18,8 @@ HOST_LIB_NAME := ssl
+ BORINGSSL_DIR := $(TRUSTY_TOP)/external/boringssl
+ 
+ HOST_ARCH := $(shell uname -m)
+-ifneq ($(HOST_ARCH),x86_64)
+-$(error Unsupported host architecture: $(HOST_ARCH), expected x86_64)
++ifneq ($(filter $(HOST_ARCH),x86_64 aarch64),$(HOST_ARCH))
++$(error Unsupported host architecture: $(HOST_ARCH), expected x86_64 or aarch64)
+ endif
+ 
+ include $(BORINGSSL_DIR)/sources.mk
+@@ -32,4 +32,4 @@ HOST_INCLUDE_DIRS += \
+ 
+ include make/host_lib.mk
+ 
+-HOST_ARCH :=
+\ No newline at end of file
++HOST_ARCH :=
