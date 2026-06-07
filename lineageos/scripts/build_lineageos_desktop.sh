@@ -156,6 +156,11 @@ record_buildtime_finish() {
   active_build_start_time=""
 }
 
+cleanup_build_tmpdir() {
+  [[ -n "${build_tmpdir:-}" && -d "$build_tmpdir" ]] || return 0
+  rm -rf "$build_tmpdir"
+}
+
 cleanup_on_exit() {
   local status=$?
   if [[ -n "$active_build_arch" ]]; then
@@ -166,6 +171,7 @@ cleanup_on_exit() {
     fi
   fi
   cleanup_temp_zram || true
+  cleanup_build_tmpdir || true
   exit "$status"
 }
 
@@ -199,19 +205,21 @@ enabled() {
   esac
 }
 
-# Route all build/signing temp to a disk-backed dir under the build out/ tree
-# (the same large filesystem the rest of the build uses), never the host's
-# default /tmp. On stock Asahi/ARM64 hosts /tmp is a small RAM-backed tmpfs;
-# the signing step (sign_target_files_apks) extracts the multi-GB target-files
-# zip into TMPDIR and otherwise exhausts it (and host RAM), dying with
-# "OSError: [Errno 122] Quota exceeded". Set unconditionally.
+# Route all build/signing temp to a dedicated disk-backed dir in $HOME, never
+# the host's default /tmp. On stock Asahi/ARM64 hosts /tmp is a small RAM-backed
+# tmpfs; the signing step (sign_target_files_apks) extracts the multi-GB
+# target-files zip into TMPDIR and otherwise exhausts it (and host RAM), dying
+# with "OSError: [Errno 122] Quota exceeded". The dir is removed on exit by
+# cleanup_on_exit.
 configure_tmpdir() {
-  export TMPDIR="$workspace/out/tmp"
+  build_tmpdir="$HOME/tmp-ika"
+  export TMPDIR="$build_tmpdir"
   mkdir -p "$TMPDIR" || die "could not create build TMPDIR: $TMPDIR"
-  log "using disk-backed TMPDIR=$TMPDIR"
+  log "using disk-backed TMPDIR=$TMPDIR (removed on exit)"
 }
 
 temp_zram_device=""
+build_tmpdir=""
 
 normalize_targets() {
   # Support matrix: arm64 ROMs build on x86_64 and arm64 hosts; x86_64 ROMs
