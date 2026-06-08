@@ -192,8 +192,3 @@ are no longer runtime dependencies.
 The current GCE image tooling in this fork lives under `tools/baseimage/`.
 See [tools/baseimage/README.md](tools/baseimage/README.md) for the current
 workflow.
-
-## Container images
-
-Please read [container/README.md](container/README.md) to build and use Docker
-or Podman images containing the Cuttlefish RPM packages.

@@ -1,6 +1,6 @@
 Name:           ika-lineageos
 Version:        20260420
-Release:        4%{?dist}
+Release:        5%{?dist}
 Summary:        LineageOS for Cuttlefish host
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish
