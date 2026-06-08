@@ -5,7 +5,7 @@ Summary:        Container-oriented Cuttlefish tools for Fedora
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish
 Source0:        android-cuttlefish-%{version}.tar.gz
-%undefine _debugsource_packages
+%global debug_package %{nil}
 
 BuildRequires:  git
 BuildRequires:  golang

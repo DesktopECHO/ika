@@ -5,6 +5,7 @@ Summary:        Gigabyte Ampere integration package for Cuttlefish on Fedora
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish
 Source0:        android-cuttlefish-%{version}.tar.gz
+%global debug_package %{nil}
 
 ExclusiveArch:  aarch64
 

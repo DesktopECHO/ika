@@ -489,7 +489,9 @@ repo_sync_sources() {
     fi
   fi
 
-  local -a sync_args=(sync -c --fail-fast -j"$jobs")
+  # repo sync uses the build job count, capped at 16.
+  local sync_jobs=$(( jobs < 16 ? jobs : 16 ))
+  local -a sync_args=(sync -c --fail-fast -j"$sync_jobs")
   if (( repo_sync_retry_fetches > 0 )); then
     sync_args+=(--retry-fetches="$repo_sync_retry_fetches")
   fi

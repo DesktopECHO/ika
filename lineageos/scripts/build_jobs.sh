@@ -34,23 +34,10 @@ physical_memory_total_kib() {
 }
 
 default_job_count() {
-  # JOBS = min(A, B), floored at 1, where:
-  #   A = number of (logical) CPU cores, minus 2 (build hosts assumed >= 4 cores)
-  #   B = (system RAM in GiB, rounded up) / 2
-  # The RAM term keeps memory-hungry compile/link steps from OOMing on hosts
-  # with many cores but limited RAM.
-  local cpu_jobs memory_kib ram_gib mem_jobs jobs
-
-  cpu_jobs=$(( $(logical_cpu_count) - 2 ))
-  memory_kib="$(physical_memory_total_kib)"
-  ram_gib=$(( (memory_kib + 1024 * 1024 - 1) / (1024 * 1024) ))   # KiB -> GiB, rounded up
-  mem_jobs=$(( ram_gib / 2 ))
-
-  if (( mem_jobs < cpu_jobs )); then
-    jobs="$mem_jobs"
-  else
-    jobs="$cpu_jobs"
-  fi
+  # JOBS = (number of logical CPU cores) - 2, floored at 1
+  # (build hosts assumed >= 4 cores).
+  local jobs
+  jobs=$(( $(logical_cpu_count) - 2 ))
   (( jobs > 0 )) || jobs=1
   printf '%s\n' "$jobs"
 }

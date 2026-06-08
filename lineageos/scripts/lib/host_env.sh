@@ -396,8 +396,7 @@ adequate_zram_swap_device() {
 }
 
 setup_temp_zram_if_needed() {
-  local mem_kib target_total_gib skip_above_gib target_total_kib skip_above_kib
-  local zram_kib zram_size dev existing_zram zram_priority
+  local mem_kib cores target_combined_gib target_combined_kib zram_kib zram_size dev existing_zram zram_priority
 
   mem_kib="$(physical_memory_total_kib)"
   if [[ ! "$mem_kib" =~ ^[0-9]+$ || "$mem_kib" -le 0 ]]; then
@@ -405,27 +404,16 @@ setup_temp_zram_if_needed() {
     return 0
   fi
 
-  # Target a fixed physical+zram total: create exactly enough zram to reach
-  # ZRAM_TARGET_TOTAL_GIB. Hosts with >= ZRAM_SKIP_ABOVE_GIB physical RAM get
-  # none. Sizes are GiB (binary), consistent with format_kib_as_gib.
-  target_total_gib="${ZRAM_TARGET_TOTAL_GIB:-40}"
-  skip_above_gib="${ZRAM_SKIP_ABOVE_GIB:-36}"
-  [[ "$target_total_gib" =~ ^[0-9]+$ && "$target_total_gib" -gt 0 ]] || \
-    die "invalid ZRAM_TARGET_TOTAL_GIB value '$target_total_gib'; expected a positive integer"
-  [[ "$skip_above_gib" =~ ^[0-9]+$ && "$skip_above_gib" -gt 0 ]] || \
-    die "invalid ZRAM_SKIP_ABOVE_GIB value '$skip_above_gib'; expected a positive integer"
+  # Target combined RAM (physical + zram) is (cores * 2) + 4 GiB, minimum 40 GiB;
+  # zram makes up the shortfall to reach it.
+  cores="$(logical_cpu_count)"
+  target_combined_gib=$(( cores * 2 + 4 ))
+  (( target_combined_gib >= 40 )) || target_combined_gib=40
+  target_combined_kib=$(( target_combined_gib * 1024 * 1024 ))
 
-  target_total_kib=$((target_total_gib * 1024 * 1024))
-  skip_above_kib=$((skip_above_gib * 1024 * 1024))
-
-  if (( mem_kib >= skip_above_kib )); then
-    log "host RAM $(format_kib_as_gib "$mem_kib") >= ${skip_above_gib} GiB; skipping temporary zram setup"
-    return 0
-  fi
-
-  zram_kib=$((target_total_kib - mem_kib))
+  zram_kib=$(( target_combined_kib - mem_kib ))
   if (( zram_kib <= 0 )); then
-    log "host RAM $(format_kib_as_gib "$mem_kib") already meets the ${target_total_gib} GiB target; skipping temporary zram setup"
+    log "host RAM $(format_kib_as_gib "$mem_kib") already meets the ${target_combined_gib} GiB combined target; skipping temporary zram setup"
     return 0
   fi
 
@@ -471,7 +459,7 @@ setup_temp_zram_if_needed() {
   local actual_algorithm
   actual_algorithm="$(sed -n 's/.*\[\([^]]*\)\].*/\1/p' \
     "/sys/block/${temp_zram_device##*/}/comp_algorithm" 2>/dev/null || true)"
-  log "created temporary zram swap $temp_zram_device ($(format_kib_as_gib "$zram_kib") to reach a ${target_total_gib} GiB physical+zram total, priority $zram_priority, algorithm ${actual_algorithm:-unknown})"
+  log "created temporary zram swap $temp_zram_device ($(format_kib_as_gib "$zram_kib") to reach a ${target_combined_gib} GiB physical+zram total, priority $zram_priority, algorithm ${actual_algorithm:-unknown})"
 }
 
 cleanup_temp_zram() {

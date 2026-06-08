@@ -1,8 +1,8 @@
-# LineageOS Desktop (ROM build, phase 1 of 2)
+# LineageOS Desktop 
 
-LineageOS Desktop is a desktop-mode-only product layer for LineageOS 23.2 running in the Cuttlefish Android emulator. It is designed to be applied over an official LineageOS checkout with a local manifest.
+LineageOS Desktop is a product layer for LineageOS 23.2 running in the Cuttlefish Android emulator. It is designed to be applied over an official LineageOS checkout with a local manifest.
 
-This document covers **phase 1** of the ika build: producing the LineageOS Desktop ROM. Phase 2 (host Cuttlefish RPMs, including `ika-lineageos`, which bundles the ROM into `/usr/share/cuttlefish-common/lineageos`) is documented in the project [README.md](../README.md). For the full end-to-end flow, start there.
+This document covers the first part of the ika build, producing the LineageOS Desktop ROM. The second part handles creation of Cuttlefish RPMs, including `ika-lineageos` and is documented in the project [README.md](../README.md). For the full end-to-end flow, start there.
 
 This directory contains the product profile, overlays, manifests, validation scripts, and source-level patches that this phase applies to a LineageOS 23.2 source checkout.
 
@@ -14,11 +14,6 @@ The lunch combos registered by `AndroidProducts.mk`:
 lunch lineage_desktop_cf_arm64_pgagnostic-trunk_staging-userdebug
 lunch lineage_desktop_cf_x86_64-trunk_staging-userdebug
 ```
-
-(The space-separated form `lunch lineage_desktop_cf_arm64_pgagnostic trunk_staging userdebug` also works.)
-
-This product targets Apple Silicon and x86-64 CPUs running in the Cuttlefish emulator.
-Both targets use Cuttlefish's default ~64 GB thin-provisioned f2fs userdata image.
 
 ## Source Layout
 
@@ -36,7 +31,7 @@ stored under `patches/` and applied to an official LineageOS 23.2 checkout.
 That keeps the project archiveable as "official LineageOS plus this overlay"
 without requiring separate fork branches.
 
-## Desktop Contract
+## Desktop Mode
 
 The desktop products split app compatibility identity from windowing behavior:
 
@@ -60,7 +55,7 @@ The policy is split by layer so it stays reviewable:
 - `config/desktop_windowing_policy.mk` owns product-level desktop properties
 - `overlays/SettingsProvider` owns first-boot desktop defaults
 - Cuttlefish `set_adb.sh` reapplies drift-prone settings every boot
-- Launcher, framework, Shell, and Cuttlefish source changes are represented as
+- Launcher, framework, and Shell changes are represented as
   patches under `patches/`
 
 Additional project docs:
@@ -73,15 +68,10 @@ Additional project docs:
 
 Building this ROM is a full LineageOS source build and is resource-intensive:
 
-- **RAM:** 32 GB minimum. Linking `system.img` and the ART/Soong build graph
-  can use most of this; less than 32 GB will OOM or thrash.
-- **Storage:** 500 GB minimum of free space. The synced source tree, ccache,
-  and build intermediates for both ARM64 and x86-64 targets land in this
-  range; a single-target build is smaller but still well over 200 GB.
-- **CPU:** x86-64 Linux is the upstream-supported AOSP build host. ARM64
-  Fedora Asahi hosts are supported by this project with ARM64 host prebuilts
-  only; more cores shorten the build proportionally, and `JOBS` defaults to
-  the logical CPU count minus 2, with a minimum of 1.
+- **RAM:** 32 GB recommended, 16 GB will work but the build will be much slower.
+  The build script will add temporary zram swap as needed.
+- **Storage:** 500 GB minimum of free space. 
+- **CPU:** x86-64 and ARM64 are both supported as build hosts.
 
 ### ARM64 Build Hosts
 
@@ -94,19 +84,7 @@ build-tools prebuilts before building. The Rust prebuilt must include both
 host builds run natively with the ARM64 prebuilts prepared by the build script,
 including on Apple Silicon's 16 KiB-page kernels.
 
-For local use on an ARM64 host, build the ARM64 Cuttlefish product:
-
-```bash
-./lineageos/scripts/build_lineageos_desktop.sh arm64
-```
-
-The default `all` target still builds both ARM64 and x86-64 release bundles,
-but the x86-64 target is mainly useful when producing packages for x86-64
-hosts.
-
-## One-Command Build
-
-From a Linux build host:
+## Build LineageOS Desktop
 
 ```bash
 git clone https://github.com/DesktopECHO/ika.git
@@ -115,7 +93,13 @@ cd ika
 ./lineageos/scripts/build_lineageos_desktop.sh
 ```
 
-The resulting `lineageos-arm64/` and `lineageos-x86_64/` directories at the ika repo root are picked up by the `ika-lineageos` RPM in phase 2.
+This will build the ROM automatically for the running CPU architecture.
+For x86-64 hosts, append `all` to the command to build both ARM64 and x86-64 release bundles.
+
+The resulting `lineageos-arm64/` and/or `lineageos-x86_64/` directories at the ika
+repo root will be picked up by the `ika-lineageos` RPM in the second phase.
+
+## How Stuff Works
 
 The script downloads LineageOS 23.2, installs this overlay and the microG
 partner manifest as local manifests, syncs official LineageOS sources, overlays

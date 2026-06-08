@@ -7,8 +7,6 @@ URL:            https://github.com/google/android-cuttlefish
 Source0:        android-cuttlefish-1.53.0.tar.gz
 ExclusiveArch:  aarch64 x86_64
 %global debug_package %{nil}
-%global __debug_install_post %{nil}
-%undefine _debugsource_packages
 AutoReqProv:    no
 
 Requires:       ika-base
