@@ -7,18 +7,17 @@ package(
 cc_library(
     name = "opengl_headers",
     hdrs = glob([
-        "include/GL/*.h",
-        "include/KHR/*.h",
+        "api/**/*.h",
     ]),
-    strip_include_prefix = "include",
+    strip_include_prefix = "api",
 )
 
 cc_library(
     name = "GLES_headers",
     hdrs = glob([
-        "include/GLES/*.h",
+        "api/GLES/*.h",
     ]),
-    strip_include_prefix = "include",
+    strip_include_prefix = "api",
     deps = [
         "@egl_headers//:egl_headers",
     ],
@@ -27,9 +26,9 @@ cc_library(
 cc_library(
     name = "GLES2_headers",
     hdrs = glob([
-        "include/GLES2/*.h",
+        "api/GLES2/*.h",
     ]),
-    strip_include_prefix = "include",
+    strip_include_prefix = "api",
     deps = [
         "@egl_headers//:egl_headers",
     ],
@@ -38,9 +37,9 @@ cc_library(
 cc_library(
     name = "GLES3_headers",
     hdrs = glob([
-        "include/GLES3/*.h",
+        "api/GLES3/*.h",
     ]),
-    strip_include_prefix = "include",
+    strip_include_prefix = "api",
     deps = [
         "@egl_headers//:egl_headers",
     ],

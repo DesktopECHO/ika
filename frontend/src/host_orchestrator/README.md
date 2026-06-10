@@ -5,19 +5,19 @@
 The Host Orchestrator API documentation is generated with the [swag](https://github.com/swaggo/swag) tool,
 generating OpenAPI Specifications based on Go annotations.
 
-Visit 
-[Web View](https://petstore3.swagger.io/?url=https://raw.githubusercontent.com/google/android-cuttlefish/refs/heads/main/frontend/src/host_orchestrator/docs/swagger.yaml)
-to see documentation derived from [docs/swagger.yaml](docs/swagger.yaml).
+The generated OpenAPI document is [docs/swagger.yaml](docs/swagger.yaml).
+Use that local file with Swagger UI or another OpenAPI viewer when reviewing
+changes in this fork.
 
 ## Update documentation 
 
-Install swag
+Install `swag`:
 
 ```
 go install github.com/swaggo/swag/cmd/swag@latest
 ```
 
-Generate updated documentation
+Generate updated documentation:
 
 ```
 # run in `frontend/src/host_orchestrator` from this checkout

@@ -13,7 +13,8 @@ include /usr/share/dpkg/buildflags.mk
 compilation_mode :=
 default_compilation_mode := \
   $(shell cd cvd; \
-          bazel build //:build_compilation_mode_txt >/dev/null 2>&1; \
+          bazel --output_user_root="$${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$$HOME/ika-build}" \
+	        build //:build_compilation_mode_txt >/dev/null 2>&1; \
 	  cat bazel-bin/build/compilation_mode.txt)
 $(if $(default_compilation_mode),,$(error Bazel install is broken))
 
@@ -53,9 +54,9 @@ copts := --strip=never
 copts += --copt="-gdwarf-4"
 endif
 
-cuttlefish_common := debian/cuttlefish-base/usr/lib/cuttlefish-common
-cuttlefish_integration := debian/cuttlefish-integration/usr/bin
-cuttlefish_metrics := debian/cuttlefish-metrics/usr/lib/cuttlefish-metrics
+cuttlefish_common := debian/ika-base/usr/lib/cuttlefish-common
+cuttlefish_integration := debian/ika-integration/usr/bin
+cuttlefish_metrics := debian/ika-metrics/usr/lib/cuttlefish-metrics
 
 disk_cache_arg :=
 ifneq ($(strip ${BAZEL_DISK_CACHE_DIR}),)
@@ -72,14 +73,49 @@ endif
 
 .PHONY: override_dh_installinit
 override_dh_installinit:
-	dh_installinit --name=cuttlefish-host-resources
+	dh_installinit --name=cuttlefish-host-resources --no-start
 	dh_installinit --name=cuttlefish-defaults
 	dh_installinit
 
 # the `--workspace_status_command` flag path depends on the current working directory of base/cvd
 .PHONY: override_dh_auto_build
 override_dh_auto_build:
-	cd cvd && ./tools/ensure_crosvm_git_mirror.sh && bazel build ${remote_cache_arg} ${disk_cache_arg} ${compilation_mode} ${conlyopts} ${copts} ${cxxopts} ${linkopts} -c opt 'cuttlefish/package:cvd' 'cuttlefish/package:defaults' 'cuttlefish/package:metrics' --spawn_strategy=local --workspace_status_command=../stamp_helper.sh --build_tag_filters=-clang-tidy
+	cd cvd && \
+	  BAZEL_OUTPUT_USER_ROOT="$${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$$HOME/ika-build}"; \
+	  BAZEL_CACHE_ROOT="$${CUTTLEFISH_BAZEL_CACHE_ROOT:-$$HOME/ika-build/cuttlefish-bazel}"; \
+	  BAZEL_REPOSITORY_CACHE="$$BAZEL_CACHE_ROOT/repository"; \
+	  BAZEL_DISTDIR="$$BAZEL_CACHE_ROOT/distdir"; \
+	  BAZEL_GIT_MIRROR_ROOT="$$BAZEL_CACHE_ROOT/git-mirrors"; \
+	  BAZEL_GIT_CONFIG="$$BAZEL_CACHE_ROOT/gitconfig"; \
+	  mkdir -p "$$BAZEL_OUTPUT_USER_ROOT" "$$BAZEL_REPOSITORY_CACHE" "$$BAZEL_DISTDIR" "$$BAZEL_GIT_MIRROR_ROOT"; \
+	  retry_count=0; max_retries=9; retry_delay=60; \
+	  while true; do \
+	    if CUTTLEFISH_BAZEL_GIT_MIRROR_ROOT="$$BAZEL_GIT_MIRROR_ROOT" \
+	         CUTTLEFISH_BAZEL_GIT_CONFIG="$$BAZEL_GIT_CONFIG" \
+	         ./tools/ensure_bazel_git_mirrors.sh && \
+	       GIT_CONFIG_GLOBAL="$$BAZEL_GIT_CONFIG" GIT_CONFIG_NOSYSTEM=1 \
+	       DISABLE_BAZEL_WRAPPER=yes USE_BAZEL_VERSION=8.5.1 \
+	       bazel --output_user_root="$$BAZEL_OUTPUT_USER_ROOT" build \
+	         ${remote_cache_arg} ${disk_cache_arg} \
+	         --repository_cache="$$BAZEL_REPOSITORY_CACHE" \
+	         --distdir="$$BAZEL_DISTDIR" \
+	         --repo_env=GIT_CONFIG_GLOBAL="$$BAZEL_GIT_CONFIG" \
+	         --repo_env=GIT_CONFIG_NOSYSTEM=1 \
+	         ${compilation_mode} ${conlyopts} ${copts} ${cxxopts} ${linkopts} -c opt \
+	         'cuttlefish/package:cvd' 'cuttlefish/package:defaults' 'cuttlefish/package:metrics' \
+	         --spawn_strategy=local \
+	         --workspace_status_command=../stamp_helper.sh \
+	         --build_tag_filters=-clang-tidy; then \
+	      break; \
+	    fi; \
+	    retry_count=$$((retry_count + 1)); \
+	    if [ "$$retry_count" -ge "$$max_retries" ]; then \
+	      echo "Bazel build failed after $$retry_count attempts." >&2; \
+	      exit 1; \
+	    fi; \
+	    echo "Bazel build failed, retrying in $${retry_delay}s ($$retry_count/$$max_retries)..." >&2; \
+	    sleep "$$retry_delay"; \
+	  done
 	dh_auto_build
 
 # Only generate optimized DWARF if debug is enabled
@@ -96,6 +132,12 @@ override_dh_strip:
 .PHONY: override_dh_install
 override_dh_install:
 	dh_install
+	install -Dpm0755 ../tools/ika debian/ika-base/usr/bin/ika
+	install -Dpm0755 ../tools/getchromium ${cuttlefish_common}/bin/getchromium
+	install -Dpm0755 rpm/cuttlefish-add-user-to-groups.sh debian/ika-base/usr/libexec/cuttlefish/cuttlefish-add-user-to-groups
+	install -Dpm0644 rpm/99-cuttlefish.conf debian/ika-base/etc/sysctl.d/99-cuttlefish.conf
+	install -Dpm0644 rpm/cuttlefish-tmpfiles.conf debian/ika-base/usr/lib/tmpfiles.d/cuttlefish.conf
+	install -Dpm0755 rpm/cuttlefish-ulimit.sh debian/ika-base/etc/profile.d/cuttlefish-ulimit.sh
 	rm -rf ${cuttlefish_common}/bin/cvd.repo_mapping
 	rm -rf ${cuttlefish_common}/bin/cvd.runfiles*
 	rm -rf ${cuttlefish_integration}/defaults.repo_mapping

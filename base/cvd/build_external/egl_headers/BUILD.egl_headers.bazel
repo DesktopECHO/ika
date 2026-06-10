@@ -10,8 +10,7 @@ package(
 cc_library(
     name = "egl_headers",
     hdrs = glob([
-        "include/EGL/*.h",
-        "include/KHR/*.h",
+        "api/**/*.h",
     ]),
-    strip_include_prefix = "include",
+    strip_include_prefix = "api",
 )

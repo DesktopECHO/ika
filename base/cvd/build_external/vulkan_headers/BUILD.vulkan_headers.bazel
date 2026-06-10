@@ -7,23 +7,26 @@ package(
 cc_library(
     name = "vulkan_headers",
     hdrs = glob([
-        "include/vulkan/*.h",
-        "include/vk_video/*.h",
+        "include/**/*.h",
     ]),
-    strip_include_prefix = "include",
+    includes = [
+        "include",
+    ],
 )
 
 cc_library(
     name = "vulkan_hpp",
     textual_hdrs = glob([
-        "include/vulkan/*.hpp",
+        "include/**/*.hpp",
     ]),
-    strip_include_prefix = "include",
+    includes = [
+        "include",
+    ],
 )
 
 filegroup(
     name = "vulkan_xml",
     srcs = [
-        "share/vulkan/registry/vk.xml",
+        "registry/vk.xml",
     ],
 )

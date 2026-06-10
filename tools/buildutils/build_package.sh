@@ -16,6 +16,11 @@
 
 set -o errexit -o nounset -o pipefail
 
+# Shared distro detection + sudo-escalation helpers, also used by
+# build_packages.sh.
+_buildutils_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_buildutils_dir}/lib/common.sh"
+
 function print_usage() {
   >&2 echo "usage: $0 [--exclude-spec NAME[.spec]]... /path/to/pkgdir"
   >&2 echo "   or: $0 [--exclude-spec NAME[.spec]]... /path/to/specfile.spec"
@@ -72,26 +77,7 @@ readonly INPUT_PATH_ABS="$(realpath "${INPUT_PATH}")"
 readonly REPO_DIR="$(realpath "$(dirname "$0")/../..")"
 readonly VERSION_FILE="${REPO_DIR}/packaging/VERSION"
 readonly VERSION="$(tr -d '\n' < "${VERSION_FILE}")"
-readonly RPMBUILD_TOPDIR="${REPO_DIR}/rpmbuild"
-readonly RPMBUILD_WORK_ROOT="${RPMBUILD_TOPDIR}/work"
-readonly TAR_BASENAME="android-cuttlefish-${VERSION}"
-readonly SOURCE_TARBALL="${RPMBUILD_TOPDIR}/SOURCES/${TAR_BASENAME}.tar.gz"
-readonly SOURCE_MANIFEST="${RPMBUILD_TOPDIR}/SOURCES/${TAR_BASENAME}.manifest"
-readonly SOURCE_STAGING_DIR="${RPMBUILD_TOPDIR}/SOURCES/${TAR_BASENAME}"
-readonly ALLOW_ROOT_RPM_BUILD="${ALLOW_ROOT_RPM_BUILD:-false}"
 declare -a build_workdirs=()
-readonly HOST_RPM_ARCH="$(rpm --eval '%{_arch}')"
-
-function refuse_root_rpm_build() {
-  if [[ "$(id -u)" -ne 0 || "${ALLOW_ROOT_RPM_BUILD}" == "true" ]]; then
-    return
-  fi
-
-  >&2 echo "Do not run RPM package builds as root."
-  >&2 echo "Root-owned Bazel and rpmbuild outputs are difficult to clean from a normal user shell."
-  >&2 echo "Run this script as your normal user, or set ALLOW_ROOT_RPM_BUILD=true for a disposable build tree."
-  exit 1
-}
 
 function normalize_spec_name() {
   local spec_name="$1"
@@ -153,6 +139,71 @@ function ika_arch_for_host() {
   esac
 }
 
+# Architecture string ('arm64'/'x86_64') of the *other* supported host. Fails
+# when the host arch is unrecognized.
+function other_ika_arch() {
+  local host_arch
+  host_arch="$(ika_arch_for_host)" || return 1
+  case "${host_arch}" in
+    arm64)  printf 'x86_64' ;;
+    x86_64) printf 'arm64' ;;
+  esac
+}
+
+# Canonical set of repo-relative paths excluded from the packaged source tree,
+# one per line. Rendered two ways below — as find(1) -prune predicates for the
+# manifest fingerprint and as rsync(1) --exclude patterns for staging — so the
+# fingerprint and the staged tree can never disagree. Everything is anchored at
+# the repo root; a trailing '*' globs the final path component (build symlinks
+# like base/cvd/bazel-bin). Bump manifest-cache-version when this changes.
+function source_tree_exclude_paths() {
+  printf '%s\n' \
+    .git .jj .cache .ccache out rpmbuild \
+    build-scrcpy-server android-sdk-cache \
+    lineageos/src toolchain \
+    base/cvd/bazel-out 'base/cvd/bazel-*' 'bazel-*'
+
+  # Keep this host's lineageos-<arch> bundle (an input to cuttlefish-lineageos)
+  # but drop the other arch's, so a ROM rebuild for one arch does not
+  # invalidate the cached tarball used by the other specs.
+  local other_arch
+  if other_arch="$(other_ika_arch)"; then
+    printf 'lineageos-%s\n' "${other_arch}"
+  else
+    printf '%s\n' lineageos-arm64 lineageos-x86_64
+  fi
+}
+
+# Populate the named array with a find(1) prune expression built from
+# source_tree_exclude_paths (-path ./A -o -path ./B ...).
+function source_tree_find_prune_args() {
+  local -n prune_ref="$1"
+  local path
+  local first=1
+
+  prune_ref=()
+  while IFS= read -r path; do
+    if (( first )); then
+      first=0
+    else
+      prune_ref+=(-o)
+    fi
+    prune_ref+=(-path "./${path}")
+  done < <(source_tree_exclude_paths)
+}
+
+# Populate the named array with rsync(1) --exclude args built from
+# source_tree_exclude_paths (--exclude=/A/ --exclude=/B/ ...).
+function source_tree_rsync_exclude_args() {
+  local -n exclude_ref="$1"
+  local path
+
+  exclude_ref=()
+  while IFS= read -r path; do
+    exclude_ref+=("--exclude=/${path}/")
+  done < <(source_tree_exclude_paths)
+}
+
 function should_skip_spec_for_missing_sources() {
   local spec_path="$1"
   local spec_name
@@ -168,46 +219,14 @@ function should_skip_spec_for_missing_sources() {
 function build_source_manifest() {
   local manifest_path="$1"
 
-  # The lineageos-<host_arch>/ bundle is an input to the cuttlefish-lineageos
-  # RPM; the bundle for the other arch is irrelevant to this host and is
-  # excluded so a fresh ROM build for one arch does not invalidate the cached
-  # source tarball used by the other specs.
-  local host_arch other_arch
-  if ! host_arch="$(ika_arch_for_host)"; then
-    host_arch=''
-  fi
-  case "${host_arch}" in
-    arm64)  other_arch=x86_64 ;;
-    x86_64) other_arch=arm64 ;;
-    *)      other_arch='' ;;
-  esac
-
-  local -a prunes=(
-    -path ./.git
-    -o -path ./.jj
-    -o -path ./.cache
-    -o -path ./.ccache
-    -o -path ./out
-    -o -path ./rpmbuild
-    -o -path ./build-scrcpy-server
-    -o -path ./android-sdk-cache
-    -o -path ./lineageos/src
-    -o -path ./toolchain
-    -o -path ./base/cvd/bazel-out
-    -o -name 'bazel-*'
-  )
-  if [[ -n "${other_arch}" ]]; then
-    prunes+=(-o -path "./lineageos-${other_arch}")
-  else
-    prunes+=(-o -path ./lineageos-arm64 -o -path ./lineageos-x86_64)
-  fi
+  local -a prunes
+  source_tree_find_prune_args prunes
 
   (
-    # Cache key bumped when the staging-exclude set changes in a way that
-    # affects tarball contents (e.g. fixing an unanchored exclude that
-    # over-pruned base/cvd/toolchain). Bumping this line invalidates any
-    # cached source tarball generated by an older buggy run.
-    printf 'manifest-cache-version\t6\n'
+    # Cache key embedded as the manifest's first line. Bump it whenever the
+    # exclude set in source_tree_exclude_paths changes in a way that affects
+    # tarball contents, to invalidate any tarball cached by an older run.
+    printf 'manifest-cache-version\t7\n'
 
     cd "${REPO_DIR}"
     find . \
@@ -238,7 +257,7 @@ function refresh_source_tarball_if_needed() {
   trap 'rm -f "${tmp_manifest}" "${tmp_source_tarball}"' RETURN
 
   local scrcpy_server_dest="${REPO_DIR}/scrcpy/scrcpy-server"
-  local scrcpy_server_build_helper="${REPO_DIR}/tools/buildutils/build_scrcpy_server_aarch64.sh"
+  local scrcpy_server_build_helper="${REPO_DIR}/tools/buildutils/build_scrcpy_server.sh"
   local local_scrcpy_server="${HOME}/ika-build/build-scrcpy-server/scrcpy-server"
 
   # Only prepare the scrcpy-server when the scrcpy spec is actually being built.
@@ -298,39 +317,8 @@ function refresh_source_tarball_if_needed() {
   rm -rf "${SOURCE_STAGING_DIR}" "${SOURCE_TARBALL}"
   mkdir -p "${SOURCE_STAGING_DIR}"
 
-  local host_arch other_arch
-  if ! host_arch="$(ika_arch_for_host)"; then
-    host_arch=''
-  fi
-  case "${host_arch}" in
-    arm64)  other_arch=x86_64 ;;
-    x86_64) other_arch=arm64 ;;
-    *)      other_arch='' ;;
-  esac
-
-  # Anchored to the source root (leading slash). Unanchored patterns like
-  # 'toolchain/' would also strip base/cvd/toolchain/, which Bazel needs for
-  # //toolchain:bazel.MODULE.bazel.
-  local -a rsync_excludes=(
-    --exclude='/.git/'
-    --exclude='/.jj/'
-    --exclude='/.cache/'
-    --exclude='/.ccache/'
-    --exclude='/out/'
-    --exclude='/rpmbuild/'
-    --exclude='/build-scrcpy-server/'
-    --exclude='/android-sdk-cache/'
-    --exclude='/lineageos/src/'
-    --exclude='/toolchain/'
-    --exclude='/base/cvd/bazel-out/'
-    --exclude='/base/cvd/bazel-*/'
-    --exclude='/bazel-*/'
-  )
-  if [[ -n "${other_arch}" ]]; then
-    rsync_excludes+=(--exclude="/lineageos-${other_arch}/")
-  else
-    rsync_excludes+=(--exclude='/lineageos-arm64/' --exclude='/lineageos-x86_64/')
-  fi
+  local -a rsync_excludes
+  source_tree_rsync_exclude_args rsync_excludes
 
   rsync -a \
     "${rsync_excludes[@]}" \
@@ -353,80 +341,115 @@ function cleanup_build_workdirs() {
 
 trap cleanup_build_workdirs EXIT
 
-refuse_root_rpm_build
+readonly DISTRO_FAMILY="$(detect_distro_family)"
+refuse_root_build
 
-mkdir -p \
-  "${RPMBUILD_TOPDIR}/BUILD" \
-  "${RPMBUILD_TOPDIR}/BUILDROOT" \
-  "${RPMBUILD_TOPDIR}/RPMS" \
-  "${RPMBUILD_TOPDIR}/SOURCES" \
-  "${RPMBUILD_TOPDIR}/SPECS" \
-  "${RPMBUILD_TOPDIR}/SRPMS" \
-  "${RPMBUILD_WORK_ROOT}"
+if [[ "${DISTRO_FAMILY}" == "rpm" ]]; then
+  readonly RPMBUILD_TOPDIR="${REPO_DIR}/rpmbuild"
+  readonly RPMBUILD_WORK_ROOT="${RPMBUILD_TOPDIR}/work"
+  readonly TAR_BASENAME="android-cuttlefish-${VERSION}"
+  readonly SOURCE_TARBALL="${RPMBUILD_TOPDIR}/SOURCES/${TAR_BASENAME}.tar.gz"
+  readonly SOURCE_MANIFEST="${RPMBUILD_TOPDIR}/SOURCES/${TAR_BASENAME}.manifest"
+  readonly SOURCE_STAGING_DIR="${RPMBUILD_TOPDIR}/SOURCES/${TAR_BASENAME}"
+  readonly HOST_RPM_ARCH="$(rpm --eval '%{_arch}')"
 
-refresh_source_tarball_if_needed
+  mkdir -p \
+    "${RPMBUILD_TOPDIR}/BUILD" \
+    "${RPMBUILD_TOPDIR}/BUILDROOT" \
+    "${RPMBUILD_TOPDIR}/RPMS" \
+    "${RPMBUILD_TOPDIR}/SOURCES" \
+    "${RPMBUILD_TOPDIR}/SPECS" \
+    "${RPMBUILD_TOPDIR}/SRPMS" \
+    "${RPMBUILD_WORK_ROOT}"
 
-declare -a specs
-declare -a pushd_args
+  refresh_source_tarball_if_needed
 
-if [[ -f "${INPUT_PATH_ABS}" && "${INPUT_PATH_ABS}" == *.spec ]]; then
-  if should_exclude_spec "${INPUT_PATH_ABS}"; then
-    echo "Skipping excluded spec $(basename "${INPUT_PATH_ABS}")"
-    exit 0
-  fi
-  if ! spec_supports_host_arch "${INPUT_PATH_ABS}"; then
-    echo "Skipping spec $(basename "${INPUT_PATH_ABS}") on ${HOST_RPM_ARCH}: unsupported by ExclusiveArch/ExcludeArch"
-    exit 0
-  fi
-  specs=("${INPUT_PATH_ABS}")
-  pushd_args=("$(dirname "${specs[0]}")")
-elif [[ -d "${INPUT_PATH_ABS}/rpm" ]]; then
-  specs=("${INPUT_PATH_ABS}"/rpm/*.spec)
-  if [[ ${#specs[@]} -eq 0 ]]; then
-    >&2 echo "no spec files found under ${INPUT_PATH_ABS}/rpm"
+  declare -a specs
+  declare -a pushd_args
+
+  if [[ -f "${INPUT_PATH_ABS}" && "${INPUT_PATH_ABS}" == *.spec ]]; then
+    if should_exclude_spec "${INPUT_PATH_ABS}"; then
+      echo "Skipping excluded spec $(basename "${INPUT_PATH_ABS}")"
+      exit 0
+    fi
+    if ! spec_supports_host_arch "${INPUT_PATH_ABS}"; then
+      echo "Skipping spec $(basename "${INPUT_PATH_ABS}") on ${HOST_RPM_ARCH}: unsupported by ExclusiveArch/ExcludeArch"
+      exit 0
+    fi
+    specs=("${INPUT_PATH_ABS}")
+    pushd_args=("$(dirname "${specs[0]}")")
+  elif [[ -d "${INPUT_PATH_ABS}/rpm" ]]; then
+    specs=("${INPUT_PATH_ABS}"/rpm/*.spec)
+    if [[ ${#specs[@]} -eq 0 ]]; then
+      >&2 echo "no spec files found under ${INPUT_PATH_ABS}/rpm"
+      exit 1
+    fi
+    declare -a filtered_specs=()
+    for spec in "${specs[@]}"; do
+      if should_exclude_spec "${spec}"; then
+        echo "Skipping excluded spec $(basename "${spec}")"
+        continue
+      fi
+      if ! spec_supports_host_arch "${spec}"; then
+        echo "Skipping spec $(basename "${spec}") on ${HOST_RPM_ARCH}: unsupported by ExclusiveArch/ExcludeArch"
+        continue
+      fi
+      filtered_specs+=("${spec}")
+    done
+    specs=("${filtered_specs[@]}")
+    if [[ ${#specs[@]} -eq 0 ]]; then
+      echo "No RPM specs left to build under ${INPUT_PATH_ABS}/rpm after exclusions"
+      exit 0
+    fi
+    pushd_args=("${INPUT_PATH_ABS}")
+  else
+    >&2 echo "missing rpm directory under ${INPUT_PATH_ABS}, or input is not a .spec file"
     exit 1
   fi
-  declare -a filtered_specs=()
-  for spec in "${specs[@]}"; do
-    if should_exclude_spec "${spec}"; then
-      echo "Skipping excluded spec $(basename "${spec}")"
-      continue
-    fi
-    if ! spec_supports_host_arch "${spec}"; then
-      echo "Skipping spec $(basename "${spec}") on ${HOST_RPM_ARCH}: unsupported by ExclusiveArch/ExcludeArch"
-      continue
-    fi
-    filtered_specs+=("${spec}")
-  done
-  specs=("${filtered_specs[@]}")
-  if [[ ${#specs[@]} -eq 0 ]]; then
-    echo "No RPM specs left to build under ${INPUT_PATH_ABS}/rpm after exclusions"
-    exit 0
-  fi
-  pushd_args=("${INPUT_PATH_ABS}")
-else
-  >&2 echo "missing rpm directory under ${INPUT_PATH_ABS}, or input is not a .spec file"
-  exit 1
-fi
 
-pushd "${pushd_args[0]}"
-for spec in "${specs[@]}"; do
-  if should_skip_spec_for_missing_sources "${spec}"; then
-    spec_basename="$(basename "${spec}")"
-    host_arch="$(ika_arch_for_host 2>/dev/null || echo '?')"
-    echo "Skipping RPM build for ${spec_basename} because ${REPO_DIR}/lineageos-${host_arch} is missing"
-    continue
+  pushd "${pushd_args[0]}"
+  for spec in "${specs[@]}"; do
+    if should_skip_spec_for_missing_sources "${spec}"; then
+      spec_basename="$(basename "${spec}")"
+      host_arch="$(ika_arch_for_host 2>/dev/null || echo '?')"
+      echo "Skipping RPM build for ${spec_basename} because ${REPO_DIR}/lineageos-${host_arch} is missing"
+      continue
+    fi
+    spec_workdir="$(mktemp -d "${RPMBUILD_WORK_ROOT}/$(normalize_spec_name "${spec}").XXXXXX")"
+    build_workdirs+=("${spec_workdir}")
+    echo "Building RPM from ${spec}"
+    rpmbuild \
+      --define "_topdir ${RPMBUILD_TOPDIR}" \
+      --define "_sourcedir ${RPMBUILD_TOPDIR}/SOURCES" \
+      --define "_rpmdir ${RPMBUILD_TOPDIR}/RPMS" \
+      --define "_srcrpmdir ${RPMBUILD_TOPDIR}/SRPMS" \
+      --define "_builddir ${spec_workdir}/BUILD" \
+      --define "_buildrootdir ${spec_workdir}/BUILDROOT" \
+      -bb "${spec}"
+  done
+  popd
+
+elif [[ "${DISTRO_FAMILY}" == "debian" ]]; then
+  if [[ ! -d "${INPUT_PATH_ABS}/debian" ]]; then
+    >&2 echo "missing debian/ directory under ${INPUT_PATH_ABS}"
+    exit 1
   fi
-  spec_workdir="$(mktemp -d "${RPMBUILD_WORK_ROOT}/$(normalize_spec_name "${spec}").XXXXXX")"
-  build_workdirs+=("${spec_workdir}")
-  echo "Building RPM from ${spec}"
-  rpmbuild \
-    --define "_topdir ${RPMBUILD_TOPDIR}" \
-    --define "_sourcedir ${RPMBUILD_TOPDIR}/SOURCES" \
-    --define "_rpmdir ${RPMBUILD_TOPDIR}/RPMS" \
-    --define "_srcrpmdir ${RPMBUILD_TOPDIR}/SRPMS" \
-    --define "_builddir ${spec_workdir}/BUILD" \
-    --define "_buildrootdir ${spec_workdir}/BUILDROOT" \
-    -bb "${spec}"
-done
-popd
+
+  # Prepend /usr/local/bin so Bazelisk installed there is found before any
+  # system bazel package.
+  export PATH="/usr/local/bin:${PATH}"
+
+  echo "Building Debian packages from ${INPUT_PATH_ABS}"
+  (
+    cd "${INPUT_PATH_ABS}"
+    dpkg-buildpackage -us -uc -b -d
+  )
+
+  parent_dir="$(dirname "${INPUT_PATH_ABS}")"
+  deb_out="${REPO_DIR}/deb"
+  mkdir -p "${deb_out}"
+  for f in "${parent_dir}"/*.deb "${parent_dir}"/*.buildinfo "${parent_dir}"/*.changes; do
+    [[ -f "${f}" ]] || continue
+    mv -f -- "${f}" "${deb_out}/"
+  done
+fi

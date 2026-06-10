@@ -1,0 +1,3 @@
+#!/bin/sh
+
+dpkg-divert --package ika-defaults --remove --rename /usr/lib/cuttlefish-common/etc/cf_defaults

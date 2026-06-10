@@ -1,4 +1,4 @@
-cuttlefish-common (1.53.0) unstable; urgency=medium
+ika-base (1.53.0) unstable; urgency=medium
 
   * Always show all help commands by @cjreynol in
     https://github.com/google/android-cuttlefish/pull/2452

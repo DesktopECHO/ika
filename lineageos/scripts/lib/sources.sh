@@ -651,6 +651,8 @@ update_native_bridge_prebuilts_for_targets() {
   enabled "$update_native_bridge_prebuilts" || return 0
   targets_include_x86_64 "$@" || return 0
 
+  build_host_lpunpack
+
   local update_script="$workspace/vendor/lineage_desktop/scripts/update_native_bridge_prebuilts.py"
   [[ -x "$update_script" ]] || die "missing native bridge update script: $update_script"
 

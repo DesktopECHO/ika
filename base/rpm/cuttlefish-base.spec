@@ -1,6 +1,6 @@
 Name:           ika-base
 Version:        1.53.0
-Release:        4%{?dist}
+Release:        5%{?dist}
 Summary:        Cuttlefish Android Virtual Device host packages for Fedora
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish
@@ -67,7 +67,6 @@ Requires:       openssl
 Requires:       python3
 Requires:       python3-requests
 Requires:       virglrenderer
-Requires:       wayland-utils
 Requires:       xdg-utils
 Requires:       xz-libs
 
@@ -165,7 +164,7 @@ pushd base/cvd
 # repositories are fetched once and then reused on slow connections. Default
 # under $HOME/ika-build alongside the other ika build scratch.
 BAZEL_CACHE_ROOT="${CUTTLEFISH_BAZEL_CACHE_ROOT:-$HOME/ika-build/cuttlefish-bazel}"
-BAZEL_OUTPUT_USER_ROOT="${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$BAZEL_CACHE_ROOT/output_user_root}"
+BAZEL_OUTPUT_USER_ROOT="${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$HOME/ika-build}"
 BAZEL_REPOSITORY_CACHE="$BAZEL_CACHE_ROOT/repository"
 BAZEL_DISK_CACHE="$BAZEL_CACHE_ROOT/disk"
 BAZEL_DISTDIR="$BAZEL_CACHE_ROOT/distdir"

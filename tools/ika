@@ -86,21 +86,36 @@ reserved_host_core_list() {
   printf '%s,%s\n' "${cores[count - 2]}" "${cores[count - 1]}"
 }
 
+# Upper bound on the auto-selected guest vCPU count. The default heuristic
+# never exceeds this; pass --cpus= to request more.
+readonly DEFAULT_GUEST_CPU_CAP=12
+
 default_guest_cpus() {
-  local perf_cores
-  perf_cores="$(count_performance_cores)"
-  perf_cores="${perf_cores//[!0-9]/}"
+  local cores guest_cpus
+  cores="$(count_performance_cores)"
+  cores="${cores//[!0-9]/}"
 
-  if [[ -z "${perf_cores}" ]] || (( perf_cores <= 0 )); then
-    echo 2
-    return
+  # Homogeneous hosts (x86_64, or ARM without cpu_capacity) report no
+  # performance cores; fall back to the online (available) CPU count.
+  if [[ -z "${cores}" ]] || (( cores <= 0 )); then
+    cores="$(nproc 2>/dev/null || true)"
+    cores="${cores//[!0-9]/}"
   fi
 
-  if (( perf_cores > 2 )); then
-    echo $((perf_cores - 2))
+  # Reserve 2 cores for the host and floor at 1. Last-ditch default of 2 if
+  # neither probe produced a usable count.
+  if [[ -z "${cores}" ]] || (( cores <= 0 )); then
+    guest_cpus=2
+  elif (( cores > 2 )); then
+    guest_cpus=$((cores - 2))
   else
-    echo 1
+    guest_cpus=1
   fi
+
+  # Cap the auto-selected default; --cpus= bypasses this entirely.
+  (( guest_cpus <= DEFAULT_GUEST_CPU_CAP )) || guest_cpus=${DEFAULT_GUEST_CPU_CAP}
+
+  echo "${guest_cpus}"
 }
 
 # ============================================================================
@@ -199,7 +214,7 @@ SCRCPY_SERVER_PATH_OVERRIDE=""
 if [[ -f "${PACKAGED_SCRCPY_SERVER}" ]]; then
   SCRCPY_SERVER_PATH_OVERRIDE="${PACKAGED_SCRCPY_SERVER}"
 fi
-SCRCPY_DPI_FLAG=""
+SCRCPY_DPI=""
 GFXSTREAM_VULKAN_MODE="${IKA_GFXSTREAM_VULKAN:-auto}"
 GFXSTREAM_GLES_CONTEXT_TYPES="gfxstream-gles:gfxstream-composer"
 GFXSTREAM_VULKAN_CONTEXT_TYPES="gfxstream-gles:gfxstream-vulkan:gfxstream-composer"
@@ -218,6 +233,43 @@ die() {
     printf '%s\n' "${CONSOLE_FAILURE_MESSAGE}" >&3
   fi
   exit 1
+}
+
+ensure_open_file_limit() {
+  local min_open_files="${IKA_MIN_OPEN_FILES:-65536}"
+  local soft_limit
+  local hard_limit
+
+  if [[ ! "${min_open_files}" =~ ^[1-9][0-9]*$ ]]; then
+    log "invalid IKA_MIN_OPEN_FILES='${min_open_files}'; using 65536"
+    min_open_files="65536"
+  fi
+
+  soft_limit="$(ulimit -Sn 2>/dev/null || true)"
+  hard_limit="$(ulimit -Hn 2>/dev/null || true)"
+  [[ -n "${soft_limit}" && -n "${hard_limit}" ]] || return 0
+  [[ "${soft_limit}" == "unlimited" ]] && return 0
+
+  if [[ "${soft_limit}" =~ ^[0-9]+$ ]] && (( soft_limit >= min_open_files )); then
+    return 0
+  fi
+
+  if [[ "${hard_limit}" != "unlimited" ]]; then
+    if [[ ! "${hard_limit}" =~ ^[0-9]+$ ]]; then
+      log "could not parse open-file hard limit '${hard_limit}'"
+      return 0
+    fi
+    if (( hard_limit < min_open_files )); then
+      log "open-file soft limit is ${soft_limit}, but hard limit ${hard_limit} prevents raising it to ${min_open_files}"
+      return 0
+    fi
+  fi
+
+  if ulimit -Sn "${min_open_files}" 2>/dev/null; then
+    log "raised open-file soft limit: ${soft_limit} -> $(ulimit -Sn)"
+  else
+    log "could not raise open-file soft limit from ${soft_limit} to ${min_open_files}"
+  fi
 }
 
 normalize_gfxstream_vulkan_mode() {
@@ -266,11 +318,11 @@ confirm_reset() {
   return 0
 }
 
-normalize_userdata_gb() {
+normalize_datagb() {
   local data_gb="$1"
 
   if [[ ! "${data_gb}" =~ ^[1-9][0-9]*$ ]]; then
-    die "USERDATA_GB must be a positive whole number of gigabytes"
+    die "DATAGB must be a positive whole number of gigabytes"
   fi
 
   printf '%s\n' "${data_gb}"
@@ -301,16 +353,16 @@ parse_start_options() {
         export IKA_GFXSTREAM_VULKAN="${GFXSTREAM_VULKAN_MODE}"
         shift
         ;;
-      --userdata_gb=*)
-        USERDATA_GB="$(normalize_userdata_gb "${1#*=}")"
-        export USERDATA_GB
+      --datagb=*)
+        DATAGB="$(normalize_datagb "${1#*=}")"
+        export DATAGB
         shift
         ;;
-      --userdata_gb)
+      --datagb)
         shift
-        [[ $# -gt 0 ]] || die "--userdata_gb requires a value"
-        USERDATA_GB="$(normalize_userdata_gb "$1")"
-        export USERDATA_GB
+        [[ $# -gt 0 ]] || die "--datagb requires a value"
+        DATAGB="$(normalize_datagb "$1")"
+        export DATAGB
         shift
         ;;
       *)
@@ -362,15 +414,15 @@ usage() {
 
 Usage:
 
-  ${SCRIPT_NAME} start [-f|--fullscreen] [--gfxstream-vulkan=auto|on|off] [--userdata_gb=GB] [--setting=arg] ...
+  ${SCRIPT_NAME} start [-f|--fullscreen] [--gfxstream-vulkan=auto|on|off] [--datagb=GB] [--setting=arg] ...
   ${SCRIPT_NAME} stop
-  ${SCRIPT_NAME} restart [-f|--fullscreen] [--gfxstream-vulkan=auto|on|off] [--userdata_gb=GB] ...
+  ${SCRIPT_NAME} restart [-f|--fullscreen] [--gfxstream-vulkan=auto|on|off] [--datagb=GB] ...
   ${SCRIPT_NAME} reset [Delete everything and start fresh]
 
 Example:
 
   ${SCRIPT_NAME} start --cpus=2 --memory_mb=2048 --dpi=240 --fullscreen
-  ${SCRIPT_NAME} start --userdata_gb=128
+  ${SCRIPT_NAME} start --datagb=128
   ${SCRIPT_NAME} restart --gfxstream-vulkan=on
 
 Environment:
@@ -380,7 +432,7 @@ Environment:
                          only on Apple Silicon 16K-page hosts or when the
                          primary host Vulkan device is llvmpipe; on forces
                          GLES+Vulkan; off forces GLES-only gfxstream.
-  USERDATA_GB            Size of a newly created userdata image, in GB.
+  DATAGB                 Size of a newly created userdata image, in GB.
   IKA_SCRCPY_EXTRA_ARGS  Extra whitespace-separated args appended to scrcpy
                          (example: --keyboard=uhid --no-clipboard-autosync)
   IKA_SCRCPY_VIDEO_SOURCE
@@ -508,41 +560,39 @@ split_start_args() {
   fi
 }
 
+# Largest "current" Wayland output mode as WxH. Probed at most once per run and
+# cached: a single start queries it more than once (DPI heuristic + display
+# ceiling) and spawning wayland-info is comparatively expensive.
+_host_display_size_probed=""
+_host_display_size_value=""
 host_display_size() {
-  command -v wayland-info >/dev/null 2>&1 || return 1
-
-  wayland-info 2>/dev/null | awk '
-    /^[[:space:]]*mode:/ {
-      in_mode = 1
-      width = 0
-      height = 0
-      next
-    }
-    in_mode {
-      if (match($0, /width:[[:space:]]*([0-9]+)/, w)) {
-        width = w[1]
-      }
-      if (match($0, /height:[[:space:]]*([0-9]+)/, h)) {
-        height = h[1]
-      }
-      if ($0 ~ /flags:/) {
-        if ($0 ~ /current/ && width && height) {
-          area = width * height
-          if (area > best_area) {
-            best_area = area
-            best_width = width
-            best_height = height
+  if [[ -z "${_host_display_size_probed}" ]]; then
+    _host_display_size_probed="yes"
+    if command -v wayland-info >/dev/null 2>&1; then
+      _host_display_size_value="$(
+        wayland-info 2>/dev/null | awk '
+          /mode:/ { in_mode = 1; width = 0; height = 0; next }
+          in_mode && /width:/ {
+            w = $0; sub(/.*width:[[:space:]]*/, "", w);  width  = int(w)
+            h = $0; sub(/.*height:[[:space:]]*/, "", h); height = int(h)
           }
-        }
-        in_mode = 0
-      }
-    }
-    END {
-      if (best_width && best_height) {
-        printf "%sx%s\n", best_width, best_height
-      }
-    }
-  '
+          in_mode && /flags:/ {
+            if (/current/ && width && height) {
+              area = width * height
+              if (area > best_area) {
+                best_area = area; best_width = width; best_height = height
+              }
+            }
+            in_mode = 0
+          }
+          END { if (best_width && best_height) printf "%sx%s\n", best_width, best_height }
+        ' || true
+      )"
+    fi
+  fi
+
+  [[ -n "${_host_display_size_value}" ]] || return 1
+  printf '%s\n' "${_host_display_size_value}"
 }
 
 has_display_size_override() {
@@ -556,14 +606,6 @@ has_display_size_override() {
   done
 
   return 1
-}
-
-current_scrcpy_dpi() {
-  if [[ "${SCRCPY_DPI_FLAG}" =~ ^--dpi=([0-9]+)$ ]]; then
-    printf '%s\n' "${BASH_REMATCH[1]}"
-  else
-    printf 'unknown\n'
-  fi
 }
 
 append_default_display_arg() {
@@ -586,10 +628,6 @@ append_default_display_arg() {
 
   width="${BASH_REMATCH[1]}"
   height="${BASH_REMATCH[2]}"
-  if (( width <= 0 || width > 65535 || height <= 0 || height > 65535 )); then
-    log "ignoring invalid host display size: ${size}"
-    return 0
-  fi
 
   args_array+=("--display=width=${width},height=${height},dpi=${dpi},refresh_rate_hz=60")
   log "display ceiling: ${width}x${height}/${dpi}"
@@ -602,7 +640,7 @@ is_apple_silicon_16k_host() {
   arch="$(uname -m 2>/dev/null || true)"
   [[ "${arch}" == "aarch64" || "${arch}" == "arm64" ]] || return 1
 
-  page_size="$(getconf PAGESIZE 2>/dev/null || getconf PAGE_SIZE 2>/dev/null || echo 0)"
+  page_size="$(getconf PAGESIZE 2>/dev/null || echo 0)"
   [[ "${page_size}" =~ ^[0-9]+$ ]] || return 1
   (( page_size > 4096 )) || return 1
 
@@ -638,27 +676,31 @@ primary_vulkan_device_is_llvmpipe() {
   grep -Eiq '(^[[:space:]]*(deviceName|driverName|driverID)[[:space:]]*=.*llvmpipe|DRIVER_ID_MESA_LLVMPIPE)' <<<"${primary_device}"
 }
 
-start_gpu_mode_value() {
-  local mode=""
+start_arg_value() {
+  local flag="$1"
+  local default_value="${2:-}"
+  shift 2
+  local value=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --gpu_mode=*)
-        mode="${1#*=}"
+      --${flag}=*|-${flag}=*)
+        value="${1#*=}"
         ;;
-      -gpu_mode=*)
-        mode="${1#*=}"
-        ;;
-      --gpu_mode|-gpu_mode)
+      --${flag}|-${flag})
         shift
-        [[ $# -gt 0 ]] || die "--gpu_mode requires a value"
-        mode="$1"
+        [[ $# -gt 0 ]] || die "--${flag} requires a value"
+        value="$1"
         ;;
     esac
     shift || true
   done
 
-  printf '%s\n' "${mode:-${CVD_GPU_DEFAULTS[gpu_mode]}}"
+  printf '%s\n' "${value:-${default_value}}"
+}
+
+start_gpu_mode_value() {
+  start_arg_value "gpu_mode" "${CVD_GPU_DEFAULTS[gpu_mode]}" "$@"
 }
 
 append_gfxstream_vulkan_args() {
@@ -675,7 +717,7 @@ append_gfxstream_vulkan_args() {
   gpu_mode="$(start_gpu_mode_value "$@")"
   CVD_GPU_MODE="${gpu_mode}"
   if [[ "${gpu_mode}" != "gfxstream" ]]; then
-    CVD_GRAPHICS_DRIVER_MESSAGE="gpu_mode=${gpu_mode} (gfxstream-vulkan=${mode} ignored)"
+    CVD_GRAPHICS_DRIVER_MESSAGE="GPU is ${gpu_mode} (gfxstream-vulkan=${mode} ignored)"
     log "gfxstream-vulkan=${mode} has no effect with gpu_mode=${gpu_mode}"
     return 0
   fi
@@ -729,14 +771,14 @@ instance_has_userdata_state() {
 append_data_storage_args() {
   local -n args_array="$1"
   shift
-  local data_gb="${USERDATA_GB:-}"
+  local data_gb="${DATAGB:-}"
   local data_mb
   local explicit_data_policy="false"
   local explicit_data_size="false"
 
   [[ -n "${data_gb}" ]] || return 0
 
-  data_gb="$(normalize_userdata_gb "${data_gb}")"
+  data_gb="$(normalize_datagb "${data_gb}")"
   data_mb=$((data_gb * 1024))
 
   if user_supplied_flag "data_policy" "$@"; then
@@ -748,7 +790,7 @@ append_data_storage_args() {
 
   if [[ "${explicit_data_policy}" != "true" ]] && instance_has_userdata_state; then
     CVD_DATA_STORAGE_MESSAGE="Ignored userdata resize; you must reset the instance first: 'ika reset'"
-    log "USERDATA_GB=${data_gb} requested, but existing userdata state is present; run '${SCRIPT_NAME} reset' before the next start to apply it."
+    log "DATAGB=${data_gb} requested, but existing userdata state is present; run '${SCRIPT_NAME} reset' before the next start to apply it."
     return 0
   fi
 
@@ -910,24 +952,13 @@ EOF
 }
 
 resolve_adb_serial() {
-  local adb_ip_and_port
-  local adb_port
+  local adb_ip_and_port=""
 
   if [[ -f "${CVD_CONFIG_PATH}" ]]; then
     adb_ip_and_port="$(grep -oE '"adb_ip_and_port"[[:space:]]*:[[:space:]]*"[^"]+"' "${CVD_CONFIG_PATH}" | head -n1 | sed -E 's/.*"([^"]+)"$/\1/' || true)"
-    if [[ -n "${adb_ip_and_port}" ]]; then
-      printf '%s\n' "${adb_ip_and_port}"
-      return 0
-    fi
-
-    adb_port="$(grep -oE '"adb_host_port"[[:space:]]*:[[:space:]]*[0-9]+' "${CVD_CONFIG_PATH}" | head -n1 | grep -oE '[0-9]+$' || true)"
-    if [[ -n "${adb_port}" ]]; then
-      printf '0.0.0.0:%s\n' "${adb_port}"
-      return 0
-    fi
   fi
 
-  printf '0.0.0.0:6520\n'
+  printf '%s\n' "${adb_ip_and_port:-0.0.0.0:6520}"
 }
 
 resolve_cuttlefish_frames_socket() {
@@ -1087,13 +1118,10 @@ start_scrcpy_with_retries() {
   )
 
   case "${scrcpy_video_source}" in
-    auto|"")
+    ""|auto|raw)
       use_cuttlefish_frames=true
       ;;
-    raw|cuttlefish|cuttlefish-frames)
-      use_cuttlefish_frames=true
-      ;;
-    encoded|adb|display)
+    encoded)
       use_cuttlefish_frames=false
       ;;
     *)
@@ -1102,8 +1130,8 @@ start_scrcpy_with_retries() {
       ;;
   esac
 
-  if [[ -n "${SCRCPY_DPI_FLAG}" ]]; then
-    scrcpy_cmd+=("${SCRCPY_DPI_FLAG}")
+  if [[ -n "${SCRCPY_DPI}" ]]; then
+    scrcpy_cmd+=("--dpi=${SCRCPY_DPI}")
   fi
   scrcpy_cmd+=(
     --force-adb-forward
@@ -1247,12 +1275,16 @@ log_start_context() {
   local launcher_log="$1"
   shift
   local scrcpy_dpi
+  local cpu_count
+  local memory_mb
   local start_message
-  scrcpy_dpi="$(current_scrcpy_dpi)"
+  scrcpy_dpi="${SCRCPY_DPI:-unknown}"
+  cpu_count="$(start_arg_value "cpus" "${CVD_COMPUTE_DEFAULTS[cpus]}" "$@")"
+  memory_mb="$(start_arg_value "memory_mb" "${CVD_COMPUTE_DEFAULTS[memory_mb]}" "$@")"
 
-  start_message="Starting Cuttlefish."
+  start_message="Starting Cuttlefish: ${cpu_count} Cores, ${memory_mb} MB"
   if [[ -n "${CVD_GRAPHICS_DRIVER_MESSAGE}" ]]; then
-    start_message+=" GPU: ${CVD_GRAPHICS_DRIVER_MESSAGE}"
+    start_message+=", ${CVD_GRAPHICS_DRIVER_MESSAGE}"
   fi
   start_message+=" ${scrcpy_dpi} DPI"
   log "${start_message}"
@@ -1283,15 +1315,16 @@ start_cvd() {
 
   require_executable "${CVD_BIN}" "cvd launcher"
   check_required_groups
+  ensure_open_file_limit
   launcher_log="${CVD_LAUNCHER_LOG}"
   adb_serial="$(resolve_adb_serial)"
   start_epoch="$(date +%s)"
   split_start_args args scrcpy_dpi "$@"
-  SCRCPY_DPI_FLAG="--dpi=${scrcpy_dpi}"
+  SCRCPY_DPI="${scrcpy_dpi}"
 
   if has_live_cvd_processes; then
     log "Cuttlefish is already running under ${CVD_HOME_DIR}"
-    if [[ -n "${USERDATA_GB:-}" ]]; then
+    if [[ -n "${DATAGB:-}" ]]; then
       respond_console "Ignored userdata resize; you must reset the instance first: 'ika reset'"
     else
       respond_console "Instance already running, local console will be restarted"

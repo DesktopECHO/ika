@@ -1,4 +1,4 @@
-Source: cuttlefish-frontend
+Source: ika-frontend
 Maintainer: Cuttlefish Team <cloud-android-ext@google.com>
 Section: misc
 Priority: optional
@@ -11,9 +11,9 @@ Build-Depends: config-package-dev,
 Standards-Version: 4.5.0
 Rules-Requires-Root: no
 
-Package: cuttlefish-user
+Package: ika-user
 Architecture: any
-Depends: cuttlefish-base,
+Depends: ika-base,
          adduser,
          openssl,
          ${misc:Depends},
@@ -23,9 +23,9 @@ Description: Cuttlefish Android Virtual Device companion package
  Contains the host signaling server supporting multi-device flows
  over WebRTC.
 
-Package: cuttlefish-orchestration
+Package: ika-orchestration
 Architecture: any
-Depends: cuttlefish-user,
+Depends: ika-user,
          adduser,
          openssl,
          nginx,

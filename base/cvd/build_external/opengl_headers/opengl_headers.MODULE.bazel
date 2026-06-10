@@ -1,7 +1,8 @@
-new_local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
+git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 
-new_local_repository(
+git_repository(
     name = "opengl_headers",
     build_file = "@//build_external/opengl_headers:BUILD.opengl_headers.bazel",
-    path = "/usr",
+    commit = "b53ca669bea4715b6d5fa53c459f47a1fecd7944",
+    remote = "https://github.com/KhronosGroup/OpenGL-Registry.git",
 )

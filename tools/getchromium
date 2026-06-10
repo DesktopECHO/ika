@@ -41,30 +41,25 @@ UI_DUMP_PATH = "/sdcard/chromium-provision-ui.xml"
 FIRST_RUN_SIGNED_OUT_TEXT = "Stay signed out"
 DEFAULT_BROWSER_CANCEL_TEXT = "Cancel"
 
+def _adb(args, check):
+    try:
+        return subprocess.run(["adb"] + args, capture_output=True, text=True, check=check)
+    except FileNotFoundError:
+        print("!!! Error: ADB not found. Ensure android-tools is installed.")
+        sys.exit(1)
+
 def run_adb(args):
     try:
-        result = subprocess.run(["adb"] + args, capture_output=True, text=True, check=True)
-        return result.stdout.strip()
+        return _adb(args, check=True).stdout.strip()
     except subprocess.CalledProcessError as e:
         print(f"!!! ADB Error: {e.stderr}")
         sys.exit(1)
-    except FileNotFoundError:
-        print("!!! Error: ADB not found. Ensure android-tools is installed.")
-        sys.exit(1)
 
 def run_adb_best_effort(args):
-    try:
-        subprocess.run(["adb"] + args, capture_output=True, text=True, check=False)
-    except FileNotFoundError:
-        print("!!! Error: ADB not found. Ensure android-tools is installed.")
-        sys.exit(1)
+    _adb(args, check=False)
 
 def run_adb_optional(args):
-    try:
-        return subprocess.run(["adb"] + args, capture_output=True, text=True, check=False)
-    except FileNotFoundError:
-        print("!!! Error: ADB not found. Ensure android-tools is installed.")
-        sys.exit(1)
+    return _adb(args, check=False)
 
 def set_chromium_default_browser():
     print("Setting Chromium as the default browser...")

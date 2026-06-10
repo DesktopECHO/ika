@@ -1,0 +1,34 @@
+#!/usr/bin/make -f
+
+LINEAGEOS_ARCH := $(shell uname -m | sed 's/aarch64/arm64/')
+LINEAGEOS_SRC := $(CURDIR)/../../lineageos-$(LINEAGEOS_ARCH)
+LINEAGEOS_DEST := debian/ika-lineageos/usr/share/cuttlefish-common/lineageos
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	@true
+
+override_dh_auto_install:
+	install -d $(LINEAGEOS_DEST)
+	cp -a $(LINEAGEOS_SRC)/. $(LINEAGEOS_DEST)/
+
+override_dh_fixperms:
+	dh_fixperms
+	find $(LINEAGEOS_DEST) -type d ! -type l -exec chmod 755 '{}' +
+	find $(LINEAGEOS_DEST) ! -type l -exec chmod u+w '{}' +
+	find $(LINEAGEOS_DEST) ! -type l -exec chmod g=u '{}' +
+	find $(LINEAGEOS_DEST) -type d ! -type l -exec chmod a+rx '{}' +
+
+override_dh_makeshlibs:
+	@true
+
+override_dh_shlibdeps:
+	@true
+
+override_dh_dwz:
+	@true
+
+override_dh_strip:
+	@true

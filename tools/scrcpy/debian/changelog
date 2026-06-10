@@ -1,0 +1,5 @@
+ika-scrcpy (3.3.4) unstable; urgency=medium
+
+  * Package scrcpy as standalone package
+
+ -- DesktopECHO <build@desktopecho.com>  Mon, 09 Jun 2026 00:00:00 +0000

@@ -1,0 +1,5 @@
+# Ignore statically-linked libraries (b/414850137)
+ika-base binary: embedded-library
+
+# No intention to provide a manpage
+ika-base binary: no-manual-page

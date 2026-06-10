@@ -1,4 +1,4 @@
-cuttlefish-frontend (1.53.0) unstable; urgency=medium
+ika-frontend (1.53.0) unstable; urgency=medium
 
   * Mark 1.52 as stable by @Databean in
     https://github.com/google/android-cuttlefish/pull/2449

@@ -25,7 +25,11 @@ filegroup(
 
 cc_import(
     name = "wayland_server_shared",
-    shared_library = "lib64/libwayland-server.so",
+    shared_library = (
+        glob(["lib64/libwayland-server.so"], allow_empty = True) +
+        glob(["lib/x86_64-linux-gnu/libwayland-server.so"], allow_empty = True) +
+        glob(["lib/aarch64-linux-gnu/libwayland-server.so"], allow_empty = True)
+    )[0],
 )
 
 cc_library(

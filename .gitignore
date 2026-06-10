@@ -7,6 +7,9 @@
 /lineageos-arm64
 /lineageos-x86_64
 /lineageos/src
+/lineageos/prebuilts/native_bridge/*
+!/lineageos/prebuilts/native_bridge/.gitignore
+!/lineageos/prebuilts/native_bridge/README.md
 /.cache
 androguard.db-wal
 androguard.db-shm
@@ -15,11 +18,42 @@ androguard.db
 cvd-phone-slim.tar
 /.vscode
 /tools/__pycache__
-/lineageos/prebuilts/native_bridge/*
-!/lineageos/prebuilts/native_bridge/.gitignore
-!/lineageos/prebuilts/native_bridge/README.md
 
 /out/
 buildtimes.log
 /.ccache
 /.claude
+/deb
+
+# debhelper build artifacts
+*/debian/.debhelper/
+*/debian/*.debhelper.log
+*/debian/*.debhelper
+*/debian/*.substvars
+*/debian/debhelper-build-stamp
+*/debian/files
+base/debian/cuttlefish-*/
+base/debian/ika-*/
+frontend/debian/cuttlefish-*/
+frontend/debian/ika-*/
+tools/scrcpy/debian/ika-scrcpy/
+tools/scrcpy/debian/.debhelper/
+tools/scrcpy/debian/*.debhelper.log
+tools/scrcpy/debian/*.substvars
+tools/scrcpy/debian/debhelper-build-stamp
+tools/scrcpy/debian/files
+tools/scrcpy/_build/
+tools/lineageos/debian/ika-lineageos/
+tools/lineageos/debian/.debhelper/
+tools/lineageos/debian/*.debhelper.log
+tools/lineageos/debian/*.substvars
+tools/lineageos/debian/debhelper-build-stamp
+tools/lineageos/debian/files
+
+# Generated frontend version file
+frontend/src/operator/webui/src/environments/version.ts
+
+# Python bytecode
+**/__pycache__/
+*.pyc
+/base/rpm/vendor/__pycache__

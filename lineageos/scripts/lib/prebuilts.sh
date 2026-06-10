@@ -277,28 +277,28 @@ ensure_linux_x86_clang_prebuilt() {
   local clang_dir payload_name cached_commit fetched_commit link_target
 
   if git -C "$dest" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-	    payload_name="$linux_x86_clang_prebuilt_version"
-	    [[ -n "$payload_name" ]] || \
-	      payload_name="$(clang_marker_value "$(clang_marker_file "$dest")" payload || true)"
-	    [[ -n "$payload_name" ]] || payload_name="$(clang_payload_name_from_metadata "$dest" || true)"
-	    if [[ -n "$payload_name" && -L "$dest/$payload_name" ]]; then
-	      link_target="$(readlink "$dest/$payload_name")"
-	      case "$link_target" in
-	        *linux-arm64*|*aarch64*)
-	          log "removing ARM64 Clang overlay from x86 prebuilt path: ${dest#$workspace/}/$payload_name -> $link_target"
-	          rm -f "$dest/$payload_name"
-	          ;;
-	      esac
-	    fi
-	    if [[ -n "$payload_name" && -x "$dest/$payload_name/bin/clang" ]] && \
-	       executable_is_arm64_elf "$dest/$payload_name/bin/clang"; then
-	      log "removing ARM64 Clang payload from x86 prebuilt path: ${dest#$workspace/}/$payload_name"
-	      rm -rf "$dest/$payload_name"
-	    fi
-	    if [[ -n "$payload_name" && -x "$dest/$payload_name/bin/clang" ]]; then
-	      cached_commit="$(clang_cached_commit "$dest" "$payload_name" \
+    payload_name="$linux_x86_clang_prebuilt_version"
+    [[ -n "$payload_name" ]] || \
+      payload_name="$(clang_marker_value "$(clang_marker_file "$dest")" payload || true)"
+    [[ -n "$payload_name" ]] || payload_name="$(clang_payload_name_from_metadata "$dest" || true)"
+    if [[ -n "$payload_name" && -L "$dest/$payload_name" ]]; then
+      link_target="$(readlink "$dest/$payload_name")"
+      case "$link_target" in
+        *linux-arm64*|*aarch64*)
+          log "removing ARM64 Clang overlay from x86 prebuilt path: ${dest#$workspace/}/$payload_name -> $link_target"
+          rm -f "$dest/$payload_name"
+          ;;
+      esac
+    fi
+    if [[ -n "$payload_name" && -x "$dest/$payload_name/bin/clang" ]] && \
+       executable_is_arm64_elf "$dest/$payload_name/bin/clang"; then
+      log "removing ARM64 Clang payload from x86 prebuilt path: ${dest#$workspace/}/$payload_name"
+      rm -rf "$dest/$payload_name"
+    fi
+    if [[ -n "$payload_name" && -x "$dest/$payload_name/bin/clang" ]]; then
+      cached_commit="$(clang_cached_commit "$dest" "$payload_name" \
         "$linux_x86_clang_prebuilt_git_url" "$linux_x86_clang_prebuilt_git_ref" || true)"
-	      if [[ -n "$cached_commit" ]] && git -C "$dest" cat-file -e "$cached_commit^{commit}" 2>/dev/null; then
+      if [[ -n "$cached_commit" ]] && git -C "$dest" cat-file -e "$cached_commit^{commit}" 2>/dev/null; then
         log "using cached x86 Clang prebuilt ${dest#$workspace/}/$payload_name"
         sync_linux_x86_clang_soong_metadata "$dest" "$cached_commit"
         clang_exclude_payload "$dest" "$payload_name"
@@ -1045,12 +1045,12 @@ ensure_arm64_rust_prebuilt() {
     install_arm64_prebuilt_from_dir "$arm64_rust_prebuilt_dir" "$dest" "$probe" "Rust"
   elif [[ -n "$arm64_rust_prebuilt_archive" ]]; then
     install_arm64_prebuilt_from_archive "$arm64_rust_prebuilt_archive" "$dest" "$probe" "Rust"
-	  elif [[ -n "$arm64_rust_prebuilt_git_url" ]]; then
-	    install_arm64_prebuilt_from_git "$arm64_rust_prebuilt_git_url" \
-	      "$arm64_rust_prebuilt_git_ref" "$dest" "$probe" "Rust"
-	  else
-	    install_arm64_rust_from_upstream_dist "$version" "$dest"
-	  fi
+  elif [[ -n "$arm64_rust_prebuilt_git_url" ]]; then
+    install_arm64_prebuilt_from_git "$arm64_rust_prebuilt_git_url" \
+      "$arm64_rust_prebuilt_git_ref" "$dest" "$probe" "Rust"
+  else
+    install_arm64_rust_from_upstream_dist "$version" "$dest"
+  fi
 
   require_arm64_prebuilt_executable "$rustc" "ARM64 Rust rustc"
   require_arm64_rust_tools "$dest" "$version"

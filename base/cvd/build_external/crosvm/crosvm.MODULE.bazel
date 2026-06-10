@@ -60,6 +60,7 @@ crosvm_bin.annotation(
     patches = [
         "@//build_external/crosvm:PATCH.crosvm-composite-duplicate-components.patch",
         "@//build_external/crosvm:PATCH.crosvm-resize-display.patch",
+        "@//build_external/crosvm:PATCH.minijail-sys_common_mk.patch",
     ],
     deps = [
         "@@//:gfxstream_backend_import",

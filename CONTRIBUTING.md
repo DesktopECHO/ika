@@ -1,7 +1,7 @@
 # Contributing
 
 This repository is a DesktopECHO fork of `google/android-cuttlefish` with
-Fedora/Asahi packaging, the `ika` launcher, ika-scrcpy integration, and the
+RPM/Debian packaging, the `ika` launcher, ika-scrcpy integration, and the
 LineageOS Desktop product layer.
 
 Use normal GitHub pull requests for changes. Keep patches narrowly scoped, and
@@ -12,6 +12,7 @@ process and CLA requirements in the upstream repository.
 Useful local checks:
 
 ```bash
+bash -n ika-build tools/ika
 ./lineageos/scripts/lib/validate_build_inputs.sh ./lineageos/src
 ./tools/buildutils/build_packages.sh
 ```

@@ -1,4 +1,4 @@
-# e2e tests 
+# e2e Tests
 
 ## Orchestration tests
 
@@ -7,18 +7,18 @@ service and `cvd` installed.
 
 Run the test command from the `e2etests` directory.
 
-```
-bazel test --local_test_jobs=1 orchestration/...
+```bash
+bazel test --local_test_jobs=1 //orchestration/...
 ```
 
 ### Adding a new Go dependency
 
-If adding `github.com/gorilla/websocket`
+If adding `github.com/gorilla/websocket`:
 
-```
+```bash
 bazel run //:gazelle -- update-repos -to_macro=go_repositories.bzl%repos "github.com/gorilla/websocket"
 ```
 
-```
+```bash
 bazel run //:gazelle
 ```

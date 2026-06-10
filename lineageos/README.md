@@ -2,7 +2,7 @@
 
 LineageOS Desktop is a product layer for LineageOS 23.2 running in the Cuttlefish Android emulator. It is designed to be applied over an official LineageOS checkout with a local manifest.
 
-This document covers the first part of the ika build, producing the LineageOS Desktop ROM. The second part handles creation of Cuttlefish RPMs, including `ika-lineageos` and is documented in the project [README.md](../README.md). For the full end-to-end flow, start there.
+This document covers the first part of the ika build, producing the LineageOS Desktop ROM. The second part handles creation of host packages, including `ika-lineageos`, and is documented in the project [README.md](../README.md). For the full end-to-end flow, start there or run `../ika-build` from the repository root.
 
 This directory contains the product profile, overlays, manifests, validation scripts, and source-level patches that this phase applies to a LineageOS 23.2 source checkout.
 
@@ -97,7 +97,7 @@ This will build the ROM automatically for the running CPU architecture.
 For x86-64 hosts, append `all` to the command to build both ARM64 and x86-64 release bundles.
 
 The resulting `lineageos-arm64/` and/or `lineageos-x86_64/` directories at the ika
-repo root will be picked up by the `ika-lineageos` RPM in the second phase.
+repo root will be picked up by the `ika-lineageos` package in the second phase.
 
 ## How Stuff Works
 
@@ -140,7 +140,7 @@ ika/lineageos-arm64/
 ika/lineageos-x86_64/
 ```
 
-The `ika-lineageos` RPM built by `tools/buildutils/build_packages.sh`
+The `ika-lineageos` package built by `tools/buildutils/build_packages.sh`
 picks up the bundle matching the build host's architecture from that
 location. Each bundle includes `build-info.json`, `build-info.txt`, and, when
 `repo` can produce it, `source-manifest.xml`. These files record image

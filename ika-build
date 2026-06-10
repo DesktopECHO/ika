@@ -1,0 +1,323 @@
+#!/usr/bin/env bash
+#
+# ika-build — one-shot builder for the ika stack. Runs from a checkout of this
+# repository and, in order:
+#
+#   1. builds the LineageOS Desktop ROM   (lineageos/scripts/build_lineageos_desktop.sh)
+#   2. builds the host packages           (tools/buildutils/build_packages.sh)
+#   3. offers to install ika-base, ika-scrcpy, and ika-lineageos
+#
+# A reboot is required after installing; this script makes that explicit.
+
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${repo_dir}"
+
+# Reuse the canonical distro detection used by the build scripts.
+source "${repo_dir}/tools/buildutils/lib/common.sh"
+
+readonly ROM_BUILD="./lineageos/scripts/build_lineageos_desktop.sh"
+readonly PKG_BUILD="./tools/buildutils/build_packages.sh"
+readonly PRIMARY_PACKAGES=(ika-base ika-scrcpy ika-lineageos)
+
+auto_yes=false
+do_install=true
+install_only=false
+removed_existing=false
+declare -a rom_args=()
+declare -a pkg_files=()
+declare -a pkg_names=()
+family=""
+
+usage() {
+  cat <<EOF
+Usage: ./ika-build [options] [rom-build-args...]
+
+Builds the LineageOS Desktop ROM, then the host packages, then offers to
+install ${PRIMARY_PACKAGES[*]}.
+
+Options:
+      --auto-install
+                   Install the built packages without prompting.
+      --install-only
+                   Skip ROM and RPM/DEB builds; install existing packages
+                   without prompting.
+      --skip-install
+                   Build only; do not offer to install.
+  -h, --help       Show this help and exit.
+
+Any remaining arguments are forwarded to ${ROM_BUILD}
+(for example 'x86_64' or 'arm64' to build a single target).
+EOF
+}
+
+banner() {
+  printf '\n==> %s\n' "$*"
+}
+
+print_reboot_notice() {
+  cat <<'EOF'
+
+============================================================================
+  REBOOT REQUIRED
+============================================================================
+
+  You MUST reboot before the virtual device will start.
+
+  Installing ika-base adds your user to the kvm, cvdnetwork, render, and
+  video groups and installs udev rules, PAM resource limits, and the
+  Cuttlefish host resources. Your current login session, its limits, and the
+  live /dev/kvm permissions do NOT pick up this new state until you reboot.
+  Logging out and back in is NOT enough.
+
+      sudo reboot
+
+  After rebooting, launch the device with:
+
+      ika start
+
+============================================================================
+EOF
+}
+
+print_manual_install() {
+  local cmd
+  local -a install_paths=()
+  install_package_paths install_paths
+
+  case "${family}" in
+    rpm)    cmd="sudo dnf install --setopt=install_weak_deps=False $(shell_join "${install_paths[@]}")" ;;
+    debian) cmd="sudo apt install --no-install-recommends $(shell_join "${install_paths[@]}")" ;;
+  esac
+
+  cat <<EOF
+
+To install later, run this from ${repo_dir}:
+
+  ${cmd}
+
+EOF
+
+  # If none of the packages are currently installed, that manual command will
+  # be a first-time install and a reboot is required afterward. (A reinstall
+  # over existing packages does not need one.)
+  local -a installed=()
+  mapfile -t installed < <(installed_target_packages)
+  if (( ${#installed[@]} == 0 )); then
+    print_reboot_notice
+  fi
+}
+
+shell_join() {
+  local joined
+  printf -v joined '%q ' "$@"
+  printf '%s' "${joined% }"
+}
+
+newest_path() {
+  local -a paths=("$@")
+  local path
+
+  (( ${#paths[@]} )) || return 1
+
+  for path in "${paths[@]}"; do
+    printf '%s\0' "${path}"
+  done | sort -zV | tr '\0' '\n' | tail -n 1
+}
+
+host_rpm_arch() {
+  if command -v rpm >/dev/null 2>&1; then
+    rpm --eval '%{_arch}'
+  else
+    uname -m
+  fi
+}
+
+install_package_paths() {
+  local -n paths_ref="$1"
+  local pkg_path
+
+  paths_ref=()
+  for pkg_path in "${pkg_files[@]}"; do
+    case "${pkg_path}" in
+      /*|./*|../*) paths_ref+=("${pkg_path}") ;;
+      *)           paths_ref+=("./${pkg_path}") ;;
+    esac
+  done
+}
+
+# Populate pkg_files with the built primary packages for the detected distro.
+collect_packages() {
+  local pkg
+  local -a found
+  local selected
+  local rpm_arch=""
+  local -a missing=()
+
+  pkg_files=()
+  pkg_names=()
+  if [[ "${family}" == "rpm" ]]; then
+    rpm_arch="$(host_rpm_arch)"
+  fi
+
+  shopt -s nullglob
+  for pkg in "${PRIMARY_PACKAGES[@]}"; do
+    case "${family}" in
+      rpm)    found=( rpmbuild/RPMS/"${rpm_arch}"/"${pkg}"-[0-9]*.rpm ) ;;
+      debian) found=( deb/"${pkg}"_*.deb ) ;;
+    esac
+
+    if (( ${#found[@]} )); then
+      selected="$(newest_path "${found[@]}")"
+      pkg_files+=("${selected}")
+      pkg_names+=("${pkg}")
+    else
+      missing+=("${pkg}")
+    fi
+  done
+
+  if (( ${#missing[@]} )); then
+    banner "Warning: could not find built package(s): ${missing[*]}"
+    echo "They may have been skipped during the build (for example ika-lineageos" >&2
+    echo "when the lineageos-<arch> bundle is absent). Review the output above." >&2
+  fi
+}
+
+# Print the subset of named packages that is currently installed.
+installed_target_packages() {
+  local -a packages=()
+  local pkg
+
+  if (( $# )); then
+    packages=("$@")
+  else
+    packages=("${PRIMARY_PACKAGES[@]}")
+  fi
+
+  for pkg in "${packages[@]}"; do
+    case "${family}" in
+      rpm)
+        if rpm -q --quiet "${pkg}"; then
+          printf '%s\n' "${pkg}"
+        fi
+        ;;
+      debian)
+        if dpkg-query -W -f='${Status}\n' "${pkg}" 2>/dev/null \
+             | grep -q 'install ok installed'; then
+          printf '%s\n' "${pkg}"
+        fi
+        ;;
+    esac
+  done
+}
+
+# Remove already-installed copies only for packages that have replacement files
+# ready, so a missing optional build output is preserved.
+remove_installed_packages() {
+  local -a installed=()
+  mapfile -t installed < <(installed_target_packages "${pkg_names[@]}")
+
+  if (( ${#installed[@]} == 0 )); then
+    return 0
+  fi
+
+  banner "Removing already-installed version(s): ${installed[*]}"
+  case "${family}" in
+    rpm)    sudo dnf remove -y "${installed[@]}" ;;
+    debian) sudo apt-get remove -y "${installed[@]}" ;;
+  esac
+  removed_existing=true
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --auto-install)  auto_yes=true; shift ;;
+    --install-only)  install_only=true; shift ;;
+    --skip-install)  do_install=false; shift ;;
+    -h|--help)       usage; exit 0 ;;
+    --)              shift; rom_args+=("$@"); break ;;
+    *)               rom_args+=("$1"); shift ;;
+  esac
+done
+
+if [[ "${install_only}" == true && "${do_install}" != true ]]; then
+  echo "--install-only and --skip-install cannot be used together." >&2
+  exit 1
+fi
+
+if [[ "${install_only}" == true && ${#rom_args[@]} -gt 0 ]]; then
+  echo "--install-only does not accept ROM build arguments." >&2
+  exit 1
+fi
+
+if [[ "${install_only}" == true ]]; then
+  auto_yes=true
+fi
+
+if [[ "${install_only}" != true ]]; then
+  banner $'Building the LineageOS Desktop ROM\n    NOTE: First run will take a long time, 3 to 6+ hours.'
+  echo
+  sleep 2
+  "${ROM_BUILD}" "${rom_args[@]}"
+
+  banner "Building the host packages"
+  "${PKG_BUILD}"
+else
+  banner "Installing existing packages"
+fi
+
+family="$(detect_distro_family)"
+collect_packages
+
+if (( ${#pkg_files[@]} == 0 )); then
+  echo "No ika packages were found to install; nothing to do." >&2
+  exit 1
+fi
+
+banner "Built packages"
+printf '  %s\n' "${pkg_files[@]}"
+
+if [[ "${do_install}" != true ]]; then
+  print_manual_install
+  exit 0
+fi
+
+if [[ "${auto_yes}" != true ]]; then
+  if [[ ! -t 0 ]]; then
+    echo
+    echo "Not running interactively; skipping install."
+    print_manual_install
+    exit 0
+  fi
+
+  printf '\nInstall these %d package(s) now with sudo? [y/N] ' "${#pkg_files[@]}"
+  read -r reply || reply=""
+  case "${reply}" in
+    [yY]|[yY][eE][sS]) ;;
+    *)
+      echo "Skipping install."
+      print_manual_install
+      exit 0
+      ;;
+  esac
+fi
+
+remove_installed_packages
+
+banner "Installing packages (sudo)"
+declare -a install_paths=()
+install_package_paths install_paths
+case "${family}" in
+  rpm)    sudo dnf install -y --setopt=install_weak_deps=False "${install_paths[@]}" ;;
+  debian) sudo apt install -y --no-install-recommends "${install_paths[@]}" ;;
+esac
+
+# A reboot is only needed for a first-time install. A reinstall over existing
+# packages keeps the already-applied groups, limits, udev rules, and host
+# resources, so the reboot warning is suppressed in that case.
+if [[ "${removed_existing}" == true ]]; then
+  banner "Reinstall complete. Existing packages were replaced; no reboot needed."
+else
+  print_reboot_notice
+fi

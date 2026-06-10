@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# On Debian/Ubuntu, /usr/sbin is absent from the default non-root PATH.
+# Add it so system tools (modprobe, mkswap, swapon, zramctl, …) are reachable.
+case ":$PATH:" in
+  *:/usr/sbin:*) ;;
+  *) export PATH="$PATH:/usr/sbin:/sbin" ;;
+esac
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 overlay_dir="$(cd "$script_dir/.." && pwd)"
 ika_root="$(cd "$overlay_dir/.." && pwd)"
@@ -334,8 +341,7 @@ build_target() {
     vbmetaimage \
     vbmetasystemimage \
     target-files-package \
-    otatools \
-    -j"$jobs"
+    otatools
   built_target_outputs_complete "$product" "$product_out" "$host_package" "${thin_files[@]}" || \
     die "build completed but expected outputs are missing for $product"
   validate_cvd_target_fstabs "$product_out"

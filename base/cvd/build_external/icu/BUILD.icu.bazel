@@ -7,7 +7,11 @@ package(
 
 cc_import(
     name = "icuuc_shared",
-    shared_library = "lib64/libicuuc.so",
+    shared_library = (
+        glob(["lib64/libicuuc.so"], allow_empty = True) +
+        glob(["lib/x86_64-linux-gnu/libicuuc.so"], allow_empty = True) +
+        glob(["lib/aarch64-linux-gnu/libicuuc.so"], allow_empty = True)
+    )[0],
 )
 
 cc_library(

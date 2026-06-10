@@ -24,6 +24,8 @@ package_for_command() {
     apt:awk) printf '%s\n' gawk ;;
     apt:find) printf '%s\n' findutils ;;
     apt:file) printf '%s\n' file ;;
+    apt:gcc) printf '%s\n' gcc ;;
+    apt:libc6-dev) printf '%s\n' libc6-dev ;;
     apt:git) printf '%s\n' git ;;
     apt:git-lfs) printf '%s\n' git-lfs ;;
     apt:go) printf '%s\n' golang-go ;;
@@ -45,6 +47,12 @@ package_for_command() {
     apt:curl) printf '%s\n' curl ;;
     apt:ccache) printf '%s\n' ccache ;;
     apt:adb) printf '%s\n' adb ;;
+    apt:zip) printf '%s\n' zip ;;
+    apt:7z) printf '%s\n' 7zip ;;
+    apt:simg2img) printf '%s\n' android-sdk-libsparse-utils ;;
+    apt:fsck.erofs) printf '%s\n' erofs-utils ;;
+    apt:debugfs) printf '%s\n' e2fsprogs ;;
+    apt:keytool) printf '%s\n' default-jdk-headless ;;
     dnf:awk) printf '%s\n' gawk ;;
     dnf:find) printf '%s\n' findutils ;;
     dnf:file) printf '%s\n' file ;;
@@ -69,6 +77,12 @@ package_for_command() {
     dnf:curl) printf '%s\n' curl ;;
     dnf:ccache) printf '%s\n' ccache ;;
     dnf:adb) printf '%s\n' android-tools ;;
+    dnf:zip) printf '%s\n' zip ;;
+    dnf:7z) printf '%s\n' 7zip ;;
+    dnf:simg2img) printf '%s\n' android-tools ;;
+    dnf:fsck.erofs) printf '%s\n' erofs-utils ;;
+    dnf:debugfs) printf '%s\n' e2fsprogs ;;
+    dnf:keytool) printf '%s\n' java-latest-openjdk-headless ;;
     pacman:awk) printf '%s\n' gawk ;;
     pacman:find) printf '%s\n' findutils ;;
     pacman:file) printf '%s\n' file ;;
@@ -93,6 +107,12 @@ package_for_command() {
     pacman:curl) printf '%s\n' curl ;;
     pacman:ccache) printf '%s\n' ccache ;;
     pacman:adb) printf '%s\n' android-tools ;;
+    pacman:zip) printf '%s\n' zip ;;
+    pacman:7z) printf '%s\n' 7zip ;;
+    pacman:simg2img) printf '%s\n' android-tools ;;
+    pacman:fsck.erofs) printf '%s\n' erofs-utils ;;
+    pacman:debugfs) printf '%s\n' e2fsprogs ;;
+    pacman:keytool) printf '%s\n' jdk-openjdk ;;
     *) return 1 ;;
   esac
 }
@@ -187,10 +207,7 @@ download_file() {
 }
 
 ensure_host_commands() {
-  local -a required=(git git-lfs python3 tar awk find readlink rsync install mktemp file readelf adb)
-  if host_is_arm64; then
-    required+=(lz4 pahole mogrify)
-  fi
+  local -a required=(git git-lfs python3 tar awk find readlink rsync install mktemp file readelf adb zip 7z simg2img fsck.erofs debugfs lz4 pahole mogrify)
   local -a missing=()
   local cmd
 
@@ -209,6 +226,17 @@ ensure_host_commands() {
 
   (( ${#missing[@]} == 0 )) || \
     die "missing required host tools: ${missing[*]}"
+
+  # crtbeginS.o is split from gcc into libgcc-<ver>-dev on Debian trixie+
+  if ! compgen -G '/usr/lib/gcc/*/*/crtbeginS.o' >/dev/null 2>&1; then
+    local _pm _gcc_ver
+    _pm="$(detect_package_manager 2>/dev/null)" || true
+    if [[ "$_pm" == "apt" ]]; then
+      _gcc_ver="$(apt-cache pkgnames 2>/dev/null | grep -E '^libgcc-[0-9]+-dev$' | \
+        grep -oE '[0-9]+' | sort -n | tail -1)"
+      [[ -n "$_gcc_ver" ]] && install_packages apt "libgcc-${_gcc_ver}-dev" || true
+    fi
+  fi
 
   ensure_downloader
 }

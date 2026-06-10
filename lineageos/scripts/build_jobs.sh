@@ -1,32 +1,11 @@
 logical_cpu_count() {
   local count
-
-  if command -v nproc >/dev/null 2>&1; then
-    count="$(nproc 2>/dev/null || true)"
-    if [[ "$count" =~ ^[0-9]+$ && "$count" -gt 0 ]]; then
-      printf '%s\n' "$count"
-      return 0
-    fi
+  count="$(nproc 2>/dev/null || true)"
+  if [[ "$count" =~ ^[0-9]+$ && "$count" -gt 0 ]]; then
+    printf '%s\n' "$count"
+  else
+    printf '%s\n' 1
   fi
-
-  if command -v getconf >/dev/null 2>&1; then
-    count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
-    if [[ "$count" =~ ^[0-9]+$ && "$count" -gt 0 ]]; then
-      printf '%s\n' "$count"
-      return 0
-    fi
-  fi
-
-  if [[ -r /proc/cpuinfo ]]; then
-    count="$(awk -F: '/^processor[[:space:]]*:/ { n++ } END { print n + 0 }' \
-      /proc/cpuinfo 2>/dev/null || true)"
-    if [[ "$count" =~ ^[0-9]+$ && "$count" -gt 0 ]]; then
-      printf '%s\n' "$count"
-      return 0
-    fi
-  fi
-
-  printf '%s\n' 1
 }
 
 physical_memory_total_kib() {

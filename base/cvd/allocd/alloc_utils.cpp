@@ -16,6 +16,7 @@
 #include "allocd/alloc_utils.h"
 
 #include <stdint.h>
+#include <unistd.h>
 
 #include <fstream>
 #include <string_view>
@@ -39,6 +40,17 @@
 
 namespace cuttlefish {
 namespace {
+
+static std::string FindDnsmasq() {
+  for (const auto* candidate : {"/usr/bin/dnsmasq", "/usr/sbin/dnsmasq", "/sbin/dnsmasq"}) {
+    if (access(candidate, X_OK) == 0) {
+      return candidate;
+    }
+  }
+  return "dnsmasq";
+}
+
+static const std::string kDnsmasq = FindDnsmasq();
 
 // Read upstream DNS servers from the host. Prefers
 // /run/systemd/resolve/resolv.conf (real upstreams written by systemd-resolved)
@@ -315,7 +327,7 @@ bool StartDnsmasq(std::string_view bridge_name, std::string_view gateway,
   GetHostDnsServers(dns_servers, dns6_servers);
 
   return Execute(
-             {"dnsmasq", "--port=0", "--strict-order", "--except-interface=lo",
+             {kDnsmasq, "--port=0", "--strict-order", "--except-interface=lo",
               absl::StrCat("--interface=", bridge_name),
               absl::StrCat("--listen-address=", gateway), "--bind-interfaces",
               absl::StrCat("--dhcp-range=", dhcp_range),

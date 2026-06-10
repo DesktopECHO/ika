@@ -14,14 +14,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Install Bazel on Fedora.
+# Install Bazel (via Bazelisk) on Fedora or Debian-based systems.
 
 set -e
 
 BAZELISK_VERSION=v1.25.0
 
+function install_prerequisites() {
+  if command -v dnf >/dev/null 2>&1; then
+    dnf install -y curl unzip zip
+  elif command -v apt-get >/dev/null 2>&1; then
+    apt-get install -y --no-install-recommends curl unzip zip
+  fi
+}
+
 function install_bazel_x86_64() {
-  dnf install -y curl unzip zip
+  install_prerequisites
   tmpdir="$(mktemp -d -t bazel_installer_XXXXXX)"
   trap 'rm -rf "$tmpdir"' EXIT
   pushd "${tmpdir}"
@@ -31,7 +39,7 @@ function install_bazel_x86_64() {
 }
 
 function install_bazel_aarch64() {
-  dnf install -y curl unzip zip
+  install_prerequisites
   tmpdir="$(mktemp -d -t bazel_installer_XXXXXX)"
   trap 'rm -rf "$tmpdir"' EXIT
   pushd "${tmpdir}"

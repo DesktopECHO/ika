@@ -1,0 +1,15 @@
+Source: ika-lineageos
+Maintainer: Cuttlefish Team <cloud-android-ext@google.com>
+Section: misc
+Priority: optional
+Build-Depends: debhelper-compat (= 12)
+Standards-Version: 4.5.0
+Rules-Requires-Root: no
+
+Package: ika-lineageos
+Architecture: amd64 arm64
+Depends: ika-base,
+         ${misc:Depends}
+Description: LineageOS for Cuttlefish host
+ Contains LineageOS 23 for use by this Cuttlefish workflow, installed under
+ /usr/share/cuttlefish-common/lineageos.

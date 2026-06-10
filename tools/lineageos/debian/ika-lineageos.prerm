@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove)
+        manifest=/var/lib/cuttlefish-lineageos/created-symlinks
+        if [ -f "$manifest" ]; then
+            tac "$manifest" | while read -r target; do
+                expected="/usr/share/cuttlefish-common/lineageos/${target#/usr/lib/cuttlefish-common/}"
+                if [ -L "$target" ] && [ "$(readlink "$target")" = "$expected" ]; then
+                    rm -f "$target"
+                fi
+            done
+            rm -f "$manifest"
+        fi
+        ;;
+esac
+
+#DEBHELPER#

@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <fstream>
 #include <string_view>
+#include <unistd.h>
 
 #include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
@@ -98,6 +99,22 @@ Result<void> CreateBridge(std::string_view name) {
 }
 
 namespace {
+
+// /usr/sbin is not in the PATH for non-root users on Debian/Ubuntu, so nft
+// won't be found by execvpe("nft", ...) even though it exists at /usr/sbin/nft.
+// Search known sbin locations as a fallback, mirroring the upstream
+// SearchForIptables() pattern.
+static std::string FindNft() {
+  for (const auto* candidate : {"/usr/bin/nft", "/usr/sbin/nft", "/sbin/nft"}) {
+    if (access(candidate, X_OK) == 0) {
+      return candidate;
+    }
+  }
+  return "nft";
+}
+
+static const std::string kNft = FindNft();
+
 // Idempotent: `nft add table/set/chain` returns success if the object exists.
 // The masquerade rule itself is NOT idempotent on `add rule`, so we detect
 // it by listing the chain and grep-ing the rule's stable signature; only
@@ -105,15 +122,15 @@ namespace {
 // the FirewallAddTrustedInterface comment below), so the helpers we exec
 // inherit CAP_NET_ADMIN the same way `iptables` did.
 Result<void> NftEnsureTopology() {
-  (void)Execute({"nft", "add", "table", "ip", "cuttlefish"});
-  (void)Execute({"nft", "add", "set", "ip", "cuttlefish", "nat_sources",
+  (void)Execute({kNft, "add", "table", "ip", "cuttlefish"});
+  (void)Execute({kNft, "add", "set", "ip", "cuttlefish", "nat_sources",
                  "{ type ipv4_addr; flags interval; }"});
-  (void)Execute({"nft", "add", "chain", "ip", "cuttlefish", "postrouting",
+  (void)Execute({kNft, "add", "chain", "ip", "cuttlefish", "postrouting",
                  "{ type nat hook postrouting priority 100; policy accept; }"});
   if (Execute({"sh", "-c",
-               "nft list chain ip cuttlefish postrouting 2>/dev/null | "
+               kNft + " list chain ip cuttlefish postrouting 2>/dev/null | "
                "grep -q 'ip saddr @nat_sources masquerade'"}) != 0) {
-    (void)Execute({"nft", "add", "rule", "ip", "cuttlefish", "postrouting",
+    (void)Execute({kNft, "add", "rule", "ip", "cuttlefish", "postrouting",
                    "ip", "saddr", "@nat_sources", "masquerade"});
   }
   return {};
@@ -124,7 +141,7 @@ Result<void> NftConfig(std::string_view network, bool add) {
   CF_EXPECT(NftEnsureTopology());
   const std::string element =
       std::string("{ ") + std::string(network) + " }";
-  CF_EXPECT(Execute({"nft", add ? "add" : "delete", "element", "ip",
+  CF_EXPECT(Execute({kNft, add ? "add" : "delete", "element", "ip",
                      "cuttlefish", "nat_sources", element}) == 0,
             "NftConfig");
   return {};

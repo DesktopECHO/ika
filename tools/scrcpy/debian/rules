@@ -1,0 +1,45 @@
+#!/usr/bin/make -f
+
+SCRCPY_SRC := $(CURDIR)/../../scrcpy
+BUILD_DIR  := $(CURDIR)/_build
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	meson setup $(SCRCPY_SRC) $(BUILD_DIR) \
+	    --buildtype=release \
+	    --prefix=/usr/lib/cuttlefish-common \
+	    --bindir=bin \
+	    -Dcompile_app=true \
+	    -Dcompile_server=true \
+	    -Dprebuilt_server=$(SCRCPY_SRC)/scrcpy-server
+
+override_dh_auto_build:
+	meson compile -C $(BUILD_DIR)
+
+override_dh_auto_install:
+	DESTDIR=$(CURDIR)/debian/ika-scrcpy meson install -C $(BUILD_DIR)
+	install -d $(CURDIR)/debian/ika-scrcpy/usr/share/applications
+	install -d $(CURDIR)/debian/ika-scrcpy/usr/share/icons/hicolor/256x256/apps
+	install -m 0644 \
+	    $(CURDIR)/debian/ika-scrcpy/usr/lib/cuttlefish-common/share/applications/scrcpy.desktop \
+	    $(CURDIR)/debian/ika-scrcpy/usr/share/applications/ika-scrcpy.desktop
+	install -m 0644 \
+	    $(CURDIR)/debian/ika-scrcpy/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps/scrcpy.png \
+	    $(CURDIR)/debian/ika-scrcpy/usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
+	sed -i \
+	    -e 's#^Exec=.*#Exec=ika start#' \
+	    -e 's#^Name=.*#Name=Ika#' \
+	    -e 's#^Icon=.*#Icon=ika-scrcpy#' \
+	    -e '/^StartupNotify=/a StartupWMClass=scrcpy' \
+	    $(CURDIR)/debian/ika-scrcpy/usr/share/applications/ika-scrcpy.desktop
+
+override_dh_auto_clean:
+	rm -rf $(BUILD_DIR)
+
+override_dh_dwz:
+	@true
+
+override_dh_strip:
+	@true

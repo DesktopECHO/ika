@@ -1,4 +1,4 @@
-Source: cuttlefish-common
+Source: ika-base
 Maintainer: Cuttlefish Team <cloud-android-ext@google.com>
 Section: misc
 Priority: optional
@@ -34,7 +34,7 @@ Build-Depends: bazel [amd64],
 Standards-Version: 4.5.0
 Rules-Requires-Root: no
 
-Package: cuttlefish-base
+Package: ika-base
 Architecture: any
 Depends: adduser,
          binfmt-support [arm64],
@@ -75,47 +75,45 @@ Depends: adduser,
          ${misc:Depends},
          ${shlibs:Depends}
 Pre-Depends: ${misc:Pre-Depends}
-Breaks: cuttlefish-common (<= 0.9.24)
+Breaks: ika-common (<= 0.9.24)
 Description: Cuttlefish Android Virtual Device companion package
  Contains set of tools and binaries required to boot up and manage
  Cuttlefish Android Virtual Device that are used in all deployments.
 
-Package: cuttlefish-common
+Package: ika-common
 Architecture: any
-Depends: cuttlefish-base,
-         cuttlefish-user,
-         cuttlefish-defaults,
+Depends: ika-base,
+         ika-user,
+         ika-defaults,
          ${misc:Depends}
 Pre-Depends: ${misc:Pre-Depends}
 Description: Cuttlefish Android Virtual Device companion package
  Metapackage ensuring all packages needed to run and interact with
  Cuttlefish device are installed.
 
-Package: cuttlefish-integration
+Package: ika-integration
 Architecture: any
-Depends: cuttlefish-base,
+Provides: ${diverted-files}
+Depends: ika-base,
          qemu-system-arm (>= 2.8.0),
          qemu-system-x86 (>= 2.8.0),
          qemu-system-misc (>= 2.8.0),
          ${misc:Depends}
 Pre-Depends: ${misc:Pre-Depends}
 Conflicts: ${diverted-files}
-Provides: ${diverted-files}
 Description: Utilities for Android cuttlefish devices in the cloud
  Configuration and utilities for Android cuttlefish devices running on
  Google Compute Engine. Not intended for use on developer machines.
 
-Package: cuttlefish-defaults
+Package: ika-defaults
 Architecture: any
-Build-Depends: bazel [amd64],
-               dh-exec
-Depends: cuttlefish-base,
+Depends: ika-base,
 Description: May potentially enable new or experimental cuttlefish
  features before being enabled by default.
 
-Package: cuttlefish-metrics
+Package: ika-metrics
 Architecture: any
-Depends: cuttlefish-base,
+Depends: ika-base,
          ${misc:Depends}
 Pre-Depends: ${misc:Pre-Depends}
 Description: Enables metrics transmissions to Google.

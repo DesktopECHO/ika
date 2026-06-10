@@ -18,7 +18,7 @@ readonly MAX_RETRIES="${CUTTLEFISH_BAZEL_GIT_MIRROR_RETRIES:-3}"
 readonly RETRY_DELAY="${CUTTLEFISH_BAZEL_GIT_MIRROR_RETRY_DELAY:-10}"
 
 git_clean() {
-  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git "$@"
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c safe.bareRepository=all "$@"
 }
 
 retry_command() {
@@ -82,7 +82,7 @@ ensure_mirror() {
 
   mkdir -p "${MIRROR_ROOT}"
 
-  if git -C "${mirror_path}" rev-parse --git-dir >/dev/null 2>&1; then
+  if git_clean -C "${mirror_path}" rev-parse --git-dir >/dev/null 2>&1; then
     echo "Refreshing local ${mirror_name} git mirror at ${mirror_path}" >&2
     ensure_remote_origin "${mirror_path}" "${primary_remote}"
     if ! retry_command "refresh ${mirror_name} mirror from ${primary_remote}" fetch_mirror "${mirror_path}"; then
@@ -132,7 +132,7 @@ ensure_minijail_mirror() {
 
   mkdir -p "${MIRROR_ROOT}"
 
-  if ! git -C "${mirror_path}" rev-parse --git-dir >/dev/null 2>&1; then
+  if ! git_clean -C "${mirror_path}" rev-parse --git-dir >/dev/null 2>&1; then
     if [[ -e "${mirror_path}" ]]; then
       local broken_path="${mirror_path}.broken.$(date +%s)"
       echo "Moving invalid minijail mirror aside: ${mirror_path} -> ${broken_path}" >&2

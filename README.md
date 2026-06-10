@@ -4,46 +4,31 @@
 
 This project originally started as an effort to get [Cuttlefish](https://source.android.com/setup/create/cuttlefish) (Google's Android Virtual Device built on Debian tooling) running on [Fedora Asahi Remix](https://asahilinux.org/), so the project was given the name **ika (イカ)**, the Japanese word for cuttlefish (or squid).
 
-The repository is a fork of [google/android-cuttlefish](https://github.com/google/android-cuttlefish), adapted for RPM-based distributions like Fedora Asahi Remix.  [Cuttlefish](https://source.android.com/setup/create/cuttlefish) is a configurable Android Virtual Device (AVD) that runs on Linux x86_64 and aarch64 hosts as well as Google Compute Engine.
+The repository is a fork of [google/android-cuttlefish](https://github.com/google/android-cuttlefish), adapted into a desktop-oriented ika workflow with RPM and Debian package builds.  [Cuttlefish](https://source.android.com/setup/create/cuttlefish) is a configurable Android Virtual Device (AVD) that runs on Linux x86_64 and aarch64 hosts as well as Google Compute Engine.
 
 ## Quick start
 
-First build the LineageOS ROM for your target architecture (x86-64 or Apple Silicon) then build Cuttlefish, CrosVM, and ika-scrcpy RPMs:
+For the normal local workflow, use `ika-build` from the repository root. It
+builds the LineageOS Desktop ROM, builds the host packages for the detected
+distribution family, and installs the primary runtime packages.
 
 ```bash
 # 1. Clone
 git clone https://github.com/DesktopECHO/ika.git
 cd ika
 
-# 2. Build the LineageOS Desktop ROM for both arches.
-#    First run: ~1-2h (downloads LineageOS 23.2 source, applies the overlay
-#    and source patches in lineageos/, builds the ARM64 and x86-64 Cuttlefish
-#    targets). The first signed build may prompt once for a signing identity
-#    and writes keys under ~/.android-certs by default. Incremental runs are
-#    much faster.
-#    Produces ./lineageos-arm64/ and ./lineageos-x86_64/ at the repo root.
-./lineageos/scripts/build_lineageos_desktop.sh
+# 2. Build and install.
+#    First run downloads LineageOS 23.2 source, applies the overlay and source
+#    patches in lineageos/, builds the Cuttlefish target for the host arch, and
+#    creates RPM or Debian packages. Incremental runs are much faster.
+./ika-build --auto-install
 
-# 3. Build the host Cuttlefish + LineageOS RPMs (~30-60 min first run).
-#    ika-lineageos bundles ./lineageos-<host_arch>/ from step 2 into
-#    /usr/share/cuttlefish-common/lineageos. If step 2 was skipped or only
-#    built the other arch, ika-lineageos is silently skipped here.
-./tools/buildutils/build_packages.sh
-
-# 4. Install the host packages and the bundled LineageOS tree.
-#    ika-base's %post detects your logged-in user and adds it to the
-#    required kvm / cvdnetwork / render / video groups automatically.
-sudo dnf install \
-  ./rpmbuild/RPMS/*/ika-base-*.rpm \
-  ./rpmbuild/RPMS/*/ika-scrcpy-*.rpm \
-  ./rpmbuild/RPMS/*/ika-lineageos-*.rpm
-
-# 5. Reboot.
-#    Required so group memberships, limits, udev rules, and Cuttlefish host
-#    resources are picked up cleanly. Logging out is not enough.
+# 3. Reboot.
+#    Required so group memberships, limits, udev rules, and device permissions
+#    are picked up cleanly. Logging out is not enough.
 sudo reboot
 
-# 6. Launch
+# 4. Launch
 ika start
 ```
 
@@ -53,19 +38,28 @@ The viewer uses Cuttlefish raw frames for both windowed and fullscreen
 sessions by default; set `IKA_SCRCPY_VIDEO_SOURCE=encoded` only if you need to
 fall back to ADB display capture for troubleshooting.
 
-### Rebuilding one phase
+### Rebuilding
 
-Once you have an initial build, you can rebuild either phase independently:
+Once you have an initial build, use the narrowest command that matches the work
+you changed:
 
+- **Full build + install** — re-run `./ika-build --auto-install`. Extra
+  arguments are forwarded to the ROM build, for example
+  `./ika-build --auto-install x86_64`.
+- **Install existing packages only** — run `./ika-build --install-only`. This
+  skips ROM and package builds, assumes yes to installation, and installs the
+  existing `ika-base`, `ika-scrcpy`, and `ika-lineageos` packages using `dnf`
+  or `apt` as appropriate.
 - **ROM only** — re-run `./lineageos/scripts/build_lineageos_desktop.sh` (or
   pass `arm64` / `x86_64` to limit it to one target). Use this after editing
   patches or overlays under `lineageos/`. Pass `RESET_PATCHED_PROJECTS=1` if
   you want patched source projects in the workspace reset before re-applying.
-- **RPMs only** — re-run `./tools/buildutils/build_packages.sh`. Use this
+- **Host packages only** — re-run `./tools/buildutils/build_packages.sh`. Use this
   after editing host sources under `base/` or `frontend/`, after editing the
-  RPM specs under `base/rpm/`, or whenever you've finished a fresh ROM
-  rebuild and want to repackage the `ika-lineageos` RPM with the new
-  contents.
+  package metadata under `base/rpm/`, `base/debian/`, `frontend/rpm/`, or
+  `frontend/debian/`, or whenever you've finished a fresh ROM rebuild and want
+  to repackage `ika-lineageos` with the new contents. Then run
+  `./ika-build --install-only` to install the package outputs.
 
 See [lineageos/README.md](lineageos/README.md) for ROM-build options (target
 subsets, microG release pinning, native-bridge sources, workspace overrides)
@@ -74,7 +68,7 @@ optional containerized RPM build.
 
 ## Managing the VM with `ika`
 
-After the RPMs are installed, `ika` is available on your `PATH` and can be used
+After the packages are installed, `ika` is available on your `PATH` and can be used
 to start, stop, and restart the packaged Cuttlefish environment.
 
 ```bash
@@ -84,8 +78,11 @@ ika start
 # Check whether the VM is running
 ika status
 
-# Stop the VM and clear instance state
+# Stop the VM
 ika stop
+
+# Factory reset the VM and clear instance state
+ika reset
 
 # Restart with new launch arguments
 ika restart --gpu_mode=gfxstream --cpus=8 --memory_mb=8192
@@ -95,7 +92,7 @@ ika restart --gfxstream-vulkan=on
 
 # Use a 128 GiB userdata image on first start after reset
 ika reset
-ika start --userdata_gb=128
+ika start --datagb=128
 
 # Show the built-in usage text
 ika help
@@ -103,9 +100,9 @@ ika help
 
 `ika start` and `ika restart` pass extra arguments directly to
 `cvd_internal_start`, so you can override launch settings on the command line.
-`stop` calls the matching low-level stop helper (`cvd_internal_stop` or
-`stop_cvd`) with `--clear_instance_dirs` and then cleans up local Cuttlefish
-processes.
+`ika stop` calls the matching low-level stop helper and then cleans up local
+Cuttlefish processes. `ika reset` is the destructive variant; it passes
+`--clear_instance_dirs` and removes the local Chromium-install stamp.
 
 By default `ika` uses:
 
@@ -120,7 +117,7 @@ By default `ika` uses:
 `guest_swiftshader` only as a troubleshooting fallback when host GPU
 acceleration is not usable.
 
-Set `USERDATA_GB` or pass `--userdata_gb=128` to choose the size, in gigabytes,
+Set `DATAGB` or pass `--datagb=128` to choose the size, in gigabytes,
 of a newly created userdata image. Existing userdata is preserved, so apply a
 new size by resetting first and then starting with the override.
 
@@ -134,19 +131,23 @@ ika restart --gfxstream-vulkan=off
 ika restart --gfxstream-vulkan=on
 ```
 
-`auto` is the default. On Apple Silicon hosts with 16 KiB pages, `auto`
-requests GLES-only gfxstream (`gfxstream-gles:gfxstream-composer`) because the
-Vulkan blob path has been unreliable there. On other hosts, `auto` leaves the
-normal Cuttlefish gfxstream defaults alone, so x86_64 keeps Vulkan enabled.
+`auto` is the default. On Apple Silicon hosts with 16 KiB pages, or when the
+primary host Vulkan device is llvmpipe, `auto` requests GLES-only gfxstream
+(`gfxstream-gles:gfxstream-composer`). On other hosts, `auto` leaves the normal
+Cuttlefish gfxstream defaults alone, so x86_64 systems with hardware Vulkan keep
+Vulkan enabled.
 
 Use `--gfxstream-vulkan=on` to re-enable gfxstream Vulkan for testing, or
 `--gfxstream-vulkan=off` to force GLES-only gfxstream. The same policy can be
 set with `IKA_GFXSTREAM_VULKAN=auto|off|on`; an explicit
 `--gpu_context_types=...` argument takes precedence.
 
-## Fedora RPM packages
+## Host Packages
 
-The repo currently builds these Fedora packages:
+The repo currently builds these host package names. On RPM distributions,
+outputs land under `rpmbuild/RPMS/`; on Debian-family distributions, outputs
+land under `deb/`. Non-primary packages are moved into an `extras/`
+subdirectory by `tools/buildutils/build_packages.sh`.
 
 * `ika-base` - Core host binaries, networking helpers, and system
   services
@@ -160,10 +161,10 @@ The repo currently builds these Fedora packages:
 * `ika-common` - Compatibility metapackage for the primary host packages
 * `ika-scrcpy` - Native viewer used by the `ika` launcher
 
-For the local Fedora/Asahi workflow, `ika-base`, `ika-scrcpy`, and
-`ika-lineageos` are the key packages. The RPM specs also provide and obsolete
-the old `cuttlefish-*` package names for upgrades, but newly built RPM files
-use the `ika-*` names.
+For the local workstation workflow, `ika-base`, `ika-scrcpy`, and
+`ika-lineageos` are the key packages. On RPM distributions, the specs also
+provide and obsolete the old `cuttlefish-*` package names for upgrades, but
+newly built package files use the `ika-*` names.
 
 ## Notes
 
@@ -173,10 +174,10 @@ on Apple Silicon 16 KiB-page hosts while keeping gfxstream GLES enabled;
 `guest_swiftshader` remains a fallback for isolating host GPU issues.
 
 `ika` expects your login session to be in `kvm`, `cvdnetwork`, `render`, and
-`video`. The `ika-base` RPM adds the installing user to these groups
-in its `%post` hook, but the active session, its PAM resource limits, and
-the live `/dev/kvm` udev permissions don't pick up the new state without a
-reboot — see step 5 of the Quick start for the full list of what's deferred.
+`video`. The `ika-base` package adds the installing user to these groups during
+package configuration, but the active session, its PAM resource limits, and the
+live `/dev/kvm` udev permissions don't pick up the new state without a
+reboot — see step 3 of the Quick start for the full list of what's deferred.
 
 Bazel is installed automatically through Bazelisk by
 [`tools/buildutils/installbazel.sh`](tools/buildutils/installbazel.sh).
@@ -192,8 +193,3 @@ are no longer runtime dependencies.
 The current GCE image tooling in this fork lives under `tools/baseimage/`.
 See [tools/baseimage/README.md](tools/baseimage/README.md) for the current
 workflow.
-
-## Container images
-
-Please read [container/README.md](container/README.md) to build and use Docker
-or Podman images containing the Cuttlefish RPM packages.

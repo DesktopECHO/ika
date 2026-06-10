@@ -1,0 +1,46 @@
+#!/bin/sh
+
+set -e
+
+case "$1" in
+    (configure)
+    # unlink if it's a symlink
+    if [ -L /var/empty ]; then
+        unlink /var/empty
+    fi
+    # delete if it's a file
+    if [ -f /var/empty ]; then
+        rm -rf /var/empty
+    fi
+    # guarantees it's a directory
+    mkdir -p /var/empty
+    if ! getent group cvdnetwork > /dev/null 2>&1
+    then
+        addgroup --system cvdnetwork
+    fi
+
+    if ! getent group kvm > /dev/null 2>&1
+    then
+        addgroup --system kvm
+    fi
+
+    setcap cap_net_admin,cap_net_bind_service,cap_net_raw=+ep \
+        /usr/lib/cuttlefish-common/bin/cvdalloc
+
+    sysctl --system > /dev/null 2>&1 || true
+    systemd-tmpfiles --create /usr/lib/tmpfiles.d/cuttlefish.conf > /dev/null 2>&1 || true
+    udevadm control --reload > /dev/null 2>&1 || true
+    systemctl daemon-reload > /dev/null 2>&1 || true
+    # Keep the legacy host-resources service opt-in. The default ika workflow
+    # uses per-user cvdalloc networking managed under /var/tmp/cvd.
+    systemctl disable --now cuttlefish-host-resources.service > /dev/null 2>&1 || true
+
+    /usr/libexec/cuttlefish/cuttlefish-add-user-to-groups || true
+    ;;
+    triggered)
+    setcap cap_net_admin,cap_net_bind_service,cap_net_raw=+ep \
+        /usr/lib/cuttlefish-common/bin/cvdalloc
+    ;;
+esac
+
+#DEBHELPER#

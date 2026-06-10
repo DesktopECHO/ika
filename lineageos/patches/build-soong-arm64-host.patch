@@ -41,6 +41,44 @@ index cbd2ab435..49fa65261 100644
  		}
  		partitionPaths = []string{"host", osName + "-" + archName, partition}
  	}
+diff --git a/android/rule_builder.go b/android/rule_builder.go
+index 88898f365..c8c46b752 100644
+--- a/android/rule_builder.go
++++ b/android/rule_builder.go
+@@ -17,6 +17,7 @@ package android
+ import (
+ 	"crypto/sha256"
+ 	"fmt"
++	"os"
+ 	"path/filepath"
+ 	"sort"
+ 	"strings"
+@@ -661,12 +662,19 @@ func (r *RuleBuilder) build(name string, desc string) {
+ 			}
+ 		}
+ 
+-		// These five directories are necessary to run native host tools like /bin/bash and py3-cmd.
+-		nsjailCmd.WriteString(" -R /bin")
+-		nsjailCmd.WriteString(" -R /lib")
+-		nsjailCmd.WriteString(" -R /lib64")
+-		nsjailCmd.WriteString(" -R /dev")
+-		nsjailCmd.WriteString(" -R /usr")
++		// These directories are necessary to run native host tools like /bin/bash
++		// and py3-cmd. Some do not exist on every host architecture -- notably
++		// aarch64 Debian keeps the dynamic loader under /lib and has no /lib64 --
++		// and nsjail treats -R as a mandatory mount, so a missing path aborts the
++		// sandbox launch. Native builds run the command on this same host, so bind
++		// only the directories that actually exist here.
++		for _, dir := range []string{"/bin", "/lib", "/lib64", "/dev", "/usr"} {
++			if _, err := os.Stat(dir); err != nil {
++				continue
++			}
++			nsjailCmd.WriteString(" -R ")
++			nsjailCmd.WriteString(dir)
++		}
+ 
+ 		nsjailCmd.WriteString(" -m none:/tmp:tmpfs:size=1073741824") // 1GB, should be enough
+ 		nsjailCmd.WriteString(" -D nsjail_build_sandbox")
 diff --git a/cc/config/global.go b/cc/config/global.go
 index 4d7bd3c92..7e75bac2a 100644
 --- a/cc/config/global.go
@@ -209,10 +247,10 @@ index 298098335..5f7eb22ed 100644
  		inRecovery:      mod.InRecovery(),
  		inRamdisk:       mod.InRamdisk(),
 diff --git a/rust/compiler.go b/rust/compiler.go
-index 631843528..9d93b94ee 100644
+index 631843528..ae6069501 100644
 --- a/rust/compiler.go
 +++ b/rust/compiler.go
-@@ -437,6 +437,25 @@ func (compiler *baseCompiler) cfgFlags(ctx ModuleContext, flags Flags) Flags {
+@@ -437,6 +437,51 @@ func (compiler *baseCompiler) cfgFlags(ctx ModuleContext, flags Flags) Flags {
  	return flags
  }
  
@@ -228,6 +266,32 @@ index 631843528..9d93b94ee 100644
 +		ctx.Arch().ArchType == android.Arm64 && ctx.Target().HostCross
 +}
 +
++// linuxMuslArm64Host matches both the native and host-cross ARM64 musl host
++// variants. Both are linked through clang, and the ARM64 host toolchain ships
++// libc++ rather than libstdc++.
++func linuxMuslArm64Host(ctx linuxMuslArm64Context) bool {
++	return ctx.Host() && ctx.Os() == android.LinuxMusl &&
++		ctx.Arch().ArchType == android.Arm64
++}
++
++// dropDefaultLinkerLibraries strips -Cdefault-linker-libraries from module
++// flags. That option stops rustc from passing -nodefaultlibs to the linker
++// driver, so clang++ auto-adds -lstdc++. The ARM64 host toolchain has no
++// libstdc++ (it uses libc++), which breaks linking host artifacts such as the
++// proc macros generated under external/cronet. The flag is meaningless for host
++// tools, so drop it rather than chase a libstdc++ that does not exist.
++func dropDefaultLinkerLibraries(flags []string) []string {
++	filtered := make([]string, 0, len(flags))
++	for _, f := range flags {
++		switch strings.TrimSpace(f) {
++		case "-Cdefault-linker-libraries", "-C default-linker-libraries":
++			continue
++		}
++		filtered = append(filtered, f)
++	}
++	return filtered
++}
++
 +func rustTargetTriple(ctx android.ModuleContext, toolchain config.Toolchain) string {
 +	if linuxMuslArm64HostCross(ctx) {
 +		return "aarch64-unknown-linux-musl"
@@ -238,7 +302,7 @@ index 631843528..9d93b94ee 100644
  func CommonDefaultFlags(ctx android.ModuleContext, toolchain config.Toolchain, flags Flags) Flags {
  	flags.GlobalRustFlags = append(flags.GlobalRustFlags, config.GlobalRustFlags...)
  	flags.GlobalRustFlags = append(flags.GlobalRustFlags, toolchain.ToolchainRustFlags())
-@@ -447,7 +466,13 @@ func CommonDefaultFlags(ctx android.ModuleContext, toolchain config.Toolchain, f
+@@ -447,7 +492,13 @@ func CommonDefaultFlags(ctx android.ModuleContext, toolchain config.Toolchain, f
  		flags.LinkFlags = append(flags.LinkFlags, cc.RpathFlags(ctx)...)
  	}
  
@@ -253,7 +317,20 @@ index 631843528..9d93b94ee 100644
  		// Add -lc, -lrt, -ldl, -lpthread, -lm and -lgcc_s to glibc builds to match
  		// the default behavior of device builds.
  		flags.RustFlags = append(flags.RustFlags, config.LinuxHostGlobalRustFlags...)
-@@ -591,6 +616,12 @@ func muslDeps(ctx DepsContext, deps Deps, static bool) Deps {
+@@ -492,7 +543,11 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags) Flag
+ 	}
+ 
+ 	flags.RustFlags = append(flags.RustFlags, lintFlags)
+-	flags.RustFlags = append(flags.RustFlags, compiler.Properties.Flags...)
++	moduleFlags := compiler.Properties.Flags
++	if linuxMuslArm64Host(ctx) {
++		moduleFlags = dropDefaultLinkerLibraries(moduleFlags)
++	}
++	flags.RustFlags = append(flags.RustFlags, moduleFlags...)
+ 	flags.RustFlags = append(flags.RustFlags, "--edition="+compiler.edition())
+ 	flags.RustdocFlags = append(flags.RustdocFlags, "--edition="+compiler.edition())
+ 	flags.LinkFlags = append(flags.LinkFlags, compiler.Properties.Ld_flags...)
+@@ -591,6 +646,12 @@ func muslDeps(ctx DepsContext, deps Deps, static bool) Deps {
  		deps.StaticLibs = append(deps.StaticLibs, libRuntimeBuiltins)
  	}
  

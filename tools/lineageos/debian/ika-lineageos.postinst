@@ -1,0 +1,26 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        manifest=/var/lib/cuttlefish-lineageos/created-symlinks
+        mkdir -p "$(dirname "$manifest")"
+        if [ ! -f "$manifest" ]; then
+            : > "$manifest"
+        fi
+
+        cd /usr/share/cuttlefish-common/lineageos || exit 0
+        find etc usr -mindepth 1 2>/dev/null | while read -r path; do
+            target="/usr/lib/cuttlefish-common/${path}"
+            source="/usr/share/cuttlefish-common/lineageos/${path}"
+            if [ ! -e "${target}" ]; then
+                mkdir -p "$(dirname "${target}")"
+                ln -s "${source}" "${target}"
+                grep -Fxq "${target}" "$manifest" || printf '%s\n' "${target}" >> "$manifest"
+            fi
+        done
+        chown -Rh root:kvm /usr/share/cuttlefish-common/lineageos > /dev/null 2>&1 || true
+        ;;
+esac
+
+#DEBHELPER#
