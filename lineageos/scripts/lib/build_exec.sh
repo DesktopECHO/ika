@@ -20,9 +20,8 @@ configure_ccache() {
   # of compile time. Optional: a missing ccache only warns, never fails.
   enabled "$ccache_enabled" || { log "ccache disabled (CCACHE_ENABLED=0)"; return 0; }
 
-  command -v ccache >/dev/null 2>&1 || install_missing_commands ccache || true
   if ! command -v ccache >/dev/null 2>&1; then
-    log "warning: ccache requested but not found and could not be installed; building without it"
+    log "warning: ccache requested but not found; building without it"
     return 0
   fi
 
@@ -141,36 +140,38 @@ arm64_log_looks_resource_limited() {
   return 1
 }
 
-raise_arm64_open_file_limit() {
-  host_is_arm64 || return 0
-  [[ -n "$arm64_nofile_limit" ]] || return 0
-  [[ "$arm64_nofile_limit" =~ ^[0-9]+$ ]] || \
-    die "ARM64_NOFILE_LIMIT must be a numeric limit or empty to skip"
+raise_host_open_file_limit() {
+  [[ -n "$host_nofile_limit" ]] || return 0
+  [[ "$host_nofile_limit" =~ ^[0-9]+$ ]] || \
+    die "NOFILE_LIMIT must be a numeric limit or empty to skip"
 
   local current_soft current_hard
   current_soft="$(ulimit -Sn)"
   current_hard="$(ulimit -Hn)"
-  if nofile_limit_at_least "$current_soft" "$arm64_nofile_limit" && \
-     nofile_limit_at_least "$current_hard" "$arm64_nofile_limit"; then
+  if nofile_limit_at_least "$current_soft" "$host_nofile_limit" && \
+     nofile_limit_at_least "$current_hard" "$host_nofile_limit"; then
     log "host open-file limit already ${current_soft}:${current_hard}"
     return 0
   fi
 
-  command -v prlimit >/dev/null 2>&1 || install_missing_commands prlimit || true
   command -v prlimit >/dev/null 2>&1 || \
-    die "ARM64 host needs prlimit to raise the open-file limit"
+    die "host needs prlimit (util-linux) to raise the open-file limit"
 
-  if run_privileged prlimit --pid "$$" --nofile="${arm64_nofile_limit}:${arm64_nofile_limit}" >/dev/null 2>&1; then
+  if [[ "${IKA_PRIVILEGED_PREFLIGHT_DONE:-0}" == "1" ]]; then
+    die "host open-file limit is ${current_soft}:${current_hard}; privileged preflight should have raised it to $host_nofile_limit"
+  fi
+
+  if run_privileged prlimit --pid "$$" --nofile="${host_nofile_limit}:${host_nofile_limit}" >/dev/null 2>&1; then
     current_soft="$(ulimit -Sn)"
     current_hard="$(ulimit -Hn)"
-    if nofile_limit_at_least "$current_soft" "$arm64_nofile_limit" && \
-       nofile_limit_at_least "$current_hard" "$arm64_nofile_limit"; then
+    if nofile_limit_at_least "$current_soft" "$host_nofile_limit" && \
+       nofile_limit_at_least "$current_hard" "$host_nofile_limit"; then
       log "raised host open-file limit to ${current_soft}:${current_hard}"
       return 0
     fi
   fi
 
-  die "failed to raise host open-file limit to $arm64_nofile_limit; current limit is ${current_soft}:${current_hard}"
+  die "failed to raise host open-file limit to $host_nofile_limit; current limit is ${current_soft}:${current_hard}"
 }
 
 active_llvm_prebuilts_version() {
@@ -218,7 +219,6 @@ configure_arm64_ninja_runner() {
     return 0
   fi
 
-  command -v ninja >/dev/null 2>&1 || install_missing_commands ninja || true
   command -v ninja >/dev/null 2>&1 || \
     die "ARM64 prebuilt Ninja cannot run on this host; install a system ninja package"
 
@@ -250,7 +250,7 @@ configure_arm64_host_build() {
   ensure_no_arm64_x86_prebuilt_substitutions
 
   arm64_android_java_home_for_build >/dev/null || true
-  raise_arm64_open_file_limit
+  raise_host_open_file_limit
   configure_arm64_ninja_runner
 }
 
@@ -307,7 +307,7 @@ run_build_arm64_native() {
   shift
 
   ensure_linux_arm64_clang_ready
-  raise_arm64_open_file_limit
+  raise_host_open_file_limit
   configure_arm64_ninja_runner
 
   local -a build_attempts=()

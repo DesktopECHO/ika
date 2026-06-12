@@ -117,7 +117,7 @@ clang_exclude_payload() {
   exclude_file="$git_dir/info/exclude"
   mkdir -p "${exclude_file%/*}"
   touch "$exclude_file"
-  for pattern in "/$payload_name/" "/$payload_name.tmp/" "/.lineage-desktop-clang-prebuilt"; do
+  for pattern in "/$payload_name/" "/$payload_name.tmp/" "/clang-stable/" "/clang-stable.tmp/" "/.lineage-desktop-clang-prebuilt"; do
     grep -qxF "$pattern" "$exclude_file" || printf '%s\n' "$pattern" >>"$exclude_file"
   done
 }
@@ -161,6 +161,63 @@ extract_clang_payload_from_ref() {
   mv "$dest/$payload_name.tmp" "$dest/$payload_name"
 }
 
+ensure_linux_x86_clang_stable_alias() {
+  local dest="$1"
+  local payload_name="$2"
+
+  if [[ -e "$dest/clang-stable/lib/libclang.so" ]]; then
+    return 0
+  fi
+
+  [[ -e "$dest/$payload_name/lib/libclang.so" ]] || \
+    die "x86 Clang payload is missing libclang: ${dest#$workspace/}/$payload_name"
+  rm -rf "$dest/clang-stable.tmp" "$dest/clang-stable"
+  ln -s "$payload_name" "$dest/clang-stable"
+}
+
+ensure_linux_x86_clang_trusty_dirgroup() {
+  local dest="$1"
+  local payload_name="$2"
+  local bp="$dest/Android.bp"
+
+  [[ -d "$dest/$payload_name" ]] || \
+    die "missing x86 Clang payload for Trusty dirgroup: ${dest#$workspace/}/$payload_name"
+
+  python3 - "$bp" "$payload_name" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+bp = Path(sys.argv[1])
+payload = sys.argv[2]
+text = bp.read_text()
+pattern = re.compile(
+    r'(dirgroup \{\n'
+    r'    name: "trusty_dirgroup_prebuilts_clang_host_linux-x86",\n'
+    r'    dirs: \[\n)'
+    r'(?:        "clang-r[^"]+",\n)+'
+    r'(    \],\n'
+    r'    visibility: \["//trusty/vendor/google/aosp/scripts"\],\n'
+    r'\})'
+)
+def replacement(match):
+    return f'{match.group(1)}        "{payload}",\n{match.group(2)}'
+updated, count = pattern.subn(replacement, text, count=1)
+if count != 1:
+    raise SystemExit(f"failed to update Trusty dirgroup in {bp}")
+legacy_ncurses = re.compile(
+    r'\nfilegroup \{\n'
+    r'    name: "clang-libncurses\.so\.5",\n'
+    r'    srcs: \[\n'
+    r'        "clang-3289846/lib64/libncurses\.so\.5",\n'
+    r'    \],\n'
+    r'\}\n?'
+)
+updated = legacy_ncurses.sub('\n', updated, count=1)
+bp.write_text(updated)
+PY
+}
+
 clone_clang_prebuilt_repo() {
   local host_tag="$1"
   local dest="$2"
@@ -194,6 +251,47 @@ clone_clang_prebuilt_repo() {
   mv "$tmp_dir" "$dest.tmp"
   mv "$dest.tmp" "$dest"
   printf '%s\n' "$dest/${clang_dir##*/}"
+}
+
+# Provision a single Clang payload via a blobless, sparse clone: only the pinned
+# payload's blobs are downloaded (~3.5 GB) instead of every payload at the branch
+# tip (~18 GB). The promisor remote keeps the Soong metadata (Android.bp,
+# soong/clangprebuilts.go) fetchable on demand via `git show`, so the resulting
+# $dest has the same shape the repo-managed/extract path produces. Returns
+# non-zero on failure (missing payload in the branch, interrupted fetch) so the
+# caller can fail with a clear error.
+fetch_clang_single_payload() {
+  local dest="$1"
+  local git_url="$2"
+  local git_ref="$3"
+  local payload_name="$4"
+
+  [[ -n "$payload_name" ]] || return 1
+
+  rm -rf "$dest.tmp"
+  mkdir -p "${dest%/*}"
+
+  if ! git clone --depth=1 --branch "$git_ref" \
+       --filter=blob:none --no-checkout "$git_url" "$dest.tmp"; then
+    rm -rf "$dest.tmp"
+    return 1
+  fi
+
+  # Materialize only the pinned payload directory; its blobs are faulted in from
+  # the promisor during checkout, the other payloads are never downloaded.
+  if ! git -C "$dest.tmp" sparse-checkout set --no-cone "/$payload_name/" || \
+     ! git -C "$dest.tmp" checkout -q HEAD; then
+    rm -rf "$dest.tmp"
+    return 1
+  fi
+
+  if [[ ! -x "$dest.tmp/$payload_name/bin/clang" ]]; then
+    rm -rf "$dest.tmp"
+    return 1
+  fi
+
+  rm -rf "$dest"
+  mv "$dest.tmp" "$dest"
 }
 
 linux_arm64_clang_payload_dir() {
@@ -252,7 +350,11 @@ ensure_linux_x86_clang_soong_compat() {
 linux_x86_clang_soong_metadata_is_compatible() {
   local dest="$1"
 
-  grep -Fq '../i386-unknown-linux-gnu' "$dest/soong/clangprebuilts.go" && \
+  [[ -f "$dest/soong/Android.bp" ]] && \
+    [[ -x "$dest/soong/generate_clang_builtin_headers_resources.sh" ]] && \
+    grep -Fq 'name: "soong-clang-prebuilts"' "$dest/soong/Android.bp" && \
+    grep -Fq 'pluginFor: ["soong_build"]' "$dest/soong/Android.bp" && \
+    grep -Fq '../i386-unknown-linux-gnu' "$dest/soong/clangprebuilts.go" && \
     grep -Fq '../x86_64-unknown-linux-gnu' "$dest/soong/clangprebuilts.go"
 }
 
@@ -262,7 +364,10 @@ sync_linux_x86_clang_soong_metadata() {
 
   mkdir -p "$dest/soong"
   git -C "$dest" show "$ref:Android.bp" >"$dest/Android.bp"
+  git -C "$dest" show "$ref:soong/Android.bp" >"$dest/soong/Android.bp"
   git -C "$dest" show "$ref:soong/clangprebuilts.go" >"$dest/soong/clangprebuilts.go"
+  git -C "$dest" show "$ref:soong/generate_clang_builtin_headers_resources.sh" >"$dest/soong/generate_clang_builtin_headers_resources.sh"
+  chmod +x "$dest/soong/generate_clang_builtin_headers_resources.sh"
   if linux_x86_clang_soong_metadata_is_compatible "$dest"; then
     return 0
   fi
@@ -304,6 +409,8 @@ ensure_linux_x86_clang_prebuilt() {
         clang_exclude_payload "$dest" "$payload_name"
         clang_write_marker "$dest" "$payload_name" "$cached_commit" \
           "$linux_x86_clang_prebuilt_git_url" "$linux_x86_clang_prebuilt_git_ref"
+        ensure_linux_x86_clang_stable_alias "$dest" "$payload_name"
+        ensure_linux_x86_clang_trusty_dirgroup "$dest" "$payload_name"
         clang_dir="$dest/$payload_name"
         set_linux_x86_clang_version_vars "$clang_dir"
         ensure_linux_x86_clang_soong_compat "$clang_dir"
@@ -323,14 +430,20 @@ ensure_linux_x86_clang_prebuilt() {
       die "x86 Clang prebuilt branch has no clang-r* payload: $linux_x86_clang_prebuilt_git_url@$linux_x86_clang_prebuilt_git_ref"
     extract_clang_payload_from_ref "$dest" FETCH_HEAD "$payload_name"
     sync_linux_x86_clang_soong_metadata "$dest" FETCH_HEAD
+    ensure_linux_x86_clang_stable_alias "$dest" "$payload_name"
+    ensure_linux_x86_clang_trusty_dirgroup "$dest" "$payload_name"
     clang_dir="$dest/$payload_name"
   elif [[ ! -e "$dest" ]]; then
-    clang_dir="$(clone_clang_prebuilt_repo linux-x86 "$dest" \
+    fetch_clang_single_payload "$dest" \
       "$linux_x86_clang_prebuilt_git_url" \
       "$linux_x86_clang_prebuilt_git_ref" \
-      "$linux_x86_clang_prebuilt_version")"
+      "$linux_x86_clang_prebuilt_version" || \
+      die "failed to fetch pinned x86 Clang payload $linux_x86_clang_prebuilt_version from $linux_x86_clang_prebuilt_git_url@$linux_x86_clang_prebuilt_git_ref"
+    clang_dir="$dest/$linux_x86_clang_prebuilt_version"
     fetched_commit="$(git -C "$dest" rev-parse HEAD)"
     sync_linux_x86_clang_soong_metadata "$dest" HEAD
+    ensure_linux_x86_clang_stable_alias "$dest" "$linux_x86_clang_prebuilt_version"
+    ensure_linux_x86_clang_trusty_dirgroup "$dest" "$linux_x86_clang_prebuilt_version"
   else
     die "cannot install pinned x86 Clang prebuilt over existing non-git path: ${dest#$workspace/}"
   fi
@@ -338,6 +451,8 @@ ensure_linux_x86_clang_prebuilt() {
   [[ -n "$clang_dir" ]] || \
     die "x86 Clang prebuilt is incomplete: $linux_x86_clang_prebuilt_git_url@$linux_x86_clang_prebuilt_git_ref"
   set_linux_x86_clang_version_vars "$clang_dir"
+  ensure_linux_x86_clang_stable_alias "$dest" "$linux_x86_llvm_prebuilts_version"
+  ensure_linux_x86_clang_trusty_dirgroup "$dest" "$linux_x86_llvm_prebuilts_version"
   ensure_linux_x86_clang_soong_compat "$clang_dir"
   if [[ -n "${fetched_commit:-}" ]]; then
     clang_exclude_payload "$dest" "$linux_x86_llvm_prebuilts_version"
@@ -1122,10 +1237,6 @@ arm64_android_java_home_for_build() {
   host_is_arm64 || return 1
   if [[ -x "$workspace/prebuilts/jdk/jdk21/linux-arm64/bin/javac" ]]; then
     return 1
-  fi
-
-  if ! command -v javac >/dev/null 2>&1 && [[ -z "$arm64_android_java_home" && -z "${OVERRIDE_ANDROID_JAVA_HOME:-}" ]]; then
-    install_missing_commands javac || true
   fi
 
   detect_arm64_android_java_home || \

@@ -1,21 +1,26 @@
 Name:           ika-lineageos
 Version:        20260420
-Release:        5%{?dist}
+Release:        6%{?dist}
 Summary:        LineageOS for Cuttlefish host
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish
-Source0:        android-cuttlefish-1.53.0.tar.gz
 ExclusiveArch:  aarch64 x86_64
-%global debug_package %{nil}
-AutoReqProv:    no
-
-Requires:       ika-base
 
 %ifarch aarch64
 %global ika_arch arm64
 %else
 %global ika_arch x86_64
 %endif
+
+# Source0 is the shared host-source tarball (LICENSE + packaging metadata only).
+# Source1 carries just this arch's ROM bundle, kept out of the shared tarball so
+# the other host packages don't unpack 2+ GB they never use.
+Source0:        android-cuttlefish-1.53.0.tar.gz
+Source1:        android-cuttlefish-rom-%{ika_arch}-1.53.0.tar
+%global debug_package %{nil}
+AutoReqProv:    no
+
+Requires:       ika-base
 
 %description
 Contains LineageOS 23 for use by this Cuttlefish workflow, installed under
@@ -26,6 +31,8 @@ Obsoletes:      cuttlefish-lineageos < %{version}-%{release}
 
 %prep
 %autosetup -n android-cuttlefish-1.53.0
+# Unpack this arch's ROM bundle (Source1) into the source tree for %%install.
+tar -xf %{SOURCE1}
 
 %install
 rm -rf %{buildroot}

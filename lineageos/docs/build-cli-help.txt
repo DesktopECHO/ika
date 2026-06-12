@@ -89,7 +89,7 @@ Environment:
   MICROG_GSFPROXY_RELEASE
                         GsfProxy microG F-Droid version name/code, or latest.
                         Default: latest
-  REPO_INSTALL_PATH     Install path used if repo is missing.
+  REPO_INSTALL_PATH     Path checked for repo if it is not on PATH.
                         Default: /usr/local/bin/repo
   REPO_SYNC_ATTEMPTS    Top-level repo sync attempts. Default: 9
   REPO_SYNC_RETRY_FETCHES
@@ -97,6 +97,14 @@ Environment:
   REPO_SYNC_QUIET       Pass --quiet to repo sync. Default: auto, enabled on
                         ARM64 hosts to keep Python repo sync output conservative
                         during ARM64 host syncs.
+  REPO_SYNC_JOBS        Override top-level repo sync jobs. Default: min(JOBS,16)
+  REPO_SYNC_CHECKOUT_JOBS
+                        Checkout jobs for repo partial-clone workspaces. Lower
+                        values reduce lazy-blob checkout failures. Default: 4
+  REPO_CLONE_FILTER     Repo partial-clone filter for fresh checkouts. Default:
+                        blob:none. Empty uses full clones.
+  REPO_GROUPS           Manifest groups passed to repo init. Default:
+                        default,-darwin. Empty syncs every group.
   ARM64_GO_PREBUILT_GIT_URL
                         AOSP Go linux-arm64 prebuilt repo used to bootstrap
                         Soong when this branch lacks prebuilts/go/linux-arm64.
@@ -173,9 +181,8 @@ Environment:
   ARM64_JOB_RETRY_LIST  Space-separated ARM64 job counts to try if a faster
                         attempt fails from memory/process pressure. Default:
                         selected job count, then lower counts down to 1.
-  ARM64_NOFILE_LIMIT    Host open-file limit requested before native ARM64
-                        builds.
-                        Default: 4194304.
+  NOFILE_LIMIT          Host open-file limit requested before builds. Set empty
+                        to skip. Default: 4194304.
   ARM64_SOONG_GOMEMLIMIT
                         Go memory limit passed into Soong on ARM64 hosts.
                         Default: 6GiB
@@ -200,8 +207,6 @@ Environment:
   ARM64_ANDROID_JAVA_HOME
                         System JDK to use when the source tree lacks an ARM64
                         JDK prebuilt. Default: auto-detect from javac.
-  AUTO_INSTALL_DEPS     Install missing basic host tools with apt/dnf/pacman
-                        when possible. Default: 1
   ARM64 native hosts    ARM64 hosts build natively with ARM64 prebuilts only,
                         including on Apple Silicon's 16 KiB-page kernels.
   RESET_PATCHED_PROJECTS

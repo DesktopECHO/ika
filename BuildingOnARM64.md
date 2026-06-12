@@ -59,8 +59,8 @@ The build engine provisions most prebuilts itself, but the host must supply:
 - Network **throughout the build** — ARM64 host prebuilts (Clang, Go, Rust, JDK,
   CMake, clang-tools) are fetched from `android.googlesource.com` at setup, and
   partial-clone fetches blobs on demand during compile.
-- A high open-file limit — `raise_arm64_open_file_limit` bumps it
-  (`ARM64_NOFILE_LIMIT`, default `4194304`).
+- A high open-file limit — `raise_host_open_file_limit` bumps it
+  (`NOFILE_LIMIT`, default `4194304`; set empty to skip).
 - JDK — if no `javac` is on PATH and no ARM64 JDK prebuilt can be fetched, the
   build dies asking for `ARM64_JDK21_PREBUILT_URL` / `ARM64_ANDROID_JAVA_HOME`.
 
@@ -169,7 +169,7 @@ ensure_arm64_clang_tools_prebuilt
 ensure_arm64_native_cmake_prebuilt
 ensure_arm64_native_jdk21_prebuilt / jdk8      # feeds ANDROID_JAVA*_HOME
 ensure_no_arm64_x86_prebuilt_substitutions     # guard against x86 shadowing
-raise_arm64_open_file_limit
+raise_host_open_file_limit
 ```
 
 ### The patch ⇄ runtime contract
@@ -184,7 +184,7 @@ raise_arm64_open_file_limit
 
 Relevant env knobs (defaults in the header of
 [build_lineageos_desktop.sh](lineageos/scripts/build_lineageos_desktop.sh)):
-`ARM64_NOFILE_LIMIT`, `ARM64_SOONG_GOMEMLIMIT`, `ARM64_SOONG_GOMAXPROCS`,
+`NOFILE_LIMIT`, `ARM64_SOONG_GOMEMLIMIT`, `ARM64_SOONG_GOMAXPROCS`,
 `ARM64_JDK21_PREBUILT_URL`, `ARM64_ANDROID_JAVA_HOME`.
 
 ---

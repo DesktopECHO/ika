@@ -12,43 +12,32 @@ ensure_repo_command() {
     return 0
   fi
 
-  ensure_downloader
-
-  local tmp_repo
-  tmp_repo="$(mktemp)"
-  log "repo is not installed; downloading from $repo_tool_url"
-  download_file "$repo_tool_url" "$tmp_repo"
-
-  log "installing repo to $repo_install_path"
-  if ! run_privileged install -m 0755 "$tmp_repo" "$repo_install_path"; then
-    rm -f "$tmp_repo"
-    die "failed to install repo to $repo_install_path"
-  fi
-  rm -f "$tmp_repo"
-
-  if found_repo="$(command -v repo 2>/dev/null)"; then
-    repo_cmd="$found_repo"
-  elif [[ -x "$repo_install_path" ]]; then
+  if [[ -x "$repo_install_path" ]]; then
     repo_cmd="$repo_install_path"
-  else
-    die "repo was installed but is not executable at $repo_install_path"
+    return 0
   fi
+
+  die "repo is not installed; run ./ika-build to install dependencies, or install repo at $repo_install_path"
 }
 
 ensure_anonymous_git_config() {
+  local git_email
+
+  git_email="$(signing_certificate_email)"
+  git_email="${git_email:-$(default_signing_email)}"
   mkdir -p "${anonymous_git_config%/*}"
   cat > "$anonymous_git_config" <<'EOF'
 [color]
 	ui = auto
 [user]
 	name = LineageOS Desktop Builder
-	email = builder@localhost
 [url "https://github.com/"]
 	insteadOf = git@github.com:
 	insteadOf = ssh://git@github.com/
 	insteadOf = ssh://git@github.com:22/
 	insteadOf = git://github.com/
 EOF
+  git config --file "$anonymous_git_config" user.email "$git_email"
 }
 
 run_anonymous_git_network() {
@@ -111,6 +100,23 @@ install_manifest() {
     install -m 0644 "$microg_manifest_src" "$microg_manifest_dest"
   else
     rm -f "$microg_manifest_dest"
+  fi
+
+  # On x86 hosts, ensure_linux_x86_clang_prebuilt provisions only the pinned
+  # Clang payload (blobless, ~3.5 GB), so drop the full
+  # prebuilts/clang/host/linux-x86 project (5 payloads, ~18 GB) from repo sync.
+  # ARM64 hosts never use the x86 host Clang and clone arm64 separately, so this
+  # is gated to x86 hosts to avoid removing a project an arm64 build might map.
+  local x86_clang_manifest_dest="$workspace/.repo/local_manifests/desktop-remove-x86-clang.xml"
+  if ! host_is_arm64; then
+    cat > "$x86_clang_manifest_dest" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <remove-project name="platform/prebuilts/clang/host/linux-x86" />
+</manifest>
+EOF
+  else
+    rm -f "$x86_clang_manifest_dest"
   fi
 }
 
@@ -385,10 +391,28 @@ repo_project_checkout_path_for_name() {
 repo_sync_failure_projects_from_log() {
   local sync_log="$1"
   awk '
+    /Cannot checkout [^:[:space:]]+/ {
+      line = $0
+      sub(/^.*Cannot checkout /, "", line)
+      sub(/:.*/, "", line)
+      print line
+    }
+    /Cannot initialize work tree for [^[:space:]]+/ {
+      line = $0
+      sub(/^.*Cannot initialize work tree for /, "", line)
+      sub(/[[:space:]].*/, "", line)
+      print line
+    }
     /^[^[:space:]]+[[:space:]]+checkout[[:space:]][0-9a-fA-F]+([[:space:]]|$)/ {
       print $1
     }
   ' "$sync_log" | sort -u
+}
+
+repo_workspace_uses_partial_clone() {
+  [[ -d "$workspace/.repo/manifests" ]] || return 1
+  [[ "$(git -C "$workspace/.repo/manifests" config --bool --get repo.partialclone 2>/dev/null || true)" == "true" ]] && return 0
+  [[ -n "$(git -C "$workspace/.repo/manifests" config --get repo.clonefilter 2>/dev/null || true)" ]]
 }
 
 repair_repo_sync_checkout_failures() {
@@ -466,8 +490,26 @@ repo_sync_sources() {
 
   cd "$workspace"
 
+  # A fresh checkout has no .repo yet. Partial-clone flags must only be passed
+  # on a fresh init: re-running `repo init --partial-clone` over an existing
+  # full clone has caused sync failures. Groups are safe to (re)apply either way.
+  local repo_is_fresh=0
+  [[ -d "$workspace/.repo" ]] || repo_is_fresh=1
+
+  local -a init_args=(init -u "$android_manifest_url" -b "$lineage_branch")
+  if [[ -n "$repo_groups" ]]; then
+    init_args+=(-g "$repo_groups")
+  fi
+  if [[ -n "$repo_clone_filter" && "$repo_is_fresh" -eq 1 ]]; then
+    init_args+=(--partial-clone --clone-filter="$repo_clone_filter")
+    log "fresh checkout: using blobless partial clone (--clone-filter=$repo_clone_filter)"
+  fi
+  if [[ -n "$repo_groups" ]]; then
+    log "repo groups: $repo_groups"
+  fi
+
   log "initializing LineageOS source at $workspace"
-  run_anonymous_git_network "$repo_cmd" init -u "$android_manifest_url" -b "$lineage_branch"
+  run_anonymous_git_network "$repo_cmd" "${init_args[@]}"
 
   install_manifest
   reset_generated_overlay_project_for_sync
@@ -489,11 +531,31 @@ repo_sync_sources() {
     fi
   fi
 
-  # repo sync uses the build job count, capped at 16.
-  local sync_jobs=$(( jobs < 16 ? jobs : 16 ))
+  # repo sync uses the build job count, capped at 16 unless REPO_SYNC_JOBS is set.
+  local sync_jobs
+  if [[ -n "$repo_sync_jobs" ]]; then
+    [[ "$repo_sync_jobs" =~ ^[0-9]+$ && "$repo_sync_jobs" -gt 0 ]] ||
+      die "REPO_SYNC_JOBS must be a positive integer"
+    sync_jobs="$repo_sync_jobs"
+  else
+    sync_jobs=$(( jobs < 16 ? jobs : 16 ))
+  fi
+
   local -a sync_args=(sync -c --fail-fast -j"$sync_jobs")
   if (( repo_sync_retry_fetches > 0 )); then
     sync_args+=(--retry-fetches="$repo_sync_retry_fetches")
+  fi
+  if repo_workspace_uses_partial_clone; then
+    local checkout_jobs
+    if [[ -n "$repo_sync_checkout_jobs" ]]; then
+      [[ "$repo_sync_checkout_jobs" =~ ^[0-9]+$ && "$repo_sync_checkout_jobs" -gt 0 ]] ||
+        die "REPO_SYNC_CHECKOUT_JOBS must be a positive integer"
+      checkout_jobs="$repo_sync_checkout_jobs"
+    else
+      checkout_jobs=4
+    fi
+    log "repo partial clone detected; using phased sync with $sync_jobs network jobs and $checkout_jobs checkout jobs"
+    sync_args+=(--no-interleaved --jobs-network="$sync_jobs" --jobs-checkout="$checkout_jobs")
   fi
   if enabled "$quiet"; then
     sync_args+=(--quiet)

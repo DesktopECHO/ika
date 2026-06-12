@@ -1,0 +1,27 @@
+# pacman scriptlets for ika-user. Mirrors the subpackage scriptlets in
+# frontend/rpm/cuttlefish-frontend.spec.
+
+_configure() {
+  if ! getent passwd _cutf-operator >/dev/null 2>&1; then
+    useradd -r -M -d /var/empty -g cvdnetwork _cutf-operator >/dev/null 2>&1 || :
+  fi
+  usermod -a -G video,render _cutf-operator >/dev/null 2>&1 || :
+  systemctl daemon-reload >/dev/null 2>&1 || :
+  systemctl enable --now cuttlefish-operator.service >/dev/null 2>&1 || :
+}
+
+post_install() {
+  _configure
+}
+
+post_upgrade() {
+  _configure
+}
+
+pre_remove() {
+  systemctl disable --now cuttlefish-operator.service >/dev/null 2>&1 || :
+}
+
+post_remove() {
+  systemctl daemon-reload >/dev/null 2>&1 || :
+}

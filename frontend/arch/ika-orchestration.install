@@ -1,0 +1,29 @@
+# pacman scriptlets for ika-orchestration. Mirrors the subpackage scriptlets
+# in frontend/rpm/cuttlefish-frontend.spec.
+
+_configure() {
+  if ! getent group httpcvd >/dev/null 2>&1; then
+    groupadd -r httpcvd >/dev/null 2>&1 || :
+  fi
+  if ! getent passwd httpcvd >/dev/null 2>&1; then
+    useradd -r -M -d /var/empty -g httpcvd httpcvd >/dev/null 2>&1 || :
+  fi
+  usermod -a -G cvdnetwork,kvm,video,render httpcvd >/dev/null 2>&1 || :
+  systemctl daemon-reload >/dev/null 2>&1 || :
+}
+
+post_install() {
+  _configure
+}
+
+post_upgrade() {
+  _configure
+}
+
+pre_remove() {
+  systemctl disable --now cuttlefish-host_orchestrator.service >/dev/null 2>&1 || :
+}
+
+post_remove() {
+  systemctl daemon-reload >/dev/null 2>&1 || :
+}

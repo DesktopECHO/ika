@@ -1,4 +1,4 @@
-ika-scrcpy (3.3.4) unstable; urgency=medium
+ika-scrcpy (3.3.4-6) unstable; urgency=medium
 
   * Package scrcpy as standalone package
 

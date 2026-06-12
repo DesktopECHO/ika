@@ -421,7 +421,7 @@ Usage:
 
 Example:
 
-  ${SCRIPT_NAME} start --cpus=2 --memory_mb=2048 --dpi=240 --fullscreen
+  ${SCRIPT_NAME} start --gpu_mode=guest_swiftshader --cpus=2 --memory_mb=2048 --dpi=240 --fullscreen
   ${SCRIPT_NAME} start --datagb=128
   ${SCRIPT_NAME} restart --gfxstream-vulkan=on
 

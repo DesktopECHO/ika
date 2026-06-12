@@ -1,0 +1,45 @@
+# Maintainer: DesktopECHO <build@desktopecho.com>
+# Mirrors base/rpm/cuttlefish-lineageos.spec. Packages the prebuilt
+# lineageos-<arch> bundle staged at the repo root by the ROM build.
+
+pkgbase=ika-lineageos
+pkgname=(ika-lineageos)
+pkgver=20260420
+pkgrel=5
+pkgdesc='LineageOS for Cuttlefish host'
+arch=(x86_64 aarch64)
+url='https://github.com/google/android-cuttlefish'
+license=(Apache-2.0)
+options=(!strip !debug)
+install=ika-lineageos.install
+_srcver=1.53.0
+source=("android-cuttlefish-${_srcver}.tar.gz")
+sha256sums=('SKIP')
+
+_srcroot="android-cuttlefish-${_srcver}"
+
+_ika_arch() {
+  case "${CARCH}" in
+    aarch64) printf 'arm64' ;;
+    *)       printf 'x86_64' ;;
+  esac
+}
+
+package_ika-lineageos() {
+  depends=(ika-base)
+  provides=(cuttlefish-lineageos)
+  conflicts=(cuttlefish-lineageos)
+  replaces=(cuttlefish-lineageos)
+
+  local root="${srcdir}/${_srcroot}"
+  local bundle="lineageos-$(_ika_arch)"
+
+  install -d "${pkgdir}/usr/share/cuttlefish-common"
+  cp -a "${root}/${bundle}" "${pkgdir}/usr/share/cuttlefish-common/lineageos"
+  find "${pkgdir}/usr/share/cuttlefish-common/lineageos" -type d ! -type l -exec chmod 755 '{}' +
+  find "${pkgdir}/usr/share/cuttlefish-common/lineageos" ! -type l -exec chmod u+w '{}' +
+  find "${pkgdir}/usr/share/cuttlefish-common/lineageos" ! -type l -exec chmod g=u '{}' +
+  find "${pkgdir}/usr/share/cuttlefish-common/lineageos" -type d ! -type l -exec chmod a+rx '{}' +
+
+  install -Dpm0644 "${root}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

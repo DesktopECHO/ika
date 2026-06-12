@@ -1,0 +1,18 @@
+# pacman scriptlets for ika-defaults. Mirrors the subpackage scriptlets in
+# base/rpm/cuttlefish-base.spec.
+
+post_install() {
+  systemctl daemon-reload >/dev/null 2>&1 || :
+}
+
+post_upgrade() {
+  systemctl daemon-reload >/dev/null 2>&1 || :
+}
+
+pre_remove() {
+  systemctl disable --now cuttlefish-defaults.service >/dev/null 2>&1 || :
+}
+
+post_remove() {
+  systemctl daemon-reload >/dev/null 2>&1 || :
+}

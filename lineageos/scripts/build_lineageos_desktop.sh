@@ -36,12 +36,20 @@ else
 fi
 output_dir="${OUTPUT_DIR:-$ika_root}"
 buildtime_log_path="${BUILDTIME_LOG_PATH:-$ika_root/buildtimes.log}"
-repo_tool_url="${REPO_TOOL_URL:-https://storage.googleapis.com/git-repo-downloads/repo}"
 repo_install_path="${REPO_INSTALL_PATH:-/usr/local/bin/repo}"
 repo_cmd="repo"
 repo_sync_attempts="${REPO_SYNC_ATTEMPTS:-9}"
 repo_sync_retry_fetches="${REPO_SYNC_RETRY_FETCHES:-9}"
 repo_sync_quiet="${REPO_SYNC_QUIET:-}"
+# Bandwidth controls for the initial `repo init`. Blobless partial clone
+# downloads commit/tree history but fetches file blobs lazily on checkout; keep
+# checkout concurrency conservative below so those lazy fetches do not stampede.
+# Set REPO_CLONE_FILTER="" to use full clones, or REPO_GROUPS="" to sync every
+# manifest group.
+repo_clone_filter="${REPO_CLONE_FILTER-blob:none}"
+repo_groups="${REPO_GROUPS-default,-darwin}"
+repo_sync_jobs="${REPO_SYNC_JOBS:-}"
+repo_sync_checkout_jobs="${REPO_SYNC_CHECKOUT_JOBS:-}"
 jobs_was_set=0
 [[ -n "${JOBS:-}" ]] && jobs_was_set=1
 arm64_go_prebuilt_git_url="${ARM64_GO_PREBUILT_GIT_URL:-https://android.googlesource.com/platform/prebuilts/go/linux-arm64}"
@@ -68,7 +76,11 @@ arm64_cmake_prebuilt_git_ref="${ARM64_CMAKE_PREBUILT_GIT_REF:-mirror-goog-llvm-r
 arm64_jdk21_prebuilt_url="${ARM64_JDK21_PREBUILT_URL:-https://api.adoptium.net/v3/binary/latest/21/ga/linux/aarch64/jdk/hotspot/normal/eclipse}"
 arm64_jdk8_prebuilt_url="${ARM64_JDK8_PREBUILT_URL:-https://api.adoptium.net/v3/binary/latest/8/ga/linux/aarch64/jdk/hotspot/normal/eclipse}"
 arm64_job_retry_list="${ARM64_JOB_RETRY_LIST:-}"
-arm64_nofile_limit="${ARM64_NOFILE_LIMIT:-4194304}"
+if [[ -n "${NOFILE_LIMIT+x}" ]]; then
+  host_nofile_limit="$NOFILE_LIMIT"
+else
+  host_nofile_limit=4194304
+fi
 arm64_soong_gomemlimit_was_set=0
 [[ -n "${ARM64_SOONG_GOMEMLIMIT:-}" ]] && arm64_soong_gomemlimit_was_set=1
 arm64_soong_gomemlimit="${ARM64_SOONG_GOMEMLIMIT:-6GiB}"
@@ -84,7 +96,6 @@ linux_arm64_llvm_prebuilts_version=""
 linux_arm64_llvm_release_version=""
 linux_x86_llvm_prebuilts_version=""
 linux_x86_llvm_release_version=""
-auto_install_deps="${AUTO_INSTALL_DEPS:-1}"
 reset_patched_projects="${RESET_PATCHED_PROJECTS:-auto}"
 anonymous_git_config_home="$workspace/.lineage-desktop-anonymous-config"
 anonymous_git_config="$anonymous_git_config_home/git/config"
@@ -374,7 +385,10 @@ main() {
   ensure_arm64_native_host
   configure_tmpdir
   ensure_signing_keys
-  setup_temp_zram_if_needed
+  raise_host_open_file_limit
+  if [[ "${IKA_PRIVILEGED_PREFLIGHT_DONE:-0}" != "1" ]]; then
+    setup_temp_zram_if_needed
+  fi
   set_build_jobs
   configure_arm64_soong_limits
   log "using $jobs parallel build jobs ($highmem_jobs high-memory jobs)"
@@ -382,7 +396,9 @@ main() {
   ensure_repo_command
   ensure_anonymous_git_config
   cleanup_workspace_path_metadata
-  ensure_workspace_selinux_contexts
+  if [[ "${IKA_PRIVILEGED_PREFLIGHT_DONE:-0}" != "1" ]]; then
+    ensure_workspace_selinux_contexts
+  fi
 
   local -a targets
   mapfile -t targets < <(normalize_targets "$@")

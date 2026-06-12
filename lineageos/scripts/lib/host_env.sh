@@ -1,121 +1,12 @@
 #!/usr/bin/env bash
-# Host-environment helpers for the LineageOS Desktop build engine: package/tool
-# detection + install, privileged execution, downloader, SELinux labeling, and
-# temporary zram swap sizing. Source only (defines functions). Relies on the
-# engine's core primitives (log/die/enabled/need_cmd) and globals at call time.
-
-detect_package_manager() {
-  if command -v apt-get >/dev/null 2>&1; then
-    printf '%s\n' apt
-  elif command -v dnf >/dev/null 2>&1; then
-    printf '%s\n' dnf
-  elif command -v pacman >/dev/null 2>&1; then
-    printf '%s\n' pacman
-  else
-    return 1
-  fi
-}
-
-package_for_command() {
-  local pm="$1"
-  local cmd="$2"
-
-  case "$pm:$cmd" in
-    apt:awk) printf '%s\n' gawk ;;
-    apt:find) printf '%s\n' findutils ;;
-    apt:file) printf '%s\n' file ;;
-    apt:gcc) printf '%s\n' gcc ;;
-    apt:libc6-dev) printf '%s\n' libc6-dev ;;
-    apt:git) printf '%s\n' git ;;
-    apt:git-lfs) printf '%s\n' git-lfs ;;
-    apt:go) printf '%s\n' golang-go ;;
-    apt:javac) printf '%s\n' openjdk-21-jdk ;;
-    apt:install|apt:mktemp|apt:readlink) printf '%s\n' coreutils ;;
-    apt:lz4) printf '%s\n' lz4 ;;
-    apt:mogrify) printf '%s\n' imagemagick ;;
-    apt:modprobe) printf '%s\n' kmod ;;
-    apt:ninja) printf '%s\n' ninja-build ;;
-    apt:pahole) printf '%s\n' dwarves ;;
-    apt:prlimit) printf '%s\n' util-linux ;;
-    apt:restorecon) printf '%s\n' policycoreutils ;;
-    apt:semanage) printf '%s\n' policycoreutils-python-utils ;;
-    apt:mkswap|apt:swapoff|apt:swapon|apt:zramctl) printf '%s\n' util-linux ;;
-    apt:python3) printf '%s\n' python3 ;;
-    apt:readelf) printf '%s\n' binutils ;;
-    apt:rsync) printf '%s\n' rsync ;;
-    apt:tar) printf '%s\n' tar ;;
-    apt:curl) printf '%s\n' curl ;;
-    apt:ccache) printf '%s\n' ccache ;;
-    apt:adb) printf '%s\n' adb ;;
-    apt:zip) printf '%s\n' zip ;;
-    apt:7z) printf '%s\n' 7zip ;;
-    apt:simg2img) printf '%s\n' android-sdk-libsparse-utils ;;
-    apt:fsck.erofs) printf '%s\n' erofs-utils ;;
-    apt:debugfs) printf '%s\n' e2fsprogs ;;
-    apt:keytool) printf '%s\n' default-jdk-headless ;;
-    dnf:awk) printf '%s\n' gawk ;;
-    dnf:find) printf '%s\n' findutils ;;
-    dnf:file) printf '%s\n' file ;;
-    dnf:git) printf '%s\n' git ;;
-    dnf:git-lfs) printf '%s\n' git-lfs ;;
-    dnf:go) printf '%s\n' golang ;;
-    dnf:javac) printf '%s\n' java-25-openjdk-devel ;;
-    dnf:install|dnf:mktemp|dnf:readlink) printf '%s\n' coreutils ;;
-    dnf:lz4) printf '%s\n' lz4 ;;
-    dnf:mogrify) printf '%s\n' ImageMagick ;;
-    dnf:modprobe) printf '%s\n' kmod ;;
-    dnf:ninja) printf '%s\n' ninja-build ;;
-    dnf:pahole) printf '%s\n' dwarves ;;
-    dnf:prlimit) printf '%s\n' util-linux ;;
-    dnf:restorecon) printf '%s\n' policycoreutils ;;
-    dnf:semanage) printf '%s\n' policycoreutils-python-utils ;;
-    dnf:mkswap|dnf:swapoff|dnf:swapon|dnf:zramctl) printf '%s\n' util-linux ;;
-    dnf:python3) printf '%s\n' python3 ;;
-    dnf:readelf) printf '%s\n' binutils ;;
-    dnf:rsync) printf '%s\n' rsync ;;
-    dnf:tar) printf '%s\n' tar ;;
-    dnf:curl) printf '%s\n' curl ;;
-    dnf:ccache) printf '%s\n' ccache ;;
-    dnf:adb) printf '%s\n' android-tools ;;
-    dnf:zip) printf '%s\n' zip ;;
-    dnf:7z) printf '%s\n' 7zip ;;
-    dnf:simg2img) printf '%s\n' android-tools ;;
-    dnf:fsck.erofs) printf '%s\n' erofs-utils ;;
-    dnf:debugfs) printf '%s\n' e2fsprogs ;;
-    dnf:keytool) printf '%s\n' java-latest-openjdk-headless ;;
-    pacman:awk) printf '%s\n' gawk ;;
-    pacman:find) printf '%s\n' findutils ;;
-    pacman:file) printf '%s\n' file ;;
-    pacman:git) printf '%s\n' git ;;
-    pacman:git-lfs) printf '%s\n' git-lfs ;;
-    pacman:go) printf '%s\n' go ;;
-    pacman:javac) printf '%s\n' jdk-openjdk ;;
-    pacman:install|pacman:mktemp|pacman:readlink) printf '%s\n' coreutils ;;
-    pacman:lz4) printf '%s\n' lz4 ;;
-    pacman:mogrify) printf '%s\n' imagemagick ;;
-    pacman:modprobe) printf '%s\n' kmod ;;
-    pacman:ninja) printf '%s\n' ninja ;;
-    pacman:pahole) printf '%s\n' dwarves ;;
-    pacman:prlimit) printf '%s\n' util-linux ;;
-    pacman:restorecon) printf '%s\n' policycoreutils ;;
-    pacman:semanage) printf '%s\n' policycoreutils ;;
-    pacman:mkswap|pacman:swapoff|pacman:swapon|pacman:zramctl) printf '%s\n' util-linux ;;
-    pacman:python3) printf '%s\n' python ;;
-    pacman:readelf) printf '%s\n' binutils ;;
-    pacman:rsync) printf '%s\n' rsync ;;
-    pacman:tar) printf '%s\n' tar ;;
-    pacman:curl) printf '%s\n' curl ;;
-    pacman:ccache) printf '%s\n' ccache ;;
-    pacman:adb) printf '%s\n' android-tools ;;
-    pacman:zip) printf '%s\n' zip ;;
-    pacman:7z) printf '%s\n' 7zip ;;
-    pacman:simg2img) printf '%s\n' android-tools ;;
-    pacman:fsck.erofs) printf '%s\n' erofs-utils ;;
-    pacman:debugfs) printf '%s\n' e2fsprogs ;;
-    pacman:keytool) printf '%s\n' jdk-openjdk ;;
-    *) return 1 ;;
-  esac
-}
+# Host-environment helpers for the LineageOS Desktop build engine: tool
+# detection, privileged execution, downloader, SELinux labeling, and temporary
+# zram swap sizing. Source only (defines functions). Relies on the engine's
+# core primitives (log/die/enabled/need_cmd) and globals at call time.
+#
+# Distro packages are installed by ./ika-build
+# (tools/buildutils/lib/dependencies.sh); helpers here only verify tools and
+# fail with guidance.
 
 run_privileged() {
   if (( EUID == 0 )); then
@@ -137,60 +28,9 @@ nofile_limit_at_least() {
   (( value >= minimum ))
 }
 
-install_packages() {
-  local pm="$1"
-  shift
-  (( $# > 0 )) || return 0
-
-  [[ "$auto_install_deps" == "1" ]] || return 1
-
-  log "installing missing host tools with $pm: $*"
-  case "$pm" in
-    apt)
-      run_privileged apt-get update
-      run_privileged apt-get install -y "$@"
-      ;;
-    dnf)
-      run_privileged dnf install -y "$@"
-      ;;
-    pacman)
-      run_privileged pacman -Sy --needed --noconfirm "$@"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-install_missing_commands() {
-  local -a missing=("$@")
-  local pm
-  pm="$(detect_package_manager)" || return 1
-
-  local -A seen_packages=()
-  local -a packages=()
-  local cmd package
-
-  for cmd in "${missing[@]}"; do
-    package="$(package_for_command "$pm" "$cmd")" || continue
-    if [[ -z "${seen_packages[$package]:-}" ]]; then
-      packages+=("$package")
-      seen_packages["$package"]=1
-    fi
-  done
-
-  install_packages "$pm" "${packages[@]}"
-}
-
 ensure_downloader() {
-  if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then
-    return 0
-  fi
-
-  install_missing_commands curl || true
-
   command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || \
-    die "missing curl or wget; install one or set AUTO_INSTALL_DEPS=1 on a supported distro"
+    die "missing curl or wget; run ./ika-build to install all build dependencies, or install one manually"
 }
 
 download_file() {
@@ -215,28 +55,8 @@ ensure_host_commands() {
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
   done
 
-  if (( ${#missing[@]} > 0 )); then
-    install_missing_commands "${missing[@]}" || true
-  fi
-
-  missing=()
-  for cmd in "${required[@]}"; do
-    command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
-  done
-
   (( ${#missing[@]} == 0 )) || \
-    die "missing required host tools: ${missing[*]}"
-
-  # crtbeginS.o is split from gcc into libgcc-<ver>-dev on Debian trixie+
-  if ! compgen -G '/usr/lib/gcc/*/*/crtbeginS.o' >/dev/null 2>&1; then
-    local _pm _gcc_ver
-    _pm="$(detect_package_manager 2>/dev/null)" || true
-    if [[ "$_pm" == "apt" ]]; then
-      _gcc_ver="$(apt-cache pkgnames 2>/dev/null | grep -E '^libgcc-[0-9]+-dev$' | \
-        grep -oE '[0-9]+' | sort -n | tail -1)"
-      [[ -n "$_gcc_ver" ]] && install_packages apt "libgcc-${_gcc_ver}-dev" || true
-    fi
-  fi
+    die "missing required host tools: ${missing[*]} (run ./ika-build to install all build dependencies, or install them manually)"
 
   ensure_downloader
 }
@@ -269,7 +89,6 @@ ensure_selinux_fcontext() {
   local type="$2"
   local escaped regex
 
-  command -v semanage >/dev/null 2>&1 || install_missing_commands semanage || true
   if command -v semanage >/dev/null 2>&1; then
     escaped="$(regex_escape "$path")"
     regex="${escaped}(/.*)?"
@@ -306,7 +125,6 @@ ensure_workspace_selinux_contexts() {
     ensure_selinux_fcontext "$path" "$workspace_type"
   done
   if command -v semanage >/dev/null 2>&1; then
-    command -v restorecon >/dev/null 2>&1 || install_missing_commands restorecon || true
     command -v restorecon >/dev/null 2>&1 || \
       die "SELinux fcontext configured for ${relabel_paths[*]}, but restorecon is missing"
     run_privileged restorecon -R "${relabel_paths[@]}" || \
@@ -326,17 +144,8 @@ ensure_temp_zram_commands() {
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
   done
 
-  if (( ${#missing[@]} > 0 )); then
-    install_missing_commands "${missing[@]}" || true
-  fi
-
-  missing=()
-  for cmd in "${required[@]}"; do
-    command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
-  done
-
   (( ${#missing[@]} == 0 )) || \
-    die "missing required zram tools: ${missing[*]}"
+    die "missing required zram tools: ${missing[*]} (run ./ika-build to install all build dependencies, or install kmod/util-linux manually)"
 }
 
 format_kib_as_gib() {
@@ -494,7 +303,11 @@ cleanup_temp_zram() {
   [[ -n "$temp_zram_device" ]] || return 0
 
   log "removing temporary zram swap $temp_zram_device"
-  run_privileged swapoff "$temp_zram_device" >/dev/null 2>&1 || true
-  run_privileged zramctl --reset "$temp_zram_device" >/dev/null 2>&1 || true
+  # Runs from the exit trap, so a failure must not abort shutdown — but the
+  # user needs to know the device is still consuming RAM and how to free it.
+  if ! run_privileged swapoff "$temp_zram_device" >/dev/null 2>&1 || \
+     ! run_privileged zramctl --reset "$temp_zram_device" >/dev/null 2>&1; then
+    log "warning: failed to remove temporary zram swap $temp_zram_device; remove it manually with: sudo swapoff $temp_zram_device; sudo zramctl --reset $temp_zram_device (or reboot)"
+  fi
   temp_zram_device=""
 }

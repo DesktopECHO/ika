@@ -1,0 +1,75 @@
+# Maintainer: DesktopECHO <build@desktopecho.com>
+# Mirrors frontend/rpm/cuttlefish-frontend.spec; the service and sysconfig
+# assets are shared with the RPM packaging under frontend/rpm/.
+
+pkgbase=ika-frontend
+pkgname=(ika-user ika-orchestration)
+pkgver=1.53.0
+pkgrel=5
+pkgdesc='Frontend and orchestration packages for Cuttlefish'
+arch=(x86_64 aarch64)
+url='https://github.com/google/android-cuttlefish'
+license=(Apache-2.0)
+makedepends=(curl git go npm protobuf)
+options=(!strip !debug)
+source=("android-cuttlefish-${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+_srcroot="android-cuttlefish-${pkgver}"
+
+build() {
+  cd "${srcdir}/${_srcroot}/frontend"
+  src/goutil src/host_orchestrator build -v -buildmode=pie -ldflags="-w"
+  src/goutil src/operator build -v -buildmode=pie -ldflags="-w"
+  ./build-webui.sh
+}
+
+package_ika-user() {
+  pkgdesc='Operator service for browser access to Cuttlefish'
+  depends=(ika-base openssl)
+  provides=(cuttlefish-user)
+  conflicts=(cuttlefish-user)
+  replaces=(cuttlefish-user)
+  install=ika-user.install
+
+  local root="${srcdir}/${_srcroot}"
+
+  install -Dpm0755 "${root}/frontend/src/operator/operator" "${pkgdir}/usr/lib/cuttlefish-common/bin/operator"
+  install -d "${pkgdir}/usr/share/cuttlefish-common/operator"
+  cp -a "${root}/frontend/src/operator/webui/dist/static" "${pkgdir}/usr/share/cuttlefish-common/operator/"
+  cp -a "${root}/frontend/src/operator/intercept" "${pkgdir}/usr/share/cuttlefish-common/operator/"
+
+  install -Dpm0644 "${root}/frontend/rpm/cuttlefish-operator.service" "${pkgdir}/usr/lib/systemd/system/cuttlefish-operator.service"
+  install -Dpm0755 "${root}/frontend/rpm/cuttlefish-operator.sh" "${pkgdir}/usr/libexec/cuttlefish/cuttlefish-operator"
+  install -Dpm0755 "${root}/frontend/rpm/cuttlefish-operator-prepare.sh" "${pkgdir}/usr/libexec/cuttlefish/cuttlefish-operator-prepare"
+  install -Dpm0644 "${root}/frontend/rpm/cuttlefish-operator.sysconfig" "${pkgdir}/etc/sysconfig/cuttlefish-operator"
+
+  install -d "${pkgdir}/usr/bin"
+  ln -sfn ../lib/cuttlefish-common/bin/host_orchestrator "${pkgdir}/usr/bin/cvd_host_orchestrator"
+
+  install -Dpm0644 "${root}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}
+
+package_ika-orchestration() {
+  pkgdesc='Host Orchestrator service for Cuttlefish'
+  depends=(ika-user nginx openssl systemd)
+  provides=(cuttlefish-orchestration)
+  conflicts=(cuttlefish-orchestration)
+  replaces=(cuttlefish-orchestration)
+  install=ika-orchestration.install
+
+  local root="${srcdir}/${_srcroot}"
+
+  install -Dpm0755 "${root}/frontend/src/host_orchestrator/host_orchestrator" "${pkgdir}/usr/lib/cuttlefish-common/bin/host_orchestrator"
+
+  install -Dpm0644 "${root}/frontend/rpm/cuttlefish-host_orchestrator.service" "${pkgdir}/usr/lib/systemd/system/cuttlefish-host_orchestrator.service"
+  install -Dpm0755 "${root}/frontend/rpm/cuttlefish-host_orchestrator.sh" "${pkgdir}/usr/libexec/cuttlefish/cuttlefish-host_orchestrator"
+  install -Dpm0755 "${root}/frontend/rpm/cuttlefish-host_orchestrator-prepare.sh" "${pkgdir}/usr/libexec/cuttlefish/cuttlefish-host_orchestrator-prepare"
+  install -Dpm0644 "${root}/frontend/rpm/cuttlefish-host_orchestrator.sysconfig" "${pkgdir}/etc/sysconfig/cuttlefish-host_orchestrator"
+  install -Dpm0644 "${root}/frontend/host/packages/cuttlefish-orchestration/etc/nginx/sites-available/cuttlefish-orchestration.conf" "${pkgdir}/etc/nginx/conf.d/cuttlefish-orchestration.conf"
+
+  install -d "${pkgdir}/usr/bin"
+  ln -sfn ../lib/cuttlefish-common/bin/cvd "${pkgdir}/usr/bin/fetch_cvd"
+
+  install -Dpm0644 "${root}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

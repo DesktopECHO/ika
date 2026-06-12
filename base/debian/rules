@@ -68,6 +68,11 @@ ifneq ($(strip ${BAZEL_REMOTE_CACHE}),)
   remote_cache_arg := --google_default_credentials --remote_cache="${BAZEL_REMOTE_CACHE}/${BAZEL_CACHE_VERSION}"
 endif
 
+# On Debian, arch-specific C headers live under /usr/include/$(DEB_HOST_MULTIARCH)
+# rather than /usr/include. Clang invoked by bindgen doesn't add this path
+# automatically, so pass it explicitly. DEB_HOST_MULTIARCH is set by buildflags.mk.
+bindgen_clang_args := --action_env=BINDGEN_EXTRA_CLANG_ARGS=-I/usr/include/$(DEB_HOST_MULTIARCH)
+
 %:
 	dh $@ --with=config-package
 
@@ -101,7 +106,8 @@ override_dh_auto_build:
 	         --distdir="$$BAZEL_DISTDIR" \
 	         --repo_env=GIT_CONFIG_GLOBAL="$$BAZEL_GIT_CONFIG" \
 	         --repo_env=GIT_CONFIG_NOSYSTEM=1 \
-	         ${compilation_mode} ${conlyopts} ${copts} ${cxxopts} ${linkopts} -c opt \
+	         ${bindgen_clang_args} \
+         ${compilation_mode} ${conlyopts} ${copts} ${cxxopts} ${linkopts} -c opt \
 	         'cuttlefish/package:cvd' 'cuttlefish/package:defaults' 'cuttlefish/package:metrics' \
 	         --spawn_strategy=local \
 	         --workspace_status_command=../stamp_helper.sh \

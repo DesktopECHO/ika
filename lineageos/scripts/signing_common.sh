@@ -11,6 +11,25 @@ _signing_common_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SETUP_KEYS_SCRIPT="$_signing_common_dir/../../tools/buildutils/setup_keys.sh"
 GENERATE_KEYS_SCRIPT="$_signing_common_dir/generate_signing_keys.sh"
 
+signing_certificate_email() {
+  local cert="$ANDROID_CERTS_DIR/releasekey.x509.pem"
+
+  [[ -f "$cert" ]] || return 0
+  command -v openssl >/dev/null 2>&1 || return 0
+  openssl x509 -in "$cert" -noout -email 2>/dev/null | sed -n '/./{p;q;}' || true
+}
+
+default_signing_email() {
+  local user host
+
+  user="${USER:-$(id -un 2>/dev/null || printf build)}"
+  host="$(hostname -f 2>/dev/null || hostname 2>/dev/null || printf localhost)"
+
+  [[ "$host" == *.* ]] || host="$host.local"
+
+  printf '%s@%s\n' "$user" "$host"
+}
+
 host_page_size() {
   local page_size
   page_size="$(getconf PAGE_SIZE 2>/dev/null || true)"

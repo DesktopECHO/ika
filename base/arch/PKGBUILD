@@ -1,0 +1,235 @@
+# Maintainer: DesktopECHO <build@desktopecho.com>
+# Arch Linux packaging for the Cuttlefish host packages. Mirrors
+# base/rpm/cuttlefish-base.spec; the service, udev, and sysconfig assets are
+# shared with the RPM packaging under base/rpm/.
+
+pkgbase=ika-base
+pkgname=(ika-base ika-common ika-integration ika-defaults ika-metrics)
+pkgver=1.53.0
+pkgrel=5
+pkgdesc='Cuttlefish Android Virtual Device host packages'
+arch=(x86_64 aarch64)
+url='https://github.com/google/android-cuttlefish'
+license=(Apache-2.0)
+makedepends=(aom clang cmake curl ffmpeg fmt gcc gflags git google-glog gtest
+             icu jsoncpp libcap libdrm libsrtp libx11 libxext libxml2 mesa
+             openssl opus perl pkgconf protobuf protobuf-c python tinyxxd
+             util-linux-libs virglrenderer vulkan-headers wayland which xz z3)
+# objcopy/nm cannot parse the Bazel/Clang-built binaries; skip strip/debug.
+options=(!strip !debug)
+source=("android-cuttlefish-${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+_srcroot="android-cuttlefish-${pkgver}"
+
+_bazel_arch() {
+  case "${CARCH}" in
+    x86_64)  printf 'k8' ;;
+    aarch64) printf 'aarch64' ;;
+    *)       return 1 ;;
+  esac
+}
+
+build() {
+  cd "${srcdir}/${_srcroot}/base/cvd"
+
+  # Keep download/build caches persistent across makepkg runs so external
+  # repositories are fetched once and then reused on slow connections.
+  # Default under $HOME/ika-build alongside the other ika build scratch.
+  local cache_root="${CUTTLEFISH_BAZEL_CACHE_ROOT:-$HOME/ika-build/cuttlefish-bazel}"
+  local output_user_root="${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$HOME/ika-build}"
+  local repository_cache="${cache_root}/repository"
+  local disk_cache="${cache_root}/disk"
+  local distdir="${cache_root}/distdir"
+  local bazel_tmpdir="${CUTTLEFISH_BAZEL_TMPDIR:-${cache_root}/tmp}"
+  local git_mirror_root="${cache_root}/git-mirrors"
+  local git_config="${cache_root}/gitconfig"
+  mkdir -p "${output_user_root}" "${repository_cache}" "${disk_cache}" \
+    "${distdir}" "${bazel_tmpdir}" "${git_mirror_root}"
+  # Keep Bazel's output tree and crate_universe temp workspaces out of the
+  # makepkg srcdir; it is transient and can hit space limits while external
+  # git repos are materialized.
+  export TMPDIR="${bazel_tmpdir}"
+
+  local retry_count=0
+  local max_retries=9
+  local retry_delay=60
+  while true; do
+    # Pre-populate mirrors for the most expensive and flaky git_repository
+    # fetches so retries happen before the long Bazel build starts.
+    if CUTTLEFISH_BAZEL_GIT_MIRROR_ROOT="${git_mirror_root}" \
+      CUTTLEFISH_BAZEL_GIT_CONFIG="${git_config}" \
+      ./tools/ensure_bazel_git_mirrors.sh && \
+      GIT_CONFIG_GLOBAL="${git_config}" GIT_CONFIG_NOSYSTEM=1 \
+      DISABLE_BAZEL_WRAPPER=yes USE_BAZEL_VERSION=8.5.1 \
+      bazel --output_user_root="${output_user_root}" build -c opt \
+      --repository_cache="${repository_cache}" \
+      --disk_cache="${disk_cache}" \
+      --distdir="${distdir}" \
+      --cxxopt=-Wno-error=deprecated-declarations \
+      --host_cxxopt=-Wno-error=deprecated-declarations \
+      --conlyopt=-Wno-error=incompatible-pointer-types-discards-qualifiers \
+      --host_conlyopt=-Wno-error=incompatible-pointer-types-discards-qualifiers \
+      'cuttlefish/package:cvd' \
+      'cuttlefish/package:defaults' \
+      'cuttlefish/package:metrics' \
+      --spawn_strategy=local \
+      --repo_env=TMPDIR="${bazel_tmpdir}" \
+      --repo_env=GIT_CONFIG_GLOBAL="${git_config}" \
+      --repo_env=GIT_CONFIG_NOSYSTEM=1 \
+      --workspace_status_command=../stamp_helper.sh \
+      --build_tag_filters=-clang-tidy; then
+      break
+    fi
+
+    retry_count=$((retry_count + 1))
+    if (( retry_count >= max_retries )); then
+      echo "Bazel build failed after ${retry_count} attempts." >&2
+      return 1
+    fi
+
+    echo "Bazel build failed, retrying in ${retry_delay}s (${retry_count}/${max_retries})..." >&2
+    sleep "${retry_delay}"
+  done
+}
+
+_package_output_root() {
+  printf '%s' "${srcdir}/${_srcroot}/base/cvd/bazel-out/$(_bazel_arch)-opt/bin/cuttlefish/package"
+}
+
+package_ika-base() {
+  pkgdesc='Cuttlefish host binaries, networking helpers, and system services'
+  depends=(curl dnsmasq iproute2 libarchive libcap libdrm libx11 libxext mesa
+           net-tools networkmanager nftables openssl python python-requests
+           procps-ng shadow systemd virglrenderer vulkan-icd-loader
+           vulkan-swrast vulkan-tools xdg-utils xz)
+  provides=(cuttlefish-base)
+  conflicts=(cuttlefish-base)
+  replaces=(cuttlefish-base)
+  backup=(etc/firewalld/zones/cuttlefish.xml
+          etc/sysctl.d/99-cuttlefish.conf)
+  install=ika-base.install
+
+  local root="${srcdir}/${_srcroot}"
+  local out
+  out="$(_package_output_root)"
+
+  install -d "${pkgdir}/usr/lib"
+  cp -a "${out}/cuttlefish-common" "${pkgdir}/usr/lib/"
+  rm -rf "${pkgdir}/usr/lib/cuttlefish-common/bin/cvd.repo_mapping" \
+         "${pkgdir}/usr/lib/cuttlefish-common/bin"/cvd.runfiles* \
+         "${pkgdir}/usr/lib/cuttlefish-common/bin/crosvm.repo_mapping" \
+         "${pkgdir}/usr/lib/cuttlefish-common/bin"/crosvm.runfiles*
+
+  chmod -x "${pkgdir}/usr/lib/cuttlefish-common/bin"/*.json
+  chmod -x "${pkgdir}/usr/lib/cuttlefish-common/bin/mke2fs.conf"
+  find "${pkgdir}/usr/lib/cuttlefish-common/etc" -type f -exec chmod -x '{}' ';'
+  find "${pkgdir}/usr/lib/cuttlefish-common/usr/share/webrtc/assets" -type f -exec chmod -x '{}' ';'
+
+  install -Dpm0755 "${root}/base/host/deploy/capability_query.py" "${pkgdir}/usr/lib/cuttlefish-common/bin/capability_query.py"
+  install -Dpm0755 "${root}/tools/getchromium" "${pkgdir}/usr/lib/cuttlefish-common/bin/getchromium"
+  # /bin is a symlink to /usr/bin on Arch; the RPM's /bin/ika lands here.
+  install -Dpm0755 "${root}/tools/ika" "${pkgdir}/usr/bin/ika"
+  install -Dpm0644 "${root}/base/host/packages/cuttlefish-base/etc/NetworkManager/conf.d/99-cuttlefish.conf" "${pkgdir}/etc/NetworkManager/conf.d/99-cuttlefish.conf"
+  install -Dpm0644 "${root}/base/rpm/99-cuttlefish.conf" "${pkgdir}/etc/sysctl.d/99-cuttlefish.conf"
+  install -Dpm0644 "${root}/base/host/packages/cuttlefish-base/etc/modules-load.d/cuttlefish-common.conf" "${pkgdir}/etc/modules-load.d/cuttlefish-common.conf"
+  install -Dpm0644 "${root}/base/host/packages/cuttlefish-base/etc/security/limits.d/1_cuttlefish.conf" "${pkgdir}/etc/security/limits.d/1_cuttlefish.conf"
+  install -Dpm0755 "${root}/base/rpm/cuttlefish-ulimit.sh" "${pkgdir}/etc/profile.d/cuttlefish-ulimit.sh"
+  install -Dpm0644 "${root}/base/rpm/70-cuttlefish-base.rules" "${pkgdir}/usr/lib/udev/rules.d/70-cuttlefish-base.rules"
+  install -Dpm0644 "${root}/base/rpm/cuttlefish-host-resources.service" "${pkgdir}/usr/lib/systemd/system/cuttlefish-host-resources.service"
+  install -Dpm0755 "${root}/base/rpm/cuttlefish-host-resources.sh" "${pkgdir}/usr/libexec/cuttlefish/cuttlefish-host-resources"
+  install -Dpm0755 "${root}/base/rpm/cuttlefish-add-user-to-groups.sh" "${pkgdir}/usr/libexec/cuttlefish/cuttlefish-add-user-to-groups"
+  install -Dpm0644 "${root}/base/rpm/cuttlefish-host-resources.sysconfig" "${pkgdir}/etc/sysconfig/cuttlefish-host-resources"
+  install -Dpm0644 "${root}/base/rpm/cuttlefish.xml" "${pkgdir}/etc/firewalld/zones/cuttlefish.xml"
+  install -Dpm0644 "${root}/base/rpm/cuttlefish-tmpfiles.conf" "${pkgdir}/usr/lib/tmpfiles.d/cuttlefish.conf"
+
+  mkdir -p "${pkgdir}/usr/lib/cuttlefish-common/bin/aarch64-linux-gnu"
+  mkdir -p "${pkgdir}/usr/lib/cuttlefish-common/bin/x86_64-linux-gnu"
+  mkdir -p "${pkgdir}/usr/lib/cuttlefish-common/lib64"
+  ln -sfn ../graphics_detector "${pkgdir}/usr/lib/cuttlefish-common/bin/aarch64-linux-gnu/gfxstream_graphics_detector"
+  ln -sfn ../libvk_swiftshader.so "${pkgdir}/usr/lib/cuttlefish-common/bin/aarch64-linux-gnu/libvk_swiftshader.so"
+  ln -sfn ../graphics_detector "${pkgdir}/usr/lib/cuttlefish-common/bin/x86_64-linux-gnu/gfxstream_graphics_detector"
+  ln -sfn ../bin/libvk_swiftshader.so "${pkgdir}/usr/lib/cuttlefish-common/lib64/vulkan.pastel.so"
+
+  # Expose cvd on PATH to match upstream's /usr/bin/cvd symlink.
+  ln -sfn /usr/lib/cuttlefish-common/bin/cvd "${pkgdir}/usr/bin/cvd"
+
+  install -Dpm0644 "${root}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}
+
+package_ika-common() {
+  pkgdesc='Compatibility metapackage for Cuttlefish host packages'
+  depends=(ika-base ika-defaults ika-user)
+  provides=(cuttlefish-common)
+  conflicts=(cuttlefish-common)
+  replaces=(cuttlefish-common)
+
+  install -Dpm0644 "${srcdir}/${_srcroot}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}
+
+package_ika-integration() {
+  pkgdesc='Cloud integration utilities for Cuttlefish'
+  depends=(ika-base)
+  case "${CARCH}" in
+    aarch64) depends+=(qemu-system-aarch64) ;;
+    x86_64)  depends+=(qemu-system-x86) ;;
+  esac
+  provides=(cuttlefish-integration)
+  conflicts=(cuttlefish-integration)
+  replaces=(cuttlefish-integration)
+
+  local root="${srcdir}/${_srcroot}"
+  local out
+  out="$(_package_output_root)"
+
+  install -d "${pkgdir}/usr/bin"
+  cp -a "${out}/cuttlefish-integration/bin/." "${pkgdir}/usr/bin/"
+  rm -rf "${pkgdir}/usr/bin/cf_defaults.repo_mapping" \
+         "${pkgdir}/usr/bin"/cf_defaults.runfiles*
+
+  install -Dpm0644 "${root}/base/host/packages/cuttlefish-integration/etc/modprobe.d/cuttlefish-integration.conf" "${pkgdir}/etc/modprobe.d/cuttlefish-integration.conf"
+  install -Dpm0644 "${root}/base/host/packages/cuttlefish-integration/etc/rsyslog.d/91-cuttlefish.conf" "${pkgdir}/etc/rsyslog.d/91-cuttlefish.conf"
+  install -Dpm0644 "${root}/base/host/packages/cuttlefish-integration/etc/ssh/sshd_config.cuttlefish" "${pkgdir}/etc/ssh/sshd_config.d/cuttlefish.conf"
+  install -Dpm0644 "${root}/base/rpm/71-cuttlefish-integration.rules" "${pkgdir}/usr/lib/udev/rules.d/71-cuttlefish-integration.rules"
+
+  install -Dpm0644 "${root}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}
+
+package_ika-defaults() {
+  pkgdesc='Optional Cuttlefish defaults override file'
+  depends=(ika-base ika-integration)
+  provides=(cuttlefish-defaults)
+  conflicts=(cuttlefish-defaults)
+  replaces=(cuttlefish-defaults)
+  backup=(etc/cuttlefish-common/cf_defaults)
+  install=ika-defaults.install
+
+  local root="${srcdir}/${_srcroot}"
+
+  install -d "${pkgdir}/etc/cuttlefish-common"
+  : > "${pkgdir}/etc/cuttlefish-common/cf_defaults"
+  chmod 0644 "${pkgdir}/etc/cuttlefish-common/cf_defaults"
+  install -Dpm0644 "${root}/base/rpm/cuttlefish-integration.sysconfig" "${pkgdir}/etc/sysconfig/cuttlefish-integration"
+  install -Dpm0644 "${root}/base/rpm/cuttlefish-defaults.service" "${pkgdir}/usr/lib/systemd/system/cuttlefish-defaults.service"
+  install -Dpm0755 "${root}/base/rpm/cuttlefish-defaults.sh" "${pkgdir}/usr/libexec/cuttlefish/cuttlefish-defaults"
+
+  install -Dpm0644 "${root}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}
+
+package_ika-metrics() {
+  pkgdesc='Metrics transmission support for Cuttlefish'
+  depends=(ika-base)
+  provides=(cuttlefish-metrics)
+  conflicts=(cuttlefish-metrics)
+  replaces=(cuttlefish-metrics)
+
+  local out
+  out="$(_package_output_root)"
+
+  install -d "${pkgdir}/usr/lib/cuttlefish-metrics/bin"
+  cp -a "${out}/cuttlefish-metrics/bin/metrics_transmitter" "${pkgdir}/usr/lib/cuttlefish-metrics/bin/"
+  rm -rf "${pkgdir}/usr/lib/cuttlefish-metrics/bin/metrics_transmitter.repo_mapping" \
+         "${pkgdir}/usr/lib/cuttlefish-metrics/bin"/metrics_transmitter.runfiles*
+
+  install -Dpm0644 "${srcdir}/${_srcroot}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

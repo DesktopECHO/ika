@@ -17,9 +17,11 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
+source "$repo_root/lineageos/scripts/signing_common.sh"
+
 config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/ika"
 config_file="$config_dir/signing.conf"
-android_certs_dir="${ANDROID_CERTS_DIR:-$HOME/.android-certs}"
+android_certs_dir="$ANDROID_CERTS_DIR"
 
 log() {
   printf '[ika-setup] %s\n' "$*"
@@ -42,8 +44,8 @@ prompt_signing_identity() {
   cat <<'EOF'
 
 This identity is embedded in every APK and APEX cert your builds emit. Use
-real values if you plan to distribute builds; the AOSP-style placeholders
-below are fine for local-only development.
+real values if you plan to distribute builds; the defaults below are fine for
+local-only development.
 
 Press Enter at each prompt to accept the default in brackets.
 
@@ -55,7 +57,8 @@ EOF
   o="$(prompt_with_default 'Organization' 'DesktopECHO')"
   ou="$(prompt_with_default 'Organizational Unit' 'Ika')"
   cn="$(prompt_with_default 'Common Name' 'LineageOS Virtual Desktop')"
-  email="$(prompt_with_default 'Email address' 'build@desktopecho.com')"
+  email="$(prompt_with_default 'Email address' "$(default_signing_email)")"
+  printf '\n'
 
   mkdir -p "$config_dir"
   umask 077

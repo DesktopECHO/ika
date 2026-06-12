@@ -116,21 +116,29 @@ the x86-64 native bridge payload is complete. Set
 
 The build signs target-files and extracted images before packaging the final
 Cuttlefish bundles. Signing keys live in `ANDROID_CERTS_DIR` (default:
-`~/.android-certs`). On a new clone, `signing_common.sh` runs
-`tools/buildutils/setup_keys.sh`, which prompts once for a certificate identity,
-writes it to `~/.config/ika/signing.conf`, and generates any missing APK/APEX
-keys. `STRICT_APEX_SIGNING=1` and `STRICT_PRESIGNED_ALLOWLIST=1` are the
-defaults; relax them only for local debugging.
+`~/.android-certs`). On a new clone, `./ika-build` prepares them immediately
+after installing build dependencies. Direct ROM builds use `signing_common.sh`
+to run `tools/buildutils/setup_keys.sh` before compiling. That setup prompts
+once for a certificate identity, writes it to `~/.config/ika/signing.conf`, and
+generates any missing APK/APEX keys. `STRICT_APEX_SIGNING=1` and
+`STRICT_PRESIGNED_ALLOWLIST=1` are the defaults; relax them only for local
+debugging.
 
-If `repo` is not installed, the script downloads it and uses `sudo install` to
-copy it to `/usr/local/bin/repo`. It also attempts to install
-missing basic host tools such as `git`, `git-lfs`, `python3`, `rsync`, `curl`,
-and `tar` with `apt`, `dnf`, or `pacman` when available. Set
-`AUTO_INSTALL_DEPS=0` to make missing tools a hard error instead.
+If `repo` is not installed, `./ika-build` downloads it during dependency setup
+and installs it to `/usr/local/bin/repo`. Missing host tools such as `git`,
+`git-lfs`, `python3`, `rsync`, `curl`, and `tar` are a hard error; `./ika-build`
+installs them with the rest of the build dependencies
+(`tools/buildutils/lib/dependencies.sh`).
 Git network operations run with a build-local git config that enables repo
 color output, sets a local builder identity, and rewrites common GitHub SSH/git
 remotes to anonymous HTTPS, so public sources can sync without a GitHub account
 or SSH key.
+
+LineageOS source sync uses repo partial clone by default to reduce initial
+downloads. Partial-clone checkouts run in a conservative phased mode because the
+missing file blobs are fetched lazily during checkout. Set `REPO_CLONE_FILTER=`
+to force full clones, or lower `REPO_SYNC_CHECKOUT_JOBS` if a network/proxy still
+has trouble with lazy blob fetches.
 
 Final Cuttlefish-ready bundles are written as directories at the ika repo
 root:
@@ -167,7 +175,8 @@ OUTPUT_DIR=/path/to/final/images    # default: ika repo root
 JOBS=16
 LINEAGE_BRANCH=lineage-23.2
 REPO_INSTALL_PATH=/usr/local/bin/repo
-AUTO_INSTALL_DEPS=0
+REPO_CLONE_FILTER=blob:none     # empty uses full clones
+REPO_SYNC_CHECKOUT_JOBS=4       # lower to 1 for fragile networks/proxies
 RESET_PATCHED_PROJECTS=0
 INCLUDE_MICROG=1
 UPDATE_MICROG_PREBUILTS=1

@@ -1,0 +1,53 @@
+# pacman scriptlets for ika-lineageos. Mirrors the %post/%postun scriptlets in
+# base/rpm/cuttlefish-lineageos.spec: expose the bundle's etc/ and usr/ trees
+# under /usr/lib/cuttlefish-common via symlinks, tracked in a manifest so only
+# links this package created are removed on uninstall.
+
+_manifest=/var/lib/cuttlefish-lineageos/created-symlinks
+
+_ensure_manifest_dir() {
+  mkdir -p "$(dirname "${_manifest}")"
+}
+
+_link_bundle() {
+  _ensure_manifest_dir
+
+  # The packaged tree is root:root; cvd expects group kvm with group-writable
+  # files, matching the RPM's %defattr(-,root,kvm,-).
+  chgrp -R kvm /usr/share/cuttlefish-common/lineageos 2>/dev/null || :
+
+  cd /usr/share/cuttlefish-common/lineageos || return 0
+  find etc usr -mindepth 1 | while read -r path; do
+    target="/usr/lib/cuttlefish-common/${path}"
+    source="/usr/share/cuttlefish-common/lineageos/${path}"
+    if [ ! -e "${target}" ]; then
+      mkdir -p "$(dirname "${target}")"
+      ln -s "${source}" "${target}"
+      grep -Fxq "${target}" "${_manifest}" || printf '%s\n' "${target}" >> "${_manifest}"
+    fi
+  done
+}
+
+post_install() {
+  _ensure_manifest_dir
+  : > "${_manifest}"
+  _link_bundle
+}
+
+post_upgrade() {
+  _ensure_manifest_dir
+  touch "${_manifest}"
+  _link_bundle
+}
+
+post_remove() {
+  if [ -f "${_manifest}" ]; then
+    tac "${_manifest}" | while read -r target; do
+      expected="/usr/share/cuttlefish-common/lineageos/${target#/usr/lib/cuttlefish-common/}"
+      if [ -L "${target}" ] && [ "$(readlink "${target}")" = "${expected}" ]; then
+        rm -f "${target}"
+      fi
+    done
+    rm -f "${_manifest}"
+  fi
+}

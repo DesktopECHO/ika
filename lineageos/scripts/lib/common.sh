@@ -9,6 +9,12 @@
 # different prefix ([lineage-desktop] vs [lineage-desktop] validate:) and the
 # validator's fail() accumulates instead of exiting, so those stay local.
 
+# Never allow a graphical sudo/askpass dialog: point SUDO_ASKPASS at a no-op so
+# sudo (run_privileged in host_env.sh) can't launch a GUI password helper,
+# overriding any value the desktop session exported. Privilege prompts go to the
+# controlling terminal or fail cleanly — never a popup.
+export SUDO_ASKPASS=/bin/false
+
 # True when the build host is ARM64. Keyed on the running host's machine type,
 # not on any build target.
 host_is_arm64() {

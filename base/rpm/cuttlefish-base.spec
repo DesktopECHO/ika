@@ -1,6 +1,6 @@
 Name:           ika-base
 Version:        1.53.0
-Release:        5%{?dist}
+Release:        6%{?dist}
 Summary:        Cuttlefish Android Virtual Device host packages for Fedora
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish
@@ -235,6 +235,15 @@ cp -a base/cvd/bazel-out/${bazel_arch}-opt/bin/cuttlefish/package/cuttlefish-int
 mkdir -p %{buildroot}/usr/lib/cuttlefish-metrics/bin
 cp -a base/cvd/bazel-out/${bazel_arch}-opt/bin/cuttlefish/package/cuttlefish-metrics/bin/metrics_transmitter %{buildroot}/usr/lib/cuttlefish-metrics/bin/
 
+# Bazel package outputs are copied with their original mode bits, which can
+# leave binaries read-only in BUILDROOT. Fedora's brp-strip rewrites ELF files
+# in place during the automatic post-install checks, so the staging copies need
+# owner write permission even though the source artifacts do not.
+find %{buildroot}/usr/lib/cuttlefish-common \
+     %{buildroot}/usr/lib/cuttlefish-metrics \
+     %{buildroot}/usr/bin \
+     \( -type f -o -type d \) -exec chmod u+w '{}' ';'
+
 rm -rf %{buildroot}/usr/lib/cuttlefish-common/bin/cvd.repo_mapping
 rm -rf %{buildroot}/usr/lib/cuttlefish-common/bin/cvd.runfiles*
 rm -rf %{buildroot}/usr/lib/cuttlefish-common/bin/crosvm.repo_mapping
@@ -405,23 +414,6 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/lib/cuttlefish-metrics
 
 %changelog
-* Tue May 26 2026 DesktopECHO <build@desktopecho.com> - 1.53.0-4
-- Bump generated RPM release to revision 4
+* Sat Jun 13 2026 DesktopECHO <build@desktopecho.com> - 1.53.0-6
+- Initial public release.
 
-* Sun May 24 2026 DesktopECHO <build@desktopecho.com> - 1.53.0-3
-- Bump generated RPM release to revision 3
-
-* Tue May 19 2026 DesktopECHO <build@desktopecho.com> - 1.53.0-1
-- Rebase Fedora packaging onto android-cuttlefish 1.53.0
-
-* Mon May 18 2026 DesktopECHO <build@desktopecho.com> - 1.51.0-5
-- Create /var/tmp/cvd via tmpfiles.d (mode 1770, root:cvdnetwork) so
-  cvdalloc dnsmasq can write pid/lease files without requiring cvd CLI
-- Persist net.ipv6.conf.all.forwarding=1 in sysctl.d alongside ipv4
-- Increase ika boot timeout from 120s to 180s for software-rendering hosts
-
-* Mon Apr 20 2026 Daniel Milisic <dmilisic@desktopecho.com> - 1.51.0-4
-- Rebase Fedora packaging onto android-cuttlefish 1.51.0
-
-* Sat Mar 28 2026 Daniel Milisic <dmilisic@desktopecho.com> - 1.50.0-1
-- Port host packaging and service assets to Fedora RPMs

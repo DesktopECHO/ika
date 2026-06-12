@@ -40,11 +40,10 @@ EOF
     ;;
 esac
 
-# Identity source precedence: env vars > per-user config > AOSP placeholders.
+# Identity source precedence: env vars > per-user config > built-in defaults.
 # Per-user config is written by ./setup.sh on first run; edit that file (or
-# export SIGNING_* vars) to change. Placeholders below match the AOSP wiki
-# example so an unconfigured run still produces a working, obviously-default
-# set of keys.
+# export SIGNING_* vars) to change. The defaults produce a working,
+# obviously-local set of keys.
 ika_signing_conf="${XDG_CONFIG_HOME:-$HOME/.config}/ika/signing.conf"
 __signing_vars=(SIGNING_C SIGNING_ST SIGNING_L SIGNING_O SIGNING_OU SIGNING_CN SIGNING_EMAIL)
 
@@ -60,7 +59,7 @@ if [[ -f "$ika_signing_conf" ]]; then
   source "$ika_signing_conf"
 fi
 
-# Restore env overrides, then apply final AOSP-placeholder defaults.
+# Restore env overrides, then apply final built-in defaults.
 for v in "${!__signing_env_overrides[@]}"; do
   printf -v "$v" '%s' "${__signing_env_overrides[$v]}"
 done
@@ -71,7 +70,7 @@ SIGNING_L="${SIGNING_L:-Toronto}"
 SIGNING_O="${SIGNING_O:-DesktopECHO}"
 SIGNING_OU="${SIGNING_OU:-Ika}"
 SIGNING_CN="${SIGNING_CN:-LineageOS Virtual Desktop}"
-SIGNING_EMAIL="${SIGNING_EMAIL:-build@desktopecho.com}"
+SIGNING_EMAIL="${SIGNING_EMAIL:-$(default_signing_email)}"
 
 subject_for() {
   local cn="$1"

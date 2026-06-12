@@ -1,0 +1,84 @@
+# pacman scriptlets for ika-base. Mirrors the %post/%preun/%postun scriptlets
+# in base/rpm/cuttlefish-base.spec.
+
+_ensure_var_empty() {
+  if [ -L /var/empty ]; then
+    unlink /var/empty >/dev/null 2>&1 || :
+  fi
+  if [ -f /var/empty ]; then
+    rm -rf /var/empty >/dev/null 2>&1 || :
+  fi
+  mkdir -p /var/empty
+}
+
+_configure() {
+  if ! getent group cvdnetwork >/dev/null 2>&1; then
+    groupadd -r cvdnetwork >/dev/null 2>&1 || :
+  fi
+  if ! getent group kvm >/dev/null 2>&1; then
+    groupadd -r kvm >/dev/null 2>&1 || :
+  fi
+  _ensure_var_empty
+  systemd-tmpfiles --create /usr/lib/tmpfiles.d/cuttlefish.conf >/dev/null 2>&1 || :
+  setcap cap_net_admin,cap_net_bind_service,cap_net_raw=+ep /usr/lib/cuttlefish-common/bin/cvdalloc >/dev/null 2>&1 || :
+  sysctl --system >/dev/null 2>&1 || :
+  /usr/libexec/cuttlefish/cuttlefish-add-user-to-groups || :
+  udevadm control --reload >/dev/null 2>&1 || :
+  systemctl daemon-reload >/dev/null 2>&1 || :
+  # Keep the legacy host-resources service opt-in. The default ika workflow
+  # uses per-user cvdalloc networking, which manages dnsmasq under
+  # /var/tmp/cvd and can be cleaned up without root privileges.
+  systemctl disable --now cuttlefish-host-resources.service >/dev/null 2>&1 || :
+
+  required_nofile=524288
+  required_rtprio=10
+  current_soft_nofile="$(ulimit -Sn 2>/dev/null || echo 0)"
+  current_hard_nofile="$(ulimit -Hn 2>/dev/null || echo 0)"
+  current_soft_rtprio="$(ulimit -Sr 2>/dev/null || echo 0)"
+  current_hard_rtprio="$(ulimit -Hr 2>/dev/null || echo 0)"
+  case "$current_soft_nofile" in
+    unlimited) current_soft_nofile="$required_nofile" ;;
+  esac
+  case "$current_hard_nofile" in
+    unlimited) current_hard_nofile="$required_nofile" ;;
+  esac
+  case "$current_soft_rtprio" in
+    unlimited) current_soft_rtprio="$required_rtprio" ;;
+  esac
+  case "$current_hard_rtprio" in
+    unlimited) current_hard_rtprio="$required_rtprio" ;;
+  esac
+  if [ "${current_soft_nofile:-0}" -lt "$required_nofile" ] || \
+     [ "${current_hard_nofile:-0}" -lt "$required_nofile" ] || \
+     [ "${current_soft_rtprio:-0}" -lt "$required_rtprio" ] || \
+     [ "${current_hard_rtprio:-0}" -lt "$required_rtprio" ]; then
+    echo "Cuttlefish installed nofile=524288 and rtprio=10 for @cvdnetwork in /etc/security/limits.d/1_cuttlefish.conf." >&2
+    echo "A new login session may be required before 'ulimit -n' and 'ulimit -r' reflect the higher limits." >&2
+  fi
+
+  # Reload firewalld to apply the cuttlefish zone (allows DHCP on bridge
+  # interfaces)
+  if systemctl is-active --quiet firewalld 2>/dev/null; then
+    firewall-cmd --reload >/dev/null 2>&1 || :
+  fi
+}
+
+post_install() {
+  _configure
+}
+
+post_upgrade() {
+  _configure
+}
+
+pre_remove() {
+  systemctl disable --now cuttlefish-host-resources.service >/dev/null 2>&1 || :
+  # Reload firewalld to remove the cuttlefish zone on uninstall
+  if systemctl is-active --quiet firewalld 2>/dev/null; then
+    firewall-cmd --reload >/dev/null 2>&1 || :
+  fi
+}
+
+post_remove() {
+  systemctl daemon-reload >/dev/null 2>&1 || :
+}

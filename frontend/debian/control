@@ -7,6 +7,8 @@ Build-Depends: config-package-dev,
                debhelper-compat (= 12),
                golang (>= 2:1.13~) | golang-1.13,
                libprotobuf-dev,
+               nodejs (>= 20.19.0~),
+               npm,
                protobuf-compiler,
 Standards-Version: 4.5.0
 Rules-Requires-Root: no
