@@ -63,3 +63,98 @@ rust_prebuilt_version() {
   sed -n 's/^[[:space:]]*RustDefaultVersion[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
     "$root/build/soong/rust/config/global.go" | head -n 1
 }
+
+retry_log() {
+  if declare -F log >/dev/null 2>&1; then
+    log "$@"
+  else
+    printf '[lineage-desktop] %s\n' "$*" >&2
+  fi
+}
+
+git_network_retry_delay() {
+  local attempt="$1"
+  local base="${GIT_NETWORK_RETRY_DELAY:-5}"
+  local max="${GIT_NETWORK_RETRY_MAX_DELAY:-60}"
+  local delay
+
+  [[ "$base" =~ ^[0-9]+$ && "$base" -gt 0 ]] || base=5
+  [[ "$max" =~ ^[0-9]+$ && "$max" -gt 0 ]] || max=60
+
+  delay=$(( base * attempt ))
+  (( delay > max )) && delay="$max"
+  printf '%s\n' "$delay"
+}
+
+git_network_attempts() {
+  local attempts="${GIT_NETWORK_ATTEMPTS:-5}"
+  [[ "$attempts" =~ ^[0-9]+$ && "$attempts" -gt 0 ]] || attempts=5
+  printf '%s\n' "$attempts"
+}
+
+git_network_retry() {
+  local description="$1"
+  shift
+
+  if (( $# == 0 )); then
+    retry_log "$description has no command to retry"
+    return 1
+  fi
+
+  local __git_retry_attempts __git_retry_attempt __git_retry_delay
+  __git_retry_attempts="$(git_network_attempts)"
+  __git_retry_attempt=1
+
+  while :; do
+    if "$@"; then
+      return 0
+    fi
+
+    if (( __git_retry_attempt >= __git_retry_attempts )); then
+      retry_log "$description failed after $__git_retry_attempt attempt(s)"
+      return 1
+    fi
+
+    __git_retry_delay="$(git_network_retry_delay "$__git_retry_attempt")"
+    retry_log "$description failed; retrying in ${__git_retry_delay} seconds (attempt $__git_retry_attempt/$__git_retry_attempts)"
+    sleep "$__git_retry_delay"
+    __git_retry_attempt=$((__git_retry_attempt + 1))
+  done
+}
+
+git_clone_with_retries() {
+  local dest="$1"
+  local description="$2"
+  shift 2
+
+  local __git_retry_attempts __git_retry_attempt __git_retry_delay
+  __git_retry_attempts="$(git_network_attempts)"
+  __git_retry_attempt=1
+
+  [[ -n "$dest" && "$dest" != "/" ]] || {
+    retry_log "$description has an unsafe clone destination: $dest"
+    return 1
+  }
+  if (( $# == 0 )); then
+    retry_log "$description has no clone source"
+    return 1
+  fi
+
+  while :; do
+    rm -rf "$dest"
+    if git clone "$@" "$dest"; then
+      return 0
+    fi
+
+    rm -rf "$dest"
+    if (( __git_retry_attempt >= __git_retry_attempts )); then
+      retry_log "$description failed after $__git_retry_attempt attempt(s)"
+      return 1
+    fi
+
+    __git_retry_delay="$(git_network_retry_delay "$__git_retry_attempt")"
+    retry_log "$description failed; retrying in ${__git_retry_delay} seconds (attempt $__git_retry_attempt/$__git_retry_attempts)"
+    sleep "$__git_retry_delay"
+    __git_retry_attempt=$((__git_retry_attempt + 1))
+  done
+}

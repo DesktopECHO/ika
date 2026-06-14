@@ -379,7 +379,7 @@ repo_project_checkout_path_for_name() {
 
   if [[ "$project_name" == platform/* ]]; then
     path="${project_name#platform/}"
-    if [[ -e "$workspace/$path" || -d "$workspace/.repo/projects/$path.git" ]]; then
+    if [[ -n "$path" && "$path" != /* && "$path" != *..* ]]; then
       printf '%s\n' "$path"
       return 0
     fi
@@ -406,7 +406,193 @@ repo_sync_failure_projects_from_log() {
     /^[^[:space:]]+[[:space:]]+checkout[[:space:]][0-9a-fA-F]+([[:space:]]|$)/ {
       print $1
     }
+    /fatal: unable to access .*android\.googlesource\.com\/.*requested URL returned error: 429/ {
+      line = $0
+      sub(/^.*android\.googlesource\.com\//, "", line)
+      sub(/\/.: The requested URL returned error: 429.*$/, "", line)
+      print line
+    }
   ' "$sync_log" | sort -u
+}
+
+repo_sync_output_filter() {
+  awk '
+    /^Updating files:[[:space:]]+100% \([0-9]+\/[0-9]+\), done\.$/ {
+      next
+    }
+    /^error: RPC failed; HTTP 429 / {
+      seen_repo_failure = 1
+      next
+    }
+    /^remote: RESOURCE_EXHAUSTED:/ {
+      seen_repo_failure = 1
+      in_quota_block = 1
+      next
+    }
+    in_quota_block && /^remote:/ {
+      next
+    }
+    in_quota_block {
+      in_quota_block = 0
+    }
+    /^fatal: unable to access .*android\.googlesource\.com\/.*requested URL returned error: 429$/ {
+      seen_repo_failure = 1
+      next
+    }
+    /^fatal: unable to access .*android\.googlesource\.com\/.*(Failed to connect|Could not connect to server)/ {
+      seen_repo_failure = 1
+      next
+    }
+    /^fatal: expected .packfile.$/ {
+      seen_repo_failure = 1
+      next
+    }
+    /^fatal: could not fetch [0-9a-fA-F]+ from promisor remote$/ {
+      seen_repo_failure = 1
+      next
+    }
+    /^error\.GitError: Cannot checkout [^:[:space:]]+: Cannot initialize work tree for / {
+      seen_repo_failure = 1
+      next
+    }
+    /^error: Cannot checkout [^[:space:]]+$/ {
+      seen_repo_failure = 1
+      next
+    }
+    /^error: Unable to fully sync the tree$/ {
+      seen_repo_failure = 1
+      next
+    }
+    /^error: Checking out local projects failed\.$/ {
+      seen_repo_failure = 1
+      next
+    }
+    /^Repo command failed due to the following .* errors:$/ {
+      seen_repo_failure = 1
+      next
+    }
+    /^Cannot initialize work tree for [^[:space:]]+$/ {
+      seen_repo_failure = 1
+      next
+    }
+    /^[^[:space:]]+[[:space:]]+checkout[[:space:]][0-9a-fA-F]+([[:space:]]|$)/ {
+      seen_repo_failure = 1
+      next
+    }
+    /^error: [^:]+: [^[:space:]]+[[:space:]]+checkout[[:space:]][0-9a-fA-F]+/ {
+      seen_repo_failure = 1
+      next
+    }
+    /^Failing repos \(checkout\):$/ {
+      seen_repo_failure = 1
+      in_failing_repos = 1
+      next
+    }
+    in_failing_repos {
+      if (/^Try re-running with / || /^=+$/) {
+        in_failing_repos = 0
+        next
+      }
+      if (/^[[:space:]]*[^[:space:]]+[[:space:]]*$/) {
+        next
+      }
+      in_failing_repos = 0
+    }
+    seen_repo_failure && /^Try re-running with / {
+      next
+    }
+    seen_repo_failure && /^=+$/ {
+      next
+    }
+    # Drop "error: ... checkout ..." lines (transient checkout failures) from the
+    # live console. The raw sync log (written via tee) still records them, and
+    # retry/failure detection works off that raw log, so this only quiets display.
+    /^error: .*checkout/ {
+      seen_repo_failure = 1
+      next
+    }
+    # Drop any line mentioning a promisor-remote fetch failure (transient, blob:none).
+    /promisor remote/ {
+      seen_repo_failure = 1
+      next
+    }
+    # Drop transient RPC/sync failure lines from the live console.
+    /^error: RPC failed/ {
+      seen_repo_failure = 1
+      next
+    }
+    /^error: Unable/ {
+      seen_repo_failure = 1
+      next
+    }
+    { print }
+  '
+}
+
+repo_sync_failure_url_from_log() {
+  local sync_log="$1"
+  awk '
+    /fatal: unable to access .*android\.googlesource\.com\/.*(Failed to connect|Could not connect to server)/ {
+      line = $0
+      start = index(line, "https://android.googlesource.com/")
+      if (start == 0) {
+        next
+      }
+      line = substr(line, start)
+      end = index(line, sprintf("%c", 39))
+      if (end > 0) {
+        line = substr(line, 1, end - 1)
+      }
+      sub(/\/$/, "", line)
+      print line
+      exit
+    }
+  ' "$sync_log"
+}
+
+repo_sync_failure_summary_from_log() {
+  local sync_log="$1"
+  local retry_delay="${2:-}"
+  local final_attempt="${3:-0}"
+  local attempt_label="${4:-}"
+  local projects retry_url subject action
+  local attempt_suffix=""
+
+  projects="$(
+    repo_sync_failure_projects_from_log "$sync_log" |
+      awk 'NF { printf "%s%s", sep, $0; sep=", " } END { if (sep != "") print "" }'
+  )"
+  retry_url="$(repo_sync_failure_url_from_log "$sync_log")"
+
+  if [[ -n "$projects" ]]; then
+    subject="on $projects"
+  else
+    subject="during repo sync"
+  fi
+
+  if [[ -n "$attempt_label" ]]; then
+    attempt_suffix=" (attempt $attempt_label)"
+  fi
+
+  if [[ "$final_attempt" == "1" ]]; then
+    action="no retry attempts remain${attempt_suffix}"
+  elif [[ -n "$retry_delay" ]]; then
+    action="retrying in ${retry_delay} seconds${attempt_suffix}"
+  else
+    action="retrying${attempt_suffix}"
+  fi
+
+  if [[ -n "$retry_url" && "$final_attempt" != "1" ]]; then
+    printf 'retrying %s\n' "$retry_url"
+  elif [[ -n "$retry_url" ]]; then
+    printf 'failed %s; no retry attempts remain\n' "$retry_url"
+  elif grep -q 'HTTP 429\|requested URL returned error: 429\|RESOURCE_EXHAUSTED' "$sync_log"; then
+    printf 'HTTP 429 %s; %s\n' "$subject" "$action"
+  elif [[ -n "$projects" ]]; then
+    printf 'repo checkout failed %s; %s\n' "$subject" "$action"
+  else
+    printf 'repo sync failed; %s\n' "$action"
+  fi
 }
 
 repo_workspace_uses_partial_clone() {
@@ -415,8 +601,13 @@ repo_workspace_uses_partial_clone() {
   [[ -n "$(git -C "$workspace/.repo/manifests" config --get repo.clonefilter 2>/dev/null || true)" ]]
 }
 
+repo_workspace_is_managed() {
+  [[ -f "$workspace/.lineage-desktop-managed" ]]
+}
+
 repair_repo_sync_checkout_failures() {
   local sync_log="$1"
+  local quiet="${2:-0}"
   [[ -f "$sync_log" ]] || return 0
 
   local -a projects=()
@@ -429,33 +620,76 @@ repair_repo_sync_checkout_failures() {
   (( ${#projects[@]} > 0 )) || return 0
 
   local checkout_path checkout_dir project_git_dir object_git_dir
-  log "repairing ${#projects[@]} repo checkout failure(s)"
+  [[ "$quiet" == "1" ]] || log "repairing ${#projects[@]} repo checkout failure(s)"
   for project in "${projects[@]}"; do
     checkout_path="$(repo_project_checkout_path_for_name "$project" || true)"
     if [[ -z "$checkout_path" || "$checkout_path" == /* || "$checkout_path" == *..* ]]; then
-      log "warning: could not determine safe checkout path for failed repo project $project"
+      [[ "$quiet" == "1" ]] || log "warning: could not determine safe checkout path for failed repo project $project"
       continue
     fi
 
-    log "repo sync checkout failed for $project; removing checkout path $checkout_path"
+    [[ "$quiet" == "1" ]] || log "repo sync checkout failed for $project; removing checkout path $checkout_path"
 
     checkout_dir="$workspace/$checkout_path"
     if [[ -e "$checkout_dir" || -L "$checkout_dir" ]]; then
-      log "removing ${checkout_dir#$workspace/}"
+      [[ "$quiet" == "1" ]] || log "removing ${checkout_dir#$workspace/}"
       rm -rf -- "$checkout_dir"
     fi
 
     project_git_dir="$workspace/.repo/projects/$checkout_path.git"
     if [[ -e "$project_git_dir" || -L "$project_git_dir" ]]; then
-      log "removing ${project_git_dir#$workspace/}"
+      [[ "$quiet" == "1" ]] || log "removing ${project_git_dir#$workspace/}"
       rm -rf -- "$project_git_dir"
     fi
 
     object_git_dir="$workspace/.repo/project-objects/$project.git"
     if [[ -e "$object_git_dir" || -L "$object_git_dir" ]]; then
-      log "removing ${object_git_dir#$workspace/}"
+      [[ "$quiet" == "1" ]] || log "removing ${object_git_dir#$workspace/}"
       rm -rf -- "$object_git_dir"
     fi
+  done
+}
+
+# git reports object/pack corruption with the on-disk path of the bad object or
+# pack, which lives under .repo/project-objects/<name>.git/... or
+# .repo/projects/<path>.git/... Pull those .git store roots out of the sync log
+# and remove them so the next attempt re-fetches the affected project cleanly.
+# (Corruption errors with no embedded path -- e.g. "did not receive expected
+# object" -- are left to the normal retry/force-sync path.)
+remove_corrupt_repo_stores_from_log() {
+  local sync_log="$1"
+  [[ -f "$sync_log" ]] || return 0
+
+  local -A seen=()
+  local -a stores=()
+  local line path store
+
+  while IFS= read -r line; do
+    case "$line" in
+      *"is corrupt"*|*"is empty"*|*"cannot be read"*|*"does not match index"*|\
+      *"inflate: data stream error"*|*"object file"*|*"loose object"*) ;;
+      *) continue ;;
+    esac
+    path="$(printf '%s\n' "$line" |
+      grep -aoE '[^[:space:]"():]*\.repo/(project-objects|projects)/[^[:space:]"():]*\.git' |
+      head -n1)"
+    [[ -n "$path" ]] || continue
+    case "$path" in
+      /*) store="$path" ;;
+      *)  store="$workspace/$path" ;;
+    esac
+    [[ -d "$store" ]] || continue
+    [[ -n "${seen[$store]:-}" ]] && continue
+    seen["$store"]=1
+    stores+=("$store")
+  done < "$sync_log"
+
+  (( ${#stores[@]} > 0 )) || return 0
+
+  log "removing ${#stores[@]} corrupt repo git store(s) reported during fetch"
+  for store in "${stores[@]}"; do
+    log "removing corrupt store ${store#$workspace/}"
+    rm -rf -- "$store"
   done
 }
 
@@ -480,6 +714,151 @@ repair_stale_repo_git_locks() {
     log "removing ${lock#$workspace/}"
     rm -f -- "$lock"
   done
+}
+
+repo_manifest_copyfile_sources() {
+  python3 - "$workspace" <<'PY'
+import pathlib
+import sys
+import xml.etree.ElementTree as ET
+
+workspace = pathlib.Path(sys.argv[1])
+manifest_roots = [
+    workspace / ".repo" / "manifests",
+    workspace / ".repo" / "local_manifests",
+]
+seen = set()
+
+for manifest_root in manifest_roots:
+    if not manifest_root.is_dir():
+        continue
+    for manifest in sorted(manifest_root.rglob("*.xml")):
+        try:
+            root = ET.parse(manifest).getroot()
+        except ET.ParseError:
+            continue
+        for element in list(root.iter("project")) + list(root.iter("extend-project")):
+            project_path = element.get("path") or element.get("name")
+            if not project_path:
+                continue
+            for copyfile in element.findall("copyfile"):
+                src = copyfile.get("src")
+                if not src:
+                    continue
+                record = (project_path, src)
+                if record in seen:
+                    continue
+                seen.add(record)
+                print(f"{project_path}\t{src}")
+PY
+}
+
+presync_repo_copyfile_sources() {
+  local copyfile_jobs="${1:-4}"
+  local -a projects=()
+  local -A seen_projects=()
+  local project_path src
+
+  while IFS=$'\t' read -r project_path src; do
+    [[ -n "$project_path" && -n "$src" ]] || continue
+    case "$project_path/$src" in
+      /*|*../*) continue ;;
+    esac
+    [[ -e "$workspace/$project_path/$src" ]] && continue
+    [[ -n "${seen_projects[$project_path]:-}" ]] && continue
+    seen_projects[$project_path]=1
+    projects+=("$project_path")
+  done < <(repo_manifest_copyfile_sources)
+
+  (( ${#projects[@]} > 0 )) || return 0
+
+  local -a copyfile_fetch_args=(sync -c --fail-fast --network-only -j"$copyfile_jobs")
+  if (( repo_sync_retry_fetches > 0 )); then
+    copyfile_fetch_args+=(--retry-fetches="$repo_sync_retry_fetches")
+  fi
+  if repo_workspace_uses_partial_clone; then
+    copyfile_fetch_args+=(--no-interleaved --jobs-network="$copyfile_jobs" --jobs-checkout="$copyfile_jobs")
+  fi
+
+  log "pre-syncing ${#projects[@]} manifest copyfile source project(s)"
+  git_network_retry "pre-sync manifest copyfile sources" \
+    run_anonymous_git_network "$repo_cmd" "${copyfile_fetch_args[@]}" "${projects[@]}"
+
+  local -a copyfile_checkout_args=(sync -c --fail-fast --local-only --interleaved -j"$copyfile_jobs")
+  if repo_workspace_is_managed; then
+    copyfile_checkout_args+=(--force-checkout)
+  fi
+  run_anonymous_git_network "$repo_cmd" "${copyfile_checkout_args[@]}" "${projects[@]}"
+}
+
+# --- source-tree completeness verification ----------------------------------
+# A rate-limited or interrupted checkout can leave a project's worktree gutted
+# (its tracked files staged-deleted) while `repo sync` still exits 0. The build
+# then dies much later with "depends on undefined module". These helpers detect
+# such projects after a sync and heal them -- first from already-fetched local
+# objects (instant, offline), then by re-syncing the stragglers over the
+# network -- and fail loudly if the tree still is not whole, so we never build
+# on half-downloaded sources.
+
+list_incomplete_repo_projects() {
+  ( cd "$workspace" 2>/dev/null &&
+    "$repo_cmd" forall -j8 -c \
+      'git status --porcelain 2>/dev/null | grep -q "^D " && printf "%s\n" "$REPO_PATH"' \
+      2>/dev/null )
+}
+
+# Restore gutted projects from local objects; print the paths that still need a
+# network re-fetch (objects not present locally).
+restore_incomplete_repo_projects_offline() {
+  local path
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    if git -C "$workspace/$path" reset --hard HEAD >/dev/null 2>&1 &&
+       ! git -C "$workspace/$path" status --porcelain 2>/dev/null | grep -q '^D '; then
+      log "restored incomplete project from local objects: $path"
+    else
+      printf '%s\n' "$path"
+    fi
+  done < <(list_incomplete_repo_projects)
+}
+
+verify_repo_sync_complete() {
+  local network_jobs="${1:-2}"
+  local rounds="${REPO_SYNC_VERIFY_ROUNDS:-20}"
+  local round=1
+  local -a remaining
+
+  while (( round <= rounds )); do
+    remaining=()
+    local path
+    while IFS= read -r path; do
+      [[ -n "$path" ]] || continue
+      remaining+=("$path")
+    done < <(restore_incomplete_repo_projects_offline)
+
+    if (( ${#remaining[@]} == 0 )); then
+      (( round > 1 )) && log "source tree verified complete after repair"
+      return 0
+    fi
+
+    log "source tree incomplete: ${#remaining[@]} project(s) need re-fetch (round $round/$rounds): ${remaining[*]}"
+    run_anonymous_git_network "$repo_cmd" sync -c -j"$network_jobs" \
+      --force-sync --force-checkout "${remaining[@]}" >/dev/null 2>&1 ||
+      log "re-sync of incomplete projects reported an error; re-verifying"
+    round=$((round + 1))
+  done
+
+  # Final check after the last repair round.
+  remaining=()
+  local path
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    remaining+=("$path")
+  done < <(list_incomplete_repo_projects)
+  (( ${#remaining[@]} == 0 )) && return 0
+
+  log "ERROR: source tree still incomplete after $rounds repair round(s): ${remaining[*]}"
+  return 1
 }
 
 repo_sync_sources() {
@@ -509,7 +888,8 @@ repo_sync_sources() {
   fi
 
   log "initializing LineageOS source at $workspace"
-  run_anonymous_git_network "$repo_cmd" "${init_args[@]}"
+  git_network_retry "repo init LineageOS source" \
+    run_anonymous_git_network "$repo_cmd" "${init_args[@]}"
 
   install_manifest
   reset_generated_overlay_project_for_sync
@@ -531,17 +911,38 @@ repo_sync_sources() {
     fi
   fi
 
-  # repo sync uses the build job count, capped at 16 unless REPO_SYNC_JOBS is set.
+  # Use a moderate default for good residential connections. Partial-clone
+  # workspaces also use this value for --jobs-network below; REPO_SYNC_JOBS can
+  # still override it.
   local sync_jobs
   if [[ -n "$repo_sync_jobs" ]]; then
     [[ "$repo_sync_jobs" =~ ^[0-9]+$ && "$repo_sync_jobs" -gt 0 ]] ||
       die "REPO_SYNC_JOBS must be a positive integer"
     sync_jobs="$repo_sync_jobs"
   else
-    sync_jobs=$(( jobs < 16 ? jobs : 16 ))
+    sync_jobs=4
   fi
 
+  # Network concurrency is the dominant cause of googlesource HTTP 429s, so keep
+  # it lower than checkout concurrency. Default to 2 (override via
+  # REPO_SYNC_NETWORK_JOBS), never exceeding sync_jobs.
+  local network_jobs
+  if [[ -n "${repo_sync_network_jobs:-}" ]]; then
+    [[ "$repo_sync_network_jobs" =~ ^[0-9]+$ && "$repo_sync_network_jobs" -gt 0 ]] ||
+      die "REPO_SYNC_NETWORK_JOBS must be a positive integer"
+    network_jobs="$repo_sync_network_jobs"
+  else
+    network_jobs=2
+    (( network_jobs > sync_jobs )) && network_jobs="$sync_jobs"
+  fi
+
+  presync_repo_copyfile_sources "$sync_jobs"
+
   local -a sync_args=(sync -c --fail-fast -j"$sync_jobs")
+  if repo_workspace_is_managed; then
+    log "managed source tree detected; using repo --force-checkout for stale checkout files"
+    sync_args+=(--force-checkout)
+  fi
   if (( repo_sync_retry_fetches > 0 )); then
     sync_args+=(--retry-fetches="$repo_sync_retry_fetches")
   fi
@@ -554,35 +955,67 @@ repo_sync_sources() {
     else
       checkout_jobs=4
     fi
-    log "repo partial clone detected; using phased sync with $sync_jobs network jobs and $checkout_jobs checkout jobs"
-    sync_args+=(--no-interleaved --jobs-network="$sync_jobs" --jobs-checkout="$checkout_jobs")
+    log "repo partial clone detected; using phased sync with $network_jobs network jobs and $checkout_jobs checkout jobs"
+    sync_args+=(--no-interleaved --jobs-network="$network_jobs" --jobs-checkout="$checkout_jobs")
   fi
   if enabled "$quiet"; then
     sync_args+=(--quiet)
   fi
 
   local attempt=1
+  local suppress_attempt_log=0
   local sync_log
   while :; do
-    log "syncing source tree (attempt $attempt/$repo_sync_attempts)"
+    if (( suppress_attempt_log == 0 )); then
+      log "syncing source tree (attempt $attempt/$repo_sync_attempts)"
+    fi
+    suppress_attempt_log=0
     sync_log="$(mktemp -t lineage-desktop-repo-sync.XXXXXX.log)"
-    if run_anonymous_git_network "$repo_cmd" "${sync_args[@]}" 2>&1 | tee "$sync_log"; then
+    if run_anonymous_git_network "$repo_cmd" "${sync_args[@]}" 2>&1 | tee "$sync_log" | repo_sync_output_filter; then
       rm -f "$sync_log"
-      return 0
+      # repo can exit 0 while leaving a gutted/incomplete tree; only declare
+      # success once every project's worktree is actually whole.
+      if verify_repo_sync_complete "$network_jobs"; then
+        return 0
+      fi
+      if (( attempt >= repo_sync_attempts )); then
+        log "ERROR: source tree still incomplete after $attempt sync attempt(s); refusing to build on partial sources"
+        return 1
+      fi
+      log "source tree incomplete after a clean sync; retrying (attempt $attempt/$repo_sync_attempts)"
+      repair_incomplete_repo_git_stores
+      repair_stale_repo_git_locks
+      attempt=$((attempt + 1))
+      suppress_attempt_log=1
+      sleep 30
+      continue
+    fi
+
+    # Linear backoff for rate limiting: 5s initially, +5s per attempt, capped at
+    # 60s (5s, 10s, 15s, ...); flat 5s for other transient failures.
+    retry_delay=5
+    if grep -q 'HTTP 429\|requested URL returned error: 429\|RESOURCE_EXHAUSTED' "$sync_log"; then
+      retry_delay=$(( 5 * attempt ))
+      (( retry_delay > 60 )) && retry_delay=60
     fi
 
     if (( attempt >= repo_sync_attempts )); then
+      log "$(repo_sync_failure_summary_from_log "$sync_log" "" 1 "$attempt/$repo_sync_attempts")"
+      repair_repo_sync_checkout_failures "$sync_log" 1
+      remove_corrupt_repo_stores_from_log "$sync_log"
       rm -f "$sync_log"
       return 1
     fi
 
-    repair_repo_sync_checkout_failures "$sync_log"
+    log "$(repo_sync_failure_summary_from_log "$sync_log" "$retry_delay" 0 "$attempt/$repo_sync_attempts")"
+    repair_repo_sync_checkout_failures "$sync_log" 1
+    remove_corrupt_repo_stores_from_log "$sync_log"
     rm -f "$sync_log"
     repair_incomplete_repo_git_stores
     repair_stale_repo_git_locks
     attempt=$((attempt + 1))
-    log "repo sync failed; retrying in 10 seconds"
-    sleep 10
+    suppress_attempt_log=1
+    sleep "$retry_delay"
   done
 }
 
@@ -720,4 +1153,19 @@ update_native_bridge_prebuilts_for_targets() {
 
   log "refreshing x86 ARM native bridge prebuilts"
   "$update_script" "$workspace"
+
+  # build_host_lpunpack (above) had to parse the x86_64 product config to build
+  # the host lpunpack tool, but it runs before the payload exists and with the
+  # bridge disabled -- so it caches a Kati/Ninja graph that excludes the native
+  # bridge. If the currently generated graph does not install the bridge, drop it
+  # so the real ROM build re-parses product config with the now-present payload
+  # and actually includes the bridge instead of reusing the bridge-less graph.
+  local x86_product product_ninja
+  x86_product="$(target_product x86_64)"
+  product_ninja="$workspace/out/soong/build.${x86_product}.ninja"
+  if [[ -f "$product_ninja" ]] &&
+     ! grep -qaE 'system/lib64/libndk_translation' "$product_ninja" 2>/dev/null; then
+    remove_generated_ninja_state "$x86_product" \
+      "cached product graph predates native bridge payload; forcing re-parse so the bridge is included"
+  fi
 }

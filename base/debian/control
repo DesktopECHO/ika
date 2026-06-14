@@ -37,7 +37,6 @@ Rules-Requires-Root: no
 Package: ika-base
 Architecture: any
 Depends: adduser,
-         binfmt-support [arm64],
          bridge-utils,
          curl,
          dnsmasq-base,
@@ -70,7 +69,7 @@ Depends: adduser,
          openssl,
          opus-tools,
          python3,
-         qemu-user-static [arm64],
+         python3-requests,
          xdg-utils,
          ${misc:Depends},
          ${shlibs:Depends}
@@ -95,10 +94,10 @@ Package: ika-integration
 Architecture: any
 Provides: ${diverted-files}
 Depends: ika-base,
-         qemu-system-arm (>= 2.8.0),
-         qemu-system-x86 (>= 2.8.0),
-         qemu-system-misc (>= 2.8.0),
          ${misc:Depends}
+Recommends: qemu-system-arm (>= 2.8.0),
+            qemu-system-x86 (>= 2.8.0),
+            qemu-system-misc (>= 2.8.0)
 Pre-Depends: ${misc:Pre-Depends}
 Conflicts: ${diverted-files}
 Description: Utilities for Android cuttlefish devices in the cloud

@@ -3,15 +3,15 @@
 # ika-build — one-shot builder for the ika stack. Runs from a checkout of this
 # repository and, in order:
 #
-#   1. installs build dependencies        (tools/buildutils/lib/dependencies.sh)
-#   2. creates/verifies ROM signing keys  (tools/buildutils/setup_keys.sh)
+#   1. creates/verifies ROM signing keys  (tools/buildutils/setup_keys.sh)
+#   2. installs build dependencies        (tools/buildutils/lib/dependencies.sh)
 #   3. builds the LineageOS Desktop ROM   (lineageos/scripts/build_lineageos_desktop.sh)
 #   4. builds the host packages           (tools/buildutils/build_packages.sh)
 #   5. offers to install ika-base, ika-scrcpy, and ika-lineageos
 #
-# Step 1 is the only point where the build pipeline installs system packages:
-# sudo runs before the long ROM build and waits for password input if needed.
-# A reboot is required after installing; this script makes that explicit.
+# Build dependencies are installed before the long ROM build and wait for
+# password input if needed. A reboot is required after installing; this script
+# makes that explicit.
 
 set -euo pipefail
 
@@ -45,7 +45,7 @@ usage() {
   cat <<EOF
 Usage: ./ika-build [options] [rom-build-args...]
 
-Installs build dependencies, prepares LineageOS signing certificates, builds
+Prepares LineageOS signing certificates, installs build dependencies, builds
 the ROM and host packages, then offers to install ${PRIMARY_PACKAGES[*]}.
 
 Options:
@@ -65,6 +65,17 @@ EOF
 
 banner() {
   printf '\n==> %s\n' "$*"
+}
+
+print_lineageos_build_next_steps() {
+  cat <<'EOF'
+
+Next steps:
+  ./lineageos/scripts/build_lineageos_desktop.sh           # starting now
+  ./lineageos/scripts/rebuild_cf_desktop_arm64.sh          # fast rebuild after source edits
+  ./lineageos/scripts/rebuild_cf_desktop_x86_64.sh
+
+EOF
 }
 
 signing_keys_already_configured() {
@@ -105,7 +116,7 @@ print_manual_install() {
 
   case "${family}" in
     rpm)    cmd="sudo dnf install --setopt=install_weak_deps=False $(shell_join "${install_paths[@]}")" ;;
-    debian) cmd="sudo apt install --no-install-recommends $(shell_join "${install_paths[@]}")" ;;
+    debian) cmd="sudo env DEBIAN_FRONTEND=noninteractive apt install --no-install-recommends $(shell_join "${install_paths[@]}")" ;;
     arch)   cmd="sudo pacman -U $(shell_join "${install_paths[@]}")" ;;
   esac
 
@@ -261,7 +272,7 @@ remove_installed_packages() {
   banner "Removing already-installed version(s): ${installed[*]}"
   case "${family}" in
     rpm)    sudo dnf remove -y "${installed[@]}" ;;
-    debian) sudo apt-get remove -y "${installed[@]}" ;;
+    debian) sudo env DEBIAN_FRONTEND=noninteractive apt-get remove -y "${installed[@]}" ;;
   esac
   removed_existing=true
 }
@@ -303,6 +314,14 @@ fi
 family="$(detect_distro_family)"
 
 if [[ "${install_only}" != true ]]; then
+  if signing_keys_already_configured; then
+    banner "LineageOS signing certificates already configured"
+  else
+    banner "Preparing LineageOS signing certificates"
+  fi
+  echo
+  ensure_signing_keys
+
   # Install dependencies and run privileged host preflight before the long ROM
   # build starts, so it does not stop hours later on a sudo prompt.
   banner "Installing build dependencies (sudo)"
@@ -322,14 +341,7 @@ if [[ "${install_only}" != true ]]; then
   # multi-hour, unprivileged ROM build.
   stop_sudo_keepalive
 
-  if signing_keys_already_configured; then
-    banner "LineageOS signing certificates already configured"
-  else
-    banner "Preparing LineageOS signing certificates"
-  fi
-  echo
-  ensure_signing_keys
-
+  print_lineageos_build_next_steps
   banner $'Building the LineageOS Desktop ROM\n    NOTE: First run will take a long time, 3 to 6+ hours.'
   echo
   sleep 2
@@ -387,7 +399,7 @@ declare -a install_paths=()
 install_package_paths install_paths
 case "${family}" in
   rpm)    sudo dnf install -y --setopt=install_weak_deps=False "${install_paths[@]}" ;;
-  debian) sudo apt install -y --no-install-recommends "${install_paths[@]}" ;;
+  debian) sudo env DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends "${install_paths[@]}" ;;
   arch)   sudo pacman -U --noconfirm "${install_paths[@]}" ;;
 esac
 

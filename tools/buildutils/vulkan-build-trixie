@@ -1,0 +1,377 @@
+#!/usr/bin/env bash
+
+# Build updated libvulkan packages from Debian testing source.
+#
+# This script is intended for native builds on Debian hosts.
+# It supports amd64 and arm64 host architectures.
+
+set -o errexit -o nounset -o pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_WORKDIR="${SCRIPT_DIR}/../../deb/libvulkan1-testing"
+
+WORKDIR="${DEFAULT_WORKDIR}"
+ASSUME_YES=false
+INSTALL_BUILT=false
+STAGE_PACKAGES=true
+
+declare -a ROOT_CMD=()
+
+print_usage() {
+  cat <<'EOF'
+Usage: vulkan-build-trixie [options]
+
+Downloads Debian testing source and builds updated libvulkan .deb packages.
+Testing is used as a source-only repository; binary build dependencies are
+installed from the host's normal Debian repositories.
+
+Options:
+  --workdir <path>       Working directory (default: ./deb/libvulkan1-testing)
+  --install              Install built libvulkan packages after building
+  --no-stage             Do not copy built packages to the repository root
+  -y, --yes              Non-interactive apt operations when sudo is available
+  -h, --help             Show this help
+
+Examples:
+  ./tools/buildutils/vulkan-build-trixie
+  ./tools/buildutils/vulkan-build-trixie --workdir ~/build/libvulkan
+
+Notes:
+  - Designed for Debian 13+ hosts.
+  - Builds for the current host architecture only (amd64 or arm64).
+  - Output .deb files are written to: <workdir>/build/
+EOF
+}
+
+init_root_cmd() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    return
+  fi
+
+  if ! command -v sudo >/dev/null 2>&1; then
+    return
+  fi
+
+  if sudo -n true >/dev/null 2>&1; then
+    ROOT_CMD=(sudo -n)
+    return
+  fi
+
+  if [[ -t 0 ]]; then
+    ROOT_CMD=(sudo)
+  fi
+}
+
+can_run_as_root() {
+  [[ "$(id -u)" -eq 0 || "${#ROOT_CMD[@]}" -gt 0 ]]
+}
+
+run_as_root() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  else
+    "${ROOT_CMD[@]}" "$@"
+  fi
+}
+
+validate_arch() {
+  case "$1" in
+    amd64|arm64)
+      ;;
+    *)
+      echo "Unsupported arch: $1 (expected amd64 or arm64)" >&2
+      exit 1
+      ;;
+  esac
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --workdir)
+        [[ $# -ge 2 ]] || {
+          echo "Missing value for --workdir" >&2
+          exit 1
+        }
+        WORKDIR="$2"
+        shift 2
+        ;;
+      -y|--yes)
+        ASSUME_YES=true
+        shift
+        ;;
+      --install)
+        INSTALL_BUILT=true
+        shift
+        ;;
+      --no-stage)
+        STAGE_PACKAGES=false
+        shift
+        ;;
+      -h|--help)
+        print_usage
+        exit 0
+        ;;
+      *)
+        echo "Unknown option: $1" >&2
+        print_usage
+        exit 1
+        ;;
+    esac
+  done
+}
+
+require_debian() {
+  if [[ ! -f /etc/os-release ]]; then
+    echo "Cannot verify host distro (/etc/os-release missing)." >&2
+    exit 1
+  fi
+
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  if [[ "${ID:-}" != "debian" ]]; then
+    echo "This script expects Debian. Detected ID=${ID:-unknown}." >&2
+    exit 1
+  fi
+}
+
+detect_host_arch() {
+  ARCH="$(dpkg --print-architecture)"
+  validate_arch "${ARCH}"
+}
+
+require_tools() {
+  local missing_core=()
+  local tool
+
+  for tool in apt-get apt-cache dpkg-buildpackage dpkg-deb; do
+    if ! command -v "${tool}" >/dev/null 2>&1; then
+      missing_core+=("${tool}")
+    fi
+  done
+
+  if [[ "${#missing_core[@]}" -gt 0 ]]; then
+    echo "Missing required base tools: ${missing_core[*]}" >&2
+    echo "This script requires a standard Debian apt/dpkg environment." >&2
+    exit 1
+  fi
+
+  if ! command -v mk-build-deps >/dev/null 2>&1; then
+    if ! can_run_as_root; then
+      cat >&2 <<'EOF'
+Missing prerequisite tool: mk-build-deps
+Root access is required to install prerequisite packages.
+Run in an interactive terminal where sudo can prompt, or run as root.
+EOF
+      exit 1
+    fi
+
+    echo "Installing prerequisite packaging tools..."
+    run_as_root env DEBIAN_FRONTEND=noninteractive apt-get update
+    run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends devscripts equivs dpkg-dev
+  fi
+
+  if ! command -v mk-build-deps >/dev/null 2>&1; then
+    echo "Failed to install mk-build-deps." >&2
+    exit 1
+  fi
+}
+
+prepare_workspace() {
+  WORKDIR="$(realpath -m "${WORKDIR}")"
+  APT_DIR="${WORKDIR}/apt"
+  BUILD_DIR="${WORKDIR}/build"
+  SRC_DIR="${WORKDIR}/src"
+
+  mkdir -p "${APT_DIR}/state/lists/partial" "${APT_DIR}/cache/archives/partial" "${BUILD_DIR}" "${SRC_DIR}"
+  if [[ "$(id -u)" -ne 0 && ( ! -w "${APT_DIR}/state/lists" || ! -w "${APT_DIR}/cache/archives" ) ]] && can_run_as_root; then
+    run_as_root chown -R "$(id -u):$(id -g)" "${APT_DIR}"
+  fi
+
+  TESTING_SOURCE_LIST="${APT_DIR}/testing-source.list"
+
+  cat > "${TESTING_SOURCE_LIST}" <<'EOF'
+deb-src http://deb.debian.org/debian testing main contrib non-free non-free-firmware
+EOF
+
+  SOURCE_APT_OPTS=(
+    -o "Dir::Etc::sourcelist=${TESTING_SOURCE_LIST}"
+    -o "Dir::Etc::sourceparts=-"
+    -o "Dir::State=${APT_DIR}/state"
+    -o "Dir::Cache=${APT_DIR}/cache"
+    -o "APT::Get::List-Cleanup=0"
+  )
+
+  if [[ "${ASSUME_YES}" == "true" ]]; then
+    APT_INSTALL_OPTS=(-y)
+  else
+    APT_INSTALL_OPTS=()
+  fi
+}
+
+refresh_testing_metadata() {
+  echo "Refreshing Debian testing source metadata..."
+  env DEBIAN_FRONTEND=noninteractive apt-get "${SOURCE_APT_OPTS[@]}" update
+}
+
+resolve_source_package() {
+  local src
+
+  src="$(apt-cache "${SOURCE_APT_OPTS[@]}" showsrc libvulkan1 2>/dev/null | awk '/^Package:/{print $2; exit}')"
+  if [[ -z "${src}" ]]; then
+    src="vulkan-loader"
+  fi
+
+  SOURCE_PACKAGE="${src}"
+  echo "Using source package: ${SOURCE_PACKAGE}"
+}
+
+install_build_tools() {
+  echo "Installing build tools from configured Debian repositories..."
+
+  run_as_root env DEBIAN_FRONTEND=noninteractive apt-get "${APT_INSTALL_OPTS[@]}" install \
+    build-essential \
+    devscripts \
+    equivs \
+    dpkg-dev
+}
+
+install_source_build_dependencies() {
+  local apt_tool
+
+  echo "Installing source build dependencies from configured Debian repositories..."
+
+  apt_tool="apt-get --no-install-recommends"
+  if [[ "${ASSUME_YES}" == "true" ]]; then
+    apt_tool="apt-get -y --no-install-recommends"
+  fi
+
+  pushd "${SOURCE_TREE}" >/dev/null
+  run_as_root env DEBIAN_FRONTEND=noninteractive mk-build-deps \
+    --install \
+    --remove \
+    --tool "${apt_tool}" \
+    debian/control
+  popd >/dev/null
+}
+
+download_source() {
+  echo "Downloading source package ${SOURCE_PACKAGE} from Debian testing..."
+
+  pushd "${SRC_DIR}" >/dev/null
+  apt-get "${SOURCE_APT_OPTS[@]}" source "${SOURCE_PACKAGE}"
+
+  SOURCE_TREE="$(find . -mindepth 1 -maxdepth 1 -type d -name "${SOURCE_PACKAGE}-*" | sort | tail -n 1)"
+  if [[ -z "${SOURCE_TREE}" ]]; then
+    echo "Unable to locate unpacked source directory for ${SOURCE_PACKAGE}" >&2
+    exit 1
+  fi
+
+  SOURCE_TREE="$(realpath "${SOURCE_TREE}")"
+  popd >/dev/null
+
+  echo "Source tree: ${SOURCE_TREE}"
+}
+
+build_packages() {
+  echo "Building binary packages for ${ARCH}..."
+
+  rm -f "$(dirname "${SOURCE_TREE}")"/*.deb
+  rm -f "${BUILD_DIR}"/*.deb
+
+  pushd "${SOURCE_TREE}" >/dev/null
+  DEB_BUILD_OPTIONS="${DEB_BUILD_OPTIONS:-}" dpkg-buildpackage -b -uc -us
+  popd >/dev/null
+
+  echo "Collecting output .deb files..."
+  find "$(dirname "${SOURCE_TREE}")" -maxdepth 1 -type f -name '*.deb' -print0 | while IFS= read -r -d '' f; do
+    cp -f "${f}" "${BUILD_DIR}/"
+  done
+
+  echo
+  echo "Build complete. Output packages:"
+  ls -1 "${BUILD_DIR}"/*.deb
+}
+
+install_built_packages() {
+  shopt -s nullglob
+  local -a all_debs=("${BUILD_DIR}"/*.deb)
+  if [[ "${#all_debs[@]}" -eq 0 ]]; then
+    echo "No built .deb packages found in ${BUILD_DIR}" >&2
+    exit 1
+  fi
+
+  local -a target_packages=(libvulkan1 libvulkan-dev)
+  local -a install_debs=()
+  local deb package target found
+  for target in "${target_packages[@]}"; do
+    found=""
+    for deb in "${all_debs[@]}"; do
+      package="$(dpkg-deb -f "${deb}" Package 2>/dev/null || true)"
+      if [[ "${package}" == "${target}" ]]; then
+        found="${deb}"
+        break
+      fi
+    done
+    if [[ -z "${found}" ]]; then
+      echo "Built package ${target} not found in ${BUILD_DIR}" >&2
+      exit 1
+    fi
+    install_debs+=("${found}")
+  done
+
+  echo
+  echo "Installing built libvulkan1 and libvulkan-dev packages..."
+  run_as_root env DEBIAN_FRONTEND=noninteractive apt-get "${APT_INSTALL_OPTS[@]}" install --no-install-recommends "${install_debs[@]}"
+}
+
+stage_built_packages() {
+  local repo_root dest f
+  repo_root="$(realpath "${SCRIPT_DIR}/../..")"
+
+  shopt -s nullglob
+  local -a debs=("${BUILD_DIR}"/*.deb)
+  if [[ "${#debs[@]}" -eq 0 ]]; then
+    echo "No built .deb packages found in ${BUILD_DIR}" >&2
+    exit 1
+  fi
+
+  echo
+  echo "Staging built vulkan packages to ${repo_root}/ for packaging..."
+  for f in "${debs[@]}"; do
+    cp -f "${f}" "${repo_root}/"
+    echo "  $(basename "${f}")"
+  done
+}
+
+main() {
+  parse_args "$@"
+  require_debian
+  detect_host_arch
+  init_root_cmd
+  require_tools
+  prepare_workspace
+
+  if ! can_run_as_root; then
+    cat >&2 <<'EOF'
+Root access is required to install build dependencies.
+Run in an interactive terminal where sudo can prompt, or run as root.
+EOF
+    exit 1
+  fi
+
+  refresh_testing_metadata
+  resolve_source_package
+  install_build_tools
+  download_source
+  install_source_build_dependencies
+  build_packages
+  if [[ "${INSTALL_BUILT}" == "true" ]]; then
+    install_built_packages
+  fi
+  if [[ "${STAGE_PACKAGES}" == "true" ]]; then
+    stage_built_packages
+  fi
+}
+
+main "$@"

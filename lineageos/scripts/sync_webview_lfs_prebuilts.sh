@@ -81,7 +81,8 @@ for arch in "${arches[@]}"; do
 
   log "syncing Git LFS objects: $project"
   git -C "$project_dir" lfs install --local --force >/dev/null
-  git -C "$project_dir" lfs fetch --include='webview.apk' --exclude=''
+  git_network_retry "fetch WebView Git LFS object for $project" \
+    git -C "$project_dir" lfs fetch --include='webview.apk' --exclude=''
   git -C "$project_dir" lfs checkout webview.apk
 
   [[ -f "$apk" ]] || die "missing WebView prebuilt APK: $apk"

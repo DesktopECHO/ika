@@ -60,31 +60,57 @@ function install_rpm_build_dependencies() {
   run_as_root dnf -y install --setopt=install_weak_deps=False "${packages[@]}"
 }
 
+function ensure_trixie_backports_repository() {
+  if grep -qrE "^[^#]*trixie-backports" \
+       /etc/apt/sources.list \
+       /etc/apt/sources.list.d/ 2>/dev/null; then
+    return 0
+  fi
+
+  echo "Debian 13 (trixie) requires the trixie-backports repository."
+  printf "Add it now? [Y/n] "
+  read -r _reply
+  case "${_reply}" in
+    [nN]*)
+      >&2 echo "Aborted. Add the repository manually and re-run."
+      exit 1
+      ;;
+  esac
+  run_as_root tee /etc/apt/sources.list.d/trixie-backports.list \
+    <<<"deb http://deb.debian.org/debian trixie-backports main contrib non-free" >/dev/null
+  run_as_root env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+}
+
+function install_trixie_testing_vulkan_loader() {
+  local buildutils_dir builder version
+  version="$(dpkg-query -W -f='${Version}' libvulkan1 2>/dev/null || true)"
+  if [[ -n "${version}" ]] && dpkg --compare-versions "${version}" ge 1.4.341; then
+    echo "libvulkan1 ${version} is already 1.4.341 or newer; skipping Debian testing Vulkan build."
+    return 0
+  fi
+
+  buildutils_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  builder="${buildutils_dir}/vulkan-build-trixie"
+
+  [[ -x "${builder}" ]] || {
+    >&2 echo "Missing executable Vulkan testing build helper: ${builder}"
+    exit 1
+  }
+
+  echo "Build libvulkan from Debian testing..."
+  "${builder}" --yes --install --no-stage
+}
+
 function install_deb_build_dependencies() {
   local codename
   codename=$(. /etc/os-release 2>/dev/null && printf '%s' "${VERSION_CODENAME:-}")
 
   if [[ "${codename}" == "trixie" ]]; then
-    if ! grep -qrE "^[^#]*trixie-backports" \
-         /etc/apt/sources.list \
-         /etc/apt/sources.list.d/ 2>/dev/null; then
-      echo "Debian 13 (trixie) requires the trixie-backports repository, which is not configured."
-      printf "Add it now? [Y/n] "
-      read -r _reply
-      case "${_reply}" in
-        [nN]*)
-          >&2 echo "Aborted. Add the repository manually and re-run."
-          exit 1
-          ;;
-      esac
-      run_as_root tee /etc/apt/sources.list.d/trixie-backports.list \
-        <<<"deb http://deb.debian.org/debian trixie-backports main contrib non-free" >/dev/null
-      run_as_root apt-get update -qq
-    fi
+    ensure_trixie_backports_repository
   fi
 
   echo "Installing Debian build dependencies"
-  run_as_root apt-get update -qq
+  run_as_root env DEBIAN_FRONTEND=noninteractive apt-get update -qq
 
   # All static build dependencies for every ika deb plus the ROM host tools, in
   # a single apt-get transaction: one sudo call, one dependency resolution.
@@ -118,7 +144,7 @@ function install_deb_build_dependencies() {
     python3 rsync tar unzip util-linux zip
   )
 
-  run_as_root apt-get install -y --no-install-recommends "${packages[@]}"
+  run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
 
   # crtbeginS.o is split from gcc into libgcc-<ver>-dev on Debian trixie+;
   # the ROM build links host tools against it.
@@ -127,27 +153,27 @@ function install_deb_build_dependencies() {
     gcc_ver="$(apt-cache pkgnames 2>/dev/null | grep -E '^libgcc-[0-9]+-dev$' | \
       grep -oE '[0-9]+' | sort -n | tail -1)"
     if [[ -n "${gcc_ver}" ]]; then
-      run_as_root apt-get install -y --no-install-recommends "libgcc-${gcc_ver}-dev"
+      run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "libgcc-${gcc_ver}-dev"
     fi
   fi
 
-  # Debian 13: upgrade Mesa/Vulkan stack from backports — base repo has
-  # vulkan_raii.hpp v1.4.309 which is ABI-incompatible with the v1.4.338
-  # headers the Bazel build fetches from KhronosGroup/Vulkan-Headers.
+  # Debian 13: upgrade Mesa from backports, then install Vulkan loader/dev
+  # packages built from testing source. Trixie base has vulkan_raii.hpp v1.4.309
+  # which is ABI-incompatible with the v1.4.338 headers the Bazel build fetches
+  # from KhronosGroup/Vulkan-Headers.
   if [[ "${codename}" == "trixie" ]]; then
-    echo "Upgrading Mesa/Vulkan stack from trixie-backports..."
-    run_as_root apt-get install -t trixie-backports -y --no-install-recommends \
+    echo "Upgrading Mesa stack from trixie-backports..."
+    run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -t trixie-backports -y --no-install-recommends \
       libegl1 \
       libegl-mesa0 \
       libgl1-mesa-dri \
       libgles2 \
       libglx-mesa0 \
-      libvulkan1 \
-      libvulkan-dev \
       mesa-common-dev \
       mesa-vulkan-drivers \
       mesa-drm-shim \
       mesa-utils-bin
+    install_trixie_testing_vulkan_loader
   fi
 }
 
@@ -165,7 +191,6 @@ function install_arch_build_dependencies() {
     cmake \
     coreutils \
     curl \
-    dwarves \
     e2fsprogs \
     erofs-utils \
     file \
@@ -181,6 +206,7 @@ function install_arch_build_dependencies() {
     gtest \
     icu \
     imagemagick \
+    inetutils \
     jdk-openjdk \
     jsoncpp \
     kmod \
@@ -198,6 +224,7 @@ function install_arch_build_dependencies() {
     npm \
     openssl \
     opus \
+    pahole \
     perl \
     pigz \
     pkgconf \
@@ -208,7 +235,6 @@ function install_arch_build_dependencies() {
     rsync \
     sdl3 \
     tar \
-    tinyxxd \
     unzip \
     util-linux \
     util-linux-libs \
@@ -218,7 +244,12 @@ function install_arch_build_dependencies() {
     which \
     xz \
     z3 \
+    zstd \
     zip
+
+  if ! pacman -T xxd >/dev/null 2>&1; then
+    run_as_root pacman -S --needed --noconfirm tinyxxd
+  fi
 }
 
 function install_build_dependencies() {

@@ -30,6 +30,41 @@ die() {
 
 source "$script_dir/lib/patch_series.sh"
 
+managed_source_tree() {
+  [[ -f "$repo_root/.lineage-desktop-managed" ]]
+}
+
+project_has_unpushed_commits() {
+  local project_dir="$1"
+  local upstream ahead
+
+  upstream="$(git -C "$project_dir" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+  [[ -n "$upstream" ]] || return 1
+
+  ahead="$(git -C "$project_dir" rev-list --count "$upstream..HEAD" 2>/dev/null || echo 0)"
+  [[ "$ahead" != "0" ]]
+}
+
+reset_dirty_managed_project() {
+  local project="$1"
+  local project_label="$2"
+  local project_dir
+
+  managed_source_tree || return 1
+  patch_series_is_source_root "$project" && return 1
+
+  project_dir="$(patch_series_project_dir "$repo_root" "$project")"
+  [[ -n "$(git -C "$project_dir" status --porcelain=v1)" ]] || return 1
+
+  if project_has_unpushed_commits "$project_dir" && [[ "${RESET_PATCHED_PROJECTS_FORCE:-0}" != "1" ]]; then
+    die "$project_label has unpushed commits; refusing to reset before patching. Push/stash your work, or set RESET_PATCHED_PROJECTS_FORCE=1 to override."
+  fi
+
+  log "resetting dirty project before patching: $project_label"
+  git -C "$project_dir" reset --hard HEAD >/dev/null
+  git -C "$project_dir" clean -fd >/dev/null
+}
+
 apply_patch_file() {
   local project="$1"
   local patch="$2"
@@ -44,7 +79,12 @@ apply_patch_file() {
   fi
 
   if ! patch_series_git_apply "$repo_root" "$project" --check --whitespace=nowarn "$patch_file" >/dev/null; then
-    die "patch does not apply cleanly to $project_label: $patch"
+    if reset_dirty_managed_project "$project" "$project_label" \
+        && patch_series_git_apply "$repo_root" "$project" --check --whitespace=nowarn "$patch_file" >/dev/null; then
+      :
+    else
+      die "patch does not apply cleanly to $project_label: $patch"
+    fi
   fi
 
   log "applying: $project_label"

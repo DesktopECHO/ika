@@ -558,7 +558,7 @@ diff --git a/ui/build/ninja.go b/ui/build/ninja.go
 index 2b31024d4..9d9fe0588 100644
 --- a/ui/build/ninja.go
 +++ b/ui/build/ninja.go
-@@ -83,14 +83,23 @@ func runNinja(ctx Context, config Config, ninjaArgs []string) {
+@@ -83,14 +83,22 @@ func runNinja(ctx Context, config Config, ninjaArgs []string) {
  	default:
  		// NINJA_NINJA or NINJA_NINJAGO.
  		executable = config.NinjaBin()
@@ -575,7 +575,6 @@ index 2b31024d4..9d9fe0588 100644
 +				"-d", "keepdepfile",
 +				"-d", "keeprsp",
 +				"-d", "stats",
-+				"-w", "dupbuild=err",
 +			}
 +		} else {
 +			args = []string{
@@ -624,7 +623,7 @@ index c9b303c5b..e8db9f12c 100644
  
  	var allArgs []string
  	allArgs = append(allArgs, pb.specificArgs...)
-@@ -666,17 +671,27 @@ func runSoong(ctx Context, config Config, enforceNoSoongOutput bool) {
+@@ -666,16 +671,25 @@ func runSoong(ctx Context, config Config, enforceNoSoongOutput bool) {
  			default:
  				// NINJA_NINJA is the default.
  				ninjaCmd = config.NinjaBin()
@@ -643,7 +642,6 @@ index c9b303c5b..e8db9f12c 100644
 +					ninjaArgs = []string{
 +						"-d", "keepdepfile",
 +						"-d", "stats",
-+						"-w", "dupbuild=err",
 +						"-j", strconv.Itoa(config.Parallel()),
 +						"-f", filepath.Join(config.SoongOutDir(), "bootstrap.ninja"),
 +					}
@@ -662,4 +660,3 @@ index c9b303c5b..e8db9f12c 100644
 +					}
  				}
  			}
- 

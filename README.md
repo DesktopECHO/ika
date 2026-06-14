@@ -18,8 +18,8 @@ git clone https://github.com/DesktopECHO/ika.git
 cd ika
 
 # 2. Build and install.
-#    Installs build dependencies (the only sudo prompt during the build),
-#    prepares signing certificates, then downloads LineageOS 23.2 source,
+#    Prepares signing certificates, installs build dependencies, then downloads
+#    LineageOS 23.2 source,
 #    applies the overlay and source patches in lineageos/, builds the
 #    Cuttlefish target for the host arch, and creates RPM or Debian packages.
 #    Incremental runs are much faster.
@@ -185,10 +185,11 @@ Bazel is installed automatically through Bazelisk by `./ika-build`, which runs
 [`tools/buildutils/installbazel.sh`](tools/buildutils/installbazel.sh) during
 its dependency step. That step
 ([`tools/buildutils/lib/dependencies.sh`](tools/buildutils/lib/dependencies.sh))
-is the only point where the build pipeline runs `apt`/`dnf`, so sudo is needed
-once at the start of a build rather than partway through. The standalone build
-scripts (`build_lineageos_desktop.sh`, `build_packages.sh`) assume dependencies
-are already installed and fail fast when one is missing.
+handles the main build dependency install near the start of a build rather than
+partway through. The signing-key bootstrap may install its small certificate
+tool set first if needed. The standalone build scripts
+(`build_lineageos_desktop.sh`, `build_packages.sh`) assume dependencies are
+already installed and fail fast when one is missing.
 
 The networking helper uses `nftables` exclusively — both the host-side
 bridge/NAT setup in `cuttlefish-host-resources.sh` and the per-user

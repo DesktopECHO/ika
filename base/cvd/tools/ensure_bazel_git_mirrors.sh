@@ -25,19 +25,29 @@ retry_command() {
   local description="$1"
   shift
 
+  if (( $# == 0 )); then
+    echo "No command provided for ${description}." >&2
+    return 1
+  fi
+
+  local retry_count="${MAX_RETRIES}"
+  local retry_delay="${RETRY_DELAY}"
   local attempt=1
+  [[ "${retry_count}" =~ ^[0-9]+$ && "${retry_count}" -gt 0 ]] || retry_count=3
+  [[ "${retry_delay}" =~ ^[0-9]+$ && "${retry_delay}" -gt 0 ]] || retry_delay=10
+
   while true; do
     if "$@"; then
       return 0
     fi
 
-    if [[ "${attempt}" -ge "${MAX_RETRIES}" ]]; then
+    if [[ "${attempt}" -ge "${retry_count}" ]]; then
       echo "Failed to ${description} after ${attempt} attempts." >&2
       return 1
     fi
 
-    echo "Failed to ${description}, retrying in ${RETRY_DELAY}s (${attempt}/${MAX_RETRIES})..." >&2
-    sleep "${RETRY_DELAY}"
+    echo "Failed to ${description}, retrying in ${retry_delay}s (${attempt}/${retry_count})..." >&2
+    sleep "${retry_delay}"
     attempt=$((attempt + 1))
   done
 }
@@ -59,6 +69,14 @@ fetch_mirror() {
   git_clean -C "${repo_path}" fetch --prune origin \
     '+refs/heads/*:refs/heads/*' \
     '+refs/tags/*:refs/tags/*'
+}
+
+clone_mirror() {
+  local remote_url="$1"
+  local tmp_path="$2"
+
+  rm -rf "${tmp_path}"
+  git_clean clone --mirror "${remote_url}" "${tmp_path}"
 }
 
 configure_rewrite() {
@@ -92,7 +110,10 @@ ensure_mirror() {
 
       echo "Primary ${mirror_name} remote failed, retrying with ${fallback_remote}" >&2
       ensure_remote_origin "${mirror_path}" "${fallback_remote}"
-      retry_command "refresh ${mirror_name} mirror from ${fallback_remote}" fetch_mirror "${mirror_path}"
+      if ! retry_command "refresh ${mirror_name} mirror from ${fallback_remote}" fetch_mirror "${mirror_path}"; then
+        ensure_remote_origin "${mirror_path}" "${primary_remote}"
+        return 1
+      fi
       ensure_remote_origin "${mirror_path}" "${primary_remote}"
     fi
   else
@@ -107,7 +128,7 @@ ensure_mirror() {
 
     echo "Creating local ${mirror_name} git mirror at ${mirror_path}" >&2
     if ! retry_command "clone ${mirror_name} mirror from ${primary_remote}" \
-      git_clean clone --mirror "${primary_remote}" "${tmp_path}"; then
+      clone_mirror "${primary_remote}" "${tmp_path}"; then
       if [[ -z "${fallback_remote}" ]]; then
         rm -rf "${tmp_path}"
         return 1
@@ -115,8 +136,11 @@ ensure_mirror() {
 
       rm -rf "${tmp_path}"
       echo "Primary ${mirror_name} remote failed, retrying with ${fallback_remote}" >&2
-      retry_command "clone ${mirror_name} mirror from ${fallback_remote}" \
-        git_clean clone --mirror "${fallback_remote}" "${tmp_path}"
+      if ! retry_command "clone ${mirror_name} mirror from ${fallback_remote}" \
+        clone_mirror "${fallback_remote}" "${tmp_path}"; then
+        rm -rf "${tmp_path}"
+        return 1
+      fi
       ensure_remote_origin "${tmp_path}" "${primary_remote}"
     fi
 

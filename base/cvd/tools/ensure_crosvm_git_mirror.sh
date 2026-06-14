@@ -4,9 +4,42 @@ set -euo pipefail
 
 readonly CROSVM_REMOTE_PRIMARY="https://chromium.googlesource.com/crosvm/crosvm"
 readonly CROSVM_REMOTE_FALLBACK="https://github.com/google/crosvm.git"
+readonly MAX_RETRIES="${CUTTLEFISH_CROSVM_GIT_MIRROR_RETRIES:-3}"
+readonly RETRY_DELAY="${CUTTLEFISH_CROSVM_GIT_MIRROR_RETRY_DELAY:-10}"
 
 git_clean() {
-  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git "$@"
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c safe.bareRepository=all "$@"
+}
+
+retry_command() {
+  local description="$1"
+  shift
+
+  if (( $# == 0 )); then
+    echo "No command provided for ${description}." >&2
+    return 1
+  fi
+
+  local retry_count="${MAX_RETRIES}"
+  local retry_delay="${RETRY_DELAY}"
+  local attempt=1
+  [[ "${retry_count}" =~ ^[0-9]+$ && "${retry_count}" -gt 0 ]] || retry_count=3
+  [[ "${retry_delay}" =~ ^[0-9]+$ && "${retry_delay}" -gt 0 ]] || retry_delay=10
+
+  while true; do
+    if "$@"; then
+      return 0
+    fi
+
+    if [[ "${attempt}" -ge "${retry_count}" ]]; then
+      echo "Failed to ${description} after ${attempt} attempts." >&2
+      return 1
+    fi
+
+    echo "Failed to ${description}, retrying in ${retry_delay}s (${attempt}/${retry_count})..." >&2
+    sleep "${retry_delay}"
+    attempt=$((attempt + 1))
+  done
 }
 
 find_crosvm_mirror_path() {
@@ -46,6 +79,14 @@ ensure_remote_origin() {
   fi
 }
 
+clone_mirror() {
+  local remote="$1"
+  local tmp_path="$2"
+
+  rm -rf "${tmp_path}"
+  git_clean clone --mirror "${remote}" "${tmp_path}"
+}
+
 main() {
   local mirror_path=
   local mirror_parent=
@@ -59,12 +100,24 @@ main() {
   mirror_parent="$(dirname "${mirror_path}")"
   mkdir -p "${mirror_parent}"
 
-  if git -C "${mirror_path}" rev-parse --git-dir >/dev/null 2>&1; then
+  if git_clean -C "${mirror_path}" rev-parse --git-dir >/dev/null 2>&1; then
     echo "Refreshing local crosvm git mirror at ${mirror_path}" >&2
     ensure_remote_origin "${mirror_path}"
-    git_clean -C "${mirror_path}" fetch --prune origin \
+    retry_command "refresh crosvm mirror from ${CROSVM_REMOTE_PRIMARY}" \
+      git_clean -C "${mirror_path}" fetch --prune origin \
       '+refs/heads/*:refs/heads/*' \
-      '+refs/tags/*:refs/tags/*'
+      '+refs/tags/*:refs/tags/*' || {
+        echo "Primary crosvm remote failed, retrying with ${CROSVM_REMOTE_FALLBACK}" >&2
+        git_clean -C "${mirror_path}" remote set-url origin "${CROSVM_REMOTE_FALLBACK}"
+        if ! retry_command "refresh crosvm mirror from ${CROSVM_REMOTE_FALLBACK}" \
+          git_clean -C "${mirror_path}" fetch --prune origin \
+          '+refs/heads/*:refs/heads/*' \
+          '+refs/tags/*:refs/tags/*'; then
+          ensure_remote_origin "${mirror_path}"
+          return 1
+        fi
+        ensure_remote_origin "${mirror_path}"
+      }
     exit 0
   fi
 
@@ -78,10 +131,16 @@ main() {
   rm -rf "${tmp_path}"
 
   echo "Creating local crosvm git mirror at ${mirror_path}" >&2
-  git_clean clone --mirror "${CROSVM_REMOTE_PRIMARY}" "${tmp_path}" || {
+  retry_command "clone crosvm mirror from ${CROSVM_REMOTE_PRIMARY}" \
+    clone_mirror "${CROSVM_REMOTE_PRIMARY}" "${tmp_path}" || {
     rm -rf "${tmp_path}"
     echo "Primary crosvm remote failed, retrying with ${CROSVM_REMOTE_FALLBACK}" >&2
-    git_clean clone --mirror "${CROSVM_REMOTE_FALLBACK}" "${tmp_path}"
+    if ! retry_command "clone crosvm mirror from ${CROSVM_REMOTE_FALLBACK}" \
+      clone_mirror "${CROSVM_REMOTE_FALLBACK}" "${tmp_path}"; then
+      rm -rf "${tmp_path}"
+      return 1
+    fi
+    ensure_remote_origin "${tmp_path}"
   }
 
   mv "${tmp_path}" "${mirror_path}"

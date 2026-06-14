@@ -19,8 +19,9 @@ ensure_arm64_go_prebuilt() {
   mkdir -p "$cache_dir"
   tmp_dir="$(mktemp -d "$cache_dir/linux-arm64.XXXXXX")"
   log "cloning ARM64 Go prebuilt: $arm64_go_prebuilt_git_url ($arm64_go_prebuilt_git_ref)"
-  git clone --depth=1 --branch "$arm64_go_prebuilt_git_ref" \
-    "$arm64_go_prebuilt_git_url" "$tmp_dir"
+  git_clone_with_retries "$tmp_dir" "clone ARM64 Go prebuilt" \
+    --depth=1 --branch "$arm64_go_prebuilt_git_ref" "$arm64_go_prebuilt_git_url" || \
+    die "failed to clone ARM64 Go prebuilt: $arm64_go_prebuilt_git_url@$arm64_go_prebuilt_git_ref"
   [[ -x "$tmp_dir/bin/go" && -f "$tmp_dir/pkg/linux_arm64/fmt.a" ]] || {
     rm -rf "$tmp_dir"
     die "ARM64 Go prebuilt is incomplete: $arm64_go_prebuilt_git_url@$arm64_go_prebuilt_git_ref"
@@ -230,7 +231,9 @@ clone_clang_prebuilt_repo() {
   mkdir -p "$cache_dir"
   tmp_dir="$(mktemp -d "$cache_dir/$host_tag.XXXXXX")"
   log "cloning $host_tag Clang prebuilt: $git_url ($git_ref)" >&2
-  git clone --depth=1 --branch "$git_ref" "$git_url" "$tmp_dir"
+  git_clone_with_retries "$tmp_dir" "clone $host_tag Clang prebuilt" \
+    --depth=1 --branch "$git_ref" "$git_url" || \
+    die "failed to clone $host_tag Clang prebuilt: $git_url@$git_ref"
 
   if [[ -n "$payload_name" ]]; then
     clang_dir="$tmp_dir/$payload_name"
@@ -271,8 +274,8 @@ fetch_clang_single_payload() {
   rm -rf "$dest.tmp"
   mkdir -p "${dest%/*}"
 
-  if ! git clone --depth=1 --branch "$git_ref" \
-       --filter=blob:none --no-checkout "$git_url" "$dest.tmp"; then
+  if ! git_clone_with_retries "$dest.tmp" "clone single Clang payload" \
+       --depth=1 --branch "$git_ref" --filter=blob:none --no-checkout "$git_url"; then
     rm -rf "$dest.tmp"
     return 1
   fi
@@ -280,7 +283,8 @@ fetch_clang_single_payload() {
   # Materialize only the pinned payload directory; its blobs are faulted in from
   # the promisor during checkout, the other payloads are never downloaded.
   if ! git -C "$dest.tmp" sparse-checkout set --no-cone "/$payload_name/" || \
-     ! git -C "$dest.tmp" checkout -q HEAD; then
+     ! git_network_retry "checkout single Clang payload $payload_name" \
+       git -C "$dest.tmp" checkout -q HEAD; then
     rm -rf "$dest.tmp"
     return 1
   fi
@@ -419,7 +423,9 @@ ensure_linux_x86_clang_prebuilt() {
     fi
 
     log "syncing x86 Clang prebuilt: $linux_x86_clang_prebuilt_git_url ($linux_x86_clang_prebuilt_git_ref)"
-    git -C "$dest" fetch --depth=1 "$linux_x86_clang_prebuilt_git_url" "$linux_x86_clang_prebuilt_git_ref"
+    git_network_retry "fetch x86 Clang prebuilt" \
+      git -C "$dest" fetch --depth=1 "$linux_x86_clang_prebuilt_git_url" "$linux_x86_clang_prebuilt_git_ref" || \
+      die "failed to fetch x86 Clang prebuilt: $linux_x86_clang_prebuilt_git_url@$linux_x86_clang_prebuilt_git_ref"
     fetched_commit="$(git -C "$dest" rev-parse FETCH_HEAD)"
     if [[ -z "$payload_name" ]]; then
       payload_name="$(clang_payload_name_from_ref "$dest" FETCH_HEAD)"
@@ -633,8 +639,8 @@ ensure_arm64_native_cmake_prebuilt() {
   mkdir -p "$cache_dir"
   tmp_dir="$(mktemp -d "$cache_dir/linux-arm64.XXXXXX")"
   log "cloning ARM64 CMake prebuilt: $arm64_cmake_prebuilt_git_url ($arm64_cmake_prebuilt_git_ref)"
-  git clone --depth=1 --branch "$arm64_cmake_prebuilt_git_ref" \
-    "$arm64_cmake_prebuilt_git_url" "$tmp_dir" || {
+  git_clone_with_retries "$tmp_dir" "clone ARM64 CMake prebuilt" \
+    --depth=1 --branch "$arm64_cmake_prebuilt_git_ref" "$arm64_cmake_prebuilt_git_url" || {
       rm -rf "$tmp_dir"
       die "failed to clone ARM64 CMake prebuilt: $arm64_cmake_prebuilt_git_url@$arm64_cmake_prebuilt_git_ref"
     }
@@ -1059,7 +1065,9 @@ install_arm64_prebuilt_from_git() {
   else
     log "cloning $label ARM64 prebuilt: $git_url"
   fi
-  git clone "${clone_args[@]}" "$git_url" "$tmp_dir"
+  git_clone_with_retries "$tmp_dir" "clone $label ARM64 prebuilt" \
+    "${clone_args[@]}" "$git_url" || \
+    die "failed to clone $label ARM64 prebuilt: $git_url${git_ref:+@$git_ref}"
   install_arm64_prebuilt_from_dir "$tmp_dir" "$dest" "$probe" "$label"
   rm -rf "$tmp_dir"
 }

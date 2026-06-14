@@ -106,16 +106,7 @@ ensure_keys() {
 main() {
   ensure_identity
   ensure_keys
-  cat <<EOF
-
-[ika-setup] done.
-
-Next steps:
-  ./lineageos/scripts/build_lineageos_desktop.sh           # full pipeline (~30-60 min after the ROM)
-  ./lineageos/scripts/rebuild_cf_desktop_arm64.sh          # fast rebuild after source edits
-  ./lineageos/scripts/rebuild_cf_desktop_x86_64.sh
-
-EOF
+  printf '\n[ika-setup] done.\n'
 }
 
 main "$@"

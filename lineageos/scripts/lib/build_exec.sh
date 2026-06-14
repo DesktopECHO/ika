@@ -1,18 +1,8 @@
 #!/usr/bin/env bash
-# Build execution for the LineageOS Desktop build engine: ARM64 memory limit
-# tuning, active-LLVM env export, native execution, and the lunch+make dispatch.
+# Build execution for the LineageOS Desktop build engine: active-LLVM env
+# export, native execution, and the lunch+make dispatch.
 # Source only (defines functions). Relies on engine globals + core primitives at
 # call time.
-
-configure_arm64_soong_limits() {
-  host_is_arm64 || return 0
-
-  if [[ ! "$arm64_soong_gomaxprocs" =~ ^[0-9]+$ || "$arm64_soong_gomaxprocs" -le 0 ]]; then
-    build_jobs_fail \
-      "invalid ARM64_SOONG_GOMAXPROCS value '$arm64_soong_gomaxprocs'; expected a positive integer"
-    return 1
-  fi
-}
 
 configure_ccache() {
   # ccache speeds up incremental and repeat builds (Soong honors USE_CCACHE for
@@ -34,110 +24,6 @@ configure_ccache() {
   CCACHE_EXEC="$(command -v ccache)"
   export CCACHE_EXEC
   log "ccache enabled: dir=$ccache_dir max=$ccache_max_size"
-}
-
-arm64_build_job_attempts() {
-  local primary_jobs="$1"
-  local candidate seen=" "
-
-  if [[ -n "$arm64_job_retry_list" ]]; then
-    for candidate in $arm64_job_retry_list; do
-      if [[ ! "$candidate" =~ ^[0-9]+$ || "$candidate" -le 0 ]]; then
-        build_jobs_fail "invalid ARM64_JOB_RETRY_LIST value '$candidate'; expected positive integers"
-        return 1
-      fi
-      if [[ "$seen" != *" $candidate "* ]]; then
-        printf '%s\n' "$candidate"
-        seen+="$candidate "
-      fi
-    done
-    return 0
-  fi
-
-  printf '%s\n' "$primary_jobs"
-  seen+="$primary_jobs "
-  if (( jobs_was_set == 0 )); then
-    for candidate in 3 2 1; do
-      if (( candidate < primary_jobs )) && [[ "$seen" != *" $candidate "* ]]; then
-        printf '%s\n' "$candidate"
-        seen+="$candidate "
-      fi
-    done
-  fi
-}
-
-arm64_validate_gomemlimit() {
-  local value="$1"
-  if [[ "$value" == "off" || "$value" =~ ^[0-9]+([KMGTPE]i?B|B)?$ ]]; then
-    return 0
-  fi
-
-  build_jobs_fail "invalid ARM64_SOONG_GOMEMLIMIT value '$value'; expected e.g. 3GiB, 2048MiB, bytes, or off"
-  return 1
-}
-
-arm64_soong_gomemlimit_attempts() {
-  local primary_limit="$1"
-  local candidate seen=" "
-
-  if [[ -n "$arm64_soong_gomemlimit_retry_list" ]]; then
-    for candidate in $arm64_soong_gomemlimit_retry_list; do
-      arm64_validate_gomemlimit "$candidate" || return 1
-      if [[ "$seen" != *" $candidate "* ]]; then
-        printf '%s\n' "$candidate"
-        seen+="$candidate "
-      fi
-    done
-    return 0
-  fi
-
-  arm64_validate_gomemlimit "$primary_limit" || return 1
-  printf '%s\n' "$primary_limit"
-  seen+="$primary_limit "
-
-  if (( arm64_soong_gomemlimit_was_set == 0 )); then
-    for candidate in 2GiB 1536MiB 1GiB; do
-      if [[ "$seen" != *" $candidate "* ]]; then
-        printf '%s\n' "$candidate"
-        seen+="$candidate "
-      fi
-    done
-  fi
-}
-
-arm64_build_attempts() {
-  local primary_jobs="$1"
-  local primary_gomemlimit="$2"
-  local -a job_attempts=()
-  local -a gomemlimit_attempts=()
-  local attempt_jobs attempt_gomemlimit
-
-  mapfile -t job_attempts < <(arm64_build_job_attempts "$primary_jobs")
-  mapfile -t gomemlimit_attempts < <(arm64_soong_gomemlimit_attempts "$primary_gomemlimit")
-
-  for attempt_jobs in "${job_attempts[@]}"; do
-    for attempt_gomemlimit in "${gomemlimit_attempts[@]}"; do
-      printf '%s %s\n' "$attempt_jobs" "$attempt_gomemlimit"
-    done
-  done
-}
-
-arm64_log_looks_resource_limited() {
-  local log_file="$1"
-  [[ -s "$log_file" ]] || return 1
-
-  if grep -Eqi \
-    '(^|[^[:alpha:]])killed([^[:alpha:]]|$)|cannot allocate memory|out of memory|std::bad_alloc|resource temporarily unavailable|too many open files|failed to create new os thread|fatal error: runtime: out of memory' \
-    "$log_file"; then
-    return 0
-  fi
-
-  if grep -Eq 'FAILED: out/soong/build\..*\.ninja|soong bootstrap failed with: exit status 1' "$log_file" && \
-      ! grep -Eqi '(^|[^[:alpha:]])error:' "$log_file"; then
-    return 0
-  fi
-
-  return 1
 }
 
 raise_host_open_file_limit() {
@@ -279,10 +165,15 @@ dump_soong_failure_logs() {
 
 run_build_native() {
   local product="$1"
-  local status
+  local java_home status
   shift
 
   export_active_llvm_env
+  if host_is_arm64; then
+    java_home="$(arm64_android_java_home_for_build || true)"
+    [[ -n "$java_home" ]] && export OVERRIDE_ANDROID_JAVA_HOME="$java_home"
+    export THINLTO_USE_MLGO="$arm64_thinlto_use_mlgo"
+  fi
 
   set +u
   source build/envsetup.sh
@@ -302,92 +193,11 @@ run_build_native() {
   return "$status"
 }
 
-run_build_arm64_native() {
-  local product="$1"
-  shift
-
-  ensure_linux_arm64_clang_ready
-  raise_host_open_file_limit
-  configure_arm64_ninja_runner
-
-  local -a build_attempts=()
-  mapfile -t build_attempts < <(arm64_build_attempts "$jobs" "$arm64_soong_gomemlimit")
-
-  local attempt attempt_jobs attempt_gomemlimit attempt_gomaxprocs
-  local attempt_gomemlimit_label attempt_log status last_status=1 java_home
-  java_home="$(arm64_android_java_home_for_build || true)"
-
-  for attempt in "${build_attempts[@]}"; do
-    read -r attempt_jobs attempt_gomemlimit <<< "$attempt"
-    attempt_gomaxprocs="$arm64_soong_gomaxprocs"
-    if (( arm64_soong_gomaxprocs_was_set == 0 && attempt_jobs < attempt_gomaxprocs )); then
-      attempt_gomaxprocs="$attempt_jobs"
-    fi
-
-    mkdir -p "$workspace/out/lineage-desktop"
-    attempt_gomemlimit_label="${attempt_gomemlimit//[^[:alnum:]._-]/_}"
-    attempt_log="$workspace/out/lineage-desktop/build-${product}-native-j${attempt_jobs}-g${attempt_gomemlimit_label}-p${attempt_gomaxprocs}.log"
-    log "running $product build natively on ARM64 ($attempt_jobs jobs, $highmem_jobs high-memory jobs, Soong GOMEMLIMIT=$attempt_gomemlimit, GOMAXPROCS=$attempt_gomaxprocs, ThinLTO MLGO=$arm64_thinlto_use_mlgo)"
-
-    export GOMEMLIMIT="$attempt_gomemlimit"
-    export GOGC="$arm64_soong_gogc"
-    export GOMAXPROCS="$attempt_gomaxprocs"
-    export GODEBUG="$arm64_godebug"
-    export GOTRACEBACK=all
-    export RUSTC_BOOTSTRAP=1
-    export ANDROID_BUILD_NINJA="${ANDROID_BUILD_NINJA:-}"
-    export ANDROID_BUILD_CLASSIC_NINJA="${ANDROID_BUILD_CLASSIC_NINJA:-}"
-    export NINJA_HIGHMEM_NUM_JOBS="$highmem_jobs"
-    export THINLTO_USE_MLGO="$arm64_thinlto_use_mlgo"
-    export_active_llvm_env
-    if [[ -n "$java_home" ]]; then
-      export OVERRIDE_ANDROID_JAVA_HOME="$java_home"
-    fi
-
-    set +u
-    source build/envsetup.sh
-    lunch "$product" trunk_staging userdebug || die "lunch $product failed"
-    [[ "${TARGET_PRODUCT:-}" == "$product" ]] || \
-      die "lunch did not set TARGET_PRODUCT=$product (got '${TARGET_PRODUCT:-}')"
-    set -eo pipefail
-    set -u
-
-    set +e
-    m "$@" -j"$attempt_jobs" 2>&1 | sanitize_build_log_output | tee "$attempt_log"
-    status="${PIPESTATUS[0]}"
-    set -e
-
-    if (( status == 0 )); then
-      jobs="$attempt_jobs"
-      arm64_soong_gomemlimit="$attempt_gomemlimit"
-      return 0
-    fi
-
-    last_status="$status"
-    dump_soong_failure_logs "$product"
-    if (( status == 137 )); then
-      log "$product build exited with status 137; treating it as ARM64 resource pressure"
-    elif ! arm64_log_looks_resource_limited "$attempt_log"; then
-      return "$status"
-    fi
-
-    remove_soong_graph_state "$product" \
-      "failed native ARM64 attempt with $attempt_jobs jobs, Soong GOMEMLIMIT=$attempt_gomemlimit, and GOMAXPROCS=$attempt_gomaxprocs"
-    log "$product build failed under ARM64 resource pressure with $attempt_jobs jobs, Soong GOMEMLIMIT=$attempt_gomemlimit, and GOMAXPROCS=$attempt_gomaxprocs; retrying lower if available"
-  done
-
-  return "$last_status"
-}
-
 run_lunch_and_make() {
   local product="$1"
   shift
 
-  if host_is_arm64; then
-    run_build_arm64_native "$product" "$@"
-  else
-    run_build_native "$product" "$@"
-  fi
+  run_build_native "$product" "$@"
 }
 
 build_host_lpunpack() {

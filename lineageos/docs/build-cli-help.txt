@@ -97,10 +97,10 @@ Environment:
   REPO_SYNC_QUIET       Pass --quiet to repo sync. Default: auto, enabled on
                         ARM64 hosts to keep Python repo sync output conservative
                         during ARM64 host syncs.
-  REPO_SYNC_JOBS        Override top-level repo sync jobs. Default: min(JOBS,16)
+  REPO_SYNC_JOBS        Override top-level repo sync jobs. Default: 4
   REPO_SYNC_CHECKOUT_JOBS
                         Checkout jobs for repo partial-clone workspaces. Lower
-                        values reduce lazy-blob checkout failures. Default: 4
+                        values reduce lazy-blob checkout failures. Default: 8
   REPO_CLONE_FILTER     Repo partial-clone filter for fresh checkouts. Default:
                         blob:none. Empty uses full clones.
   REPO_GROUPS           Manifest groups passed to repo init. Default:
@@ -178,26 +178,8 @@ Environment:
                         Native Linux ARM64 JDK 21 tarball used when this branch
                         lacks prebuilts/jdk/jdk21/linux-arm64. Default:
                         Adoptium Temurin JDK 21 API URL.
-  ARM64_JOB_RETRY_LIST  Space-separated ARM64 job counts to try if a faster
-                        attempt fails from memory/process pressure. Default:
-                        selected job count, then lower counts down to 1.
   NOFILE_LIMIT          Host open-file limit requested before builds. Set empty
                         to skip. Default: 4194304.
-  ARM64_SOONG_GOMEMLIMIT
-                        Go memory limit passed into Soong on ARM64 hosts.
-                        Default: 6GiB
-  ARM64_SOONG_GOMEMLIMIT_RETRY_LIST
-                        Space-separated Soong Go memory limits to try after
-                        resource-pressure failures. Default: ARM64_SOONG_GOMEMLIMIT,
-                        then lower limits down to 1GiB.
-  ARM64_SOONG_GOMAXPROCS
-                        Go scheduler threads for Soong graph generation on
-                        ARM64 hosts. Default: 4, capped to retry job count
-                        unless explicitly set.
-  ARM64_GODEBUG         Go runtime flags passed into ARM64 native builds.
-                        Default: asyncpreemptoff=1
-  ARM64_SOONG_GOGC      Go GC target percentage passed into Soong on ARM64
-                        hosts. Default: 100
   ARM64_THINLTO_USE_MLGO
                         Enables Soong ThinLTO MLGO linker advisors inside ARM64
                         native builds. Default: false, because current
@@ -208,7 +190,9 @@ Environment:
                         System JDK to use when the source tree lacks an ARM64
                         JDK prebuilt. Default: auto-detect from javac.
   ARM64 native hosts    ARM64 hosts build natively with ARM64 prebuilts only,
-                        including on Apple Silicon's 16 KiB-page kernels.
+                        using the same JOBS and NINJA_HIGHMEM_NUM_JOBS behavior
+                        as x86 hosts, including on Apple Silicon's 16 KiB-page
+                        kernels.
   RESET_PATCHED_PROJECTS
                         Reset patched source projects before repo sync.
                         Default: auto for script-managed workspaces

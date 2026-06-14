@@ -20,6 +20,35 @@ export SUDO_ASKPASS=/bin/false
 declare -a ROOT_CMD=()
 
 detect_distro_family() {
+  local ID="" ID_LIKE="" distro_words=""
+
+  if [[ -r /etc/os-release ]]; then
+    while IFS='=' read -r key value; do
+      case "${key}" in
+        ID|ID_LIKE)
+          value="${value%\"}"
+          value="${value#\"}"
+          printf -v "${key}" '%s' "${value}"
+          ;;
+      esac
+    done < /etc/os-release
+    distro_words=" ${ID:-} ${ID_LIKE:-} "
+    case "${distro_words}" in
+      *" arch "*|*" archarm "*|*" manjaro "*|*" endeavouros "*|*" cachyos "*|*" garuda "*|*" artix "*)
+        printf 'arch'
+        return 0
+        ;;
+      *" debian "*|*" ubuntu "*)
+        printf 'debian'
+        return 0
+        ;;
+      *" fedora "*|*" rhel "*|*" centos "*|*" rocky "*|*" almalinux "*)
+        printf 'rpm'
+        return 0
+        ;;
+    esac
+  fi
+
   if command -v dpkg >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
     printf 'debian'
   elif command -v rpm >/dev/null 2>&1 && command -v dnf >/dev/null 2>&1; then

@@ -38,8 +38,8 @@ output_dir="${OUTPUT_DIR:-$ika_root}"
 buildtime_log_path="${BUILDTIME_LOG_PATH:-$ika_root/buildtimes.log}"
 repo_install_path="${REPO_INSTALL_PATH:-/usr/local/bin/repo}"
 repo_cmd="repo"
-repo_sync_attempts="${REPO_SYNC_ATTEMPTS:-9}"
-repo_sync_retry_fetches="${REPO_SYNC_RETRY_FETCHES:-9}"
+repo_sync_attempts="${REPO_SYNC_ATTEMPTS:-100}"
+repo_sync_retry_fetches="${REPO_SYNC_RETRY_FETCHES:-20}"
 repo_sync_quiet="${REPO_SYNC_QUIET:-}"
 # Bandwidth controls for the initial `repo init`. Blobless partial clone
 # downloads commit/tree history but fetches file blobs lazily on checkout; keep
@@ -48,10 +48,11 @@ repo_sync_quiet="${REPO_SYNC_QUIET:-}"
 # manifest group.
 repo_clone_filter="${REPO_CLONE_FILTER-blob:none}"
 repo_groups="${REPO_GROUPS-default,-darwin}"
-repo_sync_jobs="${REPO_SYNC_JOBS:-}"
-repo_sync_checkout_jobs="${REPO_SYNC_CHECKOUT_JOBS:-}"
-jobs_was_set=0
-[[ -n "${JOBS:-}" ]] && jobs_was_set=1
+repo_sync_jobs="${REPO_SYNC_JOBS:-4}"
+repo_sync_checkout_jobs="${REPO_SYNC_CHECKOUT_JOBS:-8}"
+# Parallel network fetches to googlesource. Lower than checkout concurrency on
+# purpose: this is the dominant trigger for HTTP 429 rate limiting. Default 2.
+repo_sync_network_jobs="${REPO_SYNC_NETWORK_JOBS:-}"
 arm64_go_prebuilt_git_url="${ARM64_GO_PREBUILT_GIT_URL:-https://android.googlesource.com/platform/prebuilts/go/linux-arm64}"
 arm64_go_prebuilt_git_ref="${ARM64_GO_PREBUILT_GIT_REF:-mirror-goog-llvm-r596125-release}"
 arm64_rust_prebuilt_dir="${ARM64_RUST_PREBUILT_DIR:-}"
@@ -75,21 +76,11 @@ arm64_cmake_prebuilt_git_url="${ARM64_CMAKE_PREBUILT_GIT_URL:-https://android.go
 arm64_cmake_prebuilt_git_ref="${ARM64_CMAKE_PREBUILT_GIT_REF:-mirror-goog-llvm-r596125-release}"
 arm64_jdk21_prebuilt_url="${ARM64_JDK21_PREBUILT_URL:-https://api.adoptium.net/v3/binary/latest/21/ga/linux/aarch64/jdk/hotspot/normal/eclipse}"
 arm64_jdk8_prebuilt_url="${ARM64_JDK8_PREBUILT_URL:-https://api.adoptium.net/v3/binary/latest/8/ga/linux/aarch64/jdk/hotspot/normal/eclipse}"
-arm64_job_retry_list="${ARM64_JOB_RETRY_LIST:-}"
 if [[ -n "${NOFILE_LIMIT+x}" ]]; then
   host_nofile_limit="$NOFILE_LIMIT"
 else
   host_nofile_limit=4194304
 fi
-arm64_soong_gomemlimit_was_set=0
-[[ -n "${ARM64_SOONG_GOMEMLIMIT:-}" ]] && arm64_soong_gomemlimit_was_set=1
-arm64_soong_gomemlimit="${ARM64_SOONG_GOMEMLIMIT:-6GiB}"
-arm64_soong_gomemlimit_retry_list="${ARM64_SOONG_GOMEMLIMIT_RETRY_LIST:-}"
-arm64_soong_gogc="${ARM64_SOONG_GOGC:-100}"
-arm64_soong_gomaxprocs_was_set=0
-[[ -n "${ARM64_SOONG_GOMAXPROCS:-}" ]] && arm64_soong_gomaxprocs_was_set=1
-arm64_soong_gomaxprocs="${ARM64_SOONG_GOMAXPROCS:-4}"
-arm64_godebug="${ARM64_GODEBUG:-asyncpreemptoff=1}"
 arm64_thinlto_use_mlgo="${ARM64_THINLTO_USE_MLGO:-false}"
 arm64_android_java_home="${ARM64_ANDROID_JAVA_HOME:-}"
 linux_arm64_llvm_prebuilts_version=""
@@ -125,9 +116,27 @@ die() {
 active_build_arch=""
 active_build_start_epoch=""
 active_build_start_time=""
+download_start_time=""
+download_start_epoch=""
+download_end_time=""
+download_duration=""
 
 buildtime_now() {
   date '+%Y-%m-%dT%H:%M:%S%z'
+}
+
+# Format a duration in seconds as e.g. "3h45m" (or "45m" when under an hour).
+format_duration() {
+  local secs="$1" mins h m
+  [[ "$secs" =~ ^[0-9]+$ ]] || { printf -- '-'; return; }
+  mins=$(( (secs + 30) / 60 ))
+  h=$(( mins / 60 ))
+  m=$(( mins % 60 ))
+  if (( h > 0 )); then
+    printf '%dh%02dm' "$h" "$m"
+  else
+    printf '%dm' "$m"
+  fi
 }
 
 ensure_buildtime_log() {
@@ -135,8 +144,10 @@ ensure_buildtime_log() {
   log_dir="$(dirname "$buildtime_log_path")" || return 0
   mkdir -p "$log_dir" || return 0
   if [[ ! -s "$buildtime_log_path" ]]; then
-    printf '%-24s  %-24s  %10s  %-8s  %s\n' \
-      start end duration arch status >>"$buildtime_log_path" || true
+    printf '%-24s  %-24s  %-17s  %-24s  %-24s  %-14s  %-8s  %s\n' \
+      download_start download_end download_duration \
+      build_start build_end build_duration arch status \
+      >>"$buildtime_log_path" || true
   fi
 }
 
@@ -152,20 +163,22 @@ record_buildtime_finish() {
   local status="$1"
   [[ -n "$active_build_arch" ]] || return 0
 
-  local finish_epoch finish_time duration duration_tenths duration_hrs arch start_time
+  local finish_epoch finish_time duration build_duration arch start_time
   arch="$active_build_arch"
   start_time="$active_build_start_time"
   finish_epoch="$(date '+%s')"
   finish_time="$(buildtime_now)"
   duration=$(( finish_epoch - active_build_start_epoch ))
-  duration_tenths=$(( (duration * 10 + 1800) / 3600 ))
-  duration_hrs="$(( duration_tenths / 10 )).$(( duration_tenths % 10 ))"
+  build_duration="$(format_duration "$duration")"
 
   ensure_buildtime_log
-  printf '%-24s  %-24s  %10s  %-8s  %s\n' \
+  printf '%-24s  %-24s  %-17s  %-24s  %-24s  %-14s  %-8s  %s\n' \
+    "${download_start_time:--}" \
+    "${download_end_time:--}" \
+    "${download_duration:--}" \
     "$start_time" \
     "$finish_time" \
-    "$duration_hrs" \
+    "$build_duration" \
     "$arch" \
     "$status" >>"$buildtime_log_path" || true
 
@@ -323,6 +336,10 @@ build_target() {
 
   if [[ "$arch" == "x86_64" ]]; then
     if enabled "$include_x86_arm_native_bridge"; then
+      # The payload must already be installed before product config is parsed,
+      # or the bridge is silently dropped from the image. Fail loudly instead.
+      local nb_lib="$workspace/vendor/lineage_desktop/prebuilts/native_bridge/system/lib64/libndk_translation.so"
+      [[ -f "$nb_lib" ]] || die "x86 ARM native bridge enabled but payload missing ($nb_lib); native bridge prebuilts must be populated before building x86_64"
       export LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE=true
       export USE_NDK_TRANSLATION_BINARY=true
     else
@@ -390,7 +407,6 @@ main() {
     setup_temp_zram_if_needed
   fi
   set_build_jobs
-  configure_arm64_soong_limits
   log "using $jobs parallel build jobs ($highmem_jobs high-memory jobs)"
   configure_ccache
   ensure_repo_command
@@ -414,6 +430,12 @@ main() {
     prepare_target_output_headroom "$target"
   done
 
+  # Start of the download phase. This covers ALL fetches that follow -- the repo
+  # sync (including lazy blob fetches during checkout), plus the WebView LFS,
+  # microG, arm64-prebuilt, and native-bridge image downloads below. The end is
+  # captured just before the first build starts.
+  download_start_time="$(buildtime_now)"
+  download_start_epoch="$(date '+%s')"
   if enabled "$skip_sync"; then
     log "skipping repo sync (REBUILD/SKIP_SYNC); reusing existing source tree"
   else
@@ -438,6 +460,12 @@ main() {
   for target in "${targets[@]}"; do
     if [[ "$target" == "x86_64" ]]; then
       update_native_bridge_prebuilts_for_targets x86_64
+    fi
+    # End of the download phase: all fetches (incl. the native-bridge image just
+    # above) are done. Captured once, before the first build begins.
+    if [[ -z "$download_end_time" ]]; then
+      download_end_time="$(buildtime_now)"
+      download_duration="$(format_duration $(( $(date '+%s') - download_start_epoch )))"
     fi
     validate_build_inputs_for_targets "$target"
     record_buildtime_start "$target"
