@@ -48,8 +48,8 @@ repo_sync_quiet="${REPO_SYNC_QUIET:-}"
 # manifest group.
 repo_clone_filter="${REPO_CLONE_FILTER-blob:none}"
 repo_groups="${REPO_GROUPS-default,-darwin}"
-repo_sync_jobs="${REPO_SYNC_JOBS:-}"
-repo_sync_checkout_jobs="${REPO_SYNC_CHECKOUT_JOBS:-}"
+repo_sync_jobs="${REPO_SYNC_JOBS:-4}"
+repo_sync_checkout_jobs="${REPO_SYNC_CHECKOUT_JOBS:-4}"
 jobs_was_set=0
 [[ -n "${JOBS:-}" ]] && jobs_was_set=1
 arm64_go_prebuilt_git_url="${ARM64_GO_PREBUILT_GIT_URL:-https://android.googlesource.com/platform/prebuilts/go/linux-arm64}"

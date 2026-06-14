@@ -415,6 +415,10 @@ repo_workspace_uses_partial_clone() {
   [[ -n "$(git -C "$workspace/.repo/manifests" config --get repo.clonefilter 2>/dev/null || true)" ]]
 }
 
+repo_workspace_is_managed() {
+  [[ -f "$workspace/.lineage-desktop-managed" ]]
+}
+
 repair_repo_sync_checkout_failures() {
   local sync_log="$1"
   [[ -f "$sync_log" ]] || return 0
@@ -482,6 +486,80 @@ repair_stale_repo_git_locks() {
   done
 }
 
+repo_manifest_copyfile_sources() {
+  python3 - "$workspace" <<'PY'
+import pathlib
+import sys
+import xml.etree.ElementTree as ET
+
+workspace = pathlib.Path(sys.argv[1])
+manifest_roots = [
+    workspace / ".repo" / "manifests",
+    workspace / ".repo" / "local_manifests",
+]
+seen = set()
+
+for manifest_root in manifest_roots:
+    if not manifest_root.is_dir():
+        continue
+    for manifest in sorted(manifest_root.rglob("*.xml")):
+        try:
+            root = ET.parse(manifest).getroot()
+        except ET.ParseError:
+            continue
+        for element in list(root.iter("project")) + list(root.iter("extend-project")):
+            project_path = element.get("path") or element.get("name")
+            if not project_path:
+                continue
+            for copyfile in element.findall("copyfile"):
+                src = copyfile.get("src")
+                if not src:
+                    continue
+                record = (project_path, src)
+                if record in seen:
+                    continue
+                seen.add(record)
+                print(f"{project_path}\t{src}")
+PY
+}
+
+presync_repo_copyfile_sources() {
+  local copyfile_jobs="${1:-4}"
+  local -a projects=()
+  local -A seen_projects=()
+  local project_path src
+
+  while IFS=$'\t' read -r project_path src; do
+    [[ -n "$project_path" && -n "$src" ]] || continue
+    case "$project_path/$src" in
+      /*|*../*) continue ;;
+    esac
+    [[ -e "$workspace/$project_path/$src" ]] && continue
+    [[ -n "${seen_projects[$project_path]:-}" ]] && continue
+    seen_projects[$project_path]=1
+    projects+=("$project_path")
+  done < <(repo_manifest_copyfile_sources)
+
+  (( ${#projects[@]} > 0 )) || return 0
+
+  local -a copyfile_fetch_args=(sync -c --fail-fast --network-only -j"$copyfile_jobs")
+  if (( repo_sync_retry_fetches > 0 )); then
+    copyfile_fetch_args+=(--retry-fetches="$repo_sync_retry_fetches")
+  fi
+  if repo_workspace_uses_partial_clone; then
+    copyfile_fetch_args+=(--no-interleaved --jobs-network="$copyfile_jobs" --jobs-checkout="$copyfile_jobs")
+  fi
+
+  log "pre-syncing ${#projects[@]} manifest copyfile source project(s)"
+  run_anonymous_git_network "$repo_cmd" "${copyfile_fetch_args[@]}" "${projects[@]}"
+
+  local -a copyfile_checkout_args=(sync -c --fail-fast --local-only --interleaved -j"$copyfile_jobs")
+  if repo_workspace_is_managed; then
+    copyfile_checkout_args+=(--force-checkout)
+  fi
+  run_anonymous_git_network "$repo_cmd" "${copyfile_checkout_args[@]}" "${projects[@]}"
+}
+
 repo_sync_sources() {
   mkdir -p "$workspace"
   if [[ "$workspace_defaulted" -eq 1 ]]; then
@@ -531,17 +609,25 @@ repo_sync_sources() {
     fi
   fi
 
-  # repo sync uses the build job count, capped at 16 unless REPO_SYNC_JOBS is set.
+  # Use a moderate default for good residential connections. Partial-clone
+  # workspaces also use this value for --jobs-network below; REPO_SYNC_JOBS can
+  # still override it.
   local sync_jobs
   if [[ -n "$repo_sync_jobs" ]]; then
     [[ "$repo_sync_jobs" =~ ^[0-9]+$ && "$repo_sync_jobs" -gt 0 ]] ||
       die "REPO_SYNC_JOBS must be a positive integer"
     sync_jobs="$repo_sync_jobs"
   else
-    sync_jobs=$(( jobs < 16 ? jobs : 16 ))
+    sync_jobs=4
   fi
 
+  presync_repo_copyfile_sources "$sync_jobs"
+
   local -a sync_args=(sync -c --fail-fast -j"$sync_jobs")
+  if repo_workspace_is_managed; then
+    log "managed source tree detected; using repo --force-checkout for stale checkout files"
+    sync_args+=(--force-checkout)
+  fi
   if (( repo_sync_retry_fetches > 0 )); then
     sync_args+=(--retry-fetches="$repo_sync_retry_fetches")
   fi
@@ -577,12 +663,17 @@ repo_sync_sources() {
     fi
 
     repair_repo_sync_checkout_failures "$sync_log"
+    retry_delay=10
+    if grep -q 'HTTP 429\|requested URL returned error: 429' "$sync_log"; then
+      retry_delay=60
+      log "repo sync hit HTTP 429 rate limiting; backing off for ${retry_delay} seconds"
+    fi
     rm -f "$sync_log"
     repair_incomplete_repo_git_stores
     repair_stale_repo_git_locks
     attempt=$((attempt + 1))
-    log "repo sync failed; retrying in 10 seconds"
-    sleep 10
+    log "repo sync failed; retrying in ${retry_delay} seconds"
+    sleep "$retry_delay"
   done
 }
 

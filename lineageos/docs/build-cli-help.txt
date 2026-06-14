@@ -97,7 +97,7 @@ Environment:
   REPO_SYNC_QUIET       Pass --quiet to repo sync. Default: auto, enabled on
                         ARM64 hosts to keep Python repo sync output conservative
                         during ARM64 host syncs.
-  REPO_SYNC_JOBS        Override top-level repo sync jobs. Default: min(JOBS,16)
+  REPO_SYNC_JOBS        Override top-level repo sync jobs. Default: 4
   REPO_SYNC_CHECKOUT_JOBS
                         Checkout jobs for repo partial-clone workspaces. Lower
                         values reduce lazy-blob checkout failures. Default: 4
