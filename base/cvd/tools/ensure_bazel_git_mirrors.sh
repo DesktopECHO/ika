@@ -5,9 +5,8 @@ set -euo pipefail
 readonly CROSVM_REMOTE_PRIMARY="https://chromium.googlesource.com/crosvm/crosvm"
 readonly CROSVM_REMOTE_FALLBACK="https://github.com/google/crosvm.git"
 readonly MINIJAIL_REMOTE_PRIMARY="https://chromium.googlesource.com/chromiumos/platform/minijail"
-# Keep this at parity with crosvm's third_party/minijail submodule.
-readonly MINIJAIL_CROSVM_REV="7845d89927a82dbdcdee6276837cd0978f69ba19"
-readonly MINIJAIL_CROSVM_REF="refs/heads/main"
+readonly MINIJAIL_REV="d2e47c2e9aaaa2b175162c31b6bb8976cc762e1a"
+readonly MINIJAIL_REF="refs/heads/main"
 readonly ANDROID_SYSTEM_CORE_REMOTE="https://android.googlesource.com/platform/system/core"
 readonly ANDROID_SYSTEM_EXTRAS_REMOTE="https://android.googlesource.com/platform/system/extras"
 
@@ -152,7 +151,7 @@ ensure_mirror() {
 
 ensure_minijail_mirror() {
   local mirror_path="${MIRROR_ROOT}/minijail.git"
-  local local_branch="refs/heads/ika-crosvm-minijail-${MINIJAIL_CROSVM_REV:0:12}"
+  local local_branch="refs/heads/ika-minijail-${MINIJAIL_REV:0:12}"
 
   mkdir -p "${MIRROR_ROOT}"
 
@@ -169,14 +168,14 @@ ensure_minijail_mirror() {
 
   ensure_remote_origin "${mirror_path}" "${MINIJAIL_REMOTE_PRIMARY}"
 
-  if ! git_clean -C "${mirror_path}" cat-file -e "${MINIJAIL_CROSVM_REV}^{commit}" >/dev/null 2>&1; then
-    echo "Fetching pinned minijail revision ${MINIJAIL_CROSVM_REV} into ${mirror_path}" >&2
+  if ! git_clean -C "${mirror_path}" cat-file -e "${MINIJAIL_REV}^{commit}" >/dev/null 2>&1; then
+    echo "Fetching pinned minijail revision ${MINIJAIL_REV} into ${mirror_path}" >&2
     retry_command "fetch pinned minijail revision from ${MINIJAIL_REMOTE_PRIMARY}" \
       git_clean -C "${mirror_path}" fetch origin \
-        "${MINIJAIL_CROSVM_REF}:${MINIJAIL_CROSVM_REF}"
+        "${MINIJAIL_REF}:${MINIJAIL_REF}"
   fi
 
-  git_clean -C "${mirror_path}" update-ref "${local_branch}" "${MINIJAIL_CROSVM_REV}"
+  git_clean -C "${mirror_path}" update-ref "${local_branch}" "${MINIJAIL_REV}"
   configure_rewrite "${mirror_path}" \
     "${MINIJAIL_REMOTE_PRIMARY}" \
     "${MINIJAIL_REMOTE_PRIMARY}/"
