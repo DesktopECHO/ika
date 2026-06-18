@@ -208,7 +208,7 @@ validate_fstab_file() {
   local path="$1"
 
   [[ -s "$path" ]] || die "missing or empty fstab: $path"
-  grep -q '/data f2fs' "$path" || die "fstab does not mount /data as f2fs: $path"
+  grep -q '/data ext4' "$path" || die "fstab does not mount /data as ext4: $path"
   grep -q 'fileencryption=aes-256-xts:aes-256-hctr2' "$path" || \
     die "fstab does not use HCTR2 filename encryption: $path"
 }
@@ -216,7 +216,7 @@ validate_fstab_file() {
 validate_cvd_target_fstabs() {
   local product_out="$1"
 
-  validate_fstab_file "$product_out/vendor/etc/fstab.cf.f2fs.hctr2"
+  validate_fstab_file "$product_out/vendor/etc/fstab.cf.ext4.hctr2"
   validate_fstab_file \
-    "$product_out/vendor_ramdisk/first_stage_ramdisk/system/etc/fstab.cf.f2fs.hctr2"
+    "$product_out/vendor_ramdisk/first_stage_ramdisk/system/etc/fstab.cf.ext4.hctr2"
 }

@@ -144,17 +144,3 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 * Thu Jun 18 2026 DesktopECHO <build@desktopecho.com> - 1.55.0-6
 - Update Cuttlefish frontend package metadata to 1.55.0-6
 
-* Tue May 26 2026 DesktopECHO <build@desktopecho.com> - 1.53.0-4
-- Bump generated RPM release to revision 4
-
-* Sun May 24 2026 DesktopECHO <build@desktopecho.com> - 1.53.0-3
-- Bump generated RPM release to revision 3
-
-* Tue May 19 2026 DesktopECHO <build@desktopecho.com> - 1.53.0-1
-- Rebase Fedora packaging onto android-cuttlefish 1.53.0
-
-* Mon Apr 20 2026 Daniel Milisic <dmilisic@desktopecho.com> - 1.51.0-4
-- Rebase Fedora packaging onto android-cuttlefish 1.51.0
-
-* Sat Mar 28 2026 Daniel Milisic <dmilisic@desktopecho.com> - 1.50.0-1
-- Port frontend packaging and services to Fedora RPMs

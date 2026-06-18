@@ -4,7 +4,7 @@
 
 pkgbase=ika-lineageos
 pkgname=(ika-lineageos)
-pkgver=20260420
+pkgver=1.55.0
 pkgrel=6
 pkgdesc='LineageOS for Cuttlefish host'
 arch=(x86_64 aarch64)
@@ -12,7 +12,8 @@ url='https://github.com/google/android-cuttlefish'
 license=(Apache-2.0)
 options=(!strip !debug)
 install=ika-lineageos.install
-_srcver=1.55.0
+makedepends=(android-tools)
+_srcver=${pkgver}
 source=("android-cuttlefish-${_srcver}.tar.gz")
 sha256sums=('SKIP')
 
@@ -35,7 +36,8 @@ package_ika-lineageos() {
   local bundle="lineageos-$(_ika_arch)"
 
   install -d "${pkgdir}/usr/share/cuttlefish-common"
-  cp -a "${root}/${bundle}" "${pkgdir}/usr/share/cuttlefish-common/lineageos"
+  cp -a --reflink=auto --sparse=always "${root}/${bundle}" "${pkgdir}/usr/share/cuttlefish-common/lineageos"
+  "${root}/tools/lineageos/thin-provision-images.sh" "${pkgdir}/usr/share/cuttlefish-common/lineageos"
   find "${pkgdir}/usr/share/cuttlefish-common/lineageos" -type d ! -type l -exec chmod 755 '{}' +
   find "${pkgdir}/usr/share/cuttlefish-common/lineageos" ! -type l -exec chmod u+w '{}' +
   find "${pkgdir}/usr/share/cuttlefish-common/lineageos" ! -type l -exec chmod g=u '{}' +

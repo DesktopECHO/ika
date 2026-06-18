@@ -41,11 +41,14 @@ UI_DUMP_PATH = "/sdcard/chromium-provision-ui.xml"
 FIRST_RUN_SIGNED_OUT_TEXT = "Stay signed out"
 DEFAULT_BROWSER_CANCEL_TEXT = "Cancel"
 
+# Always use the cuttlefish-bundled adb shipped next to this script.
+ADB_BIN = os.path.join(os.path.dirname(os.path.realpath(__file__)), "adb")
+
 def _adb(args, check):
     try:
-        return subprocess.run(["adb"] + args, capture_output=True, text=True, check=check)
+        return subprocess.run([ADB_BIN] + args, capture_output=True, text=True, check=check)
     except FileNotFoundError:
-        print("!!! Error: ADB not found. Ensure android-tools is installed.")
+        print(f"!!! Error: bundled adb not found at '{ADB_BIN}'.")
         sys.exit(1)
 
 def run_adb(args):

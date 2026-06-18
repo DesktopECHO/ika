@@ -56,8 +56,10 @@ Requires:       libcap
 Requires:       libdrm
 Requires:       libX11
 Requires:       libXext
+Requires:       lz4
 Requires:       mesa-libgbm
 Requires:       mesa-libGL
+Requires:       glx-utils
 Requires:       mesa-vulkan-drivers
 Requires:       vulkan-tools
 Requires:       net-tools
@@ -180,6 +182,7 @@ BAZEL_DISTDIR="$BAZEL_CACHE_ROOT/distdir"
 BAZEL_TMPDIR="${CUTTLEFISH_BAZEL_TMPDIR:-$BAZEL_CACHE_ROOT/tmp}"
 BAZEL_GIT_MIRROR_ROOT="$BAZEL_CACHE_ROOT/git-mirrors"
 BAZEL_GIT_CONFIG="$BAZEL_CACHE_ROOT/gitconfig"
+CARGO_BAZEL_TIMEOUT="${CARGO_BAZEL_TIMEOUT:-1800}"
 mkdir -p "$BAZEL_OUTPUT_USER_ROOT" "$BAZEL_REPOSITORY_CACHE" "$BAZEL_DISK_CACHE" "$BAZEL_DISTDIR" "$BAZEL_TMPDIR" "$BAZEL_GIT_MIRROR_ROOT"
 # Keep Bazel's output tree and crate_universe temp workspaces out of the
 # rpmbuild BUILD directory. That directory is transient and can hit space
@@ -220,6 +223,7 @@ while true; do
     'cuttlefish/package:metrics' \
     --spawn_strategy=local \
     --repo_env=TMPDIR="$BAZEL_TMPDIR" \
+    --repo_env=CARGO_BAZEL_TIMEOUT="$CARGO_BAZEL_TIMEOUT" \
     --repo_env=GIT_CONFIG_GLOBAL="$BAZEL_GIT_CONFIG" \
     --repo_env=GIT_CONFIG_NOSYSTEM=1 \
     --workspace_status_command=../stamp_helper.sh \
@@ -435,6 +439,3 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 %changelog
 * Thu Jun 18 2026 DesktopECHO <build@desktopecho.com> - 1.55.0-6
 - Update Cuttlefish host package metadata to 1.55.0-6
-
-* Sat Jun 13 2026 DesktopECHO <build@desktopecho.com> - 1.53.0-6
-- Initial public release.

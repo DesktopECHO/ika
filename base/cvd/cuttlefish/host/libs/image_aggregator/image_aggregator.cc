@@ -359,7 +359,12 @@ Result<void> CreateOrUpdateCompositeDisk(
     std::vector<ImagePartition> partitions, const std::string& header_file,
     const std::string& footer_file, const std::string& output_composite_path,
     bool read_only) {
-  CF_EXPECT(DeAndroidSparse(partitions));
+  // crosvm can consume Android sparse images through read-only composite disks.
+  // Avoid converting packaged ROM images in place for the normal overlay-backed
+  // launch path; writable composite disks still need raw inputs.
+  if (!read_only) {
+    CF_EXPECT(DeAndroidSparse(partitions));
+  }
 
   CompositeDiskBuilder builder(read_only);
   for (auto& partition : partitions) {

@@ -13,7 +13,7 @@ the ROM owns its signing keys and empty host placeholders cannot shadow them.
 Desktop SELinux extensions cover expected graphics debug-property reads and
 host-driven shell helpers so normal boot, scrcpy, and resize/provisioning flows
 do not leave avoidable enforcing-mode denials behind.
-Userdata stays f2fs and sparse/thin-provisioned, with the default size raised
+Userdata stays ext4 and sparse/thin-provisioned, with the default size raised
 to 61 GiB.
 
 diff --git a/AndroidProducts.mk b/AndroidProducts.mk
@@ -403,10 +403,10 @@ index cc7213392..f5555d460 100644
 +gfxstream=supported
 +gfxstream_gl_program_binary_link_status=supported
 diff --git a/vsoc_arm64_pgagnostic/BoardConfig.mk b/vsoc_arm64_pgagnostic/BoardConfig.mk
-index 04affcab6..651f0aa5a 100644
+index 04affcab6..9f7af06cb 100644
 --- a/vsoc_arm64_pgagnostic/BoardConfig.mk
 +++ b/vsoc_arm64_pgagnostic/BoardConfig.mk
-@@ -20,9 +20,9 @@
+@@ -20,16 +20,17 @@
  
  TARGET_BOARD_PLATFORM := vsoc_arm64
  TARGET_ARCH := arm64
@@ -416,17 +416,42 @@ index 04affcab6..651f0aa5a 100644
 -TARGET_CPU_VARIANT := cortex-a53
 +TARGET_CPU_VARIANT := generic
  
- # Use 16K page size kernel
+-# Use 16K page size kernel
++# Use the 4K kernel for the primary boot.img. boot_16k.img is built separately
++# from BOARD_KERNEL_PATH_16K below.
  TARGET_KERNEL_ARCH ?= arm64
-@@ -31,7 +31,7 @@ TARGET_KERNEL_PATH ?= $(SYSTEM_DLKM_SRC)/kernel-$(TARGET_KERNEL_USE)
+-SYSTEM_DLKM_SRC ?= kernel/prebuilts/$(TARGET_KERNEL_USE)/$(TARGET_KERNEL_ARCH)/16k
++SYSTEM_DLKM_SRC ?= kernel/prebuilts/$(TARGET_KERNEL_USE)/$(TARGET_KERNEL_ARCH)
+ TARGET_KERNEL_PATH ?= $(SYSTEM_DLKM_SRC)/kernel-$(TARGET_KERNEL_USE)
  KERNEL_MODULES_PATH ?= \
-     kernel/prebuilts/common-modules/virtual-device/$(TARGET_KERNEL_USE)/$(subst _,-,$(TARGET_KERNEL_ARCH))/16k
+-    kernel/prebuilts/common-modules/virtual-device/$(TARGET_KERNEL_USE)/$(subst _,-,$(TARGET_KERNEL_ARCH))/16k
++    kernel/prebuilts/common-modules/virtual-device/$(TARGET_KERNEL_USE)/$(subst _,-,$(TARGET_KERNEL_ARCH))
  
--TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE := ext4
-+TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE := f2fs
+ TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE := ext4
  TARGET_RO_FILE_SYSTEM_TYPE := ext4
+@@ -55,8 +56,18 @@ HOST_CROSS_2ND_ARCH :=
+ BOARD_16K_OTA_MOVE_VENDOR := true
  
- BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
+ BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE := erofs
+-BOARD_SYSTEMIMAGE_EROFS_BLOCKSIZE := 16384
+ BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE := erofs
+
+-BOARD_F2FS_BLOCKSIZE := 16384
+-$(call soong_config_append,cvdhost,board_f2fs_blocksize,16384)
++# build_lineageos_desktop.sh exports TARGET_KERNEL_USE (the newest numbered
++# kernel prebuilt); default to 6.12 when it is unset so the primary kernel and
++# the 16K developer-option kernel both resolve to a real prebuilt.
++ifeq (true,$(PRODUCT_16K_DEVELOPER_OPTION))
++ifeq ($(strip $(TARGET_KERNEL_USE)),)
++TARGET_KERNEL_USE := 6.12
++endif
++# kernel_16k (the 16K kernel the desktop launcher boots) is copied verbatim from
++# BOARD_KERNEL_PATH_16K, which shared/BoardConfig.mk hardcodes to the stale
++# mainline 6.2.0 prebuilt. Re-point it (and its modules) at TARGET_KERNEL_USE.
++BOARD_KERNEL_PATH_16K := kernel/prebuilts/$(TARGET_KERNEL_USE)/$(TARGET_KERNEL_ARCH)/16k/kernel-$(TARGET_KERNEL_USE)
++BOARD_KERNEL_MODULES_16K := $(wildcard kernel/prebuilts/$(TARGET_KERNEL_USE)/$(TARGET_KERNEL_ARCH)/16k/*.ko)
++BOARD_KERNEL_MODULES_16K += $(wildcard kernel/prebuilts/common-modules/virtual-device/$(TARGET_KERNEL_USE)/$(TARGET_KERNEL_ARCH)/16k/*.ko)
++endif
 diff --git a/vsoc_arm64_pgagnostic/desktop/aosp_cf.mk b/vsoc_arm64_pgagnostic/desktop/aosp_cf.mk
 new file mode 100644
 index 000000000..5ef2f3b56
@@ -621,7 +646,7 @@ index 000000000..fb1c2783f
 +TARGET_ARCH := x86_64
 +TARGET_ARCH_VARIANT := sandybridge
 +TARGET_CPU_ABI := x86_64
-+TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE := f2fs
++TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE := ext4
 +
 +TARGET_2ND_ARCH := x86
 +TARGET_2ND_CPU_ABI := x86

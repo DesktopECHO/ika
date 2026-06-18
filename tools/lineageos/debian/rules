@@ -12,7 +12,8 @@ override_dh_auto_build:
 
 override_dh_auto_install:
 	install -d $(LINEAGEOS_DEST)
-	cp -a $(LINEAGEOS_SRC)/. $(LINEAGEOS_DEST)/
+	cp -a --reflink=auto --sparse=always $(LINEAGEOS_SRC)/. $(LINEAGEOS_DEST)/
+	./thin-provision-images.sh $(LINEAGEOS_DEST)
 
 override_dh_fixperms:
 	dh_fixperms

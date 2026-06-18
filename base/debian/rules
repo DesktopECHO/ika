@@ -92,6 +92,7 @@ override_dh_auto_build:
 	  BAZEL_DISTDIR="$$BAZEL_CACHE_ROOT/distdir"; \
 	  BAZEL_GIT_MIRROR_ROOT="$$BAZEL_CACHE_ROOT/git-mirrors"; \
 	  BAZEL_GIT_CONFIG="$$BAZEL_CACHE_ROOT/gitconfig"; \
+	  CARGO_BAZEL_TIMEOUT="$${CARGO_BAZEL_TIMEOUT:-1800}"; \
 	  mkdir -p "$$BAZEL_OUTPUT_USER_ROOT" "$$BAZEL_REPOSITORY_CACHE" "$$BAZEL_DISTDIR" "$$BAZEL_GIT_MIRROR_ROOT"; \
 	  retry_count=0; max_retries=9; retry_delay=60; \
 	  while true; do \
@@ -110,6 +111,7 @@ override_dh_auto_build:
 	         ${remote_cache_arg} ${disk_cache_arg} \
 	         --repository_cache="$$BAZEL_REPOSITORY_CACHE" \
 	         --distdir="$$BAZEL_DISTDIR" \
+	         --repo_env=CARGO_BAZEL_TIMEOUT="$$CARGO_BAZEL_TIMEOUT" \
 	         --repo_env=GIT_CONFIG_GLOBAL="$$BAZEL_GIT_CONFIG" \
 	         --repo_env=GIT_CONFIG_NOSYSTEM=1 \
 	         ${bindgen_clang_args} \

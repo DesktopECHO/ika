@@ -1,10 +1,10 @@
 Name:           ika-scrcpy
-Version:        3.3.4
+Version:        1.55.0
 Release:        6%{?dist}
 Summary:        scrcpy Android screen mirroring tool for Cuttlefish
 License:        Apache-2.0
 URL:            https://github.com/Genymobile/scrcpy
-Source0:        android-cuttlefish-1.55.0.tar.gz
+Source0:        android-cuttlefish-%{version}.tar.gz
 %global debug_package %{nil}
 
 BuildRequires:  gcc
@@ -38,7 +38,7 @@ Provides:       cuttlefish-scrcpy = %{version}-%{release}
 Obsoletes:      cuttlefish-scrcpy < %{version}-%{release}
 
 %prep
-%autosetup -n android-cuttlefish-1.55.0
+%autosetup -n android-cuttlefish-%{version}
 
 %build
 meson setup scrcpy _build_scrcpy \
@@ -84,11 +84,6 @@ sed -i \
 /usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
 
 %changelog
-* Tue May 26 2026 DesktopECHO <build@desktopecho.com> - 3.3.4-4
-- Bump generated RPM release to revision 4
+* Thu Jun 18 2026 DesktopECHO <build@desktopecho.com> - 1.55.0-6
+- Align ika-scrcpy package version with packaging/VERSION.
 
-* Sun May 24 2026 DesktopECHO <build@desktopecho.com> - 3.3.4-3
-- Bump generated RPM release to revision 3
-
-* Thu Apr 09 2026 Daniel Milisic <dmilisic@desktopecho.com> - 3.3.4-1
-- Package scrcpy as cuttlefish-scrcpy RPM

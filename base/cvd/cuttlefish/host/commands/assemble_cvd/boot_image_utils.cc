@@ -60,6 +60,7 @@ constexpr char kCpioExt[] = ".cpio";
 constexpr char TMP_RD_DIR[] = "stripped_ramdisk_dir";
 constexpr char STRIPPED_RD[] = "stripped_ramdisk";
 constexpr char kConcatenatedVendorRamdisk[] = "concatenated_vendor_ramdisk";
+constexpr char kSystemLz4Binary[] = "/usr/bin/lz4";
 
 Result<void> RunMkBootFs(const std::string& input_dir,
                          const std::string& output) {
@@ -85,6 +86,28 @@ Result<void> RunLz4(const std::string& input, const std::string& output) {
       CF_EXPECT(Lz4LegacyWriter(std::move(output_writer)));
   std::string input_data = CF_EXPECT(ReadToString(*input_reader));
   CF_EXPECT(WriteExact(*lz4_writer, input_data.data(), input_data.size()));
+  return {};
+}
+
+Result<void> RunSystemLz4Decompress(const std::string& input,
+                                    const std::string& output) {
+  CF_EXPECTF(FileExists(kSystemLz4Binary),
+             "Missing '{}'. Install the distro lz4 package.",
+             kSystemLz4Binary);
+
+  SharedFD output_fd = SharedFD::Open(output, O_CREAT | O_RDWR | O_TRUNC, 0644);
+  CF_EXPECTF(output_fd->IsOpen(), "Failed to open '{}': '{}'", output,
+             output_fd->StrError());
+
+  int success = Command(kSystemLz4Binary)
+                    .AddParameter("-d")
+                    .AddParameter("-c")
+                    .AddParameter(input)
+                    .RedirectStdIO(Subprocess::StdIOChannel::kStdOut,
+                                   output_fd)
+                    .Start()
+                    .Wait();
+  CF_EXPECT_EQ(success, 0, "`/usr/bin/lz4` failed to decompress ramdisk.");
   return {};
 }
 
@@ -158,18 +181,19 @@ Result<void> PackRamdisk(const std::string& ramdisk_stage_dir,
 Result<void> UnpackRamdisk(const std::string& original_ramdisk_path,
                            const std::string& ramdisk_stage_dir) {
   NativeFilesystem fs;
-  std::unique_ptr<Reader> ramdisk_input = CF_EXPECT(fs.OpenReadOnly(original_ramdisk_path));
-  CF_EXPECT(ramdisk_input.get());
 
   const std::string output_path = original_ramdisk_path + kCpioExt;
   (void) fs.DeleteFile(output_path);
-  std::unique_ptr<WriterSeeker> output = CF_EXPECT(fs.CreateFile(output_path));
-
-  if (!IsCpioArchive(original_ramdisk_path)) {
-    ramdisk_input = CF_EXPECT(Lz4LegacyReader(std::move(ramdisk_input)));
+  if (IsCpioArchive(original_ramdisk_path)) {
+    std::unique_ptr<Reader> ramdisk_input =
+        CF_EXPECT(fs.OpenReadOnly(original_ramdisk_path));
+    CF_EXPECT(ramdisk_input.get());
+    std::unique_ptr<WriterSeeker> output = CF_EXPECT(fs.CreateFile(output_path));
+    CF_EXPECTF(Copy(*ramdisk_input, *output), "Failed to copy '{}' to '{}'",
+               original_ramdisk_path, output_path);
+  } else {
+    CF_EXPECT(RunSystemLz4Decompress(original_ramdisk_path, output_path));
   }
-  CF_EXPECTF(Copy(*ramdisk_input, *output), "Failed to copy '{}' to '{}'",
-             original_ramdisk_path, output_path);
 
   CF_EXPECT(EnsureDirectoryExists(ramdisk_stage_dir));
 

@@ -225,6 +225,31 @@ function should_skip_spec_for_missing_sources() {
   return 1
 }
 
+function thin_provision_images_tool() {
+  local tool="${REPO_DIR}/tools/lineageos/thin-provision-images.sh"
+  [[ -x "${tool}" ]] || {
+    >&2 echo "missing executable image thin-provisioning helper: ${tool}"
+    exit 1
+  }
+  printf '%s\n' "${tool}"
+}
+
+function thin_provision_rom_bundle_if_present() {
+  local arch="$1"
+  local rom_dir="${REPO_DIR}/lineageos-${arch}"
+  [[ -d "${rom_dir}" ]] || return 0
+
+  "$(thin_provision_images_tool)" "${rom_dir}"
+}
+
+function thin_provision_source_rom_bundle_if_needed() {
+  [[ "${DISTRO_FAMILY:-}" != "rpm" ]] || return 0
+
+  local host_arch
+  host_arch="$(ika_arch_for_host)" || return 0
+  thin_provision_rom_bundle_if_present "${host_arch}"
+}
+
 # Emit a content fingerprint for a subtree of the repo, one record per path.
 # Files are fingerprinted by mode+size+mtime rather than a content hash so the
 # cache check stays cheap even over the multi-GB ROM bundle (sha256 of every
@@ -248,7 +273,7 @@ function build_tree_manifest() {
     # Cache key embedded as the manifest's first line. Bump it whenever the
     # record format or the exclude set changes in a way that affects tarball
     # contents, to invalidate any tarball cached by an older run.
-    printf 'manifest-cache-version\t9\n'
+    printf 'manifest-cache-version\t10\n'
 
     cd "${REPO_DIR}"
     if [[ -n "${prune_name}" ]]; then
@@ -311,6 +336,8 @@ function source_tarball_has_required_files() {
 function refresh_source_tarball_if_needed() {
   local tmp_manifest
   local tmp_source_tarball
+  thin_provision_source_rom_bundle_if_needed
+
   tmp_manifest="$(mktemp "${PKG_SOURCES_DIR}/${TAR_BASENAME}.manifest.XXXXXX")"
   tmp_source_tarball="$(mktemp "${PKG_SOURCES_DIR}/${TAR_BASENAME}.tar.gz.XXXXXX")"
   trap 'rm -f "${tmp_manifest}" "${tmp_source_tarball}"' RETURN
@@ -389,7 +416,7 @@ function refresh_source_tarball_if_needed() {
     "${REPO_DIR}/" \
     "${SOURCE_STAGING_DIR}/"
 
-  tar -cf - -C "${PKG_SOURCES_DIR}" "${TAR_BASENAME}" | pigz >"${tmp_source_tarball}"
+  tar --sparse -cf - -C "${PKG_SOURCES_DIR}" "${TAR_BASENAME}" | pigz >"${tmp_source_tarball}"
   mv "${tmp_source_tarball}" "${SOURCE_TARBALL}"
   mv "${tmp_manifest}" "${SOURCE_MANIFEST}"
   rm -rf "${SOURCE_STAGING_DIR}"
@@ -406,6 +433,7 @@ function refresh_rom_tarball_if_needed() {
   local arch="$1"
   local rom_dir="${REPO_DIR}/lineageos-${arch}"
   [[ -d "${rom_dir}" ]] || return 0
+  thin_provision_rom_bundle_if_present "${arch}"
 
   local rom_basename="android-cuttlefish-rom-${arch}-${VERSION}"
   local rom_tarball="${PKG_SOURCES_DIR}/${rom_basename}.tar"
@@ -429,7 +457,7 @@ function refresh_rom_tarball_if_needed() {
 
   echo "ROM bundle changed; writing ${arch} ROM tarball (uncompressed, this can take a minute)..."
   rm -f "${rom_tarball}"
-  tar -cf "${tmp_tarball}" -C "${REPO_DIR}" "lineageos-${arch}"
+  tar --sparse -cf "${tmp_tarball}" -C "${REPO_DIR}" "lineageos-${arch}"
   mv "${tmp_tarball}" "${rom_tarball}"
   mv "${tmp_manifest}" "${rom_manifest}"
 }

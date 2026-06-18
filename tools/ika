@@ -127,6 +127,7 @@ declare -A CVD_COMPUTE_DEFAULTS=(
   [memory_mb]="4096"
   [prefer_performance_cores]="true"
   [enable_bootanimation]="false"
+  [enable_sandbox]="false"
 )
 
 # ============================================================================
@@ -201,6 +202,9 @@ CVD_GPU_MODE="${CVD_GPU_DEFAULTS[gpu_mode]}"
 : "${CVD_PRODUCT_OUT:=${DEFAULT_CVD_PRODUCT_OUT}}"
 : "${CVD_HOME_DIR:=${HOME}/ika}"
 mkdir -p "${CVD_HOME_DIR}"
+CVD_TMP_DIR="${CVD_HOME_DIR}/tmp"
+mkdir -p "${CVD_TMP_DIR}"
+export TMPDIR="${CVD_TMP_DIR}"
 START_LOG_FILE="${CVD_HOME_DIR}/ikastart.log"
 SCRCPY_LOG_FILE="${CVD_HOME_DIR}/scrcpy.log"
 CVD_BIN="${CVD_HOST_OUT}/bin/cvd_internal_start"
@@ -454,7 +458,8 @@ Environment:
                          only on Apple Silicon 16K-page hosts or when the
                          primary host Vulkan device is llvmpipe; on forces
                          GLES+Vulkan; off forces GLES-only gfxstream.
-  DATAGB                 Size of a newly created userdata image, in GB.
+  DATAGB                 Size of the next fresh userdata image, in GB.
+                         Existing VM data must be reset first.
   IKA_SCRCPY_EXTRA_ARGS  Extra whitespace-separated args appended to scrcpy
                          (example: --keyboard=uhid --no-clipboard-autosync)
   IKA_SCRCPY_VIDEO_SOURCE
@@ -659,8 +664,7 @@ is_apple_silicon_16k_host() {
   local arch
   local page_size
 
-  arch="$(uname -m 2>/dev/null || true)"
-  [[ "${arch}" == "aarch64" || "${arch}" == "arm64" ]] || return 1
+  host_is_arm64 || return 1
 
   page_size="$(getconf PAGESIZE 2>/dev/null || echo 0)"
   [[ "${page_size}" =~ ^[0-9]+$ ]] || return 1
@@ -668,6 +672,99 @@ is_apple_silicon_16k_host() {
 
   [[ -r /proc/device-tree/compatible ]] || return 1
   tr '\0' '\n' < /proc/device-tree/compatible 2>/dev/null | grep -q '^apple,'
+}
+
+host_is_arm64() {
+  local arch
+  arch="$(uname -m 2>/dev/null || true)"
+  [[ "${arch}" == "aarch64" || "${arch}" == "arm64" ]]
+}
+
+host_page_size() {
+  local page_size
+  page_size="$(getconf PAGESIZE 2>/dev/null || true)"
+  if [[ ! "${page_size}" =~ ^[0-9]+$ ]]; then
+    page_size=0
+  fi
+  printf '%s\n' "${page_size}"
+}
+
+normalize_kernel_page_size_mode() {
+  local mode="${1:-auto}"
+  mode="${mode,,}"
+
+  case "${mode}" in
+    ""|auto)
+      printf '%s\n' "auto"
+      ;;
+    4|4k|4096)
+      printf '%s\n' "4k"
+      ;;
+    16|16k|16384)
+      printf '%s\n' "16k"
+      ;;
+    *)
+      die "invalid IKA_KERNEL_PAGE_SIZE='${1}' (expected auto, 4k, or 16k)"
+      ;;
+  esac
+}
+
+arm64_kernel_page_size() {
+  local mode
+  local page_size
+
+  host_is_arm64 || return 1
+
+  mode="$(normalize_kernel_page_size_mode "${IKA_KERNEL_PAGE_SIZE:-auto}")"
+  case "${mode}" in
+    4k|16k)
+      printf '%s\n' "${mode}"
+      ;;
+    auto)
+      page_size="$(host_page_size)"
+      if (( page_size > 4096 )); then
+        printf '%s\n' "16k"
+      else
+        printf '%s\n' "4k"
+      fi
+      ;;
+  esac
+}
+
+append_arm64_kernel_page_args() {
+  local -n args_array="$1"
+  shift
+  local selected_page_size
+  local page_size
+  local boot_16k
+
+  host_is_arm64 || return 0
+
+  if user_supplied_flag "use_16k" "$@" \
+      || user_supplied_flag "boot_image" "$@" \
+      || user_supplied_flag "kernel_path" "$@" \
+      || user_supplied_flag "initramfs_path" "$@" \
+      || user_supplied_flag "vendor_boot_image" "$@"; then
+    log "arm64 kernel page-size auto-selection skipped because boot/kernel args were supplied"
+    return 0
+  fi
+
+  selected_page_size="$(arm64_kernel_page_size)"
+  page_size="$(host_page_size)"
+
+  case "${selected_page_size}" in
+    16k)
+      boot_16k="${CVD_PRODUCT_OUT}/boot_16k.img"
+      [[ -s "${boot_16k}" ]] || \
+        die "ARM64 host page size is ${page_size} bytes, but ${boot_16k} is missing"
+
+      args_array+=("--boot_image=${boot_16k}")
+      log "arm64 kernel page-size: ${page_size} byte host pages -> boot_16k.img"
+      ;;
+    4k)
+      log "arm64 kernel page-size: ${page_size} byte host pages -> boot.img"
+      ;;
+  esac
 }
 
 primary_vulkan_device_is_llvmpipe() {
@@ -908,14 +1005,16 @@ append_data_storage_args() {
   fi
 
   if [[ "${explicit_data_policy}" != "true" ]]; then
+    # Packaged userdata.img may be Android sparse; Cuttlefish can boot it, but
+    # its resize_up_to path expects a raw filesystem image.
     args_array+=("--data_policy=always_create")
   fi
   if [[ "${explicit_data_size}" != "true" ]]; then
     args_array+=("--blank_data_image_mb=${data_mb}")
   fi
 
-  CVD_DATA_STORAGE_MESSAGE="Resizing userdata to ${data_gb} GB"
-  log "userdata storage: ${data_mb} MB"
+  CVD_DATA_STORAGE_MESSAGE="Provisioning ${data_gb} GB userdata..."
+  log "fresh userdata target: ${data_mb} MB"
 }
 
 apply_default_args() {
@@ -964,6 +1063,7 @@ append_cvd_env_args() {
 
   env_args_ref+=(
     "HOME=${CVD_HOME_DIR}"
+    "TMPDIR=${CVD_TMP_DIR}"
     "ANDROID_HOST_OUT=${CVD_HOST_OUT}"
     "ANDROID_SOONG_HOST_OUT=${CVD_HOST_OUT}"
     "ANDROID_PRODUCT_OUT=${CVD_PRODUCT_OUT}"
@@ -1425,6 +1525,7 @@ log_start_context() {
     printf '%s\n' "${CVD_DATA_STORAGE_MESSAGE}" >&3
   fi
   log "HOME=${CVD_HOME_DIR}"
+  log "TMPDIR=${CVD_TMP_DIR}"
   log "ANDROID_HOST_OUT=${CVD_HOST_OUT}"
   log "ANDROID_PRODUCT_OUT=${CVD_PRODUCT_OUT}"
   log "gpu_mode=${CVD_GPU_MODE}"
@@ -1470,6 +1571,7 @@ start_cvd() {
 
   apply_start_default_args args "$@"
   append_data_storage_args args "$@"
+  append_arm64_kernel_page_args args "$@"
   append_gfxstream_vulkan_args args "$@"
   append_default_display_arg args "${scrcpy_dpi}" "$@"
   append_host_timezone_arg args

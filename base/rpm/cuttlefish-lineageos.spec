@@ -1,5 +1,5 @@
 Name:           ika-lineageos
-Version:        20260420
+Version:        1.55.0
 Release:        6%{?dist}
 Summary:        LineageOS for Cuttlefish host
 License:        Apache-2.0
@@ -15,11 +15,12 @@ ExclusiveArch:  aarch64 x86_64
 # Source0 is the shared host-source tarball (LICENSE + packaging metadata only).
 # Source1 carries just this arch's ROM bundle, kept out of the shared tarball so
 # the other host packages don't unpack 2+ GB they never use.
-Source0:        android-cuttlefish-1.55.0.tar.gz
-Source1:        android-cuttlefish-rom-%{ika_arch}-1.55.0.tar
+Source0:        android-cuttlefish-%{version}.tar.gz
+Source1:        android-cuttlefish-rom-%{ika_arch}-%{version}.tar
 %global debug_package %{nil}
 AutoReqProv:    no
 
+BuildRequires:  android-tools
 Requires:       ika-base
 
 %description
@@ -30,7 +31,7 @@ Provides:       cuttlefish-lineageos = %{version}-%{release}
 Obsoletes:      cuttlefish-lineageos < %{version}-%{release}
 
 %prep
-%autosetup -n android-cuttlefish-1.55.0
+%autosetup -n android-cuttlefish-%{version}
 # Unpack this arch's ROM bundle (Source1) into the source tree for %%install.
 tar -xf %{SOURCE1}
 
@@ -38,7 +39,8 @@ tar -xf %{SOURCE1}
 rm -rf %{buildroot}
 
 mkdir -p %{buildroot}/usr/share/cuttlefish-common
-cp -a lineageos-%{ika_arch} %{buildroot}/usr/share/cuttlefish-common/lineageos
+cp -a --reflink=auto --sparse=always lineageos-%{ika_arch} %{buildroot}/usr/share/cuttlefish-common/lineageos
+./tools/lineageos/thin-provision-images.sh %{buildroot}/usr/share/cuttlefish-common/lineageos
 find %{buildroot}/usr/share/cuttlefish-common/lineageos -type d ! -type l -exec chmod 755 '{}' +
 find %{buildroot}/usr/share/cuttlefish-common/lineageos ! -type l -exec chmod u+w '{}' +
 find %{buildroot}/usr/share/cuttlefish-common/lineageos ! -type l -exec chmod g=u '{}' +
@@ -84,11 +86,6 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
-* Tue May 26 2026 DesktopECHO <build@desktopecho.com> - 20260420-4
-- Bump generated RPM release to revision 4
+* Thu Jun 18 2026 DesktopECHO <build@desktopecho.com> - 1.55.0-6
+- Align ika-lineageos package version with packaging/VERSION.
 
-* Sun May 24 2026 DesktopECHO <build@desktopecho.com> - 20260420-3
-- Bump generated RPM release to revision 3
-
-* Tue Mar 31 2026 Daniel Milisic <dmilisic@desktopecho.com> - 20260401-1
-- Package LineageOS as standalone RPM

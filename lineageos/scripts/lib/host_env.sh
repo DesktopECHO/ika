@@ -47,7 +47,7 @@ download_file() {
 }
 
 ensure_host_commands() {
-  local -a required=(git git-lfs python3 tar awk find readlink rsync install mktemp file readelf adb zip 7z simg2img fsck.erofs debugfs lz4 pahole mogrify)
+  local -a required=(git git-lfs python3 tar awk find readlink rsync install mktemp file readelf adb zip 7z simg2img img2simg fsck.erofs debugfs lz4 pahole mogrify)
   local -a missing=()
   local cmd
 

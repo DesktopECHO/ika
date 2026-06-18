@@ -293,6 +293,99 @@ write_release_metadata() {
   "$metadata_script" "${metadata_args[@]}"
 }
 
+normalize_crosvm_seccomp_policies() {
+  local bundle_dir="$1"
+  local policy_root="$bundle_dir/usr/share/crosvm"
+  [[ -d "$policy_root" ]] || return 0
+
+  python3 - "$policy_root" <<'PY'
+import pathlib
+import re
+import sys
+
+policy_root = pathlib.Path(sys.argv[1])
+policy_names = {
+    "gpu_device.policy",
+    "gpu_render_server.policy",
+    "video_device.policy",
+    "wl_device.policy",
+}
+required = (
+    "MADV_GUARD_INSTALL",
+    "MADV_GUARD_REMOVE",
+)
+needle = "madvise:"
+insert_after = "MADV_FREE"
+rewritten = []
+bad = []
+
+for policy in sorted(policy_root.glob("*/seccomp/*.policy")):
+    if policy.name not in policy_names:
+        continue
+    try:
+        text = policy.read_text(encoding="utf-8")
+    except OSError as exc:
+        bad.append(f"{policy}: {exc}")
+        continue
+
+    lines = text.splitlines(keepends=True)
+    changed = False
+    for idx, line in enumerate(lines):
+        if not line.lstrip().startswith(needle):
+            continue
+        if all(token in line for token in required):
+            continue
+        if re.match(r"^\s*madvise:\s*1\s*(?:#.*)?$", line):
+            continue
+        if insert_after not in line:
+            bad.append(f"{policy}: restricted madvise rule does not contain {insert_after}")
+            continue
+        suffix = "".join(f" || arg2 == {token}" for token in required)
+        lines[idx] = line.replace(insert_after, insert_after + suffix, 1)
+        changed = True
+
+    if changed:
+        policy.write_text("".join(lines), encoding="utf-8")
+        rewritten.append(str(policy.relative_to(policy_root)))
+
+for policy in sorted(policy_root.glob("*/seccomp/*.policy")):
+    if policy.name not in policy_names:
+        continue
+    text = policy.read_text(encoding="utf-8")
+    for line in text.splitlines():
+        if not line.lstrip().startswith(needle):
+            continue
+        if re.match(r"^\s*madvise:\s*1\s*(?:#.*)?$", line):
+            break
+        if all(token in line for token in required):
+            break
+        bad.append(f"{policy}: missing {'/'.join(required)}")
+        break
+
+for name in rewritten:
+    print(f"[lineage-desktop] updated crosvm seccomp policy: {name}", file=sys.stderr)
+
+if bad:
+    for item in bad:
+        print(f"[lineage-desktop] error: {item}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
+thin_provision_images_tool() {
+  local tool="$ika_root/tools/lineageos/thin-provision-images.sh"
+  [[ -x "$tool" ]] || die "missing executable image thin-provisioning helper: $tool"
+  printf '%s\n' "$tool"
+}
+
+copy_bundle_file_thin() {
+  local src="$1"
+  local dest="$2"
+
+  cp --reflink=auto --sparse=always --preserve=timestamps -- "$src" "$dest"
+  chmod 0644 "$dest"
+}
+
 package_cvd_bundle() {
   local arch="$1"
   local product="$2"
@@ -325,16 +418,18 @@ package_cvd_bundle() {
     fi
     [[ -f "$src" ]] || src="$product_out/$f"
     if [[ -f "$src" ]]; then
-      install -m 0644 "$src" "$bundle_dir/$f"
+      copy_bundle_file_thin "$src" "$bundle_dir/$f"
       copied=$((copied + 1))
     fi
   done
+  "$(thin_provision_images_tool)" "$bundle_dir"
 
   (( copied > 0 )) || die "no image files were copied from $product_out"
   desktop_android_info_selects_tablet "$bundle_dir/android-info.txt" || \
     die "$bundle_name/android-info.txt does not select config=tablet"
 
   tar -xzf "$host_package" -C "$bundle_dir" --exclude='bin' --exclude='lib64'
+  normalize_crosvm_seccomp_policies "$bundle_dir"
 
   # assemble_cvd requires every etc/cvd_config/*.json preset it might select
   # (via --config=... or via android-info.txt) to be a JSON object; it aborts

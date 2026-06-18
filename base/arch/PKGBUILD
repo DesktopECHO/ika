@@ -44,6 +44,7 @@ build() {
   local bazel_tmpdir="${CUTTLEFISH_BAZEL_TMPDIR:-${cache_root}/tmp}"
   local git_mirror_root="${cache_root}/git-mirrors"
   local git_config="${cache_root}/gitconfig"
+  local cargo_bazel_timeout="${CARGO_BAZEL_TIMEOUT:-1800}"
   mkdir -p "${output_user_root}" "${repository_cache}" "${disk_cache}" \
     "${distdir}" "${bazel_tmpdir}" "${git_mirror_root}"
   # Keep Bazel's output tree and crate_universe temp workspaces out of the
@@ -85,6 +86,7 @@ build() {
       'cuttlefish/package:metrics' \
       --spawn_strategy=local \
       --repo_env=TMPDIR="${bazel_tmpdir}" \
+      --repo_env=CARGO_BAZEL_TIMEOUT="${cargo_bazel_timeout}" \
       --repo_env=GIT_CONFIG_GLOBAL="${git_config}" \
       --repo_env=GIT_CONFIG_NOSYSTEM=1 \
       --workspace_status_command=../stamp_helper.sh \
@@ -109,7 +111,8 @@ _package_output_root() {
 
 package_ika-base() {
   pkgdesc='Cuttlefish host binaries, networking helpers, and system services'
-  depends=(curl dnsmasq iproute2 libarchive libcap libdrm libx11 libxext mesa
+  depends=(curl dnsmasq iproute2 libarchive libcap libdrm libx11 libxext lz4 mesa
+           mesa-utils
            net-tools networkmanager nftables openssl python python-requests
            procps-ng shadow systemd virglrenderer vulkan-icd-loader
            vulkan-swrast vulkan-tools xdg-utils xz)

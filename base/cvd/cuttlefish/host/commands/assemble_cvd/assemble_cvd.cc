@@ -215,6 +215,8 @@ Result<std::set<std::string>> PreservingOnResume(
   preserving.insert("os_composite_gpt_footer.img");
   preserving.insert("os_composite.img");
   preserving.insert("os_vbmeta.img");
+  // Resized userdata lives here and is part of the OS composite disk recipe.
+  preserving.insert("userdata.img");
   preserving.insert("sdcard.img");
   preserving.insert("sdcard_overlay.img");
   preserving.insert("boot_repacked.img");
@@ -251,7 +253,6 @@ Result<std::set<std::string>> PreservingOnResume(
     preserving.insert(kLogNameCrosvmOpenWrt);
     preserving.insert(kLogNameCrosvmOpenWrtBoot);
     preserving.insert(kLogNameMetrics);
-    preserving.insert("userdata.img");
   }
   if (InSandbox()) {
     preserving.insert(kLogNameLauncher);  // Created before `assemble_cvd` runs

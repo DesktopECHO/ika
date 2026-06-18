@@ -9,6 +9,8 @@ readonly MINIJAIL_REV="d2e47c2e9aaaa2b175162c31b6bb8976cc762e1a"
 readonly MINIJAIL_REF="refs/heads/main"
 readonly ANDROID_SYSTEM_CORE_REMOTE="https://android.googlesource.com/platform/system/core"
 readonly ANDROID_SYSTEM_EXTRAS_REMOTE="https://android.googlesource.com/platform/system/extras"
+readonly DEPOT_TOOLS_REMOTE_PRIMARY="https://chromium.googlesource.com/chromium/tools/depot_tools.git"
+readonly DEPOT_TOOLS_REMOTE_ALIAS="https://chromium.googlesource.com/chromium/tools/depot_tools"
 
 readonly DEFAULT_BAZEL_CACHE_ROOT="$HOME/ika-build/cuttlefish-bazel"
 readonly MIRROR_ROOT="${CUTTLEFISH_BAZEL_GIT_MIRROR_ROOT:-${CUTTLEFISH_BAZEL_CACHE_ROOT:-$DEFAULT_BAZEL_CACHE_ROOT}/git-mirrors}"
@@ -187,6 +189,7 @@ main() {
 
   ensure_mirror "crosvm" "${CROSVM_REMOTE_PRIMARY}" "${CROSVM_REMOTE_FALLBACK}"
   ensure_minijail_mirror
+  ensure_mirror "depot_tools" "${DEPOT_TOOLS_REMOTE_PRIMARY}" "${DEPOT_TOOLS_REMOTE_ALIAS}"
   ensure_mirror "android_system_core" "${ANDROID_SYSTEM_CORE_REMOTE}"
   ensure_mirror "android_system_extras" "${ANDROID_SYSTEM_EXTRAS_REMOTE}"
 }
