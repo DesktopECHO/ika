@@ -524,6 +524,15 @@ static constexpr char kCpus[] = "cpus";
 void CuttlefishConfig::MutableInstanceSpecific::set_cpus(int cpus) { (*Dictionary())[kCpus] = cpus; }
 int CuttlefishConfig::InstanceSpecific::cpus() const { return (*Dictionary())[kCpus].asInt(); }
 
+static constexpr char kPreferPerformanceCores[] = "prefer_performance_cores";
+void CuttlefishConfig::MutableInstanceSpecific::set_prefer_performance_cores(
+    bool prefer_performance_cores) {
+  (*Dictionary())[kPreferPerformanceCores] = prefer_performance_cores;
+}
+bool CuttlefishConfig::InstanceSpecific::prefer_performance_cores() const {
+  return (*Dictionary())[kPreferPerformanceCores].asBool();
+}
+
 static constexpr char kVcpuInfo[] = "vcpu_config_path";
 void CuttlefishConfig::MutableInstanceSpecific::set_vcpu_config_path(
     const std::string& vcpu_config_path) {

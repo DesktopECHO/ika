@@ -329,6 +329,11 @@ DEFINE_string(secure_hals, CF_DEFAULTS_SECURE_HALS,
               "Which HALs to use enable host security features for. Supports "
               "keymint and gatekeeper at the moment.");
 
+DEFINE_vec(prefer_performance_cores,
+           fmt::format("{}", CF_DEFAULTS_PREFER_PERFORMANCE_CORES),
+           "Prefer running guest vCPUs on the host CPUs with the highest "
+           "scheduler capacity values.");
+
 DEFINE_vec(use_sdcard, CF_DEFAULTS_USE_SDCARD ? "true" : "false",
            "Create blank SD-Card image and expose to guest");
 

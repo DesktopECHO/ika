@@ -21,14 +21,19 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include <algorithm>
 #include <cassert>
 #include <map>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <android-base/file.h>
+#include <android-base/parseint.h>
+#include <android-base/strings.h>
+#include "absl/log/log.h"
 #include "absl/strings/str_join.h"
 #include <json/json.h>
 #include <vulkan/vulkan.h>
@@ -72,6 +77,74 @@ std::string GfxstreamContextTypes(
     return requested_context_types;
   }
   return default_context_types;
+}
+
+Result<std::optional<std::string>> PreferPerformanceCoresAffinity(
+    const CuttlefishConfig::InstanceSpecific& instance) {
+  static constexpr char kCpuSysfsRoot[] = "/sys/devices/system/cpu";
+
+  std::vector<std::pair<int, int>> cpu_capacities;
+  const auto cpu_entries = CF_EXPECT(DirectoryContents(kCpuSysfsRoot));
+  for (const auto& entry : cpu_entries) {
+    if (!android::base::StartsWith(entry, "cpu")) {
+      continue;
+    }
+
+    int cpu_id = 0;
+    if (!android::base::ParseInt(entry.substr(3), &cpu_id)) {
+      continue;
+    }
+
+    const auto cpu_dir = std::string(kCpuSysfsRoot) + "/" + entry;
+    const auto online_path = cpu_dir + "/online";
+    if (FileExists(online_path)) {
+      int online = 0;
+      if (!android::base::ParseInt(
+              android::base::Trim(CF_EXPECT(ReadFileContents(online_path))),
+              &online) ||
+          online == 0) {
+        continue;
+      }
+    }
+
+    const auto capacity_path = cpu_dir + "/cpu_capacity";
+    if (!FileExists(capacity_path)) {
+      continue;
+    }
+
+    int capacity = 0;
+    if (!android::base::ParseInt(
+            android::base::Trim(CF_EXPECT(ReadFileContents(capacity_path))),
+            &capacity)) {
+      continue;
+    }
+
+    cpu_capacities.emplace_back(capacity, cpu_id);
+  }
+
+  if (cpu_capacities.empty() ||
+      cpu_capacities.size() < static_cast<size_t>(instance.cpus())) {
+    return std::nullopt;
+  }
+
+  std::sort(cpu_capacities.begin(), cpu_capacities.end(),
+            [](const auto& lhs, const auto& rhs) {
+              if (lhs.first != rhs.first) {
+                return lhs.first > rhs.first;
+              }
+              return lhs.second < rhs.second;
+            });
+
+  std::string affinity;
+  for (int vcpu = 0; vcpu < instance.cpus(); ++vcpu) {
+    if (!affinity.empty()) {
+      affinity += ":";
+    }
+    affinity += std::to_string(vcpu) + "=" +
+                std::to_string(cpu_capacities[vcpu].second);
+  }
+
+  return affinity;
 }
 
 bool CrosvmManager::IsSupported() {
@@ -649,6 +722,24 @@ Result<std::vector<MonitorCommand>> CrosvmManager::StartCommands(
   }
 
   CF_EXPECT(crosvm_cmd.AddCpus(instance.cpus(), instance.vcpu_config_path()));
+
+  if (instance.prefer_performance_cores()) {
+    if (!instance.vcpu_config_path().empty()) {
+      LOG(WARNING) << "Ignoring prefer_performance_cores because "
+                      "vcpu_config_path is already set.";
+    } else {
+      const auto affinity =
+          CF_EXPECT(PreferPerformanceCoresAffinity(instance));
+      if (affinity) {
+        crosvm_cmd.Cmd().AddParameter("--cpu-affinity=", *affinity);
+      } else {
+        LOG(WARNING)
+            << "Could not determine host CPU capacity data for "
+               "prefer_performance_cores; leaving crosvm CPU placement "
+               "unchanged.";
+      }
+    }
+  }
 
   auto disk_num = instance.virtual_disk_paths().size();
   CF_EXPECT(VmManager::kMaxDisks >= disk_num,

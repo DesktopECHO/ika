@@ -540,6 +540,8 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
   std::vector<std::string> vsock_guest_group_vec =
       CF_EXPECT(GET_FLAG_STR_VALUE(vsock_guest_group));
   CpusFlag cpus_values = CF_EXPECT(CpusFlag::FromGlobalGflags());
+  std::vector<bool> prefer_performance_cores_vec =
+      CF_EXPECT(GET_FLAG_BOOL_VALUE(prefer_performance_cores));
   BlankDataImageMbFlag blank_data_image_mb_values =
       CF_EXPECT(BlankDataImageMbFlag::FromGlobalGflags(guest_configs));
   std::vector<int> gdb_port_vec = CF_EXPECT(GET_FLAG_INT_VALUE(gdb_port));
@@ -953,6 +955,8 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
     instance.set_session_id(iface_config.mobile_tap.session_id);
 
     instance.set_cpus(cpus_values.ForIndex(instance_index));
+    instance.set_prefer_performance_cores(
+        prefer_performance_cores_vec[instance_index]);
     // make sure all instances have multiple of 2 then SMT mode
     // if any of instance doesn't have multiple of 2 then NOT SMT
     CF_EXPECT(!smt_vec[instance_index] ||
