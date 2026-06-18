@@ -93,9 +93,6 @@ type CreateBugReportOpts struct {
 type InstancesClient interface {
 	// Lists currently running devices.
 	ListCVDs() ([]*hoapi.CVD, error)
-	// Calls cvd fetch in the remote host, the downloaded artifacts can be used to create a CVD later.
-	// If not empty, the provided credentials will be used by the host orchestrator to access the build api.
-	FetchArtifacts(req *hoapi.FetchArtifactsRequest, creds BuildAPICreds) (*hoapi.FetchArtifactsResponse, error)
 	// Create a new device with artifacts from the build server or previously uploaded by the user.
 	// If not empty, the provided credentials will be used to download necessary artifacts from the build api.
 	CreateCVD(req *hoapi.CreateCVDRequest, creds BuildAPICreds) (*hoapi.CreateCVDResponse, error)
@@ -134,14 +131,18 @@ type InstanceOperationsClient interface {
 	CreateBugReport(group string, opts CreateBugReportOpts, dst io.Writer) error
 	// Powerwash the device.
 	Powerwash(groupName, instanceName string) error
-	// Stop the device.
-	Stop(groupName, instanceName string) error
+	// Stop group.
+	StopGroup(groupName string) error
+	// Stop specific instance.
+	StopInstance(groupName, instanceName string) error
 	// Restart the device.
 	Restart(groupName, instanceName string) error
 	// Press power button.
 	Powerbtn(groupName, instanceName string) error
-	// Start the device.
-	Start(groupName, instanceName string, req *hoapi.StartCVDRequest) error
+	// Start specific instance.
+	StartGroup(groupName string, req *hoapi.StartCVDRequest) error
+	// Start specific instance.
+	StartInstance(groupName, instanceName string, req *hoapi.StartCVDRequest) error
 	// Create device snapshot.
 	CreateSnapshot(groupName, instanceName string, req *hoapi.CreateSnapshotRequest) (*hoapi.CreateSnapshotResponse, error)
 	// List screen recordings
@@ -393,25 +394,6 @@ func (c *HostOrchestratorClientImpl) waitForOperationOpts(name string, res any, 
 	return c.HTTPHelper.NewPostRequest(path, nil).JSONResDoWithRetries(res, retryOpts)
 }
 
-func (c *HostOrchestratorClientImpl) FetchArtifacts(req *hoapi.FetchArtifactsRequest, creds BuildAPICreds) (*hoapi.FetchArtifactsResponse, error) {
-	var op hoapi.Operation
-	rb := c.HTTPHelper.NewPostRequest("/artifacts", req)
-	creds.ApplyToHTTPRequest(rb)
-	if err := rb.JSONResDo(&op); err != nil {
-		return nil, err
-	}
-
-	res := &hoapi.FetchArtifactsResponse{}
-	if err := c.waitForOperationOpts(op.Name, &res, RetryOptions{
-		StatusCodes: []int{http.StatusServiceUnavailable, http.StatusGatewayTimeout},
-		RetryDelay:  30 * time.Second,
-		MaxWait:     10 * time.Minute,
-	}); err != nil {
-		return nil, err
-	}
-	return res, nil
-}
-
 func (c *HostOrchestratorClientImpl) createCVDOp(req *hoapi.CreateCVDRequest, creds BuildAPICreds) (*hoapi.Operation, error) {
 	op := &hoapi.Operation{}
 	rb := c.HTTPHelper.NewPostRequest("/cvds", req)
@@ -485,7 +467,13 @@ func (c *HostOrchestratorClientImpl) Powerbtn(groupName, instanceName string) er
 	return c.doEmptyResponseRequest(rb)
 }
 
-func (c *HostOrchestratorClientImpl) Stop(groupName, instanceName string) error {
+func (c *HostOrchestratorClientImpl) StopGroup(groupName string) error {
+	path := fmt.Sprintf("/cvds/%s/:stop", groupName)
+	rb := c.HTTPHelper.NewPostRequest(path, nil)
+	return c.doEmptyResponseRequest(rb)
+}
+
+func (c *HostOrchestratorClientImpl) StopInstance(groupName, instanceName string) error {
 	path := fmt.Sprintf("/cvds/%s/%s/:stop", groupName, instanceName)
 	rb := c.HTTPHelper.NewPostRequest(path, nil)
 	return c.doEmptyResponseRequest(rb)
@@ -497,7 +485,13 @@ func (c *HostOrchestratorClientImpl) Restart(groupName, instanceName string) err
 	return c.doEmptyResponseRequest(rb)
 }
 
-func (c *HostOrchestratorClientImpl) Start(groupName, instanceName string, req *hoapi.StartCVDRequest) error {
+func (c *HostOrchestratorClientImpl) StartGroup(groupName string, req *hoapi.StartCVDRequest) error {
+	path := fmt.Sprintf("/cvds/%s/:start", groupName)
+	rb := c.HTTPHelper.NewPostRequest(path, req)
+	return c.doEmptyResponseRequest(rb)
+}
+
+func (c *HostOrchestratorClientImpl) StartInstance(groupName, instanceName string, req *hoapi.StartCVDRequest) error {
 	path := fmt.Sprintf("/cvds/%s/%s/:start", groupName, instanceName)
 	rb := c.HTTPHelper.NewPostRequest(path, req)
 	return c.doEmptyResponseRequest(rb)

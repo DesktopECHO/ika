@@ -17,7 +17,7 @@
 
 #include <string>
 
-#include <fruit/fruit.h>
+#include "fruit/fruit.h"
 
 #include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
@@ -38,7 +38,7 @@ class LogTeeCreator {
                                Subprocess::StdIOChannel log_channel);
 
  private:
-  const CuttlefishConfig::InstanceSpecific& instance_;
+  const CuttlefishConfig::InstanceSpecific instance_;
 };
 
 }  // namespace cuttlefish

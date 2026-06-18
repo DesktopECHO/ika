@@ -94,7 +94,8 @@ void ModemSimulator::RegisterModemService() {
   modem_services_[kMiscService] = std::move(miscservice);
 }
 
-void ModemSimulator::DispatchCommand(const Client& client, std::string& command) {
+void ModemSimulator::DispatchCommand(const Client& client,
+                                     std::string& command) {
   if (sms_service_) {
     if (sms_service_->IsWaitingSmsPdu()) {
       sms_service_->HandleSendSMSPDU(client, command);
@@ -120,10 +121,6 @@ void ModemSimulator::DispatchCommand(const Client& client, std::string& command)
 }
 
 void ModemSimulator::OnFirstClientConnected() {
-  if (misc_service_) {
-    misc_service_->TimeUpdate();
-  }
-
   if (network_service_) {
     network_service_->OnVoiceRegisterStateChanged();
     network_service_->OnDataRegisterStateChanged();

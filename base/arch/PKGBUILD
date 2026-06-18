@@ -5,8 +5,8 @@
 
 pkgbase=ika-base
 pkgname=(ika-base ika-common ika-integration ika-defaults ika-metrics)
-pkgver=1.53.0
-pkgrel=5
+pkgver=1.55.0
+pkgrel=6
 pkgdesc='Cuttlefish Android Virtual Device host packages'
 arch=(x86_64 aarch64)
 url='https://github.com/google/android-cuttlefish'
@@ -63,11 +63,21 @@ build() {
       GIT_CONFIG_GLOBAL="${git_config}" GIT_CONFIG_NOSYSTEM=1 \
       DISABLE_BAZEL_WRAPPER=yes USE_BAZEL_VERSION=8.5.1 \
       bazel --output_user_root="${output_user_root}" build -c opt \
+      --noshow_loading_progress \
+      --show_progress_rate_limit=30 \
+      --progress_report_interval=30 \
+      --ui_actions_shown=1 \
+      --curses=no \
+      --color=no \
       --repository_cache="${repository_cache}" \
       --disk_cache="${disk_cache}" \
       --distdir="${distdir}" \
+      --cxxopt=-Wno-deprecated-declarations \
+      --host_cxxopt=-Wno-deprecated-declarations \
       --cxxopt=-Wno-error=deprecated-declarations \
       --host_cxxopt=-Wno-error=deprecated-declarations \
+      --cxxopt=-Wno-thread-safety-reference-return \
+      --host_cxxopt=-Wno-thread-safety-reference-return \
       --conlyopt=-Wno-error=incompatible-pointer-types-discards-qualifiers \
       --host_conlyopt=-Wno-error=incompatible-pointer-types-discards-qualifiers \
       'cuttlefish/package:cvd' \
@@ -152,7 +162,7 @@ package_ika-base() {
   ln -sfn ../bin/libvk_swiftshader.so "${pkgdir}/usr/lib/cuttlefish-common/lib64/vulkan.pastel.so"
 
   # Expose cvd on PATH to match upstream's /usr/bin/cvd symlink.
-  ln -sfn /usr/lib/cuttlefish-common/bin/cvd "${pkgdir}/usr/bin/cvd"
+  ln -sfn ../lib/cuttlefish-common/bin/cvd "${pkgdir}/usr/bin/cvd"
 
   install -Dpm0644 "${root}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 }

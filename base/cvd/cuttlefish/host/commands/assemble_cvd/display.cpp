@@ -21,8 +21,10 @@
 #include <fruit/fruit.h>
 #include "absl/log/log.h"
 
-#include "cuttlefish/common/libs/utils/flag_parser.h"
+#include "cuttlefish/flag_parser/flag.h"
+#include "cuttlefish/flag_parser/gflags_compat.h"
 #include "cuttlefish/host/libs/config/display.h"
+#include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
 namespace {
@@ -75,8 +77,9 @@ class DisplaysConfigsFlagImpl : public DisplaysConfigsFlag {
   }
 
   bool WriteGflagsCompatHelpXml(std::ostream& out) const override {
-    Flag display_flag = GflagsCompatFlag(kDisplayFlag).Help(kDisplayHelp);
-    return WriteGflagsCompatXml({display_flag}, out);
+    Flag display_flag = Flag::StringFlag(kDisplayFlag).Help(kDisplayHelp);
+    WriteGflagsCompatXml({display_flag}, out);
+    return true;
   }
 
  private:

@@ -16,9 +16,9 @@
 
 #include <thread>
 
-#include <gflags/gflags.h>
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "gflags/gflags.h"
 
 #include "cuttlefish/common/libs/utils/tee_logging.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
@@ -97,11 +97,9 @@ int ImportLocationsCvdMain(int argc, char** argv) {
   LOG(INFO) << "Server port: " << server_port << " socket: " << socket_name
             << std::endl;
   if (FLAGS_format == "gpx" || FLAGS_format == "GPX") {
-    isOk =
-        GpxParser::parseFile(FLAGS_file_path.c_str(), &coordinates, &error);
+    isOk = GpxParser::parseFile(FLAGS_file_path.c_str(), &coordinates, &error);
   } else if (FLAGS_format == "kml" || FLAGS_format == "KML") {
-    isOk =
-        KmlParser::parseFile(FLAGS_file_path.c_str(), &coordinates, &error);
+    isOk = KmlParser::parseFile(FLAGS_file_path.c_str(), &coordinates, &error);
   }
 
   LOG(INFO) << "Number of parsed points: " << coordinates.size() << std::endl;
@@ -112,7 +110,7 @@ int ImportLocationsCvdMain(int argc, char** argv) {
   }
 
   int delay = (int)(1000 * FLAGS_delay);
-  auto status = gpsclient.SendGpsLocations(delay,coordinates);
+  auto status = gpsclient.SendGpsLocations(delay, coordinates);
   CHECK(status.ok()) << "Failed to send gps location data \n";
   if (!status.ok()) {
     return 1;

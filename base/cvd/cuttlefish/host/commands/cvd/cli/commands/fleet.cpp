@@ -21,8 +21,9 @@
 #include <string>
 #include <vector>
 
-#include <json/value.h>
+#include "json/value.h"
 
+#include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
 #include "cuttlefish/host/commands/cvd/cli/types.h"
@@ -30,6 +31,8 @@
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
+
+constexpr char kFleetSubcmd[] = "fleet";
 
 constexpr char kSummaryHelpText[] =
     R"(lists active devices with relevant information)";
@@ -40,40 +43,26 @@ usage: cvd fleet [--help]
   cvd fleet will list the active devices with information.
 )";
 
-class CvdFleetCommandHandler : public CvdCommandHandler {
- public:
-  CvdFleetCommandHandler(InstanceManager& instance_manager)
-      : instance_manager_(instance_manager) {}
+CvdFleetCommandHandler::CvdFleetCommandHandler(
+    InstanceManager& instance_manager)
+    : instance_manager_(instance_manager) {}
 
-  Result<void> Handle(const CommandRequest& request) override;
-  cvd_common::Args CmdList() const override { return {kFleetSubcmd}; }
+cvd_common::Args CvdFleetCommandHandler::CmdList() const {
+  return {kFleetSubcmd};
+}
 
-  Result<std::string> SummaryHelp() const override { return kSummaryHelpText; }
+std::string CvdFleetCommandHandler::SummaryHelp() const {
+  return kSummaryHelpText;
+}
 
-  bool ShouldInterceptHelp() const override { return true; }
-
-  bool RequiresDeviceExists() const override { return true; }
-
-  Result<std::string> DetailedHelp(std::vector<std::string>&) const override {
-    return kHelpMessage;
-  }
-
- private:
-  InstanceManager& instance_manager_;
-
-  static constexpr char kFleetSubcmd[] = "fleet";
-  bool IsHelp(const cvd_common::Args& cmd_args) const;
-};
+Result<std::string> CvdFleetCommandHandler::DetailedHelp(
+    const CommandRequest& request) {
+  return kHelpMessage;
+}
 
 Result<void> CvdFleetCommandHandler::Handle(const CommandRequest& request) {
-  CF_EXPECT(CanHandle(request));
-
   std::vector<std::string> args = request.SubcommandArguments();
-
-  if (IsHelp(args)) {
-    std::cout << kHelpMessage;
-    return {};
-  }
+  CF_EXPECT(ConsumeFlags({}, args, {.fail_on_unexpected_argument = true}));
 
   auto all_groups = CF_EXPECT(instance_manager_.FindGroups({}));
   Json::Value groups_json(Json::arrayValue);
@@ -86,15 +75,6 @@ Result<void> CvdFleetCommandHandler::Handle(const CommandRequest& request) {
   std::cout << output_json.toStyledString();
 
   return {};
-}
-
-bool CvdFleetCommandHandler::IsHelp(const cvd_common::Args& args) const {
-  for (const auto& arg : args) {
-    if (arg == "--help" || arg == "-help") {
-      return true;
-    }
-  }
-  return false;
 }
 
 std::unique_ptr<CvdCommandHandler> NewCvdFleetCommandHandler(

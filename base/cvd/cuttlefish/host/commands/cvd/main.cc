@@ -26,21 +26,22 @@
 #include <unordered_map>
 #include <vector>
 
-#include <android-base/file.h>
 #include "absl/cleanup/cleanup.h"
-#include "absl/strings/str_split.h"
-#include <fmt/format.h>
 #include "absl/log/log.h"
+#include "absl/strings/str_split.h"
+#include "android-base/file.h"
+#include "fmt/format.h"
 
 #include "cuttlefish/common/libs/utils/environment.h"
 #include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/common/libs/utils/flag_parser.h"
+#include "cuttlefish/flag_parser/flag.h"
+#include "cuttlefish/flag_parser/gflags_compat.h"
 #include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/common/libs/utils/tee_logging.h"
+#include "cuttlefish/host/commands/cvd/cli/log_files.h"
 #include "cuttlefish/host/commands/cvd/cvd.h"
 #include "cuttlefish/host/commands/cvd/utils/common.h"
 #include "cuttlefish/host/commands/cvd/version/version.h"
-#include "cuttlefish/host/libs/vm_manager/host_configuration.h"
 #include "cuttlefish/posix/strerror.h"
 // TODO(315772518) Re-enable once metrics send is reenabled
 // #include "cuttlefish/host/commands/cvd/metrics/cvd_metrics_api.h"
@@ -199,41 +200,35 @@ std::string ColoredUrl(const std::string& url) {
   return output;
 }
 
-bool ValidateHostConfiguration() {
-  // Validate the host before attempting to access directories.
-  std::vector<std::string> config_commands;
-  bool valid = vm_manager::ValidateHostConfiguration(&config_commands);
-  if (!valid) {
-    std::cerr << "Validation of host configuration failed." << std::endl;
-    std::cerr << "Execute the following commands:" << std::endl;
-    for (const auto& cmd : config_commands) {
-      std::cerr << "    " << cmd << std::endl;
-    }
-    std::cerr << "NOTE: Reboot for changes to take effect"
+void InitializeLogs(std::vector<std::string>& all_args) {
+  LogSeverity verbosity = CvdVerbosityOption(all_args);
+  MetadataLevel metadata_level =
+      isatty(0) ? MetadataLevel::ONLY_MESSAGE : MetadataLevel::FULL;
+
+  std::vector<std::string> log_files;
+  if (EnsureDirectoryExists(CvdUserLogDir(), 0777).ok()) {
+    log_files.push_back(GetCvdLogFileName(CvdUserLogDir()));
+  } else {
+    std::cerr << "File logging disabled, could not create " << CvdUserLogDir()
               << std::endl;
   }
-  return valid;
+  LogToStderrAndFiles(log_files, "", metadata_level, verbosity);
+
+  (void)PruneLogsDirectory(CvdUserLogDir());
 }
 
 }  // namespace
+
 }  // namespace cuttlefish
 
 int main(int argc, char** argv) {
   srand(time(NULL));
 
-  cuttlefish::cvd_common::Args all_args = cuttlefish::ArgsToVec(argc, argv);
-  cuttlefish::LogSeverity verbosity =
-      cuttlefish::CvdVerbosityOption(all_args);
-  // set verbosity for this process
-  cuttlefish::MetadataLevel metadata_level =
-      isatty(0) ? cuttlefish::MetadataLevel::ONLY_MESSAGE
-                : cuttlefish::MetadataLevel::FULL;
-  cuttlefish::LogToStderr("", metadata_level, verbosity);
+  std::vector<std::string> all_args(argv, argv + argc);
 
-  if (!cuttlefish::ValidateHostConfiguration()) {
-    return -1;
-  }
-  auto result = cuttlefish::CvdMain(std::move(all_args));
+  cuttlefish::InitializeLogs(all_args);
+
+  cuttlefish::Result<void> result = cuttlefish::CvdMain(std::move(all_args));
   if (result.ok()) {
     return 0;
   } else {

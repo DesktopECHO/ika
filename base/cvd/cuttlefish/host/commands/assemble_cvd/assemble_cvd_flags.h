@@ -68,6 +68,7 @@ DECLARE_vec(netsim);
 
 DECLARE_vec(netsim_bt);
 DECLARE_vec(netsim_uwb);
+DECLARE_vec(netsim_nfc);
 DECLARE_string(netsim_args);
 
 DECLARE_bool(enable_automotive_proxy);
@@ -75,7 +76,11 @@ DECLARE_bool(enable_automotive_proxy);
 DECLARE_vec(enable_vhal_proxy_server);
 DECLARE_int32(vhal_proxy_server_instance_num);
 
-/* Disabled by default. Explicitly enable when sandbox prerequisites are met. */
+/**
+ * crosvm sandbox feature requires /var/empty and seccomp directory
+ *
+ * Also see SetDefaultFlagsForCrosvm()
+ */
 DECLARE_vec(enable_sandbox);
 
 DECLARE_vec(enable_virtiofs);
@@ -147,8 +152,6 @@ DECLARE_vec(vsock_guest_cid);
 DECLARE_vec(vsock_guest_group);
 
 DECLARE_string(secure_hals);
-
-DECLARE_vec(prefer_performance_cores);
 
 DECLARE_vec(use_sdcard);
 

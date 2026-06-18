@@ -101,12 +101,22 @@ override_dh_auto_build:
 	       GIT_CONFIG_GLOBAL="$$BAZEL_GIT_CONFIG" GIT_CONFIG_NOSYSTEM=1 \
 	       DISABLE_BAZEL_WRAPPER=yes USE_BAZEL_VERSION=8.5.1 \
 	       bazel --output_user_root="$$BAZEL_OUTPUT_USER_ROOT" build \
+	         --noshow_loading_progress \
+	         --show_progress_rate_limit=30 \
+	         --progress_report_interval=30 \
+	         --ui_actions_shown=1 \
+	         --curses=no \
+	         --color=no \
 	         ${remote_cache_arg} ${disk_cache_arg} \
 	         --repository_cache="$$BAZEL_REPOSITORY_CACHE" \
 	         --distdir="$$BAZEL_DISTDIR" \
 	         --repo_env=GIT_CONFIG_GLOBAL="$$BAZEL_GIT_CONFIG" \
 	         --repo_env=GIT_CONFIG_NOSYSTEM=1 \
 	         ${bindgen_clang_args} \
+	         --cxxopt=-Wno-deprecated-declarations \
+	         --host_cxxopt=-Wno-deprecated-declarations \
+	         --cxxopt=-Wno-thread-safety-reference-return \
+	         --host_cxxopt=-Wno-thread-safety-reference-return \
          ${compilation_mode} ${conlyopts} ${copts} ${cxxopts} ${linkopts} -c opt \
 	         'cuttlefish/package:cvd' 'cuttlefish/package:defaults' 'cuttlefish/package:metrics' \
 	         --spawn_strategy=local \

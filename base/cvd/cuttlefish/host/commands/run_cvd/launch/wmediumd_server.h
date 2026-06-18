@@ -19,7 +19,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include <fruit/fruit.h>
+#include "fruit/fruit.h"
 
 #include "cuttlefish/host/commands/run_cvd/launch/grpc_socket_creator.h"
 #include "cuttlefish/host/commands/run_cvd/launch/log_tee_creator.h"
@@ -51,7 +51,7 @@ class WmediumdServer : public vm_manager::VmmDependencyCommand {
   Result<void> ResultSetup() override;
 
   const CuttlefishConfig::EnvironmentSpecific& environment_;
-  const CuttlefishConfig::InstanceSpecific& instance_;
+  const CuttlefishConfig::InstanceSpecific instance_;
   LogTeeCreator& log_tee_;
   GrpcSocketCreator& grpc_socket_;
   std::string config_path_;

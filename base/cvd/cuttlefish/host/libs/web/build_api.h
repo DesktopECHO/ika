@@ -33,13 +33,13 @@ class BuildApi {
       const Build& build, const std::string& target_directory,
       const std::string& artifact_name) = 0;
 
-  virtual Result<std::string> DownloadFileWithBackup(
-      const Build& build, const std::string& target_directory,
-      const std::string& artifact_name,
-      const std::string& backup_artifact_name) = 0;
-
   virtual Result<SeekableZipSource> FileReader(
       const Build&, const std::string& artifact_name) = 0;
 };
+
+Result<std::string> DownloadFileWithBackup(
+    BuildApi& build_api, const Build& build,
+    const std::string& target_directory, const std::string& artifact_name,
+    const std::string& backup_artifact_name);
 
 }  // namespace cuttlefish

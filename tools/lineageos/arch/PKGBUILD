@@ -5,14 +5,14 @@
 pkgbase=ika-lineageos
 pkgname=(ika-lineageos)
 pkgver=20260420
-pkgrel=5
+pkgrel=6
 pkgdesc='LineageOS for Cuttlefish host'
 arch=(x86_64 aarch64)
 url='https://github.com/google/android-cuttlefish'
 license=(Apache-2.0)
 options=(!strip !debug)
 install=ika-lineageos.install
-_srcver=1.53.0
+_srcver=1.55.0
 source=("android-cuttlefish-${_srcver}.tar.gz")
 sha256sums=('SKIP')
 

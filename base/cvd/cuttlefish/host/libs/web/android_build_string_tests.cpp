@@ -13,16 +13,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "cuttlefish/host/libs/web/android_build_string.h"
-
 #include <optional>
 #include <string>
 #include <vector>
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 
-#include "cuttlefish/common/libs/utils/flag_parser.h"
+#include "cuttlefish/flag_parser/flag.h"
+#include "cuttlefish/host/libs/web/android_build_string.h"
 #include "cuttlefish/result/result_matchers.h"
 
 namespace cuttlefish {
@@ -129,7 +128,7 @@ TEST(SingleBuildStringGflagsCompatFlagTests, EmptyInputEmptyResultSuccess) {
   std::optional<BuildString> value;
   auto flag = GflagsCompatFlag("myflag", value);
 
-  ASSERT_THAT(flag.Parse({"--myflag="}), IsOk());
+  ASSERT_THAT(ConsumeFlags({flag}, {"--myflag="}), IsOk());
   ASSERT_THAT(value, Eq(std::nullopt));
 }
 
@@ -137,9 +136,9 @@ TEST(SingleBuildStringGflagsCompatFlagTests, HasValueSuccess) {
   std::optional<BuildString> value;
   auto flag = GflagsCompatFlag("myflag", value);
 
-  ASSERT_THAT(flag.Parse({"--myflag=12345"}), IsOk());
+  ASSERT_THAT(ConsumeFlags({flag}, {"--myflag=12345"}), IsOk());
   ASSERT_THAT(value, Optional(DeviceBuildString{.branch_or_id = "12345"}));
-  ASSERT_THAT(flag.Parse({"--myflag=abcde/test_target"}), IsOk());
+  ASSERT_THAT(ConsumeFlags({flag}, {"--myflag=abcde/test_target"}), IsOk());
   ASSERT_THAT(value, Optional(DeviceBuildString{.branch_or_id = "abcde",
                                                 .target = "test_target"}));
 }
@@ -148,7 +147,7 @@ TEST(BuildStringGflagsCompatFlagTests, EmptyInputEmptyResultSuccess) {
   std::vector<std::optional<BuildString>> value;
   auto flag = GflagsCompatFlag("myflag", value);
 
-  ASSERT_THAT(flag.Parse({"--myflag="}), IsOk());
+  ASSERT_THAT(ConsumeFlags({flag}, {"--myflag="}), IsOk());
   ASSERT_THAT(value, IsEmpty());
 }
 
@@ -156,13 +155,14 @@ TEST(BuildStringGflagsCompatFlagTests, MultiValueSuccess) {
   std::vector<std::optional<BuildString>> value;
   auto flag = GflagsCompatFlag("myflag", value);
 
-  ASSERT_THAT(flag.Parse({"--myflag=12345,abcde"}), IsOk());
+  ASSERT_THAT(ConsumeFlags({flag}, {"--myflag=12345,abcde"}), IsOk());
   ASSERT_THAT(value, SizeIs(2));
   ASSERT_THAT(value, ElementsAre(DeviceBuildString{.branch_or_id = "12345"},
                                  DeviceBuildString{.branch_or_id = "abcde"}));
 
-  ASSERT_THAT(flag.Parse({"--myflag=12345/test_target,abcde/test_target"}),
-              IsOk());
+  ASSERT_THAT(
+      ConsumeFlags({flag}, {"--myflag=12345/test_target,abcde/test_target"}),
+      IsOk());
   ASSERT_THAT(value, SizeIs(2));
   ASSERT_THAT(
       value,
@@ -175,7 +175,7 @@ TEST(BuildStringGflagsCompatFlagTests, MultiEmptyValueSuccess) {
   std::vector<std::optional<BuildString>> value;
   auto flag = GflagsCompatFlag("myflag", value);
 
-  ASSERT_THAT(flag.Parse({"--myflag=,"}), IsOk());
+  ASSERT_THAT(ConsumeFlags({flag}, {"--myflag=,"}), IsOk());
   ASSERT_THAT(value, SizeIs(2));
   ASSERT_THAT(value, ElementsAre(std::nullopt, std::nullopt));
 }
@@ -184,14 +184,15 @@ TEST(BuildStringGflagsCompatFlagTests, MultiValueMixedWithEmptySuccess) {
   std::vector<std::optional<BuildString>> value;
   auto flag = GflagsCompatFlag("myflag", value);
 
-  ASSERT_THAT(flag.Parse({"--myflag=12345,,abcde"}), IsOk());
+  ASSERT_THAT(ConsumeFlags({flag}, {"--myflag=12345,,abcde"}), IsOk());
   ASSERT_THAT(value, SizeIs(3));
   ASSERT_THAT(value, ElementsAre(DeviceBuildString{.branch_or_id = "12345"},
                                  std::nullopt,
                                  DeviceBuildString{.branch_or_id = "abcde"}));
 
-  ASSERT_THAT(flag.Parse({"--myflag=12345/test_target,,abcde/test_target"}),
-              IsOk());
+  ASSERT_THAT(
+      ConsumeFlags({flag}, {"--myflag=12345/test_target,,abcde/test_target"}),
+      IsOk());
   ASSERT_THAT(value, SizeIs(3));
   ASSERT_THAT(
       value,

@@ -53,14 +53,13 @@ std::vector<CommandHandler> SupService::InitializeCommandHandlers() {
 }
 
 void SupService::InitializeServiceState() {
-  call_forward_infos_ = {
-    CallForwardInfo(CallForwardInfo::Reason::CFU),
-    CallForwardInfo(CallForwardInfo::Reason::CFB),
-    CallForwardInfo(CallForwardInfo::Reason::CFNR),
-    CallForwardInfo(CallForwardInfo::Reason::CFNRC)
-  };
+  call_forward_infos_ = {CallForwardInfo(CallForwardInfo::Reason::CFU),
+                         CallForwardInfo(CallForwardInfo::Reason::CFB),
+                         CallForwardInfo(CallForwardInfo::Reason::CFNR),
+                         CallForwardInfo(CallForwardInfo::Reason::CFNRC)};
 }
 
+// clang-format off
 /**
  * AT+CUSD
  *   This command allows control of the Unstructured Supplementary Service Data (USSD)
@@ -82,10 +81,12 @@ void SupService::InitializeServiceState() {
  *
  * see RIL_REQUEST_SEND_USSD or RIL_REQUEST_CANCEL_USSD in RIL
  */
+// clang-format on
 void SupService::HandleUSSD(const Client& client, std::string& /*command*/) {
   client.SendCommandResponse("OK");
 }
 
+// clang-format off
 /**
  * AT+CLIR
  *   This command refers to CLIR‑service according to 3GPP TS 22.081 that allows
@@ -109,6 +110,7 @@ void SupService::HandleUSSD(const Client& client, std::string& /*command*/) {
  *
  * see RIL_REQUEST_SET_CLIR or RIL_REQUEST_GET_CLIR in RIL
  */
+// clang-format on
 void SupService::HandleCLIR(const Client& client, std::string& command) {
   std::vector<std::string> responses;
   std::stringstream ss;
@@ -125,6 +127,7 @@ void SupService::HandleCLIR(const Client& client, std::string& command) {
   client.SendCommandResponse(responses);
 }
 
+// clang-format off
 /**
  * AT+CLIP
  *   This command refers to the supplementary service CLIP (Calling Line
@@ -146,11 +149,13 @@ void SupService::HandleCLIR(const Client& client, std::string& command) {
  *
  * see RIL_REQUEST_QUERY_CLIP in RIL
  */
+// clang-format on
 void SupService::HandleCLIP(const Client& client) {
   std::vector<std::string> responses = {"+CLIP: 0, 0", "OK"};
   client.SendCommandResponse(responses);
 }
 
+// clang-format off
 /**
  * AT+CSSN
  *   This command refers to supplementary service related network initiated
@@ -171,10 +176,13 @@ void SupService::HandleCLIP(const Client& client) {
  *
  * see RIL_REQUEST_SET_SUPP_SVC_NOTIFICATION in RIL
  */
-void SupService::HandleSuppServiceNotifications(const Client& client, std::string& /*command*/) {
+// clang-format on
+void SupService::HandleSuppServiceNotifications(const Client& client,
+                                                std::string& /*command*/) {
   client.SendCommandResponse("OK");
 }
 
+// clang-format off
 /**
  * AT+CCFCU
  *   The command allows control of the communication forwarding supplementary service
@@ -191,6 +199,7 @@ void SupService::HandleSuppServiceNotifications(const Client& client, std::strin
  *
  * see RIL_REQUEST_SET_CALL_FORWARD or RIL_REQUEST_QUERY_CALL_FORWARD_STATUS in RIL
  */
+// clang-format on
 void SupService::HandleCallForward(const Client& client, std::string& command) {
   std::vector<std::string> responses;
   std::stringstream ss;
@@ -211,8 +220,8 @@ void SupService::HandleCallForward(const Client& client, std::string& command) {
         auto iter = call_forward_infos_.begin();
         for (; iter != call_forward_infos_.end(); ++iter) {
           ss.clear();
-          ss << "+CCFCU: " << iter->status << "," << classx << "," << number_type
-                  << "," << ton << ",\"" << iter->number << "\"";
+          ss << "+CCFCU: " << iter->status << "," << classx << ","
+             << number_type << "," << ton << ",\"" << iter->number << "\"";
           if (iter->reason == CallForwardInfo::Reason::CFNR) {
             ss << ",,," << iter->timeSeconds;
           }
@@ -227,8 +236,8 @@ void SupService::HandleCallForward(const Client& client, std::string& command) {
     case CallForwardInfo::Reason::CFNR:
     case CallForwardInfo::Reason::CFNRC: {
       if (status == CallForwardInfo::CallForwardInfoStatus::INTERROGATE) {
-        ss << "+CCFCU: " << call_forward_infos_[reason].status
-           << "," << classx << "," << number_type << "," << ton << ",\""
+        ss << "+CCFCU: " << call_forward_infos_[reason].status << "," << classx
+           << "," << number_type << "," << ton << ",\""
            << call_forward_infos_[reason].number << "\"";
         if (reason == CallForwardInfo::Reason::CFNR) {
           ss << ",,," << call_forward_infos_[reason].timeSeconds;
@@ -236,11 +245,11 @@ void SupService::HandleCallForward(const Client& client, std::string& command) {
         responses.push_back(ss.str());
       } else {
         if (status == CallForwardInfo::CallForwardInfoStatus::REGISTRATION) {
-          call_forward_infos_[reason].status
-                = CallForwardInfo::CallForwardInfoStatus::ENABLE;
+          call_forward_infos_[reason].status =
+              CallForwardInfo::CallForwardInfoStatus::ENABLE;
         } else {
           call_forward_infos_[reason].status =
-                (CallForwardInfo::CallForwardInfoStatus)status;
+              (CallForwardInfo::CallForwardInfoStatus)status;
         }
         call_forward_infos_[reason].number_type = number_type;
         call_forward_infos_[reason].ton = ton;
@@ -250,7 +259,8 @@ void SupService::HandleCallForward(const Client& client, std::string& command) {
           cmd.SkipComma();
           cmd.SkipComma();
           int timeSeconds = cmd.GetNextInt();
-          call_forward_infos_[reason].timeSeconds = timeSeconds >= 0 ? timeSeconds : 0;
+          call_forward_infos_[reason].timeSeconds =
+              timeSeconds >= 0 ? timeSeconds : 0;
         }
       }
       break;
@@ -264,6 +274,7 @@ void SupService::HandleCallForward(const Client& client, std::string& command) {
   client.SendCommandResponse(responses);
 }
 
+// clang-format off
 /**
  * AT+CCWA
  *   This command allows control of the supplementary service Call Waiting
@@ -290,6 +301,7 @@ void SupService::HandleCallForward(const Client& client, std::string& command) {
  *
  * see RIL_REQUEST_QUERY_CALL_WAITING and RIL_REQUEST_SET_CALL_WAITING in RIL
  */
+// clang-format on
 void SupService::HandleCallWaiting(const Client& client, std::string& command) {
   std::vector<std::string> responses;
   std::stringstream ss;

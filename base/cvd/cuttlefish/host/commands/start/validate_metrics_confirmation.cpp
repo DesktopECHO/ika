@@ -17,12 +17,23 @@
 
 #include <iostream>
 #include <string>
+#include <string_view>
 
 #include <android-base/macros.h>
 
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
+#include "cuttlefish/host/libs/metrics/notification.h"
 
 namespace cuttlefish {
+namespace {
+
+constexpr std::string_view kFirstAnswerPrompt =
+    "Automatically send diagnostic information to Google from this Android "
+    "Virtual Device. (Y/n)?:";
+constexpr std::string_view kMustAnswerPrompt =
+    "Must accept/reject anonymous usage statistics reporting. ";
+
+}  // namespace
 
 std::string ValidateMetricsConfirmation(std::string use_metrics) {
   if (use_metrics.empty()) {
@@ -38,53 +49,26 @@ std::string ValidateMetricsConfirmation(std::string use_metrics) {
     }
   }
 
-  std::cout << "==============================================================="
-               "====\n";
-  std::cout << "NOTICE:\n\n";
-  std::cout << "By using this Android Virtual Device, you agree to\n";
-  std::cout << "Google Terms of Service (https://policies.google.com/terms).\n";
-  std::cout
-      << "The Google Privacy Policy (https://policies.google.com/privacy)\n";
-  std::cout
-      << "describes how Google handles information generated as you use\n";
-  std::cout << "Google Services.";
   char ch = !use_metrics.empty() ? tolower(use_metrics.at(0)) : -1;
   if (ch != 'n') {
     if (use_metrics.empty()) {
-      std::cout << "\n========================================================="
-                   "==========\n";
-      std::cout << "Automatically send diagnostic information to Google, such "
-                   "as crash\n";
-      std::cout << "reports and usage data from this Android Virtual Device. "
-                   "You can\n";
-      std::cout << "adjust this permission at any time by running\n";
-      std::cout << "\"launch_cvd -report_anonymous_usage_stats=n\". (Y/n)?:";
-    } else {
-      std::cout << " You can adjust the permission for sending\n";
-      std::cout << "diagnostic information to Google, such as crash reports "
-                   "and usage\n";
-      std::cout
-          << "data from this Android Virtual Device, at any time by running\n";
-      std::cout << "\"launch_cvd -report_anonymous_usage_stats=n\"\n";
-      std::cout << "==========================================================="
-                   "========\n\n";
+      std::cout << kFirstAnswerPrompt;
     }
-  } else {
-    std::cout << "\n==========================================================="
-                 "========\n\n";
   }
-  for (;;) {
+  std::string result;
+  while (result.empty()) {
     switch (ch) {
       case 0:
       case '\r':
       case '\n':
       case 'y':
-        return "y";
+        result = "y";
+        break;
       case 'n':
-        return "n";
+        result = "n";
+        break;
       default:
-        std::cout << "Must accept/reject anonymous usage statistics reporting "
-                     "(Y/n): ";
+        std::cout << kMustAnswerPrompt << kFirstAnswerPrompt;
         FALLTHROUGH_INTENDED;
       case -1:
         std::cin.get(ch);
@@ -96,7 +80,8 @@ std::string ValidateMetricsConfirmation(std::string use_metrics) {
         ch = tolower(ch);
     }
   }
-  return "";
+  DisplayAdjustmentNoticeOnce();
+  return result;
 }
 
 }  // namespace cuttlefish

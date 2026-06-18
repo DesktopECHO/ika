@@ -110,17 +110,28 @@ Result<std::string> SystemWideUserHome() {
       return CF_ERRNO("Failed to find the home directory using " << uid);
     }
   }
-  std::string home_realpath;
-  if (!android::base::Realpath(home_dir, &home_realpath)) {
-    return CF_ERRNO("Failed to convert " << home_dir << " to its Realpath");
-  }
-  return home_realpath;
+  return home_dir;
 }
 
 Result<std::string> CurrentUserName() {
-  char buf[LOGIN_NAME_MAX + 1];
-  CF_EXPECT(getlogin_r(buf, sizeof(buf)) == 0, strerror(errno));
-  return std::string(buf);
+  uid_t uid = getuid();
+  struct passwd pwd;
+  struct passwd* result;
+  long val = sysconf(_SC_GETPW_R_SIZE_MAX);
+  size_t bufsize = (val == -1) ? 16384 : val;
+  std::vector<char> buffer(bufsize);
+  int s = getpwuid_r(uid, &pwd, buffer.data(), buffer.size(), &result);
+  CF_EXPECT(s == 0, "getpwuid_r failed: " << strerror(s));
+  CF_EXPECT(result != nullptr, "User not found for uid " << uid);
+  return std::string(pwd.pw_name);
+}
+
+bool IsKvmAccessible() {
+#ifdef __linux__
+  return access("/dev/kvm", R_OK | W_OK) == 0 || InGroup("kvm");
+#else
+  return false;
+#endif
 }
 
 } // namespace cuttlefish

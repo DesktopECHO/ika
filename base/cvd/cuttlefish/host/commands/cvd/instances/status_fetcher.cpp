@@ -16,6 +16,7 @@
 
 #include "cuttlefish/host/commands/cvd/instances/status_fetcher.h"
 
+#include <algorithm>
 #include <cctype>
 #include <string>
 #include <string_view>
@@ -31,6 +32,7 @@
 #include "cuttlefish/common/libs/utils/json.h"
 #include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
+#include "cuttlefish/common/libs/utils/gflags_xml_parser.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/host_tool_target.h"
 #include "cuttlefish/host/commands/cvd/cli/utils.h"
 #include "cuttlefish/host/commands/cvd/instances/cvd_persistent_data.pb.h"
@@ -79,19 +81,19 @@ std::string HumanFriendlyStateName(cvd::InstanceState state) {
 // instance is not running.
 void OverrideInstanceJson(const LocalInstance& instance,
                           Json::Value& instance_json) {
-  instance_json["instance_name"] = instance.name();
-  instance_json["status"] = HumanFriendlyStateName(instance.state());
-  instance_json["assembly_dir"] = instance.assembly_dir();
-  instance_json["instance_dir"] = instance.instance_dir();
-  instance_json["instance_name"] = instance.name();
+  instance_json["instance_name"] = instance.Name();
+  instance_json["status"] = HumanFriendlyStateName(instance.State());
+  instance_json["assembly_dir"] = instance.AssemblyDirectory();
+  instance_json["instance_dir"] = instance.InstanceDirectory();
+  instance_json["instance_name"] = instance.Name();
   if (instance.IsActive()) {
     // Only running instances have id > 0, these values only make sense for
     // running instances.
     instance_json["web_access"] =
         fmt::format("https://localhost:1443/devices/{}/files/client.html",
-                    instance.webrtc_device_id());
-    instance_json["webrtc_device_id"] = instance.webrtc_device_id();
-    instance_json["adb_port"] = instance.adb_port();
+                    instance.WebRtcDeviceId());
+    instance_json["webrtc_device_id"] = instance.WebRtcDeviceId();
+    instance_json["adb_port"] = instance.AdbPort();
   }
 }
 
@@ -106,31 +108,31 @@ Result<Json::Value> FetchInstanceStatus(LocalInstance& instance,
   // Only running instances are capable of responding to status requests. An
   // unreachable instance is also considered running, it just didnt't reply last
   // time.
-  if (instance.state() != cvd::INSTANCE_STATE_RUNNING &&
-      instance.state() != cvd::INSTANCE_STATE_UNREACHABLE) {
+  if (instance.State() != cvd::INSTANCE_STATE_RUNNING &&
+      instance.State() != cvd::INSTANCE_STATE_UNREACHABLE) {
     Json::Value instance_json;
-    instance_json["instance_name"] = instance.name();
-    instance_json["status"] = HumanFriendlyStateName(instance.state());
+    instance_json["instance_name"] = instance.Name();
+    instance_json["status"] = HumanFriendlyStateName(instance.State());
     OverrideInstanceJson(instance, instance_json);
     return instance_json;
   }
 
   const auto working_dir = CurrentDirectory();
 
-  auto android_host_out = instance.host_artifacts_path();
-  auto home = instance.home_directory();
+  auto android_host_out = instance.HostArtifactsPath();
+  auto home = instance.HomeDirectory();
   auto bin = CF_EXPECT(GetBin(android_host_out));
   auto bin_path = fmt::format("{}/bin/{}", android_host_out, bin);
 
   cvd_common::Envs envs;
   envs["HOME"] = home;
   // old cvd_internal_status expects CUTTLEFISH_INSTANCE=<k>
-  envs[kCuttlefishInstanceEnvVarName] = std::to_string(instance.id());
+  envs[kCuttlefishInstanceEnvVarName] = std::to_string(instance.Id());
 
   ConstructCommandParam help_cmd_param{
       .bin_path = bin_path,
       .home = home,
-      .args = {"--help"},
+      .args = {"--helpxml"},
       .envs = envs,
       .working_dir = working_dir,
       .command_name = bin,
@@ -140,8 +142,11 @@ Result<Json::Value> FetchInstanceStatus(LocalInstance& instance,
   std::string stdout_str, stderr_str;
   RunWithManagedStdio(std::move(help_cmd), nullptr, &stdout_str, &stderr_str);
 
-  bool has_print = stdout_str.find("--print") != std::string::npos ||
-                   stderr_str.find("--print") != std::string::npos;
+  std::vector<GflagDescription> internal_flags =
+      CF_EXPECT(ParseGflagsXmlHelp(stdout_str));
+  bool has_print = std::any_of(
+      internal_flags.begin(), internal_flags.end(),
+      [](const GflagDescription& desc) { return desc.name == "print"; });
 
   std::vector<std::string> args{"--wait_for_launcher",
                                 std::to_string(timeout.count())};
@@ -186,7 +191,7 @@ Result<Json::Value> FetchInstanceStatus(LocalInstance& instance,
 
   if (res != 0) {
     LOG(ERROR) << "Status tool exited with code " << res;
-    instance.set_state(cvd::INSTANCE_STATE_UNREACHABLE);
+    instance.SetState(cvd::INSTANCE_STATE_UNREACHABLE);
     instance_status_json["warning"] = "cvd status failed";
   }
   OverrideInstanceJson(instance, instance_status_json);

@@ -15,13 +15,12 @@
 
 #pragma once
 
-#include <json/json.h>
+#include "json/json.h"
 
 namespace cuttlefish {
 
 // Holds the configuration of modem simulator.
 class NvramConfig {
-
  public:
   static void InitNvramConfigService(size_t num_instances, int sim_type);
   static const NvramConfig* Get();
@@ -46,7 +45,7 @@ class NvramConfig {
 
   // A view into an existing modem simulator object for a particular instance.
   class InstanceSpecific {
-  public:
+   public:
     int network_selection_mode() const;
     void set_network_selection_mode(int mode);
 

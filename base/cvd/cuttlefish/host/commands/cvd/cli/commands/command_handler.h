@@ -17,9 +17,10 @@
 #pragma once
 
 #include <string>
-#include <vector>
 
+#include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
+#include "cuttlefish/host/commands/cvd/cli/help_format.h"
 #include "cuttlefish/host/commands/cvd/cli/types.h"
 #include "cuttlefish/result/result.h"
 
@@ -29,15 +30,17 @@ class CvdCommandHandler {
  public:
   virtual ~CvdCommandHandler() = default;
 
-  virtual Result<bool> CanHandle(const CommandRequest&) const;
   virtual Result<void> Handle(const CommandRequest&) = 0;
   // returns the list of subcommand it can handle
   virtual cvd_common::Args CmdList() const = 0;
   // used for command help text
-  virtual Result<std::string> SummaryHelp() const = 0;
+  virtual std::string SummaryHelp() const = 0;
   virtual bool RequiresDeviceExists() const;
-  virtual bool ShouldInterceptHelp() const = 0;
-  virtual Result<std::string> DetailedHelp(std::vector<std::string>&) const = 0;
+  virtual Result<std::string> DetailedHelp(const CommandRequest&);
+  virtual std::vector<HelpParagraph> Description() const;
+  virtual Result<std::vector<Flag>> Flags(const CommandRequest&);
+
+  virtual bool RequiresHostConfiguration() const { return true; }
 };
 
 }  // namespace cuttlefish

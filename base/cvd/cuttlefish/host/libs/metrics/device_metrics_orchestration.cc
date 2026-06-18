@@ -20,24 +20,29 @@
 #include <string_view>
 #include <vector>
 
-#include <fmt/format.h>
 #include "absl/log/log.h"
 #include "absl/strings/str_split.h"
+#include "fmt/format.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/tee_logging.h"
 #include "cuttlefish/host/commands/cvd/instances/local_instance.h"
 #include "cuttlefish/host/commands/cvd/instances/local_instance_group.h"
 #include "cuttlefish/host/libs/metrics/device_event_type.h"
-#include "cuttlefish/host/libs/metrics/enabled.h"
 #include "cuttlefish/host/libs/metrics/guest_metrics.h"
 #include "cuttlefish/host/libs/metrics/metrics_conversion.h"
 #include "cuttlefish/host/libs/metrics/metrics_orchestration.h"
+#include "cuttlefish/host/libs/metrics/notification.h"
 #include "cuttlefish/host/libs/metrics/parsed_flags.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
 namespace {
+
+struct DeviceMetricsInput {
+  MetricsInput base_input;
+  Guests guests;
+};
 
 std::vector<GuestInfo> GetGuestInfos(
     const std::string& group_product_out,
@@ -49,7 +54,7 @@ std::vector<GuestInfo> GetGuestInfos(
       absl::StrSplit(group_product_out, ',');
   for (int i = 0; i < instances.size(); i++) {
     auto guest = GuestInfo{
-        .instance_id = instances[i].id(),
+        .instance_id = instances[i].Id(),
     };
     if (product_out_paths.size() > i) {
       guest.product_out = product_out_paths[i];
@@ -61,11 +66,14 @@ std::vector<GuestInfo> GetGuestInfos(
   return result;
 }
 
-Result<MetricsInput> GetInstanceGroupMetricsInput(
+Result<DeviceMetricsInput> GetDeviceMetricsInput(
     const LocalInstanceGroup& instance_group,
     const DeviceEventType event_type) {
-  return MetricsInput{
-      .metrics_directory = instance_group.MetricsDir(),
+  return DeviceMetricsInput{
+      .base_input =
+          MetricsInput{
+              .metrics_directory = instance_group.MetricsDir(),
+          },
       .guests =
           Guests{
               .host_artifacts = instance_group.HostArtifactsPath(),
@@ -77,30 +85,40 @@ Result<MetricsInput> GetInstanceGroupMetricsInput(
   };
 }
 
-Result<void> RunMetrics(const MetricsInput& metrics_input) {
-  ScopedLogger logger = CreateLogger(metrics_input.metrics_directory);
-  CF_EXPECTF(FileExists(metrics_input.metrics_directory),
+Result<MetricsData> GatherDeviceMetrics(
+    const DeviceMetricsInput& device_metrics_input) {
+  MetricsData metrics_data =
+      CF_EXPECT(GatherMetrics(device_metrics_input.base_input));
+  metrics_data.guest_metrics =
+      CF_EXPECT(GetGuestMetrics(device_metrics_input.guests));
+  return metrics_data;
+}
+
+Result<void> RunMetrics(const DeviceMetricsInput& metrics_input) {
+  ScopedLogger logger =
+      CreateLogger(metrics_input.base_input.metrics_directory);
+  CF_EXPECTF(FileExists(metrics_input.base_input.metrics_directory),
              "Metrics directory({}) does not exist.  Perhaps metrics were not "
              "initialized?",
-             metrics_input.metrics_directory);
-  CF_EXPECT(metrics_input.guests.has_value(),
-            "Guest information not populated for device metrics event, cannot "
-            "gather metrics data.");
+             metrics_input.base_input.metrics_directory);
 
-  const MetricsData metrics_data = CF_EXPECTF(
-      GatherMetrics(metrics_input), "Failed to gather all metrics data for {}.",
-      DeviceEventTypeString(metrics_input.guests->event_type));
-  CF_EXPECTF(OutputMetrics(metrics_input.guests->event_type,
-                           metrics_input.metrics_directory, metrics_data),
-             "Failed to output metrics for {}.",
-             DeviceEventTypeString(metrics_input.guests->event_type));
+  const std::string event_type_label =
+      DeviceEventTypeString(metrics_input.guests.event_type);
+  const MetricsData metrics_data =
+      CF_EXPECTF(GatherDeviceMetrics(metrics_input),
+                 "Failed to gather all metrics data for {}.", event_type_label);
+  CF_EXPECTF(
+      OutputMetrics(event_type_label,
+                    metrics_input.base_input.metrics_directory, metrics_data),
+      "Failed to output metrics for {}.", event_type_label);
   return {};
 }
 
 }  // namespace
 
 void GatherVmInstantiationMetrics(const LocalInstanceGroup& instance_group) {
-  Result<MetricsInput> metrics_input_result = GetInstanceGroupMetricsInput(
+  DisplayPrivacyNotice();
+  Result<DeviceMetricsInput> metrics_input_result = GetDeviceMetricsInput(
       instance_group, DeviceEventType::DeviceInstantiation);
   if (!metrics_input_result.ok()) {
     VLOG(0) << fmt::format("Failed to initialize metrics.  Error: {}",
@@ -108,16 +126,11 @@ void GatherVmInstantiationMetrics(const LocalInstanceGroup& instance_group) {
     return;
   }
   Result<void> metrics_setup_result =
-      SetUpMetrics(metrics_input_result->metrics_directory);
+      SetUpMetrics(metrics_input_result->base_input.metrics_directory);
   if (!metrics_setup_result.ok()) {
     VLOG(0) << fmt::format("Failed to initialize metrics.  Error: {}",
                            metrics_setup_result.error());
     return;
-  }
-  if (AreMetricsEnabled()) {
-    LOG(INFO) << "This will automatically send diagnostic information to "
-                 "Google, such as crash reports and usage data from the host "
-                 "machine managing the Android Virtual Device.";
   }
   Result<void> run_metrics_result = RunMetrics(*metrics_input_result);
   if (!run_metrics_result.ok()) {
@@ -129,8 +142,8 @@ void GatherVmInstantiationMetrics(const LocalInstanceGroup& instance_group) {
 }
 
 void GatherVmStartMetrics(const LocalInstanceGroup& instance_group) {
-  Result<MetricsInput> metrics_input_result = GetInstanceGroupMetricsInput(
-      instance_group, DeviceEventType::DeviceBootStart);
+  Result<DeviceMetricsInput> metrics_input_result =
+      GetDeviceMetricsInput(instance_group, DeviceEventType::DeviceBootStart);
   if (!metrics_input_result.ok()) {
     VLOG(0) << fmt::format("Failed to initialize metrics.  Error: {}",
                            metrics_input_result.error());
@@ -146,7 +159,7 @@ void GatherVmStartMetrics(const LocalInstanceGroup& instance_group) {
 }
 
 void GatherVmBootCompleteMetrics(const LocalInstanceGroup& instance_group) {
-  Result<MetricsInput> metrics_input_result = GetInstanceGroupMetricsInput(
+  Result<DeviceMetricsInput> metrics_input_result = GetDeviceMetricsInput(
       instance_group, DeviceEventType::DeviceBootComplete);
   if (!metrics_input_result.ok()) {
     VLOG(0) << fmt::format("Failed to initialize metrics.  Error: {}",
@@ -163,8 +176,8 @@ void GatherVmBootCompleteMetrics(const LocalInstanceGroup& instance_group) {
 }
 
 void GatherVmBootFailedMetrics(const LocalInstanceGroup& instance_group) {
-  Result<MetricsInput> metrics_input_result = GetInstanceGroupMetricsInput(
-      instance_group, DeviceEventType::DeviceBootFailed);
+  Result<DeviceMetricsInput> metrics_input_result =
+      GetDeviceMetricsInput(instance_group, DeviceEventType::DeviceBootFailed);
   if (!metrics_input_result.ok()) {
     VLOG(0) << fmt::format("Failed to initialize metrics.  Error: {}",
                            metrics_input_result.error());
@@ -180,8 +193,8 @@ void GatherVmBootFailedMetrics(const LocalInstanceGroup& instance_group) {
 }
 
 void GatherVmStopMetrics(const LocalInstanceGroup& instance_group) {
-  Result<MetricsInput> metrics_input_result =
-      GetInstanceGroupMetricsInput(instance_group, DeviceEventType::DeviceStop);
+  Result<DeviceMetricsInput> metrics_input_result =
+      GetDeviceMetricsInput(instance_group, DeviceEventType::DeviceStop);
   if (!metrics_input_result.ok()) {
     VLOG(0) << fmt::format("Failed to initialize metrics.  Error: {}",
                            metrics_input_result.error());

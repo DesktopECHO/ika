@@ -43,6 +43,7 @@ cf_cc_library(
     deps = [
         "//cuttlefish/host/commands/cvd/cli/parser:cf_configs_common",
         "//cuttlefish/host/commands/cvd/cli/parser:load_config_cc_proto",
+        "//cuttlefish/host/libs/config:data_image_policy",
     ],
 )
 
@@ -50,6 +51,7 @@ cf_cc_library(
     name = "cf_graphics_configs",
     srcs = ["cf_graphics_configs.cpp"],
     hdrs = ["cf_graphics_configs.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:base64",
         "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
@@ -59,6 +61,17 @@ cf_cc_library(
         "//cuttlefish/result",
         "//libbase",
         "@protobuf",
+    ],
+)
+
+cf_cc_library(
+    name = "cf_media_configs",
+    srcs = ["cf_media_configs.cpp"],
+    hdrs = ["cf_media_configs.h"],
+    deps = [
+        "//cuttlefish/host/commands/cvd/cli/parser:cf_configs_common",
+        "//cuttlefish/host/commands/cvd/cli/parser:load_config_cc_proto",
+        "//cuttlefish/result",
     ],
 )
 
@@ -112,10 +125,11 @@ cf_cc_test(
 cf_cc_test(
     name = "graphics_configs_test",
     srcs = ["graphics_configs_test.cc"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:base64",
-        "//cuttlefish/common/libs/utils:flag_parser",
         "//cuttlefish/common/libs/utils:json",
+        "//cuttlefish/flag_parser",
         "//cuttlefish/host/commands/assemble_cvd:launch_cvd_cc_proto",
         "//cuttlefish/host/commands/cvd/cli/parser:test_common",
         "//cuttlefish/result:result_matchers",
@@ -128,6 +142,7 @@ cf_cc_test(
 cf_cc_test(
     name = "vm_configs_test",
     srcs = ["vm_configs_test.cc"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:json",
         "//cuttlefish/host/commands/cvd/cli/parser:test_common",

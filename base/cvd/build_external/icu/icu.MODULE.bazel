@@ -1,3 +1,10 @@
+single_version_override(
+    module_name = "icu",
+    version = "76.1.bcr.1",
+    patch_strip = 1,
+    patches = ["@//build_external/icu:icu_dat_integrity.patch"],
+)
+
 new_local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
 
 new_local_repository(

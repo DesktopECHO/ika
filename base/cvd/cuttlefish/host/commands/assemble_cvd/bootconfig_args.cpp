@@ -33,6 +33,7 @@
 #include "cuttlefish/host/libs/vm_manager/crosvm_manager.h"
 #include "cuttlefish/host/libs/vm_manager/qemu_manager.h"
 #include "cuttlefish/host/libs/vm_manager/vm_manager.h"
+#include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
 
@@ -77,6 +78,10 @@ static constexpr std::string_view kLegacyBoardBootconfigKeysSdvCore[] = {
     "androidboot.sdv.telemetry.enabled:",
 };
 
+static constexpr std::string_view kLegacyBoardBootconfigKeysDesktop[] = {
+    "androidboot.vendor.apex.com.android.hardware.radio.desktop",
+};
+
 template <typename T>
 void AppendMapWithReplacement(T* destination, const T& source) {
   for (const auto& [k, v] : source) {
@@ -109,7 +114,7 @@ Result<std::unordered_map<std::string, std::string>> ConsoleBootconfig(
 
 }  // namespace
 
-// Bootconfig args should be added to the launcher and no longer via the build
+// Bootconfing args should be added to the launcher and no longer via the build
 // system variable `BOARD_BOOTCONFIG`. Allow legacy keys for backward
 // compatibility.
 Result<void> ValidateBoardBootconfigKeys(
@@ -126,6 +131,10 @@ Result<void> ValidateBoardBootconfigKeys(
     allowed_args.insert(allowed_args.end(),
                         std::begin(kLegacyBoardBootconfigKeysMinidroid),
                         std::end(kLegacyBoardBootconfigKeysMinidroid));
+  } else if (type == cuttlefish::DeviceType::Desktop) {
+    allowed_args.insert(allowed_args.end(),
+                        std::begin(kLegacyBoardBootconfigKeysDesktop),
+                        std::end(kLegacyBoardBootconfigKeysDesktop));
   } else if (type == cuttlefish::DeviceType::Unknown) {
     // Sdv core targets don't define device type yet.
     allowed_args.insert(allowed_args.end(),
@@ -305,7 +314,7 @@ Result<std::unordered_map<std::string, std::string>> BootconfigArgsFromConfig(
               ? "com.android.hardware.graphics.composer.drm_hwcomposer"
               : "com.android.hardware.graphics.composer.ranchu";
 
-  if (instance.enable_vhal_proxy_server()) {
+  if (instance.vhal_proxy_server_port()) {
     bootconfig_args["androidboot.vhal_proxy_server_port"] =
         std::to_string(instance.vhal_proxy_server_port());
     int32_t instance_id;

@@ -17,10 +17,12 @@
 
 #include <stddef.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "cuttlefish/common/libs/fs/shared_fd.h"
+#include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/config/known_paths.h"
@@ -31,16 +33,20 @@ constexpr const size_t kBufferSize = 1024;
 
 namespace cuttlefish {
 
-Result<MonitorCommand> NfcConnector(
+Result<std::optional<MonitorCommand>> NfcConnector(
+    const CuttlefishConfig& config,
     const CuttlefishConfig::EnvironmentSpecific& environment,
     const CuttlefishConfig::InstanceSpecific& instance) {
+  if (!config.enable_host_nfc_connector()) {
+    return {};
+  }
   std::vector<std::string> fifo_paths = {
       instance.PerInstanceInternalPath("nfc_fifo_vm.in"),
       instance.PerInstanceInternalPath("nfc_fifo_vm.out"),
   };
   std::vector<SharedFD> fifos;
   for (const auto& path : fifo_paths) {
-    fifos.emplace_back(CF_EXPECT(SharedFD::Fifo(path, 0660)));
+    fifos.emplace_back(CF_EXPECT(CreateOrReuseAndDrainFifo(path, 0660)));
   }
   return Command(TcpConnectorBinary())
       .AddParameter("-fifo_out=", fifos[0])

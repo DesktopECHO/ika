@@ -17,8 +17,10 @@
 
 #include "absl/log/log.h"
 
-#include "cuttlefish/common/libs/utils/flag_parser.h"
+#include "cuttlefish/flag_parser/flag.h"
+#include "cuttlefish/flag_parser/gflags_compat.h"
 #include "cuttlefish/host/libs/config/media.h"
+#include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
 namespace {
@@ -70,8 +72,9 @@ class MediaConfigsFlagImpl : public MediaConfigsFlag {
   }
 
   bool WriteGflagsCompatHelpXml(std::ostream& out) const override {
-    Flag media_flag = GflagsCompatFlag(kMediaFlag).Help(kMediaHelp);
-    return WriteGflagsCompatXml({media_flag}, out);
+    Flag media_flag = Flag::StringFlag(kMediaFlag).Help(kMediaHelp);
+    WriteGflagsCompatXml({media_flag}, out);
+    return true;
   }
 
  private:
@@ -93,7 +96,7 @@ namespace {
 
 class MediaConfigsFragmentImpl : public MediaConfigsFragment {
  public:
-  INJECT(MediaConfigsFragmentImpl(MediaConfigs& configs))
+   INJECT(MediaConfigsFragmentImpl(MediaConfigs& configs))
       : configs_(configs) {}
 
   std::string Name() const override { return "MediaConfigsFragmentImpl"; }
@@ -103,6 +106,7 @@ class MediaConfigsFragmentImpl : public MediaConfigsFragment {
     for (const auto& config : configs_.GetConfigs()) {
       Json::Value json(Json::objectValue);
       json[kType] = static_cast<int>(config.type);
+      json[kLensFacing] = config.lens_facing;
       configs_json.append(json);
     }
     return configs_json;
@@ -121,6 +125,9 @@ class MediaConfigsFragmentImpl : public MediaConfigsFragment {
       CuttlefishConfig::MediaConfig config = {};
       config.type =
           static_cast<CuttlefishConfig::MediaType>(json[kType].asInt());
+      if (json.isMember(kLensFacing)) {
+        config.lens_facing = json[kLensFacing].asString();
+      }
       configs.emplace_back(config);
     }
 
@@ -131,6 +138,7 @@ class MediaConfigsFragmentImpl : public MediaConfigsFragment {
  private:
   static constexpr char kMediaConfigs[] = "media_configs";
   static constexpr char kType[] = "type";
+  static constexpr char kLensFacing[] = "lens_facing";
   MediaConfigs& configs_;
 };
 

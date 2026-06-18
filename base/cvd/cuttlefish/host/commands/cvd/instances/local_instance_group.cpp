@@ -16,6 +16,9 @@
 
 #include "cuttlefish/host/commands/cvd/instances/local_instance_group.h"
 
+#include <android-base/file.h>
+#include <json/json.h>
+
 #include <algorithm>
 #include <functional>
 #include <iterator>
@@ -24,13 +27,11 @@
 #include <utility>
 #include <vector>
 
-#include <android-base/file.h>
 #include "absl/strings/str_join.h"
-#include <json/json.h>
-
 #include "cuttlefish/host/commands/cvd/instances/instance_database_types.h"
 #include "cuttlefish/host/commands/cvd/instances/local_instance.h"
 #include "cuttlefish/host/commands/cvd/utils/common.h"
+#include "cuttlefish/host/libs/log_names/log_names.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -131,8 +132,7 @@ Result<LocalInstanceGroup> LocalInstanceGroup::Builder::Build() {
     product_out_paths.emplace_back(ProductDirFromBase(base_dir_, i));
   }
 
-  group_proto_.set_product_out_path(
-      absl::StrJoin(product_out_paths, ","));
+  group_proto_.set_product_out_path(absl::StrJoin(product_out_paths, ","));
   return CF_EXPECT(LocalInstanceGroup::Create(group_proto_));
 }
 
@@ -147,7 +147,7 @@ bool LocalInstanceGroup::HasActiveInstances() const {
 
 void LocalInstanceGroup::SetAllStates(cvd::InstanceState state) {
   for (auto& instance : Instances()) {
-    instance.set_state(state);
+    instance.SetState(state);
   }
 }
 
@@ -169,7 +169,7 @@ LocalInstanceGroup::LocalInstanceGroup(const cvd::InstanceGroup& group_proto)
 Result<LocalInstance> LocalInstanceGroup::FindInstanceById(
     const unsigned id) const {
   for (const auto& instance : instances_) {
-    if (instance.id() == id) {
+    if (instance.Id() == id) {
       return instance;
     }
   }
@@ -179,7 +179,7 @@ Result<LocalInstance> LocalInstanceGroup::FindInstanceById(
 std::vector<LocalInstance> LocalInstanceGroup::FindByInstanceName(
     const std::string& instance_name) const {
   return Filter(Instances(), [instance_name](const LocalInstance& instance) {
-    return instance.name() == instance_name;
+    return instance.Name() == instance_name;
   });
 }
 
@@ -202,6 +202,15 @@ std::string LocalInstanceGroup::ProductDir(int instance_index) const {
 std::string LocalInstanceGroup::BaseDir() const {
   // The base directory is always the parent of the home directory
   return android::base::Dirname(HomeDir());
+}
+
+std::vector<std::string> LocalInstanceGroup::LogsFilenames() const {
+  return {
+      AssemblyDir() + "/" + kLogNameAssembleCvd,
+      AssemblyDir() + "/cuttlefish_config.json",
+      ArtifactsDir() + "/" + kLogNameFetch,
+      MetricsDir() + "/" + kLogNameMetrics,
+  };
 }
 
 Result<Json::Value> LocalInstanceGroup::FetchStatus(

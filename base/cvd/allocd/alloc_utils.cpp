@@ -28,6 +28,7 @@
 #include "absl/strings/str_format.h"
 
 #include "allocd/alloc_driver.h"
+#include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/commands/cvd/utils/common.h"
 #include "cuttlefish/result/result.h"
@@ -51,6 +52,15 @@ static std::string FindDnsmasq() {
 }
 
 static const std::string kDnsmasq = FindDnsmasq();
+
+Result<std::string> SearchForNft() {
+  cuttlefish::Result<std::string> nft_path =
+      cuttlefish::Search(cuttlefish::Path(), "nft");
+  if (nft_path.ok()) {
+    return *nft_path;
+  }
+  return cuttlefish::Search({"/usr/sbin", "/sbin"}, "nft");
+}
 
 // Read upstream DNS servers from the host. Prefers
 // /run/systemd/resolve/resolv.conf (real upstreams written by systemd-resolved)
@@ -123,6 +133,12 @@ bool CreateEthernetIface(std::string_view name, std::string_view bridge_name) {
   }
 
   return true;
+}
+
+Result<std::string> NftPath() {
+  static const std::string nft_path = SearchForNft().value_or("");
+  CF_EXPECT(!nft_path.empty(), "could not find nft");
+  return nft_path;
 }
 
 std::string MobileGatewayName(std::string_view ipaddr, uint16_t id) {

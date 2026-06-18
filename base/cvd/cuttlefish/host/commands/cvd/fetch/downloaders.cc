@@ -25,7 +25,6 @@
 #include "cuttlefish/host/commands/cvd/fetch/build_api_flags.h"
 #include "cuttlefish/host/commands/cvd/fetch/fetch_cvd_parser.h"
 #include "cuttlefish/host/libs/web/android_build_api.h"
-#include "cuttlefish/host/libs/web/android_build_api_key.h"
 #include "cuttlefish/host/libs/web/android_build_url.h"
 #include "cuttlefish/host/libs/web/build_api.h"
 #include "cuttlefish/host/libs/web/caching_build_api.h"
@@ -62,8 +61,7 @@ Result<Downloaders> Downloaders::Create(const BuildApiFlags& flags,
                                         const std::string& cache_base_path) {
   std::unique_ptr<Downloaders::Impl> impl(new Downloaders::Impl());
 
-  const bool use_logging_debug_function = true;
-  impl->curl_ = CurlHttpClient(use_logging_debug_function);
+  impl->curl_ = CurlHttpClient(/*use_logging_debug_function=*/true);
   impl->retrying_http_client_ = RetryingServerErrorHttpClient(
       *impl->curl_, 10, std::chrono::milliseconds(5000));
 
@@ -74,14 +72,11 @@ Result<Downloaders> Downloaders::Create(const BuildApiFlags& flags,
   Result<std::unique_ptr<CredentialSource>> cvd_creds =
       CredentialForScopes(*impl->curl_, scopes);
 
-  std::string oauth_filepath =
-      StringFromEnv("HOME", ".") + "/.acloud_oauth2.dat";
-
   impl->android_creds_ =
       cvd_creds.ok() && cvd_creds->get()
           ? std::move(*cvd_creds)
-          : CF_EXPECT(GetCredentialSourceFromFlags(*impl->retrying_http_client_,
-                                                   flags, oauth_filepath));
+          : CF_EXPECT(GetCredentialSourceFromFlags(
+                *impl->retrying_http_client_, flags, GetAcloudOauthFilepath()));
 
   impl->android_build_url_ = std::make_unique<AndroidBuildUrl>(
       flags.api_base_url, flags.api_key, flags.project_id);
@@ -94,9 +89,9 @@ Result<Downloaders> Downloaders::Create(const BuildApiFlags& flags,
   }
 
   impl->android_build_api_ = std::make_unique<AndroidBuildApi>(
-      *impl->retrying_http_client_, impl->android_creds_.get(),
-      GetCatchallApiKey(), impl->android_build_url_.get(),
-      flags.wait_retry_period, impl->cas_downloader_.get());
+      *impl->retrying_http_client_, *impl->android_build_url_,
+      impl->android_creds_.get(), flags.wait_retry_period,
+      impl->cas_downloader_.get());
 
   if (flags.enable_caching && CanCache(target_directory, cache_base_path)) {
     impl->caching_build_api_ = std::make_unique<CachingBuildApi>(

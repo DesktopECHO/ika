@@ -8,6 +8,26 @@ package(
 )
 
 cf_cc_library(
+    name = "auto_login",
+    srcs = [
+        "auto_login.cc",
+    ],
+    hdrs = [
+        "auto_login.h",
+    ],
+    deps = [
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/common/libs/utils:is_google_corp",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/common/libs/utils:subprocess_managed_stdio",
+        "//cuttlefish/host/commands/cvd/fetch:build_api_credentials",
+        "//cuttlefish/host/commands/cvd/fetch:build_api_flags",
+        "//cuttlefish/host/libs/web:oauth2_consent",
+        "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
     name = "build_api_credentials",
     srcs = [
         "build_api_credentials.cc",
@@ -16,6 +36,7 @@ cf_cc_library(
         "build_api_credentials.h",
     ],
     deps = [
+        "//cuttlefish/common/libs/utils:environment",
         "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/common/libs/utils:json",
         "//cuttlefish/host/commands/cvd/fetch:build_api_flags",
@@ -32,7 +53,7 @@ cf_cc_library(
     srcs = ["build_api_flags.cc"],
     hdrs = ["build_api_flags.h"],
     deps = [
-        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/flag_parser",
         "//cuttlefish/host/commands/cvd/cache",
         "//cuttlefish/host/commands/cvd/fetch:credential_flags",
         "//cuttlefish/host/libs/web:android_build_url",
@@ -69,7 +90,7 @@ cf_cc_library(
     srcs = ["credential_flags.cc"],
     hdrs = ["credential_flags.h"],
     deps = [
-        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/flag_parser",
     ],
 )
 
@@ -178,6 +199,7 @@ cf_cc_library(
     name = "fetch_cvd",
     srcs = ["fetch_cvd.cc"],
     hdrs = ["fetch_cvd.h"],
+    clang_format_enabled = False,
     copts = COPTS + ["-Werror=sign-compare"],
     deps = [
         "//cuttlefish/common/libs/utils:archive",
@@ -198,6 +220,7 @@ cf_cc_library(
         "//cuttlefish/host/libs/config:fetcher_config",
         "//cuttlefish/host/libs/config:file_source",
         "//cuttlefish/host/libs/image_aggregator:sparse_image",
+        "//cuttlefish/host/libs/log_names",
         "//cuttlefish/host/libs/web:android_build",
         "//cuttlefish/host/libs/web:android_build_string",
         "//cuttlefish/host/libs/web:chrome_os_build_string",
@@ -218,10 +241,11 @@ cf_cc_library(
     name = "fetch_cvd_parser",
     srcs = ["fetch_cvd_parser.cc"],
     hdrs = ["fetch_cvd_parser.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:files",
-        "//cuttlefish/common/libs/utils:flag_parser",
         "//cuttlefish/common/libs/utils:tee_logging",
+        "//cuttlefish/flag_parser",
         "//cuttlefish/host/commands/cvd/fetch:build_api_flags",
         "//cuttlefish/host/commands/cvd/fetch:vector_flags",
         "//cuttlefish/result",
@@ -294,6 +318,7 @@ cf_cc_library(
     name = "substitute",
     srcs = ["substitute.cc"],
     hdrs = ["substitute.h"],
+    clang_format_enabled = False,
     deps = [
         ":host_pkg_migration_cc_proto",
         "//cuttlefish/common/libs/utils:environment",
@@ -322,8 +347,9 @@ cf_cc_library(
     name = "vector_flags",
     srcs = ["vector_flags.cc"],
     hdrs = ["vector_flags.h"],
+    clang_format_enabled = False,
     deps = [
-        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/flag_parser",
         "//cuttlefish/host/libs/web:android_build_string",
         "//cuttlefish/host/libs/web:chrome_os_build_string",
         "//cuttlefish/result",

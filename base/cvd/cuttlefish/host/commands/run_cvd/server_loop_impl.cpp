@@ -123,7 +123,6 @@ Result<void> ServerLoopImpl::Run() {
     Select(&read_set, nullptr, nullptr, nullptr);
 
     if (read_set.IsSet(process_monitor.status())) {
-      LOG(ERROR) << "run_cvd server loop detected process monitor exit";
       return CF_ERR("process monitor has died");
     }
 
@@ -338,12 +337,6 @@ void ServerLoopImpl::DeleteFifos() {
       instance_.PerInstanceInternalPath("gatekeeper_fifo_vm.out"),
       instance_.PerInstanceInternalPath("oemlock_fifo_vm.in"),
       instance_.PerInstanceInternalPath("oemlock_fifo_vm.out"),
-      instance_.PerInstanceInternalPath("bt_fifo_vm.in"),
-      instance_.PerInstanceInternalPath("bt_fifo_vm.out"),
-      instance_.PerInstanceInternalPath("nfc_fifo_vm.in"),
-      instance_.PerInstanceInternalPath("nfc_fifo_vm.out"),
-      instance_.PerInstanceInternalPath("uwb_fifo_vm.in"),
-      instance_.PerInstanceInternalPath("uwb_fifo_vm.out"),
       instance_.PerInstanceInternalPath("gnsshvc_fifo_vm.in"),
       instance_.PerInstanceInternalPath("gnsshvc_fifo_vm.out"),
       instance_.PerInstanceInternalPath("locationhvc_fifo_vm.in"),

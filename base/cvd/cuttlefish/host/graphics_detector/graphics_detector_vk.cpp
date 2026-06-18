@@ -21,18 +21,6 @@
 namespace gfxstream {
 namespace {
 
-::gfxstream::proto::VulkanPhysicalDevice::Type ToProtoPhysicalDeviceType(
-    vk::PhysicalDeviceType type) {
-  switch (type) {
-    case vk::PhysicalDeviceType::eDiscreteGpu:
-      return ::gfxstream::proto::VulkanPhysicalDevice::TYPE_DISCRETE_GPU;
-    case vk::PhysicalDeviceType::eIntegratedGpu:
-      return ::gfxstream::proto::VulkanPhysicalDevice::TYPE_INTEGRATED_GPU;
-    default:
-      return ::gfxstream::proto::VulkanPhysicalDevice::TYPE_OTHER;
-  }
-}
-
 gfxstream::expected<Ok, vk::Result> PopulateVulkanAvailabilityImpl(
     ::gfxstream::proto::GraphicsAvailability* availability) {
   auto vk = GFXSTREAM_EXPECT(Vk::Load());
@@ -47,7 +35,10 @@ gfxstream::expected<Ok, vk::Result> PopulateVulkanAvailabilityImpl(
 
     const auto props = physicalDevice.getProperties();
     outPhysicalDevice->set_name(std::string(props.deviceName));
-    outPhysicalDevice->set_type(ToProtoPhysicalDeviceType(props.deviceType));
+    outPhysicalDevice->set_type(
+        props.deviceType == vk::PhysicalDeviceType::eDiscreteGpu
+            ? ::gfxstream::proto::VulkanPhysicalDevice::TYPE_DISCRETE_GPU
+            : ::gfxstream::proto::VulkanPhysicalDevice::TYPE_OTHER);
 
     const auto exts =
         VK_EXPECT_RV(physicalDevice.enumerateDeviceExtensionProperties());

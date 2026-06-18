@@ -13,13 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "cuttlefish/host/commands/cvd/instances/local_instance_group.h"
+
 #include <string>
 #include <vector>
 
-#include <gtest/gtest.h>
+#include "gtest/gtest.h"
 
 #include "cuttlefish/host/commands/cvd/instances/cvd_persistent_data.pb.h"
-#include "cuttlefish/host/commands/cvd/instances/local_instance_group.h"
 #include "cuttlefish/result/result_matchers.h"
 
 namespace cuttlefish {
@@ -70,7 +71,7 @@ TEST_F(LocalInstanceGroupUnitTest, SearchById) {
     auto instance_res = group_res->FindInstanceById(valid_id);
     ASSERT_THAT(instance_res, IsOk());
     auto& instance = *instance_res;
-    ASSERT_EQ(instance.id(), valid_id);
+    ASSERT_EQ(instance.Id(), valid_id);
   }
 
   // invalid search

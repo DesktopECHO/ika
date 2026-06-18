@@ -22,12 +22,12 @@
 #include <utility>
 #include <vector>
 
-#include <fmt/core.h>
-#include <fmt/format.h>
-#include <fruit/component.h>
-#include <fruit/fruit_forward_decls.h>
-#include <fruit/macro.h>
 #include "absl/log/log.h"
+#include "fmt/core.h"
+#include "fmt/format.h"
+#include "fruit/component.h"
+#include "fruit/fruit_forward_decls.h"
+#include "fruit/macro.h"
 
 #include "cuttlefish/common/libs/utils/known_paths.h"
 #include "cuttlefish/common/libs/utils/subprocess.h"
@@ -64,7 +64,7 @@ class VhostDeviceVsock : public vm_manager::VmmDependencyCommand {
   Result<void> ResultSetup() override { return {}; }
 
   LogTeeCreator& log_tee_;
-  const CuttlefishConfig::InstanceSpecific& instance_;
+  const CuttlefishConfig::InstanceSpecific instance_;
   const CuttlefishConfig& cfconfig_;
 };
 

@@ -19,17 +19,19 @@ cf_cc_library(
 cf_cc_library(
     name = "config_constants",
     hdrs = ["config_constants.h"],
+    clang_format_enabled = False,
 )
 
 cf_cc_library(
     name = "config_flag",
     srcs = ["config_flag.cpp"],
     hdrs = ["config_flag.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/key_equals_value",
         "//cuttlefish/common/libs/utils:files",
-        "//cuttlefish/common/libs/utils:flag_parser",
         "//cuttlefish/common/libs/utils:json",
+        "//cuttlefish/flag_parser",
         "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
         "//cuttlefish/host/commands/assemble_cvd/flags:system_image_dir",
         "//cuttlefish/host/libs/config:config_utils",
@@ -55,9 +57,11 @@ cf_cc_library(
     name = "config_instance_derived",
     srcs = ["config_instance_derived.cc"],
     hdrs = ["config_instance_derived.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/log_names",
     ],
 )
 
@@ -65,6 +69,7 @@ cf_cc_library(
     name = "config_utils",
     srcs = ["config_utils.cpp"],
     hdrs = ["config_utils.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:contains",
         "//cuttlefish/common/libs/utils:environment",
@@ -84,10 +89,11 @@ cf_cc_library(
     name = "custom_actions",
     srcs = ["custom_actions.cpp"],
     hdrs = ["custom_actions.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:files",
-        "//cuttlefish/common/libs/utils:flag_parser",
         "//cuttlefish/common/libs/utils:json",
+        "//cuttlefish/flag_parser",
         "//cuttlefish/host/libs/config:config_flag",
         "//cuttlefish/host/libs/config:config_fragment",
         "//cuttlefish/host/libs/config:config_utils",
@@ -110,6 +116,7 @@ cf_cc_library(
         "cuttlefish_config_instance.cpp",
     ],
     hdrs = ["cuttlefish_config.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:device_type",
         "//cuttlefish/common/libs/utils:environment",
@@ -129,6 +136,7 @@ cf_cc_library(
         "//cuttlefish/host/libs/config:guest_renderer_preload",
         "//cuttlefish/host/libs/config:secure_hals",
         "//cuttlefish/host/libs/config:vmm_mode",
+        "//cuttlefish/host/libs/log_names",
         "//cuttlefish/result",
         "//libbase",
         "@abseil-cpp//absl/log",
@@ -145,6 +153,7 @@ cf_cc_library(
     name = "data_image",
     srcs = ["data_image.cpp"],
     hdrs = ["data_image.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/fs",
         "//cuttlefish/common/libs/utils:files",
@@ -180,9 +189,10 @@ cf_cc_library(
     name = "display",
     srcs = ["display.cpp"],
     hdrs = ["display.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:contains",
-        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/flag_parser",
         "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
         "//cuttlefish/host/libs/config:cuttlefish_config",
         "//cuttlefish/result",
@@ -195,6 +205,7 @@ cf_cc_library(
     name = "esp",
     srcs = ["esp.cpp"],
     hdrs = ["esp.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/fs",
         "//cuttlefish/common/libs/utils:files",
@@ -221,6 +232,7 @@ cf_cc_library(
     name = "build_archive",
     srcs = ["build_archive.cc"],
     hdrs = ["build_archive.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/host/libs/config:fetcher_config",
@@ -247,6 +259,7 @@ cf_cc_library(
     name = "fetcher_config",
     srcs = ["fetcher_config.cpp"],
     hdrs = ["fetcher_config.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/host/libs/config:file_source",
@@ -263,7 +276,9 @@ cf_cc_library(
     srcs = ["fetcher_configs.cc"],
     hdrs = ["fetcher_configs.h"],
     deps = [
+        "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/host/libs/config:fetcher_config",
+        "//cuttlefish/result",
         "//libbase",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/strings",
@@ -327,6 +342,7 @@ cf_cc_library(
     name = "host_tools_version",
     srcs = ["host_tools_version.cpp"],
     hdrs = ["host_tools_version.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/host/libs/config:config_utils",
@@ -340,9 +356,10 @@ cf_cc_library(
     name = "instance_nums",
     srcs = ["instance_nums.cpp"],
     hdrs = ["instance_nums.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:contains",
-        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/flag_parser",
         "//cuttlefish/host/libs/config:config_utils",
         "//cuttlefish/result",
         "//libbase",
@@ -365,6 +382,7 @@ cf_cc_library(
     name = "known_paths",
     srcs = ["known_paths.cpp"],
     hdrs = ["known_paths.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/host/libs/config:config_utils",
@@ -437,9 +455,10 @@ cf_cc_library(
     name = "touchpad",
     srcs = ["touchpad.cpp"],
     hdrs = ["touchpad.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:contains",
-        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/flag_parser",
         "//cuttlefish/host/libs/config:cuttlefish_config",
         "//cuttlefish/result",
         "//libbase",
@@ -451,6 +470,7 @@ cf_cc_library(
     name = "vmm_mode",
     srcs = ["vmm_mode.cc"],
     hdrs = ["vmm_mode.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/result",
         "@abseil-cpp//absl/strings",
@@ -461,9 +481,10 @@ cf_cc_library(
     name = "media",
     srcs = ["media.cpp"],
     hdrs = ["media.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:contains",
-        "//cuttlefish/common/libs/utils:flag_parser",
+        "//cuttlefish/flag_parser",
         "//cuttlefish/host/libs/config:cuttlefish_config",
         "//cuttlefish/result",
         "//libbase",

@@ -20,9 +20,9 @@
 #include <utility>
 #include <vector>
 
-#include <fruit/component.h>
-#include <fruit/fruit_forward_decls.h>
-#include <fruit/macro.h>
+#include "fruit/component.h"
+#include "fruit/fruit_forward_decls.h"
+#include "fruit/macro.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/subprocess.h"
@@ -31,6 +31,7 @@
 #include "cuttlefish/host/libs/config/known_paths.h"
 #include "cuttlefish/host/libs/feature/command_source.h"
 #include "cuttlefish/host/libs/feature/feature.h"
+#include "cuttlefish/host/libs/log_names/log_names.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -62,7 +63,7 @@ class OpenwrtControlServer : public CommandSource {
                                             first_instance.launcher_log_path());
     openwrt_control_server_cmd.AddParameter(
         "--openwrt_log_path=",
-        AbsolutePath(first_instance.PerInstanceLogPath("crosvm_openwrt.log")));
+        AbsolutePath(first_instance.PerInstanceLogPath(kLogNameCrosvmOpenWrt)));
 
     std::vector<MonitorCommand> commands;
     commands.emplace_back(std::move(openwrt_control_server_cmd));

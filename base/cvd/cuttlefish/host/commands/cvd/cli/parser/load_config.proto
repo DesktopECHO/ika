@@ -45,6 +45,7 @@ message EnvironmentSpecification {
   optional Common common = 4;
   optional bool netsim_bt = 5;
   optional bool netsim_uwb = 6;
+  repeated string netsim_args = 7;
 }
 
 // TODO: chadreynolds - when we can make breaking changes and update, use this
@@ -55,6 +56,7 @@ message EnvironmentOptions {
   optional Common common = 3;
   optional bool netsim_bt = 4;
   optional bool netsim_uwb = 5;
+  repeated string netsim_args = 6;
 }
 
 message Common {
@@ -84,6 +86,7 @@ message Instance {
   optional Connectivity connectivity = 8;
   // TODO: b/337089452 - handle outside of proto logic
   optional string import_template = 9 [json_name = "@import"];
+  optional Media media = 10;
 }
 
 message Boot {
@@ -144,6 +147,28 @@ message Streaming {
   optional string device_id = 1;
 }
 
+message Media {
+  repeated MediaDevice devices = 1;
+}
+
+message MediaDevice {
+  oneof device {
+    V4l2EmulatedCameraSplane v4l2_emulated_camera_splane = 1;
+    V4l2EmulatedCameraMplane v4l2_emulated_camera_mplane = 2;
+    V4l2Proxy v4l2_proxy = 3;
+  }
+  optional string lens_facing = 4;
+}
+
+message V4l2EmulatedCameraSplane {}
+
+message V4l2EmulatedCameraMplane {}
+
+message V4l2Proxy {
+  // Path to a V4L2 device to expose to the guest. E.g. `/dev/video0`.
+  optional string device_path = 1;
+}
+
 message Vm {
   optional uint32 cpus = 1;
   optional uint32 memory_mb = 2;
@@ -158,7 +183,6 @@ message Vm {
   repeated CustomAction custom_actions = 9;
   // Desired user space page size.
   optional UserPageSize page_size = 10;
-  optional bool prefer_performance_cores = 11;
 }
 
 message Crosvm {

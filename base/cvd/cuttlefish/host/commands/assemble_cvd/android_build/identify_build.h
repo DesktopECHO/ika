@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -33,9 +34,25 @@ struct AndroidBuildKey {
   std::string system_image_dir;
   const FetcherConfig* fetcher_config;
   FileSource source;
-};
 
-bool operator<(const AndroidBuildKey&, const AndroidBuildKey&);
+  bool operator==(const AndroidBuildKey& other) const {
+    return system_image_dir == other.system_image_dir &&
+           fetcher_config == other.fetcher_config && source == other.source;
+  }
+  bool operator!=(const AndroidBuildKey& other) const {
+    return !(*this == other);
+  }
+  bool operator<(const AndroidBuildKey& other) const {
+    if (system_image_dir != other.system_image_dir) {
+      return system_image_dir < other.system_image_dir;
+    }
+    if (fetcher_config != other.fetcher_config) {
+      return std::less<const FetcherConfig*>{}(fetcher_config,
+                                               other.fetcher_config);
+    }
+    return static_cast<int>(source) < static_cast<int>(other.source);
+  }
+};
 
 Result<std::unique_ptr<AndroidBuild>> IdentifyAndroidBuild(
     const std::string& system_image_dir, const FetcherConfig& config,

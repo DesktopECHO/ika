@@ -32,10 +32,10 @@
 #include <string>
 #include <vector>
 
-#include <android-base/file.h>
-#include <google/protobuf/text_format.h>
-#include <google/protobuf/util/message_differencer.h>
-#include <sparse/sparse.h>
+#include "android-base/file.h"
+#include "google/protobuf/text_format.h"
+#include "google/protobuf/util/message_differencer.h"
+#include "sparse/sparse.h"
 #include <zlib.h>
 
 #include "cuttlefish/common/libs/fs/shared_buf.h"
@@ -115,6 +115,8 @@ void SetRandomUuid(uint8_t uuid[16]) {
 class CompositeDiskBuilder {
  public:
   CompositeDiskBuilder(bool read_only) : read_only_(read_only) {}
+
+  const std::vector<PartitionInfo>& Partitions() const { return partitions_; }
 
   Result<void> AppendPartition(ImagePartition source) {
     uint64_t size = CF_EXPECT(ExpandedStorageSize(source.image_file_path));
@@ -285,19 +287,11 @@ Result<void> WriteEnd(SharedFD out, const GptEnd& end) {
  * images.
  *
  * crosvm has read-only support for Android-Sparse files, but QEMU does not
- * support them. Writable/raw aggregation paths still need sparse images to be
- * materialized because they are copied into a raw disk image or exposed through
- * a writable composite layout.
+ * support them.
  */
-Result<void> DeAndroidSparseIfNeeded(std::vector<ImagePartition>& partitions,
-                                     const std::string& output_directory,
-                                     bool read_only) {
-  if (read_only) {
-    return {};
-  }
-  for (auto& partition : partitions) {
-    partition.image_file_path =
-        CF_EXPECT(ForceRawImage(partition.image_file_path, output_directory));
+Result<void> DeAndroidSparse(const std::vector<ImagePartition>& partitions) {
+  for (const auto& partition : partitions) {
+    CF_EXPECT(ForceRawImage(partition.image_file_path));
   }
   return {};
 }
@@ -319,11 +313,9 @@ uint64_t AlignToPartitionSize(uint64_t size) {
   return AlignToPowerOf2(size, PARTITION_SIZE_SHIFT);
 }
 
-Result<void> AggregateImage(std::vector<ImagePartition> partitions,
+Result<void> AggregateImage(const std::vector<ImagePartition>& partitions,
                             const std::string& output_path) {
-  CF_EXPECT(DeAndroidSparseIfNeeded(partitions,
-                                    android::base::Dirname(output_path),
-                                    /*read_only=*/false));
+  CF_EXPECT(DeAndroidSparse(partitions));
 
   CompositeDiskBuilder builder(false);
   for (auto& partition : partitions) {
@@ -339,7 +331,8 @@ Result<void> AggregateImage(std::vector<ImagePartition> partitions,
              "Could not write GPT beginning to '{}': {}", output_path,
              output->StrError());
 
-  for (auto& disk : partitions) {
+  for (const auto& partition_info : builder.Partitions()) {
+    const auto& disk = partition_info.source;
     SharedFD disk_fd = SharedFD::Open(disk.image_file_path, O_RDONLY);
     CF_EXPECTF(disk_fd->IsOpen(), "{}", disk_fd->StrError());
 
@@ -366,8 +359,7 @@ Result<void> CreateOrUpdateCompositeDisk(
     std::vector<ImagePartition> partitions, const std::string& header_file,
     const std::string& footer_file, const std::string& output_composite_path,
     bool read_only) {
-  CF_EXPECT(DeAndroidSparseIfNeeded(
-      partitions, android::base::Dirname(output_composite_path), read_only));
+  CF_EXPECT(DeAndroidSparse(partitions));
 
   CompositeDiskBuilder builder(read_only);
   for (auto& partition : partitions) {

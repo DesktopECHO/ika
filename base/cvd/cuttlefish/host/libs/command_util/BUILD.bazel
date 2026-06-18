@@ -28,6 +28,7 @@ cf_cc_library(
         "snapshot_utils.h",
         "util.h",
     ],
+    clang_format_enabled = False,
     deps = [
         ":libcuttlefish_run_cvd_proto",
         "//cuttlefish/common/libs/fs",
@@ -36,6 +37,7 @@ cf_cc_library(
         "//cuttlefish/common/libs/utils:json",
         "//cuttlefish/host/libs/config:config_instance_derived",
         "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/posix:readlink",
         "//cuttlefish/posix:strerror",
         "//cuttlefish/posix:symlink",
         "//cuttlefish/result",

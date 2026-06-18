@@ -1,5 +1,5 @@
 Name:           ika-frontend
-Version:        1.53.0
+Version:        1.55.0
 Release:        6%{?dist}
 Summary:        Frontend and orchestration packages for Cuttlefish on Fedora
 License:        Apache-2.0
@@ -60,8 +60,8 @@ artifact and log access for Cuttlefish.
 
 %build
 pushd frontend
-src/goutil src/host_orchestrator build -v -buildmode=pie -ldflags="-w"
-src/goutil src/operator build -v -buildmode=pie -ldflags="-w"
+src/goutil src/host_orchestrator build -buildmode=pie -ldflags="-w"
+src/goutil src/operator build -buildmode=pie -ldflags="-w"
 ./build-webui.sh
 popd
 
@@ -141,6 +141,9 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/libexec/cuttlefish/cuttlefish-host_orchestrator-prepare
 
 %changelog
+* Thu Jun 18 2026 DesktopECHO <build@desktopecho.com> - 1.55.0-6
+- Update Cuttlefish frontend package metadata to 1.55.0-6
+
 * Tue May 26 2026 DesktopECHO <build@desktopecho.com> - 1.53.0-4
 - Bump generated RPM release to revision 4
 

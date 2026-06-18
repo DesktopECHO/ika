@@ -24,7 +24,8 @@
 #include <fruit/fruit_forward_decls.h>
 #include <fruit/macro.h>
 
-#include "cuttlefish/common/libs/utils/flag_parser.h"
+#include "cuttlefish/flag_parser/flag.h"
+#include "cuttlefish/flag_parser/gflags_compat.h"
 #include "cuttlefish/host/libs/config/config_flag.h"
 #include "cuttlefish/host/libs/feature/feature.h"
 #include "cuttlefish/result/result.h"
@@ -54,8 +55,10 @@ class FastbootConfigFlagImpl : public FastbootConfigFlag {
 
   bool WriteGflagsCompatHelpXml(std::ostream& out) const override {
     bool proxy_fastboot = config_.ProxyFastboot();
-    Flag proxy_fastboot_flag = GflagsCompatFlag(kName, proxy_fastboot).Help(kHelp);
-    return WriteGflagsCompatXml({proxy_fastboot_flag}, out);
+    Flag proxy_fastboot_flag =
+        GflagsCompatFlag(kName, proxy_fastboot).Help(kHelp);
+    WriteGflagsCompatXml({proxy_fastboot_flag}, out);
+    return true;
   }
 
  private:

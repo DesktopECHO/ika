@@ -5,14 +5,14 @@
 pkgbase=ika-scrcpy
 pkgname=(ika-scrcpy)
 pkgver=3.3.4
-pkgrel=5
+pkgrel=6
 pkgdesc='scrcpy Android screen mirroring tool for Cuttlefish'
 arch=(x86_64 aarch64)
 url='https://github.com/Genymobile/scrcpy'
 license=(Apache-2.0)
 makedepends=(ffmpeg gcc icu libusb meson ninja pkgconf sdl3 vulkan-headers)
 options=(!debug)
-_srcver=1.53.0
+_srcver=1.55.0
 source=("android-cuttlefish-${_srcver}.tar.gz")
 sha256sums=('SKIP')
 

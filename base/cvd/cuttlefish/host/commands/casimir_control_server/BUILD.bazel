@@ -12,6 +12,7 @@ cf_cc_binary(
     srcs = [
         "main.cpp",
     ],
+    clang_format_enabled = False,
     deps = [
         ":libcasimir",
         ":libcasimir_control_server",

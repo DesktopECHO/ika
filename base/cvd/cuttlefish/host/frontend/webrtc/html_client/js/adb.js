@@ -151,7 +151,7 @@ function adbOnMessage(arrayBuffer) {
     }
 
     let payloadChecksum = getU32LE(array, 16);
-    let checksum = computeChecksum(array.slice(24, 24 + payloadLength));
+    let checksum = computeChecksum(array.slice(24));
 
     if (payloadChecksum != checksum) {
       console.error('adb message checksum mismatch.');

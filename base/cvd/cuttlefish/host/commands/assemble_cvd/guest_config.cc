@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "cuttlefish/host/commands/assemble_cvd/guest_config.h"
 
 #include <sys/types.h>
@@ -48,6 +49,7 @@
 #include "cuttlefish/host/libs/config/gpu_mode.h"
 #include "cuttlefish/pretty/optional.h"
 #include "cuttlefish/pretty/string.h"
+#include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
 namespace {
@@ -81,7 +83,8 @@ Result<void> ParseGuestConfigTextProto(const std::string& guest_config_path,
                         {config::DeviceType::Foldable, DeviceType::Foldable},
                         {config::DeviceType::Tv, DeviceType::Tv},
                         {config::DeviceType::Minidroid, DeviceType::Minidroid},
-                        {config::DeviceType::Go, DeviceType::Go}};
+                        {config::DeviceType::Go, DeviceType::Go},
+                        {config::DeviceType::Desktop, DeviceType::Desktop}};
 
   config::GuestConfigFile proto_config;
 

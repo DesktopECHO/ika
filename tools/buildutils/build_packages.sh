@@ -101,6 +101,44 @@ readonly DISTRO_FAMILY="$(detect_distro_family)"
 
 refuse_root_build
 
+PACKAGE_BUILD_MARKER="$(mktemp "${TMPDIR:-/tmp}/ika-package-build-start.XXXXXX")"
+trap 'rm -f "${PACKAGE_BUILD_MARKER}"' EXIT
+touch "${PACKAGE_BUILD_MARKER}"
+
+function package_output_dir() {
+  case "${DISTRO_FAMILY}" in
+    rpm)    printf '%s\n' "${REPO_DIR}/rpmbuild/RPMS" ;;
+    debian) printf '%s\n' "${REPO_DIR}/deb" ;;
+    arch)   printf '%s\n' "${REPO_DIR}/archbuild/packages" ;;
+    *)      printf '%s\n' "${REPO_DIR}" ;;
+  esac
+}
+
+function print_built_packages() {
+  local output_dir="$1"
+  local -a packages=()
+
+  case "${DISTRO_FAMILY}" in
+    rpm)
+      mapfile -t packages < <(find "${output_dir}" -type f -name '*.rpm' -newer "${PACKAGE_BUILD_MARKER}" 2>/dev/null | sort)
+      ;;
+    debian)
+      mapfile -t packages < <(find "${output_dir}" -type f -name '*.deb' -newer "${PACKAGE_BUILD_MARKER}" 2>/dev/null | sort)
+      ;;
+    arch)
+      mapfile -t packages < <(find "${output_dir}" -type f -name '*.pkg.tar*' -newer "${PACKAGE_BUILD_MARKER}" 2>/dev/null | sort)
+      ;;
+  esac
+
+  if [[ ${#packages[@]} -eq 0 ]]; then
+    echo "No package files were created in ${output_dir}"
+    return
+  fi
+
+  echo "Built package files:"
+  printf '  %s\n' "${packages[@]}"
+}
+
 # Build dependencies (including Bazel) are installed by ./ika-build via
 # tools/buildutils/lib/dependencies.sh. Fail fast when the toolchain is
 # absent.
@@ -109,6 +147,9 @@ if ! command -v bazel >/dev/null 2>&1; then
   >&2 echo "or install Bazel manually with: sudo tools/buildutils/installbazel.sh"
   exit 1
 fi
+
+PACKAGE_OUTPUT_DIR="$(package_output_dir)"
+echo "Building ${DISTRO_FAMILY} packages; output will be written to ${PACKAGE_OUTPUT_DIR}"
 
 # Builds all packages under base/ and frontend/ for the detected distro.
 "${BUILD_PACKAGE}" "$@" "${REPO_DIR}/base"
@@ -158,3 +199,5 @@ case "${DISTRO_FAMILY}" in
   debian) organize_debs ;;
   arch)   organize_archpkgs ;;
 esac
+
+print_built_packages "${PACKAGE_OUTPUT_DIR}"

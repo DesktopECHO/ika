@@ -22,13 +22,13 @@
 #include <regex>
 #include <string>
 
-#include <fmt/format.h>
-#include <gflags/gflags.h>
-#include <google/protobuf/empty.pb.h>
-#include <grpcpp/ext/proto_server_reflection_plugin.h>
-#include <grpcpp/grpcpp.h>
-#include <grpcpp/health_check_service_interface.h>
 #include "absl/strings/match.h"
+#include "fmt/format.h"
+#include "gflags/gflags.h"
+#include "google/protobuf/empty.pb.h"
+#include "grpcpp/ext/proto_server_reflection_plugin.h"
+#include "grpcpp/grpcpp.h"
+#include "grpcpp/health_check_service_interface.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/host/commands/openwrt_control_server/openwrt_control.grpc.pb.h"
@@ -52,8 +52,7 @@ using openwrtcontrolserver::OpenwrtIpaddrReply;
 
 DEFINE_string(grpc_uds_path, "", "grpc_uds_path");
 DEFINE_bool(bridged_wifi_tap, false,
-            "True for bridged Wi-Fi tap mode, false for non-bridged Wi-Fi tap "
-            "mode");
+            "True for using cvd-wtap-XX, false for using cvd-wifiap-XX");
 DEFINE_string(webrtc_device_id, "", "The device ID in WebRTC like cvd-1");
 DEFINE_string(launcher_log_path, "", "File path for launcher.log");
 DEFINE_string(openwrt_log_path, "", "File path for crosvm_openwrt.log");

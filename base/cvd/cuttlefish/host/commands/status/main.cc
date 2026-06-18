@@ -24,10 +24,12 @@
 #include <gflags/gflags.h>
 #include <json/value.h>
 #include "absl/log/log.h"
+#include "absl/strings/str_cat.h"
 
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/common/libs/utils/flag_parser.h"
+#include "cuttlefish/flag_parser/flag.h"
+#include "cuttlefish/flag_parser/gflags_compat.h"
 #include "cuttlefish/common/libs/utils/tee_logging.h"
 #include "cuttlefish/host/libs/command_util/runner/defs.h"
 #include "cuttlefish/host/libs/command_util/util.h"
@@ -64,11 +66,10 @@ Result<StatusFlags> GetFlagValues(int argc, char** argv) {
           .Help("List all instances status and instance config information."));
   flags.emplace_back(HelpFlag(flags));
   flags.emplace_back(HelpXmlFlag(flags, std::cout, flag_values.help_xml));
-  flags.emplace_back(UnexpectedArgumentGuard());
 
-  std::vector<std::string> args =
-      ArgsToVec(argc - 1, argv + 1);  // Skip argv[0]
-  CF_EXPECT(ConsumeFlags(flags, args), "Could not process command line flags.");
+  std::vector<std::string> args(argv + 1, argv + argc);  // Skip argv[0]
+  CF_EXPECT(ConsumeFlags(flags, args, {.fail_on_unexpected_argument = true}),
+            "Could not process command line flags.");
   return flag_values;
 }
 
@@ -99,7 +100,8 @@ Json::Value PopulateDevicesInfoFromInstance(
   device_info["web_access"] =
       CalcWebAccessUrl({.sig_server_addr = config.sig_server_address(),
                         .webrtc_device_id = webrtc_device_id});
-  device_info["adb_serial"] = instance_config.adb_ip_and_port();
+  device_info["adb_serial"] =
+      absl::StrCat("127.0.0.1:", instance_config.adb_host_port());
   for (int i = 0; i < instance_config.display_configs().size(); i++) {
     device_info["displays"][i] =
         std::to_string(instance_config.display_configs()[i].width) + " x " +

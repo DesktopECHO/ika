@@ -54,8 +54,6 @@ class WaylandServer {
    // available.
    void SetFrameCallback(Surfaces::FrameCallback callback);
 
-   void SetDmabufFrameCallback(Surfaces::DmabufFrameCallback callback);
-
    void SetDisplayEventCallback(DisplayEventCallback callback);
 
   private:

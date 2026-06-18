@@ -17,10 +17,12 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <variant>
 #include <vector>
 
-#include "cuttlefish/common/libs/utils/flag_parser.h"
+#include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -29,25 +31,43 @@ struct DeviceBuildString {
   std::string branch_or_id;
   std::optional<std::string> target;
   std::optional<std::string> filepath;
+
+  bool operator==(const DeviceBuildString& other) const {
+    return std::tie(branch_or_id, target, filepath) ==
+           std::tie(other.branch_or_id, other.target, other.filepath);
+  }
+  bool operator!=(const DeviceBuildString& other) const {
+    return !(*this == other);
+  }
+  bool operator<(const DeviceBuildString& other) const {
+    return std::tie(branch_or_id, target, filepath) <
+           std::tie(other.branch_or_id, other.target, other.filepath);
+  }
 };
 
 std::ostream& operator<<(std::ostream& out,
                          const DeviceBuildString& build_string);
-bool operator==(const DeviceBuildString& lhs, const DeviceBuildString& rhs);
-bool operator!=(const DeviceBuildString& lhs, const DeviceBuildString& rhs);
 
 struct DirectoryBuildString {
   std::vector<std::string> paths;
   std::string target;
   std::optional<std::string> filepath;
+
+  bool operator==(const DirectoryBuildString& other) const {
+    return std::tie(paths, target, filepath) ==
+           std::tie(other.paths, other.target, other.filepath);
+  }
+  bool operator!=(const DirectoryBuildString& other) const {
+    return !(*this == other);
+  }
+  bool operator<(const DirectoryBuildString& other) const {
+    return std::tie(paths, target, filepath) <
+           std::tie(other.paths, other.target, other.filepath);
+  }
 };
 
 std::ostream& operator<<(std::ostream& out,
                          const DirectoryBuildString& build_string);
-bool operator==(const DirectoryBuildString& lhs,
-                const DirectoryBuildString& rhs);
-bool operator!=(const DirectoryBuildString& lhs,
-                const DirectoryBuildString& rhs);
 
 using BuildString = std::variant<DeviceBuildString, DirectoryBuildString>;
 
@@ -60,7 +80,7 @@ std::optional<std::string> GetFilepath(const BuildString& build_string);
 
 void SetFilepath(BuildString& build_string, const std::string& value);
 
-Result<BuildString> ParseBuildString(const std::string& build_string);
+Result<BuildString> ParseBuildString(std::string_view build_string);
 
 Flag GflagsCompatFlag(const std::string& name,
                       std::optional<BuildString>& value);

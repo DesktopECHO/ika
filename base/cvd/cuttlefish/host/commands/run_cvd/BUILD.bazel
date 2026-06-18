@@ -10,6 +10,7 @@ cf_cc_library(
     name = "boot_state_machine",
     srcs = ["boot_state_machine.cc"],
     hdrs = ["boot_state_machine.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/fs",
         "//cuttlefish/common/libs/utils:files",
@@ -32,6 +33,7 @@ cf_cc_library(
         "//libbase",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/time",
         "@fruit",
         "@gflags",
         "@grpc",
@@ -105,6 +107,7 @@ cf_cc_binary(
         "//cuttlefish/host/libs/config/fastboot",
         "//cuttlefish/host/libs/feature",
         "//cuttlefish/host/libs/feature:inject",
+        "//cuttlefish/host/libs/log_names",
         "//cuttlefish/host/libs/metrics",
         "//cuttlefish/host/libs/version",
         "//cuttlefish/host/libs/vm_manager",
@@ -126,6 +129,7 @@ cf_cc_library(
         "server_loop_impl_webrtc.cpp",
     ],
     hdrs = ["server_loop.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/fs",
         "//cuttlefish/common/libs/utils:contains",
@@ -162,6 +166,7 @@ cf_cc_library(
     name = "validate",
     srcs = ["validate.cpp"],
     hdrs = ["validate.h"],
+    clang_format_enabled = False,
     deps = [
         "//allocd:alloc_utils",
         "//cuttlefish/common/libs/utils:in_sandbox",
@@ -172,5 +177,7 @@ cf_cc_library(
         "//cuttlefish/result",
         "//libbase",
         "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings",
+        "@fmt",
     ],
 )

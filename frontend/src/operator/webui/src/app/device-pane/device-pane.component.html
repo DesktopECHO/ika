@@ -34,7 +34,7 @@
         @if (legacyDevices | async; as devices) {
           @if (devices.length > 0) {
             <li>
-              <div class="group-name"> This Host </div>
+              <div class="group-name"> Ungrouped </div>
               <ul class="devices">
                 @for (device of devices; track device) {
                   <li class="device-entry" >

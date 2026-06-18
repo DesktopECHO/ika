@@ -13,17 +13,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "cuttlefish/host/commands/cvd/instances/instance_database.h"
+
 #include <iostream>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <gtest/gtest.h>
+#include "gtest/gtest.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/json.h"
-#include "cuttlefish/host/commands/cvd/instances/instance_database.h"
 #include "cuttlefish/host/commands/cvd/instances/instance_database_helper.h"
 #include "cuttlefish/host/commands/cvd/instances/local_instance_group.h"
 #include "cuttlefish/result/result_matchers.h"
@@ -229,7 +230,7 @@ TEST_F(CvdInstanceDatabaseTest, AddInstances) {
   }
   const auto& instances = kitty_group->Instances();
   for (auto const& instance : instances) {
-    ASSERT_TRUE(instance.name() == "yumi" || instance.name() == "tiger");
+    ASSERT_TRUE(instance.Name() == "yumi" || instance.Name() == "tiger");
   }
 }
 
@@ -274,11 +275,11 @@ TEST_F(CvdInstanceDatabaseTest, FindByInstanceId) {
   ASSERT_TRUE(result7.ok());
   ASSERT_TRUE(result11.ok());
   ASSERT_TRUE(result3.ok());
-  ASSERT_EQ(result1->first.name(), "8");
-  ASSERT_EQ(result10->first.name(), "tv-instance");
-  ASSERT_EQ(result7->first.name(), "my_favorite_phone");
-  ASSERT_EQ(result11->first.name(), "tv-instance");
-  ASSERT_EQ(result3->first.name(), "3_");
+  ASSERT_EQ(result1->first.Name(), "8");
+  ASSERT_EQ(result10->first.Name(), "tv-instance");
+  ASSERT_EQ(result7->first.Name(), "my_favorite_phone");
+  ASSERT_EQ(result11->first.Name(), "tv-instance");
+  ASSERT_EQ(result3->first.Name(), "3_");
   ASSERT_FALSE(result_invalid.ok());
 }
 
@@ -310,8 +311,8 @@ TEST_F(CvdInstanceDatabaseTest, FindByPerInstanceName) {
 
   ASSERT_TRUE(result1.ok());
   ASSERT_TRUE(result7.ok());
-  ASSERT_EQ(result1->first.id(), 1);
-  ASSERT_EQ(result7->first.id(), 7);
+  ASSERT_EQ(result1->first.Id(), 1);
+  ASSERT_EQ(result7->first.Id(), 7);
   ASSERT_FALSE(result_invalid.ok());
 }
 
@@ -387,9 +388,9 @@ TEST_F(CvdInstanceDatabaseTest, UpdateInstances) {
 
   auto instance_group = *(std::move(group_res));
   auto& instance1 = instance_group.Instances()[0];
-  instance1.set_state(cvd::INSTANCE_STATE_STARTING);
+  instance1.SetState(cvd::INSTANCE_STATE_STARTING);
   auto& instance2 = instance_group.Instances()[1];
-  instance2.set_state(cvd::INSTANCE_STATE_STARTING);
+  instance2.SetState(cvd::INSTANCE_STATE_STARTING);
 
   auto update_res = db.UpdateInstanceGroup(instance_group);
   ASSERT_TRUE(update_res.ok())
@@ -398,10 +399,10 @@ TEST_F(CvdInstanceDatabaseTest, UpdateInstances) {
   auto find_res = db.FindGroup({.group_name = "grp1"});
   ASSERT_TRUE(find_res.ok()) << find_res.error().Message();
 
-  EXPECT_EQ(find_res->Instances()[0].id(), 1);
-  EXPECT_EQ(find_res->Instances()[1].id(), 2);
-  EXPECT_EQ(find_res->Instances()[0].state(), cvd::INSTANCE_STATE_STARTING);
-  EXPECT_EQ(find_res->Instances()[1].state(), cvd::INSTANCE_STATE_STARTING);
+  EXPECT_EQ(find_res->Instances()[0].Id(), 1);
+  EXPECT_EQ(find_res->Instances()[1].Id(), 2);
+  EXPECT_EQ(find_res->Instances()[0].State(), cvd::INSTANCE_STATE_STARTING);
+  EXPECT_EQ(find_res->Instances()[1].State(), cvd::INSTANCE_STATE_STARTING);
 }
 
 }  // namespace selector

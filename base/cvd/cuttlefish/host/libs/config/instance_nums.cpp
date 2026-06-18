@@ -29,7 +29,8 @@
 #include <gflags/gflags.h>
 #include "absl/strings/numbers.h"
 
-#include "cuttlefish/common/libs/utils/flag_parser.h"
+#include "cuttlefish/flag_parser/flag.h"
+#include "cuttlefish/flag_parser/gflags_compat.h"
 #include "cuttlefish/host/libs/config/config_utils.h"
 #include "cuttlefish/result/result.h"
 
@@ -42,7 +43,7 @@ static Result<std::optional<int32_t>> ParseBaseInstanceFlag(
     std::vector<std::string>& flags) {
   int value = -1;
   auto flag = GflagsCompatFlag("base_instance_num", value);
-  CF_EXPECT(flag.Parse(flags), "Flag parsing error");
+  CF_EXPECT(ConsumeFlags({flag}, flags), "Flag parsing error");
   return value > 0 ? value : std::optional<int32_t>();
 }
 
@@ -53,7 +54,7 @@ static Result<std::optional<int32_t>> ParseNumInstancesFlag(
     std::vector<std::string>& flags) {
   int value = -1;
   auto flag = GflagsCompatFlag("num_instances", value);
-  CF_EXPECT(flag.Parse(flags), "Flag parsing error");
+  CF_EXPECT(ConsumeFlags({flag}, flags), "Flag parsing error");
   return value > 0 ? value : std::optional<int32_t>();
 }
 
@@ -90,7 +91,7 @@ static Result<std::vector<int32_t>> ParseInstanceNumsFlag(
     std::vector<std::string>& flags) {
   std::string value;
   auto flag = GflagsCompatFlag("instance_nums", value);
-  CF_EXPECT(flag.Parse(flags), "Flag parsing error");
+  CF_EXPECT(ConsumeFlags({flag}, flags), "Flag parsing error");
   if (!value.empty()) {
     return CF_EXPECT(ParseInstanceNums(value));
   } else {
@@ -222,11 +223,11 @@ Result<std::vector<int32_t>> InstanceNumsCalculator::CalculateFromFlags() {
     instance_nums_opt = instance_nums_;
   }
   // exactly one of these two should be given
-  CF_EXPECT(!instance_nums_opt || !base_instance_num_,
+  CF_EXPECT(!(instance_nums_opt && base_instance_num_),
+            "InstanceNums and BaseInstanceNum are mutually exclusive");
+  CF_EXPECT(instance_nums_opt || base_instance_num_,
             "At least one of --instance_nums or --base_instance_num"
                 << "should be given to call CalculateFromFlags()");
-  CF_EXPECT(instance_nums_opt || base_instance_num_,
-            "InstanceNums and BaseInstanceNum are mutually exclusive");
 
   if (instance_nums_opt) {
     if (num_instances_) {

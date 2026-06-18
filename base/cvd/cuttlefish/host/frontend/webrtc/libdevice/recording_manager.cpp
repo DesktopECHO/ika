@@ -17,9 +17,9 @@
 
 #include <mutex>
 
-#include <rtc_base/time_utils.h>
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "rtc_base/time_utils.h"
 
 #include "cuttlefish/host/frontend/webrtc/libdevice/local_recorder.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
@@ -114,13 +114,15 @@ void RecordingManager::StartSingleRecorder(const std::string& label) {
   }
 
   int recording_time = rtc::TimeMillis();
-  std::string recording_path = fmt::format("{}recording_{}_{}_{}.webm", recording_directory_,
-                                           instance_name_, label, recording_time);
+  std::string recording_path =
+      fmt::format("{}recording_{}_{}_{}.webm", recording_directory_,
+                  instance_name_, label, recording_time);
   std::unique_ptr<cuttlefish::webrtc_streaming::LocalRecorder> local_recorder =
       LocalRecorder::Create(recording_path);
   CHECK(local_recorder) << "Could not create local recorder";
   local_recorder->AddDisplay(label, existing_source->second->width_,
-                             existing_source->second->height_, existing_source->second->video_);
+                             existing_source->second->height_,
+                             existing_source->second->video_);
   local_recorders_[label] = std::move(local_recorder);
 }
 

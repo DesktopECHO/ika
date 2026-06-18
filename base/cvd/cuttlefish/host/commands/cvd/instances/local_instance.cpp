@@ -16,14 +16,16 @@
 
 #include "cuttlefish/host/commands/cvd/instances/local_instance.h"
 
+#include <android-base/file.h>
+#include <fmt/format.h>
+
 #include <fstream>
 #include <memory>
 #include <string>
 #include <utility>
 
-#include <fmt/format.h>
 #include "absl/log/log.h"
-
+#include "cuttlefish/common/libs/utils/contains.h"
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
@@ -43,10 +45,10 @@ constexpr int BASE_ADB_PORT = 6520;
 constexpr int BASE_INSTANCE_ID = 1;
 
 void AddEnvironmentForInstance(Command& cmd, const LocalInstance& instance) {
-  cmd.AddEnvironmentVariable("HOME", instance.home_directory());
-  cmd.AddEnvironmentVariable(kAndroidHostOut, instance.host_artifacts_path());
+  cmd.AddEnvironmentVariable("HOME", instance.HomeDirectory());
+  cmd.AddEnvironmentVariable(kAndroidHostOut, instance.HostArtifactsPath());
   cmd.AddEnvironmentVariable(kAndroidSoongHostOut,
-                             instance.host_artifacts_path());
+                             instance.HostArtifactsPath());
 }
 
 }  // namespace
@@ -55,39 +57,39 @@ LocalInstance::LocalInstance(std::shared_ptr<cvd::InstanceGroup> group_proto,
                              cvd::Instance* instance_proto)
     : group_proto_(group_proto), instance_proto_(instance_proto) {}
 
-void LocalInstance::set_state(cvd::InstanceState state) {
+void LocalInstance::SetState(cvd::InstanceState state) {
   instance_proto_->set_state(state);
 }
 
-std::string LocalInstance::instance_dir() const {
+std::string LocalInstance::InstanceDirectory() const {
   std::string to_ret = fmt::format("{}/cuttlefish/instances/cvd-{}",
-                                   group_proto_->home_directory(), id());
-  if(!FileExists(to_ret)) {
+                                   group_proto_->home_directory(), Id());
+  if (!FileExists(to_ret)) {
     // Legacy launchers create cuttlefish_runtime.{$ID}
     to_ret = fmt::format("{}/cuttlefish_runtime.{}",
-                         group_proto_->home_directory(), id());
+                         group_proto_->home_directory(), Id());
   }
   return to_ret;
 }
 
-int LocalInstance::adb_port() const {
+int LocalInstance::AdbPort() const {
   // The instance id is zero for a very short time between the load and create
   // commands. The adb_port property should not be accessed during that time,
   // but return an invalid port number just in case.
-  if (id() == 0) {
+  if (Id() == 0) {
     return 0;
   }
   // run_cvd picks this port from the instance id and doesn't provide a flag
   // to change in cvd_internal_flag
-  return BASE_ADB_PORT + id() - BASE_INSTANCE_ID;
+  return BASE_ADB_PORT + Id() - BASE_INSTANCE_ID;
 }
 
-std::string LocalInstance::assembly_dir() const {
-  return AssemblyDirFromHome(home_directory());
+std::string LocalInstance::AssemblyDirectory() const {
+  return AssemblyDirFromHome(HomeDirectory());
 }
 
 bool LocalInstance::IsActive() const {
-  switch (state()) {
+  switch (State()) {
     case cvd::INSTANCE_STATE_RUNNING:
     case cvd::INSTANCE_STATE_STARTING:
     case cvd::INSTANCE_STATE_STOPPING:
@@ -102,7 +104,7 @@ bool LocalInstance::IsActive() const {
       return false;
     // Include these just to avoid the warning
     default:
-      LOG(FATAL) << "Invalid instance state: " << state();
+      LOG(FATAL) << "Invalid instance state: " << State();
   }
   return false;
 }
@@ -112,16 +114,16 @@ Result<Json::Value> LocalInstance::FetchStatus(std::chrono::seconds timeout) {
 }
 
 Result<void> LocalInstance::PressPowerBtn() {
-  auto bin_check = HostToolTarget(host_artifacts_path()).GetPowerBtnBinPath();
+  auto bin_check = HostToolTarget(HostArtifactsPath()).GetPowerBtnBinPath();
   if (bin_check.ok()) {
     return PressPowerBtnLegacy();
   }
 
   std::unique_ptr<const CuttlefishConfig> config =
-      CuttlefishConfig::GetFromFile(instance_dir() + "/cuttlefish_config.json");
+      CuttlefishConfig::GetFromFile(InstanceDirectory() + "/cuttlefish_config.json");
   CF_EXPECT_EQ(config->vm_manager(), VmmMode::kCrosvm,
                "powerbtn not supported in vm manager " << config->vm_manager());
-  auto instance = config->ForInstance(id());
+  auto instance = config->ForInstance(Id());
 
   Command command = Command(instance.crosvm_binary())
                         .AddParameter("powerbtn")
@@ -134,9 +136,9 @@ Result<void> LocalInstance::PressPowerBtn() {
 
 Result<void> LocalInstance::PressPowerBtnLegacy() {
   Command cmd(
-      CF_EXPECT(HostToolTarget(host_artifacts_path()).GetPowerBtnBinPath()));
+      CF_EXPECT(HostToolTarget(HostArtifactsPath()).GetPowerBtnBinPath()));
 
-  cmd.AddParameter("--instance_num=", id());
+  cmd.AddParameter("--instance_num=", Id());
   cmd.SetEnvironment({});
   AddEnvironmentForInstance(cmd, *this);
 
@@ -191,7 +193,7 @@ Result<void> LocalInstance::PowerWash(std::chrono::seconds launcher_timeout,
 }
 
 Result<std::vector<std::string>> LocalInstance::ListRecordings() {
-  std::string recordings_dir = fmt::format("{}/recording", instance_dir());
+  std::string recordings_dir = fmt::format("{}/recording", InstanceDirectory());
   std::vector<std::string> files = CF_EXPECT(DirectoryContents(recordings_dir));
   for (std::string& file : files) {
     file = fmt::format("{}/{}", recordings_dir, file);
@@ -201,8 +203,8 @@ Result<std::vector<std::string>> LocalInstance::ListRecordings() {
 
 Result<void> LocalInstance::StartRecording(
     std::chrono::seconds launcher_timeout) {
-  CF_EXPECT(state() == cvd::INSTANCE_STATE_STARTING ||
-                state() == cvd::INSTANCE_STATE_RUNNING,
+  CF_EXPECT(State() == cvd::INSTANCE_STATE_STARTING ||
+                State() == cvd::INSTANCE_STATE_RUNNING,
             "Instance must be running to be recorded");
   CuttlefishConfig::InstanceSpecific instance_config =
       CF_EXPECT(GetInstanceConfig(), "Failed to load instance config");
@@ -212,8 +214,8 @@ Result<void> LocalInstance::StartRecording(
 
 Result<void> LocalInstance::StopRecording(
     std::chrono::seconds launcher_timeout) {
-  CF_EXPECT(state() == cvd::INSTANCE_STATE_STARTING ||
-                state() == cvd::INSTANCE_STATE_RUNNING,
+  CF_EXPECT(State() == cvd::INSTANCE_STATE_STARTING ||
+                State() == cvd::INSTANCE_STATE_RUNNING,
             "Instance must be running to be recorded");
   CuttlefishConfig::InstanceSpecific instance_config =
       CF_EXPECT(GetInstanceConfig(), "Failed to load instance config");
@@ -222,7 +224,7 @@ Result<void> LocalInstance::StopRecording(
 }
 
 std::string LocalInstance::config_file_path() const {
-  return home_directory() + "/.cuttlefish_config.json";
+  return HomeDirectory() + "/.cuttlefish_config.json";
 }
 
 Result<Json::Value> LocalInstance::ReadJsonConfig() const {
@@ -248,7 +250,7 @@ Result<const CuttlefishConfig*> LocalInstance::LoadConfig() {
 Result<const CuttlefishConfig::InstanceSpecific>
 LocalInstance::GetInstanceConfig() {
   const CuttlefishConfig* config = CF_EXPECT(LoadConfig());
-  return config->ForInstance(id());
+  return config->ForInstance(Id());
 }
 
 Result<SharedFD> LocalInstance::GetLauncherMonitor(
@@ -256,12 +258,12 @@ Result<SharedFD> LocalInstance::GetLauncherMonitor(
   // Newer cuttlefish instances put launcher monitor socket in a directory
   // under /tmp, and store this path in the config. Older instances just put
   // them in the instance directory.
-  std::string uds_dir = instance_dir();
+  std::string uds_dir = InstanceDirectory();
   Json::Value config = CF_EXPECT(ReadJsonConfig());
   if (config.isMember("instances_uds_dir") &&
       config["instances_uds_dir"].isString()) {
     uds_dir =
-        fmt::format("{}/cvd-{}", config["instances_uds_dir"].asString(), id());
+        fmt::format("{}/cvd-{}", config["instances_uds_dir"].asString(), Id());
   }
   std::string monitor_path = uds_dir + "/launcher_monitor.sock";
   SharedFD monitor = SharedFD::SocketLocalClient(monitor_path, false,
@@ -270,6 +272,25 @@ Result<SharedFD> LocalInstance::GetLauncherMonitor(
              "Failed to connect to instance monitor socket ({}): {}",
              monitor_path, monitor->StrError());
   return monitor;
+}
+
+Result<std::vector<std::string>> LocalInstance::LogsFilenames() const {
+  if (!FileExists(InstanceDirectory())) {
+    VLOG(0) << "Instance directory \"" << InstanceDirectory() << "\" does not exist";
+    return {};
+  }
+  std::string logs_dir = InstanceDirectory() + "/logs";
+  if (!FileExists(logs_dir)) {
+    VLOG(0) << "Instance logs directory \"" << logs_dir << "\" does not exist";
+    return {};
+  }
+  std::vector<std::string> result = {};
+  auto callback = [&result](const std::string& filename) -> Result<void> {
+    result.push_back(filename);
+    return {};
+  };
+  CF_EXPECT(WalkDirectory(logs_dir, callback));
+  return result;
 }
 
 }  // namespace cuttlefish

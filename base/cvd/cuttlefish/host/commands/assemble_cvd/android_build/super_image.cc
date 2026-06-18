@@ -242,7 +242,8 @@ Result<std::unique_ptr<android::fs_mgr::LpMetadata>> SuperImageFromAndroidBuild(
     metadata = android::fs_mgr::ReadFromImageFile(*path);
   } else if (path = build.ImageFile(kSuper); path.ok()) {
     if (IsAndroidSparseImage(*path)) {
-      return CF_ERRF("Skipping sparse super image metadata probe for '{}'", *path);
+      return CF_ERRF("Skipping sparse super image metadata probe for '{}'",
+                     *path);
     }
     metadata = android::fs_mgr::ReadMetadata(*path, 0);
   } else {

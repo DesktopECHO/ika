@@ -24,11 +24,12 @@
 #include <utility>
 #include <vector>
 
-#include "absl/strings/strip.h"
-#include <json/value.h>
 #include "absl/strings/numbers.h"
+#include "absl/strings/strip.h"
+#include "json/value.h"
 
-#include "cuttlefish/common/libs/utils/flag_parser.h"
+#include "cuttlefish/flag_parser/flag.h"
+#include "cuttlefish/flag_parser/gflags_compat.h"
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
 #include "cuttlefish/host/commands/cvd/cli/selector/selector.h"
@@ -104,51 +105,35 @@ Result<StatusCommandOptions> ParseFlags(cvd_common::Args& args) {
       GflagsCompatFlag("wait_for_launcher", ret.wait_for_launcher_seconds),
       GflagsCompatFlag("instance_name", ret.instance_name),
       GflagsCompatFlag("print", ret.print),
-      GflagsCompatFlag("help", ret.help),
   };
 
-  CF_EXPECT(ConsumeFlags(flags, args));
+  CF_EXPECT(ConsumeFlags(flags, args, {.fail_on_unexpected_argument = true}));
 
   return ret;
 }
 
 }  // namespace
 
-class CvdStatusCommandHandler : public CvdCommandHandler {
- public:
-  CvdStatusCommandHandler(InstanceManager& instance_manager);
+cvd_common::Args CvdStatusCommandHandler::CmdList() const {
+  return {"status", "cvd_status"};
+}
 
-  Result<void> Handle(const CommandRequest& request) override;
-  cvd_common::Args CmdList() const override { return {"status", "cvd_status"}; }
+std::string CvdStatusCommandHandler::SummaryHelp() const {
+  return kSummaryHelpText;
+}
 
-  Result<std::string> SummaryHelp() const override { return kSummaryHelpText; }
-
-  bool ShouldInterceptHelp() const override { return true; }
-
-  bool RequiresDeviceExists() const override { return true; }
-
-  Result<std::string> DetailedHelp(std::vector<std::string>&) const override {
-    return kDetailedHelpText;
-  }
-
- private:
-  InstanceManager& instance_manager_;
-};
+Result<std::string> CvdStatusCommandHandler::DetailedHelp(
+    const CommandRequest&) {
+  return kDetailedHelpText;
+}
 
 CvdStatusCommandHandler::CvdStatusCommandHandler(
     InstanceManager& instance_manager)
     : instance_manager_(instance_manager) {}
 
 Result<void> CvdStatusCommandHandler::Handle(const CommandRequest& request) {
-  CF_EXPECT(CanHandle(request));
-
   std::vector<std::string> cmd_args = request.SubcommandArguments();
   StatusCommandOptions flags = CF_EXPECT(ParseFlags(cmd_args));
-
-  if (flags.help) {
-    std::cout << kDetailedHelpText << std::endl;
-    return {};
-  }
 
   if (!CF_EXPECT(instance_manager_.HasInstanceGroups())) {
     return CF_ERR(NoGroupMessage(request));

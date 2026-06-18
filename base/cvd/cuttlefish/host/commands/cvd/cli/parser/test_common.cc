@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 
+#include "cuttlefish/host/commands/cvd/cli/parser/test_common.h"
+
 #include <algorithm>
 #include <string>
 #include <vector>
 
 #include "cuttlefish/host/commands/cvd/cli/parser/cf_flags_validator.h"
 #include "cuttlefish/host/commands/cvd/cli/parser/launch_cvd_parser.h"
-#include "cuttlefish/host/commands/cvd/cli/parser/test_common.h"
 
 namespace cuttlefish {
 
@@ -37,15 +38,13 @@ bool FindConfig(const std::vector<std::string>& vec,
 bool FindConfigIgnoreSpaces(const std::vector<std::string>& vec,
                             const std::string& str) {
   std::string target = str;
-  target.erase(std::remove(target.begin(), target.end(), ' '), target.end());
-  target.erase(std::remove(target.begin(), target.end(), '\t'), target.end());
+  std::erase(target, ' ');
+  std::erase(target, '\t');
 
   for (const auto& s : vec) {
     std::string current = s;
-    current.erase(std::remove(current.begin(), current.end(), ' '),
-                  current.end());
-    current.erase(std::remove(current.begin(), current.end(), '\t'),
-                  current.end());
+    std::erase(current, ' ');
+    std::erase(current, '\t');
     if (current == target) {
       return true;
     }

@@ -16,8 +16,8 @@
 
 #include <string>
 
-#include <gflags/gflags.h>
 #include "absl/log/log.h"
+#include "gflags/gflags.h"
 
 #include "cuttlefish/common/libs/transport/channel_sharedfd.h"
 #include "cuttlefish/common/libs/utils/device_type.h"
@@ -25,10 +25,14 @@
 #include "cuttlefish/host/commands/sensors_simulator/sensors_simulator.h"
 #include "cuttlefish/host/libs/config/logging.h"
 
-DEFINE_int32(control_from_guest_fd, -1, "Sensors control virtio-console from guest to host");
-DEFINE_int32(control_to_guest_fd, -1, "Sensors control virtio-console from host to guest");
-DEFINE_int32(data_from_guest_fd, -1, "Sensors data virtio-console from guest to host");
-DEFINE_int32(data_to_guest_fd, -1, "Sensors data virtio-console from host to guest");
+DEFINE_int32(control_from_guest_fd, -1,
+             "Sensors control virtio-console from guest to host");
+DEFINE_int32(control_to_guest_fd, -1,
+             "Sensors control virtio-console from host to guest");
+DEFINE_int32(data_from_guest_fd, -1,
+             "Sensors data virtio-console from guest to host");
+DEFINE_int32(data_to_guest_fd, -1,
+             "Sensors data virtio-console from host to guest");
 DEFINE_int32(webrtc_fd, -1, "A file descriptor to communicate with webrtc");
 DEFINE_int32(kernel_events_fd, -1,
              "A pipe for monitoring events based on messages "
@@ -60,7 +64,13 @@ Result<void> ProcessWebrtcRequest(transport::SharedFdChannel& channel,
       CF_EXPECT((ss >> y >> delimiter) && (delimiter == INNER_DELIM),
                 kReqMisFormatted);
       CF_EXPECT(static_cast<bool>(ss >> z), kReqMisFormatted);
-      sensors_simulator.RefreshSensors(x, y, z);
+      sensors_simulator.SetMotion(x, y, z);
+      break;
+    }
+    case kUpdateHingeAngle: {
+      float angle;
+      CF_EXPECT(static_cast<bool>(ss >> angle), kReqMisFormatted);
+      sensors_simulator.SetHingeAngle(angle);
       break;
     }
     case kGetSensorsData: {

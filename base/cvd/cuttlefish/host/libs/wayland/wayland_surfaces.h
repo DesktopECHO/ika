@@ -48,15 +48,8 @@ class Surfaces {
                                            uint32_t /*frame_fourcc_format*/,  //
                                            uint32_t /*frame_stride_bytes*/,   //
                                            uint8_t* /*frame_bytes*/)>;
-  using DmabufFrameCallback = std::function<bool(
-      uint32_t /*display_number*/, uint32_t /*frame_width*/,
-      uint32_t /*frame_height*/, uint32_t /*frame_fourcc_format*/,
-      int /*dmabuf_fd*/, uint32_t /*offset*/, uint32_t /*stride_bytes*/,
-      uint32_t /*modifier_hi*/, uint32_t /*modifier_lo*/)>;
 
   void SetFrameCallback(FrameCallback callback);
-
-  void SetDmabufFrameCallback(DmabufFrameCallback callback);
 
   void SetDisplayEventCallback(DisplayEventCallback callback);
 
@@ -71,16 +64,6 @@ class Surfaces {
                           uint32_t frame_stride_bytes,   //
                           uint8_t* frame_bytes);
 
-  bool HandleSurfaceDmabufFrame(uint32_t display_number,
-                                uint32_t frame_width,
-                                uint32_t frame_height,
-                                uint32_t frame_fourcc_format,
-                                int dmabuf_fd,
-                                uint32_t offset,
-                                uint32_t stride_bytes,
-                                uint32_t modifier_hi,
-                                uint32_t modifier_lo);
-
   void HandleSurfaceCreated(uint32_t display_number, uint32_t display_width,
                             uint32_t display_height);
 
@@ -88,7 +71,6 @@ class Surfaces {
 
   std::mutex callback_mutex_;
   std::optional<FrameCallback> callback_;
-  std::optional<DmabufFrameCallback> dmabuf_callback_;
   std::optional<DisplayEventCallback> event_callback_;
   // If true, report that the received frames are RGBA regardless
   // of the format reported by the wayland client.

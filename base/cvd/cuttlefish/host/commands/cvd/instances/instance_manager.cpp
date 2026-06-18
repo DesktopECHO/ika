@@ -38,6 +38,7 @@
 #include "cuttlefish/host/commands/cvd/instances/stop.h"
 #include "cuttlefish/host/commands/cvd/utils/common.h"
 #include "cuttlefish/host/libs/config/config_utils.h"
+#include "cuttlefish/host/libs/metrics/device_metrics_orchestration.h"
 #include "cuttlefish/posix/symlink.h"
 #include "cuttlefish/result/result.h"
 
@@ -101,7 +102,12 @@ InstanceManager::InstanceManager(InstanceLockFileManager& lock_manager,
 Result<std::pair<LocalInstance, LocalInstanceGroup>>
 InstanceManager::FindInstanceWithGroup(
     const InstanceDatabase::Filter& filter) const {
-  return instance_db_.FindInstanceWithGroup(filter);
+  return CF_EXPECT(instance_db_.FindInstanceWithGroup(filter));
+}
+
+Result<std::vector<std::pair<LocalInstanceGroup, std::vector<LocalInstance>>>>
+InstanceManager::FindInstances(const InstanceDatabase::Filter& filter) const {
+  return CF_EXPECT(instance_db_.FindInstances(filter));
 }
 
 Result<bool> InstanceManager::HasInstanceGroups() const {
@@ -178,6 +184,8 @@ Result<LocalInstanceGroup> InstanceManager::CreateInstanceGroup(
     CF_EXPECT(instance_desc.lock_file.Status(InUseState::kInUse));
   }
 
+  GatherVmInstantiationMetrics(group);
+
   return group;
 }
 
@@ -185,10 +193,10 @@ Result<bool> InstanceManager::RemoveInstanceGroup(LocalInstanceGroup group) {
   CF_EXPECT(!group.HasActiveInstances(),
             "Group still contains active instances");
   for (auto& instance : group.Instances()) {
-    if (instance.id() == 0) {
+    if (instance.Id() == 0) {
       continue;
     }
-    if (auto res = lock_manager_.RemoveLockFile(instance.id()); !res.ok()) {
+    if (auto res = lock_manager_.RemoveLockFile(instance.Id()); !res.ok()) {
       LOG(ERROR) << "Failed to remove instance id lock: " << res.error();
     }
   }
@@ -206,7 +214,21 @@ Result<void> InstanceManager::UpdateInstanceGroup(
 Result<void> InstanceManager::StopInstanceGroup(
     LocalInstanceGroup& group,
     std::optional<std::chrono::seconds> launcher_timeout,
-    InstanceDirActionOnStop instance_dir_action) {
+    InstanceDirActionOnStop instance_dir_action,
+    const std::vector<unsigned>& instance_nums) {
+  // Validate that the requested instances actually belong to this group
+  std::set<unsigned> valid_ids;
+  for (const auto& instance : group.Instances()) {
+    valid_ids.insert(instance.Id());
+  }
+  std::set<unsigned> ids_to_stop;
+  for (unsigned num : instance_nums) {
+    CF_EXPECTF(valid_ids.count(num) != 0,
+               "Instance ID {} does not belong to group '{}'", num,
+               group.GroupName());
+    ids_to_stop.insert(num);
+  }
+
   const auto stop_bin = CF_EXPECT(StopBin(group.HostArtifactsPath()));
   const auto stop_bin_path = group.HostArtifactsPath() + "/bin/" + stop_bin;
   int wait_for_launcher_secs = 0;
@@ -219,13 +241,23 @@ Result<void> InstanceManager::StopInstanceGroup(
       .wait_for_launcher_secs = wait_for_launcher_secs,
       .clear_runtime_dirs =
           instance_dir_action == InstanceDirActionOnStop::Clear,
+      .instance_nums = instance_nums,
   });
   if (!cmd_result.ok()) {
     LOG(WARNING)
         << "Warning: error stopping instances for dir \"" + group.HomeDir() +
                "\".\nThis can happen if instances are already stopped.\n";
+    return cmd_result;
   }
-  group.SetAllStates(cvd::INSTANCE_STATE_STOPPED);
+  if (instance_nums.empty()) {
+    group.SetAllStates(cvd::INSTANCE_STATE_STOPPED);
+  } else {
+    for (auto& instance : group.Instances()) {
+      if (ids_to_stop.count(instance.Id()) > 0) {
+        instance.SetState(cvd::INSTANCE_STATE_STOPPED);
+      }
+    }
+  }
   // TODO: b/471069557 - diagnose unused
   Result<void> unused = instance_db_.UpdateInstanceGroup(group);
   return {};
@@ -246,10 +278,10 @@ Result<void> InstanceManager::Clear() {
       }
     }
     for (auto instance : group.Instances()) {
-      if (instance.id() <= 0) {
+      if (instance.Id() <= 0) {
         continue;
       }
-      auto res = lock_manager_.RemoveLockFile(instance.id());
+      auto res = lock_manager_.RemoveLockFile(instance.Id());
       if (!res.ok()) {
         LOG(ERROR) << "Failed to remove lock file for instance: "
                    << res.error();
@@ -284,7 +316,7 @@ Result<void> InstanceManager::ResetAndClearInstanceDirs() {
 
 Result<std::vector<LocalInstanceGroup>> InstanceManager::FindGroups(
     const InstanceDatabase::Filter& filter) const {
-  return instance_db_.FindGroups(filter);
+  return CF_EXPECT(instance_db_.FindGroups(filter));
 }
 
 Result<LocalInstanceGroup> InstanceManager::FindGroup(

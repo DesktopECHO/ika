@@ -13,14 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <gflags/gflags.h>
-
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "gflags/gflags.h"
 
 #include "cuttlefish/common/libs/utils/tee_logging.h"
 #include "cuttlefish/host/commands/metrics/host_receiver.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
+#include "cuttlefish/host/libs/log_names/log_names.h"
 #include "cuttlefish/host/libs/metrics/metrics_configs.h"
 #include "cuttlefish/host/libs/metrics/metrics_defs.h"
 
@@ -32,7 +32,7 @@ int MetricsMain(int argc, char** argv) {
   auto config = CuttlefishConfig::Get();
   CHECK(config) << "Could not open cuttlefish config";
   auto instance = config->ForDefaultInstance();
-  auto metrics_log_path = instance.PerInstanceLogPath("metrics.log");
+  auto metrics_log_path = instance.PerInstanceLogPath(kLogNameMetrics);
   if (instance.run_as_daemon()) {
     LogToFiles({metrics_log_path, instance.launcher_log_path()});
   } else {

@@ -51,6 +51,7 @@
 #include "cuttlefish/host/libs/config/gpu_mode.h"
 #include "cuttlefish/host/libs/config/guest_hwui_renderer.h"
 #include "cuttlefish/host/libs/config/guest_renderer_preload.h"
+#include "cuttlefish/host/libs/log_names/log_names.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -522,15 +523,6 @@ bool CuttlefishConfig::InstanceSpecific::kgdb() const {
 static constexpr char kCpus[] = "cpus";
 void CuttlefishConfig::MutableInstanceSpecific::set_cpus(int cpus) { (*Dictionary())[kCpus] = cpus; }
 int CuttlefishConfig::InstanceSpecific::cpus() const { return (*Dictionary())[kCpus].asInt(); }
-
-static constexpr char kPreferPerformanceCores[] = "prefer_performance_cores";
-void CuttlefishConfig::MutableInstanceSpecific::set_prefer_performance_cores(
-    bool prefer_performance_cores) {
-  (*Dictionary())[kPreferPerformanceCores] = prefer_performance_cores;
-}
-bool CuttlefishConfig::InstanceSpecific::prefer_performance_cores() const {
-  return (*Dictionary())[kPreferPerformanceCores].asBool();
-}
 
 static constexpr char kVcpuInfo[] = "vcpu_config_path";
 void CuttlefishConfig::MutableInstanceSpecific::set_vcpu_config_path(
@@ -1360,7 +1352,7 @@ void CuttlefishConfig::MutableInstanceSpecific::set_modem_simulator_ports(
 }
 
 std::string CuttlefishConfig::InstanceSpecific::launcher_log_path() const {
-  return AbsolutePath(PerInstanceLogPath("launcher.log"));
+  return AbsolutePath(PerInstanceLogPath(kLogNameLauncher));
 }
 
 std::string CuttlefishConfig::InstanceSpecific::sdcard_path() const {
@@ -1927,6 +1919,7 @@ CuttlefishConfig::InstanceSpecific::audio_settings() const {
 
 static constexpr char kMediaConfigs[] = "media_configs";
 static constexpr char kMediaType[] = "type";
+static constexpr char kMediaLensFacing[] = "lens_facing";
 std::vector<CuttlefishConfig::MediaConfig>
 CuttlefishConfig::InstanceSpecific::media_configs() const {
   std::vector<MediaConfig> configs;
@@ -1934,6 +1927,9 @@ CuttlefishConfig::InstanceSpecific::media_configs() const {
     MediaConfig config = {};
     config.type =
         static_cast<CuttlefishConfig::MediaType>(json[kMediaType].asInt());
+    if (json.isMember(kMediaLensFacing)) {
+      config.lens_facing = json[kMediaLensFacing].asString();
+    }
     configs.emplace_back(config);
   }
   return configs;
@@ -1946,6 +1942,7 @@ void CuttlefishConfig::MutableInstanceSpecific::set_media_configs(
   for (const MediaConfig& config : configs) {
     Json::Value json(Json::objectValue);
     json[kMediaType] = static_cast<int>(config.type);
+    json[kMediaLensFacing] = config.lens_facing;
     configs_json.append(json);
   }
 
@@ -2009,3 +2006,4 @@ std::string CuttlefishConfig::InstanceSpecific::instance_name() const {
 std::string CuttlefishConfig::InstanceSpecific::id() const { return id_; }
 
 }  // namespace cuttlefish
+

@@ -24,14 +24,15 @@
 #include <string>
 #include <unordered_map>
 
-#include <android-base/file.h>
-#include "absl/strings/strip.h"
 #include "absl/log/log.h"
+#include "absl/strings/strip.h"
+#include "android-base/file.h"
 
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/environment.h"
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/json.h"
+#include "cuttlefish/posix/readlink.h"
 #include "cuttlefish/posix/symlink.h"
 #include "cuttlefish/result/result.h"
 
@@ -81,9 +82,8 @@ Result<void> CopyDirectoryImpl(
     CF_EXPECTF(lstat(src_path.data(), &src_stat) != -1, "Failed in lstat({})",
                src_path);
     if (IsSymlink(src_stat)) {
-      std::string target;
-      CF_EXPECTF(android::base::Readlink(src_path, &target),
-                 "Readlink failed for {}", src_path);
+      std::string target =
+          CF_EXPECTF(ReadLink(src_path), "Readlink failed for {}", src_path);
       VLOG(0) << "Creating link from " << dest_path << " to " << target;
       if (FileExists(dest_path, /* follow_symlink */ false)) {
         CF_EXPECTF(RemoveFile(dest_path), "Failed to unlink/remove file \"{}\"",
@@ -143,14 +143,11 @@ Result<void> CopyDirectoryImpl(
  * If emulating absolute path fails, "path" is returned as is.
  */
 std::string RealpathOrSelf(const std::string& path) {
-  std::string output;
-  if (android::base::Realpath(path, &output)) {
-    return output;
+  Result<std::string> output = RealPath(path);
+  if (output.ok()) {
+    return *output;
   }
-  struct InputPathForm input_form {
-    .path_to_convert = path, .follow_symlink = true,
-  };
-  auto absolute_path = EmulateAbsolutePath(input_form);
+  auto absolute_path = RealPath(path);
   return absolute_path.ok() ? *absolute_path : path;
 }
 

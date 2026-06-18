@@ -25,7 +25,7 @@
 #include "absl/strings/numbers.h"
 
 #include "cuttlefish/common/libs/utils/contains.h"
-#include "cuttlefish/common/libs/utils/flag_parser.h"
+#include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/result/result.h"
 
@@ -67,10 +67,10 @@ ParseTouchpadConfigsFromArgs(std::vector<std::string>& args) {
   std::vector<std::string> repeated_touchpad_flag_values;
 
   const std::vector<Flag> touchpad_flags = {
-      GflagsCompatFlag(kTouchpadFlag)
+    Flag::StringFlag(kTouchpadFlag)
           .Help(kTouchpadHelp)
-          .Setter([&](const FlagMatch& match) -> Result<void> {
-            repeated_touchpad_flag_values.push_back(match.value);
+          .Setter([&](std::string_view arg) -> Result<void> {
+            repeated_touchpad_flag_values.emplace_back(arg);
             return {};
           }),
   };

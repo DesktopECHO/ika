@@ -18,15 +18,28 @@
 
 #include <chrono>
 #include <string_view>
+#include <variant>
 
-#include <fmt/format.h>
+#include "fmt/format.h"
 #include "google/protobuf/timestamp.pb.h"
 
 #include "cuttlefish/common/libs/utils/host_info.h"
+#include "cuttlefish/host/commands/cvd/fetch/builds.h"
 #include "cuttlefish/host/libs/config/data_image_policy.h"
 #include "cuttlefish/host/libs/metrics/device_event_type.h"
+#include "cuttlefish/host/libs/metrics/gce_environment.h"
+#include "cuttlefish/host/libs/metrics/github_environment.h"
 #include "cuttlefish/host/libs/metrics/guest_metrics.h"
+#include "cuttlefish/host/libs/metrics/invoker.h"
+#include "cuttlefish/host/libs/web/android_build.h"
+#include "external_proto/cf_fetch_build.pb.h"
+#include "external_proto/cf_fetch_builds.pb.h"
+#include "external_proto/cf_fetch_complete.pb.h"
+#include "external_proto/cf_fetch_failure.pb.h"
+#include "external_proto/cf_fetch_start.pb.h"
 #include "external_proto/cf_flags.pb.h"
+#include "external_proto/cf_gce_environment.pb.h"
+#include "external_proto/cf_github_actions_environment.pb.h"
 #include "external_proto/cf_guest.pb.h"
 #include "external_proto/cf_host.pb.h"
 #include "external_proto/cf_log.pb.h"
@@ -37,15 +50,30 @@ namespace {
 
 using google::protobuf::Timestamp;
 using logs::proto::wireless::android::cuttlefish::CuttlefishLogEvent;
+using logs::proto::wireless::android::cuttlefish::events::CuttlefishBuild;
+using logs::proto::wireless::android::cuttlefish::events::CuttlefishFetchBuilds;
+using logs::proto::wireless::android::cuttlefish::events::
+    CuttlefishFetchComplete;
+using logs::proto::wireless::android::cuttlefish::events::
+    CuttlefishFetchFailure;
+using logs::proto::wireless::android::cuttlefish::events::CuttlefishFetchStart;
 using logs::proto::wireless::android::cuttlefish::events::CuttlefishFlags;
 using logs::proto::wireless::android::cuttlefish::events::
     CuttlefishFlags_DataPolicy;
 using logs::proto::wireless::android::cuttlefish::events::
     CuttlefishFlags_GpuMode;
+using logs::proto::wireless::android::cuttlefish::events::
+    CuttlefishGceEnvironment;
+using logs::proto::wireless::android::cuttlefish::events::
+    CuttlefishGitHubActionsEnvironment;
+using logs::proto::wireless::android::cuttlefish::events::
+    CuttlefishGitHubActionsEnvironment_Repository;
 using logs::proto::wireless::android::cuttlefish::events::CuttlefishGuest;
 using logs::proto::wireless::android::cuttlefish::events::
     CuttlefishGuest_EventType;
 using logs::proto::wireless::android::cuttlefish::events::CuttlefishHost;
+using logs::proto::wireless::android::cuttlefish::events::
+    CuttlefishHost_Invoker;
 using logs::proto::wireless::android::cuttlefish::events::CuttlefishHost_OsType;
 using logs::proto::wireless::android::cuttlefish::events::MetricsEventV2;
 
@@ -144,6 +172,68 @@ CuttlefishHost_OsType ConvertHostOs(const HostInfo& host_info) {
   }
 }
 
+CuttlefishHost_Invoker ConvertInvoker(const Invoker invoker) {
+  switch (invoker) {
+    case Invoker::Acloud:
+      return CuttlefishHost_Invoker::
+          CuttlefishHost_Invoker_CUTTLEFISH_HOST_INVOKER_ACLOUD;
+    case Invoker::HostOrchestrator:
+      return CuttlefishHost_Invoker::
+          CuttlefishHost_Invoker_CUTTLEFISH_HOST_INVOKER_HOST_ORCHESTRATOR;
+    case Invoker::None:
+      return CuttlefishHost_Invoker::
+          CuttlefishHost_Invoker_CUTTLEFISH_HOST_INVOKER_NONE;
+    case Invoker::Unknown:
+      return CuttlefishHost_Invoker::
+          CuttlefishHost_Invoker_CUTTLEFISH_HOST_INVOKER_UNSPECIFIED;
+  }
+}
+
+CuttlefishGitHubActionsEnvironment_Repository ConvertGitHubRepository(
+    const GitHubRepository repository) {
+  switch (repository) {
+    case GitHubRepository::AndroidCuttlefish:
+      return CuttlefishGitHubActionsEnvironment_Repository::
+          CuttlefishGitHubActionsEnvironment_Repository_CUTTLEFISH_GITHUB_ACTIONS_ENVIRONMENT_REPOSITORY_GOOGLE_ANDROID_CUTTLEFISH;
+    case GitHubRepository::CloudAndroidOrchestration:
+      return CuttlefishGitHubActionsEnvironment_Repository::
+          CuttlefishGitHubActionsEnvironment_Repository_CUTTLEFISH_GITHUB_ACTIONS_ENVIRONMENT_REPOSITORY_GOOGLE_CLOUD_ANDROID_ORCHESTRATION;
+    case GitHubRepository::Unknown:
+      return CuttlefishGitHubActionsEnvironment_Repository::
+          CuttlefishGitHubActionsEnvironment_Repository_CUTTLEFISH_GITHUB_ACTIONS_ENVIRONMENT_REPOSITORY_UNSPECIFIED;
+  }
+}
+
+struct PopulateEnvironment {
+  CuttlefishHost& host;
+
+  void operator()(const GceEnvironment& environment) {
+    CuttlefishGceEnvironment& gce = *host.mutable_gce();
+    gce.set_numeric_project_id(environment.numeric_project_id);
+    gce.set_zone(environment.zone);
+  }
+
+  void operator()(GitHubRepository repository) {
+    CuttlefishGitHubActionsEnvironment& github = *host.mutable_github();
+    github.set_repository(ConvertGitHubRepository(repository));
+  }
+
+  void operator()(const UnknownEnvironment&) {}
+};
+
+void PopulateCuttlefishHostEnvironment(CuttlefishHost& host,
+                                       const Environment& environment) {
+  std::visit(PopulateEnvironment{.host = host}, environment);
+}
+
+void PopulateCuttlefishHost(CuttlefishHost& host,
+                            const HostMetrics& host_metrics) {
+  host.set_host_os(ConvertHostOs(host_metrics.os));
+  host.set_host_os_version(host_metrics.os.release);
+  host.set_invoker(ConvertInvoker(host_metrics.invoker));
+  PopulateCuttlefishHostEnvironment(host, host_metrics.environment);
+}
+
 void PopulateCuttlefishGuest(CuttlefishGuest& guest,
                              const GuestMetrics& guest_metrics,
                              std::string_view session_id) {
@@ -170,6 +260,81 @@ void PopulateCuttlefishGuest(CuttlefishGuest& guest,
       guest_metrics.flag_metrics.system_image_dir_specified);
 }
 
+void PopulateCuttlefishBuild(CuttlefishBuild& cf_build, const Build& build) {
+  cf_build.set_build_id(std::visit([](auto&& arg) { return arg.id; }, build));
+  cf_build.set_target(std::visit([](auto&& arg) { return arg.target; }, build));
+  cf_build.set_product(
+      std::visit([](auto&& arg) { return arg.product; }, build));
+  if (const DeviceBuild* device_build = std::get_if<DeviceBuild>(&build)) {
+    cf_build.set_branch(device_build->branch);
+  }
+}
+
+void PopulateFetchBuilds(CuttlefishFetchBuilds& fetch_builds,
+                         const Builds& builds) {
+  if (builds.default_build) {
+    CuttlefishBuild& base_build = *fetch_builds.mutable_base();
+    PopulateCuttlefishBuild(base_build, builds.default_build.value());
+  }
+  if (builds.system) {
+    CuttlefishBuild& system_build = *fetch_builds.mutable_system();
+    PopulateCuttlefishBuild(system_build, builds.system.value());
+  }
+  if (builds.kernel) {
+    CuttlefishBuild& kernel_build = *fetch_builds.mutable_kernel();
+    PopulateCuttlefishBuild(kernel_build, builds.kernel.value());
+  }
+  if (builds.boot) {
+    CuttlefishBuild& boot_build = *fetch_builds.mutable_boot();
+    PopulateCuttlefishBuild(boot_build, builds.boot.value());
+  }
+  if (builds.bootloader) {
+    CuttlefishBuild& bootloader_build = *fetch_builds.mutable_bootloader();
+    PopulateCuttlefishBuild(bootloader_build, builds.bootloader.value());
+  }
+  if (builds.android_efi_loader) {
+    CuttlefishBuild& android_efi_loader_build =
+        *fetch_builds.mutable_android_efi_loader();
+    PopulateCuttlefishBuild(android_efi_loader_build,
+                            builds.android_efi_loader.value());
+  }
+  if (builds.otatools) {
+    CuttlefishBuild& otatools_build = *fetch_builds.mutable_otatools();
+    PopulateCuttlefishBuild(otatools_build, builds.otatools.value());
+  }
+  if (builds.test_suites) {
+    CuttlefishBuild& test_suites_build = *fetch_builds.mutable_test_suites();
+    PopulateCuttlefishBuild(test_suites_build, builds.test_suites.value());
+  }
+}
+
+struct PopulateFetchEvent {
+  MetricsEventV2& event;
+
+  void operator()(const FetchStartMetrics& start_metrics) {
+    CuttlefishFetchStart& start = *event.mutable_start();
+    start.set_enable_local_caching(start_metrics.enable_local_caching);
+    start.set_dynamic_super_image(start_metrics.dynamic_super_image_mixing);
+  }
+
+  void operator()(const FetchCompleteMetrics& complete_metrics) {
+    CuttlefishFetchComplete& complete = *event.mutable_complete();
+    complete.set_status_blocked(complete_metrics.status_blocked);
+    complete.set_fetch_size_bytes(complete_metrics.fetch_size_bytes);
+    for (const Builds& builds : complete_metrics.fetched_builds) {
+      CuttlefishFetchBuilds& fetch_builds = *complete.add_builds();
+      PopulateFetchBuilds(fetch_builds, builds);
+    }
+  }
+
+  void operator()(const FetchFailedMetrics&) { event.mutable_failure(); }
+};
+
+void PopulateCuttlefishFetch(MetricsEventV2& event,
+                             const FetchMetrics& fetch_metrics) {
+  std::visit(PopulateFetchEvent{.event = event}, fetch_metrics);
+}
+
 }  // namespace
 
 CuttlefishLogEvent BuildCuttlefishLogEvent(const MetricsData& metrics_data) {
@@ -183,14 +348,17 @@ CuttlefishLogEvent BuildCuttlefishLogEvent(const MetricsData& metrics_data) {
 
   MetricsEventV2& metrics_event = *cf_log_event.mutable_metrics_event_v2();
 
+  CuttlefishHost& host = *metrics_event.mutable_host();
+  PopulateCuttlefishHost(host, metrics_data.host_metrics);
+
   for (const GuestMetrics& guest_metric : metrics_data.guest_metrics) {
     CuttlefishGuest& guest = *metrics_event.add_guest();
     PopulateCuttlefishGuest(guest, guest_metric, metrics_data.session_id);
   }
 
-  CuttlefishHost& host = *metrics_event.mutable_host();
-  host.set_host_os(ConvertHostOs(metrics_data.host_metrics));
-  host.set_host_os_version(metrics_data.host_metrics.release);
+  if (metrics_data.fetch_metrics) {
+    PopulateCuttlefishFetch(metrics_event, metrics_data.fetch_metrics.value());
+  }
 
   return cf_log_event;
 }

@@ -17,8 +17,8 @@
 #include <cstdint>
 #include <cstdlib>
 
-#include <gflags/gflags.h>
 #include "absl/log/log.h"
+#include "gflags/gflags.h"
 
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/tee_logging.h"
@@ -64,8 +64,8 @@ Result<void> PowerwashCvdMain() {
   return {};
 }
 
-} // namespace
-} // namespace cuttlefish
+}  // namespace
+}  // namespace cuttlefish
 
 int main(int argc, char** argv) {
   cuttlefish::LogToStderr();

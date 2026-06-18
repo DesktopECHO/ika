@@ -21,7 +21,8 @@
 #include <string>
 #include <vector>
 
-#include "cuttlefish/common/libs/utils/flag_parser.h"
+#include "cuttlefish/flag_parser/flag.h"
+#include "cuttlefish/flag_parser/gflags_compat.h"
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
 #include "cuttlefish/host/commands/cvd/cli/selector/selector.h"
@@ -58,45 +59,61 @@ struct RestartOptions {
   }
 };
 
-class CvdDeviceRestartCommandHandler : public CvdCommandHandler {
- public:
-  CvdDeviceRestartCommandHandler(InstanceManager& instance_manager)
-      : instance_manager_{instance_manager} {}
-
-  Result<void> Handle(const CommandRequest& request) override {
-    CF_EXPECT(CanHandle(request));
-
-    RestartOptions options;
-    std::vector<std::string> subcmd_args = request.SubcommandArguments();
-    CF_EXPECT(ConsumeFlags(options.Flags(), subcmd_args));
-
-    auto [instance, unused] =
-        CF_EXPECT(selector::SelectInstance(instance_manager_, request),
-                  "Unable to select an instance");
-
-    CF_EXPECT(instance.Restart(
-        std::chrono::seconds(options.wait_for_launcher_seconds),
-        std::chrono::seconds(options.boot_timeout_seconds)));
-    return {};
-  }
-
-  cvd_common::Args CmdList() const override { return {kRestartCmd}; }
-
-  Result<std::string> SummaryHelp() const override { return kSummaryHelpText; }
-
-  bool ShouldInterceptHelp() const override { return true; }
-
-  bool RequiresDeviceExists() const override { return true; }
-
-  Result<std::string> DetailedHelp(std::vector<std::string>&) const override {
-    return kDetailedHelpText;
-  }
-
- private:
-  InstanceManager& instance_manager_;
-};
-
 }  // namespace
+
+CvdDeviceRestartCommandHandler::CvdDeviceRestartCommandHandler(
+    InstanceManager& instance_manager)
+    : instance_manager_{instance_manager} {}
+
+Result<void> CvdDeviceRestartCommandHandler::Handle(
+    const CommandRequest& request) {
+  RestartOptions options;
+  std::vector<std::string> subcmd_args = request.SubcommandArguments();
+  CF_EXPECT(ConsumeFlags(options.Flags(), subcmd_args,
+                         {.fail_on_unexpected_argument = true}));
+
+  auto [instance, group] =
+      CF_EXPECT(selector::SelectInstance(instance_manager_, request),
+                "Unable to select an instance");
+
+  const auto& instances = group.Instances();
+  if (!instances.empty() && instance.Id() == instances[0].Id()) {
+    bool other_active = false;
+    for (const auto& inst : instances) {
+      if (inst.Id() != instance.Id() && inst.IsActive()) {
+        other_active = true;
+        break;
+      }
+    }
+    CF_EXPECTF(
+        !other_active,
+        "Restarting the first instance (ID: {}) is not allowed "
+        "while other instances are running. Restart the entire group instead.",
+        instance.Id());
+  }
+
+  CF_EXPECT(
+      instance.Restart(std::chrono::seconds(options.wait_for_launcher_seconds),
+                       std::chrono::seconds(options.boot_timeout_seconds)));
+  return {};
+}
+
+cvd_common::Args CvdDeviceRestartCommandHandler::CmdList() const {
+  return {kRestartCmd};
+}
+
+std::string CvdDeviceRestartCommandHandler::SummaryHelp() const {
+  return kSummaryHelpText;
+}
+
+bool CvdDeviceRestartCommandHandler::RequiresDeviceExists() const {
+  return true;
+}
+
+Result<std::string> CvdDeviceRestartCommandHandler::DetailedHelp(
+    const CommandRequest& request) {
+  return kDetailedHelpText;
+}
 
 std::unique_ptr<CvdCommandHandler> NewCvdDeviceRestartCommandHandler(
     InstanceManager& instance_manager) {

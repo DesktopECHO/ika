@@ -258,7 +258,7 @@ std::shared_ptr<VideoSink> Streamer::AddDisplay(const std::string& label,
         impl_->displays_[label] = {width, height, dpi, touch_enabled, source};
 
         auto video_track = impl_->peer_connection_factory_->CreateVideoTrack(
-            label, source.get());
+            source, label);
 
         for (auto& [_, client] : impl_->clients_) {
           client->AddDisplay(video_track, label);
@@ -659,7 +659,7 @@ std::shared_ptr<ClientHandler> Streamer::Impl::CreateClientHandler(
     auto& video_source = entry.second.source;
 
     auto video_track =
-        peer_connection_factory_->CreateVideoTrack(label, video_source.get());
+        peer_connection_factory_->CreateVideoTrack(video_source, label);
     client_handler->AddDisplay(video_track, label);
   }
 
@@ -748,4 +748,3 @@ void Streamer::Impl::SetupCameraForClient(int client_id) {
 
 }  // namespace webrtc_streaming
 }  // namespace cuttlefish
-

@@ -88,7 +88,7 @@ message Audio {
       bool mute_control_enabled = 1;
       Volume volume_control = 2;
     }
-
+    
     message Stream {
       uint32 id = 1;
       ChannelLayout channel_layout = 2;
@@ -147,6 +147,7 @@ enum DeviceType {
   Tv = 5;
   Minidroid = 6;
   Go = 7;
+  Desktop = 8;
 }
 
 // The presence of this field in the proto indicates the lights HAL is enabled.

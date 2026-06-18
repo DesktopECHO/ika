@@ -42,14 +42,11 @@ async function ConnectDevice(deviceId, serverConnector) {
     }
   }, intervalMs);
 
-  try {
-    let module = await import('./cf_webrtc.js');
-    let deviceConnection = await module.Connect(deviceId, serverConnector);
-    console.info('Connected to ' + deviceId);
-    return deviceConnection;
-  } finally {
-    clearInterval(connectionInterval);
-  }
+  let module = await import('./cf_webrtc.js');
+  let deviceConnection = await module.Connect(deviceId, serverConnector);
+  console.info('Connected to ' + deviceId);
+  clearInterval(connectionInterval);
+  return deviceConnection;
 }
 
 function setupMessages() {
@@ -188,8 +185,9 @@ class DeviceControlApp {
 
     this.#showDeviceUI();
 
-    // Enable non-ADB buttons after the UI is built so custom buttons created
-    // in #showDeviceUI() are included.
+    // Enable non-ADB buttons, these buttons use data channels to communicate
+    // with the host, so they're ready to go as soon as the webrtc connection is
+    // established.
     this.#getControlPanelButtons()
         .filter(b => !b.dataset.adb)
         .forEach(b => b.disabled = false);
@@ -354,18 +352,10 @@ class DeviceControlApp {
               'control-panel-custom-buttons');
           element.dataset.adb = true;
         } else if (button.device_states) {
-          // This button corresponds to variable hardware device state(s).
-          let element = createControlPanelButton(
+          createControlPanelButton(
               button.title, button.icon_name,
               this.#getCustomDeviceStateButtonCb(button.device_states),
               'control-panel-custom-buttons');
-          for (const device_state of button.device_states) {
-            // hinge_angle is currently injected via an adb shell command that
-            // triggers a guest binary.
-            if ('hinge_angle_value' in device_state) {
-              element.dataset.adb = true;
-            }
-          }
         } else {
           // This button's command is handled by custom action server.
           createControlPanelButton(
@@ -519,7 +509,7 @@ class DeviceControlApp {
     var acc_update = sensor_vals[0].split(":").map((val) => parseFloat(val).toFixed(3));
     var gyro_update = sensor_vals[1].split(":").map((val) => parseFloat(val).toFixed(3));
     var mgn_update = sensor_vals[2].split(":").map((val) => parseFloat(val).toFixed(3));
-    var xyz_update = sensor_vals[3].split(":").map((val) => parseFloat(val).toFixed(3));
+    var xyz_update = sensor_vals[3].split(":").map((val) => parseFloat(val).toFixed(0));
 
     const acc_val = document.getElementById('accelerometer-value');
     const mgn_val = document.getElementById('magnetometer-value');
@@ -551,37 +541,19 @@ class DeviceControlApp {
     deviceConnection.sendSensorsMessage(`${xyz[0]} ${xyz[1]} ${xyz[2]}`);
   }
 
-  // Gradually rotate to a fixed orientation.
+  // Rotate to a fixed orientation.
   #setOrientation(z) {
     const sliders = document.getElementsByClassName('rotation-slider-range');
     const values = document.getElementsByClassName('rotation-slider-value');
-    if (sliders.length != values.length || sliders.length != 3) {
+    if (sliders.length != 3 || values.length != 3) {
       return;
     }
-    // Set XY axes to 0 (upright position).
-    sliders[0].value = '0';
-    values[0].textContent = '0';
-    sliders[1].value = '0';
-    values[1].textContent = '0';
-
-    // Gradually transition z axis to target angle.
-    let current_z = parseFloat(sliders[2].value);
-    const step = ((z > current_z) ? 0.5 : -0.5);
-    let move = setInterval(() => {
-      if (Math.abs(z - current_z) >= 0.5) {
-        current_z += step;
-      }
-      else {
-        current_z = z;
-      }
-      sliders[2].value = current_z;
-      values[2].textContent = `${current_z}`;
-      this.#onMotionChanged();
-      if (current_z == z) {
-        this.#onMotionChanged();
-        clearInterval(move);
-      }
-    }, 5);
+    const xyz = [0, 0, z];
+    for (let i = 0; i < 3; i++) {
+      sliders[i].value = xyz[i];
+      values[i].textContent = `${xyz[i]}`;
+    }
+    this.#onMotionChanged();
   }
 
   #onImportLocationsFile(deviceConnection, evt) {
@@ -740,8 +712,6 @@ class DeviceControlApp {
     let index = 0;
     return e => {
       if (e.type == 'mousedown') {
-        // Reset any overridden device state.
-        adbShell('cmd device_state state reset');
         // Send a device_state message for the current state.
         let message = {
           command: 'device_state',
@@ -756,11 +726,6 @@ class DeviceControlApp {
         let hingeAngle = null;
         if ('hinge_angle_value' in states[index]) {
           hingeAngle = states[index].hinge_angle_value;
-          // TODO(b/181157794): Use a custom Sensor HAL for hinge_angle
-          // injection instead of this guest binary.
-          adbShell(
-              '/vendor/bin/cuttlefish_sensor_injection hinge_angle ' +
-              states[index].hinge_angle_value);
         }
         // Update the Device Details view.
         this.#updateDeviceStateDetails(lidSwitchOpen, hingeAngle);
@@ -1134,11 +1099,9 @@ class DeviceControlApp {
   }
 
   #onRotateButton(rotation) {
-    // Attempt to init adb again, in case the initial connection failed.
-    // This succeeds immediately if already connected.
-    this.#initializeAdb();
     this.#rotateDisplays(rotation);
-    adbShell(`/vendor/bin/cuttlefish_sensor_injection rotate ${rotation}`);
+    const z = normalizeAngle(rotation);
+    this.#setOrientation(z);
   }
 
   #onControlPanelButton(e, command) {
@@ -1336,6 +1299,17 @@ window.addEventListener("load", async evt => {
   }
   document.getElementById('loader').style.display = 'none';
 });
+
+// Wrap an angle in degrees to the (-180, 180] range, preserving orientation:
+// the result is always congruent to the input modulo 360, so the corresponding
+// sin/cos (and thus the simulated orientation) are unchanged.
+function normalizeAngle(degrees) {
+  let normalized = ((degrees % 360) + 360) % 360;  // [0, 360)
+  if (normalized > 180) {
+    normalized -= 360;  // (180, 360) -> (-180, 0)
+  }
+  return normalized;
+}
 
 // The formulas in this function are derived from the following facts:
 // * The video element's aspect ratio (ar) is fixed.

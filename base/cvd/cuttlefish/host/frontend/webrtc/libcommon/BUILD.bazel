@@ -42,6 +42,7 @@ cf_cc_library(
     name = "peer_connection_utils",
     srcs = ["peer_connection_utils.cpp"],
     hdrs = ["peer_connection_utils.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/host/frontend/webrtc/libcommon:audio_device",
         "//cuttlefish/host/frontend/webrtc/libcommon:vp8only_encoder_factory",

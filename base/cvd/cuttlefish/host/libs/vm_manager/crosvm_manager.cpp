@@ -16,7 +16,6 @@
 
 #include "cuttlefish/host/libs/vm_manager/crosvm_manager.h"
 
-#include <algorithm>
 #include <poll.h>
 #include <signal.h>
 #include <sys/stat.h>
@@ -29,11 +28,8 @@
 #include <utility>
 #include <vector>
 
-#include "absl/log/log.h"
-#include "absl/strings/str_join.h"
 #include <android-base/file.h>
-#include <android-base/parseint.h>
-#include <android-base/strings.h>
+#include "absl/strings/str_join.h"
 #include <json/json.h>
 #include <vulkan/vulkan.h>
 
@@ -61,14 +57,6 @@
 namespace cuttlefish {
 namespace vm_manager {
 
-namespace {
-
-#if defined(__aarch64__)
-constexpr bool kUseFixedGpuBlobMapping = true;
-#else
-constexpr bool kUseFixedGpuBlobMapping = false;
-#endif
-
 constexpr char kCuttlefishDefaultGpuContextTypes[] =
     "gfxstream-vulkan:cross-domain:gfxstream-composer";
 constexpr char kGfxstreamContextTypes[] =
@@ -85,76 +73,6 @@ std::string GfxstreamContextTypes(
   }
   return default_context_types;
 }
-
-Result<std::optional<std::string>> PreferPerformanceCoresAffinity(
-    const CuttlefishConfig::InstanceSpecific& instance) {
-  static constexpr char kCpuSysfsRoot[] = "/sys/devices/system/cpu";
-
-  std::vector<std::pair<int, int>> cpu_capacities;
-  const auto cpu_entries = CF_EXPECT(DirectoryContents(kCpuSysfsRoot));
-  for (const auto& entry : cpu_entries) {
-    if (!android::base::StartsWith(entry, "cpu")) {
-      continue;
-    }
-
-    int cpu_id = 0;
-    if (!android::base::ParseInt(entry.substr(3), &cpu_id)) {
-      continue;
-    }
-
-    const auto cpu_dir = std::string(kCpuSysfsRoot) + "/" + entry;
-    const auto online_path = cpu_dir + "/online";
-    if (FileExists(online_path)) {
-      int online = 0;
-      if (!android::base::ParseInt(
-              android::base::Trim(CF_EXPECT(ReadFileContents(online_path))),
-              &online) ||
-          online == 0) {
-        continue;
-      }
-    }
-
-    const auto capacity_path = cpu_dir + "/cpu_capacity";
-    if (!FileExists(capacity_path)) {
-      continue;
-    }
-
-    int capacity = 0;
-    if (!android::base::ParseInt(
-            android::base::Trim(CF_EXPECT(ReadFileContents(capacity_path))),
-            &capacity)) {
-      continue;
-    }
-
-    cpu_capacities.emplace_back(capacity, cpu_id);
-  }
-
-  if (cpu_capacities.empty() ||
-      cpu_capacities.size() < static_cast<size_t>(instance.cpus())) {
-    return std::nullopt;
-  }
-
-  std::sort(cpu_capacities.begin(), cpu_capacities.end(),
-            [](const auto& lhs, const auto& rhs) {
-              if (lhs.first != rhs.first) {
-                return lhs.first > rhs.first;
-              }
-              return lhs.second < rhs.second;
-            });
-
-  std::string affinity;
-  for (int vcpu = 0; vcpu < instance.cpus(); ++vcpu) {
-    if (!affinity.empty()) {
-      affinity += ":";
-    }
-    affinity +=
-        std::to_string(vcpu) + "=" + std::to_string(cpu_capacities[vcpu].second);
-  }
-
-  return affinity;
-}
-
-}  // namespace
 
 bool CrosvmManager::IsSupported() {
 #ifdef __ANDROID__
@@ -312,8 +230,6 @@ Result<std::string> HostSwiftShaderIcdPathForArch() {
 
 Result<std::string> HostLavapipeIcdPathForArch() {
   switch (HostArch()) {
-    case Arch::Arm64:
-      return std::string("/usr/share/vulkan/icd.d/lvp_icd.aarch64.json");
     case Arch::X86:
     case Arch::X86_64:
       return HostUsrSharePath("vulkan/icd.d/vk_lavapipe_icd.cf.json");
@@ -348,19 +264,41 @@ Result<void> MaybeConfigureVulkanIcd(const CuttlefishConfig& config,
   return {};
 }
 
+// TODO(b/402274999): remove after crosvm has been fully substituted.
 Result<std::string> CrosvmPathForVhostUserGpu(const CuttlefishConfig& config) {
   const auto& instance = config.ForDefaultInstance();
+
+  std::string crosvm_path;
   switch (HostArch()) {
     case Arch::Arm64:
-      return HostBinaryPath("aarch64-linux-gnu/crosvm");
     case Arch::X86:
     case Arch::X86_64:
-      return instance.crosvm_binary();
-    default:
+      crosvm_path = HostBinaryPath("prebuilts/crosvm");
       break;
-  }
-  return CF_ERR("Unhandled host arch " << HostArchStr()
+    default:
+      return CF_ERR("Unhandled host arch " << HostArchStr()
                                        << " for vhost user gpu crosvm");
+  }
+  if (FileExists(crosvm_path)) {
+    return crosvm_path;
+  }
+
+  // Older builds placed the prebuilt in an arch specific subdirectory.
+  switch (HostArch()) {
+    case Arch::Arm64:
+      crosvm_path = HostBinaryPath("aarch64-linux-gnu/crosvm");
+      break;
+    case Arch::X86:
+    case Arch::X86_64:
+      crosvm_path = instance.crosvm_binary();
+      break;
+    default:
+      return CF_ERR("Unhandled host arch " << HostArchStr()
+                                       << " for vhost user gpu crosvm");
+  }
+
+  CF_EXPECT(FileExists(crosvm_path), "Failed to find crosvm prebuilt for vhost user gpu.");
+  return crosvm_path;
 }
 
 Result<VhostUserDeviceCommands> BuildVhostUserGpu(
@@ -427,9 +365,6 @@ Result<VhostUserDeviceCommands> BuildVhostUserGpu(
   gpu_params_json["surfaceless"] = true;
   gpu_params_json["external-blob"] = instance.enable_gpu_external_blob();
   gpu_params_json["system-blob"] = instance.enable_gpu_system_blob();
-  if (kUseFixedGpuBlobMapping && IsGfxstreamMode(gpu_mode)) {
-    gpu_params_json["fixed-blob-mapping"] = true;
-  }
   if (!instance.gpu_renderer_features().empty()) {
     gpu_params_json["renderer-features"] = instance.gpu_renderer_features();
   }
@@ -529,17 +464,13 @@ Result<void> ConfigureGpu(const CuttlefishConfig& config, Command* crosvm_cmd) {
       !gpu_renderer_features.empty()
           ? ",renderer-features=\"" + gpu_renderer_features + "\""
           : "";
-  const std::string gpu_fixed_blob_mapping_param =
-      kUseFixedGpuBlobMapping && IsGfxstreamMode(gpu_mode)
-          ? ",fixed-blob-mapping=true"
-          : "";
 
   const std::string gpu_common_string =
       fmt::format(",pci-address=00:{:0>2x}.0", VmManager::kGpuPciSlotNum) +
       gpu_udmabuf_string + gpu_pci_bar_size;
   const std::string gpu_common_3d_string =
       gpu_common_string + ",egl=true,surfaceless=true,glx=false" + gles_string +
-      gpu_renderer_features_param + gpu_fixed_blob_mapping_param;
+      gpu_renderer_features_param;
 
   std::string gpu_displays_string = "";
   if (instance.hwcomposer() != kHwComposerNone) {
@@ -715,24 +646,6 @@ Result<std::vector<MonitorCommand>> CrosvmManager::StartCommands(
   crosvm_cmd.Cmd().AddParameter("--mem=", instance.memory_mb());
   if (instance.mte()) {
     crosvm_cmd.Cmd().AddParameter("--mte");
-  }
-
-  if (instance.prefer_performance_cores()) {
-    if (!instance.vcpu_config_path().empty()) {
-      LOG(WARNING) << "Ignoring prefer_performance_cores because "
-                      "vcpu_config_path is already set.";
-    } else {
-      const auto affinity =
-          CF_EXPECT(PreferPerformanceCoresAffinity(instance));
-      if (affinity) {
-        crosvm_cmd.Cmd().AddParameter("--cpu-affinity=", *affinity);
-      } else {
-        LOG(WARNING)
-            << "Could not determine host CPU capacity data for "
-               "prefer_performance_cores; leaving crosvm CPU placement "
-               "unchanged.";
-      }
-    }
   }
 
   CF_EXPECT(crosvm_cmd.AddCpus(instance.cpus(), instance.vcpu_config_path()));
@@ -1059,7 +972,8 @@ Result<std::vector<MonitorCommand>> CrosvmManager::StartCommands(
 
   for (int index = 0; index < instance.media_configs().size(); index++) {
     auto config = instance.media_configs()[index];
-    if (config.type == CuttlefishConfig::MediaType::kV4l2EmulatedCamera) {
+    if (config.type == CuttlefishConfig::MediaType::kV4l2EmulatedCameraSPlane ||
+        config.type == CuttlefishConfig::MediaType::kV4l2EmulatedCameraMPlane) {
       crosvm_cmd.Cmd().AddParameter("--vhost-user=type=media,socket=", instance.media_socket_path(index));
     } else if (config.type == CuttlefishConfig::MediaType::kV4l2Proxy) {
       crosvm_cmd.Cmd().AddParameter("--v4l2-proxy=", "/dev/video0");

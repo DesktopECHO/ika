@@ -39,6 +39,7 @@
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/json.h"
 #include "cuttlefish/host/libs/web/android_build.h"
+#include "cuttlefish/host/libs/web/android_build_api_key.h"
 #include "cuttlefish/host/libs/web/android_build_string.h"
 #include "cuttlefish/host/libs/web/android_build_url.h"
 #include "cuttlefish/host/libs/web/cas/cas_downloader.h"
@@ -86,15 +87,13 @@ Result<Json::Value> GetResponseJson(const HttpResponse<Json::Value>& response,
 }  // namespace
 
 AndroidBuildApi::AndroidBuildApi(HttpClient& http_client,
+                                 AndroidBuildUrl& android_build_url,
                                  CredentialSource* credential_source,
-                                 std::string catchall_api_key,
-                                 AndroidBuildUrl* android_build_url,
                                  const std::chrono::seconds retry_period,
                                  CasDownloader* cas_downloader)
     : http_client_(http_client),
-      credential_source_(credential_source),
-      catchall_api_key_(catchall_api_key),
       android_build_url_(android_build_url),
+      credential_source_(credential_source),
       retry_period_(retry_period),
       cas_downloader_(cas_downloader) {}
 
@@ -149,17 +148,6 @@ Result<std::string> AndroidBuildApi::DownloadFile(
   return DownloadTargetFile(build, target_directory, artifact_name);
 }
 
-Result<std::string> AndroidBuildApi::DownloadFileWithBackup(
-    const Build& build, const std::string& target_directory,
-    const std::string& artifact_name, const std::string& backup_artifact_name) {
-  std::unordered_set<std::string> artifacts =
-      CF_EXPECT(Artifacts(build, {artifact_name, backup_artifact_name}));
-  std::string selected_artifact = artifact_name;
-  if (!Contains(artifacts, artifact_name)) {
-    selected_artifact = backup_artifact_name;
-  }
-  return DownloadTargetFile(build, target_directory, selected_artifact);
-}
 
 Result<SeekableZipSource> AndroidBuildApi::FileReader(
     const Build& build, const std::string& artifact_name) {
@@ -190,7 +178,7 @@ Result<SeekableZipSource> AndroidBuildApi::FileReader(
 
 Result<AndroidBuildApi::BuildInfo> AndroidBuildApi::GetBuildInfo(
     std::string_view build_id, std::string_view target) {
-  const std::string url = android_build_url_->GetBuildUrl(build_id, target);
+  const std::string url = android_build_url_.GetBuildUrl(build_id, target);
   auto response =
       CF_EXPECT(HttpGetToJson(http_client_, url, CF_EXPECT(Headers())));
 
@@ -234,7 +222,7 @@ Result<AndroidBuildApi::BuildInfo> AndroidBuildApi::GetBuildInfo(
 Result<bool> AndroidBuildApi::BlockUntilTerminalStatus(
     std::string_view initial_status, std::string_view build_id,
     std::string_view target) {
-  const std::string url = android_build_url_->GetBuildUrl(build_id, target);
+  const std::string url = android_build_url_.GetBuildUrl(build_id, target);
   CF_EXPECTF(!initial_status.empty(),
              "\"{}\" is not a valid branch or build id.", build_id);
 
@@ -268,33 +256,41 @@ Result<std::vector<std::string>> AndroidBuildApi::Headers() {
   if (credential_source_) {
     headers.push_back("Authorization: Bearer " +
                       CF_EXPECT(credential_source_->Credential()));
-  } else if (!catchall_api_key_.empty()) {
-    headers.push_back("X-goog-api-key: " + catchall_api_key_);
+  } else if (std::string key = GetCatchallApiKey(); !key.empty()) {
+    headers.push_back("X-goog-api-key: " + key);
   }
   return headers;
 }
 
 Result<std::optional<std::string>> AndroidBuildApi::LatestBuildId(
     const std::string& branch, const std::string& target) {
-  const std::string url =
-      android_build_url_->GetLatestBuildIdUrl(branch, target);
-  auto response =
-      CF_EXPECT(HttpGetToJson(http_client_, url, CF_EXPECT(Headers())));
+  for (const SafeLevel safe_level : kAllSafeLevels) {
+    VLOG(0) << "Attempting to download build at safe level '" << safe_level
+            << "' for branch '" << branch << "' and target '" << target << "'";
+    const std::string url =
+        android_build_url_.GetLatestBuildIdUrl(branch, target, safe_level);
+    const std::vector<std::string> headers = CF_EXPECT(Headers());
+    const HttpResponse<Json::Value> response =
+        CF_EXPECT(HttpGetToJson(http_client_, url, headers));
 
-  const Json::Value json = CF_EXPECTF(GetResponseJson(response),
-                                      "Error fetching last known good build "
-                                      "id for:\nbranch \"{}\", target \"{}\"",
-                                      branch, target);
-  if (!json.isMember("builds")) {
-    return std::nullopt;
+    Result<Json::Value> json_res = GetResponseJson(response);
+    if (!json_res.ok()) {
+      continue;
+    }
+    const Json::Value json = *json_res;
+
+    if (!json.isMember("builds")) {
+      continue;
+    }
+
+    CF_EXPECTF(json["builds"].isArray() && json["builds"].size() == 1,
+               "Expected to find a single latest build for branch \"{}\" and "
+               "target \"{}\" in the response array, "
+               "but found {}",
+               branch, target, json["builds"].size());
+    return CF_EXPECT(GetValue<std::string>(json["builds"][0], {"buildId"}));
   }
-
-  CF_EXPECTF(json["builds"].isArray() && json["builds"].size() == 1,
-             "Expected to find a single latest build for branch \"{}\" and "
-             "target \"{}\" in the response array, "
-             "but found {}",
-             branch, target, json["builds"].size());
-  return CF_EXPECT(GetValue<std::string>(json["builds"][0], { "buildId" }));
+  return std::nullopt;
 }
 
 Result<std::unordered_set<std::string>> AndroidBuildApi::Artifacts(
@@ -304,7 +300,7 @@ Result<std::unordered_set<std::string>> AndroidBuildApi::Artifacts(
   std::unordered_set<std::string> artifacts;
 
   do {
-    const std::string url = android_build_url_->GetArtifactUrl(
+    const std::string url = android_build_url_.GetArtifactUrl(
         build.id, build.target, artifact_filenames, page_token);
     auto response =
         CF_EXPECT(HttpGetToJson(http_client_, url, CF_EXPECT(Headers())));
@@ -353,7 +349,7 @@ Result<std::unordered_set<std::string>> AndroidBuildApi::Artifacts(
 Result<std::string> AndroidBuildApi::GetArtifactDownloadUrl(
     const DeviceBuild& build, const std::string& artifact) {
   const std::string download_url_endpoint =
-      android_build_url_->GetArtifactDownloadUrl(build.id, build.target,
+      android_build_url_.GetArtifactDownloadUrl(build.id, build.target,
                                                  artifact);
   auto response = CF_EXPECT(
       HttpGetToJson(http_client_, download_url_endpoint, CF_EXPECT(Headers())));

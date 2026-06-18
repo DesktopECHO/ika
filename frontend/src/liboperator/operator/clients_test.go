@@ -108,6 +108,8 @@ func TestWsClientImplementsClient(t *testing.T) {
 
 // TestWsClientClose verifies that Close() can be called multiple times safely.
 func TestWsClientClose(t *testing.T) {
+	// Create a minimal WsClient without a real connection
+	// to test the Close() sync.Once behavior
 	c := &WsClient{
 		send: make(chan interface{}, 1),
 		done: make(chan struct{}),
@@ -135,11 +137,13 @@ func TestWsClientDone(t *testing.T) {
 		done: make(chan struct{}),
 	}
 
+	// Done() should return the done channel
 	done := c.Done()
 	if done == nil {
 		t.Error("Done() returned nil")
 	}
 
+	// Channel should be open initially
 	select {
 	case <-done:
 		t.Error("done channel closed before Close() called")
@@ -147,6 +151,7 @@ func TestWsClientDone(t *testing.T) {
 		// Expected
 	}
 
+	// After Close(), channel should be closed
 	c.Close()
 	select {
 	case <-done:
@@ -165,6 +170,7 @@ func TestWsClientSendAfterClose(t *testing.T) {
 
 	c.Close()
 
+	// Send should return an error when the connection is closed
 	err := c.Send("test message")
 	if err == nil {
 		t.Error("Send after close should return an error")

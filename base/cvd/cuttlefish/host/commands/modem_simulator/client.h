@@ -31,7 +31,9 @@ class ClientId {
  public:
   ClientId();
 
-  bool operator==(const ClientId&) const;
+  bool operator==(const ClientId& other) const { return id_ == other.id_; }
+  bool operator!=(const ClientId& other) const { return !(*this == other); }
+  bool operator<(const ClientId& other) const { return id_ < other.id_; }
 
  private:
   static size_t next_id_;

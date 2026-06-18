@@ -280,6 +280,34 @@ function build_source_manifest() {
   build_tree_manifest "${manifest_path}" "." prunes
 }
 
+function source_tarball_has_required_files() {
+  local tarball="$1"
+  local tar_basename="$2"
+  local tar_index
+  local required_file
+
+  tar_index="$(mktemp "${PKG_SOURCES_DIR}/${tar_basename}.tar.index.XXXXXX")"
+  if ! tar -tzf "${tarball}" >"${tar_index}"; then
+    rm -f "${tar_index}"
+    return 1
+  fi
+
+  for required_file in \
+    "base/cvd/adb/BUILD.bazel" \
+    "base/cvd/tools/ensure_bazel_git_mirrors.sh" \
+    "base/cvd/tools/ensure_crosvm_git_mirror.sh"
+  do
+    if ! grep -Fxq "${tar_basename}/${required_file}" "${tar_index}"; then
+      echo "Discarding incomplete source tarball ${tarball}: missing ${required_file}"
+      rm -f "${tar_index}"
+      return 1
+    fi
+  done
+
+  rm -f "${tar_index}"
+  return 0
+}
+
 function refresh_source_tarball_if_needed() {
   local tmp_manifest
   local tmp_source_tarball
@@ -341,12 +369,12 @@ function refresh_source_tarball_if_needed() {
   build_source_manifest "${tmp_manifest}"
 
   if [[ -f "${SOURCE_TARBALL}" && -f "${SOURCE_MANIFEST}" ]] && cmp -s "${tmp_manifest}" "${SOURCE_MANIFEST}"; then
-    if tar -tzf "${SOURCE_TARBALL}" >/dev/null 2>&1; then
+    if source_tarball_has_required_files "${SOURCE_TARBALL}" "${TAR_BASENAME}"; then
       echo "Reusing source tarball ${SOURCE_TARBALL}"
       return
     fi
 
-    echo "Discarding corrupt source tarball ${SOURCE_TARBALL}"
+    echo "Regenerating source tarball ${SOURCE_TARBALL}"
   fi
 
   echo "Source changed; staging and compressing the source tarball (this can take a few minutes)..."
@@ -514,7 +542,7 @@ if [[ "${DISTRO_FAMILY}" == "rpm" ]]; then
     spec_workdir="$(mktemp -d "${RPMBUILD_WORK_ROOT}/$(normalize_spec_name "${spec}").XXXXXX")"
     build_workdirs+=("${spec_workdir}")
     echo "Building RPM from ${spec}"
-    rpmbuild \
+    rpmbuild --quiet \
       --define "_topdir ${RPMBUILD_TOPDIR}" \
       --define "_sourcedir ${RPMBUILD_TOPDIR}/SOURCES" \
       --define "_rpmdir ${RPMBUILD_TOPDIR}/RPMS" \

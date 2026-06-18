@@ -16,13 +16,13 @@
 
 #pragma once
 
+#include <json/json.h>
+
 #include <chrono>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
-
-#include <json/json.h>
 
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/host/commands/cvd/instances/cvd_persistent_data.pb.h"
@@ -37,25 +37,25 @@ class LocalInstance {
   LocalInstance(LocalInstance&&) = default;
   LocalInstance& operator=(const LocalInstance&) = default;
 
-  uint32_t id() const { return instance_proto_->id(); }
-  const std::string& name() const { return instance_proto_->name(); }
-  cvd::InstanceState state() const { return instance_proto_->state(); }
-  void set_state(cvd::InstanceState state);
-  const std::string& webrtc_device_id() const {
+  uint32_t Id() const { return instance_proto_->id(); }
+  const std::string& Name() const { return instance_proto_->name(); }
+  cvd::InstanceState State() const { return instance_proto_->state(); }
+  void SetState(cvd::InstanceState state);
+  const std::string& WebRtcDeviceId() const {
     return instance_proto_->webrtc_device_id();
   }
-  void set_webrtc_device_id(std::string webrtc_device_id) {
+  void SetWebRtcDeviceId(std::string webrtc_device_id) {
     instance_proto_->set_webrtc_device_id(std::move(webrtc_device_id));
   }
-  std::string instance_dir() const;
-  int adb_port() const;
-  const std::string& home_directory() const {
+  std::string InstanceDirectory() const;
+  int AdbPort() const;
+  const std::string& HomeDirectory() const {
     return group_proto_->home_directory();
   }
-  const std::string& host_artifacts_path() const {
+  const std::string& HostArtifactsPath() const {
     return group_proto_->host_artifacts_path();
   }
-  std::string assembly_dir() const;
+  std::string AssemblyDirectory() const;
 
   bool IsActive() const;
   // Contacts run_cvd to query the instance status. Returns a JSON object with
@@ -73,6 +73,9 @@ class LocalInstance {
   Result<std::vector<std::string>> ListRecordings();
   Result<void> StartRecording(std::chrono::seconds launcher_timeout);
   Result<void> StopRecording(std::chrono::seconds launcher_timeout);
+
+  // Return list of filenames of instance-level log files.
+  Result<std::vector<std::string>> LogsFilenames() const;
 
  private:
   LocalInstance(std::shared_ptr<cvd::InstanceGroup> group_proto,

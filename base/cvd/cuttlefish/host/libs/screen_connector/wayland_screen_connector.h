@@ -35,9 +35,6 @@ class WaylandScreenConnector {
 
   void SetFrameCallback(GenerateProcessedFrameCallbackImpl frame_callback);
 
-  void SetDmabufFrameCallback(
-      wayland::Surfaces::DmabufFrameCallback frame_callback);
-
   void SetDisplayEventCallback(DisplayEventCallback event_callback);
 
  private:

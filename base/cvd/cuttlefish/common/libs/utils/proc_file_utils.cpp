@@ -25,18 +25,19 @@
 #include <unordered_map>
 #include <vector>
 
-#include <android-base/file.h>
-#include <fmt/core.h>
 #include "absl/log/log.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/strip.h"
+#include "android-base/file.h"
+#include "fmt/core.h"
 
 #include "cuttlefish/common/libs/fs/shared_buf.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/posix/readlink.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -146,11 +147,9 @@ Result<std::vector<std::string>> GetCmdArgs(const pid_t pid) {
 }
 
 Result<std::string> GetExecutablePath(const pid_t pid) {
-  std::string exec_target_path;
   std::string proc_exe_path = fmt::format("/proc/{}/exe", pid);
-  CF_EXPECT(
-      android::base::Readlink(proc_exe_path, std::addressof(exec_target_path)),
-      proc_exe_path << " Should be a symbolic link but it is not.");
+  std::string exec_target_path = CF_EXPECTF(
+      ReadLink(proc_exe_path), "Unable to read link at \"{}\".", proc_exe_path);
   std::string suffix(" (deleted)");
   if (absl::EndsWith(exec_target_path, suffix)) {
     return exec_target_path.substr(0, exec_target_path.size() - suffix.size());

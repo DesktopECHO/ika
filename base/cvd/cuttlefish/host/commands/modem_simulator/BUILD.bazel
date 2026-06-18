@@ -10,6 +10,7 @@ cf_cc_library(
     name = "channel_monitor",
     srcs = ["channel_monitor.cpp"],
     hdrs = ["channel_monitor.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/fs",
         "//cuttlefish/host/commands/modem_simulator:client",
@@ -35,6 +36,7 @@ cf_cc_library(
     name = "command_parser",
     srcs = ["command_parser.cpp"],
     hdrs = ["command_parser.h"],
+    clang_format_enabled = False,
     deps = [
         "//libbase",
         "@abseil-cpp//absl/strings",
@@ -51,6 +53,7 @@ cf_cc_library(
     name = "data_service",
     srcs = ["data_service.cpp"],
     hdrs = ["data_service.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/host/commands/modem_simulator:device_config",
         "//cuttlefish/host/commands/modem_simulator:modem_service",
@@ -126,6 +129,7 @@ cf_cc_library(
         "sms_service.h",
         "stk_service.h",
     ],
+    clang_format_enabled = False,
     clang_tidy_enabled = False,  # TODO(b/405163202): Enable back once migration is completed.
     copts = [
         "-Wall",
@@ -162,11 +166,13 @@ cf_cc_binary(
     srcs = [
         "main.cpp",
     ],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/fs",
         "//cuttlefish/common/libs/utils:tee_logging",
         "//cuttlefish/host/commands/modem_simulator:modem_simulator_class",
         "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/log_names",
         "//libbase",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/log:check",
@@ -204,6 +210,7 @@ cf_cc_library(
     name = "pdu_parser",
     srcs = ["pdu_parser.cpp"],
     hdrs = ["pdu_parser.h"],
+    clang_format_enabled = False,
 )
 
 cf_cc_test(
@@ -218,6 +225,7 @@ cf_cc_test(
         "unittest/iccfile.h",
         "unittest/service_test.cpp",
     ],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/fs",
         "//cuttlefish/common/libs/utils:files",

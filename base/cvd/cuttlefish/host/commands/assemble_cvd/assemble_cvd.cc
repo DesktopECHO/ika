@@ -27,10 +27,11 @@
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/contains.h"
 #include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/common/libs/utils/flag_parser.h"
 #include "cuttlefish/common/libs/utils/in_sandbox.h"
 #include "cuttlefish/common/libs/utils/known_paths.h"
 #include "cuttlefish/common/libs/utils/tee_logging.h"
+#include "cuttlefish/flag_parser/flag.h"
+#include "cuttlefish/flag_parser/gflags_compat.h"
 #include "cuttlefish/host/commands/assemble_cvd/android_build/android_build.h"
 #include "cuttlefish/host/commands/assemble_cvd/android_build/android_builds.h"
 #include "cuttlefish/host/commands/assemble_cvd/android_build/identify_build.h"
@@ -69,8 +70,10 @@
 #include "cuttlefish/host/libs/config/fetcher_configs.h"
 #include "cuttlefish/host/libs/config/log_string_to_dir.h"
 #include "cuttlefish/host/libs/feature/inject.h"
+#include "cuttlefish/host/libs/log_names/log_names.h"
 #include "cuttlefish/posix/symlink.h"
 #include "cuttlefish/pretty/vector.h"
+#include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
 namespace {
@@ -105,13 +108,13 @@ Result<void> SaveConfig(const CuttlefishConfig& tmp_config_obj) {
 Result<void> CreateLegacySymlinks(
     const CuttlefishConfig::InstanceSpecific& instance,
     const CuttlefishConfig::EnvironmentSpecific& environment) {
-  std::string log_files[] = {"kernel.log",
-                             "launcher.log",
-                             "logcat",
-                             "metrics.log",
-                             "modem_simulator.log",
-                             "crosvm_openwrt.log",
-                             "crosvm_openwrt_boot.log"};
+  std::string log_files[] = {kLogNameKernel,
+                             kLogNameLauncher,
+                             kLogNameLogcat,
+                             kLogNameMetrics,
+                             kLogNameModemSimulator,
+                             kLogNameCrosvmOpenWrt,
+                             kLogNameCrosvmOpenWrtBoot};
   for (const auto& log_file : log_files) {
     auto symlink_location = instance.PerInstancePath(log_file);
     auto log_target = "logs/" + log_file;  // Relative path
@@ -181,7 +184,7 @@ Result<std::set<std::string>> PreservingOnResume(
   const bool resume_requested = FLAGS_resume || !snapshot_path.empty();
   if (!resume_requested) {
     if (InSandbox()) {
-      return {{"launcher.log"}};
+      return {{kLogNameLauncher}};
     } else {
       return {};
     }
@@ -190,11 +193,10 @@ Result<std::set<std::string>> PreservingOnResume(
             "Restoring from snapshot requires not creating OS disks");
   if (creating_os_disk) {
     // not snapshot restore, must be --resume
-    LOG(INFO) << "Requested resuming a previous session (the default behavior) "
-              << "but the base images have changed under the overlay, making "
-              << "the overlay incompatible. Wiping the overlay files.";
+    VLOG(0) << "Trying to resume previous session, but base images have "
+                 "changed.  Wiping overlay files.";
     if (InSandbox()) {
-      return {{"launcher.log"}};
+      return {{kLogNameLauncher}};
     } else {
       return {};
     }
@@ -234,29 +236,25 @@ Result<std::set<std::string>> PreservingOnResume(
   preserving.insert("pflash.img");
   preserving.insert("uboot_env.img");
   preserving.insert(FactoryResetProtectedImage::FileName());
-  preserving.insert(std::string(MiscImage::kName));
+  preserving.insert(absl::StrCat(MiscImage::kName, ".img"));
   preserving.insert("vmmtruststore.img");
-  preserving.insert(std::string(MetadataImage::kName));
+  preserving.insert(absl::StrCat(MetadataImage::kName, ".img"));
   preserving.insert("persistent_vbmeta.img");
   preserving.insert("oemlock_secure");
   preserving.insert("oemlock_insecure");
-  // The per-instance userdata.img is the sole backing store for /data on
-  // boots where the source data_image template doesn't exist (RPM ships
-  // none). Preserve it across --resume, otherwise the clean pass wipes it
-  // and we boot with empty /data every time.
-  preserving.insert("userdata.img");
   // Preserve logs if restoring from a snapshot.
   if (!snapshot_path.empty()) {
-    preserving.insert("kernel.log");
-    preserving.insert("launcher.log");
-    preserving.insert("logcat");
-    preserving.insert("modem_simulator.log");
-    preserving.insert("crosvm_openwrt.log");
-    preserving.insert("crosvm_openwrt_boot.log");
-    preserving.insert("metrics.log");
+    preserving.insert(kLogNameKernel);
+    preserving.insert(kLogNameLauncher);
+    preserving.insert(kLogNameLogcat);
+    preserving.insert(kLogNameModemSimulator);
+    preserving.insert(kLogNameCrosvmOpenWrt);
+    preserving.insert(kLogNameCrosvmOpenWrtBoot);
+    preserving.insert(kLogNameMetrics);
+    preserving.insert("userdata.img");
   }
   if (InSandbox()) {
-    preserving.insert("launcher.log");  // Created before `assemble_cvd` runs
+    preserving.insert(kLogNameLauncher);  // Created before `assemble_cvd` runs
   }
   for (int i = 0; i < modem_simulator_count; i++) {
     std::stringstream ss;
@@ -270,7 +268,8 @@ Result<SharedFD> SetLogger(std::string runtime_dir_parent) {
   SharedFD log_file;
   if (InSandbox()) {
     log_file = SharedFD::Open(
-        runtime_dir_parent + "/instances/cvd-1/logs/launcher.log",
+        absl::StrCat(runtime_dir_parent, "/instances/cvd-1/logs/",
+                     kLogNameLauncher),
         O_WRONLY | O_APPEND);
   } else {
     while (runtime_dir_parent[runtime_dir_parent.size() - 1] == '/') {
@@ -433,7 +432,7 @@ Result<const CuttlefishConfig*> InitFilesystemAndCreateConfig(
 
     auto environment =
         const_cast<const CuttlefishConfig&>(config).ForDefaultEnvironment();
-    LOG(INFO) << "Path for instance UDS: " << config.instances_uds_dir();
+    VLOG(0) << "Path for instance UDS: " << config.instances_uds_dir();
 
     for (const auto& instance : config.Instances()) {
       std::string vsock_dir = fmt::format("{}/vsock_{}_{}", TempDir(),
@@ -448,9 +447,9 @@ Result<const CuttlefishConfig*> InitFilesystemAndCreateConfig(
       CF_EXPECT(CreateLegacySymlinks(instance, environment));
     }
 
-    if (log->LinkAtCwd(config.AssemblyPath("assemble_cvd.log"))) {
+    if (log->LinkAtCwd(config.AssemblyPath(kLogNameAssembleCvd))) {
       LOG(ERROR) << "Unable to persist assemble_cvd log at "
-                 << config.AssemblyPath("assemble_cvd.log") << ": "
+                 << config.AssemblyPath(kLogNameAssembleCvd) << ": "
                  << log->StrError();
     }
 
@@ -484,7 +483,7 @@ Result<const CuttlefishConfig*> InitFilesystemAndCreateConfig(
     CF_EXPECT(Symlink(first_instance, double_legacy_instance_dir));
   }
 
-  CF_EXPECT(LogStringToDir(config->Instances()[0], "build_info.log",
+  CF_EXPECT(LogStringToDir(config->Instances()[0], kLogNameBuildInfo,
                            absl::StrCat(Pretty(android_builds))));
 
   CF_EXPECT(CreateDynamicDiskFiles(fetcher_configs, *config, android_builds,
@@ -574,6 +573,9 @@ Result<AndroidBuilds> FindAndroidBuilds(
 
 Result<int> AssembleCvdMain(int argc, char** argv) {
   auto log = CF_EXPECT(SetLogger(AbsolutePath(FLAGS_instance_dir)));
+  VLOG(0) << "received flags: "
+          << absl::StrJoin(std::vector<std::string>(argv + 1, argv + argc),
+                           " ");
 
   CF_EXPECT(CheckNoTTY());
 
@@ -581,7 +583,7 @@ Result<int> AssembleCvdMain(int argc, char** argv) {
   // fetcher_config.json will be searched for in the system image directory.
   (void) CF_EXPECT(ReadInputFiles());
 
-  auto args = ArgsToVec(argc - 1, argv + 1);
+  std::vector<std::string> args(argv+1, argv + argc);
 
   bool help = false;
   std::string help_str;
@@ -596,9 +598,7 @@ Result<int> AssembleCvdMain(int argc, char** argv) {
       GflagsCompatFlag("helppackage", help_str),
       GflagsCompatFlag("helpxml", helpxml),
   };
-  for (const auto& help_flag : help_flags) {
-    CF_EXPECT(help_flag.Parse(args), "Failed to process help flag");
-  }
+  CF_EXPECT(ConsumeFlags(help_flags, args), "Failed to process help flags");
 
   {
     std::string process_name = "assemble_cvd";
@@ -619,17 +619,10 @@ Result<int> AssembleCvdMain(int argc, char** argv) {
   FetcherConfigs fetcher_configs =
       FetcherConfigs::ReadFromDirectories(system_image_dir.AsVector());
 
-  AndroidBuilds android_builds =
-      CF_EXPECT(FindAndroidBuilds(system_image_dir, fetcher_configs));
-
-  VLOG(0) << android_builds;
-
   InitramfsPathFlag initramfs_path =
       InitramfsPathFlag::FromGlobalGflags(fetcher_configs);
   KernelPathFlag kernel_path = KernelPathFlag::FromGlobalGflags(fetcher_configs);
 
-  BootImageFlag boot_image =
-      CF_EXPECT(BootImageFlag::FromGlobalGflags(android_builds));
   SuperImageFlag super_image =
       SuperImageFlag::FromGlobalGflags(system_image_dir);
 
@@ -656,6 +649,14 @@ Result<int> AssembleCvdMain(int argc, char** argv) {
     }
     return 1;  // For parity with gflags
   }
+
+  AndroidBuilds android_builds =
+      CF_EXPECT(FindAndroidBuilds(system_image_dir, fetcher_configs));
+
+  VLOG(0) << android_builds;
+
+  BootImageFlag boot_image =
+      CF_EXPECT(BootImageFlag::FromGlobalGflags(android_builds));
 
   CF_EXPECT(VerifyConditionsOnSnapshotRestore(FLAGS_snapshot_path),
             "The conditions for --snapshot_path=<dir> do not meet.");

@@ -27,7 +27,7 @@
 #include "cuttlefish/host/libs/web/http_client/curl_http_client.h"
 #include "cuttlefish/host/libs/web/http_client/http_string.h"
 
-ABSL_FLAG(std::string, filename, "/etc/cuttlefish-common/cf_defaults", "Output filename.");
+ABSL_FLAG(std::string, filename, "/usr/lib/cuttlefish-common/etc/cf_defaults", "Output filename.");
 ABSL_FLAG(std::optional<std::string>, static_defaults_when, std::nullopt,
           "Specify a key-value pair as \"<key>=<value>\". "
           "The key should be a metadata path, e.g., 'project/project-id'. "

@@ -25,7 +25,8 @@
 #include <gtest/gtest.h>
 
 #include "cuttlefish/common/libs/utils/base64.h"
-#include "cuttlefish/common/libs/utils/flag_parser.h"
+#include "cuttlefish/flag_parser/flag.h"
+#include "cuttlefish/flag_parser/gflags_compat.h"
 #include "cuttlefish/common/libs/utils/json.h"
 #include "cuttlefish/host/commands/assemble_cvd/proto/launch_cvd.pb.h"
 #include "cuttlefish/host/commands/cvd/cli/parser/test_common.h"
@@ -56,11 +57,7 @@ InstanceDisplays DefaultDisplays() {
 
 Result<std::optional<InstancesDisplays>> DisplaysFlag(std::vector<std::string> args) {
   std::optional<std::string> flag_str_opt;
-  auto flag = GflagsCompatFlag("displays_binproto")
-                  .Setter([&flag_str_opt](const FlagMatch& m) -> Result<void> {
-                    flag_str_opt = m.value;
-                    return {};
-                  });
+  auto flag = GflagsCompatFlag("displays_binproto", flag_str_opt);
   CF_EXPECT(ConsumeFlags({flag}, args));
   if (!flag_str_opt.has_value()) {
     return {};

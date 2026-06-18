@@ -28,6 +28,7 @@
 #include "cuttlefish/host/libs/config/ap_boot_flow.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/image_aggregator/image_aggregator.h"
+#include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
 namespace {
@@ -84,12 +85,11 @@ Result<InstanceCompositeDisk> InstanceCompositeDisk::Create(
   const auto ipath = [&instance](const std::string& path) -> std::string {
     return instance.PerInstancePath(path);
   };
-  CF_EXPECT(bootconfig_partition.has_value());
   auto persistent_disk_builder =
       DiskBuilder()
           .ReadOnly(false)
           .Partitions(PersistentCompositeDiskConfig(instance, bootloader_env,
-                                                    *bootconfig_partition, frp,
+                                                    bootconfig_partition, frp,
                                                     persistent_vbmeta))
           .VmManager(config.vm_manager())
           .CrosvmPath(instance.crosvm_binary())

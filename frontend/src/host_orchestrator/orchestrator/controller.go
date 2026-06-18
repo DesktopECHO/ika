@@ -62,12 +62,11 @@ type Controller struct {
 }
 
 func (c *Controller) AddRoutes(router *mux.Router) {
-	router.Handle("/artifacts",
-		httpHandler(&fetchArtifactsHandler{Config: c.Config, OM: c.OperationManager})).Methods("POST")
 	router.Handle("/cvds",
 		httpHandler(newCreateCVDHandler(c.Config, c.OperationManager, c.UserArtifactsManager))).Methods("POST")
 	router.Handle("/cvds", httpHandler(&listCVDsHandlerAll{Config: c.Config})).Methods("GET")
 	router.Handle("/cvds/{group}", httpHandler(&listCVDsHandler{Config: c.Config})).Methods("GET")
+	router.Handle("/cvds/{group}/{name}", httpHandler(&listCVDsHandler{Config: c.Config})).Methods("GET")
 	router.PathPrefix("/cvds/{group}/{name}/logs").Handler(&getCVDLogsHandler{Config: c.Config}).Methods("GET")
 	router.Handle("/cvds/{group}/:start",
 		httpHandler(newExecCVDGroupCommandHandler(c.Config, c.OperationManager, &startCvdCommand{}))).Methods("POST")
@@ -81,9 +80,9 @@ func (c *Controller) AddRoutes(router *mux.Router) {
 	router.Handle("/cvds/{group}/{name}",
 		httpHandler(newExecCVDGroupCommandHandler(c.Config, c.OperationManager, &removeCvdCommand{}))).Methods("DELETE")
 	router.Handle("/cvds/{group}/{name}/:start",
-		httpHandler(newStartCVDHandler(c.Config, c.OperationManager))).Methods("POST")
+		httpHandler(newStartCVDInstanceHandler(c.Config, c.OperationManager))).Methods("POST")
 	router.Handle("/cvds/{group}/{name}/:stop",
-		httpHandler(newExecCVDGroupCommandHandler(c.Config, c.OperationManager, &stopCvdCommand{}))).Methods("POST")
+		httpHandler(newExecCVDInstanceCommandHandler(c.Config, c.OperationManager, &stopCvdInstanceCommand{}))).Methods("POST")
 	router.Handle("/cvds/{group}/{name}/:powerwash",
 		httpHandler(newExecCVDInstanceCommandHandler(c.Config, c.OperationManager, &powerwashCvdCommand{}))).Methods("POST")
 	router.Handle("/cvds/{group}/{name}/:powerbtn",
@@ -181,39 +180,6 @@ func replyJSON(w http.ResponseWriter, obj interface{}, statusCode int) error {
 	return encoder.Encode(obj)
 }
 
-type fetchArtifactsHandler struct {
-	Config Config
-	OM     OperationManager
-}
-
-// FetchArtifacts godoc
-//
-//	@Summary		Fetches and stores artifacts from the Android Build API
-//	@Description	Fetches and stores artifacts from the Android Build API
-//	@Accept			json
-//	@Produce		json
-//	@Param			FetchArtifactsRequest					body		apiv1.FetchArtifactsRequest	true	" "
-//	@Param			X-Cutf-Host-Orchestrator-BuildAPI-Creds	header		string						false	"Use this header for forwarding EUC towards the Android Build API"
-//	@Success		200										{object}	apiv1.Operation
-//	@Router			/artifacts [post]
-func (h *fetchArtifactsHandler) Handle(r *http.Request) (interface{}, error) {
-	req := apiv1.FetchArtifactsRequest{}
-	err := json.NewDecoder(r.Body).Decode(&req)
-	if err != nil {
-		return nil, operator.NewBadRequestError("Malformed JSON in request", err)
-	}
-	creds := getFetchCredentials(h.Config.BuildAPICredentials, r)
-	cvdBundleFetcher :=
-		newFetchCVDCommandArtifactsFetcher(exec.CommandContext, creds, h.Config.AndroidBuildServiceURL)
-	opts := FetchArtifactsActionOpts{
-		Request:          &req,
-		Paths:            h.Config.Paths,
-		OperationManager: h.OM,
-		CVDBundleFetcher: cvdBundleFetcher,
-	}
-	return NewFetchArtifactsAction(opts).Run()
-}
-
 type createCVDHandler struct {
 	Config        Config
 	OM            OperationManager
@@ -296,6 +262,7 @@ func (h *listCVDsHandler) Handle(r *http.Request) (interface{}, error) {
 	vars := mux.Vars(r)
 	opts := ListCVDsActionOpts{
 		Group:       vars["group"],
+		Name:        vars["name"],
 		Paths:       h.Config.Paths,
 		ExecContext: exec.CommandContext,
 	}
@@ -535,16 +502,16 @@ func (h *displayScreenshotHandler) Handle(r *http.Request) (interface{}, error) 
 	return NewDisplayScreenshotAction(opts).Run()
 }
 
-type startCVDHandler struct {
+type startCVDInstanceHandler struct {
 	Config Config
 	OM     OperationManager
 }
 
-func newStartCVDHandler(c Config, om OperationManager) *startCVDHandler {
-	return &startCVDHandler{Config: c, OM: om}
+func newStartCVDInstanceHandler(c Config, om OperationManager) *startCVDInstanceHandler {
+	return &startCVDInstanceHandler{Config: c, OM: om}
 }
 
-func (h *startCVDHandler) Handle(r *http.Request) (interface{}, error) {
+func (h *startCVDInstanceHandler) Handle(r *http.Request) (interface{}, error) {
 	req := &apiv1.StartCVDRequest{}
 	err := json.NewDecoder(r.Body).Decode(req)
 	if err != nil {
@@ -552,14 +519,15 @@ func (h *startCVDHandler) Handle(r *http.Request) (interface{}, error) {
 	}
 	vars := mux.Vars(r)
 	group := vars["group"]
-	opts := StartCVDActionOpts{
+	name := vars["name"]
+	opts := StartCVDInstanceActionOpts{
 		Request:          req,
-		Selector:         cvd.GroupSelector{Name: group},
+		Selector:         cvd.InstanceSelector{GroupName: group, Name: name},
 		Paths:            h.Config.Paths,
 		OperationManager: h.OM,
 		ExecContext:      exec.CommandContext,
 	}
-	return NewStartCVDAction(opts).Run()
+	return NewStartCVDInstanceAction(opts).Run()
 }
 
 type getCVDLogsHandler struct {

@@ -81,21 +81,17 @@ Result<BootloaderFlag> BootloaderFlag::FromGlobalGflags(
 
   std::vector<std::string> bootloaders;
   for (size_t instance = 0; instance < guest_configs.size(); instance++) {
-    std::string_view arch = ArchDirName(guest_configs[instance].target_arch);
-    std::string rel_path =
-        fmt::format("etc/bootloader_{}/bootloader.{}", arch, vmm);
-
     // /bootloader isn't present in the output folder by default and can be only
     // fetched by `--bootloader` in fetch_cvd, so pick it only in case it is
     // present.
     std::string path = system_image_dir.ForIndex(instance) + "/bootloader";
     if (!FileExists(path)) {
-      path = system_image_dir.ForIndex(instance) + "/" + rel_path;
-    }
-    if (!FileExists(path)) {
+      std::string_view arch = ArchDirName(guest_configs[instance].target_arch);
+      std::string rel_path =
+          fmt::format("etc/bootloader_{}/bootloader.{}", arch, vmm);
       path = DefaultHostArtifactsPath(rel_path);
+      CF_EXPECT(FileExists(path));
     }
-    CF_EXPECT(FileExists(path));
     bootloaders.emplace_back(std::move(path));
   }
   return BootloaderFlag(std::move(bootloaders));

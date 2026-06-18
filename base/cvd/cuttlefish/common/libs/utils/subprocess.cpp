@@ -49,6 +49,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
+
 #include "cuttlefish/common/libs/utils/contains.h"
 #include "cuttlefish/common/libs/utils/files.h"
 
@@ -97,14 +98,6 @@ std::vector<const char*> ToCharPointers(const std::vector<std::string>& vect) {
   return ret;
 }
 }  // namespace
-
-std::vector<std::string> ArgsToVec(char** argv) {
-  std::vector<std::string> args;
-  for (int i = 0; argv && argv[i]; i++) {
-    args.push_back(argv[i]);
-  }
-  return args;
-}
 
 std::unordered_map<std::string, std::string> EnvpToMap(char** envp) {
   std::unordered_map<std::string, std::string> env_map;

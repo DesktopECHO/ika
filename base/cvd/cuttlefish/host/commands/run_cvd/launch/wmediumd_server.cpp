@@ -20,9 +20,9 @@
 #include <utility>
 #include <vector>
 
-#include <fruit/component.h>
-#include <fruit/fruit_forward_decls.h>
-#include <fruit/macro.h>
+#include "fruit/component.h"
+#include "fruit/fruit_forward_decls.h"
+#include "fruit/macro.h"
 
 #include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/common/libs/utils/wait_for_unix_socket.h"
@@ -69,7 +69,7 @@ class ValidateWmediumdService : public SetupFeature {
  private:
   const CuttlefishConfig& config_;
   const CuttlefishConfig::EnvironmentSpecific& environment_;
-  const CuttlefishConfig::InstanceSpecific& instance_;
+  const CuttlefishConfig::InstanceSpecific instance_;
 };
 
 }  // namespace

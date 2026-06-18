@@ -35,6 +35,7 @@
 #include <sys/un.h>
 
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -205,17 +206,11 @@ class SharedFD {
   static std::string GetVhostUserVsockClientAddr(int cid);
 #endif
 
-  bool operator==(const SharedFD& rhs) const { return value_ == rhs.value_; }
-
-  bool operator!=(const SharedFD& rhs) const { return value_ != rhs.value_; }
-
-  bool operator<(const SharedFD& rhs) const { return value_ < rhs.value_; }
-
-  bool operator<=(const SharedFD& rhs) const { return value_ <= rhs.value_; }
-
-  bool operator>(const SharedFD& rhs) const { return value_ > rhs.value_; }
-
-  bool operator>=(const SharedFD& rhs) const { return value_ >= rhs.value_; }
+  bool operator==(const SharedFD& other) const { return value_ == other.value_; }
+  bool operator!=(const SharedFD& other) const { return !(*this == other); }
+  bool operator<(const SharedFD& other) const {
+    return std::less<std::shared_ptr<FileInstance>>{}(value_, other.value_);
+  }
 
   std::shared_ptr<FileInstance> operator->() const { return value_; }
 
@@ -316,6 +311,7 @@ class FileInstance {
   bool CopyFrom(FileInstance& in, size_t length, FileInstance* stop = nullptr);
   // Same as CopyFrom, but reads from input until EOF is reached.
   bool CopyAllFrom(FileInstance& in, FileInstance* stop = nullptr);
+  bool SendFile(FileInstance& in, off_t* offset, size_t count);
 
   int UNMANAGED_Dup();
   int UNMANAGED_Dup2(int newfd);
@@ -398,10 +394,6 @@ class FileInstance {
   bool IsATTY();
 
   int Futimens(const struct timespec times[2]);
-
-  // Returns the target of "/proc/getpid()/fd/" + std::to_string(fd_)
-  // if appropriate
-  Result<std::string> ProcFdLinkTarget() const;
 
   // inotify related functions
   int InotifyAddWatch(const std::string& pathname, uint32_t mask);

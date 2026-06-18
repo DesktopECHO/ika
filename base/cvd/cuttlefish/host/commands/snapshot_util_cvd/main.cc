@@ -26,7 +26,6 @@
 
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/common/libs/utils/flag_parser.h"
 #include "cuttlefish/common/libs/utils/tee_logging.h"
 #include "cuttlefish/host/commands/snapshot_util_cvd/parse.h"
 #include "cuttlefish/host/commands/snapshot_util_cvd/snapshot_taker.h"
@@ -37,19 +36,6 @@
 
 namespace cuttlefish {
 namespace {
-
-Result<std::string> ToAbsolutePath(const std::string& snapshot_path) {
-  const InputPathForm default_path_form{
-      .current_working_dir = std::nullopt,
-      .home_dir = std::nullopt,
-      .path_to_convert = snapshot_path,
-      .follow_symlink = false,
-  };
-  return CF_EXPECTF(
-      EmulateAbsolutePath(default_path_form),
-      "The snapshot path, \"{}\", cannot be converted to an absolute path",
-      snapshot_path);
-}
 
 // Send a `LauncherAction` RPC to every instance specified in `parsed`.
 Result<void> BroadcastLauncherAction(
@@ -89,7 +75,7 @@ Result<void> SnapshotCvdMain(std::vector<std::string> args) {
     }
     case SnapshotCmd::kSnapshotTake: {
       CF_EXPECT(!parsed.snapshot_path.empty(), "--snapshot_path is required");
-      parsed.snapshot_path = CF_EXPECT(ToAbsolutePath(parsed.snapshot_path));
+      parsed.snapshot_path = AbsolutePath(parsed.snapshot_path);
       if (parsed.force &&
           FileExists(parsed.snapshot_path, /* follow symlink */ false)) {
         CF_EXPECT(RecursivelyRemoveDirectory(parsed.snapshot_path),
@@ -155,7 +141,7 @@ Result<void> SnapshotCvdMain(std::vector<std::string> args) {
 
 int main(int argc, char** argv) {
   cuttlefish::LogToStderr();
-  std::vector<std::string> all_args = cuttlefish::ArgsToVec(argc, argv);
+  std::vector<std::string> all_args(argv, argv + argc);
   auto result = cuttlefish::SnapshotCvdMain(std::move(all_args));
   if (!result.ok()) {
     LOG(ERROR) << result.error();

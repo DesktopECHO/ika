@@ -45,18 +45,10 @@ func (c *FakeHostOrchestratorClient) ConnectADBWebSocket(device string) (*websoc
 	return nil, nil
 }
 
-func (c *FakeHostOrchestratorClient) FetchArtifacts(req *hoapi.FetchArtifactsRequest, creds BuildAPICreds) (*hoapi.FetchArtifactsResponse, error) {
-	return &hoapi.FetchArtifactsResponse{AndroidCIBundle: req.AndroidCIBundle}, nil
-}
-
 func (c *FakeHostOrchestratorClient) CreateCVD(req *hoapi.CreateCVDRequest, creds BuildAPICreds) (*hoapi.CreateCVDResponse, error) {
 	var cvds []*hoapi.CVD
 	var err error
-	if req.CVD != nil {
-		cvds, err = c.createFakeCVDs(int(req.AdditionalInstancesNum) + 1)
-	} else {
-		cvds, err = c.createFakeEnvironment(req.EnvConfig)
-	}
+	cvds, err = c.createFakeEnvironment(req.EnvConfig)
 	return &hoapi.CreateCVDResponse{CVDs: cvds}, err
 }
 
@@ -130,11 +122,15 @@ func (c *FakeHostOrchestratorClient) CreateBugReport(group string, opts CreateBu
 
 func (c *FakeHostOrchestratorClient) Powerwash(groupName, instanceName string) error { return nil }
 
-func (c *FakeHostOrchestratorClient) Stop(groupName, instanceName string) error { return nil }
+func (c *FakeHostOrchestratorClient) StopGroup(groupName string) error { return nil }
+
+func (c *FakeHostOrchestratorClient) StopInstance(groupName, instanceName string) error { return nil }
 
 func (c *FakeHostOrchestratorClient) Restart(groupName, instanceName string) error { return nil }
 
-func (c *FakeHostOrchestratorClient) Start(groupName, instanceName string, req *hoapi.StartCVDRequest) error {
+func (c *FakeHostOrchestratorClient) StartGroup(string, *hoapi.StartCVDRequest) error { return nil }
+
+func (c *FakeHostOrchestratorClient) StartInstance(groupName, instanceName string, req *hoapi.StartCVDRequest) error {
 	return nil
 }
 

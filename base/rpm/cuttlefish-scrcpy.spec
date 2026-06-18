@@ -4,7 +4,7 @@ Release:        6%{?dist}
 Summary:        scrcpy Android screen mirroring tool for Cuttlefish
 License:        Apache-2.0
 URL:            https://github.com/Genymobile/scrcpy
-Source0:        android-cuttlefish-1.53.0.tar.gz
+Source0:        android-cuttlefish-1.55.0.tar.gz
 %global debug_package %{nil}
 
 BuildRequires:  gcc
@@ -38,7 +38,7 @@ Provides:       cuttlefish-scrcpy = %{version}-%{release}
 Obsoletes:      cuttlefish-scrcpy < %{version}-%{release}
 
 %prep
-%autosetup -n android-cuttlefish-1.53.0
+%autosetup -n android-cuttlefish-1.55.0
 
 %build
 meson setup scrcpy _build_scrcpy \

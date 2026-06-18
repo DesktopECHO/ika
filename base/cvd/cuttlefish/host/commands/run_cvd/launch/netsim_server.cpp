@@ -20,9 +20,9 @@
 #include <utility>
 #include <vector>
 
-#include <fruit/component.h>
-#include <fruit/fruit_forward_decls.h>
-#include <fruit/macro.h>
+#include "fruit/component.h"
+#include "fruit/fruit_forward_decls.h"
+#include "fruit/macro.h"
 
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/files.h"
@@ -200,6 +200,13 @@ class NetsimServer : public CommandSource {
         chip.fd_out = CF_EXPECT(MakeFifo(instance, "uwb_fifo_vm.out"));
         device.chips.emplace_back(chip);
       }
+      // Add nfc chip if enabled
+      if (config_.netsim_radio_enabled(CuttlefishConfig::NetsimRadio::Nfc)) {
+        Chip chip("NFC");
+        chip.fd_in = CF_EXPECT(MakeFifo(instance, "nfc_fifo_vm.in"));
+        chip.fd_out = CF_EXPECT(MakeFifo(instance, "nfc_fifo_vm.out"));
+        device.chips.emplace_back(chip);
+      }
       // Add other chips if enabled
       devices_.emplace_back(device);
     }
@@ -209,13 +216,13 @@ class NetsimServer : public CommandSource {
   Result<SharedFD> MakeFifo(const CuttlefishConfig::InstanceSpecific& instance,
                             const char* relative_path) {
     auto path = instance.PerInstanceInternalPath(relative_path);
-    return CF_EXPECT(SharedFD::Fifo(path, 0660));
+    return CF_EXPECT(CreateOrReuseAndDrainFifo(path, 0660));
   }
 
  private:
   std::vector<Device> devices_;
   const CuttlefishConfig& config_;
-  const CuttlefishConfig::InstanceSpecific& instance_;
+  const CuttlefishConfig::InstanceSpecific instance_;
 };
 
 }  // namespace

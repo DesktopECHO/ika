@@ -20,8 +20,8 @@
 #include <string>
 #include <thread>
 
-#include <json/json.h>
 #include "absl/log/log.h"
+#include "json/json.h"
 
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/fs/shared_select.h"
@@ -71,9 +71,7 @@ UnixServerConnection::UnixServerConnection(
     const std::string& addr, std::weak_ptr<ServerConnectionObserver> observer)
     : addr_(addr), observer_(observer) {}
 
-UnixServerConnection::~UnixServerConnection() {
-  StopThread();
-}
+UnixServerConnection::~UnixServerConnection() { StopThread(); }
 
 bool UnixServerConnection::Send(const Json::Value& msg) {
   Json::StreamWriterBuilder factory;
@@ -118,7 +116,7 @@ void UnixServerConnection::Connect() {
   }
   // Start the thread
   running_ = true;
-  thread_ = std::thread([this](){ReadLoop();});
+  thread_ = std::thread([this]() { ReadLoop(); });
 }
 
 void UnixServerConnection::StopThread() {

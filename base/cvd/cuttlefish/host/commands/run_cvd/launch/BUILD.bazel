@@ -34,6 +34,7 @@ cf_cc_library(
     hdrs = ["bluetooth_connector.h"],
     deps = [
         "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/host/libs/config:cuttlefish_config",
         "//cuttlefish/host/libs/config:known_paths",
         "//cuttlefish/host/libs/feature",
@@ -114,7 +115,9 @@ cf_cc_library(
     name = "cvdalloc",
     srcs = ["cvdalloc.cpp"],
     hdrs = ["cvdalloc.h"],
+    clang_format_enabled = False,
     deps = [
+        "//allocd:alloc_utils",
         "//cuttlefish/common/libs/fs",
         "//cuttlefish/common/libs/utils:subprocess",
         "//cuttlefish/host/commands/cvdalloc:privilege",
@@ -149,6 +152,7 @@ cf_cc_library(
     hdrs = ["gnss_grpc_proxy.h"],
     deps = [
         "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/common/libs/utils:in_sandbox",
         "//cuttlefish/host/commands/run_cvd/launch:grpc_socket_creator",
         "//cuttlefish/host/libs/config:cuttlefish_config",
@@ -172,6 +176,7 @@ cf_cc_library(
     name = "kernel_log_monitor",
     srcs = ["kernel_log_monitor.cpp"],
     hdrs = ["kernel_log_monitor.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:subprocess",
         "//cuttlefish/host/commands/run_cvd:reporting",
@@ -222,6 +227,7 @@ cf_cc_library(
     name = "mcu",
     srcs = ["mcu.cpp"],
     hdrs = ["mcu.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/common/libs/utils:subprocess",
@@ -290,6 +296,7 @@ cf_cc_library(
     hdrs = ["nfc_connector.h"],
     deps = [
         "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/common/libs/utils:subprocess",
         "//cuttlefish/host/libs/config:cuttlefish_config",
         "//cuttlefish/host/libs/config:known_paths",
@@ -302,6 +309,7 @@ cf_cc_library(
     name = "open_wrt",
     srcs = ["open_wrt.cpp"],
     hdrs = ["open_wrt.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:json",
         "//cuttlefish/host/commands/run_cvd/launch:cvdalloc",
@@ -312,6 +320,7 @@ cf_cc_library(
         "//cuttlefish/host/libs/config:cuttlefish_config",
         "//cuttlefish/host/libs/config:openwrt_args",
         "//cuttlefish/host/libs/feature",
+        "//cuttlefish/host/libs/log_names",
         "//cuttlefish/host/libs/vm_manager",
         "//cuttlefish/result",
         "//libbase",
@@ -331,6 +340,7 @@ cf_cc_library(
         "//cuttlefish/host/libs/config:cuttlefish_config",
         "//cuttlefish/host/libs/config:known_paths",
         "//cuttlefish/host/libs/feature",
+        "//cuttlefish/host/libs/log_names",
         "//cuttlefish/result",
         "@fruit",
     ],
@@ -383,6 +393,8 @@ cf_cc_library(
     srcs = ["secure_env.cpp"],
     hdrs = ["secure_env.h"],
     deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/common/libs/utils:subprocess",
         "//cuttlefish/host/commands/run_cvd/launch:snapshot_control_files",
         "//cuttlefish/host/libs/config:cuttlefish_config",
@@ -399,6 +411,7 @@ cf_cc_library(
     hdrs = ["sensors_simulator.h"],
     deps = [
         "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/common/libs/utils:subprocess",
         "//cuttlefish/host/commands/run_cvd/launch:sensors_socket_pair",
         "//cuttlefish/host/libs/config:cuttlefish_config",
@@ -436,6 +449,7 @@ cf_cc_library(
     name = "streamer",
     srcs = ["streamer.cpp"],
     hdrs = ["streamer.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/fs",
         "//cuttlefish/common/libs/utils:files",
@@ -507,6 +521,7 @@ cf_cc_library(
     hdrs = ["uwb_connector.h"],
     deps = [
         "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/common/libs/utils:subprocess",
         "//cuttlefish/host/libs/config:config_utils",
         "//cuttlefish/host/libs/config:cuttlefish_config",
@@ -556,6 +571,7 @@ cf_cc_library(
     name = "vhost_input_devices",
     srcs = ["vhost_input_devices.cpp"],
     hdrs = ["input_connections_provider.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/fs",
         "//cuttlefish/common/libs/utils:files",
@@ -578,6 +594,7 @@ cf_cc_library(
     name = "vhost_user_media_devices",
     srcs = ["vhost_user_media_devices.cpp"],
     hdrs = ["vhost_user_media_devices.h"],
+    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/fs",
         "//cuttlefish/common/libs/utils:files",

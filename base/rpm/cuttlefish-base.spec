@@ -1,5 +1,5 @@
 Name:           ika-base
-Version:        1.53.0
+Version:        1.55.0
 Release:        6%{?dist}
 Summary:        Cuttlefish Android Virtual Device host packages for Fedora
 License:        Apache-2.0
@@ -147,10 +147,18 @@ esac
 SOURCE_TARBALL="%{_sourcedir}/android-cuttlefish-%{version}.tar.gz"
 if [[ ! -f base/cvd/adb/BUILD.bazel || ! -x base/cvd/tools/ensure_bazel_git_mirrors.sh ]]; then
   echo "Repairing incomplete extracted source tree from ${SOURCE_TARBALL}"
+  tmp_cvd_extract="$(mktemp -d)"
   rm -rf base/cvd
-  mkdir -p base
-  tar -xzf "${SOURCE_TARBALL}" --strip-components=2 -C base \
+  tar -xzf "${SOURCE_TARBALL}" -C "${tmp_cvd_extract}" \
     "android-cuttlefish-%{version}/base/cvd"
+  if [[ ! -x "${tmp_cvd_extract}/android-cuttlefish-%{version}/base/cvd/tools/ensure_bazel_git_mirrors.sh" ]]; then
+    echo "Source tarball ${SOURCE_TARBALL} does not contain base/cvd/tools/ensure_bazel_git_mirrors.sh." >&2
+    echo "Regenerate ${SOURCE_TARBALL} with tools/buildutils/build_package.sh." >&2
+    exit 1
+  fi
+  mkdir -p base
+  mv "${tmp_cvd_extract}/android-cuttlefish-%{version}/base/cvd" base/cvd
+  rm -rf "${tmp_cvd_extract}"
 fi
 if [[ ! -x base/cvd/tools/ensure_bazel_git_mirrors.sh ]]; then
   echo "Missing base/cvd/tools/ensure_bazel_git_mirrors.sh after source repair." >&2
@@ -158,8 +166,9 @@ if [[ ! -x base/cvd/tools/ensure_bazel_git_mirrors.sh ]]; then
   exit 1
 fi
 
+{ set +x; } 2>/dev/null
 readonly package_output_root="base/cvd/bazel-out/${bazel_arch}-opt/bin/cuttlefish/package"
-pushd base/cvd
+pushd base/cvd >/dev/null
 # Keep download/build caches persistent across rpmbuild runs so external
 # repositories are fetched once and then reused on slow connections. Default
 # under $HOME/ika-build alongside the other ika build scratch.
@@ -189,11 +198,21 @@ while true; do
     GIT_CONFIG_GLOBAL="$BAZEL_GIT_CONFIG" GIT_CONFIG_NOSYSTEM=1 \
     DISABLE_BAZEL_WRAPPER=yes USE_BAZEL_VERSION=8.5.1 \
     bazel --output_user_root="$BAZEL_OUTPUT_USER_ROOT" build -c opt \
+    --noshow_loading_progress \
+    --show_progress_rate_limit=30 \
+    --progress_report_interval=30 \
+    --ui_actions_shown=1 \
+    --curses=no \
+    --color=no \
     --repository_cache="$BAZEL_REPOSITORY_CACHE" \
     --disk_cache="$BAZEL_DISK_CACHE" \
     --distdir="$BAZEL_DISTDIR" \
+    --cxxopt=-Wno-deprecated-declarations \
+    --host_cxxopt=-Wno-deprecated-declarations \
     --cxxopt=-Wno-error=deprecated-declarations \
     --host_cxxopt=-Wno-error=deprecated-declarations \
+    --cxxopt=-Wno-thread-safety-reference-return \
+    --host_cxxopt=-Wno-thread-safety-reference-return \
     --conlyopt=-Wno-error=incompatible-pointer-types-discards-qualifiers \
     --host_conlyopt=-Wno-error=incompatible-pointer-types-discards-qualifiers \
     'cuttlefish/package:cvd' \
@@ -217,7 +236,7 @@ while true; do
   echo "Bazel build failed, retrying in ${retry_delay}s (${retry_count}/${max_retries})..." >&2
   sleep "$retry_delay"
 done
-popd
+popd >/dev/null
 
 %install
 rm -rf %{buildroot}
@@ -297,7 +316,7 @@ ln -sfn ../bin/libvk_swiftshader.so %{buildroot}/usr/lib/cuttlefish-common/lib64
 # cuttlefish-base.links). Upstream docs and tooling assume `cvd` is invokable
 # directly; without this symlink only the ika wrapper finds it.
 install -d %{buildroot}/usr/bin
-ln -sfn /usr/lib/cuttlefish-common/bin/cvd %{buildroot}/usr/bin/cvd
+ln -sfn ../lib/cuttlefish-common/bin/cvd %{buildroot}/usr/bin/cvd
 
 %post
 if ! getent group cvdnetwork >/dev/null 2>&1; then
@@ -414,6 +433,8 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/lib/cuttlefish-metrics
 
 %changelog
+* Thu Jun 18 2026 DesktopECHO <build@desktopecho.com> - 1.55.0-6
+- Update Cuttlefish host package metadata to 1.55.0-6
+
 * Sat Jun 13 2026 DesktopECHO <build@desktopecho.com> - 1.53.0-6
 - Initial public release.
-

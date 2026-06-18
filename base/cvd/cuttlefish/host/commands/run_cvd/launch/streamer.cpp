@@ -17,7 +17,6 @@
 
 #include <errno.h>
 #include <sys/socket.h>
-#include <unistd.h>
 
 #include <sstream>
 #include <string>
@@ -52,13 +51,6 @@
 namespace cuttlefish {
 
 namespace {
-
-constexpr char kDefaultWebRtcOperatorSocket[] = "/run/cuttlefish/operator";
-
-std::string WebRtcOperatorLibraryPath(const CuttlefishConfig& config) {
-  return DefaultHostArtifactsPath("lib64") + ":" + config.assembly_dir() +
-         "/lib64";
-}
 
 SharedFD CreateUnixInputServer(const std::string& path) {
   auto server =
@@ -186,12 +178,9 @@ class StreamerSockets : public virtual SetupFeature {
         instance_.PerInstanceInternalPath("confui_fifo_vm.in"),
         instance_.PerInstanceInternalPath("confui_fifo_vm.out"),
     };
-    for (const auto& path : fifo_files) {
-      unlink(path.c_str());
-    }
     std::vector<SharedFD> fds;
     for (const auto& path : fifo_files) {
-      fds.emplace_back(CF_EXPECT(SharedFD::Fifo(path, 0660)));
+      fds.emplace_back(CF_EXPECT(CreateOrReuseAndDrainFifo(path, 0660)));
     }
     confui_in_fd_ = fds[0];
     confui_out_fd_ = fds[1];
@@ -199,7 +188,7 @@ class StreamerSockets : public virtual SetupFeature {
   }
 
   const CuttlefishConfig& config_;
-  const CuttlefishConfig::InstanceSpecific& instance_;
+  const CuttlefishConfig::InstanceSpecific instance_;
   InputConnectionsProvider& input_connections_provider_;
   SharedFD frames_server_;
   SharedFD audio_server_;
@@ -240,35 +229,11 @@ class WebRtcServer : public virtual CommandSource,
   Result<std::vector<MonitorCommand>> Commands() override {
     std::vector<MonitorCommand> commands;
 
-    if (config_.sig_server_address() == kDefaultWebRtcOperatorSocket) {
-      if (FileIsSocket(config_.sig_server_address())) {
-        LOG(INFO) << "Using existing WebRTC operator socket at "
-                  << config_.sig_server_address();
-      } else {
-        const auto webrtc_sig_server = WebRtcSigServerBinary();
-        if (FileExists(webrtc_sig_server)) {
-          Command webrtc_operator(webrtc_sig_server);
-          // webrtc_operator resolves cert assets relative to usr/share.
-          webrtc_operator.SetWorkingDirectory(
-              DefaultHostArtifactsPath("usr/share"));
-          webrtc_operator.AddEnvironmentVariable(
-              "LD_LIBRARY_PATH", WebRtcOperatorLibraryPath(config_));
-          commands.emplace_back(std::move(webrtc_operator));
-        } else {
-          LOG(WARNING) << "WebRTC signaling socket "
-                       << config_.sig_server_address()
-                       << " is not available and signaling server binary is "
-                          "missing: "
-                       << webrtc_sig_server;
-        }
-      }
-    }
-
     // Start a TCP proxy to make the host signaling server available on the
     // legacy port.
     Command sig_proxy(WebRtcSigServerProxyBinary());
     sig_proxy.AddParameter("-server_port=", config_.sig_server_proxy_port());
-    commands.emplace_back(std::move(sig_proxy));
+    commands.emplace_back(std::move(sig_proxy), /* is_critical= */ false);
 
     auto stopper = [webrtc_controller = webrtc_controller_]() mutable {
       (void)webrtc_controller.SendStopRecordingCommand();
@@ -321,7 +286,7 @@ class WebRtcServer : public virtual CommandSource,
   }
 
   const CuttlefishConfig& config_;
-  const CuttlefishConfig::InstanceSpecific& instance_;
+  const CuttlefishConfig::InstanceSpecific instance_;
   StreamerSockets& sockets_;
   KernelLogPipeProvider& log_pipe_provider_;
   const CustomActionConfigProvider& custom_action_config_;
@@ -347,3 +312,4 @@ launchStreamerComponent() {
 }
 
 }  // namespace cuttlefish
+

@@ -204,10 +204,10 @@ Result<bool> InstanceDatabase::RemoveInstanceGroup(
 
 Result<std::vector<LocalInstanceGroup>> InstanceDatabase::FindGroups(
     const Filter& filter) const {
-  return viewer_.WithSharedLock<std::vector<LocalInstanceGroup>>(
+  return CF_EXPECT(viewer_.WithSharedLock<std::vector<LocalInstanceGroup>>(
       [&filter](const cvd::PersistentData& data) {
         return FindGroups(data, filter);
-      });
+      }));
 }
 
 std::vector<LocalInstanceGroup> InstanceDatabase::FindGroups(
@@ -251,6 +251,37 @@ InstanceDatabase::FindInstanceWithGroup(const Filter& filter) const {
           }
         }
         return CF_EXPECT(std::move(result_opt), "Found no matches");
+      });
+}
+
+Result<std::vector<std::pair<LocalInstanceGroup, std::vector<LocalInstance>>>>
+InstanceDatabase::FindInstances(const Filter& filter) const {
+  return viewer_.WithSharedLock<
+      std::vector<std::pair<LocalInstanceGroup, std::vector<LocalInstance>>>>(
+      [&filter](const auto& data)
+          -> Result<std::vector<
+              std::pair<LocalInstanceGroup, std::vector<LocalInstance>>>> {
+        std::vector<std::pair<LocalInstanceGroup, std::vector<LocalInstance>>>
+            result;
+        for (const auto& group : data.instance_groups()) {
+          if (!GroupMatches(group, filter)) {
+            continue;
+          }
+          LocalInstanceGroup local_group =
+              CF_EXPECT(LocalInstanceGroup::Create(group));
+          std::vector<LocalInstance> instance_results;
+          for (int i = 0; i < group.instances_size(); ++i) {
+            const auto& instance = group.instances(i);
+            if (!InstanceMatches(instance, filter)) {
+              continue;
+            }
+            instance_results.push_back(local_group.Instances()[i]);
+          }
+          if (!instance_results.empty()) {
+            result.push_back(std::make_pair(local_group, instance_results));
+          }
+        }
+        return result;
       });
 }
 

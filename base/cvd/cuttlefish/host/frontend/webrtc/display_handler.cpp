@@ -16,6 +16,7 @@
 
 #include "cuttlefish/host/frontend/webrtc/display_handler.h"
 
+#include <libyuv.h>
 #include <stdint.h>
 
 #include <chrono>
@@ -23,9 +24,8 @@
 #include <optional>
 #include <string>
 
-#include <drm/drm_fourcc.h>
-#include <libyuv.h>
 #include "absl/log/log.h"
+#include "drm/drm_fourcc.h"
 
 #include "cuttlefish/host/frontend/webrtc/libdevice/streamer.h"
 #include "cuttlefish/host/frontend/webrtc/raw_frame_streamer.h"
@@ -46,18 +46,6 @@ DisplayHandler::DisplayHandler(
       raw_frame_streamer_(raw_frame_streamer) {
   // Initialize the thread after the rest of the class
   frame_repeater_ = std::thread([this]() { RepeatFramesPeriodically(); });
-  if (raw_frame_streamer_ != nullptr) {
-    screen_connector_.SetDmabufFrameCallback(
-        [this](uint32_t display_number, uint32_t frame_width,
-               uint32_t frame_height, uint32_t frame_fourcc_format,
-               int dmabuf_fd, uint32_t offset, uint32_t frame_stride_bytes,
-               uint32_t modifier_hi, uint32_t modifier_lo) {
-          bool sent = raw_frame_streamer_->OnDmabufFrame(
-              display_number, frame_width, frame_height, frame_fourcc_format,
-              dmabuf_fd, offset, frame_stride_bytes, modifier_hi, modifier_lo);
-          return sent && !HasActiveDisplayClients();
-        });
-  }
   screen_connector_.SetCallback(GetScreenConnectorCallback());
   screen_connector_.SetDisplayEventCallback([this](const DisplayEvent& event) {
     std::visit(
@@ -112,27 +100,27 @@ DisplayHandler::GenerateProcessedFrameCallback
 DisplayHandler::GetScreenConnectorCallback() {
   // only to tell the producer how to create a ProcessedFrame to cache into the
   // queue
+  auto& composition_manager = composition_manager_;
+  auto* raw_frame_streamer = raw_frame_streamer_;
   DisplayHandler::GenerateProcessedFrameCallback callback =
-      [this](
+      [this, &composition_manager, raw_frame_streamer](
           uint32_t display_number, uint32_t frame_width, uint32_t frame_height,
           uint32_t frame_fourcc_format, uint32_t frame_stride_bytes,
           uint8_t* frame_pixels, WebRtcScProcessedFrame& processed_frame) {
         processed_frame.display_number_ = display_number;
         processed_frame.is_success_ = false;
-        if (raw_frame_streamer_ != nullptr) {
-          raw_frame_streamer_->OnFrame(display_number, frame_width,
-                                       frame_height, frame_fourcc_format,
-                                       frame_stride_bytes, frame_pixels);
+        if (raw_frame_streamer != nullptr) {
+          raw_frame_streamer->OnFrame(display_number, frame_width, frame_height,
+                                      frame_fourcc_format, frame_stride_bytes,
+                                      frame_pixels);
         }
-
-        if (raw_frame_streamer_ != nullptr && !HasActiveDisplayClients()) {
+        if (raw_frame_streamer != nullptr && !HasActiveDisplayClients()) {
           return;
         }
-
         processed_frame.buf_ =
             std::make_unique<CvdVideoFrameBuffer>(frame_width, frame_height);
-        if (composition_manager_.has_value()) {
-          composition_manager_.value()->OnFrame(
+        if (composition_manager.has_value()) {
+          composition_manager.value()->OnFrame(
               display_number, frame_width, frame_height, frame_fourcc_format,
               frame_stride_bytes, frame_pixels);
         }
@@ -159,12 +147,14 @@ DisplayHandler::GetScreenConnectorCallback() {
   return callback;
 }
 
+bool DisplayHandler::HasActiveDisplayClients() {
+  std::lock_guard lock(repeater_state_mutex_);
+  return num_active_clients_ > 0;
+}
+
 [[noreturn]] void DisplayHandler::Loop() {
   for (;;) {
     auto processed_frame = screen_connector_.OnNextFrame();
-    if (!processed_frame.is_success_ || !processed_frame.buf_) {
-      continue;
-    }
 
     std::shared_ptr<CvdVideoFrameBuffer> buffer =
         std::move(processed_frame.buf_);
@@ -312,11 +302,6 @@ void DisplayHandler::AddDisplayClient() {
 void DisplayHandler::RemoveDisplayClient() {
   std::lock_guard lock(repeater_state_mutex_);
   --num_active_clients_;
-}
-
-bool DisplayHandler::HasActiveDisplayClients() {
-  std::lock_guard lock(repeater_state_mutex_);
-  return num_active_clients_ > 0;
 }
 
 }  // namespace cuttlefish

@@ -22,8 +22,8 @@
 #include <string_view>
 #include <vector>
 
-#include <fmt/ranges.h>  // NOLINT(misc-include-cleaner): version difference
 #include "absl/log/log.h"
+#include "fmt/ranges.h"  // NOLINT(misc-include-cleaner): version difference
 
 #include "cuttlefish/common/libs/utils/contains.h"
 #include "cuttlefish/common/libs/utils/subprocess.h"
@@ -87,11 +87,10 @@ Result<int> RunProcessRestarter(std::vector<std::string> args) {
 
   for (;;) {
     CF_EXPECT(!exec_args.empty());
-    const std::string executable = exec_args.front();
-    VLOG(1) << "Starting monitored process " << executable;
+    VLOG(1) << "Starting monitored process " << exec_args.front();
     // The Execute() API and all APIs effectively called by it show the proper
     // error message using LOG(ERROR).
-    auto options = CF_EXPECT(OptionsForExecutable(executable));
+    auto options = CF_EXPECT(OptionsForExecutable(exec_args.front()));
     siginfo_t info =
         CF_EXPECTF(Execute(exec_args, std::move(options), WEXITED),
                    "Executing '{}' failed.", fmt::join(exec_args, "' '"));
@@ -101,11 +100,7 @@ Result<int> RunProcessRestarter(std::vector<std::string> args) {
       exec_args.pop_back();
     }
 
-    const bool should_restart = ShouldRestartProcess(info, parsed);
-    LOG(INFO) << "Managed process " << executable << " exited: si_code="
-              << info.si_code << " status=" << info.si_status
-              << " restart=" << should_restart;
-    if (should_restart) {
+    if (ShouldRestartProcess(info, parsed)) {
       continue;
     }
     if (info.si_code == CLD_EXITED) {
@@ -122,7 +117,7 @@ Result<int> RunProcessRestarter(std::vector<std::string> args) {
 int main(int argc, char** argv) {
   cuttlefish::DefaultSubprocessLogging(argv);
   auto result = cuttlefish::RunProcessRestarter(
-      cuttlefish::ArgsToVec(argc - 1, argv + 1));
+      std::vector<std::string>(argv + 1, argv + argc));
   if (!result.ok()) {
     VLOG(0) << result.error();
     return EXIT_FAILURE;

@@ -16,16 +16,15 @@
 
 #include "cuttlefish/host/commands/cvd/instances/config_path.h"
 
-#include <android-base/file.h>
+#include "android-base/file.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
 
 namespace cuttlefish {
 
 Result<std::string> GetCuttlefishConfigPath(const std::string& home) {
-  std::string home_realpath;
   CF_EXPECT(DirectoryExists(home), "Invalid Home Directory");
-  CF_EXPECT(android::base::Realpath(home, &home_realpath));
+  std::string home_realpath = CF_EXPECT(RealPath(home));
   static const char kSuffix[] = "/cuttlefish_assembly/cuttlefish_config.json";
   std::string config_path = AbsolutePath(home_realpath + kSuffix);
   CF_EXPECT(FileExists(config_path), "No config file exists");

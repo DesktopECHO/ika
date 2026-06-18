@@ -115,11 +115,6 @@ class ScreenConnector : public ScreenConnectorFrameRenderer {
         });
   }
 
-  void SetDmabufFrameCallback(
-      wayland::Surfaces::DmabufFrameCallback frame_callback) {
-    sc_android_src_.SetDmabufFrameCallback(std::move(frame_callback));
-  }
-
   void InjectFrame(uint32_t display_number, uint32_t frame_w, uint32_t frame_h,
                    uint32_t frame_fourcc_format, uint32_t frame_stride_bytes,
                    uint8_t* frame_bytes) {

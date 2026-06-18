@@ -17,14 +17,41 @@
 #pragma once
 
 #include <memory>
+#include <string>
+#include <vector>
 
+#include "cuttlefish/flag_parser/flag.h"
+#include "cuttlefish/host/commands/cvd/cli/command_request.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
+#include "cuttlefish/host/commands/cvd/cli/help_format.h"
+#include "cuttlefish/host/commands/cvd/cli/types.h"
 #include "cuttlefish/host/commands/cvd/instances/instance_manager.h"
+#include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
+
+class CvdStopCommandHandler : public CvdCommandHandler {
+ public:
+  CvdStopCommandHandler(InstanceManager& instance_manager);
+
+  Result<void> Handle(const CommandRequest& request) override;
+  cvd_common::Args CmdList() const override;
+  Result<std::vector<Flag>> Flags(const CommandRequest& request) override;
+
+  std::string SummaryHelp() const override;
+  std::vector<HelpParagraph> Description() const override;
+  bool RequiresDeviceExists() const override { return true; }
+
+ private:
+  struct {
+    size_t wait_for_launcher_secs = 5;
+    bool clear_instance_dirs = false;
+  } flags_;
+
+  InstanceManager& instance_manager_;
+};
 
 std::unique_ptr<CvdCommandHandler> NewCvdStopCommandHandler(
     InstanceManager& instance_manager);
 
 }  // namespace cuttlefish
-

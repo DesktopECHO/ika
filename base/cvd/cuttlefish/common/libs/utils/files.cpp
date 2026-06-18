@@ -23,11 +23,15 @@
 #endif
 
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <ftw.h>
 #include <libgen.h>
 #include <sched.h>
+#include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <sys/socket.h>
@@ -37,17 +41,11 @@
 #include <unistd.h>
 
 #include <array>
-#include <cerrno>
 #include <chrono>
-#include <cstddef>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <fstream>
 #include <ios>
 #include <iosfwd>
 #include <memory>
-#include <numeric>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -56,17 +54,14 @@
 #include <android-base/macros.h>
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
-#include <android-base/unique_fd.h>
 #include "absl/log/check.h"
 #include "absl/log/log.h"
-#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "fmt/format.h"
 
 #include "cuttlefish/common/libs/fs/shared_buf.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
-#include "cuttlefish/common/libs/utils/contains.h"
 #include "cuttlefish/common/libs/utils/environment.h"
 #include "cuttlefish/common/libs/utils/in_sandbox.h"
 #include "cuttlefish/common/libs/utils/users.h"
@@ -342,83 +337,55 @@ Result<void> RecursivelyRemoveDirectory(const std::string& path) {
   return {};
 }
 
-namespace {
-
-bool SendFile(int out_fd, int in_fd, off64_t* offset, size_t count) {
-  while (count > 0) {
-#ifdef __linux__
-    const auto bytes_written =
-        TEMP_FAILURE_RETRY(sendfile(out_fd, in_fd, offset, count));
-    if (bytes_written <= 0) {
-      return false;
-    }
-#elif defined(__APPLE__)
-    off_t bytes_written = count;
-    auto success = TEMP_FAILURE_RETRY(
-        sendfile(in_fd, out_fd, *offset, &bytes_written, nullptr, 0));
-    *offset += bytes_written;
-    if (success < 0 || bytes_written == 0) {
-      return false;
-    }
-#endif
-    count -= bytes_written;
-  }
-  return true;
-}
-
-}  // namespace
-
 bool Copy(const std::string& from, const std::string& to) {
-  android::base::unique_fd fd_from(
-      open(from.c_str(), O_RDONLY | O_CLOEXEC));
-  android::base::unique_fd fd_to(
-      open(to.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644));
+  SharedFD fd_from = SharedFD::Open(from, O_RDONLY);
+  SharedFD fd_to = SharedFD::Open(to, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
-  if (fd_from.get() < 0 || fd_to.get() < 0) {
+  if (!fd_from->IsOpen() || !fd_to->IsOpen()) {
     return false;
   }
 
-  off_t farthest_seek = lseek(fd_from.get(), 0, SEEK_END);
+  off_t farthest_seek = fd_from->LSeek(0, SEEK_END);
   if (farthest_seek == -1) {
-    PLOG(ERROR) << "Could not lseek in \"" << from << "\"";
+    LOG(ERROR) << "Could not lseek in \"" << from
+               << "\": " << fd_from->StrError();
     return false;
   }
-  if (ftruncate64(fd_to.get(), farthest_seek) < 0) {
-    PLOG(ERROR) << "Failed to ftruncate " << to;
+  if (fd_to->Truncate(farthest_seek) < 0) {
+    LOG(ERROR) << "Failed to truncate " << to << ": " << fd_to->StrError();
   }
   off_t offset = 0;
   while (offset < farthest_seek) {
-    off_t new_offset = lseek(fd_from.get(), offset, SEEK_HOLE);
+    off_t new_offset = fd_from->LSeek(offset, SEEK_HOLE);
     if (new_offset == -1) {
-      // ENXIO is returned when there are no more blocks of this type
-      // coming.
-      if (errno == ENXIO) {
+      if (fd_from->GetErrno() == ENXIO) {
         return true;
       }
-      PLOG(ERROR) << "Could not lseek in \"" << from << "\"";
+      LOG(ERROR) << "Could not lseek in \"" << from
+                 << "\": " << fd_from->StrError();
       return false;
     }
     auto data_bytes = new_offset - offset;
-    if (lseek(fd_to.get(), offset, SEEK_SET) < 0) {
-      PLOG(ERROR) << "lseek() on " << to << " failed";
+    if (fd_to->LSeek(offset, SEEK_SET) < 0) {
+      LOG(ERROR) << "lseek() on " << to << " failed: " << fd_to->StrError();
       return false;
     }
-    if (!SendFile(fd_to.get(), fd_from.get(), &offset, data_bytes)) {
-      PLOG(ERROR) << "sendfile() failed";
+    if (!fd_to->SendFile(*fd_from, &offset, data_bytes)) {
+      LOG(ERROR) << "SendFile failed: " << fd_to->StrError();
       return false;
     }
     CHECK_EQ(offset, new_offset);
+
     if (offset >= farthest_seek) {
       return true;
     }
-    new_offset = lseek(fd_from.get(), offset, SEEK_DATA);
+    new_offset = fd_from->LSeek(offset, SEEK_DATA);
     if (new_offset == -1) {
-      // ENXIO is returned when there are no more blocks of this type
-      // coming.
-      if (errno == ENXIO) {
+      if (fd_from->GetErrno() == ENXIO) {
         return true;
       }
-      PLOG(ERROR) << "Could not lseek in \"" << from << "\"";
+      LOG(ERROR) << "Could not lseek in \"" << from
+                 << "\": " << fd_from->StrError();
       return false;
     }
     offset = new_offset;
@@ -433,18 +400,25 @@ std::string AbsolutePath(std::string_view path) {
   if (path[0] == '/') {
     return std::string(path);
   }
-  if (path[0] == '~') {
-    LOG(WARNING) << "Tilde expansion in path " << path <<" is not supported";
-    return {};
-  }
 
-  std::array<char, PATH_MAX> buffer{};
-  if (!realpath(".", buffer.data())) {
-    LOG(WARNING) << "Could not get real path for current directory \".\""
-                 << ": " << strerror(errno);
+  Result<std::string> real_cwd = RealPath(".");
+  if (!real_cwd.ok()) {
+    LOG(WARNING) << "Could not get real path for current directory \".\": "
+                 << real_cwd.error();
     return {};
   }
-  return absl::StrCat(buffer.data(), "/", path);
+  return absl::StrCat(*real_cwd, "/", path);
+}
+
+Result<std::string> RealPath(const std::string& path) {
+  std::array<char, PATH_MAX> buffer{};
+  char* res;
+  do {
+    res = realpath(path.c_str(), buffer.data());
+  } while (res == nullptr && errno == EINTR);
+  CF_EXPECTF(res != nullptr, "Could not get real path for path \"{}\": {}",
+             path, StrError(errno));
+  return std::string(buffer.data());
 }
 
 off_t FileSize(const std::string& path) {
@@ -516,7 +490,9 @@ std::string ReadFile(const std::string& file) {
   }
   contents.resize(in.tellg());
   in.seekg(0, std::ios::beg);
-  in.read(&contents[0], contents.size());
+  if (!contents.empty()) {
+    in.read(&contents[0], contents.size());
+  }
   in.close();
   return(contents);
 }
@@ -533,7 +509,6 @@ Result<std::string> ReadFileContents(const std::string& filepath) {
              file->StrError());
   return file_content;
 }
-
 Result<void> WriteNewFile(const std::string& filepath, std::string_view content,
                           mode_t mode) {
   CF_EXPECTF(!FileExists(filepath), "File already exists: {}", filepath);
@@ -644,84 +619,6 @@ Result<void> WalkDirectory(const std::string& dir,
   return {};
 }
 
-namespace {
-
-std::vector<std::string> FoldPath(std::vector<std::string> elements,
-                                  std::string token) {
-  static constexpr std::array kIgnored = {".", "..", ""};
-  if (token == ".." && !elements.empty()) {
-    elements.pop_back();
-  } else if (!Contains(kIgnored, token)) {
-    elements.emplace_back(token);
-  }
-  return elements;
-}
-
-Result<std::vector<std::string>> CalculatePrefix(
-    const InputPathForm& path_info) {
-  const auto& path = path_info.path_to_convert;
-  std::string working_dir;
-  if (path_info.current_working_dir) {
-    working_dir = *path_info.current_working_dir;
-  } else {
-    working_dir = CurrentDirectory();
-  }
-  std::vector<std::string> prefix;
-  if (path == "~" || absl::StartsWith(path, "~/")) {
-    const auto home_dir =
-        path_info.home_dir.value_or(CF_EXPECT(SystemWideUserHome()));
-    prefix = absl::StrSplit(home_dir, '/', absl::SkipEmpty());
-  } else if (!absl::StartsWith(path, "/")) {
-    prefix = absl::StrSplit(working_dir, '/', absl::SkipEmpty());
-  }
-  return prefix;
-}
-
-}  // namespace
-
-Result<std::string> EmulateAbsolutePath(const InputPathForm& path_info) {
-  const auto& path = path_info.path_to_convert;
-  std::string working_dir;
-  if (path_info.current_working_dir) {
-    working_dir = *path_info.current_working_dir;
-  } else {
-    working_dir = CurrentDirectory();
-  }
-  CF_EXPECT(absl::StartsWith(working_dir, "/"),
-            "Current working directory should be given in an absolute path.");
-
-  if (path.empty()) {
-    LOG(ERROR) << "The requested path to convert an absolute path is empty.";
-    return "";
-  }
-
-  auto prefix = CF_EXPECT(CalculatePrefix(path_info));
-  std::vector<std::string> components;
-  components.insert(components.end(), prefix.begin(), prefix.end());
-  std::vector<std::string_view> tokens = absl::StrSplit(path, '/', absl::SkipEmpty());
-  // remove first ~
-  if (!tokens.empty() && tokens[0] == "~") {
-    tokens.erase(tokens.begin());
-  }
-  components.insert(components.end(), tokens.begin(), tokens.end());
-
-  std::string combined = absl::StrJoin(components, "/");
-  CF_EXPECTF(!Contains(components, "~"),
-             "~ is not allowed in the middle of the path: {}", combined);
-
-  auto processed_tokens = std::accumulate(components.begin(), components.end(),
-                                          std::vector<std::string>{}, FoldPath);
-
-  const auto processed_path = "/" + absl::StrJoin(processed_tokens, "/");
-
-  std::string real_path = processed_path;
-  if (path_info.follow_symlink && FileExists(processed_path)) {
-    CF_EXPECTF(android::base::Realpath(processed_path, &real_path),
-               "Failed to effectively conduct readpath -f {}", processed_path);
-  }
-  return real_path;
-}
-
 std::vector<std::string> Path(const std::string& env_name) {
   // TODO: Assumes a SUS system. Elsewhere we may need to change the delimiter.
   // https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap08.html
@@ -739,6 +636,37 @@ Result<std::string> Search(const std::vector<std::string>& path,
     }
   }
   return CF_ERR("Not found: ") << name << ", path " << absl::StrJoin(path, ":");
+}
+
+Result<SharedFD> CreateOrReuseAndDrainFifo(const std::string& path, mode_t mode) {
+  struct stat st {};
+  bool existed = false;
+  if (TEMP_FAILURE_RETRY(stat(path.c_str(), &st)) != 0) {
+    CF_EXPECTF(TEMP_FAILURE_RETRY(mkfifo(path.c_str(), mode)) == 0,
+               "Failed to mkfifo('{}', {:o}): {}", path, mode,
+               ::cuttlefish::StrError(errno));
+  } else {
+    CF_EXPECTF(S_ISFIFO(st.st_mode),
+               "File at '{}' exists but is not a FIFO", path);
+    existed = true;
+  }
+
+  auto ret = SharedFD::Open(path, O_RDWR);
+  CF_EXPECTF(ret->IsOpen(), "Failed to open '{}': '{}'", path, ret->StrError());
+
+  if (existed) {
+    int flags = ret->Fcntl(F_GETFL, 0);
+    if (flags >= 0) {
+      ret->Fcntl(F_SETFL, flags | O_NONBLOCK);
+      char buf[4096];
+      while (ret->Read(buf, sizeof(buf)) > 0) {
+        // Reading while there is data to read
+      }
+      ret->Fcntl(F_SETFL, flags);
+    }
+  }
+
+  return ret;
 }
 
 }  // namespace cuttlefish

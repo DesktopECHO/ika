@@ -32,9 +32,9 @@ cf_cc_library(
         "//cuttlefish/common/libs/fs",
         "//libbase",
         "@abseil-cpp//absl/log",
-        "@system_icu//:headers",
-        "@system_icu//:schriter",
-        "@system_icu//:utypes",
+        "@icu//icu4c/source/common:headers",
+        "@icu//icu4c/source/common:schriter",
+        "@icu//icu4c/source/common:utypes",
     ],
 )
 

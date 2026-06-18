@@ -42,7 +42,7 @@ uint64_t AlignToPartitionSize(uint64_t size);
  * `output_path`. The raw disk file will have a GUID Partition Table and copy in
  * the contents of the files mentioned in `partitions`.
  */
-Result<void> AggregateImage(std::vector<ImagePartition> partitions,
+Result<void> AggregateImage(const std::vector<ImagePartition>& partitions,
                             const std::string& output_path);
 
 /**

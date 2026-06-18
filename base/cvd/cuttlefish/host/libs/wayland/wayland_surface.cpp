@@ -86,7 +86,6 @@ void Surface::Commit() {
     uint32_t buffer_stride_bytes = 0;
     uint8_t* buffer_pixels = nullptr;
     uint32_t buffer_size = 0;
-    bool skip_cpu_frame = false;
 
     if (shm_buffer != nullptr) {
       wl_shm_buffer_begin_access(shm_buffer);
@@ -112,18 +111,13 @@ void Surface::Commit() {
         buffer_drm_format = dmabuf->format;
         buffer_stride_bytes = dmabuf_plane.stride;
         buffer_size = buffer_h * buffer_stride_bytes;
-        skip_cpu_frame = surfaces_.HandleSurfaceDmabufFrame(
-            display_number, buffer_w, buffer_h, buffer_drm_format,
-            dmabuf_plane.fd.get(), dmabuf_plane.offset, dmabuf_plane.stride,
-            dmabuf_plane.modifier_hi, dmabuf_plane.modifier_lo);
-        if (!skip_cpu_frame) {
-          auto mapped = mmap(nullptr, buffer_size, PROT_READ,
-                             MAP_SHARED, dmabuf_plane.fd, 0);
-          if (mapped != MAP_FAILED) {
-            buffer_pixels = reinterpret_cast<uint8_t*>(mapped);
-          } else {
-            PLOG(ERROR) << "Failed to mmap dmabuf.";
-          }
+        // TODO: Refactor to not have `PROT_WRITE`.
+        auto mapped = mmap(nullptr, buffer_size, PROT_READ,
+                            MAP_SHARED, dmabuf_plane.fd, 0);
+        if (mapped != MAP_FAILED) {
+          buffer_pixels = reinterpret_cast<uint8_t*>(mapped);
+        } else {
+          PLOG(ERROR) << "Failed to mmap dmabuf.";
         }
       }
 
@@ -134,7 +128,7 @@ void Surface::Commit() {
       state_.has_notified_surface_create = true;
     }
 
-    if (!skip_cpu_frame && buffer_pixels != nullptr) {
+    if (buffer_pixels != nullptr) {
       surfaces_.HandleSurfaceFrame(display_number, buffer_w, buffer_h,
                                    buffer_drm_format, buffer_stride_bytes,
                                    buffer_pixels);

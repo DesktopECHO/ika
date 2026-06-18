@@ -16,12 +16,10 @@
 
 #pragma once
 
-#include <optional>
 #include <string>
 #include <string_view>
 
 #include "cuttlefish/common/libs/utils/tee_logging.h"
-#include "cuttlefish/host/libs/metrics/device_event_type.h"
 #include "cuttlefish/host/libs/metrics/metrics_conversion.h"
 #include "cuttlefish/result/result.h"
 
@@ -29,13 +27,12 @@ namespace cuttlefish {
 
 struct MetricsInput {
   std::string metrics_directory;
-  std::optional<Guests> guests;
 };
 
 Result<void> SetUpMetrics(const std::string& metrics_directory);
 ScopedLogger CreateLogger(std::string_view metrics_directory);
 Result<MetricsData> GatherMetrics(const MetricsInput& metrics_input);
-Result<void> OutputMetrics(DeviceEventType event_type,
+Result<void> OutputMetrics(std::string_view event_type_label,
                            std::string_view metrics_directory,
                            const MetricsData& metrics_data);
 

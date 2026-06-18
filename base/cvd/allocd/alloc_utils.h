@@ -22,6 +22,7 @@
 #include <unistd.h>
 
 #include <optional>
+#include <string>
 #include <string_view>
 #include "cuttlefish/result/result.h"
 
@@ -54,6 +55,7 @@ int RunExternalCommand(const std::string& command);
 std::optional<std::string> GetUserName(uid_t uid);
 
 bool CreateTap(std::string_view name);
+Result<std::string> NftPath();
 
 #ifdef __linux__
 Result<void> ValidateTapInterfaceIsUsable(const std::string& interface_name);

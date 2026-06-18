@@ -160,49 +160,29 @@ std::string StopCvdBinary() { return HostBinaryPath("stop_cvd"); }
 std::string TcpConnectorBinary() { return HostBinaryPath("tcp_connector"); }
 
 std::string TestKeyRsa2048() {
-  const std::string product_path =
-      DefaultGuestImagePath("/etc/cvd_avb_testkey_rsa2048.pem");
-  if (FileHasContent(product_path)) {
-    return product_path;
-  }
   return DefaultHostArtifactsPath("etc/cvd_avb_testkey_rsa2048.pem");
 }
 
 std::string TestKeyRsa4096() {
-  const std::string product_rsa_4096 =
-      DefaultGuestImagePath("/etc/cvd_avb_testkey_rsa4096.pem");
-  if (FileHasContent(product_rsa_4096)) {
-    return product_rsa_4096;
+  const std::string rsa_4096 = DefaultHostArtifactsPath("etc/cvd_avb_testkey_rsa4096.pem");
+  if (FileExists(rsa_4096)) {
+    return rsa_4096;
+  } else {
+    return DefaultHostArtifactsPath("etc/cvd_avb_testkey.pem");
   }
-  const std::string host_rsa_4096 =
-      DefaultHostArtifactsPath("etc/cvd_avb_testkey_rsa4096.pem");
-  if (FileHasContent(host_rsa_4096)) {
-    return host_rsa_4096;
-  }
-  return DefaultHostArtifactsPath("etc/cvd_avb_testkey.pem");
 }
 
 std::string TestPubKeyRsa2048() {
-  const std::string product_path =
-      DefaultGuestImagePath("/etc/cvd_rsa2048.avbpubkey");
-  if (FileHasContent(product_path)) {
-    return product_path;
-  }
   return DefaultHostArtifactsPath("etc/cvd_rsa2048.avbpubkey");
 }
 
 std::string TestPubKeyRsa4096() {
-  const std::string product_rsa_4096 =
-      DefaultGuestImagePath("/etc/cvd_rsa4096.avbpubkey");
-  if (FileHasContent(product_rsa_4096)) {
-    return product_rsa_4096;
+  const std::string rsa_4096 = DefaultHostArtifactsPath("etc/cvd_rsa4096.avbpubkey");
+  if (FileExists(rsa_4096)) {
+    return rsa_4096;
+  } else {
+    return DefaultHostArtifactsPath("etc/cvd.avbpubkey");
   }
-  const std::string host_rsa_4096 =
-      DefaultHostArtifactsPath("etc/cvd_rsa4096.avbpubkey");
-  if (FileHasContent(host_rsa_4096)) {
-    return host_rsa_4096;
-  }
-  return DefaultHostArtifactsPath("etc/cvd.avbpubkey");
 }
 
 std::string TombstoneReceiverBinary() {
@@ -241,8 +221,13 @@ std::string VhostUserInputBinary() {
   return HostBinaryPath("cf_vhost_user_input");
 }
 
-std::string VhostUserMediaSimpleDeviceBinary() {
-  return HostBinaryPath("vhu_media_simple_device");
+std::string VhostUserMediaEmulatedCameraSPlaneBinary() {
+  return HostBinaryPath("vhu_media_emulated_camera_splane");
+}
+
+std::string VhostUserMediaEmulatedCameraMPlaneBinary() {
+  return HostBinaryPath("vhu_media_emulated_camera_mplane");
 }
 
 }  // namespace cuttlefish
+

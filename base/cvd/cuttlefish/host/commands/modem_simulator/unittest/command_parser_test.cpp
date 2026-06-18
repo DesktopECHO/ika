@@ -15,7 +15,7 @@
 
 #include "cuttlefish/host/commands/modem_simulator/command_parser.h"
 
-#include <gtest/gtest.h>
+#include "gtest/gtest.h"
 
 TEST(CommandParserUnitTest, SkipPrefix) {
   std::string command = "AT+SPUSATENVECMD=\"D3078202018190014E\"";
@@ -82,7 +82,8 @@ TEST(CommandParserUnitTest, GetNextInt) {
   ASSERT_EQ(28421, cmd.GetNextInt());
 }
 
-TEST(CommandParserUnitTest, GetNextHexInt) {  // Hexadecimal string to decimal value
+TEST(CommandParserUnitTest,
+     GetNextHexInt) {  // Hexadecimal string to decimal value
   std::string command = "C0,6F05";
 
   cuttlefish::CommandParser cmd(command);

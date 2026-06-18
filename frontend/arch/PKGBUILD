@@ -4,8 +4,8 @@
 
 pkgbase=ika-frontend
 pkgname=(ika-user ika-orchestration)
-pkgver=1.53.0
-pkgrel=5
+pkgver=1.55.0
+pkgrel=6
 pkgdesc='Frontend and orchestration packages for Cuttlefish'
 arch=(x86_64 aarch64)
 url='https://github.com/google/android-cuttlefish'
@@ -19,8 +19,8 @@ _srcroot="android-cuttlefish-${pkgver}"
 
 build() {
   cd "${srcdir}/${_srcroot}/frontend"
-  src/goutil src/host_orchestrator build -v -buildmode=pie -ldflags="-w"
-  src/goutil src/operator build -v -buildmode=pie -ldflags="-w"
+  src/goutil src/host_orchestrator build -buildmode=pie -ldflags="-w"
+  src/goutil src/operator build -buildmode=pie -ldflags="-w"
   ./build-webui.sh
 }
 

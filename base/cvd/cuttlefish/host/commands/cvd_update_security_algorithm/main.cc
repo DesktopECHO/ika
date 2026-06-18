@@ -16,8 +16,8 @@
 
 #include <string>
 
-#include <gflags/gflags.h>
 #include "absl/log/log.h"
+#include "gflags/gflags.h"
 
 #include "cuttlefish/common/libs/fs/shared_buf.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
@@ -85,6 +85,6 @@ int UpdateSecurityAlgorithmMain(int argc, char** argv) {
 }  // namespace
 }  // namespace cuttlefish
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
   return cuttlefish::UpdateSecurityAlgorithmMain(argc, argv);
 }

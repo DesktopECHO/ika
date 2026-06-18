@@ -23,17 +23,15 @@
 #include <string_view>
 #include <vector>
 
-#include <fmt/format.h>
 #include "absl/log/log.h"
+#include "fmt/format.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/common/libs/utils/host_info.h"
 #include "cuttlefish/common/libs/utils/tee_logging.h"
 #include "cuttlefish/host/commands/cvd/version/version.h"
-#include "cuttlefish/host/libs/metrics/device_event_type.h"
+#include "cuttlefish/host/libs/log_names/log_names.h"
 #include "cuttlefish/host/libs/metrics/enabled.h"
-#include "cuttlefish/host/libs/metrics/flag_metrics.h"
-#include "cuttlefish/host/libs/metrics/guest_metrics.h"
+#include "cuttlefish/host/libs/metrics/host_metrics.h"
 #include "cuttlefish/host/libs/metrics/metrics_conversion.h"
 #include "cuttlefish/host/libs/metrics/metrics_transmitter.h"
 #include "cuttlefish/host/libs/metrics/metrics_writer.h"
@@ -45,8 +43,6 @@ namespace cuttlefish {
 namespace {
 
 using logs::proto::wireless::android::cuttlefish::CuttlefishLogEvent;
-
-constexpr char kMetricsLogName[] = "metrics.log";
 
 std::chrono::milliseconds GetEpochTime() {
   auto now = std::chrono::system_clock::now().time_since_epoch();
@@ -66,36 +62,30 @@ ScopedLogger CreateLogger(std::string_view metrics_directory) {
       isatty(0) ? MetadataLevel::ONLY_MESSAGE : MetadataLevel::FULL;
   return ScopedLogger(
       SeverityTarget::FromFile(
-          fmt::format("{}/{}", metrics_directory, kMetricsLogName),
+          fmt::format("{}/{}", metrics_directory, kLogNameMetricsV2),
           metadata_level),
       "");
 }
 
 Result<MetricsData> GatherMetrics(const MetricsInput& metrics_input) {
-  auto result = MetricsData{
+  return MetricsData{
       .session_id =
           CF_EXPECT(ReadSessionIdFile(metrics_input.metrics_directory)),
       .cf_common_version = GetVersionIds().ToString(),
       .now = GetEpochTime(),
-      .host_metrics = GetHostInfo(),
+      .host_metrics = CF_EXPECT(GetHostMetrics()),
   };
-
-  if (metrics_input.guests) {
-    result.guest_metrics =
-        CF_EXPECT(GetGuestMetrics(metrics_input.guests.value()));
-  }
-
-  return result;
 }
 
-Result<void> OutputMetrics(DeviceEventType event_type,
+Result<void> OutputMetrics(std::string_view event_type_label,
                            std::string_view metrics_directory,
                            const MetricsData& metrics_data) {
   if (AreMetricsEnabled()) {
     const CuttlefishLogEvent cf_log_event =
         BuildCuttlefishLogEvent(metrics_data);
     CF_EXPECT(TransmitMetrics(kTransmitterPath, cf_log_event));
-    CF_EXPECT(WriteMetricsEvent(event_type, metrics_directory, cf_log_event));
+    CF_EXPECT(
+        WriteMetricsEvent(event_type_label, metrics_directory, cf_log_event));
   }
   return {};
 }

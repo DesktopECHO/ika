@@ -40,11 +40,11 @@ class AndroidBuildApi : public BuildApi {
   AndroidBuildApi() = delete;
   AndroidBuildApi(AndroidBuildApi&&) = delete;
   virtual ~AndroidBuildApi() = default;
-  AndroidBuildApi(HttpClient& http_client, CredentialSource* credential_source,
-                  std::string catchall_api_key,
-                  AndroidBuildUrl* android_build_url,
-                  std::chrono::seconds retry_period,
-                  CasDownloader* cas_downloader = nullptr);
+  AndroidBuildApi(
+      HttpClient& http_client, AndroidBuildUrl& android_build_url,
+      CredentialSource* credential_source = nullptr,
+      std::chrono::seconds retry_period = std::chrono::seconds::zero(),
+      CasDownloader* cas_downloader = nullptr);
 
   Result<Build> GetBuild(const BuildString& build_string) override;
 
@@ -52,10 +52,6 @@ class AndroidBuildApi : public BuildApi {
                                    const std::string& target_directory,
                                    const std::string& artifact_name) override;
 
-  Result<std::string> DownloadFileWithBackup(
-      const Build& build, const std::string& target_directory,
-      const std::string& artifact_name,
-      const std::string& backup_artifact_name) override;
 
   Result<SeekableZipSource> FileReader(
       const Build&, const std::string& artifact_name) override;
@@ -118,9 +114,8 @@ class AndroidBuildApi : public BuildApi {
                                        const std::string& artifact_name);
 
   HttpClient& http_client_;
+  AndroidBuildUrl& android_build_url_;
   CredentialSource* credential_source_;
-  std::string catchall_api_key_;
-  AndroidBuildUrl* android_build_url_;
   std::chrono::seconds retry_period_;
   CasDownloader* cas_downloader_;
 };
