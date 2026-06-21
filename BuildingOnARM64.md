@@ -77,20 +77,16 @@ every line resolves to a file, every file is referenced — no orphans).
 |---|---|---|
 | [`build-soong-arm64-host.patch`](lineageos/patches/build-soong-arm64-host.patch) | `build/soong` | Registers `linux_arm64` as a host arch; host install paths, Clang/bindgen selection, Rust host-cross + proc-macros, JDK path handling |
 | [`build-make-arm64-host.patch`](lineageos/patches/build-make-arm64-host.patch) | `build/make` | Make/kati mirror: host prebuilt tag for LLVM tools, compiler-rt/libc++ paths, `HOST_ARCH := arm64`, `USE_HOST_MUSL := true` |
-| [`prebuilts-build-tools-arm64-host.patch`](lineageos/patches/prebuilts-build-tools-arm64-host.patch) | `prebuilts/build-tools` | Enables `arm64` / `linux_musl_arm64` variants of checked-in build tools |
-| [`prebuilts-jdk21-arm64-host.patch`](lineageos/patches/prebuilts-jdk21-arm64-host.patch) | `prebuilts/jdk/jdk21` | Enables JDK 21 prebuilt build-tool modules on ARM64 |
-| [`prebuilts-rust-x86-musl-stdlib.patch`](lineageos/patches/prebuilts-rust-x86-musl-stdlib.patch) | `prebuilts/rust` | Adds ARM64 musl host target props for the Rust stdlib prebuilt |
+| [`prebuilts-arm64-host.patch`](lineageos/patches/prebuilts-arm64-host.patch) | source root | Enables ARM64 host variants for build-tools, JDK 21, and Rust prebuilt module definitions |
 | [`frameworks-libs-binary-translation-arm64-host.patch`](lineageos/patches/frameworks-libs-binary-translation-arm64-host.patch) | `frameworks/libs/binary_translation` | `berberis_all_hosts_defaults_64` so the translator builds on non-x86 hosts |
 | [`clang22.patch`](lineageos/patches/clang22.patch) | source root | Cross-project Clang 22 diagnostic fixes (see §6) |
 | [`external-rust-android-crates-io-arm64-host-cross.patch`](lineageos/patches/external-rust-android-crates-io-arm64-host-cross.patch) | `external/rust/android-crates-io` | Rust host-cross modules (incl. bindgen crates) for ARM64 |
 | [`external-cronet-arm64-host-cross.patch`](lineageos/patches/external-cronet-arm64-host-cross.patch) | `external/cronet` | Cronet host tools/Rust host-cross; scopes x86 flags to x86 |
 | [`external-sdv-vsomeip-arm64-host-cross.patch`](lineageos/patches/external-sdv-vsomeip-arm64-host-cross.patch) | `external/sdv/vsomeip` | Restricts SSE flags to x86_64 so the graph generates on ARM64 |
 | [`external-musl-lfs64-compat.patch`](lineageos/patches/external-musl-lfs64-compat.patch) | `external/musl` | Public musl header modules plus weak LFS64 aliases required by the Rust musl host stdlib shim |
-| [`vendor-lineage-arm64-host-kernel-tools.patch`](lineageos/patches/vendor-lineage-arm64-host-kernel-tools.patch) | `vendor/lineage` | Native ARM64 `lz4` / `pahole` for kernel builds |
-| [`external-trusty-lk-arm64-host-rust-link.patch`](lineageos/patches/external-trusty-lk-arm64-host-rust-link.patch) | `external/trusty/lk` | Trusty ARM64 host Rust proc-macro linker args (GNU glibc, not musl sysroot) |
-| [`external-trusty-lk-host-target-config.patch`](lineageos/patches/external-trusty-lk-host-target-config.patch) | `external/trusty/lk` | Records Trusty Clang host target/link flags in `toolchain.config` |
-| [`trusty-kernel-arm64-host-dtc.patch`](lineageos/patches/trusty-kernel-arm64-host-dtc.patch) | `trusty/kernel` | Env-provided host `dtc` instead of x86 prebuilt |
-| [`trusty-kernel-arm64-host-clang-target.patch`](lineageos/patches/trusty-kernel-arm64-host-clang-target.patch) | `trusty/kernel` | Threads Clang host target/runtime flags into Trusty host compiles |
+| [`vendor-lineage-arm64-host-tools.patch`](lineageos/patches/vendor-lineage-arm64-host-tools.patch) | `vendor/lineage` | Native ARM64 `lz4` / `pahole` for kernel builds and native `mogrify` fallback |
+| [`external-trusty-lk-arm64-host.patch`](lineageos/patches/external-trusty-lk-arm64-host.patch) | `external/trusty/lk` | Records Trusty Clang host target/link flags and ARM64 host Rust proc-macro linker args |
+| [`trusty-kernel-arm64-host.patch`](lineageos/patches/trusty-kernel-arm64-host.patch) | `trusty/kernel` | Env-provided host `dtc` plus Clang host target/runtime flags for Trusty host compiles |
 | [`trusty-user-base-arm64-host-boringssl.patch`](lineageos/patches/trusty-user-base-arm64-host-boringssl.patch) | `trusty/user/base` | Host BoringSSL archive builds on ARM64 Linux |
 
 ### 4.1 `build-soong-arm64-host.patch` deep dive (21 files)

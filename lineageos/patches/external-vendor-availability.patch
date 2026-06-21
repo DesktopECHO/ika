@@ -1,0 +1,49 @@
+Patch summary:
+Expose external helper libraries needed by vendor-side desktop graphics and
+camera modules. This only widens Soong availability for existing libraries:
+Google Highway SIMD helpers, Skia color management, and XMP metadata support.
+
+diff --git a/external/google-highway/Android.bp b/external/google-highway/Android.bp
+index 56cc9bf5..421822cf 100644
+--- a/external/google-highway/Android.bp
++++ b/external/google-highway/Android.bp
+@@ -18,6 +18,7 @@ license {
+ cc_library {
+     name: "libhwy",
+     host_supported: true,
++    vendor_available: true,
+     sdk_version: "current",
+     stl: "c++_shared",
+     export_include_dirs: [
+diff --git a/external/skia/Android.bp b/external/skia/Android.bp
+index 2eed822b2b..2bdb1f309e 100644
+--- a/external/skia/Android.bp
++++ b/external/skia/Android.bp
+@@ -1136,6 +1136,7 @@ gensrcs {
+ cc_library_static {
+     name: "libskia_skcms",
+     host_supported: true,
++    vendor_available: true,
+     sdk_version: "current",
+     srcs: [
+         "modules/skcms/skcms.cc",
+diff --git a/external/XMP-Toolkit-SDK/Android.bp b/external/XMP-Toolkit-SDK/Android.bp
+index cce5062..037d831 100644
+--- a/external/XMP-Toolkit-SDK/Android.bp
++++ b/external/XMP-Toolkit-SDK/Android.bp
+@@ -16,6 +16,7 @@ license {
+ cc_library {
+     name: "zuid_md5",
+     host_supported: true,
++    vendor_available: true,
+     sdk_version: "current",
+     stl: "c++_shared",
+     target: {
+@@ -37,6 +38,7 @@ cc_library {
+ cc_library {
+     name: "xmp_toolkit_sdk",
+     host_supported: true,
++    vendor_available: true,
+     sdk_version: "current",
+     stl: "c++_shared",
+     export_include_dirs: [

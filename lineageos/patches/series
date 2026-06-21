@@ -2,25 +2,18 @@
 # inside either field. Use "." as the project for patches applied from the
 # Android source root. Externals come first so dependent framework/Launcher3
 # patches see the modified headers/exports.
-external/google-highway patches/external-google-highway.patch
+. patches/external-vendor-availability.patch
 . patches/clang22.patch
-external/trusty/lk patches/external-trusty-lk-arm64-host-rust-link.patch
-external/trusty/lk patches/external-trusty-lk-host-target-config.patch
-trusty/kernel patches/trusty-kernel-arm64-host-dtc.patch
-trusty/kernel patches/trusty-kernel-arm64-host-clang-target.patch
-external/libpcap patches/external-libpcap-bison-data.patch
-external/one-true-awk patches/external-one-true-awk-bison-data.patch
-external/iproute2 patches/external-iproute2-bison-data.patch
-external/mesa3d patches/external-mesa3d-bison-data.patch
+external/trusty/lk patches/external-trusty-lk-arm64-host.patch
+trusty/kernel patches/trusty-kernel-arm64-host.patch
+. patches/bison.patch
 external/stg patches/external-stg-arm64-host-page-size.patch
-prebuilts/rust patches/prebuilts-rust-x86-musl-stdlib.patch
+. patches/prebuilts-arm64-host.patch
 external/musl patches/external-musl-lfs64-compat.patch
 external/rust/android-crates-io patches/external-rust-android-crates-io-arm64-host-cross.patch
 external/cronet patches/external-cronet-arm64-host-cross.patch
 external/sdv/vsomeip patches/external-sdv-vsomeip-arm64-host-cross.patch
 external/minigbm patches/external-minigbm.patch
-external/skia patches/external-skia.patch
-external/XMP-Toolkit-SDK patches/external-XMP-Toolkit-SDK.patch
 art patches/art.patch
 device/google/cuttlefish patches/device-google-cuttlefish.patch
 frameworks/av patches/frameworks-av.patch
@@ -38,12 +31,9 @@ system/sepolicy patches/system-sepolicy.patch
 system/sepolicy patches/system-sepolicy-checkfc-arm64-getopt.patch
 packages/apps/Launcher3 patches/packages-apps-Launcher3.patch
 vendor/lineage patches/vendor-lineage.patch
-vendor/lineage patches/vendor-lineage-arm64-host-kernel-tools.patch
-vendor/lineage patches/vendor-lineage-arm64-host-mogrify.patch
+vendor/lineage patches/vendor-lineage-arm64-host-tools.patch
 build/soong patches/build-soong-arm64-host.patch
 build/make patches/build-make-arm64-host.patch
-prebuilts/build-tools patches/prebuilts-build-tools-arm64-host.patch
-prebuilts/jdk/jdk21 patches/prebuilts-jdk21-arm64-host.patch
 trusty/user/base patches/trusty-user-base-arm64-host-boringssl.patch
 frameworks/libs/binary_translation patches/frameworks-libs-binary-translation-arm64-host.patch
 build/make patches/build-make-releasetools.patch

@@ -1,13 +1,37 @@
 Patch summary:
-Let Trusty host tools and tests use an env-provided Clang host target.
-ARM64 host builds use the musl sysroot and ARM64 musl compiler-rt prebuilts,
-but Clang's default host triple is aarch64-unknown-linux-gnu. Thread optional
-target flags into host compiles and optional link/runtime flags into host links
-so ASan-enabled host tests resolve the checked-in ARM64 musl runtimes. Depend on
-toolchain.config so incremental builds rebuild stale host objects when those
-flags change. x86 hosts leave the variables empty and keep the existing linker
-defaults.
+Let Trusty kernel host tooling run on ARM64 Linux hosts. DTB rules can use an
+env-provided DTC instead of the legacy x86 prebuilt, and host tools/tests thread
+optional Clang target and runtime flags so ARM64 musl host objects rebuild and
+link against the checked-in runtimes. x86 hosts leave the variables empty and
+preserve the existing defaults.
 
+diff --git a/make/dtb.mk b/make/dtb.mk
+index 78d3974..7b24198 100644
+--- a/make/dtb.mk
++++ b/make/dtb.mk
+@@ -39,7 +39,12 @@ MODULE_CPP_DTS := $(patsubst %.dts,$(BUILDDIR)/%.cpp.dts,$(MODULE_DTS))
+ MODULE_DTB := $(patsubst %.cpp.dts,%.dtb,$(MODULE_CPP_DTS))
+ MODULE_DTB_C := $(patsubst %.dtb,%.dtb.c,$(MODULE_DTB))
+ 
+-DTC_PREBUILT := prebuilts/misc/linux-x86/dtc/dtc
++ifneq ($(strip $(DTC_PREBUILT)),)
++GLOBAL_DTC_PREBUILT := $(DTC_PREBUILT)
++endif
++ifeq ($(strip $(GLOBAL_DTC_PREBUILT)),)
++GLOBAL_DTC_PREBUILT := prebuilts/misc/linux-x86/dtc/dtc
++endif
+ 
+ # Preprocess the .dts files
+ $(MODULE_CPP_DTS): MODULE_DTS_INCLUDES := $(MODULE_DTS_INCLUDES)
+@@ -50,7 +55,7 @@ $(MODULE_CPP_DTS): $(BUILDDIR)/%.cpp.dts: %.dts
+ 
+ # Compile each .dts into a .dtb
+ $(MODULE_DTB): MODULE_DTC_FLAGS := $(MODULE_DTC_FLAGS)
+-$(MODULE_DTB): DTC_PREBUILT := $(DTC_PREBUILT)
++$(MODULE_DTB): DTC_PREBUILT := $(GLOBAL_DTC_PREBUILT)
+ $(MODULE_DTB): %.dtb: %.cpp.dts
+ 	@$(MKDIR)
+ 	$(NOECHO)$(DTC_PREBUILT) -O dtb -o $@ $(MODULE_DTC_FLAGS) --symbols $<
 diff --git a/make/generic_compile.mk b/make/generic_compile.mk
 index bef406b..b136f32 100644
 --- a/make/generic_compile.mk

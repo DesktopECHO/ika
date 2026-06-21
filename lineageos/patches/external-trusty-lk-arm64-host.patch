@@ -1,0 +1,29 @@
+Patch summary:
+Teach Trusty LK's host toolchain config about ARM64-host target/link flags and
+let envsetup override Rust proc-macro linker arguments. x86 hosts keep the
+existing empty/default values; ARM64 hosts can rebuild correctly when target
+flags change and can link Rust host libraries against the GNU Rust stdlib
+instead of the musl sysroot.
+
+diff --git a/engine.mk b/engine.mk
+index 95b9a269..0894ea6b 100644
+--- a/engine.mk
++++ b/engine.mk
+@@ -450,6 +450,8 @@ CLIPPY_DRIVER := $(RUST_BINDIR)/clippy-driver
+ # needed to force a rebuild when changing compiler versions.
+ TOOLCHAIN_DEFINES := CLANG_BINDIR=\"$(subst $(SPACE),_,$(CLANG_BINDIR))\"
+ TOOLCHAIN_DEFINES += CLANG_TOOLS_BINDIR=\"$(subst $(SPACE),_,$(CLANG_TOOLS_BINDIR))\"
++TOOLCHAIN_DEFINES += CLANG_HOST_TARGET_FLAGS=\"$(subst $(SPACE),_,$(CLANG_HOST_TARGET_FLAGS))\"
++TOOLCHAIN_DEFINES += CLANG_HOST_LINK_FLAGS=\"$(subst $(SPACE),_,$(CLANG_HOST_LINK_FLAGS))\"
+ TOOLCHAIN_DEFINES += RUST_BINDIR=\"$(subst $(SPACE),_,$(RUST_BINDIR))\"
+ $(TOOLCHAIN_CONFIG): configheader
+ 	@$(call INFO_DONE,toolchain,generating config file,$@)
+@@ -457,7 +459,7 @@ $(TOOLCHAIN_CONFIG): configheader
+ 
+ GENERATED += $(TOOLCHAIN_CONFIG)
+ 
+-GLOBAL_HOST_RUST_LINK_ARGS := -B $(CLANG_BINDIR) -B $(CLANG_HOST_SEARCHDIR) \
++GLOBAL_HOST_RUST_LINK_ARGS ?= -B $(CLANG_BINDIR) -B $(CLANG_HOST_SEARCHDIR) \
+ 	$(addprefix -L ,$(CLANG_HOST_LDDIRS)) --sysroot $(CLANG_HOST_SYSROOT) -fuse-ld=lld
+ GLOBAL_HOST_RUSTFLAGS += -C linker="$(CLANG_BINDIR)/clang++" -C link-args="$(GLOBAL_HOST_RUST_LINK_ARGS)"
+ GLOBAL_SHARED_RUSTFLAGS += -C linker="$(LD)"

@@ -1,0 +1,46 @@
+Patch summary:
+Point Bison genrules at the checked-in build-tools data directory. Several
+external projects invoke the prebuilt Bison binary from Soong genrules, but the
+binary does not reliably discover its package data when launched from the build
+sandbox. Setting `BISON_PKGDATADIR` from the Bison tool location keeps parser
+generation host-independent for libpcap, one-true-awk, iproute2, and Mesa.
+
+diff --git a/external/libpcap/Android.bp b/external/libpcap/Android.bp
+--- a/external/libpcap/Android.bp
++++ b/external/libpcap/Android.bp
+@@ -51 +51 @@ genrule {
+-    cmd: "M4=$(location m4) $(location bison) -p pcap_ --no-lines --output=$(genDir)/grammar.c $(in)",
++    cmd: "BISON_PKGDATADIR=$$(dirname $$(dirname $$(dirname $(location bison))))/common/bison M4=$(location m4) $(location bison) -p pcap_ --no-lines --output=$(genDir)/grammar.c $(in)",
+@@ -62 +62 @@ genrule {
+-    cmd: "M4=$(location m4) $(location bison) -p pcap_ --no-lines --defines=$(genDir)/grammar.h --output=$(genDir)/unused $(in)",
++    cmd: "BISON_PKGDATADIR=$$(dirname $$(dirname $$(dirname $(location bison))))/common/bison M4=$(location m4) $(location bison) -p pcap_ --no-lines --defines=$(genDir)/grammar.h --output=$(genDir)/unused $(in)",
+diff --git a/external/one-true-awk/Android.bp b/external/one-true-awk/Android.bp
+--- a/external/one-true-awk/Android.bp
++++ b/external/one-true-awk/Android.bp
+@@ -56 +56 @@ genrule {
+-    cmd: "M4=$(location m4) $(location bison) -y --no-lines --output=$(genDir)/awkgram.tab.c $(in)",
++    cmd: "BISON_PKGDATADIR=$$(dirname $$(dirname $$(dirname $(location bison))))/common/bison M4=$(location m4) $(location bison) -y --no-lines --output=$(genDir)/awkgram.tab.c $(in)",
+@@ -67 +67 @@ genrule {
+-    cmd: "M4=$(location m4) $(location bison) -y --no-lines --defines=$(genDir)/awkgram.tab.h --output=$(genDir)/unused $(in)",
++    cmd: "BISON_PKGDATADIR=$$(dirname $$(dirname $$(dirname $(location bison))))/common/bison M4=$(location m4) $(location bison) -y --no-lines --defines=$(genDir)/awkgram.tab.h --output=$(genDir)/unused $(in)",
+diff --git a/external/iproute2/tc/Android.bp b/external/iproute2/tc/Android.bp
+--- a/external/iproute2/tc/Android.bp
++++ b/external/iproute2/tc/Android.bp
+@@ -44 +44 @@ genrule {
+-    cmd: "M4=$(location m4) $(location bison) -y --output=$(genDir)/emp_ematch.yacc.c $(in)",
++    cmd: "BISON_PKGDATADIR=$$(dirname $$(dirname $$(dirname $(location bison))))/common/bison M4=$(location m4) $(location bison) -y --output=$(genDir)/emp_ematch.yacc.c $(in)",
+@@ -57 +57 @@ genrule {
+-    cmd: "M4=$(location m4) $(location bison) -y --defines=$(genDir)/emp_ematch.yacc.h --output=$(genDir)/unused $(in)",
++    cmd: "BISON_PKGDATADIR=$$(dirname $$(dirname $$(dirname $(location bison))))/common/bison M4=$(location m4) $(location bison) -y --defines=$(genDir)/emp_ematch.yacc.h --output=$(genDir)/unused $(in)",
+diff --git a/external/mesa3d/src/compiler/glsl/Android.bp b/external/mesa3d/src/compiler/glsl/Android.bp
+--- a/external/mesa3d/src/compiler/glsl/Android.bp
++++ b/external/mesa3d/src/compiler/glsl/Android.bp
+@@ -180 +180 @@ genrule {
+-    cmd: " M4=$(location m4) $(location bison) -Wno-deprecated -o $(location src/compiler/glsl/glcpp/glcpp-parse.c.dummy.h) -p glcpp_parser_ --defines=$(location src/compiler/glsl/glcpp/glcpp-parse.h) $(location glcpp/glcpp-parse.y); echo '//nothing to see here' > $(location src/compiler/glsl/glcpp/glcpp-parse.c.dummy.h)",
++    cmd: " BISON_PKGDATADIR=$$(dirname $$(dirname $$(dirname $(location bison))))/common/bison M4=$(location m4) $(location bison) -Wno-deprecated -o $(location src/compiler/glsl/glcpp/glcpp-parse.c.dummy.h) -p glcpp_parser_ --defines=$(location src/compiler/glsl/glcpp/glcpp-parse.h) $(location glcpp/glcpp-parse.y); echo '//nothing to see here' > $(location src/compiler/glsl/glcpp/glcpp-parse.c.dummy.h)",
+@@ -199 +199 @@ genrule {
+-    cmd: " M4=$(location m4) $(location bison) -Wno-deprecated -o $(location src/compiler/glsl/glcpp/glcpp-parse.c) -p glcpp_parser_ --defines=$(genDir)/src/compiler/glsl/glcpp/glcpp-parse.h $(location glcpp/glcpp-parse.y); echo '//nothing to see here' > $(location src/compiler/glsl/glcpp/glcpp-parse.h.dummy.c)",
++    cmd: " BISON_PKGDATADIR=$$(dirname $$(dirname $$(dirname $(location bison))))/common/bison M4=$(location m4) $(location bison) -Wno-deprecated -o $(location src/compiler/glsl/glcpp/glcpp-parse.c) -p glcpp_parser_ --defines=$(genDir)/src/compiler/glsl/glcpp/glcpp-parse.h $(location glcpp/glcpp-parse.y); echo '//nothing to see here' > $(location src/compiler/glsl/glcpp/glcpp-parse.h.dummy.c)",
+@@ -242 +242 @@ genrule {
+-    cmd: " M4=$(location m4) $(location bison) -Wno-deprecated -o $(location src/compiler/glsl/glsl_parser.cpp) -p _mesa_glsl_ --defines=$(location src/compiler/glsl/glsl_parser.h) $(location glsl_parser.yy)",
++    cmd: " BISON_PKGDATADIR=$$(dirname $$(dirname $$(dirname $(location bison))))/common/bison M4=$(location m4) $(location bison) -Wno-deprecated -o $(location src/compiler/glsl/glsl_parser.cpp) -p _mesa_glsl_ --defines=$(location src/compiler/glsl/glsl_parser.h) $(location glsl_parser.yy)",

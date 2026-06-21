@@ -1,0 +1,79 @@
+Patch summary:
+Use native host helper tools where Lineage's checked-in x86 prebuilts cannot run
+on ARM64 hosts. Kernel builds use native lz4/pahole on ARM64 while preserving
+the prebuilt paths elsewhere, and bootanimation generation falls back to system
+ImageMagick mogrify only when the provided tool is not executable.
+
+diff --git a/bootanimation/gen-bootanimation.sh b/bootanimation/gen-bootanimation.sh
+index 8c2ba50e..645ec092 100755
+--- a/bootanimation/gen-bootanimation.sh
++++ b/bootanimation/gen-bootanimation.sh
+@@ -28,6 +28,25 @@ PARAM_TARGET_BOOTANIMATION_HALF_RES=$9
+ 
+ INTERMEDIATES=$PARAM_GENDIR/intermediates
+ 
++resolve_mogrify() {
++    local candidate=$1
++
++    if "$candidate" -version >/dev/null 2>&1; then
++        printf '%s\n' "$candidate"
++        return 0
++    fi
++
++    for candidate in /usr/bin/mogrify /bin/mogrify; do
++        if [ -x "$candidate" ] && "$candidate" -version >/dev/null 2>&1; then
++            printf '%s\n' "$candidate"
++            return 0
++        fi
++    done
++
++    echo "error: mogrify prebuilt is not executable and no host mogrify was found" >&2
++    return 126
++}
++
+ mkdir -p $INTERMEDIATES
+ 
+ tar xfp $PARAM_BOOTANIMATION_TAR -C $INTERMEDIATES
+@@ -48,7 +67,9 @@ fi
+ IMAGEHEIGHT=$(expr $IMAGEWIDTH / 3);
+ RESOLUTION="$IMAGEWIDTH"x"$IMAGEHEIGHT";
+ 
+-$PARAM_MOGRIFY -resize $RESOLUTION -colors 256 $INTERMEDIATES/*/*.png;
++MOGRIFY=$(resolve_mogrify "$PARAM_MOGRIFY")
++
++$MOGRIFY -resize $RESOLUTION -colors 256 $INTERMEDIATES/*/*.png;
+ 
+ echo "$IMAGESCALEWIDTH $IMAGESCALEHEIGHT 60" > $INTERMEDIATES/desc.txt;
+ cat $PARAM_DESC_TXT >> $INTERMEDIATES/desc.txt
+diff --git a/config/BoardConfigKernel.mk b/config/BoardConfigKernel.mk
+index 3459674b..c03707c7 100644
+--- a/config/BoardConfigKernel.mk
++++ b/config/BoardConfigKernel.mk
+@@ -252,8 +252,16 @@ ifneq ($(TARGET_KERNEL_CLANG_COMPILE), false)
+     endif
+ endif
+ 
+-# Pass prebuilt LZ4 path
+-KERNEL_MAKE_FLAGS += LZ4=$(BUILD_TOP)/prebuilts/kernel-build-tools/linux-x86/bin/lz4
++ifeq ($(HOST_PREBUILT_TAG),linux-arm64)
++    KERNEL_HOST_LZ4 ?= /usr/bin/lz4
++    KERNEL_HOST_PAHOLE ?= /usr/bin/pahole
++else
++    KERNEL_HOST_LZ4 ?= $(BUILD_TOP)/prebuilts/kernel-build-tools/linux-x86/bin/lz4
++    KERNEL_HOST_PAHOLE ?= $(BUILD_TOP)/prebuilts/kernel-build-tools/linux-x86/bin/pahole
++endif
++
++# Pass LZ4 path
++KERNEL_MAKE_FLAGS += LZ4=$(KERNEL_HOST_LZ4)
+ 
+ # Since Linux 4.16, flex and bison are required
+ KERNEL_MAKE_FLAGS += LEX=$(BUILD_TOP)/prebuilts/build-tools/$(HOST_PREBUILT_TAG)/bin/flex
+@@ -262,7 +270,7 @@ KERNEL_MAKE_FLAGS += M4=$(BUILD_TOP)/prebuilts/build-tools/$(HOST_PREBUILT_TAG)/
+ TOOLS_PATH_OVERRIDE += BISON_PKGDATADIR=$(BUILD_TOP)/prebuilts/build-tools/common/bison
+ 
+ # Since Linux 5.10, pahole is required
+-KERNEL_MAKE_FLAGS += PAHOLE=$(BUILD_TOP)/prebuilts/kernel-build-tools/linux-x86/bin/pahole
++KERNEL_MAKE_FLAGS += PAHOLE=$(KERNEL_HOST_PAHOLE)
+ 
+ # Rust bindgen wants matching Clang and libclang versions
+ KERNEL_MAKE_FLAGS += LIBCLANG_PATH=$(TARGET_KERNEL_CLANG_PATH)/lib
