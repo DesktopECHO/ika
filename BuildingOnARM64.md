@@ -85,7 +85,7 @@ every line resolves to a file, every file is referenced — no orphans).
 | [`external-rust-android-crates-io-arm64-host-cross.patch`](lineageos/patches/external-rust-android-crates-io-arm64-host-cross.patch) | `external/rust/android-crates-io` | Rust host-cross modules (incl. bindgen crates) for ARM64 |
 | [`external-cronet-arm64-host-cross.patch`](lineageos/patches/external-cronet-arm64-host-cross.patch) | `external/cronet` | Cronet host tools/Rust host-cross; scopes x86 flags to x86 |
 | [`external-sdv-vsomeip-arm64-host-cross.patch`](lineageos/patches/external-sdv-vsomeip-arm64-host-cross.patch) | `external/sdv/vsomeip` | Restricts SSE flags to x86_64 so the graph generates on ARM64 |
-| [`external-musl-lfs64-compat.patch`](lineageos/patches/external-musl-lfs64-compat.patch) | `external/musl` | musl LFS64 compatibility for host builds |
+| [`external-musl-lfs64-compat.patch`](lineageos/patches/external-musl-lfs64-compat.patch) | `external/musl` | Public musl header modules plus weak LFS64 aliases required by the Rust musl host stdlib shim |
 | [`vendor-lineage-arm64-host-kernel-tools.patch`](lineageos/patches/vendor-lineage-arm64-host-kernel-tools.patch) | `vendor/lineage` | Native ARM64 `lz4` / `pahole` for kernel builds |
 | [`external-trusty-lk-arm64-host-rust-link.patch`](lineageos/patches/external-trusty-lk-arm64-host-rust-link.patch) | `external/trusty/lk` | Trusty ARM64 host Rust proc-macro linker args (GNU glibc, not musl sysroot) |
 | [`external-trusty-lk-host-target-config.patch`](lineageos/patches/external-trusty-lk-host-target-config.patch) | `external/trusty/lk` | Records Trusty Clang host target/link flags in `toolchain.config` |
@@ -184,8 +184,7 @@ raise_host_open_file_limit
 
 Relevant env knobs (defaults in the header of
 [build_lineageos_desktop.sh](lineageos/scripts/build_lineageos_desktop.sh)):
-`NOFILE_LIMIT`, `ARM64_SOONG_GOMEMLIMIT`, `ARM64_SOONG_GOMAXPROCS`,
-`ARM64_JDK21_PREBUILT_URL`, `ARM64_ANDROID_JAVA_HOME`.
+`NOFILE_LIMIT`, `ARM64_JDK21_PREBUILT_URL`, `ARM64_ANDROID_JAVA_HOME`.
 
 ---
 

@@ -111,9 +111,9 @@ By default `ika` uses:
 - host tools from `/usr/lib/cuttlefish-common`
 - the packaged LineageOS tree from `/usr/share/cuttlefish-common/lineageos`
 - instance state under `~/ika`
-- a ~64 GB thin-provisioned f2fs userdata image
+- a ~64 GB thin-provisioned ext4 userdata image
 - `gfxstream` GPU acceleration
-- host Bluetooth, with Wi-Fi, netsim, and UWB disabled unless you override them
+- Wi-Fi, Bluetooth, netsim, and UWB disabled unless you override them
 
 `gfxstream` is the preferred GPU mode for the packaged workflow. Use
 `guest_swiftshader` only as a troubleshooting fallback when host GPU

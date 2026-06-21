@@ -1,3 +1,12 @@
+Patch summary:
+Restore the musl host compatibility surface expected by Android's Rust host
+toolchain on ARM64 build hosts. The patch makes musl header modules visible
+outside `external/musl` and restores weak LFS64 alias symbols such as `open64`,
+`stat64`, `mmap64`, and related entry points that musl 1.2.4 exposes only as
+header macros. Android's prebuilt Rust musl stdlib still references the real
+symbols through its host shim, so these aliases keep ARM64 host tools linkable
+without changing x86 host behavior.
+
 diff --git a/Android.bp b/Android.bp
 index f8ed9cff..be83a8a7 100644
 --- a/Android.bp
