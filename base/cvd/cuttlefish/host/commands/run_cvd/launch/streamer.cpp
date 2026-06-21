@@ -265,7 +265,8 @@ class WebRtcServer : public virtual CommandSource,
 
   // SetupFeature
   bool Enabled() const override {
-    return sockets_.Enabled() &&
+    return instance_.enable_webrtc() &&
+           sockets_.Enabled() &&
            (VmManagerIsCrosvm(config_) || VmManagerIsQemu(config_));
   }
 
@@ -312,4 +313,3 @@ launchStreamerComponent() {
 }
 
 }  // namespace cuttlefish
-

@@ -15,6 +15,18 @@ PACKAGED_GETCHROMIUM_BIN="/usr/lib/cuttlefish-common/bin/getchromium"
 PACKAGED_OPERATOR_BIN="/usr/lib/cuttlefish-common/bin/operator"
 SCRCPY_ICON_DIR_DEFAULT="/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps"
 
+packaged_webrtc_available() {
+  [[ -x "${PACKAGED_OPERATOR_BIN}" ]]
+}
+
+default_start_webrtc() {
+  if packaged_webrtc_available; then
+    printf '%s\n' "true"
+  else
+    printf '%s\n' "false"
+  fi
+}
+
 # Checks if a flag was supplied by the user in the arguments
 user_supplied_flag() {
   local flag="$1"
@@ -148,9 +160,17 @@ declare -A CVD_NETWORK_DEFAULTS=(
   [vhost_user_vsock]="false"
   [enable_wifi]="false"
   [enable_modem_simulator]="false"
+  [enable_host_bluetooth]="false"
   [enable_host_uwb]="false"
-  [netsim_bt]="true"
+  [netsim_bt]="false"
   [netsim_uwb]="false"
+)
+
+# ============================================================================
+# Streaming Defaults (passed to cvd_internal_start)
+# ============================================================================
+declare -A CVD_STREAMING_DEFAULTS=(
+  [start_webrtc]="$(default_start_webrtc)"
 )
 
 # ============================================================================
@@ -186,6 +206,7 @@ CVD_DEFAULT_ARG_MAPS=(
   CVD_COMPUTE_DEFAULTS
   CVD_GPU_DEFAULTS
   CVD_NETWORK_DEFAULTS
+  CVD_STREAMING_DEFAULTS
   CVD_REPORT_DEFAULTS
   CVD_OVERLAY_DEFAULTS
   CVD_LAUNCHER_DEFAULTS
@@ -283,8 +304,8 @@ ensure_open_file_limit() {
 check_webrtc_operator() {
   [[ -S "${CVD_OPERATOR_SOCKET}" ]] && return 0
 
-  if [[ ! -x "${PACKAGED_OPERATOR_BIN}" ]]; then
-    log "Optional WebRTC browser access is unavailable because ika-user is not installed."
+  if ! packaged_webrtc_available; then
+    log "Optional WebRTC browser access is disabled because ika-user is not installed."
     return 0
   fi
 

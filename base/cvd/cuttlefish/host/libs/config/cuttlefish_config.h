@@ -498,6 +498,7 @@ class CuttlefishConfig {
     uint8_t ril_prefixlen() const;
 
     std::string webrtc_assets_dir() const;
+    bool enable_webrtc() const;
 
     // The range of TCP ports available for webrtc sessions.
     std::pair<uint16_t, uint16_t> webrtc_tcp_port_range() const;
@@ -722,6 +723,7 @@ class CuttlefishConfig {
     void set_enable_kernel_log(bool enable_kernel_log);
 
     void set_webrtc_assets_dir(const std::string& webrtc_assets_dir);
+    void set_enable_webrtc(bool enable_webrtc);
 
     // The range of TCP ports available for webrtc sessions.
     void set_webrtc_tcp_port_range(std::pair<uint16_t, uint16_t> range);

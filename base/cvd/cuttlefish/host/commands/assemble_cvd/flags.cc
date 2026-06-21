@@ -596,6 +596,8 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
       CF_EXPECT(GET_FLAG_STR_VALUE(boot_slot));
   std::vector<std::string> webrtc_assets_dir_vec =
       CF_EXPECT(GET_FLAG_STR_VALUE(webrtc_assets_dir));
+  std::vector<bool> start_webrtc_vec =
+      CF_EXPECT(GET_FLAG_BOOL_VALUE(start_webrtc));
   std::vector<std::string> tcp_port_range_vec =
       CF_EXPECT(GET_FLAG_STR_VALUE(tcp_port_range));
   std::vector<std::string> udp_port_range_vec =
@@ -1269,6 +1271,7 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
     instance.set_wifi_mac_prefix(5554 + (num - 1));
 
     // streaming, webrtc setup
+    instance.set_enable_webrtc(start_webrtc_vec[instance_index]);
     instance.set_webrtc_assets_dir(webrtc_assets_dir_vec[instance_index]);
 
     std::pair<uint16_t, uint16_t> tcp_range =

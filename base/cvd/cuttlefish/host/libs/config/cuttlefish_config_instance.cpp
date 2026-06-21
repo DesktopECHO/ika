@@ -1055,6 +1055,14 @@ void CuttlefishConfig::MutableInstanceSpecific::set_webrtc_assets_dir(const std:
 std::string CuttlefishConfig::InstanceSpecific::webrtc_assets_dir() const {
   return (*Dictionary())[kWebRTCAssetsDir].asString();
 }
+static constexpr char kEnableWebRTC[] = "enable_webrtc";
+void CuttlefishConfig::MutableInstanceSpecific::set_enable_webrtc(
+    bool enable_webrtc) {
+  (*Dictionary())[kEnableWebRTC] = enable_webrtc;
+}
+bool CuttlefishConfig::InstanceSpecific::enable_webrtc() const {
+  return (*Dictionary())[kEnableWebRTC].asBool();
+}
 
 static constexpr char kWebrtcTcpPortRange[] = "webrtc_tcp_port_range";
 void CuttlefishConfig::MutableInstanceSpecific::set_webrtc_tcp_port_range(
@@ -2015,4 +2023,3 @@ std::string CuttlefishConfig::InstanceSpecific::instance_name() const {
 std::string CuttlefishConfig::InstanceSpecific::id() const { return id_; }
 
 }  // namespace cuttlefish
-
