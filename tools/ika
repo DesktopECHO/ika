@@ -159,11 +159,11 @@ declare -A CVD_NETWORK_DEFAULTS=(
   [vhost_net]="true"
   [vhost_user_vsock]="false"
   [enable_wifi]="false"
-  [enable_modem_simulator]="false"
-  [enable_host_bluetooth]="false"
+  [enable_host_bluetooth]="true"
+  [netsim_bt]="true"
   [enable_host_uwb]="false"
-  [netsim_bt]="false"
   [netsim_uwb]="false"
+  [enable_modem_simulator]="false"
 )
 
 # ============================================================================

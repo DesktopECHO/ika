@@ -49,15 +49,42 @@ if [ -z ${bridge_interface} ]; then
   create_bridges=1
 fi
 
-# Newer distros prefer nft, but broute is not supported, so use
-# the legacy ebtables instead
-ebtables=$(which ebtables-legacy)
-# If there's no ebtables-legacy, it's probably an older distro,
-# and ebtables should support broute directly
-ebtables=${ebtables:-ebtables}
-# Similarly for iptables
-iptables=$(which iptables-legacy)
-iptables=${iptables:-iptables}
+# Networking helpers use nft(8) exclusively, matching the cuttlefish-base RPM
+# and allocd (alloc_netlink/alloc_iproute2): iptables and ebtables are no longer
+# invoked. NAT is a single `ip cuttlefish` table whose masquerade rule matches a
+# shared `nat_sources` CIDR set (also populated by per-user cvdalloc), and the
+# bridged-interface drops use an `nft bridge filter` chain. nftables is a hard
+# dependency, so fail loudly if nft is missing.
+command -v nft >/dev/null 2>&1 || {
+    echo "cuttlefish-host-resources: 'nft' is required but not found in PATH" >&2
+    exit 1
+}
+
+# Idempotent topology: `ip cuttlefish` table, `nat_sources` set, postrouting nat
+# chain with one `ip saddr @nat_sources masquerade` rule, plus the bridge filter
+# chain for per-tap drops. `add table/set/chain` are no-ops if they already
+# exist; the masquerade rule is added once and detected by string match after.
+ensure_nft_topology() {
+    nft add table ip cuttlefish 2>/dev/null || true
+    nft add set ip cuttlefish nat_sources '{ type ipv4_addr; flags interval; }' 2>/dev/null || true
+    nft add chain ip cuttlefish postrouting '{ type nat hook postrouting priority 100; policy accept; }' 2>/dev/null || true
+    if ! nft list chain ip cuttlefish postrouting 2>/dev/null | grep -q 'ip saddr @nat_sources masquerade'; then
+        nft add rule ip cuttlefish postrouting ip saddr @nat_sources masquerade 2>/dev/null || true
+    fi
+    # Bridge filter chain for per-tap ipv4/ipv6 drops (replaces ebtables).
+    nft add table bridge filter 2>/dev/null || true
+    nft add chain bridge filter FORWARD '{ type filter hook forward priority 0; }' 2>/dev/null || true
+}
+
+# Add/remove a guest source network ("a.b.c.d/len") to/from the masquerade set.
+nat_add() {
+    ensure_nft_topology
+    nft add element ip cuttlefish nat_sources "{ ${1} }" 2>/dev/null || true
+}
+
+nat_del() {
+    nft delete element ip cuttlefish nat_sources "{ ${1} }" 2>/dev/null || true
+}
 
 # Make sure these directories exist, since they are used multiple times
 mkdir -p /run /var/run
@@ -136,7 +163,7 @@ create_interface() {
     if [ -n "${ipv6_prefix}" -a -n "${ipv6_prefix_length}" ]; then
         ip -6 addr add "${ipv6_prefix}1/${ipv6_prefix_length}" dev "${tap}"
     fi
-    "${iptables}" -t nat -A POSTROUTING -s "${network}" -j MASQUERADE
+    nat_add "${network}"
 }
 
 # Destroy a tap interface
@@ -153,7 +180,7 @@ destroy_interface() {
     ipv6_prefix="${4}"
     ipv6_prefix_length="${5}"
 
-    "${iptables}" -t nat -D POSTROUTING -s "${network}" -j MASQUERADE
+    nat_del "${network}"
     ip addr del "${gateway}${netmask}" dev "${tap}"
     if [ -n "${ipv6_prefix}" -a -n "${ipv6_prefix_length}" ]; then
         ip -6 addr del "${ipv6_prefix}1/${ipv6_prefix_length}" dev "${tap}"
@@ -182,12 +209,10 @@ create_bridged_interfaces() {
         ip link set dev "${tap}" master "${2}"
         if [ "${create_bridges}" != "1" ]; then
             if [ "$ipv4_bridge" != "1" ]; then
-                $ebtables -t broute -A BROUTING -p ipv4 --in-if  "${tap}" -j DROP
-                $ebtables -t filter -A FORWARD  -p ipv4 --out-if "${tap}" -j DROP
+                nft add rule bridge filter FORWARD oifname "${tap}" ether type ip drop 2>/dev/null || true
             fi
             if [ "$ipv6_bridge" != "1" ]; then
-                $ebtables -t broute -A BROUTING -p ipv6 --in-if  "${tap}" -j DROP
-                $ebtables -t filter -A FORWARD  -p ipv6 --out-if "${tap}" -j DROP
+                nft add rule bridge filter FORWARD oifname "${tap}" ether type ip6 drop 2>/dev/null || true
             fi
         fi
     done
@@ -205,7 +230,7 @@ create_bridged_interfaces() {
         start_dnsmasq \
           "${2}" "${gateway}" "${dhcp_range}" \
           "${ipv6_prefix}" "${ipv6_prefix_length}"
-        "${iptables}" -t nat -A POSTROUTING -s "${network}" -j MASQUERADE
+        nat_add "${network}"
     fi
 }
 
@@ -222,7 +247,7 @@ destroy_bridged_interfaces() {
         network="${1}.0${netmask}"
         ipv6_prefix="${4}"
         ipv6_prefix_length="${5}"
-        "${iptables}" -t nat -D POSTROUTING -s "${network}" -j MASQUERADE
+        nat_del "${network}"
         stop_dnsmasq "${2}"
         if [ -n "${ipv6_prefix}" -a -n "${ipv6_prefix_length}" ]; then
             ip -6 addr del "${ipv6_prefix}1/${ipv6_prefix_length}" dev "${2}"
@@ -231,16 +256,9 @@ destroy_bridged_interfaces() {
     fi
     for i in $(seq ${num_cvd_accounts}); do
         tap="$(printf ${3}-%02d $i)"
-        if [ "${create_bridges}" != "1" ]; then
-            if [ "$ipv4_bridge" != "1" ]; then
-                $ebtables -t filter -D FORWARD  -p ipv4 --out-if "${tap}" -j DROP
-                $ebtables -t broute -D BROUTING -p ipv4 --in-if  "${tap}" -j DROP
-            fi
-            if [ "$ipv6_bridge" != "1" ]; then
-                $ebtables -t filter -D FORWARD  -p ipv6 --out-if "${tap}" -j DROP
-                $ebtables -t broute -D BROUTING -p ipv6 --in-if  "${tap}" -j DROP
-            fi
-        fi
+        # Per-tap bridge-filter drops (the ebtables replacement) are flushed in
+        # bulk in stop() via `nft flush chain bridge filter FORWARD`, so there is
+        # no need to delete them individually here.
         destroy_tap "${tap}"
     done
     if [ "${create_bridges}" = "1" ]; then
@@ -253,6 +271,10 @@ start() {
     # Enable ip forwarding
     echo 1 > /proc/sys/net/ipv4/ip_forward
     echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
+
+    # Create the ip cuttlefish + bridge filter topology before any per-interface
+    # ops touch the nat_sources set / bridge filter chain.
+    ensure_nft_topology
 
     # Ethernet
     # 192.168.98.X for cvd-ebr and cvd-etap-XX
@@ -334,6 +356,11 @@ stop() {
             destroy_interface $tap 192.168.95 $(($i - 64))
         fi
     done
+
+    # Flush the bridge filter chain used as the ebtables replacement so leftover
+    # per-tap drop rules don't accumulate across restarts. The `ip cuttlefish`
+    # table is left alone because per-user cvdalloc allocations may still use it.
+    nft flush chain bridge filter FORWARD 2>/dev/null || true
 }
 
 usage() {
