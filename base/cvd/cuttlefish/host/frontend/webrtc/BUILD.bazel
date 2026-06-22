@@ -184,6 +184,21 @@ cf_cc_library(
     deps = ["@abseil-cpp//absl/log"],
 )
 
+cf_cc_binary(
+    name = "raw_frame_streamer",
+    srcs = [
+        "raw_frame_streamer_main.cpp",
+    ],
+    deps = [
+        ":libcuttlefish_webrtc_raw_frame_streamer",
+        "//cuttlefish/host/libs/config:logging",
+        "//cuttlefish/host/libs/screen_connector",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
+        "@gflags",
+    ],
+)
+
 cf_cc_library(
     name = "libcuttlefish_webrtc_display_handler",
     srcs = ["display_handler.cpp"],

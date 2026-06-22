@@ -98,8 +98,8 @@ std::vector<Command> LaunchCustomActionServers(
   return commands;
 }
 
-// Creates the frame and input sockets and add the relevant arguments to
-// webrtc commands
+// Creates the frame and input sockets and adds the relevant arguments to
+// streamer commands.
 class StreamerSockets : public virtual SetupFeature {
  public:
   INJECT(StreamerSockets(const CuttlefishConfig& config,
@@ -145,6 +145,10 @@ class StreamerSockets : public virtual SetupFeature {
     cmd.AddParameter("--confui_out_fd=", confui_out_fd_);
     cmd.AddParameter("-switches_fd=",
                      input_connections_provider_.SwitchesConnection());
+  }
+
+  void AppendFrameCommandArguments(Command& cmd) {
+    cmd.AddParameter("-frame_server_fd=", frames_server_);
   }
 
   // SetupFeature
@@ -297,6 +301,49 @@ class WebRtcServer : public virtual CommandSource,
   AutoSensorsSocketPair::Type& sensors_socket_pair_;
 };
 
+class RawFrameStreamerServer : public virtual CommandSource {
+ public:
+  INJECT(RawFrameStreamerServer(
+      const CuttlefishConfig& config,
+      const CuttlefishConfig::InstanceSpecific& instance,
+      StreamerSockets& sockets))
+      : config_(config), instance_(instance), sockets_(sockets) {}
+
+  // CommandSource
+  Result<std::vector<MonitorCommand>> Commands() override {
+    std::vector<MonitorCommand> commands;
+    Command raw_frame_streamer(RawFrameStreamerBinary());
+    raw_frame_streamer.UnsetFromEnvironment("http_proxy");
+    sockets_.AppendFrameCommandArguments(raw_frame_streamer);
+    raw_frame_streamer.AddParameter(
+        "--raw_frame_socket_path=",
+        instance_.PerInstanceInternalUdsPath("ika_frames.sock"));
+    raw_frame_streamer.AddParameter("--frames_are_rgba=",
+                                    !instance_.guest_uses_bgra_framebuffers());
+    commands.emplace_back(std::move(raw_frame_streamer));
+    return commands;
+  }
+
+  // SetupFeature
+  bool Enabled() const override {
+    return !instance_.enable_webrtc() &&
+           sockets_.Enabled() &&
+           (VmManagerIsCrosvm(config_) || VmManagerIsQemu(config_));
+  }
+
+ private:
+  std::string Name() const override { return "RawFrameStreamerServer"; }
+  std::unordered_set<SetupFeature*> Dependencies() const override {
+    return {static_cast<SetupFeature*>(&sockets_)};
+  }
+
+  Result<void> ResultSetup() override { return {}; }
+
+  const CuttlefishConfig& config_;
+  const CuttlefishConfig::InstanceSpecific instance_;
+  StreamerSockets& sockets_;
+};
+
 }  // namespace
 
 fruit::Component<fruit::Required<
@@ -305,10 +352,12 @@ fruit::Component<fruit::Required<
     WebRtcController>>
 launchStreamerComponent() {
   return fruit::createComponent()
+      .addMultibinding<CommandSource, RawFrameStreamerServer>()
       .addMultibinding<CommandSource, WebRtcServer>()
       .addMultibinding<DiagnosticInformation, WebRtcServer>()
       .addMultibinding<KernelLogPipeConsumer, WebRtcServer>()
       .addMultibinding<SetupFeature, StreamerSockets>()
+      .addMultibinding<SetupFeature, RawFrameStreamerServer>()
       .addMultibinding<SetupFeature, WebRtcServer>();
 }
 

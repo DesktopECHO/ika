@@ -67,9 +67,12 @@ static constexpr char kInstanceDir[] = "instance_dir";
 CuttlefishConfig::MutableInstanceSpecific::MutableInstanceSpecific(
     CuttlefishConfig* config, const std::string& id)
     : config_(config), id_(id) {
+  auto* dictionary = Dictionary();
   // Legacy for acloud
-  (*Dictionary())[kInstanceDir] = config_->InstancesPath(IdToName(id));
-  (*Dictionary())["enable_webrtc"] = true;
+  (*dictionary)[kInstanceDir] = config_->InstancesPath(IdToName(id));
+  if (!dictionary->isMember("enable_webrtc")) {
+    (*dictionary)["enable_webrtc"] = true;
+  }
 }
 
 Json::Value* CuttlefishConfig::MutableInstanceSpecific::Dictionary() {

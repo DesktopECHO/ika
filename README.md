@@ -37,8 +37,7 @@ ika start
 A few seconds after the virtual device starts, the bundled `ika` viewer
 opens automatically against the running Cuttlefish instance.
 The viewer uses Cuttlefish raw frames for both windowed and fullscreen
-sessions by default; set `IKA_SCRCPY_VIDEO_SOURCE=encoded` only if you need to
-fall back to ADB display capture for troubleshooting.
+sessions.
 
 ### Rebuilding
 
@@ -94,7 +93,7 @@ ika restart --gfxstream-vulkan=on
 
 # Use a 128 GiB userdata image on first start after reset
 ika reset
-ika start --datagb=128
+ika start --data_gb=128
 
 # Show the built-in usage text
 ika help
@@ -119,7 +118,7 @@ By default `ika` uses:
 `guest_swiftshader` only as a troubleshooting fallback when host GPU
 acceleration is not usable.
 
-Set `DATAGB` or pass `--datagb=128` to choose the size, in gigabytes,
+Set `DATA_GB` or pass `--data_gb=128` to choose the size, in gigabytes,
 of a newly created userdata image. Existing userdata is preserved, so apply a
 new size by resetting first and then starting with the override.
 

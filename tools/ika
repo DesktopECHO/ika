@@ -12,20 +12,7 @@ DEFAULT_CVD_PRODUCT_OUT="/usr/share/cuttlefish-common/lineageos"
 PACKAGED_SCRCPY_BIN="/usr/lib/cuttlefish-common/bin/scrcpy"
 PACKAGED_SCRCPY_SERVER="/usr/lib/cuttlefish-common/share/scrcpy/scrcpy-server"
 PACKAGED_GETCHROMIUM_BIN="/usr/lib/cuttlefish-common/bin/getchromium"
-PACKAGED_OPERATOR_BIN="/usr/lib/cuttlefish-common/bin/operator"
 SCRCPY_ICON_DIR_DEFAULT="/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps"
-
-packaged_webrtc_available() {
-  [[ -x "${PACKAGED_OPERATOR_BIN}" ]]
-}
-
-default_start_webrtc() {
-  if packaged_webrtc_available; then
-    printf '%s\n' "true"
-  else
-    printf '%s\n' "false"
-  fi
-}
 
 # Checks if a flag was supplied by the user in the arguments
 user_supplied_flag() {
@@ -159,18 +146,16 @@ declare -A CVD_NETWORK_DEFAULTS=(
   [vhost_net]="true"
   [vhost_user_vsock]="false"
   [enable_wifi]="false"
-  [enable_host_bluetooth]="true"
-  [netsim_bt]="true"
+  [enable_host_bluetooth]="false"
+  [netsim_bt]="false"
+  [enable_host_nfc]="false"
+  [netsim_nfc]="false"
+  [casimir_instance_num]="1"
   [enable_host_uwb]="false"
   [netsim_uwb]="false"
+  [pica_instance_num]="1"
+  [start_gnss_proxy]="false"
   [enable_modem_simulator]="false"
-)
-
-# ============================================================================
-# Streaming Defaults (passed to cvd_internal_start)
-# ============================================================================
-declare -A CVD_STREAMING_DEFAULTS=(
-  [start_webrtc]="$(default_start_webrtc)"
 )
 
 # ============================================================================
@@ -192,6 +177,7 @@ declare -A CVD_BOOT_DEFAULTS=(
 # ============================================================================
 declare -A CVD_LAUNCHER_DEFAULTS=(
   [daemon]="true"
+  [start_webrtc]="false"
 )
 
 # ============================================================================
@@ -206,7 +192,6 @@ CVD_DEFAULT_ARG_MAPS=(
   CVD_COMPUTE_DEFAULTS
   CVD_GPU_DEFAULTS
   CVD_NETWORK_DEFAULTS
-  CVD_STREAMING_DEFAULTS
   CVD_REPORT_DEFAULTS
   CVD_OVERLAY_DEFAULTS
   CVD_LAUNCHER_DEFAULTS
@@ -235,8 +220,6 @@ CVD_ADB_BIN="${CVD_HOST_OUT}/bin/adb"
 CVD_INSTANCE_DIR="${CVD_HOME_DIR}/cuttlefish/instances/cvd-1"
 CVD_LAUNCHER_LOG="${CVD_INSTANCE_DIR}/logs/launcher.log"
 CVD_CONFIG_PATH="${CVD_INSTANCE_DIR}/cuttlefish_config.json"
-CVD_OPERATOR_SOCKET="/run/cuttlefish/operator"
-CVD_OPERATOR_SERVICE="cuttlefish-operator.service"
 CHROMIUM_INSTALL_STAMP="${CVD_HOME_DIR}/chromium-installed-cvd-1"
 SCRCPY_BIN="${PACKAGED_SCRCPY_BIN}"
 SCRCPY_SERVER_PATH_OVERRIDE=""
@@ -250,7 +233,7 @@ GFXSTREAM_VULKAN_CONTEXT_TYPES="gfxstream-gles:gfxstream-vulkan:gfxstream-compos
 CVD_GRAPHICS_DRIVER_MESSAGE=""
 CVD_DATA_STORAGE_MESSAGE=""
 
-CVD_PROCESS_REGEX='(^|/)(cvd_internal_start|launch_cvd|run_cvd|crosvm|process_restarter|socket_vsock_proxy|wmediumd|webRTC)([[:space:]]|$)'
+CVD_PROCESS_REGEX='(^|/)(cvd_internal_start|launch_cvd|run_cvd|crosvm|process_restarter|raw_frame_streamer|socket_vsock_proxy|wmediumd)([[:space:]]|$)'
 
 log() {
   printf '[%s] %s\n' "${SCRIPT_NAME}" "$*" >&2
@@ -301,24 +284,6 @@ ensure_open_file_limit() {
   fi
 }
 
-check_webrtc_operator() {
-  [[ -S "${CVD_OPERATOR_SOCKET}" ]] && return 0
-
-  if ! packaged_webrtc_available; then
-    log "Optional WebRTC browser access is disabled because ika-user is not installed."
-    return 0
-  fi
-
-  if command -v systemctl >/dev/null 2>&1; then
-    if ! systemctl is-active --quiet "${CVD_OPERATOR_SERVICE}" 2>/dev/null; then
-      log "Optional WebRTC browser access is unavailable because ${CVD_OPERATOR_SERVICE} is inactive."
-    fi
-    return 0
-  fi
-
-  log "Optional WebRTC browser access is unavailable because ${CVD_OPERATOR_SOCKET} is not present."
-}
-
 normalize_gfxstream_vulkan_mode() {
   local mode="${1,,}"
 
@@ -365,11 +330,11 @@ confirm_reset() {
   return 0
 }
 
-normalize_datagb() {
+normalize_data_gb() {
   local data_gb="$1"
 
   if [[ ! "${data_gb}" =~ ^[1-9][0-9]*$ ]]; then
-    die "DATAGB must be a positive whole number of gigabytes"
+    die "DATA_GB must be a positive whole number of gigabytes"
   fi
 
   printf '%s\n' "${data_gb}"
@@ -400,16 +365,16 @@ parse_start_options() {
         export IKA_GFXSTREAM_VULKAN="${GFXSTREAM_VULKAN_MODE}"
         shift
         ;;
-      --datagb=*)
-        DATAGB="$(normalize_datagb "${1#*=}")"
-        export DATAGB
+      --data_gb=*)
+        DATA_GB="$(normalize_data_gb "${1#*=}")"
+        export DATA_GB
         shift
         ;;
-      --datagb)
+      --data_gb)
         shift
-        [[ $# -gt 0 ]] || die "--datagb requires a value"
-        DATAGB="$(normalize_datagb "$1")"
-        export DATAGB
+        [[ $# -gt 0 ]] || die "--data_gb requires a value"
+        DATA_GB="$(normalize_data_gb "$1")"
+        export DATA_GB
         shift
         ;;
       *)
@@ -461,15 +426,15 @@ usage() {
 
 Usage:
 
-  ${SCRIPT_NAME} start [-f|--fullscreen] [--gfxstream-vulkan=auto|on|off] [--datagb=GB] [--setting=arg] ...
+  ${SCRIPT_NAME} start [-f|--fullscreen] [--gfxstream-vulkan=auto|on|off] [--data_gb=GB] [--setting=arg] ...
   ${SCRIPT_NAME} stop
-  ${SCRIPT_NAME} restart [-f|--fullscreen] [--gfxstream-vulkan=auto|on|off] [--datagb=GB] ...
+  ${SCRIPT_NAME} restart [-f|--fullscreen] [--gfxstream-vulkan=auto|on|off] [--data_gb=GB] ...
   ${SCRIPT_NAME} reset [Delete everything and start fresh]
 
 Example:
 
   ${SCRIPT_NAME} start --gpu_mode=guest_swiftshader --cpus=2 --memory_mb=2048 --dpi=240 --fullscreen
-  ${SCRIPT_NAME} start --datagb=128
+  ${SCRIPT_NAME} start --data_gb=128
   ${SCRIPT_NAME} restart --gfxstream-vulkan=on
 
 Environment:
@@ -479,14 +444,10 @@ Environment:
                          only on Apple Silicon 16K-page hosts or when the
                          primary host Vulkan device is llvmpipe; on forces
                          GLES+Vulkan; off forces GLES-only gfxstream.
-  DATAGB                 Size of the next fresh userdata image, in GB.
+  DATA_GB                Size of the next fresh userdata image, in GB.
                          Existing VM data must be reset first.
   IKA_SCRCPY_EXTRA_ARGS  Extra whitespace-separated args appended to scrcpy
                          (example: --keyboard=uhid --no-clipboard-autosync)
-  IKA_SCRCPY_VIDEO_SOURCE
-                         auto, encoded, or raw. auto and raw use Cuttlefish
-                         frames for both windowed and fullscreen sessions;
-                         encoded uses ADB display capture.
 
 EOF
 }
@@ -839,6 +800,35 @@ start_arg_value() {
   printf '%s\n' "${value:-${default_value}}"
 }
 
+start_bool_arg_value() {
+  local flag="$1"
+  local default_value="${2:-}"
+  shift 2
+  local value="${default_value}"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --${flag}=*|-${flag}=*)
+        value="${1#*=}"
+        ;;
+      --no${flag}|-no${flag})
+        value="false"
+        ;;
+      --${flag}|-${flag})
+        if [[ $# -gt 1 && "$2" != -* ]]; then
+          shift
+          value="$1"
+        else
+          value="true"
+        fi
+        ;;
+    esac
+    shift || true
+  done
+
+  printf '%s\n' "${value}"
+}
+
 start_gpu_mode_value() {
   start_arg_value "gpu_mode" "${CVD_GPU_DEFAULTS[gpu_mode]}" "$@"
 }
@@ -1002,14 +992,14 @@ protect_overlay_resume() {
 append_data_storage_args() {
   local -n args_array="$1"
   shift
-  local data_gb="${DATAGB:-}"
+  local data_gb="${DATA_GB:-}"
   local data_mb
   local explicit_data_policy="false"
   local explicit_data_size="false"
 
   [[ -n "${data_gb}" ]] || return 0
 
-  data_gb="$(normalize_datagb "${data_gb}")"
+  data_gb="$(normalize_data_gb "${data_gb}")"
   data_mb=$((data_gb * 1024))
 
   if user_supplied_flag "data_policy" "$@"; then
@@ -1021,7 +1011,7 @@ append_data_storage_args() {
 
   if [[ "${explicit_data_policy}" != "true" ]] && instance_has_userdata_state; then
     CVD_DATA_STORAGE_MESSAGE="Ignored userdata resize; you must reset the instance first: 'ika reset'"
-    log "DATAGB=${data_gb} requested, but existing userdata state is present; run '${SCRIPT_NAME} reset' before the next start to apply it."
+    log "DATA_GB=${data_gb} requested, but existing userdata state is present; run '${SCRIPT_NAME} reset' before the next start to apply it."
     return 0
   fi
 
@@ -1067,6 +1057,23 @@ apply_start_default_args() {
   done
 }
 
+append_webrtc_audio_args() {
+  local -n args_array="$1"
+  shift
+  local start_webrtc
+
+  start_webrtc="$(start_bool_arg_value "start_webrtc" "${CVD_LAUNCHER_DEFAULTS[start_webrtc]}" "$@")"
+
+  case "${start_webrtc}" in
+    false|False|FALSE|0|no|No|NO|off|Off|OFF)
+      if ! user_supplied_flag "enable_audio" "$@"; then
+        args_array+=("--enable_audio=false")
+        log "start_webrtc=false; disabling Cuttlefish audio server"
+      fi
+      ;;
+  esac
+}
+
 append_host_timezone_arg() {
   local -n args_array="$1"
   local tz
@@ -1074,7 +1081,7 @@ append_host_timezone_arg() {
   tz="$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')"
   [[ -n "${tz}" ]] || return 0
 
-  args_array+=("--extra_bootconfig_args=androidboot.timezone=\"${tz}\"")
+  args_array+=("--extra_bootconfig_args=androidboot.timezone=\"${tz}\" androidboot.cuttlefish_service_bluetooth_checker=false")
   log "timezone: ${tz}"
 }
 
@@ -1317,18 +1324,6 @@ wait_for_boot() {
   return 1
 }
 
-pin_host_frontend_processes() {
-  local host_core_list="$1"
-  local pid
-  [[ -n "${host_core_list}" ]] || return 0
-  command -v taskset >/dev/null 2>&1 || return 0
-
-  while read -r pid; do
-    [[ -n "${pid}" ]] || continue
-    taskset -apc "${host_core_list}" "${pid}" >/dev/null 2>&1 || true
-  done < <(pgrep -u "${UID}" -x webRTC || true)
-}
-
 ensure_chromium_before_scrcpy() {
   local adb_serial="$1"
 
@@ -1359,8 +1354,6 @@ start_scrcpy_with_retries() {
   local max_attempts=5
   local cuttlefish_frames_socket
   local scrcpy_log="${SCRCPY_LOG_FILE}"
-  local scrcpy_video_source="${IKA_SCRCPY_VIDEO_SOURCE:-auto}"
-  local use_cuttlefish_frames=true
   local host_core_list
   local -a scrcpy_env=()
   local -a scrcpy_extra_args=()
@@ -1368,19 +1361,6 @@ start_scrcpy_with_retries() {
     "${SCRCPY_BIN}"
     -s "${adb_serial}"
   )
-
-  case "${scrcpy_video_source}" in
-    ""|auto|raw)
-      use_cuttlefish_frames=true
-      ;;
-    encoded)
-      use_cuttlefish_frames=false
-      ;;
-    *)
-      log "unknown IKA_SCRCPY_VIDEO_SOURCE='${scrcpy_video_source}', using raw Cuttlefish frames"
-      use_cuttlefish_frames=true
-      ;;
-  esac
 
   if [[ -n "${SCRCPY_DPI}" ]]; then
     scrcpy_cmd+=("--dpi=${SCRCPY_DPI}")
@@ -1397,13 +1377,9 @@ start_scrcpy_with_retries() {
     --mouse-bind=+hsn:b+++
   )
 
-  if [[ "${use_cuttlefish_frames}" == "true" ]]; then
-    cuttlefish_frames_socket="$(resolve_cuttlefish_frames_socket)"
-    scrcpy_cmd+=(--cuttlefish-frames-socket="${cuttlefish_frames_socket}")
-    log "scrcpy video source: raw Cuttlefish frames (${cuttlefish_frames_socket})"
-  else
-    log "scrcpy video source: encoded display capture"
-  fi
+  cuttlefish_frames_socket="$(resolve_cuttlefish_frames_socket)"
+  scrcpy_cmd+=(--cuttlefish-frames-socket="${cuttlefish_frames_socket}")
+  log "scrcpy video source: raw Cuttlefish frames (${cuttlefish_frames_socket})"
 
   if [[ -n "${IKA_SCRCPY_EXTRA_ARGS:-}" ]]; then
     read -r -a scrcpy_extra_args <<<"${IKA_SCRCPY_EXTRA_ARGS}"
@@ -1446,7 +1422,6 @@ start_scrcpy_with_retries() {
   host_core_list="$(reserved_host_core_list)"
   if [[ -n "${host_core_list}" ]] && command -v taskset >/dev/null 2>&1; then
     log "pinning direct console to host performance cores: ${host_core_list}"
-    pin_host_frontend_processes "${host_core_list}"
     scrcpy_cmd=(taskset -c "${host_core_list}" "${scrcpy_cmd[@]}")
   fi
 
@@ -1569,7 +1544,6 @@ start_cvd() {
   require_executable "${CVD_BIN}" "cvd launcher"
   check_required_groups
   ensure_open_file_limit
-  check_webrtc_operator
   launcher_log="${CVD_LAUNCHER_LOG}"
   adb_serial="$(resolve_adb_serial)"
   start_epoch="$(date +%s)"
@@ -1578,7 +1552,7 @@ start_cvd() {
 
   if has_live_cvd_processes; then
     log "Cuttlefish is already running under ${CVD_HOME_DIR}"
-    if [[ -n "${DATAGB:-}" ]]; then
+    if [[ -n "${DATA_GB:-}" ]]; then
       respond_console "Ignored userdata resize; you must reset the instance first: 'ika reset'"
     else
       respond_console "Instance already running, local console will be restarted"
@@ -1591,6 +1565,7 @@ start_cvd() {
   protect_overlay_resume
 
   apply_start_default_args args "$@"
+  append_webrtc_audio_args args "$@"
   append_data_storage_args args "$@"
   append_arm64_kernel_page_args args "$@"
   append_gfxstream_vulkan_args args "$@"

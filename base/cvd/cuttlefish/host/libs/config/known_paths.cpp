@@ -135,6 +135,10 @@ std::string ProcessRestarterBinary() {
   return HostBinaryPath("process_restarter");
 }
 
+std::string RawFrameStreamerBinary() {
+  return HostBinaryPath("raw_frame_streamer");
+}
+
 std::string RootCanalBinary() { return HostBinaryPath("rootcanal"); }
 
 std::string ScreenRecordingServerBinary() {
@@ -230,4 +234,3 @@ std::string VhostUserMediaEmulatedCameraMPlaneBinary() {
 }
 
 }  // namespace cuttlefish
-

@@ -52,6 +52,7 @@ std::string NewfsMsdos();
 std::string OpenwrtControlServerBinary();
 std::string PicaBinary();
 std::string ProcessRestarterBinary();
+std::string RawFrameStreamerBinary();
 std::string RootCanalBinary();
 std::string ScreenRecordingServerBinary();
 std::string SecureEnvBinary();
@@ -78,4 +79,3 @@ std::string WmediumdBinary();
 std::string WmediumdGenConfigBinary();
 
 }  // namespace cuttlefish
-

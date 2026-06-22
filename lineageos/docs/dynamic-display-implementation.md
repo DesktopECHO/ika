@@ -27,10 +27,6 @@ The default viewer path uses raw Cuttlefish frames:
 5. Android reports the new display metrics through `DisplayManager` and the
    normal configuration-change path.
 
-The encoded fallback path (`IKA_SCRCPY_VIDEO_SOURCE=encoded`) does not use the
-raw frame socket, so display size changes go through the scrcpy server's
-`Device.setDisplaySizeAndDensity(...)` path instead.
-
 ## Guest Fallback Contract
 
 For manual testing and future host-side actors that do not go through

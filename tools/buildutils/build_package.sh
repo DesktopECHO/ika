@@ -470,6 +470,22 @@ function cleanup_build_workdirs() {
   done
 }
 
+function rpm_spec_workdir() {
+  local spec_path="$1"
+  local spec_name
+  local workdir
+
+  spec_name="$(normalize_spec_name "${spec_path}")"
+  workdir="${RPMBUILD_WORK_ROOT}/${spec_name}"
+
+  # Keep the rpmbuild path stable so Bazel's output_base, which is derived from
+  # the workspace path, is reused across RPM package builds. The extracted
+  # source/buildroot are still cleaned for each rpmbuild invocation.
+  rm -rf "${workdir}/BUILD" "${workdir}/BUILDROOT"
+  mkdir -p "${workdir}"
+  printf '%s\n' "${workdir}"
+}
+
 trap cleanup_build_workdirs EXIT
 
 readonly DISTRO_FAMILY="$(detect_distro_family)"
@@ -567,7 +583,7 @@ if [[ "${DISTRO_FAMILY}" == "rpm" ]]; then
       echo "Skipping RPM build for ${spec_basename} because ${REPO_DIR}/lineageos-${host_arch} is missing"
       continue
     fi
-    spec_workdir="$(mktemp -d "${RPMBUILD_WORK_ROOT}/$(normalize_spec_name "${spec}").XXXXXX")"
+    spec_workdir="$(rpm_spec_workdir "${spec}")"
     build_workdirs+=("${spec_workdir}")
     echo "Building RPM from ${spec}"
     rpmbuild --quiet \
