@@ -369,7 +369,7 @@ index 93c8870a6e..3898d96598 100644
 +    }
  }
 diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarActivityContext.java b/quickstep/src/com/android/launcher3/taskbar/TaskbarActivityContext.java
-index 3ff0bf39fc..5fdaf4db74 100644
+index 3ff0bf39fc..741d22b8e4 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/TaskbarActivityContext.java
 +++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarActivityContext.java
 @@ -39,6 +39,7 @@ import static com.android.launcher3.config.FeatureFlags.enableTaskbarPinning;
@@ -566,11 +566,17 @@ index 3ff0bf39fc..5fdaf4db74 100644
      /** Returns whether the given task is minimized and can be unminimized. */
      public boolean canUnminimizeDesktopTask(int taskId) {
          BubbleTextView.RunningAppState runningAppState =
-@@ -2335,10 +2399,19 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
+@@ -2335,10 +2399,26 @@ public class TaskbarActivityContext extends BaseTaskbarContext {
      }
  
      public void showPopupMenuForIcon(BubbleTextView btv) {
--        setTaskbarWindowFullscreen(true);
++        // Request the fullscreen taskbar window *before* posting show(), so the window relayout
++        // to MATCH_PARENT gets a message-loop iteration to land before the popup measures and
++        // anchors itself above the bar. Doing the resize inside the posted show() (via
++        // onTaskbarPopupOpening) races the popup's measure pass against the not-yet-expanded
++        // window, which intermittently clips the popup to the strip height so the first
++        // right-click appears to do nothing. This matches upstream ordering.
+         setTaskbarWindowFullscreen(true);
          btv.post(() -> mControllers.taskbarPopupController.show(btv));
      }
  
@@ -1355,7 +1361,7 @@ index 6bbaeb707f..7249a47299 100644
 +    }
  }
 diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarView.java b/quickstep/src/com/android/launcher3/taskbar/TaskbarView.java
-index 09ff7322bb..ccb4f6b352 100644
+index 09ff7322bb..2d73488dcb 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/TaskbarView.java
 +++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarView.java
 @@ -34,10 +34,10 @@ import android.content.res.Resources;
@@ -1433,8 +1439,16 @@ index 09ff7322bb..ccb4f6b352 100644
          int navSpaceNeeded = deviceProfile.getHotseatProfile().getBarEndOffset();
  
          int ignoreCount = 0;
-@@ -1039,18 +1054,129 @@ public class TaskbarView extends FrameLayout implements FolderIcon.FolderIconPar
+@@ -1037,20 +1052,151 @@ public class TaskbarView extends FrameLayout implements FolderIcon.FolderIconPar
+      * Sets OnClickListener and OnLongClickListener for the given view.
+      */
      public void setClickAndLongClickListenersForIcon(View icon) {
++        // Taskbar icons must not be focusable in touch mode. Otherwise, when an icon is not the
++        // currently-focused view (e.g. right after a popup or a launched app took focus), the
++        // framework consumes the click's ACTION_UP to take focus and skips performClick -- so the
++        // first click only re-focuses the icon and "does nothing", and the retry clicks. Keep
++        // regular focusability for keyboard/D-pad navigation.
++        icon.setFocusableInTouchMode(false);
          icon.setOnClickListener(mIconClickListener);
          icon.setOnLongClickListener(mIconLongClickListener);
 +        icon.setOnContextClickListener(v -> {
@@ -1447,7 +1461,13 @@ index 09ff7322bb..ccb4f6b352 100644
 -                    && (event.getButtonState() & MotionEvent.BUTTON_SECONDARY) != 0
 -                    && v instanceof BubbleTextView) {
 -                mActivityContext.showPopupMenuForIcon((BubbleTextView) v);
-+            if (isSecondaryClickAction(event)) {
++            // Open on the secondary-button DOWN. ACTION_BUTTON_PRESS is not delivered by all
++            // mouse input paths (e.g. injected/remote mice deliver DOWN/MOVE/UP with a button
++            // state but no button-press action), and the framework's onContextClick is not
++            // reliably generated for those. The secondary-button DOWN, however, always reaches
++            // the icon. The debounce in maybeShowPopupMenuForIcon dedupes a later onContextClick
++            // or BUTTON_PRESS for the same gesture.
++            if (isSecondaryClickDown(event) || isSecondaryClickAction(event)) {
 +                mActiveSecondaryClickTarget = v;
 +                return maybeShowPopupMenuForIcon(v, event.getEventTime());
 +            }
@@ -1480,9 +1500,9 @@ index 09ff7322bb..ccb4f6b352 100644
 +        if (!(view instanceof BubbleTextView icon)) {
 +            return false;
 +        }
-+        // A mouse secondary click arrives as DOWN, BUTTON_PRESS, BUTTON_RELEASE, UP.
-+        // The DOWN is consumed so the popup opens from BUTTON_PRESS, after Android has
-+        // established this as a real mouse-button gesture.
++        // A mouse secondary click arrives as DOWN, BUTTON_PRESS, BUTTON_RELEASE, UP. We open from
++        // the DOWN because ACTION_BUTTON_PRESS is not delivered by all mouse input paths and the
++        // framework's onContextClick is not reliably generated for those.
 +        icon.cancelLongPress();
 +        if (isDuplicateSecondaryClick(view, eventTimeMs)) {
 +            return true;
@@ -1505,6 +1525,14 @@ index 09ff7322bb..ccb4f6b352 100644
 +            }
 +            mActiveSecondaryClickTarget = view;
 +            return true;
++        }
++        // A new, non-secondary gesture is starting. Any previously-claimed secondary target is
++        // stale now (its UP may have been grabbed by the popup and never cleared here), and we
++        // must NOT let the stale target make us swallow this primary gesture's UP below -- that
++        // would suppress the icon's onClick and make the left-click silently fail.
++        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
++            mActiveSecondaryClickTarget = null;
++            return false;
 +        }
 +        if (mActiveSecondaryClickTarget != view) {
 +            return false;
@@ -1568,7 +1596,7 @@ index 09ff7322bb..ccb4f6b352 100644
       * Sets OnHoverListener for the given view.
       */
 diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarViewCallbacks.java b/quickstep/src/com/android/launcher3/taskbar/TaskbarViewCallbacks.java
-index a03940e0e0..e28b9a5e8a 100644
+index a03940e0e0..486603027a 100644
 --- a/quickstep/src/com/android/launcher3/taskbar/TaskbarViewCallbacks.java
 +++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarViewCallbacks.java
 @@ -25,7 +25,6 @@ import android.annotation.SuppressLint;
@@ -1579,13 +1607,17 @@ index a03940e0e0..e28b9a5e8a 100644
  import android.view.MotionEvent;
  import android.view.View;
  
-@@ -88,7 +87,23 @@ public class TaskbarViewCallbacks {
+@@ -88,7 +87,27 @@ public class TaskbarViewCallbacks {
  
      @SuppressLint("ClickableViewAccessibility")
      public View.OnTouchListener getTaskbarTouchListener() {
 -        return (view, event) -> mGestureDetector.onTouchEvent(event);
 +        return (view, event) -> {
-+            if (TaskbarView.isSecondaryClickAction(event)) {
++            // Open on the secondary-button DOWN as well as BUTTON_PRESS: some mouse input paths
++            // never deliver ACTION_BUTTON_PRESS, so DOWN is the reliable trigger. The hit-test in
++            // maybeShowPopupMenuForIconAt only opens when the point is actually over an icon.
++            if (TaskbarView.isSecondaryClickDown(event)
++                    || TaskbarView.isSecondaryClickAction(event)) {
 +                if (mTaskbarView.maybeShowPopupMenuForIconAt(
 +                        event.getRawX(), event.getRawY(), event.getEventTime())) {
 +                    return true;
@@ -1604,7 +1636,7 @@ index a03940e0e0..e28b9a5e8a 100644
      }
  
      public View.OnLongClickListener getTaskbarDividerLongClickListener() {
-@@ -100,12 +115,13 @@ public class TaskbarViewCallbacks {
+@@ -100,12 +119,13 @@ public class TaskbarViewCallbacks {
  
      public View.OnTouchListener getTaskbarDividerRightClickListener() {
          return (v, event) -> {
@@ -1621,7 +1653,7 @@ index a03940e0e0..e28b9a5e8a 100644
              return false;
          };
      }
-@@ -254,8 +270,7 @@ public class TaskbarViewCallbacks {
+@@ -254,8 +274,7 @@ public class TaskbarViewCallbacks {
      private class TaskbarViewGestureListener extends GestureDetector.SimpleOnGestureListener {
          @Override
          public boolean onDown(@NonNull MotionEvent event) {

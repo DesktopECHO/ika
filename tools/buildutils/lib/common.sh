@@ -61,6 +61,25 @@ detect_distro_family() {
   fi
 }
 
+ika_arch_for_host() {
+  case "$(uname -m)" in
+    aarch64) printf 'arm64' ;;
+    x86_64)  printf 'x86_64' ;;
+    *)       return 1 ;;
+  esac
+}
+
+# Architecture string ('arm64'/'x86_64') of the other supported host. Fails
+# when the host arch is unrecognized.
+other_ika_arch() {
+  local host_arch
+  host_arch="$(ika_arch_for_host)" || return 1
+  case "${host_arch}" in
+    arm64)  printf 'x86_64' ;;
+    x86_64) printf 'arm64' ;;
+  esac
+}
+
 refuse_root_build() {
   if [[ "$(id -u)" -ne 0 ]]; then
     return

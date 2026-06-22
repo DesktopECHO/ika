@@ -1,0 +1,185 @@
+diff --git a/AndroidManifest.xml b/AndroidManifest.xml
+index f4691b4c43..97a43b40a1 100644
+--- a/AndroidManifest.xml
++++ b/AndroidManifest.xml
+@@ -244,9 +244,14 @@
+             </intent-filter>
+         </receiver>
+ 
++        <!-- ika: disabled so the page-agnostic 16 KB warning notification is never
++             posted on this desktop VM. This receiver's only job is to start
++             PageAgnosticNotificationService on boot; disabling it leaves the
++             page-agnostic gate (Enable16kUtils) and the Developer Options dialog
++             completely stock. -->
+         <receiver
+             android:name=".development.Enable16KBootReceiver"
+-            android:enabled="true"
++            android:enabled="false"
+             android:exported="true">
+             <intent-filter>
+                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+diff --git a/color-check-baseline.xml b/color-check-baseline.xml
+index 4b26cb5eb1..1e7dafe723 100644
+--- a/color-check-baseline.xml
++++ b/color-check-baseline.xml
+@@ -3537,6 +3537,22 @@
+             column="17"/>
+     </issue>
+ 
++    <issue
++        id="HardCodedColor"
++        severity="Error"
++        message="Avoid using hardcoded color"
++        category="Correctness"
++        priority="4"
++        summary="Using hardcoded color"
++        explanation="Hardcoded color values are bad because theme changes cannot be uniformly applied.Instead use the theme specific colors such as `?android:attr/textColorPrimary` in attributes.&#xA;This ensures that a theme change from a light to a dark theme can be uniformlyapplied across the app."
++        errorLine1="    &lt;background android:drawable=&quot;@color/shortcut_background&quot;/>"
++        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
++        <location
++            file="res/drawable/ic_shortcut_apps.xml"
++            line="18"
++            column="17"/>
++    </issue>
++
+     <issue
+         id="HardCodedColor"
+         severity="Error"
+@@ -3553,6 +3569,22 @@
+             column="17"/>
+     </issue>
+ 
++    <issue
++        id="HardCodedColor"
++        severity="Error"
++        message="Avoid using hardcoded color"
++        category="Correctness"
++        priority="4"
++        summary="Using hardcoded color"
++        explanation="Hardcoded color values are bad because theme changes cannot be uniformly applied.Instead use the theme specific colors such as `?android:attr/textColorPrimary` in attributes.&#xA;This ensures that a theme change from a light to a dark theme can be uniformlyapplied across the app."
++        errorLine1="    &lt;background android:drawable=&quot;@color/shortcut_background&quot;/>"
++        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
++        <location
++            file="res/drawable/ic_shortcut_storage.xml"
++            line="18"
++            column="17"/>
++    </issue>
++
+     <issue
+         id="HardCodedColor"
+         severity="Error"
+diff --git a/res/drawable/ic_shortcut_apps.xml b/res/drawable/ic_shortcut_apps.xml
+new file mode 100644
+index 0000000000..ecc41a6776
+--- /dev/null
++++ b/res/drawable/ic_shortcut_apps.xml
+@@ -0,0 +1,33 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++  ~ Copyright (C) 2026 The Android Open Source Project
++  ~
++  ~ Licensed under the Apache License, Version 2.0 (the "License");
++  ~ you may not use this file except in compliance with the License.
++  ~ You may obtain a copy of the License at
++  ~
++  ~      http://www.apache.org/licenses/LICENSE-2.0
++  ~
++  ~ Unless required by applicable law or agreed to in writing, software
++  ~ distributed under the License is distributed on an "AS IS" BASIS,
++  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++  ~ See the License for the specific language governing permissions and
++  ~ limitations under the License
++  -->
++<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
++    <background android:drawable="@color/shortcut_background"/>
++    <foreground>
++        <vector
++            android:width="120dp"
++            android:height="120dp"
++            android:viewportWidth="78.0"
++            android:viewportHeight="78.0">
++            <group android:translateX="13.0" android:translateY="13.0">
++                <path
++                    android:fillColor="@*android:color/accent_device_default_light"
++                    android:fillType="evenOdd"
++                    android:pathData="M30,20C30,21.1 30.9,22 32,22C33.1,22 34,21.1 34,20C34,18.9 33.1,18 32,18C30.9,18 30,18.9 30,20ZM20,22C21.1,22 22,21.1 22,20C22,18.9 21.1,18 20,18C18.9,18 18,18.9 18,20C18,21.1 18.9,22 20,22ZM26.001,34C27.101,34 28.001,33.1 28.001,32C28.001,30.9 27.101,30 26.001,30C24.901,30 24.001,30.9 24.001,32C24.001,33.1 24.901,34 26.001,34ZM22.001,32C22.001,33.1 21.101,34 20.001,34C18.901,34 18.001,33.1 18.001,32C18.001,30.9 18.901,30 20.001,30C21.101,30 22.001,30.9 22.001,32ZM20.001,28C21.101,28 22.001,27.1 22.001,26C22.001,24.9 21.101,24 20.001,24C18.901,24 18.001,24.9 18.001,26C18.001,27.1 18.901,28 20.001,28ZM28.001,26C28.001,27.1 27.101,28 26.001,28C24.901,28 24.001,27.1 24.001,26C24.001,24.9 24.901,24 26.001,24C27.101,24 28.001,24.9 28.001,26ZM28.001,20C28.001,21.1 27.101,22 26.001,22C24.901,22 24.001,21.1 24.001,20C24.001,18.9 24.901,18 26.001,18C27.101,18 28.001,18.9 28.001,20ZM32,28C33.1,28 34,27.1 34,26C34,24.9 33.1,24 32,24C30.9,24 30,24.9 30,26C30,27.1 30.9,28 32,28ZM34,32C34,33.1 33.1,34 32,34C30.9,34 30,33.1 30,32C30,30.9 30.9,30 32,30C33.1,30 34,30.9 34,32Z"/>
++            </group>
++        </vector>
++    </foreground>
++</adaptive-icon>
+diff --git a/res/drawable/ic_shortcut_storage.xml b/res/drawable/ic_shortcut_storage.xml
+new file mode 100644
+index 0000000000..b735df3201
+--- /dev/null
++++ b/res/drawable/ic_shortcut_storage.xml
+@@ -0,0 +1,32 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++  ~ Copyright (C) 2026 The Android Open Source Project
++  ~
++  ~ Licensed under the Apache License, Version 2.0 (the "License");
++  ~ you may not use this file except in compliance with the License.
++  ~ You may obtain a copy of the License at
++  ~
++  ~      http://www.apache.org/licenses/LICENSE-2.0
++  ~
++  ~ Unless required by applicable law or agreed to in writing, software
++  ~ distributed under the License is distributed on an "AS IS" BASIS,
++  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++  ~ See the License for the specific language governing permissions and
++  ~ limitations under the License
++  -->
++<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
++    <background android:drawable="@color/shortcut_background"/>
++    <foreground>
++        <vector
++            android:width="120dp"
++            android:height="120dp"
++            android:viewportWidth="78.0"
++            android:viewportHeight="78.0">
++            <group android:translateX="13.0" android:translateY="13.0">
++                <path
++                    android:fillColor="@*android:color/accent_device_default_light"
++                    android:pathData="M17,34h18v-4H17V34zM19,31h2v2h-2V31zM17,18v4h18v-4H17zM21,21h-2v-2h2V21zM17,28h18v-4H17V28zM19,25h2v2h-2V25z"/>
++            </group>
++        </vector>
++    </foreground>
++</adaptive-icon>
+diff --git a/res/xml/shortcuts.xml b/res/xml/shortcuts.xml
+index 9c9368811a..240e4f1fd8 100644
+--- a/res/xml/shortcuts.xml
++++ b/res/xml/shortcuts.xml
+@@ -16,11 +16,11 @@
+   -->
+ <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+     <shortcut
+-        android:shortcutId="manifest-shortcut-wifi"
+-        android:icon="@drawable/ic_shortcut_wireless"
+-        android:shortcutShortLabel="@string/wifi_settings">
++        android:shortcutId="manifest-shortcut-storage"
++        android:icon="@drawable/ic_shortcut_storage"
++        android:shortcutShortLabel="@string/storage_settings">
+         <intent
+-            android:action="android.settings.WIFI_SETTINGS"
++            android:action="android.settings.INTERNAL_STORAGE_SETTINGS"
+             android:targetPackage="${applicationId}"/>
+     </shortcut>
+     <shortcut
+@@ -34,11 +34,11 @@
+             android:targetClass="com.android.settings.Settings$DataUsageSummaryActivity"/>
+     </shortcut>
+     <shortcut
+-        android:shortcutId="manifest-shortcut-battery"
+-        android:icon="@drawable/ic_shortcut_battery"
+-        android:shortcutShortLabel="@string/power_usage_summary_title">
++        android:shortcutId="manifest-shortcut-apps"
++        android:icon="@drawable/ic_shortcut_apps"
++        android:shortcutShortLabel="@string/apps_dashboard_title">
+         <intent
+-            android:action="android.intent.action.POWER_USAGE_SUMMARY"
++            android:action="android.settings.APPLICATION_SETTINGS"
+             android:targetPackage="${applicationId}"/>
+     </shortcut>
+-</shortcuts>
+\ No newline at end of file
++</shortcuts>

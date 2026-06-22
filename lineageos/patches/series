@@ -26,10 +26,12 @@ frameworks/native patches/frameworks-native-logspam.patch
 # independently when chasing an AOSP rebase.
 frameworks/base patches/frameworks-base.patch
 frameworks/base patches/frameworks-base-native-bridge.patch
+frameworks/base patches/frameworks-base-settingsprovider-ota.patch
 system/core patches/system-core.patch
 system/sepolicy patches/system-sepolicy.patch
 system/sepolicy patches/system-sepolicy-checkfc-arm64-getopt.patch
 packages/apps/Launcher3 patches/packages-apps-Launcher3.patch
+packages/apps/Settings patches/packages-apps-Settings.patch
 vendor/lineage patches/vendor-lineage.patch
 vendor/lineage patches/vendor-lineage-arm64-host-tools.patch
 build/soong patches/build-soong-arm64-host.patch

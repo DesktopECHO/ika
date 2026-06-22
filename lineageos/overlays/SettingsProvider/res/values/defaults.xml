@@ -17,4 +17,7 @@
     <integer name="def_user_rotation">0</integer>
     <integer name="def_long_press_timeout_millis">350</integer>
     <integer name="def_pointer_speed">2</integer>
+    <!-- Disable automatic OTA updates on the desktop VM (1==disabled). Seeded by
+         the def_ota_disable_automatic_update hook in SettingsProvider. -->
+    <integer name="def_ota_disable_automatic_update">1</integer>
 </resources>

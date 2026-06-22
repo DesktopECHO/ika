@@ -1,0 +1,29 @@
+diff --git a/packages/SettingsProvider/res/values/defaults.xml b/packages/SettingsProvider/res/values/defaults.xml
+index ce8de5e8d525..e3b61c852a8a 100644
+--- a/packages/SettingsProvider/res/values/defaults.xml
++++ b/packages/SettingsProvider/res/values/defaults.xml
+@@ -175,6 +175,10 @@
+     <!-- Default for Settings.Global.HEADS_UP_NOTIFICATIONS_ENABLED, 1==on -->
+     <integer name="def_heads_up_enabled">1</integer>
+ 
++    <!-- Default for Settings.Global.OTA_DISABLE_AUTOMATIC_UPDATE, 0==automatic
++         updates enabled (stock AOSP). Products override this via RRO. -->
++    <integer name="def_ota_disable_automatic_update">0</integer>
++
+     <!-- Default for Settings.Global.DEVICE_NAME $1=MANUFACTURER $2=MODEL-->
+     <string name="def_device_name">%1$s %2$s</string>
+ 
+diff --git a/packages/SettingsProvider/src/com/android/providers/settings/DatabaseHelper.java b/packages/SettingsProvider/src/com/android/providers/settings/DatabaseHelper.java
+index a3eab5da1100..b0f88b7b5386 100644
+--- a/packages/SettingsProvider/src/com/android/providers/settings/DatabaseHelper.java
++++ b/packages/SettingsProvider/src/com/android/providers/settings/DatabaseHelper.java
+@@ -2452,6 +2452,9 @@ class DatabaseHelper extends SQLiteOpenHelper {
+             loadIntegerSetting(stmt, Global.HEADS_UP_NOTIFICATIONS_ENABLED,
+                     R.integer.def_heads_up_enabled);
+ 
++            loadIntegerSetting(stmt, Settings.Global.OTA_DISABLE_AUTOMATIC_UPDATE,
++                    R.integer.def_ota_disable_automatic_update);
++
+             loadSetting(stmt, Settings.Global.DEVICE_NAME, getDefaultDeviceName());
+ 
+             // Set default lid/cover behaviour according to legacy device config

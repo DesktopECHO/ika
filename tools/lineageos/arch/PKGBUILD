@@ -21,8 +21,9 @@ _srcroot="android-cuttlefish-${_srcver}"
 
 _ika_arch() {
   case "${CARCH}" in
+    x86_64)  printf 'x86_64' ;;
     aarch64) printf 'arm64' ;;
-    *)       printf 'x86_64' ;;
+    *)       return 1 ;;
   esac
 }
 
@@ -33,7 +34,9 @@ package_ika-lineageos() {
   replaces=(cuttlefish-lineageos)
 
   local root="${srcdir}/${_srcroot}"
-  local bundle="lineageos-$(_ika_arch)"
+  local ika_arch
+  ika_arch="$(_ika_arch)" || return 1
+  local bundle="lineageos-${ika_arch}"
 
   install -d "${pkgdir}/usr/share/cuttlefish-common"
   cp -a --reflink=auto --sparse=always "${root}/${bundle}" "${pkgdir}/usr/share/cuttlefish-common/lineageos"

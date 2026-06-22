@@ -131,25 +131,6 @@ function spec_supports_host_arch() {
   return 0
 }
 
-function ika_arch_for_host() {
-  case "$(uname -m)" in
-    aarch64) printf 'arm64' ;;
-    x86_64)  printf 'x86_64' ;;
-    *)       return 1 ;;
-  esac
-}
-
-# Architecture string ('arm64'/'x86_64') of the *other* supported host. Fails
-# when the host arch is unrecognized.
-function other_ika_arch() {
-  local host_arch
-  host_arch="$(ika_arch_for_host)" || return 1
-  case "${host_arch}" in
-    arm64)  printf 'x86_64' ;;
-    x86_64) printf 'arm64' ;;
-  esac
-}
-
 # Canonical set of repo-relative paths excluded from the packaged source tree,
 # one per line. Rendered two ways below — as find(1) -prune predicates for the
 # manifest fingerprint and as rsync(1) --exclude patterns for staging — so the
@@ -486,6 +467,22 @@ function rpm_spec_workdir() {
   printf '%s\n' "${workdir}"
 }
 
+function arch_pkg_workdir() {
+  local pkg_path="$1"
+  local pkg_name
+  local workdir
+
+  pkg_name="$(basename "${pkg_path}")"
+  workdir="${ARCHBUILD_WORK_ROOT}/${pkg_name}"
+
+  # Keep makepkg's workspace path stable for the same reason as RPM: Bazel's
+  # output_base is derived from the workspace path. Clean the transient package
+  # workspace each invocation while reusing the same absolute path.
+  rm -rf "${workdir}"
+  mkdir -p "${workdir}"
+  printf '%s\n' "${workdir}"
+}
+
 trap cleanup_build_workdirs EXIT
 
 readonly DISTRO_FAMILY="$(detect_distro_family)"
@@ -649,7 +646,7 @@ elif [[ "${DISTRO_FAMILY}" == "arch" ]]; then
   # system bazel package.
   export PATH="/usr/local/bin:${PATH}"
 
-  pkg_workdir="$(mktemp -d "${ARCHBUILD_WORK_ROOT}/$(basename "${INPUT_PATH_ABS}").XXXXXX")"
+  pkg_workdir="$(arch_pkg_workdir "${INPUT_PATH_ABS}")"
   build_workdirs+=("${pkg_workdir}")
   cp -a "${INPUT_PATH_ABS}/arch/." "${pkg_workdir}/"
   ln -sfn "${SOURCE_TARBALL}" "${pkg_workdir}/${TAR_BASENAME}.tar.gz"

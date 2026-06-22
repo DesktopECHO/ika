@@ -1,6 +1,13 @@
 #!/usr/bin/make -f
 
-LINEAGEOS_ARCH := $(shell uname -m | sed 's/aarch64/arm64/')
+HOST_MACHINE := $(shell uname -m)
+ifeq ($(HOST_MACHINE),aarch64)
+LINEAGEOS_ARCH := arm64
+else ifeq ($(HOST_MACHINE),x86_64)
+LINEAGEOS_ARCH := x86_64
+else
+LINEAGEOS_ARCH := unsupported
+endif
 LINEAGEOS_SRC := $(CURDIR)/../../lineageos-$(LINEAGEOS_ARCH)
 LINEAGEOS_DEST := debian/ika-lineageos/usr/share/cuttlefish-common/lineageos
 
@@ -11,6 +18,7 @@ override_dh_auto_build:
 	@true
 
 override_dh_auto_install:
+	test "$(LINEAGEOS_ARCH)" != unsupported
 	install -d $(LINEAGEOS_DEST)
 	cp -a --reflink=auto --sparse=always $(LINEAGEOS_SRC)/. $(LINEAGEOS_DEST)/
 	./thin-provision-images.sh $(LINEAGEOS_DEST)

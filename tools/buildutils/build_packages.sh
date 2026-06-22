@@ -155,13 +155,14 @@ echo "Building ${DISTRO_FAMILY} packages; output will be written to ${PACKAGE_OU
 "${BUILD_PACKAGE}" "$@" "${REPO_DIR}/base"
 "${BUILD_PACKAGE}" "$@" "${REPO_DIR}/frontend"
 
-# Build ika-scrcpy outside the RPM flow. Build the server APK first if not
-# already present. On RPM this is handled automatically via
-# base/rpm/cuttlefish-scrcpy.spec.
+# Build ika-scrcpy outside the RPM flow. Refresh the server APK first on
+# Debian so the packaged client and device-side server stay in lockstep. On RPM
+# this is handled automatically via base/rpm/cuttlefish-scrcpy.spec.
 if [[ "${DISTRO_FAMILY}" != "rpm" ]]; then
-  if [[ "${DISTRO_FAMILY}" == "debian" && ! -f "${REPO_DIR}/scrcpy/scrcpy-server" ]]; then
+  if [[ "${DISTRO_FAMILY}" == "debian" ]]; then
     if [[ -x "${BUILD_SCRCPY_SERVER}" ]]; then
       echo "Building scrcpy-server..."
+      rm -f "${REPO_DIR}/scrcpy/scrcpy-server"
       BUILD_DIR="${REPO_DIR}/deb/debbuild/build-scrcpy-server" \
       ANDROID_CACHE_DIR="${REPO_DIR}/deb/debbuild/android-sdk-cache" \
         "${BUILD_SCRCPY_SERVER}"
@@ -181,11 +182,7 @@ fi
 # On RPM this is handled automatically: build_package.sh iterates all *.spec
 # files in base/rpm/, including cuttlefish-lineageos.spec.
 if [[ "${DISTRO_FAMILY}" != "rpm" ]]; then
-  case "$(uname -m)" in
-    x86_64)  _lineageos_arch="x86_64" ;;
-    aarch64) _lineageos_arch="arm64" ;;
-    *)       _lineageos_arch="" ;;
-  esac
+  _lineageos_arch="$(ika_arch_for_host 2>/dev/null || true)"
   if [[ -n "${_lineageos_arch}" && -d "${REPO_DIR}/lineageos-${_lineageos_arch}" ]]; then
     echo "Building ika-lineageos for ${_lineageos_arch}..."
     "${BUILD_PACKAGE}" "$@" "${REPO_DIR}/tools/lineageos"
