@@ -17,17 +17,23 @@
 #include "util/sdl.h"
 
 #define DISPLAY_MARGIN_PX 96
-#define FLEX_DISPLAY_REQUEST_MIN_INTERVAL SC_TICK_FROM_MS(250)
-#define FLEX_DISPLAY_RESIZE_QUIET_DELAY SC_TICK_FROM_MS(150)
+#define FLEX_DISPLAY_REQUEST_MIN_INTERVAL SC_TICK_FROM_MS(300)
+#define FLEX_DISPLAY_RESIZE_QUIET_DELAY SC_TICK_FROM_MS(400)
 #define FLEX_DISPLAY_POST_READY_FRAME_GRACE SC_TICK_FROM_MS(150)
-#define FLEX_DISPLAY_INITIAL_SHOW_TIMEOUT SC_TICK_FROM_MS(350)
+#define FLEX_DISPLAY_INITIAL_SHOW_TIMEOUT SC_TICK_FROM_MS(1000)
+// Extra time the window stays hidden after the guest first renders at the
+// target resolution, letting a freshly-booted desktop finish drawing before the
+// window is revealed.
+#define FLEX_DISPLAY_SHOW_SETTLE_GRACE SC_TICK_FROM_MS(1000)
 #define RAW_FRAME_RESIZE_THROTTLE_WINDOW SC_TICK_FROM_MS(1000)
 #define RAW_FRAME_RESIZE_RENDER_INTERVAL SC_TICK_FROM_MS(33)
 #define SC_WINDOW_MIN_WIDTH 540
 #define SC_WINDOW_MIN_HEIGHT 540
+// Resize-border thickness in logical points at content scale 1.0; scaled by the
+// window's display content scale so it grows on HiDPI/retina displays.
 #define SC_WINDOW_RESIZE_BORDER 8
-#define SC_WINDOW_DRAG_HOTSPOT_WIDTH 150
-#define SC_WINDOW_DRAG_HOTSPOT_HEIGHT 28
+#define SC_WINDOW_DRAG_HOTSPOT_WIDTH_RATIO 0.05f
+#define SC_WINDOW_DRAG_HOTSPOT_HEIGHT_RATIO 0.025f
 #define SC_WINDOW_DRAG_HOLD_DELAY SC_TICK_FROM_MS(220)
 #define SC_WINDOW_CLICK_MOVE_TOLERANCE 8.0f
 // Blur effect parameters: jittered ghost copies of the texture drawn at low
@@ -53,6 +59,15 @@
 // Tick interval driving the fade animation; ~60 Hz is enough for a smooth
 // linear ramp without burning CPU.
 #define FLEX_DISPLAY_BLUR_FADE_INTERVAL_MS 16
+
+// Duration of the fade-from-black once the window has settled.
+#define SC_WINDOW_FADE_IN_DURATION SC_TICK_FROM_MS(600)
+// Minimum time the window is held black after first show, giving the
+// flex_display resize dance time to engage before it is judged "settled".
+#define SC_WINDOW_FADE_IN_HOLD_GRACE SC_TICK_FROM_MS(1000)
+// Safety cap: begin the fade even if the resize never reports settled, so the
+// window can never stay black indefinitely.
+#define SC_WINDOW_FADE_IN_MAX_HOLD SC_TICK_FROM_MS(5000)
 
 #define DOWNCAST(SINK) container_of(SINK, struct sc_screen, frame_sink)
 
@@ -90,10 +105,19 @@ is_windowed(struct sc_screen *screen) {
 }
 
 static inline bool
-sc_screen_is_drag_hotspot(float x, float y) {
-    return x >= 0 && y >= 0
-        && x < SC_WINDOW_DRAG_HOTSPOT_WIDTH
-        && y < SC_WINDOW_DRAG_HOTSPOT_HEIGHT;
+sc_screen_is_drag_hotspot(SDL_Window *window, float x, float y) {
+    // Fraction of the fullscreen (display) size -- a fixed area that does not
+    // change when the window is resized.
+    int full_w = 0, full_h = 0;
+    SDL_Rect bounds;
+    SDL_DisplayID display = SDL_GetDisplayForWindow(window);
+    if (display && SDL_GetDisplayBounds(display, &bounds)) {
+        full_w = bounds.w;
+        full_h = bounds.h;
+    }
+    int hw = (int) (full_w * SC_WINDOW_DRAG_HOTSPOT_WIDTH_RATIO);
+    int hh = (int) (full_h * SC_WINDOW_DRAG_HOTSPOT_HEIGHT_RATIO);
+    return x >= 0 && y >= 0 && x < hw && y < hh;
 }
 
 static void
@@ -137,7 +161,7 @@ sc_screen_window_hit_test(SDL_Window *window, const SDL_Point *area,
     struct sc_screen *screen = data;
     SDL_MouseButtonFlags buttons = SDL_GetGlobalMouseState(NULL, NULL);
     bool left_down = buttons & SDL_BUTTON_LMASK;
-    bool in_hotspot = sc_screen_is_drag_hotspot(area->x, area->y);
+    bool in_hotspot = sc_screen_is_drag_hotspot(screen->window, area->x, area->y);
 
     if (left_down && !screen->hotspot_button_down) {
         screen->hotspot_button_down = true;
@@ -162,7 +186,11 @@ sc_screen_window_hit_test(SDL_Window *window, const SDL_Point *area,
         return SDL_HITTEST_NORMAL;
     }
 
-    const int border = SC_WINDOW_RESIZE_BORDER;
+    float content_scale = SDL_GetDisplayContentScale(SDL_GetDisplayForWindow(window));
+    if (content_scale <= 0.0f) {
+        content_scale = 1.0f;
+    }
+    const int border = (int) (SC_WINDOW_RESIZE_BORDER * content_scale);
     bool left = area->x < border;
     bool right = area->x >= w - border;
     bool top = area->y < border;
@@ -878,6 +906,48 @@ sc_screen_render_window_border(struct sc_screen *screen) {
 
 // render the texture to the renderer
 //
+// Hold the window solid black from first-show until the flex_display resize
+// dance settles (transient_stretch clears, after a grace period) or a safety
+// cap elapses, then fade the content in from black over
+// SC_WINDOW_FADE_IN_DURATION. This hides the post-show resize re-draw behind
+// the black hold. A no-op once the fade has finished.
+static void
+sc_screen_render_window_fade_in(struct sc_screen *screen) {
+    if (!screen->window_fade_in_show_tick) {
+        return;
+    }
+    sc_tick now = sc_tick_now();
+    Uint8 alpha = 0xff; // hold phase default: solid black
+
+    if (!screen->window_fade_in_start_tick) {
+        // Still holding: begin the fade once the resize has settled (or the
+        // safety cap is hit).
+        sc_tick held = now - screen->window_fade_in_show_tick;
+        bool settle = (!screen->transient_stretch
+                       && held >= SC_WINDOW_FADE_IN_HOLD_GRACE)
+                   || held >= SC_WINDOW_FADE_IN_MAX_HOLD;
+        if (settle) {
+            screen->window_fade_in_start_tick = now;
+        }
+    }
+
+    if (screen->window_fade_in_start_tick) {
+        sc_tick elapsed = now - screen->window_fade_in_start_tick;
+        if (elapsed >= SC_WINDOW_FADE_IN_DURATION) {
+            screen->window_fade_in_show_tick = 0;
+            screen->window_fade_in_start_tick = 0;
+            return;
+        }
+        float progress = (float) elapsed / (float) SC_WINDOW_FADE_IN_DURATION;
+        alpha = (Uint8) ((1.0f - progress) * 255.0f + 0.5f);
+    }
+
+    SDL_Renderer *renderer = screen->renderer;
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, alpha);
+    SDL_RenderFillRect(renderer, NULL);
+}
+
 // Set the update_content_rect flag if the window or content size may have
 // changed, so that the content rectangle is recomputed
 static void
@@ -952,6 +1022,7 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
 
 end:
     sc_screen_render_window_border(screen);
+    sc_screen_render_window_fade_in(screen);
     sc_sdl_render_present(renderer);
     if (screen->window_shown) {
         // Secondary backstop: some Wayland compositors swallow resize events.
@@ -1306,6 +1377,10 @@ sc_screen_blur_fade_timer(void *userdata, SDL_TimerID timerID,
             push_event = true;
             keep_firing = sc_tick_now() - screen->blur_fade_in_start_tick
                         < FLEX_DISPLAY_BLUR_FADE_IN_DURATION;
+        }
+        if (screen->window_fade_in_show_tick) {
+            push_event = true;
+            keep_firing = true;
         }
     }
     sc_mutex_unlock(&screen->mutex);
@@ -1981,7 +2056,10 @@ sc_screen_init(struct sc_screen *screen,
     screen->initial_display_size.width = 0;
     screen->initial_display_size.height = 0;
     screen->initial_window_prepare_tick = 0;
+    screen->initial_size_caught_up_tick = 0;
     screen->initial_window_show_timer = 0;
+    screen->window_fade_in_show_tick = 0;
+    screen->window_fade_in_start_tick = 0;
     screen->transient_stretch = false;
     screen->transient_stretch_source_size.width = 0;
     screen->transient_stretch_source_size.height = 0;
@@ -2222,8 +2300,11 @@ sc_screen_init(struct sc_screen *screen,
 
     if (!screen->video) {
         // Show the window immediately
+        screen->window_fade_in_show_tick = sc_tick_now();
+        screen->window_fade_in_start_tick = 0;
         screen->window_shown = true;
         sc_sdl_show_window(screen->window);
+        sc_screen_start_blur_animation_timer(screen);
 
         if (sc_screen_is_relative_mode(screen)) {
             // Capture mouse immediately if video mirroring is disabled
@@ -2322,12 +2403,15 @@ sc_screen_show_prepared_window(struct sc_screen *screen) {
     }
 
     screen->initial_window_show_deferred = false;
+    screen->window_fade_in_show_tick = sc_tick_now();
+    screen->window_fade_in_start_tick = 0;
     screen->window_shown = true;
     if (!screen->flex_display) {
         set_aspect_ratio(screen, screen->content_size);
     }
     sc_sdl_show_window(screen->window);
     sc_screen_update_content_rect(screen);
+    sc_screen_start_blur_animation_timer(screen);
 
     if (sc_screen_is_relative_mode(screen)) {
         sc_mouse_capture_set_active(&screen->mc, true);
@@ -2616,12 +2700,28 @@ sc_screen_apply_raw_frame(struct sc_screen *screen) {
             && screen->initial_display_size.height
             && source_size.width == screen->initial_display_size.width
             && source_size.height == screen->initial_display_size.height;
+        if (size_caught_up) {
+            if (!screen->initial_size_caught_up_tick) {
+                screen->initial_size_caught_up_tick = now;
+            }
+        } else {
+            screen->initial_size_caught_up_tick = 0;
+        }
+        // Once the resolution matches, keep rendering in the background for an
+        // extra settle grace so a freshly-booted desktop finishes drawing
+        // before the window appears.
+        bool settled =
+            screen->initial_size_caught_up_tick
+            && now - screen->initial_size_caught_up_tick
+                    >= FLEX_DISPLAY_SHOW_SETTLE_GRACE;
         bool wait_expired =
             screen->initial_window_prepare_tick
             && now - screen->initial_window_prepare_tick
                     >= FLEX_DISPLAY_INITIAL_SHOW_TIMEOUT;
 
-        if (size_caught_up || wait_expired) {
+        // Honor the full settle grace once caught up; the timeout only applies
+        // as a fallback when a matching frame never arrives.
+        if (settled || (!size_caught_up && wait_expired)) {
             sc_screen_show_prepared_window(screen);
         } else {
             return true;
@@ -3090,7 +3190,8 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
                 uint64_t flags = SDL_GetWindowFlags(screen->window);
                 bool maximized = flags & SDL_WINDOW_MAXIMIZED;
                 if (maximized
-                        && sc_screen_is_drag_hotspot(event->button.x,
+                        && sc_screen_is_drag_hotspot(screen->window,
+                                                     event->button.x,
                                                      event->button.y)) {
                     screen->maximized_hotspot_press_pending = true;
                     screen->maximized_hotspot_press_tick = sc_tick_now();

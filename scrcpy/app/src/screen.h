@@ -95,6 +95,9 @@ struct sc_screen {
     bool initial_window_show_deferred;
     struct sc_size initial_display_size;
     sc_tick initial_window_prepare_tick;
+    // Set when an incoming frame first matches initial_display_size; the window
+    // is then held hidden for FLEX_DISPLAY_SHOW_SETTLE_GRACE before revealing.
+    sc_tick initial_size_caught_up_tick;
     SDL_TimerID initial_window_show_timer; // protected by mutex
     bool transient_stretch;
     struct sc_size transient_stretch_source_size;
@@ -111,6 +114,12 @@ struct sc_screen {
     // Set when the resize hold begins, so the blur ghost overlay can ramp in
     // gradually during transient_stretch instead of snapping to full strength.
     sc_tick blur_fade_in_start_tick;
+    // window_fade_in_show_tick: set when the window is first shown. The content
+    // is held solid black (hiding the flex_display resize dance) until the
+    // resize settles, then window_fade_in_start_tick is set and the content
+    // fades in from black.
+    sc_tick window_fade_in_show_tick;
+    sc_tick window_fade_in_start_tick;
     // Set when the resize hold releases and the blur begins its fade-out.
     // transient_stretch is already false at this point; the texture has been
     // swapped to the new content, but the blur ghost overlay decays from
