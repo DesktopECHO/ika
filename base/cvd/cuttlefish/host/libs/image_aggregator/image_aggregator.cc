@@ -352,6 +352,7 @@ Result<void> AggregateImage(const std::vector<ImagePartition>& partitions,
   CF_EXPECTF(WriteEnd(output, builder.End(beginning)),
              "Could not write GPT end to '{}': {}", output_path,
              output->StrError());
+  CF_EXPECT(ThinProvisionImage(output_path));
   return {};
 };
 

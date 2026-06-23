@@ -23,6 +23,7 @@
 #include <string_view>
 #include <utility>
 
+#include <android-base/logging.h>
 #include <android-base/unique_fd.h>
 #include <sparse/sparse.h>
 
@@ -70,6 +71,21 @@ Result<bool> IsSparseImage(const std::string& image_path) {
   return buffer == kAndroidSparseImageMagic;
 }
 
+Result<void> ThinProvisionImage(const std::string& image_path) {
+#ifdef __linux__
+  // Best-effort: reclaiming zero ranges is a space optimization, not a
+  // correctness requirement. `fallocate --dig-holes` exits non-zero when the
+  // host filesystem lacks FALLOC_FL_PUNCH_HOLE (e.g. ZFS, some NFS) or when
+  // `fallocate` is not GNU util-linux; neither should block image creation.
+  int status = Execute({"fallocate", "--dig-holes", image_path});
+  if (status != 0) {
+    LOG(WARNING) << "`fallocate --dig-holes " << image_path << "` exited with "
+                 << status << "; leaving the image fully allocated";
+  }
+#endif
+  return {};
+}
+
 Result<void> ForceRawImage(const std::string& image_path) {
   if (!CF_EXPECT(IsSparseImage(image_path))) {
     return {};
@@ -93,6 +109,7 @@ Result<void> ForceRawImage(const std::string& image_path) {
   // within the same directory so they can only be in different mounts if one
   // is a bind mount, in which case `rename` won't work anyway.
   CF_EXPECT(Rename(tmp_raw_image_path, image_path));
+  CF_EXPECT(ThinProvisionImage(image_path));
 
   return {};
 }

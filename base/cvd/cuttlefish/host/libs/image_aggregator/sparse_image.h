@@ -23,6 +23,7 @@ namespace cuttlefish {
 
 Result<void> ForceRawImage(const std::string& image_path);
 Result<bool> IsSparseImage(const std::string& image_path);
+Result<void> ThinProvisionImage(const std::string& image_path);
 
 /** Image file format comprised of a list of chunks of "raw data" and "fill
  * data" that is a repeated byte string.  */

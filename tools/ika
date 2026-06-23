@@ -172,6 +172,10 @@ declare -A CVD_BOOT_DEFAULTS=(
   [boot_timeout_sec]="120"
 )
 
+# Android Settings reports internal storage capacity in decimal GB. Cuttlefish's
+# blank_data_image_mb flag is MiB, so keep the default just under 64 GB decimal.
+readonly DEFAULT_DATA_GB=64
+
 # ============================================================================
 # Launcher Lifecycle Defaults (passed to cvd_internal_start)
 # ============================================================================
@@ -338,6 +342,11 @@ normalize_data_gb() {
   fi
 
   printf '%s\n' "${data_gb}"
+}
+
+data_gb_to_mib() {
+  local data_gb="$1"
+  printf '%s\n' "$((data_gb * 1000000000 / 1048576))"
 }
 
 parse_start_options() {
@@ -992,15 +1001,11 @@ protect_overlay_resume() {
 append_data_storage_args() {
   local -n args_array="$1"
   shift
-  local data_gb="${DATA_GB:-}"
+  local requested_data_gb="${DATA_GB:-}"
+  local data_gb
   local data_mb
   local explicit_data_policy="false"
   local explicit_data_size="false"
-
-  [[ -n "${data_gb}" ]] || return 0
-
-  data_gb="$(normalize_data_gb "${data_gb}")"
-  data_mb=$((data_gb * 1024))
 
   if user_supplied_flag "data_policy" "$@"; then
     explicit_data_policy="true"
@@ -1010,22 +1015,28 @@ append_data_storage_args() {
   fi
 
   if [[ "${explicit_data_policy}" != "true" ]] && instance_has_userdata_state; then
-    CVD_DATA_STORAGE_MESSAGE="Ignored userdata resize; you must reset the instance first: 'ika reset'"
-    log "DATA_GB=${data_gb} requested, but existing userdata state is present; run '${SCRIPT_NAME} reset' before the next start to apply it."
+    if [[ -n "${requested_data_gb}" ]]; then
+      CVD_DATA_STORAGE_MESSAGE="Ignored userdata resize; you must reset the instance first: 'ika reset'"
+      log "DATA_GB=${requested_data_gb} requested, but existing userdata state is present; run '${SCRIPT_NAME} reset' before the next start to apply it."
+    fi
     return 0
   fi
 
+  data_gb="$(normalize_data_gb "${requested_data_gb:-${DEFAULT_DATA_GB}}")"
+  data_mb="$(data_gb_to_mib "${data_gb}")"
+
   if [[ "${explicit_data_policy}" != "true" ]]; then
-    # Packaged userdata.img may be Android sparse; Cuttlefish can boot it, but
-    # its resize_up_to path expects a raw filesystem image.
     args_array+=("--data_policy=always_create")
   fi
+
   if [[ "${explicit_data_size}" != "true" ]]; then
     args_array+=("--blank_data_image_mb=${data_mb}")
   fi
 
-  CVD_DATA_STORAGE_MESSAGE="Provisioning ${data_gb} GB userdata..."
-  log "fresh userdata target: ${data_mb} MB"
+  if [[ -n "${requested_data_gb}" ]]; then
+    CVD_DATA_STORAGE_MESSAGE="Provisioning ${data_gb} GB userdata..."
+    log "fresh userdata target: ${data_mb} MiB"
+  fi
 }
 
 apply_default_args() {

@@ -133,33 +133,34 @@ Result<void> CreateDynamicDiskFiles(
     CF_EXPECT(InitializeDataImage(instance));
     CF_EXPECT(InitializePflash(instance));
 
-    // Check if filling in the sparse image would run out of disk space.
-    std::string data_image = instance.data_image();
+    // Check the userdata image that will be included in the composite disk.
+    std::string data_image = FileExists(instance.new_data_image())
+                                 ? instance.new_data_image()
+                                 : instance.data_image();
     auto existing_sizes = SparseFileSizes(data_image);
-    if (existing_sizes.sparse_size == 0 && existing_sizes.disk_size == 0) {
-      data_image = instance.new_data_image();
-      existing_sizes = SparseFileSizes(data_image);
-      CF_EXPECT(existing_sizes.sparse_size > 0 || existing_sizes.disk_size > 0,
-                "Unable to determine size of \""
-                    << data_image << "\". Does this file exist?");
-    }
-    if (existing_sizes.sparse_size > 0 || existing_sizes.disk_size > 0) {
-      auto available_space = AvailableSpaceAtPath(data_image);
-      if (available_space <
-          existing_sizes.sparse_size - existing_sizes.disk_size) {
-        // TODO(schuffelen): Duplicate this check in run_cvd when it can run on
-        // a separate machine
-        return CF_ERR("Not enough space remaining in fs containing \""
-                      << data_image << "\", wanted "
-                      << (existing_sizes.sparse_size - existing_sizes.disk_size)
-                      << ", got " << available_space);
-      } else {
-        VLOG(0) << "Available space: " << available_space;
-        VLOG(0) << "Sparse size of \"" << data_image
-                << "\": " << existing_sizes.sparse_size;
-        VLOG(0) << "Disk size of \"" << data_image
-                << "\": " << existing_sizes.disk_size;
-      }
+    CF_EXPECT(existing_sizes.sparse_size > 0 || existing_sizes.disk_size > 0,
+              "Unable to determine size of \"" << data_image
+                                               << "\". Does this file exist?");
+    auto available_space = AvailableSpaceAtPath(data_image);
+    if (available_space < existing_sizes.sparse_size - existing_sizes.disk_size) {
+      // The userdata image is thin-provisioned: it only consumes host space as
+      // the guest writes to it, so its full (sparse) size may legitimately
+      // exceed the free space on the host. Over-committing is the whole point of
+      // thin provisioning, so warn instead of refusing to boot. This branch only
+      // trips for thin images anyway -- a fully-allocated image has
+      // disk_size ~= sparse_size, leaving nothing left to fill.
+      LOG(WARNING) << "Host filesystem containing \"" << data_image << "\" has "
+                   << available_space
+                   << " bytes free, less than the image's unallocated size ("
+                   << (existing_sizes.sparse_size - existing_sizes.disk_size)
+                   << " bytes). The VM may run out of host space if the guest "
+                      "fills userdata.";
+    } else {
+      VLOG(0) << "Available space: " << available_space;
+      VLOG(0) << "Sparse size of \"" << data_image
+              << "\": " << existing_sizes.sparse_size;
+      VLOG(0) << "Disk size of \"" << data_image
+              << "\": " << existing_sizes.disk_size;
     }
 
     CF_EXPECT_LE(instance_index, image_files.size());

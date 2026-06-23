@@ -42,6 +42,7 @@
 #include "cuttlefish/host/libs/config/esp/make_fat_image.h"
 #include "cuttlefish/host/libs/config/openwrt_args.h"
 #include "cuttlefish/host/libs/image_aggregator/mbr.h"
+#include "cuttlefish/host/libs/image_aggregator/sparse_image.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -128,16 +129,28 @@ std::string GetFsType(const std::string& path) {
 
 enum class DataImageAction { kNoAction, kResizeImage, kCreateBlankImage };
 
-static Result<DataImageAction> ChooseDataImageAction(
+struct DataImageDecision {
+  DataImageAction action;
+  // Only meaningful for kResizeImage: whether the source image is in Android
+  // sparse format and therefore needs ForceRawImage before resizing.
+  bool source_is_android_sparse = false;
+};
+
+static Result<DataImageDecision> ChooseDataImageAction(
     const CuttlefishConfig::InstanceSpecific& instance) {
   if (instance.data_policy() == DataImagePolicy::AlwaysCreate) {
-    return DataImageAction::kCreateBlankImage;
+    return DataImageDecision{DataImageAction::kCreateBlankImage};
   }
   if (!FileHasContent(instance.data_image())) {
-    return DataImageAction::kCreateBlankImage;
+    return DataImageDecision{DataImageAction::kCreateBlankImage};
   }
   if (instance.data_policy() == DataImagePolicy::UseExisting) {
-    return DataImageAction::kNoAction;
+    return DataImageDecision{DataImageAction::kNoAction};
+  }
+  if (instance.data_policy() == DataImagePolicy::ResizeUpTo &&
+      CF_EXPECT(IsSparseImage(instance.data_image()))) {
+    return DataImageDecision{DataImageAction::kResizeImage,
+                             /*source_is_android_sparse=*/true};
   }
   auto current_fs_type = GetFsType(instance.data_image());
   if (current_fs_type != instance.userdata_format()) {
@@ -146,12 +159,12 @@ static Result<DataImageAction> ChooseDataImageAction(
                   << DataImagePolicyString(DataImagePolicy::ResizeUpTo)
                   << " (\"" << current_fs_type << "\" != \""
                   << instance.userdata_format() << "\")");
-    return DataImageAction::kCreateBlankImage;
+    return DataImageDecision{DataImageAction::kCreateBlankImage};
   }
   if (instance.data_policy() == DataImagePolicy::ResizeUpTo) {
-    return DataImageAction::kResizeImage;
+    return DataImageDecision{DataImageAction::kResizeImage};
   }
-  return DataImageAction::kNoAction;
+  return DataImageDecision{DataImageAction::kNoAction};
 }
 
 } // namespace
@@ -215,14 +228,14 @@ Result<void> CreateBlankSdcardImage(std::string_view image, int num_mb) {
 
 Result<void> InitializeDataImage(
     const CuttlefishConfig::InstanceSpecific& instance) {
-  auto action = CF_EXPECT(ChooseDataImageAction(instance));
-  switch (action) {
+  auto decision = CF_EXPECT(ChooseDataImageAction(instance));
+  switch (decision.action) {
     case DataImageAction::kNoAction:
       VLOG(0) << instance.data_image() << " exists. Not creating it.";
       return {};
     case DataImageAction::kCreateBlankImage: {
-      if (Result<void> res = RemoveFile(instance.new_data_image()); !res.ok()) {
-        LOG(ERROR) << res.error();
+      if (FileExists(instance.new_data_image())) {
+        CF_EXPECT(RemoveFile(instance.new_data_image()));
       }
       CF_EXPECT(instance.blank_data_image_mb() != 0,
                 "Expected `-blank_data_image_mb` to be set for "
@@ -238,6 +251,7 @@ Result<void> InitializeDataImage(
                    "Failed to create a blank image at '{}' with size '{}'",
                    instance.new_data_image(), instance.blank_data_image_mb());
       }
+      CF_EXPECT(ThinProvisionImage(instance.new_data_image()));
       return {};
     }
     case DataImageAction::kResizeImage: {
@@ -247,11 +261,21 @@ Result<void> InitializeDataImage(
       CF_EXPECTF(Copy(instance.data_image(), instance.new_data_image()),
                  "Failed to `cp {} {}`", instance.data_image(),
                  instance.new_data_image());
+      if (decision.source_is_android_sparse) {
+        CF_EXPECT(ForceRawImage(instance.new_data_image()));
+        auto current_fs_type = GetFsType(instance.new_data_image());
+        CF_EXPECT(instance.userdata_format() == current_fs_type,
+                  "Changing the fs format is incompatible with --data_policy="
+                      << DataImagePolicyString(DataImagePolicy::ResizeUpTo)
+                      << " (\"" << current_fs_type << "\" != \""
+                      << instance.userdata_format() << "\")");
+      }
       CF_EXPECT(ResizeImage(instance.new_data_image(),
                             instance.blank_data_image_mb(), instance),
                 "Failed to resize \"" << instance.new_data_image() << "\" to "
                                       << instance.blank_data_image_mb()
                                       << " MB");
+      CF_EXPECT(ThinProvisionImage(instance.new_data_image()));
       return {};
     }
   }
