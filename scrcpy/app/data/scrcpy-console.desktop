@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=scrcpy (console)
-GenericName=Android Remote Control
+GenericName=Android Virtual Desktop
 Comment=Display and control your Android device
 # For some users, the PATH or ADB environment variables are set from the shell
 # startup file, like .bashrc or .zshrc… Run an interactive shell to get
