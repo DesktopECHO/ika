@@ -27,6 +27,7 @@
 #define FLEX_DISPLAY_SHOW_SETTLE_GRACE SC_TICK_FROM_MS(1000)
 #define RAW_FRAME_RESIZE_THROTTLE_WINDOW SC_TICK_FROM_MS(1000)
 #define RAW_FRAME_RESIZE_RENDER_INTERVAL SC_TICK_FROM_MS(33)
+// Minimum window size at display content scale 1.0; scaled at runtime on HiDPI.
 #define SC_WINDOW_MIN_WIDTH 540
 #define SC_WINDOW_MIN_HEIGHT 540
 // Resize-border thickness in logical points at content scale 1.0; scaled by the
@@ -102,6 +103,47 @@ is_windowed(struct sc_screen *screen) {
     return !(SDL_GetWindowFlags(screen->window) & (SDL_WINDOW_FULLSCREEN
                                                  | SDL_WINDOW_MINIMIZED
                                                  | SDL_WINDOW_MAXIMIZED));
+}
+
+static float
+sc_screen_get_display_content_scale(SDL_Window *window) {
+    SDL_DisplayID display = SDL_GetDisplayForWindow(window);
+    if (!display) {
+        return 1.0f;
+    }
+
+    float scale = SDL_GetDisplayContentScale(display);
+    return scale > 0.0f ? scale : 1.0f;
+}
+
+static uint16_t
+sc_screen_scale_min_window_dimension(uint16_t value, float scale) {
+    if (scale < 1.0f) {
+        scale = 1.0f;
+    }
+
+    uint32_t scaled = (uint32_t) (value * scale + 0.5f);
+    return scaled > UINT16_MAX ? UINT16_MAX : scaled;
+}
+
+static struct sc_size
+sc_screen_get_min_window_size(SDL_Window *window) {
+    float scale = sc_screen_get_display_content_scale(window);
+    struct sc_size size = {
+        .width = sc_screen_scale_min_window_dimension(SC_WINDOW_MIN_WIDTH,
+                                                      scale),
+        .height = sc_screen_scale_min_window_dimension(SC_WINDOW_MIN_HEIGHT,
+                                                       scale),
+    };
+    return size;
+}
+
+static void
+sc_screen_set_window_min_size(SDL_Window *window) {
+    struct sc_size size = sc_screen_get_min_window_size(window);
+    if (!SDL_SetWindowMinimumSize(window, size.width, size.height)) {
+        LOGW("Could not set window minimum size: %s", SDL_GetError());
+    }
 }
 
 static inline bool
@@ -186,10 +228,7 @@ sc_screen_window_hit_test(SDL_Window *window, const SDL_Point *area,
         return SDL_HITTEST_NORMAL;
     }
 
-    float content_scale = SDL_GetDisplayContentScale(SDL_GetDisplayForWindow(window));
-    if (content_scale <= 0.0f) {
-        content_scale = 1.0f;
-    }
+    float content_scale = sc_screen_get_display_content_scale(window);
     const int border = (int) (SC_WINDOW_RESIZE_BORDER * content_scale);
     bool left = area->x < border;
     bool right = area->x >= w - border;
@@ -1216,8 +1255,10 @@ sc_screen_snap_window_to_requested_pixel_size(struct sc_screen *screen) {
                 / render_size.height,
     };
 
-    target_size.width = MAX(target_size.width, SC_WINDOW_MIN_WIDTH);
-    target_size.height = MAX(target_size.height, SC_WINDOW_MIN_HEIGHT);
+    struct sc_size min_window_size =
+        sc_screen_get_min_window_size(screen->window);
+    target_size.width = MAX(target_size.width, min_window_size.width);
+    target_size.height = MAX(target_size.height, min_window_size.height);
 
     if (target_size.width == window_size.width
             && target_size.height == window_size.height) {
@@ -2159,10 +2200,7 @@ sc_screen_init(struct sc_screen *screen,
         goto error_destroy_fps_counter;
     }
 
-    if (!SDL_SetWindowMinimumSize(screen->window, SC_WINDOW_MIN_WIDTH,
-                                  SC_WINDOW_MIN_HEIGHT)) {
-        LOGW("Could not set window minimum size: %s", SDL_GetError());
-    }
+    sc_screen_set_window_min_size(screen->window);
 
     if (screen->flex_display && screen->launch_display_dpi) {
         SDL_DisplayID disp = SDL_GetDisplayForWindow(screen->window);
@@ -3219,6 +3257,8 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
             }
             break;
         case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+            sc_screen_set_window_min_size(screen->window);
+
             // Window moved to a display with a different content scale (DPI
             // ratio). Recompute flex_display_dpi proportionally and force an
             // immediate resize so Android's font/icon density stays correct.

@@ -536,6 +536,9 @@ resolve_scrcpy_dpi() {
   width="${BASH_REMATCH[1]}"
   dpi=$(( width / 10 - 24 ))
   dpi=$(( dpi / 8 * 8 ))
+  if (( dpi < 96 )); then
+    dpi=96
+  fi
 
   printf '%s\n' "${dpi}"
 }
