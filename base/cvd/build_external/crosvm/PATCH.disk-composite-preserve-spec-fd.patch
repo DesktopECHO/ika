@@ -1,0 +1,51 @@
+--- a/src/composite.rs
++++ b/src/composite.rs
+@@ -22,6 +22,7 @@
+ use std::sync::Arc;
+ 
+ use async_trait::async_trait;
++use base::AsRawDescriptor;
+ use base::AsRawDescriptors;
+ use base::FileAllocate;
+ use base::FileReadWriteAtVolatile;
+@@ -352,10 +353,14 @@
+ 
+ impl AsRawDescriptors for CompositeDiskFile {
+     fn as_raw_descriptors(&self) -> Vec<RawDescriptor> {
+-        self.component_disks
+-            .iter()
+-            .flat_map(|d| d.file.as_raw_descriptors())
+-            .collect()
++        let mut descriptors = vec![self._disk_spec_file.as_raw_descriptor()];
++        descriptors.extend(
++            self.component_disks
++                .iter()
++                .flat_map(|d| d.file.as_raw_descriptors()),
++        );
++
++        descriptors
+     }
+ }
+ 
+@@ -1043,10 +1048,12 @@
+         let file1 = tempfile().unwrap();
+         let file2 = tempfile().unwrap();
+         let file3 = tempfile().unwrap();
++        let spec_file = tempfile().unwrap();
+         let mut in_descriptors = vec![
+             file1.as_raw_descriptor(),
+             file2.as_raw_descriptor(),
+             file3.as_raw_descriptor(),
++            spec_file.as_raw_descriptor(),
+         ];
+         in_descriptors.sort_unstable();
+         let disk_part1 = ComponentDiskPart {
+@@ -1070,7 +1077,7 @@
+             file_offset: 0,
+             needs_flush: AtomicBool::new(false),
+         };
+-        let composite = new_from_components(vec![disk_part1, disk_part2, disk_part3]).unwrap();
++        let composite = CompositeDiskFile::new(vec![disk_part1, disk_part2, disk_part3], spec_file).unwrap();
+         let mut out_descriptors = composite.as_raw_descriptors();
+         out_descriptors.sort_unstable();
+         assert_eq!(in_descriptors, out_descriptors);

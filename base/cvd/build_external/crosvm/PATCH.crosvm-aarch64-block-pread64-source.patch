@@ -1,0 +1,11 @@
+diff --git a/jail/seccomp/aarch64/block_device.policy b/jail/seccomp/aarch64/block_device.policy
+index 76eeef0cf..b9da43e0e 100644
+--- a/jail/seccomp/aarch64/block_device.policy
++++ b/jail/seccomp/aarch64/block_device.policy
+@@ -13,5 +13,6 @@ ioctl: arg1 == 0x1277
+ openat: return ENOENT
+ newfstatat: 1
++pread64: 1
+ preadv: 1
+ pwrite64: 1
+ pwritev: 1

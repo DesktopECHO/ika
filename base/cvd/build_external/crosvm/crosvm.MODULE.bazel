@@ -48,7 +48,6 @@ crosvm_bin.spec(
         "wl-dmabuf",
         "zstd-disk",
     ],
-    # TODO: schuffelen - fix the sandbox
     git = CROSVM_REMOTE,
     rev = CROSVM_REV,
 )
@@ -59,6 +58,10 @@ crosvm_bin.annotation(
     patch_args = ["-p1"],
     patches = [
         "@//build_external/crosvm:PATCH.crosvm-composite-duplicate-components.patch",
+        # Sandbox fixes also need crate-specific variants below because
+        # crates_universe checks out each published crate with its own root.
+        "@//build_external/crosvm:PATCH.crosvm-composite-preserve-spec-fd.patch",
+        "@//build_external/crosvm:PATCH.crosvm-gpu-2d-sandbox.patch",
         "@//build_external/crosvm:PATCH.crosvm-resize-display.patch",
         "@//build_external/crosvm:PATCH.minijail-sys_common_mk.patch",
     ],
@@ -79,6 +82,25 @@ crosvm_bin.annotation(
         # include path. Pass it explicitly so bindings generation can find
         # libavcodec/libavutil/libswscale headers in the Bazel sandbox.
         "BINDGEN_EXTRA_CLANG_ARGS": "-I/usr/include/ffmpeg",
+    },
+)
+
+# The linked disk crate owns CompositeDiskFile; keep its spec fd reported to
+# minijail so the sandbox's close-fds pass does not invalidate Rust-owned Files.
+crosvm_bin.annotation(
+    crate = "disk",
+    patch_args = ["-p1"],
+    patches = [
+        "@//build_external/crosvm:PATCH.disk-composite-preserve-spec-fd.patch",
+    ],
+)
+
+crosvm_bin.annotation(
+    crate = "v4l2r",
+    build_script_env = {
+        # v4l2r bindgen starts from /usr/include/linux/videodev2.h, which
+        # includes libc headers from Debian's multiarch include directory.
+        "BINDGEN_EXTRA_CLANG_ARGS": "-I/usr/include/aarch64-linux-gnu -I/usr/include/x86_64-linux-gnu",
     },
 )
 
@@ -135,11 +157,17 @@ crosvm_bin.annotation(
     ],
 )
 
+# ARM64 sandbox policy and GPU minijail mount fixes for guest SwiftShader.
 crosvm_bin.annotation(
     crate = "jail",
     build_script_data_glob = ["seccomp/**"],
     build_script_data = ["@@//:compile_seccomp_policy_exe"],
     build_script_env = {"COMPILE_SECCOMP_POLICY": "$(execpath @@//:compile_seccomp_policy_exe)"},
+    patch_args = ["-p1"],
+    patches = [
+        "@//build_external/crosvm:PATCH.jail-aarch64-block-pread64.patch",
+        "@//build_external/crosvm:PATCH.jail-gpu-host-graphics-libs-optional.patch",
+    ],
 )
 
 # minijail-sys/build.rs invokes `make` to build the minijail C library, so all
@@ -193,7 +221,10 @@ git_repository(
     init_submodules = True,
     patch_strip = 1,
     patches = [
+        "@//build_external/crosvm:PATCH.crosvm-aarch64-block-pread64-source.patch",
         "@//build_external/crosvm:PATCH.crosvm-composite-duplicate-components.patch",
+        "@//build_external/crosvm:PATCH.crosvm-composite-preserve-spec-fd.patch",
+        "@//build_external/crosvm:PATCH.crosvm-gpu-2d-sandbox-source.patch",
         "@//build_external/crosvm:PATCH.crosvm-resize-display.patch",
         "@//build_external/crosvm:PATCH.minijail-sys_common_mk.patch",
     ],

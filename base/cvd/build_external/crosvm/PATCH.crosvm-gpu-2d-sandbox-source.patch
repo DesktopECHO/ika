@@ -1,0 +1,85 @@
+diff --git a/jail/src/helpers.rs b/jail/src/helpers.rs
+index 8c82f4d4d..27feaf135 100644
+--- a/jail/src/helpers.rs
++++ b/jail/src/helpers.rs
+@@ -374,6 +374,7 @@ pub fn create_gpu_minijail(
+     config: &SandboxConfig,
+     render_node_only: bool,
+     snapshot_scratch_directory: Option<&Path>,
++    bind_host_graphics_libs: bool,
+ ) -> Result<Minijail> {
+     let mut jail = create_sandbox_minijail(root, MAX_OPEN_FILES_FOR_GPU, config)?;
+ 
+@@ -414,20 +415,22 @@ pub fn create_gpu_minijail(
+         jail.mount_bind(udmabuf_path, udmabuf_path, true)?;
+     }
+ 
+-    // Libraries that are required when mesa drivers are dynamically loaded.
+-    jail_mount_bind_if_exists(
+-        &mut jail,
+-        &[
+-            "/usr/lib",
+-            "/usr/lib64",
+-            "/lib",
+-            "/lib64",
+-            "/usr/share/drirc.d",
+-            "/usr/share/glvnd",
+-            "/usr/share/libdrm",
+-            "/usr/share/vulkan",
+-        ],
+-    )?;
++    if bind_host_graphics_libs {
++        // Libraries that are required when mesa drivers are dynamically loaded.
++        jail_mount_bind_if_exists(
++            &mut jail,
++            &[
++                "/usr/lib",
++                "/usr/lib64",
++                "/lib",
++                "/lib64",
++                "/usr/share/drirc.d",
++                "/usr/share/glvnd",
++                "/usr/share/libdrm",
++                "/usr/share/vulkan",
++            ],
++        )?;
++    }
+ 
+     // pvr driver requires read access to /proc/self/task/*/comm.
+     mount_proc(&mut jail)?;
+diff --git a/src/crosvm/sys/linux/device_helpers.rs b/src/crosvm/sys/linux/device_helpers.rs
+index 2aa0c66fb..4f858478d 100644
+--- a/src/crosvm/sys/linux/device_helpers.rs
++++ b/src/crosvm/sys/linux/device_helpers.rs
+@@ -928,6 +928,7 @@ pub fn create_wayland_device(
+             &config,
+             /* render_node_only= */ false,
+             /* snapshot_scratch_path= */ None,
++            /* bind_host_graphics_libs= */ false,
+         )?;
+         // Bind mount the wayland socket's directory into jail's root. This is necessary since
+         // each new wayland context must open() the socket. If the wayland socket is ever
+diff --git a/src/crosvm/sys/linux/gpu.rs b/src/crosvm/sys/linux/gpu.rs
+index 44891528d..27ed76e08 100644
+--- a/src/crosvm/sys/linux/gpu.rs
++++ b/src/crosvm/sys/linux/gpu.rs
+@@ -166,8 +166,9 @@ pub fn create_gpu_device(
+         let mut jail = create_gpu_minijail(
+             &jail_config.pivot_root,
+             &config,
+             /* render_node_only= */ false,
+             gpu_params.snapshot_scratch_path.as_deref(),
++            /* bind_host_graphics_libs= */ gpu_params.mode != virtio::GpuMode::Mode2D,
+         )?;
+ 
+         // Prepare GPU shader disk cache directory.
+@@ -303,8 +304,9 @@ pub fn start_gpu_render_server(
+         let mut jail = create_gpu_minijail(
+             &jail_config.pivot_root,
+             &config,
+             /* render_node_only= */ true,
+             /* snapshot_scratch_path= */ None,
++            /* bind_host_graphics_libs= */ true,
+         )?;
+ 
+         let cache_info = get_gpu_cache_info(

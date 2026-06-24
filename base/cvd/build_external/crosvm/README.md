@@ -19,6 +19,11 @@ Gfxstream Vulkan is controlled by the packaged `ika` launcher instead:
 - **What it does:** Introduces `OpenComponentDiskKey` (path + open-mode tuple) and a `HashMap`-backed cache so a composite disk that references the same backing component multiple times only opens the underlying file once, sharing the open handle across `ComponentDiskPart` entries.
 - **Why:** Some Cuttlefish composite layouts reference the same component disk from more than one slot. Without dedup, each reference re-opens the file with conflicting locks/flags and `composite::open` fails.
 
+#### `PATCH.disk-composite-preserve-spec-fd.patch`
+- **Targets:** `disk` crate. File: `src/composite.rs`.
+- **What it does:** Includes the composite disk specification file descriptor in `CompositeDiskFile::as_raw_descriptors()`.
+- **Why:** The file is intentionally kept open to retain its lock. In crosvm multiprocess sandbox mode, unreported descriptors are closed by minijail; Rust then traps when `_disk_spec_file` is dropped because the owned fd was already closed.
+
 #### `PATCH.crosvm-resize-display.patch`
 - **Targets:** `crosvm_bin` and the source `git_repository`. File: `devices/src/virtio/gpu/virtio_gpu.rs`.
 - **What it does:** Adds `VirtioGpu::resize_display(display_id, DisplayParameters)` that updates an existing scanout's `width`, `height`, and stored `display_params`, then flips `scanouts_updated` so the GPU thread re-syncs.
@@ -74,11 +79,39 @@ See `crosvm.MODULE.bazel`. The relevant blocks:
 
 | Target | Patches |
 |---|---|
-| `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-resize-display` |
+| `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-composite-preserve-spec-fd`, `crosvm-gpu-2d-sandbox`, `crosvm-resize-display` |
+| `crosvm_bin.annotation(crate = "disk")` | `disk-composite-preserve-spec-fd` |
+| `crosvm_bin.annotation(crate = "jail")` | `jail-aarch64-block-pread64`, `jail-gpu-host-graphics-libs-optional` |
 | `crosvm_bin.annotation(crate = "mesa3d_util")` | `mesa3d_util-upstream-main-20260520` |
 | `crosvm_bin.annotation(crate = "devices")` | `crosvm-resize-display-devices` |
 | `crosvm_bin.annotation(crate = "rutabaga_gfx")` | `rutabaga_gfx_build_rs`, `rutabaga_gfx-upstream-main-20260520` |
 | `crosvm_bin.annotation(crate = "minijail-sys")` | `minijail-sys_build_rs` |
 | `crosvm_bin.annotation(crate = "proto_build_tools")` | `proto_build_tools` |
 | `crosvm_bin.annotation(crate = "vm_control")` | `crosvm-resize-display-vm-control` |
-| `git_repository(name = "crosvm")` (source tree) | `crosvm-composite-duplicate-components`, `crosvm-resize-display`, `minijail-sys_common_mk` |
+| `git_repository(name = "crosvm")` (source tree) | `crosvm-aarch64-block-pread64-source`, `crosvm-composite-duplicate-components`, `crosvm-composite-preserve-spec-fd`, `crosvm-gpu-2d-sandbox-source`, `crosvm-resize-display`, `minijail-sys_common_mk` |
+
+#### `PATCH.jail-aarch64-block-pread64.patch`
+- **Targets:** `jail` crate. File: `seccomp/aarch64/block_device.policy`.
+- **What it does:** Allows `pread64` for the ARM64 virtio block-device sandbox.
+- **Why:** The ARM64 block backend can issue `pread64` after entering the device jail. Without this allow-list entry, minijail kills `pcivirtio-block` with `SIGSYS` during sandboxed boot.
+
+#### `PATCH.crosvm-composite-preserve-spec-fd.patch`
+- **Targets:** `crosvm_bin` and the source `git_repository`. File: `disk/src/composite.rs`.
+- **What it does:** Includes the composite disk specification file descriptor in `CompositeDiskFile::as_raw_descriptors()`.
+- **Why:** The file is intentionally kept open to retain its lock. In crosvm multiprocess sandbox mode, unreported descriptors are closed by minijail; Rust then traps when `_disk_spec_file` is dropped because the owned fd was already closed.
+
+#### `PATCH.jail-gpu-host-graphics-libs-optional.patch`
+- **Targets:** `jail` crate. File: `src/helpers.rs`.
+- **What it does:** Adds a `bind_host_graphics_libs` parameter to the GPU minijail helper so callers can skip broad `/usr/lib`, `/lib`, and Mesa/Vulkan data bind mounts when they are not needed.
+
+#### `PATCH.crosvm-gpu-2d-sandbox.patch`
+- **Targets:** `crosvm` crate. Files: `src/crosvm/sys/linux/gpu.rs`, `src/crosvm/sys/linux/device_helpers.rs`.
+- **What it does:** Keeps host graphics library bind mounts for the render-server jail, but skips them for the virtio GPU device when the backend is pure `2D` and for the virtio-wl device. This avoids ARM64 minijail failures on guest SwiftShader launches while keeping sandboxing enabled.
+
+#### `PATCH.crosvm-gpu-2d-sandbox-source.patch`
+- **Targets:** Source `git_repository` checkout.
+- **What it does:** Equivalent full-tree version of the two crate-universe patches above for users of `@crosvm`.
+
+#### `PATCH.crosvm-aarch64-block-pread64-source.patch`
+- **Targets:** Source `git_repository` checkout.
+- **What it does:** Equivalent full-tree version of `PATCH.jail-aarch64-block-pread64.patch`.

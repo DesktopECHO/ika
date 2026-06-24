@@ -1,0 +1,49 @@
+diff --git a/src/helpers.rs b/src/helpers.rs
+index 8c82f4d4d..27feaf135 100644
+--- a/src/helpers.rs
++++ b/src/helpers.rs
+@@ -374,6 +374,7 @@ pub fn create_gpu_minijail(
+     config: &SandboxConfig,
+     render_node_only: bool,
+     snapshot_scratch_directory: Option<&Path>,
++    bind_host_graphics_libs: bool,
+ ) -> Result<Minijail> {
+     let mut jail = create_sandbox_minijail(root, MAX_OPEN_FILES_FOR_GPU, config)?;
+ 
+@@ -414,20 +415,22 @@ pub fn create_gpu_minijail(
+         jail.mount_bind(udmabuf_path, udmabuf_path, true)?;
+     }
+ 
+-    // Libraries that are required when mesa drivers are dynamically loaded.
+-    jail_mount_bind_if_exists(
+-        &mut jail,
+-        &[
+-            "/usr/lib",
+-            "/usr/lib64",
+-            "/lib",
+-            "/lib64",
+-            "/usr/share/drirc.d",
+-            "/usr/share/glvnd",
+-            "/usr/share/libdrm",
+-            "/usr/share/vulkan",
+-        ],
+-    )?;
++    if bind_host_graphics_libs {
++        // Libraries that are required when mesa drivers are dynamically loaded.
++        jail_mount_bind_if_exists(
++            &mut jail,
++            &[
++                "/usr/lib",
++                "/usr/lib64",
++                "/lib",
++                "/lib64",
++                "/usr/share/drirc.d",
++                "/usr/share/glvnd",
++                "/usr/share/libdrm",
++                "/usr/share/vulkan",
++            ],
++        )?;
++    }
+ 
+     // pvr driver requires read access to /proc/self/task/*/comm.
+     mount_proc(&mut jail)?;
