@@ -38,6 +38,12 @@ Environment:
                         first build sees ~no benefit. Default: 1
   CCACHE_DIR            ccache directory. Default: $HOME/.ccache
   CCACHE_MAX_SIZE       ccache size cap (ccache -M). Default: 50G
+  ARM64_PREBUILT_CACHE_DIR
+                        Persistent cache for downloaded ARM64 host prebuilts
+                        such as Rust dist tarballs and JDK archives. Also used
+                        as scratch space for git-based prebuilt installs.
+                        Default:
+                        $HOME/ika-build/arm64-prebuilts
   LINEAGE_BRANCH        LineageOS branch. Default: lineage-23.2
   ANDROID_MANIFEST_URL  Manifest repository. Default: LineageOS/android.git
   MANIFEST_URL          Fallback overlay manifest URL.

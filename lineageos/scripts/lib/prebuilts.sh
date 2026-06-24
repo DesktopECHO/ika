@@ -5,6 +5,19 @@
 # bridge, and verification helpers. Source only (defines functions). ARM64
 # fetchers self-gate on host_is_arm64. Relies on engine globals + core primitives.
 
+arm64_prebuilt_cache_subdir() {
+  local subdir="$1"
+  local base="${arm64_prebuilt_cache_dir:-$HOME/ika-build/arm64-prebuilts}"
+  local dir
+
+  [[ -n "$base" && "$base" != "/" ]] || \
+    die "unsafe ARM64_PREBUILT_CACHE_DIR: $base"
+
+  dir="$base/$subdir"
+  mkdir -p "$dir"
+  printf '%s\n' "$dir"
+}
+
 ensure_arm64_go_prebuilt() {
   host_is_arm64 || return 0
   if [[ -x "$workspace/prebuilts/go/linux-arm64/bin/go" ]]; then
@@ -13,7 +26,7 @@ ensure_arm64_go_prebuilt() {
   fi
 
   local cache_dir tmp_dir dest_dir
-  cache_dir="$workspace/out/lineage-desktop/go-prebuilts"
+  cache_dir="$(arm64_prebuilt_cache_subdir go)"
   dest_dir="$workspace/prebuilts/go/linux-arm64"
 
   mkdir -p "$cache_dir"
@@ -227,7 +240,7 @@ clone_clang_prebuilt_repo() {
   local payload_name="${5:-}"
   local cache_dir tmp_dir clang_dir
 
-  cache_dir="$workspace/out/lineage-desktop/clang-prebuilts"
+  cache_dir="$(arm64_prebuilt_cache_subdir clang)"
   mkdir -p "$cache_dir"
   tmp_dir="$(mktemp -d "$cache_dir/$host_tag.XXXXXX")"
   log "cloning $host_tag Clang prebuilt: $git_url ($git_ref)" >&2
@@ -635,7 +648,7 @@ ensure_arm64_native_cmake_prebuilt() {
     return 0
   fi
 
-  cache_dir="$workspace/out/lineage-desktop/cmake-prebuilts"
+  cache_dir="$(arm64_prebuilt_cache_subdir cmake)"
   mkdir -p "$cache_dir"
   tmp_dir="$(mktemp -d "$cache_dir/linux-arm64.XXXXXX")"
   log "cloning ARM64 CMake prebuilt: $arm64_cmake_prebuilt_git_url ($arm64_cmake_prebuilt_git_ref)"
@@ -676,7 +689,7 @@ ensure_arm64_native_jdk21_prebuilt() {
     log "warning: ignoring ARM64 JDK prebuilt with unexpected jlink version '$version'"
   fi
 
-  cache_dir="$workspace/out/lineage-desktop/jdk21-prebuilts"
+  cache_dir="$(arm64_prebuilt_cache_subdir jdk21)"
   archive="$cache_dir/jdk21-linux-arm64.tar.gz"
   mkdir -p "$cache_dir"
 
@@ -740,7 +753,7 @@ ensure_arm64_jdk8_prebuilt() {
     log "warning: ignoring ARM64 JDK 8 prebuilt with unexpected java version '$version'"
   fi
 
-  cache_dir="$workspace/out/lineage-desktop/jdk8-prebuilts"
+  cache_dir="$(arm64_prebuilt_cache_subdir jdk8)"
   archive="$cache_dir/jdk8-linux-arm64.tar.gz"
   mkdir -p "$cache_dir"
 
@@ -1038,7 +1051,7 @@ install_arm64_prebuilt_from_archive() {
   local label="$4"
   local cache_dir archive_path tmp_dir
 
-  cache_dir="$workspace/out/lineage-desktop/arm64-prebuilts"
+  cache_dir="$(arm64_prebuilt_cache_subdir archives)"
   archive_path="$(download_arm64_prebuilt_archive "$archive_source" "$cache_dir" "$label")"
   tmp_dir="$(mktemp -d "$cache_dir/extract.XXXXXX")"
   extract_arm64_prebuilt_archive "$archive_path" "$tmp_dir"
@@ -1055,7 +1068,7 @@ install_arm64_prebuilt_from_git() {
   local cache_dir tmp_dir
   local -a clone_args
 
-  cache_dir="$workspace/out/lineage-desktop/arm64-prebuilts"
+  cache_dir="$(arm64_prebuilt_cache_subdir git)"
   mkdir -p "$cache_dir"
   tmp_dir="$(mktemp -d "$cache_dir/git.XXXXXX")"
   clone_args=(--depth=1)
@@ -1077,7 +1090,7 @@ prepare_arm64_rust_upstream_component() {
   local probe="$2"
   local cache_dir archive extract_dir root
 
-  cache_dir="$workspace/out/lineage-desktop/arm64-prebuilts/rust"
+  cache_dir="$(arm64_prebuilt_cache_subdir rust)"
   archive="$cache_dir/$component.tar.xz"
   extract_dir="$cache_dir/extract-$component"
   root="$extract_dir/$component"
@@ -1093,7 +1106,10 @@ prepare_arm64_rust_upstream_component() {
   if [[ ! -e "$root/$probe" ]]; then
     rm -rf "$extract_dir"
     mkdir -p "$extract_dir"
-    tar -xf "$archive" -C "$extract_dir"
+    tar -xf "$archive" -C "$extract_dir" || {
+      rm -rf "$extract_dir" "$archive"
+      die "failed to extract ARM64 Rust upstream component archive: $archive"
+    }
   fi
   [[ -e "$root/$probe" ]] || \
     die "ARM64 Rust upstream component is incomplete: $archive"
@@ -1115,7 +1131,7 @@ install_arm64_rust_from_upstream_dist() {
     "rust-std-$version-aarch64-unknown-linux-musl" \
     "rust-std-aarch64-unknown-linux-musl/lib/rustlib/aarch64-unknown-linux-musl/lib")"
 
-  cache_dir="$workspace/out/lineage-desktop/arm64-prebuilts/rust"
+  cache_dir="$(arm64_prebuilt_cache_subdir rust)"
   install_dir="$(mktemp -d "$cache_dir/install.XXXXXX")"
   "$gnu_root/install.sh" --prefix="$install_dir" --disable-ldconfig >/dev/null
   "$musl_root/install.sh" --prefix="$install_dir" --disable-ldconfig >/dev/null
