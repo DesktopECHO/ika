@@ -231,11 +231,12 @@ if [[ -f "${PACKAGED_SCRCPY_SERVER}" ]]; then
   SCRCPY_SERVER_PATH_OVERRIDE="${PACKAGED_SCRCPY_SERVER}"
 fi
 SCRCPY_DPI=""
-GFXSTREAM_VULKAN_MODE="${IKA_GFXSTREAM_VULKAN:-auto}"
+GFXSTREAM_VULKAN_MODE="${GFXSTREAM_VULKAN:-auto}"
 GFXSTREAM_GLES_CONTEXT_TYPES="gfxstream-gles:gfxstream-composer"
 GFXSTREAM_VULKAN_CONTEXT_TYPES="gfxstream-gles:gfxstream-vulkan:gfxstream-composer"
 CVD_GRAPHICS_DRIVER_MESSAGE=""
 CVD_DATA_STORAGE_MESSAGE=""
+CVD_NEWLY_PROVISIONED="false"
 
 CVD_PROCESS_REGEX='(^|/)(cvd_internal_start|launch_cvd|run_cvd|crosvm|process_restarter|raw_frame_streamer|socket_vsock_proxy|wmediumd)([[:space:]]|$)'
 
@@ -362,16 +363,16 @@ parse_start_options() {
         fullscreen_mode_ref="true"
         shift
         ;;
-      --gfxstream-vulkan=*)
+      --gfxstream_vulkan=*)
         GFXSTREAM_VULKAN_MODE="$(normalize_gfxstream_vulkan_mode "${1#*=}")"
-        export IKA_GFXSTREAM_VULKAN="${GFXSTREAM_VULKAN_MODE}"
+        export GFXSTREAM_VULKAN="${GFXSTREAM_VULKAN_MODE}"
         shift
         ;;
-      --gfxstream-vulkan)
+      --gfxstream_vulkan)
         shift
-        [[ $# -gt 0 ]] || die "--gfxstream-vulkan requires a value: auto, on, or off"
+        [[ $# -gt 0 ]] || die "--gfxstream_vulkan requires a value: auto, on, or off"
         GFXSTREAM_VULKAN_MODE="$(normalize_gfxstream_vulkan_mode "$1")"
-        export IKA_GFXSTREAM_VULKAN="${GFXSTREAM_VULKAN_MODE}"
+        export GFXSTREAM_VULKAN="${GFXSTREAM_VULKAN_MODE}"
         shift
         ;;
       --data_gb=*)
@@ -384,6 +385,18 @@ parse_start_options() {
         [[ $# -gt 0 ]] || die "--data_gb requires a value"
         DATA_GB="$(normalize_data_gb "$1")"
         export DATA_GB
+        shift
+        ;;
+      --ika_scrcpy=*)
+        IKA_SCRCPY="${1#*=}"
+        export IKA_SCRCPY
+        shift
+        ;;
+      --ika_scrcpy)
+        shift
+        [[ $# -gt 0 ]] || die "--ika_scrcpy requires a value"
+        IKA_SCRCPY="$1"
+        export IKA_SCRCPY
         shift
         ;;
       *)
@@ -435,28 +448,31 @@ usage() {
 
 Usage:
 
-  ${SCRIPT_NAME} start [-f|--fullscreen] [--gfxstream-vulkan=auto|on|off] [--data_gb=GB] [--setting=arg] ...
+  ${SCRIPT_NAME} start [-f|--fullscreen] [--gfxstream_vulkan=auto|on|off] [--data_gb=GB] [--ika_scrcpy=ARGS] [--setting=arg] ...
   ${SCRIPT_NAME} stop
-  ${SCRIPT_NAME} restart [-f|--fullscreen] [--gfxstream-vulkan=auto|on|off] [--data_gb=GB] ...
+  ${SCRIPT_NAME} restart [-f|--fullscreen] [--gfxstream_vulkan=auto|on|off] [--data_gb=GB] [--ika_scrcpy=ARGS] ...
   ${SCRIPT_NAME} reset [Delete everything and start fresh]
 
 Example:
 
   ${SCRIPT_NAME} start --gpu_mode=guest_swiftshader --cpus=2 --memory_mb=2048 --dpi=240 --fullscreen
   ${SCRIPT_NAME} start --data_gb=128
-  ${SCRIPT_NAME} restart --gfxstream-vulkan=on
+  ${SCRIPT_NAME} restart --gfxstream_vulkan=on
+  ${SCRIPT_NAME} restart --ika_scrcpy="--no-clipboard-autosync"
 
 Environment:
 
-  IKA_GFXSTREAM_VULKAN
-                         auto, on, or off. auto disables gfxstream Vulkan
+  GFXSTREAM_VULKAN       auto, on, or off. auto disables gfxstream Vulkan
                          only on Apple Silicon 16K-page hosts or when the
                          primary host Vulkan device is llvmpipe; on forces
                          GLES+Vulkan; off forces GLES-only gfxstream.
   DATA_GB                Size of the next fresh userdata image, in GB.
                          Existing VM data must be reset first.
-  IKA_SCRCPY_EXTRA_ARGS  Extra whitespace-separated args appended to scrcpy
+  IKA_SCRCPY             Extra whitespace-separated args appended to scrcpy.
+                         Equivalent command-line option: --ika_scrcpy=ARGS
                          (example: --keyboard=uhid --no-clipboard-autosync)
+
+  NOTE: All other parameters are passed directly to Cuttlefish.
 
 EOF
 }
@@ -1007,6 +1023,7 @@ append_data_storage_args() {
   local requested_data_gb="${DATA_GB:-}"
   local data_gb
   local data_mb
+  local has_existing_userdata_state="false"
   local explicit_data_policy="false"
   local explicit_data_size="false"
 
@@ -1017,7 +1034,11 @@ append_data_storage_args() {
     explicit_data_size="true"
   fi
 
-  if [[ "${explicit_data_policy}" != "true" ]] && instance_has_userdata_state; then
+  if instance_has_userdata_state; then
+    has_existing_userdata_state="true"
+  fi
+
+  if [[ "${explicit_data_policy}" != "true" && "${has_existing_userdata_state}" == "true" ]]; then
     if [[ -n "${requested_data_gb}" ]]; then
       CVD_DATA_STORAGE_MESSAGE="Ignored userdata resize; you must reset the instance first: 'ika reset'"
       log "DATA_GB=${requested_data_gb} requested, but existing userdata state is present; run '${SCRIPT_NAME} reset' before the next start to apply it."
@@ -1035,6 +1056,8 @@ append_data_storage_args() {
   if [[ "${explicit_data_size}" != "true" ]]; then
     args_array+=("--blank_data_image_mb=${data_mb}")
   fi
+
+  CVD_NEWLY_PROVISIONED="true"
 
   if [[ -n "${requested_data_gb}" ]]; then
     CVD_DATA_STORAGE_MESSAGE="Provisioning ${data_gb} GB userdata..."
@@ -1309,6 +1332,16 @@ adb_boot_completed() {
   [[ "${boot_completed}" == "1" ]]
 }
 
+sync_android_filesystems() {
+  local adb_serial="$1"
+
+  [[ -x "${CVD_ADB_BIN}" ]] || return 0
+
+  if ! "${CVD_ADB_BIN}" -s "${adb_serial}" shell sync >/dev/null 2>&1; then
+    log "Android filesystem sync failed or device is unavailable; continuing stop."
+  fi
+}
+
 wait_for_boot() {
   local launcher_log="$1"
   local deadline="$2"
@@ -1341,9 +1374,7 @@ wait_for_boot() {
 ensure_chromium_before_scrcpy() {
   local adb_serial="$1"
 
-  if [[ -f "${CHROMIUM_INSTALL_STAMP}" ]] \
-      && grep -F "Preserving: ${CVD_INSTANCE_DIR}/overlay.img" "${CVD_LAUNCHER_LOG}" >/dev/null 2>&1; then
-    log "Chromium install stamp found and Cuttlefish preserved overlay.img; skipping getchromium."
+  if [[ "${CVD_NEWLY_PROVISIONED}" != "true" ]]; then
     return 0
   fi
 
@@ -1395,8 +1426,8 @@ start_scrcpy_with_retries() {
   scrcpy_cmd+=(--cuttlefish-frames-socket="${cuttlefish_frames_socket}")
   log "scrcpy video source: raw Cuttlefish frames (${cuttlefish_frames_socket})"
 
-  if [[ -n "${IKA_SCRCPY_EXTRA_ARGS:-}" ]]; then
-    read -r -a scrcpy_extra_args <<<"${IKA_SCRCPY_EXTRA_ARGS}"
+  if [[ -n "${IKA_SCRCPY:-}" ]]; then
+    read -r -a scrcpy_extra_args <<<"${IKA_SCRCPY}"
     if [[ "${#scrcpy_extra_args[@]}" -gt 0 ]]; then
       log "using extra scrcpy args: $(shell_join "${scrcpy_extra_args[@]}")"
       scrcpy_cmd+=("${scrcpy_extra_args[@]}")
@@ -1616,6 +1647,7 @@ start_cvd() {
 stop_cvd_internal() {
   local clear_instance_dirs="${1:-false}"
   shift || true
+  local adb_serial
   local stop_ok="false"
   local -a run_with_args=()
   local -a stop_args=()
@@ -1626,6 +1658,11 @@ stop_cvd_internal() {
   stop_args+=("$@")
 
   require_executable "${CVD_STOP_BIN}" "cvd stop helper"
+
+  if [[ "${clear_instance_dirs}" != "true" ]] && has_live_cvd_processes; then
+    adb_serial="$(resolve_adb_serial)"
+    sync_android_filesystems "${adb_serial}"
+  fi
 
   if [[ -f "${CVD_CONFIG_PATH}" ]]; then
     run_with_args+=(--config "${CVD_CONFIG_PATH}")

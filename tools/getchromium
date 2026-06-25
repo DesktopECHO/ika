@@ -13,7 +13,7 @@ import xml.etree.ElementTree as ET
 STORAGE_URL = "https://commondatastorage.googleapis.com/chromium-browser-snapshots"
 DOWNLOAD_CACHE_DIR = "/tmp"
 DOWNLOAD_BASENAME = "chrome-android-desktop"
-DOWNLOAD_PROGRESS_DOT_PERCENT = 10
+DOWNLOAD_PROGRESS_DOT_PERCENT = 20
 DOWNLOAD_PROGRESS_UNKNOWN_CHUNKS = 2
 ARCH_DETECT_ATTEMPTS = 10
 ARCH_DETECT_RETRY_SECONDS = 0.5
@@ -78,7 +78,6 @@ def poll_until(predicate, attempts, interval_seconds):
     return False
 
 def set_chromium_default_browser():
-    print("Setting Chromium as the default browser...")
     verify_chromium_installed()
     for package_name in STOCK_BROWSER_PACKAGES:
         run_adb_best_effort(
@@ -202,22 +201,21 @@ def provision_chromium_first_run():
 
     if tap_ui_text(FIRST_RUN_SIGNED_OUT_TEXT, 20):
         print("Finalizing setup...")
-        if tap_ui_text(DEFAULT_BROWSER_CANCEL_TEXT, 10):
-            print("Dismissed default-browser prompt.")
+        tap_ui_text(DEFAULT_BROWSER_CANCEL_TEXT, 10)
         return
-
-    print("No Chromium first-run prompt detected.")
 
 def relaunch_chromium_cycles():
     close_chromium()
     for _ in range(CHROMIUM_RELAUNCH_CYCLES):
         launch_chromium()
-        if not poll_until(chromium_resumed, CHROMIUM_RESUMED_CHECK_ATTEMPTS, CHROMIUM_RESUMED_CHECK_RETRY_SECONDS):
-            print("Chromium activity did not reach the foreground; continuing.")
+        poll_until(chromium_resumed, CHROMIUM_RESUMED_CHECK_ATTEMPTS, CHROMIUM_RESUMED_CHECK_RETRY_SECONDS)
         # Resuming only means it foregrounded; dwell so Chromium actually
         # writes its first-run state before we stop it.
         time.sleep(CHROMIUM_SETTLE_SECONDS)
         close_chromium()
+
+def sync_device_storage():
+    run_adb(["shell", "sync"])
 
 def chromium_snapshot_prefix_for_abi(abi):
     if "arm64" in abi:
@@ -227,8 +225,6 @@ def chromium_snapshot_prefix_for_abi(abi):
     return None
 
 def detect_prefix():
-    sys.stdout.write("Detecting device architecture... ")
-    sys.stdout.flush()
     abi = ""
     last_error = ""
     prefix = None
@@ -254,17 +250,12 @@ def detect_prefix():
             print(f"Last error: {last_error}")
         sys.exit(1)
 
-    print(prefix)
     return prefix
 
 def fetch_latest_revision(prefix):
-    sys.stdout.write(f"Fetching latest revision for {prefix}... ")
-    sys.stdout.flush()
-
     r = requests.get(f"{STORAGE_URL}/{prefix}/LAST_CHANGE")
     r.raise_for_status()
     revision = r.text.strip()
-    print(revision)
 
     return revision
 
@@ -291,7 +282,6 @@ def find_cached_zip(prefix):
                     return zip_path
         except zipfile.BadZipFile:
             pass
-        print(f"Ignoring invalid cached zip: {zip_path}")
     return None
 
 def download_zip_if_needed(download_url, zip_path, revision):
@@ -300,16 +290,14 @@ def download_zip_if_needed(download_url, zip_path, revision):
             with zipfile.ZipFile(zip_path, "r") as z:
                 bad_file = z.testzip()
             if bad_file is None:
-                print(f"Using cached build {revision}: {zip_path}")
                 return
-            print(f"Cached zip is corrupt at {bad_file}; re-downloading.")
         except zipfile.BadZipFile:
-            print("Cached zip is invalid; re-downloading.")
+            pass
 
     os.makedirs(os.path.dirname(zip_path), exist_ok=True)
     partial_zip = f"{zip_path}.part"
 
-    sys.stdout.write("Downloading")
+    sys.stdout.write("Downloading Chromium nightly for desktop")
     sys.stdout.flush()
     with requests.get(download_url, stream=True) as r:
         r.raise_for_status()
@@ -334,7 +322,7 @@ def download_zip_if_needed(download_url, zip_path, revision):
                     sys.stdout.write(".")
                     sys.stdout.flush()
     os.replace(partial_zip, zip_path)
-    print(f" done: {zip_path}")
+    print(f" done: {os.path.basename(zip_path)}")
 
 def main():
     extracted_dir = "/tmp/chrome_extracted_content"
@@ -344,12 +332,9 @@ def main():
             write_chromium_stamp()
             return
 
-        print("Chromium first-run, install will take a moment.")
         prefix = detect_prefix()
         temp_zip = find_cached_zip(prefix)
-        if temp_zip:
-            print(f"Using existing cached build: {temp_zip}")
-        else:
+        if not temp_zip:
             revision = fetch_latest_revision(prefix)
             download_url = f"{STORAGE_URL}/{prefix}/{revision}/chrome-android-desktop.zip"
             temp_zip = cached_zip_path(prefix, revision)
@@ -392,17 +377,10 @@ def main():
             print(f"Found files: {all_apks}")
             return
 
-        print(f"Selected APK {os.path.basename(target_apk)} from {len(all_apks)} APK(s)")
-
-        sys.stdout.write("Installing to device... ")
-        sys.stdout.flush()
         # -r: replace, -d: allow downgrade, -g: grant all permissions
         install_output = run_adb(["install", "-r", "-d", "-g", target_apk])
         install_lines = install_output.splitlines()
-        if install_lines and install_lines[-1] == "Success":
-            print("Success")
-        else:
-            print("done")
+        if not (install_lines and install_lines[-1] == "Success"):
             if install_output:
                 print(install_output)
         verify_chromium_installed()
@@ -411,7 +389,7 @@ def main():
         disable_stock_browsers()
         provision_chromium_first_run()
         relaunch_chromium_cycles()
-        print("Installation Successful!")
+        sync_device_storage()
 
     except Exception as e:
         print(f"\n!!! An unexpected error occurred: {e}")

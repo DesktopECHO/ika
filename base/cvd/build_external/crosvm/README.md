@@ -7,7 +7,7 @@ Patches applied to upstream [crosvm](https://chromium.googlesource.com/crosvm/cr
 ### gfxstream Vulkan policy
 
 Gfxstream Vulkan is controlled by the packaged `ika` launcher instead:
-`ika start --gfxstream-vulkan=auto|off|on` maps to Cuttlefish
+`ika start --gfxstream_vulkan=auto|off|on` maps to Cuttlefish
 `--gpu_context_types=...` when `--gpu_mode=gfxstream` is used. The default
 `auto` policy disables gfxstream Vulkan only on Apple Silicon hosts with
 16 KiB pages and leaves x86_64 behavior unchanged.

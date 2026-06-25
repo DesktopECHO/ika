@@ -23,7 +23,7 @@ cd ika
 #    applies the overlay and source patches in lineageos/, builds the
 #    Cuttlefish target for the host arch, and creates RPM or Debian packages.
 #    Incremental runs are much faster.
-./ika-build --auto-install
+./ika-build
 
 # 3. Reboot.
 #    Required so group memberships, limits, udev rules, and device permissions
@@ -44,11 +44,11 @@ sessions.
 Once you have an initial build, use the narrowest command that matches the work
 you changed:
 
-- **Full build + install** — re-run `./ika-build --auto-install`. Extra
+- **Full build + install** — re-run `./ika-build` and accept the install prompt. Extra
   arguments are forwarded to the ROM build, for example
-  `./ika-build --auto-install x86_64`.
-- **Install existing packages only** — run `./ika-build --install-only`. This
-  skips ROM and package builds, assumes yes to installation, and installs the
+  `./ika-build x86_64`.
+- **Install package files only** — run `./ika-build --install-packages`. This
+  does not build source, assumes yes to installation, and installs the
   existing `ika-base`, `ika-scrcpy`, and `ika-lineageos` packages using `dnf`
   or `apt` as appropriate.
 - **ROM only** — re-run `./lineageos/scripts/build_lineageos_desktop.sh` (or
@@ -60,7 +60,7 @@ you changed:
   package metadata under `base/rpm/`, `base/debian/`, `frontend/rpm/`, or
   `frontend/debian/`, or whenever you've finished a fresh ROM rebuild and want
   to repackage `ika-lineageos` with the new contents. Then run
-  `./ika-build --install-only` to install the package outputs.
+  `./ika-build --install-packages` to install the package outputs.
 
 See [lineageos/README.md](lineageos/README.md) for ROM-build options (target
 subsets, microG release pinning, native-bridge sources, workspace overrides)
@@ -89,7 +89,7 @@ ika reset
 ika restart --gpu_mode=gfxstream --cpus=8 --memory_mb=8192
 
 # Temporarily enable gfxstream Vulkan on Apple Silicon for testing
-ika restart --gfxstream-vulkan=on
+ika restart --gfxstream_vulkan=on
 
 # Use a 128 GiB userdata image on first start after reset
 ika reset
@@ -127,9 +127,9 @@ new size by resetting first and then starting with the override.
 `ika` has a launcher-level switch for the gfxstream Vulkan context:
 
 ```bash
-ika start --gfxstream-vulkan=auto
-ika restart --gfxstream-vulkan=off
-ika restart --gfxstream-vulkan=on
+ika start --gfxstream_vulkan=auto
+ika restart --gfxstream_vulkan=off
+ika restart --gfxstream_vulkan=on
 ```
 
 `auto` is the default. On Apple Silicon hosts with 16 KiB pages, or when the
@@ -138,9 +138,9 @@ primary host Vulkan device is llvmpipe, `auto` requests GLES-only gfxstream
 Cuttlefish gfxstream defaults alone, so x86_64 systems with hardware Vulkan keep
 Vulkan enabled.
 
-Use `--gfxstream-vulkan=on` to re-enable gfxstream Vulkan for testing, or
-`--gfxstream-vulkan=off` to force GLES-only gfxstream. The same policy can be
-set with `IKA_GFXSTREAM_VULKAN=auto|off|on`; an explicit
+Use `--gfxstream_vulkan=on` to re-enable gfxstream Vulkan for testing, or
+`--gfxstream_vulkan=off` to force GLES-only gfxstream. The same policy can be
+set with `GFXSTREAM_VULKAN=auto|off|on`; an explicit
 `--gpu_context_types=...` argument takes precedence.
 
 ## Host Packages

@@ -33,7 +33,7 @@ readonly PRIMARY_PACKAGES=(ika-base ika-scrcpy ika-lineageos)
 
 auto_yes=false
 do_install=true
-install_only=false
+install_packages=false
 removed_existing=false
 declare -a rom_args=()
 declare -a pkg_files=()
@@ -43,23 +43,20 @@ privileged_preflight_active=false
 
 usage() {
   cat <<EOF
-Usage: ./ika-build [options] [rom-build-args...]
+Usage: ./ika-build [options] [all|arm64|x86_64]...
 
 Prepares LineageOS signing certificates, installs build dependencies, builds
 the ROM and host packages, then offers to install ${PRIMARY_PACKAGES[*]}.
 
 Options:
-      --auto-install
-                   Install the built packages without prompting.
-      --install-only
-                   Skip ROM and package builds; install existing packages
-                   without prompting.
+      --install-packages
+                   Do not build source; install existing package files
+                   without prompting (if they exist.)
       --skip-install
                    Build only; do not offer to install.
   -h, --help       Show this help and exit.
 
-Any remaining arguments are forwarded to ${ROM_BUILD}
-(for example 'x86_64' or 'arm64' to build a single target).
+Optional ROM target arguments limit the build to all, arm64, and/or x86_64.
 EOF
 }
 
@@ -286,34 +283,61 @@ cleanup_privileged_preflight_on_exit() {
   exit "$status"
 }
 
+add_rom_arg() {
+  case "$1" in
+    all|arm64|x86_64)
+      rom_args+=("$1")
+      ;;
+    -*)
+      echo "Unrecognized option: $1" >&2
+      echo "Run ./ika-build --help for usage." >&2
+      exit 1
+      ;;
+    *)
+      echo "Unrecognized argument: $1" >&2
+      echo "Supported ROM targets are: all, arm64, x86_64." >&2
+      exit 1
+      ;;
+  esac
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --auto-install)  auto_yes=true; shift ;;
-    --install-only)  install_only=true; shift ;;
+    --install-packages) install_packages=true; shift ;;
     --skip-install)  do_install=false; shift ;;
     -h|--help)       usage; exit 0 ;;
-    --)              shift; rom_args+=("$@"); break ;;
-    *)               rom_args+=("$1"); shift ;;
+    --)
+      shift
+      while [[ $# -gt 0 ]]; do
+        add_rom_arg "$1"
+        shift
+      done
+      break
+      ;;
+    *)
+      add_rom_arg "$1"
+      shift
+      ;;
   esac
 done
 
-if [[ "${install_only}" == true && "${do_install}" != true ]]; then
-  echo "--install-only and --skip-install cannot be used together." >&2
+if [[ "${install_packages}" == true && "${do_install}" != true ]]; then
+  echo "--install-packages and --skip-install cannot be used together." >&2
   exit 1
 fi
 
-if [[ "${install_only}" == true && ${#rom_args[@]} -gt 0 ]]; then
-  echo "--install-only does not accept ROM build arguments." >&2
+if [[ "${install_packages}" == true && ${#rom_args[@]} -gt 0 ]]; then
+  echo "--install-packages does not accept ROM build arguments." >&2
   exit 1
 fi
 
-if [[ "${install_only}" == true ]]; then
+if [[ "${install_packages}" == true ]]; then
   auto_yes=true
 fi
 
 family="$(detect_distro_family)"
 
-if [[ "${install_only}" != true ]]; then
+if [[ "${install_packages}" != true ]]; then
   if signing_keys_already_configured; then
     banner "LineageOS signing certificates already configured"
   else
@@ -345,7 +369,10 @@ if [[ "${install_only}" != true ]]; then
   banner $'Building the LineageOS Desktop ROM\n    NOTE: First run will take a long time, 3 to 6+ hours.'
   echo
   sleep 2
-  "${ROM_BUILD}" "${rom_args[@]}"
+  if ! "${ROM_BUILD}" "${rom_args[@]}"; then
+    echo "LineageOS Desktop ROM build failed; not building host packages." >&2
+    exit 1
+  fi
   cleanup_lineageos_privileged_host
   privileged_preflight_active=false
   trap - EXIT
