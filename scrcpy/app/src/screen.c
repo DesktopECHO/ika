@@ -28,7 +28,7 @@
 #define RAW_FRAME_RESIZE_THROTTLE_WINDOW SC_TICK_FROM_MS(1000)
 #define RAW_FRAME_RESIZE_RENDER_INTERVAL SC_TICK_FROM_MS(33)
 // Minimum window size at display content scale 1.0; scaled at runtime on HiDPI.
-#define SC_WINDOW_MIN_WIDTH 540
+#define SC_WINDOW_MIN_WIDTH 360
 #define SC_WINDOW_MIN_HEIGHT 540
 // Resize-border thickness in logical points at content scale 1.0; scaled by the
 // window's display content scale so it grows on HiDPI/retina displays.
@@ -43,32 +43,31 @@
 //   _STEP  - pixel scale for the sample offsets. Larger = wider blur.
 //   _ALPHA - per-ghost alpha (0-255) at full intensity. Scaled down as the
 //            fade decays so the blur softly disappears.
-#define FLEX_DISPLAY_BLUR_STEP 1.55f
-#define FLEX_DISPLAY_BLUR_ALPHA 4
+#define FLEX_DISPLAY_BLUR_STEP 2.15f
+#define FLEX_DISPLAY_BLUR_ALPHA 5
 // Blur fade-in duration while the resize is unsettled. This ramps the ghost
 // overlay in gradually instead of snapping to full blur as soon as the window
 // changes size.
 #define FLEX_DISPLAY_BLUR_FADE_IN_DURATION SC_TICK_FROM_MS(125)
 // Keep the captured preview fully opaque for a brief moment after release so
 // a one-frame transitional live buffer is not revealed underneath the fade.
-#define FLEX_DISPLAY_PREVIEW_REVEAL_DELAY SC_TICK_FROM_MS(250)
+#define FLEX_DISPLAY_PREVIEW_REVEAL_DELAY SC_TICK_FROM_MS(650)
 // Blur fade-out duration. When the resize hold releases, the blur ghost intensity
 // decays linearly to 0.0 over this period rather than snapping off in one
 // frame. The underlying texture has already been swapped to the new content by
 // the time the fade begins, so the fade reveals the new content sharpening up.
-#define FLEX_DISPLAY_BLUR_FADE_OUT_DURATION SC_TICK_FROM_MS(250)
+#define FLEX_DISPLAY_BLUR_FADE_OUT_DURATION SC_TICK_FROM_MS(450)
 // Tick interval driving the fade animation; ~60 Hz is enough for a smooth
 // linear ramp without burning CPU.
 #define FLEX_DISPLAY_BLUR_FADE_INTERVAL_MS 16
 
-// Duration of the fade-from-black once the window has settled.
-#define SC_WINDOW_FADE_IN_DURATION SC_TICK_FROM_MS(600)
-// Minimum time the window is held black after first show, giving the
-// flex_display resize dance time to engage before it is judged "settled".
-#define SC_WINDOW_FADE_IN_HOLD_GRACE SC_TICK_FROM_MS(1000)
-// Safety cap: begin the fade even if the resize never reports settled, so the
-// window can never stay black indefinitely.
-#define SC_WINDOW_FADE_IN_MAX_HOLD SC_TICK_FROM_MS(5000)
+// Hold the prepared window black for at least this long before fading in.
+#define SC_WINDOW_FADE_IN_HOLD SC_TICK_FROM_MS(1500)
+// Duration of the fade-from-black once the prepared window is revealed.
+#define SC_WINDOW_FADE_IN_DURATION SC_TICK_FROM_MS(500)
+// Safety cap: begin the fade even if flex_display never reports settled, so
+// the window can never stay black indefinitely.
+#define SC_WINDOW_FADE_IN_MAX_HOLD SC_TICK_FROM_MS(3000)
 
 #define DOWNCAST(SINK) container_of(SINK, struct sc_screen, frame_sink)
 
@@ -96,6 +95,11 @@ get_oriented_size(struct sc_size size, enum sc_orientation orientation) {
         oriented_size.height = size.height;
     }
     return oriented_size;
+}
+
+static inline bool
+sc_size_is_valid(struct sc_size size) {
+    return size.width && size.height;
 }
 
 static inline bool
@@ -384,6 +388,18 @@ sc_screen_is_relative_mode(struct sc_screen *screen) {
     return screen->im.mp && screen->im.mp->relative_mode;
 }
 
+static inline float
+sc_screen_smoothstep(float value) {
+    if (value <= 0.0f) {
+        return 0.0f;
+    }
+    if (value >= 1.0f) {
+        return 1.0f;
+    }
+
+    return value * value * (3.0f - 2.0f * value);
+}
+
 static void
 compute_content_rect(struct sc_size render_size, struct sc_size content_size,
                      bool can_upscale, enum sc_render_fit render_fit,
@@ -528,6 +544,9 @@ static void
 sc_screen_start_blur_animation_timer(struct sc_screen *screen);
 static bool
 sc_screen_render_texture(struct sc_screen *screen, const SDL_FRect *geometry);
+static bool
+sc_screen_render_texture_with_alpha(struct sc_screen *screen,
+                                    const SDL_FRect *geometry, float alpha);
 static void
 sc_screen_destroy_resize_preview(struct sc_screen *screen);
 static bool
@@ -537,6 +556,10 @@ sc_screen_render_resize_preview(struct sc_screen *screen,
                                 const SDL_FRect *geometry,
                                 float alpha,
                                 float intensity);
+static bool
+sc_screen_render_blurred_stretch(struct sc_screen *screen,
+                                 const SDL_FRect *geometry,
+                                 float intensity, float alpha);
 static void
 sc_screen_note_display_ready_raw_frame(struct sc_screen *screen);
 static bool
@@ -646,6 +669,44 @@ sc_screen_render_texture(struct sc_screen *screen, const SDL_FRect *geometry) {
                                     NULL, flip);
 }
 
+static bool
+sc_screen_render_texture_with_alpha(struct sc_screen *screen,
+                                    const SDL_FRect *geometry, float alpha) {
+    if (alpha <= 0.0f) {
+        return true;
+    }
+    if (alpha >= 1.0f) {
+        return sc_screen_render_texture(screen, geometry);
+    }
+
+    SDL_Texture *texture = screen->tex.texture;
+    SDL_BlendMode previous_blend_mode = SDL_BLENDMODE_BLEND;
+    bool got_blend_mode = SDL_GetTextureBlendMode(texture,
+                                                  &previous_blend_mode);
+    Uint8 previous_alpha = 255;
+    bool got_alpha = SDL_GetTextureAlphaMod(texture, &previous_alpha);
+
+    bool ok = SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+    Uint8 texture_alpha = (Uint8) (255.0f * alpha + 0.5f);
+    ok &= SDL_SetTextureAlphaMod(texture, texture_alpha);
+    if (ok) {
+        ok &= sc_screen_render_texture(screen, geometry);
+    }
+
+    if (got_alpha) {
+        SDL_SetTextureAlphaMod(texture, previous_alpha);
+    } else {
+        SDL_SetTextureAlphaMod(texture, 255);
+    }
+    if (got_blend_mode) {
+        SDL_SetTextureBlendMode(texture, previous_blend_mode);
+    } else {
+        SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_NONE);
+    }
+
+    return ok;
+}
+
 static void
 sc_screen_destroy_resize_preview(struct sc_screen *screen) {
     if (screen->resize_preview_texture) {
@@ -656,27 +717,33 @@ sc_screen_destroy_resize_preview(struct sc_screen *screen) {
     screen->resize_preview_size.height = 0;
 }
 
+enum sc_resize_preview_mode {
+    SC_RESIZE_PREVIEW_CONTENT,
+    SC_RESIZE_PREVIEW_WINDOW,
+};
+
+static struct sc_size
+sc_screen_get_resize_preview_source_size(struct sc_screen *screen) {
+    if (sc_size_is_valid(screen->last_requested_display_size)) {
+        return screen->last_requested_display_size;
+    }
+    return screen->frame_size;
+}
+
+static void
+sc_screen_set_resize_preview_source_fallback(struct sc_screen *screen) {
+    screen->transient_stretch_source_size =
+        sc_screen_get_resize_preview_source_size(screen);
+}
+
 static bool
-sc_screen_capture_resize_preview(struct sc_screen *screen) {
+sc_screen_capture_preview(struct sc_screen *screen, struct sc_size preview_size,
+                          struct sc_size source_size, const char *label) {
     sc_screen_destroy_resize_preview(screen);
 
     if (!screen->tex.texture
-            || !screen->frame_size.width
-            || !screen->frame_size.height) {
-        return false;
-    }
-
-    struct sc_size source_size = screen->last_requested_display_size;
-    if (!source_size.width || !source_size.height) {
-        source_size = screen->frame_size;
-    }
-    if (!source_size.width || !source_size.height) {
-        return false;
-    }
-
-    struct sc_size preview_size =
-        get_oriented_size(source_size, screen->orientation);
-    if (!preview_size.width || !preview_size.height) {
+            || !sc_size_is_valid(preview_size)
+            || !sc_size_is_valid(source_size)) {
         return false;
     }
 
@@ -685,7 +752,8 @@ sc_screen_capture_resize_preview(struct sc_screen *screen) {
                           SDL_TEXTUREACCESS_TARGET,
                           preview_size.width, preview_size.height);
     if (!preview) {
-        LOGW("Could not create resize preview texture: %s", SDL_GetError());
+        LOGW("Could not create %s preview texture: %s",
+             label, SDL_GetError());
         return false;
     }
 
@@ -694,13 +762,14 @@ sc_screen_capture_resize_preview(struct sc_screen *screen) {
 
     SDL_Texture *previous_target = SDL_GetRenderTarget(screen->renderer);
     if (!SDL_SetRenderTarget(screen->renderer, preview)) {
-        LOGW("Could not set resize preview target: %s", SDL_GetError());
+        LOGW("Could not set %s preview target: %s", label, SDL_GetError());
         SDL_DestroyTexture(preview);
         return false;
     }
 
     SDL_SetRenderDrawColor(screen->renderer, 0, 0, 0, 0xff);
     sc_sdl_render_clear(screen->renderer);
+
     SDL_FRect dst = {
         .x = 0,
         .y = 0,
@@ -724,6 +793,66 @@ sc_screen_capture_resize_preview(struct sc_screen *screen) {
     return true;
 }
 
+static bool
+sc_screen_capture_resize_preview(struct sc_screen *screen) {
+    struct sc_size source_size = {0};
+    if (sc_size_is_valid(screen->frame_size)) {
+        source_size = sc_screen_get_resize_preview_source_size(screen);
+    }
+
+    struct sc_size preview_size =
+        get_oriented_size(source_size, screen->orientation);
+    return sc_screen_capture_preview(screen, preview_size, source_size,
+                                     "resize");
+}
+
+static bool
+sc_screen_capture_window_preview(struct sc_screen *screen) {
+    struct sc_size preview_size =
+        sc_sdl_get_render_output_size(screen->renderer);
+    struct sc_size source_size =
+        sc_screen_get_resize_preview_source_size(screen);
+
+    return sc_screen_capture_preview(screen, preview_size, source_size,
+                                     "window restore");
+}
+
+static void
+sc_screen_begin_resize_hold(struct sc_screen *screen, sc_tick now,
+                            enum sc_resize_preview_mode preview_mode) {
+    if (!screen->transient_stretch) {
+        screen->blur_fade_in_start_tick = now;
+        bool captured = preview_mode == SC_RESIZE_PREVIEW_WINDOW
+                      ? sc_screen_capture_window_preview(screen)
+                      : sc_screen_capture_resize_preview(screen);
+        if (!captured) {
+            sc_screen_set_resize_preview_source_fallback(screen);
+        }
+        sc_screen_start_blur_animation_timer(screen);
+    }
+
+    screen->transient_stretch = true;
+    screen->last_resize_event_tick = now;
+    sc_screen_schedule_resize_settle(screen);
+}
+
+static void
+sc_screen_start_restore_stretch(struct sc_screen *screen) {
+    if (!screen->window_shown || !screen->flex_display || !screen->tex.texture) {
+        return;
+    }
+
+    if (screen->blur_fade_start_tick) {
+        sc_screen_stop_blur_fade(screen);
+    }
+
+    sc_screen_begin_resize_hold(screen, sc_tick_now(),
+                                SC_RESIZE_PREVIEW_WINDOW);
+    screen->display_ready = false;
+    screen->display_ready_tick = 0;
+    screen->display_ready_raw_frame = false;
+}
+
 // Renders the current texture with low-alpha ghost copies overlaid at small,
 // jittered offsets. During resize, the texture is stretched to the window and
 // blurred in; after release, the newly uploaded texture is blurred out to full
@@ -731,10 +860,10 @@ sc_screen_capture_resize_preview(struct sc_screen *screen) {
 static bool
 sc_screen_render_blurred_stretch(struct sc_screen *screen,
                                  const SDL_FRect *geometry,
-                                 float intensity) {
-    bool ok = sc_screen_render_texture(screen, geometry);
+                                 float intensity, float alpha) {
+    bool ok = sc_screen_render_texture_with_alpha(screen, geometry, alpha);
 
-    if (intensity <= 0.0f) {
+    if (intensity <= 0.0f || alpha <= 0.0f) {
         return ok;
     }
 
@@ -745,7 +874,7 @@ sc_screen_render_blurred_stretch(struct sc_screen *screen,
     Uint8 previous_alpha = 255;
     bool got_alpha = SDL_GetTextureAlphaMod(texture, &previous_alpha);
 
-    int scaled = (int) (FLEX_DISPLAY_BLUR_ALPHA * intensity + 0.5f);
+    int scaled = (int) (FLEX_DISPLAY_BLUR_ALPHA * intensity * alpha + 0.5f);
     if (scaled < 1) {
         scaled = 1;
     }
@@ -945,46 +1074,39 @@ sc_screen_render_window_border(struct sc_screen *screen) {
 
 // render the texture to the renderer
 //
-// Hold the window solid black from first-show until the flex_display resize
-// dance settles (transient_stretch clears, after a grace period) or a safety
-// cap elapses, then fade the content in from black over
-// SC_WINDOW_FADE_IN_DURATION. This hides the post-show resize re-draw behind
-// the black hold. A no-op once the fade has finished.
-static void
-sc_screen_render_window_fade_in(struct sc_screen *screen) {
+// Hold the prepared window black until flex_display has settled and
+// SC_WINDOW_FADE_IN_HOLD has elapsed, then fade the rendered content in over
+// SC_WINDOW_FADE_IN_DURATION. The fade starts on the first render after that
+// hold so a busy compositor cannot skip the visible ramp.
+static float
+sc_screen_get_window_fade_alpha(struct sc_screen *screen) {
     if (!screen->window_fade_in_show_tick) {
-        return;
+        return 1.0f;
     }
     sc_tick now = sc_tick_now();
-    Uint8 alpha = 0xff; // hold phase default: solid black
 
     if (!screen->window_fade_in_start_tick) {
-        // Still holding: begin the fade once the resize has settled (or the
-        // safety cap is hit).
         sc_tick held = now - screen->window_fade_in_show_tick;
-        bool settle = (!screen->transient_stretch
-                       && held >= SC_WINDOW_FADE_IN_HOLD_GRACE)
-                   || held >= SC_WINDOW_FADE_IN_MAX_HOLD;
-        if (settle) {
-            screen->window_fade_in_start_tick = now;
+        bool min_hold_elapsed = held >= SC_WINDOW_FADE_IN_HOLD;
+        bool flex_settled = !screen->flex_display || !screen->transient_stretch;
+        bool max_hold_elapsed = held >= SC_WINDOW_FADE_IN_MAX_HOLD;
+        if ((!min_hold_elapsed || !flex_settled) && !max_hold_elapsed) {
+            return 0.0f;
         }
+        screen->window_fade_in_start_tick = now;
     }
 
-    if (screen->window_fade_in_start_tick) {
-        sc_tick elapsed = now - screen->window_fade_in_start_tick;
-        if (elapsed >= SC_WINDOW_FADE_IN_DURATION) {
-            screen->window_fade_in_show_tick = 0;
-            screen->window_fade_in_start_tick = 0;
-            return;
-        }
-        float progress = (float) elapsed / (float) SC_WINDOW_FADE_IN_DURATION;
-        alpha = (Uint8) ((1.0f - progress) * 255.0f + 0.5f);
+    sc_tick fade_elapsed = now - screen->window_fade_in_start_tick;
+    if (!fade_elapsed) {
+        return 0.0f;
     }
 
-    SDL_Renderer *renderer = screen->renderer;
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, alpha);
-    SDL_RenderFillRect(renderer, NULL);
+    if (fade_elapsed >= SC_WINDOW_FADE_IN_DURATION) {
+        screen->window_fade_in_show_tick = 0;
+        screen->window_fade_in_start_tick = 0;
+        return 1.0f;
+    }
+    return (float) fade_elapsed / (float) SC_WINDOW_FADE_IN_DURATION;
 }
 
 // Set the update_content_rect flag if the window or content size may have
@@ -998,8 +1120,10 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
     }
 
     SDL_Renderer *renderer = screen->renderer;
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0xff);
     sc_sdl_render_clear(renderer);
+
+    float startup_alpha = sc_screen_get_window_fade_alpha(screen);
 
     bool ok = false;
     SDL_Texture *texture = screen->tex.texture;
@@ -1025,10 +1149,11 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
     if (screen->flex_display && screen->transient_stretch
             && screen->resize_preview_texture) {
         ok = sc_screen_render_resize_preview(
-                screen, geometry, 1.0f,
+                screen, geometry, startup_alpha,
                 sc_screen_blur_fade_in_intensity(screen));
     } else {
-        ok = sc_screen_render_texture(screen, geometry);
+        ok = sc_screen_render_texture_with_alpha(screen, geometry,
+                                                 startup_alpha);
         if (ok && screen->flex_display && screen->blur_fade_start_tick
                 && screen->resize_preview_texture) {
             float intensity = sc_screen_blur_intensity(screen);
@@ -1036,7 +1161,8 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
                 sc_screen_stop_blur_fade(screen);
             } else {
                 ok &= sc_screen_render_resize_preview(screen, geometry,
-                                                      intensity, intensity);
+                                                      intensity * startup_alpha,
+                                                      intensity);
             }
         } else if (screen->flex_display
                 && (screen->transient_stretch
@@ -1050,7 +1176,8 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
                 }
             } else {
                 ok &= sc_screen_render_blurred_stretch(screen, geometry,
-                                                       intensity);
+                                                       intensity,
+                                                       startup_alpha);
             }
         }
     }
@@ -1060,8 +1187,9 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
     }
 
 end:
-    sc_screen_render_window_border(screen);
-    sc_screen_render_window_fade_in(screen);
+    if (startup_alpha >= 1.0f) {
+        sc_screen_render_window_border(screen);
+    }
     sc_sdl_render_present(renderer);
     if (screen->window_shown) {
         // Secondary backstop: some Wayland compositors swallow resize events.
@@ -1289,21 +1417,8 @@ sc_screen_on_resize(struct sc_screen *screen) {
             if (screen->blur_fade_start_tick) {
                 sc_screen_stop_blur_fade(screen);
             }
-            sc_tick now = sc_tick_now();
-            if (!screen->transient_stretch) {
-                screen->blur_fade_in_start_tick = now;
-                if (!sc_screen_capture_resize_preview(screen)) {
-                    screen->transient_stretch_source_size =
-                        screen->last_requested_display_size.width
-                        && screen->last_requested_display_size.height
-                            ? screen->last_requested_display_size
-                            : screen->frame_size;
-                }
-                sc_screen_start_blur_animation_timer(screen);
-            }
-            screen->transient_stretch = true;
-            screen->last_resize_event_tick = now;
-            sc_screen_schedule_resize_settle(screen);
+            sc_screen_begin_resize_hold(screen, sc_tick_now(),
+                                        SC_RESIZE_PREVIEW_CONTENT);
         }
         sc_screen_render(screen, true);
     }
@@ -1379,7 +1494,9 @@ sc_screen_blur_fade_in_intensity(struct sc_screen *screen) {
     if (elapsed >= FLEX_DISPLAY_BLUR_FADE_IN_DURATION) {
         return 1.0f;
     }
-    return (float) elapsed / (float) FLEX_DISPLAY_BLUR_FADE_IN_DURATION;
+    float progress = (float) elapsed
+                   / (float) FLEX_DISPLAY_BLUR_FADE_IN_DURATION;
+    return sc_screen_smoothstep(progress);
 }
 
 static float
@@ -1396,8 +1513,9 @@ sc_screen_blur_intensity(struct sc_screen *screen) {
     if (elapsed >= FLEX_DISPLAY_BLUR_FADE_OUT_DURATION) {
         return 0.0f;
     }
-    float fade = 1.0f - (float) elapsed
-                       / (float) FLEX_DISPLAY_BLUR_FADE_OUT_DURATION;
+    float progress = (float) elapsed
+                   / (float) FLEX_DISPLAY_BLUR_FADE_OUT_DURATION;
+    float fade = 1.0f - sc_screen_smoothstep(progress);
     return screen->blur_fade_start_intensity * fade;
 }
 
@@ -1448,6 +1566,10 @@ sc_screen_stop_blur_fade(struct sc_screen *screen) {
 
     screen->blur_fade_start_tick = 0;
     screen->blur_fade_start_intensity = 0.0f;
+
+    if (screen->window_fade_in_show_tick) {
+        return;
+    }
 
     sc_mutex_lock(&screen->mutex);
     old_timer = screen->blur_fade_timer;
@@ -2123,10 +2245,10 @@ sc_screen_init(struct sc_screen *screen,
     screen->hotspot_dragged = false;
     screen->hotspot_press_tick = 0;
     screen->hotspot_drag_pending = false;
-    screen->maximized_hotspot_press_pending = false;
-    screen->maximized_hotspot_press_tick = 0;
-    screen->maximized_hotspot_press_x = 0.f;
-    screen->maximized_hotspot_press_y = 0.f;
+    screen->restore_hotspot_press_pending = false;
+    screen->restore_hotspot_press_tick = 0;
+    screen->restore_hotspot_press_x = 0.f;
+    screen->restore_hotspot_press_y = 0.f;
 
     screen->req.x = params->window_x;
     screen->req.y = params->window_y;
@@ -3090,20 +3212,7 @@ sc_screen_on_resize_settled(struct sc_screen *screen) {
 
     sc_screen_maybe_request_display_resize(screen, true);
     if (sc_screen_snap_window_to_requested_pixel_size(screen)) {
-        screen->last_resize_event_tick = now;
-        if (!screen->transient_stretch) {
-            screen->blur_fade_in_start_tick = now;
-            if (!sc_screen_capture_resize_preview(screen)) {
-                screen->transient_stretch_source_size =
-                    screen->last_requested_display_size.width
-                    && screen->last_requested_display_size.height
-                        ? screen->last_requested_display_size
-                        : screen->frame_size;
-            }
-            sc_screen_start_blur_animation_timer(screen);
-        }
-        screen->transient_stretch = true;
-        sc_screen_schedule_resize_settle(screen);
+        sc_screen_begin_resize_hold(screen, now, SC_RESIZE_PREVIEW_CONTENT);
         return;
     }
 
@@ -3208,9 +3317,9 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
             sc_screen_render(screen, true);
             return;
         case SDL_EVENT_MOUSE_MOTION:
-            if (screen->video && screen->maximized_hotspot_press_pending) {
-                float dx = event->motion.x - screen->maximized_hotspot_press_x;
-                float dy = event->motion.y - screen->maximized_hotspot_press_y;
+            if (screen->video && screen->restore_hotspot_press_pending) {
+                float dx = event->motion.x - screen->restore_hotspot_press_x;
+                float dy = event->motion.y - screen->restore_hotspot_press_y;
                 if (dx < 0) {
                     dx = -dx;
                 }
@@ -3219,37 +3328,51 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
                 }
                 if (dx > SC_WINDOW_CLICK_MOVE_TOLERANCE
                         || dy > SC_WINDOW_CLICK_MOVE_TOLERANCE) {
-                    screen->maximized_hotspot_press_pending = false;
+                    screen->restore_hotspot_press_pending = false;
                 }
             }
             break;
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
             if (screen->video && event->button.button == SDL_BUTTON_LEFT) {
                 uint64_t flags = SDL_GetWindowFlags(screen->window);
-                bool maximized = flags & SDL_WINDOW_MAXIMIZED;
-                if (maximized
+                bool constrained =
+                    flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MAXIMIZED);
+                if (constrained
                         && sc_screen_is_drag_hotspot(screen->window,
                                                      event->button.x,
                                                      event->button.y)) {
-                    screen->maximized_hotspot_press_pending = true;
-                    screen->maximized_hotspot_press_tick = sc_tick_now();
-                    screen->maximized_hotspot_press_x = event->button.x;
-                    screen->maximized_hotspot_press_y = event->button.y;
+                    screen->restore_hotspot_press_pending = true;
+                    screen->restore_hotspot_press_tick = sc_tick_now();
+                    screen->restore_hotspot_press_x = event->button.x;
+                    screen->restore_hotspot_press_y = event->button.y;
                     // Do not inject the synthetic titlebar click to Android.
                     return;
                 }
-                screen->maximized_hotspot_press_pending = false;
+                screen->restore_hotspot_press_pending = false;
             }
             break;
         case SDL_EVENT_MOUSE_BUTTON_UP:
             if (screen->video && event->button.button == SDL_BUTTON_LEFT
-                    && screen->maximized_hotspot_press_pending) {
-                screen->maximized_hotspot_press_pending = false;
+                    && screen->restore_hotspot_press_pending) {
+                screen->restore_hotspot_press_pending = false;
                 sc_tick elapsed = sc_tick_now()
-                        - screen->maximized_hotspot_press_tick;
+                        - screen->restore_hotspot_press_tick;
                 if (elapsed <= SC_WINDOW_DRAG_HOLD_DELAY) {
-                    if (!SDL_RestoreWindow(screen->window)) {
-                        LOGW("Could not restore window: %s", SDL_GetError());
+                    uint64_t flags = SDL_GetWindowFlags(screen->window);
+                    bool fullscreen = flags & SDL_WINDOW_FULLSCREEN;
+                    bool maximized = flags & SDL_WINDOW_MAXIMIZED;
+                    if (fullscreen) {
+                        sc_screen_start_restore_stretch(screen);
+                        if (!SDL_SetWindowFullscreen(screen->window, false)) {
+                            LOGW("Could not leave fullscreen mode: %s",
+                                 SDL_GetError());
+                        }
+                    } else if (maximized) {
+                        sc_screen_start_restore_stretch(screen);
+                        if (!SDL_RestoreWindow(screen->window)) {
+                            LOGW("Could not restore window: %s",
+                                 SDL_GetError());
+                        }
                     }
                 }
                 // Do not inject the synthetic titlebar click to Android.

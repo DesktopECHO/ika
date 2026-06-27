@@ -29,16 +29,47 @@ user_supplied_flag() {
   return 1
 }
 
+packaged_scrcpy_pids() {
+  local pid
+  local proc_uid
+  local argv0
+  local exe_path
+
+  for proc in /proc/[0-9]*; do
+    [[ -d "${proc}" ]] || continue
+    pid="${proc##*/}"
+    proc_uid="$(stat -c '%u' "${proc}" 2>/dev/null || true)"
+    [[ "${proc_uid}" == "${UID}" ]] || continue
+
+    argv0="$(tr '\0' '\n' <"${proc}/cmdline" 2>/dev/null | head -n1 || true)"
+    if [[ "${argv0}" == "${SCRCPY_BIN:-${PACKAGED_SCRCPY_BIN}}" \
+        || "${argv0}" == "${PACKAGED_SCRCPY_BIN}" ]]; then
+      printf '%s\n' "${pid}"
+      continue
+    fi
+
+    exe_path="$(readlink -f "${proc}/exe" 2>/dev/null || true)"
+    exe_path="${exe_path% (deleted)}"
+    if [[ "${exe_path}" == "${SCRCPY_BIN:-${PACKAGED_SCRCPY_BIN}}" \
+        || "${exe_path}" == "${PACKAGED_SCRCPY_BIN}" ]]; then
+      printf '%s\n' "${pid}"
+    fi
+  done
+}
+
+has_packaged_scrcpy() {
+  local pids
+
+  pids="$(packaged_scrcpy_pids)"
+  [[ -n "${pids}" ]]
+}
+
 stop_startup_packaged_scrcpy() {
   local pid
-  local exe_path
   local deadline
 
   while read -r pid; do
     [[ -n "${pid}" ]] || continue
-
-    exe_path="$(readlink -f "/proc/${pid}/exe" 2>/dev/null || true)"
-    [[ "${exe_path}" == "${PACKAGED_SCRCPY_BIN}" ]] || continue
 
     kill "${pid}" >/dev/null 2>&1 || true
 
@@ -52,7 +83,7 @@ stop_startup_packaged_scrcpy() {
       fi
       sleep 0.2
     done
-  done < <(pgrep -u "${UID}" -x scrcpy || true)
+  done < <(packaged_scrcpy_pids | sort -u)
 }
 
 count_performance_cores() {
@@ -630,6 +661,62 @@ host_display_size() {
 
   [[ -n "${_host_display_size_value}" ]] || return 1
   printf '%s\n' "${_host_display_size_value}"
+}
+
+_host_display_logical_size_probed=""
+_host_display_logical_size_value=""
+host_display_logical_size() {
+  if [[ -z "${_host_display_logical_size_probed}" ]]; then
+    _host_display_logical_size_probed="yes"
+    if command -v wayland-info >/dev/null 2>&1; then
+      _host_display_logical_size_value="$(
+        wayland-info 2>/dev/null | awk '
+          /logical_width:/ {
+            line = $0
+            sub(/.*logical_width:[[:space:]]*/, "", line)
+            split(line, width_parts, ",")
+            width = int(width_parts[1])
+
+            line = $0
+            sub(/.*logical_height:[[:space:]]*/, "", line)
+            height = int(line)
+
+            if (width && height) {
+              area = width * height
+              if (area > best_area) {
+                best_area = area; best_width = width; best_height = height
+              }
+            }
+          }
+          END { if (best_width && best_height) printf "%sx%s\n", best_width, best_height }
+        ' || true
+      )"
+    fi
+  fi
+
+  [[ -n "${_host_display_logical_size_value}" ]] || return 1
+  printf '%s\n' "${_host_display_logical_size_value}"
+}
+
+default_scrcpy_window_size() {
+  local size
+  local width
+  local height
+  local host_width
+  local host_height
+
+  size="$(host_display_logical_size || true)"
+  if [[ "${size}" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+    host_width="${BASH_REMATCH[1]}"
+    host_height="${BASH_REMATCH[2]}"
+    width=$(( host_width * 85 / 100 ))
+    height=$(( host_height * 85 / 100 ))
+  else
+    width=1280
+    height=720
+  fi
+
+  printf '%sx%s\n' "${width}" "${height}"
 }
 
 has_display_size_override() {
@@ -1400,12 +1487,34 @@ start_scrcpy_with_retries() {
   local cuttlefish_frames_socket
   local scrcpy_log="${SCRCPY_LOG_FILE}"
   local host_core_list
+  local scrcpy_lock_file="${CVD_HOME_DIR}/scrcpy-launch.lock"
+  local scrcpy_lock_fd=""
+  local scrcpy_window_size
+  local scrcpy_window_width
+  local scrcpy_window_height
   local -a scrcpy_env=()
   local -a scrcpy_extra_args=()
   local -a scrcpy_cmd=(
     "${SCRCPY_BIN}"
     -s "${adb_serial}"
   )
+
+  exec {scrcpy_lock_fd}>"${scrcpy_lock_file}"
+  if ! flock "${scrcpy_lock_fd}"; then
+    log "unable to acquire scrcpy launch lock: ${scrcpy_lock_file}"
+    return 1
+  fi
+
+  stop_startup_packaged_scrcpy
+
+  scrcpy_window_size="$(default_scrcpy_window_size)"
+  if [[ "${scrcpy_window_size}" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+    scrcpy_window_width="${BASH_REMATCH[1]}"
+    scrcpy_window_height="${BASH_REMATCH[2]}"
+  else
+    scrcpy_window_width=1280
+    scrcpy_window_height=720
+  fi
 
   if [[ -n "${SCRCPY_DPI}" ]]; then
     scrcpy_cmd+=("--dpi=${SCRCPY_DPI}")
@@ -1414,8 +1523,10 @@ start_scrcpy_with_retries() {
     --force-adb-forward
     --render-driver=opengl
     --window-borderless
-    --audio-buffer=80
-    --audio-output-buffer=10
+    --window-width="${scrcpy_window_width}"
+    --window-height="${scrcpy_window_height}"
+    --audio-buffer=90
+    --audio-output-buffer=15
     --audio-codec=raw
     --gamepad=uhid
     --keyboard=sdk
@@ -1486,7 +1597,7 @@ start_scrcpy_with_retries() {
     disown || true
 
     sleep 1.5
-    if pgrep -x scrcpy >/dev/null 2>&1; then
+    if has_packaged_scrcpy; then
       return 0
     fi
 

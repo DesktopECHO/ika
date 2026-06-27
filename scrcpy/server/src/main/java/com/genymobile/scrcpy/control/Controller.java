@@ -73,7 +73,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     }
 
     private static final int DEFAULT_DEVICE_ID = 0;
-    private static final int PRIMARY_DISPLAY_MIN_WIDTH = 540;
+    private static final int PRIMARY_DISPLAY_MIN_WIDTH = 360;
     private static final int PRIMARY_DISPLAY_MIN_HEIGHT = 540;
     private static final int DISPLAY_SIZE_ALIGNMENT = 8;
     private static final long DISPLAY_READY_STABLE_DELAY_MS = 50;

@@ -114,10 +114,10 @@ struct sc_screen {
     // Set when the resize hold begins, so the blur ghost overlay can ramp in
     // gradually during transient_stretch instead of snapping to full strength.
     sc_tick blur_fade_in_start_tick;
-    // window_fade_in_show_tick: set when the window is first shown. The content
-    // is held solid black (hiding the flex_display resize dance) until the
-    // resize settles, then window_fade_in_start_tick is set and the content
-    // fades in from black.
+    // window_fade_in_show_tick: set when the prepared window is first shown.
+    // window_fade_in_start_tick: set on the first render after the minimum
+    // black hold and flex_display resize settlement, so startup fade timing
+    // follows the final resize but cannot be skipped by a busy compositor.
     sc_tick window_fade_in_show_tick;
     sc_tick window_fade_in_start_tick;
     // Set when the resize hold releases and the blur begins its fade-out.
@@ -133,10 +133,10 @@ struct sc_screen {
     bool hotspot_dragged;
     sc_tick hotspot_press_tick;
     bool hotspot_drag_pending;
-    bool maximized_hotspot_press_pending;
-    sc_tick maximized_hotspot_press_tick;
-    float maximized_hotspot_press_x;
-    float maximized_hotspot_press_y;
+    bool restore_hotspot_press_pending;
+    sc_tick restore_hotspot_press_tick;
+    float restore_hotspot_press_x;
+    float restore_hotspot_press_y;
 
     bool resize_pending; // resize requested while fullscreen or maximized
     // The content size the last time the window was not maximized or
