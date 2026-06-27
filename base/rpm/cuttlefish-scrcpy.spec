@@ -1,5 +1,5 @@
 Name:           ika-scrcpy
-Version:        1.55.0
+Version:        260628
 Release:        6%{?dist}
 Summary:        scrcpy Android screen mirroring tool for Cuttlefish
 License:        Apache-2.0
@@ -84,6 +84,5 @@ sed -i \
 /usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
 
 %changelog
-* Thu Jun 18 2026 DesktopECHO <build@desktopecho.com> - 1.55.0-6
+* Sun Jun 28 2026 DesktopECHO <build@desktopecho.com> - 260628-6
 - Align ika-scrcpy package version with packaging/VERSION.
-

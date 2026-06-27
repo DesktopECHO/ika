@@ -4,7 +4,7 @@
 
 pkgbase=ika-scrcpy
 pkgname=(ika-scrcpy)
-pkgver=1.55.0
+pkgver=260628
 pkgrel=6
 pkgdesc='scrcpy Android screen mirroring tool for Cuttlefish'
 arch=(x86_64 aarch64)

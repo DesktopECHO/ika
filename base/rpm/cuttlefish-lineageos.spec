@@ -1,5 +1,5 @@
 Name:           ika-lineageos
-Version:        1.55.0
+Version:        260628
 Release:        6%{?dist}
 Summary:        LineageOS for Cuttlefish host
 License:        Apache-2.0
@@ -86,6 +86,5 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
-* Thu Jun 18 2026 DesktopECHO <build@desktopecho.com> - 1.55.0-6
+* Sun Jun 28 2026 DesktopECHO <build@desktopecho.com> - 260628-6
 - Align ika-lineageos package version with packaging/VERSION.
-

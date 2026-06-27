@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "cuttlefish/host/frontend/webrtc/raw_frame_streamer.h"
+#include "cuttlefish/host/frontend/webrtc/ika_stream.h"
 
 #include <errno.h>
 #include <fcntl.h>

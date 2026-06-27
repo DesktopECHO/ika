@@ -23,7 +23,7 @@
 #include "absl/log/log.h"
 #include "gflags/gflags.h"
 
-#include "cuttlefish/host/frontend/webrtc/raw_frame_streamer.h"
+#include "cuttlefish/host/frontend/webrtc/ika_stream.h"
 #include "cuttlefish/host/libs/config/logging.h"
 #include "cuttlefish/host/libs/screen_connector/wayland_screen_connector.h"
 
@@ -52,14 +52,14 @@ int RawFrameStreamerMain(int argc, char** argv) {
 
   LOG(INFO) << "Starting raw frame streamer on " << FLAGS_raw_frame_socket_path;
 
-  RawFrameStreamer raw_frame_streamer(FLAGS_raw_frame_socket_path);
+  RawFrameStreamer ika_stream(FLAGS_raw_frame_socket_path);
   WaylandScreenConnector screen_connector(FLAGS_frame_server_fd,
                                           FLAGS_frames_are_rgba);
   screen_connector.SetFrameCallback(
-      [&raw_frame_streamer](uint32_t display_number, uint32_t frame_width,
+      [&ika_stream](uint32_t display_number, uint32_t frame_width,
                             uint32_t frame_height, uint32_t frame_fourcc_format,
                             uint32_t frame_stride_bytes, uint8_t* frame_bytes) {
-        raw_frame_streamer.OnFrame(display_number, frame_width, frame_height,
+        ika_stream.OnFrame(display_number, frame_width, frame_height,
                                    frame_fourcc_format, frame_stride_bytes,
                                    frame_bytes);
       });

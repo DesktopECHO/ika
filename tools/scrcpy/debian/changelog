@@ -1,5 +1,5 @@
-ika-scrcpy (1.55.0-6) unstable; urgency=medium
+ika-scrcpy (260628-6) unstable; urgency=medium
 
   * Align package version with packaging/VERSION.
 
- -- DesktopECHO <build@desktopecho.com>  Thu, 18 Jun 2026 00:00:00 +0000
+ -- DesktopECHO <build@desktopecho.com>  Sun, 28 Jun 2026 00:00:00 +0000

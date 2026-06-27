@@ -238,7 +238,7 @@ CVD_GRAPHICS_DRIVER_MESSAGE=""
 CVD_DATA_STORAGE_MESSAGE=""
 CVD_NEWLY_PROVISIONED="false"
 
-CVD_PROCESS_REGEX='(^|/)(cvd_internal_start|launch_cvd|run_cvd|crosvm|process_restarter|raw_frame_streamer|socket_vsock_proxy|wmediumd)([[:space:]]|$)'
+CVD_PROCESS_REGEX='(^|/)(cvd_internal_start|launch_cvd|run_cvd|crosvm|process_restarter|ika_stream|socket_vsock_proxy|wmediumd)([[:space:]]|$)'
 
 log() {
   printf '[%s] %s\n' "${SCRIPT_NAME}" "$*" >&2
@@ -1417,8 +1417,9 @@ start_scrcpy_with_retries() {
     --audio-buffer=80
     --audio-output-buffer=10
     --audio-codec=raw
-    --keyboard=uhid
     --gamepad=uhid
+    --keyboard=sdk
+    --prefer-text
     --mouse-bind=+hsn:b+++
   )
 

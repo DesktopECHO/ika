@@ -5,7 +5,7 @@
 
 pkgbase=ika-base
 pkgname=(ika-base ika-common ika-integration ika-defaults ika-metrics)
-pkgver=1.55.0
+pkgver=260628
 pkgrel=6
 pkgdesc='Cuttlefish Android Virtual Device host packages'
 arch=(x86_64 aarch64)

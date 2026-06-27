@@ -28,7 +28,7 @@
 #include "drm/drm_fourcc.h"
 
 #include "cuttlefish/host/frontend/webrtc/libdevice/streamer.h"
-#include "cuttlefish/host/frontend/webrtc/raw_frame_streamer.h"
+#include "cuttlefish/host/frontend/webrtc/ika_stream.h"
 #include "cuttlefish/host/libs/screen_connector/composition_manager.h"
 #include "cuttlefish/host/libs/screen_connector/video_frame_buffer.h"
 
@@ -38,12 +38,12 @@ DisplayHandler::DisplayHandler(
     webrtc_streaming::Streamer& streamer, ScreenshotHandler& screenshot_handler,
     ScreenConnector& screen_connector,
     std::optional<std::unique_ptr<CompositionManager>> composition_manager,
-    RawFrameStreamer* raw_frame_streamer)
+    RawFrameStreamer* ika_stream)
     : composition_manager_(std::move(composition_manager)),
       streamer_(streamer),
       screenshot_handler_(screenshot_handler),
       screen_connector_(screen_connector),
-      raw_frame_streamer_(raw_frame_streamer) {
+      ika_stream_(ika_stream) {
   // Initialize the thread after the rest of the class
   frame_repeater_ = std::thread([this]() { RepeatFramesPeriodically(); });
   screen_connector_.SetCallback(GetScreenConnectorCallback());
@@ -101,20 +101,20 @@ DisplayHandler::GetScreenConnectorCallback() {
   // only to tell the producer how to create a ProcessedFrame to cache into the
   // queue
   auto& composition_manager = composition_manager_;
-  auto* raw_frame_streamer = raw_frame_streamer_;
+  auto* ika_stream = ika_stream_;
   DisplayHandler::GenerateProcessedFrameCallback callback =
-      [this, &composition_manager, raw_frame_streamer](
+      [this, &composition_manager, ika_stream](
           uint32_t display_number, uint32_t frame_width, uint32_t frame_height,
           uint32_t frame_fourcc_format, uint32_t frame_stride_bytes,
           uint8_t* frame_pixels, WebRtcScProcessedFrame& processed_frame) {
         processed_frame.display_number_ = display_number;
         processed_frame.is_success_ = false;
-        if (raw_frame_streamer != nullptr) {
-          raw_frame_streamer->OnFrame(display_number, frame_width, frame_height,
+        if (ika_stream != nullptr) {
+          ika_stream->OnFrame(display_number, frame_width, frame_height,
                                       frame_fourcc_format, frame_stride_bytes,
                                       frame_pixels);
         }
-        if (raw_frame_streamer != nullptr && !HasActiveDisplayClients()) {
+        if (ika_stream != nullptr && !HasActiveDisplayClients()) {
           return;
         }
         processed_frame.buf_ =

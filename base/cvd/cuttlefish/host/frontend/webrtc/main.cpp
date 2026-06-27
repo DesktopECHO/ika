@@ -42,7 +42,7 @@
 #include "cuttlefish/host/frontend/webrtc/libdevice/local_recorder.h"
 #include "cuttlefish/host/frontend/webrtc/libdevice/streamer.h"
 #include "cuttlefish/host/frontend/webrtc/libdevice/video_sink.h"
-#include "cuttlefish/host/frontend/webrtc/raw_frame_streamer.h"
+#include "cuttlefish/host/frontend/webrtc/ika_stream.h"
 #include "cuttlefish/host/frontend/webrtc/screenshot_handler.h"
 #include "cuttlefish/host/frontend/webrtc/webrtc_command_channel.h"
 #include "cuttlefish/host/frontend/webrtc/webrtc_commands.pb.h"
@@ -452,12 +452,12 @@ int CuttlefishMain() {
     raw_frame_socket_path =
         instance.PerInstanceInternalUdsPath("ika_frames.sock");
   }
-  auto raw_frame_streamer =
+  auto ika_stream =
       std::make_unique<RawFrameStreamer>(std::move(raw_frame_socket_path));
 
   auto display_handler = std::make_shared<DisplayHandler>(
       *streamer, screenshot_handler, screen_connector,
-      std::move(composition_manager), raw_frame_streamer.get());
+      std::move(composition_manager), ika_stream.get());
 
   if (instance.camera_server_port()) {
     auto camera_controller = streamer->AddCamera(instance.camera_server_port(),

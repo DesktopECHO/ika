@@ -312,15 +312,15 @@ class RawFrameStreamerServer : public virtual CommandSource {
   // CommandSource
   Result<std::vector<MonitorCommand>> Commands() override {
     std::vector<MonitorCommand> commands;
-    Command raw_frame_streamer(RawFrameStreamerBinary());
-    raw_frame_streamer.UnsetFromEnvironment("http_proxy");
-    sockets_.AppendFrameCommandArguments(raw_frame_streamer);
-    raw_frame_streamer.AddParameter(
+    Command ika_stream(RawFrameStreamerBinary());
+    ika_stream.UnsetFromEnvironment("http_proxy");
+    sockets_.AppendFrameCommandArguments(ika_stream);
+    ika_stream.AddParameter(
         "--raw_frame_socket_path=",
         instance_.PerInstanceInternalUdsPath("ika_frames.sock"));
-    raw_frame_streamer.AddParameter("--frames_are_rgba=",
+    ika_stream.AddParameter("--frames_are_rgba=",
                                     !instance_.guest_uses_bgra_framebuffers());
-    commands.emplace_back(std::move(raw_frame_streamer));
+    commands.emplace_back(std::move(ika_stream));
     return commands;
   }
 

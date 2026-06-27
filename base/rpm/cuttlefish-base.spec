@@ -1,5 +1,5 @@
 Name:           ika-base
-Version:        1.55.0
+Version:        260628
 Release:        6%{?dist}
 Summary:        Cuttlefish Android Virtual Device host packages for Fedora
 License:        Apache-2.0
@@ -437,5 +437,5 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/lib/cuttlefish-metrics
 
 %changelog
-* Thu Jun 18 2026 DesktopECHO <build@desktopecho.com> - 1.55.0-6
-- Update Cuttlefish host package metadata to 1.55.0-6
+* Sun Jun 28 2026 DesktopECHO <build@desktopecho.com> - 260628-6
+- Update Cuttlefish host package metadata to 260628-6

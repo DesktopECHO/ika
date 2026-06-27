@@ -178,19 +178,19 @@ cf_cc_library(
 )
 
 cf_cc_library(
-    name = "libcuttlefish_webrtc_raw_frame_streamer",
-    srcs = ["raw_frame_streamer.cpp"],
-    hdrs = ["raw_frame_streamer.h"],
+    name = "libcuttlefish_webrtc_ika_stream",
+    srcs = ["ika_stream.cpp"],
+    hdrs = ["ika_stream.h"],
     deps = ["@abseil-cpp//absl/log"],
 )
 
 cf_cc_binary(
-    name = "raw_frame_streamer",
+    name = "ika_stream",
     srcs = [
-        "raw_frame_streamer_main.cpp",
+        "ika_stream_main.cpp",
     ],
     deps = [
-        ":libcuttlefish_webrtc_raw_frame_streamer",
+        ":libcuttlefish_webrtc_ika_stream",
         "//cuttlefish/host/libs/config:logging",
         "//cuttlefish/host/libs/screen_connector",
         "@abseil-cpp//absl/log",
@@ -205,7 +205,7 @@ cf_cc_library(
     hdrs = ["display_handler.h"],
     deps = [
         ":libcuttlefish_webrtc_cvd_video_frame_buffer",
-        ":libcuttlefish_webrtc_raw_frame_streamer",
+        ":libcuttlefish_webrtc_ika_stream",
         ":libcuttlefish_webrtc_screenshot_handler",
         "//cuttlefish/host/frontend/webrtc/libdevice:streamer",
         "//cuttlefish/host/frontend/webrtc/libdevice:video_sink",
@@ -364,7 +364,7 @@ cf_cc_binary(
         ":libcuttlefish_webrtc_kernel_log_events_handler",
         ":libcuttlefish_webrtc_kml_locations_handler",
         ":libcuttlefish_webrtc_location_handler",
-        ":libcuttlefish_webrtc_raw_frame_streamer",
+        ":libcuttlefish_webrtc_ika_stream",
         ":libcuttlefish_webrtc_screenshot_handler",
         ":libcuttlefish_webrtc_sensors_handler",
         "//cuttlefish/common/libs/fs",

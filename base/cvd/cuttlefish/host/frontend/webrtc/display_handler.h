@@ -68,7 +68,7 @@ class DisplayHandler {
       webrtc_streaming::Streamer& streamer,
       ScreenshotHandler& screenshot_handler, ScreenConnector& screen_connector,
       std::optional<std::unique_ptr<CompositionManager>> composition_manager,
-      RawFrameStreamer* raw_frame_streamer);
+      RawFrameStreamer* ika_stream);
   ~DisplayHandler();
 
   [[noreturn]] void Loop();
@@ -98,7 +98,7 @@ class DisplayHandler {
   webrtc_streaming::Streamer& streamer_;
   ScreenshotHandler& screenshot_handler_;
   ScreenConnector& screen_connector_;
-  RawFrameStreamer* raw_frame_streamer_;
+  RawFrameStreamer* ika_stream_;
   std::map<uint32_t, std::shared_ptr<BufferInfo>> display_last_buffers_;
   std::mutex last_buffers_mutex_;
   std::mutex send_mutex_;

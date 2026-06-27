@@ -83,7 +83,7 @@ package_files(
         "cuttlefish-common/bin/powerbtn_cvd": "//cuttlefish/host/commands/powerbtn_cvd",
         "cuttlefish-common/bin/powerwash_cvd": "//cuttlefish/host/commands/powerwash_cvd",
         "cuttlefish-common/bin/process_restarter": "//cuttlefish/host/commands/process_restarter",
-        "cuttlefish-common/bin/raw_frame_streamer": "//cuttlefish/host/frontend/webrtc:raw_frame_streamer",
+        "cuttlefish-common/bin/ika_stream": "//cuttlefish/host/frontend/webrtc:ika_stream",
         "cuttlefish-common/bin/record_cvd": "//cuttlefish/host/commands/record_cvd",
         "cuttlefish-common/bin/resize2fs": "@e2fsprogs//:resize2fs",
         "cuttlefish-common/bin/restart_cvd": "//cuttlefish/host/commands/restart_cvd",

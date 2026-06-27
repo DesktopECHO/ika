@@ -136,7 +136,7 @@ std::string ProcessRestarterBinary() {
 }
 
 std::string RawFrameStreamerBinary() {
-  return HostBinaryPath("raw_frame_streamer");
+  return HostBinaryPath("ika_stream");
 }
 
 std::string RootCanalBinary() { return HostBinaryPath("rootcanal"); }

@@ -1,5 +1,5 @@
-ika-base (1.55.0-6) unstable; urgency=medium
+ika-base (260628-6) unstable; urgency=medium
 
-  * Update Cuttlefish host package metadata to 1.55.0-6.
+  * Update Cuttlefish host package metadata to 260628-6.
 
- -- DesktopECHO <build@desktopecho.com>  Thu, 18 Jun 2026 00:00:00 +0000
+ -- DesktopECHO <build@desktopecho.com>  Sun, 28 Jun 2026 00:00:00 +0000
