@@ -383,15 +383,22 @@ data_gb_to_mib() {
 
 parse_start_options() {
   local -n fullscreen_mode_ref="$1"
-  local -n start_args_ref="$2"
-  shift 2
+  local -n game_mode_ref="$2"
+  local -n start_args_ref="$3"
+  shift 3
 
   fullscreen_mode_ref="false"
+  game_mode_ref="false"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -f|--fullscreen)
         fullscreen_mode_ref="true"
+        shift
+        ;;
+      --game)
+        fullscreen_mode_ref="true"
+        game_mode_ref="true"
         shift
         ;;
       --gfxstream_vulkan=*)
@@ -479,17 +486,23 @@ usage() {
 
 Usage:
 
-  ${SCRIPT_NAME} start [-f|--fullscreen] [--gfxstream_vulkan=auto|on|off] [--data_gb=GB] [--ika_scrcpy=ARGS] [--setting=arg] ...
+  ${SCRIPT_NAME} start [-f|--fullscreen|--game] [--gfxstream_vulkan=auto|on|off] [--data_gb=GB] [--ika_scrcpy=ARGS] [--setting=arg] ...
   ${SCRIPT_NAME} stop
-  ${SCRIPT_NAME} restart [-f|--fullscreen] [--gfxstream_vulkan=auto|on|off] [--data_gb=GB] [--ika_scrcpy=ARGS] ...
+  ${SCRIPT_NAME} restart [-f|--fullscreen|--game] [--gfxstream_vulkan=auto|on|off] [--data_gb=GB] [--ika_scrcpy=ARGS] ...
   ${SCRIPT_NAME} reset [Delete everything and start fresh]
 
 Example:
 
   ${SCRIPT_NAME} start --gpu_mode=guest_swiftshader --cpus=2 --memory_mb=2048 --dpi=240 --fullscreen
+  ${SCRIPT_NAME} start --game
   ${SCRIPT_NAME} start --data_gb=128
   ${SCRIPT_NAME} restart --gfxstream_vulkan=on
   ${SCRIPT_NAME} restart --ika_scrcpy="--no-clipboard-autosync"
+
+Options:
+
+  --game                 Start scrcpy fullscreen with UHID gamepad, keyboard,
+                         and mouse input.
 
 Environment:
 
@@ -1482,6 +1495,7 @@ ensure_chromium_before_scrcpy() {
 start_scrcpy_with_retries() {
   local adb_serial="$1"
   local fullscreen_mode="${2:-false}"
+  local game_mode="${3:-false}"
   local attempt=1
   local max_attempts=5
   local cuttlefish_frames_socket
@@ -1520,19 +1534,30 @@ start_scrcpy_with_retries() {
     scrcpy_cmd+=("--dpi=${SCRCPY_DPI}")
   fi
   scrcpy_cmd+=(
+    --mouse-bind=+hsn:b+++
     --force-adb-forward
     --render-driver=opengl
     --window-borderless
     --window-width="${scrcpy_window_width}"
     --window-height="${scrcpy_window_height}"
-    --audio-buffer=90
-    --audio-output-buffer=15
     --audio-codec=raw
-    --gamepad=uhid
-    --keyboard=sdk
-    --prefer-text
-    --mouse-bind=+hsn:b+++
   )
+
+  # Game mode uses UHID for all input devices; normal mode keeps text-friendly
+  # SDK keyboard injection.
+  if [[ "${game_mode}" == "true" ]]; then
+    log "scrcpy game mode: UHID gamepad, keyboard, and mouse"
+    scrcpy_cmd+=(
+      --gamepad=uhid
+      --keyboard=uhid
+      --mouse=uhid
+    )
+  else
+    scrcpy_cmd+=(
+      --keyboard=sdk
+      --prefer-text
+    )
+  fi
 
   cuttlefish_frames_socket="$(resolve_cuttlefish_frames_socket)"
   scrcpy_cmd+=(--cuttlefish-frames-socket="${cuttlefish_frames_socket}")
@@ -1615,6 +1640,7 @@ start_scrcpy_with_retries() {
 schedule_scrcpy_when_launcher_ready() {
   local adb_serial="$1"
   local fullscreen_mode="${2:-false}"
+  local game_mode="${3:-false}"
 
   (
     while has_live_cvd_processes; do
@@ -1628,7 +1654,7 @@ schedule_scrcpy_when_launcher_ready() {
       log "deferred scrcpy watcher stopped because Cuttlefish exited before sys.boot_completed=1."
       exit 0
     fi
-    start_scrcpy_with_retries "${adb_serial}" "${fullscreen_mode}" || true
+    start_scrcpy_with_retries "${adb_serial}" "${fullscreen_mode}" "${game_mode}" || true
   ) &
 
   disown || true
@@ -1638,6 +1664,7 @@ schedule_scrcpy_when_launcher_ready() {
 maybe_start_scrcpy() {
   local adb_serial="$1"
   local fullscreen_mode="${2:-false}"
+  local game_mode="${3:-false}"
 
   if [[ ! -x "${SCRCPY_BIN}" ]]; then
     log "scrcpy not found at ${SCRCPY_BIN}; skipping client launch."
@@ -1646,12 +1673,12 @@ maybe_start_scrcpy() {
 
   if adb_boot_completed "${adb_serial}"; then
     log "adb reports sys.boot_completed=1; starting scrcpy immediately."
-    start_scrcpy_with_retries "${adb_serial}" "${fullscreen_mode}" || true
+    start_scrcpy_with_retries "${adb_serial}" "${fullscreen_mode}" "${game_mode}" || true
     return 0
   fi
 
   log "adb has not reported sys.boot_completed=1; deferring scrcpy launch."
-  schedule_scrcpy_when_launcher_ready "${adb_serial}" "${fullscreen_mode}"
+  schedule_scrcpy_when_launcher_ready "${adb_serial}" "${fullscreen_mode}" "${game_mode}"
   return 0
 }
 
@@ -1688,7 +1715,8 @@ log_start_context() {
 
 start_cvd() {
   local fullscreen_mode="${1:-false}"
-  shift || true
+  local game_mode="${2:-false}"
+  shift 2 || true
   local -a args=()
   local launcher_log
   local adb_serial
@@ -1715,7 +1743,7 @@ start_cvd() {
       respond_console "Instance already running, local console will be restarted"
     fi
     respond "Android virtual device running"
-    maybe_start_scrcpy "${adb_serial}" "${fullscreen_mode}" || true
+    maybe_start_scrcpy "${adb_serial}" "${fullscreen_mode}" "${game_mode}" || true
     return 0
   fi
 
@@ -1752,7 +1780,7 @@ start_cvd() {
 
   log "boot completed after seeing: adb sys.boot_completed=1"
   respond "Android virtual device running"
-  maybe_start_scrcpy "${adb_serial}" "${fullscreen_mode}" || true
+  maybe_start_scrcpy "${adb_serial}" "${fullscreen_mode}" "${game_mode}" || true
 
 }
 
@@ -1811,9 +1839,12 @@ stop_cvd_internal() {
 
 exec_start_command() {
   local fullscreen_mode="$1"
-  shift
+  local game_mode="$2"
+  shift 2
 
-  if [[ "${fullscreen_mode}" == "true" ]]; then
+  if [[ "${game_mode}" == "true" ]]; then
+    exec "$0" start --game "$@"
+  elif [[ "${fullscreen_mode}" == "true" ]]; then
     exec "$0" start --fullscreen "$@"
   fi
 
@@ -1823,6 +1854,7 @@ exec_start_command() {
 main() {
   local command="${1:-help}"
   local fullscreen_mode
+  local game_mode
   local -a start_args
 
   case "${command}" in
@@ -1832,8 +1864,8 @@ main() {
       redirect_start_logs
       shift
       start_args=()
-      parse_start_options fullscreen_mode start_args "$@"
-      run_timed_operation "started" start_cvd "${fullscreen_mode}" "${start_args[@]}"
+      parse_start_options fullscreen_mode game_mode start_args "$@"
+      run_timed_operation "started" start_cvd "${fullscreen_mode}" "${game_mode}" "${start_args[@]}"
       ;;
     stop)
       shift
@@ -1847,11 +1879,11 @@ main() {
     restart)
       shift
       start_args=()
-      parse_start_options fullscreen_mode start_args "$@"
+      parse_start_options fullscreen_mode game_mode start_args "$@"
       protect_overlay_resume
       stop_cvd_internal false
       sleep 0.5
-      exec_start_command "${fullscreen_mode}" "${start_args[@]}"
+      exec_start_command "${fullscreen_mode}" "${game_mode}" "${start_args[@]}"
       ;;
     status)
       if has_live_cvd_processes; then
