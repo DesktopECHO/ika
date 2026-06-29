@@ -14,7 +14,7 @@ BUILD_SCRCPY_SERVER="$(dirname "$0")/build_scrcpy_server.sh"
 # Primary ika packages kept at the top level of the output tree; everything
 # else a spec emits (debug, devel, sub-packages, the cuttlefish-* shims) is
 # moved into an extras/ subdirectory.
-readonly PRIMARY_PACKAGES=(ika-base ika-lineageos ika-scrcpy)
+readonly PRIMARY_PACKAGES=(ika-base ika-lineageos)
 
 function is_primary_package() {
   local candidate="$1"
@@ -151,32 +151,29 @@ fi
 PACKAGE_OUTPUT_DIR="$(package_output_dir)"
 echo "Building ${DISTRO_FAMILY} packages; output will be written to ${PACKAGE_OUTPUT_DIR}"
 
+# The scrcpy viewer is now folded into ika-base. On Debian, base/debian/rules
+# builds the scrcpy client from a prebuilt scrcpy-server APK staged in-tree at
+# scrcpy/scrcpy-server, so build/refresh the server before the base package. On
+# RPM and Arch this is handled by build_package.sh while it assembles the source
+# tarball for the base package.
+if [[ "${DISTRO_FAMILY}" == "debian" ]]; then
+  if [[ -x "${BUILD_SCRCPY_SERVER}" ]]; then
+    echo "Building scrcpy-server..."
+    rm -f "${REPO_DIR}/scrcpy/scrcpy-server"
+    BUILD_DIR="${REPO_DIR}/deb/debbuild/build-scrcpy-server" \
+    ANDROID_CACHE_DIR="${REPO_DIR}/deb/debbuild/android-sdk-cache" \
+      "${BUILD_SCRCPY_SERVER}"
+    cp "${REPO_DIR}/deb/debbuild/build-scrcpy-server/scrcpy-server" \
+       "${REPO_DIR}/scrcpy/scrcpy-server"
+  else
+    >&2 echo "Error: ${BUILD_SCRCPY_SERVER} not found; ika-base requires scrcpy-server to build the bundled viewer"
+    exit 1
+  fi
+fi
+
 # Builds all packages under base/ and frontend/ for the detected distro.
 "${BUILD_PACKAGE}" "$@" "${REPO_DIR}/base"
 "${BUILD_PACKAGE}" "$@" "${REPO_DIR}/frontend"
-
-# Build ika-scrcpy outside the RPM flow. Refresh the server APK first on
-# Debian so the packaged client and device-side server stay in lockstep. On RPM
-# this is handled automatically via base/rpm/cuttlefish-scrcpy.spec.
-if [[ "${DISTRO_FAMILY}" != "rpm" ]]; then
-  if [[ "${DISTRO_FAMILY}" == "debian" ]]; then
-    if [[ -x "${BUILD_SCRCPY_SERVER}" ]]; then
-      echo "Building scrcpy-server..."
-      rm -f "${REPO_DIR}/scrcpy/scrcpy-server"
-      BUILD_DIR="${REPO_DIR}/deb/debbuild/build-scrcpy-server" \
-      ANDROID_CACHE_DIR="${REPO_DIR}/deb/debbuild/android-sdk-cache" \
-        "${BUILD_SCRCPY_SERVER}"
-      cp "${REPO_DIR}/deb/debbuild/build-scrcpy-server/scrcpy-server" \
-         "${REPO_DIR}/scrcpy/scrcpy-server"
-    else
-      >&2 echo "Warning: scrcpy/scrcpy-server missing and ${BUILD_SCRCPY_SERVER} not found; skipping ika-scrcpy"
-    fi
-  fi
-  if [[ "${DISTRO_FAMILY}" == "arch" || -f "${REPO_DIR}/scrcpy/scrcpy-server" ]]; then
-    echo "Building ika-scrcpy..."
-    "${BUILD_PACKAGE}" "$@" "${REPO_DIR}/tools/scrcpy"
-  fi
-fi
 
 # Build ika-lineageos outside the RPM flow if the prebuilt bundle exists.
 # On RPM this is handled automatically: build_package.sh iterates all *.spec

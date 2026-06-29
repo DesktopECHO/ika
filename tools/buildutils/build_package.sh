@@ -327,20 +327,23 @@ function refresh_source_tarball_if_needed() {
   local scrcpy_server_build_helper="${REPO_DIR}/tools/buildutils/build_scrcpy_server.sh"
   local local_scrcpy_server="${HOME}/ika-build/build-scrcpy-server/scrcpy-server"
 
+  # The scrcpy viewer is folded into ika-base, which compiles it from a prebuilt
+  # scrcpy-server APK bundled in the source tarball. Build/refresh the server
+  # when packaging the base spec (RPM) or the base/ tree (Arch).
   local building_scrcpy=false
   if [[ "${DISTRO_FAMILY:-}" == "rpm" ]]; then
-    local scrcpy_spec_path="${INPUT_PATH_ABS}/rpm/cuttlefish-scrcpy.spec"
-    if [[ -f "${INPUT_PATH_ABS}" && "$(basename "${INPUT_PATH_ABS}" .spec)" == "cuttlefish-scrcpy" ]]; then
+    local base_spec_path="${INPUT_PATH_ABS}/rpm/cuttlefish-base.spec"
+    if [[ -f "${INPUT_PATH_ABS}" && "$(basename "${INPUT_PATH_ABS}" .spec)" == "cuttlefish-base" ]]; then
       if ! should_exclude_spec "${INPUT_PATH_ABS}" && spec_supports_host_arch "${INPUT_PATH_ABS}"; then
         building_scrcpy=true
       fi
-    elif [[ -d "${INPUT_PATH_ABS}/rpm" && -f "${scrcpy_spec_path}" ]]; then
-      if ! should_exclude_spec "${scrcpy_spec_path}" && spec_supports_host_arch "${scrcpy_spec_path}"; then
+    elif [[ -d "${INPUT_PATH_ABS}/rpm" && -f "${base_spec_path}" ]]; then
+      if ! should_exclude_spec "${base_spec_path}" && spec_supports_host_arch "${base_spec_path}"; then
         building_scrcpy=true
       fi
     fi
   elif [[ "${DISTRO_FAMILY:-}" == "arch" ]]; then
-    if [[ "${INPUT_PATH_ABS}" == "${REPO_DIR}/tools/scrcpy" ]]; then
+    if [[ "${INPUT_PATH_ABS}" == "${REPO_DIR}/base" ]]; then
       building_scrcpy=true
     fi
   fi

@@ -12,9 +12,9 @@ arch=(x86_64 aarch64)
 url='https://github.com/google/android-cuttlefish'
 license=(Apache-2.0)
 makedepends=(aom clang cmake curl ffmpeg fmt gcc gflags git google-glog gtest
-             icu jsoncpp libcap libdrm libsrtp libx11 libxext libxml2 mesa
-             openssl opus perl pkgconf protobuf protobuf-c python xxd
-             util-linux-libs virglrenderer vulkan-headers wayland which xz z3)
+             icu jsoncpp libcap libdrm libsrtp libusb libx11 libxext libxml2 mesa
+             meson ninja openssl opus perl pkgconf protobuf protobuf-c python sdl3
+             xxd util-linux-libs virglrenderer vulkan-headers wayland which xz z3)
 # objcopy/nm cannot parse the Bazel/Clang-built binaries; skip strip/debug.
 options=(!strip !debug)
 source=("android-cuttlefish-${pkgver}.tar.gz")
@@ -103,6 +103,18 @@ build() {
     echo "Bazel build failed, retrying in ${retry_delay}s (${retry_count}/${max_retries})..." >&2
     sleep "${retry_delay}"
   done
+
+  # Build the scrcpy viewer (folded in from the former ika-scrcpy package). The
+  # prebuilt scrcpy-server APK is bundled in the source tarball at
+  # scrcpy/scrcpy-server.
+  cd "${srcdir}/${_srcroot}"
+  meson setup scrcpy _build_scrcpy \
+      --buildtype=release \
+      --prefix=/usr/lib/cuttlefish-common \
+      --bindir=bin \
+      -Dprebuilt_server=scrcpy-server \
+      -Dcompile_server=true
+  meson compile -C _build_scrcpy
 }
 
 _package_output_root() {
@@ -111,14 +123,15 @@ _package_output_root() {
 
 package_ika-base() {
   pkgdesc='Cuttlefish host binaries, networking helpers, and system services'
-  depends=(curl dnsmasq iproute2 libarchive libcap libdrm libx11 libxext lz4 mesa
-           mesa-utils
+  depends=(curl dnsmasq ffmpeg iproute2 libarchive libcap libdrm libusb libx11
+           libxext lz4 mesa mesa-utils
            net-tools networkmanager nftables openssl python python-requests
-           procps-ng shadow systemd virglrenderer vulkan-icd-loader
-           vulkan-swrast vulkan-tools xdg-utils xz)
-  provides=(cuttlefish-base)
-  conflicts=(cuttlefish-base)
-  replaces=(cuttlefish-base)
+           procps-ng sdl3 shadow systemd virglrenderer vulkan-icd-loader
+           vulkan-swrast vulkan-tools wayland-utils xdg-utils xz)
+  # ika-base now ships the scrcpy viewer; retire the standalone ika-scrcpy.
+  provides=(cuttlefish-base ika-scrcpy)
+  conflicts=(cuttlefish-base ika-scrcpy)
+  replaces=(cuttlefish-base ika-scrcpy)
   backup=(etc/firewalld/zones/cuttlefish.xml
           etc/sysctl.d/99-cuttlefish.conf)
   install=ika-base.install
@@ -167,7 +180,28 @@ package_ika-base() {
   # Expose cvd on PATH to match upstream's /usr/bin/cvd symlink.
   ln -sfn ../lib/cuttlefish-common/bin/cvd "${pkgdir}/usr/bin/cvd"
 
+  # Install the scrcpy viewer (folded in from the former ika-scrcpy package)
+  # and expose the "Ika" desktop launcher.
+  cd "${root}"
+  DESTDIR="${pkgdir}" meson install -C _build_scrcpy
+
+  install -d "${pkgdir}/usr/share/applications"
+  install -d "${pkgdir}/usr/share/icons/hicolor/256x256/apps"
+  install -m 0644 \
+    "${pkgdir}/usr/lib/cuttlefish-common/share/applications/scrcpy.desktop" \
+    "${pkgdir}/usr/share/applications/ika-scrcpy.desktop"
+  install -m 0644 \
+    "${pkgdir}/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps/scrcpy.png" \
+    "${pkgdir}/usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png"
+  sed -i \
+    -e 's#^Exec=.*#Exec=ika start#' \
+    -e 's#^Name=.*#Name=Ika#' \
+    -e 's#^Icon=.*#Icon=ika-scrcpy#' \
+    -e '/^StartupNotify=/a StartupWMClass=scrcpy' \
+    "${pkgdir}/usr/share/applications/ika-scrcpy.desktop"
+
   install -Dpm0644 "${root}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dpm0644 "${root}/scrcpy/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.scrcpy"
 }
 
 package_ika-common() {

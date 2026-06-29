@@ -47,6 +47,15 @@ BuildRequires:  which
 BuildRequires:  xxd
 BuildRequires:  xz-devel
 BuildRequires:  z3-devel
+# scrcpy viewer (Meson C build), folded into ika-base.
+BuildRequires:  meson
+BuildRequires:  ninja-build
+BuildRequires:  SDL3-devel
+BuildRequires:  libusb1-devel
+BuildRequires:  libavcodec-free-devel
+BuildRequires:  libavformat-free-devel
+BuildRequires:  libavutil-free-devel
+BuildRequires:  libswresample-free-devel
 
 Requires:       bsdtar
 Requires:       curl
@@ -71,6 +80,14 @@ Requires:       python3-requests
 Requires:       virglrenderer
 Requires:       xdg-utils
 Requires:       xz-libs
+# scrcpy viewer runtime dependencies, folded into ika-base.
+Requires:       wayland-utils
+Requires:       SDL3
+Requires:       libusb1
+Requires:       libavcodec-free
+Requires:       libavformat-free
+Requires:       libavutil-free
+Requires:       libswresample-free
 
 Requires(post): /usr/sbin/groupadd
 Requires(post): /usr/sbin/usermod
@@ -87,6 +104,12 @@ required to boot and manage Cuttlefish Android Virtual Devices on Fedora.
 
 Provides:       cuttlefish-base = %{version}-%{release}
 Obsoletes:      cuttlefish-base < %{version}-%{release}
+# The standalone scrcpy viewer package is now folded into ika-base. Retire both
+# the ika and legacy cuttlefish names so upgrades remove the old package.
+Provides:       ika-scrcpy = %{version}-%{release}
+Obsoletes:      ika-scrcpy < %{version}-%{release}
+Provides:       cuttlefish-scrcpy = %{version}-%{release}
+Obsoletes:      cuttlefish-scrcpy < %{version}-%{release}
 
 %package -n ika-common
 Summary:        Compatibility metapackage for Cuttlefish host packages
@@ -242,6 +265,17 @@ while true; do
 done
 popd >/dev/null
 
+# Build the scrcpy viewer (folded in from the former ika-scrcpy package). The
+# prebuilt scrcpy-server APK is bundled in the source tarball at
+# scrcpy/scrcpy-server (refreshed by tools/buildutils/build_package.sh).
+meson setup scrcpy _build_scrcpy \
+    --buildtype=release \
+    --prefix=/usr/lib/cuttlefish-common \
+    --bindir=bin \
+    -Dprebuilt_server=scrcpy-server \
+    -Dcompile_server=true
+meson compile -C _build_scrcpy
+
 %install
 rm -rf %{buildroot}
 
@@ -257,6 +291,27 @@ mkdir -p %{buildroot}/usr/bin
 cp -a base/cvd/bazel-out/${bazel_arch}-opt/bin/cuttlefish/package/cuttlefish-integration/bin/* %{buildroot}/usr/bin/
 mkdir -p %{buildroot}/usr/lib/cuttlefish-metrics/bin
 cp -a base/cvd/bazel-out/${bazel_arch}-opt/bin/cuttlefish/package/cuttlefish-metrics/bin/metrics_transmitter %{buildroot}/usr/lib/cuttlefish-metrics/bin/
+
+# Install the scrcpy viewer (folded in from the former ika-scrcpy package) into
+# the shared cuttlefish-common tree, then expose the "Ika" desktop launcher.
+DESTDIR=%{buildroot} meson install -C _build_scrcpy
+
+install -d %{buildroot}/usr/share/applications
+install -d %{buildroot}/usr/share/icons/hicolor/256x256/apps
+
+install -m 0644 \
+  %{buildroot}/usr/lib/cuttlefish-common/share/applications/scrcpy.desktop \
+  %{buildroot}/usr/share/applications/ika-scrcpy.desktop
+install -m 0644 \
+  %{buildroot}/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps/scrcpy.png \
+  %{buildroot}/usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
+
+sed -i \
+  -e 's#^Exec=.*#Exec=ika start#' \
+  -e 's#^Name=.*#Name=Ika#' \
+  -e 's#^Icon=.*#Icon=ika-scrcpy#' \
+  -e '/^StartupNotify=/a StartupWMClass=scrcpy' \
+  %{buildroot}/usr/share/applications/ika-scrcpy.desktop
 
 # Bazel package outputs are copied with their original mode bits, which can
 # leave binaries read-only in BUILDROOT. Fedora's brp-strip rewrites ELF files
@@ -401,6 +456,8 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /bin/ika
 /usr/bin/cvd
 /usr/lib/cuttlefish-common
+/usr/share/applications/ika-scrcpy.desktop
+/usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
 %config(noreplace) /etc/firewalld/zones/cuttlefish.xml
 /etc/NetworkManager/conf.d/99-cuttlefish.conf
 %config(noreplace) /etc/sysctl.d/99-cuttlefish.conf
@@ -437,5 +494,8 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/lib/cuttlefish-metrics
 
 %changelog
+* Mon Jun 29 2026 DesktopECHO <build@desktopecho.com> - 260628-6
+- Fold the scrcpy viewer into ika-base; the standalone ika-scrcpy package is
+  retired (Provides/Obsoletes ika-scrcpy and cuttlefish-scrcpy).
 * Sun Jun 28 2026 DesktopECHO <build@desktopecho.com> - 260628-6
 - Update Cuttlefish host package metadata to 260628-6

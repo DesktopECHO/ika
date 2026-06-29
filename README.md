@@ -6,6 +6,20 @@ This project originally started as an effort to get [Cuttlefish](https://source.
 
 The repository is a fork of [google/android-cuttlefish](https://github.com/google/android-cuttlefish), adapted into a desktop-oriented ika workflow with RPM and Debian package builds.  [Cuttlefish](https://source.android.com/setup/create/cuttlefish) is a configurable Android Virtual Device (AVD) that runs on Linux x86_64 and aarch64 hosts as well as Google Compute Engine.
 
+## Download binaries
+
+Prebuilt packages from the [latest release](https://github.com/DesktopECHO/ika/releases/latest) (`260628`). Pick the row for your package and the column for your distro and CPU architecture.
+
+| Package | Fedora x86_64 | Fedora aarch64 | Debian amd64 | Debian arm64 |
+| --- | --- | --- | --- | --- |
+| **ika-lineageos** (ROM image) | [1.36 GB](https://github.com/DesktopECHO/ika/releases/download/260628/ika-lineageos-260628-6.fc44.x86_64.rpm) | [1.17 GB](https://github.com/DesktopECHO/ika/releases/download/260628/ika-lineageos-260628-6.fc44.aarch64.rpm) | [1.32 GB](https://github.com/DesktopECHO/ika/releases/download/260628/ika-lineageos_260628-6_amd64.deb) | [1.13 GB](https://github.com/DesktopECHO/ika/releases/download/260628/ika-lineageos_260628-6_arm64.deb) |
+| **ika-base** (virtualization app + virtual console) | [139 MB](https://github.com/DesktopECHO/ika/releases/download/260628/ika-base-260628-6.fc44.x86_64.rpm) | [135 MB](https://github.com/DesktopECHO/ika/releases/download/260628/ika-base-260628-6.fc44.aarch64.rpm) | [115 MB](https://github.com/DesktopECHO/ika/releases/download/260628/ika-base_260628-6_amd64.deb) | [100 MB](https://github.com/DesktopECHO/ika/releases/download/260628/ika-base_260628-6_arm64.deb) |
+
+Install both `ika-lineageos` and `ika-base` for a working setup; `ika-base`
+includes the virtual console. On Fedora use `sudo dnf install ./<file>.rpm`; on
+Debian use `sudo apt install ./<file>.deb`. Or build from source with the
+Quick start below.
+
 ## Quick start
 
 For the normal local workflow, use `ika-build` from the repository root. It
@@ -34,9 +48,9 @@ sudo reboot
 ika start
 ```
 
-A few seconds after the virtual device starts, the bundled `ika` viewer
+A few seconds after the virtual device starts, the bundled `ika` virtual console
 opens automatically against the running Cuttlefish instance.
-The viewer uses Cuttlefish raw frames for both windowed and fullscreen
+The virtual console uses Cuttlefish raw frames for both windowed and fullscreen
 sessions.
 
 ### Rebuilding
@@ -49,7 +63,7 @@ you changed:
   `./ika-build x86_64`.
 - **Install package files only** — run `./ika-build --install-packages`. This
   does not build source, assumes yes to installation, and installs the
-  existing `ika-base`, `ika-scrcpy`, and `ika-lineageos` packages using `dnf`
+  existing `ika-base` and `ika-lineageos` packages using `dnf`
   or `apt` as appropriate.
 - **ROM only** — re-run `./lineageos/scripts/build_lineageos_desktop.sh` (or
   pass `arm64` / `x86_64` to limit it to one target). Use this after editing
@@ -150,8 +164,8 @@ outputs land under `rpmbuild/RPMS/`; on Debian-family distributions, outputs
 land under `deb/`. Non-primary packages are moved into an `extras/`
 subdirectory by `tools/buildutils/build_packages.sh`.
 
-* `ika-base` - Core host binaries, networking helpers, and system
-  services
+* `ika-base` - Core host binaries, networking helpers, system services, and
+  the bundled virtual console used by the `ika` launcher
 * `ika-user` - Browser-facing operator service
 * `ika-orchestration` - Host Orchestrator service and nginx config
 * `ika-integration` - Cloud integration utilities
@@ -160,12 +174,11 @@ subdirectory by `tools/buildutils/build_packages.sh`.
 * `ika-lineageos` - Bundled `lineageos/` tree installed under
   `/usr/share/cuttlefish-common/lineageos`
 * `ika-common` - Compatibility metapackage for the primary host packages
-* `ika-scrcpy` - Native viewer used by the `ika` launcher
 
-For the local workstation workflow, `ika-base`, `ika-scrcpy`, and
-`ika-lineageos` are the key packages. On RPM distributions, the specs also
-provide and obsolete the old `cuttlefish-*` package names for upgrades, but
-newly built package files use the `ika-*` names.
+For the local workstation workflow, `ika-base` and `ika-lineageos` are the key
+packages; `ika-base` includes the virtual console used by the `ika` launcher. On
+RPM distributions, the specs also provide and obsolete the old `cuttlefish-*`
+package names for upgrades, but newly built package files use the `ika-*` names.
 
 ## Notes
 

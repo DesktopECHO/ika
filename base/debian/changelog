@@ -1,5 +1,7 @@
 ika-base (260628-6) unstable; urgency=medium
 
   * Update Cuttlefish host package metadata to 260628-6.
+  * Fold the scrcpy viewer into ika-base; retire the standalone ika-scrcpy
+    package (Provides/Conflicts/Replaces ika-scrcpy).
 
  -- DesktopECHO <build@desktopecho.com>  Sun, 28 Jun 2026 00:00:00 +0000

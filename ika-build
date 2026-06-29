@@ -7,7 +7,7 @@
 #   2. installs build dependencies        (tools/buildutils/lib/dependencies.sh)
 #   3. builds the LineageOS Desktop ROM   (lineageos/scripts/build_lineageos_desktop.sh)
 #   4. builds the host packages           (tools/buildutils/build_packages.sh)
-#   5. offers to install ika-base, ika-scrcpy, and ika-lineageos
+#   5. offers to install ika-base and ika-lineageos
 #
 # Build dependencies are installed before the long ROM build and wait for
 # password input if needed. A reboot is required after installing; this script
@@ -29,7 +29,7 @@ refuse_root_build
 readonly ROM_BUILD="./lineageos/scripts/build_lineageos_desktop.sh"
 readonly PKG_BUILD="./tools/buildutils/build_packages.sh"
 readonly INSTALL_BAZEL="./tools/buildutils/installbazel.sh"
-readonly PRIMARY_PACKAGES=(ika-base ika-scrcpy ika-lineageos)
+readonly PRIMARY_PACKAGES=(ika-base ika-lineageos)
 
 auto_yes=false
 do_install=true

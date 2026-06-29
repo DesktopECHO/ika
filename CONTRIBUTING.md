@@ -1,7 +1,7 @@
 # Contributing
 
 This repository is a DesktopECHO fork of `google/android-cuttlefish` with
-RPM/Debian packaging, the `ika` launcher, ika-scrcpy integration, and the
+RPM/Debian packaging, the `ika` launcher, the bundled virtual console, and the
 LineageOS Desktop product layer.
 
 Use normal GitHub pull requests for changes. Keep patches narrowly scoped, and

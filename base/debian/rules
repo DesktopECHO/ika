@@ -56,6 +56,11 @@ endif
 
 cuttlefish_common := debian/ika-base/usr/lib/cuttlefish-common
 cuttlefish_integration := debian/ika-integration/usr/bin
+
+# scrcpy viewer (folded in from the former ika-scrcpy package). Built with meson
+# from the upstream tree at repo_root/scrcpy and installed into ika-base.
+scrcpy_src := $(CURDIR)/../scrcpy
+scrcpy_build_dir := $(CURDIR)/_build_scrcpy
 cuttlefish_metrics := debian/ika-metrics/usr/lib/cuttlefish-metrics
 
 disk_cache_arg :=
@@ -135,6 +140,22 @@ override_dh_auto_build:
 	    sleep "$$retry_delay"; \
 	  done
 	dh_auto_build
+	# Build the scrcpy viewer. The prebuilt scrcpy-server APK is staged at
+	# repo_root/scrcpy/scrcpy-server by tools/buildutils/build_packages.sh.
+	meson setup $(scrcpy_src) $(scrcpy_build_dir) \
+	    --buildtype=release \
+	    --prefix=/usr/lib/cuttlefish-common \
+	    --bindir=bin \
+	    -Dcompile_app=true \
+	    -Dcompile_server=true \
+	    -Dprebuilt_server=$(scrcpy_src)/scrcpy-server
+	meson compile -C $(scrcpy_build_dir)
+
+# Clean the scrcpy meson build tree alongside the default clean.
+.PHONY: override_dh_auto_clean
+override_dh_auto_clean:
+	dh_auto_clean
+	rm -rf $(scrcpy_build_dir)
 
 # Only generate optimized DWARF if debug is enabled
 .PHONY: override_dh_dwz
@@ -162,6 +183,22 @@ override_dh_install:
 	rm -rf ${cuttlefish_integration}/defaults.runfiles*
 	rm -rf ${cuttlefish_metrics}/bin/cvd.repo_mapping
 	rm -rf ${cuttlefish_metrics}/bin/cvd.runfiles*
+	# Install the scrcpy viewer into ika-base and expose the "Ika" launcher.
+	DESTDIR=$(CURDIR)/debian/ika-base meson install -C $(scrcpy_build_dir)
+	install -d debian/ika-base/usr/share/applications
+	install -d debian/ika-base/usr/share/icons/hicolor/256x256/apps
+	install -m 0644 \
+	    ${cuttlefish_common}/share/applications/scrcpy.desktop \
+	    debian/ika-base/usr/share/applications/ika-scrcpy.desktop
+	install -m 0644 \
+	    ${cuttlefish_common}/share/icons/hicolor/256x256/apps/scrcpy.png \
+	    debian/ika-base/usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
+	sed -i \
+	    -e 's#^Exec=.*#Exec=ika start#' \
+	    -e 's#^Name=.*#Name=Ika#' \
+	    -e 's#^Icon=.*#Icon=ika-scrcpy#' \
+	    -e '/^StartupNotify=/a StartupWMClass=scrcpy' \
+	    debian/ika-base/usr/share/applications/ika-scrcpy.desktop
 
 # Repair output files bazel actions made executable
 .PHONY: override_dh_fixperms

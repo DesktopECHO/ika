@@ -36,13 +36,9 @@ base/debian/cuttlefish-*/
 base/debian/ika-*/
 frontend/debian/cuttlefish-*/
 frontend/debian/ika-*/
-tools/scrcpy/debian/ika-scrcpy/
-tools/scrcpy/debian/.debhelper/
-tools/scrcpy/debian/*.debhelper.log
-tools/scrcpy/debian/*.substvars
-tools/scrcpy/debian/debhelper-build-stamp
-tools/scrcpy/debian/files
-tools/scrcpy/_build/
+# scrcpy viewer is built as part of ika-base.
+base/_build_scrcpy/
+scrcpy/scrcpy-server
 tools/lineageos/debian/ika-lineageos/
 tools/lineageos/debian/.debhelper/
 tools/lineageos/debian/*.debhelper.log

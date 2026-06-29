@@ -41,7 +41,7 @@ function install_rpm_build_dependencies() {
     # cuttlefish-frontend BuildRequires (Go + Node.js)
     curl golang npm
 
-    # cuttlefish-scrcpy BuildRequires (Meson C build)
+    # ika-base scrcpy viewer BuildRequires (Meson C build + scrcpy-server Java build)
     meson ninja-build java-25-openjdk-devel SDL3-devel libavcodec-free-devel
     libavformat-free-devel libavutil-free-devel libswresample-free-devel
     libusb1-devel vulkan-headers libicu-devel
@@ -132,7 +132,7 @@ function install_deb_build_dependencies() {
     # cuttlefish-frontend Build-Depends (Go + Node.js)
     curl golang-go npm
 
-    # ika-scrcpy Build-Depends (Meson C build + scrcpy-server Java build)
+    # ika-base scrcpy viewer Build-Depends (Meson C build + scrcpy-server Java build)
     default-jdk meson ninja-build libavcodec-dev libavformat-dev libavutil-dev
     libswresample-dev libsdl3-dev libusb-1.0-0-dev
 
