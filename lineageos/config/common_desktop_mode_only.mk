@@ -44,6 +44,11 @@ PRODUCT_PRODUCT_PROPERTIES += \
     pm.dexopt.first-boot=speed-profile \
     pm.dexopt.install=speed-profile
 
+# Cuttlefish init renames eth0 to buried_eth0 only when this property is empty.
+# Keep it present so ethernet-only launches retain the kernel eth0 name.
+PRODUCT_VENDOR_PROPERTIES += \
+    ro.vendor.disable_rename_eth0=false
+
 # Seed per-display windowing settings (R7). DisplayWindowSettingsProvider reads
 # this on first boot and persists into /data/system/display_settings.xml; the
 # entry keys the Cuttlefish default display to WINDOWING_MODE_FREEFORM and
