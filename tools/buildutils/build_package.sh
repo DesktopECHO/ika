@@ -301,7 +301,8 @@ function source_tarball_has_required_files() {
   for required_file in \
     "base/cvd/adb/BUILD.bazel" \
     "base/cvd/tools/ensure_bazel_git_mirrors.sh" \
-    "base/cvd/tools/ensure_crosvm_git_mirror.sh"
+    "base/cvd/tools/ensure_crosvm_git_mirror.sh" \
+    "base/cvd/tools/kill_stale_bazel_servers.sh"
   do
     if ! grep -Fxq "${tar_basename}/${required_file}" "${tar_index}"; then
       echo "Discarding incomplete source tarball ${tarball}: missing ${required_file}"

@@ -212,6 +212,14 @@ mkdir -p "$BAZEL_OUTPUT_USER_ROOT" "$BAZEL_REPOSITORY_CACHE" "$BAZEL_DISK_CACHE"
 # limits while external git repos are materialized.
 export TMPDIR="$BAZEL_TMPDIR"
 
+# Shut down stale Bazel servers from earlier or concurrent builds that share
+# this --output_user_root. Two servers racing on the shared caches and the
+# in-tree sources trip --guard_against_concurrent_changes and cause transient
+# "file not found" build failures.
+CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT="$BAZEL_OUTPUT_USER_ROOT" \
+  ./tools/kill_stale_bazel_servers.sh || \
+  echo "Warning: stale Bazel server cleanup failed; continuing." >&2
+
 retry_count=0
 max_retries=9
 retry_delay=60

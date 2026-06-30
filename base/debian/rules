@@ -99,6 +99,9 @@ override_dh_auto_build:
 	  BAZEL_GIT_CONFIG="$$BAZEL_CACHE_ROOT/gitconfig"; \
 	  CARGO_BAZEL_TIMEOUT="$${CARGO_BAZEL_TIMEOUT:-1800}"; \
 	  mkdir -p "$$BAZEL_OUTPUT_USER_ROOT" "$$BAZEL_REPOSITORY_CACHE" "$$BAZEL_DISTDIR" "$$BAZEL_GIT_MIRROR_ROOT"; \
+	  CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT="$$BAZEL_OUTPUT_USER_ROOT" \
+	    ./tools/kill_stale_bazel_servers.sh || \
+	    echo "Warning: stale Bazel server cleanup failed; continuing." >&2; \
 	  retry_count=0; max_retries=9; retry_delay=60; \
 	  while true; do \
 	    if CUTTLEFISH_BAZEL_GIT_MIRROR_ROOT="$$BAZEL_GIT_MIRROR_ROOT" \

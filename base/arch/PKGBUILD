@@ -52,6 +52,14 @@ build() {
   # git repos are materialized.
   export TMPDIR="${bazel_tmpdir}"
 
+  # Shut down stale Bazel servers from earlier or concurrent builds that share
+  # this --output_user_root. Two servers racing on the shared caches and the
+  # in-tree sources trip --guard_against_concurrent_changes and cause transient
+  # "file not found" build failures.
+  CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT="${output_user_root}" \
+    ./tools/kill_stale_bazel_servers.sh || \
+    echo "Warning: stale Bazel server cleanup failed; continuing." >&2
+
   local retry_count=0
   local max_retries=9
   local retry_delay=60
