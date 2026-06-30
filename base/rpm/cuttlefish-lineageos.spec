@@ -1,6 +1,6 @@
 Name:           ika-lineageos
-Version:        260628
-Release:        6%{?dist}
+Version:        260629
+Release:        1%{?dist}
 Summary:        LineageOS for Cuttlefish host
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish
@@ -86,5 +86,5 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
-* Sun Jun 28 2026 DesktopECHO <build@desktopecho.com> - 260628-6
+* Mon Jun 29 2026 DesktopECHO <build@desktopecho.com> - 260629-1
 - Align ika-lineageos package version with packaging/VERSION.

@@ -1,5 +1,5 @@
-ika-lineageos (260628-6) unstable; urgency=medium
+ika-lineageos (260629-1) unstable; urgency=medium
 
-  * Rebuild against the Cuttlefish 260628 source package.
+  * Rebuild against the Cuttlefish 260629 source package.
 
- -- DesktopECHO <build@desktopecho.com>  Sun, 28 Jun 2026 00:00:00 +0000
+ -- DesktopECHO <build@desktopecho.com>  Mon, 29 Jun 2026 00:00:00 +0000

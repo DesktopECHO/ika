@@ -4,8 +4,8 @@
 
 pkgbase=ika-frontend
 pkgname=(ika-user ika-orchestration)
-pkgver=260628
-pkgrel=6
+pkgver=260629
+pkgrel=1
 pkgdesc='Frontend and orchestration packages for Cuttlefish'
 arch=(x86_64 aarch64)
 url='https://github.com/google/android-cuttlefish'

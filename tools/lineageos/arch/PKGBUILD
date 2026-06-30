@@ -4,8 +4,8 @@
 
 pkgbase=ika-lineageos
 pkgname=(ika-lineageos)
-pkgver=260628
-pkgrel=6
+pkgver=260629
+pkgrel=1
 pkgdesc='LineageOS for Cuttlefish host'
 arch=(x86_64 aarch64)
 url='https://github.com/google/android-cuttlefish'

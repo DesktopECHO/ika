@@ -1,6 +1,6 @@
 Name:           ika-base
-Version:        260628
-Release:        6%{?dist}
+Version:        260629
+Release:        1%{?dist}
 Summary:        Cuttlefish Android Virtual Device host packages for Fedora
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish
@@ -494,7 +494,7 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/lib/cuttlefish-metrics
 
 %changelog
-* Mon Jun 29 2026 DesktopECHO <build@desktopecho.com> - 260628-6
+* Mon Jun 29 2026 DesktopECHO <build@desktopecho.com> - 260629-1
 - Fold the scrcpy viewer into ika-base; the standalone ika-scrcpy package is
   retired (Provides/Obsoletes ika-scrcpy and cuttlefish-scrcpy).
 * Sun Jun 28 2026 DesktopECHO <build@desktopecho.com> - 260628-6

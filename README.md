@@ -8,12 +8,12 @@ The repository is a fork of [google/android-cuttlefish](https://github.com/googl
 
 ## Download binaries
 
-Prebuilt packages from the [latest release](https://github.com/DesktopECHO/ika/releases/latest) (`260628`). Pick the row for your package and the column for your distro and CPU architecture.
+Prebuilt packages from the [latest release](https://github.com/DesktopECHO/ika/releases/latest) (`260629`). Pick the row for your package and the column for your distro and CPU architecture.
 
 | Package | Fedora x86_64 | Fedora aarch64 | Debian amd64 | Debian arm64 |
 | --- | --- | --- | --- | --- |
-| **ika-lineageos** (ROM image) | [1.36 GB](https://github.com/DesktopECHO/ika/releases/download/260628/ika-lineageos-260628-6.fc44.x86_64.rpm) | [1.17 GB](https://github.com/DesktopECHO/ika/releases/download/260628/ika-lineageos-260628-6.fc44.aarch64.rpm) | [1.32 GB](https://github.com/DesktopECHO/ika/releases/download/260628/ika-lineageos_260628-6_amd64.deb) | [1.13 GB](https://github.com/DesktopECHO/ika/releases/download/260628/ika-lineageos_260628-6_arm64.deb) |
-| **ika-base** (virtualization app + virtual console) | [139 MB](https://github.com/DesktopECHO/ika/releases/download/260628/ika-base-260628-6.fc44.x86_64.rpm) | [135 MB](https://github.com/DesktopECHO/ika/releases/download/260628/ika-base-260628-6.fc44.aarch64.rpm) | [115 MB](https://github.com/DesktopECHO/ika/releases/download/260628/ika-base_260628-6_amd64.deb) | [100 MB](https://github.com/DesktopECHO/ika/releases/download/260628/ika-base_260628-6_arm64.deb) |
+| **ika-lineageos** (ROM image) | [1.36 GB](https://github.com/DesktopECHO/ika/releases/download/260629/ika-lineageos-260629-1.fc44.x86_64.rpm) | [1.17 GB](https://github.com/DesktopECHO/ika/releases/download/260629/ika-lineageos-260629-1.fc44.aarch64.rpm) | [1.32 GB](https://github.com/DesktopECHO/ika/releases/download/260629/ika-lineageos_260629-1_amd64.deb) | [1.13 GB](https://github.com/DesktopECHO/ika/releases/download/260629/ika-lineageos_260629-1_arm64.deb) |
+| **ika-base** (virtualization app + virtual console) | [139 MB](https://github.com/DesktopECHO/ika/releases/download/260629/ika-base-260629-1.fc44.x86_64.rpm) | [135 MB](https://github.com/DesktopECHO/ika/releases/download/260629/ika-base-260629-1.fc44.aarch64.rpm) | [115 MB](https://github.com/DesktopECHO/ika/releases/download/260629/ika-base_260629-1_amd64.deb) | [100 MB](https://github.com/DesktopECHO/ika/releases/download/260629/ika-base_260629-1_arm64.deb) |
 
 Install both `ika-lineageos` and `ika-base` for a working setup; `ika-base`
 includes the virtual console. On Fedora use `sudo dnf install ./<file>.rpm`; on
