@@ -1,0 +1,28 @@
+Patch summary:
+Derive the gfxstream host blob page size from the host page size instead of a
+hardcoded 4096. On 16K-page hosts (Apple Silicon under Asahi) the udmabuf-backed
+host-visible blob path aligns its shared-memory size to kPageSizeforBlob before
+calling UDMABUF_CREATE; a 4096 value under-aligns the region (the kernel requires
+the system page size, 16384) and the import/map fails. kPageMaskForBlob is the
+matching host-VA alignment mask used by the blob mapping guard. All uses are
+runtime (size alignment, pointer-alignment checks, comparisons), so switching
+from constexpr 4096 to getpagesize() is safe; <unistd.h> is already included.
+
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -171,8 +171,12 @@
+     VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME,
+ };
+
+-static constexpr uint64_t kPageSizeforBlob = 4096;
+-static constexpr uint64_t kPageMaskForBlob = ~(0xfff);
++// ika: derive the blob page size from the host page size so the SystemBlob/
++// udmabuf host-visible path aligns correctly on 16K-page hosts (Apple Silicon
++// under Asahi). A hardcoded 4096 under-aligns udmabuf imports and blob sizes,
++// causing UDMABUF_CREATE / mapping failures on 16K pages.
++static const uint64_t kPageSizeforBlob = static_cast<uint64_t>(getpagesize());
++static const uint64_t kPageMaskForBlob = ~(static_cast<uint64_t>(getpagesize()) - 1);
+
+ static std::atomic<uint64_t> sNextHostBlobId{1};
+ static std::atomic<uint64_t> sUniqueShmemId = 0;

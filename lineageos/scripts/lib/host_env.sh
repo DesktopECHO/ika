@@ -302,12 +302,8 @@ setup_temp_zram_if_needed() {
 cleanup_temp_zram() {
   [[ -n "$temp_zram_device" ]] || return 0
 
-  log "removing temporary zram swap $temp_zram_device"
-  # Runs from the exit trap, so a failure must not abort shutdown — but the
-  # user needs to know the device is still consuming RAM and how to free it.
-  if ! run_privileged swapoff "$temp_zram_device" >/dev/null 2>&1 || \
-     ! run_privileged zramctl --reset "$temp_zram_device" >/dev/null 2>&1; then
-    log "warning: failed to remove temporary zram swap $temp_zram_device; remove it manually with: sudo swapoff $temp_zram_device; sudo zramctl --reset $temp_zram_device (or reboot)"
-  fi
+  log "temporary zram swap $temp_zram_device remains enabled for this boot"
+  log "to remove it now, run: sudo swapoff $temp_zram_device; sudo zramctl --reset $temp_zram_device"
+  log "otherwise it will be cleared automatically on next reboot"
   temp_zram_device=""
 }

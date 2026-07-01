@@ -389,7 +389,7 @@ index 67aece73f..931e14695 100644
 +    locksettings set-disabled true
 +    # User-mutable preferences are seeded once and then left alone, so a subsequent change in
 +    # Settings is not clobbered on the next reboot. (R15)
-+    put_system pointer_speed 2
++    put_system pointer_speed -7
 +    put_system screen_off_timeout 2147483647
 +    put_global lineage_desktop_provisioned 1
 +fi

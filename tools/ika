@@ -265,6 +265,15 @@ SCRCPY_DPI=""
 GFXSTREAM_VULKAN_MODE="${GFXSTREAM_VULKAN:-auto}"
 GFXSTREAM_GLES_CONTEXT_TYPES="gfxstream-gles:gfxstream-composer"
 GFXSTREAM_VULKAN_CONTEXT_TYPES="gfxstream-gles:gfxstream-vulkan:gfxstream-composer"
+GFXSTREAM_VULKAN_CONTEXT_TYPES_WITH_WSI="${GFXSTREAM_VULKAN_CONTEXT_TYPES},wsi=vk"
+# Apple Silicon (Honeykrisp) exposes the dma-buf external-memory path
+# (VK_EXT_external_memory_dma_buf) but NOT VK_EXT_external_memory_host, so the
+# gfxstream SystemBlob host-pointer path cannot be backed by the Apple GPU and
+# must stay disabled (forcing it falls back to llvmpipe and loses acceleration).
+# Route host-visible guest memory through udmabuf-backed dma-buf instead; this
+# requires the PATCH.gfxstream.blob_page_size_runtime gfxstream patch so blob
+# sizes align to the 16K host page (otherwise UDMABUF_CREATE fails).
+GFXSTREAM_APPLE_16K_VULKAN_RENDERER_FEATURES="ExternalBlob:enabled;SystemBlob:disabled;VulkanAllocateHostVisibleAsUdmabuf:enabled;VulkanUseDedicatedAhbMemoryType:enabled"
 CVD_GRAPHICS_DRIVER_MESSAGE=""
 CVD_DATA_STORAGE_MESSAGE=""
 CVD_NEWLY_PROVISIONED="false"
@@ -496,6 +505,7 @@ Example:
   ${SCRIPT_NAME} start --gpu_mode=guest_swiftshader --cpus=2 --memory_mb=2048 --dpi=240 --fullscreen
   ${SCRIPT_NAME} start --game
   ${SCRIPT_NAME} start --data_gb=128
+  ${SCRIPT_NAME} restart --gpu_mode=gfxstream_guest_angle_host_swiftshader
   ${SCRIPT_NAME} restart --gfxstream_vulkan=on
   ${SCRIPT_NAME} restart --ika_scrcpy="--no-clipboard-autosync"
 
@@ -510,6 +520,9 @@ Environment:
                          only on Apple Silicon 16K-page hosts or when the
                          primary host Vulkan device is llvmpipe; on forces
                          GLES+Vulkan; off forces GLES-only gfxstream.
+                         On Apple Silicon 16K-page hosts, on also routes
+                         host-visible guest Vulkan memory through udmabuf-backed
+                         dma-buf (the path the Apple GPU supports).
   DATA_GB                Size of the next fresh userdata image, in GB.
                          Existing VM data must be reset first.
   IKA_SCRCPY             Extra whitespace-separated args appended to scrcpy.
@@ -961,6 +974,116 @@ start_gpu_mode_value() {
   start_arg_value "gpu_mode" "${CVD_GPU_DEFAULTS[gpu_mode]}" "$@"
 }
 
+merge_gfxstream_renderer_features() {
+  local existing="$1"
+  local required="$2"
+  local result=""
+  local feature
+  local name
+  local -a existing_features=()
+
+  IFS=';' read -r -a existing_features <<<"${existing}"
+  for feature in "${existing_features[@]}"; do
+    [[ -n "${feature}" ]] || continue
+    name="${feature%%:*}"
+    case "${name}" in
+      ExternalBlob|SystemBlob|VulkanAllocateHostVisibleAsUdmabuf|VulkanUseDedicatedAhbMemoryType)
+        continue
+        ;;
+    esac
+    result+="${result:+;}${feature}"
+  done
+
+  result+="${result:+;}${required}"
+  printf '%s\n' "${result}"
+}
+
+append_or_merge_gpu_renderer_features() {
+  local -n renderer_args_array="$1"
+  local required="$2"
+  local i
+  local existing
+
+  for i in "${!renderer_args_array[@]}"; do
+    case "${renderer_args_array[${i}]}" in
+      --gpu_renderer_features=*|-gpu_renderer_features=*)
+        existing="${renderer_args_array[${i}]#*=}"
+        renderer_args_array[${i}]="--gpu_renderer_features=$(merge_gfxstream_renderer_features "${existing}" "${required}")"
+        return 0
+        ;;
+      --gpu_renderer_features|-gpu_renderer_features)
+        (( i + 1 < ${#renderer_args_array[@]} )) || die "--gpu_renderer_features requires a value"
+        existing="${renderer_args_array[$((i + 1))]}"
+        renderer_args_array[$((i + 1))]="$(merge_gfxstream_renderer_features "${existing}" "${required}")"
+        return 0
+        ;;
+    esac
+  done
+
+  renderer_args_array+=("--gpu_renderer_features=${required}")
+}
+
+gfxstream_context_types_include_vulkan() {
+  local context_types="$1"
+  local contexts="${context_types%%,*}"
+
+  [[ ":${contexts}:" == *":gfxstream-vulkan:"* ]]
+}
+
+gfxstream_context_types_include_wsi_vk() {
+  local context_types="$1"
+
+  [[ ",${context_types}," == *",wsi=vk,"* ]]
+}
+
+append_gfxstream_wsi_vk() {
+  local context_types="$1"
+
+  if gfxstream_context_types_include_wsi_vk "${context_types}"; then
+    printf '%s\n' "${context_types}"
+  else
+    printf '%s\n' "${context_types},wsi=vk"
+  fi
+}
+
+merge_gpu_context_types_for_vulkan() {
+  local -n context_args_array="$1"
+  local default_context_types="$2"
+  local require_wsi_vk="${3:-false}"
+  local i
+  local existing
+  local merged
+
+  for i in "${!context_args_array[@]}"; do
+    case "${context_args_array[${i}]}" in
+      --gpu_context_types=*|-gpu_context_types=*)
+        existing="${context_args_array[${i}]#*=}"
+        if [[ "${require_wsi_vk}" == "true" ]] \
+            && gfxstream_context_types_include_vulkan "${existing}"; then
+          merged="$(append_gfxstream_wsi_vk "${existing}")"
+          context_args_array[${i}]="--gpu_context_types=${merged}"
+        fi
+        printf '%s\n' "${existing}"
+        return 0
+        ;;
+      --gpu_context_types|-gpu_context_types)
+        (( i + 1 < ${#context_args_array[@]} )) || die "--gpu_context_types requires a value"
+        existing="${context_args_array[$((i + 1))]}"
+        if [[ "${require_wsi_vk}" == "true" ]] \
+            && gfxstream_context_types_include_vulkan "${existing}"; then
+          merged="$(append_gfxstream_wsi_vk "${existing}")"
+          context_args_array[$((i + 1))]="${merged}"
+        fi
+        printf '%s\n' "${existing}"
+        return 0
+        ;;
+    esac
+  done
+
+  context_args_array+=("--gpu_context_types=${default_context_types}")
+  printf '%s\n' "${default_context_types}"
+}
+
 append_gfxstream_vulkan_args() {
   local -n args_array="$1"
   shift
@@ -968,6 +1091,8 @@ append_gfxstream_vulkan_args() {
   local selected_mode
   local gpu_mode
   local vulkan_decision
+  local user_context_types
+  local effective_context_types
 
   mode="$(normalize_gfxstream_vulkan_mode "${GFXSTREAM_VULKAN_MODE}")"
   GFXSTREAM_VULKAN_MODE="${mode}"
@@ -981,8 +1106,18 @@ append_gfxstream_vulkan_args() {
   fi
 
   if user_supplied_flag "gpu_context_types" "$@"; then
-    CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (user gpu_context_types; gfxstream-vulkan=${mode} not applied)"
-    log "using user supplied gpu_context_types; gfxstream-vulkan=${mode} not applied"
+    user_context_types="$(merge_gpu_context_types_for_vulkan args_array \
+      "${GFXSTREAM_VULKAN_CONTEXT_TYPES_WITH_WSI}" \
+      "$([[ "${mode}" == "on" ]] && echo true || echo false)")"
+    effective_context_types="$(start_arg_value "gpu_context_types" "${user_context_types}" "${args_array[@]}")"
+    CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (user gpu_context_types; gfxstream-vulkan=${mode})"
+    log "using user supplied gpu_context_types=${effective_context_types}; gfxstream-vulkan=${mode}"
+    if gfxstream_context_types_include_vulkan "${effective_context_types}" \
+        && is_apple_silicon_16k_host; then
+      append_or_merge_gpu_renderer_features \
+        args_array "${GFXSTREAM_APPLE_16K_VULKAN_RENDERER_FEATURES}"
+      log "Apple Silicon 16K host: routing host-visible Vulkan memory via udmabuf dma-buf"
+    fi
     return 0
   fi
 
@@ -1009,9 +1144,14 @@ append_gfxstream_vulkan_args() {
       log "${vulkan_decision}; context-types=${GFXSTREAM_GLES_CONTEXT_TYPES}"
       ;;
     on)
-      args_array+=("--gpu_context_types=${GFXSTREAM_VULKAN_CONTEXT_TYPES}")
+      args_array+=("--gpu_context_types=${GFXSTREAM_VULKAN_CONTEXT_TYPES_WITH_WSI}")
       CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (GLES+Vulkan; ${vulkan_decision})"
-      log "${vulkan_decision}; context-types=${GFXSTREAM_VULKAN_CONTEXT_TYPES}"
+      log "${vulkan_decision}; context-types=${GFXSTREAM_VULKAN_CONTEXT_TYPES_WITH_WSI}"
+      if is_apple_silicon_16k_host; then
+        append_or_merge_gpu_renderer_features \
+          args_array "${GFXSTREAM_APPLE_16K_VULKAN_RENDERER_FEATURES}"
+        log "Apple Silicon 16K host: routing host-visible Vulkan memory via udmabuf dma-buf"
+      fi
       ;;
   esac
 }

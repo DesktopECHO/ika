@@ -8,5 +8,6 @@ git_repository(
     patches = [
         "@//build_external/gfxstream:PATCH.gfxstream.build_variables.patch",
         "@//build_external/gfxstream:PATCH.protobuf_deprecation_warning.patch",
+        "@//build_external/gfxstream:PATCH.gfxstream.blob_page_size_runtime.patch",
     ],
 )

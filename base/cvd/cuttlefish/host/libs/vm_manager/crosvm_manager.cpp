@@ -79,6 +79,25 @@ std::string GfxstreamContextTypes(
   return default_context_types;
 }
 
+bool GfxstreamContextTypesIncludeVulkan(const std::string& context_types) {
+  const auto wsi_separator = context_types.find(',');
+  const std::string context_type_list =
+      wsi_separator == std::string::npos
+          ? context_types
+          : context_types.substr(0, wsi_separator);
+  const auto split_context_types = android::base::Split(context_type_list, ":");
+  return std::find(split_context_types.begin(), split_context_types.end(),
+                   "gfxstream-vulkan") != split_context_types.end();
+}
+
+std::string GfxstreamVulkanWsiParam(const std::string& context_types) {
+  if (!GfxstreamContextTypesIncludeVulkan(context_types) ||
+      context_types.find("wsi=") != std::string::npos) {
+    return "";
+  }
+  return ",wsi=vk";
+}
+
 Result<std::optional<std::string>> PreferPerformanceCoresAffinity(
     const CuttlefishConfig::InstanceSpecific& instance) {
   static constexpr char kCpuSysfsRoot[] = "/sys/devices/system/cpu";
@@ -425,12 +444,20 @@ Result<VhostUserDeviceCommands> BuildVhostUserGpu(
   if (gpu_mode == GpuMode::GuestSwiftshader) {
     gpu_params_json["backend"] = "2D";
   } else if (gpu_mode == GpuMode::Gfxstream) {
-    gpu_params_json["context-types"] =
+    const std::string context_types =
         GfxstreamContextTypes(instance, kGfxstreamVhostContextTypes);
+    gpu_params_json["context-types"] = context_types;
+    if (GfxstreamContextTypesIncludeVulkan(context_types)) {
+      gpu_params_json["wsi"] = "vk";
+    }
     gpu_params_json["egl"] = true;
     gpu_params_json["gles"] = true;
   } else if (IsGfxstreamGuestAngleMode(gpu_mode)) {
-    gpu_params_json["context-types"] = "gfxstream-vulkan";
+    const std::string context_types = "gfxstream-vulkan";
+    gpu_params_json["context-types"] = context_types;
+    if (GfxstreamContextTypesIncludeVulkan(context_types)) {
+      gpu_params_json["wsi"] = "vk";
+    }
     gpu_params_json["egl"] = false;
     gpu_params_json["gles"] = false;
   }
@@ -576,15 +603,18 @@ Result<void> ConfigureGpu(const CuttlefishConfig& config, Command* crosvm_cmd) {
                              "backend=virglrenderer,context-types=virgl2",
                              gpu_common_3d_string);
   } else if (gpu_mode == GpuMode::Gfxstream) {
+    const std::string context_types =
+        GfxstreamContextTypes(instance, kGfxstreamContextTypes);
     crosvm_cmd->AddParameter(
-        "--gpu=", gpu_displays_string,
-        "context-types=" +
-            GfxstreamContextTypes(instance, kGfxstreamContextTypes),
+        "--gpu=", gpu_displays_string, "context-types=" + context_types +
+                                        GfxstreamVulkanWsiParam(context_types),
         gpu_common_3d_string);
   } else if (IsGfxstreamGuestAngleMode(gpu_mode)) {
+    const std::string context_types =
+        "gfxstream-vulkan:gfxstream-composer";
     crosvm_cmd->AddParameter(
-        "--gpu=", gpu_displays_string,
-        "context-types=gfxstream-vulkan:gfxstream-composer",
+        "--gpu=", gpu_displays_string, "context-types=" + context_types +
+                                        GfxstreamVulkanWsiParam(context_types),
         gpu_common_3d_string);
   } else if (gpu_mode == GpuMode::Custom) {
     crosvm_cmd->AddParameter("--gpu=", gpu_displays_string,
