@@ -783,17 +783,19 @@ Result<std::vector<MonitorCommand>> QemuManager::StartCommands(
     case ExternalNetworkMode::kTap:
       if (instance.enable_tap_devices()) {
         has_network_devices = true;
-        qemu_cmd.AddParameter("-netdev");
-        qemu_cmd.AddParameter(
-            "tap,id=hostnet0,ifname=", instance.mobile_tap_name(),
-            ",script=no,downscript=no", vhost_net);
+        if (instance.enable_modem_simulator()) {
+          qemu_cmd.AddParameter("-netdev");
+          qemu_cmd.AddParameter(
+              "tap,id=hostnet0,ifname=", instance.mobile_tap_name(),
+              ",script=no,downscript=no", vhost_net);
+        }
 
         qemu_cmd.AddParameter("-netdev");
         qemu_cmd.AddParameter(
             "tap,id=hostnet1,ifname=", instance.ethernet_tap_name(),
             ",script=no,downscript=no", vhost_net);
 
-        if (!config.virtio_mac80211_hwsim()) {
+        if (!config.virtio_mac80211_hwsim() && instance.has_wifi_card()) {
           qemu_cmd.AddParameter("-netdev");
           qemu_cmd.AddParameter(
               "tap,id=hostnet2,ifname=", instance.wifi_tap_name(),
@@ -803,20 +805,23 @@ Result<std::vector<MonitorCommand>> QemuManager::StartCommands(
       break;
     case cuttlefish::ExternalNetworkMode::kSlirp: {
       has_network_devices = true;
-      const std::string net =
-          fmt::format("{}/{}", instance.ril_ipaddr(), instance.ril_prefixlen());
-      const std::string& host = instance.ril_gateway();
-      qemu_cmd.AddParameter("-netdev");
-      // TODO(schuffelen): `dns` needs to match the first `nameserver` in
-      // `/etc/resolv.conf`. Implement something that generalizes beyond
-      // gLinux.
-      qemu_cmd.AddParameter("user,id=hostnet0,net=", net, ",host=", host,
-                            ",dns=127.0.0.1");
+      if (instance.enable_modem_simulator()) {
+        const std::string net =
+            fmt::format("{}/{}", instance.ril_ipaddr(),
+                        instance.ril_prefixlen());
+        const std::string& host = instance.ril_gateway();
+        qemu_cmd.AddParameter("-netdev");
+        // TODO(schuffelen): `dns` needs to match the first `nameserver` in
+        // `/etc/resolv.conf`. Implement something that generalizes beyond
+        // gLinux.
+        qemu_cmd.AddParameter("user,id=hostnet0,net=", net, ",host=", host,
+                              ",dns=127.0.0.1");
+      }
 
       qemu_cmd.AddParameter("-netdev");
       qemu_cmd.AddParameter("user,id=hostnet1,net=10.0.1.1/24,dns=8.8.4.4");
 
-      if (!config.virtio_mac80211_hwsim()) {
+      if (!config.virtio_mac80211_hwsim() && instance.has_wifi_card()) {
         qemu_cmd.AddParameter("-netdev");
         qemu_cmd.AddParameter("user,id=hostnet2,net=10.0.2.1/24,dns=1.1.1.1");
       }
@@ -830,15 +835,17 @@ Result<std::vector<MonitorCommand>> QemuManager::StartCommands(
   if (has_network_devices) {
     // The ordering of virtio-net devices is important. Make sure any change
     // here is reflected in ethprime u-boot variable
-    qemu_cmd.AddParameter("-device");
-    qemu_cmd.AddParameter(
-        "virtio-net-pci-non-transitional,netdev=hostnet0,id=net0,mac=",
-        instance.mobile_mac());
+    if (instance.enable_modem_simulator()) {
+      qemu_cmd.AddParameter("-device");
+      qemu_cmd.AddParameter(
+          "virtio-net-pci-non-transitional,netdev=hostnet0,id=net0,mac=",
+          instance.mobile_mac());
+    }
     qemu_cmd.AddParameter("-device");
     qemu_cmd.AddParameter(
         "virtio-net-pci-non-transitional,netdev=hostnet1,id=net1,mac=",
         instance.ethernet_mac());
-    if (!config.virtio_mac80211_hwsim()) {
+    if (!config.virtio_mac80211_hwsim() && instance.has_wifi_card()) {
       qemu_cmd.AddParameter("-device");
       qemu_cmd.AddParameter(
           "virtio-net-pci-non-transitional,netdev=hostnet2,id=net2,mac=",

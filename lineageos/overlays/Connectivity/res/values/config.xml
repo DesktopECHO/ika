@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string-array translatable="false" name="config_ethernet_interfaces">
-        <item>eth1;*;;</item>
+        <item>eth0;*;;</item>
     </string-array>
 </resources>

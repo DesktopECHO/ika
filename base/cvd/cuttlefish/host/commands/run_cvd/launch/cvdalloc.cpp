@@ -65,6 +65,10 @@ Result<std::vector<MonitorCommand>> Cvdalloc::Commands() {
   Command cmd(path, KillSubprocessFallback(nice_stop));
   cmd.AddParameter("--id=", instance_.id());
   cmd.AddParameter("--socket=", their_socket_);
+  cmd.AddParameter("--enable_mobile=",
+                   instance_.enable_modem_simulator() ? "true" : "false");
+  cmd.AddParameter("--enable_wifi=",
+                   instance_.has_wifi_card() ? "true" : "false");
   std::vector<MonitorCommand> commands;
   commands.emplace_back(std::move(cmd));
   return commands;

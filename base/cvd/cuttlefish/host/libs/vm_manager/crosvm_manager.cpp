@@ -802,8 +802,10 @@ Result<std::vector<MonitorCommand>> CrosvmManager::StartCommands(
         pci::Address(0, VmManager::kNetPciDeviceNum, 1);
     const pci::Address ethernet_pci =
         pci::Address(0, VmManager::kNetPciDeviceNum, 2);
-    crosvm_cmd.AddTap(instance.mobile_tap_name(), instance.mobile_mac(),
-                      mobile_pci);
+    if (instance.enable_modem_simulator()) {
+      crosvm_cmd.AddTap(instance.mobile_tap_name(), instance.mobile_mac(),
+                        mobile_pci);
+    }
     crosvm_cmd.AddTap(instance.ethernet_tap_name(), instance.ethernet_mac(),
                       ethernet_pci);
 

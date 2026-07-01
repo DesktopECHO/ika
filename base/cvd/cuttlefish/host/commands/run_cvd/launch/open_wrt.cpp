@@ -111,7 +111,8 @@ class OpenWrt : public CommandSource {
       ap_cmd.Cmd().AddParameter("--vhost-user=mac80211-hwsim,socket=",
                                 environment_.vhost_user_mac80211_hwsim());
     }
-    if (environment_.enable_wifi() && instance_.enable_tap_devices()) {
+    if (environment_.enable_wifi() && instance_.has_wifi_card() &&
+        instance_.enable_tap_devices()) {
       ap_cmd.AddTap(instance_.wifi_tap_name());
     }
 

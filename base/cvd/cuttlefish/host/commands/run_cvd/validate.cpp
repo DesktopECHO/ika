@@ -37,16 +37,23 @@ namespace cuttlefish {
 static Result<void> TestTapDevices(
     const CuttlefishConfig::InstanceSpecific& instance) {
 #ifdef __linux__
-  if (InSandbox()
-  || instance.use_cvdalloc()) { // cvdalloc owns its own resources. those resources can't be validated this way.
+  // cvdalloc owns its own resources, so they can't be validated here.
+  if (InSandbox() || instance.use_cvdalloc()) {
     return {};
   }
-  auto wifi = instance.wifi_tap_name();
-  CF_EXPECTF(ValidateTapInterfaceIsUsable(wifi), "Failed to validate tap interface: {}", wifi);
-  auto mobile = instance.mobile_tap_name();
-  CF_EXPECTF(ValidateTapInterfaceIsUsable(mobile), "Failed to validate tap interface: {}", mobile);
+  if (instance.has_wifi_card()) {
+    auto wifi = instance.wifi_tap_name();
+    CF_EXPECTF(ValidateTapInterfaceIsUsable(wifi),
+               "Failed to validate tap interface: {}", wifi);
+  }
+  if (instance.enable_modem_simulator()) {
+    auto mobile = instance.mobile_tap_name();
+    CF_EXPECTF(ValidateTapInterfaceIsUsable(mobile),
+               "Failed to validate tap interface: {}", mobile);
+  }
   auto eth = instance.ethernet_tap_name();
-  CF_EXPECTF(ValidateTapInterfaceIsUsable(eth), "Failed to validate tap interface: {}", eth);
+  CF_EXPECTF(ValidateTapInterfaceIsUsable(eth),
+             "Failed to validate tap interface: {}", eth);
 #else
   (void)instance;
 #endif

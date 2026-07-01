@@ -35,6 +35,8 @@
 
 ABSL_FLAG(int, id, 0, "Id");
 ABSL_FLAG(int, socket, 0, "Socket");
+ABSL_FLAG(bool, enable_mobile, true, "Allocate the mobile tap interface.");
+ABSL_FLAG(bool, enable_wifi, true, "Allocate the wifi tap interfaces.");
 
 namespace cuttlefish {
 namespace {
@@ -45,17 +47,22 @@ void Usage() {
 }
 
 Result<void> Allocate(int id, std::string_view ethernet_bridge_name,
-                      std::string_view wireless_bridge_name) {
+                      std::string_view wireless_bridge_name,
+                      bool enable_mobile, bool enable_wifi) {
   LOG(INFO) << "cvdalloc: allocating network resources";
 
-  CF_EXPECT(CreateMobileIface(CvdallocInterfaceName("mtap", id), id,
-                              kCvdallocMobileIpPrefix));
-  CF_EXPECT(CreateEthernetBridgeIface(wireless_bridge_name,
-                                      kCvdallocWirelessIpPrefix));
-  CF_EXPECT(CreateEthernetIface(CvdallocInterfaceName("wtap", id),
-                                wireless_bridge_name));
-  CF_EXPECT(CreateMobileIface(CvdallocInterfaceName("wifiap", id), id,
-                              kCvdallocWirelessApIpPrefix));
+  if (enable_mobile) {
+    CF_EXPECT(CreateMobileIface(CvdallocInterfaceName("mtap", id), id,
+                                kCvdallocMobileIpPrefix));
+  }
+  if (enable_wifi) {
+    CF_EXPECT(CreateEthernetBridgeIface(wireless_bridge_name,
+                                        kCvdallocWirelessIpPrefix));
+    CF_EXPECT(CreateEthernetIface(CvdallocInterfaceName("wtap", id),
+                                  wireless_bridge_name));
+    CF_EXPECT(CreateMobileIface(CvdallocInterfaceName("wifiap", id), id,
+                                kCvdallocWirelessApIpPrefix));
+  }
   CF_EXPECT(CreateEthernetBridgeIface(ethernet_bridge_name,
                                       kCvdallocEthernetIpPrefix));
   CF_EXPECT(CreateEthernetIface(CvdallocInterfaceName("etap", id),
@@ -65,18 +72,22 @@ Result<void> Allocate(int id, std::string_view ethernet_bridge_name,
 }
 
 Result<void> Teardown(int id, std::string_view ethernet_bridge_name,
-                      std::string_view wireless_bridge_name) {
+                      std::string_view wireless_bridge_name,
+                      bool enable_mobile, bool enable_wifi) {
   LOG(INFO) << "cvdalloc: tearing down resources";
 
-  DestroyMobileIface(CvdallocInterfaceName("mtap", id), id,
-                     kCvdallocMobileIpPrefix);
-  DestroyMobileIface(CvdallocInterfaceName("wtap", id), id,
-                     kCvdallocWirelessIpPrefix);
-  DestroyMobileIface(CvdallocInterfaceName("wifiap", id), id,
-                     kCvdallocWirelessApIpPrefix);
+  if (enable_mobile) {
+    DestroyMobileIface(CvdallocInterfaceName("mtap", id), id,
+                       kCvdallocMobileIpPrefix);
+  }
+  if (enable_wifi) {
+    DestroyEthernetIface(CvdallocInterfaceName("wtap", id));
+    DestroyMobileIface(CvdallocInterfaceName("wifiap", id), id,
+                       kCvdallocWirelessApIpPrefix);
+    DestroyBridge(wireless_bridge_name);
+  }
   DestroyEthernetIface(CvdallocInterfaceName("etap", id));
   DestroyBridge(ethernet_bridge_name);
-  DestroyBridge(wireless_bridge_name);
 
   return {};
 }
@@ -93,6 +104,8 @@ Result<int> CvdallocMain(int argc, char *argv[]) {
   }
 
   int id = absl::GetFlag(FLAGS_id);
+  bool enable_mobile = absl::GetFlag(FLAGS_enable_mobile);
+  bool enable_wifi = absl::GetFlag(FLAGS_enable_wifi);
 
   auto sock = SharedFD::Dup(absl::GetFlag(FLAGS_socket));
   if (!sock->IsOpen()) {
@@ -124,14 +137,16 @@ Result<int> CvdallocMain(int argc, char *argv[]) {
     return CF_ERRF("Couldn't elevate permissions: {}", StrError(errno));
   }
 
-  absl::Cleanup teardown = [id]() {
+  absl::Cleanup teardown = [id, enable_mobile, enable_wifi]() {
     LOG(INFO) << "cvdalloc: teardown started";
     // TODO: b/471069557 - diagnose unused
     Result<void> unused =
-        Teardown(id, kCvdallocEthernetBridgeName, kCvdallocWirelessBridgeName);
+        Teardown(id, kCvdallocEthernetBridgeName, kCvdallocWirelessBridgeName,
+                 enable_mobile, enable_wifi);
   };
 
-  CF_EXPECT(Allocate(id, kCvdallocEthernetBridgeName, kCvdallocWirelessBridgeName));
+  CF_EXPECT(Allocate(id, kCvdallocEthernetBridgeName,
+                     kCvdallocWirelessBridgeName, enable_mobile, enable_wifi));
   CF_EXPECT(cvdalloc::Post(sock));
 
   LOG(INFO) << "cvdalloc: waiting to teardown";
