@@ -22,6 +22,7 @@
 
 #include <drm/drm_fourcc.h>
 #include <sys/mman.h>
+#include <unistd.h>
 #include <wayland-server-protocol.h>
 
 #include "absl/log/check.h"
@@ -85,7 +86,8 @@ void Surface::Commit() {
     uint32_t buffer_drm_format = 0;
     uint32_t buffer_stride_bytes = 0;
     uint8_t* buffer_pixels = nullptr;
-    uint32_t buffer_size = 0;
+    void* mapped_dmabuf = nullptr;
+    size_t mapped_dmabuf_size = 0;
 
     if (shm_buffer != nullptr) {
       wl_shm_buffer_begin_access(shm_buffer);
@@ -110,14 +112,36 @@ void Surface::Commit() {
       if (dmabuf_plane.fd.ok()) {
         buffer_drm_format = dmabuf->format;
         buffer_stride_bytes = dmabuf_plane.stride;
-        buffer_size = buffer_h * buffer_stride_bytes;
-        // TODO: Refactor to not have `PROT_WRITE`.
-        auto mapped = mmap(nullptr, buffer_size, PROT_READ,
-                            MAP_SHARED, dmabuf_plane.fd, 0);
-        if (mapped != MAP_FAILED) {
-          buffer_pixels = reinterpret_cast<uint8_t*>(mapped);
+        size_t buffer_size = static_cast<size_t>(buffer_h) * buffer_stride_bytes;
+        if (buffer_h != 0 && buffer_size / buffer_h != buffer_stride_bytes) {
+          LOG(ERROR) << "DMABUF frame size overflow.";
         } else {
-          PLOG(ERROR) << "Failed to mmap dmabuf.";
+          const long page_size = sysconf(_SC_PAGESIZE);
+          if (page_size <= 0) {
+            PLOG(ERROR) << "Failed to get page size for DMABUF mmap.";
+          } else {
+            const size_t page_mask = static_cast<size_t>(page_size) - 1;
+            const size_t map_offset =
+                static_cast<size_t>(dmabuf_plane.offset) & ~page_mask;
+            const size_t map_delta =
+                static_cast<size_t>(dmabuf_plane.offset) - map_offset;
+            mapped_dmabuf_size = buffer_size + map_delta;
+            if (mapped_dmabuf_size < buffer_size) {
+              LOG(ERROR) << "DMABUF mmap size overflow.";
+            } else {
+              mapped_dmabuf = mmap(nullptr, mapped_dmabuf_size, PROT_READ,
+                                   MAP_SHARED, dmabuf_plane.fd,
+                                   static_cast<off_t>(map_offset));
+              if (mapped_dmabuf != MAP_FAILED) {
+                buffer_pixels =
+                    reinterpret_cast<uint8_t*>(mapped_dmabuf) + map_delta;
+              } else {
+                mapped_dmabuf = nullptr;
+                mapped_dmabuf_size = 0;
+                PLOG(ERROR) << "Failed to mmap dmabuf.";
+              }
+            }
+          }
         }
       }
 
@@ -137,8 +161,8 @@ void Surface::Commit() {
     if (shm_buffer != nullptr) {
       wl_shm_buffer_end_access(shm_buffer);
     } else {
-      if (buffer_pixels != nullptr) {
-        munmap(buffer_pixels, buffer_size);
+      if (mapped_dmabuf != nullptr) {
+        munmap(mapped_dmabuf, mapped_dmabuf_size);
       }
     }
   }

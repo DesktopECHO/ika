@@ -1,0 +1,136 @@
+Patch summary:
+Fix gfxstream guest Vulkan rendering on Apple Silicon/Asahi by preserving the
+host modifier path for DRM-format image queries and by carrying Android's
+AHardwareBuffer layout-preservation workaround into sync2 pipeline barriers.
+Without these guards, ANGLE/Chromium can create native-buffer surfaces whose
+contents are discarded or whose attachment usage is stripped, leaving Vulkan
+accelerated web content black.
+
+diff --git a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+index 859a90740ea..ca32fce3eb8 100644
+--- a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
++++ b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+@@ -7148,28 +7148,17 @@ VkResult ResourceTracker::on_vkGetPhysicalDeviceImageFormatProperties2_common(
+     const VkPhysicalDeviceImageDrmFormatModifierInfoEXT* drmFmtMod =
+         vk_find_struct_const(pImageFormatInfo, PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT);
+     VkDrmFormatModifierPropertiesListEXT* emulatedDrmFmtModPropsList = nullptr;
+-    if (drmFmtMod) {
+-        if (doImageDrmFormatModifierEmulation(physicalDevice)) {
+-            emulatedDrmFmtModPropsList =
+-                vk_find_struct(pImageFormatProperties, DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT);
+-
+-            if (drmFmtMod->drmFormatModifier == DRM_FORMAT_MOD_LINEAR) {
+-                // Remove the drmFmtMod from the localImageFormatInfo
+-                vk_filter_struct(&localImageFormatInfo,
+-                                 PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT);
+-                mesa_logd(
+-                    "getPhysicalDeviceImageFormatProperties2: emulating DRM_FORMAT_MOD_LINEAR with "
+-                    "VK_IMAGE_TILING_LINEAR");
+-                localImageFormatInfo.tiling = VK_IMAGE_TILING_LINEAR;
+-                localImageFormatInfo.usage &=
+-                    ~(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
+-            } else {
+-                return VK_ERROR_FORMAT_NOT_SUPPORTED;
+-            }
++    if (drmFmtMod && doImageDrmFormatModifierEmulation(physicalDevice)) {
++        if (drmFmtMod->drmFormatModifier == DRM_FORMAT_MOD_LINEAR) {
++            // Remove the drmFmtMod from the localImageFormatInfo.
++            vk_filter_struct(&localImageFormatInfo,
++                             PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT);
++            mesa_logd(
++                "getPhysicalDeviceImageFormatProperties2: emulating DRM_FORMAT_MOD_LINEAR with "
++                "VK_IMAGE_TILING_LINEAR");
+         } else {
+-            // Host supports DRM format modifiers => leave the input unchanged.
++            return VK_ERROR_FORMAT_NOT_SUPPORTED;
+         }
+-        mesa_logd("emulating DRM_FORMAT_MOD_LINEAR with VK_IMAGE_TILING_OPTIMAL");
+         emulatedDrmFmtModPropsList =
+             vk_find_struct(pImageFormatProperties, DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT);
+         localImageFormatInfo.tiling = VK_IMAGE_TILING_LINEAR;
+diff --git a/src/gfxstream/guest/vulkan_enc/func_table.cpp b/src/gfxstream/guest/vulkan_enc/func_table.cpp
+index b28b4fe10c3..ed64fcf93df 100644
+--- a/src/gfxstream/guest/vulkan_enc/func_table.cpp
++++ b/src/gfxstream/guest/vulkan_enc/func_table.cpp
+@@ -45,6 +45,19 @@
+ #if defined(LINUX_GUEST_BUILD) || DETECT_OS_FUCHSIA || DETECT_OS_WINDOWS
+ #undef VK_ANDROID_native_buffer
+ #endif
++
++#ifdef VK_USE_PLATFORM_ANDROID_KHR
++static void gfxstream_fix_android_ahb_image_barrier2_layout(VkImageMemoryBarrier2* barrier) {
++    // Android does not pass the current VkImageLayout with imported AHardwareBuffers.
++    // Match ResourceTracker's vkCmdPipelineBarrier workaround for sync2 callers.
++    if (barrier->srcQueueFamilyIndex != barrier->dstQueueFamilyIndex &&
++        (barrier->srcQueueFamilyIndex == VK_QUEUE_FAMILY_EXTERNAL ||
++         barrier->srcQueueFamilyIndex == VK_QUEUE_FAMILY_FOREIGN_EXT) &&
++        barrier->oldLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
++        barrier->oldLayout = barrier->newLayout;
++    }
++}
++#endif
+ #ifdef VK_VERSION_1_0
+ void gfxstream_vk_GetPhysicalDeviceFeatures(VkPhysicalDevice physicalDevice,
+                                             VkPhysicalDeviceFeatures* pFeatures) {
+@@ -2414,6 +2427,8 @@ void gfxstream_vk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
+         std::vector<VkDependencyInfo> internal_pDependencyInfo(1);
+         std::vector<std::vector<VkBufferMemoryBarrier2>>
+             internal_VkDependencyInfo_pBufferMemoryBarriers;
++        std::vector<std::vector<VkImageMemoryBarrier2>>
++            internal_VkDependencyInfo_pImageMemoryBarriers;
+         for (uint32_t i = 0; i < 1; ++i) {
+             internal_pDependencyInfo[i] = pDependencyInfo[i];
+             /* VkDependencyInfo::pBufferMemoryBarriers */
+@@ -2432,6 +2447,21 @@ void gfxstream_vk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
+             }
+             internal_pDependencyInfo[i].pBufferMemoryBarriers =
+                 internal_VkDependencyInfo_pBufferMemoryBarriers[i].data();
++#ifdef VK_USE_PLATFORM_ANDROID_KHR
++            /* VkDependencyInfo::pImageMemoryBarriers */
++            internal_VkDependencyInfo_pImageMemoryBarriers.push_back(
++                std::vector<VkImageMemoryBarrier2>());
++            internal_VkDependencyInfo_pImageMemoryBarriers[i].resize(
++                internal_pDependencyInfo[i].imageMemoryBarrierCount);
++            for (uint32_t j = 0; j < internal_pDependencyInfo[i].imageMemoryBarrierCount; ++j) {
++                internal_VkDependencyInfo_pImageMemoryBarriers[i][j] =
++                    internal_pDependencyInfo[i].pImageMemoryBarriers[j];
++                gfxstream_fix_android_ahb_image_barrier2_layout(
++                    &internal_VkDependencyInfo_pImageMemoryBarriers[i][j]);
++            }
++            internal_pDependencyInfo[i].pImageMemoryBarriers =
++                internal_VkDependencyInfo_pImageMemoryBarriers[i].data();
++#endif
+         }
+         vkEnc->vkCmdPipelineBarrier2(gfxstream_commandBuffer->internal_object,
+                                      internal_pDependencyInfo.data(), true /* do lock */);
+@@ -3844,6 +3874,8 @@ void gfxstream_vk_CmdPipelineBarrier2KHR(VkCommandBuffer commandBuffer,
+         std::vector<VkDependencyInfo> internal_pDependencyInfo(1);
+         std::vector<std::vector<VkBufferMemoryBarrier2>>
+             internal_VkDependencyInfo_pBufferMemoryBarriers;
++        std::vector<std::vector<VkImageMemoryBarrier2>>
++            internal_VkDependencyInfo_pImageMemoryBarriers;
+         for (uint32_t i = 0; i < 1; ++i) {
+             internal_pDependencyInfo[i] = pDependencyInfo[i];
+             /* VkDependencyInfo::pBufferMemoryBarriers */
+@@ -3862,6 +3894,21 @@ void gfxstream_vk_CmdPipelineBarrier2KHR(VkCommandBuffer commandBuffer,
+             }
+             internal_pDependencyInfo[i].pBufferMemoryBarriers =
+                 internal_VkDependencyInfo_pBufferMemoryBarriers[i].data();
++#ifdef VK_USE_PLATFORM_ANDROID_KHR
++            /* VkDependencyInfo::pImageMemoryBarriers */
++            internal_VkDependencyInfo_pImageMemoryBarriers.push_back(
++                std::vector<VkImageMemoryBarrier2>());
++            internal_VkDependencyInfo_pImageMemoryBarriers[i].resize(
++                internal_pDependencyInfo[i].imageMemoryBarrierCount);
++            for (uint32_t j = 0; j < internal_pDependencyInfo[i].imageMemoryBarrierCount; ++j) {
++                internal_VkDependencyInfo_pImageMemoryBarriers[i][j] =
++                    internal_pDependencyInfo[i].pImageMemoryBarriers[j];
++                gfxstream_fix_android_ahb_image_barrier2_layout(
++                    &internal_VkDependencyInfo_pImageMemoryBarriers[i][j]);
++            }
++            internal_pDependencyInfo[i].pImageMemoryBarriers =
++                internal_VkDependencyInfo_pImageMemoryBarriers[i].data();
++#endif
+         }
+         vkEnc->vkCmdPipelineBarrier2KHR(gfxstream_commandBuffer->internal_object,
+                                         internal_pDependencyInfo.data(), true /* do lock */);

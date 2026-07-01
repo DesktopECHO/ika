@@ -17,4 +17,4 @@ $(call inherit-product, packages/modules/Virtualization/apex/product_packages.mk
 PRODUCT_NAME := lineage_desktop_cf_arm64_pgagnostic
 PRODUCT_BRAND := LineageOS
 PRODUCT_MANUFACTURER := DesktopECHO
-PRODUCT_MODEL := Ika LineageOS desktop (ARMv8)
+PRODUCT_MODEL := Ika LineageOS Desktop ARM64

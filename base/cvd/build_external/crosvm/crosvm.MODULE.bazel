@@ -45,6 +45,16 @@ crosvm_bin.spec(
         "video-decoder",
         "video-encoder",
         "virgl_renderer",
+        # Vulkan-based rutabaga_gralloc backend. Required on Apple Silicon
+        # (Asahi): the bundled minigbm has no asahi driver backend, so
+        # gbm_create_device fails on the Apple GPU render node and crosvm is
+        # left with only the "system" gralloc backend, which cannot import the
+        # dma-buf blobs gfxstream exports for host-visible guest memory
+        # (crosvm: "invalid gralloc backend" -> guest ANGLE VK_ERROR_OUT_OF_
+        # DEVICE_MEMORY -> black surfaces). The vulkano backend imports/maps
+        # those blobs via VK_EXT_external_memory_dma_buf through Honeykrisp,
+        # which supports it. vulkano 0.33.0 + deps are already in Cargo.lock.
+        "vulkano",
         "wl-dmabuf",
         "zstd-disk",
     ],
@@ -63,6 +73,7 @@ crosvm_bin.annotation(
         "@//build_external/crosvm:PATCH.crosvm-composite-preserve-spec-fd.patch",
         "@//build_external/crosvm:PATCH.crosvm-gpu-2d-sandbox.patch",
         "@//build_external/crosvm:PATCH.crosvm-resize-display.patch",
+        "@//build_external/crosvm:PATCH.crosvm-enable-vulkano-gralloc.patch",
         "@//build_external/crosvm:PATCH.minijail-sys_common_mk.patch",
     ],
     deps = [

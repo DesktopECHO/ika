@@ -3,6 +3,7 @@
 set -euo pipefail
 
 modprobe bridge 2>/dev/null || true
+modprobe udmabuf 2>/dev/null || true
 
 if [ -f /etc/sysconfig/cuttlefish-host-resources ]; then
   . /etc/sysconfig/cuttlefish-host-resources
@@ -15,6 +16,8 @@ ipv4_bridge=${ipv4_bridge:-1}
 ipv6_bridge=${ipv6_bridge:-1}
 dns_servers=${dns_servers:-8.8.8.8,8.8.4.4}
 dns6_servers=${dns6_servers:-2001:4860:4860::8888,2001:4860:4860::8844}
+udmabuf_list_limit=${udmabuf_list_limit:-8192}
+udmabuf_size_limit_mb=${udmabuf_size_limit_mb:-256}
 
 create_bridges=0
 if [ -z "${bridge_interface:-}" ]; then
@@ -53,6 +56,15 @@ ensure_nft_topology() {
   # Bridge filter chain for per-tap ipv4/ipv6 drops (replaces ebtables).
   nft add table bridge filter 2>/dev/null || true
   nft add chain bridge filter FORWARD '{ type filter hook forward priority 0; }' 2>/dev/null || true
+}
+
+tune_udmabuf() {
+  if [ -w /sys/module/udmabuf/parameters/list_limit ]; then
+    echo "$udmabuf_list_limit" > /sys/module/udmabuf/parameters/list_limit || true
+  fi
+  if [ -w /sys/module/udmabuf/parameters/size_limit_mb ]; then
+    echo "$udmabuf_size_limit_mb" > /sys/module/udmabuf/parameters/size_limit_mb || true
+  fi
 }
 
 nat_add() {
@@ -216,6 +228,7 @@ destroy_bridged_interfaces() {
 start() {
   echo 1 > /proc/sys/net/ipv4/ip_forward
   echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
+  tune_udmabuf
 
   # Idempotently create the ip cuttlefish + bridge filter topology before
   # any per-interface ops touch the set / chain.

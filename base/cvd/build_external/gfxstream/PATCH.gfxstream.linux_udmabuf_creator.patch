@@ -1,0 +1,27 @@
+Patch summary:
+Build gfxstream's real Linux udmabuf implementation on Linux hosts. The Bazel
+build was always compiling UdmabufCreator_stub.cpp, so
+VulkanAllocateHostVisibleAsUdmabuf could never initialize even when /dev/udmabuf
+was present and readable. Selecting UdmabufCreator_linux.cpp on Linux keeps the
+stub for other hosts while allowing gfxstream to create udmabuf-backed dma-buf
+handles for host-visible Vulkan memory.
+
+diff --git a/common/base/BUILD.bazel b/common/base/BUILD.bazel
+--- a/common/base/BUILD.bazel
++++ b/common/base/BUILD.bazel
+@@ -61,7 +61,13 @@ cc_library(
+         "StringFormat.cpp",
+         "System.cpp",
+         "Tracing.cpp",
+-        "UdmabufCreator_stub.cpp",
+-    ] + select({
++    ] + select({
++        "@platforms//os:linux": [
++            "UdmabufCreator_linux.cpp",
++        ],
++        "//conditions:default": [
++            "UdmabufCreator_stub.cpp",
++        ],
++    }) + select({
+         "@platforms//os:windows": [
+             "SharedMemory_win32.cpp",

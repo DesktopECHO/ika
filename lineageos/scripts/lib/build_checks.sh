@@ -63,8 +63,14 @@ remove_generated_ninja_state() {
 
   [[ -d "$out_dir" ]] || return 0
 
-  log "removing generated Ninja/Kati state for $product: $reason"
-  rm -f "$out_dir/.ninja_deps" "$out_dir/.ninja_log"
+  log "removing generated Ninja/Kati manifests for $product: $reason"
+  # Deliberately preserve out/.ninja_log and out/.ninja_deps: they are ninja's
+  # build history (per-output command hashes) and discovered header-dep DB.
+  # Deleting them makes ninja treat every output as never-built and rebuild the
+  # entire graph (a full ~4h rebuild every run). They are tiny (~17 MB), so
+  # removing them frees no meaningful headroom while destroying incrementality.
+  # The multi-GB manifests removed below are the real headroom win and are
+  # regenerated cheaply by Soong/Kati on the next build.
   find "$out_dir" -maxdepth 1 -type f \( \
     -name "build-${product}.ninja" -o \
     -name "build-${product}-*.ninja" -o \

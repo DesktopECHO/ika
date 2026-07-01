@@ -14,6 +14,7 @@ external/rust/android-crates-io patches/external-rust-android-crates-io-arm64-ho
 external/cronet patches/external-cronet-arm64-host-cross.patch
 external/sdv/vsomeip patches/external-sdv-vsomeip-arm64-host-cross.patch
 external/minigbm patches/external-minigbm.patch
+external/mesa3d patches/external-mesa3d.patch
 art patches/art.patch
 device/google/cuttlefish patches/device-google-cuttlefish.patch
 frameworks/av patches/frameworks-av.patch
@@ -27,6 +28,7 @@ frameworks/native patches/frameworks-native-logspam.patch
 frameworks/base patches/frameworks-base.patch
 frameworks/base patches/frameworks-base-native-bridge.patch
 frameworks/base patches/frameworks-base-settingsprovider-ota.patch
+frameworks/base patches/frameworks-base-settingsprovider-pointer-speed.patch
 system/core patches/system-core.patch
 system/sepolicy patches/system-sepolicy.patch
 system/sepolicy patches/system-sepolicy-checkfc-arm64-getopt.patch

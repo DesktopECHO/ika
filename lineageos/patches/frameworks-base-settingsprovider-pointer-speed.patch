@@ -1,0 +1,22 @@
+Patch summary:
+Seed the desktop "Pointer speed" slider at its slowest position. AOSP's
+SettingsProvider ships def_pointer_speed=0 (the slider's mid-point); set it to
+-7 so Settings.System.POINTER_SPEED defaults to the far-left (slowest) end of
+the -7..7 range when the settings database is first created. The Cuttlefish
+first-boot provisioning script re-asserts the same value. Kept as a standalone
+patch so the default can be reverted independently of the OTA-default seeding
+in frameworks-base-settingsprovider-ota.patch.
+
+diff --git a/packages/SettingsProvider/res/values/defaults.xml b/packages/SettingsProvider/res/values/defaults.xml
+index e3b61c852a8a..f00f6d94d439 100644
+--- a/packages/SettingsProvider/res/values/defaults.xml
++++ b/packages/SettingsProvider/res/values/defaults.xml
+@@ -132,7 +132,7 @@
+     <bool name="def_show_ime_with_hard_keyboard">false</bool>
+ 
+     <!-- Default for Settings.System.POINTER_SPEED -->
+-    <integer name="def_pointer_speed">0</integer>
++    <integer name="def_pointer_speed">-7</integer>
+ 
+     <!-- Default for DTMF tones enabled -->
+     <bool name="def_dtmf_tones_enabled">true</bool>
