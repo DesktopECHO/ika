@@ -262,6 +262,14 @@ while true; do
     break
   fi
 
+  # If the build working tree has disappeared (e.g. the extracted source dir was
+  # removed out from under us), retrying is futile and would just burn the
+  # remaining attempts. Bail out immediately.
+  if [[ ! -x ./tools/ensure_bazel_git_mirrors.sh ]]; then
+    echo "Build working tree is gone (./tools/ensure_bazel_git_mirrors.sh missing); aborting without further retries." >&2
+    exit 1
+  fi
+
   retry_count=$((retry_count + 1))
   if [ "$retry_count" -ge "$max_retries" ]; then
     echo "Bazel build failed after ${retry_count} attempts." >&2

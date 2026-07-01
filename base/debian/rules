@@ -134,6 +134,10 @@ override_dh_auto_build:
 	         --build_tag_filters=-clang-tidy; then \
 	      break; \
 	    fi; \
+	    if [ ! -x ./tools/ensure_bazel_git_mirrors.sh ]; then \
+	      echo "Build working tree is gone (./tools/ensure_bazel_git_mirrors.sh missing); aborting without further retries." >&2; \
+	      exit 1; \
+	    fi; \
 	    retry_count=$$((retry_count + 1)); \
 	    if [ "$$retry_count" -ge "$$max_retries" ]; then \
 	      echo "Bazel build failed after $$retry_count attempts." >&2; \
