@@ -135,9 +135,21 @@ std::string GfxstreamRendererBlobParams(
                                  : "," + absl::StrJoin(gpu_blob_params, ",");
 }
 
-std::string GfxstreamVulkanWsiParam(const std::string& context_types) {
+bool UsesUdmabufBackedGfxstreamVulkan(const std::string& renderer_features) {
+  return GfxstreamRendererFeatureEnabled(
+             renderer_features, "VulkanAllocateHostVisibleAsUdmabuf") == true;
+}
+
+std::string GfxstreamVulkanWsiParam(const std::string& context_types,
+                                    const std::string& renderer_features) {
   if (!GfxstreamContextTypesIncludeVulkan(context_types) ||
       context_types.find("wsi=") != std::string::npos) {
+    return "";
+  }
+  if (UsesUdmabufBackedGfxstreamVulkan(renderer_features)) {
+    // On Apple Silicon, udmabuf-backed gfxstream Vulkan works for the guest,
+    // but the Vulkan native swapchain path can feed black scanout frames to
+    // the host console. Keep guest Vulkan without forcing Vulkan WSI.
     return "";
   }
   return ",wsi=vk";
@@ -492,7 +504,8 @@ Result<VhostUserDeviceCommands> BuildVhostUserGpu(
     const std::string context_types =
         GfxstreamContextTypes(instance, kGfxstreamVhostContextTypes);
     gpu_params_json["context-types"] = GfxstreamContextTypeList(context_types);
-    if (GfxstreamContextTypesIncludeVulkan(context_types)) {
+    if (GfxstreamContextTypesIncludeVulkan(context_types) &&
+        !UsesUdmabufBackedGfxstreamVulkan(instance.gpu_renderer_features())) {
       gpu_params_json["wsi"] = "vk";
     }
     gpu_params_json["egl"] = true;
@@ -654,14 +667,18 @@ Result<void> ConfigureGpu(const CuttlefishConfig& config, Command* crosvm_cmd) {
         GfxstreamContextTypes(instance, kGfxstreamContextTypes);
     crosvm_cmd->AddParameter(
         "--gpu=", gpu_displays_string, "context-types=" + context_types +
-                                        GfxstreamVulkanWsiParam(context_types),
+                                        GfxstreamVulkanWsiParam(
+                                            context_types,
+                                            gpu_renderer_features),
         gpu_common_3d_string);
   } else if (IsGfxstreamGuestAngleMode(gpu_mode)) {
     const std::string context_types =
         "gfxstream-vulkan:gfxstream-composer";
     crosvm_cmd->AddParameter(
         "--gpu=", gpu_displays_string, "context-types=" + context_types +
-                                        GfxstreamVulkanWsiParam(context_types),
+                                        GfxstreamVulkanWsiParam(
+                                            context_types,
+                                            gpu_renderer_features),
         gpu_common_3d_string);
   } else if (gpu_mode == GpuMode::Custom) {
     crosvm_cmd->AddParameter("--gpu=", gpu_displays_string,

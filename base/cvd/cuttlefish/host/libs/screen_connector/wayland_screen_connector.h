@@ -34,6 +34,7 @@ class WaylandScreenConnector {
                                     frames_are_rgba));
 
   void SetFrameCallback(GenerateProcessedFrameCallbackImpl frame_callback);
+  void SetDmabufFrameCallback(GenerateDmabufFrameCallbackImpl frame_callback);
 
   void SetDisplayEventCallback(DisplayEventCallback event_callback);
 

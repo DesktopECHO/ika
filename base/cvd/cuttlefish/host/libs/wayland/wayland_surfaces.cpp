@@ -32,6 +32,11 @@ void Surfaces::SetFrameCallback(FrameCallback callback) {
   callback_.emplace(std::move(callback));
 }
 
+void Surfaces::SetDmabufFrameCallback(DmabufFrameCallback callback) {
+  std::unique_lock<std::mutex> lock(callback_mutex_);
+  dmabuf_callback_.emplace(std::move(callback));
+}
+
 void Surfaces::SetDisplayEventCallback(DisplayEventCallback callback) {
   std::unique_lock<std::mutex> lock(callback_mutex_);
   event_callback_.emplace(std::move(callback));
@@ -56,6 +61,20 @@ void Surfaces::HandleSurfaceFrame(uint32_t display_number, uint32_t frame_width,
     (callback_.value())(display_number, frame_width, frame_height,
                         frame_fourcc_format, frame_stride_bytes, frame_bytes);
   }
+}
+
+bool Surfaces::HandleSurfaceDmabufFrame(
+    uint32_t display_number, uint32_t frame_width, uint32_t frame_height,
+    uint32_t frame_fourcc_format, int dmabuf_fd, uint32_t frame_offset,
+    uint32_t frame_stride_bytes, uint32_t modifier_hi, uint32_t modifier_lo) {
+  std::unique_lock<std::mutex> lock(callback_mutex_);
+
+  if (dmabuf_callback_) {
+    return (dmabuf_callback_.value())(
+        display_number, frame_width, frame_height, frame_fourcc_format,
+        dmabuf_fd, frame_offset, frame_stride_bytes, modifier_hi, modifier_lo);
+  }
+  return false;
 }
 
 void Surfaces::HandleSurfaceCreated(uint32_t display_number,

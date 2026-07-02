@@ -86,6 +86,7 @@ void Surface::Commit() {
     uint32_t buffer_drm_format = 0;
     uint32_t buffer_stride_bytes = 0;
     uint8_t* buffer_pixels = nullptr;
+    bool frame_delivered = false;
     void* mapped_dmabuf = nullptr;
     size_t mapped_dmabuf_size = 0;
 
@@ -112,8 +113,19 @@ void Surface::Commit() {
       if (dmabuf_plane.fd.ok()) {
         buffer_drm_format = dmabuf->format;
         buffer_stride_bytes = dmabuf_plane.stride;
+        if (!state_.has_notified_surface_create) {
+          surfaces_.HandleSurfaceCreated(display_number, buffer_w, buffer_h);
+          state_.has_notified_surface_create = true;
+        }
+        frame_delivered = surfaces_.HandleSurfaceDmabufFrame(
+            display_number, buffer_w, buffer_h, buffer_drm_format,
+            dmabuf_plane.fd.get(), dmabuf_plane.offset, buffer_stride_bytes,
+            dmabuf_plane.modifier_hi, dmabuf_plane.modifier_lo);
         size_t buffer_size = static_cast<size_t>(buffer_h) * buffer_stride_bytes;
-        if (buffer_h != 0 && buffer_size / buffer_h != buffer_stride_bytes) {
+        if (frame_delivered) {
+          buffer_pixels = nullptr;
+        } else if (buffer_h != 0 &&
+                   buffer_size / buffer_h != buffer_stride_bytes) {
           LOG(ERROR) << "DMABUF frame size overflow.";
         } else {
           const long page_size = sysconf(_SC_PAGESIZE);
@@ -152,7 +164,7 @@ void Surface::Commit() {
       state_.has_notified_surface_create = true;
     }
 
-    if (buffer_pixels != nullptr) {
+    if (!frame_delivered && buffer_pixels != nullptr) {
       surfaces_.HandleSurfaceFrame(display_number, buffer_w, buffer_h,
                                    buffer_drm_format, buffer_stride_bytes,
                                    buffer_pixels);

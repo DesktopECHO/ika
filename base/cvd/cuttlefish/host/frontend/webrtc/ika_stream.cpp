@@ -577,7 +577,14 @@ RawFrameStreamer::FrameSendResult RawFrameStreamer::SendShmFrame(
   }
   if (shm.fd < 0 || shm.data == nullptr || payload_size > shm.slot_size) {
     const FrameSendResult init_result = SendShmInit(fd, shm, payload_size);
-    if (init_result != FrameSendResult::kSent) {
+    if (init_result == FrameSendResult::kFailed) {
+      return init_result;
+    }
+    // If SHM is now available, continue below and send this frame too. A static
+    // desktop may not produce another frame for a long time, so skipping the
+    // frame that initialized the slots leaves the client showing zero-filled
+    // memory.
+    if (init_result == FrameSendResult::kUnavailable) {
       return init_result;
     }
   }
