@@ -265,14 +265,12 @@ SCRCPY_DPI=""
 GFXSTREAM_VULKAN_MODE="${GFXSTREAM_VULKAN:-auto}"
 GFXSTREAM_GLES_CONTEXT_TYPES="gfxstream-gles:gfxstream-composer"
 GFXSTREAM_VULKAN_CONTEXT_TYPES="gfxstream-gles:gfxstream-vulkan:gfxstream-composer"
-GFXSTREAM_VULKAN_CONTEXT_TYPES_WITH_WSI="${GFXSTREAM_VULKAN_CONTEXT_TYPES},wsi=vk"
 # Apple Silicon (Honeykrisp) exposes the dma-buf external-memory path
 # (VK_EXT_external_memory_dma_buf) but NOT VK_EXT_external_memory_host, so the
 # gfxstream SystemBlob host-pointer path cannot be backed by the Apple GPU and
-# must stay disabled (forcing it falls back to llvmpipe and loses acceleration).
-# Route host-visible guest memory through udmabuf-backed dma-buf instead; this
-# requires the PATCH.gfxstream.blob_page_size_runtime gfxstream patch so blob
-# sizes align to the 16K host page (otherwise UDMABUF_CREATE fails).
+# must stay disabled. Route host-visible guest Vulkan memory through
+# udmabuf-backed dma-bufs instead; the packaged gfxstream build links the real
+# Linux UdmabufCreator so this can initialize on hosts with /dev/udmabuf.
 GFXSTREAM_APPLE_16K_VULKAN_RENDERER_FEATURES="ExternalBlob:enabled;SystemBlob:disabled;VulkanAllocateHostVisibleAsUdmabuf:enabled;VulkanUseDedicatedAhbMemoryType:enabled"
 CVD_GRAPHICS_DRIVER_MESSAGE=""
 CVD_DATA_STORAGE_MESSAGE=""
@@ -1030,50 +1028,22 @@ gfxstream_context_types_include_vulkan() {
   [[ ":${contexts}:" == *":gfxstream-vulkan:"* ]]
 }
 
-gfxstream_context_types_include_wsi_vk() {
-  local context_types="$1"
-
-  [[ ",${context_types}," == *",wsi=vk,"* ]]
-}
-
-append_gfxstream_wsi_vk() {
-  local context_types="$1"
-
-  if gfxstream_context_types_include_wsi_vk "${context_types}"; then
-    printf '%s\n' "${context_types}"
-  else
-    printf '%s\n' "${context_types},wsi=vk"
-  fi
-}
-
 merge_gpu_context_types_for_vulkan() {
   local -n context_args_array="$1"
   local default_context_types="$2"
-  local require_wsi_vk="${3:-false}"
   local i
   local existing
-  local merged
 
   for i in "${!context_args_array[@]}"; do
     case "${context_args_array[${i}]}" in
       --gpu_context_types=*|-gpu_context_types=*)
         existing="${context_args_array[${i}]#*=}"
-        if [[ "${require_wsi_vk}" == "true" ]] \
-            && gfxstream_context_types_include_vulkan "${existing}"; then
-          merged="$(append_gfxstream_wsi_vk "${existing}")"
-          context_args_array[${i}]="--gpu_context_types=${merged}"
-        fi
         printf '%s\n' "${existing}"
         return 0
         ;;
       --gpu_context_types|-gpu_context_types)
         (( i + 1 < ${#context_args_array[@]} )) || die "--gpu_context_types requires a value"
         existing="${context_args_array[$((i + 1))]}"
-        if [[ "${require_wsi_vk}" == "true" ]] \
-            && gfxstream_context_types_include_vulkan "${existing}"; then
-          merged="$(append_gfxstream_wsi_vk "${existing}")"
-          context_args_array[$((i + 1))]="${merged}"
-        fi
         printf '%s\n' "${existing}"
         return 0
         ;;
@@ -1082,6 +1052,41 @@ merge_gpu_context_types_for_vulkan() {
 
   context_args_array+=("--gpu_context_types=${default_context_types}")
   printf '%s\n' "${default_context_types}"
+}
+
+set_or_append_start_arg() {
+  local -n set_args_array="$1"
+  local flag="$2"
+  local value="$3"
+  local i
+
+  for i in "${!set_args_array[@]}"; do
+    case "${set_args_array[${i}]}" in
+      --${flag}=*|-${flag}=*)
+        set_args_array[${i}]="--${flag}=${value}"
+        return 0
+        ;;
+      --${flag}|-${flag})
+        if (( i + 1 < ${#set_args_array[@]} )); then
+          set_args_array[$((i + 1))]="${value}"
+        else
+          set_args_array+=("${value}")
+        fi
+        return 0
+        ;;
+    esac
+  done
+
+  set_args_array+=("--${flag}=${value}")
+}
+
+append_apple_16k_gfxstream_vulkan_args() {
+  local -n apple_args_array="$1"
+
+  append_or_merge_gpu_renderer_features \
+    apple_args_array "${GFXSTREAM_APPLE_16K_VULKAN_RENDERER_FEATURES}"
+  set_or_append_start_arg apple_args_array "enable_gpu_udmabuf" "true"
+  log "Apple Silicon 16K host: using udmabuf-backed ExternalBlob with Vulkano gralloc; disabling SystemBlob"
 }
 
 append_gfxstream_vulkan_args() {
@@ -1107,16 +1112,13 @@ append_gfxstream_vulkan_args() {
 
   if user_supplied_flag "gpu_context_types" "$@"; then
     user_context_types="$(merge_gpu_context_types_for_vulkan args_array \
-      "${GFXSTREAM_VULKAN_CONTEXT_TYPES_WITH_WSI}" \
-      "$([[ "${mode}" == "on" ]] && echo true || echo false)")"
+      "${GFXSTREAM_VULKAN_CONTEXT_TYPES}")"
     effective_context_types="$(start_arg_value "gpu_context_types" "${user_context_types}" "${args_array[@]}")"
     CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (user gpu_context_types; gfxstream-vulkan=${mode})"
     log "using user supplied gpu_context_types=${effective_context_types}; gfxstream-vulkan=${mode}"
     if gfxstream_context_types_include_vulkan "${effective_context_types}" \
         && is_apple_silicon_16k_host; then
-      append_or_merge_gpu_renderer_features \
-        args_array "${GFXSTREAM_APPLE_16K_VULKAN_RENDERER_FEATURES}"
-      log "Apple Silicon 16K host: routing host-visible Vulkan memory via udmabuf dma-buf"
+      append_apple_16k_gfxstream_vulkan_args args_array
     fi
     return 0
   fi
@@ -1144,13 +1146,11 @@ append_gfxstream_vulkan_args() {
       log "${vulkan_decision}; context-types=${GFXSTREAM_GLES_CONTEXT_TYPES}"
       ;;
     on)
-      args_array+=("--gpu_context_types=${GFXSTREAM_VULKAN_CONTEXT_TYPES_WITH_WSI}")
+      args_array+=("--gpu_context_types=${GFXSTREAM_VULKAN_CONTEXT_TYPES}")
       CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (GLES+Vulkan; ${vulkan_decision})"
-      log "${vulkan_decision}; context-types=${GFXSTREAM_VULKAN_CONTEXT_TYPES_WITH_WSI}"
+      log "${vulkan_decision}; context-types=${GFXSTREAM_VULKAN_CONTEXT_TYPES}"
       if is_apple_silicon_16k_host; then
-        append_or_merge_gpu_renderer_features \
-          args_array "${GFXSTREAM_APPLE_16K_VULKAN_RENDERER_FEATURES}"
-        log "Apple Silicon 16K host: routing host-visible Vulkan memory via udmabuf dma-buf"
+        append_apple_16k_gfxstream_vulkan_args args_array
       fi
       ;;
   esac

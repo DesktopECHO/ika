@@ -1,0 +1,34 @@
+diff --git a/src/crosvm/sys/linux.rs b/src/crosvm/sys/linux.rs
+--- a/src/crosvm/sys/linux.rs
++++ b/src/crosvm/sys/linux.rs
+@@ -2484,7 +2484,13 @@
+             })?
+     };
+ 
+-    let flags = RutabagaGrallocBackendFlags::new().disable_vulkano();
++    // ika: keep the Vulkano gralloc backend enabled. On Apple Silicon (Asahi)
++    // the bundled minigbm has no asahi driver, so the only backend able to
++    // import the gfxstream dma-buf blobs for host-visible guest memory is
++    // Vulkano (via VK_EXT_external_memory_dma_buf through Honeykrisp). Disabling
++    // it leaves crosvm with only the System backend and yields
++    // "invalid gralloc backend" (guest ANGLE VK_ERROR_OUT_OF_DEVICE_MEMORY).
++    let flags = RutabagaGrallocBackendFlags::new();
+     let gralloc = RutabagaGralloc::new(flags).context("failed to create gralloc")?;
+ 
+     run_control(
+diff --git a/src/crosvm/sys/linux/gpu.rs b/src/crosvm/sys/linux/gpu.rs
+--- a/src/crosvm/sys/linux/gpu.rs
++++ b/src/crosvm/sys/linux/gpu.rs
+@@ -117,6 +117,11 @@
+     //     hypervisor process.
+     //   - fixed_blob_mapping is not yet compatible with VmMemorySource::ExternalMapping
+-    gpu_params.external_blob = is_sandboxed || gpu_params.fixed_blob_mapping;
++    //
++    // ika: preserve an explicit external-blob request. On Apple Silicon with
++    // sandboxing disabled, this keeps host-visible gfxstream blobs on the
++    // dma-buf/Vulkano import path instead of falling back to rutabaga mmap.
++    gpu_params.external_blob =
++        gpu_params.external_blob || is_sandboxed || gpu_params.fixed_blob_mapping;
+ 
+     // Implicit launch is not allowed when sandboxed. A socket fd from a separate sandboxed
+     // render_server process must be provided instead.

@@ -1,0 +1,63 @@
+Patch summary:
+Make gfxstream's POSIX SharedMemory memfd creation compatible with modern
+udmabuf. Bazel builds do not define HAVE_MEMFD_CREATE here, so the raw syscall
+fallback was creating memfds with FD_CLOEXEC only and skipping the seal block.
+On current kernels UDMABUF_CREATE rejects those memfds with EINVAL because
+F_SEAL_SHRINK is required. Use the memfd flag values for the syscall fallback
+and add the shrink/grow/seal seals for shared-memory memfds regardless of
+whether memfd_create came from libc or the syscall fallback.
+
+diff --git a/common/base/SharedMemory_posix.cpp b/common/base/SharedMemory_posix.cpp
+--- a/common/base/SharedMemory_posix.cpp
++++ b/common/base/SharedMemory_posix.cpp
+@@ -30,6 +30,21 @@
+ namespace gfxstream {
+ namespace base {
+ 
++#ifndef MFD_CLOEXEC
++#define MFD_CLOEXEC 0x0001U
++#endif
++#ifndef MFD_ALLOW_SEALING
++#define MFD_ALLOW_SEALING 0x0002U
++#endif
++#ifndef F_ADD_SEALS
++#define F_ADD_SEALS 1033
++#endif
++#ifndef F_SEAL_SEAL
++#define F_SEAL_SEAL 0x0001
++#define F_SEAL_SHRINK 0x0002
++#define F_SEAL_GROW 0x0004
++#endif
++
+ SharedMemory::SharedMemory(const std::string& name, size_t size) {
+     mSize = ALIGN(size, getpagesize());
+     const std::string& kFileUri = "file://";
+@@ -114,7 +129,7 @@ int SharedMemory::openInternal(int oflag, int mode, bool doMapping) {
+ #if defined(HAVE_MEMFD_CREATE)
+         mFd = memfd_create(mName.c_str(), MFD_CLOEXEC | MFD_ALLOW_SEALING);
+ #else
+-        mFd = syscall(__NR_memfd_create, mName.c_str(), FD_CLOEXEC);
++        mFd = syscall(__NR_memfd_create, mName.c_str(), MFD_CLOEXEC | MFD_ALLOW_SEALING);
+ #endif
+     } else {
+         mFd = ::open(mName.c_str(), oflag, mode);
+@@ -146,12 +161,12 @@ int SharedMemory::openInternal(int oflag, int mode, bool doMapping) {
+             return err;
+         }
+ 
+-#if defined(HAVE_MEMFD_CREATE)
+-        if (fcntl(mFd, F_ADD_SEALS, F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW) == -1) {
+-            err = -errno;
+-            close();
+-            return err;
++        if (mShareType == ShareType::SHARED_MEMORY) {
++            if (fcntl(mFd, F_ADD_SEALS, F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW) == -1) {
++                err = -errno;
++                close();
++                return err;
++            }
+         }
+-#endif
+     }
+ 
+     if (doMapping) {

@@ -79,15 +79,60 @@ std::string GfxstreamContextTypes(
   return default_context_types;
 }
 
-bool GfxstreamContextTypesIncludeVulkan(const std::string& context_types) {
+std::string GfxstreamContextTypeList(const std::string& context_types) {
   const auto wsi_separator = context_types.find(',');
+  if (wsi_separator == std::string::npos) {
+    return context_types;
+  }
+  return context_types.substr(0, wsi_separator);
+}
+
+bool GfxstreamContextTypesIncludeVulkan(const std::string& context_types) {
   const std::string context_type_list =
-      wsi_separator == std::string::npos
-          ? context_types
-          : context_types.substr(0, wsi_separator);
+      GfxstreamContextTypeList(context_types);
   const auto split_context_types = android::base::Split(context_type_list, ":");
   return std::find(split_context_types.begin(), split_context_types.end(),
                    "gfxstream-vulkan") != split_context_types.end();
+}
+
+std::optional<bool> GfxstreamRendererFeatureEnabled(
+    const std::string& renderer_features, const std::string& feature_name) {
+  std::string normalized_renderer_features = renderer_features;
+  std::replace(normalized_renderer_features.begin(),
+               normalized_renderer_features.end(), ',', ';');
+  for (const std::string& feature :
+       android::base::Split(normalized_renderer_features, ";")) {
+    const std::vector<std::string> parts = android::base::Split(feature, ":");
+    if (parts.size() != 2 || parts[0] != feature_name) {
+      continue;
+    }
+    if (parts[1] == "enabled") {
+      return true;
+    }
+    if (parts[1] == "disabled") {
+      return false;
+    }
+  }
+  return std::nullopt;
+}
+
+std::string GfxstreamRendererBlobParams(
+    const std::string& renderer_features) {
+  std::vector<std::string> gpu_blob_params;
+  const auto external_blob =
+      GfxstreamRendererFeatureEnabled(renderer_features, "ExternalBlob");
+  if (external_blob.has_value()) {
+    gpu_blob_params.push_back(std::string("external-blob=") +
+                              (*external_blob ? "true" : "false"));
+  }
+  const auto system_blob =
+      GfxstreamRendererFeatureEnabled(renderer_features, "SystemBlob");
+  if (system_blob.has_value()) {
+    gpu_blob_params.push_back(std::string("system-blob=") +
+                              (*system_blob ? "true" : "false"));
+  }
+  return gpu_blob_params.empty() ? ""
+                                 : "," + absl::StrJoin(gpu_blob_params, ",");
 }
 
 std::string GfxstreamVulkanWsiParam(const std::string& context_types) {
@@ -446,7 +491,7 @@ Result<VhostUserDeviceCommands> BuildVhostUserGpu(
   } else if (gpu_mode == GpuMode::Gfxstream) {
     const std::string context_types =
         GfxstreamContextTypes(instance, kGfxstreamVhostContextTypes);
-    gpu_params_json["context-types"] = context_types;
+    gpu_params_json["context-types"] = GfxstreamContextTypeList(context_types);
     if (GfxstreamContextTypesIncludeVulkan(context_types)) {
       gpu_params_json["wsi"] = "vk";
     }
@@ -564,10 +609,12 @@ Result<void> ConfigureGpu(const CuttlefishConfig& config, Command* crosvm_cmd) {
       !gpu_renderer_features.empty()
           ? ",renderer-features=\"" + gpu_renderer_features + "\""
           : "";
+  const std::string gpu_renderer_blob_params =
+      GfxstreamRendererBlobParams(gpu_renderer_features);
 
   const std::string gpu_common_string =
       fmt::format(",pci-address=00:{:0>2x}.0", VmManager::kGpuPciSlotNum) +
-      gpu_udmabuf_string + gpu_pci_bar_size;
+      gpu_udmabuf_string + gpu_pci_bar_size + gpu_renderer_blob_params;
   const std::string gpu_common_3d_string =
       gpu_common_string + ",egl=true,surfaceless=true,glx=false" + gles_string +
       gpu_renderer_features_param;
