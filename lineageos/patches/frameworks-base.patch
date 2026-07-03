@@ -2589,3 +2589,262 @@ diff --git a/services/core/java/com/android/server/wm/TaskPersister.java b/servi
          if (DEBUG) Slog.d(TAG, "restoreImage: restoring " + filename);
          return BitmapFactory.decodeFile(filename);
      }
+diff --git a/core/res/res/values/strings.xml b/core/res/res/values/strings.xml
+index f9abbcd1b24a..d634cdf575a3 100644
+--- a/core/res/res/values/strings.xml
++++ b/core/res/res/values/strings.xml
+@@ -264,2 +264,8 @@
+     <string name="page_size_compat_title">Android App Compatibility</string>
++    <!-- Notification text displayed when an app is not 16 KB aligned on a 16 KB device. [CHAR LIMIT=120] -->
++    <string name="page_size_compat_notification_text">%1$s will run using page size compatibility mode.</string>
++    <!-- Expanded notification text displayed when an app is not 16 KB aligned on a 16 KB device. [CHAR LIMIT=NONE] -->
++    <string name="page_size_compat_notification_big_text">%1$s is not 16 KB compatible and will run using page size compatibility mode. For best compatibility, update or rebuild the app with 16 KB support.</string>
++    <!-- Notification action that stops future page size compatibility notifications for the app. [CHAR LIMIT=40] -->
++    <string name="page_size_compat_notification_hide_action">Don\'t show again</string>
+
+diff --git a/services/core/java/com/android/server/wm/AppWarnings.java b/services/core/java/com/android/server/wm/AppWarnings.java
+index 995e3a9feb7e..01ffb662cee0 100644
+--- a/services/core/java/com/android/server/wm/AppWarnings.java
++++ b/services/core/java/com/android/server/wm/AppWarnings.java
+@@ -28,2 +28,5 @@ import android.annotation.WorkerThread;
+ import android.app.AlertDialog;
++import android.app.Notification;
++import android.app.NotificationManager;
++import android.app.PendingIntent;
+ import android.content.BroadcastReceiver;
+@@ -35,4 +38,8 @@ import android.content.pm.ApplicationInfo;
+ import android.content.pm.Flags;
++import android.content.pm.PackageItemInfo;
++import android.content.pm.PackageManager;
+ import android.content.pm.UserInfo;
+ import android.content.res.Configuration;
++import android.graphics.drawable.Icon;
++import android.net.Uri;
+ import android.os.Build;
+@@ -43,2 +50,3 @@ import android.os.SystemProperties;
+ import android.os.UserHandle;
++import android.provider.Settings;
+ import android.util.ArrayMap;
+@@ -51,5 +59,6 @@ import android.util.SparseArray;
+ import android.util.Xml;
+-import android.view.ContextThemeWrapper;
+
++import com.android.internal.R;
+ import com.android.internal.annotations.GuardedBy;
++import com.android.internal.notification.SystemNotificationChannels;
+ import com.android.internal.util.ArrayUtils;
+@@ -75,2 +84,9 @@ class AppWarnings {
+     private static final String CONFIG_FILE_NAME = "packages-warnings.xml";
++    private static final String ACTION_HIDE_PAGE_SIZE_MISMATCH =
++            "com.android.server.wm.action.HIDE_PAGE_SIZE_MISMATCH";
++    private static final String EXTRA_PACKAGE_NAME =
++            "com.android.server.wm.extra.PACKAGE_NAME";
++    private static final String EXTRA_USER_ID =
++            "com.android.server.wm.extra.USER_ID";
++    private static final int PAGE_SIZE_MISMATCH_NOTIFICATION_ID = 0x5047534d; // PGSM
+
+@@ -94,4 +110,21 @@ class AppWarnings {
+     private final AtomicFile mConfigFile;
++    private final NotificationManager mNotificationManager;
+
+     private UserManagerInternal mUserManagerInternal;
++    private final BroadcastReceiver mPageSizeMismatchNotificationReceiver =
++            new BroadcastReceiver() {
++                @Override
++                public void onReceive(Context context, Intent intent) {
++                    if (!ACTION_HIDE_PAGE_SIZE_MISMATCH.equals(intent.getAction())) {
++                        return;
++                    }
++                    final String packageName = intent.getStringExtra(EXTRA_PACKAGE_NAME);
++                    final int userId = intent.getIntExtra(EXTRA_USER_ID, USER_NULL);
++                    if (packageName == null || userId == USER_NULL) {
++                        return;
++                    }
++                    setPackageFlag(userId, packageName, FLAG_HIDE_PAGE_SIZE_MISMATCH, true);
++                    cancelPageSizeMismatchNotification(packageName, userId);
++                }
++            };
+
+@@ -106,3 +139,2 @@ class AppWarnings {
+     private SparseArray<DeprecatedAbiDialog> mDeprecatedAbiDialogs;
+-    private SparseArray<PageSizeMismatchDialog> mPageSizeMismatchDialogs;
+
+@@ -124,2 +156,3 @@ class AppWarnings {
+         mConfigFile = new AtomicFile(new File(systemDir, CONFIG_FILE_NAME), "warnings-config");
++        mNotificationManager = atm.mContext.getSystemService(NotificationManager.class);
+     }
+@@ -132,2 +165,5 @@ class AppWarnings {
+         readConfigFromFileAmsThread();
++        mAtm.mContext.registerReceiverAsUser(mPageSizeMismatchNotificationReceiver,
++                UserHandle.ALL, new IntentFilter(ACTION_HIDE_PAGE_SIZE_MISMATCH), null,
++                mUiHandler, Context.RECEIVER_NOT_EXPORTED);
+
+@@ -256,4 +292,4 @@ class AppWarnings {
+
+-    public void showPageSizeMismatchDialogIfNeeded(ActivityRecord r) {
+-        // Don't show dialog if the app compat is enabled using property
++    public void showPageSizeMismatchNotificationIfNeeded(ActivityRecord r) {
++        // Don't show a per-app warning if app compat is enabled globally using a property.
+         final String appCompatEnabled = SystemProperties.get(
+@@ -264,3 +300,3 @@ class AppWarnings {
+
+-        mUiHandler.showPageSizeMismatchDialog(r);
++        mUiHandler.showPageSizeMismatchNotification(r);
+     }
+@@ -278,3 +314,3 @@ class AppWarnings {
+         if (Flags.appCompatOption16kb()) {
+-            showPageSizeMismatchDialogIfNeeded(r);
++            showPageSizeMismatchNotificationIfNeeded(r);
+         }
+@@ -478,3 +514,3 @@ class AppWarnings {
+     @UiThread
+-    private void showPageSizeMismatchDialogUiThread(@NonNull ActivityRecord ar) {
++    private void showPageSizeMismatchNotificationUiThread(@NonNull ActivityRecord ar) {
+         String warning =
+@@ -488,39 +524,8 @@ class AppWarnings {
+         final int userId = getUserIdForActivity(ar);
+-        PageSizeMismatchDialog pageSizeMismatchDialog;
+-        if (mPageSizeMismatchDialogs != null) {
+-            pageSizeMismatchDialog = mPageSizeMismatchDialogs.get(userId);
+-            if (pageSizeMismatchDialog != null) {
+-                pageSizeMismatchDialog.dismiss();
+-                mPageSizeMismatchDialogs.remove(userId);
+-            }
++        if (hasPackageFlag(userId, ar.packageName, FLAG_HIDE_PAGE_SIZE_MISMATCH)) {
++            cancelPageSizeMismatchNotification(ar.packageName, userId);
++            return;
+         }
+-        if (!hasPackageFlag(userId, ar.packageName, FLAG_HIDE_PAGE_SIZE_MISMATCH)) {
+-            Context context =  getUiContextForActivity(ar);
+-            // PageSizeMismatchDialog has link in message which should open in browser.
+-            // Starting activity from non-activity context is not allowed and flag
+-            // FLAG_ACTIVITY_NEW_TASK is needed to start activity.
+-            context =  new ContextThemeWrapper(context, context.getThemeResId()) {
+-                @Override
+-                public void startActivity(Intent intent) {
+-                    // PageSizeMismatch dialog stays on top of the browser even after opening link
+-                    // set broadcast to close the dialog when link has been clicked.
+-                    sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
+
+-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+-                    super.startActivity(intent);
+-                }
+-            };
+-            pageSizeMismatchDialog =
+-                    new PageSizeMismatchDialog(
+-                            AppWarnings.this,
+-                            context,
+-                            ar.info.applicationInfo,
+-                            userId,
+-                            warning);
+-            pageSizeMismatchDialog.show();
+-            if (mPageSizeMismatchDialogs == null) {
+-                mPageSizeMismatchDialogs = new SparseArray<>();
+-            }
+-            mPageSizeMismatchDialogs.put(userId, pageSizeMismatchDialog);
+-        }
++        postPageSizeMismatchNotification(ar, userId);
+     }
+@@ -581,10 +586,5 @@ class AppWarnings {
+
+-        // Hides the "page size app compat" dialog if necessary.
+-        if (mPageSizeMismatchDialogs != null) {
+-            PageSizeMismatchDialog pageSizeMismatchDialog = mPageSizeMismatchDialogs.get(userId);
+-            if (pageSizeMismatchDialog != null
+-                    && (name == null || name.equals(pageSizeMismatchDialog.mPackageName))) {
+-                pageSizeMismatchDialog.dismiss();
+-                mPageSizeMismatchDialogs.remove(userId);
+-            }
++        // Hides the "page size app compat" notification if necessary.
++        if (name != null) {
++            cancelPageSizeMismatchNotification(name, userId);
+         }
+@@ -592,2 +592,66 @@ class AppWarnings {
+
++    @UiThread
++    private void postPageSizeMismatchNotification(@NonNull ActivityRecord ar, int userId) {
++        final Context context = getUiContextForActivity(ar);
++        final PackageManager pm = context.getPackageManager();
++        final CharSequence label = ar.info.applicationInfo.loadSafeLabel(pm,
++                PackageItemInfo.DEFAULT_MAX_LABEL_SIZE_PX,
++                PackageItemInfo.SAFE_LABEL_FLAG_FIRST_LINE
++                        | PackageItemInfo.SAFE_LABEL_FLAG_TRIM);
++        final CharSequence title = context.getText(R.string.page_size_compat_title);
++        final CharSequence text = context.getString(
++                R.string.page_size_compat_notification_text, label);
++        final CharSequence bigText = context.getString(
++                R.string.page_size_compat_notification_big_text, label);
++
++        final UserHandle user = UserHandle.of(userId);
++        final Intent appInfoIntent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
++                .setData(Uri.fromParts("package", ar.packageName, null))
++                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++        final PendingIntent contentIntent = PendingIntent.getActivityAsUser(mAtm.mContext,
++                getPageSizeMismatchRequestCode(ar.packageName, userId), appInfoIntent,
++                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE, null, user);
++        final Intent hideIntent = new Intent(ACTION_HIDE_PAGE_SIZE_MISMATCH)
++                .setPackage(mAtm.mContext.getPackageName())
++                .putExtra(EXTRA_PACKAGE_NAME, ar.packageName)
++                .putExtra(EXTRA_USER_ID, userId);
++        final PendingIntent hidePendingIntent = PendingIntent.getBroadcast(mAtm.mContext,
++                getPageSizeMismatchRequestCode(ar.packageName, userId), hideIntent,
++                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
++        final Icon icon = Icon.createWithResource(mAtm.mContext, R.drawable.stat_sys_warning);
++
++        final Notification notification = new Notification.Builder(
++                context, SystemNotificationChannels.DEVELOPER)
++                .setSmallIcon(R.drawable.stat_sys_warning)
++                .setColor(context.getColor(R.color.system_notification_accent_color))
++                .setContentTitle(title)
++                .setContentText(text)
++                .setStyle(new Notification.BigTextStyle().bigText(bigText))
++                .setContentIntent(contentIntent)
++                .setAutoCancel(true)
++                .setLocalOnly(true)
++                .setOnlyAlertOnce(true)
++                .setPriority(Notification.PRIORITY_LOW)
++                .setSilent(true)
++                .addAction(new Notification.Action.Builder(icon,
++                        context.getText(R.string.page_size_compat_notification_hide_action),
++                        hidePendingIntent).build())
++                .build();
++        mNotificationManager.notifyAsUser(getPageSizeMismatchNotificationTag(ar.packageName),
++                PAGE_SIZE_MISMATCH_NOTIFICATION_ID, notification, user);
++    }
++
++    private void cancelPageSizeMismatchNotification(String packageName, int userId) {
++        mNotificationManager.cancelAsUser(getPageSizeMismatchNotificationTag(packageName),
++                PAGE_SIZE_MISMATCH_NOTIFICATION_ID, UserHandle.of(userId));
++    }
++
++    private static String getPageSizeMismatchNotificationTag(String packageName) {
++        return "PageSizeMismatch:" + packageName;
++    }
++
++    private static int getPageSizeMismatchRequestCode(String packageName, int userId) {
++        return 31 * packageName.hashCode() + userId;
++    }
++
+     /**
+@@ -729,3 +793,3 @@ class AppWarnings {
+         private static final int MSG_SHOW_DEPRECATED_ABI_DIALOG = 6;
+-        private static final int MSG_SHOW_PAGE_SIZE_APP_MISMATCH_DIALOG = 7;
++        private static final int MSG_SHOW_PAGE_SIZE_APP_MISMATCH_NOTIFICATION = 7;
+
+@@ -762,5 +826,5 @@ class AppWarnings {
+                 } break;
+-                case MSG_SHOW_PAGE_SIZE_APP_MISMATCH_DIALOG: {
++                case MSG_SHOW_PAGE_SIZE_APP_MISMATCH_NOTIFICATION: {
+                     final ActivityRecord ar = (ActivityRecord) msg.obj;
+-                    showPageSizeMismatchDialogUiThread(ar);
++                    showPageSizeMismatchNotificationUiThread(ar);
+                 } break;
+@@ -798,5 +862,5 @@ class AppWarnings {
+
+-        public void showPageSizeMismatchDialog(ActivityRecord r) {
+-            removeMessages(MSG_SHOW_PAGE_SIZE_APP_MISMATCH_DIALOG);
+-            obtainMessage(MSG_SHOW_PAGE_SIZE_APP_MISMATCH_DIALOG, r).sendToTarget();
++        public void showPageSizeMismatchNotification(ActivityRecord r) {
++            removeMessages(MSG_SHOW_PAGE_SIZE_APP_MISMATCH_NOTIFICATION);
++            obtainMessage(MSG_SHOW_PAGE_SIZE_APP_MISMATCH_NOTIFICATION, r).sendToTarget();
+         }
