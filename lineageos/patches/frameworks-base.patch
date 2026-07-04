@@ -258,6 +258,16 @@ index 819b7cc28e5a..089c370ab196 100644
    <java-symbol type="bool" name="config_allowRotationResolver" />
    <java-symbol type="bool" name="config_dockedStackDividerFreeSnapMode" />
    <java-symbol type="dimen" name="docked_stack_divider_thickness" />
+@@ -3449,6 +3450,9 @@
+   <java-symbol type="string" name="page_size_compat_apk_and_elf_not_aligned" />
+   <java-symbol type="string" name="page_size_compat_unknown" />
+   <java-symbol type="string" name="page_size_compat_title" />
++  <java-symbol type="string" name="page_size_compat_notification_text" />
++  <java-symbol type="string" name="page_size_compat_notification_big_text" />
++  <java-symbol type="string" name="page_size_compat_notification_hide_action" />
+ 
+   <!--  Work profile unlaunchable app alert dialog-->
+   <java-symbol type="style" name="AlertDialogWithEmergencyButton"/>
 diff --git a/core/tests/coretests/src/android/window/DesktopExperienceFlagsTest.java b/core/tests/coretests/src/android/window/DesktopExperienceFlagsTest.java
 index 2c97c6601d7a..f6b6c5b6c63f 100644
 --- a/core/tests/coretests/src/android/window/DesktopExperienceFlagsTest.java
