@@ -165,6 +165,11 @@ crosvm_bin.annotation(
     patches = [
         "@//build_external/crosvm:PATCH.rutabaga_gfx_build_rs.patch",
         "@//build_external/crosvm:PATCH.rutabaga_gfx-upstream-main-20260520.patch",
+        # Capability gate for the vulkano backend enabled by
+        # PATCH.crosvm-enable-vulkano-gralloc.patch: prefer minigbm when it
+        # initializes (x86-64 and any host with a minigbm driver), start and
+        # select Vulkano only when it doesn't (Apple Silicon / Asahi).
+        "@//build_external/crosvm:PATCH.rutabaga_gfx-gralloc-vulkano-fallback.patch",
     ],
 )
 

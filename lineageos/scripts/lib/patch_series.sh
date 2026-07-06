@@ -48,50 +48,27 @@ patch_series_git_apply() {
   fi
 }
 
-# Returns 0 when a project's whole patch list is already applied to the live
-# tree: apply the list to a throwaway worktree of HEAD, snapshot the combined
-# diff, and confirm it reverse-applies cleanly to the project. Quiet by design
-# (no logging) so each caller phrases its own messages. Source-root entries are
-# never grouped this way and return non-zero.
+# Returns 0 when every patch in a project's list reverse-checks against the live
+# tree. This intentionally avoids throwaway worktrees: repo partial clones may
+# not have every historical blob needed for `git apply --index`, while the live
+# checkout already has the patched files. Source-root entries are checked one by
+# one by callers and return non-zero here.
 #   patch_series_already_applied <root> <overlay_dir> <project> <patch_list>
 patch_series_already_applied() {
   local root="$1"
   local overlay_dir="$2"
   local project="$3"
   local patch_list="$4"
-  local project_dir tmp_dir tmp_worktree combined_patch patch patch_file
-  local applied=1
+  local patch patch_file
 
   patch_series_is_source_root "$project" && return 1
-  project_dir="$(patch_series_project_dir "$root" "$project")"
-
-  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/lineage-patch-series.XXXXXX")" || return 1
-  tmp_worktree="$tmp_dir/worktree"
-  combined_patch="$tmp_dir/combined.patch"
-
-  if ! git -C "$project_dir" worktree add --detach --quiet "$tmp_worktree" HEAD >/dev/null 2>&1; then
-    rm -rf "$tmp_dir"
-    return 1
-  fi
 
   while IFS= read -r patch; do
     [[ -n "$patch" ]] || continue
     patch_file="$overlay_dir/$patch"
-    if ! git -C "$tmp_worktree" apply --index --whitespace=nowarn "$patch_file" >/dev/null 2>&1; then
-      applied=0
-      break
-    fi
+    patch_series_git_apply "$root" "$project" --check --reverse --whitespace=nowarn "$patch_file" >/dev/null 2>&1 || \
+      return 1
   done <<<"$patch_list"
 
-  if (( applied )); then
-    git -C "$tmp_worktree" diff --cached --binary HEAD -- > "$combined_patch"
-    if [[ ! -s "$combined_patch" ]] \
-        || ! git -C "$project_dir" apply --check --reverse "$combined_patch" >/dev/null 2>&1; then
-      applied=0
-    fi
-  fi
-
-  git -C "$project_dir" worktree remove --force "$tmp_worktree" >/dev/null 2>&1 || rm -rf "$tmp_worktree"
-  rm -rf "$tmp_dir"
-  (( applied ))
+  return 0
 }

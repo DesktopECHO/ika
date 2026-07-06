@@ -1,0 +1,147 @@
+Patch summary:
+Restore Android build glue for Khronos Vulkan-Headers v1.4.341.
+
+The local manifest replaces AOSP's external/vulkan-headers checkout with the
+matching upstream Khronos tag so the ROM builds against VK_HEADER_VERSION 341.
+Upstream does not carry Android's Soong module definitions, so add back the
+current Android.bp and Bazel header-library target.
+
+diff --git a/Android.bp b/Android.bp
+new file mode 100644
+index 0000000..cfb8cce
+--- /dev/null
++++ b/Android.bp
+@@ -0,0 +1,91 @@
++// Copyright 2019 The Android Open Source Project
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//      http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package {
++    default_applicable_licenses: ["external_vulkan-headers_license"],
++}
++
++license {
++    name: "external_vulkan-headers_license",
++    visibility: [":__subpackages__"],
++    license_kinds: [
++        "SPDX-license-identifier-Apache-2.0",
++    ],
++    license_text: [
++        "LICENSES/Apache-2.0.txt",
++    ],
++}
++
++license {
++    name: "external_vulkan-headers_license.unused.MIT",
++    visibility: [":__subpackages__"],
++    license_kinds: [
++        "SPDX-license-identifier-MIT",
++    ],
++    license_text: [
++        "LICENSES/MIT.txt",
++    ],
++}
++
++filegroup {
++    name: "external_vulkan-headers_unused.MIT",
++    visibility: ["//visibility:private"],
++    licenses: ["external_vulkan-headers_license.unused.MIT"],
++    srcs: ["registry/parse_dependency.py"],
++}
++
++// This module defines which headers are included in the NDK sysroot during
++// the NDK build process.
++ndk_headers {
++    name: "ndk_vulkan_headers",
++    from: "include",
++    to: "",
++    srcs: [
++        "include/**/*.h",
++    ],
++    license: "LICENSES/Apache-2.0.txt",
++    // The Vulkan headers aren't self-contained. vulkan_fuchsia.h, at the very
++    // least, requires other headers to be included first.
++    //
++    // Low risk to disable verification here since upstream also cares about
++    // C-compatibility. Can remove if upstream ever decides they want to
++    // guarantee self-contained headers as well.
++    skip_verification: true,
++}
++
++// This module makes Vulkan headers available to other modules without
++// having to link against libvulkan.so, e.g. for the Vulkan loader and
++// drivers, or things that dlopen libvulkan.so. It's available to system
++// modules, as part of the VNDK, and to unbundled modules.
++cc_library_headers {
++    name: "vulkan_headers",
++    export_include_dirs: ["include"],
++    native_bridge_supported: true, // Used for verification in Berberis.
++    host_supported: true,
++    vendor_available: true,
++    sdk_version: "24",
++    apex_available: [
++        "//apex_available:platform",
++        "com.android.virt",
++    ],
++    llndk: {
++        llndk_headers: true,
++    },
++}
++
++// This module makes Vulkan XML file available to vendor code.
++filegroup {
++    name: "vulkan_headers_registry",
++    srcs: ["registry/vk.xml"],
++}
+diff --git a/BUILD.bazel b/BUILD.bazel
+new file mode 100644
+index 0000000..41f9b66
+--- /dev/null
++++ b/BUILD.bazel
+@@ -0,0 +1,36 @@
++load("@rules_cc//cc:defs.bzl", "cc_library")
++load("@rules_license//rules:license.bzl", "license")
++load("@rules_license//rules:license_kind.bzl", "license_kind")
++
++package(
++    default_applicable_licenses = [":license"],
++    default_visibility = ["//visibility:public"],
++)
++
++license_kind(
++    name = "SPDX-license-identifier-Apache-2.0",
++    conditions = ["notice"],
++    url = "https://spdx.org/licenses/Apache-2.0.html",
++)
++
++license_kind(
++    name = "SPDX-license-identifier-MIT",
++    conditions = ["notice"],
++    url = "https://spdx.org/licenses/MIT.html",
++)
++
++license(
++    name = "license",
++    license_kinds = [
++        ":SPDX-license-identifier-Apache-2.0",
++        ":SPDX-license-identifier-MIT",
++    ],
++    visibility = [":__subpackages__"],
++)
++
++cc_library(
++    name = "vulkan_headers",
++    hdrs = glob(["include/**/*"]),
++    includes = ["include"],
++    visibility = ["//visibility:public"],
++)

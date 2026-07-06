@@ -43,6 +43,7 @@ The desktop products split app compatibility identity from windowing behavior:
   disabled for the desktop profile
 - desktop mode is enabled by resources/properties instead of
   `android.hardware.type.pc`, which Play treats as a PC/desktop device
+- the ARM64 ROM targets ARMv8.2-A-or-newer devices
 - ARM64 and x86-64 share the same desktop overlays, provisioning, userdata
   format, and taskbar behavior; native bridge support is the x86-64-only
   architecture addition
@@ -104,7 +105,7 @@ repo root will be picked up by the `ika-lineageos` package in the second phase.
 The script downloads LineageOS 23.2, installs this overlay and the microG
 partner manifest as local manifests, syncs official LineageOS sources, overlays
 the local `lineage_desktop` tree, applies the patches in `patches/`, refreshes
-the microG prebuilts, installs the x86-64 ARM native bridge payload, and builds
+the microG prebuilts, installs the x86-64 ARM64 native bridge payload, and builds
 both Cuttlefish products.
 
 Before compiling, the script runs `scripts/lib/validate_build_inputs.sh` to verify
@@ -185,6 +186,7 @@ MICROG_GMSCORE_RELEASE=latest
 MICROG_GSFPROXY_RELEASE=latest
 MICROG_FDROID_RELEASE=latest
 MICROG_FDROID_PRIVILEGED_RELEASE=latest
+MICROG_PREBUILT_CACHE_DIR=~/ika-build/microg-prebuilts
 INCLUDE_X86_ARM_NATIVE_BRIDGE=1
 UPDATE_NATIVE_BRIDGE_PREBUILTS=1
 NATIVE_BRIDGE_SOURCE_DIR=/path/to/extracted/android/system
@@ -210,13 +212,27 @@ from the official F-Droid repository before building. Set
 `MICROG_FDROID_RELEASE`, or `MICROG_FDROID_PRIVILEGED_RELEASE` to version
 names/codes, to pin reproducible versions.
 
+Downloaded APKs are cached under `MICROG_PREBUILT_CACHE_DIR` (default
+`~/ika-build/microg-prebuilts`, alongside the ccache and ARM64 prebuilt caches).
+The cache is keyed by the upstream, version-stamped file name, so a rebuild
+whose resolved versions are already cached copies them into `vendor/partner_gms`
+without re-downloading. A small `index.json` manifest in the same directory maps
+each pinned version to its cached APK.
+
+For a **fully offline** build, pin every `MICROG_*_RELEASE` to an explicit
+version (not `latest`) and warm the cache once online. On later runs each pinned
+module whose APK is already cached is installed straight from the manifest with
+no upstream request at all — not even the release-metadata or F-Droid index
+lookup. `latest` always re-queries metadata so a newer upstream release is not
+missed (though an unchanged version still skips the download).
+
 `INCLUDE_X86_ARM_NATIVE_BRIDGE=1` is the default for the x86-64 product. The
 build helper runs `scripts/update_native_bridge_prebuilts.py`, which downloads
 the Android 16 Google APIs x86-64 SDK system image, verifies its SHA1, extracts
 Google's `libndk_translation.so` runtime, proxy libraries, and binfmt/init glue,
 and installs those proprietary files into the workspace at
 `vendor/lineage_desktop/prebuilts/native_bridge/system`. The binaries are not
-committed to this repository. ARM/ARM64 guest bionic and Android support
+committed to this repository. ARM64 guest bionic and Android support
 libraries, including `/system/lib64/arm64/libc.so`, are built from the matching
 LineageOS source tree via AOSP's native bridge support modules; they are not
 copied from the SDK image or from the ARM64 ROM. When Google's SDK payload does

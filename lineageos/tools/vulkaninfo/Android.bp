@@ -1,0 +1,44 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+// Khronos vulkaninfo, vendored from Vulkan-Tools v1.4.341 (matches the
+// external/vulkan-headers version in the tree; see README.md). Built as a
+// plain console binary with no VK_USE_PLATFORM_* WSI defines, so it reports
+// everything except surface/present info.
+cc_binary {
+    name: "vulkaninfo",
+    srcs: ["vulkaninfo.cpp"],
+    local_include_dirs: ["generated"],
+    header_libs: [
+        "vulkan_headers",
+    ],
+    cpp_std: "c++17",
+    system_ext_specific: true,
+    cflags: [
+        "-Wall",
+        "-Wno-error",
+    ],
+    // Upstream vulkaninfo reports errors via throw/catch; AOSP disables
+    // exceptions by default.
+    cppflags: ["-fexceptions"],
+    // 64-bit only, built for each product's native arch (x86_64 on the
+    // Cuttlefish desktop product, arm64 on pgagnostic), so it exercises the
+    // gfxstream guest driver directly without Berberis translation.
+    compile_multilib: "64",
+    // Also buildable as an arm64 guest binary (installed to /system_ext/bin/arm64
+    // by adding vulkaninfo.native_bridge to PRODUCT_PACKAGES): the x86_64
+    // image ships it to probe the translated path real apps use. See
+    // config/x86_arm_native_bridge.mk and the vulkaninfo_arm64 wrapper.
+    native_bridge_supported: true,
+}
+
+// x86-only convenience wrapper: runs the arm64 guest vulkaninfo under
+// ndk_translation, so `vulkaninfo` vs `vulkaninfo_arm64` output diffs
+// separate gfxstream driver issues from Berberis translation issues.
+sh_binary {
+    name: "vulkaninfo_arm64",
+    src: "vulkaninfo_arm64.sh",
+    filename: "vulkaninfo_arm64",
+    system_ext_specific: true,
+}

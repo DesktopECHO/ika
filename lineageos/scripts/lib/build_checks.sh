@@ -14,8 +14,27 @@ validate_build_inputs_for_targets() {
   local validate_script="$workspace/vendor/lineage_desktop/scripts/lib/validate_build_inputs.sh"
   [[ -x "$validate_script" ]] || die "missing build input validator: $validate_script"
 
+  build_validation_zipalign "$@"
+
   log "validating build inputs"
   "$validate_script" "$workspace" "$@"
+}
+
+build_validation_zipalign() {
+  local host_tag zipalign_bin target
+  host_tag="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/aarch64/arm64/;s/x86_64/x86/')"
+  zipalign_bin="$workspace/out/host/$host_tag/bin/zipalign"
+
+  [[ -x "$zipalign_bin" ]] && return 0
+
+  for target in "$@"; do
+    if [[ "$target" == "arm64" ]]; then
+      log "zipalign not found at ${zipalign_bin#$workspace/}; building validation host tool"
+      (cd "$workspace" && run_build_native "$(target_product "$target")" zipalign)
+      [[ -x "$zipalign_bin" ]] || die "zipalign build succeeded but binary not found at $zipalign_bin"
+      return 0
+    fi
+  done
 }
 
 repair_soong_zero_byte_objects() {

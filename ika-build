@@ -56,7 +56,8 @@ Options:
                    Build only; do not offer to install.
   -h, --help       Show this help and exit.
 
-Optional ROM target arguments limit the build to all, arm64, and/or x86_64.
+By default only the host's native ROM (arm64 or x86_64) is built. Pass optional
+target arguments (all, arm64, and/or x86_64) to build a different or wider set.
 EOF
 }
 
@@ -364,6 +365,12 @@ if [[ "${install_packages}" != true ]]; then
   # Privileged setup is done; let the timestamp lapse normally during the
   # multi-hour, unprivileged ROM build.
   stop_sudo_keepalive
+
+  # With no explicit target, build only the host-native ROM rather than every
+  # architecture. Explicit arguments (all/arm64/x86_64) still override this.
+  if (( ${#rom_args[@]} == 0 )); then
+    rom_args=("$(ika_arch_for_host)")
+  fi
 
   print_lineageos_build_next_steps
   banner $'Building the LineageOS Desktop ROM\n    NOTE: First run will take a long time, 3 to 6+ hours.'

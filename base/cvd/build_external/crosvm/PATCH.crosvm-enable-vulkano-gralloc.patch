@@ -1,7 +1,7 @@
 diff --git a/src/crosvm/sys/linux.rs b/src/crosvm/sys/linux.rs
 --- a/src/crosvm/sys/linux.rs
 +++ b/src/crosvm/sys/linux.rs
-@@ -2484,7 +2484,13 @@
+@@ -2484,7 +2484,16 @@
              })?
      };
  
@@ -12,6 +12,9 @@ diff --git a/src/crosvm/sys/linux.rs b/src/crosvm/sys/linux.rs
 +    // Vulkano (via VK_EXT_external_memory_dma_buf through Honeykrisp). Disabling
 +    // it leaves crosvm with only the System backend and yields
 +    // "invalid gralloc backend" (guest ANGLE VK_ERROR_OUT_OF_DEVICE_MEMORY).
++    // Hosts with a working minigbm keep using it: rutabaga only starts and
++    // selects Vulkano when minigbm failed to initialize (see
++    // PATCH.rutabaga_gfx-gralloc-vulkano-fallback.patch).
 +    let flags = RutabagaGrallocBackendFlags::new();
      let gralloc = RutabagaGralloc::new(flags).context("failed to create gralloc")?;
  

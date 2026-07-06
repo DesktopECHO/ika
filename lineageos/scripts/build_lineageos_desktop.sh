@@ -340,7 +340,7 @@ build_target() {
       # The payload must already be installed before product config is parsed,
       # or the bridge is silently dropped from the image. Fail loudly instead.
       local nb_lib="$workspace/vendor/lineage_desktop/prebuilts/native_bridge/system/lib64/libndk_translation.so"
-      [[ -f "$nb_lib" ]] || die "x86 ARM native bridge enabled but payload missing ($nb_lib); native bridge prebuilts must be populated before building x86_64"
+      [[ -f "$nb_lib" ]] || die "x86 ARM64 native bridge enabled but payload missing ($nb_lib); native bridge prebuilts must be populated before building x86_64"
       export LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE=true
       export USE_NDK_TRANSLATION_BINARY=true
     else

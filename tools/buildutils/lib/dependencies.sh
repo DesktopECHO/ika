@@ -159,7 +159,7 @@ function install_deb_build_dependencies() {
 
   # Debian 13: upgrade Mesa from backports, then install Vulkan loader/dev
   # packages built from testing source. Trixie base has vulkan_raii.hpp v1.4.309
-  # which is ABI-incompatible with the v1.4.338 headers the Bazel build fetches
+  # which is ABI-incompatible with the v1.4.341 headers the Bazel build fetches
   # from KhronosGroup/Vulkan-Headers.
   if [[ "${codename}" == "trixie" ]]; then
     echo "Upgrading Mesa stack from trixie-backports..."

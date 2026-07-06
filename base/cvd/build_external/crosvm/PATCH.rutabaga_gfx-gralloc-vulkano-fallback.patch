@@ -1,0 +1,35 @@
+--- a/src/rutabaga_gralloc/gralloc.rs	2026-07-07 19:03:24.628962096 -0300
++++ b/src/rutabaga_gralloc/gralloc.rs	2026-07-07 19:04:03.165365406 -0300
+@@ -280,8 +280,14 @@
+             }
+         }
+ 
++        // ika: capability gate. Vulkano exists to serve hosts where minigbm
++        // has no driver for the GPU (e.g. Apple Silicon / Asahi, whose render
++        // node minigbm cannot open). When minigbm did initialize, skip Vulkano
++        // entirely: creating a Vulkan instance at VMM startup is the cost that
++        // made upstream disable this backend on Linux, and minigbm is the
++        // tested allocation path there.
+         #[cfg(feature = "vulkano")]
+-        if flags.uses_vulkano() {
++        if flags.uses_vulkano() && !grallocs.contains_key(&GrallocBackend::Minigbm) {
+             match VulkanoGralloc::init() {
+                 Ok(vulkano) => {
+                     grallocs.insert(GrallocBackend::Vulkano, vulkano);
+@@ -336,9 +342,15 @@
+             }
+         }
+ 
++        // ika: only route allocations to Vulkano when it actually
++        // initialized. Upstream selects it whenever the feature is compiled
++        // in, which breaks every allocation on hosts where VulkanoGralloc::
++        // init() failed (and would shadow a working minigbm).
+         #[cfg(feature = "vulkano")]
+         {
+-            _backend = GrallocBackend::Vulkano;
++            if self.grallocs.contains_key(&GrallocBackend::Vulkano) {
++                _backend = GrallocBackend::Vulkano;
++            }
+         }
+ 
+         _backend

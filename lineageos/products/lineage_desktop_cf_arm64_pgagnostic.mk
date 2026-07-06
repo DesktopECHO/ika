@@ -7,12 +7,20 @@
 CF_VENDOR_NO_UWB := true
 CF_VENDOR_NO_THREADNETWORK := true
 
-$(call inherit-product, device/google/cuttlefish/vsoc_arm64_pgagnostic/desktop/aosp_cf.mk)
+$(call inherit-product, device/google/cuttlefish/ika_arm64/desktop/aosp_cf.mk)
 $(call inherit-product, vendor/lineage_desktop/config/common_desktop_mode_only.mk)
 
 # Android Virtualization Framework (parity with the x86_64 desktop product,
 # which pulls this in via the Cuttlefish desktop aosp_cf.mk).
 $(call inherit-product, packages/modules/Virtualization/apex/product_packages.mk)
+
+# ARM64 is the only desktop image that boots real 4K/16K kernels. Keep
+# platform prebuilts honest while letting PackageManager/linker backcompat wrap
+# third-party 4K APK native libraries at install/load time.
+PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE := true
+PRODUCT_PRODUCT_PROPERTIES += \
+    bionic.linker.16kb.app_compat.enabled=true \
+    pm.16kb.app_compat.disabled=false
 
 PRODUCT_NAME := lineage_desktop_cf_arm64_pgagnostic
 PRODUCT_BRAND := LineageOS

@@ -1,6 +1,6 @@
 Patch summary:
 Keep native-bridge loader namespaces from advertising APK-embedded native
-library paths. The x86 desktop image can run ARM apps through the native
+library paths. The x86_64 desktop image can run ARM64 apps through the native
 bridge, but translated guest linkers are much more reliable when the selected
 libraries are real extracted files instead of `apk.zip!/lib/...` paths.
 

@@ -95,6 +95,13 @@ Environment:
   MICROG_GSFPROXY_RELEASE
                         GsfProxy microG F-Droid version name/code, or latest.
                         Default: latest
+  MICROG_PREBUILT_CACHE_DIR
+                        Persistent cache for downloaded microG/F-Droid APKs. A
+                        version already present is reused instead of refetched.
+                        With every MICROG_*_RELEASE pinned (not latest) and the
+                        cache warm, updates run fully offline: pinned+cached
+                        modules skip even the release-metadata/F-Droid index
+                        lookup. Default: $HOME/ika-build/microg-prebuilts
   REPO_INSTALL_PATH     Path checked for repo if it is not on PATH.
                         Default: /usr/local/bin/repo
   REPO_SYNC_ATTEMPTS    Top-level repo sync attempts. Default: 9

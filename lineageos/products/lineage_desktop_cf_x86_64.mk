@@ -7,7 +7,7 @@
 CF_VENDOR_NO_UWB := true
 CF_VENDOR_NO_THREADNETWORK := true
 
-$(call inherit-product, device/google/cuttlefish/vsoc_x86_64_sandybridge/desktop/aosp_cf.mk)
+$(call inherit-product, device/google/cuttlefish/ika_x86_64/desktop/aosp_cf.mk)
 $(call inherit-product, vendor/lineage_desktop/config/common_desktop_mode_only.mk)
 $(call inherit-product, vendor/lineage_desktop/config/x86_arm_native_bridge.mk)
 

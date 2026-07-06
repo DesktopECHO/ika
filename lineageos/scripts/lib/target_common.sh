@@ -44,8 +44,8 @@ target_product() {
 # Requires $workspace to be set by the caller (the build engine).
 target_product_out() {
   case "$1" in
-    arm64) printf '%s\n' "$workspace/out/target/product/vsoc_arm64_pgagnostic" ;;
-    x86_64) printf '%s\n' "$workspace/out/target/product/vsoc_x86_64_sandybridge" ;;
+    arm64) printf '%s\n' "$workspace/out/target/product/ika_arm64" ;;
+    x86_64) printf '%s\n' "$workspace/out/target/product/ika_x86_64" ;;
     *) die "internal error: unsupported target $1" ;;
   esac
 }

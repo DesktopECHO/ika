@@ -1,0 +1,47 @@
+Patch summary:
+Build zipalign for device images as well as host tools.
+
+The desktop ROMs ship zipalign for on-device APK page-alignment diagnostics.
+Upstream only builds zipalign as a host binary, so make the zipalign library and
+binary host-supported device modules while preserving the existing host variant
+used by build tools and static SDK tooling.
+
+diff --git a/tools/zipalign/Android.bp b/tools/zipalign/Android.bp
+index 5eedca9289..efc06dc751 100644
+--- a/tools/zipalign/Android.bp
++++ b/tools/zipalign/Android.bp
+@@ -16,8 +16,9 @@ cc_defaults {
+     },
+ }
+ 
+-cc_library_host_static {
++cc_library_static {
+     name: "libzipalign",
++    host_supported: true,
+     srcs: [
+         "ZipAlign.cpp",
+         "ZipEntry.cpp",
+@@ -29,6 +30,11 @@ cc_library_host_static {
+     ],
+     cflags: ["-Wall", "-Werror"],
+-
++    target: {
++        android: {
++            cflags: ["-Wno-non-virtual-dtor"],
++        },
++    },
++
+     // NOTE: Do not add any shared_libs dependencies because they will break the
+     // static_sdk_tools target.
+     whole_static_libs: [
+@@ -41,8 +42,9 @@ cc_library_host_static {
+     defaults: ["zipalign_defaults"],
+ }
+ 
+-cc_binary_host {
++cc_binary {
+     name: "zipalign",
++    host_supported: true,
+     srcs: [
+         "ZipAlignMain.cpp",
+     ],

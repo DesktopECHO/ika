@@ -40,20 +40,11 @@ PAYLOAD_REQUIRED_FILES = (
     "etc/binfmt_misc/arm64_dyn",
     "etc/binfmt_misc/arm64_exe",
     "etc/init/ndk_translation.rc",
-    "etc/ld.config.arm.txt",
     "etc/ld.config.arm64.txt",
     "lib64/libndk_translation.so",
 )
 
-PAYLOAD_ARM32_FILES = (
-    "bin/ndk_translation_program_runner_binfmt_misc",
-    "etc/binfmt_misc/arm_dyn",
-    "etc/binfmt_misc/arm_exe",
-    "lib/libndk_translation.so",
-)
-
 PAYLOAD_GLOBS = (
-    "lib/*ndk_translation*.so",
     "lib64/*ndk_translation*.so",
 )
 
@@ -444,18 +435,6 @@ def stage_payload(source_root, output_root):
         raise UpdateError(
             "native bridge payload missing required files: " + ", ".join(missing)
         )
-
-    if (system_root / "lib" / "libndk_translation.so").is_file():
-        missing = []
-        for relpath in PAYLOAD_ARM32_FILES:
-            if not (system_root / relpath).is_file():
-                missing.append(relpath)
-                continue
-            copy_relpath(system_root, relpath, output_root, copied)
-        if missing:
-            raise UpdateError(
-                "native bridge ARM32 payload missing required files: " + ", ".join(missing)
-            )
 
     for pattern in PAYLOAD_GLOBS:
         for src in sorted(system_root.glob(pattern)):

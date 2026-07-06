@@ -24,12 +24,18 @@ PRODUCT_PACKAGES += \
     libndk_translation_proxy_libm
 endif
 
+# Arm64 guest build of vulkaninfo (tools/vulkaninfo) plus a shell wrapper to
+# run it under translation. These install to system_ext so generic_system's
+# /system artifact-path requirement stays clean.
+PRODUCT_PACKAGES += \
+    vulkaninfo.native_bridge:64 \
+    vulkaninfo_arm64
+
 LINEAGE_DESKTOP_NATIVE_BRIDGE_COPY_FILES := \
     bin/ndk_translation_program_runner_binfmt_misc_arm64 \
     etc/binfmt_misc/arm64_dyn \
     etc/binfmt_misc/arm64_exe \
     etc/init/ndk_translation.rc \
-    etc/ld.config.arm.txt \
     etc/ld.config.arm64.txt
 
 PRODUCT_COPY_FILES += \
@@ -37,17 +43,11 @@ PRODUCT_COPY_FILES += \
     $(call find-copy-subdir-files,libndk_translation*.so,$(LINEAGE_DESKTOP_NATIVE_BRIDGE_PREBUILT_DIR)/lib64,$(TARGET_COPY_OUT_SYSTEM)/lib64)
 
 PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST += \
-    $(TARGET_COPY_OUT_SYSTEM)/bin/arm/% \
     $(TARGET_COPY_OUT_SYSTEM)/bin/arm64/% \
     $(TARGET_COPY_OUT_SYSTEM)/bin/ndk_translation_program_runner_binfmt_misc_arm64 \
     $(TARGET_COPY_OUT_SYSTEM)/etc/binfmt_misc/% \
     $(TARGET_COPY_OUT_SYSTEM)/etc/init/ndk_translation.rc \
-    $(TARGET_COPY_OUT_SYSTEM)/etc/ld.config.arm%.txt \
-    $(TARGET_COPY_OUT_SYSTEM)/lib/arm/% \
-    $(TARGET_COPY_OUT_SYSTEM)/lib/libclcore_neon.bc \
-    $(TARGET_COPY_OUT_SYSTEM)/lib/libblasV8.so \
-    $(TARGET_COPY_OUT_SYSTEM)/lib/libberberis_exec_region.so \
-    $(TARGET_COPY_OUT_SYSTEM)/lib/libndk_translation% \
+    $(TARGET_COPY_OUT_SYSTEM)/etc/ld.config.arm64.txt \
     $(TARGET_COPY_OUT_SYSTEM)/lib64/arm64/% \
     $(TARGET_COPY_OUT_SYSTEM)/lib64/libblasV8.so \
     $(TARGET_COPY_OUT_SYSTEM)/lib64/libberberis_exec_region.so \
@@ -59,21 +59,7 @@ PRODUCT_PRODUCT_PROPERTIES += \
     ro.dalvik.vm.native.bridge=libndk_translation.so \
     ro.dalvik.vm.isa.arm64=x86_64 \
     ro.enable.native.bridge.exec=1
-
-ifneq (,$(wildcard $(LINEAGE_DESKTOP_NATIVE_BRIDGE_PREBUILT_DIR)/lib/libndk_translation.so))
-PRODUCT_PACKAGES += \
-    $(NATIVE_BRIDGE_PRODUCT_PACKAGES_ARM)
-
-PRODUCT_COPY_FILES += \
-    $(LINEAGE_DESKTOP_NATIVE_BRIDGE_PREBUILT_DIR)/bin/ndk_translation_program_runner_binfmt_misc:$(TARGET_COPY_OUT_SYSTEM)/bin/ndk_translation_program_runner_binfmt_misc \
-    $(LINEAGE_DESKTOP_NATIVE_BRIDGE_PREBUILT_DIR)/etc/binfmt_misc/arm_dyn:$(TARGET_COPY_OUT_SYSTEM)/etc/binfmt_misc/arm_dyn \
-    $(LINEAGE_DESKTOP_NATIVE_BRIDGE_PREBUILT_DIR)/etc/binfmt_misc/arm_exe:$(TARGET_COPY_OUT_SYSTEM)/etc/binfmt_misc/arm_exe \
-    $(call find-copy-subdir-files,libndk_translation*.so,$(LINEAGE_DESKTOP_NATIVE_BRIDGE_PREBUILT_DIR)/lib,$(TARGET_COPY_OUT_SYSTEM)/lib)
-
-PRODUCT_PRODUCT_PROPERTIES += \
-    ro.dalvik.vm.isa.arm=x86
-endif
 else
-$(warning x86 ARM native bridge payload missing: run vendor/lineage_desktop/scripts/update_native_bridge_prebuilts.py before building x86-64)
+$(warning x86 ARM64 native bridge payload missing: run vendor/lineage_desktop/scripts/update_native_bridge_prebuilts.py before building x86-64)
 endif
 endif

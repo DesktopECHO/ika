@@ -13,6 +13,8 @@ external/musl patches/external-musl-lfs64-compat.patch
 external/rust/android-crates-io patches/external-rust-android-crates-io-arm64-host-cross.patch
 external/cronet patches/external-cronet-arm64-host-cross.patch
 external/sdv/vsomeip patches/external-sdv-vsomeip-arm64-host-cross.patch
+external/vulkan-headers patches/external-vulkan-headers-android-build.patch
+prebuilts/abi-dumps/ndk patches/prebuilts-abi-dumps-vulkan-1.4.341.patch
 external/minigbm patches/external-minigbm.patch
 external/mesa3d patches/external-mesa3d.patch
 art patches/art.patch
@@ -38,6 +40,7 @@ vendor/lineage patches/vendor-lineage.patch
 vendor/lineage patches/vendor-lineage-arm64-host-tools.patch
 build/soong patches/build-soong-arm64-host.patch
 build/make patches/build-make-arm64-host.patch
+build/make patches/build-make-zipalign-device.patch
 trusty/user/base patches/trusty-user-base-arm64-host-boringssl.patch
 frameworks/libs/binary_translation patches/frameworks-libs-binary-translation-arm64-host.patch
 build/make patches/build-make-releasetools.patch

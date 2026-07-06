@@ -852,6 +852,10 @@ arm64_kernel_page_size() {
   esac
 }
 
+cvd_product_out_has_arm64_16k_artifacts() {
+  [[ -s "${CVD_PRODUCT_OUT}/boot_16k.img" || -s "${CVD_PRODUCT_OUT}/kernel_16k" ]]
+}
+
 append_arm64_kernel_page_args() {
   local -n args_array="$1"
   shift
@@ -860,6 +864,7 @@ append_arm64_kernel_page_args() {
   local boot_16k
 
   host_is_arm64 || return 0
+  cvd_product_out_has_arm64_16k_artifacts || return 0
 
   if user_supplied_flag "use_16k" "$@" \
       || user_supplied_flag "boot_image" "$@" \

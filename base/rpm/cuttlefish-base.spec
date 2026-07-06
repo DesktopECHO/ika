@@ -407,10 +407,13 @@ setcap cap_net_admin,cap_net_bind_service,cap_net_raw=+ep /usr/lib/cuttlefish-co
 /usr/libexec/cuttlefish/cuttlefish-add-user-to-groups || :
 udevadm control --reload >/dev/null 2>&1 || :
 systemctl daemon-reload >/dev/null 2>&1 || :
-# Keep the legacy host-resources service opt-in. The default ika workflow uses
-# per-user cvdalloc networking, which manages dnsmasq under /var/tmp/cvd and
-# can be cleaned up without root privileges.
-systemctl disable --now cuttlefish-host-resources.service >/dev/null 2>&1 || :
+# Enable host-resources so host setup runs on every boot -- notably tune_udmabuf,
+# which raises the udmabuf caps the gfxstream Vulkan host-visible path needs (the
+# sysfs params reset to kernel defaults each boot, so a one-shot does not stick).
+# The legacy system-wide bridge/dnsmasq networking stays gated off by default
+# (enable_legacy_networking=0 in the script) so it does not conflict with the
+# per-user cvdalloc networking the default ika workflow uses.
+systemctl enable --now cuttlefish-host-resources.service >/dev/null 2>&1 || :
 required_nofile=524288
 required_rtprio=10
 current_soft_nofile="$(ulimit -Sn 2>/dev/null || echo 0)"

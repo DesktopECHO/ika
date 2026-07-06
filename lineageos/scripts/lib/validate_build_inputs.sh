@@ -49,6 +49,116 @@ require_arm64_elf() {
   fi
 }
 
+zipalign_tool() {
+  local out_zipalign="$android_root/out/host/$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/aarch64/arm64/;s/x86_64/x86/')/bin/zipalign"
+  local source_tree_zipalign="$android_root/prebuilts/sdk/tools/linux/bin/zipalign"
+
+  if [[ -x "$out_zipalign" ]]; then
+    printf '%s\n' "$out_zipalign"
+    return 0
+  fi
+  if [[ -x "$source_tree_zipalign" ]]; then
+    printf '%s\n' "$source_tree_zipalign"
+    return 0
+  fi
+  command -v zipalign 2>/dev/null
+}
+
+readelf_tool() {
+  command -v llvm-readelf 2>/dev/null || command -v readelf 2>/dev/null
+}
+
+report_apk_16k_audit_issue() {
+  local policy="$1"
+  local label="$2"
+  local apk="$3"
+  local detail="$4"
+
+  case "$policy" in
+    allow_compat)
+      log "warning: $label will rely on 16 KB app compat if booted on a 16 KB kernel: $detail ($apk)"
+      ;;
+    fail)
+      fail "$label is not 16 KB clean: $detail ($apk)"
+      ;;
+    *)
+      fail "internal error: unknown APK 16 KB audit policy '$policy' for $apk"
+      ;;
+  esac
+}
+
+audit_apk_16k_alignment() {
+  target_enabled arm64 || return 0
+
+  local apk="$1"
+  local label="$2"
+  local policy="$3"
+  local zipalign readelf tmp_dir output rel so alignments
+  local -a compat_libs=()
+
+  [[ -f "$apk" ]] || return 0
+
+  zipalign="$(zipalign_tool || true)"
+  if [[ -z "$zipalign" ]]; then
+    fail "zipalign is required for ARM64 APK 16 KB alignment audit"
+    return 0
+  fi
+
+  if ! output="$("$zipalign" -c -P 16 -v 4 "$apk" 2>&1)"; then
+    report_apk_16k_audit_issue "$policy" "$label" "$apk" \
+      "zipalign -c -P 16 -v 4 failed: $(printf '%s\n' "$output" | tail -n 1)"
+  fi
+
+  readelf="$(readelf_tool || true)"
+  if [[ -z "$readelf" ]]; then
+    fail "llvm-readelf or readelf is required for ARM64 APK native-library page-size audit"
+    return 0
+  fi
+
+  tmp_dir="$(mktemp -d)"
+  if ! python3 - "$apk" "$tmp_dir" <<'PY'
+from pathlib import Path
+import re
+import sys
+import zipfile
+
+apk = Path(sys.argv[1])
+out = Path(sys.argv[2])
+lib_re = re.compile(r"^lib/arm64-v8a/[^/]+\.so$")
+
+with zipfile.ZipFile(apk) as archive:
+    for info in archive.infolist():
+        if not lib_re.match(info.filename):
+            continue
+        dest = out / info.filename
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(archive.read(info))
+PY
+  then
+    fail "failed to extract native libraries for APK 16 KB audit: $apk"
+    rm -rf "$tmp_dir"
+    return 0
+  fi
+
+  while IFS= read -r -d '' so; do
+    rel="${so#$tmp_dir/}"
+    if ! alignments="$("$readelf" -lW "$so" 2>/dev/null | awk '$1 == "LOAD" { print $NF }' | sort -u | xargs)"; then
+      fail "failed to inspect ELF program headers in $apk:$rel"
+      continue
+    fi
+    if grep -Eq '(^|[[:space:]])(0x0*1000|4096)($|[[:space:]])' <<<"$alignments"; then
+      compat_libs+=("$rel align=$alignments")
+    fi
+  done < <(find "$tmp_dir" -type f -name '*.so' -print0)
+
+  rm -rf "$tmp_dir"
+
+  if (( ${#compat_libs[@]} > 0 )); then
+    report_apk_16k_audit_issue "$policy" "$label" "$apk" \
+      "4 KB LOAD alignment: ${compat_libs[*]}"
+  fi
+}
+
 normalize_targets() {
   if (( $# == 0 )); then
     printf '%s\n' arm64 x86_64
@@ -169,11 +279,10 @@ check_project_patch_series() {
   local project="$1"
   local patch_list="$2"
 
-  # patch_series_already_applied (lib/patch_series.sh) builds the project's
-  # combined diff in a throwaway worktree and confirms it reverse-applies to the
-  # live tree -- the same check this used to inline. It is a quiet predicate, so
-  # a failure here is reported as a single "not cleanly applied" rather than the
-  # former per-patch granularity; the pass/fail outcome is unchanged.
+  # patch_series_already_applied (lib/patch_series.sh) reverse-checks every
+  # patch in this project's stack against the live tree. The apply step is
+  # responsible for resetting managed projects before reapplying the series, so
+  # validation can stay read-only and partial-clone friendly.
   patch_series_already_applied "$android_root" "$overlay_dir" "$project" "$patch_list" || \
     fail "patch series is not applied cleanly to $project"
 }
@@ -304,8 +413,8 @@ PY
 
 check_userdata_policy() {
   local shared_device="$android_root/device/google/cuttlefish/shared/device.mk"
-  local arm_board="$android_root/device/google/cuttlefish/vsoc_arm64_pgagnostic/BoardConfig.mk"
-  local x86_board="$android_root/device/google/cuttlefish/vsoc_x86_64_sandybridge/BoardConfig.mk"
+  local arm_board="$android_root/device/google/cuttlefish/ika_arm64/BoardConfig.mk"
+  local x86_board="$android_root/device/google/cuttlefish/ika_x86_64/BoardConfig.mk"
 
   require_file "$shared_device"
   require_file "$arm_board"
@@ -324,6 +433,41 @@ check_userdata_policy() {
       "$overlay_dir" >/dev/null 2>&1; then
     fail "overlay contains a hard userdata partition size override"
   fi
+}
+
+check_x86_64_64_bit_only_product() {
+  target_enabled x86_64 || return 0
+
+  local x86_board="$android_root/device/google/cuttlefish/ika_x86_64/BoardConfig.mk"
+  local x86_product="$android_root/device/google/cuttlefish/ika_x86_64/desktop/aosp_cf.mk"
+
+  require_file "$x86_board"
+  require_file "$x86_product"
+
+  grep -Eq '^[[:space:]]*TARGET_ARCH[[:space:]]*:=[[:space:]]*x86_64[[:space:]]*$' "$x86_board" || \
+    fail "x86-64 BoardConfig must use TARGET_ARCH := x86_64: $x86_board"
+  grep -Eq '^[[:space:]]*TARGET_CPU_ABI[[:space:]]*:=[[:space:]]*x86_64[[:space:]]*$' "$x86_board" || \
+    fail "x86-64 BoardConfig must use TARGET_CPU_ABI := x86_64: $x86_board"
+  if grep -Eq '^[[:space:]]*TARGET_2ND_|^[[:space:]]*TARGET_NATIVE_BRIDGE_2ND_' "$x86_board"; then
+    fail "x86-64 product must stay 64-bit-only; remove TARGET_2ND_* and TARGET_NATIVE_BRIDGE_2ND_* from $x86_board"
+  fi
+  grep -Fq 'core_64_bit_only.mk' "$x86_product" || \
+    fail "x86-64 product must inherit core_64_bit_only.mk: $x86_product"
+}
+
+check_arm64_min_arch_variant() {
+  target_enabled arm64 || return 0
+
+  local arm_board="$android_root/device/google/cuttlefish/ika_arm64/BoardConfig.mk"
+
+  require_file "$arm_board"
+
+  grep -Eq '^[[:space:]]*TARGET_ARCH[[:space:]]*:=[[:space:]]*arm64[[:space:]]*$' "$arm_board" || \
+    fail "ARM64 BoardConfig must use TARGET_ARCH := arm64: $arm_board"
+  grep -Eq '^[[:space:]]*TARGET_CPU_ABI[[:space:]]*:=[[:space:]]*arm64-v8a[[:space:]]*$' "$arm_board" || \
+    fail "ARM64 BoardConfig must use TARGET_CPU_ABI := arm64-v8a: $arm_board"
+  grep -Eq '^[[:space:]]*TARGET_ARCH_VARIANT[[:space:]]*:=[[:space:]]*armv8-2a[[:space:]]*$' "$arm_board" || \
+    fail "ARM64 ROM must target minimum ARMv8.2-A devices with TARGET_ARCH_VARIANT := armv8-2a: $arm_board"
 }
 
 check_unscoped_x86_flags() {
@@ -781,6 +925,8 @@ check_microg_prebuilts() {
         fail "APK is still a Git LFS pointer: $apk"
       elif ! validate_zip_file "$apk" >/dev/null 2>&1; then
         fail "invalid APK zip: $apk"
+      else
+        audit_apk_16k_alignment "$apk" "third-party microG prebuilt $(basename "$apk")" allow_compat
       fi
     fi
   done
@@ -801,6 +947,8 @@ check_webview_prebuilts() {
         fail "WebView prebuilt is still a Git LFS pointer: $apk"
       elif ! validate_zip_file "$apk" >/dev/null 2>&1; then
         fail "invalid WebView prebuilt APK: $apk"
+      elif [[ "$arch" == "arm64" ]]; then
+        audit_apk_16k_alignment "$apk" "ARM64 WebView prebuilt" fail
       fi
     fi
   done
@@ -818,6 +966,8 @@ check_native_bridge() {
 
   local bridge="$android_root/vendor/lineage_desktop/prebuilts/native_bridge"
   local system="$bridge/system"
+  local vulkaninfo_bp="$overlay_dir/tools/vulkaninfo/Android.bp"
+  local vulkaninfo_wrapper="$overlay_dir/tools/vulkaninfo/vulkaninfo_arm64.sh"
   local required
   for required in \
     "$bridge/Android.bp" \
@@ -828,7 +978,9 @@ check_native_bridge() {
     "$system/etc/init/ndk_translation.rc" \
     "$system/etc/ld.config.arm64.txt" \
     "$system/lib64/libndk_translation.so" \
-    "$android_root/frameworks/libs/native_bridge_support/android_api/libc/Android.bp"
+    "$android_root/frameworks/libs/native_bridge_support/android_api/libc/Android.bp" \
+    "$vulkaninfo_bp" \
+    "$vulkaninfo_wrapper"
   do
     require_file "$required"
   done
@@ -836,6 +988,13 @@ check_native_bridge() {
   grep -q 'ro.dalvik.vm.native.bridge=libndk_translation.so' \
     "$overlay_dir/config/x86_arm_native_bridge.mk" || \
     fail "x86 native bridge product properties are missing"
+  grep -Fq 'vulkaninfo.native_bridge:64' "$overlay_dir/config/x86_arm_native_bridge.mk" || \
+    fail "x86 native bridge diagnostic vulkaninfo package is missing"
+  if [[ "$(grep -Fc 'system_ext_specific: true' "$vulkaninfo_bp")" -lt 2 ]]; then
+    fail "vulkaninfo diagnostics must install to system_ext, outside generic_system's /system artifact path"
+  fi
+  grep -Fq '/system_ext/bin/arm64/vulkaninfo /system_ext/bin/arm64/vulkaninfo' "$vulkaninfo_wrapper" || \
+    fail "x86 native bridge vulkaninfo wrapper must run the system_ext arm64 guest binary"
 }
 
 check_desktop_flags() {
@@ -936,6 +1095,88 @@ check_product_makefiles() {
   return 0
 }
 
+check_zipalign_rom_package() {
+  local common_mk="$overlay_dir/config/common_desktop_mode_only.mk"
+  require_file "$common_mk"
+  [[ -f "$common_mk" ]] || return 0
+
+  grep -Eq '(^|[[:space:]\\])zipalign([[:space:]\\]|$)' "$common_mk" || \
+    fail "zipalign is not included in the shared desktop ROM package list: $common_mk"
+}
+
+check_arm64_page_size_product_defaults() {
+  target_enabled arm64 || return 0
+
+  local arm64_mk="$overlay_dir/products/lineage_desktop_cf_arm64_pgagnostic.mk"
+  local x86_mk="$overlay_dir/products/lineage_desktop_cf_x86_64.mk"
+
+  require_file "$arm64_mk"
+  [[ -f "$arm64_mk" ]] || return 0
+
+  grep -Eq '^[[:space:]]*PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE[[:space:]]*:?=[[:space:]]*true' "$arm64_mk" || \
+    fail "ARM64 product must enable PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE: $arm64_mk"
+  grep -Eq '^[[:space:]]*bionic\.linker\.16kb\.app_compat\.enabled[[:space:]]*=[[:space:]]*true' "$arm64_mk" || \
+    fail "ARM64 product must default-enable linker 16 KB app compat: $arm64_mk"
+  grep -Eq '^[[:space:]]*pm\.16kb\.app_compat\.disabled[[:space:]]*=[[:space:]]*false' "$arm64_mk" || \
+    fail "ARM64 product must default-enable PackageManager 16 KB app compat: $arm64_mk"
+
+  if [[ -f "$x86_mk" ]] && grep -Eq '16kb\.app_compat|PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE' "$x86_mk"; then
+    fail "4K/16K app compat defaults must stay ARM64-only, but x86 product contains them: $x86_mk"
+  fi
+}
+
+check_vulkan_header_version() {
+  local expected_version=341
+  local header="$android_root/external/vulkan-headers/include/vulkan/vulkan_core.h"
+  local registry="$android_root/external/vulkan-headers/registry/vk.xml"
+
+  require_file "$header"
+  require_file "$registry"
+  [[ -f "$header" && -f "$registry" ]] || return 0
+
+  grep -Eq "^[[:space:]]*#define[[:space:]]+VK_HEADER_VERSION[[:space:]]+$expected_version[[:space:]]*$" "$header" || \
+    fail "external/vulkan-headers is not at VK_HEADER_VERSION $expected_version: $header"
+  grep -Eq "<name>VK_HEADER_VERSION</name>[[:space:]]+$expected_version</type>" "$registry" || \
+    fail "external/vulkan-headers registry is not at VK_HEADER_VERSION $expected_version: $registry"
+
+  return 0
+}
+
+check_vulkan_ndk_abi_dumps() {
+  local arch api dump enum
+  local -a required_enums=(
+    'name: "VK_FORMAT_ASTC_3x3x3_UNORM_BLOCK_EXT"'
+    'name: "VK_PIPELINE_BIND_POINT_DATA_GRAPH_ARM"'
+    'name: "VK_ERROR_VALIDATION_FAILED"'
+    'name: "VK_ERROR_PRESENT_TIMING_QUEUE_FULL_EXT"'
+  )
+  local -a required_api28_enums=(
+    'name: "VK_EXTERNAL_MEMORY_HANDLE_TYPE_OH_NATIVE_BUFFER_BIT_OHOS"'
+  )
+
+  for arch in arm64 x86_64; do
+    target_enabled "$arch" || continue
+
+    for api in 24 25 26 27 28 29 30 31 32 33 34 35 36; do
+      dump="$android_root/prebuilts/abi-dumps/ndk/$api/$arch/libvulkan/abi.stg"
+      require_file "$dump"
+      [[ -f "$dump" ]] || continue
+
+      for enum in "${required_enums[@]}"; do
+        grep -Fq "$enum" "$dump" || \
+          fail "$arch libvulkan NDK $api ABI dump is not refreshed for Vulkan 1.4.341: missing $enum in $dump"
+      done
+
+      if (( api >= 28 )); then
+        for enum in "${required_api28_enums[@]}"; do
+          grep -Fq "$enum" "$dump" || \
+            fail "$arch libvulkan NDK $api ABI dump is not refreshed for Vulkan 1.4.341: missing $enum in $dump"
+        done
+      fi
+    done
+  done
+}
+
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]; then
   usage
   exit 0
@@ -960,12 +1201,18 @@ check_no_arm64_x86_prebuilt_substitutions
 check_patch_series
 check_patched_xml_resource_references
 check_userdata_policy
+check_x86_64_64_bit_only_product
+check_arm64_min_arch_variant
 check_microg_prebuilts
 check_webview_prebuilts
 check_native_bridge
 check_desktop_flags
 check_no_phone_defaults
 check_product_makefiles
+check_zipalign_rom_package
+check_arm64_page_size_product_defaults
+check_vulkan_header_version
+check_vulkan_ndk_abi_dumps
 
 if (( failures > 0 )); then
   exit 1

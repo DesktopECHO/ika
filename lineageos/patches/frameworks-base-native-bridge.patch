@@ -1,8 +1,8 @@
 Patch summary:
-Support x86-to-ARM native bridge installs by forcing translated APK native
+Support x86_64-to-ARM64 native bridge installs by forcing translated APK native
 libraries to be extracted as real files when the selected ABI is bridged. Some
 apps are marked as not requiring native library extraction, which is fine for
-normal same-ISA execution but unreliable for translated ARM-on-x86 execution.
+normal same-ISA execution but unreliable for translated ARM64-on-x86_64 execution.
 
 This patch keeps the normal package manager ABI selection flow intact and adds
 the special extraction path only after a bridged ABI has been selected. That

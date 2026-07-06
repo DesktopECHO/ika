@@ -74,13 +74,15 @@ PRODUCT_PACKAGES += \
     LineageDesktopSettingsProviderOverlay \
     LineageDesktopSystemUIOverlay
 
-# Native (x86_64/arm64) Vulkan extension enumerator. Runs without app/Berberis
-# translation so it exercises the gfxstream guest driver directly, for validating
-# the extensions advertised by lineageos/patches/external-mesa3d.patch.
-PRODUCT_PACKAGES += vkextcheck
+# Native (x86_64/arm64) diagnostics. vulkaninfo exercises the gfxstream guest
+# driver directly; zipalign lets the ROM itself audit APK page alignment.
+PRODUCT_PACKAGES += \
+    vulkaninfo \
+    zipalign
 # The arm64 pgagnostic (GSI-style) product enforces a /system artifact-path
-# requirement; allow this debug tool's binary. No-op for the x86_64 product.
-PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST += system/bin/vkextcheck
+# requirement; allow the device zipalign binary. vulkaninfo lives on system_ext.
+PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST += \
+    system/bin/zipalign
 
 # Allow microG Android.mk files when the optional partner_gms local manifest is present.
 PRODUCT_ALLOWED_ANDROIDMK_FILES += \

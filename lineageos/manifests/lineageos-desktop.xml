@@ -8,6 +8,16 @@
 -->
 <manifest>
   <remote name="desktopecho" fetch="https://github.com/DesktopECHO" />
+  <remote name="khronos" fetch="https://github.com" />
+
+  <remove-project name="platform/external/vulkan-headers" />
+
+  <project
+      path="external/vulkan-headers"
+      name="KhronosGroup/Vulkan-Headers"
+      remote="khronos"
+      revision="b5c8f996196ba4aa6d8f97e52b5d3b6e70f7e4e2"
+      groups="pdk" />
 
   <project
       path="vendor/ika"

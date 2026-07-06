@@ -388,6 +388,30 @@ repo_project_checkout_path_for_name() {
   return 1
 }
 
+repo_sync_force_sync_paths_from_log() {
+  local sync_log="$1"
+  awk '
+    /hooks is different in .*\.repo\/projects\/.*\.git vs .*\.repo\/project-objects\// {
+      line = $0
+      sub(/^.*\.repo\/projects\//, "", line)
+      sub(/\.git vs .*$/, "", line)
+      print line
+    }
+    /repo sync --force-sync / {
+      line = $0
+      sub(/^.*repo sync --force-sync /, "", line)
+      sub(/`.*/, "", line)
+      sub(/[[:space:]]+to proceed\..*/, "", line)
+      n = split(line, fields, /[[:space:]]+/)
+      for (i = 1; i <= n; i++) {
+        if (fields[i] != "" && fields[i] !~ /^-/) {
+          print fields[i]
+        }
+      }
+    }
+  ' "$sync_log" | sort -u
+}
+
 repo_sync_failure_projects_from_log() {
   local sync_log="$1"
   awk '
@@ -455,11 +479,35 @@ repo_sync_output_filter() {
       seen_repo_failure = 1
       next
     }
+    /^error: hooks is different in .*\.repo\/projects\/.*\.git vs .*\.repo\/project-objects\// {
+      seen_repo_failure = 1
+      next
+    }
+    /^error\.GitError: Cannot fetch --force-sync not enabled; cannot overwrite a local work tree\./ {
+      seen_repo_failure = 1
+      next
+    }
+    /^--force-sync not enabled; cannot overwrite a local work tree\./ {
+      seen_repo_failure = 1
+      next
+    }
     /^error: Cannot checkout [^[:space:]]+$/ {
       seen_repo_failure = 1
       next
     }
     /^error: Unable to fully sync the tree$/ {
+      seen_repo_failure = 1
+      next
+    }
+    /^error: Exited sync due to fetch errors\.$/ {
+      seen_repo_failure = 1
+      next
+    }
+    /^Local checkouts \*not\* updated\. Resolve network issues & retry\.$/ {
+      seen_repo_failure = 1
+      next
+    }
+    /^`repo sync -l` will update some local checkouts\.$/ {
       seen_repo_failure = 1
       next
     }
@@ -555,17 +603,23 @@ repo_sync_failure_summary_from_log() {
   local retry_delay="${2:-}"
   local final_attempt="${3:-0}"
   local attempt_label="${4:-}"
-  local projects retry_url subject action
+  local projects force_sync_paths retry_url subject action
   local attempt_suffix=""
 
   projects="$(
     repo_sync_failure_projects_from_log "$sync_log" |
       awk 'NF { printf "%s%s", sep, $0; sep=", " } END { if (sep != "") print "" }'
   )"
+  force_sync_paths="$(
+    repo_sync_force_sync_paths_from_log "$sync_log" |
+      awk 'NF { printf "%s%s", sep, $0; sep=", " } END { if (sep != "") print "" }'
+  )"
   retry_url="$(repo_sync_failure_url_from_log "$sync_log")"
 
   if [[ -n "$projects" ]]; then
     subject="on $projects"
+  elif [[ -n "$force_sync_paths" ]]; then
+    subject="after project metadata changed for $force_sync_paths"
   else
     subject="during repo sync"
   fi
@@ -588,6 +642,8 @@ repo_sync_failure_summary_from_log() {
     printf 'failed %s; no retry attempts remain\n' "$retry_url"
   elif grep -q 'HTTP 429\|requested URL returned error: 429\|RESOURCE_EXHAUSTED' "$sync_log"; then
     printf 'HTTP 429 %s; %s\n' "$subject" "$action"
+  elif [[ -n "$force_sync_paths" ]]; then
+    printf 'repo force-sync required %s; %s\n' "$subject" "$action"
   elif [[ -n "$projects" ]]; then
     printf 'repo checkout failed %s; %s\n' "$subject" "$action"
   else
@@ -648,6 +704,41 @@ repair_repo_sync_checkout_failures() {
       rm -rf -- "$object_git_dir"
     fi
   done
+}
+
+repair_repo_sync_force_sync_failures() {
+  local sync_log="$1"
+  local quiet="${2:-0}"
+  [[ -f "$sync_log" ]] || return 1
+
+  local -A seen=()
+  local -a paths=()
+  local path
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    case "$path" in
+      /*|*..*|.*)
+        [[ "$quiet" == "1" ]] || log "warning: ignoring unsafe repo force-sync path from log: $path"
+        continue
+        ;;
+    esac
+    [[ -n "${seen[$path]:-}" ]] && continue
+    seen["$path"]=1
+    paths+=("$path")
+  done < <(repo_sync_force_sync_paths_from_log "$sync_log")
+
+  (( ${#paths[@]} > 0 )) || return 1
+
+  local -a force_sync_args=(sync -c --fail-fast --force-sync --force-checkout -j1)
+  if (( repo_sync_retry_fetches > 0 )); then
+    force_sync_args+=(--retry-fetches="$repo_sync_retry_fetches")
+  fi
+  if repo_workspace_uses_partial_clone; then
+    force_sync_args+=(--no-interleaved --jobs-network=1 --jobs-checkout=1)
+  fi
+
+  [[ "$quiet" == "1" ]] || log "repo project metadata changed; force-syncing ${paths[*]}"
+  run_anonymous_git_network "$repo_cmd" "${force_sync_args[@]}" "${paths[@]}"
 }
 
 # git reports object/pack corruption with the on-disk path of the bad object or
@@ -964,6 +1055,7 @@ repo_sync_sources() {
 
   local attempt=1
   local suppress_attempt_log=0
+  local force_sync_repairs=0
   local sync_log
   while :; do
     if (( suppress_attempt_log == 0 )); then
@@ -997,6 +1089,15 @@ repo_sync_sources() {
     if grep -q 'HTTP 429\|requested URL returned error: 429\|RESOURCE_EXHAUSTED' "$sync_log"; then
       retry_delay=$(( 5 * attempt ))
       (( retry_delay > 60 )) && retry_delay=60
+    fi
+
+    if (( force_sync_repairs < 3 )) && repair_repo_sync_force_sync_failures "$sync_log"; then
+      force_sync_repairs=$((force_sync_repairs + 1))
+      rm -f "$sync_log"
+      repair_incomplete_repo_git_stores
+      repair_stale_repo_git_locks
+      log "repo force-sync repair completed; retrying source sync"
+      continue
     fi
 
     if (( attempt >= repo_sync_attempts )); then
@@ -1151,7 +1252,7 @@ update_native_bridge_prebuilts_for_targets() {
   local update_script="$workspace/vendor/lineage_desktop/scripts/update_native_bridge_prebuilts.py"
   [[ -x "$update_script" ]] || die "missing native bridge update script: $update_script"
 
-  log "refreshing x86 ARM native bridge prebuilts"
+  log "refreshing x86 ARM64 native bridge prebuilts"
   "$update_script" "$workspace"
 
   # build_host_lpunpack (above) had to parse the x86_64 product config to build
