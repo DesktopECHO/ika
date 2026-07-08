@@ -16,6 +16,8 @@
 
 set -o errexit -o nounset -o pipefail
 
+export PATH="${HOME}/.local/bin:${PATH}"
+
 if [[ "$(id -u)" -eq 0 ]]; then
   build_uid="${HOST_UID:-$(stat -c '%u' "${PWD}")}"
   build_gid="${HOST_GID:-$(stat -c '%g' "${PWD}")}"
@@ -42,5 +44,9 @@ fi
 # This configuration setting is required for building frontend package on the
 # docker instance.
 git config --global --add safe.directory "${PWD}"
+
+if ! command -v bazel >/dev/null 2>&1; then
+  tools/buildutils/installbazel.sh
+fi
 
 exec tools/buildutils/build_package.sh "$@"

@@ -15,6 +15,15 @@
 # popup — keeping the build headless-safe and unattended-friendly.
 export SUDO_ASKPASS=/bin/false
 
+if [[ -n "${HOME:-}" ]]; then
+  IKA_USER_BIN_DIR="${IKA_USER_BIN_DIR:-${HOME}/.local/bin}"
+  export IKA_USER_BIN_DIR
+  case ":$PATH:" in
+    *:"${IKA_USER_BIN_DIR}":*) ;;
+    *) export PATH="${IKA_USER_BIN_DIR}:$PATH" ;;
+  esac
+fi
+
 # Root command prefix, populated by init_root_cmd. Empty when no sudo
 # escalation is available.
 declare -a ROOT_CMD=()
@@ -123,8 +132,8 @@ drop_root_cmd() {
 }
 
 # --- sudo timestamp keep-alive ----------------------------------------------
-# The privileged setup phase (dependency install + Bazel download + host
-# preflight) can run well past sudo's default 5-minute timestamp_timeout.
+# The privileged setup phase (dependency install + host preflight) can run well
+# past sudo's default 5-minute timestamp_timeout.
 # Without a refresh, a later sudo call would re-prompt for a password and stall
 # an otherwise unattended build. start_sudo_keepalive primes the timestamp once
 # (a single, predictable prompt) then refreshes it in the background until

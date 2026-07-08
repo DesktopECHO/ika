@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Install Bazel (via Bazelisk) on Fedora or Debian-based systems.
+# Install Bazel (via Bazelisk) into the user's local bin directory.
 #
 # Prerequisites (curl, unzip, zip) are installed by ./ika-build via
 # tools/buildutils/lib/dependencies.sh.
@@ -22,23 +22,27 @@
 set -e
 
 BAZELISK_VERSION=v1.25.0
+BAZEL_INSTALL_PATH="${BAZEL_INSTALL_PATH:-${HOME}/.local/bin/bazel}"
 
-function install_bazel_x86_64() {
+function install_bazel_binary() {
+  local url="$1"
+  local tmpdir
+
   tmpdir="$(mktemp -d -t bazel_installer_XXXXXX)"
   trap 'rm -rf "$tmpdir"' EXIT
   pushd "${tmpdir}"
-  curl -fsSLo bazel "https://github.com/bazelbuild/bazelisk/releases/download/${BAZELISK_VERSION}/bazelisk-linux-amd64"
-  install -m 0755 bazel /usr/local/bin/bazel
+  curl -fsSLo bazel "$url"
+  mkdir -p "$(dirname "${BAZEL_INSTALL_PATH}")"
+  install -m 0755 bazel "${BAZEL_INSTALL_PATH}"
   popd
 }
 
+function install_bazel_x86_64() {
+  install_bazel_binary "https://github.com/bazelbuild/bazelisk/releases/download/${BAZELISK_VERSION}/bazelisk-linux-amd64"
+}
+
 function install_bazel_aarch64() {
-  tmpdir="$(mktemp -d -t bazel_installer_XXXXXX)"
-  trap 'rm -rf "$tmpdir"' EXIT
-  pushd "${tmpdir}"
-  curl -fsSLo bazel "https://github.com/bazelbuild/bazelisk/releases/download/${BAZELISK_VERSION}/bazelisk-linux-arm64"
-  install -m 0755 bazel /usr/local/bin/bazel
-  popd
+  install_bazel_binary "https://github.com/bazelbuild/bazelisk/releases/download/${BAZELISK_VERSION}/bazelisk-linux-arm64"
 }
 
 install_bazel_$(uname -m)

@@ -50,18 +50,24 @@ require_arm64_elf() {
 }
 
 zipalign_tool() {
-  local out_zipalign="$android_root/out/host/$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/aarch64/arm64/;s/x86_64/x86/')/bin/zipalign"
-  local source_tree_zipalign="$android_root/prebuilts/sdk/tools/linux/bin/zipalign"
+  local candidate status
 
-  if [[ -x "$out_zipalign" ]]; then
-    printf '%s\n' "$out_zipalign"
+  for candidate in \
+    "$android_root/out/host/$(host_out_tag)/bin/zipalign" \
+    "$android_root/prebuilts/sdk/tools/linux/bin/zipalign" \
+    "$(command -v zipalign 2>/dev/null || true)"; do
+    [[ -x "$candidate" ]] || continue
+    # -x cannot tell a foreign-arch ELF from a runnable one, and the SDK
+    # prebuilt is x86-64-only: picking it on an ARM64 host would surface later
+    # as a bogus "not 16 KB clean" audit failure instead of a missing tool.
+    # Probe by executing; 126 means the binary cannot run on this host.
+    status=0
+    "$candidate" </dev/null >/dev/null 2>&1 || status=$?
+    [[ "$status" -ne 126 ]] || continue
+    printf '%s\n' "$candidate"
     return 0
-  fi
-  if [[ -x "$source_tree_zipalign" ]]; then
-    printf '%s\n' "$source_tree_zipalign"
-    return 0
-  fi
-  command -v zipalign 2>/dev/null
+  done
+  return 1
 }
 
 readelf_tool() {
@@ -1177,6 +1183,560 @@ check_vulkan_ndk_abi_dumps() {
   done
 }
 
+check_virtualization_stack_pins() {
+  case "${VALIDATE_VIRTUALIZATION_STACK_PINS:-1}" in
+    0|false|no|off)
+      log "virtualization stack pin validation skipped by VALIDATE_VIRTUALIZATION_STACK_PINS=0"
+      return 0
+      ;;
+  esac
+
+  local manifest="$overlay_dir/manifests/lineageos-desktop.xml"
+  local checker_output project path expected head project_dir
+  require_file "$manifest"
+  [[ -f "$manifest" ]] || return 0
+
+  if ! checker_output="$(python3 - "$manifest" <<'PY' 2>&1
+import sys
+import xml.etree.ElementTree as ET
+
+manifest = sys.argv[1]
+expected = {
+    ("platform/external/mesa3d", "external/mesa3d"):
+        "d4b6f1eba289310b16ee77bedb3c1cf467b6b6fd",
+    ("platform/external/minigbm", "external/minigbm"):
+        "b7c93249f685222a524c51403719493cc114ff5d",
+    ("device/google/cuttlefish", "device/google/cuttlefish"):
+        "283645aacf6cdb56cc31a9362f54d412dbc132a1",
+    ("device/google/cuttlefish_vmm", "device/google/cuttlefish_vmm"):
+        "360473222a8700b6a935054b0c882cfbc2ba5701",
+    ("device/google/cuttlefish_prebuilts", "device/google/cuttlefish_prebuilts"):
+        "36f427b7c46682cfcdb2e61eee6893acbfb2a606",
+    ("platform/external/crosvm", "external/crosvm"):
+        "c7dd8d6950912fa5e6fde7ec2d1616e0ddc090f8",
+    ("platform/hardware/google/gfxstream", "hardware/google/gfxstream"):
+        "b46f0d4b4545def09bdf30651d4bf848b2ba0c34",
+    ("platform/external/rust/rutabaga_gfx", "external/rust/rutabaga_gfx"):
+        "1f181b0b3e4b821459f21fd9025cd4c408c4f9ec",
+    ("KhronosGroup/Vulkan-Headers", "external/vulkan-headers"):
+        "b5c8f996196ba4aa6d8f97e52b5d3b6e70f7e4e2",
+}
+
+root = ET.parse(manifest).getroot()
+seen = {}
+for elem in root:
+    if elem.tag not in {"project", "extend-project"}:
+        continue
+    key = (elem.get("name"), elem.get("path"))
+    if key in expected:
+        seen[key] = elem.get("revision")
+
+errors = []
+for key, revision in expected.items():
+    found = seen.get(key)
+    if found != revision:
+        name, path = key
+        errors.append(f"{path} must be pinned to {revision} in {manifest}; found {found or 'missing'}")
+
+if errors:
+    print("\n".join(errors), file=sys.stderr)
+    raise SystemExit(1)
+PY
+)"; then
+    fail "$checker_output"
+  fi
+
+  while read -r project expected; do
+    [[ -n "$project" ]] || continue
+    project_dir="$android_root/$project"
+    if [[ ! -d "$project_dir/.git" && ! -f "$project_dir/.git" && ! -L "$project_dir/.git" ]]; then
+      fail "missing virtualization stack project checkout: $project"
+      continue
+    fi
+
+    head="$(git -C "$project_dir" rev-parse HEAD 2>/dev/null || true)"
+    if [[ "$head" != "$expected" ]]; then
+      fail "$project is not synced to the pinned virtualization stack revision $expected (found ${head:-unknown}); rerun with SKIP_SYNC=0"
+    fi
+  done <<'EOF'
+external/mesa3d d4b6f1eba289310b16ee77bedb3c1cf467b6b6fd
+external/minigbm b7c93249f685222a524c51403719493cc114ff5d
+device/google/cuttlefish 283645aacf6cdb56cc31a9362f54d412dbc132a1
+device/google/cuttlefish_vmm 360473222a8700b6a935054b0c882cfbc2ba5701
+device/google/cuttlefish_prebuilts 36f427b7c46682cfcdb2e61eee6893acbfb2a606
+external/crosvm c7dd8d6950912fa5e6fde7ec2d1616e0ddc090f8
+hardware/google/gfxstream b46f0d4b4545def09bdf30651d4bf848b2ba0c34
+external/rust/rutabaga_gfx 1f181b0b3e4b821459f21fd9025cd4c408c4f9ec
+external/vulkan-headers b5c8f996196ba4aa6d8f97e52b5d3b6e70f7e4e2
+EOF
+}
+
+check_crosvm_wayland_codegen() {
+  local bp="$android_root/external/crosvm/gpu_display/Android.bp"
+  local checker_output
+  require_file "$bp"
+  [[ -f "$bp" ]] || return 0
+
+  if ! checker_output="$(python3 - "$bp" <<'PY' 2>&1
+import re
+import sys
+from pathlib import Path
+
+bp = Path(sys.argv[1])
+text = bp.read_text()
+
+expected = {
+    "gpu_display_protocol_sources": 'output: "$(in).c"',
+    "gpu_display_client_protocol_headers": 'output: "$(in).h"',
+    "gpu_display_server_protocol_headers": 'output: "$(in).h"',
+}
+
+errors = []
+for name, output in expected.items():
+    match = re.search(
+        r'(?ms)^\s*(?P<kind>[A-Za-z0-9_]+)\s*\{\s*'
+        r'name:\s*"' + re.escape(name) + r'",(?P<body>.*?)^\s*\}',
+        text,
+    )
+    if not match:
+        errors.append(f"{bp}: missing {name}")
+        continue
+    if match.group("kind") != "wayland_protocol_codegen":
+        errors.append(
+            f"{bp}: {name} must use wayland_protocol_codegen, not {match.group('kind')}"
+        )
+    if output not in match.group("body"):
+        errors.append(f"{bp}: {name} must use {output}")
+
+if errors:
+    print("\n".join(errors), file=sys.stderr)
+    raise SystemExit(1)
+PY
+)"; then
+    fail "$checker_output"
+  fi
+}
+
+check_cuttlefish_proto_editions() {
+  local checker_output
+
+  if ! checker_output="$(python3 - "$android_root" <<'PY' 2>&1
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+cuttlefish = root / "device/google/cuttlefish"
+
+if not cuttlefish.exists():
+    raise SystemExit(0)
+
+edition_re = re.compile(r'(?m)^\s*edition\s*=\s*"[^"]+"\s*;')
+module_start_re = re.compile(r"(?m)^\s*[A-Za-z0-9_]+\s*\{")
+
+
+def brace_block(text: str, open_brace: int) -> str:
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(open_brace, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_brace:index + 1]
+    return text[open_brace:]
+
+
+def module_blocks(bp_text: str):
+    for match in module_start_re.finditer(bp_text):
+        yield brace_block(bp_text, bp_text.find("{", match.start()))
+
+
+def named_block(text: str, name: str) -> str:
+    match = re.search(r"(?m)^\s*" + re.escape(name) + r"\s*:\s*\{", text)
+    if not match:
+        return ""
+    return brace_block(text, text.find("{", match.start()))
+
+
+def module_name(block: str) -> str:
+    match = re.search(r'(?m)^\s*name\s*:\s*"([^"]+)"', block)
+    return match.group(1) if match else "<unnamed>"
+
+
+def module_references_proto(block: str, proto: Path, bp: Path) -> bool:
+    try:
+        rel_to_bp = proto.relative_to(bp.parent).as_posix()
+    except ValueError:
+        rel_to_bp = proto.name
+    quoted_candidates = {
+        f'"{proto.name}"',
+        f'"{rel_to_bp}"',
+        f'"{proto.relative_to(cuttlefish).as_posix()}"',
+    }
+    return any(candidate in block for candidate in quoted_candidates)
+
+
+def module_enables_editions(block: str) -> bool:
+    proto_block = named_block(block, "proto")
+    return bool(
+        proto_block and
+        re.search(r"(?m)^\s*experimental_editions\s*:\s*true\s*,?", proto_block)
+    )
+
+
+errors = []
+bp_files = sorted(cuttlefish.rglob("Android.bp"))
+for proto in sorted(cuttlefish.rglob("*.proto")):
+    if not edition_re.search(proto.read_text(errors="ignore")):
+        continue
+
+    owners = []
+    enabled = []
+    for bp in bp_files:
+        bp_text = bp.read_text(errors="ignore")
+        for block in module_blocks(bp_text):
+            if not module_references_proto(block, proto, bp):
+                continue
+            name = module_name(block)
+            owners.append(f"{bp.relative_to(root)}:{name}")
+            if module_enables_editions(block):
+                enabled.append(name)
+
+    if enabled:
+        continue
+
+    rel_proto = proto.relative_to(root)
+    if owners:
+        errors.append(
+            f"{rel_proto} uses protobuf editions; set proto.experimental_editions: "
+            f"true on its owning module(s): {', '.join(owners)}"
+        )
+    else:
+        errors.append(
+            f"{rel_proto} uses protobuf editions, but no Cuttlefish Android.bp module "
+            "directly lists it in srcs"
+        )
+
+if errors:
+    print("\n".join(errors), file=sys.stderr)
+    raise SystemExit(1)
+PY
+)"; then
+    fail "$checker_output"
+  fi
+}
+
+check_cuttlefish_health_aidl_compat() {
+  local checker_output
+
+  if ! checker_output="$(python3 - "$android_root" <<'PY' 2>&1
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+health_dir = root / "device/google/cuttlefish/guest/hals/health"
+bp = health_dir / "Android.bp"
+cpp = health_dir / "health-aidl.cpp"
+
+if not bp.exists() or not cpp.exists():
+    raise SystemExit(0)
+
+errors = []
+bp_text = bp.read_text(errors="ignore")
+version_match = re.search(r'"android\.hardware\.health-V([0-9]+)-ndk"', bp_text)
+if not version_match:
+    errors.append(f"{bp.relative_to(root)} does not link an android.hardware.health-V*-ndk module")
+else:
+    version = version_match.group(1)
+    aidl = (
+        root
+        / "hardware/interfaces/health/aidl/aidl_api/android.hardware.health"
+        / version
+        / "android/hardware/health/BatteryHealthData.aidl"
+    )
+    if not aidl.exists():
+        errors.append(
+            f"{bp.relative_to(root)} links android.hardware.health-V{version}-ndk, "
+            f"but {aidl.relative_to(root)} is missing"
+        )
+    else:
+        aidl_text = aidl.read_text(errors="ignore")
+        allowed_fields = set(
+            re.findall(
+                r"(?m)^\s*(?:@[A-Za-z0-9_.]+(?:\([^)]*\))?\s+)*"
+                r"[A-Za-z0-9_.<>]+\s+(battery[A-Za-z0-9_]+)\b",
+                aidl_text,
+            )
+        )
+        used_fields = sorted(
+            set(re.findall(r"\bout->(battery[A-Za-z0-9_]+)\b", cpp.read_text(errors="ignore")))
+        )
+        unknown_fields = [field for field in used_fields if field not in allowed_fields]
+        if unknown_fields:
+            errors.append(
+                f"{cpp.relative_to(root)} writes BatteryHealthData field(s) not in "
+                f"android.hardware.health-V{version}: {', '.join(unknown_fields)}"
+            )
+
+if errors:
+    print("\n".join(errors), file=sys.stderr)
+    raise SystemExit(1)
+PY
+)"; then
+    fail "$checker_output"
+  fi
+}
+
+check_cuttlefish_cppcose_compat() {
+  local header source
+
+  header="$android_root/system/keymaster/include/keymaster/cppcose/cppcose.h"
+  source="$android_root/device/google/cuttlefish/host/commands/secure_env/tpm_remote_provisioning_context.cpp"
+
+  require_file "$header"
+  require_file "$source"
+  [[ -f "$header" && -f "$source" ]] || return 0
+
+  if grep -Fq 'constructEdDsaCoseSign1' "$source" &&
+      ! grep -Fq 'constructEdDsaCoseSign1' "$header"; then
+    fail "Cuttlefish secure_env uses constructEdDsaCoseSign1, but this branch's cppcose API only exposes constructCoseSign1: ${source#$android_root/}"
+  fi
+}
+
+check_cuttlefish_sepolicy_compat() {
+  local checker_output
+
+  if ! checker_output="$(python3 - "$android_root" <<'PY' 2>&1
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+system_sepolicy_roots = [
+    root / "system/sepolicy/public",
+    root / "system/sepolicy/private",
+    root / "system/sepolicy/vendor",
+    root / "vendor/lineage/sepolicy",
+]
+cuttlefish_roots = [
+    root / "device/google/cuttlefish/shared/sepolicy",
+    root / "device/google/cuttlefish/shared/desktop/sepolicy",
+    root / "device/google/cuttlefish/shared/graphics/sepolicy",
+    root / "system/bt/vendor_libs/linux/sepolicy",
+]
+scan_roots = [
+    root / "device/google/cuttlefish/shared/sepolicy/system_ext/private",
+    root / "device/google/cuttlefish/shared/sepolicy/product/private",
+    root / "device/google/cuttlefish/shared/sepolicy/vendor",
+    root / "device/google/cuttlefish/shared/desktop/sepolicy",
+    root / "device/google/cuttlefish/shared/graphics/sepolicy",
+]
+
+def interesting_file(path: Path) -> bool:
+    return path.is_file() and (
+        path.suffix in {".te", ".cil"} or path.name in {"attributes", "global_macros", "te_macros"}
+    )
+
+defined = set()
+type_pattern = re.compile(r"(?m)^\s*(?:type|attribute)\s+([A-Za-z0-9_]+)\b")
+property_pattern = re.compile(
+    r"(?m)^\s*[A-Za-z0-9_]*prop\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)"
+)
+hal_attribute_pattern = re.compile(
+    r"(?m)^\s*hal_attribute\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)"
+)
+hal_attribute_service_pattern = re.compile(
+    r"(?m)^\s*hal_attribute_(?:hwservice|service)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,"
+)
+def define_hal(base: str) -> None:
+    hal_type = base if base.startswith("hal_") else f"hal_{base}"
+    defined.update({hal_type, f"{hal_type}_client", f"{hal_type}_server"})
+
+for search_root in [*system_sepolicy_roots, *cuttlefish_roots]:
+    if not search_root.exists():
+        continue
+    for path in search_root.rglob("*"):
+        if not interesting_file(path):
+            continue
+        text = path.read_text(errors="ignore")
+        defined.update(type_pattern.findall(text))
+        defined.update(property_pattern.findall(text))
+        for name in hal_attribute_pattern.findall(text):
+            define_hal(name)
+        for name in hal_attribute_service_pattern.findall(text):
+            define_hal(name)
+
+macro_type_args = {
+    "add_service": (0, 1),
+    "binder_call": (0, 1),
+    "binder_use": (0,),
+    "domain_auto_trans": (0, 1, 2),
+    "early_virtmgr_use": (0,),
+    "get_prop": (0, 1),
+    "hal_client_domain": (0, 1),
+    "hal_server_domain": (0, 1),
+    "init_daemon_domain": (0,),
+    "set_prop": (0, 1),
+    "tmpfs_domain": (0,),
+    "use_bootstrap_libs": (0,),
+}
+macro_patterns = {
+    macro: re.compile(r"\b" + re.escape(macro) + r"\s*\(([^)]*)\)")
+    for macro in macro_type_args
+}
+typeattribute_pattern = re.compile(
+    r"(?m)^\s*typeattribute\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;"
+)
+policycap_pattern = re.compile(r"\bpolicycap\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")
+symbol_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+ignored_symbols = {"self"}
+supported_policycaps = set()
+platform_policycap_file = root / "system/sepolicy/private/policy_capabilities"
+if platform_policycap_file.exists():
+    supported_policycaps.update(policycap_pattern.findall(platform_policycap_file.read_text(errors="ignore")))
+
+def is_defined(symbol: str) -> bool:
+    return symbol in ignored_symbols or symbol in defined
+
+def check_symbol(errors, path: Path, line: int, context: str, symbol: str) -> None:
+    if not symbol_pattern.match(symbol) or symbol.startswith("$"):
+        return
+    if is_defined(symbol):
+        return
+    errors.append(
+        f"{path.relative_to(root)}:{line}: {context} references {symbol}, "
+        "but this sepolicy tree does not define it"
+    )
+
+errors = []
+for scan_root in scan_roots:
+    if not scan_root.exists():
+        continue
+    for path in scan_root.rglob("policy_capabilities"):
+        text = path.read_text(errors="ignore")
+        for capability in sorted(set(policycap_pattern.findall(text))):
+            if capability in supported_policycaps:
+                continue
+            errors.append(
+                f"{path.relative_to(root)}: policycap {capability} is not used by "
+                "this platform sepolicy tree and may be unsupported by checkpolicy"
+            )
+    for path in scan_root.rglob("*.te"):
+        text = "\n".join(
+            line for line in path.read_text(errors="ignore").splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        for match in typeattribute_pattern.finditer(text):
+            line = text[:match.start()].count("\n") + 1
+            check_symbol(errors, path, line, "typeattribute", match.group(1))
+            check_symbol(errors, path, line, "typeattribute", match.group(2))
+        for macro, positions in macro_type_args.items():
+            for match in macro_patterns[macro].finditer(text):
+                line = text[:match.start()].count("\n") + 1
+                args = [
+                    arg.strip().strip("`'\";")
+                    for arg in match.group(1).split(",")
+                ]
+                for position in positions:
+                    if position < len(args):
+                        check_symbol(errors, path, line, f"{macro}()", args[position])
+
+if errors:
+    print("\n".join(errors), file=sys.stderr)
+    raise SystemExit(1)
+PY
+)"; then
+    fail "$checker_output"
+  fi
+}
+
+check_cuttlefish_platform_app_policy() {
+  local checker_output
+
+  if ! checker_output="$(python3 - "$android_root" <<'PY' 2>&1
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+type_names = ("platform_app_36", "platform_app_all")
+system_sepolicy = root / "system/sepolicy"
+cuttlefish_policy = root / "device/google/cuttlefish/shared/sepolicy/system_ext/private"
+
+def type_defined(search_roots, type_name: str) -> bool:
+    te_pattern = re.compile(rf"(?m)^\s*type(?:attribute)?\s+{re.escape(type_name)}(?:[;,\s]|$)")
+    cil_pattern = re.compile(rf"\(type(?:attribute)?\s+{re.escape(type_name)}\)")
+    for root in search_roots:
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if path.suffix not in {".te", ".cil"}:
+                continue
+            try:
+                text = path.read_text(errors="ignore")
+            except OSError:
+                continue
+            if te_pattern.search(text) or cil_pattern.search(text):
+                return True
+    return False
+
+errors = []
+if cuttlefish_policy.exists():
+    for type_name in type_names:
+        if type_defined([system_sepolicy], type_name):
+            continue
+        token = re.compile(rf"\b{re.escape(type_name)}\b")
+        offenders = []
+        for path in cuttlefish_policy.rglob("*.te"):
+            text = path.read_text(errors="ignore")
+            if token.search(text):
+                offenders.append(str(path.relative_to(root)))
+        if offenders:
+            errors.append(
+                f"Cuttlefish system_ext policy references {type_name}, but this "
+                f"platform sepolicy tree does not define it: {', '.join(offenders)}"
+            )
+
+    add_service = re.compile(
+        r"\badd_service\s*\(\s*[A-Za-z0-9_]+\s*,\s*([A-Za-z0-9_]+)\s*\)"
+    )
+    search_roots = [system_sepolicy, cuttlefish_policy]
+    for path in cuttlefish_policy.rglob("*.te"):
+        text = path.read_text(errors="ignore")
+        for service_type in sorted(set(add_service.findall(text))):
+            if type_defined(search_roots, service_type):
+                continue
+            errors.append(
+                f"Cuttlefish system_ext policy references add_service(..., {service_type}), "
+                f"but this sepolicy tree does not define that service type: "
+                f"{path.relative_to(root)}"
+            )
+
+if errors:
+    print("\n".join(errors), file=sys.stderr)
+    raise SystemExit(1)
+PY
+)"; then
+    fail "$checker_output"
+  fi
+}
+
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]; then
   usage
   exit 0
@@ -1213,6 +1773,13 @@ check_zipalign_rom_package
 check_arm64_page_size_product_defaults
 check_vulkan_header_version
 check_vulkan_ndk_abi_dumps
+check_virtualization_stack_pins
+check_crosvm_wayland_codegen
+check_cuttlefish_proto_editions
+check_cuttlefish_health_aidl_compat
+check_cuttlefish_cppcose_compat
+check_cuttlefish_sepolicy_compat
+check_cuttlefish_platform_app_policy
 
 if (( failures > 0 )); then
   exit 1

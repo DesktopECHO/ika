@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ -n "${HOME:-}" ]]; then
+  user_bin_dir="${IKA_USER_BIN_DIR:-${HOME}/.local/bin}"
+  case ":$PATH:" in
+    *:"${user_bin_dir}":*) ;;
+    *) export PATH="${user_bin_dir}:$PATH" ;;
+  esac
+fi
+
 # On Debian/Ubuntu, /usr/sbin is absent from the default non-root PATH.
 # Add it so system tools (modprobe, mkswap, swapon, zramctl, …) are reachable.
 case ":$PATH:" in
@@ -21,6 +29,7 @@ include_x86_arm_native_bridge="${INCLUDE_X86_ARM_NATIVE_BRIDGE:-1}"
 update_native_bridge_prebuilts="${UPDATE_NATIVE_BRIDGE_PREBUILTS:-1}"
 validate_build_inputs="${VALIDATE_BUILD_INPUTS:-1}"
 strict_bundle_validation="${STRICT_BUNDLE_VALIDATION:-0}"
+build_variant="${BUILD_VARIANT:-userdebug}"
 ccache_enabled="${CCACHE_ENABLED:-1}"
 ccache_dir="${CCACHE_DIR:-$HOME/ika-build/.ccache}"
 ccache_max_size="${CCACHE_MAX_SIZE:-50G}"
@@ -37,7 +46,7 @@ else
 fi
 output_dir="${OUTPUT_DIR:-$ika_root}"
 buildtime_log_path="${BUILDTIME_LOG_PATH:-$ika_root/buildtimes.log}"
-repo_install_path="${REPO_INSTALL_PATH:-/usr/local/bin/repo}"
+repo_install_path="${REPO_INSTALL_PATH:-${HOME}/.local/bin/repo}"
 repo_cmd="repo"
 repo_sync_attempts="${REPO_SYNC_ATTEMPTS:-100}"
 repo_sync_retry_fetches="${REPO_SYNC_RETRY_FETCHES:-20}"
@@ -113,6 +122,11 @@ die() {
   printf '[lineage-desktop] error: %s\n' "$*" >&2
   exit 1
 }
+
+case "$build_variant" in
+  user|userdebug|eng) ;;
+  *) die "BUILD_VARIANT must be one of: user, userdebug, eng (got '$build_variant')" ;;
+esac
 
 active_build_arch=""
 active_build_start_epoch=""

@@ -1,0 +1,40 @@
+Patch summary:
+Adapt the pinned crosvm Android.bp files to this ROM tree's Wayland protocol
+codegen module. crosvm expects generated headers such as `aura-shell.h` to be
+available from a flat include directory, and the local `wayland_protocol_codegen`
+module exports that directory by default.
+
+diff --git a/gpu_display/Android.bp b/gpu_display/Android.bp
+index 33d18f243..44b0c241a 100644
+--- a/gpu_display/Android.bp
++++ b/gpu_display/Android.bp
+@@ -110,7 +110,7 @@ cc_library_static {
+-gensrcs {
++wayland_protocol_codegen {
+     name: "gpu_display_protocol_sources",
+     cmd: "$(location wayland_scanner) private-code < $(in) > $(out)",
+-    output: "$(in:base).c",
++    output: "$(in).c",
+     srcs: [
+         ":wayland_extension_protocols",
+         "protocol/virtio-gpu-metadata-v1.xml",
+@@ -121,7 +121,7 @@ gensrcs {
+-gensrcs {
++wayland_protocol_codegen {
+     name: "gpu_display_client_protocol_headers",
+     cmd: "$(location wayland_scanner) client-header < $(in) > $(out)",
+-    output: "$(in:base).h",
++    output: "$(in).h",
+     srcs: [
+         ":wayland_extension_protocols",
+         "protocol/virtio-gpu-metadata-v1.xml",
+@@ -132,7 +132,7 @@ gensrcs {
+-gensrcs {
++wayland_protocol_codegen {
+     name: "gpu_display_server_protocol_headers",
+     cmd: "$(location wayland_scanner) server-header < $(in) > $(out)",
+-    output: "$(in:base).h",
++    output: "$(in).h",
+     srcs: [
+         ":wayland_extension_protocols",
+         "protocol/virtio-gpu-metadata-v1.xml",

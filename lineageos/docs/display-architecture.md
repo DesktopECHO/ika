@@ -12,7 +12,7 @@ This document compares how upstream Cuttlefish drives an Android virtual display
 | Resize event flow | none (visual scale only) | SDL -> ika-scrcpy client -> `cvd display resize` for raw frames, plus `TYPE_RESIZE_DISPLAY`/`DISPLAY_READY` for settle tracking -> DisplayManager listeners |
 | DPI selection | Static at launch (`--display=…,dpi=…`) | Computed from host width; user can override with `--dpi` or `IKADPI` |
 | Input transport | WebRTC data channel | scrcpy `UInput` injection |
-| Audio transport | WebRTC media stream | scrcpy raw audio with low-latency buffer settings |
+| Audio transport | WebRTC media stream | Cuttlefish virtio-snd -> host PipeWire stream |
 | Multi-display / hotplug | `cvd_display add/remove/resize` CLI | Same CLI is available; ika does not currently drive it |
 | GPU path | varies (host, gfxstream, virgl) | `gpu_mode=gfxstream`, `enable_gpu_udmabuf=true`, `gpu_vhost_user_mode=off`, `use_cvdalloc=true` |
 | CPU pinning | none | host frontend pinned to last two performance cores |
@@ -66,7 +66,7 @@ DPI does **not** change when the scrcpy window is resized — only resolution ch
 
 **Upstream:** audio is muxed into the WebRTC media stream with whatever codec is negotiated (typically Opus).
 
-**ika:** scrcpy's audio with explicit low-latency settings: `--audio-buffer=80 --audio-output-buffer=10 --audio-codec=raw`. The 10ms output buffer keeps perceived audio latency below the threshold where it desyncs from on-screen events, at the cost of more frequent buffer underruns on a contended host.
+**ika:** Cuttlefish audio is enabled even though WebRTC is off. The raw `ika_stream` frontend services the guest virtio-snd device and publishes mixed guest playback as a normal PipeWire application stream named `ika`. scrcpy runs with `--no-audio`, so sound is no longer tied to adb, the scrcpy server, or whether the console window is open.
 
 ## 6. Multi-display and hotplug
 
@@ -88,3 +88,12 @@ prefer_performance_cores=true
 `gfxstream` is the primary path going forward. `guest_swiftshader` is useful as
 a diagnostic fallback because it removes host GPU acceleration from the equation,
 but it is not the normal performance target for this product.
+
+The production guest Vulkan stack pins patched Mesa 25.3 at `d4b6f1eba289`.
+That revision is verified with the pinned gfxstream, rutabaga_gfx, crosvm,
+minigbm, and Vulkan-Headers revisions in `manifests/lineageos-desktop.xml`.
+
+Run `ika graphics-check` to verify that the VM is using hardware gfxstream
+Vulkan and the zero-copy flags. Run `ika graphics-check --chromium` for the
+end-to-end check; it opens Example Domain, saves `~/ika/graphics-check.png`,
+and fails if the frame matches the solid-magenta or blank regression.

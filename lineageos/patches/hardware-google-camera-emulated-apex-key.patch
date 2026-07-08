@@ -1,0 +1,54 @@
+Patch summary:
+Sign the EmulatedCamera provider APEX with the shared vendor HAL key so
+apexd can activate a camera HAL at all.
+
+The cuttlefish camera product config (device/google/cuttlefish
+shared/camera/device_vendor.mk) unconditionally installs two multi-install
+variants of the same APEX name:
+- com.google.emulated.camera.provider.hal (this project, GoogleCamera HWL
+  emulated cameras) signed with its own local key, and
+- com.google.emulated.camera.provider.hal.v4l2 (device/google/cuttlefish
+  guest/hals/virtio_media) signed with the shared vendor HAL key
+  (hardware/interfaces/apexkey's com.android.hardware.key).
+
+apexd requires every APEX participating in multi-install selection to be
+signed with the same public key. Because the two variants differ, boot logs
+show "Multi-install APEXes for com.google.emulated.camera.provider.hal have
+different public keys." and apexd activates NEITHER variant: cameraserver
+reports zero camera devices even though the bootconfig selector
+(ro.boot.vendor.apex.com.google.emulated.camera.provider.hal) and the
+emu_camera_*.json configs are all present. Confirmed on a live 2026-07-11
+ika_arm64 instance; the built vendor/apex files carried different
+apex_pubkey payloads. User-visible fallout: anything that opens a camera
+dies -- e.g. Chromium's Cardboard VR QR-scanner activity crashes the
+browser with "Unable to resume activity" and its window composites as
+solid magenta.
+
+Fix: sign this project's variants with the same shared vendor HAL key the
+v4l2 variant already uses. This direction (rather than re-keying the v4l2
+APEX) is required by Soong namespaces: EmulatedCamera is its own
+soong_namespace, so its key modules are not visible from
+device/google/cuttlefish, while the root-namespace com.android.hardware.key
+is visible everywhere. The now-unreferenced local apex_key/certificate
+modules are left in place to keep the diff minimal.
+
+diff --git a/devices/EmulatedCamera/hwl/apex/Android.bp b/devices/EmulatedCamera/hwl/apex/Android.bp
+index a2f754f..e6d16ff 100644
+--- a/devices/EmulatedCamera/hwl/apex/Android.bp
++++ b/devices/EmulatedCamera/hwl/apex/Android.bp
+@@ -43,8 +43,13 @@ prebuilt_etc {
+ apex_defaults {
+     name: "com.google.emulated.camera.provider.hal.defaults",
+     manifest: "apex_manifest.json",
+-    key: "com.google.emulated.camera.provider.hal.key",
+-    certificate: ":com.google.emulated.camera.provider.hal.certificate",
++    // Multi-install APEX selection requires every variant of
++    // com.google.emulated.camera.provider.hal to be signed with the same key;
++    // the v4l2 variant (device/google/cuttlefish guest/hals/virtio_media) uses
++    // the shared vendor HAL key, so sign this one with it too or apexd
++    // activates neither and the guest boots with zero cameras.
++    key: "com.android.hardware.key",
++    certificate: ":com.android.hardware.certificate",
+     file_contexts: "file_contexts",
+     updatable: false,
+     // Install the apex in /vendor/apex

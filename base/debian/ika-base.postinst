@@ -31,9 +31,12 @@ case "$1" in
     systemd-tmpfiles --create /usr/lib/tmpfiles.d/cuttlefish.conf > /dev/null 2>&1 || true
     udevadm control --reload > /dev/null 2>&1 || true
     systemctl daemon-reload > /dev/null 2>&1 || true
-    # Keep the legacy host-resources service opt-in. The default ika workflow
-    # uses per-user cvdalloc networking managed under /var/tmp/cvd.
-    systemctl disable --now cuttlefish-host-resources.service > /dev/null 2>&1 || true
+    # Enable host-resources so host setup runs on every boot -- notably
+    # tune_udmabuf, which raises the udmabuf caps the gfxstream Vulkan
+    # host-visible path needs (the sysfs params reset to kernel defaults each
+    # boot, so a one-shot does not stick). The service does no networking;
+    # guest networking is per-user cvdalloc under /var/tmp/cvd.
+    systemctl enable --now cuttlefish-host-resources.service > /dev/null 2>&1 || true
 
     /usr/libexec/cuttlefish/cuttlefish-add-user-to-groups || true
     ;;

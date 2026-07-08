@@ -21,9 +21,8 @@ validate_build_inputs_for_targets() {
 }
 
 build_validation_zipalign() {
-  local host_tag zipalign_bin target
-  host_tag="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/aarch64/arm64/;s/x86_64/x86/')"
-  zipalign_bin="$workspace/out/host/$host_tag/bin/zipalign"
+  local zipalign_bin target
+  zipalign_bin="$workspace/out/host/$(host_out_tag)/bin/zipalign"
 
   [[ -x "$zipalign_bin" ]] && return 0
 

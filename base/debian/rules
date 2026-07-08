@@ -127,7 +127,7 @@ override_dh_auto_build:
 	         --host_cxxopt=-Wno-deprecated-declarations \
 	         --cxxopt=-Wno-thread-safety-reference-return \
 	         --host_cxxopt=-Wno-thread-safety-reference-return \
-         ${compilation_mode} ${conlyopts} ${copts} ${cxxopts} ${linkopts} -c opt \
+         -c opt ${compilation_mode} ${conlyopts} ${copts} ${cxxopts} ${linkopts} \
 	         'cuttlefish/package:cvd' 'cuttlefish/package:defaults' 'cuttlefish/package:metrics' \
 	         --spawn_strategy=local \
 	         --workspace_status_command=../stamp_helper.sh \

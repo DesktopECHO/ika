@@ -11,16 +11,31 @@ external/stg patches/external-stg-arm64-host-page-size.patch
 . patches/prebuilts-arm64-host.patch
 external/musl patches/external-musl-lfs64-compat.patch
 external/rust/android-crates-io patches/external-rust-android-crates-io-arm64-host-cross.patch
+external/rust/rutabaga_gfx patches/external-rust-rutabaga-gfx-nativewindow-ahb.patch
+external/crosvm patches/external-crosvm.patch
+external/epson-inkjet-printer-escpr patches/external-epson-inkjet-printer-escpr-gfxstream-license.patch
 external/cronet patches/external-cronet-arm64-host-cross.patch
 external/sdv/vsomeip patches/external-sdv-vsomeip-arm64-host-cross.patch
 external/vulkan-headers patches/external-vulkan-headers-android-build.patch
 prebuilts/abi-dumps/ndk patches/prebuilts-abi-dumps-vulkan-1.4.341.patch
 external/minigbm patches/external-minigbm.patch
+external/deqp-deps/glslang patches/external-deqp-deps-glslang-validator-host.patch
 external/mesa3d patches/external-mesa3d.patch
+hardware/google/gfxstream patches/hardware-google-gfxstream-opengles-3.2.patch
+hardware/google/gfxstream patches/hardware-google-gfxstream-guest-egl-attrib-safety.patch
+hardware/google/camera patches/hardware-google-camera-emulated-apex-key.patch
 art patches/art.patch
+device/generic/goldfish patches/device-generic-goldfish.patch
+device/generic/goldfish patches/device-generic-goldfish-sensors-transport-compat.patch
 device/google/cuttlefish patches/device-google-cuttlefish.patch
+device/google/cuttlefish patches/device-google-cuttlefish-light-compat.patch
+device/google/cuttlefish patches/device-google-cuttlefish-health-compat.patch
+device/google/cuttlefish patches/device-google-cuttlefish-sepolicy-compat.patch
+device/google/cuttlefish patches/device-google-cuttlefish-proto-editions.patch
+device/google/cuttlefish patches/device-google-cuttlefish-secure-env-cppcose-compat.patch
 frameworks/av patches/frameworks-av.patch
 frameworks/native patches/frameworks-native-logspam.patch
+frameworks/native patches/frameworks-native-vulkan-profile-timestamps.patch
 # frameworks/base is patched twice on purpose: the first patch is the generic
 # desktop framework changes (DesktopExperienceFlags, SettingsProvider seed, QS
 # changes); the second is the native-bridge-only changes (NativeLibraryHelper,
@@ -39,6 +54,7 @@ packages/apps/Settings patches/packages-apps-Settings.patch
 vendor/lineage patches/vendor-lineage.patch
 vendor/lineage patches/vendor-lineage-arm64-host-tools.patch
 build/soong patches/build-soong-arm64-host.patch
+build/soong patches/build-soong-proto-editions.patch
 build/make patches/build-make-arm64-host.patch
 build/make patches/build-make-zipalign-device.patch
 trusty/user/base patches/trusty-user-base-arm64-host-boringssl.patch

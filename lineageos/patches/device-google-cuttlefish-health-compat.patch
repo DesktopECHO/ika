@@ -1,0 +1,33 @@
+Patch summary:
+Build the pinned Cuttlefish health HAL against the branch-frozen health AIDL V4.
+The base tree's libhealth_aidl_impl and libbatterymonitor path already use V4;
+linking the Cuttlefish service to V5 mixes interface versions and fails Soong.
+Drop fake battery detail fields that only exist in newer health AIDL revisions.
+
+diff --git a/guest/hals/health/Android.bp b/guest/hals/health/Android.bp
+index 9c12297e8..03fd7a3e9 100644
+--- a/guest/hals/health/Android.bp
++++ b/guest/hals/health/Android.bp
+@@ -31,7 +31,7 @@ cc_defaults {
+     ],
+ 
+     static_libs: [
+-        "android.hardware.health-V5-ndk",
++        "android.hardware.health-V4-ndk",
+         "libbase",
+         "libbatterymonitor",
+         "libcutils",
+diff --git a/guest/hals/health/health-aidl.cpp b/guest/hals/health/health-aidl.cpp
+index ba50cfb62..be87d3e24 100644
+--- a/guest/hals/health/health-aidl.cpp
++++ b/guest/hals/health/health-aidl.cpp
+@@ -102,9 +102,6 @@ ScopedAStatus HealthImpl::getBatteryHealthData(BatteryHealthData* out) {
+   out->batterySerialNumber =
+       "d1f92fe7591ff096ca3a29c450a5a3d1";  // MD5("battery serial")
+   out->batteryPartStatus = BatteryPartStatus::UNSUPPORTED;
+-  out->batteryManufacturer = "Google";
+-  out->batteryModelName = "Cuttlefish fake battery";
+-  out->batteryVoltageMinDesignUv = 4321000;
+   return ScopedAStatus::ok();
+ }
+ 

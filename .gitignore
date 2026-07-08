@@ -53,3 +53,4 @@ frontend/src/operator/webui/src/environments/version.ts
 **/__pycache__/
 *.pyc
 /base/rpm/vendor/__pycache__
+/base/cvd/.bazel_output_base

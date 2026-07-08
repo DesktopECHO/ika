@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 
-# Build updated libvulkan packages from Debian testing source.
+# Build updated libvulkan packages from a Debian Salsa packaging commit.
 #
-# This script is intended for native builds on Debian hosts.
-# It supports amd64 and arm64 host architectures.
+# This script is intended for native builds on Debian hosts. It builds for the
+# current host architecture only and installs the Vulkan loader packages needed
+# by ika without enabling Debian testing/backports repositories.
 
 set -o errexit -o nounset -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_WORKDIR="${SCRIPT_DIR}/../../deb/libvulkan1-testing"
+DEFAULT_WORKDIR="${SCRIPT_DIR}/../../deb/libvulkan1-salsa"
+DEFAULT_VULKAN_REPO_URL="https://salsa.debian.org/xorg-team/vulkan/vulkan-loader.git"
+DEFAULT_VULKAN_COMMIT="e3a3df62e0b7e9b12dacb626a8d554a47ad9ed2d"
 
 WORKDIR="${DEFAULT_WORKDIR}"
+VULKAN_REPO_URL="${VULKAN_REPO_URL:-${DEFAULT_VULKAN_REPO_URL}}"
+VULKAN_COMMIT="${VULKAN_COMMIT:-${DEFAULT_VULKAN_COMMIT}}"
 ASSUME_YES=false
 INSTALL_BUILT=false
 STAGE_PACKAGES=true
@@ -18,15 +23,16 @@ STAGE_PACKAGES=true
 declare -a ROOT_CMD=()
 
 print_usage() {
-  cat <<'EOF'
+  cat <<EOF
 Usage: vulkan-build-trixie [options]
 
-Downloads Debian testing source and builds updated libvulkan .deb packages.
-Testing is used as a source-only repository; binary build dependencies are
-installed from the host's normal Debian repositories.
+Builds Vulkan loader packages from the Debian Salsa packaging commit:
+  ${DEFAULT_VULKAN_COMMIT}
 
 Options:
-  --workdir <path>       Working directory (default: ./deb/libvulkan1-testing)
+  --workdir <path>       Working directory (default: ./deb/libvulkan1-salsa)
+  --repo-url <url>       Vulkan loader packaging git URL (default: ${DEFAULT_VULKAN_REPO_URL})
+  --commit <sha>         Vulkan loader packaging commit (default: ${DEFAULT_VULKAN_COMMIT})
   --install              Install built libvulkan packages after building
   --no-stage             Do not copy built packages to the repository root
   -y, --yes              Non-interactive apt operations when sudo is available
@@ -37,7 +43,7 @@ Examples:
   ./tools/buildutils/vulkan-build-trixie --workdir ~/build/libvulkan
 
 Notes:
-  - Designed for Debian 13+ hosts.
+  - Designed for Debian hosts with repositories that satisfy the source build dependencies.
   - Builds for the current host architecture only (amd64 or arm64).
   - Output .deb files are written to: <workdir>/build/
 EOF
@@ -96,6 +102,22 @@ parse_args() {
         WORKDIR="$2"
         shift 2
         ;;
+      --repo-url)
+        [[ $# -ge 2 ]] || {
+          echo "Missing value for --repo-url" >&2
+          exit 1
+        }
+        VULKAN_REPO_URL="$2"
+        shift 2
+        ;;
+      --commit)
+        [[ $# -ge 2 ]] || {
+          echo "Missing value for --commit" >&2
+          exit 1
+        }
+        VULKAN_COMMIT="$2"
+        shift 2
+        ;;
       -y|--yes)
         ASSUME_YES=true
         shift
@@ -141,89 +163,55 @@ detect_host_arch() {
 }
 
 require_tools() {
-  local missing_core=()
+  local missing=()
   local tool
 
-  for tool in apt-get apt-cache dpkg-buildpackage dpkg-deb; do
+  for tool in apt-get dpkg-buildpackage dpkg-deb dpkg-parsechangelog git; do
     if ! command -v "${tool}" >/dev/null 2>&1; then
-      missing_core+=("${tool}")
+      missing+=("${tool}")
     fi
   done
 
-  if [[ "${#missing_core[@]}" -gt 0 ]]; then
-    echo "Missing required base tools: ${missing_core[*]}" >&2
-    echo "This script requires a standard Debian apt/dpkg environment." >&2
-    exit 1
+  if ! command -v mk-build-deps >/dev/null 2>&1; then
+    missing+=(mk-build-deps)
   fi
 
-  if ! command -v mk-build-deps >/dev/null 2>&1; then
-    if ! can_run_as_root; then
-      cat >&2 <<'EOF'
-Missing prerequisite tool: mk-build-deps
+  if [[ "${#missing[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  if ! can_run_as_root; then
+    cat >&2 <<EOF
+Missing prerequisite tool(s): ${missing[*]}
 Root access is required to install prerequisite packages.
 Run in an interactive terminal where sudo can prompt, or run as root.
 EOF
-      exit 1
-    fi
-
-    echo "Installing prerequisite packaging tools..."
-    run_as_root env DEBIAN_FRONTEND=noninteractive apt-get update
-    run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends devscripts equivs dpkg-dev
-  fi
-
-  if ! command -v mk-build-deps >/dev/null 2>&1; then
-    echo "Failed to install mk-build-deps." >&2
     exit 1
   fi
+
+  echo "Installing prerequisite packaging tools..."
+  run_as_root env DEBIAN_FRONTEND=noninteractive apt-get update
+  run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    build-essential \
+    devscripts \
+    dpkg-dev \
+    equivs \
+    git
 }
 
 prepare_workspace() {
   WORKDIR="$(realpath -m "${WORKDIR}")"
-  APT_DIR="${WORKDIR}/apt"
   BUILD_DIR="${WORKDIR}/build"
   SRC_DIR="${WORKDIR}/src"
+  SOURCE_TREE="${SRC_DIR}/vulkan-loader-${VULKAN_COMMIT:0:12}"
 
-  mkdir -p "${APT_DIR}/state/lists/partial" "${APT_DIR}/cache/archives/partial" "${BUILD_DIR}" "${SRC_DIR}"
-  if [[ "$(id -u)" -ne 0 && ( ! -w "${APT_DIR}/state/lists" || ! -w "${APT_DIR}/cache/archives" ) ]] && can_run_as_root; then
-    run_as_root chown -R "$(id -u):$(id -g)" "${APT_DIR}"
-  fi
-
-  TESTING_SOURCE_LIST="${APT_DIR}/testing-source.list"
-
-  cat > "${TESTING_SOURCE_LIST}" <<'EOF'
-deb-src http://deb.debian.org/debian testing main contrib non-free non-free-firmware
-EOF
-
-  SOURCE_APT_OPTS=(
-    -o "Dir::Etc::sourcelist=${TESTING_SOURCE_LIST}"
-    -o "Dir::Etc::sourceparts=-"
-    -o "Dir::State=${APT_DIR}/state"
-    -o "Dir::Cache=${APT_DIR}/cache"
-    -o "APT::Get::List-Cleanup=0"
-  )
+  mkdir -p "${BUILD_DIR}" "${SRC_DIR}"
 
   if [[ "${ASSUME_YES}" == "true" ]]; then
     APT_INSTALL_OPTS=(-y)
   else
     APT_INSTALL_OPTS=()
   fi
-}
-
-refresh_testing_metadata() {
-  echo "Refreshing Debian testing source metadata..."
-  env DEBIAN_FRONTEND=noninteractive apt-get "${SOURCE_APT_OPTS[@]}" update
-}
-
-resolve_source_package() {
-  local src
-
-  src="$(apt-cache "${SOURCE_APT_OPTS[@]}" showsrc libvulkan1 2>/dev/null | awk '/^Package:/{print $2; exit}')"
-  if [[ -z "${src}" ]]; then
-    src="vulkan-loader"
-  fi
-
-  SOURCE_PACKAGE="${src}"
-  echo "Using source package: ${SOURCE_PACKAGE}"
 }
 
 install_build_tools() {
@@ -236,10 +224,41 @@ install_build_tools() {
     dpkg-dev
 }
 
+fetch_source() {
+  local current_commit=""
+
+  if [[ -d "${SOURCE_TREE}/.git" ]]; then
+    current_commit="$(git -C "${SOURCE_TREE}" rev-parse HEAD 2>/dev/null || true)"
+  fi
+
+  if [[ "${current_commit}" == "${VULKAN_COMMIT}" ]]; then
+    echo "Reusing Vulkan loader source tree at ${SOURCE_TREE}"
+    return 0
+  fi
+
+  rm -rf "${SOURCE_TREE}"
+  mkdir -p "${SOURCE_TREE}"
+
+  echo "Fetching Vulkan loader packaging commit ${VULKAN_COMMIT}..."
+  git -C "${SOURCE_TREE}" init -q
+  git -C "${SOURCE_TREE}" remote add origin "${VULKAN_REPO_URL}"
+  git -C "${SOURCE_TREE}" -c protocol.version=2 fetch --depth=1 --filter=blob:none origin "${VULKAN_COMMIT}"
+  git -C "${SOURCE_TREE}" checkout -q --force FETCH_HEAD
+
+  current_commit="$(git -C "${SOURCE_TREE}" rev-parse HEAD)"
+  if [[ "${current_commit}" != "${VULKAN_COMMIT}" ]]; then
+    echo "Fetched ${current_commit}, expected ${VULKAN_COMMIT}" >&2
+    exit 1
+  fi
+
+  echo "Source tree: ${SOURCE_TREE}"
+  echo "Vulkan loader package version: $(cd "${SOURCE_TREE}" && dpkg-parsechangelog -S Version)"
+}
+
 install_source_build_dependencies() {
   local apt_tool
 
-  echo "Installing source build dependencies from configured Debian repositories..."
+  echo "Installing Vulkan loader source build dependencies from configured Debian repositories..."
 
   apt_tool="apt-get --no-install-recommends"
   if [[ "${ASSUME_YES}" == "true" ]]; then
@@ -255,26 +274,8 @@ install_source_build_dependencies() {
   popd >/dev/null
 }
 
-download_source() {
-  echo "Downloading source package ${SOURCE_PACKAGE} from Debian testing..."
-
-  pushd "${SRC_DIR}" >/dev/null
-  apt-get "${SOURCE_APT_OPTS[@]}" source "${SOURCE_PACKAGE}"
-
-  SOURCE_TREE="$(find . -mindepth 1 -maxdepth 1 -type d -name "${SOURCE_PACKAGE}-*" | sort | tail -n 1)"
-  if [[ -z "${SOURCE_TREE}" ]]; then
-    echo "Unable to locate unpacked source directory for ${SOURCE_PACKAGE}" >&2
-    exit 1
-  fi
-
-  SOURCE_TREE="$(realpath "${SOURCE_TREE}")"
-  popd >/dev/null
-
-  echo "Source tree: ${SOURCE_TREE}"
-}
-
 build_packages() {
-  echo "Building binary packages for ${ARCH}..."
+  echo "Building Vulkan loader binary packages for ${ARCH}..."
 
   rm -f "$(dirname "${SOURCE_TREE}")"/*.deb
   rm -f "${BUILD_DIR}"/*.deb
@@ -360,10 +361,8 @@ EOF
     exit 1
   fi
 
-  refresh_testing_metadata
-  resolve_source_package
   install_build_tools
-  download_source
+  fetch_source
   install_source_build_dependencies
   build_packages
   if [[ "${INSTALL_BUILT}" == "true" ]]; then

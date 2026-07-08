@@ -598,6 +598,19 @@ repo_sync_failure_url_from_log() {
   ' "$sync_log"
 }
 
+repo_sync_manifest_error_from_log() {
+  local sync_log="$1"
+  awk '
+    {
+      start = index($0, "error parsing manifest")
+      if (start > 0) {
+        print substr($0, start)
+        exit
+      }
+    }
+  ' "$sync_log"
+}
+
 repo_sync_failure_summary_from_log() {
   local sync_log="$1"
   local retry_delay="${2:-}"
@@ -1056,7 +1069,7 @@ repo_sync_sources() {
   local attempt=1
   local suppress_attempt_log=0
   local force_sync_repairs=0
-  local sync_log
+  local sync_log manifest_error
   while :; do
     if (( suppress_attempt_log == 0 )); then
       log "syncing source tree (attempt $attempt/$repo_sync_attempts)"
@@ -1081,6 +1094,18 @@ repo_sync_sources() {
       suppress_attempt_log=1
       sleep 30
       continue
+    fi
+
+    # A malformed manifest fails every attempt identically, and the console
+    # filter can hide repo's top-level error line (it contains the echoed
+    # --force-checkout flag), so surface the parser's message from the raw log
+    # and stop instead of burning retries.
+    manifest_error="$(repo_sync_manifest_error_from_log "$sync_log")"
+    if [[ -n "$manifest_error" ]]; then
+      log "ERROR: $manifest_error"
+      log "ERROR: manifest parse errors are not retryable; fix the manifest and re-run"
+      rm -f "$sync_log"
+      return 1
     fi
 
     # Linear backoff for rate limiting: 5s initially, +5s per attempt, capped at

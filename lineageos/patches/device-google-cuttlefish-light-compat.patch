@@ -1,0 +1,25 @@
+Patch summary:
+Disable the newer Cuttlefish light APEX for the Ika desktop products on this
+branch. The pinned Cuttlefish tree uses android.hardware.light V3 Rust types,
+while the base hardware/interfaces tree only freezes light AIDL through V2.
+
+diff --git a/guest/hals/light/Android.bp b/guest/hals/light/Android.bp
+index db9f901b9..c0b38ae47 100644
+--- a/guest/hals/light/Android.bp
++++ b/guest/hals/light/Android.bp
+@@ -4,6 +4,7 @@ package {
+ 
+ rust_binary {
+     name: "android.hardware.light-service.cuttlefish",
++    enabled: false,
+     relative_install_path: "hw",
+     vendor: true,
+     prefer_rlib: true,
+@@ -38,6 +39,7 @@ prebuilt_etc {
+ 
+ apex {
+     name: "com.google.cf.light",
++    enabled: false,
+     manifest: "apex_manifest.json",
+     file_contexts: "apex_file_contexts",
+     key: "com.google.cf.apex.key",

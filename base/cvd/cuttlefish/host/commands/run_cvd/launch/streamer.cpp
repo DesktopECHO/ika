@@ -149,6 +149,9 @@ class StreamerSockets : public virtual SetupFeature {
 
   void AppendFrameCommandArguments(Command& cmd) {
     cmd.AddParameter("-frame_server_fd=", frames_server_);
+    if (instance_.enable_audio()) {
+      cmd.AddParameter("--audio_server_fd=", audio_server_);
+    }
   }
 
   // SetupFeature

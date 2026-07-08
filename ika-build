@@ -35,6 +35,7 @@ auto_yes=false
 do_install=true
 install_packages=false
 removed_existing=false
+packages_built_this_run=false
 declare -a rom_args=()
 declare -a pkg_files=()
 declare -a pkg_names=()
@@ -339,6 +340,8 @@ fi
 family="$(detect_distro_family)"
 
 if [[ "${install_packages}" != true ]]; then
+  needs_privileged_setup=false
+
   if signing_keys_already_configured; then
     banner "LineageOS signing certificates already configured"
   else
@@ -349,13 +352,21 @@ if [[ "${install_packages}" != true ]]; then
 
   # Install dependencies and run privileged host preflight before the long ROM
   # build starts, so it does not stop hours later on a sudo prompt.
-  banner "Installing build dependencies (sudo)"
+  if build_dependency_packages_need_install "${family}"; then
+    needs_privileged_setup=true
+    banner "Installing build dependencies (sudo)"
+  else
+    banner "Build dependency packages already installed"
+  fi
   echo
+
   init_root_cmd
   # Keep the sudo timestamp warm across the whole privileged setup phase so a
-  # single password entry covers dependency install, Bazel download, and host
-  # preflight without a mid-phase re-prompt stalling an unattended build.
-  start_sudo_keepalive
+  # single password entry covers dependency install and host preflight without
+  # a mid-phase re-prompt stalling an unattended build.
+  if [[ "${needs_privileged_setup}" == true ]]; then
+    start_sudo_keepalive
+  fi
   install_build_dependencies "${family}"
   install_bazel_if_missing "${INSTALL_BAZEL}"
   build_workspace="${WORKSPACE:-$repo_dir/lineageos/src}"
@@ -387,6 +398,7 @@ if [[ "${install_packages}" != true ]]; then
   banner "Building the host packages"
   echo
   "${PKG_BUILD}"
+  packages_built_this_run=true
 else
   banner "Installing existing packages"
 fi
@@ -398,8 +410,10 @@ if (( ${#pkg_files[@]} == 0 )); then
   exit 1
 fi
 
-banner "Built packages"
-printf '  %s\n' "${pkg_files[@]}"
+if [[ "${packages_built_this_run}" != true ]]; then
+  banner "Packages to install"
+  printf '  %s\n' "${pkg_files[@]}"
+fi
 
 if [[ "${do_install}" != true ]]; then
   print_manual_install
@@ -424,6 +438,15 @@ if [[ "${auto_yes}" != true ]]; then
       exit 0
       ;;
   esac
+fi
+
+# The long build intentionally lets its earlier sudo timestamp expire. Refresh
+# credentials immediately after the user accepts so the following remove and
+# install operations cannot silently stop at an unavailable password prompt.
+if ! sudo -n true 2>/dev/null; then
+  echo
+  echo "Administrator privileges are required to install the packages."
+  sudo -v
 fi
 
 remove_installed_packages

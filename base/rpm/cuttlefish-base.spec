@@ -7,6 +7,11 @@ URL:            https://github.com/google/android-cuttlefish
 Source0:        android-cuttlefish-%{version}.tar.gz
 # objcopy/nm (find-debuginfo) can't parse the Bazel/Clang-built binaries; skip debug packaging.
 %global debug_package %{nil}
+# Fedora 44's GNU strip also cannot parse some Bazel/Clang-built Cuttlefish
+# binaries, so skip the automatic brp strip passes for this package.
+%global __brp_strip %{nil}
+%global __brp_strip_comment_note %{nil}
+%global __brp_strip_lto %{nil}
 
 BuildRequires:  libaom-devel
 BuildRequires:  clang-devel
@@ -51,6 +56,7 @@ BuildRequires:  z3-devel
 BuildRequires:  meson
 BuildRequires:  ninja-build
 BuildRequires:  SDL3-devel
+BuildRequires:  pipewire-devel
 BuildRequires:  libusb1-devel
 BuildRequires:  libavcodec-free-devel
 BuildRequires:  libavformat-free-devel
@@ -83,6 +89,7 @@ Requires:       xz-libs
 # scrcpy viewer runtime dependencies, folded into ika-base.
 Requires:       wayland-utils
 Requires:       SDL3
+Requires:       pipewire-libs
 Requires:       libusb1
 Requires:       libavcodec-free
 Requires:       libavformat-free
@@ -330,9 +337,8 @@ sed -i \
   %{buildroot}/usr/share/applications/ika-scrcpy.desktop
 
 # Bazel package outputs are copied with their original mode bits, which can
-# leave binaries read-only in BUILDROOT. Fedora's brp-strip rewrites ELF files
-# in place during the automatic post-install checks, so the staging copies need
-# owner write permission even though the source artifacts do not.
+# leave files read-only in BUILDROOT. Keep staging copies writable so any later
+# packaging step can adjust them without mutating the source artifacts.
 find %{buildroot}/usr/lib/cuttlefish-common \
      %{buildroot}/usr/lib/cuttlefish-metrics \
      %{buildroot}/usr/bin \
@@ -410,9 +416,7 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 # Enable host-resources so host setup runs on every boot -- notably tune_udmabuf,
 # which raises the udmabuf caps the gfxstream Vulkan host-visible path needs (the
 # sysfs params reset to kernel defaults each boot, so a one-shot does not stick).
-# The legacy system-wide bridge/dnsmasq networking stays gated off by default
-# (enable_legacy_networking=0 in the script) so it does not conflict with the
-# per-user cvdalloc networking the default ika workflow uses.
+# The service does no networking; guest networking is per-user cvdalloc.
 systemctl enable --now cuttlefish-host-resources.service >/dev/null 2>&1 || :
 required_nofile=524288
 required_rtprio=10

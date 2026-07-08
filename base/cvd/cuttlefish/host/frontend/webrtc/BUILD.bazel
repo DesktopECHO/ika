@@ -63,7 +63,19 @@ cf_cc_library(
         "@fmt",
         "@fruit",
         "@jsoncpp",
-        "@libwebrtc",
+    ],
+)
+
+cf_cc_library(
+    name = "libcuttlefish_webrtc_audio_stream_config",
+    srcs = ["audio_stream_config.cpp"],
+    hdrs = ["audio_stream_config.h"],
+    deps = [
+        ":libcuttlefish_webrtc_audio_settings",
+        "//cuttlefish/host/commands/assemble_cvd:guest_config_cc_proto",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
     ],
 )
 
@@ -88,6 +100,18 @@ cf_cc_library(
 cf_cc_library(
     name = "libcuttlefish_webrtc_audio_settings",
     hdrs = ["audio_settings.h"],
+)
+
+cf_cc_library(
+    name = "libcuttlefish_webrtc_pipewire_audio_sink",
+    srcs = ["pipewire_audio_sink.cpp"],
+    hdrs = ["pipewire_audio_sink.h"],
+    deps = [
+        ":libcuttlefish_webrtc_audio_settings",
+        "//cuttlefish/host/frontend/webrtc/libdevice:audio_sink",
+        "@abseil-cpp//absl/log",
+        "@pipewire//:pipewire",
+    ],
 )
 
 cf_cc_library(
@@ -190,7 +214,15 @@ cf_cc_binary(
         "ika_stream_main.cpp",
     ],
     deps = [
+        ":libcuttlefish_webrtc_audio_handler",
+        ":libcuttlefish_webrtc_audio_settings",
+        ":libcuttlefish_webrtc_audio_stream_config",
         ":libcuttlefish_webrtc_ika_stream",
+        ":libcuttlefish_webrtc_pipewire_audio_sink",
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/host/frontend/webrtc/libcommon:audio_source",
+        "//cuttlefish/host/libs/audio_connector",
+        "//cuttlefish/host/libs/config:cuttlefish_config",
         "//cuttlefish/host/libs/config:logging",
         "//cuttlefish/host/libs/screen_connector",
         "@abseil-cpp//absl/log",

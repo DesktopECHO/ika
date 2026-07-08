@@ -1,0 +1,43 @@
+Patch summary:
+Adapt Cuttlefish secure_env remote provisioning to this branch's cppcose API.
+The code still uses Ed25519 keys and EDDSA COSE signatures; this platform tree
+exposes that path as the generic constructCoseSign1 helper rather than the newer
+constructEdDsaCoseSign1 wrapper.
+
+diff --git a/host/commands/secure_env/tpm_remote_provisioning_context.cpp b/host/commands/secure_env/tpm_remote_provisioning_context.cpp
+index dbcb525cb..104d1628e 100644
+--- a/host/commands/secure_env/tpm_remote_provisioning_context.cpp
++++ b/host/commands/secure_env/tpm_remote_provisioning_context.cpp
+@@ -142,9 +142,9 @@ TpmRemoteProvisioningContext::GenerateBcc(bool testMode) const {
+                std::vector<uint8_t>{0x20} /* keyCertSign = 1<<5 */)
+           .canonicalize()
+           .encode();
+-  auto coseSign1 = constructEdDsaCoseSign1(privKey,       /* signing key */
+-                                           cppbor::Map(), /* extra protected */
+-                                           sign1Payload, {} /* AAD */);
++  auto coseSign1 = constructCoseSign1(privKey,       /* signing key */
++                                      cppbor::Map(), /* extra protected */
++                                      sign1Payload, {} /* AAD */);
+   assert(coseSign1);
+ 
+   return {privKey,
+@@ -191,7 +191,7 @@ TpmRemoteProvisioningContext::BuildProtectedDataPayload(
+     bcc = std::move(*clone->asArray());
+   }
+-  auto sign1 = constructEdDsaCoseSign1(devicePrivKey, {} /* extra protected */,
+-                                       macKey, aad);
++  auto sign1 =
++      constructCoseSign1(devicePrivKey, {} /* extra protected */, macKey, aad);
+   if (!sign1) {
+     return sign1.moveMessage();
+   }
+@@ -243,7 +243,7 @@ cppcose::ErrMsgOr<cppbor::Array> TpmRemoteProvisioningContext::BuildCsr(
+       cppbor::Array().add(challenge).add(cppbor::Bstr(csrPayload.encode()));
+   auto signedData =
+-      constructEdDsaCoseSign1(devicePrivKey_, {} /* extra protected */,
+-                              signedDataPayload.encode(), {} /* aad */);
++      constructCoseSign1(devicePrivKey_, {} /* extra protected */,
++                         signedDataPayload.encode(), {} /* aad */);
+ 
+   return cppbor::Array()
+       .add(1 /* version */)

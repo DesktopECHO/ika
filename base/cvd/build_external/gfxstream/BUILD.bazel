@@ -10,4 +10,5 @@ exports_files([
     "PATCH.gfxstream.blob_page_size_runtime.patch",
     "PATCH.gfxstream.linux_udmabuf_creator.patch",
     "PATCH.gfxstream.memfd_udmabuf_seals.patch",
+    "PATCH.gfxstream.opengles-3.2.patch",
 ])

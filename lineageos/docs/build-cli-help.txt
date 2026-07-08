@@ -62,6 +62,13 @@ Environment:
                         Run build-time source, ARM64 host prebuilt/toolchain,
                         userdata, and desktop policy checks before compiling.
                         Default: 1
+  BUILD_VARIANT         Android build variant passed to lunch. Use userdebug
+                        for debug-friendly local builds, or user for
+                        release-style builds. eng is accepted for experiments.
+                        Default: userdebug
+                        user builds keep local ADB access by using Cuttlefish's
+                        guest TCP ADB path with no key authorization and a
+                        loopback-only host proxy.
   STRICT_BUNDLE_VALIDATION
                         Fail the build if package_cvd_bundle has to normalize
                         any etc/cvd_config/*.json preset (empty / unparseable
@@ -103,7 +110,7 @@ Environment:
                         modules skip even the release-metadata/F-Droid index
                         lookup. Default: $HOME/ika-build/microg-prebuilts
   REPO_INSTALL_PATH     Path checked for repo if it is not on PATH.
-                        Default: /usr/local/bin/repo
+                        Default: $HOME/.local/bin/repo
   REPO_SYNC_ATTEMPTS    Top-level repo sync attempts. Default: 9
   REPO_SYNC_RETRY_FETCHES
                         Per-project repo fetch retries. Default: 9

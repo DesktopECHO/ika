@@ -1,0 +1,17 @@
+Patch summary:
+Allow the Cuttlefish guest configuration proto to use protobuf editions without
+changing global protoc behavior. The source proto declares edition = "2023", so
+its generated C++ module must opt in to protoc's editions mode.
+
+diff --git a/host/commands/assemble_cvd/proto/Android.bp b/host/commands/assemble_cvd/proto/Android.bp
+index 7fe84e914..a3a73339d 100644
+--- a/host/commands/assemble_cvd/proto/Android.bp
++++ b/host/commands/assemble_cvd/proto/Android.bp
+@@ -40,6 +40,7 @@ cc_library {
+     proto: {
+         export_proto_headers: true,
+         type: "full",
++        experimental_editions: true,
+     },
+     srcs: ["guest_config.proto"],
+     shared_libs: [

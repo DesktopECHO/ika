@@ -2,46 +2,46 @@
 
 # イカ (Ika, /ee-kah/)
 
-This project originally started as an effort to get [Cuttlefish](https://source.android.com/setup/create/cuttlefish) (Google's Android Virtual Device built on Debian tooling) running on [Fedora Asahi Remix](https://asahilinux.org/), so the project was given the name **ika (イカ)**, the Japanese word for cuttlefish (or squid).
+This project started as an effort to get the [Cuttlefish](https://source.android.com/setup/create/cuttlefish) Android Emulator running on [Fedora Asahi Remix](https://asahilinux.org/).  **ika (イカ)** is the Japanese word for cuttlefish (or squid) and the name stuck, even as it evolved to include x86-64 support.
 
-The repository is a fork of [google/android-cuttlefish](https://github.com/google/android-cuttlefish), adapted into a desktop-oriented ika workflow with RPM and Debian package builds.  [Cuttlefish](https://source.android.com/setup/create/cuttlefish) is a configurable Android Virtual Device (AVD) that runs on Linux x86_64 and aarch64 hosts as well as Google Compute Engine.
+Ika consists of two components:  The Android OS disk image (the device ROM, informally) and a virtual machine player (Cuttlefish) that runs Android on x86-64 or ARM64 (Asahi) Linux hosts.
 
-## Download binaries
+## Binaries
 
-Prebuilt packages from the [latest release](https://github.com/DesktopECHO/ika/releases/latest) (`260629`). Pick the row for your package and the column for your distro and CPU architecture.
+Prebuilt packages for Fedora Linux (.rpm) and Debian/Ubuntu (.deb) are linked below from the [latest release](https://github.com/DesktopECHO/ika/releases/latest) (`260629`). Pick the row for your package and the column for your distro and CPU architecture.
 
-| Package | Fedora x86_64 | Fedora aarch64 | Debian amd64 | Debian arm64 |
+The Mesa packages supplied by Debian 13 and Ubuntu 26.04 are too old for Ika; install the supported Mesa stack from a suitable backport or PPA archive.
+
+On Debian 13 (trixie), enable `trixie-backports` and install the Mesa stack from backports using the [Debian Backports instructions](https://backports.debian.org/Instructions/).
+
+On Ubuntu-family hosts, use the [Kisak Mesa PPA instructions](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa).
+
+| Package | Fedora x86_64 | Fedora ARM64 | Debian x86_64 | Debian ARM64 |
 | --- | --- | --- | --- | --- |
 | **ika-lineageos** (ROM image) | [1.36 GB](https://github.com/DesktopECHO/ika/releases/download/260629/ika-lineageos-260629-1.fc44.x86_64.rpm) | [1.17 GB](https://github.com/DesktopECHO/ika/releases/download/260629/ika-lineageos-260629-1.fc44.aarch64.rpm) | [1.32 GB](https://github.com/DesktopECHO/ika/releases/download/260629/ika-lineageos_260629-1_amd64.deb) | [1.13 GB](https://github.com/DesktopECHO/ika/releases/download/260629/ika-lineageos_260629-1_arm64.deb) |
 | **ika-base** (virtualization app + virtual console) | [139 MB](https://github.com/DesktopECHO/ika/releases/download/260629/ika-base-260629-1.fc44.x86_64.rpm) | [135 MB](https://github.com/DesktopECHO/ika/releases/download/260629/ika-base-260629-1.fc44.aarch64.rpm) | [115 MB](https://github.com/DesktopECHO/ika/releases/download/260629/ika-base_260629-1_amd64.deb) | [100 MB](https://github.com/DesktopECHO/ika/releases/download/260629/ika-base_260629-1_arm64.deb) |
 
-Install both `ika-lineageos` and `ika-base` for a working setup; `ika-base`
-includes the virtual console. On Fedora use `sudo dnf install ./<file>.rpm`; on
-Debian use `sudo apt install ./<file>.deb`. Or build from source with the
-Quick start below.
+## Building from Source
 
-## Quick start
-
-For the normal local workflow, use `ika-build` from the repository root. It
-builds the LineageOS Desktop ROM, builds the host packages for the detected
-distribution family, and installs the primary runtime packages.
+You will need a minimum of 16GB RAM, 300GB storage, and some patience for the build to complete.  `ika-build` handles all the install prequisitres. 
 
 ```bash
-# 1. Clone
+# 1. Clone:
 git clone https://github.com/DesktopECHO/ika.git
 cd ika
 
-# 2. Build and install.
-#    Prepares signing certificates, installs build dependencies, then downloads
-#    LineageOS 23.2 source,
-#    applies the overlay and source patches in lineageos/, builds the
-#    Cuttlefish target for the host arch, and creates RPM or Debian packages.
-#    Incremental runs are much faster.
+# 2. Build:
+#    Prepares signing certificates, installs build dependencies, downloads
+#    LineageOS 23.2 source, applies the overlay and source patches in lineageos,
+#    builds the Cuttlefish target for the host arch, creates RPM or Debian packages
+#    and offers to install them after the build is completed. 
+
 ./ika-build
 
 # 3. Reboot.
 #    Required so group memberships, limits, udev rules, and device permissions
 #    are picked up cleanly. Logging out is not enough.
+
 sudo reboot
 
 # 4. Launch
@@ -125,8 +125,8 @@ By default `ika` uses:
 - the packaged LineageOS tree from `/usr/share/cuttlefish-common/lineageos`
 - instance state under `~/ika`
 - a ~64 GB thin-provisioned ext4 userdata image
+- guest RAM set to about one quarter of host RAM, capped at 32 GB 
 - `gfxstream` GPU acceleration
-- Wi-Fi, Bluetooth, netsim, and UWB disabled unless you override them
 
 `gfxstream` is the preferred GPU mode for the packaged workflow. Use
 `guest_swiftshader` only as a troubleshooting fallback when host GPU
@@ -146,11 +146,12 @@ ika restart --gfxstream_vulkan=off
 ika restart --gfxstream_vulkan=on
 ```
 
-`auto` is the default. On Apple Silicon hosts with 16 KiB pages, or when the
-primary host Vulkan device is llvmpipe, `auto` requests GLES-only gfxstream
-(`gfxstream-gles:gfxstream-composer`). On other hosts, `auto` leaves the normal
-Cuttlefish gfxstream defaults alone, so x86_64 systems with hardware Vulkan keep
-Vulkan enabled.
+`auto` is the default. When the primary host Vulkan device is llvmpipe, `auto`
+requests GLES-only gfxstream (`gfxstream-gles:gfxstream-composer`). On Apple
+Silicon hosts with 16 KiB pages, `auto` requests GLES+Vulkan and routes
+host-visible guest Vulkan memory through the udmabuf-backed path the Apple GPU
+supports. On other hosts, `auto` leaves the normal Cuttlefish gfxstream defaults
+alone, so systems with hardware Vulkan keep Vulkan enabled.
 
 Use `--gfxstream_vulkan=on` to re-enable gfxstream Vulkan for testing, or
 `--gfxstream_vulkan=off` to force GLES-only gfxstream. The same policy can be

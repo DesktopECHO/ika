@@ -4,8 +4,9 @@
 # No other script may call apt/dnf: a package install mid-build would stall
 # a multi-hour unattended build at a sudo password prompt.
 #
-# Source only — defines functions. Requires lib/common.sh (run_as_root,
-# can_run_as_root) with init_root_cmd already called.
+# Source only — defines functions. Requires lib/common.sh. Read-only query
+# helpers do not need root; installer functions expect init_root_cmd to have
+# been called when elevation is required.
 
 case ":$PATH:" in
   *:/usr/sbin:*) ;;
@@ -15,15 +16,17 @@ esac
 # Accept both the distro-agnostic name and the legacy RPM-specific name.
 readonly SKIP_BUILD_DEPENDENCIES="${SKIP_BUILD_DEPENDENCIES:-${SKIP_RPM_BUILD_DEPENDENCIES:-false}}"
 readonly REPO_TOOL_URL="${REPO_TOOL_URL:-https://storage.googleapis.com/git-repo-downloads/repo}"
-readonly REPO_INSTALL_PATH="${REPO_INSTALL_PATH:-/usr/local/bin/repo}"
+readonly REPO_INSTALL_PATH="${REPO_INSTALL_PATH:-${HOME}/.local/bin/repo}"
+readonly BAZEL_INSTALL_PATH="${BAZEL_INSTALL_PATH:-${HOME}/.local/bin/bazel}"
+readonly DEBIAN_MESA_SOURCE_PACKAGE="${DEBIAN_MESA_SOURCE_PACKAGE:-mesa}"
+readonly DEBIAN_MESA_BACKPORTS_SUITE="${DEBIAN_MESA_BACKPORTS_SUITE:-trixie-backports}"
+readonly DEBIAN_MESA_MIN_VERSION="${DEBIAN_MESA_MIN_VERSION:-${TRIXIE_MESA_BACKPORT_MIN_VERSION:-26.1}}"
+readonly DEBIAN_VULKAN_LOADER_COMMIT="${DEBIAN_VULKAN_LOADER_COMMIT:-${TRIXIE_VULKAN_LOADER_COMMIT:-e3a3df62e0b7e9b12dacb626a8d554a47ad9ed2d}}"
+readonly DEBIAN_VULKAN_LOADER_MIN_VERSION="${DEBIAN_VULKAN_LOADER_MIN_VERSION:-${TRIXIE_VULKAN_LOADER_MIN_VERSION:-1.4.341}}"
+readonly DEBIAN_ENABLE_BACKPORTS="${DEBIAN_ENABLE_BACKPORTS:-ask}"
 LINEAGEOS_PRIVILEGED_HELPERS_LOADED=0
 
-function install_rpm_build_dependencies() {
-  echo "Installing RPM build dependencies"
-  run_as_root dnf -y upgrade --refresh
-
-  # Every build dependency for all ika RPMs plus the ROM host tools, installed
-  # in a single dnf transaction: one sudo call, one dependency resolution.
+function rpm_build_dependency_packages() {
   local -a packages=(
     # Core RPM build tooling
     rpm-build rpmdevtools systemd-rpm-macros
@@ -42,9 +45,9 @@ function install_rpm_build_dependencies() {
     curl golang npm
 
     # ika-base scrcpy viewer BuildRequires (Meson C build + scrcpy-server Java build)
-    meson ninja-build java-25-openjdk-devel SDL3-devel libavcodec-free-devel
-    libavformat-free-devel libavutil-free-devel libswresample-free-devel
-    libusb1-devel vulkan-headers libicu-devel
+    meson ninja-build java-25-openjdk-devel SDL3-devel pipewire-devel
+    libavcodec-free-devel libavformat-free-devel libavutil-free-devel
+    libswresample-free-devel libusb1-devel vulkan-headers libicu-devel
 
     # Runtime tools needed during rpmbuild
     rsync pigz
@@ -57,68 +60,13 @@ function install_rpm_build_dependencies() {
     policycoreutils policycoreutils-python-utils tar unzip util-linux zip
   )
 
-  run_as_root dnf -y install --setopt=install_weak_deps=False "${packages[@]}"
+  printf '%s\n' "${packages[@]}"
 }
 
-function ensure_trixie_backports_repository() {
-  if grep -qrE "^[^#]*trixie-backports" \
-       /etc/apt/sources.list \
-       /etc/apt/sources.list.d/ 2>/dev/null; then
-    return 0
-  fi
-
-  echo "Debian 13 (trixie) requires the trixie-backports repository."
-  printf "Add it now? [Y/n] "
-  read -r _reply
-  case "${_reply}" in
-    [nN]*)
-      >&2 echo "Aborted. Add the repository manually and re-run."
-      exit 1
-      ;;
-  esac
-  run_as_root tee /etc/apt/sources.list.d/trixie-backports.list \
-    <<<"deb http://deb.debian.org/debian trixie-backports main contrib non-free" >/dev/null
-  run_as_root env DEBIAN_FRONTEND=noninteractive apt-get update -qq
-}
-
-function install_trixie_testing_vulkan_loader() {
-  local buildutils_dir builder version
-  version="$(dpkg-query -W -f='${Version}' libvulkan1 2>/dev/null || true)"
-  if [[ -n "${version}" ]] && dpkg --compare-versions "${version}" ge 1.4.341; then
-    echo "libvulkan1 ${version} is already 1.4.341 or newer; skipping Debian testing Vulkan build."
-    return 0
-  fi
-
-  buildutils_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-  builder="${buildutils_dir}/vulkan-build-trixie"
-
-  [[ -x "${builder}" ]] || {
-    >&2 echo "Missing executable Vulkan testing build helper: ${builder}"
-    exit 1
-  }
-
-  echo "Build libvulkan from Debian testing..."
-  "${builder}" --yes --install --no-stage
-}
-
-function install_deb_build_dependencies() {
-  local codename
-  codename=$(. /etc/os-release 2>/dev/null && printf '%s' "${VERSION_CODENAME:-}")
-
-  if [[ "${codename}" == "trixie" ]]; then
-    ensure_trixie_backports_repository
-  fi
-
-  echo "Installing Debian build dependencies"
-  run_as_root env DEBIAN_FRONTEND=noninteractive apt-get update -qq
-
-  # All static build dependencies for every ika deb plus the ROM host tools, in
-  # a single apt-get transaction: one sudo call, one dependency resolution.
-  # (The conditional libgcc-<ver>-dev and trixie-backports steps below can't
-  # join it — they depend on runtime detection / a different apt source.)
+function deb_build_dependency_packages() {
   local -a packages=(
     # Core deb build tooling
-    config-package-dev debhelper dh-exec dpkg-dev
+    build-essential config-package-dev debhelper dh-exec dpkg-dev
 
     # cuttlefish-base Build-Depends (Bazel C++ build)
     cmake git libaom-dev libavdevice-dev libclang-dev libfmt-dev libgflags-dev
@@ -134,7 +82,7 @@ function install_deb_build_dependencies() {
 
     # ika-base scrcpy viewer Build-Depends (Meson C build + scrcpy-server Java build)
     default-jdk meson ninja-build libavcodec-dev libavformat-dev libavutil-dev
-    libswresample-dev libsdl3-dev libusb-1.0-0-dev
+    libpipewire-0.3-dev libswresample-dev libsdl3-dev libusb-1.0-0-dev
 
     # LineageOS Desktop ROM host tools + Bazelisk prerequisites — previously
     # installed on demand by lineageos/scripts/lib/host_env.sh and
@@ -144,6 +92,387 @@ function install_deb_build_dependencies() {
     python3 rsync tar unzip util-linux zip
   )
 
+  printf '%s\n' "${packages[@]}"
+}
+
+function deb_mesa_version_packages() {
+  local -a packages=(
+    libegl-mesa0
+    libgbm-dev
+    libgbm1
+    libgl1-mesa-dri
+    libglx-mesa0
+    mesa-common-dev
+    mesa-vulkan-drivers
+    mesa-drm-shim
+  )
+
+  printf '%s\n' "${packages[@]}"
+}
+
+function arch_build_dependency_packages() {
+  local -a packages=(
+    base-devel
+    aom
+    android-tools
+    7zip
+    binutils
+    ccache
+    clang
+    cmake
+    coreutils
+    curl
+    e2fsprogs
+    erofs-utils
+    file
+    ffmpeg
+    findutils
+    fmt
+    gawk
+    gcc
+    gflags
+    git
+    git-lfs
+    google-glog
+    gtest
+    icu
+    imagemagick
+    inetutils
+    jdk-openjdk
+    jsoncpp
+    kmod
+    libcap
+    libdrm
+    libusb
+    libsrtp
+    libx11
+    libxext
+    libxml2
+    lz4
+    mesa
+    meson
+    ninja
+    npm
+    openssl
+    opus
+    pahole
+    perl
+    pigz
+    pkgconf
+    protobuf
+    protobuf-c
+    python
+    go
+    rsync
+    sdl3
+    tar
+    unzip
+    util-linux
+    util-linux-libs
+    virglrenderer
+    vulkan-headers
+    wayland
+    which
+    xz
+    z3
+    zstd
+    zip
+  )
+
+  printf '%s\n' "${packages[@]}"
+}
+
+function deb_package_installed() {
+  local pkg="$1"
+  dpkg-query -W -f='${Status}\n' "$pkg" 2>/dev/null | grep -q 'install ok installed'
+}
+
+function deb_package_version_at_least() {
+  local pkg="$1"
+  local min_version="$2"
+  local version
+
+  version="$(dpkg-query -W -f='${Version}' "$pkg" 2>/dev/null || true)"
+  [[ -n "${version}" ]] && dpkg --compare-versions "${version}" ge "${min_version}"
+}
+
+function debian_codename() {
+  . /etc/os-release 2>/dev/null && printf '%s' "${VERSION_CODENAME:-}"
+}
+
+function debian_is_trixie() {
+  [[ "$(debian_codename)" == "trixie" ]]
+}
+
+function rpm_package_installed() {
+  local pkg="$1"
+  rpm -q --quiet "$pkg" >/dev/null 2>&1 || \
+    rpm -q --quiet --whatprovides "$pkg" >/dev/null 2>&1
+}
+
+function arch_package_installed() {
+  local pkg="$1"
+  pacman -Q --quiet "$pkg" >/dev/null 2>&1
+}
+
+function missing_rpm_build_dependencies() {
+  local pkg
+
+  while read -r pkg; do
+    [[ -n "$pkg" ]] || continue
+    rpm_package_installed "$pkg" || printf '%s\n' "$pkg"
+  done < <(rpm_build_dependency_packages)
+}
+
+function missing_deb_build_dependencies() {
+  local pkg version gcc_ver
+
+  while read -r pkg; do
+    [[ -n "$pkg" ]] || continue
+    deb_package_installed "$pkg" || printf '%s\n' "$pkg"
+  done < <(deb_build_dependency_packages)
+
+  # crtbeginS.o is split from gcc into libgcc-<ver>-dev on Debian trixie+;
+  # the ROM build links host tools against it.
+  if ! compgen -G '/usr/lib/gcc/*/*/crtbeginS.o' >/dev/null 2>&1; then
+    gcc_ver="$(apt-cache pkgnames 2>/dev/null | grep -E '^libgcc-[0-9]+-dev$' | \
+      grep -oE '[0-9]+' | sort -n | tail -1)"
+    if [[ -n "${gcc_ver}" ]]; then
+      printf 'libgcc-%s-dev\n' "$gcc_ver"
+    else
+      printf '%s\n' 'libgcc-<version>-dev'
+    fi
+  fi
+
+  if debian_is_trixie && ! debian_mesa_stack_at_min_version; then
+    printf 'mesa>=%s-from-backports-source\n' "${DEBIAN_MESA_MIN_VERSION}"
+  fi
+
+  version="$(dpkg-query -W -f='${Version}' libvulkan-dev 2>/dev/null || true)"
+  if [[ -z "${version}" ]] || ! dpkg --compare-versions "${version}" ge "${DEBIAN_VULKAN_LOADER_MIN_VERSION}"; then
+    printf 'libvulkan-dev>=%s-from-salsa-%s\n' \
+      "${DEBIAN_VULKAN_LOADER_MIN_VERSION}" \
+      "${DEBIAN_VULKAN_LOADER_COMMIT:0:12}"
+  fi
+}
+
+function missing_arch_build_dependencies() {
+  local pkg
+
+  while read -r pkg; do
+    [[ -n "$pkg" ]] || continue
+    arch_package_installed "$pkg" || printf '%s\n' "$pkg"
+  done < <(arch_build_dependency_packages)
+}
+
+function missing_build_dependencies() {
+  local family="$1"
+
+  case "${family}" in
+    rpm)    missing_rpm_build_dependencies ;;
+    debian) missing_deb_build_dependencies ;;
+    arch)   missing_arch_build_dependencies ;;
+  esac
+}
+
+function build_dependency_packages_need_install() {
+  local family="$1"
+  local -a missing=()
+
+  [[ "${SKIP_BUILD_DEPENDENCIES}" == "true" ]] && return 1
+
+  mapfile -t missing < <(missing_build_dependencies "$family")
+  (( ${#missing[@]} > 0 ))
+}
+
+function repo_tool_available() {
+  command -v repo >/dev/null 2>&1 || [[ -x "$REPO_INSTALL_PATH" ]]
+}
+
+function install_rpm_build_dependencies() {
+  local -a packages=()
+
+  echo "Installing RPM build dependencies"
+  run_as_root dnf -y upgrade --refresh
+
+  # Every build dependency for all ika RPMs plus the ROM host tools, installed
+  # in a single dnf transaction: one sudo call, one dependency resolution.
+  mapfile -t packages < <(rpm_build_dependency_packages)
+  run_as_root dnf -y install --setopt=install_weak_deps=False "${packages[@]}"
+}
+
+function install_debian_salsa_vulkan_loader() {
+  local buildutils_dir builder version
+  version="$(dpkg-query -W -f='${Version}' libvulkan-dev 2>/dev/null || true)"
+  if [[ -n "${version}" ]] && dpkg --compare-versions "${version}" ge "${DEBIAN_VULKAN_LOADER_MIN_VERSION}"; then
+    echo "libvulkan-dev ${version} is already ${DEBIAN_VULKAN_LOADER_MIN_VERSION} or newer; skipping Vulkan loader build."
+    return 0
+  fi
+
+  buildutils_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  builder="${buildutils_dir}/vulkan-build-trixie"
+
+  [[ -x "${builder}" ]] || {
+    >&2 echo "Missing executable Vulkan Salsa build helper: ${builder}"
+    exit 1
+  }
+
+  echo "Build libvulkan from Debian Salsa commit ${DEBIAN_VULKAN_LOADER_COMMIT}..."
+  "${builder}" --yes --install --no-stage --commit "${DEBIAN_VULKAN_LOADER_COMMIT}"
+}
+
+function debian_backports_binary_repository_present() {
+  local suite="$1"
+  local file
+
+  for file in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+    [[ -f "${file}" ]] || continue
+    if grep -Eq "^[[:space:]]*deb[[:space:]].*[[:space:]]${suite}([[:space:]]|$)" "${file}" ||
+       { grep -Eq "^[[:space:]]*Types:[[:space:]]+([^#]*[[:space:]])?deb([[:space:]]|$)" "${file}" &&
+         grep -Eq "^[[:space:]]*Suites:[[:space:]].*(^|[[:space:]])${suite}([[:space:]]|$)" "${file}"; }; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+function debian_backports_source_repository_present() {
+  local suite="$1"
+  local file
+
+  for file in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+    [[ -f "${file}" ]] || continue
+    if grep -Eq "^[[:space:]]*deb-src[[:space:]].*[[:space:]]${suite}([[:space:]]|$)" "${file}" ||
+       { grep -Eq "^[[:space:]]*Types:[[:space:]]+([^#]*[[:space:]])?deb-src([[:space:]]|$)" "${file}" &&
+         grep -Eq "^[[:space:]]*Suites:[[:space:]].*(^|[[:space:]])${suite}([[:space:]]|$)" "${file}"; }; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+function ensure_debian_backports_repository() {
+  local suite="$1"
+  local list_file="/etc/apt/sources.list.d/${suite}.list"
+  local -a lines=()
+  local reply
+
+  debian_backports_binary_repository_present "${suite}" || \
+    lines+=("deb http://deb.debian.org/debian ${suite} main contrib non-free non-free-firmware")
+  debian_backports_source_repository_present "${suite}" || \
+    lines+=("deb-src http://deb.debian.org/debian ${suite} main contrib non-free non-free-firmware")
+
+  if [[ "${#lines[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  case "${DEBIAN_ENABLE_BACKPORTS}" in
+    1|true|yes|always)
+      reply="y"
+      ;;
+    0|false|no|never)
+      echo "Skipping ${suite}; DEBIAN_ENABLE_BACKPORTS=${DEBIAN_ENABLE_BACKPORTS}."
+      return 1
+      ;;
+    ask)
+      if [[ ! -t 0 ]]; then
+        echo "Skipping ${suite}; no interactive terminal is available to ask about adding it."
+        return 1
+      fi
+
+      echo "Debian ${suite} source is needed to build Mesa ${DEBIAN_MESA_MIN_VERSION}+."
+      printf "Add missing ${suite} binary/source repository entries? [Y/n] "
+      read -r reply
+      ;;
+    *)
+      >&2 echo "Unknown DEBIAN_ENABLE_BACKPORTS=${DEBIAN_ENABLE_BACKPORTS}; expected ask, true, or false."
+      return 1
+      ;;
+  esac
+
+  case "${reply}" in
+    [nN]*)
+      echo "Skipping ${suite}; cannot build Mesa from the backports source repository."
+      return 1
+      ;;
+  esac
+
+  printf '%s\n' "${lines[@]}" | run_as_root tee "${list_file}" >/dev/null
+  if ! run_as_root env DEBIAN_FRONTEND=noninteractive apt-get update -qq; then
+    echo "Unable to use ${suite}; removing ${list_file}."
+    run_as_root rm -f "${list_file}"
+    run_as_root env DEBIAN_FRONTEND=noninteractive apt-get update -qq || true
+    return 1
+  fi
+}
+
+function ensure_debian_backports_for_mesa_source_build() {
+  local codename
+
+  codename="$(debian_codename)"
+  if [[ "${codename}" != "trixie" ]]; then
+    >&2 echo "Mesa backports source build is only supported on Debian trixie. Detected VERSION_CODENAME=${codename:-unknown}."
+    return 1
+  fi
+
+  ensure_debian_backports_repository "${DEBIAN_MESA_BACKPORTS_SUITE}"
+}
+
+function debian_mesa_stack_at_min_version() {
+  local pkg
+
+  while read -r pkg; do
+    [[ -n "$pkg" ]] || continue
+    deb_package_version_at_least "$pkg" "${DEBIAN_MESA_MIN_VERSION}" || return 1
+  done < <(deb_mesa_version_packages)
+
+  return 0
+}
+
+function install_debian_mesa() {
+  local buildutils_dir builder
+
+  if debian_mesa_stack_at_min_version; then
+    echo "Mesa stack is already ${DEBIAN_MESA_MIN_VERSION} or newer; skipping Mesa build."
+    return 0
+  fi
+
+  if ! ensure_debian_backports_for_mesa_source_build; then
+    >&2 echo "Mesa ${DEBIAN_MESA_MIN_VERSION}+ must be built from the Debian backports source repository."
+    exit 1
+  fi
+
+  buildutils_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  builder="${buildutils_dir}/mesa-build-trixie"
+
+  [[ -x "${builder}" ]] || {
+    >&2 echo "Missing executable Mesa backports source build helper: ${builder}"
+    exit 1
+  }
+
+  echo "Build Mesa ${DEBIAN_MESA_MIN_VERSION} from Debian backports source..."
+  "${builder}" \
+    --yes \
+    --install \
+    --no-stage \
+    --source-suite "${DEBIAN_MESA_BACKPORTS_SUITE}" \
+    --source-package "${DEBIAN_MESA_SOURCE_PACKAGE}" \
+    --min-version "${DEBIAN_MESA_MIN_VERSION}"
+}
+
+function install_deb_build_dependencies() {
+  local -a packages=()
+
+  echo "Installing Debian build dependencies"
+  run_as_root env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+
+  # All static build dependencies for every ika deb plus the ROM host tools, in
+  # a single apt-get transaction: one sudo call, one dependency resolution.
+  # (The conditional libgcc-<ver>-dev and Mesa/Vulkan source-package builds
+  # below can't join it — they depend on runtime detection.)
+  mapfile -t packages < <(deb_build_dependency_packages)
   run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
 
   # crtbeginS.o is split from gcc into libgcc-<ver>-dev on Debian trixie+;
@@ -157,95 +486,25 @@ function install_deb_build_dependencies() {
     fi
   fi
 
-  # Debian 13: upgrade Mesa from backports, then install Vulkan loader/dev
-  # packages built from testing source. Trixie base has vulkan_raii.hpp v1.4.309
-  # which is ABI-incompatible with the v1.4.341 headers the Bazel build fetches
-  # from KhronosGroup/Vulkan-Headers.
-  if [[ "${codename}" == "trixie" ]]; then
-    echo "Upgrading Mesa stack from trixie-backports..."
-    run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -t trixie-backports -y --no-install-recommends \
-      libegl1 \
-      libegl-mesa0 \
-      libgl1-mesa-dri \
-      libgles2 \
-      libglx-mesa0 \
-      mesa-common-dev \
-      mesa-vulkan-drivers \
-      mesa-drm-shim \
-      mesa-utils-bin
-    install_trixie_testing_vulkan_loader
+  # Build Vulkan loader from the pinned Debian Salsa packaging commit whenever
+  # libvulkan-dev is older than required, then build Mesa from trixie-backports
+  # source if the installed stack is still older than required. Mesa binaries are
+  # not installed from backports here.
+  # Debian trixie has vulkan_raii.hpp v1.4.309 which is ABI-incompatible with the
+  # v1.4.341 headers the Bazel build fetches from KhronosGroup/Vulkan-Headers.
+  install_debian_salsa_vulkan_loader
+  if debian_is_trixie; then
+    install_debian_mesa
   fi
 }
 
 function install_arch_build_dependencies() {
+  local -a packages=()
+
   echo "Installing Arch Linux build dependencies"
 
-  run_as_root pacman -Syu --needed --noconfirm \
-    base-devel \
-    aom \
-    android-tools \
-    7zip \
-    binutils \
-    ccache \
-    clang \
-    cmake \
-    coreutils \
-    curl \
-    e2fsprogs \
-    erofs-utils \
-    file \
-    ffmpeg \
-    findutils \
-    fmt \
-    gawk \
-    gcc \
-    gflags \
-    git \
-    git-lfs \
-    google-glog \
-    gtest \
-    icu \
-    imagemagick \
-    inetutils \
-    jdk-openjdk \
-    jsoncpp \
-    kmod \
-    libcap \
-    libdrm \
-    libusb \
-    libsrtp \
-    libx11 \
-    libxext \
-    libxml2 \
-    lz4 \
-    mesa \
-    meson \
-    ninja \
-    npm \
-    openssl \
-    opus \
-    pahole \
-    perl \
-    pigz \
-    pkgconf \
-    protobuf \
-    protobuf-c \
-    python \
-    go \
-    rsync \
-    sdl3 \
-    tar \
-    unzip \
-    util-linux \
-    util-linux-libs \
-    virglrenderer \
-    vulkan-headers \
-    wayland \
-    which \
-    xz \
-    z3 \
-    zstd \
-    zip
+  mapfile -t packages < <(arch_build_dependency_packages)
+  run_as_root pacman -Syu --needed --noconfirm "${packages[@]}"
 
   if ! pacman -T xxd >/dev/null 2>&1; then
     run_as_root pacman -S --needed --noconfirm tinyxxd
@@ -254,14 +513,23 @@ function install_arch_build_dependencies() {
 
 function install_build_dependencies() {
   local family="$1"
+  local -a missing=()
 
   if [[ "${SKIP_BUILD_DEPENDENCIES}" == "true" ]]; then
     echo "Skipping build dependency installation (SKIP_BUILD_DEPENDENCIES=true)"
     return
   fi
 
+  mapfile -t missing < <(missing_build_dependencies "$family")
+  if (( ${#missing[@]} == 0 )); then
+    echo "Build dependency packages are already installed; skipping distro package install."
+    install_repo_if_missing
+    return
+  fi
+
   if ! can_run_as_root; then
     >&2 echo "Cannot install build dependencies without root privileges."
+    >&2 echo "Missing package(s): ${missing[*]}"
     >&2 echo "Run in an interactive terminal with sudo access, or set SKIP_BUILD_DEPENDENCIES=true if dependencies are already installed."
     exit 1
   fi
@@ -272,24 +540,25 @@ function install_build_dependencies() {
     arch)   install_arch_build_dependencies ;;
   esac
 
+  mapfile -t missing < <(missing_build_dependencies "$family")
+  if (( ${#missing[@]} > 0 )); then
+    >&2 echo "Build dependency installation completed, but package(s) are still missing: ${missing[*]}"
+    exit 1
+  fi
+
   install_repo_if_missing
 }
 
 # Bazel is not packaged by the distros we support; install it via Bazelisk
-# when missing. Runs as root because the installer writes /usr/local/bin.
+# into the user's local bin directory when missing.
 function install_bazel_if_missing() {
   local installer="$1"
 
-  if command -v bazel >/dev/null 2>&1; then
+  if [[ -x "$BAZEL_INSTALL_PATH" ]]; then
     return 0
   fi
 
-  if ! can_run_as_root; then
-    >&2 echo "Bazel is not installed and cannot be installed without root privileges."
-    >&2 echo "Install bazel manually or run in an interactive terminal with sudo access."
-    exit 1
-  fi
-  run_as_root "${installer}"
+  env BAZEL_INSTALL_PATH="$BAZEL_INSTALL_PATH" "${installer}"
 }
 
 function load_lineageos_privileged_helpers() {
@@ -363,18 +632,12 @@ function cleanup_lineageos_privileged_host() {
 }
 
 # repo is distributed as a standalone script. Install it during dependency
-# setup so the ROM build never has to sudo in the middle of source sync setup.
+# setup so the ROM build can sync sources without requiring a system install.
 function install_repo_if_missing() {
   local tmp_repo
 
-  if command -v repo >/dev/null 2>&1 || [[ -x "$REPO_INSTALL_PATH" ]]; then
+  if [[ -x "$REPO_INSTALL_PATH" ]]; then
     return 0
-  fi
-
-  if ! can_run_as_root; then
-    >&2 echo "repo is not installed and cannot be installed without root privileges."
-    >&2 echo "Install repo manually or run in an interactive terminal with sudo access."
-    exit 1
   fi
 
   command -v curl >/dev/null 2>&1 || {
@@ -387,7 +650,8 @@ function install_repo_if_missing() {
     rm -f "$tmp_repo"
     exit 1
   fi
-  if ! run_as_root install -m 0755 "$tmp_repo" "$REPO_INSTALL_PATH"; then
+  mkdir -p "$(dirname "$REPO_INSTALL_PATH")"
+  if ! install -m 0755 "$tmp_repo" "$REPO_INSTALL_PATH"; then
     rm -f "$tmp_repo"
     exit 1
   fi

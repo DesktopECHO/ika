@@ -32,7 +32,7 @@ guest*. Almost the entire story is about that second thing.
 The host — an M1 Pro (`apple,j316s` / `t6000`) on Asahi Fedora
 with **16 KiB memory pages** — exposes:
 
-- **`Apple M1 Pro (G13S C0)`**, driver `DRIVER_ID_MESA_HONEYKRISP`, Mesa 26.1.3,
+- **`Apple M1 Pro (G13S C0)`**, driver `DRIVER_ID_MESA_HONEYKRISP`,
   **conformance version 1.4.0.0** — a real, conformant hardware Vulkan driver, and
   the *primary* device the loader returns (llvmpipe is only the fallback).
 - All the extensions a remoting renderer needs to share images:
@@ -202,14 +202,15 @@ its own ways of producing black surfaces, fixed in `external-mesa3d.patch`:
   does), a guest image query must stay on the host pass-through path. The original
   code fell into a linear-emulation fallback that stripped `COLOR_ATTACHMENT` /
   `INPUT_ATTACHMENT` usage — which is exactly how a render target ends up unable to
-  be rendered to, i.e. black.
+  be rendered to, i.e. black. This is carried in `external-mesa3d.patch`.
 - **AHardwareBuffer layout on sync2 barriers.** Android doesn't pass the current
   `VkImageLayout` for imported AHBs. On a queue-family ownership transfer with
   `oldLayout == UNDEFINED`, the contents are discarded. ResourceTracker already
-  worked around this for the legacy barrier path; the patch extends it to the
-  modern `vkCmdPipelineBarrier2` / `vkCmdPipelineBarrier2KHR` path that ANGLE
-  actually uses (other sync2 entry points, e.g. `vkCmdSetEvent2`, aren't
-  touched by this patch).
+  worked around this for the legacy barrier path; the patch extends it to every
+  modern sync2 entry point that carries a `VkDependencyInfo` with image
+  barriers -- `vkCmdPipelineBarrier2`/`KHR` (the path ANGLE actually uses),
+  plus `vkCmdSetEvent2`/`KHR` and `vkCmdWaitEvents2`/`KHR` for native Vulkan
+  apps that synchronize with events instead of barriers.
 - **Extension exposure** (`1f93451`). Advertise the gfxstream Vulkan extensions
   whose backing feature structs and encoder paths already exist — 16-bit storage,
   `maintenance5`, host image copy, KHR vertex-attribute-divisor,
@@ -259,7 +260,6 @@ Linux GPU host. Most of the effort was convincing four codebases of that one fac
   `.disable_vulkano()` so the gate — not a hardcoded flag — decides.
 - The gfxstream patches (`getpagesize()`, memfd seals, Linux UdmabufCreator) are
   inert or standard on x86-64 and safe to keep global.
-
 ---
 
 ## Change inventory

@@ -1,0 +1,139 @@
+Patch summary:
+Teach the Goldfish sensors transport interface about split CONTROL and DATA
+message paths so Cuttlefish's separate sensors vconsoles can compile and route
+traffic correctly, while Ranchu/qemud keeps using its existing single fd.
+
+diff --git a/hals/sensors/entry.cpp b/hals/sensors/entry.cpp
+index 170f3fc2..f9fd2a58 100644
+--- a/hals/sensors/entry.cpp
++++ b/hals/sensors/entry.cpp
+@@ -28,11 +28,11 @@ class QemudSensorsTransport : public goldfish::SensorsTransport {
+     QemudSensorsTransport()
+         : m_qemuSensorsFd(qemud_channel_open("sensors")) {}
+ 
+-    int Send(const void* msg, int size) override {
++    int Send(goldfish::SensorsMessageType, const void* msg, int size) override {
+         return qemud_channel_send(m_qemuSensorsFd.get(), msg, size);
+     }
+ 
+-    int Receive(void* msg, int maxsize) override {
++    int Receive(goldfish::SensorsMessageType, void* msg, int maxsize) override {
+         return qemud_channel_recv(m_qemuSensorsFd.get(), msg, maxsize);
+     }
+ 
+@@ -40,7 +40,7 @@ class QemudSensorsTransport : public goldfish::SensorsTransport {
+         return m_qemuSensorsFd.ok();
+     }
+ 
+-    int Fd() const override {
++    int Fd(goldfish::SensorsMessageType) const override {
+         return m_qemuSensorsFd.get();
+     }
+ 
+diff --git a/hals/sensors/include/multihal_sensors_transport.h b/hals/sensors/include/multihal_sensors_transport.h
+index d5de1501..35f3f52f 100644
+--- a/hals/sensors/include/multihal_sensors_transport.h
++++ b/hals/sensors/include/multihal_sensors_transport.h
+@@ -18,12 +18,17 @@
+ 
+ namespace goldfish {
+ 
++enum class SensorsMessageType {
++    CONTROL,
++    DATA,
++};
++
+ class SensorsTransport {
+  public:
+-    virtual int Send(const void* msg, int size) = 0;
+-    virtual int Receive(void* msg, int maxsize) = 0;
++    virtual int Send(SensorsMessageType type, const void* msg, int size) = 0;
++    virtual int Receive(SensorsMessageType type, void* msg, int maxsize) = 0;
+     virtual bool Ok() const = 0;
+-    virtual int Fd() const = 0;
++    virtual int Fd(SensorsMessageType type) const = 0;
+     virtual const char* Name() const = 0;
+ 
+     virtual ~SensorsTransport() = default;
+diff --git a/hals/sensors/multihal_sensors.cpp b/hals/sensors/multihal_sensors.cpp
+index 2d553cc3..0cca2c00 100644
+--- a/hals/sensors/multihal_sensors.cpp
++++ b/hals/sensors/multihal_sensors.cpp
+@@ -32,10 +32,10 @@ namespace {
+ constexpr int64_t kMaxSamplingPeriodNs = 1000000000;
+ 
+ struct SensorsTransportStub : public SensorsTransport {
+-    int Send(const void*, int) override { return -1; }
+-    int Receive(void*, int) override { return -1; }
++    int Send(SensorsMessageType, const void*, int) override { return -1; }
++    int Receive(SensorsMessageType, void*, int) override { return -1; }
+     bool Ok() const override { return false; }
+-    int Fd() const override { return -1; }
++    int Fd(SensorsMessageType) const override { return -1; }
+     const char* Name() const override { return "stub"; }
+ };
+ 
+@@ -66,11 +66,12 @@ MultihalSensors::MultihalSensors(SensorsTransportFactory stf)
+         using namespace std::literals;
+         const std::string_view kListSensorsCmd = "list-sensors"sv;
+ 
+-        LOG_ALWAYS_FATAL_IF(st->Send(kListSensorsCmd.data(), kListSensorsCmd.size()) < 0,
++        LOG_ALWAYS_FATAL_IF(st->Send(SensorsMessageType::CONTROL, kListSensorsCmd.data(),
++                                     kListSensorsCmd.size()) < 0,
+                             "%s:%d: send for %s failed", __func__, __LINE__, st->Name());
+ 
+         char buffer[64];
+-        const int len = st->Receive(buffer, sizeof(buffer) - 1);
++        const int len = st->Receive(SensorsMessageType::CONTROL, buffer, sizeof(buffer) - 1);
+         LOG_ALWAYS_FATAL_IF(len < 0, "%s:%d: receive for %s failed", __func__, __LINE__,
+                             st->Name());
+ 
+@@ -437,7 +438,7 @@ void MultihalSensors::qemuSensorListenerThread() {
+             m_sensorsTransport = st.get();
+         }
+ 
+-        const bool cont = qemuSensorListenerThreadImpl(st->Fd());
++        const bool cont = qemuSensorListenerThreadImpl(st->Fd(SensorsMessageType::DATA));
+ 
+         {
+             std::unique_lock<std::mutex> lock(m_mtx);
+diff --git a/hals/sensors/multihal_sensors_qemu.cpp b/hals/sensors/multihal_sensors_qemu.cpp
+index e30223b0..f2aa0ccc 100644
+--- a/hals/sensors/multihal_sensors_qemu.cpp
++++ b/hals/sensors/multihal_sensors_qemu.cpp
+@@ -62,7 +62,7 @@ bool MultihalSensors::setSensorsReportingImpl(SensorsTransport& st,
+                        getQemuSensorNameByHandle(sensorHandle),
+                        (enabled ? 1 : 0));
+ 
+-    if (st.Send(buffer, len) < 0) {
++    if (st.Send(SensorsMessageType::CONTROL, buffer, len) < 0) {
+         ALOGE("%s:%d: send for %s failed", __func__, __LINE__, st.Name());
+         return false;
+     } else {
+@@ -87,7 +87,7 @@ bool MultihalSensors::setAllSensorsReporting(SensorsTransport& st,
+ bool MultihalSensors::setSensorsGuestTime(SensorsTransport& st, const int64_t value) {
+     char buffer[64];
+     int len = snprintf(buffer, sizeof(buffer), "time:%" PRId64, value);
+-    if (st.Send(buffer, len) < 0) {
++    if (st.Send(SensorsMessageType::CONTROL, buffer, len) < 0) {
+         ALOGE("%s:%d: send for %s failed", __func__, __LINE__, st.Name());
+         return false;
+     } else {
+@@ -99,7 +99,7 @@ bool MultihalSensors::setSensorsUpdateIntervalMs(SensorsTransport& st,
+                                                  const uint32_t intervalMs) {
+     char buffer[64];
+     const int len = snprintf(buffer, sizeof(buffer), "set-delay:%u", intervalMs);
+-    if (st.Send(buffer, len) < 0) {
++    if (st.Send(SensorsMessageType::CONTROL, buffer, len) < 0) {
+         ALOGE("%s:%d: send for %s failed", __func__, __LINE__, st.Name());
+         return false;
+     } else {
+@@ -114,7 +114,7 @@ double MultihalSensors::randomError(float lo, float hi) {
+ 
+ void MultihalSensors::parseQemuSensorEventLocked(QemuSensorsProtocolState* state) {
+     char buf[256];
+-    const int len = m_sensorsTransport->Receive(buf, sizeof(buf) - 1);
++    const int len = m_sensorsTransport->Receive(SensorsMessageType::DATA, buf, sizeof(buf) - 1);
+     if (len < 0) {
+         ALOGE("%s:%d: receive for %s failed", __func__, __LINE__, m_sensorsTransport->Name());
+     }

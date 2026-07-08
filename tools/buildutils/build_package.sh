@@ -99,6 +99,23 @@ function should_exclude_spec() {
   return 1
 }
 
+function remove_generated_paths() {
+  local path
+
+  for path in "$@"; do
+    [[ -e "${path}" || -L "${path}" ]] || continue
+    if rm -rf -- "${path}"; then
+      continue
+    fi
+
+    # Bazel external archives can contain read-only files, for example the
+    # rules_python toolchain payload. Make generated trees writable before the
+    # second removal attempt so stale staging dirs do not break package builds.
+    chmod -R u+rwX -- "${path}" 2>/dev/null || true
+    rm -rf -- "${path}"
+  done
+}
+
 function spec_supports_host_arch() {
   local spec_path="$1"
   local exclusive_arches
@@ -142,7 +159,7 @@ function source_tree_exclude_paths() {
     .git .jj .cache .ccache out rpmbuild archbuild \
     build-scrcpy-server android-sdk-cache \
     lineageos/src toolchain \
-    base/cvd/bazel-out 'base/cvd/bazel-*' 'bazel-*'
+    base/cvd/.bazel_output_base base/cvd/bazel-out 'base/cvd/bazel-*' 'bazel-*'
 
   if [[ "${DISTRO_FAMILY:-}" == "rpm" ]]; then
     # RPM ships the ROM through cuttlefish-lineageos.spec's own Source1 tarball
@@ -254,7 +271,7 @@ function build_tree_manifest() {
     # Cache key embedded as the manifest's first line. Bump it whenever the
     # record format or the exclude set changes in a way that affects tarball
     # contents, to invalidate any tarball cached by an older run.
-    printf 'manifest-cache-version\t10\n'
+    printf 'manifest-cache-version\t11\n'
 
     cd "${REPO_DIR}"
     if [[ -n "${prune_name}" ]]; then
@@ -390,7 +407,7 @@ function refresh_source_tarball_if_needed() {
   fi
 
   echo "Source changed; staging and compressing the source tarball (this can take a few minutes)..."
-  rm -rf "${SOURCE_STAGING_DIR}" "${SOURCE_TARBALL}"
+  remove_generated_paths "${SOURCE_STAGING_DIR}" "${SOURCE_TARBALL}"
   mkdir -p "${SOURCE_STAGING_DIR}"
 
   local -a rsync_excludes
@@ -404,7 +421,7 @@ function refresh_source_tarball_if_needed() {
   tar --sparse -cf - -C "${PKG_SOURCES_DIR}" "${TAR_BASENAME}" | pigz >"${tmp_source_tarball}"
   mv "${tmp_source_tarball}" "${SOURCE_TARBALL}"
   mv "${tmp_manifest}" "${SOURCE_MANIFEST}"
-  rm -rf "${SOURCE_STAGING_DIR}"
+  remove_generated_paths "${SOURCE_STAGING_DIR}"
 }
 
 # Stage the per-arch LineageOS ROM bundle into its own tarball, consumed only by
@@ -451,7 +468,7 @@ function cleanup_build_workdirs() {
   local workdir
   for workdir in "${build_workdirs[@]}"; do
     [[ -d "${workdir}" ]] || continue
-    rm -rf "${workdir}" || true
+    remove_generated_paths "${workdir}" || true
   done
 }
 
@@ -466,7 +483,7 @@ function rpm_spec_workdir() {
   # Keep the rpmbuild path stable so Bazel's output_base, which is derived from
   # the workspace path, is reused across RPM package builds. The extracted
   # source/buildroot are still cleaned for each rpmbuild invocation.
-  rm -rf "${workdir}/BUILD" "${workdir}/BUILDROOT"
+  remove_generated_paths "${workdir}/BUILD" "${workdir}/BUILDROOT"
   mkdir -p "${workdir}"
   printf '%s\n' "${workdir}"
 }
@@ -482,7 +499,7 @@ function arch_pkg_workdir() {
   # Keep makepkg's workspace path stable for the same reason as RPM: Bazel's
   # output_base is derived from the workspace path. Clean the transient package
   # workspace each invocation while reusing the same absolute path.
-  rm -rf "${workdir}"
+  remove_generated_paths "${workdir}"
   mkdir -p "${workdir}"
   printf '%s\n' "${workdir}"
 }
@@ -605,10 +622,6 @@ elif [[ "${DISTRO_FAMILY}" == "debian" ]]; then
     exit 1
   fi
 
-  # Prepend /usr/local/bin so Bazelisk installed there is found before any
-  # system bazel package.
-  export PATH="/usr/local/bin:${PATH}"
-
   echo "Building Debian packages from ${INPUT_PATH_ABS}"
   (
     cd "${INPUT_PATH_ABS}"
@@ -645,10 +658,6 @@ elif [[ "${DISTRO_FAMILY}" == "arch" ]]; then
     "${PKG_SOURCES_DIR}"
 
   refresh_source_tarball_if_needed
-
-  # Prepend /usr/local/bin so Bazelisk installed there is found before any
-  # system bazel package.
-  export PATH="/usr/local/bin:${PATH}"
 
   pkg_workdir="$(arch_pkg_workdir "${INPUT_PATH_ABS}")"
   build_workdirs+=("${pkg_workdir}")

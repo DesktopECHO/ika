@@ -12,6 +12,52 @@
 
   <remove-project name="platform/external/vulkan-headers" />
 
+  <!-- Keep the graphics and VM stack on one verified snapshot. Mesa 25.3 plus
+       the external-mesa3d patch is the production guest Vulkan baseline: it
+       renders Chromium/ANGLE correctly through gfxstream and the Apple GPU
+       while retaining the udmabuf zero-copy path. Verified on Apple Silicon
+       on 2026-07-12. Do not move any graphics pin without a boot, vulkaninfo,
+       and Chromium/ANGLE screenshot verification pass. -->
+  <extend-project
+      name="platform/external/mesa3d"
+      path="external/mesa3d"
+      revision="d4b6f1eba289310b16ee77bedb3c1cf467b6b6fd" />
+
+  <extend-project
+      name="platform/external/minigbm"
+      path="external/minigbm"
+      revision="b7c93249f685222a524c51403719493cc114ff5d" />
+
+  <extend-project
+      name="device/google/cuttlefish"
+      path="device/google/cuttlefish"
+      revision="283645aacf6cdb56cc31a9362f54d412dbc132a1" />
+
+  <extend-project
+      name="device/google/cuttlefish_vmm"
+      path="device/google/cuttlefish_vmm"
+      revision="360473222a8700b6a935054b0c882cfbc2ba5701" />
+
+  <extend-project
+      name="device/google/cuttlefish_prebuilts"
+      path="device/google/cuttlefish_prebuilts"
+      revision="36f427b7c46682cfcdb2e61eee6893acbfb2a606" />
+
+  <extend-project
+      name="platform/external/crosvm"
+      path="external/crosvm"
+      revision="c7dd8d6950912fa5e6fde7ec2d1616e0ddc090f8" />
+
+  <extend-project
+      name="platform/hardware/google/gfxstream"
+      path="hardware/google/gfxstream"
+      revision="b46f0d4b4545def09bdf30651d4bf848b2ba0c34" />
+
+  <extend-project
+      name="platform/external/rust/rutabaga_gfx"
+      path="external/rust/rutabaga_gfx"
+      revision="1f181b0b3e4b821459f21fd9025cd4c408c4f9ec" />
+
   <project
       path="external/vulkan-headers"
       name="KhronosGroup/Vulkan-Headers"

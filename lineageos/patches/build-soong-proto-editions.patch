@@ -1,0 +1,24 @@
+diff --git a/android/proto.go b/android/proto.go
+index a38eb473d..a5c6e1e2f 100644
+--- a/android/proto.go
++++ b/android/proto.go
+@@ -74,6 +74,10 @@ func GetProtoFlags(ctx ModuleContext, p *ProtoProperties) ProtoFlags {
+ 		flags = append(flags, JoinWithPrefix(rootProtoIncludeDirs.Strings(), "-I"))
+ 	}
+ 
++	if proptools.Bool(p.Proto.Experimental_editions) {
++		flags = append(flags, "--experimental_editions")
++	}
++
+ 	ctx.VisitDirectDepsProxyWithTag(ProtoPluginDepTag, func(dep ModuleProxy) {
+ 		if h, ok := OtherModuleProvider(ctx, dep, HostToolProviderInfoProvider); !ok || !h.HostToolPath.Valid() {
+ 			ctx.PropertyErrorf("proto.plugin", "module %q is not a host tool provider",
+@@ -123,5 +127,8 @@ type ProtoProperties struct {
+ 		// false in the future.
+ 		Canonical_path_from_root *bool
++
++		// Enables protoc support for editioned .proto files.
++		Experimental_editions *bool
+ 	} `android:"arch_variant"`
+ }
+ 

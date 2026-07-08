@@ -12,7 +12,9 @@ The lunch combos registered by `AndroidProducts.mk`:
 
 ```bash
 lunch lineage_desktop_cf_arm64_pgagnostic-trunk_staging-userdebug
+lunch lineage_desktop_cf_arm64_pgagnostic-trunk_staging-user
 lunch lineage_desktop_cf_x86_64-trunk_staging-userdebug
+lunch lineage_desktop_cf_x86_64-trunk_staging-user
 ```
 
 ## Source Layout
@@ -97,6 +99,21 @@ cd ika
 This will build the ROM automatically for the running CPU architecture.
 For x86-64 hosts, append `all` to the command to build both ARM64 and x86-64 release bundles.
 
+The build script defaults to `BUILD_VARIANT=userdebug` so local builds keep
+debug-friendly behavior such as `adb root`. For release-style images, pass
+`BUILD_VARIANT=user`:
+
+```bash
+BUILD_VARIANT=user ./lineageos/scripts/build_lineageos_desktop.sh x86_64
+```
+
+`eng` is accepted for experiments, but release bundles should use `user` and the
+normal signing flow. `WITH_ADB_INSECURE` is only enabled for `userdebug` builds;
+`scrcpy` does not require root or insecure ADB. Cuttlefish keeps release-style
+`user` builds reachable by enabling guest TCP ADB on port `5555`, disabling ADB
+key authorization with `ro.adb.secure=0`, and exposing the host ADB proxy only on
+`127.0.0.1:6520` for the first instance.
+
 The resulting `lineageos-arm64/` and/or `lineageos-x86_64/` directories at the ika
 repo root will be picked up by the `ika-lineageos` package in the second phase.
 
@@ -126,7 +143,7 @@ generates any missing APK/APEX keys. `STRICT_APEX_SIGNING=1` and
 debugging.
 
 If `repo` is not installed, `./ika-build` downloads it during dependency setup
-and installs it to `/usr/local/bin/repo`. Missing host tools such as `git`,
+and installs it to `$HOME/.local/bin/repo`. Missing host tools such as `git`,
 `git-lfs`, `python3`, `rsync`, `curl`, and `tar` are a hard error; `./ika-build`
 installs them with the rest of the build dependencies
 (`tools/buildutils/lib/dependencies.sh`).
@@ -173,9 +190,10 @@ Useful environment overrides:
 ```text
 WORKSPACE=/path/to/android/source
 OUTPUT_DIR=/path/to/final/images    # default: ika repo root
+BUILD_VARIANT=userdebug             # userdebug, user, or eng
 JOBS=16
 LINEAGE_BRANCH=lineage-23.2
-REPO_INSTALL_PATH=/usr/local/bin/repo
+REPO_INSTALL_PATH=$HOME/.local/bin/repo
 REPO_CLONE_FILTER=blob:none     # empty uses full clones
 REPO_SYNC_JOBS=4                # also used as partial-clone network jobs
 REPO_SYNC_CHECKOUT_JOBS=4

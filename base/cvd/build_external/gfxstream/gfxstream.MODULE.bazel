@@ -11,5 +11,6 @@ git_repository(
         "@//build_external/gfxstream:PATCH.gfxstream.blob_page_size_runtime.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.linux_udmabuf_creator.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.memfd_udmabuf_seals.patch",
+        "@//build_external/gfxstream:PATCH.gfxstream.opengles-3.2.patch",
     ],
 )

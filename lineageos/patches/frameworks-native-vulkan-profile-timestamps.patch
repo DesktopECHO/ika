@@ -1,0 +1,23 @@
+Patch summary:
+Allow Ika/Cuttlefish products to expose Android Vulkan display timing when the
+product explicitly opts in. The Vulkan loader implements VK_GOOGLE_display_timing
+through its swapchain layer, but it only advertises the extension when
+service.sf.present_timestamp is true; keep the default HWC reliability policy
+unchanged and add a product-gated override for profile-compatible desktops.
+
+diff --git a/services/surfaceflinger/SurfaceFlinger.cpp b/services/surfaceflinger/SurfaceFlinger.cpp
+index 0ab1a9b812..f0c1b00cdc 100644
+--- a/services/surfaceflinger/SurfaceFlinger.cpp
++++ b/services/surfaceflinger/SurfaceFlinger.cpp
+@@ -1121,7 +1121,10 @@ void SurfaceFlinger::init() FTL_FAKE_GUARD(kMainThreadContext) {
+ // `property_service`, which may be delayed by slow operations like `mount_all --late` in
+ // the `init` process. See b/34499826 and b/63844978.
+ void SurfaceFlinger::initBootProperties() {
+-    property_set("service.sf.present_timestamp", mHasReliablePresentFences ? "1" : "0");
++    const bool exposePresentTimestamps =
++            mHasReliablePresentFences ||
++            base::GetBoolProperty("ro.surface_flinger.force_present_timestamp", false);
++    property_set("service.sf.present_timestamp", exposePresentTimestamps ? "1" : "0");
+ 
+     if (base::GetBoolProperty("debug.sf.boot_animation"s, true) &&
+         (base::GetIntProperty("debug.sf.nobootanimation"s, 0) == 0)) {

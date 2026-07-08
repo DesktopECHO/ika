@@ -120,6 +120,9 @@ reserved_host_core_list() {
 # Upper bound on the auto-selected guest vCPU count. The default heuristic
 # never exceeds this; pass --cpus= to request more.
 readonly DEFAULT_GUEST_CPU_CAP=12
+readonly DEFAULT_GUEST_MEMORY_STEP_MB=2048
+readonly DEFAULT_GUEST_MEMORY_CAP_MB=32768
+readonly DEFAULT_GUEST_MEMORY_FALLBACK_MB=4096
 
 default_guest_cpus() {
   local cores guest_cpus
@@ -149,12 +152,63 @@ default_guest_cpus() {
   echo "${guest_cpus}"
 }
 
+host_physical_memory_mb() {
+  local block_size_hex block_size_bytes block_count state path
+  local mem_kb
+
+  if [[ -r /sys/devices/system/memory/block_size_bytes ]]; then
+    block_size_hex="$(</sys/devices/system/memory/block_size_bytes)"
+    block_size_hex="${block_size_hex#0x}"
+    if [[ "${block_size_hex}" =~ ^[0-9A-Fa-f]+$ ]]; then
+      block_size_bytes=$((16#${block_size_hex}))
+      block_count=0
+      for path in /sys/devices/system/memory/memory[0-9]*; do
+        [[ -d "${path}" ]] || continue
+        if [[ -r "${path}/state" ]]; then
+          state="$(<"${path}/state")"
+          [[ "${state}" == "online" ]] || continue
+        fi
+        ((block_count += 1))
+      done
+      if (( block_size_bytes > 0 && block_count > 0 )); then
+        echo $(((block_size_bytes * block_count) / 1024 / 1024))
+        return 0
+      fi
+    fi
+  fi
+
+  mem_kb="$(awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo 2>/dev/null || true)"
+  mem_kb="${mem_kb//[!0-9]/}"
+  if [[ -n "${mem_kb}" ]] && (( mem_kb > 0 )); then
+    echo $((mem_kb / 1024))
+  fi
+}
+
+default_guest_memory_mb() {
+  local mem_mb target_mb rounded_mb
+
+  mem_mb="$(host_physical_memory_mb)"
+  mem_mb="${mem_mb//[!0-9]/}"
+  if [[ -z "${mem_mb}" ]] || (( mem_mb <= 0 )); then
+    echo "${DEFAULT_GUEST_MEMORY_FALLBACK_MB}"
+    return 0
+  fi
+
+  target_mb=$((mem_mb / 4))
+  rounded_mb=$((((target_mb + DEFAULT_GUEST_MEMORY_STEP_MB - 1) / DEFAULT_GUEST_MEMORY_STEP_MB) * DEFAULT_GUEST_MEMORY_STEP_MB))
+
+  (( rounded_mb >= DEFAULT_GUEST_MEMORY_STEP_MB )) || rounded_mb=${DEFAULT_GUEST_MEMORY_STEP_MB}
+  (( rounded_mb <= DEFAULT_GUEST_MEMORY_CAP_MB )) || rounded_mb=${DEFAULT_GUEST_MEMORY_CAP_MB}
+
+  echo "${rounded_mb}"
+}
+
 # ============================================================================
 # Compute Configuration Defaults (passed to cvd_internal_start)
 # ============================================================================
 declare -A CVD_COMPUTE_DEFAULTS=(
   [cpus]="$(default_guest_cpus)"
-  [memory_mb]="4096"
+  [memory_mb]="$(default_guest_memory_mb)"
   [prefer_performance_cores]="true"
   [enable_bootanimation]="false"
   [enable_sandbox]="false"
@@ -165,9 +219,18 @@ declare -A CVD_COMPUTE_DEFAULTS=(
 # ============================================================================
 declare -A CVD_GPU_DEFAULTS=(
   [gpu_mode]="gfxstream"
+  # Keep off: this package's Bazel build ships exactly one crosvm binary
+  # (cuttlefish-common/bin/crosvm, see cuttlefish/package/BUILD.bazel). Upstream
+  # auto-enables vhost-user-gpu on ARM64 hosts in --gpu_vhost_user_mode=auto,
+  # which runs the GPU device as a *separate* crosvm process resolved by
+  # CrosvmPathForVhostUserGpu() in crosvm_manager.cpp; that default does not
+  # apply to this package, and vhost-user-gpu on ARM64 is not yet thoroughly
+  # tested upstream regardless. Do not flip this to auto/on without confirming
+  # both.
   [gpu_vhost_user_mode]="off"
   [enable_gpu_udmabuf]="true"
   [use_cvdalloc]="true"
+  [gpu_renderer_features]="GlProgramBinaryLinkStatus:enabled;MinimalLogging:enabled"
 )
 
 # ============================================================================
@@ -194,6 +257,14 @@ declare -A CVD_NETWORK_DEFAULTS=(
 # ============================================================================
 declare -A CVD_REPORT_DEFAULTS=(
   [report_anonymous_usage_stats]="n"
+)
+
+# ============================================================================
+# Logging Configuration Defaults (passed to cvd_internal_start)
+# ============================================================================
+declare -A CVD_LOGGING_DEFAULTS=(
+  [file_verbosity]="WARNING"
+  [verbosity]="WARNING"
 )
 
 # ============================================================================
@@ -228,6 +299,7 @@ CVD_DEFAULT_ARG_MAPS=(
   CVD_GPU_DEFAULTS
   CVD_NETWORK_DEFAULTS
   CVD_REPORT_DEFAULTS
+  CVD_LOGGING_DEFAULTS
   CVD_OVERLAY_DEFAULTS
   CVD_LAUNCHER_DEFAULTS
 )
@@ -511,14 +583,15 @@ Options:
 
   --game                 Start scrcpy fullscreen with UHID gamepad, keyboard,
                          and mouse input.
+  --memory_mb=MB         Override the default guest RAM: about one quarter of
+                         host RAM, rounded up to 2048 MB, capped at 32768 MB.
 
 Environment:
 
   GFXSTREAM_VULKAN       auto, on, or off. auto disables gfxstream Vulkan
-                         only on Apple Silicon 16K-page hosts or when the
-                         primary host Vulkan device is llvmpipe; on forces
-                         GLES+Vulkan; off forces GLES-only gfxstream.
-                         On Apple Silicon 16K-page hosts, on also routes
+                         only when the primary host Vulkan device is llvmpipe;
+                         on forces GLES+Vulkan; off forces GLES-only gfxstream.
+                         On Apple Silicon 16K-page hosts, auto/on routes
                          host-visible guest Vulkan memory through udmabuf-backed
                          dma-buf (the path the Apple GPU supports).
   DATA_GB                Size of the next fresh userdata image, in GB.
@@ -944,35 +1017,6 @@ start_arg_value() {
   printf '%s\n' "${value:-${default_value}}"
 }
 
-start_bool_arg_value() {
-  local flag="$1"
-  local default_value="${2:-}"
-  shift 2
-  local value="${default_value}"
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --${flag}=*|-${flag}=*)
-        value="${1#*=}"
-        ;;
-      --no${flag}|-no${flag})
-        value="false"
-        ;;
-      --${flag}|-${flag})
-        if [[ $# -gt 1 && "$2" != -* ]]; then
-          shift
-          value="$1"
-        else
-          value="true"
-        fi
-        ;;
-    esac
-    shift || true
-  done
-
-  printf '%s\n' "${value}"
-}
-
 start_gpu_mode_value() {
   start_arg_value "gpu_mode" "${CVD_GPU_DEFAULTS[gpu_mode]}" "$@"
 }
@@ -1031,6 +1075,12 @@ gfxstream_context_types_include_vulkan() {
   local contexts="${context_types%%,*}"
 
   [[ ":${contexts}:" == *":gfxstream-vulkan:"* ]]
+}
+
+gfxstream_guest_angle_uses_host_vulkan() {
+  local gpu_mode="$1"
+
+  [[ "${gpu_mode}" == "gfxstream_guest_angle" ]]
 }
 
 merge_gpu_context_types_for_vulkan() {
@@ -1109,6 +1159,16 @@ append_gfxstream_vulkan_args() {
 
   gpu_mode="$(start_gpu_mode_value "$@")"
   CVD_GPU_MODE="${gpu_mode}"
+  if gfxstream_guest_angle_uses_host_vulkan "${gpu_mode}"; then
+    CVD_GRAPHICS_DRIVER_MESSAGE="${gpu_mode} (ANGLE over gfxstream Vulkan)"
+    log "gfxstream-vulkan=${mode} context toggle has no effect with gpu_mode=${gpu_mode} (Vulkan-only)"
+    if is_apple_silicon_16k_host; then
+      append_apple_16k_gfxstream_vulkan_args args_array
+      CVD_GRAPHICS_DRIVER_MESSAGE="${gpu_mode} (ANGLE over gfxstream Vulkan; Apple 16K udmabuf)"
+    fi
+    return 0
+  fi
+
   if [[ "${gpu_mode}" != "gfxstream" ]]; then
     CVD_GRAPHICS_DRIVER_MESSAGE="GPU is ${gpu_mode} (gfxstream-vulkan=${mode} ignored)"
     log "gfxstream-vulkan=${mode} has no effect with gpu_mode=${gpu_mode}"
@@ -1131,12 +1191,12 @@ append_gfxstream_vulkan_args() {
   selected_mode="${mode}"
   vulkan_decision="gfxstream-vulkan=${mode}"
   if [[ "${selected_mode}" == "auto" ]]; then
-    if is_apple_silicon_16k_host; then
-      selected_mode="off"
-      vulkan_decision="gfxstream-vulkan=auto -> off (Apple Silicon 16K host)"
-    elif primary_vulkan_device_is_llvmpipe; then
+    if primary_vulkan_device_is_llvmpipe; then
       selected_mode="off"
       vulkan_decision="gfxstream-vulkan=auto -> off (primary Vulkan device is llvmpipe)"
+    elif is_apple_silicon_16k_host; then
+      selected_mode="on"
+      vulkan_decision="gfxstream-vulkan=auto -> on (ARM 16k host)"
     else
       CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (Defaults; vulkan=auto)"
       log "gfxstream-vulkan=auto; leaving Cuttlefish gfxstream defaults"
@@ -1339,21 +1399,14 @@ apply_start_default_args() {
   done
 }
 
-append_webrtc_audio_args() {
+append_cuttlefish_audio_args() {
   local -n args_array="$1"
   shift
-  local start_webrtc
 
-  start_webrtc="$(start_bool_arg_value "start_webrtc" "${CVD_LAUNCHER_DEFAULTS[start_webrtc]}" "$@")"
-
-  case "${start_webrtc}" in
-    false|False|FALSE|0|no|No|NO|off|Off|OFF)
-      if ! user_supplied_flag "enable_audio" "$@"; then
-        args_array+=("--enable_audio=false")
-        log "start_webrtc=false; disabling Cuttlefish audio server"
-      fi
-      ;;
-  esac
+  if ! user_supplied_flag "enable_audio" "$@"; then
+    args_array+=("--enable_audio=true")
+    log "enabling Cuttlefish virtio-snd audio server"
+  fi
 }
 
 append_host_timezone_arg() {
@@ -1573,7 +1626,10 @@ adb_boot_completed() {
   fi
   [[ -n "${adb_bin}" ]] || return 1
 
-  boot_completed="$("${adb_bin}" -s "${adb_serial}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+  # timeout guards against the dead-guest host proxy accepting the
+  # connection and never answering (same hazard as in
+  # sync_android_filesystems), which would stall wait_for_boot's poll loop.
+  boot_completed="$(timeout 5 "${adb_bin}" -s "${adb_serial}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
   [[ "${boot_completed}" == "1" ]]
 }
 
@@ -1582,7 +1638,15 @@ sync_android_filesystems() {
 
   [[ -x "${CVD_ADB_BIN}" ]] || return 0
 
-  if ! "${CVD_ADB_BIN}" -s "${adb_serial}" shell sync >/dev/null 2>&1; then
+  # The adb TCP endpoint is a host-side proxy that keeps accepting
+  # connections after the guest dies, so an unguarded `adb shell` can block
+  # stop/restart forever. Probe the guest first and cap the sync itself.
+  if ! timeout 5 "${CVD_ADB_BIN}" -s "${adb_serial}" shell true >/dev/null 2>&1; then
+    log "Guest is not responding over adb; skipping filesystem sync."
+    return 0
+  fi
+
+  if ! timeout 30 "${CVD_ADB_BIN}" -s "${adb_serial}" shell sync >/dev/null 2>&1; then
     log "Android filesystem sync failed or device is unavailable; continuing stop."
   fi
 }
@@ -1685,7 +1749,7 @@ start_scrcpy_with_retries() {
     --window-borderless
     --window-width="${scrcpy_window_width}"
     --window-height="${scrcpy_window_height}"
-    --audio-codec=raw
+    --no-audio
   )
 
   # Game mode uses UHID for all input devices; normal mode keeps text-friendly
@@ -1895,7 +1959,7 @@ start_cvd() {
   protect_overlay_resume
 
   apply_start_default_args args "$@"
-  append_webrtc_audio_args args "$@"
+  append_cuttlefish_audio_args args "$@"
   append_data_storage_args args "$@"
   append_arm64_kernel_page_args args "$@"
   append_gfxstream_vulkan_args args "$@"

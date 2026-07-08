@@ -1,11 +1,25 @@
 Patch summary:
 Add minimal desktop SELinux policy for expected VM behavior. The policy quiets
 known benign denials from optional services and legacy probes, and allows
-shell-driven display-density checks used by host-side desktop testing.
+shell-driven display-density checks used by host-side desktop testing. It also
+labels the desktop SurfaceFlinger present-timestamp property so vendor init can
+set the vendor build property without falling back to default_prop.
 
 This patch does not broaden app privileges for normal desktop use; it documents
 and permits only the small set of behaviors the VM is expected to perform.
 
+diff --git a/private/property_contexts b/private/property_contexts
+index b325c2ff0..f8d847aa8 100644
+--- a/private/property_contexts
++++ b/private/property_contexts
+@@ -1544,6 +1544,7 @@ ro.surface_flinger.ignore_hdr_camera_layers               u:object_r:surfaceflin
+ ro.surface_flinger.clear_slots_with_set_layer_buffer      u:object_r:surfaceflinger_prop:s0 exact bool
+ ro.surface_flinger.prime_shader_cache.ultrahdr            u:object_r:surfaceflinger_prop:s0 exact bool
+ ro.surface_flinger.game_default_frame_rate_override       u:object_r:surfaceflinger_prop:s0 exact int
++ro.surface_flinger.force_present_timestamp                u:object_r:surfaceflinger_prop:s0 exact bool
+ 
+ ro.sf.disable_triple_buffer u:object_r:surfaceflinger_prop:s0 exact bool
+ ro.sf.lcd_density           u:object_r:surfaceflinger_prop:s0 exact int
 diff --git a/private/lineage_desktop.te b/private/lineage_desktop.te
 new file mode 100644
 index 000000000..a3500ff34

@@ -286,7 +286,7 @@ CrosvmManager::ConfigureGraphics(
         {"androidboot.hardware.egl", gles_impl},
         {"androidboot.hardware.vulkan", "ranchu"},
         {"androidboot.hardware.gltransport", gfxstream_transport},
-        {"androidboot.opengles.version", "196609"},  // OpenGL ES 3.1
+        {"androidboot.opengles.version", "196610"},  // OpenGL ES 3.2
     };
   } else if (instance.gpu_mode() == GpuMode::Custom) {
     bootconfig_args = {
@@ -414,6 +414,18 @@ Result<void> MaybeConfigureVulkanIcd(const CuttlefishConfig& config,
 }
 
 // TODO(b/402274999): remove after crosvm has been fully substituted.
+//
+// NOTE: this repo's Bazel package (cuttlefish/package:cvd) builds and ships a
+// single crosvm binary at cuttlefish-common/bin/crosvm; it does not populate
+// "prebuilts/crosvm", and ARM64's arch-specific fallback path below
+// ("aarch64-linux-gnu/crosvm") is likewise never populated by this package.
+// vhost-user-gpu launches the GPU device as a *separate* crosvm process
+// resolved by this function, so both attempts fall through to the same
+// crosvm used for the main VMM process (instance.crosvm_binary()) below,
+// matching what the x86/x86_64 fallback already did directly. tools/ika still
+// hardcodes gpu_vhost_user_mode=off regardless, both because of this
+// packaging gap and because vhost-user-gpu on ARM64 is not yet thoroughly
+// tested upstream; do not flip it back to auto/on without confirming both.
 Result<std::string> CrosvmPathForVhostUserGpu(const CuttlefishConfig& config) {
   const auto& instance = config.ForDefaultInstance();
 
@@ -445,8 +457,19 @@ Result<std::string> CrosvmPathForVhostUserGpu(const CuttlefishConfig& config) {
       return CF_ERR("Unhandled host arch " << HostArchStr()
                                        << " for vhost user gpu crosvm");
   }
+  if (FileExists(crosvm_path)) {
+    return crosvm_path;
+  }
 
-  CF_EXPECT(FileExists(crosvm_path), "Failed to find crosvm prebuilt for vhost user gpu.");
+  // Neither prebuilt convention matched (this package ships exactly one
+  // crosvm binary regardless of host arch); fall back to the same crosvm
+  // used for the main VMM process instead of failing outright.
+  crosvm_path = instance.crosvm_binary();
+
+  CF_EXPECT(FileExists(crosvm_path),
+            "Failed to find a crosvm binary for vhost user gpu (tried "
+            "prebuilts/crosvm, an arch-specific prebuilt, and "
+                << crosvm_path << ").");
   return crosvm_path;
 }
 

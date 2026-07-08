@@ -13,7 +13,7 @@ url='https://github.com/google/android-cuttlefish'
 license=(Apache-2.0)
 makedepends=(aom clang cmake curl ffmpeg fmt gcc gflags git google-glog gtest
              icu jsoncpp libcap libdrm libsrtp libusb libx11 libxext libxml2 mesa
-             meson ninja openssl opus perl pkgconf protobuf protobuf-c python sdl3
+             meson ninja openssl opus perl pipewire pkgconf protobuf protobuf-c python sdl3
              xxd util-linux-libs virglrenderer vulkan-headers wayland which xz z3)
 # objcopy/nm cannot parse the Bazel/Clang-built binaries; skip strip/debug.
 options=(!strip !debug)
@@ -142,7 +142,7 @@ package_ika-base() {
   depends=(curl dnsmasq ffmpeg iproute2 libarchive libcap libdrm libusb libx11
            libxext lz4 mesa mesa-utils
            net-tools networkmanager nftables openssl python python-requests
-           procps-ng sdl3 shadow systemd virglrenderer vulkan-icd-loader
+           pipewire procps-ng sdl3 shadow systemd virglrenderer vulkan-icd-loader
            vulkan-swrast vulkan-tools wayland-utils xdg-utils xz)
   # ika-base now ships the scrcpy viewer; retire the standalone ika-scrcpy.
   provides=(cuttlefish-base ika-scrcpy)

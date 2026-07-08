@@ -1,0 +1,128 @@
+Patch summary:
+Add the host glslangValidator module expected by Android 17 Mesa's generated
+SPIR-V header genrules. LineageOS 23.2's dEQP glslang checkout only exposes
+the library pieces needed by dEQP, while the pinned Android Mesa snapshot references the standalone
+validator by its legacy module name. Build a host-only validator from the same
+checked-out glslang sources, with the generated build-info and intrinsic
+headers wired into Soong, so Mesa shader headers can be generated during the
+Android 16/LineageOS build.
+
+diff --git a/Android.bp b/Android.bp
+index f41468bb..886f2f40 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -64,6 +64,14 @@ genrule {
+     tool_files: ["build_info.py"],
+ }
+ 
++genrule {
++    name: "deqp_glslang_gen_intrinsic_header_h",
++    srcs: ["glslang/ExtensionHeaders/GL_EXT_shader_realtime_clock.glsl"],
++    out: ["glslang/glsl_intrinsic_header.h"],
++    cmd: "$(location) -i $$(dirname $(location glslang/ExtensionHeaders/GL_EXT_shader_realtime_clock.glsl)) -o $(location glslang/glsl_intrinsic_header.h)",
++    tool_files: ["gen_extension_headers.py"],
++}
++
+ cc_defaults {
+     name: "deqp_glslang_defaults",
+     defaults: ["deqp_and_deps_defaults"],
+@@ -86,6 +94,99 @@ cc_defaults {
+     ],
+ }
+ 
++cc_defaults {
++    name: "deqp_glslang_validator_host_defaults",
++    cpp_std: "c++17",
++    cflags: [
++        "-DENABLE_HLSL=1",
++        "-DENABLE_OPT=0",
++        "-DENABLE_SPIRV=1",
++        "-DGLSLANG_OSINCLUDE_UNIX",
++        "-Wno-enum-enum-conversion",
++        "-Wno-extra-semi",
++        "-Wno-ignored-qualifiers",
++        "-Wno-implicit-fallthrough",
++        "-Wno-implicit-int-conversion",
++        "-Wno-inconsistent-missing-override",
++        "-Wno-missing-field-initializers",
++        "-Wno-newline-eof",
++        "-Wno-shorten-64-to-32",
++        "-Wno-sign-compare",
++        "-Wno-sign-conversion",
++        "-Wno-suggest-destructor-override",
++        "-Wno-suggest-override",
++        "-Wno-unused-but-set-variable",
++        "-Wno-unused-parameter",
++        "-Wno-unused-variable",
++    ],
++    cppflags: ["-fexceptions"],
++    local_include_dirs: ["."],
++    generated_headers: [
++        "deqp_glslang_gen_build_info_h",
++        "deqp_glslang_gen_intrinsic_header_h",
++    ],
++    rtti: true,
++    stl: "libc++_static",
++}
++
++cc_binary_host {
++    name: "glslangValidator",
++    defaults: ["deqp_glslang_validator_host_defaults"],
++    srcs: [
++        "StandAlone/StandAlone.cpp",
++        "SPIRV/CInterface/spirv_c_interface.cpp",
++        "SPIRV/GlslangToSpv.cpp",
++        "SPIRV/InReadableOrder.cpp",
++        "SPIRV/Logger.cpp",
++        "SPIRV/SpvBuilder.cpp",
++        "SPIRV/SpvPostProcess.cpp",
++        "SPIRV/disassemble.cpp",
++        "SPIRV/doc.cpp",
++        "glslang/CInterface/glslang_c_interface.cpp",
++        "glslang/GenericCodeGen/CodeGen.cpp",
++        "glslang/GenericCodeGen/Link.cpp",
++        "glslang/HLSL/hlslAttributes.cpp",
++        "glslang/HLSL/hlslGrammar.cpp",
++        "glslang/HLSL/hlslOpMap.cpp",
++        "glslang/HLSL/hlslParseHelper.cpp",
++        "glslang/HLSL/hlslParseables.cpp",
++        "glslang/HLSL/hlslScanContext.cpp",
++        "glslang/HLSL/hlslTokenStream.cpp",
++        "glslang/MachineIndependent/Constant.cpp",
++        "glslang/MachineIndependent/InfoSink.cpp",
++        "glslang/MachineIndependent/Initialize.cpp",
++        "glslang/MachineIndependent/IntermTraverse.cpp",
++        "glslang/MachineIndependent/Intermediate.cpp",
++        "glslang/MachineIndependent/ParseContextBase.cpp",
++        "glslang/MachineIndependent/ParseHelper.cpp",
++        "glslang/MachineIndependent/PoolAlloc.cpp",
++        "glslang/MachineIndependent/RemoveTree.cpp",
++        "glslang/MachineIndependent/Scan.cpp",
++        "glslang/MachineIndependent/ShaderLang.cpp",
++        "glslang/MachineIndependent/SpirvIntrinsics.cpp",
++        "glslang/MachineIndependent/SymbolTable.cpp",
++        "glslang/MachineIndependent/Versions.cpp",
++        "glslang/MachineIndependent/attribute.cpp",
++        "glslang/MachineIndependent/glslang_tab.cpp",
++        "glslang/MachineIndependent/intermOut.cpp",
++        "glslang/MachineIndependent/iomapper.cpp",
++        "glslang/MachineIndependent/limits.cpp",
++        "glslang/MachineIndependent/linkValidate.cpp",
++        "glslang/MachineIndependent/parseConst.cpp",
++        "glslang/MachineIndependent/preprocessor/Pp.cpp",
++        "glslang/MachineIndependent/preprocessor/PpAtom.cpp",
++        "glslang/MachineIndependent/preprocessor/PpContext.cpp",
++        "glslang/MachineIndependent/preprocessor/PpScanner.cpp",
++        "glslang/MachineIndependent/preprocessor/PpTokens.cpp",
++        "glslang/MachineIndependent/propagateNoContraction.cpp",
++        "glslang/MachineIndependent/reflection.cpp",
++        "glslang/OSDependent/Unix/ossource.cpp",
++        "glslang/ResourceLimits/ResourceLimits.cpp",
++        "glslang/ResourceLimits/resource_limits_c.cpp",
++    ],
++    host_ldlibs: ["-lpthread"],
++}
++
+ cc_library_static {
+     name: "deqp_glslang_OSDependent",
+     defaults: [

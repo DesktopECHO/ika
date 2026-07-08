@@ -178,7 +178,8 @@ run_build_native() {
 
   set +u
   source build/envsetup.sh
-  lunch "$product" trunk_staging userdebug || die "lunch $product failed"
+  log "lunching $product trunk_staging $build_variant"
+  lunch "$product" trunk_staging "$build_variant" || die "lunch $product failed"
   [[ "${TARGET_PRODUCT:-}" == "$product" ]] || \
     die "lunch did not set TARGET_PRODUCT=$product (got '${TARGET_PRODUCT:-}')"
   # envsetup.sh and lunch both call `set +u` and may toggle other -o options;

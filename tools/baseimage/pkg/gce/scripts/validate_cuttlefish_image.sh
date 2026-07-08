@@ -16,8 +16,10 @@
 
 set -o errexit -o nounset -o pipefail
 
+export PATH="${HOME}/.local/bin:${PATH}"
+
 sudo dnf install -y git jq
-sudo bash tools/buildutils/installbazel.sh
+tools/buildutils/installbazel.sh
 
 # Validate NVIDIA driver installation.
 nvidia-smi

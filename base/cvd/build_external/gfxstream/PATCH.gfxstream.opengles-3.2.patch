@@ -1,0 +1,513 @@
+Patch summary:
+Complete OpenGL ES 3.2 support in the Bazel-built gfxstream backend and guest
+encoder. The host advertises ANDROID_EMU_gles_max_version_3_2 only when it can
+create an ES 3.2 context; cube-map-array textures, sRGB decode parameters, and
+valid ES 3.2 sampler units are tracked through the guest encoder. Desktop
+OpenGL 4.6 maps to ES 3.2, while native EGL probes ES 3.2 before falling back.
+
+diff --git a/host/gl/glestranslator/common/include/common/gl_utils.h b/host/gl/glestranslator/common/include/common/gl_utils.h
+index 50c9d5513..6124359b5 100644
+--- a/host/gl/glestranslator/common/include/common/gl_utils.h
++++ b/host/gl/glestranslator/common/include/common/gl_utils.h
+@@ -37,6 +37,7 @@ typedef enum {
+     GLES_2_0 = 2,
+     GLES_3_0 = 3,
+     GLES_3_1 = 4,
++    GLES_3_2 = 5,
+     MAX_GLES_VERSION //Must be last
+ } GLESVersion;
+ 
+diff --git a/host/gl/glestranslator/egl/egl_display.cpp b/host/gl/glestranslator/egl/egl_display.cpp
+index b8bb72857..888c0d7ee 100644
+--- a/host/gl/glestranslator/egl/egl_display.cpp
++++ b/host/gl/glestranslator/egl/egl_display.cpp
+@@ -33,6 +33,7 @@ EglDisplay::EglDisplay(EGLNativeDisplayType dpy,
+     m_manager[GLES_2_0] = new ObjectNameManager(&m_globalNameSpace);
+     m_manager[GLES_3_0] = m_manager[GLES_2_0];
+     m_manager[GLES_3_1] = m_manager[GLES_2_0];
++    m_manager[GLES_3_2] = m_manager[GLES_2_0];
+ };
+ 
+ EglDisplay::~EglDisplay() {
+diff --git a/host/gl/glestranslator/egl/egl_imp.cpp b/host/gl/glestranslator/egl/egl_imp.cpp
+index 4d2397843..063dcbbcf 100644
+--- a/host/gl/glestranslator/egl/egl_imp.cpp
++++ b/host/gl/glestranslator/egl/egl_imp.cpp
+@@ -388,5 +388,16 @@ static EGLBoolean initStaticGLES() {
+         initGLESx(GLES_3_1);
+     }
++    if(!g_eglInfo->getIface(GLES_3_2)) {
++        func  = loadIfaces(LIB_GLES_V2_NAME, error, sizeof(error));
++        if (func) {
++            renderableType |= EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT;
++            g_eglInfo->setIface(func(&s_eglIface),GLES_3_2);
++        } else {
++           fprintf(stderr, "%s: Could not find ifaces for GLES 3.x [%s]\n",
++                   __FUNCTION__, error);
++        }
++        initGLESx(GLES_3_2);
++    }
+     dpy->initialize(renderableType);
+     return EGL_TRUE;
+ }
+@@ -982,6 +993,9 @@ EGLContext eglCreateOrLoadContext(EGLDisplay display, EGLConfig config, EGLConte
+          case 1:
+              glesVersion = GLES_3_1;
+              break;
++         case 2:
++             glesVersion = GLES_3_2;
++             break;
+          default:
+              RETURN_ERROR(EGL_NO_CONTEXT, EGL_BAD_ATTRIBUTE);
+              break;
+@@ -1759,8 +1773,10 @@ EGLAPI void EGLAPIENTRY eglSetMaxGLESVersion(EGLint version) {
+         glesVersion = GLES_3_0;
+         break;
+     case 2:
+-    case 3: // TODO: GLES 3.2 support?
+         glesVersion = GLES_3_1;
+         break;
++    case 3:
++        glesVersion = GLES_3_2;
++        break;
+     }
+ 
+     if (g_eglInfo->getIface(GLES_1_1)) {
+diff --git a/host/gl/gles_version_detector.cpp b/host/gl/gles_version_detector.cpp
+index 34415eb02..9305721d1 100644
+--- a/host/gl/gles_version_detector.cpp
++++ b/host/gl/gles_version_detector.cpp
+@@ -41,6 +41,10 @@ static const EGLint gles3ConfigAttribs[] =
+ static const EGLint pbufAttribs[] =
+     { EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE };
+ 
++static const EGLint gles32Attribs[] =
++   { EGL_CONTEXT_MAJOR_VERSION_KHR, 3,
++     EGL_CONTEXT_MINOR_VERSION_KHR, 2, EGL_NONE };
++
+ static const EGLint gles31Attribs[] =
+    { EGL_CONTEXT_MAJOR_VERSION_KHR, 3,
+      EGL_CONTEXT_MINOR_VERSION_KHR, 1, EGL_NONE };
+@@ -65,6 +69,9 @@ static bool sTryContextCreation(EGLDisplay dpy, GLESDispatchMaxVersion ver) {
+     case GLES_DISPATCH_MAX_VERSION_3_1:
+         contextAttribs = gles31Attribs;
+         break;
++    case GLES_DISPATCH_MAX_VERSION_3_2:
++        contextAttribs = gles32Attribs;
++        break;
+     default:
+         break;
+     }
+@@ -98,9 +105,9 @@ static bool sTryContextCreation(EGLDisplay dpy, GLESDispatchMaxVersion ver) {
+ 
+ GLESDispatchMaxVersion calcMaxVersionFromDispatch(const gfxstream::host::FeatureSet& features,
+                                                   EGLDisplay dpy) {
+-    // TODO: 3.1 is the highest
++    // Probe up to ES 3.2. The dispatch enum and guest feature string both support it.
+     GLESDispatchMaxVersion maxVersion =
+-       GLES_DISPATCH_MAX_VERSION_3_1;
++       GLES_DISPATCH_MAX_VERSION_3_2;
+ 
+     if (get_gfxstream_renderer() == SELECTED_RENDERER_HOST
+         || get_gfxstream_renderer() == SELECTED_RENDERER_SWIFTSHADER_INDIRECT
+@@ -111,10 +118,13 @@ GLESDispatchMaxVersion calcMaxVersionFromDispatch(const gfxstream::host::Feature
+                 (GLESDispatchMaxVersion)s_egl.eglGetMaxGLESVersion(dpy);
+         }
+     } else {
+-        if (!sTryContextCreation(dpy, GLES_DISPATCH_MAX_VERSION_3_1)) {
+-            maxVersion = GLES_DISPATCH_MAX_VERSION_3_0;
+-            if (!sTryContextCreation(dpy, GLES_DISPATCH_MAX_VERSION_3_0)) {
+-                maxVersion = GLES_DISPATCH_MAX_VERSION_2;
++        if (!sTryContextCreation(dpy, GLES_DISPATCH_MAX_VERSION_3_2)) {
++            maxVersion = GLES_DISPATCH_MAX_VERSION_3_1;
++            if (!sTryContextCreation(dpy, GLES_DISPATCH_MAX_VERSION_3_1)) {
++                maxVersion = GLES_DISPATCH_MAX_VERSION_3_0;
++                if (!sTryContextCreation(dpy, GLES_DISPATCH_MAX_VERSION_3_0)) {
++                    maxVersion = GLES_DISPATCH_MAX_VERSION_2;
++                }
+             }
+         }
+     }
+diff --git a/host/gl/glestranslator/egl/egl_os_api.h b/host/gl/glestranslator/egl/egl_os_api.h
+--- a/host/gl/glestranslator/egl/egl_os_api.h
++++ b/host/gl/glestranslator/egl/egl_os_api.h
+@@ -151,6 +151,11 @@ inline GlesVersion calcMaxESVersionFromCoreVersion(int coreMajor, int coreMinor)
+             // 4.3 core has all the entry points we need, but we want 4.5 core for
+             // ARB_ES31_compatibility to avoid shader translation (for now. TODO:
+             // translate ESSL 310 to 4.3 shaders)
++            // OpenGL 4.6 provides the entry points required by the ES 3.2
++            // translator and supports GLSL 4.60 for translated ESSL 3.20.
++            if (coreMinor > 5) {
++                return EglOS::GlesVersion::ES32;
++            }
+             return coreMinor > 4 ? EglOS::GlesVersion::ES31 : EglOS::GlesVersion::ES30;
+         default:
+             return EglOS::GlesVersion::ES2;
+diff --git a/host/gl/glestranslator/egl/egl_os_api_egl.cpp b/host/gl/glestranslator/egl/egl_os_api_egl.cpp
+--- a/host/gl/glestranslator/egl/egl_os_api_egl.cpp
++++ b/host/gl/glestranslator/egl/egl_os_api_egl.cpp
+@@ -421,6 +421,10 @@ EglOsEglDisplay::EglOsEglDisplay(bool nullEgl) {
+     static const EGLint pbufAttribs[] =
+         { EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE };
+ 
++    static const EGLint gles32Attribs[] =
++       { EGL_CONTEXT_MAJOR_VERSION_KHR, 3,
++         EGL_CONTEXT_MINOR_VERSION_KHR, 2, EGL_NONE };
++
+     static const EGLint gles31Attribs[] =
+        { EGL_CONTEXT_MAJOR_VERSION_KHR, 3,
+          EGL_CONTEXT_MINOR_VERSION_KHR, 1, EGL_NONE };
+@@ -439,15 +443,21 @@ EglOsEglDisplay::EglOsEglDisplay(bool nullEgl) {
+                 config, pbufAttribs);
+         if (surface != EGL_NO_SURFACE) {
+             EGLContext ctx = mDispatcher.eglCreateContext(mDisplay,
+-                    config, EGL_NO_CONTEXT, gles31Attribs);
++                    config, EGL_NO_CONTEXT, gles32Attribs);
+ 
+             if (ctx != EGL_NO_CONTEXT) {
+-                mGlesVersion = GlesVersion::ES31;
++                mGlesVersion = GlesVersion::ES32;
+             } else {
+                 ctx = mDispatcher.eglCreateContext(mDisplay, config,
+-                        EGL_NO_CONTEXT, gles30Attribs);
++                        EGL_NO_CONTEXT, gles31Attribs);
+                 if (ctx != EGL_NO_CONTEXT) {
+-                    mGlesVersion = GlesVersion::ES30;
++                    mGlesVersion = GlesVersion::ES31;
++                } else {
++                    ctx = mDispatcher.eglCreateContext(mDisplay, config,
++                            EGL_NO_CONTEXT, gles30Attribs);
++                    if (ctx != EGL_NO_CONTEXT) {
++                        mGlesVersion = GlesVersion::ES30;
++                    }
+                 }
+             }
+             mDispatcher.eglDestroySurface(mDisplay, surface);
+@@ -466,8 +476,6 @@ EglOsEglDisplay::~EglOsEglDisplay() {
+ }
+ 
+ EglOS::GlesVersion EglOsEglDisplay::getMaxGlesVersion() {
+-    // Maximum GLES3.1
+-    // GLES3.2 will also need some more autogen + enums if anyone is interested.
+     return mGlesVersion;
+ }
+ 
+diff --git a/host/render_control.cpp b/host/render_control.cpp
+index f6470f06b..d08c7cb16 100644
+--- a/host/render_control.cpp
++++ b/host/render_control.cpp
+@@ -57,6 +57,7 @@ using gl::EmulatedEglFenceSync;
+ using gl::GLES_DISPATCH_MAX_VERSION_2;
+ using gl::GLES_DISPATCH_MAX_VERSION_3_0;
+ using gl::GLES_DISPATCH_MAX_VERSION_3_1;
++using gl::GLES_DISPATCH_MAX_VERSION_3_2;
+ using gl::GLESApi;
+ using gl::GLESApi_CM;
+ using gl::GLESDispatchMaxVersion;
+@@ -191,10 +192,11 @@ static const char* kDma1Str = "ANDROID_EMU_dma_v1";
+ static const char* kDma2Str = "ANDROID_EMU_dma_v2";
+ static const char* kDirectMemStr = "ANDROID_EMU_direct_mem";
+ 
+-// GLESDynamicVersion: up to 3.1 so far
++// GLESDynamicVersion: up to 3.2 so far
+ static const char* kGLESDynamicVersion_2 = "ANDROID_EMU_gles_max_version_2";
+ static const char* kGLESDynamicVersion_3_0 = "ANDROID_EMU_gles_max_version_3_0";
+ static const char* kGLESDynamicVersion_3_1 = "ANDROID_EMU_gles_max_version_3_1";
++static const char* kGLESDynamicVersion_3_2 = "ANDROID_EMU_gles_max_version_3_2";
+ 
+ // HWComposer Host Composition
+ static const char* kHostCompositionV1 = "ANDROID_EMU_host_composition_v1";
+@@ -367,6 +369,8 @@ const char* maxVersionToFeatureString(GLESDispatchMaxVersion version) {
+             return kGLESDynamicVersion_3_0;
+         case GLES_DISPATCH_MAX_VERSION_3_1:
+             return kGLESDynamicVersion_3_1;
++        case GLES_DISPATCH_MAX_VERSION_3_2:
++            return kGLESDynamicVersion_3_2;
+         default:
+             return kGLESDynamicVersion_2;
+     }
+@@ -682,6 +686,9 @@ static EGLint rcGetGLString(EGLenum name, void* buffer, EGLint bufferSize) {
+             case GLES_DISPATCH_MAX_VERSION_3_1:
+                 glStr = replaceESVersionString(glStr, "3.1");
+                 break;
++            case GLES_DISPATCH_MAX_VERSION_3_2:
++                glStr = replaceESVersionString(glStr, "3.2");
++                break;
+             default:
+                 break;
+             }
+diff --git a/guest/GLESv2_enc/GL2Encoder.cpp b/guest/GLESv2_enc/GL2Encoder.cpp
+index 6fdeea0d..a13a3a6b 100644
+--- a/guest/GLESv2_enc/GL2Encoder.cpp
++++ b/guest/GLESv2_enc/GL2Encoder.cpp
+@@ -51,7 +51,9 @@ using gfxstream::guest::gles2::ProgramBinaryInfo;
+ 
+ static GLubyte *gVendorString= (GLubyte *) "Android";
+ static GLubyte *gRendererString= (GLubyte *) "Android HW-GLES 3.0";
+-static GLubyte *gVersionString= (GLubyte *) "OpenGL ES 3.0";
++static GLubyte *gVersionString30= (GLubyte *) "OpenGL ES 3.0";
++static GLubyte *gVersionString31= (GLubyte *) "OpenGL ES 3.1";
++static GLubyte *gVersionString32= (GLubyte *) "OpenGL ES 3.2";
+ static GLubyte *gExtensionsString= (GLubyte *) "GL_OES_EGL_image_external ";
+ 
+ #define SET_ERROR_IF(condition, err) if((condition)) { \
+@@ -641,7 +643,9 @@ const GLubyte *GL2Encoder::s_glGetString(void *self, GLenum name)
+         retval = gRendererString;
+         break;
+     case GL_VERSION:
+-        retval = gVersionString;
++        retval = ctx->es32Plus() ? gVersionString32 :
++                 (ctx->majorVersion() == 3 && ctx->minorVersion() >= 1) ? gVersionString31 :
++                 gVersionString30;
+         break;
+     case GL_EXTENSIONS:
+         retval = gExtensionsString;
+@@ -853,6 +857,11 @@ void GL2Encoder::s_glGetIntegerv(void *self, GLenum param, GLint *ptr)
+         if (!state) return;
+         *ptr = state->getBoundTexture(GL_TEXTURE_EXTERNAL_OES);
+         break;
++    case GL_TEXTURE_BINDING_CUBE_MAP_ARRAY_OES:
++        SET_ERROR_IF(!ctx->es32Plus(), GL_INVALID_ENUM);
++        if (!state) return;
++        *ptr = state->getBoundTexture(GL_TEXTURE_CUBE_MAP_ARRAY_OES);
++        break;
+     case GL_MAX_VERTEX_ATTRIBS:
+         *ptr = CODEC_MAX_VERTEX_ATTRIBUTES;
+         break;
+@@ -1071,7 +1080,8 @@ void GL2Encoder::s_glGetFloatv(void *self, GLenum param, GLfloat *ptr)
+     case GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS:
+     case GL_MAX_VERTEX_ATTRIB_BINDINGS:
+     case GL_TEXTURE_BINDING_2D:
+-    case GL_TEXTURE_BINDING_EXTERNAL_OES: {
++    case GL_TEXTURE_BINDING_EXTERNAL_OES:
++    case GL_TEXTURE_BINDING_CUBE_MAP_ARRAY_OES: {
+         GLint res;
+         s_glGetIntegerv(ctx, param, &res);
+         *ptr = (GLfloat)res;
+@@ -1135,7 +1145,8 @@ void GL2Encoder::s_glGetBooleanv(void *self, GLenum param, GLboolean *ptr)
+     case GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS:
+     case GL_MAX_VERTEX_ATTRIB_BINDINGS:
+     case GL_TEXTURE_BINDING_2D:
+-    case GL_TEXTURE_BINDING_EXTERNAL_OES: {
++    case GL_TEXTURE_BINDING_EXTERNAL_OES:
++    case GL_TEXTURE_BINDING_CUBE_MAP_ARRAY_OES: {
+         GLint res;
+         s_glGetIntegerv(ctx, param, &res);
+         *ptr = res == 0 ? GL_FALSE : GL_TRUE;
+@@ -4267,6 +4278,7 @@ void GL2Encoder::s_glFramebufferTextureLayer(void* self, GLenum target, GLenum a
+     SET_ERROR_IF(!ctx->m_state->boundFramebuffer(target), GL_INVALID_OPERATION);
+     GLenum lastBoundTarget = state->queryTexLastBoundTarget(texture);
+     SET_ERROR_IF(lastBoundTarget != GL_TEXTURE_2D_ARRAY &&
++                 lastBoundTarget != GL_TEXTURE_CUBE_MAP_ARRAY_OES &&
+                  lastBoundTarget != GL_TEXTURE_3D,
+                  GL_INVALID_OPERATION);
+     state->attachTextureObject(target, attachment, texture, level, layer);
+@@ -4398,6 +4410,7 @@ void GL2Encoder::s_glTexImage3D(void* self, GLenum target, GLint level, GLint in
+     GLClientState* state = ctx->m_state;
+ 
+     SET_ERROR_IF(target != GL_TEXTURE_3D &&
++                 target != GL_TEXTURE_CUBE_MAP_ARRAY_OES &&
+                  target != GL_TEXTURE_2D_ARRAY,
+                  GL_INVALID_ENUM);
+     SET_ERROR_IF(!GLESv2Validation::pixelType(ctx, type), GL_INVALID_ENUM);
+@@ -4469,6 +4482,7 @@ void GL2Encoder::s_glTexSubImage3D(void* self, GLenum target, GLint level, GLint
+     GLClientState* state = ctx->m_state;
+ 
+     SET_ERROR_IF(target != GL_TEXTURE_3D &&
++                 target != GL_TEXTURE_CUBE_MAP_ARRAY_OES &&
+                  target != GL_TEXTURE_2D_ARRAY,
+                  GL_INVALID_ENUM);
+     SET_ERROR_IF(!GLESv2Validation::pixelType(ctx, type), GL_INVALID_ENUM);
+@@ -4527,6 +4541,7 @@ void GL2Encoder::s_glCompressedTexImage3D(void* self, GLenum target, GLint level
+     GLClientState* state = ctx->m_state;
+ 
+     SET_ERROR_IF(target != GL_TEXTURE_3D &&
++                 target != GL_TEXTURE_CUBE_MAP_ARRAY_OES &&
+                  target != GL_TEXTURE_2D_ARRAY,
+                  GL_INVALID_ENUM);
+     // Filter compressed formats support.
+@@ -4663,6 +4678,7 @@ void GL2Encoder::s_glTexStorage3D(void* self, GLenum target, GLsizei levels, GLe
+     GL2Encoder* ctx = (GL2Encoder*)self;
+     GLClientState* state = ctx->m_state;
+     SET_ERROR_IF(target != GL_TEXTURE_3D &&
++                 target != GL_TEXTURE_CUBE_MAP_ARRAY_OES &&
+                  target != GL_TEXTURE_2D_ARRAY,
+                  GL_INVALID_ENUM);
+     SET_ERROR_IF(!GLESv2Validation::pixelInternalFormat(internalformat), GL_INVALID_ENUM);
+@@ -4692,6 +4708,9 @@ void GL2Encoder::s_glTexStorage3D(void* self, GLenum target, GLsizei levels, GLe
+                  GL_INVALID_OPERATION);
+     SET_ERROR_IF(target == GL_TEXTURE_2D_ARRAY && (levels > ilog2((uint32_t)std::max(width, height)) + 1),
+                  GL_INVALID_OPERATION);
++    SET_ERROR_IF(target == GL_TEXTURE_CUBE_MAP_ARRAY_OES &&
++                 (depth % 6 != 0 || levels > ilog2((uint32_t)std::max(width, height)) + 1),
++                 GL_INVALID_OPERATION);
+     SET_ERROR_IF(state->isBoundTextureImmutableFormat(target), GL_INVALID_OPERATION);
+ 
+     state->setBoundTextureInternalFormat(target, internalformat);
+@@ -4953,7 +4972,9 @@ const GLubyte* GL2Encoder::s_glGetStringi(void* self, GLenum name, GLuint index)
+         retval = gRendererString;
+         break;
+     case GL_VERSION:
+-        retval = gVersionString;
++        retval = ctx->es32Plus() ? gVersionString32 :
++                 (ctx->majorVersion() == 3 && ctx->minorVersion() >= 1) ? gVersionString31 :
++                 gVersionString30;
+         break;
+     case GL_EXTENSIONS:
+         retval = (const GLubyte*)(ctx->m_currExtensionsArray[index].c_str());
+@@ -5391,6 +5412,7 @@ void GL2Encoder::s_glGenerateMipmap(void* self, GLenum target) {
+     SET_ERROR_IF(target != GL_TEXTURE_2D &&
+                  target != GL_TEXTURE_3D &&
+                  target != GL_TEXTURE_CUBE_MAP &&
++                 target != GL_TEXTURE_CUBE_MAP_ARRAY_OES &&
+                  target != GL_TEXTURE_2D_ARRAY,
+                  GL_INVALID_ENUM);
+ 
+@@ -5431,6 +5453,11 @@ void GL2Encoder::s_glBindSampler(void* self, GLuint unit, GLuint sampler) {
+     GL2Encoder *ctx = (GL2Encoder *)self;
+     GLint maxCombinedUnits;
+     ctx->glGetIntegerv(ctx, GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxCombinedUnits);
++    if (maxCombinedUnits <= 0) {
++        // ES 3.1 and 3.2 require at least 96 combined texture image units.
++        // Some host-translator contexts transiently return zero during setup.
++        maxCombinedUnits = ctx->majorVersion() == 3 && ctx->minorVersion() >= 1 ? 96 : 32;
++    }
+     SET_ERROR_IF(unit >= maxCombinedUnits, GL_INVALID_VALUE);
+     SET_ERROR_IF(!ctx->m_state->samplerExists(sampler), GL_INVALID_OPERATION);
+     if (ctx->m_state->isSamplerBindNoOp(unit, sampler)) return;
+@@ -6415,6 +6442,7 @@ void GL2Encoder::s_glCopyTexSubImage2D(void *self , GLenum target, GLint level,
+ void GL2Encoder::s_glCopyTexSubImage3D(void *self , GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLint x, GLint y, GLsizei width, GLsizei height) {
+     GL2Encoder *ctx = (GL2Encoder*)self;
+     SET_ERROR_IF(target != GL_TEXTURE_3D &&
++                 target != GL_TEXTURE_CUBE_MAP_ARRAY_OES &&
+                  target != GL_TEXTURE_2D_ARRAY,
+                  GL_INVALID_ENUM);
+     GLint max_texture_size;
+diff --git a/guest/GLESv2_enc/GLESv2Validation.cpp b/guest/GLESv2_enc/GLESv2Validation.cpp
+index e9c78267..512d357e 100644
+--- a/guest/GLESv2_enc/GLESv2Validation.cpp
++++ b/guest/GLESv2_enc/GLESv2Validation.cpp
+@@ -677,6 +677,8 @@ bool textureTarget(GL2Encoder* ctx, GLenum target) {
+         return glesMajorVersion >= 3 && glesMinorVersion >= 1;
+     case GL_TEXTURE_BUFFER_OES:
+         return  ctx->es32Plus() || ctx->getExtensions().textureBufferAny();
++    case GL_TEXTURE_CUBE_MAP_ARRAY_OES:
++        return ctx->es32Plus();
+     default:
+         break;
+     }
+@@ -693,6 +695,8 @@ bool textureParams(GL2Encoder* ctx, GLenum param) {
+     case GL_TEXTURE_WRAP_T:
+     case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+         return true;
++    case GL_TEXTURE_SRGB_DECODE_EXT:
++        return true;
+     case GL_TEXTURE_SWIZZLE_R:
+     case GL_TEXTURE_SWIZZLE_G:
+     case GL_TEXTURE_SWIZZLE_B:
+@@ -710,6 +714,8 @@ bool textureParams(GL2Encoder* ctx, GLenum param) {
+     case GL_DEPTH_STENCIL_TEXTURE_MODE:
+         return glesMajorVersion >= 3 && glesMinorVersion >= 1;
+     default:
++        GFXSTREAM_ERROR("Unsupported texture parameter 0x%x for GLES %d.%d", param,
++                        glesMajorVersion, glesMinorVersion);
+         return false;
+     }
+ }
+@@ -791,6 +797,8 @@ bool textureParamValue(GL2Encoder* ctx, GLenum pname, GLint intval, GLfloat floa
+             (enumval == GL_MIRRORED_REPEAT);
+     case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+         return true;
++    case GL_TEXTURE_SRGB_DECODE_EXT:
++        return enumval == GL_DECODE_EXT || enumval == GL_SKIP_DECODE_EXT;
+     case GL_TEXTURE_IMMUTABLE_FORMAT:
+     case GL_TEXTURE_IMMUTABLE_LEVELS:
+     case GL_DEPTH_STENCIL_TEXTURE_MODE:
+diff --git a/guest/OpenglCodecCommon/GLClientState.cpp b/guest/OpenglCodecCommon/GLClientState.cpp
+index 931c9b47..43fea836 100644
+--- a/guest/OpenglCodecCommon/GLClientState.cpp
++++ b/guest/OpenglCodecCommon/GLClientState.cpp
+@@ -1449,6 +1449,9 @@ GLenum GLClientState::bindTexture(GLenum target, GLuint texture,
+     case GL_TEXTURE_BUFFER_OES:
+         m_tex.activeUnit->texture[TEXTURE_BUFFER] = texture;
+         break;
++    case GL_TEXTURE_CUBE_MAP_ARRAY_OES:
++        m_tex.activeUnit->texture[TEXTURE_CUBE_MAP_ARRAY] = texture;
++        break;
+     }
+ 
+     if (firstUse) {
+@@ -1734,6 +1737,8 @@ GLuint GLClientState::getBoundTexture(GLenum target) const
+         return m_tex.activeUnit->texture[TEXTURE_2D_MULTISAMPLE];
+     case GL_TEXTURE_BUFFER_OES:
+         return m_tex.activeUnit->texture[TEXTURE_BUFFER];
++    case GL_TEXTURE_CUBE_MAP_ARRAY_OES:
++        return m_tex.activeUnit->texture[TEXTURE_CUBE_MAP_ARRAY];
+     default:
+         return 0;
+     }
+diff --git a/guest/OpenglCodecCommon/include/gfxstream/guest/GLClientState.h b/guest/OpenglCodecCommon/include/gfxstream/guest/GLClientState.h
+index d0ec8252..2c4cf2a4 100644
+--- a/guest/OpenglCodecCommon/include/gfxstream/guest/GLClientState.h
++++ b/guest/OpenglCodecCommon/include/gfxstream/guest/GLClientState.h
+@@ -660,6 +660,7 @@ private:
+         TEXTURE_3D = 4,
+         TEXTURE_2D_MULTISAMPLE = 5,
+         TEXTURE_BUFFER = 6,
++        TEXTURE_CUBE_MAP_ARRAY = 7,
+         TEXTURE_TARGET_COUNT
+     };
+     struct TextureUnit {
+diff --git a/host/gl/glestranslator/gles_v2/gles_v2_imp.cpp b/host/gl/glestranslator/gles_v2/gles_v2_imp.cpp
+index c07411c3..4d282747 100644
+--- a/host/gl/glestranslator/gles_v2/gles_v2_imp.cpp
++++ b/host/gl/glestranslator/gles_v2/gles_v2_imp.cpp
+@@ -903,6 +903,9 @@ GL_APICALL void  GL_APIENTRY glCompileShader(GLuint shader){
+ 
+             ctx->dispatcher().glGetShaderiv(globalShaderName,GL_COMPILE_STATUS,&compileStatus);
+             sp->setCompileStatus(compileStatus == GL_FALSE ? false : true);
++            if (compileStatus == GL_FALSE) {
++                GFXSTREAM_ERROR("Host shader compilation failed: %s", infoLog);
++            }
+         } else {
+             ctx->dispatcher().glCompileShader(globalShaderName);
+             sp->setCompileStatus(false);
+@@ -3261,6 +3264,10 @@ GL_APICALL void  GL_APIENTRY glLinkProgram(GLuint program){
+         ctx->dispatcher().glGetProgramInfoLog(globalProgramName, infoLogLength,
+                                               &cLog, log.get());
+ 
++        if (linkStatus == GL_FALSE) {
++            GFXSTREAM_ERROR("Host program link failed: %s", log.get());
++        }
++
+         // Only update when there actually is something to update.
+         if (cLog > 0) {
+             programData->setInfoLog(log.release());
+
+diff --git a/host/gl/glestranslator/gles_v2/gles_v2_validate.cpp b/host/gl/glestranslator/gles_v2/gles_v2_validate.cpp
+index 5b5bd94b..593a581a 100644
+--- a/host/gl/glestranslator/gles_v2/gles_v2_validate.cpp
++++ b/host/gl/glestranslator/gles_v2/gles_v2_validate.cpp
+@@ -353,6 +353,9 @@ bool GLESv2Validate::textureTarget(GLEScontext* ctx, GLenum target) {
+         return glesMajorVersion >= 3;
+     case GL_TEXTURE_2D_MULTISAMPLE:
+         return glesMajorVersion >= 3 && glesMinorVersion >= 1;
++    case GL_TEXTURE_CUBE_MAP_ARRAY:
++        // GL_OES_texture_cube_map_array exposes the same target to ES 3.1.
++        return glesMajorVersion >= 3 && glesMinorVersion >= 1;
+     case GL_TEXTURE_BUFFER:
+         return glesMajorVersion >= 3 && ( glesMinorVersion > 1 ||
+            (glesMinorVersion == 1 && ctx->getCaps()->textureBufferAny()));
+@@ -370,6 +373,7 @@ bool GLESv2Validate::textureParams(GLEScontext* ctx, GLenum param) {
+     case GL_TEXTURE_WRAP_S:
+     case GL_TEXTURE_WRAP_T:
+     case GL_TEXTURE_MAX_ANISOTROPY_EXT:
++    case GL_TEXTURE_SRGB_DECODE_EXT:
+         return true;
+     case GL_TEXTURE_SWIZZLE_R:
+     case GL_TEXTURE_SWIZZLE_G:
+@@ -938,4 +942,3 @@ int GLESv2Validate::sizeOfType(GLenum type) {
+     }
+     return retval;
+ }
+-

@@ -1,0 +1,60 @@
+Patch summary:
+Fix an unsafe failure path in the guest gfxstream EGL implementation found while
+investigating CarX Highway Racing (a Unity 2022.3 il2cpp title) rendering solid
+black despite starting, running, and continuously submitting new frames on an
+x86-64 host.
+
+Root cause chain, confirmed live via adb/logcat on a running instance:
+- The host correctly negotiates its real max GLES dispatch version per
+  session (`host/render_control.cpp`'s `calcMaxVersionFromDispatch()`); on the
+  test host this run settled on ES 3.1, which the guest correctly receives via
+  `ANDROID_EMU_gles_max_version_3_1` and reports through
+  `ExtendedRCEncoderContext::getGLESMaxVersion()`. Unity 2022.3, which requests
+  the highest context version available, asks for ES 3.2 anyway and is
+  correctly rejected by `egl.cpp`'s `eglCreateContext` with
+  `EGL_BAD_CONFIG: no ES 3.2 support` -- this part of the guest/host
+  negotiation is working as designed, not a bug.
+- Immediately afterward (same thread, same frame), a config-attribute query
+  fails with `eglDisplay.cpp`'s "Bad attribute idx." (attribute not present
+  in the set the host reported via `rcGetConfigs`), which `eglGetConfigAttrib`
+  correctly turns into `EGL_BAD_ATTRIBUTE` for callers that check the return
+  value. But the lower-level `eglDisplay::getAttribValue()` this call goes
+  through returns `EGL_FALSE` on that path *without writing `*value`* --
+  leaving the output parameter uninitialized. Any caller that reads `*value`
+  before (or instead of) checking the boolean return -- a real-world pattern
+  this file already defends against for `EGL_FRAMEBUFFER_TARGET_ANDROID`,
+  `EGL_COVERAGE_SAMPLES_NV`, `EGL_COVERAGE_BUFFERS_NV`,
+  `EGL_DEPTH_ENCODING_NV`, and `EGL_COLOR_COMPONENT_TYPE_EXT` via explicit
+  special-casing a few lines above this function -- gets whatever garbage was
+  left on the stack instead of a defined value. That is consistent with an
+  app's post-rejection fallback silently configuring a broken surface/context
+  and continuing to submit frames that never show real content, instead of
+  failing loudly or falling back to a supported ES version (3.1 in this case).
+
+What this patch does: makes `eglDisplay::getAttribValue()` write a
+well-defined value (0) before returning `EGL_FALSE` for an unrecognized
+attribute index, matching the "always leave the output parameter in a defined
+state" contract every other special-cased attribute in this file already
+follows. This cannot regress any caller that correctly checks the `EGLBoolean`
+return (they were already required to ignore `*value` on failure); it only
+removes an uninitialized-read hazard for callers that do not.
+
+diff --git a/guest/egl/eglDisplay.cpp b/guest/egl/eglDisplay.cpp
+index 4607b10d..30c04050 100644
+--- a/guest/egl/eglDisplay.cpp
++++ b/guest/egl/eglDisplay.cpp
+@@ -451,6 +451,14 @@ EGLBoolean eglDisplay::getAttribValue(EGLConfig config, EGLint attribIdx, EGLint
+     if (attribIdx == ATTRIBUTE_NONE)
+     {
+         GFXSTREAM_ERROR("Bad attribute idx.");
++        // Some callers (e.g. eglCreateWindowSurface/eglCreatePbufferSurface's
++        // inline EGL_SURFACE_TYPE probe, and app fallback paths that run after
++        // a rejected context/config request) do not all check this function's
++        // EGLBoolean return before reading *value. Leaving it uninitialized
++        // lets whatever garbage was on the caller's stack pass for a real
++        // attribute value, which can silently corrupt surface/config decisions
++        // instead of failing loudly. Give it a well-defined, inert value.
++        *value = 0;
+         return EGL_FALSE;
+     }
+     *value = *(m_configs + (intptr_t)(getIndexOfConfig(config))*m_numConfigAttribs + attribIdx);

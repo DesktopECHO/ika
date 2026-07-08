@@ -1,0 +1,70 @@
+Patch summary:
+Split the Ranchu radio service build inputs into a defaults module and expose
+the Ranchu sources and VINTF fragment as filegroups so the pinned Cuttlefish
+radio APEX can reuse the same implementation while keeping its own rc and
+metadata.
+
+diff --git a/hals/radio/Android.bp b/hals/radio/Android.bp
+index b1601958..935aab7b 100644
+--- a/hals/radio/Android.bp
++++ b/hals/radio/Android.bp
+@@ -22,11 +22,8 @@ package {
+     default_applicable_licenses: ["device_generic_goldfish_license"],
+ }
+ 
+-cc_binary {
+-    name: "android.hardware.radio-service.ranchu",
+-    relative_install_path: "hw",
+-    vendor: true,
+-    cpp_std: "c++20",
++filegroup {
++    name: "android.hardware.radio.ranchu-sources",
+     srcs: [
+         "AtChannel.cpp",
+         "AtResponse.cpp",
+@@ -47,8 +44,21 @@ cc_binary {
+         "RadioVoice.cpp",
+         "Sap.cpp",
+     ],
+-    init_rc: ["android.hardware.radio.ranchu.rc"],
+-    vintf_fragments: ["android.hardware.radio.ranchu.xml"],
++    visibility: ["//device/google/cuttlefish/apex/com.google.cf.rild"],
++}
++
++filegroup {
++    name: "android.hardware.radio.ranchu-manifests",
++    srcs: ["android.hardware.radio.ranchu.xml"],
++    visibility: ["//device/google/cuttlefish/apex/com.google.cf.rild"],
++}
++
++cc_defaults {
++    name: "android.hardware.radio-service.ranchu.defaults",
++    cpp_std: "c++20",
++    srcs: [
++        "//device/generic/goldfish/hals/radio:android.hardware.radio.ranchu-sources",
++    ],
+     shared_libs: [
+         "android.hardware.radio.config-V5-ndk",
+         "android.hardware.radio.data-V5-ndk",
+@@ -68,9 +78,20 @@ cc_binary {
+         "libutils",
+     ],
+     cflags: [
+-        "-DLOG_TAG=\"radio-service.ranchu\"",
+         "-DANDROID_BASE_UNIQUE_FD_DISABLE_IMPLICIT_CONVERSION",
+     ],
++}
++
++cc_binary {
++    name: "android.hardware.radio-service.ranchu",
++    defaults: ["android.hardware.radio-service.ranchu.defaults"],
++    relative_install_path: "hw",
++    vendor: true,
++    init_rc: ["android.hardware.radio.ranchu.rc"],
++    vintf_fragments: ["android.hardware.radio.ranchu.xml"],
++    cflags: [
++        "-DLOG_TAG=\"radio-service.ranchu\"",
++    ],
+     required: [
+         "EmulatorRadioConfig",
+         "EmulatorTetheringConfigOverlay",

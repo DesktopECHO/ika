@@ -1,0 +1,71 @@
+Patch summary:
+Adapt the pinned Cuttlefish system_ext policy to this branch's platform sepolicy
+API. This tree exposes date-based compat types such as platform_app_202504, not
+platform_app_36, and does not define the newer platform_app_all aggregate. It
+also only declares the older Trusty accessor service labels. Use the live
+platform_app domain for the current platform app permissions, drop the
+unsupported versioned fragment, keep the Trusty launcher registrations to
+services this branch actually defines, and drop newer vendor policy fragments
+unsupported by this branch's checkpolicy/sepolicy API.
+
+diff --git a/shared/sepolicy/system_ext/private/platform_app_36.te b/shared/sepolicy/system_ext/private/platform_app_36.te
+deleted file mode 100644
+index b37b5232c..000000000
+--- a/shared/sepolicy/system_ext/private/platform_app_36.te
++++ /dev/null
+@@ -1,3 +0,0 @@
+-# allow platform_app/systemui access to fingerprint
+-hal_client_domain(platform_app_36, hal_fingerprint)
+-hal_client_domain(platform_app_36, hal_face)
+diff --git a/shared/sepolicy/system_ext/private/platform_app_all.te b/shared/sepolicy/system_ext/private/platform_app_all.te
+index 5096dcbc8..7f6d3bcce 100644
+--- a/shared/sepolicy/system_ext/private/platform_app_all.te
++++ b/shared/sepolicy/system_ext/private/platform_app_all.te
+@@ -1,7 +1,7 @@
+-get_prop(platform_app_all, vendor_aware_available_prop)
++get_prop(platform_app, vendor_aware_available_prop)
+ 
+ # allow systemui to set boot animation colors
+-set_prop(platform_app_all, bootanim_system_prop);
++set_prop(platform_app, bootanim_system_prop);
+ 
+ # allow systemui access to bluetooth_lea_prop
+-get_prop(platform_app_all, bluetooth_lea_prop)
++get_prop(platform_app, bluetooth_lea_prop)
+diff --git a/shared/sepolicy/system_ext/private/trusty_security_vm_launcher.te b/shared/sepolicy/system_ext/private/trusty_security_vm_launcher.te
+index f53e777cd..d114d4e44 100644
+--- a/shared/sepolicy/system_ext/private/trusty_security_vm_launcher.te
++++ b/shared/sepolicy/system_ext/private/trusty_security_vm_launcher.te
+@@ -9,9 +9,6 @@ is_flag_enabled(RELEASE_AVF_ENABLE_EARLY_VM, `
+     early_virtmgr_use(trusty_security_vm_launcher)
+     binder_use(trusty_security_vm_launcher)
+     add_service(trusty_security_vm_launcher, accessor_trusty_keymint_comm_service)
+-    add_service(trusty_security_vm_launcher, accessor_trusty_keymint_provisioning_service)
+-    add_service(trusty_security_vm_launcher, accessor_trusty_gatekeeper_service)
+-    add_service(trusty_security_vm_launcher, accessor_trusty_hwcrypto_sharedsecret_service)
+ 
+     allow trusty_security_vm_launcher kmsg_debug_device:chr_file rw_file_perms;
+     use_bootstrap_libs(trusty_security_vm_launcher)
+diff --git a/shared/sepolicy/vendor/policy_capabilities b/shared/sepolicy/vendor/policy_capabilities
+deleted file mode 100644
+index 16773190a..000000000
+--- a/shared/sepolicy/vendor/policy_capabilities
++++ /dev/null
+@@ -1,3 +0,0 @@
+-starting_at_board_api(202604, `
+-  policycap memfd_class;
+-')
+diff --git a/shared/sepolicy/vendor/hal_npu_scheduling_cuttlefish.te b/shared/sepolicy/vendor/hal_npu_scheduling_cuttlefish.te
+deleted file mode 100644
+index d5bd4efcb..000000000
+--- a/shared/sepolicy/vendor/hal_npu_scheduling_cuttlefish.te
++++ /dev/null
+@@ -1,7 +0,0 @@
+-starting_at_board_api(202604, `
+-  type hal_npu_scheduling_cuttlefish, domain;
+-  hal_server_domain(hal_npu_scheduling_cuttlefish, hal_npu_scheduling)
+-
+-  type hal_npu_scheduling_cuttlefish_exec, exec_type, vendor_file_type, file_type;
+-  init_daemon_domain(hal_npu_scheduling_cuttlefish)
+-')
+\ No newline at end of file

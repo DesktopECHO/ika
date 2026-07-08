@@ -1,0 +1,30 @@
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(
+    default_visibility = ["@//:android_cuttlefish"],
+)
+
+cc_import(
+    name = "pipewire_shared",
+    shared_library = (
+        glob(["lib64/libpipewire-0.3.so"], allow_empty = True) +
+        glob(["lib/libpipewire-0.3.so"], allow_empty = True) +
+        glob(["lib/x86_64-linux-gnu/libpipewire-0.3.so"], allow_empty = True) +
+        glob(["lib/aarch64-linux-gnu/libpipewire-0.3.so"], allow_empty = True)
+    )[0],
+)
+
+cc_library(
+    name = "pipewire",
+    hdrs = glob([
+        "include/pipewire-0.3/**/*.h",
+        "include/spa-0.2/**/*.h",
+    ]),
+    includes = [
+        "include/pipewire-0.3",
+        "include/spa-0.2",
+    ],
+    linkopts = ["-pthread"],
+    deps = [":pipewire_shared"],
+)

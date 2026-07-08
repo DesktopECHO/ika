@@ -67,6 +67,7 @@ int main(int argc, char** argv) {
       cuttlefish::SharedFD::Open(path.c_str(), O_CREAT | O_APPEND | O_WRONLY, 0666);
 
   // Server loop
+  size_t dropped_bytes = 0;
   while (true) {
     char buff[1024];
     auto read = pipe->Read(buff, sizeof(buff));
@@ -75,9 +76,27 @@ int main(int argc, char** argv) {
       break;
     }
     auto written = cuttlefish::WriteAll(logcat_file, buff, read);
-    CHECK(written == read) << "Error writing to log file: "
-                           << logcat_file->StrError()
-                           << ". This is unrecoverable.";
+    if (written == read) {
+      if (dropped_bytes > 0) {
+        LOG(ERROR) << "Log file writable again after dropping " << dropped_bytes
+                   << " bytes of guest logs";
+        dropped_bytes = 0;
+      }
+      continue;
+    }
+    // A log file write failure must not kill this process: run_cvd monitors
+    // it as critical and stops the entire device when it exits. Keep draining
+    // the pipe so the guest console never blocks, drop the unwritten data,
+    // and reopen the file in case it was rotated or deleted. Log only on the
+    // first failed write of a streak so a persistent failure cannot flood the
+    // launcher log.
+    if (dropped_bytes == 0) {
+      LOG(ERROR) << "Error writing to log file: " << logcat_file->StrError()
+                 << "; dropping guest log data and reopening the file";
+    }
+    dropped_bytes += read - (written > 0 ? written : 0);
+    logcat_file = cuttlefish::SharedFD::Open(path.c_str(),
+                                             O_CREAT | O_APPEND | O_WRONLY, 0666);
   }
 
   logcat_file->Close();

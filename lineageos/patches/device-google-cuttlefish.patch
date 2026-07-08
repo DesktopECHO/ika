@@ -10,15 +10,97 @@ assumptions where the host is responsible for the hardware experience, while
 preserving the Cuttlefish pieces still needed for boot, graphics, and packaging.
 Host-side AVB key lookup is also pointed at the ROM/product bundle first, so
 the ROM owns its signing keys and empty host placeholders cannot shadow them.
+The patch also carries the generated Soong serializer expected by the pinned
+Cuttlefish snapshot, keeping bootstrap verification reproducible.
+The Cuttlefish NPU APEX is disabled for this tree because the pinned Cuttlefish
+snapshot is ahead of the platform NPU Rust interface variants available here.
+The Bluetooth service is kept on the offload modules available in this platform
+tree by omitting the newer A2DP offload crate.
+Lavapipe host ICD generation is pointed at this tree's Mesa Vulkan XML module.
+Ika desktop products also disable the newer Bluetooth LPP service instance when
+this platform tree does not provide its socket service binary.
 Desktop SELinux extensions cover expected graphics debug-property reads and
 host-driven shell helpers so normal boot, scrcpy, and resize/provisioning flows
 do not leave avoidable enforcing-mode denials behind.
 The ARM64 desktop target is pinned to ARMv8.2-A as its minimum device ISA.
+ARM64 hosts are allowed to satisfy accelerated GPU mode requirements because
+Ika explicitly carries and tests the ARM64 host graphics stack.
 Userdata stays ext4 and sparse/thin-provisioned, with the default size raised
 to 61 GiB.
+snd-aloop is excluded from the boot ramdisks on both architectures so
+virtio-snd enumerates as ALSA card 0: the generic AIDL audio HAL plays to
+card 0/device 0 by default, and a first-stage-loaded loopback card would
+silently swallow the guest audio meant for the host virtio-snd server.
+ADB host exposure is loopback-only while user builds keep guest TCP ADB
+available without interactive key authorization.
 
+diff --git a/host/libs/config/adb/launch.cpp b/host/libs/config/adb/launch.cpp
+index 4ab0a2e0e..9f635f15d 100644
+--- a/host/libs/config/adb/launch.cpp
++++ b/host/libs/config/adb/launch.cpp
+@@ -43,7 +43,7 @@ class AdbHelper {
+   }
+ 
+   std::string ConnectorTcpArg() const {
+-    return "0.0.0.0:" + std::to_string(instance_.adb_host_port());
++    return "127.0.0.1:" + std::to_string(instance_.adb_host_port());
+   }
+ 
+   std::string ConnectorVsockArg() const {
+diff --git a/host/commands/assemble_cvd/graphics_flags.cc b/host/commands/assemble_cvd/graphics_flags.cc
+index efa4b3a50..11ad7bbd8 100644
+--- a/host/commands/assemble_cvd/graphics_flags.cc
++++ b/host/commands/assemble_cvd/graphics_flags.cc
+@@ -65,15 +65,6 @@ struct RequirementWithReason {
+ 
+ const std::unordered_map<GpuMode, std::vector<RequirementWithReason>>&
+ GetGpuModeRequirementsMap() {
+-  const RequirementWithReason kHostIsNonArm{
+-      .func = [](const CommonState&) { return HostArch() != Arch::Arm64; },
+-      .success_explanation = "The host is not ARM64.",
+-      .failure_explanation =
+-          "The host is ARM64. Not enabling accelerated modes on ARM64 until "
+-          "vhost-user-gpu has been more thoroughly tested. Please explicitly "
+-          "use --gpu_mode=gfxstream or --gpu_mode=gfxstream_guest_angle to "
+-          "enable for now.",
+-  };
+   const RequirementWithReason kNotUsingHostQemu{
+       .func =
+           [](const CommonState& common) {
+@@ -185,7 +176,6 @@ GetGpuModeRequirementsMap() {
+                   kGuestSupportsGfxstream,
+                   kHostGlesAvailable,
+                   kHostGlesIsNonSoftwareRenderer,
+-                  kHostIsNonArm,
+                   kHostVulkanAvailable,
+                   kHostVulkanIsNonSoftwareRenderer,
+               },
+@@ -194,7 +184,6 @@ GetGpuModeRequirementsMap() {
+               GpuMode::GfxstreamGuestAngle,
+               {
+                   kGuestSupportsGfxstream,
+-                  kHostIsNonArm,
+                   kHostVulkanAvailable,
+                   kHostVulkanIsNonSoftwareRenderer,
+                   kNotUsingHostQemu,
+@@ -204,7 +193,6 @@ GetGpuModeRequirementsMap() {
+               GpuMode::GfxstreamGuestAngleHostSwiftshader,
+               {
+                   kGuestSupportsGfxstream,
+-                  kHostIsNonArm,
+                   kHostVulkanAvailable,
+                   kNotUsingHostQemu,
+               },
+@@ -213,7 +201,6 @@ GetGpuModeRequirementsMap() {
+               GpuMode::GfxstreamGuestAngleHostLavapipe,
+               {
+                   kGuestSupportsGfxstream,
+-                  kHostIsNonArm,
+                   kHostVulkanAvailable,
+                   kNotUsingHostQemu,
+               },
 diff --git a/AndroidProducts.mk b/AndroidProducts.mk
-index ff5f2cc46..173663686 100644
+index 8ab931f99..c8fd248cf 100644
 --- a/AndroidProducts.mk
 +++ b/AndroidProducts.mk
 @@ -20,6 +20,7 @@ PRODUCT_MAKEFILES := \
@@ -29,21 +111,23 @@ index ff5f2cc46..173663686 100644
  	aosp_cf_arm64_phone_fullmte:$(LOCAL_DIR)/vsoc_arm64_only/phone/aosp_cf_fullmte.mk \
  	aosp_cf_arm64_phone_hwasan:$(LOCAL_DIR)/vsoc_arm64/phone/aosp_cf_hwasan.mk \
  	aosp_cf_arm64_only_phone:$(LOCAL_DIR)/vsoc_arm64_only/phone/aosp_cf.mk \
-@@ -39,6 +40,7 @@ PRODUCT_MAKEFILES := \
+@@ -40,7 +41,8 @@ PRODUCT_MAKEFILES := \
  	aosp_cf_x86_64_auto_portrait:$(LOCAL_DIR)/vsoc_x86_64_only/auto_portrait/aosp_cf.mk \
+ 	aosp_cf_x86_64_desktop:$(LOCAL_DIR)/vsoc_x86_64_only/desktop/aosp_cf.mk \
  	aosp_cf_x86_64_pc:$(LOCAL_DIR)/vsoc_x86_64_only/pc/aosp_cf.mk \
  	aosp_cf_x86_64_phone:$(LOCAL_DIR)/vsoc_x86_64/phone/aosp_cf.mk \
 +	aosp_cf_ika_x86_64:$(LOCAL_DIR)/ika_x86_64/desktop/aosp_cf.mk \
- 	aosp_cf_x86_64_phone_soong_system:$(LOCAL_DIR)/vsoc_x86_64/phone/aosp_cf_soong_system.mk \
- 	aosp_cf_x86_64_phone_vendor:$(LOCAL_DIR)/vsoc_x86_64/phone/aosp_cf_vendor.mk \
- 	aosp_cf_x86_64_ssi:$(LOCAL_DIR)/vsoc_x86_64/phone/aosp_cf_ssi.mk \
-@@ -58,9 +60,11 @@ PRODUCT_MAKEFILES := \
+ 	aosp_cf_x86_64_tv:$(LOCAL_DIR)/vsoc_x86_64_only/tv/aosp_cf.mk \
+ 	aosp_cf_x86_64_foldable:$(LOCAL_DIR)/vsoc_x86_64_only/phone/aosp_cf_foldable.mk \
+ 	aosp_cf_x86_64_host:$(LOCAL_DIR)/vsoc_x86_64_host/aosp_cf.mk \
+@@ -60,10 +62,12 @@ PRODUCT_MAKEFILES := \
  COMMON_LUNCH_CHOICES := \
  	aosp_cf_arm64_auto-trunk_staging-userdebug \
  	aosp_cf_arm64_phone-trunk_staging-userdebug \
 +	aosp_cf_ika_arm64-trunk_staging-userdebug \
  	aosp_cf_riscv64_phone-trunk_staging-userdebug \
  	aosp_cf_x86_64_only_phone_hsum-trunk_staging-userdebug \
+ 	aosp_cf_x86_64_desktop-trunk_staging-userdebug \
  	aosp_cf_x86_64_pc-trunk_staging-userdebug \
 +	aosp_cf_ika_x86_64-trunk_staging-userdebug \
  	aosp_cf_x86_64_phone-trunk_staging-userdebug \
@@ -84,6 +168,15 @@ diff --git a/host/commands/assemble_cvd/flags.cc b/host/commands/assemble_cvd/fl
 index 978df685d..ef1ed0b6e 100644
 --- a/host/commands/assemble_cvd/flags.cc
 +++ b/host/commands/assemble_cvd/flags.cc
+@@ -2036,7 +2036,7 @@ Result<void> SetInstanceSpecificFlags(
+     // the deprecated vnc was 6444 + num - 1, and qemu_vnc was vnc - 5900
+     instance.set_qemu_vnc_server_port(544 + num - 1);
+     instance.set_adb_host_port(6520 + num - 1);
+-    instance.set_adb_ip_and_port("0.0.0.0:" + std::to_string(6520 + num - 1));
++    instance.set_adb_ip_and_port("127.0.0.1:" + std::to_string(6520 + num - 1));
+     instance.set_fastboot_host_port(const_instance.adb_host_port());
+ 
+     instance.set_enable_vhal_proxy_server(
 @@ -2475,11 +2475,7 @@ Result<std::vector<GuestConfig>> GetGuestConfigAndSetDefaults() {
                "all instance target_arch should be same");
    }
@@ -123,6 +216,124 @@ index b31638ad7..c9b0a1302 100644
  
  TARGET_VULKAN_SUPPORT ?= true
  
+@@ -485,13 +485,16 @@ PRODUCT_PACKAGES += \
+ # NPU HAL
+ #
+ ifeq ($(RELEASE_AIDL_USE_UNFROZEN),true)
++LOCAL_NPU_HAL_PRODUCT_PACKAGE ?= com.android.hardware.npu.cf
++ifneq ($(strip $(LOCAL_NPU_HAL_PRODUCT_PACKAGE)),)
+     PRODUCT_PACKAGES += \
+-        com.android.hardware.npu.cf
++        $(LOCAL_NPU_HAL_PRODUCT_PACKAGE)
+ 
+     # Indicates that Cuttlefish has NPU support
+     PRODUCT_COPY_FILES += \
+         frameworks/native/data/etc/android.hardware.npu.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.npu.xml
+ endif
++endif
+ 
+ # USB
+ PRODUCT_PACKAGES += \
+diff --git a/guest/hals/npu/Android.bp b/guest/hals/npu/Android.bp
+index 651017034..32889819c 100644
+--- a/guest/hals/npu/Android.bp
++++ b/guest/hals/npu/Android.bp
+@@ -24,6 +24,7 @@ vintf_fragment {
+ 
+ rust_binary {
+     name: "android.hardware.npu@V1-cf-service",
++    enabled: false,
+     relative_install_path: "hw",
+     vendor: true,
+     prefer_rlib: true,
+@@ -47,6 +48,7 @@ rust_binary {
+ 
+ rust_binary {
+     name: "run-test-inference",
++    enabled: false,
+     vendor: true,
+     prefer_rlib: true,
+     rustlibs: [
+diff --git a/guest/hals/npu/apex/Android.bp b/guest/hals/npu/apex/Android.bp
+index b3dcd7170..11e3db704 100644
+--- a/guest/hals/npu/apex/Android.bp
++++ b/guest/hals/npu/apex/Android.bp
+@@ -30,6 +30,7 @@ prebuilt_etc {
+ 
+ apex {
+     name: "com.android.hardware.npu.cf",
++    enabled: false,
+     manifest: "apex_manifest.json",
+     key: "com.android.hardware.npu.test.key",
+     file_contexts: "file_contexts",
+diff --git a/guest/hals/bluetooth/Android.bp b/guest/hals/bluetooth/Android.bp
+index 3d1c710a9..638bc9f6a 100644
+--- a/guest/hals/bluetooth/Android.bp
++++ b/guest/hals/bluetooth/Android.bp
+@@ -29,7 +29,6 @@ rust_binary {
+         "libbinder_rs",
+         "libbinder_tokio_rs",
+         "libbluetooth_offload_hal",
+-        "libbluetooth_offload_a2dp_hci",
+         "libbluetooth_offload_leaudio_hci",
+         "libbytes",
+         "liblibc",
+diff --git a/guest/hals/bluetooth/src/main.rs b/guest/hals/bluetooth/src/main.rs
+index 93270ed6e..bf90ac8d2 100644
+--- a/guest/hals/bluetooth/src/main.rs
++++ b/guest/hals/bluetooth/src/main.rs
+@@ -19,7 +19,6 @@
+ 
+ use android_hardware_bluetooth::aidl::android::hardware::bluetooth::IBluetoothHci::BnBluetoothHci;
+ use binder::{self, BinderFeatures, ProcessState};
+-use bluetooth_offload_a2dp_hci::A2dpModuleBuilder;
+ use bluetooth_offload_hal::HciProxy;
+ use bluetooth_offload_leaudio_hci::LeAudioModuleBuilder;
+ use log::{error, info};
+@@ -56,7 +55,7 @@ fn main() {
+ 
+     let hci_binder = BnBluetoothHci::new_binder(
+         HciProxy::new(
+-            vec![Box::new(LeAudioModuleBuilder {}), Box::new(A2dpModuleBuilder {})],
++            vec![Box::new(LeAudioModuleBuilder {})],
+             hci::BluetoothHci::new(&opt.serial),
+         ),
+         binder::BinderFeatures::default(),
+diff --git a/apex/com.google.cf.bt/Android.bp b/apex/com.google.cf.bt/Android.bp
+index 782ca1d27..2b73866f4 100644
+--- a/apex/com.google.cf.bt/Android.bp
++++ b/apex/com.google.cf.bt/Android.bp
+@@ -58,6 +58,7 @@ prebuilt_etc {
+ 
+ prebuilt_etc {
+     name: "android.hardware.bluetooth.socket-service.lpp.xml",
++    enabled: false,
+     src: ":manifest_android.hardware.bluetooth.socket-service.lpp.xml",
+     sub_dir: "vintf",
+     installable: false,
+diff --git a/build/Android.bp b/build/Android.bp
+--- a/build/Android.bp
++++ b/build/Android.bp
+@@ -471,7 +471,7 @@ cvd_host_swiftshader_files = [
+ genrule {
+     name: "vk_lavapipe_icd.cf.json",
+     srcs: [
+-        ":vk_api_xml",
++        ":mesa_vulkan_xml",
+     ],
+     out: [
+         "vk_lavapipe_icd.cf.json",
+@@ -479,7 +479,7 @@ genrule {
+     tools: [
+-        "vk_icd_py_binary",
++        "vk_icd_gen",
+     ],
+-    cmd: "python3 $(location vk_icd_py_binary) --api-version 1.4 --xml $(location :vk_api_xml) " +
+-        "--icd-lib-path ../../../../lib64 --icd-filename vulkan.lvp.so --out $(location vk_lavapipe_icd.cf.json)",
++    cmd: "python3 $(location vk_icd_gen) --api-version 1.4 --xml $(location :mesa_vulkan_xml) " +
++        "--lib-path ../../../../lib64/vulkan.lvp.so --out $(location vk_lavapipe_icd.cf.json)",
+ }
+
 diff --git a/shared/desktop/android-info.txt b/shared/desktop/android-info.txt
 new file mode 100644
 index 000000000..fcd665dc4
@@ -132,6 +343,20 @@ index 000000000..fcd665dc4
 +config=tablet
 +gfxstream=supported
 +gfxstream_gl_program_binary_link_status=supported
+diff --git a/shared/bluetooth/device_vendor.mk b/shared/bluetooth/device_vendor.mk
+index 794e33d5f..0dad968d4 100644
+--- a/shared/bluetooth/device_vendor.mk
++++ b/shared/bluetooth/device_vendor.mk
+@@ -34,7 +34,8 @@ endif
+ 
+ PRODUCT_PACKAGES += com.google.cf.bt
+ 
+-$(call soong_config_set_bool,cuttlefish_config,bt_lpp_service_instance_enabled, $(RELEASE_BLUETOOTH_LPP_SERVICE_INSTANCE))
++LOCAL_BT_LPP_SERVICE_INSTANCE_ENABLED ?= $(RELEASE_BLUETOOTH_LPP_SERVICE_INSTANCE)
++$(call soong_config_set_bool,cuttlefish_config,bt_lpp_service_instance_enabled, $(LOCAL_BT_LPP_SERVICE_INSTANCE_ENABLED))
+ 
+ else # BOARD_HAVE_BLUETOOTH == true
+ 
 diff --git a/shared/desktop/device_vendor.mk b/shared/desktop/device_vendor.mk
 index 067d0f323..2835ed013 100644
 --- a/shared/desktop/device_vendor.mk
@@ -227,17 +452,6 @@ index d194959f0..05f1ace3e 100644
 +    vendor: true,
      sdk_version: "current",
  }
-diff --git a/shared/overlays/core/res/values/config.xml b/shared/overlays/core/res/values/config.xml
-index cd86d5fcc..cc280aa19 100644
---- a/shared/overlays/core/res/values/config.xml
-+++ b/shared/overlays/core/res/values/config.xml
-@@ -76,4 +76,4 @@
-     <string name="config_satellite_emergency_handover_intent_action">com.google.android.apps.stargate.ACTION_ESOS_QUESTIONNAIRE</string>
-     <!-- The intent action to handle esp loopback eSOS messaging. -->
-     <string name="config_satellite_test_with_esp_replies_intent_action">com.google.android.apps.stargate.ACTION_ESOS_QUESTIONNAIRE_TEST_WITH_ESP_REPLIES</string>
--</resources>
-\ No newline at end of file
-+</resources>
 diff --git a/shared/sepolicy/system_ext/private/set_adb.te b/shared/sepolicy/system_ext/private/set_adb.te
 index e66a3fa73..3048390b9 100644
 --- a/shared/sepolicy/system_ext/private/set_adb.te
@@ -286,6 +500,15 @@ index 203bf5fc8..f7f1c1e91 100644
  # /mnt/sdcard -> /storage/self/primary symlink is deprecated. Ignore attempts to
  # create it. This denial is fixed in core policy in Android R aosp/943799.
  dontaudit init tmpfs:lnk_file create;
+diff --git a/shared/sepolicy/vendor/file.te b/shared/sepolicy/vendor/file.te
+index e30a8ece8..1c68677e5 100644
+--- a/shared/sepolicy/vendor/file.te
++++ b/shared/sepolicy/vendor/file.te
+@@ -4,3 +4,4 @@ type mediadrm_vendor_data_file, file_type, data_file_type;
+ type mcu_control_device, dev_type;
+ type mcu_uart_device, dev_type;
+ type ti50_char_device, dev_type;
++type hal_motioncontext_default_exec, exec_type, vendor_file_type, file_type;
 diff --git a/shared/sepolicy/vendor/shell.te b/shared/sepolicy/vendor/shell.te
 index 5b97180de..06a02fe22 100644
 --- a/shared/sepolicy/vendor/shell.te
@@ -408,7 +631,7 @@ new file mode 100644
 index 000000000..9f7af06cb
 --- /dev/null
 +++ b/ika_arm64/BoardConfig.mk
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,83 @@
 +#
 +# Copyright 2026 The Android Open-Source Project
 +#
@@ -483,12 +706,21 @@ index 000000000..9f7af06cb
 +BOARD_KERNEL_MODULES_16K := $(wildcard kernel/prebuilts/$(TARGET_KERNEL_USE)/$(TARGET_KERNEL_ARCH)/16k/*.ko)
 +BOARD_KERNEL_MODULES_16K += $(wildcard kernel/prebuilts/common-modules/virtual-device/$(TARGET_KERNEL_USE)/$(TARGET_KERNEL_ARCH)/16k/*.ko)
 +endif
++
++# Keep snd-aloop out of the boot ramdisks. First-stage init loads every module
++# packed there (the vendor_dlkm blocklist that suppresses snd_aloop in second
++# stage does not apply that early), so the loopback would claim ALSA card 0
++# ahead of virtio-snd. The generic AIDL audio HAL's primary stream opens
++# card 0/device 0 when the Speaker port has no address, sending all guest
++# audio into the loopback instead of the host virtio-snd server.
++BOARD_VENDOR_RAMDISK_KERNEL_MODULES := $(filter-out %/snd-aloop.ko,$(BOARD_VENDOR_RAMDISK_KERNEL_MODULES))
++BOARD_KERNEL_MODULES_16K := $(filter-out %/snd-aloop.ko,$(BOARD_KERNEL_MODULES_16K))
 diff --git a/ika_arm64/desktop/aosp_cf.mk b/ika_arm64/desktop/aosp_cf.mk
 new file mode 100644
 index 000000000..5ef2f3b56
 --- /dev/null
 +++ b/ika_arm64/desktop/aosp_cf.mk
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,88 @@
 +#
 +# Copyright (C) 2026 The Android Open Source Project
 +#
@@ -547,6 +779,9 @@ index 000000000..5ef2f3b56
 +#
 +# All components inherited here go to vendor image
 +#
++LOCAL_BT_LPP_SERVICE_INSTANCE_ENABLED := false
++LOCAL_NPU_HAL_PRODUCT_PACKAGE :=
++LOCAL_ENABLE_LIGHT := false
 +$(call inherit-product, device/google/cuttlefish/shared/desktop/device_vendor.mk)
 +
 +#
@@ -566,6 +801,7 @@ index 000000000..5ef2f3b56
 +PRODUCT_NO_BIONIC_PAGE_SIZE_MACRO := true
 +
 +PRODUCT_VENDOR_PROPERTIES += \
++    ro.surface_flinger.force_present_timestamp=true \
 +    ro.soc.manufacturer=$(PRODUCT_MANUFACTURER) \
 +    ro.soc.model=$(PRODUCT_DEVICE)
 +
@@ -575,6 +811,109 @@ index 000000000..5ef2f3b56
 +
 +# Ignore all Android.mk files
 +PRODUCT_IGNORE_ALL_ANDROIDMK := true
+diff --git a/host/libs/vm_manager/crosvm_manager.cpp b/host/libs/vm_manager/crosvm_manager.cpp
+index e82db4277..7f572b53b 100644
+--- a/host/libs/vm_manager/crosvm_manager.cpp
++++ b/host/libs/vm_manager/crosvm_manager.cpp
+@@ -123,7 +123,7 @@ CrosvmManager::ConfigureGraphics(
+         {"androidboot.hardware.egl", gles_impl},
+         {"androidboot.hardware.vulkan", "ranchu"},
+         {"androidboot.hardware.gltransport", gfxstream_transport},
+-        {"androidboot.opengles.version", "196609"},  // OpenGL ES 3.1
++        {"androidboot.opengles.version", "196610"},  // OpenGL ES 3.2
+     };
+   } else if (instance.gpu_mode() == GpuMode::Custom) {
+     bootconfig_args = {
+diff --git a/build/cvd-host-package.go b/build/cvd-host-package.go
+--- a/build/cvd-host-package.go
++++ b/build/cvd-host-package.go
+@@ -38,7 +38,6 @@ func init() {
+ type cvdHostPackage struct {
+ 	android.ModuleBase
+ 	android.PackagingBase
+-	blueprint.ModuleUsesIncrementalWalkDeps
+ }
+ 
+ // We need to implement IsNativeCoverageNeeded so that in coverage builds we don't get packaging
+@@ -121,8 +120,7 @@ func (c *cvdHostPackage) GenerateAndroidBuildActions(ctx android.ModuleContext)
+ 	tarball := sboxDir.Join(ctx, c.BaseModuleName()+".tar.gz")
+ 
+ 	builder := android.NewRuleBuilder(pctx, ctx).
+-		Sbox(sboxDir, sboxManifest).
+-		SandboxDisabled()
++		Sbox(sboxDir, sboxManifest)
+ 	builder.Command().Text("rm").Flag("-rf").Text(packageDir.String())
+ 	builder.Command().Text("mkdir").Flag("-p").Text(packageDir.String())
+ 	specs := c.GatherPackagingSpecs(ctx)
+diff --git a/build/Android.bp b/build/Android.bp
+--- a/build/Android.bp
++++ b/build/Android.bp
+@@ -65,7 +65,7 @@ bootstrap_go_package {
+     ],
+     srcs: [
+         "cvd-host-package.go",
+-        "cuttlefish_enc.go",
++        "cvd-host-package_gob_enc.go",
+     ],
+     pluginFor: ["soong_build"],
+ }
+diff --git a/build/cvd-host-package_gob_enc.go b/build/cvd-host-package_gob_enc.go
+new file mode 100644
+index 000000000..8d4aae104
+--- /dev/null
++++ b/build/cvd-host-package_gob_enc.go
+@@ -0,0 +1,51 @@
++// Code generated by go run gob_gen.go; DO NOT EDIT.
++
++package cuttlefish
++
++import (
++	"android/soong/android"
++	"bytes"
++	"github.com/google/blueprint/gobtools"
++)
++
++func init() {
++	CvdHostPackageMetadataInfoGobRegId = gobtools.RegisterType(func() gobtools.CustomDec { return new(CvdHostPackageMetadataInfo) })
++}
++
++func (r CvdHostPackageMetadataInfo) Encode(ctx gobtools.EncContext, buf *bytes.Buffer) error {
++	var err error
++
++	if err = gobtools.EncodeInterface(ctx, buf, r.TarballMetadata); err != nil {
++		return err
++	}
++
++	if err = gobtools.EncodeSimple(buf, r.IsLinuxX8664); err != nil {
++		return err
++	}
++	return err
++}
++
++func (r *CvdHostPackageMetadataInfo) Decode(ctx gobtools.EncContext, buf *bytes.Reader) error {
++	var err error
++
++	if val2, err := gobtools.DecodeInterface(ctx, buf); err != nil {
++		return err
++	} else if val2 == nil {
++		r.TarballMetadata = nil
++	} else {
++		r.TarballMetadata = val2.(android.Path)
++	}
++
++	err = gobtools.DecodeSimple[bool](buf, &r.IsLinuxX8664)
++	if err != nil {
++		return err
++	}
++
++	return err
++}
++
++var CvdHostPackageMetadataInfoGobRegId int16
++
++func (r CvdHostPackageMetadataInfo) GetTypeId() int16 {
++	return CvdHostPackageMetadataInfoGobRegId
++}
 diff --git a/host/libs/config/known_paths.cpp b/host/libs/config/known_paths.cpp
 index 7c13c08ab..0aeb14282 100644
 --- a/host/libs/config/known_paths.cpp
@@ -652,7 +991,7 @@ new file mode 100644
 index 000000000..fb1c2783f
 --- /dev/null
 +++ b/ika_x86_64/BoardConfig.mk
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,56 @@
 +#
 +# Copyright 2026 The Android Open-Source Project
 +#
@@ -704,12 +1043,17 @@ index 000000000..fb1c2783f
 +ifneq ($(BOARD_IS_AUTOMOTIVE), true)
 +-include device/google/cuttlefish/shared/virgl/BoardConfig.mk
 +endif
++
++# Keep snd-aloop out of the boot ramdisks so the loopback cannot claim ALSA
++# card 0 ahead of virtio-snd and swallow guest audio (see ika_arm64/BoardConfig.mk).
++BOARD_VENDOR_RAMDISK_KERNEL_MODULES := $(filter-out %/snd-aloop.ko,$(BOARD_VENDOR_RAMDISK_KERNEL_MODULES))
++BOARD_KERNEL_MODULES_16K := $(filter-out %/snd-aloop.ko,$(BOARD_KERNEL_MODULES_16K))
 diff --git a/ika_x86_64/desktop/aosp_cf.mk b/ika_x86_64/desktop/aosp_cf.mk
 new file mode 100644
 index 000000000..b8785171f
 --- /dev/null
 +++ b/ika_x86_64/desktop/aosp_cf.mk
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,82 @@
 +#
 +# Copyright (C) 2026 The Android Open Source Project
 +#
@@ -768,10 +1112,10 @@ index 000000000..b8785171f
 +#
 +# All components inherited here go to vendor image
 +#
++LOCAL_BT_LPP_SERVICE_INSTANCE_ENABLED := false
++LOCAL_NPU_HAL_PRODUCT_PACKAGE :=
++LOCAL_ENABLE_LIGHT := false
 +$(call inherit-product, device/google/cuttlefish/shared/desktop/device_vendor.mk)
-+
-+# Nested virtualization support
-+$(call inherit-product, packages/modules/Virtualization/apex/product_packages.mk)
 +
 +#
 +# Special settings for the target
@@ -788,6 +1132,7 @@ index 000000000..b8785171f
 +PRODUCT_MODEL := Ika x86_64 desktop
 +
 +PRODUCT_VENDOR_PROPERTIES += \
++    ro.surface_flinger.force_present_timestamp=true \
 +    ro.soc.manufacturer=$(PRODUCT_MANUFACTURER) \
 +    ro.soc.model=$(PRODUCT_DEVICE)
 +

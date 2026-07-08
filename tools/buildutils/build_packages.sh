@@ -114,29 +114,58 @@ function package_output_dir() {
   esac
 }
 
+function built_package_name() {
+  local package_path="$1"
+
+  case "${DISTRO_FAMILY}" in
+    rpm)    rpm_package_name "${package_path}" ;;
+    debian) deb_package_name "${package_path}" ;;
+    arch)   archpkg_package_name "${package_path}" ;;
+  esac
+}
+
+function package_display_path() {
+  local package_path="$1"
+
+  if [[ "${package_path}" == "${REPO_DIR}/"* ]]; then
+    printf '%s\n' "${package_path#"${REPO_DIR}/"}"
+  else
+    printf '%s\n' "${package_path}"
+  fi
+}
+
 function print_built_packages() {
   local output_dir="$1"
-  local -a packages=()
+  local package_path package_name
+  local -a built_packages=()
+  local -a primary_packages=()
 
   case "${DISTRO_FAMILY}" in
     rpm)
-      mapfile -t packages < <(find "${output_dir}" -type f -name '*.rpm' -newer "${PACKAGE_BUILD_MARKER}" 2>/dev/null | sort)
+      mapfile -t built_packages < <(find "${output_dir}" -type f -name '*.rpm' -newer "${PACKAGE_BUILD_MARKER}" 2>/dev/null | sort)
       ;;
     debian)
-      mapfile -t packages < <(find "${output_dir}" -type f -name '*.deb' -newer "${PACKAGE_BUILD_MARKER}" 2>/dev/null | sort)
+      mapfile -t built_packages < <(find "${output_dir}" -type f -name '*.deb' -newer "${PACKAGE_BUILD_MARKER}" 2>/dev/null | sort)
       ;;
     arch)
-      mapfile -t packages < <(find "${output_dir}" -type f -name '*.pkg.tar*' -newer "${PACKAGE_BUILD_MARKER}" 2>/dev/null | sort)
+      mapfile -t built_packages < <(find "${output_dir}" -type f -name '*.pkg.tar*' -newer "${PACKAGE_BUILD_MARKER}" 2>/dev/null | sort)
       ;;
   esac
 
-  if [[ ${#packages[@]} -eq 0 ]]; then
-    echo "No package files were created in ${output_dir}"
+  for package_path in "${built_packages[@]}"; do
+    package_name="$(built_package_name "${package_path}")"
+    if is_primary_package "${package_name}"; then
+      primary_packages+=("$(package_display_path "${package_path}")")
+    fi
+  done
+
+  if [[ ${#primary_packages[@]} -eq 0 ]]; then
+    echo "No primary package files were created in ${output_dir}"
     return
   fi
 
   echo "Built package files:"
-  printf '  %s\n' "${packages[@]}"
+  printf '  %s\n' "${primary_packages[@]}"
 }
 
 # Build dependencies (including Bazel) are installed by ./ika-build via
@@ -144,7 +173,7 @@ function print_built_packages() {
 # absent.
 if ! command -v bazel >/dev/null 2>&1; then
   >&2 echo "bazel not found. Run ./ika-build to install all build dependencies first,"
-  >&2 echo "or install Bazel manually with: sudo tools/buildutils/installbazel.sh"
+  >&2 echo "or install Bazel manually with: tools/buildutils/installbazel.sh"
   exit 1
 fi
 

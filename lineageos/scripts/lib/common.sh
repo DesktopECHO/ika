@@ -28,6 +28,16 @@ host_is_arm64() {
   esac
 }
 
+# Soong host-output tag for the running build host (out/host/<tag>), e.g.
+# linux-x86 or linux-arm64. Distinct from target_host_tag in target_common.sh,
+# which names the tuple packaged for a *target* and can be a cross tag
+# (linux_musl-arm64).
+host_out_tag() {
+  printf '%s-%s\n' \
+    "$(uname -s | tr '[:upper:]' '[:lower:]')" \
+    "$(uname -m | sed 's/aarch64/arm64/;s/x86_64/x86/')"
+}
+
 # Verify a .zip/.apk is a structurally valid archive with no corrupt members.
 # Prints the offending path + reason and returns non-zero on failure.
 validate_zip_file() {

@@ -1,6 +1,7 @@
 FROM fedora:43 AS base
 
 ENV OVERRIDE_BAZEL_WRAPPER_DOWNLOAD_DIR=/tmp/cw_bazel
+ENV PATH="/root/.local/bin:${PATH}"
 
 RUN dnf -y upgrade --refresh
 RUN dnf -y install sudo systemd systemd-journal-remote nginx jq android-tools

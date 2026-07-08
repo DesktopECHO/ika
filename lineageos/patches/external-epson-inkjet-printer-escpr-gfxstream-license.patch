@@ -1,0 +1,19 @@
+Patch summary:
+Allow the pinned gfxstream xcb third-party package to reuse the branch-local X11
+license kind. The newer gfxstream tree declares its bundled xcb headers with
+SPDX-license-identifier-X11, while this ROM branch keeps that license kind
+scoped to the Epson escpr project that defines it.
+
+diff --git a/Android.bp b/Android.bp
+index 7668dcd..b73695d 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -261,6 +261,7 @@ license_kind {
+     name: "SPDX-license-identifier-X11",
+     visibility: [
+-        "//visibility:private",
++        "//external/epson-inkjet-printer-escpr:__pkg__",
++        "//hardware/google/gfxstream/third_party/xcb",
+     ],
+     conditions: ["notice"],
+ }

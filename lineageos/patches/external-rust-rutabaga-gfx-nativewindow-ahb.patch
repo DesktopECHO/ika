@@ -1,0 +1,52 @@
+Patch summary:
+Adapt rutabaga_gfx AHardwareBuffer export to the nativewindow Rust API
+available in this Android tree. The upstream code expects nativewindow::AhbInfo,
+but this branch exposes cloned NativeHandle values instead; convert that handle
+into RutabagaHandle::AhbInfo so gfxstream AHB exports compile on Android.
+
+diff --git a/src/gfxstream.rs b/src/gfxstream.rs
+index 65612a1..892fffd 100644
+--- a/src/gfxstream.rs
++++ b/src/gfxstream.rs
+@@ -533,7 +533,6 @@ impl Gfxstream {
+             #[cfg(target_os = "android")]
+             {
+                 use crate::handle::AhbInfo;
+-                use nativewindow::AhbInfo as NativeAhbInfo;
+                 use nativewindow::HardwareBuffer;
+                 use std::os::fd::IntoRawFd;
+                 use std::ptr::NonNull;
+@@ -545,13 +544,18 @@ impl Gfxstream {
+                 // Safe because `buffer_ptr` is a valid AHardwareBuffer pointer.
+                 let buffer = unsafe { HardwareBuffer::clone_from_raw(buffer_ptr.cast()) };
+ 
+-                let ahb_info: NativeAhbInfo = buffer
+-                    .try_into()
+-                    .map_err(|_| RutabagaError::InvalidResourceId)?;
++                let native_handle = buffer
++                    .cloned_native_handle()
++                    .ok_or(RutabagaError::InvalidResourceId)?;
++                let metadata = native_handle
++                    .ints()
++                    .iter()
++                    .flat_map(|value| value.to_ne_bytes())
++                    .collect();
+ 
+-                // Convert nativewindow::AhbInfo to RutabagaHandle::AhbInfo
+-                let fds = ahb_info
+-                    .fds
++                // Convert nativewindow::NativeHandle to RutabagaHandle::AhbInfo.
++                let fds = native_handle
++                    .into_fds()
+                     .into_iter()
+                     .map(|fd| {
+                         // SAFETY:
+@@ -562,7 +566,7 @@ impl Gfxstream {
+ 
+                 Ok(Arc::new(RutabagaHandle::from(AhbInfo {
+                     fds,
+-                    metadata: ahb_info.data,
++                    metadata,
+                 })))
+             }
+             #[cfg(not(target_os = "android"))]

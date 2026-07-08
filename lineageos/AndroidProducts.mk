@@ -9,4 +9,6 @@ PRODUCT_MAKEFILES := \
 
 COMMON_LUNCH_CHOICES := \
     lineage_desktop_cf_arm64_pgagnostic-trunk_staging-userdebug \
-    lineage_desktop_cf_x86_64-trunk_staging-userdebug
+    lineage_desktop_cf_arm64_pgagnostic-trunk_staging-user \
+    lineage_desktop_cf_x86_64-trunk_staging-userdebug \
+    lineage_desktop_cf_x86_64-trunk_staging-user
