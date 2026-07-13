@@ -122,13 +122,13 @@ repo root will be picked up by the `ika-lineageos` package in the second phase.
 The script downloads LineageOS 23.2, installs this overlay and the microG
 partner manifest as local manifests, syncs official LineageOS sources, overlays
 the local `lineage_desktop` tree, applies the patches in `patches/`, refreshes
-the microG prebuilts, installs the x86-64 ARM64 native bridge payload, and builds
-both Cuttlefish products.
+the microG packages, installs the x86-64 ARM64 native bridge payload when that
+target is requested, and builds the requested Cuttlefish product or products.
 
 Before compiling, the script runs `scripts/lib/validate_build_inputs.sh` to verify
 that source patches are applied, required desktop aconfig flags are enabled,
 patched XML files do not reference missing local XML resources, userdata remains
-the default ~64 GB f2fs image, microG and WebView APKs are valid zip files, and
+the default ~64 GB ext4 image, microG and WebView APKs are valid zip files, and
 the x86-64 native bridge payload is complete. Set
 `VALIDATE_BUILD_INPUTS=0` only for local experiments.
 
@@ -200,7 +200,9 @@ REPO_SYNC_CHECKOUT_JOBS=4
 RESET_PATCHED_PROJECTS=0
 INCLUDE_MICROG=1
 UPDATE_MICROG_PREBUILTS=1
-MICROG_GMSCORE_RELEASE=latest
+MICROG_GMSCORE_RELEASE=main
+MICROG_GMSCORE_SOURCE_DIR=~/ika-build/microg-main/GmsCore
+MICROG_ANDROID_SDK_ROOT=~/ika-build/android-sdk
 MICROG_GSFPROXY_RELEASE=latest
 MICROG_FDROID_RELEASE=latest
 MICROG_FDROID_PRIVILEGED_RELEASE=latest
@@ -222,15 +224,29 @@ same cleanup behavior.
 `INCLUDE_MICROG=1` is the default product behavior. It syncs
 `vendor/partner_gms` from the lineageos4microg manifest and includes GmsCore,
 FakeStore, GsfProxy, F-Droid, and the F-Droid privileged extension. With
-`UPDATE_MICROG_PREBUILTS=1`, the script downloads the latest official
-`microg/GmsCore` custom-ROM APKs for GmsCore and FakeStore, the latest GsfProxy
-APK from the microG F-Droid repository, and F-Droid/F-Droid Privileged Extension
-from the official F-Droid repository before building. Set
-`MICROG_GMSCORE_RELEASE` to a release tag, or set `MICROG_GSFPROXY_RELEASE`,
+`UPDATE_MICROG_PREBUILTS=1`, the script builds GmsCore from the current upstream
+`microg/GmsCore` mainline (upstream currently names the branch `master`) and
+signs it with the ROM platform key. It
+downloads the latest official FakeStore and GsfProxy APKs, plus F-Droid and
+F-Droid Privileged Extension, before building the ROM. In this mainline mode,
+GmsCore exposes its settings permissions to explicitly allowlisted privileged
+apps, allowing the official-signed FakeStore to serve Play Billing without
+losing the Play Store identity used for Google authentication. The source checkout is
+cached under `MICROG_GMSCORE_SOURCE_DIR`; the exact commit used is written to
+`vendor/partner_gms/.gmscore_source.json`. The source build requires Android SDK
+platform 35 and build-tools 34.0.0 under `MICROG_ANDROID_SDK_ROOT`. Set
+`MICROG_GMSCORE_RELEASE` to a release tag or `latest` to use a published GmsCore
+prebuilt instead, or set `MICROG_GSFPROXY_RELEASE`,
 `MICROG_FDROID_RELEASE`, or `MICROG_FDROID_PRIVILEGED_RELEASE` to version
 names/codes, to pin reproducible versions.
 
-Downloaded APKs are cached under `MICROG_PREBUILT_CACHE_DIR` (default
+The mainline default intentionally picks up Play Services compatibility fixes
+that have merged upstream but are not yet in a microG release. This currently
+includes the scoped Google Play Games server-auth callback needed by newer game
+clients. Release builds record the exact GmsCore commit so this moving input is
+auditable.
+
+Downloaded and source-built APKs are cached under `MICROG_PREBUILT_CACHE_DIR` (default
 `~/ika-build/microg-prebuilts`, alongside the ccache and ARM64 prebuilt caches).
 The cache is keyed by the upstream, version-stamped file name, so a rebuild
 whose resolved versions are already cached copies them into `vendor/partner_gms`

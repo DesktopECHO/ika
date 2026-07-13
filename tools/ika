@@ -230,7 +230,7 @@ declare -A CVD_GPU_DEFAULTS=(
   [gpu_vhost_user_mode]="off"
   [enable_gpu_udmabuf]="true"
   [use_cvdalloc]="true"
-  [gpu_renderer_features]="GlProgramBinaryLinkStatus:enabled;MinimalLogging:enabled"
+  [gpu_renderer_features]="MinimalLogging:disabled"
 )
 
 # ============================================================================
@@ -573,20 +573,20 @@ Usage:
 Example:
 
   ${SCRIPT_NAME} start --gpu_mode=guest_swiftshader --cpus=2 --memory_mb=2048 --dpi=240 --fullscreen
-  ${SCRIPT_NAME} start --game
+  ${SCRIPT_NAME} start --gpu_mode=gfxstream_guest_angle
   ${SCRIPT_NAME} start --data_gb=128
-  ${SCRIPT_NAME} restart --gpu_mode=gfxstream_guest_angle_host_swiftshader
   ${SCRIPT_NAME} restart --gfxstream_vulkan=on
   ${SCRIPT_NAME} restart --ika_scrcpy="--no-clipboard-autosync"
+  ${SCRIPT_NAME} start --game
 
 Options:
 
-  --game                 Start scrcpy fullscreen with UHID gamepad, keyboard,
-                         and mouse input.
-  --memory_mb=MB         Override the default guest RAM: about one quarter of
-                         host RAM, rounded up to 2048 MB, capped at 32768 MB.
+  --game                 Start scrcpy fullscreen with UHID gamepad
+                         keyboard and mouse input.
+  --memory_mb=MB         Override the default guest RAM setting.
+                         Normally ~25% of host RAM, capped at 32GB max.
 
-Environment:
+Environment Variables:
 
   GFXSTREAM_VULKAN       auto, on, or off. auto disables gfxstream Vulkan
                          only when the primary host Vulkan device is llvmpipe;
@@ -600,7 +600,7 @@ Environment:
                          Equivalent command-line option: --ika_scrcpy=ARGS
                          (example: --keyboard=uhid --no-clipboard-autosync)
 
-  NOTE: All other parameters are passed directly to Cuttlefish.
+  NOTE: All other parameters will be passed directly to Cuttlefish.
 
 EOF
 }
@@ -1170,7 +1170,7 @@ append_gfxstream_vulkan_args() {
   fi
 
   if [[ "${gpu_mode}" != "gfxstream" ]]; then
-    CVD_GRAPHICS_DRIVER_MESSAGE="GPU is ${gpu_mode} (gfxstream-vulkan=${mode} ignored)"
+    CVD_GRAPHICS_DRIVER_MESSAGE="GPU: ${gpu_mode} (gfxstream-vulkan=${mode} ignored)"
     log "gfxstream-vulkan=${mode} has no effect with gpu_mode=${gpu_mode}"
     return 0
   fi
@@ -1195,10 +1195,12 @@ append_gfxstream_vulkan_args() {
       selected_mode="off"
       vulkan_decision="gfxstream-vulkan=auto -> off (primary Vulkan device is llvmpipe)"
     elif is_apple_silicon_16k_host; then
-      selected_mode="on"
-      vulkan_decision="gfxstream-vulkan=auto -> on (ARM 16k host)"
+      append_apple_16k_gfxstream_vulkan_args args_array
+      CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (OpenGL ES + Vulkan, Apple Silicon)"
+      log "gfxstream-vulkan=auto; leaving Cuttlefish gfxstream defaults with Apple 16K udmabuf"
+      return 0
     else
-      CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (Defaults; vulkan=auto)"
+      CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (Default settings, vulkan=auto)"
       log "gfxstream-vulkan=auto; leaving Cuttlefish gfxstream defaults"
       return 0
     fi
@@ -1207,12 +1209,12 @@ append_gfxstream_vulkan_args() {
   case "${selected_mode}" in
     off)
       args_array+=("--gpu_context_types=${GFXSTREAM_GLES_CONTEXT_TYPES}")
-      CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (GLES-only)"
+      CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (OpenGL ES)"
       log "${vulkan_decision}; context-types=${GFXSTREAM_GLES_CONTEXT_TYPES}"
       ;;
     on)
       args_array+=("--gpu_context_types=${GFXSTREAM_VULKAN_CONTEXT_TYPES}")
-      CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (GLES+Vulkan; ${vulkan_decision})"
+      CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (OpenGL ES + Vulkan; ${vulkan_decision})"
       log "${vulkan_decision}; context-types=${GFXSTREAM_VULKAN_CONTEXT_TYPES}"
       if is_apple_silicon_16k_host; then
         append_apple_16k_gfxstream_vulkan_args args_array
@@ -1431,6 +1433,13 @@ append_cvd_env_args() {
     "ANDROID_SOONG_HOST_OUT=${CVD_HOST_OUT}"
     "ANDROID_PRODUCT_OUT=${CVD_PRODUCT_OUT}"
   )
+
+  # gfxstream creates its host EGL display without a window-system surface.
+  # Selecting this explicitly also avoids inheriting a broken/unavailable X11
+  # platform from SSH sessions on headless and Apple Silicon hosts.
+  if [[ "${CVD_GPU_MODE}" == gfxstream* ]]; then
+    env_args_ref+=("EGL_PLATFORM=${EGL_PLATFORM:-surfaceless}")
+  fi
 
   if [[ -n "${config_path}" ]]; then
     env_args_ref+=("CUTTLEFISH_CONFIG_FILE=${config_path}")
@@ -2078,6 +2087,11 @@ main() {
       ;;
     stop)
       shift
+      if ! has_live_cvd_processes; then
+        stop_dnsmasq
+        respond "Not running"
+        return 0
+      fi
       stop_cvd_internal false "$@"
       ;;
     reset)
@@ -2090,8 +2104,13 @@ main() {
       start_args=()
       parse_start_options fullscreen_mode game_mode start_args "$@"
       protect_overlay_resume
-      stop_cvd_internal false
-      sleep 0.5
+      if has_live_cvd_processes; then
+        stop_cvd_internal false
+        sleep 0.5
+      else
+        stop_dnsmasq
+        respond "Not running"
+      fi
       exec_start_command "${fullscreen_mode}" "${game_mode}" "${start_args[@]}"
       ;;
     status)

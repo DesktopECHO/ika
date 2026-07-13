@@ -23,7 +23,8 @@ On Ubuntu-family hosts, use the [Kisak Mesa PPA instructions](https://launchpad.
 
 ## Building from Source
 
-You will need a minimum of 16GB RAM, 300GB storage, and some patience for the build to complete.  `ika-build` handles all the install prequisitres. 
+You will need a minimum of 16 GB RAM, 500 GB of free storage, and some patience
+for the build to complete. `ika-build` handles the installation prerequisites.
 
 ```bash
 # 1. Clone:
@@ -34,7 +35,7 @@ cd ika
 #    Prepares signing certificates, installs build dependencies, downloads
 #    LineageOS 23.2 source, applies the overlay and source patches in lineageos,
 #    builds the Cuttlefish target for the host arch, creates RPM or Debian packages
-#    and offers to install them after the build is completed. 
+#    and prints the package installation command when the build is complete.
 
 ./ika-build
 
@@ -102,7 +103,7 @@ ika reset
 # Restart with new launch arguments
 ika restart --gpu_mode=gfxstream --cpus=8 --memory_mb=8192
 
-# Temporarily enable gfxstream Vulkan on Apple Silicon for testing
+# Explicitly force the GLES+Vulkan gfxstream context set
 ika restart --gfxstream_vulkan=on
 
 # Use a 128 GiB userdata image on first start after reset
@@ -125,12 +126,20 @@ By default `ika` uses:
 - the packaged LineageOS tree from `/usr/share/cuttlefish-common/lineageos`
 - instance state under `~/ika`
 - a ~64 GB thin-provisioned ext4 userdata image
-- guest RAM set to about one quarter of host RAM, capped at 32 GB 
+- guest vCPUs set to the available/performance-core count minus two, capped at 12
+- guest RAM set to about one quarter of host RAM, rounded to 2 GB steps and
+  capped at 32 GB
 - `gfxstream` GPU acceleration
+- Ethernet-only guest networking by default; Wi-Fi, Bluetooth, NFC, UWB, GNSS,
+  and the modem simulator remain off unless explicitly enabled
 
 `gfxstream` is the preferred GPU mode for the packaged workflow. Use
 `guest_swiftshader` only as a troubleshooting fallback when host GPU
-acceleration is not usable.
+acceleration is not usable. The launcher selects EGL's surfaceless platform for
+gfxstream so an unavailable X11 display inherited from SSH cannot redirect host
+renderer initialization. The desktop product also leaves gfxstream's optional
+program-binary link-status feature disabled; shader source compilation remains
+available and avoids corrupt cached-program rendering on affected games.
 
 Set `DATA_GB` or pass `--data_gb=128` to choose the size, in gigabytes,
 of a newly created userdata image. Existing userdata is preserved, so apply a
@@ -148,15 +157,21 @@ ika restart --gfxstream_vulkan=on
 
 `auto` is the default. When the primary host Vulkan device is llvmpipe, `auto`
 requests GLES-only gfxstream (`gfxstream-gles:gfxstream-composer`). On Apple
-Silicon hosts with 16 KiB pages, `auto` requests GLES+Vulkan and routes
-host-visible guest Vulkan memory through the udmabuf-backed path the Apple GPU
-supports. On other hosts, `auto` leaves the normal Cuttlefish gfxstream defaults
-alone, so systems with hardware Vulkan keep Vulkan enabled.
+Silicon hosts with 16 KiB pages, `auto` leaves Cuttlefish's normal GLES+Vulkan
+selection in place and routes host-visible guest Vulkan memory through the
+udmabuf-backed path the Apple GPU supports. On other hosts, `auto` leaves the
+normal Cuttlefish gfxstream defaults alone, so systems with hardware Vulkan keep
+Vulkan enabled.
 
 Use `--gfxstream_vulkan=on` to re-enable gfxstream Vulkan for testing, or
 `--gfxstream_vulkan=off` to force GLES-only gfxstream. The same policy can be
 set with `GFXSTREAM_VULKAN=auto|off|on`; an explicit
 `--gpu_context_types=...` argument takes precedence.
+
+The guest advertises OpenGL ES 3.2 through gfxstream, including
+`ANDROID_EMU_gles_max_version_3_2`, with fallback to ES 3.1, 3.0, and 2.0 when
+the host translator cannot provide 3.2. Vulkan remains the preferred accelerated
+API for applications that support it.
 
 ## Host Packages
 
@@ -184,9 +199,9 @@ package names for upgrades, but newly built package files use the `ika-*` names.
 ## Notes
 
 On ARM64 Asahi Linux, this fork keeps `gfxstream` as the forward path. The
-packaged `ika` launcher disables only the gfxstream Vulkan context by default
-on Apple Silicon 16 KiB-page hosts while keeping gfxstream GLES enabled;
-`guest_swiftshader` remains a fallback for isolating host GPU issues.
+default `auto` policy keeps Cuttlefish's GLES+Vulkan contexts enabled on Apple
+Silicon 16 KiB-page hosts and applies the required udmabuf-backed external-memory
+path. `guest_swiftshader` remains a fallback for isolating host GPU issues.
 
 `ika` expects your login session to be in `kvm`, `cvdnetwork`, `render`, and
 `video`. The `ika-base` package adds the installing user to these groups during

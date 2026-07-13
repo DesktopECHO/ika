@@ -26,19 +26,4 @@ cc_binary {
     // Cuttlefish desktop product, arm64 on pgagnostic), so it exercises the
     // gfxstream guest driver directly without Berberis translation.
     compile_multilib: "64",
-    // Also buildable as an arm64 guest binary (installed to /system_ext/bin/arm64
-    // by adding vulkaninfo.native_bridge to PRODUCT_PACKAGES): the x86_64
-    // image ships it to probe the translated path real apps use. See
-    // config/x86_arm_native_bridge.mk and the vulkaninfo_arm64 wrapper.
-    native_bridge_supported: true,
-}
-
-// x86-only convenience wrapper: runs the arm64 guest vulkaninfo under
-// ndk_translation, so `vulkaninfo` vs `vulkaninfo_arm64` output diffs
-// separate gfxstream driver issues from Berberis translation issues.
-sh_binary {
-    name: "vulkaninfo_arm64",
-    src: "vulkaninfo_arm64.sh",
-    filename: "vulkaninfo_arm64",
-    system_ext_specific: true,
 }

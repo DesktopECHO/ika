@@ -83,6 +83,13 @@ def read_text(path: Path) -> str | None:
         return None
 
 
+def read_json_file(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
 def microg_info(android_root: Path) -> dict[str, Any]:
     partner = android_root / "vendor" / "partner_gms"
     modules = {
@@ -96,6 +103,7 @@ def microg_info(android_root: Path) -> dict[str, Any]:
     }
     return {
         "release": read_text(partner / ".microg_release"),
+        "gmscore_source": read_json_file(partner / ".gmscore_source.json"),
         "modules": {name: file_info(path) for name, path in modules.items()},
     }
 
@@ -206,7 +214,7 @@ def build_metadata(args: argparse.Namespace) -> dict[str, Any]:
             "update_native_bridge_prebuilts": os.environ.get(
                 "UPDATE_NATIVE_BRIDGE_PREBUILTS", "1"
             ),
-            "microg_gmscore_release": os.environ.get("MICROG_GMSCORE_RELEASE", "latest"),
+            "microg_gmscore_release": os.environ.get("MICROG_GMSCORE_RELEASE", "main"),
             "microg_gsfproxy_release": os.environ.get("MICROG_GSFPROXY_RELEASE", "latest"),
             "microg_fdroid_release": os.environ.get("MICROG_FDROID_RELEASE", "latest"),
             "microg_fdroid_privileged_release": os.environ.get(

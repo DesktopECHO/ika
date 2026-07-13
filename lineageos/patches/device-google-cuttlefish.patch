@@ -339,10 +339,9 @@ new file mode 100644
 index 000000000..fcd665dc4
 --- /dev/null
 +++ b/shared/desktop/android-info.txt
-@@ -0,0 +1,3 @@
+@@ -0,0 +1,2 @@
 +config=tablet
 +gfxstream=supported
-+gfxstream_gl_program_binary_link_status=supported
 diff --git a/shared/bluetooth/device_vendor.mk b/shared/bluetooth/device_vendor.mk
 index 794e33d5f..0dad968d4 100644
 --- a/shared/bluetooth/device_vendor.mk
@@ -621,11 +620,10 @@ diff --git a/shared/x86_16kb/android-info.txt b/shared/x86_16kb/android-info.txt
 index cc7213392..f5555d460 100644
 --- a/shared/x86_16kb/android-info.txt
 +++ b/shared/x86_16kb/android-info.txt
-@@ -1,2 +1,3 @@
+@@ -1,2 +1,2 @@
  config=phone
 -gfxstream=unsupported
 +gfxstream=supported
-+gfxstream_gl_program_binary_link_status=supported
 diff --git a/ika_arm64/BoardConfig.mk b/ika_arm64/BoardConfig.mk
 new file mode 100644
 index 000000000..9f7af06cb

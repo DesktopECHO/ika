@@ -7,7 +7,7 @@
 #   2. installs build dependencies        (tools/buildutils/lib/dependencies.sh)
 #   3. builds the LineageOS Desktop ROM   (lineageos/scripts/build_lineageos_desktop.sh)
 #   4. builds the host packages           (tools/buildutils/build_packages.sh)
-#   5. offers to install ika-base and ika-lineageos
+#   5. prints instructions to install ika-base and ika-lineageos
 #
 # Build dependencies are installed before the long ROM build and wait for
 # password input if needed. A reboot is required after installing; this script
@@ -31,8 +31,6 @@ readonly PKG_BUILD="./tools/buildutils/build_packages.sh"
 readonly INSTALL_BAZEL="./tools/buildutils/installbazel.sh"
 readonly PRIMARY_PACKAGES=(ika-base ika-lineageos)
 
-auto_yes=false
-do_install=true
 install_packages=false
 removed_existing=false
 packages_built_this_run=false
@@ -47,14 +45,13 @@ usage() {
 Usage: ./ika-build [options] [all|arm64|x86_64]...
 
 Prepares LineageOS signing certificates, installs build dependencies, builds
-the ROM and host packages, then offers to install ${PRIMARY_PACKAGES[*]}.
+the ROM and host packages, then prints the command needed to install
+${PRIMARY_PACKAGES[*]}.
 
 Options:
       --install-packages
                    Do not build source; install existing package files
                    without prompting (if they exist.)
-      --skip-install
-                   Build only; do not offer to install.
   -h, --help       Show this help and exit.
 
 By default only the host's native ROM (arm64 or x86_64) is built. Pass optional
@@ -90,7 +87,7 @@ print_reboot_notice() {
   REBOOT REQUIRED
 ============================================================================
 
-  You MUST reboot before the virtual device will start.
+  After package installation, you MUST reboot before Android can be started.
 
   Installing ika-base adds your user to the kvm, cvdnetwork, render, and
   video groups and installs udev rules, PAM resource limits, and the
@@ -110,29 +107,43 @@ EOF
 
 print_manual_install() {
   local cmd
+  local -a installed_base=()
   local -a install_paths=()
   install_package_paths install_paths
+  mapfile -t installed_base < <(installed_target_packages ika-base)
 
   case "${family}" in
-    rpm)    cmd="sudo dnf install --setopt=install_weak_deps=False $(shell_join "${install_paths[@]}")" ;;
-    debian) cmd="sudo env DEBIAN_FRONTEND=noninteractive apt install --no-install-recommends $(shell_join "${install_paths[@]}")" ;;
+    rpm)
+      if (( ${#installed_base[@]} )); then
+        cmd="sudo dnf reinstall $(shell_join "${install_paths[@]}")"
+      else
+        cmd="sudo dnf install $(shell_join "${install_paths[@]}")"
+      fi
+      ;;
+    debian)
+      if (( ${#installed_base[@]} )); then
+        cmd="sudo apt install --reinstall $(shell_join "${install_paths[@]}")"
+      else
+        cmd="sudo apt install $(shell_join "${install_paths[@]}")"
+      fi
+      ;;
     arch)   cmd="sudo pacman -U $(shell_join "${install_paths[@]}")" ;;
   esac
 
   cat <<EOF
 
-To install later, run this from ${repo_dir}:
+============================================================================
+To install, run this from ${repo_dir}:
+============================================================================
 
   ${cmd}
 
 EOF
 
-  # If none of the packages are currently installed, that manual command will
-  # be a first-time install and a reboot is required afterward. (A reinstall
-  # over existing packages does not need one.)
-  local -a installed=()
-  mapfile -t installed < <(installed_target_packages)
-  if (( ${#installed[@]} == 0 )); then
+  # If ika-base is not currently installed, that manual command is a first-time
+  # host install and a reboot is required afterward. A reinstall over ika-base
+  # does not need one.
+  if (( ${#installed_base[@]} == 0 )); then
     print_reboot_notice
   fi
 }
@@ -271,7 +282,7 @@ remove_installed_packages() {
   banner "Removing already-installed version(s): ${installed[*]}"
   case "${family}" in
     rpm)    sudo dnf remove -y "${installed[@]}" ;;
-    debian) sudo env DEBIAN_FRONTEND=noninteractive apt-get remove -y "${installed[@]}" ;;
+    debian) sudo apt-get remove -y "${installed[@]}" ;;
   esac
   removed_existing=true
 }
@@ -306,7 +317,6 @@ add_rom_arg() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --install-packages) install_packages=true; shift ;;
-    --skip-install)  do_install=false; shift ;;
     -h|--help)       usage; exit 0 ;;
     --)
       shift
@@ -323,18 +333,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "${install_packages}" == true && "${do_install}" != true ]]; then
-  echo "--install-packages and --skip-install cannot be used together." >&2
-  exit 1
-fi
-
 if [[ "${install_packages}" == true && ${#rom_args[@]} -gt 0 ]]; then
   echo "--install-packages does not accept ROM build arguments." >&2
   exit 1
-fi
-
-if [[ "${install_packages}" == true ]]; then
-  auto_yes=true
 fi
 
 family="$(detect_distro_family)"
@@ -415,34 +416,14 @@ if [[ "${packages_built_this_run}" != true ]]; then
   printf '  %s\n' "${pkg_files[@]}"
 fi
 
-if [[ "${do_install}" != true ]]; then
+if [[ "${install_packages}" != true ]]; then
   print_manual_install
   exit 0
 fi
 
-if [[ "${auto_yes}" != true ]]; then
-  if [[ ! -t 0 ]]; then
-    echo
-    echo "Not running interactively; skipping install."
-    print_manual_install
-    exit 0
-  fi
-
-  printf '\nInstall these %d package(s) now with sudo? [y/N] ' "${#pkg_files[@]}"
-  read -r reply || reply=""
-  case "${reply}" in
-    [yY]|[yY][eE][sS]) ;;
-    *)
-      echo "Skipping install."
-      print_manual_install
-      exit 0
-      ;;
-  esac
-fi
-
-# The long build intentionally lets its earlier sudo timestamp expire. Refresh
-# credentials immediately after the user accepts so the following remove and
-# install operations cannot silently stop at an unavailable password prompt.
+# --install-packages is an explicit request to install existing artifacts.
+# Refresh credentials immediately so remove/install operations cannot stop at
+# an unavailable password prompt.
 if ! sudo -n true 2>/dev/null; then
   echo
   echo "Administrator privileges are required to install the packages."
@@ -455,8 +436,8 @@ banner "Installing packages (sudo)"
 declare -a install_paths=()
 install_package_paths install_paths
 case "${family}" in
-  rpm)    sudo dnf install -y --setopt=install_weak_deps=False "${install_paths[@]}" ;;
-  debian) sudo env DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends "${install_paths[@]}" ;;
+  rpm)    sudo dnf install -y "${install_paths[@]}" ;;
+  debian) sudo apt install -y "${install_paths[@]}" ;;
   arch)   sudo pacman -U --noconfirm "${install_paths[@]}" ;;
 esac
 

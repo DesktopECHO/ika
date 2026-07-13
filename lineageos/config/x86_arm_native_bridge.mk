@@ -24,13 +24,6 @@ PRODUCT_PACKAGES += \
     libndk_translation_proxy_libm
 endif
 
-# Arm64 guest build of vulkaninfo (tools/vulkaninfo) plus a shell wrapper to
-# run it under translation. These install to system_ext so generic_system's
-# /system artifact-path requirement stays clean.
-PRODUCT_PACKAGES += \
-    vulkaninfo.native_bridge:64 \
-    vulkaninfo_arm64
-
 LINEAGE_DESKTOP_NATIVE_BRIDGE_COPY_FILES := \
     bin/ndk_translation_program_runner_binfmt_misc_arm64 \
     etc/binfmt_misc/arm64_dyn \

@@ -21,6 +21,7 @@ readonly BAZEL_INSTALL_PATH="${BAZEL_INSTALL_PATH:-${HOME}/.local/bin/bazel}"
 readonly DEBIAN_MESA_SOURCE_PACKAGE="${DEBIAN_MESA_SOURCE_PACKAGE:-mesa}"
 readonly DEBIAN_MESA_BACKPORTS_SUITE="${DEBIAN_MESA_BACKPORTS_SUITE:-trixie-backports}"
 readonly DEBIAN_MESA_MIN_VERSION="${DEBIAN_MESA_MIN_VERSION:-${TRIXIE_MESA_BACKPORT_MIN_VERSION:-26.1}}"
+readonly DEBIAN_MESA_PACKAGE_REVISION="${DEBIAN_MESA_PACKAGE_REVISION:-80}"
 readonly DEBIAN_VULKAN_LOADER_COMMIT="${DEBIAN_VULKAN_LOADER_COMMIT:-${TRIXIE_VULKAN_LOADER_COMMIT:-e3a3df62e0b7e9b12dacb626a8d554a47ad9ed2d}}"
 readonly DEBIAN_VULKAN_LOADER_MIN_VERSION="${DEBIAN_VULKAN_LOADER_MIN_VERSION:-${TRIXIE_VULKAN_LOADER_MIN_VERSION:-1.4.341}}"
 readonly DEBIAN_ENABLE_BACKPORTS="${DEBIAN_ENABLE_BACKPORTS:-ask}"
@@ -245,7 +246,9 @@ function missing_deb_build_dependencies() {
   fi
 
   if debian_is_trixie && ! debian_mesa_stack_at_min_version; then
-    printf 'mesa>=%s-from-backports-source\n' "${DEBIAN_MESA_MIN_VERSION}"
+    printf 'mesa>=%s-revision-%s-from-backports-source\n' \
+      "${DEBIAN_MESA_MIN_VERSION}" \
+      "${DEBIAN_MESA_PACKAGE_REVISION}"
   fi
 
   version="$(dpkg-query -W -f='${Version}' libvulkan-dev 2>/dev/null || true)"
@@ -421,11 +424,19 @@ function ensure_debian_backports_for_mesa_source_build() {
 }
 
 function debian_mesa_stack_at_min_version() {
-  local pkg
+  local pkg version debian_revision
 
   while read -r pkg; do
     [[ -n "$pkg" ]] || continue
+    version="$(dpkg-query -W -f='${Version}' "$pkg" 2>/dev/null || true)"
     deb_package_version_at_least "$pkg" "${DEBIAN_MESA_MIN_VERSION}" || return 1
+
+    # Stock Debian revisions such as -1 or -2 must not satisfy this check.
+    # Ika uses revision 80 so apt keeps this build in preference to the stock
+    # package for the same Mesa upstream release.
+    [[ "${version}" == *-* ]] || return 1
+    debian_revision="${version##*-}"
+    dpkg --compare-versions "${debian_revision}" ge "${DEBIAN_MESA_PACKAGE_REVISION}" || return 1
   done < <(deb_mesa_version_packages)
 
   return 0
@@ -435,12 +446,12 @@ function install_debian_mesa() {
   local buildutils_dir builder
 
   if debian_mesa_stack_at_min_version; then
-    echo "Mesa stack is already ${DEBIAN_MESA_MIN_VERSION} or newer; skipping Mesa build."
+    echo "Mesa stack is already ${DEBIAN_MESA_MIN_VERSION} revision ${DEBIAN_MESA_PACKAGE_REVISION} or newer; skipping Mesa build."
     return 0
   fi
 
   if ! ensure_debian_backports_for_mesa_source_build; then
-    >&2 echo "Mesa ${DEBIAN_MESA_MIN_VERSION}+ must be built from the Debian backports source repository."
+    >&2 echo "Mesa ${DEBIAN_MESA_MIN_VERSION}+ revision ${DEBIAN_MESA_PACKAGE_REVISION} must be built from the Debian backports source repository."
     exit 1
   fi
 
@@ -452,14 +463,16 @@ function install_debian_mesa() {
     exit 1
   }
 
-  echo "Build Mesa ${DEBIAN_MESA_MIN_VERSION} from Debian backports source..."
+  echo "Build Mesa ${DEBIAN_MESA_MIN_VERSION} revision ${DEBIAN_MESA_PACKAGE_REVISION} from Debian backports source..."
   "${builder}" \
     --yes \
     --install \
     --no-stage \
     --source-suite "${DEBIAN_MESA_BACKPORTS_SUITE}" \
     --source-package "${DEBIAN_MESA_SOURCE_PACKAGE}" \
-    --min-version "${DEBIAN_MESA_MIN_VERSION}"
+    --min-version "${DEBIAN_MESA_MIN_VERSION}" \
+    --package-revision "${DEBIAN_MESA_PACKAGE_REVISION}" \
+    --vulkan-min-version "${DEBIAN_VULKAN_LOADER_MIN_VERSION}"
 }
 
 function install_deb_build_dependencies() {

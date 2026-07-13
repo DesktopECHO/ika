@@ -30,10 +30,5 @@ matching Vulkan-Tools tag (the generated header must match
 Usage on device: `vulkaninfo`, `vulkaninfo --summary`,
 `vulkaninfo --json` (see `vulkaninfo.md`).
 
-On x86_64 images an arm64 guest build is also shipped
-(`vulkaninfo.native_bridge` → `/system_ext/bin/arm64/vulkaninfo`) with a
-`vulkaninfo_arm64` wrapper that runs it under ndk_translation/Berberis —
-the path real (translated) apps take. Diff `vulkaninfo` vs
-`vulkaninfo_arm64` output to separate gfxstream driver issues from
-translation issues. The arm64 (pgagnostic) ROM ships only the native
-arm64 `vulkaninfo`.
+Both desktop ROMs ship only the native 64-bit binary: x86_64 `vulkaninfo` on
+the x86_64 ROM and arm64 `vulkaninfo` on the arm64 (pgagnostic) ROM.

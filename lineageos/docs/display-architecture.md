@@ -92,6 +92,9 @@ but it is not the normal performance target for this product.
 The production guest Vulkan stack pins patched Mesa 25.3 at `d4b6f1eba289`.
 That revision is verified with the pinned gfxstream, rutabaga_gfx, crosvm,
 minigbm, and Vulkan-Headers revisions in `manifests/lineageos-desktop.xml`.
+The companion gfxstream translator advertises OpenGL ES 3.2 and
+`ANDROID_EMU_gles_max_version_3_2`, with version fallback when the host cannot
+provide the complete ES 3.2 capability set.
 
 Run `ika graphics-check` to verify that the VM is using hardware gfxstream
 Vulkan and the zero-copy flags. Run `ika graphics-check --chromium` for the

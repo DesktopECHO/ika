@@ -30,8 +30,9 @@ USER_AGENT = "lineage-desktop-microg-updater/1.0"
 # Transient network errors that should trigger a retry. F-Droid's index is
 # ~15 MiB and TLS reads occasionally truncate; GitHub returns 5xx under load.
 _TRANSIENT_HTTP_STATUSES = (408, 429, 500, 502, 503, 504)
-_NETWORK_RETRIES = 4
+_NETWORK_RETRIES = 20
 _NETWORK_BACKOFF_SECONDS = 2.0
+_NETWORK_MAX_BACKOFF_SECONDS = 60.0
 
 
 def _is_transient_exception(exc):
@@ -59,7 +60,10 @@ def _retry_network(label, attempt_fn):
             if not _is_transient_exception(exc) or attempt == _NETWORK_RETRIES:
                 raise
             last_exc = exc
-            delay = _NETWORK_BACKOFF_SECONDS * (2 ** attempt)
+            delay = min(
+                _NETWORK_BACKOFF_SECONDS * (2 ** attempt),
+                _NETWORK_MAX_BACKOFF_SECONDS,
+            )
             log(f"network retry {attempt + 1}/{_NETWORK_RETRIES} for {label}: {exc} (sleeping {delay:.1f}s)")
             time.sleep(delay)
     if last_exc is not None:
@@ -321,6 +325,9 @@ def ensure_partner_permissions(partner_dir):
     fakestore_default_permissions = (
         partner_dir / "FakeStore" / "default-permissions-com.android.vending.xml"
     )
+    fakestore_privapp_permissions = (
+        partner_dir / "FakeStore" / "privapp-permissions-com.android.vending.xml"
+    )
 
     changed |= replace_permission_placeholder(
         gms_default_permissions,
@@ -341,6 +348,7 @@ def ensure_partner_permissions(partner_dir):
         )
 
     for permission in (
+        "android.permission.DUMP",
         "android.permission.READ_SYSTEM_GRAMMATICAL_GENDER",
         "android.permission.PROVIDE_REMOTE_CREDENTIALS",
         "android.permission.PROVIDE_DEFAULT_ENABLED_CREDENTIAL_SERVICE",
@@ -355,6 +363,16 @@ def ensure_partner_permissions(partner_dir):
         fakestore_default_permissions,
         "android.permission.FAKE_PACKAGE_SIGNATURE",
     )
+
+    for permission in (
+        "com.google.android.gms.permission.READ_SETTINGS",
+        "com.google.android.gms.permission.WRITE_SETTINGS",
+    ):
+        changed |= ensure_permission(
+            fakestore_privapp_permissions,
+            "</privapp-permissions>",
+            permission,
+        )
 
     if changed:
         log("updated microG permission allowlists")
@@ -430,6 +448,24 @@ def cached_entry(manifest, module, selector, cache_dir):
     return entry
 
 
+def build_gmscore_main(android_root, cache_dir):
+    build_script = Path(__file__).with_name("build_microg_main.py")
+    if not build_script.is_file():
+        raise UpdateError(f"missing GmsCore source build script: {build_script}")
+    try:
+        output = subprocess.check_output(
+            [str(build_script), str(android_root), "--output-dir", str(cache_dir)],
+            text=True,
+        )
+        result = json.loads(output)
+    except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+        raise UpdateError(f"failed to build GmsCore from upstream main: {exc}") from exc
+    apk = Path(result.get("apk", ""))
+    if not apk.is_file() or not result.get("commit") or not result.get("version_code"):
+        raise UpdateError(f"invalid GmsCore source build result: {result}")
+    return result
+
+
 def update_microg(android_root, gmscore_release_selector, gsfproxy_release_selector,
                   fdroid_release_selector, fdroid_privileged_release_selector,
                   skip_certificate_check, cache_dir):
@@ -443,17 +479,55 @@ def update_microg(android_root, gmscore_release_selector, gsfproxy_release_selec
     manifest = load_manifest(cache_dir)
     summary = {}
 
-    # GmsCore and FakeStore ship in the same microg/GmsCore release, so they
-    # share one selector and one GitHub metadata lookup. Skip that lookup only
-    # when BOTH are pinned and already cached.
+    # Ika follows GmsCore's upstream main branch so merged compatibility fixes
+    # do not have to wait for a release. FakeStore still comes from the latest
+    # official release and retains its upstream certificate/signature-spoofed
+    # Play Store identity for Google authentication.
+    source_marker = partner_dir / ".gmscore_source.json"
+    was_source_built = source_marker.is_file()
+    if gmscore_release_selector == "main":
+        result = build_gmscore_main(android_root, cache_dir)
+        commit = result["commit"]
+        version_code = str(result["version_code"])
+        module_dir = partner_dir / "GmsCore"
+        install_from_cache(module_dir, "GmsCore.apk", Path(result["apk"]), True)
+        write_text_if_changed(module_dir / ".version_code", f"{version_code}\n")
+        write_text_if_changed(
+            source_marker,
+            json.dumps(
+                {"selector": "main", "branch": result["branch"], "commit": commit},
+                sort_keys=True,
+            ) + "\n",
+        )
+        gmscore_tag = f"main@{commit}"
+        summary["GmsCore"] = f"{gmscore_tag}/{version_code}"
+
+        fakestore_release = release_for(GMSCORE_REPO, "latest")
+        fakestore_tag = fakestore_release["tag_name"]
+        fakestore_asset, fakestore_match = find_asset(
+            fakestore_release, r"com\.android\.vending-(\d+)\.apk")
+        fakestore_apk = update_module(
+            partner_dir, "FakeStore", fakestore_asset, fakestore_match.group(1),
+            skip_certificate_check, cache_dir)
+        record_manifest(
+            manifest, "FakeStore", (fakestore_tag,),
+            {"apk": fakestore_apk, "version_code": fakestore_match.group(1),
+             "tag": fakestore_tag},
+        )
+        summary["FakeStore"] = fakestore_match.group(1)
+    # Release-mode GmsCore and FakeStore ship in the same microg/GmsCore
+    # release, so they share one selector and one GitHub metadata lookup.
     gms_cached = cached_entry(manifest, "GmsCore", gmscore_release_selector, cache_dir)
     fakestore_cached = cached_entry(manifest, "FakeStore", gmscore_release_selector, cache_dir)
-    if gms_cached and fakestore_cached:
+    if gmscore_release_selector == "main":
+        pass
+    elif gms_cached and fakestore_cached:
         log(f"GmsCore/FakeStore: pinned '{gmscore_release_selector}' already cached; "
             "skipping GitHub metadata lookup")
         gmscore_tag = gms_cached.get("tag", gmscore_release_selector)
         install_cached_module(partner_dir, "GmsCore", gms_cached["apk"],
-                              gms_cached["version_code"], cache_dir, skip_certificate_check)
+                              gms_cached["version_code"], cache_dir,
+                              skip_certificate_check or was_source_built)
         install_cached_module(partner_dir, "FakeStore", fakestore_cached["apk"],
                               fakestore_cached["version_code"], cache_dir, skip_certificate_check)
         summary["GmsCore"] = f"{gmscore_tag}/{gms_cached['version_code']}"
@@ -467,7 +541,8 @@ def update_microg(android_root, gmscore_release_selector, gsfproxy_release_selec
             gmscore_release, r"com\.android\.vending-(\d+)\.apk")
 
         gms_apk = update_module(partner_dir, "GmsCore", gmscore_asset,
-                                gmscore_match.group(1), skip_certificate_check, cache_dir)
+                                gmscore_match.group(1),
+                                skip_certificate_check or was_source_built, cache_dir)
         fakestore_apk = update_module(partner_dir, "FakeStore", fakestore_asset,
                                       fakestore_match.group(1), skip_certificate_check, cache_dir)
 
@@ -479,6 +554,9 @@ def update_microg(android_root, gmscore_release_selector, gsfproxy_release_selec
                          "tag": gmscore_tag})
         summary["GmsCore"] = f"{gmscore_tag}/{gmscore_match.group(1)}"
         summary["FakeStore"] = fakestore_match.group(1)
+
+    if gmscore_release_selector != "main":
+        source_marker.unlink(missing_ok=True)
 
     # F-Droid modules: each resolves from its own repo index (the ~15 MiB
     # metadata download that a pinned+cached run gets to skip entirely).
@@ -531,8 +609,8 @@ def parse_args():
     )
     parser.add_argument(
         "--gmscore-release",
-        default=os.environ.get("MICROG_GMSCORE_RELEASE", "latest"),
-        help="microg/GmsCore release tag, or latest. Default: latest.",
+        default=os.environ.get("MICROG_GMSCORE_RELEASE", "main"),
+        help="microg/GmsCore release tag, latest, or main. Default: main.",
     )
     parser.add_argument(
         "--gsfproxy-release",

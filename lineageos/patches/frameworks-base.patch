@@ -14,10 +14,9 @@ placement, and VM-irrelevant QS tiles can be blocklisted by product resources.
 Keeping that policy in the framework layer gives Launcher and the product
 overlays a stable desktop contract to build on.
 
-Games categorized as games that explicitly set `resizeableActivity=false` are
-kept fullscreen. This respects their manifest contract and preserves lifecycle
-and graphics assumptions used by older Unity activity trampolines, while games
-that advertise resizing remain available as desktop windows.
+All apps categorized as games are kept fullscreen, regardless of their resize
+declaration. This preserves the lifecycle, input, and graphics assumptions used
+by games while non-game applications remain available as desktop windows.
 
 Also reduce benign desktop VM framework logspam. Recents cleanup can run before
 the per-user recent task/image directories have been created on a fresh userdata
@@ -2261,7 +2260,27 @@ diff --git a/services/core/java/com/android/server/pm/ComputerEngine.java b/serv
 index 1cc02de121f8..4777c0b94277 100644
 --- a/services/core/java/com/android/server/pm/ComputerEngine.java
 +++ b/services/core/java/com/android/server/pm/ComputerEngine.java
-@@ -1526,6 +1526,25 @@ public class ComputerEngine implements Computer {
+@@ -1498,8 +1498,17 @@ public class ComputerEngine implements Computer {
+             return false;
+         }
+ 
+-        return Signature.areExactMatch(
+-                p.getSigningDetails(), new Signature[]{MICROG_REAL_SIGNATURE});
++        if (Signature.areExactMatch(
++                p.getSigningDetails(), new Signature[]{MICROG_REAL_SIGNATURE})) {
++            return true;
++        }
++
++        // Ika builds GmsCore from upstream source and signs it with the ROM platform key.
++        // Only trust that signer when the APK is part of the immutable product image; a
++        // data-partition update must still carry microG's upstream signature.
++        final String baseApkPath = p.getBaseApkPath();
++        return "com.google.android.gms".equals(p.getPackageName())
++                && "/product/priv-app/GmsCore/GmsCore.apk".equals(baseApkPath);
+     }
+ 
+     private static Optional<Signature> generateFakeSignature(AndroidPackage p) {
+@@ -1526,6 +1535,25 @@ public class ComputerEngine implements Computer {
          return Optional.of(fakeSignature);
      }
  
@@ -2287,7 +2306,7 @@ index 1cc02de121f8..4777c0b94277 100644
      public final PackageInfo generatePackageInfo(PackageStateInternal ps,
              @PackageManager.PackageInfoFlagsBits long flags, int userId) {
          if (!mUserManager.exists(userId)) return null;
-@@ -4235,7 +4254,7 @@ public class ComputerEngine implements Computer {
+@@ -4235,7 +4263,7 @@ public class ComputerEngine implements Computer {
                  || shouldFilterApplicationIncludingUninstalled(ps2, callingUid, userId)) {
              return PackageManager.SIGNATURE_UNKNOWN_PACKAGE;
          }
@@ -2835,45 +2854,42 @@ index 697ecbc87386..5302636bb4ad 100644
       * ActivityInfo, int)
       */
      public boolean isTopActivityExemptFromDesktopWindowing(@NonNull TaskInfo task) {
-+        if (isNonResizableGame(task.topActivityInfo)) {
++        if (isGame(task.topActivityInfo)) {
 +            return true;
 +        }
          return isTopActivityExemptFromDesktopWindowing(task.baseActivity,
                  task.isTopActivityNoDisplay, task.isActivityStackTransparent, task.numActivities,
                  task.userId, task.topActivityInfo, task.topActivityType);
-@@ -122,6 +125,13 @@ public class DesktopModeCompatPolicy {
+@@ -122,6 +125,11 @@ public class DesktopModeCompatPolicy {
          if (isTopActivityNoDisplay) {
              return false;
          }
-+        // Games that explicitly opt out of resizing commonly assume fullscreen lifecycle and
-+        // surface behavior. Forcing them into desktop freeform can break activity trampolines
-+        // (including Unity's OBB downloader) and graphics initialization. Respect the manifest
-+        // opt-out while leaving games that advertise resize support windowable.
-+        if (isNonResizableGame(info)) {
++        // Games commonly assume fullscreen lifecycle, input, and surface behavior. Keep every
++        // app categorized as a game out of desktop freeform regardless of its resize declaration.
++        if (isGame(info)) {
 +            return true;
 +        }
          // Dream activities should be fullscreen and thus should be forced out of desktop.
          if (DesktopExperienceFlags.ENABLE_DREAM_ACTIVITY_WINDOWING_EXCLUSION.isTrue()
                  && topActivityType == ACTIVITY_TYPE_DREAM) {
-@@ -150,6 +160,9 @@ public class DesktopModeCompatPolicy {
+@@ -150,6 +158,9 @@ public class DesktopModeCompatPolicy {
  
      /** @see #shouldDisableDesktopEntryPoints(String, int, boolean, boolean, int) */
      public boolean shouldDisableDesktopEntryPoints(@NonNull TaskInfo task) {
-+        if (isNonResizableGame(task.topActivityInfo)) {
++        if (isGame(task.topActivityInfo)) {
 +            return true;
 +        }
          final String packageName = task.baseActivity != null ? task.baseActivity.getPackageName() :
                  null;
          return shouldDisableDesktopEntryPoints(
-@@ -225,6 +238,13 @@ public class DesktopModeCompatPolicy {
+@@ -225,6 +236,12 @@ public class DesktopModeCompatPolicy {
          return isActivityStackTransparent && numActivities > 0;
      }
  
-+    private boolean isNonResizableGame(@Nullable ActivityInfo info) {
++    private boolean isGame(@Nullable ActivityInfo info) {
 +        return info != null
 +                && info.applicationInfo != null
-+                && info.applicationInfo.category == android.content.pm.ApplicationInfo.CATEGORY_GAME
-+                && !ActivityInfo.isResizeableMode(info.resizeMode);
++                && info.applicationInfo.category == android.content.pm.ApplicationInfo.CATEGORY_GAME;
 +    }
 +
      private boolean isSystemUiTask(@Nullable String packageName) {
@@ -2904,7 +2920,7 @@ index 7015b7561ed0..db0820cb4a31 100644
 +
 +    @Test
 +    fun testIsTopActivityExemptFromDesktopWindowing_resizableGame() {
-+        assertFalse(desktopModeCompatPolicy.isTopActivityExemptFromDesktopWindowing(
++        assertTrue(desktopModeCompatPolicy.isTopActivityExemptFromDesktopWindowing(
 +            createFreeformTask()
 +                .apply {
 +                    baseActivity = baseActivityTest

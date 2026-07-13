@@ -21,6 +21,7 @@ Status values:
 | F-Droid | native | native | no | no | Baseline package manager smoke test. | supported |
 | microG Settings | native | native | no | yes | Verifies bundled microG install and signature-spoofing path. | supported |
 | Chromium | native | native | no | optional | Use bundled browser/WebView validation before release. | works-with-notes |
+| Rebel Racing | native | translated on x86-64 if ARM-only | yes on x86-64 | yes | Requires fullscreen because it opts out of resizing. Newer builds also need the scoped Play Games server-auth callback carried by the default mainline GmsCore build. | works-with-notes |
 | Angry Birds 2 | native | translated on x86-64 if ARM-only | yes on x86-64 | likely | Validate Play Services, GPU, and ABI selection. | unknown |
 | Asphalt 8 | native | translated on x86-64 if ARM-only | yes on x86-64 | likely | May reject non-certified devices or fail GPU checks. | blocked |
 | CarX Highway Racing | native | translated on x86-64 if ARM-only | yes on x86-64 | likely | Historically sensitive to graphics/native runtime. | blocked |
@@ -35,3 +36,8 @@ Release smoke set:
    reaches app code instead of failing in the linker.
 4. Record any app that crashes in this file with the top crash frame and target
    architecture.
+
+Every app categorized as `ApplicationInfo.CATEGORY_GAME` is launched fullscreen
+by the desktop compatibility policy, regardless of its `resizeableActivity`
+declaration. This preserves the lifecycle, input, and surface assumptions common
+to games while non-game applications retain normal desktop windowing.

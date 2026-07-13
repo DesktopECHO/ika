@@ -1,0 +1,37 @@
+Patch summary:
+Guard gfxstream's compressed-texture passthrough behind the host native texture
+decompression feature flag. When native decompression is disabled, the host GL
+translator should not pass compressed texture payloads through solely because the
+host advertises a matching compressed format extension; doing so can let games
+successfully upload texture data that the translator/host path later interprets
+incorrectly, producing pink or missing textures. Falling back to the existing
+non-passthrough/decompression path is slower, but it is the safer behavior until
+format-specific passthrough support is verified.
+
+diff --git a/host/gl/glestranslator/common/include/common/gles_context.h b/host/gl/glestranslator/common/include/common/gles_context.h
+index 7f8f71d3..bc54d8f0 100644
+--- a/host/gl/glestranslator/common/include/common/gles_context.h
++++ b/host/gl/glestranslator/common/include/common/gles_context.h
+@@ -250,6 +250,7 @@ public:
+     GLEScontext(GlobalNameSpace* globalNameSpace, gfxstream::Stream* stream,
+             GlLibrary* glLib);
+     virtual void init(bool nativeTextureDecompressionEnabled, bool programBinaryLinkStatusEnabled);
++    bool nativeTextureDecompressionEnabled() const { return m_nativeTextureDecompressionEnabled; }
+     static void initGlobal(EGLiface* eglIface);
+     GLenum getGLerror();
+     void setGLerror(GLenum err);
+diff --git a/host/gl/glestranslator/common/texture_utils.cpp b/host/gl/glestranslator/common/texture_utils.cpp
+index 8997cd75..190e7c7f 100644
+--- a/host/gl/glestranslator/common/texture_utils.cpp
++++ b/host/gl/glestranslator/common/texture_utils.cpp
+@@ -897,6 +897,10 @@ bool isEtc2OrAstcFormat(GLenum format) {
+ }
+ 
+ bool shouldPassthroughCompressedFormat(GLEScontext* ctx, GLenum internalformat) {
++    if (!ctx->nativeTextureDecompressionEnabled()) {
++        return false;
++    }
++
+     if (isEtc2Format(internalformat)) {
+         return ctx->getCaps()->hasEtc2Support;
+     } else if (isAstcFormat(internalformat)) {

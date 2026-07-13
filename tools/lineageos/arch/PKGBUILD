@@ -4,7 +4,7 @@
 
 pkgbase=ika-lineageos
 pkgname=(ika-lineageos)
-pkgver=260629
+pkgver=260713
 pkgrel=1
 pkgdesc='LineageOS for Cuttlefish host'
 arch=(x86_64 aarch64)

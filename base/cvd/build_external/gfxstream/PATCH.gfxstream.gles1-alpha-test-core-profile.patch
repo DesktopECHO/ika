@@ -1,0 +1,34 @@
+Prevent GLES1 alpha-test state from calling unavailable host entry points.
+
+gfxstream's fixed-function translator already treats GL_ALPHA_TEST as emulated
+state when its backing context is OpenGL core profile or GLES. glAlphaFunc and
+glAlphaFuncx missed that split and unconditionally called the host dispatcher.
+On GLES-backed hosts that dispatcher entry is null, so a legacy game issuing
+glAlphaFunc can segfault the entire crosvm process.
+
+Keep alpha-function updates on the compatibility-profile path and avoid the
+unavailable host function on the two shader-emulated paths.
+
+diff --git a/host/gl/glestranslator/gles_cm/gles_cm_imp.cpp b/host/gl/glestranslator/gles_cm/gles_cm_imp.cpp
+--- a/host/gl/glestranslator/gles_cm/gles_cm_imp.cpp
++++ b/host/gl/glestranslator/gles_cm/gles_cm_imp.cpp
+@@ -443,6 +443,11 @@ GL_API void GL_APIENTRY  glAlphaFunc( GLenum func, GLclampf ref) {
+     GET_CTX()
+     GLES_CM_TRACE()
+     SET_ERROR_IF(!GLEScmValidate::alphaFunc(func),GL_INVALID_ENUM);
++    // Alpha testing is fixed-function state that is unavailable on both core
++    // profile OpenGL and GLES hosts. CoreProfileEngine already treats
++    // GL_ALPHA_TEST enable/disable as emulated state, so do not dispatch the
++    // corresponding host-only entry point on those paths.
++    if (isCoreProfile() || isGles2Gles()) return;
+     ctx->dispatcher().glAlphaFunc(func,ref);
+ }
+ 
+@@ -451,6 +456,7 @@ GL_API void GL_APIENTRY  glAlphaFuncx( GLenum func, GLclampx ref) {
+     GET_CTX()
+     GLES_CM_TRACE()
+     SET_ERROR_IF(!GLEScmValidate::alphaFunc(func),GL_INVALID_ENUM);
++    if (isCoreProfile() || isGles2Gles()) return;
+     ctx->dispatcher().glAlphaFunc(func,X2F(ref));
+ }
+ 

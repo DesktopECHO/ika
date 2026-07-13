@@ -467,8 +467,9 @@ main() {
   else
     apply_source_patches
   fi
-  update_microg_prebuilts
   configure_arm64_host_build
+  build_host_microg_tools "${targets[@]}"
+  update_microg_prebuilts
   cleanup_arm64_prebuilt_download_caches
 
   local target

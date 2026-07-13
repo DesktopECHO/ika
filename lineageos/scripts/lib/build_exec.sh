@@ -211,3 +211,35 @@ build_host_lpunpack() {
   [[ -x "$lpunpack_bin" ]] || die "lpunpack build succeeded but binary not found at $lpunpack_bin"
   log "lpunpack built: $lpunpack_bin"
 }
+
+build_host_microg_tools() {
+  enabled "$include_microg" || return 0
+  enabled "$update_microg_prebuilts" || return 0
+  [[ "${MICROG_GMSCORE_RELEASE:-main}" == "main" ]] || return 0
+
+  local host_tag build_target host_bin
+  if host_is_arm64; then
+    host_tag="linux-arm64"
+  else
+    host_tag="linux-x86"
+  fi
+  build_target="${1:-}"
+  [[ -n "$build_target" ]] || die "internal error: no target available for GmsCore host-tool bootstrap"
+  host_bin="$workspace/out/host/$host_tag/bin"
+  local -a tools=(aapt2 aidl apksigner d8 zipalign adb)
+  local tool missing=0
+  for tool in "${tools[@]}"; do
+    if [[ ! -x "$host_bin/$tool" ]]; then
+      missing=1
+      break
+    fi
+  done
+  (( missing == 0 )) && return 0
+
+  log "building native $host_tag Android SDK tools for GmsCore"
+  (cd "$workspace" && run_build_native "$(target_product "$build_target")" "${tools[@]}")
+  for tool in "${tools[@]}"; do
+    [[ -x "$host_bin/$tool" ]] || \
+      die "GmsCore host-tool build succeeded but $host_bin/$tool is missing"
+  done
+}

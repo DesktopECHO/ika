@@ -972,8 +972,6 @@ check_native_bridge() {
 
   local bridge="$android_root/vendor/lineage_desktop/prebuilts/native_bridge"
   local system="$bridge/system"
-  local vulkaninfo_bp="$overlay_dir/tools/vulkaninfo/Android.bp"
-  local vulkaninfo_wrapper="$overlay_dir/tools/vulkaninfo/vulkaninfo_arm64.sh"
   local required
   for required in \
     "$bridge/Android.bp" \
@@ -984,9 +982,7 @@ check_native_bridge() {
     "$system/etc/init/ndk_translation.rc" \
     "$system/etc/ld.config.arm64.txt" \
     "$system/lib64/libndk_translation.so" \
-    "$android_root/frameworks/libs/native_bridge_support/android_api/libc/Android.bp" \
-    "$vulkaninfo_bp" \
-    "$vulkaninfo_wrapper"
+    "$android_root/frameworks/libs/native_bridge_support/android_api/libc/Android.bp"
   do
     require_file "$required"
   done
@@ -994,13 +990,6 @@ check_native_bridge() {
   grep -q 'ro.dalvik.vm.native.bridge=libndk_translation.so' \
     "$overlay_dir/config/x86_arm_native_bridge.mk" || \
     fail "x86 native bridge product properties are missing"
-  grep -Fq 'vulkaninfo.native_bridge:64' "$overlay_dir/config/x86_arm_native_bridge.mk" || \
-    fail "x86 native bridge diagnostic vulkaninfo package is missing"
-  if [[ "$(grep -Fc 'system_ext_specific: true' "$vulkaninfo_bp")" -lt 2 ]]; then
-    fail "vulkaninfo diagnostics must install to system_ext, outside generic_system's /system artifact path"
-  fi
-  grep -Fq '/system_ext/bin/arm64/vulkaninfo /system_ext/bin/arm64/vulkaninfo' "$vulkaninfo_wrapper" || \
-    fail "x86 native bridge vulkaninfo wrapper must run the system_ext arm64 guest binary"
 }
 
 check_desktop_flags() {

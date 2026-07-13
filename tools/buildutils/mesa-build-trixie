@@ -14,11 +14,15 @@ DEFAULT_WORKDIR="${SCRIPT_DIR}/../../deb/mesa-trixie-backport"
 DEFAULT_MESA_SOURCE_PACKAGE="mesa"
 DEFAULT_MESA_SOURCE_SUITE="trixie-backports"
 DEFAULT_MIN_MESA_VERSION="26.1"
+DEFAULT_PACKAGE_REVISION="80"
+DEFAULT_VULKAN_MIN_VERSION="1.4.341"
 
 WORKDIR="${DEFAULT_WORKDIR}"
 MESA_SOURCE_PACKAGE="${MESA_SOURCE_PACKAGE:-${DEFAULT_MESA_SOURCE_PACKAGE}}"
 MESA_SOURCE_SUITE="${MESA_SOURCE_SUITE:-${DEFAULT_MESA_SOURCE_SUITE}}"
 MIN_MESA_VERSION="${MIN_MESA_VERSION:-${DEFAULT_MIN_MESA_VERSION}}"
+PACKAGE_REVISION="${PACKAGE_REVISION:-${DEFAULT_PACKAGE_REVISION}}"
+VULKAN_MIN_VERSION="${VULKAN_MIN_VERSION:-${DEFAULT_VULKAN_MIN_VERSION}}"
 ASSUME_YES=false
 INSTALL_BUILT=false
 STAGE_PACKAGES=true
@@ -49,6 +53,9 @@ Options:
   --source-suite <suite> Debian source suite (default: ${DEFAULT_MESA_SOURCE_SUITE})
   --source-package <pkg> Debian source package (default: ${DEFAULT_MESA_SOURCE_PACKAGE})
   --min-version <ver>    Minimum acceptable Mesa source version (default: ${DEFAULT_MIN_MESA_VERSION})
+  --package-revision <n> Debian package revision (default: ${DEFAULT_PACKAGE_REVISION})
+  --vulkan-min-version <ver>
+                         Required libvulkan-dev version (default: ${DEFAULT_VULKAN_MIN_VERSION})
   --install              Install selected built Mesa packages after building
   --no-stage             Do not copy selected built packages to the repository root
   -y, --yes              Non-interactive apt operations when sudo is available
@@ -138,6 +145,22 @@ parse_args() {
         MIN_MESA_VERSION="$2"
         shift 2
         ;;
+      --package-revision)
+        [[ $# -ge 2 ]] || {
+          echo "Missing value for --package-revision" >&2
+          exit 1
+        }
+        PACKAGE_REVISION="$2"
+        shift 2
+        ;;
+      --vulkan-min-version)
+        [[ $# -ge 2 ]] || {
+          echo "Missing value for --vulkan-min-version" >&2
+          exit 1
+        }
+        VULKAN_MIN_VERSION="$2"
+        shift 2
+        ;;
       -y|--yes)
         ASSUME_YES=true
         shift
@@ -198,7 +221,7 @@ require_tools() {
   local missing=()
   local tool
 
-  for tool in apt-get dpkg-deb dpkg-buildpackage dpkg-parsechangelog; do
+  for tool in apt-get dch dpkg-deb dpkg-buildpackage dpkg-parsechangelog; do
     if ! command -v "${tool}" >/dev/null 2>&1; then
       missing+=("${tool}")
     fi
@@ -255,7 +278,7 @@ refresh_source_metadata() {
 }
 
 fetch_source() {
-  local source_tree version
+  local source_tree version upstream_version package_version
 
   rm -rf "${SRC_DIR:?}/${MESA_SOURCE_PACKAGE}-"*/
   rm -f "${SRC_DIR}"/*.dsc "${SRC_DIR}"/*.tar.* "${SRC_DIR}"/*.debian.tar.* "${SRC_DIR}"/*.orig.tar.* "${SRC_DIR}"/*.buildinfo "${SRC_DIR}"/*.changes
@@ -277,8 +300,30 @@ fetch_source() {
     exit 1
   fi
 
+  if [[ ! "${PACKAGE_REVISION}" =~ ^[0-9]+$ ]]; then
+    echo "Invalid Debian package revision: ${PACKAGE_REVISION} (expected an integer)." >&2
+    exit 1
+  fi
+
+  if [[ "${version}" != *-* ]]; then
+    echo "Mesa source version ${version} has no Debian revision to replace." >&2
+    exit 1
+  fi
+
+  upstream_version="${version%-*}"
+  package_version="${upstream_version}-${PACKAGE_REVISION}"
+  (
+    cd "${SOURCE_TREE}"
+    DEBFULLNAME="Ika Build" DEBEMAIL="build@desktopecho.com" \
+      dch --newversion "${package_version}" \
+          --distribution "${MESA_SOURCE_SUITE}" \
+          --force-distribution \
+          "Rebuild Mesa against Ika's pinned Vulkan loader."
+  )
+
   echo "Source tree: ${SOURCE_TREE}"
-  echo "Mesa package version: ${version}"
+  echo "Mesa source version: ${version}"
+  echo "Mesa package version: ${package_version}"
 }
 
 install_source_build_dependencies() {
@@ -298,6 +343,18 @@ install_source_build_dependencies() {
     --tool "${apt_tool}" \
     debian/control
   popd >/dev/null
+}
+
+verify_pinned_vulkan() {
+  local version
+
+  version="$(dpkg-query -W -f='${Version}' libvulkan-dev 2>/dev/null || true)"
+  if [[ -z "${version}" ]] || ! dpkg --compare-versions "${version}" ge "${VULKAN_MIN_VERSION}"; then
+    echo "Mesa must be built against Ika's pinned libvulkan-dev ${VULKAN_MIN_VERSION}+; found ${version:-not installed}." >&2
+    exit 1
+  fi
+
+  echo "Building against pinned libvulkan-dev ${version}."
 }
 
 build_packages() {
@@ -449,6 +506,7 @@ EOF
   refresh_source_metadata
   fetch_source
   install_source_build_dependencies
+  verify_pinned_vulkan
   build_packages
   if [[ "${INSTALL_BUILT}" == "true" ]]; then
     install_built_packages

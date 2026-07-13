@@ -225,10 +225,14 @@ its own ways of producing black surfaces, fixed in `external-mesa3d.patch`:
 After rebuilding and reinstalling the host package and the guest ROM:
 
 ```
---gfxstream_vulkan=on
+--gfxstream_vulkan=auto
 → Chromium: ANGLE Vulkan 1.4.341 via Virtio-GPU GFXStream on Apple M1 Pro
 → previous VK_ERROR_OUT_OF_DEVICE_MEMORY and context-init failures: gone
 ```
+
+`auto` now leaves Cuttlefish's normal GLES+Vulkan context selection intact on
+Apple Silicon. The launcher only adds the 16 KiB-specific udmabuf/ExternalBlob
+memory configuration; `on` remains available as an explicit context override.
 
 Android's Vulkan, inside a VM, accelerated by the Apple Silicon GPU.
 

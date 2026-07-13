@@ -5,8 +5,9 @@ Each public tarball should be reproducible from documented inputs.
 Before building:
 
 1. Choose the LineageOS branch and manifest revision.
-2. Choose microG versions or leave them as `latest` and let the build metadata
-   record the resolved APK checksums.
+2. Choose the GmsCore gate (`main` by default or `latest` for the official
+   prebuilt) and other microG versions. Build metadata records the mainline
+   source revision and all resolved APK checksums.
 3. Choose the native bridge SDK payload for x86-64, or set
    `NATIVE_BRIDGE_SOURCE_DIR` to a vetted extracted payload.
 4. Run the one-command build script from a clean or script-managed workspace.
