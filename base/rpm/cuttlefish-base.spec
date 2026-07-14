@@ -72,10 +72,10 @@ Requires:       libdrm
 Requires:       libX11
 Requires:       libXext
 Requires:       lz4
-Requires:       mesa-libgbm
-Requires:       mesa-libGL
+Requires:       mesa-libgbm >= 26.1
+Requires:       mesa-libGL >= 26.1
 Requires:       glx-utils
-Requires:       mesa-vulkan-drivers
+Requires:       mesa-vulkan-drivers >= 26.1
 Requires:       vulkan-tools
 Requires:       net-tools
 Requires:       NetworkManager

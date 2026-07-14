@@ -593,7 +593,7 @@ index 67aece73f..931e14695 100644
 +# matching appop defaults to MODE_DEFAULT, which Settings.canDrawOverlays() treats as denied. That
 +# makes microG's self-check report overlay permission as unchecked and can suppress pop-ups, push
 +# notifications, and background sync. Re-assert MODE_ALLOWED each boot; the command is a no-op when
-+# com.google.android.gms is absent (INCLUDE_MICROG=0).
++# com.google.android.gms may be absent when no provider is selected.
 +cmd appops set com.google.android.gms SYSTEM_ALERT_WINDOW allow >/dev/null 2>&1
 +
 +# Keep crash evidence in logcat/dropbox but avoid modal crash-report loops on the desktop.

@@ -108,15 +108,6 @@ performance_core_ids() {
   done | sort -n
 }
 
-reserved_host_core_list() {
-  local -a cores=()
-  local count
-  mapfile -t cores < <(performance_core_ids)
-  count="${#cores[@]}"
-  (( count > 2 )) || return 0
-  printf '%s,%s\n' "${cores[count - 2]}" "${cores[count - 1]}"
-}
-
 # Upper bound on the auto-selected guest vCPU count. The default heuristic
 # never exceeds this; pass --cpus= to request more.
 readonly DEFAULT_GUEST_CPU_CAP=12
@@ -218,7 +209,7 @@ declare -A CVD_COMPUTE_DEFAULTS=(
 # GPU Configuration Defaults (passed to cvd_internal_start)
 # ============================================================================
 declare -A CVD_GPU_DEFAULTS=(
-  [gpu_mode]="gfxstream"
+  [gpu_mode]="gfxstream_guest_angle"
   # Keep off: this package's Bazel build ships exactly one crosvm binary
   # (cuttlefish-common/bin/crosvm, see cuttlefish/package/BUILD.bazel). Upstream
   # auto-enables vhost-user-gpu on ARM64 hosts in --gpu_vhost_user_mode=auto,
@@ -318,6 +309,7 @@ mkdir -p "${CVD_HOME_DIR}"
 CVD_TMP_DIR="${CVD_HOME_DIR}/tmp"
 mkdir -p "${CVD_TMP_DIR}"
 export TMPDIR="${CVD_TMP_DIR}"
+DATA_GB_CONFIG_FILE="${CVD_HOME_DIR}/data-gb"
 START_LOG_FILE="${CVD_HOME_DIR}/ikastart.log"
 SCRCPY_LOG_FILE="${CVD_HOME_DIR}/scrcpy.log"
 CVD_BIN="${CVD_HOST_OUT}/bin/cvd_internal_start"
@@ -449,7 +441,7 @@ normalize_data_gb() {
   local data_gb="$1"
 
   if [[ ! "${data_gb}" =~ ^[1-9][0-9]*$ ]]; then
-    die "DATA_GB must be a positive whole number of gigabytes"
+    die "--data_gb must be a positive whole number of gigabytes"
   fi
 
   printf '%s\n' "${data_gb}"
@@ -458,6 +450,42 @@ normalize_data_gb() {
 data_gb_to_mib() {
   local data_gb="$1"
   printf '%s\n' "$((data_gb * 1000000000 / 1048576))"
+}
+
+parse_reset_options() {
+  local -n data_gb_ref="$1"
+  local -n reset_args_ref="$2"
+  shift 2
+
+  data_gb_ref=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --data_gb=*)
+        data_gb_ref="$(normalize_data_gb "${1#*=}")"
+        shift
+        ;;
+      --data_gb)
+        shift
+        [[ $# -gt 0 ]] || die "--data_gb requires a value"
+        data_gb_ref="$(normalize_data_gb "$1")"
+        shift
+        ;;
+      *)
+        reset_args_ref+=("$1")
+        shift
+        ;;
+    esac
+  done
+}
+
+save_data_gb_configuration() {
+  local data_gb="$1"
+
+  [[ -n "${data_gb}" ]] || return 0
+  mkdir -p "${CVD_HOME_DIR}"
+  printf '%s\n' "${data_gb}" > "${DATA_GB_CONFIG_FILE}"
+  log "userdata size configured: ${data_gb} GB (applies on next start)"
 }
 
 parse_start_options() {
@@ -492,17 +520,9 @@ parse_start_options() {
         export GFXSTREAM_VULKAN="${GFXSTREAM_VULKAN_MODE}"
         shift
         ;;
-      --data_gb=*)
-        DATA_GB="$(normalize_data_gb "${1#*=}")"
-        export DATA_GB
-        shift
-        ;;
-      --data_gb)
-        shift
-        [[ $# -gt 0 ]] || die "--data_gb requires a value"
-        DATA_GB="$(normalize_data_gb "$1")"
-        export DATA_GB
-        shift
+      --data_gb=*|--data_gb)
+        respond_console "Use '${SCRIPT_NAME} reset --data_gb=GB' to change userdata size."
+        die "--data_gb is only valid with '${SCRIPT_NAME} reset'"
         ;;
       --ika_scrcpy=*)
         IKA_SCRCPY="${1#*=}"
@@ -565,16 +585,16 @@ usage() {
 
 Usage:
 
-  ${SCRIPT_NAME} start [-f|--fullscreen|--game] [--gfxstream_vulkan=auto|on|off] [--data_gb=GB] [--ika_scrcpy=ARGS] [--setting=arg] ...
+  ${SCRIPT_NAME} start [-f|--fullscreen|--game] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] [--setting=arg] ...
   ${SCRIPT_NAME} stop
-  ${SCRIPT_NAME} restart [-f|--fullscreen|--game] [--gfxstream_vulkan=auto|on|off] [--data_gb=GB] [--ika_scrcpy=ARGS] ...
-  ${SCRIPT_NAME} reset [Delete everything and start fresh]
+  ${SCRIPT_NAME} restart [-f|--fullscreen|--game] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] ...
+  ${SCRIPT_NAME} reset [--data_gb=GB] [Delete everything and start fresh]
 
 Example:
 
   ${SCRIPT_NAME} start --gpu_mode=guest_swiftshader --cpus=2 --memory_mb=2048 --dpi=240 --fullscreen
   ${SCRIPT_NAME} start --gpu_mode=gfxstream_guest_angle
-  ${SCRIPT_NAME} start --data_gb=128
+  ${SCRIPT_NAME} reset --data_gb=128
   ${SCRIPT_NAME} restart --gfxstream_vulkan=on
   ${SCRIPT_NAME} restart --ika_scrcpy="--no-clipboard-autosync"
   ${SCRIPT_NAME} start --game
@@ -585,6 +605,8 @@ Options:
                          keyboard and mouse input.
   --memory_mb=MB         Override the default guest RAM setting.
                          Normally ~25% of host RAM, capped at 32GB max.
+  --data_gb=GB           With reset, configure the userdata size used by the
+                         next start and subsequent factory resets.
 
 Environment Variables:
 
@@ -594,8 +616,6 @@ Environment Variables:
                          On Apple Silicon 16K-page hosts, auto/on routes
                          host-visible guest Vulkan memory through udmabuf-backed
                          dma-buf (the path the Apple GPU supports).
-  DATA_GB                Size of the next fresh userdata image, in GB.
-                         Existing VM data must be reset first.
   IKA_SCRCPY             Extra whitespace-separated args appended to scrcpy.
                          Equivalent command-line option: --ika_scrcpy=ARGS
                          (example: --keyboard=uhid --no-clipboard-autosync)
@@ -1327,7 +1347,7 @@ protect_overlay_resume() {
 append_data_storage_args() {
   local -n args_array="$1"
   shift
-  local requested_data_gb="${DATA_GB:-}"
+  local configured_data_gb=""
   local data_gb
   local data_mb
   local has_existing_userdata_state="false"
@@ -1346,14 +1366,15 @@ append_data_storage_args() {
   fi
 
   if [[ "${explicit_data_policy}" != "true" && "${has_existing_userdata_state}" == "true" ]]; then
-    if [[ -n "${requested_data_gb}" ]]; then
-      CVD_DATA_STORAGE_MESSAGE="Ignored userdata resize; you must reset the instance first: 'ika reset'"
-      log "DATA_GB=${requested_data_gb} requested, but existing userdata state is present; run '${SCRIPT_NAME} reset' before the next start to apply it."
-    fi
     return 0
   fi
 
-  data_gb="$(normalize_data_gb "${requested_data_gb:-${DEFAULT_DATA_GB}}")"
+  if [[ -s "${DATA_GB_CONFIG_FILE}" ]]; then
+    IFS= read -r configured_data_gb < "${DATA_GB_CONFIG_FILE}"
+    configured_data_gb="$(normalize_data_gb "${configured_data_gb}")"
+  fi
+
+  data_gb="${configured_data_gb:-${DEFAULT_DATA_GB}}"
   data_mb="$(data_gb_to_mib "${data_gb}")"
 
   if [[ "${explicit_data_policy}" != "true" ]]; then
@@ -1366,7 +1387,7 @@ append_data_storage_args() {
 
   CVD_NEWLY_PROVISIONED="true"
 
-  if [[ -n "${requested_data_gb}" ]]; then
+  if [[ -n "${configured_data_gb}" ]]; then
     CVD_DATA_STORAGE_MESSAGE="Provisioning ${data_gb} GB userdata..."
     log "fresh userdata target: ${data_mb} MiB"
   fi
@@ -1460,16 +1481,14 @@ run_with_cvd_env() {
 }
 
 run_stop_helper() {
-  local -a statuses
+  local status
 
   set +e
-  set +o pipefail
-  run_with_cvd_env "$@" 2>&1 | grep -v -Fx "Requesting stop"
-  statuses=("${PIPESTATUS[@]}")
-  set -o pipefail
+  run_with_cvd_env "$@" >/dev/null 2>&1
+  status="$?"
   set -e
 
-  return "${statuses[0]}"
+  return "${status}"
 }
 
 has_session_group() {
@@ -1718,7 +1737,6 @@ start_scrcpy_with_retries() {
   local max_attempts=5
   local cuttlefish_frames_socket
   local scrcpy_log="${SCRCPY_LOG_FILE}"
-  local host_core_list
   local scrcpy_lock_file="${CVD_HOME_DIR}/scrcpy-launch.lock"
   local scrcpy_lock_fd=""
   local scrcpy_window_size
@@ -1817,12 +1835,6 @@ start_scrcpy_with_retries() {
       "${scrcpy_env[@]}"
       "${scrcpy_cmd[@]}"
     )
-  fi
-
-  host_core_list="$(reserved_host_core_list)"
-  if [[ -n "${host_core_list}" ]] && command -v taskset >/dev/null 2>&1; then
-    log "pinning direct console to host performance cores: ${host_core_list}"
-    scrcpy_cmd=(taskset -c "${host_core_list}" "${scrcpy_cmd[@]}")
   fi
 
   mkdir -p "$(dirname "${scrcpy_log}")"
@@ -1955,11 +1967,7 @@ start_cvd() {
 
   if has_live_cvd_processes; then
     log "Cuttlefish is already running under ${CVD_HOME_DIR}"
-    if [[ -n "${DATA_GB:-}" ]]; then
-      respond_console "Ignored userdata resize; you must reset the instance first: 'ika reset'"
-    else
-      respond_console "Instance already running, local console will be restarted"
-    fi
+    respond_console "Instance already running, local console will be restarted"
     respond "Android virtual device running"
     maybe_start_scrcpy "${adb_serial}" "${fullscreen_mode}" "${game_mode}" || true
     return 0
@@ -2034,7 +2042,7 @@ stop_cvd_internal() {
 
   if [[ "${stop_ok}" != "true" ]]; then
     log "retrying stop via $(basename "${CVD_CLI_BIN}") stop"
-    run_with_cvd_env "${CVD_CLI_BIN}" stop "${stop_args[@]}" && stop_ok="true" || true
+    run_stop_helper "${CVD_CLI_BIN}" stop "${stop_args[@]}" && stop_ok="true" || true
   fi
 
   if [[ "${clear_instance_dirs}" == "true" ]]; then
@@ -2073,6 +2081,8 @@ main() {
   local command="${1:-help}"
   local fullscreen_mode
   local game_mode
+  local reset_data_gb
+  local -a reset_args
   local -a start_args
 
   case "${command}" in
@@ -2089,15 +2099,19 @@ main() {
       shift
       if ! has_live_cvd_processes; then
         stop_dnsmasq
-        respond "Not running"
+        respond "Android virtual device not running"
         return 0
       fi
       stop_cvd_internal false "$@"
+      respond "Android virtual device stopped"
       ;;
     reset)
       shift
+      reset_args=()
+      parse_reset_options reset_data_gb reset_args "$@"
       confirm_reset || exit 1
-      stop_cvd_internal true "$@"
+      stop_cvd_internal true "${reset_args[@]}"
+      save_data_gb_configuration "${reset_data_gb}"
       ;;
     restart)
       shift
@@ -2109,7 +2123,7 @@ main() {
         sleep 0.5
       else
         stop_dnsmasq
-        respond "Not running"
+        respond "Android virtual device not running"
       fi
       exec_start_command "${fullscreen_mode}" "${game_mode}" "${start_args[@]}"
       ;;

@@ -94,13 +94,27 @@ install_manifest() {
 
   local microg_manifest_src="$overlay_dir/manifests/lineageos4microg.xml"
   local microg_manifest_dest="$workspace/.repo/local_manifests/lineageos4microg.xml"
+  local mtg_manifest_src="$overlay_dir/manifests/mindthegapps.xml"
+  local mtg_manifest_dest="$workspace/.repo/local_manifests/mindthegapps.xml"
 
-  if enabled "$include_microg"; then
-    [[ -f "$microg_manifest_src" ]] || die "missing microG manifest: $microg_manifest_src"
-    install -m 0644 "$microg_manifest_src" "$microg_manifest_dest"
-  else
-    rm -f "$microg_manifest_dest"
-  fi
+  case "$gms_provider" in
+    microg)
+      [[ -f "$microg_manifest_src" ]] || die "missing microG manifest: $microg_manifest_src"
+      install -m 0644 "$microg_manifest_src" "$microg_manifest_dest"
+      rm -f "$mtg_manifest_dest"
+      ;;
+    mtg)
+      [[ -f "$mtg_manifest_src" ]] || die "missing MindTheGapps manifest: $mtg_manifest_src"
+      install -m 0644 "$mtg_manifest_src" "$mtg_manifest_dest"
+      rm -f "$microg_manifest_dest"
+      ;;
+    none)
+      rm -f "$microg_manifest_dest" "$mtg_manifest_dest"
+      ;;
+    *)
+      die "internal error: unsupported GMS provider '$gms_provider'"
+      ;;
+  esac
 
   # On x86 hosts, ensure_linux_x86_clang_prebuilt provisions only the pinned
   # Clang payload (blobless, ~3.5 GB), so drop the full
@@ -260,8 +274,14 @@ reset_patched_projects_for_sync() {
     esac
   fi
 
-  if enabled "$include_microg" && [[ -d "$workspace/vendor/partner_gms/.git" ]]; then
+  # Provider manifests are mutually exclusive. Reset both existing checkouts,
+  # including the provider that is about to be removed, so repo can delete a
+  # stale project whose downloaded APKs or LFS files changed the worktree.
+  if [[ -d "$workspace/vendor/partner_gms/.git" || -f "$workspace/vendor/partner_gms/.git" ]]; then
     safe_reset_project "$workspace/vendor/partner_gms" "vendor/partner_gms"
+  fi
+  if [[ -d "$workspace/vendor/gapps/.git" || -f "$workspace/vendor/gapps/.git" ]]; then
+    safe_reset_project "$workspace/vendor/gapps" "vendor/gapps"
   fi
 
   local line project patch extra project_dir patch_file
@@ -1257,6 +1277,50 @@ update_microg_prebuilts() {
 
   log "refreshing microG prebuilts"
   "$update_script" "$workspace"
+}
+
+apply_mindthegapps_x86_64_compat_patch() {
+  local gapps="$1"
+  shift
+
+  targets_include_x86_64 "$@" || return 0
+
+  local patch="$overlay_dir/patches/vendor-gapps-x86_64-4k-prebuilt.patch"
+  [[ -f "$patch" ]] || die "missing MindTheGapps x86-64 compatibility patch: $patch"
+
+  if git -C "$gapps" apply --reverse --check --whitespace=nowarn "$patch" >/dev/null 2>&1; then
+    return 0
+  fi
+  git -C "$gapps" apply --check --whitespace=nowarn "$patch" >/dev/null || \
+    die "MindTheGapps x86-64 compatibility patch does not apply cleanly"
+
+  log "allowing MindTheGapps' unrelinkable 4 KiB x86-64 LatinIME prebuilt"
+  git -C "$gapps" apply --whitespace=nowarn "$patch"
+}
+
+sync_mindthegapps_lfs_prebuilts() {
+  [[ "$gms_provider" == "mtg" ]] || return 0
+
+  local gapps="$workspace/vendor/gapps"
+  [[ -d "$gapps/.git" || -f "$gapps/.git" ]] || \
+    die "MindTheGapps source is missing after repo sync: $gapps"
+  git lfs version >/dev/null 2>&1 || \
+    die "git-lfs is required to fetch MindTheGapps prebuilts"
+
+  local include="common/**"
+  local target
+  for target in "$@"; do
+    case "$target" in
+      arm64|x86_64) include+=",$target/**" ;;
+      *) die "internal error: unsupported MindTheGapps target '$target'" ;;
+    esac
+  done
+
+  log "fetching MindTheGapps prebuilts for $*"
+  git -C "$gapps" lfs install --local >/dev/null
+  run_anonymous_git_network git -C "$gapps" lfs pull \
+    --include="$include" --exclude=""
+  apply_mindthegapps_x86_64_compat_patch "$gapps" "$@"
 }
 
 targets_include_x86_64() {

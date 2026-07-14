@@ -1,0 +1,11 @@
+diff --git a/x86_64/Android.bp b/x86_64/Android.bp
+--- a/x86_64/Android.bp
++++ b/x86_64/Android.bp
+@@ -62,4 +62,7 @@ cc_prebuilt_library_shared {
+     srcs: ["proprietary/product/lib64/libjni_latinimegoogle.so"],
+     prefer: true,
+     product_specific: true,
++    // This proprietary x86-64 prebuilt is linked with 4 KiB segments and
++    // cannot be relinked here. The x86-64 Cuttlefish kernel uses 4 KiB pages.
++    ignore_max_page_size: true,
+ }

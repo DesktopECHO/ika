@@ -92,25 +92,26 @@ def read_json(url):
     return _retry_network(url, attempt)
 
 
-def latest_release_from_list(repo):
-    releases = read_json(f"{GITHUB_API}/{repo}/releases")
-    for release in releases:
-        if not release.get("draft") and not release.get("prerelease"):
-            return release
-    for release in releases:
-        if not release.get("draft"):
-            return release
+def newest_published_release(repo):
+    releases = read_json(f"{GITHUB_API}/{repo}/releases?per_page=100")
+    published = [release for release in releases if not release.get("draft")]
+    if published:
+        # GitHub's /releases/latest endpoint can lag the actual releases feed,
+        # particularly while a newly published release is marked prerelease.
+        # Ika intentionally follows the newest non-draft publication shown on
+        # the releases page, including prereleases.
+        return max(
+            published,
+            key=lambda release: release.get("published_at")
+            or release.get("created_at")
+            or "",
+        )
     raise UpdateError(f"{repo} has no published releases")
 
 
 def release_for(repo, selector):
     if selector == "latest":
-        try:
-            return read_json(f"{GITHUB_API}/{repo}/releases/latest")
-        except urllib.error.HTTPError as exc:
-            if exc.code != 404:
-                raise
-            return latest_release_from_list(repo)
+        return newest_published_release(repo)
     return read_json(f"{GITHUB_API}/{repo}/releases/tags/{selector}")
 
 
@@ -448,24 +449,6 @@ def cached_entry(manifest, module, selector, cache_dir):
     return entry
 
 
-def build_gmscore_main(android_root, cache_dir):
-    build_script = Path(__file__).with_name("build_microg_main.py")
-    if not build_script.is_file():
-        raise UpdateError(f"missing GmsCore source build script: {build_script}")
-    try:
-        output = subprocess.check_output(
-            [str(build_script), str(android_root), "--output-dir", str(cache_dir)],
-            text=True,
-        )
-        result = json.loads(output)
-    except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
-        raise UpdateError(f"failed to build GmsCore from upstream main: {exc}") from exc
-    apk = Path(result.get("apk", ""))
-    if not apk.is_file() or not result.get("commit") or not result.get("version_code"):
-        raise UpdateError(f"invalid GmsCore source build result: {result}")
-    return result
-
-
 def update_microg(android_root, gmscore_release_selector, gsfproxy_release_selector,
                   fdroid_release_selector, fdroid_privileged_release_selector,
                   skip_certificate_check, cache_dir):
@@ -479,49 +462,21 @@ def update_microg(android_root, gmscore_release_selector, gsfproxy_release_selec
     manifest = load_manifest(cache_dir)
     summary = {}
 
-    # Ika follows GmsCore's upstream main branch so merged compatibility fixes
-    # do not have to wait for a release. FakeStore still comes from the latest
-    # official release and retains its upstream certificate/signature-spoofed
-    # Play Store identity for Google authentication.
+    if gmscore_release_selector == "main":
+        raise UpdateError(
+            "GmsCore main is not a release; omit MICROG_GMSCORE_RELEASE to use "
+            "the newest published release, or set it to an explicit release tag"
+        )
+
+    # GmsCore and FakeStore ship together in the same published microg/GmsCore
+    # release. An old source marker also tells us certificate continuity may
+    # legitimately change once while migrating from a platform-signed mainline
+    # build to the official release APK.
     source_marker = partner_dir / ".gmscore_source.json"
     was_source_built = source_marker.is_file()
-    if gmscore_release_selector == "main":
-        result = build_gmscore_main(android_root, cache_dir)
-        commit = result["commit"]
-        version_code = str(result["version_code"])
-        module_dir = partner_dir / "GmsCore"
-        install_from_cache(module_dir, "GmsCore.apk", Path(result["apk"]), True)
-        write_text_if_changed(module_dir / ".version_code", f"{version_code}\n")
-        write_text_if_changed(
-            source_marker,
-            json.dumps(
-                {"selector": "main", "branch": result["branch"], "commit": commit},
-                sort_keys=True,
-            ) + "\n",
-        )
-        gmscore_tag = f"main@{commit}"
-        summary["GmsCore"] = f"{gmscore_tag}/{version_code}"
-
-        fakestore_release = release_for(GMSCORE_REPO, "latest")
-        fakestore_tag = fakestore_release["tag_name"]
-        fakestore_asset, fakestore_match = find_asset(
-            fakestore_release, r"com\.android\.vending-(\d+)\.apk")
-        fakestore_apk = update_module(
-            partner_dir, "FakeStore", fakestore_asset, fakestore_match.group(1),
-            skip_certificate_check, cache_dir)
-        record_manifest(
-            manifest, "FakeStore", (fakestore_tag,),
-            {"apk": fakestore_apk, "version_code": fakestore_match.group(1),
-             "tag": fakestore_tag},
-        )
-        summary["FakeStore"] = fakestore_match.group(1)
-    # Release-mode GmsCore and FakeStore ship in the same microg/GmsCore
-    # release, so they share one selector and one GitHub metadata lookup.
     gms_cached = cached_entry(manifest, "GmsCore", gmscore_release_selector, cache_dir)
     fakestore_cached = cached_entry(manifest, "FakeStore", gmscore_release_selector, cache_dir)
-    if gmscore_release_selector == "main":
-        pass
-    elif gms_cached and fakestore_cached:
+    if gms_cached and fakestore_cached:
         log(f"GmsCore/FakeStore: pinned '{gmscore_release_selector}' already cached; "
             "skipping GitHub metadata lookup")
         gmscore_tag = gms_cached.get("tag", gmscore_release_selector)
@@ -555,8 +510,7 @@ def update_microg(android_root, gmscore_release_selector, gsfproxy_release_selec
         summary["GmsCore"] = f"{gmscore_tag}/{gmscore_match.group(1)}"
         summary["FakeStore"] = fakestore_match.group(1)
 
-    if gmscore_release_selector != "main":
-        source_marker.unlink(missing_ok=True)
+    source_marker.unlink(missing_ok=True)
 
     # F-Droid modules: each resolves from its own repo index (the ~15 MiB
     # metadata download that a pinned+cached run gets to skip entirely).
@@ -609,8 +563,10 @@ def parse_args():
     )
     parser.add_argument(
         "--gmscore-release",
-        default=os.environ.get("MICROG_GMSCORE_RELEASE", "main"),
-        help="microg/GmsCore release tag, latest, or main. Default: main.",
+        default=os.environ.get("MICROG_GMSCORE_RELEASE", "latest"),
+        help="microg/GmsCore release tag. By default, resolve the newest "
+             "published non-draft entry from GitHub Releases, including "
+             "prereleases.",
     )
     parser.add_argument(
         "--gsfproxy-release",

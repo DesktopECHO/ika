@@ -1,8 +1,13 @@
-Usage: build_lineageos_desktop.sh [all|arm64|x86_64]...
+Usage: build_lineageos_desktop.sh [--microg|--mtg] [all|arm64|x86_64]...
 
 Build LineageOS Desktop from a clean LineageOS 23.2 checkout and write
 Cuttlefish-ready bundles into the directories lineageos-arm64/ and
 lineageos-x86_64/ under the ika project root.
+
+Options:
+  --microg              Include microG.
+  --mtg                 Include MindTheGapps.
+  -h, --help            Show this help and exit.
 
 Host support: arm64 ROMs build on both x86_64 and arm64 hosts; x86_64 ROMs build
 on x86_64 hosts only. With no target argument, the script builds only the ROM
@@ -47,12 +52,11 @@ Environment:
   LINEAGE_BRANCH        LineageOS branch. Default: lineage-23.2
   ANDROID_MANIFEST_URL  Manifest repository. Default: LineageOS/android.git
   MANIFEST_URL          Fallback overlay manifest URL.
-  INCLUDE_MICROG        Sync vendor/partner_gms and include microG packages.
-                        Default: 1
   UPDATE_MICROG_PREBUILTS
-                        Refresh microG packages before building. GmsCore follows
-                        MICROG_GMSCORE_RELEASE (mainline source by default);
-                        FakeStore and GsfProxy use official prebuilts. Default: 1
+                        Refresh microG packages before building. GmsCore and
+                        FakeStore come from the newest published GmsCore release;
+                        GsfProxy uses its official prebuilt. Used only with
+                        --microg. Default: 1
   INCLUDE_X86_ARM_NATIVE_BRIDGE
                         Enable ARM64 native bridge support for the x86-64 ROM.
                         Default: 1
@@ -99,16 +103,9 @@ Environment:
   NATIVE_BRIDGE_SDK_PACKAGE_SHA1
                         Expected SHA1 for the SDK package. Empty skips checking.
   MICROG_GMSCORE_RELEASE
-                        GmsCore source selector: main builds upstream mainline;
-                        latest uses the newest release prebuilt; a release tag
-                        pins that prebuilt. Default: main
-  MICROG_GMSCORE_SOURCE_DIR
-                        Persistent upstream GmsCore checkout used by main.
-                        Default: ~/ika-build/microg-main/GmsCore
-  MICROG_ANDROID_SDK_ROOT
-                        Android SDK containing platform 35 and build-tools
-                        34.0.0 for the GmsCore source build.
-                        Default: ~/ika-build/android-sdk
+                        Explicit published GmsCore release tag. When omitted,
+                        the newest published non-draft entry is resolved from
+                        GitHub Releases, including prereleases. Default: latest
   MICROG_GSFPROXY_RELEASE
                         GsfProxy microG F-Droid version name/code, or latest.
                         Default: latest

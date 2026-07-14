@@ -108,6 +108,14 @@ def microg_info(android_root: Path) -> dict[str, Any]:
     }
 
 
+def mindthegapps_info(android_root: Path, arch: str) -> dict[str, Any]:
+    vendor = android_root / "vendor" / "gapps"
+    return {
+        "source": git_info(vendor),
+        "arch_makefile": file_info(vendor / arch / f"{arch}-vendor.mk"),
+    }
+
+
 def webview_info(android_root: Path, arch: str) -> dict[str, Any]:
     prebuilt_arch = "arm64" if arch == "arm64" else "x86_64"
     path = android_root / "external" / "chromium-webview" / "prebuilt" / prebuilt_arch / "webview.apk"
@@ -183,6 +191,38 @@ def build_metadata(args: argparse.Namespace) -> dict[str, Any]:
         if (bundle_dir / image).exists()
     }
 
+    gms_provider = os.environ.get("LINEAGE_DESKTOP_GMS_PROVIDER", "none")
+    build_options = {
+        "gms_provider": gms_provider,
+        "include_x86_arm_native_bridge": os.environ.get(
+            "INCLUDE_X86_ARM_NATIVE_BRIDGE", "1"
+        ),
+        "update_native_bridge_prebuilts": os.environ.get(
+            "UPDATE_NATIVE_BRIDGE_PREBUILTS", "1"
+        ),
+        "native_bridge_sdk_package_sha1": os.environ.get(
+            "NATIVE_BRIDGE_SDK_PACKAGE_SHA1", ""
+        ),
+    }
+    if gms_provider == "microg":
+        build_options.update({
+            "update_microg_prebuilts": os.environ.get(
+                "UPDATE_MICROG_PREBUILTS", "1"
+            ),
+            "microg_gmscore_release": os.environ.get(
+                "MICROG_GMSCORE_RELEASE", "latest"
+            ),
+            "microg_gsfproxy_release": os.environ.get(
+                "MICROG_GSFPROXY_RELEASE", "latest"
+            ),
+            "microg_fdroid_release": os.environ.get(
+                "MICROG_FDROID_RELEASE", "latest"
+            ),
+            "microg_fdroid_privileged_release": os.environ.get(
+                "MICROG_FDROID_PRIVILEGED_RELEASE", "latest"
+            ),
+        })
+
     metadata: dict[str, Any] = {
         "schema": 1,
         "generated_utc": _dt.datetime.now(_dt.timezone.utc)
@@ -205,29 +245,15 @@ def build_metadata(args: argparse.Namespace) -> dict[str, Any]:
             "source_manifest": source_manifest_result["path"],
             "source_manifest_error": source_manifest_result["reason"],
         },
-        "build_options": {
-            "include_microg": os.environ.get("INCLUDE_MICROG", "1"),
-            "update_microg_prebuilts": os.environ.get("UPDATE_MICROG_PREBUILTS", "1"),
-            "include_x86_arm_native_bridge": os.environ.get(
-                "INCLUDE_X86_ARM_NATIVE_BRIDGE", "1"
-            ),
-            "update_native_bridge_prebuilts": os.environ.get(
-                "UPDATE_NATIVE_BRIDGE_PREBUILTS", "1"
-            ),
-            "microg_gmscore_release": os.environ.get("MICROG_GMSCORE_RELEASE", "main"),
-            "microg_gsfproxy_release": os.environ.get("MICROG_GSFPROXY_RELEASE", "latest"),
-            "microg_fdroid_release": os.environ.get("MICROG_FDROID_RELEASE", "latest"),
-            "microg_fdroid_privileged_release": os.environ.get(
-                "MICROG_FDROID_PRIVILEGED_RELEASE", "latest"
-            ),
-            "native_bridge_sdk_package_sha1": os.environ.get(
-                "NATIVE_BRIDGE_SDK_PACKAGE_SHA1", ""
-            ),
-        },
+        "build_options": build_options,
         "images": images,
-        "microg": microg_info(android_root),
         "webview": webview_info(android_root, args.arch),
     }
+
+    if gms_provider == "microg":
+        metadata["microg"] = microg_info(android_root)
+    elif gms_provider == "mtg":
+        metadata["mindthegapps"] = mindthegapps_info(android_root, args.arch)
 
     if args.arch == "x86_64":
         metadata["native_bridge"] = native_bridge_info(android_root)
@@ -247,8 +273,15 @@ def write_text_summary(metadata: dict[str, Any], path: Path) -> None:
         f"Overlay commit: {overlay.get('commit', 'unknown')}",
         f"Overlay dirty: {overlay.get('dirty', 'unknown')}",
         f"Image files: {image_count}",
-        f"microG release: {metadata.get('microg', {}).get('release') or 'unknown'}",
+        f"GMS provider: {metadata.get('build_options', {}).get('gms_provider', 'none')}",
     ]
+    if "microg" in metadata:
+        lines.append(
+            f"microG release: {metadata.get('microg', {}).get('release') or 'unknown'}"
+        )
+    elif "mindthegapps" in metadata:
+        mtg_source = metadata.get("mindthegapps", {}).get("source", {})
+        lines.append(f"MindTheGapps commit: {mtg_source.get('commit', 'unknown')}")
     if metadata["arch"] == "x86_64":
         bridge = metadata.get("native_bridge", {})
         bridge_file = bridge.get("files", {}).get("libndk_translation", {})

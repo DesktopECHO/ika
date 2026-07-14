@@ -5,16 +5,19 @@ Each public tarball should be reproducible from documented inputs.
 Before building:
 
 1. Choose the LineageOS branch and manifest revision.
-2. Choose the GmsCore gate (`main` by default or `latest` for the official
-   prebuilt) and other microG versions. Build metadata records the mainline
-   source revision and all resolved APK checksums.
+2. Choose `--microg` or `--mtg` when that provider should be included. For
+   microG, the newest published, non-draft GmsCore entry (including prereleases)
+   is selected unless an explicit release tag is pinned; choose the other module
+   versions as needed. Build metadata records the selected provider and its
+   resolved source information.
 3. Choose the native bridge SDK payload for x86-64, or set
    `NATIVE_BRIDGE_SOURCE_DIR` to a vetted extracted payload.
 4. Run the one-command build script from a clean or script-managed workspace.
 
 The build script runs `scripts/lib/validate_build_inputs.sh` before compiling. It
-checks patch application state, userdata policy, required microG APKs, WebView
-prebuilts, native bridge files for x86-64, and required desktop aconfig flags.
+checks patch application state, userdata policy, selected provider prebuilts,
+WebView prebuilts, native bridge files for x86-64, and required desktop aconfig
+flags.
 
 Each generated Cuttlefish bundle contains:
 
@@ -22,7 +25,7 @@ Each generated Cuttlefish bundle contains:
 - `build-info.txt`: short human-readable summary
 - `source-manifest.xml`: `repo manifest -r` output when `repo` is available
 - image checksums for files copied into the bundle
-- microG APK checksums
+- selected provider source and prebuilt metadata
 - WebView APK checksum for the target architecture
 - native bridge payload metadata for x86-64
 

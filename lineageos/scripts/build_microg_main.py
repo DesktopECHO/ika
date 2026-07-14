@@ -6,10 +6,12 @@
 """Build and platform-sign GmsCore from upstream microG main."""
 
 import argparse
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -17,6 +19,7 @@ import tempfile
 
 UPSTREAM_URL = "https://github.com/microg/GmsCore.git"
 UPSTREAM_BRANCH = "master"
+UPSTREAM_BUILD_FILE = Path("build.gradle")
 SETTINGS_MANIFEST = Path("play-services-base/core/src/main/AndroidManifest.xml")
 SETTINGS_SIGNATURE_LEVEL = 'android:protectionLevel="signature"'
 SETTINGS_PRIVILEGED_LEVEL = 'android:protectionLevel="signature|privileged"'
@@ -107,6 +110,47 @@ def default_sdk_root():
     return Path.home() / "ika-build" / "android-sdk"
 
 
+@contextmanager
+def temporary_sdk_location(source_dir, sdk_root):
+    """Make Gradle use the selected SDK without altering the cached checkout."""
+    local_properties = source_dir / "local.properties"
+    previous = local_properties.read_bytes() if local_properties.exists() else None
+    local_properties.write_text(f"sdk.dir={sdk_root}\n")
+    try:
+        yield
+    finally:
+        if previous is None:
+            local_properties.unlink(missing_ok=True)
+        else:
+            local_properties.write_bytes(previous)
+
+
+def read_android_tool_versions(source_dir):
+    """Read the SDK versions declared by the checked-out upstream build."""
+    build_file = source_dir / UPSTREAM_BUILD_FILE
+    try:
+        text = build_file.read_text()
+    except OSError as exc:
+        raise BuildError(f"cannot read upstream build configuration {build_file}: {exc}") from exc
+
+    build_tools_match = re.search(
+        r"ext\.androidBuildVersionTools\s*=\s*['\"]([^'\"]+)['\"]", text
+    )
+    compile_sdk_match = re.search(r"ext\.androidCompileSdk\s*=\s*([0-9]+)", text)
+    if not build_tools_match or not compile_sdk_match:
+        raise BuildError(
+            f"cannot determine Android SDK versions from upstream {build_file}"
+        )
+
+    build_tools_version = build_tools_match.group(1)
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){2}", build_tools_version):
+        raise BuildError(
+            f"unexpected Android build-tools version in {build_file}: "
+            f"{build_tools_version}"
+        )
+    return compile_sdk_match.group(1), build_tools_version
+
+
 def replace_symlink(path, target):
     """Point a private SDK-cache path at an AOSP build artifact."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -125,26 +169,33 @@ def write_if_missing(path, content):
         path.write_text(content)
 
 
-def bootstrap_sdk_from_aosp(android_root, sdk_root):
-    """Create the small SDK view Gradle needs from the AOSP ARM64 build.
+def bootstrap_sdk_from_aosp(android_root, sdk_root, compile_sdk, build_tools_version):
+    """Create the small host-native SDK view Gradle needs from the AOSP build.
 
     Google's downloadable Linux SDK build-tools are x86-64 binaries.  Native
     ARM64 Ika builds already produce the equivalent host tools, so reuse them
     instead of requiring an incompatible SDK download.
     """
-    platform_dir = sdk_root / "platforms" / "android-35"
-    public_sdk = android_root / "prebuilts" / "sdk" / "35" / "public"
-    build_tools = sdk_root / "build-tools" / "34.0.0"
+    platform_dir = sdk_root / "platforms" / f"android-{compile_sdk}"
+    public_sdk = android_root / "prebuilts" / "sdk" / compile_sdk / "public"
+    build_tools = sdk_root / "build-tools" / build_tools_version
     platform_tools = sdk_root / "platform-tools"
     host_tag = "linux-arm64" if platform.machine().lower() in ("aarch64", "arm64") else "linux-x86"
     host_out = android_root / "out" / "host" / host_tag
+    core_lambda = android_root / "prebuilts" / "sdk" / "tools" / "core-lambda-stubs.jar"
 
     required_sources = (
         public_sdk / "android.jar",
         public_sdk / "core-for-system-modules.jar",
         public_sdk / "framework.aidl",
+        public_sdk / "data" / "api-versions.xml",
+        core_lambda,
         host_out / "bin" / "aapt2",
+        host_out / "bin" / "aidl",
         host_out / "bin" / "apksigner",
+        host_out / "bin" / "d8",
+        host_out / "bin" / "zipalign",
+        host_out / "bin" / "adb",
     )
     missing = [str(path) for path in required_sources if not path.exists()]
     if missing:
@@ -154,12 +205,19 @@ def bootstrap_sdk_from_aosp(android_root, sdk_root):
 
     for name in ("android.jar", "core-for-system-modules.jar", "framework.aidl"):
         replace_symlink(platform_dir / name, public_sdk / name)
-    replace_symlink(platform_dir / "data", public_sdk / "data")
+    # A downloaded SDK has a real data directory; a minimal script-managed SDK
+    # can point directly at the matching checked-in AOSP data instead.
+    platform_data = platform_dir / "data"
+    if not platform_data.exists():
+        replace_symlink(platform_data, public_sdk / "data")
     write_if_missing(
         platform_dir / "source.properties",
-        "Pkg.Desc=Android SDK Platform 35\nPkg.Revision=1\nAndroidVersion.ApiLevel=35\n",
+        f"Pkg.Desc=Android SDK Platform {compile_sdk}\n"
+        f"Pkg.Revision=1\nAndroidVersion.ApiLevel={compile_sdk}\n",
     )
-    write_if_missing(platform_dir / "build.prop", "ro.build.version.sdk=35\n")
+    write_if_missing(
+        platform_dir / "build.prop", f"ro.build.version.sdk={compile_sdk}\n"
+    )
 
     # AGP 8 uses aapt2 for resources and its bundled D8 for dexing.  Populate
     # the other standard entries when AOSP has produced them so BuildToolInfo
@@ -171,17 +229,17 @@ def bootstrap_sdk_from_aosp(android_root, sdk_root):
     # BuildToolInfo still requires the legacy AAPT slot even though AGP 8 uses
     # the aapt2 override above for every resource task.
     replace_symlink(build_tools / "aapt", host_out / "bin" / "aapt2")
-    # DEXDUMP is another legacy presence check in BuildToolInfo 34.0.0; GmsCore
-    # does not invoke it (AGP carries its own D8/R8 implementation).
+    # DEXDUMP is another legacy presence check in BuildToolInfo; GmsCore does
+    # not invoke it (AGP carries its own D8/R8 implementation).
     replace_symlink(build_tools / "dexdump", host_out / "bin" / "d8")
     # Split APK selection is likewise not used by this single universal APK.
     replace_symlink(build_tools / "split-select", host_out / "bin" / "aapt2")
-    core_lambda = android_root / "prebuilts" / "sdk" / "tools" / "core-lambda-stubs.jar"
-    if core_lambda.exists():
-        replace_symlink(build_tools / "core-lambda-stubs.jar", core_lambda)
+    replace_symlink(build_tools / "core-lambda-stubs.jar", core_lambda)
+    build_tools_major = build_tools_version.split(".", 1)[0]
     write_if_missing(
         build_tools / "source.properties",
-        "Pkg.Desc=Android SDK Build-Tools 34\nPkg.Revision=34.0.0\n",
+        f"Pkg.Desc=Android SDK Build-Tools {build_tools_major}\n"
+        f"Pkg.Revision={build_tools_version}\n",
     )
     for name in ("adb", "fastboot"):
         source = host_out / "bin" / name
@@ -194,23 +252,51 @@ def bootstrap_sdk_from_aosp(android_root, sdk_root):
     log(f"using native AOSP SDK tools from {host_out}")
 
 
-def validate_toolchain(android_root, java_home, sdk_root):
-    sdk_required = (
-        sdk_root / "platforms" / "android-35" / "android.jar",
-        sdk_root / "platforms" / "android-35" / "core-for-system-modules.jar",
-        sdk_root / "platforms" / "android-35" / "data" / "api-versions.xml",
-        sdk_root / "build-tools" / "34.0.0" / "aapt",
-        sdk_root / "build-tools" / "34.0.0" / "aapt2",
-        sdk_root / "build-tools" / "34.0.0" / "aidl",
-        sdk_root / "build-tools" / "34.0.0" / "apksigner",
-        sdk_root / "build-tools" / "34.0.0" / "core-lambda-stubs.jar",
-        sdk_root / "build-tools" / "34.0.0" / "dexdump",
-        sdk_root / "build-tools" / "34.0.0" / "split-select",
-        sdk_root / "build-tools" / "34.0.0" / "zipalign",
+def tool_runs(path, *args):
+    if not path.is_file() or not os.access(path, os.X_OK):
+        return False
+    try:
+        completed = subprocess.run(
+            [str(path), *args],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
+
+
+def sdk_required_paths(sdk_root, compile_sdk, build_tools_version):
+    platform_dir = sdk_root / "platforms" / f"android-{compile_sdk}"
+    build_tools = sdk_root / "build-tools" / build_tools_version
+    return (
+        platform_dir / "android.jar",
+        platform_dir / "core-for-system-modules.jar",
+        platform_dir / "data" / "api-versions.xml",
+        build_tools / "aapt",
+        build_tools / "aapt2",
+        build_tools / "aidl",
+        build_tools / "apksigner",
+        build_tools / "core-lambda-stubs.jar",
+        build_tools / "dexdump",
+        build_tools / "split-select",
+        build_tools / "zipalign",
         sdk_root / "platform-tools" / "adb",
     )
-    if any(not path.exists() for path in sdk_required):
-        bootstrap_sdk_from_aosp(android_root, sdk_root)
+
+
+def validate_toolchain(
+    android_root, java_home, sdk_root, compile_sdk, build_tools_version
+):
+    sdk_required = sdk_required_paths(sdk_root, compile_sdk, build_tools_version)
+    aapt2 = sdk_root / "build-tools" / build_tools_version / "aapt2"
+    if any(not path.exists() for path in sdk_required) or not tool_runs(
+        aapt2, "version"
+    ):
+        bootstrap_sdk_from_aosp(
+            android_root, sdk_root, compile_sdk, build_tools_version
+        )
 
     required = (
         java_home / "bin" / "java",
@@ -219,6 +305,8 @@ def validate_toolchain(android_root, java_home, sdk_root):
         android_root / "build" / "make" / "target" / "product" / "security" / "platform.x509.pem",
     )
     missing = [str(path) for path in required if not path.exists()]
+    if not tool_runs(aapt2, "version"):
+        missing.append(f"{aapt2} (not runnable on this host)")
     if missing:
         raise BuildError("missing GmsCore build dependency: " + ", ".join(missing))
 
@@ -241,8 +329,10 @@ def read_built_apk(source_dir):
     return apk, version_code
 
 
-def sign_apk(android_root, sdk_root, java_home, unsigned_apk, output_apk):
-    apksigner = sdk_root / "build-tools" / "34.0.0" / "apksigner"
+def sign_apk(
+    android_root, sdk_root, java_home, build_tools_version, unsigned_apk, output_apk
+):
+    apksigner = sdk_root / "build-tools" / build_tools_version / "apksigner"
     key_dir = android_root / "build" / "make" / "target" / "product" / "security"
     env = os.environ.copy()
     env["JAVA_HOME"] = str(java_home)
@@ -294,8 +384,15 @@ def main():
     sdk_root = default_sdk_root()
 
     try:
-        validate_toolchain(android_root, java_home, sdk_root)
         commit = ensure_checkout(source_dir)
+        compile_sdk, build_tools_version = read_android_tool_versions(source_dir)
+        log(
+            f"upstream GmsCore requires Android platform {compile_sdk} "
+            f"and build-tools {build_tools_version}"
+        )
+        validate_toolchain(
+            android_root, java_home, sdk_root, compile_sdk, build_tools_version
+        )
         env = os.environ.copy()
         env.update({
             "JAVA_HOME": str(java_home),
@@ -304,24 +401,35 @@ def main():
         })
         set_privileged_settings_permissions(source_dir, True)
         try:
-            run(
-                [
-                    source_dir / "gradlew", "--no-daemon", "--no-configuration-cache",
-                    f"-Pandroid.aapt2FromMavenOverride={sdk_root / 'build-tools' / '34.0.0' / 'aapt2'}",
-                    ":play-services-core:assembleMapboxDefaultRelease",
-                ],
-                cwd=source_dir,
-                env=env,
-            )
+            with temporary_sdk_location(source_dir, sdk_root):
+                run(
+                    [
+                        source_dir / "gradlew", "--no-daemon",
+                        "--no-configuration-cache",
+                        f"-Pandroid.aapt2FromMavenOverride={sdk_root / 'build-tools' / build_tools_version / 'aapt2'}",
+                        ":play-services-core:assembleMapboxDefaultRelease",
+                    ],
+                    cwd=source_dir,
+                    env=env,
+                )
         finally:
             set_privileged_settings_permissions(source_dir, False)
         unsigned_apk, version_code = read_built_apk(source_dir)
         output_apk = output_dir / f"GmsCore-main-{commit}-{version_code}.apk"
-        sign_apk(android_root, sdk_root, java_home, unsigned_apk, output_apk)
+        sign_apk(
+            android_root,
+            sdk_root,
+            java_home,
+            build_tools_version,
+            unsigned_apk,
+            output_apk,
+        )
         print(json.dumps({
             "apk": str(output_apk),
             "branch": UPSTREAM_BRANCH,
+            "build_tools_version": build_tools_version,
             "commit": commit,
+            "compile_sdk": compile_sdk,
             "version_code": version_code,
         }))
         return 0

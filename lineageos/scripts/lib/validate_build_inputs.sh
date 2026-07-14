@@ -909,13 +909,6 @@ check_no_arm64_x86_prebuilt_substitutions() {
 }
 
 check_microg_prebuilts() {
-  case "${INCLUDE_MICROG:-1}" in
-    0|false|no|off)
-      log "microG validation skipped by INCLUDE_MICROG=0"
-      return 0
-      ;;
-  esac
-
   local partner="$android_root/vendor/partner_gms"
   local apk
   for apk in \
@@ -936,6 +929,74 @@ check_microg_prebuilts() {
       fi
     fi
   done
+}
+
+check_mindthegapps_prebuilts() {
+  local gapps="$android_root/vendor/gapps"
+  local arch arch_bp path
+
+  require_file "$gapps/common/Android.bp"
+  require_file "$gapps/common/common-vendor.mk"
+
+  for arch in "${targets[@]}"; do
+    arch_bp="$gapps/$arch/Android.bp"
+    require_file "$arch_bp"
+    require_file "$gapps/$arch/$arch-vendor.mk"
+    [[ -d "$gapps/common/proprietary" ]] || \
+      fail "missing MindTheGapps common proprietary tree: $gapps/common/proprietary"
+    [[ -d "$gapps/$arch/proprietary" ]] || \
+      fail "missing MindTheGapps $arch proprietary tree: $gapps/$arch/proprietary"
+
+    if [[ "$arch" == "x86_64" && -f "$arch_bp" ]] && ! awk '
+      /^[[:space:]]*cc_prebuilt_library_shared[[:space:]]*\{/ {
+        in_module = 1
+        target_module = 0
+        ignores_max_page_size = 0
+      }
+      in_module && /name:[[:space:]]*"libjni_latinimegoogle"/ {
+        target_module = 1
+      }
+      in_module && /ignore_max_page_size:[[:space:]]*true/ {
+        ignores_max_page_size = 1
+      }
+      in_module && /^[[:space:]]*\}/ {
+        if (target_module && ignores_max_page_size) found = 1
+        in_module = 0
+      }
+      END { exit found ? 0 : 1 }
+    ' "$arch_bp"; then
+      fail "MindTheGapps x86-64 LatinIME prebuilt is missing its scoped 4 KiB alignment exception: $arch_bp"
+    fi
+
+    while IFS= read -r -d '' path; do
+      if [[ ! -s "$path" ]]; then
+        fail "empty MindTheGapps prebuilt: $path"
+      elif head -c 256 "$path" | grep -q 'git-lfs.github.com/spec'; then
+        fail "MindTheGapps prebuilt is still a Git LFS pointer: $path"
+      elif [[ "$path" == *.apk ]]; then
+        if ! validate_zip_file "$path" >/dev/null 2>&1; then
+          fail "invalid MindTheGapps APK zip: $path"
+        else
+          audit_apk_16k_alignment \
+            "$path" "MindTheGapps $arch prebuilt $(basename "$path")" allow_compat
+        fi
+      elif [[ "$path" == *.apex ]] && ! validate_zip_file "$path" >/dev/null 2>&1; then
+        fail "invalid MindTheGapps APEX zip: $path"
+      fi
+    done < <(
+      find "$gapps/common/proprietary" "$gapps/$arch/proprietary" \
+        -type f -print0 2>/dev/null
+    )
+  done
+}
+
+check_gms_provider_prebuilts() {
+  case "${LINEAGE_DESKTOP_GMS_PROVIDER:-none}" in
+    none) ;;
+    microg) check_microg_prebuilts ;;
+    mtg) check_mindthegapps_prebuilts ;;
+    *) fail "invalid LINEAGE_DESKTOP_GMS_PROVIDER=${LINEAGE_DESKTOP_GMS_PROVIDER}" ;;
+  esac
 }
 
 check_webview_prebuilts() {
@@ -1752,7 +1813,7 @@ check_patched_xml_resource_references
 check_userdata_policy
 check_x86_64_64_bit_only_product
 check_arm64_min_arch_variant
-check_microg_prebuilts
+check_gms_provider_prebuilts
 check_webview_prebuilts
 check_native_bridge
 check_desktop_flags

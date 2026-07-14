@@ -10,4 +10,4 @@
 # OUTPUT_DIR, JOBS, ...) is honored by the engine.
 set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec env REBUILD=1 "$script_dir/build_lineageos_desktop.sh" x86_64
+exec env REBUILD=1 "$script_dir/build_lineageos_desktop.sh" "$@" x86_64

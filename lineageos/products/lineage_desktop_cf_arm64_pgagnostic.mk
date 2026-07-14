@@ -8,6 +8,7 @@ CF_VENDOR_NO_UWB := true
 CF_VENDOR_NO_THREADNETWORK := true
 
 $(call inherit-product, device/google/cuttlefish/ika_arm64/desktop/aosp_cf.mk)
+LINEAGE_DESKTOP_MTG_ARCH := arm64
 $(call inherit-product, vendor/lineage_desktop/config/common_desktop_mode_only.mk)
 
 # ARM64 is the only desktop image that boots real 4K/16K kernels. Keep

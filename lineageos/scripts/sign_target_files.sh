@@ -156,10 +156,37 @@ allowlisted_presigned_apks=(
   signed-CtsSecureElementAccessControlTestCases3.apk
 )
 
+if [[ "${LINEAGE_DESKTOP_GMS_PROVIDER:-none}" == "mtg" ]]; then
+  # MindTheGapps modules deliberately retain Google's package signatures.
+  allowlisted_presigned_apks+=(
+    AndroidAutoStub.apk
+    GoogleCalendarSyncAdapter.apk
+    GoogleContactsSyncAdapter.apk
+    GoogleFeedback.apk
+    GooglePartnerSetup.apk
+    GoogleRestore.apk
+    GoogleServicesFramework.apk
+    MarkupGoogle_v2.apk
+    Phonesky.apk
+    PrebuiltExchange3Google.apk
+    PrebuiltGmsCoreVic.apk
+    SetupWizard.apk
+    SpeechServicesByGoogle.apk
+    Velvet.apk
+    VelvetTitan.apk
+    Wellbeing.apk
+    talkback.apk
+  )
+fi
+
 allowlisted_presigned_apexes=(
   # AOSP's CTS shim APEX is a prebuilt fixture with PRESIGNED metadata.
   com.android.apex.cts.shim.apex
 )
+
+if [[ "${LINEAGE_DESKTOP_GMS_PROVIDER:-none}" == "mtg" ]]; then
+  allowlisted_presigned_apexes+=(com.google.android.gmssystem.prodvic.apex)
+fi
 
 contains_item() {
   local needle="$1"

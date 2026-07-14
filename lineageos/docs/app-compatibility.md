@@ -21,7 +21,7 @@ Status values:
 | F-Droid | native | native | no | no | Baseline package manager smoke test. | supported |
 | microG Settings | native | native | no | yes | Verifies bundled microG install and signature-spoofing path. | supported |
 | Chromium | native | native | no | optional | Use bundled browser/WebView validation before release. | works-with-notes |
-| Rebel Racing | native | translated on x86-64 if ARM-only | yes on x86-64 | yes | Requires fullscreen because it opts out of resizing. Newer builds also need the scoped Play Games server-auth callback carried by the default mainline GmsCore build. | works-with-notes |
+| Rebel Racing | native | translated on x86-64 if ARM-only | yes on x86-64 | yes | Requires fullscreen because it opts out of resizing. Newer builds also need a GmsCore release containing the scoped Play Games server-auth callback. | works-with-notes |
 | Angry Birds 2 | native | translated on x86-64 if ARM-only | yes on x86-64 | likely | Validate Play Services, GPU, and ABI selection. | unknown |
 | Asphalt 8 | native | translated on x86-64 if ARM-only | yes on x86-64 | likely | May reject non-certified devices or fail GPU checks. | blocked |
 | CarX Highway Racing | native | translated on x86-64 if ARM-only | yes on x86-64 | likely | Historically sensitive to graphics/native runtime. | blocked |

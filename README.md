@@ -59,13 +59,11 @@ sessions.
 Once you have an initial build, use the narrowest command that matches the work
 you changed:
 
-- **Full build + install** — re-run `./ika-build` and accept the install prompt. Extra
-  arguments are forwarded to the ROM build, for example
-  `./ika-build x86_64`.
-- **Install package files only** — run `./ika-build --install-packages`. This
-  does not build source, assumes yes to installation, and installs the
-  existing `ika-base` and `ika-lineageos` packages using `dnf`
-  or `apt` as appropriate.
+- **Full build** — re-run `./ika-build`, then run the installation command it
+  prints. Extra arguments are forwarded to the ROM build, for example
+  `./ika-build x86_64`, `./ika-build --microg arm64`, or
+  `./ika-build --mtg x86_64`. With no arguments, `ika-build` prompts for microG,
+  MindTheGapps, or DeGoogled with no App Store before building the host-native ROM.
 - **ROM only** — re-run `./lineageos/scripts/build_lineageos_desktop.sh` (or
   pass `arm64` / `x86_64` to limit it to one target). Use this after editing
   patches or overlays under `lineageos/`. Pass `RESET_PATCHED_PROJECTS=1` if
@@ -74,11 +72,12 @@ you changed:
   after editing host sources under `base/` or `frontend/`, after editing the
   package metadata under `base/rpm/`, `base/debian/`, `frontend/rpm/`, or
   `frontend/debian/`, or whenever you've finished a fresh ROM rebuild and want
-  to repackage `ika-lineageos` with the new contents. Then run
-  `./ika-build --install-packages` to install the package outputs.
+  to repackage `ika-lineageos` with the new contents. Install those outputs
+  directly with your distribution's package manager.
 
-See [lineageos/README.md](lineageos/README.md) for ROM-build options (target
-subsets, microG release pinning, native-bridge sources, workspace overrides)
+See [lineageos/README.md](lineageos/README.md) for ROM-build options (provider
+selection, target subsets, microG release pinning, native-bridge sources,
+workspace overrides)
 and [tools/buildutils/cw/README.md](tools/buildutils/cw/README.md) for the
 optional containerized RPM build.
 
@@ -106,9 +105,9 @@ ika restart --gpu_mode=gfxstream --cpus=8 --memory_mb=8192
 # Explicitly force the GLES+Vulkan gfxstream context set
 ika restart --gfxstream_vulkan=on
 
-# Use a 128 GiB userdata image on first start after reset
-ika reset
-ika start --data_gb=128
+# Factory reset and use a 128 GB userdata image on the next start
+ika reset --data_gb=128
+ika start
 
 # Show the built-in usage text
 ika help
@@ -141,9 +140,10 @@ renderer initialization. The desktop product also leaves gfxstream's optional
 program-binary link-status feature disabled; shader source compilation remains
 available and avoids corrupt cached-program rendering on affected games.
 
-Set `DATA_GB` or pass `--data_gb=128` to choose the size, in gigabytes,
-of a newly created userdata image. Existing userdata is preserved, so apply a
-new size by resetting first and then starting with the override.
+Pass `--data_gb=128` to `ika reset` to choose the size, in decimal gigabytes,
+of newly created userdata. The selected size is stored under `~/ika` and takes
+effect on the next `ika start`. It remains the configured size for later factory
+resets until changed by another `ika reset --data_gb=...`.
 
 ### gfxstream Vulkan switch
 

@@ -23,7 +23,8 @@ ika_root="$(cd "$overlay_dir/.." && pwd)"
 android_manifest_url="${ANDROID_MANIFEST_URL:-https://github.com/LineageOS/android.git}"
 lineage_branch="${LINEAGE_BRANCH:-lineage-23.2}"
 manifest_url="${MANIFEST_URL:-https://raw.githubusercontent.com/DesktopECHO/ika/main/lineageos/manifests/lineageos-desktop.xml}"
-include_microg="${INCLUDE_MICROG:-1}"
+gms_provider="none"
+include_microg=0
 update_microg_prebuilts="${UPDATE_MICROG_PREBUILTS:-1}"
 include_x86_arm_native_bridge="${INCLUDE_X86_ARM_NATIVE_BRIDGE:-1}"
 update_native_bridge_prebuilts="${UPDATE_NATIVE_BRIDGE_PREBUILTS:-1}"
@@ -231,6 +232,7 @@ source "$script_dir/build_jobs.sh"
 source "$script_dir/signing_common.sh"
 source "$script_dir/lib/target_common.sh"
 source "$script_dir/lib/host_env.sh"
+source "$script_dir/lib/gms_provider.sh"
 source "$script_dir/lib/sources.sh"
 source "$script_dir/lib/prebuilts.sh"
 source "$script_dir/lib/build_exec.sh"
@@ -406,12 +408,22 @@ build_target() {
 main() {
   trap cleanup_on_exit EXIT
 
-  case "${1:-}" in
-    -h|--help|help)
-      usage
-      exit 0
-      ;;
-  esac
+  local -a requested_targets=()
+  if ! parse_gms_provider_arguments gms_provider requested_targets "$@"; then
+    die "$GMS_PROVIDER_PARSE_ERROR"
+  fi
+  if [[ "$GMS_PROVIDER_SHOW_HELP" == "1" ]]; then
+    usage
+    exit 0
+  fi
+
+  if [[ "$gms_provider" == "microg" ]]; then
+    include_microg=1
+  else
+    include_microg=0
+  fi
+  export LINEAGE_DESKTOP_GMS_PROVIDER="$gms_provider"
+  export INCLUDE_MICROG="$include_microg"
 
   ensure_host_commands
   ensure_arm64_native_host
@@ -432,7 +444,7 @@ main() {
   fi
 
   local -a targets
-  mapfile -t targets < <(normalize_targets "$@")
+  mapfile -t targets < <(normalize_targets "${requested_targets[@]}")
   if host_is_arm64; then
     local requested_target
     for requested_target in "${targets[@]}"; do
@@ -456,6 +468,7 @@ main() {
   else
     repo_sync_sources
   fi
+  sync_mindthegapps_lfs_prebuilts "${targets[@]}"
   sync_webview_lfs_prebuilts
   repair_webview_intermediates
   apply_local_overlay
@@ -468,7 +481,6 @@ main() {
     apply_source_patches
   fi
   configure_arm64_host_build
-  build_host_microg_tools "${targets[@]}"
   update_microg_prebuilts
   cleanup_arm64_prebuilt_download_caches
 

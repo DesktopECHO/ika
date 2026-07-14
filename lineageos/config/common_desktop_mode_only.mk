@@ -9,7 +9,12 @@ LINEAGE_SKIP_JELLY := true
 ifeq ($(TARGET_BUILD_VARIANT),userdebug)
 WITH_ADB_INSECURE := true
 endif
+# The build entry point exports this variable from --microg / --mtg. Keep the
+# product usable directly as well: an unset value includes neither provider.
+WITH_GMS := false
+ifeq ($(LINEAGE_DESKTOP_GMS_PROVIDER),microg)
 WITH_GMS := true
+endif
 
 $(call inherit-product, vendor/lineage/config/common_full_tablet_wifionly.mk)
 
@@ -84,7 +89,8 @@ PRODUCT_PACKAGES += \
 PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST += \
     system/bin/zipalign
 
-# Allow microG Android.mk files when the optional partner_gms local manifest is present.
+ifeq ($(LINEAGE_DESKTOP_GMS_PROVIDER),microg)
+# Allow microG Android.mk files when the optional partner_gms manifest is present.
 PRODUCT_ALLOWED_ANDROIDMK_FILES += \
     vendor/partner_gms/GmsCore/Android.mk \
     vendor/partner_gms/FakeStore/Android.mk \
@@ -92,3 +98,15 @@ PRODUCT_ALLOWED_ANDROIDMK_FILES += \
     vendor/partner_gms/FDroid/Android.mk \
     vendor/partner_gms/FDroidPrivilegedExtension/Android.mk \
     vendor/partner_gms/additional_repos.xml/Android.mk
+endif
+
+ifeq ($(LINEAGE_DESKTOP_GMS_PROVIDER),mtg)
+# Set this after Lineage common configuration has evaluated partner_gms.mk, so
+# a stale microG checkout cannot be inherited alongside MindTheGapps. The final
+# value still gives the MTG product the larger GMS partition-size policy.
+WITH_GMS := true
+ifeq ($(filter arm64 x86_64,$(LINEAGE_DESKTOP_MTG_ARCH)),)
+$(error LINEAGE_DESKTOP_MTG_ARCH must be arm64 or x86_64)
+endif
+$(call inherit-product,vendor/gapps/$(LINEAGE_DESKTOP_MTG_ARCH)/$(LINEAGE_DESKTOP_MTG_ARCH)-vendor.mk)
+endif

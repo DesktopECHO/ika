@@ -164,6 +164,41 @@ dump_soong_failure_logs() {
   fi
 }
 
+run_make_with_jobs() {
+  local requested_jobs="$1"
+  local status
+  shift
+
+  set +e
+  m "$@" -j"$requested_jobs" 2>&1 | sanitize_build_log_output
+  status="${PIPESTATUS[0]}"
+  set -e
+  return "$status"
+}
+
+# A crosvm host-binary link uses Rust ThinLTO but is not assigned to Soong's
+# high-memory pool. Under a parallel ROM build rustc can occasionally exit 1
+# without a diagnostic, while the identical link succeeds when run alone. Keep
+# recovery deliberately narrow so real compiler/linker diagnostics still fail
+# immediately and remain visible to the caller.
+silent_crosvm_link_failure() {
+  local error_log="$workspace/out/error.log"
+  local failed_actions
+
+  [[ -s "$error_log" ]] || return 1
+  failed_actions="$(grep -c '^FAILED:' "$error_log" 2>/dev/null || true)"
+  [[ "$failed_actions" == "1" ]] || return 1
+  grep -Fqx \
+    'FAILED: //external/crosvm:crosvm rustc src/main.rs [linux_glibc]' \
+    "$error_log" || return 1
+
+  awk '
+    /^Output:$/ { saw_output = 1; next }
+    saw_output && $0 !~ /^[[:space:]]*$/ { output_is_nonempty = 1 }
+    END { exit !(saw_output && !output_is_nonempty) }
+  ' "$error_log"
+}
+
 run_build_native() {
   local product="$1"
   local java_home status
@@ -187,10 +222,26 @@ run_build_native() {
   set -eo pipefail
   set -u
 
-  set +e
-  m "$@" -j"$jobs" 2>&1 | sanitize_build_log_output
-  status="${PIPESTATUS[0]}"
-  set -e
+  status=0
+  run_make_with_jobs "$jobs" "$@" || status=$?
+  (( status == 0 )) && return 0
+
+  if ! silent_crosvm_link_failure; then
+    dump_soong_failure_logs "$product"
+    return "$status"
+  fi
+
+  log "$product crosvm Rust/ThinLTO link exited without a diagnostic; rebuilding crosvm alone with one job"
+  status=0
+  run_make_with_jobs 1 crosvm || status=$?
+  if (( status != 0 )); then
+    dump_soong_failure_logs "$product"
+    return "$status"
+  fi
+
+  log "$product crosvm recovery succeeded; resuming the requested targets with $jobs parallel build jobs"
+  status=0
+  run_make_with_jobs "$jobs" "$@" || status=$?
   (( status == 0 )) || dump_soong_failure_logs "$product"
   return "$status"
 }
@@ -210,36 +261,4 @@ build_host_lpunpack() {
     LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE=false lpunpack)
   [[ -x "$lpunpack_bin" ]] || die "lpunpack build succeeded but binary not found at $lpunpack_bin"
   log "lpunpack built: $lpunpack_bin"
-}
-
-build_host_microg_tools() {
-  enabled "$include_microg" || return 0
-  enabled "$update_microg_prebuilts" || return 0
-  [[ "${MICROG_GMSCORE_RELEASE:-main}" == "main" ]] || return 0
-
-  local host_tag build_target host_bin
-  if host_is_arm64; then
-    host_tag="linux-arm64"
-  else
-    host_tag="linux-x86"
-  fi
-  build_target="${1:-}"
-  [[ -n "$build_target" ]] || die "internal error: no target available for GmsCore host-tool bootstrap"
-  host_bin="$workspace/out/host/$host_tag/bin"
-  local -a tools=(aapt2 aidl apksigner d8 zipalign adb)
-  local tool missing=0
-  for tool in "${tools[@]}"; do
-    if [[ ! -x "$host_bin/$tool" ]]; then
-      missing=1
-      break
-    fi
-  done
-  (( missing == 0 )) && return 0
-
-  log "building native $host_tag Android SDK tools for GmsCore"
-  (cd "$workspace" && run_build_native "$(target_product "$build_target")" "${tools[@]}")
-  for tool in "${tools[@]}"; do
-    [[ -x "$host_bin/$tool" ]] || \
-      die "GmsCore host-tool build succeeded but $host_bin/$tool is missing"
-  done
 }
