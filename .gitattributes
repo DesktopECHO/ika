@@ -1,3 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 *.patch -whitespace
+lineageos/prebuilts/mindthegapps/x86_64/gmscore/*.apk filter=lfs diff=lfs merge=lfs -text

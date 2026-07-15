@@ -16,6 +16,11 @@ ARM64_PRODUCT = ROOT / "products" / "lineage_desktop_cf_arm64_pgagnostic.mk"
 X86_64_PRODUCT = ROOT / "products" / "lineage_desktop_cf_x86_64.mk"
 SOURCES = ROOT / "scripts" / "lib" / "sources.sh"
 COMMON = ROOT / "scripts" / "lib" / "common.sh"
+GMS_CHECKSUMS = ROOT / "prebuilts" / "mindthegapps" / "x86_64" / "gmscore" / "SHA256SUMS"
+MODERN_GMS_PATCH = ROOT / "patches" / "vendor-gapps-x86_64-modern-gms.patch"
+BUNDLE = ROOT / "scripts" / "lib" / "bundle.sh"
+SIGN_TARGET_FILES = ROOT / "scripts" / "sign_target_files.sh"
+VALIDATE_BUILD_INPUTS = ROOT / "scripts" / "lib" / "validate_build_inputs.sh"
 
 
 class GmsProviderTest(unittest.TestCase):
@@ -108,7 +113,7 @@ fi
         self.assertIsNotNone(project)
         self.assertEqual("vendor/gapps", project.attrib["path"])
         self.assertEqual("vendor_gapps", project.attrib["name"])
-        self.assertEqual("cinnamonbun", project.attrib["revision"])
+        self.assertEqual("baklava", project.attrib["revision"])
 
         product = PRODUCT_CONFIG.read_text()
         self.assertIn("ifeq ($(LINEAGE_DESKTOP_GMS_PROVIDER),mtg)", product)
@@ -160,6 +165,54 @@ all:
                         self.assertIn(expected_mtg, result.stdout)
                     else:
                         self.assertNotIn("vendor/gapps/", result.stdout)
+
+    def test_x86_64_gms_density_splits_stay_wired_through_packaging(self):
+        checksums = GMS_CHECKSUMS.read_text()
+        patch = MODERN_GMS_PATCH.read_text()
+        bundle = BUNDLE.read_text()
+        signing = SIGN_TARGET_FILES.read_text()
+        validator = VALIDATE_BUILD_INPUTS.read_text()
+
+        for filename, module in (
+            ("split_config.ldpi.apk", "GmsCoreConfigLdpi"),
+            ("split_config.mdpi.apk", "GmsCoreConfigMdpi"),
+            ("split_config.hdpi.apk", "GmsCoreConfigHdpi"),
+            ("split_config.xhdpi.apk", "GmsCoreConfigXhdpi"),
+            ("split_config.xxhdpi.apk", "GmsCoreConfigXxhdpi"),
+            ("split_config.xxxhdpi.apk", "GmsCoreConfigXxxhdpi"),
+        ):
+            with self.subTest(filename=filename):
+                self.assertIn(f"  {filename}\n", checksums)
+                self.assertIn(f'name: "{module}"', patch)
+                self.assertIn(f'apk: "proprietary/product/priv-app/GmsCore/{filename}"', patch)
+                self.assertIn(f'"{filename}",', bundle)
+                self.assertIn(f'"{module}.apk|{filename}"', signing)
+                self.assertIn(module, validator)
+
+    def test_x86_64_gms_split_cert_names_map_to_installed_filenames(self):
+        signing = SIGN_TARGET_FILES.read_text()
+
+        for module, filename in (
+            ("GmsCoreAdsDynamite", "split_AdsDynamite_installtime.apk"),
+            ("GmsCoreConfigEn", "split_config.en.apk"),
+            ("GmsCoreConfigLdpi", "split_config.ldpi.apk"),
+            ("GmsCoreConfigMdpi", "split_config.mdpi.apk"),
+            ("GmsCoreConfigHdpi", "split_config.hdpi.apk"),
+            ("GmsCoreConfigXhdpi", "split_config.xhdpi.apk"),
+            ("GmsCoreConfigXxhdpi", "split_config.xxhdpi.apk"),
+            ("GmsCoreConfigXxxhdpi", "split_config.xxxhdpi.apk"),
+            ("GmsCoreCronetDynamite", "split_CronetDynamite_installtime.apk"),
+            ("GmsCoreDynamiteLoader", "split_DynamiteLoader_installtime.apk"),
+            ("GmsCoreDynamiteModulesA", "split_DynamiteModulesA_installtime.apk"),
+            ("GmsCoreDynamiteModulesC", "split_DynamiteModulesC_installtime.apk"),
+            ("GmsCoreGoogleCertificates", "split_GoogleCertificates_installtime.apk"),
+            ("GmsCoreMapsDynamite", "split_MapsDynamite_installtime.apk"),
+            ("GmsCoreMeasurementDynamite", "split_MeasurementDynamite_installtime.apk"),
+        ):
+            with self.subTest(module=module):
+                self.assertIn(f'"{module}.apk|{filename}"', signing)
+
+        self.assertIn('sign_args+=(--extra_apks "$installed_apk=")', signing)
 
     def test_provider_switch_cleans_the_provider_being_removed(self):
         with tempfile.TemporaryDirectory() as temp_dir:

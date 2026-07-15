@@ -102,6 +102,7 @@ remove_generated_ninja_state() {
     -name "${prefix}.ninja.*" -o \
     -name "${prefix}.*.ninja" -o \
     -name "Android-${product}.mk" -o \
+    -name "installs-${product}.mk" -o \
     -name "late-${product}.mk" \
   \) -delete 2>/dev/null || true
 }

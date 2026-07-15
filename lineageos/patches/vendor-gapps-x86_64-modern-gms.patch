@@ -1,0 +1,294 @@
+diff --git a/common/proprietary/product/etc/permissions/privapp-permissions-google-product.xml b/common/proprietary/product/etc/permissions/privapp-permissions-google-product.xml
+index 78f46a0..ee750b1 100644
+--- a/common/proprietary/product/etc/permissions/privapp-permissions-google-product.xml
++++ b/common/proprietary/product/etc/permissions/privapp-permissions-google-product.xml
+@@ -220,6 +220,13 @@ It allows additional grants on top of privapp-permissions-platform.xml
+         <permission name="android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND"/>
+     </privapp-permissions>
+     <privapp-permissions package="com.google.android.gms">
++        <permission name="android.permission.ACCESS_COMPANION_INFO"/>
++        <permission name="android.permission.GET_ROLE_HOLDERS"/>
++        <permission name="android.permission.LOG_COMPAT_CHANGE"/>
++        <permission name="android.permission.MANAGE_SECURE_LOCK_DEVICE"/>
++        <permission name="android.permission.OBSERVE_ROLE_HOLDERS"/>
++        <permission name="android.permission.PACKET_KEEPALIVE_OFFLOAD"/>
++        <permission name="android.permission.READ_COMPAT_CHANGE_CONFIG"/>
+         <permission name="android.permission.ACCESS_BROADCAST_RESPONSE_STATS"/>
+         <permission name="android.permission.ACCESS_CACHE_FILESYSTEM"/>
+         <permission name="android.permission.ACCESS_CONTEXT_HUB"/>
+diff --git a/x86_64/Android.bp b/x86_64/Android.bp
+index 64e4ec5..2de59e7 100644
+--- a/x86_64/Android.bp
++++ b/x86_64/Android.bp
+@@ -17,6 +17,246 @@ android_app_import {
+     product_specific: true,
+ }
+ 
++android_app_import {
++    name: "GmsCoreAdsDynamite",
++    owner: "gapps",
++    apk: "proprietary/product/priv-app/GmsCore/split_AdsDynamite_installtime.apk",
++    filename: "split_AdsDynamite_installtime.apk",
++    relative_install_path: "GmsCore",
++    install_path_skip_module_dir: true,
++    preprocessed: true,
++    presigned: true,
++    dex_preopt: {
++        enabled: false,
++    },
++    privileged: true,
++    product_specific: true,
++}
++
++android_app_import {
++    name: "GmsCoreCronetDynamite",
++    owner: "gapps",
++    apk: "proprietary/product/priv-app/GmsCore/split_CronetDynamite_installtime.apk",
++    filename: "split_CronetDynamite_installtime.apk",
++    relative_install_path: "GmsCore",
++    install_path_skip_module_dir: true,
++    preprocessed: true,
++    presigned: true,
++    dex_preopt: {
++        enabled: false,
++    },
++    privileged: true,
++    product_specific: true,
++}
++
++android_app_import {
++    name: "GmsCoreDynamiteLoader",
++    owner: "gapps",
++    apk: "proprietary/product/priv-app/GmsCore/split_DynamiteLoader_installtime.apk",
++    filename: "split_DynamiteLoader_installtime.apk",
++    relative_install_path: "GmsCore",
++    install_path_skip_module_dir: true,
++    preprocessed: true,
++    presigned: true,
++    dex_preopt: {
++        enabled: false,
++    },
++    privileged: true,
++    product_specific: true,
++}
++
++android_app_import {
++    name: "GmsCoreDynamiteModulesA",
++    owner: "gapps",
++    apk: "proprietary/product/priv-app/GmsCore/split_DynamiteModulesA_installtime.apk",
++    filename: "split_DynamiteModulesA_installtime.apk",
++    relative_install_path: "GmsCore",
++    install_path_skip_module_dir: true,
++    preprocessed: true,
++    presigned: true,
++    dex_preopt: {
++        enabled: false,
++    },
++    privileged: true,
++    product_specific: true,
++}
++
++android_app_import {
++    name: "GmsCoreDynamiteModulesC",
++    owner: "gapps",
++    apk: "proprietary/product/priv-app/GmsCore/split_DynamiteModulesC_installtime.apk",
++    filename: "split_DynamiteModulesC_installtime.apk",
++    relative_install_path: "GmsCore",
++    install_path_skip_module_dir: true,
++    preprocessed: true,
++    presigned: true,
++    dex_preopt: {
++        enabled: false,
++    },
++    privileged: true,
++    product_specific: true,
++}
++
++android_app_import {
++    name: "GmsCoreGoogleCertificates",
++    owner: "gapps",
++    apk: "proprietary/product/priv-app/GmsCore/split_GoogleCertificates_installtime.apk",
++    filename: "split_GoogleCertificates_installtime.apk",
++    relative_install_path: "GmsCore",
++    install_path_skip_module_dir: true,
++    preprocessed: true,
++    presigned: true,
++    dex_preopt: {
++        enabled: false,
++    },
++    privileged: true,
++    product_specific: true,
++}
++
++android_app_import {
++    name: "GmsCoreMapsDynamite",
++    owner: "gapps",
++    apk: "proprietary/product/priv-app/GmsCore/split_MapsDynamite_installtime.apk",
++    filename: "split_MapsDynamite_installtime.apk",
++    relative_install_path: "GmsCore",
++    install_path_skip_module_dir: true,
++    preprocessed: true,
++    presigned: true,
++    dex_preopt: {
++        enabled: false,
++    },
++    privileged: true,
++    product_specific: true,
++}
++
++android_app_import {
++    name: "GmsCoreMeasurementDynamite",
++    owner: "gapps",
++    apk: "proprietary/product/priv-app/GmsCore/split_MeasurementDynamite_installtime.apk",
++    filename: "split_MeasurementDynamite_installtime.apk",
++    relative_install_path: "GmsCore",
++    install_path_skip_module_dir: true,
++    preprocessed: true,
++    presigned: true,
++    dex_preopt: {
++        enabled: false,
++    },
++    privileged: true,
++    product_specific: true,
++}
++
++android_app_import {
++    name: "GmsCoreConfigEn",
++    owner: "gapps",
++    apk: "proprietary/product/priv-app/GmsCore/split_config.en.apk",
++    filename: "split_config.en.apk",
++    relative_install_path: "GmsCore",
++    install_path_skip_module_dir: true,
++    preprocessed: true,
++    presigned: true,
++    dex_preopt: {
++        enabled: false,
++    },
++    privileged: true,
++    product_specific: true,
++}
++
++android_app_import {
++    name: "GmsCoreConfigLdpi",
++    owner: "gapps",
++    apk: "proprietary/product/priv-app/GmsCore/split_config.ldpi.apk",
++    filename: "split_config.ldpi.apk",
++    relative_install_path: "GmsCore",
++    install_path_skip_module_dir: true,
++    preprocessed: true,
++    presigned: true,
++    dex_preopt: {
++        enabled: false,
++    },
++    privileged: true,
++    product_specific: true,
++}
++
++android_app_import {
++    name: "GmsCoreConfigMdpi",
++    owner: "gapps",
++    apk: "proprietary/product/priv-app/GmsCore/split_config.mdpi.apk",
++    filename: "split_config.mdpi.apk",
++    relative_install_path: "GmsCore",
++    install_path_skip_module_dir: true,
++    preprocessed: true,
++    presigned: true,
++    dex_preopt: {
++        enabled: false,
++    },
++    privileged: true,
++    product_specific: true,
++}
++
++android_app_import {
++    name: "GmsCoreConfigHdpi",
++    owner: "gapps",
++    apk: "proprietary/product/priv-app/GmsCore/split_config.hdpi.apk",
++    filename: "split_config.hdpi.apk",
++    relative_install_path: "GmsCore",
++    install_path_skip_module_dir: true,
++    preprocessed: true,
++    presigned: true,
++    dex_preopt: {
++        enabled: false,
++    },
++    privileged: true,
++    product_specific: true,
++}
++
++android_app_import {
++    name: "GmsCoreConfigXhdpi",
++    owner: "gapps",
++    apk: "proprietary/product/priv-app/GmsCore/split_config.xhdpi.apk",
++    filename: "split_config.xhdpi.apk",
++    relative_install_path: "GmsCore",
++    install_path_skip_module_dir: true,
++    preprocessed: true,
++    presigned: true,
++    dex_preopt: {
++        enabled: false,
++    },
++    privileged: true,
++    product_specific: true,
++}
++
++android_app_import {
++    name: "GmsCoreConfigXxhdpi",
++    owner: "gapps",
++    apk: "proprietary/product/priv-app/GmsCore/split_config.xxhdpi.apk",
++    filename: "split_config.xxhdpi.apk",
++    relative_install_path: "GmsCore",
++    install_path_skip_module_dir: true,
++    preprocessed: true,
++    presigned: true,
++    dex_preopt: {
++        enabled: false,
++    },
++    privileged: true,
++    product_specific: true,
++}
++
++android_app_import {
++    name: "GmsCoreConfigXxxhdpi",
++    owner: "gapps",
++    apk: "proprietary/product/priv-app/GmsCore/split_config.xxxhdpi.apk",
++    filename: "split_config.xxxhdpi.apk",
++    relative_install_path: "GmsCore",
++    install_path_skip_module_dir: true,
++    preprocessed: true,
++    presigned: true,
++    dex_preopt: {
++        enabled: false,
++    },
++    privileged: true,
++    product_specific: true,
++}
++
+ android_app_import {
+     name: "Phonesky",
+     owner: "gapps",
+diff --git a/x86_64/x86_64-vendor.mk b/x86_64/x86_64-vendor.mk
+index 46c7ee0..afd3103 100644
+--- a/x86_64/x86_64-vendor.mk
++++ b/x86_64/x86_64-vendor.mk
+@@ -6,5 +6,20 @@ PRODUCT_SOONG_NAMESPACES += \
+ 
+ PRODUCT_PACKAGES += \
+     GmsCore \
++    GmsCoreAdsDynamite \
++    GmsCoreConfigEn \
++    GmsCoreConfigLdpi \
++    GmsCoreConfigMdpi \
++    GmsCoreConfigHdpi \
++    GmsCoreConfigXhdpi \
++    GmsCoreConfigXxhdpi \
++    GmsCoreConfigXxxhdpi \
++    GmsCoreCronetDynamite \
++    GmsCoreDynamiteLoader \
++    GmsCoreDynamiteModulesA \
++    GmsCoreDynamiteModulesC \
++    GmsCoreGoogleCertificates \
++    GmsCoreMapsDynamite \
++    GmsCoreMeasurementDynamite \
+     Phonesky \
+     libjni_latinimegoogle

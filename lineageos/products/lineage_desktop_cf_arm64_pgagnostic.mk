@@ -22,4 +22,4 @@ PRODUCT_PRODUCT_PROPERTIES += \
 PRODUCT_NAME := lineage_desktop_cf_arm64_pgagnostic
 PRODUCT_BRAND := LineageOS
 PRODUCT_MANUFACTURER := DesktopECHO
-PRODUCT_MODEL := Ika LineageOS Desktop ARM64
+PRODUCT_MODEL := Ika Virtual Desktop

@@ -26,7 +26,9 @@ DEFAULT_SDK_PACKAGE = (
 # SHA1 is sourced from Google's repository.xml manifest; we keep it for parity
 # with that manifest, but also verify SHA256 because SHA1 is collision-broken.
 DEFAULT_SDK_PACKAGE_SHA1 = "dc5a0f14318ac2f18c876e1286809fcde665f507"
-DEFAULT_SDK_PACKAGE_SHA256 = ""
+DEFAULT_SDK_PACKAGE_SHA256 = (
+    "c1cc2876483da0914aa63f692473d2554a3af482fd617eb8183559fca2f24ed6"
+)
 USER_AGENT = "lineage-desktop-native-bridge-updater/1.0"
 SPARSE_MAGIC = b":\xff&\xed"
 EROFS_MAGIC = b"\xe2\xe1\xf5\xe0"
@@ -39,9 +41,37 @@ PAYLOAD_REQUIRED_FILES = (
     "bin/ndk_translation_program_runner_binfmt_misc_arm64",
     "etc/binfmt_misc/arm64_dyn",
     "etc/binfmt_misc/arm64_exe",
+    "etc/berberis/cpuinfo.arm64.txt",
     "etc/init/ndk_translation.rc",
     "etc/ld.config.arm64.txt",
     "lib64/libndk_translation.so",
+)
+
+# These proxies are the host-side counterparts of AOSP's modified ARM64 guest
+# libraries in native_bridge_support.mk. libm is the one exception: some Google
+# SDK images omit its proxy, and x86_arm_native_bridge.mk deliberately builds
+# that proxy from the matching AOSP source tree instead.
+PAYLOAD_REQUIRED_PROXY_LIBRARIES = (
+    "libEGL",
+    "libGLESv1_CM",
+    "libGLESv2",
+    "libGLESv3",
+    "libOpenMAXAL",
+    "libOpenSLES",
+    "libaaudio",
+    "libamidi",
+    "libandroid",
+    "libandroid_runtime",
+    "libbinder_ndk",
+    "libc",
+    "libcamera2ndk",
+    "libjnigraphics",
+    "libmediandk",
+    "libnativehelper",
+    "libnativewindow",
+    "libneuralnetworks",
+    "libvulkan",
+    "libwebviewchromium_plat_support",
 )
 
 PAYLOAD_GLOBS = (
@@ -426,7 +456,11 @@ def stage_payload(source_root, output_root):
     copied = set()
 
     missing = []
-    for relpath in PAYLOAD_REQUIRED_FILES:
+    required_files = PAYLOAD_REQUIRED_FILES + tuple(
+        f"lib64/libndk_translation_proxy_{library}.so"
+        for library in PAYLOAD_REQUIRED_PROXY_LIBRARIES
+    )
+    for relpath in required_files:
         if not (system_root / relpath).is_file():
             missing.append(relpath)
             continue

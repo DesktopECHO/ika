@@ -28,6 +28,7 @@ LINEAGE_DESKTOP_NATIVE_BRIDGE_COPY_FILES := \
     bin/ndk_translation_program_runner_binfmt_misc_arm64 \
     etc/binfmt_misc/arm64_dyn \
     etc/binfmt_misc/arm64_exe \
+    etc/berberis/cpuinfo.arm64.txt \
     etc/init/ndk_translation.rc \
     etc/ld.config.arm64.txt
 
@@ -39,6 +40,7 @@ PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST += \
     $(TARGET_COPY_OUT_SYSTEM)/bin/arm64/% \
     $(TARGET_COPY_OUT_SYSTEM)/bin/ndk_translation_program_runner_binfmt_misc_arm64 \
     $(TARGET_COPY_OUT_SYSTEM)/etc/binfmt_misc/% \
+    $(TARGET_COPY_OUT_SYSTEM)/etc/berberis/cpuinfo.arm64.txt \
     $(TARGET_COPY_OUT_SYSTEM)/etc/init/ndk_translation.rc \
     $(TARGET_COPY_OUT_SYSTEM)/etc/ld.config.arm64.txt \
     $(TARGET_COPY_OUT_SYSTEM)/lib64/arm64/% \

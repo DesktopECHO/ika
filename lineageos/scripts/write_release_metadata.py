@@ -138,6 +138,7 @@ def native_bridge_info(android_root: Path) -> dict[str, Any]:
         "libndk_translation": bridge / "system" / "lib64" / "libndk_translation.so",
         "binfmt_arm64_dyn": bridge / "system" / "etc" / "binfmt_misc" / "arm64_dyn",
         "binfmt_arm64_exe": bridge / "system" / "etc" / "binfmt_misc" / "arm64_exe",
+        "cpuinfo_arm64": bridge / "system" / "etc" / "berberis" / "cpuinfo.arm64.txt",
         "init_rc": bridge / "system" / "etc" / "init" / "ndk_translation.rc",
         "ld_config_arm64": bridge / "system" / "etc" / "ld.config.arm64.txt",
     }

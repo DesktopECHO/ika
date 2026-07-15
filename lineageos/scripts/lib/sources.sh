@@ -1298,6 +1298,51 @@ apply_mindthegapps_x86_64_compat_patch() {
   git -C "$gapps" apply --whitespace=nowarn "$patch"
 }
 
+# Android 16 GSF delegates its providers to modern GMS. The old x86-64 GMS
+# cannot bootstrap through Play because its update conflicts with legacy GSF,
+# so install the complete matching package set before the image is assembled.
+install_mindthegapps_x86_64_modern_gms() {
+  local gapps="$1"
+  shift
+
+  targets_include_x86_64 "$@" || return 0
+
+  local source="$overlay_dir/prebuilts/mindthegapps/x86_64/gmscore"
+  local destination="$gapps/x86_64/proprietary/product/priv-app/GmsCore"
+
+  [[ -f "$source/SHA256SUMS" ]] || \
+    die "missing x86-64 Google Play services checksum manifest: $source/SHA256SUMS"
+  if ! (cd "$source" && sha256sum --check --strict SHA256SUMS >/dev/null); then
+    die "x86-64 Google Play services prebuilts are missing or corrupt: $source"
+  fi
+
+  log "installing current Google Play services x86-64 package set"
+  rm -rf "$destination"
+  mkdir -p "$destination"
+  install -m 0644 "$source"/*.apk "$destination/"
+  rm -f \
+    "$gapps/common/proprietary/system_ext/priv-app/GoogleServicesFramework/GoogleServicesFramework-x86_64.apk"
+}
+
+apply_mindthegapps_x86_64_modern_gms_patch() {
+  local gapps="$1"
+  shift
+
+  targets_include_x86_64 "$@" || return 0
+
+  local patch="$overlay_dir/patches/vendor-gapps-x86_64-modern-gms.patch"
+  [[ -f "$patch" ]] || die "missing MindTheGapps x86-64 modern GMS patch: $patch"
+
+  if git -C "$gapps" apply --reverse --check --whitespace=nowarn "$patch" >/dev/null 2>&1; then
+    return 0
+  fi
+  git -C "$gapps" apply --check --whitespace=nowarn "$patch" >/dev/null || \
+    die "MindTheGapps x86-64 modern GMS patch does not apply cleanly"
+
+  log "integrating current x86-64 Google Play services split APKs"
+  git -C "$gapps" apply --whitespace=nowarn "$patch"
+}
+
 sync_mindthegapps_lfs_prebuilts() {
   [[ "$gms_provider" == "mtg" ]] || return 0
 
@@ -1321,6 +1366,8 @@ sync_mindthegapps_lfs_prebuilts() {
   run_anonymous_git_network git -C "$gapps" lfs pull \
     --include="$include" --exclude=""
   apply_mindthegapps_x86_64_compat_patch "$gapps" "$@"
+  install_mindthegapps_x86_64_modern_gms "$gapps" "$@"
+  apply_mindthegapps_x86_64_modern_gms_patch "$gapps" "$@"
 }
 
 targets_include_x86_64() {

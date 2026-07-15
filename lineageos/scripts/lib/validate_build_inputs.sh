@@ -933,10 +933,15 @@ check_microg_prebuilts() {
 
 check_mindthegapps_prebuilts() {
   local gapps="$android_root/vendor/gapps"
-  local arch arch_bp path
+  local arch arch_bp path gsf gsf_sha256 gms_dir gms_manifest gms_module
 
   require_file "$gapps/common/Android.bp"
   require_file "$gapps/common/common-vendor.mk"
+
+  if ! grep -Eq '^[[:space:]]*GoogleServicesFramework([[:space:]]*\\)?[[:space:]]*$' \
+       "$gapps/common/common-vendor.mk"; then
+    fail "MindTheGapps common product does not select its architecture-aware Google Services Framework module"
+  fi
 
   for arch in "${targets[@]}"; do
     arch_bp="$gapps/$arch/Android.bp"
@@ -966,6 +971,51 @@ check_mindthegapps_prebuilts() {
       END { exit found ? 0 : 1 }
     ' "$arch_bp"; then
       fail "MindTheGapps x86-64 LatinIME prebuilt is missing its scoped 4 KiB alignment exception: $arch_bp"
+    fi
+
+    if [[ "$arch" == "x86_64" ]]; then
+      gsf="$gapps/common/proprietary/system_ext/priv-app/GoogleServicesFramework/GoogleServicesFramework.apk"
+      require_file "$gsf"
+      if [[ -f "$gsf" ]]; then
+        gsf_sha256="$(sha256sum "$gsf" | awk '{print $1}')"
+        [[ "$gsf_sha256" == "41c0d547ac1466e87ccf783e36192cacbda0f6010128327a2503b4330dc8b534" ]] || \
+          fail "unexpected MindTheGapps Android 16 Google Services Framework: $gsf"
+      fi
+
+      if [[ -e "$gapps/common/proprietary/system_ext/priv-app/GoogleServicesFramework/GoogleServicesFramework-x86_64.apk" ]] ||
+         grep -Fq 'GoogleServicesFramework-x86_64.apk' "$gapps/common/Android.bp"; then
+        fail "stale Android 13 Google Services Framework override remains in MindTheGapps"
+      fi
+
+      if grep -Rq 'name:[[:space:]]*"GoogleServicesFrameworkX86"' \
+          "$gapps/common/Android.bp" "$gapps/x86_64/Android.bp"; then
+        fail "MindTheGapps defines a second Google Services Framework module with a conflicting install path"
+      fi
+
+      gms_dir="$gapps/x86_64/proprietary/product/priv-app/GmsCore"
+      gms_manifest="$overlay_dir/prebuilts/mindthegapps/x86_64/gmscore/SHA256SUMS"
+      [[ -d "$gms_dir" ]] || \
+        fail "missing MindTheGapps x86-64 Google Play services package set: $gms_dir"
+      require_file "$gms_manifest"
+      if [[ -d "$gms_dir" && -f "$gms_manifest" ]] &&
+         ! (cd "$gms_dir" && sha256sum --check --strict "$gms_manifest" >/dev/null); then
+        fail "MindTheGapps x86-64 Google Play services package set is missing or corrupt: $gms_dir"
+      fi
+
+      for gms_module in \
+        GmsCoreAdsDynamite GmsCoreConfigEn GmsCoreConfigLdpi \
+        GmsCoreConfigMdpi GmsCoreConfigHdpi GmsCoreConfigXhdpi \
+        GmsCoreConfigXxhdpi GmsCoreConfigXxxhdpi \
+        GmsCoreCronetDynamite GmsCoreDynamiteLoader \
+        GmsCoreDynamiteModulesA GmsCoreDynamiteModulesC \
+        GmsCoreGoogleCertificates GmsCoreMapsDynamite \
+        GmsCoreMeasurementDynamite; do
+        grep -Fq "name: \"$gms_module\"" "$arch_bp" || \
+          fail "MindTheGapps x86-64 split module is missing: $gms_module"
+        grep -Eq "^[[:space:]]*$gms_module([[:space:]]*\\\\)?[[:space:]]*$" \
+          "$gapps/x86_64/x86_64-vendor.mk" || \
+          fail "MindTheGapps x86-64 product does not select split module: $gms_module"
+      done
     fi
 
     while IFS= read -r -d '' path; do
@@ -1040,6 +1090,7 @@ check_native_bridge() {
     "$system/bin/ndk_translation_program_runner_binfmt_misc_arm64" \
     "$system/etc/binfmt_misc/arm64_dyn" \
     "$system/etc/binfmt_misc/arm64_exe" \
+    "$system/etc/berberis/cpuinfo.arm64.txt" \
     "$system/etc/init/ndk_translation.rc" \
     "$system/etc/ld.config.arm64.txt" \
     "$system/lib64/libndk_translation.so" \
@@ -1048,9 +1099,47 @@ check_native_bridge() {
     require_file "$required"
   done
 
+  local proxy
+  for proxy in \
+    libEGL \
+    libGLESv1_CM \
+    libGLESv2 \
+    libGLESv3 \
+    libOpenMAXAL \
+    libOpenSLES \
+    libaaudio \
+    libamidi \
+    libandroid \
+    libandroid_runtime \
+    libbinder_ndk \
+    libc \
+    libcamera2ndk \
+    libjnigraphics \
+    libmediandk \
+    libnativehelper \
+    libnativewindow \
+    libneuralnetworks \
+    libvulkan \
+    libwebviewchromium_plat_support
+  do
+    require_file "$system/lib64/libndk_translation_proxy_${proxy}.so"
+  done
+
+  grep -aq '/system/etc/berberis/cpuinfo.arm64.txt' \
+    "$system/lib64/libndk_translation.so" || \
+    fail "native bridge runtime does not use the packaged ARM64 CPU description"
+  grep -q '^processor[[:space:]]*:' "$system/etc/berberis/cpuinfo.arm64.txt" || \
+    fail "ARM64 native bridge CPU description has no processors"
+  grep -Eq '^Features[[:space:]]*:.*(^|[[:space:]])asimd([[:space:]]|$)' \
+    "$system/etc/berberis/cpuinfo.arm64.txt" || \
+    fail "ARM64 native bridge CPU description is missing ASIMD support"
+
   grep -q 'ro.dalvik.vm.native.bridge=libndk_translation.so' \
     "$overlay_dir/config/x86_arm_native_bridge.mk" || \
     fail "x86 native bridge product properties are missing"
+  grep -q 'etc/berberis/cpuinfo.arm64.txt' \
+    "$overlay_dir/config/x86_arm_native_bridge.mk" || \
+    fail "x86 native bridge product does not install its ARM64 CPU description"
 }
 
 check_desktop_flags() {

@@ -237,10 +237,14 @@ tag, or set `MICROG_GSFPROXY_RELEASE`,
 `MICROG_FDROID_RELEASE`, or `MICROG_FDROID_PRIVILEGED_RELEASE` to version
 names/codes, to pin reproducible versions.
 
-`--mtg` syncs the MindTheGapps `cinnamonbun` vendor tree to `vendor/gapps` and
+`--mtg` syncs the MindTheGapps `baklava` vendor tree to `vendor/gapps` and
 inherits its matching `arm64` or `x86_64` product makefile. Its Google-signed
 APK and APEX prebuilts remain presigned during target-files signing, and the
-exact vendor commit is recorded in each bundle's release metadata.
+exact vendor commit is recorded in each bundle's release metadata. ARM64 uses
+the branch's current Android 16 GSF and Play Services pair. Because upstream's
+native x86-64 Play Services remains at its Android 13 version, x86-64 uses the
+Google-signed GSF from that same upstream package-set commit so its required
+`com.google.android.gsf.gservices` provider remains available.
 
 Downloaded APKs are cached under `MICROG_PREBUILT_CACHE_DIR` (default
 `~/ika-build/microg-prebuilts`, alongside the ccache and ARM64 prebuilt caches).

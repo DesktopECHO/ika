@@ -45,6 +45,98 @@ for name in names:
 PY
 }
 
+# Inspect the assembled archive rather than trusting module selection: the
+# x86-64 image must contain the complete modern GMS set and the matching GSF.
+mindthegapps_gsf_target_files_exclusive() {
+  local arch="$1"
+  local target_files_zip="$2"
+  local gsf_source gms_source=""
+
+  [[ -f "$target_files_zip" && -s "$target_files_zip" ]] || return 1
+
+  case "$arch" in
+    arm64)
+      gsf_source="$workspace/vendor/gapps/common/proprietary/system_ext/priv-app/GoogleServicesFramework/GoogleServicesFramework.apk"
+      ;;
+    x86_64)
+      gsf_source="$workspace/vendor/gapps/common/proprietary/system_ext/priv-app/GoogleServicesFramework/GoogleServicesFramework.apk"
+      gms_source="$workspace/vendor/gapps/x86_64/proprietary/product/priv-app/GmsCore"
+      ;;
+    *) return 1 ;;
+  esac
+
+  python3 - "$target_files_zip" "$arch" "$gsf_source" "$gms_source" <<'PY'
+import hashlib
+from pathlib import Path, PurePosixPath
+import sys
+import zipfile
+
+target_files, arch, gsf_source, gms_source = sys.argv[1:]
+gsf_entry = "SYSTEM_EXT/priv-app/GoogleServicesFramework/GoogleServicesFramework.apk"
+partition_prefixes = ("SYSTEM/", "SYSTEM_EXT/", "PRODUCT/", "VENDOR/", "SYSTEM_OTHER/")
+gms_names = (
+    "GmsCore.apk",
+    "split_AdsDynamite_installtime.apk",
+    "split_CronetDynamite_installtime.apk",
+    "split_DynamiteLoader_installtime.apk",
+    "split_DynamiteModulesA_installtime.apk",
+    "split_DynamiteModulesC_installtime.apk",
+    "split_GoogleCertificates_installtime.apk",
+    "split_MapsDynamite_installtime.apk",
+    "split_MeasurementDynamite_installtime.apk",
+    "split_config.en.apk",
+    "split_config.ldpi.apk",
+    "split_config.mdpi.apk",
+    "split_config.hdpi.apk",
+    "split_config.xhdpi.apk",
+    "split_config.xxhdpi.apk",
+    "split_config.xxxhdpi.apk",
+)
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+try:
+    with zipfile.ZipFile(target_files) as archive:
+        names = archive.namelist()
+        gsf_entries = sorted(
+            name for name in names
+            if name.startswith(partition_prefixes)
+            and PurePosixPath(name).name == "GoogleServicesFramework.apk"
+        )
+        if gsf_entries != [gsf_entry]:
+            raise ValueError(f"expected only {gsf_entry}, found {gsf_entries}")
+
+        packaged_gsf = archive.read(gsf_entry)
+        expected_gsf = Path(gsf_source).read_bytes()
+        if digest(packaged_gsf) != digest(expected_gsf):
+            raise ValueError("packaged GSF does not match the selected prebuilt")
+
+        if arch == "x86_64":
+            if digest(expected_gsf) != "41c0d547ac1466e87ccf783e36192cacbda0f6010128327a2503b4330dc8b534":
+                raise ValueError("x86-64 image does not use the pinned Android 16 GSF")
+
+            expected_entries = [f"PRODUCT/priv-app/GmsCore/{name}" for name in gms_names]
+            packaged_entries = sorted(
+                name for name in names
+                if name.startswith("PRODUCT/priv-app/GmsCore/") and name.endswith(".apk")
+            )
+            if packaged_entries != sorted(expected_entries):
+                raise ValueError(
+                    f"expected GMS APKs {sorted(expected_entries)}, found {packaged_entries}"
+                )
+
+            for name, entry in zip(gms_names, expected_entries):
+                expected_gms = (Path(gms_source) / name).read_bytes()
+                packaged_gms = archive.read(entry)
+                if digest(packaged_gms) != digest(expected_gms):
+                    raise ValueError(f"packaged {name} does not match its Google-signed prebuilt")
+except (OSError, ValueError, zipfile.BadZipFile, KeyError) as exc:
+    print(f"MindTheGapps package selection error: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
 valid_targz_archive() {
   local path="$1"
   [[ -f "$path" && -s "$path" ]] || return 1

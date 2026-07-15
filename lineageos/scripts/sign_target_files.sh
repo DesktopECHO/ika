@@ -156,6 +156,35 @@ allowlisted_presigned_apks=(
   signed-CtsSecureElementAccessControlTestCases3.apk
 )
 
+# Soong records each split module in META/apkcerts.txt under the module output
+# name, while the target-files archive contains the filename requested by the
+# module's `filename` property. Keep the two identities paired: the former is
+# checked by the strict PRESIGNED allowlist and the latter is passed to
+# sign_target_files_apks so it can find and preserve the Google signature.
+mtg_gms_split_apk_pairs=(
+  "GmsCoreAdsDynamite.apk|split_AdsDynamite_installtime.apk"
+  "GmsCoreConfigEn.apk|split_config.en.apk"
+  "GmsCoreConfigLdpi.apk|split_config.ldpi.apk"
+  "GmsCoreConfigMdpi.apk|split_config.mdpi.apk"
+  "GmsCoreConfigHdpi.apk|split_config.hdpi.apk"
+  "GmsCoreConfigXhdpi.apk|split_config.xhdpi.apk"
+  "GmsCoreConfigXxhdpi.apk|split_config.xxhdpi.apk"
+  "GmsCoreConfigXxxhdpi.apk|split_config.xxxhdpi.apk"
+  "GmsCoreCronetDynamite.apk|split_CronetDynamite_installtime.apk"
+  "GmsCoreDynamiteLoader.apk|split_DynamiteLoader_installtime.apk"
+  "GmsCoreDynamiteModulesA.apk|split_DynamiteModulesA_installtime.apk"
+  "GmsCoreDynamiteModulesC.apk|split_DynamiteModulesC_installtime.apk"
+  "GmsCoreGoogleCertificates.apk|split_GoogleCertificates_installtime.apk"
+  "GmsCoreMapsDynamite.apk|split_MapsDynamite_installtime.apk"
+  "GmsCoreMeasurementDynamite.apk|split_MeasurementDynamite_installtime.apk"
+)
+mtg_gms_split_cert_names=()
+mtg_gms_split_installed_names=()
+for pair in "${mtg_gms_split_apk_pairs[@]}"; do
+  mtg_gms_split_cert_names+=("${pair%%|*}")
+  mtg_gms_split_installed_names+=("${pair#*|}")
+done
+
 if [[ "${LINEAGE_DESKTOP_GMS_PROVIDER:-none}" == "mtg" ]]; then
   # MindTheGapps modules deliberately retain Google's package signatures.
   allowlisted_presigned_apks+=(
@@ -177,6 +206,7 @@ if [[ "${LINEAGE_DESKTOP_GMS_PROVIDER:-none}" == "mtg" ]]; then
     Wellbeing.apk
     talkback.apk
   )
+  allowlisted_presigned_apks+=("${mtg_gms_split_cert_names[@]}")
 fi
 
 allowlisted_presigned_apexes=(
@@ -288,6 +318,25 @@ extra_releasekey_apks=(
 )
 
 sign_args=(-o -d "$ANDROID_CERTS_DIR")
+
+# apkcerts.txt uses the GmsCore module aliases above, but releasetools indexes
+# actual archive entries by basename. Add PRESIGNED mappings for only the
+# split filenames present in this target so signing neither rejects them as
+# unknown nor replaces Google's signatures.
+presigned_apk_aliases=0
+if [[ "${LINEAGE_DESKTOP_GMS_PROVIDER:-none}" == "mtg" ]]; then
+  mapfile -t installed_apk_basenames < <(
+    unzip -Z1 "$input_zip" \
+      | awk -F/ '/\.apk$/ {print $NF}' \
+      | sort -u
+  )
+  for installed_apk in "${mtg_gms_split_installed_names[@]}"; do
+    if contains_item "$installed_apk" "${installed_apk_basenames[@]}"; then
+      sign_args+=(--extra_apks "$installed_apk=")
+      presigned_apk_aliases=$((presigned_apk_aliases + 1))
+    fi
+  done
+fi
 
 # `-d` populates an internal key_map for the well-known mainline cert tags
 # (testkey/devkey/media/shared/platform/networkstack/sdk_sandbox/bluetooth),
@@ -452,6 +501,7 @@ fi
 
 printf '[lineage-desktop] signing %s\n' "$(basename "$input_zip")"
 printf '[lineage-desktop]   apk overrides: %d (from META/apkcerts.txt)\n' "$apk_overrides"
+printf '[lineage-desktop]   presigned APK filename aliases: %d\n' "$presigned_apk_aliases"
 printf '[lineage-desktop]   apex: %d user-signed, %d build-default-signed, %d presigned, %d skipped (no key)\n' \
   "$apex_signed" "$apex_build_default" "$apex_presigned" "$apex_skipped"
 

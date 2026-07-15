@@ -9,5 +9,5 @@
       path="vendor/gapps"
       name="vendor_gapps"
       remote="mindthegapps"
-      revision="cinnamonbun" />
+      revision="baklava" />
 </manifest>

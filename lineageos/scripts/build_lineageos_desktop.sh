@@ -392,6 +392,10 @@ build_target() {
   validate_cvd_target_fstabs "$product_out"
   desktop_launcher_outputs_exclusive "$product_out" "$target_files_zip" || \
     die "$product target-files still include non-QuickStep Launcher3 artifacts"
+  if [[ "$gms_provider" == "mtg" ]]; then
+    mindthegapps_gsf_target_files_exclusive "$arch" "$target_files_zip" || \
+      die "$product target-files contain the wrong MindTheGapps GSF/Play Services pairing"
+  fi
   repair_cvd_host_package_avb_keys "$host_package"
 
   log "signing $product target-files"
@@ -399,6 +403,10 @@ build_target() {
     "$target_files_zip" \
     "$signed_target_files_zip" \
     "$signed_images_dir"
+  if [[ "$gms_provider" == "mtg" ]]; then
+    mindthegapps_gsf_target_files_exclusive "$arch" "$signed_target_files_zip" || \
+      die "$product signed target-files changed the selected MindTheGapps packages"
+  fi
 
   package_cvd_bundle "$arch" "$product" "$product_out" "$host_package" "$signed_images_dir" "$bundle_name" "${thin_files[@]}"
   bundle_dir_complete "$output_dir/$bundle_name" "${thin_files[@]}" || \
