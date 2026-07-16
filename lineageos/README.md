@@ -196,6 +196,7 @@ Useful environment overrides:
 
 ```text
 WORKSPACE=/path/to/android/source
+IKA_WORK_ROOT=/path/to/ika/ika-work  # default: ika repo root/ika-work
 OUTPUT_DIR=/path/to/final/images    # default: ika repo root
 BUILD_VARIANT=userdebug             # userdebug, user, or eng
 JOBS=16
@@ -210,7 +211,7 @@ MICROG_GMSCORE_RELEASE=latest
 MICROG_GSFPROXY_RELEASE=latest
 MICROG_FDROID_RELEASE=latest
 MICROG_FDROID_PRIVILEGED_RELEASE=latest
-MICROG_PREBUILT_CACHE_DIR=~/ika-build/microg-prebuilts
+MICROG_PREBUILT_CACHE_DIR=/path/to/ika/ika-work/microg-prebuilts
 INCLUDE_X86_ARM_NATIVE_BRIDGE=1
 UPDATE_NATIVE_BRIDGE_PREBUILTS=1
 NATIVE_BRIDGE_SOURCE_DIR=/path/to/extracted/android/system
@@ -247,7 +248,8 @@ Google-signed GSF from that same upstream package-set commit so its required
 `com.google.android.gsf.gservices` provider remains available.
 
 Downloaded APKs are cached under `MICROG_PREBUILT_CACHE_DIR` (default
-`~/ika-build/microg-prebuilts`, alongside the ccache and ARM64 prebuilt caches).
+`ika-work/microg-prebuilts` at the ika repository root, alongside the ccache and
+ARM64 prebuilt caches).
 The cache is keyed by the upstream, version-stamped file name, so a rebuild
 whose resolved versions are already cached copies them into `vendor/partner_gms`
 without re-downloading. A small `index.json` manifest in the same directory maps

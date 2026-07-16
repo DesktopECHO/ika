@@ -18,8 +18,10 @@ target is rejected.
 Environment:
   WORKSPACE             Android source checkout to create or reuse.
                         Default: ika/lineageos/src
+  IKA_WORK_ROOT         Build caches, SDKs, temporary files, and signed staging.
+                        Default: ika/ika-work
   OUTPUT_DIR            Parent directory for the lineageos-<arch>/ bundle
-                        directories and signed target-files staging.
+                        directories.
                         Default: the ika project root.
   BUILDTIME_LOG_PATH    TSV ledger for each ROM build target with start time,
                         finish time, duration, architecture, and success or
@@ -41,14 +43,13 @@ Environment:
   CCACHE_ENABLED        Enable ccache for the build (Soong honors USE_CCACHE for
                         C/C++). Speeds up repeat/incremental builds; a clean
                         first build sees ~no benefit. Default: 1
-  CCACHE_DIR            ccache directory. Default: $HOME/.ccache
+  CCACHE_DIR            ccache directory. Default: ika/ika-work/.ccache
   CCACHE_MAX_SIZE       ccache size cap (ccache -M). Default: 50G
   ARM64_PREBUILT_CACHE_DIR
                         Persistent cache for downloaded ARM64 host prebuilts
                         such as Rust dist tarballs and JDK archives. Also used
                         as scratch space for git-based prebuilt installs.
-                        Default:
-                        $HOME/ika-build/arm64-prebuilts
+                        Default: ika/ika-work/arm64-prebuilts
   LINEAGE_BRANCH        LineageOS branch. Default: lineage-23.2
   ANDROID_MANIFEST_URL  Manifest repository. Default: LineageOS/android.git
   MANIFEST_URL          Fallback overlay manifest URL.
@@ -115,7 +116,7 @@ Environment:
                         With every MICROG_*_RELEASE pinned (not latest) and the
                         cache warm, updates run fully offline: pinned+cached
                         modules skip even the release-metadata/F-Droid index
-                        lookup. Default: $HOME/ika-build/microg-prebuilts
+                        lookup. Default: ika/ika-work/microg-prebuilts
   REPO_INSTALL_PATH     Path checked for repo if it is not on PATH.
                         Default: $HOME/.local/bin/repo
   REPO_SYNC_ATTEMPTS    Top-level repo sync attempts. Default: 9

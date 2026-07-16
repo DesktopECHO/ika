@@ -7,7 +7,7 @@
 
 arm64_prebuilt_cache_subdir() {
   local subdir="$1"
-  local base="${arm64_prebuilt_cache_dir:-$HOME/ika-build/arm64-prebuilts}"
+  local base="${arm64_prebuilt_cache_dir:-$ika_work_root/arm64-prebuilts}"
   local dir
 
   [[ -n "$base" && "$base" != "/" ]] || \

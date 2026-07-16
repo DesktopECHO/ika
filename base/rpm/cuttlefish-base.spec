@@ -203,9 +203,11 @@ readonly package_output_root="base/cvd/bazel-out/${bazel_arch}-opt/bin/cuttlefis
 pushd base/cvd >/dev/null
 # Keep download/build caches persistent across rpmbuild runs so external
 # repositories are fetched once and then reused on slow connections. Default
-# under $HOME/ika-build alongside the other ika build scratch.
-BAZEL_CACHE_ROOT="${CUTTLEFISH_BAZEL_CACHE_ROOT:-$HOME/ika-build/cuttlefish-bazel}"
-BAZEL_OUTPUT_USER_ROOT="${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$HOME/ika-build}"
+# under the repository's ika-work directory.
+REPO_ROOT="$(realpath ../..)"
+WORK_ROOT="${IKA_WORK_ROOT:-$REPO_ROOT/ika-work}"
+BAZEL_CACHE_ROOT="${CUTTLEFISH_BAZEL_CACHE_ROOT:-$WORK_ROOT/cuttlefish-bazel}"
+BAZEL_OUTPUT_USER_ROOT="${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$WORK_ROOT}"
 BAZEL_REPOSITORY_CACHE="$BAZEL_CACHE_ROOT/repository"
 BAZEL_DISK_CACHE="$BAZEL_CACHE_ROOT/disk"
 BAZEL_DISTDIR="$BAZEL_CACHE_ROOT/distdir"

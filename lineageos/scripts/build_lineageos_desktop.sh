@@ -19,6 +19,8 @@ esac
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 overlay_dir="$(cd "$script_dir/.." && pwd)"
 ika_root="$(cd "$overlay_dir/.." && pwd)"
+ika_work_root="${IKA_WORK_ROOT:-$ika_root/ika-work}"
+export IKA_WORK_ROOT="$ika_work_root"
 
 android_manifest_url="${ANDROID_MANIFEST_URL:-https://github.com/LineageOS/android.git}"
 lineage_branch="${LINEAGE_BRANCH:-lineage-23.2}"
@@ -32,9 +34,9 @@ validate_build_inputs="${VALIDATE_BUILD_INPUTS:-1}"
 strict_bundle_validation="${STRICT_BUNDLE_VALIDATION:-0}"
 build_variant="${BUILD_VARIANT:-userdebug}"
 ccache_enabled="${CCACHE_ENABLED:-1}"
-ccache_dir="${CCACHE_DIR:-$HOME/ika-build/.ccache}"
+ccache_dir="${CCACHE_DIR:-$ika_work_root/.ccache}"
 ccache_max_size="${CCACHE_MAX_SIZE:-50G}"
-arm64_prebuilt_cache_dir="${ARM64_PREBUILT_CACHE_DIR:-$HOME/ika-build/arm64-prebuilts}"
+arm64_prebuilt_cache_dir="${ARM64_PREBUILT_CACHE_DIR:-$ika_work_root/arm64-prebuilts}"
 rebuild="${REBUILD:-0}"
 skip_sync="${SKIP_SYNC:-$rebuild}"
 skip_patch="${SKIP_PATCH:-$rebuild}"
@@ -253,14 +255,14 @@ enabled() {
   esac
 }
 
-# Route all build/signing temp to a dedicated disk-backed dir in $HOME, never
-# the host's default /tmp. On stock Asahi/ARM64 hosts /tmp is a small RAM-backed
-# tmpfs; the signing step (sign_target_files_apks) extracts the multi-GB
-# target-files zip into TMPDIR and otherwise exhausts it (and host RAM), dying
-# with "OSError: [Errno 122] Quota exceeded". The dir is removed on exit by
-# cleanup_on_exit.
+# Route all build/signing temp to the repository's disk-backed work directory,
+# never the host's default /tmp. On stock Asahi/ARM64 hosts /tmp is a small
+# RAM-backed tmpfs; the signing step (sign_target_files_apks) extracts the
+# multi-GB target-files zip into TMPDIR and otherwise exhausts it (and host
+# RAM), dying with "OSError: [Errno 122] Quota exceeded". The dir is removed on
+# exit by cleanup_on_exit.
 configure_tmpdir() {
-  build_tmpdir="$HOME/ika-build/tmp"
+  build_tmpdir="$ika_work_root/tmp"
   export TMPDIR="$build_tmpdir"
   mkdir -p "$TMPDIR" || die "could not create build TMPDIR: $TMPDIR"
   log "using disk-backed TMPDIR=$TMPDIR (removed on exit)"
@@ -366,7 +368,7 @@ build_target() {
   fi
 
   local target_files_zip="$product_out/obj/PACKAGING/target_files_intermediates/${product}-target_files.zip"
-  local signed_artifacts_dir="$HOME/ika-build/lineageos/signed/$product"
+  local signed_artifacts_dir="$ika_work_root/lineageos/signed/$product"
   local signed_target_files_zip="$signed_artifacts_dir/${product}-target_files-signed.zip"
   local signed_images_dir="$signed_artifacts_dir/signed_images"
   remove_packaged_target_outputs "$product" "$product_out" "$host_package" "${thin_files[@]}"

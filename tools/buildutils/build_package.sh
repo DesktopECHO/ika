@@ -75,8 +75,12 @@ readonly INPUT_PATH="${input_path}"
 readonly INPUT_PATH_ABS="$(realpath "${INPUT_PATH}")"
 
 readonly REPO_DIR="$(realpath "$(dirname "$0")/../..")"
+readonly IKA_WORK_ROOT="${IKA_WORK_ROOT:-${REPO_DIR}/ika-work}"
 readonly VERSION_FILE="${REPO_DIR}/packaging/VERSION"
 readonly VERSION="$(tr -d '\n' < "${VERSION_FILE}")"
+export IKA_WORK_ROOT
+export CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT="${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-${IKA_WORK_ROOT}}"
+export CUTTLEFISH_BAZEL_CACHE_ROOT="${CUTTLEFISH_BAZEL_CACHE_ROOT:-${IKA_WORK_ROOT}/cuttlefish-bazel}"
 declare -a build_workdirs=()
 
 function normalize_spec_name() {
@@ -156,7 +160,7 @@ function spec_supports_host_arch() {
 # like base/cvd/bazel-bin). Bump manifest-cache-version when this changes.
 function source_tree_exclude_paths() {
   printf '%s\n' \
-    .git .jj .cache .ccache out rpmbuild archbuild \
+    .git .jj .cache .ccache out ika-work rpmbuild archbuild \
     build-scrcpy-server android-sdk-cache \
     lineageos/src toolchain \
     base/cvd/.bazel_output_base base/cvd/bazel-out 'base/cvd/bazel-*' 'bazel-*'
@@ -271,7 +275,7 @@ function build_tree_manifest() {
     # Cache key embedded as the manifest's first line. Bump it whenever the
     # record format or the exclude set changes in a way that affects tarball
     # contents, to invalidate any tarball cached by an older run.
-    printf 'manifest-cache-version\t11\n'
+    printf 'manifest-cache-version\t12\n'
 
     cd "${REPO_DIR}"
     if [[ -n "${prune_name}" ]]; then
@@ -343,7 +347,7 @@ function refresh_source_tarball_if_needed() {
 
   local scrcpy_server_dest="${REPO_DIR}/scrcpy/scrcpy-server"
   local scrcpy_server_build_helper="${REPO_DIR}/tools/buildutils/build_scrcpy_server.sh"
-  local local_scrcpy_server="${HOME}/ika-build/build-scrcpy-server/scrcpy-server"
+  local local_scrcpy_server="${IKA_WORK_ROOT}/build-scrcpy-server/scrcpy-server"
 
   # The scrcpy viewer is folded into ika-base, which compiles it from a prebuilt
   # scrcpy-server APK bundled in the source tarball. Build/refresh the server
@@ -379,8 +383,8 @@ function refresh_source_tarball_if_needed() {
     fi
 
     echo "Building scrcpy-server locally for $(uname -m)"
-    if ! BUILD_DIR="${HOME}/ika-build/build-scrcpy-server" \
-        ANDROID_CACHE_DIR="${HOME}/ika-build/android-sdk-cache" \
+    if ! BUILD_DIR="${IKA_WORK_ROOT}/build-scrcpy-server" \
+        ANDROID_CACHE_DIR="${IKA_WORK_ROOT}/android-sdk-cache" \
         "${scrcpy_server_build_helper}"; then
       >&2 echo "Local scrcpy-server build failed."
       return 1

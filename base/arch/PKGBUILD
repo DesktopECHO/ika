@@ -35,9 +35,12 @@ build() {
 
   # Keep download/build caches persistent across makepkg runs so external
   # repositories are fetched once and then reused on slow connections.
-  # Default under $HOME/ika-build alongside the other ika build scratch.
-  local cache_root="${CUTTLEFISH_BAZEL_CACHE_ROOT:-$HOME/ika-build/cuttlefish-bazel}"
-  local output_user_root="${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$HOME/ika-build}"
+  # Default under the repository's ika-work directory.
+  local repo_root
+  repo_root="$(realpath ../..)"
+  local work_root="${IKA_WORK_ROOT:-${repo_root}/ika-work}"
+  local cache_root="${CUTTLEFISH_BAZEL_CACHE_ROOT:-${work_root}/cuttlefish-bazel}"
+  local output_user_root="${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-${work_root}}"
   local repository_cache="${cache_root}/repository"
   local disk_cache="${cache_root}/disk"
   local distdir="${cache_root}/distdir"

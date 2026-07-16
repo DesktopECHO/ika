@@ -9,11 +9,14 @@
 
 include /usr/share/dpkg/buildflags.mk
 
+ika_repo_root := $(abspath $(dir $(firstword $(MAKEFILE_LIST)))/../..)
+ika_work_root := $(if $(strip $(IKA_WORK_ROOT)),$(abspath $(IKA_WORK_ROOT)),$(ika_repo_root)/ika-work)
+
 # Retrieve bazel's view of the current compilation_mode
 compilation_mode :=
 default_compilation_mode := \
   $(shell cd cvd; \
-          bazel --output_user_root="$${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$$HOME/ika-build}" \
+          bazel --output_user_root="$${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$(ika_work_root)}" \
 	        build //:build_compilation_mode_txt >/dev/null 2>&1; \
 	  cat bazel-bin/build/compilation_mode.txt)
 $(if $(default_compilation_mode),,$(error Bazel install is broken))
@@ -91,8 +94,8 @@ override_dh_installinit:
 .PHONY: override_dh_auto_build
 override_dh_auto_build:
 	cd cvd && \
-	  BAZEL_OUTPUT_USER_ROOT="$${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$$HOME/ika-build}"; \
-	  BAZEL_CACHE_ROOT="$${CUTTLEFISH_BAZEL_CACHE_ROOT:-$$HOME/ika-build/cuttlefish-bazel}"; \
+	  BAZEL_OUTPUT_USER_ROOT="$${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$(ika_work_root)}"; \
+	  BAZEL_CACHE_ROOT="$${CUTTLEFISH_BAZEL_CACHE_ROOT:-$(ika_work_root)/cuttlefish-bazel}"; \
 	  BAZEL_REPOSITORY_CACHE="$$BAZEL_CACHE_ROOT/repository"; \
 	  BAZEL_DISTDIR="$$BAZEL_CACHE_ROOT/distdir"; \
 	  BAZEL_GIT_MIRROR_ROOT="$$BAZEL_CACHE_ROOT/git-mirrors"; \

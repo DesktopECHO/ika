@@ -12,7 +12,10 @@ readonly ANDROID_SYSTEM_EXTRAS_REMOTE="https://android.googlesource.com/platform
 readonly DEPOT_TOOLS_REMOTE_PRIMARY="https://chromium.googlesource.com/chromium/tools/depot_tools.git"
 readonly DEPOT_TOOLS_REMOTE_ALIAS="https://chromium.googlesource.com/chromium/tools/depot_tools"
 
-readonly DEFAULT_BAZEL_CACHE_ROOT="$HOME/ika-build/cuttlefish-bazel"
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+readonly WORK_ROOT="${IKA_WORK_ROOT:-${REPO_ROOT}/ika-work}"
+readonly DEFAULT_BAZEL_CACHE_ROOT="${WORK_ROOT}/cuttlefish-bazel"
 readonly MIRROR_ROOT="${CUTTLEFISH_BAZEL_GIT_MIRROR_ROOT:-${CUTTLEFISH_BAZEL_CACHE_ROOT:-$DEFAULT_BAZEL_CACHE_ROOT}/git-mirrors}"
 readonly GIT_CONFIG_PATH="${CUTTLEFISH_BAZEL_GIT_CONFIG:-${CUTTLEFISH_BAZEL_CACHE_ROOT:-$DEFAULT_BAZEL_CACHE_ROOT}/gitconfig}"
 readonly MAX_RETRIES="${CUTTLEFISH_BAZEL_GIT_MIRROR_RETRIES:-3}"

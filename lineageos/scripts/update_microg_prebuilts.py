@@ -26,6 +26,7 @@ GMSCORE_REPO = "microg/GmsCore"
 FDROID_MICROG_REPO = "https://microg.org/fdroid/repo"
 FDROID_MAIN_REPO = "https://f-droid.org/repo"
 USER_AGENT = "lineage-desktop-microg-updater/1.0"
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Transient network errors that should trigger a retry. F-Droid's index is
 # ~15 MiB and TLS reads occasionally truncate; GitHub returns 5xx under load.
@@ -76,6 +77,13 @@ class UpdateError(Exception):
 
 def log(message):
     print(f"[lineage-desktop] {message}")
+
+
+def default_work_root():
+    configured = os.environ.get("IKA_WORK_ROOT")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return REPO_ROOT / "ika-work"
 
 
 def read_json(url):
@@ -594,7 +602,8 @@ def parse_args():
         default=os.environ.get("MICROG_PREBUILT_CACHE_DIR", ""),
         help="Persistent directory for downloaded APKs; a version already present "
              "is reused instead of refetched. "
-             "Default: $MICROG_PREBUILT_CACHE_DIR or ~/ika-build/microg-prebuilts.",
+             "Default: $MICROG_PREBUILT_CACHE_DIR or "
+             "<repo>/ika-work/microg-prebuilts.",
     )
     return parser.parse_args()
 
@@ -602,7 +611,7 @@ def parse_args():
 def resolve_cache_dir(cache_dir_arg):
     if cache_dir_arg:
         return Path(cache_dir_arg).expanduser()
-    return Path.home() / "ika-build" / "microg-prebuilts"
+    return default_work_root() / "microg-prebuilts"
 
 
 def main():

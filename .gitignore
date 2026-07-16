@@ -20,6 +20,7 @@ cvd-phone-slim.tar
 /tools/__pycache__
 
 /out/
+/ika-work/
 buildtimes.log
 /.ccache
 /.claude

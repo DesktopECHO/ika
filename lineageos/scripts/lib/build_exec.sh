@@ -116,7 +116,7 @@ configure_arm64_ninja_runner() {
 configure_arm64_host_build() {
   host_is_arm64 || return 0
 
-  log "using ARM64 prebuilt download cache: ${arm64_prebuilt_cache_dir:-$HOME/ika-build/arm64-prebuilts}"
+  log "using ARM64 prebuilt download cache: ${arm64_prebuilt_cache_dir:-$ika_work_root/arm64-prebuilts}"
   ensure_arm64_go_prebuilt
   [[ -d "$workspace/prebuilts/build-tools/linux-arm64" ]] || \
     die "missing ARM64 build tools prebuilt: prebuilts/build-tools/linux-arm64"

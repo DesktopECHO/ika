@@ -23,6 +23,7 @@ UPSTREAM_BUILD_FILE = Path("build.gradle")
 SETTINGS_MANIFEST = Path("play-services-base/core/src/main/AndroidManifest.xml")
 SETTINGS_SIGNATURE_LEVEL = 'android:protectionLevel="signature"'
 SETTINGS_PRIVILEGED_LEVEL = 'android:protectionLevel="signature|privileged"'
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class BuildError(Exception):
@@ -101,13 +102,20 @@ def default_java_home(android_root):
     return android_root / "prebuilts" / "jdk" / "jdk21" / "linux-x86"
 
 
+def default_work_root():
+    configured = os.environ.get("IKA_WORK_ROOT")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return REPO_ROOT / "ika-work"
+
+
 def default_sdk_root():
     configured = os.environ.get("MICROG_ANDROID_SDK_ROOT")
     if not configured:
         configured = os.environ.get("ANDROID_SDK_ROOT") or os.environ.get("ANDROID_HOME")
     if configured:
         return Path(configured).expanduser().resolve()
-    return Path.home() / "ika-build" / "android-sdk"
+    return default_work_root() / "android-sdk"
 
 
 @contextmanager
@@ -369,7 +377,10 @@ def parse_args():
     parser.add_argument("android_root", nargs="?", default=".")
     parser.add_argument(
         "--source-dir",
-        default=os.environ.get("MICROG_GMSCORE_SOURCE_DIR", "~/ika-build/microg-main/GmsCore"),
+        default=os.environ.get(
+            "MICROG_GMSCORE_SOURCE_DIR",
+            str(default_work_root() / "microg-main" / "GmsCore"),
+        ),
     )
     parser.add_argument("--output-dir", required=True)
     return parser.parse_args()

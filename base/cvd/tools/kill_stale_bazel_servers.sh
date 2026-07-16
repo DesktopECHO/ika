@@ -3,7 +3,7 @@
 # Shut down stale Bazel servers before starting a build.
 #
 # Every ika package build runs Bazel with a shared
-# --output_user_root (default $HOME/ika-build) so the disk cache, repository
+# --output_user_root (default <repo>/ika-work) so the disk cache, repository
 # cache, distdir and git mirrors are reused across runs. When a server from an
 # earlier or concurrent build is still alive under that same root, two servers
 # end up racing on the shared caches and on the in-tree sources. That trips
@@ -18,7 +18,10 @@
 
 set -euo pipefail
 
-readonly OUTPUT_USER_ROOT="${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$HOME/ika-build}"
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+readonly WORK_ROOT="${IKA_WORK_ROOT:-${REPO_ROOT}/ika-work}"
+readonly OUTPUT_USER_ROOT="${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-${WORK_ROOT}}"
 
 if [[ "${CUTTLEFISH_SKIP_BAZEL_SERVER_CLEANUP:-}" == "1" ]]; then
   exit 0
