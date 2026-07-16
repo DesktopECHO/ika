@@ -1,0 +1,51 @@
+Force-destroy Vulkan objects which survive per-context cleanup.
+
+VirtioGpuFrontend normally destroys every context during renderer teardown, and
+the context cleanup callbacks in turn destroy guest Vulkan instances. Treat
+that as the fast path, but do not rely on it as the only path: a missed or
+partially initialized context otherwise leaves host VkDeviceMemory alive until
+the DRM file is closed.
+
+VkDecoderGlobalState already has the dependency-aware destruction path used by
+vkDestroyInstance. Run it for every still-tracked instance from Impl's
+destructor, while VkEmulation and its host Vulkan dispatch are still alive.
+
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -215,7 +215,7 @@ class VkDecoderGlobalState::Impl {
+         }
+     }
+ 
+-    ~Impl() = default;
++    ~Impl();
+ 
+     // Resets all internal tracking info.
+     // Assumes that the heavyweight cleanup operations have already happened.
+@@ -10975,6 +10975,27 @@ class VkDecoderGlobalState::Impl {
+     std::unordered_map<LinearImageCreateInfo, LinearImageProperties, LinearImageCreateInfo::Hash>
+         mLinearImageProperties GUARDED_BY(mMutex);
+ };
++
++VkDecoderGlobalState::Impl::~Impl() {
++    std::vector<VkInstance> instances;
++    {
++        std::lock_guard<std::mutex> lock(mMutex);
++        instances.reserve(mInstanceInfo.size());
++        for (const auto& [instance, _] : mInstanceInfo) {
++            instances.push_back(instance);
++        }
++    }
++
++    if (!instances.empty()) {
++        GFXSTREAM_WARNING(
++            "Forcing cleanup of %zu Vulkan instance(s) left at renderer teardown.",
++            instances.size());
++    }
++
++    for (VkInstance instance : instances) {
++        vkDestroyInstanceImpl(instance, nullptr);
++    }
++}
+ 
+ VkDecoderGlobalState::VkDecoderGlobalState(VkEmulation* emulation)
+     : mImpl(new VkDecoderGlobalState::Impl(emulation)) {}

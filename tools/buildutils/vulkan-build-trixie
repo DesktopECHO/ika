@@ -2,9 +2,9 @@
 
 # Build updated libvulkan packages from a Debian Salsa packaging commit.
 #
-# This script is intended for native builds on Debian hosts. It builds for the
-# current host architecture only and installs the Vulkan loader packages needed
-# by ika without enabling Debian testing/backports repositories.
+# This script is intended for native builds on Debian trixie hosts only. It
+# builds for the current host architecture and installs the Vulkan loader
+# packages needed by ika without enabling Debian testing/backports repositories.
 
 set -o errexit -o nounset -o pipefail
 
@@ -43,7 +43,7 @@ Examples:
   ./tools/buildutils/vulkan-build-trixie --workdir ~/build/libvulkan
 
 Notes:
-  - Designed for Debian hosts with repositories that satisfy the source build dependencies.
+  - Designed for Debian trixie hosts only.
   - Builds for the current host architecture only (amd64 or arm64).
   - Output .deb files are written to: <workdir>/build/
 EOF
@@ -153,6 +153,18 @@ require_debian() {
   . /etc/os-release
   if [[ "${ID:-}" != "debian" ]]; then
     echo "This script expects Debian. Detected ID=${ID:-unknown}." >&2
+    exit 1
+  fi
+}
+
+require_trixie() {
+  local codename
+
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  codename="${VERSION_CODENAME:-}"
+  if [[ "${codename}" != "trixie" ]]; then
+    echo "This script expects Debian trixie. Detected VERSION_CODENAME=${codename:-unknown}." >&2
     exit 1
   fi
 }
@@ -348,6 +360,7 @@ stage_built_packages() {
 main() {
   parse_args "$@"
   require_debian
+  require_trixie
   detect_host_arch
   init_root_cmd
   require_tools

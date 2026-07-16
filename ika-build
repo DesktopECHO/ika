@@ -119,7 +119,7 @@ print_manual_install() {
   cat <<EOF
 
 ============================================================================
-To install, run this from ${repo_dir}:
+  INSTALLATION (Run this from ${repo_dir})
 ============================================================================
 
   ${cmd}

@@ -18,13 +18,12 @@ readonly SKIP_BUILD_DEPENDENCIES="${SKIP_BUILD_DEPENDENCIES:-${SKIP_RPM_BUILD_DE
 readonly REPO_TOOL_URL="${REPO_TOOL_URL:-https://storage.googleapis.com/git-repo-downloads/repo}"
 readonly REPO_INSTALL_PATH="${REPO_INSTALL_PATH:-${HOME}/.local/bin/repo}"
 readonly BAZEL_INSTALL_PATH="${BAZEL_INSTALL_PATH:-${HOME}/.local/bin/bazel}"
-readonly DEBIAN_MESA_SOURCE_PACKAGE="${DEBIAN_MESA_SOURCE_PACKAGE:-mesa}"
 readonly DEBIAN_MESA_BACKPORTS_SUITE="${DEBIAN_MESA_BACKPORTS_SUITE:-trixie-backports}"
 readonly DEBIAN_MESA_MIN_VERSION="${DEBIAN_MESA_MIN_VERSION:-${TRIXIE_MESA_BACKPORT_MIN_VERSION:-26.1}}"
-readonly DEBIAN_MESA_PACKAGE_REVISION="${DEBIAN_MESA_PACKAGE_REVISION:-80}"
 readonly DEBIAN_VULKAN_LOADER_COMMIT="${DEBIAN_VULKAN_LOADER_COMMIT:-${TRIXIE_VULKAN_LOADER_COMMIT:-e3a3df62e0b7e9b12dacb626a8d554a47ad9ed2d}}"
 readonly DEBIAN_VULKAN_LOADER_MIN_VERSION="${DEBIAN_VULKAN_LOADER_MIN_VERSION:-${TRIXIE_VULKAN_LOADER_MIN_VERSION:-1.4.341}}"
-readonly DEBIAN_ENABLE_BACKPORTS="${DEBIAN_ENABLE_BACKPORTS:-ask}"
+readonly UBUNTU_KISAK_MESA_PPA="${UBUNTU_KISAK_MESA_PPA:-ppa:kisak/kisak-mesa}"
+readonly UBUNTU_ENABLE_KISAK_MESA="${UBUNTU_ENABLE_KISAK_MESA:-ask}"
 LINEAGEOS_PRIVILEGED_HELPERS_LOADED=0
 
 function rpm_build_dependency_packages() {
@@ -201,8 +200,26 @@ function debian_codename() {
   . /etc/os-release 2>/dev/null && printf '%s' "${VERSION_CODENAME:-}"
 }
 
+function debian_distribution_kind() {
+  local ID="" ID_LIKE="" UBUNTU_CODENAME="" distro_words
+
+  if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+  fi
+
+  distro_words=" ${ID:-} ${ID_LIKE:-} "
+  if [[ -n "${UBUNTU_CODENAME:-}" || "${distro_words}" == *" ubuntu "* ]]; then
+    printf 'ubuntu'
+  elif [[ "${distro_words}" == *" debian "* ]]; then
+    printf 'debian'
+  else
+    printf 'unknown'
+  fi
+}
+
 function debian_is_trixie() {
-  [[ "$(debian_codename)" == "trixie" ]]
+  [[ "$(debian_distribution_kind)" == "debian" && "$(debian_codename)" == "trixie" ]]
 }
 
 function rpm_package_installed() {
@@ -245,17 +262,27 @@ function missing_deb_build_dependencies() {
     fi
   fi
 
-  if debian_is_trixie && ! debian_mesa_stack_at_min_version; then
-    printf 'mesa>=%s-revision-%s-from-backports-source\n' \
-      "${DEBIAN_MESA_MIN_VERSION}" \
-      "${DEBIAN_MESA_PACKAGE_REVISION}"
+  if ! debian_mesa_stack_at_min_version; then
+    case "$(debian_distribution_kind)" in
+      ubuntu)
+        printf 'mesa>=%s-from-kisak-mesa-ppa\n' "${DEBIAN_MESA_MIN_VERSION}"
+        ;;
+      debian)
+        printf 'mesa>=%s-from-%s\n' "${DEBIAN_MESA_MIN_VERSION}" "${DEBIAN_MESA_BACKPORTS_SUITE}"
+        ;;
+      *)
+        printf 'mesa>=%s-from-a-supported-binary-repository\n' "${DEBIAN_MESA_MIN_VERSION}"
+        ;;
+    esac
   fi
 
-  version="$(dpkg-query -W -f='${Version}' libvulkan-dev 2>/dev/null || true)"
-  if [[ -z "${version}" ]] || ! dpkg --compare-versions "${version}" ge "${DEBIAN_VULKAN_LOADER_MIN_VERSION}"; then
-    printf 'libvulkan-dev>=%s-from-salsa-%s\n' \
-      "${DEBIAN_VULKAN_LOADER_MIN_VERSION}" \
-      "${DEBIAN_VULKAN_LOADER_COMMIT:0:12}"
+  if debian_is_trixie; then
+    version="$(dpkg-query -W -f='${Version}' libvulkan-dev 2>/dev/null || true)"
+    if [[ -z "${version}" ]] || ! dpkg --compare-versions "${version}" ge "${DEBIAN_VULKAN_LOADER_MIN_VERSION}"; then
+      printf 'libvulkan-dev>=%s-from-salsa-%s\n' \
+        "${DEBIAN_VULKAN_LOADER_MIN_VERSION}" \
+        "${DEBIAN_VULKAN_LOADER_COMMIT:0:12}"
+    fi
   fi
 }
 
@@ -332,23 +359,7 @@ function debian_backports_binary_repository_present() {
     [[ -f "${file}" ]] || continue
     if grep -Eq "^[[:space:]]*deb[[:space:]].*[[:space:]]${suite}([[:space:]]|$)" "${file}" ||
        { grep -Eq "^[[:space:]]*Types:[[:space:]]+([^#]*[[:space:]])?deb([[:space:]]|$)" "${file}" &&
-         grep -Eq "^[[:space:]]*Suites:[[:space:]].*(^|[[:space:]])${suite}([[:space:]]|$)" "${file}"; }; then
-      return 0
-    fi
-  done
-
-  return 1
-}
-
-function debian_backports_source_repository_present() {
-  local suite="$1"
-  local file
-
-  for file in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
-    [[ -f "${file}" ]] || continue
-    if grep -Eq "^[[:space:]]*deb-src[[:space:]].*[[:space:]]${suite}([[:space:]]|$)" "${file}" ||
-       { grep -Eq "^[[:space:]]*Types:[[:space:]]+([^#]*[[:space:]])?deb-src([[:space:]]|$)" "${file}" &&
-         grep -Eq "^[[:space:]]*Suites:[[:space:]].*(^|[[:space:]])${suite}([[:space:]]|$)" "${file}"; }; then
+         grep -Eq "^[[:space:]]*Suites:[[:space:]]+([^#]*[[:space:]])?${suite}([[:space:]]|$)" "${file}"; }; then
       return 0
     fi
   done
@@ -358,121 +369,209 @@ function debian_backports_source_repository_present() {
 
 function ensure_debian_backports_repository() {
   local suite="$1"
-  local list_file="/etc/apt/sources.list.d/${suite}.list"
-  local -a lines=()
-  local reply
+  local sources_file="/etc/apt/sources.list.d/ika-${suite}.sources"
 
-  debian_backports_binary_repository_present "${suite}" || \
-    lines+=("deb http://deb.debian.org/debian ${suite} main contrib non-free non-free-firmware")
-  debian_backports_source_repository_present "${suite}" || \
-    lines+=("deb-src http://deb.debian.org/debian ${suite} main contrib non-free non-free-firmware")
-
-  if [[ "${#lines[@]}" -eq 0 ]]; then
+  if debian_backports_binary_repository_present "${suite}"; then
     return 0
   fi
 
-  case "${DEBIAN_ENABLE_BACKPORTS}" in
-    1|true|yes|always)
-      reply="y"
-      ;;
-    0|false|no|never)
-      echo "Skipping ${suite}; DEBIAN_ENABLE_BACKPORTS=${DEBIAN_ENABLE_BACKPORTS}."
-      return 1
-      ;;
-    ask)
-      if [[ ! -t 0 ]]; then
-        echo "Skipping ${suite}; no interactive terminal is available to ask about adding it."
-        return 1
-      fi
-
-      echo "Debian ${suite} source is needed to build Mesa ${DEBIAN_MESA_MIN_VERSION}+."
-      printf "Add missing ${suite} binary/source repository entries? [Y/n] "
-      read -r reply
-      ;;
-    *)
-      >&2 echo "Unknown DEBIAN_ENABLE_BACKPORTS=${DEBIAN_ENABLE_BACKPORTS}; expected ask, true, or false."
-      return 1
-      ;;
-  esac
-
-  case "${reply}" in
-    [nN]*)
-      echo "Skipping ${suite}; cannot build Mesa from the backports source repository."
-      return 1
-      ;;
-  esac
-
-  printf '%s\n' "${lines[@]}" | run_as_root tee "${list_file}" >/dev/null
+  echo "Adding Debian ${suite} binary repository for Mesa ${DEBIAN_MESA_MIN_VERSION}+..."
+  printf '%s\n' \
+    'Types: deb' \
+    'URIs: http://deb.debian.org/debian' \
+    "Suites: ${suite}" \
+    'Components: main' \
+    'Enabled: yes' \
+    'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' | \
+    run_as_root tee "${sources_file}" >/dev/null
   if ! run_as_root env DEBIAN_FRONTEND=noninteractive apt-get update -qq; then
-    echo "Unable to use ${suite}; removing ${list_file}."
-    run_as_root rm -f "${list_file}"
+    echo "Unable to use ${suite}; removing ${sources_file}."
+    run_as_root rm -f "${sources_file}"
     run_as_root env DEBIAN_FRONTEND=noninteractive apt-get update -qq || true
     return 1
   fi
 }
 
-function ensure_debian_backports_for_mesa_source_build() {
+function ensure_debian_backports_for_mesa() {
   local codename
 
   codename="$(debian_codename)"
-  if [[ "${codename}" != "trixie" ]]; then
-    >&2 echo "Mesa backports source build is only supported on Debian trixie. Detected VERSION_CODENAME=${codename:-unknown}."
+  if ! debian_is_trixie; then
+    >&2 echo "Mesa installation from ${DEBIAN_MESA_BACKPORTS_SUITE} is only supported on Debian trixie. Detected VERSION_CODENAME=${codename:-unknown}."
     return 1
   fi
 
   ensure_debian_backports_repository "${DEBIAN_MESA_BACKPORTS_SUITE}"
 }
 
-function debian_mesa_stack_at_min_version() {
-  local pkg version debian_revision
+function ubuntu_kisak_mesa_repository_present() {
+  local file
+
+  for file in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+    [[ -f "${file}" ]] || continue
+    if grep -Eiq '^[[:space:]]*[^#].*(ppa\.launchpadcontent\.net/kisak/kisak-mesa/ubuntu|ppa:kisak/kisak-mesa)' "${file}"; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+function ensure_ubuntu_kisak_mesa_repository() {
+  local reply
+
+  if ubuntu_kisak_mesa_repository_present; then
+    return 0
+  fi
+
+  case "${UBUNTU_ENABLE_KISAK_MESA}" in
+    1|true|yes|always)
+      reply="y"
+      ;;
+    0|false|no|never)
+      echo "Skipping ${UBUNTU_KISAK_MESA_PPA}; UBUNTU_ENABLE_KISAK_MESA=${UBUNTU_ENABLE_KISAK_MESA}."
+      return 1
+      ;;
+    ask)
+      if [[ ! -t 0 ]]; then
+        echo "Skipping ${UBUNTU_KISAK_MESA_PPA}; no interactive terminal is available to ask about adding it."
+        return 1
+      fi
+
+      echo "Ubuntu requires Mesa ${DEBIAN_MESA_MIN_VERSION}+ from the Kisak Mesa PPA for Ika."
+      printf "Add %s? [Y/n] " "${UBUNTU_KISAK_MESA_PPA}"
+      read -r reply
+      ;;
+    *)
+      >&2 echo "Unknown UBUNTU_ENABLE_KISAK_MESA=${UBUNTU_ENABLE_KISAK_MESA}; expected ask, true, or false."
+      return 1
+      ;;
+  esac
+
+  case "${reply}" in
+    [nN]*)
+      echo "Skipping ${UBUNTU_KISAK_MESA_PPA}; cannot install Mesa ${DEBIAN_MESA_MIN_VERSION}+ from Kisak."
+      return 1
+      ;;
+  esac
+
+  if ! command -v add-apt-repository >/dev/null 2>&1; then
+    run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends software-properties-common
+  fi
+
+  if ! run_as_root add-apt-repository -y "${UBUNTU_KISAK_MESA_PPA}"; then
+    >&2 echo "Unable to add ${UBUNTU_KISAK_MESA_PPA}."
+    return 1
+  fi
+  run_as_root env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+}
+
+function deb_mesa_candidate_version() {
+  local pkg="$1"
+  local target_release="${2:-}"
+
+  if [[ -n "${target_release}" ]]; then
+    apt-cache show "${pkg}/${target_release}" 2>/dev/null | \
+      awk '$1 == "Version:" { print $2; exit }'
+  else
+    apt-cache policy "${pkg}" 2>/dev/null | \
+      awk '$1 == "Candidate:" { print $2; exit }'
+  fi
+}
+
+function deb_mesa_candidates_at_min_version() {
+  local target_release="${1:-}"
+  local source_name="$2"
+  local pkg version
 
   while read -r pkg; do
-    [[ -n "$pkg" ]] || continue
-    version="$(dpkg-query -W -f='${Version}' "$pkg" 2>/dev/null || true)"
-    deb_package_version_at_least "$pkg" "${DEBIAN_MESA_MIN_VERSION}" || return 1
-
-    # Stock Debian revisions such as -1 or -2 must not satisfy this check.
-    # Ika uses revision 80 so apt keeps this build in preference to the stock
-    # package for the same Mesa upstream release.
-    [[ "${version}" == *-* ]] || return 1
-    debian_revision="${version##*-}"
-    dpkg --compare-versions "${debian_revision}" ge "${DEBIAN_MESA_PACKAGE_REVISION}" || return 1
+    [[ -n "${pkg}" ]] || continue
+    version="$(deb_mesa_candidate_version "${pkg}" "${target_release}")"
+    if [[ -z "${version}" || "${version}" == "(none)" ]] ||
+       ! dpkg --compare-versions "${version}" ge "${DEBIAN_MESA_MIN_VERSION}"; then
+      >&2 printf '%s offers %s candidate %s; Ika requires Mesa %s or newer.\n' \
+        "${source_name}" "${pkg}" "${version:-none}" "${DEBIAN_MESA_MIN_VERSION}"
+      return 1
+    fi
   done < <(deb_mesa_version_packages)
 
   return 0
 }
 
-function install_debian_mesa() {
-  local buildutils_dir builder
+function debian_mesa_stack_at_min_version() {
+  local pkg
 
+  while read -r pkg; do
+    [[ -n "${pkg}" ]] || continue
+    deb_package_version_at_least "${pkg}" "${DEBIAN_MESA_MIN_VERSION}" || return 1
+  done < <(deb_mesa_version_packages)
+
+  return 0
+}
+
+function install_debian_mesa_from_backports() {
+  local pkg
+  local -a packages=()
+
+  if ! ensure_debian_backports_for_mesa; then
+    >&2 echo "Mesa ${DEBIAN_MESA_MIN_VERSION}+ must be installed from ${DEBIAN_MESA_BACKPORTS_SUITE}; source builds are not supported."
+    return 1
+  fi
+
+  if ! deb_mesa_candidates_at_min_version "${DEBIAN_MESA_BACKPORTS_SUITE}" "Debian ${DEBIAN_MESA_BACKPORTS_SUITE}"; then
+    >&2 echo "Wait for Debian backports to publish Mesa ${DEBIAN_MESA_MIN_VERSION}+; Ika will not build Mesa from source."
+    return 1
+  fi
+
+  while read -r pkg; do
+    [[ -n "${pkg}" ]] || continue
+    packages+=("${pkg}/${DEBIAN_MESA_BACKPORTS_SUITE}")
+  done < <(deb_mesa_version_packages)
+  echo "Installing Mesa ${DEBIAN_MESA_MIN_VERSION}+ from ${DEBIAN_MESA_BACKPORTS_SUITE}..."
+  run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
+}
+
+function install_ubuntu_mesa_from_kisak() {
+  local -a packages=()
+
+  if ! ensure_ubuntu_kisak_mesa_repository; then
+    >&2 echo "Mesa ${DEBIAN_MESA_MIN_VERSION}+ must be installed from ${UBUNTU_KISAK_MESA_PPA}; source builds are not supported."
+    return 1
+  fi
+
+  if ! deb_mesa_candidates_at_min_version "" "Kisak Mesa PPA"; then
+    >&2 echo "Wait for Kisak to publish Mesa ${DEBIAN_MESA_MIN_VERSION}+ for this Ubuntu release and architecture; Ika will not build Mesa from source."
+    return 1
+  fi
+
+  mapfile -t packages < <(deb_mesa_version_packages)
+  echo "Installing Mesa ${DEBIAN_MESA_MIN_VERSION}+ from ${UBUNTU_KISAK_MESA_PPA}..."
+  run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
+}
+
+function install_debian_mesa() {
   if debian_mesa_stack_at_min_version; then
-    echo "Mesa stack is already ${DEBIAN_MESA_MIN_VERSION} revision ${DEBIAN_MESA_PACKAGE_REVISION} or newer; skipping Mesa build."
+    echo "Mesa stack is already ${DEBIAN_MESA_MIN_VERSION} or newer; skipping Mesa installation."
     return 0
   fi
 
-  if ! ensure_debian_backports_for_mesa_source_build; then
-    >&2 echo "Mesa ${DEBIAN_MESA_MIN_VERSION}+ revision ${DEBIAN_MESA_PACKAGE_REVISION} must be built from the Debian backports source repository."
+  case "$(debian_distribution_kind)" in
+    debian)
+      install_debian_mesa_from_backports || exit 1
+      ;;
+    ubuntu)
+      install_ubuntu_mesa_from_kisak || exit 1
+      ;;
+    *)
+      >&2 echo "Unsupported Debian-family distribution; install Mesa ${DEBIAN_MESA_MIN_VERSION}+ from a binary repository."
+      exit 1
+      ;;
+  esac
+
+  if ! debian_mesa_stack_at_min_version; then
+    >&2 echo "Mesa installation completed, but one or more required packages are still older than ${DEBIAN_MESA_MIN_VERSION}."
     exit 1
   fi
-
-  buildutils_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-  builder="${buildutils_dir}/mesa-build-trixie"
-
-  [[ -x "${builder}" ]] || {
-    >&2 echo "Missing executable Mesa backports source build helper: ${builder}"
-    exit 1
-  }
-
-  echo "Build Mesa ${DEBIAN_MESA_MIN_VERSION} revision ${DEBIAN_MESA_PACKAGE_REVISION} from Debian backports source..."
-  "${builder}" \
-    --yes \
-    --install \
-    --no-stage \
-    --source-suite "${DEBIAN_MESA_BACKPORTS_SUITE}" \
-    --source-package "${DEBIAN_MESA_SOURCE_PACKAGE}" \
-    --min-version "${DEBIAN_MESA_MIN_VERSION}" \
-    --package-revision "${DEBIAN_MESA_PACKAGE_REVISION}" \
-    --vulkan-min-version "${DEBIAN_VULKAN_LOADER_MIN_VERSION}"
 }
 
 function install_deb_build_dependencies() {
@@ -483,8 +582,8 @@ function install_deb_build_dependencies() {
 
   # All static build dependencies for every ika deb plus the ROM host tools, in
   # a single apt-get transaction: one sudo call, one dependency resolution.
-  # (The conditional libgcc-<ver>-dev and Mesa/Vulkan source-package builds
-  # below can't join it — they depend on runtime detection.)
+  # (The conditional libgcc-<ver>-dev, Mesa repository installation, and
+  # Vulkan loader build below can't join it — they depend on runtime detection.)
   mapfile -t packages < <(deb_build_dependency_packages)
   run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
 
@@ -499,16 +598,17 @@ function install_deb_build_dependencies() {
     fi
   fi
 
-  # Build Vulkan loader from the pinned Debian Salsa packaging commit whenever
-  # libvulkan-dev is older than required, then build Mesa from trixie-backports
-  # source if the installed stack is still older than required. Mesa binaries are
-  # not installed from backports here.
+  # Debian trixie alone needs the Vulkan loader built from the pinned Debian
+  # Salsa packaging commit when libvulkan-dev is older than required. Install
+  # Mesa binaries only when the installed stack is older than required:
+  # trixie-backports on Debian, or the Kisak Mesa PPA on Ubuntu. Mesa is never
+  # built from source.
   # Debian trixie has vulkan_raii.hpp v1.4.309 which is ABI-incompatible with the
   # v1.4.341 headers the Bazel build fetches from KhronosGroup/Vulkan-Headers.
-  install_debian_salsa_vulkan_loader
   if debian_is_trixie; then
-    install_debian_mesa
+    install_debian_salsa_vulkan_loader
   fi
+  install_debian_mesa
 }
 
 function install_arch_build_dependencies() {

@@ -10,11 +10,24 @@ Ika consists of two components:  The Android OS disk image (the device ROM, info
 
 Prebuilt packages for Fedora Linux (.rpm) and Debian/Ubuntu (.deb) are linked below from the [latest release](https://github.com/DesktopECHO/ika/releases/latest) (`260629`). Pick the row for your package and the column for your distro and CPU architecture.
 
-The Mesa packages supplied by Debian 13 and Ubuntu 26.04 are too old for Ika; install the supported Mesa stack from a suitable backport or PPA archive.
+Ika requires Mesa 26.1 or newer on Debian-family hosts. `ika-build` installs
+Mesa only from binary package repositories; it never builds Mesa locally from
+source.
 
-On Debian 13 (trixie), enable `trixie-backports` and install the Mesa stack from backports using the [Debian Backports instructions](https://backports.debian.org/Instructions/).
+On Debian 13 (trixie), `ika-build` automatically enables `trixie-backports`
+when Mesa 26.1+ is not already installed, then installs the required Mesa
+packages with explicit `package/trixie-backports` selectors, following the
+[Debian Backports instructions](https://backports.debian.org/Instructions/).
 
-On Ubuntu-family hosts, use the [Kisak Mesa PPA instructions](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa).
+On Ubuntu-family hosts, `ika-build` offers to enable `ppa:kisak/kisak-mesa`
+with `add-apt-repository`, then installs the Mesa packages from Kisak. Set
+`UBUNTU_ENABLE_KISAK_MESA=true` for an unattended build. See the
+[Kisak Mesa PPA instructions](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa).
+
+Debian trixie also needs Vulkan loader 1.4.341. On trixie only, `ika-build`
+builds that loader from the pinned Debian Salsa packaging source when the
+installed `libvulkan-dev` is older. This source-build exception does not apply
+to Mesa or to Ubuntu.
 
 | Package | Fedora x86_64 | Fedora ARM64 | Debian x86_64 | Debian ARM64 |
 | --- | --- | --- | --- | --- |

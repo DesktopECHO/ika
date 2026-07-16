@@ -13,5 +13,8 @@ git_repository(
         "@//build_external/gfxstream:PATCH.gfxstream.linux_udmabuf_creator.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.memfd_udmabuf_seals.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.opengles-3.2.patch",
+        # Last-resort cleanup for Vulkan instances which survive normal
+        # per-context teardown, before the renderer closes its DRM file.
+        "@//build_external/gfxstream:PATCH.gfxstream.force-vulkan-cleanup-on-teardown.patch",
     ],
 )

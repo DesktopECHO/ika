@@ -170,6 +170,9 @@ crosvm_bin.annotation(
         # initializes (x86-64 and any host with a minigbm driver), start and
         # select Vulkano only when it doesn't (Apple Silicon / Asahi).
         "@//build_external/crosvm:PATCH.rutabaga_gfx-gralloc-vulkano-fallback.patch",
+        # Drain renderer resources and contexts while the component is alive,
+        # so clean VMM shutdown reaches gfxstream's normal unbind paths.
+        "@//build_external/crosvm:PATCH.rutabaga_gfx-cleanup-on-drop.patch",
     ],
 )
 

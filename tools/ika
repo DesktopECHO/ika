@@ -320,6 +320,7 @@ CVD_INSTANCE_DIR="${CVD_HOME_DIR}/cuttlefish/instances/cvd-1"
 CVD_LAUNCHER_LOG="${CVD_INSTANCE_DIR}/logs/launcher.log"
 CVD_CONFIG_PATH="${CVD_INSTANCE_DIR}/cuttlefish_config.json"
 CHROMIUM_INSTALL_STAMP="${CVD_HOME_DIR}/chromium-installed-cvd-1"
+UDMABUF_BASELINE_FILE="${CVD_HOME_DIR}/udmabuf-baseline"
 SCRCPY_BIN="${PACKAGED_SCRCPY_BIN}"
 SCRCPY_SERVER_PATH_OVERRIDE=""
 if [[ -f "${PACKAGED_SCRCPY_SERVER}" ]]; then
@@ -339,6 +340,7 @@ GFXSTREAM_APPLE_16K_VULKAN_RENDERER_FEATURES="ExternalBlob:enabled;SystemBlob:di
 CVD_GRAPHICS_DRIVER_MESSAGE=""
 CVD_DATA_STORAGE_MESSAGE=""
 CVD_NEWLY_PROVISIONED="false"
+: "${IKA_STOP_GRACE_SEC:=30}"
 
 CVD_PROCESS_REGEX='(^|/)(cvd_internal_start|launch_cvd|run_cvd|crosvm|process_restarter|ika_stream|socket_vsock_proxy|wmediumd)([[:space:]]|$)'
 
@@ -619,6 +621,8 @@ Environment Variables:
   IKA_SCRCPY             Extra whitespace-separated args appended to scrcpy.
                          Equivalent command-line option: --ika_scrcpy=ARGS
                          (example: --keyboard=uhid --no-clipboard-autosync)
+  IKA_STOP_GRACE_SEC     Seconds to allow Cuttlefish and gfxstream to clean up
+                         before forcing surviving processes to exit (default: 30).
 
   NOTE: All other parameters will be passed directly to Cuttlefish.
 
@@ -1609,6 +1613,9 @@ stop_dnsmasq() {
 
 cleanup_user_processes() {
   local -a pids=()
+  local -a survivors=()
+  local any_survivor
+  local deadline
   local pid
 
   while read -r pid; do
@@ -1624,8 +1631,139 @@ cleanup_user_processes() {
   mapfile -t pids < <(printf '%s\n' "${pids[@]}" | sort -u)
   log "stopping leftover Cuttlefish processes: ${pids[*]}"
   kill "${pids[@]}" 2>/dev/null || true
-  sleep 1
-  kill -9 "${pids[@]}" 2>/dev/null || true
+
+  # SECONDS has one-second resolution. Add one tick so the configured grace
+  # period is never shortened by entering this loop partway through a tick.
+  deadline=$((SECONDS + IKA_STOP_GRACE_SEC + 1))
+  while (( SECONDS < deadline )); do
+    survivors=()
+    for pid in "${pids[@]}"; do
+      if cvd_pid_is_alive "${pid}"; then
+        survivors+=("${pid}")
+      fi
+    done
+    if [[ "${#survivors[@]}" -eq 0 ]]; then
+      return 0
+    fi
+    sleep 0.2
+  done
+
+  survivors=()
+  for pid in "${pids[@]}"; do
+    if cvd_pid_is_alive "${pid}"; then
+      survivors+=("${pid}")
+    fi
+  done
+  if [[ "${#survivors[@]}" -gt 0 ]]; then
+    log "Cuttlefish processes did not exit within ${IKA_STOP_GRACE_SEC}s; forcing termination: ${survivors[*]}"
+    kill -9 "${survivors[@]}" 2>/dev/null || true
+
+    deadline=$((SECONDS + 6))
+    while (( SECONDS < deadline )); do
+      any_survivor="false"
+      for pid in "${survivors[@]}"; do
+        if cvd_pid_is_alive "${pid}"; then
+          any_survivor="true"
+          break
+        fi
+      done
+      [[ "${any_survivor}" == "true" ]] || return 0
+      sleep 0.2
+    done
+  fi
+}
+
+cvd_pid_is_alive() {
+  local pid="$1"
+  local command_line
+  local state
+
+  [[ -r "/proc/${pid}/stat" ]] || return 1
+  state="$(awk '{ print $3 }' "/proc/${pid}/stat" 2>/dev/null || true)"
+  [[ -n "${state}" && "${state}" != "Z" ]] || return 1
+
+  command_line="$(tr '\0' ' ' <"/proc/${pid}/cmdline" 2>/dev/null || true)"
+  [[ "${command_line}" =~ ${CVD_PROCESS_REGEX} ]]
+}
+
+normalize_stop_grace_seconds() {
+  if [[ ! "${IKA_STOP_GRACE_SEC}" =~ ^[1-9][0-9]*$ ]]; then
+    die "IKA_STOP_GRACE_SEC must be a positive whole number of seconds"
+  fi
+}
+
+read_udmabuf_snapshot() {
+  local bufinfo="/sys/kernel/debug/dma_buf/bufinfo"
+  local contents
+
+  # Some Asahi kernels can retain imported udmabufs after an unclean renderer
+  # exit. Keep this probe advisory: failure to read debugfs must never prevent
+  # the VM from starting or stopping.
+  if [[ -r "${bufinfo}" ]]; then
+    contents="$(<"${bufinfo}")"
+  elif command -v sudo >/dev/null 2>&1; then
+    contents="$(sudo -n cat "${bufinfo}" 2>/dev/null)" || return 1
+  else
+    return 1
+  fi
+
+  awk '$5 == "udmabuf" && $1 ~ /^[0-9]+$/ { count++; bytes += $1 }
+       END { printf "%d %.0f\n", count, bytes }' <<<"${contents}"
+}
+
+record_udmabuf_baseline() {
+  local snapshot
+
+  snapshot="$(read_udmabuf_snapshot || true)"
+  [[ "${snapshot}" =~ ^[0-9]+\ [0-9]+$ ]] || return 0
+
+  printf '%s\n' "${snapshot}" >"${UDMABUF_BASELINE_FILE}"
+  log "Asahi udmabuf baseline: $(format_udmabuf_snapshot "${snapshot}")"
+}
+
+format_udmabuf_bytes() {
+  local bytes="$1"
+
+  if command -v numfmt >/dev/null 2>&1; then
+    numfmt --to=iec-i --suffix=B "${bytes}" 2>/dev/null || printf '%s bytes\n' "${bytes}"
+  else
+    printf '%s bytes\n' "${bytes}"
+  fi
+}
+
+format_udmabuf_snapshot() {
+  local snapshot="$1"
+  local count bytes
+
+  read -r count bytes <<<"${snapshot}"
+  printf '%s object(s), %s' "${count}" "$(format_udmabuf_bytes "${bytes}")"
+}
+
+report_udmabuf_leaks() {
+  local baseline
+  local current
+  local baseline_count baseline_bytes
+  local current_count current_bytes
+  local leaked_count leaked_bytes
+
+  [[ -r "${UDMABUF_BASELINE_FILE}" ]] || return 0
+  baseline="$(<"${UDMABUF_BASELINE_FILE}")"
+  current="$(read_udmabuf_snapshot || true)"
+  [[ "${baseline}" =~ ^[0-9]+\ [0-9]+$ ]] || return 0
+  [[ "${current}" =~ ^[0-9]+\ [0-9]+$ ]] || return 0
+
+  read -r baseline_count baseline_bytes <<<"${baseline}"
+  read -r current_count current_bytes <<<"${current}"
+  leaked_count=$((current_count - baseline_count))
+  leaked_bytes=$((current_bytes - baseline_bytes))
+
+  if (( leaked_count > 0 || leaked_bytes > 0 )); then
+    (( leaked_count > 0 )) || leaked_count=0
+    (( leaked_bytes > 0 )) || leaked_bytes=0
+    log "WARNING: Asahi retained ${leaked_count} udmabuf object(s) ($(format_udmabuf_bytes "${leaked_bytes}")) after Cuttlefish stopped. A graphics-session reset or reboot may still be required to reclaim kernel-pinned memory."
+  else
+    log "Asahi udmabuf usage returned to baseline: $(format_udmabuf_snapshot "${current}")"
+  fi
 }
 
 within_deadline() {
@@ -1654,29 +1792,10 @@ adb_boot_completed() {
   fi
   [[ -n "${adb_bin}" ]] || return 1
 
-  # timeout guards against the dead-guest host proxy accepting the
-  # connection and never answering (same hazard as in
-  # sync_android_filesystems), which would stall wait_for_boot's poll loop.
+  # timeout guards against the dead-guest host proxy accepting the connection
+  # and never answering, which would stall wait_for_boot's poll loop.
   boot_completed="$(timeout 5 "${adb_bin}" -s "${adb_serial}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
   [[ "${boot_completed}" == "1" ]]
-}
-
-sync_android_filesystems() {
-  local adb_serial="$1"
-
-  [[ -x "${CVD_ADB_BIN}" ]] || return 0
-
-  # The adb TCP endpoint is a host-side proxy that keeps accepting
-  # connections after the guest dies, so an unguarded `adb shell` can block
-  # stop/restart forever. Probe the guest first and cap the sync itself.
-  if ! timeout 5 "${CVD_ADB_BIN}" -s "${adb_serial}" shell true >/dev/null 2>&1; then
-    log "Guest is not responding over adb; skipping filesystem sync."
-    return 0
-  fi
-
-  if ! timeout 30 "${CVD_ADB_BIN}" -s "${adb_serial}" shell sync >/dev/null 2>&1; then
-    log "Android filesystem sync failed or device is unavailable; continuing stop."
-  fi
 }
 
 wait_for_boot() {
@@ -1973,6 +2092,7 @@ start_cvd() {
     return 0
   fi
 
+  record_udmabuf_baseline
   protect_overlay_resume
 
   apply_start_default_args args "$@"
@@ -2013,22 +2133,21 @@ start_cvd() {
 stop_cvd_internal() {
   local clear_instance_dirs="${1:-false}"
   shift || true
-  local adb_serial
   local stop_ok="false"
   local -a run_with_args=()
   local -a stop_args=()
 
+  normalize_stop_grace_seconds
+
   if [[ "${clear_instance_dirs}" == "true" ]]; then
     stop_args+=("--clear_instance_dirs")
+  fi
+  if ! user_supplied_flag "wait_for_launcher" "$@"; then
+    stop_args+=("--wait_for_launcher=${IKA_STOP_GRACE_SEC}")
   fi
   stop_args+=("$@")
 
   require_executable "${CVD_STOP_BIN}" "cvd stop helper"
-
-  if [[ "${clear_instance_dirs}" != "true" ]] && has_live_cvd_processes; then
-    adb_serial="$(resolve_adb_serial)"
-    sync_android_filesystems "${adb_serial}"
-  fi
 
   if [[ -f "${CVD_CONFIG_PATH}" ]]; then
     run_with_args+=(--config "${CVD_CONFIG_PATH}")
@@ -2052,6 +2171,7 @@ stop_cvd_internal() {
 
   stop_dnsmasq
   cleanup_user_processes
+  report_udmabuf_leaks
 
   if has_live_cvd_processes; then
     die "Cuttlefish processes are still running after stop attempt"
@@ -2099,6 +2219,7 @@ main() {
       shift
       if ! has_live_cvd_processes; then
         stop_dnsmasq
+        report_udmabuf_leaks
         respond "Android virtual device not running"
         return 0
       fi

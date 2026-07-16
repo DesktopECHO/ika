@@ -1,0 +1,24 @@
+Explicitly release renderer objects when Rutabaga is dropped.
+
+Normal virtio-gpu commands unreference individual resources, but VMM shutdown
+may leave resources and contexts in Rutabaga's maps. Merely dropping the Rust
+maps does not call the renderer's resource-unref entry point. Drain them while
+the renderer component is still alive so gfxstream can free Vulkan allocations
+through the driver's normal unbind path before stream_renderer_teardown closes
+the DRM file.
+
+--- a/src/rutabaga_core.rs
++++ b/src/rutabaga_core.rs
+@@ -1286,4 +1286,12 @@ impl Rutabaga {
+ }
+ 
++impl Drop for Rutabaga {
++    fn drop(&mut self) {
++        if let Err(e) = self.destroy_objects() {
++            log::error!("failed to clean up Rutabaga objects during shutdown: {e}");
++        }
++    }
++}
++
+ /// Rutabaga Builder, following the Rust builder pattern.
+ pub struct RutabagaBuilder {
