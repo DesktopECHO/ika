@@ -348,6 +348,10 @@ log() {
   printf '[%s] %s\n' "${SCRIPT_NAME}" "$*" >&2
 }
 
+log_file_only() {
+  printf '[%s] %s\n' "${SCRIPT_NAME}" "$*" >>"${START_LOG_FILE}"
+}
+
 die() {
   log "error: $*"
   if [[ -n "${CONSOLE_FAILURE_MESSAGE:-}" ]]; then
@@ -878,18 +882,21 @@ append_default_display_arg() {
   log "display ceiling: ${width}x${height}/${dpi}"
 }
 
-is_apple_silicon_16k_host() {
-  local arch
-  local page_size
-
+host_is_apple_silicon() {
   host_is_arm64 || return 1
-
-  page_size="$(getconf PAGESIZE 2>/dev/null || echo 0)"
-  [[ "${page_size}" =~ ^[0-9]+$ ]] || return 1
-  (( page_size > 4096 )) || return 1
 
   [[ -r /proc/device-tree/compatible ]] || return 1
   tr '\0' '\n' < /proc/device-tree/compatible 2>/dev/null | grep -q '^apple,'
+}
+
+is_apple_silicon_16k_host() {
+  local page_size
+
+  host_is_apple_silicon || return 1
+
+  page_size="$(getconf PAGESIZE 2>/dev/null || echo 0)"
+  [[ "${page_size}" =~ ^[0-9]+$ ]] || return 1
+  (( page_size > 4096 ))
 }
 
 host_is_arm64() {
@@ -1714,6 +1721,8 @@ read_udmabuf_snapshot() {
 record_udmabuf_baseline() {
   local snapshot
 
+  host_is_apple_silicon || return 0
+
   snapshot="$(read_udmabuf_snapshot || true)"
   [[ "${snapshot}" =~ ^[0-9]+\ [0-9]+$ ]] || return 0
 
@@ -1746,6 +1755,8 @@ report_udmabuf_leaks() {
   local current_count current_bytes
   local leaked_count leaked_bytes
 
+  host_is_apple_silicon || return 0
+
   [[ -r "${UDMABUF_BASELINE_FILE}" ]] || return 0
   baseline="$(<"${UDMABUF_BASELINE_FILE}")"
   current="$(read_udmabuf_snapshot || true)"
@@ -1762,7 +1773,7 @@ report_udmabuf_leaks() {
     (( leaked_bytes > 0 )) || leaked_bytes=0
     log "WARNING: Asahi retained ${leaked_count} udmabuf object(s) ($(format_udmabuf_bytes "${leaked_bytes}")) after Cuttlefish stopped. A graphics-session reset or reboot may still be required to reclaim kernel-pinned memory."
   else
-    log "Asahi udmabuf usage returned to baseline: $(format_udmabuf_snapshot "${current}")"
+    log_file_only "Asahi udmabuf usage returned to baseline: $(format_udmabuf_snapshot "${current}")"
   fi
 }
 
