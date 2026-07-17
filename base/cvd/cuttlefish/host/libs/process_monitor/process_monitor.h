@@ -30,13 +30,24 @@
 
 namespace cuttlefish {
 
+enum class ProcessMonitorExit {
+  // The monitor was stopped by its parent or an annotated critical command.
+  kExpected,
+  // An unannotated critical command exited while restart was disabled.
+  kUnexpected,
+};
+
 struct MonitorEntry {
   std::unique_ptr<Command> cmd;
   std::unique_ptr<Subprocess> proc;
   bool is_critical;
+  std::set<int> expected_exit_codes;
 
-  MonitorEntry(Command command, bool is_critical)
-      : cmd(new Command(std::move(command))), is_critical(is_critical) {}
+  MonitorEntry(Command command, bool is_critical,
+               std::set<int> expected_exit_codes)
+      : cmd(new Command(std::move(command))),
+        is_critical(is_critical),
+        expected_exit_codes(std::move(expected_exit_codes)) {}
 };
 
 // Launches and keeps track of subprocesses, decides response if they
@@ -65,6 +76,8 @@ class ProcessMonitor {
 
   // Start all processes given by AddCommand.
   Result<void> StartAndMonitorProcesses();
+  // Waits for the process monitor and classifies why it exited.
+  Result<ProcessMonitorExit> WaitForMonitor();
   // Stops all monitored subprocesses.
   Result<void> StopMonitoredProcesses();
   // Suspend all host subprocesses
@@ -77,7 +90,7 @@ class ProcessMonitor {
 
  private:
   Result<void> StartSubprocesses(Properties& properties);
-  Result<void> MonitorRoutine();
+  Result<ProcessMonitorExit> MonitorRoutine();
   Result<void> ReadMonitorSocketLoop(std::atomic_bool&);
   /*
    * The child run_cvd process suspends the host processes

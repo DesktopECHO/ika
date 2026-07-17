@@ -120,6 +120,11 @@ Result<void> ServerLoopImpl::Run() {
     Select(&read_set, nullptr, nullptr, nullptr);
 
     if (read_set.IsSet(process_monitor.status())) {
+      auto monitor_exit = CF_EXPECT(process_monitor.WaitForMonitor());
+      if (monitor_exit == ProcessMonitorExit::kExpected) {
+        LOG(INFO) << "Guest stopped; exiting launcher cleanly";
+        std::exit(EXIT_SUCCESS);
+      }
       return CF_ERR("process monitor has died");
     }
 

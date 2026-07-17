@@ -25,6 +25,7 @@
 #include <cassert>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -1256,7 +1257,10 @@ Result<std::vector<MonitorCommand>> CrosvmManager::StartCommands(
                                    crosvm_logs);
     crosvm_cmd.Cmd().RedirectStdIO(Subprocess::StdIOChannel::kStdErr,
                                    crosvm_logs);
-    commands.emplace_back(std::move(crosvm_cmd.Cmd()), true);
+    // With --extended-status, crosvm returns 0 when the guest powers off and
+    // 32 when it requests a reset. The process restarter consumes reset exits,
+    // so a clean wrapper exit means that the guest intentionally stopped.
+    commands.emplace_back(std::move(crosvm_cmd.Cmd()), true, std::set<int>{0});
   }
 
   return commands;

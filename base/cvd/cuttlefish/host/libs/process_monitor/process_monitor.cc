@@ -28,9 +28,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <future>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/log/log.h"
@@ -64,6 +66,10 @@ enum ChildToParentResponseType : uint8_t {
   kSuccess = 0,
   kFailure = 1,
 };
+
+constexpr int kMonitorSuccessExitCode = 0;
+constexpr int kMonitorErrorExitCode = 1;
+constexpr int kUnexpectedCriticalProcessExitCode = 2;
 
 Result<void> SendEmptyRequest(Channel& channel, uint32_t type) {
   ManagedMessage message = CF_EXPECT(CreateMessage(type, false, 0));
@@ -109,10 +115,10 @@ void LogSubprocessExit(const std::string& name, const siginfo_t& infop) {
   }
 }
 
-Result<void> MonitorLoop(std::atomic_bool& running,
-                         std::mutex& properties_mutex,
-                         const bool restart_subprocesses,
-                         std::vector<MonitorEntry>& monitored) {
+Result<ProcessMonitorExit> MonitorLoop(std::atomic_bool& running,
+                                       std::mutex& properties_mutex,
+                                       const bool restart_subprocesses,
+                                       std::vector<MonitorEntry>& monitored) {
   while (running.load()) {
     int wstatus;
     pid_t pid = wait(&wstatus);
@@ -131,6 +137,24 @@ Result<void> MonitorLoop(std::atomic_bool& running,
     if (it == monitored.end()) {
       LogSubprocessExit("(unknown)", pid, wstatus);
     } else {
+      const bool expected_exit =
+          WIFEXITED(wstatus) &&
+          it->expected_exit_codes.count(WEXITSTATUS(wstatus)) != 0;
+      if (expected_exit) {
+        const std::string name = it->cmd->GetShortName();
+        const int exit_code = WEXITSTATUS(wstatus);
+        const bool is_critical = it->is_critical;
+        LOG(INFO) << "Monitored subprocess " << name << " (" << pid
+                  << ") exited as expected with code " << exit_code;
+        monitored.erase(it);
+        if (is_critical) {
+          LOG(INFO) << "Stopping all monitored processes after expected exit "
+                       "of critical process";
+          running.store(false);
+          return ProcessMonitorExit::kExpected;
+        }
+        continue;
+      }
       LogSubprocessExit(it->cmd->GetShortName(), it->proc->pid(), wstatus);
       if (restart_subprocesses) {
         auto options = SubprocessOptions().InGroup(true);
@@ -143,12 +167,12 @@ Result<void> MonitorLoop(std::atomic_bool& running,
           LOG(ERROR) << "Stopping all monitored processes due to unexpected "
                         "exit of critical process";
           running.store(false);
-          break;
+          return ProcessMonitorExit::kUnexpected;
         }
       }
     }
   }
-  return {};
+  return ProcessMonitorExit::kExpected;
 }
 
 Result<void> StopSubprocesses(std::vector<MonitorEntry>& monitored) {
@@ -334,7 +358,8 @@ ProcessMonitor::Properties& ProcessMonitor::Properties::RestartSubprocesses(
 
 ProcessMonitor::Properties& ProcessMonitor::Properties::AddCommand(
     MonitorCommand cmd) & {
-  entries_.emplace_back(std::move(cmd.command), cmd.is_critical);
+  entries_.emplace_back(std::move(cmd.command), cmd.is_critical,
+                        std::move(cmd.expected_exit_codes));
   return *this;
 }
 
@@ -363,17 +388,35 @@ Result<void> ProcessMonitor::StopMonitoredProcesses() {
   CF_EXPECT(
       SendEmptyRequest(*parent_channel_, ParentToChildMessageType::kStop));
 
-  pid_t last_monitor = monitor_;
-  monitor_ = -1;
+  auto monitor_exit = CF_EXPECT(WaitForMonitor());
+  CF_EXPECT(monitor_exit == ProcessMonitorExit::kExpected,
+            "Process monitor reported an unexpected critical process exit");
+  return {};
+}
+
+Result<ProcessMonitorExit> ProcessMonitor::WaitForMonitor() {
+  CF_EXPECT(monitor_ != -1, "The monitor process has already exited.");
+
+  const pid_t last_monitor = std::exchange(monitor_, -1);
   parent_channel_.reset();
+  if (status_->IsOpen()) {
+    status_->Close();
+  }
+
   int wstatus;
   CF_EXPECT(waitpid(last_monitor, &wstatus, 0) == last_monitor,
             "Failed to wait for monitor process");
   CF_EXPECT(!WIFSIGNALED(wstatus), "Monitor process exited due to a signal");
   CF_EXPECT(WIFEXITED(wstatus), "Monitor process exited for unknown reasons");
-  CF_EXPECT(WEXITSTATUS(wstatus) == 0,
-            "Monitor process exited with code " << WEXITSTATUS(wstatus));
-  return {};
+
+  const int exit_code = WEXITSTATUS(wstatus);
+  if (exit_code == kMonitorSuccessExitCode) {
+    return ProcessMonitorExit::kExpected;
+  }
+  if (exit_code == kUnexpectedCriticalProcessExitCode) {
+    return ProcessMonitorExit::kUnexpected;
+  }
+  return CF_ERR("Monitor process exited with code " << exit_code);
 }
 
 Result<void> ProcessMonitor::SuspendMonitoredProcesses() {
@@ -415,12 +458,17 @@ Result<void> ProcessMonitor::StartAndMonitorProcesses() {
     pipe_read->Close();
     child_channel_ = transport::SharedFdChannel(child_sock, child_sock);
     child_sock_ = std::move(child_sock);
-    Result<void> monitor_result = MonitorRoutine();
+    Result<ProcessMonitorExit> monitor_result = MonitorRoutine();
+    int monitor_exit_code = kMonitorErrorExitCode;
     if (!monitor_result.ok()) {
       LOG(ERROR) << "Monitoring processes failed:\n" << monitor_result.error();
+    } else if (*monitor_result == ProcessMonitorExit::kUnexpected) {
+      monitor_exit_code = kUnexpectedCriticalProcessExitCode;
+    } else {
+      monitor_exit_code = kMonitorSuccessExitCode;
     }
     pipe_write->Close();
-    std::exit(monitor_result.ok() ? 0 : 1);
+    std::exit(monitor_exit_code);
   } else {
     pipe_write->Close();
     parent_channel_ = transport::SharedFdChannel(parent_sock, parent_sock);
@@ -429,7 +477,7 @@ Result<void> ProcessMonitor::StartAndMonitorProcesses() {
   }
 }
 
-Result<void> ProcessMonitor::MonitorRoutine() {
+Result<ProcessMonitorExit> ProcessMonitor::MonitorRoutine() {
 #ifdef __linux__
   // Make this process a subreaper to reliably catch subprocess exits.
   // See https://man7.org/linux/man-pages/man2/prctl.2.html
@@ -450,9 +498,9 @@ Result<void> ProcessMonitor::MonitorRoutine() {
   auto parent_comms = std::async(std::launch::async, read_monitor_socket_loop,
                                  std::ref(running));
 
-  CF_EXPECT(MonitorLoop(running, properties_mutex_,
-                        properties_.restart_subprocesses_,
-                        properties_.entries_));
+  auto monitor_exit = CF_EXPECT(MonitorLoop(running, properties_mutex_,
+                                            properties_.restart_subprocesses_,
+                                            properties_.entries_));
   if (child_sock_->IsOpen()) {
     child_sock_->Shutdown(SHUT_RDWR);
   }
@@ -460,7 +508,7 @@ Result<void> ProcessMonitor::MonitorRoutine() {
 
   CF_EXPECT(StopSubprocesses(properties_.entries_));
   VLOG(0) << "Done monitoring subprocesses";
-  return {};
+  return monitor_exit;
 }
 
 }  // namespace cuttlefish

@@ -1,4 +1,4 @@
-load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library", "cf_cc_test")
 
 package(
     default_visibility = ["//:android_cuttlefish"],
@@ -24,5 +24,17 @@ cf_cc_library(
         "//libbase",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_test(
+    name = "process_monitor_test",
+    srcs = ["process_monitor_test.cc"],
+    deps = [
+        ":process_monitor",
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result",
     ],
 )

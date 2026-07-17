@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -29,9 +30,15 @@ namespace cuttlefish {
 struct MonitorCommand {
   Command command;
   bool is_critical;
+  // A critical command exiting normally with one of these codes ends the
+  // process monitor successfully instead of being reported as a crash.
+  std::set<int> expected_exit_codes;
 
-  MonitorCommand(Command command, bool is_critical = true)
-      : command(std::move(command)), is_critical(is_critical) {}
+  MonitorCommand(Command command, bool is_critical = true,
+                 std::set<int> expected_exit_codes = {})
+      : command(std::move(command)),
+        is_critical(is_critical),
+        expected_exit_codes(std::move(expected_exit_codes)) {}
 };
 
 class CommandSource : public virtual SetupFeature {
