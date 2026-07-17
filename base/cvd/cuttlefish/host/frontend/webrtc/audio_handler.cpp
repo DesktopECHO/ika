@@ -434,6 +434,23 @@ void AudioHandler::ReleaseStream(StreamControlCommand& cmd) {
     cmd.Reply(AudioStatus::VIRTIO_SND_S_BAD_MSG);
     return;
   }
+
+  const bool is_capture = IsCapture(cmd.stream_id());
+  auto& stream_desc = stream_descs_[cmd.stream_id()];
+  bool was_active;
+  {
+    std::lock_guard<std::mutex> lock(stream_desc.mtx);
+    was_active = stream_desc.active;
+    stream_desc.active = false;
+    stream_desc.holding_buffer.clear();
+  }
+  if (was_active) {
+    if (is_capture) {
+      audio_source_->Stop();
+    } else {
+      audio_mixer_->OnStreamStopped(cmd.stream_id());
+    }
+  }
   cmd.Reply(AudioStatus::VIRTIO_SND_S_OK);
 }
 
@@ -442,8 +459,26 @@ void AudioHandler::StartStream(StreamControlCommand& cmd) {
     cmd.Reply(AudioStatus::VIRTIO_SND_S_BAD_MSG);
     return;
   }
+
+  const bool is_capture = IsCapture(cmd.stream_id());
   auto& stream_desc = stream_descs_[cmd.stream_id()];
-  stream_desc.active = true;
+  if (is_capture) {
+    uint8_t bytes_per_sample;
+    uint8_t channels;
+    uint32_t sample_rate;
+    {
+      std::lock_guard<std::mutex> lock(stream_desc.mtx);
+      bytes_per_sample = stream_desc.bits_per_sample / 8;
+      channels = stream_desc.channels;
+      sample_rate = stream_desc.sample_rate;
+      stream_desc.holding_buffer.clear();
+    }
+    audio_source_->Start(bytes_per_sample, channels, sample_rate);
+  }
+  {
+    std::lock_guard<std::mutex> lock(stream_desc.mtx);
+    stream_desc.active = true;
+  }
   cmd.Reply(AudioStatus::VIRTIO_SND_S_OK);
 }
 
@@ -452,9 +487,19 @@ void AudioHandler::StopStream(StreamControlCommand& cmd) {
     cmd.Reply(AudioStatus::VIRTIO_SND_S_BAD_MSG);
     return;
   }
+
+  const bool is_capture = IsCapture(cmd.stream_id());
   auto& stream_desc = stream_descs_[cmd.stream_id()];
-  stream_desc.active = false;
-  audio_mixer_->OnStreamStopped(cmd.stream_id());
+  {
+    std::lock_guard<std::mutex> lock(stream_desc.mtx);
+    stream_desc.active = false;
+    stream_desc.holding_buffer.clear();
+  }
+  if (is_capture) {
+    audio_source_->Stop();
+  } else {
+    audio_mixer_->OnStreamStopped(cmd.stream_id());
+  }
   cmd.Reply(AudioStatus::VIRTIO_SND_S_OK);
 }
 

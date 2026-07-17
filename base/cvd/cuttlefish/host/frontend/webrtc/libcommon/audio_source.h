@@ -25,6 +25,15 @@ namespace webrtc_streaming {
 // Interface to provide access to a stream originated on the client.
 class AudioSource {
  public:
+  // Notifies the source that the guest is about to start or stop capturing.
+  // Sources that do not own their underlying stream may leave these as no-ops.
+  virtual void Start(int bytes_per_sample, int num_channels, int sample_rate) {
+    (void)bytes_per_sample;
+    (void)num_channels;
+    (void)sample_rate;
+  }
+  virtual void Stop() {}
+
   // Returns the number of bytes read or a negative number in case of errors. If
   // muted is set to true, the contents of data should be considered to be all
   // 0s.

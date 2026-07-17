@@ -66,7 +66,14 @@ DPI does **not** change when the scrcpy window is resized — only resolution ch
 
 **Upstream:** audio is muxed into the WebRTC media stream with whatever codec is negotiated (typically Opus).
 
-**ika:** Cuttlefish audio is enabled even though WebRTC is off. The raw `ika_stream` frontend services the guest virtio-snd device and publishes mixed guest playback as a normal PipeWire application stream named `ika`. scrcpy runs with `--no-audio`, so sound is no longer tied to adb, the scrcpy server, or whether the console window is open.
+**ika:** Cuttlefish audio is enabled even though WebRTC is off. The raw
+`ika_stream` frontend services the guest virtio-snd device, publishes mixed
+guest playback as a normal PipeWire application stream named `ika`, and routes
+the desktop's default PipeWire microphone source into the guest's built-in mic.
+The capture stream is connected only while an Android app is recording; if the
+host has no microphone source, Android receives silence. scrcpy runs with
+`--no-audio`, so sound is no longer tied to adb, the scrcpy server, or whether
+the console window is open.
 
 ## 6. Multi-display and hotplug
 

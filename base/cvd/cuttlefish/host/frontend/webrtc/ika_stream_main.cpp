@@ -26,8 +26,8 @@
 #include "cuttlefish/host/frontend/webrtc/audio_handler.h"
 #include "cuttlefish/host/frontend/webrtc/audio_stream_config.h"
 #include "cuttlefish/host/frontend/webrtc/ika_stream.h"
-#include "cuttlefish/host/frontend/webrtc/libcommon/audio_source.h"
 #include "cuttlefish/host/frontend/webrtc/pipewire_audio_sink.h"
+#include "cuttlefish/host/frontend/webrtc/pipewire_audio_source.h"
 #include "cuttlefish/host/libs/audio_connector/server.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/config/logging.h"
@@ -43,21 +43,6 @@ DEFINE_bool(frames_are_rgba, true, "Whether incoming frames use RGBA order");
 
 namespace cuttlefish {
 namespace {
-
-class SilentAudioSource : public webrtc_streaming::AudioSource {
- public:
-  int GetMoreAudioData(void* data, int bytes_per_sample,
-                       int samples_per_channel, int num_channels,
-                       int sample_rate, bool& muted) override {
-    (void)data;
-    (void)bytes_per_sample;
-    (void)samples_per_channel;
-    (void)num_channels;
-    (void)sample_rate;
-    muted = true;
-    return 0;
-  }
-};
 
 std::unique_ptr<AudioServer> CreateAudioServer(int audio_server_fd) {
   SharedFD server_fd = SharedFD::Dup(audio_server_fd);
@@ -81,7 +66,7 @@ std::shared_ptr<AudioHandler> SetupAudio() {
   std::shared_ptr<webrtc_streaming::AudioSink> audio_sink =
       std::make_shared<PipeWireAudioSink>("ika", stream_config.mixer_settings);
   std::shared_ptr<webrtc_streaming::AudioSource> audio_source =
-      std::make_shared<SilentAudioSource>();
+      std::make_shared<PipeWireAudioSource>("ika.microphone");
   auto audio_handler = std::make_shared<AudioHandler>(
       CreateAudioServer(FLAGS_audio_server_fd), std::move(audio_sink),
       std::move(audio_source), stream_config.streams,

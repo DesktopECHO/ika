@@ -115,6 +115,17 @@ cf_cc_library(
 )
 
 cf_cc_library(
+    name = "libcuttlefish_webrtc_pipewire_audio_source",
+    srcs = ["pipewire_audio_source.cpp"],
+    hdrs = ["pipewire_audio_source.h"],
+    deps = [
+        "//cuttlefish/host/frontend/webrtc/libcommon:audio_source",
+        "@abseil-cpp//absl/log",
+        "@pipewire//:pipewire",
+    ],
+)
+
+cf_cc_library(
     name = "libcuttlefish_webrtc_bluetooth_handler",
     srcs = ["bluetooth_handler.cpp"],
     hdrs = ["bluetooth_handler.h"],
@@ -219,6 +230,7 @@ cf_cc_binary(
         ":libcuttlefish_webrtc_audio_stream_config",
         ":libcuttlefish_webrtc_ika_stream",
         ":libcuttlefish_webrtc_pipewire_audio_sink",
+        ":libcuttlefish_webrtc_pipewire_audio_source",
         "//cuttlefish/common/libs/fs",
         "//cuttlefish/host/frontend/webrtc/libcommon:audio_source",
         "//cuttlefish/host/libs/audio_connector",
