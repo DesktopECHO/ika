@@ -35,6 +35,8 @@
 #define SC_WINDOW_RESIZE_BORDER 8
 #define SC_WINDOW_DRAG_HOTSPOT_WIDTH_RATIO 0.05f
 #define SC_WINDOW_DRAG_HOTSPOT_HEIGHT_RATIO 0.025f
+#define SC_WINDOW_DRAG_HOTSPOT_X 1
+#define SC_WINDOW_DRAG_HOTSPOT_Y 1
 #define SC_WINDOW_DRAG_HOLD_DELAY SC_TICK_FROM_MS(220)
 #define SC_WINDOW_CLICK_MOVE_TOLERANCE 8.0f
 // Blur effect parameters: jittered ghost copies of the texture drawn at low
@@ -163,7 +165,10 @@ sc_screen_is_drag_hotspot(SDL_Window *window, float x, float y) {
     }
     int hw = (int) (full_w * SC_WINDOW_DRAG_HOTSPOT_WIDTH_RATIO);
     int hh = (int) (full_h * SC_WINDOW_DRAG_HOTSPOT_HEIGHT_RATIO);
-    return x >= 0 && y >= 0 && x < hw && y < hh;
+    return x >= SC_WINDOW_DRAG_HOTSPOT_X
+        && y >= SC_WINDOW_DRAG_HOTSPOT_Y
+        && x < SC_WINDOW_DRAG_HOTSPOT_X + hw
+        && y < SC_WINDOW_DRAG_HOTSPOT_Y + hh;
 }
 
 static void
