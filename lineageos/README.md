@@ -72,7 +72,10 @@ Additional project docs:
 Building this ROM is a full LineageOS source build and is resource-intensive:
 
 - **RAM:** 32 GB recommended, 16 GB will work but the build will be much slower.
-  The build script will add temporary zram swap as needed.
+  The build script adds temporary zram as needed so physical RAM plus zram
+  reaches `max(44 GiB, 2 GiB per logical CPU + 4 GiB)`. Build-created zram
+  remains enabled until reboot; the build exit log prints commands to remove it
+  immediately.
 - **Storage:** 500 GB minimum of free space. 
 - **CPU:** x86-64 and ARM64 are both supported as build hosts.
 

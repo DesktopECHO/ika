@@ -31,11 +31,13 @@ Environment:
   NINJA_HIGHMEM_NUM_JOBS
                         Soong high-memory pool jobs. Default: one job per
                         32 GiB of RAM, minimum 1 and capped at JOBS.
-  Temporary zram       Builds get zram swap sized to reach a fixed physical+zram
-                        total (ZRAM_TARGET_TOTAL_GIB, default 40 GiB), prioritized
-                        above existing swap. Hosts with ZRAM_SKIP_ABOVE_GIB
-                        (default 36 GiB) physical RAM or more get none.
-                        Build-created zram is removed automatically on exit.
+  Temporary zram       Builds get zram swap sized so physical RAM plus zram
+                        reaches max(44 GiB, 2 GiB per logical CPU + 4 GiB),
+                        prioritized above existing swap. No zram is added when
+                        physical RAM already meets that target. Build-created
+                        zram remains enabled for the current boot and is reset
+                        automatically on reboot; exit logs commands to remove
+                        it immediately.
   ZRAM_COMP_ALGORITHM   Compression algorithm for build-created zram. Default:
                         zstd (higher ratio, more usable RAM, paid on otherwise
                         idle cores). Falls back to the kernel default if the

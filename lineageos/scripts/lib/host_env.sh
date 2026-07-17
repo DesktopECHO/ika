@@ -241,11 +241,11 @@ setup_temp_zram_if_needed() {
     return 0
   fi
 
-  # Target combined RAM (physical + zram) is (cores * 2) + 4 GiB, minimum 40 GiB;
+  # Target combined RAM (physical + zram) is (cores * 2) + 4 GiB, minimum 44 GiB;
   # zram makes up the shortfall to reach it.
   cores="$(logical_cpu_count)"
   target_combined_gib=$(( cores * 2 + 4 ))
-  (( target_combined_gib >= 40 )) || target_combined_gib=40
+  (( target_combined_gib >= 44 )) || target_combined_gib=44
   target_combined_kib=$(( target_combined_gib * 1024 * 1024 ))
 
   zram_kib=$(( target_combined_kib - mem_kib ))
