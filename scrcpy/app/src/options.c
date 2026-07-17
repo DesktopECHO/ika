@@ -18,6 +18,7 @@ const struct scrcpy_options scrcpy_options_default = {
     .camera_ar = NULL,
     .camera_zoom = NULL,
     .cuttlefish_frames_socket = NULL,
+    .window_state_file = NULL,
     .camera_fps = 0,
     .log_level = SC_LOG_LEVEL_INFO,
     .video_codec = SC_CODEC_H264,

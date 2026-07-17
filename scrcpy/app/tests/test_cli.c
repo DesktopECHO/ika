@@ -66,6 +66,7 @@ static void test_options(void) {
         "--window-y", "-1",
         "--window-width", "600",
         "--window-height", "0",
+        "--window-state-file", "/tmp/scrcpy-window-state",
         "--window-borderless",
     };
 
@@ -93,6 +94,7 @@ static void test_options(void) {
     assert(opts->window_y == -1);
     assert(opts->window_width == 600);
     assert(opts->window_height == 0);
+    assert(!strcmp(opts->window_state_file, "/tmp/scrcpy-window-state"));
     assert(opts->window_borderless);
 }
 

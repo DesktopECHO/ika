@@ -5,6 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 #ifndef _WIN32
+# include <errno.h>
+# include <fcntl.h>
+#endif
+#ifndef _WIN32
 # include <unistd.h>
 #endif
 #include <SDL3/SDL.h>
@@ -84,6 +88,85 @@ set_aspect_ratio(struct sc_screen *screen, struct sc_size content_size) {
             LOGW("Could not set window aspect ratio: %s", SDL_GetError());
         }
     }
+}
+
+static void
+sc_screen_update_saved_window_size(struct sc_screen *screen) {
+    SDL_WindowFlags flags = SDL_GetWindowFlags(screen->window);
+    // Compositor-controlled sizes are not useful when restoring a resizable
+    // window, so retain the last logical windowed size across these modes.
+    if (flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MAXIMIZED)) {
+        return;
+    }
+
+    struct sc_size size = sc_sdl_get_window_size(screen->window);
+    if (size.width > 0 && size.height > 0) {
+        screen->saved_window_size = size;
+        screen->saved_window_size_valid = true;
+    }
+}
+
+static void
+sc_screen_save_window_state(struct sc_screen *screen) {
+    if (!screen->window_state_file) {
+        return;
+    }
+
+    sc_screen_update_saved_window_size(screen);
+    if (!screen->saved_window_size_valid) {
+        LOGW("Not saving window state without a valid windowed size");
+        return;
+    }
+
+    SDL_WindowFlags flags = SDL_GetWindowFlags(screen->window);
+    bool fullscreen = flags & SDL_WINDOW_FULLSCREEN;
+
+#ifndef _WIN32
+    const char *path = screen->window_state_file;
+    size_t temp_path_size = strlen(path) + 32;
+    char *temp_path = malloc(temp_path_size);
+    if (!temp_path) {
+        LOG_OOM();
+        return;
+    }
+
+    snprintf(temp_path, temp_path_size, "%s.tmp.%ld", path, (long) getpid());
+    int fd = open(temp_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd == -1) {
+        LOGW("Could not open window state file %s: %s", temp_path,
+             strerror(errno));
+        free(temp_path);
+        return;
+    }
+
+    FILE *file = fdopen(fd, "w");
+    if (!file) {
+        LOGW("Could not write window state file %s: %s", temp_path,
+             strerror(errno));
+        close(fd);
+        unlink(temp_path);
+        free(temp_path);
+        return;
+    }
+
+    bool ok = fprintf(file, "version=1\nwidth=%d\nheight=%d\nfullscreen=%s\n",
+                      screen->saved_window_size.width,
+                      screen->saved_window_size.height,
+                      fullscreen ? "true" : "false") > 0;
+    ok &= fflush(file) == 0;
+    ok &= fsync(fd) == 0;
+    ok &= fclose(file) == 0;
+    if (ok) {
+        ok = rename(temp_path, path) == 0;
+    }
+    if (!ok) {
+        LOGW("Could not save window state to %s: %s", path, strerror(errno));
+        unlink(temp_path);
+    }
+    free(temp_path);
+#else
+    (void) fullscreen;
+#endif
 }
 
 static inline struct sc_size
@@ -2262,6 +2345,12 @@ sc_screen_init(struct sc_screen *screen,
     screen->req.fullscreen = params->fullscreen;
     screen->req.start_fps_counter = params->start_fps_counter;
 
+    screen->window_state_file = params->window_state_file;
+    screen->saved_window_size.width = params->window_width;
+    screen->saved_window_size.height = params->window_height;
+    screen->saved_window_size_valid = params->window_width
+                                   && params->window_height;
+
     screen->prevent_auto_resize = false;
 
     bool ok = sc_mutex_init(&screen->mutex);
@@ -2520,11 +2609,14 @@ sc_screen_show_initial_window(struct sc_screen *screen) {
         set_aspect_ratio(screen, screen->content_size);
     }
     sc_sdl_set_window_size(screen->window, window_size);
+    screen->saved_window_size = window_size;
+    screen->saved_window_size_valid = true;
     sc_sdl_set_window_position(screen->window, position);
 
     if (screen->req.fullscreen) {
         sc_screen_toggle_fullscreen(screen);
     }
+    sc_screen_save_window_state(screen);
 
     if (screen->req.start_fps_counter) {
         sc_fps_counter_start(&screen->fps_counter);
@@ -2585,6 +2677,7 @@ sc_screen_show_prepared_window(struct sc_screen *screen) {
 
 void
 sc_screen_hide_window(struct sc_screen *screen) {
+    sc_screen_save_window_state(screen);
     sc_sdl_hide_window(screen->window);
     screen->window_shown = false;
 }
@@ -3304,6 +3397,7 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
         }
         case SC_EVENT_RESIZE_SETTLED:
             sc_screen_on_resize_settled(screen);
+            sc_screen_save_window_state(screen);
             return;
         case SC_EVENT_BLUR_FADE_TICK:
             if (screen->window_shown) {
@@ -3414,6 +3508,7 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
         case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
         case SDL_EVENT_WINDOW_RESIZED:
             sc_screen_on_resize(screen);
+            sc_screen_update_saved_window_size(screen);
             return;
 #endif
         case SDL_EVENT_WINDOW_RESTORED:
@@ -3425,14 +3520,17 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
         case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
             LOGD("Switched to fullscreen mode");
             assert(screen->video);
+            sc_screen_save_window_state(screen);
             return;
         case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
             LOGD("Switched to windowed mode");
             assert(screen->video);
             if (is_windowed(screen)) {
                 apply_pending_resize(screen);
+                sc_screen_update_saved_window_size(screen);
                 sc_screen_render(screen, true);
             }
+            sc_screen_save_window_state(screen);
             return;
         case SC_EVENT_DEVICE_DISCONNECTED:
             assert(!screen->disconnected);

@@ -71,6 +71,11 @@ struct sc_screen {
         bool start_fps_counter;
     } req;
 
+    const char *window_state_file;
+    // Last logical size observed outside fullscreen and maximized modes
+    struct sc_size saved_window_size;
+    bool saved_window_size_valid;
+
     SDL_Window *window;
     SDL_Renderer *renderer;
 #ifdef SC_DISPLAY_FORCE_OPENGL_CORE_PROFILE
@@ -215,6 +220,7 @@ struct sc_screen_params {
     int16_t window_y; // accepts SC_WINDOW_POSITION_UNDEFINED
     uint16_t window_width;
     uint16_t window_height;
+    const char *window_state_file;
 
     bool window_aspect_ratio_lock;
     bool window_borderless;

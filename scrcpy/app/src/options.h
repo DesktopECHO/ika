@@ -250,6 +250,7 @@ struct scrcpy_options {
     const char *camera_ar;
     const char *camera_zoom;
     const char *cuttlefish_frames_socket;
+    const char *window_state_file;
     uint16_t camera_fps;
     enum sc_log_level log_level;
     enum sc_codec video_codec;

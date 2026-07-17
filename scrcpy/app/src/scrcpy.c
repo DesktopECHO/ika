@@ -829,6 +829,7 @@ aoa_complete:
             .window_y = options->window_y,
             .window_width = options->window_width,
             .window_height = options->window_height,
+            .window_state_file = options->window_state_file,
             .window_aspect_ratio_lock = options->window_aspect_ratio_lock,
             .window_borderless = options->window_borderless,
             .render_fit = options->render_fit,

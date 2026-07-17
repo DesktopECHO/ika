@@ -30,6 +30,7 @@ enum {
     OPT_WINDOW_Y,
     OPT_WINDOW_WIDTH,
     OPT_WINDOW_HEIGHT,
+    OPT_WINDOW_STATE_FILE,
     OPT_WINDOW_BORDERLESS,
     OPT_MAX_FPS,
     OPT_DISPLAY_ID,
@@ -1032,6 +1033,13 @@ static const struct sc_option options[] = {
         .argdesc = "value",
         .text = "Set the initial window height.\n"
                 "Default is 0 (automatic).",
+    },
+    {
+        .longopt_id = OPT_WINDOW_STATE_FILE,
+        .longopt = "window-state-file",
+        .argdesc = "path",
+        .text = "Continuously save the last windowed size and fullscreen "
+                "state to this file.",
     },
     {
         .shortopt = 'x',
@@ -2556,6 +2564,9 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
                 if (!parse_window_dimension(optarg, &opts->window_height)) {
                     return false;
                 }
+                break;
+            case OPT_WINDOW_STATE_FILE:
+                opts->window_state_file = optarg;
                 break;
             case OPT_WINDOW_BORDERLESS:
                 opts->window_borderless = true;
