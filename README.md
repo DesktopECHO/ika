@@ -42,12 +42,12 @@ application and disk image.
 > [Kisak Mesa PPA](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa)
 > before installing the binary packages.
 
-## Building from Source
+## Building Ika from Source
 
 You need at least 16 GB of RAM and 300 GB free space. The initial build takes
-approximately 3–9 hours, so running it overnight is advisable. The *ika-build*
-script handles the prerequisite steps and produces installable packages for
-your distribution. 
+approximately 3–6 hours or more, depending on your hardware and internet speed,
+running it overnight is advisable. The *ika-build* script handles the prerequisite
+steps and produces installable .deb/.rpm packages for your distribution. 
 
 ```bash
 # 1. Download and extract:
