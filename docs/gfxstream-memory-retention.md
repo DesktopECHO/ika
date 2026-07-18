@@ -11,20 +11,19 @@ The fault was a combination of lifetime and retention problems along the
 host-visible Vulkan allocation path:
 
 1. Gfxstream created a fresh udmabuf object for each host-visible allocation.
-2. Ownership of that allocation was split between the host `VkDeviceMemory`
+   Multiple `VkEmulation` instances can be created during one renderer process,
+   so reuse scoped to one instance cannot bound cross-process kernel retention.
+2. Ownership of each allocation was split between the host `VkDeviceMemory`
    object and the virtio-gpu blob exported to crosvm, but no common lifetime
    token described when both users were finished.
-3. Crosvm imported an already-mappable DMA-BUF into a second Vulkan allocation
-   merely to obtain a CPU mapping. This introduced another driver-controlled
-   descriptor and allocation lifetime.
-4. Even after graphics objects were destroyed, glibc retained free pages in
+3. Even after graphics objects were destroyed, glibc retained free pages in
    the many arenas created by short-lived gfxstream render threads.
 
 The result behaved like a leak from the host's point of view even when portions
 of the graphics object graph had been released. The solution makes ownership
-explicit, removes the redundant Vulkan import, reuses external-memory objects
-instead of continually creating new identities, and trims allocator residue at
-the correct cleanup boundary.
+explicit, reuses external-memory objects through one renderer-wide pool instead
+of continually creating new identities, and trims allocator residue at the
+correct cleanup boundary.
 
 No Mesa or kernel source changes are required.
 
@@ -37,8 +36,6 @@ create and destroy guest graphics processes with large host-visible allocations.
 
 The design deliberately preserves other configurations:
 
-- Opaque Vulkan external-memory handles continue through crosvm's Vulkano
-  import path.
 - The pool is used only by gfxstream's udmabuf allocation path.
 - The glibc tuning is injected only for Apple Silicon 16 KiB-page gfxstream
   launches.
@@ -73,13 +70,6 @@ udmabufs on every launch therefore permits retention to grow with every launch.
 Gfxstream cannot reliably force all external driver bookkeeping to disappear,
 and changing Mesa or the kernel was outside the allowed scope.
 
-### Redundant crosvm Vulkan import
-
-The exported udmabuf is already a file-backed, directly mappable DMA-BUF.
-Crosvm nevertheless passed it through Vulkano's Vulkan import path to obtain a
-CPU address. This added a second Vulkan device-memory lifetime and allowed an
-imported descriptor to keep the backing pages pinned beyond guest unmap.
-
 ### Allocator residency
 
 Gfxstream performs cleanup work across many render threads. Glibc's default
@@ -91,8 +81,10 @@ or virtio-gpu object and therefore is not fixed by object destruction alone.
 
 ### 1. Exact-size udmabuf pool
 
-`PATCH.gfxstream.pool-host-visible-udmabufs.patch` adds a process-local pool to
-`UdmabufCreator`.
+`PATCH.gfxstream.pool-host-visible-udmabufs.patch` adds one process-wide pool
+shared by every `UdmabufCreator` in the renderer. This scope is essential:
+gfxstream can create several `VkEmulation` objects, and a pool owned by one of
+those objects is destroyed too early to provide cross-process reuse.
 
 - A new allocation size creates one memfd/udmabuf pair.
 - A later allocation of exactly the same size reuses that pair.
@@ -117,17 +109,7 @@ The lease releases the pool entry only after both references are destroyed.
 This restores the lifetime information that was missing at the ownership split
 and prevents reuse while either side can still expose the memory.
 
-### 3. Direct crosvm DMA-BUF mapping
-
-`PATCH.vm_control-map-dmabuf-directly.patch` detects
-`RUTABAGA_HANDLE_TYPE_MEM_DMABUF` in `VmMemorySource::Vulkan` and maps it with
-`mmap` through crosvm's descriptor mapping helper. Unregistering the guest
-memory now drops a normal `MemoryMapping` and its retained descriptor without
-creating a second Vulkan import.
-
-Opaque Vulkan handles still use the existing gralloc/Vulkano path.
-
-### 4. Cleanup-boundary allocator trim
+### 3. Cleanup-boundary allocator trim
 
 Once gfxstream's cleanup worker has joined the guest process render threads,
 removed its GL/Vulkan objects, and released its `ProcessResources`, it calls
@@ -163,11 +145,48 @@ Some retained memory is expected and is not considered a regression:
 ## Validation
 
 On 2026-07-17, the complete patched dependency graph was built from the Ryzen9
-working copy at base commit `12597a6b7` with the repository's pinned Bazel
-8.5.1. The optimized `@crosvm_bin//:crosvm__crosvm` and
-`@gfxstream//host:gfxstream_backend` targets both completed successfully (684
-local actions). `tools/ika` also passed `bash -n`, and the complete change set
-passed `git diff --check`.
+working copy with the repository's pinned Bazel 8.5.1. The optimized
+`@crosvm_bin//:crosvm__crosvm` and `@gfxstream//host:gfxstream_backend` targets
+both completed successfully. The ARM64 gfxstream target was then built on the
+affected host and installed for runtime testing. `tools/ika` also passed
+`bash -n`, and the complete change set passed `git diff --check`.
+
+### Kernel-accounting re-evaluation
+
+Process RSS alone initially gave a misleading result. An early version scoped
+the pool to one `UdmabufCreator`; its visible memfd names appeared to plateau,
+but `/sys/kernel/debug/dma_buf/bufinfo` showed 565 retained udmabufs totaling
+5,719,097,344 bytes after repeated launches. Gfxstream creates multiple
+`VkEmulation` objects during the renderer lifetime, so those per-instance pools
+were being destroyed and recreated. The GPU driver retained the old imports in
+the kernel even after their userspace pools disappeared.
+
+The installed design was changed to one pool shared by every
+`UdmabufCreator` in the renderer. The host was rebooted to remove the pre-fix
+kernel state, and five launch/force-stop cycles of Asphalt 9 were run. Samples
+were collected after process cleanup:
+
+| Stage | udmabuf objects | udmabuf bytes | crosvm anonymous PSS (KiB) |
+| --- | ---: | ---: | ---: |
+| VM boot | 154 | 236,929,024 | 502,352 |
+| Cycle 1 | 191 | 1,735,950,336 | 705,200 |
+| Cycle 2 | 192 | 1,736,015,872 | 872,176 |
+| Cycle 3 | 192 | 1,736,015,872 | 812,560 |
+| Cycle 4 | 192 | 1,736,015,872 | 1,028,320 |
+| Cycle 5 | 192 | 1,736,015,872 | 741,216 |
+
+The first cycle established the workload high-water mark. Cycle two added one
+64 KiB object; cycles three through five added no udmabuf objects or bytes.
+Ordinary DRM DMA-BUFs also reached a display-buffer high-water mark and then
+decreased. Anonymous PSS fluctuated rather than increasing once per launch,
+which is consistent with allocator and renderer caches rather than retained
+per-launch backing.
+
+This kernel view also establishes the limit of a userspace-only solution. Before
+the reboot, udmabufs retained by the Apple GPU stack survived renderer exit;
+closing crosvm was not sufficient to reclaim them. Without changing Mesa or the
+kernel, the practical remedy is therefore to reuse the same kernel objects and
+bound retention at the running renderer's workload high-water mark.
 
 Runtime validation is performed in layers:
 
@@ -176,9 +195,11 @@ Runtime validation is performed in layers:
 - repeated Asphalt launches are checked for a plateau after warm-up, rather
   than expecting all graphics RSS to return to the pre-launch baseline.
 
-For runtime verification, observe both host RSS and DMA-BUF/fd counts over at
-least three launch/exit cycles. A rising first-cycle high-water mark is normal;
-continued near-linear growth after equivalent later cycles is not.
+For runtime verification, observe host RSS, `/proc/meminfo` kernel/shmem
+counters, and `/sys/kernel/debug/dma_buf/bufinfo` over at least three
+launch/exit cycles. A rising first-cycle high-water mark is normal; continued
+near-linear growth in either process or kernel accounting after equivalent
+later cycles is not.
 
 ## Risks and limitations
 
@@ -190,13 +211,12 @@ continued near-linear growth after equivalent later cycles is not.
 - `malloc_trim` is glibc-specific and compiled out on other C libraries.
 - This mitigation cannot eliminate arbitrary caches inside external drivers;
   it bounds their growth by reusing external-memory identities.
-- Pool entries are reclaimed when gfxstream exits, not during idle periods.
+- The renderer-wide pool intentionally keeps its high-water backing resident;
+  entries are reclaimed when gfxstream exits, not during idle periods.
 
 ## Changed files
 
 - `base/cvd/build_external/gfxstream/PATCH.gfxstream.pool-host-visible-udmabufs.patch`
 - `base/cvd/build_external/gfxstream/gfxstream.MODULE.bazel`
-- `base/cvd/build_external/crosvm/PATCH.vm_control-map-dmabuf-directly.patch`
-- `base/cvd/build_external/crosvm/crosvm.MODULE.bazel`
-- `base/cvd/build_external/crosvm/README.md`
+- `docs/gfxstream-memory-retention.md`
 - `tools/ika`

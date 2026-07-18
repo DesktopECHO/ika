@@ -40,11 +40,6 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** Adds a `ResizeDisplay { display_id, display }` variant to `GpuControlCommand` and re-exports `do_gpu_display_resize` from `client.rs`. Pair with the `resize_display` patches so the control-socket protocol exposes the new operation end-to-end.
 - **Why:** Without this, the `resize_display` capability added on the device side has no client-facing command.
 
-#### `PATCH.vm_control-map-dmabuf-directly.patch`
-- **Targets:** `vm_control` crate. File: `src/lib.rs`.
-- **What it does:** Maps `VmMemorySource::Vulkan` resources directly when the exported handle is a DMA-BUF, retaining the Vulkano import path for opaque Vulkan handles.
-- **Why:** Gfxstream's Apple Silicon host-visible allocations are udmabuf-backed DMA-BUFs and are already directly mappable. Importing them into a second Vulkano device-memory object needlessly transfers descriptor ownership through the Vulkan driver. The guest mapping was released on process exit, but the imported descriptors remained open in crosvm and pinned the backing pages. Direct mmap makes unregister/drop release the mapping without a second Vulkan lifetime.
-
 ### Upstream-sync patches (large)
 
 #### `PATCH.mesa3d_util-upstream-main-20260520.patch`

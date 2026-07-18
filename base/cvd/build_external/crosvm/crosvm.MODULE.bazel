@@ -217,10 +217,7 @@ crosvm_bin.annotation(
 crosvm_bin.annotation(
     crate = "vm_control",
     patch_args = ["-p1"],
-    patches = [
-        "@//build_external/crosvm:PATCH.crosvm-resize-display-vm-control.patch",
-        "@//build_external/crosvm:PATCH.vm_control-map-dmabuf-directly.patch",
-    ],
+    patches = ["@//build_external/crosvm:PATCH.crosvm-resize-display-vm-control.patch"],
 )
 
 crosvm_bin.from_specs(

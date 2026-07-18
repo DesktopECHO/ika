@@ -1,8 +1,8 @@
 Patch summary:
 Bound host-visible Vulkan memory retained by GPU drivers which fail to release
-imported dma-bufs. Keep an exact-size pool of udmabuf objects and reuse their
-backing memfds across guest process lifetimes instead of creating a new dma-buf
-for every allocation cycle.
+imported dma-bufs. Keep a renderer-wide exact-size pool of udmabuf objects and
+reuse their backing memfds across VkEmulation and guest process lifetimes
+instead of creating a new dma-buf for every allocation cycle.
 
 Carry a shared lease through both owners of the backing allocation: the host
 VkDeviceMemory and the virtio-gpu blob resource exported to the VMM. An entry
@@ -57,7 +57,7 @@ diff --git a/common/base/include/gfxstream/memory/UdmabufCreator.h b/common/base
 diff --git a/common/base/UdmabufCreator_linux.cpp b/common/base/UdmabufCreator_linux.cpp
 --- a/common/base/UdmabufCreator_linux.cpp
 +++ b/common/base/UdmabufCreator_linux.cpp
-@@ -18,14 +18,86 @@
+@@ -18,14 +18,94 @@
  #include <sys/utsname.h>
  #include <unistd.h>
  
@@ -134,11 +134,19 @@ diff --git a/common/base/UdmabufCreator_linux.cpp b/common/base/UdmabufCreator_l
 +    uint64_t mId;
 +};
 +
++// A renderer can create multiple VkEmulation objects over its lifetime. Share
++// one pool across all of their UdmabufCreator instances; an instance-local
++// pool would recreate every dma-buf when a guest graphics process restarts.
++std::shared_ptr<UdmabufPoolState> GetProcessUdmabufPool() {
++    static const auto pool = std::make_shared<UdmabufPoolState>();
++    return pool;
++}
++
 +}  // namespace
 +
 +class UdmabufCreator::Impl {
 +   public:
-+    std::shared_ptr<UdmabufPoolState> pool = std::make_shared<UdmabufPoolState>();
++    std::shared_ptr<UdmabufPoolState> pool = GetProcessUdmabufPool();
 +};
 +
  bool IsAndroidKernel6_6() {
