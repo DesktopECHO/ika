@@ -362,6 +362,7 @@ find %{buildroot}/usr/lib/cuttlefish-common/usr/share/webrtc/assets -type f -exe
 
 install -Dpm0755 base/host/deploy/capability_query.py %{buildroot}/usr/lib/cuttlefish-common/bin/capability_query.py
 install -Dpm0755 tools/getchromium %{buildroot}/usr/lib/cuttlefish-common/bin/getchromium
+install -Dpm0755 tools/ika-udmabuf-broker %{buildroot}/usr/lib/cuttlefish-common/bin/ika-udmabuf-broker
 install -Dpm0755 tools/ika %{buildroot}/bin/ika
 install -Dpm0644 base/host/packages/cuttlefish-base/etc/NetworkManager/conf.d/99-cuttlefish.conf %{buildroot}/etc/NetworkManager/conf.d/99-cuttlefish.conf
 install -Dpm0644 base/rpm/99-cuttlefish.conf %{buildroot}/etc/sysctl.d/99-cuttlefish.conf

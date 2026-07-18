@@ -1,0 +1,238 @@
+#!/usr/bin/python3
+"""Keep gfxstream udmabuf identities reusable across Cuttlefish runs.
+
+Asahi kernels can retain a DMA-BUF attachment after the importing DRM file is
+closed.  A retained attachment pins the udmabuf's memfd pages, but there is no
+userspace API which can detach it.  This broker owns the original descriptors
+and lends duplicates to each renderer process, allowing later Cuttlefish runs
+to reuse the same pinned pages instead of allocating another high-water set.
+"""
+
+from __future__ import annotations
+
+import argparse
+import array
+import errno
+import fcntl
+import os
+import signal
+import socket
+import struct
+import sys
+import threading
+from dataclasses import dataclass
+
+
+MAGIC = 0x55444D42  # "UDMB"
+VERSION = 1
+REQUEST = struct.Struct("=IIQ")
+RESPONSE = struct.Struct("=IiQ")
+
+# _IOW('u', 0x42, struct udmabuf_create), whose Linux UAPI layout is
+# u32 memfd, u32 flags, u64 offset, u64 size.
+UDMABUF_CREATE = 0x40187542
+UDMABUF_CREATE_ARGS = struct.Struct("=IIQQ")
+UDMABUF_FLAGS_CLOEXEC = 1
+
+MFD_CLOEXEC = 0x0001
+MFD_ALLOW_SEALING = 0x0002
+F_ADD_SEALS = 1033
+F_SEAL_SEAL = 0x0001
+F_SEAL_SHRINK = 0x0002
+F_SEAL_GROW = 0x0004
+
+
+@dataclass
+class Entry:
+    ident: int
+    size: int
+    memfd: int
+    dmabuf: int
+    owner: object | None = None
+
+
+class Broker:
+    def __init__(self, socket_path: str, pid_file: str) -> None:
+        self.socket_path = socket_path
+        self.pid_file = pid_file
+        self.uid = os.getuid()
+        self.control_fd = os.open("/dev/udmabuf", os.O_RDWR | os.O_CLOEXEC)
+        self.entries: list[Entry] = []
+        self.next_ident = 1
+        self.lock = threading.Lock()
+        self.stopping = threading.Event()
+        self.server: socket.socket | None = None
+
+    def _create_entry(self, size: int) -> Entry:
+        memfd = os.memfd_create(
+            f"ika-udmabuf-{self.next_ident}", MFD_CLOEXEC | MFD_ALLOW_SEALING
+        )
+        try:
+            os.ftruncate(memfd, size)
+            fcntl.fcntl(
+                memfd,
+                F_ADD_SEALS,
+                F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW,
+            )
+            args = bytearray(
+                UDMABUF_CREATE_ARGS.pack(
+                    memfd, UDMABUF_FLAGS_CLOEXEC, 0, size
+                )
+            )
+            dmabuf = fcntl.ioctl(
+                self.control_fd, UDMABUF_CREATE, args, True
+            )
+        except BaseException:
+            os.close(memfd)
+            raise
+
+        entry = Entry(self.next_ident, size, memfd, dmabuf)
+        self.next_ident += 1
+        self.entries.append(entry)
+        print(
+            f"created entry id={entry.ident} size={entry.size}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return entry
+
+    def _lease(self, owner: object, size: int) -> Entry:
+        with self.lock:
+            for entry in self.entries:
+                if entry.owner is None and entry.size == size:
+                    entry.owner = owner
+                    return entry
+            entry = self._create_entry(size)
+            entry.owner = owner
+            return entry
+
+    def _release_owner(self, owner: object) -> None:
+        with self.lock:
+            for entry in self.entries:
+                if entry.owner is owner:
+                    entry.owner = None
+
+    @staticmethod
+    def _send_error(connection: socket.socket, error_number: int) -> None:
+        connection.send(RESPONSE.pack(MAGIC, -abs(error_number), 0))
+
+    def _serve_client(self, connection: socket.socket) -> None:
+        owner = object()
+        try:
+            pid, uid, _gid = struct.unpack(
+                "3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+            )
+            if uid != self.uid:
+                self._send_error(connection, errno.EACCES)
+                return
+
+            while not self.stopping.is_set():
+                packet = connection.recv(REQUEST.size)
+                if not packet:
+                    return
+                if len(packet) != REQUEST.size:
+                    self._send_error(connection, errno.EPROTO)
+                    return
+
+                magic, version, size = REQUEST.unpack(packet)
+                page_size = os.sysconf("SC_PAGE_SIZE")
+                if magic != MAGIC or version != VERSION:
+                    self._send_error(connection, errno.EPROTO)
+                    return
+                if size == 0 or size % page_size or size > (1 << 40):
+                    self._send_error(connection, errno.EINVAL)
+                    continue
+
+                try:
+                    entry = self._lease(owner, size)
+                    rights = array.array("i", [entry.memfd, entry.dmabuf])
+                    connection.sendmsg(
+                        [RESPONSE.pack(MAGIC, 0, entry.ident)],
+                        [(socket.SOL_SOCKET, socket.SCM_RIGHTS, rights)],
+                    )
+                except OSError as error:
+                    self._send_error(connection, error.errno or errno.EIO)
+                    print(
+                        f"request from pid={pid} failed: {error}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            self._release_owner(owner)
+            connection.close()
+
+    def stop(self, _signum: int | None = None, _frame: object | None = None) -> None:
+        self.stopping.set()
+        if self.server is not None:
+            self.server.close()
+
+    def run(self) -> None:
+        os.makedirs(os.path.dirname(self.socket_path), mode=0o700, exist_ok=True)
+        try:
+            os.unlink(self.socket_path)
+        except FileNotFoundError:
+            pass
+
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC)
+        self.server = server
+        server.bind(self.socket_path)
+        os.chmod(self.socket_path, 0o600)
+        server.listen(4)
+
+        with open(self.pid_file, "w", encoding="ascii") as output:
+            output.write(f"{os.getpid()}\n")
+
+        signal.signal(signal.SIGTERM, self.stop)
+        signal.signal(signal.SIGINT, self.stop)
+        print(
+            f"listening on {self.socket_path}", file=sys.stderr, flush=True
+        )
+
+        try:
+            while not self.stopping.is_set():
+                try:
+                    connection, _ = server.accept()
+                except OSError as error:
+                    if self.stopping.is_set() or error.errno in (errno.EBADF, errno.EINTR):
+                        continue
+                    raise
+                threading.Thread(
+                    target=self._serve_client, args=(connection,), daemon=True
+                ).start()
+        finally:
+            try:
+                server.close()
+            except OSError:
+                pass
+            for entry in self.entries:
+                os.close(entry.dmabuf)
+                os.close(entry.memfd)
+            os.close(self.control_fd)
+            for path in (self.socket_path, self.pid_file):
+                try:
+                    os.unlink(path)
+                except FileNotFoundError:
+                    pass
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--socket", required=True)
+    parser.add_argument("--pid-file", required=True)
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        Broker(args.socket, args.pid_file).run()
+    except OSError as error:
+        print(f"ika-udmabuf-broker: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

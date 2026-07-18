@@ -15,6 +15,9 @@ git_repository(
         # Reuse host-visible udmabuf objects across guest process lifetimes so
         # drivers which retain imports grow only to the workload high-water mark.
         "@//build_external/gfxstream:PATCH.gfxstream.pool-host-visible-udmabufs.patch",
+        # Preserve that pool's backing identities across renderer restarts on
+        # Asahi hosts, where the kernel can retain the final DMA-BUF attachment.
+        "@//build_external/gfxstream:PATCH.gfxstream.udmabuf-broker.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.opengles-3.2.patch",
         # Last-resort cleanup for Vulkan instances which survive normal
         # per-context teardown, before the renderer closes its DRM file.

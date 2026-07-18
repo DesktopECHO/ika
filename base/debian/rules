@@ -182,6 +182,7 @@ override_dh_strip:
 override_dh_install:
 	dh_install
 	install -Dpm0755 ../tools/ika debian/ika-base/usr/bin/ika
+	install -Dpm0755 ../tools/ika-udmabuf-broker ${cuttlefish_common}/bin/ika-udmabuf-broker
 	install -Dpm0755 ../tools/getchromium ${cuttlefish_common}/bin/getchromium
 	install -Dpm0755 rpm/cuttlefish-add-user-to-groups.sh debian/ika-base/usr/libexec/cuttlefish/cuttlefish-add-user-to-groups
 	install -Dpm0644 rpm/99-cuttlefish.conf debian/ika-base/etc/sysctl.d/99-cuttlefish.conf

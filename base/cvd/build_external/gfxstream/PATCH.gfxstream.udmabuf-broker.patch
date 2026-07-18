@@ -1,0 +1,204 @@
+Patch summary:
+Allow gfxstream's renderer-local udmabuf pool to obtain backing descriptors
+from Ika's persistent per-user broker. Some Asahi kernels retain one DMA-BUF
+attachment after the renderer closes its DRM file, which pins every udmabuf
+folio and makes true userspace reclamation impossible. Keeping the original
+descriptors in a broker lets later Cuttlefish processes reuse the same backing
+pages instead of allocating another workload-sized set after every VM restart.
+
+The broker is optional. If its socket is unset or unavailable, retain the
+existing in-process allocation path.
+
+--- a/common/base/UdmabufCreator_linux.cpp
++++ b/common/base/UdmabufCreator_linux.cpp
+@@ -15,11 +15,15 @@
+ #include <fcntl.h>
+ #include <linux/udmabuf.h>
+ #include <sys/ioctl.h>
++#include <sys/socket.h>
++#include <sys/un.h>
+ #include <sys/utsname.h>
+ #include <unistd.h>
+ 
++#include <array>
+ #include <chrono>
+ #include <cstdint>
++#include <cstdlib>
+ #include <cstring>
+ #include <memory>
+ #include <mutex>
+@@ -40,6 +44,29 @@
+ // from racing that final close.
+ constexpr auto kReuseQuarantine = std::chrono::milliseconds(250);
+ 
++constexpr uint32_t kBrokerMagic = 0x55444d42;  // "UDMB"
++constexpr uint32_t kBrokerVersion = 1;
++
++struct UdmabufBrokerRequest {
++    uint32_t magic = kBrokerMagic;
++    uint32_t version = kBrokerVersion;
++    uint64_t size = 0;
++};
++
++struct UdmabufBrokerResponse {
++    uint32_t magic = 0;
++    int32_t status = 0;
++    uint64_t id = 0;
++};
++
++static_assert(sizeof(UdmabufBrokerRequest) == 16);
++static_assert(sizeof(UdmabufBrokerResponse) == 16);
++
++struct UdmabufBrokerAllocation {
++    ManagedDescriptor memory;
++    ManagedDescriptor udmabuf;
++};
++
+ struct UdmabufPoolEntry {
+     UdmabufPoolEntry(uint64_t idIn, size_t sizeIn, ManagedDescriptor memoryIn,
+                      ManagedDescriptor udmabufIn)
+@@ -70,6 +97,88 @@
+         }
+     }
+ 
++    std::optional<UdmabufBrokerAllocation> requestFromBroker(size_t size) {
++        auto socketFd = mBrokerSocket.get();
++        if (!socketFd) {
++            const char* path = std::getenv("GFXSTREAM_UDMABUF_BROKER");
++            if (!path || !path[0] || std::strlen(path) >= sizeof(sockaddr_un::sun_path)) {
++                return std::nullopt;
++            }
++
++            int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
++            if (fd < 0) {
++                return std::nullopt;
++            }
++
++            sockaddr_un address = {};
++            address.sun_family = AF_UNIX;
++            std::strncpy(address.sun_path, path, sizeof(address.sun_path) - 1);
++            if (connect(fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) < 0) {
++                close(fd);
++                return std::nullopt;
++            }
++            mBrokerSocket = ManagedDescriptor(fd);
++            socketFd = mBrokerSocket.get();
++        }
++
++        UdmabufBrokerRequest request = {
++            .size = static_cast<uint64_t>(size),
++        };
++        if (send(*socketFd, &request, sizeof(request), MSG_NOSIGNAL) != sizeof(request)) {
++            mBrokerSocket = ManagedDescriptor();
++            return std::nullopt;
++        }
++
++        UdmabufBrokerResponse response;
++        iovec io = {
++            .iov_base = &response,
++            .iov_len = sizeof(response),
++        };
++        char control[CMSG_SPACE(sizeof(DescriptorType) * 2)] = {};
++        msghdr message = {
++            .msg_iov = &io,
++            .msg_iovlen = 1,
++            .msg_control = control,
++            .msg_controllen = sizeof(control),
++        };
++        const ssize_t received = recvmsg(*socketFd, &message, MSG_CMSG_CLOEXEC);
++        if (received != sizeof(response) || response.magic != kBrokerMagic || response.status != 0 ||
++            (message.msg_flags & (MSG_TRUNC | MSG_CTRUNC))) {
++            mBrokerSocket = ManagedDescriptor();
++            return std::nullopt;
++        }
++
++        std::array<DescriptorType, 2> descriptors = {-1, -1};
++        bool foundDescriptors = false;
++        for (cmsghdr* header = CMSG_FIRSTHDR(&message); header;
++             header = CMSG_NXTHDR(&message, header)) {
++            if (header->cmsg_level != SOL_SOCKET || header->cmsg_type != SCM_RIGHTS ||
++                header->cmsg_len < CMSG_LEN(sizeof(descriptors))) {
++                continue;
++            }
++            std::memcpy(descriptors.data(), CMSG_DATA(header), sizeof(descriptors));
++            foundDescriptors = true;
++            break;
++        }
++        if (!foundDescriptors || descriptors[0] < 0 || descriptors[1] < 0) {
++            for (DescriptorType descriptor : descriptors) {
++                if (descriptor >= 0) {
++                    close(descriptor);
++                }
++            }
++            mBrokerSocket = ManagedDescriptor();
++            return std::nullopt;
++        }
++
++        return UdmabufBrokerAllocation{
++            .memory = ManagedDescriptor(descriptors[0]),
++            .udmabuf = ManagedDescriptor(descriptors[1]),
++        };
++    }
++
++    // Declare the connection before the entries so process teardown closes all
++    // local descriptors before releasing the broker-side leases.
++    ManagedDescriptor mBrokerSocket;
+     std::mutex mMutex;
+     std::vector<std::unique_ptr<UdmabufPoolEntry>> mEntries;
+     uint64_t mNextId = 1;
+@@ -208,21 +317,42 @@
+         };
+     }
+ 
+-    // An udmabuf-created fd and a shared memory fd have separate lifetimes, but alias the same set
+-    // of kernel pages.
+-    const struct udmabuf_create create = {
+-        .memfd = (uint32_t)memory.getFd(),
+-        .flags = UDMABUF_FLAGS_CLOEXEC,
+-        .size = (uint64_t)memory.size(),
+-    };
+-
+-    DescriptorType udmabuf = ioctl(*mOsHandleCreator.get(), UDMABUF_CREATE, &create);
+-    if (udmabuf < 0) {
+-        return std::nullopt;
++    DescriptorType udmabuf = -1;
++    DescriptorType pooledMemory = -1;
++    DescriptorType pooledUdmabuf = -1;
++
++    // Prefer descriptors owned by Ika's persistent broker. Asahi can leave one
++    // import attached after the DRM file closes; retaining and reusing the
++    // dma-buf identity prevents each Cuttlefish restart from pinning another
++    // workload-sized set of pages.
++    auto brokerAllocation = pool->requestFromBroker(memory.size());
++    if (brokerAllocation) {
++        auto brokerMemory = brokerAllocation->memory.get();
++        auto brokerUdmabuf = brokerAllocation->udmabuf.get();
++        if (!brokerMemory || !brokerUdmabuf ||
++            dup3(*brokerMemory, memory.getFd(), O_CLOEXEC) < 0) {
++            return std::nullopt;
++        }
++        udmabuf = fcntl(*brokerUdmabuf, F_DUPFD_CLOEXEC, 0);
++        pooledMemory = *brokerAllocation->memory.release();
++        pooledUdmabuf = *brokerAllocation->udmabuf.release();
++    } else {
++        // An udmabuf-created fd and a shared memory fd have separate lifetimes,
++        // but alias the same set of kernel pages.
++        const struct udmabuf_create create = {
++            .memfd = (uint32_t)memory.getFd(),
++            .flags = UDMABUF_FLAGS_CLOEXEC,
++            .size = (uint64_t)memory.size(),
++        };
++
++        udmabuf = ioctl(*mOsHandleCreator.get(), UDMABUF_CREATE, &create);
++        if (udmabuf < 0) {
++            return std::nullopt;
++        }
++        pooledMemory = fcntl(memory.getFd(), F_DUPFD_CLOEXEC, 0);
++        pooledUdmabuf = fcntl(udmabuf, F_DUPFD_CLOEXEC, 0);
+     }
+ 
+-    DescriptorType pooledMemory = fcntl(memory.getFd(), F_DUPFD_CLOEXEC, 0);
+-    DescriptorType pooledUdmabuf = fcntl(udmabuf, F_DUPFD_CLOEXEC, 0);
+     if (pooledMemory < 0 || pooledUdmabuf < 0) {
+         if (pooledMemory >= 0) {
+             close(pooledMemory);

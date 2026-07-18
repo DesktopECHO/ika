@@ -358,11 +358,16 @@ CVD_BIN="${CVD_HOST_OUT}/bin/cvd_internal_start"
 CVD_CLI_BIN="${CVD_HOST_OUT}/bin/cvd"
 CVD_STOP_BIN="${CVD_HOST_OUT}/bin/cvd_internal_stop"
 CVD_ADB_BIN="${CVD_HOST_OUT}/bin/adb"
+UDMABUF_BROKER_BIN="${PACKAGED_CVD_HOST_OUT}/bin/ika-udmabuf-broker"
 CVD_INSTANCE_DIR="${CVD_HOME_DIR}/cuttlefish/instances/cvd-1"
 CVD_LAUNCHER_LOG="${CVD_INSTANCE_DIR}/logs/launcher.log"
 CVD_CONFIG_PATH="${CVD_INSTANCE_DIR}/cuttlefish_config.json"
 CHROMIUM_INSTALL_STAMP="${CVD_HOME_DIR}/chromium-installed-cvd-1"
 UDMABUF_BASELINE_FILE="${CVD_HOME_DIR}/udmabuf-baseline"
+UDMABUF_BROKER_SOCKET="${CVD_TMP_DIR}/udmabuf-broker.sock"
+UDMABUF_BROKER_PID_FILE="${CVD_TMP_DIR}/udmabuf-broker.pid"
+UDMABUF_BROKER_LOG_FILE="${CVD_HOME_DIR}/udmabuf-broker.log"
+GFXSTREAM_UDMABUF_BROKER_SOCKET=""
 SCRCPY_BIN="${PACKAGED_SCRCPY_BIN}"
 SCRCPY_SERVER_PATH_OVERRIDE=""
 if [[ -f "${PACKAGED_SCRCPY_SERVER}" ]]; then
@@ -384,6 +389,7 @@ CVD_DATA_STORAGE_MESSAGE=""
 CVD_NEWLY_PROVISIONED="false"
 : "${IKA_STOP_GRACE_SEC:=30}"
 : "${IKA_SCRCPY_REBOOT_TIMEOUT_SEC:=120}"
+: "${IKA_UDMABUF_BROKER:=auto}"
 
 readonly SCRCPY_EXIT_DISCONNECTED=2
 
@@ -440,6 +446,72 @@ ensure_open_file_limit() {
   else
     log "could not raise open-file soft limit from ${soft_limit} to ${min_open_files}"
   fi
+}
+
+udmabuf_broker_is_alive() {
+  local pid
+  local command_line
+
+  [[ -r "${UDMABUF_BROKER_PID_FILE}" && -S "${UDMABUF_BROKER_SOCKET}" ]] || return 1
+  read -r pid <"${UDMABUF_BROKER_PID_FILE}" || return 1
+  [[ "${pid}" =~ ^[1-9][0-9]*$ && -r "/proc/${pid}/cmdline" ]] || return 1
+  command_line="$(tr '\0' ' ' <"/proc/${pid}/cmdline" 2>/dev/null || true)"
+  [[ "${command_line}" == *"ika-udmabuf-broker"* &&
+     "${command_line}" == *"${UDMABUF_BROKER_SOCKET}"* ]]
+}
+
+ensure_udmabuf_broker() {
+  local mode="${IKA_UDMABUF_BROKER,,}"
+  local pid
+  local deadline
+
+  GFXSTREAM_UDMABUF_BROKER_SOCKET=""
+  [[ "${CVD_GPU_MODE}" == gfxstream* ]] || return 0
+  is_apple_silicon_16k_host || return 0
+
+  case "${mode}" in
+    ""|auto|1|true|yes|on|enable|enabled)
+      ;;
+    0|false|no|off|disable|disabled)
+      log "Apple Silicon udmabuf broker disabled by IKA_UDMABUF_BROKER=${IKA_UDMABUF_BROKER}"
+      return 0
+      ;;
+    *)
+      die "invalid IKA_UDMABUF_BROKER='${IKA_UDMABUF_BROKER}' (expected auto, on, or off)"
+      ;;
+  esac
+
+  if udmabuf_broker_is_alive; then
+    GFXSTREAM_UDMABUF_BROKER_SOCKET="${UDMABUF_BROKER_SOCKET}"
+    log "reusing persistent Apple Silicon udmabuf broker"
+    return 0
+  fi
+
+  if [[ ! -x "${UDMABUF_BROKER_BIN}" ]]; then
+    log "WARNING: ${UDMABUF_BROKER_BIN} is unavailable; kernel-pinned udmabufs cannot be reused across VM restarts"
+    return 0
+  fi
+
+  rm -f "${UDMABUF_BROKER_SOCKET}" "${UDMABUF_BROKER_PID_FILE}"
+  nohup "${UDMABUF_BROKER_BIN}" \
+    --socket "${UDMABUF_BROKER_SOCKET}" \
+    --pid-file "${UDMABUF_BROKER_PID_FILE}" \
+    </dev/null >>"${UDMABUF_BROKER_LOG_FILE}" 2>&1 3>&- &
+  pid="$!"
+  disown "${pid}" 2>/dev/null || true
+
+  deadline=$((SECONDS + 5))
+  while (( SECONDS < deadline )); do
+    if udmabuf_broker_is_alive; then
+      GFXSTREAM_UDMABUF_BROKER_SOCKET="${UDMABUF_BROKER_SOCKET}"
+      log "started persistent Apple Silicon udmabuf broker (pid ${pid})"
+      return 0
+    fi
+    kill -0 "${pid}" 2>/dev/null || break
+    sleep 0.1
+  done
+
+  log "WARNING: udmabuf broker failed to start; see ${UDMABUF_BROKER_LOG_FILE}"
 }
 
 normalize_gfxstream_vulkan_mode() {
@@ -672,6 +744,8 @@ Environment Variables:
                          (example: --keyboard=uhid --no-clipboard-autosync)
   IKA_STOP_GRACE_SEC     Seconds to allow Cuttlefish and gfxstream to clean up
                          before forcing surviving processes to exit (default: 30).
+  IKA_UDMABUF_BROKER     auto/on keeps Apple Silicon udmabuf identities reusable
+                         across VM restarts; off uses renderer-local pooling only.
   IKA_SCRCPY_REBOOT_TIMEOUT_SEC
                          Seconds to wait for a guest reboot before leaving the
                          console closed (default: 120).
@@ -1538,6 +1612,11 @@ append_cvd_env_args() {
     fi
     env_args_ref+=("GLIBC_TUNABLES=${glibc_tunables}")
     log "Apple Silicon gfxstream allocator tunables: ${glibc_tunables}"
+
+    if [[ -n "${GFXSTREAM_UDMABUF_BROKER_SOCKET}" ]]; then
+      env_args_ref+=("GFXSTREAM_UDMABUF_BROKER=${GFXSTREAM_UDMABUF_BROKER_SOCKET}")
+      log "Apple Silicon gfxstream udmabuf broker: ${GFXSTREAM_UDMABUF_BROKER_SOCKET}"
+    fi
   fi
 
   if [[ -n "${config_path}" ]]; then
@@ -1838,7 +1917,11 @@ report_udmabuf_leaks() {
   if (( leaked_count > 0 || leaked_bytes > 0 )); then
     (( leaked_count > 0 )) || leaked_count=0
     (( leaked_bytes > 0 )) || leaked_bytes=0
-    log "WARNING: Asahi retained ${leaked_count} udmabuf object(s) ($(format_udmabuf_bytes "${leaked_bytes}")) after Cuttlefish stopped. A graphics-session reset or reboot may still be required to reclaim kernel-pinned memory."
+    if udmabuf_broker_is_alive; then
+      log "Asahi retained ${leaked_count} udmabuf object(s) ($(format_udmabuf_bytes "${leaked_bytes}")) after Cuttlefish stopped; the persistent broker is preserving these identities for reuse by the next VM. Reboot the host to reclaim the pinned high-water allocation."
+    else
+      log "WARNING: Asahi retained ${leaked_count} udmabuf object(s) ($(format_udmabuf_bytes "${leaked_bytes}")) after Cuttlefish stopped. A host reboot is required to reclaim kernel-pinned memory."
+    fi
   else
     log_file_only "Asahi udmabuf usage returned to baseline: $(format_udmabuf_snapshot "${current}")"
   fi
@@ -2357,6 +2440,7 @@ start_cvd() {
   append_data_storage_args args "$@"
   append_arm64_kernel_page_args args "$@"
   append_gfxstream_vulkan_args args "$@"
+  ensure_udmabuf_broker
   append_default_display_arg args "${scrcpy_dpi}" "$@"
   append_host_timezone_arg args
   append_cvd_env_args cvd_env_args
