@@ -1,13 +1,14 @@
-# Run e2e tests in Containers
+# Run End-to-End Tests in Containers
 
 ## Set the relevant permissions
 
-**IMPORTANT** Do not use rootfull podman in your development workflow, use rootless podman.
+> [!IMPORTANT]
+> Use rootless Podman for development; do not use rootful Podman.
 
-Github Actions does not offer a Fedora based runner, using Podman we can create Fedora based
-containers that mimics a real host behavior.
+GitHub Actions does not provide a Fedora-based runner. Podman provides a
+Fedora-based container that more closely matches host behavior.
 
-```
+```bash
 sudo setfacl -m "u:$(whoami):rw" /dev/kvm
 sudo setfacl -m "u:$(whoami):rw" /dev/vhost-net
 sudo setfacl -m "u:$(whoami):rw" /dev/vhost-vsock
@@ -15,13 +16,13 @@ sudo setfacl -m "u:$(whoami):rw" /dev/vhost-vsock
 
 ## Build the image
 
-The build image command must be run at the root of the `ika` repo directory.
+Run the image-build command from the root of the Ika repository.
 
 Image creation expects ika RPM packages: `ika-base-*.rpm`,
 `ika-metrics-*.rpm`, `ika-user-*.rpm`, and `ika-orchestration-*.rpm` in the
 current directory.
 
-```
+```bash
 podman build \
   --file "tools/testutils/cw/Containerfile" \
   --tag "android-cuttlefish-e2etest:latest" \
@@ -29,9 +30,10 @@ podman build \
 ```
 
 ## Run the container
-The run container command must be run at the root of the `ika` repo directory.
 
-```
+Run the container command from the root of the Ika repository.
+
+```bash
 mkdir -p /tmp/cw_bazel && \
 podman run --name tester \
   -d \
@@ -49,7 +51,7 @@ podman run --name tester \
 
 ## Run the test
 
-```
+```bash
 podman exec -it tester \
   bazel --output_user_root=/tmp/cw_bazel/output test //orchestration/journal_gatewayd_test:journal_gatewayd_test_test
 ```

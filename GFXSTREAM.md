@@ -1,4 +1,4 @@
-# gfxstream GPU Modes
+# Gfxstream GPU Modes
 
 Both `gfxstream` and `gfxstream_guest_angle` use gfxstream and the physical
 host GPU, but they translate OpenGL ES differently.
@@ -11,7 +11,7 @@ host GPU, but they translate OpenGL ES differently.
 | crosvm setting | `gles=true` | `gles=false` |
 | Compatibility | The current GLES translator breaks some games | Better game compatibility |
 | Performance | Potentially less translation overhead | Usually excellent, but workload-dependent |
-| `--gfxstream_vulkan` | Controls the optional Vulkan context | Ignored; Vulkan is mandatory |
+| `--gfxstream_vulkan` | Controls the optional Vulkan context | Ignored; Vulkan is required |
 
 The `gfxstream` rendering path is:
 
@@ -25,11 +25,14 @@ The `gfxstream_guest_angle` rendering path is:
 Game GLES -> guest ANGLE -> Vulkan -> gfxstream Vulkan -> host Vulkan driver -> physical GPU
 ```
 
-Beach Buggy Racing fails with `gfxstream` because the native gfxstream GLES
-translator drops its 3D pass. It works with `gfxstream_guest_angle` because
-ANGLE handles GLES and gfxstream transports Vulkan.
+`gfxstream_guest_angle` is Ika's default because guest ANGLE avoids compatibility
+problems in gfxstream's direct GLES translator. For example, Beach Buggy Racing
+loses its 3D pass in direct `gfxstream` mode but works with
+`gfxstream_guest_angle`, where ANGLE handles GLES and gfxstream transports
+Vulkan.
 
-For systems with a working hardware Vulkan driver, start Ika with:
+To explicitly select the default mode on a system with a working hardware
+Vulkan driver, run:
 
 ```bash
 ika restart --gpu_mode=gfxstream_guest_angle

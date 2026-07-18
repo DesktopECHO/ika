@@ -1,8 +1,8 @@
-# e2e Tests
+# End-to-End Tests
 
-## Orchestration tests
+## Orchestration Tests
 
-The orchestration e2e tests require an environment with the `host orchestrator`
+The orchestration end-to-end tests require an environment with the `host orchestrator`
 service and `cvd` installed.
 
 Run the test command from the `e2etests` directory.
@@ -11,13 +11,17 @@ Run the test command from the `e2etests` directory.
 bazel test --local_test_jobs=1 //orchestration/...
 ```
 
-### Adding a new Go dependency
+### Add a Go Dependency
 
-If adding `github.com/gorilla/websocket`:
+For example, to add `github.com/gorilla/websocket`:
 
 ```bash
-bazel run //:gazelle -- update-repos -to_macro=go_repositories.bzl%repos "github.com/gorilla/websocket"
+go get github.com/gorilla/websocket
 ```
+
+Add the generated repository name (`com_github_gorilla_websocket` in this
+example) to the `use_repo(go_deps, ...)` list in `MODULE.bazel`, then update the
+BUILD files:
 
 ```bash
 bazel run //:gazelle

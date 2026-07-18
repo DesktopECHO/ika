@@ -1,4 +1,4 @@
-# GFXSTREAM-VULKAN.md
+# Gfxstream Vulkan on Apple Silicon
 
 To render, a Vulkan call made by an Android app (Chromium) has a few hops to travel:
 
@@ -6,13 +6,13 @@ To render, a Vulkan call made by an Android app (Chromium) has a few hops to tra
 Android app / Chromium (ANGLE)
    │  Vulkan API
    ▼
-gfxstream GUEST encoder  (mesa3d/src/gfxstream/guest — vulkan.ranchu.so)
+gfxstream guest encoder  (mesa3d/src/gfxstream/guest — vulkan.ranchu.so)
    │  serialized command stream over virtio-gpu
    ▼
 crosvm + rutabaga        (the VMM; owns guest memory + the virtio-gpu device)
    │  dispatch to the host renderer
    ▼
-gfxstream HOST renderer  (libgfxstream_backend.so)
+gfxstream host renderer  (libgfxstream_backend.so)
    │  real Vulkan
    ▼
 Honeykrisp               (Mesa's Apple-GPU Vulkan driver)
@@ -110,13 +110,14 @@ always start Vulkano"*) added a single line:
 let flags = RutabagaGrallocBackendFlags::new().disable_vulkano();
 ```
 
-The assumption — *"Linux has gbm, so it doesn't need Vulkano"* — 
+The assumption—*"Linux has gbm, so it doesn't need Vulkano"*—
 breaks on Apple Silicon. minigbm has no asahi driver.
 Re-enabling it wasn't fighting a correctness decision; it was restoring
 the fallback Windows already relies on, for the platform where the default
-no longer holds. 
+no longer holds.
 
 The fix is two parts, both in the crosvm build:
+
 - Add the `vulkano` cargo feature (its `0.33.0` dep tree was already in `Cargo.lock`).
 - **`PATCH.crosvm-enable-vulkano-gralloc.patch`** — remove the `.disable_vulkano()`
   call so the backend actually initializes.
@@ -208,7 +209,7 @@ its own ways of producing black surfaces, fixed in `external-mesa3d.patch`:
   `oldLayout == UNDEFINED`, the contents are discarded. ResourceTracker already
   worked around this for the legacy barrier path; the patch extends it to every
   modern sync2 entry point that carries a `VkDependencyInfo` with image
-  barriers -- `vkCmdPipelineBarrier2`/`KHR` (the path ANGLE actually uses),
+  barriers—`vkCmdPipelineBarrier2`/`KHR` (the path ANGLE actually uses),
   plus `vkCmdSetEvent2`/`KHR` and `vkCmdWaitEvents2`/`KHR` for native Vulkan
   apps that synchronize with events instead of barriers.
 - **Extension exposure** (`1f93451`). Advertise the gfxstream Vulkan extensions
@@ -264,6 +265,7 @@ Linux GPU host. Most of the effort was convincing four codebases of that one fac
   `.disable_vulkano()` so the gate — not a hardcoded flag — decides.
 - The gfxstream patches (`getpagesize()`, memfd seals, Linux UdmabufCreator) are
   inert or standard on x86-64 and safe to keep global.
+
 ---
 
 ## Change inventory
@@ -278,4 +280,4 @@ Linux GPU host. Most of the effort was convincing four codebases of that one fac
 | `wayland_*` + `ika_stream` (`83c6d38`) | cuttlefish host | Host console on GLES readback; DMA-BUF frames with correct offsets; no zero-filled SHM |
 | `modprobe.d` + `cuttlefish-host-resources.sh` | host provisioning | Load and tune the udmabuf kernel module |
 | `external-mesa3d.patch` | guest mesa3d | DRM-modifier passthrough, AHB sync2 layout, extension exposure |
-| `tools/ika` | launcher | Apple-Silicon-16K gating: udmabuf-backed ExternalBlob, SystemBlob off |
+| `tools/ika` | launcher | Apple Silicon 16 KiB gating: udmabuf-backed ExternalBlob, SystemBlob off |

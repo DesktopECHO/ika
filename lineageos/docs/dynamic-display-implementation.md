@@ -1,8 +1,9 @@
 # Dynamic Display Implementation
 
-LineageOS Desktop treats the Cuttlefish primary display as a resizable desktop
-surface. The host launcher starts Cuttlefish with an initial display size and
-DPI derived from the host monitor, then opens ika-scrcpy as the front-end.
+LineageOS Desktop is designed to treat the Cuttlefish primary display as a
+resizable desktop surface. The host launcher starts Cuttlefish with an initial
+display size and DPI derived from the host monitor, then opens `ika-scrcpy` as
+the frontend.
 
 ## Runtime Resize Flow
 
@@ -11,8 +12,8 @@ The default viewer path uses raw Cuttlefish frames:
 1. `tools/ika` launches ika-scrcpy with `--cuttlefish-frames-socket=...` and
    `--dpi=<computed-or-user-value>`.
 2. ika-scrcpy listens for SDL window resize events and debounces them.
-3. For raw Cuttlefish frames, ika-scrcpy resizes the physical Cuttlefish
-   display by spawning:
+3. For raw Cuttlefish frames, ika-scrcpy attempts to resize the physical
+   Cuttlefish display by spawning:
 
    ```bash
    cvd display resize \
@@ -26,6 +27,13 @@ The default viewer path uses raw Cuttlefish frames:
    settles.
 5. Android reports the new display metrics through `DisplayManager` and the
    normal configuration-change path.
+
+> [!IMPORTANT]
+> The Cuttlefish 1.55 command dispatcher currently included in this tree does
+> not expose the `resize` subcommand, so step 3 exits without changing the
+> physical display. The Android logical resize and settle path in steps 4–5
+> still runs. See
+> [`host/commands/display/main.cpp`](../../base/cvd/cuttlefish/host/commands/display/main.cpp).
 
 ## Guest Fallback Contract
 
@@ -42,7 +50,7 @@ and `/system_ext/etc/init/cvd_display_resize.rc`. Init property triggers invoke
 the helper, which fans property writes into `cmd window size` and
 `cmd window density`.
 
-## Launcher And Taskbar Handling
+## Launcher and Taskbar Handling
 
 `packages-apps-Launcher3.patch` contains the runtime Launcher3 work needed for
 resize: desktop taskbar behavior, taskbar all-apps, responsive desktop profiles,

@@ -6,7 +6,7 @@ payload is adopted, or an app changes major versions.
 
 The desktop ROM intentionally presents a tablet-like, non-telephony feature set
 to package managers. Do not expose `android.hardware.type.pc`; Play treats that
-as a desktop/PC device and filters some phone/tablet apps before install.
+as a desktop/PC device and filters some phone/tablet apps before installation.
 
 Status values:
 

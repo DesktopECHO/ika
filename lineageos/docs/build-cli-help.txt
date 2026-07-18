@@ -2,7 +2,7 @@ Usage: build_lineageos_desktop.sh [--microg|--mtg] [all|arm64|x86_64]...
 
 Build LineageOS Desktop from a clean LineageOS 23.2 checkout and write
 Cuttlefish-ready bundles into the directories lineageos-arm64/ and
-lineageos-x86_64/ under the ika project root.
+lineageos-x86_64/ under the Ika project root.
 
 Options:
   --microg              Include microG.
@@ -31,7 +31,7 @@ Environment:
   NINJA_HIGHMEM_NUM_JOBS
                         Soong high-memory pool jobs. Default: one job per
                         32 GiB of RAM, minimum 1 and capped at JOBS.
-  Temporary zram       Builds get zram swap sized so physical RAM plus zram
+  Temporary zram        Builds use zram swap sized so physical RAM plus zram
                         reaches max(44 GiB, 2 GiB per logical CPU + 4 GiB),
                         prioritized above existing swap. No zram is added when
                         physical RAM already meets that target. Build-created
@@ -112,6 +112,11 @@ Environment:
   MICROG_GSFPROXY_RELEASE
                         GsfProxy microG F-Droid version name/code, or latest.
                         Default: latest
+  MICROG_FDROID_RELEASE
+                        F-Droid version name/code, or latest. Default: latest
+  MICROG_FDROID_PRIVILEGED_RELEASE
+                        F-Droid Privileged Extension version name/code, or
+                        latest. Default: latest
   MICROG_PREBUILT_CACHE_DIR
                         Persistent cache for downloaded microG/F-Droid APKs. A
                         version already present is reused instead of refetched.
@@ -121,13 +126,16 @@ Environment:
                         lookup. Default: ika/ika-work/microg-prebuilts
   REPO_INSTALL_PATH     Path checked for repo if it is not on PATH.
                         Default: $HOME/.local/bin/repo
-  REPO_SYNC_ATTEMPTS    Top-level repo sync attempts. Default: 9
+  REPO_SYNC_ATTEMPTS    Top-level repo sync attempts. Default: 100
   REPO_SYNC_RETRY_FETCHES
-                        Per-project repo fetch retries. Default: 9
+                        Per-project repo fetch retries. Default: 20
   REPO_SYNC_QUIET       Pass --quiet to repo sync. Default: auto, enabled on
                         ARM64 hosts to keep Python repo sync output conservative
                         during ARM64 host syncs.
   REPO_SYNC_JOBS        Override top-level repo sync jobs. Default: 4
+  REPO_SYNC_NETWORK_JOBS
+                        Concurrent network fetches during repo sync. This value
+                        never exceeds REPO_SYNC_JOBS. Default: 2
   REPO_SYNC_CHECKOUT_JOBS
                         Checkout jobs for repo partial-clone workspaces. Lower
                         values reduce lazy-blob checkout failures. Default: 8
@@ -208,6 +216,10 @@ Environment:
                         Native Linux ARM64 JDK 21 tarball used when this branch
                         lacks prebuilts/jdk/jdk21/linux-arm64. Default:
                         Adoptium Temurin JDK 21 API URL.
+  ARM64_JDK8_PREBUILT_URL
+                        Native Linux ARM64 JDK 8 tarball used when this branch
+                        lacks prebuilts/jdk/jdk8/linux-arm64. Default:
+                        Adoptium Temurin JDK 8 API URL.
   NOFILE_LIMIT          Host open-file limit requested before builds. Set empty
                         to skip. Default: 4194304.
   ARM64_THINLTO_USE_MLGO
@@ -225,4 +237,4 @@ Environment:
                         kernels.
   RESET_PATCHED_PROJECTS
                         Reset patched source projects before repo sync.
-                        Default: auto for script-managed workspaces
+                        Default: auto for script-managed workspaces.

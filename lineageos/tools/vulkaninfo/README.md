@@ -1,9 +1,9 @@
-# vulkaninfo
+# Vulkaninfo
 
 Khronos `vulkaninfo` vendored from
 [KhronosGroup/Vulkan-Tools](https://github.com/KhronosGroup/Vulkan-Tools)
 tag `v1.4.341`, chosen to match `external/vulkan-headers`
-(`VK_HEADER_VERSION 341`). Replaces the earlier home-grown `vkextcheck`
+(`VK_HEADER_VERSION 341`). It replaces the earlier homegrown `vkextcheck`
 extension enumerator with the full upstream report: instance/device
 extensions, features, properties, limits, memory heaps/types, queue
 families, format properties, and all the pNext-chain extension structs.
@@ -19,9 +19,9 @@ Build notes (`Android.bp` is local):
   none, so it is built platform-less and skips surface enumeration only.
 - Vulkan is loaded via `dlopen("libvulkan.so")` (upstream fallback path),
   not linked, so no `libvulkan` dependency.
-- `compile_multilib: "64"` keeps it native x86_64 on the Cuttlefish
-  desktop product — no arm64/Berberis translation — so it talks to the
-  gfxstream guest driver directly.
+- `compile_multilib: "64"` builds the native 64-bit binary for each Cuttlefish
+  desktop product (x86_64 or ARM64), avoiding native-bridge translation so it
+  talks directly to the gfxstream guest driver.
 
 To update: bump `external/vulkan-headers`, copy the same files from the
 matching Vulkan-Tools tag (the generated header must match

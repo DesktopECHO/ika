@@ -3,7 +3,7 @@
 ## Summary
 
 Repeated Asphalt launches on an Ika VM running on an Apple Silicon host caused
-the host graphics stack's resident memory to grow and not return to its previous
+the host graphics stack's resident memory to grow without returning to its previous
 level after the game exited. The growth occurred while the VM remained running;
 the existing renderer-shutdown cleanup therefore could not address it.
 
@@ -36,7 +36,7 @@ No Mesa or kernel source changes are required.
 
 The affected configuration is the Apple Silicon 16 KiB-page host path using
 gfxstream and udmabuf-backed host-visible Vulkan memory. Asphalt was used as the
-high-churn reproducer, but the problem applies to workloads which repeatedly
+high-churn reproducer, but the problem applies to workloads that repeatedly
 create and destroy guest graphics processes with large host-visible allocations.
 
 The design deliberately preserves other configurations:
@@ -258,8 +258,8 @@ graphics-session restart can release the pages.
 
 Runtime validation is performed in layers:
 
-- repeated guest process teardown exercises release by both Vulkan-memory and
-  virtio-blob owners before a pool entry becomes reusable; and
+- repeated guest-process teardown exercises release by both Vulkan-memory and
+  virtio-blob owners before a pool entry becomes reusable;
 - repeated Asphalt launches are checked for a plateau after warm-up; and
 - two complete start/Asphalt/stop cycles are checked for stable udmabuf object
   count and bytes, proving reuse across different crosvm processes.

@@ -1,15 +1,15 @@
-# Build RPM packages in containers
+# Build RPM Packages in Containers
 
-**Podman Compatible**: packages can be built with [Podman](https://podman.io) as well.
+The build container is also compatible with [Podman](https://podman.io).
 
 ## Build the image
 
 The build image command must be run at the root of this repository checkout.
 
-Enabling Docker [BuildKit](https://docs.docker.com/build/buildkit/) is required
-on Docker version below 23.0 to build this image.
+Docker versions earlier than 23.0 require
+[BuildKit](https://docs.docker.com/build/buildkit/) to build this image.
 
-```
+```bash
 docker build \
   --file "tools/buildutils/cw/Containerfile" \
   --tag "android-cuttlefish-build:latest" \
@@ -26,7 +26,7 @@ so generated files are not left owned by root on the host.
 
 ### base
 
-```
+```bash
 docker run \
   -e HOST_UID=$(id -u) \
   -e HOST_GID=$(id -g) \
@@ -35,9 +35,9 @@ docker run \
   android-cuttlefish-build:latest base
 ```
 
-Persist bazel cache among executions.
+To persist the Bazel cache across runs:
 
-```
+```bash
 mkdir -p out/cuttlefish-bazel
 docker run \
   -e HOST_UID=$(id -u) \
@@ -50,7 +50,7 @@ docker run \
 
 ### container
 
-```
+```bash
 docker run \
   -e HOST_UID=$(id -u) \
   -e HOST_GID=$(id -g) \
@@ -61,7 +61,7 @@ docker run \
 
 ### frontend
 
-```
+```bash
 docker run \
   -e HOST_UID=$(id -u) \
   -e HOST_GID=$(id -g) \

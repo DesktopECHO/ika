@@ -711,14 +711,16 @@ Usage:
   ${SCRIPT_NAME} start [-f|--fullscreen|--game] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] [--setting=arg] ...
   ${SCRIPT_NAME} stop
   ${SCRIPT_NAME} restart [-f|--fullscreen|--game] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] ...
-  ${SCRIPT_NAME} reset [--data_gb=GB] [Delete everything and start fresh]
+  ${SCRIPT_NAME} reset [--data_gb=GB]
+  ${SCRIPT_NAME} status
+  ${SCRIPT_NAME} help
 
 Example:
 
   ${SCRIPT_NAME} start --gpu_mode=guest_swiftshader --cpus=2 --memory_mb=2048 --dpi=240 --fullscreen
   ${SCRIPT_NAME} start --gpu_mode=gfxstream_guest_angle
   ${SCRIPT_NAME} reset --data_gb=128
-  ${SCRIPT_NAME} restart --gfxstream_vulkan=on
+  ${SCRIPT_NAME} restart --gpu_mode=gfxstream --gfxstream_vulkan=on
   ${SCRIPT_NAME} restart --ika_scrcpy="--no-clipboard-autosync"
   ${SCRIPT_NAME} start --game
 
@@ -727,18 +729,20 @@ Options:
   --game                 Start scrcpy fullscreen with UHID gamepad
                          keyboard and mouse input.
   --memory_mb=MB         Override the default guest RAM setting.
-                         Normally ~25% of host RAM, capped at 32GB max.
+                         Normally ~25% of host RAM, capped at 32 GB.
   --data_gb=GB           With reset, configure the userdata size used by the
                          next start and subsequent factory resets.
 
-Environment Variables:
+Environment variables:
 
-  GFXSTREAM_VULKAN       auto, on, or off. auto disables gfxstream Vulkan
-                         only when the primary host Vulkan device is llvmpipe;
-                         on forces GLES+Vulkan; off forces GLES-only gfxstream.
-                         On Apple Silicon 16K-page hosts, auto/on routes
+  GFXSTREAM_VULKAN       auto, on, or off. With --gpu_mode=gfxstream, auto
+                         disables Vulkan only when the primary host Vulkan
+                         device is llvmpipe; on forces GLES+Vulkan, and off
+                         forces GLES-only. The setting is ignored by the
+                         Vulkan-only gfxstream_guest_angle mode. On Apple
+                         Silicon hosts with 16 KiB pages, gfxstream modes route
                          host-visible guest Vulkan memory through udmabuf-backed
-                         dma-buf (the path the Apple GPU supports).
+                         dma-bufs (the path the Apple GPU supports).
   IKA_SCRCPY             Extra whitespace-separated args appended to the console.
                          Equivalent command-line option: --ika_scrcpy=ARGS
                          (example: --keyboard=uhid --no-clipboard-autosync)

@@ -1,17 +1,17 @@
-# Create a GCE image for orchestrating Cuttlefish instances
+# Create a GCE Image for Cuttlefish Orchestration
 
 ## Setup
 
-```
+```bash
 cd tools/baseimage
 gcloud auth application-default login
 ```
 
-## Step 1. Create image with wanted kernel version
+## Step 1: Create an Image with the Desired Kernel Version
 
-Go to Step 2 if you have already an image with the wanted kernel.
+Skip to step 2 if you already have an image with the desired kernel.
 
-```
+```bash
 go run ./cmd/create_gce_fixed_kernel \
   -project <project> \
   -source-image-project fedora-cloud \
@@ -20,11 +20,11 @@ go run ./cmd/create_gce_fixed_kernel \
   -image-name <fixed_kernel_image_name>
 ```
 
-## Step 2. Create base image
+## Step 2: Create a Base Image
 
-Go to Step 3 if you have already a base image.
+Skip to step 3 if you already have a base image.
 
-```
+```bash
 go run ./cmd/create_gce_base_image \
   -project <project> \
   -source-image-project <project> \
@@ -32,11 +32,11 @@ go run ./cmd/create_gce_base_image \
   -image-name <base_image_name>
 ```
 
-## Step 3. Create image with ika RPM packages installed.
+## Step 3: Create an Image with Ika RPM Packages
 
 Run these `go run ./cmd/...` commands from the `tools/baseimage` directory.
 
-```
+```bash
 go run ./cmd/gce_install_cuttlefish_packages \
   -project <project> \
   -source-image-project <project> \
@@ -47,9 +47,9 @@ go run ./cmd/gce_install_cuttlefish_packages \
   -rpm <path/to/ika-orchestration-rpm>
 ```
 
-## Step 4. Validate output image
+## Step 4: Validate the Output Image
 
-```
+```bash
 go run ./cmd/gce_validate_image \
   -project <project> \
   -image-project <project> \

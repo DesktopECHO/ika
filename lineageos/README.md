@@ -1,14 +1,21 @@
-# LineageOS Desktop 
+# LineageOS Desktop
 
-LineageOS Desktop is a product layer for LineageOS 23.2 running in the Cuttlefish Android emulator. It is designed to be applied over an official LineageOS checkout with a local manifest.
+LineageOS Desktop is a product layer for LineageOS 23.2 that runs in the
+Cuttlefish Android emulator. It is applied to an official LineageOS checkout
+through a local manifest.
 
-This document covers the first part of the ika build, producing the LineageOS Desktop ROM. The second part handles creation of host packages, including `ika-lineageos`, and is documented in the project [README.md](../README.md). For the full end-to-end flow, start there or run `../ika-build` from the repository root.
+This document covers the first phase of the Ika build: producing the LineageOS
+Desktop ROM. The second phase creates host packages, including `ika-lineageos`,
+and is documented in the project [README.md](../README.md). For the complete
+workflow, start there or run `../ika-build` from the repository root.
 
-This directory contains the product profile, overlays, manifests, validation scripts, and source-level patches that this phase applies to a LineageOS 23.2 source checkout.
+This directory contains the product profile, overlays, manifests, validation
+scripts, and source-level patches that this phase applies to a LineageOS 23.2
+source checkout.
 
 ## Products
 
-The lunch combos registered by `AndroidProducts.mk`:
+`AndroidProducts.mk` registers these lunch combinations:
 
 ```bash
 lunch lineage_desktop_cf_arm64_pgagnostic-trunk_staging-userdebug
@@ -76,31 +83,35 @@ Building this ROM is a full LineageOS source build and is resource-intensive:
   reaches `max(44 GiB, 2 GiB per logical CPU + 4 GiB)`. Build-created zram
   remains enabled until reboot; the build exit log prints commands to remove it
   immediately.
-- **Storage:** 500 GB minimum of free space. 
+- **Storage:** At least 300 GB of free space.
 - **CPU:** x86-64 and ARM64 are both supported as build hosts.
 
 ### ARM64 Build Hosts
 
 ARM64 host builds require real `linux-arm64` prebuilts for host tools. The
-build script refuses symlinked `linux-x86` substitutions. Clang-tools are
-pulled from AOSP's `platform/prebuilts/clang-tools` `mirror-goog-main-prebuilts`
-branch by default; provide the remaining ARM64 Rust, CMake, JDK, Go, Clang, and
-build-tools prebuilts before building. The Rust prebuilt must include both
-`aarch64-unknown-linux-gnu` and `aarch64-unknown-linux-musl` stdlibs. ARM64
-host builds run natively with the ARM64 prebuilts prepared by the build script,
-including on Apple Silicon's 16 KiB-page kernels.
+build script refuses symlinked `linux-x86` substitutions and fetches or prepares
+the required ARM64 Go, Rust, Clang, Clang tools, CMake, and JDK prebuilts. The
+synced source tree must provide `prebuilts/build-tools/linux-arm64`, and the
+Rust prebuilt must include both `aarch64-unknown-linux-gnu` and
+`aarch64-unknown-linux-musl` standard libraries. ARM64 host builds run natively
+with the prebuilts prepared by the build script, including on Apple Silicon
+kernels with 16 KiB pages.
 
-## Build LineageOS Desktop
+## Build the LineageOS Desktop ROM
+
+The initial download requires `curl` and `unzip`:
 
 ```bash
-git clone https://github.com/DesktopECHO/ika.git
-cd ika
+curl -L https://github.com/DesktopECHO/ika/archive/refs/heads/main.zip -o ika-main.zip
+unzip ika-main.zip
+rm ika-main.zip
+cd ika-main
 
 ./lineageos/scripts/build_lineageos_desktop.sh
 ```
 
-This will build the ROM automatically for the running CPU architecture.
-For x86-64 hosts, append `all` to the command to build both ARM64 and x86-64 release bundles.
+By default, the script builds the ROM for the host CPU architecture. On an
+x86-64 host, append `all` to build both ARM64 and x86-64 release bundles.
 
 The build script defaults to `BUILD_VARIANT=userdebug` so local builds keep
 debug-friendly behavior such as `adb root`. For release-style images, pass
@@ -117,10 +128,11 @@ normal signing flow. `WITH_ADB_INSECURE` is only enabled for `userdebug` builds;
 key authorization with `ro.adb.secure=0`, and exposing the host ADB proxy only on
 `127.0.0.1:6520` for the first instance.
 
-The resulting `lineageos-arm64/` and/or `lineageos-x86_64/` directories at the ika
-repo root will be picked up by the `ika-lineageos` package in the second phase.
+The resulting `lineageos-arm64/` and/or `lineageos-x86_64/` directories at the
+Ika repository root are picked up by the `ika-lineageos` package in the second
+phase.
 
-## How Stuff Works
+## How the Build Works
 
 The script downloads LineageOS 23.2, installs this overlay and the selected
 provider manifest, syncs official LineageOS sources, overlays the local
@@ -137,7 +149,7 @@ valid, and the x86-64 native bridge payload is complete. Set
 
 The build signs target-files and extracted images before packaging the final
 Cuttlefish bundles. Signing keys live in `ANDROID_CERTS_DIR` (default:
-`~/.android-certs`). On a new clone, `./ika-build` prepares them immediately
+`~/.android-certs`). In a new checkout, `./ika-build` prepares them immediately
 after installing build dependencies. Direct ROM builds use `signing_common.sh`
 to run `tools/buildutils/setup_keys.sh` before compiling. That setup prompts
 once for a certificate identity, writes it to `~/.config/ika/signing.conf`, and
@@ -147,9 +159,10 @@ debugging.
 
 If `repo` is not installed, `./ika-build` downloads it during dependency setup
 and installs it to `$HOME/.local/bin/repo`. Missing host tools such as `git`,
-`git-lfs`, `python3`, `rsync`, `curl`, and `tar` are a hard error; `./ika-build`
-installs them with the rest of the build dependencies
+`git-lfs`, `python3`, `rsync`, `curl`, and `tar` cause direct ROM builds to
+stop; `./ika-build` installs them with the rest of the build dependencies
 (`tools/buildutils/lib/dependencies.sh`).
+
 Git network operations run with a build-local git config that enables repo
 color output, sets a local builder identity, and rewrites common GitHub SSH/git
 remotes to anonymous HTTPS, so public sources can sync without a GitHub account
@@ -161,7 +174,7 @@ missing file blobs are fetched lazily during checkout. Set `REPO_CLONE_FILTER=`
 to force full clones, or lower `REPO_SYNC_CHECKOUT_JOBS` if a network/proxy still
 has trouble with lazy blob fetches.
 
-Final Cuttlefish-ready bundles are written as directories at the ika repo
+Final Cuttlefish-ready bundles are written as directories at the Ika repository
 root:
 
 ```text
@@ -177,9 +190,9 @@ checksums, overlay commit state, microG APK checksums, WebView APK checksums,
 and x86-64 native bridge metadata.
 
 Override the destination with `OUTPUT_DIR=/some/other/dir` if you want the
-bundles somewhere other than the ika repo root. Signed target-files staging also
-uses `OUTPUT_DIR`, so point it at a filesystem with enough free space for the
-final signing and bundle extraction steps.
+bundles somewhere other than the Ika repository root. Signed target-files
+staging also uses `OUTPUT_DIR`, so point it at a filesystem with enough free
+space for the final signing and bundle extraction steps.
 
 To build only one architecture:
 
@@ -199,16 +212,17 @@ Useful environment overrides:
 
 ```text
 WORKSPACE=/path/to/android/source
-IKA_WORK_ROOT=/path/to/ika/ika-work  # default: ika repo root/ika-work
-OUTPUT_DIR=/path/to/final/images    # default: ika repo root
+IKA_WORK_ROOT=/path/to/ika/ika-work  # default: ika repository root/ika-work
+OUTPUT_DIR=/path/to/final/images     # default: ika repository root
 BUILD_VARIANT=userdebug             # userdebug, user, or eng
 JOBS=16
 LINEAGE_BRANCH=lineage-23.2
 REPO_INSTALL_PATH=$HOME/.local/bin/repo
-REPO_CLONE_FILTER=blob:none     # empty uses full clones
-REPO_SYNC_JOBS=4                # also used as partial-clone network jobs
-REPO_SYNC_CHECKOUT_JOBS=4
-RESET_PATCHED_PROJECTS=0
+REPO_CLONE_FILTER=blob:none          # empty uses full clones
+REPO_SYNC_JOBS=4                     # top-level sync jobs
+REPO_SYNC_NETWORK_JOBS=2             # concurrent network fetches
+REPO_SYNC_CHECKOUT_JOBS=8            # partial-clone checkout jobs
+RESET_PATCHED_PROJECTS=auto
 UPDATE_MICROG_PREBUILTS=1
 MICROG_GMSCORE_RELEASE=latest
 MICROG_GSFPROXY_RELEASE=latest
@@ -235,11 +249,10 @@ extension. With `UPDATE_MICROG_PREBUILTS=1`, the script resolves the newest
 published, non-draft `microg/GmsCore` entry from GitHub Releases, including an
 entry marked prerelease, and downloads its official GmsCore and FakeStore APKs.
 It also downloads the latest official GsfProxy, F-Droid, and F-Droid Privileged
-Extension APKs before
-building the ROM. Set `MICROG_GMSCORE_RELEASE` to an explicit published release
-tag, or set `MICROG_GSFPROXY_RELEASE`,
-`MICROG_FDROID_RELEASE`, or `MICROG_FDROID_PRIVILEGED_RELEASE` to version
-names/codes, to pin reproducible versions.
+Extension APKs before building the ROM. Set `MICROG_GMSCORE_RELEASE` to an
+explicit published release tag, or set `MICROG_GSFPROXY_RELEASE`,
+`MICROG_FDROID_RELEASE`, or `MICROG_FDROID_PRIVILEGED_RELEASE` to version names
+or codes to pin reproducible versions.
 
 `--mtg` syncs the MindTheGapps `baklava` vendor tree to `vendor/gapps` and
 inherits its matching `arm64` or `x86_64` product makefile. Its Google-signed
@@ -251,23 +264,24 @@ Google-signed GSF from that same upstream package-set commit so its required
 `com.google.android.gsf.gservices` provider remains available.
 
 Downloaded APKs are cached under `MICROG_PREBUILT_CACHE_DIR` (default
-`ika-work/microg-prebuilts` at the ika repository root, alongside the ccache and
+`ika-work/microg-prebuilts` at the Ika repository root, alongside the ccache and
 ARM64 prebuilt caches).
 The cache is keyed by the upstream, version-stamped file name, so a rebuild
 whose resolved versions are already cached copies them into `vendor/partner_gms`
 without re-downloading. A small `index.json` manifest in the same directory maps
 each pinned version to its cached APK.
 
-For a **fully offline** build, pin every `MICROG_*_RELEASE` to an explicit
-version (not `latest`) and warm the cache once online. On later runs each pinned
-module whose APK is already cached is installed straight from the manifest with
-no upstream request at all — not even the release-metadata or F-Droid index
+For an offline rebuild from an already-synced workspace, pin every
+`MICROG_*_RELEASE` to an explicit version (not `latest`), warm the cache once
+online, and use `REBUILD=1` to skip source synchronization. On later runs, each
+pinned module whose APK is already cached is installed directly from the
+manifest with no upstream request—not even a release-metadata or F-Droid index
 lookup. `latest` always re-queries metadata so a newer upstream release is not
-missed (though an unchanged version still skips the download).
+missed, though an unchanged version still skips the download.
 
 `INCLUDE_X86_ARM_NATIVE_BRIDGE=1` is the default for the x86-64 product. The
 build helper runs `scripts/update_native_bridge_prebuilts.py`, which downloads
-the Android 16 Google APIs x86-64 SDK system image, verifies its SHA1, extracts
+the Android 16 Google APIs x86-64 SDK system image, verifies its SHA-1, extracts
 Google's `libndk_translation.so` runtime, proxy libraries, and binfmt/init glue,
 and installs those proprietary files into the workspace at
 `vendor/lineage_desktop/prebuilts/native_bridge/system`. The binaries are not
@@ -337,7 +351,7 @@ vendor/lineage_desktop/scripts/rebuild_cf_desktop_arm64.sh
 vendor/lineage_desktop/scripts/rebuild_cf_desktop_x86_64.sh
 ```
 
-From the ika checkout, those helpers also use the default source tree at
+From the Ika checkout, those helpers also use the default source tree at
 `lineageos/src`:
 
 ```bash
@@ -353,8 +367,8 @@ native bridge payload unless `INCLUDE_X86_ARM_NATIVE_BRIDGE=0` is set, and the
 host/target matrix is enforced (x86-64 builds on x86-64 hosts only; arm64 builds
 on x86-64 and arm64 hosts).
 
-They write the Cuttlefish bundle into the same per-arch directories as a full
-build:
+They write the Cuttlefish bundle into the same per-architecture directories as
+a full build:
 
 ```text
 lineageos-arm64/
@@ -374,8 +388,8 @@ This checks release inputs without needing a booted device.
 After launching a Cuttlefish instance:
 
 ```bash
-vendor/lineage_desktop/scripts/smoke_resize_desktop.sh mbp16.local:6520
+vendor/lineage_desktop/scripts/smoke_resize_desktop.sh 127.0.0.1:6520
 ```
 
-This checks the desktop feature contract, resizes the display, verifies the
-desktop settings remain enabled, and captures a screenshot.
+This checks the desktop feature contract, resizes the logical display, verifies
+that the desktop settings remain enabled, and captures a screenshot.

@@ -1,8 +1,14 @@
 # ika-scrcpy
 
-This is a fork of [scrcpy](https://github.com/Genymobile/scrcpy) used as the display system for the [ika](https://github.com/DesktopECHO/ika) project — a Cuttlefish (Android Virtual Device) host for Fedora Asahi Remix and other RPM-based distributions.
+This is a fork of [scrcpy](https://github.com/Genymobile/scrcpy) used as the
+display system for [Ika](https://github.com/DesktopECHO/ika), a Cuttlefish
+Android virtual desktop for Fedora and Debian/Ubuntu hosts.
 
-The fork replaces scrcpy's normal encoded video path with a direct Unix socket connection to the Cuttlefish frame server. Control, audio, clipboard, and `DISPLAY_READY` settle acknowledgements still use the normal scrcpy server path over ADB. The result is a native desktop window that shows the Cuttlefish display at full render resolution and resizes the virtual hardware display dynamically as the window is resized.
+The fork replaces scrcpy's normal encoded-video path with a direct Unix-domain
+socket connection to the Cuttlefish frame server. Control, audio, clipboard,
+and `DISPLAY_READY` acknowledgements still use the normal scrcpy server path
+over ADB. The result is a native desktop window that displays Cuttlefish at full
+render resolution and sends display-resize requests as the window changes.
 
 ---
 
@@ -12,9 +18,9 @@ The fork replaces scrcpy's normal encoded video path with a direct Unix socket c
 
 Pass `--video-source=cuttlefish-wayland` together with `--cuttlefish-frames-socket=PATH` to bypass the ADB/USB/TCP connection path and receive raw frames directly from Cuttlefish.
 
-```
+```bash
 ika-scrcpy --video-source=cuttlefish-wayland \
-           --cuttlefish-frames-socket=/run/cuttlefish/cvd-1/display_0 \
+           --cuttlefish-frames-socket=/path/to/cvd-1/internal/ika_frames.sock \
            --display-id=0
 ```
 
@@ -28,7 +34,7 @@ messages, but it does not encode or stream display frames.
 The new source file `app/src/cuttlefish_frame_source.c` owns a background thread that:
 
 1. Connects to the Cuttlefish frame Unix socket.
-2. Reads a two-field common header (magic + version) from each message, using `recvmsg` so ancillary file descriptors (DMA-BUF fds) can be received in the same call.
+2. Reads a two-field common header (magic + version) from each message, using `recvmsg` so ancillary file descriptors (DMA-BUF FDs) can be received in the same call.
 3. Dispatches to the appropriate handler based on the magic value.
 4. Auto-reconnects with a 250 ms back-off if the socket drops.
 
@@ -40,7 +46,7 @@ The Cuttlefish frame server can send frames via three different transports. All 
 |-------|-------|-----------|
 | `0x46414b49` | `IKAF` | Raw inline pixels — pixel data follows the header inline on the socket |
 | `0x44414b49` | `IKAD` | DMA-BUF — a GPU buffer file descriptor is passed via `SCM_RIGHTS` ancillary data; no pixel copy |
-| `0x53414b49` | `IKAS` | Shared-memory init — an fd for a shared memory region is passed via `SCM_RIGHTS`; the client `mmap`s it |
+| `0x53414b49` | `IKAS` | Shared-memory init — an FD for a shared memory region is passed via `SCM_RIGHTS`; the client maps it with `mmap()` |
 | `0x4e414b49` | `IKAN` | Shared-memory notify — tells the client which slot in the pre-mapped region holds the new frame |
 
 Each header carries width, height, a DRM FourCC (e.g. `XR24`, `AB24`) for pixel format, stride in bytes, and a display number. Frames addressed to a display number other than the configured `--display-id` are silently discarded.
@@ -49,11 +55,12 @@ Pixel formats are translated from DRM FourCCs to SDL3 `SDL_PixelFormat` values b
 
 ### 4. `--flex-display` / `--dpi` — live display resize
 
-When `--flex-display`, `--flex-display=DPI`, or the ika alias `--dpi=DPI` is passed, ika-scrcpy tells the Cuttlefish virtual hardware to resize its display whenever the window is resized.
+When `--flex-display`, `--flex-display=DPI`, or the Ika alias `--dpi=DPI` is
+passed, ika-scrcpy requests a display resize whenever the window is resized.
 
 The resize is issued by spawning `cvd display resize` as a child process:
 
-```
+```bash
 cvd display resize \
     --instance_num=<N> \
     --display_id=<ID> \
@@ -61,6 +68,13 @@ cvd display resize \
 ```
 
 The instance number `N` is parsed from the socket path by scanning for the pattern `cvd-N`. The `cvd` binary path defaults to `/usr/lib/cuttlefish-common/bin/cvd` and can be overridden with the `IKA_CVD_BIN` environment variable.
+
+> [!IMPORTANT]
+> The Cuttlefish 1.55 command dispatcher currently included in this repository
+> does not expose the `resize` subcommand, so the child process exits without
+> changing the physical display. The Android-side logical resize and
+> `DISPLAY_READY` request still run. See
+> [`host/commands/display/main.cpp`](../base/cvd/cuttlefish/host/commands/display/main.cpp).
 
 Display resize requests are rate-limited by `FLEX_DISPLAY_REQUEST_MIN_INTERVAL`. Separately, raw-frame rendering is throttled for `RAW_FRAME_RESIZE_THROTTLE_WINDOW` after window-resize activity, with redraws limited by `RAW_FRAME_RESIZE_RENDER_INTERVAL`. Only one resize child process runs at a time; any still-running child is reaped before a new one is spawned.
 
@@ -74,7 +88,8 @@ While a flex-display resize is in flight, the screen is in `transient_stretch` m
 - Jittered ghost copies of the preview are composited at low alpha and staggered fractional pixel offsets to produce a soft-blur effect without a shader pass.
 - When the Cuttlefish device confirms the new size is active (via the `DISPLAY_READY` device message), the host window has not resized for the settle delay, and a raw frame newer than the current display resize request has arrived, `transient_stretch` is cleared. The final live frame is drawn underneath while the preview texture stays opaque briefly, then crossfades out.
 
-The result is a smooth visual transition rather than a jarring jump when the window is resized.
+The result is a smooth visual transition instead of an abrupt jump during
+window resizing.
 
 ### 6. `DISPLAY_READY` device message
 

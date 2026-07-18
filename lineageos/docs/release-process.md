@@ -1,6 +1,6 @@
 # Release Process
 
-Each public tarball should be reproducible from documented inputs.
+Each public release should be reproducible from documented inputs.
 
 Before building:
 
@@ -30,5 +30,6 @@ Each generated Cuttlefish bundle contains:
 - native bridge payload metadata for x86-64
 
 Release reviewers should compare these files between ARM64 and x86-64 before
-publishing. Expected differences are architecture, kernel artifacts, host
-package, WebView architecture prebuilt, and x86-64 native bridge metadata.
+publishing. Expected differences are the target product and architecture,
+kernel artifacts, WebView architecture prebuilt, and x86-64 native bridge
+metadata.
