@@ -1505,6 +1505,7 @@ append_host_timezone_arg() {
 append_cvd_env_args() {
   local -n env_args_ref="$1"
   local config_path="${2:-}"
+  local glibc_tunables
 
   env_args_ref+=(
     "HOME=${CVD_HOME_DIR}"
@@ -1519,6 +1520,24 @@ append_cvd_env_args() {
   # platform from SSH sessions on headless and Apple Silicon hosts.
   if [[ "${CVD_GPU_MODE}" == gfxstream* ]]; then
     env_args_ref+=("EGL_PLATFORM=${EGL_PLATFORM:-surfaceless}")
+  fi
+
+  # gfxstream creates many short-lived render threads. On glibc's default
+  # arena policy, allocations freed during guest graphics-process cleanup can
+  # remain resident in dozens of per-thread arenas. This is especially costly
+  # on the Apple 16K udmabuf path, where Asphalt otherwise leaves hundreds of
+  # MiB of free allocator pages resident after each launch. Cap the arena count
+  # and retain any caller-provided tunables.
+  if [[ "${CVD_GPU_MODE}" == gfxstream* ]] && is_apple_silicon_16k_host; then
+    glibc_tunables="${GLIBC_TUNABLES:-}"
+    if [[ ":${glibc_tunables}:" != *":glibc.malloc.arena_max="* ]]; then
+      glibc_tunables="${glibc_tunables:+${glibc_tunables}:}glibc.malloc.arena_max=4"
+    fi
+    if [[ ":${glibc_tunables}:" != *":glibc.malloc.trim_threshold="* ]]; then
+      glibc_tunables="${glibc_tunables:+${glibc_tunables}:}glibc.malloc.trim_threshold=131072"
+    fi
+    env_args_ref+=("GLIBC_TUNABLES=${glibc_tunables}")
+    log "Apple Silicon gfxstream allocator tunables: ${glibc_tunables}"
   fi
 
   if [[ -n "${config_path}" ]]; then

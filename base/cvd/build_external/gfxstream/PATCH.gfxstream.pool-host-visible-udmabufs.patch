@@ -1,0 +1,413 @@
+Patch summary:
+Bound host-visible Vulkan memory retained by GPU drivers which fail to release
+imported dma-bufs. Keep an exact-size pool of udmabuf objects and reuse their
+backing memfds across guest process lifetimes instead of creating a new dma-buf
+for every allocation cycle.
+
+Carry a shared lease through both owners of the backing allocation: the host
+VkDeviceMemory and the virtio-gpu blob resource exported to the VMM. An entry
+does not become reusable until both owners are gone, with a short quarantine to
+avoid racing the VMM's final descriptor close.
+
+After the renderer cleanup worker has waited for the guest process render
+threads, destroyed the Vulkan/GL resources, and released ProcessResources,
+trim glibc arenas on this udmabuf-specific path. Otherwise hundreds of MiB of
+already-free per-render-thread allocations remain resident after every game
+launch even though the graphics objects are gone.
+
+diff --git a/common/base/include/gfxstream/memory/UdmabufCreator.h b/common/base/include/gfxstream/memory/UdmabufCreator.h
+--- a/common/base/include/gfxstream/memory/UdmabufCreator.h
++++ b/common/base/include/gfxstream/memory/UdmabufCreator.h
+@@ -14,6 +14,7 @@
+ #pragma once
+ 
+ #include <cstdint>
++#include <memory>
+ #include <optional>
+ 
+ #include "gfxstream/ManagedDescriptor.h"
+@@ -28,6 +29,14 @@ namespace base {
+ bool IsAndroidKernel6_6();
+ bool HasUdmabufDevice();
+ 
++struct UdmabufAllocation {
++    DescriptorType descriptor;
++
++    // Keeps the backing allocation reserved until every gfxstream owner that
++    // can still expose it to the guest has gone away.
++    std::shared_ptr<void> lifetime;
++};
++
+ class UdmabufCreator {
+    public:
+     UdmabufCreator();
+@@ -36,9 +45,11 @@ class UdmabufCreator {
+     // true on success, false on failure
+     bool init();
+ 
+-    std::optional<DescriptorType> handleFromSharedMemory(SharedMemory& memory);
++    std::optional<UdmabufAllocation> handleFromSharedMemory(SharedMemory& memory);
+ 
+    private:
++    class Impl;
++    std::unique_ptr<Impl> mImpl;
+     ManagedDescriptor mOsHandleCreator;
+ };
+ 
+diff --git a/common/base/UdmabufCreator_linux.cpp b/common/base/UdmabufCreator_linux.cpp
+--- a/common/base/UdmabufCreator_linux.cpp
++++ b/common/base/UdmabufCreator_linux.cpp
+@@ -18,14 +18,86 @@
+ #include <sys/utsname.h>
+ #include <unistd.h>
+ 
++#include <chrono>
+ #include <cstdint>
+ #include <cstring>
++#include <memory>
++#include <mutex>
++#include <vector>
+ 
+ #include "gfxstream/memory/UdmabufCreator.h"
+ 
+ namespace gfxstream {
+ namespace base {
+ 
++namespace {
++
++using Clock = std::chrono::steady_clock;
++
++// Keep a short quarantine after both gfxstream owners release an allocation.
++// Resource unref and the VMM's final descriptor close happen synchronously in
++// practice, but the quarantine prevents an immediately following allocation
++// from racing that final close.
++constexpr auto kReuseQuarantine = std::chrono::milliseconds(250);
++
++struct UdmabufPoolEntry {
++    UdmabufPoolEntry(uint64_t idIn, size_t sizeIn, ManagedDescriptor memoryIn,
++                     ManagedDescriptor udmabufIn)
++        : id(idIn),
++          size(sizeIn),
++          memory(std::move(memoryIn)),
++          udmabuf(std::move(udmabufIn)) {}
++
++    uint64_t id;
++    size_t size;
++    ManagedDescriptor memory;
++    ManagedDescriptor udmabuf;
++    bool inUse = true;
++    Clock::time_point reusableAfter = Clock::time_point::max();
++};
++
++class UdmabufPoolState {
++   public:
++    void release(uint64_t id) {
++        std::lock_guard<std::mutex> lock(mMutex);
++        for (auto& entry : mEntries) {
++            if (entry->id != id) {
++                continue;
++            }
++            entry->inUse = false;
++            entry->reusableAfter = Clock::now() + kReuseQuarantine;
++            return;
++        }
++    }
++
++    std::mutex mMutex;
++    std::vector<std::unique_ptr<UdmabufPoolEntry>> mEntries;
++    uint64_t mNextId = 1;
++};
++
++class UdmabufPoolLease {
++   public:
++    UdmabufPoolLease(std::shared_ptr<UdmabufPoolState> state, uint64_t id)
++        : mState(std::move(state)), mId(id) {}
++
++    ~UdmabufPoolLease() {
++        if (mState) {
++            mState->release(mId);
++        }
++    }
++
++   private:
++    std::shared_ptr<UdmabufPoolState> mState;
++    uint64_t mId;
++};
++
++}  // namespace
++
++class UdmabufCreator::Impl {
++   public:
++    std::shared_ptr<UdmabufPoolState> pool = std::make_shared<UdmabufPoolState>();
++};
++
+ bool IsAndroidKernel6_6() {
+     int ret;
+     int major = 0;
+@@ -76,7 +148,7 @@ bool IsAndroidKernel6_6() {
+ 
+ bool HasUdmabufDevice() { return access("/dev/udmabuf", F_OK) == 0; }
+ 
+-UdmabufCreator::UdmabufCreator() {}
++UdmabufCreator::UdmabufCreator() : mImpl(std::make_unique<Impl>()) {}
+ 
+ UdmabufCreator::~UdmabufCreator() {}
+ 
+@@ -90,7 +162,44 @@ bool UdmabufCreator::init() {
+     return true;
+ }
+ 
+-std::optional<DescriptorType> UdmabufCreator::handleFromSharedMemory(SharedMemory& memory) {
++std::optional<UdmabufAllocation> UdmabufCreator::handleFromSharedMemory(SharedMemory& memory) {
++    auto pool = mImpl->pool;
++    std::lock_guard<std::mutex> lock(pool->mMutex);
++
++    // Reuse the exact same dma-buf object for recurring allocation sizes. This
++    // bounds driver-retained imports to the workload high-water mark. Exact
++    // size matching also preserves Vulkan dma-buf import-size requirements.
++    const auto now = Clock::now();
++    for (auto& entry : pool->mEntries) {
++        if (entry->inUse || entry->size != memory.size() || entry->reusableAfter > now) {
++            continue;
++        }
++
++        auto memoryFd = entry->memory.get();
++        auto udmabufFd = entry->udmabuf.get();
++        if (!memoryFd || !udmabufFd) {
++            return std::nullopt;
++        }
++
++        // Replace the newly-created memfd owned by |memory| with a duplicate
++        // of the pooled backing while retaining the same descriptor number.
++        if (dup3(*memoryFd, memory.getFd(), O_CLOEXEC) < 0) {
++            return std::nullopt;
++        }
++
++        DescriptorType descriptor = fcntl(*udmabufFd, F_DUPFD_CLOEXEC, 0);
++        if (descriptor < 0) {
++            return std::nullopt;
++        }
++
++        entry->inUse = true;
++        entry->reusableAfter = Clock::time_point::max();
++        return UdmabufAllocation{
++            .descriptor = descriptor,
++            .lifetime = std::make_shared<UdmabufPoolLease>(pool, entry->id),
++        };
++    }
++
+     // An udmabuf-created fd and a shared memory fd have separate lifetimes, but alias the same set
+     // of kernel pages.
+     const struct udmabuf_create create = {
+@@ -104,8 +213,27 @@ std::optional<DescriptorType> UdmabufCreator::handleFromSharedMemory(SharedMemor
+         return std::nullopt;
+     }
+ 
+-    std::optional<DescriptorType> descriptorOpt = std::make_optional(udmabuf);
+-    return descriptorOpt;
++    DescriptorType pooledMemory = fcntl(memory.getFd(), F_DUPFD_CLOEXEC, 0);
++    DescriptorType pooledUdmabuf = fcntl(udmabuf, F_DUPFD_CLOEXEC, 0);
++    if (pooledMemory < 0 || pooledUdmabuf < 0) {
++        if (pooledMemory >= 0) {
++            close(pooledMemory);
++        }
++        if (pooledUdmabuf >= 0) {
++            close(pooledUdmabuf);
++        }
++        close(udmabuf);
++        return std::nullopt;
++    }
++
++    const uint64_t id = pool->mNextId++;
++    pool->mEntries.emplace_back(std::make_unique<UdmabufPoolEntry>(
++        id, memory.size(), ManagedDescriptor(pooledMemory), ManagedDescriptor(pooledUdmabuf)));
++
++    return UdmabufAllocation{
++        .descriptor = udmabuf,
++        .lifetime = std::make_shared<UdmabufPoolLease>(pool, id),
++    };
+ }
+ 
+ }  // namespace base
+diff --git a/common/base/UdmabufCreator_stub.cpp b/common/base/UdmabufCreator_stub.cpp
+--- a/common/base/UdmabufCreator_stub.cpp
++++ b/common/base/UdmabufCreator_stub.cpp
+@@ -17,17 +17,19 @@
+ namespace gfxstream {
+ namespace base {
+ 
++class UdmabufCreator::Impl {};
++
+ bool IsAndroidKernel6_6() { return false; }
+ 
+ bool HasUdmabufDevice() { return false; }
+ 
+-UdmabufCreator::UdmabufCreator() {}
++UdmabufCreator::UdmabufCreator() : mImpl(std::make_unique<Impl>()) {}
+ 
+ UdmabufCreator::~UdmabufCreator() {}
+ 
+ bool UdmabufCreator::init() { return false; }
+ 
+-std::optional<DescriptorType> UdmabufCreator::handleFromSharedMemory(SharedMemory& memory) {
++std::optional<UdmabufAllocation> UdmabufCreator::handleFromSharedMemory(SharedMemory& memory) {
+     return std::nullopt;
+ }
+ 
+diff --git a/host/common/include/gfxstream/host/external_object_manager.h b/host/common/include/gfxstream/host/external_object_manager.h
+--- a/host/common/include/gfxstream/host/external_object_manager.h
++++ b/host/common/include/gfxstream/host/external_object_manager.h
+@@ -16,6 +16,7 @@
+ #include <inttypes.h>
+ 
+ #include <atomic>
++#include <memory>
+ #include <mutex>
+ #include <optional>
+ #include <unordered_map>
+@@ -119,6 +120,9 @@ struct BlobDescriptorInfo {
+     BlobDescriptorType descriptorInfo;
+     uint32_t caching;
+     std::optional<VulkanInfo> vulkanInfoOpt;
++    // Optional ownership token for memory that must not be recycled while a
++    // virtio-gpu resource can still expose it to the VMM.
++    std::shared_ptr<void> externalMemoryLifetime;
+ };
+ 
+ using SyncDescriptorInfo = GenericDescriptorInfo;
+@@ -134,7 +138,8 @@ class ExternalObjectManager {
+ 
+     void addBlobDescriptorInfo(uint32_t ctx_id, uint64_t blobId, BlobDescriptorValueType descriptor,
+                                uint32_t streamHandleType, uint32_t caching,
+-                               std::optional<VulkanInfo> vulkanInfoOpt);
++                               std::optional<VulkanInfo> vulkanInfoOpt,
++                               std::shared_ptr<void> externalMemoryLifetime = {});
+     std::optional<BlobDescriptorInfo> removeBlobDescriptorInfo(uint32_t ctx_id, uint64_t blobId);
+ 
+     void addSyncDescriptorInfo(uint32_t ctx_id, uint64_t syncId, ManagedDescriptor descriptor,
+diff --git a/host/common/external_object_manager.cpp b/host/common/external_object_manager.cpp
+--- a/host/common/external_object_manager.cpp
++++ b/host/common/external_object_manager.cpp
+@@ -54,7 +54,8 @@ std::optional<HostMemInfo> ExternalObjectManager::removeMapping(uint32_t ctxId,
+ void ExternalObjectManager::addBlobDescriptorInfo(uint32_t ctxId, uint64_t blobId,
+                                                   BlobDescriptorValueType descriptor,
+                                                   uint32_t streamHandleType, uint32_t caching,
+-                                                  std::optional<VulkanInfo> vulkanInfoOpt) {
++                                                  std::optional<VulkanInfo> vulkanInfoOpt,
++                                                  std::shared_ptr<void> externalMemoryLifetime) {
+     struct BlobDescriptorInfo info = {
+         .descriptorInfo =
+             {
+@@ -67,6 +68,7 @@ void ExternalObjectManager::addBlobDescriptorInfo(uint32_t ctxId, uint64_t blobI
+             },
+         .caching = caching,
+         .vulkanInfoOpt = vulkanInfoOpt,
++        .externalMemoryLifetime = std::move(externalMemoryLifetime),
+     };
+ 
+     auto key = std::make_pair(ctxId, blobId);
+diff --git a/host/renderer_impl.cpp b/host/renderer_impl.cpp
+--- a/host/renderer_impl.cpp
++++ b/host/renderer_impl.cpp
+@@ -18,6 +18,10 @@
+ #include <algorithm>
+ #include <limits>
+ #include <utility>
++
++#if defined(__GLIBC__)
++#include <malloc.h>
++#endif
+ #include <variant>
+ 
+ #include "frame_buffer.h"
+@@ -72,9 +76,20 @@ public:
+                 using gfxstream::base::WorkerProcessingResult;
+                 struct {
+                     WorkerProcessingResult operator()(CleanProcessResources resources) {
+-                        FrameBuffer::getFB()->cleanupProcGLObjects(resources.puid);
+-                        // resources.resource are destroyed automatically when going out of the
+-                        // scope.
++                        auto* frameBuffer = FrameBuffer::getFB();
++                        frameBuffer->cleanupProcGLObjects(resources.puid);
++
++                        // Release the last per-process resource container before trimming. Mesa
++                        // and gfxstream do substantial work on render threads, and glibc otherwise
++                        // leaves their now-free pages resident in thread arenas after an abrupt
++                        // guest process exit.
++                        resources.resource.reset();
++#if defined(__GLIBC__)
++                        if (frameBuffer->getFeatures()
++                                .VulkanAllocateHostVisibleAsUdmabuf.enabled()) {
++                            malloc_trim(0);
++                        }
++#endif
+                         return WorkerProcessingResult::Continue;
+                     }
+                     WorkerProcessingResult operator()(Exit) {
+diff --git a/host/vulkan/vk_decoder_internal_structs.h b/host/vulkan/vk_decoder_internal_structs.h
+--- a/host/vulkan/vk_decoder_internal_structs.h
++++ b/host/vulkan/vk_decoder_internal_structs.h
+@@ -174,6 +174,11 @@ struct MemoryInfo {
+     // Set if the memory is backed by shared memory.
+     std::optional<gfxstream::base::SharedMemory> sharedMemory;
+ 
++    // For pooled external memory, keep the backing reserved for the lifetime
++    // of this Vulkan memory object. The virtio-gpu resource holds a second
++    // reference after the blob descriptor is handed off.
++    std::shared_ptr<void> externalMemoryLifetime;
++
+     std::shared_ptr<PrivateMemory> privateMemory;
+     // virtio-gpu blobs
+     uint64_t blobId = 0;
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -6442,6 +6442,7 @@ class VkDecoderGlobalState::Impl {
+         const bool emulateHostVisible = hostVisible && !importEmulatedExternalMemory;
+ 
+         std::optional<SharedMemory> sharedMemory = std::nullopt;
++        std::shared_ptr<void> externalMemoryLifetime;
+         std::optional<VkExportMemoryAllocateInfo> exportAllocateInfo;
+         std::shared_ptr<PrivateMemory> privateMemory = {};
+ 
+@@ -6510,8 +6511,8 @@ class VkDecoderGlobalState::Impl {
+                         return VK_ERROR_OUT_OF_HOST_MEMORY;
+                     }
+ 
+-                    auto descriptor = creator->handleFromSharedMemory(memory);
+-                    if (!descriptor.has_value()) {
++                    auto allocation = creator->handleFromSharedMemory(memory);
++                    if (!allocation.has_value()) {
+                         GFXSTREAM_ERROR("Failed to create handle from shared memory");
+                         return VK_ERROR_OUT_OF_HOST_MEMORY;
+                     }
+@@ -6523,9 +6524,10 @@ class VkDecoderGlobalState::Impl {
+                         return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+                     }
+ 
+-                    importFdInfo.fd = descriptor.value();
++                    importFdInfo.fd = allocation->descriptor;
+                     importFdInfo.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+                     vk_append_struct(&structChainIter, &importFdInfo);
++                    externalMemoryLifetime = std::move(allocation->lifetime);
+ #else
+                     GFXSTREAM_ERROR("Import from shared memory should not work here");
+                     return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+@@ -6655,6 +6657,7 @@ class VkDecoderGlobalState::Impl {
+         memoryInfo.size = localAllocInfo.allocationSize;
+         memoryInfo.device = device;
+         memoryInfo.memoryIndex = localAllocInfo.memoryTypeIndex;
++        memoryInfo.externalMemoryLifetime = std::move(externalMemoryLifetime);
+ 
+         if (importCbInfoPtr) {
+             memoryInfo.boundColorBuffer = importCbInfoPtr->colorBuffer;
+@@ -7120,7 +7123,8 @@ class VkDecoderGlobalState::Impl {
+             // handles.
+             ExternalObjectManager::get()->addBlobDescriptorInfo(
+                 virtioGpuContextId, hostBlobId, info->sharedMemory->releaseHandle(),
+-                STREAM_HANDLE_TYPE_MEM_SHM, info->caching, std::nullopt);
++                STREAM_HANDLE_TYPE_MEM_SHM, info->caching, std::nullopt,
++                info->externalMemoryLifetime);
+         } else if (m_vkEmulation->getFeatures().ExternalBlob.enabled()) {
+ #ifdef __APPLE__
+             if (m_vkEmulation->getExternalMemoryMode() == ExternalMemory::Mode::Metal) {
