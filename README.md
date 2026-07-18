@@ -2,17 +2,15 @@
 
 # イカ · The LineageOS Virtual Desktop
 
-**Ika** _(/ee-kah/)_—Japanese for "cuttlefish"—began as an effort to run the
+**Ika** _/ee-kah/_ - Japanese for "cuttlefish" - began as an effort to run the
 [Cuttlefish](https://source.android.com/setup/create/cuttlefish) Android emulator
 on [Fedora Asahi Remix](https://asahilinux.org/). It has since evolved into a
 desktop operating system for Apple Silicon and x86-64 hosts, but the name stuck.
 
 ## Features
 
-- Custom **LineageOS 23.2** (Android 16) image designed as a desktop-first
-  operating system.
-- **Dynamic display** resize integration that preserves the configured DPI;
-  see the current [host-tool limitation](lineageos/docs/display-architecture.md#current-resize-limitation).
+- **LineageOS 23.2** (Android 16) reimagined as a desktop-first operating system.
+- **Dynamic display** window resizing that preserves the configured DPI settings.
 - **Accelerated GPU rendering** with OpenGL ES and Vulkan support.
 - **Native builds on Asahi Linux** and x86-64 systems with as little as 16 GB
   of RAM.
@@ -22,9 +20,8 @@ desktop operating system for Apple Silicon and x86-64 hosts, but the name stuck.
 ## Ika Binaries
 
 Ika consists of two packages: an Android disk image (informally, the device ROM)
-and a matching Cuttlefish virtual-machine application. Prebuilt Fedora Linux
-(`.rpm`) and Debian/Ubuntu (`.deb`) packages are available from
-[release 260713](https://github.com/DesktopECHO/ika/releases/tag/260713).
+and a matching Cuttlefish virtual machine application. Prebuilt Fedora Linux
+(`.rpm`) and Debian/Ubuntu (`.deb`) packages are available below.
 Select your distribution and CPU architecture, then download the corresponding
 application and disk image.
 
@@ -40,18 +37,17 @@ application and disk image.
 | Debian ARM64 | [ika-base (101 MB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-base_260713-1_arm64.deb) | [ika-lineageos (1.24 GB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-lineageos_260713-1_arm64.deb) |
 
 > [!NOTE]
-> Debian and Ubuntu require Mesa 26.1 or newer. Make it available from
+> Debian and Ubuntu require Mesa 26.1 or newer. Get an updated Mesa from
 > [Debian trixie-backports](https://backports.debian.org/Instructions/) or the
 > [Kisak Mesa PPA](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa)
 > before installing the binary packages.
 
 ## Building from Source
 
-You need at least 16 GB of RAM and 300 GB of free space. The build usually takes
-approximately 3–6 hours, so running it overnight is advisable. The *ika-build*
+You need at least 16 GB of RAM and 300 GB free space. The initial build takes
+approximately 3–9 hours, so running it overnight is advisable. The *ika-build*
 script handles the prerequisite steps and produces installable packages for
-your distribution. The initial download-and-extract step requires `curl` and
-`unzip`.
+your distribution. 
 
 ```bash
 # 1. Download and extract:
@@ -80,9 +76,6 @@ sudo reboot
 
 ika start
 ```
-
-A few seconds after the virtual device starts, the bundled `ika` virtual console
-opens automatically against the running Cuttlefish instance.
 
 Ika requires Mesa 26.1 or newer on Debian/Ubuntu hosts (Fedora already includes
 Mesa 26.1).
@@ -276,9 +269,3 @@ bridge/NAT setup in `cuttlefish-host-resources.sh` and the per-user
 `cvdalloc` daemon manage their rules via native `nft` commands against a
 shared `ip cuttlefish` table. iptables (and `iptables-nft`) and ebtables
 are no longer runtime dependencies.
-
-## Google Compute Engine
-
-The current GCE image tooling in this fork lives under `tools/baseimage/`.
-See [tools/baseimage/README.md](tools/baseimage/README.md) for the current
-workflow.
