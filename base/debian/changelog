@@ -1,3 +1,9 @@
+ika-base (260719-1) unstable; urgency=medium
+
+  * Update Ika host package metadata to 260719-1.
+
+ -- DesktopECHO <build@desktopecho.com>  Sun, 19 Jul 2026 00:00:00 +0000
+
 ika-base (260713-1) unstable; urgency=medium
 
   * Update Ika host package metadata to 260713-1.

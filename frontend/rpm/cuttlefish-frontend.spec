@@ -1,5 +1,5 @@
 Name:           ika-frontend
-Version:        260713
+Version:        260719
 Release:        1%{?dist}
 Summary:        Frontend and orchestration packages for Cuttlefish on Fedora
 License:        Apache-2.0
@@ -141,6 +141,9 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/libexec/cuttlefish/cuttlefish-host_orchestrator-prepare
 
 %changelog
+* Sun Jul 19 2026 DesktopECHO <build@desktopecho.com> - 260719-1
+- Update Ika frontend package metadata to 260719-1.
+
 * Mon Jul 13 2026 DesktopECHO <build@desktopecho.com> - 260713-1
 - Update Ika frontend package metadata to 260713-1.
 
