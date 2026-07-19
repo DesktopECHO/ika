@@ -30,7 +30,7 @@ application and disk image.
 |  |  |  |
 | Fedora x86_64 | [ika-base (144 MB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-base-260713-1.fc44.x86_64.rpm) | [ika-lineageos (1.31 GB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-lineageos-260713-1.fc44.x86_64.rpm) |
 |  |  |  |
-| Fedora ARM64 | [ika-base (xxx MB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-base-260713-1.fc44.aarch64.rpm) | [ika-lineageos (x.x GB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-lineageos-260713-1.fc44.aarch64.rpm) |
+| Fedora ARM64 | [ika-base (141 MB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-base-260713-1.fc44.aarch64.rpm) | [ika-lineageos (1.29 GB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-lineageos-260713-1.fc44.aarch64.rpm) |
 |  |  |  |
 | Debian x86_64 | [ika-base (116 MB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-base_260713-1_amd64.deb) | [ika-lineageos (1.26 GB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-lineageos_260713-1_amd64.deb) |
 |  |  |  |
@@ -44,9 +44,9 @@ application and disk image.
 
 ## Building Ika from Source
 
-You need at least 16 GB of RAM and 300 GB free space. The initial build takes
-approximately 3–6 hours or more, depending on your hardware and internet speed,
-running it overnight is advisable. The *ika-build* script handles the prerequisite
+A successful build requires a minimum of 16GB RAM and 300GB storage.
+The initial build will take 3–6 hours or more, depending on your hardware and internet bandwidth.
+It's advisable to just let run it overnight. The *ika-build* script handles the prerequisite
 steps and produces installable .deb/.rpm packages for your distribution. 
 
 ```bash
@@ -113,11 +113,9 @@ After the initial build, use the narrowest command that matches your changes:
   to repackage `ika-lineageos` with the new contents. Install the outputs
   directly with your distribution's package manager.
 
-See [lineageos/README.md](lineageos/README.md) for ROM-build options (provider
+See [lineageos/README.md](lineageos/README.md) for ROM-build options; provider
 selection, target subsets, microG release pinning, native-bridge sources,
-workspace overrides),
-and [tools/buildutils/cw/README.md](tools/buildutils/cw/README.md) for the
-optional containerized RPM build.
+workspace overrides.
 
 ## Managing the VM with `ika`
 
@@ -224,13 +222,13 @@ subdirectory by `tools/buildutils/build_packages.sh`.
 
 - `ika-base` — Core host binaries, networking helpers, system services, and
   the bundled virtual console used by the `ika` launcher
+- `ika-lineageos` — Bundled `lineageos/` tree installed under
+  `/usr/share/cuttlefish-common/lineageos`
 - `ika-user` — Browser-facing operator service
 - `ika-orchestration` — Host Orchestrator service and nginx configuration
 - `ika-integration` — Cloud-integration utilities
 - `ika-defaults` — Optional defaults-override service and configuration
 - `ika-metrics` — Metrics transmitter binary
-- `ika-lineageos` — Bundled `lineageos/` tree installed under
-  `/usr/share/cuttlefish-common/lineageos`
 - `ika-common` — Compatibility metapackage for the primary host packages
 
 For the local workstation workflow, `ika-base` and `ika-lineageos` are the key
