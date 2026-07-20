@@ -1,3 +1,10 @@
+ika-lineageos (260720-1) unstable; urgency=medium
+
+  * Upgrade guest Mesa to 26.1.5 and both Android GKIs to 6.12.74.
+  * Retain the dEQP Vulkan regression harness in development images.
+
+ -- DesktopECHO <build@desktopecho.com>  Mon, 20 Jul 2026 00:00:00 +0000
+
 ika-lineageos (260719-1) unstable; urgency=medium
 
   * Update Ika LineageOS package metadata to 260719-1.

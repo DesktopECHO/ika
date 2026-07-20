@@ -1,5 +1,5 @@
 Name:           ika-lineageos
-Version:        260719
+Version:        260720
 Release:        1%{?dist}
 Summary:        LineageOS for Cuttlefish host
 License:        Apache-2.0
@@ -86,6 +86,10 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Mon Jul 20 2026 DesktopECHO <build@desktopecho.com> - 260720-1
+- Upgrade guest Mesa to 26.1.5 and both Android GKIs to 6.12.74.
+- Retain the dEQP Vulkan regression harness in development images.
+
 * Sun Jul 19 2026 DesktopECHO <build@desktopecho.com> - 260719-1
 - Update Ika LineageOS package metadata to 260719-1.
 
