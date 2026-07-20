@@ -34,7 +34,7 @@ application and disk image.
 |  |  |  |
 | Debian x86_64 | [ika-base (116 MB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-base_260713-1_amd64.deb) | [ika-lineageos (1.26 GB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-lineageos_260713-1_amd64.deb) |
 |  |  |  |
-| Debian ARM64 | [ika-base (101 MB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-base_260713-1_arm64.deb) | [ika-lineageos (1.24 GB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-lineageos_260713-1_arm64.deb) |
+| Debian ARM64 | [ika-base (101 MB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-base_260713-1_arm64.deb) | [ika-lineageos (1.24 GB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-lineageos_260713-1_arm64.deb) | 
 
 > [!NOTE]
 > Debian and Ubuntu require Mesa 26.1 or newer. Get an updated Mesa from
