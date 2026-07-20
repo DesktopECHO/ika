@@ -4,7 +4,7 @@
 
 pkgbase=ika-frontend
 pkgname=(ika-user ika-orchestration)
-pkgver=260719
+pkgver=260720
 pkgrel=1
 pkgdesc='Frontend and orchestration packages for Cuttlefish'
 arch=(x86_64 aarch64)

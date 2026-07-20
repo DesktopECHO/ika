@@ -1,8 +1,8 @@
 Patch summary:
-Add the host glslangValidator module expected by Android 17 Mesa's generated
+Add the host glslangValidator module expected by Mesa 26.1.5's generated
 SPIR-V header genrules. LineageOS 23.2's dEQP glslang checkout only exposes
-the library pieces needed by dEQP, while the pinned Android Mesa snapshot references the standalone
-validator by its legacy module name. Build a host-only validator from the same
+the library pieces needed by dEQP, while the generated Mesa Soong files also
+reference the standalone validator. Build a host-only validator from the same
 checked-out glslang sources, with the generated build-info and intrinsic
 headers wired into Soong, so Mesa shader headers can be generated during the
 Android 16/LineageOS build.

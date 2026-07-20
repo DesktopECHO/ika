@@ -1,3 +1,4 @@
 exports_files([
+    "PATCH.ffmpeg-pkg-config-includes.patch",
     "crosvm.config.toml",
 ])
