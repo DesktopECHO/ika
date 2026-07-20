@@ -8,7 +8,7 @@ PRODUCT_MAKEFILES := \
     $(LOCAL_DIR)/products/lineage_desktop_cf_x86_64.mk
 
 COMMON_LUNCH_CHOICES := \
-    lineage_desktop_cf_arm64_pgagnostic-trunk_staging-userdebug \
-    lineage_desktop_cf_arm64_pgagnostic-trunk_staging-user \
-    lineage_desktop_cf_x86_64-trunk_staging-userdebug \
-    lineage_desktop_cf_x86_64-trunk_staging-user
+    lineage_desktop_cf_arm64_pgagnostic-bp4a-userdebug \
+    lineage_desktop_cf_arm64_pgagnostic-bp4a-user \
+    lineage_desktop_cf_x86_64-bp4a-userdebug \
+    lineage_desktop_cf_x86_64-bp4a-user
