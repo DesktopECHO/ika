@@ -1,0 +1,37 @@
+--- a/build.rs
++++ b/build.rs
+@@ -23,20 +23,30 @@
+     }
+ 
+     // Match all ffmpeg 6.0+ versions.
+-    Config::new()
++    let avcodec = Config::new()
+         .atleast_version("60")
+         .probe("libavcodec")
+         .unwrap();
+-    Config::new()
++    let avutil = Config::new()
+         .atleast_version("58")
+         .probe("libavutil")
+         .unwrap();
+-    Config::new()
++    let swscale = Config::new()
+         .atleast_version("7")
+         .probe("libswscale")
+         .unwrap();
+ 
+-    let bindings = bindgen::Builder::default()
++    // pkg-config may select a private prefix containing a pinned static
++    // FFmpeg build. Forward its include directories to bindgen instead of
++    // assuming that headers are installed in a distro-specific system path.
++    let mut builder = bindgen::Builder::default();
++    for library in [avcodec, avutil, swscale] {
++        for include_path in library.include_paths {
++            builder = builder.clang_arg(format!("-I{}", include_path.display()));
++        }
++    }
++
++    let bindings = builder
+         .header("src/bindings.h")
+         .allowlist_function("av_.*")
+         .allowlist_function("avcodec_.*")

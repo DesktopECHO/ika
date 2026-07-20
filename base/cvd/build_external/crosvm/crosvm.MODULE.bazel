@@ -88,12 +88,14 @@ crosvm_bin.annotation(
 crosvm_bin.annotation(
     crate = "ffmpeg",
     build_script_env = {
-        # Fedora's ffmpeg headers are installed under /usr/include/ffmpeg, but
-        # crosvm's build.rs invokes bindgen without forwarding pkg-config's
-        # include path. Pass it explicitly so bindings generation can find
-        # libavcodec/libavutil/libswscale headers in the Bazel sandbox.
+        # Keep Fedora's system-header location as a fallback. The patch below
+        # also forwards pkg-config include paths for private static builds.
         "BINDGEN_EXTRA_CLANG_ARGS": "-I/usr/include/ffmpeg",
     },
+    patch_args = ["-p1"],
+    patches = [
+        "@//build_external/crosvm:PATCH.ffmpeg-pkg-config-includes.patch",
+    ],
 )
 
 # The linked disk crate owns CompositeDiskFile; keep its spec fd reported to
