@@ -75,7 +75,7 @@ function deb_build_dependency_packages() {
     openssl libprotobuf-c-dev libprotobuf-dev libsrtp2-dev libssl-dev
     libvirglrenderer-dev libxml2-dev libz3-dev libicu-dev
     libvulkan-dev libgl-dev libgles-dev libegl-dev libcap-dev libdrm-dev
-    libgbm-dev libwayland-dev libva-dev libxtst-dev libzstd-dev pkgconf protobuf-compiler
+    libgbm-dev libwayland-dev libva-dev libzstd-dev pkgconf protobuf-compiler
     uuid-dev xxd
 
     # cuttlefish-frontend Build-Depends (Go + Node.js)

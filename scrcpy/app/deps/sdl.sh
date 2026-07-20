@@ -27,58 +27,57 @@ cd "$BUILD_DIR/$PROJECT_DIR"
 export CFLAGS='-O2'
 export CXXFLAGS="$CFLAGS"
 
-if [[ -d "$DIRNAME" ]]
+mkdir -p "$DIRNAME"
+cd "$DIRNAME"
+
+conf=(
+    -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR/$DIRNAME"
+    -DSDL_TESTS=OFF
+)
+
+if [[ "$HOST" == linux ]]
 then
-    echo "'$PWD/$DIRNAME' already exists, not reconfigured"
-    cd "$DIRNAME"
-else
-    mkdir "$DIRNAME"
-    cd "$DIRNAME"
-
-    conf=(
-        -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR/$DIRNAME"
-        -DSDL_TESTS=OFF
+    conf+=(
+        -DSDL_WAYLAND=ON
+        -DSDL_X11=ON
+        # scrcpy does not synthesize X11 input through XTEST. Disabling this
+        # optional SDL backend avoids a libXtst build dependency.
+        -DSDL_X11_XTEST=OFF
     )
-
-    if [[ "$HOST" == linux ]]
-    then
-        conf+=(
-            -DSDL_WAYLAND=ON
-            -DSDL_X11=ON
-        )
-    fi
-
-    if [[ "$LINK_TYPE" == static ]]
-    then
-        conf+=(
-            -DBUILD_SHARED_LIBS=OFF
-        )
-    else
-        conf+=(
-            -DBUILD_SHARED_LIBS=ON
-        )
-    fi
-
-    if [[ "$BUILD_TYPE" == cross ]]
-    then
-        if [[ "$HOST" = win32 ]]
-        then
-            TOOLCHAIN_FILENAME="cmake-toolchain-mingw64-i686.cmake"
-        elif [[ "$HOST" = win64 ]]
-        then
-            TOOLCHAIN_FILENAME="cmake-toolchain-mingw64-x86_64.cmake"
-        else
-            echo "Unsupported cross-build to host: $HOST" >&2
-            exit 1
-        fi
-
-        conf+=(
-            -DCMAKE_TOOLCHAIN_FILE="$SOURCES_DIR/$PROJECT_DIR/build-scripts/$TOOLCHAIN_FILENAME"
-        )
-    fi
-
-    cmake "$SOURCES_DIR/$PROJECT_DIR" "${conf[@]}"
 fi
+
+if [[ "$LINK_TYPE" == static ]]
+then
+    conf+=(
+        -DBUILD_SHARED_LIBS=OFF
+    )
+else
+    conf+=(
+        -DBUILD_SHARED_LIBS=ON
+    )
+fi
+
+if [[ "$BUILD_TYPE" == cross ]]
+then
+    if [[ "$HOST" = win32 ]]
+    then
+        TOOLCHAIN_FILENAME="cmake-toolchain-mingw64-i686.cmake"
+    elif [[ "$HOST" = win64 ]]
+    then
+        TOOLCHAIN_FILENAME="cmake-toolchain-mingw64-x86_64.cmake"
+    else
+        echo "Unsupported cross-build to host: $HOST" >&2
+        exit 1
+    fi
+
+    conf+=(
+        -DCMAKE_TOOLCHAIN_FILE="$SOURCES_DIR/$PROJECT_DIR/build-scripts/$TOOLCHAIN_FILENAME"
+    )
+fi
+
+# Reconfigure on every invocation so an interrupted configure or changed
+# option does not leave the dependency cache permanently unusable.
+cmake "$SOURCES_DIR/$PROJECT_DIR" "${conf[@]}"
 
 cmake --build .
 cmake --install .
