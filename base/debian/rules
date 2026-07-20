@@ -64,6 +64,9 @@ cuttlefish_integration := debian/ika-integration/usr/bin
 # from the upstream tree at repo_root/scrcpy and installed into ika-base.
 scrcpy_src := $(CURDIR)/../scrcpy
 scrcpy_build_dir := $(CURDIR)/_build_scrcpy
+scrcpy_deps_work_dir := $(ika_work_root)/scrcpy-deps
+scrcpy_static_deps := $(scrcpy_deps_work_dir)/install/linux-native-static
+crosvm_bin := cvd/bazel-bin/cuttlefish/package/cuttlefish-common/bin/crosvm
 cuttlefish_metrics := debian/ika-metrics/usr/lib/cuttlefish-metrics
 
 disk_cache_arg :=
@@ -80,6 +83,11 @@ endif
 # rather than /usr/include. Clang invoked by bindgen doesn't add this path
 # automatically, so pass it explicitly. DEB_HOST_MULTIARCH is set by buildflags.mk.
 bindgen_clang_args := --action_env=BINDGEN_EXTRA_CLANG_ARGS=-I/usr/include/$(DEB_HOST_MULTIARCH)
+static_ffmpeg_action_env := \
+  --action_env=PKG_CONFIG_PATH=$(scrcpy_static_deps)/lib/pkgconfig \
+  --action_env=LIBAVCODEC_STATIC=1 \
+  --action_env=LIBAVUTIL_STATIC=1 \
+  --action_env=LIBSWSCALE_STATIC=1
 
 %:
 	dh $@ --with=config-package
@@ -93,6 +101,12 @@ override_dh_installinit:
 # the `--workspace_status_command` flag path depends on the current working directory of base/cvd
 .PHONY: override_dh_auto_build
 override_dh_auto_build:
+	# Build the pinned, minimal dependency set first. Both crosvm and scrcpy use
+	# these static FFmpeg archives, avoiding distro-specific FFmpeg SONAMEs.
+	cd $(scrcpy_src) && SCRCPY_DEPS_WORK_DIR=$(scrcpy_deps_work_dir) app/deps/sdl.sh linux native static
+	cd $(scrcpy_src) && SCRCPY_DEPS_WORK_DIR=$(scrcpy_deps_work_dir) app/deps/dav1d.sh linux native static
+	cd $(scrcpy_src) && SCRCPY_DEPS_WORK_DIR=$(scrcpy_deps_work_dir) app/deps/ffmpeg.sh linux native static
+	cd $(scrcpy_src) && SCRCPY_DEPS_WORK_DIR=$(scrcpy_deps_work_dir) app/deps/libusb.sh linux native static
 	cd cvd && \
 	  BAZEL_OUTPUT_USER_ROOT="$${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$(ika_work_root)}"; \
 	  BAZEL_CACHE_ROOT="$${CUTTLEFISH_BAZEL_CACHE_ROOT:-$(ika_work_root)/cuttlefish-bazel}"; \
@@ -126,6 +140,7 @@ override_dh_auto_build:
 	         --repo_env=GIT_CONFIG_GLOBAL="$$BAZEL_GIT_CONFIG" \
 	         --repo_env=GIT_CONFIG_NOSYSTEM=1 \
 	         ${bindgen_clang_args} \
+	         ${static_ffmpeg_action_env} \
 	         --cxxopt=-Wno-deprecated-declarations \
 	         --host_cxxopt=-Wno-deprecated-declarations \
 	         --cxxopt=-Wno-thread-safety-reference-return \
@@ -149,17 +164,31 @@ override_dh_auto_build:
 	    echo "Bazel build failed, retrying in $${retry_delay}s ($$retry_count/$$max_retries)..." >&2; \
 	    sleep "$$retry_delay"; \
 	  done
+	@if readelf -d $(crosvm_bin) | grep -Eq 'Shared library: \[(libav|libsw)'; then \
+	  echo "Error: crosvm still has a shared FFmpeg dependency" >&2; \
+	  readelf -d $(crosvm_bin) | grep 'Shared library' >&2; \
+	  exit 1; \
+	fi
 	dh_auto_build
 	# Build the scrcpy viewer. The prebuilt scrcpy-server APK is staged at
 	# repo_root/scrcpy/scrcpy-server by tools/buildutils/build_packages.sh.
 	meson setup $(scrcpy_src) $(scrcpy_build_dir) \
+	    --pkg-config-path=$(scrcpy_static_deps)/lib/pkgconfig \
+	    -Dc_args=-I$(scrcpy_static_deps)/include \
+	    -Dc_link_args=-L$(scrcpy_static_deps)/lib \
 	    --buildtype=release \
 	    --prefix=/usr/lib/cuttlefish-common \
 	    --bindir=bin \
+	    -Dstatic=true \
 	    -Dcompile_app=true \
 	    -Dcompile_server=true \
 	    -Dprebuilt_server=$(scrcpy_src)/scrcpy-server
 	meson compile -C $(scrcpy_build_dir)
+	@if readelf -d $(scrcpy_build_dir)/app/scrcpy | grep -Eq 'Shared library: \[(libav|libsw|libSDL3|libusb)'; then \
+	  echo "Error: scrcpy still has a shared multimedia dependency" >&2; \
+	  readelf -d $(scrcpy_build_dir)/app/scrcpy | grep 'Shared library' >&2; \
+	  exit 1; \
+	fi
 
 # Clean the scrcpy meson build tree alongside the default clean.
 .PHONY: override_dh_auto_clean
