@@ -32,6 +32,25 @@ residue at the correct cleanup boundary.
 
 No Mesa or kernel source changes are required.
 
+### Mesa 26.1.5 and guest-kernel review
+
+The graphics-stack upgrade on 2026-07-20 does not make these mitigations
+obsolete. Mesa 26.1.5 and Linux 6.12.74 run inside the Android guest, whereas
+the retained DMA-BUF attachment is owned by the host Honeykrisp/Asahi path.
+The pinned host gfxstream revision, Fedora's Honeykrisp Mesa 26.1.4, and Asahi
+7.0.13 kernel remain in that path. The bundled Mesa 26.1.5 Lavapipe ICD is a
+software fallback and does not replace Honeykrisp on the accelerated path.
+Retain the pooling, broker, shared lease, allocator trim, Rutabaga drain, and
+defensive Vulkan teardown until an A/B kernel-accounting test on a newer host
+stack shows that closing the last userspace descriptor also removes the Apple
+GPU attachment.
+
+A stopped-VM check during that review found 564 orphaned udmabufs totaling
+2,565,439,488 bytes on the current Asahi 7.0.13 host. The sampled objects each
+still listed `406400000.gpu` as their sole attachment after the broker had been
+stopped, directly confirming that the current host kernel still needs identity
+preservation and reuse.
+
 ## Scope and constraints
 
 The affected configuration is the Apple Silicon 16 KiB-page host path using

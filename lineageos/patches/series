@@ -7,6 +7,7 @@
 external/trusty/lk patches/external-trusty-lk-arm64-host.patch
 trusty/kernel patches/trusty-kernel-arm64-host.patch
 . patches/bison.patch
+system/bpf patches/system-bpf-vmlinux-6.12.patch
 external/stg patches/external-stg-arm64-host-page-size.patch
 . patches/prebuilts-arm64-host.patch
 external/musl patches/external-musl-lfs64-compat.patch

@@ -11,12 +11,13 @@ preserving the Cuttlefish pieces still needed for boot, graphics, and packaging.
 Host-side AVB key lookup is also pointed at the ROM/product bundle first, so
 the ROM owns its signing keys and empty host placeholders cannot shadow them.
 The patch also carries the generated Soong serializer expected by the pinned
-Cuttlefish snapshot, keeping bootstrap verification reproducible.
+Cuttlefish snapshot, keeping bootstrap verification reproducible. OTA vendor
+post-install metadata follows the board filesystem type so update_engine mounts
+ext4 and EROFS vendor images with the format they were actually built with.
 The Cuttlefish NPU APEX is disabled for this tree because the pinned Cuttlefish
 snapshot is ahead of the platform NPU Rust interface variants available here.
 The Bluetooth service is kept on the offload modules available in this platform
 tree by omitting the newer A2DP offload crate.
-Lavapipe host ICD generation is pointed at this tree's Mesa Vulkan XML module.
 Ika desktop products also disable the newer Bluetooth LPP service instance when
 this platform tree does not provide its socket service binary.
 Desktop SELinux extensions cover expected graphics debug-property reads and
@@ -216,6 +217,15 @@ index b31638ad7..c9b0a1302 100644
  
  TARGET_VULKAN_SUPPORT ?= true
  
+@@ -133,7 +133,7 @@ AB_OTA_POSTINSTALL_CONFIG += \
+ AB_OTA_POSTINSTALL_CONFIG += \
+     RUN_POSTINSTALL_vendor=true \
+     POSTINSTALL_PATH_vendor=bin/checkpoint_gc \
+-    FILESYSTEM_TYPE_vendor=erofs \
++    FILESYSTEM_TYPE_vendor=$(BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE) \
+     POSTINSTALL_OPTIONAL_vendor=true
+ 
+ # Userdata Checkpointing OTA GC
 @@ -485,13 +485,16 @@ PRODUCT_PACKAGES += \
  # NPU HAL
  #
@@ -311,29 +321,6 @@ index 782ca1d27..2b73866f4 100644
      src: ":manifest_android.hardware.bluetooth.socket-service.lpp.xml",
      sub_dir: "vintf",
      installable: false,
-diff --git a/build/Android.bp b/build/Android.bp
---- a/build/Android.bp
-+++ b/build/Android.bp
-@@ -471,7 +471,7 @@ cvd_host_swiftshader_files = [
- genrule {
-     name: "vk_lavapipe_icd.cf.json",
-     srcs: [
--        ":vk_api_xml",
-+        ":mesa_vulkan_xml",
-     ],
-     out: [
-         "vk_lavapipe_icd.cf.json",
-@@ -479,7 +479,7 @@ genrule {
-     tools: [
--        "vk_icd_py_binary",
-+        "vk_icd_gen",
-     ],
--    cmd: "python3 $(location vk_icd_py_binary) --api-version 1.4 --xml $(location :vk_api_xml) " +
--        "--icd-lib-path ../../../../lib64 --icd-filename vulkan.lvp.so --out $(location vk_lavapipe_icd.cf.json)",
-+    cmd: "python3 $(location vk_icd_gen) --api-version 1.4 --xml $(location :mesa_vulkan_xml) " +
-+        "--lib-path ../../../../lib64/vulkan.lvp.so --out $(location vk_lavapipe_icd.cf.json)",
- }
-
 diff --git a/shared/desktop/android-info.txt b/shared/desktop/android-info.txt
 new file mode 100644
 index 000000000..fcd665dc4
@@ -715,10 +702,10 @@ index 000000000..9f7af06cb
 +BOARD_KERNEL_MODULES_16K := $(filter-out %/snd-aloop.ko,$(BOARD_KERNEL_MODULES_16K))
 diff --git a/ika_arm64/desktop/aosp_cf.mk b/ika_arm64/desktop/aosp_cf.mk
 new file mode 100644
-index 000000000..5ef2f3b56
+index 000000000..868258978
 --- /dev/null
 +++ b/ika_arm64/desktop/aosp_cf.mk
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,91 @@
 +#
 +# Copyright (C) 2026 The Android Open Source Project
 +#
@@ -774,6 +761,10 @@ index 000000000..5ef2f3b56
 +    preinstalled-packages-platform-aosp-product.xml \
 +    ThemePicker
 +
++# Keep the command-line Vulkan conformance harness in the development ROM so
++# graphics regressions can be reproduced without rebuilding a test target.
++PRODUCT_PACKAGES += deqp-binary
++
 +#
 +# All components inherited here go to vendor image
 +#
@@ -806,9 +797,6 @@ index 000000000..5ef2f3b56
 +PRODUCT_16K_DEVELOPER_OPTION := true
 +
 +TARGET_BOOTS_16K := true
-+
-+# Ignore all Android.mk files
-+PRODUCT_IGNORE_ALL_ANDROIDMK := true
 diff --git a/host/libs/vm_manager/crosvm_manager.cpp b/host/libs/vm_manager/crosvm_manager.cpp
 index e82db4277..7f572b53b 100644
 --- a/host/libs/vm_manager/crosvm_manager.cpp
@@ -1048,10 +1036,10 @@ index 000000000..fb1c2783f
 +BOARD_KERNEL_MODULES_16K := $(filter-out %/snd-aloop.ko,$(BOARD_KERNEL_MODULES_16K))
 diff --git a/ika_x86_64/desktop/aosp_cf.mk b/ika_x86_64/desktop/aosp_cf.mk
 new file mode 100644
-index 000000000..b8785171f
+index 000000000..41e06bf4c
 --- /dev/null
 +++ b/ika_x86_64/desktop/aosp_cf.mk
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,85 @@
 +#
 +# Copyright (C) 2026 The Android Open Source Project
 +#
@@ -1107,6 +1095,10 @@ index 000000000..b8785171f
 +    preinstalled-packages-platform-aosp-product.xml \
 +    ThemePicker
 +
++# Keep the command-line Vulkan conformance harness in the development ROM so
++# graphics regressions can be reproduced without rebuilding a test target.
++PRODUCT_PACKAGES += deqp-binary
++
 +#
 +# All components inherited here go to vendor image
 +#
@@ -1133,6 +1125,3 @@ index 000000000..b8785171f
 +    ro.surface_flinger.force_present_timestamp=true \
 +    ro.soc.manufacturer=$(PRODUCT_MANUFACTURER) \
 +    ro.soc.model=$(PRODUCT_DEVICE)
-+
-+# Ignore all Android.mk files
-+PRODUCT_IGNORE_ALL_ANDROIDMK := true

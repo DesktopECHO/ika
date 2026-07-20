@@ -165,38 +165,6 @@ index 45d1920eaef..395d3ddd683 100644
     const uint8_t *p = data;
     size_t i;
  
-diff --git a/external/mesa3d/src/panfrost/midgard/disassemble.c b/external/mesa3d/src/panfrost/midgard/disassemble.c
-index 45315e38b2b..a5f686f5bac 100644
---- a/external/mesa3d/src/panfrost/midgard/disassemble.c
-+++ b/external/mesa3d/src/panfrost/midgard/disassemble.c
-@@ -338,7 +338,10 @@ print_quad_word(FILE *fp, const uint32_t *words, unsigned tabs)
-    fprintf(fp, "\n");
- }
- 
--static const char components[16] = "xyzwefghijklmnop";
-+static const char components[16] = {
-+   'x', 'y', 'z', 'w', 'e', 'f', 'g', 'h',
-+   'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p',
-+};
- 
- static int
- bits_for_mode(midgard_reg_mode mode)
-diff --git a/external/mesa3d/src/panfrost/midgard/midgard_print.c b/external/mesa3d/src/panfrost/midgard/midgard_print.c
-index 8fc817af9e9..e5d2030ecea 100644
---- a/external/mesa3d/src/panfrost/midgard/midgard_print.c
-+++ b/external/mesa3d/src/panfrost/midgard/midgard_print.c
-@@ -60,7 +60,10 @@ mir_print_index(int source)
-    }
- }
- 
--static const char components[16] = "xyzwefghijklmnop";
-+static const char components[16] = {
-+   'x', 'y', 'z', 'w', 'e', 'f', 'g', 'h',
-+   'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p',
-+};
- 
- static void
- mir_print_mask(unsigned mask)
 diff --git a/external/curl/lib/request.c b/external/curl/lib/request.c
 index 0d9b23ef0c..969bdcd135 100644
 --- a/external/curl/lib/request.c
