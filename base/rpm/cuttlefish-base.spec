@@ -26,7 +26,8 @@ BuildRequires:  jsoncpp-devel
 BuildRequires:  libX11-devel
 BuildRequires:  libXext-devel
 BuildRequires:  libcurl-devel
-BuildRequires:  libavdevice-free-devel
+# Accept either Fedora's FFmpeg-free headers or RPM Fusion's FFmpeg headers.
+BuildRequires:  pkgconfig(libavdevice)
 BuildRequires:  libcap-devel
 BuildRequires:  libdrm-devel
 BuildRequires:  libicu-devel
@@ -34,7 +35,7 @@ BuildRequires:  libxcrypt-compat
 BuildRequires:  libuuid-devel
 BuildRequires:  libxml2-devel
 BuildRequires:  libsrtp-devel
-BuildRequires:  libswscale-free-devel
+BuildRequires:  pkgconfig(libswscale)
 BuildRequires:  opus-devel
 BuildRequires:  openssl-devel
 BuildRequires:  perl-FindBin
@@ -58,17 +59,15 @@ BuildRequires:  ninja-build
 BuildRequires:  SDL3-devel
 BuildRequires:  pipewire-devel
 BuildRequires:  libusb1-devel
-BuildRequires:  libavcodec-free-devel
-BuildRequires:  libavformat-free-devel
-BuildRequires:  libavutil-free-devel
-BuildRequires:  libswresample-free-devel
+BuildRequires:  pkgconfig(libavcodec)
+BuildRequires:  pkgconfig(libavformat)
+BuildRequires:  pkgconfig(libavutil)
+BuildRequires:  pkgconfig(libswresample)
 
 Requires:       bsdtar
 Requires:       curl
 Requires:       dnsmasq
 Requires:       iproute
-Requires:       libcap
-Requires:       libdrm
 Requires:       libX11
 Requires:       libXext
 Requires:       lz4
@@ -83,18 +82,10 @@ Requires:       nftables
 Requires:       openssl
 Requires:       python3
 Requires:       python3-requests
-Requires:       virglrenderer
 Requires:       xdg-utils
-Requires:       xz-libs
-# scrcpy viewer runtime dependencies, folded into ika-base.
+# Linked library dependencies are generated from ELF SONAMEs. Keep only the
+# scrcpy runtime tools that RPM cannot discover from the packaged binaries.
 Requires:       wayland-utils
-Requires:       SDL3
-Requires:       pipewire-libs
-Requires:       libusb1
-Requires:       libavcodec-free
-Requires:       libavformat-free
-Requires:       libavutil-free
-Requires:       libswresample-free
 
 Requires(post): /usr/sbin/groupadd
 Requires(post): /usr/sbin/usermod
