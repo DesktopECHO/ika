@@ -14,7 +14,7 @@ license=(Apache-2.0)
 makedepends=(aom clang cmake curl ffmpeg fmt gcc gflags git google-glog gtest
              icu jsoncpp libcap libdrm libsrtp libusb libx11 libxext libxml2 mesa
              meson ninja openssl opus perl pipewire pkgconf protobuf protobuf-c python sdl3
-             xxd util-linux-libs virglrenderer vulkan-headers wayland which xz z3)
+             xxd util-linux-libs v4l-utils virglrenderer vulkan-headers wayland which xz z3)
 # objcopy/nm cannot parse the Bazel/Clang-built binaries; skip strip/debug.
 options=(!strip !debug)
 source=("android-cuttlefish-${pkgver}.tar.gz")
