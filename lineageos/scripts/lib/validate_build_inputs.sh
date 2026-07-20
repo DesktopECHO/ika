@@ -1328,10 +1328,13 @@ check_vulkan_ndk_abi_dumps() {
   done
 }
 
-check_virtualization_stack_pins() {
-  case "${VALIDATE_VIRTUALIZATION_STACK_PINS:-1}" in
+check_cuttlefish_runtime_pins() {
+  # VALIDATE_VIRTUALIZATION_STACK_PINS is retained as a compatibility alias;
+  # these projects implement the outer Cuttlefish runtime and virtual-GPU
+  # transport. They do not imply that AVF is enabled inside the Android guest.
+  case "${VALIDATE_CUTTLEFISH_RUNTIME_PINS:-${VALIDATE_VIRTUALIZATION_STACK_PINS:-1}}" in
     0|false|no|off)
-      log "virtualization stack pin validation skipped by VALIDATE_VIRTUALIZATION_STACK_PINS=0"
+      log "Cuttlefish runtime pin validation skipped by VALIDATE_CUTTLEFISH_RUNTIME_PINS=0"
       return 0
       ;;
   esac
@@ -1403,13 +1406,13 @@ PY
     [[ -n "$project" ]] || continue
     project_dir="$android_root/$project"
     if [[ ! -d "$project_dir/.git" && ! -f "$project_dir/.git" && ! -L "$project_dir/.git" ]]; then
-      fail "missing virtualization stack project checkout: $project"
+      fail "missing Cuttlefish runtime/graphics project checkout: $project"
       continue
     fi
 
     head="$(git -C "$project_dir" rev-parse HEAD 2>/dev/null || true)"
     if [[ "$head" != "$expected" ]]; then
-      fail "$project is not synced to the pinned virtualization stack revision $expected (found ${head:-unknown}); rerun with SKIP_SYNC=0"
+      fail "$project is not synced to the pinned Cuttlefish runtime/graphics revision $expected (found ${head:-unknown}); rerun with SKIP_SYNC=0"
     fi
   done <<'EOF'
 external/mesa3d 6a02618ccf6c5651ecb9cccbde571eb61fd73592
@@ -2013,7 +2016,7 @@ check_zipalign_rom_package
 check_arm64_page_size_product_defaults
 check_vulkan_header_version
 check_vulkan_ndk_abi_dumps
-check_virtualization_stack_pins
+check_cuttlefish_runtime_pins
 check_graphics_stack_versions
 check_crosvm_wayland_codegen
 check_cuttlefish_proto_editions
