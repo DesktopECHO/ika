@@ -514,7 +514,7 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 %changelog
 * Mon Jul 20 2026 DesktopECHO <build@desktopecho.com> - 260720-1
 - Upgrade bundled host Lavapipe to Mesa 26.1.5 and validate the Vulkan ICD.
-- Link the scrcpy and crosvm multimedia stacks to pinned static libraries.
+- Keep scrcpy and crosvm compatible with either Fedora or RPM Fusion FFmpeg.
 
 * Sun Jul 19 2026 DesktopECHO <build@desktopecho.com> - 260719-1
 - Update Ika host package metadata to 260719-1.
