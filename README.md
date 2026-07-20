@@ -42,7 +42,7 @@ application and disk image.
 > [Kisak Mesa PPA](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa)
 > before installing the binary packages.
 
-## Building Ika from Source
+## Build Ika from Source
 
 A successful build requires a minimum of 16GB RAM and 300GB storage.
 The initial build will take 3–6 hours or more, depending on your hardware and internet bandwidth.
@@ -116,6 +116,15 @@ After the initial build, use the narrowest command that matches your changes:
 See [lineageos/README.md](lineageos/README.md) for ROM-build options; provider
 selection, target subsets, microG release pinning, native-bridge sources,
 workspace overrides.
+
+## Window Handling
+
+The clock at the top-left of the console window is also a **hot corner**. 
+Click+hold the hot corner to move the console window. If the window is maximized
+or in fullscreen mode, click the hot corner once to return to windowed mode.
+
+Drag the window to the left or right edge of the screen to fill half of the
+desktop, or drag it to the top edge to maximize the window.
 
 ## Managing the VM with `ika`
 
