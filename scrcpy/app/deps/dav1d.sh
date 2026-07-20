@@ -23,46 +23,48 @@ fi
 mkdir -p "$BUILD_DIR/$PROJECT_DIR"
 cd "$BUILD_DIR/$PROJECT_DIR"
 
-if [[ -d "$DIRNAME" ]]
+mkdir -p "$DIRNAME"
+cd "$DIRNAME"
+
+conf=(
+    --prefix="$INSTALL_DIR/$DIRNAME"
+    --libdir=lib
+    -Denable_tests=false
+    -Denable_tools=false
+    # Always build dav1d statically
+    --default-library=static
+)
+
+if [[ "$BUILD_TYPE" == cross ]]
 then
-    echo "'$PWD/$DIRNAME' already exists, not reconfigured"
-    cd "$DIRNAME"
+    case "$HOST" in
+        win32)
+            conf+=(
+                --cross-file="$SOURCES_DIR/$PROJECT_DIR/package/crossfiles/i686-w64-mingw32.meson"
+            )
+            ;;
+
+        win64)
+            conf+=(
+                --cross-file="$SOURCES_DIR/$PROJECT_DIR/package/crossfiles/x86_64-w64-mingw32.meson"
+            )
+            ;;
+
+        *)
+            echo "Unsupported host: $HOST" >&2
+            exit 1
+    esac
+fi
+
+# A directory alone does not mean Meson completed setup: an interrupted run
+# may leave the directory without build.ninja. Reconfigure only when Meson's
+# persistent configuration exists; otherwise perform a fresh setup.
+if [[ -f meson-private/coredata.dat ]]
+then
+    meson setup --reconfigure . "$SOURCES_DIR/$PROJECT_DIR" "${conf[@]}"
 else
-    mkdir "$DIRNAME"
-    cd "$DIRNAME"
-
-    conf=(
-        --prefix="$INSTALL_DIR/$DIRNAME"
-        --libdir=lib
-        -Denable_tests=false
-        -Denable_tools=false
-        # Always build dav1d statically
-        --default-library=static
-    )
-
-    if [[ "$BUILD_TYPE" == cross ]]
-    then
-        case "$HOST" in
-            win32)
-                conf+=(
-                    --cross-file="$SOURCES_DIR/$PROJECT_DIR/package/crossfiles/i686-w64-mingw32.meson"
-                )
-                ;;
-
-            win64)
-                conf+=(
-                    --cross-file="$SOURCES_DIR/$PROJECT_DIR/package/crossfiles/x86_64-w64-mingw32.meson"
-                )
-                ;;
-
-            *)
-                echo "Unsupported host: $HOST" >&2
-                exit 1
-        esac
-    fi
-
     meson setup . "$SOURCES_DIR/$PROJECT_DIR" "${conf[@]}"
 fi
 
-ninja
-ninja install
+meson compile
+meson install
