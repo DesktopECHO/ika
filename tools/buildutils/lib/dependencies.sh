@@ -67,23 +67,25 @@ function rpm_build_dependency_packages() {
 function deb_build_dependency_packages() {
   local -a packages=(
     # Core deb build tooling
-    build-essential config-package-dev debhelper dh-exec dpkg-dev
+    binutils build-essential config-package-dev debhelper dh-exec dpkg-dev
 
     # cuttlefish-base Build-Depends (Bazel C++ build)
-    cmake git libaom-dev libavdevice-dev libclang-dev libfmt-dev libgflags-dev
+    cmake git libaom-dev libclang-dev libfmt-dev libgflags-dev
     libgoogle-glog-dev libgtest-dev libjsoncpp-dev liblzma-dev libopus-dev
     openssl libprotobuf-c-dev libprotobuf-dev libsrtp2-dev libssl-dev
-    libswscale-dev libvirglrenderer-dev libxml2-dev libz3-dev libicu-dev
+    libvirglrenderer-dev libxml2-dev libz3-dev libicu-dev
     libvulkan-dev libgl-dev libgles-dev libegl-dev libcap-dev libdrm-dev
-    libgbm-dev libwayland-dev libva-dev libzstd-dev pkgconf protobuf-compiler
+    libgbm-dev libwayland-dev libva-dev libxtst-dev libzstd-dev pkgconf protobuf-compiler
     uuid-dev xxd
 
     # cuttlefish-frontend Build-Depends (Go + Node.js)
     curl golang-go npm
 
-    # ika-base scrcpy viewer Build-Depends (Meson C build + scrcpy-server Java build)
-    default-jdk meson ninja-build libavcodec-dev libavformat-dev libavutil-dev
-    libpipewire-0.3-dev libswresample-dev libsdl3-dev libusb-1.0-0-dev
+    # ika-base pinned static multimedia dependencies (crosvm + scrcpy), plus
+    # the scrcpy-server Java build
+    autoconf automake ca-certificates default-jdk libtool meson nasm ninja-build
+    libpipewire-0.3-dev libsdl3-dev libusb-1.0-0-dev libv4l-dev wget xz-utils
+    zlib1g-dev
 
     # LineageOS Desktop ROM host tools + Bazelisk prerequisites — previously
     # installed on demand by lineageos/scripts/lib/host_env.sh and
