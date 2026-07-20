@@ -33,7 +33,8 @@ function rpm_build_dependency_packages() {
 
     # cuttlefish-base BuildRequires (Bazel C++ build). FFmpeg pkg-config
     # capabilities accept either the Fedora or RPM Fusion development stack.
-    libaom-devel "pkgconfig(libavdevice)" "pkgconfig(libswscale)" clang-devel
+    libaom-devel "pkgconfig(libavdevice)" "pkgconfig(libswscale)"
+    "pkgconfig(libv4l2)" clang-devel
     cmake fmt-devel gcc-c++ gflags-devel git glog-devel gtest-devel
     jsoncpp-devel libX11-devel libXext-devel libcurl-devel libcap-devel
     libdrm-devel libxcrypt-compat libuuid-devel libxml2-devel libsrtp-devel
@@ -172,6 +173,7 @@ function arch_build_dependency_packages() {
     unzip
     util-linux
     util-linux-libs
+    v4l-utils
     virglrenderer
     vulkan-headers
     wayland
