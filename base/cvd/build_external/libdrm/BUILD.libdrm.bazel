@@ -37,6 +37,7 @@ cc_library(
         "include/xf86drm.h",
         "include/xf86drmMode.h",
     ],
+    includes = ["include/drm"],
     strip_include_prefix = "include",
     deps = [":libdrm_shared"],
 )

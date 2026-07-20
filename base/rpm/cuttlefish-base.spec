@@ -1,5 +1,5 @@
 Name:           ika-base
-Version:        260719
+Version:        260720
 Release:        1%{?dist}
 Summary:        Cuttlefish Android Virtual Device host packages for Fedora
 License:        Apache-2.0
@@ -511,6 +511,10 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/lib/cuttlefish-metrics
 
 %changelog
+* Mon Jul 20 2026 DesktopECHO <build@desktopecho.com> - 260720-1
+- Upgrade bundled host Lavapipe to Mesa 26.1.5 and validate the Vulkan ICD.
+- Link the scrcpy and crosvm multimedia stacks to pinned static libraries.
+
 * Sun Jul 19 2026 DesktopECHO <build@desktopecho.com> - 260719-1
 - Update Ika host package metadata to 260719-1.
 
