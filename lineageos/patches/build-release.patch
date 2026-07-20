@@ -9,6 +9,177 @@ release flag sets. Keeping those values here makes the behavior reproducible
 across both trunk staging and BP4A-style builds instead of depending on runtime
 flag edits after first boot.
 
+LineageOS 23.2 selects the stable BP4A target. Carry the remaining desktop
+windowing values into that release config as read-only values so stable Android
+16 builds keep the same desktop behavior without masquerading as a
+trunk-staging preview build.
+
+diff --git a/aconfig/bp4a/com.android.launcher3/enable_large_desktop_windowing_tile_flag_values.textproto b/aconfig/bp4a/com.android.launcher3/enable_large_desktop_windowing_tile_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/bp4a/com.android.launcher3/enable_large_desktop_windowing_tile_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.launcher3"
++  name: "enable_large_desktop_windowing_tile"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.launcher3/enable_scalability_for_desktop_experience_flag_values.textproto b/aconfig/bp4a/com.android.launcher3/enable_scalability_for_desktop_experience_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/bp4a/com.android.launcher3/enable_scalability_for_desktop_experience_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.launcher3"
++  name: "enable_scalability_for_desktop_experience"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.systemui/status_bar_for_desktop_flag_values.textproto b/aconfig/bp4a/com.android.systemui/status_bar_for_desktop_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/bp4a/com.android.systemui/status_bar_for_desktop_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.systemui"
++  name: "status_bar_for_desktop"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.window.flags/enable_desktop_windowing_mode_flag_values.textproto b/aconfig/bp4a/com.android.window.flags/enable_desktop_windowing_mode_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/bp4a/com.android.window.flags/enable_desktop_windowing_mode_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.window.flags"
++  name: "enable_desktop_windowing_mode"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.window.flags/enable_desktop_windowing_transitions_flag_values.textproto b/aconfig/bp4a/com.android.window.flags/enable_desktop_windowing_transitions_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/bp4a/com.android.window.flags/enable_desktop_windowing_transitions_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.window.flags"
++  name: "enable_desktop_windowing_transitions"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.window.flags/enable_desktop_windowing_persistence_flag_values.textproto b/aconfig/bp4a/com.android.window.flags/enable_desktop_windowing_persistence_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/bp4a/com.android.window.flags/enable_desktop_windowing_persistence_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.window.flags"
++  name: "enable_desktop_windowing_persistence"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.window.flags/enable_desktop_windowing_taskbar_running_apps_flag_values.textproto b/aconfig/bp4a/com.android.window.flags/enable_desktop_windowing_taskbar_running_apps_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/bp4a/com.android.window.flags/enable_desktop_windowing_taskbar_running_apps_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.window.flags"
++  name: "enable_desktop_windowing_taskbar_running_apps"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.window.flags/enable_windowing_edge_drag_resize_flag_values.textproto b/aconfig/bp4a/com.android.window.flags/enable_windowing_edge_drag_resize_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/bp4a/com.android.window.flags/enable_windowing_edge_drag_resize_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.window.flags"
++  name: "enable_windowing_edge_drag_resize"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.window.flags/enable_windowing_scaled_resizing_flag_values.textproto b/aconfig/bp4a/com.android.window.flags/enable_windowing_scaled_resizing_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/bp4a/com.android.window.flags/enable_windowing_scaled_resizing_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.window.flags"
++  name: "enable_windowing_scaled_resizing"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.window.flags/enable_windowing_dynamic_initial_bounds_flag_values.textproto b/aconfig/bp4a/com.android.window.flags/enable_windowing_dynamic_initial_bounds_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/bp4a/com.android.window.flags/enable_windowing_dynamic_initial_bounds_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.window.flags"
++  name: "enable_windowing_dynamic_initial_bounds"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.window.flags/universal_resizable_by_default_flag_values.textproto b/aconfig/bp4a/com.android.window.flags/universal_resizable_by_default_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/bp4a/com.android.window.flags/universal_resizable_by_default_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.window.flags"
++  name: "universal_resizable_by_default"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.window.flags/show_home_behind_desktop_flag_values.textproto b/aconfig/bp4a/com.android.window.flags/show_home_behind_desktop_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/bp4a/com.android.window.flags/show_home_behind_desktop_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.window.flags"
++  name: "show_home_behind_desktop"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.window.flags/enable_minimize_button_flag_values.textproto b/aconfig/bp4a/com.android.window.flags/enable_minimize_button_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/bp4a/com.android.window.flags/enable_minimize_button_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.window.flags"
++  name: "enable_minimize_button"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.window.flags/enable_themed_app_headers_flag_values.textproto b/aconfig/bp4a/com.android.window.flags/enable_themed_app_headers_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/bp4a/com.android.window.flags/enable_themed_app_headers_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.window.flags"
++  name: "enable_themed_app_headers"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.window.flags/skip_compat_ui_education_in_desktop_mode_flag_values.textproto b/aconfig/bp4a/com.android.window.flags/skip_compat_ui_education_in_desktop_mode_flag_values.textproto
+new file mode 100644
+--- /dev/null
++++ b/aconfig/bp4a/com.android.window.flags/skip_compat_ui_education_in_desktop_mode_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.window.flags"
++  name: "skip_compat_ui_education_in_desktop_mode"
++  state: ENABLED
++  permission: READ_ONLY
++}
+
 diff --git a/aconfig/bp4a/com.android.launcher3/blurred_home_animation_flag_values.textproto b/aconfig/bp4a/com.android.launcher3/blurred_home_animation_flag_values.textproto
 new file mode 100644
 --- /dev/null
