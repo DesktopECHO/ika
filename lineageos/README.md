@@ -18,11 +18,17 @@ source checkout.
 `AndroidProducts.mk` registers these lunch combinations:
 
 ```bash
-lunch lineage_desktop_cf_arm64_pgagnostic-trunk_staging-userdebug
-lunch lineage_desktop_cf_arm64_pgagnostic-trunk_staging-user
-lunch lineage_desktop_cf_x86_64-trunk_staging-userdebug
-lunch lineage_desktop_cf_x86_64-trunk_staging-user
+lunch lineage_desktop_cf_arm64_pgagnostic-bp4a-userdebug
+lunch lineage_desktop_cf_arm64_pgagnostic-bp4a-user
+lunch lineage_desktop_cf_x86_64-bp4a-userdebug
+lunch lineage_desktop_cf_x86_64-bp4a-user
 ```
+
+The build wrapper reads `vendor/lineage/vars/aosp_target_release` and therefore
+tracks the stable Android release selected by LineageOS 23.2 (`bp4a`), rather
+than the preview-oriented `trunk_staging` configuration. Set
+`IKA_ANDROID_TARGET_RELEASE` only when deliberately testing another release
+configuration.
 
 ## Source Layout
 

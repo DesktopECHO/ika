@@ -201,7 +201,7 @@ silent_crosvm_link_failure() {
 
 run_build_native() {
   local product="$1"
-  local java_home status
+  local java_home status target_release
   shift
 
   export_active_llvm_env
@@ -213,8 +213,18 @@ run_build_native() {
 
   set +u
   source build/envsetup.sh
-  log "lunching $product trunk_staging $build_variant"
-  lunch "$product" trunk_staging "$build_variant" || die "lunch $product failed"
+  target_release="${IKA_ANDROID_TARGET_RELEASE:-}"
+  if [[ -z "$target_release" && -r vendor/lineage/vars/aosp_target_release ]]; then
+    # Keep custom products on the stable Android release selected by the
+    # Lineage branch instead of silently building against trunk_staging.
+    source vendor/lineage/vars/aosp_target_release
+    target_release="${aosp_target_release:-}"
+  fi
+  [[ -n "$target_release" ]] || die "could not determine the Lineage Android target release"
+
+  log "lunching $product $target_release $build_variant"
+  lunch "$product" "$target_release" "$build_variant" || \
+    die "lunch $product $target_release $build_variant failed"
   [[ "${TARGET_PRODUCT:-}" == "$product" ]] || \
     die "lunch did not set TARGET_PRODUCT=$product (got '${TARGET_PRODUCT:-}')"
   # envsetup.sh and lunch both call `set +u` and may toggle other -o options;
