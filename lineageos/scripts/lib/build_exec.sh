@@ -201,7 +201,7 @@ silent_crosvm_link_failure() {
 
 run_build_native() {
   local product="$1"
-  local java_home status target_release
+  local avf_enabled java_home product_packages status target_release
   shift
 
   export_active_llvm_env
@@ -227,6 +227,20 @@ run_build_native() {
     die "lunch $product $target_release $build_variant failed"
   [[ "${TARGET_PRODUCT:-}" == "$product" ]] || \
     die "lunch did not set TARGET_PRODUCT=$product (got '${TARGET_PRODUCT:-}')"
+
+  # Ika itself is already the Android guest of the outer host-side Cuttlefish
+  # VM. Do not accidentally add Android's in-guest AVF/Microdroid layer when
+  # rebasing the product inheritance onto a newer Cuttlefish revision. The
+  # small disabled com.android.virt compatibility APEX remains part of AOSP's
+  # base system because framework-virtualization is on the boot class path.
+  avf_enabled="$(get_build_var PRODUCT_AVF_ENABLED)"
+  product_packages="$(get_build_var PRODUCT_PACKAGES)"
+  if [[ "$avf_enabled" == "true" ]] || \
+      grep -Eq '(^|[[:space:]])(com\.android\.compos|features_com\.android\.virt\.xml)($|[[:space:]])' \
+        <<<"$product_packages"; then
+    die "$product enables guest AVF/Microdroid; Ika ROMs must keep nested virtualization disabled"
+  fi
+
   # envsetup.sh and lunch both call `set +u` and may toggle other -o options;
   # re-assert the strict shell flags before running the long build.
   set -eo pipefail
