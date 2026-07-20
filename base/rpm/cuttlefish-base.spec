@@ -28,6 +28,7 @@ BuildRequires:  libXext-devel
 BuildRequires:  libcurl-devel
 # Accept either Fedora's FFmpeg-free headers or RPM Fusion's FFmpeg headers.
 BuildRequires:  pkgconfig(libavdevice)
+BuildRequires:  pkgconfig(libv4l2)
 BuildRequires:  libcap-devel
 BuildRequires:  libdrm-devel
 BuildRequires:  libicu-devel
