@@ -123,8 +123,12 @@ The clock at the top-left of the console window is also a **hot corner**.
 Click+hold the hot corner to move the console window. If the window is maximized
 or in fullscreen mode, click the hot corner once to return to windowed mode.
 
-Drag the window to the left or right edge of the screen to fill half of the
-desktop, or drag it to the top edge to maximize the window.
+Drag the window to the left or right edge of the screen to fill half
+of the desktop, or drag it to the top edge to maximize the window.
+
+Super (Command) + F Switches in and out of fullscreen mode.
+
+Super (Command) + T Switches the title bar on and off. 
 
 ## Managing the VM with `ika`
 
@@ -152,7 +156,9 @@ ika restart --gpu_mode=gfxstream --gfxstream_vulkan=on
 
 # Factory reset and use a 128 GB userdata image on the next start
 ika reset --data_gb=128
-ika start
+
+# Game Mode will start Ika fullscreen and enable HID keyboard and mouse 
+ika start --game
 
 # Show the built-in usage text
 ika help
@@ -164,16 +170,14 @@ ika help
 Cuttlefish processes. `ika reset` is the destructive variant; it passes
 `--clear_instance_dirs` and removes the local Chromium-install stamp.
 
-By default `ika` uses:
+Default `ika` settings and configuration:
 
 - host tools from `/usr/lib/cuttlefish-common`
 - the packaged LineageOS tree from `/usr/share/cuttlefish-common/lineageos`
 - instance state under `~/ika`
-- a ~64 GB thin-provisioned ext4 userdata image
+- ~64 GB thin-provisioned ext4 userdata image
 - guest vCPUs set to the available/performance-core count minus two, capped at 12
-- guest RAM set to about one quarter of host RAM, rounded to 2 GB steps and
-  capped at 32 GB
-- `gfxstream_guest_angle` GPU acceleration
+- guest RAM set to one quarter of host RAM, capped at 32 GB
 - Ethernet-only guest networking by default; Wi-Fi, Bluetooth, NFC, UWB, GNSS,
   and the modem simulator remain off unless explicitly enabled
 
@@ -224,13 +228,13 @@ API for applications that support it.
 
 ## Host Packages
 
-The repository currently builds these host package names. On RPM distributions,
+The repository builds the host package names listed below. On RPM distributions,
 outputs land under `rpmbuild/RPMS/`; on Debian-family distributions, outputs
 land under `deb/`. Non-primary packages are moved into an `extras/`
 subdirectory by `tools/buildutils/build_packages.sh`.
 
-- `ika-base` — Core host binaries, networking helpers, system services, and
-  the bundled virtual console used by the `ika` launcher
+- `ika-base` — Core host binaries, networking helpers, system services,
+  and scrcpy-based virtual console used by the `ika` launcher
 - `ika-lineageos` — Bundled `lineageos/` tree installed under
   `/usr/share/cuttlefish-common/lineageos`
 - `ika-user` — Browser-facing operator service
@@ -240,10 +244,7 @@ subdirectory by `tools/buildutils/build_packages.sh`.
 - `ika-metrics` — Metrics transmitter binary
 - `ika-common` — Compatibility metapackage for the primary host packages
 
-For the local workstation workflow, `ika-base` and `ika-lineageos` are the key
-packages; `ika-base` includes the virtual console used by the `ika` launcher. On
-RPM distributions, the specs also provide and obsolete the old `cuttlefish-*`
-package names for upgrades, but newly built package files use the `ika-*` names.
+The majority of users will need only `ika-base` and `ika-lineageos`
 
 ## Notes
 
