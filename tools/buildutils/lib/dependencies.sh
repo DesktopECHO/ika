@@ -31,8 +31,9 @@ function rpm_build_dependency_packages() {
     # Core RPM build tooling
     rpm-build rpmdevtools systemd-rpm-macros
 
-    # cuttlefish-base BuildRequires (Bazel C++ build)
-    libaom-devel libavdevice-free-devel libswscale-free-devel clang-devel
+    # cuttlefish-base BuildRequires (Bazel C++ build). FFmpeg pkg-config
+    # capabilities accept either the Fedora or RPM Fusion development stack.
+    libaom-devel "pkgconfig(libavdevice)" "pkgconfig(libswscale)" clang-devel
     cmake fmt-devel gcc-c++ gflags-devel git glog-devel gtest-devel
     jsoncpp-devel libX11-devel libXext-devel libcurl-devel libcap-devel
     libdrm-devel libxcrypt-compat libuuid-devel libxml2-devel libsrtp-devel
@@ -46,8 +47,8 @@ function rpm_build_dependency_packages() {
 
     # ika-base scrcpy viewer BuildRequires (Meson C build + scrcpy-server Java build)
     meson ninja-build java-25-openjdk-devel SDL3-devel pipewire-devel
-    libavcodec-free-devel libavformat-free-devel libavutil-free-devel
-    libswresample-free-devel libusb1-devel vulkan-headers libicu-devel
+    "pkgconfig(libavcodec)" "pkgconfig(libavformat)" "pkgconfig(libavutil)"
+    "pkgconfig(libswresample)" libusb1-devel vulkan-headers libicu-devel
 
     # Runtime tools needed during rpmbuild
     rsync pigz
