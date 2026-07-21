@@ -5,7 +5,8 @@
 **Ika** _/ee-kah/_ - Japanese for "cuttlefish" - began as an effort to run the
 [Cuttlefish](https://source.android.com/setup/create/cuttlefish) Android emulator
 on [Fedora Asahi Remix](https://asahilinux.org/). It has since evolved into a
-desktop operating system for Apple Silicon and x86-64 hosts, but the name stuck.
+full-blown desktop operating environment for Apple Silicon and x86-64 hosts.
+The project scope changed over time but the name stuck.
 
 ## Features
 
@@ -60,7 +61,7 @@ unzip ika-main.zip && rm ika-main.zip && cd ika-main
 # Prepares signing certificates, installs build dependencies, downloads the
 # LineageOS 23.2 source, applies the overlay and source patches, builds the
 # Cuttlefish target for the host architecture, creates RPM or Debian packages,
-# and prints the package installation command when the build is complete.
+# and provides package installation instructions when the build is complete.
 
 ./ika-build
 
