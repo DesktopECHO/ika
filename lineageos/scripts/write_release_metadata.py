@@ -179,6 +179,7 @@ def write_source_manifest(android_root: Path, bundle_dir: Path) -> dict[str, Any
 
 
 def build_metadata(args: argparse.Namespace) -> dict[str, Any]:
+    ika_root = Path(args.ika_root).resolve()
     android_root = Path(args.android_root).resolve()
     overlay_dir = Path(args.overlay_dir).resolve()
     bundle_dir = Path(args.bundle_dir).resolve()
@@ -228,6 +229,9 @@ def build_metadata(args: argparse.Namespace) -> dict[str, Any]:
             ),
         })
 
+    ika = git_info(ika_root)
+    ika["source_commit"] = os.environ.get("IKA_SOURCE_COMMIT") or ika.get("commit")
+
     metadata: dict[str, Any] = {
         "schema": 1,
         "generated_utc": _dt.datetime.now(_dt.timezone.utc)
@@ -244,6 +248,7 @@ def build_metadata(args: argparse.Namespace) -> dict[str, Any]:
         "paths": {
             "product_out": str(product_out),
         },
+        "ika": ika,
         "overlay": git_info(overlay_dir),
         "android": {
             "manifest_branch": args.lineage_branch,
@@ -267,6 +272,7 @@ def build_metadata(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def write_text_summary(metadata: dict[str, Any], path: Path) -> None:
+    ika = metadata.get("ika", {})
     overlay = metadata.get("overlay", {})
     image_count = len(metadata.get("images", {}))
     lines = [
@@ -275,6 +281,7 @@ def write_text_summary(metadata: dict[str, Any], path: Path) -> None:
         f"Product: {metadata['product']}",
         f"Architecture: {metadata['arch']}",
         f"Lineage branch: {metadata['lineage_branch']}",
+        f"Ika source commit: {ika.get('source_commit', 'unknown')}",
         f"Overlay commit: {overlay.get('commit', 'unknown')}",
         f"Overlay dirty: {overlay.get('dirty', 'unknown')}",
         f"Image files: {image_count}",
@@ -296,6 +303,7 @@ def write_text_summary(metadata: dict[str, Any], path: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--ika-root", required=True)
     parser.add_argument("--android-root", required=True)
     parser.add_argument("--overlay-dir", required=True)
     parser.add_argument("--product-out", required=True)

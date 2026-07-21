@@ -21,6 +21,8 @@ overlay_dir="$(cd "$script_dir/.." && pwd)"
 ika_root="$(cd "$overlay_dir/.." && pwd)"
 ika_work_root="${IKA_WORK_ROOT:-$ika_root/ika-work}"
 export IKA_WORK_ROOT="$ika_work_root"
+ika_source_commit="${IKA_SOURCE_COMMIT:-$(git -C "$ika_root" rev-parse HEAD 2>/dev/null || true)}"
+export IKA_SOURCE_COMMIT="$ika_source_commit"
 
 android_manifest_url="${ANDROID_MANIFEST_URL:-https://github.com/LineageOS/android.git}"
 lineage_branch="${LINEAGE_BRANCH:-lineage-23.2}"
@@ -130,6 +132,9 @@ case "$build_variant" in
   user|userdebug|eng) ;;
   *) die "BUILD_VARIANT must be one of: user, userdebug, eng (got '$build_variant')" ;;
 esac
+
+[[ "$ika_source_commit" =~ ^[0-9a-f]{40}$ ]] || \
+  die "could not determine the exact Ika source commit for release metadata"
 
 active_build_arch=""
 active_build_start_epoch=""
