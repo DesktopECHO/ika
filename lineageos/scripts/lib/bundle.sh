@@ -282,12 +282,31 @@ bundle_dir_complete() {
   desktop_android_info_selects_tablet "$bundle_dir/android-info.txt"
 }
 
-vulkan_test_outputs_complete() {
+vulkan_test_apk() {
   local product_out="$1"
-  local apk binary
+  local host_tag="$2"
+  local apk
 
+  # Older trees staged the CTS APK beside the product testcases. Android 16
+  # stages the architecture-independent APK in the host CTS directory while
+  # keeping deqp-binary in the product output. Accept the legacy location, but
+  # prefer the host directory belonging to this build architecture.
   apk="$(find "$product_out/testcases/com.drawelements.deqp" -type f \
     -name 'com.drawelements.deqp.apk' -print -quit 2>/dev/null || true)"
+  if [[ -z "$apk" ]]; then
+    apk="$(find "$workspace/out/host/$host_tag/testcases/CtsDeqpTestCases" \
+      -type f -name 'com.drawelements.deqp.apk' -print -quit \
+      2>/dev/null || true)"
+  fi
+  printf '%s\n' "$apk"
+}
+
+vulkan_test_outputs_complete() {
+  local product_out="$1"
+  local host_tag="$2"
+  local apk binary
+
+  apk="$(vulkan_test_apk "$product_out" "$host_tag")"
   binary="$(find "$product_out/testcases/deqp-binary" -type f \
     -name 'deqp-binary*' -print -quit 2>/dev/null || true)"
 
@@ -566,14 +585,14 @@ copy_bundle_file_thin() {
 
 copy_vulkan_test_outputs() {
   local product_out="$1"
-  local bundle_dir="$2"
+  local host_tag="$2"
+  local bundle_dir="$3"
   local apk binary test_dir
 
-  vulkan_test_outputs_complete "$product_out" || \
-    die "missing Vulkan CTS outputs under $product_out/testcases"
+  vulkan_test_outputs_complete "$product_out" "$host_tag" || \
+    die "missing Vulkan CTS outputs for $product_out ($host_tag)"
 
-  apk="$(find "$product_out/testcases/com.drawelements.deqp" -type f \
-    -name 'com.drawelements.deqp.apk' -print -quit)"
+  apk="$(vulkan_test_apk "$product_out" "$host_tag")"
   binary="$(find "$product_out/testcases/deqp-binary" -type f \
     -name 'deqp-binary*' -print -quit)"
   test_dir="$bundle_dir/testcases/vulkan"
@@ -657,7 +676,8 @@ package_cvd_bundle() {
     fi
   done
   "$(thin_provision_images_tool)" "$bundle_dir"
-  copy_vulkan_test_outputs "$product_out" "$bundle_dir"
+  copy_vulkan_test_outputs \
+    "$product_out" "$(target_host_tag "$arch")" "$bundle_dir"
   if [[ "$arch" == "x86_64" ]] && enabled "${include_x86_arm_native_bridge:-1}"; then
     copy_native_bridge_test_outputs "$product_out" "$bundle_dir"
   fi
