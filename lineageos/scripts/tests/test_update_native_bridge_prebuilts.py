@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import struct
 import tempfile
@@ -81,6 +82,19 @@ class UpdateNativeBridgePrebuiltsTest(unittest.TestCase):
                 MODULE.EM_X86_64,
                 MODULE.elf_machine(output / "lib64/libndk_translation.so"),
             )
+
+    def test_copy_file_refreshes_timestamp_for_android_incremental_builds(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source"
+            destination = root / "destination"
+            source.write_bytes(b"new payload")
+            os.utime(source, ns=(1_000_000_000, 1_000_000_000))
+
+            MODULE.copy_file(source, destination)
+
+            self.assertEqual(source.read_bytes(), destination.read_bytes())
+            self.assertGreater(destination.stat().st_mtime_ns, source.stat().st_mtime_ns)
 
     def test_stage_payload_accepts_current_cpuinfo_location_and_init_trigger(self):
         with tempfile.TemporaryDirectory() as temp_dir:
