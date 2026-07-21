@@ -19,9 +19,10 @@ instead of serializing opaque pData as one byte, which deterministically
 crashes the host renderer for mutable sampler templates. Preserve template
 stride and guest buffer-handle translation and route the Vulkan 1.4 and KHR
 aliases through the same implementation. Let the host fill complete standalone
-driver/ID properties, mask unsupported video-format capabilities, emulate the
-supported global-priority range on Vulkan 1.3 hosts, and fully unwind partially
-initialized guest/host devices on allocation failures.
+driver/ID properties, keep legacy and Properties2 format overrides consistent,
+mask unsupported video and protected-pipeline capabilities, emulate LOW/MEDIUM
+global priority while denying privileged requests consistently, and fully unwind
+partially initialized guest/host devices on allocation failures.
 
 Let Soong and Meson generate gfxstream's reserved-marshalling sources from the
 same 26.1.5 Vulkan registry used by the encoder. Carrying an older generated
@@ -7618,7 +7619,7 @@ index 0000000000000000000000000000000000000000..05e4d07a27fa1898310c0127205dd2f0
 +    },
 +}
 diff --git a/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp b/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp
-index c979d699f623718431ec5b319d31768178b34e01..f1822ee31d3ae8d7aecf0fcabebdcc9d8762d58c 100644
+index c979d699f623718431ec5b319d31768178b34e01..19565f769492d4999ea78146e4ec204c4588ca86 100644
 --- a/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp
 +++ b/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp
 @@ -130,6 +130,9 @@ static const char* const kGuestEmulatedDeviceExtensions[] = {
@@ -7710,7 +7711,7 @@ index c979d699f623718431ec5b319d31768178b34e01..f1822ee31d3ae8d7aecf0fcabebdcc9d
          std::vector<const char*> filteredExts = filteredDeviceExtensionNames(
              gfxstream_physicalDevice, localCreateInfo.enabledExtensionCount,
              localCreateInfo.ppEnabledExtensionNames);
-@@ -610,18 +674,27 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
+@@ -610,18 +674,30 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
              }
          }
  
@@ -7719,7 +7720,10 @@ index c979d699f623718431ec5b319d31768178b34e01..f1822ee31d3ae8d7aecf0fcabebdcc9d
 -                                       pAllocator, &gfxstream_device->internal_object,
 -                                       true /* do lock */);
 +        if (unsupportedGlobalPriority) {
-+            result = VK_ERROR_INITIALIZATION_FAILED;
++            // The guest policy emulates LOW and MEDIUM. HIGH and REALTIME are privileged
++            // scheduling requests, so consistently deny them instead of depending on which
++            // priorities the host happens to advertise.
++            result = VK_ERROR_NOT_PERMITTED_KHR;
 +        } else {
 +            auto vkEnc = gfxstream::vk::ResourceTracker::getThreadLocalEncoder();
 +            result = vkEnc->vkCreateDevice(gfxstream_physicalDevice->internal_object,
@@ -7744,7 +7748,7 @@ index c979d699f623718431ec5b319d31768178b34e01..f1822ee31d3ae8d7aecf0fcabebdcc9d
                  mutablePhysicalDeviceGroupProperties->physicalDevices[physDev] =
                      initialPhysicalDeviceList[physDev];
              }
-@@ -638,23 +711,39 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
+@@ -638,23 +714,39 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
  
          result = vk_device_init(&gfxstream_device->vk, &gfxstream_physicalDevice->vk,
                                  &dispatch_table, pCreateInfo, pMesaAllocator);
@@ -8034,7 +8038,7 @@ index 0000000000000000000000000000000000000000..a8cbd13e48ed012da7fee0ebab1645af
 +    ],
 +}
 diff --git a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
-index 40101545f0306be775ddc6c5a928416bd9a03790..0347b69711a4c1742299cd3676c81ea74d6dc4d5 100644
+index 40101545f0306be775ddc6c5a928416bd9a03790..e544b084170a6410804b3b1b62704de36ddc4f4c 100644
 --- a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
 +++ b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
 @@ -1773,15 +1773,21 @@ VkResult ResourceTracker::on_vkEnumerateDeviceExtensionProperties(
@@ -8117,7 +8121,27 @@ index 40101545f0306be775ddc6c5a928416bd9a03790..0347b69711a4c1742299cd3676c81ea7
  #if defined(VK_USE_PLATFORM_ANDROID_KHR) || DETECT_OS_LINUX
      bool hostSupportsExternalFenceFd =
          getHostDeviceExtensionIndex("VK_KHR_external_fence_fd") != -1;
-@@ -2196,14 +2217,6 @@ void ResourceTracker::on_vkGetPhysicalDeviceProperties2(void* context,
+@@ -2168,6 +2189,19 @@ void ResourceTracker::on_vkGetPhysicalDeviceFeatures2(void*, VkPhysicalDevice,
+         if (memoryReportFeaturesEXT) {
+             memoryReportFeaturesEXT->deviceMemoryReport = VK_TRUE;
+         }
++
++        VkPhysicalDeviceVulkan14Features* vulkan14Features =
++            vk_find_struct(pFeatures, PHYSICAL_DEVICE_VULKAN_1_4_FEATURES);
++        VkPhysicalDevicePipelineProtectedAccessFeatures* pipelineProtectedAccessFeatures =
++            vk_find_struct(pFeatures, PHYSICAL_DEVICE_PIPELINE_PROTECTED_ACCESS_FEATURES);
++        // Host drivers disagree on the promoted Vulkan 1.4 value versus the standalone EXT
++        // structure, and gfxstream does not provide protected pipeline access to the guest.
++        // Report the conservative supported value through both query forms, even when callers
++        // request only one of the structures.
++        if (vulkan14Features) vulkan14Features->pipelineProtectedAccess = VK_FALSE;
++        if (pipelineProtectedAccessFeatures) {
++            pipelineProtectedAccessFeatures->pipelineProtectedAccess = VK_FALSE;
++        }
+     }
+ }
+ 
+@@ -2196,14 +2230,6 @@ void ResourceTracker::on_vkGetPhysicalDeviceProperties2(void* context,
          vk_filter_struct(&localProps, PHYSICAL_DEVICE_PCI_BUS_INFO_PROPERTIES_EXT);
      }
  
@@ -8132,7 +8156,7 @@ index 40101545f0306be775ddc6c5a928416bd9a03790..0347b69711a4c1742299cd3676c81ea7
  #if defined(VK_USE_PLATFORM_ANDROID_KHR)
      if (vk_find_struct(&localProps, PHYSICAL_DEVICE_PRESENTATION_PROPERTIES_ANDROID)) {
          vk_filter_struct(&localProps, PHYSICAL_DEVICE_PRESENTATION_PROPERTIES_ANDROID);
-@@ -6695,6 +6708,8 @@ VkResult ResourceTracker::initDescriptorUpdateTemplateBuffers(
+@@ -6695,6 +6721,8 @@ VkResult ResourceTracker::initDescriptorUpdateTemplateBuffers(
      }
  
      auto& info = it->second;
@@ -8141,7 +8165,7 @@ index 40101545f0306be775ddc6c5a928416bd9a03790..0347b69711a4c1742299cd3676c81ea7
      uint32_t inlineUniformBlockBufferSize = 0;
  
      for (uint32_t i = 0; i < pCreateInfo->descriptorUpdateEntryCount; ++i) {
-@@ -6947,6 +6962,165 @@ void ResourceTracker::on_vkUpdateDescriptorSetWithTemplate(
+@@ -6947,6 +6975,173 @@ void ResourceTracker::on_vkUpdateDescriptorSetWithTemplate(
          bufferViews, inlineUniformBlockBuffer, true /* do lock */);
  }
  
@@ -8295,28 +8319,31 @@ index 40101545f0306be775ddc6c5a928416bd9a03790..0347b69711a4c1742299cd3676c81ea7
 +    pFormatProperties->bufferFeatures &= ~kUnsupportedVideoFormatFeatures;
 +}
 +
++static void applyGuestFormatOverrides(VkFormat format, VkFormatProperties* pFormatProperties) {
++    if (format == VK_FORMAT_EAC_R11G11_SNORM_BLOCK) {
++        pFormatProperties->linearTilingFeatures |=
++            VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
++    }
++    maskUnsupportedVideoFormatFeatures(pFormatProperties);
++}
++
 +void ResourceTracker::on_vkGetPhysicalDeviceFormatProperties(
 +    void* context, VkPhysicalDevice physicalDevice, VkFormat format,
 +    VkFormatProperties* pFormatProperties) {
 +    VkEncoder* enc = static_cast<VkEncoder*>(context);
 +    enc->vkGetPhysicalDeviceFormatProperties(physicalDevice, format, pFormatProperties,
 +                                             true /* do lock */);
-+    maskUnsupportedVideoFormatFeatures(pFormatProperties);
++    applyGuestFormatOverrides(format, pFormatProperties);
 +}
 +
  #ifdef LINUX_GUEST_BUILD
  static void fillEmulatedDrmFormatModPropsList(
      const VkFormatProperties* pFormatProperties,
-@@ -6974,6 +7148,26 @@ void ResourceTracker::on_vkGetPhysicalDeviceFormatProperties2(
+@@ -6974,6 +7169,21 @@ void ResourceTracker::on_vkGetPhysicalDeviceFormatProperties2(
      enc->vkGetPhysicalDeviceFormatProperties2(physicalDevice, format, pFormatProperties,
                                                true /* do lock */);
  
-+    if (format == VK_FORMAT_EAC_R11G11_SNORM_BLOCK) {
-+        pFormatProperties->formatProperties.linearTilingFeatures |=
-+            VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
-+    }
-+
-+    maskUnsupportedVideoFormatFeatures(&pFormatProperties->formatProperties);
++    applyGuestFormatOverrides(format, &pFormatProperties->formatProperties);
 +
 +    VkFormatProperties3* formatProperties3 =
 +        vk_find_struct(pFormatProperties, FORMAT_PROPERTIES_3);
@@ -8334,7 +8361,7 @@ index 40101545f0306be775ddc6c5a928416bd9a03790..0347b69711a4c1742299cd3676c81ea7
  #ifdef LINUX_GUEST_BUILD
      VkDrmFormatModifierPropertiesListEXT* emulatedDrmFmtModPropsList =
          vk_find_struct(pFormatProperties, DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT);
-@@ -7038,27 +7232,20 @@ VkResult ResourceTracker::on_vkGetPhysicalDeviceImageFormatProperties2(
+@@ -7038,27 +7248,20 @@ VkResult ResourceTracker::on_vkGetPhysicalDeviceImageFormatProperties2(
      const VkPhysicalDeviceImageDrmFormatModifierInfoEXT* drmFmtMod =
          vk_find_struct_const(pImageFormatInfo, PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT);
      VkDrmFormatModifierPropertiesListEXT* emulatedDrmFmtModPropsList = nullptr;
@@ -8374,7 +8401,7 @@ index 40101545f0306be775ddc6c5a928416bd9a03790..0347b69711a4c1742299cd3676c81ea7
      }
  #endif  // LINUX_GUEST_BUILD
  
-@@ -7471,6 +7658,60 @@ void ResourceTracker::on_vkCmdPipelineBarrier(
+@@ -7471,6 +7674,60 @@ void ResourceTracker::on_vkCmdPipelineBarrier(
                                updatedImageMemoryBarriers.data(), true /* do lock */);
  }
  
@@ -13906,4 +13933,3 @@ index 0000000000000000000000000000000000000000..46b66d2ecdc6c464ba0a33a1c790f55f
 +        default: [],
 +    }),
 +}
-
