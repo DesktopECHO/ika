@@ -130,6 +130,34 @@ class UpdateNativeBridgePrebuiltsTest(unittest.TestCase):
             self.assertEqual(payload.stat().st_size, manifest["files"][0]["size"])
             self.assertEqual(64, len(manifest["files"][0]["sha256"]))
 
+    def test_install_uses_prebuilt_libm_proxy_when_payload_provides_it(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = self.make_source(root / "source")
+            write_host_elf(
+                source / "lib64/libndk_translation_proxy_libm.so"
+            )
+            output = root / "prebuilts/system"
+
+            MODULE.install_payload(source, output, {"source_dir": str(source)})
+
+            android_bp = (output.parent / "Android.bp").read_text()
+            self.assertNotIn('name: "libndk_translation_proxy_libm"', android_bp)
+            self.assertTrue(
+                (output / "lib64/libndk_translation_proxy_libm.so").is_file()
+            )
+
+    def test_install_builds_libm_proxy_fallback_when_payload_omits_it(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = self.make_source(root / "source")
+            output = root / "prebuilts/system"
+
+            MODULE.install_payload(source, output, {"source_dir": str(source)})
+
+            android_bp = (output.parent / "Android.bp").read_text()
+            self.assertIn('name: "libndk_translation_proxy_libm"', android_bp)
+
 
 if __name__ == "__main__":
     unittest.main()
