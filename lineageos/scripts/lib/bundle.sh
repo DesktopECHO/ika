@@ -390,6 +390,84 @@ native_bridge_image_outputs_complete() {
     "$product_properties" || return 1
   grep -q '^ro.dalvik.vm.isa.arm64=x86_64$' "$product_properties" || return 1
   grep -q '^ro.enable.native.bridge.exec=1$' "$product_properties" || return 1
+
+  native_bridge_image_outputs_match_manifest "$product_out"
+}
+
+native_bridge_image_outputs_match_manifest() {
+  local product_out="$1"
+  local manifest="${2:-$workspace/vendor/lineage_desktop/prebuilts/native_bridge/manifest.json}"
+
+  [[ -s "$manifest" ]] || {
+    printf '[lineage-desktop] native-bridge manifest is missing: %s\n' "$manifest" >&2
+    return 1
+  }
+
+  python3 - "$manifest" "$product_out/system" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+manifest_path = Path(sys.argv[1])
+installed_root = Path(sys.argv[2])
+
+try:
+    manifest = json.loads(manifest_path.read_text())
+except (OSError, json.JSONDecodeError) as exc:
+    print(
+        f"[lineage-desktop] invalid native-bridge manifest {manifest_path}: {exc}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+if manifest.get("format_version") != 1 or not isinstance(manifest.get("files"), list):
+    print(
+        f"[lineage-desktop] unsupported native-bridge manifest: {manifest_path}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+for entry in manifest["files"]:
+    try:
+        relpath = entry["path"]
+        expected_size = entry["size"]
+        expected_digest = entry["sha256"]
+    except (KeyError, TypeError):
+        print("[lineage-desktop] malformed native-bridge manifest entry", file=sys.stderr)
+        raise SystemExit(1)
+
+    parts = Path(relpath).parts
+    if not relpath or relpath.startswith("/") or ".." in parts:
+        print(f"[lineage-desktop] unsafe native-bridge path: {relpath!r}", file=sys.stderr)
+        raise SystemExit(1)
+
+    installed = installed_root / relpath
+    if not installed.is_file():
+        print(f"[lineage-desktop] native-bridge output is missing: {installed}", file=sys.stderr)
+        raise SystemExit(1)
+    actual_size = installed.stat().st_size
+    if actual_size != expected_size:
+        print(
+            f"[lineage-desktop] native-bridge output size mismatch: {installed} "
+            f"(manifest={expected_size} installed={actual_size})",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    digest = hashlib.sha256()
+    with installed.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    actual_digest = digest.hexdigest()
+    if actual_digest != expected_digest:
+        print(
+            f"[lineage-desktop] native-bridge output digest mismatch: {installed} "
+            f"(manifest={expected_digest} installed={actual_digest})",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+PY
 }
 
 built_target_outputs_complete() {
