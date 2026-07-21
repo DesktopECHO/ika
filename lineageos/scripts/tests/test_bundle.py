@@ -25,11 +25,21 @@ class BundleTest(unittest.TestCase):
                 product_out
                 / "testcases/deqp-binary/x86_64/deqp-binary64"
             )
+            resource = (
+                root
+                / "out/host/linux-x86/testcases/CtsDeqpTestCases/vulkan"
+                / "amber/api/descriptor_set/descriptor_set_layout_binding"
+                / "layout_binding_order.amber"
+            )
             apk.parent.mkdir(parents=True)
             binary.parent.mkdir(parents=True)
+            resource.parent.mkdir(parents=True)
             apk.write_bytes(b"apk")
             binary.write_bytes(b"binary")
             binary.chmod(0o755)
+            resource.write_bytes(b"amber")
+
+            bundle_dir = root / "bundle"
 
             script = f"""
 set -e
@@ -37,8 +47,24 @@ workspace={root!s}
 source {BUNDLE_SH!s}
 vulkan_test_outputs_complete {product_out!s} linux-x86
 ! vulkan_test_outputs_complete {product_out!s} linux-arm64
+copy_vulkan_test_outputs {product_out!s} linux-x86 {bundle_dir!s}
 """
             subprocess.run(["bash", "-c", script], check=True)
+            self.assertEqual(
+                (bundle_dir / "testcases/vulkan/CtsDeqpTestCases.apk").read_bytes(),
+                b"apk",
+            )
+            bundled_binary = bundle_dir / "testcases/vulkan/deqp-binary"
+            self.assertEqual(bundled_binary.read_bytes(), b"binary")
+            self.assertTrue(bundled_binary.stat().st_mode & 0o111)
+            self.assertEqual(
+                (
+                    bundle_dir
+                    / "testcases/vulkan/vulkan/amber/api/descriptor_set"
+                    / "descriptor_set_layout_binding/layout_binding_order.amber"
+                ).read_bytes(),
+                b"amber",
+            )
 
     def test_native_bridge_installed_payload_must_match_manifest(self):
         with tempfile.TemporaryDirectory() as temp_dir:
