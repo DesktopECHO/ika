@@ -259,8 +259,9 @@ PY
 }
 
 bundle_dir_complete() {
-  local bundle_dir="$1"
-  shift
+  local arch="$1"
+  local bundle_dir="$2"
+  shift 2
 
   [[ -d "$bundle_dir" ]] || return 1
 
@@ -271,6 +272,12 @@ bundle_dir_complete() {
 
   [[ -s "$bundle_dir/testcases/vulkan/CtsDeqpTestCases.apk" ]] || return 1
   [[ -x "$bundle_dir/testcases/vulkan/deqp-binary" ]] || return 1
+  if [[ "$arch" == "x86_64" ]] && enabled "${include_x86_arm_native_bridge:-1}"; then
+    [[ -x "$bundle_dir/testcases/native_bridge/ndk_program_tests" ]] || return 1
+    [[ -x "$bundle_dir/testcases/native_bridge/ndk_program_tests_static" ]] || return 1
+    [[ -x "$bundle_dir/testcases/native_bridge/run-tests.sh" ]] || return 1
+    [[ -s "$bundle_dir/testcases/native_bridge/manifest.json" ]] || return 1
+  fi
 
   desktop_android_info_selects_tablet "$bundle_dir/android-info.txt"
 }
@@ -285,6 +292,70 @@ vulkan_test_outputs_complete() {
     -name 'deqp-binary*' -print -quit 2>/dev/null || true)"
 
   [[ -n "$apk" && -s "$apk" && -n "$binary" && -s "$binary" && -x "$binary" ]]
+}
+
+native_bridge_test_outputs_complete() {
+  local product_out="$1"
+  local dynamic static
+
+  dynamic="$(find "$product_out/testcases/ndk_program_tests.native_bridge" -type f \
+    -name ndk_program_tests -print -quit 2>/dev/null || true)"
+  static="$(find "$product_out/testcases/ndk_program_tests_static.native_bridge" -type f \
+    -name ndk_program_tests_static -print -quit 2>/dev/null || true)"
+
+  [[ -n "$dynamic" && -s "$dynamic" && -x "$dynamic" ]] || return 1
+  [[ -n "$static" && -s "$static" && -x "$static" ]] || return 1
+
+  # Despite the x86_64 test-suite directory used by Tradefed, these must be
+  # ARM64 guest executables. Shipping a native x86 test here would give a false
+  # green result without ever entering libndk_translation.
+  local readelf_bin
+  readelf_bin="$(command -v llvm-readelf || command -v readelf || true)"
+  [[ -n "$readelf_bin" ]] || return 1
+  "$readelf_bin" -h "$dynamic" 2>/dev/null | grep -Eq 'Machine:[[:space:]]+AArch64' || return 1
+  "$readelf_bin" -h "$static" 2>/dev/null | grep -Eq 'Machine:[[:space:]]+AArch64' || return 1
+}
+
+native_bridge_image_outputs_complete() {
+  local product_out="$1"
+  local required
+
+  for required in \
+    system/bin/arm64/app_process64 \
+    system/bin/arm64/linker64 \
+    system/bin/ndk_translation_program_runner_binfmt_misc_arm64 \
+    system/etc/cpuinfo.arm64.txt \
+    system/etc/berberis/cpuinfo.arm64.txt \
+    system/etc/binfmt_misc/arm64_dyn \
+    system/etc/binfmt_misc/arm64_exe \
+    system/etc/init/ndk_translation.rc \
+    system/etc/ld.config.arm64.txt \
+    system/lib64/libndk_translation.so \
+    system/lib64/libndk_translation_proxy_libEGL.so \
+    system/lib64/libndk_translation_proxy_libGLESv2.so \
+    system/lib64/libndk_translation_proxy_libandroid.so \
+    system/lib64/libndk_translation_proxy_libc.so \
+    system/lib64/libndk_translation_proxy_libm.so \
+    system/lib64/libndk_translation_proxy_libnativewindow.so \
+    system/lib64/libndk_translation_proxy_libvulkan.so \
+    system/lib64/arm64/libEGL.so \
+    system/lib64/arm64/libGLESv2.so \
+    system/lib64/arm64/libandroid.so \
+    system/lib64/arm64/libc.so \
+    system/lib64/arm64/libdl.so \
+    system/lib64/arm64/libm.so \
+    system/lib64/arm64/libnativewindow.so \
+    system/lib64/arm64/libvulkan.so
+  do
+    [[ -s "$product_out/$required" ]] || return 1
+  done
+
+  grep -Eq '(^|,)arm64-v8a(,|$)' "$product_out/system/build.prop" || return 1
+  local product_properties="$product_out/product/etc/build.prop"
+  grep -q '^ro.dalvik.vm.native.bridge=libndk_translation.so$' \
+    "$product_properties" || return 1
+  grep -q '^ro.dalvik.vm.isa.arm64=x86_64$' "$product_properties" || return 1
+  grep -q '^ro.enable.native.bridge.exec=1$' "$product_properties" || return 1
 }
 
 built_target_outputs_complete() {
@@ -517,6 +588,38 @@ copy_vulkan_test_outputs() {
   chmod 0755 "$test_dir/deqp-binary"
 }
 
+copy_native_bridge_test_outputs() {
+  local product_out="$1"
+  local bundle_dir="$2"
+  local dynamic static test_dir manifest
+
+  native_bridge_test_outputs_complete "$product_out" || \
+    die "missing ARM64 native-bridge test outputs under $product_out/testcases"
+  native_bridge_image_outputs_complete "$product_out" || \
+    die "incomplete ARM64 native-bridge runtime under $product_out/system"
+
+  dynamic="$(find "$product_out/testcases/ndk_program_tests.native_bridge" -type f \
+    -name ndk_program_tests -print -quit)"
+  static="$(find "$product_out/testcases/ndk_program_tests_static.native_bridge" -type f \
+    -name ndk_program_tests_static -print -quit)"
+  manifest="$workspace/vendor/lineage_desktop/prebuilts/native_bridge/manifest.json"
+  [[ -s "$manifest" ]] || die "missing native-bridge payload manifest: $manifest"
+
+  test_dir="$bundle_dir/testcases/native_bridge"
+  mkdir -p "$test_dir"
+  cp --reflink=auto --sparse=always --preserve=timestamps -- "$dynamic" \
+    "$test_dir/ndk_program_tests"
+  cp --reflink=auto --sparse=always --preserve=timestamps -- "$static" \
+    "$test_dir/ndk_program_tests_static"
+  cp --preserve=timestamps -- \
+    "$script_dir/smoke_native_bridge.sh" "$test_dir/run-tests.sh"
+  copy_bundle_file_thin "$manifest" "$test_dir/manifest.json"
+  chmod 0755 \
+    "$test_dir/ndk_program_tests" \
+    "$test_dir/ndk_program_tests_static" \
+    "$test_dir/run-tests.sh"
+}
+
 package_cvd_bundle() {
   local arch="$1"
   local product="$2"
@@ -555,6 +658,9 @@ package_cvd_bundle() {
   done
   "$(thin_provision_images_tool)" "$bundle_dir"
   copy_vulkan_test_outputs "$product_out" "$bundle_dir"
+  if [[ "$arch" == "x86_64" ]] && enabled "${include_x86_arm_native_bridge:-1}"; then
+    copy_native_bridge_test_outputs "$product_out" "$bundle_dir"
+  fi
 
   (( copied > 0 )) || die "no image files were copied from $product_out"
   desktop_android_info_selects_tablet "$bundle_dir/android-info.txt" || \

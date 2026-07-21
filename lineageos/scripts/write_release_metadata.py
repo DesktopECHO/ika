@@ -139,6 +139,7 @@ def native_bridge_info(android_root: Path) -> dict[str, Any]:
         "binfmt_arm64_dyn": bridge / "system" / "etc" / "binfmt_misc" / "arm64_dyn",
         "binfmt_arm64_exe": bridge / "system" / "etc" / "binfmt_misc" / "arm64_exe",
         "cpuinfo_arm64": bridge / "system" / "etc" / "berberis" / "cpuinfo.arm64.txt",
+        "cpuinfo_arm64_current": bridge / "system" / "etc" / "cpuinfo.arm64.txt",
         "init_rc": bridge / "system" / "etc" / "init" / "ndk_translation.rc",
         "ld_config_arm64": bridge / "system" / "etc" / "ld.config.arm64.txt",
     }
@@ -203,6 +204,9 @@ def build_metadata(args: argparse.Namespace) -> dict[str, Any]:
         ),
         "native_bridge_sdk_package_sha1": os.environ.get(
             "NATIVE_BRIDGE_SDK_PACKAGE_SHA1", ""
+        ),
+        "native_bridge_sdk_package_sha256": os.environ.get(
+            "NATIVE_BRIDGE_SDK_PACKAGE_SHA256", ""
         ),
     }
     if gms_provider == "microg":
