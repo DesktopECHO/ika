@@ -269,7 +269,22 @@ bundle_dir_complete() {
     [[ -e "$bundle_dir/$member" ]] || return 1
   done
 
+  [[ -s "$bundle_dir/testcases/vulkan/CtsDeqpTestCases.apk" ]] || return 1
+  [[ -x "$bundle_dir/testcases/vulkan/deqp-binary" ]] || return 1
+
   desktop_android_info_selects_tablet "$bundle_dir/android-info.txt"
+}
+
+vulkan_test_outputs_complete() {
+  local product_out="$1"
+  local apk binary
+
+  apk="$(find "$product_out/testcases/com.drawelements.deqp" -type f \
+    -name 'com.drawelements.deqp.apk' -print -quit 2>/dev/null || true)"
+  binary="$(find "$product_out/testcases/deqp-binary" -type f \
+    -name 'deqp-binary*' -print -quit 2>/dev/null || true)"
+
+  [[ -n "$apk" && -s "$apk" && -n "$binary" && -s "$binary" && -x "$binary" ]]
 }
 
 built_target_outputs_complete() {
@@ -478,6 +493,30 @@ copy_bundle_file_thin() {
   chmod 0644 "$dest"
 }
 
+copy_vulkan_test_outputs() {
+  local product_out="$1"
+  local bundle_dir="$2"
+  local apk binary test_dir
+
+  vulkan_test_outputs_complete "$product_out" || \
+    die "missing Vulkan CTS outputs under $product_out/testcases"
+
+  apk="$(find "$product_out/testcases/com.drawelements.deqp" -type f \
+    -name 'com.drawelements.deqp.apk' -print -quit)"
+  binary="$(find "$product_out/testcases/deqp-binary" -type f \
+    -name 'deqp-binary*' -print -quit)"
+  test_dir="$bundle_dir/testcases/vulkan"
+  mkdir -p "$test_dir"
+
+  # Keep the established CTS artifact name in the release bundle even though
+  # current Android branches name the device-side module
+  # com.drawelements.deqp.apk.
+  copy_bundle_file_thin "$apk" "$test_dir/CtsDeqpTestCases.apk"
+  cp --reflink=auto --sparse=always --preserve=timestamps -- "$binary" \
+    "$test_dir/deqp-binary"
+  chmod 0755 "$test_dir/deqp-binary"
+}
+
 package_cvd_bundle() {
   local arch="$1"
   local product="$2"
@@ -515,6 +554,7 @@ package_cvd_bundle() {
     fi
   done
   "$(thin_provision_images_tool)" "$bundle_dir"
+  copy_vulkan_test_outputs "$product_out" "$bundle_dir"
 
   (( copied > 0 )) || die "no image files were copied from $product_out"
   desktop_android_info_selects_tablet "$bundle_dir/android-info.txt" || \

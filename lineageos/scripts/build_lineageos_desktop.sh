@@ -375,6 +375,7 @@ build_target() {
   rm -rf "$signed_artifacts_dir"
 
   run_lunch_and_make "$product" \
+    CtsDeqpTestCases \
     hosttar \
     bootimage \
     vendorbootimage \
@@ -391,6 +392,8 @@ build_target() {
     otatools
   built_target_outputs_complete "$product" "$product_out" "$host_package" "${thin_files[@]}" || \
     die "build completed but expected outputs are missing for $product"
+  vulkan_test_outputs_complete "$product_out" || \
+    die "build completed but Vulkan CTS outputs are missing for $product"
   validate_cvd_target_fstabs "$product_out"
   desktop_launcher_outputs_exclusive "$product_out" "$target_files_zip" || \
     die "$product target-files still include non-QuickStep Launcher3 artifacts"
