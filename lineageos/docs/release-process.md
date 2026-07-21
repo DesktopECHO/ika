@@ -24,6 +24,7 @@ Each generated Cuttlefish bundle contains:
 - `build-info.json`: machine-readable release metadata
 - `build-info.txt`: short human-readable summary
 - `source-manifest.xml`: `repo manifest -r` output when `repo` is available
+- the exact top-level Ika source commit captured at build start
 - image checksums for files copied into the bundle
 - selected provider source and prebuilt metadata
 - WebView APK checksum for the target architecture
@@ -32,9 +33,9 @@ Each generated Cuttlefish bundle contains:
 - ARM64 static/dynamic native-bridge regression suites on x86-64
 
 Release reviewers should compare these files between ARM64 and x86-64 before
-publishing. Expected differences are the target product and architecture,
-kernel artifacts, WebView architecture prebuilt, and x86-64 native bridge
-metadata.
+publishing. The recorded Ika source commit must match. Expected differences are
+the target product and architecture, kernel artifacts, WebView architecture
+prebuilt, and x86-64 native bridge metadata.
 
 Before publishing x86-64, boot the final bundle and run
 `testcases/native_bridge/run-tests.sh -s SERIAL`. Run at least one Vulkan CTS
