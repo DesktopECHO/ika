@@ -450,7 +450,12 @@ def find_system_root(path):
 
 def copy_file(src, dest):
     dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dest)
+    # Do not preserve the SDK archive timestamp. Android's PRODUCT_COPY_FILES
+    # rules use mtimes to decide whether an installed image file is current;
+    # preserving an older timestamp can leave a previous translator in
+    # PRODUCT_OUT while the newly generated manifest describes this payload.
+    shutil.copyfile(src, dest)
+    shutil.copymode(src, dest)
 
 
 def copy_relpath(system_root, relpath, output_root, copied):
