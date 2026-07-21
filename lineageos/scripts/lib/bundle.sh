@@ -279,6 +279,21 @@ bundle_dir_complete() {
     [[ -s "$bundle_dir/testcases/native_bridge/manifest.json" ]] || return 1
   fi
 
+  python3 - "$bundle_dir/build-info.json" "${IKA_SOURCE_COMMIT:-}" <<'PY' || return 1
+import json
+import pathlib
+import re
+import sys
+
+metadata = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+actual = metadata.get("ika", {}).get("source_commit", "")
+expected = sys.argv[2]
+if re.fullmatch(r"[0-9a-f]{40}", actual) is None:
+    raise SystemExit(1)
+if expected and actual != expected:
+    raise SystemExit(1)
+PY
+
   desktop_android_info_selects_tablet "$bundle_dir/android-info.txt"
 }
 
@@ -473,6 +488,7 @@ write_release_metadata() {
   [[ -x "$metadata_script" ]] || die "missing release metadata writer: $metadata_script"
 
   local -a metadata_args=(
+    --ika-root "$ika_root"
     --android-root "$workspace"
     --overlay-dir "$workspace/vendor/lineage_desktop"
     --product-out "$product_out"
