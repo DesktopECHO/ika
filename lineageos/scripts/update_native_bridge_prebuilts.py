@@ -95,7 +95,7 @@ REQUIRED_ARM64_FEATURES = frozenset(
     ("fp", "asimd", "aes", "pmull", "crc32", "atomics")
 )
 
-ANDROID_BP = """\
+ANDROID_BP_BASE = """\
 package {
     default_applicable_licenses: ["Android-Apache-2.0"],
 }
@@ -110,7 +110,9 @@ cc_prebuilt_library_shared {
         none: true,
     },
 }
+"""
 
+ANDROID_BP_LIBM_PROXY = """\
 cc_library_shared {
     name: "libndk_translation_proxy_libm",
     defaults: [
@@ -611,8 +613,11 @@ def write_manifest(path, source, files):
     (path / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
 
-def write_android_bp(path):
-    (path / "Android.bp").write_text(ANDROID_BP)
+def write_android_bp(path, build_libm_proxy):
+    contents = ANDROID_BP_BASE
+    if build_libm_proxy:
+        contents += "\n" + ANDROID_BP_LIBM_PROXY
+    (path / "Android.bp").write_text(contents)
 
 
 def install_payload(source_root, output_dir, source_description):
@@ -628,7 +633,12 @@ def install_payload(source_root, output_dir, source_description):
         shutil.rmtree(output_dir, ignore_errors=True)
         shutil.move(str(stage_dir), output_dir)
         shutil.move(str(tmp_root / "manifest.json"), output_dir.parent / "manifest.json")
-        write_android_bp(output_dir.parent)
+        # Android 16.1 revision 4 and newer currently ship a libm proxy built
+        # alongside the proprietary translator. Install that exact prebuilt
+        # through PRODUCT_COPY_FILES. Older images omit it, in which case the
+        # generated module supplies a source-built AOSP fallback instead.
+        build_libm_proxy = "lib64/libndk_translation_proxy_libm.so" not in files
+        write_android_bp(output_dir.parent, build_libm_proxy)
 
     log(f"native bridge payload ready: {output_dir} ({len(files)} files)")
 
