@@ -192,8 +192,9 @@ The `ika-lineageos` package built by `tools/buildutils/build_packages.sh`
 picks up the bundle matching the build host's architecture from that
 location. Each bundle includes `build-info.json`, `build-info.txt`, and, when
 `repo` can produce it, `source-manifest.xml`. These files record image
-checksums, overlay commit state, microG APK checksums, WebView APK checksums,
-and x86-64 native bridge metadata.
+checksums, the exact top-level Ika source commit captured when the build starts,
+overlay commit state, microG APK checksums, WebView APK checksums, and x86-64
+native bridge metadata.
 
 Override the destination with `OUTPUT_DIR=/some/other/dir` if you want the
 bundles somewhere other than the Ika repository root. Signed target-files
