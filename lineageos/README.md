@@ -240,6 +240,7 @@ UPDATE_NATIVE_BRIDGE_PREBUILTS=1
 NATIVE_BRIDGE_SOURCE_DIR=/path/to/extracted/android/system
 NATIVE_BRIDGE_SDK_PACKAGE=/path/or/url/to/google_apis_x86_64_system_image.zip
 NATIVE_BRIDGE_SDK_PACKAGE_SHA1=
+NATIVE_BRIDGE_SDK_PACKAGE_SHA256=
 VALIDATE_BUILD_INPUTS=1
 ```
 
@@ -287,7 +288,8 @@ missed, though an unchanged version still skips the download.
 
 `INCLUDE_X86_ARM_NATIVE_BRIDGE=1` is the default for the x86-64 product. The
 build helper runs `scripts/update_native_bridge_prebuilts.py`, which downloads
-the Android 16 Google APIs x86-64 SDK system image, verifies its SHA-1, extracts
+the pinned Android 16 API 36.1 Google APIs x86-64 revision-4 system image,
+verifies its catalog SHA-1 and independently pinned SHA-256, extracts
 Google's `libndk_translation.so` runtime, proxy libraries, and binfmt/init glue,
 and installs those proprietary files into the workspace at
 `vendor/lineage_desktop/prebuilts/native_bridge/system`. The binaries are not
@@ -308,7 +310,9 @@ extraction even when the APK requested embedded library loading.
 
 For offline or pinned builds, set `NATIVE_BRIDGE_SDK_PACKAGE` to a local SDK zip
 or set `NATIVE_BRIDGE_SOURCE_DIR` to an already-extracted Android system image
-root that contains `lib64/libndk_translation.so`. Manual x86-64 builds need
+root that contains `lib64/libndk_translation.so`. Set both digest variables
+when overriding the package; leaving either empty explicitly skips that digest.
+Manual x86-64 builds need
 `USE_NDK_TRANSLATION_BINARY=true` exported before `lunch`; the one-command build
 script sets it automatically.
 
@@ -399,3 +403,15 @@ vendor/lineage_desktop/scripts/smoke_resize_desktop.sh 127.0.0.1:6520
 
 This checks the desktop feature contract, resizes the logical display, verifies
 that the desktop settings remain enabled, and captures a screenshot.
+
+The x86-64 release bundle also contains ARM64 static and dynamic native-bridge
+regression suites. Run them against a launched bundle with:
+
+```bash
+lineageos-x86_64/testcases/native_bridge/run-tests.sh -s 127.0.0.1:6520
+```
+
+The static suite isolates ARM64 instruction and syscall translation. The
+dynamic suite additionally exercises the translated linker and host proxy
+libraries. A release build fails packaging if either executable, the bridge
+runtime, its Vulkan/EGL/GLES proxies, or its integrity manifest is absent.

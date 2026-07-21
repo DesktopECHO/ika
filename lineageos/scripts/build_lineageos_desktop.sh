@@ -336,7 +336,7 @@ prepare_target_output_headroom() {
 build_target() {
   local arch="$1"
   local product product_out host_package bundle_name host_tag
-  local -a thin_files
+  local -a thin_files test_targets
 
   host_tag="$(target_host_tag "$arch")"
   product="$(target_product "$arch")"
@@ -374,8 +374,20 @@ build_target() {
   remove_packaged_target_outputs "$product" "$product_out" "$host_package" "${thin_files[@]}"
   rm -rf "$signed_artifacts_dir"
 
+  test_targets=(CtsDeqpTestCases)
+  if [[ "$arch" == "x86_64" ]] && enabled "$include_x86_arm_native_bridge"; then
+    # Build both forms of AOSP's ARM64 NDK runtime suite. The dynamic binary
+    # exercises the translated guest linker and proxy libraries; the static
+    # binary isolates instruction/syscall translation from shared-library
+    # resolution. They are release-bundle diagnostics, not installed apps.
+    test_targets+=(
+      ndk_program_tests.native_bridge
+      ndk_program_tests_static.native_bridge
+    )
+  fi
+
   run_lunch_and_make "$product" \
-    CtsDeqpTestCases \
+    "${test_targets[@]}" \
     hosttar \
     bootimage \
     vendorbootimage \
@@ -394,6 +406,12 @@ build_target() {
     die "build completed but expected outputs are missing for $product"
   vulkan_test_outputs_complete "$product_out" || \
     die "build completed but Vulkan CTS outputs are missing for $product"
+  if [[ "$arch" == "x86_64" ]] && enabled "$include_x86_arm_native_bridge"; then
+    native_bridge_test_outputs_complete "$product_out" || \
+      die "build completed but ARM64 native-bridge test outputs are missing for $product"
+    native_bridge_image_outputs_complete "$product_out" || \
+      die "build completed but the ARM64 native-bridge runtime is incomplete for $product"
+  fi
   validate_cvd_target_fstabs "$product_out"
   desktop_launcher_outputs_exclusive "$product_out" "$target_files_zip" || \
     die "$product target-files still include non-QuickStep Launcher3 artifacts"
@@ -414,7 +432,7 @@ build_target() {
   fi
 
   package_cvd_bundle "$arch" "$product" "$product_out" "$host_package" "$signed_images_dir" "$bundle_name" "${thin_files[@]}"
-  bundle_dir_complete "$output_dir/$bundle_name" "${thin_files[@]}" || \
+  bundle_dir_complete "$arch" "$output_dir/$bundle_name" "${thin_files[@]}" || \
     die "packaging completed but $bundle_name/ is incomplete"
 }
 

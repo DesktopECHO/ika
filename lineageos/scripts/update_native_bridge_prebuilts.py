@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -21,13 +22,13 @@ import zipfile
 
 DEFAULT_SDK_PACKAGE = (
     "https://dl.google.com/android/repository/sys-img/google_apis/"
-    "x86_64-36.0-Baklava_r01.zip"
+    "x86_64-36.1_r04.zip"
 )
 # SHA1 is sourced from Google's repository.xml manifest; we keep it for parity
 # with that manifest, but also verify SHA256 because SHA1 is collision-broken.
-DEFAULT_SDK_PACKAGE_SHA1 = "dc5a0f14318ac2f18c876e1286809fcde665f507"
+DEFAULT_SDK_PACKAGE_SHA1 = "15261872d5f0ae4b5728faefd0380d51b61a5b23"
 DEFAULT_SDK_PACKAGE_SHA256 = (
-    "c1cc2876483da0914aa63f692473d2554a3af482fd617eb8183559fca2f24ed6"
+    "d4e62da6f1ef0bf217657e51f42e48638a15355e6f4112762a6ceabfba6cef21"
 )
 USER_AGENT = "lineage-desktop-native-bridge-updater/1.0"
 SPARSE_MAGIC = b":\xff&\xed"
@@ -41,10 +42,17 @@ PAYLOAD_REQUIRED_FILES = (
     "bin/ndk_translation_program_runner_binfmt_misc_arm64",
     "etc/binfmt_misc/arm64_dyn",
     "etc/binfmt_misc/arm64_exe",
-    "etc/berberis/cpuinfo.arm64.txt",
     "etc/init/ndk_translation.rc",
     "etc/ld.config.arm64.txt",
     "lib64/libndk_translation.so",
+)
+
+# Google moved the guest CPU description in later Android 16 emulator images.
+# Install both names so the staged payload remains usable with either runtime
+# generation; libndk_translation contains the path it will actually open.
+CPU_INFO_RELPATHS = (
+    "etc/cpuinfo.arm64.txt",
+    "etc/berberis/cpuinfo.arm64.txt",
 )
 
 # These proxies are the host-side counterparts of AOSP's modified ARM64 guest
@@ -76,6 +84,15 @@ PAYLOAD_REQUIRED_PROXY_LIBRARIES = (
 
 PAYLOAD_GLOBS = (
     "lib64/*ndk_translation*.so",
+)
+
+ELF_MAGIC = b"\x7fELF"
+ELFCLASS64 = 2
+ELFDATA2LSB = 1
+EM_X86_64 = 62
+ARM64_BINFMT_MACHINE_ESCAPE = b"\\xb7"
+REQUIRED_ARM64_FEATURES = frozenset(
+    ("fp", "asimd", "aes", "pmull", "crc32", "atomics")
 )
 
 ANDROID_BP = """\
@@ -451,6 +468,82 @@ def copy_relpath(system_root, relpath, output_root, copied):
         copied.add(relpath)
 
 
+def elf_machine(path):
+    with open(path, "rb") as stream:
+        header = stream.read(20)
+    if len(header) < 20 or header[:4] != ELF_MAGIC:
+        raise UpdateError(f"native bridge payload is not ELF: {path}")
+    if header[4] != ELFCLASS64 or header[5] != ELFDATA2LSB:
+        raise UpdateError(f"native bridge payload is not little-endian ELF64: {path}")
+    return struct.unpack_from("<H", header, 18)[0]
+
+
+def validate_staged_payload(output_root):
+    host_elfs = [
+        output_root / "bin/ndk_translation_program_runner_binfmt_misc_arm64",
+        output_root / "lib64/libndk_translation.so",
+        *sorted(output_root.glob("lib64/libndk_translation_proxy_*.so")),
+    ]
+    for path in host_elfs:
+        if elf_machine(path) != EM_X86_64:
+            raise UpdateError(f"native bridge host binary is not x86-64 ELF: {path}")
+
+    runner = host_elfs[0]
+    if not os.access(runner, os.X_OK):
+        raise UpdateError(f"native bridge program runner is not executable: {runner}")
+
+    expected_runner = b"/system/bin/ndk_translation_program_runner_binfmt_misc_arm64"
+    for name in ("arm64_dyn", "arm64_exe"):
+        config = (output_root / "etc/binfmt_misc" / name).read_bytes()
+        if ARM64_BINFMT_MACHINE_ESCAPE not in config or expected_runner not in config:
+            raise UpdateError(f"invalid ARM64 binfmt configuration: {name}")
+
+    rc = (output_root / "etc/init/ndk_translation.rc").read_text()
+    for setting in (
+        "ro.dalvik.vm.isa.arm64=x86_64",
+        "/system/etc/binfmt_misc/arm64_exe",
+        "/system/etc/binfmt_misc/arm64_dyn",
+    ):
+        if setting not in rc:
+            raise UpdateError(f"native bridge init configuration is missing {setting}")
+    if not any(
+        setting in rc
+        for setting in (
+            "ro.dalvik.vm.native.bridge=libndk_translation.so",
+            "ro.enable.native.bridge.exec=1",
+        )
+    ):
+        raise UpdateError("native bridge init configuration has no enable condition")
+
+    ld_config = (output_root / "etc/ld.config.arm64.txt").read_text()
+    for setting in ("dir.system=/system", "dir.system=/data", "/system/${LIB}/arm64"):
+        if setting not in ld_config:
+            raise UpdateError(f"ARM64 linker configuration is missing {setting}")
+
+    runtime = (output_root / "lib64/libndk_translation.so").read_bytes()
+    runtime_cpuinfo_paths = [
+        relpath
+        for relpath in CPU_INFO_RELPATHS
+        if f"/system/{relpath}".encode() in runtime
+    ]
+    if not runtime_cpuinfo_paths:
+        raise UpdateError("native bridge runtime does not name a supported CPU description")
+
+    cpuinfo = (output_root / runtime_cpuinfo_paths[0]).read_text()
+    processors = [line for line in cpuinfo.splitlines() if line.startswith("processor")]
+    feature_lines = [line for line in cpuinfo.splitlines() if line.startswith("Features")]
+    if not processors or not feature_lines:
+        raise UpdateError("ARM64 CPU description has no processors or Features line")
+    for line in feature_lines:
+        features = frozenset(line.partition(":")[2].split())
+        missing = REQUIRED_ARM64_FEATURES - features
+        if missing:
+            raise UpdateError(
+                "ARM64 CPU description is missing required features: "
+                + ", ".join(sorted(missing))
+            )
+
+
 def stage_payload(source_root, output_root):
     system_root = find_system_root(source_root)
     copied = set()
@@ -465,6 +558,19 @@ def stage_payload(source_root, output_root):
             missing.append(relpath)
             continue
         copy_relpath(system_root, relpath, output_root, copied)
+
+    cpuinfo_source = next(
+        (system_root / relpath for relpath in CPU_INFO_RELPATHS if (system_root / relpath).is_file()),
+        None,
+    )
+    if cpuinfo_source is None:
+        missing.append(" or ".join(CPU_INFO_RELPATHS))
+    else:
+        # Keep a compatibility alias for older/newer Android 16 translator
+        # builds. Both files are tiny and are included in the signed manifest.
+        for relpath in CPU_INFO_RELPATHS:
+            copy_file(cpuinfo_source, output_root / relpath)
+            copied.add(relpath)
     if missing:
         raise UpdateError(
             "native bridge payload missing required files: " + ", ".join(missing)
@@ -480,6 +586,7 @@ def stage_payload(source_root, output_root):
     if len(copied) == 1:
         log("warning: only libndk_translation.so was found in the SDK payload")
 
+    validate_staged_payload(output_root)
     return sorted(copied)
 
 
@@ -497,6 +604,7 @@ def write_manifest(path, source, files):
             )
 
     manifest = {
+        "format_version": 1,
         "source": source,
         "files": entries,
     }

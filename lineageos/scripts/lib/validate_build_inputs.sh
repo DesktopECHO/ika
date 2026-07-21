@@ -1096,6 +1096,7 @@ check_native_bridge() {
     "$system/bin/ndk_translation_program_runner_binfmt_misc_arm64" \
     "$system/etc/binfmt_misc/arm64_dyn" \
     "$system/etc/binfmt_misc/arm64_exe" \
+    "$system/etc/cpuinfo.arm64.txt" \
     "$system/etc/berberis/cpuinfo.arm64.txt" \
     "$system/etc/init/ndk_translation.rc" \
     "$system/etc/ld.config.arm64.txt" \
@@ -1131,13 +1132,21 @@ check_native_bridge() {
     require_file "$system/lib64/libndk_translation_proxy_${proxy}.so"
   done
 
-  grep -aq '/system/etc/berberis/cpuinfo.arm64.txt' \
-    "$system/lib64/libndk_translation.so" || \
-    fail "native bridge runtime does not use the packaged ARM64 CPU description"
-  grep -q '^processor[[:space:]]*:' "$system/etc/berberis/cpuinfo.arm64.txt" || \
+  local runtime_cpuinfo
+  if grep -aq '/system/etc/cpuinfo.arm64.txt' "$system/lib64/libndk_translation.so"; then
+    runtime_cpuinfo="$system/etc/cpuinfo.arm64.txt"
+  elif grep -aq '/system/etc/berberis/cpuinfo.arm64.txt' \
+    "$system/lib64/libndk_translation.so"; then
+    runtime_cpuinfo="$system/etc/berberis/cpuinfo.arm64.txt"
+  else
+    fail "native bridge runtime does not use a packaged ARM64 CPU description"
+    runtime_cpuinfo="$system/etc/berberis/cpuinfo.arm64.txt"
+  fi
+  [[ -s "$runtime_cpuinfo" ]] || fail "native bridge ARM64 CPU description is missing"
+  grep -q '^processor[[:space:]]*:' "$runtime_cpuinfo" || \
     fail "ARM64 native bridge CPU description has no processors"
   grep -Eq '^Features[[:space:]]*:.*(^|[[:space:]])asimd([[:space:]]|$)' \
-    "$system/etc/berberis/cpuinfo.arm64.txt" || \
+    "$runtime_cpuinfo" || \
     fail "ARM64 native bridge CPU description is missing ASIMD support"
 
   grep -q 'ro.dalvik.vm.native.bridge=libndk_translation.so' \
@@ -1146,6 +1155,70 @@ check_native_bridge() {
   grep -q 'etc/berberis/cpuinfo.arm64.txt' \
     "$overlay_dir/config/x86_arm_native_bridge.mk" || \
     fail "x86 native bridge product does not install its ARM64 CPU description"
+  grep -q 'etc/cpuinfo.arm64.txt' \
+    "$overlay_dir/config/x86_arm_native_bridge.mk" || \
+    fail "x86 native bridge product does not install the current ARM64 CPU description path"
+
+  python3 - "$bridge" <<'PY' || fail "native bridge payload manifest validation failed"
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+manifest_path = root / "manifest.json"
+try:
+    manifest = json.loads(manifest_path.read_text())
+except (OSError, json.JSONDecodeError) as exc:
+    print(f"[lineage-desktop] error: invalid {manifest_path}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+
+if manifest.get("format_version") != 1:
+    print("[lineage-desktop] error: unsupported native bridge manifest format", file=sys.stderr)
+    raise SystemExit(1)
+
+entries = manifest.get("files")
+if not isinstance(entries, list) or not entries:
+    print("[lineage-desktop] error: native bridge manifest has no files", file=sys.stderr)
+    raise SystemExit(1)
+
+seen = set()
+for entry in entries:
+    try:
+        relpath = entry["path"]
+        expected_size = entry["size"]
+        expected_digest = entry["sha256"]
+    except (KeyError, TypeError):
+        print("[lineage-desktop] error: malformed native bridge manifest entry", file=sys.stderr)
+        raise SystemExit(1)
+    if relpath in seen or relpath.startswith("/") or ".." in Path(relpath).parts:
+        print(f"[lineage-desktop] error: unsafe/duplicate manifest path: {relpath}", file=sys.stderr)
+        raise SystemExit(1)
+    seen.add(relpath)
+    path = root / "system" / relpath
+    if not path.is_file() or path.stat().st_size != expected_size:
+        print(f"[lineage-desktop] error: native bridge file size mismatch: {relpath}", file=sys.stderr)
+        raise SystemExit(1)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != expected_digest:
+        print(f"[lineage-desktop] error: native bridge file digest mismatch: {relpath}", file=sys.stderr)
+        raise SystemExit(1)
+
+actual = {
+    str(path.relative_to(root / "system"))
+    for path in (root / "system").rglob("*")
+    if path.is_file()
+}
+if actual != seen:
+    missing = sorted(seen - actual)
+    untracked = sorted(actual - seen)
+    print(
+        f"[lineage-desktop] error: native bridge manifest mismatch; "
+        f"missing={missing}, untracked={untracked}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
 }
 
 check_desktop_flags() {

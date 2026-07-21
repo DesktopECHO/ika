@@ -105,6 +105,9 @@ Environment:
                         native bridge payload.
   NATIVE_BRIDGE_SDK_PACKAGE_SHA1
                         Expected SHA1 for the SDK package. Empty skips checking.
+  NATIVE_BRIDGE_SDK_PACKAGE_SHA256
+                        Expected SHA256 for the SDK package. Empty skips
+                        checking; strongly recommended for overridden packages.
   MICROG_GMSCORE_RELEASE
                         Explicit published GmsCore release tag. When omitted,
                         the newest published non-draft entry is resolved from
