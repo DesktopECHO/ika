@@ -20,11 +20,32 @@ com.android.window.flags/enable_multiple_desktops_frontend
 com.android.window.flags/enable_minimize_button
 com.android.window.flags/enable_themed_app_headers
 com.android.window.flags/skip_compat_ui_education_in_desktop_mode
-com.android.launcher3/enable_large_desktop_windowing_tile
 com.android.launcher3/enable_scalability_for_desktop_experience
-# Desktop visual-polish flags enabled by build-release.patch.
-# Listed here so a regression that drops or disables them fails the build
-# validator instead of silently turning the polish off.
+# Desktop and Launcher polish enabled by build-release.patch. These mirror the
+# user-facing trunk paths that are safe on the stable BP4A source revision;
+# architectural experiments and diagnostic logging remain disabled.
 com.android.launcher3/blurred_home_animation
+com.android.launcher3/avoid_display_cutout_bubble_bar
 com.android.launcher3/enable_overview_desktop_tile_wallpaper_background
+com.android.launcher3/enable_taskbar_customization
+com.android.launcher3/enable_taskbar_icon_container
 com.android.systemui/status_bar_for_desktop
+com.android.window.flags/close_fullscreen_and_splitscreen_keyboard_shortcut
+com.android.window.flags/enable_border_settings
+com.android.window.flags/enable_box_shadow_settings
+com.android.window.flags/enable_compatui_sysui_launcher_fix
+com.android.window.flags/enable_connected_displays_wallpaper_presentations
+com.android.window.flags/enable_cross_displays_app_launch_transition
+com.android.window.flags/enable_desktop_app_launch_alttab_transitions
+com.android.window.flags/enable_desktop_app_launch_transitions
+com.android.window.flags/enable_desktop_first_policy_in_lpm
+com.android.window.flags/enable_desktop_invisible_task_removal_cleanup_bugfix
+com.android.window.flags/enable_desktop_mode_through_dev_option
+com.android.window.flags/enable_desktop_windowing_enter_transitions
+com.android.window.flags/enable_desktop_windowing_exit_transitions
+com.android.window.flags/enable_desktop_windowing_pip_in_overview_bugfix
+com.android.window.flags/enable_freeform_box_shadows
+com.android.window.flags/enable_fullscreen_window_controls
+com.android.window.flags/enable_taskbar_connected_displays
+com.android.window.flags/polish_close_wallpaper_includes_open_change
+com.android.window.flags/port_window_size_animation
