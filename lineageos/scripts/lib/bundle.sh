@@ -272,6 +272,7 @@ bundle_dir_complete() {
 
   [[ -s "$bundle_dir/testcases/vulkan/CtsDeqpTestCases.apk" ]] || return 1
   [[ -x "$bundle_dir/testcases/vulkan/deqp-binary" ]] || return 1
+  [[ -s "$bundle_dir/testcases/vulkan/vulkan/amber/api/descriptor_set/descriptor_set_layout_binding/layout_binding_order.amber" ]] || return 1
   if [[ "$arch" == "x86_64" ]] && enabled "${include_x86_arm_native_bridge:-1}"; then
     [[ -x "$bundle_dir/testcases/native_bridge/ndk_program_tests" ]] || return 1
     [[ -x "$bundle_dir/testcases/native_bridge/ndk_program_tests_static" ]] || return 1
@@ -316,16 +317,27 @@ vulkan_test_apk() {
   printf '%s\n' "$apk"
 }
 
+vulkan_test_resources() {
+  local host_tag="$1"
+  local resources="$workspace/out/host/$host_tag/testcases/CtsDeqpTestCases/vulkan"
+
+  [[ -d "$resources" ]] || return 1
+  printf '%s\n' "$resources"
+}
+
 vulkan_test_outputs_complete() {
   local product_out="$1"
   local host_tag="$2"
-  local apk binary
+  local apk binary resources
 
   apk="$(vulkan_test_apk "$product_out" "$host_tag")"
   binary="$(find "$product_out/testcases/deqp-binary" -type f \
     -name 'deqp-binary*' -print -quit 2>/dev/null || true)"
+  resources="$(vulkan_test_resources "$host_tag" 2>/dev/null || true)"
 
-  [[ -n "$apk" && -s "$apk" && -n "$binary" && -s "$binary" && -x "$binary" ]]
+  [[ -n "$apk" && -s "$apk" && -n "$binary" && -s "$binary" && -x "$binary" ]] || return 1
+  [[ -n "$resources" && \
+     -s "$resources/amber/api/descriptor_set/descriptor_set_layout_binding/layout_binding_order.amber" ]]
 }
 
 native_bridge_test_outputs_complete() {
@@ -681,7 +693,7 @@ copy_vulkan_test_outputs() {
   local product_out="$1"
   local host_tag="$2"
   local bundle_dir="$3"
-  local apk binary test_dir
+  local apk binary resources test_dir
 
   vulkan_test_outputs_complete "$product_out" "$host_tag" || \
     die "missing Vulkan CTS outputs for $product_out ($host_tag)"
@@ -689,6 +701,7 @@ copy_vulkan_test_outputs() {
   apk="$(vulkan_test_apk "$product_out" "$host_tag")"
   binary="$(find "$product_out/testcases/deqp-binary" -type f \
     -name 'deqp-binary*' -print -quit)"
+  resources="$(vulkan_test_resources "$host_tag")"
   test_dir="$bundle_dir/testcases/vulkan"
   mkdir -p "$test_dir"
 
@@ -699,6 +712,7 @@ copy_vulkan_test_outputs() {
   cp --reflink=auto --sparse=always --preserve=timestamps -- "$binary" \
     "$test_dir/deqp-binary"
   chmod 0755 "$test_dir/deqp-binary"
+  cp -a --reflink=auto --preserve=timestamps -- "$resources" "$test_dir/vulkan"
 }
 
 copy_native_bridge_test_outputs() {
