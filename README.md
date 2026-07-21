@@ -185,11 +185,11 @@ Default `ika` settings and configuration:
 Android ANGLE over gfxstream Vulkan. Use `gfxstream` to test gfxstream's direct
 OpenGL ES translator, or `guest_swiftshader` as a troubleshooting fallback when
 host GPU acceleration is unavailable. See [GFXSTREAM.md](GFXSTREAM.md) for a
-comparison. The launcher selects EGL's surfaceless platform for gfxstream modes
-so an unavailable X11 display inherited from SSH cannot redirect host-renderer
-initialization. The desktop product also leaves gfxstream's optional
-program-binary link-status feature disabled; shader-source compilation remains
-available and avoids corrupt cached-program rendering in affected games.
+comparison. Use `gfxstream_guest_angle` for games and Vulkan/CTS; mixed
+`gfxstream` mode does not support data-buffer AHardwareBuffers. Gfxstream uses
+surfaceless EGL to avoid SSH/X11 display issues. Program-binary caching stays
+disabled because it corrupts rendering in some games; shader compilation still
+works.
 
 Pass `--data_gb=128` to `ika reset` to choose the size, in decimal gigabytes,
 of newly created userdata. The selected size is stored under `~/ika` and takes
