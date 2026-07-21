@@ -1328,6 +1328,27 @@ check_vulkan_ndk_abi_dumps() {
   done
 }
 
+check_vulkan_llndk_abi_dumps() {
+  local arch dump enum
+  local -a required_enums=(
+    '"name" : "VK_PIPELINE_BIND_POINT_DATA_GRAPH_ARM"'
+    '"name" : "VK_ERROR_PRESENT_TIMING_QUEUE_FULL_EXT"'
+    '"name" : "VK_ERROR_VALIDATION_FAILED"'
+  )
+
+  for arch in arm64 x86_64; do
+    target_enabled "$arch" || continue
+    dump="$android_root/prebuilts/abi-dumps/vndk/202504/64/$arch/source-based/libvulkan.so.lsdump"
+    require_file "$dump"
+    [[ -f "$dump" ]] || continue
+
+    for enum in "${required_enums[@]}"; do
+      grep -Fq "$enum" "$dump" || \
+        fail "$arch libvulkan Android 16 LLNDK ABI dump is not refreshed for Vulkan 1.4.341: missing $enum in $dump"
+    done
+  done
+}
+
 check_cuttlefish_runtime_pins() {
   # VALIDATE_VIRTUALIZATION_STACK_PINS is retained as a compatibility alias;
   # these projects implement the outer Cuttlefish runtime and virtual-GPU
@@ -2016,6 +2037,7 @@ check_zipalign_rom_package
 check_arm64_page_size_product_defaults
 check_vulkan_header_version
 check_vulkan_ndk_abi_dumps
+check_vulkan_llndk_abi_dumps
 check_cuttlefish_runtime_pins
 check_graphics_stack_versions
 check_crosvm_wayland_codegen
