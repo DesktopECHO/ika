@@ -12,6 +12,9 @@ git_repository(
         "@//build_external/gfxstream:PATCH.gfxstream.gles1-alpha-test-core-profile.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.linux_udmabuf_creator.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.memfd_udmabuf_seals.patch",
+        # Keep the advertised Vulkan feature/extension set internally
+        # consistent on both RADV and Honeykrisp hosts.
+        "@//build_external/gfxstream:PATCH.gfxstream.vulkan-cts-correctness.patch",
         # Reuse host-visible udmabuf objects across guest process lifetimes so
         # drivers which retain imports grow only to the workload high-water mark.
         "@//build_external/gfxstream:PATCH.gfxstream.pool-host-visible-udmabufs.patch",
