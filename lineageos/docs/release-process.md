@@ -28,8 +28,14 @@ Each generated Cuttlefish bundle contains:
 - selected provider source and prebuilt metadata
 - WebView APK checksum for the target architecture
 - native bridge payload metadata for x86-64
+- Vulkan CTS artifacts on both architectures
+- ARM64 static/dynamic native-bridge regression suites on x86-64
 
 Release reviewers should compare these files between ARM64 and x86-64 before
 publishing. Expected differences are the target product and architecture,
 kernel artifacts, WebView architecture prebuilt, and x86-64 native bridge
 metadata.
+
+Before publishing x86-64, boot the final bundle and run
+`testcases/native_bridge/run-tests.sh -s SERIAL`. Run at least one Vulkan CTS
+smoke case from the bundled APK or command-line dEQP binary as well.

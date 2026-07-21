@@ -27,13 +27,15 @@ Status values:
 | CarX Highway Racing | native | translated on x86-64 if ARM-only | yes on x86-64 | likely | Historically sensitive to graphics/native runtime. | blocked |
 | Nintendo apps | native | translated on x86-64 if ARM-only | yes on x86-64 | yes | Usually depends on Play Integrity/device attestation. | blocked |
 | No Limit 2 | native | translated on x86-64 if ARM-only | yes on x86-64 | unknown | Needs crash-log retest on each ROM image. | unknown |
+| Vulkan Caps Viewer 4.11 | native ARM64 | translated ARM64 only | yes on x86-64 | no | Its bundled Qt 6.9.3 Android platform plugin dereferences a null accessibility backend during startup under translation, before creating a Vulkan instance. Qt 6.10 removed that startup call; use a Caps Viewer build based on Qt 6.10+ or a native x86-64 build when available. | blocked |
 
 Release smoke set:
 
 1. Open the launcher and app drawer.
 2. Launch Settings, Files, F-Droid, Aurora Store, microG Settings, and Chromium.
-3. On x86-64, install one ARM64-only test APK and confirm native bridge startup
-   reaches app code instead of failing in the linker.
+3. On x86-64, run the bundled static and dynamic ARM64 native-bridge suites,
+   then install one representative ARM64-only APK and confirm startup reaches
+   app code instead of failing in the linker.
 4. Record any app that crashes in this file with the top crash frame and target
    architecture.
 
