@@ -404,7 +404,7 @@ build_target() {
     otatools
   built_target_outputs_complete "$product" "$product_out" "$host_package" "${thin_files[@]}" || \
     die "build completed but expected outputs are missing for $product"
-  vulkan_test_outputs_complete "$product_out" || \
+  vulkan_test_outputs_complete "$product_out" "$host_tag" || \
     die "build completed but Vulkan CTS outputs are missing for $product"
   if [[ "$arch" == "x86_64" ]] && enabled "$include_x86_arm_native_bridge"; then
     native_bridge_test_outputs_complete "$product_out" || \
