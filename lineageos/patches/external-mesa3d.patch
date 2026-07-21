@@ -20,9 +20,10 @@ crashes the host renderer for mutable sampler templates. Preserve template
 stride and guest buffer-handle translation and route the Vulkan 1.4 and KHR
 aliases through the same implementation. Let the host fill complete standalone
 driver/ID properties, keep legacy and Properties2 format overrides consistent,
-mask unsupported video and protected-pipeline capabilities, emulate LOW/MEDIUM
-global priority while denying privileged requests consistently, and fully unwind
-partially initialized guest/host devices on allocation failures.
+mask unsupported video and protected-pipeline capabilities, reject attempts to
+enable the masked protected-pipeline feature, emulate LOW/MEDIUM global priority
+while denying privileged requests consistently, and fully unwind partially
+initialized guest/host devices on allocation failures.
 
 Let Soong and Meson generate gfxstream's reserved-marshalling sources from the
 same 26.1.5 Vulkan registry used by the encoder. Carrying an older generated
@@ -7619,7 +7620,7 @@ index 0000000000000000000000000000000000000000..05e4d07a27fa1898310c0127205dd2f0
 +    },
 +}
 diff --git a/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp b/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp
-index c979d699f623718431ec5b319d31768178b34e01..19565f769492d4999ea78146e4ec204c4588ca86 100644
+index c979d699f623718431ec5b319d31768178b34e01..967c04d48603414055b61268c7a3d203ba13d32a 100644
 --- a/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp
 +++ b/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp
 @@ -130,6 +130,9 @@ static const char* const kGuestEmulatedDeviceExtensions[] = {
@@ -7667,7 +7668,26 @@ index c979d699f623718431ec5b319d31768178b34e01..19565f769492d4999ea78146e4ec204c
  VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
                                     const VkDeviceCreateInfo* pCreateInfo,
                                     const VkAllocationCallbacks* pAllocator, VkDevice* pDevice) {
-@@ -583,10 +614,43 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
+@@ -578,15 +609,62 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
+         mutableSwapchainMaintenance1Features->swapchainMaintenance1 = VK_FALSE;
+     }
+ 
++    // ResourceTracker reports pipelineProtectedAccess as unsupported because gfxstream cannot
++    // preserve its protected-memory guarantees. Keep device creation consistent with that query:
++    // a host which happens to accept the feature must not make it observable to the guest.
++    const VkPhysicalDeviceVulkan14Features* vulkan14Features =
++        vk_find_struct_const(pCreateInfo->pNext, PHYSICAL_DEVICE_VULKAN_1_4_FEATURES);
++    const VkPhysicalDevicePipelineProtectedAccessFeatures* pipelineProtectedAccessFeatures =
++        vk_find_struct_const(pCreateInfo->pNext,
++                             PHYSICAL_DEVICE_PIPELINE_PROTECTED_ACCESS_FEATURES);
++    if ((vulkan14Features && vulkan14Features->pipelineProtectedAccess) ||
++        (pipelineProtectedAccessFeatures &&
++         pipelineProtectedAccessFeatures->pipelineProtectedAccess)) {
++        return VK_ERROR_FEATURE_NOT_PRESENT;
++    }
++
+     const VkAllocationCallbacks* pMesaAllocator =
+         pAllocator ?: &gfxstream_physicalDevice->instance->vk.alloc;
      struct gfxstream_vk_device* gfxstream_device = (struct gfxstream_vk_device*)vk_zalloc(
          pMesaAllocator, sizeof(struct gfxstream_vk_device), GFXSTREAM_DEFAULT_ALIGN, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
      result = gfxstream_device ? VK_SUCCESS : VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -7711,7 +7731,7 @@ index c979d699f623718431ec5b319d31768178b34e01..19565f769492d4999ea78146e4ec204c
          std::vector<const char*> filteredExts = filteredDeviceExtensionNames(
              gfxstream_physicalDevice, localCreateInfo.enabledExtensionCount,
              localCreateInfo.ppEnabledExtensionNames);
-@@ -610,18 +674,30 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
+@@ -610,18 +688,30 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
              }
          }
  
@@ -7748,7 +7768,7 @@ index c979d699f623718431ec5b319d31768178b34e01..19565f769492d4999ea78146e4ec204c
                  mutablePhysicalDeviceGroupProperties->physicalDevices[physDev] =
                      initialPhysicalDeviceList[physDev];
              }
-@@ -638,23 +714,39 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
+@@ -638,23 +728,39 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
  
          result = vk_device_init(&gfxstream_device->vk, &gfxstream_physicalDevice->vk,
                                  &dispatch_table, pCreateInfo, pMesaAllocator);
