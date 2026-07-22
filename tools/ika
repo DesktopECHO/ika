@@ -1167,6 +1167,51 @@ primary_vulkan_device_is_llvmpipe() {
   grep -Eiq '(^[[:space:]]*(deviceName|driverName|driverID)[[:space:]]*=.*llvmpipe|DRIVER_ID_MESA_LLVMPIPE)' <<<"${primary_device}"
 }
 
+primary_vulkan_device_is_radv() {
+  local summary
+  local primary_device
+
+  command -v vulkaninfo >/dev/null 2>&1 || return 1
+
+  summary="$(vulkaninfo --summary 2>/dev/null || true)"
+  [[ -n "${summary}" ]] || return 1
+
+  primary_device="$(
+    awk '
+      /^GPU[0-9]+:/ {
+        if (seen) {
+          exit
+        }
+        seen = 1
+        next
+      }
+      seen {
+        print
+      }
+    ' <<<"${summary}"
+  )"
+  [[ -n "${primary_device}" ]] || return 1
+
+  grep -Eiq '(^[[:space:]]*(deviceName|driverName|driverID)[[:space:]]*=.*radv|DRIVER_ID_MESA_RADV)' <<<"${primary_device}"
+}
+
+append_comma_option() {
+  local existing="$1"
+  local required="$2"
+  local option
+  local -a options=()
+
+  IFS=',' read -r -a options <<<"${existing}"
+  for option in "${options[@]}"; do
+    if [[ "${option}" == "${required}" ]]; then
+      printf '%s\n' "${existing}"
+      return 0
+    fi
+  done
+
+  printf '%s\n' "${existing}${existing:+,}${required}"
+}
+
 start_arg_value() {
   local flag="$1"
   local default_value="${2:-}"
@@ -1600,6 +1645,7 @@ append_cvd_env_args() {
   local -n env_args_ref="$1"
   local config_path="${2:-}"
   local glibc_tunables
+  local radv_debug
 
   env_args_ref+=(
     "HOME=${CVD_HOME_DIR}"
@@ -1614,6 +1660,18 @@ append_cvd_env_args() {
   # platform from SSH sessions on headless and Apple Silicon hosts.
   if [[ "${CVD_GPU_MODE}" == gfxstream* ]]; then
     env_args_ref+=("EGL_PLATFORM=${EGL_PLATFORM:-surfaceless}")
+  fi
+
+  # RADV's default asynchronous shader compilation can report fence completion
+  # before a transform-feedback pipeline has finished compiling. Gfxstream can
+  # then execute an incomplete pipeline, producing intermittent missing
+  # primitives even though the associated query result is correct. Compile
+  # shaders synchronously for gfxstream on RADV, while preserving any options
+  # supplied by the caller. Other Vulkan drivers are left unchanged.
+  if [[ "${CVD_GPU_MODE}" == gfxstream* ]] && primary_vulkan_device_is_radv; then
+    radv_debug="$(append_comma_option "${RADV_DEBUG:-}" "syncshaders")"
+    env_args_ref+=("RADV_DEBUG=${radv_debug}")
+    log "RADV gfxstream correctness options: ${radv_debug}"
   fi
 
   # gfxstream creates many short-lived render threads. On glibc's default
@@ -2633,4 +2691,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
