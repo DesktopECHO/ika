@@ -12,6 +12,7 @@ exports_files([
     "PATCH.gfxstream.linux_udmabuf_creator.patch",
     "PATCH.gfxstream.memfd_udmabuf_seals.patch",
     "PATCH.gfxstream.sparse-astc-native.patch",
+    "PATCH.gfxstream.sparse-compressed-feature-contract.patch",
     "PATCH.gfxstream.vulkan-cts-correctness.patch",
     "PATCH.gfxstream.opengles-3.2.patch",
 ])
