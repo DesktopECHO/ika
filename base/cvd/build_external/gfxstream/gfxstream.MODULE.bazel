@@ -15,6 +15,9 @@ git_repository(
         # Keep the advertised Vulkan feature/extension set internally
         # consistent on both RADV and Honeykrisp hosts.
         "@//build_external/gfxstream:PATCH.gfxstream.vulkan-cts-correctness.patch",
+        # Sparse images cannot use the multi-image compressed-texture emulation
+        # layout; retain native host sparse compressed formats when supported.
+        "@//build_external/gfxstream:PATCH.gfxstream.sparse-astc-native.patch",
         # Reuse host-visible udmabuf objects across guest process lifetimes so
         # drivers which retain imports grow only to the workload high-water mark.
         "@//build_external/gfxstream:PATCH.gfxstream.pool-host-visible-udmabufs.patch",
