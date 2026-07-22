@@ -13,7 +13,8 @@ native DRM-format-modifier queries on the host pass-through path, complete the
 BGRA AHardwareBuffer mappings used by Android cursor planes, and expose the
 Vulkan 1.4/profile capabilities supported by the generated gfxstream protocol.
 The Android Vulkan CPU-only profile's EAC transfer bits remain supplied by the
-guest where required.
+guest where required, consistently through legacy and VkFormatProperties3
+queries.
 
 Expand descriptor push templates into typed vkCmdPushDescriptorSet writes
 instead of serializing opaque pData as one byte, which deterministically
@@ -9166,7 +9167,7 @@ index 40101545f0306be775ddc6c5a928416bd9a03790..6ac5bcbf1fe2a0697f2fcc772b9e98f6
  #ifdef LINUX_GUEST_BUILD
  static void fillEmulatedDrmFormatModPropsList(
      const VkFormatProperties* pFormatProperties,
-@@ -6974,6 +7205,21 @@ void ResourceTracker::on_vkGetPhysicalDeviceFormatProperties2(
+@@ -6974,6 +7205,25 @@ void ResourceTracker::on_vkGetPhysicalDeviceFormatProperties2(
      enc->vkGetPhysicalDeviceFormatProperties2(physicalDevice, format, pFormatProperties,
                                                true /* do lock */);
  
@@ -9175,6 +9176,10 @@ index 40101545f0306be775ddc6c5a928416bd9a03790..6ac5bcbf1fe2a0697f2fcc772b9e98f6
 +    VkFormatProperties3* formatProperties3 =
 +        vk_find_struct(pFormatProperties, FORMAT_PROPERTIES_3);
 +    if (formatProperties3) {
++        if (format == VK_FORMAT_EAC_R11G11_SNORM_BLOCK) {
++            formatProperties3->linearTilingFeatures |=
++                VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT;
++        }
 +        constexpr VkFormatFeatureFlags2 kUnsupportedVideoFormatFeatures2 =
 +            VK_FORMAT_FEATURE_2_VIDEO_DECODE_OUTPUT_BIT_KHR |
 +            VK_FORMAT_FEATURE_2_VIDEO_DECODE_DPB_BIT_KHR |
