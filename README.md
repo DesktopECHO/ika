@@ -188,8 +188,11 @@ host GPU acceleration is unavailable. See [GFXSTREAM.md](GFXSTREAM.md) for a
 comparison. Use `gfxstream_guest_angle` for games and Vulkan/CTS; mixed
 `gfxstream` mode does not support data-buffer AHardwareBuffers. Gfxstream uses
 surfaceless EGL to avoid SSH/X11 display issues. Program-binary caching stays
-disabled because it corrupts rendering in some games; shader compilation still
-works.
+disabled because it corrupts rendering in some games. On RADV hosts, `ika`
+adds `syncshaders` to `RADV_DEBUG` for gfxstream modes. This prevents
+asynchronous host shader compilation from intermittently executing incomplete
+transform-feedback pipelines; existing caller-provided `RADV_DEBUG` options are
+retained. Other Vulkan drivers are unchanged.
 
 Pass `--data_gb=128` to `ika reset` to choose the size, in decimal gigabytes,
 of newly created userdata. The selected size is stored under `~/ika` and takes
