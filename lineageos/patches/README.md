@@ -70,7 +70,7 @@ cross-project index.
 | [`trusty-user-base-arm64-host-boringssl.patch`](trusty-user-base-arm64-host-boringssl.patch) | `trusty/user/base` | Allows Trusty's host BoringSSL archive to build on ARM64 Linux hosts while preserving the existing x86-64 host path. |
 | [`frameworks-libs-binary-translation-arm64-host.patch`](frameworks-libs-binary-translation-arm64-host.patch) | `frameworks/libs/binary_translation` | Broadens binary-translation host helper defaults so required host-side tools can be built from ARM64 hosts without x86-only defaults. |
 | [`build-make-releasetools.patch`](build-make-releasetools.patch) | `build/make` | Fixes target-files signing for embedded boot OTA zips that are intentionally not regenerated, and preserves signed `boot_16k.img` when present. |
-| [`build-release.patch`](build-release.patch) | `build/release` | Sets release aconfig defaults for desktop builds: keeps SystemUI Quick Settings on the classic implementation and enables Launcher3 desktop visual-effect flags in generated release flag sets. |
+| [`build-release.patch`](build-release.patch) | `build/release` | Sets release aconfig defaults for desktop builds: keeps SystemUI Quick Settings on the classic implementation and enables Launcher3 desktop visual effects and mouse behavior, Bubble Anything with its trunk stability fixes, PiP box shadows, and cutout-aware bubble-bar behavior in generated release flag sets. |
 
 ## Maintenance Notes
 
