@@ -57,7 +57,7 @@ existing in-process allocation path.
  struct UdmabufPoolEntry {
      UdmabufPoolEntry(uint64_t idIn, size_t sizeIn, ManagedDescriptor memoryIn,
                       ManagedDescriptor udmabufIn)
-@@ -70,6 +97,88 @@
+@@ -70,6 +97,94 @@
          }
      }
  
@@ -106,10 +106,16 @@ existing in-process allocation path.
 +            .msg_controllen = sizeof(control),
 +        };
 +        const ssize_t received = recvmsg(*socketFd, &message, MSG_CMSG_CLOEXEC);
-+        if (received != sizeof(response) || response.magic != kBrokerMagic || response.status != 0 ||
++        if (received != sizeof(response) || response.magic != kBrokerMagic ||
 +            (message.msg_flags & (MSG_TRUNC | MSG_CTRUNC))) {
 +            mBrokerSocket = ManagedDescriptor();
 +            return std::nullopt;
++        }
++        if (response.status != 0) {
++            // A valid broker refusal (notably its residency cap) must fail the
++            // allocation instead of falling back to a fresh, non-reusable
++            // udmabuf that would bypass the host-safety limit.
++            return UdmabufBrokerAllocation{};
 +        }
 +
 +        std::array<DescriptorType, 2> descriptors = {-1, -1};
@@ -146,7 +152,7 @@ existing in-process allocation path.
      std::mutex mMutex;
      std::vector<std::unique_ptr<UdmabufPoolEntry>> mEntries;
      uint64_t mNextId = 1;
-@@ -208,21 +317,42 @@
+@@ -208,21 +323,42 @@
          };
      }
  
