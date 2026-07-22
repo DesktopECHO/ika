@@ -4,17 +4,19 @@ on the known-good non-Compose path because the desktop QS customizations target
 the classic implementation, including the tile removals and panel interaction
 behavior used by this VM.
 
-This also enables Launcher3 desktop visual-effect flags in the generated
-release flag sets. Keeping those values here makes the behavior reproducible
-across both trunk staging and BP4A-style builds instead of depending on runtime
-flag edits after first boot.
+This also enables Launcher3 desktop visual-effect and mouse-interaction flags
+in the generated release flag sets. Keeping those values here makes the
+behavior reproducible across both trunk staging and BP4A-style builds instead
+of depending on runtime flag edits after first boot.
 
 LineageOS 23.2 selects the stable BP4A target. Carry the core desktop windowing
 values plus the user-facing trunk polish into that release config as read-only
 values. This restores cutout-aware taskbar layout, taskbar customization,
 desktop transition motion, modern borders and shadows, connected-display
-behavior, and related correctness fixes without enabling diagnostic logging,
-Launcher model rewrites, or the experimental WindowDecoration2 refactor.
+behavior, desktop mouse interaction, the Bubble Anything launcher/bubble-bar
+path and its trunk stability fixes, and related correctness fixes without
+enabling diagnostic logging, Launcher model rewrites, or the experimental
+WindowDecoration2 refactor.
 
 diff --git a/aconfig/trunk_staging/com.android.systemui/qs_ui_refactor_compose_fragment_flag_values.textproto b/aconfig/trunk_staging/com.android.systemui/qs_ui_refactor_compose_fragment_flag_values.textproto
 index 22f6c87ee..dcaaa919c 100644
@@ -49,6 +51,18 @@ index 000000000..a151b9b05
 +flag_value {
 +  package: "com.android.launcher3"
 +  name: "blurred_home_animation"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.launcher3/enable_mouse_interaction_changes_flag_values.textproto b/aconfig/bp4a/com.android.launcher3/enable_mouse_interaction_changes_flag_values.textproto
+new file mode 100644
+index 000000000..2e0c51a0d
+--- /dev/null
++++ b/aconfig/bp4a/com.android.launcher3/enable_mouse_interaction_changes_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.launcher3"
++  name: "enable_mouse_interaction_changes"
 +  state: ENABLED
 +  permission: READ_ONLY
 +}
@@ -328,6 +342,18 @@ index 000000000..61c645266
 +  state: ENABLED
 +  permission: READ_ONLY
 +}
+diff --git a/aconfig/bp4a/com.android.window.flags/enable_experimental_bubbles_controller_flag_values.textproto b/aconfig/bp4a/com.android.window.flags/enable_experimental_bubbles_controller_flag_values.textproto
+new file mode 100644
+index 000000000..cc26fada2
+--- /dev/null
++++ b/aconfig/bp4a/com.android.window.flags/enable_experimental_bubbles_controller_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.window.flags"
++  name: "enable_experimental_bubbles_controller"
++  state: ENABLED
++  permission: READ_ONLY
++}
 diff --git a/aconfig/bp4a/com.android.window.flags/enable_freeform_box_shadows_flag_values.textproto b/aconfig/bp4a/com.android.window.flags/enable_freeform_box_shadows_flag_values.textproto
 new file mode 100644
 index 000000000..516efba23
@@ -484,6 +510,114 @@ index 000000000..756ced3d1
 +  state: ENABLED
 +  permission: READ_ONLY
 +}
+diff --git a/aconfig/bp4a/com.android.wm.shell/bug_rotation_button_cover_bubble_flag_values.textproto b/aconfig/bp4a/com.android.wm.shell/bug_rotation_button_cover_bubble_flag_values.textproto
+new file mode 100644
+index 000000000..a13a2f9a7
+--- /dev/null
++++ b/aconfig/bp4a/com.android.wm.shell/bug_rotation_button_cover_bubble_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.wm.shell"
++  name: "bug_rotation_button_cover_bubble"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.wm.shell/enable_bubble_bar_flag_values.textproto b/aconfig/bp4a/com.android.wm.shell/enable_bubble_bar_flag_values.textproto
+new file mode 100644
+index 000000000..f302f6fe9
+--- /dev/null
++++ b/aconfig/bp4a/com.android.wm.shell/enable_bubble_bar_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.wm.shell"
++  name: "enable_bubble_bar"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.wm.shell/enable_bubble_stashing_flag_values.textproto b/aconfig/bp4a/com.android.wm.shell/enable_bubble_stashing_flag_values.textproto
+new file mode 100644
+index 000000000..d998ee607
+--- /dev/null
++++ b/aconfig/bp4a/com.android.wm.shell/enable_bubble_stashing_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.wm.shell"
++  name: "enable_bubble_stashing"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.wm.shell/enable_create_any_bubble_flag_values.textproto b/aconfig/bp4a/com.android.wm.shell/enable_create_any_bubble_flag_values.textproto
+new file mode 100644
+index 000000000..a85207824
+--- /dev/null
++++ b/aconfig/bp4a/com.android.wm.shell/enable_create_any_bubble_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.wm.shell"
++  name: "enable_create_any_bubble"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.wm.shell/enable_pip_box_shadows_flag_values.textproto b/aconfig/bp4a/com.android.wm.shell/enable_pip_box_shadows_flag_values.textproto
+new file mode 100644
+index 000000000..25908cadd
+--- /dev/null
++++ b/aconfig/bp4a/com.android.wm.shell/enable_pip_box_shadows_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.wm.shell"
++  name: "enable_pip_box_shadows"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.wm.shell/enable_shell_restart_bubble_cleanup_flag_values.textproto b/aconfig/bp4a/com.android.wm.shell/enable_shell_restart_bubble_cleanup_flag_values.textproto
+new file mode 100644
+index 000000000..b95331295
+--- /dev/null
++++ b/aconfig/bp4a/com.android.wm.shell/enable_shell_restart_bubble_cleanup_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.wm.shell"
++  name: "enable_shell_restart_bubble_cleanup"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.wm.shell/fix_bubbles_expanded_sysui_flag_flag_values.textproto b/aconfig/bp4a/com.android.wm.shell/fix_bubbles_expanded_sysui_flag_flag_values.textproto
+new file mode 100644
+index 000000000..84698bf2a
+--- /dev/null
++++ b/aconfig/bp4a/com.android.wm.shell/fix_bubbles_expanded_sysui_flag_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.wm.shell"
++  name: "fix_bubbles_expanded_sysui_flag"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.wm.shell/fix_exit_split_on_enter_bubble_flag_values.textproto b/aconfig/bp4a/com.android.wm.shell/fix_exit_split_on_enter_bubble_flag_values.textproto
+new file mode 100644
+index 000000000..53bef61bc
+--- /dev/null
++++ b/aconfig/bp4a/com.android.wm.shell/fix_exit_split_on_enter_bubble_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.wm.shell"
++  name: "fix_exit_split_on_enter_bubble"
++  state: ENABLED
++  permission: READ_ONLY
++}
+diff --git a/aconfig/bp4a/com.android.wm.shell/fix_task_view_rotation_animation_flag_values.textproto b/aconfig/bp4a/com.android.wm.shell/fix_task_view_rotation_animation_flag_values.textproto
+new file mode 100644
+index 000000000..8d1948a7f
+--- /dev/null
++++ b/aconfig/bp4a/com.android.wm.shell/fix_task_view_rotation_animation_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.wm.shell"
++  name: "fix_task_view_rotation_animation"
++  state: ENABLED
++  permission: READ_ONLY
++}
 diff --git a/aconfig/trunk_staging/com.android.launcher3/blurred_home_animation_flag_values.textproto b/aconfig/trunk_staging/com.android.launcher3/blurred_home_animation_flag_values.textproto
 new file mode 100644
 index 000000000..3488e3b4c
@@ -508,4 +642,3 @@ index 000000000..432f04f91
 +  state: ENABLED
 +  permission: READ_WRITE
 +}
-
