@@ -18,6 +18,9 @@ git_repository(
         # Sparse images cannot use the multi-image compressed-texture emulation
         # layout; retain native host sparse compressed formats when supported.
         "@//build_external/gfxstream:PATCH.gfxstream.sparse-astc-native.patch",
+        # Sparse binding is device-wide. Hide it only when an advertised
+        # compressed-format set depends on emulation rather than host support.
+        "@//build_external/gfxstream:PATCH.gfxstream.sparse-compressed-feature-contract.patch",
         # Reuse host-visible udmabuf objects across guest process lifetimes so
         # drivers which retain imports grow only to the workload high-water mark.
         "@//build_external/gfxstream:PATCH.gfxstream.pool-host-visible-udmabufs.patch",
