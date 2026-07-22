@@ -45,6 +45,11 @@ guest addresses and must never enter the host wire chain; register them with the
 guest ResourceTracker after device creation instead. Report the backing memory
 heap index rather than the memory-type index in allocation callbacks.
 
+Regenerate supported extension structs even when a lower-numbered unsupported
+extension referenced them first. Vulkan-Headers 1.4.341's descriptor-heap
+extension otherwise marks the custom-border-color sampler struct declared while
+only unsupported-feature wrappers are active, dropping its guest pNext payload.
+
 Written against Mesa 26.1.5 (6a02618ccf6c5651ecb9cccbde571eb61fd73592).
 
 diff --git a/Android.bp b/Android.bp
@@ -6952,7 +6957,7 @@ index 03e53180755a516db711c1ce9c7be3ef396b2800..9a57b8516c8dc559c318a4790fe05919
      # Use vk_common_* entrypoints; usually just dispatches to the "vk*2()" API variant
      "vkGetDeviceQueue",
 diff --git a/src/gfxstream/codegen/scripts/cerealgenerator.py b/src/gfxstream/codegen/scripts/cerealgenerator.py
-index c370f8c92f502bf3a7ad25c010a34539dd9eea93..eef6ac004386642e2cac8c2bd79774aefdbcc8c4 100644
+index c370f8c92f502bf3a7ad25c010a34539dd9eea93..8aef9978ae3f2c536f9f5f5e1ff8365657298e04 100644
 --- a/src/gfxstream/codegen/scripts/cerealgenerator.py
 +++ b/src/gfxstream/codegen/scripts/cerealgenerator.py
 @@ -96,7 +96,15 @@ SUPPORTED_FEATURES = [
@@ -6971,6 +6976,29 @@ index c370f8c92f502bf3a7ad25c010a34539dd9eea93..eef6ac004386642e2cac8c2bd79774ae
      "VK_EXT_image_compression_control",
      "VK_EXT_image_compression_control_swapchain",
      "VK_EXT_image_drm_format_modifier",
+@@ -864,6 +872,22 @@ class BumpPool;
+         else:
+             self.supportedModules = SUPPORTED_MODULES.get(self.featureName)
+ 
++        # The registry can encounter a type first as a dependency of an unsupported
++        # extension. In that case only UNSUPPORTED_FEATURE_MODULES sees the type, but
++        # Registry.generateFeature() still marks it declared. If a supported extension
++        # later owns the same type, clear that stale declaration so every normal wrapper
++        # can generate it under the correct feature guard.
++        if self.featureName in SUPPORTED_FEATURES:
++            for features in interface.findall('require'):
++                for typeElement in features.findall('type'):
++                    typeName = typeElement.get('name')
++                    registeredType = self.genOpts.registry.typedict.get(typeName)
++                    generatedStruct = self.typeInfo.structs.get(typeName)
++                    if (registeredType is not None and registeredType.declared and
++                            generatedStruct is not None and
++                            generatedStruct.feature not in SUPPORTED_FEATURES):
++                        registeredType.declared = False
++
+         self.typeInfo.onBeginFeature(self.featureName, self.featureType)
+ 
+         self.forEachModule(
 diff --git a/src/gfxstream/codegen/xml/Android.bp b/src/gfxstream/codegen/xml/Android.bp
 new file mode 100644
 index 0000000000000000000000000000000000000000..37f80a7d05b653b3e3e95af8cadaebb387d7d63b
