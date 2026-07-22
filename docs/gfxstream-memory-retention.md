@@ -150,6 +150,15 @@ and passes descriptors with `SCM_RIGHTS`. If the broker is disabled or
 unavailable, gfxstream safely falls back to its renderer-local allocation path.
 `IKA_UDMABUF_BROKER=off` provides an explicit diagnostic override.
 
+The broker also enforces a fail-closed residency ceiling: 4,096 entries and
+4 GiB of backing by default. Existing exact-size entries remain reusable at the
+ceiling, but a request that would create another entry returns `ENOSPC`.
+Gfxstream treats that valid broker refusal as an allocation failure rather than
+falling back to a fresh local udmabuf, which prevents allocation-test or hostile
+workloads from bypassing the ceiling and starving a 16 GiB host. The defaults
+can be adjusted with `IKA_UDMABUF_BROKER_MAX_ENTRIES` and
+`IKA_UDMABUF_BROKER_MAX_BYTES` when host capacity is known.
+
 ### 3. Shared lifetime token
 
 Each pooled entry returns a shared lease along with its descriptor. References
@@ -293,7 +302,7 @@ later cycles is not.
 
 - Exact-size pooling is conservative. Workloads using many distinct allocation
   sizes can create more pool entries, though each recurring size is still
-  bounded by peak concurrency.
+  bounded by peak concurrency and the configured broker ceiling.
 - The broker deliberately keeps its high-water backing resident between VM
   runs. This is bounded retention, not reclamation; rebooting the host remains
   necessary when that memory must be returned immediately.
