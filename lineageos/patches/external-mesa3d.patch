@@ -6893,7 +6893,15 @@ diff --git a/src/gfxstream/codegen/scripts/cereal/encoder.py b/src/gfxstream/cod
 index 974a82c5948ed140add1d14c9bd80eae09689bac..52eeb881f356c3354370074c83c1378a9e15e17b 100644
 --- a/src/gfxstream/codegen/scripts/cereal/encoder.py
 +++ b/src/gfxstream/codegen/scripts/cereal/encoder.py
-@@ -629,6 +629,10 @@ def unwrap_vkAcquireImageANDROID_nativeFenceFd():
+@@ -73,6 +73,7 @@ ENCODER_CUSTOM_RESOURCE_POSTPROCESS = [
+     "vkCreateDevice",
+     "vkMapMemoryIntoAddressSpaceGOOGLE",
+     "vkGetPhysicalDeviceFeatures2",
++    "vkGetPhysicalDeviceFeatures2KHR",
+     "vkCreateDescriptorUpdateTemplate",
+     "vkGetPhysicalDeviceExternalSemaphoreProperties",
+ ]
+@@ -629,6 +630,10 @@ def unwrap_vkAcquireImageANDROID_nativeFenceFd():
  custom_encodes = {
      "vkMapMemory" : emit_only_resource_event,
      "vkUnmapMemory" : emit_only_resource_event,
@@ -8846,7 +8854,7 @@ index 40101545f0306be775ddc6c5a928416bd9a03790..6ac5bcbf1fe2a0697f2fcc772b9e98f6
  #if defined(VK_USE_PLATFORM_ANDROID_KHR) || DETECT_OS_LINUX
      bool hostSupportsExternalFenceFd =
          getHostDeviceExtensionIndex("VK_KHR_external_fence_fd") != -1;
-@@ -2168,6 +2189,19 @@ void ResourceTracker::on_vkGetPhysicalDeviceFeatures2(void*, VkPhysicalDevice,
+@@ -2168,9 +2189,27 @@ void ResourceTracker::on_vkGetPhysicalDeviceFeatures2(void*, VkPhysicalDevice,
          if (memoryReportFeaturesEXT) {
              memoryReportFeaturesEXT->deviceMemoryReport = VK_TRUE;
          }
@@ -8866,7 +8874,15 @@ index 40101545f0306be775ddc6c5a928416bd9a03790..6ac5bcbf1fe2a0697f2fcc772b9e98f6
      }
  }
  
-@@ -2196,14 +2230,6 @@ void ResourceTracker::on_vkGetPhysicalDeviceProperties2(void* context,
++void ResourceTracker::on_vkGetPhysicalDeviceFeatures2KHR(
++    void* context, VkPhysicalDevice physicalDevice, VkPhysicalDeviceFeatures2* pFeatures) {
++    on_vkGetPhysicalDeviceFeatures2(context, physicalDevice, pFeatures);
++}
++
+ void ResourceTracker::on_vkGetPhysicalDeviceProperties2KHR(
+     void* context, VkPhysicalDevice physicalDevice, VkPhysicalDeviceProperties2* pProperties) {
+     on_vkGetPhysicalDeviceProperties2(context, physicalDevice, pProperties);
+@@ -2196,14 +2235,6 @@ void ResourceTracker::on_vkGetPhysicalDeviceProperties2(void* context,
          vk_filter_struct(&localProps, PHYSICAL_DEVICE_PCI_BUS_INFO_PROPERTIES_EXT);
      }
  
@@ -8881,6 +8897,32 @@ index 40101545f0306be775ddc6c5a928416bd9a03790..6ac5bcbf1fe2a0697f2fcc772b9e98f6
  #if defined(VK_USE_PLATFORM_ANDROID_KHR)
      if (vk_find_struct(&localProps, PHYSICAL_DEVICE_PRESENTATION_PROPERTIES_ANDROID)) {
          vk_filter_struct(&localProps, PHYSICAL_DEVICE_PRESENTATION_PROPERTIES_ANDROID);
+@@ -2212,6 +2243,25 @@ void ResourceTracker::on_vkGetPhysicalDeviceProperties2(void* context,
+ 
+     enc->vkGetPhysicalDeviceProperties2(physicalDevice, &localProps, false /* no lock */);
+ 
++    VkPhysicalDeviceIDProperties* idProperties =
++        vk_find_struct(&localProps, PHYSICAL_DEVICE_ID_PROPERTIES);
++    if (idProperties && localProps.properties.apiVersion >= VK_API_VERSION_1_1) {
++        VkPhysicalDeviceVulkan11Properties vulkan11Properties = {
++            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES,
++        };
++        VkPhysicalDeviceProperties2 propertiesWithVulkan11 = {
++            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
++            .pNext = &vulkan11Properties,
++        };
++        enc->vkGetPhysicalDeviceProperties2(physicalDevice, &propertiesWithVulkan11,
++                                            false /* no lock */);
++        memcpy(idProperties->deviceUUID, vulkan11Properties.deviceUUID, VK_UUID_SIZE);
++        memcpy(idProperties->driverUUID, vulkan11Properties.driverUUID, VK_UUID_SIZE);
++        memcpy(idProperties->deviceLUID, vulkan11Properties.deviceLUID, VK_LUID_SIZE);
++        idProperties->deviceNodeMask = vulkan11Properties.deviceNodeMask;
++        idProperties->deviceLUIDValid = vulkan11Properties.deviceLUIDValid;
++    }
++
+     *pProperties = localProps;
+     pProperties->pNext = pNextOriginal;
+ 
 @@ -3383,6 +3409,10 @@ VkResult ResourceTracker::on_vkAllocateMemory(void* context, VkResult input_resu
                                                const VkMemoryAllocateInfo* pAllocateInfo,
                                                const VkAllocationCallbacks* pAllocator,
@@ -9298,7 +9340,16 @@ diff --git a/src/gfxstream/guest/vulkan_enc/ResourceTracker.h b/src/gfxstream/gu
 index b59c09acb8980faa4fb044cfd6d2ef12a39039c4..06ada2c54d966ba0ff1f635b272bbcff33d0a2d7 100644
 --- a/src/gfxstream/guest/vulkan_enc/ResourceTracker.h
 +++ b/src/gfxstream/guest/vulkan_enc/ResourceTracker.h
-@@ -197,6 +197,15 @@ class ResourceTracker {
+@@ -162,6 +162,8 @@ class ResourceTracker {
+ 
+     void on_vkGetPhysicalDeviceFeatures2(void* context, VkPhysicalDevice physicalDevice,
+                                          VkPhysicalDeviceFeatures2* pFeatures);
++    void on_vkGetPhysicalDeviceFeatures2KHR(void* context, VkPhysicalDevice physicalDevice,
++                                            VkPhysicalDeviceFeatures2* pFeatures);
+ 
+     void on_vkGetPhysicalDeviceProperties2KHR(void* context, VkPhysicalDevice physicalDevice,
+                                               VkPhysicalDeviceProperties2* pProperties);
+@@ -197,6 +199,15 @@ class ResourceTracker {
  
      void on_vkUnmapMemory(void* context, VkDevice device, VkDeviceMemory memory);
  
