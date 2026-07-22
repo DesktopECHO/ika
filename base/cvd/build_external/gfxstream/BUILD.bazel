@@ -11,6 +11,7 @@ exports_files([
     "PATCH.gfxstream.gles1-alpha-test-core-profile.patch",
     "PATCH.gfxstream.linux_udmabuf_creator.patch",
     "PATCH.gfxstream.memfd_udmabuf_seals.patch",
+    "PATCH.gfxstream.sparse-astc-native.patch",
     "PATCH.gfxstream.vulkan-cts-correctness.patch",
     "PATCH.gfxstream.opengles-3.2.patch",
 ])

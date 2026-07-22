@@ -26,6 +26,7 @@ external/mesa3d patches/external-mesa3d.patch
 hardware/google/gfxstream patches/hardware-google-gfxstream-opengles-3.2.patch
 hardware/google/gfxstream patches/hardware-google-gfxstream-guest-egl-attrib-safety.patch
 hardware/google/gfxstream patches/hardware-google-gfxstream-compressed-texture-passthrough-guard.patch
+hardware/google/gfxstream patches/hardware-google-gfxstream-sparse-astc-native.patch
 hardware/google/gfxstream patches/hardware-google-gfxstream-gles1-alpha-test-core-profile.patch
 hardware/google/camera patches/hardware-google-camera-emulated-apex-key.patch
 art patches/art.patch
