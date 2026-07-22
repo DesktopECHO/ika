@@ -39,6 +39,11 @@ wire protocol does not return host-written VkBindMemoryStatus values, so split
 only status-bearing bind batches into individual calls, record every result,
 and retain the original batched fast path when status reporting is not used.
 
+Keep VK_EXT_device_memory_report entirely guest-emulated. Callback pointers are
+guest addresses and must never enter the host wire chain; register them with the
+guest ResourceTracker after device creation instead. Report the backing memory
+heap index rather than the memory-type index in allocation callbacks.
+
 Written against Mesa 26.1.5 (6a02618ccf6c5651ecb9cccbde571eb61fd73592).
 
 diff --git a/Android.bp b/Android.bp
@@ -8210,20 +8215,21 @@ index 0000000000000000000000000000000000000000..05e4d07a27fa1898310c0127205dd2f0
 +    },
 +}
 diff --git a/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp b/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp
-index c979d699f623718431ec5b319d31768178b34e01..cd6b8a2e185eb513a0908cf18346496fcc94c28d 100644
+index c979d699f623718431ec5b319d31768178b34e01..d1ba80b3d24e49a15cb3b565dc1fdfe24236dff3 100644
 --- a/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp
 +++ b/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp
-@@ -130,6 +130,9 @@ static const char* const kGuestEmulatedDeviceExtensions[] = {
+@@ -130,6 +130,10 @@ static const char* const kGuestEmulatedDeviceExtensions[] = {
      VK_KHR_SWAPCHAIN_EXTENSION_NAME,
      VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
      VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
 +    VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME,
 +    VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME,
 +    VK_EXT_GLOBAL_PRIORITY_QUERY_EXTENSION_NAME,
++    VK_EXT_DEVICE_MEMORY_REPORT_EXTENSION_NAME,
  };
  
  static bool isGuestEmulatedDeviceExtension(const char* name) {
-@@ -555,6 +558,34 @@ static inline void gfxstream_vk_device_queue_family_fini(struct gfxstream_vk_dev
+@@ -555,6 +559,34 @@ static inline void gfxstream_vk_device_queue_family_fini(struct gfxstream_vk_dev
      vk_free(&dev->vk.alloc, dev->queue_families);
  }
  
@@ -8258,7 +8264,7 @@ index c979d699f623718431ec5b319d31768178b34e01..cd6b8a2e185eb513a0908cf18346496f
  VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
                                     const VkDeviceCreateInfo* pCreateInfo,
                                     const VkAllocationCallbacks* pAllocator, VkDevice* pDevice) {
-@@ -578,15 +609,62 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
+@@ -578,15 +610,69 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
          mutableSwapchainMaintenance1Features->swapchainMaintenance1 = VK_FALSE;
      }
  
@@ -8296,13 +8302,13 @@ index c979d699f623718431ec5b319d31768178b34e01..cd6b8a2e185eb513a0908cf18346496f
 +            pCreateInfo->pQueueCreateInfos,
 +            pCreateInfo->pQueueCreateInfos + pCreateInfo->queueCreateInfoCount);
 +        localCreateInfo.pQueueCreateInfos = localQueueCreateInfos.data();
-+        std::vector<RemovedPNextStruct> removedGlobalPriorityStructs;
++        std::vector<RemovedPNextStruct> removedPNextStructs;
 +        RemovedPNextStruct removal;
 +        bool unsupportedGlobalPriority = false;
 +        while (remove_pnext_struct(reinterpret_cast<VkBaseOutStructure*>(&localCreateInfo),
 +                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GLOBAL_PRIORITY_QUERY_FEATURES,
 +                                   &removal)) {
-+            removedGlobalPriorityStructs.push_back(removal);
++            removedPNextStructs.push_back(removal);
 +        }
 +        for (auto& queueCreateInfo : localQueueCreateInfos) {
 +            while (remove_pnext_struct(reinterpret_cast<VkBaseOutStructure*>(&queueCreateInfo),
@@ -8314,14 +8320,21 @@ index c979d699f623718431ec5b319d31768178b34e01..cd6b8a2e185eb513a0908cf18346496f
 +                    globalPriority->globalPriority > VK_QUEUE_GLOBAL_PRIORITY_MEDIUM) {
 +                    unsupportedGlobalPriority = true;
 +                }
-+                removedGlobalPriorityStructs.push_back(removal);
++                removedPNextStructs.push_back(removal);
 +            }
++        }
++        // Device-memory-report callbacks are guest function pointers. ResourceTracker emulates
++        // the reports locally, so never serialize that callback-bearing structure to the host.
++        while (remove_pnext_struct(
++            reinterpret_cast<VkBaseOutStructure*>(&localCreateInfo),
++            VK_STRUCTURE_TYPE_DEVICE_DEVICE_MEMORY_REPORT_CREATE_INFO_EXT, &removal)) {
++            removedPNextStructs.push_back(removal);
 +        }
 +
          std::vector<const char*> filteredExts = filteredDeviceExtensionNames(
              gfxstream_physicalDevice, localCreateInfo.enabledExtensionCount,
              localCreateInfo.ppEnabledExtensionNames);
-@@ -610,18 +688,30 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
+@@ -610,18 +696,29 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
              }
          }
  
@@ -8343,8 +8356,7 @@ index c979d699f623718431ec5b319d31768178b34e01..cd6b8a2e185eb513a0908cf18346496f
 +            hostDeviceCreated = result == VK_SUCCESS;
 +        }
 +
-+        for (auto it = removedGlobalPriorityStructs.rbegin();
-+             it != removedGlobalPriorityStructs.rend(); ++it) {
++        for (auto it = removedPNextStructs.rbegin(); it != removedPNextStructs.rend(); ++it) {
 +            restore_pnext_struct(*it);
 +        }
  
@@ -8358,7 +8370,7 @@ index c979d699f623718431ec5b319d31768178b34e01..cd6b8a2e185eb513a0908cf18346496f
                  mutablePhysicalDeviceGroupProperties->physicalDevices[physDev] =
                      initialPhysicalDeviceList[physDev];
              }
-@@ -638,23 +728,39 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
+@@ -638,23 +735,47 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
  
          result = vk_device_init(&gfxstream_device->vk, &gfxstream_physicalDevice->vk,
                                  &dispatch_table, pCreateInfo, pMesaAllocator);
@@ -8382,6 +8394,14 @@ index c979d699f623718431ec5b319d31768178b34e01..cd6b8a2e185eb513a0908cf18346496f
      }
  
 +    if (result == VK_SUCCESS) {
++        auto vkEnc = gfxstream::vk::ResourceTracker::getThreadLocalEncoder();
++        auto resources = gfxstream::vk::ResourceTracker::get();
++        result = resources->on_vkCreateDevice(
++            vkEnc, VK_SUCCESS, gfxstream_physicalDevice->internal_object, pCreateInfo,
++            pAllocator, &gfxstream_device->internal_object);
++    }
++
++    if (result == VK_SUCCESS) {
 +        *pDevice = gfxstream_vk_device_to_handle(gfxstream_device);
 +        return VK_SUCCESS;
 +    }
@@ -8401,7 +8421,16 @@ index c979d699f623718431ec5b319d31768178b34e01..cd6b8a2e185eb513a0908cf18346496f
      return result;
  }
  
-@@ -726,6 +832,84 @@ VkResult gfxstream_vk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo
+@@ -671,6 +792,8 @@ void gfxstream_vk_DestroyDevice(VkDevice device, const VkAllocationCallbacks* pA
+     gfxstream_vk_device_queue_family_fini(gfxstream_device);
+ 
+     auto vkEnc = gfxstream::vk::ResourceTracker::getThreadLocalEncoder();
++    auto resources = gfxstream::vk::ResourceTracker::get();
++    resources->on_vkDestroyDevice_pre(vkEnc, gfxstream_device->internal_object, pAllocator);
+     vkEnc->vkDestroyDevice(gfxstream_device->internal_object, pAllocator, true /* do lock */);
+ 
+     vk_free(alloc, gfxstream_device->queues);
+@@ -726,6 +849,84 @@ VkResult gfxstream_vk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo
      return vkAllocateMemory_VkResult_return;
  }
  
@@ -8733,7 +8762,7 @@ index 0000000000000000000000000000000000000000..a8cbd13e48ed012da7fee0ebab1645af
 +    ],
 +}
 diff --git a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
-index 40101545f0306be775ddc6c5a928416bd9a03790..8d95d93a28d5f0226444d7e3059f7b8aedf0def4 100644
+index 40101545f0306be775ddc6c5a928416bd9a03790..6ac5bcbf1fe2a0697f2fcc772b9e98f67232ddae 100644
 --- a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
 +++ b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
 @@ -1773,15 +1773,21 @@ VkResult ResourceTracker::on_vkEnumerateDeviceExtensionProperties(
@@ -8851,7 +8880,75 @@ index 40101545f0306be775ddc6c5a928416bd9a03790..8d95d93a28d5f0226444d7e3059f7b8a
  #if defined(VK_USE_PLATFORM_ANDROID_KHR)
      if (vk_find_struct(&localProps, PHYSICAL_DEVICE_PRESENTATION_PROPERTIES_ANDROID)) {
          vk_filter_struct(&localProps, PHYSICAL_DEVICE_PRESENTATION_PROPERTIES_ANDROID);
-@@ -4313,6 +4339,34 @@ void ResourceTracker::on_vkUnmapMemory(void*, VkDevice, VkDeviceMemory) {
+@@ -3383,6 +3409,10 @@ VkResult ResourceTracker::on_vkAllocateMemory(void* context, VkResult input_resu
+                                               const VkMemoryAllocateInfo* pAllocateInfo,
+                                               const VkAllocationCallbacks* pAllocator,
+                                               VkDeviceMemory* pMemory) {
++    const VkPhysicalDeviceMemoryProperties& physicalDeviceMemoryProps =
++        getPhysicalDeviceMemoryProperties(context, device, VK_NULL_HANDLE);
++    const uint32_t memoryHeapIndex =
++        physicalDeviceMemoryProps.memoryTypes[pAllocateInfo->memoryTypeIndex].heapIndex;
+ #define _RETURN_FAILURE_WITH_DEVICE_MEMORY_REPORT(result)                                      \
+     {                                                                                          \
+         auto it = info_VkDevice.find(device);                                                  \
+@@ -3390,7 +3420,7 @@ VkResult ResourceTracker::on_vkAllocateMemory(void* context, VkResult input_resu
+         emitDeviceMemoryReport(it->second,                                                     \
+                                VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_ALLOCATION_FAILED_EXT, 0,    \
+                                pAllocateInfo->allocationSize, VK_OBJECT_TYPE_DEVICE_MEMORY, 0, \
+-                               pAllocateInfo->memoryTypeIndex);                                \
++                               memoryHeapIndex);                                               \
+         return result;                                                                         \
+     }
+ 
+@@ -3488,9 +3518,6 @@ VkResult ResourceTracker::on_vkAllocateMemory(void* context, VkResult input_resu
+     bool shouldPassThroughDedicatedAllocInfo =
+         !exportAllocateInfoPtr && !importBufferCollectionInfoPtr && !importVmoInfoPtr;
+ 
+-    const VkPhysicalDeviceMemoryProperties& physicalDeviceMemoryProps =
+-        getPhysicalDeviceMemoryProperties(context, device, VK_NULL_HANDLE);
+-
+     const bool requestedMemoryIsHostVisible =
+         isHostVisible(&physicalDeviceMemoryProps, pAllocateInfo->memoryTypeIndex);
+ 
+@@ -4122,7 +4149,7 @@ VkResult ResourceTracker::on_vkAllocateMemory(void* context, VkResult input_resu
+                                         : VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_ALLOCATE_EXT,
+                                memoryObjectId, pAllocateInfo->allocationSize,
+                                VK_OBJECT_TYPE_DEVICE_MEMORY, (uint64_t)(void*)*pMemory,
+-                               pAllocateInfo->memoryTypeIndex);
++                               memoryHeapIndex);
+         return VK_SUCCESS;
+     }
+ 
+@@ -4179,7 +4206,7 @@ VkResult ResourceTracker::on_vkAllocateMemory(void* context, VkResult input_resu
+                                     : VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_ALLOCATE_EXT,
+                            memoryObjectId, pAllocateInfo->allocationSize,
+                            VK_OBJECT_TYPE_DEVICE_MEMORY, (uint64_t)(void*)*pMemory,
+-                           pAllocateInfo->memoryTypeIndex);
++                           memoryHeapIndex);
+     return VK_SUCCESS;
+ }
+ 
+@@ -4201,11 +4228,18 @@ void ResourceTracker::on_vkFreeMemory(void* context, VkDevice device, VkDeviceMe
+         info.importedFd = -1;
+     }
+ 
++    uint32_t memoryHeapIndex = 0;
++    auto deviceIt = info_VkDevice.find(device);
++    if (deviceIt != info_VkDevice.end() &&
++        info.memoryTypeIndex < deviceIt->second.memProps.memoryTypeCount) {
++        memoryHeapIndex = deviceIt->second.memProps.memoryTypes[info.memoryTypeIndex].heapIndex;
++    }
++
+     emitDeviceMemoryReport(info_VkDevice[device],
+                            info.imported ? VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_UNIMPORT_EXT
+                                          : VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_FREE_EXT,
+                            memoryObjectId, 0 /* size */, VK_OBJECT_TYPE_DEVICE_MEMORY,
+-                           (uint64_t)(void*)memory);
++                           (uint64_t)(void*)memory, memoryHeapIndex);
+ 
+ #ifdef VK_USE_PLATFORM_FUCHSIA
+     if (info.vmoHandle && info.ptr) {
+@@ -4313,6 +4347,34 @@ void ResourceTracker::on_vkUnmapMemory(void*, VkDevice, VkDeviceMemory) {
      // no-op
  }
  
@@ -8886,7 +8983,7 @@ index 40101545f0306be775ddc6c5a928416bd9a03790..8d95d93a28d5f0226444d7e3059f7b8a
  void ResourceTracker::transformImageMemoryRequirements2ForGuest(VkImage image,
                                                                  VkMemoryRequirements2* reqs2) {
      std::lock_guard<std::recursive_mutex> lock(mLock);
-@@ -6695,6 +6749,8 @@ VkResult ResourceTracker::initDescriptorUpdateTemplateBuffers(
+@@ -6695,6 +6757,8 @@ VkResult ResourceTracker::initDescriptorUpdateTemplateBuffers(
      }
  
      auto& info = it->second;
@@ -8895,7 +8992,7 @@ index 40101545f0306be775ddc6c5a928416bd9a03790..8d95d93a28d5f0226444d7e3059f7b8a
      uint32_t inlineUniformBlockBufferSize = 0;
  
      for (uint32_t i = 0; i < pCreateInfo->descriptorUpdateEntryCount; ++i) {
-@@ -6947,6 +7003,173 @@ void ResourceTracker::on_vkUpdateDescriptorSetWithTemplate(
+@@ -6947,6 +7011,173 @@ void ResourceTracker::on_vkUpdateDescriptorSetWithTemplate(
          bufferViews, inlineUniformBlockBuffer, true /* do lock */);
  }
  
@@ -9069,7 +9166,7 @@ index 40101545f0306be775ddc6c5a928416bd9a03790..8d95d93a28d5f0226444d7e3059f7b8a
  #ifdef LINUX_GUEST_BUILD
  static void fillEmulatedDrmFormatModPropsList(
      const VkFormatProperties* pFormatProperties,
-@@ -6974,6 +7197,21 @@ void ResourceTracker::on_vkGetPhysicalDeviceFormatProperties2(
+@@ -6974,6 +7205,21 @@ void ResourceTracker::on_vkGetPhysicalDeviceFormatProperties2(
      enc->vkGetPhysicalDeviceFormatProperties2(physicalDevice, format, pFormatProperties,
                                                true /* do lock */);
  
@@ -9091,7 +9188,7 @@ index 40101545f0306be775ddc6c5a928416bd9a03790..8d95d93a28d5f0226444d7e3059f7b8a
  #ifdef LINUX_GUEST_BUILD
      VkDrmFormatModifierPropertiesListEXT* emulatedDrmFmtModPropsList =
          vk_find_struct(pFormatProperties, DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT);
-@@ -7038,27 +7276,20 @@ VkResult ResourceTracker::on_vkGetPhysicalDeviceImageFormatProperties2(
+@@ -7038,27 +7284,20 @@ VkResult ResourceTracker::on_vkGetPhysicalDeviceImageFormatProperties2(
      const VkPhysicalDeviceImageDrmFormatModifierInfoEXT* drmFmtMod =
          vk_find_struct_const(pImageFormatInfo, PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT);
      VkDrmFormatModifierPropertiesListEXT* emulatedDrmFmtModPropsList = nullptr;
@@ -9131,7 +9228,7 @@ index 40101545f0306be775ddc6c5a928416bd9a03790..8d95d93a28d5f0226444d7e3059f7b8a
      }
  #endif  // LINUX_GUEST_BUILD
  
-@@ -7471,6 +7702,60 @@ void ResourceTracker::on_vkCmdPipelineBarrier(
+@@ -7471,6 +7710,60 @@ void ResourceTracker::on_vkCmdPipelineBarrier(
                                updatedImageMemoryBarriers.data(), true /* do lock */);
  }
  
