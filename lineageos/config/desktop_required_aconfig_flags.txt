@@ -21,15 +21,29 @@ com.android.window.flags/enable_minimize_button
 com.android.window.flags/enable_themed_app_headers
 com.android.window.flags/skip_compat_ui_education_in_desktop_mode
 com.android.launcher3/enable_scalability_for_desktop_experience
+# Bubble Anything and its desktop bubble bar. The see-through task-fragment
+# dependency is supplied by BP4A; build-release.patch supplies the other gates.
+com.android.launcher3/avoid_display_cutout_bubble_bar
+com.android.wm.shell/bug_rotation_button_cover_bubble
+com.android.wm.shell/enable_bubble_bar
+com.android.wm.shell/enable_bubble_stashing
+com.android.wm.shell/enable_create_any_bubble
+com.android.wm.shell/enable_shell_restart_bubble_cleanup
+com.android.wm.shell/fix_bubbles_expanded_sysui_flag
+com.android.wm.shell/fix_exit_split_on_enter_bubble
+com.android.wm.shell/fix_task_view_rotation_animation
+com.android.window.flags/enable_experimental_bubbles_controller
+com.android.window.flags/enable_see_through_task_fragments
 # Desktop and Launcher polish enabled by build-release.patch. These mirror the
 # user-facing trunk paths that are safe on the stable BP4A source revision;
-# architectural experiments and diagnostic logging remain disabled.
+# unrelated architectural experiments and diagnostic logging remain disabled.
 com.android.launcher3/blurred_home_animation
-com.android.launcher3/avoid_display_cutout_bubble_bar
+com.android.launcher3/enable_mouse_interaction_changes
 com.android.launcher3/enable_overview_desktop_tile_wallpaper_background
 com.android.launcher3/enable_taskbar_customization
 com.android.launcher3/enable_taskbar_icon_container
 com.android.systemui/status_bar_for_desktop
+com.android.wm.shell/enable_pip_box_shadows
 com.android.window.flags/close_fullscreen_and_splitscreen_keyboard_shortcut
 com.android.window.flags/enable_border_settings
 com.android.window.flags/enable_box_shadow_settings
