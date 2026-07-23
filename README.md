@@ -97,8 +97,8 @@ After the initial build, use the narrowest command that matches your changes:
 
 - **Full build** — re-run `./ika-build`, then run the installation command it
   prints. Extra arguments are forwarded to the ROM build, for example
-  `./ika-build x86_64`, `./ika-build --microg arm64`, or
-  `./ika-build --mtg x86_64`. With no arguments, `ika-build` prompts for microG,
+  `./ika-build x86_64`, `./ika-build arm64 --microg`, or
+  `./ika-build x86_64 --mtg`. With no arguments, `ika-build` prompts for microG,
   MindTheGapps, or a de-Googled image without an app store before building the
   host-native ROM.
 - **ROM only** — re-run `./lineageos/scripts/build_lineageos_desktop.sh` (or
