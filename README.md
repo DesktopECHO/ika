@@ -1,12 +1,10 @@
 <img width="1920" height="1080" alt="Ika Virtual Desktop" src="https://github.com/user-attachments/assets/ad0213c3-6a9d-45bc-9468-dcdd82abca26" />
 
-# イカ · The LineageOS Virtual Desktop
+# イカ · Ika Virtual Desktop
 
-**Ika** _/ee-kah/_ - Japanese for "cuttlefish" - began as an effort to run the
-[Cuttlefish](https://source.android.com/setup/create/cuttlefish) Android emulator
-on [Fedora Asahi Remix](https://asahilinux.org/). It has since evolved into a
-full-blown desktop operating environment for Apple Silicon and x86-64 hosts.
-The project scope changed over time but the name stuck.
+**Ika** _/ee-kah/_, the Japanese word for squid or cuttlefish, began as an effort to
+run the [Cuttlefish](https://source.android.com/setup/create/cuttlefish) Android emulator
+on [Fedora Asahi Remix](https://asahilinux.org/). It later evolved into a desktop-centric Android build for Apple Silicon and x86-64 hosts, but the name already stuck.
 
 ## Features
 
@@ -62,7 +60,7 @@ unzip ika-main.zip && rm ika-main.zip && cd ika-main
 # Prepares signing certificates, installs build dependencies, downloads the
 # LineageOS 23.2 source, applies the overlay and source patches, builds the
 # Cuttlefish target for the host architecture, creates RPM or Debian packages,
-# and provides package installation instructions when the build is complete.
+# and prints the package installation command when the build is complete.
 
 ./ika-build
 
@@ -100,8 +98,8 @@ After the initial build, use the narrowest command that matches your changes:
 
 - **Full build** — re-run `./ika-build`, then run the installation command it
   prints. Extra arguments are forwarded to the ROM build, for example
-  `./ika-build x86_64`, `./ika-build --microg arm64`, or
-  `./ika-build --mtg x86_64`. With no arguments, `ika-build` prompts for microG,
+  `./ika-build x86_64`, `./ika-build arm64 --microg`, or
+  `./ika-build x86_64 --mtg`. With no arguments, `ika-build` prompts for microG,
   MindTheGapps, or a de-Googled image without an app store before building the
   host-native ROM.
 - **ROM only** — re-run `./lineageos/scripts/build_lineageos_desktop.sh` (or
