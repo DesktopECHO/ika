@@ -32,6 +32,10 @@ snd-aloop is excluded from the boot ramdisks on both architectures so
 virtio-snd enumerates as ALSA card 0: the generic AIDL audio HAL plays to
 card 0/device 0 by default, and a first-stage-loaded loopback card would
 silently swallow the guest audio meant for the host virtio-snd server.
+The primary audio policy also omits Cuttlefish's VTS-only MMAP ports. Modern
+AIDL audio HALs derive MMAP availability from those routes and ignore the
+legacy aaudio.mmap_policy properties, so removing the routes keeps games on
+the functional legacy mixer that feeds virtio-snd.
 ADB host exposure is loopback-only while user builds keep guest TCP ADB
 available without interactive key authorization.
 
@@ -204,11 +208,50 @@ index 8416f0f40..437b56902 100644
  
  // Graphics default parameters
  #define CF_DEFAULTS_HWCOMPOSER cuttlefish::kHwComposerAuto
+diff --git a/shared/config/audio/policy/primary_audio_policy_configuration.xml b/shared/config/audio/policy/primary_audio_policy_configuration.xml
+index 5fb3da7a2..f393a0996 100644
+--- a/shared/config/audio/policy/primary_audio_policy_configuration.xml
++++ b/shared/config/audio/policy/primary_audio_policy_configuration.xml
+@@ -42,21 +42,11 @@
+                      samplingRates="44100 48000"
+                      channelMasks="AUDIO_CHANNEL_OUT_MONO AUDIO_CHANNEL_OUT_STEREO"/>
+         </mixPort>
+-        <mixPort name="mmap_no_irq_out" role="source" flags="AUDIO_OUTPUT_FLAG_DIRECT AUDIO_OUTPUT_FLAG_MMAP_NOIRQ">
+-             <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
+-                      samplingRates="44100 48000"
+-                      channelMasks="AUDIO_CHANNEL_OUT_STEREO"/>
+-        </mixPort>
+         <mixPort name="primary input" role="sink">
+             <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
+                      samplingRates="8000 11025 16000 32000 44100 48000"
+                      channelMasks="AUDIO_CHANNEL_IN_MONO AUDIO_CHANNEL_IN_STEREO"/>
+         </mixPort>
+-        <mixPort name="mmap_no_irq_in" role="sink" flags="AUDIO_INPUT_FLAG_MMAP_NOIRQ">
+-            <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
+-                             samplingRates="44100 48000"
+-                             channelMasks="AUDIO_CHANNEL_IN_MONO AUDIO_CHANNEL_IN_STEREO"/>
+-        </mixPort>
+         <mixPort name="telephony_tx" role="source">
+             <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
+                      samplingRates="8000 11025 16000 32000 44100 48000"
+@@ -93,11 +83,9 @@
+     </devicePorts>
+     <routes>
+         <route type="mix" sink="Speaker"
+-               sources="primary output,compressed_offload,mmap_no_irq_out"/>
++               sources="primary output,compressed_offload"/>
+         <route type="mix" sink="primary input"
+                sources="Built-In Mic"/>
+-        <route type="mix" sink="mmap_no_irq_in"
+-               sources="Built-In Mic"/>
+ 
+         <route type="mix" sink="telephony_rx"
+                sources="Telephony Rx"/>
 diff --git a/shared/device.mk b/shared/device.mk
-index b31638ad7..496fc6743 100644
+index ae0341029..7be66d4a7 100644
 --- a/shared/device.mk
 +++ b/shared/device.mk
-@@ -45,7 +45,7 @@ PRODUCT_FS_COMPRESSION := 1
+@@ -41,7 +41,7 @@ PRODUCT_FS_COMPRESSION := 1
  TARGET_RO_FILE_SYSTEM_TYPE ?= erofs
  BOARD_EROFS_COMPRESS_HINTS := device/google/cuttlefish/shared/erofs_compress_hints.txt
  TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE ?= f2fs
@@ -226,11 +269,12 @@ index b31638ad7..496fc6743 100644
      POSTINSTALL_OPTIONAL_vendor=true
  
  # Userdata Checkpointing OTA GC
-@@ -301,8 +301,10 @@ LOCAL_AUDIO_PRODUCT_PACKAGE += \
+@@ -300,8 +300,11 @@ LOCAL_AUDIO_PRODUCT_PACKAGE += \
  PRODUCT_SYSTEM_EXT_PROPERTIES += \
      ro.audio.ihaladaptervendorextension_enabled=true
-+# CVD's AIDL MMAP endpoint is a VTS-only DSP simulator and does not feed
-+# virtio-snd. Keep AAudio on the functional legacy mixer path.
++# CVD's MMAP endpoint is a VTS-only DSP simulator and does not feed virtio-snd.
++# Legacy HALs read these properties; the AIDL HAL is also prevented from
++# advertising MMAP by the product audio policy configuration.
  PRODUCT_PRODUCT_PROPERTIES += \
 -    aaudio.mmap_policy=2 \
 -    aaudio.mmap_exclusive_policy=2 \
@@ -239,7 +283,7 @@ index b31638ad7..496fc6743 100644
      aaudio.hw_burst_min_usec=2000
  endif
  
-@@ -485,13 +487,16 @@ PRODUCT_PACKAGES += \
+@@ -485,13 +488,16 @@ PRODUCT_PACKAGES += \
  # NPU HAL
  #
  ifeq ($(RELEASE_AIDL_USE_UNFROZEN),true)
