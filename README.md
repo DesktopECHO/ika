@@ -11,7 +11,8 @@ The project scope changed over time but the name stuck.
 ## Features
 
 - **LineageOS 23.2** (Android 16) reimagined as a desktop-first operating system.
-- **Dynamic display** window resizing that preserves the configured DPI settings.
+- **Native builds** for **Apple Silicon** or **x86-64** systems with as little as 16 GB RAM.
+- **Dynamic display** window resizing that preserves DPI settings.
 - **Accelerated GPU rendering** with OpenGL ES and Vulkan support.
 - **Native builds on Asahi Linux** and x86-64 systems with as little as 16 GB
   of RAM.

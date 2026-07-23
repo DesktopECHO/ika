@@ -29,4 +29,9 @@
     <bool name="config_enable_emergency_call_while_sim_locked">false</bool>
     <bool name="config_emergencyGestureEnabled">false</bool>
     <bool name="config_battery_percentage_setting_available">false</bool>
+
+    <!-- Start with "Allow user switch" off, but keep the user-facing setting
+         available. Do not silently enable it when a guest or user is created. -->
+    <bool name="config_showUserSwitcherByDefault">false</bool>
+    <bool name="config_enableUserSwitcherUponUserCreation">false</bool>
 </resources>
