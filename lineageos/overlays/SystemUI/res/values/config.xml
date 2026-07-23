@@ -8,8 +8,12 @@
     <string name="config_navBarLayoutQuickstep" translatable="false">left[1W],back[1WC];;contextual[1WC],right[.1W]</string>
     <string name="config_navBarLayoutHandle" translatable="false">left[1W],back[70AC];;ime_switcher[70AC],right[.1W]</string>
 
-    <!-- Default Quick Settings tile order, with phone-only/VM-irrelevant tiles removed. -->
-    <string name="quick_settings_tiles_default" translatable="false">wifi,bt,dnd,cast,screenrecord,mictoggle,cameratoggle,location,hotspot,inversion,saver,dark,work,night,onehanded,color_correction,font_scaling,desktop_effects</string>
-    <string name="quick_settings_tiles" translatable="false">wifi,bt,dnd,cast,screenrecord,mictoggle,cameratoggle</string>
+    <!--
+        Desktop defaults prioritize theme, capture, and privacy controls. Radio, casting,
+        airplane, and modes tiles remain available in the editor but are not selected by default.
+    -->
+    <string name="quick_settings_tiles_default" translatable="false">wifi,dark,alarm,screenrecord,mictoggle,cameratoggle,location,hotspot,inversion,saver,work,night,onehanded,color_correction,font_scaling,desktop_effects</string>
+    <string name="quick_settings_tiles_new_default" translatable="false">internet,dark,alarm,screenrecord,mictoggle,cameratoggle</string>
+    <string name="quick_settings_tiles" translatable="false">wifi,dark,alarm,screenrecord,mictoggle,cameratoggle</string>
     <string name="quick_settings_tiles_unavailable" translatable="false">flashlight,rotation,battery,reduce_brightness,dream</string>
 </resources>
