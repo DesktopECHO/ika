@@ -1,19 +1,18 @@
 <img width="1920" height="1080" alt="Ika Virtual Desktop" src="https://github.com/user-attachments/assets/ad0213c3-6a9d-45bc-9468-dcdd82abca26" />
 
-# イカ · The LineageOS Virtual Desktop
+# イカ · Ika Virtual Desktop
 
-**Ika** _/ee-kah/_ - Japanese for "cuttlefish" - began as an effort to run the
-[Cuttlefish](https://source.android.com/setup/create/cuttlefish) Android emulator
-on [Fedora Asahi Remix](https://asahilinux.org/). It has since evolved into a
-desktop operating system for Apple Silicon and x86-64 hosts, but the name stuck.
+**Ika** _/ee-kah/_, the Japanese word for squid or cuttlefish, began as an effort to
+run the [Cuttlefish](https://source.android.com/setup/create/cuttlefish) Android emulator
+on [Fedora Asahi Remix](https://asahilinux.org/). It later evolved into an Android virtual
+desktop environment for Apple Silicon and x86-64 hosts, but the name stuck.
 
 ## Features
 
+- Builds natively on **Asahi Linux** and **x86-64** systems with as low as 16 GB RAM.
 - **LineageOS 23.2** (Android 16) reimagined as a desktop-first operating system.
 - **Dynamic display** window resizing that preserves the configured DPI settings.
 - **Accelerated GPU rendering** with OpenGL ES and Vulkan support.
-- **Native builds on Asahi Linux** and x86-64 systems with as little as 16 GB
-  of RAM.
 - **Flexible build options** for **MindTheGapps**, **microG**, or a fully
   de-Googled ROM without an app store.
 
