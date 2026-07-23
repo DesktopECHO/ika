@@ -1,0 +1,117 @@
+Patch summary:
+Make the Cuttlefish AIDL capture path use ALSA as its only real-time pacing
+source.
+
+The primary HAL's emulator workaround skips a transfer whenever the stream
+falls behind wall clock. On input, that skips the real ALSA read and returns
+zero-filled buffers to AudioRecord.
+
+StreamAlsa also enables MonoPipe's blocking-writer throttle for input even
+though ALSA capture reads are already hardware paced. The extra delay makes
+the worker progressively fall behind until virtio-snd returns EIO. Conversely,
+the client-facing read is non-blocking and substitutes silence whenever the
+worker has not filled the pipe yet.
+
+Keep the host-buffer workaround limited to playback, remove MonoPipe's second
+capture throttle, and wait for complete input data at the client-facing side.
+This keeps the ALSA worker draining continuously and gives AudioRecord one
+stable, hardware-paced stream.
+
+diff --git a/audio/aidl/default/alsa/StreamAlsa.cpp b/audio/aidl/default/alsa/StreamAlsa.cpp
+index 7a44cc78a..5cd91199c 100644
+--- a/audio/aidl/default/alsa/StreamAlsa.cpp
++++ b/audio/aidl/default/alsa/StreamAlsa.cpp
+@@ -128,7 +128,10 @@ StreamAlsa::~StreamAlsa() {
+             return ::android::NO_INIT;
+         }
+         alsaDeviceProxies.push_back(std::move(proxy));
+-        auto sink = makeSink(mIsInput);  // Do not block the writer when it is on our thread.
++        // ALSA capture reads are already paced by the input device. Enabling MonoPipe's
++        // blocking writer adds a second real-time throttle, which can make the capture
++        // worker fall behind far enough for virtual ALSA devices to fail with EIO.
++        auto sink = makeSink(false);
+         if (sink != nullptr) {
+             sinks.push_back(sink);
+         } else {
+@@ -165,14 +168,25 @@ StreamAlsa::~StreamAlsa() {
+     if (mIsInput) {
+         const size_t i = 0;  // For the input case, only support a single device.
+         LOG(VERBOSE) << __func__ << ": reading from sink " << i;
+-        ssize_t framesRead = mSources[i]->read(buffer, frameCount);
+-        LOG_IF(FATAL, framesRead < 0) << "Error reading from the pipe: " << framesRead;
+-        if (ssize_t framesMissing = static_cast<ssize_t>(frameCount) - framesRead;
+-            framesMissing > 0) {
+-            LOG(WARNING) << __func__ << ": incomplete data received, inserting " << framesMissing
+-                         << " frames of silence";
+-            memset(static_cast<char*>(buffer) + framesRead * mFrameSizeBytes, 0,
+-                   framesMissing * mFrameSizeBytes);
++        size_t framesRead = 0;
++        while (framesRead < frameCount) {
++            const ssize_t framesReadOrError = mSources[i]->read(
++                    static_cast<char*>(buffer) + framesRead * mFrameSizeBytes,
++                    frameCount - framesRead);
++            LOG_IF(FATAL, framesReadOrError < 0)
++                    << "Error reading from the pipe: " << framesReadOrError;
++            if (framesReadOrError > 0) {
++                framesRead += framesReadOrError;
++            } else if (!mIoThreadIsRunning) {
++                memset(static_cast<char*>(buffer) + framesRead * mFrameSizeBytes, 0,
++                       (frameCount - framesRead) * mFrameSizeBytes);
++                break;
++            } else {
++                // MonoPipeReader does not provide a blocking read. ALSA input is
++                // consumed on a separate thread, so wait for it to supply data
++                // instead of returning a full buffer of synthetic silence.
++                usleep(1000);
++            }
+         }
+         maxLatency = proxy_get_latency(mAlsaDeviceProxies[i].get());
+     } else {
+@@ -253,10 +267,15 @@ void StreamAlsa::inputIoThread(size_t idx) {
+             size_t bufferFramesWritten = 0;
+             while (bufferFramesWritten < mBufferSizeFrames) {
+                 if (!mIoThreadIsRunning) return;
+-                ssize_t framesWrittenOrError =
+-                        mSinks[idx]->write(&buffer[0], mBufferSizeFrames - bufferFramesWritten);
+-                if (framesWrittenOrError >= 0) {
++                ssize_t framesWrittenOrError = mSinks[idx]->write(
++                        &buffer[bufferFramesWritten * mFrameSizeBytes],
++                        mBufferSizeFrames - bufferFramesWritten);
++                if (framesWrittenOrError > 0) {
+                     bufferFramesWritten += framesWrittenOrError;
++                } else if (framesWrittenOrError == 0) {
++                    // A non-blocking MonoPipe has no wait primitive. Yield until the
++                    // stream worker consumes enough data for the rest of this buffer.
++                    usleep(1000);
+                 } else {
+                     LOG(WARNING) << __func__ << "[" << idx
+                                  << "]: Error while writing into the pipe: "
+diff --git a/audio/aidl/default/primary/StreamPrimary.cpp b/audio/aidl/default/primary/StreamPrimary.cpp
+index 84556801d..23b10be5f 100644
+--- a/audio/aidl/default/primary/StreamPrimary.cpp
++++ b/audio/aidl/default/primary/StreamPrimary.cpp
+@@ -96,18 +96,21 @@ StreamPrimary::StreamPrimary(StreamContext* context, const Metadata& metadata)
+     if (isStubStreamOnWorker()) {
+         return mStubDriver.transfer(buffer, frameCount, actualFrameCount, latencyMs);
+     }
++    // ALSA input reads are already paced by the host microphone. Applying the
++    // emulator playback workaround to capture skips real reads and inserts
++    // entire buffers of silence into AudioRecord clients.
++    const bool useTransferPacing = !mIsInput && !mIsAsynchronous;
+     // This is a workaround for the emulator implementation which has a host-side buffer
+     // and is not being able to achieve real-time behavior similar to ADSPs (b/302587331).
+-    if (!mSkipNextTransfer) {
++    if (!useTransferPacing || !mSkipNextTransfer) {
+         RETURN_STATUS_IF_ERROR(
+                 StreamAlsa::transfer(buffer, frameCount, actualFrameCount, latencyMs));
+     } else {
+         LOG(DEBUG) << __func__ << ": skipping transfer (" << frameCount << " frames)";
+         *actualFrameCount = frameCount;
+-        if (mIsInput) memset(buffer, 0, frameCount * mFrameSizeBytes);
+         mSkipNextTransfer = false;
+     }
+-    if (!mIsAsynchronous) {
++    if (useTransferPacing) {
+         const long bufferDurationUs =
+                 (*actualFrameCount) * MICROS_PER_SECOND / mContext.getSampleRate();
+         const auto totalDurationUs =
