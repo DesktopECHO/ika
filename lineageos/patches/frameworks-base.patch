@@ -8,11 +8,11 @@ desktop cleanup, and other VM-facing framework defaults.
 Most of the changes are about replacing phone assumptions with desktop ones.
 The guest has no useful battery saver, flashlight, wallet, auto-rotate, or
 screen-sleep affordance, and its display/window model is host-driven. For the
-desktop product, the Quick Settings brightness slider is also replaced
-functionally with a media-volume slider while reusing the existing slider
-placement, and VM-irrelevant QS tiles can be blocklisted by product resources.
-Keeping that policy in the framework layer gives Launcher and the product
-overlays a stable desktop contract to build on.
+desktop product, the Quick Settings brightness control is replaced with a
+five-stream audio mixer for media, call, ring, notification, and alarm volume,
+and VM-irrelevant QS tiles can be blocklisted by product resources. Keeping that
+policy in the framework layer gives Launcher and the product overlays a stable
+desktop contract to build on.
 
 All apps categorized as games are kept fullscreen, regardless of their resize
 declaration. This preserves the lifecycle, input, and graphics assumptions used
@@ -1040,6 +1040,35 @@ index 84216613f9a9..c9abdaab86e7 100644
                  pointerDeviceRepository = kosmos.pointerDeviceRepository,
                  secureLockDeviceInteractor = { kosmos.secureLockDeviceInteractor },
              )
+diff --git a/packages/SystemUI/multivalentTests/src/com/android/systemui/qs/composefragment/viewmodel/QSFragmentComposeViewModelTest.kt b/packages/SystemUI/multivalentTests/src/com/android/systemui/qs/composefragment/viewmodel/QSFragmentComposeViewModelTest.kt
+index e851c743ad5e..63ab8bbfab32 100644
+--- a/packages/SystemUI/multivalentTests/src/com/android/systemui/qs/composefragment/viewmodel/QSFragmentComposeViewModelTest.kt
++++ b/packages/SystemUI/multivalentTests/src/com/android/systemui/qs/composefragment/viewmodel/QSFragmentComposeViewModelTest.kt
+@@ -587,6 +587,24 @@ class QSFragmentComposeViewModelTest : AbstractQSFragmentComposeViewModelTest()
+             }
+         }
+ 
++    @Test
++    fun mediaVolumeSlidersEnabled_createsAllVolumeSliderViewModels() =
++        with(kosmos) {
++            overrideResource(R.bool.config_useQsMediaVolumeSlider, true)
++
++            testScope.testWithinLifecycle {
++                assertThat(underTest.volumeSliderViewModels).hasSize(5)
++            }
++        }
++
++    @Test
++    fun mediaVolumeSlidersDisabled_doesNotCreateVolumeSliderViewModels() =
++        with(kosmos) {
++            overrideResource(R.bool.config_useQsMediaVolumeSlider, false)
++
++            testScope.testWithinLifecycle { assertThat(underTest.volumeSliderViewModels).isEmpty() }
++        }
++
+     private fun TestScope.setMediaState(state: MediaState) {
+         with(kosmos) {
+             val activeMedia = state == ACTIVE_MEDIA
 diff --git a/packages/SystemUI/multivalentTests/src/com/android/systemui/shade/NotificationPanelViewControllerBaseTest.java b/packages/SystemUI/multivalentTests/src/com/android/systemui/shade/NotificationPanelViewControllerBaseTest.java
 index 873f680b347a..b7ad7b743d82 100644
 --- a/packages/SystemUI/multivalentTests/src/com/android/systemui/shade/NotificationPanelViewControllerBaseTest.java
@@ -1176,18 +1205,20 @@ diff --git a/packages/SystemUI/res/values/config.xml b/packages/SystemUI/res/val
 index e0bc1ec0e01a..c4410ee7c913 100644
 --- a/packages/SystemUI/res/values/config.xml
 +++ b/packages/SystemUI/res/values/config.xml
-@@ -102,12 +102,12 @@
+@@ -102,12 +102,14 @@
  
      <!-- The default tiles to display in QuickSettings -->
++    <!-- Desktop defaults favor host-relevant theme, capture, and privacy controls. -->
      <string name="quick_settings_tiles_default" translatable="false">
 -        internet,bt,flashlight,dnd,alarm,airplane,controls,wallet,rotation,battery,cast,screenrecord,mictoggle,cameratoggle,custom(com.android.permissioncontroller/.permission.service.v33.SafetyCenterQsTileService)
-+        internet,bt,dnd,alarm,airplane,cast,screenrecord,mictoggle,cameratoggle,custom(com.android.permissioncontroller/.permission.service.v33.SafetyCenterQsTileService)
++        internet,dark,alarm,screenrecord,mictoggle,cameratoggle,custom(com.android.permissioncontroller/.permission.service.v33.SafetyCenterQsTileService)
      </string>
  
      <!-- The default tiles to display in QuickSettings with the new UI -->
++    <!-- Radio, casting, airplane, and modes tiles remain available from the editor. -->
      <string name="quick_settings_tiles_new_default" translatable="false">
 -        internet,bt,dnd,cast,flashlight,airplane,rotation,wallet,alarm,controls,screenrecord,battery
-+        internet,bt,dnd,cast,airplane,alarm,screenrecord
++        internet,dark,alarm,screenrecord,mictoggle,cameratoggle
      </string>
  
      <!-- The class path of the Safety Quick Settings Tile -->
@@ -1729,19 +1760,220 @@ index fddef2ed6194..40e7beac2de6 100644
  }
 -
 diff --git a/packages/SystemUI/src/com/android/systemui/qs/composefragment/QSFragmentCompose.kt b/packages/SystemUI/src/com/android/systemui/qs/composefragment/QSFragmentCompose.kt
-index 84ee87b427be..d2bb3e0f3c1e 100644
+index 84ee87b427be..51f4e02d5a25 100644
 --- a/packages/SystemUI/src/com/android/systemui/qs/composefragment/QSFragmentCompose.kt
 +++ b/packages/SystemUI/src/com/android/systemui/qs/composefragment/QSFragmentCompose.kt
-@@ -978,8 +978,7 @@ constructor(
+@@ -49,9 +49,11 @@ import androidx.compose.foundation.layout.offset
+ import androidx.compose.foundation.layout.padding
+ import androidx.compose.foundation.layout.requiredHeightIn
+ import androidx.compose.foundation.layout.systemBars
++import androidx.compose.foundation.layout.width
+ import androidx.compose.foundation.layout.windowInsetsBottomHeight
+ import androidx.compose.foundation.verticalScroll
+ import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.CompositionLocalProvider
+ import androidx.compose.runtime.DisposableEffect
+@@ -95,6 +97,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import androidx.lifecycle.lifecycleScope
+ import androidx.lifecycle.repeatOnLifecycle
+ import com.android.app.tracing.coroutines.launchTraced
++import com.android.compose.PlatformSliderDefaults
+ import com.android.compose.animation.scene.ContentKey
+ import com.android.compose.animation.scene.ContentScope
+ import com.android.compose.animation.scene.ElementKey
+@@ -168,6 +171,7 @@ import com.android.systemui.util.children
+ import com.android.systemui.util.kotlin.pairwise
+ import com.android.systemui.util.printSection
+ import com.android.systemui.util.println
++import com.android.systemui.volume.panel.component.volume.ui.composable.VolumeSlider
+ import java.io.PrintWriter
+ import java.util.function.Consumer
+ import javax.inject.Inject
+@@ -930,7 +934,10 @@ constructor(
+                         ) {
+                             QuickSettingsLayout(
+                                 brightness =
+-                                    if (viewModel.isBrightnessSliderVisible) {
++                                    if (
++                                        viewModel.volumeSliderViewModels.isNotEmpty() ||
++                                            viewModel.isBrightnessSliderVisible
++                                    ) {
+                                         { BrightnessSlider() }
+                                     } else {
+                                         {}
+@@ -938,6 +945,7 @@ constructor(
+                                 tiles = TileGrid,
+                                 media = Media,
+                                 mediaInRow = viewModel.qsMediaInRow,
++                                forceShowSlider = viewModel.volumeSliderViewModels.isNotEmpty(),
+                             )
+                         }
+                     }
+@@ -977,16 +985,52 @@ constructor(
+             )
          ) {
              AlwaysDarkMode {
-                 BrightnessSliderContainer(
+-                BrightnessSliderContainer(
 -                    viewModel =
 -                        viewModel.containerViewModel.brightnessSliderViewModel,
-+                    viewModel = viewModel.containerViewModel.brightnessSliderViewModel,
-                     containerColors =
-                         ContainerColors(
-                             Color.Transparent,
+-                    containerColors =
+-                        ContainerColors(
+-                            Color.Transparent,
+-                            ContainerColors.defaultContainerColor,
+-                        ),
+-                    modifier = Modifier.fillMaxWidth(),
+-                )
++                // Desktop products use this slot for the persistent multi-stream audio mixer.
++                if (viewModel.volumeSliderViewModels.isNotEmpty()) {
++                    Column(verticalArrangement = spacedBy(4.dp)) {
++                        viewModel.volumeSliderViewModels.forEach { volumeSliderViewModel ->
++                            val volumeSliderState by
++                                volumeSliderViewModel.slider.collectAsStateWithLifecycle()
++                            Row(verticalAlignment = Alignment.CenterVertically) {
++                                Text(
++                                    text = volumeSliderState.label,
++                                    style = MaterialTheme.typography.labelLarge,
++                                    modifier = Modifier.width(104.dp),
++                                )
++                                VolumeSlider(
++                                    state = volumeSliderState,
++                                    onValueChange = { newValue ->
++                                        volumeSliderViewModel.onValueChanged(
++                                            volumeSliderState,
++                                            newValue,
++                                        )
++                                    },
++                                    onValueChangeFinished =
++                                        volumeSliderViewModel::onValueChangeFinished,
++                                    onIconTapped = {
++                                        volumeSliderViewModel.toggleMuted(volumeSliderState)
++                                    },
++                                    sliderColors =
++                                        PlatformSliderDefaults.defaultPlatformSliderColors(),
++                                    hapticsViewModelFactory =
++                                        volumeSliderViewModel.getSliderHapticsViewModelFactory(),
++                                    showLabel = false,
++                                    modifier = Modifier.weight(1f),
++                                )
++                            }
++                        }
++                    }
++                } else {
++                    BrightnessSliderContainer(
++                        viewModel = viewModel.containerViewModel.brightnessSliderViewModel,
++                        containerColors =
++                            ContainerColors(
++                                Color.Transparent,
++                                ContainerColors.defaultContainerColor,
++                            ),
++                        modifier = Modifier.fillMaxWidth(),
++                    )
++                }
+             }
+         }
+     }
+@@ -1543,16 +1586,17 @@ fun QuickSettingsLayout(
+     tiles: @Composable () -> Unit,
+     media: @Composable () -> Unit,
+     mediaInRow: Boolean,
++    forceShowSlider: Boolean = false,
+ ) {
+     val brightnessSettings = rememberQsBrightnessSettings()
+     val sliderAtTop = brightnessSettings.sliderAtTop
+-    val showSlider = brightnessSettings.showSlider
++    val showSlider = forceShowSlider || brightnessSettings.showSlider != 0
+ 
+     Column(
+         verticalArrangement = spacedBy(dimensionResource(R.dimen.qs_tile_margin_vertical)),
+         horizontalAlignment = Alignment.CenterHorizontally
+     ) {
+-        if (showSlider != 0 && sliderAtTop) {
++        if (showSlider && sliderAtTop) {
+             brightness()
+         }
+ 
+@@ -1568,7 +1612,7 @@ fun QuickSettingsLayout(
+             tiles()
+         }
+ 
+-        if (showSlider != 0 && !sliderAtTop) {
++        if (showSlider && !sliderAtTop) {
+             brightness()
+         }
+ 
+diff --git a/packages/SystemUI/src/com/android/systemui/qs/composefragment/viewmodel/QSFragmentComposeViewModel.kt b/packages/SystemUI/src/com/android/systemui/qs/composefragment/viewmodel/QSFragmentComposeViewModel.kt
+index 6f84cd94d93d..080f00c77928 100644
+--- a/packages/SystemUI/src/com/android/systemui/qs/composefragment/viewmodel/QSFragmentComposeViewModel.kt
++++ b/packages/SystemUI/src/com/android/systemui/qs/composefragment/viewmodel/QSFragmentComposeViewModel.kt
+@@ -18,6 +18,7 @@ package com.android.systemui.qs.composefragment.viewmodel
+ 
+ import android.content.res.Resources
+ import android.graphics.Rect
++import android.media.AudioManager
+ import androidx.annotation.FloatRange
+ import androidx.annotation.VisibleForTesting
+ import androidx.compose.runtime.derivedStateOf
+@@ -30,6 +31,7 @@ import com.android.app.animation.Interpolators
+ import com.android.app.tracing.coroutines.launchTraced as launch
+ import com.android.internal.logging.UiEventLogger
+ import com.android.keyguard.BouncerPanelExpansionCalculator
++import com.android.settingslib.volume.shared.model.AudioStream
+ import com.android.systemui.Dumpable
+ import com.android.systemui.Flags
+ import com.android.systemui.Flags.qsComposeFragmentEarlyExpansion
+@@ -81,6 +83,7 @@ import com.android.systemui.util.kotlin.emitOnStart
+ import com.android.systemui.util.printSection
+ import com.android.systemui.util.println
+ import com.android.systemui.utils.coroutines.flow.conflatedCallbackFlow
++import com.android.systemui.volume.panel.component.volume.slider.ui.viewmodel.AudioStreamSliderViewModel
+ import dagger.assisted.Assisted
+ import dagger.assisted.AssistedFactory
+ import dagger.assisted.AssistedInject
+@@ -120,6 +123,7 @@ constructor(
+     @Named(QS_PANEL) val qsMediaHost: MediaHost,
+     @Named(QSFragmentComposeModule.QS_USING_MEDIA_PLAYER) private val usingMedia: Boolean,
+     private val uiEventLogger: UiEventLogger,
++    audioStreamSliderViewModelFactory: AudioStreamSliderViewModel.Factory,
+     @Assisted private val lifecycleScope: LifecycleCoroutineScope,
+     private val mediaCarouselInteractor: MediaCarouselInteractor,
+     val mediaViewModelFactory: MediaViewModel.Factory,
+@@ -127,6 +131,17 @@ constructor(
+ 
+     val containerViewModel = containerViewModelFactory.create(supportsBrightnessMirroring = true)
+     val quickQuickSettingsViewModel = quickQuickSettingsViewModelFactory.create()
++    val volumeSliderViewModels =
++        if (resources.getBoolean(R.bool.config_useQsMediaVolumeSlider)) {
++            VOLUME_STREAMS.map { stream ->
++                audioStreamSliderViewModelFactory.create(
++                    AudioStreamSliderViewModel.FactoryAudioStreamWrapper(AudioStream(stream)),
++                    lifecycleScope,
++                )
++            }
++        } else {
++            emptyList()
++        }
+ 
+     val qsMediaUiBehavior =
+         MediaUiBehavior(
+@@ -646,6 +661,16 @@ constructor(
+     data class QSExpansionState(@FloatRange(0.0, 1.0) val progress: Float)
+ 
+     companion object {
++        // Match the desktop mixer layout: primary playback first, then communication and alerts.
++        private val VOLUME_STREAMS =
++            listOf(
++                AudioManager.STREAM_MUSIC,
++                AudioManager.STREAM_VOICE_CALL,
++                AudioManager.STREAM_RING,
++                AudioManager.STREAM_NOTIFICATION,
++                AudioManager.STREAM_ALARM,
++            )
++
+         private val EARLY_EXPANSION
+             get() = if (qsComposeFragmentEarlyExpansion()) 1.0E-6F else 0f
+ 
 diff --git a/packages/SystemUI/src/com/android/systemui/qs/panels/data/repository/StockTilesRepository.kt b/packages/SystemUI/src/com/android/systemui/qs/panels/data/repository/StockTilesRepository.kt
 index a2d892c86f4c..f324351db716 100644
 --- a/packages/SystemUI/src/com/android/systemui/qs/panels/data/repository/StockTilesRepository.kt
@@ -2256,6 +2488,26 @@ index b4df2bab6852..bba2dd6a3fb3 100644
              pointerDeviceRepository = pointerDeviceRepository,
              secureLockDeviceInteractor = { secureLockDeviceInteractor },
          )
+diff --git a/packages/SystemUI/tests/utils/src/com/android/systemui/qs/composefragment/viewmodel/QSFragmentComposeViewModelKosmos.kt b/packages/SystemUI/tests/utils/src/com/android/systemui/qs/composefragment/viewmodel/QSFragmentComposeViewModelKosmos.kt
+index a4f0337d4960..07f2d4d86bf5 100644
+--- a/packages/SystemUI/tests/utils/src/com/android/systemui/qs/composefragment/viewmodel/QSFragmentComposeViewModelKosmos.kt
++++ b/packages/SystemUI/tests/utils/src/com/android/systemui/qs/composefragment/viewmodel/QSFragmentComposeViewModelKosmos.kt
+@@ -41,6 +41,7 @@ import com.android.systemui.shade.largeScreenHeaderHelper
+ import com.android.systemui.shade.transition.largeScreenShadeInterpolator
+ import com.android.systemui.statusbar.disableflags.domain.interactor.disableFlagsInteractor
+ import com.android.systemui.statusbar.sysuiStatusBarStateController
++import com.android.systemui.volume.panel.component.volume.slider.ui.viewmodel.audioStreamSliderViewModelFactory
+ 
+ val Kosmos.qsFragmentComposeViewModelFactory by
+     Kosmos.Fixture {
+@@ -70,6 +71,7 @@ val Kosmos.qsFragmentComposeViewModelFactory by
+                     qsMediaHost,
+                     usingMediaInComposeFragment,
+                     uiEventLoggerFake,
++                    audioStreamSliderViewModelFactory,
+                     lifecycleScope,
+                     mediaCarouselInteractor,
+                     mediaViewModelFactory,
 diff --git a/services/core/java/com/android/server/pm/ComputerEngine.java b/services/core/java/com/android/server/pm/ComputerEngine.java
 index 1cc02de121f8..4777c0b94277 100644
 --- a/services/core/java/com/android/server/pm/ComputerEngine.java
