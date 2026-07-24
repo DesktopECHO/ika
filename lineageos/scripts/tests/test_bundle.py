@@ -44,6 +44,7 @@ class BundleTest(unittest.TestCase):
             script = f"""
 set -e
 workspace={root!s}
+build_vulkan_tests=1
 source {BUNDLE_SH!s}
 vulkan_test_outputs_complete {product_out!s} linux-x86
 ! vulkan_test_outputs_complete {product_out!s} linux-arm64

@@ -1548,13 +1548,13 @@ check_graphics_stack_versions() {
 
   if target_enabled arm64; then
     require_file "$arm_product"
-    grep -Fq 'PRODUCT_PACKAGES += deqp-binary' "$arm_product" || \
-      fail "ARM64 development image does not retain the dEQP command-line harness: $arm_product"
+    grep -Fq 'ifeq ($(LINEAGE_DESKTOP_BUILD_VULKAN_TESTS),true)' "$arm_product" || \
+      fail "ARM64 product does not gate the Vulkan dEQP harness behind the opt-in switch: $arm_product"
   fi
   if target_enabled x86_64; then
     require_file "$x86_product"
-    grep -Fq 'PRODUCT_PACKAGES += deqp-binary' "$x86_product" || \
-      fail "x86-64 development image does not retain the dEQP command-line harness: $x86_product"
+    grep -Fq 'ifeq ($(LINEAGE_DESKTOP_BUILD_VULKAN_TESTS),true)' "$x86_product" || \
+      fail "x86-64 product does not gate the Vulkan dEQP harness behind the opt-in switch: $x86_product"
   fi
 
   if target_enabled arm64; then

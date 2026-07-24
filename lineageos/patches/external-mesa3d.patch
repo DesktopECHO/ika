@@ -23,9 +23,9 @@ stride and guest buffer-handle translation and route the Vulkan 1.4 and KHR
 aliases through the same implementation. Let the host fill complete standalone
 driver/ID properties, keep legacy and Properties2 format overrides consistent,
 mask unsupported video and protected-pipeline capabilities, reject attempts to
-enable the masked protected-pipeline feature, emulate LOW/MEDIUM global priority
-while denying privileged requests consistently, and fully unwind partially
-initialized guest/host devices on allocation failures.
+enable the masked protected-pipeline feature, emulate global-priority scheduling
+requests with the host default, and fully unwind partially initialized guest/host
+devices on allocation failures.
 
 Let Soong and Meson generate gfxstream's reserved-marshalling sources from the
 same 26.1.5 Vulkan registry used by the encoder. Carrying an older generated
@@ -8301,7 +8301,7 @@ index c979d699f623718431ec5b319d31768178b34e01..d1ba80b3d24e49a15cb3b565dc1fdfe2
  VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
                                     const VkDeviceCreateInfo* pCreateInfo,
                                     const VkAllocationCallbacks* pAllocator, VkDevice* pDevice) {
-@@ -578,15 +610,69 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
+@@ -578,15 +610,62 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
          mutableSwapchainMaintenance1Features->swapchainMaintenance1 = VK_FALSE;
      }
  
@@ -8341,7 +8341,6 @@ index c979d699f623718431ec5b319d31768178b34e01..d1ba80b3d24e49a15cb3b565dc1fdfe2
 +        localCreateInfo.pQueueCreateInfos = localQueueCreateInfos.data();
 +        std::vector<RemovedPNextStruct> removedPNextStructs;
 +        RemovedPNextStruct removal;
-+        bool unsupportedGlobalPriority = false;
 +        while (remove_pnext_struct(reinterpret_cast<VkBaseOutStructure*>(&localCreateInfo),
 +                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GLOBAL_PRIORITY_QUERY_FEATURES,
 +                                   &removal)) {
@@ -8351,12 +8350,6 @@ index c979d699f623718431ec5b319d31768178b34e01..d1ba80b3d24e49a15cb3b565dc1fdfe2
 +            while (remove_pnext_struct(reinterpret_cast<VkBaseOutStructure*>(&queueCreateInfo),
 +                                       VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO,
 +                                       &removal)) {
-+                const auto* globalPriority =
-+                    reinterpret_cast<const VkDeviceQueueGlobalPriorityCreateInfo*>(removal.removed);
-+                if (globalPriority->globalPriority < VK_QUEUE_GLOBAL_PRIORITY_LOW ||
-+                    globalPriority->globalPriority > VK_QUEUE_GLOBAL_PRIORITY_MEDIUM) {
-+                    unsupportedGlobalPriority = true;
-+                }
 +                removedPNextStructs.push_back(removal);
 +            }
 +        }
@@ -8371,27 +8364,18 @@ index c979d699f623718431ec5b319d31768178b34e01..d1ba80b3d24e49a15cb3b565dc1fdfe2
          std::vector<const char*> filteredExts = filteredDeviceExtensionNames(
              gfxstream_physicalDevice, localCreateInfo.enabledExtensionCount,
              localCreateInfo.ppEnabledExtensionNames);
-@@ -610,18 +696,29 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
+@@ -610,18 +689,22 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
              }
          }
  
--        auto vkEnc = gfxstream::vk::ResourceTracker::getThreadLocalEncoder();
+         auto vkEnc = gfxstream::vk::ResourceTracker::getThreadLocalEncoder();
 -        result = vkEnc->vkCreateDevice(gfxstream_physicalDevice->internal_object, &localCreateInfo,
 -                                       pAllocator, &gfxstream_device->internal_object,
--                                       true /* do lock */);
-+        if (unsupportedGlobalPriority) {
-+            // The guest policy emulates LOW and MEDIUM. HIGH and REALTIME are privileged
-+            // scheduling requests, so consistently deny them instead of depending on which
-+            // priorities the host happens to advertise.
-+            result = VK_ERROR_NOT_PERMITTED_KHR;
-+        } else {
-+            auto vkEnc = gfxstream::vk::ResourceTracker::getThreadLocalEncoder();
-+            result = vkEnc->vkCreateDevice(gfxstream_physicalDevice->internal_object,
-+                                           &localCreateInfo, pAllocator,
-+                                           &gfxstream_device->internal_object,
-+                                           true /* do lock */);
-+            hostDeviceCreated = result == VK_SUCCESS;
-+        }
++        result = vkEnc->vkCreateDevice(gfxstream_physicalDevice->internal_object,
++                                       &localCreateInfo, pAllocator,
++                                       &gfxstream_device->internal_object,
+                                        true /* do lock */);
++        hostDeviceCreated = result == VK_SUCCESS;
 +
 +        for (auto it = removedPNextStructs.rbegin(); it != removedPNextStructs.rend(); ++it) {
 +            restore_pnext_struct(*it);
@@ -8407,7 +8391,7 @@ index c979d699f623718431ec5b319d31768178b34e01..d1ba80b3d24e49a15cb3b565dc1fdfe2
                  mutablePhysicalDeviceGroupProperties->physicalDevices[physDev] =
                      initialPhysicalDeviceList[physDev];
              }
-@@ -638,23 +735,47 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
+@@ -638,23 +721,47 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
  
          result = vk_device_init(&gfxstream_device->vk, &gfxstream_physicalDevice->vk,
                                  &dispatch_table, pCreateInfo, pMesaAllocator);
@@ -8458,7 +8442,7 @@ index c979d699f623718431ec5b319d31768178b34e01..d1ba80b3d24e49a15cb3b565dc1fdfe2
      return result;
  }
  
-@@ -671,6 +792,8 @@ void gfxstream_vk_DestroyDevice(VkDevice device, const VkAllocationCallbacks* pA
+@@ -671,6 +778,8 @@ void gfxstream_vk_DestroyDevice(VkDevice device, const VkAllocationCallbacks* pA
      gfxstream_vk_device_queue_family_fini(gfxstream_device);
  
      auto vkEnc = gfxstream::vk::ResourceTracker::getThreadLocalEncoder();
@@ -8467,7 +8451,7 @@ index c979d699f623718431ec5b319d31768178b34e01..d1ba80b3d24e49a15cb3b565dc1fdfe2
      vkEnc->vkDestroyDevice(gfxstream_device->internal_object, pAllocator, true /* do lock */);
  
      vk_free(alloc, gfxstream_device->queues);
-@@ -726,6 +849,84 @@ VkResult gfxstream_vk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo
+@@ -726,6 +835,84 @@ VkResult gfxstream_vk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo
      return vkAllocateMemory_VkResult_return;
  }
  

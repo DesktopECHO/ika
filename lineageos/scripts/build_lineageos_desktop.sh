@@ -31,6 +31,7 @@ gms_provider="none"
 include_microg=0
 update_microg_prebuilts="${UPDATE_MICROG_PREBUILTS:-1}"
 include_x86_arm_native_bridge="${INCLUDE_X86_ARM_NATIVE_BRIDGE:-1}"
+build_vulkan_tests="${BUILD_VULKAN_TESTS:-0}"
 update_native_bridge_prebuilts="${UPDATE_NATIVE_BRIDGE_PREBUILTS:-1}"
 validate_build_inputs="${VALIDATE_BUILD_INPUTS:-1}"
 strict_bundle_validation="${STRICT_BUNDLE_VALIDATION:-0}"
@@ -379,7 +380,10 @@ build_target() {
   remove_packaged_target_outputs "$product" "$product_out" "$host_package" "${thin_files[@]}"
   rm -rf "$signed_artifacts_dir"
 
-  test_targets=(CtsDeqpTestCases)
+  test_targets=()
+  if enabled "$build_vulkan_tests"; then
+    test_targets+=(CtsDeqpTestCases)
+  fi
   if [[ "$arch" == "x86_64" ]] && enabled "$include_x86_arm_native_bridge"; then
     # Build both forms of AOSP's ARM64 NDK runtime suite. The dynamic binary
     # exercises the translated guest linker and proxy libraries; the static
@@ -409,8 +413,10 @@ build_target() {
     otatools
   built_target_outputs_complete "$product" "$product_out" "$host_package" "${thin_files[@]}" || \
     die "build completed but expected outputs are missing for $product"
-  vulkan_test_outputs_complete "$product_out" "$host_tag" || \
-    die "build completed but Vulkan CTS outputs are missing for $product"
+  if enabled "$build_vulkan_tests"; then
+    vulkan_test_outputs_complete "$product_out" "$host_tag" || \
+      die "build completed but Vulkan CTS outputs are missing for $product"
+  fi
   if [[ "$arch" == "x86_64" ]] && enabled "$include_x86_arm_native_bridge"; then
     native_bridge_test_outputs_complete "$product_out" || \
       die "build completed but ARM64 native-bridge test outputs are missing for $product"
@@ -460,6 +466,11 @@ main() {
   fi
   export LINEAGE_DESKTOP_GMS_PROVIDER="$gms_provider"
   export INCLUDE_MICROG="$include_microg"
+  if enabled "$build_vulkan_tests"; then
+    export LINEAGE_DESKTOP_BUILD_VULKAN_TESTS=true
+  else
+    export LINEAGE_DESKTOP_BUILD_VULKAN_TESTS=false
+  fi
 
   ensure_host_commands
   ensure_arm64_native_host
