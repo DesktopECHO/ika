@@ -1996,9 +1996,9 @@ report_udmabuf_leaks() {
     (( leaked_count > 0 )) || leaked_count=0
     (( leaked_bytes > 0 )) || leaked_bytes=0
     if udmabuf_broker_is_alive; then
-      log "Asahi retained ${leaked_count} udmabuf object(s) ($(format_udmabuf_bytes "${leaked_bytes}")) after Cuttlefish stopped; the persistent broker is preserving these identities for reuse by the next VM. Reboot the host to reclaim the pinned high-water allocation."
+      log_file_only "Asahi retained ${leaked_count} udmabuf object(s) ($(format_udmabuf_bytes "${leaked_bytes}")) after Cuttlefish stopped; the persistent broker is preserving these identities for reuse by the next VM. Reboot the host to reclaim the pinned high-water allocation."
     else
-      log "WARNING: Asahi retained ${leaked_count} udmabuf object(s) ($(format_udmabuf_bytes "${leaked_bytes}")) after Cuttlefish stopped. A host reboot is required to reclaim kernel-pinned memory."
+      log_file_only "WARNING: Asahi retained ${leaked_count} udmabuf object(s) ($(format_udmabuf_bytes "${leaked_bytes}")) after Cuttlefish stopped. A host reboot is required to reclaim kernel-pinned memory."
     fi
   else
     log_file_only "Asahi udmabuf usage returned to baseline: $(format_udmabuf_snapshot "${current}")"
