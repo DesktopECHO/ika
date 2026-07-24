@@ -1291,6 +1291,33 @@ check_no_phone_defaults() {
   return 0
 }
 
+check_user_switcher_defaults() {
+  local resource
+  local resource_name
+  local resource_file
+  local -a resource_files=(
+    "$overlay_dir/overlays/framework-res/res/values/config.xml"
+    "$overlay_dir/overlays/framework-res/res/values-sw600dp/config.xml"
+  )
+  local -a resource_names=(
+    "config_showUserSwitcherByDefault"
+    "config_enableUserSwitcherUponUserCreation"
+  )
+
+  # Both products identify as tablets. Requiring the same false values in the
+  # default and sw600dp configurations prevents framework-res's tablet-specific
+  # true default from winning resource selection on either architecture.
+  for resource_file in "${resource_files[@]}"; do
+    require_file "$resource_file"
+    [[ -f "$resource_file" ]] || continue
+    for resource_name in "${resource_names[@]}"; do
+      resource="<bool name=\"${resource_name}\">false</bool>"
+      grep -Fq "$resource" "$resource_file" || \
+        fail "$resource_name must default to false in $resource_file"
+    done
+  done
+}
+
 # Verify the lunch combos declared in AndroidProducts.mk actually point at
 # product makefiles we ship.
 check_product_makefiles() {
@@ -2105,6 +2132,7 @@ check_webview_prebuilts
 check_native_bridge
 check_desktop_flags
 check_no_phone_defaults
+check_user_switcher_defaults
 check_product_makefiles
 check_zipalign_rom_package
 check_arm64_page_size_product_defaults
