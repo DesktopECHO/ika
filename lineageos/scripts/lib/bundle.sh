@@ -270,9 +270,11 @@ bundle_dir_complete() {
     [[ -e "$bundle_dir/$member" ]] || return 1
   done
 
-  [[ -s "$bundle_dir/testcases/vulkan/CtsDeqpTestCases.apk" ]] || return 1
-  [[ -x "$bundle_dir/testcases/vulkan/deqp-binary" ]] || return 1
-  [[ -s "$bundle_dir/testcases/vulkan/vulkan/amber/api/descriptor_set/descriptor_set_layout_binding/layout_binding_order.amber" ]] || return 1
+  if enabled "${build_vulkan_tests:-0}"; then
+    [[ -s "$bundle_dir/testcases/vulkan/CtsDeqpTestCases.apk" ]] || return 1
+    [[ -x "$bundle_dir/testcases/vulkan/deqp-binary" ]] || return 1
+    [[ -s "$bundle_dir/testcases/vulkan/vulkan/amber/api/descriptor_set/descriptor_set_layout_binding/layout_binding_order.amber" ]] || return 1
+  fi
   if [[ "$arch" == "x86_64" ]] && enabled "${include_x86_arm_native_bridge:-1}"; then
     [[ -x "$bundle_dir/testcases/native_bridge/ndk_program_tests" ]] || return 1
     [[ -x "$bundle_dir/testcases/native_bridge/ndk_program_tests_static" ]] || return 1
@@ -784,8 +786,10 @@ package_cvd_bundle() {
     fi
   done
   "$(thin_provision_images_tool)" "$bundle_dir"
-  copy_vulkan_test_outputs \
-    "$product_out" "$(target_host_tag "$arch")" "$bundle_dir"
+  if enabled "${build_vulkan_tests:-0}"; then
+    copy_vulkan_test_outputs \
+      "$product_out" "$(target_host_tag "$arch")" "$bundle_dir"
+  fi
   if [[ "$arch" == "x86_64" ]] && enabled "${include_x86_arm_native_bridge:-1}"; then
     copy_native_bridge_test_outputs "$product_out" "$bundle_dir"
   fi
