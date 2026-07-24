@@ -63,6 +63,8 @@ Environment:
   INCLUDE_X86_ARM_NATIVE_BRIDGE
                         Enable ARM64 native bridge support for the x86-64 ROM.
                         Default: 1
+  BUILD_VULKAN_TESTS    Build, validate, and bundle the Vulkan CTS/dEQP
+                        diagnostics for either architecture. Default: 0
   UPDATE_NATIVE_BRIDGE_PREBUILTS
                         Download/extract the Google NDK translation payload for
                         x86-64 builds before building. Default: 1
