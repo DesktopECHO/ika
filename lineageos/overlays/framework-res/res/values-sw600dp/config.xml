@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Ika is a tablet-sized desktop product. Match the unqualified defaults
+         so framework-res cannot re-enable user switching via its sw600dp
+         config_showUserSwitcherByDefault=true override. -->
+    <bool name="config_showUserSwitcherByDefault">false</bool>
+    <bool name="config_enableUserSwitcherUponUserCreation">false</bool>
+</resources>
