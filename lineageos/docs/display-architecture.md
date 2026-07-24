@@ -161,10 +161,9 @@ rutabaga_gfx, crosvm, minigbm, and Vulkan-Headers revisions in
 `manifests/lineageos-desktop.xml`. Both guest architectures pin their kernels
 and virtual-device modules to the same Android 16 6.12.74 GKI build; ARM64 also
 pins the corresponding 16 KiB variant.
-ROM builds retain `deqp-binary` and also build the CTS dEQP package. Each final
-Cuttlefish bundle ships `testcases/vulkan/deqp-binary` and
-`testcases/vulkan/CtsDeqpTestCases.apk`, so the active Vulkan path can be
-regression-tested after any graphics update without a separate CTS build.
+ROM builds omit the Vulkan dEQP binary and CTS dEQP package by default.
+Set `BUILD_VULKAN_TESTS=1` to opt in to building and bundling those diagnostics
+for either architecture.
 The x86-64 bundle additionally ships ARM64 static and dynamic NDK suites under
 `testcases/native_bridge/`; `run-tests.sh` verifies every installed translator
 file against the pinned payload manifest, checks the ABI/property contract, and

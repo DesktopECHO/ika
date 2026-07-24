@@ -762,7 +762,7 @@ new file mode 100644
 index 000000000..868258978
 --- /dev/null
 +++ b/ika_arm64/desktop/aosp_cf.mk
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,92 @@
 +#
 +# Copyright (C) 2026 The Android Open Source Project
 +#
@@ -818,9 +818,10 @@ index 000000000..868258978
 +    preinstalled-packages-platform-aosp-product.xml \
 +    ThemePicker
 +
-+# Keep the command-line Vulkan conformance harness in the development ROM so
-+# graphics regressions can be reproduced without rebuilding a test target.
++# Keep Vulkan conformance tests opt-in; release images omit them by default.
++ifeq ($(LINEAGE_DESKTOP_BUILD_VULKAN_TESTS),true)
 +PRODUCT_PACKAGES += deqp-binary
++endif
 +
 +#
 +# All components inherited here go to vendor image
@@ -1096,7 +1097,7 @@ new file mode 100644
 index 000000000..41e06bf4c
 --- /dev/null
 +++ b/ika_x86_64/desktop/aosp_cf.mk
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,86 @@
 +#
 +# Copyright (C) 2026 The Android Open Source Project
 +#
@@ -1152,9 +1153,10 @@ index 000000000..41e06bf4c
 +    preinstalled-packages-platform-aosp-product.xml \
 +    ThemePicker
 +
-+# Keep the command-line Vulkan conformance harness in the development ROM so
-+# graphics regressions can be reproduced without rebuilding a test target.
++# Keep Vulkan conformance tests opt-in; release images omit them by default.
++ifeq ($(LINEAGE_DESKTOP_BUILD_VULKAN_TESTS),true)
 +PRODUCT_PACKAGES += deqp-binary
++endif
 +
 +#
 +# All components inherited here go to vendor image
