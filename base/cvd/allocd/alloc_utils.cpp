@@ -65,11 +65,10 @@ Result<std::string> SearchForNft() {
 // Read upstream DNS servers from the host. Prefers
 // /run/systemd/resolve/resolv.conf (real upstreams written by systemd-resolved)
 // over /etc/resolv.conf, which typically resolves to a loopback stub address
-// (127.0.0.53) unreachable from the VM guest. Falls back to Google DNS.
+// (127.0.0.53) unreachable from the VM guest. Falls back to Google DNS for
+// IPv4, but leaves IPv6 DNS unadvertised if the host has no usable resolver.
 void GetHostDnsServers(std::string& ipv4_servers, std::string& ipv6_servers) {
   static constexpr std::string_view kFallbackV4 = "8.8.8.8,8.8.4.4";
-  static constexpr std::string_view kFallbackV6 =
-      "2001:4860:4860::8888,2001:4860:4860::8844";
   static constexpr const char* kCandidates[] = {
       "/run/systemd/resolve/resolv.conf",
       "/etc/resolv.conf",
@@ -87,8 +86,15 @@ void GetHostDnsServers(std::string& ipv4_servers, std::string& ipv6_servers) {
         continue;
       }
       std::string addr = line.substr(11);
-      // Skip loopback addresses (stub resolvers like 127.0.0.53)
+      // Skip loopback addresses (stub resolvers like 127.0.0.53).
       if (addr.rfind("127.", 0) == 0 || addr == "::1") {
+        continue;
+      }
+      // An IPv6 scope ID refers to an interface in the host network namespace.
+      // It is neither meaningful to the guest nor accepted by dnsmasq in an
+      // IPv6 DHCP option (for example, fe80::1%wlan0). If all host IPv6
+      // resolvers are scoped, omit IPv6 DNS from the guest configuration.
+      if (addr.find('%') != std::string::npos) {
         continue;
       }
       (addr.find(':') != std::string::npos ? v6 : v4).push_back(addr);
@@ -115,7 +121,7 @@ void GetHostDnsServers(std::string& ipv4_servers, std::string& ipv6_servers) {
   };
 
   ipv4_servers = join_at_least_two(v4, kFallbackV4);
-  ipv6_servers = join_at_least_two(v6, kFallbackV6);
+  ipv6_servers = join_at_least_two(v6, std::string_view{});
 }
 
 }  // namespace
@@ -342,19 +348,29 @@ bool StartDnsmasq(std::string_view bridge_name, std::string_view gateway,
   std::string dns_servers, dns6_servers;
   GetHostDnsServers(dns_servers, dns6_servers);
 
-  return Execute(
-             {kDnsmasq, "--port=0", "--strict-order", "--except-interface=lo",
-              absl::StrCat("--interface=", bridge_name),
-              absl::StrCat("--listen-address=", gateway), "--bind-interfaces",
-              absl::StrCat("--dhcp-range=", dhcp_range),
-              absl::StrCat("--dhcp-option=option:dns-server,", dns_servers),
-              absl::StrCat("--dhcp-option=option6:dns-server,", dns6_servers),
-              "--conf-file=",
-              absl::StrCat("--pid-file=", CvdDir(), "/cuttlefish-dnsmasq-",
-                           bridge_name, ".pid"),
-              absl::StrCat("--dhcp-leasefile=", CvdDir(),
-                           "/cuttlefish-dnsmasq-", bridge_name, ".leases"),
-              "--dhcp-no-override"}) == 0;
+  std::vector<std::string> args = {
+      kDnsmasq,
+      "--port=0",
+      "--strict-order",
+      "--except-interface=lo",
+      absl::StrCat("--interface=", bridge_name),
+      absl::StrCat("--listen-address=", gateway),
+      "--bind-interfaces",
+      absl::StrCat("--dhcp-range=", dhcp_range),
+      absl::StrCat("--dhcp-option=option:dns-server,", dns_servers),
+  };
+  if (!dns6_servers.empty()) {
+    args.push_back(
+        absl::StrCat("--dhcp-option=option6:dns-server,", dns6_servers));
+  }
+  args.insert(args.end(),
+              {"--conf-file=",
+               absl::StrCat("--pid-file=", CvdDir(), "/cuttlefish-dnsmasq-",
+                            bridge_name, ".pid"),
+               absl::StrCat("--dhcp-leasefile=", CvdDir(),
+                            "/cuttlefish-dnsmasq-", bridge_name, ".leases"),
+               "--dhcp-no-override"});
+  return Execute(args) == 0;
 }
 
 bool StopDnsmasq(std::string_view name) {
