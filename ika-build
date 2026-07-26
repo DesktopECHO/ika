@@ -41,7 +41,7 @@ privileged_preflight_active=false
 
 usage() {
   cat <<EOF
-Usage: ./ika-build [options] [all|arm64|x86_64]...
+Usage: ./ika-build [all|arm64|x86_64]... [options]
 
 Prepares LineageOS signing certificates, installs build dependencies, builds
 the ROM and host packages, then prints the command needed to install

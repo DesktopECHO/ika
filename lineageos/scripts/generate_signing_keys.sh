@@ -156,7 +156,7 @@ SIGNING_ST="${SIGNING_ST:-ON}"
 SIGNING_L="${SIGNING_L:-Toronto}"
 SIGNING_O="${SIGNING_O:-DesktopECHO}"
 SIGNING_OU="${SIGNING_OU:-Ika}"
-SIGNING_CN="${SIGNING_CN:-LineageOS Virtual Desktop}"
+SIGNING_CN="${SIGNING_CN:-Android Desktop}"
 SIGNING_EMAIL="${SIGNING_EMAIL:-$(default_signing_email)}"
 
 subject_for() {

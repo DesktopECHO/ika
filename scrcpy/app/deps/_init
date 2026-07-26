@@ -47,7 +47,7 @@ cd "$DEPS_DIR"
 
 PATCHES_DIR="$PWD/patches"
 
-WORK_DIR="$PWD/work"
+WORK_DIR="${SCRCPY_DEPS_WORK_DIR:-$PWD/work}"
 SOURCES_DIR="$WORK_DIR/sources"
 BUILD_DIR="$WORK_DIR/build"
 INSTALL_DIR="$WORK_DIR/install"

@@ -1,6 +1,6 @@
 <img width="1920" height="1080" alt="Ika Virtual Desktop" src="https://github.com/user-attachments/assets/ad0213c3-6a9d-45bc-9468-dcdd82abca26" />
 
-# イカ · The LineageOS Virtual Desktop
+# イカ · Ika Virtual Desktop
 
 **Ika** _/ee-kah/_ - Japanese for "cuttlefish" - began as an effort to run the
 [Cuttlefish](https://source.android.com/setup/create/cuttlefish) Android emulator
@@ -11,10 +11,9 @@ The project scope changed over time but the name stuck.
 ## Features
 
 - **LineageOS 23.2** (Android 16) reimagined as a desktop-first operating system.
-- **Dynamic display** window resizing that preserves the configured DPI settings.
+- **Native builds** for **Apple Silicon** or **x86-64** systems with as little as 16 GB RAM.
+- **Dynamic display** window resizing that preserves DPI settings.
 - **Accelerated GPU rendering** with OpenGL ES and Vulkan support.
-- **Native builds on Asahi Linux** and x86-64 systems with as little as 16 GB
-  of RAM.
 - **Flexible build options** for **MindTheGapps**, **microG**, or a fully
   de-Googled ROM without an app store.
 
@@ -43,7 +42,7 @@ application and disk image.
 > [Kisak Mesa PPA](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa)
 > before installing the binary packages.
 
-## Building Ika from Source
+## Build Ika from Source
 
 A successful build requires a minimum of 16GB RAM and 300GB storage.
 The initial build will take 3–6 hours or more, depending on your hardware and internet bandwidth.
@@ -99,8 +98,8 @@ After the initial build, use the narrowest command that matches your changes:
 
 - **Full build** — re-run `./ika-build`, then run the installation command it
   prints. Extra arguments are forwarded to the ROM build, for example
-  `./ika-build x86_64`, `./ika-build --microg arm64`, or
-  `./ika-build --mtg x86_64`. With no arguments, `ika-build` prompts for microG,
+  `./ika-build x86_64`, `./ika-build arm64 --microg`, or
+  `./ika-build x86_64 --mtg`. With no arguments, `ika-build` prompts for microG,
   MindTheGapps, or a de-Googled image without an app store before building the
   host-native ROM.
 - **ROM only** — re-run `./lineageos/scripts/build_lineageos_desktop.sh` (or
@@ -117,6 +116,19 @@ After the initial build, use the narrowest command that matches your changes:
 See [lineageos/README.md](lineageos/README.md) for ROM-build options; provider
 selection, target subsets, microG release pinning, native-bridge sources,
 workspace overrides.
+
+## Window Handling
+
+The clock at the top-left of the console window is also a **hot corner**.
+Click+hold the hot corner to move the console window. If the window is maximized
+or in fullscreen mode, click the hot corner once to return to windowed mode.
+
+Drag the window to the left or right edge of the screen to fill half
+of the desktop, or drag it to the top edge to maximize the window.
+
+Super (Command) + F Switches in and out of fullscreen mode.
+
+Super (Command) + T Switches the title bar on and off.
 
 ## Managing the VM with `ika`
 
@@ -144,7 +156,9 @@ ika restart --gpu_mode=gfxstream --gfxstream_vulkan=on
 
 # Factory reset and use a 128 GB userdata image on the next start
 ika reset --data_gb=128
-ika start
+
+# Game Mode will start Ika fullscreen and enable HID keyboard and mouse
+ika start --game
 
 # Show the built-in usage text
 ika help
@@ -156,16 +170,14 @@ ika help
 Cuttlefish processes. `ika reset` is the destructive variant; it passes
 `--clear_instance_dirs` and removes the local Chromium-install stamp.
 
-By default `ika` uses:
+Default `ika` settings and configuration:
 
 - host tools from `/usr/lib/cuttlefish-common`
 - the packaged LineageOS tree from `/usr/share/cuttlefish-common/lineageos`
 - instance state under `~/ika`
-- a ~64 GB thin-provisioned ext4 userdata image
+- ~64 GB thin-provisioned ext4 userdata image
 - guest vCPUs set to the available/performance-core count minus two, capped at 12
-- guest RAM set to about one quarter of host RAM, rounded to 2 GB steps and
-  capped at 32 GB
-- `gfxstream_guest_angle` GPU acceleration
+- guest RAM set to one quarter of host RAM, capped at 32 GB
 - Ethernet-only guest networking by default; Wi-Fi, Bluetooth, NFC, UWB, GNSS,
   and the modem simulator remain off unless explicitly enabled
 
@@ -173,11 +185,14 @@ By default `ika` uses:
 Android ANGLE over gfxstream Vulkan. Use `gfxstream` to test gfxstream's direct
 OpenGL ES translator, or `guest_swiftshader` as a troubleshooting fallback when
 host GPU acceleration is unavailable. See [GFXSTREAM.md](GFXSTREAM.md) for a
-comparison. The launcher selects EGL's surfaceless platform for gfxstream modes
-so an unavailable X11 display inherited from SSH cannot redirect host-renderer
-initialization. The desktop product also leaves gfxstream's optional
-program-binary link-status feature disabled; shader-source compilation remains
-available and avoids corrupt cached-program rendering in affected games.
+comparison. Use `gfxstream_guest_angle` for games and Vulkan/CTS; mixed
+`gfxstream` mode does not support data-buffer AHardwareBuffers. Gfxstream uses
+surfaceless EGL to avoid SSH/X11 display issues. Program-binary caching stays
+disabled because it corrupts rendering in some games. On RADV hosts, `ika`
+adds `syncshaders` to `RADV_DEBUG` for gfxstream modes. This prevents
+asynchronous host shader compilation from intermittently executing incomplete
+transform-feedback pipelines; existing caller-provided `RADV_DEBUG` options are
+retained. Other Vulkan drivers are unchanged.
 
 Pass `--data_gb=128` to `ika reset` to choose the size, in decimal gigabytes,
 of newly created userdata. The selected size is stored under `~/ika` and takes
@@ -216,13 +231,13 @@ API for applications that support it.
 
 ## Host Packages
 
-The repository currently builds these host package names. On RPM distributions,
+The repository builds the host package names listed below. On RPM distributions,
 outputs land under `rpmbuild/RPMS/`; on Debian-family distributions, outputs
 land under `deb/`. Non-primary packages are moved into an `extras/`
 subdirectory by `tools/buildutils/build_packages.sh`.
 
-- `ika-base` — Core host binaries, networking helpers, system services, and
-  the bundled virtual console used by the `ika` launcher
+- `ika-base` — Core host binaries, networking helpers, system services,
+  and scrcpy-based virtual console used by the `ika` launcher
 - `ika-lineageos` — Bundled `lineageos/` tree installed under
   `/usr/share/cuttlefish-common/lineageos`
 - `ika-user` — Browser-facing operator service
@@ -232,10 +247,7 @@ subdirectory by `tools/buildutils/build_packages.sh`.
 - `ika-metrics` — Metrics transmitter binary
 - `ika-common` — Compatibility metapackage for the primary host packages
 
-For the local workstation workflow, `ika-base` and `ika-lineageos` are the key
-packages; `ika-base` includes the virtual console used by the `ika` launcher. On
-RPM distributions, the specs also provide and obsolete the old `cuttlefish-*`
-package names for upgrades, but newly built package files use the `ika-*` names.
+The majority of users will need only `ika-base` and `ika-lineageos`
 
 ## Notes
 

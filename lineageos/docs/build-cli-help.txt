@@ -63,6 +63,8 @@ Environment:
   INCLUDE_X86_ARM_NATIVE_BRIDGE
                         Enable ARM64 native bridge support for the x86-64 ROM.
                         Default: 1
+  BUILD_VULKAN_TESTS    Build, validate, and bundle the Vulkan CTS/dEQP
+                        diagnostics for either architecture. Default: 0
   UPDATE_NATIVE_BRIDGE_PREBUILTS
                         Download/extract the Google NDK translation payload for
                         x86-64 builds before building. Default: 1
@@ -105,6 +107,9 @@ Environment:
                         native bridge payload.
   NATIVE_BRIDGE_SDK_PACKAGE_SHA1
                         Expected SHA1 for the SDK package. Empty skips checking.
+  NATIVE_BRIDGE_SDK_PACKAGE_SHA256
+                        Expected SHA256 for the SDK package. Empty skips
+                        checking; strongly recommended for overridden packages.
   MICROG_GMSCORE_RELEASE
                         Explicit published GmsCore release tag. When omitted,
                         the newest published non-draft entry is resolved from

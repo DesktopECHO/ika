@@ -11,12 +11,13 @@ preserving the Cuttlefish pieces still needed for boot, graphics, and packaging.
 Host-side AVB key lookup is also pointed at the ROM/product bundle first, so
 the ROM owns its signing keys and empty host placeholders cannot shadow them.
 The patch also carries the generated Soong serializer expected by the pinned
-Cuttlefish snapshot, keeping bootstrap verification reproducible.
+Cuttlefish snapshot, keeping bootstrap verification reproducible. OTA vendor
+post-install metadata follows the board filesystem type so update_engine mounts
+ext4 and EROFS vendor images with the format they were actually built with.
 The Cuttlefish NPU APEX is disabled for this tree because the pinned Cuttlefish
 snapshot is ahead of the platform NPU Rust interface variants available here.
 The Bluetooth service is kept on the offload modules available in this platform
 tree by omitting the newer A2DP offload crate.
-Lavapipe host ICD generation is pointed at this tree's Mesa Vulkan XML module.
 Ika desktop products also disable the newer Bluetooth LPP service instance when
 this platform tree does not provide its socket service binary.
 Desktop SELinux extensions cover expected graphics debug-property reads and
@@ -31,6 +32,10 @@ snd-aloop is excluded from the boot ramdisks on both architectures so
 virtio-snd enumerates as ALSA card 0: the generic AIDL audio HAL plays to
 card 0/device 0 by default, and a first-stage-loaded loopback card would
 silently swallow the guest audio meant for the host virtio-snd server.
+The primary audio policy also omits Cuttlefish's VTS-only MMAP ports. Modern
+AIDL audio HALs derive MMAP availability from those routes and ignore the
+legacy aaudio.mmap_policy properties, so removing the routes keeps games on
+the functional legacy mixer that feeds virtio-snd.
 ADB host exposure is loopback-only while user builds keep guest TCP ADB
 available without interactive key authorization.
 
@@ -203,11 +208,50 @@ index 8416f0f40..437b56902 100644
  
  // Graphics default parameters
  #define CF_DEFAULTS_HWCOMPOSER cuttlefish::kHwComposerAuto
+diff --git a/shared/config/audio/policy/primary_audio_policy_configuration.xml b/shared/config/audio/policy/primary_audio_policy_configuration.xml
+index 5fb3da7a2..f393a0996 100644
+--- a/shared/config/audio/policy/primary_audio_policy_configuration.xml
++++ b/shared/config/audio/policy/primary_audio_policy_configuration.xml
+@@ -42,21 +42,11 @@
+                      samplingRates="44100 48000"
+                      channelMasks="AUDIO_CHANNEL_OUT_MONO AUDIO_CHANNEL_OUT_STEREO"/>
+         </mixPort>
+-        <mixPort name="mmap_no_irq_out" role="source" flags="AUDIO_OUTPUT_FLAG_DIRECT AUDIO_OUTPUT_FLAG_MMAP_NOIRQ">
+-             <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
+-                      samplingRates="44100 48000"
+-                      channelMasks="AUDIO_CHANNEL_OUT_STEREO"/>
+-        </mixPort>
+         <mixPort name="primary input" role="sink">
+             <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
+                      samplingRates="8000 11025 16000 32000 44100 48000"
+                      channelMasks="AUDIO_CHANNEL_IN_MONO AUDIO_CHANNEL_IN_STEREO"/>
+         </mixPort>
+-        <mixPort name="mmap_no_irq_in" role="sink" flags="AUDIO_INPUT_FLAG_MMAP_NOIRQ">
+-            <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
+-                             samplingRates="44100 48000"
+-                             channelMasks="AUDIO_CHANNEL_IN_MONO AUDIO_CHANNEL_IN_STEREO"/>
+-        </mixPort>
+         <mixPort name="telephony_tx" role="source">
+             <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
+                      samplingRates="8000 11025 16000 32000 44100 48000"
+@@ -93,11 +83,9 @@
+     </devicePorts>
+     <routes>
+         <route type="mix" sink="Speaker"
+-               sources="primary output,compressed_offload,mmap_no_irq_out"/>
++               sources="primary output,compressed_offload"/>
+         <route type="mix" sink="primary input"
+                sources="Built-In Mic"/>
+-        <route type="mix" sink="mmap_no_irq_in"
+-               sources="Built-In Mic"/>
+ 
+         <route type="mix" sink="telephony_rx"
+                sources="Telephony Rx"/>
 diff --git a/shared/device.mk b/shared/device.mk
-index b31638ad7..c9b0a1302 100644
+index ae0341029..7be66d4a7 100644
 --- a/shared/device.mk
 +++ b/shared/device.mk
-@@ -45,7 +45,7 @@ PRODUCT_FS_COMPRESSION := 1
+@@ -41,7 +41,7 @@ PRODUCT_FS_COMPRESSION := 1
  TARGET_RO_FILE_SYSTEM_TYPE ?= erofs
  BOARD_EROFS_COMPRESS_HINTS := device/google/cuttlefish/shared/erofs_compress_hints.txt
  TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE ?= f2fs
@@ -216,7 +260,30 @@ index b31638ad7..c9b0a1302 100644
  
  TARGET_VULKAN_SUPPORT ?= true
  
-@@ -485,13 +485,16 @@ PRODUCT_PACKAGES += \
+@@ -133,7 +133,7 @@ AB_OTA_POSTINSTALL_CONFIG += \
+ AB_OTA_POSTINSTALL_CONFIG += \
+     RUN_POSTINSTALL_vendor=true \
+     POSTINSTALL_PATH_vendor=bin/checkpoint_gc \
+-    FILESYSTEM_TYPE_vendor=erofs \
++    FILESYSTEM_TYPE_vendor=$(BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE) \
+     POSTINSTALL_OPTIONAL_vendor=true
+ 
+ # Userdata Checkpointing OTA GC
+@@ -300,8 +300,11 @@ LOCAL_AUDIO_PRODUCT_PACKAGE += \
+ PRODUCT_SYSTEM_EXT_PROPERTIES += \
+     ro.audio.ihaladaptervendorextension_enabled=true
++# CVD's MMAP endpoint is a VTS-only DSP simulator and does not feed virtio-snd.
++# Legacy HALs read these properties; the AIDL HAL is also prevented from
++# advertising MMAP by the product audio policy configuration.
+ PRODUCT_PRODUCT_PROPERTIES += \
+-    aaudio.mmap_policy=2 \
+-    aaudio.mmap_exclusive_policy=2 \
++    aaudio.mmap_policy=1 \
++    aaudio.mmap_exclusive_policy=1 \
+     aaudio.hw_burst_min_usec=2000
+ endif
+ 
+@@ -485,13 +488,16 @@ PRODUCT_PACKAGES += \
  # NPU HAL
  #
  ifeq ($(RELEASE_AIDL_USE_UNFROZEN),true)
@@ -311,29 +378,6 @@ index 782ca1d27..2b73866f4 100644
      src: ":manifest_android.hardware.bluetooth.socket-service.lpp.xml",
      sub_dir: "vintf",
      installable: false,
-diff --git a/build/Android.bp b/build/Android.bp
---- a/build/Android.bp
-+++ b/build/Android.bp
-@@ -471,7 +471,7 @@ cvd_host_swiftshader_files = [
- genrule {
-     name: "vk_lavapipe_icd.cf.json",
-     srcs: [
--        ":vk_api_xml",
-+        ":mesa_vulkan_xml",
-     ],
-     out: [
-         "vk_lavapipe_icd.cf.json",
-@@ -479,7 +479,7 @@ genrule {
-     tools: [
--        "vk_icd_py_binary",
-+        "vk_icd_gen",
-     ],
--    cmd: "python3 $(location vk_icd_py_binary) --api-version 1.4 --xml $(location :vk_api_xml) " +
--        "--icd-lib-path ../../../../lib64 --icd-filename vulkan.lvp.so --out $(location vk_lavapipe_icd.cf.json)",
-+    cmd: "python3 $(location vk_icd_gen) --api-version 1.4 --xml $(location :mesa_vulkan_xml) " +
-+        "--lib-path ../../../../lib64/vulkan.lvp.so --out $(location vk_lavapipe_icd.cf.json)",
- }
-
 diff --git a/shared/desktop/android-info.txt b/shared/desktop/android-info.txt
 new file mode 100644
 index 000000000..fcd665dc4
@@ -715,10 +759,10 @@ index 000000000..9f7af06cb
 +BOARD_KERNEL_MODULES_16K := $(filter-out %/snd-aloop.ko,$(BOARD_KERNEL_MODULES_16K))
 diff --git a/ika_arm64/desktop/aosp_cf.mk b/ika_arm64/desktop/aosp_cf.mk
 new file mode 100644
-index 000000000..5ef2f3b56
+index 000000000..868258978
 --- /dev/null
 +++ b/ika_arm64/desktop/aosp_cf.mk
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,92 @@
 +#
 +# Copyright (C) 2026 The Android Open Source Project
 +#
@@ -774,6 +818,11 @@ index 000000000..5ef2f3b56
 +    preinstalled-packages-platform-aosp-product.xml \
 +    ThemePicker
 +
++# Keep Vulkan conformance tests opt-in; release images omit them by default.
++ifeq ($(LINEAGE_DESKTOP_BUILD_VULKAN_TESTS),true)
++PRODUCT_PACKAGES += deqp-binary
++endif
++
 +#
 +# All components inherited here go to vendor image
 +#
@@ -806,9 +855,6 @@ index 000000000..5ef2f3b56
 +PRODUCT_16K_DEVELOPER_OPTION := true
 +
 +TARGET_BOOTS_16K := true
-+
-+# Ignore all Android.mk files
-+PRODUCT_IGNORE_ALL_ANDROIDMK := true
 diff --git a/host/libs/vm_manager/crosvm_manager.cpp b/host/libs/vm_manager/crosvm_manager.cpp
 index e82db4277..7f572b53b 100644
 --- a/host/libs/vm_manager/crosvm_manager.cpp
@@ -1048,10 +1094,10 @@ index 000000000..fb1c2783f
 +BOARD_KERNEL_MODULES_16K := $(filter-out %/snd-aloop.ko,$(BOARD_KERNEL_MODULES_16K))
 diff --git a/ika_x86_64/desktop/aosp_cf.mk b/ika_x86_64/desktop/aosp_cf.mk
 new file mode 100644
-index 000000000..b8785171f
+index 000000000..41e06bf4c
 --- /dev/null
 +++ b/ika_x86_64/desktop/aosp_cf.mk
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,86 @@
 +#
 +# Copyright (C) 2026 The Android Open Source Project
 +#
@@ -1107,6 +1153,11 @@ index 000000000..b8785171f
 +    preinstalled-packages-platform-aosp-product.xml \
 +    ThemePicker
 +
++# Keep Vulkan conformance tests opt-in; release images omit them by default.
++ifeq ($(LINEAGE_DESKTOP_BUILD_VULKAN_TESTS),true)
++PRODUCT_PACKAGES += deqp-binary
++endif
++
 +#
 +# All components inherited here go to vendor image
 +#
@@ -1133,6 +1184,3 @@ index 000000000..b8785171f
 +    ro.surface_flinger.force_present_timestamp=true \
 +    ro.soc.manufacturer=$(PRODUCT_MANUFACTURER) \
 +    ro.soc.model=$(PRODUCT_DEVICE)
-+
-+# Ignore all Android.mk files
-+PRODUCT_IGNORE_ALL_ANDROIDMK := true

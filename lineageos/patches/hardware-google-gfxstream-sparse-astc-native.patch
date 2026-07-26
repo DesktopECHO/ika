@@ -1,0 +1,73 @@
+Patch summary:
+Keep sparse compressed images on the host driver's native Vulkan path.  The
+compressed-texture emulation path replaces one guest image with an output image
+and private mip images; sparse residency binds only describe the guest-visible
+image and therefore cannot bind the private emulation images correctly.
+
+Sparse-format capability queries already pass through to the host.  Apply the
+same policy to legacy/Properties2 image-format queries, device image-memory
+requirements, and image creation.  Hosts with native sparse ASTC continue to
+work, hosts without it report the native unsupported result, and non-sparse
+compressed images retain the existing emulation path.
+
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index 69f5be00..8aa12497 100644
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -177,6 +177,16 @@ static constexpr uint32_t kMinVersion = VK_MAKE_VERSION(1, 0, 0);
+ static constexpr uint64_t kPageSizeforBlob = 4096;
+ static constexpr uint64_t kPageMaskForBlob = ~(0xfff);
+ 
++// Compressed-texture emulation expands one guest image into several host images. Sparse binds
++// describe only the guest-visible image, so sparse compressed images require the native path.
++static constexpr VkImageCreateFlags kSparseImageCreateFlags =
++    VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT |
++    VK_IMAGE_CREATE_SPARSE_ALIASED_BIT;
++
++static bool usesSparseImageBinding(VkImageCreateFlags flags) {
++    return (flags & kSparseImageCreateFlags) != 0;
++}
++
+ static std::atomic<uint64_t> sNextHostBlobId{1};
+ static std::atomic<uint64_t> sUniqueShmemId = 0;
+ 
+@@ -1486,7 +1494,8 @@ class VkDecoderGlobalState::Impl {
+         VkImageFormatProperties* pImageFormatProperties) {
+         auto physicalDevice = unbox_VkPhysicalDevice(boxed_physicalDevice);
+         auto vk = dispatch_VkPhysicalDevice(boxed_physicalDevice);
+-        const bool emulatedTexture = isEmulatedCompressedTexture(format, physicalDevice, vk);
++        const bool emulatedTexture = !usesSparseImageBinding(flags) &&
++                                     isEmulatedCompressedTexture(format, physicalDevice, vk);
+         if (emulatedTexture) {
+             if (!supportEmulatedCompressedImageFormatProperty(format, type, tiling, usage, flags)) {
+                 memset(pImageFormatProperties, 0, sizeof(VkImageFormatProperties));
+@@ -1518,7 +1527,8 @@ class VkDecoderGlobalState::Impl {
+         auto vk = dispatch_VkPhysicalDevice(boxed_physicalDevice);
+         VkPhysicalDeviceImageFormatInfo2 imageFormatInfo;
+         VkFormat format = pImageFormatInfo->format;
+-        const bool emulatedTexture = isEmulatedCompressedTexture(format, physicalDevice, vk);
++        const bool emulatedTexture = !usesSparseImageBinding(pImageFormatInfo->flags) &&
++                                     isEmulatedCompressedTexture(format, physicalDevice, vk);
+         if (emulatedTexture) {
+             if (!supportEmulatedCompressedImageFormatProperty(
+                     pImageFormatInfo->format, pImageFormatInfo->type, pImageFormatInfo->tiling,
+@@ -2563,7 +2573,8 @@ class VkDecoderGlobalState::Impl {
+             return;
+         }
+ 
+-        needDecompression = deviceInfo->needEmulatedDecompression(format);
++        needDecompression = !usesSparseImageBinding(pInfo->pCreateInfo->flags) &&
++                            deviceInfo->needEmulatedDecompression(format);
+         if (!needDecompression) {
+             // No modifications needed
+             return;
+@@ -2941,7 +2952,8 @@ class VkDecoderGlobalState::Impl {
+         }
+ #endif
+ 
+-        const bool needDecompression = deviceInfo->needEmulatedDecompression(pCreateInfo->format);
++        const bool needDecompression = !usesSparseImageBinding(pCreateInfo->flags) &&
++                                       deviceInfo->needEmulatedDecompression(pCreateInfo->format);
+         std::unique_ptr<CompressedImageInfo> cmpInfo = nullptr;
+         VkImageCreateInfo decompInfo;
+         if (needDecompression) {

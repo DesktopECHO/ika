@@ -259,8 +259,9 @@ PY
 }
 
 bundle_dir_complete() {
-  local bundle_dir="$1"
-  shift
+  local arch="$1"
+  local bundle_dir="$2"
+  shift 2
 
   [[ -d "$bundle_dir" ]] || return 1
 
@@ -269,7 +270,218 @@ bundle_dir_complete() {
     [[ -e "$bundle_dir/$member" ]] || return 1
   done
 
+  if enabled "${build_vulkan_tests:-0}"; then
+    [[ -s "$bundle_dir/testcases/vulkan/CtsDeqpTestCases.apk" ]] || return 1
+    [[ -x "$bundle_dir/testcases/vulkan/deqp-binary" ]] || return 1
+    [[ -s "$bundle_dir/testcases/vulkan/vulkan/amber/api/descriptor_set/descriptor_set_layout_binding/layout_binding_order.amber" ]] || return 1
+  fi
+  if [[ "$arch" == "x86_64" ]] && enabled "${include_x86_arm_native_bridge:-1}"; then
+    [[ -x "$bundle_dir/testcases/native_bridge/ndk_program_tests" ]] || return 1
+    [[ -x "$bundle_dir/testcases/native_bridge/ndk_program_tests_static" ]] || return 1
+    [[ -x "$bundle_dir/testcases/native_bridge/run-tests.sh" ]] || return 1
+    [[ -s "$bundle_dir/testcases/native_bridge/manifest.json" ]] || return 1
+  fi
+
+  python3 - "$bundle_dir/build-info.json" "${IKA_SOURCE_COMMIT:-}" <<'PY' || return 1
+import json
+import pathlib
+import re
+import sys
+
+metadata = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+actual = metadata.get("ika", {}).get("source_commit", "")
+expected = sys.argv[2]
+if re.fullmatch(r"[0-9a-f]{40}", actual) is None:
+    raise SystemExit(1)
+if expected and actual != expected:
+    raise SystemExit(1)
+PY
+
   desktop_android_info_selects_tablet "$bundle_dir/android-info.txt"
+}
+
+vulkan_test_apk() {
+  local product_out="$1"
+  local host_tag="$2"
+  local apk
+
+  # Older trees staged the CTS APK beside the product testcases. Android 16
+  # stages the architecture-independent APK in the host CTS directory while
+  # keeping deqp-binary in the product output. Accept the legacy location, but
+  # prefer the host directory belonging to this build architecture.
+  apk="$(find "$product_out/testcases/com.drawelements.deqp" -type f \
+    -name 'com.drawelements.deqp.apk' -print -quit 2>/dev/null || true)"
+  if [[ -z "$apk" ]]; then
+    apk="$(find "$workspace/out/host/$host_tag/testcases/CtsDeqpTestCases" \
+      -type f -name 'com.drawelements.deqp.apk' -print -quit \
+      2>/dev/null || true)"
+  fi
+  printf '%s\n' "$apk"
+}
+
+vulkan_test_resources() {
+  local host_tag="$1"
+  local resources="$workspace/out/host/$host_tag/testcases/CtsDeqpTestCases/vulkan"
+
+  [[ -d "$resources" ]] || return 1
+  printf '%s\n' "$resources"
+}
+
+vulkan_test_outputs_complete() {
+  local product_out="$1"
+  local host_tag="$2"
+  local apk binary resources
+
+  apk="$(vulkan_test_apk "$product_out" "$host_tag")"
+  binary="$(find "$product_out/testcases/deqp-binary" -type f \
+    -name 'deqp-binary*' -print -quit 2>/dev/null || true)"
+  resources="$(vulkan_test_resources "$host_tag" 2>/dev/null || true)"
+
+  [[ -n "$apk" && -s "$apk" && -n "$binary" && -s "$binary" && -x "$binary" ]] || return 1
+  [[ -n "$resources" && \
+     -s "$resources/amber/api/descriptor_set/descriptor_set_layout_binding/layout_binding_order.amber" ]]
+}
+
+native_bridge_test_outputs_complete() {
+  local product_out="$1"
+  local dynamic static
+
+  dynamic="$(find "$product_out/testcases/ndk_program_tests.native_bridge" -type f \
+    -name ndk_program_tests -print -quit 2>/dev/null || true)"
+  static="$(find "$product_out/testcases/ndk_program_tests_static.native_bridge" -type f \
+    -name ndk_program_tests_static -print -quit 2>/dev/null || true)"
+
+  [[ -n "$dynamic" && -s "$dynamic" && -x "$dynamic" ]] || return 1
+  [[ -n "$static" && -s "$static" && -x "$static" ]] || return 1
+
+  # Despite the x86_64 test-suite directory used by Tradefed, these must be
+  # ARM64 guest executables. Shipping a native x86 test here would give a false
+  # green result without ever entering libndk_translation.
+  local readelf_bin
+  readelf_bin="$(command -v llvm-readelf || command -v readelf || true)"
+  [[ -n "$readelf_bin" ]] || return 1
+  "$readelf_bin" -h "$dynamic" 2>/dev/null | grep -Eq 'Machine:[[:space:]]+AArch64' || return 1
+  "$readelf_bin" -h "$static" 2>/dev/null | grep -Eq 'Machine:[[:space:]]+AArch64' || return 1
+}
+
+native_bridge_image_outputs_complete() {
+  local product_out="$1"
+  local required
+
+  for required in \
+    system/bin/arm64/app_process64 \
+    system/bin/arm64/linker64 \
+    system/bin/ndk_translation_program_runner_binfmt_misc_arm64 \
+    system/etc/cpuinfo.arm64.txt \
+    system/etc/berberis/cpuinfo.arm64.txt \
+    system/etc/binfmt_misc/arm64_dyn \
+    system/etc/binfmt_misc/arm64_exe \
+    system/etc/init/ndk_translation.rc \
+    system/etc/ld.config.arm64.txt \
+    system/lib64/libndk_translation.so \
+    system/lib64/libndk_translation_proxy_libEGL.so \
+    system/lib64/libndk_translation_proxy_libGLESv2.so \
+    system/lib64/libndk_translation_proxy_libandroid.so \
+    system/lib64/libndk_translation_proxy_libc.so \
+    system/lib64/libndk_translation_proxy_libm.so \
+    system/lib64/libndk_translation_proxy_libnativewindow.so \
+    system/lib64/libndk_translation_proxy_libvulkan.so \
+    system/lib64/arm64/libEGL.so \
+    system/lib64/arm64/libGLESv2.so \
+    system/lib64/arm64/libandroid.so \
+    system/lib64/arm64/libc.so \
+    system/lib64/arm64/libdl.so \
+    system/lib64/arm64/libm.so \
+    system/lib64/arm64/libnativewindow.so \
+    system/lib64/arm64/libvulkan.so
+  do
+    [[ -s "$product_out/$required" ]] || return 1
+  done
+
+  grep -Eq '(^|,)arm64-v8a(,|$)' "$product_out/system/build.prop" || return 1
+  local product_properties="$product_out/product/etc/build.prop"
+  grep -q '^ro.dalvik.vm.native.bridge=libndk_translation.so$' \
+    "$product_properties" || return 1
+  grep -q '^ro.dalvik.vm.isa.arm64=x86_64$' "$product_properties" || return 1
+  grep -q '^ro.enable.native.bridge.exec=1$' "$product_properties" || return 1
+
+  native_bridge_image_outputs_match_manifest "$product_out"
+}
+
+native_bridge_image_outputs_match_manifest() {
+  local product_out="$1"
+  local manifest="${2:-$workspace/vendor/lineage_desktop/prebuilts/native_bridge/manifest.json}"
+
+  [[ -s "$manifest" ]] || {
+    printf '[lineage-desktop] native-bridge manifest is missing: %s\n' "$manifest" >&2
+    return 1
+  }
+
+  python3 - "$manifest" "$product_out/system" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+manifest_path = Path(sys.argv[1])
+installed_root = Path(sys.argv[2])
+
+try:
+    manifest = json.loads(manifest_path.read_text())
+except (OSError, json.JSONDecodeError) as exc:
+    print(
+        f"[lineage-desktop] invalid native-bridge manifest {manifest_path}: {exc}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+if manifest.get("format_version") != 1 or not isinstance(manifest.get("files"), list):
+    print(
+        f"[lineage-desktop] unsupported native-bridge manifest: {manifest_path}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+for entry in manifest["files"]:
+    try:
+        relpath = entry["path"]
+        expected_size = entry["size"]
+        expected_digest = entry["sha256"]
+    except (KeyError, TypeError):
+        print("[lineage-desktop] malformed native-bridge manifest entry", file=sys.stderr)
+        raise SystemExit(1)
+
+    parts = Path(relpath).parts
+    if not relpath or relpath.startswith("/") or ".." in parts:
+        print(f"[lineage-desktop] unsafe native-bridge path: {relpath!r}", file=sys.stderr)
+        raise SystemExit(1)
+
+    installed = installed_root / relpath
+    if not installed.is_file():
+        print(f"[lineage-desktop] native-bridge output is missing: {installed}", file=sys.stderr)
+        raise SystemExit(1)
+    actual_size = installed.stat().st_size
+    if actual_size != expected_size:
+        print(
+            f"[lineage-desktop] native-bridge output size mismatch: {installed} "
+            f"(manifest={expected_size} installed={actual_size})",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    digest = hashlib.sha256()
+    with installed.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    actual_digest = digest.hexdigest()
+    if actual_digest != expected_digest:
+        print(
+            f"[lineage-desktop] native-bridge output digest mismatch: {installed} "
+            f"(manifest={expected_digest} installed={actual_digest})",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+PY
 }
 
 built_target_outputs_complete() {
@@ -368,6 +580,7 @@ write_release_metadata() {
   [[ -x "$metadata_script" ]] || die "missing release metadata writer: $metadata_script"
 
   local -a metadata_args=(
+    --ika-root "$ika_root"
     --android-root "$workspace"
     --overlay-dir "$workspace/vendor/lineage_desktop"
     --product-out "$product_out"
@@ -478,6 +691,64 @@ copy_bundle_file_thin() {
   chmod 0644 "$dest"
 }
 
+copy_vulkan_test_outputs() {
+  local product_out="$1"
+  local host_tag="$2"
+  local bundle_dir="$3"
+  local apk binary resources test_dir
+
+  vulkan_test_outputs_complete "$product_out" "$host_tag" || \
+    die "missing Vulkan CTS outputs for $product_out ($host_tag)"
+
+  apk="$(vulkan_test_apk "$product_out" "$host_tag")"
+  binary="$(find "$product_out/testcases/deqp-binary" -type f \
+    -name 'deqp-binary*' -print -quit)"
+  resources="$(vulkan_test_resources "$host_tag")"
+  test_dir="$bundle_dir/testcases/vulkan"
+  mkdir -p "$test_dir"
+
+  # Keep the established CTS artifact name in the release bundle even though
+  # current Android branches name the device-side module
+  # com.drawelements.deqp.apk.
+  copy_bundle_file_thin "$apk" "$test_dir/CtsDeqpTestCases.apk"
+  cp --reflink=auto --sparse=always --preserve=timestamps -- "$binary" \
+    "$test_dir/deqp-binary"
+  chmod 0755 "$test_dir/deqp-binary"
+  cp -a --reflink=auto --preserve=timestamps -- "$resources" "$test_dir/vulkan"
+}
+
+copy_native_bridge_test_outputs() {
+  local product_out="$1"
+  local bundle_dir="$2"
+  local dynamic static test_dir manifest
+
+  native_bridge_test_outputs_complete "$product_out" || \
+    die "missing ARM64 native-bridge test outputs under $product_out/testcases"
+  native_bridge_image_outputs_complete "$product_out" || \
+    die "incomplete ARM64 native-bridge runtime under $product_out/system"
+
+  dynamic="$(find "$product_out/testcases/ndk_program_tests.native_bridge" -type f \
+    -name ndk_program_tests -print -quit)"
+  static="$(find "$product_out/testcases/ndk_program_tests_static.native_bridge" -type f \
+    -name ndk_program_tests_static -print -quit)"
+  manifest="$workspace/vendor/lineage_desktop/prebuilts/native_bridge/manifest.json"
+  [[ -s "$manifest" ]] || die "missing native-bridge payload manifest: $manifest"
+
+  test_dir="$bundle_dir/testcases/native_bridge"
+  mkdir -p "$test_dir"
+  cp --reflink=auto --sparse=always --preserve=timestamps -- "$dynamic" \
+    "$test_dir/ndk_program_tests"
+  cp --reflink=auto --sparse=always --preserve=timestamps -- "$static" \
+    "$test_dir/ndk_program_tests_static"
+  cp --preserve=timestamps -- \
+    "$script_dir/smoke_native_bridge.sh" "$test_dir/run-tests.sh"
+  copy_bundle_file_thin "$manifest" "$test_dir/manifest.json"
+  chmod 0755 \
+    "$test_dir/ndk_program_tests" \
+    "$test_dir/ndk_program_tests_static" \
+    "$test_dir/run-tests.sh"
+}
+
 package_cvd_bundle() {
   local arch="$1"
   local product="$2"
@@ -515,6 +786,13 @@ package_cvd_bundle() {
     fi
   done
   "$(thin_provision_images_tool)" "$bundle_dir"
+  if enabled "${build_vulkan_tests:-0}"; then
+    copy_vulkan_test_outputs \
+      "$product_out" "$(target_host_tag "$arch")" "$bundle_dir"
+  fi
+  if [[ "$arch" == "x86_64" ]] && enabled "${include_x86_arm_native_bridge:-1}"; then
+    copy_native_bridge_test_outputs "$product_out" "$bundle_dir"
+  fi
 
   (( copied > 0 )) || die "no image files were copied from $product_out"
   desktop_android_info_selects_tablet "$bundle_dir/android-info.txt" || \

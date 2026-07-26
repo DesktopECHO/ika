@@ -1,5 +1,5 @@
 Name:           ika-base
-Version:        260713
+Version:        260726
 Release:        1%{?dist}
 Summary:        Cuttlefish Android Virtual Device host packages for Fedora
 License:        Apache-2.0
@@ -28,6 +28,7 @@ BuildRequires:  libXext-devel
 BuildRequires:  libcurl-devel
 # Accept either Fedora's FFmpeg-free headers or RPM Fusion's FFmpeg headers.
 BuildRequires:  pkgconfig(libavdevice)
+BuildRequires:  pkgconfig(libv4l2)
 BuildRequires:  libcap-devel
 BuildRequires:  libdrm-devel
 BuildRequires:  libicu-devel
@@ -511,6 +512,16 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/lib/cuttlefish-metrics
 
 %changelog
+* Sun Jul 26 2026 DesktopECHO <build@desktopecho.com> - 260726-1
+- Update Ika host package metadata to 260726-1.
+
+* Mon Jul 20 2026 DesktopECHO <build@desktopecho.com> - 260720-1
+- Upgrade bundled host Lavapipe to Mesa 26.1.5 and validate the Vulkan ICD.
+- Keep scrcpy and crosvm compatible with either Fedora or RPM Fusion FFmpeg.
+
+* Sun Jul 19 2026 DesktopECHO <build@desktopecho.com> - 260719-1
+- Update Ika host package metadata to 260719-1.
+
 * Mon Jul 13 2026 DesktopECHO <build@desktopecho.com> - 260713-1
 - Update Ika host package metadata to 260713-1.
 
