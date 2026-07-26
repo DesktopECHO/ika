@@ -433,6 +433,12 @@ check_userdata_policy() {
   grep -Eq '^[[:space:]]*TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE[[:space:]]*:=[[:space:]]*ext4[[:space:]]*$' "$x86_board" || \
     fail "x86-64 userdata is not ext4 in $x86_board"
 
+  # update_engine mounts each post-install partition using this metadata. Keep
+  # it tied to BoardConfig so ext4 desktop vendor images are never mislabeled
+  # as EROFS (which fails after an otherwise complete A/B payload write).
+  grep -Fq 'FILESYSTEM_TYPE_vendor=$(BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE)' "$shared_device" || \
+    fail "vendor OTA post-install filesystem type does not follow BoardConfig in $shared_device"
+
   if grep -R --include='*.mk' --include='BoardConfig*.mk' \
       --exclude-dir='.git' --exclude-dir='out' --exclude-dir='src' \
       -E '^[[:space:]]*TARGET_USERDATAIMAGE_PARTITION_SIZE[[:space:]]*:=' \
@@ -1090,6 +1096,7 @@ check_native_bridge() {
     "$system/bin/ndk_translation_program_runner_binfmt_misc_arm64" \
     "$system/etc/binfmt_misc/arm64_dyn" \
     "$system/etc/binfmt_misc/arm64_exe" \
+    "$system/etc/cpuinfo.arm64.txt" \
     "$system/etc/berberis/cpuinfo.arm64.txt" \
     "$system/etc/init/ndk_translation.rc" \
     "$system/etc/ld.config.arm64.txt" \
@@ -1125,13 +1132,21 @@ check_native_bridge() {
     require_file "$system/lib64/libndk_translation_proxy_${proxy}.so"
   done
 
-  grep -aq '/system/etc/berberis/cpuinfo.arm64.txt' \
-    "$system/lib64/libndk_translation.so" || \
-    fail "native bridge runtime does not use the packaged ARM64 CPU description"
-  grep -q '^processor[[:space:]]*:' "$system/etc/berberis/cpuinfo.arm64.txt" || \
+  local runtime_cpuinfo
+  if grep -aq '/system/etc/cpuinfo.arm64.txt' "$system/lib64/libndk_translation.so"; then
+    runtime_cpuinfo="$system/etc/cpuinfo.arm64.txt"
+  elif grep -aq '/system/etc/berberis/cpuinfo.arm64.txt' \
+    "$system/lib64/libndk_translation.so"; then
+    runtime_cpuinfo="$system/etc/berberis/cpuinfo.arm64.txt"
+  else
+    fail "native bridge runtime does not use a packaged ARM64 CPU description"
+    runtime_cpuinfo="$system/etc/berberis/cpuinfo.arm64.txt"
+  fi
+  [[ -s "$runtime_cpuinfo" ]] || fail "native bridge ARM64 CPU description is missing"
+  grep -q '^processor[[:space:]]*:' "$runtime_cpuinfo" || \
     fail "ARM64 native bridge CPU description has no processors"
   grep -Eq '^Features[[:space:]]*:.*(^|[[:space:]])asimd([[:space:]]|$)' \
-    "$system/etc/berberis/cpuinfo.arm64.txt" || \
+    "$runtime_cpuinfo" || \
     fail "ARM64 native bridge CPU description is missing ASIMD support"
 
   grep -q 'ro.dalvik.vm.native.bridge=libndk_translation.so' \
@@ -1140,6 +1155,70 @@ check_native_bridge() {
   grep -q 'etc/berberis/cpuinfo.arm64.txt' \
     "$overlay_dir/config/x86_arm_native_bridge.mk" || \
     fail "x86 native bridge product does not install its ARM64 CPU description"
+  grep -q 'etc/cpuinfo.arm64.txt' \
+    "$overlay_dir/config/x86_arm_native_bridge.mk" || \
+    fail "x86 native bridge product does not install the current ARM64 CPU description path"
+
+  python3 - "$bridge" <<'PY' || fail "native bridge payload manifest validation failed"
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+manifest_path = root / "manifest.json"
+try:
+    manifest = json.loads(manifest_path.read_text())
+except (OSError, json.JSONDecodeError) as exc:
+    print(f"[lineage-desktop] error: invalid {manifest_path}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+
+if manifest.get("format_version") != 1:
+    print("[lineage-desktop] error: unsupported native bridge manifest format", file=sys.stderr)
+    raise SystemExit(1)
+
+entries = manifest.get("files")
+if not isinstance(entries, list) or not entries:
+    print("[lineage-desktop] error: native bridge manifest has no files", file=sys.stderr)
+    raise SystemExit(1)
+
+seen = set()
+for entry in entries:
+    try:
+        relpath = entry["path"]
+        expected_size = entry["size"]
+        expected_digest = entry["sha256"]
+    except (KeyError, TypeError):
+        print("[lineage-desktop] error: malformed native bridge manifest entry", file=sys.stderr)
+        raise SystemExit(1)
+    if relpath in seen or relpath.startswith("/") or ".." in Path(relpath).parts:
+        print(f"[lineage-desktop] error: unsafe/duplicate manifest path: {relpath}", file=sys.stderr)
+        raise SystemExit(1)
+    seen.add(relpath)
+    path = root / "system" / relpath
+    if not path.is_file() or path.stat().st_size != expected_size:
+        print(f"[lineage-desktop] error: native bridge file size mismatch: {relpath}", file=sys.stderr)
+        raise SystemExit(1)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != expected_digest:
+        print(f"[lineage-desktop] error: native bridge file digest mismatch: {relpath}", file=sys.stderr)
+        raise SystemExit(1)
+
+actual = {
+    str(path.relative_to(root / "system"))
+    for path in (root / "system").rglob("*")
+    if path.is_file()
+}
+if actual != seen:
+    missing = sorted(seen - actual)
+    untracked = sorted(actual - seen)
+    print(
+        f"[lineage-desktop] error: native bridge manifest mismatch; "
+        f"missing={missing}, untracked={untracked}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
 }
 
 check_desktop_flags() {
@@ -1210,6 +1289,33 @@ check_no_phone_defaults() {
   fi
 
   return 0
+}
+
+check_user_switcher_defaults() {
+  local resource
+  local resource_name
+  local resource_file
+  local -a resource_files=(
+    "$overlay_dir/overlays/framework-res/res/values/config.xml"
+    "$overlay_dir/overlays/framework-res/res/values-sw600dp/config.xml"
+  )
+  local -a resource_names=(
+    "config_showUserSwitcherByDefault"
+    "config_enableUserSwitcherUponUserCreation"
+  )
+
+  # Both products identify as tablets. Requiring the same false values in the
+  # default and sw600dp configurations prevents framework-res's tablet-specific
+  # true default from winning resource selection on either architecture.
+  for resource_file in "${resource_files[@]}"; do
+    require_file "$resource_file"
+    [[ -f "$resource_file" ]] || continue
+    for resource_name in "${resource_names[@]}"; do
+      resource="<bool name=\"${resource_name}\">false</bool>"
+      grep -Fq "$resource" "$resource_file" || \
+        fail "$resource_name must default to false in $resource_file"
+    done
+  done
 }
 
 # Verify the lunch combos declared in AndroidProducts.mk actually point at
@@ -1322,10 +1428,34 @@ check_vulkan_ndk_abi_dumps() {
   done
 }
 
-check_virtualization_stack_pins() {
-  case "${VALIDATE_VIRTUALIZATION_STACK_PINS:-1}" in
+check_vulkan_llndk_abi_dumps() {
+  local arch dump enum
+  local -a required_enums=(
+    '"name" : "VK_PIPELINE_BIND_POINT_DATA_GRAPH_ARM"'
+    '"name" : "VK_ERROR_PRESENT_TIMING_QUEUE_FULL_EXT"'
+    '"name" : "VK_ERROR_VALIDATION_FAILED"'
+  )
+
+  for arch in arm64 x86_64; do
+    target_enabled "$arch" || continue
+    dump="$android_root/prebuilts/abi-dumps/vndk/202504/64/$arch/source-based/libvulkan.so.lsdump"
+    require_file "$dump"
+    [[ -f "$dump" ]] || continue
+
+    for enum in "${required_enums[@]}"; do
+      grep -Fq "$enum" "$dump" || \
+        fail "$arch libvulkan Android 16 LLNDK ABI dump is not refreshed for Vulkan 1.4.341: missing $enum in $dump"
+    done
+  done
+}
+
+check_cuttlefish_runtime_pins() {
+  # VALIDATE_VIRTUALIZATION_STACK_PINS is retained as a compatibility alias;
+  # these projects implement the outer Cuttlefish runtime and virtual-GPU
+  # transport. They do not imply that AVF is enabled inside the Android guest.
+  case "${VALIDATE_CUTTLEFISH_RUNTIME_PINS:-${VALIDATE_VIRTUALIZATION_STACK_PINS:-1}}" in
     0|false|no|off)
-      log "virtualization stack pin validation skipped by VALIDATE_VIRTUALIZATION_STACK_PINS=0"
+      log "Cuttlefish runtime pin validation skipped by VALIDATE_CUTTLEFISH_RUNTIME_PINS=0"
       return 0
       ;;
   esac
@@ -1342,7 +1472,15 @@ import xml.etree.ElementTree as ET
 manifest = sys.argv[1]
 expected = {
     ("platform/external/mesa3d", "external/mesa3d"):
-        "d4b6f1eba289310b16ee77bedb3c1cf467b6b6fd",
+        "6a02618ccf6c5651ecb9cccbde571eb61fd73592",
+    ("kernel/prebuilts/6.12/arm64", "kernel/prebuilts/6.12/arm64"):
+        "318576752b27af3d328e6deb5e6aa29b08f762c9",
+    ("kernel/prebuilts/common-modules/virtual-device/6.12/arm64", "kernel/prebuilts/common-modules/virtual-device/6.12/arm64"):
+        "e6673fcbd05e63e6fcc2c2d2cf33246108b73b0c",
+    ("kernel/prebuilts/6.12/x86-64", "kernel/prebuilts/6.12/x86_64"):
+        "cb8e8ee3babf4a27b742f59dcb92f59cf186299c",
+    ("kernel/prebuilts/common-modules/virtual-device/6.12/x86-64", "kernel/prebuilts/common-modules/virtual-device/6.12/x86-64"):
+        "4463c45163d93baf9479744641a03961f58c1467",
     ("platform/external/minigbm", "external/minigbm"):
         "b7c93249f685222a524c51403719493cc114ff5d",
     ("device/google/cuttlefish", "device/google/cuttlefish"):
@@ -1389,16 +1527,20 @@ PY
     [[ -n "$project" ]] || continue
     project_dir="$android_root/$project"
     if [[ ! -d "$project_dir/.git" && ! -f "$project_dir/.git" && ! -L "$project_dir/.git" ]]; then
-      fail "missing virtualization stack project checkout: $project"
+      fail "missing Cuttlefish runtime/graphics project checkout: $project"
       continue
     fi
 
     head="$(git -C "$project_dir" rev-parse HEAD 2>/dev/null || true)"
     if [[ "$head" != "$expected" ]]; then
-      fail "$project is not synced to the pinned virtualization stack revision $expected (found ${head:-unknown}); rerun with SKIP_SYNC=0"
+      fail "$project is not synced to the pinned Cuttlefish runtime/graphics revision $expected (found ${head:-unknown}); rerun with SKIP_SYNC=0"
     fi
   done <<'EOF'
-external/mesa3d d4b6f1eba289310b16ee77bedb3c1cf467b6b6fd
+external/mesa3d 6a02618ccf6c5651ecb9cccbde571eb61fd73592
+kernel/prebuilts/6.12/arm64 318576752b27af3d328e6deb5e6aa29b08f762c9
+kernel/prebuilts/common-modules/virtual-device/6.12/arm64 e6673fcbd05e63e6fcc2c2d2cf33246108b73b0c
+kernel/prebuilts/6.12/x86_64 cb8e8ee3babf4a27b742f59dcb92f59cf186299c
+kernel/prebuilts/common-modules/virtual-device/6.12/x86-64 4463c45163d93baf9479744641a03961f58c1467
 external/minigbm b7c93249f685222a524c51403719493cc114ff5d
 device/google/cuttlefish 283645aacf6cdb56cc31a9362f54d412dbc132a1
 device/google/cuttlefish_vmm 360473222a8700b6a935054b0c882cfbc2ba5701
@@ -1408,6 +1550,89 @@ hardware/google/gfxstream b46f0d4b4545def09bdf30651d4bf848b2ba0c34
 external/rust/rutabaga_gfx 1f181b0b3e4b821459f21fd9025cd4c408c4f9ec
 external/vulkan-headers b5c8f996196ba4aa6d8f97e52b5d3b6e70f7e4e2
 EOF
+}
+
+check_graphics_stack_versions() {
+  local mesa_version_file="$android_root/external/mesa3d/VERSION"
+  local mesa_android_bp="$android_root/external/mesa3d/Android.bp"
+  local arm_product="$android_root/device/google/cuttlefish/ika_arm64/desktop/aosp_cf.mk"
+  local x86_product="$android_root/device/google/cuttlefish/ika_x86_64/desktop/aosp_cf.mk"
+  local stale_reserved_header="$android_root/external/mesa3d/src/gfxstream/guest/vulkan_enc/goldfish_vk_reserved_marshaling_guest.h"
+  local stale_reserved_impl="$android_root/external/mesa3d/src/gfxstream/guest/vulkan_enc/goldfish_vk_reserved_marshaling_guest.cpp"
+  require_file "$mesa_version_file"
+  require_file "$mesa_android_bp"
+  if [[ -f "$mesa_version_file" && "$(tr -d '[:space:]' < "$mesa_version_file")" != "26.1.5" ]]; then
+    fail "external/mesa3d VERSION is not 26.1.5: $mesa_version_file"
+  fi
+  if [[ -f "$mesa_android_bp" ]] && ! grep -Fq -- '-DPACKAGE_VERSION=\"26.1.5\"' "$mesa_android_bp"; then
+    fail "external/mesa3d generated Android.bp does not identify Mesa 26.1.5: $mesa_android_bp"
+  fi
+  # These are genrule outputs. Checked-in copies precede Soong's generated
+  # include directory and can silently shadow declarations from the pinned XML.
+  if [[ -e "$stale_reserved_header" || -e "$stale_reserved_impl" ]]; then
+    fail "external/mesa3d carries stale gfxstream reserved-marshalling output; keep it generated from the pinned Vulkan registry"
+  fi
+
+  if target_enabled arm64; then
+    require_file "$arm_product"
+    grep -Fq 'ifeq ($(LINEAGE_DESKTOP_BUILD_VULKAN_TESTS),true)' "$arm_product" || \
+      fail "ARM64 product does not gate the Vulkan dEQP harness behind the opt-in switch: $arm_product"
+  fi
+  if target_enabled x86_64; then
+    require_file "$x86_product"
+    grep -Fq 'ifeq ($(LINEAGE_DESKTOP_BUILD_VULKAN_TESTS),true)' "$x86_product" || \
+      fail "x86-64 product does not gate the Vulkan dEQP harness behind the opt-in switch: $x86_product"
+  fi
+
+  if target_enabled arm64; then
+    local expected_kernel_version="6.12.74-android16-6-g3ec022196c4e-ab15076761"
+    local kernel_version_mk="$android_root/kernel/prebuilts/6.12/arm64/16k/kernel_version.mk"
+    local virtio_gpu_module="$android_root/kernel/prebuilts/common-modules/virtual-device/6.12/arm64/16k/virtio-gpu.ko"
+    local bpf_vmlinux_header="$android_root/system/bpf/include/vmlinux/6.12/arm64/vmlinux.h"
+    local expected_bpf_vmlinux_sha256="fb5c710e28962f8ec3d0c9b2d60613f58663c6111a36004fababc9f4799347a1"
+    require_file "$kernel_version_mk"
+    require_file "$virtio_gpu_module"
+    require_file "$bpf_vmlinux_header"
+    if [[ -f "$kernel_version_mk" ]] && ! grep -Fqx "BOARD_KERNEL_VERSION := $expected_kernel_version" "$kernel_version_mk"; then
+      fail "ARM64 16 KiB guest kernel is not the expected $expected_kernel_version build: $kernel_version_mk"
+    fi
+    if [[ -f "$virtio_gpu_module" ]] && ! grep -aFq "vermagic=$expected_kernel_version " "$virtio_gpu_module"; then
+      fail "ARM64 virtio-gpu module does not match the pinned 16 KiB guest kernel: $virtio_gpu_module"
+    fi
+    if [[ -f "$bpf_vmlinux_header" ]]; then
+      local actual_bpf_vmlinux_sha256
+      actual_bpf_vmlinux_sha256="$(sha256sum "$bpf_vmlinux_header")"
+      actual_bpf_vmlinux_sha256="${actual_bpf_vmlinux_sha256%% *}"
+      if [[ "$actual_bpf_vmlinux_sha256" != "$expected_bpf_vmlinux_sha256" ]]; then
+        fail "ARM64 BPF vmlinux.h does not match the pinned 16 KiB guest kernel BTF: $bpf_vmlinux_header"
+      fi
+    fi
+  fi
+
+  if target_enabled x86_64; then
+    local expected_kernel_version="6.12.74-android16-6-g3ec022196c4e-ab15076761"
+    local kernel_version_mk="$android_root/kernel/prebuilts/6.12/x86_64/kernel_version.mk"
+    local virtio_gpu_module="$android_root/kernel/prebuilts/common-modules/virtual-device/6.12/x86-64/virtio-gpu.ko"
+    local bpf_vmlinux_header="$android_root/system/bpf/include/vmlinux/6.12/x86_64/vmlinux.h"
+    local expected_bpf_vmlinux_sha256="b694014d296f4aac0c993fe909fd8d512966bec946d4e98f6f6798159023dfb6"
+    require_file "$kernel_version_mk"
+    require_file "$virtio_gpu_module"
+    require_file "$bpf_vmlinux_header"
+    if [[ -f "$kernel_version_mk" ]] && ! grep -Fqx "BOARD_KERNEL_VERSION := $expected_kernel_version" "$kernel_version_mk"; then
+      fail "x86-64 guest kernel is not the expected $expected_kernel_version build: $kernel_version_mk"
+    fi
+    if [[ -f "$virtio_gpu_module" ]] && ! grep -aFq "vermagic=$expected_kernel_version " "$virtio_gpu_module"; then
+      fail "x86-64 virtio-gpu module does not match the pinned guest kernel: $virtio_gpu_module"
+    fi
+    if [[ -f "$bpf_vmlinux_header" ]]; then
+      local actual_bpf_vmlinux_sha256
+      actual_bpf_vmlinux_sha256="$(sha256sum "$bpf_vmlinux_header")"
+      actual_bpf_vmlinux_sha256="${actual_bpf_vmlinux_sha256%% *}"
+      if [[ "$actual_bpf_vmlinux_sha256" != "$expected_bpf_vmlinux_sha256" ]]; then
+        fail "x86-64 BPF vmlinux.h does not match the pinned guest kernel BTF: $bpf_vmlinux_header"
+      fi
+    fi
+  fi
 }
 
 check_crosvm_wayland_codegen() {
@@ -1907,12 +2132,15 @@ check_webview_prebuilts
 check_native_bridge
 check_desktop_flags
 check_no_phone_defaults
+check_user_switcher_defaults
 check_product_makefiles
 check_zipalign_rom_package
 check_arm64_page_size_product_defaults
 check_vulkan_header_version
 check_vulkan_ndk_abi_dumps
-check_virtualization_stack_pins
+check_vulkan_llndk_abi_dumps
+check_cuttlefish_runtime_pins
+check_graphics_stack_versions
 check_crosvm_wayland_codegen
 check_cuttlefish_proto_editions
 check_cuttlefish_health_aidl_compat

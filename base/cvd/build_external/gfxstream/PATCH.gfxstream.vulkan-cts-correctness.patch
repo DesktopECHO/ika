@@ -1,0 +1,40 @@
+Patch summary:
+Keep gfxstream's advertised Vulkan contract consistent with the device it can
+create. VulkanBatchedDescriptorSetUpdate deliberately masks inlineUniformBlock,
+but inlineUniformBlock is mandatory for every Vulkan 1.3 device. Disable the
+batching optimization by default so the already-supported non-batched inline
+uniform path remains available.
+
+Also classify VK_EXT_external_memory_acquire_unmodified as an emulated device
+extension. The Android guest advertises this profile marker when a host driver
+does not provide it because imported AHB layouts are already preserved in the
+guest. It has no commands or feature/property structs, so forwarding the
+enabled extension to such a host only makes vkCreateDevice fail with
+VK_ERROR_EXTENSION_NOT_PRESENT (notably on Mesa Honeykrisp).
+
+diff --git a/host/virtio_gpu_gfxstream_renderer.cpp b/host/virtio_gpu_gfxstream_renderer.cpp
+--- a/host/virtio_gpu_gfxstream_renderer.cpp
++++ b/host/virtio_gpu_gfxstream_renderer.cpp
+@@ -108,8 +108,10 @@
+     GFXSTREAM_SET_BOOL_FEATURE_ON_CONDITION(
+         &features, Vulkan,
+         rendererFlags & STREAM_RENDERER_FLAGS_USE_VK_BIT);
++    // The batched descriptor path cannot represent inline uniform blocks, a
++    // mandatory Vulkan 1.3 feature. Prefer the compliant non-batched path.
+     GFXSTREAM_SET_BOOL_FEATURE_ON_CONDITION(
+-        &features, VulkanBatchedDescriptorSetUpdate, true);
++        &features, VulkanBatchedDescriptorSetUpdate, false);
+     GFXSTREAM_SET_BOOL_FEATURE_ON_CONDITION(
+         &features, VulkanIgnoredHandles, true);
+     GFXSTREAM_SET_BOOL_FEATURE_ON_CONDITION(
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -148,6 +148,7 @@
+     "VK_FUCHSIA_external_memory",
+     "VK_FUCHSIA_external_semaphore",
+     VK_EXT_DEVICE_MEMORY_REPORT_EXTENSION_NAME,
++    VK_EXT_EXTERNAL_MEMORY_ACQUIRE_UNMODIFIED_EXTENSION_NAME,
+     VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME,
+     VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
+     VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME,

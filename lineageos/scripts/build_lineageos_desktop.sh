@@ -21,6 +21,8 @@ overlay_dir="$(cd "$script_dir/.." && pwd)"
 ika_root="$(cd "$overlay_dir/.." && pwd)"
 ika_work_root="${IKA_WORK_ROOT:-$ika_root/ika-work}"
 export IKA_WORK_ROOT="$ika_work_root"
+ika_source_commit="${IKA_SOURCE_COMMIT:-$(git -C "$ika_root" rev-parse HEAD 2>/dev/null || true)}"
+export IKA_SOURCE_COMMIT="$ika_source_commit"
 
 android_manifest_url="${ANDROID_MANIFEST_URL:-https://github.com/LineageOS/android.git}"
 lineage_branch="${LINEAGE_BRANCH:-lineage-23.2}"
@@ -29,6 +31,7 @@ gms_provider="none"
 include_microg=0
 update_microg_prebuilts="${UPDATE_MICROG_PREBUILTS:-1}"
 include_x86_arm_native_bridge="${INCLUDE_X86_ARM_NATIVE_BRIDGE:-1}"
+build_vulkan_tests="${BUILD_VULKAN_TESTS:-0}"
 update_native_bridge_prebuilts="${UPDATE_NATIVE_BRIDGE_PREBUILTS:-1}"
 validate_build_inputs="${VALIDATE_BUILD_INPUTS:-1}"
 strict_bundle_validation="${STRICT_BUNDLE_VALIDATION:-0}"
@@ -130,6 +133,9 @@ case "$build_variant" in
   user|userdebug|eng) ;;
   *) die "BUILD_VARIANT must be one of: user, userdebug, eng (got '$build_variant')" ;;
 esac
+
+[[ "$ika_source_commit" =~ ^[0-9a-f]{40}$ ]] || \
+  die "could not determine the exact Ika source commit for release metadata"
 
 active_build_arch=""
 active_build_start_epoch=""
@@ -336,7 +342,7 @@ prepare_target_output_headroom() {
 build_target() {
   local arch="$1"
   local product product_out host_package bundle_name host_tag
-  local -a thin_files
+  local -a thin_files test_targets
 
   host_tag="$(target_host_tag "$arch")"
   product="$(target_product "$arch")"
@@ -374,7 +380,23 @@ build_target() {
   remove_packaged_target_outputs "$product" "$product_out" "$host_package" "${thin_files[@]}"
   rm -rf "$signed_artifacts_dir"
 
+  test_targets=()
+  if enabled "$build_vulkan_tests"; then
+    test_targets+=(CtsDeqpTestCases)
+  fi
+  if [[ "$arch" == "x86_64" ]] && enabled "$include_x86_arm_native_bridge"; then
+    # Build both forms of AOSP's ARM64 NDK runtime suite. The dynamic binary
+    # exercises the translated guest linker and proxy libraries; the static
+    # binary isolates instruction/syscall translation from shared-library
+    # resolution. They are release-bundle diagnostics, not installed apps.
+    test_targets+=(
+      ndk_program_tests.native_bridge
+      ndk_program_tests_static.native_bridge
+    )
+  fi
+
   run_lunch_and_make "$product" \
+    "${test_targets[@]}" \
     hosttar \
     bootimage \
     vendorbootimage \
@@ -391,6 +413,16 @@ build_target() {
     otatools
   built_target_outputs_complete "$product" "$product_out" "$host_package" "${thin_files[@]}" || \
     die "build completed but expected outputs are missing for $product"
+  if enabled "$build_vulkan_tests"; then
+    vulkan_test_outputs_complete "$product_out" "$host_tag" || \
+      die "build completed but Vulkan CTS outputs are missing for $product"
+  fi
+  if [[ "$arch" == "x86_64" ]] && enabled "$include_x86_arm_native_bridge"; then
+    native_bridge_test_outputs_complete "$product_out" || \
+      die "build completed but ARM64 native-bridge test outputs are missing for $product"
+    native_bridge_image_outputs_complete "$product_out" || \
+      die "build completed but the ARM64 native-bridge runtime is incomplete for $product"
+  fi
   validate_cvd_target_fstabs "$product_out"
   desktop_launcher_outputs_exclusive "$product_out" "$target_files_zip" || \
     die "$product target-files still include non-QuickStep Launcher3 artifacts"
@@ -411,7 +443,7 @@ build_target() {
   fi
 
   package_cvd_bundle "$arch" "$product" "$product_out" "$host_package" "$signed_images_dir" "$bundle_name" "${thin_files[@]}"
-  bundle_dir_complete "$output_dir/$bundle_name" "${thin_files[@]}" || \
+  bundle_dir_complete "$arch" "$output_dir/$bundle_name" "${thin_files[@]}" || \
     die "packaging completed but $bundle_name/ is incomplete"
 }
 
@@ -434,6 +466,11 @@ main() {
   fi
   export LINEAGE_DESKTOP_GMS_PROVIDER="$gms_provider"
   export INCLUDE_MICROG="$include_microg"
+  if enabled "$build_vulkan_tests"; then
+    export LINEAGE_DESKTOP_BUILD_VULKAN_TESTS=true
+  else
+    export LINEAGE_DESKTOP_BUILD_VULKAN_TESTS=false
+  fi
 
   ensure_host_commands
   ensure_arm64_native_host

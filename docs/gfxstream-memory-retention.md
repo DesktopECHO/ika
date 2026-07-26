@@ -32,6 +32,25 @@ residue at the correct cleanup boundary.
 
 No Mesa or kernel source changes are required.
 
+### Mesa 26.1.5 and guest-kernel review
+
+The graphics-stack upgrade on 2026-07-20 does not make these mitigations
+obsolete. Mesa 26.1.5 and Linux 6.12.74 run inside the Android guest, whereas
+the retained DMA-BUF attachment is owned by the host Honeykrisp/Asahi path.
+The pinned host gfxstream revision, Fedora's Honeykrisp Mesa 26.1.4, and Asahi
+7.0.13 kernel remain in that path. The bundled Mesa 26.1.5 Lavapipe ICD is a
+software fallback and does not replace Honeykrisp on the accelerated path.
+Retain the pooling, broker, shared lease, allocator trim, Rutabaga drain, and
+defensive Vulkan teardown until an A/B kernel-accounting test on a newer host
+stack shows that closing the last userspace descriptor also removes the Apple
+GPU attachment.
+
+A stopped-VM check during that review found 564 orphaned udmabufs totaling
+2,565,439,488 bytes on the current Asahi 7.0.13 host. The sampled objects each
+still listed `406400000.gpu` as their sole attachment after the broker had been
+stopped, directly confirming that the current host kernel still needs identity
+preservation and reuse.
+
 ## Scope and constraints
 
 The affected configuration is the Apple Silicon 16 KiB-page host path using
@@ -130,6 +149,15 @@ The protocol validates a fixed magic/version, allocation size and peer UID,
 and passes descriptors with `SCM_RIGHTS`. If the broker is disabled or
 unavailable, gfxstream safely falls back to its renderer-local allocation path.
 `IKA_UDMABUF_BROKER=off` provides an explicit diagnostic override.
+
+The broker also enforces a fail-closed residency ceiling: 4,096 entries and
+4 GiB of backing by default. Existing exact-size entries remain reusable at the
+ceiling, but a request that would create another entry returns `ENOSPC`.
+Gfxstream treats that valid broker refusal as an allocation failure rather than
+falling back to a fresh local udmabuf, which prevents allocation-test or hostile
+workloads from bypassing the ceiling and starving a 16 GiB host. The defaults
+can be adjusted with `IKA_UDMABUF_BROKER_MAX_ENTRIES` and
+`IKA_UDMABUF_BROKER_MAX_BYTES` when host capacity is known.
 
 ### 3. Shared lifetime token
 
@@ -274,7 +302,7 @@ later cycles is not.
 
 - Exact-size pooling is conservative. Workloads using many distinct allocation
   sizes can create more pool entries, though each recurring size is still
-  bounded by peak concurrency.
+  bounded by peak concurrency and the configured broker ceiling.
 - The broker deliberately keeps its high-water backing resident between VM
   runs. This is bounded retention, not reclamation; rebooting the host remains
   necessary when that memory must be returned immediately.

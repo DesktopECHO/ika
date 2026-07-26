@@ -26,41 +26,41 @@ cd "$BUILD_DIR/$PROJECT_DIR"
 export CFLAGS='-O2'
 export CXXFLAGS="$CFLAGS"
 
-if [[ -d "$DIRNAME" ]]
+mkdir -p "$DIRNAME"
+cd "$DIRNAME"
+
+conf=(
+    --prefix="$INSTALL_DIR/$DIRNAME"
+)
+
+if [[ "$LINK_TYPE" == static ]]
 then
-    echo "'$PWD/$DIRNAME' already exists, not reconfigured"
-    cd "$DIRNAME"
-else
-    mkdir "$DIRNAME"
-    cd "$DIRNAME"
-
-    conf=(
-        --prefix="$INSTALL_DIR/$DIRNAME"
+    conf+=(
+        --enable-static
+        --disable-shared
     )
-
-    if [[ "$LINK_TYPE" == static ]]
-    then
-        conf+=(
-            --enable-static
-            --disable-shared
-        )
-    else
-        conf+=(
-            --disable-static
-            --enable-shared
-        )
-    fi
-
-    if [[ "$BUILD_TYPE" == cross ]]
-    then
-        conf+=(
-            --host="$HOST_TRIPLET"
-        )
-    fi
-
-    "$SOURCES_DIR/$PROJECT_DIR"/bootstrap.sh
-    "$SOURCES_DIR/$PROJECT_DIR"/configure "${conf[@]}"
+else
+    conf+=(
+        --disable-static
+        --enable-shared
+    )
 fi
+
+if [[ "$BUILD_TYPE" == cross ]]
+then
+    conf+=(
+        --host="$HOST_TRIPLET"
+    )
+fi
+
+if [[ ! -x "$SOURCES_DIR/$PROJECT_DIR/configure" ]]
+then
+    "$SOURCES_DIR/$PROJECT_DIR"/bootstrap.sh
+fi
+
+# Configure on every invocation so a directory left by an interrupted setup
+# cannot be mistaken for a usable build tree.
+"$SOURCES_DIR/$PROJECT_DIR"/configure "${conf[@]}"
 
 make -j
 make install-strip

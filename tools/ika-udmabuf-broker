@@ -28,6 +28,9 @@ VERSION = 1
 REQUEST = struct.Struct("=IIQ")
 RESPONSE = struct.Struct("=IiQ")
 
+DEFAULT_MAX_ENTRIES = 4096
+DEFAULT_MAX_BYTES = 4 * 1024 * 1024 * 1024
+
 # _IOW('u', 0x42, struct udmabuf_create), whose Linux UAPI layout is
 # u32 memfd, u32 flags, u64 offset, u64 size.
 UDMABUF_CREATE = 0x40187542
@@ -52,12 +55,21 @@ class Entry:
 
 
 class Broker:
-    def __init__(self, socket_path: str, pid_file: str) -> None:
+    def __init__(
+        self,
+        socket_path: str,
+        pid_file: str,
+        max_entries: int = DEFAULT_MAX_ENTRIES,
+        max_bytes: int = DEFAULT_MAX_BYTES,
+    ) -> None:
         self.socket_path = socket_path
         self.pid_file = pid_file
+        self.max_entries = max_entries
+        self.max_bytes = max_bytes
         self.uid = os.getuid()
         self.control_fd = os.open("/dev/udmabuf", os.O_RDWR | os.O_CLOEXEC)
         self.entries: list[Entry] = []
+        self.total_bytes = 0
         self.next_ident = 1
         self.lock = threading.Lock()
         self.stopping = threading.Event()
@@ -89,6 +101,7 @@ class Broker:
         entry = Entry(self.next_ident, size, memfd, dmabuf)
         self.next_ident += 1
         self.entries.append(entry)
+        self.total_bytes += size
         print(
             f"created entry id={entry.ident} size={entry.size}",
             file=sys.stderr,
@@ -102,6 +115,16 @@ class Broker:
                 if entry.owner is None and entry.size == size:
                     entry.owner = owner
                     return entry
+            if len(self.entries) >= self.max_entries:
+                raise OSError(
+                    errno.ENOSPC,
+                    f"udmabuf entry limit reached ({self.max_entries})",
+                )
+            if size > self.max_bytes - self.total_bytes:
+                raise OSError(
+                    errno.ENOSPC,
+                    f"udmabuf byte limit reached ({self.max_bytes})",
+                )
             entry = self._create_entry(size)
             entry.owner = owner
             return entry
@@ -221,13 +244,23 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--socket", required=True)
     parser.add_argument("--pid-file", required=True)
+    parser.add_argument("--max-entries", type=int, default=DEFAULT_MAX_ENTRIES)
+    parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    if args.max_entries <= 0 or args.max_bytes <= 0:
+        print("ika-udmabuf-broker: limits must be positive", file=sys.stderr)
+        return 2
     try:
-        Broker(args.socket, args.pid_file).run()
+        Broker(
+            args.socket,
+            args.pid_file,
+            max_entries=args.max_entries,
+            max_bytes=args.max_bytes,
+        ).run()
     except OSError as error:
         print(f"ika-udmabuf-broker: {error}", file=sys.stderr)
         return 1

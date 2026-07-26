@@ -56,7 +56,7 @@ EOF
   l="$(prompt_with_default 'City / Locality' 'Toronto')"
   o="$(prompt_with_default 'Organization' 'DesktopECHO')"
   ou="$(prompt_with_default 'Organizational Unit' 'Ika')"
-  cn="$(prompt_with_default 'Common Name' 'LineageOS Virtual Desktop')"
+  cn="$(prompt_with_default 'Common Name' 'Android Desktop')"
   email="$(prompt_with_default 'Email address' "$(default_signing_email)")"
   printf '\n'
 

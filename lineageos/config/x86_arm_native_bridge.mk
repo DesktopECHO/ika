@@ -17,8 +17,11 @@ PRODUCT_SOONG_NAMESPACES += \
 
 PRODUCT_PACKAGES += \
     libberberis_exec_region \
-    $(NATIVE_BRIDGE_PRODUCT_PACKAGES)
+    $(filter-out libndk_translation_proxy_libm,$(NATIVE_BRIDGE_PRODUCT_PACKAGES))
 
+# Newer Google images ship the libm proxy that matches their translator.
+# Older payloads omitted it, so retain AOSP's source-built proxy as a fallback
+# without creating two install rules for the same /system path.
 ifeq (,$(wildcard $(LINEAGE_DESKTOP_NATIVE_BRIDGE_PREBUILT_DIR)/lib64/libndk_translation_proxy_libm.so))
 PRODUCT_PACKAGES += \
     libndk_translation_proxy_libm
@@ -28,6 +31,7 @@ LINEAGE_DESKTOP_NATIVE_BRIDGE_COPY_FILES := \
     bin/ndk_translation_program_runner_binfmt_misc_arm64 \
     etc/binfmt_misc/arm64_dyn \
     etc/binfmt_misc/arm64_exe \
+    etc/cpuinfo.arm64.txt \
     etc/berberis/cpuinfo.arm64.txt \
     etc/init/ndk_translation.rc \
     etc/ld.config.arm64.txt
@@ -40,6 +44,7 @@ PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST += \
     $(TARGET_COPY_OUT_SYSTEM)/bin/arm64/% \
     $(TARGET_COPY_OUT_SYSTEM)/bin/ndk_translation_program_runner_binfmt_misc_arm64 \
     $(TARGET_COPY_OUT_SYSTEM)/etc/binfmt_misc/% \
+    $(TARGET_COPY_OUT_SYSTEM)/etc/cpuinfo.arm64.txt \
     $(TARGET_COPY_OUT_SYSTEM)/etc/berberis/cpuinfo.arm64.txt \
     $(TARGET_COPY_OUT_SYSTEM)/etc/init/ndk_translation.rc \
     $(TARGET_COPY_OUT_SYSTEM)/etc/ld.config.arm64.txt \

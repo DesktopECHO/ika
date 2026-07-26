@@ -260,7 +260,10 @@ declare -A CVD_GPU_DEFAULTS=(
   [gpu_vhost_user_mode]="off"
   [enable_gpu_udmabuf]="true"
   [use_cvdalloc]="true"
-  [gpu_renderer_features]="MinimalLogging:disabled"
+  # gfxstream's batched descriptor path masks inlineUniformBlock even though
+  # Vulkan 1.3 makes that feature mandatory. Keep the fully compliant
+  # non-batched path until gfxstream can batch inline-uniform descriptors.
+  [gpu_renderer_features]="MinimalLogging:disabled;VulkanBatchedDescriptorSetUpdate:disabled"
 )
 
 # ============================================================================
@@ -367,6 +370,8 @@ UDMABUF_BASELINE_FILE="${CVD_HOME_DIR}/udmabuf-baseline"
 UDMABUF_BROKER_SOCKET="${CVD_TMP_DIR}/udmabuf-broker.sock"
 UDMABUF_BROKER_PID_FILE="${CVD_TMP_DIR}/udmabuf-broker.pid"
 UDMABUF_BROKER_LOG_FILE="${CVD_HOME_DIR}/udmabuf-broker.log"
+UDMABUF_BROKER_MAX_ENTRIES="${IKA_UDMABUF_BROKER_MAX_ENTRIES:-4096}"
+UDMABUF_BROKER_MAX_BYTES="${IKA_UDMABUF_BROKER_MAX_BYTES:-4294967296}"
 GFXSTREAM_UDMABUF_BROKER_SOCKET=""
 SCRCPY_BIN="${PACKAGED_SCRCPY_BIN}"
 SCRCPY_SERVER_PATH_OVERRIDE=""
@@ -469,6 +474,11 @@ ensure_udmabuf_broker() {
   [[ "${CVD_GPU_MODE}" == gfxstream* ]] || return 0
   is_apple_silicon_16k_host || return 0
 
+  [[ "${UDMABUF_BROKER_MAX_ENTRIES}" =~ ^[1-9][0-9]*$ ]] ||
+    die "invalid IKA_UDMABUF_BROKER_MAX_ENTRIES='${UDMABUF_BROKER_MAX_ENTRIES}'"
+  [[ "${UDMABUF_BROKER_MAX_BYTES}" =~ ^[1-9][0-9]*$ ]] ||
+    die "invalid IKA_UDMABUF_BROKER_MAX_BYTES='${UDMABUF_BROKER_MAX_BYTES}'"
+
   case "${mode}" in
     ""|auto|1|true|yes|on|enable|enabled)
       ;;
@@ -496,6 +506,8 @@ ensure_udmabuf_broker() {
   nohup "${UDMABUF_BROKER_BIN}" \
     --socket "${UDMABUF_BROKER_SOCKET}" \
     --pid-file "${UDMABUF_BROKER_PID_FILE}" \
+    --max-entries "${UDMABUF_BROKER_MAX_ENTRIES}" \
+    --max-bytes "${UDMABUF_BROKER_MAX_BYTES}" \
     </dev/null >>"${UDMABUF_BROKER_LOG_FILE}" 2>&1 3>&- &
   pid="$!"
   disown "${pid}" 2>/dev/null || true
@@ -750,6 +762,10 @@ Environment variables:
                          before forcing surviving processes to exit (default: 30).
   IKA_UDMABUF_BROKER     auto/on keeps Apple Silicon udmabuf identities reusable
                          across VM restarts; off uses renderer-local pooling only.
+  IKA_UDMABUF_BROKER_MAX_ENTRIES
+                         Maximum persistent entries (default: 4096).
+  IKA_UDMABUF_BROKER_MAX_BYTES
+                         Maximum persistent backing bytes (default: 4294967296).
   IKA_SCRCPY_REBOOT_TIMEOUT_SEC
                          Seconds to wait for a guest reboot before leaving the
                          console closed (default: 120).
@@ -1149,6 +1165,51 @@ primary_vulkan_device_is_llvmpipe() {
   [[ -n "${primary_device}" ]] || return 1
 
   grep -Eiq '(^[[:space:]]*(deviceName|driverName|driverID)[[:space:]]*=.*llvmpipe|DRIVER_ID_MESA_LLVMPIPE)' <<<"${primary_device}"
+}
+
+primary_vulkan_device_is_radv() {
+  local summary
+  local primary_device
+
+  command -v vulkaninfo >/dev/null 2>&1 || return 1
+
+  summary="$(vulkaninfo --summary 2>/dev/null || true)"
+  [[ -n "${summary}" ]] || return 1
+
+  primary_device="$(
+    awk '
+      /^GPU[0-9]+:/ {
+        if (seen) {
+          exit
+        }
+        seen = 1
+        next
+      }
+      seen {
+        print
+      }
+    ' <<<"${summary}"
+  )"
+  [[ -n "${primary_device}" ]] || return 1
+
+  grep -Eiq '(^[[:space:]]*(deviceName|driverName|driverID)[[:space:]]*=.*radv|DRIVER_ID_MESA_RADV)' <<<"${primary_device}"
+}
+
+append_comma_option() {
+  local existing="$1"
+  local required="$2"
+  local option
+  local -a options=()
+
+  IFS=',' read -r -a options <<<"${existing}"
+  for option in "${options[@]}"; do
+    if [[ "${option}" == "${required}" ]]; then
+      printf '%s\n' "${existing}"
+      return 0
+    fi
+  done
+
+  printf '%s\n' "${existing}${existing:+,}${required}"
 }
 
 start_arg_value() {
@@ -1584,6 +1645,7 @@ append_cvd_env_args() {
   local -n env_args_ref="$1"
   local config_path="${2:-}"
   local glibc_tunables
+  local radv_debug
 
   env_args_ref+=(
     "HOME=${CVD_HOME_DIR}"
@@ -1598,6 +1660,18 @@ append_cvd_env_args() {
   # platform from SSH sessions on headless and Apple Silicon hosts.
   if [[ "${CVD_GPU_MODE}" == gfxstream* ]]; then
     env_args_ref+=("EGL_PLATFORM=${EGL_PLATFORM:-surfaceless}")
+  fi
+
+  # RADV's default asynchronous shader compilation can report fence completion
+  # before a transform-feedback pipeline has finished compiling. Gfxstream can
+  # then execute an incomplete pipeline, producing intermittent missing
+  # primitives even though the associated query result is correct. Compile
+  # shaders synchronously for gfxstream on RADV, while preserving any options
+  # supplied by the caller. Other Vulkan drivers are left unchanged.
+  if [[ "${CVD_GPU_MODE}" == gfxstream* ]] && primary_vulkan_device_is_radv; then
+    radv_debug="$(append_comma_option "${RADV_DEBUG:-}" "syncshaders")"
+    env_args_ref+=("RADV_DEBUG=${radv_debug}")
+    log "RADV gfxstream correctness options: ${radv_debug}"
   fi
 
   # gfxstream creates many short-lived render threads. On glibc's default
@@ -1922,9 +1996,9 @@ report_udmabuf_leaks() {
     (( leaked_count > 0 )) || leaked_count=0
     (( leaked_bytes > 0 )) || leaked_bytes=0
     if udmabuf_broker_is_alive; then
-      log "Asahi retained ${leaked_count} udmabuf object(s) ($(format_udmabuf_bytes "${leaked_bytes}")) after Cuttlefish stopped; the persistent broker is preserving these identities for reuse by the next VM. Reboot the host to reclaim the pinned high-water allocation."
+      log_file_only "Asahi retained ${leaked_count} udmabuf object(s) ($(format_udmabuf_bytes "${leaked_bytes}")) after Cuttlefish stopped; the persistent broker is preserving these identities for reuse by the next VM. Reboot the host to reclaim the pinned high-water allocation."
     else
-      log "WARNING: Asahi retained ${leaked_count} udmabuf object(s) ($(format_udmabuf_bytes "${leaked_bytes}")) after Cuttlefish stopped. A host reboot is required to reclaim kernel-pinned memory."
+      log_file_only "WARNING: Asahi retained ${leaked_count} udmabuf object(s) ($(format_udmabuf_bytes "${leaked_bytes}")) after Cuttlefish stopped. A host reboot is required to reclaim kernel-pinned memory."
     fi
   else
     log_file_only "Asahi udmabuf usage returned to baseline: $(format_udmabuf_snapshot "${current}")"
@@ -2617,4 +2691,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

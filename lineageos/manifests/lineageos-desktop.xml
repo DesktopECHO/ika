@@ -12,16 +12,43 @@
 
   <remove-project name="platform/external/vulkan-headers" />
 
-  <!-- Keep the graphics and VM stack on one verified snapshot. Mesa 25.3 plus
-       the external-mesa3d patch is the production guest Vulkan baseline: it
-       renders Chromium/ANGLE correctly through gfxstream and the Apple GPU
-       while retaining the udmabuf zero-copy path. Verified on Apple Silicon
-       on 2026-07-12. Do not move any graphics pin without a boot, vulkaninfo,
-       and Chromium/ANGLE screenshot verification pass. -->
+  <!-- Mesa 26.1.5 is paired with generated Android/gfxstream build glue in
+       external-mesa3d.patch. Some virtualization pins come from Android 17-era
+       AOSP release heads, while minigbm remains on Android 16 QPR2; this mixed
+       stack depends on the compatibility patches in this repository. Keep the
+       Mesa source pin and integration patch together. Do not move any graphics
+       pin without a boot, vulkaninfo, and Chromium/ANGLE screenshot verification
+       pass on Apple Silicon. -->
   <extend-project
       name="platform/external/mesa3d"
       path="external/mesa3d"
-      revision="d4b6f1eba289310b16ee77bedb3c1cf467b6b6fd" />
+      revision="6a02618ccf6c5651ecb9cccbde571eb61fd73592" />
+
+  <!-- Keep both guest architectures and their virtual-device modules on the
+       same Android 6.12 KMI release. This advances the guests from 6.12.38 to
+       the 6.12.74 android16-6 maintenance build without changing kernel
+       families. Google's matching x86-64 artifacts were published through the
+       Android 17 release branch; immutable commits below carry the same Android
+       16 kernel release and build ID as ARM64. -->
+  <extend-project
+      name="kernel/prebuilts/6.12/arm64"
+      path="kernel/prebuilts/6.12/arm64"
+      revision="318576752b27af3d328e6deb5e6aa29b08f762c9" />
+
+  <extend-project
+      name="kernel/prebuilts/common-modules/virtual-device/6.12/arm64"
+      path="kernel/prebuilts/common-modules/virtual-device/6.12/arm64"
+      revision="e6673fcbd05e63e6fcc2c2d2cf33246108b73b0c" />
+
+  <extend-project
+      name="kernel/prebuilts/6.12/x86-64"
+      path="kernel/prebuilts/6.12/x86_64"
+      revision="cb8e8ee3babf4a27b742f59dcb92f59cf186299c" />
+
+  <extend-project
+      name="kernel/prebuilts/common-modules/virtual-device/6.12/x86-64"
+      path="kernel/prebuilts/common-modules/virtual-device/6.12/x86-64"
+      revision="4463c45163d93baf9479744641a03961f58c1467" />
 
   <extend-project
       name="platform/external/minigbm"
