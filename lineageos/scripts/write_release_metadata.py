@@ -200,6 +200,9 @@ def build_metadata(args: argparse.Namespace) -> dict[str, Any]:
         "include_x86_arm_native_bridge": os.environ.get(
             "INCLUDE_X86_ARM_NATIVE_BRIDGE", "1"
         ),
+        "build_native_bridge_tests": os.environ.get(
+            "BUILD_NATIVE_BRIDGE_TESTS", "0"
+        ),
         "update_native_bridge_prebuilts": os.environ.get(
             "UPDATE_NATIVE_BRIDGE_PREBUILTS", "1"
         ),
