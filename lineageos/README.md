@@ -405,8 +405,9 @@ vendor/lineage_desktop/scripts/smoke_resize_desktop.sh 127.0.0.1:6520
 This checks the desktop feature contract, resizes the logical display, verifies
 that the desktop settings remain enabled, and captures a screenshot.
 
-The x86-64 release bundle also contains ARM64 static and dynamic native-bridge
-regression suites. Run them against a launched bundle with:
+Set `BUILD_NATIVE_BRIDGE_TESTS=1` when creating an x86-64 release to build and
+bundle the ARM64 static and dynamic native-bridge regression suites. Run them
+against a launched bundle with:
 
 ```bash
 lineageos-x86_64/testcases/native_bridge/run-tests.sh -s 127.0.0.1:6520
@@ -414,5 +415,6 @@ lineageos-x86_64/testcases/native_bridge/run-tests.sh -s 127.0.0.1:6520
 
 The static suite isolates ARM64 instruction and syscall translation. The
 dynamic suite additionally exercises the translated linker and host proxy
-libraries. A release build fails packaging if either executable, the bridge
-runtime, its Vulkan/EGL/GLES proxies, or its integrity manifest is absent.
+libraries. When the diagnostics are requested, the build fails packaging if
+either executable or its integrity manifest is absent. The bridge runtime and
+its Vulkan/EGL/GLES proxies remain mandatory for every native-bridge build.
