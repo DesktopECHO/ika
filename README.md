@@ -28,13 +28,13 @@ application and disk image.
 | **Distribution / architecture** | **Application** | **Disk Image** |
 | --- | --- | --- |
 |  |  |  |
-| Fedora x86_64 | [ika-base (144 MB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-base-260713-1.fc44.x86_64.rpm) | [ika-lineageos (1.31 GB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-lineageos-260713-1.fc44.x86_64.rpm) |
+| Fedora x86_64 | [ika-base (144 MB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-base-260726-1.fc44.x86_64.rpm) | [ika-lineageos (1.31 GB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-lineageos-260726-1.fc44.x86_64.rpm) |
 |  |  |  |
-| Fedora ARM64 | [ika-base (141 MB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-base-260713-1.fc44.aarch64.rpm) | [ika-lineageos (1.29 GB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-lineageos-260713-1.fc44.aarch64.rpm) |
+| Fedora ARM64 | [ika-base (141 MB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-base-260726-1.fc44.aarch64.rpm) | [ika-lineageos (1.29 GB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-lineageos-260726-1.fc44.aarch64.rpm) |
 |  |  |  |
-| Debian x86_64 | [ika-base (116 MB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-base_260713-1_amd64.deb) | [ika-lineageos (1.26 GB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-lineageos_260713-1_amd64.deb) |
+| Debian x86_64 | [ika-base (116 MB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-base_260726-1_amd64.deb) | [ika-lineageos (1.26 GB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-lineageos_260726-1_amd64.deb) |
 |  |  |  |
-| Debian ARM64 | [ika-base (101 MB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-base_260713-1_arm64.deb) | [ika-lineageos (1.24 GB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-lineageos_260713-1_arm64.deb) | 
+| Debian ARM64 | [ika-base (101 MB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-base_260726-1_arm64.deb) | [ika-lineageos (1.24 GB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-lineageos_260726-1_arm64.deb) |
 
 > [!NOTE]
 > Debian and Ubuntu require Mesa 26.1 or newer. Get an updated Mesa from
