@@ -17,7 +17,7 @@ on [Fedora Asahi Remix](https://asahilinux.org/). It later evolved into a deskto
 - **Flexible build options** for **MindTheGapps**, **microG**, or a fully
   de-Googled ROM without an app store.
 
-## Ika Binaries
+## Ika Binaries (Updated 2026-07-26)
 
 Ika consists of two packages: an Android disk image (informally, the device ROM)
 and a matching Cuttlefish virtual machine application. Prebuilt Fedora Linux
