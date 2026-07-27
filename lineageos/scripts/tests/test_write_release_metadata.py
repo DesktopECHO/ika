@@ -74,6 +74,9 @@ class WriteReleaseMetadataTest(unittest.TestCase):
 
             self.assertEqual(metadata["ika"]["source_commit"], build_commit)
             self.assertEqual(metadata["ika"]["commit"], current_commit)
+            self.assertEqual(
+                metadata["build_options"]["build_native_bridge_tests"], "0"
+            )
 
 
 if __name__ == "__main__":

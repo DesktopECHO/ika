@@ -12,7 +12,9 @@ Before building:
    resolved source information.
 3. Choose the native bridge SDK payload for x86-64, or set
    `NATIVE_BRIDGE_SOURCE_DIR` to a vetted extracted payload.
-4. Run the one-command build script from a clean or script-managed workspace.
+4. Set `BUILD_NATIVE_BRIDGE_TESTS=1` and `BUILD_VULKAN_TESTS=1` for publishable
+   builds so the release diagnostics are included.
+5. Run the one-command build script from a clean or script-managed workspace.
 
 The build script runs `scripts/lib/validate_build_inputs.sh` before compiling. It
 checks patch application state, userdata policy, selected provider prebuilts,
@@ -29,8 +31,9 @@ Each generated Cuttlefish bundle contains:
 - selected provider source and prebuilt metadata
 - WebView APK checksum for the target architecture
 - native bridge payload metadata for x86-64
-- Vulkan CTS artifacts on both architectures
-- ARM64 static/dynamic native-bridge regression suites on x86-64
+- Vulkan CTS artifacts when `BUILD_VULKAN_TESTS=1`
+- ARM64 static/dynamic native-bridge regression suites on x86-64 when
+  `BUILD_NATIVE_BRIDGE_TESTS=1`
 
 Release reviewers should compare these files between ARM64 and x86-64 before
 publishing. The recorded Ika source commit must match. Expected differences are
