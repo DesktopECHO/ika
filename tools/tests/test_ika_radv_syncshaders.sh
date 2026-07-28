@@ -37,6 +37,16 @@ assert_env_omits_prefix() {
   done
 }
 
+assert_arg_contains() {
+  local expected="$1"
+  shift
+  local value
+  for value in "$@"; do
+    [[ "${value}" == *"${expected}"* ]] && return 0
+  done
+  fail "arguments do not contain '${expected}'"
+}
+
 assert_equal "syncshaders" "$(append_comma_option "" "syncshaders")"
 assert_equal "nodcc,syncshaders" "$(append_comma_option "nodcc" "syncshaders")"
 assert_equal "nodcc,syncshaders" "$(append_comma_option "nodcc,syncshaders" "syncshaders")"
@@ -52,5 +62,13 @@ primary_vulkan_device_is_radv() { return 1; }
 env_args=(env)
 append_cvd_env_args env_args
 assert_env_omits_prefix "RADV_DEBUG=" "${env_args[@]}"
+
+primary_vulkan_device_is_radv() { return 0; }
+renderer_args=(
+  "--gpu_renderer_features=MinimalLogging:disabled;VulkanBatchedDescriptorSetUpdate:disabled"
+)
+append_radv_gfxstream_vulkan_args renderer_args
+assert_arg_contains \
+  "VulkanAllocateDeviceMemoryOnly:enabled" "${renderer_args[@]}"
 
 printf 'PASS: RADV syncshaders launcher tests\n'
