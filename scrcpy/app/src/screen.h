@@ -23,7 +23,6 @@
 #include "trait/key_processor.h"
 #include "trait/frame_sink.h"
 #include "trait/mouse_processor.h"
-#include "util/process.h"
 #include "util/tick.h"
 
 #ifdef __APPLE__
@@ -89,13 +88,17 @@ struct sc_screen {
     // Last requested remote display size (in device orientation), used to
     // Deduplicate resize requests while dpi-driven resizing is active.
     struct sc_size last_requested_display_size;
+    // Last viewport size confirmed by DISPLAY_READY. Raw Cuttlefish frames use
+    // a fixed backing-buffer size, so this acknowledgement is the authoritative
+    // logical size associated with subsequently received raw frames.
+    struct sc_size last_ready_display_size;
+    sc_tick last_ready_display_tick;
     bool resize_display_using_pixel_size;
     const char *cuttlefish_frames_socket;
     uint32_t cuttlefish_display_id;
     uint16_t flex_display_dpi;
     uint16_t launch_display_dpi;    // flex_display_dpi at init, for DPI ratio
     float initial_display_scale;    // host display scale at init, for DPI ratio
-    sc_pid cuttlefish_resize_pid;   // async resize child, reaped before next spawn
     sc_tick last_resize_request_tick;
     bool initial_window_show_deferred;
     struct sc_size initial_display_size;
