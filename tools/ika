@@ -383,6 +383,7 @@ GFXSTREAM_VULKAN_MODE="${GFXSTREAM_VULKAN:-auto}"
 GFXSTREAM_GLES_CONTEXT_TYPES="gfxstream-gles:gfxstream-composer"
 GFXSTREAM_VULKAN_CONTEXT_TYPES="gfxstream-gles:gfxstream-vulkan:gfxstream-composer"
 GFXSTREAM_RADV_VULKAN_RENDERER_FEATURES="VulkanAllocateDeviceMemoryOnly:enabled"
+RADV_VEGA_OR_OLDER_FAMILY_REGEX='(TAHITI|PITCAIRN|VERDE|OLAND|HAINAN|BONAIRE|KABINI|KAVERI|HAWAII|MULLINS|TONGA|ICELAND|CARRIZO|FIJI|STONEY|POLARIS10|POLARIS11|POLARIS12|VEGAM|VEGA10|RAVEN|VEGA12|VEGA20|RAVEN2|RENOIR)'
 # Apple Silicon (Honeykrisp) exposes the dma-buf external-memory path
 # (VK_EXT_external_memory_dma_buf) but NOT VK_EXT_external_memory_host, so the
 # gfxstream SystemBlob host-pointer path cannot be backed by the Apple GPU and
@@ -1196,6 +1197,43 @@ primary_vulkan_device_is_radv() {
   grep -Eiq '(^[[:space:]]*(deviceName|driverName|driverID)[[:space:]]*=.*radv|DRIVER_ID_MESA_RADV)' <<<"${primary_device}"
 }
 
+vulkan_device_summary_is_radv_vega_or_older() {
+  local device_summary="$1"
+
+  grep -Eiq '(^[[:space:]]*(deviceName|driverName|driverID)[[:space:]]*=.*radv|DRIVER_ID_MESA_RADV)' \
+    <<<"${device_summary}" || return 1
+  grep -Eiq "RADV[[:space:]_-]*${RADV_VEGA_OR_OLDER_FAMILY_REGEX}([^[:alnum:]_]|$)" \
+    <<<"${device_summary}"
+}
+
+primary_vulkan_device_is_radv_vega_or_older() {
+  local summary
+  local primary_device
+
+  command -v vulkaninfo >/dev/null 2>&1 || return 1
+
+  summary="$(vulkaninfo --summary 2>/dev/null || true)"
+  [[ -n "${summary}" ]] || return 1
+
+  primary_device="$(
+    awk '
+      /^GPU[0-9]+:/ {
+        if (seen) {
+          exit
+        }
+        seen = 1
+        next
+      }
+      seen {
+        print
+      }
+    ' <<<"${summary}"
+  )"
+  [[ -n "${primary_device}" ]] || return 1
+
+  vulkan_device_summary_is_radv_vega_or_older "${primary_device}"
+}
+
 append_comma_option() {
   local existing="$1"
   local required="$2"
@@ -1366,10 +1404,10 @@ append_apple_16k_gfxstream_vulkan_args() {
 append_radv_gfxstream_vulkan_args() {
   local -n radv_args_array="$1"
 
-  primary_vulkan_device_is_radv || return 1
+  primary_vulkan_device_is_radv_vega_or_older || return 1
   append_or_merge_gpu_renderer_features \
     radv_args_array "${GFXSTREAM_RADV_VULKAN_RENDERER_FEATURES}"
-  log "RADV gfxstream: using device-only Vulkan memory to avoid AMD host-visible memory corruption"
+  log "RADV Vega-or-older gfxstream: using device-only Vulkan memory to avoid AMD host-visible memory corruption"
 }
 
 append_gfxstream_vulkan_args() {
