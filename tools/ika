@@ -1141,13 +1141,20 @@ append_arm64_kernel_page_args() {
   esac
 }
 
+vulkaninfo_summary() {
+  command -v vulkaninfo >/dev/null 2>&1 || return 1
+
+  # GPU classification does not need a presentation surface. Keep the probe
+  # independent of X11/Wayland authentication, especially for SSH launches
+  # that inherit DISPLAY without a usable authorization cookie.
+  env -u DISPLAY -u WAYLAND_DISPLAY vulkaninfo --summary 2>/dev/null
+}
+
 primary_vulkan_device_is_llvmpipe() {
   local summary
   local primary_device
 
-  command -v vulkaninfo >/dev/null 2>&1 || return 1
-
-  summary="$(vulkaninfo --summary 2>/dev/null || true)"
+  summary="$(vulkaninfo_summary || true)"
   [[ -n "${summary}" ]] || return 1
 
   primary_device="$(
@@ -1173,9 +1180,7 @@ primary_vulkan_device_is_radv() {
   local summary
   local primary_device
 
-  command -v vulkaninfo >/dev/null 2>&1 || return 1
-
-  summary="$(vulkaninfo --summary 2>/dev/null || true)"
+  summary="$(vulkaninfo_summary || true)"
   [[ -n "${summary}" ]] || return 1
 
   primary_device="$(
@@ -1210,9 +1215,7 @@ primary_vulkan_device_is_radv_vega_or_older() {
   local summary
   local primary_device
 
-  command -v vulkaninfo >/dev/null 2>&1 || return 1
-
-  summary="$(vulkaninfo --summary 2>/dev/null || true)"
+  summary="$(vulkaninfo_summary || true)"
   [[ -n "${summary}" ]] || return 1
 
   primary_device="$(

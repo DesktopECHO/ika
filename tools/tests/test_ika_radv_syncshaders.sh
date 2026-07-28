@@ -67,6 +67,28 @@ assert_failure() {
   fi
 }
 
+fake_vulkaninfo_dir="$(mktemp -d)"
+fake_vulkaninfo="${fake_vulkaninfo_dir}/vulkaninfo"
+trap 'rm -f -- "${fake_vulkaninfo}"; rmdir -- "${fake_vulkaninfo_dir}"' EXIT
+cat >"${fake_vulkaninfo}" <<'EOF'
+#!/usr/bin/bash
+[[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]] || exit 9
+cat <<'SUMMARY'
+GPU0:
+  deviceName = AMD Radeon RX 480 Graphics (RADV POLARIS10)
+  driverID = DRIVER_ID_MESA_RADV
+  driverName = radv
+SUMMARY
+EOF
+chmod 0755 "${fake_vulkaninfo}"
+
+PATH="${fake_vulkaninfo_dir}:${PATH}" \
+  DISPLAY=:unauthorized WAYLAND_DISPLAY=unavailable \
+  assert_success primary_vulkan_device_is_radv
+PATH="${fake_vulkaninfo_dir}:${PATH}" \
+  DISPLAY=:unauthorized WAYLAND_DISPLAY=unavailable \
+  assert_success primary_vulkan_device_is_radv_vega_or_older
+
 assert_equal "syncshaders" "$(append_comma_option "" "syncshaders")"
 assert_equal "nodcc,syncshaders" "$(append_comma_option "nodcc" "syncshaders")"
 assert_equal "nodcc,syncshaders" "$(append_comma_option "nodcc,syncshaders" "syncshaders")"
