@@ -12,8 +12,6 @@ on [Fedora Asahi Remix](https://asahilinux.org/). It later evolved into a deskto
 - **Native builds** for **Apple Silicon** or **x86-64** systems with as little as 16 GB RAM.
 - **Dynamic display** window resizing that preserves DPI settings.
 - **Accelerated GPU rendering** with OpenGL ES and Vulkan support.
-- **Native builds on Asahi Linux** and x86-64 systems with as little as 16 GB
-  of RAM.
 - **Flexible build options** for **MindTheGapps**, **microG**, or a fully
   de-Googled ROM without an app store.
 
