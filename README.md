@@ -17,11 +17,14 @@ on [Fedora Asahi Remix](https://asahilinux.org/). It later evolved into a deskto
 
 ## Ika Binaries (Updated 2026-07-26)
 
-Ika consists of two packages: an Android disk image (informally, the device ROM)
-and a matching Cuttlefish virtual machine application. Prebuilt Fedora Linux
-(`.rpm`) and Debian/Ubuntu (`.deb`) packages are available below.
+Ika consists of two packages: An Android disk image (informally, the device ROM)
+and a matching Cuttlefish virtual machine application. Prebuilt Fedora 44
+(`.rpm`) and Debian 13/Ubuntu 26.04 packages (`.deb`) are available below.
 Select your distribution and CPU architecture, then download the corresponding
 application and disk image.
+
+> [!NOTE]
+> Debian and Ubuntu require Mesa 26.1 or newer. Get updated binaries from [Debian trixie-backports](https://backports.debian.org/Instructions/) or the [Kisak Mesa PPA](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa) before installing the Ika packages.
 
 | **Distribution / architecture** | **Application** | **Disk Image** |
 | --- | --- | --- |
@@ -33,12 +36,6 @@ application and disk image.
 | Debian x86_64 | [ika-base (116 MB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-base_260726-1_amd64.deb) | [ika-lineageos (1.26 GB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-lineageos_260726-1_amd64.deb) |
 |  |  |  |
 | Debian ARM64 | [ika-base (101 MB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-base_260726-1_arm64.deb) | [ika-lineageos (1.24 GB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-lineageos_260726-1_arm64.deb) |
-
-> [!NOTE]
-> Debian and Ubuntu require Mesa 26.1 or newer. Get an updated Mesa from
-> [Debian trixie-backports](https://backports.debian.org/Instructions/) or the
-> [Kisak Mesa PPA](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa)
-> before installing the binary packages.
 
 ## Build Ika from Source
 
