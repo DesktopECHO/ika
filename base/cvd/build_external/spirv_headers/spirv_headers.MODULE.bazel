@@ -2,6 +2,6 @@ git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "g
 
 git_repository(
     name = "spirv_headers",
-    commit = "c63848ecf2200425511319fd8bf2c17b751e501e",
+    commit = "0d25db97cb9b8f725e4c95e4553001710e7fc39d",
     remote = "https://github.com/KhronosGroup/SPIRV-Headers.git",
 )
