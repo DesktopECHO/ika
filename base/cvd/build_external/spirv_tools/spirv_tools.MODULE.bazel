@@ -2,7 +2,7 @@ git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "g
 
 git_repository(
     name = "spirv_tools",
-    commit = "113784c9cf103b775fdadb1ef194f6b963e24a7e",
+    commit = "e39e5c5838bc4b4162c349f2a2e5f163efe5432f",
     remote = "https://github.com/KhronosGroup/SPIRV-Tools.git",
     patches = [
         "//build_external/spirv_tools:bazel9.patch",
