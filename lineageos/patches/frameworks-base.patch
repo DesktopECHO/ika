@@ -2344,7 +2344,7 @@ diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/phone/Keyguard
 index b3bf60b3c6cc..25e2377c91a9 100644
 --- a/packages/SystemUI/src/com/android/systemui/statusbar/phone/KeyguardStatusBarViewController.java
 +++ b/packages/SystemUI/src/com/android/systemui/statusbar/phone/KeyguardStatusBarViewController.java
-@@ -533,10 +533,12 @@ public class KeyguardStatusBarViewController extends ViewController<KeyguardStat
+@@ -533,16 +533,18 @@ public class KeyguardStatusBarViewController extends ViewController<KeyguardStat
              collectFlow(mView, mKeyguardInteractor.primaryBouncerShowing, x -> updateViewState());
          }
          if (NewStatusBarIcons.isEnabled()) {
@@ -2355,11 +2355,21 @@ index b3bf60b3c6cc..25e2377c91a9 100644
 +                    mBatteryComposeView = createAndBindComposeBattery();
 +                }
 +                mSystemIconsContainer.addView(mBatteryComposeView, -1);
++                mSecureSettings.registerContentObserverForUserSync(
++                        StatusBarIconController.ICON_HIDE_LIST,
++                        false, mIconHideListObserver, UserHandle.USER_ALL);
++                mIconHideListObserver.onChange(false, null);
              }
 -            mSystemIconsContainer.addView(mBatteryComposeView, -1);
              // Set the margins for the system icons appropriately
              AlphaOptimizedLinearLayout systemIcons =
                      mSystemIconsContainer.findViewById(R.id.statusIcons);
+             SystemStatusIconsLayoutHelper.configurePaddingForNewStatusBarIcons(systemIcons);
+-            mSecureSettings.registerContentObserverForUserSync(
+-                    StatusBarIconController.ICON_HIDE_LIST,
+-                    false, mIconHideListObserver, UserHandle.USER_ALL);
+-            mIconHideListObserver.onChange(false, null);
+         }
 diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/battery/ui/binder/UnifiedBatteryViewBinder.kt b/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/battery/ui/binder/UnifiedBatteryViewBinder.kt
 index 59890d9129b5..2081677f1a3a 100644
 --- a/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/battery/ui/binder/UnifiedBatteryViewBinder.kt
@@ -2381,6 +2391,18 @@ index 59890d9129b5..2081677f1a3a 100644
                      setViewCompositionStrategy(
                          if (SceneContainerFlag.isEnabled) {
                              ViewCompositionStrategy.Default
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/binder/HomeStatusBarViewBinder.kt b/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/binder/HomeStatusBarViewBinder.kt
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/binder/HomeStatusBarViewBinder.kt
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/binder/HomeStatusBarViewBinder.kt
+@@ -453,7 +453,7 @@ object HomeStatusBarViewBinder {
+ 
+                     launch {
+                         batteryVisible.collect { isVisible ->
+-                            batteryView.isVisible = isVisible
++                            batteryView?.isVisible = isVisible
+                         }
+                     }
+ 
 diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt b/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt
 index 23e715dccde8..3c178dc8d74e 100644
 --- a/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt

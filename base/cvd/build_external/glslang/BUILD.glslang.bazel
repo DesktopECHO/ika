@@ -1,5 +1,5 @@
 # Host shader compiler used only while generating Mesa's embedded SPIR-V.
-# Adapted from gfxstream 6e68776c's Bazel dependency definition.
+# Adapted from gfxstream's Bazel dependency definition.
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 
 package(
@@ -112,6 +112,7 @@ cc_library(
     copts = [
         "-DENABLE_HLSL",
         "-DENABLE_OPT=0",
+        "-DENABLE_SPIRV=1",
     ],
     includes = [
         ".",
@@ -151,6 +152,7 @@ cc_binary(
     ),
     copts = [
         "-DENABLE_OPT=0",
+        "-DENABLE_SPIRV=1",
     ],
     deps = [
         ":glslang",

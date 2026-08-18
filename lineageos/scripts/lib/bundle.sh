@@ -275,7 +275,9 @@ bundle_dir_complete() {
     [[ -x "$bundle_dir/testcases/vulkan/deqp-binary" ]] || return 1
     [[ -s "$bundle_dir/testcases/vulkan/vulkan/amber/api/descriptor_set/descriptor_set_layout_binding/layout_binding_order.amber" ]] || return 1
   fi
-  if [[ "$arch" == "x86_64" ]] && enabled "${include_x86_arm_native_bridge:-1}"; then
+  if [[ "$arch" == "x86_64" ]] &&
+     enabled "${include_x86_arm_native_bridge:-1}" &&
+     enabled "${build_native_bridge_tests:-0}"; then
     [[ -x "$bundle_dir/testcases/native_bridge/ndk_program_tests" ]] || return 1
     [[ -x "$bundle_dir/testcases/native_bridge/ndk_program_tests_static" ]] || return 1
     [[ -x "$bundle_dir/testcases/native_bridge/run-tests.sh" ]] || return 1
@@ -790,7 +792,9 @@ package_cvd_bundle() {
     copy_vulkan_test_outputs \
       "$product_out" "$(target_host_tag "$arch")" "$bundle_dir"
   fi
-  if [[ "$arch" == "x86_64" ]] && enabled "${include_x86_arm_native_bridge:-1}"; then
+  if [[ "$arch" == "x86_64" ]] &&
+     enabled "${include_x86_arm_native_bridge:-1}" &&
+     enabled "${build_native_bridge_tests:-0}"; then
     copy_native_bridge_test_outputs "$product_out" "$bundle_dir"
   fi
 

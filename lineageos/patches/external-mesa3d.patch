@@ -1,5 +1,5 @@
 Patch summary:
-Carry AOSP's Android/gfxstream build integration forward to the Mesa 26.1.5
+Carry AOSP's Android/gfxstream build integration forward to the Mesa 26.1.7
 release while retaining the guest fixes required by Ika's Apple Silicon path.
 The Soong files are generated from Mesa's Meson definitions with
 meson2hermetic 9217da54f71a and cover gfxstream and lavapipe for Android x86,
@@ -28,7 +28,7 @@ requests with the host default, and fully unwind partially initialized guest/hos
 devices on allocation failures.
 
 Let Soong and Meson generate gfxstream's reserved-marshalling sources from the
-same 26.1.5 Vulkan registry used by the encoder. Carrying an older generated
+same 26.1.7 Vulkan registry used by the encoder. Carrying an older generated
 header here shadows Soong's output and drops newer maintenance6 declarations.
 
 Route the Vulkan 1.4 and KHR map-memory2 entry points through the guest memory
@@ -46,11 +46,11 @@ guest ResourceTracker after device creation instead. Report the backing memory
 heap index rather than the memory-type index in allocation callbacks.
 
 Regenerate supported extension structs even when a lower-numbered unsupported
-extension referenced them first. Vulkan-Headers 1.4.341's descriptor-heap
+extension referenced them first. Vulkan-Headers 1.4.360's descriptor-heap
 extension otherwise marks the custom-border-color sampler struct declared while
 only unsupported-feature wrappers are active, dropping its guest pNext payload.
 
-Written against Mesa 26.1.5 (6a02618ccf6c5651ecb9cccbde571eb61fd73592).
+Written against Mesa 26.1.7 (e8617e4ca95fc655b0f13fd115c224d27eba2441).
 
 diff --git a/Android.bp b/Android.bp
 new file mode 100644
@@ -196,7 +196,7 @@ index 0000000000000000000000000000000000000000..82dcfeeac92a402f4e24542f15c3a384
 +        "-DMESA_LLVM_VERSION_STRING=\"16.0\"",
 +        "-DMESA_SYSTEM_HAS_KMS_DRM=1",
 +        "-DPACKAGE_BUGREPORT=\"https://gitlab.freedesktop.org/mesa/mesa/-/issues\"",
-+        "-DPACKAGE_VERSION=\"26.1.5\"",
++        "-DPACKAGE_VERSION=\"26.1.7\"",
 +        "-DTHREAD_SANITIZER=0",
 +        "-DUSE_GCC_ATOMIC_BUILTINS",
 +        "-DUSE_LIBGLVND=0",
@@ -409,7 +409,7 @@ index 0000000000000000000000000000000000000000..82dcfeeac92a402f4e24542f15c3a384
 +        "-DMESA_LLVM_VERSION_STRING=\"16.0\"",
 +        "-DMESA_SYSTEM_HAS_KMS_DRM=1",
 +        "-DPACKAGE_BUGREPORT=\"https://gitlab.freedesktop.org/mesa/mesa/-/issues\"",
-+        "-DPACKAGE_VERSION=\"26.1.5\"",
++        "-DPACKAGE_VERSION=\"26.1.7\"",
 +        "-DTHREAD_SANITIZER=0",
 +        "-DUSE_GCC_ATOMIC_BUILTINS",
 +        "-DUSE_LIBGLVND=0",

@@ -4,7 +4,7 @@ external projects invoke the prebuilt Bison binary from Soong genrules, but the
 binary does not reliably discover its package data when launched from the build
 sandbox. Setting `BISON_PKGDATADIR` from the Bison tool location keeps parser
 generation host-independent for libpcap, one-true-awk, and iproute2. Mesa
-26.1.5's generated Soong files no longer carry a Bison genrule.
+26.1.7's generated Soong files no longer carry a Bison genrule.
 
 diff --git a/external/libpcap/Android.bp b/external/libpcap/Android.bp
 index bf511871..a3a07818 100644

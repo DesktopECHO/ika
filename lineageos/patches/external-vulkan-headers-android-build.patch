@@ -1,8 +1,8 @@
 Patch summary:
-Restore Android build glue for Khronos Vulkan-Headers v1.4.341.
+Restore Android build glue for Khronos Vulkan-Headers v1.4.360.
 
 The local manifest replaces AOSP's external/vulkan-headers checkout with the
-matching upstream Khronos tag so the ROM builds against VK_HEADER_VERSION 341.
+matching upstream Khronos tag so the ROM builds against VK_HEADER_VERSION 360.
 Upstream does not carry Android's Soong module definitions, so add back the
 current Android.bp and Bazel header-library target.
 
