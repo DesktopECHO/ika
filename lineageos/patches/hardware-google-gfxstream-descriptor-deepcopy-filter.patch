@@ -1,0 +1,79 @@
+Patch summary:
+Regenerate the checked-in host VkWriteDescriptorSet deep-copy implementation
+after teaching Mesa's gfxstream generator to honor descriptor-type filters.
+Inactive payload pointers are ignored by Vulkan and may contain undefined data.
+
+diff --git a/host/vulkan/cereal/common/goldfish_vk_deepcopy.cpp b/host/vulkan/cereal/common/goldfish_vk_deepcopy.cpp
+index 5d8451c6..f285c589 100644
+--- a/host/vulkan/cereal/common/goldfish_vk_deepcopy.cpp
++++ b/host/vulkan/cereal/common/goldfish_vk_deepcopy.cpp
+@@ -1766,34 +1766,48 @@ void deepcopy_VkWriteDescriptorSet(Allocator* alloc, VkStructureType rootType,
+         to->pNext = (void*)alloc->alloc(pNext_size);
+         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
+     }
+-    if (from) {
+-        to->pImageInfo = nullptr;
+-        if (from->pImageInfo) {
+-            to->pImageInfo = (VkDescriptorImageInfo*)alloc->alloc(
+-                from->descriptorCount * sizeof(const VkDescriptorImageInfo));
+-            to->descriptorCount = from->descriptorCount;
+-            for (uint32_t i = 0; i < (uint32_t)from->descriptorCount; ++i) {
+-                deepcopy_VkDescriptorImageInfo(alloc, rootType, from->pImageInfo + i,
+-                                               (VkDescriptorImageInfo*)(to->pImageInfo + i));
++    to->pImageInfo = nullptr;
++    if ((VK_DESCRIPTOR_TYPE_SAMPLER == from->descriptorType) ||
++        (VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER == from->descriptorType) ||
++        (VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE == from->descriptorType) ||
++        (VK_DESCRIPTOR_TYPE_STORAGE_IMAGE == from->descriptorType) ||
++        (VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT == from->descriptorType)) {
++        if (from) {
++            if (from->pImageInfo) {
++                to->pImageInfo = (VkDescriptorImageInfo*)alloc->alloc(
++                    from->descriptorCount * sizeof(const VkDescriptorImageInfo));
++                to->descriptorCount = from->descriptorCount;
++                for (uint32_t i = 0; i < (uint32_t)from->descriptorCount; ++i) {
++                    deepcopy_VkDescriptorImageInfo(alloc, rootType, from->pImageInfo + i,
++                                                   (VkDescriptorImageInfo*)(to->pImageInfo + i));
++                }
+             }
+         }
+     }
+-    if (from) {
+-        to->pBufferInfo = nullptr;
+-        if (from->pBufferInfo) {
+-            to->pBufferInfo = (VkDescriptorBufferInfo*)alloc->alloc(
+-                from->descriptorCount * sizeof(const VkDescriptorBufferInfo));
+-            to->descriptorCount = from->descriptorCount;
+-            for (uint32_t i = 0; i < (uint32_t)from->descriptorCount; ++i) {
+-                deepcopy_VkDescriptorBufferInfo(alloc, rootType, from->pBufferInfo + i,
+-                                                (VkDescriptorBufferInfo*)(to->pBufferInfo + i));
++    to->pBufferInfo = nullptr;
++    if ((VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER == from->descriptorType) ||
++        (VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC == from->descriptorType) ||
++        (VK_DESCRIPTOR_TYPE_STORAGE_BUFFER == from->descriptorType) ||
++        (VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC == from->descriptorType)) {
++        if (from) {
++            if (from->pBufferInfo) {
++                to->pBufferInfo = (VkDescriptorBufferInfo*)alloc->alloc(
++                    from->descriptorCount * sizeof(const VkDescriptorBufferInfo));
++                to->descriptorCount = from->descriptorCount;
++                for (uint32_t i = 0; i < (uint32_t)from->descriptorCount; ++i) {
++                    deepcopy_VkDescriptorBufferInfo(alloc, rootType, from->pBufferInfo + i,
++                                                    (VkDescriptorBufferInfo*)(to->pBufferInfo + i));
++                }
+             }
+         }
+     }
+     to->pTexelBufferView = nullptr;
+-    if (from->pTexelBufferView) {
+-        to->pTexelBufferView = (VkBufferView*)alloc->dupArray(
+-            from->pTexelBufferView, from->descriptorCount * sizeof(const VkBufferView));
++    if ((VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER == from->descriptorType) ||
++        (VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER == from->descriptorType)) {
++        if (from->pTexelBufferView) {
++            to->pTexelBufferView = (VkBufferView*)alloc->dupArray(
++                from->pTexelBufferView, from->descriptorCount * sizeof(const VkBufferView));
++        }
+     }
+ }
+ 

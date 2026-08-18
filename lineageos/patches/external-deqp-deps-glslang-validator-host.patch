@@ -1,5 +1,5 @@
 Patch summary:
-Add the host glslangValidator module expected by Mesa 26.1.5's generated
+Add the host glslangValidator module expected by Mesa 26.1.7's generated
 SPIR-V header genrules. LineageOS 23.2's dEQP glslang checkout only exposes
 the library pieces needed by dEQP, while the generated Mesa Soong files also
 reference the standalone validator. Build a host-only validator from the same

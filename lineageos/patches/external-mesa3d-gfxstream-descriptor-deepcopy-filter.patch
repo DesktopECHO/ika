@@ -1,0 +1,85 @@
+Patch summary:
+Honor gfxstream's existing VkWriteDescriptorSet descriptor-type filters in the
+deep-copy generator. Vulkan permits inactive descriptor payload pointers to be
+ignored, so dereferencing all non-null payloads can crash on undefined values.
+
+The filter tables and streaming paths already distinguish image, buffer, and
+texel-buffer descriptors. Reuse those tables for generated deep copies and
+clear inactive destination pointers rather than carrying shallow-copied junk.
+
+diff --git a/src/gfxstream/codegen/scripts/cereal/deepcopy.py b/src/gfxstream/codegen/scripts/cereal/deepcopy.py
+index 392c4c255bf..53f42147d43 100644
+--- a/src/gfxstream/codegen/scripts/cereal/deepcopy.py
++++ b/src/gfxstream/codegen/scripts/cereal/deepcopy.py
+@@ -66,6 +66,25 @@ class DeepcopyCodegen(VulkanTypeIterator):
+ 
+         return bytesExpr
+ 
++    def hasFilterGuard(self, vulkanType):
++        return vulkanType.filterVar is not None and vulkanType.filterVals is not None
++
++    def beginFilterGuard(self, vulkanType):
++        if not self.hasFilterGuard(vulkanType):
++            return
++
++        filterVarAccess = "%s->%s" % (self.inputVars[0], vulkanType.filterVar)
++        filterValsExpr = " || ".join(
++            "(%s == %s)" % (filterVal, filterVarAccess)
++            for filterVal in vulkanType.filterVals)
++        self.cgen.beginIf(filterValsExpr)
++
++    def endFilterGuard(self, vulkanType):
++        if not self.hasFilterGuard(vulkanType):
++            return
++
++        self.cgen.endIf()
++
+     def onCheck(self, vulkanType):
+         pass
+ 
+@@ -90,11 +109,19 @@ class DeepcopyCodegen(VulkanTypeIterator):
+ 
+         isPtr = vulkanType.pointerIndirectionLevels > 0
+ 
++        hasFilterGuard = self.hasFilterGuard(vulkanType)
++        if isPtr and hasFilterGuard:
++            # Filtered pointers may be undefined when their selector is inactive.
++            self.cgen.stmt("%s = nullptr" % accessRhs)
++
++        self.beginFilterGuard(vulkanType)
++
+         if lenAccessorGuardLhs is not None:
+             self.cgen.beginIf(lenAccessorGuardLhs)
+ 
+         if isPtr:
+-            self.cgen.stmt("%s = nullptr" % accessRhs)
++            if not hasFilterGuard:
++                self.cgen.stmt("%s = nullptr" % accessRhs)
+             self.cgen.beginIf(accessLhs)
+ 
+             self.cgen.stmt( \
+@@ -133,6 +160,8 @@ class DeepcopyCodegen(VulkanTypeIterator):
+         if lenAccessorGuardLhs is not None:
+             self.cgen.endIf()
+ 
++        self.endFilterGuard(vulkanType)
++
+     def onString(self, vulkanType):
+         accessLhs = self.exprAccessorLhs(vulkanType)
+         accessRhs = self.exprAccessorRhs(vulkanType)
+@@ -226,6 +255,7 @@ class DeepcopyCodegen(VulkanTypeIterator):
+         lenAccessLhs = self.lenAccessorLhs(vulkanType)
+ 
+         self.cgen.stmt("%s = nullptr" % accessRhs)
++        self.beginFilterGuard(vulkanType)
+         self.cgen.beginIf(accessLhs)
+ 
+         bytesExpr = self.makeAllocBytesExpr(lenAccessLhs, vulkanType)
+@@ -239,6 +269,7 @@ class DeepcopyCodegen(VulkanTypeIterator):
+              bytesExpr))
+ 
+         self.cgen.endIf()
++        self.endFilterGuard(vulkanType)
+ 
+     def onValue(self, vulkanType):
+         if self.skipValues:

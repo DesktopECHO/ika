@@ -1377,7 +1377,7 @@ check_arm64_page_size_product_defaults() {
 }
 
 check_vulkan_header_version() {
-  local expected_version=341
+  local expected_version=360
   local header="$android_root/external/vulkan-headers/include/vulkan/vulkan_core.h"
   local registry="$android_root/external/vulkan-headers/registry/vk.xml"
 
@@ -1415,13 +1415,13 @@ check_vulkan_ndk_abi_dumps() {
 
       for enum in "${required_enums[@]}"; do
         grep -Fq "$enum" "$dump" || \
-          fail "$arch libvulkan NDK $api ABI dump is not refreshed for Vulkan 1.4.341: missing $enum in $dump"
+          fail "$arch libvulkan NDK $api ABI dump is not refreshed for the pinned Vulkan headers: missing $enum in $dump"
       done
 
       if (( api >= 28 )); then
         for enum in "${required_api28_enums[@]}"; do
           grep -Fq "$enum" "$dump" || \
-            fail "$arch libvulkan NDK $api ABI dump is not refreshed for Vulkan 1.4.341: missing $enum in $dump"
+            fail "$arch libvulkan NDK $api ABI dump is not refreshed for the pinned Vulkan headers: missing $enum in $dump"
         done
       fi
     done
@@ -1431,6 +1431,7 @@ check_vulkan_ndk_abi_dumps() {
 check_vulkan_llndk_abi_dumps() {
   local arch dump enum
   local -a required_enums=(
+    '"name" : "VK_QUERY_TYPE_TIME_ELAPSED_QCOM"'
     '"name" : "VK_PIPELINE_BIND_POINT_DATA_GRAPH_ARM"'
     '"name" : "VK_ERROR_PRESENT_TIMING_QUEUE_FULL_EXT"'
     '"name" : "VK_ERROR_VALIDATION_FAILED"'
@@ -1444,7 +1445,7 @@ check_vulkan_llndk_abi_dumps() {
 
     for enum in "${required_enums[@]}"; do
       grep -Fq "$enum" "$dump" || \
-        fail "$arch libvulkan Android 16 LLNDK ABI dump is not refreshed for Vulkan 1.4.341: missing $enum in $dump"
+        fail "$arch libvulkan Android 16 LLNDK ABI dump is not refreshed for the pinned Vulkan headers: missing $enum in $dump"
     done
   done
 }
@@ -1471,8 +1472,8 @@ import xml.etree.ElementTree as ET
 
 manifest = sys.argv[1]
 expected = {
-    ("platform/external/mesa3d", "external/mesa3d"):
-        "6a02618ccf6c5651ecb9cccbde571eb61fd73592",
+    ("mesa/mesa", "external/mesa3d"):
+        "e8617e4ca95fc655b0f13fd115c224d27eba2441",
     ("kernel/prebuilts/6.12/arm64", "kernel/prebuilts/6.12/arm64"):
         "318576752b27af3d328e6deb5e6aa29b08f762c9",
     ("kernel/prebuilts/common-modules/virtual-device/6.12/arm64", "kernel/prebuilts/common-modules/virtual-device/6.12/arm64"):
@@ -1496,7 +1497,7 @@ expected = {
     ("platform/external/rust/rutabaga_gfx", "external/rust/rutabaga_gfx"):
         "1f181b0b3e4b821459f21fd9025cd4c408c4f9ec",
     ("KhronosGroup/Vulkan-Headers", "external/vulkan-headers"):
-        "b5c8f996196ba4aa6d8f97e52b5d3b6e70f7e4e2",
+        "0b7f383797fa7be53ae28213e001ae60668ee511",
 }
 
 root = ET.parse(manifest).getroot()
@@ -1536,7 +1537,7 @@ PY
       fail "$project is not synced to the pinned Cuttlefish runtime/graphics revision $expected (found ${head:-unknown}); rerun with SKIP_SYNC=0"
     fi
   done <<'EOF'
-external/mesa3d 6a02618ccf6c5651ecb9cccbde571eb61fd73592
+external/mesa3d e8617e4ca95fc655b0f13fd115c224d27eba2441
 kernel/prebuilts/6.12/arm64 318576752b27af3d328e6deb5e6aa29b08f762c9
 kernel/prebuilts/common-modules/virtual-device/6.12/arm64 e6673fcbd05e63e6fcc2c2d2cf33246108b73b0c
 kernel/prebuilts/6.12/x86_64 cb8e8ee3babf4a27b742f59dcb92f59cf186299c
@@ -1548,7 +1549,7 @@ device/google/cuttlefish_prebuilts 36f427b7c46682cfcdb2e61eee6893acbfb2a606
 external/crosvm c7dd8d6950912fa5e6fde7ec2d1616e0ddc090f8
 hardware/google/gfxstream b46f0d4b4545def09bdf30651d4bf848b2ba0c34
 external/rust/rutabaga_gfx 1f181b0b3e4b821459f21fd9025cd4c408c4f9ec
-external/vulkan-headers b5c8f996196ba4aa6d8f97e52b5d3b6e70f7e4e2
+external/vulkan-headers 0b7f383797fa7be53ae28213e001ae60668ee511
 EOF
 }
 
@@ -1561,11 +1562,11 @@ check_graphics_stack_versions() {
   local stale_reserved_impl="$android_root/external/mesa3d/src/gfxstream/guest/vulkan_enc/goldfish_vk_reserved_marshaling_guest.cpp"
   require_file "$mesa_version_file"
   require_file "$mesa_android_bp"
-  if [[ -f "$mesa_version_file" && "$(tr -d '[:space:]' < "$mesa_version_file")" != "26.1.5" ]]; then
-    fail "external/mesa3d VERSION is not 26.1.5: $mesa_version_file"
+  if [[ -f "$mesa_version_file" && "$(tr -d '[:space:]' < "$mesa_version_file")" != "26.1.7" ]]; then
+    fail "external/mesa3d VERSION is not 26.1.7: $mesa_version_file"
   fi
-  if [[ -f "$mesa_android_bp" ]] && ! grep -Fq -- '-DPACKAGE_VERSION=\"26.1.5\"' "$mesa_android_bp"; then
-    fail "external/mesa3d generated Android.bp does not identify Mesa 26.1.5: $mesa_android_bp"
+  if [[ -f "$mesa_android_bp" ]] && ! grep -Fq -- '-DPACKAGE_VERSION=\"26.1.7\"' "$mesa_android_bp"; then
+    fail "external/mesa3d generated Android.bp does not identify Mesa 26.1.7: $mesa_android_bp"
   fi
   # These are genrule outputs. Checked-in copies precede Soong's generated
   # include directory and can silently shadow declarations from the pinned XML.

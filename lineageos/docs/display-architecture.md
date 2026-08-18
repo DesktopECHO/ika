@@ -155,8 +155,8 @@ available for testing the native gfxstream GLES translator, while
 `guest_swiftshader` is a diagnostic fallback that removes host GPU acceleration
 from the equation.
 
-The production guest Vulkan stack pins patched Mesa 26.1.5 at
-`6a02618ccf6c`. That revision is verified with the pinned gfxstream,
+The production guest Vulkan stack pins patched Mesa 26.1.7 at
+`e8617e4ca95f`. That revision is verified with the pinned gfxstream,
 rutabaga_gfx, crosvm, minigbm, and Vulkan-Headers revisions in
 `manifests/lineageos-desktop.xml`. Both guest architectures pin their kernels
 and virtual-device modules to the same Android 16 6.12.74 GKI build; ARM64 also

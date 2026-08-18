@@ -334,6 +334,7 @@ struct SurfaceExtension {
     std::string name;
     void (*create_window)(AppInstance &) = nullptr;
     VkSurfaceKHR (*create_surface)(AppInstance &) = nullptr;
+    VkSurfaceKHR (*create_surface_for_physical_device)(AppInstance &, VkPhysicalDevice) = nullptr;
     void (*destroy_window)(AppInstance &) = nullptr;
     VkSurfaceKHR surface = VK_NULL_HANDLE;
 
@@ -362,12 +363,14 @@ struct AppVideoProfile {
     using CreateCapabilitiesChainCb = std::function<std::unique_ptr<video_capabilities_chain>(void **)>;
     struct CreateFormatPropertiesChainCb {
         std::string format_name;
-        VkImageUsageFlags image_usage_flags;
+        VkImageUsageFlags2KHR image_usage_flags;
         std::function<bool(const VkVideoCapabilitiesKHR &capabilities)> check_required_caps;
         std::function<std::unique_ptr<video_format_properties_chain>(void **)> callback;
     };
     using CreateFormatPropertiesChainCbList = std::vector<CreateFormatPropertiesChainCb>;
     using InitProfileCb = std::function<void(AppVideoProfile &)>;
+
+    bool IsImageUsageFlags2Supported(AppGpu &gpu) const;
 
     AppVideoProfile(AppGpu &gpu, VkPhysicalDevice phys_device, const std::string &in_name,
                     const VkVideoProfileInfoKHR &in_profile_info, CreateProfileInfoChainCb create_profile_info_chain,
@@ -405,9 +408,24 @@ struct AppVideoProfile {
                 continue;
             }
 
+            VkImageUsageFlags2CreateInfoKHR image_usage_flags2_info = {VK_STRUCTURE_TYPE_IMAGE_USAGE_FLAGS_2_CREATE_INFO_KHR,
+                                                                       &profile_list};
             VkPhysicalDeviceVideoFormatInfoKHR video_format_info = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_FORMAT_INFO_KHR,
-                                                                    &profile_list,
-                                                                    create_format_properties_chain_info.image_usage_flags};
+                                                                    &profile_list};
+
+            if (create_format_properties_chain_info.image_usage_flags <= VK_IMAGE_USAGE_FLAG_BITS_MAX_ENUM) {
+                // Regular 32-bit VkImageUsageFlags is sufficient
+                video_format_info.imageUsage =
+                    static_cast<VkImageUsageFlags>(create_format_properties_chain_info.image_usage_flags);
+            } else {
+                if (!IsImageUsageFlags2Supported(gpu)) {
+                    // This format uses one of the 64-bit flag bits therefore requires VkImageUsageFlags2KHR
+                    continue;
+                }
+                // Include VkImageUsageFlags2CreateInfoKHR in the input chain
+                image_usage_flags2_info.usage = create_format_properties_chain_info.image_usage_flags;
+                video_format_info.pNext = &image_usage_flags2_info;
+            }
 
             uint32_t video_format_property_count = 0;
             result =
@@ -520,8 +538,6 @@ struct AppInstance {
     std::vector<SurfaceExtension> surface_extensions;
 
     int width = 256, height = 256;
-
-    VkSurfaceCapabilitiesKHR surface_capabilities;
 
 #ifdef VK_USE_PLATFORM_WIN32_KHR
     HINSTANCE h_instance;  // Windows Instance
@@ -663,6 +679,9 @@ struct AppInstance {
             if (strcmp(VK_EXT_DEBUG_REPORT_EXTENSION_NAME, ext.extensionName) == 0) {
                 inst_extensions.push_back(ext.extensionName);
             }
+            if (strcmp(VK_EXT_DEBUG_UTILS_EXTENSION_NAME, ext.extensionName) == 0) {
+                inst_extensions.push_back(ext.extensionName);
+            }
             if (strcmp(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, ext.extensionName) == 0) {
                 inst_extensions.push_back(ext.extensionName);
             }
@@ -670,6 +689,9 @@ struct AppInstance {
                 inst_extensions.push_back(ext.extensionName);
             }
             if (strcmp(VK_KHR_SURFACE_EXTENSION_NAME, ext.extensionName) == 0) {
+                inst_extensions.push_back(ext.extensionName);
+            }
+            if (strcmp(VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME, ext.extensionName) == 0) {
                 inst_extensions.push_back(ext.extensionName);
             }
 #ifdef VK_USE_PLATFORM_ANDROID_KHR
@@ -737,8 +759,14 @@ struct AppInstance {
                 inst_extensions.push_back(ext.extensionName);
             }
 #endif
-#ifdef VK_USE_PLATFORM_DISPLAY
+#ifdef VK_USE_PLATFORM_DISPLAY_KHR
             if (strcmp(VK_KHR_DISPLAY_EXTENSION_NAME, ext.extensionName) == 0) {
+                inst_extensions.push_back(ext.extensionName);
+            }
+            if (strcmp(VK_EXT_DIRECT_MODE_DISPLAY_EXTENSION_NAME, ext.extensionName) == 0) {
+                inst_extensions.push_back(ext.extensionName);
+            }
+            if (strcmp(VK_EXT_DISPLAY_SURFACE_COUNTER_EXTENSION_NAME, ext.extensionName) == 0) {
                 inst_extensions.push_back(ext.extensionName);
             }
 #endif
@@ -752,6 +780,12 @@ struct AppInstance {
                 inst_extensions.push_back(ext.extensionName);
             }
             if (strcmp(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME, ext.extensionName) == 0) {
+                inst_extensions.push_back(ext.extensionName);
+            }
+            if (strcmp(VK_KHR_DEVICE_GROUP_CREATION_EXTENSION_NAME, ext.extensionName) == 0) {
+                inst_extensions.push_back(ext.extensionName);
+            }
+            if (strcmp(VK_NV_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME, ext.extensionName) == 0) {
                 inst_extensions.push_back(ext.extensionName);
             }
         }
@@ -779,18 +813,10 @@ struct AppInstance {
 #if defined(VK_USE_PLATFORM_XCB_KHR) || defined(VK_USE_PLATFORM_XLIB_KHR) || defined(VK_USE_PLATFORM_WIN32_KHR) ||      \
     defined(VK_USE_PLATFORM_MACOS_MVK) || defined(VK_USE_PLATFORM_METAL_EXT) || defined(VK_USE_PLATFORM_WAYLAND_KHR) || \
     defined(VK_USE_PLATFORM_DIRECTFB_EXT) || defined(VK_USE_PLATFORM_GGP) || defined(VK_USE_PLATFORM_SCREEN_QNX) ||     \
-    defined(VK_USE_PLATFORM_DISPLAY)
+    defined(VK_USE_PLATFORM_DISPLAY_KHR)
 
 #define VULKANINFO_WSI_ENABLED
 #endif
-
-//-----------------------------------------------------------
-#if defined(VULKANINFO_WSI_ENABLED)
-static void AppDestroySurface(AppInstance &inst, VkSurfaceKHR surface) {  // same for all platforms
-    vkDestroySurfaceKHR(inst.instance, surface, nullptr);
-}
-#endif  // defined(VULKANINFO_WSI_ENABLED)
-//-----------------------------------------------------------
 
 //---------------------------Win32---------------------------
 #ifdef VK_USE_PLATFORM_WIN32_KHR
@@ -937,7 +963,7 @@ static void AppCreateXlibWindow(AppInstance &inst) {
 
     inst.xlib_display = XOpenDisplay(nullptr);
     if (inst.xlib_display == nullptr) {
-        THROW_ERR("XLib failed to connect to the X server.\nExiting...");
+        THROW_ERR("XLib failed to connect to the X server.");
     }
 
     XVisualInfo vInfoTemplate = {};
@@ -981,7 +1007,7 @@ static void AppDestroyXlibWindow(AppInstance &inst) {
 static void AppCreateMacOSWindow(AppInstance &inst) {
     inst.macos_window = CreateMetalView(inst.width, inst.height);
     if (inst.macos_window == nullptr) {
-        THROW_ERR("Could not create a native Metal view.\nExiting...");
+        THROW_ERR("Could not create a native Metal view.");
     }
 }
 
@@ -1007,7 +1033,7 @@ static void AppDestroyMacOSWindow(AppInstance &inst) { DestroyMetalView(inst.mac
 static void AppCreateMetalWindow(AppInstance &inst) {
     inst.metal_window = CreateMetalView(inst.width, inst.height);
     if (inst.metal_window == nullptr) {
-        THROW_ERR("Could not create a native Metal view.\nExiting...");
+        THROW_ERR("Could not create a native Metal view.");
     }
 }
 
@@ -1074,12 +1100,12 @@ static void AppCreateDirectFBWindow(AppInstance &inst) {
 
     ret = DirectFBInit(NULL, NULL);
     if (ret) {
-        THROW_ERR("DirectFBInit failed to initialize DirectFB.\nExiting...");
+        THROW_ERR("DirectFBInit failed to initialize DirectFB.");
     }
 
     ret = DirectFBCreate(&inst.dfb);
     if (ret) {
-        THROW_ERR("DirectFBCreate failed to create main interface of DirectFB.\nExiting...");
+        THROW_ERR("DirectFBCreate failed to create main interface of DirectFB.");
     }
 
     DFBSurfaceDescription desc;
@@ -1089,7 +1115,7 @@ static void AppCreateDirectFBWindow(AppInstance &inst) {
     desc.height = inst.height;
     ret = inst.dfb->CreateSurface(inst.dfb, &desc, &inst.directfb_surface);
     if (ret) {
-        THROW_ERR("CreateSurface failed to create DirectFB surface interface.\nExiting...");
+        THROW_ERR("CreateSurface failed to create DirectFB surface interface.");
     }
 }
 
@@ -1158,15 +1184,15 @@ static void AppCreateScreenWindow(AppInstance &inst) {
 
     rc = screen_create_context(&inst.context, 0);
     if (rc) {
-        THROW_ERR("Could not create a QNX Screen context.\nExiting...");
+        THROW_ERR("Could not create a QNX Screen context.");
     }
     rc = screen_create_window(&inst.window, inst.context);
     if (rc) {
-        THROW_ERR("Could not create a QNX Screen window.\nExiting...");
+        THROW_ERR("Could not create a QNX Screen window.");
     }
     rc = screen_set_window_property_iv(inst.window, SCREEN_PROPERTY_USAGE, &usage);
     if (rc) {
-        THROW_ERR("Could not set SCREEN_USAGE_VULKAN flag for QNX Screen window!\nExiting...");
+        THROW_ERR("Could not set SCREEN_USAGE_VULKAN flag for QNX Screen window!");
     }
 }
 
@@ -1189,6 +1215,64 @@ static void AppDestroyScreenWindow(AppInstance &inst) {
     screen_destroy_context(inst.context);
 }
 #endif  // VK_USE_PLATFORM_SCREEN_QNX
+
+//-----------------------------------------------------------
+//----------------------KHR DISPLAY--------------------------
+#ifdef VK_USE_PLATFORM_DISPLAY_KHR
+static VkSurfaceKHR AppCreateDisplaySurface(AppInstance &inst, VkPhysicalDevice phys_device) {
+    auto all_display_props = GetVector<VkDisplayPropertiesKHR>("vkGetPhysicalDeviceDisplayPropertiesKHR",
+                                                               vkGetPhysicalDeviceDisplayPropertiesKHR, phys_device);
+    if (all_display_props.size() == 0) return VK_NULL_HANDLE;
+
+    auto all_plane_props = GetVector<VkDisplayPlanePropertiesKHR>("vkGetPhysicalDeviceDisplayPlanePropertiesKHR",
+                                                                  vkGetPhysicalDeviceDisplayPlanePropertiesKHR, phys_device);
+    if (all_plane_props.size() == 0) THROW_VK_ERR("No display plane properties for physical device.", VK_ERROR_UNKNOWN);
+
+    // Always use the first plane
+    const uint32_t plane_index = 0;
+    const auto &plane_props = all_plane_props[plane_index];
+
+    auto supported_displays = GetVector<VkDisplayKHR>("vkGetDisplayPlaneSupportedDisplaysKHR",
+                                                      vkGetDisplayPlaneSupportedDisplaysKHR, phys_device, plane_index);
+    if (supported_displays.size() == 0) THROW_VK_ERR("No display supported by the display plane.", VK_ERROR_UNKNOWN);
+
+    const VkDisplayKHR display = plane_props.currentDisplay != VK_NULL_HANDLE ? plane_props.currentDisplay : supported_displays[0];
+
+    auto all_mode_props =
+        GetVector<VkDisplayModePropertiesKHR>("vkGetDisplayModePropertiesKHR", vkGetDisplayModePropertiesKHR, phys_device, display);
+    if (all_mode_props.size() == 0) THROW_VK_ERR("No display modes reported for display.", VK_ERROR_UNKNOWN);
+
+    const auto &mode_props = all_mode_props[0];
+    const VkDisplayModeKHR mode = mode_props.displayMode;
+
+    VkDisplayPlaneCapabilitiesKHR plane_caps{};
+    VkResult result = vkGetDisplayPlaneCapabilitiesKHR(phys_device, mode, plane_index, &plane_caps);
+    if (result != VK_SUCCESS) THROW_VK_ERR("vkGetDisplayPlaneCapabilitiesKHR", result);
+
+    VkDisplaySurfaceCreateInfoKHR createInfo;
+    createInfo.sType = VK_STRUCTURE_TYPE_DISPLAY_SURFACE_CREATE_INFO_KHR;
+    createInfo.pNext = NULL;
+    createInfo.flags = 0;
+    createInfo.displayMode = mode;
+    createInfo.planeIndex = plane_index;
+    createInfo.planeStackIndex = plane_props.currentStackIndex;
+    createInfo.transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    createInfo.globalAlpha = 1.0f;
+    for (uint32_t i = 0; i < 32; ++i) {
+        if ((plane_caps.supportedAlpha & (1 << i)) != 0) {
+            createInfo.alphaMode = static_cast<VkDisplayPlaneAlphaFlagBitsKHR>(1 << i);
+            break;
+        }
+    }
+    createInfo.imageExtent = mode_props.parameters.visibleRegion;
+
+    VkSurfaceKHR surface;
+    VkResult err = vkCreateDisplayPlaneSurfaceKHR(inst.instance, &createInfo, NULL, &surface);
+    if (err) THROW_VK_ERR("vkCreateDisplayPlaneSurfaceKHR", err);
+    return surface;
+}
+#endif  // VK_USE_PLATFORM_DISPLAY_KHR
+
 //-----------------------------------------------------------
 // ------------ Setup Windows ------------- //
 
@@ -1208,6 +1292,27 @@ void SetupWindowExtensions(AppInstance &inst) {
     if (wayland_display != nullptr) {
         wl_display_disconnect(wayland_display);
         has_wayland_display = true;
+    }
+#endif
+
+#ifdef VK_USE_PLATFORM_SCREEN_QNX
+    screen_context_t screen_context;
+    int rc;
+    bool screen_windowing_available = false;
+
+    rc = screen_create_context(&screen_context, 0);
+    if (rc) {
+        std::cerr << "Failed to create a QNX Screen context ... skipping surface info\n";
+    } else {
+        screen_window_t screen_window;
+        rc = screen_create_window(&screen_window, screen_context);
+        if (rc) {
+            std::cerr << "Failed to create a QNX Screen window ... skipping surface info\n";
+        } else {
+            screen_windowing_available = true;
+            screen_destroy_window(screen_window);
+        }
+        screen_destroy_context(screen_context);
     }
 #endif
 
@@ -1331,10 +1436,21 @@ void SetupWindowExtensions(AppInstance &inst) {
         surface_ext_qnx_screen.create_surface = AppCreateScreenSurface;
         surface_ext_qnx_screen.destroy_window = AppDestroyScreenWindow;
 
-        inst.AddSurfaceExtension(surface_ext_qnx_screen);
+        if (screen_windowing_available) {
+            inst.AddSurfaceExtension(surface_ext_qnx_screen);
+        }
     }
 #endif
-// TODO: add support for VK_KHR_display surfaces
+//--DISPLAY--
+#ifdef VK_USE_PLATFORM_DISPLAY_KHR
+    SurfaceExtension surface_ext_khr_display;
+    if (inst.CheckExtensionEnabled(VK_KHR_DISPLAY_EXTENSION_NAME)) {
+        surface_ext_khr_display.name = VK_KHR_DISPLAY_EXTENSION_NAME;
+        surface_ext_khr_display.create_surface_for_physical_device = AppCreateDisplaySurface;
+
+        inst.AddSurfaceExtension(surface_ext_khr_display);
+    }
+#endif
 }
 
 // ---------- Surfaces -------------- //
@@ -1387,13 +1503,13 @@ class AppSurface {
             VkPhysicalDeviceSurfaceInfo2KHR surface_info{};
             surface_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR;
             surface_info.surface = surface_extension.surface;
-#if defined(WIN32)
+#ifdef VK_USE_PLATFORM_WIN32_KHR
             VkSurfaceFullScreenExclusiveWin32InfoEXT win32_fullscreen_exclusive_info{};
             win32_fullscreen_exclusive_info.sType = VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_WIN32_INFO_EXT;
             win32_fullscreen_exclusive_info.hmonitor = MonitorFromWindow(inst.h_wnd, MONITOR_DEFAULTTOPRIMARY);
 
             surface_info.pNext = static_cast<void *>(&win32_fullscreen_exclusive_info);
-#endif  // defined(WIN32)
+#endif  // VK_USE_PLATFORM_WIN32_KHR
             VkResult err = vkGetPhysicalDeviceSurfaceCapabilities2KHR(phys_device, &surface_info, &surface_capabilities2_khr);
             if (err) THROW_VK_ERR("vkGetPhysicalDeviceSurfaceCapabilities2KHR", err);
         }
@@ -1565,10 +1681,13 @@ struct AppQueueFamilyProperties {
     bool can_present = false;
     bool can_always_present = true;
     std::vector<std::pair<std::string, VkBool32>> present_support;
-    AppQueueFamilyProperties(AppInstance &inst, VkPhysicalDevice physical_device, VkQueueFamilyProperties family_properties,
+    AppQueueFamilyProperties(AppInstance &inst, VkPhysicalDevice physical_device,
+                             const std::vector<SurfaceExtension> &surface_extensions, VkQueueFamilyProperties family_properties,
                              uint32_t queue_index, void *pNext = nullptr)
         : props(family_properties), queue_index(queue_index), pNext(pNext) {
-        for (const auto &surface_ext : inst.surface_extensions) {
+        for (const auto &surface_ext : surface_extensions) {
+            if (surface_ext.surface == VK_NULL_HANDLE) continue;
+
             present_support.push_back({surface_ext.name, VK_FALSE});
             VkResult err = vkGetPhysicalDeviceSurfaceSupportKHR(physical_device, queue_index, surface_ext.surface,
                                                                 &present_support.back().second);
@@ -1620,6 +1739,10 @@ struct AppGpu {
 
     std::vector<VkExtensionProperties> device_extensions;
 
+    // There are certain surface extensions that are physical device specific such as VK_KHR_display
+    // The per physical device surfaces for these are maintained here instead at the AppInstance level
+    std::vector<SurfaceExtension> surface_extensions;
+
     VkDevice dev = VK_NULL_HANDLE;
     VkPhysicalDeviceFeatures enabled_features{};
 
@@ -1636,8 +1759,9 @@ struct AppGpu {
     std::vector<AppDisplay> displays;
     std::vector<AppDisplayPlane> display_planes;
 
-    AppGpu(AppInstance &inst, uint32_t id, VkPhysicalDevice phys_device, bool show_promoted_structs)
-        : inst(inst), id(id), phys_device(phys_device) {
+    AppGpu(AppInstance &inst, uint32_t id, VkPhysicalDevice phys_device, bool show_promoted_structs,
+           std::vector<SurfaceExtension> &&surface_extensions)
+        : inst(inst), id(id), phys_device(phys_device), surface_extensions(surface_extensions) {
         vkGetPhysicalDeviceProperties(phys_device, &props);
 
         // needs to find the minimum of the instance and device version, and use that to print the device info
@@ -1734,12 +1858,13 @@ struct AppGpu {
         int queue_index = 0;
         if (queue_props2.size() > 0) {
             for (auto &queue_prop : queue_props2) {
-                extended_queue_props.push_back(
-                    AppQueueFamilyProperties(inst, phys_device, queue_prop.queueFamilyProperties, queue_index++, queue_prop.pNext));
+                extended_queue_props.push_back(AppQueueFamilyProperties(
+                    inst, phys_device, surface_extensions, queue_prop.queueFamilyProperties, queue_index++, queue_prop.pNext));
             }
         } else {
             for (auto &queue_prop : queue_props) {
-                extended_queue_props.push_back(AppQueueFamilyProperties(inst, phys_device, queue_prop, queue_index++, nullptr));
+                extended_queue_props.push_back(
+                    AppQueueFamilyProperties(inst, phys_device, surface_extensions, queue_prop, queue_index++, nullptr));
             }
         }
 
@@ -1870,7 +1995,18 @@ struct AppGpu {
         vkDestroyDevice(dev, nullptr);
         dev = VK_NULL_HANDLE;
     }
-    ~AppGpu() { vkDestroyDevice(dev, nullptr); }
+
+    ~AppGpu() {
+        for (auto &surface_extension : surface_extensions) {
+            // If the surface is per physical device then we have to destroy it here as there's a separate surface for the
+            // AppGpu object (contrarily to surfaces shared across the instance that are maintained by AppInstance)
+            if (surface_extension.create_surface_for_physical_device) {
+                vkDestroySurfaceKHR(inst.instance, surface_extension.surface, nullptr);
+            }
+        }
+
+        vkDestroyDevice(dev, nullptr);
+    }
 
     AppGpu(const AppGpu &) = delete;
     const AppGpu &operator=(const AppGpu &) = delete;
@@ -1940,6 +2076,11 @@ struct AppGpu {
     }
 };
 
+bool AppVideoProfile::IsImageUsageFlags2Supported(AppGpu &gpu) const {
+    // VkImageUsageFlags2KHR requires VK_KHR_extended_flags
+    return gpu.CheckPhysicalDeviceExtensionIncluded(VK_KHR_EXTENDED_FLAGS_EXTENSION_NAME);
+}
+
 std::vector<VkPhysicalDeviceToolPropertiesEXT> GetToolingInfo(AppGpu &gpu) {
     if (vkGetPhysicalDeviceToolPropertiesEXT == nullptr) return {};
     return GetVector<VkPhysicalDeviceToolPropertiesEXT>("vkGetPhysicalDeviceToolPropertiesEXT",
@@ -1947,23 +2088,31 @@ std::vector<VkPhysicalDeviceToolPropertiesEXT> GetToolingInfo(AppGpu &gpu) {
 }
 
 std::vector<VkCooperativeMatrixPropertiesKHR> GetCooperativeMatrixInfo(AppGpu &gpu) {
-    if (vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR == nullptr) return {};
+    if (vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR == nullptr ||
+        !gpu.CheckPhysicalDeviceExtensionIncluded("VK_KHR_cooperative_matrix"))
+        return {};
     return GetVector<VkCooperativeMatrixPropertiesKHR>("vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR",
                                                        vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR, gpu.phys_device);
 }
 std::vector<VkTimeDomainKHR> GetTimeDomainInfo(AppGpu &gpu) {
-    if (vkGetPhysicalDeviceCalibrateableTimeDomainsKHR == nullptr) return {};
+    if (vkGetPhysicalDeviceCalibrateableTimeDomainsKHR == nullptr ||
+        !gpu.CheckPhysicalDeviceExtensionIncluded("VK_KHR_calibrated_timestamps"))
+        return {};
     return GetVector<VkTimeDomainKHR>("vkGetPhysicalDeviceCalibrateableTimeDomainsKHR",
                                       vkGetPhysicalDeviceCalibrateableTimeDomainsKHR, gpu.phys_device);
 }
 std::vector<VkPhysicalDeviceFragmentShadingRateKHR> GetFragmentShadingRateInfo(AppGpu &gpu) {
-    if (vkGetPhysicalDeviceFragmentShadingRatesKHR == nullptr) return {};
+    if (vkGetPhysicalDeviceFragmentShadingRatesKHR == nullptr ||
+        !gpu.CheckPhysicalDeviceExtensionIncluded("VK_KHR_fragment_shading_rate"))
+        return {};
     return GetVector<VkPhysicalDeviceFragmentShadingRateKHR>("vkGetPhysicalDeviceFragmentShadingRatesKHR",
                                                              vkGetPhysicalDeviceFragmentShadingRatesKHR, gpu.phys_device);
 }
 // Returns vector where each index maps to VkSampleCountFlagBits
 std::vector<VkMultisamplePropertiesEXT> GetSampleLocationInfo(AppGpu &gpu) {
-    if (vkGetPhysicalDeviceMultisamplePropertiesEXT == nullptr) return {};
+    if (vkGetPhysicalDeviceMultisamplePropertiesEXT == nullptr ||
+        !gpu.CheckPhysicalDeviceExtensionIncluded("VK_EXT_sample_locations"))
+        return {};
     std::vector<VkMultisamplePropertiesEXT> result;
     // 7 covers VK_SAMPLE_COUNT_1_BIT to 64_BIT
     for (uint32_t i = 0; i < 7; i++) {
