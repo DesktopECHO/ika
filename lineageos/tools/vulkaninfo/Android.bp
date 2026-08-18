@@ -2,7 +2,7 @@ package {
     default_applicable_licenses: ["Android-Apache-2.0"],
 }
 
-// Khronos vulkaninfo, vendored from Vulkan-Tools v1.4.341 (matches the
+// Khronos vulkaninfo, vendored from Vulkan-Tools v1.4.360 (matches the
 // external/vulkan-headers version in the tree; see README.md). Built as a
 // plain console binary with no VK_USE_PLATFORM_* WSI defines, so it reports
 // everything except surface/present info.

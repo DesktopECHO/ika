@@ -1,5 +1,5 @@
-# Adapted from gfxstream 6e68776c's maintained host Mesa build and rebased to
-# the Mesa 26.1.5 source layout. Keep this file and mesa.MODULE.bazel together.
+# Adapted from gfxstream's maintained host Mesa build and rebased to the Mesa
+# 26.1.7 source layout. Keep this file and mesa.MODULE.bazel together.
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_shared_library")
 load("@rules_python//python:defs.bzl", "py_binary")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_static_library")
@@ -54,7 +54,7 @@ MESA_DEFAULT_COPTS = [
     "-DMESA_DEBUG=0",
     "-DMESA_LLVM_VERSION_STRING=\\\"16.0.0\\\"",
     "-DPACKAGE_BUGREPORT=\\\"https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa\\\"",
-    "-DPACKAGE_VERSION=\\\"26.1.5\\\"",
+    "-DPACKAGE_VERSION=\\\"26.1.7\\\"",
     "-DTIME_ACTIVE",
     "-DTIME_MONOTONIC_RAW",
     "-DTIME_MONOTONIC",
@@ -152,7 +152,7 @@ genrule(
     name = "gen_mesa_commit",
     outs = ["git_sha1.h"],
     cmd = """
-        echo '#define MESA_GIT_SHA1 " (git-6a02618ccf)"' > $(location git_sha1.h)
+        echo '#define MESA_GIT_SHA1 " (git-e8617e4ca9)"' > $(location git_sha1.h)
     """,
 )
 

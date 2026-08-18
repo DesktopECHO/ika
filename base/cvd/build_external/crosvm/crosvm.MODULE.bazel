@@ -1,8 +1,8 @@
 # this needs to be at parity with with build_external/crosvm/crosvm.config.toml
 CROSVM_REMOTE = "https://chromium.googlesource.com/crosvm/crosvm"
-CROSVM_REV = "0d750f762c23156132f46979598132de01471355"
+CROSVM_REV = "af81a39911aa67ac210afeed04496a31a9f5bdab"
 MINIGBM_REMOTE = "https://chromium.googlesource.com/chromiumos/platform/minigbm"
-MINIGBM_REV = "0c4f081b12d6e92d66dabc0b0f8da11206778848"
+MINIGBM_REV = "37fa33b3d823a84816ea8dd32dd7f543f8a2a5fa"
 
 # note that this won't use the same source checkout as the git_repository directive below
 #
@@ -118,25 +118,6 @@ crosvm_bin.annotation(
 )
 
 crosvm_bin.annotation(
-    crate = "mesa3d_util",
-    patch_args = ["-p1"],
-    patches = ["@//build_external/crosvm:PATCH.mesa3d_util-upstream-main-20260520.patch"],
-)
-
-crosvm_bin.annotation(
-    crate = "rustix",
-    # Latest mesa3d_util uses rustix::thread::futex for cross-domain atomic
-    # memory sentinels.
-    crate_features = ["thread"],
-)
-
-crosvm_bin.annotation(
-    crate = "linux-raw-sys",
-    # rustix's thread feature pulls in prctl constants.
-    crate_features = ["prctl"],
-)
-
-crosvm_bin.annotation(
     crate = "devices",
     patch_args = ["-p1"],
     patches = [
@@ -166,7 +147,6 @@ crosvm_bin.annotation(
     patch_args = ["-p1"],
     patches = [
         "@//build_external/crosvm:PATCH.rutabaga_gfx_build_rs.patch",
-        "@//build_external/crosvm:PATCH.rutabaga_gfx-upstream-main-20260520.patch",
         # Capability gate for the vulkano backend enabled by
         # PATCH.crosvm-enable-vulkano-gralloc.patch: prefer minigbm when it
         # initializes (x86-64 and any host with a minigbm driver), start and

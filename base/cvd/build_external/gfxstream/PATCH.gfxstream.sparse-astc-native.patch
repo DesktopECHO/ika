@@ -1,19 +1,20 @@
 Patch summary:
-Keep sparse compressed images on the host driver's native Vulkan path.  The
+Keep sparse compressed images on the host driver's native Vulkan path. The
 compressed-texture emulation path replaces one guest image with an output image
 and private mip images; sparse residency binds only describe the guest-visible
 image and therefore cannot bind the private emulation images correctly.
 
-Sparse-format capability queries already pass through to the host.  Apply the
+Sparse-format capability queries already pass through to the host. Apply the
 same policy to legacy/Properties2 image-format queries, device image-memory
-requirements, and image creation.  Hosts with native sparse ASTC continue to
+requirements, and image creation. Hosts with native sparse ASTC continue to
 work, hosts without it report the native unsupported result, and non-sparse
 compressed images retain the existing emulation path.
 
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index 15fcc847..bd1cf308 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -177,6 +177,16 @@ static const uint64_t kPageSizeforBlob = static_cast<uint64_t>(getpagesize());
+@@ -178,6 +178,16 @@ static constexpr const char* const kEmulatedInstanceExtensions[] = {
  static const uint64_t kPageSizeforBlob = static_cast<uint64_t>(getpagesize());
  static const uint64_t kPageMaskForBlob = ~(static_cast<uint64_t>(getpagesize()) - 1);
  
@@ -30,7 +31,7 @@ diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_gl
  static std::atomic<uint64_t> sNextHostBlobId{1};
  static std::atomic<uint64_t> sUniqueShmemId = 0;
  
-@@ -1518,7 +1526,8 @@ class VkDecoderGlobalState::Impl {
+@@ -1584,7 +1594,8 @@ class VkDecoderGlobalState::Impl {
          VkImageFormatProperties* pImageFormatProperties) {
          auto physicalDevice = unbox_VkPhysicalDevice(boxed_physicalDevice);
          auto vk = dispatch_VkPhysicalDevice(boxed_physicalDevice);
@@ -40,7 +41,7 @@ diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_gl
          if (emulatedTexture) {
              if (!supportEmulatedCompressedImageFormatProperty(format, type, tiling, usage, flags)) {
                  memset(pImageFormatProperties, 0, sizeof(VkImageFormatProperties));
-@@ -1550,7 +1559,8 @@ class VkDecoderGlobalState::Impl {
+@@ -1616,7 +1627,8 @@ class VkDecoderGlobalState::Impl {
          auto vk = dispatch_VkPhysicalDevice(boxed_physicalDevice);
          VkPhysicalDeviceImageFormatInfo2 imageFormatInfo;
          VkFormat format = pImageFormatInfo->format;
@@ -50,7 +51,7 @@ diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_gl
          if (emulatedTexture) {
              if (!supportEmulatedCompressedImageFormatProperty(
                      pImageFormatInfo->format, pImageFormatInfo->type, pImageFormatInfo->tiling,
-@@ -2665,7 +2675,8 @@ class VkDecoderGlobalState::Impl {
+@@ -2733,7 +2745,8 @@ class VkDecoderGlobalState::Impl {
              return;
          }
  
@@ -60,10 +61,10 @@ diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_gl
          if (!needDecompression) {
              // No modifications needed
              return;
-@@ -3043,7 +3054,8 @@ class VkDecoderGlobalState::Impl {
-         }
- #endif
+@@ -3064,7 +3077,8 @@ class VkDecoderGlobalState::Impl {
  
+         // Change creation parameters before the validation checks below as the
+         // creation format and its device properties may change
 -        const bool needDecompression = deviceInfo->needEmulatedDecompression(pCreateInfo->format);
 +        const bool needDecompression = !usesSparseImageBinding(pCreateInfo->flags) &&
 +                                       deviceInfo->needEmulatedDecompression(pCreateInfo->format);

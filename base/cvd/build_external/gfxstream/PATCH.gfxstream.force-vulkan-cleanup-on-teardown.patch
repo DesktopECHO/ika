@@ -43,7 +43,7 @@ destructor, while VkEmulation and its host Vulkan dispatch are still alive.
 +    }
 +
 +    for (VkInstance instance : instances) {
-+        vkDestroyInstanceImpl(instance, nullptr);
++        vkDestroyInstanceImpl(instance);
 +    }
 +}
  

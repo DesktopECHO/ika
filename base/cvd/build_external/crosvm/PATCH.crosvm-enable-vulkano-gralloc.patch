@@ -1,10 +1,10 @@
 diff --git a/src/crosvm/sys/linux.rs b/src/crosvm/sys/linux.rs
 --- a/src/crosvm/sys/linux.rs
 +++ b/src/crosvm/sys/linux.rs
-@@ -2484,7 +2484,16 @@
-             })?
+@@ -2640,7 +2640,16 @@ fn run_vm(
      };
  
+     #[cfg(feature = "gpu")]
 -    let flags = RutabagaGrallocBackendFlags::new().disable_vulkano();
 +    // ika: keep the Vulkano gralloc backend enabled. On Apple Silicon (Asahi)
 +    // the bundled minigbm has no asahi driver, so the only backend able to
@@ -16,9 +16,9 @@ diff --git a/src/crosvm/sys/linux.rs b/src/crosvm/sys/linux.rs
 +    // selects Vulkano when minigbm failed to initialize (see
 +    // PATCH.rutabaga_gfx-gralloc-vulkano-fallback.patch).
 +    let flags = RutabagaGrallocBackendFlags::new();
+     #[cfg(feature = "gpu")]
      let gralloc = RutabagaGralloc::new(flags).context("failed to create gralloc")?;
  
-     run_control(
 diff --git a/src/crosvm/sys/linux/gpu.rs b/src/crosvm/sys/linux/gpu.rs
 --- a/src/crosvm/sys/linux/gpu.rs
 +++ b/src/crosvm/sys/linux/gpu.rs

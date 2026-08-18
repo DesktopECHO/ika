@@ -11,7 +11,7 @@ index acecd85c04..3e7ec8aa58 100644
  use std::collections::HashSet;
  use std::convert::TryInto;
  use std::fs::File;
-@@ -133,6 +135,49 @@ impl ComponentDiskPart {
+@@ -133,6 +135,50 @@ impl ComponentDiskPart {
      }
  }
  
@@ -54,6 +54,7 @@ index acecd85c04..3e7ec8aa58 100644
 +        is_direct: key.is_direct,
 +        lock: key.lock,
 +        depth: key.depth,
++        ..Default::default(),
 +    })
 +    .map_err(|e| Error::DiskError(Box::new(e)))
 +}
@@ -69,7 +70,7 @@ index acecd85c04..3e7ec8aa58 100644
          let mut disks: Vec<ComponentDiskPart> = proto
              .component_disks
              .iter()
-@@ -224,17 +270,19 @@ impl CompositeDiskFile {
+@@ -228,18 +274,19 @@ impl CompositeDiskFile {
                  //         part (the proto does not have fields for it).
                  //    (b)  this override of sorts always matches the correct user intent.
                  Ok(ComponentDiskPart {
@@ -78,10 +79,11 @@ index acecd85c04..3e7ec8aa58 100644
 -                        is_read_only: !writable,
 -                        is_sparse_file: params.is_sparse_file && writable,
 -                        // TODO: Should pass `params.is_overlapped` through here. Needs testing.
--                        is_overlapped: false,
+-                        // is_overlapped: false,
 -                        is_direct: params.is_direct,
 -                        lock: params.lock,
 -                        depth: params.depth + 1,
+-                        ..Default::default()
 -                    })
 -                    .map_err(|e| Error::DiskError(Box::new(e)))?,
 +                    file: open_component_disk(

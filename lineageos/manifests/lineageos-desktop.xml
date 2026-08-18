@@ -9,20 +9,24 @@
 <manifest>
   <remote name="desktopecho" fetch="https://github.com/DesktopECHO" />
   <remote name="khronos" fetch="https://github.com" />
+  <remote name="mesa" fetch="https://gitlab.freedesktop.org" />
 
   <remove-project name="platform/external/vulkan-headers" />
+  <remove-project name="platform/external/mesa3d" />
 
-  <!-- Mesa 26.1.5 is paired with generated Android/gfxstream build glue in
+  <!-- Mesa 26.1.7 is paired with generated Android/gfxstream build glue in
        external-mesa3d.patch. Some virtualization pins come from Android 17-era
        AOSP release heads, while minigbm remains on Android 16 QPR2; this mixed
        stack depends on the compatibility patches in this repository. Keep the
        Mesa source pin and integration patch together. Do not move any graphics
        pin without a boot, vulkaninfo, and Chromium/ANGLE screenshot verification
        pass on Apple Silicon. -->
-  <extend-project
-      name="platform/external/mesa3d"
+  <project
+      name="mesa/mesa"
       path="external/mesa3d"
-      revision="6a02618ccf6c5651ecb9cccbde571eb61fd73592" />
+      remote="mesa"
+      revision="e8617e4ca95fc655b0f13fd115c224d27eba2441"
+      groups="pdk-cw-fs,pdk-fs" />
 
   <!-- Keep both guest architectures and their virtual-device modules on the
        same Android 6.12 KMI release. This advances the guests from 6.12.38 to
@@ -89,7 +93,7 @@
       path="external/vulkan-headers"
       name="KhronosGroup/Vulkan-Headers"
       remote="khronos"
-      revision="b5c8f996196ba4aa6d8f97e52b5d3b6e70f7e4e2"
+      revision="0b7f383797fa7be53ae28213e001ae60668ee511"
       groups="pdk" />
 
   <project
