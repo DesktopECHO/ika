@@ -382,6 +382,8 @@ SCRCPY_DPI=""
 GFXSTREAM_VULKAN_MODE="${GFXSTREAM_VULKAN:-auto}"
 GFXSTREAM_GLES_CONTEXT_TYPES="gfxstream-gles:gfxstream-composer"
 GFXSTREAM_VULKAN_CONTEXT_TYPES="gfxstream-gles:gfxstream-vulkan:gfxstream-composer"
+GFXSTREAM_RADV_VULKAN_RENDERER_FEATURES="VulkanAllocateDeviceMemoryOnly:enabled"
+RADV_VEGA_OR_OLDER_FAMILY_REGEX='(TAHITI|PITCAIRN|VERDE|OLAND|HAINAN|BONAIRE|KABINI|KAVERI|HAWAII|MULLINS|TONGA|ICELAND|CARRIZO|FIJI|STONEY|POLARIS10|POLARIS11|POLARIS12|VEGAM|VEGA10|RAVEN|VEGA12|VEGA20|RAVEN2|RENOIR)'
 # Apple Silicon (Honeykrisp) exposes the dma-buf external-memory path
 # (VK_EXT_external_memory_dma_buf) but NOT VK_EXT_external_memory_host, so the
 # gfxstream SystemBlob host-pointer path cannot be backed by the Apple GPU and
@@ -1139,13 +1141,20 @@ append_arm64_kernel_page_args() {
   esac
 }
 
+vulkaninfo_summary() {
+  command -v vulkaninfo >/dev/null 2>&1 || return 1
+
+  # GPU classification does not need a presentation surface. Keep the probe
+  # independent of X11/Wayland authentication, especially for SSH launches
+  # that inherit DISPLAY without a usable authorization cookie.
+  env -u DISPLAY -u WAYLAND_DISPLAY vulkaninfo --summary 2>/dev/null
+}
+
 primary_vulkan_device_is_llvmpipe() {
   local summary
   local primary_device
 
-  command -v vulkaninfo >/dev/null 2>&1 || return 1
-
-  summary="$(vulkaninfo --summary 2>/dev/null || true)"
+  summary="$(vulkaninfo_summary || true)"
   [[ -n "${summary}" ]] || return 1
 
   primary_device="$(
@@ -1171,9 +1180,7 @@ primary_vulkan_device_is_radv() {
   local summary
   local primary_device
 
-  command -v vulkaninfo >/dev/null 2>&1 || return 1
-
-  summary="$(vulkaninfo --summary 2>/dev/null || true)"
+  summary="$(vulkaninfo_summary || true)"
   [[ -n "${summary}" ]] || return 1
 
   primary_device="$(
@@ -1193,6 +1200,41 @@ primary_vulkan_device_is_radv() {
   [[ -n "${primary_device}" ]] || return 1
 
   grep -Eiq '(^[[:space:]]*(deviceName|driverName|driverID)[[:space:]]*=.*radv|DRIVER_ID_MESA_RADV)' <<<"${primary_device}"
+}
+
+vulkan_device_summary_is_radv_vega_or_older() {
+  local device_summary="$1"
+
+  grep -Eiq '(^[[:space:]]*(deviceName|driverName|driverID)[[:space:]]*=.*radv|DRIVER_ID_MESA_RADV)' \
+    <<<"${device_summary}" || return 1
+  grep -Eiq "RADV[[:space:]_-]*${RADV_VEGA_OR_OLDER_FAMILY_REGEX}([^[:alnum:]_]|$)" \
+    <<<"${device_summary}"
+}
+
+primary_vulkan_device_is_radv_vega_or_older() {
+  local summary
+  local primary_device
+
+  summary="$(vulkaninfo_summary || true)"
+  [[ -n "${summary}" ]] || return 1
+
+  primary_device="$(
+    awk '
+      /^GPU[0-9]+:/ {
+        if (seen) {
+          exit
+        }
+        seen = 1
+        next
+      }
+      seen {
+        print
+      }
+    ' <<<"${summary}"
+  )"
+  [[ -n "${primary_device}" ]] || return 1
+
+  vulkan_device_summary_is_radv_vega_or_older "${primary_device}"
 }
 
 append_comma_option() {
@@ -1362,6 +1404,15 @@ append_apple_16k_gfxstream_vulkan_args() {
   log "Apple Silicon 16K host: using udmabuf-backed ExternalBlob with Vulkano gralloc; disabling SystemBlob"
 }
 
+append_radv_gfxstream_vulkan_args() {
+  local -n radv_args_array="$1"
+
+  primary_vulkan_device_is_radv_vega_or_older || return 1
+  append_or_merge_gpu_renderer_features \
+    radv_args_array "${GFXSTREAM_RADV_VULKAN_RENDERER_FEATURES}"
+  log "RADV Vega-or-older gfxstream: using device-only Vulkan memory to avoid AMD host-visible memory corruption"
+}
+
 append_gfxstream_vulkan_args() {
   local -n args_array="$1"
   shift
@@ -1380,6 +1431,9 @@ append_gfxstream_vulkan_args() {
   if gfxstream_guest_angle_uses_host_vulkan "${gpu_mode}"; then
     CVD_GRAPHICS_DRIVER_MESSAGE="${gpu_mode} (ANGLE over gfxstream Vulkan)"
     log "gfxstream-vulkan=${mode} context toggle has no effect with gpu_mode=${gpu_mode} (Vulkan-only)"
+    if append_radv_gfxstream_vulkan_args args_array; then
+      CVD_GRAPHICS_DRIVER_MESSAGE="${gpu_mode} (ANGLE over gfxstream Vulkan; RADV device memory)"
+    fi
     if is_apple_silicon_16k_host; then
       append_apple_16k_gfxstream_vulkan_args args_array
       CVD_GRAPHICS_DRIVER_MESSAGE="${gpu_mode} (ANGLE over gfxstream Vulkan; Apple 16K udmabuf)"
@@ -1403,6 +1457,9 @@ append_gfxstream_vulkan_args() {
         && is_apple_silicon_16k_host; then
       append_apple_16k_gfxstream_vulkan_args args_array
     fi
+    if gfxstream_context_types_include_vulkan "${effective_context_types}"; then
+      append_radv_gfxstream_vulkan_args args_array || true
+    fi
     return 0
   fi
 
@@ -1418,6 +1475,7 @@ append_gfxstream_vulkan_args() {
       log "gfxstream-vulkan=auto; leaving Cuttlefish gfxstream defaults with Apple 16K udmabuf"
       return 0
     else
+      append_radv_gfxstream_vulkan_args args_array || true
       CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (Default settings, vulkan=auto)"
       log "gfxstream-vulkan=auto; leaving Cuttlefish gfxstream defaults"
       return 0
@@ -1437,6 +1495,7 @@ append_gfxstream_vulkan_args() {
       if is_apple_silicon_16k_host; then
         append_apple_16k_gfxstream_vulkan_args args_array
       fi
+      append_radv_gfxstream_vulkan_args args_array || true
       ;;
   esac
 }

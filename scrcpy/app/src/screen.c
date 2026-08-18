@@ -17,13 +17,12 @@
 #include "icon.h"
 #include "options.h"
 #include "util/log.h"
-#include "util/process.h"
 #include "util/sdl.h"
 
 #define DISPLAY_MARGIN_PX 96
 #define FLEX_DISPLAY_REQUEST_MIN_INTERVAL SC_TICK_FROM_MS(300)
-#define FLEX_DISPLAY_RESIZE_QUIET_DELAY SC_TICK_FROM_MS(400)
-#define FLEX_DISPLAY_POST_READY_FRAME_GRACE SC_TICK_FROM_MS(150)
+#define FLEX_DISPLAY_RESIZE_QUIET_DELAY SC_TICK_FROM_MS(200)
+#define FLEX_DISPLAY_POST_READY_SETTLE_DELAY SC_TICK_FROM_MS(1250)
 #define FLEX_DISPLAY_INITIAL_SHOW_TIMEOUT SC_TICK_FROM_MS(1000)
 // Extra time the window stays hidden after the guest first renders at the
 // target resolution, letting a freshly-booted desktop finish drawing before the
@@ -55,14 +54,15 @@
 // overlay in gradually instead of snapping to full blur as soon as the window
 // changes size.
 #define FLEX_DISPLAY_BLUR_FADE_IN_DURATION SC_TICK_FROM_MS(125)
-// Keep the captured preview fully opaque for a brief moment after release so
-// a one-frame transitional live buffer is not revealed underneath the fade.
-#define FLEX_DISPLAY_PREVIEW_REVEAL_DELAY SC_TICK_FROM_MS(650)
+// The guest settle delay above keeps the preview visible until the live layout
+// is usable. Switch the ghost effect to that settled live frame immediately at
+// release instead of crossfading two differently positioned layouts.
+#define FLEX_DISPLAY_PREVIEW_REVEAL_DELAY SC_TICK_FROM_MS(0)
 // Blur fade-out duration. When the resize hold releases, the blur ghost intensity
 // decays linearly to 0.0 over this period rather than snapping off in one
 // frame. The underlying texture has already been swapped to the new content by
 // the time the fade begins, so the fade reveals the new content sharpening up.
-#define FLEX_DISPLAY_BLUR_FADE_OUT_DURATION SC_TICK_FROM_MS(450)
+#define FLEX_DISPLAY_BLUR_FADE_OUT_DURATION SC_TICK_FROM_MS(250)
 // Tick interval driving the fade animation; ~60 Hz is enough for a smooth
 // linear ramp without burning CPU.
 #define FLEX_DISPLAY_BLUR_FADE_INTERVAL_MS 16
@@ -555,30 +555,14 @@ sc_screen_update_content_rect(struct sc_screen *screen) {
             && screen->video
             && !screen->disconnected
             && screen->render_fit != SC_RENDER_FIT_DISABLED) {
-        if (screen->resize_display_using_pixel_size
-                && screen->last_requested_display_size.width
-                && screen->last_requested_display_size.height) {
-            // Direct Display requests the guest size in render-output pixels
-            // with no codec alignment applied. Keep the rendered frame at
-            // exactly that size so the rect and the frame are always 1:1.
-            struct sc_size requested_size =
-                get_oriented_size(screen->last_requested_display_size,
-                                  screen->orientation);
-            uint16_t width = MIN(requested_size.width, render_size.width);
-            uint16_t height = MIN(requested_size.height, render_size.height);
-            screen->rect.x = (render_size.width - width) / 2;
-            screen->rect.y = (render_size.height - height) / 2;
-            screen->rect.w = width;
-            screen->rect.h = height;
-        } else {
-            // In dpi resize mode, the host window is the source of truth.
-            // Once the remote display catches up, continue filling the window
-            // instead of falling back to aspect-preserving letterboxing.
-            screen->rect.x = 0;
-            screen->rect.y = 0;
-            screen->rect.w = render_size.width;
-            screen->rect.h = render_size.height;
-        }
+        // The host window is the source of truth. The guest framebuffer may be
+        // slightly smaller due to encoder or GPU row-pitch alignment, so scale
+        // it into the exact compositor-managed output instead of changing the
+        // SDL window to match the framebuffer.
+        screen->rect.x = 0;
+        screen->rect.y = 0;
+        screen->rect.w = render_size.width;
+        screen->rect.h = render_size.height;
         return;
     }
 
@@ -588,9 +572,6 @@ sc_screen_update_content_rect(struct sc_screen *screen) {
 
 static void
 sc_screen_maybe_request_display_resize(struct sc_screen *screen, bool force);
-static void
-sc_screen_resize_cuttlefish_physical_display(struct sc_screen *screen,
-                                             uint16_t width, uint16_t height);
 static void
 sc_screen_note_raw_frame_resize_activity(struct sc_screen *screen);
 static void
@@ -1231,8 +1212,10 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
     }
 
     // During resize, draw a captured preview texture if available. Once the
-    // live frame catches up, the preview fades out over the final frame so
-    // the content transition is a crossfade instead of a hard swap.
+    // live frame catches up, hold that preview over Android's surface relayout,
+    // then move the ghost effect to the live texture before fading it out. A
+    // crossfade between the old and new layouts makes the ghost appear to
+    // drift, and exposes transient black app surfaces underneath it.
     SDL_FRect *geometry = &screen->rect;
     if (screen->flex_display && screen->transient_stretch
             && screen->resize_preview_texture) {
@@ -1242,27 +1225,29 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
     } else {
         ok = sc_screen_render_texture_with_alpha(screen, geometry,
                                                  startup_alpha);
-        if (ok && screen->flex_display && screen->blur_fade_start_tick
-                && screen->resize_preview_texture) {
+        if (ok && screen->flex_display && screen->blur_fade_start_tick) {
             float intensity = sc_screen_blur_intensity(screen);
             if (intensity <= 0.0f) {
                 sc_screen_stop_blur_fade(screen);
-            } else {
+            } else if (screen->resize_preview_texture
+                    && sc_tick_now() - screen->blur_fade_start_tick
+                            < FLEX_DISPLAY_PREVIEW_REVEAL_DELAY) {
+                // Keep the last settled layout fully covering Android while
+                // its windows redraw at the new display size.
                 ok &= sc_screen_render_resize_preview(screen, geometry,
                                                       intensity * startup_alpha,
                                                       intensity);
-            }
-        } else if (screen->flex_display
-                && (screen->transient_stretch
-                    || screen->blur_fade_start_tick)) {
-            float intensity = screen->transient_stretch
-                            ? sc_screen_blur_fade_in_intensity(screen)
-                            : sc_screen_blur_intensity(screen);
-            if (intensity <= 0.0f) {
-                if (screen->blur_fade_start_tick) {
-                    sc_screen_stop_blur_fade(screen);
-                }
             } else {
+                // The live texture and its ghost copies use the same geometry,
+                // so this fade cannot drift when Android has reflowed its UI.
+                sc_screen_destroy_resize_preview(screen);
+                ok &= sc_screen_render_blurred_stretch(screen, geometry,
+                                                       intensity,
+                                                       startup_alpha);
+            }
+        } else if (screen->flex_display && screen->transient_stretch) {
+            float intensity = sc_screen_blur_fade_in_intensity(screen);
+            if (intensity > 0.0f) {
                 ok &= sc_screen_render_blurred_stretch(screen, geometry,
                                                        intensity,
                                                        startup_alpha);
@@ -1286,87 +1271,6 @@ end:
         // the window size hasn't changed since the last request.
         sc_screen_maybe_request_display_resize(screen, false);
     }
-}
-
-static unsigned
-sc_screen_parse_cuttlefish_instance(const char *socket_path) {
-    if (!socket_path) {
-        return 1;
-    }
-
-    const char *p = socket_path;
-    while ((p = strstr(p, "cvd-"))) {
-        p += 4;
-        char *end = NULL;
-        unsigned long instance = strtoul(p, &end, 10);
-        if (end != p && instance > 0 && instance <= 9999) {
-            return (unsigned) instance;
-        }
-    }
-
-    return 1;
-}
-
-static const char *
-sc_screen_get_cvd_bin(void) {
-    const char *cvd_bin = getenv("IKA_CVD_BIN");
-    if (cvd_bin && *cvd_bin) {
-        return cvd_bin;
-    }
-
-    return "/usr/lib/cuttlefish-common/bin/cvd";
-}
-
-static void
-sc_screen_resize_cuttlefish_physical_display(struct sc_screen *screen,
-                                             uint16_t width, uint16_t height) {
-    if (!screen->cuttlefish_frames_socket) {
-        return;
-    }
-
-    unsigned instance =
-        sc_screen_parse_cuttlefish_instance(screen->cuttlefish_frames_socket);
-    uint16_t dpi = screen->flex_display_dpi ? screen->flex_display_dpi : 320;
-
-    char instance_arg[32];
-    char display_id_arg[32];
-    char display_arg[128];
-    snprintf(instance_arg, sizeof(instance_arg), "--instance_num=%u", instance);
-    snprintf(display_id_arg, sizeof(display_id_arg), "--display_id=%" PRIu32,
-             screen->cuttlefish_display_id);
-    snprintf(display_arg, sizeof(display_arg),
-             "--display=width=%" PRIu16 ",height=%" PRIu16
-             ",dpi=%" PRIu16 ",refresh_rate_hz=60",
-             width, height, dpi);
-
-    const char *const argv[] = {
-        sc_screen_get_cvd_bin(),
-        "display",
-        "resize",
-        instance_arg,
-        display_id_arg,
-        display_arg,
-        NULL,
-    };
-
-    // Reap any still-running resize child before spawning a new one.
-    if (screen->cuttlefish_resize_pid != SC_PROCESS_NONE) {
-        sc_process_close(screen->cuttlefish_resize_pid);
-        screen->cuttlefish_resize_pid = SC_PROCESS_NONE;
-    }
-
-    sc_pid pid;
-    enum sc_process_result result =
-        sc_process_execute(argv, &pid, SC_PROCESS_NO_STDOUT
-                                      | SC_PROCESS_NO_STDERR);
-    if (result != SC_PROCESS_SUCCESS) {
-        LOGD("Could not execute Cuttlefish physical display resize");
-        return;
-    }
-
-    // Don't block — let the resize command run concurrently with incoming
-    // frames. The pid is reaped at the next resize call or in destroy().
-    screen->cuttlefish_resize_pid = pid;
 }
 
 static void
@@ -1396,9 +1300,14 @@ sc_screen_maybe_request_display_resize(struct sc_screen *screen, bool force) {
     }
 
     // For encoded video the server rounds up to the codec's macroblock
-    // alignment; pre-round down here so both sides agree. Raw-frame paths
-    // (resize_display_using_pixel_size) have no encoder, so pass as-is.
-    if (!screen->resize_display_using_pixel_size) {
+    // alignment; pre-round down here so both sides agree. Raw Cuttlefish
+    // frames use host Vulkan images. Keep 32-bit rows on a 256-byte boundary
+    // for GPUs such as RADV Polaris, while retaining the normal vertical
+    // alignment because row pitch does not depend on image height.
+    if (screen->resize_display_using_pixel_size) {
+        width &= ~63;
+        height &= ~7;
+    } else {
         width &= ~7;
         height &= ~7;
     }
@@ -1409,10 +1318,18 @@ sc_screen_maybe_request_display_resize(struct sc_screen *screen, bool force) {
     sc_tick now = sc_tick_now();
     if (screen->last_requested_display_size.width == width
             && screen->last_requested_display_size.height == height) {
-        if (screen->transient_stretch && !screen->display_ready) {
+        // A host resize may quantize to the framebuffer size already active in
+        // the guest. Treat it as ready only when the guest has acknowledged
+        // that exact viewport and the raw stream has delivered a later frame.
+        if (screen->transient_stretch && !screen->display_ready
+                && screen->last_ready_display_size.width == width
+                && screen->last_ready_display_size.height == height
+                && screen->last_ready_display_tick
+                && screen->raw_frame.received_tick
+                        > screen->last_ready_display_tick) {
             screen->display_ready = true;
-            screen->display_ready_tick = now;
-            screen->display_ready_raw_frame = false;
+            screen->display_ready_tick = screen->last_ready_display_tick;
+            screen->display_ready_raw_frame = true;
         }
         return;
     }
@@ -1431,67 +1348,8 @@ sc_screen_maybe_request_display_resize(struct sc_screen *screen, bool force) {
     screen->display_ready_tick = 0;
     screen->display_ready_raw_frame = false;
 
-    if (screen->resize_display_using_pixel_size) {
-        sc_screen_resize_cuttlefish_physical_display(screen, width, height);
-    }
-
     LOGV("resize_display(%" PRIu16 ", %" PRIu16 ")", width, height);
     sc_controller_resize_display(screen->controller, width, height);
-}
-
-static bool
-sc_screen_snap_window_to_requested_pixel_size(struct sc_screen *screen) {
-    if (!screen->resize_display_using_pixel_size || !is_windowed(screen)
-            || !screen->last_requested_display_size.width
-            || !screen->last_requested_display_size.height) {
-        return false;
-    }
-
-    struct sc_size render_size =
-        sc_sdl_get_render_output_size(screen->renderer);
-    struct sc_size requested_size =
-        get_oriented_size(screen->last_requested_display_size,
-                          screen->orientation);
-
-    if (render_size.width == requested_size.width
-            && render_size.height == requested_size.height) {
-        return false;
-    }
-
-    if (render_size.width < requested_size.width
-            || render_size.height < requested_size.height) {
-        return false;
-    }
-
-    struct sc_size window_size = sc_sdl_get_window_size(screen->window);
-    struct sc_size target_size = {
-        .width = (uint32_t) window_size.width * requested_size.width
-               / render_size.width,
-        .height = (uint32_t) window_size.height * requested_size.height
-                / render_size.height,
-    };
-
-    struct sc_size min_window_size =
-        sc_screen_get_min_window_size(screen->window);
-    target_size.width = MAX(target_size.width, min_window_size.width);
-    target_size.height = MAX(target_size.height, min_window_size.height);
-
-    if (target_size.width == window_size.width
-            && target_size.height == window_size.height) {
-        return false;
-    }
-
-    struct sc_point position = sc_sdl_get_window_position(screen->window);
-    struct sc_point target_position = {
-        .x = position.x + (window_size.width - target_size.width) / 2,
-        .y = position.y + (window_size.height - target_size.height) / 2,
-    };
-
-    sc_sdl_set_window_size(screen->window, target_size);
-    sc_sdl_set_window_position(screen->window, target_position);
-    LOGD("Snapped window to Direct Display pixel size: %ux%u",
-         target_size.width, target_size.height);
-    return true;
 }
 
 static void
@@ -1536,15 +1394,23 @@ sc_screen_schedule_resize_settle_after(struct sc_screen *screen,
         delay_ms = 1;
     }
 
-    SDL_TimerID old_timer;
+    SDL_TimerID old_timer = 0;
+    sc_mutex_lock(&screen->mutex);
+    // Register while holding the mutex so a short-delay callback cannot run
+    // before its timer ID is published. Preserve the existing timer if SDL
+    // fails to create its replacement.
     SDL_TimerID new_timer =
         SDL_AddTimer(delay_ms, sc_screen_resize_settle_timer, screen);
-
-    sc_mutex_lock(&screen->mutex);
-    old_timer = sc_screen_take_resize_settle_timer_locked(screen);
-    screen->resize_settle_timer = new_timer;
+    if (new_timer) {
+        old_timer = sc_screen_take_resize_settle_timer_locked(screen);
+        screen->resize_settle_timer = new_timer;
+    }
     sc_mutex_unlock(&screen->mutex);
 
+    if (!new_timer) {
+        LOGW("Could not schedule resize-settle timer: %s", SDL_GetError());
+        return;
+    }
     if (old_timer) {
         SDL_RemoveTimer(old_timer);
     }
@@ -2299,9 +2165,11 @@ sc_screen_init(struct sc_screen *screen,
     screen->flex_display_dpi = params->flex_display_dpi;
     screen->launch_display_dpi = params->flex_display_dpi;
     screen->initial_display_scale = 1.0f;
-    screen->cuttlefish_resize_pid = SC_PROCESS_NONE;
     screen->last_requested_display_size.width = 0;
     screen->last_requested_display_size.height = 0;
+    screen->last_ready_display_size.width = 0;
+    screen->last_ready_display_size.height = 0;
+    screen->last_ready_display_tick = 0;
     screen->last_resize_request_tick = 0;
     screen->initial_window_show_deferred = false;
     screen->initial_display_size.width = 0;
@@ -2725,9 +2593,6 @@ sc_screen_destroy(struct sc_screen *screen) {
     if (screen->blur_fade_timer) {
         SDL_RemoveTimer(screen->blur_fade_timer);
     }
-    if (screen->cuttlefish_resize_pid != SC_PROCESS_NONE) {
-        sc_process_close(screen->cuttlefish_resize_pid);
-    }
     sc_screen_raw_frame_clear(screen, true);
     sc_screen_raw_frame_clear(screen, false);
     for (size_t i = 0; i < SC_RAW_FRAME_BUFFER_POOL_SIZE; ++i) {
@@ -3025,18 +2890,22 @@ sc_screen_note_display_ready_raw_frame(struct sc_screen *screen) {
         return;
     }
 
-    bool post_ready_frame =
-        screen->raw_frame.received_tick > screen->display_ready_tick;
-    if (!post_ready_frame) {
+    // DISPLAY_READY only confirms the logical display configuration. The
+    // screencast shows SurfaceFlinger/ANGLE still presenting partially reflowed
+    // windows and black polygonal regions for about one second afterward. Keep
+    // the last clean preview visible until a frame arrives beyond that guest
+    // settle interval. The raw backing dimensions cannot be compared because
+    // Cuttlefish keeps them fixed (for example at 3840x2160).
+    sc_tick settled_tick = screen->display_ready_tick
+                         + FLEX_DISPLAY_POST_READY_SETTLE_DELAY;
+    if (screen->raw_frame.received_tick <= settled_tick) {
         sc_tick now = sc_tick_now();
-        sc_tick elapsed = now - screen->display_ready_tick;
-        if (elapsed < FLEX_DISPLAY_POST_READY_FRAME_GRACE) {
-            Uint32 delay_ms =
-                SC_TICK_TO_MS(FLEX_DISPLAY_POST_READY_FRAME_GRACE - elapsed);
+        if (now < settled_tick) {
+            Uint32 delay_ms = SC_TICK_TO_MS(settled_tick - now);
             sc_screen_schedule_resize_settle_after(screen,
                                                    delay_ms ? delay_ms : 1);
-            return;
         }
+        return;
     }
 
     screen->display_ready_raw_frame = true;
@@ -3309,11 +3178,6 @@ sc_screen_on_resize_settled(struct sc_screen *screen) {
     }
 
     sc_screen_maybe_request_display_resize(screen, true);
-    if (sc_screen_snap_window_to_requested_pixel_size(screen)) {
-        sc_screen_begin_resize_hold(screen, now, SC_RESIZE_PREVIEW_CONTENT);
-        return;
-    }
-
     sc_screen_force_raw_frame_refresh(screen);
 
     if (sc_screen_try_release_resize_hold(screen)) {
@@ -3328,8 +3192,7 @@ sc_screen_on_display_ready(struct sc_screen *screen, uint32_t display_id,
                            uint16_t width, uint16_t height) {
     (void) display_id; // single-display in flex mode; reserved for future use
 
-    if (!screen->flex_display || !screen->transient_stretch) {
-        // Not in a transitional state. Nothing to do.
+    if (!screen->flex_display) {
         return;
     }
 
@@ -3339,7 +3202,7 @@ sc_screen_on_display_ready(struct sc_screen *screen, uint32_t display_id,
     // Ignore stale acks so we don't drop the hold mid-flight.
     uint16_t req_w = screen->last_requested_display_size.width;
     uint16_t req_h = screen->last_requested_display_size.height;
-    if (req_w && req_h && (width != req_w || height != req_h)) {
+    if (!req_w || !req_h || width != req_w || height != req_h) {
         if (sc_get_log_level() <= SC_LOG_LEVEL_VERBOSE) {
             LOGV("DISPLAY_READY %ux%u doesn't match latest request %ux%u; "
                  "treating as stale", width, height, req_w, req_h);
@@ -3347,8 +3210,17 @@ sc_screen_on_display_ready(struct sc_screen *screen, uint32_t display_id,
         return;
     }
 
+    screen->last_ready_display_size.width = width;
+    screen->last_ready_display_size.height = height;
+    screen->last_ready_display_tick = sc_tick_now();
+    if (!screen->transient_stretch) {
+        // Remember the acknowledged viewport for a later host resize that
+        // quantizes to the same guest size, even when no hold is active now.
+        return;
+    }
+
     screen->display_ready = true;
-    screen->display_ready_tick = sc_tick_now();
+    screen->display_ready_tick = screen->last_ready_display_tick;
     screen->display_ready_raw_frame = false;
     sc_screen_note_display_ready_raw_frame(screen);
 

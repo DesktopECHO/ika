@@ -2,8 +2,8 @@
 
 Khronos `vulkaninfo` vendored from
 [KhronosGroup/Vulkan-Tools](https://github.com/KhronosGroup/Vulkan-Tools)
-tag `v1.4.341`, chosen to match `external/vulkan-headers`
-(`VK_HEADER_VERSION 341`). It replaces the earlier homegrown `vkextcheck`
+tag `v1.4.360`, chosen to match `external/vulkan-headers`
+(`VK_HEADER_VERSION 360`). It replaces the earlier homegrown `vkextcheck`
 extension enumerator with the full upstream report: instance/device
 extensions, features, properties, limits, memory heaps/types, queue
 families, format properties, and all the pNext-chain extension structs.

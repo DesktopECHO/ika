@@ -40,17 +40,20 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** Adds a `ResizeDisplay { display_id, display }` variant to `GpuControlCommand` and re-exports `do_gpu_display_resize` from `client.rs`. Pair with the `resize_display` patches so the control-socket protocol exposes the new operation end-to-end.
 - **Why:** Without this, the `resize_display` capability added on the device side has no client-facing command.
 
-### Upstream-sync patches (large)
+#### `PATCH.crosvm-enable-vulkano-gralloc.patch`
+- **Targets:** `crosvm_bin`. Files: `src/crosvm/sys/linux.rs`, `src/crosvm/sys/linux/gpu.rs`.
+- **What it does:** Keeps rutabaga's Vulkano gralloc backend available and preserves an explicit `external_blob` request.
+- **Why:** Minigbm has no Asahi driver. On Apple Silicon Linux, Vulkano is therefore the fallback that imports gfxstream dma-bufs through Honeykrisp. Rutabaga 0.1.80 now provides the cross-domain and atomic-memory support that previously required the removed `mesa3d_util` and `rutabaga_gfx` upstream-sync overlays.
 
-#### `PATCH.mesa3d_util-upstream-main-20260520.patch`
-- **Targets:** `mesa3d_util` crate.
-- **What it does:** Adds new modules (notably `atomic_memory_sentinel.rs`) and other API surface required by the newer `rutabaga_gfx`. Effectively fast-forwards the pinned `mesa3d_util` crate to upstream `main` as of 2026-05-20.
-- **Why:** The `rutabaga_gfx` upstream-sync patch below depends on `AtomicMemorySentinel` and other helpers that don't exist in the crate version Cargo resolves to. Without this patch, that one fails to compile.
+#### `PATCH.rutabaga_gfx-gralloc-vulkano-fallback.patch`
+- **Targets:** `rutabaga_gfx` crate. File: `src/rutabaga_gralloc/gralloc.rs`.
+- **What it does:** Prefers a working minigbm backend and starts Vulkano only when minigbm initialization fails.
+- **Why:** This preserves the established x86_64 path while allowing Apple Silicon hosts to use the upstream Vulkano backend.
 
-#### `PATCH.rutabaga_gfx-upstream-main-20260520.patch`
-- **Targets:** `rutabaga_gfx` crate.
-- **What it does:** Fast-forwards `rutabaga_gfx` to upstream `main` as of 2026-05-20 — adds `cross_domain/atomic_memory_sentinel_manager.rs`, refreshes `cross_domain/{protocol,mod}.rs`, `rutabaga_core.rs`, `rutabaga_gralloc/gralloc.rs`, `rutabaga_utils.rs`, `lib.rs`.
-- **Why:** Picks up bug fixes and API additions needed by both crosvm and gfxstream that haven't landed in a published crate release.
+#### `PATCH.rutabaga_gfx-cleanup-on-drop.patch`
+- **Targets:** `rutabaga_gfx` crate. File: `src/rutabaga_core.rs`.
+- **What it does:** Releases gfxstream contexts and resources before the renderer component is destroyed.
+- **Why:** Orderly teardown reaches gfxstream's normal unbind paths instead of leaving renderer-owned resources alive during process shutdown.
 
 ### Build-system patches (no runtime effect)
 
@@ -80,12 +83,11 @@ See `crosvm.MODULE.bazel`. The relevant blocks:
 
 | Target | Patches |
 |---|---|
-| `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-composite-preserve-spec-fd`, `crosvm-gpu-2d-sandbox`, `crosvm-resize-display` |
+| `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-composite-preserve-spec-fd`, `crosvm-gpu-2d-sandbox`, `crosvm-resize-display`, `crosvm-enable-vulkano-gralloc`, `minijail-sys_common_mk` |
 | `crosvm_bin.annotation(crate = "disk")` | `disk-composite-preserve-spec-fd` |
 | `crosvm_bin.annotation(crate = "jail")` | `jail-aarch64-block-pread64`, `jail-gpu-host-graphics-libs-optional` |
-| `crosvm_bin.annotation(crate = "mesa3d_util")` | `mesa3d_util-upstream-main-20260520` |
 | `crosvm_bin.annotation(crate = "devices")` | `crosvm-resize-display-devices` |
-| `crosvm_bin.annotation(crate = "rutabaga_gfx")` | `rutabaga_gfx_build_rs`, `rutabaga_gfx-upstream-main-20260520` |
+| `crosvm_bin.annotation(crate = "rutabaga_gfx")` | `rutabaga_gfx_build_rs`, `rutabaga_gfx-gralloc-vulkano-fallback`, `rutabaga_gfx-cleanup-on-drop` |
 | `crosvm_bin.annotation(crate = "minijail-sys")` | `minijail-sys_build_rs` |
 | `crosvm_bin.annotation(crate = "proto_build_tools")` | `proto_build_tools` |
 | `crosvm_bin.annotation(crate = "vm_control")` | `crosvm-resize-display-vm-control` |

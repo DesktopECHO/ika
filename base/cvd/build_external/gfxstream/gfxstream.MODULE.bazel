@@ -2,12 +2,10 @@ git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "g
 
 git_repository(
     name = "gfxstream",
-    commit = "6e68776cefbe1f1a662bb7321aa98e5348e8c062",
+    commit = "9068c3aa805e92bc7d425ad6fee6dec2af4a4024",
     remote = "https://github.com/google/gfxstream.git",
     patch_strip = 1,
     patches = [
-        "@//build_external/gfxstream:PATCH.gfxstream.build_variables.patch",
-        "@//build_external/gfxstream:PATCH.protobuf_deprecation_warning.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.blob_page_size_runtime.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.gles1-alpha-test-core-profile.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.linux_udmabuf_creator.patch",

@@ -2,11 +2,9 @@
 
 # イカ · Ika Virtual Desktop
 
-**Ika** _/ee-kah/_ - Japanese for "cuttlefish" - began as an effort to run the
-[Cuttlefish](https://source.android.com/setup/create/cuttlefish) Android emulator
-on [Fedora Asahi Remix](https://asahilinux.org/). It has since evolved into a
-full-blown desktop operating environment for Apple Silicon and x86-64 hosts.
-The project scope changed over time but the name stuck.
+**Ika** _/ee-kah/_, the Japanese word for squid or cuttlefish, began as an effort to
+run the [Cuttlefish](https://source.android.com/setup/create/cuttlefish) Android emulator
+on [Fedora Asahi Remix](https://asahilinux.org/). It later evolved into a desktop-centric Android build for Apple Silicon and x86-64 hosts, but the name already stuck.
 
 ## Features
 
@@ -17,7 +15,7 @@ The project scope changed over time but the name stuck.
 - **Flexible build options** for **MindTheGapps**, **microG**, or a fully
   de-Googled ROM without an app store.
 
-## Ika Binaries
+## Ika Binaries (Updated 2026-07-26)
 
 Ika consists of two packages: an Android disk image (informally, the device ROM)
 and a matching Cuttlefish virtual machine application. Prebuilt Fedora Linux
@@ -28,13 +26,13 @@ application and disk image.
 | **Distribution / architecture** | **Application** | **Disk Image** |
 | --- | --- | --- |
 |  |  |  |
-| Fedora x86_64 | [ika-base (144 MB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-base-260713-1.fc44.x86_64.rpm) | [ika-lineageos (1.31 GB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-lineageos-260713-1.fc44.x86_64.rpm) |
+| Fedora x86_64 | [ika-base (144 MB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-base-260726-1.fc44.x86_64.rpm) | [ika-lineageos (1.31 GB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-lineageos-260726-1.fc44.x86_64.rpm) |
 |  |  |  |
-| Fedora ARM64 | [ika-base (141 MB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-base-260713-1.fc44.aarch64.rpm) | [ika-lineageos (1.29 GB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-lineageos-260713-1.fc44.aarch64.rpm) |
+| Fedora ARM64 | [ika-base (141 MB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-base-260726-1.fc44.aarch64.rpm) | [ika-lineageos (1.29 GB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-lineageos-260726-1.fc44.aarch64.rpm) |
 |  |  |  |
-| Debian x86_64 | [ika-base (116 MB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-base_260713-1_amd64.deb) | [ika-lineageos (1.26 GB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-lineageos_260713-1_amd64.deb) |
+| Debian x86_64 | [ika-base (116 MB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-base_260726-1_amd64.deb) | [ika-lineageos (1.26 GB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-lineageos_260726-1_amd64.deb) |
 |  |  |  |
-| Debian ARM64 | [ika-base (101 MB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-base_260713-1_arm64.deb) | [ika-lineageos (1.24 GB)](https://github.com/DesktopECHO/ika/releases/download/260713/ika-lineageos_260713-1_arm64.deb) |
+| Debian ARM64 | [ika-base (101 MB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-base_260726-1_arm64.deb) | [ika-lineageos (1.24 GB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-lineageos_260726-1_arm64.deb) |
 
 > [!NOTE]
 > Debian and Ubuntu require Mesa 26.1 or newer. Get an updated Mesa from
@@ -60,7 +58,7 @@ unzip ika-main.zip && rm ika-main.zip && cd ika-main
 # Prepares signing certificates, installs build dependencies, downloads the
 # LineageOS 23.2 source, applies the overlay and source patches, builds the
 # Cuttlefish target for the host architecture, creates RPM or Debian packages,
-# and provides package installation instructions when the build is complete.
+# and prints the package installation command when the build is complete.
 
 ./ika-build
 
@@ -119,7 +117,7 @@ workspace overrides.
 
 ## Window Handling
 
-The clock at the top-left of the console window is also a **hot corner**.
+The clock at the top-left of the console window is also a **hot corner**. 
 Click+hold the hot corner to move the console window. If the window is maximized
 or in fullscreen mode, click the hot corner once to return to windowed mode.
 
@@ -128,7 +126,7 @@ of the desktop, or drag it to the top edge to maximize the window.
 
 Super (Command) + F Switches in and out of fullscreen mode.
 
-Super (Command) + T Switches the title bar on and off.
+Super (Command) + T Switches the title bar on and off. 
 
 ## Managing the VM with `ika`
 
@@ -157,7 +155,7 @@ ika restart --gpu_mode=gfxstream --gfxstream_vulkan=on
 # Factory reset and use a 128 GB userdata image on the next start
 ika reset --data_gb=128
 
-# Game Mode will start Ika fullscreen and enable HID keyboard and mouse
+# Game Mode will start Ika fullscreen and enable HID keyboard and mouse 
 ika start --game
 
 # Show the built-in usage text
