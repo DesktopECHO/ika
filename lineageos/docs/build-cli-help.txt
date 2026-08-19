@@ -67,7 +67,7 @@ Environment:
                         Build, validate, and bundle the ARM64 native-bridge NDK
                         regression suites for x86-64. Default: 0
   BUILD_VULKAN_TESTS    Build, validate, and bundle the Vulkan CTS/dEQP
-                        diagnostics for either architecture. Default: 0
+                        diagnostics for either architecture. Default: 1
   UPDATE_NATIVE_BRIDGE_PREBUILTS
                         Download/extract the Google NDK translation payload for
                         x86-64 builds before building. Default: 1
