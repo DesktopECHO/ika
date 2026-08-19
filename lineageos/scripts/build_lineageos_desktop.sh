@@ -417,7 +417,7 @@ build_target() {
   built_target_outputs_complete "$product" "$product_out" "$host_package" "${thin_files[@]}" || \
     die "build completed but expected outputs are missing for $product"
   if enabled "$build_vulkan_tests"; then
-    vulkan_test_outputs_complete "$product_out" "$host_tag" || \
+    vulkan_test_outputs_complete "$product_out" || \
       die "build completed but Vulkan CTS outputs are missing for $product"
   fi
   if [[ "$arch" == "x86_64" ]] && enabled "$include_x86_arm_native_bridge"; then

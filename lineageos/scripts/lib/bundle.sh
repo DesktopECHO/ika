@@ -304,17 +304,19 @@ PY
 
 vulkan_test_apk() {
   local product_out="$1"
-  local host_tag="$2"
   local apk
 
   # Older trees staged the CTS APK beside the product testcases. Android 16
   # stages the architecture-independent APK in the host CTS directory while
   # keeping deqp-binary in the product output. Accept the legacy location, but
-  # prefer the host directory belonging to this build architecture.
+  # prefer the host directory. This is always the build machine's own Soong
+  # host-output tag (host_out_tag), never a target/cross tag like the
+  # linux_musl-arm64 tag cvd-host_package.tar.gz uses: host-side CTS tooling
+  # runs on the machine doing the compiling, regardless of ROM target arch.
   apk="$(find "$product_out/testcases/com.drawelements.deqp" -type f \
     -name 'com.drawelements.deqp.apk' -print -quit 2>/dev/null || true)"
   if [[ -z "$apk" ]]; then
-    apk="$(find "$workspace/out/host/$host_tag/testcases/CtsDeqpTestCases" \
+    apk="$(find "$workspace/out/host/$(host_out_tag)/testcases/CtsDeqpTestCases" \
       -type f -name 'com.drawelements.deqp.apk' -print -quit \
       2>/dev/null || true)"
   fi
@@ -322,8 +324,7 @@ vulkan_test_apk() {
 }
 
 vulkan_test_resources() {
-  local host_tag="$1"
-  local resources="$workspace/out/host/$host_tag/testcases/CtsDeqpTestCases/vulkan"
+  local resources="$workspace/out/host/$(host_out_tag)/testcases/CtsDeqpTestCases/vulkan"
 
   [[ -d "$resources" ]] || return 1
   printf '%s\n' "$resources"
@@ -331,13 +332,12 @@ vulkan_test_resources() {
 
 vulkan_test_outputs_complete() {
   local product_out="$1"
-  local host_tag="$2"
   local apk binary resources
 
-  apk="$(vulkan_test_apk "$product_out" "$host_tag")"
-  binary="$(find "$product_out/testcases/deqp-binary" -type f \
+  apk="$(vulkan_test_apk "$product_out")"
+  binary="$(find "$product_out/data/nativetest64/deqp-binary" -type f \
     -name 'deqp-binary*' -print -quit 2>/dev/null || true)"
-  resources="$(vulkan_test_resources "$host_tag" 2>/dev/null || true)"
+  resources="$(vulkan_test_resources 2>/dev/null || true)"
 
   [[ -n "$apk" && -s "$apk" && -n "$binary" && -s "$binary" && -x "$binary" ]] || return 1
   [[ -n "$resources" && \
@@ -695,17 +695,16 @@ copy_bundle_file_thin() {
 
 copy_vulkan_test_outputs() {
   local product_out="$1"
-  local host_tag="$2"
-  local bundle_dir="$3"
+  local bundle_dir="$2"
   local apk binary resources test_dir
 
-  vulkan_test_outputs_complete "$product_out" "$host_tag" || \
-    die "missing Vulkan CTS outputs for $product_out ($host_tag)"
+  vulkan_test_outputs_complete "$product_out" || \
+    die "missing Vulkan CTS outputs for $product_out"
 
-  apk="$(vulkan_test_apk "$product_out" "$host_tag")"
-  binary="$(find "$product_out/testcases/deqp-binary" -type f \
+  apk="$(vulkan_test_apk "$product_out")"
+  binary="$(find "$product_out/data/nativetest64/deqp-binary" -type f \
     -name 'deqp-binary*' -print -quit)"
-  resources="$(vulkan_test_resources "$host_tag")"
+  resources="$(vulkan_test_resources)"
   test_dir="$bundle_dir/testcases/vulkan"
   mkdir -p "$test_dir"
 
@@ -789,8 +788,7 @@ package_cvd_bundle() {
   done
   "$(thin_provision_images_tool)" "$bundle_dir"
   if enabled "${build_vulkan_tests:-0}"; then
-    copy_vulkan_test_outputs \
-      "$product_out" "$(target_host_tag "$arch")" "$bundle_dir"
+    copy_vulkan_test_outputs "$product_out" "$bundle_dir"
   fi
   if [[ "$arch" == "x86_64" ]] &&
      enabled "${include_x86_arm_native_bridge:-1}" &&
