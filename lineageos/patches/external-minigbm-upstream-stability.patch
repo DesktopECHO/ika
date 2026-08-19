@@ -1,0 +1,121 @@
+Patch summary:
+Backport three focused Android 17 minigbm fixes onto the pinned Android 16
+QPR2 base: avoid destroying a gralloc BO twice after metadata initialization
+fails (9843c4f9c0), remove hardcoded host page-size assumptions from virtgpu
+mappings (109c854139), and accept lavapipe's software-rendering device identity
+in cros_gralloc (8a939198fe). This deliberately avoids the Android 17
+IAllocator-v3 transition while retaining the fixes relevant to Ika's 4 KiB and
+16 KiB ARM64 guests and diagnostic software-rendering path.
+
+diff --git a/cros_gralloc/cros_gralloc_driver.cc b/cros_gralloc/cros_gralloc_driver.cc
+index b17c8c7..68882d9 100644
+--- a/cros_gralloc/cros_gralloc_driver.cc
++++ b/cros_gralloc/cros_gralloc_driver.cc
+@@ -163,7 +163,8 @@ static bool is_running_with_software_rendering()
+ 	const char *vulkan_driver = drv_get_os_option("ro.hardware.vulkan");
+ 	if (!vulkan_driver)
+ 		vulkan_driver = drv_get_os_option("ro.board.platform");
+-	return (vulkan_driver != nullptr && strstr(vulkan_driver, "pastel") != nullptr);
++	return (vulkan_driver != nullptr && (strstr(vulkan_driver, "lvp") != nullptr ||
++					     strstr(vulkan_driver, "pastel") != nullptr));
+ }
+ 
+ cros_gralloc_driver::cros_gralloc_driver()
+@@ -368,7 +369,10 @@ destroy_hnd:
+ 	native_handle_close(hnd);
+ 	native_handle_delete(hnd);
+ 
+-	drv_bo_destroy(bo);
++	// cros_gralloc_buffer takes the bo ownership when cros_gralloc_buffer::create succeeds
++	if (!buffer)
++		drv_bo_destroy(bo);
++
+ 	return ret;
+ }
+ 
+diff --git a/drv_helpers.h b/drv_helpers.h
+index 1c347f8..fe4cca7 100644
+--- a/drv_helpers.h
++++ b/drv_helpers.h
+@@ -16,10 +16,6 @@ extern "C" {
+ #include "drv.h"
+ #include "drv_array_helpers.h"
+ 
+-#ifndef PAGE_SIZE
+-#define PAGE_SIZE 0x1000
+-#endif
+-
+ struct format_metadata;
+ 
+ uint32_t drv_height_from_format(uint32_t format, uint32_t height, size_t plane);
+diff --git a/virtgpu_cross_domain.c b/virtgpu_cross_domain.c
+index 02e5f13..b4d1898 100644
+--- a/virtgpu_cross_domain.c
++++ b/virtgpu_cross_domain.c
+@@ -7,6 +7,7 @@
+ #include <errno.h>
+ #include <string.h>
+ #include <sys/mman.h>
++#include <unistd.h>
+ #include <xf86drm.h>
+ 
+ #include "drv_helpers.h"
+@@ -46,7 +47,7 @@ static void cross_domain_release_private(struct driver *drv)
+ 	struct drm_gem_close gem_close = { 0 };
+ 
+ 	if (priv->ring_addr != MAP_FAILED)
+-		munmap(priv->ring_addr, PAGE_SIZE);
++		munmap(priv->ring_addr, getpagesize());
+ 
+ 	if (priv->ring_handle) {
+ 		gem_close.handle = priv->ring_handle;
+@@ -242,6 +243,8 @@ static int cross_domain_init(struct driver *drv)
+ 	struct CrossDomainInit cmd_init;
+ 	struct CrossDomainCapabilities cross_domain_caps;
+ 
++	const size_t page_size = getpagesize();
++
+ 	memset(&cmd_init, 0, sizeof(cmd_init));
+ 	if (!params[param_context_init].value)
+ 		return -ENOTSUP;
+@@ -309,7 +312,7 @@ static int cross_domain_init(struct driver *drv)
+ 	}
+ 
+ 	// Create a shared ring buffer to read metadata queries.
+-	drm_rc_blob.size = PAGE_SIZE;
++	drm_rc_blob.size = page_size;
+ 	drm_rc_blob.blob_mem = VIRTGPU_BLOB_MEM_GUEST;
+ 	drm_rc_blob.blob_flags = VIRTGPU_BLOB_FLAG_USE_MAPPABLE;
+ 
+@@ -330,7 +333,7 @@ static int cross_domain_init(struct driver *drv)
+ 	}
+ 
+ 	priv->ring_addr =
+-	    mmap(0, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, drv->fd, map.offset);
++	    mmap(0, page_size, PROT_READ | PROT_WRITE, MAP_SHARED, drv->fd, map.offset);
+ 
+ 	if (priv->ring_addr == MAP_FAILED) {
+ 		drv_loge("mmap failed with %s\n", strerror(errno));
+diff --git a/virtgpu_virgl.c b/virtgpu_virgl.c
+index ac8fbc2..888d1b2 100644
+--- a/virtgpu_virgl.c
++++ b/virtgpu_virgl.c
+@@ -555,7 +555,7 @@ static int virgl_3d_bo_create(struct bo *bo, uint32_t width, uint32_t height, ui
+ 	res_create.last_level = 0;
+ 	res_create.nr_samples = 0;
+ 
+-	res_create.size = ALIGN(bo->meta.total_size, PAGE_SIZE); // PAGE_SIZE = 0x1000
++	res_create.size = ALIGN(bo->meta.total_size, getpagesize());
+ 	ret = drmIoctl(bo->drv->fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE, &res_create);
+ 	if (ret) {
+ 		drv_loge("DRM_IOCTL_VIRTGPU_RESOURCE_CREATE failed with %s\n", strerror(errno));
+@@ -928,7 +928,7 @@ static int virgl_blob_get_host_format(struct driver *drv, struct bo_metadata *me
+ 	}
+ 	pthread_mutex_unlock(&priv->host_blob_format_lock);
+ 
+-	meta->total_size = ALIGN(meta->total_size, PAGE_SIZE);
++	meta->total_size = ALIGN(meta->total_size, getpagesize());
+ 	meta->tiling = blob_flags_from_use_flags(meta->use_flags);
+ 
+ 	return 0;
+
