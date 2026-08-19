@@ -12,8 +12,9 @@ Before building:
    resolved source information.
 3. Choose the native bridge SDK payload for x86-64, or set
    `NATIVE_BRIDGE_SOURCE_DIR` to a vetted extracted payload.
-4. Set `BUILD_NATIVE_BRIDGE_TESTS=1` and `BUILD_VULKAN_TESTS=1` for publishable
-   builds so the release diagnostics are included.
+4. Set `BUILD_NATIVE_BRIDGE_TESTS=1` for publishable builds so the native-bridge
+   regression diagnostics are included. Vulkan CTS/dEQP diagnostics are included
+   by default (`BUILD_VULKAN_TESTS=1`); set `BUILD_VULKAN_TESTS=0` to exclude them.
 5. Run the one-command build script from a clean or script-managed workspace.
 
 The build script runs `scripts/lib/validate_build_inputs.sh` before compiling. It
@@ -31,7 +32,7 @@ Each generated Cuttlefish bundle contains:
 - selected provider source and prebuilt metadata
 - WebView APK checksum for the target architecture
 - native bridge payload metadata for x86-64
-- Vulkan CTS artifacts when `BUILD_VULKAN_TESTS=1`
+- Vulkan CTS artifacts (included by default; omitted when `BUILD_VULKAN_TESTS=0`)
 - ARM64 static/dynamic native-bridge regression suites on x86-64 when
   `BUILD_NATIVE_BRIDGE_TESTS=1`
 
