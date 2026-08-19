@@ -109,46 +109,6 @@ index 9a1933b6..7a40da34 100644
  }
  
  ABSL_NAMESPACE_END
-diff --git a/external/swiftshader/src/Android.bp b/external/swiftshader/src/Android.bp
-index 3d56a27d4..c3206486c 100644
---- a/external/swiftshader/src/Android.bp
-+++ b/external/swiftshader/src/Android.bp
-@@ -46,8 +46,9 @@ cc_defaults {
- 
-     cflags: [
-         "-DREACTOR_ANONYMOUS_MMAP_NAME=swiftshader_jit",
--        "-Wno-unused-parameter",
-         "-Wno-implicit-fallthrough",
-+        "-Wno-unnecessary-virtual-specifier",
-+        "-Wno-unused-parameter",
-     ],
- 
-     static_libs: [
-diff --git a/external/swiftshader/third_party/llvm-16.0/Android.bp b/external/swiftshader/third_party/llvm-16.0/Android.bp
-index aaf033182..1c3128328 100644
---- a/external/swiftshader/third_party/llvm-16.0/Android.bp
-+++ b/external/swiftshader/third_party/llvm-16.0/Android.bp
-@@ -1520,6 +1520,7 @@ cc_defaults {
-         "-Wno-ignored-qualifiers",
-         "-Wno-implicit-fallthrough",
-         "-Wno-nontrivial-memcall",
-+        "-Wno-unnecessary-virtual-specifier",
-         "-Wno-unreachable-code-loop-increment",
-         "-Wno-unused-parameter",
-         "-Wno-unused-variable",
-diff --git a/external/swiftshader/third_party/llvm-16.0/llvm/include/llvm/IR/ConstantFolder.h b/external/swiftshader/third_party/llvm-16.0/llvm/include/llvm/IR/ConstantFolder.h
-index 82c07d47a..1680eddfa 100644
---- a/external/swiftshader/third_party/llvm-16.0/llvm/include/llvm/IR/ConstantFolder.h
-+++ b/external/swiftshader/third_party/llvm-16.0/llvm/include/llvm/IR/ConstantFolder.h
-@@ -28,7 +28,7 @@ namespace llvm {
- 
- /// ConstantFolder - Create constants with minimum, target independent, folding.
- class ConstantFolder final : public IRBuilderFolder {
--  virtual void anchor();
-+  void anchor();
- 
- public:
-   explicit ConstantFolder() = default;
 diff --git a/external/mesa3d/src/gallium/auxiliary/driver_trace/tr_dump.c b/external/mesa3d/src/gallium/auxiliary/driver_trace/tr_dump.c
 index 45d1920eaef..395d3ddd683 100644
 --- a/external/mesa3d/src/gallium/auxiliary/driver_trace/tr_dump.c

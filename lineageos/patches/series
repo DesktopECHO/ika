@@ -20,6 +20,8 @@ external/sdv/vsomeip patches/external-sdv-vsomeip-arm64-host-cross.patch
 external/vulkan-headers patches/external-vulkan-headers-android-build.patch
 prebuilts/abi-dumps/ndk patches/prebuilts-abi-dumps-vulkan-1.4.341.patch
 prebuilts/abi-dumps/vndk patches/prebuilts-abi-dumps-vulkan-llndk-1.4.360.patch
+external/drm_hwcomposer patches/external-drm-hwcomposer-upstream-stability.patch
+external/minigbm patches/external-minigbm-upstream-stability.patch
 external/minigbm patches/external-minigbm.patch
 external/deqp-deps/glslang patches/external-deqp-deps-glslang-validator-host.patch
 external/mesa3d patches/external-mesa3d.patch

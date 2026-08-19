@@ -15,12 +15,13 @@
   <remove-project name="platform/external/mesa3d" />
 
   <!-- Mesa 26.1.7 is paired with generated Android/gfxstream build glue in
-       external-mesa3d.patch. Some virtualization pins come from Android 17-era
-       AOSP release heads, while minigbm remains on Android 16 QPR2; this mixed
-       stack depends on the compatibility patches in this repository. Keep the
-       Mesa source pin and integration patch together. Do not move any graphics
-       pin without a boot, vulkaninfo, and Chromium/ANGLE screenshot verification
-       pass on Apple Silicon. -->
+       external-mesa3d.patch. ANGLE and guest SwiftShader follow Android 17
+       release heads, while drm_hwcomposer and minigbm remain on Android 16 QPR2
+       with focused upstream backports. This mixed stack depends on the
+       compatibility patches in this repository. Keep the Mesa source pin and
+       integration patch together. Do not move any graphics pin without a boot,
+       vulkaninfo, and Chromium/ANGLE screenshot verification pass on Apple
+       Silicon. -->
   <project
       name="mesa/mesa"
       path="external/mesa3d"
@@ -53,6 +54,21 @@
       name="kernel/prebuilts/common-modules/virtual-device/6.12/x86-64"
       path="kernel/prebuilts/common-modules/virtual-device/6.12/x86-64"
       revision="4463c45163d93baf9479744641a03961f58c1467" />
+
+  <extend-project
+      name="platform/external/angle"
+      path="external/angle"
+      revision="1f4500d3906c24de59eec5b9cda17a2ad2a8ba2d" />
+
+  <extend-project
+      name="platform/external/swiftshader"
+      path="external/swiftshader"
+      revision="9a22bb9de00f5d8ddf4fc5ba5c2f425c2816e679" />
+
+  <extend-project
+      name="platform/external/drm_hwcomposer"
+      path="external/drm_hwcomposer"
+      revision="423951fda2f3d74538b1db5c56f321178ac4c053" />
 
   <extend-project
       name="platform/external/minigbm"

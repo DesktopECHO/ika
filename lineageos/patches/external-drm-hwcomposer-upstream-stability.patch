@@ -1,0 +1,135 @@
+Patch summary:
+Backport drm_hwcomposer's upstream stale-MST-pipeline teardown
+(a0c304a8ff) onto the pinned Android 16 QPR2 base so hotplug refresh cannot
+leave a removed connector holding a CRTC needed by its replacement. Also carry
+the applicable upstream C++23 direct <vector> include (a7abcb9458); the same
+direct include is added to DrmDevice because this backport changes its public
+return type. Newer Android 17 planner/backlight fixes are intentionally omitted
+because those subsystems do not exist on this base.
+
+diff --git a/drm/DrmDevice.cpp b/drm/DrmDevice.cpp
+index 21926e8..c580b45 100644
+--- a/drm/DrmDevice.cpp
++++ b/drm/DrmDevice.cpp
+@@ -253,14 +253,18 @@ auto DrmDevice::GetConnectors()
+   return connectors_;
+ }
+ 
+-auto DrmDevice::RefreshConnectors() -> void {
++auto DrmDevice::RefreshConnectors()
++    -> std::vector<std::unique_ptr<DrmConnector>> {
++  std::vector<std::unique_ptr<DrmConnector>> stale_connectors;
++
+   auto res = MakeDrmModeResUnique(*GetFd());
+   if (!res) {
+     ALOGE("Failed to get DrmDevice resources");
+-    return;
++    return stale_connectors;
+   }
+ 
+-  // Remove the stale connectors present in connectors_ but not in DRM resources
++  // Remove stale connectors (present in connectors_ but not in DRM resources)
++  // and transfer their ownership to the returned vector.
+   std::set<uint32_t> conn_ids_present;
+   for (auto it = begin(connectors_); it != end(connectors_);) {
+     auto stale = true;
+@@ -273,11 +277,10 @@ auto DrmDevice::RefreshConnectors() -> void {
+         break;
+       }
+     }
+-    if (stale && it->get()->GetPipeline() == nullptr) {
++    if (stale) {
++      stale_connectors.emplace_back(std::move(*it));
+       it = connectors_.erase(it);
+     } else {
+-      ALOGE_IF(stale, "Stale connector %d %s has pipeline attached",
+-               it->get()->GetId(), it->get()->GetName().c_str());
+       ++it;
+     }
+   }
+@@ -297,6 +300,8 @@ auto DrmDevice::RefreshConnectors() -> void {
+       connectors_.emplace_back(std::move(conn));
+     }
+   }
++
++  return stale_connectors;
+ }
+ 
+ auto DrmDevice::GetPlanes() -> const std::vector<std::unique_ptr<DrmPlane>> & {
+diff --git a/drm/DrmDevice.h b/drm/DrmDevice.h
+index d432c0e..790fce2 100644
+--- a/drm/DrmDevice.h
++++ b/drm/DrmDevice.h
+@@ -20,6 +20,7 @@
+ #include <map>
+ #include <optional>
+ #include <tuple>
++#include <vector>
+ 
+ #include "DrmConnector.h"
+ #include "DrmCrtc.h"
+@@ -113,7 +114,7 @@ class DrmDevice {
+     return cap_cursor_size_;
+   }
+ 
+-  auto RefreshConnectors() -> void;
++  auto RefreshConnectors() -> std::vector<std::unique_ptr<DrmConnector>>;
+ 
+  private:
+   explicit DrmDevice(ResourceManager *res_man, uint32_t index);
+diff --git a/drm/ResourceManager.cpp b/drm/ResourceManager.cpp
+index c202c24..cf4cb30 100644
+--- a/drm/ResourceManager.cpp
++++ b/drm/ResourceManager.cpp
+@@ -94,7 +94,8 @@ void ResourceManager::Init() {
+   uevent_listener_->RegisterHotplugHandler([this] {
+     const std::unique_lock lock(GetMainLock());
+     for (auto &drm : drms_) {
+-      drm->RefreshConnectors();
++      auto stale_connectors = drm->RefreshConnectors();
++      DetachStalePipelines(stale_connectors);
+     }
+     UpdateFrontendDisplays();
+   });
+@@ -163,6 +164,19 @@ void ResourceManager::UpdateFrontendDisplays() {
+   frontend_interface_->FinalizeDisplayBinding();
+ }
+ 
++void ResourceManager::DetachStalePipelines(
++    const std::vector<std::unique_ptr<DrmConnector>> &stale_connectors) {
++  for (const auto &conn : stale_connectors) {
++    auto it = attached_pipelines_.find(conn.get());
++    if (it != attached_pipelines_.end()) {
++      ALOGI("Detaching pipeline for stale connector %s (id=%d)",
++            conn->GetName().c_str(), conn->GetId());
++      frontend_interface_->UnbindDisplay(it->second);
++      attached_pipelines_.erase(it);
++    }
++  }
++}
++
+ void ResourceManager::DetachAllFrontendDisplays() {
+   for (auto &p : attached_pipelines_) {
+     frontend_interface_->UnbindDisplay(p.second);
+diff --git a/drm/ResourceManager.h b/drm/ResourceManager.h
+index e25f526..dc464ca 100644
+--- a/drm/ResourceManager.h
++++ b/drm/ResourceManager.h
+@@ -19,6 +19,7 @@
+ #include <cstring>
+ #include <mutex>
+ #include <set>
++#include <vector>
+ 
+ #include "DrmDevice.h"
+ #include "DrmDisplayPipeline.h"
+@@ -74,6 +75,8 @@ class ResourceManager {
+  private:
+   auto GetOrderedConnectors() -> std::vector<DrmConnector *>;
+   void UpdateFrontendDisplays();
++  void DetachStalePipelines(
++      const std::vector<std::unique_ptr<DrmConnector>> &stale_connectors);
+   void DetachAllFrontendDisplays();
+ 
+   std::vector<std::unique_ptr<DrmDevice>> drms_;
+
