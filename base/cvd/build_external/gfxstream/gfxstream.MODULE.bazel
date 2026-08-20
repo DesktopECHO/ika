@@ -19,6 +19,10 @@ git_repository(
         # Sparse binding is device-wide. Hide it only when an advertised
         # compressed-format set depends on emulation rather than host support.
         "@//build_external/gfxstream:PATCH.gfxstream.sparse-compressed-feature-contract.patch",
+        # VkImageToMemoryCopy/VkMemoryToImageCopy::pHostPointer is marshalled as a
+        # single byte, so the host would hand the driver a 1-byte buffer to write a
+        # whole image through. Refuse the call instead of corrupting the heap.
+        "@//build_external/gfxstream:PATCH.gfxstream.host-image-copy-refuse-unmarshalled.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.opengles-3.2.patch",
         # Last-resort cleanup for Vulkan instances which survive normal
         # per-context teardown, before the renderer closes its DRM file.
