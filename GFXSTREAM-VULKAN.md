@@ -214,7 +214,7 @@ its own ways of producing black surfaces, fixed in `external-mesa3d.patch`:
   apps that synchronize with events instead of barriers.
 - **Extension exposure** (`1f93451`). Advertise the gfxstream Vulkan extensions
   whose backing feature structs and encoder paths already exist — 16-bit storage,
-  `maintenance5`, host image copy, KHR vertex-attribute-divisor,
+  `maintenance5`, KHR vertex-attribute-divisor,
   external-memory-acquire-unmodified — so Android's Vulkan profile and benchmark
   detection see the real capabilities, *without* re-enabling native WSI and
   undoing the console fix.
