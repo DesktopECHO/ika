@@ -19,6 +19,14 @@ PRODUCT_PRODUCT_PROPERTIES += \
     bionic.linker.16kb.app_compat.enabled=true \
     pm.16kb.app_compat.disabled=false
 
+# The 16 KB ARM64 guest kernel advertises userfaultfd support, but its
+# UFFDIO_MOVE ioctl stalls under load, so ART takes a SIGBUS while the
+# concurrent mark-compact collector relocates the heap. Left at "default" the
+# build resolves this from the kernel version and turns CMC on. Pin it off so
+# ART uses the concurrent-copying collector, and so dexpreopt and odrefresh
+# agree with the runtime instead of recompiling the boot image on every boot.
+PRODUCT_ENABLE_UFFD_GC := false
+
 PRODUCT_NAME := lineage_desktop_cf_arm64_pgagnostic
 PRODUCT_BRAND := LineageOS
 PRODUCT_MANUFACTURER := DesktopECHO
