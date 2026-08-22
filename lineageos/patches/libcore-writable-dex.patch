@@ -1,0 +1,33 @@
+Patch summary:
+Allow writable dynamic DEX globally by disabling compatibility change 218865702
+by default. The platform still retains the compatibility change and can enable
+enforcement explicitly if a stricter deployment requires it.
+
+diff --git a/dalvik/src/main/java/dalvik/system/DexFile.java b/dalvik/src/main/java/dalvik/system/DexFile.java
+--- a/dalvik/src/main/java/dalvik/system/DexFile.java
++++ b/dalvik/src/main/java/dalvik/system/DexFile.java
+@@ -20,11 +20,10 @@ import static android.annotation.SystemApi.Client.MODULE_LIBRARIES;
+ import android.annotation.SystemApi;
+ import android.annotation.TestApi;
+ import android.compat.annotation.ChangeId;
+-import android.compat.annotation.EnabledAfter;
++import android.compat.annotation.Disabled;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.system.ErrnoException;
+ 
+-import dalvik.annotation.compat.VersionCodes;
+ import dalvik.annotation.optimization.ReachabilitySensitive;
+ 
+ import libcore.io.Libcore;
+@@ -68,10 +67,9 @@ public final class DexFile {
+      *
+      * @hide
+      */
+-    // TODO (topjohnwu@): change to @EnabledSince with U API version
+     @TestApi
+     @ChangeId
+-    @EnabledAfter(targetSdkVersion = VersionCodes.TIRAMISU)
++    @Disabled
+     public static final long ENFORCE_READ_ONLY_JAVA_DCL = 218865702;
+ 
+     /**
