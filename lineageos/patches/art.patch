@@ -1,4 +1,27 @@
 Patch summary:
+Use explicit ARM64 suspend checks and explicit null checks so ART never relies
+on deliberate SIGSEGVs that legacy game crash handlers intercept. ART normally
+generates a hardware fault (an `ldr` from the protected suspend-trigger page, or
+a load through a null reference) and consumes the resulting SIGSEGV in its own
+fault manager. Older Breakpad/Crashpad-derived SDKs -- NetEase CrashHunter,
+various anti-cheat and telemetry runtimes -- install their signal handler ahead
+of ART, so they see ARTs internal faults first and report them as native
+crashes. Those handlers then ptrace-stop every thread to write a minidump, which
+either kills the process outright or deadlocks the app.
+
+With explicit checks the compiler emits a compare-and-branch instead, so a null
+dereference raises a normal NullPointerException and a suspend request is polled
+rather than trapped. No signal is generated, so nothing is left for a foreign
+handler to steal. Genuine native crashes are still reported normally.
+
+The runtime and dex2oat copies must change together so the boot image,
+AOT-compiled application code, and JIT-compiled code all agree with the
+runtime fault-handler configuration; JIT already follows the runtime flag
+through Runtime::GetImplicitNullChecks(). Implicit stack-overflow checks stay
+enabled, and nterp is unaffected because it already null-checks explicitly
+(cbz ..., common_errNullObject). The cost is one compare-and-branch per
+dereference and per suspend poll.
+
 Keep native-bridge loader namespaces from advertising APK-embedded native
 library paths. The x86_64 desktop image can run ARM64 apps through the native
 bridge, but translated guest linkers are much more reliable when the selected
@@ -8,6 +31,25 @@ This patch leaves the normal native app namespace behavior alone and only
 filters search paths for bridged namespaces. The intent is to make translated
 apps load predictably without weakening namespace isolation for regular apps.
 
+diff --git a/dex2oat/dex2oat.cc b/dex2oat/dex2oat.cc
+index d279e93397..72515d08e7 100644
+--- a/dex2oat/dex2oat.cc
++++ b/dex2oat/dex2oat.cc
+@@ -849,14 +849,12 @@ class Dex2Oat final {
+     // Set the compilation target's implicit checks options.
+     switch (compiler_options_->GetInstructionSet()) {
+       case InstructionSet::kArm64:
+-        compiler_options_->implicit_suspend_checks_ = true;
+         FALLTHROUGH_INTENDED;
+       case InstructionSet::kArm:
+       case InstructionSet::kThumb2:
+       case InstructionSet::kRiscv64:
+       case InstructionSet::kX86:
+       case InstructionSet::kX86_64:
+-        compiler_options_->implicit_null_checks_ = true;
+         compiler_options_->implicit_so_checks_ = true;
+         break;
+ 
 diff --git a/libnativeloader/native_loader_namespace.cpp b/libnativeloader/native_loader_namespace.cpp
 index e19789f961..c3080d1e55 100644
 --- a/libnativeloader/native_loader_namespace.cpp
@@ -79,3 +121,22 @@ index e19789f961..c3080d1e55 100644
  }
  
  Result<void> NativeLoaderNamespace::Link(const NativeLoaderNamespace* target,
+diff --git a/runtime/runtime.cc b/runtime/runtime.cc
+index 6c671dacc6..12b31aab53 100644
+--- a/runtime/runtime.cc
++++ b/runtime/runtime.cc
+@@ -1943,14 +1943,12 @@ bool Runtime::Init(RuntimeArgumentMap&& runtime_options_in) {
+   // Change the implicit checks flags based on runtime architecture.
+   switch (kRuntimeQuickCodeISA) {
+     case InstructionSet::kArm64:
+-      implicit_suspend_checks_ = true;
+       FALLTHROUGH_INTENDED;
+     case InstructionSet::kArm:
+     case InstructionSet::kThumb2:
+     case InstructionSet::kRiscv64:
+     case InstructionSet::kX86:
+     case InstructionSet::kX86_64:
+-      implicit_null_checks_ = true;
+       // Historical note: Installing stack protection was not playing well with Valgrind.
+       implicit_so_checks_ = true;
+       break;
