@@ -1,0 +1,45 @@
+Patch summary:
+Stop forcing ASTC emulation on hosts that support ASTC natively.
+
+needEmulatedAstc() spot-checks a few ASTC formats before trusting the host, and
+required VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT and
+VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT in *both* linearTilingFeatures
+and optimalTilingFeatures. Vulkan does not require block-compressed formats to be
+usable with VK_IMAGE_TILING_LINEAR, and drivers do not expose them that way, so
+the linear half of the test can never pass and every host falls through to the
+emulated decompression path regardless of native support.
+
+On Honeykrisp (Apple M1/M2) the host reports textureCompressionASTC_LDR = true
+with optimalTilingFeatures = SAMPLED_IMAGE | SAMPLED_IMAGE_FILTER_LINEAR |
+BLIT_SRC | TRANSFER_SRC | TRANSFER_DST for the ASTC LDR formats, and
+linearTilingFeatures = 0. The GPU decompression path is used anyway, and it
+mis-decodes some footprints: VK_FORMAT_ASTC_6x5_UNORM_BLOCK renders as vertical
+stripes of block noise, so games shipping 6x5 textures (CarX Street) show corrupt
+surfaces while geometry, lighting, and vector UI draw correctly.
+
+Check optimal tiling only. Sampled images are always created with
+VK_IMAGE_TILING_OPTIMAL, so that is the property which reflects whether the host
+can sample the format. Hosts without native ASTC still report
+textureCompressionASTC_LDR = false and keep the emulation path, and this also
+skips a full decompression pass per texture where the hardware can do the work.
+
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -10447,9 +10447,13 @@
+             VkFormatProperties props;
+             vk->vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &props);
+ 
+-            if ((props.linearTilingFeatures & requiredTilingFeatures) != requiredTilingFeatures ||
+-                (props.optimalTilingFeatures & requiredTilingFeatures) != requiredTilingFeatures) {
+-                // Linear tiling is not supported, emulate
++            // Only optimal tiling is relevant here. Sampled images are always created with
++            // VK_IMAGE_TILING_OPTIMAL, and Vulkan does not require block-compressed formats
++            // to be usable with VK_IMAGE_TILING_LINEAR. Requiring linear support made this
++            // test fail on every driver, forcing emulation even with native ASTC.
++            if ((props.optimalTilingFeatures & requiredTilingFeatures) !=
++                requiredTilingFeatures) {
++                // The host cannot sample the format natively, emulate
+                 return true;
+             }
+         }
