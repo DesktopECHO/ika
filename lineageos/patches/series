@@ -35,6 +35,7 @@ hardware/google/gfxstream patches/hardware-google-gfxstream-sparse-compressed-fe
 hardware/google/gfxstream patches/hardware-google-gfxstream-gles1-alpha-test-core-profile.patch
 hardware/google/camera patches/hardware-google-camera-emulated-apex-key.patch
 hardware/interfaces patches/hardware-interfaces-audio-input-pacing.patch
+libcore patches/libcore-writable-dex.patch
 art patches/art.patch
 device/generic/goldfish patches/device-generic-goldfish.patch
 device/generic/goldfish patches/device-generic-goldfish-sensors-transport-compat.patch
