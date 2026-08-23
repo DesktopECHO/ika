@@ -30,6 +30,15 @@ than the preview-oriented `trunk_staging` configuration. Set
 `IKA_ANDROID_TARGET_RELEASE` only when deliberately testing another release
 configuration.
 
+The two products are not configured identically. `lineage_desktop_cf_arm64_pgagnostic`
+sets `PRODUCT_ENABLE_UFFD_GC := false`, because the 16 KiB ARM64 guest kernel
+advertises userfaultfd but stalls on `UFFDIO_MOVE`, so ART takes a SIGBUS while
+the concurrent mark-compact collector relocates the heap. Pinning it off selects
+the concurrent-copying collector and keeps dexpreopt and odrefresh agreeing with
+the runtime instead of recompiling the boot image on every boot. The x86_64
+product leaves the setting at `default`, where the build resolves it from the
+kernel version.
+
 ## Source Layout
 
 This repository owns product policy only:

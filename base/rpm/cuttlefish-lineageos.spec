@@ -1,5 +1,5 @@
 Name:           ika-lineageos
-Version:        260819
+Version:        260822
 Release:        1%{?dist}
 Summary:        LineageOS for Cuttlefish host
 License:        Apache-2.0
@@ -86,6 +86,9 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Sat Aug 22 2026 DesktopECHO <build@desktopecho.com> - 260822-1
+- Update Ika LineageOS package metadata to 260822-1.
+
 * Wed Aug 19 2026 DesktopECHO <build@desktopecho.com> - 260819-1
 - Update Ika LineageOS package metadata to 260819-1.
 

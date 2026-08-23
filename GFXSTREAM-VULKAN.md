@@ -218,6 +218,15 @@ its own ways of producing black surfaces, fixed in `external-mesa3d.patch`:
   external-memory-acquire-unmodified — so Android's Vulkan profile and benchmark
   detection see the real capabilities, *without* re-enabling native WSI and
   undoing the console fix.
+- **Host image copy is advertised but refused** (`48669f9`). The extension stays
+  visible for capability detection, but `vkCopyImageToMemory` /
+  `vkCopyMemoryToImage` and their EXT aliases now fail instead of reaching the
+  host driver. `VkImageToMemoryCopy::pHostPointer` is a bare `void*` in the
+  Vulkan XML with no length attribute, so gfxstream's cereal codegen marshals it
+  as a pointer to a single byte; the driver then writes an entire image through
+  that one-byte allocation and takes crosvm down with it. The payload never
+  crosses the virtio-gpu boundary either, so the call cannot succeed as
+  marshalled — failing it is strictly better than crashing the renderer.
 
 ---
 
@@ -265,6 +274,32 @@ Linux GPU host. Most of the effort was convincing four codebases of that one fac
   `.disable_vulkano()` so the gate — not a hardcoded flag — decides.
 - The gfxstream patches (`getpagesize()`, memfd seals, Linux UdmabufCreator) are
   inert or standard on x86-64 and safe to keep global.
+- **Compressed textures corrupt through guest ANGLE, for some titles.** GLES
+  reaches the GPU translated by guest ANGLE, and some titles' compressed textures
+  decode as block noise or vertical stripes — CarX Highway Racing draws a
+  scrambled billboard plus striped road, car body and debris in gameplay, while
+  geometry, lighting, text and vector UI are correct. It is per-title, not a
+  property of the path: CarX Drift Racing 3 is also Unity on ANGLE and renders
+  cleanly in gameplay under both modes, so the trigger is likely a specific
+  texture format or footprint rather than ANGLE translation as such. Grade this
+  from gameplay only — menus and cutscenes render correctly even for affected
+  titles. The same build renders correctly under
+  `ika start --gpu_mode=gfxstream`, and apps using Vulkan directly (Destiny
+  Rising) are unaffected, so the fault is in the guest ANGLE path rather than the
+  host renderer or the Apple driver. Reproduced in both directions across VM
+  restarts. Not ASTC emulation: the stripes are identical with emulation on and
+  off. Not `VK_EXT_host_image_copy` either — there are no such calls in the
+  trace. The defect inside ANGLE is not yet pinpointed; `external/angle` is in
+  the ROM tree and carries no patches yet.
+- **`gfxstream` mode loses color buffers.** The direct GLES path avoids the ANGLE
+  texture corruption, but its renderer drops color buffers across app relaunch
+  cycles (`TextureDraw: GL error=0x502`, `Failed to find ColorBuffer: <id>`,
+  `Failed to bind to texture: invalid color buffer`). `adb screencap` then
+  returns whole-screen magenta, pure black, or blocks indefinitely. The guest
+  stays responsive and the console keeps receiving frames, so the display path
+  survives and a VM restart clears it — but it means magenta in a `gfxstream`
+  capture is not evidence of a texture fault, and it argues against adopting this
+  mode as the default without fixing the buffer lifetime first.
 
 ---
 
@@ -280,4 +315,5 @@ Linux GPU host. Most of the effort was convincing four codebases of that one fac
 | `wayland_*` + `ika_stream` (`83c6d38`) | cuttlefish host | Host console on GLES readback; DMA-BUF frames with correct offsets; no zero-filled SHM |
 | `modprobe.d` + `cuttlefish-host-resources.sh` | host provisioning | Load and tune the udmabuf kernel module |
 | `external-mesa3d.patch` | guest mesa3d | DRM-modifier passthrough, AHB sync2 layout, extension exposure |
+| `vk_decoder_global_state.cpp` (`48669f9`) | gfxstream host | Refuse host image copy calls whose pixel payload cereal cannot marshal, instead of crashing the renderer |
 | `tools/ika` | launcher | Apple Silicon 16 KiB gating: udmabuf-backed ExternalBlob, SystemBlob off |
