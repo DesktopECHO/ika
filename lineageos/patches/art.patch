@@ -1,26 +1,52 @@
 Patch summary:
-Use explicit ARM64 suspend checks and explicit null checks so ART never relies
-on deliberate SIGSEGVs that legacy game crash handlers intercept. ART normally
-generates a hardware fault (an `ldr` from the protected suspend-trigger page, or
-a load through a null reference) and consumes the resulting SIGSEGV in its own
-fault manager. Older Breakpad/Crashpad-derived SDKs -- NetEase CrashHunter,
-various anti-cheat and telemetry runtimes -- install their signal handler ahead
-of ART, so they see ARTs internal faults first and report them as native
-crashes. Those handlers then ptrace-stop every thread to write a minidump, which
-either kills the process outright or deadlocks the app.
+Stop ART from raising SIGSEGV that legacy game crash handlers steal, by making
+every managed execution tier use explicit null checks, and by using explicit
+ARM64 suspend checks.
 
-With explicit checks the compiler emits a compare-and-branch instead, so a null
-dereference raises a normal NullPointerException and a suspend request is polled
-rather than trapped. No signal is generated, so nothing is left for a foreign
-handler to steal. Genuine native crashes are still reported normally.
+ART normally generates deliberate hardware faults -- an `ldr` through a
+protected suspend-trigger page, and loads through a null reference -- and
+consumes the resulting signals in its own fault manager. Older
+Breakpad/Crashpad-derived SDKs (NetEase CrashHunter and similar anti-cheat and
+telemetry runtimes) hook `sigaction` with bytehook and install their handler
+ahead of ART, so they see ART internal faults first, decide the signal is "not
+throwable", and report it as a fatal native crash. What should have been a
+catchable NullPointerException instead kills the process, or deadlocks it while
+the handler ptrace-stops every thread to write a minidump.
 
-The runtime and dex2oat copies must change together so the boot image,
-AOT-compiled application code, and JIT-compiled code all agree with the
-runtime fault-handler configuration; JIT already follows the runtime flag
-through Runtime::GetImplicitNullChecks(). Implicit stack-overflow checks stay
-enabled, and nterp is unaffected because it already null-checks explicitly
-(cbz ..., common_errNullObject). The cost is one compare-and-branch per
-dereference and per suspend poll.
+Three tiers had to be covered, because a null receiver can be reached from any
+of them:
+
+  1. dex2oat  -- AOT and boot-image code.
+  2. jit_compiler -- pinned explicit rather than inheriting the runtime flag.
+  3. nterp    -- see below.
+
+nterp did not null-check uniformly. Field access, array access and
+invoke-direct/super already branch to `common_errNullObject`, but
+invoke-virtual and invoke-interface deliberately dereferenced the receiver to
+load its class and relied on the handler, as their own comment said: "Note: if
+w1 is null, this will be handled by our SIGSEGV handler." Those four sites (two
+per architecture) now use the same explicit check as the neighbouring
+invoke-direct path. A null receiver in interpreted code was the single most
+common path into this bug -- `Dialog.show` -> `PhoneWindow.installDecor` ->
+`LayoutInflater.tryCreateView` reaches it during ordinary UI inflation.
+
+IMPORTANT -- `implicit_null_checks_` stays enabled in Runtime::Init.
+Clearing it stops NullPointerHandler from being installed, which is only safe
+if nothing can still fault. It is deliberately left on so the handler remains
+as a backstop; the safe direction is explicit-check code with the handler
+present, and the unsafe direction is implicit-check code with no handler. That
+combination takes down ordinary system apps (Settings, Phonesky, Wellbeing)
+with `SEGV_MAPERR fault addr 0x0` in `nterp_op_invoke_virtual`. See also the
+comment on `fault_manager.AddGeneratedCodeRange(nterp_header...)`: "Nterp code
+can use signal handling just like the compiled managed code."
+
+Implicit ARM64 suspend checks are disabled in both the runtime and dex2oat.
+That pair is consistent on its own and has shipped previously.
+
+Cost: one compare-and-branch per dereference in compiled code and per receiver
+in nterp invoke-virtual/interface, and FastCompiler::CompileARM64 bails out
+when implicit null checks are off, so JIT baseline compilation falls back to
+the optimizing compiler.
 
 Keep native-bridge loader namespaces from advertising APK-embedded native
 library paths. The x86_64 desktop image can run ARM64 apps through the native
@@ -31,6 +57,24 @@ This patch leaves the normal native app namespace behavior alone and only
 filters search paths for bridged namespaces. The intent is to make translated
 apps load predictably without weakening namespace isolation for regular apps.
 
+diff --git a/compiler/jit/jit_compiler.cc b/compiler/jit/jit_compiler.cc
+index 6b72727641..e8ec306765 100644
+--- a/compiler/jit/jit_compiler.cc
++++ b/compiler/jit/jit_compiler.cc
+@@ -78,7 +78,12 @@ void JitCompiler::ParseCompilerOptions() {
+     compiler_options_->SetDebuggable(runtime->IsJavaDebuggable());
+   }
+ 
+-  compiler_options_->implicit_null_checks_ = runtime->GetImplicitNullChecks();
++  // Emit explicit null checks in JIT-compiled code. The runtime still installs
++  // the implicit-check fault handler for nterp, but compiled managed code must
++  // not raise SIGSEGV of its own: legacy game crash handlers (NetEase
++  // CrashHunter and other Breakpad derivatives) hook sigaction ahead of ART and
++  // report ART internal faults as native crashes.
++  compiler_options_->implicit_null_checks_ = false;
+   compiler_options_->implicit_so_checks_ = runtime->GetImplicitStackOverflowChecks();
+   compiler_options_->implicit_suspend_checks_ = runtime->GetImplicitSuspendChecks();
+ 
 diff --git a/dex2oat/dex2oat.cc b/dex2oat/dex2oat.cc
 index d279e93397..72515d08e7 100644
 --- a/dex2oat/dex2oat.cc
@@ -121,11 +165,56 @@ index e19789f961..c3080d1e55 100644
  }
  
  Result<void> NativeLoaderNamespace::Link(const NativeLoaderNamespace* target,
+diff --git a/runtime/interpreter/mterp/arm64ng/invoke.S b/runtime/interpreter/mterp/arm64ng/invoke.S
+index cf92c2ded3..f8dac869cf 100644
+--- a/runtime/interpreter/mterp/arm64ng/invoke.S
++++ b/runtime/interpreter/mterp/arm64ng/invoke.S
+@@ -82,7 +82,7 @@
+    and w1, w1, #0xf
+    .endif
+    GET_VREG w1, w1
+-   // Note: if w1 is null, this will be handled by our SIGSEGV handler.
++   cbz w1, common_errNullObject    // bail if null
+    ldr w2, [x1, #MIRROR_OBJECT_CLASS_OFFSET]
+    UNPOISON_HEAP_REF w2
+    // Test the first two bits of the fetched ArtMethod:
+@@ -159,7 +159,7 @@
+    and w1, w1, #0xf
+    .endif
+    GET_VREG w1, w1
+-   // Note: if w1 is null, this will be handled by our SIGSEGV handler.
++   cbz w1, common_errNullObject    // bail if null
+    ldr w0, [x1, #MIRROR_OBJECT_CLASS_OFFSET]
+    UNPOISON_HEAP_REF w0
+    add w0, w0, #MIRROR_CLASS_VTABLE_OFFSET_64
+diff --git a/runtime/interpreter/mterp/x86_64ng/invoke.S b/runtime/interpreter/mterp/x86_64ng/invoke.S
+index b2174cae80..b5e3af9371 100644
+--- a/runtime/interpreter/mterp/x86_64ng/invoke.S
++++ b/runtime/interpreter/mterp/x86_64ng/invoke.S
+@@ -84,6 +84,8 @@
+    andq $$0xf, %r11
+    .endif
+    movl (rFP, %r11, 4), %esi
++   testl  %esi, %esi                      // null receiver?
++   je     common_errNullObject            // bail if so
+    movl MIRROR_OBJECT_CLASS_OFFSET(%esi), %edx
+    UNPOISON_HEAP_REF edx
+    // Test the first two bits of the fetched ArtMethod:
+@@ -160,7 +162,8 @@
+    andq $$0xf, %r11
+    .endif
+    movl (rFP, %r11, 4), %esi
+-   // Note: if esi is null, this will be handled by our SIGSEGV handler.
++   testl  %esi, %esi                      // null receiver?
++   je     common_errNullObject            // bail if so
+    movl MIRROR_OBJECT_CLASS_OFFSET(%esi), %edx
+    UNPOISON_HEAP_REF edx
+    movq MIRROR_CLASS_VTABLE_OFFSET_64(%edx, %edi, 8), %rdi
 diff --git a/runtime/runtime.cc b/runtime/runtime.cc
-index 6c671dacc6..12b31aab53 100644
+index 6c671dacc6..3639b38a06 100644
 --- a/runtime/runtime.cc
 +++ b/runtime/runtime.cc
-@@ -1943,14 +1943,12 @@ bool Runtime::Init(RuntimeArgumentMap&& runtime_options_in) {
+@@ -1943,7 +1943,6 @@ bool Runtime::Init(RuntimeArgumentMap&& runtime_options_in) {
    // Change the implicit checks flags based on runtime architecture.
    switch (kRuntimeQuickCodeISA) {
      case InstructionSet::kArm64:
@@ -133,10 +222,3 @@ index 6c671dacc6..12b31aab53 100644
        FALLTHROUGH_INTENDED;
      case InstructionSet::kArm:
      case InstructionSet::kThumb2:
-     case InstructionSet::kRiscv64:
-     case InstructionSet::kX86:
-     case InstructionSet::kX86_64:
--      implicit_null_checks_ = true;
-       // Historical note: Installing stack protection was not playing well with Valgrind.
-       implicit_so_checks_ = true;
-       break;
