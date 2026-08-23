@@ -27,9 +27,5 @@ git_repository(
         # Last-resort cleanup for Vulkan instances which survive normal
         # per-context teardown, before the renderer closes its DRM file.
         "@//build_external/gfxstream:PATCH.gfxstream.force-vulkan-cleanup-on-teardown.patch",
-        # needEmulatedAstc() also demanded linear-tiling support, which no driver
-        # exposes for block-compressed formats, so ASTC was emulated even on hosts
-        # with native support. The emulated path mis-decodes ASTC 6x5.
-        "@//build_external/gfxstream:PATCH.gfxstream.astc-native-optimal-tiling.patch",
     ],
 )

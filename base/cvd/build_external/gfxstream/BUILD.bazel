@@ -15,5 +15,4 @@ exports_files([
     "PATCH.gfxstream.sparse-compressed-feature-contract.patch",
     "PATCH.gfxstream.vulkan-cts-correctness.patch",
     "PATCH.gfxstream.opengles-3.2.patch",
-    "PATCH.gfxstream.astc-native-optimal-tiling.patch",
 ])
