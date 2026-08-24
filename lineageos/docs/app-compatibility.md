@@ -36,7 +36,7 @@ correctly while the same title is corrupt in-world.
 | [CarX Highway Racing](#carx-highway-racing) | 🟢 | 🟡 | 🟢 | 🟢 | ANGLE corruption is Honeykrisp-specific: clean on X86 (RADV) under both paths |
 | [Chromium](#chromium) | 🟡 | 🟡 | 🟡 | 🟡 | Magenta window title bar under gfxstream |
 | [Destiny Rising](#destiny-rising) | 🟡 | 🟢 | 🟢 | ⚪ | ARM gfx draws an unlit world and black UI panels; X86 gfx is clean, so that fault is not gfxstream-wide |
-| [Google Play](#google-play) | ⚪ | ⚪ | 🟢 | ⚪ | The install path for every other row; verify it is signed in before grading anything |
+| [Google Play](#google-play) | ⚪ | ⚪ | 🟢 | 🟢 | The install path for every other row; verify it is signed in before grading anything |
 | Nintendo apps | 🔴 | 🔴 | 🔴 | 🔴 | Play Integrity / device attestation |
 | [No Limit Drag Racing 2](#no-limit-drag-racing-2) | ⚪ | ⚪ | 🟢 | ⚪ | Clean in-race on X86 gfx; launch needs two-finger input adb cannot inject |
 
@@ -248,9 +248,9 @@ Two behaviours to plan around when grading other apps:
   reboot that silently uninstalls anything sideloaded beforehand. Install games
   *after* Play is signed in, not before.
 
-Only the x86-64 `gfxstream` cell is graded here, from a signed-in storefront on
-RADV. The ARM cells are used routinely for installs but have not been captured
-and graded, so they stay ungraded rather than assumed.
+Also clean under ANGLE on x86-64: storefront, promo banners and install
+buttons all render correctly. The ARM cells are used routinely for installs but
+have not been captured and graded, so they stay ungraded rather than assumed.
 
 ### Asphalt 8
 
