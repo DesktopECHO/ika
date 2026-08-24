@@ -17,16 +17,21 @@ as a desktop/PC device and filters some phone/tablet apps before installation.
 | 🔴 | Does not run. |
 | ⚪ | Not yet tested on this release train. |
 
-The two rightmost columns are the result under each `gpu_mode`
-(`ika start --gpu_mode=...`). They differ, so record which mode a result came
-from, and which architecture. Grade graphics from **actual gameplay**: menus and
-cutscenes frequently render correctly while the same title is corrupt in-world.
-An app with no mode-specific testing carries the same value in both columns.
+The two dot columns are the result under each `gpu_mode`
+(`ika start --gpu_mode=...`):
+
+- **direct** — `--gpu_mode=gfxstream`
+- **ANGLE** — `--gpu_mode=gfxstream_guest_angle` (the default)
+
+They differ, so record which mode a result came from, and which architecture.
+Grade graphics from **actual gameplay**: menus and cutscenes frequently render
+correctly while the same title is corrupt in-world. An app with no mode-specific
+testing carries the same value in both columns.
 
 ## Matrix
 
-| App | Target | `gfxstream` | `gfxstream_guest_angle` | Detail |
-| --- | --- | --- | --- | --- |
+| App | Target | direct | ANGLE | Detail |
+| --- | --- | :---: | :---: | --- |
 | Angry Birds 2 | both | ⚪ | ⚪ | Validate Play Services, GPU, ABI selection |
 | Asphalt 8 | both | 🔴 | 🔴 | Device certification, not graphics-path specific |
 | Chromium | both | 🟡 | 🟡 | Bundled browser/WebView validation |
@@ -82,7 +87,8 @@ by itself imply the corruption seen in CarX Highway Racing.
 
 <a href="images/carx-highway-gfxstream-full.jpg"><img src="images/carx-highway-gfxstream.jpg" width="120" alt="CarX Highway Racing in gameplay, textures rendering correctly"></a>
 
-*In-race under `gfxstream`. The billboard and car body are the surfaces that corrupt under `gfxstream_guest_angle`.*
+*In-race under `gfxstream`. The billboard and car body are the surfaces that
+corrupt under `gfxstream_guest_angle`.*
 
 Launches and plays on ARM64. Under `gfxstream_guest_angle` its compressed
 textures corrupt in gameplay: roadside billboards become coloured block noise,
