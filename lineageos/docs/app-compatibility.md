@@ -30,7 +30,7 @@ correctly while the same title is corrupt in-world.
 
 | App | ARM gfx | ARM agl | X86 gfx | X86 agl | Detail |
 | --- | :---: | :---: | :---: | :---: | --- |
-| [Angry Birds 2](#angry-birds-2) | ⚪ | 🟢 | ⚪ | ⚪ | Installs from Play and renders correctly under ANGLE |
+| [Angry Birds 2](#angry-birds-2) | ⚪ | 🟢 | ⚪ | ⚪ | Verified in a live level under ANGLE |
 | Asphalt 8 | 🔴 | 🔴 | 🔴 | 🔴 | Device certification, not graphics-path specific |
 | [CarX Drift Racing 3](#carx-drift-racing-3) | 🟢 | 🟢 | 🟢 | ⚪ | Clean in gameplay on every path graded so far; the Unity/ANGLE counterexample |
 | [CarX Highway Racing](#carx-highway-racing) | 🟢 | 🟡 | 🟢 | ⚪ | ARM ANGLE corrupts textures in gameplay; clean on X86 gfx (RADV) translated |
@@ -65,19 +65,34 @@ instead. Re-grade per architecture rather than assuming. Neither path is clean:
 
 ### Angry Birds 2
 
-<a href="images/angry-birds-2-full.jpg"><img src="images/angry-birds-2.jpg" width="120" alt="Angry Birds 2 rendering correctly under ANGLE"></a>
+<a href="images/angry-birds-2-gameplay-full.jpg"><img src="images/angry-birds-2-gameplay.jpg" width="120" alt="Angry Birds 2 in a live level under ANGLE, rendering correctly"></a>
 
-*Under ANGLE. Background art, sprites and text all render correctly.*
+*In a live level under ANGLE: slingshot, physics props, score counter, all correct.*
 
-Installs from Play without being filtered out, and renders correctly under ANGLE.
-Graded at its Terms of Service gate rather than in gameplay — accepting an
-agreement on the account holder's behalf is not something a test should do, so
-the level itself is unverified.
+Installs from Play without being filtered out, and renders correctly under ANGLE
+through the flock-select menu and into a live level.
 
-Not graded under `gfxstream`: it launches and reaches 285 MB RSS with no crash,
-but every capture came back pure black while the renderer was logging
-`Failed to find ColorBuffer`. That is the capture fault described under Graphics
-paths, so the black frames say nothing about the app.
+First attempt stalled behind a Rovio-side "You are offline" gate that survived
+repeated Retry taps despite the guest having fully validated connectivity (ICMP,
+DNS, and clock all fine). Root cause was network-level, not the ROM or the app:
+this LAN's DHCP-assigned DNS servers sinkhole `fundingchoicesmessages.google.com`
+(and other ad/tracker domains) to `0.0.0.0` / `127.0.0.1`, most likely a Pi-hole or
+AdGuard Home-style blocklist. Rovio's TCF consent SDK depends on that Google
+ad-consent domain before its own offline-checker will let the menu proceed, so it
+misreports a filtered DNS answer as no connectivity at all.
+
+Worked around by pointing only the guest at Private DNS (`dns.google`), leaving the
+host and router untouched:
+
+```
+adb shell settings put global private_dns_mode hostname
+adb shell settings put global private_dns_specifier dns.google
+```
+
+That setting is still active on this guest. Worth knowing for any app depending on a
+domain your network's DNS filters: a false "you are offline" here is a testing
+environment artifact, not a ROM defect, and it is worth checking DNS resolution of
+the specific failing host before concluding an app is broken.
 
 ### CarX Drift Racing 3
 
