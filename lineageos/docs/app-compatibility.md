@@ -32,7 +32,7 @@ correctly while the same title is corrupt in-world.
 | --- | :---: | :---: | :---: | :---: | --- |
 | [Angry Birds 2](#angry-birds-2) | ⚪ | 🟢 | ⚪ | ⚪ | ARM agl verified in a live level; X86 gfx not gradable, no level entry point found |
 | [Asphalt 8](#asphalt-8) | ⚪ | 🟢 | 🟡 | ⚪ | X86 gfx: HUD live, 3D world black. ARM agl: confirmed clean mid-race |
-| [CarX Drift Racing 3](#carx-drift-racing-3) | 🟢 | 🟢 | 🟢 | ⚪ | Clean in gameplay on every path graded so far; the Unity/ANGLE counterexample |
+| [CarX Drift Racing 3](#carx-drift-racing-3) | 🟢 | 🟢 | 🟢 | 🟢 | Clean on all eight cells graded; the Unity/ANGLE counterexample on both hosts |
 | [CarX Highway Racing](#carx-highway-racing) | 🟢 | 🟡 | 🟢 | 🟢 | ANGLE corruption is Honeykrisp-specific: clean on X86 (RADV) under both paths |
 | [Chromium](#chromium) | 🟡 | 🟡 | 🟡 | 🟡 | Magenta window title bar under gfxstream |
 | [Destiny Rising](#destiny-rising) | 🟡 | 🟢 | 🟢 | ⚪ | ARM gfx draws an unlit world and black UI panels; X86 gfx is clean, so that fault is not gfxstream-wide |
@@ -105,9 +105,11 @@ the specific failing host before concluding an app is broken.
 
 <a href="images/carx-drift-racing-3-full.jpg"><img src="images/carx-drift-racing-3.jpg" width="120" alt="CarX Drift Racing 3 in-world under ANGLE on ARM64, rendering correctly"></a>
 <a href="images/carx-drift-racing-3-x86-gfxstream-full.jpg"><img src="images/carx-drift-racing-3-x86-gfxstream.jpg" width="120" alt="CarX Drift Racing 3 driving at 61 km/h under gfxstream on x86-64, rendering correctly"></a>
+<a href="images/carx-drift-racing-3-x86-angle-full.jpg"><img src="images/carx-drift-racing-3-x86-angle.jpg" width="120" alt="CarX Drift Racing 3 driving at 49 km/h under ANGLE on x86-64, rendering correctly"></a>
 
-*Left: ARM64 in-world test drive under ANGLE. Right: x86-64 under `gfxstream`,
-driving at 61 km/h — foliage, road, car decals and HUD all correct.*
+*Left to right: ARM64 ANGLE, in-world test drive. x86-64 `gfxstream`, driving
+at 61 km/h. x86-64 ANGLE, driving at 49 km/h with motion blur — livery decals,
+minimap, tachometer and grass/foliage all correct.*
 
 Unity/GLES through ANGLE, but renders correctly in gameplay under both modes,
 verified in-world with HUD rather than from the garage menu. Kept here as the
@@ -118,6 +120,12 @@ On x86-64 it runs translated through native bridge and is clean under
 `gfxstream`, graded while driving rather than parked. It gates gameplay behind
 a 773 MB in-game asset download on a fresh install, so budget for that before
 the first grading run.
+
+Also clean under ANGLE on x86-64, graded moving at 49 km/h with motion blur
+active. That makes this the only title graded on all eight matrix cells, and
+it stays clean on every one -- useful as the control for the CarX Highway
+Racing finding that the ANGLE compressed-texture fault is Honeykrisp-specific
+rather than something every Unity/ANGLE title hits.
 
 ### CarX Highway Racing
 
