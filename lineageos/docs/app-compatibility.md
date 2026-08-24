@@ -139,13 +139,53 @@ Reaches gameplay and streams its multi-GB asset packs. Not yet graded under
 
 ## Release smoke set
 
-1. Open the launcher and app drawer.
-2. Launch Settings, Files, F-Droid, Aurora Store, microG Settings, and Chromium.
-3. On x86-64, run the bundled static and dynamic ARM64 native-bridge suites,
-   then install one representative ARM64-only APK and confirm startup reaches
-   app code instead of failing in the linker.
-4. Record any app that crashes in this file with the top crash frame and target
-   architecture.
+Grade one cell at a time. A cell is one architecture on one graphics path, and
+results carry across neither axis, so a pass elsewhere is not evidence here.
+
+**Per boot**
+
+1. Start the VM in the mode under test: `ika start --gpu_mode=gfxstream` or
+   `--gpu_mode=gfxstream_guest_angle`. Confirm `ro.build.date` is the image you
+   meant to test, since an upgrade that leaves the composite disk stale makes
+   `ika start` refuse with the offending file named — run `ika reset` then.
+2. On x86-64 confirm native bridge is live before installing anything ARM-only:
+   `getprop ro.product.cpu.abilist` must list `arm64-v8a` alongside `x86_64`.
+3. Open the launcher and app drawer. Launch Settings, Files, F-Droid, Aurora
+   Store, microG Settings, and Chromium.
+
+**Per app**
+
+4. Install split APKs with `adb install-multiple`; a lone `base.apk` will not
+   run. Expect Play to replace a sideloaded copy with its own build on first
+   launch, and let that finish before grading. Check `primaryCpuAbi` to confirm
+   whether the app is running native or translated.
+5. Clear the way to gameplay: dismiss runtime permission dialogs, and let
+   in-game asset downloads finish. These are separate from the APK and can run
+   to hundreds of megabytes or more.
+6. **Grade from actual gameplay.** Menus, garages, title screens and scripted
+   cutscenes routinely render correctly while the same title is corrupt
+   in-world. For a driving game that means moving under your own input, not
+   parked and not mid-cutscene: hold the on-screen accelerate control and
+   confirm the speedometer reads non-zero in the same frame you capture.
+   `adb shell input swipe X Y X Y 3000` injects a hold; note that
+   `input mouse swipe` does *not* work, because on-screen controls only accept
+   touch.
+7. Judge the capture by eye. Do not grade from a magenta-pixel count: under
+   `gfxstream` a lost color buffer turns whole captures magenta or black
+   without any texture being at fault, and coarse block noise does not register
+   as striping in a naive filter.
+8. Confirm the process survived: still alive and foreground, no fatal signals in
+   `adb logcat -b crash`, and no new files in `/data/tombstones`.
+
+**Recording**
+
+9. Update the matrix cell, and add a screenshot for anything that is not a
+   plain pass: 120px thumbnail linking to the full-resolution capture, under
+   `images/`. Say in the caption which architecture and mode it came from.
+10. Record crashes with the top crash frame and the target architecture. If the
+    fault is in ART or a system library rather than the app, name the frame —
+    `nterp_op_invoke_virtual` and a `fault addr 0x0` mean something very
+    different from a fault inside the game's own code.
 
 Every app categorized as `ApplicationInfo.CATEGORY_GAME` is launched fullscreen
 by the desktop compatibility policy, regardless of its `resizeableActivity`
