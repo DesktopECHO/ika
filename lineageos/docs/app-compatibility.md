@@ -30,7 +30,7 @@ correctly while the same title is corrupt in-world.
 
 | App | ARM gfx | ARM agl | X86 gfx | X86 agl | Detail |
 | --- | :---: | :---: | :---: | :---: | --- |
-| [Angry Birds 2](#angry-birds-2) | ⚪ | 🟢 | ⚪ | ⚪ | Verified in a live level under ANGLE |
+| [Angry Birds 2](#angry-birds-2) | ⚪ | 🟢 | ⚪ | ⚪ | ARM agl verified in a live level; X86 gfx not gradable, no level entry point found |
 | [Asphalt 8](#asphalt-8) | ⚪ | 🟢 | 🟡 | ⚪ | X86 gfx: HUD live, 3D world black. ARM agl: confirmed clean mid-race |
 | [CarX Drift Racing 3](#carx-drift-racing-3) | 🟢 | 🟢 | 🟢 | ⚪ | Clean in gameplay on every path graded so far; the Unity/ANGLE counterexample |
 | [CarX Highway Racing](#carx-highway-racing) | 🟢 | 🟡 | 🟢 | ⚪ | ARM ANGLE corrupts textures in gameplay; clean on X86 gfx (RADV) translated |
@@ -38,7 +38,7 @@ correctly while the same title is corrupt in-world.
 | [Destiny Rising](#destiny-rising) | 🟡 | 🟢 | ⚪ | ⚪ | Unlit world and black UI panels under gfxstream; clean under ANGLE |
 | [Google Play](#google-play) | ⚪ | ⚪ | 🟢 | ⚪ | The install path for every other row; verify it is signed in before grading anything |
 | Nintendo apps | 🔴 | 🔴 | 🔴 | 🔴 | Play Integrity / device attestation |
-| No Limit 2 | ⚪ | ⚪ | ⚪ | ⚪ | Needs crash-log retest on each ROM image |
+| [No Limit Drag Racing 2](#no-limit-drag-racing-2) | ⚪ | ⚪ | 🟢 | ⚪ | Clean in-race on X86 gfx; launch needs two-finger input adb cannot inject |
 
 ## Graphics paths
 
@@ -244,6 +244,29 @@ bundle) and was dismissed with the Android back button rather than tapping
 anywhere near it, since it was a real-money-shaped offer and not something to
 risk triggering by accident.
 
+### No Limit Drag Racing 2
+
+<a href="images/no-limit-2-x86-gfxstream-full.jpg"><img src="images/no-limit-2-x86-gfxstream.jpg" width="120" alt="No Limit Drag Racing 2 doing a burnout under gfxstream on x86-64, rendering correctly"></a>
+<a href="images/no-limit-2-x86-stage-full.jpg"><img src="images/no-limit-2-x86-stage.jpg" width="120" alt="No Limit Drag Racing 2 staged at the Christmas tree under gfxstream on x86-64"></a>
+
+*Left: burnout at the start of a Career race on x86-64 under `gfxstream` —
+tachometer sweeping to 5800 rpm, tire smoke, tire-temp gauge live. Right:
+staged at the Christmas tree on the drag strip.*
+
+Package is `com.battlecreek.nolimit2`; the old row called it "No Limit 2".
+Installs from Play at 575 MB and runs translated through native bridge. Clean
+everywhere it was exercised: dealership car model with reflections and shadows,
+garage, mode select, race intro, and the in-race drag strip with its
+environment, Christmas tree and HUD. The engine responds to injected throttle,
+so this is live in-race rendering rather than a menu.
+
+Graded from staging and burnout rather than a moving car, because the launch
+requires holding the line-lock button and the throttle **at the same time** and
+`adb shell input` only injects one pointer — concurrent `input swipe` calls
+serialise instead of overlapping. That is a limitation of the test harness, not
+of the game. A moving-car frame needs either real input through the console or
+`sendevent`-level multitouch.
+
 ## Release smoke set
 
 Grade one cell at a time. A cell is one architecture on one graphics path, and
@@ -278,7 +301,12 @@ results carry across neither axis, so a pass elsewhere is not evidence here.
    confirm the speedometer reads non-zero in the same frame you capture.
    `adb shell input swipe X Y X Y 3000` injects a hold; note that
    `input mouse swipe` does *not* work, because on-screen controls only accept
-   touch.
+   touch. `adb shell input` also injects only **one** pointer, and concurrent
+   calls serialise rather than overlap, so any control needing two fingers at
+   once — a drag racing line-lock plus throttle, for example — cannot be driven
+   this way. Grade those from live in-world rendering instead and say so, or
+   drive them by hand through the console; do not record a harness limit as an
+   app failure.
 7. Judge the capture by eye. Do not grade from a magenta-pixel count: under
    `gfxstream` a lost color buffer turns whole captures magenta or black
    without any texture being at fault, and coarse block noise does not register
