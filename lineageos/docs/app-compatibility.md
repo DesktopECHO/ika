@@ -32,13 +32,13 @@ correctly while the same title is corrupt in-world.
 | --- | :---: | :---: | :---: | :---: | --- |
 | Angry Birds 2 | ⚪ | ⚪ | ⚪ | ⚪ | Validate Play Services, GPU, ABI selection |
 | Asphalt 8 | 🔴 | 🔴 | 🔴 | 🔴 | Device certification, not graphics-path specific |
-| CarX Drift Racing 3 | 🟢 | 🟢 | ⚪ | ⚪ | [details](#carx-drift-racing-3) |
-| CarX Highway Racing | 🟢 | 🟡 | ⚪ | ⚪ | Textures corrupt in gameplay under ANGLE — [details](#carx-highway-racing) |
+| [CarX Drift Racing 3](#carx-drift-racing-3) | 🟢 | 🟢 | ⚪ | ⚪ | Clean in gameplay on both paths; the Unity/ANGLE counterexample |
+| [CarX Highway Racing](#carx-highway-racing) | 🟢 | 🟡 | ⚪ | ⚪ | Textures corrupt in gameplay under ANGLE, clean under gfxstream |
 | Chromium | 🟡 | 🟡 | 🟡 | 🟡 | Bundled browser/WebView validation |
-| Destiny Rising | ⚪ | 🟢 | ⚪ | ⚪ | [details](#destiny-rising) |
+| [Destiny Rising](#destiny-rising) | ⚪ | 🟢 | ⚪ | ⚪ | Needs writable DEX, UFFD GC off, and explicit ART null checks |
 | Nintendo apps | 🔴 | 🔴 | 🔴 | 🔴 | Play Integrity / device attestation |
 | No Limit 2 | ⚪ | ⚪ | ⚪ | ⚪ | Needs crash-log retest on each ROM image |
-| Rebel Racing | ⚪ | ⚪ | ⚪ | ⚪ | [details](#rebel-racing) |
+| [Rebel Racing](#rebel-racing) | ⚪ | ⚪ | ⚪ | ⚪ | Sideloaded base.apk stalls at 0% asset download, never reaches gameplay |
 
 ## Graphics paths
 
