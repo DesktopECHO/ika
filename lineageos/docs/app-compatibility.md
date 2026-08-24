@@ -31,7 +31,7 @@ correctly while the same title is corrupt in-world.
 | App | ARM gfx | ARM agl | X86 gfx | X86 agl | Detail |
 | --- | :---: | :---: | :---: | :---: | --- |
 | [Angry Birds 2](#angry-birds-2) | ⚪ | 🟢 | ⚪ | ⚪ | Verified in a live level under ANGLE |
-| Asphalt 8 | 🔴 | 🔴 | 🔴 | 🔴 | Device certification, not graphics-path specific |
+| [Asphalt 8](#asphalt-8) | ⚪ | ⚪ | 🟡 | ⚪ | Installs and races on X86 gfx, but the 3D world never renders — only the HUD |
 | [CarX Drift Racing 3](#carx-drift-racing-3) | 🟢 | 🟢 | 🟢 | ⚪ | Clean in gameplay on every path graded so far; the Unity/ANGLE counterexample |
 | [CarX Highway Racing](#carx-highway-racing) | 🟢 | 🟡 | 🟢 | ⚪ | ARM ANGLE corrupts textures in gameplay; clean on X86 gfx (RADV) translated |
 | [Chromium](#chromium) | 🟡 | 🟡 | 🟡 | 🟡 | Magenta window title bar under gfxstream |
@@ -196,6 +196,28 @@ Two behaviours to plan around when grading other apps:
 Only the x86-64 `gfxstream` cell is graded here, from a signed-in storefront on
 RADV. The ARM cells are used routinely for installs but have not been captured
 and graded, so they stay ungraded rather than assumed.
+
+### Asphalt 8
+
+<a href="images/asphalt-8-x86-gfxstream-full.jpg"><img src="images/asphalt-8-x86-gfxstream.jpg" width="120" alt="Asphalt 8 mid-race under gfxstream on x86-64, HUD live but the 3D world is black"></a>
+
+*Mid-race on x86-64 under `gfxstream`. The timer is ticking (01:16 into a 5:00
+race), speed and position update, and a coin popup animates — but the track,
+car and environment never draw. Only the HUD/vector overlay renders.*
+
+Installs and launches from Play with no device-certification rejection; the
+previous all-red row predated any real test on this build. Gets past the age
+gate and the GDPR/ad-partner consent dialog, reaches a race, and the process
+stays alive with no crash and no tombstone. The 3D scene is fully black for
+the whole race while the HUD keeps updating in real time, which rules out a
+loading stall. This does not match the `Failed to find ColorBuffer` /
+`TextureDraw: GL error` signature described under Graphics paths, so treat it
+as a distinct fault rather than the same one.
+
+The failure shape — HUD renders, 3D world does not — mirrors Destiny Rising
+under `gfxstream` on ARM64. Worth checking whether `gfxstream_guest_angle`
+clears it here the same way it does there before concluding this is
+`gfxstream`-wide rather than title-specific.
 
 ## Release smoke set
 
