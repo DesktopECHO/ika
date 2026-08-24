@@ -38,7 +38,6 @@ correctly while the same title is corrupt in-world.
 | [Destiny Rising](#destiny-rising) | 🟡 | 🟢 | ⚪ | ⚪ | Unlit world and black UI panels under gfxstream; clean under ANGLE |
 | Nintendo apps | 🔴 | 🔴 | 🔴 | 🔴 | Play Integrity / device attestation |
 | No Limit 2 | ⚪ | ⚪ | ⚪ | ⚪ | Needs crash-log retest on each ROM image |
-| [Rebel Racing](#rebel-racing) | ⚪ | ⚪ | ⚪ | ⚪ | Sideloaded base.apk stalls at 0% asset download, never reaches gameplay |
 
 ## Graphics paths
 
@@ -137,19 +136,6 @@ Needs three ROM behaviours together:
 Uses Vulkan directly, so it is unaffected by the ANGLE compressed-texture issue.
 Reaches gameplay and streams its multi-GB asset packs. Not yet graded under
 `gfxstream`: it launches, but no verified gameplay frame was captured.
-
-### Rebel Racing
-
-<a href="images/rebel-racing-full.jpg"><img src="images/rebel-racing.jpg" width="120" alt="Rebel Racing stalled on its asset download at 0%"></a>
-
-*Stalled on the in-game asset download at 0%, never reaching gameplay.*
-
-Requires fullscreen because it opts out of resizing. Newer builds also need a
-GmsCore release containing the scoped Play Games server-auth callback. Launches
-and holds foreground on ARM64, but a sideloaded `base.apk` on its own stalls on
-its in-game asset download at 0% and never reaches gameplay, so it cannot be
-graded for graphics under either mode. Install the full split set, or via Play,
-to test.
 
 ## Release smoke set
 
