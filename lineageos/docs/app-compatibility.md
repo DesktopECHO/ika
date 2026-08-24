@@ -17,37 +17,28 @@ as a desktop/PC device and filters some phone/tablet apps before installation.
 | 🔴 | Does not run. |
 | ⚪ | Not yet tested on this release train. |
 
-The two dot columns are the result under each `gpu_mode`
-(`ika start --gpu_mode=...`):
+One row per app. The four dot columns are architecture × graphics path:
 
-- **direct** — `--gpu_mode=gfxstream`
-- **ANGLE** — `--gpu_mode=gfxstream_guest_angle` (the default)
+- **A64** — ARM64 ROM  ·  **x86** — x86-64 ROM (ARM-only apps run translated)
+- **dir** — `--gpu_mode=gfxstream`  ·  **ang** — `--gpu_mode=gfxstream_guest_angle` (the default)
 
-They differ, so record which mode a result came from, and which architecture.
-Grade graphics from **actual gameplay**: menus and cutscenes frequently render
-correctly while the same title is corrupt in-world. An app with no mode-specific
-testing carries the same value in both columns.
+Results do not carry across either axis, so grade each cell separately. Grade
+graphics from **actual gameplay**: menus and cutscenes frequently render
+correctly while the same title is corrupt in-world.
 
 ## Matrix
 
-| App | Target | direct | ANGLE | Detail |
-| --- | --- | :---: | :---: | --- |
-| Angry Birds 2 | both | ⚪ | ⚪ | Validate Play Services, GPU, ABI selection |
-| Asphalt 8 | both | 🔴 | 🔴 | Device certification, not graphics-path specific |
-| Chromium | both | 🟡 | 🟡 | Bundled browser/WebView validation |
-| CarX Drift Racing 3 | ARM64 | 🟢 | 🟢 | [details](#carx-drift-racing-3) |
-| CarX Drift Racing 3 | x86-64 (translated) | ⚪ | ⚪ | Not tested under translation |
-| CarX Highway Racing | ARM64 | 🟢 | 🟡 | Textures corrupt in gameplay under ANGLE — [details](#carx-highway-racing) |
-| CarX Highway Racing | x86-64 (translated) | ⚪ | ⚪ | Not tested under translation |
-| Destiny Rising | ARM64 | ⚪ | 🟢 | [details](#destiny-rising) |
-| Destiny Rising | x86-64 (translated) | ⚪ | ⚪ | Not tested under translation |
-| Nintendo apps | both | 🔴 | 🔴 | Play Integrity / device attestation |
-| No Limit 2 | both | ⚪ | ⚪ | Needs crash-log retest on each ROM image |
-| Rebel Racing | both | ⚪ | ⚪ | [details](#rebel-racing) |
-
-`Target` is the ROM the result was observed on. Use `both` only when the result
-is architecture-independent — anything graphics-related is not, so split the row
-and grade each architecture separately.
+| App | A64 dir | A64 ang | x86 dir | x86 ang | Detail |
+| --- | :---: | :---: | :---: | :---: | --- |
+| Angry Birds 2 | ⚪ | ⚪ | ⚪ | ⚪ | Validate Play Services, GPU, ABI selection |
+| Asphalt 8 | 🔴 | 🔴 | 🔴 | 🔴 | Device certification, not graphics-path specific |
+| CarX Drift Racing 3 | 🟢 | 🟢 | ⚪ | ⚪ | [details](#carx-drift-racing-3) |
+| CarX Highway Racing | 🟢 | 🟡 | ⚪ | ⚪ | Textures corrupt in gameplay under ANGLE — [details](#carx-highway-racing) |
+| Chromium | 🟡 | 🟡 | 🟡 | 🟡 | Bundled browser/WebView validation |
+| Destiny Rising | ⚪ | 🟢 | ⚪ | ⚪ | [details](#destiny-rising) |
+| Nintendo apps | 🔴 | 🔴 | 🔴 | 🔴 | Play Integrity / device attestation |
+| No Limit 2 | ⚪ | ⚪ | ⚪ | ⚪ | Needs crash-log retest on each ROM image |
+| Rebel Racing | ⚪ | ⚪ | ⚪ | ⚪ | [details](#rebel-racing) |
 
 ## Graphics paths
 
