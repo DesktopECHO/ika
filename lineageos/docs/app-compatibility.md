@@ -71,12 +71,20 @@ instead. Re-grade per architecture rather than assuming. Neither path is clean:
 
 ### CarX Drift Racing 3
 
+<img src="images/carx-drift-racing-3.jpg" width="480" alt="CarX Drift Racing 3 in-world test drive, rendering correctly">
+
+*In-world test drive under `gfxstream_guest_angle`.*
+
 Unity/GLES through ANGLE, but renders correctly in gameplay under both modes,
 verified in-world with HUD rather than from the garage menu. Kept here as the
 counterexample to "Unity on ANGLE is broken": being a Unity/ANGLE title does not
 by itself imply the corruption seen in CarX Highway Racing.
 
 ### CarX Highway Racing
+
+<img src="images/carx-highway-gfxstream.jpg" width="480" alt="CarX Highway Racing in gameplay, textures rendering correctly">
+
+*In-race under `gfxstream`. The billboard and car body are the surfaces that corrupt under `gfxstream_guest_angle`.*
 
 Launches and plays on ARM64. Under `gfxstream_guest_angle` its compressed
 textures corrupt in gameplay: roadside billboards become coloured block noise,
@@ -87,6 +95,10 @@ rather than the host renderer or the ASTC decoder. Its menus and cutscenes
 render correctly in both modes, so grade this one from a race.
 
 ### Destiny Rising
+
+<img src="images/destiny-rising.jpg" width="480" alt="Destiny Rising in-world at Haven with full HUD">
+
+*In-world at Haven under `gfxstream_guest_angle`, full HUD intact.*
 
 Needs three ROM behaviours together:
 
