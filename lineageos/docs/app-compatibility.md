@@ -35,7 +35,7 @@ correctly while the same title is corrupt in-world.
 | [CarX Drift Racing 3](#carx-drift-racing-3) | 🟢 | 🟢 | 🟢 | ⚪ | Clean in gameplay on every path graded so far; the Unity/ANGLE counterexample |
 | [CarX Highway Racing](#carx-highway-racing) | 🟢 | 🟡 | 🟢 | ⚪ | ARM ANGLE corrupts textures in gameplay; clean on X86 gfx (RADV) translated |
 | [Chromium](#chromium) | 🟡 | 🟡 | 🟡 | 🟡 | Magenta window title bar under gfxstream |
-| [Destiny Rising](#destiny-rising) | 🟡 | 🟢 | ⚪ | ⚪ | Unlit world and black UI panels under gfxstream; clean under ANGLE |
+| [Destiny Rising](#destiny-rising) | 🟡 | 🟢 | 🟢 | ⚪ | ARM gfx draws an unlit world and black UI panels; X86 gfx is clean, so that fault is not gfxstream-wide |
 | [Google Play](#google-play) | ⚪ | ⚪ | 🟢 | ⚪ | The install path for every other row; verify it is signed in before grading anything |
 | Nintendo apps | 🔴 | 🔴 | 🔴 | 🔴 | Play Integrity / device attestation |
 | [No Limit Drag Racing 2](#no-limit-drag-racing-2) | ⚪ | ⚪ | 🟢 | ⚪ | Clean in-race on X86 gfx; launch needs two-finger input adb cannot inject |
@@ -168,6 +168,19 @@ Needs three ROM behaviours together:
 Uses Vulkan directly, so it is unaffected by the ANGLE compressed-texture issue.
 Reaches gameplay and streams its multi-GB asset packs. Not yet graded under
 `gfxstream`: it launches, but no verified gameplay frame was captured.
+
+<a href="images/destiny-rising-x86-gfxstream-full.jpg"><img src="images/destiny-rising-x86-gfxstream.jpg" width="120" alt="Destiny Rising in-world at Haven under gfxstream on x86-64, fully lit and correct"></a>
+
+*In-world at Haven on x86-64 under `gfxstream`. World lighting, architecture,
+the Traveler, other players, minimap and every HUD panel all render correctly —
+compare the ARM64 `gfxstream` result.*
+
+On x86-64 it runs translated through native bridge and is clean under
+`gfxstream`, graded in-world rather than from the title screen. This matters
+for diagnosis: the unlit world and black UI panels seen under `gfxstream` on
+Apple Silicon do **not** reproduce on RADV, so that fault belongs to the ARM64
+host stack rather than to the `gfxstream` path itself. Budget for a large
+first-run asset download; this install pulled 22 GB before reaching Haven.
 
 ### Google Play
 
