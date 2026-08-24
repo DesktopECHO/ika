@@ -39,8 +39,6 @@ An app with no mode-specific testing carries the same value in both columns.
 | Nintendo apps | both | 🔴 | 🔴 | Play Integrity / device attestation |
 | No Limit 2 | both | ⚪ | ⚪ | Needs crash-log retest on each ROM image |
 | Rebel Racing | both | ⚪ | ⚪ | [details](#rebel-racing) |
-| Vulkan Caps Viewer 4.11 | ARM64 | ⚪ | ⚪ | Native build; the Qt fault is translation-only |
-| Vulkan Caps Viewer 4.11 | x86-64 (translated) | 🔴 | 🔴 | [details](#vulkan-caps-viewer-411) |
 
 `Target` is the ROM the result was observed on. Use `both` only when the result
 is architecture-independent — anything graphics-related is not, so split the row
@@ -71,7 +69,7 @@ instead. Re-grade per architecture rather than assuming. Neither path is clean:
 
 ### CarX Drift Racing 3
 
-<a href="images/carx-drift-racing-3-full.jpg"><img src="images/carx-drift-racing-3.jpg" width="480" alt="CarX Drift Racing 3 in-world test drive, rendering correctly"></a>
+<a href="images/carx-drift-racing-3-full.jpg"><img src="images/carx-drift-racing-3.jpg" width="120" alt="CarX Drift Racing 3 in-world test drive, rendering correctly"></a>
 
 *In-world test drive under `gfxstream_guest_angle`.*
 
@@ -82,7 +80,7 @@ by itself imply the corruption seen in CarX Highway Racing.
 
 ### CarX Highway Racing
 
-<a href="images/carx-highway-gfxstream-full.jpg"><img src="images/carx-highway-gfxstream.jpg" width="480" alt="CarX Highway Racing in gameplay, textures rendering correctly"></a>
+<a href="images/carx-highway-gfxstream-full.jpg"><img src="images/carx-highway-gfxstream.jpg" width="120" alt="CarX Highway Racing in gameplay, textures rendering correctly"></a>
 
 *In-race under `gfxstream`. The billboard and car body are the surfaces that corrupt under `gfxstream_guest_angle`.*
 
@@ -96,7 +94,7 @@ render correctly in both modes, so grade this one from a race.
 
 ### Destiny Rising
 
-<a href="images/destiny-rising-full.jpg"><img src="images/destiny-rising.jpg" width="480" alt="Destiny Rising in-world at Haven with full HUD"></a>
+<a href="images/destiny-rising-full.jpg"><img src="images/destiny-rising.jpg" width="120" alt="Destiny Rising in-world at Haven with full HUD"></a>
 
 *In-world at Haven under `gfxstream_guest_angle`, full HUD intact.*
 
@@ -120,13 +118,6 @@ and holds foreground on ARM64, but a sideloaded `base.apk` on its own stalls on
 its in-game asset download at 0% and never reaches gameplay, so it cannot be
 graded for graphics under either mode. Install the full split set, or via Play,
 to test.
-
-### Vulkan Caps Viewer 4.11
-
-Its bundled Qt 6.9.3 Android platform plugin dereferences a null accessibility
-backend during startup under translation, before creating a Vulkan instance. Qt
-6.10 removed that startup call; use a Caps Viewer build based on Qt 6.10+, or a
-native x86-64 build when available.
 
 ## Release smoke set
 
