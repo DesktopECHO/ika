@@ -32,8 +32,8 @@ correctly while the same title is corrupt in-world.
 | --- | :---: | :---: | :---: | :---: | --- |
 | Angry Birds 2 | ⚪ | ⚪ | ⚪ | ⚪ | Validate Play Services, GPU, ABI selection |
 | Asphalt 8 | 🔴 | 🔴 | 🔴 | 🔴 | Device certification, not graphics-path specific |
-| [CarX Drift Racing 3](#carx-drift-racing-3) | 🟢 | 🟢 | ⚪ | ⚪ | Clean in gameplay on both paths; the Unity/ANGLE counterexample |
-| [CarX Highway Racing](#carx-highway-racing) | 🟢 | 🟡 | ⚪ | ⚪ | Textures corrupt in gameplay under ANGLE, clean under gfxstream |
+| [CarX Drift Racing 3](#carx-drift-racing-3) | 🟢 | 🟢 | 🟢 | ⚪ | Clean in gameplay on every path graded so far; the Unity/ANGLE counterexample |
+| [CarX Highway Racing](#carx-highway-racing) | 🟢 | 🟡 | 🟢 | ⚪ | ARM ANGLE corrupts textures in gameplay; clean on X86 gfx (RADV) translated |
 | [Chromium](#chromium) | 🟡 | 🟡 | 🟡 | 🟡 | Magenta window title bar under gfxstream |
 | [Destiny Rising](#destiny-rising) | 🟡 | 🟢 | ⚪ | ⚪ | Unlit world and black UI panels under gfxstream; clean under ANGLE |
 | Nintendo apps | 🔴 | 🔴 | 🔴 | 🔴 | Play Integrity / device attestation |
@@ -65,23 +65,32 @@ instead. Re-grade per architecture rather than assuming. Neither path is clean:
 
 ### CarX Drift Racing 3
 
-<a href="images/carx-drift-racing-3-full.jpg"><img src="images/carx-drift-racing-3.jpg" width="120" alt="CarX Drift Racing 3 in-world under ANGLE, rendering correctly"></a>
+<a href="images/carx-drift-racing-3-full.jpg"><img src="images/carx-drift-racing-3.jpg" width="120" alt="CarX Drift Racing 3 in-world under ANGLE on ARM64, rendering correctly"></a>
+<a href="images/carx-drift-racing-3-x86-gfxstream-full.jpg"><img src="images/carx-drift-racing-3-x86-gfxstream.jpg" width="120" alt="CarX Drift Racing 3 driving at 61 km/h under gfxstream on x86-64, rendering correctly"></a>
 
-*In-world test drive under ANGLE. Clean under `gfxstream` too.*
+*Left: ARM64 in-world test drive under ANGLE. Right: x86-64 under `gfxstream`,
+driving at 61 km/h — foliage, road, car decals and HUD all correct.*
 
 Unity/GLES through ANGLE, but renders correctly in gameplay under both modes,
 verified in-world with HUD rather than from the garage menu. Kept here as the
 counterexample to "Unity on ANGLE is broken": being a Unity/ANGLE title does not
 by itself imply the corruption seen in CarX Highway Racing.
 
+On x86-64 it runs translated through native bridge and is clean under
+`gfxstream`, graded while driving rather than parked. It gates gameplay behind
+a 773 MB in-game asset download on a fresh install, so budget for that before
+the first grading run.
+
 ### CarX Highway Racing
 
-<a href="images/carx-highway-gfxstream-full.jpg"><img src="images/carx-highway-gfxstream.jpg" width="120" alt="CarX Highway Racing in-race under gfxstream, rendering correctly"></a>
-<a href="images/carx-highway-angle-full.jpg"><img src="images/carx-highway-angle.jpg" width="120" alt="CarX Highway Racing in-race under ANGLE, textures corrupt"></a>
+<a href="images/carx-highway-gfxstream-full.jpg"><img src="images/carx-highway-gfxstream.jpg" width="120" alt="CarX Highway Racing in-race under gfxstream on ARM64, rendering correctly"></a>
+<a href="images/carx-highway-angle-full.jpg"><img src="images/carx-highway-angle.jpg" width="120" alt="CarX Highway Racing in-race under ANGLE on ARM64, textures corrupt"></a>
+<a href="images/carx-highway-x86-gfxstream-full.jpg"><img src="images/carx-highway-x86-gfxstream.jpg" width="120" alt="CarX Highway Racing in-race under gfxstream on x86-64, rendering correctly"></a>
 
-*Left: in-race under `gfxstream`, correct. Right: the same race under
+*Left: ARM64 in-race under `gfxstream`, correct. Middle: the same race under
 ANGLE — the billboard is block noise and the road, car body and HUD bar are
-striped.*
+striped. Right: x86-64 under `gfxstream`, correct — 61% race distance, 51 MPH,
+billboards intact.*
 
 Launches and plays on ARM64. Under `gfxstream_guest_angle` its compressed
 textures corrupt in gameplay: roadside billboards become coloured block noise,
@@ -90,6 +99,14 @@ stripes. Geometry, lighting, text and vector UI stay correct. The same build
 renders correctly under `gfxstream`, so the fault is in the guest ANGLE path
 rather than the host renderer or the ASTC decoder. Its menus and cutscenes
 render correctly in both modes, so grade this one from a race.
+
+On x86-64 the game installs and runs translated through native bridge
+(`primaryCpuAbi=arm64-v8a` on an `x86_64,arm64-v8a` device) and renders
+correctly in-race under `gfxstream` on RADV, billboards included. Play replaces
+a sideloaded copy with its own build on first launch, so let that update finish
+before grading. The ANGLE cell is still ungraded on this architecture; until it
+is, do not assume the ARM64 ANGLE corruption reproduces here, since the two
+hosts run different Vulkan drivers.
 
 ### Chromium
 
