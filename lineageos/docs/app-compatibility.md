@@ -150,8 +150,10 @@ results carry across neither axis, so a pass elsewhere is not evidence here.
    `ika start` refuse with the offending file named — run `ika reset` then.
 2. On x86-64 confirm native bridge is live before installing anything ARM-only:
    `getprop ro.product.cpu.abilist` must list `arm64-v8a` alongside `x86_64`.
-3. Open the launcher and app drawer. Launch Settings, Files, F-Droid, Aurora
-   Store, microG Settings, and Chromium.
+3. Open the launcher and app drawer. Launch Settings, Files, Chromium, and
+   Google Play. Confirm Play is signed in before going further: installs and
+   updates run through it, and a signed-out device silently changes what the
+   rest of the run is even testing.
 
 **Per app**
 
