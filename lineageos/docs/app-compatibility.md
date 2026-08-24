@@ -61,12 +61,20 @@ instead. Re-grade per architecture rather than assuming. Neither path is clean:
   the trigger is, it depends on the specific texture format or footprint a
   title uses, not on the engine or the path alone. Apps using Vulkan directly
   are unaffected on either host.
-- **`gfxstream` loses color buffers.** Across app relaunch cycles the renderer
-  logs `Failed to find ColorBuffer: <id>` and `TextureDraw: GL error=0x502`,
-  after which `adb screencap` returns whole-screen magenta, pure black, or
-  hangs. The guest stays responsive and the console keeps receiving frames, so
-  the display survives and a VM restart clears it. Note the consequence for
-  testing: **a magenta capture in this mode is not by itself a texture fault.**
+- **The renderer loses color buffers, on either path.** Documented under
+  `gfxstream`: across app relaunch cycles it logs `Failed to find ColorBuffer:
+  <id>` and `TextureDraw: GL error=0x502`, after which `adb screencap` returns
+  whole-screen magenta, pure black, or hangs. Also seen once under
+  `gfxstream_guest_angle` on x86-64: after force-stopping CarX Drift Racing 3
+  (confirmed dead) and launching Chromium, CarX's HUD kept rendering behind
+  Chromium's window, survived a trip Home and a full Chromium restart, while
+  Chromium's own content was genuinely live. Same class of fault, different
+  symptom -- a frozen frame from a killed task instead of a magenta fill. In
+  both cases the guest stays responsive and the console keeps receiving
+  frames, so the display survives and a VM restart clears it. Note the
+  consequence for testing: **an odd capture in either mode is not by itself a
+  texture fault** -- check the process is actually gone and try a fresh
+  restart before concluding the app is at fault.
 
 ## Per-app details
 
@@ -171,6 +179,16 @@ hosts run different Vulkan drivers.
 window title bar draws magenta — the same invalid-color-buffer artifact
 described under Graphics paths. Destiny Rising is visible behind it with the
 black UI panels from the same fault.*
+
+On x86-64 under `gfxstream_guest_angle`, the title bar itself is clean -- no
+magenta -- but a different symptom of the same underlying issue showed up
+instead: after force-stopping CarX Drift Racing 3 (confirmed 0 processes) and
+launching Chromium fresh, its minimap, tachometer and control-arrow HUD kept
+rendering behind Chromium's window. It survived going Home and fully
+restarting Chromium, while Chromium's own content was genuinely live (its
+new-tab shortcuts changed between captures). So the stale-buffer class of fault
+is not confined to `gfxstream`, and does not always present as magenta -- here
+it was a frozen frame from a killed app's task instead.
 
 ### Destiny Rising
 
