@@ -30,7 +30,7 @@ correctly while the same title is corrupt in-world.
 
 | App | ARM gfx | ARM agl | X86 gfx | X86 agl | Detail |
 | --- | :---: | :---: | :---: | :---: | --- |
-| Angry Birds 2 | ⚪ | ⚪ | ⚪ | ⚪ | Validate Play Services, GPU, ABI selection |
+| [Angry Birds 2](#angry-birds-2) | ⚪ | 🟢 | ⚪ | ⚪ | Installs from Play and renders correctly under ANGLE |
 | Asphalt 8 | 🔴 | 🔴 | 🔴 | 🔴 | Device certification, not graphics-path specific |
 | [CarX Drift Racing 3](#carx-drift-racing-3) | 🟢 | 🟢 | 🟢 | ⚪ | Clean in gameplay on every path graded so far; the Unity/ANGLE counterexample |
 | [CarX Highway Racing](#carx-highway-racing) | 🟢 | 🟡 | 🟢 | ⚪ | ARM ANGLE corrupts textures in gameplay; clean on X86 gfx (RADV) translated |
@@ -62,6 +62,22 @@ instead. Re-grade per architecture rather than assuming. Neither path is clean:
   testing: **a magenta capture in this mode is not by itself a texture fault.**
 
 ## Per-app details
+
+### Angry Birds 2
+
+<a href="images/angry-birds-2-full.jpg"><img src="images/angry-birds-2.jpg" width="120" alt="Angry Birds 2 rendering correctly under ANGLE"></a>
+
+*Under ANGLE. Background art, sprites and text all render correctly.*
+
+Installs from Play without being filtered out, and renders correctly under ANGLE.
+Graded at its Terms of Service gate rather than in gameplay — accepting an
+agreement on the account holder's behalf is not something a test should do, so
+the level itself is unverified.
+
+Not graded under `gfxstream`: it launches and reaches 285 MB RSS with no crash,
+but every capture came back pure black while the renderer was logging
+`Failed to find ColorBuffer`. That is the capture fault described under Graphics
+paths, so the black frames say nothing about the app.
 
 ### CarX Drift Racing 3
 
