@@ -12,10 +12,10 @@ as a desktop/PC device and filters some phone/tablet apps before installation.
 
 | Value | Meaning |
 | --- | --- |
-| `supported` | Works in release images. |
+| `works` | Works in release images. |
 | `notes` | Usable, but has a known quirk or dependency. |
 | `gfx-corrupt` | Runs and is playable, but renders incorrectly under this mode. |
-| `blocked` | Does not run. |
+| `fail` | Does not run. |
 | `unknown` | Not yet tested on this release train. |
 
 The two rightmost columns are the result under each `gpu_mode`
@@ -28,19 +28,16 @@ mode-specific testing carries the same value in both columns.
 
 | App | ARM64 | x86-64 | `gfxstream` | `gfxstream_guest_angle` | Detail |
 | --- | --- | --- | --- | --- | --- |
-| Aurora Store | native | native | `notes` | `notes` | Network and anonymous/session login health |
-| F-Droid | native | native | `supported` | `supported` | Baseline package-manager smoke test |
-| microG Settings | native | native | `supported` | `supported` | Bundled microG install and signature spoofing |
 | Chromium | native | native | `notes` | `notes` | Bundled browser/WebView validation |
 | Angry Birds 2 | native | translated | `unknown` | `unknown` | Validate Play Services, GPU, ABI selection |
-| Asphalt 8 | native | translated | `blocked` | `blocked` | May reject non-certified devices or fail GPU checks |
-| CarX Drift Racing 3 | native | `unknown` | `supported` | `supported` | [details](#carx-drift-racing-3) |
-| CarX Highway Racing | native | `unknown` | `supported` | `gfx-corrupt` | [details](#carx-highway-racing) |
-| Destiny Rising | native | `unknown` | `unknown` | `supported` | [details](#destiny-rising) |
-| Nintendo apps | native | translated | `blocked` | `blocked` | Play Integrity / device attestation |
+| Asphalt 8 | native | translated | `fail` | `fail` | May reject non-certified devices or fail GPU checks |
+| CarX Drift Racing 3 | native | `unknown` | `works` | `works` | [details](#carx-drift-racing-3) |
+| CarX Highway Racing | native | `unknown` | `works` | `gfx-corrupt` | [details](#carx-highway-racing) |
+| Destiny Rising | native | `unknown` | `unknown` | `works` | [details](#destiny-rising) |
+| Nintendo apps | native | translated | `fail` | `fail` | Play Integrity / device attestation |
 | No Limit 2 | native | translated | `unknown` | `unknown` | Needs crash-log retest on each ROM image |
 | Rebel Racing | native | translated | `unknown` | `unknown` | [details](#rebel-racing) |
-| Vulkan Caps Viewer 4.11 | native | translated | `blocked` | `blocked` | [details](#vulkan-caps-viewer-411) |
+| Vulkan Caps Viewer 4.11 | native | translated | `fail` | `fail` | [details](#vulkan-caps-viewer-411) |
 
 ## Graphics paths
 
