@@ -34,8 +34,8 @@ correctly while the same title is corrupt in-world.
 | Asphalt 8 | 🔴 | 🔴 | 🔴 | 🔴 | Device certification, not graphics-path specific |
 | [CarX Drift Racing 3](#carx-drift-racing-3) | 🟢 | 🟢 | ⚪ | ⚪ | Clean in gameplay on both paths; the Unity/ANGLE counterexample |
 | [CarX Highway Racing](#carx-highway-racing) | 🟢 | 🟡 | ⚪ | ⚪ | Textures corrupt in gameplay under ANGLE, clean under gfxstream |
-| Chromium | 🟡 | 🟡 | 🟡 | 🟡 | Bundled browser/WebView validation |
-| [Destiny Rising](#destiny-rising) | ⚪ | 🟢 | ⚪ | ⚪ | Needs writable DEX, UFFD GC off, and explicit ART null checks |
+| [Chromium](#chromium) | 🟡 | 🟡 | 🟡 | 🟡 | Magenta window title bar under gfxstream |
+| [Destiny Rising](#destiny-rising) | 🟡 | 🟢 | ⚪ | ⚪ | Unlit world and black UI panels under gfxstream; clean under ANGLE |
 | Nintendo apps | 🔴 | 🔴 | 🔴 | 🔴 | Play Integrity / device attestation |
 | No Limit 2 | ⚪ | ⚪ | ⚪ | ⚪ | Needs crash-log retest on each ROM image |
 | [Rebel Racing](#rebel-racing) | ⚪ | ⚪ | ⚪ | ⚪ | Sideloaded base.apk stalls at 0% asset download, never reaches gameplay |
@@ -65,9 +65,9 @@ instead. Re-grade per architecture rather than assuming. Neither path is clean:
 
 ### CarX Drift Racing 3
 
-<a href="images/carx-drift-racing-3-full.jpg"><img src="images/carx-drift-racing-3.jpg" width="120" alt="CarX Drift Racing 3 in-world test drive, rendering correctly"></a>
+<a href="images/carx-drift-racing-3-full.jpg"><img src="images/carx-drift-racing-3.jpg" width="120" alt="CarX Drift Racing 3 in-world under ANGLE, rendering correctly"></a>
 
-*In-world test drive under `gfxstream_guest_angle`.*
+*In-world test drive under ANGLE. Clean under `gfxstream` too.*
 
 Unity/GLES through ANGLE, but renders correctly in gameplay under both modes,
 verified in-world with HUD rather than from the garage menu. Kept here as the
@@ -76,10 +76,12 @@ by itself imply the corruption seen in CarX Highway Racing.
 
 ### CarX Highway Racing
 
-<a href="images/carx-highway-gfxstream-full.jpg"><img src="images/carx-highway-gfxstream.jpg" width="120" alt="CarX Highway Racing in gameplay, textures rendering correctly"></a>
+<a href="images/carx-highway-gfxstream-full.jpg"><img src="images/carx-highway-gfxstream.jpg" width="120" alt="CarX Highway Racing in-race under gfxstream, rendering correctly"></a>
+<a href="images/carx-highway-angle-full.jpg"><img src="images/carx-highway-angle.jpg" width="120" alt="CarX Highway Racing in-race under ANGLE, textures corrupt"></a>
 
-*In-race under `gfxstream`. The billboard and car body are the surfaces that
-corrupt under `gfxstream_guest_angle`.*
+*Left: in-race under `gfxstream`, correct. Right: the same race under
+ANGLE — the billboard is block noise and the road, car body and HUD bar are
+striped.*
 
 Launches and plays on ARM64. Under `gfxstream_guest_angle` its compressed
 textures corrupt in gameplay: roadside billboards become coloured block noise,
@@ -89,11 +91,23 @@ renders correctly under `gfxstream`, so the fault is in the guest ANGLE path
 rather than the host renderer or the ASTC decoder. Its menus and cutscenes
 render correctly in both modes, so grade this one from a race.
 
+### Chromium
+
+<a href="images/chromium-full.jpg"><img src="images/chromium.jpg" width="120" alt="Chromium rendering correctly except for a magenta window title bar"></a>
+
+*Page content, icons and text render correctly under `gfxstream`, but the
+window title bar draws magenta — the same invalid-color-buffer artifact
+described under Graphics paths. Destiny Rising is visible behind it with the
+black UI panels from the same fault.*
+
 ### Destiny Rising
 
-<a href="images/destiny-rising-full.jpg"><img src="images/destiny-rising.jpg" width="120" alt="Destiny Rising in-world at Haven with full HUD"></a>
+<a href="images/destiny-rising-full.jpg"><img src="images/destiny-rising.jpg" width="120" alt="Destiny Rising at Haven under ANGLE, full daylight and HUD"></a>
+<a href="images/destiny-rising-gfxstream-full.jpg"><img src="images/destiny-rising-gfxstream.jpg" width="120" alt="Destiny Rising at Haven under gfxstream, unlit with black UI panels"></a>
 
-*In-world at Haven under `gfxstream_guest_angle`, full HUD intact.*
+*Left: Haven under ANGLE, correct. Right: the same location under
+`gfxstream` — the world is unlit and the minimap, quest and nameplate panels
+draw as black rectangles.*
 
 Needs three ROM behaviours together:
 
@@ -108,6 +122,10 @@ Reaches gameplay and streams its multi-GB asset packs. Not yet graded under
 `gfxstream`: it launches, but no verified gameplay frame was captured.
 
 ### Rebel Racing
+
+<a href="images/rebel-racing-full.jpg"><img src="images/rebel-racing.jpg" width="120" alt="Rebel Racing stalled on its asset download at 0%"></a>
+
+*Stalled on the in-game asset download at 0%, never reaching gameplay.*
 
 Requires fullscreen because it opts out of resizing. Newer builds also need a
 GmsCore release containing the scoped Play Games server-auth callback. Launches
