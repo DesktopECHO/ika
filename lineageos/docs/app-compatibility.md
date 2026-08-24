@@ -71,7 +71,7 @@ instead. Re-grade per architecture rather than assuming. Neither path is clean:
 
 ### CarX Drift Racing 3
 
-<img src="images/carx-drift-racing-3.jpg" width="480" alt="CarX Drift Racing 3 in-world test drive, rendering correctly">
+<a href="images/carx-drift-racing-3-full.jpg"><img src="images/carx-drift-racing-3.jpg" width="480" alt="CarX Drift Racing 3 in-world test drive, rendering correctly"></a>
 
 *In-world test drive under `gfxstream_guest_angle`.*
 
@@ -82,7 +82,7 @@ by itself imply the corruption seen in CarX Highway Racing.
 
 ### CarX Highway Racing
 
-<img src="images/carx-highway-gfxstream.jpg" width="480" alt="CarX Highway Racing in gameplay, textures rendering correctly">
+<a href="images/carx-highway-gfxstream-full.jpg"><img src="images/carx-highway-gfxstream.jpg" width="480" alt="CarX Highway Racing in gameplay, textures rendering correctly"></a>
 
 *In-race under `gfxstream`. The billboard and car body are the surfaces that corrupt under `gfxstream_guest_angle`.*
 
@@ -96,7 +96,7 @@ render correctly in both modes, so grade this one from a race.
 
 ### Destiny Rising
 
-<img src="images/destiny-rising.jpg" width="480" alt="Destiny Rising in-world at Haven with full HUD">
+<a href="images/destiny-rising-full.jpg"><img src="images/destiny-rising.jpg" width="480" alt="Destiny Rising in-world at Haven with full HUD"></a>
 
 *In-world at Haven under `gfxstream_guest_angle`, full HUD intact.*
 
