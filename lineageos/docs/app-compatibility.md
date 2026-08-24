@@ -8,41 +8,51 @@ The desktop ROM intentionally presents a tablet-like, non-telephony feature set
 to package managers. Do not expose `android.hardware.type.pc`; Play treats that
 as a desktop/PC device and filters some phone/tablet apps before installation.
 
-## Status values
+## Status
 
-| Value | Meaning |
+| Dot | Meaning |
 | --- | --- |
-| `works` | Works in release images. |
-| `notes` | Usable, but has a known quirk or dependency. |
-| `gfx-corrupt` | Runs and is playable, but renders incorrectly under this mode. |
-| `fail` | Does not run. |
-| `unknown` | Not yet tested on this release train. |
+| 🟢 | Works. |
+| 🟡 | Works with conditions — a known quirk, or it runs but renders incorrectly. See the Detail column. |
+| 🔴 | Does not run. |
+| ⚪ | Not yet tested on this release train. |
 
 The two rightmost columns are the result under each `gpu_mode`
 (`ika start --gpu_mode=...`). They differ, so record which mode a result came
-from. Grade graphics from **actual gameplay**: menus and cutscenes frequently
-render correctly while the same title is corrupt in-world. An app with no
-mode-specific testing carries the same value in both columns.
+from, and which architecture. Grade graphics from **actual gameplay**: menus and
+cutscenes frequently render correctly while the same title is corrupt in-world.
+An app with no mode-specific testing carries the same value in both columns.
 
 ## Matrix
 
-| App | ARM64 | x86-64 | `gfxstream` | `gfxstream_guest_angle` | Detail |
-| --- | --- | --- | --- | --- | --- |
-| Chromium | native | native | `notes` | `notes` | Bundled browser/WebView validation |
-| Angry Birds 2 | native | translated | `unknown` | `unknown` | Validate Play Services, GPU, ABI selection |
-| Asphalt 8 | native | translated | `fail` | `fail` | May reject non-certified devices or fail GPU checks |
-| CarX Drift Racing 3 | native | `unknown` | `works` | `works` | [details](#carx-drift-racing-3) |
-| CarX Highway Racing | native | `unknown` | `works` | `gfx-corrupt` | [details](#carx-highway-racing) |
-| Destiny Rising | native | `unknown` | `unknown` | `works` | [details](#destiny-rising) |
-| Nintendo apps | native | translated | `fail` | `fail` | Play Integrity / device attestation |
-| No Limit 2 | native | translated | `unknown` | `unknown` | Needs crash-log retest on each ROM image |
-| Rebel Racing | native | translated | `unknown` | `unknown` | [details](#rebel-racing) |
-| Vulkan Caps Viewer 4.11 | native | translated | `fail` | `fail` | [details](#vulkan-caps-viewer-411) |
+| App | Target | `gfxstream` | `gfxstream_guest_angle` | Detail |
+| --- | --- | --- | --- | --- |
+| Angry Birds 2 | both | ⚪ | ⚪ | Validate Play Services, GPU, ABI selection |
+| Asphalt 8 | both | 🔴 | 🔴 | Device certification, not graphics-path specific |
+| Chromium | both | 🟡 | 🟡 | Bundled browser/WebView validation |
+| CarX Drift Racing 3 | ARM64 | 🟢 | 🟢 | [details](#carx-drift-racing-3) |
+| CarX Drift Racing 3 | x86-64 (translated) | ⚪ | ⚪ | Not tested under translation |
+| CarX Highway Racing | ARM64 | 🟢 | 🟡 | Textures corrupt in gameplay under ANGLE — [details](#carx-highway-racing) |
+| CarX Highway Racing | x86-64 (translated) | ⚪ | ⚪ | Not tested under translation |
+| Destiny Rising | ARM64 | ⚪ | 🟢 | [details](#destiny-rising) |
+| Destiny Rising | x86-64 (translated) | ⚪ | ⚪ | Not tested under translation |
+| Nintendo apps | both | 🔴 | 🔴 | Play Integrity / device attestation |
+| No Limit 2 | both | ⚪ | ⚪ | Needs crash-log retest on each ROM image |
+| Rebel Racing | both | ⚪ | ⚪ | [details](#rebel-racing) |
+| Vulkan Caps Viewer 4.11 | ARM64 | ⚪ | ⚪ | Native build; the Qt fault is translation-only |
+| Vulkan Caps Viewer 4.11 | x86-64 (translated) | 🔴 | 🔴 | [details](#vulkan-caps-viewer-411) |
+
+`Target` is the ROM the result was observed on. Use `both` only when the result
+is architecture-independent — anything graphics-related is not, so split the row
+and grade each architecture separately.
 
 ## Graphics paths
 
 Guest ANGLE translates GLES to Vulkan; `gfxstream` uses the direct GLES path
-instead. Neither is clean:
+instead. Both run against the *host* Vulkan driver, so a result does not carry
+across architectures: the ARM64 results below were taken on Apple Silicon
+(Honeykrisp), while an x86-64 host runs RADV, ANV or a proprietary driver
+instead. Re-grade per architecture rather than assuming. Neither path is clean:
 
 - **Guest ANGLE corrupts compressed textures for some titles.** They decode as
   block noise or vertical stripes while geometry, lighting, text and vector UI
