@@ -31,7 +31,7 @@ correctly while the same title is corrupt in-world.
 | App | ARM gfx | ARM agl | X86 gfx | X86 agl | Detail |
 | --- | :---: | :---: | :---: | :---: | --- |
 | [Angry Birds 2](#angry-birds-2) | ⚪ | 🟢 | ⚪ | ⚪ | Verified in a live level under ANGLE |
-| [Asphalt 8](#asphalt-8) | ⚪ | ⚪ | 🟡 | ⚪ | X86 gfx: HUD live, 3D world black. ARM agl: no corruption seen anywhere, but no confirmed live-race frame yet |
+| [Asphalt 8](#asphalt-8) | ⚪ | 🟢 | 🟡 | ⚪ | X86 gfx: HUD live, 3D world black. ARM agl: confirmed clean mid-race |
 | [CarX Drift Racing 3](#carx-drift-racing-3) | 🟢 | 🟢 | 🟢 | ⚪ | Clean in gameplay on every path graded so far; the Unity/ANGLE counterexample |
 | [CarX Highway Racing](#carx-highway-racing) | 🟢 | 🟡 | 🟢 | ⚪ | ARM ANGLE corrupts textures in gameplay; clean on X86 gfx (RADV) translated |
 | [Chromium](#chromium) | 🟡 | 🟡 | 🟡 | 🟡 | Magenta window title bar under gfxstream |
@@ -203,6 +203,11 @@ and graded, so they stay ungraded rather than assumed.
 
 <a href="images/asphalt-8-rewards-full.jpg"><img src="images/asphalt-8-rewards.jpg" width="120" alt="Asphalt 8 post-race rewards screen under ANGLE on ARM64"></a> <a href="images/asphalt-8-garage-full.jpg"><img src="images/asphalt-8-garage.jpg" width="120" alt="Asphalt 8 garage with detailed car and character models under ANGLE on ARM64"></a>
 
+<a href="images/asphalt-8-race-arm-angle-full.jpg"><img src="images/asphalt-8-race-arm-angle.jpg" width="120" alt="Asphalt 8 mid-race on ARM64 under ANGLE at 208 km/h, fully clean"></a>
+
+*The confirmed live-race frame: ARM64 under ANGLE, 208 km/h, 2nd/6 position,
+Alps track. No corruption anywhere in the scene.*
+
 *ARM64 under ANGLE: post-race rewards screen, and the garage with full-detail car
 and character models. No corruption in either, alongside everything else listed below.*
 
@@ -224,27 +229,20 @@ under `gfxstream` on ARM64. Worth checking whether `gfxstream_guest_angle`
 clears it here the same way it does there before concluding this is
 `gfxstream`-wide rather than title-specific.
 
-**ARM64, `gfxstream_guest_angle`:** checked the question above directly. Installs
-and launches without the device-certification rejection the original all-red
-grading assumed. Verified clean, with zero corruption of any kind, across the
-title screen, the age-gate and account-sync dialogs, a loading screen, a
-post-race rewards screen, the garage with full-detail 3D car and character
-models, and a lengthy pre-race cinematic reveal (also full-detail geometry,
-lighting and reflections). That is a wide enough spread of GPU-heavy content
-that a texture or color-buffer fault would very likely have shown up in at
-least one of them, the way it does immediately for CarX Highway Racing.
+**ARM64, `gfxstream_guest_angle`: confirmed.** A clean boot (no conflicting
+cloud save this time) reached a live race directly. Mid-race capture at 208
+km/h, 2nd/6 position, full HUD -- mountains, snow, trees, rock formations, the
+guardrail, and the competing car all render correctly with no corruption of
+any kind. Combined with the clean title screen, dialogs, loading screen,
+rewards screen, garage, and pre-race cinematic already observed, this answers
+the open question directly: `gfxstream_guest_angle` clears the black-3D-world
+fault seen under `gfxstream` on x86-64, the same way it does for Destiny
+Rising.
 
-Left as `⚪` rather than graded, on purpose. Per the gameplay-grading rule
-above, a driving game needs a confirmed frame with the accelerate held and the
-speedometer reading non-zero — the same bar this doc exists to enforce after
-the original all-red grading skipped it. That frame was not obtained: a
-save-conflict dialog (an existing cloud profile from an earlier test session)
-interrupted repeated attempts to reach a fresh race, and the run that did get
-past it stalled in what looked like a pre-race staging loop rather than
-starting. So this is strong circumstantial evidence that ANGLE clears the
-black-3D-world fault the way it does for Destiny Rising, not a confirmed
-answer — the next attempt should pick up from a clean boot without a
-conflicting cloud save and go straight for the swipe-hold capture.
+One purchase dialog appeared mid-flow (a discounted one-time currency/token
+bundle) and was dismissed with the Android back button rather than tapping
+anywhere near it, since it was a real-money-shaped offer and not something to
+risk triggering by accident.
 
 ## Release smoke set
 
