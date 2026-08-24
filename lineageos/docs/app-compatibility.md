@@ -33,7 +33,7 @@ correctly while the same title is corrupt in-world.
 | [Angry Birds 2](#angry-birds-2) | ⚪ | 🟢 | ⚪ | ⚪ | ARM agl verified in a live level; X86 gfx not gradable, no level entry point found |
 | [Asphalt 8](#asphalt-8) | ⚪ | 🟢 | 🟡 | ⚪ | X86 gfx: HUD live, 3D world black. ARM agl: confirmed clean mid-race |
 | [CarX Drift Racing 3](#carx-drift-racing-3) | 🟢 | 🟢 | 🟢 | ⚪ | Clean in gameplay on every path graded so far; the Unity/ANGLE counterexample |
-| [CarX Highway Racing](#carx-highway-racing) | 🟢 | 🟡 | 🟢 | ⚪ | ARM ANGLE corrupts textures in gameplay; clean on X86 gfx (RADV) translated |
+| [CarX Highway Racing](#carx-highway-racing) | 🟢 | 🟡 | 🟢 | 🟢 | ANGLE corruption is Honeykrisp-specific: clean on X86 (RADV) under both paths |
 | [Chromium](#chromium) | 🟡 | 🟡 | 🟡 | 🟡 | Magenta window title bar under gfxstream |
 | [Destiny Rising](#destiny-rising) | 🟡 | 🟢 | 🟢 | ⚪ | ARM gfx draws an unlit world and black UI panels; X86 gfx is clean, so that fault is not gfxstream-wide |
 | [Google Play](#google-play) | ⚪ | ⚪ | 🟢 | ⚪ | The install path for every other row; verify it is signed in before grading anything |
@@ -48,12 +48,19 @@ across architectures: the ARM64 results below were taken on Apple Silicon
 (Honeykrisp), while an x86-64 host runs RADV, ANV or a proprietary driver
 instead. Re-grade per architecture rather than assuming. Neither path is clean:
 
-- **Guest ANGLE corrupts compressed textures for some titles.** They decode as
-  block noise or vertical stripes while geometry, lighting, text and vector UI
-  stay correct. This is per-title, not a property of the path — CarX Highway
-  Racing is corrupt in gameplay while CarX Drift Racing 3, also Unity on ANGLE,
-  is clean. The trigger is more likely a specific texture format or footprint.
-  Apps using Vulkan directly are unaffected.
+- **Guest ANGLE corrupts compressed textures on Honeykrisp, not on RADV.**
+  CarX Highway Racing decodes billboards, car body panels, interior and HUD bar
+  as block noise or vertical stripes under `gfxstream_guest_angle` on Apple
+  Silicon (Honeykrisp), with geometry, lighting, text and vector UI staying
+  correct. The same build of the same title is clean under the same graphics
+  path on x86-64 (RADV), graded in-race at both 54 and 47 MPH. That rules out
+  the path itself, the game, and ASTC emulation (already isolated separately,
+  see the per-app detail below) as the cause, and narrows it to something in
+  ANGLE's interaction with the Honeykrisp Vulkan driver specifically. CarX
+  Drift Racing 3, also Unity on ANGLE, stays clean on both hosts, so whatever
+  the trigger is, it depends on the specific texture format or footprint a
+  title uses, not on the engine or the path alone. Apps using Vulkan directly
+  are unaffected on either host.
 - **`gfxstream` loses color buffers.** Across app relaunch cycles the renderer
   logs `Failed to find ColorBuffer: <id>` and `TextureDraw: GL error=0x502`,
   after which `adb screencap` returns whole-screen magenta, pure black, or
@@ -117,11 +124,13 @@ the first grading run.
 <a href="images/carx-highway-gfxstream-full.jpg"><img src="images/carx-highway-gfxstream.jpg" width="120" alt="CarX Highway Racing in-race under gfxstream on ARM64, rendering correctly"></a>
 <a href="images/carx-highway-angle-full.jpg"><img src="images/carx-highway-angle.jpg" width="120" alt="CarX Highway Racing in-race under ANGLE on ARM64, textures corrupt"></a>
 <a href="images/carx-highway-x86-gfxstream-full.jpg"><img src="images/carx-highway-x86-gfxstream.jpg" width="120" alt="CarX Highway Racing in-race under gfxstream on x86-64, rendering correctly"></a>
+<a href="images/carx-highway-x86-angle-full.jpg"><img src="images/carx-highway-x86-angle.jpg" width="120" alt="CarX Highway Racing in-race under ANGLE on x86-64, rendering correctly"></a>
 
-*Left: ARM64 in-race under `gfxstream`, correct. Middle: the same race under
-ANGLE — the billboard is block noise and the road, car body and HUD bar are
-striped. Right: x86-64 under `gfxstream`, correct — 61% race distance, 51 MPH,
-billboards intact.*
+*Left to right: ARM64 `gfxstream`, correct. ARM64 ANGLE — the billboard is
+block noise and the road, car body and HUD bar are striped. x86-64 `gfxstream`,
+correct at 61% race distance and 51 MPH, billboards intact. x86-64 ANGLE,
+correct at 54 MPH — the same title, the same graphics path, and the same
+corrupt-on-ARM64 build, clean on RADV.*
 
 Launches and plays on ARM64. Under `gfxstream_guest_angle` its compressed
 textures corrupt in gameplay: roadside billboards become coloured block noise,
@@ -130,6 +139,13 @@ stripes. Geometry, lighting, text and vector UI stay correct. The same build
 renders correctly under `gfxstream`, so the fault is in the guest ANGLE path
 rather than the host renderer or the ASTC decoder. Its menus and cutscenes
 render correctly in both modes, so grade this one from a race.
+
+The same title is clean under ANGLE on x86-64 (RADV), graded in-race at 54 MPH
+with sparks, nitro prompt and a second frame at 47 MPH — same build, same
+graphics path, different host driver. That means the ANGLE corruption is not a
+property of the guest translation path in general; it is specific to how
+ANGLE's compressed-texture handling interacts with the Honeykrisp Vulkan
+driver on this title's texture set.
 
 On x86-64 the game installs and runs translated through native bridge
 (`primaryCpuAbi=arm64-v8a` on an `x86_64,arm64-v8a` device) and renders
