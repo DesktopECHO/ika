@@ -19,7 +19,7 @@ as a desktop/PC device and filters some phone/tablet apps before installation.
 
 One row per app. The four dot columns are architecture × graphics path:
 
-- **A64** — ARM64 ROM  ·  **x86** — x86-64 ROM (ARM-only apps run translated)
+- **ARM** — ARM64 ROM  ·  **X86** — x86-64 ROM (ARM-only apps run translated)
 - **gfx** — `--gpu_mode=gfxstream`  ·  **agl** — `--gpu_mode=gfxstream_guest_angle` (the default)
 
 Results do not carry across either axis, so grade each cell separately. Grade
@@ -28,7 +28,7 @@ correctly while the same title is corrupt in-world.
 
 ## Matrix
 
-| App | A64 gfx | A64 agl | x86 gfx | x86 agl | Detail |
+| App | ARM gfx | ARM agl | X86 gfx | X86 agl | Detail |
 | --- | :---: | :---: | :---: | :---: | --- |
 | Angry Birds 2 | ⚪ | ⚪ | ⚪ | ⚪ | Validate Play Services, GPU, ABI selection |
 | Asphalt 8 | 🔴 | 🔴 | 🔴 | 🔴 | Device certification, not graphics-path specific |
