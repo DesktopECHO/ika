@@ -36,6 +36,7 @@ correctly while the same title is corrupt in-world.
 | [CarX Highway Racing](#carx-highway-racing) | 🟢 | 🟡 | 🟢 | ⚪ | ARM ANGLE corrupts textures in gameplay; clean on X86 gfx (RADV) translated |
 | [Chromium](#chromium) | 🟡 | 🟡 | 🟡 | 🟡 | Magenta window title bar under gfxstream |
 | [Destiny Rising](#destiny-rising) | 🟡 | 🟢 | ⚪ | ⚪ | Unlit world and black UI panels under gfxstream; clean under ANGLE |
+| [Google Play](#google-play) | ⚪ | ⚪ | 🟢 | ⚪ | The install path for every other row; verify it is signed in before grading anything |
 | Nintendo apps | 🔴 | 🔴 | 🔴 | 🔴 | Play Integrity / device attestation |
 | No Limit 2 | ⚪ | ⚪ | ⚪ | ⚪ | Needs crash-log retest on each ROM image |
 
@@ -136,6 +137,34 @@ Needs three ROM behaviours together:
 Uses Vulkan directly, so it is unaffected by the ANGLE compressed-texture issue.
 Reaches gameplay and streams its multi-GB asset packs. Not yet graded under
 `gfxstream`: it launches, but no verified gameplay frame was captured.
+
+### Google Play
+
+<a href="images/google-play-x86-gfxstream-full.jpg"><img src="images/google-play-x86-gfxstream.jpg" width="120" alt="Google Play storefront rendering correctly on x86-64 under gfxstream"></a>
+
+*Storefront on x86-64 under `gfxstream`, signed in. Promo art, app cards and
+the window title bar all render correctly — note the contrast with Chromium,
+whose title bar draws magenta in this same mode.*
+
+This build ships MindTheGapps, so Play is the install path for the rest of the
+matrix rather than F-Droid, Aurora Store or microG. It is worth tracking as its
+own row because a Play problem invalidates every grade taken after it.
+
+Two behaviours to plan around when grading other apps:
+
+- **Play replaces a sideloaded copy with its own build on first launch.** CarX
+  Highway Racing was sideloaded from a saved APK set, and Play pulled a 535 MB
+  replacement before the game would start. Let that finish, then re-check
+  `primaryCpuAbi`, since the replacement decides whether the app runs native or
+  translated.
+- **Sign-in state is fragile across a factory reset.** `ika reset` clears it
+  along with everything else, and re-signing in can take the VM through a
+  reboot that silently uninstalls anything sideloaded beforehand. Install games
+  *after* Play is signed in, not before.
+
+Only the x86-64 `gfxstream` cell is graded here, from a signed-in storefront on
+RADV. The ARM cells are used routinely for installs but have not been captured
+and graded, so they stay ungraded rather than assumed.
 
 ## Release smoke set
 
