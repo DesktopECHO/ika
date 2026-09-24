@@ -1,3 +1,11 @@
+ika-base (260924-1) unstable; urgency=medium
+
+  * Upgrade other installed Mesa packages (VA-API, VDPAU, i386) with the
+    backports/Kisak Mesa stack so apt no longer removes them.
+  * Stop the Mesa version check from failing intermittently under pipefail.
+
+ -- DesktopECHO <build@desktopecho.com>  Thu, 24 Sep 2026 00:00:00 +0000
+
 ika-base (260819-1) unstable; urgency=medium
 
   * Update Ika host package metadata to 260819-1.

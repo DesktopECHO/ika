@@ -109,22 +109,6 @@ index 9a1933b6..7a40da34 100644
  }
  
  ABSL_NAMESPACE_END
-diff --git a/external/mesa3d/src/gallium/auxiliary/driver_trace/tr_dump.c b/external/mesa3d/src/gallium/auxiliary/driver_trace/tr_dump.c
-index 45d1920eaef..395d3ddd683 100644
---- a/external/mesa3d/src/gallium/auxiliary/driver_trace/tr_dump.c
-+++ b/external/mesa3d/src/gallium/auxiliary/driver_trace/tr_dump.c
-@@ -479,7 +479,10 @@ void trace_dump_float(double value)
- void trace_dump_bytes(const void *data,
-                       size_t size)
- {
--   static const char hex_table[16] = "0123456789ABCDEF";
-+   static const char hex_table[16] = {
-+      '0', '1', '2', '3', '4', '5', '6', '7',
-+      '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
-+   };
-    const uint8_t *p = data;
-    size_t i;
- 
 diff --git a/external/curl/lib/request.c b/external/curl/lib/request.c
 index 0d9b23ef0c..969bdcd135 100644
 --- a/external/curl/lib/request.c

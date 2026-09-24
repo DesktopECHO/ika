@@ -191,6 +191,14 @@ project_has_local_work() {
 safe_reset_project() {
   local project_dir="$1"
   local label="$2"
+  local project_real
+
+  # Reset each checkout once per run, not once per patch.
+  declare -gA reset_for_sync_project_dirs
+  project_real="$(cd "$project_dir" && pwd -P)"
+  [[ -z "${reset_for_sync_project_dirs[$project_real]:-}" ]] || return 0
+  reset_for_sync_project_dirs[$project_real]=1
+
   if project_has_local_work "$project_dir"; then
     if [[ "${RESET_PATCHED_PROJECTS_FORCE:-0}" == "1" ]]; then
       log "warning: $label has local work; resetting anyway because RESET_PATCHED_PROJECTS_FORCE=1"
@@ -241,15 +249,13 @@ project_dir_for_source_root_patch_path() {
 reset_projects_touched_by_source_root_patch() {
   local patch_file="$1"
   local path project_dir label
-  declare -A seen_project_dirs=()
 
   [[ -f "$patch_file" ]] || return 0
 
   while IFS= read -r path; do
     [[ -n "$path" ]] || continue
     project_dir="$(project_dir_for_source_root_patch_path "$path" || true)"
-    [[ -n "$project_dir" && -z "${seen_project_dirs[$project_dir]:-}" ]] || continue
-    seen_project_dirs[$project_dir]=1
+    [[ -n "$project_dir" ]] || continue
     label="${project_dir#$workspace/}"
     safe_reset_project "$project_dir" "$label"
   done < <(source_root_patch_paths "$patch_file")
@@ -1298,6 +1304,96 @@ apply_mindthegapps_x86_64_compat_patch() {
   git -C "$gapps" apply --whitespace=nowarn "$patch"
 }
 
+is_git_lfs_pointer() {
+  [[ -f "$1" ]] && head -c 42 "$1" | LC_ALL=C grep -qxF "version https://git-lfs.github.com/spec/v1"
+}
+
+# Download Git LFS objects for pointer files through the LFS batch API.
+fetch_git_lfs_objects() {
+  python3 - "$@" <<'PY'
+import hashlib, json, os, sys, urllib.request
+
+paths = sys.argv[1:]
+headers = {
+    "Accept": "application/vnd.git-lfs+json",
+    "Content-Type": "application/vnd.git-lfs+json",
+    "User-Agent": "ika-build",
+}
+objects = {}
+for path in paths:
+    fields = dict(line.split(" ", 1) for line in open(path).read().splitlines() if " " in line)
+    oid = fields["oid"].removeprefix("sha256:")
+    objects.setdefault(oid, {"size": int(fields["size"]), "paths": []})["paths"].append(path)
+
+request = urllib.request.Request(
+    "https://github.com/DesktopECHO/ika.git/info/lfs/objects/batch",
+    data=json.dumps({
+        "operation": "download",
+        "transfers": ["basic"],
+        "objects": [{"oid": oid, "size": o["size"]} for oid, o in objects.items()],
+    }).encode(),
+    headers=headers,
+)
+with urllib.request.urlopen(request, timeout=60) as response:
+    batch = json.load(response)
+
+for entry in batch.get("objects", []):
+    oid = entry["oid"]
+    if "error" in entry:
+        sys.exit(f"LFS object {oid}: {entry['error'].get('message', entry['error'])}")
+    action = entry["actions"]["download"]
+    obj = objects[oid]
+    first = obj["paths"][0]
+    tmp = f"{first}.lfs-download"
+    digest = hashlib.sha256()
+    size = 0
+    download = urllib.request.Request(action["href"], headers=action.get("header", {}))
+    with urllib.request.urlopen(download, timeout=300) as response, open(tmp, "wb") as out:
+        while chunk := response.read(1 << 20):
+            digest.update(chunk)
+            size += len(chunk)
+            out.write(chunk)
+    if digest.hexdigest() != oid or size != obj["size"]:
+        os.unlink(tmp)
+        sys.exit(f"LFS object {oid} failed verification")
+    for path in obj["paths"][1:]:
+        with open(tmp, "rb") as src, open(path, "wb") as dst:
+            dst.write(src.read())
+    os.replace(tmp, first)
+PY
+}
+
+# Replace Git LFS pointer files (from a source-zip download or a clone made
+# without git-lfs) with their real content.
+ensure_git_lfs_files() {
+  local dir="$1"
+  local file top rel
+  local -a pointers=()
+
+  for file in "$dir"/*; do
+    is_git_lfs_pointer "$file" && pointers+=("$file")
+  done
+  (( ${#pointers[@]} > 0 )) || return 0
+
+  log "fetching ${#pointers[@]} Git LFS file(s) missing from ${dir#$ika_root/}"
+  top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -n "$top" ]] && git lfs version >/dev/null 2>&1; then
+    rel="$(realpath --relative-to="$top" "$dir")"
+    git -C "$top" lfs install --local >/dev/null
+    git_network_retry "git lfs pull ${rel}" \
+      run_anonymous_git_network git -C "$top" lfs pull --include="$rel/*" --exclude="" || true
+    pointers=()
+    for file in "$dir"/*; do
+      is_git_lfs_pointer "$file" && pointers+=("$file")
+    done
+    (( ${#pointers[@]} > 0 )) || return 0
+  fi
+
+  git_network_retry "Git LFS download from GitHub" \
+    fetch_git_lfs_objects "${pointers[@]}" || \
+    die "could not download Git LFS files for ${dir#$ika_root/}; clone ika with git-lfs installed and run 'git lfs pull'"
+}
+
 # Android 16 GSF delegates its providers to modern GMS. The old x86-64 GMS
 # cannot bootstrap through Play because its update conflicts with legacy GSF,
 # so install the complete matching package set before the image is assembled.
@@ -1312,6 +1408,7 @@ install_mindthegapps_x86_64_modern_gms() {
 
   [[ -f "$source/SHA256SUMS" ]] || \
     die "missing x86-64 Google Play services checksum manifest: $source/SHA256SUMS"
+  ensure_git_lfs_files "$source"
   if ! (cd "$source" && sha256sum --check --strict SHA256SUMS >/dev/null); then
     die "x86-64 Google Play services prebuilts are missing or corrupt: $source"
   fi
@@ -1363,7 +1460,8 @@ sync_mindthegapps_lfs_prebuilts() {
 
   log "fetching MindTheGapps prebuilts for $*"
   git -C "$gapps" lfs install --local >/dev/null
-  run_anonymous_git_network git -C "$gapps" lfs pull \
+  git_network_retry "MindTheGapps Git LFS pull" \
+    run_anonymous_git_network git -C "$gapps" lfs pull \
     --include="$include" --exclude=""
   apply_mindthegapps_x86_64_compat_patch "$gapps" "$@"
   install_mindthegapps_x86_64_modern_gms "$gapps" "$@"
