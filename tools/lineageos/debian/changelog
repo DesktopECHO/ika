@@ -1,3 +1,16 @@
+ika-lineageos (260924-1) unstable; urgency=medium
+
+  * Fetch the x86-64 Google Play services APKs from Git LFS when the checkout only
+    has pointer files (source ZIP or clone without git-lfs) (issue #10).
+  * Retry the MindTheGapps Git LFS pull on transient errors such as HTTP 429.
+  * Refresh the vendor/lineage kernel.mk patch for the upstream Bazel output change.
+  * Disable the native bridge for lunch while building lpunpack, so product config
+    no longer warns that the payload is missing.
+  * Remove the Mesa trace fix duplicated between clang22.patch and
+    external-mesa3d.patch, and reset each patched project once before sync.
+
+ -- DesktopECHO <build@desktopecho.com>  Thu, 24 Sep 2026 00:00:00 +0000
+
 ika-lineageos (260822-1) unstable; urgency=medium
 
   * Update Ika LineageOS package metadata to 260822-1.

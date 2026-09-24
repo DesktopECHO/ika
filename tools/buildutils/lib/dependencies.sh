@@ -475,12 +475,13 @@ function deb_mesa_candidate_version() {
   local pkg="$1"
   local target_release="${2:-}"
 
+  # Don't exit awk early: SIGPIPE to apt-cache fails under pipefail.
   if [[ -n "${target_release}" ]]; then
     apt-cache show "${pkg}/${target_release}" 2>/dev/null | \
-      awk '$1 == "Version:" { print $2; exit }'
+      awk '$1 == "Version:" && !found { print $2; found = 1 }'
   else
     apt-cache policy "${pkg}" 2>/dev/null | \
-      awk '$1 == "Candidate:" { print $2; exit }'
+      awk '$1 == "Candidate:" && !found { print $2; found = 1 }'
   fi
 }
 
@@ -501,6 +502,34 @@ function deb_mesa_candidates_at_min_version() {
   done < <(deb_mesa_version_packages)
 
   return 0
+}
+
+# Installed Mesa packages the target repo can upgrade too; otherwise apt
+# removes them (e.g. mesa-va-drivers) to satisfy the version lock.
+function deb_installed_mesa_companion_packages() {
+  local target_release="${1:-}"
+  local native_arch status pkg source name arch version
+  local -A required=()
+
+  native_arch="$(dpkg --print-architecture)"
+  while read -r pkg; do
+    [[ -n "${pkg}" ]] && required["${pkg}"]=1
+  done < <(deb_mesa_version_packages)
+
+  while IFS='|' read -r status pkg source; do
+    [[ "${status}" == ii* && "${source}" == "mesa" ]] || continue
+    name="${pkg%%:*}"
+    arch="${pkg#*:}"
+    [[ "${arch}" == "${pkg}" ]] && arch="${native_arch}"
+    if [[ "${arch}" == "${native_arch}" ]]; then
+      [[ -z "${required[${name}]:-}" ]] || continue
+      pkg="${name}"
+    fi
+    version="$(deb_mesa_candidate_version "${pkg}" "${target_release}" || true)"
+    [[ -n "${version}" && "${version}" != "(none)" ]] || continue
+    dpkg --compare-versions "${version}" ge "${DEBIAN_MESA_MIN_VERSION}" || continue
+    printf '%s\n' "${pkg}"
+  done < <(dpkg-query -W -f='${db:Status-Abbrev}|${binary:Package}|${source:Package}\n' 2>/dev/null)
 }
 
 function debian_mesa_stack_at_min_version() {
@@ -531,7 +560,7 @@ function install_debian_mesa_from_backports() {
   while read -r pkg; do
     [[ -n "${pkg}" ]] || continue
     packages+=("${pkg}/${DEBIAN_MESA_BACKPORTS_SUITE}")
-  done < <(deb_mesa_version_packages)
+  done < <(deb_mesa_version_packages; deb_installed_mesa_companion_packages "${DEBIAN_MESA_BACKPORTS_SUITE}")
   echo "Installing Mesa ${DEBIAN_MESA_MIN_VERSION}+ from ${DEBIAN_MESA_BACKPORTS_SUITE}..."
   run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
 }
@@ -549,7 +578,7 @@ function install_ubuntu_mesa_from_kisak() {
     return 1
   fi
 
-  mapfile -t packages < <(deb_mesa_version_packages)
+  mapfile -t packages < <(deb_mesa_version_packages; deb_installed_mesa_companion_packages)
   echo "Installing Mesa ${DEBIAN_MESA_MIN_VERSION}+ from ${UBUNTU_KISAK_MESA_PPA}..."
   run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
 }

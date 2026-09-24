@@ -26,10 +26,11 @@ index 54a6f1bb..5f53291a 100644
 diff --git a/build/tasks/kernel.mk b/build/tasks/kernel.mk
 --- a/build/tasks/kernel.mk
 +++ b/build/tasks/kernel.mk
-@@ -763,6 +763,6 @@ $(TARGET_PREBUILT_INT_KERNEL): $(DEPMOD) $(KERNEL_MODULES_PARTITION_FILE_LIST) $
+@@ -770,7 +770,7 @@ endif
  $(TARGET_PREBUILT_INT_KERNEL): $(DEPMOD) $(KERNEL_MODULES_PARTITION_FILE_LIST) $(SYSTEM_KERNEL_MODULES_PARTITION_FILE_LIST)
  	@echo "Building $(BOARD_KERNEL_IMAGE_NAME)"
- 	@mkdir -p $(KERNEL_OUT)
+ 	$(hide) rm -rf $(KERNEL_OUT)
+ 	@mkdir -p $(KERNEL_OUT) $(KERNEL_BAZEL_OUT)
  	$(hide) cd $(KERNEL_PATH) && \
 -		python3 $(BUILD_TOP)/.repo/repo/repo manifest -o - -r \
 +		/usr/bin/python3 $(BUILD_TOP)/.repo/repo/repo manifest -o - -r \

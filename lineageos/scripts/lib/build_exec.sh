@@ -281,8 +281,10 @@ build_host_lpunpack() {
   local lpunpack_bin="$workspace/out/host/linux-x86/bin/lpunpack"
   [[ -x "$lpunpack_bin" ]] && return 0
   log "lpunpack not found; building from LineageOS tree..."
-  (cd "$workspace" && run_build_native "$(target_product x86_64)" \
-    LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE=false lpunpack)
+  # Built before the bridge payload exists; export so lunch also sees it off.
+  (cd "$workspace" &&
+    export LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE=false &&
+    run_build_native "$(target_product x86_64)" lpunpack)
   [[ -x "$lpunpack_bin" ]] || die "lpunpack build succeeded but binary not found at $lpunpack_bin"
   log "lpunpack built: $lpunpack_bin"
 }

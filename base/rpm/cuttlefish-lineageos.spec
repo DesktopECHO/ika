@@ -1,5 +1,5 @@
 Name:           ika-lineageos
-Version:        260822
+Version:        260924
 Release:        1%{?dist}
 Summary:        LineageOS for Cuttlefish host
 License:        Apache-2.0
@@ -86,6 +86,16 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Thu Sep 24 2026 DesktopECHO <build@desktopecho.com> - 260924-1
+- Fetch the x86-64 Google Play services APKs from Git LFS when the checkout only
+  has pointer files (source ZIP or clone without git-lfs) (issue #10).
+- Retry the MindTheGapps Git LFS pull on transient errors such as HTTP 429.
+- Refresh the vendor/lineage kernel.mk patch for the upstream Bazel output change.
+- Disable the native bridge for lunch while building lpunpack, so product config
+  no longer warns that the payload is missing.
+- Remove the Mesa trace fix duplicated between clang22.patch and
+  external-mesa3d.patch, and reset each patched project once before sync.
+
 * Sat Aug 22 2026 DesktopECHO <build@desktopecho.com> - 260822-1
 - Update Ika LineageOS package metadata to 260822-1.
 
