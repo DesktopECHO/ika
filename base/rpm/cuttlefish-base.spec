@@ -72,6 +72,7 @@ Requires:       iproute
 Requires:       libX11
 Requires:       libXext
 Requires:       lz4
+Requires:       lsof
 Requires:       mesa-libgbm >= 26.1
 Requires:       mesa-libGL >= 26.1
 Requires:       glx-utils
