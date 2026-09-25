@@ -145,7 +145,7 @@ package_ika-base() {
   # Arch's Mesa packages use epoch 1; preserve it so 1:25.x cannot satisfy
   # the Mesa 26.1 runtime floor.
   depends=(curl dnsmasq ffmpeg iproute2 libarchive libcap libdrm libusb libx11
-           libxext lz4 'mesa>=1:26.1' mesa-utils
+           libxext lsof lz4 'mesa>=1:26.1' mesa-utils
            net-tools networkmanager nftables openssl python python-requests
            pipewire procps-ng sdl3 shadow systemd virglrenderer vulkan-icd-loader
            vulkan-swrast vulkan-tools wayland-utils xdg-utils xz)

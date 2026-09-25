@@ -1602,11 +1602,16 @@ append_cuttlefish_audio_args() {
   fi
 }
 
+host_timezone() {
+  command -v timedatectl >/dev/null 2>&1 || return 0
+  timedatectl show --property=Timezone --value 2>/dev/null || true
+}
+
 append_host_timezone_arg() {
   local -n args_array="$1"
   local tz
 
-  tz="$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')"
+  tz="$(host_timezone)"
   [[ -n "${tz}" ]] || return 0
 
   args_array+=("--extra_bootconfig_args=androidboot.timezone=\"${tz}\" androidboot.cuttlefish_service_bluetooth_checker=false")
