@@ -15,6 +15,13 @@ on [Fedora Asahi Remix](https://asahilinux.org/). It later evolved into a deskto
 - **Flexible build options** for **MindTheGapps**, **microG**, or a fully
   de-Googled ROM without an app store.
 
+The Apple Silicon Vulkan memory-sharing path, including its 16 KiB-page and
+udmabuf handling, is documented in [GFXSTREAM-VULKAN.md](GFXSTREAM-VULKAN.md).
+The implementation patch inventory is maintained in
+[lineageos/patches/README.md](lineageos/patches/README.md); known graphics-path
+limitations are recorded in that Vulkan document rather than presented as
+completed compatibility fixes.
+
 ## Ika Binaries (Updated 2026-07-26)
 
 Ika consists of two packages: An Android disk image (informally, the device ROM)
@@ -257,7 +264,7 @@ fallback for isolating host GPU issues.
 `video`. The `ika-base` package adds the installing user to these groups during
 package configuration, but the active session, its PAM resource limits, and the
 live `/dev/kvm` udev permissions don't pick up the new state without a
-reboot—see step 3 under [Building from Source](#building-from-source) for the
+reboot—see step 3 under [Building from Source](#build-ika-from-source) for the
 full list of deferred changes.
 
 Bazel is installed automatically through Bazelisk by `./ika-build`, which runs
