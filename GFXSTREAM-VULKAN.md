@@ -25,6 +25,20 @@ Every link has to agree on two things: *that Vulkan is turned on*, and — the h
 part — *how a chunk of GPU memory allocated on the host becomes visible to the
 guest*. Almost the entire story is about that second thing.
 
+## Current status
+
+The Apple Silicon host-visible-memory path described below is implemented in this
+repository. The relevant crosvm, gfxstream, Mesa, Cuttlefish, and launcher
+changes are applied as part of the normal build; they are not merely proposed
+backports. The complete source-patch inventory is maintained in
+[`lineageos/patches/README.md`](lineageos/patches/README.md).
+
+This fixes accelerated guest Vulkan rendering on the tested Apple Silicon
+configuration. It does not make every graphics path equivalent: guest ANGLE
+still has a per-title compressed-texture corruption issue, and direct
+`gfxstream` mode still has a color-buffer lifetime issue. Those remain open
+compatibility issues rather than prerequisites for the Vulkan memory path.
+
 ---
 
 ## Act I — I heard somewhere it was supposed to work!
@@ -116,11 +130,15 @@ Re-enabling it wasn't fighting a correctness decision; it was restoring
 the fallback Windows already relies on, for the platform where the default
 no longer holds.
 
-The fix is two parts, both in the crosvm build:
+The core fix is two parts, both in the crosvm build:
 
 - Add the `vulkano` cargo feature (its `0.33.0` dep tree was already in `Cargo.lock`).
 - **`PATCH.crosvm-enable-vulkano-gralloc.patch`** — remove the `.disable_vulkano()`
   call so the backend actually initializes.
+
+The follow-up **`PATCH.rutabaga_gfx-gralloc-vulkano-fallback.patch`** keeps this
+backend as a fallback: minigbm remains preferred where it initializes
+successfully, while Vulkano is selected only when it is available and needed.
 
 With that, crosvm's `resource_map_blob` takes the `VmMemorySource::Vulkan` branch,
 imports the dma-buf via Honeykrisp, and maps it into the guest.
