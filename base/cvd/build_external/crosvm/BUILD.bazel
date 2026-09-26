@@ -1,4 +1,8 @@
 exports_files([
+    "PATCH.base-fixed-blob-arena-protection-zero-context.patch",
+    "PATCH.crosvm-fixed-blob-vulkan-condition-zero-context.patch",
+    "PATCH.crosvm-gpu-unref-shmem-mapping.patch",
     "PATCH.ffmpeg-pkg-config-includes.patch",
+    "PATCH.vm-control-fixed-blob-arena-protection-zero-context.patch",
     "crosvm.config.toml",
 ])

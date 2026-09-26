@@ -1,6 +1,6 @@
 # this needs to be at parity with with build_external/crosvm/crosvm.config.toml
 CROSVM_REMOTE = "https://chromium.googlesource.com/crosvm/crosvm"
-CROSVM_REV = "af81a39911aa67ac210afeed04496a31a9f5bdab"
+CROSVM_REV = "78c5df67a6ff5548157d8d12618162b91ae12d47"
 MINIGBM_REMOTE = "https://chromium.googlesource.com/chromiumos/platform/minigbm"
 MINIGBM_REV = "37fa33b3d823a84816ea8dd32dd7f543f8a2a5fa"
 
@@ -72,6 +72,7 @@ crosvm_bin.annotation(
         # crates_universe checks out each published crate with its own root.
         "@//build_external/crosvm:PATCH.crosvm-composite-preserve-spec-fd.patch",
         "@//build_external/crosvm:PATCH.crosvm-gpu-2d-sandbox.patch",
+        "@//build_external/crosvm:PATCH.crosvm-gpu-unref-shmem-mapping.patch",
         "@//build_external/crosvm:PATCH.crosvm-resize-display.patch",
         "@//build_external/crosvm:PATCH.crosvm-enable-vulkano-gralloc.patch",
         "@//build_external/crosvm:PATCH.minijail-sys_common_mk.patch",
@@ -199,7 +200,9 @@ crosvm_bin.annotation(
 crosvm_bin.annotation(
     crate = "vm_control",
     patch_args = ["-p1"],
-    patches = ["@//build_external/crosvm:PATCH.crosvm-resize-display-vm-control.patch"],
+    patches = [
+        "@//build_external/crosvm:PATCH.crosvm-resize-display-vm-control.patch",
+    ],
 )
 
 crosvm_bin.from_specs(

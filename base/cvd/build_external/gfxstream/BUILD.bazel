@@ -6,6 +6,7 @@ package(
 
 exports_files([
     "PATCH.gfxstream.build_variables.patch",
+    "PATCH.gfxstream.protobuf-deprecation-warning.patch",
     "PATCH.protobuf_deprecation_warning.patch",
     "PATCH.gfxstream.blob_page_size_runtime.patch",
     "PATCH.gfxstream.gles1-alpha-test-core-profile.patch",

@@ -1,0 +1,7 @@
+diff --git a/build_variables.bzl b/build_variables.bzl
+--- a/build_variables.bzl
++++ b/build_variables.bzl
+@@ -31,2 +31,3 @@
+ GFXSTREAM_HOST_COPTS = GFXSTREAM_COMMON_COPTS + [
++    "-Wno-deprecated-declarations",
+ ] + select({
