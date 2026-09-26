@@ -1,0 +1,9 @@
+diff --git a/src/sys/linux/mmap.rs b/src/sys/linux/mmap.rs
+--- a/src/sys/linux/mmap.rs
++++ b/src/sys/linux/mmap.rs
+@@ -663,0 +664,5 @@
++
++    /// Creates an mmap arena of `size` bytes with custom initial memory protections.
++    pub fn new_protection(size: usize, prot: Protection) -> Result<MemoryMappingArena> {
++        MemoryMapping::new_protection(size, None, prot).map(From::from)
++    }
