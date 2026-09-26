@@ -249,15 +249,9 @@ declare -A CVD_COMPUTE_DEFAULTS=(
 # ============================================================================
 declare -A CVD_GPU_DEFAULTS=(
   [gpu_mode]="gfxstream_guest_angle"
-  # Keep off: this package's Bazel build ships exactly one crosvm binary
-  # (cuttlefish-common/bin/crosvm, see cuttlefish/package/BUILD.bazel). Upstream
-  # auto-enables vhost-user-gpu on ARM64 hosts in --gpu_vhost_user_mode=auto,
-  # which runs the GPU device as a *separate* crosvm process resolved by
-  # CrosvmPathForVhostUserGpu() in crosvm_manager.cpp; that default does not
-  # apply to this package, and vhost-user-gpu on ARM64 is not yet thoroughly
-  # tested upstream regardless. Do not flip this to auto/on without confirming
-  # both.
-  [gpu_vhost_user_mode]="off"
+  # Use Cuttlefish's upstream ARM64 auto-selection now that the packaged
+  # CrosVM includes standalone vhost-user GPU control-socket support.
+  [gpu_vhost_user_mode]="auto"
   [enable_gpu_udmabuf]="true"
   [use_cvdalloc]="true"
   # gfxstream's batched descriptor path masks inlineUniformBlock even though
