@@ -207,16 +207,22 @@ Result<void> ServerLoopImpl::HandleExtended(
     }
     case ActionsCase::kStartScreenRecording: {
       VLOG(0) << "Run_cvd received start screen recording request.";
+      CF_EXPECT(device_status_.load() == DeviceStatus::kActive,
+                "Device is not active, cannot start screen recording");
       CF_EXPECT(HandleStartScreenRecording());
       return {};
     }
     case ActionsCase::kStopScreenRecording: {
       VLOG(0) << "Run_cvd received stop screen recording request.";
+      CF_EXPECT(device_status_.load() == DeviceStatus::kActive,
+                "Device is not active, cannot stop screen recording");
       CF_EXPECT(HandleStopScreenRecording());
       return {};
     }
     case ActionsCase::kScreenshotDisplay: {
       VLOG(0) << "Run_cvd received screenshot display request.";
+      CF_EXPECT(device_status_.load() == DeviceStatus::kActive,
+                "Device is not active, cannot take screenshot");
       const auto& request = action_info.extended_action.screenshot_display();
       CF_EXPECT(HandleScreenshotDisplay(request));
       return {};
