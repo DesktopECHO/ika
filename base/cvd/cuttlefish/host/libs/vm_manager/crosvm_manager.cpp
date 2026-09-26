@@ -423,10 +423,7 @@ Result<void> MaybeConfigureVulkanIcd(const CuttlefishConfig& config,
 // vhost-user-gpu launches the GPU device as a *separate* crosvm process
 // resolved by this function, so both attempts fall through to the same
 // crosvm used for the main VMM process (instance.crosvm_binary()) below,
-// matching what the x86/x86_64 fallback already did directly. tools/ika still
-// hardcodes gpu_vhost_user_mode=off regardless, both because of this
-// packaging gap and because vhost-user-gpu on ARM64 is not yet thoroughly
-// tested upstream; do not flip it back to auto/on without confirming both.
+// matching what the x86/x86_64 fallback already did directly.
 Result<std::string> CrosvmPathForVhostUserGpu(const CuttlefishConfig& config) {
   const auto& instance = config.ForDefaultInstance();
 
@@ -537,7 +534,8 @@ Result<VhostUserDeviceCommands> BuildVhostUserGpu(
   } else if (IsGfxstreamGuestAngleMode(gpu_mode)) {
     const std::string context_types = "gfxstream-vulkan";
     gpu_params_json["context-types"] = context_types;
-    if (GfxstreamContextTypesIncludeVulkan(context_types)) {
+    if (GfxstreamContextTypesIncludeVulkan(context_types) &&
+        !UsesUdmabufBackedGfxstreamVulkan(instance.gpu_renderer_features())) {
       gpu_params_json["wsi"] = "vk";
     }
     gpu_params_json["egl"] = false;
@@ -551,6 +549,10 @@ Result<VhostUserDeviceCommands> BuildVhostUserGpu(
     gpu_params_json["renderer-features"] = instance.gpu_renderer_features();
   }
   gpu_params_json["udmabuf"] = instance.enable_gpu_udmabuf();
+
+  gpu_device_cmd.Cmd().AddParameter(
+      "--control-socket-path=",
+      instance.PerInstanceInternalUdsPath("vhost-user-gpu-control"));
 
   const bool target_is_32bit = instance.target_arch() == Arch::Arm ||
                                instance.target_arch() == Arch::X86;
