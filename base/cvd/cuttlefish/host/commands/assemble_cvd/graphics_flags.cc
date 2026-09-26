@@ -112,6 +112,23 @@ bool KernelReleaseAtLeast(std::string_view release, int minimum_major,
          (major == minimum_major && minor >= minimum_minor);
 }
 
+// Apple Silicon hosts (Asahi Linux) expose a devicetree "compatible" property
+// with an "apple,<soc>" entry. Other ARM64 hosts (e.g. generic SBCs, cloud
+// ARM64 VMs) do not.
+bool IsAppleSiliconHost() {
+  std::string compatible;
+  if (!android::base::ReadFileToString("/proc/device-tree/compatible",
+                                        &compatible)) {
+    return false;
+  }
+  for (std::string_view entry : absl::StrSplit(compatible, '\0')) {
+    if (entry.substr(0, 6) == "apple,") {
+      return true;
+    }
+  }
+  return false;
+}
+
 using MeetsRequirementFunc = std::function<bool(const CommonState& common)>;
 
 struct RequirementWithReason {
@@ -125,14 +142,15 @@ GetGpuModeRequirementsMap() {
   const RequirementWithReason kHostIsNonArm{
       .func =
           [](const CommonState& common) {
-            return common.host_info.arch != Arch::Arm64;
+            return common.host_info.arch != Arch::Arm64 ||
+                   IsAppleSiliconHost();
           },
-      .success_explanation = "The host is not ARM64.",
+      .success_explanation = "The host is not generic ARM64.",
       .failure_explanation =
-          "The host is ARM64. Not enabling accelerated modes on ARM64 until "
-          "vhost-user-gpu has been more thoroughly tested. Please explicitly use "
-          "--gpu_mode=gfxstream or --gpu_mode=gfxstream_guest_angle to "
-          "enable for now.",
+          "The host is ARM64. Not enabling accelerated modes on generic ARM64 "
+          "until vhost-user-gpu has been more thoroughly tested. Please "
+          "explicitly use --gpu_mode=gfxstream or "
+          "--gpu_mode=gfxstream_guest_angle to enable for now.",
   };
   const RequirementWithReason kNotUsingHostQemu{
       .func =
