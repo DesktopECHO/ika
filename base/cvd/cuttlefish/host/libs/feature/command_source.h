@@ -27,9 +27,16 @@
 
 namespace cuttlefish {
 
+enum class ProcessCategory {
+  kNonCriticalSupport,
+  kCriticalSupport,
+  kVmm,
+};
+
 struct MonitorCommand {
   Command command;
   bool is_critical;
+  ProcessCategory category;
   // A critical command exiting normally with one of these codes ends the
   // process monitor successfully instead of being reported as a crash.
   std::set<int> expected_exit_codes;
@@ -38,7 +45,17 @@ struct MonitorCommand {
                  std::set<int> expected_exit_codes = {})
       : command(std::move(command)),
         is_critical(is_critical),
+        category(is_critical ? ProcessCategory::kCriticalSupport
+                             : ProcessCategory::kNonCriticalSupport),
         expected_exit_codes(std::move(expected_exit_codes)) {}
+
+  MonitorCommand(Command command, ProcessCategory category)
+      : command(std::move(command)),
+        is_critical(category != ProcessCategory::kNonCriticalSupport),
+    category(category),
+    expected_exit_codes(category == ProcessCategory::kVmm
+          ? std::set<int>{0}
+          : std::set<int>{}) {}
 };
 
 class CommandSource : public virtual SetupFeature {

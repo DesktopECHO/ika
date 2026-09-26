@@ -30,16 +30,20 @@ namespace {
 
 Result<ProcessMonitorExit> RunMonitoredExit(int exit_code,
                                             std::set<int> expected_exit_codes,
-                                            bool restart_subprocesses = false) {
+                      bool restart_subprocesses = false,
+                      ProcessCategory category =
+                        ProcessCategory::kCriticalSupport) {
   Command command("/bin/sh");
   command.AddParameter("-c");
   command.AddParameter("exit " + std::to_string(exit_code));
 
   ProcessMonitor::Properties properties;
   properties.RestartSubprocesses(restart_subprocesses);
-  properties.AddCommand(MonitorCommand(std::move(command),
-                                       /* is_critical= */ true,
-                                       std::move(expected_exit_codes)));
+  MonitorCommand monitor_command(std::move(command),
+                                 /* is_critical= */ true,
+                                 std::move(expected_exit_codes));
+  monitor_command.category = category;
+  properties.AddCommand(std::move(monitor_command));
 
   ProcessMonitor monitor(std::move(properties), SharedFD());
   CF_EXPECT(monitor.StartAndMonitorProcesses());
@@ -47,14 +51,15 @@ Result<ProcessMonitorExit> RunMonitoredExit(int exit_code,
 }
 
 TEST(ProcessMonitorTest, ExpectedCriticalExitIsClean) {
-  auto result = RunMonitoredExit(0, {0});
+  auto result = RunMonitoredExit(0, {0}, false, ProcessCategory::kVmm);
 
   ASSERT_TRUE(result.ok()) << result.error().Trace();
   EXPECT_EQ(*result, ProcessMonitorExit::kExpected);
 }
 
 TEST(ProcessMonitorTest, ExpectedCriticalExitIsNotRestarted) {
-  auto result = RunMonitoredExit(0, {0}, /* restart_subprocesses= */ true);
+  auto result = RunMonitoredExit(0, {0}, /* restart_subprocesses= */ true,
+                                 ProcessCategory::kVmm);
 
   ASSERT_TRUE(result.ok()) << result.error().Trace();
   EXPECT_EQ(*result, ProcessMonitorExit::kExpected);

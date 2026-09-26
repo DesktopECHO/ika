@@ -38,6 +38,7 @@
 #include "absl/log/log.h"
 #include "absl/strings/match.h"
 #include "android-base/file.h"
+#include "android-base/macros.h"
 
 #include "cuttlefish/common/libs/transport/channel.h"
 #include "cuttlefish/common/libs/transport/channel_sharedfd.h"
@@ -144,14 +145,22 @@ Result<ProcessMonitorExit> MonitorLoop(std::atomic_bool& running,
         const std::string name = it->cmd->GetShortName();
         const int exit_code = WEXITSTATUS(wstatus);
         const bool is_critical = it->is_critical;
+        const bool is_vmm = it->category == ProcessCategory::kVmm;
         LOG(INFO) << "Monitored subprocess " << name << " (" << pid
                   << ") exited as expected with code " << exit_code;
         monitored.erase(it);
-        if (is_critical) {
+        if (is_critical && is_vmm && exit_code == 0) {
           LOG(INFO) << "Stopping all monitored processes after expected exit "
-                       "of critical process";
+                       "of VMM process " << name;
           running.store(false);
           return ProcessMonitorExit::kExpected;
+        }
+        if (is_critical) {
+          LOG(ERROR) << "Stopping all monitored processes after unexpected "
+                        "exit of critical process "
+                     << name;
+          running.store(false);
+          return ProcessMonitorExit::kUnexpected;
         }
         continue;
       }
@@ -161,11 +170,13 @@ Result<ProcessMonitorExit> MonitorLoop(std::atomic_bool& running,
         // in the future, cmd->Start might not run exec()
         it->proc.reset(new Subprocess(it->cmd->Start(std::move(options))));
       } else {
-        bool is_critical = it->is_critical;
+        const bool is_critical = it->is_critical;
+        const std::string name = it->cmd->GetShortName();
         monitored.erase(it);
         if (running.load() && is_critical) {
           LOG(ERROR) << "Stopping all monitored processes due to unexpected "
-                        "exit of critical process";
+                        "exit of critical process "
+                     << name;
           running.store(false);
           return ProcessMonitorExit::kUnexpected;
         }
@@ -360,6 +371,7 @@ ProcessMonitor::Properties& ProcessMonitor::Properties::AddCommand(
     MonitorCommand cmd) & {
   entries_.emplace_back(std::move(cmd.command), cmd.is_critical,
                         std::move(cmd.expected_exit_codes));
+  entries_.back().category = cmd.category;
   return *this;
 }
 
@@ -382,15 +394,33 @@ ProcessMonitor::ProcessMonitor(ProcessMonitor::Properties&& properties,
       monitor_(-1) {}
 
 Result<void> ProcessMonitor::StopMonitoredProcesses() {
-  CF_EXPECT(monitor_ != -1, "The monitor process has already exited.");
-  CF_EXPECT(parent_channel_.has_value(),
-            "The monitor socket is already closed");
-  CF_EXPECT(
-      SendEmptyRequest(*parent_channel_, ParentToChildMessageType::kStop));
+  if (monitor_ == -1) {
+    return {};
+  }
 
-  auto monitor_exit = CF_EXPECT(WaitForMonitor());
-  CF_EXPECT(monitor_exit == ProcessMonitorExit::kExpected,
-            "Process monitor reported an unexpected critical process exit");
+  const pid_t last_monitor = monitor_;
+  monitor_ = -1;
+  int wstatus = 0;
+  pid_t wait_result =
+      TEMP_FAILURE_RETRY(waitpid(last_monitor, &wstatus, WNOHANG));
+  if (wait_result == 0) {
+    if (parent_channel_.has_value()) {
+      auto send_result =
+          SendEmptyRequest(*parent_channel_, ParentToChildMessageType::kStop);
+      if (!send_result.has_value()) {
+        VLOG(0) << "SendEmptyRequest failed during stop: "
+                << send_result.error();
+      }
+    }
+    wait_result = TEMP_FAILURE_RETRY(waitpid(last_monitor, &wstatus, 0));
+  }
+
+  parent_channel_.reset();
+  CF_EXPECT(wait_result == last_monitor, "Failed to wait for monitor process");
+  CF_EXPECT(!WIFSIGNALED(wstatus), "Monitor process exited due to a signal");
+  CF_EXPECT(WIFEXITED(wstatus), "Monitor process exited for unknown reasons");
+  CF_EXPECT(WEXITSTATUS(wstatus) == 0,
+            "Monitor process exited with code " << WEXITSTATUS(wstatus));
   return {};
 }
 

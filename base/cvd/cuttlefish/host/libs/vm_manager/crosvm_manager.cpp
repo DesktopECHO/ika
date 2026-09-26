@@ -1262,7 +1262,7 @@ Result<std::vector<MonitorCommand>> CrosvmManager::StartCommands(
     // With --extended-status, crosvm returns 0 when the guest powers off and
     // 32 when it requests a reset. The process restarter consumes reset exits,
     // so a clean wrapper exit means that the guest intentionally stopped.
-    commands.emplace_back(std::move(crosvm_cmd.Cmd()), true, std::set<int>{0});
+    commands.emplace_back(std::move(crosvm_cmd.Cmd()), ProcessCategory::kVmm);
   }
 
   return commands;
