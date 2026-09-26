@@ -1473,7 +1473,7 @@ import xml.etree.ElementTree as ET
 manifest = sys.argv[1]
 expected = {
     ("mesa/mesa", "external/mesa3d"):
-        "e8617e4ca95fc655b0f13fd115c224d27eba2441",
+      "0fadfea4f394211946f308458f614839ef253ee8",
     ("kernel/prebuilts/6.12/arm64", "kernel/prebuilts/6.12/arm64"):
         "318576752b27af3d328e6deb5e6aa29b08f762c9",
     ("kernel/prebuilts/common-modules/virtual-device/6.12/arm64", "kernel/prebuilts/common-modules/virtual-device/6.12/arm64"):
@@ -1537,7 +1537,7 @@ PY
       fail "$project is not synced to the pinned Cuttlefish runtime/graphics revision $expected (found ${head:-unknown}); rerun with SKIP_SYNC=0"
     fi
   done <<'EOF'
-external/mesa3d e8617e4ca95fc655b0f13fd115c224d27eba2441
+external/mesa3d 0fadfea4f394211946f308458f614839ef253ee8
 kernel/prebuilts/6.12/arm64 318576752b27af3d328e6deb5e6aa29b08f762c9
 kernel/prebuilts/common-modules/virtual-device/6.12/arm64 e6673fcbd05e63e6fcc2c2d2cf33246108b73b0c
 kernel/prebuilts/6.12/x86_64 cb8e8ee3babf4a27b742f59dcb92f59cf186299c
@@ -1562,11 +1562,11 @@ check_graphics_stack_versions() {
   local stale_reserved_impl="$android_root/external/mesa3d/src/gfxstream/guest/vulkan_enc/goldfish_vk_reserved_marshaling_guest.cpp"
   require_file "$mesa_version_file"
   require_file "$mesa_android_bp"
-  if [[ -f "$mesa_version_file" && "$(tr -d '[:space:]' < "$mesa_version_file")" != "26.1.7" ]]; then
-    fail "external/mesa3d VERSION is not 26.1.7: $mesa_version_file"
+  if [[ -f "$mesa_version_file" && "$(tr -d '[:space:]' < "$mesa_version_file")" != "26.1.8" ]]; then
+    fail "external/mesa3d VERSION is not 26.1.8: $mesa_version_file"
   fi
-  if [[ -f "$mesa_android_bp" ]] && ! grep -Fq -- '-DPACKAGE_VERSION=\"26.1.7\"' "$mesa_android_bp"; then
-    fail "external/mesa3d generated Android.bp does not identify Mesa 26.1.7: $mesa_android_bp"
+  if [[ -f "$mesa_android_bp" ]] && ! grep -Fq -- '-DPACKAGE_VERSION=\"26.1.8\"' "$mesa_android_bp"; then
+    fail "external/mesa3d generated Android.bp does not identify Mesa 26.1.8: $mesa_android_bp"
   fi
   # These are genrule outputs. Checked-in copies precede Soong's generated
   # include directory and can silently shadow declarations from the pinned XML.
