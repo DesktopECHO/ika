@@ -457,10 +457,11 @@ GetNeededVhostUserGpuHostRendererFeatures(
         Contains(availability.vulkan().physical_devices(0).extensions(),
                  "VK_EXT_external_memory_host");
 
-    CF_EXPECT(
-        has_external_memory_host || mode != GpuMode::GfxstreamGuestAngle,
-        "VK_EXT_external_memory_host is required for running with "
-        "--gpu_mode=gfxstream_guest_angle and --enable_gpu_vhost_user=true");
+    if (!has_external_memory_host && mode == GpuMode::GfxstreamGuestAngle) {
+      LOG(WARNING) << "VK_EXT_external_memory_host not supported by the host "
+                       "GPU driver, using external-blob for --gpu_mode="
+                    << GpuModeString(mode);
+    }
 
     features.system_blob = has_external_memory_host;
   }
