@@ -39,6 +39,7 @@ libcore patches/libcore-writable-dex.patch
 art patches/art.patch
 device/generic/goldfish patches/device-generic-goldfish.patch
 device/generic/goldfish patches/device-generic-goldfish-sensors-transport-compat.patch
+device/generic/goldfish patches/device-generic-goldfish-hwc3-guest-composer-rgba.patch
 device/google/cuttlefish patches/device-google-cuttlefish.patch
 device/google/cuttlefish patches/device-google-cuttlefish-light-compat.patch
 device/google/cuttlefish patches/device-google-cuttlefish-health-compat.patch
