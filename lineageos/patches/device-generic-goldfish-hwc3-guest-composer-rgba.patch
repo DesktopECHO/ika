@@ -1,0 +1,74 @@
+Patch summary:
+Make the Ranchu guest software composer write every converted layer in the
+R,G,B,A byte order of its DRM_FORMAT_ABGR8888/XBGR8888 composition buffers.
+
+GuestFrameComposer copies RGBA layers straight through (DoCopy), but its
+RGB565 and YV12 converters used libyuv's "ARGB" outputs, which are B,G,R,A in
+memory. With guest_swiftshader, any RGB565 layer that SurfaceFlinger assigns
+DEVICE composition was shown with red and blue exchanged on the host (e.g.
+Asphalt 8's SurfaceView renders RGB_565 and appears with swapped colors,
+while adb screencap, which recomposes through RenderEngine, looks correct).
+
+- RGB565: keep libyuv::RGB565ToARGB() and swap R/B in place with
+  libyuv::ARGBToABGR(); the vertical flip is already applied by the first call.
+- YV12: Gralloc::LockYCbCr() already resolves the Cb/Cr planes from plane
+  layout metadata, but ConvertFromYV12() swapped them again and then wrote
+  BGRA. The two swaps roughly cancelled, leaving red/blue using each other's
+  BT.601 coefficients. Pass Cb/Cr in their real roles to libyuv::I420ToABGR().
+
+diff --git a/hals/hwc3/GuestFrameComposer.cpp b/hals/hwc3/GuestFrameComposer.cpp
+index 9fc0b3c..1bae85e 100644
+--- a/hals/hwc3/GuestFrameComposer.cpp
++++ b/hals/hwc3/GuestFrameComposer.cpp
+@@ -244,9 +244,22 @@ int ConvertFromRGB565(const BufferSpec& src, const BufferSpec& dst, bool vFlip)
+         height = -height;
+     }
+ 
+-    return libyuv::RGB565ToARGB(srcBuffer, srcStrideBytes,  //
+-                                dstBuffer, dstStrideBytes,  //
+-                                width, height);
++    // libyuv::RGB565ToARGB() writes libyuv ARGB, which is B,G,R,A in memory,
++    // but every composition buffer is DRM_FORMAT_ABGR8888/XBGR8888 (R,G,B,A in
++    // memory, see DoCopy() and DoFill()). libyuv has no RGB565ToABGR(), so swap
++    // R and B in place afterwards. The first call already applied the vertical
++    // flip while reading the source, so the swap walks dst top-down.
++    int ret = libyuv::RGB565ToARGB(srcBuffer, srcStrideBytes,  //
++                                   dstBuffer, dstStrideBytes,  //
++                                   width, height);
++    if (ret) {
++        return ret;
++    }
++
++    const int dstHeight = height < 0 ? -height : height;
++    return libyuv::ARGBToABGR(dstBuffer, dstStrideBytes,  //
++                              dstBuffer, dstStrideBytes,  //
++                              width, dstHeight);
+ }
+ 
+ int ConvertFromYV12(const BufferSpec& src, const BufferSpec& dst, bool vFlip) {
+@@ -263,7 +276,7 @@ int ConvertFromYV12(const BufferSpec& src, const BufferSpec& dst, bool vFlip) {
+     }
+     auto& srcBufferYCbCr = *srcBufferYCbCrOpt;
+ 
+-    // The libyuv::I420ToARGB() function is for tri-planar.
++    // The libyuv::I420ToABGR() function is for tri-planar.
+     if (srcBufferYCbCr.chroma_step != 1) {
+         ALOGE("%s called with bad chroma step", __FUNCTION__);
+         return -1;
+@@ -290,10 +303,13 @@ int ConvertFromYV12(const BufferSpec& src, const BufferSpec& dst, bool vFlip) {
+         height = -height;
+     }
+ 
+-    // YV12 is the same as I420, with the U and V planes swapped
+-    return libyuv::I420ToARGB(srcY, strideYBytes,  //
+-                              srcV, strideVBytes,  //
++    // Gralloc::LockYCbCr() resolves the Cb and Cr planes from the plane layout
++    // metadata, so YV12's V-before-U storage order is already accounted for and
++    // srcU/srcV are the real Cb/Cr planes. Write ABGR (R,G,B,A in memory) to
++    // match the DRM_FORMAT_ABGR8888/XBGR8888 composition buffers.
++    return libyuv::I420ToABGR(srcY, strideYBytes,  //
+                               srcU, strideUBytes,  //
++                              srcV, strideVBytes,  //
+                               dstBuffer, dstStrideBytes, width, height);
+ }
+ 
