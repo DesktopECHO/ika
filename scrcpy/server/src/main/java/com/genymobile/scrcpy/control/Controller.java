@@ -73,10 +73,10 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     }
 
     private static final int DEFAULT_DEVICE_ID = 0;
+    // Mirrored by FLEX_DISPLAY_MIN_WIDTH/HEIGHT in the client's screen.c.
     private static final int PRIMARY_DISPLAY_MIN_WIDTH = 360;
     private static final int PRIMARY_DISPLAY_MIN_HEIGHT = 540;
     private static final int DISPLAY_SIZE_ALIGNMENT = 8;
-    private static final long DISPLAY_READY_STABLE_DELAY_MS = 50;
 
     // control_msg.h values of the pointerId field in inject_touch_event message
     private static final int POINTER_ID_MOUSE = -1;
@@ -385,13 +385,14 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
             if (handler == null) {
                 return;
             }
-            handler.postDelayed(
-                    () -> sendDisplayReadyIfStable(pending, generation),
-                    DISPLAY_READY_STABLE_DELAY_MS);
+            // Send from the handler thread, which re-checks that this request
+            // is still current. The client waits for the guest to stop
+            // presenting frames, so no extra settle delay is needed here.
+            handler.post(() -> sendDisplayReadyIfCurrent(pending, generation));
         }
     }
 
-    private void sendDisplayReadyIfStable(Size pending, long generation) {
+    private void sendDisplayReadyIfCurrent(Size pending, long generation) {
         synchronized (displayReadyLock) {
             if (pendingDisplayReadyGeneration != generation
                     || !pending.equals(pendingDisplayReadySize)

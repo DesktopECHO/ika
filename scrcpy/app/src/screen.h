@@ -112,10 +112,22 @@ struct sc_screen {
     SDL_Texture *resize_preview_texture;
     struct sc_size resize_preview_size;
     sc_tick last_resize_event_tick;
+    // How long the host window must stay unchanged before the display resize
+    // is requested: short for maximize/restore/fullscreen, longer for drags.
+    sc_tick resize_quiet_delay;
+    // Last maximize/restore/fullscreen transition, and the window state it
+    // left behind, used to classify the resize events that follow it.
+    sc_tick window_state_change_tick;
+    SDL_WindowFlags last_window_state_flags;
+    // Diagnostics: when the current hold began, and the previous raw frame
+    // consumed after DISPLAY_READY.
+    sc_tick resize_hold_start_tick;
+    sc_tick resize_log_prev_frame_tick;
     // Set once the device reports DISPLAY_READY for last_requested_display_size.
     // The stretched preview is released only after this is true, the host
-    // window has been quiet for FLEX_DISPLAY_RESIZE_QUIET_DELAY, and a raw
-    // frame newer than the current display resize request has arrived.
+    // window has been quiet for resize_quiet_delay, and the guest has drawn a
+    // frame newer than the resize request and then gone idle (or kept drawing
+    // past the maximum settle delay).
     bool display_ready;
     sc_tick display_ready_tick;
     bool display_ready_raw_frame;
@@ -187,6 +199,8 @@ struct sc_screen {
     size_t raw_frame_buffer_next;
     sc_tick last_raw_frame_render_tick; // protected by mutex
     sc_tick last_raw_frame_resize_tick; // protected by mutex
+    // Arrival time of the newest raw frame, consumed or not.
+    sc_tick last_raw_frame_received_tick; // protected by mutex
 
     bool paused;
     AVFrame *resume_frame;
@@ -350,9 +364,10 @@ sc_screen_hidpi_scale_coords(struct sc_screen *screen, int32_t *x, int32_t *y);
 
 // Handler for DEVICE_MSG_TYPE_DISPLAY_READY. Called on the main thread after
 // the receiver forwards the device-side signal that the guest has finished a
-// resize. transient_stretch only clears once this signal has arrived and the
-// host window has not resized for the settle delay and a raw frame newer than
-// the current display resize request has arrived. display_id, width, height are
+// resize. transient_stretch only clears once this signal has arrived, the host
+// window has not resized for the quiet delay, and the guest has presented a
+// frame newer than the current display resize request and then gone idle (or
+// kept presenting past the maximum settle delay). display_id, width, height are
 // reported by the device for the client to sanity-check against its last
 // request.
 void
