@@ -645,6 +645,13 @@ elif [[ "${DISTRO_FAMILY}" == "arch" ]]; then
     >&2 echo "missing arch/PKGBUILD under ${INPUT_PATH_ABS}"
     exit 1
   fi
+  # The PKGBUILD names its source tarball from pkgver, which must match the
+  # tarball staged below from packaging/VERSION.
+  pkgbuild_pkgver="$(sed -n 's/^pkgver=//p' "${INPUT_PATH_ABS}/arch/PKGBUILD" | head -n1)"
+  if [[ "${pkgbuild_pkgver}" != "${VERSION}" ]]; then
+    >&2 echo "${INPUT_PATH_ABS}/arch/PKGBUILD has pkgver=${pkgbuild_pkgver}, but packaging/VERSION is ${VERSION}"
+    exit 1
+  fi
 
   readonly ARCHBUILD_TOPDIR="${REPO_DIR}/archbuild"
   readonly ARCHBUILD_WORK_ROOT="${ARCHBUILD_TOPDIR}/work"
