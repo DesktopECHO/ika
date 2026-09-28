@@ -1,5 +1,8 @@
+# The version comes from packaging/VERSION; tools/buildutils/build_package.sh
+# passes it as ika_version.
+%{!?ika_version:%{error:ika_version is not defined; build with tools/buildutils/build_package.sh}}
 Name:           ika-lineageos
-Version:        260924
+Version:        %{ika_version}
 Release:        1%{?dist}
 Summary:        LineageOS for Cuttlefish host
 License:        Apache-2.0
@@ -15,8 +18,8 @@ ExclusiveArch:  aarch64 x86_64
 # Source0 is the shared host-source tarball (LICENSE + packaging metadata only).
 # Source1 carries just this arch's ROM bundle, kept out of the shared tarball so
 # the other host packages don't unpack 2+ GB they never use.
-Source0:        android-cuttlefish-%{version}.tar.gz
-Source1:        android-cuttlefish-rom-%{ika_arch}-%{version}.tar
+Source0:        ika-base-%{version}.tar.gz
+Source1:        ika-lineageos-%{ika_arch}-%{version}.tar
 %global debug_package %{nil}
 AutoReqProv:    no
 
@@ -31,7 +34,7 @@ Provides:       cuttlefish-lineageos = %{version}-%{release}
 Obsoletes:      cuttlefish-lineageos < %{version}-%{release}
 
 %prep
-%autosetup -n android-cuttlefish-%{version}
+%autosetup -n ika-base-%{version}
 # Unpack this arch's ROM bundle (Source1) into the source tree for %%install.
 tar -xf %{SOURCE1}
 

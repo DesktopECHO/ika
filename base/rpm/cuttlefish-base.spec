@@ -1,10 +1,13 @@
+# The version comes from packaging/VERSION; tools/buildutils/build_package.sh
+# passes it as ika_version.
+%{!?ika_version:%{error:ika_version is not defined; build with tools/buildutils/build_package.sh}}
 Name:           ika-base
-Version:        260924
+Version:        %{ika_version}
 Release:        1%{?dist}
 Summary:        Cuttlefish Android Virtual Device host packages for Fedora
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish
-Source0:        android-cuttlefish-%{version}.tar.gz
+Source0:        ika-base-%{version}.tar.gz
 # objcopy/nm (find-debuginfo) can't parse the Bazel/Clang-built binaries; skip debug packaging.
 %global debug_package %{nil}
 # Fedora 44's GNU strip also cannot parse some Bazel/Clang-built Cuttlefish
@@ -160,7 +163,7 @@ Obsoletes:      cuttlefish-metrics < %{version}-%{release}
 Contains the metrics transmitter binary used by Cuttlefish.
 
 %prep
-%autosetup -n android-cuttlefish-%{version}
+%autosetup -n ika-base-%{version}
 
 %build
 case "%{_arch}" in
@@ -169,20 +172,20 @@ case "%{_arch}" in
   *) echo "Unsupported architecture: %{_arch}" >&2; exit 1 ;;
 esac
 
-SOURCE_TARBALL="%{_sourcedir}/android-cuttlefish-%{version}.tar.gz"
+SOURCE_TARBALL="%{_sourcedir}/ika-base-%{version}.tar.gz"
 if [[ ! -f base/cvd/adb/BUILD.bazel || ! -x base/cvd/tools/ensure_bazel_git_mirrors.sh ]]; then
   echo "Repairing incomplete extracted source tree from ${SOURCE_TARBALL}"
   tmp_cvd_extract="$(mktemp -d)"
   rm -rf base/cvd
   tar -xzf "${SOURCE_TARBALL}" -C "${tmp_cvd_extract}" \
-    "android-cuttlefish-%{version}/base/cvd"
-  if [[ ! -x "${tmp_cvd_extract}/android-cuttlefish-%{version}/base/cvd/tools/ensure_bazel_git_mirrors.sh" ]]; then
+    "ika-base-%{version}/base/cvd"
+  if [[ ! -x "${tmp_cvd_extract}/ika-base-%{version}/base/cvd/tools/ensure_bazel_git_mirrors.sh" ]]; then
     echo "Source tarball ${SOURCE_TARBALL} does not contain base/cvd/tools/ensure_bazel_git_mirrors.sh." >&2
     echo "Regenerate ${SOURCE_TARBALL} with tools/buildutils/build_package.sh." >&2
     exit 1
   fi
   mkdir -p base
-  mv "${tmp_cvd_extract}/android-cuttlefish-%{version}/base/cvd" base/cvd
+  mv "${tmp_cvd_extract}/ika-base-%{version}/base/cvd" base/cvd
   rm -rf "${tmp_cvd_extract}"
 fi
 if [[ ! -x base/cvd/tools/ensure_bazel_git_mirrors.sh ]]; then

@@ -92,6 +92,16 @@ static_ffmpeg_action_env := \
 %:
 	dh $@ --with=config-package
 
+# The package version comes from packaging/VERSION, not debian/changelog.
+ika_version := $(shell tr -d '\n' < $(ika_repo_root)/packaging/VERSION)
+ifeq ($(ika_version),)
+$(error could not read $(ika_repo_root)/packaging/VERSION)
+endif
+
+.PHONY: override_dh_gencontrol
+override_dh_gencontrol:
+	dh_gencontrol -- -v$(ika_version)-1
+
 .PHONY: override_dh_installinit
 override_dh_installinit:
 	dh_installinit --name=cuttlefish-host-resources --no-start

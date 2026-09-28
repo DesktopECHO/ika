@@ -78,6 +78,14 @@ readonly REPO_DIR="$(realpath "$(dirname "$0")/../..")"
 readonly IKA_WORK_ROOT="${IKA_WORK_ROOT:-${REPO_DIR}/ika-work}"
 readonly VERSION_FILE="${REPO_DIR}/packaging/VERSION"
 readonly VERSION="$(tr -d '\n' < "${VERSION_FILE}")"
+if [[ ! "${VERSION}" =~ ^[0-9]+$ ]]; then
+  >&2 echo "invalid version '${VERSION}' in ${VERSION_FILE}"
+  exit 1
+fi
+# packaging/VERSION is the only version source: RPM specs read it as
+# ika_version, Arch PKGBUILDs get pkgver written into their working copy, and
+# the Debian rules pass it to dh_gencontrol.
+readonly -a RPM_VERSION_DEFINE=(--define "ika_version ${VERSION}")
 export IKA_WORK_ROOT
 export CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT="${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-${IKA_WORK_ROOT}}"
 export CUTTLEFISH_BAZEL_CACHE_ROOT="${CUTTLEFISH_BAZEL_CACHE_ROOT:-${IKA_WORK_ROOT}/cuttlefish-bazel}"
@@ -127,8 +135,8 @@ function spec_supports_host_arch() {
   local arch
   local matched
 
-  exclusive_arches="$(rpmspec --srpm --query --qf '[%{EXCLUSIVEARCH} ]' "${spec_path}" 2>/dev/null || true)"
-  excluded_arches="$(rpmspec --srpm --query --qf '[%{EXCLUDEARCH} ]' "${spec_path}" 2>/dev/null || true)"
+  exclusive_arches="$(rpmspec "${RPM_VERSION_DEFINE[@]}" --srpm --query --qf '[%{EXCLUSIVEARCH} ]' "${spec_path}" 2>/dev/null || true)"
+  excluded_arches="$(rpmspec "${RPM_VERSION_DEFINE[@]}" --srpm --query --qf '[%{EXCLUDEARCH} ]' "${spec_path}" 2>/dev/null || true)"
 
   if [[ -n "${exclusive_arches}" && "${exclusive_arches}" != "(none)" ]]; then
     matched=false
@@ -165,24 +173,12 @@ function source_tree_exclude_paths() {
     lineageos/src toolchain \
     base/cvd/.bazel_output_base base/cvd/bazel-out 'base/cvd/bazel-*' 'bazel-*'
 
-  if [[ "${DISTRO_FAMILY:-}" == "rpm" ]]; then
-    # RPM ships the ROM through cuttlefish-lineageos.spec's own Source1 tarball
-    # (see refresh_rom_tarball_if_needed), so both bundles stay out of the
-    # shared host-source tarball. That keeps it tiny: base/frontend/scrcpy then
-    # unpack a few MB instead of 2+ GB they never use, and editing host source
-    # no longer re-tars the multi-GB ROM.
-    printf '%s\n' lineageos-arm64 lineageos-x86_64
-  else
-    # Other families bundle this host's lineageos-<arch> ROM into the shared
-    # tarball; drop only the other arch's so a one-arch ROM rebuild does not
-    # invalidate the cached tarball used by the other specs.
-    local other_arch
-    if other_arch="$(other_ika_arch)"; then
-      printf 'lineageos-%s\n' "${other_arch}"
-    else
-      printf '%s\n' lineageos-arm64 lineageos-x86_64
-    fi
-  fi
+  # ika-lineageos ships the ROM through its own ika-lineageos-<arch> tarball
+  # (see refresh_rom_tarball_if_needed), so both bundles stay out of the
+  # shared host-source tarball. That keeps it tiny: base/frontend/scrcpy then
+  # unpack a few MB instead of 2+ GB they never use, and editing host source
+  # no longer re-tars the multi-GB ROM.
+  printf '%s\n' lineageos-arm64 lineageos-x86_64
 }
 
 # Populate the named array with a find(1) prune expression built from
@@ -244,14 +240,6 @@ function thin_provision_rom_bundle_if_present() {
   "$(thin_provision_images_tool)" "${rom_dir}"
 }
 
-function thin_provision_source_rom_bundle_if_needed() {
-  [[ "${DISTRO_FAMILY:-}" != "rpm" ]] || return 0
-
-  local host_arch
-  host_arch="$(ika_arch_for_host)" || return 0
-  thin_provision_rom_bundle_if_present "${host_arch}"
-}
-
 # Emit a content fingerprint for a subtree of the repo, one record per path.
 # Files are fingerprinted by mode+size+mtime rather than a content hash so the
 # cache check stays cheap even over the multi-GB ROM bundle (sha256 of every
@@ -275,7 +263,7 @@ function build_tree_manifest() {
     # Cache key embedded as the manifest's first line. Bump it whenever the
     # record format or the exclude set changes in a way that affects tarball
     # contents, to invalidate any tarball cached by an older run.
-    printf 'manifest-cache-version\t12\n'
+    printf 'manifest-cache-version\t13\n'
 
     cd "${REPO_DIR}"
     if [[ -n "${prune_name}" ]]; then
@@ -339,7 +327,6 @@ function source_tarball_has_required_files() {
 function refresh_source_tarball_if_needed() {
   local tmp_manifest
   local tmp_source_tarball
-  thin_provision_source_rom_bundle_if_needed
 
   tmp_manifest="$(mktemp "${PKG_SOURCES_DIR}/${TAR_BASENAME}.manifest.XXXXXX")"
   tmp_source_tarball="$(mktemp "${PKG_SOURCES_DIR}/${TAR_BASENAME}.tar.gz.XXXXXX")"
@@ -429,19 +416,24 @@ function refresh_source_tarball_if_needed() {
 }
 
 # Stage the per-arch LineageOS ROM bundle into its own tarball, consumed only by
-# cuttlefish-lineageos.spec (Source1). Kept separate from the shared host-source
-# tarball so base/frontend/scrcpy don't unpack 2+ GB they never use. Written
-# uncompressed: the ROM is almost entirely already-compressed images (super.img,
-# boot images), so gzip costs minutes of CPU for a negligible size reduction.
-# Cached on a mode+size+mtime fingerprint, so it is rewritten only when the ROM
-# actually changes (a host-source edit no longer touches it).
+# the ika-lineageos RPM spec (Source1) and Arch PKGBUILD. Kept separate from the
+# shared host-source tarball so base/frontend/scrcpy don't unpack 2+ GB they
+# never use. Written uncompressed: the ROM is almost entirely already-compressed
+# images (super.img, boot images), so gzip costs minutes of CPU for a negligible
+# size reduction. Cached on a mode+size+mtime fingerprint, so it is rewritten
+# only when the ROM actually changes (a host-source edit no longer touches it).
+function rom_tarball_basename() {
+  printf 'ika-lineageos-%s-%s' "$1" "${VERSION}"
+}
+
 function refresh_rom_tarball_if_needed() {
   local arch="$1"
   local rom_dir="${REPO_DIR}/lineageos-${arch}"
   [[ -d "${rom_dir}" ]] || return 0
   thin_provision_rom_bundle_if_present "${arch}"
 
-  local rom_basename="android-cuttlefish-rom-${arch}-${VERSION}"
+  local rom_basename
+  rom_basename="$(rom_tarball_basename "${arch}")"
   local rom_tarball="${PKG_SOURCES_DIR}/${rom_basename}.tar"
   local rom_manifest="${PKG_SOURCES_DIR}/${rom_basename}.manifest"
 
@@ -518,7 +510,7 @@ if [[ "${DISTRO_FAMILY}" == "rpm" ]]; then
   readonly RPMBUILD_TOPDIR="${REPO_DIR}/rpmbuild"
   readonly RPMBUILD_WORK_ROOT="${RPMBUILD_TOPDIR}/work"
   readonly PKG_SOURCES_DIR="${RPMBUILD_TOPDIR}/SOURCES"
-  readonly TAR_BASENAME="android-cuttlefish-${VERSION}"
+  readonly TAR_BASENAME="ika-base-${VERSION}"
   readonly SOURCE_TARBALL="${PKG_SOURCES_DIR}/${TAR_BASENAME}.tar.gz"
   readonly SOURCE_MANIFEST="${PKG_SOURCES_DIR}/${TAR_BASENAME}.manifest"
   readonly SOURCE_STAGING_DIR="${PKG_SOURCES_DIR}/${TAR_BASENAME}"
@@ -616,6 +608,7 @@ if [[ "${DISTRO_FAMILY}" == "rpm" ]]; then
       --define "_builddir ${spec_workdir}/BUILD" \
       --define "_buildrootdir ${spec_workdir}/BUILDROOT" \
       --define "_binary_payload ${RPM_BINARY_PAYLOAD}" \
+      "${RPM_VERSION_DEFINE[@]}" \
       -bb "${spec}"
   done
   popd
@@ -645,19 +638,12 @@ elif [[ "${DISTRO_FAMILY}" == "arch" ]]; then
     >&2 echo "missing arch/PKGBUILD under ${INPUT_PATH_ABS}"
     exit 1
   fi
-  # The PKGBUILD names its source tarball from pkgver, which must match the
-  # tarball staged below from packaging/VERSION.
-  pkgbuild_pkgver="$(sed -n 's/^pkgver=//p' "${INPUT_PATH_ABS}/arch/PKGBUILD" | head -n1)"
-  if [[ "${pkgbuild_pkgver}" != "${VERSION}" ]]; then
-    >&2 echo "${INPUT_PATH_ABS}/arch/PKGBUILD has pkgver=${pkgbuild_pkgver}, but packaging/VERSION is ${VERSION}"
-    exit 1
-  fi
 
   readonly ARCHBUILD_TOPDIR="${REPO_DIR}/archbuild"
   readonly ARCHBUILD_WORK_ROOT="${ARCHBUILD_TOPDIR}/work"
   readonly ARCHBUILD_PKGDEST="${ARCHBUILD_TOPDIR}/packages"
   readonly PKG_SOURCES_DIR="${ARCHBUILD_TOPDIR}/SOURCES"
-  readonly TAR_BASENAME="android-cuttlefish-${VERSION}"
+  readonly TAR_BASENAME="ika-base-${VERSION}"
   readonly SOURCE_TARBALL="${PKG_SOURCES_DIR}/${TAR_BASENAME}.tar.gz"
   readonly SOURCE_MANIFEST="${PKG_SOURCES_DIR}/${TAR_BASENAME}.manifest"
   readonly SOURCE_STAGING_DIR="${PKG_SOURCES_DIR}/${TAR_BASENAME}"
@@ -673,7 +659,24 @@ elif [[ "${DISTRO_FAMILY}" == "arch" ]]; then
   pkg_workdir="$(arch_pkg_workdir "${INPUT_PATH_ABS}")"
   build_workdirs+=("${pkg_workdir}")
   cp -a "${INPUT_PATH_ABS}/arch/." "${pkg_workdir}/"
+  sed -i "s/^pkgver=.*/pkgver=${VERSION}/" "${pkg_workdir}/PKGBUILD"
   ln -sfn "${SOURCE_TARBALL}" "${pkg_workdir}/${TAR_BASENAME}.tar.gz"
+
+  # ika-lineageos also takes this host's ROM bundle from its own tarball.
+  if grep -q '^pkgbase=ika-lineageos$' "${pkg_workdir}/PKGBUILD"; then
+    rom_arch="$(ika_arch_for_host)" || {
+      >&2 echo "ika-lineageos: unsupported host architecture $(uname -m)"
+      exit 1
+    }
+    if [[ ! -d "${REPO_DIR}/lineageos-${rom_arch}" ]]; then
+      >&2 echo "ika-lineageos: missing ROM bundle ${REPO_DIR}/lineageos-${rom_arch}"
+      exit 1
+    fi
+    refresh_rom_tarball_if_needed "${rom_arch}"
+    rom_tarball_name="$(rom_tarball_basename "${rom_arch}").tar"
+    ln -sfn "${PKG_SOURCES_DIR}/${rom_tarball_name}" \
+      "${pkg_workdir}/${rom_tarball_name}"
+  fi
 
   echo "Building packages from ${INPUT_PATH_ABS}/arch"
   (

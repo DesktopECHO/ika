@@ -1,10 +1,13 @@
+# The version comes from packaging/VERSION; tools/buildutils/build_package.sh
+# passes it as ika_version.
+%{!?ika_version:%{error:ika_version is not defined; build with tools/buildutils/build_package.sh}}
 Name:           ika-frontend
-Version:        260924
+Version:        %{ika_version}
 Release:        1%{?dist}
 Summary:        Frontend and orchestration packages for Cuttlefish on Fedora
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish
-Source0:        android-cuttlefish-%{version}.tar.gz
+Source0:        ika-base-%{version}.tar.gz
 %global debug_package %{nil}
 
 BuildRequires:  curl
@@ -56,7 +59,7 @@ Contains the Host Orchestrator service and nginx configuration used to expose
 artifact and log access for Cuttlefish.
 
 %prep
-%autosetup -n android-cuttlefish-%{version}
+%autosetup -n ika-base-%{version}
 
 %build
 pushd frontend

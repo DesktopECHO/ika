@@ -1,10 +1,12 @@
 # Maintainer: DesktopECHO <build@desktopecho.com>
 # Mirrors base/rpm/cuttlefish-lineageos.spec. Packages the prebuilt
-# lineageos-<arch> bundle staged at the repo root by the ROM build.
+# lineageos-<arch> bundle staged at the repo root by the ROM build, which
+# tools/buildutils/build_package.sh tars up as ika-lineageos-<arch>-<version>.
 
 pkgbase=ika-lineageos
 pkgname=(ika-lineageos)
-pkgver=260924
+# Set from packaging/VERSION by tools/buildutils/build_package.sh.
+pkgver=0
 pkgrel=1
 pkgdesc='LineageOS for Cuttlefish host'
 arch=(x86_64 aarch64)
@@ -13,11 +15,14 @@ license=(Apache-2.0)
 options=(!strip !debug)
 install=ika-lineageos.install
 makedepends=(android-tools)
-_srcver=${pkgver}
-source=("android-cuttlefish-${_srcver}.tar.gz")
+source=("ika-base-${pkgver}.tar.gz")
+source_x86_64=("ika-lineageos-x86_64-${pkgver}.tar")
+source_aarch64=("ika-lineageos-arm64-${pkgver}.tar")
 sha256sums=('SKIP')
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
 
-_srcroot="android-cuttlefish-${_srcver}"
+_srcroot="ika-base-${pkgver}"
 
 _ika_arch() {
   case "${CARCH}" in
@@ -39,7 +44,7 @@ package_ika-lineageos() {
   local bundle="lineageos-${ika_arch}"
 
   install -d "${pkgdir}/usr/share/cuttlefish-common"
-  cp -a --reflink=auto --sparse=always "${root}/${bundle}" "${pkgdir}/usr/share/cuttlefish-common/lineageos"
+  cp -a --reflink=auto --sparse=always "${srcdir}/${bundle}" "${pkgdir}/usr/share/cuttlefish-common/lineageos"
   "${root}/tools/lineageos/thin-provision-images.sh" "${pkgdir}/usr/share/cuttlefish-common/lineageos"
   find "${pkgdir}/usr/share/cuttlefish-common/lineageos" -type d ! -type l -exec chmod 755 '{}' +
   find "${pkgdir}/usr/share/cuttlefish-common/lineageos" ! -type l -exec chmod u+w '{}' +
