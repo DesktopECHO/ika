@@ -14,6 +14,17 @@ LINEAGEOS_DEST := debian/ika-lineageos/usr/share/cuttlefish-common/lineageos
 %:
 	dh $@
 
+# The package version comes from packaging/VERSION, not debian/changelog.
+ika_repo_root := $(abspath $(dir $(firstword $(MAKEFILE_LIST)))/../../..)
+ika_version := $(shell tr -d '\n' < $(ika_repo_root)/packaging/VERSION)
+ifeq ($(ika_version),)
+$(error could not read $(ika_repo_root)/packaging/VERSION)
+endif
+
+.PHONY: override_dh_gencontrol
+override_dh_gencontrol:
+	dh_gencontrol -- -v$(ika_version)-1
+
 override_dh_auto_build:
 	@true
 

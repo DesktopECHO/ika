@@ -5,7 +5,8 @@
 
 pkgbase=ika-base
 pkgname=(ika-base ika-common ika-integration ika-defaults ika-metrics)
-pkgver=260924
+# Set from packaging/VERSION by tools/buildutils/build_package.sh.
+pkgver=0
 pkgrel=1
 pkgdesc='Cuttlefish Android Virtual Device host packages'
 arch=(x86_64 aarch64)
@@ -17,10 +18,10 @@ makedepends=(aom clang cmake curl ffmpeg fmt gcc gflags git google-glog gtest
              xxd util-linux-libs v4l-utils virglrenderer vulkan-headers wayland which xz z3)
 # objcopy/nm cannot parse the Bazel/Clang-built binaries; skip strip/debug.
 options=(!strip !debug)
-source=("android-cuttlefish-${pkgver}.tar.gz")
+source=("ika-base-${pkgver}.tar.gz")
 sha256sums=('SKIP')
 
-_srcroot="android-cuttlefish-${pkgver}"
+_srcroot="ika-base-${pkgver}"
 
 _bazel_arch() {
   case "${CARCH}" in

@@ -4,7 +4,8 @@
 
 pkgbase=ika-frontend
 pkgname=(ika-user ika-orchestration)
-pkgver=260819
+# Set from packaging/VERSION by tools/buildutils/build_package.sh.
+pkgver=0
 pkgrel=1
 pkgdesc='Frontend and orchestration packages for Cuttlefish'
 arch=(x86_64 aarch64)
@@ -12,10 +13,10 @@ url='https://github.com/google/android-cuttlefish'
 license=(Apache-2.0)
 makedepends=(curl git go npm protobuf)
 options=(!strip !debug)
-source=("android-cuttlefish-${pkgver}.tar.gz")
+source=("ika-base-${pkgver}.tar.gz")
 sha256sums=('SKIP')
 
-_srcroot="android-cuttlefish-${pkgver}"
+_srcroot="ika-base-${pkgver}"
 
 build() {
   cd "${srcdir}/${_srcroot}/frontend"

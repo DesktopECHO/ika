@@ -4,18 +4,21 @@ Each public release should be reproducible from documented inputs.
 
 Before building:
 
-1. Choose the LineageOS branch and manifest revision.
-2. Choose `--microg` or `--mtg` when that provider should be included. For
+1. Set the release version in `packaging/VERSION`. It is the only place the
+   version is recorded: the RPM specs, Arch PKGBUILDs and Debian packages all
+   take it from there at build time.
+2. Choose the LineageOS branch and manifest revision.
+3. Choose `--microg` or `--mtg` when that provider should be included. For
    microG, the newest published, non-draft GmsCore entry (including prereleases)
    is selected unless an explicit release tag is pinned; choose the other module
    versions as needed. Build metadata records the selected provider and its
    resolved source information.
-3. Choose the native bridge SDK payload for x86-64, or set
+4. Choose the native bridge SDK payload for x86-64, or set
    `NATIVE_BRIDGE_SOURCE_DIR` to a vetted extracted payload.
-4. Set `BUILD_NATIVE_BRIDGE_TESTS=1` for publishable builds so the native-bridge
+5. Set `BUILD_NATIVE_BRIDGE_TESTS=1` for publishable builds so the native-bridge
    regression diagnostics are included. Vulkan CTS/dEQP diagnostics are included
    by default (`BUILD_VULKAN_TESTS=1`); set `BUILD_VULKAN_TESTS=0` to exclude them.
-5. Run the one-command build script from a clean or script-managed workspace.
+6. Run the one-command build script from a clean or script-managed workspace.
 
 The build script runs `scripts/lib/validate_build_inputs.sh` before compiling. It
 checks patch application state, userdata policy, selected provider prebuilts,
