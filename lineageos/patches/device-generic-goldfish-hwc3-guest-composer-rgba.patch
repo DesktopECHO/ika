@@ -9,18 +9,19 @@ DEVICE composition was shown with red and blue exchanged on the host (e.g.
 Asphalt 8's SurfaceView renders RGB_565 and appears with swapped colors,
 while adb screencap, which recomposes through RenderEngine, looks correct).
 
-- RGB565: keep libyuv::RGB565ToARGB() and swap R/B in place with
-  libyuv::ARGBToABGR(); the vertical flip is already applied by the first call.
+- RGB565: keep libyuv::RGB565ToARGB() and swap R/B in place with an explicit
+  loop (no reliance on libyuv tolerating aliased buffers); the vertical flip is
+  already applied by the first call.
 - YV12: Gralloc::LockYCbCr() already resolves the Cb/Cr planes from plane
   layout metadata, but ConvertFromYV12() swapped them again and then wrote
   BGRA. The two swaps roughly cancelled, leaving red/blue using each other's
   BT.601 coefficients. Pass Cb/Cr in their real roles to libyuv::I420ToABGR().
 
 diff --git a/hals/hwc3/GuestFrameComposer.cpp b/hals/hwc3/GuestFrameComposer.cpp
-index 9fc0b3c..1bae85e 100644
+index 9fc0b3c..d2af37d 100644
 --- a/hals/hwc3/GuestFrameComposer.cpp
 +++ b/hals/hwc3/GuestFrameComposer.cpp
-@@ -244,9 +244,22 @@ int ConvertFromRGB565(const BufferSpec& src, const BufferSpec& dst, bool vFlip)
+@@ -244,9 +244,30 @@ int ConvertFromRGB565(const BufferSpec& src, const BufferSpec& dst, bool vFlip)
          height = -height;
      }
  
@@ -30,8 +31,10 @@ index 9fc0b3c..1bae85e 100644
 +    // libyuv::RGB565ToARGB() writes libyuv ARGB, which is B,G,R,A in memory,
 +    // but every composition buffer is DRM_FORMAT_ABGR8888/XBGR8888 (R,G,B,A in
 +    // memory, see DoCopy() and DoFill()). libyuv has no RGB565ToABGR(), so swap
-+    // R and B in place afterwards. The first call already applied the vertical
-+    // flip while reading the source, so the swap walks dst top-down.
++    // R and B afterwards with an explicit loop rather than relying on libyuv's
++    // conversions tolerating aliased source and destination. The first call
++    // already applied the vertical flip while reading the source, so the swap
++    // walks dst top-down.
 +    int ret = libyuv::RGB565ToARGB(srcBuffer, srcStrideBytes,  //
 +                                   dstBuffer, dstStrideBytes,  //
 +                                   width, height);
@@ -40,13 +43,19 @@ index 9fc0b3c..1bae85e 100644
 +    }
 +
 +    const int dstHeight = height < 0 ? -height : height;
-+    return libyuv::ARGBToABGR(dstBuffer, dstStrideBytes,  //
-+                              dstBuffer, dstStrideBytes,  //
-+                              width, dstHeight);
++    for (int y = 0; y < dstHeight; y++) {
++        uint8_t* pixel = dstBuffer + static_cast<size_t>(y) * dstStrideBytes;
++        for (int x = 0; x < width; x++, pixel += 4) {
++            const uint8_t b = pixel[0];
++            pixel[0] = pixel[2];
++            pixel[2] = b;
++        }
++    }
++    return 0;
  }
  
  int ConvertFromYV12(const BufferSpec& src, const BufferSpec& dst, bool vFlip) {
-@@ -263,7 +276,7 @@ int ConvertFromYV12(const BufferSpec& src, const BufferSpec& dst, bool vFlip) {
+@@ -263,7 +284,7 @@ int ConvertFromYV12(const BufferSpec& src, const BufferSpec& dst, bool vFlip) {
      }
      auto& srcBufferYCbCr = *srcBufferYCbCrOpt;
  
@@ -55,7 +64,7 @@ index 9fc0b3c..1bae85e 100644
      if (srcBufferYCbCr.chroma_step != 1) {
          ALOGE("%s called with bad chroma step", __FUNCTION__);
          return -1;
-@@ -290,10 +303,13 @@ int ConvertFromYV12(const BufferSpec& src, const BufferSpec& dst, bool vFlip) {
+@@ -290,10 +311,13 @@ int ConvertFromYV12(const BufferSpec& src, const BufferSpec& dst, bool vFlip) {
          height = -height;
      }
  
