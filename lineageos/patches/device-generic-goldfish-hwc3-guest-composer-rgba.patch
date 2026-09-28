@@ -44,7 +44,7 @@ index 9fc0b3c..d2af37d 100644
 +
 +    const int dstHeight = height < 0 ? -height : height;
 +    for (int y = 0; y < dstHeight; y++) {
-+        uint8_t* pixel = dstBuffer + static_cast<size_t>(y) * dstStrideBytes;
++        uint8_t* pixel = dstBuffer + static_cast<size_t>(y) * static_cast<size_t>(dstStrideBytes);
 +        for (int x = 0; x < width; x++, pixel += 4) {
 +            const uint8_t b = pixel[0];
 +            pixel[0] = pixel[2];
