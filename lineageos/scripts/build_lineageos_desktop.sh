@@ -22,6 +22,11 @@ ika_root="$(cd "$overlay_dir/.." && pwd)"
 ika_work_root="${IKA_WORK_ROOT:-$ika_root/ika-work}"
 export IKA_WORK_ROOT="$ika_work_root"
 ika_source_commit="${IKA_SOURCE_COMMIT:-$(git -C "$ika_root" rev-parse HEAD 2>/dev/null || true)}"
+# GitHub source zips have no .git; git archive's export-subst stamps the
+# commit into packaging/SOURCE_COMMIT instead.
+if [[ -z "$ika_source_commit" && -r "$ika_root/packaging/SOURCE_COMMIT" ]]; then
+  ika_source_commit="$(tr -d '[:space:]' < "$ika_root/packaging/SOURCE_COMMIT")"
+fi
 export IKA_SOURCE_COMMIT="$ika_source_commit"
 
 android_manifest_url="${ANDROID_MANIFEST_URL:-https://github.com/LineageOS/android.git}"
@@ -136,7 +141,7 @@ case "$build_variant" in
 esac
 
 [[ "$ika_source_commit" =~ ^[0-9a-f]{40}$ ]] || \
-  die "could not determine the exact Ika source commit for release metadata"
+  die "could not determine the exact Ika source commit for release metadata."
 
 active_build_arch=""
 active_build_start_epoch=""
