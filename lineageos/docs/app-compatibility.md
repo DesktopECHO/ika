@@ -31,7 +31,7 @@ correctly while the same title is corrupt in-world.
 | App | ARM gfx | ARM agl | X86 gfx | X86 agl | Detail |
 | --- | :---: | :---: | :---: | :---: | --- |
 | [Angry Birds 2](#angry-birds-2) | ⚪ | 🟢 | ⚪ | ⚪ | ARM agl verified in a live level; X86 gfx not gradable, no level entry point found |
-| [Asphalt 8](#asphalt-8) | ⚪ | 🟢 | 🟡 | ⚪ | X86 gfx: HUD live, 3D world black. ARM agl: confirmed clean mid-race |
+| [Asphalt 8](#asphalt-8) | ⚪ | 🟢 | 🟡 | 🟢 | X86 agl: clean through a live race once gfxstream restores push constants after ASTC decompression. X86 gfx: HUD live, 3D world black (not re-graded with that fix). ARM agl: confirmed clean mid-race |
 | [CarX Drift Racing 3](#carx-drift-racing-3) | 🟢 | 🟢 | 🟢 | 🟢 | Clean on all eight cells graded; the Unity/ANGLE counterexample on both hosts |
 | [CarX Highway Racing](#carx-highway-racing) | 🟢 | 🟡 | 🟢 | 🟢 | ANGLE corruption is Honeykrisp-specific: clean on X86 (RADV) under both paths |
 | [Chromium](#chromium) | 🟡 | 🟡 | 🟡 | 🟡 | Magenta window title bar under gfxstream |
@@ -255,6 +255,10 @@ have not been captured and graded, so they stay ungraded rather than assumed.
 ### Asphalt 8
 
 <a href="images/asphalt-8-x86-gfxstream-full.jpg"><img src="images/asphalt-8-x86-gfxstream.jpg" width="120" alt="Asphalt 8 mid-race under gfxstream on x86-64, HUD live but the 3D world is black"></a>
+<a href="images/asphalt-8-x86-angle-full.jpg"><img src="images/asphalt-8-x86-angle.jpg" width="120" alt="Asphalt 8 launch frame on x86-64 under ANGLE"></a>
+
+*x86-64 under ANGLE: the launch frame. The race itself was graded live (see
+the x86-64 `gfxstream_guest_angle` notes below) rather than from this capture.*
 
 <a href="images/asphalt-8-rewards-full.jpg"><img src="images/asphalt-8-rewards.jpg" width="120" alt="Asphalt 8 post-race rewards screen under ANGLE on ARM64"></a> <a href="images/asphalt-8-garage-full.jpg"><img src="images/asphalt-8-garage.jpg" width="120" alt="Asphalt 8 garage with detailed car and character models under ANGLE on ARM64"></a>
 
@@ -290,9 +294,25 @@ km/h, 2nd/6 position, full HUD -- mountains, snow, trees, rock formations, the
 guardrail, and the competing car all render correctly with no corruption of
 any kind. Combined with the clean title screen, dialogs, loading screen,
 rewards screen, garage, and pre-race cinematic already observed, this answers
-the open question directly: `gfxstream_guest_angle` clears the black-3D-world
-fault seen under `gfxstream` on x86-64, the same way it does for Destiny
-Rising.
+the open question for ARM64: `gfxstream_guest_angle` is clean there, the same
+way it is for Destiny Rising. It did not carry over to x86-64, which needed the
+gfxstream fix below.
+
+**x86-64, `gfxstream_guest_angle`: fixed in gfxstream.** Before the fix the 3D
+world repeatedly faded to black mid-race (HUD live), and the menu garage could
+go dark too. The colour-grading pass multiplies the scene by a vignette mask
+that the game blends from ASTC textures, and the first blend after a new mask
+was loaded wrote nothing, leaving an all-zero mask. RADV has no native ASTC, so
+gfxstream decompresses those textures with a compute dispatch when the guest
+first transitions them for reading. That dispatch calls `vkCmdPushConstants`,
+and RADV keeps one push constant block per command buffer for every bind point,
+so it overwrote ANGLE's graphics driver uniforms; ANGLE does not re-push
+unchanged values within a command buffer, so the following draw produced no
+fragments. `PATCH.gfxstream.decompression-restore-push-constants.patch` replays
+the guest's push constants after each decompression. With it, a World Series
+race stayed visible start to finish with no debug layer or workaround in place.
+Hosts with native ASTC (Apple Silicon) never take this decompression path,
+which is why ARM64 was unaffected.
 
 One purchase dialog appeared mid-flow (a discounted one-time currency/token
 bundle) and was dismissed with the Android back button rather than tapping

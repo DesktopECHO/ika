@@ -16,4 +16,8 @@ exports_files([
     "PATCH.gfxstream.sparse-compressed-feature-contract.patch",
     "PATCH.gfxstream.vulkan-cts-correctness.patch",
     "PATCH.gfxstream.opengles-3.2.patch",
+    "PATCH.gfxstream.decompression-restore-push-constants.patch",
+    "PATCH.gfxstream.pipeline-barrier2khr-decompression.patch",
+    "PATCH.gfxstream.copy-buffer-to-image2-init.patch",
+    "PATCH.gfxstream.compressed-row-length-round-up.patch",
 ])
