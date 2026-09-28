@@ -1,0 +1,36 @@
+Patch summary:
+Initialize the per-mip copy info for emulated compressed images.
+
+on_vkCmdCopyBufferToImage2 and on_vkCmdCopyBufferToImage2KHR split an upload
+into one copy per compressed mip level, but built each VkCopyBufferToImageInfo2
+from an uninitialized stack variable and only set dstImage, regionCount and
+pRegions. sType, pNext, srcBuffer and dstImageLayout reached the driver as
+stack garbage. Start from the guest's copy info, as the neighbouring
+vkCmdCopyImage2 and vkCmdCopyImageToBuffer2 handlers already do.
+
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index 3a32c5b..bbc6896 100644
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -5860,7 +5860,9 @@ class VkDecoderGlobalState::Impl {
+         CompressedImageInfo& cmpInfo = *imageInfo->compressInfo;
+ 
+         for (uint32_t r = 0; r < pCopyBufferToImageInfo->regionCount; r++) {
+-            VkCopyBufferToImageInfo2 inf;
++            // Start from the guest's copy info so sType, pNext, srcBuffer and dstImageLayout
++            // are valid; only the destination and region change per compressed mip level.
++            VkCopyBufferToImageInfo2 inf = *pCopyBufferToImageInfo;
+             uint32_t mipLevel = pCopyBufferToImageInfo->pRegions[r].imageSubresource.mipLevel;
+             inf.dstImage = cmpInfo.compressedMipmap(mipLevel);
+             VkBufferImageCopy2 region = cmpInfo.getBufferImageCopy(pCopyBufferToImageInfo->pRegions[r]);
+@@ -5917,7 +5919,9 @@ class VkDecoderGlobalState::Impl {
+ 
+         CompressedImageInfo& cmpInfo = *imageInfo->compressInfo;
+         for (uint32_t r = 0; r < pCopyBufferToImageInfo->regionCount; r++) {
+-            VkCopyBufferToImageInfo2KHR inf;
++            // Start from the guest's copy info so sType, pNext, srcBuffer and dstImageLayout
++            // are valid; only the destination and region change per compressed mip level.
++            VkCopyBufferToImageInfo2KHR inf = *pCopyBufferToImageInfo;
+             uint32_t mipLevel = pCopyBufferToImageInfo->pRegions[r].imageSubresource.mipLevel;
+             inf.dstImage = cmpInfo.compressedMipmap(mipLevel);
+             VkBufferImageCopy2KHR region = cmpInfo.getBufferImageCopy(pCopyBufferToImageInfo->pRegions[r]);

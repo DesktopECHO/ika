@@ -28,5 +28,18 @@ git_repository(
         # Last-resort cleanup for Vulkan instances which survive normal
         # per-context teardown, before the renderer closes its DRM file.
         "@//build_external/gfxstream:PATCH.gfxstream.force-vulkan-cleanup-on-teardown.patch",
+        # The ETC2/ASTC decompression dispatch pushes its own constants; replay
+        # the guest's push constants afterwards so RADV does not run the next
+        # draw with the decompression parameters (Asphalt 8 black 3D world).
+        "@//build_external/gfxstream:PATCH.gfxstream.decompression-restore-push-constants.patch",
+        # Guests record image barriers with vkCmdPipelineBarrier2KHR; route it
+        # through the global state so emulated textures are decompressed too.
+        "@//build_external/gfxstream:PATCH.gfxstream.pipeline-barrier2khr-decompression.patch",
+        # Per-mip vkCmdCopyBufferToImage2 info for emulated compressed images
+        # was built from an uninitialized struct (srcBuffer, layout, sType).
+        "@//build_external/gfxstream:PATCH.gfxstream.copy-buffer-to-image2-init.patch",
+        # Round texel row length/image height up to whole compressed blocks,
+        # matching the rounded-up copy extent (e.g. 128-wide ASTC 6x6).
+        "@//build_external/gfxstream:PATCH.gfxstream.compressed-row-length-round-up.patch",
     ],
 )

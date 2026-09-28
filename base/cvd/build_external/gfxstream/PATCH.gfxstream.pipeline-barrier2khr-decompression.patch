@@ -1,0 +1,44 @@
+Patch summary:
+Route vkCmdPipelineBarrier2KHR through the global state.
+
+Both decoders forwarded vkCmdPipelineBarrier2KHR straight to the driver, while
+vkCmdPipelineBarrier and vkCmdPipelineBarrier2 go through the global state,
+which decompresses emulated ETC2/ASTC images when they become readable and
+tracks image layouts. Guests such as ANGLE record image barriers with the KHR
+alias, so those transitions skipped decompression. VkDependencyInfoKHR is an
+alias of VkDependencyInfo, so reuse on_vkCmdPipelineBarrier2.
+
+diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
+index 373a4a2..dbb548e 100644
+--- a/host/vulkan/vk_decoder.cpp
++++ b/host/vulkan/vk_decoder.cpp
+@@ -17288,7 +17288,11 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
+                                    (unsigned long long)pDependencyInfo);
+                 }
+                 if (CC_LIKELY(vk)) {
+-                    vk->vkCmdPipelineBarrier2KHR(unboxed_commandBuffer, pDependencyInfo);
++                    // Route through the global state like vkCmdPipelineBarrier2 so emulated
++                    // compressed images (ETC2/ASTC) are decompressed and image layouts tracked.
++                    (void)unboxed_commandBuffer;
++                    m_state->on_vkCmdPipelineBarrier2(&m_pool, snapshotApiCallHandle, commandBuffer,
++                                                      pDependencyInfo);
+                 }
+                 vkStream->unsetHandleMapping();
+                 if (m_snapshotsEnabled) {
+diff --git a/host/vulkan/vk_sub_decoder.cpp b/host/vulkan/vk_sub_decoder.cpp
+index 85d19b2..f549ecc 100644
+--- a/host/vulkan/vk_sub_decoder.cpp
++++ b/host/vulkan/vk_sub_decoder.cpp
+@@ -3266,7 +3266,11 @@ size_t subDecode(VulkanMemReadingStream* readStream, VulkanDispatch* vk,
+                                                       (VkDependencyInfo*)(pDependencyInfo));
+                 }
+                 if (CC_LIKELY(vk)) {
+-                    vk->vkCmdPipelineBarrier2KHR((VkCommandBuffer)dispatchHandle, pDependencyInfo);
++                    // Route through the global state like vkCmdPipelineBarrier2 so emulated
++                    // compressed images (ETC2/ASTC) are decompressed and image layouts tracked.
++                    this->on_vkCmdPipelineBarrier2(pool, snapshotApiCallHandle,
++                                                   (VkCommandBuffer)(boxed_dispatchHandle),
++                                                   pDependencyInfo);
+                 }
+                 if (snapshotsEnabled()) {
+                     this->snapshot()->vkCmdPipelineBarrier2KHR(

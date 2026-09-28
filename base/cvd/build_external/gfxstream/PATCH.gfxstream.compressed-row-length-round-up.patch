@@ -1,0 +1,44 @@
+Patch summary:
+Round compressed buffer row length and image height up to whole blocks.
+
+CompressedImageInfo::getBufferImageCopy converts bufferRowLength and
+bufferImageHeight from texels to blocks for the copy into the compressed
+mipmap images, but used truncating division while the copy extent
+(compressedMipmapPortion) rounds up. A texel row length that is not a
+multiple of the block size, e.g. 128 for ASTC 6x6 (21.3 blocks), became a
+row length shorter than the 22-block copy width: invalid usage that drivers
+resolve by reading rows at the wrong stride. Round up, as drivers do for
+native block-compressed formats. A zero (tightly packed) value is unchanged.
+
+diff --git a/host/vulkan/emulated_textures/compressed_image_info.cpp b/host/vulkan/emulated_textures/compressed_image_info.cpp
+index add9dd7..cbca0b5 100644
+--- a/host/vulkan/emulated_textures/compressed_image_info.cpp
++++ b/host/vulkan/emulated_textures/compressed_image_info.cpp
+@@ -540,8 +540,11 @@ VkBufferImageCopy CompressedImageInfo::getBufferImageCopy(
+     VkBufferImageCopy region = origRegion;
+     uint32_t mipLevel = region.imageSubresource.mipLevel;
+     region.imageSubresource.mipLevel = 0;
+-    region.bufferRowLength /= mBlock.width;
+-    region.bufferImageHeight /= mBlock.height;
++    // Row length and image height are in texels and describe whole blocks; round up so a
++    // width that is not a multiple of the block size (e.g. 128 for ASTC 6x6) still covers
++    // the partial last block, matching compressedMipmapPortion() for the copy extent.
++    region.bufferRowLength = (region.bufferRowLength + mBlock.width - 1) / mBlock.width;
++    region.bufferImageHeight = (region.bufferImageHeight + mBlock.height - 1) / mBlock.height;
+     region.imageOffset.x /= mBlock.width;
+     region.imageOffset.y /= mBlock.height;
+     region.imageExtent = compressedMipmapPortion(region.imageExtent, mipLevel);
+@@ -553,8 +556,11 @@ VkBufferImageCopy2 CompressedImageInfo::getBufferImageCopy(
+     VkBufferImageCopy2 region = origRegion;
+     uint32_t mipLevel = region.imageSubresource.mipLevel;
+     region.imageSubresource.mipLevel = 0;
+-    region.bufferRowLength /= mBlock.width;
+-    region.bufferImageHeight /= mBlock.height;
++    // Row length and image height are in texels and describe whole blocks; round up so a
++    // width that is not a multiple of the block size (e.g. 128 for ASTC 6x6) still covers
++    // the partial last block, matching compressedMipmapPortion() for the copy extent.
++    region.bufferRowLength = (region.bufferRowLength + mBlock.width - 1) / mBlock.width;
++    region.bufferImageHeight = (region.bufferImageHeight + mBlock.height - 1) / mBlock.height;
+     region.imageOffset.x /= mBlock.width;
+     region.imageOffset.y /= mBlock.height;
+     region.imageExtent = compressedMipmapPortion(region.imageExtent, mipLevel);
