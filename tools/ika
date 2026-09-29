@@ -15,26 +15,32 @@ PACKAGED_GETCHROMIUM_BIN="/usr/lib/cuttlefish-common/bin/getchromium"
 SCRCPY_ICON_DIR_DEFAULT="/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps"
 IKA_SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 
-scrcpy_supervisor_pid() {
+# Prints the pid recorded in a supervisor pid file if it is still a live
+# supervisor of the given kind (__console_supervisor or __app_supervisor).
+supervisor_pid_from_file() {
+  local pid_file="$1"
+  local marker="$2"
   local pid
   local command_line
 
-  [[ -f "${SCRCPY_SUPERVISOR_PID_FILE:-}" ]] || return 1
-  pid="$(<"${SCRCPY_SUPERVISOR_PID_FILE}")"
+  [[ -n "${pid_file}" && -f "${pid_file}" ]] || return 1
+  pid="$(<"${pid_file}")"
   [[ "${pid}" =~ ^[0-9]+$ && -r "/proc/${pid}/cmdline" ]] || return 1
   [[ "$(stat -c '%u' "/proc/${pid}" 2>/dev/null || true)" == "${UID}" ]] || return 1
   command_line="$(tr '\0' ' ' <"/proc/${pid}/cmdline" 2>/dev/null || true)"
-  [[ "${command_line}" == *" __console_supervisor "* ]] || return 1
+  [[ "${command_line}" == *" ${marker} "* ]] || return 1
   printf '%s\n' "${pid}"
 }
 
-stop_scrcpy_supervisor() {
+stop_supervisor_from_file() {
+  local pid_file="$1"
+  local marker="$2"
   local pid
   local deadline
 
-  pid="$(scrcpy_supervisor_pid || true)"
+  pid="$(supervisor_pid_from_file "${pid_file}" "${marker}" || true)"
   if [[ -z "${pid}" ]]; then
-    rm -f "${SCRCPY_SUPERVISOR_PID_FILE:-}"
+    rm -f "${pid_file}"
     return 0
   fi
 
@@ -42,13 +48,30 @@ stop_scrcpy_supervisor() {
   deadline=$((SECONDS + 5))
   while kill -0 "${pid}" >/dev/null 2>&1; do
     if (( SECONDS >= deadline )); then
-      printf '[%s] console supervisor pid %s did not exit cleanly; forcing termination\n' "${SCRIPT_NAME}" "${pid}" >&2
+      printf '[%s] supervisor pid %s did not exit cleanly; forcing termination\n' "${SCRIPT_NAME}" "${pid}" >&2
       kill -9 "${pid}" >/dev/null 2>&1 || true
       break
     fi
     sleep 0.2
   done
-  rm -f "${SCRCPY_SUPERVISOR_PID_FILE}"
+  rm -f "${pid_file}"
+}
+
+scrcpy_supervisor_pid() {
+  supervisor_pid_from_file "${SCRCPY_SUPERVISOR_PID_FILE:-}" __console_supervisor
+}
+
+stop_scrcpy_supervisor() {
+  stop_supervisor_from_file "${SCRCPY_SUPERVISOR_PID_FILE:-}" __console_supervisor
+}
+
+stop_app_supervisors() {
+  local pid_file
+
+  for pid_file in "${IKA_APPS_DIR}"/*/supervisor.pid; do
+    [[ -f "${pid_file}" ]] || continue
+    stop_supervisor_from_file "${pid_file}" __app_supervisor
+  done
 }
 
 # Checks if a flag was supplied by the user in the arguments
@@ -66,46 +89,74 @@ user_supplied_flag() {
   return 1
 }
 
+# App windows opened by `ika app` carry IKA_APP_PACKAGE in their environment.
+is_app_window_process() {
+  tr '\0' '\n' <"$1/environ" 2>/dev/null | grep -q '^IKA_APP_PACKAGE='
+}
+
+# Lists packaged scrcpy processes owned by this user. Scope "console" skips
+# app windows and app list queries; "all" includes them. Candidates come from
+# pgrep by process name, since checking every process costs over a second.
 packaged_scrcpy_pids() {
+  local scope="${1:-all}"
   local pid
-  local proc_uid
+  local proc
   local argv0
   local exe_path
+  local matched
+  local name
+  local -A names=()
 
-  for proc in /proc/[0-9]*; do
-    [[ -d "${proc}" ]] || continue
-    pid="${proc##*/}"
-    proc_uid="$(stat -c '%u' "${proc}" 2>/dev/null || true)"
-    [[ "${proc_uid}" == "${UID}" ]] || continue
-
+  names["$(basename "${SCRCPY_BIN:-${PACKAGED_SCRCPY_BIN}}")"]=1
+  names["$(basename "${PACKAGED_SCRCPY_BIN}")"]=1
+  for name in "${!names[@]}"; do
+    # The kernel keeps only the first 15 characters of a process name.
+    pgrep -u "${UID}" -x "${name:0:15}" || true
+  done | sort -u | while read -r pid; do
+    proc="/proc/${pid}"
+    matched="false"
     argv0="$(tr '\0' '\n' <"${proc}/cmdline" 2>/dev/null | head -n1 || true)"
     if [[ "${argv0}" == "${SCRCPY_BIN:-${PACKAGED_SCRCPY_BIN}}" \
         || "${argv0}" == "${PACKAGED_SCRCPY_BIN}" ]]; then
-      printf '%s\n' "${pid}"
+      matched="true"
+    else
+      exe_path="$(readlink -f "${proc}/exe" 2>/dev/null || true)"
+      exe_path="${exe_path% (deleted)}"
+      if [[ "${exe_path}" == "${SCRCPY_BIN:-${PACKAGED_SCRCPY_BIN}}" \
+          || "${exe_path}" == "${PACKAGED_SCRCPY_BIN}" ]]; then
+        matched="true"
+      fi
+    fi
+    [[ "${matched}" == "true" ]] || continue
+
+    if [[ "${scope}" == "console" ]] \
+        && { is_app_window_process "${proc}" \
+             || tr '\0' '\n' <"${proc}/cmdline" 2>/dev/null | grep -qx -- '--list-apps'; }; then
       continue
     fi
-
-    exe_path="$(readlink -f "${proc}/exe" 2>/dev/null || true)"
-    exe_path="${exe_path% (deleted)}"
-    if [[ "${exe_path}" == "${SCRCPY_BIN:-${PACKAGED_SCRCPY_BIN}}" \
-        || "${exe_path}" == "${PACKAGED_SCRCPY_BIN}" ]]; then
-      printf '%s\n' "${pid}"
-    fi
+    printf '%s\n' "${pid}"
   done
 }
 
 has_packaged_scrcpy() {
   local pids
 
-  pids="$(packaged_scrcpy_pids)"
+  pids="$(packaged_scrcpy_pids console)"
   [[ -n "${pids}" ]]
 }
 
+# Scope "console" closes only the desktop console, leaving app windows open;
+# "all" also closes app windows and stops their supervisors first so they do
+# not relaunch the windows.
 stop_startup_packaged_scrcpy() {
+  local scope="${1:-all}"
   local pid
   local deadline
 
   stop_scrcpy_supervisor
+  if [[ "${scope}" == "all" ]]; then
+    stop_app_supervisors
+  fi
 
   while read -r pid; do
     [[ -n "${pid}" ]] || continue
@@ -122,7 +173,7 @@ stop_startup_packaged_scrcpy() {
       fi
       sleep 0.2
     done
-  done < <(packaged_scrcpy_pids | sort -u)
+  done < <(packaged_scrcpy_pids "${scope}" | sort -u)
 }
 
 count_performance_cores() {
@@ -351,6 +402,21 @@ SCRCPY_LOG_FILE="${CVD_HOME_DIR}/console.log"
 SCRCPY_WINDOW_STATE_FILE="${CVD_HOME_DIR}/console-window-state"
 SCRCPY_SUPERVISOR_PID_FILE="${CVD_HOME_DIR}/console-supervisor.pid"
 SCRCPY_SUPERVISOR_LOCK_FILE="${CVD_HOME_DIR}/console-supervisor.lock"
+IKA_APPS_DIR="${CVD_HOME_DIR}/apps"
+APP_MENU_WATCHER_PID_FILE="${CVD_HOME_DIR}/app-menu-watcher.pid"
+APP_MENU_WATCHER_LOCK_FILE="${CVD_HOME_DIR}/app-menu-watcher.lock"
+APP_MENU_SYNC_LOCK_FILE="${CVD_HOME_DIR}/app-menu-sync.lock"
+APP_MENU_LOG_FILE="${CVD_HOME_DIR}/app-menu.log"
+APP_MENU_DISABLED_FILE="${CVD_HOME_DIR}/app-menu-disabled"
+APP_LIST_CACHE="${IKA_APPS_DIR}/app-list"
+# Game session started by 'ika app <game>': see start_game_session.
+GAME_SESSION_FILE="${CVD_HOME_DIR}/game-session"
+GAME_SESSION_EXITED_FILE="${CVD_HOME_DIR}/game-session.exited"
+GAME_SESSION_LOCK_FILE="${CVD_HOME_DIR}/game-session.lock"
+game_session_lock_fd=""
+GAME_CONSOLE_WINDOW_STATE_FILE="${CVD_HOME_DIR}/game-console-window-state"
+APP_GAMES_FILE="${IKA_APPS_DIR}/games"
+: "${IKA_APP_MENU_POLL_SEC:=5}"
 CVD_BIN="${CVD_HOST_OUT}/bin/cvd_internal_start"
 CVD_CLI_BIN="${CVD_HOST_OUT}/bin/cvd"
 CVD_STOP_BIN="${CVD_HOST_OUT}/bin/cvd_internal_stop"
@@ -381,10 +447,16 @@ GFXSTREAM_APPLE_16K_VULKAN_RENDERER_FEATURES="ExternalBlob:enabled;SystemBlob:di
 CVD_GRAPHICS_DRIVER_MESSAGE=""
 CVD_DATA_STORAGE_MESSAGE=""
 CVD_NEWLY_PROVISIONED="false"
+# Set to false by --no-console: start the VM without the desktop console.
+START_CONSOLE="true"
+# Set by the internal --game-session start option.
+START_GAME_SESSION="false"
 : "${IKA_STOP_GRACE_SEC:=30}"
 : "${IKA_SCRCPY_REBOOT_TIMEOUT_SEC:=120}"
 
 readonly SCRCPY_EXIT_DISCONNECTED=2
+# scrcpy --ika-game-session: the window left fullscreen or was closed.
+readonly SCRCPY_EXIT_GAME_SESSION_ENDED=3
 
 CVD_PROCESS_REGEX='(^|/)(cvd_internal_start|launch_cvd|run_cvd|crosvm|process_restarter|ika_stream|socket_vsock_proxy|wmediumd)([[:space:]]|$)'
 
@@ -401,7 +473,49 @@ die() {
   if [[ -n "${CONSOLE_FAILURE_MESSAGE:-}" ]]; then
     printf '%s\n' "${CONSOLE_FAILURE_MESSAGE}" >&3
   fi
+  close_progress_notifications
+  notify_user "$*"
   exit 1
+}
+
+# Shows a desktop notification when ika runs without a terminal, for example
+# from a menu launcher (see run_app_command), where messages would be lost.
+notify_user() {
+  [[ "${IKA_NOTIFY:-}" == "true" ]] || return 0
+  command -v notify-send >/dev/null 2>&1 || return 0
+  notify-send --app-name=Ika --icon=ika-scrcpy "Ika" "$1" >/dev/null 2>&1 || true
+}
+
+IKA_PROGRESS_NOTIFICATIONS=()
+
+# Like notify_user, for a message that close_progress_notifications withdraws
+# once the work is done. Plasma holds back popups while a fullscreen window has
+# focus and shows them when it leaves fullscreen, so a "Starting…" message left
+# open would reappear when a game session ends.
+notify_progress() {
+  local id
+
+  [[ "${IKA_NOTIFY:-}" == "true" ]] || return 0
+  command -v notify-send >/dev/null 2>&1 || return 0
+  id="$(notify-send --print-id --app-name=Ika --icon=ika-scrcpy "Ika" "$1" 2>/dev/null)" || id=""
+  if [[ "${id}" =~ ^[0-9]+$ ]]; then
+    IKA_PROGRESS_NOTIFICATIONS+=("${id}")
+  elif [[ -z "${id}" ]]; then
+    # notify-send before libnotify 0.7.9 has no --print-id.
+    notify-send --app-name=Ika --icon=ika-scrcpy "Ika" "$1" >/dev/null 2>&1 || true
+  fi
+}
+
+close_progress_notifications() {
+  local id
+
+  command -v gdbus >/dev/null 2>&1 || return 0
+  for id in "${IKA_PROGRESS_NOTIFICATIONS[@]}"; do
+    gdbus call --session --dest org.freedesktop.Notifications \
+      --object-path /org/freedesktop/Notifications \
+      --method org.freedesktop.Notifications.CloseNotification "${id}" >/dev/null 2>&1 || true
+  done
+  IKA_PROGRESS_NOTIFICATIONS=()
 }
 
 ensure_open_file_limit() {
@@ -558,6 +672,16 @@ parse_start_options() {
         game_mode_ref="true"
         shift
         ;;
+      --no-console)
+        START_CONSOLE="false"
+        shift
+        ;;
+      --game-session)
+        # Internal, used by 'ika app <game>': the console ends the game
+        # session when it leaves fullscreen or is closed.
+        START_GAME_SESSION="true"
+        shift
+        ;;
       --gfxstream_vulkan=*)
         GFXSTREAM_VULKAN_MODE="$(normalize_gfxstream_vulkan_mode "${1#*=}")"
         export GFXSTREAM_VULKAN="${GFXSTREAM_VULKAN_MODE}"
@@ -635,11 +759,16 @@ usage() {
 
 Usage:
 
-  ${SCRIPT_NAME} start [-f|--fullscreen|--game] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] [--setting=arg] ...
+  ${SCRIPT_NAME} start [-f|--fullscreen|--game|--no-console] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] [--setting=arg] ...
   ${SCRIPT_NAME} stop
-  ${SCRIPT_NAME} restart [-f|--fullscreen|--game] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] ...
+  ${SCRIPT_NAME} restart [-f|--fullscreen|--game|--no-console] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] ...
   ${SCRIPT_NAME} reset [--data_gb=GB]
   ${SCRIPT_NAME} status
+  ${SCRIPT_NAME} app NAME|PACKAGE [-f|--fullscreen] [--game] [--window] [--title=TEXT] [--size=WxH] [--ika_scrcpy=ARGS]
+  ${SCRIPT_NAME} app --info NAME|PACKAGE
+  ${SCRIPT_NAME} app
+  ${SCRIPT_NAME} app close NAME|PACKAGE|--all
+  ${SCRIPT_NAME} app sync [--remove]
   ${SCRIPT_NAME} help
 
 Example:
@@ -650,15 +779,62 @@ Example:
   ${SCRIPT_NAME} restart --gpu_mode=gfxstream --gfxstream_vulkan=on
   ${SCRIPT_NAME} restart --ika_scrcpy="--no-clipboard-autosync"
   ${SCRIPT_NAME} start --game
+  ${SCRIPT_NAME} app com.gameloft.android.ANMP.GloftA8HM --game
+  ${SCRIPT_NAME} app Asphalt 8
 
 Options:
 
   --game                 Start scrcpy fullscreen with UHID gamepad
-                         keyboard and mouse input.
+                         keyboard and mouse input. With app, use UHID
+                         input but keep the window unless -f is given.
+  --no-console           With start or restart, run the VM without opening the
+                         desktop console window (app windows still work).
   --memory_mb=MB         Override the default guest RAM setting.
                          Normally ~25% of host RAM, capped at 32 GB.
   --data_gb=GB           With reset, configure the userdata size used by the
                          next start and subsequent factory resets.
+  --title=TEXT           With app, override the window title (default: the
+                         app's label).
+  --size=WxH             With app, set the initial window size in logical
+                         points (default: last size, or 60% of the screen).
+
+App windows:
+
+  '${SCRIPT_NAME} app NAME' opens one app in its own resizable, titled
+  window backed by a separate Android virtual display. The app is restarted
+  on that display if it was already running, and closing the window closes
+  the app. App windows use encoded video (IKA_APP_BIT_RATE, default 40M)
+  rather than the console's raw frames. 'stop', 'reset', and 'restart' close
+  all app windows; 'start' leaves them open.
+
+  Games (apps declaring android:appCategory="game", or listed in
+  IKA_GAME_APPS in this script) start in a game session instead: fullscreen
+  on the primary display in the console, with gamepad, keyboard and mouse
+  passthrough. Leaving fullscreen or closing that window ends the session:
+  the window closes, the game is sent to the background (it keeps its state
+  and resumes next time), and the desktop console comes back if it was open
+  before. '--window' opens a game
+  in its own window instead. '--game' forwards the gamepad and keyboard and
+  mouse as HID devices in an app window.
+
+  '${SCRIPT_NAME} app' alone lists the apps that can be launched, with apps
+  already open in their own window in bold (marked "(open)" when the output
+  is not a terminal or NO_COLOR is set).
+
+  NAME is a package name or an app label from that list. Labels match
+  case-insensitively, exactly or by a unique part ('app setti' opens
+  Settings), and need no quotes when they contain spaces.
+
+  '${SCRIPT_NAME} app sync' adds each launchable app to the desktop's app menu,
+  as "🎮 ∙ LABEL" for games or "ᗩ ∙ LABEL" for other apps, with its own icon, in an
+  "Android Apps (Ika)" group (a GNOME
+  app-grid folder, or a submenu on KDE Plasma, XFCE, Cinnamon and MATE), and
+  removes entries for
+  apps that were uninstalled. While the VM runs, a watcher started by 'start'
+  keeps the menu in sync as apps are installed or removed (log:
+  ~/ika/app-menu.log). '--remove' deletes the entries and the group and turns
+  the automatic sync off until 'app sync' is run again. 'reset' removes the
+  entries as well; the next 'start' rebuilds them.
 
 Environment variables:
 
@@ -673,6 +849,9 @@ Environment variables:
   IKA_SCRCPY             Extra whitespace-separated args appended to the console.
                          Equivalent command-line option: --ika_scrcpy=ARGS
                          (example: --keyboard=uhid --no-clipboard-autosync)
+  IKA_APP_MENU_POLL_SEC  Seconds between checks for installed or removed
+                         apps while the app menu watcher runs (default: 5).
+  IKA_APP_BIT_RATE       Video bit rate of app windows (default: 40M).
   IKA_STOP_GRACE_SEC     Seconds to allow Cuttlefish and gfxstream to clean up
                          before forcing surviving processes to exit (default: 30).
   IKA_SCRCPY_REBOOT_TIMEOUT_SEC
@@ -2100,6 +2279,13 @@ run_scrcpy_supervisor() {
   local started_at
   local initial_attempt=1
   local supervisor_lock_fd
+  local game_session="false"
+  local session_watch_pid=""
+
+  if [[ " ${base_command[*]} " == *" --ika-game-session "* ]]; then
+    game_session="true"
+    SCRCPY_WINDOW_STATE_FILE="${GAME_CONSOLE_WINDOW_STATE_FILE}"
+  fi
 
   if [[ ! "${IKA_SCRCPY_REBOOT_TIMEOUT_SEC}" =~ ^[1-9][0-9]*$ ]]; then
     die "IKA_SCRCPY_REBOOT_TIMEOUT_SEC must be a positive whole number of seconds"
@@ -2140,11 +2326,34 @@ run_scrcpy_supervisor() {
     started_at="${SECONDS}"
     "${command[@]}" &
     scrcpy_supervisor_child_pid="$!"
+    if [[ "${game_session}" == "true" ]]; then
+      ( exec {supervisor_lock_fd}>&-
+        watch_game_session "${adb_serial}" "${scrcpy_supervisor_child_pid}" ) &
+      session_watch_pid="$!"
+    fi
     set +e
     wait "${scrcpy_supervisor_child_pid}"
     status="$?"
     set -e
     scrcpy_supervisor_child_pid=""
+    if [[ -n "${session_watch_pid}" ]]; then
+      kill "${session_watch_pid}" >/dev/null 2>&1 || true
+      session_watch_pid=""
+    fi
+
+    if [[ "${game_session}" == "true" ]] \
+        && [[ "${status}" -eq "${SCRCPY_EXIT_GAME_SESSION_ENDED}" \
+              || -f "${GAME_SESSION_EXITED_FILE}" ]]; then
+      # Release this console's lock and pid file first: the desktop console
+      # restored by end_game_session must not find them held.
+      exec {supervisor_lock_fd}>&-
+      trap - EXIT
+      lock_game_session || log "game session lock timed out; ending the session anyway"
+      scrcpy_supervisor_cleanup
+      end_game_session "${adb_serial}"
+      unlock_game_session
+      return 0
+    fi
 
     if [[ "${status}" -eq 0 ]]; then
       # Closing the window is intentional and must not create a reopen loop.
@@ -2238,6 +2447,67 @@ ensure_chromium_before_scrcpy() {
   fi
 }
 
+# Game mode uses UHID for all input devices; normal mode keeps text-friendly
+# SDK keyboard injection.
+append_scrcpy_input_args() {
+  local -n input_args_ref="$1"
+  local game_mode="$2"
+  local label="$3"
+
+  if [[ "${game_mode}" == "true" ]]; then
+    log "${label} game mode: UHID gamepad, keyboard, and mouse"
+    input_args_ref+=(
+      --gamepad=uhid
+      --keyboard=uhid
+      --mouse=uhid
+    )
+  else
+    input_args_ref+=(
+      --keyboard=sdk
+      --prefer-text
+    )
+  fi
+}
+
+append_scrcpy_extra_args() {
+  local -n extra_args_ref="$1"
+  local label="$2"
+  local -a scrcpy_extra_args=()
+
+  [[ -n "${IKA_SCRCPY:-}" ]] || return 0
+  read -r -a scrcpy_extra_args <<<"${IKA_SCRCPY}"
+  if [[ "${#scrcpy_extra_args[@]}" -gt 0 ]]; then
+    log "using extra ${label} args: $(shell_join "${scrcpy_extra_args[@]}")"
+    extra_args_ref+=("${scrcpy_extra_args[@]}")
+  fi
+}
+
+append_scrcpy_env() {
+  local -n scrcpy_env_ref="$1"
+
+  if [[ -d "${SCRCPY_ICON_DIR_DEFAULT}" ]]; then
+    scrcpy_env_ref+=("SCRCPY_ICON_DIR=${SCRCPY_ICON_DIR_DEFAULT}")
+  fi
+
+  if [[ -x "${CVD_CLI_BIN}" ]]; then
+    scrcpy_env_ref+=("IKA_CVD_BIN=${CVD_CLI_BIN}")
+  fi
+
+  # scrcpy spawns `adb` to push the server jar and open the shell. Point it
+  # at the cuttlefish-bundled adb explicitly so it doesn't rely on PATH —
+  # on a stock Asahi system there's no /usr/bin/adb, and even where there
+  # is one we want the cuttlefish version that's known to match the rest
+  # of the cvd-host_package.
+  local packaged_adb="${PACKAGED_CVD_HOST_OUT}/bin/adb"
+  if [[ -x "${packaged_adb}" ]]; then
+    scrcpy_env_ref+=("ADB=${packaged_adb}")
+  fi
+
+  if [[ -n "${SCRCPY_SERVER_PATH_OVERRIDE}" && -f "${SCRCPY_SERVER_PATH_OVERRIDE}" ]]; then
+    scrcpy_env_ref+=("SCRCPY_SERVER_PATH=${SCRCPY_SERVER_PATH_OVERRIDE}")
+  fi
+}
+
 start_scrcpy_with_retries() {
   local adb_serial="$1"
   local fullscreen_mode="${2:-false}"
@@ -2250,7 +2520,6 @@ start_scrcpy_with_retries() {
   local scrcpy_window_width
   local scrcpy_window_height
   local -a scrcpy_env=()
-  local -a scrcpy_extra_args=()
   local -a scrcpy_cmd=(
     "${SCRCPY_BIN}"
     -s "${adb_serial}"
@@ -2284,56 +2553,22 @@ start_scrcpy_with_retries() {
     --no-audio
   )
 
-  # Game mode uses UHID for all input devices; normal mode keeps text-friendly
-  # SDK keyboard injection.
-  if [[ "${game_mode}" == "true" ]]; then
-    log "console game mode: UHID gamepad, keyboard, and mouse"
-    scrcpy_cmd+=(
-      --gamepad=uhid
-      --keyboard=uhid
-      --mouse=uhid
-    )
-  else
-    scrcpy_cmd+=(
-      --keyboard=sdk
-      --prefer-text
-    )
-  fi
+  append_scrcpy_input_args scrcpy_cmd "${game_mode}" console
 
   cuttlefish_frames_socket="$(resolve_cuttlefish_frames_socket)"
   scrcpy_cmd+=(--cuttlefish-frames-socket="${cuttlefish_frames_socket}")
-  scrcpy_cmd+=(--window-state-file="${SCRCPY_WINDOW_STATE_FILE}")
+  if [[ "${START_GAME_SESSION}" == "true" ]]; then
+    # The fullscreen game console keeps its own window state, so that it does
+    # not replace the desktop console's size.
+    scrcpy_cmd+=(--ika-game-session)
+    scrcpy_cmd+=(--window-state-file="${GAME_CONSOLE_WINDOW_STATE_FILE}")
+  else
+    scrcpy_cmd+=(--window-state-file="${SCRCPY_WINDOW_STATE_FILE}")
+  fi
   log "console video source: raw Cuttlefish frames (${cuttlefish_frames_socket})"
 
-  if [[ -n "${IKA_SCRCPY:-}" ]]; then
-    read -r -a scrcpy_extra_args <<<"${IKA_SCRCPY}"
-    if [[ "${#scrcpy_extra_args[@]}" -gt 0 ]]; then
-      log "using extra console args: $(shell_join "${scrcpy_extra_args[@]}")"
-      scrcpy_cmd+=("${scrcpy_extra_args[@]}")
-    fi
-  fi
-
-  if [[ -d "${SCRCPY_ICON_DIR_DEFAULT}" ]]; then
-    scrcpy_env+=("SCRCPY_ICON_DIR=${SCRCPY_ICON_DIR_DEFAULT}")
-  fi
-
-  if [[ -x "${CVD_CLI_BIN}" ]]; then
-    scrcpy_env+=("IKA_CVD_BIN=${CVD_CLI_BIN}")
-  fi
-
-  # scrcpy spawns `adb` to push the server jar and open the shell. Point it
-  # at the cuttlefish-bundled adb explicitly so it doesn't rely on PATH —
-  # on a stock Asahi system there's no /usr/bin/adb, and even where there
-  # is one we want the cuttlefish version that's known to match the rest
-  # of the cvd-host_package.
-  local packaged_adb="${PACKAGED_CVD_HOST_OUT}/bin/adb"
-  if [[ -x "${packaged_adb}" ]]; then
-    scrcpy_env+=("ADB=${packaged_adb}")
-  fi
-
-  if [[ -n "${SCRCPY_SERVER_PATH_OVERRIDE}" && -f "${SCRCPY_SERVER_PATH_OVERRIDE}" ]]; then
-    scrcpy_env+=("SCRCPY_SERVER_PATH=${SCRCPY_SERVER_PATH_OVERRIDE}")
-  fi
+  append_scrcpy_extra_args scrcpy_cmd console
+  append_scrcpy_env scrcpy_env
 
   if [[ "${#scrcpy_env[@]}" -gt 0 ]]; then
     scrcpy_cmd=(
@@ -2411,6 +2646,1635 @@ maybe_start_scrcpy() {
   return 0
 }
 
+# ============================================================================
+# App windows (ika app)
+# ============================================================================
+#
+# Each app window is a separate scrcpy client that creates its own Android
+# virtual display (--new-display), launches one app on it, and follows host
+# window resizes. Unlike the desktop console, these windows use scrcpy's
+# encoded video path rather than raw Cuttlefish frames.
+
+is_app_package_name() {
+  [[ "$1" =~ ^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$ ]]
+}
+
+validate_app_package() {
+  is_app_package_name "$1" || die "invalid package name '$1'"
+}
+
+use_app_window_paths() {
+  local app_dir="${IKA_APPS_DIR}/$1"
+
+  SCRCPY_SUPERVISOR_PID_FILE="${app_dir}/supervisor.pid"
+  SCRCPY_SUPERVISOR_LOCK_FILE="${app_dir}/supervisor.lock"
+  SCRCPY_WINDOW_STATE_FILE="${app_dir}/window-state"
+  SCRCPY_LOG_FILE="${app_dir}/window.log"
+}
+
+guest_adb() {
+  local adb_serial="$1"
+  shift
+  local adb_bin
+
+  if [[ -x "${CVD_ADB_BIN}" ]]; then
+    adb_bin="${CVD_ADB_BIN}"
+  else
+    adb_bin="$(command -v adb || true)"
+  fi
+  [[ -n "${adb_bin}" ]] || return 1
+
+  timeout "${GUEST_ADB_TIMEOUT:-10}" "${adb_bin}" -s "${adb_serial}" "$@"
+}
+
+app_is_installed() {
+  local package="$1"
+  local adb_serial="$2"
+  local package_path
+
+  package_path="$(guest_adb "${adb_serial}" shell pm path "${package}" 2>/dev/null | tr -d '\r' || true)"
+  [[ "${package_path}" == package:* ]]
+}
+
+# Density of the desktop display, preferring the override that ika applies
+# when the console window is resized.
+guest_display_density() {
+  local adb_serial="$1"
+  local output
+  local override
+  local physical
+
+  output="$(guest_adb "${adb_serial}" shell wm density 2>/dev/null | tr -d '\r' || true)"
+  override="$(sed -n 's/^Override density: *\([0-9][0-9]*\).*/\1/p' <<<"${output}")"
+  physical="$(sed -n 's/^Physical density: *\([0-9][0-9]*\).*/\1/p' <<<"${output}")"
+  printf '%s\n' "${override:-${physical}}"
+}
+
+# The desktop display is sized in native host pixels, but scrcpy sizes an
+# encoded virtual display in logical window points. Scale the desktop density
+# by the host's logical/native ratio so app content matches the desktop's
+# physical size on HiDPI hosts.
+app_window_dpi() {
+  local guest_dpi="$1"
+  local native
+  local logical
+  local native_max
+  local logical_max
+  local dpi="${guest_dpi}"
+
+  native="$(host_display_size || true)"
+  logical="$(host_display_logical_size || true)"
+  if [[ "${native}" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+    native_max=$(( BASH_REMATCH[1] > BASH_REMATCH[2] ? BASH_REMATCH[1] : BASH_REMATCH[2] ))
+    if [[ "${logical}" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+      logical_max=$(( BASH_REMATCH[1] > BASH_REMATCH[2] ? BASH_REMATCH[1] : BASH_REMATCH[2] ))
+      if (( native_max > 0 && logical_max > 0 )); then
+        dpi=$(( guest_dpi * logical_max / native_max ))
+      fi
+    fi
+  fi
+
+  dpi=$(( (dpi + 4) / 8 * 8 ))
+  if (( dpi < 96 )); then
+    dpi=96
+  fi
+  printf '%s\n' "${dpi}"
+}
+
+# 16:9 at 60% of the host's logical width, capped at 75% of its height.
+default_app_window_size() {
+  local size
+  local host_width
+  local host_height
+  local width=1280
+  local height=720
+  local max_height
+
+  size="$(host_display_logical_size || true)"
+  if [[ "${size}" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+    host_width="${BASH_REMATCH[1]}"
+    host_height="${BASH_REMATCH[2]}"
+    width=$(( host_width * 60 / 100 ))
+    height=$(( width * 9 / 16 ))
+    max_height=$(( host_height * 75 / 100 ))
+    if (( height > max_height )); then
+      height="${max_height}"
+      width=$(( height * 16 / 9 ))
+    fi
+  fi
+
+  printf '%sx%s\n' "$(( width / 8 * 8 ))" "$(( height / 8 * 8 ))"
+}
+
+# Apps kept out of the app list, name matching and the desktop menu. They can
+# still be opened by giving their full package name.
+IKA_HIDDEN_APPS=(
+  com.google.android.apps.restore
+  org.lineageos.aperture
+  com.google.android.googlequicksearchbox
+  com.android.calculator2
+  org.lineageos.etar
+  com.android.deskclock
+  com.android.contacts
+  org.lineageos.recorder
+  org.lineageos.audiofx
+)
+
+# Apps treated as games even though they do not declare
+# android:appCategory="game", which Android uses to identify games.
+IKA_GAME_APPS=(
+)
+
+# Games are apps that declare themselves as such (recorded by the last sync in
+# APP_GAMES_FILE, see IkaAppIcons) or that are listed in IKA_GAME_APPS. Given
+# an adb serial, a game installed since the last sync is also recognized, by
+# asking the guest's game mode service, which only accepts games.
+is_game_app() {
+  local package="$1"
+  local adb_serial="${2:-}"
+  local game
+
+  for game in "${IKA_GAME_APPS[@]}"; do
+    [[ "${package}" == "${game}" ]] && return 0
+  done
+  if [[ -f "${APP_GAMES_FILE}" ]] && grep -qxF "${package}" "${APP_GAMES_FILE}"; then
+    return 0
+  fi
+  [[ -n "${adb_serial}" ]] || return 1
+  guest_adb "${adb_serial}" shell cmd game list-modes "${package}" </dev/null 2>/dev/null \
+    | grep -q 'current mode'
+}
+
+is_hidden_app() {
+  local hidden
+
+  for hidden in "${IKA_HIDDEN_APPS[@]}"; do
+    [[ "$1" == "${hidden}" ]] && return 0
+  done
+  return 1
+}
+
+# Prints "LABEL<TAB>PACKAGE" for every enabled app with a launcher entry,
+# except hidden apps, and caches the result for name lookups.
+list_guest_apps() {
+  local apps
+
+  apps="$(query_guest_apps "$1")"
+  [[ -n "${apps}" ]] || return 0
+  mkdir -p "${IKA_APPS_DIR}"
+  if printf '%s\n' "${apps}" > "${APP_LIST_CACHE}.$$"; then
+    mv -f "${APP_LIST_CACHE}.$$" "${APP_LIST_CACHE}"
+  fi
+  printf '%s\n' "${apps}"
+}
+
+# Queries the launchable apps from scrcpy's app list, which prints each app as
+# " * LABEL  PACKAGE" (system) or " - LABEL  PACKAGE", but moves the package to
+# an indented continuation line when the label is 30 characters or longer.
+query_guest_apps() {
+  local adb_serial="$1"
+  local output
+  local -a scrcpy_env=()
+
+  append_scrcpy_env scrcpy_env
+  # Nothing unless the query succeeded: a partial list would make the menu sync
+  # remove the launchers of the apps missing from it.
+  output="$(timeout 30 env "${scrcpy_env[@]}" "${SCRCPY_BIN}" -s "${adb_serial}" --list-apps 2>&1)" \
+    || return 0
+  printf '%s\n' "${output}" \
+    | tr -d '\r' \
+    | awk '
+        function is_package(s) {
+          return s ~ /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/
+        }
+        function emit_same_line(    name, package) {
+          name = pending
+          package = name
+          sub(/.*[[:space:]]/, "", package)
+          sub(/[[:space:]]+[^[:space:]]+[[:space:]]*$/, "", name)
+          if (is_package(package) && name != "") {
+            printf "%s\t%s\n", name, package
+          }
+          pending = ""
+        }
+        /^ [*-] / {
+          if (pending != "") {
+            emit_same_line()
+          }
+          pending = substr($0, 4)
+          next
+        }
+        pending != "" && /^[[:space:]]+[^[:space:]]+[[:space:]]*$/ && is_package($1) {
+          sub(/[[:space:]]+$/, "", pending)
+          printf "%s\t%s\n", pending, $1
+          pending = ""
+          next
+        }
+        pending != "" {
+          emit_same_line()
+        }
+        END {
+          if (pending != "") {
+            emit_same_line()
+          }
+        }' \
+    | IKA_HIDDEN="${IKA_HIDDEN_APPS[*]}" awk -F '\t' '
+        BEGIN {
+          n = split(ENVIRON["IKA_HIDDEN"], packages, " ")
+          for (i = 1; i <= n; i++) {
+            hidden[packages[i]] = 1
+          }
+        }
+        !($2 in hidden)' || true
+}
+
+# Resolves the app's label, cached per package because listing apps is slow.
+# Falls back to the package name.
+app_window_title() {
+  local package="$1"
+  local adb_serial="$2"
+  local title_file="${IKA_APPS_DIR}/${package}/title"
+  local title=""
+
+  if [[ -s "${title_file}" ]]; then
+    title="$(<"${title_file}")"
+  else
+    title="$(list_guest_apps "${adb_serial}" \
+      | awk -F '\t' -v pkg="${package}" '$2 == pkg { print $1; exit }' || true)"
+    if [[ -n "${title}" ]]; then
+      printf '%s\n' "${title}" > "${title_file}"
+    fi
+  fi
+
+  printf '%s\n' "${title:-${package}}"
+}
+
+# Resolves NAME to "LABEL<TAB>PACKAGE" among the launchable apps. The app list
+# cached by the last listing or sync answers most lookups without the live
+# query, which takes over half a second; a miss, an ambiguous name, or an app
+# that is no longer installed falls back to the live list.
+resolve_launchable_app() {
+  local name="$1"
+  local adb_serial="$2"
+  local matches
+
+  if [[ -s "${APP_LIST_CACHE}" ]]; then
+    matches="$(match_app_name "${name}" < "${APP_LIST_CACHE}")"
+    if [[ -n "${matches}" && "$(grep -c . <<<"${matches}")" -eq 1 ]] \
+        && app_is_installed "${matches#*$'\t'}" "${adb_serial}"; then
+      printf '%s\n' "${matches}"
+      return 0
+    fi
+  fi
+  resolve_app_name "${name}" "$(list_guest_apps "${adb_serial}")" "launchable app"
+}
+
+# ============================================================================
+# Game sessions (ika app <game>)
+# ============================================================================
+#
+# A game started with 'ika app' runs in a game session instead of an app
+# window: fullscreen on the primary display, in the console started with
+# --game (gamepad, keyboard and mouse passthrough) and --game-session. The
+# session ends when that console leaves fullscreen or is closed, or when the
+# game quits: the game is sent Home (backgrounded, not killed), the session
+# console closes, and the desktop console is restored if it was open before
+# the session. Games started any other way are not affected.
+
+read_game_session_value() {
+  [[ -f "${GAME_SESSION_FILE}" ]] || return 0
+  sed -n "s/^$1=//p" "${GAME_SESSION_FILE}" | head -n1
+}
+
+write_game_session() {
+  local package="$1"
+  local label="$2"
+  local console_was_open="$3"
+
+  printf 'package=%s\nlabel=%s\nconsole_was_open=%s\n' \
+    "${package}" "${label}" "${console_was_open}" > "${GAME_SESSION_FILE}.$$"
+  mv -f "${GAME_SESSION_FILE}.$$" "${GAME_SESSION_FILE}"
+  rm -f "${GAME_SESSION_EXITED_FILE}"
+}
+
+clear_game_session() {
+  rm -f "${GAME_SESSION_FILE}" "${GAME_SESSION_EXITED_FILE}"
+}
+
+# Starting a game and ending a session hold this lock, so that a game launched
+# while a session ends waits and then sees the console the end left behind.
+# Commands that outlive the holder must close game_session_lock_fd.
+lock_game_session() {
+  exec {game_session_lock_fd}>"${GAME_SESSION_LOCK_FILE}"
+  flock -w 120 "${game_session_lock_fd}"
+}
+
+unlock_game_session() {
+  [[ -n "${game_session_lock_fd}" ]] || return 0
+  exec {game_session_lock_fd}>&-
+  game_session_lock_fd=""
+}
+
+# True when the console running now is a game session console.
+game_session_console_running() {
+  local pid
+
+  pid="$(scrcpy_supervisor_pid || true)"
+  [[ -n "${pid}" ]] || return 1
+  [[ " $(tr '\0' ' ' </proc/"${pid}"/cmdline 2>/dev/null) " == *" --ika-game-session "* ]]
+}
+
+# Whether the desktop console should come back when a game session ends: it
+# was open before the session. A session started from within another one
+# keeps the original answer.
+desktop_console_was_open() {
+  if [[ -f "${GAME_SESSION_FILE}" ]] && game_session_console_running; then
+    printf '%s\n' "$(read_game_session_value console_was_open)"
+  elif has_live_cvd_processes && scrcpy_supervisor_pid >/dev/null; then
+    printf 'true\n'
+  else
+    printf 'false\n'
+  fi
+}
+
+# Prints the package of the activity in front on the primary display.
+primary_display_top_package() {
+  local package
+
+  package="$(guest_adb "$1" shell dumpsys activity activities 2>/dev/null \
+    | tr -d '\r' \
+    | awk '
+        /^Display #0/ { primary = 1; next }
+        /^Display #/ { primary = 0 }
+        primary && /topResumedActivity=/ {
+          for (i = 1; i <= NF; i++) {
+            if ($i ~ /\//) {
+              split($i, component, "/")
+              print component[1]
+              exit
+            }
+          }
+        }' || true)"
+  [[ -n "${package}" ]] || return 1
+  printf '%s\n' "${package}"
+}
+
+guest_home_package() {
+  guest_adb "$1" shell cmd package resolve-activity --brief \
+    -a android.intent.action.MAIN -c android.intent.category.HOME 2>/dev/null \
+    | tr -d '\r' | tail -n1 | cut -d/ -f1
+}
+
+# Runs next to a game session console and stops it once the session's game
+# has quit: after the game was seen in front, the home screen is in front of
+# the primary display or the game's process is gone, on two checks in a row.
+# A game that never comes to the front within two minutes ends the session
+# too. Leaves GAME_SESSION_EXITED_FILE so that the supervisor ends the session.
+watch_game_session() {
+  local adb_serial="$1"
+  local console_pid="$2"
+  local home
+  local package
+  local watched=""
+  local top
+  local seen="false"
+  local misses=0
+  local since="${SECONDS}"
+
+  home="$(guest_home_package "${adb_serial}" || true)"
+  while kill -0 "${console_pid}" 2>/dev/null; do
+    sleep 3
+    package="$(read_game_session_value package)"
+    [[ -n "${package}" ]] || continue
+    if [[ "${package}" != "${watched}" ]]; then
+      # A new game replaced the previous one in this session.
+      watched="${package}"
+      seen="false"
+      misses=0
+      since="${SECONDS}"
+    fi
+
+    top="$(primary_display_top_package "${adb_serial}" || true)"
+    if [[ "${top}" == "${package}" ]]; then
+      seen="true"
+      misses=0
+      continue
+    fi
+    if [[ "${seen}" != "true" ]]; then
+      if (( SECONDS - since > 120 )); then
+        log "game ${package} did not come to the front; ending the session"
+        break
+      fi
+      continue
+    fi
+
+    if { [[ -n "${home}" && "${top}" == "${home}" ]] \
+          || ! guest_adb "${adb_serial}" shell pidof "${package}" </dev/null >/dev/null 2>&1; }; then
+      misses=$((misses + 1))
+      if (( misses >= 2 )); then
+        log "game ${package} quit; ending the session"
+        break
+      fi
+    else
+      misses=0
+    fi
+  done
+
+  if kill -0 "${console_pid}" 2>/dev/null; then
+    : > "${GAME_SESSION_EXITED_FILE}"
+    kill "${console_pid}" >/dev/null 2>&1 || true
+  fi
+}
+
+# Prints the home screen's state as Launcher3 reports it (Normal, Background,
+# ...), or nothing for another launcher.
+launcher_state() {
+  guest_adb "$1" shell dumpsys activity "$2" </dev/null 2>/dev/null \
+    | tr -d '\r' | grep -a -m1 -o 'mState:[A-Za-z]*' | cut -d: -f2
+}
+
+# Returns the primary display to the home screen with the Home key. On Ika's
+# desktop, Home from an app can leave Launcher3 in its Background state, which
+# shows the app's snapshot in front of the desktop, and a further press
+# settles it on the home screen. Pressing Home on the home screen itself goes
+# the other way, so each press waits for the state it produced.
+go_home() {
+  local adb_serial="$1"
+  local home
+  local state=""
+  local press
+  local poll
+
+  home="$(guest_home_package "${adb_serial}" || true)"
+  for press in 1 2; do
+    guest_adb "${adb_serial}" shell input -d 0 keyevent KEYCODE_HOME </dev/null >/dev/null 2>&1 || true
+    [[ -n "${home}" ]] || return 0
+    for poll in {1..6}; do
+      sleep 0.5
+      state="$(launcher_state "${adb_serial}" "${home}" || true)"
+      [[ -z "${state}" || "${state}" == "Normal" ]] && return 0
+    done
+  done
+  log "home screen still in its ${state} state"
+}
+
+# Called by the game session console's supervisor once the session is over.
+end_game_session() {
+  local adb_serial="$1"
+  local package
+  local console_was_open
+
+  package="$(read_game_session_value package)"
+  console_was_open="$(read_game_session_value console_was_open)"
+
+  # If the game is still in front, background it with the Home key, which
+  # pauses and stops it as a phone does (the point where games save their
+  # state). It is never force-stopped. A key press rather than a HOME intent:
+  # the intent leaves the launcher in its app-transition state, showing the
+  # game's snapshot in front of the desktop. Skip this if something else is
+  # in front by now, for example after the game quit by itself.
+  if [[ -n "${package}" ]] \
+      && [[ "$(primary_display_top_package "${adb_serial}" || true)" == "${package}" ]]; then
+    go_home "${adb_serial}"
+  fi
+  clear_game_session
+  log "game session for ${package:-unknown} ended"
+
+  # Restored before the session lock is released, so that a game launched
+  # meanwhile finds the desktop console open.
+  if [[ "${console_was_open}" == "true" ]] && has_live_cvd_processes; then
+    log "restoring the desktop console"
+    "${IKA_SCRIPT_PATH}" start </dev/null >/dev/null 2>&1 3>&- {game_session_lock_fd}>&- \
+      || log "could not restore the desktop console; see ${START_LOG_FILE}"
+  fi
+
+}
+
+# Starts PACKAGE in a game session (see above).
+start_game_session() {
+  local package="$1"
+  local label="$2"
+  local console_was_open
+  local adb_serial
+  local component
+  local output
+  local autostart_lock_fd
+
+  adb_serial="$(resolve_adb_serial)"
+  lock_game_session || die "timed out waiting for another game session to start or end"
+  console_was_open="$(desktop_console_was_open)"
+
+  # A game runs in one place only: close its app window if it has one.
+  if app_window_is_open "${package}"; then
+    stop_supervisor_from_file "${IKA_APPS_DIR}/${package}/supervisor.pid" __app_supervisor
+  fi
+
+  write_game_session "${package}" "${label}" "${console_was_open}"
+
+  # A session console already running is kept, and the new game replaces the
+  # current one. Any other console is relaunched as a session console.
+  if ! game_session_console_running; then
+    notify_progress "Starting ${label}…"
+    exec {autostart_lock_fd}>"${CVD_HOME_DIR}/autostart.lock"
+    flock -w "$((CVD_BOOT_TIMEOUT_SEC + 60))" "${autostart_lock_fd}" \
+      || die "timed out waiting for Ika to start"
+    "${IKA_SCRIPT_PATH}" start --game --game-session </dev/null >/dev/null 2>&1 \
+      {autostart_lock_fd}>&- {game_session_lock_fd}>&- \
+      || die "could not start the game session; see ${START_LOG_FILE}"
+    exec {autostart_lock_fd}>&-
+  fi
+
+  component="$(guest_adb "${adb_serial}" shell cmd package resolve-activity --brief \
+    -a android.intent.action.MAIN -c android.intent.category.LAUNCHER "${package}" \
+    </dev/null 2>/dev/null | tr -d '\r' | tail -n1)"
+  [[ "${component}" == */* ]] || die "${label} has no launcher activity"
+
+  # Launch like the home screen does (an existing task is brought back rather
+  # than restarted), on the primary display, forced fullscreen rather than
+  # into the desktop's freeform windowing.
+  output="$(guest_adb "${adb_serial}" shell am start --display 0 --windowingMode 1 \
+    -a android.intent.action.MAIN -c android.intent.category.LAUNCHER \
+    -f 0x10200000 -n "${component}" </dev/null 2>&1 | tr -d '\r' || true)"
+  if [[ "${output}" == *Error* || "${output}" == *Exception* ]]; then
+    die "could not start ${label}: ${output}"
+  fi
+  unlock_game_session
+  close_progress_notifications
+  respond "Started ${label} in a game session; leave fullscreen to end it"
+}
+
+# Starts the VM without its console when it is not running, so that menu
+# launchers work while Ika is stopped, then waits for the guest to boot.
+ensure_guest_ready() {
+  local adb_serial
+  local deadline
+  local autostart_lock_fd
+
+  # Serialize concurrent launches, so only one of them starts the VM.
+  exec {autostart_lock_fd}>"${CVD_HOME_DIR}/autostart.lock"
+  flock -w "$((CVD_BOOT_TIMEOUT_SEC + 60))" "${autostart_lock_fd}" \
+    || die "timed out waiting for Ika to start"
+  if ! has_live_cvd_processes; then
+    log "Android virtual device not running; starting it without the console"
+    notify_progress "Starting Android… Virtual machine needs a moment to get ready"
+    # Close the lock for the child: the VM processes it starts outlive this
+    # command and would otherwise hold the lock for as long as the VM runs.
+    "${IKA_SCRIPT_PATH}" start --no-console </dev/null >/dev/null 2>&1 \
+      {autostart_lock_fd}>&- \
+      || die "could not start the Android virtual device; see ${START_LOG_FILE}"
+  fi
+  exec {autostart_lock_fd}>&-
+
+  adb_serial="$(resolve_adb_serial)"
+  deadline="$(make_deadline "${CVD_BOOT_TIMEOUT_SEC}")"
+  until adb_boot_completed "${adb_serial}"; do
+    has_live_cvd_processes || die "the Android virtual device stopped while booting"
+    within_deadline "${deadline}" || die "the Android virtual device did not finish booting"
+    sleep 1
+  done
+}
+
+# Filters "LABEL<TAB>PACKAGE" lines on stdin to the apps NAME refers to: an
+# exact package or case-insensitive label match, otherwise every label that
+# contains NAME case-insensitively.
+match_app_name() {
+  IKA_APP_NAME="$1" awk -F '\t' '
+    BEGIN { name = tolower(ENVIRON["IKA_APP_NAME"]) }
+    { labels[NR] = $1; packages[NR] = $2 }
+    tolower($1) == name || tolower($2) == name { exact[++n_exact] = NR }
+    index(tolower($1), name) { partial[++n_partial] = NR }
+    END {
+      if (n_exact) {
+        for (i = 1; i <= n_exact; i++) print labels[exact[i]] "\t" packages[exact[i]]
+      } else {
+        for (i = 1; i <= n_partial; i++) print labels[partial[i]] "\t" packages[partial[i]]
+      }
+    }'
+}
+
+# Resolves NAME to exactly one "LABEL<TAB>PACKAGE" line from the LIST of apps,
+# or dies naming the candidates when NAME is unknown or ambiguous.
+resolve_app_name() {
+  local name="$1"
+  local list="$2"
+  local what="$3"
+  local matches
+  local count
+  local label
+  local package
+
+  matches="$(match_app_name "${name}" <<<"${list}")"
+  count="$(grep -c . <<<"${matches}" || true)"
+  if [[ "${count}" -eq 1 ]]; then
+    printf '%s\n' "${matches}"
+    return 0
+  fi
+
+  if [[ "${count}" -eq 0 ]]; then
+    die "no ${what} matches '${name}'; see '${SCRIPT_NAME} app'"
+  fi
+  log "'${name}' matches several ${what}s:"
+  while IFS=$'\t' read -r label package; do
+    log "  ${label}  (${package})"
+  done <<<"${matches}"
+  die "use a longer name or the package name"
+}
+
+open_app_window() {
+  local name="$1"
+  local fullscreen_mode="$2"
+  local game_mode="$3"
+  local title="$4"
+  local window_size="$5"
+  local window_mode="${6:-false}"
+  local package=""
+  local label=""
+  local resolved
+  local adb_serial
+  local guest_dpi
+  local dpi
+  local saved_width=""
+  local saved_height=""
+  local saved_fullscreen=""
+  local attempt
+  local -a scrcpy_env=()
+  local -a scrcpy_cmd=()
+
+  require_executable "${SCRCPY_BIN}" "console client"
+  ensure_guest_ready
+  adb_serial="$(resolve_adb_serial)"
+
+  # A package name is used as given; anything else is looked up by label.
+  if is_app_package_name "${name}" \
+      && app_is_installed "${name}" "${adb_serial}"; then
+    package="${name}"
+  else
+    resolved="$(resolve_launchable_app "${name}" "${adb_serial}")" || exit 1
+    package="${resolved#*$'\t'}"
+    label="${resolved%%$'\t'*}"
+    if [[ -z "${title}" ]]; then
+      title="${label}"
+    fi
+  fi
+  validate_app_package "${package}"
+  scrcpy_env=("IKA_APP_PACKAGE=${package}")
+
+  # Before use_app_window_paths, which repoints the supervisor paths from the
+  # console to this app's window.
+  if [[ "${window_mode}" != "true" ]] && is_game_app "${package}" "${adb_serial}"; then
+    if [[ -z "${label}" && -s "${IKA_APPS_DIR}/${package}/title" ]]; then
+      label="$(<"${IKA_APPS_DIR}/${package}/title")"
+    fi
+    start_game_session "${package}" "${label:-${package}}"
+    return 0
+  fi
+
+  use_app_window_paths "${package}"
+  (umask 077 && mkdir -p "${IKA_APPS_DIR}/${package}")
+  # Cache the label so the window can later be matched by name.
+  if [[ -n "${label}" ]]; then
+    printf '%s\n' "${label}" > "${IKA_APPS_DIR}/${package}/title"
+  fi
+
+  if supervisor_pid_from_file "${SCRCPY_SUPERVISOR_PID_FILE}" __app_supervisor >/dev/null; then
+    respond "${package} is already open in its own window"
+    return 0
+  fi
+
+  if [[ -z "${title}" ]]; then
+    title="$(app_window_title "${package}" "${adb_serial}")"
+  fi
+
+  if [[ -z "${window_size}" ]]; then
+    if read_scrcpy_window_state "${SCRCPY_WINDOW_STATE_FILE}" \
+        saved_width saved_height saved_fullscreen; then
+      window_size="${saved_width}x${saved_height}"
+    else
+      window_size="$(default_app_window_size)"
+    fi
+  fi
+  [[ "${window_size}" =~ ^[1-9][0-9]*x[1-9][0-9]*$ ]] \
+    || die "--size must be WIDTHxHEIGHT (example: 1600x900)"
+
+  guest_dpi="$(guest_display_density "${adb_serial}")"
+  [[ "${guest_dpi}" =~ ^[1-9][0-9]*$ ]] || die "could not read the guest display density"
+  dpi="$(app_window_dpi "${guest_dpi}")"
+
+  # --dpi enables flex resizing: the virtual display follows the window size
+  # at a fixed density. "+" force-stops the app first so it starts on the new
+  # display instead of resurfacing an existing task on the desktop. Closing the
+  # window destroys the virtual display and the app with it.
+  scrcpy_cmd=(
+    "${SCRCPY_BIN}"
+    -s "${adb_serial}"
+    --new-display="${window_size}/${dpi}"
+    --dpi="${dpi}"
+    --start-app="+${package}"
+    --no-vd-system-decorations
+    --window-title="${title}"
+    --window-state-file="${SCRCPY_WINDOW_STATE_FILE}"
+    --video-bit-rate="${IKA_APP_BIT_RATE:-40M}"
+    --mouse-bind=+hsn:b+++
+    --force-adb-forward
+    --render-driver=opengl
+    --no-audio
+  )
+  append_scrcpy_input_args scrcpy_cmd "${game_mode}" "app window"
+  append_scrcpy_extra_args scrcpy_cmd "app window"
+
+  # A distinct app ID lets the host desktop treat each app as its own window
+  # group instead of stacking it under the Ika console.
+  append_scrcpy_env scrcpy_env
+  scrcpy_env+=("SDL_APP_ID=ika-${package}")
+  scrcpy_cmd=(env "${scrcpy_env[@]}" "${scrcpy_cmd[@]}")
+
+  : > "${SCRCPY_LOG_FILE}"
+  log "opening ${package} (${window_size}/${dpi}) as \"${title}\""
+  setsid --fork "${IKA_SCRIPT_PATH}" __app_supervisor "${package}" \
+    "${adb_serial}" "${fullscreen_mode}" -- "${scrcpy_cmd[@]}" \
+    </dev/null >>"${SCRCPY_LOG_FILE}" 2>&1 3>&- &
+  disown || true
+
+  # Return as soon as the supervisor has registered, instead of a fixed wait.
+  for attempt in {1..30}; do
+    if supervisor_pid_from_file "${SCRCPY_SUPERVISOR_PID_FILE}" __app_supervisor >/dev/null; then
+      respond "Opened ${title} in its own window"
+      return 0
+    fi
+    sleep 0.05
+  done
+
+  die "could not open a window for ${package}; see ${SCRCPY_LOG_FILE}"
+}
+
+# Opens Android's App info page for NAME in the Settings app window: the page
+# is started on the display of that window, opening the window first if needed.
+open_app_info() {
+  local name="$1"
+  local settings="com.android.settings"
+  local adb_serial
+  local resolved
+  local package
+  local label
+  local log_file
+  local display_id=""
+  local deadline
+  local output
+
+  require_executable "${SCRCPY_BIN}" "console client"
+  ensure_guest_ready
+  adb_serial="$(resolve_adb_serial)"
+
+  if is_app_package_name "${name}" \
+      && app_is_installed "${name}" "${adb_serial}"; then
+    package="${name}"
+    label="${name}"
+    if [[ -s "${IKA_APPS_DIR}/${package}/title" ]]; then
+      label="$(<"${IKA_APPS_DIR}/${package}/title")"
+    elif [[ -f "$(app_menu_data_dir)/applications/ika-${package}.desktop" ]]; then
+      # The launcher name carries a game/app marker (see app_launcher_name).
+      label="$(sed -n 's/^Name=//p' \
+        "$(app_menu_data_dir)/applications/ika-${package}.desktop" | head -n1)"
+      label="${label#* ∙ }"
+      label="${label:-${package}}"
+    fi
+  else
+    resolved="$(resolve_launchable_app "${name}" "${adb_serial}")" || exit 1
+    package="${resolved#*$'\t'}"
+    label="${resolved%%$'\t'*}"
+  fi
+  validate_app_package "${package}"
+
+  log_file="${IKA_APPS_DIR}/${settings}/window.log"
+  if ! app_window_is_open "${settings}"; then
+    ( open_app_window "${settings}" false false "" "" ) >/dev/null || exit 1
+    # Let Settings finish starting, so that the App info page opens on top.
+    deadline="$(make_deadline 20)"
+    until [[ -n "${display_id}" ]]; do
+      display_id="$(sed -n 's/.*Starting app .* on display \([0-9][0-9]*\)\.\.\..*/\1/p' \
+        "${log_file}" 2>/dev/null | tail -n1)"
+      [[ -n "${display_id}" ]] && break
+      within_deadline "${deadline}" || die "the Settings window did not start"
+      sleep 0.5
+    done
+    sleep 1.5
+  else
+    display_id="$(sed -n 's/.*Starting app .* on display \([0-9][0-9]*\)\.\.\..*/\1/p' \
+      "${log_file}" 2>/dev/null | tail -n1)"
+    [[ -n "${display_id}" ]] || die "could not find the Settings window's display"
+  fi
+
+  output="$(guest_adb "${adb_serial}" shell am start --display "${display_id}" \
+    -a android.settings.APPLICATION_DETAILS_SETTINGS -d "package:${package}" \
+    -f 0x10000000 2>&1 | tr -d '\r' || true)"
+  if [[ "${output}" == *Error* || "${output}" == *Exception* ]]; then
+    die "could not open App info for ${label}: ${output}"
+  fi
+  respond "Opened App info for ${label}"
+}
+
+run_app_supervisor() {
+  local package="$1"
+  shift
+
+  validate_app_package "${package}"
+  use_app_window_paths "${package}"
+  run_scrcpy_supervisor "$@"
+}
+
+app_window_is_open() {
+  supervisor_pid_from_file "${IKA_APPS_DIR}/$1/supervisor.pid" __app_supervisor >/dev/null
+}
+
+# Lists launchable apps sorted by label. Apps already open in their own window
+# are shown in bold on a terminal, or marked "(open)" when the output is not a
+# terminal or NO_COLOR is set.
+list_launchable_apps() {
+  local adb_serial
+  local -a labels=()
+  local -a packages=()
+  local label
+  local package
+  local width=0
+  local max_width=40
+  local bold=""
+  local plain=""
+  local i
+
+  require_executable "${SCRCPY_BIN}" "console client"
+  has_live_cvd_processes || die "Android virtual device not running; start it with '${SCRIPT_NAME} start'"
+  adb_serial="$(resolve_adb_serial)"
+  adb_boot_completed "${adb_serial}" || die "Android virtual device has not finished booting"
+
+  while IFS=$'\t' read -r label package; do
+    [[ -n "${label}" && -n "${package}" ]] || continue
+    labels+=("${label}")
+    packages+=("${package}")
+    if (( ${#label} > width )); then
+      width="${#label}"
+    fi
+  done < <(list_guest_apps "${adb_serial}" | sort -f -t $'\t' -k1,1 -k2,2)
+
+  if [[ "${#packages[@]}" -eq 0 ]]; then
+    die "could not list apps from the Android virtual device"
+  fi
+  if (( width > max_width )); then
+    width="${max_width}"
+  fi
+
+  if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    bold=$'\e[1m'
+    plain=$'\e[0m'
+  fi
+
+  for i in "${!packages[@]}"; do
+    label="${labels[i]}"
+    package="${packages[i]}"
+    if app_window_is_open "${package}"; then
+      if [[ -n "${bold}" ]]; then
+        printf '%s%-*s  %s%s\n' "${bold}" "${width}" "${label}" "${package}" "${plain}"
+      else
+        printf '%-*s  %s  (open)\n' "${width}" "${label}" "${package}"
+      fi
+    else
+      printf '%-*s  %s\n' "${width}" "${label}" "${package}"
+    fi
+  done
+}
+
+# ============================================================================
+# Desktop menu entries for guest apps (ika app sync)
+# ============================================================================
+#
+# Each launchable app gets ~/.local/share/applications/ika-PACKAGE.desktop.
+# Its file name matches the app window's Wayland app ID (SDL_APP_ID), so
+# GNOME Shell and KWin associate open app windows with their launcher. The
+# launchers are grouped as "Android Apps (Ika)": KDE Plasma, XFCE, Cinnamon
+# and MATE read a freedesktop menu-merge file, while GNOME Shell, which
+# ignores menu files, gets an app-grid folder matching the same category.
+
+IKA_MENU_NAME="Android Apps (Ika)"
+IKA_MENU_ID="ika-android-apps"
+IKA_MENU_CATEGORY="X-Ika-Android"
+IKA_MENU_ICON="ika-scrcpy"
+IKA_MENU_ICON_SIZE="192"
+IKA_MENU_VERSION="3"
+
+app_menu_icon_dir() {
+  printf '%s/icons\n' "${IKA_APPS_DIR}"
+}
+
+# Renders every launchable app's icon inside the guest with the IkaAppIcons
+# helper in the scrcpy-server jar, and stores them as ICON_DIR/PACKAGE-HASH.png.
+# The content hash changes the launcher's Icon path whenever an app's icon
+# changes, so desktop icon caches never show a stale one. On success, icons of
+# apps that are no longer launchable are removed.
+export_app_icons() {
+  local adb_serial="$1"
+  local icon_dir
+  local server_jar="${SCRCPY_SERVER_PATH_OVERRIDE:-${PACKAGED_SCRCPY_SERVER}}"
+  local remote_jar="/data/local/tmp/ika-app-icons.jar"
+  local remote_dir="/data/local/tmp/ika-app-icons"
+  local staging
+  local png
+  local package
+  local hash
+  local dest
+  local -A keep=()
+
+  if [[ ! -f "${server_jar}" ]]; then
+    log "scrcpy-server not found at ${server_jar}; keeping existing app icons"
+    return 1
+  fi
+
+  icon_dir="$(app_menu_icon_dir)"
+  staging="$(mktemp -d "${CVD_TMP_DIR}/app-icons.XXXXXX")"
+  if ! guest_adb "${adb_serial}" push -q "${server_jar}" "${remote_jar}" >/dev/null \
+      || ! GUEST_ADB_TIMEOUT=60 guest_adb "${adb_serial}" shell \
+          "rm -rf ${remote_dir} && CLASSPATH=${remote_jar} app_process / com.genymobile.scrcpy.IkaAppIcons ${remote_dir} ${IKA_MENU_ICON_SIZE}" >/dev/null \
+      || ! GUEST_ADB_TIMEOUT=60 guest_adb "${adb_serial}" pull -q "${remote_dir}" "${staging}/icons" >/dev/null; then
+    guest_adb "${adb_serial}" shell "rm -rf ${remote_dir} ${remote_jar}" >/dev/null 2>&1 || true
+    rm -rf "${staging}"
+    log "could not render app icons in the guest; keeping existing app icons"
+    return 1
+  fi
+  guest_adb "${adb_serial}" shell "rm -rf ${remote_dir} ${remote_jar}" >/dev/null 2>&1 || true
+
+  if [[ -f "${staging}/icons/games.list" ]]; then
+    mkdir -p "${IKA_APPS_DIR}"
+    mv -f "${staging}/icons/games.list" "${APP_GAMES_FILE}"
+  fi
+
+  mkdir -p "${icon_dir}"
+  for png in "${staging}/icons"/*.png; do
+    [[ -f "${png}" ]] || continue
+    package="$(basename "${png}" .png)"
+    is_app_package_name "${package}" || continue
+    is_hidden_app "${package}" && continue
+    hash="$(sha256sum < "${png}" | cut -c1-12)"
+    dest="${icon_dir}/${package}-${hash}.png"
+    if [[ ! -f "${dest}" ]]; then
+      mv -f "${png}" "${dest}"
+    fi
+    keep["${dest}"]=1
+  done
+  rm -rf "${staging}"
+
+  for png in "${icon_dir}"/*.png; do
+    [[ -f "${png}" && -z "${keep[${png}]:-}" ]] && rm -f "${png}"
+  done
+  return 0
+}
+
+# Prints the icon for PACKAGE: its rendered PNG when there is one, otherwise
+# the generic Ika icon.
+app_menu_icon() {
+  local package="$1"
+  local -a icons=("$(app_menu_icon_dir)/${package}"-*.png)
+
+  if [[ -f "${icons[0]}" ]]; then
+    printf '%s\n' "${icons[0]}"
+  else
+    printf '%s\n' "${IKA_MENU_ICON}"
+  fi
+}
+
+app_menu_data_dir() {
+  printf '%s\n' "${XDG_DATA_HOME:-${HOME}/.local/share}"
+}
+
+app_menu_config_dir() {
+  printf '%s\n' "${XDG_CONFIG_HOME:-${HOME}/.config}"
+}
+
+# Writes stdin to PATH only when the content differs, so menus that watch
+# these directories are not refreshed needlessly.
+write_file_if_changed() {
+  local path="$1"
+  local content
+
+  content="$(cat)"
+  if [[ -f "${path}" ]] && [[ "$(<"${path}")" == "${content}" ]]; then
+    return 1
+  fi
+  mkdir -p "$(dirname "${path}")"
+  printf '%s\n' "${content}" > "${path}"
+}
+
+# Rewrites APP_GAMES_FILE from the guest's game mode service, for the apps in
+# LIST (LABEL<TAB>PACKAGE lines). Keeps the old file if the guest can't answer.
+refresh_app_games_file() {
+  local adb_serial="$1"
+  local list="$2"
+  local label
+  local package
+  local packages=""
+  local output
+
+  while IFS=$'\t' read -r label package; do
+    is_app_package_name "${package}" && packages+=" ${package}"
+  done <<<"${list}"
+  [[ -n "${packages}" ]] || return 0
+
+  output="$(GUEST_ADB_TIMEOUT=60 guest_adb "${adb_serial}" shell \
+    "for p in${packages}; do cmd game list-modes \$p 2>/dev/null | grep -q 'current mode' && echo \$p; done; echo ika-games-done" \
+    </dev/null 2>/dev/null)" || return 0
+  [[ "${output}" == *ika-games-done* ]] || return 0
+  mkdir -p "${IKA_APPS_DIR}"
+  grep -v '^ika-games-done' <<<"${output//$'\r'/}" | grep -v '^$' > "${APP_GAMES_FILE}" || true
+}
+
+# Prints a launcher's menu name: the app label, marked as a game or an app.
+app_launcher_name() {
+  local label="$1"
+  local package="$2"
+
+  if is_game_app "${package}"; then
+    printf '🎮 ∙ %s\n' "${label}"
+  else
+    printf 'ᗩ ∙ %s\n' "${label}"
+  fi
+}
+
+# Creates or updates one launcher and returns 1 when it was already current.
+# Existing launchers are edited in place, keeping any keys the user added.
+write_app_launcher() {
+  local apps_dir="$1"
+  local label="$2"
+  local package="$3"
+  local icon="$4"
+  local file="${apps_dir}/ika-${package}.desktop"
+  local name
+  local keywords="${label//;/ };${package};Android;Ika;"
+  local settings_icon
+
+  name="$(app_launcher_name "${label}" "${package}")"
+  settings_icon="$(app_menu_icon com.android.settings)"
+  if [[ -f "${file}" ]] \
+      && grep -qxF "Name=${name}" "${file}" \
+      && grep -qxF "Icon=${icon}" "${file}" \
+      && grep -qxF "Exec=ika app --info ${package}" "${file}" \
+      && grep -qxF "Icon=${settings_icon}" "${file}" \
+      && grep -qxF "X-Ika-Package=${package}" "${file}" \
+      && grep -qxF "X-Ika-Version=${IKA_MENU_VERSION}" "${file}"; then
+    return 1
+  fi
+
+  if command -v desktop-file-edit >/dev/null 2>&1; then
+    if [[ ! -f "${file}" ]]; then
+      printf '[Desktop Entry]\nType=Application\n' > "${file}"
+    fi
+    # The action group must exist before desktop-file-edit validates the
+    # Actions key.
+    set_launcher_settings_action "${file}" "${package}" "${settings_icon}"
+    desktop-file-edit \
+      --set-name="${name}" \
+      --set-key=Exec --set-value="ika app ${package}" \
+      --set-icon="${icon}" \
+      --set-key=Terminal --set-value=false \
+      --set-key=StartupWMClass --set-value="ika-${package}" \
+      --set-key=Keywords --set-value="${keywords}" \
+      --set-key=Actions --set-value="app-settings;" \
+      --add-category="${IKA_MENU_CATEGORY}" \
+      --set-key=X-Ika-Package --set-value="${package}" \
+      --set-key=X-Ika-Version --set-value="${IKA_MENU_VERSION}" \
+      "${file}"
+  else
+    cat > "${file}" <<EOF
+[Desktop Entry]
+Type=Application
+Name=${name}
+Exec=ika app ${package}
+Icon=${icon}
+Terminal=false
+StartupWMClass=ika-${package}
+Keywords=${keywords}
+Actions=app-settings;
+Categories=${IKA_MENU_CATEGORY};
+X-Ika-Package=${package}
+X-Ika-Version=${IKA_MENU_VERSION}
+EOF
+    set_launcher_settings_action "${file}" "${package}" "${settings_icon}"
+  fi
+}
+
+# Writes the launcher's "App Settings" action, which opens Android's App info
+# page for the app. desktop-file-edit only edits the main group, so the action
+# group is replaced here, without leaving blank lines behind.
+set_launcher_settings_action() {
+  local file="$1"
+  local package="$2"
+  local settings_icon="$3"
+
+  {
+    awk '
+      /^\[/ { skip = ($0 == "[Desktop Action app-settings]") }
+      skip { next }
+      /^[[:space:]]*$/ { blanks = blanks $0 "\n"; next }
+      { printf "%s", blanks; blanks = ""; print }' "${file}"
+    printf '\n[Desktop Action app-settings]\nName=App Settings\nExec=ika app --info %s\nIcon=%s\n' \
+      "${package}" "${settings_icon}"
+  } > "${file}.tmp"
+  mv -f "${file}.tmp" "${file}"
+}
+
+# Prints the launchers created by ika, identified by their X-Ika-Version key.
+list_app_launchers() {
+  local file
+
+  for file in "$(app_menu_data_dir)"/applications/ika-*.desktop; do
+    [[ -f "${file}" ]] || continue
+    grep -q '^X-Ika-Version=' "${file}" && printf '%s\n' "${file}"
+  done
+  return 0
+}
+
+app_menu_merge_file() {
+  printf '%s/menus/applications-merged/%s.menu\n' "$(app_menu_config_dir)" "${IKA_MENU_ID}"
+}
+
+app_menu_directory_file() {
+  printf '%s/desktop-directories/%s.directory\n' "$(app_menu_data_dir)" "${IKA_MENU_ID}"
+}
+
+install_xdg_app_menu() {
+  write_file_if_changed "$(app_menu_directory_file)" <<EOF || true
+[Desktop Entry]
+Type=Directory
+Name=${IKA_MENU_NAME}
+Icon=${IKA_MENU_ICON}
+EOF
+
+  write_file_if_changed "$(app_menu_merge_file)" <<EOF || true
+<!DOCTYPE Menu PUBLIC "-//freedesktop//DTD Menu 1.0//EN"
+ "http://www.freedesktop.org/standards/menu-spec/menu-1.0.dtd">
+<Menu>
+  <Name>Applications</Name>
+  <Menu>
+    <Name>${IKA_MENU_NAME}</Name>
+    <Directory>${IKA_MENU_ID}.directory</Directory>
+    <Include>
+      <Category>${IKA_MENU_CATEGORY}</Category>
+    </Include>
+  </Menu>
+</Menu>
+EOF
+}
+
+# GNOME Shell settings are only usable inside a desktop session.
+gnome_app_folders_available() {
+  [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]] || return 1
+  command -v gsettings >/dev/null 2>&1 || return 1
+  gsettings list-schemas 2>/dev/null | grep -qx 'org.gnome.desktop.app-folders'
+}
+
+gnome_app_folder_schema() {
+  printf 'org.gnome.desktop.app-folders.folder:/org/gnome/desktop/app-folders/folders/%s/\n' \
+    "${IKA_MENU_ID}"
+}
+
+install_gnome_app_folder() {
+  local schema
+  local children
+
+  gnome_app_folders_available || return 0
+  schema="$(gnome_app_folder_schema)"
+
+  if [[ "$(gsettings get "${schema}" name)" != "'${IKA_MENU_NAME}'" ]]; then
+    gsettings set "${schema}" name "'${IKA_MENU_NAME}'"
+  fi
+  if [[ "$(gsettings get "${schema}" categories)" != "['${IKA_MENU_CATEGORY}']" ]]; then
+    gsettings set "${schema}" categories "['${IKA_MENU_CATEGORY}']"
+  fi
+  if [[ "$(gsettings get "${schema}" translate)" != "false" ]]; then
+    gsettings set "${schema}" translate false
+  fi
+
+  children="$(gsettings get org.gnome.desktop.app-folders folder-children)"
+  if [[ "${children}" != *"'${IKA_MENU_ID}'"* ]]; then
+    if [[ "${children}" == "@as []" || "${children}" == "[]" ]]; then
+      children="['${IKA_MENU_ID}']"
+    else
+      children="${children%]}, '${IKA_MENU_ID}']"
+    fi
+    gsettings set org.gnome.desktop.app-folders folder-children "${children}"
+  fi
+}
+
+remove_gnome_app_folder() {
+  local children
+  local item="'${IKA_MENU_ID}'"
+
+  gnome_app_folders_available || return 0
+  children="$(gsettings get org.gnome.desktop.app-folders folder-children)"
+  if [[ "${children}" == *"${item}"* ]]; then
+    children="${children//", ${item}"/}"
+    children="${children//"${item}, "/}"
+    children="${children//"${item}"/}"
+    if [[ "${children}" == "[]" ]]; then
+      children="@as []"
+    fi
+    gsettings set org.gnome.desktop.app-folders folder-children "${children}"
+  fi
+
+  if command -v dconf >/dev/null 2>&1; then
+    dconf reset -f "/org/gnome/desktop/app-folders/folders/${IKA_MENU_ID}/"
+  else
+    gsettings reset-recursively "$(gnome_app_folder_schema)"
+  fi
+}
+
+# Rebuilds desktop caches: the MIME cache, and KDE's ksycoca, which Plasma's
+# menus read instead of rescanning launcher files.
+refresh_app_menu_caches() {
+  local kbuildsycoca
+
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q "$(app_menu_data_dir)/applications" || true
+  fi
+  for kbuildsycoca in kbuildsycoca6 kbuildsycoca5; do
+    if command -v "${kbuildsycoca}" >/dev/null 2>&1; then
+      "${kbuildsycoca}" >/dev/null 2>&1 || true
+      break
+    fi
+  done
+}
+
+# GNOME Shell keeps an app-grid icon, label included, for as long as its app
+# stays installed, so a launcher renamed in place would keep showing its old
+# name. Launchers whose name changes are therefore moved out of the
+# applications directory until GNOME Shell has dropped them, updated there,
+# and moved back as new apps. Prints the number of launchers updated.
+refresh_renamed_launchers() {
+  local apps_dir="$1"
+  local list="$2"
+  local label
+  local package
+  local file
+  local parked
+  local -a labels=()
+  local -a packages=()
+  local i
+
+  if ! pgrep -u "${UID}" -x gnome-shell >/dev/null 2>&1; then
+    printf '0\n'
+    return 0
+  fi
+
+  while IFS=$'\t' read -r label package; do
+    is_app_package_name "${package}" || continue
+    file="${apps_dir}/ika-${package}.desktop"
+    if [[ -f "${file}" ]] && grep -q '^X-Ika-Version=' "${file}" \
+        && ! grep -qxF "Name=$(app_launcher_name "${label}" "${package}")" "${file}"; then
+      labels+=("${label}")
+      packages+=("${package}")
+    fi
+  done <<<"${list}"
+
+  if [[ "${#packages[@]}" -eq 0 ]]; then
+    printf '0\n'
+    return 0
+  fi
+
+  parked="$(mktemp -d "${CVD_TMP_DIR}/renamed-launchers.XXXXXX")"
+  for package in "${packages[@]}"; do
+    mv -f "${apps_dir}/ika-${package}.desktop" "${parked}/"
+  done
+  refresh_app_menu_caches
+  # GNOME Shell processes app changes asynchronously and rate-limits them.
+  sleep 3
+  for i in "${!packages[@]}"; do
+    write_app_launcher "${parked}" "${labels[i]}" "${packages[i]}" \
+      "$(app_menu_icon "${packages[i]}")" || true
+    mv -f "${parked}/ika-${packages[i]}.desktop" "${apps_dir}/"
+  done
+  rmdir "${parked}" 2>/dev/null || true
+  printf '%s\n' "${#packages[@]}"
+}
+
+sync_app_menu() {
+  local adb_serial
+  local apps_dir
+  local list
+  local label
+  local package
+  local file
+  local updated=0
+  local removed=0
+  local icons="unchanged"
+  local sync_lock_fd
+  local -A current=()
+
+  require_executable "${SCRCPY_BIN}" "console client"
+  has_live_cvd_processes || die "Android virtual device not running; start it with '${SCRIPT_NAME} start'"
+  adb_serial="$(resolve_adb_serial)"
+  adb_boot_completed "${adb_serial}" || die "Android virtual device has not finished booting"
+
+  # The app menu watcher and a manual sync must not write the same files.
+  exec {sync_lock_fd}>"${APP_MENU_SYNC_LOCK_FILE}"
+  flock -w 120 "${sync_lock_fd}" || die "another app menu sync is still running"
+
+  list="$(list_guest_apps "${adb_serial}")"
+  [[ -n "${list}" ]] || die "could not list apps from the Android virtual device"
+
+  if export_app_icons "${adb_serial}"; then
+    icons="rendered"
+  else
+    # The icon helper also lists the games; without it, a game installed since
+    # its last run would be named as an app.
+    refresh_app_games_file "${adb_serial}" "${list}"
+  fi
+
+  apps_dir="$(app_menu_data_dir)/applications"
+  mkdir -p "${apps_dir}"
+  updated="$(refresh_renamed_launchers "${apps_dir}" "${list}")"
+  while IFS=$'\t' read -r label package; do
+    is_app_package_name "${package}" || continue
+    current["${package}"]=1
+    if write_app_launcher "${apps_dir}" "${label}" "${package}" \
+        "$(app_menu_icon "${package}")"; then
+      updated=$((updated + 1))
+    fi
+  done <<<"${list}"
+
+  while read -r file; do
+    [[ -n "${file}" ]] || continue
+    package="$(sed -n 's/^X-Ika-Package=//p' "${file}" | head -n1)"
+    if [[ -z "${package}" || -z "${current[${package}]:-}" ]]; then
+      rm -f "${file}"
+      removed=$((removed + 1))
+    fi
+  done < <(list_app_launchers)
+
+  install_xdg_app_menu
+  install_gnome_app_folder
+  refresh_app_menu_caches
+  # Release the lock now: a watcher started after this would inherit the
+  # descriptor and block on it.
+  exec {sync_lock_fd}>&-
+
+  respond "${IKA_MENU_NAME}: ${#current[@]} apps (${updated} added or updated, ${removed} removed, icons ${icons})"
+}
+
+remove_app_menu() {
+  local file
+  local removed=0
+  local sync_lock_fd
+
+  exec {sync_lock_fd}>"${APP_MENU_SYNC_LOCK_FILE}"
+  flock -w 120 "${sync_lock_fd}" || die "an app menu sync is still running"
+
+  while read -r file; do
+    [[ -n "${file}" ]] || continue
+    rm -f "${file}"
+    removed=$((removed + 1))
+  done < <(list_app_launchers)
+
+  rm -f "$(app_menu_merge_file)" "$(app_menu_directory_file)" "${APP_LIST_CACHE}" \
+    "${APP_GAMES_FILE}"
+  rm -rf "$(app_menu_icon_dir)"
+  remove_gnome_app_folder
+  refresh_app_menu_caches
+  exec {sync_lock_fd}>&-
+
+  respond "Removed ${IKA_MENU_NAME} (${removed} launchers)"
+}
+
+# Prints a fingerprint of the guest's enabled packages and their versions,
+# which changes whenever an app is installed, updated, removed, enabled or
+# disabled.
+guest_package_fingerprint() {
+  local packages
+
+  packages="$(guest_adb "$1" shell cmd package list packages -e --show-versioncode 2>/dev/null \
+    | tr -d '\r' || true)"
+  [[ -n "${packages}" ]] || return 1
+  sort <<<"${packages}" | sha256sum | cut -c1-16
+}
+
+app_menu_watcher_cleanup() {
+  if [[ -f "${APP_MENU_WATCHER_PID_FILE}" \
+      && "$(<"${APP_MENU_WATCHER_PID_FILE}")" == "$$" ]]; then
+    rm -f "${APP_MENU_WATCHER_PID_FILE}"
+  fi
+}
+
+# Keeps the desktop menu in sync while the VM runs: syncs once the guest has
+# booted, then whenever its packages change. Polling one package listing costs
+# a few tens of milliseconds and needs nothing running in the guest. Exits
+# when the VM stops or the menu is removed with 'ika app sync --remove'.
+run_app_menu_watcher() {
+  local adb_serial
+  local fingerprint
+  local synced=""
+  local watcher_lock_fd
+
+  exec {watcher_lock_fd}>"${APP_MENU_WATCHER_LOCK_FILE}"
+  flock -n "${watcher_lock_fd}" || return 0
+  printf '%s\n' "$$" > "${APP_MENU_WATCHER_PID_FILE}"
+  trap 'exit 0' INT TERM HUP
+  trap app_menu_watcher_cleanup EXIT
+
+  adb_serial="$(resolve_adb_serial)"
+  log "app menu watcher started"
+  while has_live_cvd_processes && [[ ! -f "${APP_MENU_DISABLED_FILE}" ]]; do
+    if adb_boot_completed "${adb_serial}" \
+        && fingerprint="$(guest_package_fingerprint "${adb_serial}")" \
+        && [[ "${fingerprint}" != "${synced}" ]]; then
+      if [[ -n "${synced}" ]]; then
+        log "guest packages changed; updating the app menu"
+      fi
+      # Wait in the background so that a stop request is handled at once
+      # instead of after the running command.
+      # Without the watcher's lock, which a daemon started during the sync
+      # (such as an adb server) would otherwise keep.
+      ( exec {watcher_lock_fd}>&-; sync_app_menu ) &
+      if wait "$!"; then
+        synced="${fingerprint}"
+      else
+        log "app menu sync failed; retrying in 30s"
+        sleep 30 &
+        wait "$!"
+      fi
+    fi
+    sleep "${IKA_APP_MENU_POLL_SEC}" &
+    wait "$!"
+  done
+  log "app menu watcher stopped"
+}
+
+start_app_menu_watcher() {
+  [[ ! -f "${APP_MENU_DISABLED_FILE}" ]] || return 0
+  supervisor_pid_from_file "${APP_MENU_WATCHER_PID_FILE}" __app_menu_watcher >/dev/null && return 0
+
+  setsid --fork "${IKA_SCRIPT_PATH}" __app_menu_watcher \
+    </dev/null >>"${APP_MENU_LOG_FILE}" 2>&1 3>&- &
+  disown || true
+}
+
+stop_app_menu_watcher() {
+  stop_supervisor_from_file "${APP_MENU_WATCHER_PID_FILE}" __app_menu_watcher
+}
+
+# Prints "LABEL<TAB>PACKAGE" for each open app window, using the cached title.
+list_open_app_windows() {
+  local pid_file
+  local app_dir
+  local package
+  local title
+
+  for pid_file in "${IKA_APPS_DIR}"/*/supervisor.pid; do
+    [[ -f "${pid_file}" ]] || continue
+    supervisor_pid_from_file "${pid_file}" __app_supervisor >/dev/null || continue
+    app_dir="$(dirname "${pid_file}")"
+    package="$(basename "${app_dir}")"
+    title="${package}"
+    if [[ -s "${app_dir}/title" ]]; then
+      title="$(<"${app_dir}/title")"
+    fi
+    printf '%s\t%s\n' "${title}" "${package}"
+  done
+}
+
+close_app_window() {
+  local name="$1"
+  local open_windows
+  local resolved
+  local package
+
+  open_windows="$(list_open_app_windows)"
+  if [[ -z "${open_windows}" ]]; then
+    respond "No app windows are open"
+    return 0
+  fi
+  resolved="$(resolve_app_name "${name}" "${open_windows}" "open app window")" || exit 1
+  package="${resolved#*$'\t'}"
+  validate_app_package "${package}"
+
+  stop_supervisor_from_file "${IKA_APPS_DIR}/${package}/supervisor.pid" __app_supervisor
+  respond "Closed ${resolved%%$'\t'*}"
+}
+
+run_app_command() {
+  local name=""
+  local info_mode="false"
+  local window_mode="false"
+  local fullscreen_mode="false"
+  local game_mode="false"
+  local title=""
+  local window_size=""
+
+  # Without a terminal (a menu launcher), report errors as notifications.
+  if [[ ! -t 0 && ! -t 2 ]]; then
+    IKA_NOTIFY="true"
+  fi
+
+  case "${1:-}" in
+    "")
+      list_launchable_apps
+      return 0
+      ;;
+    sync)
+      shift
+      case "${1:-}" in
+        "")
+          rm -f "${APP_MENU_DISABLED_FILE}"
+          sync_app_menu
+          start_app_menu_watcher
+          ;;
+        --remove)
+          : > "${APP_MENU_DISABLED_FILE}"
+          stop_app_menu_watcher
+          remove_app_menu
+          ;;
+        *)
+          die "usage: ${SCRIPT_NAME} app sync [--remove]"
+          ;;
+      esac
+      return 0
+      ;;
+    close)
+      shift
+      [[ $# -gt 0 ]] || die "usage: ${SCRIPT_NAME} app close NAME|PACKAGE|--all"
+      if [[ "$1" == "--all" ]]; then
+        stop_app_supervisors
+        respond "Closed all app windows"
+      else
+        # Unquoted multi-word labels arrive as separate arguments.
+        close_app_window "$*"
+      fi
+      return 0
+      ;;
+  esac
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -f|--fullscreen)
+        fullscreen_mode="true"
+        shift
+        ;;
+      --game)
+        game_mode="true"
+        shift
+        ;;
+      --info)
+        info_mode="true"
+        shift
+        ;;
+      --window)
+        window_mode="true"
+        shift
+        ;;
+      --title=*)
+        title="${1#*=}"
+        shift
+        ;;
+      --title)
+        shift
+        [[ $# -gt 0 ]] || die "--title requires a value"
+        title="$1"
+        shift
+        ;;
+      --size=*)
+        window_size="${1#*=}"
+        shift
+        ;;
+      --size)
+        shift
+        [[ $# -gt 0 ]] || die "--size requires a value"
+        window_size="$1"
+        shift
+        ;;
+      --ika_scrcpy=*)
+        IKA_SCRCPY="${1#*=}"
+        shift
+        ;;
+      --ika_scrcpy)
+        shift
+        [[ $# -gt 0 ]] || die "--ika_scrcpy requires a value"
+        IKA_SCRCPY="$1"
+        shift
+        ;;
+      -*)
+        die "unknown app option: $1"
+        ;;
+      *)
+        # Unquoted multi-word labels arrive as separate arguments.
+        name="${name:+${name} }$1"
+        shift
+        ;;
+    esac
+  done
+
+  [[ -n "${name}" ]] || die "usage: ${SCRIPT_NAME} app NAME|PACKAGE [options]"
+  if [[ "${info_mode}" == "true" ]]; then
+    open_app_info "${name}"
+    return 0
+  fi
+  open_app_window "${name}" "${fullscreen_mode}" "${game_mode}" \
+    "${title}" "${window_size}" "${window_mode}"
+}
+
 log_start_context() {
   local launcher_log="$1"
   shift
@@ -2466,9 +4330,14 @@ start_cvd() {
 
   if has_live_cvd_processes; then
     log "Cuttlefish is already running under ${CVD_HOME_DIR}"
-    respond_console "Instance already running, local console will be restarted"
+    if [[ "${START_CONSOLE}" == "true" ]]; then
+      respond_console "Instance already running, local console will be restarted"
+    fi
     respond "Android virtual device running"
-    maybe_start_scrcpy "${adb_serial}" "${fullscreen_mode}" "${game_mode}" || true
+    if [[ "${START_CONSOLE}" == "true" ]]; then
+      maybe_start_scrcpy "${adb_serial}" "${fullscreen_mode}" "${game_mode}" || true
+    fi
+    start_app_menu_watcher
     return 0
   fi
 
@@ -2506,7 +4375,10 @@ start_cvd() {
 
   log "boot completed after seeing: adb sys.boot_completed=1"
   respond "Android virtual device running"
-  maybe_start_scrcpy "${adb_serial}" "${fullscreen_mode}" "${game_mode}" || true
+  if [[ "${START_CONSOLE}" == "true" ]]; then
+    maybe_start_scrcpy "${adb_serial}" "${fullscreen_mode}" "${game_mode}" || true
+  fi
+  start_app_menu_watcher
 
 }
 
@@ -2567,14 +4439,18 @@ exec_start_command() {
   local fullscreen_mode="$1"
   local game_mode="$2"
   shift 2
+  local -a mode_args=()
 
   if [[ "${game_mode}" == "true" ]]; then
-    exec "$0" start --game "$@"
+    mode_args+=(--game)
   elif [[ "${fullscreen_mode}" == "true" ]]; then
-    exec "$0" start --fullscreen "$@"
+    mode_args+=(--fullscreen)
+  fi
+  if [[ "${START_CONSOLE}" != "true" ]]; then
+    mode_args+=(--no-console)
   fi
 
-  exec "$0" start "$@"
+  exec "$0" start "${mode_args[@]}" "$@"
 }
 
 main() {
@@ -2588,16 +4464,24 @@ main() {
   case "${command}" in
     start)
       CONSOLE_FAILURE_MESSAGE="Startup Failed."
-      stop_startup_packaged_scrcpy
-      redirect_start_logs
       shift
       start_args=()
       parse_start_options fullscreen_mode game_mode start_args "$@"
+      if [[ "${START_GAME_SESSION}" != "true" ]]; then
+        clear_game_session
+      fi
+      # --no-console leaves an existing console window alone.
+      if [[ "${START_CONSOLE}" == "true" ]]; then
+        stop_startup_packaged_scrcpy console
+      fi
+      redirect_start_logs
       run_timed_operation "started" start_cvd "${fullscreen_mode}" "${game_mode}" "${start_args[@]}"
       ;;
     stop)
       shift
       stop_startup_packaged_scrcpy
+      stop_app_menu_watcher
+      clear_game_session
       if ! has_live_cvd_processes; then
         stop_dnsmasq
         report_udmabuf_leaks
@@ -2609,16 +4493,26 @@ main() {
       ;;
     reset)
       shift
-      stop_startup_packaged_scrcpy
+      stop_startup_packaged_scrcpy console
       reset_args=()
       parse_reset_options reset_data_gb reset_args "$@"
       confirm_reset || exit 1
+      # Only once confirmed: an aborted reset leaves app windows, the menu
+      # watcher and a game session alone.
+      stop_startup_packaged_scrcpy
+      stop_app_menu_watcher
+      clear_game_session
       stop_cvd_internal true "${reset_args[@]}"
       save_data_gb_configuration "${reset_data_gb}"
+      # A factory reset removes the installed apps. The menu is rebuilt from
+      # the reset device on the next start unless it was turned off.
+      remove_app_menu
       ;;
     restart)
       shift
       stop_startup_packaged_scrcpy
+      stop_app_menu_watcher
+      clear_game_session
       start_args=()
       parse_start_options fullscreen_mode game_mode start_args "$@"
       protect_overlay_resume
@@ -2638,9 +4532,20 @@ main() {
         respond "Android virtual device not running."
       fi
       ;;
+    app)
+      shift
+      run_app_command "$@"
+      ;;
     __console_supervisor)
       shift
       run_scrcpy_supervisor "$@"
+      ;;
+    __app_supervisor)
+      shift
+      run_app_supervisor "$@"
+      ;;
+    __app_menu_watcher)
+      run_app_menu_watcher
       ;;
     help|-h|--help)
       usage
