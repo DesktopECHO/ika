@@ -152,6 +152,9 @@ function arch_build_dependency_packages() {
     libx11
     libxext
     libxml2
+    # The Bazel-downloaded LLVM toolchain's ld.lld links against libxml2.so.2;
+    # Arch's libxml2 2.14+ ships libxml2.so.16 and moved the old ABI here.
+    libxml2-legacy
     lz4
     mesa
     meson
