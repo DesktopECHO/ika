@@ -64,6 +64,8 @@
   server.
 
 ### Packaging and build
+- Arch Linux is supported: `ika-build` builds and installs Arch packages
+  (build from source; no prebuilt Arch binaries yet).
 - The package version is taken from `packaging/VERSION` only.
 - New dependencies: `desktop-file-utils` and `lsof`. On Arch, also
   `libxml2-legacy` and `libxcrypt-compat`.

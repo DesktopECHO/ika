@@ -9,7 +9,8 @@ on [Fedora Asahi Remix](https://asahilinux.org/). It later evolved into a deskto
 ## Features
 
 - **LineageOS 23.2** (Android 16) reimagined as a desktop-first operating system.
-- **Native builds** for **Apple Silicon** or **x86-64** systems with as little as 16 GB RAM.
+- **Native builds** for **Apple Silicon** or **x86-64** systems with as little as 16 GB RAM,
+  on **Fedora**, **Debian/Ubuntu** and **Arch Linux**.
 - **Dynamic display** window resizing that preserves DPI settings.
 - **Accelerated GPU rendering** with OpenGL ES and Vulkan support.
 - **App windows**: run single Android apps in their own desktop windows, listed
@@ -54,7 +55,8 @@ application and disk image.
 A successful build requires a minimum of 16GB RAM and 300GB storage.
 The initial build will take 3–6 hours or more, depending on your hardware and internet bandwidth.
 It's advisable to just let run it overnight. The *ika-build* script handles the prerequisite
-steps and produces installable .deb/.rpm packages for your distribution. 
+steps and produces installable .rpm, .deb or Arch Linux packages for your distribution.
+Prebuilt binaries are only published for Fedora and Debian/Ubuntu; on Arch Linux, build from source.
 
 ```bash
 # 1. Download and extract:
@@ -84,8 +86,8 @@ sudo reboot
 ika start
 ```
 
-Ika requires Mesa 26.1 or newer on Debian/Ubuntu hosts (Fedora already includes
-Mesa 26.1).
+Ika requires Mesa 26.1 or newer on Debian/Ubuntu hosts (Fedora and Arch Linux
+already include Mesa 26.1).
 On Debian 13 (trixie), `ika-build` automatically enables `trixie-backports`
 when Mesa 26.1 or newer is not already installed and installs the required Mesa
 packages with explicit `package/trixie-backports` selectors, following the
