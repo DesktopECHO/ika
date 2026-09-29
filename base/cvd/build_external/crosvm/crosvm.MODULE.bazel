@@ -96,6 +96,8 @@ crosvm_bin.annotation(
     patch_args = ["-p1"],
     patches = [
         "@//build_external/crosvm:PATCH.ffmpeg-pkg-config-includes.patch",
+        # Applies on top of the build.rs changes above.
+        "@//build_external/crosvm:PATCH.ffmpeg-codec-supported-config.patch",
     ],
 )
 
