@@ -69,6 +69,7 @@ Package: ika-base
 Architecture: any
 Depends: adduser,
          curl,
+         desktop-file-utils,
          dnsmasq-base,
          grub-efi-arm64-bin [arm64],
          grub-efi-amd64-bin [!arm64],
