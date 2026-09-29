@@ -155,6 +155,9 @@ function arch_build_dependency_packages() {
     # The Bazel-downloaded LLVM toolchain's ld.lld links against libxml2.so.2;
     # Arch's libxml2 2.14+ ships libxml2.so.16 and moved the old ABI here.
     libxml2-legacy
+    # The Bazel-downloaded rules_perl perl links against libcrypt.so.1, which
+    # Arch's libxcrypt only provides through this compat package.
+    libxcrypt-compat
     lz4
     mesa
     meson
