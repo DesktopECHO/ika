@@ -108,6 +108,7 @@ enum {
     OPT_NO_WINDOW_ASPECT_RATIO_LOCK,
     OPT_RENDER_FIT,
     OPT_CUTTLEFISH_FRAMES_SOCKET,
+    OPT_IKA_GAME_SESSION,
     OPT_CVD,
 };
 
@@ -344,6 +345,13 @@ static const struct sc_option options[] = {
         .text = "Use a Cuttlefish raw frame socket as the video source. "
                 "Android video capture is disabled, but the control socket "
                 "remains enabled.",
+    },
+    {
+        .longopt_id = OPT_IKA_GAME_SESSION,
+        .longopt = "ika-game-session",
+        .text = "Ika game session: exit with status 3 when the window leaves "
+                "fullscreen or is closed, so that the caller can end the "
+                "session.",
     },
     {
         .longopt_id = OPT_CVD,
@@ -2609,6 +2617,9 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
             }
             case OPT_RENDER_DRIVER:
                 opts->render_driver = optarg;
+                break;
+            case OPT_IKA_GAME_SESSION:
+                opts->ika_game_session = true;
                 break;
             case OPT_CUTTLEFISH_FRAMES_SOCKET:
             case OPT_CVD:

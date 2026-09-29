@@ -156,7 +156,7 @@ sdl_set_hints(const char *render_driver, bool disable_screensaver) {
 }
 
 static enum scrcpy_exit_code
-event_loop(struct scrcpy *s, bool has_screen) {
+event_loop(struct scrcpy *s, bool has_screen, bool game_session) {
     SDL_Event event;
     while (SDL_WaitEvent(&event)) {
         switch (event.type) {
@@ -183,7 +183,11 @@ event_loop(struct scrcpy *s, bool has_screen) {
                 return SCRCPY_EXIT_SUCCESS;
             case SDL_EVENT_QUIT:
                 LOGD("User requested to quit");
-                return SCRCPY_EXIT_SUCCESS;
+                // Closing a game session window ends the session too.
+                return game_session ? SCRCPY_EXIT_GAME_SESSION_ENDED
+                                    : SCRCPY_EXIT_SUCCESS;
+            case SC_EVENT_GAME_SESSION_ENDED:
+                return SCRCPY_EXIT_GAME_SESSION_ENDED;
             case SC_EVENT_RUN_ON_MAIN_THREAD: {
                 sc_runnable_fn run = event.user.data1;
                 void *userdata = event.user.data2;
@@ -832,6 +836,7 @@ aoa_complete:
             .window_state_file = options->window_state_file,
             .window_aspect_ratio_lock = options->window_aspect_ratio_lock,
             .window_borderless = options->window_borderless,
+            .game_session = options->ika_game_session,
             .render_fit = options->render_fit,
             .orientation = options->display_orientation,
             .mipmaps = options->mipmaps,
@@ -976,7 +981,7 @@ aoa_complete:
         }
     }
 
-    ret = event_loop(s, options->window);
+    ret = event_loop(s, options->window, options->ika_game_session);
     terminate_runnables_on_event_loop();
     disconnected = ret == SCRCPY_EXIT_DISCONNECTED;
 

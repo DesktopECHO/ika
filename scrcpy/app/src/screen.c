@@ -92,6 +92,12 @@
 // Safety cap: begin the fade even if flex_display never reports settled, so
 // the window can never stay black indefinitely.
 #define SC_WINDOW_FADE_IN_MAX_HOLD SC_TICK_FROM_MS(3000)
+// The hold covers the desktop console drawing itself after boot. An app window
+// (encoded video) shows an app that is already drawing, so keep its reveal
+// short.
+#define SC_WINDOW_FADE_IN_HOLD_ENCODED SC_TICK_FROM_MS(100)
+#define SC_WINDOW_FADE_IN_DURATION_ENCODED SC_TICK_FROM_MS(200)
+#define SC_WINDOW_FADE_IN_MAX_HOLD_ENCODED SC_TICK_FROM_MS(1000)
 
 #define DOWNCAST(SINK) container_of(SINK, struct sc_screen, frame_sink)
 
@@ -655,6 +661,22 @@ static void
 sc_screen_set_resize_quiet_delay(struct sc_screen *screen, bool discrete);
 
 static bool
+sc_screen_uses_raw_frames(struct sc_screen *screen) {
+    return screen->cuttlefish_frames_socket;
+}
+
+// The server rounds encoded video to the codec's size alignment (at least 8,
+// commonly 16), so a matching frame may differ slightly from the request.
+static bool
+sc_screen_frame_matches_resize_request(struct sc_screen *screen,
+                                       struct sc_size frame_size) {
+    struct sc_size req = screen->last_requested_display_size;
+    return req.width && req.height
+        && abs((int) frame_size.width - (int) req.width) < 16
+        && abs((int) frame_size.height - (int) req.height) < 16;
+}
+
+static bool
 sc_screen_should_hold_resize(struct sc_screen *screen) {
     // Keep the last uploaded texture frozen while Android catches up. Incoming
     // frames stay on the CPU side and cannot pollute the blurred resize image.
@@ -693,6 +715,27 @@ sc_screen_resize_log_ms(struct sc_screen *screen, sc_tick tick) {
         return 0;
     }
     return SC_TICK_TO_MS(tick - screen->resize_hold_start_tick);
+}
+
+// Encoded streams from a --new-display virtual display receive no
+// DISPLAY_READY. The encoder restarts at the new display size, so a decoded
+// frame of the requested size proves the resize reached the guest.
+static void
+sc_screen_note_encoded_display_ready(struct sc_screen *screen) {
+    if (sc_screen_uses_raw_frames(screen)
+            || !screen->transient_stretch
+            || screen->display_ready
+            || !sc_screen_frame_matches_resize_request(screen,
+                                                       screen->frame_size)) {
+        return;
+    }
+
+    screen->display_ready = true;
+    screen->display_ready_tick = sc_tick_now();
+    screen->display_ready_raw_frame = true;
+    LOGD("Flex resize: encoded frame %" PRIu16 "x%" PRIu16 " at +%" PRItick
+         "ms", screen->frame_size.width, screen->frame_size.height,
+         sc_screen_resize_log_ms(screen, screen->display_ready_tick));
 }
 
 static bool
@@ -1193,12 +1236,18 @@ sc_screen_get_window_fade_alpha(struct sc_screen *screen) {
         return 1.0f;
     }
     sc_tick now = sc_tick_now();
+    bool raw = sc_screen_uses_raw_frames(screen);
+    sc_tick hold = raw ? SC_WINDOW_FADE_IN_HOLD : SC_WINDOW_FADE_IN_HOLD_ENCODED;
+    sc_tick max_hold = raw ? SC_WINDOW_FADE_IN_MAX_HOLD
+                           : SC_WINDOW_FADE_IN_MAX_HOLD_ENCODED;
+    sc_tick duration = raw ? SC_WINDOW_FADE_IN_DURATION
+                           : SC_WINDOW_FADE_IN_DURATION_ENCODED;
 
     if (!screen->window_fade_in_start_tick) {
         sc_tick held = now - screen->window_fade_in_show_tick;
-        bool min_hold_elapsed = held >= SC_WINDOW_FADE_IN_HOLD;
+        bool min_hold_elapsed = held >= hold;
         bool flex_settled = !screen->flex_display || !screen->transient_stretch;
-        bool max_hold_elapsed = held >= SC_WINDOW_FADE_IN_MAX_HOLD;
+        bool max_hold_elapsed = held >= max_hold;
         if ((!min_hold_elapsed || !flex_settled) && !max_hold_elapsed) {
             return 0.0f;
         }
@@ -1210,12 +1259,12 @@ sc_screen_get_window_fade_alpha(struct sc_screen *screen) {
         return 0.0f;
     }
 
-    if (fade_elapsed >= SC_WINDOW_FADE_IN_DURATION) {
+    if (fade_elapsed >= duration) {
         screen->window_fade_in_show_tick = 0;
         screen->window_fade_in_start_tick = 0;
         return 1.0f;
     }
-    return (float) fade_elapsed / (float) SC_WINDOW_FADE_IN_DURATION;
+    return (float) fade_elapsed / (float) duration;
 }
 
 // Set the update_content_rect flag if the window or content size may have
@@ -1379,6 +1428,9 @@ sc_screen_maybe_request_display_resize(struct sc_screen *screen, bool force) {
             screen->display_ready_tick = screen->last_ready_display_tick;
             screen->display_ready_raw_frame = true;
         }
+        // An encoded stream already at this size will not restart, so no
+        // new-size frame is coming to end the hold.
+        sc_screen_note_encoded_display_ready(screen);
         return;
     }
 
@@ -2270,6 +2322,8 @@ sc_screen_init(struct sc_screen *screen,
     screen->window_aspect_ratio_lock = params->window_aspect_ratio_lock;
     screen->render_fit = params->render_fit;
     screen->flex_display = params->flex_display;
+    screen->game_session = params->game_session;
+    screen->game_session_was_fullscreen = false;
     screen->resize_display_using_pixel_size =
         params->resize_display_using_pixel_size;
     screen->cuttlefish_frames_socket = params->cuttlefish_frames_socket;
@@ -2818,7 +2872,6 @@ sc_screen_set_orientation(struct sc_screen *screen,
 static bool
 sc_screen_apply_frame(struct sc_screen *screen, bool can_resize) {
     assert(screen->video);
-    assert(screen->window_shown);
 
     sc_fps_counter_add_rendered_frame(&screen->fps_counter);
 
@@ -2840,6 +2893,26 @@ sc_screen_apply_frame(struct sc_screen *screen, bool can_resize) {
     bool ok = sc_texture_set_from_frame(&screen->tex, frame);
     if (!ok) {
         return false;
+    }
+
+    if (!screen->window_shown) {
+        // A flex window is prepared hidden. Show it with the first frame at
+        // the requested size rather than waiting for the show timeout, which
+        // remains the fallback.
+        if (screen->initial_window_show_deferred
+                && sc_screen_frame_matches_resize_request(screen,
+                                                          new_frame_size)) {
+            sc_screen_show_prepared_window(screen);
+        }
+        if (!screen->window_shown) {
+            return true;
+        }
+    }
+
+    sc_screen_note_encoded_display_ready(screen);
+    if (sc_screen_should_hold_resize(screen)
+            && sc_screen_try_release_resize_hold(screen)) {
+        return true;
     }
 
     sc_screen_render(screen, false);
@@ -2990,7 +3063,13 @@ sc_screen_release_resize_hold(struct sc_screen *screen) {
     // Order matters: start the fade first so the very next render (driven by
     // apply_raw_frame) already paints the new texture with the blur overlay.
     sc_screen_start_blur_fade(screen);
-    sc_screen_apply_raw_frame(screen);
+    if (sc_screen_uses_raw_frames(screen)) {
+        sc_screen_apply_raw_frame(screen);
+    } else {
+        // Encoded frames are uploaded as they arrive, so the texture is
+        // already current.
+        sc_screen_render(screen, true);
+    }
 }
 
 static void
@@ -3049,9 +3128,30 @@ sc_screen_note_display_ready_raw_frame(struct sc_screen *screen) {
          sc_screen_resize_log_ms(screen, latest_tick));
 }
 
+// Milliseconds until an encoded stream's resize hold may be released without
+// a matching frame, so a size the device never produces cannot hold forever.
+static Uint32
+sc_screen_encoded_resize_hold_remaining_ms(struct sc_screen *screen) {
+    if (!screen->last_resize_request_tick) {
+        return 0;
+    }
+    sc_tick elapsed = sc_tick_now() - screen->last_resize_request_tick;
+    if (elapsed >= FLEX_DISPLAY_POST_READY_MAX_SETTLE_DELAY) {
+        return 0;
+    }
+    Uint32 remaining_ms =
+        SC_TICK_TO_MS(FLEX_DISPLAY_POST_READY_MAX_SETTLE_DELAY - elapsed);
+    return remaining_ms ? remaining_ms : 1;
+}
+
 static bool
 sc_screen_try_release_resize_hold(struct sc_screen *screen) {
-    if (!screen->transient_stretch || !screen->display_ready) {
+    if (!screen->transient_stretch) {
+        return false;
+    }
+    if (!screen->display_ready
+            && (sc_screen_uses_raw_frames(screen)
+                || sc_screen_encoded_resize_hold_remaining_ms(screen))) {
         return false;
     }
 
@@ -3327,6 +3427,12 @@ sc_screen_on_resize_settled(struct sc_screen *screen) {
         return;
     }
 
+    if (!sc_screen_uses_raw_frames(screen) && screen->transient_stretch
+            && !screen->display_ready) {
+        sc_screen_schedule_resize_settle_after(
+            screen, sc_screen_encoded_resize_hold_remaining_ms(screen));
+    }
+
     sc_screen_render(screen, true);
 }
 
@@ -3544,6 +3650,7 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
         case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
             LOGD("Switched to fullscreen mode");
             assert(screen->video);
+            screen->game_session_was_fullscreen = true;
             sc_screen_on_window_state_changed(screen);
             sc_screen_save_window_state(screen);
             return;
@@ -3557,6 +3664,11 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
                 sc_screen_render(screen, true);
             }
             sc_screen_save_window_state(screen);
+            if (screen->game_session && screen->game_session_was_fullscreen) {
+                LOGI("Left fullscreen: ending the game session");
+                bool ok = sc_push_event(SC_EVENT_GAME_SESSION_ENDED);
+                (void) ok; // ignore failure
+            }
             return;
         case SC_EVENT_DEVICE_DISCONNECTED:
             assert(!screen->disconnected);

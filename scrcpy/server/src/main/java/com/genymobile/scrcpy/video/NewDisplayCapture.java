@@ -202,8 +202,7 @@ public class NewDisplayCapture extends SurfaceCapture {
                         | VIRTUAL_DISPLAY_FLAG_TOUCH_FEEDBACK_DISABLED;
                 if (Build.VERSION.SDK_INT >= AndroidVersions.API_34_ANDROID_14) {
                     flags |= VIRTUAL_DISPLAY_FLAG_OWN_FOCUS
-                            | VIRTUAL_DISPLAY_FLAG_DEVICE_DISPLAY_GROUP
-                            | VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS;
+                            | VIRTUAL_DISPLAY_FLAG_DEVICE_DISPLAY_GROUP;
                 }
             }
             virtualDisplay = ServiceManager.getDisplayManager()
@@ -282,6 +281,14 @@ public class NewDisplayCapture extends SurfaceCapture {
     public synchronized void setDisplaySize(int width, int height, int dpi) {
         if (width <= 0 || height <= 0) {
             return;
+        }
+
+        // An explicit --new-display density stays fixed across resizes, so a
+        // larger window shows more content instead of zooming. mainDisplaySize
+        // is only initialized when the density is derived, so it must not be
+        // used to rescale an explicit one.
+        if (dpi == 0 && newDisplay.hasExplicitDpi()) {
+            dpi = newDisplay.getDpi();
         }
 
         requestedDisplaySize = new Size(width, height);
