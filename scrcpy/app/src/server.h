@@ -82,6 +82,8 @@ struct sc_server {
     struct sc_server_params params;
     char *serial;
     char *device_socket_name;
+    // "CLASSPATH=" followed by this instance's server path on the device
+    char device_server_classpath[64];
 
     sc_thread thread;
     struct sc_server_info info; // initialized once connected
