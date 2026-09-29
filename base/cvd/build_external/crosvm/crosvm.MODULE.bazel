@@ -95,9 +95,12 @@ crosvm_bin.annotation(
     },
     patch_args = ["-p1"],
     patches = [
+        # crate_universe applies annotation patches in sorted label order, not
+        # list order. PATCH.ffmpeg-supported-config.patch edits the build.rs
+        # produced by PATCH.ffmpeg-pkg-config-includes.patch, so its name must
+        # keep sorting after it.
         "@//build_external/crosvm:PATCH.ffmpeg-pkg-config-includes.patch",
-        # Applies on top of the build.rs changes above.
-        "@//build_external/crosvm:PATCH.ffmpeg-codec-supported-config.patch",
+        "@//build_external/crosvm:PATCH.ffmpeg-supported-config.patch",
     ],
 )
 

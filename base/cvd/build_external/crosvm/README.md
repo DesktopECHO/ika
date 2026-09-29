@@ -87,8 +87,8 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** Drops the `#[path = "<out_dir>/<file>.rs"]` directive that the generator was emitting alongside each `pub mod ...;` declaration.
 - **Why:** `out_dir` resolves to a temporary path inside the Bazel sandbox at codegen time. If that path is baked into the generated source, the next consumer of the crate fails to find it (the sandbox is gone). Removing the `#[path]` lets the standard `pub mod` lookup find the generated file via the build script's `OUT_DIR` env at compile time.
 
-#### `PATCH.ffmpeg-codec-supported-config.patch`
-- **Targets:** `ffmpeg` crate. Files: `build.rs`, `src/avcodec.rs`. Applied after `PATCH.ffmpeg-pkg-config-includes.patch`.
+#### `PATCH.ffmpeg-supported-config.patch`
+- **Targets:** `ffmpeg` crate. Files: `build.rs`, `src/avcodec.rs`. Applied after `PATCH.ffmpeg-pkg-config-includes.patch`, which crate_universe guarantees only because it applies annotation patches in sorted name order; keep the names sorting that way.
 - **What it does:** `build.rs` sets the `ffmpeg_codec_supported_config` cfg when pkg-config reports libavcodec 61.13.100 (FFmpeg 7.1) or newer, and `AvCodec::pixel_format_iter()` then reads the codec's pixel formats through `avcodec_get_supported_config()` instead of the `AVCodec.pix_fmts` field. Older FFmpeg keeps using the field.
 - **Why:** FFmpeg 9 (libavcodec 63, shipped by Arch) removed `AVCodec.pix_fmts`, so the crate no longer compiled there. On FFmpeg 8.1 both paths return identical pixel format lists for every codec.
 
