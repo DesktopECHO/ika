@@ -1,6 +1,0 @@
-diff --git a/src/sys/linux.rs b/src/sys/linux.rs
---- a/src/sys/linux.rs
-+++ b/src/sys/linux.rs
-@@ -200 +200 @@
--            let arena = match MemoryMappingArena::new(size) {
-+            let arena = match MemoryMappingArena::new_protection(size, Protection::read_write()) {

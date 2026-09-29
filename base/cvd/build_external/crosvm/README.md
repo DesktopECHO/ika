@@ -50,11 +50,6 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** Keeps rutabaga's Vulkano gralloc backend available and preserves an explicit `external_blob` request.
 - **Why:** Minigbm has no Asahi driver. On Apple Silicon Linux, Vulkano is therefore the fallback that imports gfxstream dma-bufs through Honeykrisp. Rutabaga 0.1.80 now provides the cross-domain and atomic-memory support that previously required the removed `mesa3d_util` and `rutabaga_gfx` upstream-sync overlays.
 
-#### Fixed-blob mappings
-- **Targets:** `base`, `vm_control`, and `crosvm` crates. Files: `src/sys/linux/mmap.rs`, `src/sys/linux.rs`, and `src/crosvm/sys/linux/gpu.rs`.
-- **What it does:** Creates the GPU BAR shared-memory arena read/write and only disables fixed-blob mapping when Vulkano is actually selected, not merely compiled into crosvm.
-- **Why:** The shared-memory arena must permit writable mappings. A Vulkano-enabled build using GLES-only rendering can still use fixed-blob mapping.
-
 #### `PATCH.rutabaga_gfx-gralloc-vulkano-fallback.patch`
 - **Targets:** `rutabaga_gfx` crate. File: `src/rutabaga_gralloc/gralloc.rs`.
 - **What it does:** Prefers a working minigbm backend and starts Vulkano only when minigbm initialization fails.
@@ -98,15 +93,14 @@ See `crosvm.MODULE.bazel`. The relevant blocks:
 
 | Target | Patches |
 |---|---|
-| `crosvm_bin.annotation(crate = "base")` | `base-fixed-blob-arena-protection` |
-| `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-composite-preserve-spec-fd`, `crosvm-gpu-2d-sandbox`, `crosvm-gpu-unref-shmem-mapping`, `crosvm-resize-display`, `crosvm-enable-vulkano-gralloc`, `crosvm-fixed-blob-vulkan-condition`, `minijail-sys_common_mk` |
+| `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-composite-preserve-spec-fd`, `crosvm-gpu-2d-sandbox`, `crosvm-gpu-unref-shmem-mapping`, `crosvm-resize-display`, `crosvm-enable-vulkano-gralloc`, `minijail-sys_common_mk` |
 | `crosvm_bin.annotation(crate = "disk")` | `disk-composite-preserve-spec-fd` |
 | `crosvm_bin.annotation(crate = "jail")` | `jail-aarch64-block-pread64`, `jail-gpu-host-graphics-libs-optional` |
 | `crosvm_bin.annotation(crate = "devices")` | `crosvm-resize-display-devices` |
 | `crosvm_bin.annotation(crate = "rutabaga_gfx")` | `rutabaga_gfx_build_rs`, `rutabaga_gfx-gralloc-vulkano-fallback`, `rutabaga_gfx-cleanup-on-drop` |
 | `crosvm_bin.annotation(crate = "minijail-sys")` | `minijail-sys_build_rs` |
 | `crosvm_bin.annotation(crate = "proto_build_tools")` | `proto_build_tools` |
-| `crosvm_bin.annotation(crate = "vm_control")` | `crosvm-resize-display-vm-control`, `vm-control-fixed-blob-arena-protection` |
+| `crosvm_bin.annotation(crate = "vm_control")` | `crosvm-resize-display-vm-control` |
 | `git_repository(name = "crosvm")` (source tree) | `crosvm-aarch64-block-pread64-source`, `crosvm-composite-duplicate-components`, `crosvm-composite-preserve-spec-fd`, `crosvm-gpu-2d-sandbox-source`, `crosvm-resize-display`, `minijail-sys_common_mk` |
 
 #### `PATCH.jail-aarch64-block-pread64.patch`
