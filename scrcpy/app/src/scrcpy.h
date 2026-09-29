@@ -14,6 +14,9 @@ enum scrcpy_exit_code {
 
     // Device was disconnected while running
     SCRCPY_EXIT_DISCONNECTED,
+
+    // With --ika-game-session, the window left fullscreen or was closed
+    SCRCPY_EXIT_GAME_SESSION_ENDED,
 };
 
 enum scrcpy_exit_code

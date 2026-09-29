@@ -47,6 +47,10 @@ struct sc_screen {
     bool camera;
     bool window_aspect_ratio_lock;
     bool flex_display;
+    // --ika-game-session: leaving fullscreen ends the session. Only armed
+    // once the window has actually been fullscreen.
+    bool game_session;
+    bool game_session_was_fullscreen;
 
     struct sc_controller *controller;
 
@@ -241,6 +245,7 @@ struct sc_screen_params {
 
     bool window_aspect_ratio_lock;
     bool window_borderless;
+    bool game_session;
 
     enum sc_render_fit render_fit;
     enum sc_orientation orientation;
