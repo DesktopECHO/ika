@@ -65,6 +65,21 @@ TEST(ProcessMonitorTest, ExpectedCriticalExitIsNotRestarted) {
   EXPECT_EQ(*result, ProcessMonitorExit::kExpected);
 }
 
+TEST(ProcessMonitorTest, UnlistedVmmExitIsUnexpected) {
+  auto result = RunMonitoredExit(7, {0}, false, ProcessCategory::kVmm);
+
+  ASSERT_TRUE(result.ok()) << result.error().Trace();
+  EXPECT_EQ(*result, ProcessMonitorExit::kUnexpected);
+}
+
+TEST(ProcessMonitorTest, ListedSupportExitIsUnexpected) {
+  // Expected exit codes only let the VMM end the monitor cleanly.
+  auto result = RunMonitoredExit(0, {0});
+
+  ASSERT_TRUE(result.ok()) << result.error().Trace();
+  EXPECT_EQ(*result, ProcessMonitorExit::kUnexpected);
+}
+
 TEST(ProcessMonitorTest, UnlistedCriticalExitRemainsUnexpected) {
   auto result = RunMonitoredExit(7, {0});
 

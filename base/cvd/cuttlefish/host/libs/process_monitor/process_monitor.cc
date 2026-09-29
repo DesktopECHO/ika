@@ -138,29 +138,22 @@ Result<ProcessMonitorExit> MonitorLoop(std::atomic_bool& running,
     if (it == monitored.end()) {
       LogSubprocessExit("(unknown)", pid, wstatus);
     } else {
+      // Only the VMM ends the monitor cleanly. Any exit of another critical
+      // process is a crash, whatever its expected exit codes.
+      const bool is_vmm = it->category == ProcessCategory::kVmm;
       const bool expected_exit =
-          WIFEXITED(wstatus) &&
+          (is_vmm || !it->is_critical) && WIFEXITED(wstatus) &&
           it->expected_exit_codes.count(WEXITSTATUS(wstatus)) != 0;
       if (expected_exit) {
         const std::string name = it->cmd->GetShortName();
-        const int exit_code = WEXITSTATUS(wstatus);
-        const bool is_critical = it->is_critical;
-        const bool is_vmm = it->category == ProcessCategory::kVmm;
         LOG(INFO) << "Monitored subprocess " << name << " (" << pid
-                  << ") exited as expected with code " << exit_code;
+                  << ") exited as expected with code " << WEXITSTATUS(wstatus);
         monitored.erase(it);
-        if (is_critical && is_vmm && exit_code == 0) {
+        if (is_vmm) {
           LOG(INFO) << "Stopping all monitored processes after expected exit "
                        "of VMM process " << name;
           running.store(false);
           return ProcessMonitorExit::kExpected;
-        }
-        if (is_critical) {
-          LOG(ERROR) << "Stopping all monitored processes after unexpected "
-                        "exit of critical process "
-                     << name;
-          running.store(false);
-          return ProcessMonitorExit::kUnexpected;
         }
         continue;
       }

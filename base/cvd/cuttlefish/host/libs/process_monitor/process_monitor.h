@@ -31,9 +31,10 @@
 namespace cuttlefish {
 
 enum class ProcessMonitorExit {
-  // The monitor was stopped by its parent or an annotated critical command.
+  // The monitor was stopped by its parent, or the VMM exited with one of its
+  // expected exit codes.
   kExpected,
-  // An unannotated critical command exited while restart was disabled.
+  // Any other critical command exited while restart was disabled.
   kUnexpected,
 };
 

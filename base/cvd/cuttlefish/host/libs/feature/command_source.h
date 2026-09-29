@@ -37,8 +37,10 @@ struct MonitorCommand {
   Command command;
   bool is_critical;
   ProcessCategory category;
-  // A critical command exiting normally with one of these codes ends the
-  // process monitor successfully instead of being reported as a crash.
+  // Exit codes that count as a normal exit. The VMM exiting with one of them
+  // ends the process monitor successfully. A non-critical command exiting with
+  // one is not restarted. Other critical commands ignore these codes: any exit
+  // of theirs is a crash.
   std::set<int> expected_exit_codes;
 
   MonitorCommand(Command command, bool is_critical = true,
