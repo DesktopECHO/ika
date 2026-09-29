@@ -18,7 +18,11 @@
 #define SC_SERVER_FILENAME "scrcpy-server"
 
 #define SC_SERVER_PATH_DEFAULT PREFIX "/share/scrcpy/" SC_SERVER_FILENAME
-#define SC_DEVICE_SERVER_PATH "/data/local/tmp/scrcpy-server.jar"
+// Each client pushes its own copy, named after its scid: the server deletes
+// its jar once started, which would break another client still starting from
+// a shared one.
+#define SC_DEVICE_SERVER_PATH_FORMAT "/data/local/tmp/scrcpy-server-%08x.jar"
+#define SC_CLASSPATH_PREFIX "CLASSPATH="
 
 #define SC_ADB_PORT_DEFAULT 5555
 #define SC_SOCKET_NAME_PREFIX "scrcpy_"
@@ -54,7 +58,8 @@ get_server_path(void) {
 }
 
 static bool
-push_server(struct sc_intr *intr, const char *serial) {
+push_server(struct sc_intr *intr, const char *serial,
+            const char *device_server_path) {
     char *server_path = get_server_path();
     if (!server_path) {
         return false;
@@ -64,7 +69,7 @@ push_server(struct sc_intr *intr, const char *serial) {
         free(server_path);
         return false;
     }
-    bool ok = sc_adb_push(intr, serial, server_path, SC_DEVICE_SERVER_PATH, 0);
+    bool ok = sc_adb_push(intr, serial, server_path, device_server_path, 0);
     free(server_path);
     return ok;
 }
@@ -215,7 +220,7 @@ execute_server(struct sc_server *server,
     cmd[count++] = "-s";
     cmd[count++] = serial;
     cmd[count++] = "shell";
-    cmd[count++] = "CLASSPATH=" SC_DEVICE_SERVER_PATH;
+    cmd[count++] = server->device_server_classpath;
     cmd[count++] = "app_process";
 
 #ifdef SERVER_DEBUGGER
@@ -1040,7 +1045,15 @@ run_server(void *data) {
     assert(serial);
     LOGD("Device serial: %s", serial);
 
-    ok = push_server(&server->intr, serial);
+    int n = snprintf(server->device_server_classpath,
+                     sizeof(server->device_server_classpath),
+                     SC_CLASSPATH_PREFIX SC_DEVICE_SERVER_PATH_FORMAT,
+                     params->scid);
+    assert(n > 0 && (size_t) n < sizeof(server->device_server_classpath));
+    (void) n;
+
+    ok = push_server(&server->intr, serial, server->device_server_classpath
+                                    + sizeof(SC_CLASSPATH_PREFIX) - 1);
     if (!ok) {
         goto error_connection_failed;
     }
