@@ -85,10 +85,12 @@
 // linear ramp without burning CPU.
 #define FLEX_DISPLAY_BLUR_FADE_INTERVAL_MS 16
 
-// Hold the prepared window black for at least this long before fading in.
-#define SC_WINDOW_FADE_IN_HOLD SC_TICK_FROM_MS(500)
+// Hold the prepared window dark gray for at least this long before fading in.
+#define SC_WINDOW_FADE_IN_HOLD SC_TICK_FROM_MS(1000)
 // Duration of the fade-from-black once the prepared window is revealed.
 #define SC_WINDOW_FADE_IN_DURATION SC_TICK_FROM_MS(500)
+// Gray shown during the hold and faded from, matching the window border.
+#define SC_WINDOW_FADE_IN_GRAY 0x33
 // Safety cap: begin the fade even if flex_display never reports settled, so
 // the window can never stay black indefinitely.
 #define SC_WINDOW_FADE_IN_MAX_HOLD SC_TICK_FROM_MS(3000)
@@ -1276,7 +1278,7 @@ sc_screen_render_window_border(struct sc_screen *screen) {
 
 // render the texture to the renderer
 //
-// Hold the prepared window black until flex_display has settled and
+// Hold the prepared window dark gray until flex_display has settled and
 // SC_WINDOW_FADE_IN_HOLD has elapsed, then fade the rendered content in over
 // SC_WINDOW_FADE_IN_DURATION. The fade starts on the first render after that
 // hold so a busy compositor cannot skip the visible ramp.
@@ -1331,10 +1333,11 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
     }
 
     SDL_Renderer *renderer = screen->renderer;
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0xff);
-    sc_sdl_render_clear(renderer);
-
     float startup_alpha = sc_screen_get_window_fade_alpha(screen);
+    // Hold and fade in from dark gray rather than black
+    uint8_t clear = startup_alpha < 1.0f ? SC_WINDOW_FADE_IN_GRAY : 0;
+    SDL_SetRenderDrawColor(renderer, clear, clear, clear, 0xff);
+    sc_sdl_render_clear(renderer);
 
     bool ok = false;
     SDL_Texture *texture = screen->tex.texture;
