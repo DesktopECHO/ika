@@ -14,6 +14,19 @@
 #include "util/log.h"
 #include "util/sdl.h"
 
+// IKA_TOUCH (set by 'ika app --touch') sends left-button clicks and drags as a
+// real finger instead of a mouse, for games that ignore the mouse. It is fixed
+// for the life of the process, so every left press and release is a finger.
+static bool
+sc_input_manager_touch_mode(void) {
+    static int touch_mode = -1;
+    if (touch_mode < 0) {
+        const char *env = getenv("IKA_TOUCH");
+        touch_mode = env && *env && strcmp(env, "0") != 0;
+    }
+    return touch_mode;
+}
+
 void
 sc_input_manager_init(struct sc_input_manager *im,
                       const struct sc_input_manager_params *params) {
@@ -731,8 +744,11 @@ sc_input_manager_process_mouse_motion(struct sc_input_manager *im,
 
     struct sc_mouse_motion_event evt = {
         .position = sc_input_manager_get_position(im, event->x, event->y),
-        .pointer_id = im->vfinger_down ? SC_POINTER_ID_GENERIC_FINGER
-                                       : SC_POINTER_ID_MOUSE,
+        .pointer_id = (im->vfinger_down
+                       || (sc_input_manager_touch_mode()
+                           && (im->mouse_buttons_state & SC_MOUSE_BUTTON_LEFT)))
+                    ? SC_POINTER_ID_GENERIC_FINGER
+                    : SC_POINTER_ID_MOUSE,
         .xrel = event->xrel,
         .yrel = event->yrel,
         .buttons_state = im->mouse_buttons_state,
@@ -916,7 +932,9 @@ sc_input_manager_process_mouse_button(struct sc_input_manager *im,
     bool change_vfinger = event->button == SDL_BUTTON_LEFT &&
             ((down && !im->vfinger_down && (ctrl_pressed || shift_pressed)) ||
              (!down && im->vfinger_down));
-    bool use_finger = im->vfinger_down || change_vfinger;
+    bool use_finger = im->vfinger_down || change_vfinger
+                   || (sc_input_manager_touch_mode()
+                       && event->button == SDL_BUTTON_LEFT);
 
     struct sc_mouse_click_event evt = {
         .position = sc_input_manager_get_position(im, event->x, event->y),
