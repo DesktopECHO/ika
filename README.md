@@ -227,6 +227,17 @@ stretching it. Super + T and Super + F work as they do in the console.
   `ika app NAME --window` opens a game in its own window instead. Only games
   started with `ika app` (or from the menu) behave this way; `ika start --game`
   and games opened inside the Android desktop are unaffected.
+- **Touch input** (`ika app NAME --touch`) is for games that ignore the mouse.
+  Left-button clicks and drags are sent to Android as a real finger on a
+  touchscreen instead of as mouse input, so a drag is a swipe. The right and
+  middle buttons and the wheel stay mouse input, Ctrl or Shift with the left
+  button still simulates a pinch, and no hover is sent. In a game session the
+  mouse leaves UHID (the gamepad and keyboard still pass through as HID
+  devices), and a session already running in the other input mode is
+  restarted when you start a game in the new one. `--touch` works with app
+  windows too, and `IKA_TOUCH=1 ika start --game` does the same for the
+  console. Most desktop apps should not use it: some route mouse clicks
+  differently from touch, for example Chromium's tab strip.
 - App windows stream encoded H.264 video from the guest rather than the
   console's raw frames, which costs guest CPU time. Set `IKA_APP_BIT_RATE`
   (default `40M`) to trade quality for bandwidth.
@@ -247,7 +258,9 @@ stretching it. Super + T and Super + F work as they do in the console.
   and errors as desktop notifications.
 - Right-click a menu entry for **App Settings**, which opens the app's
   Android App info page (permissions, storage, force stop, uninstall) in the
-  Settings window. From a terminal: `ika app --info NAME`.
+  Settings window. From a terminal: `ika app --info NAME`. The entries of
+  games also offer **Play with Touch Input**, which runs
+  `ika app --touch PACKAGE`.
 - The menu is kept up to date automatically: once the guest has booted,
   `ika start` runs a background watcher that syncs the menu and then checks
   every few seconds (`IKA_APP_MENU_POLL_SEC`, default 5) for installed,
