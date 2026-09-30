@@ -1,6 +1,6 @@
-# Changelog
+## Ika 260928, changes since release 260726
 
-## Unreleased (260928), changes since release 260726
+**NOTE:  Apple Silicon devices must be running Kernel 7.1 or newer**
 
 ### New: app windows and desktop integration
 - `ika app NAME` opens a single Android app in its own resizable window, backed
@@ -33,7 +33,7 @@
 - Fixed red and blue being swapped in the guest software composer (for
   example, in Asphalt 8).
 - Dropped the udmabuf retention workaround, which the Asahi kernel no longer
-  needs.
+  needs. 
 
 ### Android guest and game compatibility
 - Builds on stable Android 16 (BP4A).
@@ -46,8 +46,6 @@
 - Fixed playback and microphone audio. Quick Settings has a five-stream audio
   mixer, and the notification shade and default settings were refined for
   desktop use.
-- Documented and graded app compatibility for both GPU modes, with gameplay
-  screenshots.
 
 ### Apple Silicon and ARM64 hosts
 - Accelerated GPU modes are allowed on Apple Silicon.
@@ -55,21 +53,13 @@
   feature is missing.
 
 ### Console and host
-- Smoother window resizing. The resize preview ends as soon as the guest stops
-  drawing.
+- Smoother window resizing. 
 - An expected guest power-off stops the VM cleanly again, so `ika status` no
   longer reports a stopped VM as running.
 - Fixed timezone detection.
-- Several scrcpy windows can now run at once without crashing each other's
-  server.
 
 ### Packaging and build
-- Arch Linux is supported: `ika-build` builds and installs Arch packages
-  (build from source; no prebuilt Arch binaries yet).
-- The package version is taken from `packaging/VERSION` only.
-- New dependencies: `desktop-file-utils` and `lsof`. On Arch, also
-  `libxml2-legacy` and `libxcrypt-compat`.
-- Debian multimedia dependencies are statically linked.
-- Builds against FFmpeg 9.
+- Arch Linux is now supported!
+- New dependencies: `desktop-file-utils` and `lsof`.
+- Builds against FFmpeg 9 for Arch.
 - Google Play services for x86-64 are fetched from Git LFS.
-- Release metadata records the matching Ika source commit.
