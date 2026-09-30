@@ -813,7 +813,7 @@ App windows:
   '${SCRIPT_NAME} app NAME' opens one app in its own resizable, titled
   window backed by a separate Android virtual display. The app is restarted
   on that display if it was already running, and closing the window closes
-  the app. App windows use encoded video (IKA_APP_BIT_RATE, default 40M)
+  the app. App windows use encoded video (IKA_APP_BIT_RATE, default 80M)
   rather than the console's raw frames. 'stop', 'reset', and 'restart' close
   all app windows; 'start' leaves them open.
 
@@ -861,7 +861,10 @@ Environment variables:
                          (example: --keyboard=uhid --no-clipboard-autosync)
   IKA_APP_MENU_POLL_SEC  Seconds between checks for installed or removed
                          apps while the app menu watcher runs (default: 5).
-  IKA_APP_BIT_RATE       Video bit rate of app windows (default: 40M).
+  IKA_APP_BIT_RATE       Video bit rate of app windows (default: 80M).
+  IKA_APP_CODEC_OPTIONS  scrcpy --video-codec-options for app windows
+                         (default: video-qp-max:int=18, which caps the encoder's
+                         quantizer to keep text sharp; empty removes it).
   IKA_STOP_GRACE_SEC     Seconds to allow Cuttlefish and gfxstream to clean up
                          before forcing surviving processes to exit (default: 30).
   IKA_SCRCPY_REBOOT_TIMEOUT_SEC
@@ -2829,17 +2832,23 @@ guest_display_density() {
   printf '%s\n' "${override:-${physical}}"
 }
 
-# The desktop display is sized in native host pixels, but scrcpy sizes an
-# encoded virtual display in logical window points. Scale the desktop density
-# by the host's logical/native ratio so app content matches the desktop's
-# physical size on HiDPI hosts.
-app_window_dpi() {
-  local guest_dpi="$1"
+# Like the desktop display, size an app window's virtual display in native
+# host pixels rather than logical window points, so on HiDPI hosts the app
+# draws at native resolution instead of being upscaled. Scale the logical window
+# size by the host's native/logical ratio and round down to the 8-pixel
+# multiple video encoders need.
+app_window_display_size() {
+  local window_size="$1"
   local native
   local logical
   local native_max
   local logical_max
-  local dpi="${guest_dpi}"
+  local width
+  local height
+
+  [[ "${window_size}" =~ ^([0-9]+)x([0-9]+)$ ]] || return 1
+  width="${BASH_REMATCH[1]}"
+  height="${BASH_REMATCH[2]}"
 
   native="$(host_display_size || true)"
   logical="$(host_display_logical_size || true)"
@@ -2848,16 +2857,16 @@ app_window_dpi() {
     if [[ "${logical}" =~ ^([0-9]+)x([0-9]+)$ ]]; then
       logical_max=$(( BASH_REMATCH[1] > BASH_REMATCH[2] ? BASH_REMATCH[1] : BASH_REMATCH[2] ))
       if (( native_max > 0 && logical_max > 0 )); then
-        dpi=$(( guest_dpi * logical_max / native_max ))
+        width=$(( width * native_max / logical_max ))
+        height=$(( height * native_max / logical_max ))
       fi
     fi
   fi
 
-  dpi=$(( (dpi + 4) / 8 * 8 ))
-  if (( dpi < 96 )); then
-    dpi=96
-  fi
-  printf '%s\n' "${dpi}"
+  width=$(( width / 8 * 8 ))
+  height=$(( height / 8 * 8 ))
+  (( width > 0 && height > 0 )) || return 1
+  printf '%sx%s\n' "${width}" "${height}"
 }
 
 # 16:9 at 60% of the host's logical width, capped at 75% of its height.
@@ -3423,6 +3432,8 @@ open_app_window() {
   local adb_serial
   local guest_dpi
   local dpi
+  local display_size
+  local codec_options
   local saved_width=""
   local saved_height=""
   local saved_fullscreen=""
@@ -3488,7 +3499,9 @@ open_app_window() {
 
   guest_dpi="$(guest_display_density "${adb_serial}")"
   [[ "${guest_dpi}" =~ ^[1-9][0-9]*$ ]] || die "could not read the guest display density"
-  dpi="$(app_window_dpi "${guest_dpi}")"
+  dpi="${guest_dpi}"
+  display_size="$(app_window_display_size "${window_size}")" \
+    || die "could not size the app window display for ${window_size}"
 
   # --dpi enables flex resizing: the virtual display follows the window size
   # at a fixed density. "+" force-stops the app first so it starts on the new
@@ -3497,18 +3510,24 @@ open_app_window() {
   scrcpy_cmd=(
     "${SCRCPY_BIN}"
     -s "${adb_serial}"
-    --new-display="${window_size}/${dpi}"
+    --new-display="${display_size}/${dpi}"
     --dpi="${dpi}"
     --start-app="+${package}"
     --no-vd-system-decorations
     --window-title="${title}"
     --window-state-file="${SCRCPY_WINDOW_STATE_FILE}"
-    --video-bit-rate="${IKA_APP_BIT_RATE:-40M}"
+    --video-bit-rate="${IKA_APP_BIT_RATE:-80M}"
     --mouse-bind=+hsn:b+++
     --force-adb-forward
     --render-driver=opengl
     --no-audio
   )
+  # Cap the encoder's quantizer so text stays sharp; the connection is local,
+  # so the extra bit rate is cheap. An empty IKA_APP_CODEC_OPTIONS removes it.
+  codec_options="${IKA_APP_CODEC_OPTIONS-video-qp-max:int=18}"
+  if [[ -n "${codec_options}" ]]; then
+    scrcpy_cmd+=(--video-codec-options="${codec_options}")
+  fi
   append_scrcpy_input_args scrcpy_cmd "${game_mode}" "app window"
   append_scrcpy_extra_args scrcpy_cmd "app window"
 

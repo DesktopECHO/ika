@@ -240,7 +240,9 @@ stretching it. Super + T and Super + F work as they do in the console.
   differently from touch, for example Chromium's tab strip.
 - App windows stream encoded H.264 video from the guest rather than the
   console's raw frames, which costs guest CPU time. Set `IKA_APP_BIT_RATE`
-  (default `40M`) to trade quality for bandwidth.
+  (default `80M`) to trade quality for bandwidth. `IKA_APP_CODEC_OPTIONS`
+  (default `video-qp-max:int=18`) caps the encoder's quantizer to keep text
+  sharp; set it empty to remove the cap.
 - `ika app sync` adds every launchable app to the desktop's app menu, as
   "🎮 ∙ LABEL" for games (apps declaring `android:appCategory="game"`, or listed
   in `IKA_GAME_APPS` in `tools/ika`) and "ᗩ ∙ LABEL" for other apps, in an
