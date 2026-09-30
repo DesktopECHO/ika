@@ -1790,6 +1790,33 @@ host_timezone() {
   timedatectl show --property=Timezone --value 2>/dev/null || true
 }
 
+# Prints "dark" or "light" for the desktop's color scheme, or nothing when it
+# states no preference. Reads the freedesktop Settings portal, which ika-scrcpy
+# window title bars follow too, then GNOME's setting.
+host_color_scheme() {
+  local value=""
+
+  if command -v gdbus >/dev/null 2>&1; then
+    value="$(timeout 3 gdbus call --session \
+        --dest org.freedesktop.portal.Desktop \
+        --object-path /org/freedesktop/portal/desktop \
+        --method org.freedesktop.portal.Settings.Read \
+        org.freedesktop.appearance color-scheme 2>/dev/null \
+      | grep -oE 'uint32 [0-9]+' | awk '{ print $2 }' || true)"
+  fi
+  if [[ -z "${value}" ]] && command -v gsettings >/dev/null 2>&1; then
+    case "$(gsettings get org.gnome.desktop.interface color-scheme 2>/dev/null)" in
+      "'prefer-dark'") value=1 ;;
+      "'prefer-light'") value=2 ;;
+    esac
+  fi
+
+  case "${value}" in
+    1) printf 'dark\n' ;;
+    2) printf 'light\n' ;;
+  esac
+}
+
 append_host_timezone_arg() {
   local -n args_array="$1"
   local tz
@@ -2537,6 +2564,17 @@ append_scrcpy_env() {
   if [[ -n "${SCRCPY_SERVER_PATH_OVERRIDE}" && -f "${SCRCPY_SERVER_PATH_OVERRIDE}" ]]; then
     scrcpy_env_ref+=("SCRCPY_SERVER_PATH=${SCRCPY_SERVER_PATH_OVERRIDE}")
   fi
+
+  # On GNOME Wayland, GTK draws the window title bar (libdecor's GTK plugin)
+  # and only goes dark when GTK_THEME says so. Match the desktop's light or
+  # dark style, unless the user set a theme.
+  if [[ -z "${GTK_THEME:-}" ]]; then
+    if [[ "$(host_color_scheme)" == "dark" ]]; then
+      scrcpy_env_ref+=("GTK_THEME=Adwaita:dark")
+    else
+      scrcpy_env_ref+=("GTK_THEME=Adwaita")
+    fi
+  fi
 }
 
 start_scrcpy_with_retries() {
@@ -2746,6 +2784,35 @@ disable_guest_bluetooth() {
   guest_adb "${adb_serial}" shell settings put global bluetooth_on 0 >/dev/null 2>&1 || true
   guest_adb "${adb_serial}" shell cmd bluetooth_manager disable >/dev/null 2>&1 || true
   log "disabled guest Bluetooth (no host Bluetooth controller)"
+}
+
+# On a VM's first boot, start Android in the host's light or dark theme. The
+# ika_theme_seeded marker lives in the guest, so later boots leave a theme the
+# user picked in Android alone, and a wiped VM is seeded again.
+seed_guest_theme() {
+  local adb_serial="$1"
+  local seeded
+  local scheme
+  local night
+
+  # Only an explicit "null" means unset; an adb error must not re-seed.
+  seeded="$(guest_adb "${adb_serial}" shell settings get global ika_theme_seeded 2>/dev/null | tr -d '\r' || true)"
+  [[ "${seeded}" == "null" ]] || return 0
+
+  # LineageOS defaults to dark, and GNOME's light style reports no preference,
+  # so anything but dark is applied as light.
+  scheme="$(host_color_scheme)"
+  if [[ "${scheme}" == "dark" ]]; then
+    night=yes
+  else
+    scheme="light"
+    night=no
+  fi
+  # Through the uimode service, which applies the change at once and saves it
+  # to ui_night_mode; writing the setting directly only applies after reboot.
+  guest_adb "${adb_serial}" shell cmd uimode night "${night}" >/dev/null 2>&1 || true
+  log "set the guest theme to ${scheme} to match the host"
+  guest_adb "${adb_serial}" shell settings put global ika_theme_seeded 1 >/dev/null 2>&1 || true
 }
 
 # Density of the desktop display, preferring the override that ika applies
@@ -4477,6 +4544,7 @@ start_cvd() {
 
   log "boot completed after seeing: adb sys.boot_completed=1"
   disable_guest_bluetooth "${adb_serial}" "$@"
+  seed_guest_theme "${adb_serial}"
   respond "Android virtual device running"
   if [[ "${START_CONSOLE}" == "true" ]]; then
     maybe_start_scrcpy "${adb_serial}" "${fullscreen_mode}" "${game_mode}" || true

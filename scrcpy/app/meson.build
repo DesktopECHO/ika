@@ -131,6 +131,11 @@ if usb_support
     dependencies += dependency('libusb-1.0', static: static)
 endif
 
+if host_machine.system() == 'linux'
+    # dlopen(), for sc_sdl_apply_gtk_theme_variant() (in libc since glibc 2.34)
+    dependencies += cc.find_library('dl', required: false)
+endif
+
 if host_machine.system() == 'windows'
     dependencies += cc.find_library('mingw32')
     dependencies += cc.find_library('ws2_32')

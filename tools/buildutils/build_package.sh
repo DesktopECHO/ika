@@ -179,6 +179,18 @@ function source_tree_exclude_paths() {
   # unpack a few MB instead of 2+ GB they never use, and editing host source
   # no longer re-tars the multi-GB ROM.
   printf '%s\n' lineageos-arm64 lineageos-x86_64
+
+  # ika keeps its VM state in CVD_HOME_DIR, ~/ika by default, which is also
+  # where `git clone` from $HOME puts this checkout. Leave that state out:
+  # instance disks, live sockets, logs and locks.
+  printf '%s\n' \
+    tmp cuttlefish cuttlefish_assembly cuttlefish_runtime 'cuttlefish_runtime.*' \
+    .cuttlefish_config.json apps app-menu-disabled app-menu.log \
+    app-menu-sync.lock app-menu-watcher.lock app-menu-watcher.pid \
+    autostart.lock 'chromium-installed-cvd-*' console-launch.lock console.log \
+    console-supervisor.lock console-supervisor.pid console-window-state \
+    data-gb game-console-window-state game-session game-session.exited \
+    game-session.lock ikastart.log udmabuf-baseline
 }
 
 # Populate the named array with a find(1) prune expression built from
@@ -200,14 +212,15 @@ function source_tree_find_prune_args() {
 }
 
 # Populate the named array with rsync(1) --exclude args built from
-# source_tree_exclude_paths (--exclude=/A/ --exclude=/B/ ...).
+# source_tree_exclude_paths (--exclude=/A --exclude=/B ...), which match both
+# directories and files.
 function source_tree_rsync_exclude_args() {
   local -n exclude_ref="$1"
   local path
 
   exclude_ref=()
   while IFS= read -r path; do
-    exclude_ref+=("--exclude=/${path}/")
+    exclude_ref+=("--exclude=/${path}")
   done < <(source_tree_exclude_paths)
 }
 
@@ -263,7 +276,7 @@ function build_tree_manifest() {
     # Cache key embedded as the manifest's first line. Bump it whenever the
     # record format or the exclude set changes in a way that affects tarball
     # contents, to invalidate any tarball cached by an older run.
-    printf 'manifest-cache-version\t13\n'
+    printf 'manifest-cache-version\t14\n'
 
     cd "${REPO_DIR}"
     if [[ -n "${prune_name}" ]]; then

@@ -86,7 +86,7 @@
 #define FLEX_DISPLAY_BLUR_FADE_INTERVAL_MS 16
 
 // Hold the prepared window black for at least this long before fading in.
-#define SC_WINDOW_FADE_IN_HOLD SC_TICK_FROM_MS(1500)
+#define SC_WINDOW_FADE_IN_HOLD SC_TICK_FROM_MS(500)
 // Duration of the fade-from-black once the prepared window is revealed.
 #define SC_WINDOW_FADE_IN_DURATION SC_TICK_FROM_MS(500)
 // Safety cap: begin the fade even if flex_display never reports settled, so
@@ -2478,6 +2478,10 @@ sc_screen_init(struct sc_screen *screen,
         LOGE("Could not create renderer: %s", SDL_GetError());
         goto error_destroy_window;
     }
+
+    // After the renderer: an OpenGL renderer makes SDL recreate the X11
+    // window, which would drop a property set on the first one.
+    sc_sdl_apply_gtk_theme_variant(screen->window);
 
 #ifdef SC_DISPLAY_FORCE_OPENGL_CORE_PROFILE
     screen->gl_context = NULL;
