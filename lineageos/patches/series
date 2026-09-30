@@ -59,6 +59,7 @@ frameworks/base patches/frameworks-base.patch
 frameworks/base patches/frameworks-base-native-bridge.patch
 frameworks/base patches/frameworks-base-settingsprovider-ota.patch
 frameworks/base patches/frameworks-base-settingsprovider-pointer-speed.patch
+frameworks/base patches/frameworks-base-display-scaling-disabled.patch
 frameworks/base patches/frameworks-base-settingslib-sysprop-poker.patch
 frameworks/base patches/frameworks-base-carrier-config-wtf.patch
 frameworks/base patches/frameworks-base-settingsprovider-deviceconfig-quiet-deny.patch

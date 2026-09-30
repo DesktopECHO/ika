@@ -1,0 +1,41 @@
+Patch summary:
+Make "wm scaling off" take effect. WindowManager marks its display info with
+FLAG_SCALING_DISABLED, but DisplayManager only copies selected fields from the
+WindowManager override, not flags, so LogicalDisplay kept stretching an
+override size to fill the physical display. Pass changes of the flag to
+DisplayManagerInternal.setDisplayScalingDisabled(), which LogicalDisplay reads.
+Only changes are sent, so DisplayFoldController's use of the same setting is
+not overridden. Ika's scrcpy turns scaling off for its windowed console so the
+guest draws the window size 1:1 instead of resampling it.
+
+diff --git a/services/core/java/com/android/server/wm/DisplayContent.java b/services/core/java/com/android/server/wm/DisplayContent.java
+index 27427724f0c3..e26ad2ef58d9 100644
+--- a/services/core/java/com/android/server/wm/DisplayContent.java
++++ b/services/core/java/com/android/server/wm/DisplayContent.java
+@@ -472,6 +472,8 @@ class DisplayContent extends RootDisplayArea implements WindowManagerPolicy.Disp
+      * @see WindowManagerService#setForcedDisplayScalingMode(int, int)
+      */
+     boolean mDisplayScalingDisabled;
++    /** Last FLAG_SCALING_DISABLED state passed to DisplayManager. */
++    private boolean mScalingDisabledSentToDisplayManager;
+     final Display mDisplay;
+     private final DisplayInfo mDisplayInfo = new DisplayInfo();
+ 
+@@ -2396,6 +2398,17 @@ class DisplayContent extends RootDisplayArea implements WindowManagerPolicy.Disp
+      * Sets the current DisplayInfo in DisplayContent as an override to DisplayManager
+      */
+     private void setDisplayInfoOverride() {
++        // DisplayManager does not take flags from the WindowManager override, so
++        // FLAG_SCALING_DISABLED ("wm scaling off") never reached the logical display
++        // and an override size was still stretched to fill it. Pass changes on
++        // explicitly; an unchanged state leaves DisplayFoldController's setting alone.
++        final boolean scalingDisabled =
++                (mDisplayInfo.flags & Display.FLAG_SCALING_DISABLED) != 0;
++        if (scalingDisabled != mScalingDisabledSentToDisplayManager) {
++            mWmService.mDisplayManagerInternal.setDisplayScalingDisabled(mDisplayId,
++                    scalingDisabled);
++            mScalingDisabledSentToDisplayManager = scalingDisabled;
++        }
+         mWmService.mDisplayManagerInternal.setDisplayInfoOverrideFromWindowManager(mDisplayId,
+                 mDisplayInfo);
+ 
