@@ -2,7 +2,7 @@
 
 **NOTE:  Apple Silicon devices must be running Kernel 7.1 or newer**
 
-### New: app windows and desktop integration
+### New:  App windows and desktop integration
 - `ika app NAME` opens a single Android app in its own resizable window, backed
   by its own virtual display that follows the window size. Apps can be named
   by label (partial, case-insensitive) or package. Plain `ika app` lists the
