@@ -81,6 +81,9 @@ sc_device_msg_deserialize(const uint8_t *buf, size_t len,
             msg->display_ready.height = sc_read16be(&buf[7]);
             return 9;
         }
+        case DEVICE_MSG_TYPE_APP_ENDED:
+            // type(1) only
+            return 1;
         default:
             LOGW("Unknown device message type: %d", (int) msg->type);
             return -1; // error, we cannot recover

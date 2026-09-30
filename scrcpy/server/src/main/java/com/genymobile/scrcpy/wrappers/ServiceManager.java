@@ -31,6 +31,7 @@ public final class ServiceManager {
     private static StatusBarManager statusBarManager;
     private static ClipboardManager clipboardManager;
     private static ActivityManager activityManager;
+    private static ActivityTaskManager activityTaskManager;
     private static CameraManager cameraManager;
 
     private ServiceManager() {
@@ -96,6 +97,13 @@ public final class ServiceManager {
             activityManager = ActivityManager.create();
         }
         return activityManager;
+    }
+
+    public static ActivityTaskManager getActivityTaskManager() {
+        if (activityTaskManager == null) {
+            activityTaskManager = ActivityTaskManager.create();
+        }
+        return activityTaskManager;
     }
 
     public static CameraManager getCameraManager() {

@@ -6,6 +6,7 @@ public final class DeviceMessage {
     public static final int TYPE_ACK_CLIPBOARD = 1;
     public static final int TYPE_UHID_OUTPUT = 2;
     public static final int TYPE_DISPLAY_READY = 3;
+    public static final int TYPE_APP_ENDED = 4;
 
     private int type;
     private String text;
@@ -47,6 +48,12 @@ public final class DeviceMessage {
         event.displayId = displayId;
         event.width = width;
         event.height = height;
+        return event;
+    }
+
+    public static DeviceMessage createAppEnded() {
+        DeviceMessage event = new DeviceMessage();
+        event.type = TYPE_APP_ENDED;
         return event;
     }
 

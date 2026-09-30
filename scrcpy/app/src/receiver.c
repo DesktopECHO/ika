@@ -195,6 +195,11 @@ process_msg(struct sc_receiver *receiver, struct sc_device_msg *msg) {
             }
             break;
         }
+        case DEVICE_MSG_TYPE_APP_ENDED:
+            if (!sc_push_event(SC_EVENT_APP_ENDED)) {
+                LOGW("Could not report the end of the app");
+            }
+            break;
     }
 }
 

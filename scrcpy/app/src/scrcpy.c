@@ -188,6 +188,11 @@ event_loop(struct scrcpy *s, bool has_screen, bool game_session) {
                                     : SCRCPY_EXIT_SUCCESS;
             case SC_EVENT_GAME_SESSION_ENDED:
                 return SCRCPY_EXIT_GAME_SESSION_ENDED;
+            case SC_EVENT_APP_ENDED:
+                // The app left its new virtual display: close the window, as
+                // if the user had closed it.
+                LOGI("App ended");
+                return SCRCPY_EXIT_SUCCESS;
             case SC_EVENT_RUN_ON_MAIN_THREAD: {
                 sc_runnable_fn run = event.user.data1;
                 void *userdata = event.user.data2;
