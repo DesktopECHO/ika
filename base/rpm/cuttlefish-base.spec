@@ -93,6 +93,9 @@ Requires:       xdg-utils
 # Linked library dependencies are generated from ELF SONAMEs. Keep only the
 # scrcpy runtime tools that RPM cannot discover from the packaged binaries.
 Requires:       wayland-utils
+# SDL loads libdecor at runtime; its GTK plugin (in the libdecor package) draws
+# GNOME Wayland title bars in the system light/dark theme.
+Requires:       libdecor
 
 Requires(post): /usr/sbin/groupadd
 Requires(post): /usr/sbin/usermod

@@ -43,4 +43,11 @@ sc_sdl_render_clear(SDL_Renderer *renderer);
 void
 sc_sdl_render_present(SDL_Renderer *renderer);
 
+/**
+ * On X11, request the dark title bar variant when GTK_THEME names a dark
+ * variant (e.g. "Adwaita:dark"). Does nothing elsewhere.
+ */
+void
+sc_sdl_apply_gtk_theme_variant(SDL_Window *window);
+
 #endif
