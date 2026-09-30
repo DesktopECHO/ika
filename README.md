@@ -12,7 +12,7 @@ on [Fedora Asahi Remix](https://asahilinux.org/). It later evolved into a deskto
 - **Native builds** for **Apple Silicon** or **x86-64** systems with as little as 16 GB RAM,
   on **Fedora**, **Debian/Ubuntu** and **Arch Linux**.
 - **Dynamic display** window resizing that preserves DPI settings.
-- **Accelerated GPU rendering** with OpenGL ES and Vulkan support.
+- **GPU acceleration** with support for OpenGL ES and Vulkan.
 - **App windows**: run single Android apps in their own desktop windows, listed
   in your desktop's app menu; games start fullscreen with gamepad passthrough
   (see [App windows](#app-windows)).
@@ -28,27 +28,31 @@ The implementation patch inventory is maintained in
 limitations are recorded in that Vulkan document rather than presented as
 completed compatibility fixes.
 
-## Ika Binaries (Updated 2026-07-26)
+## Ika Binaries (Updated 2026-09-28)
 
 Ika consists of two packages: An Android disk image (informally, the device ROM)
 and a matching Cuttlefish virtual machine application. Prebuilt Fedora 44
-(`.rpm`) and Debian 13/Ubuntu 26.04 packages (`.deb`) are available below.
-Select your distribution and CPU architecture, then download the corresponding
-application and disk image.
+(`.rpm`), Debian 13/Ubuntu 26.04 (`.deb`) and Arch Linux x86_64 (`.pkg.tar.zst`)
+packages are available below. Select your distribution and CPU architecture, then
+download the corresponding application and disk image.
 
 > [!NOTE]
 > Debian and Ubuntu require Mesa 26.1 or newer. Get updated binaries from [Debian trixie-backports](https://backports.debian.org/Instructions/) or the [Kisak Mesa PPA](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa) before installing the Ika packages.
 
-| **Distribution / architecture** | **Application** | **Disk Image** |
+| **Distribution • Architecture** | **Application** | **Disk Image** |
 | --- | --- | --- |
 |  |  |  |
-| Fedora x86_64 | [ika-base (144 MB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-base-260726-1.fc44.x86_64.rpm) | [ika-lineageos (1.31 GB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-lineageos-260726-1.fc44.x86_64.rpm) |
+| Fedora 44 • x86_64 | [ika-base (145 MB)](https://github.com/DesktopECHO/ika/releases/download/260928/ika-base-260928-1.fc44.x86_64.rpm) | [ika-lineageos (1.38 GB)](https://github.com/DesktopECHO/ika/releases/download/260928/ika-lineageos-260928-1.fc44.x86_64.rpm) |
 |  |  |  |
-| Fedora ARM64 | [ika-base (141 MB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-base-260726-1.fc44.aarch64.rpm) | [ika-lineageos (1.29 GB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-lineageos-260726-1.fc44.aarch64.rpm) |
+| Fedora 44 • ARM64 | [ika-base (142 MB)](https://github.com/DesktopECHO/ika/releases/download/260928/ika-base-260928-1.fc44.aarch64.rpm) | [ika-lineageos (1.37 GB)](https://github.com/DesktopECHO/ika/releases/download/260928/ika-lineageos-260928-1.fc44.aarch64.rpm) |
 |  |  |  |
-| Debian x86_64 | [ika-base (116 MB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-base_260726-1_amd64.deb) | [ika-lineageos (1.26 GB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-lineageos_260726-1_amd64.deb) |
+| Debian 13 / Ubuntu 26.04  •  x86_64 | [ika-base (121 MB)](https://github.com/DesktopECHO/ika/releases/download/260928/ika-base_260928-1_amd64.deb) | [ika-lineageos (1.33 GB)](https://github.com/DesktopECHO/ika/releases/download/260928/ika-lineageos_260928-1_amd64.deb) |
 |  |  |  |
-| Debian ARM64 | [ika-base (101 MB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-base_260726-1_arm64.deb) | [ika-lineageos (1.24 GB)](https://github.com/DesktopECHO/ika/releases/download/260726/ika-lineageos_260726-1_arm64.deb) |
+| Debian 13 / Ubuntu 26.04 • ARM64 | [ika-base (106 MB)](https://github.com/DesktopECHO/ika/releases/download/260928/ika-base_260928-1_arm64.deb) | [ika-lineageos (1.31 GB)](https://github.com/DesktopECHO/ika/releases/download/260928/ika-lineageos_260928-1_arm64.deb) |
+|  |  |  |
+| Arch Linux • x86_64 | [ika-base (201 MB)](https://github.com/DesktopECHO/ika/releases/download/260928/ika-base-260928-1-x86_64.pkg.tar.zst) | [ika-lineageos (1.57 GB)](https://github.com/DesktopECHO/ika/releases/download/260928/ika-lineageos-260928-1-x86_64.pkg.tar.zst) |
+|  |  |  |
+| Arch Linux • ARM64 | [`./ika-build`](https://github.com/DesktopECHO/ika#build-ika-from-source) | [`./ika-build`](https://github.com/DesktopECHO/ika#build-ika-from-source) |
 
 ## Build Ika from Source
 
@@ -56,7 +60,7 @@ A successful build requires a minimum of 16GB RAM and 300GB storage.
 The initial build will take 3–6 hours or more, depending on your hardware and internet bandwidth.
 It's advisable to just let run it overnight. The *ika-build* script handles the prerequisite
 steps and produces installable .rpm, .deb or Arch Linux packages for your distribution.
-Prebuilt binaries are only published for Fedora and Debian/Ubuntu; on Arch Linux, build from source.
+Prebuilt binaries are published for Fedora, Debian/Ubuntu and Arch Linux x86_64; on Arch Linux ARM64, build from source.
 
 ```bash
 # 1. Download and extract:
