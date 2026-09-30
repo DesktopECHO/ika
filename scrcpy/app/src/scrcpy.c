@@ -812,7 +812,10 @@ aoa_complete:
             .video = screen_video,
             .camera = options->video_source == SC_VIDEO_SOURCE_CAMERA,
             .flex_display = options->flex_display,
-            .resize_display_using_pixel_size = cuttlefish_video,
+            // App windows (flex virtual displays) are sized in pixels like
+            // the raw-frame console, so HiDPI scaling does not upscale them.
+            .resize_display_using_pixel_size = cuttlefish_video
+                || (options->flex_display && options->new_display),
             .cuttlefish_frames_socket = cuttlefish_video
                                       ? options->cuttlefish_frames_socket
                                       : NULL,

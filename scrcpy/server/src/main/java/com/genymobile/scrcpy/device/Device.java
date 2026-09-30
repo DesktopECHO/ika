@@ -52,6 +52,15 @@ public final class Device {
     private static final Pattern WM_DENSITY_OVERRIDE_PATTERN =
             Pattern.compile("^Override density: ([0-9]+)$",
                     Pattern.MULTILINE);
+    private static final Pattern WM_SIZE_PHYSICAL_PATTERN =
+            Pattern.compile("^Physical size: ([0-9]+)x([0-9]+)$",
+                    Pattern.MULTILINE);
+
+    // Physical size of display 0, read once; it does not change at runtime.
+    private static Size physicalDisplaySize;
+    // Whether this server turned off display scaling on display 0, or null if
+    // it has not set the scaling mode.
+    private static Boolean displayScalingDisabled;
 
     private Device() {
         // not instantiable
@@ -238,6 +247,24 @@ public final class Device {
         }
     }
 
+    private static Size getPhysicalDisplaySize() {
+        if (physicalDisplaySize == null) {
+            try {
+                String output = com.genymobile.scrcpy.util.Command.execReadOutput(
+                        "wm", "size");
+                Matcher matcher = WM_SIZE_PHYSICAL_PATTERN.matcher(output);
+                if (matcher.find()) {
+                    physicalDisplaySize = new Size(
+                            Integer.parseInt(matcher.group(1)),
+                            Integer.parseInt(matcher.group(2)));
+                }
+            } catch (Exception e) {
+                Ln.e("Could not read physical display size", e);
+            }
+        }
+        return physicalDisplaySize;
+    }
+
     public static boolean setDisplaySizeAndDensity(int displayId, Size size,
                                                    int density) {
         if (displayId != 0) {
@@ -246,6 +273,22 @@ public final class Device {
         }
 
         try {
+            // With scaling on, Android stretches an override size to fill the
+            // physical display, and the client then scales that frame again to
+            // fit its window, blurring text twice. When the size fits, turn
+            // scaling off: Android draws it 1:1, centered in the physical
+            // frame, and the client shows that region unscaled. Set the mode
+            // before the size so the new size is never shown stretched.
+            Size physical = getPhysicalDisplaySize();
+            boolean disableScaling = physical != null
+                    && size.getWidth() <= physical.getWidth()
+                    && size.getHeight() <= physical.getHeight();
+            if (displayScalingDisabled == null
+                    || displayScalingDisabled != disableScaling) {
+                com.genymobile.scrcpy.util.Command.exec("wm", "scaling",
+                        disableScaling ? "off" : "auto");
+                displayScalingDisabled = disableScaling;
+            }
             com.genymobile.scrcpy.util.Command.exec("wm", "size",
                     size.getWidth() + "x" + size.getHeight());
             if (density > 0) {
@@ -269,6 +312,10 @@ public final class Device {
 
         boolean ok = true;
         try {
+            if (displayScalingDisabled != null && displayScalingDisabled) {
+                com.genymobile.scrcpy.util.Command.exec("wm", "scaling", "auto");
+            }
+            displayScalingDisabled = null;
             if (sizeOverride != null) {
                 com.genymobile.scrcpy.util.Command.exec("wm", "size",
                         sizeOverride.getWidth() + "x" + sizeOverride.getHeight());
