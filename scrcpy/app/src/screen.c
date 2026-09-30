@@ -579,6 +579,44 @@ sc_screen_update_content_rect(struct sc_screen *screen) {
             && screen->video
             && !screen->disconnected
             && screen->render_fit != SC_RENDER_FIT_DISABLED) {
+        // Raw frames at a size that fits the frame are unscaled (see
+        // sc_screen_compute_raw_frame_source_rect). Show them 1:1, centered,
+        // so text is not resampled. The request is the exact window size, so
+        // this normally fills the window.
+        struct sc_size source = screen->last_requested_display_size;
+        if (screen->raw_frame_source_open
+                && source.width && source.height
+                && source.width <= screen->frame_size.width
+                && source.height <= screen->frame_size.height) {
+            struct sc_size oriented =
+                get_oriented_size(source, screen->orientation);
+            if (oriented.width <= render_size.width
+                    && oriented.height <= render_size.height) {
+                screen->rect.x = (render_size.width - oriented.width) / 2;
+                screen->rect.y = (render_size.height - oriented.height) / 2;
+                screen->rect.w = oriented.width;
+                screen->rect.h = oriented.height;
+                return;
+            }
+        }
+
+        // An encoded display sized in pixels arrives at its own size, at most
+        // the codec alignment smaller than the window: show it 1:1 as well.
+        if (!screen->raw_frame_source_open
+                && screen->resize_display_using_pixel_size) {
+            struct sc_size oriented =
+                get_oriented_size(screen->frame_size, screen->orientation);
+            if (oriented.width && oriented.height
+                    && oriented.width <= render_size.width
+                    && oriented.height <= render_size.height) {
+                screen->rect.x = (render_size.width - oriented.width) / 2;
+                screen->rect.y = (render_size.height - oriented.height) / 2;
+                screen->rect.w = oriented.width;
+                screen->rect.h = oriented.height;
+                return;
+            }
+        }
+
         // The host window is the source of truth. The guest framebuffer may be
         // slightly smaller due to encoder or GPU row-pitch alignment, so scale
         // it into the exact compositor-managed output instead of changing the
@@ -745,6 +783,18 @@ sc_screen_compute_raw_frame_source_rect(struct sc_size frame_size,
     if (!frame_size.width || !frame_size.height
             || !source_size.width || !source_size.height) {
         return false;
+    }
+
+    // When the requested size fits the frame, the server turns off Android's
+    // display scaling, so the content is drawn 1:1 and centered in the frame
+    // (LogicalDisplay rounds the offsets down).
+    if (source_size.width <= frame_size.width
+            && source_size.height <= frame_size.height) {
+        rect->x = (frame_size.width - source_size.width) / 2;
+        rect->y = (frame_size.height - source_size.height) / 2;
+        rect->w = source_size.width;
+        rect->h = source_size.height;
+        return true;
     }
 
     float frame_ar = (float) frame_size.width / frame_size.height;
@@ -1273,7 +1323,10 @@ static void
 sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
     assert(screen->window_shown);
 
-    if (update_content_rect || screen->transient_stretch) {
+    // In flex mode the content rect also depends on the guest display size,
+    // which changes without a window resize (e.g. when a resize hold ends).
+    if (update_content_rect || screen->transient_stretch
+            || screen->flex_display) {
         sc_screen_update_content_rect(screen);
     }
 
@@ -1372,10 +1425,10 @@ sc_screen_maybe_request_display_resize(struct sc_screen *screen, bool force) {
     }
 
     assert(!screen->camera);
-    // For regular encoded display capture, keep the remote display at the
-    // logical window size to avoid creating unnecessarily large encoder input.
-    // For Direct Display/raw frames, request the renderer output size instead
-    // so HiDPI desktop scaling does not upscale already-rendered text.
+    // Raw frames and app windows (encoded virtual displays) request the
+    // renderer output size in pixels, so HiDPI desktop scaling does not
+    // upscale already-rendered text. Other encoded display capture keeps the
+    // remote display at the logical window size to limit the encoder input.
     struct sc_size resize_size = screen->resize_display_using_pixel_size
                                ? sc_sdl_get_render_output_size(screen->renderer)
                                : sc_sdl_get_window_size(screen->window);
@@ -1390,11 +1443,11 @@ sc_screen_maybe_request_display_resize(struct sc_screen *screen, bool force) {
 
     // For encoded video the server rounds up to the codec's macroblock
     // alignment; pre-round down here so both sides agree. Raw Cuttlefish
-    // frames use host Vulkan images. Keep 32-bit rows on a 256-byte boundary
-    // for GPUs such as RADV Polaris, while retaining the normal vertical
-    // alignment because row pitch does not depend on image height.
-    uint16_t width_align = screen->resize_display_using_pixel_size ? 64 : 8;
-    uint16_t height_align = 8;
+    // frames are always the fixed physical display, with the requested size
+    // drawn 1:1 inside it, so request the exact size: rounding it down would
+    // only leave a border around the unscaled content.
+    uint16_t width_align = sc_screen_uses_raw_frames(screen) ? 1 : 8;
+    uint16_t height_align = sc_screen_uses_raw_frames(screen) ? 1 : 8;
     width &= ~(width_align - 1);
     height &= ~(height_align - 1);
 
