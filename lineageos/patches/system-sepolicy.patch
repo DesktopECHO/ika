@@ -22,10 +22,10 @@ index b325c2ff0..f8d847aa8 100644
  ro.sf.lcd_density           u:object_r:surfaceflinger_prop:s0 exact int
 diff --git a/private/lineage_desktop.te b/private/lineage_desktop.te
 new file mode 100644
-index 000000000..a3500ff34
+index 000000000..2a063b9b3
 --- /dev/null
 +++ b/private/lineage_desktop.te
-@@ -0,0 +1,8 @@
+@@ -0,0 +1,23 @@
 +# Desktop builds intentionally keep optional stats bootstrap and legacy app probes
 +# denied; avoid noisy AVCs without granting the underlying access.
 +dontaudit domain statsbootstrap_service:service_manager find;
@@ -34,3 +34,18 @@ index 000000000..a3500ff34
 +
 +# Host-driven tests query the Cuttlefish density property through shell tools.
 +get_prop(shell, qemu_sf_lcd_density_prop)
++
++# Settings looks up every registered service after a developer-option change
++# (SettingsLib SystemPropPoker). AOSP already silences the lookups system_app is
++# not allowed to make for most of these; cover the rest without granting them.
++dontaudit system_app {
++  apex_service
++  lpdump_service
++  system_suspend_control_internal_service
++  system_suspend_control_service
++  tracingproxy_service
++}:service_manager find;
++
++# GmsCore probes the wireless-debugging properties. Keep them denied, as AOSP's
++# gmscore_app.te already does for system_adbd_prop.
++dontaudit gmscore_app adbd_prop:file r_file_perms;

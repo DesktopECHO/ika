@@ -1,0 +1,33 @@
+Patch summary:
+Answer DeviceConfig bulk writes from callers without WRITE_DEVICE_CONFIG or
+WRITE_ALLOWLISTED_DEVICE_CONFIG with SET_ALL_RESULT_DISABLED instead of a
+SecurityException. LineageOS assigns the configurator role to SimpleDeviceConfig,
+so GmsCore's PlatformConfigurator is denied on every flag sync, and each denial
+was logged by DatabaseUtils in system_server. Callers now see the same result as
+when DeviceConfig sync is disabled (Settings.Config.setStrings returns false);
+nothing is written, and callers holding either permission are unaffected.
+
+diff --git a/packages/SettingsProvider/src/com/android/providers/settings/SettingsProvider.java b/packages/SettingsProvider/src/com/android/providers/settings/SettingsProvider.java
+index 1231f5632649..20f5aa186e45 100644
+--- a/packages/SettingsProvider/src/com/android/providers/settings/SettingsProvider.java
++++ b/packages/SettingsProvider/src/com/android/providers/settings/SettingsProvider.java
+@@ -1251,7 +1251,18 @@ public class SettingsProvider extends ContentProvider {
+             Slog.v(LOG_TAG, "setAllConfigSettings for prefix: " + prefix);
+         }
+ 
+-        enforceDeviceConfigWritePermission(getContext(), keyValues.keySet());
++        // LineageOS gives the DeviceConfig configurator role to SimpleDeviceConfig, so GmsCore's
++        // flag sync holds neither write permission. Report sync as disabled to such callers
++        // instead of throwing, which logged a SecurityException for every sync attempt.
++        final Context context = getContext();
++        if (context.checkCallingOrSelfPermission(Manifest.permission.WRITE_DEVICE_CONFIG)
++                        != PackageManager.PERMISSION_GRANTED
++                && context.checkCallingOrSelfPermission(
++                        Manifest.permission.WRITE_ALLOWLISTED_DEVICE_CONFIG)
++                        != PackageManager.PERMISSION_GRANTED) {
++            return SET_ALL_RESULT_DISABLED;
++        }
++        enforceDeviceConfigWritePermission(context, keyValues.keySet());
+         final String callingPackage = resolveCallingPackage();
+ 
+         synchronized (mLock) {

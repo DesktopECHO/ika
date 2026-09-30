@@ -1,0 +1,117 @@
+Patch summary:
+Stop Settings' SystemPropPoker from sending SYSPROPS_TRANSACTION to services
+its SELinux domain cannot call. After every developer-option change it pokes
+every registered service; each HAL and daemon system_app may not call fails
+with BR_FAILED_REPLY (EACCES), logging "!!! FAILED BINDER TRANSACTION !!!" and a
+rust_binder warning per service. Skip stable AIDL instances ("pkg.IName/inst"),
+and remember any other service that refuses the poke while its binder stays
+alive so later pokes skip it. Services that actually died are still retried.
+
+diff --git a/packages/SettingsLib/src/com/android/settingslib/development/SystemPropPoker.java b/packages/SettingsLib/src/com/android/settingslib/development/SystemPropPoker.java
+index 3f16be184c41..5b6965dd7597 100644
+--- a/packages/SettingsLib/src/com/android/settingslib/development/SystemPropPoker.java
++++ b/packages/SettingsLib/src/com/android/settingslib/development/SystemPropPoker.java
+@@ -26,6 +26,9 @@ import android.util.Log;
+ import androidx.annotation.NonNull;
+ import androidx.annotation.VisibleForTesting;
+ 
++import java.util.Set;
++import java.util.concurrent.ConcurrentHashMap;
++
+ public class SystemPropPoker  {
+     private static final String TAG = "SystemPropPoker";
+ 
+@@ -61,6 +64,11 @@ public class SystemPropPoker  {
+ 
+     public static class PokerTask extends AsyncTask<Void, Void, Void> {
+ 
++        // Services that refused a poke while their binder stayed alive, which means this
++        // process's SELinux domain may not call them. Skip them on later pokes instead of
++        // repeating the failed transactions on every developer-option change.
++        private static final Set<String> sRefusedServices = ConcurrentHashMap.newKeySet();
++
+         @VisibleForTesting
+         String[] listServices() {
+             return ServiceManager.listServices();
+@@ -79,13 +87,20 @@ public class SystemPropPoker  {
+                 return null;
+             }
+             for (String service : services) {
++                // Stable AIDL instances ("package.IName/instance") are HAL and system daemon
++                // interfaces; the Settings domain is not allowed to call most of them.
++                if (service.indexOf('/') >= 0 || sRefusedServices.contains(service)) {
++                    continue;
++                }
+                 IBinder obj = checkService(service);
+                 if (obj != null) {
+                     Parcel data = Parcel.obtain();
+                     try {
+                         obj.transact(IBinder.SYSPROPS_TRANSACTION, data, null, 0);
+                     } catch (RemoteException e) {
+-                        // Ignore
++                        if (obj.isBinderAlive()) {
++                            sRefusedServices.add(service);
++                        }
+                     } catch (Exception e) {
+                         Log.i(TAG, "Someone wrote a bad service '" + service
+                                 + "' that doesn't like to be poked", e);
+diff --git a/packages/SettingsLib/tests/robotests/src/com/android/settingslib/development/SystemPropPokerTest.java b/packages/SettingsLib/tests/robotests/src/com/android/settingslib/development/SystemPropPokerTest.java
+index d1212fcad864..a48f5ee0c1ed 100644
+--- a/packages/SettingsLib/tests/robotests/src/com/android/settingslib/development/SystemPropPokerTest.java
++++ b/packages/SettingsLib/tests/robotests/src/com/android/settingslib/development/SystemPropPokerTest.java
+@@ -21,9 +21,12 @@ import static org.mockito.ArgumentMatchers.anyInt;
+ import static org.mockito.ArgumentMatchers.nullable;
+ import static org.mockito.Mockito.atLeastOnce;
+ import static org.mockito.Mockito.doReturn;
++import static org.mockito.Mockito.doThrow;
+ import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.times;
+ import static org.mockito.Mockito.verify;
+ 
++import android.os.DeadObjectException;
+ import android.os.IBinder;
+ import android.os.Parcel;
+ 
+@@ -73,4 +76,42 @@ public class SystemPropPokerTest {
+         verify(mMockBinder, atLeastOnce())
+                 .transact(anyInt(), any(Parcel.class), nullable(Parcel.class), anyInt());
+     }
++
++    @Test
++    public void testPokeSkipsStableAidlInstances() throws Exception {
++        doReturn(new String[] {"android.hardware.test.ITest/default"})
++                .when(mPokerTask).listServices();
++        mSystemPropPoker.poke();
++        verify(mPokerTask, never()).checkService("android.hardware.test.ITest/default");
++    }
++
++    @Test
++    public void testPokeSkipsServiceThatRefusedPoke() throws Exception {
++        doReturn(new String[] {"refusingService"}).when(mPokerTask).listServices();
++        doReturn(mMockBinder).when(mPokerTask).checkService("refusingService");
++        doThrow(new DeadObjectException()).when(mMockBinder)
++                .transact(anyInt(), any(Parcel.class), nullable(Parcel.class), anyInt());
++        doReturn(true).when(mMockBinder).isBinderAlive();
++
++        mSystemPropPoker.poke();
++        mSystemPropPoker.poke();
++
++        verify(mMockBinder, times(1))
++                .transact(anyInt(), any(Parcel.class), nullable(Parcel.class), anyInt());
++    }
++
++    @Test
++    public void testPokeRetriesServiceThatDied() throws Exception {
++        doReturn(new String[] {"dyingService"}).when(mPokerTask).listServices();
++        doReturn(mMockBinder).when(mPokerTask).checkService("dyingService");
++        doThrow(new DeadObjectException()).when(mMockBinder)
++                .transact(anyInt(), any(Parcel.class), nullable(Parcel.class), anyInt());
++        doReturn(false).when(mMockBinder).isBinderAlive();
++
++        mSystemPropPoker.poke();
++        mSystemPropPoker.poke();
++
++        verify(mMockBinder, times(2))
++                .transact(anyInt(), any(Parcel.class), nullable(Parcel.class), anyInt());
++    }
+ }

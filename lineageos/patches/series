@@ -59,6 +59,9 @@ frameworks/base patches/frameworks-base.patch
 frameworks/base patches/frameworks-base-native-bridge.patch
 frameworks/base patches/frameworks-base-settingsprovider-ota.patch
 frameworks/base patches/frameworks-base-settingsprovider-pointer-speed.patch
+frameworks/base patches/frameworks-base-settingslib-sysprop-poker.patch
+frameworks/base patches/frameworks-base-carrier-config-wtf.patch
+frameworks/base patches/frameworks-base-settingsprovider-deviceconfig-quiet-deny.patch
 system/core patches/system-core.patch
 system/sepolicy patches/system-sepolicy.patch
 system/sepolicy patches/system-sepolicy-checkfc-arm64-getopt.patch
