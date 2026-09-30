@@ -30,9 +30,12 @@ constexpr int kOemLockedBit = 2;
 
 // Default state is allowed_by_carrier = true
 //                  allowed_by_device = true
-//                  locked = false
-constexpr uint8_t kDefaultState =
-    0 | (1 << kAllowedByCarrierBit) | (1 << kAllowedByDeviceBit);
+//                  locked = true
+// New Ika VMs boot with a locked bootloader, so verified boot is enforced.
+// Unlocking stays allowed.
+constexpr uint8_t kDefaultState = 0 | (1 << kAllowedByCarrierBit) |
+                                  (1 << kAllowedByDeviceBit) |
+                                  (1 << kOemLockedBit);
 
 Result<void> InitializeDefaultState(secure_env::Storage& storage) {
   if (storage.Exists()) {
