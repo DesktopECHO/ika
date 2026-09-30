@@ -572,14 +572,17 @@ index ffd04b70a..141ca75d6 100644
 +
 +get_prop(surfaceflinger, vendor_graphics_debug_prop)
 diff --git a/shared/sepolicy/vendor/system_server.te b/shared/sepolicy/vendor/system_server.te
-index 7d0ceaad7..926cfa742 100644
+index 7d0ceaad7..7af35a407 100644
 --- a/shared/sepolicy/vendor/system_server.te
 +++ b/shared/sepolicy/vendor/system_server.te
-@@ -1,2 +1,4 @@
+@@ -1,2 +1,7 @@
  # Cuttlefish is still using the legacy wifi HAL (pre-HIDL)
  get_prop(system_server, wifi_hal_prop)
 +
 +allow system_server shell:unix_stream_socket getopt;
++
++# The in-process graphics stack (Mesa/gfxstream, minigbm) reads its vendor debug properties.
++get_prop(system_server, vendor_graphics_debug_prop)
 diff --git a/shared/sepolicy/vendor/te_macros b/shared/sepolicy/vendor/te_macros
 index c4f26eb0c..773933614 100644
 --- a/shared/sepolicy/vendor/te_macros

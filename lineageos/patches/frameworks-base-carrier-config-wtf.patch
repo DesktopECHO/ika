@@ -1,0 +1,19 @@
+Patch summary:
+Do not report a WTF when the carrier config manager is requested on a device
+without FEATURE_TELEPHONY_SUBSCRIPTION. TelephonyFrameworkInitializer returns a
+null CarrierConfigManager there by design, so SystemServiceRegistry logged
+"Manager wrapper not available: carrier_config" for every caller on the desktop
+VM. Treat it like VCN_MANAGEMENT_SERVICE, which has the same feature gate.
+
+diff --git a/core/java/android/app/SystemServiceRegistry.java b/core/java/android/app/SystemServiceRegistry.java
+index 60a938d70184..de5cbfb5546b 100644
+--- a/core/java/android/app/SystemServiceRegistry.java
++++ b/core/java/android/app/SystemServiceRegistry.java
+@@ -2073,6 +2073,7 @@ public final class SystemServiceRegistry {
+                 case Context.VIRTUAL_DEVICE_SERVICE:
+                     return null;
+                 case Context.VCN_MANAGEMENT_SERVICE:
++                case Context.CARRIER_CONFIG_SERVICE:
+                     if (!hasSystemFeatureOpportunistic(ctx,
+                             PackageManager.FEATURE_TELEPHONY_SUBSCRIPTION)) {
+                         return null;
