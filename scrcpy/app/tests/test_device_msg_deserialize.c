@@ -83,6 +83,16 @@ static void test_deserialize_uhid_output(void) {
     sc_device_msg_destroy(&msg);
 }
 
+static void test_deserialize_app_ended(void) {
+    const uint8_t input[] = {DEVICE_MSG_TYPE_APP_ENDED};
+
+    struct sc_device_msg msg;
+    ssize_t r = sc_device_msg_deserialize(input, sizeof(input), &msg);
+    assert(r == 1);
+
+    assert(msg.type == DEVICE_MSG_TYPE_APP_ENDED);
+}
+
 int main(int argc, char *argv[]) {
     (void) argc;
     (void) argv;
@@ -91,5 +101,6 @@ int main(int argc, char *argv[]) {
     test_deserialize_clipboard_big();
     test_deserialize_ack_set_clipboard();
     test_deserialize_uhid_output();
+    test_deserialize_app_ended();
     return 0;
 }

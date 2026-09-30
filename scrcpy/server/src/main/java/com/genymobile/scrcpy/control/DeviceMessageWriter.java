@@ -45,6 +45,9 @@ public class DeviceMessageWriter {
                 dos.writeShort(msg.getWidth());
                 dos.writeShort(msg.getHeight());
                 break;
+            case DeviceMessage.TYPE_APP_ENDED:
+                // type(1) only
+                break;
             default:
                 throw new ControlProtocolException("Unknown event type: " + type);
         }

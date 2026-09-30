@@ -93,6 +93,8 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     private final ControlChannel controlChannel;
     private final CleanUp cleanUp;
     private final DeviceMessageSender sender;
+    // Watches the app of a new virtual display (--new-display), null otherwise
+    private final AppEndWatcher appEndWatcher;
     private final boolean clipboardAutosync;
     private final boolean powerOn;
     private final boolean flexDisplay;
@@ -142,6 +144,9 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         this.flexDisplayDpi = options.getFlexDisplayDpi();
         initPointers();
         sender = new DeviceMessageSender(controlChannel);
+        appEndWatcher = displayId == Device.DISPLAY_ID_NONE
+                ? new AppEndWatcher(() -> sender.send(DeviceMessage.createAppEnded()))
+                : null;
 
         supportsInputEvents = Device.supportsInputEvents(displayId);
         if (!supportsInputEvents) {
@@ -174,6 +179,11 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     public void onNewVirtualDisplay(int virtualDisplayId, PositionMapper positionMapper) {
         DisplayData data = new DisplayData(virtualDisplayId, positionMapper);
         DisplayData old = this.displayData.getAndSet(data);
+        if (appEndWatcher != null) {
+            // Also called when the display is recreated: follow the new id
+            appEndWatcher.setDisplayId(virtualDisplayId);
+            appEndWatcher.start();
+        }
         if (old == null) {
             // The very first time the Controller is notified of a new virtual display
             synchronized (displayDataAvailable) {
@@ -456,6 +466,9 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     @Override
     public void stop() {
         stopDisplayReadyListener();
+        if (appEndWatcher != null) {
+            appEndWatcher.stop();
+        }
         if (thread != null) {
             thread.interrupt();
         }

@@ -19,6 +19,9 @@ enum sc_device_msg_type {
     // resize. The client uses this with the host-side resize quiet period to
     // decide when to drop its stretched preview.
     DEVICE_MSG_TYPE_DISPLAY_READY,
+    // Sent by the device when the app of a new virtual display is gone
+    // (finished, killed, or moved to another display).
+    DEVICE_MSG_TYPE_APP_ENDED,
 };
 
 struct sc_device_msg {
