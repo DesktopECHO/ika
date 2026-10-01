@@ -6,13 +6,25 @@ surfaces or streaming a full desktop-sized framebuffer.
 
 The patch adjusts advertised codec capabilities and matching encoder limits
 together, so framework capability checks and actual software codec behavior stay
-aligned.
+aligned: each dimension up to 4096 and the area up to Level 5.1 MaxFS (36864
+macroblocks), the same bounds external-libavc-encoder-max-size.patch gives
+libavc. The component rejects larger areas at configure time instead of failing
+every frame.
 
 diff --git a/media/codec2/components/avc/C2SoftAvcEnc.cpp b/media/codec2/components/avc/C2SoftAvcEnc.cpp
-index 1e7b275d2f..f5f405510a 100644
+index 1e7b275d2f..980684773c 100644
 --- a/media/codec2/components/avc/C2SoftAvcEnc.cpp
 +++ b/media/codec2/components/avc/C2SoftAvcEnc.cpp
-@@ -109,8 +109,8 @@ public:
+@@ -45,6 +45,8 @@ namespace {
+ 
+ constexpr char COMPONENT_NAME[] = "c2.android.avc.encoder";
+ constexpr uint32_t kMinOutBufferSize = 524288;
++// libavc bounds the picture area by its highest level (Level 5.1 MaxFS).
++constexpr uint32_t kMaxMacroblocks = 36864;
+ void ParseGop(
+         const C2StreamGopTuning::output &gop,
+         uint32_t *syncInterval, uint32_t *iInterval, uint32_t *maxBframes) {
+@@ -109,8 +111,8 @@ public:
                  DefineParam(mSize, C2_PARAMKEY_PICTURE_SIZE)
                  .withDefault(new C2StreamPictureSizeInfo::input(0u, 16, 16))
                  .withFields({
@@ -23,7 +35,7 @@ index 1e7b275d2f..f5f405510a 100644
                  })
                  .withSetter(SizeSetter)
                  .build());
-@@ -166,7 +166,7 @@ public:
+@@ -166,7 +168,7 @@ public:
          addParameter(
                  DefineParam(mBitrate, C2_PARAMKEY_BITRATE)
                  .withDefault(new C2StreamBitrateInfo::output(0u, 64000))
@@ -32,7 +44,7 @@ index 1e7b275d2f..f5f405510a 100644
                  .withSetter(BitrateSetter)
                  .build());
  
-@@ -208,6 +208,7 @@ public:
+@@ -208,6 +210,7 @@ public:
                          LEVEL_AVC_4_1,
                          LEVEL_AVC_4_2,
                          LEVEL_AVC_5,
@@ -40,7 +52,22 @@ index 1e7b275d2f..f5f405510a 100644
                      }),
                  })
                  .withSetter(ProfileLevelSetter, mSize, mFrameRate, mBitrate)
-@@ -334,6 +335,7 @@ public:
+@@ -297,6 +300,14 @@ public:
+             res = res.plus(C2SettingResultBuilder::BadValue(me.F(me.v.height)));
+             me.set().height = oldMe.v.height;
+         }
++        // Each dimension may be in range while the area is not: reject it here
++        // so configure() fails instead of every frame failing to encode.
++        uint64_t mbs = uint64_t((me.v.width + 15) / 16) * ((me.v.height + 15) / 16);
++        if (mbs > kMaxMacroblocks) {
++            res = res.plus(C2SettingResultBuilder::BadValue(me.F(me.v.width)));
++            me.set().width = oldMe.v.width;
++            me.set().height = oldMe.v.height;
++        }
+         return res;
+     }
+ 
+@@ -334,6 +345,7 @@ public:
              { LEVEL_AVC_4_1, 245760,  8192,  50000000 },
              { LEVEL_AVC_4_2, 522240,  8704,  50000000 },
              { LEVEL_AVC_5,   589824, 22080, 135000000 },
@@ -48,7 +75,7 @@ index 1e7b275d2f..f5f405510a 100644
          };
  
          uint64_t mbs = uint64_t((size.v.width + 15) / 16) * ((size.v.height + 15) / 16);
-@@ -371,9 +373,9 @@ public:
+@@ -371,9 +383,9 @@ public:
                  needsUpdate = true;
              }
          }
@@ -60,7 +87,7 @@ index 1e7b275d2f..f5f405510a 100644
          }
  
          return C2R::Ok();
-@@ -526,6 +528,7 @@ public:
+@@ -526,6 +538,7 @@ public:
              { LEVEL_AVC_4_1, 41 },
              { LEVEL_AVC_4_2, 42 },
              { LEVEL_AVC_5,   50 },
@@ -69,7 +96,7 @@ index 1e7b275d2f..f5f405510a 100644
          for (const Level &level : levels) {
              if (mProfileLevel->level == level.c2Level) {
 diff --git a/media/libstagefright/data/media_codecs_google_c2_video.xml b/media/libstagefright/data/media_codecs_google_c2_video.xml
-index 2fb2d5947b..3bcb94ac4e 100644
+index 2fb2d5947b..63e02a07e4 100644
 --- a/media/libstagefright/data/media_codecs_google_c2_video.xml
 +++ b/media/libstagefright/data/media_codecs_google_c2_video.xml
 @@ -116,13 +116,13 @@
@@ -79,20 +106,20 @@ index 2fb2d5947b..3bcb94ac4e 100644
 -            <!-- profiles and levels:  ProfileBaseline : Level41 -->
 -            <Limit name="size" min="16x16" max="2048x2048" />
 +            <!-- profiles and levels:  ProfileBaseline : Level51 -->
-+            <Limit name="size" min="16x16" max="4096x2304" />
++            <Limit name="size" min="16x16" max="4096x4096" />
              <Limit name="alignment" value="2x2" />
              <Limit name="block-size" value="16x16" />
 -            <Limit name="block-count" range="1-8192" /> <!-- max 2048x1024 -->
 -            <Limit name="blocks-per-second" range="1-245760" />
 -            <Limit name="bitrate" range="1-12000000" />
-+            <Limit name="block-count" range="1-36864" /> <!-- max 4096x2304 -->
++            <Limit name="block-count" range="1-36864" /> <!-- max 4096x2304 or 2304x4096 -->
 +            <Limit name="blocks-per-second" range="1-2073600" />
 +            <Limit name="bitrate" range="1-240000000" />
              <Feature name="intra-refresh" />
          </MediaCodec>
          <MediaCodec name="c2.android.hevc.encoder" type="video/hevc">
 diff --git a/media/libstagefright/data/media_codecs_sw.xml b/media/libstagefright/data/media_codecs_sw.xml
-index 475048c5db..fea2a6d9a8 100644
+index 475048c5db..ba96c0a541 100644
 --- a/media/libstagefright/data/media_codecs_sw.xml
 +++ b/media/libstagefright/data/media_codecs_sw.xml
 @@ -344,11 +344,11 @@
@@ -104,9 +131,9 @@ index 475048c5db..fea2a6d9a8 100644
 -                <Limit name="block-count" range="1-8192" /> <!-- max 2048x1024 -->
 -                <Limit name="blocks-per-second" range="1-245760" />
 -                <Limit name="bitrate" range="1-12000000" />
-+                <Limit name="size" min="16x16" max="4096x2304" />
++                <Limit name="size" min="16x16" max="4096x4096" />
 +                <!-- profiles and levels:  ProfileBaseline : Level51 -->
-+                <Limit name="block-count" range="1-36864" /> <!-- max 4096x2304 -->
++                <Limit name="block-count" range="1-36864" /> <!-- max 4096x2304 or 2304x4096 -->
 +                <Limit name="blocks-per-second" range="1-2073600" />
 +                <Limit name="bitrate" range="1-240000000" />
              </Variant>
