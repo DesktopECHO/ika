@@ -18,6 +18,12 @@
 - `ika app NAME --touch` sends left-button clicks and drags as touch, for
   games that ignore the mouse. Game launchers get a "Play with Touch Input"
   action.
+- App windows wider than 2560 pixels (about 1280 points on a 2x HiDPI
+  display) no longer open blank or freeze on a distorted frame. Android's
+  software H.264 encoder now goes up to 4096x2304 (or 2304x4096). A window
+  beyond what the encoder takes is scaled to fit instead of failing.
+- An app window no longer stays distorted after a resize when Android
+  reported the new size late.
 
 ### Android guest
 - A new VM starts in the desktop's light or dark theme; it can be changed in

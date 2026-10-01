@@ -106,7 +106,13 @@ public class DisplaySizeMonitor {
         this.sessionDisplaySize = sessionDisplaySize;
     }
 
-    private void checkDisplaySizeChanged() {
+    /**
+     * Compare the current display size with the session display size, and request a reset if they differ.
+     * <p/>
+     * Called on display events, and by a capture after it records the size it read, in case the display changed before the session size
+     * was recorded (its event would then have been compared with an older session size).
+     */
+    public void checkDisplaySizeChanged() {
         DisplayInfo di = ServiceManager.getDisplayManager().getDisplayInfo(displayId);
         if (di == null) {
             Ln.w("DisplayInfo for " + displayId + " cannot be retrieved");

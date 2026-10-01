@@ -37,6 +37,7 @@ public class SurfaceEncoder implements AsyncProcessor {
     // Keep the values in descending order
     private static final int[] MAX_SIZE_FALLBACK = {2560, 1920, 1600, 1280, 1024, 800};
     private static final int MAX_CONSECUTIVE_ERRORS = 3;
+    private static final int MAX_CONSECUTIVE_CANCELLATIONS = 3;
 
     private final SurfaceCapture capture;
     private final Streamer streamer;
@@ -48,6 +49,7 @@ public class SurfaceEncoder implements AsyncProcessor {
 
     private boolean firstFrameSent;
     private int consecutiveErrors;
+    private int consecutiveCancellations;
 
     private Thread thread;
     private final AtomicBoolean stopped = new AtomicBoolean();
@@ -69,6 +71,9 @@ public class SurfaceEncoder implements AsyncProcessor {
         MediaCodec mediaCodec = createMediaCodec(codec, encoderName);
         MediaCodecInfo.CodecCapabilities codecCapabilities = mediaCodec.getCodecInfo().getCapabilitiesForType(codec.getMimeType());
 
+        if (codecCapabilities.getVideoCapabilities() != null) {
+            capture.setEncoderSizeLimit(new EncoderSizeLimit(codecCapabilities.getVideoCapabilities()));
+        }
         capture.init(reset);
 
         try {
@@ -131,14 +136,19 @@ public class SurfaceEncoder implements AsyncProcessor {
                     // cancelled"). This is expected while reconfiguring after a resize.
                     boolean resetRequested = reset.consumeReset();
                     if (resetRequested) {
+                        consecutiveCancellations = 0;
                         alive = !stopped.get() && !capture.isClosed();
-                    } else if (isOutputDequeueCancellation(e)) {
+                    } else if (isOutputDequeueCancellation(e)
+                            && ++consecutiveCancellations <= MAX_CONSECUTIVE_CANCELLATIONS) {
                         // This is often transient while resizing/reconfiguring
                         // display capture. Retry without exhausting the
-                        // consecutive error budget.
+                        // consecutive error budget, but not forever: an
+                        // encoder that fails every frame at this size (for
+                        // example beyond its real limits) reports it this way.
                         alive = !stopped.get() && !capture.isClosed();
                         SystemClock.sleep(20);
                     } else {
+                        consecutiveCancellations = 0;
                         Ln.e("Capture/encoding error: " + e.getClass().getName() + ": " + e.getMessage());
                         if (!prepareRetry(size)) {
                             throw e;
@@ -172,22 +182,23 @@ public class SurfaceEncoder implements AsyncProcessor {
     private boolean prepareRetry(Size currentSize) {
         if (firstFrameSent) {
             ++consecutiveErrors;
-            if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+            if (consecutiveErrors < MAX_CONSECUTIVE_ERRORS) {
+                // Wait a bit to increase the probability that retrying will fix the problem
+                SystemClock.sleep(50);
+                return true;
+            }
+
+            // Errors that persist once streaming usually mean the capture was resized beyond what the encoder really handles (its
+            // advertised capabilities may overstate it). Downsizing is less surprising than a stream that stops.
+            if (!downsizeOnError) {
                 // Definitively fail
                 return false;
             }
-
-            // Wait a bit to increase the probability that retrying will fix the problem
-            SystemClock.sleep(50);
-            return true;
-        }
-
-        if (!downsizeOnError) {
+            consecutiveErrors = 0;
+        } else if (!downsizeOnError) {
             // Must fail immediately
             return false;
         }
-
-        // Downsizing on error is only enabled if an encoding failure occurs before the first frame (downsizing later could be surprising)
 
         int newMaxSize = chooseMaxSizeFallback(currentSize);
         if (newMaxSize == 0) {
@@ -309,6 +320,7 @@ public class SurfaceEncoder implements AsyncProcessor {
                         // If this is not a config packet, then it contains a frame
                         firstFrameSent = true;
                         consecutiveErrors = 0;
+                        consecutiveCancellations = 0;
                     }
 
                     streamer.writePacket(codecBuffer, bufferInfo);

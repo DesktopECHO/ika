@@ -17,12 +17,34 @@ public abstract class SurfaceCapture {
     }
 
     private CaptureListener listener;
+    private EncoderSizeLimit encoderSizeLimit;
 
     /**
      * Notify the listener that the capture has been invalidated (for example, because its size changed).
      */
     protected void invalidate() {
         listener.onInvalidated();
+    }
+
+    /**
+     * Set the sizes the encoder advertises, to scale the video down to them in {@link #prepare()} (set by the encoder before
+     * {@link #init()}).
+     *
+     * @param encoderSizeLimit the encoder sizes, or {@code null} for no limit
+     */
+    public void setEncoderSizeLimit(EncoderSizeLimit encoderSizeLimit) {
+        this.encoderSizeLimit = encoderSizeLimit;
+    }
+
+    /**
+     * Scale a video size down, keeping its aspect ratio, until the encoder supports it.
+     *
+     * @param size the video size
+     * @param alignment the alignment of the result
+     * @return {@code size} if the encoder supports it (or no limit is set), else the largest smaller size it supports
+     */
+    protected Size fitToEncoder(Size size, int alignment) {
+        return encoderSizeLimit == null ? size : encoderSizeLimit.fit(size, alignment);
     }
 
     /**
