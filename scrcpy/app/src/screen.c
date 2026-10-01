@@ -717,8 +717,9 @@ sc_screen_uses_raw_frames(struct sc_screen *screen) {
     return screen->cuttlefish_frames_socket;
 }
 
-// The server rounds encoded video to the codec's size alignment (at least 8,
-// commonly 16), so a matching frame may differ slightly from the request.
+// The server rounds encoded video to its size alignment (2 for new displays,
+// at least 8 otherwise), so a matching frame may differ slightly from the
+// request.
 static bool
 sc_screen_frame_matches_resize_request(struct sc_screen *screen,
                                        struct sc_size frame_size) {
@@ -1461,8 +1462,8 @@ sc_screen_maybe_request_display_resize(struct sc_screen *screen, bool force) {
     // frames are always the fixed physical display, with the requested size
     // drawn 1:1 inside it, so request the exact size: rounding it down would
     // only leave a border around the unscaled content.
-    uint16_t width_align = sc_screen_uses_raw_frames(screen) ? 1 : 8;
-    uint16_t height_align = sc_screen_uses_raw_frames(screen) ? 1 : 8;
+    uint16_t width_align = sc_screen_uses_raw_frames(screen) ? 1 : 2;
+    uint16_t height_align = sc_screen_uses_raw_frames(screen) ? 1 : 2;
     width &= ~(width_align - 1);
     height &= ~(height_align - 1);
 
