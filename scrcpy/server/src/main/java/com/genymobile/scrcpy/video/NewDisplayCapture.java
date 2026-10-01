@@ -135,6 +135,11 @@ public class NewDisplayCapture extends SurfaceCapture {
             displaySize = displayInfo.getSize();
             dpi = displayInfo.getDpi();
             displayRotation = displayInfo.getRotation();
+            // VirtualDisplay.resize() reaches DisplayInfo asynchronously, so this may still be the previous size, while setDisplaySize()
+            // already recorded the requested one: the display event would then match it and never reset this session. Record the size
+            // actually captured, then check again for a change that landed in between.
+            displaySizeMonitor.setSessionDisplaySize(displaySize);
+            displaySizeMonitor.checkDisplaySizeChanged();
         }
 
         VideoFilter filter = new VideoFilter(displaySize);
@@ -148,13 +153,18 @@ public class NewDisplayCapture extends SurfaceCapture {
         filter.addAngle(angle);
 
         Size filteredSize = filter.getOutputSize();
-        if (!filteredSize.isMultipleOf(getAlignment())
-                || (maxSize != 0 && filteredSize.getMax() > maxSize)) {
+        Size outputSize = filteredSize;
+        if (!outputSize.isMultipleOf(getAlignment())
+                || (maxSize != 0 && outputSize.getMax() > maxSize)) {
             if (maxSize != 0) {
-                filteredSize = filteredSize.limit(maxSize);
+                outputSize = outputSize.limit(maxSize);
             }
-            filteredSize = filteredSize.round(getAlignment());
-            filter.addResize(filteredSize);
+            outputSize = outputSize.round(getAlignment());
+        }
+        // The virtual display keeps the requested size; only the video is scaled down if the encoder cannot take it
+        outputSize = fitToEncoder(outputSize, getAlignment());
+        if (!outputSize.equals(filteredSize)) {
+            filter.addResize(outputSize);
         }
 
         eventTransform = filter.getInverseTransform();

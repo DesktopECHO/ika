@@ -561,6 +561,10 @@ compute_content_rect(struct sc_size render_size, struct sc_size content_size,
     }
 }
 
+static bool
+sc_screen_frame_matches_resize_request(struct sc_screen *screen,
+                                       struct sc_size frame_size);
+
 static void
 sc_screen_update_content_rect(struct sc_screen *screen) {
     // Only upscale video frames, not icon
@@ -602,13 +606,17 @@ sc_screen_update_content_rect(struct sc_screen *screen) {
             }
         }
 
-        // An encoded display sized in pixels arrives at its own size, at most
-        // the codec alignment smaller than the window: show it 1:1 as well.
+        // An encoded display sized in pixels arrives at the requested size, at
+        // most the codec alignment smaller than the window: show it 1:1 as
+        // well. Any other frame (from an earlier size, or scaled down by the
+        // server to what the encoder supports) keeps its aspect ratio.
         if (!screen->raw_frame_source_open
                 && screen->resize_display_using_pixel_size) {
             struct sc_size oriented =
                 get_oriented_size(screen->frame_size, screen->orientation);
             if (oriented.width && oriented.height
+                    && sc_screen_frame_matches_resize_request(screen,
+                                                    screen->frame_size)
                     && oriented.width <= render_size.width
                     && oriented.height <= render_size.height) {
                 screen->rect.x = (render_size.width - oriented.width) / 2;
@@ -617,6 +625,10 @@ sc_screen_update_content_rect(struct sc_screen *screen) {
                 screen->rect.h = oriented.height;
                 return;
             }
+            compute_content_rect(render_size, screen->content_size,
+                                 can_upscale, screen->render_fit,
+                                 &screen->rect);
+            return;
         }
 
         // The host window is the source of truth. The guest framebuffer may be
