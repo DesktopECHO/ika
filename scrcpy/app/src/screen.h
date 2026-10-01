@@ -31,6 +31,10 @@
 
 #define SC_RAW_FRAME_BUFFER_POOL_SIZE 4
 
+// Grid of luma samples compared between encoded frames during a resize hold
+#define SC_SETTLE_SAMPLE_COLUMNS 64
+#define SC_SETTLE_SAMPLE_ROWS 36
+
 struct sc_raw_frame_buffer {
     uint8_t *pixels;
     size_t capacity;
@@ -135,6 +139,14 @@ struct sc_screen {
     bool display_ready;
     sc_tick display_ready_tick;
     bool display_ready_raw_frame;
+    // Encoded streams: the encoder repeats its last frame while nothing
+    // changes, so frames keep arriving after Android has settled. Coarse luma
+    // samples of the last frame tell a redraw from a repeat, and
+    // encoded_settle_change_tick is the last redraw seen during the hold.
+    uint8_t encoded_settle_samples[SC_SETTLE_SAMPLE_COLUMNS
+                                   * SC_SETTLE_SAMPLE_ROWS];
+    bool encoded_settle_samples_valid;
+    sc_tick encoded_settle_change_tick;
     // Set when the resize hold begins, so the blur ghost overlay can ramp in
     // gradually during transient_stretch instead of snapping to full strength.
     sc_tick blur_fade_in_start_tick;

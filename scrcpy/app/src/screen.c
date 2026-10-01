@@ -41,6 +41,11 @@
 // Upper bound for guests that keep presenting (video, animations): accept the
 // first frame after this delay even if the guest never goes idle.
 #define FLEX_DISPLAY_POST_READY_MAX_SETTLE_DELAY SC_TICK_FROM_MS(1250)
+// Encoded streams keep delivering frames while the guest is idle (the encoder
+// repeats the last one, refining it slightly), so they settle on content
+// instead: a sampled luma value changing by more than this means Android
+// redrew. FLEX_DISPLAY_GUEST_IDLE_DELAY without such a change means it is done.
+#define FLEX_DISPLAY_ENCODED_SETTLE_LUMA_CHANGE 24
 #define FLEX_DISPLAY_INITIAL_SHOW_TIMEOUT SC_TICK_FROM_MS(1000)
 // Extra time the window stays hidden after the guest first renders at the
 // target resolution, letting a freshly-booted desktop finish drawing before the
@@ -770,9 +775,95 @@ sc_screen_resize_log_ms(struct sc_screen *screen, sc_tick tick) {
     return SC_TICK_TO_MS(tick - screen->resize_hold_start_tick);
 }
 
+// Sample the luma plane of the current decoded frame on a coarse grid. Returns
+// false if the frame has no 8-bit luma plane to sample.
+static bool
+sc_screen_sample_encoded_frame(struct sc_screen *screen, uint8_t *samples) {
+    const AVFrame *frame = screen->frame;
+    if (!frame || !frame->data[0] || frame->width <= 0 || frame->height <= 0) {
+        return false;
+    }
+    if (frame->format != AV_PIX_FMT_YUV420P
+            && frame->format != AV_PIX_FMT_YUVJ420P
+            && frame->format != AV_PIX_FMT_NV12) {
+        return false;
+    }
+
+    for (int row = 0; row < SC_SETTLE_SAMPLE_ROWS; ++row) {
+        int y = (2 * row + 1) * frame->height / (2 * SC_SETTLE_SAMPLE_ROWS);
+        const uint8_t *line = frame->data[0] + (ptrdiff_t) y * frame->linesize[0];
+        for (int col = 0; col < SC_SETTLE_SAMPLE_COLUMNS; ++col) {
+            int x = (2 * col + 1) * frame->width
+                  / (2 * SC_SETTLE_SAMPLE_COLUMNS);
+            samples[row * SC_SETTLE_SAMPLE_COLUMNS + col] = line[x];
+        }
+    }
+    return true;
+}
+
+// During an encoded resize hold, record when Android last redrew: a frame
+// whose samples differ noticeably from the previous one, as opposed to the
+// encoder repeating (and slightly refining) the last frame.
+static void
+sc_screen_note_encoded_settle_frame(struct sc_screen *screen) {
+    uint8_t samples[SC_SETTLE_SAMPLE_COLUMNS * SC_SETTLE_SAMPLE_ROWS];
+    if (!sc_screen_sample_encoded_frame(screen, samples)) {
+        // Cannot tell redraws from repeats: do not hold for them
+        screen->display_ready_raw_frame = true;
+        return;
+    }
+
+    bool changed = !screen->encoded_settle_samples_valid;
+    for (size_t i = 0; !changed && i < sizeof(samples); ++i) {
+        int diff = samples[i] - screen->encoded_settle_samples[i];
+        changed = diff > FLEX_DISPLAY_ENCODED_SETTLE_LUMA_CHANGE
+               || diff < -FLEX_DISPLAY_ENCODED_SETTLE_LUMA_CHANGE;
+    }
+    if (changed) {
+        memcpy(screen->encoded_settle_samples, samples, sizeof(samples));
+        screen->encoded_settle_samples_valid = true;
+        screen->encoded_settle_change_tick = sc_tick_now();
+    }
+}
+
+// Like sc_screen_note_display_ready_raw_frame() for raw frames: once the
+// encoded stream is at the requested size, wait until Android has stopped
+// redrawing for FLEX_DISPLAY_GUEST_IDLE_DELAY (or kept redrawing past the
+// maximum settle delay), so the reflowing layout is never shown.
+static void
+sc_screen_check_encoded_settled(struct sc_screen *screen) {
+    if (sc_screen_uses_raw_frames(screen)
+            || !screen->transient_stretch
+            || !screen->display_ready
+            || screen->display_ready_raw_frame) {
+        return;
+    }
+
+    sc_tick now = sc_tick_now();
+    sc_tick idle_tick = screen->encoded_settle_change_tick
+                      + FLEX_DISPLAY_GUEST_IDLE_DELAY;
+    sc_tick max_tick = screen->display_ready_tick
+                     + FLEX_DISPLAY_POST_READY_MAX_SETTLE_DELAY;
+    bool idle = now >= idle_tick;
+    if (!idle && now < max_tick) {
+        sc_tick next = idle_tick < max_tick ? idle_tick : max_tick;
+        Uint32 delay_ms = SC_TICK_TO_MS(next - now);
+        sc_screen_schedule_resize_settle_after(screen, delay_ms ? delay_ms : 1);
+        return;
+    }
+
+    screen->display_ready_raw_frame = true;
+    LOGD("Flex resize: encoded stream settled (%s) at +%" PRItick "ms, "
+         "last redraw +%" PRItick "ms", idle ? "idle" : "max delay",
+         sc_screen_resize_log_ms(screen, now),
+         sc_screen_resize_log_ms(screen, screen->encoded_settle_change_tick));
+}
+
 // Encoded streams from a --new-display virtual display receive no
 // DISPLAY_READY. The encoder restarts at the new display size, so a decoded
-// frame of the requested size proves the resize reached the guest.
+// frame of the requested size proves the resize reached the guest. Android is
+// still reflowing at that point, so the hold then waits for it to settle (see
+// sc_screen_check_encoded_settled()).
 static void
 sc_screen_note_encoded_display_ready(struct sc_screen *screen) {
     if (sc_screen_uses_raw_frames(screen)
@@ -785,7 +876,9 @@ sc_screen_note_encoded_display_ready(struct sc_screen *screen) {
 
     screen->display_ready = true;
     screen->display_ready_tick = sc_tick_now();
-    screen->display_ready_raw_frame = true;
+    screen->display_ready_raw_frame = false;
+    screen->encoded_settle_samples_valid = false;
+    sc_screen_note_encoded_settle_frame(screen);
     LOGD("Flex resize: encoded frame %" PRIu16 "x%" PRIu16 " at +%" PRItick
          "ms", screen->frame_size.width, screen->frame_size.height,
          sc_screen_resize_log_ms(screen, screen->display_ready_tick));
@@ -2983,6 +3076,10 @@ sc_screen_apply_frame(struct sc_screen *screen, bool can_resize) {
     }
 
     sc_screen_note_encoded_display_ready(screen);
+    if (screen->transient_stretch && screen->display_ready
+            && !screen->display_ready_raw_frame) {
+        sc_screen_note_encoded_settle_frame(screen);
+    }
     if (sc_screen_should_hold_resize(screen)
             && sc_screen_try_release_resize_hold(screen)) {
         return true;
@@ -3229,7 +3326,11 @@ sc_screen_try_release_resize_hold(struct sc_screen *screen) {
     }
 
     if (!screen->display_ready_raw_frame) {
-        sc_screen_note_display_ready_raw_frame(screen);
+        if (sc_screen_uses_raw_frames(screen)) {
+            sc_screen_note_display_ready_raw_frame(screen);
+        } else {
+            sc_screen_check_encoded_settled(screen);
+        }
     }
 
     Uint32 quiet_remaining_ms =
@@ -3242,6 +3343,13 @@ sc_screen_try_release_resize_hold(struct sc_screen *screen) {
     if (screen->raw_frame_source_open
             && !screen->display_ready_raw_frame) {
         sc_screen_force_raw_frame_refresh(screen);
+        return false;
+    }
+
+    // Android is still reflowing; sc_screen_check_encoded_settled() has
+    // scheduled the next check
+    if (!sc_screen_uses_raw_frames(screen) && screen->display_ready
+            && !screen->display_ready_raw_frame) {
         return false;
     }
 
