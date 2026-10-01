@@ -2835,8 +2835,8 @@ guest_display_density() {
 # Like the desktop display, size an app window's virtual display in native
 # host pixels rather than logical window points, so on HiDPI hosts the app
 # draws at native resolution instead of being upscaled. Scale the logical window
-# size by the host's native/logical ratio and round down to the 8-pixel
-# multiple video encoders need.
+# size by the host's native/logical ratio and round down to the even size the
+# guest's software H.264 encoder needs.
 app_window_display_size() {
   local window_size="$1"
   local native
@@ -2863,8 +2863,8 @@ app_window_display_size() {
     fi
   fi
 
-  width=$(( width / 8 * 8 ))
-  height=$(( height / 8 * 8 ))
+  width=$(( width / 2 * 2 ))
+  height=$(( height / 2 * 2 ))
   (( width > 0 && height > 0 )) || return 1
   printf '%sx%s\n' "${width}" "${height}"
 }

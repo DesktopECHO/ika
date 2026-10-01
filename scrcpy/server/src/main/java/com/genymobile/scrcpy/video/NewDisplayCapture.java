@@ -285,7 +285,8 @@ public class NewDisplayCapture extends SurfaceCapture {
     }
 
     private int getAlignment() {
-        return Math.max(8, minSizeAlignment);
+        // The guest's software H.264 encoder only needs even sizes
+        return Math.max(2, minSizeAlignment);
     }
 
     public synchronized void setDisplaySize(int width, int height, int dpi) {
