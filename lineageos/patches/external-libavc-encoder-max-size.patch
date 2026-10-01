@@ -1,0 +1,110 @@
+Patch summary:
+Raise the libavc H.264 encoder's hard size limit from 2560x2560 to 4096x4096,
+matching the Codec2 limits in frameworks-av.patch. Without this the Codec2
+component accepted large desktop windows (for example 3104x1672 on a 3456x2160
+host) but libavc refused them at init, so every frame failed to encode.
+
+MAX_WD/MAX_HT only bound the per-instance dimensions: buffers are sized from
+each instance's own dimensions and level. Level-derived sizes and the level
+lookup do assume the picture fits the highest supported level, so pictures
+above Level 5.1 MaxFS (36864 macroblocks, e.g. 4096x2304 or 2304x4096) are now
+rejected at mem-record fill and init, in both the AVC and SVC encoders.
+
+diff --git a/encoder/ih264e_api.c b/encoder/ih264e_api.c
+index 3f5ffaf..82f253f 100644
+--- a/encoder/ih264e_api.c
++++ b/encoder/ih264e_api.c
+@@ -322,6 +322,13 @@ static IV_STATUS_T api_check_struct_sanity(iv_obj_t *ps_handle,
+                 return (IV_FAIL);
+             }
+ 
++            if (max_wd * max_ht > MAX_LUMA_PIC_SIZE)
++            {
++                ps_op->s_ive_op.u4_error_code |= 1 << IVE_UNSUPPORTEDPARAM;
++                ps_op->s_ive_op.u4_error_code |= IH264E_CODEC_LEVEL_NOT_SUPPORTED;
++                return (IV_FAIL);
++            }
++
+             /* verify number of mem rec ptr */
+             if (NULL == ps_ip->s_ive_ip.ps_mem_rec)
+             {
+@@ -397,6 +404,13 @@ static IV_STATUS_T api_check_struct_sanity(iv_obj_t *ps_handle,
+                 return (IV_FAIL);
+             }
+ 
++            if (max_wd * max_ht > MAX_LUMA_PIC_SIZE)
++            {
++                ps_op->s_ive_op.u4_error_code |= 1 << IVE_UNSUPPORTEDPARAM;
++                ps_op->s_ive_op.u4_error_code |= IH264E_CODEC_LEVEL_NOT_SUPPORTED;
++                return (IV_FAIL);
++            }
++
+             if (ps_ip->s_ive_ip.u4_max_ref_cnt > MAX_REF_PIC_CNT ||
+                            ps_ip->s_ive_ip.u4_max_ref_cnt < MIN_REF_PIC_CNT)
+             {
+diff --git a/encoder/ih264e_defs.h b/encoder/ih264e_defs.h
+index 317e306..ef72a95 100644
+--- a/encoder/ih264e_defs.h
++++ b/encoder/ih264e_defs.h
+@@ -102,7 +102,11 @@
+  */
+ 
+ /* changed by haining@ to support Nexus 6P screen size, was previously 1920 */
+-#define MAX_WD   2560
++/* Ika: raised to 4096 for desktop windows and displays wider than 2560.
++ * Per-instance buffers are sized from the instance's own dimensions and level,
++ * so this is only an API bound; MAX_LUMA_PIC_SIZE keeps the area within the
++ * highest supported level. */
++#define MAX_WD   4096
+ 
+ /**
+  * Minimum height supported by codec
+@@ -114,7 +118,15 @@
+  */
+ 
+ /* changed by haining@ to support Nexus 6P screen size, was previously 1920 */
+-#define MAX_HT   2560
++/* Ika: raised to 4096 with MAX_WD (portrait sizes up to 2304x4096). */
++#define MAX_HT   4096
++
++/**
++ * Maximum luma samples in a picture: MaxFS of MAX_LEVEL (Level 5.1, 36864 MBs).
++ * Level-derived buffer sizes and level lookups assume the picture fits a level,
++ * so larger pictures must be rejected even when each dimension is in range.
++ */
++#define MAX_LUMA_PIC_SIZE   (36864 * 256)
+ 
+ /*****************************************************************************/
+ /* Padding sizes                                                             */
+diff --git a/encoder/svc/isvce_api.c b/encoder/svc/isvce_api.c
+index d44d7e7..2ebf9a6 100644
+--- a/encoder/svc/isvce_api.c
++++ b/encoder/svc/isvce_api.c
+@@ -325,6 +325,13 @@ static IV_STATUS_T api_check_struct_sanity(iv_obj_t *ps_handle, void *pv_api_ip,
+                 return (IV_FAIL);
+             }
+ 
++            if(max_wd * max_ht > MAX_LUMA_PIC_SIZE)
++            {
++                ps_op->s_ive_op.u4_error_code |= 1 << IVE_UNSUPPORTEDPARAM;
++                ps_op->s_ive_op.u4_error_code |= IH264E_CODEC_LEVEL_NOT_SUPPORTED;
++                return (IV_FAIL);
++            }
++
+             /* verify number of mem rec ptr */
+             if(NULL == ps_ip->s_ive_ip.ps_mem_rec)
+             {
+@@ -397,6 +404,13 @@ static IV_STATUS_T api_check_struct_sanity(iv_obj_t *ps_handle, void *pv_api_ip,
+                 return (IV_FAIL);
+             }
+ 
++            if(max_wd * max_ht > MAX_LUMA_PIC_SIZE)
++            {
++                ps_op->s_ive_op.u4_error_code |= 1 << IVE_UNSUPPORTEDPARAM;
++                ps_op->s_ive_op.u4_error_code |= IH264E_CODEC_LEVEL_NOT_SUPPORTED;
++                return (IV_FAIL);
++            }
++
+             if(ps_ip->s_ive_ip.u4_max_ref_cnt > MAX_REF_PIC_CNT ||
+                ps_ip->s_ive_ip.u4_max_ref_cnt < MIN_REF_PIC_CNT)
+             {

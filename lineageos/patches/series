@@ -26,6 +26,7 @@ external/minigbm patches/external-minigbm.patch
 external/deqp-deps/glslang patches/external-deqp-deps-glslang-validator-host.patch
 external/mesa3d patches/external-mesa3d.patch
 external/mesa3d patches/external-mesa3d-gfxstream-descriptor-deepcopy-filter.patch
+external/libavc patches/external-libavc-encoder-max-size.patch
 hardware/google/gfxstream patches/hardware-google-gfxstream-descriptor-deepcopy-filter.patch
 hardware/google/gfxstream patches/hardware-google-gfxstream-opengles-3.2.patch
 hardware/google/gfxstream patches/hardware-google-gfxstream-guest-egl-attrib-safety.patch
