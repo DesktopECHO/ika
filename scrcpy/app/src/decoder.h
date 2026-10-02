@@ -16,6 +16,9 @@ struct sc_decoder {
     const char *name; // must be statically allocated (e.g. a string literal)
 
     AVCodecContext *ctx;
+    // Context opened by the decoder itself when a session changes the video
+    // size (ctx then points to it), or NULL
+    AVCodecContext *own_ctx;
     AVFrame *frame;
 
     struct sc_stream_session session; // only initialized for video stream

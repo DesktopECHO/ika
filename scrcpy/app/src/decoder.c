@@ -24,6 +24,7 @@ sc_decoder_open(struct sc_decoder *decoder, AVCodecContext *ctx,
     }
 
     decoder->ctx = ctx;
+    decoder->own_ctx = NULL;
 
     // A video stream must have a session
     assert(session || ctx->codec_type != AVMEDIA_TYPE_VIDEO);
@@ -41,6 +42,7 @@ static void
 sc_decoder_close(struct sc_decoder *decoder) {
     sc_frame_source_sinks_close(&decoder->frame_source);
     av_frame_free(&decoder->frame);
+    avcodec_free_context(&decoder->own_ctx);
 }
 
 static bool
@@ -109,9 +111,50 @@ sc_decoder_push(struct sc_decoder *decoder, const AVPacket *packet) {
     return true;
 }
 
+// Decode a session of a new video size with a fresh context. FFmpeg's H.264
+// decoder only reinitializes when the macroblock grid changes, so a resize
+// within the same grid (898x1348 -> 900x1350: 57x85 macroblocks either way)
+// kept the previous size. The frames then disagreed with the server's video
+// size, which ignores mouse events generated for another size.
+static bool
+sc_decoder_reopen(struct sc_decoder *decoder,
+                  const struct sc_stream_session *session) {
+    const AVCodec *codec = decoder->ctx->codec;
+    AVCodecContext *ctx = avcodec_alloc_context3(codec);
+    if (!ctx) {
+        LOG_OOM();
+        return false;
+    }
+
+    ctx->flags = decoder->ctx->flags;
+    ctx->width = session->video.width;
+    ctx->height = session->video.height;
+    ctx->pix_fmt = decoder->ctx->pix_fmt;
+
+    if (avcodec_open2(ctx, codec, NULL) < 0) {
+        LOGE("Decoder '%s': could not reopen codec", decoder->name);
+        avcodec_free_context(&ctx);
+        return false;
+    }
+
+    avcodec_free_context(&decoder->own_ctx);
+    decoder->own_ctx = ctx;
+    decoder->ctx = ctx;
+    return true;
+}
+
 static bool
 sc_decoder_push_session(struct sc_decoder *decoder,
                         const struct sc_stream_session *session) {
+    // A new session starts with a key frame, so nothing is lost by switching
+    // to a new context
+    if (decoder->ctx->codec_type == AVMEDIA_TYPE_VIDEO
+            && (session->video.width != decoder->session.video.width
+                || session->video.height != decoder->session.video.height)
+            && !sc_decoder_reopen(decoder, session)) {
+        return false;
+    }
+
     decoder->session = *session;
     return sc_frame_source_sinks_push_session(&decoder->frame_source, session);
 }
