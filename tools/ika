@@ -349,7 +349,7 @@ declare -A CVD_LOGGING_DEFAULTS=(
 # Boot & Logging Configuration Defaults (internal use only)
 # ============================================================================
 declare -A CVD_BOOT_DEFAULTS=(
-  [boot_timeout_sec]="120"
+  [boot_timeout_sec]="150"
 )
 
 # Android Settings reports internal storage capacity in decimal GB. Cuttlefish's
@@ -1247,6 +1247,56 @@ vulkaninfo_summary() {
   # independent of X11/Wayland authentication, especially for SSH launches
   # that inherit DISPLAY without a usable authorization cookie.
   env -u DISPLAY -u WAYLAND_DISPLAY vulkaninfo --summary 2>/dev/null
+}
+
+vulkan_summary_has_only_software_devices() {
+  local summary="$1"
+
+  awk '
+    function finish_device() {
+      if (!in_device) {
+        return
+      }
+      device_count++
+      if (software_device) {
+        software_count++
+      }
+    }
+    /^GPU[0-9]+:/ {
+      finish_device()
+      in_device = 1
+      software_device = 0
+      next
+    }
+    in_device {
+      line = tolower($0)
+      if (line ~ /(llvmpipe|lavapipe|swiftshader|software rasterizer|software device)/) {
+        software_device = 1
+      }
+    }
+    END {
+      finish_device()
+      exit !(device_count > 0 && device_count == software_count)
+    }
+  ' <<<"${summary}"
+}
+
+default_gpu_mode_for_start() {
+  local summary
+
+  if user_supplied_flag "gpu_mode" "$@"; then
+    start_arg_value "gpu_mode" "${CVD_GPU_DEFAULTS[gpu_mode]}" "$@"
+    return 0
+  fi
+
+  summary="$(vulkaninfo_summary || true)"
+  if [[ -n "${summary}" ]] && vulkan_summary_has_only_software_devices "${summary}"; then
+    log "only software Vulkan devices detected; defaulting gpu_mode=gfxstream"
+    printf '%s\n' "gfxstream"
+    return 0
+  fi
+
+  printf '%s\n' "${CVD_GPU_DEFAULTS[gpu_mode]}"
 }
 
 primary_vulkan_device_is_llvmpipe() {
@@ -4531,6 +4581,10 @@ start_cvd() {
 
   record_udmabuf_baseline
   protect_overlay_resume
+
+  if ! user_supplied_flag "gpu_mode" "$@"; then
+    CVD_GPU_DEFAULTS[gpu_mode]="$(default_gpu_mode_for_start)"
+  fi
 
   apply_start_default_args args "$@"
   append_cuttlefish_audio_args args "$@"

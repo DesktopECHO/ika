@@ -292,15 +292,14 @@ Default `ika` settings and configuration:
   and the modem simulator remain off unless explicitly enabled
 
 `gfxstream_guest_angle` is the default GPU mode. It runs guest OpenGL ES through
-Android ANGLE over gfxstream Vulkan. Use `gfxstream` to test gfxstream's direct
-OpenGL ES translator, or `guest_swiftshader` as a troubleshooting fallback when
-host GPU acceleration is unavailable. See [GFXSTREAM.md](GFXSTREAM.md) for a
-comparison. Use `gfxstream_guest_angle` for games and Vulkan/CTS; mixed
-`gfxstream` mode does not support data-buffer AHardwareBuffers. Gfxstream uses
-surfaceless EGL to avoid SSH/X11 display issues. Program-binary caching stays
-disabled because it corrupts rendering in some games. On RADV hosts, `ika`
-adds `syncshaders` to `RADV_DEBUG` for gfxstream modes. This prevents
-asynchronous host shader compilation from intermittently executing incomplete
+Android ANGLE over gfxstream Vulkan. If the host only has llvmpipe, `ika` uses
+`gfxstream` instead, which is much lighter on the CPU. Passing `--gpu_mode`
+overrides this. See [GFXSTREAM.md](GFXSTREAM.md) for a comparison. Use
+`gfxstream_guest_angle` for games and Vulkan/CTS; mixed `gfxstream` mode does
+not support data-buffer AHardwareBuffers. Program-binary caching stays disabled
+because it corrupts rendering in some games. On RADV hosts, `ika` adds
+`syncshaders` to `RADV_DEBUG` for gfxstream modes. This prevents asynchronous
+host shader compilation from intermittently executing incomplete
 transform-feedback pipelines; existing caller-provided `RADV_DEBUG` options are
 retained. Other Vulkan drivers are unchanged.
 
