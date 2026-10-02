@@ -28,7 +28,7 @@ The implementation patch inventory is maintained in
 limitations are recorded in that Vulkan document rather than presented as
 completed compatibility fixes.
 
-## Ika Binaries (Updated 2026-09-28)
+## Ika Binaries (Updated 2026-09-30)
 
 Ika consists of two packages: An Android disk image (informally, the device ROM)
 and a matching Cuttlefish virtual machine application. Prebuilt Fedora 44
