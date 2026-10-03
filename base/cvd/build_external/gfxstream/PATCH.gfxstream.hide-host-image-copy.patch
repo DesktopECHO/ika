@@ -1,0 +1,120 @@
+Patch summary:
+Stop advertising host image copy to the guest.
+
+PATCH.gfxstream.host-image-copy-refuse-unmarshalled.patch makes the decoder
+fail vkCopyMemoryToImage/vkCopyImageToMemory (and the EXT aliases) because
+their pHostPointer payload is not marshalled. The host still listed
+VK_EXT_host_image_copy and reported hostImageCopy = VK_TRUE, so guests kept
+using it. ANGLE uploads textures through vkCopyMemoryToImageEXT when the
+extension is present; every such upload failed and the texture stayed empty.
+In Fruit Ninja (Unity on ANGLE) the 3D fruit drew as black silhouettes and
+the dojo background, menu rings, logo and top bar were missing. Disabling
+ANGLE's supportsHostImageCopy feature alone made the scene render correctly.
+
+ANGLE only takes that path when the host reports
+identicalMemoryTypeRequirements, which Honeykrisp does and RADV and llvmpipe
+do not, so the GLES symptom is Apple-only. Native Vulkan apps could pick the
+extension up on any host.
+
+Remove VK_EXT_host_image_copy from the device extensions, clear
+hostImageCopy in VkPhysicalDeviceHostImageCopyFeatures and
+VkPhysicalDeviceVulkan14Features (it is an optional Vulkan 1.4 feature), and
+clear VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT from VkFormatProperties3, so
+guests fall back to staging-buffer uploads. Drop this once the payload is
+marshalled and the calls are re-enabled.
+
+diff --git a/host/vulkan/cereal/common/vk_struct_id.h b/host/vulkan/cereal/common/vk_struct_id.h
+index c8e9841e8..3e7a4578f 100644
+--- a/host/vulkan/cereal/common/vk_struct_id.h
++++ b/host/vulkan/cereal/common/vk_struct_id.h
+@@ -168,6 +168,12 @@ REGISTER_VK_STRUCT_ID(VkPhysicalDeviceVulkan12Features,
+                       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES);
+ REGISTER_VK_STRUCT_ID(VkPhysicalDeviceVulkan13Features,
+                       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES);
++REGISTER_VK_STRUCT_ID(VkPhysicalDeviceVulkan14Features,
++                      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES);
++REGISTER_VK_STRUCT_ID(VkPhysicalDeviceHostImageCopyFeatures,
++                      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES);
++REGISTER_VK_STRUCT_ID(VkFormatProperties2, VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2);
++REGISTER_VK_STRUCT_ID(VkFormatProperties3, VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3);
+ 
+ REGISTER_VK_STRUCT_ID(VkDebugMetadataGOOGLE,
+                       VK_STRUCTURE_TYPE_DEBUG_METADATA_GOOGLE);
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index 5a9535152..31f352439 100644
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -35,6 +35,7 @@
+ #include <list>
+ #include <memory>
+ #include <mutex>
++#include <type_traits>
+ #include <unordered_map>
+ #include <vector>
+ 
+@@ -1639,6 +1640,19 @@ class VkDecoderGlobalState::Impl {
+             }
+         }
+ 
++        // Host image copy is not advertised (see on_vkEnumerateDeviceExtensionProperties), and
++        // it is an optional Vulkan 1.4 core feature too.
++        VkPhysicalDeviceHostImageCopyFeatures* hostImageCopyFeatures =
++            vk_find_struct<VkPhysicalDeviceHostImageCopyFeatures>(pFeatures);
++        if (hostImageCopyFeatures != nullptr) {
++            hostImageCopyFeatures->hostImageCopy = VK_FALSE;
++        }
++        VkPhysicalDeviceVulkan14Features* vulkan14Features =
++            vk_find_struct<VkPhysicalDeviceVulkan14Features>(pFeatures);
++        if (vulkan14Features != nullptr) {
++            vulkan14Features->hostImageCopy = VK_FALSE;
++        }
++
+         if (disableSparseBindingSupport && pFeatures->features.sparseBinding) {
+             pFeatures->features.sparseBinding = VK_FALSE;
+             pFeatures->features.sparseResidencyBuffer = VK_FALSE;
+@@ -2088,6 +2102,17 @@ class VkDecoderGlobalState::Impl {
+                            }),
+             properties.end());
+ 
++        // vkCopyMemoryToImage/vkCopyImageToMemory cannot be marshalled (their pHostPointer
++        // payload never reaches the host), so the decoder refuses them. Do not advertise host
++        // image copy either, otherwise guests such as ANGLE upload textures through it and the
++        // uploads are silently lost.
++        properties.erase(std::remove_if(properties.begin(), properties.end(),
++                                        [](const VkExtensionProperties& extension) {
++                                            return !strcmp(extension.extensionName,
++                                                           VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME);
++                                        }),
++                         properties.end());
++
+         // Add in emulated extensions:
+ 
+ #if defined(_WIN32)
+@@ -10941,9 +10966,25 @@ class VkDecoderGlobalState::Impl {
+                 physicalDevice, CompressedImageInfo::getOutputFormat(format),
+                 pFormatProperties);
+             maskFormatPropertiesForEmulatedTextures(pFormatProperties);
+-            return;
++        } else {
++            getPhysicalDeviceFormatPropertiesFunc(physicalDevice, format, pFormatProperties);
++        }
++        if constexpr (std::is_same_v<VkFormatProperties1or2, VkFormatProperties2>) {
++            maskHostImageTransferFormatFeatures(pFormatProperties);
++        }
++    }
++
++    // Host image copy is not advertised (see on_vkEnumerateDeviceExtensionProperties), so no
++    // format may report it either.
++    void maskHostImageTransferFormatFeatures(VkFormatProperties2* pFormatProperties) {
++        VkFormatProperties3* formatProperties3 =
++            vk_find_struct<VkFormatProperties3>(pFormatProperties);
++        if (formatProperties3 != nullptr) {
++            formatProperties3->linearTilingFeatures &= ~VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT;
++            formatProperties3->optimalTilingFeatures &=
++                ~VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT;
++            formatProperties3->bufferFeatures &= ~VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT;
+         }
+-        getPhysicalDeviceFormatPropertiesFunc(physicalDevice, format, pFormatProperties);
+     }
+ 
+     template <typename VkHandleToInfoMap,

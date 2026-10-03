@@ -24,6 +24,10 @@ git_repository(
         # single byte, so the host would hand the driver a 1-byte buffer to write a
         # whole image through. Refuse the call instead of corrupting the heap.
         "@//build_external/gfxstream:PATCH.gfxstream.host-image-copy-refuse-unmarshalled.patch",
+        # The calls above are refused, so stop advertising host image copy as well;
+        # ANGLE otherwise uploads textures through it and they stay empty
+        # (Fruit Ninja black fruit and missing menu art).
+        "@//build_external/gfxstream:PATCH.gfxstream.hide-host-image-copy.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.opengles-3.2.patch",
         # Last-resort cleanup for Vulkan instances which survive normal
         # per-context teardown, before the renderer closes its DRM file.

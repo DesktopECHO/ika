@@ -20,4 +20,5 @@ exports_files([
     "PATCH.gfxstream.pipeline-barrier2khr-decompression.patch",
     "PATCH.gfxstream.copy-buffer-to-image2-init.patch",
     "PATCH.gfxstream.compressed-row-length-round-up.patch",
+    "PATCH.gfxstream.hide-host-image-copy.patch",
 ])
