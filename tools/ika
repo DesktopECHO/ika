@@ -3094,7 +3094,7 @@ query_guest_apps() {
     | tr -d '\r' \
     | awk '
         function is_package(s) {
-          return s ~ /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/
+          return s ~ /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/
         }
         function emit_same_line(    name, package) {
           name = pending
@@ -3954,7 +3954,7 @@ refresh_app_games_file() {
   grep -v '^ika-games-done' <<<"${output//$'\r'/}" | grep -v '^$' > "${APP_GAMES_FILE}" || true
 }
 
-# Prints a launcher's menu name: the app label, marked as a game or an app.
+# Prints the launcher's menu name: the app label, marked as a game or an app.
 app_launcher_name() {
   local label="$1"
   local package="$2"
