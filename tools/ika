@@ -1877,13 +1877,10 @@ host_color_scheme() {
   esac
 }
 
-append_host_timezone_arg() {
+append_bootconfig_args() {
   local -n args_array="$1"
   local tz
   local bootconfig_value=""
-  local adb_public_key
-  local adb_public_key_chunk
-  local adb_public_key_chunk_index=0
 
   tz="$(host_timezone)"
   if [[ -n "${tz}" ]]; then
@@ -1893,21 +1890,12 @@ append_host_timezone_arg() {
 
   if is_user_build; then
     prepare_user_adb_key || return 1
-    adb_public_key="$(cut -d' ' -f1 "${USER_ADB_PUBLIC_KEY}")"
-    [[ -n "${adb_public_key}" ]] || {
-      log "could not read public ADB key: ${USER_ADB_PUBLIC_KEY}"
+    USER_ADB_PUBLIC_KEY_VALUE="$(cut -d' ' -f1 "${USER_ADB_PUBLIC_KEY}")"
+    [[ -n "${USER_ADB_PUBLIC_KEY_VALUE}" ]] || {
+      log "could not derive public ADB key from ${USER_ADB_PRIVATE_KEY}"
       return 1
     }
-    if ((${#adb_public_key} > 64 * 24)); then
-      log "public ADB key is too long for bootconfig transport"
-      return 1
-    fi
-    while [[ -n "${adb_public_key}" ]]; do
-      adb_public_key_chunk="${adb_public_key:0:64}"
-      adb_public_key="${adb_public_key:64}"
-      bootconfig_value+="${bootconfig_value:+ }androidboot.ika.adb_pubkey_$(printf '%02d' "${adb_public_key_chunk_index}")=${adb_public_key_chunk}"
-      adb_public_key_chunk_index=$((adb_public_key_chunk_index + 1))
-    done
+    bootconfig_value+="${bootconfig_value:+ }androidboot.ika.adb_pubkey=${USER_ADB_PUBLIC_KEY_VALUE}"
   fi
 
   [[ -n "${bootconfig_value}" ]] || return 0
@@ -2308,6 +2296,7 @@ prepare_user_adb_key() {
 
   local adb_bin
   local public_key_tmp
+  local public_key
   mkdir -p "${HOST_HOME}/.android" || return 1
   adb_bin="$(resolve_adb_bin)"
   [[ -n "${adb_bin}" ]] || {
@@ -2321,15 +2310,21 @@ prepare_user_adb_key() {
       return 1
     }
   fi
-  if [[ ! -s "${USER_ADB_PUBLIC_KEY}" ]]; then
-    public_key_tmp="$(mktemp "${USER_ADB_PUBLIC_KEY}.XXXXXX")" || return 1
-    if ! "${adb_bin}" pubkey "${USER_ADB_PRIVATE_KEY}" > "${public_key_tmp}"; then
-      rm -f "${public_key_tmp}"
-      log "could not derive the public user ADB key: ${USER_ADB_PRIVATE_KEY}"
-      return 1
-    fi
-    mv -f "${public_key_tmp}" "${USER_ADB_PUBLIC_KEY}"
+  public_key="$("${adb_bin}" pubkey "${USER_ADB_PRIVATE_KEY}")" || {
+    log "could not derive the public user ADB key: ${USER_ADB_PRIVATE_KEY}"
+    return 1
+  }
+  USER_ADB_PUBLIC_KEY_VALUE="${public_key%% *}"
+  [[ -n "${USER_ADB_PUBLIC_KEY_VALUE}" ]] || {
+    log "adb returned an empty public key for ${USER_ADB_PRIVATE_KEY}"
+    return 1
+  }
+  public_key_tmp="$(mktemp "${USER_ADB_PUBLIC_KEY}.XXXXXX")" || return 1
+  if ! printf '%s\n' "${public_key}" > "${public_key_tmp}"; then
+    rm -f "${public_key_tmp}"
+    return 1
   fi
+  mv -f "${public_key_tmp}" "${USER_ADB_PUBLIC_KEY}"
   chmod 600 "${USER_ADB_PRIVATE_KEY}" || return 1
   chmod 644 "${USER_ADB_PUBLIC_KEY}" || return 1
 }
@@ -4663,7 +4658,7 @@ start_cvd() {
   append_arm64_kernel_page_args args "$@"
   append_gfxstream_vulkan_args args "$@"
   append_default_display_arg args "${scrcpy_dpi}" "$@"
-  append_host_timezone_arg args
+  append_bootconfig_args args
   append_cvd_env_args cvd_env_args
 
   log_start_context "${launcher_log}" "${args[@]}"

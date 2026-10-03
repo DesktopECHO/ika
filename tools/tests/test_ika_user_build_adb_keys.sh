@@ -10,7 +10,11 @@ export HOME="${TEST_ROOT}/home"
 export CVD_HOME_DIR="${TEST_ROOT}/ika"
 export CVD_PRODUCT_OUT="${TEST_ROOT}/product"
 export ADB_TEST_LOG="${TEST_ROOT}/adb.log"
-export ADB_TEST_PUBLIC_KEY="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+ADB_TEST_PUBLIC_KEY=""
+while ((${#ADB_TEST_PUBLIC_KEY} < 700)); do
+  ADB_TEST_PUBLIC_KEY+="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+done
+export ADB_TEST_PUBLIC_KEY="${ADB_TEST_PUBLIC_KEY:0:700}"
 unset ADB_VENDOR_KEYS
 mkdir -p "${CVD_PRODUCT_OUT}"
 printf 'user\n' > "${CVD_PRODUCT_OUT}/ika-build-variant"
@@ -53,23 +57,21 @@ USER_ADB_PUBLIC_KEY="${USER_ADB_PRIVATE_KEY}.pub"
 assert_equal "user" "${CVD_BUILD_VARIANT}"
 host_timezone() { printf 'UTC\n'; }
 bootconfig_args=()
-append_host_timezone_arg bootconfig_args
+append_bootconfig_args bootconfig_args
 assert_equal 1 "${#bootconfig_args[@]}"
 bootconfig_words=()
 read -r -a bootconfig_words <<< "${bootconfig_args[0]#--extra_bootconfig_args=}"
 assert_contains 'androidboot.timezone="UTC"' "${bootconfig_words[@]}"
 assert_contains 'androidboot.cuttlefish_service_bluetooth_checker=false' "${bootconfig_words[@]}"
-assembled_public_key=""
-adb_key_chunk_count=0
-for bootconfig_word in "${bootconfig_words[@]}"; do
-  [[ "${bootconfig_word}" == androidboot.ika.adb_pubkey_* ]] || continue
-  adb_key_chunk="${bootconfig_word#*=}"
-  [[ "${#adb_key_chunk}" -le 64 ]] || fail "bootconfig key chunk exceeds property limit"
-  assembled_public_key+="${adb_key_chunk}"
-  adb_key_chunk_count=$((adb_key_chunk_count + 1))
-done
-assert_equal "${ADB_TEST_PUBLIC_KEY}" "${assembled_public_key}"
-assert_equal 3 "${adb_key_chunk_count}"
+assert_contains "androidboot.ika.adb_pubkey=${ADB_TEST_PUBLIC_KEY}" "${bootconfig_words[@]}"
+[[ "${#bootconfig_words[@]}" -eq 3 ]] || \
+  fail "expected timezone, Bluetooth, and one ADB bootconfig property"
+grep -Fqx 'on post-fs-data && property:ro.boot.ika.adb_pubkey=*' \
+  "${ROOT}/lineageos/prebuilts/adb/ika_adb_keys.rc" || \
+  fail "guest init does not trigger on the ADB property emitted by ika"
+grep -Fqx '    write /data/misc/adb/adb_keys ${ro.boot.ika.adb_pubkey}' \
+  "${ROOT}/lineageos/prebuilts/adb/ika_adb_keys.rc" || \
+  fail "guest init does not write the ADB property emitted by ika"
 assert_equal "keygen ${USER_ADB_PRIVATE_KEY}" "$(<"${ADB_TEST_LOG}")"
 [[ -s "${USER_ADB_PRIVATE_KEY}" && -s "${USER_ADB_PUBLIC_KEY}" ]] || \
   fail "user ADB keypair was not generated"
@@ -78,6 +80,12 @@ assert_equal 'private-key' "$(<"${USER_ADB_PRIVATE_KEY}")"
 rm "${USER_ADB_PUBLIC_KEY}"
 prepare_user_adb_key
 assert_equal "${ADB_TEST_PUBLIC_KEY} user@host" "$(<"${USER_ADB_PUBLIC_KEY}")"
+printf 'stale-public-key other@host\n' > "${USER_ADB_PUBLIC_KEY}"
+ADB_TEST_PUBLIC_KEY="new-public-key-value"
+export ADB_TEST_PUBLIC_KEY
+prepare_user_adb_key
+assert_equal "new-public-key-value" "${USER_ADB_PUBLIC_KEY_VALUE}"
+assert_equal "new-public-key-value user@host" "$(<"${USER_ADB_PUBLIC_KEY}")"
 
 assert_equal "${HOME}|" "$(host_adb 5 version)"
 
@@ -88,9 +96,9 @@ append_cvd_env_args cvd_env
 assert_contains "ADB_VENDOR_KEYS=${USER_ADB_PRIVATE_KEY}:/other/adbkey" "${cvd_env[@]}"
 host_timezone() { return 0; }
 user_no_timezone_args=()
-append_host_timezone_arg user_no_timezone_args
+append_bootconfig_args user_no_timezone_args
 assert_equal 1 "${#user_no_timezone_args[@]}"
-[[ "${user_no_timezone_args[0]}" == *androidboot.ika.adb_pubkey_00=* ]] || \
+[[ "${user_no_timezone_args[0]}" == *androidboot.ika.adb_pubkey=* ]] || \
   fail "user ADB key was omitted when the host timezone was unavailable"
 
 assert_equal "${HOME}|/other/adbkey" "$(host_adb 5 version)"
@@ -103,7 +111,7 @@ for env_entry in "${userdebug_cvd_env[@]}"; do
     fail "userdebug Cuttlefish had ADB_VENDOR_KEYS overridden"
 done
 userdebug_bootconfig_args=()
-append_host_timezone_arg userdebug_bootconfig_args
+append_bootconfig_args userdebug_bootconfig_args
 [[ "${userdebug_bootconfig_args[*]}" != *androidboot.ika.adb_pubkey=* ]] || \
   fail "userdebug bootconfig trusted the user key"
 [[ "$(wc -l < "${ADB_TEST_LOG}")" -eq 1 ]] || \

@@ -1,6 +1,6 @@
-on post-fs-data && property:ro.boot.ika.adb_pubkey_00=*
+on post-fs-data && property:ro.boot.ika.adb_pubkey=*
     mkdir /data/misc/adb 02750 system shell
-    write /data/misc/adb/adb_keys ${ro.boot.ika.adb_pubkey_00}${ro.boot.ika.adb_pubkey_01}${ro.boot.ika.adb_pubkey_02}${ro.boot.ika.adb_pubkey_03}${ro.boot.ika.adb_pubkey_04}${ro.boot.ika.adb_pubkey_05}${ro.boot.ika.adb_pubkey_06}${ro.boot.ika.adb_pubkey_07}${ro.boot.ika.adb_pubkey_08}${ro.boot.ika.adb_pubkey_09}${ro.boot.ika.adb_pubkey_10}${ro.boot.ika.adb_pubkey_11}${ro.boot.ika.adb_pubkey_12}${ro.boot.ika.adb_pubkey_13}${ro.boot.ika.adb_pubkey_14}${ro.boot.ika.adb_pubkey_15}${ro.boot.ika.adb_pubkey_16}${ro.boot.ika.adb_pubkey_17}${ro.boot.ika.adb_pubkey_18}${ro.boot.ika.adb_pubkey_19}${ro.boot.ika.adb_pubkey_20}${ro.boot.ika.adb_pubkey_21}${ro.boot.ika.adb_pubkey_22}${ro.boot.ika.adb_pubkey_23}
+    write /data/misc/adb/adb_keys ${ro.boot.ika.adb_pubkey}
     chown system shell /data/misc/adb/adb_keys
     chmod 0640 /data/misc/adb/adb_keys
     restorecon /data/misc/adb/adb_keys
