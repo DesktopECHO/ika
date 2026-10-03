@@ -1,0 +1,15 @@
+diff --git a/shared/device.mk b/shared/device.mk
+--- a/shared/device.mk
++++ b/shared/device.mk
+@@ -76,11 +76,6 @@ PRODUCT_PRODUCT_PROPERTIES += \
+     persist.sys.fuse.passthrough.enable=true \
+     remote_provisioning.tee.rkp_only=1
+ 
+-# Until we support adb keys on user builds, and fix logcat over serial,
+-# spawn adbd by default without authorization for "adb logcat"
+ ifeq ($(TARGET_BUILD_VARIANT),user)
+-PRODUCT_PRODUCT_PROPERTIES += \
+-    ro.adb.secure=0
+-
+ PRODUCT_PACKAGES += \
+     logpersist.start

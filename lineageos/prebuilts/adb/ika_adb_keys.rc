@@ -1,0 +1,6 @@
+on post-fs-data && property:ro.boot.ika.adb_pubkey=*
+    mkdir /data/misc/adb 02750 system shell
+    write /data/misc/adb/adb_keys ${ro.boot.ika.adb_pubkey}
+    chown system shell /data/misc/adb/adb_keys
+    chmod 0640 /data/misc/adb/adb_keys
+    restorecon /data/misc/adb/adb_keys
