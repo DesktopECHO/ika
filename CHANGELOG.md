@@ -1,3 +1,12 @@
+## Unreleased, changes since release 260930
+
+### Graphics
+- GLES games no longer lose textures under the default
+  `gfxstream_guest_angle` mode on Apple Silicon hosts. Fruit Ninja drew its fruit as black shapes and
+  was missing its menu artwork. gfxstream advertised Vulkan host image copy,
+  which it cannot carry to the host, so texture uploads through it were
+  dropped. It is no longer offered to the guest.
+
 ## Ika 260930, changes since release 260928
 
 ### Sharper windows

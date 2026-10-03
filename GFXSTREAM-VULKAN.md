@@ -245,6 +245,20 @@ its own ways of producing black surfaces, fixed in `external-mesa3d.patch`:
   that one-byte allocation and takes crosvm down with it. The payload never
   crosses the virtio-gpu boundary either, so the call cannot succeed as
   marshalled — failing it is strictly better than crashing the renderer.
+- **Host image copy is no longer advertised**
+  (`PATCH.gfxstream.hide-host-image-copy.patch`). Leaving the extension visible
+  after refusing the calls broke GLES titles: guest ANGLE uploads textures with
+  `vkCopyMemoryToImageEXT` whenever `VK_EXT_host_image_copy` is present, each
+  upload failed, and the textures stayed empty. Fruit Ninja drew its 3D fruit as
+  black silhouettes and lost its dojo background, menu rings and logo. ANGLE
+  only takes that path when the host reports `identicalMemoryTypeRequirements`
+  (Honeykrisp does, RADV and llvmpipe do not), so the GLES symptom is
+  Apple-only; native Vulkan apps could hit it on any host. The host now drops
+  the extension, reports `hostImageCopy = VK_FALSE` (extension struct and
+  Vulkan 1.4 core) and clears `VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT`, so
+  ANGLE and native Vulkan apps use staging-buffer uploads. The guest needs no change: it only forwards host-listed extensions.
+  Capability detection no longer sees host image copy; restore it together with
+  the calls once the payload is marshalled.
 
 ---
 
@@ -334,4 +348,5 @@ Linux GPU host. Most of the effort was convincing four codebases of that one fac
 | `modprobe.d` + `cuttlefish-host-resources.sh` | host provisioning | Load and tune the udmabuf kernel module |
 | `external-mesa3d.patch` | guest mesa3d | DRM-modifier passthrough, AHB sync2 layout, extension exposure |
 | `vk_decoder_global_state.cpp` (`48669f9`) | gfxstream host | Refuse host image copy calls whose pixel payload cereal cannot marshal, instead of crashing the renderer |
+| `PATCH.gfxstream.hide-host-image-copy.patch` | gfxstream host | Stop advertising host image copy, so guests do not upload textures through the refused calls |
 | `tools/ika` | launcher | Apple Silicon 16 KiB gating: udmabuf-backed ExternalBlob, SystemBlob off |
