@@ -72,6 +72,8 @@ Requires:       bsdtar
 Requires:       curl
 # ika app sync edits desktop menu launchers.
 Requires:       desktop-file-utils
+# ika app reports progress and errors from menu launchers with notify-send.
+Requires:       libnotify
 Requires:       dnsmasq
 Requires:       iproute
 Requires:       libX11
