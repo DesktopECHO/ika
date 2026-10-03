@@ -138,9 +138,11 @@ BUILD_VARIANT=user ./lineageos/scripts/build_lineageos_desktop.sh x86_64
 
 `eng` is accepted for experiments, but release bundles should use `user` and the
 normal signing flow. `WITH_ADB_INSECURE` is only enabled for `userdebug` builds;
-`scrcpy` does not require root or insecure ADB. Cuttlefish keeps release-style
-`user` builds reachable by enabling guest TCP ADB on port `5555`, disabling ADB
-key authorization with `ro.adb.secure=0`, and exposing the host ADB proxy only on
+`scrcpy` does not require root or insecure ADB. For `user` builds, `ika` uses
+the host user's `~/.android/adbkey` and passes its public key to the guest in
+bootconfig. The guest installs that key during `post-fs-data`; this replaces
+the guest's ADB key list on each boot.
+Cuttlefish exposes guest TCP ADB on port `5555` through the host proxy at
 `127.0.0.1:6520` for the first instance.
 
 The resulting `lineageos-arm64/` and/or `lineageos-x86_64/` directories at the

@@ -276,7 +276,7 @@ function build_tree_manifest() {
     # Cache key embedded as the manifest's first line. Bump it whenever the
     # record format or the exclude set changes in a way that affects tarball
     # contents, to invalidate any tarball cached by an older run.
-    printf 'manifest-cache-version\t14\n'
+    printf 'manifest-cache-version\t17\n'
 
     cd "${REPO_DIR}"
     if [[ -n "${prune_name}" ]]; then
@@ -289,7 +289,6 @@ function build_tree_manifest() {
 
         local meta
         meta="$(stat -c '%f %s %Y' "${path}")"
-
         if [[ -L "${path}" ]]; then
           printf 'symlink\t%s\t%s\t%s\n' "${relpath}" "${meta}" "$(readlink "${path}")"
         elif [[ -d "${path}" ]]; then
