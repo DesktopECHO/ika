@@ -9,9 +9,9 @@ experience from a phone emulator in a browser to a native desktop window.
 | Concern | Upstream Cuttlefish | Ika |
 |---|---|---|
 | Frame transport | WebRTC over network | Unix domain socket → scrcpy native window |
-| Host frontend | WebRTC browser viewer (HTML/JavaScript) | ika-scrcpy with `--cuttlefish-frames-socket=…` |
+| Host frontend | WebRTC browser viewer (HTML/JavaScript) | scrcpy with `--cuttlefish-frames-socket=…` |
 | Window resize | Client scales frames; guest display geometry is static | Client sends an Android logical resize request; the raw-frame path also attempts a physical Cuttlefish resize |
-| Resize event flow | None (visual scaling only) | SDL → ika-scrcpy → `TYPE_RESIZE_DISPLAY` → forced logical size (scaling off) → `DISPLAY_READY` → DisplayManager listeners |
+| Resize event flow | None (visual scaling only) | SDL → scrcpy → `TYPE_RESIZE_DISPLAY` → forced logical size (scaling off) → `DISPLAY_READY` → DisplayManager listeners |
 | DPI selection | Static at launch (`--display=…,dpi=…`) | Computed from host width; user can override with `--dpi` or `IKADPI` |
 | Input transport | WebRTC data channel | scrcpy control channel using Android input APIs; UHID in game mode |
 | Audio transport | WebRTC media stream | Cuttlefish virtio-snd → host PipeWire stream |
@@ -33,8 +33,11 @@ from a Cuttlefish-internal Unix-domain socket. Ika passes that socket path to
 scrcpy with `--cuttlefish-frames-socket=...`. The socket is normally
 `…/cvd-1/internal/ika_frames.sock`, derived from the `frame_sock_path` field in
 `cuttlefish_config.json`. Bypassing WebRTC removes the encode/decode round trip
-and browser intermediary; frames arrive at scrcpy's SDL renderer over a local
-socket.
+and browser intermediary. `ika_stream` writes each raw frame into one of four
+shared-memory slots (or passes a DMA-BUF), and the socket only carries a short
+notice per frame. scrcpy uploads the slot to its texture without copying it
+first and hands the slot back afterwards; `ika_stream` does not rewrite a slot
+until then.
 
 ## 2. Window resize: scaling vs. device resize requests
 

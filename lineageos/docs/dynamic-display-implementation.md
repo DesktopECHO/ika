@@ -2,18 +2,18 @@
 
 LineageOS Desktop is designed to treat the Cuttlefish primary display as a
 resizable desktop surface. The host launcher starts Cuttlefish with an initial
-display size and DPI derived from the host monitor, then opens `ika-scrcpy` as
-the frontend.
+display size and DPI derived from the host monitor, then opens Ika's scrcpy
+client (`scrcpy/`) as the frontend.
 
 ## Runtime Resize Flow
 
 The default viewer path uses raw Cuttlefish frames:
 
-1. `tools/ika` launches ika-scrcpy with `--cuttlefish-frames-socket=...` and
+1. `tools/ika` launches scrcpy with `--cuttlefish-frames-socket=...` and
    `--dpi=<computed-or-user-value>`.
-2. ika-scrcpy follows the window size in pixels, debounced while the window
+2. scrcpy follows the window size in pixels, debounced while the window
    is being resized.
-3. ika-scrcpy sends `TYPE_RESIZE_DISPLAY` to the scrcpy server, which forces
+3. scrcpy sends `TYPE_RESIZE_DISPLAY` to the scrcpy server, which forces
    the logical size of the main display (as `wm size`, with `wm scaling off`
    when it fits the physical display, and `wm density` once), and sends
    `DISPLAY_READY` when the display has settled.
@@ -26,7 +26,7 @@ See [`scrcpy/IKA.md`](../../scrcpy/IKA.md).
 ## Guest Fallback Contract
 
 For manual testing and future host-side actors that do not go through
-ika-scrcpy, the product also accepts:
+scrcpy, the product also accepts:
 
 | Property | Format | Meaning |
 | --- | --- | --- |
