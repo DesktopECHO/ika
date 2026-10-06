@@ -2765,6 +2765,9 @@ start_scrcpy_with_retries() {
 
   append_scrcpy_extra_args scrcpy_cmd console
   append_scrcpy_env scrcpy_env
+  # ika.desktop's ID. Otherwise SDL uses the executable name, scrcpy, which
+  # KDE's taskbar also derives for app windows and would match to the console.
+  scrcpy_env+=("SDL_APP_ID=ika")
 
   if [[ "${#scrcpy_env[@]}" -gt 0 ]]; then
     scrcpy_cmd=(
@@ -3105,6 +3108,8 @@ query_guest_apps() {
             emit_same_line()
           }
           pending = substr($0, 4)
+          # The app list is tab-separated, so a tab in a label would split it.
+          gsub(/\t/, " ", pending)
           next
         }
         pending != "" && /^[[:space:]]+[^[:space:]]+[[:space:]]*$/ && is_package($1) {
@@ -3150,6 +3155,30 @@ app_window_title() {
   fi
 
   printf '%s\n' "${title:-${package}}"
+}
+
+# Prints the app's name as its menu launcher shows it, without the game/app
+# marker (see app_launcher_name), for messages and notifications. It comes from
+# the launcher, the cached app list, or the cached window title, without asking
+# the guest, and falls back to the package name.
+app_display_name() {
+  local package="$1"
+  local launcher
+  local name=""
+
+  launcher="$(app_menu_data_dir)/applications/ika-${package}.desktop"
+  if [[ -f "${launcher}" ]]; then
+    name="$(sed -n '/^Name=/{s///p;q}' "${launcher}")"
+    name="${name#* ∙ }"
+    name="${name//\\\\/\\}"
+  fi
+  if [[ -z "${name}" && -s "${APP_LIST_CACHE}" ]]; then
+    name="$(awk -F '\t' -v pkg="${package}" '$2 == pkg { print $1; exit }' "${APP_LIST_CACHE}")"
+  fi
+  if [[ -z "${name}" && -s "${IKA_APPS_DIR}/${package}/title" ]]; then
+    name="$(<"${IKA_APPS_DIR}/${package}/title")"
+  fi
+  printf '%s\n' "${name:-${package}}"
 }
 
 # Resolves NAME to "LABEL<TAB>PACKAGE" among the launchable apps. The app list
@@ -3470,7 +3499,7 @@ ensure_guest_ready() {
     || die "timed out waiting for Ika to start"
   if ! has_live_cvd_processes; then
     log "Android virtual device not running; starting it without the console"
-    notify_progress "Starting Android… Virtual machine needs a moment to get ready"
+    notify_progress "Starting Android virtual machine, one moment..."
     # Close the lock for the child: the VM processes it starts outlive this
     # command and would otherwise hold the lock for as long as the VM runs.
     "${IKA_SCRIPT_PATH}" start --no-console </dev/null >/dev/null 2>&1 \
@@ -3525,6 +3554,10 @@ resolve_app_name() {
   fi
 
   if [[ "${count}" -eq 0 ]]; then
+    # Menu launchers pass the package of an app that may since have been removed.
+    if is_app_package_name "${name}"; then
+      die "$(app_display_name "${name}") is not installed in Android; see '${SCRIPT_NAME} app'"
+    fi
     die "no ${what} matches '${name}'; see '${SCRIPT_NAME} app'"
   fi
   log "'${name}' matches several ${what}s:"
@@ -3549,6 +3582,7 @@ open_app_window() {
   local dpi
   local display_size
   local codec_options
+  local app_icon
   local saved_width=""
   local saved_height=""
   local saved_fullscreen=""
@@ -3560,17 +3594,20 @@ open_app_window() {
   ensure_guest_ready
   adb_serial="$(resolve_adb_serial)"
 
-  # A package name is used as given; anything else is looked up by label.
+  # A package name is used as given (menu launchers pass one); anything else is
+  # looked up by label.
   if is_app_package_name "${name}" \
       && app_is_installed "${name}" "${adb_serial}"; then
     package="${name}"
+    label="$(app_display_name "${package}")"
+    [[ "${label}" != "${package}" ]] || label=""
   else
     resolved="$(resolve_launchable_app "${name}" "${adb_serial}")" || exit 1
     package="${resolved#*$'\t'}"
     label="${resolved%%$'\t'*}"
-    if [[ -z "${title}" ]]; then
-      title="${label}"
-    fi
+  fi
+  if [[ -z "${title}" ]]; then
+    title="${label}"
   fi
   validate_app_package "${package}"
   scrcpy_env=("IKA_APP_PACKAGE=${package}")
@@ -3578,9 +3615,6 @@ open_app_window() {
   # Before use_app_window_paths, which repoints the supervisor paths from the
   # console to this app's window.
   if [[ "${window_mode}" != "true" ]] && is_game_app "${package}" "${adb_serial}"; then
-    if [[ -z "${label}" && -s "${IKA_APPS_DIR}/${package}/title" ]]; then
-      label="$(<"${IKA_APPS_DIR}/${package}/title")"
-    fi
     start_game_session "${package}" "${label:-${package}}"
     return 0
   fi
@@ -3593,7 +3627,7 @@ open_app_window() {
   fi
 
   if supervisor_pid_from_file "${SCRCPY_SUPERVISOR_PID_FILE}" __app_supervisor >/dev/null; then
-    respond "${package} is already open in its own window"
+    respond "${label:-${package}} is already open in its own window"
     return 0
   fi
 
@@ -3650,6 +3684,12 @@ open_app_window() {
   # group instead of stacking it under the Ika console.
   append_scrcpy_env scrcpy_env
   scrcpy_env+=("SDL_APP_ID=ika-${package}")
+  # Without the app's own icon, the window would set the generic Ika icon,
+  # which taskbars prefer over the launcher's.
+  app_icon="$(app_menu_icon "${package}")"
+  if [[ -f "${app_icon}" ]]; then
+    scrcpy_env+=("IKA_WINDOW_ICON=${app_icon}")
+  fi
   scrcpy_cmd=(env "${scrcpy_env[@]}" "${scrcpy_cmd[@]}")
 
   : > "${SCRCPY_LOG_FILE}"
@@ -3668,7 +3708,7 @@ open_app_window() {
     sleep 0.05
   done
 
-  die "could not open a window for ${package}; see ${SCRCPY_LOG_FILE}"
+  die "could not open a window for ${label:-${title}}; see ${SCRCPY_LOG_FILE}"
 }
 
 # Opens Android's App info page for NAME in the Settings app window: the page
@@ -3692,16 +3732,7 @@ open_app_info() {
   if is_app_package_name "${name}" \
       && app_is_installed "${name}" "${adb_serial}"; then
     package="${name}"
-    label="${name}"
-    if [[ -s "${IKA_APPS_DIR}/${package}/title" ]]; then
-      label="$(<"${IKA_APPS_DIR}/${package}/title")"
-    elif [[ -f "$(app_menu_data_dir)/applications/ika-${package}.desktop" ]]; then
-      # The launcher name carries a game/app marker (see app_launcher_name).
-      label="$(sed -n 's/^Name=//p' \
-        "$(app_menu_data_dir)/applications/ika-${package}.desktop" | head -n1)"
-      label="${label#* ∙ }"
-      label="${label:-${package}}"
-    fi
+    label="$(app_display_name "${package}")"
   else
     resolved="$(resolve_launchable_app "${name}" "${adb_serial}")" || exit 1
     package="${resolved#*$'\t'}"
@@ -3960,6 +3991,12 @@ app_launcher_name() {
   fi
 }
 
+# Prints a desktop entry string value as desktop-file-edit writes it: with each
+# backslash doubled. Launcher keys are compared in that form.
+desktop_entry_escape() {
+  printf '%s\n' "${1//\\/\\\\}"
+}
+
 # Creates or updates one launcher and returns 1 when it was already current.
 # Existing launchers are edited in place, keeping any keys the user added.
 write_app_launcher() {
@@ -3983,14 +4020,15 @@ write_app_launcher() {
     touch_exec="ika app --touch ${package}"
   fi
   if [[ -f "${file}" ]] \
-      && grep -qxF "Name=${name}" "${file}" \
+      && grep -qxF "Name=$(desktop_entry_escape "${name}")" "${file}" \
       && grep -qxF "Icon=${icon}" "${file}" \
       && grep -qxF "Actions=${actions}" "${file}" \
       && { [[ -z "${touch_exec}" ]] || grep -qxF "Exec=${touch_exec}" "${file}"; } \
       && grep -qxF "Exec=ika app --info ${package}" "${file}" \
       && grep -qxF "Icon=${settings_icon}" "${file}" \
       && grep -qxF "X-Ika-Package=${package}" "${file}" \
-      && grep -qxF "X-Ika-Version=${IKA_MENU_VERSION}" "${file}"; then
+      && grep -qxF "X-Ika-Version=${IKA_MENU_VERSION}" "${file}" \
+      && grep -qE "^Categories=(.*;)?${IKA_MENU_CATEGORY}(;|$)" "${file}"; then
     return 1
   fi
 
@@ -4018,12 +4056,12 @@ write_app_launcher() {
     cat > "${file}" <<EOF
 [Desktop Entry]
 Type=Application
-Name=${name}
+Name=$(desktop_entry_escape "${name}")
 Exec=ika app ${package}
 Icon=${icon}
 Terminal=false
 StartupWMClass=ika-${package}
-Keywords=${keywords}
+Keywords=$(desktop_entry_escape "${keywords}")
 Actions=${actions}
 Categories=${IKA_MENU_CATEGORY};
 X-Ika-Package=${package}
@@ -4118,22 +4156,92 @@ EOF
 EOF
 }
 
-# GNOME Shell settings are only usable inside a desktop session.
+# Prints the desktop session's bus. The app menu watcher and commands run over
+# SSH lack DBUS_SESSION_BUS_ADDRESS, so fall back to the user bus socket.
+app_menu_session_bus() {
+  local socket="${XDG_RUNTIME_DIR:-/run/user/${UID}}/bus"
+
+  if [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
+    printf '%s\n' "${DBUS_SESSION_BUS_ADDRESS}"
+  elif [[ -S "${socket}" ]]; then
+    printf 'unix:path=%s\n' "${socket}"
+  else
+    return 1
+  fi
+}
+
+# GNOME Shell settings are only usable inside a desktop session. grep reads
+# the whole schema list: with -q it could exit first, and gsettings' SIGPIPE
+# would fail the pipeline under pipefail, skipping the folder setup.
 gnome_app_folders_available() {
   [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]] || return 1
   command -v gsettings >/dev/null 2>&1 || return 1
-  gsettings list-schemas 2>/dev/null | grep -qx 'org.gnome.desktop.app-folders'
+  gsettings list-schemas 2>/dev/null | grep -x 'org.gnome.desktop.app-folders' >/dev/null
 }
 
 gnome_app_folder_schema() {
   printf 'org.gnome.desktop.app-folders.folder:/org/gnome/desktop/app-folders/folders/%s/\n' \
-    "${IKA_MENU_ID}"
+    "${1:-${IKA_MENU_ID}}"
 }
 
+# Prints the items of a gsettings string array ("['a', 'b']" or "@as []"), one
+# per line. Desktop file IDs contain neither quotes nor commas.
+gsettings_strv_items() {
+  local value="$1"
+  local item
+  local -a items=()
+
+  value="${value#@as }"
+  value="${value#[}"
+  value="${value%]}"
+  IFS=',' read -r -a items <<<"${value}"
+  for item in "${items[@]+"${items[@]}"}"; do
+    item="${item# }"
+    item="${item#\'}"
+    item="${item%\'}"
+    [[ -z "${item}" ]] || printf '%s\n' "${item}"
+  done
+}
+
+# Formats the lines read from stdin as a gsettings string array.
+gsettings_strv() {
+  local item
+  local value=""
+
+  while IFS= read -r item; do
+    [[ -n "${item}" ]] && value+="${value:+, }'${item}'"
+  done
+  if [[ -n "${value}" ]]; then
+    printf '[%s]\n' "${value}"
+  else
+    printf '@as []\n'
+  fi
+}
+
+# Prints a folder's string array key without the Ika launchers in it.
+gsettings_strv_without_launchers() {
+  gsettings_strv_items "$(gsettings get "$1" "$2")" \
+    | { grep -v '^ika-.*\.desktop$' || true; }
+}
+
+# Creates the GNOME Shell app-grid folder and puts the given launchers
+# (desktop file IDs) in it. Matching on the category alone is not enough:
+# when an app is installed, GNOME Shell refreshes its folders from the app
+# list it had before the install (js/ui/appDisplay.js, AppDisplay._redisplay),
+# so a new launcher would appear in the main grid. Listing the launchers in the
+# folder's 'apps' key, before they are written, avoids that. Launchers dragged
+# out of the folder, or into another folder, are moved back.
 install_gnome_app_folder() {
+  local bus
   local schema
   local children
+  local folder
+  local folder_schema
+  local current
+  local wanted
 
+  bus="$(app_menu_session_bus)" || return 0
+  local -x DBUS_SESSION_BUS_ADDRESS="${bus}"
   gnome_app_folders_available || return 0
   schema="$(gnome_app_folder_schema)"
 
@@ -4156,12 +4264,37 @@ install_gnome_app_folder() {
     fi
     gsettings set org.gnome.desktop.app-folders folder-children "${children}"
   fi
+
+  current="$(gsettings_strv_items "$(gsettings get "${schema}" apps)" | gsettings_strv)"
+  wanted="$( { gsettings_strv_without_launchers "${schema}" apps; printf '%s\n' "$@"; } \
+    | gsettings_strv)"
+  if [[ "${wanted}" != "${current}" ]]; then
+    gsettings set "${schema}" apps "${wanted}"
+  fi
+  current="$(gsettings_strv_items "$(gsettings get "${schema}" excluded-apps)" | gsettings_strv)"
+  wanted="$(gsettings_strv_without_launchers "${schema}" excluded-apps | gsettings_strv)"
+  if [[ "${wanted}" != "${current}" ]]; then
+    gsettings set "${schema}" excluded-apps "${wanted}"
+  fi
+
+  for folder in $(gsettings_strv_items "${children}"); do
+    [[ "${folder}" != "${IKA_MENU_ID}" ]] || continue
+    folder_schema="$(gnome_app_folder_schema "${folder}")"
+    current="$(gsettings get "${folder_schema}" apps 2>/dev/null)" || continue
+    if [[ "${current}" == *"'ika-"*".desktop'"* ]]; then
+      gsettings set "${folder_schema}" apps \
+        "$(gsettings_strv_without_launchers "${folder_schema}" apps | gsettings_strv)"
+    fi
+  done
 }
 
 remove_gnome_app_folder() {
+  local bus
   local children
   local item="'${IKA_MENU_ID}'"
 
+  bus="$(app_menu_session_bus)" || return 0
+  local -x DBUS_SESSION_BUS_ADDRESS="${bus}"
   gnome_app_folders_available || return 0
   children="$(gsettings get org.gnome.desktop.app-folders folder-children)"
   if [[ "${children}" == *"${item}"* ]]; then
@@ -4222,7 +4355,8 @@ refresh_renamed_launchers() {
     is_app_package_name "${package}" || continue
     file="${apps_dir}/ika-${package}.desktop"
     if [[ -f "${file}" ]] && grep -q '^X-Ika-Version=' "${file}" \
-        && ! grep -qxF "Name=$(app_launcher_name "${label}" "${package}")" "${file}"; then
+        && ! grep -qxF "Name=$(desktop_entry_escape "$(app_launcher_name "${label}" "${package}")")" \
+          "${file}"; then
       labels+=("${label}")
       packages+=("${package}")
     fi
@@ -4261,6 +4395,7 @@ sync_app_menu() {
   local icons="unchanged"
   local sync_lock_fd
   local -A current=()
+  local -a desktop_ids=()
 
   require_executable "${SCRCPY_BIN}" "console client"
   has_live_cvd_processes || die "Android virtual device not running; start it with '${SCRIPT_NAME} start'"
@@ -4284,6 +4419,19 @@ sync_app_menu() {
 
   apps_dir="$(app_menu_data_dir)/applications"
   mkdir -p "${apps_dir}"
+  # Set up the group, with every launcher in it, before any launcher is
+  # written: an app whose launcher appears first can end up outside it.
+  # Launchers the user hid stay out of the GNOME folder's explicit list.
+  while IFS=$'\t' read -r label package; do
+    is_app_package_name "${package}" || continue
+    file="${apps_dir}/ika-${package}.desktop"
+    if [[ ! -f "${file}" ]] || ! grep -qx 'NoDisplay=true' "${file}"; then
+      desktop_ids+=("ika-${package}.desktop")
+    fi
+  done <<<"${list}"
+  install_xdg_app_menu
+  install_gnome_app_folder "${desktop_ids[@]+"${desktop_ids[@]}"}"
+
   updated="$(refresh_renamed_launchers "${apps_dir}" "${list}")"
   while IFS=$'\t' read -r label package; do
     is_app_package_name "${package}" || continue
@@ -4303,8 +4451,6 @@ sync_app_menu() {
     fi
   done < <(list_app_launchers)
 
-  install_xdg_app_menu
-  install_gnome_app_folder
   refresh_app_menu_caches
   # Release the lock now: a watcher started after this would inherit the
   # descriptor and block on it.
