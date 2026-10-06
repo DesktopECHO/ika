@@ -1,0 +1,15 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+// Publishes the GMS Android ID, in decimal, as sys.ika.gsf_android_id. Runs as
+// the system uid to read it from the Gservices provider's dump: GMS serves the
+// ID itself only to callers it approves.
+android_app {
+    name: "IkaGsfId",
+    srcs: ["src/**/*.java"],
+    platform_apis: true,
+    certificate: "platform",
+    privileged: true,
+    system_ext_specific: true,
+}

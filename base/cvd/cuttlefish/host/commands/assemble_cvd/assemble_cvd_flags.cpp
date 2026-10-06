@@ -23,7 +23,9 @@
 
 #include "cuttlefish/common/libs/utils/known_paths.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags_defaults.h"
+#include "cuttlefish/host/libs/config/config_utils.h"
 #include "cuttlefish/host/libs/config/display.h"
+#include "cuttlefish/host/libs/version/version.h"
 
 #define DEFINE_vec DEFINE_string
 
@@ -52,7 +54,10 @@ DEFINE_vec(extra_bootconfig_args, CF_DEFAULTS_EXTRA_BOOTCONFIG_ARGS,
            "Space-separated list of extra bootconfig args. "
            "Note: overwriting an existing bootconfig argument "
            "requires ':=' instead of '='.");
-DEFINE_vec(serial_number, CF_DEFAULTS_SERIAL_NUMBER,
+// GMS check-in rejects "261003-01" as a serial; keep it letters and digits.
+DEFINE_vec(serial_number,
+           cuttlefish::ForCurrentInstance(
+               ("IKA" + cuttlefish::GetCuttlefishCommonVersion()).c_str()),
            "Serial number to use for the device");
 DEFINE_vec(use_random_serial, fmt::format("{}", CF_DEFAULTS_USE_RANDOM_SERIAL),
            "Whether to use random serial for the device.");

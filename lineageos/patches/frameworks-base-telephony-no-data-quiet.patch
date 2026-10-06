@@ -1,0 +1,18 @@
+Patch summary:
+Quiet isDataEnabled without telephony data.
+
+diff --git a/telephony/java/android/telephony/TelephonyManager.java b/telephony/java/android/telephony/TelephonyManager.java
+--- a/telephony/java/android/telephony/TelephonyManager.java
++++ b/telephony/java/android/telephony/TelephonyManager.java
+@@ -11855,6 +11855,11 @@
+         try {
+             return isDataEnabledForReason(DATA_ENABLED_REASON_USER);
+         } catch (IllegalStateException ise) {
++            if (mContext != null && !mContext.getPackageManager().hasSystemFeature(
++                    PackageManager.FEATURE_TELEPHONY_DATA)) {
++                // No telephony stack by design (desktop VM); callers get the default silently.
++                return false;
++            }
+             // TODO(b/176163590): Remove this catch once TelephonyManager is booting safely.
+             Log.e(TAG, "Error calling #isDataEnabled, returning default (false).", ise);
+             return false;

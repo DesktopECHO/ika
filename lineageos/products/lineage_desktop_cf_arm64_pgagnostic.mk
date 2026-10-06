@@ -30,4 +30,4 @@ PRODUCT_ENABLE_UFFD_GC := false
 PRODUCT_NAME := lineage_desktop_cf_arm64_pgagnostic
 PRODUCT_BRAND := LineageOS
 PRODUCT_MANUFACTURER := DesktopECHO
-PRODUCT_MODEL := Ika Virtual Desktop
+PRODUCT_MODEL := Ika Android Environment

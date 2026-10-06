@@ -1,0 +1,42 @@
+Patch summary:
+Quiet virtual display teardown.
+
+diff --git a/services/core/java/com/android/server/wm/WindowManagerService.java b/services/core/java/com/android/server/wm/WindowManagerService.java
+--- a/services/core/java/com/android/server/wm/WindowManagerService.java
++++ b/services/core/java/com/android/server/wm/WindowManagerService.java
+@@ -5252,9 +5252,9 @@
+         synchronized (mGlobalLock) {
+             final DisplayContent displayContent = mRoot.getDisplayContent(displayId);
+             if (displayContent == null) {
+-                throw new IllegalArgumentException(
+-                        "Trying to unregister system gesture exclusion event for invalid display: "
+-                                + displayId);
++                // The display is already gone (e.g. a closed app-window virtual display), so
++                // there is nothing left to unregister from.
++                return;
+             }
+             displayContent.unregisterSystemGestureExclusionListener(listener);
+         }
+diff --git a/services/core/java/com/android/server/display/mode/ModeChangeObserver.java b/services/core/java/com/android/server/display/mode/ModeChangeObserver.java
+--- a/services/core/java/com/android/server/display/mode/ModeChangeObserver.java
++++ b/services/core/java/com/android/server/display/mode/ModeChangeObserver.java
+@@ -75,7 +75,8 @@
+             public void onDisplayRemoved(int displayId) {
+                 int oldPhysicalDisplayIdIndex = mPhysicalIdToLogicalIdMap.indexOfValue(displayId);
+                 if (oldPhysicalDisplayIdIndex < 0) {
+-                    Slog.e(TAG, "Removed display not found");
++                    // Only physical displays are tracked; virtual displays (app windows) are
++                    // expected to be missing here.
+                     return;
+                 }
+                 long oldPhysicalDisplayId =
+@@ -89,7 +90,8 @@
+             public void onDisplayChanged(int displayId) {
+                 int oldPhysicalDisplayIdIndex = mPhysicalIdToLogicalIdMap.indexOfValue(displayId);
+                 if (oldPhysicalDisplayIdIndex < 0) {
+-                    Slog.e(TAG, "Changed display not found");
++                    // Only physical displays are tracked; virtual displays (app windows) are
++                    // expected to be missing here.
+                     return;
+                 }
+                 long oldPhysicalDisplayId =
