@@ -77,6 +77,10 @@ PRODUCT_COPY_FILES += \
     vendor/lineage_desktop/prebuilts/cvd_display_resize/cvd_display_resize.sh:$(TARGET_COPY_OUT_SYSTEM_EXT)/bin/cvd_display_resize.sh \
     vendor/lineage_desktop/prebuilts/cvd_display_resize/cvd_display_resize.rc:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/init/cvd_display_resize.rc
 
+# Publishes the GMS Android ID in decimal as sys.ika.gsf_android_id once device
+# check-in has assigned it. A platform-signed app, so it works in user builds.
+PRODUCT_PACKAGES += IkaGsfId
+
 PRODUCT_PACKAGES += \
     LineageDesktopConnectivityOverlay \
     LineageDesktopFrameworkResOverlay \

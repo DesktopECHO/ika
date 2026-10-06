@@ -1,22 +1,17 @@
 Patch summary:
-Add minimal desktop SELinux policy for expected VM behavior. The policy quiets
-known benign denials from optional services and legacy probes, and allows
-shell-driven display-density checks used by host-side desktop testing. It also
-labels the desktop SurfaceFlinger present-timestamp property so vendor init can
-set the vendor build property without falling back to default_prop.
-
-This patch does not broaden app privileges for normal desktop use; it documents
-and permits only the small set of behaviors the VM is expected to perform.
+Desktop policy: quiet benign denials, shell density checks, labels for the
+present-timestamp property and sys.ika.gsf_android_id.
 
 diff --git a/private/property_contexts b/private/property_contexts
 index b325c2ff0..f8d847aa8 100644
 --- a/private/property_contexts
 +++ b/private/property_contexts
-@@ -1544,6 +1544,7 @@ ro.surface_flinger.ignore_hdr_camera_layers               u:object_r:surfaceflin
+@@ -1544,6 +1544,8 @@ ro.surface_flinger.ignore_hdr_camera_layers               u:object_r:surfaceflin
  ro.surface_flinger.clear_slots_with_set_layer_buffer      u:object_r:surfaceflinger_prop:s0 exact bool
  ro.surface_flinger.prime_shader_cache.ultrahdr            u:object_r:surfaceflinger_prop:s0 exact bool
  ro.surface_flinger.game_default_frame_rate_override       u:object_r:surfaceflinger_prop:s0 exact int
 +ro.surface_flinger.force_present_timestamp                u:object_r:surfaceflinger_prop:s0 exact bool
++sys.ika.gsf_android_id                                    u:object_r:ika_gsf_prop:s0 exact string
  
  ro.sf.disable_triple_buffer u:object_r:surfaceflinger_prop:s0 exact bool
  ro.sf.lcd_density           u:object_r:surfaceflinger_prop:s0 exact int
@@ -25,7 +20,7 @@ new file mode 100644
 index 000000000..2a063b9b3
 --- /dev/null
 +++ b/private/lineage_desktop.te
-@@ -0,0 +1,23 @@
+@@ -0,0 +1,29 @@
 +# Desktop builds intentionally keep optional stats bootstrap and legacy app probes
 +# denied; avoid noisy AVCs without granting the underlying access.
 +dontaudit domain statsbootstrap_service:service_manager find;
@@ -49,3 +44,9 @@ index 000000000..2a063b9b3
 +# GmsCore probes the wireless-debugging properties. Keep them denied, as AOSP's
 +# gmscore_app.te already does for system_adbd_prop.
 +dontaudit gmscore_app adbd_prop:file r_file_perms;
++
++# IkaGsfId (platform-signed, so system_app) publishes the GMS Android ID in hex;
++# adb shell reads it.
++system_internal_prop(ika_gsf_prop)
++set_prop(system_app, ika_gsf_prop)
++get_prop(shell, ika_gsf_prop)

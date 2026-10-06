@@ -65,6 +65,9 @@ frameworks/base patches/frameworks-base-display-scaling-disabled.patch
 frameworks/base patches/frameworks-base-settingslib-sysprop-poker.patch
 frameworks/base patches/frameworks-base-carrier-config-wtf.patch
 frameworks/base patches/frameworks-base-settingsprovider-deviceconfig-quiet-deny.patch
+frameworks/base patches/frameworks-base-virtual-display-teardown-quiet.patch
+frameworks/base patches/frameworks-base-powerstats-no-battery-bluetooth.patch
+frameworks/base patches/frameworks-base-telephony-no-data-quiet.patch
 system/core patches/system-core.patch
 system/sepolicy patches/system-sepolicy.patch
 system/sepolicy patches/system-sepolicy-checkfc-arm64-getopt.patch
