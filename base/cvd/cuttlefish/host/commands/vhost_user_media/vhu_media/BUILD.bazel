@@ -16,6 +16,7 @@ rust_library(
         "virtio-bindings",
         "virtio-media",
         "virtio-queue",
+        "uuid",
         "vm-allocator",
         "vm-memory",
         "vmm-sys-util",

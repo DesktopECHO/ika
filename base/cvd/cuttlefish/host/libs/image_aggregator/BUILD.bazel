@@ -138,6 +138,7 @@ cf_cc_library(
         "//cuttlefish/posix:rename",
         "//cuttlefish/result",
         "//libbase",
+        "@abseil-cpp//absl/log",
         "@android_system_core//:libsparse",
     ],
 )
