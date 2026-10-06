@@ -12,13 +12,17 @@ pkgdesc='Cuttlefish Android Virtual Device host packages'
 arch=(x86_64 aarch64)
 url='https://github.com/google/android-cuttlefish'
 license=(Apache-2.0)
-makedepends=(aom clang cmake curl ffmpeg fmt gcc gflags git google-glog gtest
-             icu jsoncpp libcap libdrm libsrtp libusb libx11 libxcrypt-compat
-             libxext libxml2 libxml2-legacy mesa meson ninja openssl opus perl
-             pipewire pkgconf protobuf protobuf-c python sdl3
-             xxd util-linux-libs v4l-utils virglrenderer vulkan-headers wayland which xz z3)
+makedepends=(alsa-lib aom clang cmake curl fmt gcc gflags git google-glog gtest
+             icu jsoncpp libcap libdecor libdrm libpipewire libsrtp libx11 libxcrypt-compat
+             libxext libxfixes libxi libxkbcommon libxml2 libxml2-legacy libxcursor
+             libxrandr libxss mesa meson nasm ninja openssl opus perl
+             pipewire pkgconf protobuf protobuf-c python
+             wget xxd util-linux-libs v4l-utils virglrenderer vulkan-headers wayland
+             wayland-protocols which xz z3)
 # objcopy/nm cannot parse the Bazel/Clang-built binaries; skip strip/debug.
-options=(!strip !debug)
+# makepkg's LTO would make the static FFmpeg (and SDL, libusb) GCC LTO
+# objects, which Bazel's ld.lld cannot link into crosvm.
+options=(!strip !debug !lto)
 source=("ika-base-${pkgver}.tar.gz")
 sha256sums=('SKIP')
 
@@ -50,12 +54,21 @@ build() {
   local git_mirror_root="${cache_root}/git-mirrors"
   local git_config="${cache_root}/gitconfig"
   local cargo_bazel_timeout="${CARGO_BAZEL_TIMEOUT:-1800}"
+  local scrcpy_deps_work_dir="${work_root}/scrcpy-deps"
+  local scrcpy_static_deps="${scrcpy_deps_work_dir}/install/linux-native-static"
   mkdir -p "${output_user_root}" "${repository_cache}" "${disk_cache}" \
     "${distdir}" "${bazel_tmpdir}" "${git_mirror_root}"
   # Keep Bazel's output tree and crate_universe temp workspaces out of the
   # makepkg srcdir; it is transient and can hit space limits while external
   # git repos are materialized.
   export TMPDIR="${bazel_tmpdir}"
+
+  cd "${srcdir}/${_srcroot}"
+  SCRCPY_DEPS_WORK_DIR="${scrcpy_deps_work_dir}" scrcpy/app/deps/libusb.sh linux native static
+  SCRCPY_DEPS_WORK_DIR="${scrcpy_deps_work_dir}" scrcpy/app/deps/sdl.sh linux native static
+  SCRCPY_DEPS_WORK_DIR="${scrcpy_deps_work_dir}" scrcpy/app/deps/dav1d.sh linux native static
+  SCRCPY_DEPS_WORK_DIR="${scrcpy_deps_work_dir}" scrcpy/app/deps/ffmpeg.sh linux native static
+  cd base/cvd
 
   # Shut down stale Bazel servers from earlier or concurrent builds that share
   # this --output_user_root. Two servers racing on the shared caches and the
@@ -102,6 +115,10 @@ build() {
       --repo_env=CARGO_BAZEL_TIMEOUT="${cargo_bazel_timeout}" \
       --repo_env=GIT_CONFIG_GLOBAL="${git_config}" \
       --repo_env=GIT_CONFIG_NOSYSTEM=1 \
+      --action_env=PKG_CONFIG_PATH="${scrcpy_static_deps}/lib/pkgconfig" \
+      --action_env=LIBAVCODEC_STATIC=1 \
+      --action_env=LIBAVUTIL_STATIC=1 \
+      --action_env=LIBSWSCALE_STATIC=1 \
       --workspace_status_command=../stamp_helper.sh \
       --build_tag_filters=-clang-tidy; then
       break
@@ -125,17 +142,32 @@ build() {
     sleep "${retry_delay}"
   done
 
+  if readelf -d bazel-bin/cuttlefish/package/cuttlefish-common/bin/crosvm | grep -Eq 'Shared library: \[(libav|libsw)'; then
+    echo "Error: crosvm still has a shared FFmpeg dependency" >&2
+    readelf -d bazel-bin/cuttlefish/package/cuttlefish-common/bin/crosvm | grep 'Shared library' >&2
+    return 1
+  fi
+
   # Build the scrcpy viewer (folded in from the former ika-scrcpy package). The
   # prebuilt scrcpy-server APK is bundled in the source tarball at
   # scrcpy/scrcpy-server.
   cd "${srcdir}/${_srcroot}"
   meson setup scrcpy _build_scrcpy \
+      --pkg-config-path="${scrcpy_static_deps}/lib/pkgconfig" \
+      -Dc_args="-I${scrcpy_static_deps}/include" \
+      -Dc_link_args="-L${scrcpy_static_deps}/lib" \
       --buildtype=release \
       --prefix=/usr/lib/cuttlefish-common \
       --bindir=bin \
+      -Dstatic=true \
       -Dprebuilt_server=scrcpy-server \
       -Dcompile_server=true
   meson compile -C _build_scrcpy
+  if readelf -d _build_scrcpy/app/scrcpy | grep -Eq 'Shared library: \[(libav|libsw)'; then
+    echo "Error: scrcpy still has a shared FFmpeg dependency" >&2
+    readelf -d _build_scrcpy/app/scrcpy | grep 'Shared library' >&2
+    return 1
+  fi
 }
 
 _package_output_root() {
@@ -146,11 +178,13 @@ package_ika-base() {
   pkgdesc='Cuttlefish host binaries, networking helpers, and system services'
   # Arch's Mesa packages use epoch 1; preserve it so 1:25.x cannot satisfy
   # the Mesa 26.1 runtime floor.
-  depends=(curl desktop-file-utils dnsmasq ffmpeg gtk3 iproute2 libarchive libcap libdecor libdrm libusb libx11
+  depends=(curl desktop-file-utils dnsmasq gtk3 iproute2 libarchive libcap libdecor libdrm libnotify libx11
            libxext lsof lz4 'mesa>=1:26.1' mesa-utils
            net-tools networkmanager nftables openssl python python-requests
-           pipewire procps-ng sdl3 shadow systemd virglrenderer vulkan-icd-loader
-           vulkan-swrast vulkan-tools wayland-utils xdg-utils xz)
+           pipewire procps-ng shadow systemd virglrenderer vulkan-icd-loader
+           vulkan-swrast vulkan-tools wayland wayland-utils xdg-utils xz
+           # Loaded at runtime by the static SDL in the scrcpy viewer
+           libxcursor libxfixes libxi libxkbcommon libxrandr libxss)
   # ika-base now ships the scrcpy viewer; retire the standalone ika-scrcpy.
   provides=(cuttlefish-base ika-scrcpy)
   conflicts=(cuttlefish-base ika-scrcpy)

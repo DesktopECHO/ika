@@ -79,6 +79,7 @@ crosvm_bin.annotation(
     ],
     deps = [
         "@@//:gfxstream_backend_import",
+        "@crosvm_bin__ffmpeg-0.1.0//:build_script_build",
     ],
     rustc_flags = [
         # Look for shared libraries in the same directory as the binary.
@@ -88,11 +89,6 @@ crosvm_bin.annotation(
 
 crosvm_bin.annotation(
     crate = "ffmpeg",
-    build_script_env = {
-        # Keep Fedora's system-header location as a fallback. The patch below
-        # also forwards pkg-config include paths for private static builds.
-        "BINDGEN_EXTRA_CLANG_ARGS": "-I/usr/include/ffmpeg",
-    },
     patch_args = ["-p1"],
     patches = [
         # crate_universe applies annotation patches in sorted label order, not

@@ -57,8 +57,21 @@ mkdir -p "$INSTALL_DIR" "$SOURCES_DIR" "$WORK_DIR"
 checksum() {
     local file="$1"
     local sum="$2"
+    local actual
     echo "$file: verifying checksum..."
-    echo "$sum  $file" | shasum -a256 -c
+    if ! command -v sha256sum >/dev/null 2>&1
+    then
+        echo "sha256sum is required" >&2
+        return 1
+    fi
+    actual="$(sha256sum "$file")" || return
+    actual="${actual%% *}"
+    if [[ "$actual" != "$sum" ]]
+    then
+        echo "$file: SHA-256 mismatch (expected $sum, got $actual)" >&2
+        return 1
+    fi
+    echo "$file: OK"
 }
 
 get_file() {

@@ -3,9 +3,9 @@ set -ex
 . $(dirname ${BASH_SOURCE[0]})/_init
 process_args "$@"
 
-VERSION=3.4.0
+VERSION=3.4.18
 URL="https://github.com/libsdl-org/SDL/archive/refs/tags/release-$VERSION.tar.gz"
-SHA256SUM=9614b9696abc4597ffce6b888829dc6537ae500423474c342ac4a67222c5654c
+SHA256SUM=c4b08b950bd29d83caae0ab8d884298d27046a9d30700fb42841c50992665c90
 
 PROJECT_DIR="sdl-$VERSION"
 FILENAME="$PROJECT_DIR.tar.gz"
@@ -25,6 +25,13 @@ mkdir -p "$BUILD_DIR/$PROJECT_DIR"
 cd "$BUILD_DIR/$PROJECT_DIR"
 
 export CFLAGS='-O2'
+if [[ "$HOST" == linux && "$BUILD_TYPE" == native ]]
+then
+    # RPM-family toolchains enable PIE at link time; compile feature probes as
+    # PIE too, otherwise symbol checks can fail with absolute-relocation errors.
+    CFLAGS+=' -fPIE'
+fi
+export CFLAGS
 export CXXFLAGS="$CFLAGS"
 
 mkdir -p "$DIRNAME"
@@ -32,6 +39,9 @@ cd "$DIRNAME"
 
 conf=(
     -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR/$DIRNAME"
+    # The other dependencies install to lib, where the builds look for them;
+    # CMake would pick lib64 on Fedora.
+    -DCMAKE_INSTALL_LIBDIR=lib
     -DSDL_TESTS=OFF
 )
 
@@ -75,9 +85,11 @@ then
     )
 fi
 
-# Reconfigure on every invocation so an interrupted configure or changed
-# option does not leave the dependency cache permanently unusable.
-cmake "$SOURCES_DIR/$PROJECT_DIR" "${conf[@]}"
+# Configure from scratch on every invocation. CMake keeps feature-check results
+# in its cache, so a probe that failed once (as every libc check did before
+# -fPIE, under RPM's hardened linker flags) would stay failed, and SDL would
+# ignore the environment (SDL_APP_ID included) and its libc functions.
+cmake --fresh "$SOURCES_DIR/$PROJECT_DIR" "${conf[@]}"
 
 cmake --build .
 cmake --install .
