@@ -16,6 +16,8 @@ on [Fedora Asahi Remix](https://asahilinux.org/). It later evolved into a deskto
 - **App windows**: run single Android apps in their own desktop windows, listed
   in your desktop's app menu; games start fullscreen with gamepad passthrough
   (see [App windows](#app-windows)).
+- **Camera**: use a webcam or a Mac's FaceTime camera as Android's front camera
+  (see [Camera](#camera)).
 - **Flexible build options** for **MindTheGapps**, **microG**, or a fully
   de-Googled ROM without an app store.
 
@@ -28,7 +30,7 @@ The implementation patch inventory is maintained in
 limitations are recorded in that Vulkan document rather than presented as
 completed compatibility fixes.
 
-## Ika Binaries (Updated 2026-09-28)
+## Ika Binaries (Updated 2026-09-30)
 
 Ika consists of two packages: An Android disk image (informally, the device ROM)
 and a matching Cuttlefish virtual machine application. Prebuilt Fedora 44
@@ -143,6 +145,11 @@ Super (Command) + F Switches in and out of fullscreen mode.
 
 Super (Command) + T Switches the title bar on and off. 
 
+Without a title bar, resize the console by dragging just outside its edges:
+the window keeps an invisible 4-pixel margin for that, so the edge of the
+Android desktop stays clickable. While a window is resized, its last complete
+picture is stretched and blurred until Android has drawn the new size.
+
 ## Managing the VM with `ika`
 
 After the packages are installed, `ika` is available on your `PATH`. Use it to
@@ -197,8 +204,8 @@ ika help
 
 ### Camera
 
-Android has a single camera, the front camera. It is emulated unless Ika is
-started with `--camera`, which passes a host camera through instead (crosvm
+Android has a single camera, the front camera. It is emulated (a landscape
+test scene) unless Ika is started with `--camera`, which passes a host camera through instead (crosvm
 virtio-media, served by Android's external camera HAL):
 
 - `ika start --camera` (or `ika restart --camera`) uses the first video
@@ -233,8 +240,8 @@ stretching it. Super + T and Super + F work as they do in the console.
   (`ika app setti` opens Settings), and need no quotes when they contain
   spaces. An ambiguous name lists the matching apps instead of guessing.
 - Some apps are hidden from `ika app`, name matching and the menu: Android
-  Switch, the camera, the Google search app, Calculator, Calendar, Clock,
-  Contacts, Recorder and AudioFX. See `IKA_HIDDEN_APPS` in `tools/ika`. They
+  Switch, the Google search app, Calculator, Calendar, Clock, Contacts,
+  Recorder and AudioFX. See `IKA_HIDDEN_APPS` in `tools/ika`. They
   still open when given by full package name.
 - The window title is the app's label; override it with `--title=TEXT`. Window
   size is remembered per app under `~/ika/apps/PACKAGE/`; `--size=WxH` sets
@@ -270,7 +277,9 @@ stretching it. Super + T and Super + F work as they do in the console.
   console's raw frames, which costs guest CPU time. Set `IKA_APP_BIT_RATE`
   (default `80M`) to trade quality for bandwidth. `IKA_APP_CODEC_OPTIONS`
   (default `video-qp-max:int=18`) caps the encoder's quantizer to keep text
-  sharp; set it empty to remove the cap.
+  sharp; set it empty to remove the cap. Where the host's VA-API driver
+  decodes H.264 (Intel GPUs, for example), the video is decoded on the GPU;
+  otherwise in software.
 - `ika app sync` adds every launchable app to the desktop's app menu, as
   "🎮 ∙ LABEL" for games (apps declaring `android:appCategory="game"`, or listed
   in `IKA_GAME_APPS` in `tools/ika`) and "ᗩ ∙ LABEL" for other apps, in an

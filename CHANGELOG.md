@@ -1,3 +1,81 @@
+## Ika 261008, changes since release 260930
+
+### Camera
+- `ika start --camera` passes a host camera to Android: USB webcams, the
+  FaceTime camera of Apple Silicon Macs (Asahi kernel) and Intel Macs, the OBS
+  virtual camera (`--camera=obs`), or a given device (`--camera=video2`). See
+  [Camera](README.md#camera). Ika now depends on v4l-utils.
+- Android has a single front camera, emulated or passed through. The emulated
+  camera is landscape; it used to look like a portrait phone camera.
+- The Camera app (Aperture) is in the app list and menu. Photos default to
+  16:9, video records at 640x480, 720p or 1080p with AAC stereo sound, and
+  only the sizes and settings the camera supports are offered, with noise
+  reduction at every level.
+- The FaceTime camera of 2013-2017 Intel Macs (facetimehd driver) works with
+  the stock driver. Ika started cameras like it streaming before Android had
+  set them up, and Android then failed to open them.
+
+### Display
+- The display client is rebuilt on scrcpy 5.0.1 (it was a fork of 3.3.4).
+- While the console or an app window is resized, the last complete picture
+  is stretched and blurred until Android has drawn the new size, then fades
+  to it.
+- The console's resize edges are an invisible 4-pixel margin just outside the
+  window, on GNOME and KDE, Wayland and X11, so they no longer cover the edge
+  of the Android desktop.
+- The console uses about half the CPU while the screen changes: it shows
+  frames from shared memory without copying them.
+- App windows decode their video on the GPU through VA-API where the driver
+  supports H.264 (Intel, for example): on a 2011 MacBook Pro, an app window
+  went from 41% to 4% CPU. Other hosts decode in software as before.
+- Clicks work in app windows on displays with fractional scaling. Some window
+  sizes made Android resize the app's display right after it opened, and the
+  window then ignored every click; app windows now keep an even size in
+  pixels.
+- When Android disconnects, the console shows Ika's squid instead of a red
+  cross.
+
+### Graphics
+- GLES games no longer lose textures on Apple Silicon hosts. Fruit Ninja drew
+  its fruit as black shapes and was missing its menu artwork.
+- Hosts with only a software Vulkan driver (llvmpipe) default to the lighter
+  `gfxstream` GPU mode.
+- Videos no longer play pink, and the GPU faults that came with them are
+  gone: gfxstream buffers are no longer forced linear.
+- On hosts without a hardware Vulkan driver, `getchromium` installs a Chromium
+  build that starts without one; newer builds closed at startup.
+
+### App menu and notifications
+- Newly installed apps appear inside the "Android Apps (Ika)" folder on
+  GNOME instead of loose in the app grid.
+- Notifications show up on every desktop (Ika now depends on notify-send)
+  and name the app, e.g. "Starting Angry Birds 2…", instead of its package.
+- App windows show the app's own icon, and KDE's taskbar groups them under
+  their own launchers instead of the Ika console. The desktop entry is now
+  `ika.desktop`.
+
+### Android guest
+- The device is named "Ika Android Environment", with a serial number
+  starting with IKA.
+- The Google Services Framework Android ID, needed to register a device with
+  Google, is published as the `sys.ika.gsf_android_id` property.
+- Fewer errors expected on a desktop VM in the logs: power statistics without
+  a battery, mobile data without telephony, virtual display teardown.
+- The desktop tile in Overview has a solid background. Its wallpaper
+  background was drawn unscaled and left part of the tile empty on large
+  displays.
+
+### User builds
+- ADB works on user builds with authentication on: Ika passes your
+  `~/.android/adbkey` to the guest at each start, and only that key is
+  accepted.
+
+### Other
+- The boot timeout is longer, for older systems.
+- Packages build against pinned static FFmpeg 9.0.2, SDL 3.4.18 and libusb
+  instead of the distribution's libraries. libva is a build dependency; at
+  runtime it is loaded only when installed.
+
 ## Ika 260930, changes since release 260928
 
 ### Sharper windows

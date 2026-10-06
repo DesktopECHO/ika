@@ -1,8 +1,8 @@
 # Ika changes to scrcpy
 
-This is [scrcpy] 5.0.1 (imported unchanged in its own commit) with the changes
-that make it Ika's display client: the desktop console of the Cuttlefish main
-display, and the windows of single apps (`ika app`).
+This is [scrcpy] 5.0.1 with the changes that make it Ika's display client: the
+desktop console of the Cuttlefish main display, and the windows of single apps
+(`ika app`).
 
 [scrcpy]: https://github.com/Genymobile/scrcpy
 

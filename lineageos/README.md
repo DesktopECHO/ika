@@ -49,6 +49,8 @@ This repository owns product policy only:
 - build/package helper scripts
 - documentation and validation scripts
 - source-level patches for the projects that cannot be customized by overlays
+- small desktop helper apps under `packages/` (`IkaGsfId` publishes the Google
+  Services Framework Android ID as `sys.ika.gsf_android_id`)
 
 Behavioral framework, Launcher, SystemUI, Shell, and Cuttlefish changes are
 stored under `patches/` and applied to an official LineageOS 23.2 checkout.
@@ -60,6 +62,7 @@ without requiring separate fork branches.
 The desktop products split app compatibility identity from windowing behavior:
 
 - Android and app stores see a tablet-shaped, Wi-Fi-only, non-telephony device
+  named "Ika Android Environment", with a single front camera
 - desktop/freeform mode is re-applied at boot
 - taskbar clicks focus, restore, or open desktop windows instead of entering
   split selection
