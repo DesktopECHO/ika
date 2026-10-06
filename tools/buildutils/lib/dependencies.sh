@@ -29,27 +29,28 @@ LINEAGEOS_PRIVILEGED_HELPERS_LOADED=0
 function rpm_build_dependency_packages() {
   local -a packages=(
     # Core RPM build tooling
-    rpm-build rpmdevtools systemd-rpm-macros
+    rpm-build rpmdevtools systemd-devel systemd-rpm-macros
 
-    # cuttlefish-base BuildRequires (Bazel C++ build). FFmpeg pkg-config
-    # capabilities accept either the Fedora or RPM Fusion development stack.
-    libaom-devel "pkgconfig(libavdevice)" "pkgconfig(libswscale)"
+    # cuttlefish-base BuildRequires (Bazel C++ build).
+    libaom-devel nasm wget
     "pkgconfig(libv4l2)" clang-devel
-    cmake fmt-devel gcc-c++ gflags-devel git glog-devel gtest-devel
-    jsoncpp-devel libX11-devel libXext-devel libcurl-devel libcap-devel
-    libdrm-devel libxcrypt-compat libuuid-devel libxml2-devel libsrtp-devel
+    cmake fmt-devel gcc-c++ gflags-devel git libtool glog-devel gtest-devel
+    jsoncpp-devel libX11-devel libXcursor-devel libXext-devel libXfixes-devel
+    libXi-devel libXrandr-devel libXScrnSaver-devel libcurl-devel libcap-devel
+    libdecor-devel libdrm-devel libxcrypt-compat libuuid-devel libxml2-devel libsrtp-devel
+    libxkbcommon-devel
     opus-devel openssl openssl-devel perl-FindBin pkgconf-pkg-config
     protobuf-c-devel protobuf-compiler protobuf-devel python3
-    mesa-libgbm-devel virglrenderer-devel wayland-devel which xxd xz-devel
+    mesa-libgbm-devel virglrenderer-devel wayland-devel wayland-protocols-devel
+    which xxd xz-devel
     z3-devel
 
     # cuttlefish-frontend BuildRequires (Go + Node.js)
     curl golang npm
 
     # ika-base scrcpy viewer BuildRequires (Meson C build + scrcpy-server Java build)
-    meson ninja-build java-25-openjdk-devel SDL3-devel pipewire-devel
-    "pkgconfig(libavcodec)" "pkgconfig(libavformat)" "pkgconfig(libavutil)"
-    "pkgconfig(libswresample)" libusb1-devel vulkan-headers libicu-devel
+    meson ninja-build java-25-openjdk-devel libglvnd-devel alsa-lib-devel pipewire-devel
+    vulkan-headers libicu-devel
 
     # Runtime tools needed during rpmbuild
     rsync pigz
@@ -75,8 +76,10 @@ function deb_build_dependency_packages() {
     libgoogle-glog-dev libgtest-dev libjsoncpp-dev liblzma-dev libopus-dev
     openssl libprotobuf-c-dev libprotobuf-dev libsrtp2-dev libssl-dev
     libvirglrenderer-dev libxml2-dev libz3-dev libicu-dev
-    libvulkan-dev libgl-dev libgles-dev libegl-dev libcap-dev libdrm-dev
-    libgbm-dev libwayland-dev libva-dev libzstd-dev pkgconf protobuf-compiler
+    libvulkan-dev libgl-dev libgles-dev libegl-dev libcap-dev libdrm-dev libdecor-0-dev
+    libgbm-dev libwayland-dev wayland-protocols libva-dev libxkbcommon-dev
+    libxcursor-dev libxfixes-dev libxi-dev libxrandr-dev libxss-dev libzstd-dev
+    pkgconf protobuf-compiler
     uuid-dev xxd
 
     # cuttlefish-frontend Build-Depends (Go + Node.js)
@@ -85,7 +88,8 @@ function deb_build_dependency_packages() {
     # ika-base pinned static multimedia dependencies (crosvm + scrcpy), plus
     # the scrcpy-server Java build
     autoconf automake ca-certificates default-jdk libtool meson nasm ninja-build
-    libpipewire-0.3-dev libsdl3-dev libusb-1.0-0-dev libv4l-dev wget xz-utils
+    libasound2-dev libpipewire-0.3-dev libudev-dev libv4l-dev wget xz-utils
+    libdbus-1-dev libibus-1.0-dev libpulse-dev libsndio-dev libx11-dev libxext-dev
     zlib1g-dev
 
     # LineageOS Desktop ROM host tools + Bazelisk prerequisites — previously
@@ -117,6 +121,7 @@ function deb_mesa_version_packages() {
 function arch_build_dependency_packages() {
   local -a packages=(
     base-devel
+    alsa-lib
     aom
     android-tools
     7zip
@@ -129,7 +134,6 @@ function arch_build_dependency_packages() {
     e2fsprogs
     erofs-utils
     file
-    ffmpeg
     findutils
     fmt
     gawk
@@ -146,11 +150,18 @@ function arch_build_dependency_packages() {
     jsoncpp
     kmod
     libcap
+    libdecor
     libdrm
-    libusb
+    libpipewire
     libsrtp
     libx11
+    libxcursor
     libxext
+    libxfixes
+    libxi
+    libxkbcommon
+    libxrandr
+    libxss
     libxml2
     # The Bazel-downloaded LLVM toolchain's ld.lld links against libxml2.so.2;
     # Arch's libxml2 2.14+ ships libxml2.so.16 and moved the old ABI here.
@@ -161,6 +172,7 @@ function arch_build_dependency_packages() {
     lz4
     mesa
     meson
+    nasm
     ninja
     npm
     openssl
@@ -174,7 +186,6 @@ function arch_build_dependency_packages() {
     python
     go
     rsync
-    sdl3
     tar
     unzip
     util-linux
@@ -183,6 +194,8 @@ function arch_build_dependency_packages() {
     virglrenderer
     vulkan-headers
     wayland
+    wayland-protocols
+    wget
     which
     xz
     z3

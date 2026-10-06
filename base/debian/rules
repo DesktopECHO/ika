@@ -113,10 +113,10 @@ override_dh_installinit:
 override_dh_auto_build:
 	# Build the pinned, minimal dependency set first. Both crosvm and scrcpy use
 	# these static FFmpeg archives, avoiding distro-specific FFmpeg SONAMEs.
+	cd $(scrcpy_src) && SCRCPY_DEPS_WORK_DIR=$(scrcpy_deps_work_dir) app/deps/libusb.sh linux native static
 	cd $(scrcpy_src) && SCRCPY_DEPS_WORK_DIR=$(scrcpy_deps_work_dir) app/deps/sdl.sh linux native static
 	cd $(scrcpy_src) && SCRCPY_DEPS_WORK_DIR=$(scrcpy_deps_work_dir) app/deps/dav1d.sh linux native static
 	cd $(scrcpy_src) && SCRCPY_DEPS_WORK_DIR=$(scrcpy_deps_work_dir) app/deps/ffmpeg.sh linux native static
-	cd $(scrcpy_src) && SCRCPY_DEPS_WORK_DIR=$(scrcpy_deps_work_dir) app/deps/libusb.sh linux native static
 	cd cvd && \
 	  BAZEL_OUTPUT_USER_ROOT="$${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$(ika_work_root)}"; \
 	  BAZEL_CACHE_ROOT="$${CUTTLEFISH_BAZEL_CACHE_ROOT:-$(ika_work_root)/cuttlefish-bazel}"; \

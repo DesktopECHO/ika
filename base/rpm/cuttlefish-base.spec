@@ -23,23 +23,28 @@ BuildRequires:  fmt-devel
 BuildRequires:  gcc-c++
 BuildRequires:  gflags-devel
 BuildRequires:  git
+BuildRequires:  libtool
 BuildRequires:  glog-devel
 BuildRequires:  gtest-devel
 BuildRequires:  jsoncpp-devel
 BuildRequires:  libX11-devel
+BuildRequires:  libXcursor-devel
 BuildRequires:  libXext-devel
+BuildRequires:  libXfixes-devel
+BuildRequires:  libXi-devel
+BuildRequires:  libXrandr-devel
+BuildRequires:  libXScrnSaver-devel
 BuildRequires:  libcurl-devel
-# Accept either Fedora's FFmpeg-free headers or RPM Fusion's FFmpeg headers.
-BuildRequires:  pkgconfig(libavdevice)
+BuildRequires:  libxkbcommon-devel
 BuildRequires:  pkgconfig(libv4l2)
 BuildRequires:  libcap-devel
+BuildRequires:  libdecor-devel
 BuildRequires:  libdrm-devel
 BuildRequires:  libicu-devel
 BuildRequires:  libxcrypt-compat
 BuildRequires:  libuuid-devel
 BuildRequires:  libxml2-devel
 BuildRequires:  libsrtp-devel
-BuildRequires:  pkgconfig(libswscale)
 BuildRequires:  opus-devel
 BuildRequires:  openssl-devel
 BuildRequires:  perl-FindBin
@@ -49,29 +54,31 @@ BuildRequires:  protobuf-compiler
 BuildRequires:  protobuf-devel
 BuildRequires:  python3
 BuildRequires:  systemd-rpm-macros
+BuildRequires:  systemd-devel
 BuildRequires:  mesa-libgbm-devel
 BuildRequires:  virglrenderer-devel
 BuildRequires:  vulkan-headers
 BuildRequires:  wayland-devel
+BuildRequires:  wayland-protocols-devel
 BuildRequires:  which
 BuildRequires:  xxd
 BuildRequires:  xz-devel
 BuildRequires:  z3-devel
 # scrcpy viewer (Meson C build), folded into ika-base.
 BuildRequires:  meson
+BuildRequires:  nasm
 BuildRequires:  ninja-build
-BuildRequires:  SDL3-devel
+BuildRequires:  wget
+BuildRequires:  pkgconfig(gl)
+BuildRequires:  alsa-lib-devel
 BuildRequires:  pipewire-devel
-BuildRequires:  libusb1-devel
-BuildRequires:  pkgconfig(libavcodec)
-BuildRequires:  pkgconfig(libavformat)
-BuildRequires:  pkgconfig(libavutil)
-BuildRequires:  pkgconfig(libswresample)
 
 Requires:       bsdtar
 Requires:       curl
 # ika app sync edits desktop menu launchers.
 Requires:       desktop-file-utils
+# ika app reports progress and errors from menu launchers with notify-send.
+Requires:       libnotify
 Requires:       dnsmasq
 Requires:       iproute
 Requires:       libX11
@@ -207,6 +214,8 @@ pushd base/cvd >/dev/null
 # under the repository's ika-work directory.
 REPO_ROOT="$(realpath ../..)"
 WORK_ROOT="${IKA_WORK_ROOT:-$REPO_ROOT/ika-work}"
+SCRCPY_DEPS_WORK_DIR="$WORK_ROOT/scrcpy-deps"
+SCRCPY_STATIC_DEPS="$SCRCPY_DEPS_WORK_DIR/install/linux-native-static"
 BAZEL_CACHE_ROOT="${CUTTLEFISH_BAZEL_CACHE_ROOT:-$WORK_ROOT/cuttlefish-bazel}"
 BAZEL_OUTPUT_USER_ROOT="${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$WORK_ROOT}"
 BAZEL_REPOSITORY_CACHE="$BAZEL_CACHE_ROOT/repository"
@@ -221,6 +230,11 @@ mkdir -p "$BAZEL_OUTPUT_USER_ROOT" "$BAZEL_REPOSITORY_CACHE" "$BAZEL_DISK_CACHE"
 # rpmbuild BUILD directory. That directory is transient and can hit space
 # limits while external git repos are materialized.
 export TMPDIR="$BAZEL_TMPDIR"
+
+SCRCPY_DEPS_WORK_DIR="$SCRCPY_DEPS_WORK_DIR" ../../scrcpy/app/deps/libusb.sh linux native static
+SCRCPY_DEPS_WORK_DIR="$SCRCPY_DEPS_WORK_DIR" ../../scrcpy/app/deps/sdl.sh linux native static
+SCRCPY_DEPS_WORK_DIR="$SCRCPY_DEPS_WORK_DIR" ../../scrcpy/app/deps/dav1d.sh linux native static
+SCRCPY_DEPS_WORK_DIR="$SCRCPY_DEPS_WORK_DIR" ../../scrcpy/app/deps/ffmpeg.sh linux native static
 
 # Shut down stale Bazel servers from earlier or concurrent builds that share
 # this --output_user_root. Two servers racing on the shared caches and the
@@ -267,6 +281,10 @@ while true; do
     --repo_env=CARGO_BAZEL_TIMEOUT="$CARGO_BAZEL_TIMEOUT" \
     --repo_env=GIT_CONFIG_GLOBAL="$BAZEL_GIT_CONFIG" \
     --repo_env=GIT_CONFIG_NOSYSTEM=1 \
+    --action_env=PKG_CONFIG_PATH="$SCRCPY_STATIC_DEPS/lib/pkgconfig" \
+    --action_env=LIBAVCODEC_STATIC=1 \
+    --action_env=LIBAVUTIL_STATIC=1 \
+    --action_env=LIBSWSCALE_STATIC=1 \
     --workspace_status_command=../stamp_helper.sh \
     --build_tag_filters=-clang-tidy; then
     break
@@ -289,18 +307,32 @@ while true; do
   echo "Bazel build failed, retrying in ${retry_delay}s (${retry_count}/${max_retries})..." >&2
   sleep "$retry_delay"
 done
+if readelf -d bazel-bin/cuttlefish/package/cuttlefish-common/bin/crosvm | grep -Eq 'Shared library: \[(libav|libsw)'; then
+  echo "Error: crosvm still has a shared FFmpeg dependency" >&2
+  readelf -d bazel-bin/cuttlefish/package/cuttlefish-common/bin/crosvm | grep 'Shared library' >&2
+  exit 1
+fi
 popd >/dev/null
 
 # Build the scrcpy viewer (folded in from the former ika-scrcpy package). The
 # prebuilt scrcpy-server APK is bundled in the source tarball at
 # scrcpy/scrcpy-server (refreshed by tools/buildutils/build_package.sh).
 meson setup scrcpy _build_scrcpy \
+  --pkg-config-path="$SCRCPY_STATIC_DEPS/lib/pkgconfig" \
+  -Dc_args="-I$SCRCPY_STATIC_DEPS/include" \
+  -Dc_link_args="-L$SCRCPY_STATIC_DEPS/lib" \
     --buildtype=release \
     --prefix=/usr/lib/cuttlefish-common \
     --bindir=bin \
+    -Dstatic=true \
     -Dprebuilt_server=scrcpy-server \
     -Dcompile_server=true
 meson compile -C _build_scrcpy
+if readelf -d _build_scrcpy/app/scrcpy | grep -Eq 'Shared library: \[(libav|libsw)'; then
+  echo "Error: scrcpy still has a shared FFmpeg dependency" >&2
+  readelf -d _build_scrcpy/app/scrcpy | grep 'Shared library' >&2
+  exit 1
+fi
 
 %install
 rm -rf %{buildroot}
