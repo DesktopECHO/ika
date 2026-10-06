@@ -238,16 +238,17 @@ override_dh_install:
 	install -d debian/ika-base/usr/share/icons/hicolor/256x256/apps
 	install -m 0644 \
 	    ${cuttlefish_common}/share/applications/scrcpy.desktop \
-	    debian/ika-base/usr/share/applications/ika-scrcpy.desktop
+	    debian/ika-base/usr/share/applications/ika.desktop
 	install -m 0644 \
 	    ${cuttlefish_common}/share/icons/hicolor/256x256/apps/scrcpy.png \
 	    debian/ika-base/usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
 	sed -i \
 	    -e 's#^Exec=.*#Exec=ika start#' \
 	    -e 's#^Name=.*#Name=Ika#' \
+	    -e 's#^Comment=.*#Comment=Open the Ika desktop window#' \
 	    -e 's#^Icon=.*#Icon=ika-scrcpy#' \
-	    -e '/^StartupNotify=/a StartupWMClass=scrcpy' \
-	    debian/ika-base/usr/share/applications/ika-scrcpy.desktop
+	    -e '/^StartupNotify=/a StartupWMClass=ika' \
+	    debian/ika-base/usr/share/applications/ika.desktop
 
 # Repair output files bazel actions made executable
 .PHONY: override_dh_fixperms

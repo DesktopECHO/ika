@@ -359,7 +359,7 @@ install -d %{buildroot}/usr/share/icons/hicolor/256x256/apps
 
 install -m 0644 \
   %{buildroot}/usr/lib/cuttlefish-common/share/applications/scrcpy.desktop \
-  %{buildroot}/usr/share/applications/ika-scrcpy.desktop
+  %{buildroot}/usr/share/applications/ika.desktop
 install -m 0644 \
   %{buildroot}/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps/scrcpy.png \
   %{buildroot}/usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
@@ -367,9 +367,10 @@ install -m 0644 \
 sed -i \
   -e 's#^Exec=.*#Exec=ika start#' \
   -e 's#^Name=.*#Name=Ika#' \
+  -e 's#^Comment=.*#Comment=Open the Ika desktop window#' \
   -e 's#^Icon=.*#Icon=ika-scrcpy#' \
-  -e '/^StartupNotify=/a StartupWMClass=scrcpy' \
-  %{buildroot}/usr/share/applications/ika-scrcpy.desktop
+  -e '/^StartupNotify=/a StartupWMClass=ika' \
+  %{buildroot}/usr/share/applications/ika.desktop
 
 # Bazel package outputs are copied with their original mode bits, which can
 # leave files read-only in BUILDROOT. Keep staging copies writable so any later
@@ -514,7 +515,7 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /bin/ika
 /usr/bin/cvd
 /usr/lib/cuttlefish-common
-/usr/share/applications/ika-scrcpy.desktop
+/usr/share/applications/ika.desktop
 /usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
 %config(noreplace) /etc/firewalld/zones/cuttlefish.xml
 /etc/NetworkManager/conf.d/99-cuttlefish.conf

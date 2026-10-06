@@ -246,16 +246,17 @@ package_ika-base() {
   install -d "${pkgdir}/usr/share/icons/hicolor/256x256/apps"
   install -m 0644 \
     "${pkgdir}/usr/lib/cuttlefish-common/share/applications/scrcpy.desktop" \
-    "${pkgdir}/usr/share/applications/ika-scrcpy.desktop"
+    "${pkgdir}/usr/share/applications/ika.desktop"
   install -m 0644 \
     "${pkgdir}/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps/scrcpy.png" \
     "${pkgdir}/usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png"
   sed -i \
     -e 's#^Exec=.*#Exec=ika start#' \
     -e 's#^Name=.*#Name=Ika#' \
+    -e 's#^Comment=.*#Comment=Open the Ika desktop window#' \
     -e 's#^Icon=.*#Icon=ika-scrcpy#' \
-    -e '/^StartupNotify=/a StartupWMClass=scrcpy' \
-    "${pkgdir}/usr/share/applications/ika-scrcpy.desktop"
+    -e '/^StartupNotify=/a StartupWMClass=ika' \
+    "${pkgdir}/usr/share/applications/ika.desktop"
 
   install -Dpm0644 "${root}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
   install -Dpm0644 "${root}/scrcpy/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.scrcpy"
