@@ -349,7 +349,7 @@ declare -A CVD_LOGGING_DEFAULTS=(
 # Boot & Logging Configuration Defaults (internal use only)
 # ============================================================================
 declare -A CVD_BOOT_DEFAULTS=(
-  [boot_timeout_sec]="120"
+  [boot_timeout_sec]="150"
 )
 
 # Android Settings reports internal storage capacity in decimal GB. Cuttlefish's
@@ -392,6 +392,13 @@ CVD_GPU_MODE="${CVD_GPU_DEFAULTS[gpu_mode]}"
 : "${CVD_HOST_OUT:=${PACKAGED_CVD_HOST_OUT}}"
 : "${CVD_PRODUCT_OUT:=${DEFAULT_CVD_PRODUCT_OUT}}"
 : "${CVD_HOME_DIR:=${HOME}/ika}"
+HOST_HOME="${HOME}"
+USER_ADB_PRIVATE_KEY="${HOST_HOME}/.android/adbkey"
+USER_ADB_PUBLIC_KEY="${USER_ADB_PRIVATE_KEY}.pub"
+CVD_BUILD_VARIANT=""
+if [[ -r "${CVD_PRODUCT_OUT}/ika-build-variant" ]]; then
+  IFS= read -r CVD_BUILD_VARIANT < "${CVD_PRODUCT_OUT}/ika-build-variant" || true
+fi
 mkdir -p "${CVD_HOME_DIR}"
 CVD_TMP_DIR="${CVD_HOME_DIR}/tmp"
 mkdir -p "${CVD_TMP_DIR}"
@@ -1249,6 +1256,56 @@ vulkaninfo_summary() {
   env -u DISPLAY -u WAYLAND_DISPLAY vulkaninfo --summary 2>/dev/null
 }
 
+vulkan_summary_has_only_software_devices() {
+  local summary="$1"
+
+  awk '
+    function finish_device() {
+      if (!in_device) {
+        return
+      }
+      device_count++
+      if (software_device) {
+        software_count++
+      }
+    }
+    /^GPU[0-9]+:/ {
+      finish_device()
+      in_device = 1
+      software_device = 0
+      next
+    }
+    in_device {
+      line = tolower($0)
+      if (line ~ /(llvmpipe|lavapipe|swiftshader|software rasterizer|software device)/) {
+        software_device = 1
+      }
+    }
+    END {
+      finish_device()
+      exit !(device_count > 0 && device_count == software_count)
+    }
+  ' <<<"${summary}"
+}
+
+default_gpu_mode_for_start() {
+  local summary
+
+  if user_supplied_flag "gpu_mode" "$@"; then
+    start_arg_value "gpu_mode" "${CVD_GPU_DEFAULTS[gpu_mode]}" "$@"
+    return 0
+  fi
+
+  summary="$(vulkaninfo_summary || true)"
+  if [[ -n "${summary}" ]] && vulkan_summary_has_only_software_devices "${summary}"; then
+    log "only software Vulkan devices detected; defaulting gpu_mode=gfxstream"
+    printf '%s\n' "gfxstream"
+    return 0
+  fi
+
+  printf '%s\n' "${CVD_GPU_DEFAULTS[gpu_mode]}"
+}
+
 primary_vulkan_device_is_llvmpipe() {
   local summary
   local primary_device
@@ -1820,15 +1877,27 @@ host_color_scheme() {
   esac
 }
 
-append_host_timezone_arg() {
+append_bootconfig_args() {
   local -n args_array="$1"
   local tz
+  local bootconfig_value=""
 
   tz="$(host_timezone)"
-  [[ -n "${tz}" ]] || return 0
+  if [[ -n "${tz}" ]]; then
+    bootconfig_value="androidboot.timezone=\"${tz}\" androidboot.cuttlefish_service_bluetooth_checker=false"
+    log "timezone: ${tz}"
+  fi
 
-  args_array+=("--extra_bootconfig_args=androidboot.timezone=\"${tz}\" androidboot.cuttlefish_service_bluetooth_checker=false")
-  log "timezone: ${tz}"
+  if is_user_build; then
+    [[ -n "${USER_ADB_PUBLIC_KEY_VALUE:-}" ]] || {
+      log "public ADB key was not prepared for ${USER_ADB_PRIVATE_KEY}"
+      return 1
+    }
+    bootconfig_value+="${bootconfig_value:+ }androidboot.ika.adb_pubkey=${USER_ADB_PUBLIC_KEY_VALUE}"
+  fi
+
+  [[ -n "${bootconfig_value}" ]] || return 0
+  args_array+=("--extra_bootconfig_args=${bootconfig_value}")
 }
 
 append_cvd_env_args() {
@@ -1836,6 +1905,7 @@ append_cvd_env_args() {
   local config_path="${2:-}"
   local glibc_tunables
   local radv_debug
+  local adb_vendor_keys
 
   env_args_ref+=(
     "HOME=${CVD_HOME_DIR}"
@@ -1844,6 +1914,12 @@ append_cvd_env_args() {
     "ANDROID_SOONG_HOST_OUT=${CVD_HOST_OUT}"
     "ANDROID_PRODUCT_OUT=${CVD_PRODUCT_OUT}"
   )
+
+  if is_user_build; then
+    adb_vendor_keys="${USER_ADB_PRIVATE_KEY}"
+    [[ -n "${ADB_VENDOR_KEYS:-}" ]] && adb_vendor_keys+=":${ADB_VENDOR_KEYS}"
+    env_args_ref+=("ADB_VENDOR_KEYS=${adb_vendor_keys}")
+  fi
 
   # gfxstream creates its host EGL display without a window-system surface.
   # Selecting this explicitly also avoids inheriting a broken/unavailable X11
@@ -2200,37 +2276,85 @@ make_deadline() {
   fi
 }
 
+resolve_adb_bin() {
+  if [[ -x "${CVD_ADB_BIN}" ]]; then
+    printf '%s\n' "${CVD_ADB_BIN}"
+  else
+    command -v adb || true
+  fi
+}
+
+is_user_build() {
+  [[ "${CVD_BUILD_VARIANT}" == "user" ]]
+}
+
+prepare_user_adb_key() {
+  is_user_build || return 0
+
+  local adb_bin
+  local public_key_tmp
+  local public_key
+  mkdir -p "${HOST_HOME}/.android" || return 1
+  adb_bin="$(resolve_adb_bin)"
+  [[ -n "${adb_bin}" ]] || {
+    log "adb is required to provision the user ADB key"
+    return 1
+  }
+
+  if [[ ! -s "${USER_ADB_PRIVATE_KEY}" ]]; then
+    "${adb_bin}" keygen "${USER_ADB_PRIVATE_KEY}" >/dev/null || {
+      log "could not generate the user ADB key: ${USER_ADB_PRIVATE_KEY}"
+      return 1
+    }
+  fi
+  public_key="$("${adb_bin}" pubkey "${USER_ADB_PRIVATE_KEY}")" || {
+    log "could not derive the public user ADB key: ${USER_ADB_PRIVATE_KEY}"
+    return 1
+  }
+  USER_ADB_PUBLIC_KEY_VALUE="${public_key%% *}"
+  [[ -n "${USER_ADB_PUBLIC_KEY_VALUE}" ]] || {
+    log "adb returned an empty public key for ${USER_ADB_PRIVATE_KEY}"
+    return 1
+  }
+  if ! printf '%s\n' "${public_key}" | cmp -s - "${USER_ADB_PUBLIC_KEY}"; then
+    public_key_tmp="$(mktemp "${USER_ADB_PUBLIC_KEY}.XXXXXX")" || return 1
+    if ! printf '%s\n' "${public_key}" > "${public_key_tmp}"; then
+      rm -f "${public_key_tmp}"
+      return 1
+    fi
+    mv -f "${public_key_tmp}" "${USER_ADB_PUBLIC_KEY}"
+  fi
+  chmod 600 "${USER_ADB_PRIVATE_KEY}" || return 1
+  chmod 644 "${USER_ADB_PUBLIC_KEY}" || return 1
+}
+
+host_adb() {
+  local timeout_seconds="$1"
+  shift
+  local adb_bin
+
+  adb_bin="$(resolve_adb_bin)"
+  [[ -n "${adb_bin}" ]] || return 1
+  timeout "${timeout_seconds}" "${adb_bin}" "$@"
+}
+
 adb_boot_completed() {
   local adb_serial="$1"
-  local adb_bin
   local boot_completed
-
-  if [[ -x "${CVD_ADB_BIN}" ]]; then
-    adb_bin="${CVD_ADB_BIN}"
-  else
-    adb_bin="$(command -v adb || true)"
-  fi
-  [[ -n "${adb_bin}" ]] || return 1
 
   # timeout guards against the dead-guest host proxy accepting the connection
   # and never answering, which would stall wait_for_boot's poll loop.
-  boot_completed="$(timeout 5 "${adb_bin}" -s "${adb_serial}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+  boot_completed="$(host_adb 5 -s "${adb_serial}" shell getprop sys.boot_completed 2>/dev/null \
+    | tr -d '\r' || true)"
   [[ "${boot_completed}" == "1" ]]
 }
 
 adb_guest_boot_id() {
   local adb_serial="$1"
-  local adb_bin
   local boot_id
 
-  if [[ -x "${CVD_ADB_BIN}" ]]; then
-    adb_bin="${CVD_ADB_BIN}"
-  else
-    adb_bin="$(command -v adb || true)"
-  fi
-  [[ -n "${adb_bin}" ]] || return 1
-
-  boot_id="$(timeout 5 "${adb_bin}" -s "${adb_serial}" shell cat /proc/sys/kernel/random/boot_id 2>/dev/null | tr -d '\r' || true)"
+  boot_id="$(host_adb 5 -s "${adb_serial}" shell cat /proc/sys/kernel/random/boot_id 2>/dev/null \
+    | tr -d '\r' || true)"
   [[ "${boot_id}" =~ ^[0-9a-fA-F-]{36}$ ]] || return 1
   printf '%s\n' "${boot_id}"
 }
@@ -2747,16 +2871,7 @@ use_app_window_paths() {
 guest_adb() {
   local adb_serial="$1"
   shift
-  local adb_bin
-
-  if [[ -x "${CVD_ADB_BIN}" ]]; then
-    adb_bin="${CVD_ADB_BIN}"
-  else
-    adb_bin="$(command -v adb || true)"
-  fi
-  [[ -n "${adb_bin}" ]] || return 1
-
-  timeout "${GUEST_ADB_TIMEOUT:-10}" "${adb_bin}" -s "${adb_serial}" "$@"
+  host_adb "${GUEST_ADB_TIMEOUT:-10}" -s "${adb_serial}" "$@"
 }
 
 app_is_installed() {
@@ -2973,7 +3088,7 @@ query_guest_apps() {
     | tr -d '\r' \
     | awk '
         function is_package(s) {
-          return s ~ /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/
+          return s ~ /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/
         }
         function emit_same_line(    name, package) {
           name = pending
@@ -3833,7 +3948,7 @@ refresh_app_games_file() {
   grep -v '^ika-games-done' <<<"${output//$'\r'/}" | grep -v '^$' > "${APP_GAMES_FILE}" || true
 }
 
-# Prints a launcher's menu name: the app label, marked as a game or an app.
+# Prints the launcher's menu name: the app label, marked as a game or an app.
 app_launcher_name() {
   local label="$1"
   local package="$2"
@@ -4532,13 +4647,18 @@ start_cvd() {
   record_udmabuf_baseline
   protect_overlay_resume
 
+  if ! user_supplied_flag "gpu_mode" "$@"; then
+    CVD_GPU_DEFAULTS[gpu_mode]="$(default_gpu_mode_for_start)"
+  fi
+
   apply_start_default_args args "$@"
   append_cuttlefish_audio_args args "$@"
   append_data_storage_args args "$@"
   append_arm64_kernel_page_args args "$@"
   append_gfxstream_vulkan_args args "$@"
   append_default_display_arg args "${scrcpy_dpi}" "$@"
-  append_host_timezone_arg args
+  prepare_user_adb_key || return 1
+  append_bootconfig_args args
   append_cvd_env_args cvd_env_args
 
   log_start_context "${launcher_log}" "${args[@]}"

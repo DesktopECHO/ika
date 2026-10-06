@@ -9,6 +9,13 @@ LINEAGE_SKIP_JELLY := true
 ifeq ($(TARGET_BUILD_VARIANT),userdebug)
 WITH_ADB_INSECURE := true
 endif
+
+ifeq ($(TARGET_BUILD_VARIANT),user)
+# `ika` supplies the user's public key in bootconfig at VM start.
+PRODUCT_COPY_FILES += \
+    vendor/lineage_desktop/prebuilts/adb/ika_adb_keys.rc:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/init/ika_adb_keys.rc
+endif
+
 # The build entry point exports this variable from --microg / --mtg. Keep the
 # product usable directly as well: an unset value includes neither provider.
 WITH_GMS := false
