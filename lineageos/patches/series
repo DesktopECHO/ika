@@ -23,6 +23,7 @@ prebuilts/abi-dumps/vndk patches/prebuilts-abi-dumps-vulkan-llndk-1.4.360.patch
 external/drm_hwcomposer patches/external-drm-hwcomposer-upstream-stability.patch
 external/minigbm patches/external-minigbm-upstream-stability.patch
 external/minigbm patches/external-minigbm.patch
+external/minigbm patches/external-minigbm-gfxstream-no-forced-linear.patch
 external/deqp-deps/glslang patches/external-deqp-deps-glslang-validator-host.patch
 external/mesa3d patches/external-mesa3d.patch
 external/mesa3d patches/external-mesa3d-gfxstream-descriptor-deepcopy-filter.patch

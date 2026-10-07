@@ -1,0 +1,43 @@
+Patch summary:
+On gfxstream, YV12 and non-camera IMPLEMENTATION_DEFINED buffers are not forced
+linear. The host tiles a linear resource linearly, but guest Vulkan imports it
+optimal (ANGLE sampling a video frame), so the GPU reads past it: pink video,
+DCMP/GPUVM faults.
+
+diff --git a/virtgpu_virgl.c b/virtgpu_virgl.c
+index 888d1b2..c56f928 100644
+--- a/virtgpu_virgl.c
++++ b/virtgpu_virgl.c
+@@ -1245,6 +1245,12 @@ static void virgl_3d_resolve_format_and_use_flags(struct driver *drv, uint32_t f
+ 						  uint64_t use_flags, uint32_t *out_format,
+ 						  uint64_t *out_use_flags)
+ {
++	struct virgl_priv *priv = (struct virgl_priv *)drv->priv;
++	/* gfxstream backs a linear resource with a linear image, but guest Vulkan imports
++	 * it, such as ANGLE sampling a video frame, with optimal tiling: the GPU reads
++	 * past it. So the hacks below don't force linear there. */
++	bool force_linear = !priv->caps_is_gfxstream;
++
+ 	*out_format = format;
+ 	*out_use_flags = use_flags;
+ 
+@@ -1258,7 +1264,8 @@ static void virgl_3d_resolve_format_and_use_flags(struct driver *drv, uint32_t f
+ 			/* HACK: See b/28671744 and b/264408280 */
+ 			*out_format = DRM_FORMAT_XBGR8888;
+ 			*out_use_flags &= ~BO_USE_HW_VIDEO_ENCODER;
+-			*out_use_flags |= BO_USE_LINEAR;
++			if (force_linear)
++				*out_use_flags |= BO_USE_LINEAR;
+ 		}
+ 		break;
+ 	case DRM_FORMAT_FLEX_YCbCr_420_888:
+@@ -1287,7 +1294,8 @@ static void virgl_3d_resolve_format_and_use_flags(struct driver *drv, uint32_t f
+ 	case DRM_FORMAT_YVU420_ANDROID:
+ 		*out_use_flags &= ~BO_USE_SCANOUT;
+ 		/* HACK: See b/172389166. Also see gbm_bo_create. */
+-		*out_use_flags |= BO_USE_LINEAR;
++		if (force_linear)
++			*out_use_flags |= BO_USE_LINEAR;
+ 		break;
+ 	default:
+ 		break;
