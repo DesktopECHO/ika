@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,7 +20,11 @@
 #define SC_CF_MAGIC_DMA_BUF 0x44414b49u // IKAD: a DMA-BUF fd is attached
 #define SC_CF_MAGIC_SHM_INIT 0x53414b49u // IKAS: a memfd of slots is attached
 #define SC_CF_MAGIC_SHM_FRAME 0x4e414b49u // IKAN: a slot holds a new frame
+#define SC_CF_MAGIC_HELLO 0x48414b49u // IKAH: sent by the client on connection
+#define SC_CF_MAGIC_SHM_RELEASE 0x52414b49u // IKAR: sent when a slot is free
 #define SC_CF_VERSION 1
+// IKAS with a generation: the client must release the slots (IKAR)
+#define SC_CF_VERSION_SHM_RELEASE 2
 
 #define SC_CF_MAX_PAYLOAD (256u * 1024 * 1024)
 #define SC_CF_MAX_SLOTS 16
@@ -59,6 +64,32 @@ struct sc_cf_dma_buf_header {
 struct sc_cf_shm_init_header {
     uint32_t slot_count;
     uint32_t slot_size;
+};
+
+// Client messages: IKAH (arg0 = 1: releases slots), IKAR (arg0 = generation,
+// arg1 = slot index)
+struct sc_cf_client_msg {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t arg0;
+    uint32_t arg1;
+};
+
+// Shared memory slots, in an AVBufferRef so that they stay mapped while frames
+// point into them
+struct sc_cf_shm {
+    uint8_t *data;
+    size_t size;
+    uint32_t slot_count;
+    uint32_t slot_size;
+    uint32_t generation; // 0 if the slots are not released (copied instead)
+    int fd; // the socket (dup) to send releases, -1 if none
+};
+
+// A frame pointing into a slot
+struct sc_cf_slot {
+    AVBufferRef *shm;
+    uint32_t index;
 };
 
 // IKAN
@@ -163,15 +194,49 @@ sc_cf_recv_header(int fd, struct sc_cf_header *header, int *attached_fd) {
     return true;
 }
 
+static bool
+sc_cf_send_msg(int fd, uint32_t magic, uint32_t arg0, uint32_t arg1) {
+    struct sc_cf_client_msg msg = {
+        .magic = magic,
+        .version = SC_CF_VERSION_SHM_RELEASE,
+        .arg0 = arg0,
+        .arg1 = arg1,
+    };
+    ssize_t w;
+    do {
+        w = send(fd, &msg, sizeof(msg), MSG_NOSIGNAL);
+    } while (w < 0 && errno == EINTR);
+    return w == (ssize_t) sizeof(msg);
+}
+
 static void
-sc_cf_unmap_shm(struct sc_cf_source *source) {
-    if (source->shm) {
-        munmap(source->shm, source->shm_size);
-        source->shm = NULL;
+sc_cf_free_shm(void *opaque, uint8_t *data) {
+    (void) opaque;
+    struct sc_cf_shm *shm = (struct sc_cf_shm *) data;
+    munmap(shm->data, shm->size);
+    if (shm->fd != -1) {
+        close(shm->fd);
     }
-    source->shm_size = 0;
-    source->shm_slot_count = 0;
-    source->shm_slot_size = 0;
+    free(shm);
+}
+
+static void
+sc_cf_release_slot(struct sc_cf_shm *shm, uint32_t index) {
+    if (shm->generation) {
+        // Fails once disconnected, the server forgot the slots anyway
+        sc_cf_send_msg(shm->fd, SC_CF_MAGIC_SHM_RELEASE, shm->generation,
+                       index);
+    }
+}
+
+static void
+sc_cf_free_slot(void *opaque, uint8_t *data) {
+    (void) data;
+    struct sc_cf_slot *slot = opaque;
+    struct sc_cf_shm *shm = (struct sc_cf_shm *) slot->shm->data;
+    sc_cf_release_slot(shm, slot->index);
+    av_buffer_unref(&slot->shm);
+    free(slot);
 }
 
 static bool
@@ -238,6 +303,45 @@ sc_cf_make_frame(struct sc_cf_source *source, int fd, const uint8_t *src,
     return true;
 }
 
+// Fill source->frame with the pixels in a slot, without a copy
+static bool
+sc_cf_make_slot_frame(struct sc_cf_source *source,
+                      const struct sc_cf_shm_frame_header *h) {
+    struct sc_cf_shm *shm = (struct sc_cf_shm *) source->shm->data;
+
+    struct sc_cf_slot *slot = malloc(sizeof(*slot));
+    if (!slot) {
+        LOG_OOM();
+        return false;
+    }
+    slot->shm = av_buffer_ref(source->shm);
+    if (!slot->shm) {
+        LOG_OOM();
+        free(slot);
+        return false;
+    }
+    slot->index = h->slot_index;
+
+    uint8_t *data = shm->data + (size_t) h->slot_index * shm->slot_size;
+    AVBufferRef *buf = av_buffer_create(data, h->payload_size, sc_cf_free_slot,
+                                        slot, AV_BUFFER_FLAG_READONLY);
+    if (!buf) {
+        LOG_OOM();
+        av_buffer_unref(&slot->shm);
+        free(slot);
+        return false;
+    }
+
+    AVFrame *frame = source->frame;
+    frame->buf[0] = buf;
+    frame->data[0] = data;
+    frame->linesize[0] = h->stride;
+    frame->format = sc_cf_get_pix_fmt(h->fourcc);
+    frame->width = h->width;
+    frame->height = h->height;
+    return true;
+}
+
 static void
 sc_cf_free_dma_buf(void *opaque, uint8_t *data) {
     (void) opaque;
@@ -295,7 +399,9 @@ sc_cf_process_msg(struct sc_cf_source *source, int fd) {
         return false;
     }
 
-    if (header.version != SC_CF_VERSION) {
+    bool shm_release = header.magic == SC_CF_MAGIC_SHM_INIT
+                    && header.version == SC_CF_VERSION_SHM_RELEASE;
+    if (header.version != SC_CF_VERSION && !shm_release) {
         LOGE("Unsupported Cuttlefish frame version: %" PRIu32, header.version);
         goto error;
     }
@@ -336,28 +442,57 @@ sc_cf_process_msg(struct sc_cf_source *source, int fd) {
         }
         case SC_CF_MAGIC_SHM_INIT: {
             struct sc_cf_shm_init_header h;
+            uint32_t generation = 0;
             if (attached_fd == -1 || !sc_cf_read_all(fd, &h, sizeof(h))
+                    || (shm_release && (!sc_cf_read_all(fd, &generation,
+                                                        sizeof(generation))
+                                        || !generation))
                     || !h.slot_count || h.slot_count > SC_CF_MAX_SLOTS
                     || !h.slot_size || h.slot_size > SC_CF_MAX_PAYLOAD) {
                 LOGE("Invalid Cuttlefish shared memory setup");
                 goto error;
             }
-            size_t size = (size_t) h.slot_count * h.slot_size;
-            void *shm = mmap(NULL, size, PROT_READ, MAP_SHARED, attached_fd, 0);
-            close(attached_fd);
-            attached_fd = -1;
-            if (shm == MAP_FAILED) {
-                LOGE("Could not map Cuttlefish frame slots: %s",
-                     strerror(errno));
+            struct sc_cf_shm *shm = malloc(sizeof(*shm));
+            if (!shm) {
+                LOG_OOM();
                 goto error;
             }
-            sc_cf_unmap_shm(source);
-            source->shm = shm;
-            source->shm_size = size;
-            source->shm_slot_count = h.slot_count;
-            source->shm_slot_size = h.slot_size;
-            LOGD("Cuttlefish frame slots: %" PRIu32 " x %" PRIu32 " bytes",
-                 h.slot_count, h.slot_size);
+            shm->size = (size_t) h.slot_count * h.slot_size;
+            shm->data = mmap(NULL, shm->size, PROT_READ, MAP_SHARED,
+                             attached_fd, 0);
+            close(attached_fd);
+            attached_fd = -1;
+            if (shm->data == MAP_FAILED) {
+                LOGE("Could not map Cuttlefish frame slots: %s",
+                     strerror(errno));
+                free(shm);
+                goto error;
+            }
+            shm->slot_count = h.slot_count;
+            shm->slot_size = h.slot_size;
+            shm->generation = generation;
+            shm->fd = -1;
+            if (generation) {
+                shm->fd = fcntl(fd, F_DUPFD_CLOEXEC, 3);
+                if (shm->fd == -1) {
+                    LOGE("Could not duplicate Cuttlefish frame socket: %s",
+                         strerror(errno));
+                    sc_cf_free_shm(NULL, (uint8_t *) shm);
+                    goto error;
+                }
+            }
+            AVBufferRef *ref = av_buffer_create((uint8_t *) shm, sizeof(*shm),
+                                                sc_cf_free_shm, NULL, 0);
+            if (!ref) {
+                LOG_OOM();
+                sc_cf_free_shm(NULL, (uint8_t *) shm);
+                goto error;
+            }
+            av_buffer_unref(&source->shm);
+            source->shm = ref;
+            LOGD("Cuttlefish frame slots: %" PRIu32 " x %" PRIu32 " bytes%s",
+                 h.slot_count, h.slot_size,
+                 generation ? ", shown without a copy" : "");
             break;
         }
         case SC_CF_MAGIC_SHM_FRAME: {
@@ -365,25 +500,34 @@ sc_cf_process_msg(struct sc_cf_source *source, int fd) {
             if (!sc_cf_read_all(fd, &h, sizeof(h))) {
                 goto error;
             }
-            if (!source->shm || h.slot_index >= source->shm_slot_count
+            struct sc_cf_shm *shm =
+                source->shm ? (struct sc_cf_shm *) source->shm->data : NULL;
+            if (!shm || h.slot_index >= shm->slot_count
                     || !sc_cf_check_size(h.width, h.height, h.stride)
-                    || h.payload_size > source->shm_slot_size
+                    || h.payload_size > shm->slot_size
                     || h.payload_size < (uint64_t) h.stride * h.height) {
                 LOGE("Invalid Cuttlefish shared memory frame");
                 goto error;
             }
             if (h.display_number != source->display_id
                     || sc_cf_get_pix_fmt(h.fourcc) == AV_PIX_FMT_NONE) {
+                sc_cf_release_slot(shm, h.slot_index);
                 break;
             }
-            // Copy the slot, the server reuses it for a later frame
-            const uint8_t *slot =
-                source->shm + (size_t) h.slot_index * source->shm_slot_size;
-            if (!sc_cf_make_frame(source, fd, slot, h.width, h.height,
-                                  h.fourcc, h.stride, h.payload_size)) {
-                goto error;
+            bool ok;
+            if (shm->generation) {
+                ok = sc_cf_make_slot_frame(source, &h);
+                if (!ok) {
+                    sc_cf_release_slot(shm, h.slot_index);
+                }
+            } else {
+                // Copy the slot, the server reuses it for a later frame
+                const uint8_t *slot =
+                    shm->data + (size_t) h.slot_index * shm->slot_size;
+                ok = sc_cf_make_frame(source, fd, slot, h.width, h.height,
+                                      h.fourcc, h.stride, h.payload_size);
             }
-            if (!sc_cf_push(source)) {
+            if (!ok || !sc_cf_push(source)) {
                 goto error;
             }
             break;
@@ -479,6 +623,12 @@ run_cf_source(void *data) {
         error_logged = false;
         LOGD("Connected to Cuttlefish frame socket %s", source->socket_path);
 
+        // Ask for the slots to be released by the client instead of copied (an
+        // older server ignores it)
+        if (!sc_cf_send_msg(fd, SC_CF_MAGIC_HELLO, 1, 0)) {
+            LOGW("Could not send Cuttlefish frame socket hello");
+        }
+
         while (sc_cf_process_msg(source, fd));
 
         sc_mutex_lock(&source->mutex);
@@ -486,7 +636,7 @@ run_cf_source(void *data) {
         stopped = source->stopped;
         sc_mutex_unlock(&source->mutex);
         close(fd);
-        sc_cf_unmap_shm(source);
+        av_buffer_unref(&source->shm);
         av_frame_unref(source->frame);
 
         if (!stopped) {
@@ -529,9 +679,6 @@ sc_cf_source_init(struct sc_cf_source *source, const char *socket_path,
     source->stopped = false;
     source->fd = -1;
     source->shm = NULL;
-    source->shm_size = 0;
-    source->shm_slot_count = 0;
-    source->shm_slot_size = 0;
     source->pool = NULL;
     source->pool_size = 0;
     source->sinks_open = false;
@@ -568,7 +715,7 @@ sc_cf_source_join(struct sc_cf_source *source) {
 
 void
 sc_cf_source_destroy(struct sc_cf_source *source) {
-    sc_cf_unmap_shm(source);
+    av_buffer_unref(&source->shm);
     av_buffer_pool_uninit(&source->pool);
     av_frame_free(&source->frame);
     sc_mutex_destroy(&source->mutex);

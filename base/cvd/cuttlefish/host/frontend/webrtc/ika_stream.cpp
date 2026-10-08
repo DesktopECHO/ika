@@ -44,6 +44,12 @@ constexpr uint32_t kDmabufFrameVersion = 1;
 constexpr uint32_t kShmInitMagic = 0x53414b49;    // "IKAS", little-endian.
 constexpr uint32_t kShmNotifyMagic = 0x4e414b49;  // "IKAN", little-endian.
 constexpr uint32_t kShmFrameVersion = 1;
+// Slots released by the client: IKAS carries a generation, and the client
+// sends IKAR once it no longer reads a slot
+constexpr uint32_t kShmReleaseVersion = 2;
+constexpr uint32_t kClientHelloMagic = 0x48414b49;   // "IKAH", little-endian.
+constexpr uint32_t kSlotReleaseMagic = 0x52414b49;   // "IKAR", little-endian.
+constexpr int kClientHelloTimeoutMs = 100;
 constexpr size_t kRawBufferPoolSize = 4;
 constexpr int kAcceptPollTimeoutMs = 100;
 constexpr int kFrameSendTimeoutMs = 50;
@@ -66,6 +72,23 @@ struct ShmInitHeader {
   uint32_t version;
   uint32_t slot_count;
   uint32_t slot_size;
+};
+
+struct ShmInitReleaseHeader {
+  uint32_t magic;
+  uint32_t version;
+  uint32_t slot_count;
+  uint32_t slot_size;
+  uint32_t generation;
+};
+
+// Sent by the client: IKAH (arg0 = 1 if it releases slots) on connection,
+// then IKAR (arg0 = generation, arg1 = slot index)
+struct ClientMessage {
+  uint32_t magic;
+  uint32_t version;
+  uint32_t arg0;
+  uint32_t arg1;
 };
 
 struct ShmFrameHeader {
@@ -412,6 +435,18 @@ void RawFrameStreamer::ClientLoop(int client_fd) {
   uint64_t sent_generation = 0;
   ClientShm shm;
 
+  // A client releasing the slots says so as soon as it connects
+  pollfd pfd = {
+      .fd = client_fd,
+      .events = POLLIN,
+      .revents = 0,
+  };
+  if (poll(&pfd, 1, kClientHelloTimeoutMs) > 0 &&
+      !ReadClientMessages(client_fd, shm)) {
+    CloseClientShm(shm);
+    return;
+  }
+
   while (true) {
     Frame frame;
     {
@@ -520,16 +555,21 @@ RawFrameStreamer::FrameSendResult RawFrameStreamer::SendShmInit(
     return FrameSendResult::kUnavailable;
   }
 
-  ShmInitHeader header = {
+  const uint32_t generation =
+      shm.client_releases_slots ? shm.last_generation + 1 : 0;
+  ShmInitReleaseHeader header = {
       .magic = kShmInitMagic,
-      .version = kShmFrameVersion,
+      .version = generation ? kShmReleaseVersion : kShmFrameVersion,
       .slot_count = kSlotCount,
       .slot_size = static_cast<uint32_t>(slot_size),
+      .generation = generation,
   };
+  const size_t header_size =
+      generation ? sizeof(ShmInitReleaseHeader) : sizeof(ShmInitHeader);
 
   iovec iov = {};
   iov.iov_base = &header;
-  iov.iov_len = sizeof(header);
+  iov.iov_len = header_size;
 
   alignas(struct cmsghdr) char control[CMSG_SPACE(sizeof(int))] = {};
   msghdr msg = {};
@@ -544,7 +584,7 @@ RawFrameStreamer::FrameSendResult RawFrameStreamer::SendShmInit(
   cmsg->cmsg_len = CMSG_LEN(sizeof(int));
   memcpy(CMSG_DATA(cmsg), &shm_fd, sizeof(int));
 
-  bool sent = SendMessageWithDeadline(fd, &msg, sizeof(header));
+  bool sent = SendMessageWithDeadline(fd, &msg, header_size);
 
   if (!sent) {
     munmap(mapping, mapping_size);
@@ -558,9 +598,15 @@ RawFrameStreamer::FrameSendResult RawFrameStreamer::SendShmInit(
   shm.slot_size = slot_size;
   shm.slot_count = kSlotCount;
   shm.next_slot = 0;
+  shm.generation = generation;
+  shm.busy_slots = 0;
+  if (generation) {
+    shm.last_generation = generation;
+  }
 
   LOG(INFO) << "Using shared-memory raw frame slots: " << kSlotCount << " x "
-            << slot_size << " bytes";
+            << slot_size << " bytes"
+            << (generation ? ", released by the client" : "");
   return FrameSendResult::kSent;
 }
 
@@ -593,7 +639,10 @@ RawFrameStreamer::FrameSendResult RawFrameStreamer::SendShmFrame(
     return FrameSendResult::kFailed;
   }
 
-  const uint32_t slot_index = shm.next_slot++ % shm.slot_count;
+  uint32_t slot_index;
+  if (!AcquireShmSlot(fd, shm, &slot_index)) {
+    return FrameSendResult::kFailed;
+  }
   uint8_t* slot = shm.data + static_cast<size_t>(slot_index) * shm.slot_size;
   memcpy(slot, frame.pixels->data(), payload_size);
 
@@ -611,6 +660,82 @@ RawFrameStreamer::FrameSendResult RawFrameStreamer::SendShmFrame(
 
   return SendAll(fd, &header, sizeof(header)) ? FrameSendResult::kSent
                                               : FrameSendResult::kFailed;
+}
+
+// Read the pending client messages without blocking. Return false if the
+// connection is closed.
+bool RawFrameStreamer::ReadClientMessages(int fd, ClientShm& shm) {
+  while (true) {
+    ssize_t r = recv(fd, shm.message + shm.message_size,
+                     sizeof(shm.message) - shm.message_size, MSG_DONTWAIT);
+    if (r < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return errno == EAGAIN || errno == EWOULDBLOCK;
+    }
+    if (r == 0) {
+      return false;
+    }
+    shm.message_size += r;
+    if (shm.message_size < sizeof(shm.message)) {
+      continue;
+    }
+    shm.message_size = 0;
+
+    ClientMessage message;
+    memcpy(&message, shm.message, sizeof(message));
+    if (message.version != kShmReleaseVersion) {
+      continue;
+    }
+    if (message.magic == kClientHelloMagic) {
+      shm.client_releases_slots = message.arg0 == 1;
+    } else if (message.magic == kSlotReleaseMagic && shm.generation &&
+               message.arg0 == shm.generation &&
+               message.arg1 < shm.slot_count) {
+      shm.busy_slots &= ~(1u << message.arg1);
+    }
+  }
+}
+
+// Pick the slot for the next frame. If the client releases the slots, wait
+// until it has released one.
+bool RawFrameStreamer::AcquireShmSlot(int fd, ClientShm& shm,
+                                      uint32_t* slot_index) {
+  if (!shm.generation) {
+    *slot_index = shm.next_slot++ % shm.slot_count;
+    return true;
+  }
+
+  while (true) {
+    if (!ReadClientMessages(fd, shm)) {
+      return false;
+    }
+    for (uint32_t i = 0; i < shm.slot_count; ++i) {
+      const uint32_t index = (shm.next_slot + i) % shm.slot_count;
+      if ((shm.busy_slots & (1u << index)) == 0) {
+        shm.busy_slots |= 1u << index;
+        shm.next_slot = index + 1;
+        *slot_index = index;
+        return true;
+      }
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (stopped_) {
+        return false;
+      }
+    }
+    pollfd pfd = {
+        .fd = fd,
+        .events = POLLIN,
+        .revents = 0,
+    };
+    if (poll(&pfd, 1, kAcceptPollTimeoutMs) < 0 && errno != EINTR) {
+      return false;
+    }
+  }
 }
 
 bool RawFrameStreamer::SendDmabufFrame(int fd, const Frame& frame) {
@@ -658,7 +783,13 @@ void RawFrameStreamer::CloseClientShm(ClientShm& shm) const {
   if (shm.fd >= 0) {
     close(shm.fd);
   }
-  shm = ClientShm{};
+  shm.fd = -1;
+  shm.data = nullptr;
+  shm.slot_size = 0;
+  shm.slot_count = 4;
+  shm.next_slot = 0;
+  shm.generation = 0;
+  shm.busy_slots = 0;
 }
 
 RawFrameStreamer::Frame RawFrameStreamer::CopyLatestFrameLocked() const {
