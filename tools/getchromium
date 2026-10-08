@@ -24,6 +24,13 @@ CHROME_COMMAND_LINE_FILES = (
     "/data/local/tmp/chrome-command-line",
 )
 CHROMIUM_STAMP = os.environ.get("IKA_CHROMIUM_STAMP", "")
+# Without hardware Vulkan, Android-desktop Chromium has no OpenGL fallback unless
+# SkipVulkanBlocklist is off, and its GPU process aborts at startup.
+NO_HARDWARE_VULKAN_CHROMIUM_FLAGS = (
+    "_ --disable-features=SkipVulkanBlocklist,DefaultANGLEVulkan,VulkanFromANGLE,SkiaGraphite"
+)
+LLVMPIPE_DRIVER_RE = re.compile(r"^\s*driverName\s*=\s*llvmpipe\b", re.MULTILINE)
+VULKANINFO_TIMEOUT_SECONDS = 30
 BROWSER_APK_PRIORITY = (
     "Chromium.apk",
     "ChromePublic.apk",
@@ -258,6 +265,37 @@ def fetch_latest_revision(prefix):
 
     return revision
 
+def has_hardware_vulkan_device():
+    # Probe without a display so SSH launches with a stale DISPLAY still work.
+    env = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISPLAY")}
+    try:
+        summary = subprocess.run(
+            ["vulkaninfo", "--summary"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=VULKANINFO_TIMEOUT_SECONDS,
+        ).stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+    if not summary.strip():
+        return False
+
+    # Only the first device (GPU0, "GPUn:" plus indented properties) decides.
+    first_device = re.search(r"^GPU\d+:\n(?:[ \t].*\n?)*", summary, flags=re.MULTILINE)
+    return not LLVMPIPE_DRIVER_RE.search(first_device.group(0) if first_device else summary)
+
+def apply_chromium_gpu_flags():
+    if has_hardware_vulkan_device():
+        return
+
+    print("No hardware Vulkan device found; disabling Chromium's Vulkan-only GPU path.")
+    for path in CHROME_COMMAND_LINE_FILES:
+        run_adb_best_effort(
+            ["shell", f"echo '{NO_HARDWARE_VULKAN_CHROMIUM_FLAGS}' > {path} && chmod 644 {path}"]
+        )
+
 def cached_zip_path(prefix, revision):
     return os.path.join(
         DOWNLOAD_CACHE_DIR,
@@ -328,6 +366,7 @@ def main():
     
     try:
         if chromium_installed(wait=True):
+            apply_chromium_gpu_flags()
             write_chromium_stamp()
             return
 
@@ -386,6 +425,7 @@ def main():
         write_chromium_stamp()
         set_chromium_default_browser()
         disable_stock_browsers()
+        apply_chromium_gpu_flags()
         provision_chromium_first_run()
         relaunch_chromium_cycles()
         sync_device_storage()
