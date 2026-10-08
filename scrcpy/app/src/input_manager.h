@@ -32,6 +32,10 @@ struct sc_input_manager {
 
     uint16_t sdl_shortcut_mods;
 
+    // Ika: left clicks and drags are sent as a finger (IKA_TOUCH), for games
+    // that ignore the mouse
+    bool touch_mode;
+
     bool vfinger_down;
     bool vfinger_invert_x;
     bool vfinger_invert_y;

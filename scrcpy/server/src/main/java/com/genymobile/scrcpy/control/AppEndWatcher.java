@@ -7,11 +7,9 @@ import com.genymobile.scrcpy.wrappers.ServiceManager;
 import android.os.SystemClock;
 
 /**
- * Reports when the app on a new virtual display is gone: after the display has
- * held an activity, it stays without one for EMPTY_GRACE_MS. That covers the app
- * finishing, being killed (Android removes the task of a foreground activity it
- * cannot restore), and being moved to another display. A task Android keeps
- * while restarting the app stays on the display and does not count.
+ * Reports when the app on a new virtual display is gone: after the display has held an activity, it stays without one for EMPTY_GRACE_MS.
+ * That covers the app finishing, being killed (Android removes the task of a foreground activity it cannot restore), and being moved to
+ * another display. A task Android keeps while restarting the app stays on the display and does not count.
  */
 final class AppEndWatcher {
 
@@ -27,11 +25,9 @@ final class AppEndWatcher {
         this.onAppEnded = onAppEnded;
     }
 
-    void setDisplayId(int displayId) {
+    // Also called when the display is recreated, to follow the new id
+    synchronized void watch(int displayId) {
         this.displayId = displayId;
-    }
-
-    synchronized void start() {
         if (thread == null) {
             thread = new Thread(this::run, "app-end-watcher");
             thread.setDaemon(true);
@@ -52,10 +48,6 @@ final class AppEndWatcher {
             while (!Thread.currentThread().isInterrupted()) {
                 Thread.sleep(POLL_INTERVAL_MS);
                 int id = displayId;
-                if (id == Device.DISPLAY_ID_NONE) {
-                    continue;
-                }
-
                 int count;
                 try {
                     count = ServiceManager.getActivityTaskManager().getActivityTaskCount(id);

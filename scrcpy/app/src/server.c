@@ -18,11 +18,11 @@
 #define SC_SERVER_FILENAME "scrcpy-server"
 
 #define SC_SERVER_PATH_DEFAULT PREFIX "/share/scrcpy/" SC_SERVER_FILENAME
-// Each client pushes its own copy, named after its scid: the server deletes
-// its jar once started, which would break another client still starting from
-// a shared one.
-#define SC_DEVICE_SERVER_PATH_FORMAT "/data/local/tmp/scrcpy-server-%08x.jar"
+// Each client pushes its own copy, named after its scid: the server deletes its
+// jar once started, which would break another client starting at the same time
+// from a shared one
 #define SC_CLASSPATH_PREFIX "CLASSPATH="
+#define SC_DEVICE_SERVER_PATH_FORMAT "/data/local/tmp/scrcpy-server-%08x.jar"
 
 #define SC_ADB_PORT_DEFAULT 5555
 #define SC_SOCKET_NAME_PREFIX "scrcpy_"
@@ -59,7 +59,7 @@ get_server_path(void) {
 
 static bool
 push_server(struct sc_intr *intr, const char *serial,
-            const char *device_server_path) {
+            const char *device_path) {
     char *server_path = get_server_path();
     if (!server_path) {
         return false;
@@ -69,7 +69,7 @@ push_server(struct sc_intr *intr, const char *serial,
         free(server_path);
         return false;
     }
-    bool ok = sc_adb_push(intr, serial, server_path, device_server_path, 0);
+    bool ok = sc_adb_push(intr, serial, server_path, device_path, 0);
     free(server_path);
     return ok;
 }
@@ -116,6 +116,10 @@ sc_server_get_codec_name(enum sc_codec codec) {
             return "h265";
         case SC_CODEC_AV1:
             return "av1";
+        case SC_CODEC_VP8:
+            return "vp8";
+        case SC_CODEC_VP9:
+            return "vp9";
         case SC_CODEC_OPUS:
             return "opus";
         case SC_CODEC_AAC:
@@ -290,7 +294,7 @@ execute_server(struct sc_server *server,
         ADD_PARAM("audio_codec=%s",
             sc_server_get_codec_name(params->audio_codec));
     }
-    if (params->video && params->video_source != SC_VIDEO_SOURCE_DISPLAY) {
+    if (params->video_source != SC_VIDEO_SOURCE_DISPLAY) {
         assert(params->video_source == SC_VIDEO_SOURCE_CAMERA);
         ADD_PARAM("video_source=camera");
     }
@@ -406,6 +410,10 @@ execute_server(struct sc_server *server,
         // By default, clipboard_autosync is true
         ADD_PARAM("clipboard_autosync=false");
     }
+    if (!params->downsize_on_error) {
+        // By default, downsize_on_error is true
+        ADD_PARAM("downsize_on_error=false");
+    }
     if (!params->cleanup) {
         // By default, cleanup is true
         ADD_PARAM("cleanup=false");
@@ -418,11 +426,14 @@ execute_server(struct sc_server *server,
         VALIDATE_STRING(params->new_display);
         ADD_PARAM("new_display=%s", params->new_display);
     }
-    if (!params->flex_display) {
-        ADD_PARAM("flex_display=false");
+    if (params->flex_display) {
+        ADD_PARAM("flex_display=true");
     }
     if (params->flex_display_dpi) {
-        ADD_PARAM("dpi=%" PRIu16, params->flex_display_dpi);
+        ADD_PARAM("flex_display_dpi=%" PRIu16, params->flex_display_dpi);
+    }
+    if (params->ignore_video_encoder_constraints) {
+        ADD_PARAM("ignore_video_encoder_constraints=true");
     }
     if (params->display_ime_policy != SC_DISPLAY_IME_POLICY_UNDEFINED) {
         ADD_PARAM("display_ime_policy=%s",
@@ -433,6 +444,9 @@ execute_server(struct sc_server *server,
     }
     if (!params->vd_system_decorations) {
         ADD_PARAM("vd_system_decorations=false");
+    }
+    if (params->keep_active) {
+        ADD_PARAM("keep_active=true");
     }
     if (params->list & SC_OPTION_LIST_ENCODERS) {
         ADD_PARAM("list_encoders=true");
@@ -597,7 +611,8 @@ device_read_info(struct sc_intr *intr, sc_socket device_socket,
     }
     // in case the client sends garbage
     buf[SC_DEVICE_NAME_FIELD_LENGTH - 1] = '\0';
-    memcpy(info->device_name, (char *) buf, sizeof(info->device_name));
+    static_assert(sizeof(info->device_name) == SC_DEVICE_NAME_FIELD_LENGTH);
+    memcpy(info->device_name, buf, SC_DEVICE_NAME_FIELD_LENGTH);
 
     return true;
 }
@@ -1052,8 +1067,9 @@ run_server(void *data) {
     assert(n > 0 && (size_t) n < sizeof(server->device_server_classpath));
     (void) n;
 
-    ok = push_server(&server->intr, serial, server->device_server_classpath
-                                    + sizeof(SC_CLASSPATH_PREFIX) - 1);
+    const char *device_path =
+        server->device_server_classpath + sizeof(SC_CLASSPATH_PREFIX) - 1;
+    ok = push_server(&server->intr, serial, device_path);
     if (!ok) {
         goto error_connection_failed;
     }

@@ -16,9 +16,6 @@ sc_sdl_create_window(const char *title, int64_t x, int64_t y, int64_t width,
 struct sc_size
 sc_sdl_get_window_size(SDL_Window *window);
 
-struct sc_size
-sc_sdl_get_window_size_in_pixels(SDL_Window *window);
-
 void
 sc_sdl_set_window_size(SDL_Window *window, struct sc_size size);
 
@@ -34,20 +31,10 @@ sc_sdl_show_window(SDL_Window *window);
 void
 sc_sdl_hide_window(SDL_Window *window);
 
-struct sc_size
-sc_sdl_get_render_output_size(SDL_Renderer *renderer);
-
 bool
 sc_sdl_render_clear(SDL_Renderer *renderer);
 
 void
 sc_sdl_render_present(SDL_Renderer *renderer);
-
-/**
- * On X11, request the dark title bar variant when GTK_THEME names a dark
- * variant (e.g. "Adwaita:dark"). Does nothing elsewhere.
- */
-void
-sc_sdl_apply_gtk_theme_variant(SDL_Window *window);
 
 #endif

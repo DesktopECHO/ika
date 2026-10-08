@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <SDL3/SDL_init.h>
 #include <SDL3/SDL_mutex.h>
 
 #include "util/log.h"
@@ -104,6 +105,11 @@ sc_mutex_unlock(sc_mutex *mutex) {
 sc_thread_id
 sc_thread_get_id(void) {
     return SDL_GetCurrentThreadID();
+}
+
+bool
+sc_thread_is_main(void) {
+    return SDL_IsMainThread();
 }
 
 #ifndef NDEBUG

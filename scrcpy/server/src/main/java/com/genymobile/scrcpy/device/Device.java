@@ -2,6 +2,8 @@ package com.genymobile.scrcpy.device;
 
 import com.genymobile.scrcpy.AndroidVersions;
 import com.genymobile.scrcpy.FakeContext;
+import com.genymobile.scrcpy.display.DisplayInfo;
+import com.genymobile.scrcpy.model.DeviceApp;
 import com.genymobile.scrcpy.util.Ln;
 import com.genymobile.scrcpy.wrappers.ActivityManager;
 import com.genymobile.scrcpy.wrappers.ClipboardManager;
@@ -12,8 +14,8 @@ import com.genymobile.scrcpy.wrappers.SurfaceControl;
 import com.genymobile.scrcpy.wrappers.WindowManager;
 
 import android.annotation.SuppressLint;
-import android.content.Intent;
 import android.app.ActivityOptions;
+import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.os.Build;
@@ -25,12 +27,9 @@ import android.view.InputEvent;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public final class Device {
 
@@ -46,21 +45,6 @@ public final class Device {
     // The new display power method introduced in Android 15 does not work as expected:
     // <https://github.com/Genymobile/scrcpy/issues/5530>
     private static final boolean USE_ANDROID_15_DISPLAY_POWER = false;
-    private static final Pattern WM_SIZE_OVERRIDE_PATTERN =
-            Pattern.compile("^Override size: ([0-9]+)x([0-9]+)$",
-                    Pattern.MULTILINE);
-    private static final Pattern WM_DENSITY_OVERRIDE_PATTERN =
-            Pattern.compile("^Override density: ([0-9]+)$",
-                    Pattern.MULTILINE);
-    private static final Pattern WM_SIZE_PHYSICAL_PATTERN =
-            Pattern.compile("^Physical size: ([0-9]+)x([0-9]+)$",
-                    Pattern.MULTILINE);
-
-    // Physical size of display 0, read once; it does not change at runtime.
-    private static Size physicalDisplaySize;
-    // Whether this server turned off display scaling on display 0, or null if
-    // it has not set the scaling mode.
-    private static Boolean displayScalingDisabled;
 
     private Device() {
         // not instantiable
@@ -102,6 +86,11 @@ public final class Device {
     public static boolean isScreenOn(int displayId) {
         assert displayId != DISPLAY_ID_NONE;
         return ServiceManager.getPowerManager().isScreenOn(displayId);
+    }
+
+    public static void keepActive(int displayId) {
+        assert displayId != DISPLAY_ID_NONE;
+        ServiceManager.getPowerManager().userActivity(displayId);
     }
 
     public static void expandNotificationPanel() {
@@ -203,138 +192,6 @@ public final class Device {
             return true;
         }
         return pressReleaseKeycode(KeyEvent.KEYCODE_POWER, displayId, Device.INJECT_MODE_ASYNC);
-    }
-
-    public static Size getDisplaySizeOverride(int displayId) {
-        if (displayId != 0) {
-            Ln.w("Display size override only supported on display 0");
-            return null;
-        }
-
-        try {
-            String output = com.genymobile.scrcpy.util.Command.execReadOutput("wm",
-                    "size");
-            Matcher matcher = WM_SIZE_OVERRIDE_PATTERN.matcher(output);
-            if (!matcher.find()) {
-                return null;
-            }
-            int width = Integer.parseInt(matcher.group(1));
-            int height = Integer.parseInt(matcher.group(2));
-            return new Size(width, height);
-        } catch (Exception e) {
-            Ln.e("Could not read display size override", e);
-            return null;
-        }
-    }
-
-    public static int getDisplayDensityOverride(int displayId) {
-        if (displayId != 0) {
-            Ln.w("Display density override only supported on display 0");
-            return -1;
-        }
-
-        try {
-            String output = com.genymobile.scrcpy.util.Command.execReadOutput("wm",
-                    "density");
-            Matcher matcher = WM_DENSITY_OVERRIDE_PATTERN.matcher(output);
-            if (!matcher.find()) {
-                return -1;
-            }
-            return Integer.parseInt(matcher.group(1));
-        } catch (Exception e) {
-            Ln.e("Could not read display density override", e);
-            return -1;
-        }
-    }
-
-    private static Size getPhysicalDisplaySize() {
-        if (physicalDisplaySize == null) {
-            try {
-                String output = com.genymobile.scrcpy.util.Command.execReadOutput(
-                        "wm", "size");
-                Matcher matcher = WM_SIZE_PHYSICAL_PATTERN.matcher(output);
-                if (matcher.find()) {
-                    physicalDisplaySize = new Size(
-                            Integer.parseInt(matcher.group(1)),
-                            Integer.parseInt(matcher.group(2)));
-                }
-            } catch (Exception e) {
-                Ln.e("Could not read physical display size", e);
-            }
-        }
-        return physicalDisplaySize;
-    }
-
-    public static boolean setDisplaySizeAndDensity(int displayId, Size size,
-                                                   int density) {
-        if (displayId != 0) {
-            Ln.w("Primary display resizing only supported on display 0");
-            return false;
-        }
-
-        try {
-            // With scaling on, Android stretches an override size to fill the
-            // physical display, and the client then scales that frame again to
-            // fit its window, blurring text twice. When the size fits, turn
-            // scaling off: Android draws it 1:1, centered in the physical
-            // frame, and the client shows that region unscaled. Set the mode
-            // before the size so the new size is never shown stretched.
-            Size physical = getPhysicalDisplaySize();
-            boolean disableScaling = physical != null
-                    && size.getWidth() <= physical.getWidth()
-                    && size.getHeight() <= physical.getHeight();
-            if (displayScalingDisabled == null
-                    || displayScalingDisabled != disableScaling) {
-                com.genymobile.scrcpy.util.Command.exec("wm", "scaling",
-                        disableScaling ? "off" : "auto");
-                displayScalingDisabled = disableScaling;
-            }
-            com.genymobile.scrcpy.util.Command.exec("wm", "size",
-                    size.getWidth() + "x" + size.getHeight());
-            if (density > 0) {
-                com.genymobile.scrcpy.util.Command.exec("wm", "density",
-                        String.valueOf(density));
-            }
-            return true;
-        } catch (IOException | InterruptedException e) {
-            Ln.e("Could not apply display size/density override", e);
-            return false;
-        }
-    }
-
-    public static boolean restoreDisplaySizeAndDensity(int displayId,
-                                                       Size sizeOverride,
-                                                       int densityOverride) {
-        if (displayId != 0) {
-            Ln.w("Primary display resizing only supported on display 0");
-            return false;
-        }
-
-        boolean ok = true;
-        try {
-            if (displayScalingDisabled != null && displayScalingDisabled) {
-                com.genymobile.scrcpy.util.Command.exec("wm", "scaling", "auto");
-            }
-            displayScalingDisabled = null;
-            if (sizeOverride != null) {
-                com.genymobile.scrcpy.util.Command.exec("wm", "size",
-                        sizeOverride.getWidth() + "x" + sizeOverride.getHeight());
-            } else {
-                com.genymobile.scrcpy.util.Command.exec("wm", "size", "reset");
-            }
-
-            if (densityOverride > 0) {
-                com.genymobile.scrcpy.util.Command.exec("wm", "density",
-                        String.valueOf(densityOverride));
-            } else {
-                com.genymobile.scrcpy.util.Command.exec("wm", "density", "reset");
-            }
-        } catch (IOException | InterruptedException e) {
-            Ln.e("Could not restore display size/density override", e);
-            ok = false;
-        }
-
-        return ok;
     }
 
     /**
@@ -461,5 +318,9 @@ public final class Device {
             am.forceStopPackage(packageName);
         }
         am.startActivity(launchIntent, options);
+    }
+
+    public static void sendBroadcast(Intent intent) {
+        ServiceManager.getActivityManager().sendBroadcast(intent);
     }
 }

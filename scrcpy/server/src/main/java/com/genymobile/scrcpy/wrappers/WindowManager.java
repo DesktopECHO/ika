@@ -1,18 +1,16 @@
 package com.genymobile.scrcpy.wrappers;
 
 import com.genymobile.scrcpy.AndroidVersions;
+import com.genymobile.scrcpy.model.Size;
 import com.genymobile.scrcpy.util.Ln;
 
 import android.annotation.TargetApi;
-import android.os.Binder;
+import android.graphics.Point;
 import android.os.Build;
-import android.os.IBinder;
 import android.os.IInterface;
 import android.view.IDisplayWindowListener;
 
 import java.lang.reflect.Method;
-import java.lang.reflect.Proxy;
-import java.util.List;
 
 public final class WindowManager {
 
@@ -21,10 +19,9 @@ public final class WindowManager {
     public static final int DISPLAY_IME_POLICY_LOCAL = 0;
     public static final int DISPLAY_IME_POLICY_FALLBACK_DISPLAY = 1;
     public static final int DISPLAY_IME_POLICY_HIDE = 2;
-    // android.app.WindowConfiguration.WINDOWING_MODE_FREEFORM
-    public static final int WINDOWING_MODE_FREEFORM = 5;
-    // android.window.DisplayAreaOrganizer.FEATURE_DEFAULT_TASK_CONTAINER
-    private static final int FEATURE_DEFAULT_TASK_CONTAINER = 1;
+
+    // android.os.UserHandle.USER_CURRENT
+    private static final int USER_CURRENT = -2;
 
     private final IInterface manager;
     private Method getRotationMethod;
@@ -274,88 +271,97 @@ public final class WindowManager {
     }
 
     /**
-     * Set the windowing mode of a display's default task area via
-     * WindowContainerTransaction.
-     *
-     * This is required for Android desktop mode to operate in freeform
-     * windowing mode on virtual displays.
+     * Return the size forced on a display (as by "wm size"), or {@code null} if it has its initial size.
      */
-    @TargetApi(AndroidVersions.API_34_ANDROID_14)
-    @SuppressWarnings("unchecked")
-    public void setDisplayWindowingMode(int displayId, int windowingMode) {
-        // A Binder token used to identify this organizer during
-        // registration/unregistration with the system server.
-        IBinder organizerBinder = new Binder();
-        Object organizerProxy = null;
-        Object daoController = null;
+    public Size getForcedDisplaySize(int displayId) {
         try {
-            Class<?> serviceManagerClass = Class.forName("android.os.ServiceManager");
-            Method getServiceMethod = serviceManagerClass.getDeclaredMethod("getService", String.class);
-            IBinder wocBinder = (IBinder) getServiceMethod.invoke(null, "window_organizer");
-            if (wocBinder == null) {
-                Ln.w("window_organizer service not available");
-                return;
-            }
+            Point initial = new Point();
+            Point base = new Point();
+            manager.getClass().getMethod("getInitialDisplaySize", int.class, Point.class).invoke(manager, displayId, initial);
+            manager.getClass().getMethod("getBaseDisplaySize", int.class, Point.class).invoke(manager, displayId, base);
+            return base.equals(initial) ? null : new Size(base.x, base.y);
+        } catch (ReflectiveOperationException e) {
+            Ln.e("Could not read the display size", e);
+            return null;
+        }
+    }
 
-            Class<?> iWocStubClass = Class.forName("android.window.IWindowOrganizerController$Stub");
-            Object windowOrganizerController = iWocStubClass.getDeclaredMethod("asInterface", IBinder.class).invoke(null, wocBinder);
+    /**
+     * Return the physical size of a display, or {@code null} if unknown.
+     */
+    public Size getInitialDisplaySize(int displayId) {
+        try {
+            Point initial = new Point();
+            manager.getClass().getMethod("getInitialDisplaySize", int.class, Point.class).invoke(manager, displayId, initial);
+            return new Size(initial.x, initial.y);
+        } catch (ReflectiveOperationException e) {
+            Ln.e("Could not read the initial display size", e);
+            return null;
+        }
+    }
 
-            daoController = windowOrganizerController.getClass().getMethod("getDisplayAreaOrganizerController")
-                    .invoke(windowOrganizerController);
-
-            // Create a no-op IDisplayAreaOrganizer proxy for registration;
-            // callbacks are ignored since we unregister immediately.
-            Class<?> idaoClass = Class.forName("android.window.IDisplayAreaOrganizer");
-            organizerProxy = Proxy.newProxyInstance(
-                    ClassLoader.getSystemClassLoader(),
-                    new Class[] {idaoClass},
-                    (proxy, method, args) -> {
-                        if ("asBinder".equals(method.getName())) {
-                            return organizerBinder;
-                        }
-                        return null;
-                    });
-
-            // Register the organizer to get display area tokens.
-            Object parceledList = daoController.getClass()
-                    .getMethod("registerOrganizer", idaoClass, int.class)
-                    .invoke(daoController, organizerProxy, FEATURE_DEFAULT_TASK_CONTAINER);
-
-            List<Object> displayAreaInfos = (List<Object>) parceledList.getClass().getMethod("getList").invoke(parceledList);
-
-            Object targetToken = null;
-            for (Object info : displayAreaInfos) {
-                Object displayAreaInfo = info.getClass().getMethod("getDisplayAreaInfo").invoke(info);
-                int daDisplayId = displayAreaInfo.getClass().getDeclaredField("displayId").getInt(displayAreaInfo);
-                if (daDisplayId == displayId) {
-                    targetToken = displayAreaInfo.getClass().getDeclaredField("token").get(displayAreaInfo);
-                    break;
-                }
-            }
-
-            if (targetToken != null) {
-                Class<?> wctClass = Class.forName("android.window.WindowContainerTransaction");
-                Object wct = wctClass.getDeclaredConstructor().newInstance();
-
-                Class<?> tokenClass = Class.forName("android.window.WindowContainerToken");
-                wctClass.getMethod("setWindowingMode", tokenClass, int.class).invoke(wct, targetToken, windowingMode);
-
-                windowOrganizerController.getClass().getMethod("applyTransaction", wctClass)
-                        .invoke(windowOrganizerController, wct);
+    /**
+     * Force the size of a display (as "wm size"), or restore its initial size if {@code size} is {@code null}.
+     */
+    public boolean setForcedDisplaySize(int displayId, Size size) {
+        try {
+            if (size != null) {
+                manager.getClass().getMethod("setForcedDisplaySize", int.class, int.class, int.class)
+                        .invoke(manager, displayId, size.getWidth(), size.getHeight());
             } else {
-                Ln.w("Could not find display area for display " + displayId);
+                manager.getClass().getMethod("clearForcedDisplaySize", int.class).invoke(manager, displayId);
             }
-        } catch (Exception e) {
-            Ln.w("Could not set windowing mode for display " + displayId, e);
-        } finally {
-            if (organizerProxy != null && daoController != null) {
-                try {
-                    Class<?> idaoClass = Class.forName("android.window.IDisplayAreaOrganizer");
-                    daoController.getClass().getMethod("unregisterOrganizer", idaoClass).invoke(daoController, organizerProxy);
-                } catch (Exception e) {
-                    Ln.w("Could not unregister display area organizer", e);
-                }
+            return true;
+        } catch (ReflectiveOperationException e) {
+            Ln.e("Could not set the display size", e);
+            return false;
+        }
+    }
+
+    /**
+     * Return the density forced on a display (as by "wm density"), or 0 if it has its initial density.
+     */
+    public int getForcedDisplayDensity(int displayId) {
+        try {
+            int initial = (int) manager.getClass().getMethod("getInitialDisplayDensity", int.class).invoke(manager, displayId);
+            int base = (int) manager.getClass().getMethod("getBaseDisplayDensity", int.class).invoke(manager, displayId);
+            return base == initial ? 0 : base;
+        } catch (ReflectiveOperationException e) {
+            Ln.e("Could not read the display density", e);
+            return 0;
+        }
+    }
+
+    /**
+     * Force the density of a display (as "wm density"), or restore its initial density if {@code density} is 0.
+     */
+    public boolean setForcedDisplayDensity(int displayId, int density) {
+        try {
+            if (density > 0) {
+                manager.getClass().getMethod("setForcedDisplayDensityForUser", int.class, int.class, int.class)
+                        .invoke(manager, displayId, density, USER_CURRENT);
+            } else {
+                manager.getClass().getMethod("clearForcedDisplayDensityForUser", int.class, int.class)
+                        .invoke(manager, displayId, USER_CURRENT);
             }
+            return true;
+        } catch (ReflectiveOperationException e) {
+            Ln.e("Could not set the display density", e);
+            return false;
+        }
+    }
+
+    /**
+     * Turn off (as "wm scaling off") or restore Android's scaling of a forced display size to the physical display.
+     */
+    public boolean setDisplayScalingDisabled(int displayId, boolean disabled) {
+        try {
+            // 0: FORCE_SCALING_MODE_AUTO, 1: FORCE_SCALING_MODE_DISABLED
+            manager.getClass().getMethod("setForcedDisplayScalingMode", int.class, int.class).invoke(manager, displayId, disabled ? 1 : 0);
+            return true;
+        } catch (ReflectiveOperationException e) {
+            Ln.e("Could not set the display scaling mode", e);
+            return false;
         }
     }
 }

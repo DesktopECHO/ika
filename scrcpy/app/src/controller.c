@@ -78,12 +78,6 @@ sc_controller_configure(struct sc_controller *controller,
 }
 
 void
-sc_controller_set_screen(struct sc_controller *controller,
-                         struct sc_screen *screen) {
-    controller->receiver.screen = screen;
-}
-
-void
 sc_controller_destroy(struct sc_controller *controller) {
     sc_cond_destroy(&controller->msg_cond);
     sc_mutex_destroy(&controller->mutex);
@@ -139,10 +133,10 @@ sc_controller_resize_display(struct sc_controller *controller,
     bool was_set = controller->resize_display.width;
     controller->resize_display.width = width;
     controller->resize_display.height = height;
-    sc_mutex_unlock(&controller->mutex);
     if (!was_set) {
         sc_cond_signal(&controller->msg_cond);
     }
+    sc_mutex_unlock(&controller->mutex);
 }
 
 static bool

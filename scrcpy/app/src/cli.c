@@ -30,7 +30,6 @@ enum {
     OPT_WINDOW_Y,
     OPT_WINDOW_WIDTH,
     OPT_WINDOW_HEIGHT,
-    OPT_WINDOW_STATE_FILE,
     OPT_WINDOW_BORDERLESS,
     OPT_MAX_FPS,
     OPT_DISPLAY_ID,
@@ -52,6 +51,7 @@ enum {
     OPT_NO_CLIPBOARD_AUTOSYNC,
     OPT_TCPIP,
     OPT_RAW_KEY_EVENTS,
+    OPT_NO_DOWNSIZE_ON_ERROR,
     OPT_OTG,
     OPT_NO_CLEANUP,
     OPT_PRINT_FPS,
@@ -106,10 +106,16 @@ enum {
     OPT_CAMERA_ZOOM,
     OPT_MIN_SIZE_ALIGNMENT,
     OPT_NO_WINDOW_ASPECT_RATIO_LOCK,
+    OPT_KEEP_ACTIVE,
+    OPT_BACKGROUND_COLOR,
     OPT_RENDER_FIT,
+    OPT_IGNORE_VIDEO_ENCODER_CONSTRAINTS,
+    OPT_NO_TERMINAL_TITLE,
+    OPT_HWDEC,
     OPT_CUTTLEFISH_FRAMES_SOCKET,
+    OPT_DPI,
+    OPT_WINDOW_STATE_FILE,
     OPT_IKA_GAME_SESSION,
-    OPT_CVD,
 };
 
 struct sc_option {
@@ -258,6 +264,14 @@ static const struct sc_option options[] = {
                 "Default is 8M (8000000).",
     },
     {
+        .longopt_id = OPT_BACKGROUND_COLOR,
+        .longopt = "background-color",
+        .argdesc = "hexcolor",
+        .text = "Set the background color, encoded as hexadecimal color code "
+                "(#RGB or #RRGGBB).\n"
+                "Default is #222 (dark gray).",
+    },
+    {
         .longopt_id = OPT_CAMERA_AR,
         .longopt = "camera-ar",
         .argdesc = "ar",
@@ -337,27 +351,6 @@ static const struct sc_option options[] = {
         .text = "Crop the device screen on the server.\n"
                 "The values are expressed in the device natural orientation "
                 "(typically, portrait for a phone, landscape for a tablet).",
-    },
-    {
-        .longopt_id = OPT_CUTTLEFISH_FRAMES_SOCKET,
-        .longopt = "cuttlefish-frames-socket",
-        .argdesc = "path",
-        .text = "Use a Cuttlefish raw frame socket as the video source. "
-                "Android video capture is disabled, but the control socket "
-                "remains enabled.",
-    },
-    {
-        .longopt_id = OPT_IKA_GAME_SESSION,
-        .longopt = "ika-game-session",
-        .text = "Ika game session: exit with status 3 when the window leaves "
-                "fullscreen or is closed, so that the caller can end the "
-                "session.",
-    },
-    {
-        .longopt_id = OPT_CVD,
-        .longopt = "cvd",
-        .argdesc = "path",
-        .text = "Alias for --cuttlefish-frames-socket.",
     },
     {
         .shortopt = 'd',
@@ -443,8 +436,32 @@ static const struct sc_option options[] = {
         .text = "Print this help.",
     },
     {
+        .longopt_id = OPT_HWDEC,
+        .longopt = "hwdec",
+        .argdesc = "mode",
+        .text = "Configure hardware video decoding on the computer.\n"
+                "Possible values are \"auto\" (the first available hardware "
+                "decoder, software decoding otherwise), \"disabled\" "
+                "(always use software decoding), \"vaapi\" (Linux only), "
+                "\"d3d11va\" (Windows only) and \"videotoolbox\" (macOS "
+                "only).\n"
+                "Default is \"auto\".",
+    },
+    {
+        .longopt_id = OPT_IGNORE_VIDEO_ENCODER_CONSTRAINTS,
+        .longopt = "ignore-video-encoder-constraints",
+        .text = "Do not consider video encoder capabilities.\n"
+                "This is useful if the reported capabilities are incorrect.\n"
+                "It may help to force a value for --min-size-alignment.",
+    },
+    {
         .shortopt = 'K',
         .text = "Same as --keyboard=uhid, or --keyboard=aoa if --otg is set.",
+    },
+    {
+        .longopt_id = OPT_KEEP_ACTIVE,
+        .longopt = "keep-active",
+        .text = "Keep the screen on by simulating user activity.",
     },
     {
         .longopt_id = OPT_KEYBOARD,
@@ -512,9 +529,12 @@ static const struct sc_option options[] = {
         .shortopt = 'm',
         .longopt = "max-size",
         .argdesc = "value",
-        .text = "Limit both the width and height of the video to value. The "
-                "other dimension is computed so that the device aspect-ratio "
-                "is preserved.\n"
+        .text = "Limit both the width and height of the video.\n"
+                "For display mirroring, the other dimension is computed so "
+                "that the device aspect ratio is preserved (except for flex "
+                "displays).\n"
+                "For camera mirroring, the value is used to select the camera "
+                "source size instead.\n"
                 "Default is 0 (unlimited).",
     },
     {
@@ -636,6 +656,13 @@ static const struct sc_option options[] = {
                 "This option disables this automatic synchronization."
     },
     {
+        .longopt_id = OPT_NO_DOWNSIZE_ON_ERROR,
+        .longopt = "no-downsize-on-error",
+        .text = "By default, on MediaCodec error, scrcpy automatically tries "
+                "again with a lower definition.\n"
+                "This option disables this behavior.",
+    },
+    {
         .longopt_id = OPT_NO_KEY_REPEAT,
         .longopt = "no-key-repeat",
         .text = "Do not forward repeated key events when a key is held down.",
@@ -657,6 +684,11 @@ static const struct sc_option options[] = {
         .longopt_id = OPT_NO_POWER_ON,
         .longopt = "no-power-on",
         .text = "Do not power on the device on start.",
+    },
+    {
+        .longopt_id = OPT_NO_TERMINAL_TITLE,
+        .longopt = "no-terminal-title",
+        .text = "Disable terminal title updates.",
     },
     {
         .longopt_id = OPT_NO_VD_DESTROY_CONTENT,
@@ -809,14 +841,16 @@ static const struct sc_option options[] = {
         .argdesc = "mode",
         .text = "Set the render-fit mode to configure how the rendering fits "
                 "the window.\n"
-                "Possible values are \"natural\" and \"disabled\".\n"
-                "\"natural\": preserve the aspect ratio and fit the window as "
-                "best as possible (black bars are added either at the top and "
-                "bottom or at the sides if needed).\n"
-                "\"disabled\": render the display at the top-left corner, "
-                "without scaling.\n"
-                "Default is \"natural\". With --dpi, scrcpy fills the window "
-                "after the display resize is applied.",
+                "Possible values are \"letterbox\", \"stretched\" and "
+                "\"unscaled\".\n"
+                "\"letterbox\": preserve the aspect ratio and fit the window "
+                "as best as possible (black bars are added either at the top "
+                "and bottom or at the sides if needed).\n"
+                "\"stretched\": fit the window without preserving the aspect "
+                "ratio.\n"
+                "\"unscaled\": render the display without scaling.\n"
+                "Default is \"letterbox\", unless --flex-display is set, in "
+                "which case it is \"unscaled\".",
     },
     {
         .longopt_id = OPT_REQUIRE_AUDIO,
@@ -965,7 +999,7 @@ static const struct sc_option options[] = {
         .longopt_id = OPT_VIDEO_CODEC,
         .longopt = "video-codec",
         .argdesc = "name",
-        .text = "Select a video codec (h264, h265 or av1).\n"
+        .text = "Select a video codec (h264, h265, av1, vp8 or vp9).\n"
                 "Default is h264.",
     },
     {
@@ -992,8 +1026,7 @@ static const struct sc_option options[] = {
         .longopt_id = OPT_VIDEO_SOURCE,
         .longopt = "video-source",
         .argdesc = "source",
-        .text = "Select the video source (display, camera or "
-                "cuttlefish-wayland).\n"
+        .text = "Select the video source (display or camera).\n"
                 "Camera mirroring requires Android 12+.\n"
                 "Default is display.",
     },
@@ -1043,28 +1076,47 @@ static const struct sc_option options[] = {
                 "Default is 0 (automatic).",
     },
     {
+        .shortopt = 'x',
+        .longopt = "flex-display",
+        .text = "Continuously resize the virtual display to match the window.",
+    },
+    {
+        .longopt_id = OPT_CUTTLEFISH_FRAMES_SOCKET,
+        .longopt = "cuttlefish-frames-socket",
+        .argdesc = "path",
+        .text = "Show the frames of a Cuttlefish display, read from the Ika "
+                "frame socket, instead of a video stream. Control still goes "
+                "through the server.",
+    },
+    {
+        .longopt_id = OPT_DPI,
+        .longopt = "dpi",
+        .argdesc = "value",
+        .text = "Enable flex display. With --cuttlefish-frames-socket, the "
+                "main display is resized to the window, at this density.",
+    },
+    {
         .longopt_id = OPT_WINDOW_STATE_FILE,
         .longopt = "window-state-file",
         .argdesc = "path",
-        .text = "Continuously save the last windowed size and fullscreen "
-                "state to this file.",
+        .text = "Save the windowed size and the fullscreen state to this "
+                "file on exit.",
     },
     {
-        .shortopt = 'x',
-        .longopt = "dpi",
-        .argdesc = "[dpi]",
-        .optional_arg = true,
-        .text = "Continuously resize the display to match the window.\n"
-                "This applies to displays created with --new-display, and to "
-                "the primary display (display 0).\n"
-                "Optionally provide a fixed display density for primary "
-                "display resizing.",
+        .longopt_id = OPT_IKA_GAME_SESSION,
+        .longopt = "ika-game-session",
+        .text = "Exit with status 3 when the window leaves fullscreen or is "
+                "closed.",
     },
 };
 
 static const struct sc_shortcut shortcuts[] = {
     {
-        .shortcuts = { "MOD+f" },
+        .shortcuts = { "MOD+q" },
+        .text = "Quit",
+    },
+    {
+        .shortcuts = { "MOD+f", "F11" },
         .text = "Switch fullscreen mode",
     },
     {
@@ -1206,7 +1258,11 @@ static const struct sc_shortcut shortcuts[] = {
     },
     {
         .shortcuts = { "MOD+t" },
-        .text = "Toggle window decorations/titlebar",
+        .text = "Turn on the camera torch (camera mode only)",
+    },
+    {
+        .shortcuts = { "MOD+Shift+t" },
+        .text = "Turn off the camera torch (camera mode only)",
     },
     {
         .shortcuts = { "MOD+Up" },
@@ -1790,18 +1846,6 @@ parse_window_dimension(const char *s, uint16_t *dimension) {
 }
 
 static bool
-parse_display_dpi(const char *s, uint16_t *dpi) {
-    long value;
-    bool ok = parse_integer_arg(s, &value, false, 1, 0xFFFF, "display dpi");
-    if (!ok) {
-        return false;
-    }
-
-    *dpi = (uint16_t) value;
-    return true;
-}
-
-static bool
 parse_port_range(const char *s, struct sc_port_range *port_range) {
     long values[2];
     size_t count = parse_integers_arg(s, ':', 2, values, 0, 0xFFFF, "port");
@@ -1918,7 +1962,7 @@ parse_shortcut_mods(const char *s, uint8_t *shortcut_mods) {
     // A list of shortcut modifiers, for example "lctrl,rctrl,rsuper"
 
     for (;;) {
-        char *comma = strchr(s, ',');
+        const char *comma = strchr(s, ',');
         assert(!comma || comma > s);
         size_t limit = comma ? (size_t) (comma - s) : strlen(s);
 
@@ -2031,7 +2075,15 @@ parse_video_codec(const char *optarg, enum sc_codec *codec) {
         *codec = SC_CODEC_AV1;
         return true;
     }
-    LOGE("Unsupported video codec: %s (expected h264, h265 or av1)", optarg);
+    if (!strcmp(optarg, "vp8")) {
+        *codec = SC_CODEC_VP8;
+        return true;
+    }
+    if (!strcmp(optarg, "vp9")) {
+        *codec = SC_CODEC_VP9;
+        return true;
+    }
+    LOGE("Unsupported video codec: %s (expected h264, h265, av1, vp8 or vp9)", optarg);
     return false;
 }
 
@@ -2070,13 +2122,7 @@ parse_video_source(const char *optarg, enum sc_video_source *source) {
         return true;
     }
 
-    if (!strcmp(optarg, "cuttlefish-wayland")) {
-        *source = SC_VIDEO_SOURCE_CUTTLEFISH_WAYLAND;
-        return true;
-    }
-
-    LOGE("Unsupported video source: %s (expected display, camera or "
-         "cuttlefish-wayland)", optarg);
+    LOGE("Unsupported video source: %s (expected display or camera)", optarg);
     return false;
 }
 
@@ -2397,18 +2443,139 @@ parse_mouse_bindings(const char *s, struct sc_mouse_bindings *mb) {
 }
 
 static bool
+parse_hex_char(char c, uint8_t *value) {
+    if (c >= '0' && c <= '9') {
+        *value = c - '0';
+        return true;
+    }
+    if (c >= 'a' && c <= 'f') {
+        *value = c - 'a' + 10;
+        return true;
+    }
+    if (c >= 'A' && c <= 'F') {
+        *value = c - 'A' + 10;
+        return true;
+    }
+    return false;
+}
+
+static bool
+parse_hex_byte(const char *s, uint8_t *value) {
+    uint8_t left, right;
+    bool ok = parse_hex_char(s[0], &left)
+           && parse_hex_char(s[1], &right);
+    if (!ok) {
+        return false;
+    }
+    *value = left << 4 | right;
+    return true;
+}
+
+static bool
+parse_hex_color(const char *s, uint32_t *color) {
+    if (s[0] == '#') {
+        // Accept with and without a leading '#'
+        ++s;
+    }
+
+    size_t len = strlen(s);
+    if (len != 3 && len != 6) {
+        LOGE("Invalid hexadecimal color code (expected #RGB or #RRGGBB): "
+             "%s", s);
+        return false;
+    }
+
+    uint8_t rgb[3];
+    if (len == 3) {
+        for (size_t i = 0; i < 3; ++i) {
+            bool ok = parse_hex_char(s[i], &rgb[i]);
+            if (!ok) {
+                LOGE("Invalid hexadecimal color code: %s", s);
+                return false;
+            }
+            rgb[i] *= 0x11;
+        }
+    } else {
+        assert(len == 6);
+        for (size_t i = 0; i < 3; ++i) {
+            bool ok = parse_hex_byte(&s[2*i], &rgb[i]);
+            if (!ok) {
+                LOGE("Invalid hexadecimal color code: %s", s);
+                return false;
+            }
+        }
+    }
+
+    *color = rgb[0] << 16 | rgb[1] << 8 | rgb[2];
+    return true;
+}
+
+static bool
 parse_render_fit(const char *optarg, enum sc_render_fit *mode) {
-    if (!strcmp(optarg, "natural")) {
-        *mode = SC_RENDER_FIT_NATURAL;
+    if (!strcmp(optarg, "letterbox")) {
+        *mode = SC_RENDER_FIT_LETTERBOX;
+        return true;
+    }
+
+    if (!strcmp(optarg, "stretched")) {
+        *mode = SC_RENDER_FIT_STRETCHED;
+        return true;
+    }
+
+    if (!strcmp(optarg, "unscaled")) {
+        *mode = SC_RENDER_FIT_UNSCALED;
+        return true;
+    }
+
+    LOGE("Unsupported render-fit: %s (expected letterbox, stretched or "
+         "unscaled)", optarg);
+    return false;
+}
+
+static bool
+parse_hwdec_mode(const char *optarg, enum sc_hwdec_mode *mode) {
+    if (!strcmp(optarg, "auto")) {
+        *mode = SC_HWDEC_MODE_AUTO;
         return true;
     }
 
     if (!strcmp(optarg, "disabled")) {
-        *mode = SC_RENDER_FIT_DISABLED;
+        *mode = SC_HWDEC_MODE_DISABLED;
         return true;
     }
 
-    LOGE("Unsupported render-fit: %s (expected natural or disabled)", optarg);
+    if (!strcmp(optarg, "vaapi")) {
+#ifdef HAVE_VAAPI
+        *mode = SC_HWDEC_MODE_VAAPI;
+        return true;
+#else
+        LOGE("VA-API support is disabled on this platform.");
+        return false;
+#endif
+    }
+
+    if (!strcmp(optarg, "d3d11va")) {
+#ifdef HAVE_D3D11VA
+        *mode = SC_HWDEC_MODE_D3D11VA;
+        return true;
+#else
+        LOGE("D3D11VA support is disabled on this platform.");
+        return false;
+#endif
+    }
+
+    if (!strcmp(optarg, "videotoolbox")) {
+#ifdef HAVE_VIDEOTOOLBOX
+        *mode = SC_HWDEC_MODE_VIDEOTOOLBOX;
+        return true;
+#else
+        LOGE("VideoToolbox support is disabled on this platform.");
+        return false;
+#endif
+    }
+
+    LOGE("Unsupported hwdec mode: %s (expected auto, disabled, vaapi, d3d11va "
+         "or videotoolbox)", optarg);
     return false;
 }
 
@@ -2573,9 +2740,6 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
                     return false;
                 }
                 break;
-            case OPT_WINDOW_STATE_FILE:
-                opts->window_state_file = optarg;
-                break;
             case OPT_WINDOW_BORDERLESS:
                 opts->window_borderless = true;
                 break;
@@ -2617,14 +2781,6 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
             }
             case OPT_RENDER_DRIVER:
                 opts->render_driver = optarg;
-                break;
-            case OPT_IKA_GAME_SESSION:
-                opts->ika_game_session = true;
-                break;
-            case OPT_CUTTLEFISH_FRAMES_SOCKET:
-            case OPT_CVD:
-                opts->cuttlefish_frames_socket = optarg;
-                opts->video_source = SC_VIDEO_SOURCE_CUTTLEFISH_WAYLAND;
                 break;
             case OPT_NO_MIPMAPS:
                 opts->mipmaps = false;
@@ -2672,6 +2828,9 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
             case OPT_TCPIP:
                 opts->tcpip = true;
                 opts->tcpip_dst = optarg;
+                break;
+            case OPT_NO_DOWNSIZE_ON_ERROR:
+                opts->downsize_on_error = false;
                 break;
             case OPT_NO_VIDEO:
                 opts->video = false;
@@ -2856,6 +3015,14 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
             case OPT_NO_WINDOW_ASPECT_RATIO_LOCK:
                 opts->window_aspect_ratio_lock = false;
                 break;
+            case OPT_KEEP_ACTIVE:
+                opts->keep_active = true;
+                break;
+            case OPT_BACKGROUND_COLOR:
+                if (!parse_hex_color(optarg, &opts->background_color)) {
+                    return false;
+                }
+                break;
             case OPT_RENDER_FIT:
                 if (!parse_render_fit(optarg, &opts->render_fit)) {
                     return false;
@@ -2863,7 +3030,34 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
                 break;
             case 'x':
                 opts->flex_display = true;
-                if (optarg && !parse_display_dpi(optarg, &opts->flex_display_dpi)) {
+                break;
+            case OPT_CUTTLEFISH_FRAMES_SOCKET:
+                opts->cuttlefish_frames_socket = optarg;
+                break;
+            case OPT_DPI: {
+                long value;
+                if (!parse_integer_arg(optarg, &value, false, 1, 0xFFFF,
+                                       "dpi")) {
+                    return false;
+                }
+                opts->flex_display_dpi = (uint16_t) value;
+                opts->flex_display = true;
+                break;
+            }
+            case OPT_WINDOW_STATE_FILE:
+                opts->window_state_file = optarg;
+                break;
+            case OPT_IKA_GAME_SESSION:
+                opts->ika_game_session = true;
+                break;
+            case OPT_IGNORE_VIDEO_ENCODER_CONSTRAINTS:
+                opts->ignore_video_encoder_constraints = true;
+                break;
+            case OPT_NO_TERMINAL_TITLE:
+                opts->update_terminal_title = false;
+                break;
+            case OPT_HWDEC:
+                if (!parse_hwdec_mode(optarg, &opts->hwdec_mode)) {
                     return false;
                 }
                 break;
@@ -2897,14 +3091,31 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
 
     bool otg = false;
     bool v4l2 = false;
-    bool cuttlefish_video = !!opts->cuttlefish_frames_socket
-            || opts->video_source == SC_VIDEO_SOURCE_CUTTLEFISH_WAYLAND;
 #ifdef HAVE_USB
     otg = opts->otg;
 #endif
 #ifdef HAVE_V4L2
     v4l2 = !!opts->v4l2_device;
 #endif
+
+    if (opts->cuttlefish_frames_socket) {
+        // The video comes from the Cuttlefish frame socket, not from the server
+        if (!opts->window || !opts->video_playback) {
+            LOGE("--cuttlefish-frames-socket requires a window");
+            return false;
+        }
+        if (!opts->control) {
+            LOGE("--cuttlefish-frames-socket requires control");
+            return false;
+        }
+        if (opts->video_source != SC_VIDEO_SOURCE_DISPLAY
+                || opts->new_display || opts->record_filename || v4l2) {
+            LOGE("--cuttlefish-frames-socket only shows the main display");
+            return false;
+        }
+        opts->video = true;
+        opts->hwdec_mode = SC_HWDEC_MODE_DISABLED;
+    }
 
     if (!opts->window) {
         // Without window, there cannot be any video playback
@@ -2913,31 +3124,7 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
         // --turn-screen-off
     }
 
-    if (cuttlefish_video) {
-        if (!opts->cuttlefish_frames_socket) {
-            LOGE("--video-source=cuttlefish-wayland requires "
-                 "--cuttlefish-frames-socket=PATH");
-            return false;
-        }
-        if (!opts->window) {
-            LOGE("Cuttlefish video source requires a scrcpy window");
-            return false;
-        }
-        if (!opts->video_playback) {
-            LOGE("Cuttlefish video source requires video playback");
-            return false;
-        }
-        if (opts->record_filename) {
-            LOGE("Recording is not supported with Cuttlefish raw frames");
-            return false;
-        }
-        if (v4l2) {
-            LOGE("V4L2 sink is not supported with Cuttlefish raw frames");
-            return false;
-        }
-    }
-
-    if (!opts->video && !cuttlefish_video) {
+    if (!opts->video) {
         opts->video_playback = false;
         // Do not power on the device on start if video capture is disabled
         opts->power_on = false;
@@ -2958,13 +3145,12 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
         opts->audio = false;
     }
 
-    if (!opts->video && !cuttlefish_video && !opts->audio && !opts->control
-            && !otg) {
+    if (!opts->video && !opts->audio && !opts->control && !otg) {
         LOGE("No video, no audio, no control, no OTG: nothing to do");
         return false;
     }
 
-    if (!opts->video && !cuttlefish_video && !otg) {
+    if (!opts->video && !otg) {
         // If video is disabled, then scrcpy must exit on audio failure.
         opts->require_audio = true;
     }
@@ -2982,10 +3168,40 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
         }
     }
 
+    if (opts->hwdec_mode != SC_HWDEC_MODE_DISABLED) {
+        if (!opts->video_playback) {
+            if (opts->hwdec_mode != SC_HWDEC_MODE_AUTO) {
+                LOGE("Hardware decoding requires video playback");
+                return false;
+            }
+            opts->hwdec_mode = SC_HWDEC_MODE_DISABLED;
+        } else if (v4l2) {
+            if (opts->hwdec_mode != SC_HWDEC_MODE_AUTO) {
+                LOGE("Hardware decoding is not compatible with V4L2");
+                return false;
+            }
+            LOGI("V4L2 sink enabled, hardware decoding disabled");
+            opts->hwdec_mode = SC_HWDEC_MODE_DISABLED;
+        }
+    }
+
 #ifdef HAVE_V4L2
-    if (v4l2 && !opts->video) {
-        LOGE("V4L2 sink requires video capture, but --no-video was set.");
-        return false;
+    if (v4l2) {
+        if (!opts->video) {
+            LOGE("V4L2 sink requires video capture, but --no-video was set.");
+            return false;
+        }
+
+        if (opts->flex_display) {
+            LOGE("V4L2 is incompatible with -x/--flex-display because it does "
+                 "not support resizing");
+            return false;
+        }
+
+        // V4L2 could not handle size change.
+        // Do not log because downsizing on error is the default behavior,
+        // not an explicit request from the user.
+        opts->downsize_on_error = false;
     }
 
     if (opts->v4l2_buffer && !opts->v4l2_device) {
@@ -2994,8 +3210,7 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
     }
 #endif
 
-    if (opts->control && (opts->video_source == SC_VIDEO_SOURCE_DISPLAY
-            || opts->video_source == SC_VIDEO_SOURCE_CUTTLEFISH_WAYLAND)) {
+    if (opts->control && opts->video_source == SC_VIDEO_SOURCE_DISPLAY) {
         if (opts->keyboard_input_mode == SC_KEYBOARD_INPUT_MODE_AUTO) {
             opts->keyboard_input_mode = otg ? SC_KEYBOARD_INPUT_MODE_AOA
                                             : SC_KEYBOARD_INPUT_MODE_SDK;
@@ -3075,7 +3290,8 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
     }
 
     if (opts->render_fit == SC_RENDER_FIT_AUTO) {
-        opts->render_fit = SC_RENDER_FIT_NATURAL;
+        opts->render_fit = opts->flex_display ? SC_RENDER_FIT_UNSCALED
+                                              : SC_RENDER_FIT_LETTERBOX;
     }
 
     if (otg) {
@@ -3199,30 +3415,19 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
 
     if (opts->flex_display) {
         if (opts->video_source != SC_VIDEO_SOURCE_DISPLAY
-                && opts->video_source != SC_VIDEO_SOURCE_CUTTLEFISH_WAYLAND) {
-            LOGE("-x/--dpi is only available with "
-                 "--video-source=display or cuttlefish-wayland");
+                || (!opts->new_display && !opts->cuttlefish_frames_socket)) {
+            LOGE("-x/--flex-display can only be applied to displays created "
+                 "with --new-display or to a Cuttlefish main display");
             return false;
         }
 
-        if (!opts->video) {
-            LOGE("-x/--dpi is incompatible with --no-video");
-            return false;
-        }
-
-        if (!opts->new_display && opts->display_id != 0) {
-            LOGE("-x/--dpi is only supported on --new-display or "
-                 "on the primary display (--display-id=0)");
-            return false;
-        }
-
-        if (opts->max_size) {
-            LOGE("--max-size is not compatible with -x/--dpi");
+        if (!opts->control) {
+            LOGE("-n/--no-control is not compatible with -x/--flex-display");
             return false;
         }
 
         if (opts->crop) {
-            LOGE("--crop is not compatible with -x/--dpi");
+            LOGE("--crop is not compatible with -x/--flex-display");
             return false;
         }
 
@@ -3238,8 +3443,7 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
 
     if (opts->audio && opts->audio_source == SC_AUDIO_SOURCE_AUTO) {
         // Select the audio source according to the video source
-        if (opts->video_source == SC_VIDEO_SOURCE_DISPLAY
-                || opts->video_source == SC_VIDEO_SOURCE_CUTTLEFISH_WAYLAND) {
+        if (opts->video_source == SC_VIDEO_SOURCE_DISPLAY) {
             if (opts->audio_dup) {
                 LOGI("Audio duplication enabled: audio source switched to "
                      "\"playback\"");
@@ -3334,6 +3538,12 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
             LOGE("Recording to MP4 container does not support RAW audio");
             return false;
         }
+
+        if (opts->record_format == SC_RECORD_FORMAT_MP4
+                && opts->video_codec == SC_CODEC_VP8) {
+            LOGE("Recording to MP4 container does not support VP8 video");
+            return false;
+        }
     }
 
     if (opts->audio_codec == SC_CODEC_FLAC && opts->audio_bit_rate) {
@@ -3371,6 +3581,10 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
         }
         if (opts->start_app) {
             LOGE("Cannot start an Android app if control is disabled");
+            return false;
+        }
+        if (opts->keep_active) {
+            LOGE("Cannot keep device active if control is disabled");
             return false;
         }
     }

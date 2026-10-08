@@ -40,6 +40,7 @@ BuildRequires:  pkgconfig(libv4l2)
 BuildRequires:  libcap-devel
 BuildRequires:  libdecor-devel
 BuildRequires:  libdrm-devel
+BuildRequires:  libva-devel
 BuildRequires:  libicu-devel
 BuildRequires:  libxcrypt-compat
 BuildRequires:  libuuid-devel
@@ -217,6 +218,8 @@ REPO_ROOT="$(realpath ../..)"
 WORK_ROOT="${IKA_WORK_ROOT:-$REPO_ROOT/ika-work}"
 SCRCPY_DEPS_WORK_DIR="$WORK_ROOT/scrcpy-deps"
 SCRCPY_STATIC_DEPS="$SCRCPY_DEPS_WORK_DIR/install/linux-native-static"
+# FFmpeg with VA-API, for scrcpy only (crosvm must not depend on libva)
+SCRCPY_VAAPI_DEPS="$SCRCPY_STATIC_DEPS-vaapi"
 BAZEL_CACHE_ROOT="${CUTTLEFISH_BAZEL_CACHE_ROOT:-$WORK_ROOT/cuttlefish-bazel}"
 BAZEL_OUTPUT_USER_ROOT="${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$WORK_ROOT}"
 BAZEL_REPOSITORY_CACHE="$BAZEL_CACHE_ROOT/repository"
@@ -236,6 +239,7 @@ SCRCPY_DEPS_WORK_DIR="$SCRCPY_DEPS_WORK_DIR" ../../scrcpy/app/deps/libusb.sh lin
 SCRCPY_DEPS_WORK_DIR="$SCRCPY_DEPS_WORK_DIR" ../../scrcpy/app/deps/sdl.sh linux native static
 SCRCPY_DEPS_WORK_DIR="$SCRCPY_DEPS_WORK_DIR" ../../scrcpy/app/deps/dav1d.sh linux native static
 SCRCPY_DEPS_WORK_DIR="$SCRCPY_DEPS_WORK_DIR" ../../scrcpy/app/deps/ffmpeg.sh linux native static
+SCRCPY_FFMPEG_VAAPI=1 SCRCPY_DEPS_WORK_DIR="$SCRCPY_DEPS_WORK_DIR" ../../scrcpy/app/deps/ffmpeg.sh linux native static
 
 # Shut down stale Bazel servers from earlier or concurrent builds that share
 # this --output_user_root. Two servers racing on the shared caches and the
@@ -319,9 +323,9 @@ popd >/dev/null
 # prebuilt scrcpy-server APK is bundled in the source tarball at
 # scrcpy/scrcpy-server (refreshed by tools/buildutils/build_package.sh).
 meson setup scrcpy _build_scrcpy \
-  --pkg-config-path="$SCRCPY_STATIC_DEPS/lib/pkgconfig" \
-  -Dc_args="-I$SCRCPY_STATIC_DEPS/include" \
-  -Dc_link_args="-L$SCRCPY_STATIC_DEPS/lib" \
+  --pkg-config-path="$SCRCPY_VAAPI_DEPS/lib/pkgconfig:$SCRCPY_STATIC_DEPS/lib/pkgconfig" \
+  -Dc_args="-I$SCRCPY_VAAPI_DEPS/include -I$SCRCPY_STATIC_DEPS/include" \
+  -Dc_link_args="-L$SCRCPY_VAAPI_DEPS/lib -L$SCRCPY_STATIC_DEPS/lib" \
     --buildtype=release \
     --prefix=/usr/lib/cuttlefish-common \
     --bindir=bin \
@@ -329,8 +333,8 @@ meson setup scrcpy _build_scrcpy \
     -Dprebuilt_server=scrcpy-server \
     -Dcompile_server=true
 meson compile -C _build_scrcpy
-if readelf -d _build_scrcpy/app/scrcpy | grep -Eq 'Shared library: \[(libav|libsw)'; then
-  echo "Error: scrcpy still has a shared FFmpeg dependency" >&2
+if readelf -d _build_scrcpy/app/scrcpy | grep -Eq 'Shared library: \[(libav|libsw|libva|libdrm)'; then
+  echo "Error: scrcpy still has a shared FFmpeg or VA-API dependency" >&2
   readelf -d _build_scrcpy/app/scrcpy | grep 'Shared library' >&2
   exit 1
 fi

@@ -11,29 +11,17 @@ The default viewer path uses raw Cuttlefish frames:
 
 1. `tools/ika` launches ika-scrcpy with `--cuttlefish-frames-socket=...` and
    `--dpi=<computed-or-user-value>`.
-2. ika-scrcpy listens for SDL window resize events and debounces them.
-3. For raw Cuttlefish frames, ika-scrcpy attempts to resize the physical
-   Cuttlefish display by spawning:
+2. ika-scrcpy follows the window size in pixels, debounced while the window
+   is being resized.
+3. ika-scrcpy sends `TYPE_RESIZE_DISPLAY` to the scrcpy server, which forces
+   the logical size of the main display (as `wm size`, with `wm scaling off`
+   when it fits the physical display, and `wm density` once), and sends
+   `DISPLAY_READY` when the display has settled.
+4. Android reports the new display metrics through `DisplayManager` and the
+   normal configuration-change path. The physical Cuttlefish display keeps its
+   size; the client shows the logical display 1:1 from its frames.
 
-   ```bash
-   cvd display resize \
-     --instance_num=<N> \
-     --display_id=<ID> \
-     --display=width=<W>,height=<H>,dpi=<DPI>,refresh_rate_hz=60
-   ```
-
-4. ika-scrcpy also sends `TYPE_RESIZE_DISPLAY` to the scrcpy server so the
-   Android-side control path can acknowledge `DISPLAY_READY` when the display
-   settles.
-5. Android reports the new display metrics through `DisplayManager` and the
-   normal configuration-change path.
-
-> [!IMPORTANT]
-> The Cuttlefish 1.55 command dispatcher currently included in this tree does
-> not expose the `resize` subcommand, so step 3 exits without changing the
-> physical display. The Android logical resize and settle path in steps 4–5
-> still runs. See
-> [`host/commands/display/main.cpp`](../../base/cvd/cuttlefish/host/commands/display/main.cpp).
+See [`scrcpy/IKA.md`](../../scrcpy/IKA.md).
 
 ## Guest Fallback Contract
 

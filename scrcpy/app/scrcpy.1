@@ -1,4 +1,4 @@
-.TH "scrcpy" "1"
+.TH "SCRCPY" "1"
 .SH NAME
 scrcpy \- Display and control your Android device
 
@@ -96,6 +96,12 @@ Default is 10.
 Encode the video at the given bit rate, expressed in bits/s. Unit suffixes are supported: '\fBK\fR' (x1000) and '\fBM\fR' (x1000000).
 
 Default is 8M (8000000).
+
+.TP
+.BI "\-\-background-color " hexcolor
+Set the background color, encoded as hexadecimal color code (#RGB or #RRGGBB).
+
+Default is #222 (dark gray).
 
 .TP
 .BI "\-\-camera\-ar " ar
@@ -224,14 +230,34 @@ Possible values are "disabled", "uhid" and "aoa":
  - "uhid" simulates physical HID gamepads using the Linux HID kernel module on the device.
  - "aoa" simulates physical HID gamepads using the AOAv2 protocol. It may only work over USB.
 
-Also see \fB\-\-keyboard\f and R\fB\-\-mouse\fR.
+Also see \fB\-\-keyboard\fR and R\fB\-\-mouse\fR.
 .TP
 .B \-h, \-\-help
 Print this help.
 
 .TP
+.BI "\-\-hwdec " mode
+Configure hardware video decoding on the computer.
+
+Possible values are "auto" (the first available hardware decoder, software decoding otherwise), "disabled" (always use software decoding), "vaapi" (Linux only), "d3d11va" (Windows only) and "videotoolbox" (macOS only).
+
+Default is "auto".
+
+.TP
+.B \-\-ignore\-video\-encoder\-constraints
+Do not consider video encoder capabilities.
+
+This is useful if the reported capabilities are incorrect.
+
+It may help to force a value for \fB\-\-min\-size\-alignment\fR.
+
+.TP
 .B \-K
 Same as \fB\-\-keyboard=uhid\fR, or \fB\-\-keyboard=aoa\fR if \fB\-\-otg\fR is set.
+
+.TP
+.B \-\-keep\-active
+Keep the screen on by simulating user activity.
 
 .TP
 .BI "\-\-keyboard " mode
@@ -284,7 +310,11 @@ List displays available on the device.
 
 .TP
 .BI "\-m, \-\-max\-size " value
-Limit both the width and height of the video to \fIvalue\fR. The other dimension is computed so that the device aspect\-ratio is preserved.
+Limit both the width and height of the video.
+
+For display mirroring, the other dimension is computed so that the device aspect ratio is preserved (except for flex displays).
+
+For camera mirroring, the value is used to select the camera source size instead.
 
 Default is 0 (unlimited).
 
@@ -385,6 +415,12 @@ By default, scrcpy automatically synchronizes the computer clipboard to the devi
 This option disables this automatic synchronization.
 
 .TP
+.B \-\-no\-downsize\-on\-error
+By default, on MediaCodec error, scrcpy automatically tries again with a lower definition.
+
+This option disables this behavior.
+
+.TP
 .B \-\-no\-key\-repeat
 Do not forward repeated key events when a key is held down.
 
@@ -399,6 +435,10 @@ Do not forward mouse hover (mouse motion without any clicks) events.
 .TP
 .B \-\-no\-power\-on
 Do not power on the device on start.
+
+.TP
+.B \-\-no\-terminal\-title
+Disable terminal title updates.
 
 .TP
 .B \-\-no\-vd\-destroy\-content
@@ -472,7 +512,7 @@ This avoids issues when combining multiple keys to enter special characters,
 but breaks the expected behavior of alpha keys in games (typically WASD).
 
 .TP
-.B "\-\-print\-fps
+.B \-\-print\-fps
 Start FPS counter, to print framerate logs to the console. It can be started or stopped at any time with MOD+i.
 
 .TP
@@ -518,12 +558,13 @@ Supported names are currently "direct3d", "opengl", "opengles2", "opengles", "me
 .BI "\-\-render\-fit " mode
 Set the render-fit mode to configure how the rendering fits the window.
 
-Possible values are "natural" and "disabled":
+Possible values are "letterbox", "stretched" and "unscaled":
 
- - "natural": preserve the aspect ratio and fit the window as best as possible (black bars are added either at the top and bottom or at the sides if needed).
- - "disabled": render the display at the top-left corner, without scaling.
+ - "letterbox": preserve the aspect ratio and fit the window as best as possible (black bars are added either at the top and bottom or at the sides if needed).
+ - "stretched": fit the window without preserving the aspect ratio.
+ - "unscaled": render the display without scaling.
 
-Default is "natural", unless --dpi is set, in which case it is "disabled".
+Default is "letterbox", unless --flex-display is set, in which case it is "unscaled".
 
 .TP
 .B \-\-require\-audio
@@ -574,7 +615,7 @@ Enable "show touches" on start, restore the initial value on exit.
 It only shows physical touches (not clicks from scrcpy).
 
 .TP
-.BI "\-\-tcpip\fR[=[+]\fIip\fR[:\fIport\fR]]
+.B \-\-tcpip\fR[=[+]\fIip\fR[:\fIport\fR]]
 Configure and connect the device over TCP/IP.
 
 If a destination address is provided, then scrcpy connects to this address before starting. The device must listen on the given TCP port (default is 5555).
@@ -631,7 +672,7 @@ Default is 0 (no buffering).
 
 .TP
 .BI "\-\-video\-codec " name
-Select a video codec (h264, h265 or av1).
+Select a video codec (h264, h265, av1, vp8 or vp9).
 
 Default is h264.
 
@@ -696,12 +737,8 @@ Set the initial window height.
 Default is 0 (automatic).
 
 .TP
-.BI "\-x, \-\-dpi\fR[=\fIdpi\fR]"
-Continuously resize the display to match the window.
-
-This applies to displays created with \fB\-\-new\-display\fR, and to the primary display (display 0).
-
-Optionally provide a fixed display density for primary display resizing.
+.B \-x, \-\-flex\-display
+Continuously resize the virtual display to match the window.
 
 .SH EXIT STATUS
 .B scrcpy
@@ -715,7 +752,11 @@ In the following list, MOD is the shortcut modifier. By default, it's (left)
 Alt or (left) Super, but it can be configured by \fB\-\-shortcut\-mod\fR (see above).
 
 .TP
-.B MOD+f
+.B MOD+q
+Quit
+
+.TP
+.B MOD+f, F11
 Switch fullscreen mode
 
 .TP
@@ -852,7 +893,11 @@ Push file to device (see \fB\-\-push\-target\fR)
 
 .TP
 .B MOD+t
-Toggle window decorations/titlebar
+Turn on the camera torch (camera mode only)
+
+.TP
+.B MOD+Shift+t
+Turn off the camera torch (camera mode only)
 
 .TP
 .B MOD+Up
@@ -899,7 +944,7 @@ Report bugs to <https://github.com/Genymobile/scrcpy/issues>.
 .SH COPYRIGHT
 Copyright \(co 2018 Genymobile <https://www.genymobile.com>
 
-Copyright \(co 2018\-2025 Romain Vimont <rom@rom1v.com>
+Copyright \(co 2018\-2026 Romain Vimont <rom@rom1v.com>
 
 Licensed under the Apache License, Version 2.0.
 

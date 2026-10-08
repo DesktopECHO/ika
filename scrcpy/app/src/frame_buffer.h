@@ -6,8 +6,6 @@
 #include <stdbool.h>
 #include <libavutil/frame.h>
 
-#include "util/thread.h"
-
 // forward declarations
 typedef struct AVFrame AVFrame;
 

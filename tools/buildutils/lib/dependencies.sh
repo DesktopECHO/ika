@@ -37,7 +37,7 @@ function rpm_build_dependency_packages() {
     cmake fmt-devel gcc-c++ gflags-devel git libtool glog-devel gtest-devel
     jsoncpp-devel libX11-devel libXcursor-devel libXext-devel libXfixes-devel
     libXi-devel libXrandr-devel libXScrnSaver-devel libcurl-devel libcap-devel
-    libdecor-devel libdrm-devel libxcrypt-compat libuuid-devel libxml2-devel libsrtp-devel
+    libdecor-devel libdrm-devel libva-devel libxcrypt-compat libuuid-devel libxml2-devel libsrtp-devel
     libxkbcommon-devel
     opus-devel openssl openssl-devel perl-FindBin pkgconf-pkg-config
     protobuf-c-devel protobuf-compiler protobuf-devel python3
@@ -154,6 +154,7 @@ function arch_build_dependency_packages() {
     libdrm
     libpipewire
     libsrtp
+    libva
     libx11
     libxcursor
     libxext

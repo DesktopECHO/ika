@@ -15,12 +15,7 @@ enum sc_device_msg_type {
     DEVICE_MSG_TYPE_CLIPBOARD,
     DEVICE_MSG_TYPE_ACK_CLIPBOARD,
     DEVICE_MSG_TYPE_UHID_OUTPUT,
-    // Sent by the device when the guest display has finished a requested
-    // resize. The client uses this with the host-side resize quiet period to
-    // decide when to drop its stretched preview.
     DEVICE_MSG_TYPE_DISPLAY_READY,
-    // Sent by the device when the app of a new virtual display is gone
-    // (finished, killed, or moved to another display).
     DEVICE_MSG_TYPE_APP_ENDED,
 };
 
