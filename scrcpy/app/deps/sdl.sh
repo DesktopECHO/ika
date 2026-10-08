@@ -53,7 +53,13 @@ then
         # scrcpy does not synthesize X11 input through XTEST. Disabling this
         # optional SDL backend avoids a libXtst build dependency.
         -DSDL_X11_XTEST=OFF
+        # Link the libusb that libusb.sh builds into this prefix (build it
+        # first) instead of loading the host's at runtime, so SDL is the same
+        # whether or not the host has libusb-1.0-0-dev.
+        -DSDL_HIDAPI_LIBUSB=ON
+        -DSDL_HIDAPI_LIBUSB_SHARED=OFF
     )
+    export PKG_CONFIG_PATH="$INSTALL_DIR/$DIRNAME/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 fi
 
 if [[ "$LINK_TYPE" == static ]]

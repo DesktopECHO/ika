@@ -66,7 +66,6 @@ static void test_options(void) {
         "--window-y", "-1",
         "--window-width", "600",
         "--window-height", "0",
-        "--window-state-file", "/tmp/scrcpy-window-state",
         "--window-borderless",
     };
 
@@ -94,7 +93,6 @@ static void test_options(void) {
     assert(opts->window_y == -1);
     assert(opts->window_width == 600);
     assert(opts->window_height == 0);
-    assert(!strcmp(opts->window_state_file, "/tmp/scrcpy-window-state"));
     assert(opts->window_borderless);
 }
 
@@ -121,46 +119,6 @@ static void test_options2(void) {
     assert(!opts->audio_playback);
     assert(!strcmp(opts->record_filename, "file.mp4"));
     assert(opts->record_format == SC_RECORD_FORMAT_MP4);
-}
-
-static void test_dpi_with_value(void) {
-    struct scrcpy_cli_args args = {
-        .opts = scrcpy_options_default,
-        .help = false,
-        .version = false,
-    };
-
-    char *argv[] = {
-        "scrcpy",
-        "--dpi=240",
-    };
-
-    bool ok = scrcpy_parse_args(&args, ARRAY_LEN(argv), argv);
-    assert(ok);
-
-    const struct scrcpy_options *opts = &args.opts;
-    assert(opts->flex_display);
-    assert(opts->flex_display_dpi == 240);
-}
-
-static void test_dpi_without_value(void) {
-    struct scrcpy_cli_args args = {
-        .opts = scrcpy_options_default,
-        .help = false,
-        .version = false,
-    };
-
-    char *argv[] = {
-        "scrcpy",
-        "--dpi",
-    };
-
-    bool ok = scrcpy_parse_args(&args, ARRAY_LEN(argv), argv);
-    assert(ok);
-
-    const struct scrcpy_options *opts = &args.opts;
-    assert(opts->flex_display);
-    assert(opts->flex_display_dpi == 0);
 }
 
 static void test_parse_shortcut_mods(void) {
@@ -199,8 +157,6 @@ int main(int argc, char *argv[]) {
     test_flag_help();
     test_options();
     test_options2();
-    test_dpi_with_value();
-    test_dpi_without_value();
     test_parse_shortcut_mods();
     return 0;
 }

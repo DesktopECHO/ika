@@ -5,7 +5,6 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include <stddef.h>
 #include <SDL3/SDL.h>
 #include <libavcodec/avcodec.h>
 #include <libavutil/frame.h>
@@ -16,6 +15,8 @@
 #include "disconnect.h"
 #include "fps_counter.h"
 #include "frame_buffer.h"
+#include "ika/flex.h"
+#include "ika/window.h"
 #include "input_manager.h"
 #include "mouse_capture.h"
 #include "options.h"
@@ -23,22 +24,11 @@
 #include "trait/key_processor.h"
 #include "trait/frame_sink.h"
 #include "trait/mouse_processor.h"
-#include "util/tick.h"
+#include "util/thread.h"
 
 #ifdef __APPLE__
 # define SC_DISPLAY_FORCE_OPENGL_CORE_PROFILE
 #endif
-
-#define SC_RAW_FRAME_BUFFER_POOL_SIZE 4
-
-// Grid of luma samples compared between encoded frames during a resize hold
-#define SC_SETTLE_SAMPLE_COLUMNS 64
-#define SC_SETTLE_SAMPLE_ROWS 36
-
-struct sc_raw_frame_buffer {
-    uint8_t *pixels;
-    size_t capacity;
-};
 
 struct sc_screen {
     struct sc_frame_sink frame_sink; // frame sink trait
@@ -51,12 +41,34 @@ struct sc_screen {
     bool camera;
     bool window_aspect_ratio_lock;
     bool flex_display;
-    // --ika-game-session: leaving fullscreen ends the session. Only armed
-    // once the window has actually been fullscreen.
-    bool game_session;
-    bool game_session_was_fullscreen;
+    // Uncompressed Cuttlefish frames of the main display
+    bool raw;
+    // Flex display sizes are in pixels and the content is shown 1:1
+    bool pixel_mode;
 
     struct sc_controller *controller;
+
+    // Ika
+    struct sc_flex flex; // initialized if flex_display
+    struct sc_ika_window ika_window;
+    struct sc_size windowed_size; // last size while not fullscreen/maximized
+    const char *window_state_file;
+    bool game_session;
+    bool game_session_fullscreen; // the game session went fullscreen
+
+    struct sc_screen_bg_color {
+        uint8_t r;
+        uint8_t g;
+        uint8_t b;
+    } bg;
+    // Ika: in pixel mode, the color of the top-right pixel of the last frame,
+    // used around the content instead of bg
+    struct sc_screen_bg_color content_bg;
+    bool has_content_bg;
+    // The last frame is not readable on the CPU (hardware decoding): read the
+    // color from the rendered frame
+    bool content_bg_from_render;
+    bool content_bg_read; // read from a render at least once
 
     struct sc_texture tex;
     struct sc_input_manager im;
@@ -78,11 +90,6 @@ struct sc_screen {
         bool start_fps_counter;
     } req;
 
-    const char *window_state_file;
-    // Last logical size observed outside fullscreen and maximized modes
-    struct sc_size saved_window_size;
-    bool saved_window_size_valid;
-
     SDL_Window *window;
     SDL_Renderer *renderer;
 #ifdef SC_DISPLAY_FORCE_OPENGL_CORE_PROFILE
@@ -93,86 +100,6 @@ struct sc_screen {
 
     struct sc_size frame_size;
     struct sc_size content_size; // rotated frame_size
-    // Last requested remote display size (in device orientation), used to
-    // Deduplicate resize requests while dpi-driven resizing is active.
-    struct sc_size last_requested_display_size;
-    // Last viewport size confirmed by DISPLAY_READY. Raw Cuttlefish frames use
-    // a fixed backing-buffer size, so this acknowledgement is the authoritative
-    // logical size associated with subsequently received raw frames.
-    struct sc_size last_ready_display_size;
-    sc_tick last_ready_display_tick;
-    bool resize_display_using_pixel_size;
-    const char *cuttlefish_frames_socket;
-    uint32_t cuttlefish_display_id;
-    uint16_t flex_display_dpi;
-    uint16_t launch_display_dpi;    // flex_display_dpi at init, for DPI ratio
-    float initial_display_scale;    // host display scale at init, for DPI ratio
-    sc_tick last_resize_request_tick;
-    bool initial_window_show_deferred;
-    struct sc_size initial_display_size;
-    sc_tick initial_window_prepare_tick;
-    // Set when an incoming frame first matches initial_display_size; the window
-    // is then held hidden for FLEX_DISPLAY_SHOW_SETTLE_GRACE before revealing.
-    sc_tick initial_size_caught_up_tick;
-    SDL_TimerID initial_window_show_timer; // protected by mutex
-    bool transient_stretch;
-    struct sc_size transient_stretch_source_size;
-    SDL_Texture *resize_preview_texture;
-    struct sc_size resize_preview_size;
-    sc_tick last_resize_event_tick;
-    // How long the host window must stay unchanged before the display resize
-    // is requested: short for maximize/restore/fullscreen, longer for drags.
-    sc_tick resize_quiet_delay;
-    // Last maximize/restore/fullscreen transition, and the window state it
-    // left behind, used to classify the resize events that follow it.
-    sc_tick window_state_change_tick;
-    SDL_WindowFlags last_window_state_flags;
-    // Diagnostics: when the current hold began, and the previous raw frame
-    // consumed after DISPLAY_READY.
-    sc_tick resize_hold_start_tick;
-    sc_tick resize_log_prev_frame_tick;
-    // Set once the device reports DISPLAY_READY for last_requested_display_size.
-    // The stretched preview is released only after this is true, the host
-    // window has been quiet for resize_quiet_delay, and the guest has drawn a
-    // frame newer than the resize request and then gone idle (or kept drawing
-    // past the maximum settle delay).
-    bool display_ready;
-    sc_tick display_ready_tick;
-    bool display_ready_raw_frame;
-    // Encoded streams: the encoder repeats its last frame while nothing
-    // changes, so frames keep arriving after Android has settled. Coarse luma
-    // samples of the last frame tell a redraw from a repeat, and
-    // encoded_settle_change_tick is the last redraw seen during the hold.
-    uint8_t encoded_settle_samples[SC_SETTLE_SAMPLE_COLUMNS
-                                   * SC_SETTLE_SAMPLE_ROWS];
-    bool encoded_settle_samples_valid;
-    sc_tick encoded_settle_change_tick;
-    // Set when the resize hold begins, so the blur ghost overlay can ramp in
-    // gradually during transient_stretch instead of snapping to full strength.
-    sc_tick blur_fade_in_start_tick;
-    // window_fade_in_show_tick: set when the prepared window is first shown.
-    // window_fade_in_start_tick: set on the first render after the minimum
-    // black hold and flex_display resize settlement, so startup fade timing
-    // follows the final resize but cannot be skipped by a busy compositor.
-    sc_tick window_fade_in_show_tick;
-    sc_tick window_fade_in_start_tick;
-    // Set when the resize hold releases and the blur begins its fade-out.
-    // transient_stretch is already false at this point; the texture has been
-    // swapped to the new content, but the blur ghost overlay decays from
-    // blur_fade_start_intensity to zero.
-    sc_tick blur_fade_start_tick;
-    float blur_fade_start_intensity;
-    SDL_TimerID resize_settle_timer; // protected by mutex
-    SDL_TimerID blur_fade_timer; // protected by mutex
-    bool hotspot_button_down;
-    bool hotspot_press_started_in_hotspot;
-    bool hotspot_dragged;
-    sc_tick hotspot_press_tick;
-    bool hotspot_drag_pending;
-    bool restore_hotspot_press_pending;
-    sc_tick restore_hotspot_press_tick;
-    float restore_hotspot_press_x;
-    float restore_hotspot_press_y;
 
     bool resize_pending; // resize requested while fullscreen or maximized
     // The content size the last time the window was not maximized or
@@ -190,50 +117,31 @@ struct sc_screen {
 
     AVFrame *frame;
 
-    struct {
-        uint32_t display_number;
-        struct sc_size size;
-        uint32_t fourcc;
-        SDL_PixelFormat format;
-        uint32_t stride;
-        uint8_t *pixels;
-        size_t size_bytes;
-        int dmabuf_fd;
-        uint32_t offset;
-        uint32_t modifier_hi;
-        uint32_t modifier_lo;
-        sc_tick received_tick;
-        bool is_dmabuf;
-        bool owns_pixels;
-    } pending_raw_frame, raw_frame;
-    bool pending_raw_frame_available; // protected by mutex
-    bool raw_frame_event_pending; // protected by mutex
-    bool raw_frame_source_open;
-    SDL_TimerID raw_frame_refresh_timer; // protected by mutex
-    struct sc_raw_frame_buffer
-        raw_frame_buffer_pool[SC_RAW_FRAME_BUFFER_POOL_SIZE];
-    size_t raw_frame_buffer_next;
-    sc_tick last_raw_frame_render_tick; // protected by mutex
-    sc_tick last_raw_frame_resize_tick; // protected by mutex
-    // Arrival time of the newest raw frame, consumed or not.
-    sc_tick last_raw_frame_received_tick; // protected by mutex
-
     bool paused;
     AVFrame *resume_frame;
 
     bool disconnected;
     bool disconnect_started;
     struct sc_disconnect disconnect;
+
+    SDL_Texture *icon_tex;
+    // render icon rather than frame?
+    bool is_icon_active;
+
+    // Track resize requests caused by frame-size changes
+    struct sc_resize_tracker {
+        sc_tick time; // 0 means none
+        struct sc_size size;
+    } resize_tracker;
 };
 
 struct sc_screen_params {
     bool video;
     bool camera;
     bool flex_display;
-    bool resize_display_using_pixel_size;
-    const char *cuttlefish_frames_socket;
-    uint32_t cuttlefish_display_id;
-    uint16_t flex_display_dpi;
+    bool raw;
+    const char *window_state_file;
+    bool game_session;
 
     struct sc_controller *controller;
     struct sc_file_pusher *fp;
@@ -253,15 +161,17 @@ struct sc_screen_params {
     int16_t window_y; // accepts SC_WINDOW_POSITION_UNDEFINED
     uint16_t window_width;
     uint16_t window_height;
-    const char *window_state_file;
+
+    uint32_t background_color;
 
     bool window_aspect_ratio_lock;
     bool window_borderless;
-    bool game_session;
 
     enum sc_render_fit render_fit;
     enum sc_orientation orientation;
     bool mipmaps;
+
+    enum sc_hwdec_mode hwdec_mode;
 
     bool fullscreen;
     bool start_fps_counter;
@@ -295,10 +205,6 @@ sc_screen_hide_window(struct sc_screen *screen);
 void
 sc_screen_toggle_fullscreen(struct sc_screen *screen);
 
-// toggle window decorations
-void
-sc_screen_toggle_window_bordered(struct sc_screen *screen);
-
 // resize window to optimal size (remove black borders)
 void
 sc_screen_resize_to_fit(struct sc_screen *screen);
@@ -316,34 +222,13 @@ sc_screen_set_orientation(struct sc_screen *screen,
 void
 sc_screen_set_paused(struct sc_screen *screen, bool paused);
 
-// Push one raw video frame from an external producer.
-bool
-sc_screen_push_raw_frame(struct sc_screen *screen, uint32_t display_number,
-                         uint32_t width, uint32_t height, uint32_t fourcc,
-                         SDL_PixelFormat format, uint32_t stride,
-                         uint8_t *pixels, size_t size_bytes,
-                         bool owns_pixels);
-
-uint8_t *
-sc_screen_alloc_raw_frame_buffer(struct sc_screen *screen, size_t size);
-
-void
-sc_screen_recycle_raw_frame_buffer(struct sc_screen *screen, uint8_t *pixels,
-                                   size_t capacity);
-
-bool
-sc_screen_push_dmabuf_frame(struct sc_screen *screen, uint32_t display_number,
-                            uint32_t width, uint32_t height, uint32_t fourcc,
-                            SDL_PixelFormat format, int dmabuf_fd,
-                            uint32_t offset, uint32_t stride,
-                            uint32_t modifier_hi, uint32_t modifier_lo);
-
-void
-sc_screen_close_raw_frame_source(struct sc_screen *screen);
-
 // react to SDL events
 void
 sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event);
+
+// save the window state to the window state file, if any
+void
+sc_screen_save_window_state(struct sc_screen *screen);
 
 // run the event loop once the device is disconnected
 void
@@ -355,40 +240,32 @@ struct sc_point
 sc_screen_convert_window_to_frame_coords(struct sc_screen *screen,
                                         int32_t x, int32_t y);
 
-// convert point from drawable coordinates to frame coordinates
-// x and y are expressed in pixels
-struct sc_point
-sc_screen_convert_drawable_to_frame_coords(struct sc_screen *screen,
-                                          int32_t x, int32_t y);
+// The size of the device display, in which input events are expressed
+static inline struct sc_size
+sc_screen_get_device_size(struct sc_screen *screen) {
+    if (screen->raw && screen->flex_display) {
+        // The frames have the physical size, the display may be smaller
+        struct sc_size shown = sc_flex_get_shown_size(&screen->flex);
+        if (shown.width && shown.height) {
+            return shown;
+        }
+    }
+    return screen->frame_size;
+}
 
-struct sc_size
-sc_screen_get_input_size(struct sc_screen *screen);
+static inline enum AVHWDeviceType
+sc_screen_get_hw_type(struct sc_screen *screen) {
+    return sc_texture_get_hw_type(&screen->tex);
+}
 
-struct sc_point
-sc_screen_convert_window_to_input_coords(struct sc_screen *screen,
-                                        int32_t x, int32_t y);
+static inline const char *
+sc_screen_get_hw_device(struct sc_screen *screen) {
+    return sc_texture_get_hw_device(&screen->tex);
+}
 
-struct sc_point
-sc_screen_convert_drawable_to_input_coords(struct sc_screen *screen,
-                                          int32_t x, int32_t y);
-
-// Convert coordinates from window to drawable.
-// Events are expressed in window coordinates, but content is expressed in
-// drawable coordinates. They are the same if HiDPI scaling is 1, but differ
-// otherwise.
-void
-sc_screen_hidpi_scale_coords(struct sc_screen *screen, int32_t *x, int32_t *y);
-
-// Handler for DEVICE_MSG_TYPE_DISPLAY_READY. Called on the main thread after
-// the receiver forwards the device-side signal that the guest has finished a
-// resize. transient_stretch only clears once this signal has arrived, the host
-// window has not resized for the quiet delay, and the guest has presented a
-// frame newer than the current display resize request and then gone idle (or
-// kept presenting past the maximum settle delay). display_id, width, height are
-// reported by the device for the client to sanity-check against its last
-// request.
-void
-sc_screen_on_display_ready(struct sc_screen *screen, uint32_t display_id,
-                           uint16_t width, uint16_t height);
+static inline bool
+sc_screen_disable_hwdec(struct sc_screen *screen) {
+    return sc_texture_disable_hwdec(&screen->tex);
+}
 
 #endif

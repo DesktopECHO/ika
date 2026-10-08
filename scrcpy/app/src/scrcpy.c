@@ -16,16 +16,16 @@
 
 #include "audio_player.h"
 #include "controller.h"
-#include "cuttlefish_frame_source.h"
 #include "decoder.h"
-#include "delay_buffer.h"
 #include "demuxer.h"
 #include "events.h"
 #include "file_pusher.h"
+#include "hwdec.h"
 #include "keyboard_sdk.h"
 #include "mouse_sdk.h"
 #include "recorder.h"
 #include "screen.h"
+#include "sdl_hints.h"
 #include "server.h"
 #include "uhid/gamepad_uhid.h"
 #include "uhid/keyboard_uhid.h"
@@ -40,11 +40,19 @@
 #include "util/acksync.h"
 #include "util/log.h"
 #include "util/rand.h"
+#include "util/str.h"
+#include "util/term.h"
 #include "util/timeout.h"
 #include "util/tick.h"
 #ifdef HAVE_V4L2
 # include "v4l2_sink.h"
 #endif
+#include "video_regulator.h"
+#ifndef _WIN32
+# include "ika/cf_source.h"
+#endif
+
+#define SC_BACKPRESSURE_THRESHOLD 8 // in-flight frames in video regulator
 
 struct scrcpy {
     struct sc_server server;
@@ -54,14 +62,17 @@ struct scrcpy {
     struct sc_demuxer audio_demuxer;
     struct sc_decoder video_decoder;
     struct sc_decoder audio_decoder;
+    struct sc_hwdec hwdec;
     struct sc_recorder recorder;
-    struct sc_delay_buffer video_buffer;
-    struct sc_cuttlefish_frame_source cuttlefish_frame_source;
+    struct sc_video_regulator video_regulator;
 #ifdef HAVE_V4L2
     struct sc_v4l2_sink v4l2_sink;
-    struct sc_delay_buffer v4l2_buffer;
+    struct sc_video_regulator v4l2_regulator;
 #endif
     struct sc_controller controller;
+#ifndef _WIN32
+    struct sc_cf_source cf_source;
+#endif
     struct sc_file_pusher file_pusher;
 #ifdef HAVE_USB
     struct sc_usb usb;
@@ -112,49 +123,6 @@ sdl_configure_ctrl_c_windows(void) {
 }
 #endif // _WIN32
 
-static void
-sdl_set_hints(const char *render_driver, bool disable_screensaver) {
-    if (render_driver && !SDL_SetHint(SDL_HINT_RENDER_DRIVER, render_driver)) {
-        LOGW("Could not set render driver");
-    }
-
-    // App name used in various contexts (such as PulseAudio)
-    if (!SDL_SetHint(SDL_HINT_APP_NAME, "scrcpy")) {
-        LOGW("Could not set app name");
-    }
-
-    // Handle a click to gain focus as any other click
-    if (!SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1")) {
-        LOGW("Could not enable mouse focus clickthrough");
-    }
-
-    // Disable synthetic mouse events from touch events
-    // Touch events with id SDL_TOUCH_MOUSEID are ignored anyway, but it is
-    // better not to generate them in the first place.
-    if (!SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0")) {
-        LOGW("Could not disable synthetic mouse events");
-    }
-
-    // Disable compositor bypassing on X11
-    if (!SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0")) {
-        LOGW("Could not disable X11 compositor bypass");
-    }
-
-    // Do not minimize on focus loss
-    if (!SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0")) {
-        LOGW("Could not disable minimize on focus loss");
-    }
-
-    if (!SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1")) {
-        LOGW("Could not allow joystick background events");
-    }
-
-    if (!disable_screensaver
-            && !SDL_SetHint(SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "1")) {
-        LOGW("Could not enable screensaver");
-    }
-}
-
 static enum scrcpy_exit_code
 event_loop(struct scrcpy *s, bool has_screen, bool game_session) {
     SDL_Event event;
@@ -172,6 +140,9 @@ event_loop(struct scrcpy *s, bool has_screen, bool game_session) {
             case SC_EVENT_CONTROLLER_ERROR:
                 LOGE("Controller error");
                 return SCRCPY_EXIT_FAILURE;
+            case SC_EVENT_DECODER_ERROR:
+                LOGE("Decoder error");
+                return SCRCPY_EXIT_FAILURE;
             case SC_EVENT_RECORDER_ERROR:
                 LOGE("Recorder error");
                 return SCRCPY_EXIT_FAILURE;
@@ -183,22 +154,15 @@ event_loop(struct scrcpy *s, bool has_screen, bool game_session) {
                 return SCRCPY_EXIT_SUCCESS;
             case SDL_EVENT_QUIT:
                 LOGD("User requested to quit");
-                // Closing a game session window ends the session too.
+                // Closing the window of a game session ends it
                 return game_session ? SCRCPY_EXIT_GAME_SESSION_ENDED
                                     : SCRCPY_EXIT_SUCCESS;
             case SC_EVENT_GAME_SESSION_ENDED:
                 return SCRCPY_EXIT_GAME_SESSION_ENDED;
             case SC_EVENT_APP_ENDED:
-                // The app left its new virtual display: close the window, as
-                // if the user had closed it.
+                // The app left its new display: close the window
                 LOGI("App ended");
                 return SCRCPY_EXIT_SUCCESS;
-            case SC_EVENT_RUN_ON_MAIN_THREAD: {
-                sc_runnable_fn run = event.user.data1;
-                void *userdata = event.user.data2;
-                run(userdata);
-                break;
-            }
             default:
                 if (has_screen) {
                     sc_screen_handle_event(&s->screen, &event);
@@ -207,22 +171,6 @@ event_loop(struct scrcpy *s, bool has_screen, bool game_session) {
         }
     }
     return SCRCPY_EXIT_FAILURE;
-}
-
-static void
-terminate_runnables_on_event_loop(void) {
-    sc_reject_new_runnables();
-
-    SDL_Event event;
-    while (SDL_PeepEvents(&event, 1, SDL_GETEVENT,
-                          SC_EVENT_RUN_ON_MAIN_THREAD,
-                          SC_EVENT_RUN_ON_MAIN_THREAD) == 1) {
-        assert(event.type == SC_EVENT_RUN_ON_MAIN_THREAD);
-        // Make sure all posted runnables are run, to avoid memory leaks
-        sc_runnable_fn run = event.user.data1;
-        void *userdata = event.user.data2;
-        run(userdata);
-    }
 }
 
 // Return true on success, false on error
@@ -250,6 +198,16 @@ await_for_server(bool *connected) {
 
     LOGE("SDL_WaitEvent() error: %s", SDL_GetError());
     return false;
+}
+
+static void
+sc_decoder_on_ended(struct sc_decoder *decoder, bool success, void *userdata) {
+    (void) decoder;
+    (void) userdata;
+
+    if (!success) {
+        sc_push_event(SC_EVENT_DECODER_ERROR);
+    }
 }
 
 static void
@@ -371,10 +329,62 @@ init_sdl_gamepads(void) {
         if (SDL_IsGamepad(joystick)) {
             SDL_Event event;
             event.gdevice.type = SDL_EVENT_GAMEPAD_ADDED;
-            event.gdevice.which = i;
+            event.gdevice.which = joystick;
             SDL_PushEvent(&event);
         }
     }
+
+    SDL_free(joysticks);
+}
+
+static void
+set_terminal_title_with_prefix(const char *value) {
+    char title[128];
+    memcpy(title, "scrcpy - ", 9);
+    size_t trunc_len = sc_str_utf8_truncation_index(value, 128 - 9 - 1);
+    assert(trunc_len <= 128 - 9 - 1);
+    memcpy(&title[9], value, trunc_len);
+    title[9 + trunc_len] = '\0';
+    sc_term_set_title(title);
+}
+
+static bool
+sc_init_video_hwdec(struct sc_hwdec *hwdec, enum sc_hwdec_mode mode,
+                    struct sc_screen *screen) {
+    enum AVHWDeviceType hw_type = AV_HWDEVICE_TYPE_NONE;
+    const char *hw_device = NULL;
+    SDL_Renderer *renderer = NULL;
+    if (screen) {
+        hw_type = sc_screen_get_hw_type(screen);
+        hw_device = sc_screen_get_hw_device(screen);
+        renderer = screen->renderer;
+    }
+    bool hw_forced = hw_type != AV_HWDEVICE_TYPE_NONE
+                  && mode != SC_HWDEC_MODE_AUTO;
+    if (sc_hwdec_init(hwdec, hw_type, hw_device, hw_forced, renderer)) {
+        return true;
+    }
+
+    // The software decoder cannot fail
+    assert(hw_type != AV_HWDEVICE_TYPE_NONE);
+
+    if (mode != SC_HWDEC_MODE_AUTO) {
+        LOGE("Hardware decoder %s unavailable",
+             av_hwdevice_get_type_name(hw_type));
+        return false;
+    }
+
+    // The screen created its interop according to the requested hardware
+    // decoder mode, but in the end the hardware decoder is unavailable, fall
+    // back to software decoding and replace the screen interop with a software
+    // interop.
+    LOGI("Hardware decoding unavailable; using software decoding");
+    if (!sc_screen_disable_hwdec(screen)) {
+        return false;
+    }
+
+    // Initialize software decoder
+    return sc_hwdec_init(hwdec, AV_HWDEVICE_TYPE_NONE, NULL, false, NULL);
 }
 
 enum scrcpy_exit_code
@@ -402,11 +412,16 @@ scrcpy(struct scrcpy_options *options) {
     bool recorder_started = false;
 #ifdef HAVE_V4L2
     bool v4l2_sink_initialized = false;
+    bool v4l2_regulator_initialized = false;
 #endif
-    bool cuttlefish_frame_source_initialized = false;
-    bool cuttlefish_frame_source_started = false;
+    bool video_regulator_initialized = false;
     bool video_demuxer_started = false;
     bool audio_demuxer_started = false;
+    bool hwdec_initialized = false;
+    bool video_decoder_initialized = false;
+    bool video_decoder_started = false;
+    bool audio_decoder_initialized = false;
+    bool audio_decoder_started = false;
 #ifdef HAVE_USB
     bool aoa_hid_initialized = false;
     bool keyboard_aoa_initialized = false;
@@ -416,15 +431,21 @@ scrcpy(struct scrcpy_options *options) {
     bool controller_initialized = false;
     bool controller_started = false;
     bool screen_initialized = false;
+    bool cf_source_initialized = false;
+    bool cf_source_started = false;
     bool timeout_initialized = false;
     bool timeout_started = false;
     bool disconnected = false;
 
     struct sc_acksync *acksync = NULL;
 
-    bool cuttlefish_video = !!options->cuttlefish_frames_socket;
-    bool device_video = options->video && !cuttlefish_video;
-    bool screen_video = options->video_playback || cuttlefish_video;
+#ifndef _WIN32
+    // The video comes from the Cuttlefish frame socket, not from the server
+    bool cuttlefish = options->cuttlefish_frames_socket;
+#else
+    bool cuttlefish = false;
+#endif
+    bool device_video = options->video && !cuttlefish;
 
     uint32_t scid = scrcpy_generate_scid();
 
@@ -461,7 +482,6 @@ scrcpy(struct scrcpy_options *options) {
         .audio_dup = options->audio_dup,
         .show_touches = options->show_touches,
         .stay_awake = options->stay_awake,
-        .flex_display_dpi = options->flex_display_dpi,
         .video_codec_options = options->video_codec_options,
         .audio_codec_options = options->audio_codec_options,
         .video_encoder = options->video_encoder,
@@ -473,6 +493,7 @@ scrcpy(struct scrcpy_options *options) {
         .force_adb_forward = options->force_adb_forward,
         .power_off_on_close = options->power_off_on_close,
         .clipboard_autosync = options->clipboard_autosync,
+        .downsize_on_error = options->downsize_on_error,
         .tcpip = options->tcpip,
         .tcpip_dst = options->tcpip_dst,
         .cleanup = options->cleanup,
@@ -483,7 +504,11 @@ scrcpy(struct scrcpy_options *options) {
         .camera_zoom = options->camera_zoom,
         .vd_destroy_content = options->vd_destroy_content,
         .vd_system_decorations = options->vd_system_decorations,
+        .keep_active = options->keep_active,
         .flex_display = options->flex_display,
+        .flex_display_dpi = options->flex_display_dpi,
+        .ignore_video_encoder_constraints =
+            options->ignore_video_encoder_constraints,
         .list = options->list,
     };
 
@@ -502,7 +527,14 @@ scrcpy(struct scrcpy_options *options) {
 
     // Set hints before starting the server thread to avoid race conditions in
     // SDL
-    sdl_set_hints(options->render_driver, options->disable_screensaver);
+    sc_sdl_set_hints(options->render_driver, options->disable_screensaver);
+    if (options->window_borderless) {
+        // A borderless window has no decorations to draw: without libdecor,
+        // it can set its own window geometry (see ika/window.c)
+        if (!SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR, "0")) {
+            LOGW("Could not disable libdecor");
+        }
+    }
 
     if (!sc_server_start(&s->server)) {
         goto end;
@@ -517,7 +549,7 @@ scrcpy(struct scrcpy_options *options) {
     }
 
     // playback implies capture
-    assert(!options->video_playback || options->video || cuttlefish_video);
+    assert(!options->video_playback || options->video);
     assert(!options->audio_playback || options->audio);
 
     if (options->window ||
@@ -528,7 +560,7 @@ scrcpy(struct scrcpy_options *options) {
         // <https://github.com/Genymobile/scrcpy/issues/4418>
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             // If it fails, it is an error only if video playback is enabled
-            if (screen_video) {
+            if (options->video_playback) {
                 LOGE("Could not initialize SDL video: %s", SDL_GetError());
                 goto end;
             } else {
@@ -570,13 +602,21 @@ scrcpy(struct scrcpy_options *options) {
     // It is necessarily initialized here, since the device is connected
     struct sc_server_info *info = &s->server.info;
 
+    const char *window_title =
+        options->window_title ? options->window_title : info->device_name;
+    assert(window_title);
+
+    if (options->update_terminal_title) {
+        set_terminal_title_with_prefix(window_title);
+    }
+
     const char *serial = s->server.serial;
     assert(serial);
 
     struct sc_file_pusher *fp = NULL;
 
     if (options->window && options->control) {
-        if (!sc_file_pusher_init(&s->file_pusher, serial,
+        if (!sc_file_pusher_init(&s->file_pusher, &s->controller, serial,
                                  options->push_target)) {
             goto end;
         }
@@ -584,12 +624,19 @@ scrcpy(struct scrcpy_options *options) {
         file_pusher_initialized = true;
     }
 
+    bool has_video_buffer = options->video_buffer;
+#ifdef HAVE_V4L2
+    has_video_buffer |= options->v4l2_buffer;
+#endif
+
     if (device_video) {
         static const struct sc_demuxer_callbacks video_demuxer_cbs = {
             .on_ended = sc_video_demuxer_on_ended,
         };
+        // If a video buffer is present, then the recv date must be set
+        bool set_recv_date = has_video_buffer;
         sc_demuxer_init(&s->video_demuxer, "video", s->server.video_socket,
-                        &video_demuxer_cbs, NULL);
+                        set_recv_date, &video_demuxer_cbs, NULL);
     }
 
     if (options->audio) {
@@ -597,31 +644,19 @@ scrcpy(struct scrcpy_options *options) {
             .on_ended = sc_audio_demuxer_on_ended,
         };
         sc_demuxer_init(&s->audio_demuxer, "audio", s->server.audio_socket,
-                        &audio_demuxer_cbs, options);
+                        false, &audio_demuxer_cbs, options);
     }
 
-    bool needs_video_decoder = device_video && options->video_playback;
-    bool needs_audio_decoder = options->audio_playback;
-#ifdef HAVE_V4L2
-    needs_video_decoder |= !!options->v4l2_device;
-#endif
-    if (needs_video_decoder) {
-        sc_decoder_init(&s->video_decoder, "video");
-        sc_packet_source_add_sink(&s->video_demuxer.packet_source,
-                                  &s->video_decoder.packet_sink);
-    }
-    if (needs_audio_decoder) {
-        sc_decoder_init(&s->audio_decoder, "audio");
-        sc_packet_source_add_sink(&s->audio_demuxer.packet_source,
-                                  &s->audio_decoder.packet_sink);
-    }
+    static const struct sc_decoder_callbacks decoder_cbs = {
+        .on_ended = sc_decoder_on_ended,
+    };
 
     if (options->record_filename) {
         static const struct sc_recorder_callbacks recorder_cbs = {
             .on_ended = sc_recorder_on_ended,
         };
         if (!sc_recorder_init(&s->recorder, options->record_filename,
-                              options->record_format, device_video,
+                              options->record_format, options->video,
                               options->audio, options->record_orientation,
                               &recorder_cbs, NULL)) {
             goto end;
@@ -633,7 +668,7 @@ scrcpy(struct scrcpy_options *options) {
         }
         recorder_started = true;
 
-        if (device_video) {
+        if (options->video) {
             sc_packet_source_add_sink(&s->video_demuxer.packet_source,
                                       &s->recorder.video_packet_sink);
         }
@@ -810,22 +845,13 @@ aoa_complete:
     assert(options->control == !!controller);
 
     if (options->window) {
-        const char *window_title =
-            options->window_title ? options->window_title : info->device_name;
-
         struct sc_screen_params screen_params = {
-            .video = screen_video,
+            .video = options->video_playback,
             .camera = options->video_source == SC_VIDEO_SOURCE_CAMERA,
             .flex_display = options->flex_display,
-            // App windows (flex virtual displays) are sized in pixels like
-            // the raw-frame console, so HiDPI scaling does not upscale them.
-            .resize_display_using_pixel_size = cuttlefish_video
-                || (options->flex_display && options->new_display),
-            .cuttlefish_frames_socket = cuttlefish_video
-                                      ? options->cuttlefish_frames_socket
-                                      : NULL,
-            .cuttlefish_display_id = options->display_id,
-            .flex_display_dpi = options->flex_display_dpi,
+            .raw = cuttlefish,
+            .window_state_file = options->window_state_file,
+            .game_session = options->ika_game_session,
             .controller = controller,
             .fp = fp,
             .kp = kp,
@@ -841,13 +867,13 @@ aoa_complete:
             .window_y = options->window_y,
             .window_width = options->window_width,
             .window_height = options->window_height,
-            .window_state_file = options->window_state_file,
+            .background_color = options->background_color,
             .window_aspect_ratio_lock = options->window_aspect_ratio_lock,
             .window_borderless = options->window_borderless,
-            .game_session = options->ika_game_session,
             .render_fit = options->render_fit,
             .orientation = options->display_orientation,
             .mipmaps = options->mipmaps,
+            .hwdec_mode = options->hwdec_mode,
             .fullscreen = options->fullscreen,
             .start_fps_counter = options->start_fps_counter,
         };
@@ -856,37 +882,99 @@ aoa_complete:
             goto end;
         }
         screen_initialized = true;
+    }
 
-        if (controller_initialized) {
-            sc_controller_set_screen(&s->controller, &s->screen);
+    bool needs_video_decoder = options->video_playback && !cuttlefish;
+    bool needs_audio_decoder = options->audio_playback;
+#ifdef HAVE_V4L2
+    needs_video_decoder |= !!options->v4l2_device;
+#endif
+    if (needs_video_decoder) {
+        struct sc_screen *screen = options->video_playback ? &s->screen : NULL;
+        assert(!screen || screen_initialized);
+
+        if (!sc_init_video_hwdec(&s->hwdec, options->hwdec_mode, screen)) {
+            goto end;
         }
+        hwdec_initialized = true;
 
-        if (cuttlefish_video) {
-            if (!sc_cuttlefish_frame_source_init(&s->cuttlefish_frame_source,
-                                                 options->cuttlefish_frames_socket,
-                                                 options->display_id,
-                                                 &s->screen)) {
+        // If a video buffer is present, then the recv date must be forwarded
+        // from the AVPacket to the AVFrame
+        bool copy_opaque = has_video_buffer;
+        if (!sc_decoder_init(&s->video_decoder, "video", &s->hwdec, copy_opaque,
+                             &decoder_cbs, NULL)) {
+            goto end;
+        }
+        video_decoder_initialized = true;
+
+        sc_packet_source_add_sink(&s->video_demuxer.packet_source,
+                                  &s->video_decoder.packet_sink);
+
+        if (!sc_decoder_start(&s->video_decoder)) {
+            goto end;
+        }
+        video_decoder_started = true;
+    }
+
+    if (needs_audio_decoder) {
+        if (!sc_decoder_init(&s->audio_decoder, "audio", NULL, false,
+                             &decoder_cbs, NULL)) {
+            goto end;
+        }
+        audio_decoder_initialized = true;
+
+        sc_packet_source_add_sink(&s->audio_demuxer.packet_source,
+                                  &s->audio_decoder.packet_sink);
+
+        if (!sc_decoder_start(&s->audio_decoder)) {
+            goto end;
+        }
+        audio_decoder_started = true;
+    }
+
+#ifndef _WIN32
+    if (cuttlefish) {
+        assert(screen_initialized);
+        if (!sc_cf_source_init(&s->cf_source,
+                               options->cuttlefish_frames_socket,
+                               options->display_id)) {
+            goto end;
+        }
+        cf_source_initialized = true;
+        sc_frame_source_add_sink(&s->cf_source.frame_source,
+                                 &s->screen.frame_sink);
+        if (!sc_cf_source_start(&s->cf_source)) {
+            goto end;
+        }
+        cf_source_started = true;
+    }
+#endif
+
+    if (options->video_playback && !cuttlefish) {
+        assert(options->window);
+        assert(screen_initialized);
+        struct sc_frame_source *src = &s->video_decoder.frame_source;
+        if (options->video_buffer) {
+            uint32_t backpressure_threshold = SC_BACKPRESSURE_THRESHOLD;
+#ifdef HAVE_V4L2
+            if (options->v4l2_device && options->v4l2_buffer
+                    && options->v4l2_buffer < options->video_buffer) {
+                // Disable the backpressure threshold for this video regulator,
+                // it will be handled by the v4l2 video regulator
+                backpressure_threshold = 0; // disabled
+            }
+#endif
+            if (!sc_video_regulator_init(&s->video_regulator,
+                                         options->video_buffer, true,
+                                         backpressure_threshold)) {
                 goto end;
             }
-            cuttlefish_frame_source_initialized = true;
-
-            if (!sc_cuttlefish_frame_source_start(&s->cuttlefish_frame_source)) {
-                goto end;
-            }
-            cuttlefish_frame_source_started = true;
+            video_regulator_initialized = true;
+            sc_frame_source_add_sink(src, &s->video_regulator.frame_sink);
+            src = &s->video_regulator.frame_source;
         }
 
-        if (device_video && options->video_playback) {
-            struct sc_frame_source *src = &s->video_decoder.frame_source;
-            if (options->video_buffer) {
-                sc_delay_buffer_init(&s->video_buffer,
-                                     options->video_buffer, true);
-                sc_frame_source_add_sink(src, &s->video_buffer.frame_sink);
-                src = &s->video_buffer.frame_source;
-            }
-
-            sc_frame_source_add_sink(src, &s->screen.frame_sink);
-        }
+        sc_frame_source_add_sink(src, &s->screen.frame_sink);
     }
 
     if (options->audio_playback) {
@@ -904,9 +992,21 @@ aoa_complete:
 
         struct sc_frame_source *src = &s->video_decoder.frame_source;
         if (options->v4l2_buffer) {
-            sc_delay_buffer_init(&s->v4l2_buffer, options->v4l2_buffer, true);
-            sc_frame_source_add_sink(src, &s->v4l2_buffer.frame_sink);
-            src = &s->v4l2_buffer.frame_source;
+            uint32_t backpressure_threshold = SC_BACKPRESSURE_THRESHOLD;
+            if (options->video_playback && options->video_buffer
+                    && options->video_buffer <= options->v4l2_buffer) {
+                // Disable the backpressure threshold for this video
+                // regulator, it will be handled by the display video regulator
+                backpressure_threshold = 0; // disabled
+            }
+            if (!sc_video_regulator_init(&s->v4l2_regulator,
+                                         options->v4l2_buffer,
+                                         true, backpressure_threshold)) {
+                goto end;
+            }
+            v4l2_regulator_initialized = true;
+            sc_frame_source_add_sink(src, &s->v4l2_regulator.frame_sink);
+            src = &s->v4l2_regulator.frame_source;
         }
 
         sc_frame_source_add_sink(src, &s->v4l2_sink.frame_sink);
@@ -990,7 +1090,14 @@ aoa_complete:
     }
 
     ret = event_loop(s, options->window, options->ika_game_session);
-    terminate_runnables_on_event_loop();
+    if (screen_initialized) {
+        sc_screen_save_window_state(&s->screen);
+    }
+
+    // Reject all new runnables, and execute the pending ones now
+    // (they could access memory that will be cleaned up below)
+    sc_main_thread_stop();
+
     disconnected = ret == SCRCPY_EXIT_DISCONNECTED;
 
 end:
@@ -1002,20 +1109,8 @@ end:
     // end-of-stream
 #ifdef HAVE_USB
     if (aoa_hid_initialized) {
-        if (keyboard_aoa_initialized) {
-            sc_keyboard_aoa_destroy(&s->keyboard_aoa);
-        }
-        if (mouse_aoa_initialized) {
-            sc_mouse_aoa_destroy(&s->mouse_aoa);
-        }
-        if (gamepad_aoa_initialized) {
-            sc_gamepad_aoa_destroy(&s->gamepad_aoa);
-        }
         sc_aoa_stop(&s->aoa);
         sc_usb_stop(&s->usb);
-    }
-    if (acksync) {
-        sc_acksync_destroy(acksync);
     }
 #endif
     if (controller_started) {
@@ -1024,11 +1119,27 @@ end:
     if (file_pusher_initialized) {
         sc_file_pusher_stop(&s->file_pusher);
     }
+    if (video_decoder_started) {
+        sc_decoder_stop(&s->video_decoder);
+    }
+#ifndef _WIN32
+    if (cf_source_started) {
+        sc_cf_source_stop(&s->cf_source);
+    }
+#endif
+    if (audio_decoder_started) {
+        sc_decoder_stop(&s->audio_decoder);
+    }
+    if (video_regulator_initialized) {
+        sc_video_regulator_stop(&s->video_regulator);
+    }
+#ifdef HAVE_V4L2
+    if (v4l2_regulator_initialized) {
+        sc_video_regulator_stop(&s->v4l2_regulator);
+    }
+#endif
     if (recorder_initialized) {
         sc_recorder_stop(&s->recorder);
-    }
-    if (cuttlefish_frame_source_started) {
-        sc_cuttlefish_frame_source_stop(&s->cuttlefish_frame_source);
     }
     if (screen_initialized) {
         sc_screen_interrupt(&s->screen);
@@ -1046,8 +1157,22 @@ end:
         LOGD("Quit...");
 
         // Close the window immediately, because sc_screen_destroy() may only be
-        // called once the video demuxer thread is joined (it may take time)
+        // called once the video decoder thread is joined (it may take time)
         sc_screen_hide_window(&s->screen);
+    }
+
+    if (video_decoder_started) {
+        sc_decoder_join(&s->video_decoder);
+    }
+
+#ifndef _WIN32
+    if (cf_source_started) {
+        sc_cf_source_join(&s->cf_source);
+    }
+#endif
+
+    if (audio_decoder_started) {
+        sc_decoder_join(&s->audio_decoder);
     }
 
     if (timeout_started) {
@@ -1067,12 +1192,14 @@ end:
         sc_demuxer_join(&s->audio_demuxer);
     }
 
-    if (cuttlefish_frame_source_started) {
-        sc_cuttlefish_frame_source_join(&s->cuttlefish_frame_source);
-        sc_screen_close_raw_frame_source(&s->screen);
+    if (video_regulator_initialized) {
+        sc_video_regulator_destroy(&s->video_regulator);
     }
 
 #ifdef HAVE_V4L2
+    if (v4l2_regulator_initialized) {
+        sc_video_regulator_destroy(&s->v4l2_regulator);
+    }
     if (v4l2_sink_initialized) {
         sc_v4l2_sink_destroy(&s->v4l2_sink);
     }
@@ -1085,8 +1212,34 @@ end:
         sc_usb_join(&s->usb);
         sc_usb_disconnect(&s->usb);
         sc_usb_destroy(&s->usb);
+
+        if (keyboard_aoa_initialized) {
+            sc_keyboard_aoa_destroy(&s->keyboard_aoa);
+        }
+        if (mouse_aoa_initialized) {
+            sc_mouse_aoa_destroy(&s->mouse_aoa);
+        }
+        if (gamepad_aoa_initialized) {
+            sc_gamepad_aoa_destroy(&s->gamepad_aoa);
+        }
+    }
+    if (acksync) {
+        sc_acksync_destroy(acksync);
     }
 #endif
+
+    if (video_decoder_initialized) {
+        sc_decoder_destroy(&s->video_decoder);
+    }
+
+    // The hwdec must outlive the video decoder
+    if (hwdec_initialized) {
+        sc_hwdec_destroy(&s->hwdec);
+    }
+
+    if (audio_decoder_initialized) {
+        sc_decoder_destroy(&s->audio_decoder);
+    }
 
     // Destroy the screen only after the video demuxer is guaranteed to be
     // finished, because otherwise the screen could receive new frames after
@@ -1096,9 +1249,11 @@ end:
         sc_screen_destroy(&s->screen);
     }
 
-    if (cuttlefish_frame_source_initialized) {
-        sc_cuttlefish_frame_source_destroy(&s->cuttlefish_frame_source);
+#ifndef _WIN32
+    if (cf_source_initialized) {
+        sc_cf_source_destroy(&s->cf_source);
     }
+#endif
 
     if (controller_started) {
         sc_controller_join(&s->controller);

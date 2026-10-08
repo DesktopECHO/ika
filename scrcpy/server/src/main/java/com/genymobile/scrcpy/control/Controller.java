@@ -5,37 +5,35 @@ import com.genymobile.scrcpy.AsyncProcessor;
 import com.genymobile.scrcpy.CleanUp;
 import com.genymobile.scrcpy.Options;
 import com.genymobile.scrcpy.device.Device;
-import com.genymobile.scrcpy.device.DeviceApp;
-import com.genymobile.scrcpy.device.DisplayInfo;
-import com.genymobile.scrcpy.device.Point;
-import com.genymobile.scrcpy.device.Position;
-import com.genymobile.scrcpy.device.Size;
+import com.genymobile.scrcpy.display.DisplayInfo;
+import com.genymobile.scrcpy.display.PrimaryDisplayResizer;
+import com.genymobile.scrcpy.model.DeviceApp;
+import com.genymobile.scrcpy.model.Point;
+import com.genymobile.scrcpy.model.Position;
+import com.genymobile.scrcpy.model.Size;
 import com.genymobile.scrcpy.util.Ln;
 import com.genymobile.scrcpy.util.LogUtils;
 import com.genymobile.scrcpy.video.CameraCapture;
+import com.genymobile.scrcpy.video.CaptureControl;
 import com.genymobile.scrcpy.video.NewDisplayCapture;
-import com.genymobile.scrcpy.video.ScreenCapture;
 import com.genymobile.scrcpy.video.SurfaceCapture;
+import com.genymobile.scrcpy.video.VideoSource;
 import com.genymobile.scrcpy.video.VirtualDisplayListener;
 import com.genymobile.scrcpy.wrappers.ClipboardManager;
-import com.genymobile.scrcpy.wrappers.DisplayManager;
-import com.genymobile.scrcpy.wrappers.DisplayWindowListener;
 import com.genymobile.scrcpy.wrappers.InputManager;
 import com.genymobile.scrcpy.wrappers.ServiceManager;
 
 import android.content.Intent;
-import android.content.res.Configuration;
+import android.net.Uri;
 import android.os.Build;
-import android.os.Handler;
-import android.os.HandlerThread;
 import android.os.SystemClock;
 import android.util.Pair;
-import android.view.IDisplayWindowListener;
 import android.view.InputDevice;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -73,32 +71,34 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     }
 
     private static final int DEFAULT_DEVICE_ID = 0;
-    // Mirrored by FLEX_DISPLAY_MIN_WIDTH/HEIGHT in the client's screen.c.
-    private static final int PRIMARY_DISPLAY_MIN_WIDTH = 360;
-    private static final int PRIMARY_DISPLAY_MIN_HEIGHT = 540;
-    private static final int DISPLAY_SIZE_ALIGNMENT = 8;
 
     // control_msg.h values of the pointerId field in inject_touch_event message
     private static final int POINTER_ID_MOUSE = -1;
+
+    // Interval between simulated user activity events
+    private static final long KEEP_ACTIVE_INTERVAL_MS = 4000;
 
     private static final ScheduledExecutorService EXECUTOR = Executors.newSingleThreadScheduledExecutor();
     private ExecutorService startAppExecutor;
 
     private Thread thread;
+    private Thread keepActiveThread;
 
     private UhidManager uhidManager;
 
+    private final boolean camera;
     private final int displayId;
     private final boolean supportsInputEvents;
     private final ControlChannel controlChannel;
     private final CleanUp cleanUp;
     private final DeviceMessageSender sender;
-    // Watches the app of a new virtual display (--new-display), null otherwise
+    // Resizes the main display for flex display without a new virtual display, null otherwise
+    private final PrimaryDisplayResizer primaryDisplayResizer;
+    // Watches the app of a new virtual display, null otherwise
     private final AppEndWatcher appEndWatcher;
     private final boolean clipboardAutosync;
     private final boolean powerOn;
-    private final boolean flexDisplay;
-    private final int flexDisplayDpi;
+    private final boolean keepActive;
 
     private final KeyCharacterMap charMap = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD);
 
@@ -114,39 +114,42 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
 
     private boolean keepDisplayPowerOff;
 
-    // Used for resetting video encoding on RESET_VIDEO message
+    // Used for resetting video encoding on RESET_VIDEO message or for sending camera controls
     private SurfaceCapture surfaceCapture;
-    private Size lastPrimaryDisplaySizeRequest;
-    private int lastPrimaryDisplayDpiRequest;
-
-    // DEVICE_MSG_TYPE_DISPLAY_READY plumbing. Listener registered at start,
-    // unregistered at stop. pendingDisplayReadySize is armed before applying a
-    // resize and cleared when the display reaches that size (at which point we
-    // send DISPLAY_READY to the client).
-    private DisplayManager.DisplayListenerHandle displayReadyListenerHandle;
-    private HandlerThread displayReadyHandlerThread;
-    private Handler displayReadyHandler;
-    private IDisplayWindowListener displayReadyWindowListener;
-    private final Object displayReadyLock = new Object();
-    private Size pendingDisplayReadySize;
-    private long pendingDisplayReadyGeneration;
-    private boolean pendingDisplayReadyDisplayInfoReached;
-    private boolean pendingDisplayReadyWindowConfigSeen;
-    private boolean displayReadyUseWindowConfig;
 
     public Controller(ControlChannel controlChannel, CleanUp cleanUp, Options options) {
-        this.displayId = options.getDisplayId();
+        this.camera = options.getVideoSource() == VideoSource.CAMERA;
         this.controlChannel = controlChannel;
         this.cleanUp = cleanUp;
+
+        if (this.camera) {
+            // Unused for camera
+            this.displayId = Device.DISPLAY_ID_NONE;
+            this.supportsInputEvents = false;
+            this.sender = null;
+            this.clipboardAutosync = false;
+            this.powerOn = false;
+            this.keepActive = false;
+            this.primaryDisplayResizer = null;
+            this.appEndWatcher = null;
+            return;
+        }
+
+        this.displayId = options.getDisplayId();
+
         this.clipboardAutosync = options.getClipboardAutosync();
         this.powerOn = options.getPowerOn();
-        this.flexDisplay = options.getFlexDisplay();
-        this.flexDisplayDpi = options.getFlexDisplayDpi();
+        this.keepActive = options.getKeepActive();
         initPointers();
         sender = new DeviceMessageSender(controlChannel);
-        appEndWatcher = displayId == Device.DISPLAY_ID_NONE
-                ? new AppEndWatcher(() -> sender.send(DeviceMessage.createAppEnded()))
-                : null;
+
+        if (options.getFlexDisplay() && options.getNewDisplay() == null && displayId == 0) {
+            primaryDisplayResizer = new PrimaryDisplayResizer(options.getFlexDisplayDpi(),
+                    (readyDisplayId, size) -> sender.send(DeviceMessage.createDisplayReady(readyDisplayId, size.getWidth(), size.getHeight())));
+        } else {
+            primaryDisplayResizer = null;
+        }
+        appEndWatcher = options.getNewDisplay() != null ? new AppEndWatcher(() -> sender.send(DeviceMessage.createAppEnded())) : null;
 
         supportsInputEvents = Device.supportsInputEvents(displayId);
         if (!supportsInputEvents) {
@@ -180,9 +183,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         DisplayData data = new DisplayData(virtualDisplayId, positionMapper);
         DisplayData old = this.displayData.getAndSet(data);
         if (appEndWatcher != null) {
-            // Also called when the display is recreated: follow the new id
-            appEndWatcher.setDisplayId(virtualDisplayId);
-            appEndWatcher.start();
+            appEndWatcher.watch(virtualDisplayId);
         }
         if (old == null) {
             // The very first time the Controller is notified of a new virtual display
@@ -245,7 +246,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
 
     private void control() throws IOException {
         // on start, power on the device
-        if (powerOn && displayId == 0 && !Device.isScreenOn(displayId)) {
+        if (!camera && powerOn && displayId == 0 && !Device.isScreenOn(displayId)) {
             Device.pressReleaseKeycode(KeyEvent.KEYCODE_POWER, displayId, Device.INJECT_MODE_ASYNC);
 
             // dirty hack
@@ -264,10 +265,36 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         }
     }
 
+    private void startKeepActiveThread() {
+        keepActiveThread = new Thread(() -> {
+            try {
+                while (true) {
+                    Thread.sleep(KEEP_ACTIVE_INTERVAL_MS);
+                    int actionDisplayId = getActionDisplayId();
+                    if (actionDisplayId != Device.DISPLAY_ID_NONE) {
+                        Device.keepActive(actionDisplayId);
+                    }
+                }
+            } catch (InterruptedException e) {
+                // ignore
+            } catch (Throwable e) {
+                Ln.e("Keep active error", e);
+            } finally {
+                Ln.d("Keep active thread stopped");
+            }
+        });
+        keepActiveThread.setName("keep-active");
+        keepActiveThread.setDaemon(true);
+        keepActiveThread.start();
+    }
+
     @Override
     public void start(TerminationListener listener) {
-        if (flexDisplay && displayId == 0) {
-            startDisplayReadyListener();
+        if (keepActive) {
+            startKeepActiveThread();
+        }
+        if (primaryDisplayResizer != null) {
+            primaryDisplayResizer.start();
         }
 
         thread = new Thread(() -> {
@@ -284,195 +311,28 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
             }
         }, "control-recv");
         thread.start();
-        sender.start();
-    }
-
-    private void startDisplayReadyListener() {
-        displayReadyHandlerThread = new HandlerThread("scrcpy-display-ready");
-        displayReadyHandlerThread.start();
-        displayReadyHandler = new Handler(displayReadyHandlerThread.getLooper());
-        displayReadyListenerHandle = ServiceManager.getDisplayManager().registerDisplayListener(eventDisplayId -> {
-            if (eventDisplayId != displayId) {
-                return;
-            }
-            if (Ln.isEnabled(Ln.Level.VERBOSE)) {
-                Ln.v("DISPLAY_READY: onDisplayChanged(" + eventDisplayId + ")");
-            }
-            noteDisplayReadySignal(false);
-        }, displayReadyHandler);
-
-        displayReadyWindowListener = new DisplayWindowListener() {
-            @Override
-            public void onDisplayConfigurationChanged(int eventDisplayId,
-                    Configuration newConfig) {
-                if (eventDisplayId != displayId) {
-                    return;
-                }
-                if (Ln.isEnabled(Ln.Level.VERBOSE)) {
-                    Ln.v("DISPLAY_READY: onDisplayConfigurationChanged("
-                            + eventDisplayId + ")");
-                }
-                noteDisplayReadySignal(true);
-            }
-        };
-
-        int[] wmDisplays = ServiceManager.getWindowManager()
-                .registerDisplayWindowListener(displayReadyWindowListener);
-        displayReadyUseWindowConfig = wmDisplays != null;
-        if (!displayReadyUseWindowConfig) {
-            displayReadyWindowListener = null;
-            Ln.w("DISPLAY_READY: WindowManager listener unavailable");
-        }
-    }
-
-    private void armPendingDisplayReady(Size requestedSize,
-            boolean requireWindowConfig) {
-        synchronized (displayReadyLock) {
-            pendingDisplayReadySize = requestedSize;
-            pendingDisplayReadyGeneration++;
-            pendingDisplayReadyDisplayInfoReached = false;
-            pendingDisplayReadyWindowConfigSeen =
-                    !displayReadyUseWindowConfig || !requireWindowConfig;
-        }
-    }
-
-    private void clearPendingDisplayReady(Size requestedSize) {
-        synchronized (displayReadyLock) {
-            if (requestedSize.equals(pendingDisplayReadySize)) {
-                pendingDisplayReadySize = null;
-                pendingDisplayReadyGeneration++;
-                pendingDisplayReadyDisplayInfoReached = false;
-                pendingDisplayReadyWindowConfigSeen = false;
-            }
-        }
-    }
-
-    private void noteDisplayReadySignal(boolean windowConfigSeen) {
-        Size pending;
-        long generation;
-        synchronized (displayReadyLock) {
-            pending = pendingDisplayReadySize;
-            if (pending == null) {
-                return;
-            }
-            generation = pendingDisplayReadyGeneration;
-            if (windowConfigSeen && displayReadyUseWindowConfig) {
-                pendingDisplayReadyWindowConfigSeen = true;
-            }
-        }
-        checkDisplayReadyReached(pending, generation);
-    }
-
-    private void checkDisplayReadyReached(Size pending, long generation) {
-        DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(displayId);
-        if (info == null) {
-            return;
-        }
-        Size current = info.getSize();
-        if (pending.equals(current)) {
-            synchronized (displayReadyLock) {
-                if (pendingDisplayReadyGeneration != generation
-                        || !pending.equals(pendingDisplayReadySize)) {
-                    return;
-                }
-                pendingDisplayReadyDisplayInfoReached = true;
-            }
-        } else {
-            // Display reached an intermediate or unrelated size. Keep waiting;
-            // the next onDisplayChanged should resolve to the requested size.
-            return;
-        }
-
-        boolean ready;
-        synchronized (displayReadyLock) {
-            ready = pendingDisplayReadyGeneration == generation
-                    && pending.equals(pendingDisplayReadySize)
-                    && pendingDisplayReadyDisplayInfoReached
-                    && pendingDisplayReadyWindowConfigSeen;
-        }
-        if (ready) {
-            Handler handler = displayReadyHandler;
-            if (handler == null) {
-                return;
-            }
-            // Send from the handler thread, which re-checks that this request
-            // is still current. The client waits for the guest to stop
-            // presenting frames, so no extra settle delay is needed here.
-            handler.post(() -> sendDisplayReadyIfCurrent(pending, generation));
-        }
-    }
-
-    private void sendDisplayReadyIfCurrent(Size pending, long generation) {
-        synchronized (displayReadyLock) {
-            if (pendingDisplayReadyGeneration != generation
-                    || !pending.equals(pendingDisplayReadySize)
-                    || !pendingDisplayReadyDisplayInfoReached
-                    || !pendingDisplayReadyWindowConfigSeen) {
-                return;
-            }
-        }
-
-        DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(displayId);
-        if (info == null || !pending.equals(info.getSize())) {
-            return;
-        }
-
-        synchronized (displayReadyLock) {
-            if (pendingDisplayReadyGeneration != generation
-                    || !pending.equals(pendingDisplayReadySize)
-                    || !pendingDisplayReadyDisplayInfoReached
-                    || !pendingDisplayReadyWindowConfigSeen) {
-                return;
-            }
-            pendingDisplayReadySize = null;
-            pendingDisplayReadyGeneration++;
-            pendingDisplayReadyDisplayInfoReached = false;
-            pendingDisplayReadyWindowConfigSeen = false;
-        }
-
-        DeviceMessage msg = DeviceMessage.createDisplayReady(displayId,
-                pending.getWidth(), pending.getHeight());
-        sender.send(msg);
-        if (Ln.isEnabled(Ln.Level.VERBOSE)) {
-            Ln.v("Sent DISPLAY_READY for display " + displayId + " at "
-                    + pending.getWidth() + "x" + pending.getHeight());
-        }
-    }
-
-    private void stopDisplayReadyListener() {
-        if (displayReadyListenerHandle != null) {
-            ServiceManager.getDisplayManager().unregisterDisplayListener(displayReadyListenerHandle);
-            displayReadyListenerHandle = null;
-        }
-        if (displayReadyWindowListener != null) {
-            ServiceManager.getWindowManager()
-                    .unregisterDisplayWindowListener(displayReadyWindowListener);
-            displayReadyWindowListener = null;
-        }
-        if (displayReadyHandlerThread != null) {
-            displayReadyHandlerThread.quitSafely();
-            displayReadyHandlerThread = null;
-        }
-        displayReadyHandler = null;
-        displayReadyUseWindowConfig = false;
-        synchronized (displayReadyLock) {
-            pendingDisplayReadySize = null;
-            pendingDisplayReadyGeneration++;
-            pendingDisplayReadyDisplayInfoReached = false;
-            pendingDisplayReadyWindowConfigSeen = false;
+        if (sender != null) {
+            sender.start();
         }
     }
 
     @Override
     public void stop() {
-        stopDisplayReadyListener();
+        if (keepActiveThread != null) {
+            keepActiveThread.interrupt();
+        }
+        if (primaryDisplayResizer != null) {
+            primaryDisplayResizer.stop();
+        }
         if (appEndWatcher != null) {
             appEndWatcher.stop();
         }
         if (thread != null) {
             thread.interrupt();
         }
-        sender.stop();
+        if (sender != null) {
+            sender.stop();
+        }
     }
 
     @Override
@@ -480,112 +340,131 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         if (thread != null) {
             thread.join();
         }
-        sender.join();
+        if (sender != null) {
+            sender.join();
+        }
     }
 
     private boolean handleEvent() throws IOException {
         ControlMessage msg;
         try {
             msg = controlChannel.recv();
+        } catch (ControlProtocolException e) {
+            Ln.e("Control protocol error", e);
+            return false;
         } catch (IOException e) {
             // this is expected on close
             return false;
         }
 
-        switch (msg.getType()) {
-            case ControlMessage.TYPE_INJECT_KEYCODE:
-                if (supportsInputEvents) {
-                    injectKeycode(msg.getAction(), msg.getKeycode(), msg.getRepeat(), msg.getMetaState());
-                }
-                break;
-            case ControlMessage.TYPE_INJECT_TEXT:
-                if (supportsInputEvents) {
-                    injectText(msg.getText());
-                }
-                break;
-            case ControlMessage.TYPE_INJECT_TOUCH_EVENT:
-                if (supportsInputEvents) {
-                    injectTouch(msg.getAction(), msg.getPointerId(), msg.getPosition(), msg.getPressure(), msg.getActionButton(), msg.getButtons());
-                }
-                break;
-            case ControlMessage.TYPE_INJECT_SCROLL_EVENT:
-                if (supportsInputEvents) {
-                    injectScroll(msg.getPosition(), msg.getHScroll(), msg.getVScroll(), msg.getButtons());
-                }
-                break;
-            case ControlMessage.TYPE_BACK_OR_SCREEN_ON:
-                if (supportsInputEvents) {
-                    pressBackOrTurnScreenOn(msg.getAction());
-                }
-                break;
-            case ControlMessage.TYPE_EXPAND_NOTIFICATION_PANEL:
-                Device.expandNotificationPanel();
-                break;
-            case ControlMessage.TYPE_EXPAND_SETTINGS_PANEL:
-                Device.expandSettingsPanel();
-                break;
-            case ControlMessage.TYPE_COLLAPSE_PANELS:
-                Device.collapsePanels();
-                break;
-            case ControlMessage.TYPE_GET_CLIPBOARD:
-                getClipboard(msg.getCopyKey());
-                break;
-            case ControlMessage.TYPE_SET_CLIPBOARD:
-                setClipboard(msg.getText(), msg.getPaste(), msg.getSequence());
-                break;
-            case ControlMessage.TYPE_SET_DISPLAY_POWER:
-                if (supportsInputEvents) {
-                    setDisplayPower(msg.getOn());
-                }
-                break;
-            case ControlMessage.TYPE_ROTATE_DEVICE:
-                Device.rotateDevice(getActionDisplayId());
-                break;
-            case ControlMessage.TYPE_UHID_CREATE:
-                getUhidManager().open(msg.getId(), msg.getVendorId(), msg.getProductId(), msg.getText(), msg.getData());
-                break;
-            case ControlMessage.TYPE_UHID_INPUT:
-                getUhidManager().writeInput(msg.getId(), msg.getData());
-                break;
-            case ControlMessage.TYPE_UHID_DESTROY:
-                getUhidManager().close(msg.getId());
-                break;
-            case ControlMessage.TYPE_OPEN_HARD_KEYBOARD_SETTINGS:
-                openHardKeyboardSettings();
-                break;
-            case ControlMessage.TYPE_START_APP:
-                startAppAsync(msg.getText());
-                break;
+        int type = msg.getType();
+
+        // Events for all sources (display or camera)
+        switch (type) {
             case ControlMessage.TYPE_RESET_VIDEO:
                 resetVideo();
-                break;
-            case ControlMessage.TYPE_RESIZE_DISPLAY: {
-                int dpi = flexDisplay && displayId == 0
-                        ? flexDisplayDpi
-                        : 0;
-                setDisplaySize(msg.getWidth(), msg.getHeight(), dpi);
-                break;
-            }
-            case ControlMessage.TYPE_CAMERA_SET_TORCH:
-                if (surfaceCapture instanceof CameraCapture) {
-                    ((CameraCapture) surfaceCapture).setTorchEnabled(msg.getOn());
-                }
-                break;
-            case ControlMessage.TYPE_CAMERA_ZOOM_IN:
-                if (surfaceCapture instanceof CameraCapture) {
-                    ((CameraCapture) surfaceCapture).zoomIn();
-                }
-                break;
-            case ControlMessage.TYPE_CAMERA_ZOOM_OUT:
-                if (surfaceCapture instanceof CameraCapture) {
-                    ((CameraCapture) surfaceCapture).zoomOut();
-                }
-                break;
+                return true;
             default:
-                // do nothing
+                // fall through
         }
 
-        return true;
+        if (!camera) {
+            switch (type) {
+                case ControlMessage.TYPE_INJECT_KEYCODE:
+                    if (supportsInputEvents) {
+                        injectKeycode(msg.getAction(), msg.getKeycode(), msg.getRepeat(), msg.getMetaState());
+                    }
+                    return true;
+                case ControlMessage.TYPE_INJECT_TEXT:
+                    if (supportsInputEvents) {
+                        injectText(msg.getText());
+                    }
+                    return true;
+                case ControlMessage.TYPE_INJECT_TOUCH_EVENT:
+                    if (supportsInputEvents) {
+                        injectTouch(
+                                msg.getAction(), msg.getPointerId(), msg.getPosition(), msg.getPressure(), msg.getActionButton(), msg.getButtons());
+                    }
+                    return true;
+                case ControlMessage.TYPE_INJECT_SCROLL_EVENT:
+                    if (supportsInputEvents) {
+                        injectScroll(msg.getPosition(), msg.getHScroll(), msg.getVScroll(), msg.getButtons());
+                    }
+                    return true;
+                case ControlMessage.TYPE_BACK_OR_SCREEN_ON:
+                    if (supportsInputEvents) {
+                        pressBackOrTurnScreenOn(msg.getAction());
+                    }
+                    return true;
+                case ControlMessage.TYPE_EXPAND_NOTIFICATION_PANEL:
+                    Device.expandNotificationPanel();
+                    return true;
+                case ControlMessage.TYPE_EXPAND_SETTINGS_PANEL:
+                    Device.expandSettingsPanel();
+                    return true;
+                case ControlMessage.TYPE_COLLAPSE_PANELS:
+                    Device.collapsePanels();
+                    return true;
+                case ControlMessage.TYPE_GET_CLIPBOARD:
+                    getClipboard(msg.getCopyKey());
+                    return true;
+                case ControlMessage.TYPE_SET_CLIPBOARD:
+                    setClipboard(msg.getText(), msg.getPaste(), msg.getSequence());
+                    return true;
+                case ControlMessage.TYPE_SET_DISPLAY_POWER:
+                    if (supportsInputEvents) {
+                        setDisplayPower(msg.getOn());
+                    }
+                    return true;
+                case ControlMessage.TYPE_ROTATE_DEVICE:
+                    int actionDisplayId = getActionDisplayId();
+                    if (actionDisplayId != Device.DISPLAY_ID_NONE) {
+                        Device.rotateDevice(actionDisplayId);
+                    }
+                    return true;
+                case ControlMessage.TYPE_UHID_CREATE:
+                    getUhidManager().open(msg.getId(), msg.getVendorId(), msg.getProductId(), msg.getText(), msg.getData());
+                    return true;
+                case ControlMessage.TYPE_UHID_INPUT:
+                    getUhidManager().writeInput(msg.getId(), msg.getData());
+                    return true;
+                case ControlMessage.TYPE_UHID_DESTROY:
+                    getUhidManager().close(msg.getId());
+                    return true;
+                case ControlMessage.TYPE_OPEN_HARD_KEYBOARD_SETTINGS:
+                    openHardKeyboardSettings();
+                    return true;
+                case ControlMessage.TYPE_START_APP:
+                    startAppAsync(msg.getText());
+                    return true;
+                case ControlMessage.TYPE_RESIZE_DISPLAY:
+                    resizeDisplay(msg.getWidth(), msg.getHeight());
+                    return true;
+                case ControlMessage.TYPE_SCAN_FILE:
+                    scanFile(msg.getText());
+                    return true;
+                default:
+                    // fall through
+            }
+        } else {
+            assert surfaceCapture instanceof CameraCapture;
+            CameraCapture cameraCapture = (CameraCapture) surfaceCapture;
+            switch (type) {
+                case ControlMessage.TYPE_CAMERA_SET_TORCH:
+                    cameraCapture.setTorchEnabled(msg.getOn());
+                    return true;
+                case ControlMessage.TYPE_CAMERA_ZOOM_IN:
+                    cameraCapture.zoomIn();
+                    return true;
+                case ControlMessage.TYPE_CAMERA_ZOOM_OUT:
+                    cameraCapture.zoomOut();
+                    return true;
+                default:
+                    // fall through
+            }
+        }
+
+        throw new AssertionError("Unexpected message type: " + type);
     }
 
     private boolean injectKeycode(int action, int keycode, int repeat, int metaState) {
@@ -605,9 +484,11 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         }
 
         int actionDisplayId = getActionDisplayId();
-        for (KeyEvent event : events) {
-            if (!Device.injectEvent(event, actionDisplayId, Device.INJECT_MODE_ASYNC)) {
-                return false;
+        if (actionDisplayId != Device.DISPLAY_ID_NONE) {
+            for (KeyEvent event : events) {
+                if (!Device.injectEvent(event, actionDisplayId, Device.INJECT_MODE_ASYNC)) {
+                    return false;
+                }
             }
         }
         return true;
@@ -676,11 +557,10 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         pointer.setPressure(pressure);
 
         int source;
-        boolean mousePointer = pointerId == POINTER_ID_MOUSE;
-        boolean mouseButtonEvent = actionButton != 0 || buttons != 0;
-        if (mousePointer && (action == MotionEvent.ACTION_HOVER_MOVE || mouseButtonEvent)) {
-            // Real mouse event. Keep primary clicks as SOURCE_MOUSE too, because desktop
-            // apps such as Chromium route tab-strip clicks through mouse-only caption logic.
+        boolean activeButtons = (actionButton | buttons) != 0;
+        if (pointerId == POINTER_ID_MOUSE && (action == MotionEvent.ACTION_HOVER_MOVE || activeButtons)) {
+            // Real mouse event. Primary clicks stay mouse events too: desktop apps such as Chromium handle tab strip clicks only from a
+            // mouse.
             pointerProperties[pointerIndex].toolType = MotionEvent.TOOL_TYPE_MOUSE;
             source = InputDevice.SOURCE_MOUSE;
             pointer.setUp(buttons == 0);
@@ -804,14 +684,24 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     }
 
     private boolean pressBackOrTurnScreenOn(int action) {
-        if (displayId == Device.DISPLAY_ID_NONE || Device.isScreenOn(displayId)) {
+        boolean injectBack;
+        // Device.isScreenOn(displayId) ignores the displayId below Android 14
+        if (Build.VERSION.SDK_INT >= AndroidVersions.API_34_ANDROID_14) {
+            // Inject BACK if the screen is on for the current virtual display id
+            int actionDisplayId = getActionDisplayId();
+            injectBack = actionDisplayId == Device.DISPLAY_ID_NONE || Device.isScreenOn(actionDisplayId);
+        } else {
+            // Inject BACK if the display is not the main display, or if the main display is on
+            injectBack = displayId != 0 || Device.isScreenOn(0);
+        }
+        if (injectBack) {
             return injectKeyEvent(action, KeyEvent.KEYCODE_BACK, 0, 0, Device.INJECT_MODE_ASYNC);
         }
 
         // Screen is off
         // Only press POWER on ACTION_DOWN
         if (action != KeyEvent.ACTION_DOWN) {
-            // do nothing,
+            // do nothing
             return true;
         }
 
@@ -870,11 +760,19 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     }
 
     private boolean injectKeyEvent(int action, int keyCode, int repeat, int metaState, int injectMode) {
-        return Device.injectKeyEvent(action, keyCode, repeat, metaState, getActionDisplayId(), injectMode);
+        int actionDisplayId = getActionDisplayId();
+        if (actionDisplayId == Device.DISPLAY_ID_NONE) {
+            return false;
+        }
+        return Device.injectKeyEvent(action, keyCode, repeat, metaState, actionDisplayId, injectMode);
     }
 
     private boolean pressReleaseKeycode(int keyCode, int injectMode) {
-        return Device.pressReleaseKeycode(keyCode, getActionDisplayId(), injectMode);
+        int actionDisplayId = getActionDisplayId();
+        if (actionDisplayId == Device.DISPLAY_ID_NONE) {
+            return false;
+        }
+        return Device.pressReleaseKeycode(keyCode, actionDisplayId, injectMode);
     }
 
     private int getActionDisplayId() {
@@ -886,8 +784,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         // Virtual display created by --new-display, use the virtualDisplayId
         DisplayData data = displayData.get();
         if (data == null) {
-            // If no virtual display id is initialized yet, use the main display id
-            return 0;
+            return Device.DISPLAY_ID_NONE;
         }
 
         return data.virtualDisplayId;
@@ -1003,65 +900,27 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     private void resetVideo() {
         if (surfaceCapture != null) {
             Ln.i("Video capture reset");
-            surfaceCapture.requestInvalidate();
+            surfaceCapture.getCaptureControl().reset(CaptureControl.RESET_REASON_CLIENT_RESET);
         }
     }
 
-    private static int alignUp(int value, int alignment) {
-        return (value + alignment - 1) & -alignment;
+    private void resizeDisplay(int width, int height) {
+        if (primaryDisplayResizer != null) {
+            primaryDisplayResizer.resize(width, height);
+        } else if (surfaceCapture instanceof NewDisplayCapture) {
+            ((NewDisplayCapture) surfaceCapture).requestResize(width, height);
+        } else {
+            Ln.w("Display resize ignored: not a flex display");
+        }
     }
 
-    private void setDisplaySize(int width, int height, int dpi) {
-        if (surfaceCapture instanceof NewDisplayCapture) {
-            NewDisplayCapture nd = (NewDisplayCapture) surfaceCapture;
-            Ln.i("Resize virtual display to " + width + "x" + height + "/" + dpi);
-            nd.setDisplaySize(width, height, dpi);
-        } else if ((surfaceCapture instanceof ScreenCapture || surfaceCapture == null)
-                && flexDisplay && displayId == 0) {
-            if (width <= 0 || height <= 0) {
-                Ln.w("Primary display resize ignored: invalid size " + width
-                        + "x" + height);
-                return;
-            }
-            int finalWidth = Math.max(width, PRIMARY_DISPLAY_MIN_WIDTH);
-            int finalHeight = Math.max(height, PRIMARY_DISPLAY_MIN_HEIGHT);
-            if (surfaceCapture instanceof ScreenCapture) {
-                // Many encoders require dimensions aligned to at least 8 pixels.
-                int alignedWidth = alignUp(finalWidth, DISPLAY_SIZE_ALIGNMENT);
-                int alignedHeight = alignUp(finalHeight, DISPLAY_SIZE_ALIGNMENT);
-                if (alignedWidth != finalWidth || alignedHeight != finalHeight) {
-                    Ln.v("Align primary display resize " + width + "x" + height
-                            + " -> " + alignedWidth + "x" + alignedHeight);
-                }
-                finalWidth = alignedWidth;
-                finalHeight = alignedHeight;
-            }
-
-            Size requestedSize = new Size(finalWidth, finalHeight);
-            if (requestedSize.equals(lastPrimaryDisplaySizeRequest)
-                    && dpi == lastPrimaryDisplayDpiRequest) {
-                armPendingDisplayReady(requestedSize, false);
-                noteDisplayReadySignal(false);
-                return;
-            }
-
-            Ln.i("Resize primary display to " + requestedSize.getWidth() + "x"
-                    + requestedSize.getHeight() + "/" + dpi);
-            int requestedDpi = dpi != lastPrimaryDisplayDpiRequest ? dpi : 0;
-            // Arm the DisplayListener before applying the resize so it cannot
-            // miss a synchronous display-changed callback from wm size.
-            armPendingDisplayReady(requestedSize, true);
-            if (Device.setDisplaySizeAndDensity(displayId, requestedSize,
-                    requestedDpi)) {
-                lastPrimaryDisplaySizeRequest = requestedSize;
-                lastPrimaryDisplayDpiRequest = dpi;
-                noteDisplayReadySignal(false);
-            } else {
-                clearPendingDisplayReady(requestedSize);
-                Ln.w("Primary display resize failed");
-            }
-        } else {
-            Ln.w("Display resize ignored: not a virtual display capture");
+    private void scanFile(String path) {
+        try {
+            @SuppressWarnings("deprecation")
+            Intent intent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, Uri.fromFile(new File(path)));
+            Device.sendBroadcast(intent);
+        } catch (Throwable t) {
+            Ln.e("MediaStore scan failed for " + path, t);
         }
     }
 }

@@ -10,11 +10,14 @@
 #endif
 #include "events.h"
 #include "screen.h"
+#include "sdl_hints.h"
 #include "usb/aoa_hid.h"
 #include "usb/gamepad_aoa.h"
 #include "usb/keyboard_aoa.h"
 #include "usb/mouse_aoa.h"
 #include "util/log.h"
+#include "util/str.h"
+#include "util/term.h"
 
 struct scrcpy_otg {
     struct sc_usb usb;
@@ -57,16 +60,32 @@ event_loop(struct scrcpy_otg *s) {
     return SCRCPY_EXIT_FAILURE;
 }
 
+static void
+set_terminal_title_with_prefix(const char *value) {
+    char title[128];
+    memcpy(title, "scrcpy - ", 9);
+    size_t trunc_len = sc_str_utf8_truncation_index(value, 128 - 9 - 1);
+    assert(trunc_len <= 128 - 9 - 1);
+    memcpy(&title[9], value, trunc_len);
+    title[9 + trunc_len] = '\0';
+    sc_term_set_title(title);
+}
+
 enum scrcpy_exit_code
 scrcpy_otg(struct scrcpy_options *options) {
     static struct scrcpy_otg scrcpy_otg;
     struct scrcpy_otg *s = &scrcpy_otg;
 
     const char *serial = options->serial;
-
-    if (!SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1")) {
-        LOGW("Could not allow joystick background events");
+    if (!serial) {
+        // No explicit selection, check $ANDROID_SERIAL
+        serial = getenv("ANDROID_SERIAL");
+        if (serial) {
+            LOGI("Using ANDROID_SERIAL: %s", serial);
+        }
     }
+
+    sc_sdl_set_hints(options->render_driver, options->disable_screensaver);
 
     // Minimal SDL initialization
     if (!SDL_Init(SDL_INIT_EVENTS)) {
@@ -82,10 +101,6 @@ scrcpy_otg(struct scrcpy_options *options) {
     }
 
     atexit(SDL_Quit);
-
-    if (!SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1")) {
-        LOGW("Could not enable mouse focus clickthrough");
-    }
 
     enum scrcpy_exit_code ret = SCRCPY_EXIT_FAILURE;
 
@@ -184,7 +199,15 @@ scrcpy_otg(struct scrcpy_options *options) {
 
     const char *window_title = options->window_title;
     if (!window_title) {
-        window_title = usb_device.product ? usb_device.product : "scrcpy";
+        window_title = usb_device.product; // might still be NULL
+    }
+
+    if (window_title) {
+        if (options->update_terminal_title) {
+            set_terminal_title_with_prefix(window_title);
+        }
+    } else {
+        window_title = "scrcpy";
     }
 
     struct sc_screen_params params = {

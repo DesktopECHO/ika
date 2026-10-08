@@ -1,6 +1,7 @@
 #include "audio_player.h"
 
 #include "util/log.h"
+#include "util/memory.h"
 #include "SDL3/SDL_hints.h"
 
 /** Downcast frame_sink to sc_audio_player */
@@ -37,12 +38,13 @@ sc_audio_player_stream_callback(void *userdata, SDL_AudioStream *stream,
     }
 }
 
-static bool
+static enum sc_sink_result
 sc_audio_player_frame_sink_push(struct sc_frame_sink *sink,
                                 const AVFrame *frame) {
     struct sc_audio_player *ap = DOWNCAST(sink);
 
-    return sc_audio_regulator_push(&ap->audioreg, frame);
+    bool ok = sc_audio_regulator_push(&ap->audioreg, frame);
+    return ok ? SC_SINK_OK : SC_SINK_KO;
 }
 
 static bool
@@ -53,14 +55,8 @@ sc_audio_player_frame_sink_open(struct sc_frame_sink *sink,
 
     struct sc_audio_player *ap = DOWNCAST(sink);
 
-#ifdef SCRCPY_LAVU_HAS_CHLAYOUT
     assert(ctx->ch_layout.nb_channels > 0 && ctx->ch_layout.nb_channels < 256);
     uint8_t nb_channels = ctx->ch_layout.nb_channels;
-#else
-    int tmp = av_get_channel_layout_nb_channels(ctx->channel_layout);
-    assert(tmp > 0 && tmp < 256);
-    uint8_t nb_channels = tmp;
-#endif
 
     assert(ctx->sample_rate > 0);
     assert(!av_sample_fmt_is_planar(SC_AV_SAMPLE_FMT));
@@ -95,7 +91,7 @@ sc_audio_player_frame_sink_open(struct sc_frame_sink *sink,
     // honored)
     uint64_t aout_buffer_samples = MAX(1024, aout_samples);
     ap->aout_buffer_size = aout_buffer_samples * sample_size;
-    ap->aout_buffer = malloc(ap->aout_buffer_size);
+    ap->aout_buffer = sc_allocarray(aout_buffer_samples, sample_size);
     if (!ap->aout_buffer) {
         sc_audio_regulator_destroy(&ap->audioreg);
         return false;
