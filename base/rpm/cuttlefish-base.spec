@@ -96,6 +96,7 @@ Requires:       nftables
 Requires:       openssl
 Requires:       python3
 Requires:       python3-requests
+Requires:       v4l-utils
 Requires:       xdg-utils
 # Linked library dependencies are generated from ELF SONAMEs. Keep only the
 # scrcpy runtime tools that RPM cannot discover from the packaged binaries.

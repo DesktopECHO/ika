@@ -123,6 +123,8 @@ class CuttlefishConfig {
   struct MediaConfig {
     MediaType type;
     std::string lens_facing;
+    // Host V4L2 device for kV4l2Proxy; empty means /dev/video0
+    std::string device;
   };
 
   void set_secure_hals(const std::set<SecureHal>&);

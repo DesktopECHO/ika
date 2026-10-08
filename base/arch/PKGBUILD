@@ -181,7 +181,7 @@ package_ika-base() {
   depends=(curl desktop-file-utils dnsmasq gtk3 iproute2 libarchive libcap libdecor libdrm libnotify libx11
            libxext lsof lz4 'mesa>=1:26.1' mesa-utils
            net-tools networkmanager nftables openssl python python-requests
-           pipewire procps-ng shadow systemd virglrenderer vulkan-icd-loader
+           pipewire procps-ng shadow systemd v4l-utils virglrenderer vulkan-icd-loader
            vulkan-swrast vulkan-tools wayland wayland-utils xdg-utils xz
            # Loaded at runtime by the static SDL in the scrcpy viewer
            libxcursor libxfixes libxi libxkbcommon libxrandr libxss)

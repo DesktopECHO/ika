@@ -1,0 +1,42 @@
+Patch summary:
+front.mk: one front camera, front features only (a missing back camera stalls
+CameraX ~6 s).
+
+diff --git a/shared/camera/config/front.mk b/shared/camera/config/front.mk
+new file mode 100644
+index 0000000..4d645fe
+--- /dev/null
++++ b/shared/camera/config/front.mk
+@@ -0,0 +1,32 @@
++#
++# Copyright (C) 2026 The Android Open Source Project
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++#
++
++# A single front camera: the emulated front camera, or a host camera passed
++# through with virtio-media, which the external camera HAL reports as the
++# front camera. Only features both provide are declared. android.hardware.camera
++# means a back camera: declaring it makes CameraX's camera validation fail and
++# retry for several seconds whenever an app initializes it.
++PRODUCT_COPY_FILES += \
++    frameworks/native/data/etc/android.hardware.camera.front.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.camera.front.xml
++
++PRODUCT_VENDOR_PROPERTIES += \
++    ro.camerax.extensions.enabled=true \
++    ro.vendor.camera.config=front
++
++PRODUCT_SOONG_NAMESPACES += hardware/google/camera/devices/EmulatedCamera
++
++PRODUCT_PACKAGES += \
++    emu_camera_front.json

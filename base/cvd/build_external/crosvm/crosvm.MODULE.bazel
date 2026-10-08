@@ -117,6 +117,12 @@ crosvm_bin.annotation(
         # includes libc headers from Debian's multiarch include directory.
         "BINDGEN_EXTRA_CLANG_ARGS": "-I/usr/include/aarch64-linux-gnu -I/usr/include/x86_64-linux-gnu",
     },
+    patch_args = ["-p1"],
+    patches = [
+        # The --v4l2-proxy device polls through v4l2r's Poller; its EPOLLIN probe
+        # starts read() streaming on host cameras whose driver supports read().
+        "@//build_external/crosvm:PATCH.v4l2r-poller-no-epollin-probe.patch",
+    ],
 )
 
 crosvm_bin.annotation(

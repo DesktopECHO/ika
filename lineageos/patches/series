@@ -36,7 +36,9 @@ hardware/google/gfxstream patches/hardware-google-gfxstream-sparse-astc-native.p
 hardware/google/gfxstream patches/hardware-google-gfxstream-sparse-compressed-feature-contract.patch
 hardware/google/gfxstream patches/hardware-google-gfxstream-gles1-alpha-test-core-profile.patch
 hardware/google/camera patches/hardware-google-camera-emulated-apex-key.patch
+hardware/google/camera patches/hardware-google-camera-front-only-config.patch
 hardware/interfaces patches/hardware-interfaces-audio-input-pacing.patch
+hardware/interfaces patches/hardware-interfaces-camera-external-nv12.patch
 libcore patches/libcore-writable-dex.patch
 art patches/art.patch
 device/generic/goldfish patches/device-generic-goldfish.patch
@@ -49,6 +51,8 @@ device/google/cuttlefish patches/device-google-cuttlefish-health-compat.patch
 device/google/cuttlefish patches/device-google-cuttlefish-sepolicy-compat.patch
 device/google/cuttlefish patches/device-google-cuttlefish-proto-editions.patch
 device/google/cuttlefish patches/device-google-cuttlefish-secure-env-cppcose-compat.patch
+device/google/cuttlefish patches/device-google-cuttlefish-front-camera.patch
+device/google/cuttlefish patches/device-google-cuttlefish-camcorder-profiles.patch
 frameworks/av patches/frameworks-av.patch
 frameworks/native patches/frameworks-native-logspam.patch
 frameworks/native patches/frameworks-native-vulkan-profile-timestamps.patch
@@ -72,6 +76,11 @@ frameworks/base patches/frameworks-base-telephony-no-data-quiet.patch
 system/core patches/system-core.patch
 system/sepolicy patches/system-sepolicy.patch
 system/sepolicy patches/system-sepolicy-checkfc-arm64-getopt.patch
+packages/apps/Aperture patches/packages-apps-Aperture-16-9.patch
+packages/apps/Aperture patches/packages-apps-Aperture-camera-sizes.patch
+packages/apps/Aperture patches/packages-apps-Aperture-video-denoise.patch
+packages/apps/Aperture patches/packages-apps-Aperture-ika-settings.patch
+packages/apps/Aperture patches/packages-apps-Aperture-video-quality-interval.patch
 packages/apps/Launcher3 patches/packages-apps-Launcher3.patch
 packages/apps/Settings patches/packages-apps-Settings.patch
 vendor/lineage patches/vendor-lineage.patch
