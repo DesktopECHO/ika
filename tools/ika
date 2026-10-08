@@ -458,6 +458,8 @@ CVD_NEWLY_PROVISIONED="false"
 START_CONSOLE="true"
 # Set by the internal --game-session start option.
 START_GAME_SESSION="false"
+# Set by 'start', which keeps a running VM: --camera then can't take effect.
+START_KEEPS_RUNNING_VM="false"
 : "${IKA_STOP_GRACE_SEC:=30}"
 : "${IKA_SCRCPY_REBOOT_TIMEOUT_SEC:=120}"
 
@@ -659,10 +661,155 @@ save_data_gb_configuration() {
   log "userdata size configured: ${data_gb} GB (applies on next start)"
 }
 
+# ============================================================================
+# Host camera passthrough (--camera)
+# ============================================================================
+#
+# '--camera' passes a host V4L2 camera to the guest with crosvm virtio-media
+# (cvd --media=type=v4l2_proxy,device=...). The guest's external camera HAL
+# serves it as the front camera, in place of the emulated one. Without a value,
+# the first video capture device offering MJPEG, NV12 or YUYV is used: USB
+# (UVC) webcams, the FaceTime camera of Apple Silicon Macs (Asahi apple-isp)
+# and of older Intel Macs (facetimehd). Virtual cameras (v4l2loopback, such as
+# the OBS virtual camera, and vivid) are used only when there is no other;
+# '--camera=obs' picks the OBS virtual camera.
+
+# True when DEVICE is a camera the guest can use: a video capture node offering
+# MJPEG, NV12 or YUYV. Without v4l2-ctl, accepts the first node of each device
+# (sysfs index 0), as UVC cameras add metadata nodes after their capture node.
+is_usable_camera_device() {
+  local device="$1"
+  local info
+  local caps
+  local formats
+
+  if ! command -v v4l2-ctl >/dev/null 2>&1; then
+    [[ "$(cat "/sys/class/video4linux/${device##*/}/index" 2>/dev/null)" == "0" ]]
+    return
+  fi
+
+  info="$(v4l2-ctl -d "${device}" --info 2>/dev/null)" || return 1
+  caps="$(awk '/Device Caps/ { print $NF; exit }' <<<"${info}")"
+  [[ "${caps}" =~ ^0x[0-9a-fA-F]+$ ]] || return 1
+  # V4L2_CAP_VIDEO_CAPTURE
+  (( caps & 0x1 )) || return 1
+  formats="$(v4l2-ctl -d "${device}" --list-formats 2>/dev/null)" || return 1
+  [[ "${formats}" =~ \'(MJPG|NV12|YUYV)\' ]]
+}
+
+# Prints the V4L2 driver name of DEVICE (e.g. "uvcvideo", "v4l2 loopback").
+camera_v4l2_driver() {
+  v4l2-ctl -d "$1" --info 2>/dev/null \
+    | sed -n 's/^[[:space:]]*Driver name[[:space:]]*:[[:space:]]*//p' | head -n 1
+}
+
+# True when DEVICE is a virtual camera: v4l2loopback (OBS and other virtual
+# cameras) or the vivid test driver. These have no parent device in sysfs.
+is_virtual_camera_device() {
+  local device="$1"
+
+  case "$(camera_v4l2_driver "${device}")" in
+    "v4l2 loopback"|vivid) return 0 ;;
+  esac
+  [[ ! -e "/sys/class/video4linux/${device##*/}/device" ]]
+}
+
+# Prints the host's video nodes as /dev/videoN, in number order.
+list_video_devices() {
+  local node
+
+  while IFS= read -r node; do
+    [[ -c "/dev/${node}" ]] && printf '/dev/%s\n' "${node}"
+  done < <(find /sys/class/video4linux -maxdepth 1 -name 'video*' -printf '%f\n' 2>/dev/null | sort -V)
+}
+
+# Prints the first usable host camera in /dev/videoN order, preferring a
+# physical camera over a virtual one.
+detect_host_camera() {
+  local device
+  local virtual=""
+
+  while IFS= read -r device; do
+    is_usable_camera_device "${device}" || continue
+    if ! is_virtual_camera_device "${device}"; then
+      printf '%s\n' "${device}"
+      return 0
+    fi
+    [[ -n "${virtual}" ]] || virtual="${device}"
+  done < <(list_video_devices)
+  [[ -n "${virtual}" ]] || return 1
+  printf '%s\n' "${virtual}"
+}
+
+# Prints the OBS virtual camera: the v4l2loopback device named after OBS, or
+# else the first v4l2loopback device.
+detect_obs_camera() {
+  local device
+  local loopback=""
+
+  while IFS= read -r device; do
+    [[ "$(camera_v4l2_driver "${device}")" == "v4l2 loopback" ]] || continue
+    if [[ "$(cat "/sys/class/video4linux/${device##*/}/name" 2>/dev/null)" == *OBS* ]]; then
+      printf '%s\n' "${device}"
+      return 0
+    fi
+    [[ -n "${loopback}" ]] || loopback="${device}"
+  done < <(list_video_devices)
+  [[ -n "${loopback}" ]] || return 1
+  printf '%s\n' "${loopback}"
+}
+
+# Prints the host camera for --camera: "auto" (or empty) detects one, "obs"
+# picks the OBS virtual camera, "videoN" or "/dev/videoN" names one.
+resolve_camera_device() {
+  local requested="${1:-auto}"
+  local device
+  local sysfs
+  local name
+  local driver
+
+  case "${requested}" in
+    auto)
+      device="$(detect_host_camera)" \
+        || die "no usable camera found (a video capture device offering MJPEG, NV12 or YUYV); name one with --camera=videoN"
+      ;;
+    obs)
+      device="$(detect_obs_camera)" \
+        || die "no OBS virtual camera found; click Start Virtual Camera in OBS first"
+      is_usable_camera_device "${device}" \
+        || log "warning: ${device} is not capturing yet; start the virtual camera in OBS before Android opens the camera"
+      ;;
+    *)
+      [[ "${requested}" =~ ^(/dev/)?video[0-9]+$ ]] \
+        || die "--camera expects obs, videoN or /dev/videoN, got '${requested}'"
+      device="/dev/${requested#/dev/}"
+      [[ -c "${device}" ]] || die "camera ${device} does not exist"
+      is_usable_camera_device "${device}" \
+        || log "warning: ${device} does not look like a camera (a video capture device offering MJPEG, NV12 or YUYV); Android may show none"
+      ;;
+  esac
+
+  [[ -r "${device}" && -w "${device}" ]] \
+    || die "no access to camera ${device}; add your user to the video group and log in again"
+  sysfs="/sys/class/video4linux/${device##*/}"
+  name="$(cat "${sysfs}/name" 2>/dev/null || true)"
+  # uvcvideo names nodes "PRODUCT: ENTITY" (cut at 31 characters); keep PRODUCT
+  name="${name%: *}"
+  driver="$(readlink -f "${sysfs}/device/driver" 2>/dev/null || true)"
+  driver="${driver##*/}"
+  # Virtual cameras have no parent device in sysfs
+  [[ -n "${driver}" ]] || driver="$(camera_v4l2_driver "${device}")"
+  # The Asahi driver names the Apple Silicon FaceTime HD camera after itself
+  [[ "${driver}" == "apple-isp" ]] && name="FaceTime HD Camera (Built-in)"
+  log "camera${driver:+ ${driver}}: ${name:+${name} at }${device}"
+  printf '%s\n' "${device}"
+}
+
 parse_start_options() {
   local -n fullscreen_mode_ref="$1"
   local -n game_mode_ref="$2"
   local -n start_args_ref="$3"
+  local camera_device=""
   shift 3
 
   fullscreen_mode_ref="false"
@@ -704,6 +851,24 @@ parse_start_options() {
       --data_gb=*|--data_gb)
         respond_console "Use '${SCRIPT_NAME} reset --data_gb=GB' to change userdata size."
         die "--data_gb is only valid with '${SCRIPT_NAME} reset'"
+        ;;
+      --camera|--camera=*)
+        [[ -z "${camera_device}" ]] || die "--camera given more than once"
+        camera_device="auto"
+        if [[ "$1" == --camera=* ]]; then
+          camera_device="${1#--camera=}"
+        elif [[ $# -gt 1 && "$2" =~ ^(obs|(/dev/)?video[0-9]+)$ ]]; then
+          camera_device="$2"
+          shift
+        fi
+        # The camera is attached when the VM starts
+        if [[ "${START_KEEPS_RUNNING_VM}" == "true" ]] && has_live_cvd_processes; then
+          [[ "${camera_device}" == "auto" ]] && camera_device=""
+          die "Unable to add camera to a powered-on instance, try '${SCRIPT_NAME} restart --camera${camera_device:+=${camera_device}}'"
+        fi
+        camera_device="$(resolve_camera_device "${camera_device}")" || exit 1
+        start_args_ref+=("--media=type=v4l2_proxy,device=${camera_device}")
+        shift
         ;;
       --ika_scrcpy=*)
         IKA_SCRCPY="${1#*=}"
@@ -766,9 +931,9 @@ usage() {
 
 Usage:
 
-  ${SCRIPT_NAME} start [-f|--fullscreen|--game|--no-console] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] [--setting=arg] ...
+  ${SCRIPT_NAME} start [-f|--fullscreen|--game|--no-console] [--camera[=obs|videoN]] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] [--setting=arg] ...
   ${SCRIPT_NAME} stop
-  ${SCRIPT_NAME} restart [-f|--fullscreen|--game|--no-console] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] ...
+  ${SCRIPT_NAME} restart [-f|--fullscreen|--game|--no-console] [--camera[=obs|videoN]] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] ...
   ${SCRIPT_NAME} reset [--data_gb=GB]
   ${SCRIPT_NAME} status
   ${SCRIPT_NAME} app NAME|PACKAGE [-f|--fullscreen] [--game] [--touch] [--window] [--title=TEXT] [--size=WxH] [--ika_scrcpy=ARGS]
@@ -786,6 +951,9 @@ Example:
   ${SCRIPT_NAME} restart --gpu_mode=gfxstream --gfxstream_vulkan=on
   ${SCRIPT_NAME} restart --ika_scrcpy="--no-clipboard-autosync"
   ${SCRIPT_NAME} start --game
+  ${SCRIPT_NAME} restart --camera
+  ${SCRIPT_NAME} restart --camera=video2
+  ${SCRIPT_NAME} restart --camera=obs
   ${SCRIPT_NAME} app com.gameloft.android.ANMP.GloftA8HM --game
   ${SCRIPT_NAME} app Asphalt 8 --touch
 
@@ -806,6 +974,16 @@ Options:
                          '${SCRIPT_NAME} start --game'.
   --no-console           With start or restart, run the VM without opening the
                          desktop console window (app windows still work).
+  --camera[=obs|videoN]  With start or restart, pass a host camera to Android
+                         as its front camera, in place of the emulated one.
+                         Without a value, the first video capture device
+                         offering MJPEG, NV12 or YUYV is used (USB webcams,
+                         the Mac FaceTime camera), and a virtual camera only
+                         when there is no other; obs picks the OBS virtual
+                         camera; videoN or /dev/videoN picks one. Applies
+                         until the next start or restart without it. Needs
+                         the video group. start only adds a camera when
+                         Android is off; use restart while it runs.
   --memory_mb=MB         Override the default guest RAM setting.
                          Normally ~25% of host RAM, capped at 32 GB.
   --data_gb=GB           With reset, configure the userdata size used by the
@@ -3016,7 +3194,6 @@ default_app_window_size() {
 # still be opened by giving their full package name.
 IKA_HIDDEN_APPS=(
   com.google.android.apps.restore
-  org.lineageos.aperture
   com.google.android.googlequicksearchbox
   com.android.calculator2
   org.lineageos.etar
@@ -4922,6 +5099,7 @@ main() {
       CONSOLE_FAILURE_MESSAGE="Startup Failed."
       shift
       start_args=()
+      START_KEEPS_RUNNING_VM="true"
       parse_start_options fullscreen_mode game_mode start_args "$@"
       if [[ "${START_GAME_SESSION}" != "true" ]]; then
         clear_game_session
@@ -4966,11 +5144,13 @@ main() {
       ;;
     restart)
       shift
+      start_args=()
+      # Before stopping anything: a bad option (or --camera finding no camera)
+      # must leave the running VM and its console as they are
+      parse_start_options fullscreen_mode game_mode start_args "$@"
       stop_startup_packaged_scrcpy
       stop_app_menu_watcher
       clear_game_session
-      start_args=()
-      parse_start_options fullscreen_mode game_mode start_args "$@"
       protect_overlay_resume
       if has_live_cvd_processes; then
         stop_cvd_internal false

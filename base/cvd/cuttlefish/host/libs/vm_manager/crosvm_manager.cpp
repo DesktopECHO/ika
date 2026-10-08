@@ -1189,7 +1189,8 @@ Result<std::vector<MonitorCommand>> CrosvmManager::StartCommands(
         config.type == CuttlefishConfig::MediaType::kV4l2EmulatedCameraMPlane) {
       crosvm_cmd.Cmd().AddParameter("--vhost-user=type=media,socket=", instance.media_socket_path(index));
     } else if (config.type == CuttlefishConfig::MediaType::kV4l2Proxy) {
-      crosvm_cmd.Cmd().AddParameter("--v4l2-proxy=", "/dev/video0");
+      crosvm_cmd.Cmd().AddParameter(
+          "--v4l2-proxy=", config.device.empty() ? "/dev/video0" : config.device);
     }
   }
 

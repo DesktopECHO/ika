@@ -68,6 +68,12 @@ PRODUCT_VENDOR_PROPERTIES += \
 PRODUCT_COPY_FILES += \
     vendor/lineage_desktop/prebuilts/display_settings/display_settings.xml:$(TARGET_COPY_OUT_VENDOR)/etc/display_settings.xml
 
+# Host cameras passed through with `ika start --camera` are served by the
+# external camera HAL, which reads this config: 30 fps up to 1080p, landscape
+# orientation, and reported as the front camera.
+PRODUCT_COPY_FILES += \
+    vendor/lineage_desktop/prebuilts/camera/external_camera_config.xml:$(TARGET_COPY_OUT_VENDOR)/etc/external_camera_config.xml
+
 # Host-window-resize listener (R5). /usr/bin/ika sets
 # vendor.cuttlefish.display.size (and optionally .dpi) when the user resizes
 # the Cuttlefish host window; init triggers cvd_display_resize.sh, which fans

@@ -60,6 +60,11 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** Releases gfxstream contexts and resources before the renderer component is destroyed.
 - **Why:** Orderly teardown reaches gfxstream's normal unbind paths instead of leaving renderer-owned resources alive during process shutdown.
 
+#### `PATCH.v4l2r-poller-no-epollin-probe.patch`
+- **Targets:** `v4l2r` crate. File: `src/device/poller.rs`.
+- **What it does:** `Poller::new` registers the device with no events, instead of registering `EPOLLIN`, doing a dummy `epoll_wait` and clearing the events again.
+- **Why:** The `--v4l2-proxy` camera device creates a `Poller` for each guest session. On a host camera whose driver supports `read()` (`VB2_READ`: facetimehd, gspca, pwc), that `EPOLLIN` poll on a queue without buffers starts the vb2 `read()` emulator, so the queue is streaming before the guest configures it and the camera HAL's `VIDIOC_S_PARM` fails with `EBUSY`. The probe only worked around kernels 5.9 and older, where the first poll had to ask for `EPOLLIN` or `EPOLLOUT` for later frame wakeups to arrive.
+
 ### Build-system patches (no runtime effect)
 
 #### `PATCH.rutabaga_gfx_build_rs.patch`

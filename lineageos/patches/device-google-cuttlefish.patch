@@ -11,6 +11,7 @@ Ika desktop device base:
 - no snd-aloop; no VTS MMAP audio ports
 - loopback host ADB; guest TCP ADB on user builds
 - chipname from the manufacturer
+- one front camera (front.mk)
 
 diff --git a/host/libs/config/adb/launch.cpp b/host/libs/config/adb/launch.cpp
 index 4ab0a2e0e..9f635f15d 100644
@@ -392,7 +393,8 @@ index 067d0f323..2835ed013 100644
 +
  # Loads the camera HAL and which set of cameras is required.
  $(call inherit-product, device/google/cuttlefish/shared/camera/device_vendor.mk)
- $(call inherit-product, device/google/cuttlefish/shared/camera/config/standard.mk)
+-$(call inherit-product, device/google/cuttlefish/shared/camera/config/standard.mk)
++$(call inherit-product, device/google/cuttlefish/shared/camera/config/front.mk)
 +
 +TARGET_BOARD_INFO_FILE ?= device/google/cuttlefish/shared/desktop/android-info.txt
 diff --git a/shared/desktop/sepolicy/gscd.te b/shared/desktop/sepolicy/gscd.te

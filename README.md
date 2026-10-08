@@ -173,6 +173,11 @@ ika reset --data_gb=128
 # Game Mode will start Ika fullscreen and enable HID keyboard and mouse 
 ika start --game
 
+# Use the host's camera as Android's camera (auto-detected, or a given node)
+ika restart --camera
+ika restart --camera=video2
+ika restart --camera=obs
+
 # List launchable apps (open app windows in bold), open one in its own
 # window by label or package name, close it
 ika app
@@ -189,6 +194,29 @@ ika app sync --remove
 # Show the built-in usage text
 ika help
 ```
+
+### Camera
+
+Android has a single camera, the front camera. It is emulated unless Ika is
+started with `--camera`, which passes a host camera through instead (crosvm
+virtio-media, served by Android's external camera HAL):
+
+- `ika start --camera` (or `ika restart --camera`) uses the first video
+  capture device that offers MJPEG, NV12 or YUYV: USB webcams, the FaceTime
+  camera of Apple Silicon Macs on an Asahi kernel (`apple-isp`), and that of
+  Intel Macs (UVC on 2011-2012 and T2 models, `facetimehd` on 2013-2017
+  models). Metadata nodes, such as the second node of a UVC webcam, are
+  skipped, and virtual cameras (v4l2loopback, vivid) are used only when there
+  is no other.
+- `--camera=obs` picks the OBS virtual camera. Click Start Virtual Camera in
+  OBS first: OBS creates the device then, and Android needs it to be capturing
+  when it opens the camera.
+- `--camera=video2` or `--camera=/dev/video2` picks a device; `v4l2-ctl
+  --list-devices` lists them.
+- The camera is attached when Android starts: `ika start --camera` refuses
+  while it runs, so use `ika restart --camera` then. It is used until the
+  next `ika start` or `ika restart` without `--camera`. It needs the `video`
+  group, and while Android streams from it, other programs on the host can't.
 
 ### App windows
 

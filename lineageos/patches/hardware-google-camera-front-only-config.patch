@@ -1,0 +1,51 @@
+Patch summary:
+ro.vendor.camera.config=front: front emulated camera only (ID 1).
+Front camera sensor orientation 0: the display is landscape.
+
+diff --git a/devices/EmulatedCamera/hwl/ConfigUtils.cpp b/devices/EmulatedCamera/hwl/ConfigUtils.cpp
+index e3768ac..9df00a9 100644
+--- a/devices/EmulatedCamera/hwl/ConfigUtils.cpp
++++ b/devices/EmulatedCamera/hwl/ConfigUtils.cpp
+@@ -490,6 +490,11 @@ status_t GetCameraConfigurations(std::vector<CameraConfiguration>* configs) {
+       config_file_locations.emplace_back(config_dir +
+                                          std::string(kCameraConfigExternal));
+       logical_id_counter = 1;
++    } else if (strcmp(prop, "front") == 0) {
++      // Only the front camera, keeping its ID from the default layout
++      config_file_locations.emplace_back(config_dir +
++                                         std::string(kCameraConfigFront));
++      logical_id_counter = 1;
+     } else {
+       // Default phone layout.
+       config_file_locations.emplace_back(config_dir +
+diff --git a/devices/EmulatedCamera/hwl/configs/emu_camera_front.json b/devices/EmulatedCamera/hwl/configs/emu_camera_front.json
+index 7d30888..cd85c73 100644
+--- a/devices/EmulatedCamera/hwl/configs/emu_camera_front.json
++++ b/devices/EmulatedCamera/hwl/configs/emu_camera_front.json
+@@ -1481,7 +1481,7 @@
+    "444"
+   ],
+   "android.sensor.orientation": [
+-   "270"
++   "0"
+   ],
+   "android.sensor.profileHueSatMapDimensions": [
+    "0",
+@@ -2974,7 +2974,7 @@
+    "444"
+   ],
+   "android.sensor.orientation": [
+-   "270"
++   "0"
+   ],
+   "android.sensor.profileHueSatMapDimensions": [
+    "0",
+@@ -4512,7 +4512,7 @@
+    "640"
+   ],
+   "android.sensor.orientation": [
+-   "270"
++   "0"
+   ],
+   "android.sensor.profileHueSatMapDimensions": [
+    "0",

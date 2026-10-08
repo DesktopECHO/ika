@@ -1,0 +1,163 @@
+Patch summary:
+Offer only video qualities and photo aspect ratios the camera captures at a
+size of its own; CameraX lists every camcorder profile for an external camera.
+
+diff --git a/app/src/main/java/org/lineageos/aperture/CameraActivity.kt b/app/src/main/java/org/lineageos/aperture/CameraActivity.kt
+index c810e70..9068c5d 100644
+--- a/app/src/main/java/org/lineageos/aperture/CameraActivity.kt
++++ b/app/src/main/java/org/lineageos/aperture/CameraActivity.kt
+@@ -871,7 +871,6 @@ open class CameraActivity : AppCompatActivity(R.layout.activity_camera) {
+             viewModel.cameraState.collectLatest { cameraState ->
+                 // Update secondary bar buttons
+                 timerButton.isEnabled = cameraState == CameraState.IDLE
+-                aspectRatioButton.isEnabled = cameraState == CameraState.IDLE
+                 effectButton.isEnabled = cameraState == CameraState.IDLE
+                 settingsButton.isEnabled = cameraState == CameraState.IDLE
+ 
+@@ -1168,6 +1167,13 @@ open class CameraActivity : AppCompatActivity(R.layout.activity_camera) {
+             }
+         }
+ 
++        launch {
++            viewModel.isPhotoAspectRatioButtonEnabled.collectLatest {
++                    isPhotoAspectRatioButtonEnabled ->
++                aspectRatioButton.isEnabled = isPhotoAspectRatioButtonEnabled
++            }
++        }
++
+         launch {
+             viewModel.photoEffect.collectLatest { photoEffect ->
+                 // Update secondary bar buttons
+diff --git a/app/src/main/java/org/lineageos/aperture/models/Camera.kt b/app/src/main/java/org/lineageos/aperture/models/Camera.kt
+index 0847e6f..a3b4f0d 100644
+--- a/app/src/main/java/org/lineageos/aperture/models/Camera.kt
++++ b/app/src/main/java/org/lineageos/aperture/models/Camera.kt
+@@ -5,12 +5,15 @@
+ 
+ package org.lineageos.aperture.models
+ 
++import android.graphics.ImageFormat
+ import android.hardware.camera2.CameraCharacteristics
+ import android.hardware.camera2.CameraMetadata
++import android.media.MediaRecorder
+ import android.os.Build
+ import androidx.annotation.OptIn
+ import androidx.camera.camera2.interop.Camera2CameraInfo
+ import androidx.camera.camera2.interop.ExperimentalCamera2Interop
++import androidx.camera.core.AspectRatio
+ import androidx.camera.core.CameraInfo
+ import androidx.camera.core.CameraSelector
+ import androidx.camera.core.CameraState
+@@ -19,6 +22,7 @@ import androidx.camera.core.ExperimentalZeroShutterLag
+ import androidx.camera.core.ImageCapture
+ import androidx.camera.extensions.ExtensionsManager
+ import androidx.camera.video.Quality
++import androidx.camera.video.QualitySelector
+ import androidx.camera.video.Recorder
+ import androidx.core.util.toClosedRange
+ import androidx.lifecycle.asFlow
+@@ -84,7 +88,28 @@ class Camera private constructor(
+         }
+     }
+ 
+-    private val supportedVideoFrameRates = cameraInfo.supportedFrameRateRanges.mapNotNull {
++    /**
++     * Photo aspect ratios, as [AspectRatio.Ratio], the camera captures at a size of its own. A
++     * camera with sizes of neither ratio offers both, cropped.
++     */
++    val supportedPhotoAspectRatios = camera2CameraInfo.getCameraCharacteristic(
++        CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP
++    ).let { map ->
++        val sizes = listOfNotNull(
++            map?.getOutputSizes(ImageFormat.JPEG),
++            map?.getHighResolutionOutputSizes(ImageFormat.JPEG),
++        ).flatMap { it.toList() }
++        listOf(AspectRatio.RATIO_4_3, AspectRatio.RATIO_16_9).filter { aspectRatio ->
++            sizes.any {
++                when (aspectRatio) {
++                    AspectRatio.RATIO_4_3 -> it.width * 3 == it.height * 4
++                    else -> it.width * 9 == it.height * 16
++                }
++            }
++        }.ifEmpty { listOf(AspectRatio.RATIO_4_3, AspectRatio.RATIO_16_9) }
++    }
++
++    private val supportedVideoFrameRates =cameraInfo.supportedFrameRateRanges.mapNotNull {
+         FrameRate.fromRange(it.toClosedRange())
+     }.toSet()
+ 
+@@ -94,8 +119,21 @@ class Camera private constructor(
+         VideoDynamicRange.fromDynamicRange(it)
+     }
+ 
++    /**
++     * Sizes the camera can stream to a video recorder.
++     */
++    private val videoOutputSizes = camera2CameraInfo.getCameraCharacteristic(
++        CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP
++    )?.getOutputSizes(MediaRecorder::class.java).orEmpty().toSet()
++
++    // CameraX takes the qualities from the camcorder profiles, which an external camera needn't
++    // match. Keep only those the camera streams at the profile's own size.
+     private val videoQualityForDynamicRanges = supportedVideoDynamicRanges.associateWith {
+-        videoCapabilities.getSupportedQualities(it.dynamicRange)
++        videoCapabilities.getSupportedQualities(it.dynamicRange).filter { quality ->
++            QualitySelector.getResolution(cameraInfo, quality)?.let { size ->
++                size in videoOutputSizes
++            } ?: true
++        }
+     }
+ 
+     val supportedVideoQualities =
+diff --git a/app/src/main/java/org/lineageos/aperture/viewmodels/CameraViewModel.kt b/app/src/main/java/org/lineageos/aperture/viewmodels/CameraViewModel.kt
+index 9a59c3c..858cf3b 100644
+--- a/app/src/main/java/org/lineageos/aperture/viewmodels/CameraViewModel.kt
++++ b/app/src/main/java/org/lineageos/aperture/viewmodels/CameraViewModel.kt
+@@ -644,6 +644,19 @@ class CameraViewModel(application: Application) : ApertureViewModel(application)
+             initialValue = preferencesRepository.photoAspectRatio.value,
+         )
+ 
++    val isPhotoAspectRatioButtonEnabled = combine(
++        camera,
++        cameraState,
++    ) { camera, cameraState ->
++        cameraState == CameraState.IDLE && camera.supportedPhotoAspectRatios.size > 1
++    }
++        .flowOn(Dispatchers.IO)
++        .stateIn(
++            scope = viewModelScope,
++            started = SharingStarted.WhileSubscribed(),
++            initialValue = false,
++        )
++
+     /**
+      * Photo effect.
+      * @see ExtensionMode.Mode
+@@ -1405,11 +1418,11 @@ class CameraViewModel(application: Application) : ApertureViewModel(application)
+      */
+     fun cyclePhotoAspectRatio() =
+         updateConfiguration<CameraConfiguration.Photo> { cameraConfiguration ->
+-            val newAspectRatio = when (cameraConfiguration.photoAspectRatio) {
+-                AspectRatio.RATIO_4_3 -> AspectRatio.RATIO_16_9
+-                AspectRatio.RATIO_16_9 -> AspectRatio.RATIO_4_3
+-                else -> AspectRatio.RATIO_4_3
+-            }
++            val aspectRatios = cameraConfiguration.camera.supportedPhotoAspectRatios
++            val newAspectRatio = aspectRatios[
++                (aspectRatios.indexOf(cameraConfiguration.photoAspectRatio) + 1) %
++                        aspectRatios.size
++            ]
+ 
+             preferencesRepository.photoAspectRatio.value = newAspectRatio
+ 
+@@ -1689,7 +1702,9 @@ class CameraViewModel(application: Application) : ApertureViewModel(application)
+                 extensionMode = preferencesRepository.photoEffect.value,
+                 camera2Options = buildPhotoCamera2Options(camera, photoCaptureMode),
+                 photoCaptureMode = photoCaptureMode,
+-                photoAspectRatio = preferencesRepository.photoAspectRatio.value,
++                photoAspectRatio = preferencesRepository.photoAspectRatio.value.takeIf {
++                    camera.supportedPhotoAspectRatios.contains(it)
++                } ?: camera.supportedPhotoAspectRatios.last(),
+                 enableHighResolution = overlaysRepository.enableHighResolution,
+                 photoOutputFormat = photoOutputFormat,
+             )

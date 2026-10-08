@@ -45,9 +45,10 @@ Result<std::vector<std::string>> GenerateMediaFlags(
         } else if (device.has_v4l2_emulated_camera_mplane()) {
           flag += "type=v4l2_emulated_camera_mplane";
         } else if (device.has_v4l2_proxy()) {
-          // TODO(b/520114678): Use device.v4l2_proxy.device_path when
-          // supported.
           flag += "type=v4l2_proxy";
+          if (device.v4l2_proxy().has_device_path()) {
+            flag += ",device=" + device.v4l2_proxy().device_path();
+          }
         }
         if (device.has_lens_facing()) {
           flag += ",lens_facing=" + device.lens_facing();

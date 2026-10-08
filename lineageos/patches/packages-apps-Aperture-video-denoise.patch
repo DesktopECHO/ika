@@ -1,0 +1,24 @@
+Patch summary:
+Video mode offers every denoising level (minimal, fast, high quality); the
+external camera HAL runs them all at full frame rate.
+
+diff --git a/app/src/main/java/org/lineageos/aperture/models/NoiseReductionMode.kt b/app/src/main/java/org/lineageos/aperture/models/NoiseReductionMode.kt
+index 42201a0..b3f83ba 100644
+--- a/app/src/main/java/org/lineageos/aperture/models/NoiseReductionMode.kt
++++ b/app/src/main/java/org/lineageos/aperture/models/NoiseReductionMode.kt
+@@ -26,11 +26,14 @@ enum class NoiseReductionMode {
+         /**
+          * We don't want to drop frames, when it's enabled allow
+          * only default (the HAL will decide what to do), OFF (zero latency),
+-         * FAST (no frame drop guaranteed) and ZERO_SHUTTER_LAG.
++         * FAST and MINIMAL (no frame drop guaranteed), ZERO_SHUTTER_LAG, and
++         * HIGH_QUALITY, which the external camera HAL runs at full frame rate.
+          */
+         val ALLOWED_MODES_ON_VIDEO_MODE = setOf(
+             OFF,
+             FAST,
++            HIGH_QUALITY,
++            MINIMAL,
+             ZERO_SHUTTER_LAG,
+         )
+     }
