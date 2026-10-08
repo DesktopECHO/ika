@@ -18,6 +18,10 @@
  * The frames are uncompressed: either in a shared memory slot (or inline) as
  * packed RGB, or as a DMA-BUF (AV_PIX_FMT_DRM_PRIME). They always have the
  * physical size of the display.
+ *
+ * If the server supports it, the frames point into the shared memory slots
+ * without a copy: the server does not rewrite a slot until the client releases
+ * it, when the last reference to the frame is dropped.
  */
 struct sc_cf_source {
     struct sc_frame_source frame_source; // frame source trait
@@ -30,11 +34,9 @@ struct sc_cf_source {
     bool stopped;
     int fd; // the connected socket, -1 if none
 
-    // Shared memory slots, mapped from the server (IKAS message)
-    uint8_t *shm;
-    size_t shm_size;
-    uint32_t shm_slot_count;
-    uint32_t shm_slot_size;
+    // Shared memory slots, mapped from the server (IKAS message), a
+    // struct sc_cf_shm referenced by the frames pointing into it
+    AVBufferRef *shm;
 
     AVBufferPool *pool;
     size_t pool_size;

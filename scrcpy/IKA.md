@@ -26,6 +26,13 @@ Frames become `AVFrame`s: packed RGB, or `AV_PIX_FMT_DRM_PRIME` for DMA-BUFs.
 `app/src/interop/interop_raw.c` uploads the former and imports the latter
 through EGL. Alpha is ignored.
 
+The client sends `IKAH` (version 2) on connection. A server that knows it
+sends `IKAS` version 2, with a generation: the frames then point into the
+slots without a copy, and the client sends `IKAR` (generation, slot index)
+when the last reference to a frame is dropped. The server does not rewrite a
+slot until it is released. Otherwise (`IKAS` version 1, from an older server)
+the client copies each slot as soon as it is notified.
+
 ## Flex display in pixels
 
 `--dpi=N` enables flex display: the device display follows the window size, in
