@@ -75,6 +75,10 @@ class RawFrameStreamer {
     uint32_t offset = 0;
     uint32_t modifier_hi = 0;
     uint32_t modifier_lo = 0;
+    // Raw frames written straight into the client's shared memory: the slot
+    // holding the pixels, and whether the client thread has taken the frame
+    int slot = -1;
+    bool slot_sent = false;
   };
 
   struct ClientShm {
@@ -101,10 +105,16 @@ class RawFrameStreamer {
   bool SendRawFrame(int fd, const Frame& frame, ClientShm& shm);
   FrameSendResult SendShmInit(int fd, ClientShm& shm, size_t payload_size);
   FrameSendResult SendShmFrame(int fd, const Frame& frame, ClientShm& shm);
+  bool SendShmNotify(int fd, const Frame& frame, uint32_t slot_index);
   bool ReadClientMessages(int fd, ClientShm& shm);
   bool AcquireShmSlot(int fd, ClientShm& shm, uint32_t* slot_index);
   void CloseClientShm(ClientShm& shm) const;
-  Frame CopyLatestFrameLocked() const;
+  void EndClientLocked();
+  bool WriteSlotFrameLocked(const RawFrameHeader& header,
+                            const uint8_t* pixels);
+  void DetachLatestFrameFromShmLocked();
+  void ReplaceLatestFrameLocked(Frame frame);
+  Frame CopyLatestFrameLocked();
   void CloseFrameFd(Frame& frame) const;
   std::shared_ptr<std::vector<uint8_t>> AcquireRawBufferLocked(size_t size);
 
@@ -119,6 +129,10 @@ class RawFrameStreamer {
   uint64_t generation_ = 0;
   std::optional<uint32_t> suppress_next_raw_display_;
   Frame latest_frame_;
+  // The connected client's slots. Only the client thread maps, unmaps and
+  // reconfigures them, under mutex_; OnFrame() writes frames into free slots
+  // under mutex_ too.
+  ClientShm shm_;
   std::vector<std::shared_ptr<std::vector<uint8_t>>> raw_buffers_;
   size_t next_raw_buffer_ = 0;
 };
