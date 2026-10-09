@@ -42,6 +42,10 @@ struct sc_ika_window {
     // libwayland-client, already loaded by SDL
     void *wayland;
 
+    // The odd window size that a snap to even was last tried from
+    int snap_width;
+    int snap_height;
+
     // A left click started in the corner of a fullscreen/maximized window
     bool corner_press;
     sc_tick corner_press_tick;
@@ -76,6 +80,13 @@ sc_ika_window_get_content_pixel_rect(struct sc_ika_window *iw);
 // Resize the window so that its content has this size
 void
 sc_ika_window_set_content_size(struct sc_ika_window *iw, struct sc_size size);
+
+// Shrink a windowed window by a few points if its pixel size is odd. The
+// encoder of the display needs even sizes, and a window whose size differs from
+// the display size makes the display resize right after start. Not for a
+// window being resized.
+void
+sc_ika_window_snap_even(struct sc_ika_window *iw);
 
 // Update the margin when the window size or state has changed
 void

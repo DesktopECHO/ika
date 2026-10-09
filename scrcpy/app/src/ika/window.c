@@ -327,6 +327,8 @@ sc_ika_window_init(struct sc_ika_window *iw, SDL_Window *window) {
     iw->expected_height = 0;
     iw->compositor_width = 0;
     iw->compositor_height = 0;
+    iw->snap_width = 0;
+    iw->snap_height = 0;
     iw->wayland = NULL;
     if (iw->margin_backend == SC_IKA_WINDOW_MARGIN_WAYLAND) {
         iw->wayland = dlopen("libwayland-client.so.0", RTLD_LAZY | RTLD_NOLOAD);
@@ -376,15 +378,68 @@ sc_ika_window_get_content_pixel_rect(struct sc_ika_window *iw) {
     return (SDL_Rect) {m, m, MAX(w - 2 * m, 1), MAX(h - 2 * m, 1)};
 }
 
+// The largest length, at most 3 points shorter, whose size in pixels is even
+static int
+sc_ika_window_snap_length(int length, float density) {
+    for (int i = 0; i < 4 && length - i > 1; ++i) {
+        int pixels = (int) SDL_roundf((length - i) * density);
+        if (!(pixels & 1)) {
+            return length - i;
+        }
+    }
+    return length;
+}
+
 void
 sc_ika_window_set_content_size(struct sc_ika_window *iw, struct sc_size size) {
     // The margin is applied on change if the window is maximized or fullscreen
     int m = sc_ika_window_is_constrained(iw->window) ? 0 : iw->margin;
     int w = size.width + 2 * m;
     int h = size.height + 2 * m;
+    if (!sc_ika_window_is_constrained(iw->window)) {
+        float density = sc_ika_window_get_pixel_density(iw->window);
+        w = sc_ika_window_snap_length(w, density);
+        h = sc_ika_window_snap_length(h, density);
+    }
     iw->expected_width = w;
     iw->expected_height = h;
     if (!SDL_SetWindowSize(iw->window, w, h)) {
+        LOGW("Could not set window size: %s", SDL_GetError());
+    }
+    sc_ika_window_apply_margin(iw);
+}
+
+void
+sc_ika_window_snap_even(struct sc_ika_window *iw) {
+    if (sc_ika_window_is_constrained(iw->window)) {
+        return;
+    }
+
+    int pw, ph, w, h;
+    if (!SDL_GetWindowSizeInPixels(iw->window, &pw, &ph)
+            || !SDL_GetWindowSize(iw->window, &w, &h)
+            || w <= 0 || h <= 0) {
+        return;
+    }
+    if (!(pw & 1) && !(ph & 1)) {
+        iw->snap_width = 0;
+        iw->snap_height = 0;
+        return;
+    }
+    if (w == iw->snap_width && h == iw->snap_height) {
+        // Already tried from this size: the compositor keeps it (a tiled
+        // window)
+        return;
+    }
+    iw->snap_width = w;
+    iw->snap_height = h;
+
+    // The density that the compositor gave, to find a size that rounds to even
+    int nw = (pw & 1) ? sc_ika_window_snap_length(w, (float) pw / w) : w;
+    int nh = (ph & 1) ? sc_ika_window_snap_length(h, (float) ph / h) : h;
+    iw->expected_width = nw;
+    iw->expected_height = nh;
+    if (!SDL_SetWindowSize(iw->window, nw, nh)) {
         LOGW("Could not set window size: %s", SDL_GetError());
     }
     sc_ika_window_apply_margin(iw);

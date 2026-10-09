@@ -110,6 +110,9 @@ sc_screen_flex_on_window_size(struct sc_screen *screen) {
     if (sc_orientation_is_swap(screen->orientation)) {
         size = (struct sc_size) {size.height, size.width};
     }
+    // The display size is even, as the encoder aligns it
+    size.width &= ~1;
+    size.height &= ~1;
 
     SDL_Texture *live = NULL;
     SDL_FRect src;
@@ -1515,6 +1518,12 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
                     sc_screen_update_raw_content_size(screen);
                 }
                 sc_screen_render(screen, true);
+            }
+            if (screen->flex_display && screen->pixel_mode
+                    && screen->window_shown
+                    && !sc_flex_is_holding(&screen->flex)) {
+                // Resizing has settled: make the window size even
+                sc_ika_window_snap_even(&screen->ika_window);
             }
             return;
         case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
