@@ -53,6 +53,7 @@ device/google/cuttlefish patches/device-google-cuttlefish-proto-editions.patch
 device/google/cuttlefish patches/device-google-cuttlefish-secure-env-cppcose-compat.patch
 device/google/cuttlefish patches/device-google-cuttlefish-front-camera.patch
 device/google/cuttlefish patches/device-google-cuttlefish-camcorder-profiles.patch
+device/google/cuttlefish patches/device-google-cuttlefish-zram-at-boot.patch
 frameworks/av patches/frameworks-av.patch
 frameworks/native patches/frameworks-native-logspam.patch
 frameworks/native patches/frameworks-native-vulkan-profile-timestamps.patch

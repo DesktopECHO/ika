@@ -1,0 +1,24 @@
+Patch summary:
+Enable zram at zygote-start instead of after boot completes, so the
+first-boot dexopt has swap on hosts that give the guest little RAM.
+
+diff --git a/shared/config/init.vendor.rc b/shared/config/init.vendor.rc
+index 83d7769..f0c4fb2 100644
+--- a/shared/config/init.vendor.rc
++++ b/shared/config/init.vendor.rc
+@@ -96,10 +96,11 @@ on property:sys.boot_completed=1
+     mount ext2 /dev/block/by-name/custom /mnt/vendor/custom loop rw sync
+ 
+ # We want one opportunity per boot to enable zram, so we
+-# use a trigger we fire from the above stanza. If
+-# persist.sys.zram_enabled becomes true after boot,
+-# we don't want to run swapon_all at that time.
+-on sys-boot-completed-set && property:persist.sys.zram_enabled=1
++# use zygote-start, which fires once per boot. Enabling it
++# before system_server starts gives the first-boot dexopt
++# swap to fall back on. If persist.sys.zram_enabled becomes
++# true after boot, we don't want to run swapon_all at that time.
++on zygote-start && property:persist.sys.zram_enabled=1
+     swapon_all
+ 
+ service vendor.dlkm_loader /vendor/bin/dlkm_loader
