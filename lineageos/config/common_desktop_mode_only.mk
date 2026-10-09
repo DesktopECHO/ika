@@ -53,7 +53,7 @@ PRODUCT_PRODUCT_PROPERTIES += \
     ro.config.media_vol_default=12 \
     ro.setupwizard.mode=DISABLED \
     debug.sf.nobootanimation=1 \
-    pm.dexopt.first-boot=speed-profile \
+    pm.dexopt.first-boot=verify \
     pm.dexopt.install=speed-profile
 
 # Cuttlefish init renames eth0 to buried_eth0 only when this property is empty.
