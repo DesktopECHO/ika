@@ -215,25 +215,7 @@ void RawFrameStreamer::OnFrame(uint32_t display_number, uint32_t width,
     return;
   }
 
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (suppress_next_raw_display_.has_value() &&
-        *suppress_next_raw_display_ == display_number) {
-      suppress_next_raw_display_.reset();
-      return;
-    }
-  }
-
-  std::shared_ptr<std::vector<uint8_t>> payload;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    payload = AcquireRawBufferLocked(payload_size);
-  }
-  payload->assign(pixels, pixels + payload_size);
-
-  Frame frame;
-  frame.type = FrameType::kRaw;
-  frame.header = {
+  const RawFrameHeader header = {
       .magic = kRawFrameMagic,
       .version = kRawFrameVersion,
       .display_number = display_number,
@@ -243,15 +225,102 @@ void RawFrameStreamer::OnFrame(uint32_t display_number, uint32_t width,
       .stride_bytes = stride_bytes,
       .payload_size = static_cast<uint32_t>(payload_size),
   };
+
+  std::shared_ptr<std::vector<uint8_t>> payload;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (suppress_next_raw_display_.has_value() &&
+        *suppress_next_raw_display_ == display_number) {
+      suppress_next_raw_display_.reset();
+      return;
+    }
+    if (WriteSlotFrameLocked(header, pixels)) {
+      ++generation_;
+      frame_cv_.notify_all();
+      return;
+    }
+    payload = AcquireRawBufferLocked(payload_size);
+  }
+  payload->assign(pixels, pixels + payload_size);
+
+  Frame frame;
+  frame.type = FrameType::kRaw;
+  frame.header = header;
   frame.pixels = std::move(payload);
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    CloseFrameFd(latest_frame_);
-    latest_frame_ = std::move(frame);
+    ReplaceLatestFrameLocked(std::move(frame));
     ++generation_;
   }
   frame_cv_.notify_all();
+}
+
+// Copy a frame straight into a free slot of the client's shared memory, so
+// that the client thread only tells the client which slot holds it. Takes a
+// client that releases the slots, with slots big enough for the frame.
+bool RawFrameStreamer::WriteSlotFrameLocked(const RawFrameHeader& header,
+                                            const uint8_t* pixels) {
+  ClientShm& shm = shm_;
+  if (shm.data == nullptr || !shm.generation ||
+      header.payload_size > shm.slot_size) {
+    return false;
+  }
+
+  // The latest frame, if the client thread hasn't taken it, is replaced by
+  // this one: its slot is free for it
+  uint32_t replaced = 0;
+  if (latest_frame_.slot >= 0 && !latest_frame_.slot_sent) {
+    replaced = 1u << latest_frame_.slot;
+  }
+  for (uint32_t i = 0; i < shm.slot_count; ++i) {
+    const uint32_t index = (shm.next_slot + i) % shm.slot_count;
+    if (((shm.busy_slots & ~replaced) & (1u << index)) != 0) {
+      continue;
+    }
+    shm.busy_slots |= 1u << index;
+    shm.next_slot = index + 1;
+    memcpy(shm.data + static_cast<size_t>(index) * shm.slot_size, pixels,
+           header.payload_size);
+
+    Frame frame;
+    frame.type = FrameType::kRaw;
+    frame.header = header;
+    frame.slot = static_cast<int>(index);
+    ReplaceLatestFrameLocked(std::move(frame));
+    return true;
+  }
+  return false;
+}
+
+// Copy the latest frame out of the shared memory before it is unmapped, so
+// that the next client still gets it
+void RawFrameStreamer::DetachLatestFrameFromShmLocked() {
+  if (latest_frame_.slot < 0) {
+    return;
+  }
+  if (shm_.data != nullptr) {
+    const size_t payload_size = latest_frame_.header.payload_size;
+    const uint8_t* slot =
+        shm_.data + static_cast<size_t>(latest_frame_.slot) * shm_.slot_size;
+    auto payload = AcquireRawBufferLocked(payload_size);
+    payload->assign(slot, slot + payload_size);
+    latest_frame_.pixels = std::move(payload);
+  } else {
+    latest_frame_.type = FrameType::kNone;
+  }
+  latest_frame_.slot = -1;
+  latest_frame_.slot_sent = false;
+}
+
+void RawFrameStreamer::ReplaceLatestFrameLocked(Frame frame) {
+  // A slot never sent to the client is free again
+  if (latest_frame_.slot >= 0 && !latest_frame_.slot_sent &&
+      latest_frame_.slot != frame.slot) {
+    shm_.busy_slots &= ~(1u << latest_frame_.slot);
+  }
+  CloseFrameFd(latest_frame_);
+  latest_frame_ = std::move(frame);
 }
 
 bool RawFrameStreamer::OnDmabufFrame(uint32_t display_number, uint32_t width,
@@ -289,8 +358,7 @@ bool RawFrameStreamer::OnDmabufFrame(uint32_t display_number, uint32_t width,
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    CloseFrameFd(latest_frame_);
-    latest_frame_ = std::move(frame);
+    ReplaceLatestFrameLocked(std::move(frame));
     suppress_next_raw_display_ = display_number;
     ++generation_;
   }
@@ -433,7 +501,11 @@ void RawFrameStreamer::ServerLoop() {
 
 void RawFrameStreamer::ClientLoop(int client_fd) {
   uint64_t sent_generation = 0;
-  ClientShm shm;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    shm_ = ClientShm();
+  }
+  ClientShm& shm = shm_;
 
   // A client releasing the slots says so as soon as it connects
   pollfd pfd = {
@@ -443,7 +515,8 @@ void RawFrameStreamer::ClientLoop(int client_fd) {
   };
   if (poll(&pfd, 1, kClientHelloTimeoutMs) > 0 &&
       !ReadClientMessages(client_fd, shm)) {
-    CloseClientShm(shm);
+    std::lock_guard<std::mutex> lock(mutex_);
+    EndClientLocked();
     return;
   }
 
@@ -454,7 +527,7 @@ void RawFrameStreamer::ClientLoop(int client_fd) {
       frame_cv_.wait(
           lock, [&]() { return stopped_ || generation_ != sent_generation; });
       if (stopped_) {
-        CloseClientShm(shm);
+        EndClientLocked();
         return;
       }
       sent_generation = generation_;
@@ -466,17 +539,25 @@ void RawFrameStreamer::ClientLoop(int client_fd) {
     }
 
     bool ok = false;
-    if (frame.type == FrameType::kRaw) {
+    if (frame.type == FrameType::kRaw && frame.slot >= 0) {
+      ok = SendShmNotify(client_fd, frame, frame.slot);
+    } else if (frame.type == FrameType::kRaw) {
       ok = SendRawFrame(client_fd, frame, shm);
     } else {
       ok = SendDmabufFrame(client_fd, frame);
     }
     CloseFrameFd(frame);
     if (!ok) {
-      CloseClientShm(shm);
+      std::lock_guard<std::mutex> lock(mutex_);
+      EndClientLocked();
       return;
     }
   }
+}
+
+void RawFrameStreamer::EndClientLocked() {
+  DetachLatestFrameFromShmLocked();
+  CloseClientShm(shm_);
 }
 
 bool RawFrameStreamer::SendAll(int fd, const void* data, size_t size) {
@@ -592,16 +673,20 @@ RawFrameStreamer::FrameSendResult RawFrameStreamer::SendShmInit(
     return FrameSendResult::kFailed;
   }
 
-  CloseClientShm(shm);
-  shm.fd = shm_fd;
-  shm.data = reinterpret_cast<uint8_t*>(mapping);
-  shm.slot_size = slot_size;
-  shm.slot_count = kSlotCount;
-  shm.next_slot = 0;
-  shm.generation = generation;
-  shm.busy_slots = 0;
-  if (generation) {
-    shm.last_generation = generation;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    DetachLatestFrameFromShmLocked();
+    CloseClientShm(shm);
+    shm.fd = shm_fd;
+    shm.data = reinterpret_cast<uint8_t*>(mapping);
+    shm.slot_size = slot_size;
+    shm.slot_count = kSlotCount;
+    shm.next_slot = 0;
+    shm.generation = generation;
+    shm.busy_slots = 0;
+    if (generation) {
+      shm.last_generation = generation;
+    }
   }
 
   LOG(INFO) << "Using shared-memory raw frame slots: " << kSlotCount << " x "
@@ -646,6 +731,13 @@ RawFrameStreamer::FrameSendResult RawFrameStreamer::SendShmFrame(
   uint8_t* slot = shm.data + static_cast<size_t>(slot_index) * shm.slot_size;
   memcpy(slot, frame.pixels->data(), payload_size);
 
+  return SendShmNotify(fd, frame, slot_index) ? FrameSendResult::kSent
+                                              : FrameSendResult::kFailed;
+}
+
+// Tell the client that a slot holds the frame
+bool RawFrameStreamer::SendShmNotify(int fd, const Frame& frame,
+                                     uint32_t slot_index) {
   ShmFrameHeader header = {
       .magic = kShmNotifyMagic,
       .version = kShmFrameVersion,
@@ -654,12 +746,10 @@ RawFrameStreamer::FrameSendResult RawFrameStreamer::SendShmFrame(
       .height = frame.header.height,
       .fourcc = frame.header.fourcc,
       .stride_bytes = frame.header.stride_bytes,
-      .payload_size = static_cast<uint32_t>(payload_size),
+      .payload_size = frame.header.payload_size,
       .slot_index = slot_index,
   };
-
-  return SendAll(fd, &header, sizeof(header)) ? FrameSendResult::kSent
-                                              : FrameSendResult::kFailed;
+  return SendAll(fd, &header, sizeof(header));
 }
 
 // Read the pending client messages without blocking. Return false if the
@@ -688,6 +778,7 @@ bool RawFrameStreamer::ReadClientMessages(int fd, ClientShm& shm) {
     if (message.version != kShmReleaseVersion) {
       continue;
     }
+    std::lock_guard<std::mutex> lock(mutex_);
     if (message.magic == kClientHelloMagic) {
       shm.client_releases_slots = message.arg0 == 1;
     } else if (message.magic == kSlotReleaseMagic && shm.generation &&
@@ -711,18 +802,17 @@ bool RawFrameStreamer::AcquireShmSlot(int fd, ClientShm& shm,
     if (!ReadClientMessages(fd, shm)) {
       return false;
     }
-    for (uint32_t i = 0; i < shm.slot_count; ++i) {
-      const uint32_t index = (shm.next_slot + i) % shm.slot_count;
-      if ((shm.busy_slots & (1u << index)) == 0) {
-        shm.busy_slots |= 1u << index;
-        shm.next_slot = index + 1;
-        *slot_index = index;
-        return true;
-      }
-    }
-
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      for (uint32_t i = 0; i < shm.slot_count; ++i) {
+        const uint32_t index = (shm.next_slot + i) % shm.slot_count;
+        if ((shm.busy_slots & (1u << index)) == 0) {
+          shm.busy_slots |= 1u << index;
+          shm.next_slot = index + 1;
+          *slot_index = index;
+          return true;
+        }
+      }
       if (stopped_) {
         return false;
       }
@@ -792,7 +882,7 @@ void RawFrameStreamer::CloseClientShm(ClientShm& shm) const {
   shm.busy_slots = 0;
 }
 
-RawFrameStreamer::Frame RawFrameStreamer::CopyLatestFrameLocked() const {
+RawFrameStreamer::Frame RawFrameStreamer::CopyLatestFrameLocked() {
   Frame frame;
   frame.type = latest_frame_.type;
   frame.header = latest_frame_.header;
@@ -800,6 +890,11 @@ RawFrameStreamer::Frame RawFrameStreamer::CopyLatestFrameLocked() const {
   frame.offset = latest_frame_.offset;
   frame.modifier_hi = latest_frame_.modifier_hi;
   frame.modifier_lo = latest_frame_.modifier_lo;
+  // From now on the client holds the slot, until it releases it
+  frame.slot = latest_frame_.slot;
+  if (latest_frame_.slot >= 0) {
+    latest_frame_.slot_sent = true;
+  }
   if (latest_frame_.dmabuf_fd >= 0) {
     frame.dmabuf_fd = fcntl(latest_frame_.dmabuf_fd, F_DUPFD_CLOEXEC, 3);
   }
