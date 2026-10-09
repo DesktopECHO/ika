@@ -39,7 +39,6 @@ com.android.window.flags/enable_see_through_task_fragments
 # unrelated architectural experiments and diagnostic logging remain disabled.
 com.android.launcher3/blurred_home_animation
 com.android.launcher3/enable_mouse_interaction_changes
-com.android.launcher3/enable_overview_desktop_tile_wallpaper_background
 com.android.launcher3/enable_taskbar_customization
 com.android.launcher3/enable_taskbar_icon_container
 com.android.systemui/status_bar_for_desktop
