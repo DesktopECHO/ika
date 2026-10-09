@@ -2,7 +2,7 @@ git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "g
 
 git_repository(
     name = "gfxstream",
-    commit = "ebe5b424e15c0816f64b97c9691060333bb43c7e",
+    commit = "07ee40efb0e7037a9a9b7fe59071e7c4997e7cbe",
     remote = "https://github.com/google/gfxstream.git",
     patch_strip = 1,
     patches = [
