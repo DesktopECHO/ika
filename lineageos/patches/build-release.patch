@@ -18,6 +18,11 @@ path and its trunk stability fixes, and related correctness fixes without
 enabling diagnostic logging, Launcher model rewrites, or the experimental
 WindowDecoration2 refactor.
 
+The Overview desktop tile keeps its solid background: the wallpaper-screenshot
+background (enable_overview_desktop_tile_wallpaper_background) is drawn
+unscaled and leaves part of the tile empty on large displays. Android 17
+dropped it.
+
 diff --git a/aconfig/trunk_staging/com.android.systemui/qs_ui_refactor_compose_fragment_flag_values.textproto b/aconfig/trunk_staging/com.android.systemui/qs_ui_refactor_compose_fragment_flag_values.textproto
 index 22f6c87ee..dcaaa919c 100644
 --- a/aconfig/trunk_staging/com.android.systemui/qs_ui_refactor_compose_fragment_flag_values.textproto
@@ -63,18 +68,6 @@ index 000000000..2e0c51a0d
 +flag_value {
 +  package: "com.android.launcher3"
 +  name: "enable_mouse_interaction_changes"
-+  state: ENABLED
-+  permission: READ_ONLY
-+}
-diff --git a/aconfig/bp4a/com.android.launcher3/enable_overview_desktop_tile_wallpaper_background_flag_values.textproto b/aconfig/bp4a/com.android.launcher3/enable_overview_desktop_tile_wallpaper_background_flag_values.textproto
-new file mode 100644
-index 000000000..736cdfe18
---- /dev/null
-+++ b/aconfig/bp4a/com.android.launcher3/enable_overview_desktop_tile_wallpaper_background_flag_values.textproto
-@@ -0,0 +1,6 @@
-+flag_value {
-+  package: "com.android.launcher3"
-+  name: "enable_overview_desktop_tile_wallpaper_background"
 +  state: ENABLED
 +  permission: READ_ONLY
 +}
@@ -627,18 +620,6 @@ index 000000000..3488e3b4c
 +flag_value {
 +  package: "com.android.launcher3"
 +  name: "blurred_home_animation"
-+  state: ENABLED
-+  permission: READ_WRITE
-+}
-diff --git a/aconfig/trunk_staging/com.android.launcher3/enable_overview_desktop_tile_wallpaper_background_flag_values.textproto b/aconfig/trunk_staging/com.android.launcher3/enable_overview_desktop_tile_wallpaper_background_flag_values.textproto
-new file mode 100644
-index 000000000..432f04f91
---- /dev/null
-+++ b/aconfig/trunk_staging/com.android.launcher3/enable_overview_desktop_tile_wallpaper_background_flag_values.textproto
-@@ -0,0 +1,6 @@
-+flag_value {
-+  package: "com.android.launcher3"
-+  name: "enable_overview_desktop_tile_wallpaper_background"
 +  state: ENABLED
 +  permission: READ_WRITE
 +}
