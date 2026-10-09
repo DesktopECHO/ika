@@ -3131,8 +3131,11 @@ guest_display_density() {
 # Like the desktop display, size an app window's virtual display in native
 # host pixels rather than logical window points, so on HiDPI hosts the app
 # draws at native resolution instead of being upscaled. Scale the logical window
-# size by the host's native/logical ratio and round down to the even size the
-# guest's software H.264 encoder needs.
+# size by the host's native/logical ratio and round to the nearest pixel, as SDL
+# does for the window pixel size that the scrcpy client requests, then round
+# down to the even size the guest's software H.264 encoder needs, as the scrcpy
+# server does. Any other initial size makes the server resize the display right
+# after start, and its input mapping then rejects every click.
 app_window_display_size() {
   local window_size="$1"
   local native
@@ -3153,8 +3156,8 @@ app_window_display_size() {
     if [[ "${logical}" =~ ^([0-9]+)x([0-9]+)$ ]]; then
       logical_max=$(( BASH_REMATCH[1] > BASH_REMATCH[2] ? BASH_REMATCH[1] : BASH_REMATCH[2] ))
       if (( native_max > 0 && logical_max > 0 )); then
-        width=$(( width * native_max / logical_max ))
-        height=$(( height * native_max / logical_max ))
+        width=$(( (width * native_max + logical_max / 2) / logical_max ))
+        height=$(( (height * native_max + logical_max / 2) / logical_max ))
       fi
     fi
   fi
