@@ -1,6 +1,6 @@
 Patch summary:
 Make the Cuttlefish AIDL capture path use ALSA as its only real-time pacing
-source.
+source, and recover ALSA streams that stall.
 
 The primary HAL's emulator workaround skips a transfer whenever the stream
 falls behind wall clock. On input, that skips the real ALSA read and returns
@@ -12,16 +12,61 @@ the worker progressively fall behind until virtio-snd returns EIO. Conversely,
 the client-facing read is non-blocking and substitutes silence whenever the
 worker has not filled the pipe yet.
 
-Keep the host-buffer workaround limited to playback, remove MonoPipe's second
-capture throttle, and wait for complete input data at the client-facing side.
-This keeps the ALSA worker draining continuously and gives AudioRecord one
-stable, hardware-paced stream.
+Keep the host-buffer workaround limited to playback and remove MonoPipe's
+second capture throttle. The capture worker never waits for the client: it
+drops what does not fit into the pipe, so ALSA keeps draining. Capture gets an
+ALSA buffer and pipe twice the stream buffer, since the worker reads a whole
+stream buffer at a time and an equal-sized ALSA buffer overruns on any delay.
+The client-facing read waits for complete input data, for at most two buffer
+durations.
+
+A virtio-snd stream can stall with no I/O in flight: when a full buffer of
+I/O completes between two pointer updates, the indirect pointer sees no
+progress, so every transfer times out with EIO and nothing restarts it.
+tinyalsa reports these failures as -1, so the EIO retries in alsa_utils never
+apply. Stop the PCM after a failed read or write so the next transfer prepares
+and restarts it. Without this, a stalled capture stream left the client read
+blocked, the stream never reached standby, and microphone and playback stayed
+silent until reboot.
 
 diff --git a/audio/aidl/default/alsa/StreamAlsa.cpp b/audio/aidl/default/alsa/StreamAlsa.cpp
-index 7a44cc78a..5cd91199c 100644
+index 7a44cc78a..0da430ad8 100644
 --- a/audio/aidl/default/alsa/StreamAlsa.cpp
 +++ b/audio/aidl/default/alsa/StreamAlsa.cpp
-@@ -128,7 +128,10 @@ StreamAlsa::~StreamAlsa() {
+@@ -14,6 +14,7 @@
+  * limitations under the License.
+  */
+ 
++#include <chrono>
+ #include <cmath>
+ #include <limits>
+ 
+@@ -53,7 +54,11 @@ StreamAlsa::~StreamAlsa() {
+ 
+ ::android::sp<::android::MonoPipe> StreamAlsa::makeSink(bool writeCanBlock) {
+     const ::android::NBAIO_Format format = getPipeFormat();
+-    auto sink = ::android::sp<::android::MonoPipe>::make(mBufferSizeFrames, format, writeCanBlock);
++    // The capture worker never waits for the client, so give the input pipe room
++    // to absorb a late client read instead of dropping audio right away.
++    const size_t pipeFrames = mIsInput ? kInputBufferMultiplier * mBufferSizeFrames
++                                       : mBufferSizeFrames;
++    auto sink = ::android::sp<::android::MonoPipe>::make(pipeFrames, format, writeCanBlock);
+     const ::android::NBAIO_Format offers[1] = {format};
+     size_t numCounterOffers = 0;
+     ssize_t index = sink->negotiate(offers, 1, nullptr, numCounterOffers);
+@@ -121,14 +126,21 @@ StreamAlsa::~StreamAlsa() {
+                     device, const_cast<struct pcm_config*>(&mConfig.value()),
+                     true /*require_exact_match*/);
+         } else {
++            // The capture worker reads a whole stream buffer at a time. With an ALSA buffer of
++            // the same size, any scheduling delay overruns it, so give capture more room.
++            const size_t alsaBufferFrames =
++                    mIsInput ? kInputBufferMultiplier * mBufferSizeFrames : mBufferSizeFrames;
+             proxy = alsa::openProxyForAttachedDevice(
+-                    device, const_cast<struct pcm_config*>(&mConfig.value()), mBufferSizeFrames);
++                    device, const_cast<struct pcm_config*>(&mConfig.value()), alsaBufferFrames);
+         }
+         if (proxy.get() == nullptr) {
              return ::android::NO_INIT;
          }
          alsaDeviceProxies.push_back(std::move(proxy));
@@ -33,7 +78,7 @@ index 7a44cc78a..5cd91199c 100644
          if (sink != nullptr) {
              sinks.push_back(sink);
          } else {
-@@ -165,14 +168,25 @@ StreamAlsa::~StreamAlsa() {
+@@ -165,14 +177,30 @@ StreamAlsa::~StreamAlsa() {
      if (mIsInput) {
          const size_t i = 0;  // For the input case, only support a single device.
          LOG(VERBOSE) << __func__ << ": reading from sink " << i;
@@ -45,6 +90,14 @@ index 7a44cc78a..5cd91199c 100644
 -                         << " frames of silence";
 -            memset(static_cast<char*>(buffer) + framesRead * mFrameSizeBytes, 0,
 -                   framesMissing * mFrameSizeBytes);
++        // MonoPipeReader does not provide a blocking read. ALSA input is consumed on a
++        // separate thread, so wait for it to supply data instead of returning a full
++        // buffer of synthetic silence. Bound the wait: while ALSA recovers from a stall,
++        // a read that never returns keeps the stream from reaching standby.
++        const auto deadline =
++                std::chrono::steady_clock::now() +
++                std::chrono::microseconds(kInputBufferMultiplier * frameCount *
++                                          MICROS_PER_SECOND / mSampleRate);
 +        size_t framesRead = 0;
 +        while (framesRead < frameCount) {
 +            const ssize_t framesReadOrError = mSources[i]->read(
@@ -54,38 +107,110 @@ index 7a44cc78a..5cd91199c 100644
 +                    << "Error reading from the pipe: " << framesReadOrError;
 +            if (framesReadOrError > 0) {
 +                framesRead += framesReadOrError;
-+            } else if (!mIoThreadIsRunning) {
++            } else if (!mIoThreadIsRunning || std::chrono::steady_clock::now() >= deadline) {
 +                memset(static_cast<char*>(buffer) + framesRead * mFrameSizeBytes, 0,
 +                       (frameCount - framesRead) * mFrameSizeBytes);
 +                break;
 +            } else {
-+                // MonoPipeReader does not provide a blocking read. ALSA input is
-+                // consumed on a separate thread, so wait for it to supply data
-+                // instead of returning a full buffer of synthetic silence.
 +                usleep(1000);
 +            }
          }
          maxLatency = proxy_get_latency(mAlsaDeviceProxies[i].get());
      } else {
-@@ -253,10 +267,15 @@ void StreamAlsa::inputIoThread(size_t idx) {
-             size_t bufferFramesWritten = 0;
-             while (bufferFramesWritten < mBufferSizeFrames) {
-                 if (!mIoThreadIsRunning) return;
+@@ -246,31 +274,43 @@ void StreamAlsa::inputIoThread(size_t idx) {
+ #endif
+     const size_t bufferSize = mBufferSizeFrames * mFrameSizeBytes;
+     std::vector<char> buffer(bufferSize);
++    bool dropping = false;
+     while (mIoThreadIsRunning) {
+         if (int ret = proxy_read_with_retries(mAlsaDeviceProxies[idx].get(), &buffer[0], bufferSize,
+                                               mReadWriteRetries);
+             ret == 0) {
+-            size_t bufferFramesWritten = 0;
+-            while (bufferFramesWritten < mBufferSizeFrames) {
+-                if (!mIoThreadIsRunning) return;
 -                ssize_t framesWrittenOrError =
 -                        mSinks[idx]->write(&buffer[0], mBufferSizeFrames - bufferFramesWritten);
 -                if (framesWrittenOrError >= 0) {
-+                ssize_t framesWrittenOrError = mSinks[idx]->write(
-+                        &buffer[bufferFramesWritten * mFrameSizeBytes],
-+                        mBufferSizeFrames - bufferFramesWritten);
-+                if (framesWrittenOrError > 0) {
-                     bufferFramesWritten += framesWrittenOrError;
-+                } else if (framesWrittenOrError == 0) {
-+                    // A non-blocking MonoPipe has no wait primitive. Yield until the
-+                    // stream worker consumes enough data for the rest of this buffer.
-+                    usleep(1000);
-                 } else {
-                     LOG(WARNING) << __func__ << "[" << idx
-                                  << "]: Error while writing into the pipe: "
+-                    bufferFramesWritten += framesWrittenOrError;
+-                } else {
+-                    LOG(WARNING) << __func__ << "[" << idx
+-                                 << "]: Error while writing into the pipe: "
+-                                 << framesWrittenOrError;
+-                }
++            // Never wait for the client here: ALSA capture is paced by the device, and a
++            // worker that stops reading overruns the device buffer. Drop what does not fit.
++            ssize_t framesWrittenOrError = mSinks[idx]->write(&buffer[0], mBufferSizeFrames);
++            if (framesWrittenOrError < 0) {
++                LOG(WARNING) << __func__ << "[" << idx
++                             << "]: Error while writing into the pipe: " << framesWrittenOrError;
++            } else if (static_cast<size_t>(framesWrittenOrError) < mBufferSizeFrames) {
++                LOG_IF(WARNING, !dropping) << __func__ << "[" << idx << "]: pipe full, dropping "
++                                           << mBufferSizeFrames - framesWrittenOrError
++                                           << " frames";
++                dropping = true;
++            } else {
++                dropping = false;
+             }
+-        } else {
++        } else if (mIoThreadIsRunning) {
+             // Errors when the stream is being stopped are expected.
+-            LOG_IF(WARNING, mIoThreadIsRunning)
+-                    << __func__ << "[" << idx << "]: Error reading from ALSA: " << ret;
++            LOG(WARNING) << __func__ << "[" << idx << "]: Error reading from ALSA: " << ret
++                         << ", restarting the PCM";
++            recoverPcm(idx);
+         }
+     }
+ }
+ 
++void StreamAlsa::recoverPcm(size_t idx) {
++    // tinyalsa reports every failure as -1, so the EIO retries in alsa_utils never apply.
++    // A virtio-snd stream can also stall with no I/O in flight, where every transfer times
++    // out with EIO and nothing restarts it. Stopping the PCM makes the next transfer prepare
++    // and restart it, which resets the device position and requeues the I/O.
++    proxy_stop(mAlsaDeviceProxies[idx].get());
++    if (mIoThreadIsRunning) usleep(kPcmRecoveryDelayUs);
++}
++
+ void StreamAlsa::outputIoThread(size_t idx) {
+ #if defined(__ANDROID__)
+     setWorkerThreadPriority(pthread_gettid_np(pthread_self()));
+@@ -286,8 +326,11 @@ void StreamAlsa::outputIoThread(size_t idx) {
+                                                framesReadOrError * mFrameSizeBytes,
+                                                mReadWriteRetries);
+             // Errors when the stream is being stopped are expected.
+-            LOG_IF(WARNING, ret != 0 && mIoThreadIsRunning)
+-                    << __func__ << "[" << idx << "]: Error writing into ALSA: " << ret;
++            if (ret != 0 && mIoThreadIsRunning) {
++                LOG(WARNING) << __func__ << "[" << idx << "]: Error writing into ALSA: " << ret
++                             << ", restarting the PCM";
++                recoverPcm(idx);
++            }
+         } else if (framesReadOrError == 0) {
+             // MonoPipeReader does not have a blocking read, while use of std::condition_variable
+             // requires use of a mutex. For now, just do a 1ms sleep. Consider using a different
+diff --git a/audio/aidl/default/include/core-impl/StreamAlsa.h b/audio/aidl/default/include/core-impl/StreamAlsa.h
+index c0dcb6324..cfdbd9d94 100644
+--- a/audio/aidl/default/include/core-impl/StreamAlsa.h
++++ b/audio/aidl/default/include/core-impl/StreamAlsa.h
+@@ -64,11 +64,16 @@ class StreamAlsa : public StreamCommonImpl {
+     const int mReadWriteRetries;
+ 
+   private:
++    // Capture buffering (ALSA buffer, pipe, client wait) in stream buffers.
++    static constexpr size_t kInputBufferMultiplier = 2;
++    static constexpr int kPcmRecoveryDelayUs = 10000;
++
+     ::android::NBAIO_Format getPipeFormat() const;
+     ::android::sp<::android::MonoPipe> makeSink(bool writeCanBlock);
+     ::android::sp<::android::MonoPipeReader> makeSource(::android::MonoPipe* pipe);
+     void inputIoThread(size_t idx);
+     void outputIoThread(size_t idx);
++    void recoverPcm(size_t idx);
+     void teardownIo();
+ 
+     std::atomic<float> mGain = 1.0;
 diff --git a/audio/aidl/default/primary/StreamPrimary.cpp b/audio/aidl/default/primary/StreamPrimary.cpp
 index 84556801d..23b10be5f 100644
 --- a/audio/aidl/default/primary/StreamPrimary.cpp
