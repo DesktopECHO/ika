@@ -23,7 +23,7 @@ index edae6e0..c810e70 100644
  import androidx.camera.extensions.ExtensionMode
  import androidx.camera.video.Quality
  import androidx.camera.video.QualitySelector
-@@ -1594,6 +1596,50 @@ open class CameraActivity : AppCompatActivity(R.layout.activity_camera) {
+@@ -1594,6 +1596,59 @@ open class CameraActivity : AppCompatActivity(R.layout.activity_camera) {
              }
          }
  
@@ -63,6 +63,15 @@ index edae6e0..c810e70 100644
 +                            size, ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER
 +                        )
 +                    )
++                    .setResolutionFilter { sizes, _ ->
++                        sizes.filter {
++                            if (size.width * 3 == size.height * 4) {
++                                it.width * 3 == it.height * 4
++                            } else {
++                                it.width * 9 == it.height * 16
++                            }
++                        }
++                    }
 +                    .build()
 +            }
 +
