@@ -6,6 +6,7 @@ git_repository(
     remote = "https://github.com/google/gfxstream.git",
     patch_strip = 1,
     patches = [
+        "@//build_external/gfxstream:PATCH.gfxstream.integrated-gpu-score.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.protobuf-deprecation-warning.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.blob_page_size_runtime.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.gles1-alpha-test-core-profile.patch",
