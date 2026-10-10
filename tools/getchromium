@@ -2,16 +2,22 @@
 import subprocess
 import requests
 import zipfile
+import io
 import os
 import glob
 import re
 import sys
-import shutil
 import time
 import xml.etree.ElementTree as ET
 
 STORAGE_URL = "https://commondatastorage.googleapis.com/chromium-browser-snapshots"
-DOWNLOAD_CACHE_DIR = "/tmp"
+# The browser APK (~0.4 GB) is cached on disk, in the user's cache directory.
+DOWNLOAD_CACHE_DIR = os.path.join(
+    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
+    "ika",
+    "chromium",
+)
+DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 DOWNLOAD_PROGRESS_DOT_PERCENT = 20
 DOWNLOAD_PROGRESS_UNKNOWN_CHUNKS = 2
 ARCH_DETECT_ATTEMPTS = 10
@@ -126,11 +132,22 @@ def verify_chromium_installed():
     sys.exit(1)
 
 def chromium_installed(wait=False):
-    def installed():
+    # With wait, retry only while the package service is unavailable; once it
+    # answers, "not installed" is final.
+    answer = None
+
+    def answered():
+        nonlocal answer
         result = run_adb_optional(["shell", "pm", "path", CHROME_PACKAGE])
-        return result.returncode == 0 and bool(result.stdout.strip())
+        if result.returncode == 0 and result.stdout.strip():
+            answer = True
+        elif "Can't find service" not in result.stderr + result.stdout:
+            answer = False
+        return answer is not None
+
     attempts = INSTALLED_CHECK_ATTEMPTS if wait else 1
-    return poll_until(installed, attempts, INSTALLED_CHECK_RETRY_SECONDS)
+    poll_until(answered, attempts, INSTALLED_CHECK_RETRY_SECONDS)
+    return bool(answer)
 
 def write_chromium_stamp():
     if not CHROMIUM_STAMP:
@@ -157,7 +174,7 @@ def parse_bounds(bounds):
     return ((left + right) // 2, (top + bottom) // 2)
 
 def find_ui_text_center(text):
-    dump_result = run_adb_optional(["shell", "uiautomator", "dump", UI_DUMP_PATH])
+    dump_result = run_adb_optional(["shell", "uiautomator", "dump", "--compressed", UI_DUMP_PATH])
     if dump_result.returncode != 0:
         return None
 
@@ -177,16 +194,17 @@ def find_ui_text_center(text):
     return None
 
 def tap_ui_text(text, timeout_seconds):
+    # Always looks at least once, so a timeout of 0 means a single check.
     deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
+    while True:
         center = find_ui_text_center(text)
         if center:
             x, y = center
             run_adb(["shell", "input", "tap", str(x), str(y)])
             return True
+        if time.monotonic() >= deadline:
+            return False
         time.sleep(1)
-
-    return False
 
 def launch_chromium():
     run_adb(["shell", "monkey", "-p", CHROME_PACKAGE, "-c", "android.intent.category.LAUNCHER", "1"])
@@ -207,7 +225,9 @@ def provision_chromium_first_run():
 
     if tap_ui_text(FIRST_RUN_SIGNED_OUT_TEXT, 20):
         print("Finalizing setup...")
-        tap_ui_text(DEFAULT_BROWSER_CANCEL_TEXT, 10)
+        # Chromium already holds the browser role, so its default-browser
+        # prompt rarely appears: check once instead of waiting for it.
+        tap_ui_text(DEFAULT_BROWSER_CANCEL_TEXT, 0)
         return
 
 def relaunch_chromium_cycles():
@@ -296,124 +316,194 @@ def apply_chromium_gpu_flags():
             ["shell", f"echo '{NO_HARDWARE_VULKAN_CHROMIUM_FLAGS}' > {path} && chmod 644 {path}"]
         )
 
-def cached_zip_path(prefix, revision):
+class HttpRangeReader(io.RawIOBase):
+    """Seekable read-only view of a remote file, fetched with HTTP Range requests.
+
+    Sequential reads share one streaming response, so reading a zip member is a
+    single download of just that member's bytes.
+    """
+
+    def __init__(self, url):
+        self._url = url
+        self._session = requests.Session()
+        response = self._session.head(url, allow_redirects=True)
+        response.raise_for_status()
+        if response.headers.get("accept-ranges") != "bytes":
+            raise RuntimeError(f"{url} does not support range requests")
+        self._size = int(response.headers["content-length"])
+        self._pos = 0
+        self._response = None
+        self._chunks = None
+        self._buffer = b""
+        self._stream_pos = None
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def tell(self):
+        return self._pos
+
+    def seek(self, offset, whence=io.SEEK_SET):
+        if whence == io.SEEK_SET:
+            self._pos = offset
+        elif whence == io.SEEK_CUR:
+            self._pos += offset
+        elif whence == io.SEEK_END:
+            self._pos = self._size + offset
+        else:
+            raise ValueError(f"invalid whence {whence}")
+        return self._pos
+
+    def _close_stream(self):
+        if self._response is not None:
+            self._response.close()
+        self._response = None
+        self._chunks = None
+        self._buffer = b""
+        self._stream_pos = None
+
+    def readinto(self, buffer):
+        if self._pos >= self._size:
+            return 0
+        if self._stream_pos != self._pos:
+            self._close_stream()
+            self._response = self._session.get(
+                self._url,
+                headers={"Range": f"bytes={self._pos}-"},
+                stream=True,
+            )
+            self._response.raise_for_status()
+            self._chunks = self._response.iter_content(chunk_size=DOWNLOAD_CHUNK_BYTES)
+            self._stream_pos = self._pos
+        while not self._buffer:
+            self._buffer = next(self._chunks, b"")
+            if not self._buffer:
+                self._close_stream()
+                return 0
+        count = min(len(buffer), len(self._buffer))
+        buffer[:count] = self._buffer[:count]
+        self._buffer = self._buffer[count:]
+        self._pos += count
+        self._stream_pos = self._pos
+        return count
+
+    def close(self):
+        self._close_stream()
+        self._session.close()
+        super().close()
+
+def select_browser_apk(names):
+    apks = [name for name in names if name.endswith(".apk")]
+    # ContentShell is an APK, but it is not a browser role candidate.
+    candidates = [apk for apk in apks if is_browser_candidate(apk)]
+    # Prefer the unbranded APK, which avoids ChromePublic's Google account
+    # first-run path when the snapshot includes both APKs.
+    for preferred_apk in BROWSER_APK_PRIORITY:
+        for apk in candidates:
+            if os.path.basename(apk) == preferred_apk:
+                return apk
+    if candidates:
+        return candidates[0]
+    print("!!! Error: Could not find the correct browser APK in the package.")
+    print(f"Found files: {apks}")
+    sys.exit(1)
+
+def cached_apk_path(prefix, revision, member):
     return os.path.join(
-        DOWNLOAD_CACHE_DIR,
-        f"{prefix}-{revision}.zip",
+        DOWNLOAD_CACHE_DIR, f"{prefix}-{revision}-{os.path.basename(member)}"
     )
 
-def find_cached_zip(prefix):
-    # Reuse an existing build for this arch, preferring the newest revision on
-    # disk; an older cached revision is fine and avoids a re-download.
-    cached_glob = os.path.join(DOWNLOAD_CACHE_DIR, f"{prefix}-*.zip")
+def cache_revision(path):
+    revision = os.path.basename(path).split("-")[1].split(".")[0]
+    return int(revision) if revision.isdigit() else -1
 
-    def revision_of(path):
-        revision = os.path.basename(path).rsplit("-", 1)[-1][:-len(".zip")]
-        return int(revision) if revision.isdigit() else -1
-
-    # Prefer the newest revision already on disk; skip any corrupt leftovers.
-    for zip_path in sorted(glob.glob(cached_glob), key=revision_of, reverse=True):
-        try:
-            with zipfile.ZipFile(zip_path, "r") as z:
-                if z.testzip() is None:
-                    return zip_path
-        except zipfile.BadZipFile:
-            pass
+def find_cached_apk(prefix):
+    # Reuse an existing APK for this arch, preferring the newest revision on
+    # disk; an older cached revision is fine and avoids a download. An APK only
+    # gets its final name once it is complete and its CRC checked.
+    cached = glob.glob(os.path.join(DOWNLOAD_CACHE_DIR, f"{prefix}-*-*.apk"))
+    for apk_path in sorted(cached, key=cache_revision, reverse=True):
+        if zipfile.is_zipfile(apk_path):
+            return apk_path
     return None
 
-def download_zip_if_needed(download_url, zip_path, revision):
-    if os.path.exists(zip_path):
-        try:
-            with zipfile.ZipFile(zip_path, "r") as z:
-                bad_file = z.testzip()
-            if bad_file is None:
-                return
-        except zipfile.BadZipFile:
-            pass
+def find_cached_zip(prefix):
+    # A whole snapshot zip downloaded by an earlier version.
+    cached = glob.glob(os.path.join(DOWNLOAD_CACHE_DIR, f"{prefix}-*.zip"))
+    for zip_path in sorted(cached, key=cache_revision, reverse=True):
+        if zipfile.is_zipfile(zip_path):
+            return zip_path
+    return None
 
-    os.makedirs(os.path.dirname(zip_path), exist_ok=True)
-    partial_zip = f"{zip_path}.part"
+def copy_with_progress(source, apk_path, total_bytes):
+    partial_apk = f"{apk_path}.part"
+    next_progress_percent = DOWNLOAD_PROGRESS_DOT_PERCENT
+    copied_bytes = 0
+    with open(partial_apk, "wb") as output:
+        while chunk := source.read(DOWNLOAD_CHUNK_BYTES):
+            output.write(chunk)
+            copied_bytes += len(chunk)
+            progress_percent = copied_bytes * 100 // max(total_bytes, 1)
+            while progress_percent >= next_progress_percent:
+                sys.stdout.write(".")
+                sys.stdout.flush()
+                next_progress_percent += DOWNLOAD_PROGRESS_DOT_PERCENT
+    # Reading the member to its end checks its CRC, so a complete file is good.
+    os.replace(partial_apk, apk_path)
 
+def extract_browser_apk(snapshot_zip, prefix, revision):
+    member = select_browser_apk(snapshot_zip.namelist())
+    apk_path = cached_apk_path(prefix, revision, member)
+    with snapshot_zip.open(member) as source:
+        copy_with_progress(source, apk_path, snapshot_zip.getinfo(member).file_size)
+    print(f" {apk_path}")
+    return apk_path
+
+def download_browser_apk(prefix, revision):
+    # Fetch only the browser APK out of the snapshot zip: the zip also carries
+    # WebView and ContentShell, more than half of its size.
+    download_url = f"{STORAGE_URL}/{prefix}/{revision}/chrome-android-desktop.zip"
     sys.stdout.write("Downloading Chromium for Android desktop")
     sys.stdout.flush()
-    with requests.get(download_url, stream=True) as r:
-        r.raise_for_status()
-        total_bytes = int(r.headers.get("content-length", "0"))
-        next_progress_percent = DOWNLOAD_PROGRESS_DOT_PERCENT
-        downloaded_bytes = 0
-        downloaded_chunks = 0
-        with open(partial_zip, 'wb') as f:
-            for chunk in r.iter_content(chunk_size=1024*1024):
-                if not chunk:
-                    continue
-                f.write(chunk)
-                downloaded_bytes += len(chunk)
-                downloaded_chunks += 1
-                if total_bytes > 0:
-                    progress_percent = downloaded_bytes * 100 // total_bytes
-                    while progress_percent >= next_progress_percent:
-                        sys.stdout.write(".")
-                        sys.stdout.flush()
-                        next_progress_percent += DOWNLOAD_PROGRESS_DOT_PERCENT
-                elif downloaded_chunks % DOWNLOAD_PROGRESS_UNKNOWN_CHUNKS == 0:
-                    sys.stdout.write(".")
-                    sys.stdout.flush()
-    os.replace(partial_zip, zip_path)
-    print(f" {zip_path}")
+    with HttpRangeReader(download_url) as remote:
+        reader = io.BufferedReader(remote, buffer_size=DOWNLOAD_CHUNK_BYTES)
+        with zipfile.ZipFile(reader) as snapshot_zip:
+            return extract_browser_apk(snapshot_zip, prefix, revision)
+
+def apk_from_cached_zip(zip_path, prefix):
+    sys.stdout.write("Extracting Chromium from the cached download")
+    sys.stdout.flush()
+    with zipfile.ZipFile(zip_path) as snapshot_zip:
+        return extract_browser_apk(snapshot_zip, prefix, cache_revision(zip_path))
+
+def prune_cache(prefix, keep_path):
+    for path in glob.glob(os.path.join(DOWNLOAD_CACHE_DIR, f"{prefix}-*")):
+        if path != keep_path:
+            os.remove(path)
+
+def browser_apk(prefix):
+    os.makedirs(DOWNLOAD_CACHE_DIR, exist_ok=True)
+    apk_path = find_cached_apk(prefix)
+    if not apk_path:
+        zip_path = find_cached_zip(prefix)
+        if zip_path:
+            apk_path = apk_from_cached_zip(zip_path, prefix)
+        else:
+            apk_path = download_browser_apk(prefix, fetch_latest_revision(prefix))
+    prune_cache(prefix, apk_path)
+    return apk_path
 
 def main():
-    extracted_dir = "/tmp/chrome_extracted_content"
-    
     try:
         if chromium_installed(wait=True):
             apply_chromium_gpu_flags()
             write_chromium_stamp()
             return
 
-        prefix = detect_prefix()
-        temp_zip = find_cached_zip(prefix)
-        if not temp_zip:
-            revision = fetch_latest_revision(prefix)
-            download_url = f"{STORAGE_URL}/{prefix}/{revision}/chrome-android-desktop.zip"
-            temp_zip = cached_zip_path(prefix, revision)
-            download_zip_if_needed(download_url, temp_zip, revision)
-
-        if os.path.isdir(extracted_dir):
-            shutil.rmtree(extracted_dir)
-        os.makedirs(extracted_dir)
-
-        with zipfile.ZipFile(temp_zip, 'r') as z:
-            z.extractall(extracted_dir)
-
-            all_apks = []
-            for root, _, files in os.walk(extracted_dir):
-                for file in files:
-                    if file.endswith(".apk"):
-                        all_apks.append(os.path.join(root, file))
-
-            # Logic to find the "Real" Browser APK. ContentShell is an APK,
-            # but it is not a browser role candidate.
-            filtered_apks = [apk for apk in all_apks if is_browser_candidate(apk)]
-
-            # 1. Prefer the unbranded APK, which avoids ChromePublic's Google
-            # account first-run path when the snapshot includes both APKs.
-            target_apk = None
-            for preferred_apk in BROWSER_APK_PRIORITY:
-                for apk in filtered_apks:
-                    if os.path.basename(apk) == preferred_apk:
-                        target_apk = apk
-                        break
-                if target_apk:
-                    break
-
-            # 2. Fallback to the first browser-like APK found.
-            if not target_apk and filtered_apks:
-                target_apk = filtered_apks[0]
-
-        if not target_apk:
-            print("!!! Error: Could not find the correct browser APK in the package.")
-            print(f"Found files: {all_apks}")
-            return
+        target_apk = browser_apk(detect_prefix())
 
         # -r: replace, -d: allow downgrade, -g: grant all permissions
         install_output = run_adb(["install", "-r", "-d", "-g", target_apk])
@@ -432,10 +522,7 @@ def main():
 
     except Exception as e:
         print(f"\n!!! An unexpected error occurred: {e}")
-    
-    finally:
-        if os.path.isdir(extracted_dir):
-            shutil.rmtree(extracted_dir)
+        return 1
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
