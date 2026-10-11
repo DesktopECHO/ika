@@ -182,9 +182,10 @@ function source_tree_exclude_paths() {
 
   # ika keeps its VM state in CVD_HOME_DIR, ~/ika by default, which is also
   # where `git clone` from $HOME puts this checkout. Leave that state out:
-  # instance disks, live sockets, logs and locks.
+  # instance disks, live sockets, logs and locks, and getchromium's APK.
   printf '%s\n' \
     tmp cuttlefish cuttlefish_assembly cuttlefish_runtime 'cuttlefish_runtime.*' \
+    Chromium.apk Chromium.apk.part \
     .cuttlefish_config.json apps app-menu-disabled app-menu.log \
     app-menu-sync.lock app-menu-watcher.lock app-menu-watcher.pid \
     autostart.lock 'chromium-installed-cvd-*' console-launch.lock console.log \
