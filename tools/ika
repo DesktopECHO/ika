@@ -432,6 +432,7 @@ CVD_INSTANCE_DIR="${CVD_HOME_DIR}/cuttlefish/instances/cvd-1"
 CVD_LAUNCHER_LOG="${CVD_INSTANCE_DIR}/logs/launcher.log"
 CVD_CONFIG_PATH="${CVD_INSTANCE_DIR}/cuttlefish_config.json"
 CHROMIUM_INSTALL_STAMP="${CVD_HOME_DIR}/chromium-installed-cvd-1"
+CHROMIUM_APK="${CVD_HOME_DIR}/Chromium.apk"
 UDMABUF_BASELINE_FILE="${CVD_HOME_DIR}/udmabuf-baseline"
 SCRCPY_BIN="${PACKAGED_SCRCPY_BIN}"
 SCRCPY_SERVER_PATH_OVERRIDE=""
@@ -453,7 +454,6 @@ RADV_VEGA_OR_OLDER_FAMILY_REGEX='(TAHITI|PITCAIRN|VERDE|OLAND|HAINAN|BONAIRE|KAB
 GFXSTREAM_APPLE_16K_VULKAN_RENDERER_FEATURES="ExternalBlob:enabled;SystemBlob:disabled;VulkanAllocateHostVisibleAsUdmabuf:enabled;VulkanUseDedicatedAhbMemoryType:enabled"
 CVD_GRAPHICS_DRIVER_MESSAGE=""
 CVD_DATA_STORAGE_MESSAGE=""
-CVD_NEWLY_PROVISIONED="false"
 # Set to false by --no-console: start the VM without the desktop console.
 START_CONSOLE="true"
 # Set by the internal --game-session start option.
@@ -2013,8 +2013,6 @@ append_data_storage_args() {
     args_array+=("--blank_data_image_mb=${data_mb}")
   fi
 
-  CVD_NEWLY_PROVISIONED="true"
-
   if [[ -n "${configured_data_gb}" ]]; then
     CVD_DATA_STORAGE_MESSAGE="Provisioning ${data_gb} GB userdata..."
     log "fresh userdata target: ${data_mb} MiB"
@@ -2805,24 +2803,28 @@ wait_for_boot() {
   return 1
 }
 
-ensure_chromium_before_scrcpy() {
+# Installs Chromium until it has succeeded once for this VM. 'ika reset'
+# removes the stamp, so a reset VM gets it again; one removed by the user stays
+# removed. Runs before the console opens: getchromium drives the guest UI.
+ensure_chromium() {
   local adb_serial="$1"
 
-  if [[ "${CVD_NEWLY_PROVISIONED}" != "true" ]]; then
+  if [[ -e "${CHROMIUM_INSTALL_STAMP}" ]]; then
     return 0
   fi
 
   if [[ ! -x "${PACKAGED_GETCHROMIUM_BIN}" ]]; then
-    log "${PACKAGED_GETCHROMIUM_BIN} is unavailable; continuing to the console."
+    log "${PACKAGED_GETCHROMIUM_BIN} is unavailable; skipping Chromium."
     return 0
   fi
 
-  if ANDROID_SERIAL="${adb_serial}" IKA_CHROMIUM_STAMP="${CHROMIUM_INSTALL_STAMP}" "${PACKAGED_GETCHROMIUM_BIN}" >&3 2>&3; then
+  if ANDROID_SERIAL="${adb_serial}" IKA_CHROMIUM_APK="${CHROMIUM_APK}" \
+      "${PACKAGED_GETCHROMIUM_BIN}" >&3 2>&3; then
     mkdir -p "$(dirname "${CHROMIUM_INSTALL_STAMP}")"
     : > "${CHROMIUM_INSTALL_STAMP}"
     log "getchromium completed."
   else
-    log "getchromium failed; continuing to the console."
+    log "getchromium failed; it runs again on the next start."
   fi
 }
 
@@ -2995,7 +2997,7 @@ start_scrcpy_with_retries() {
   mkdir -p "$(dirname "${scrcpy_log}")"
   : > "${scrcpy_log}"
 
-  ensure_chromium_before_scrcpy "${adb_serial}"
+  ensure_chromium "${adb_serial}"
 
   flock -u "${scrcpy_lock_fd}"
   exec {scrcpy_lock_fd}>&-
@@ -5002,6 +5004,8 @@ start_cvd() {
     respond "Android virtual device running"
     if [[ "${START_CONSOLE}" == "true" ]]; then
       maybe_start_scrcpy "${adb_serial}" "${fullscreen_mode}" "${game_mode}" || true
+    else
+      ensure_chromium "${adb_serial}"
     fi
     start_app_menu_watcher
     return 0
@@ -5050,6 +5054,8 @@ start_cvd() {
   respond "Android virtual device running"
   if [[ "${START_CONSOLE}" == "true" ]]; then
     maybe_start_scrcpy "${adb_serial}" "${fullscreen_mode}" "${game_mode}" || true
+  else
+    ensure_chromium "${adb_serial}"
   fi
   start_app_menu_watcher
 
