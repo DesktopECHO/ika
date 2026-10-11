@@ -12,6 +12,7 @@ DEFAULT_CVD_PRODUCT_OUT="/usr/share/cuttlefish-common/lineageos"
 PACKAGED_SCRCPY_BIN="/usr/lib/cuttlefish-common/bin/scrcpy"
 PACKAGED_SCRCPY_SERVER="/usr/lib/cuttlefish-common/share/scrcpy/scrcpy-server"
 PACKAGED_GETCHROMIUM_BIN="/usr/lib/cuttlefish-common/bin/getchromium"
+PACKAGED_IKA_ROOT_BIN="/usr/lib/cuttlefish-common/bin/ika-root"
 SCRCPY_ICON_DIR_DEFAULT="/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps"
 IKA_SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 
@@ -944,6 +945,7 @@ Usage:
   ${SCRIPT_NAME} stop
   ${SCRIPT_NAME} restart [-f|--fullscreen|--game|--no-console] [--camera[=obs|videoN]] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] ...
   ${SCRIPT_NAME} reset [--data_gb=GB]
+  ${SCRIPT_NAME} root
   ${SCRIPT_NAME} status
   ${SCRIPT_NAME} app NAME|PACKAGE [-f|--fullscreen] [--game] [--touch] [--window] [--title=TEXT] [--size=WxH] [--ika_scrcpy=ARGS]
   ${SCRIPT_NAME} app --info NAME|PACKAGE
@@ -1039,6 +1041,13 @@ App windows:
   ~/ika/app-menu.log). '--remove' deletes the entries and the group and turns
   the automatic sync off until 'app sync' is run again. 'reset' removes the
   entries as well; the next 'start' rebuilds them.
+
+Root:
+
+  '${SCRIPT_NAME} root' runs ika-root, which roots the VM with the latest Magisk
+  release and enables developer options. Rooting a VM the first time unlocks
+  and wipes it, after asking to confirm; later runs update Magisk and keep the
+  data. 'reset' undoes it.
 
 Environment variables:
 
@@ -5227,6 +5236,11 @@ main() {
     app)
       shift
       run_app_command "$@"
+      ;;
+    root)
+      shift
+      require_executable "${PACKAGED_IKA_ROOT_BIN}" "ika-root"
+      exec "${PACKAGED_IKA_ROOT_BIN}" "$@"
       ;;
     __console_supervisor)
       shift

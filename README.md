@@ -18,6 +18,8 @@ on [Fedora Asahi Remix](https://asahilinux.org/). It later evolved into a deskto
   (see [App windows](#app-windows)).
 - **Camera**: use a webcam or a Mac's FaceTime camera as Android's front camera
   (see [Camera](#camera)).
+- **Root**: `ika root` roots the VM with Magisk (see
+  [Rooting with Magisk](#rooting-with-magisk)).
 - **Flexible build options** for **MindTheGapps**, **microG**, or a fully
   de-Googled ROM without an app store.
 
@@ -177,6 +179,10 @@ ika restart --gpu_mode=gfxstream --gfxstream_vulkan=on
 # Factory reset and use a 128 GB userdata image on the next start
 ika reset --data_gb=128
 
+# Root the VM with Magisk; the first time, this factory-resets the VM and
+# unlocks its bootloader, after asking to confirm
+ika root
+
 # Game Mode will start Ika fullscreen and enable HID keyboard and mouse 
 ika start --game
 
@@ -224,6 +230,27 @@ virtio-media, served by Android's external camera HAL):
   while it runs, so use `ika restart --camera` then. It is used until the
   next `ika start` or `ika restart` without `--camera`. It needs the `video`
   group, and while Android streams from it, other programs on the host can't.
+
+### Rooting with Magisk
+
+`ika root` roots the VM with [Magisk](https://github.com/topjohnwu/Magisk).
+It works on user and userdebug builds and needs nothing else installed. If
+the VM is not running, it is started first.
+
+- The first time, `ika root` factory-resets the VM and unlocks its
+  bootloader, after asking to confirm. Unlocking changes the keys that
+  encrypt Android's data, so the data cannot be kept, just as when a phone's
+  bootloader is unlocked.
+- It downloads the latest Magisk release from GitHub into `~/ika` (again only
+  when a newer one is out), patches Android's `init_boot` image with Magisk's
+  own patcher, flashes it from the bootloader and finishes Magisk's setup.
+  The VM reboots a few times along the way.
+- Afterwards `adb shell su` works without a prompt, the Magisk app is
+  installed and Android's developer options are enabled.
+- Running `ika root` again on a rooted VM keeps its data and updates Magisk
+  to the latest release.
+- `ika reset` undoes it: it relocks the bootloader and returns the VM to
+  stock Android.
 
 ### App windows
 
@@ -315,7 +342,8 @@ stretching it. Super + T and Super + F work as they do in the console.
 `cvd_internal_start`, so you can override launch settings on the command line.
 `ika stop` calls the matching low-level stop helper and then cleans up local
 Cuttlefish processes. `ika reset` is the destructive variant; it passes
-`--clear_instance_dirs` and removes the local Chromium-install stamp.
+`--clear_instance_dirs` and removes the local Chromium-install stamp. It also
+relocks the bootloader and removes root.
 
 Default `ika` settings and configuration:
 
@@ -323,6 +351,7 @@ Default `ika` settings and configuration:
 - the packaged LineageOS tree from `/usr/share/cuttlefish-common/lineageos`
 - instance state under `~/ika`
 - ~64 GB thin-provisioned ext4 userdata image
+- Chromium installed as the default browser on new devices
 - guest vCPUs set to the available/performance-core count minus two, capped at 12
 - guest RAM set to one quarter of host RAM, capped at 32 GB
 - Ethernet-only guest networking by default; Wi-Fi, Bluetooth, NFC, UWB, GNSS,

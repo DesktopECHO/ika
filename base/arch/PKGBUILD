@@ -216,6 +216,7 @@ package_ika-base() {
   install -Dpm0755 "${root}/tools/getchromium" "${pkgdir}/usr/lib/cuttlefish-common/bin/getchromium"
   # /bin is a symlink to /usr/bin on Arch; the RPM's /bin/ika lands here.
   install -Dpm0755 "${root}/tools/ika" "${pkgdir}/usr/bin/ika"
+  install -Dpm0755 "${root}/tools/ika-root" "${pkgdir}/usr/lib/cuttlefish-common/bin/ika-root"
   install -Dpm0644 "${root}/base/host/packages/cuttlefish-base/etc/NetworkManager/conf.d/99-cuttlefish.conf" "${pkgdir}/etc/NetworkManager/conf.d/99-cuttlefish.conf"
   install -Dpm0644 "${root}/base/rpm/99-cuttlefish.conf" "${pkgdir}/etc/sysctl.d/99-cuttlefish.conf"
   install -Dpm0644 "${root}/base/host/packages/cuttlefish-base/etc/modules-load.d/cuttlefish-common.conf" "${pkgdir}/etc/modules-load.d/cuttlefish-common.conf"
