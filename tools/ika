@@ -478,12 +478,20 @@ log_file_only() {
 }
 
 die() {
+  die_with_notification "$*" "$*"
+}
+
+# Like die, with a separate (shorter) message for the desktop notification.
+die_with_notification() {
+  local notification="$1"
+  shift
+
   log "error: $*"
   if [[ -n "${CONSOLE_FAILURE_MESSAGE:-}" ]]; then
     printf '%s\n' "${CONSOLE_FAILURE_MESSAGE}" >&3
   fi
   close_progress_notifications
-  notify_user "$*"
+  notify_user "${notification}"
   exit 1
 }
 
@@ -771,7 +779,8 @@ resolve_camera_device() {
   case "${requested}" in
     auto)
       device="$(detect_host_camera)" \
-        || die "no usable camera found (a video capture device offering MJPEG, NV12 or YUYV); name one with --camera=videoN"
+        || die_with_notification "No usable camera found." \
+          "no usable camera found (a video capture device offering MJPEG, NV12 or YUYV); name one with --camera=videoN"
       ;;
     obs)
       device="$(detect_obs_camera)" \
@@ -3680,7 +3689,7 @@ start_game_session() {
     exec {autostart_lock_fd}>"${CVD_HOME_DIR}/autostart.lock"
     flock -w "$((CVD_BOOT_TIMEOUT_SEC + 60))" "${autostart_lock_fd}" \
       || die "timed out waiting for Ika to start"
-    "${IKA_SCRIPT_PATH}" start --game --game-session </dev/null >/dev/null 2>&1 \
+    IKA_NOTIFY=false "${IKA_SCRIPT_PATH}" start --game --game-session </dev/null >/dev/null 2>&1 \
       {autostart_lock_fd}>&- {game_session_lock_fd}>&- \
       || die "could not start the game session; see ${START_LOG_FILE}"
     exec {autostart_lock_fd}>&-
@@ -3721,7 +3730,7 @@ ensure_guest_ready() {
     notify_progress "Starting Android virtual machine, one moment..."
     # Close the lock for the child: the VM processes it starts outlive this
     # command and would otherwise hold the lock for as long as the VM runs.
-    "${IKA_SCRIPT_PATH}" start --no-console </dev/null >/dev/null 2>&1 \
+    IKA_NOTIFY=false "${IKA_SCRIPT_PATH}" start --no-console </dev/null >/dev/null 2>&1 \
       {autostart_lock_fd}>&- \
       || die "could not start the Android virtual device; see ${START_LOG_FILE}"
   fi
@@ -5011,6 +5020,7 @@ start_cvd() {
     return 0
   fi
 
+  notify_progress "Starting Android virtual machine, one moment..."
   record_udmabuf_baseline
   protect_overlay_resume
 
@@ -5058,7 +5068,7 @@ start_cvd() {
     ensure_chromium "${adb_serial}"
   fi
   start_app_menu_watcher
-
+  close_progress_notifications
 }
 
 stop_cvd_internal() {
