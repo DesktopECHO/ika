@@ -25,6 +25,11 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** Includes the composite disk specification file descriptor in `CompositeDiskFile::as_raw_descriptors()`.
 - **Why:** The file is intentionally kept open to retain its lock. In crosvm multiprocess sandbox mode, unreported descriptors are closed by minijail; Rust then traps when `_disk_spec_file` is dropped because the owned fd was already closed.
 
+#### `PATCH.disk-qcow-zero-clusters.patch`
+- **Targets:** `disk` crate. Files: `src/qcow/mod.rs`, `src/qcow/qcow_raw_file.rs`.
+- **What it does:** Supports qcow2 version 3 zero clusters (L2 entry bit 0). Discarding or write-zeroing a full cluster of a qcow2 image that has a backing file now frees the cluster's storage and marks it zero, instead of allocating a cluster and writing zeroes into it. Zero clusters read as zeroes rather than from the backing file, and a later write into one starts from zeroes.
+- **Why:** Cuttlefish's `overlay.img` is a qcow2 over `os_composite.img`, so every guest discard took that allocate-and-zero path. A factory reset (Settings, recovery, RescueParty) discards the whole userdata partition, which grew `overlay.img` by the partition size (64 GB by default) and filled the host disk; an `fstrim` of `/data` did the same for its free space.
+
 #### `PATCH.crosvm-resize-display.patch`
 - **Targets:** `crosvm_bin` and the source `git_repository`. File: `devices/src/virtio/gpu/virtio_gpu.rs`.
 - **What it does:** Adds `VirtioGpu::resize_display(display_id, DisplayParameters)` that updates an existing scanout's `width`, `height`, and stored `display_params`, then flips `scanouts_updated` so the GPU thread re-syncs.
@@ -99,7 +104,7 @@ See `crosvm.MODULE.bazel`. The relevant blocks:
 | Target | Patches |
 |---|---|
 | `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-composite-preserve-spec-fd`, `crosvm-gpu-2d-sandbox`, `crosvm-gpu-unref-shmem-mapping`, `crosvm-resize-display`, `crosvm-enable-vulkano-gralloc`, `minijail-sys_common_mk` |
-| `crosvm_bin.annotation(crate = "disk")` | `disk-composite-preserve-spec-fd` |
+| `crosvm_bin.annotation(crate = "disk")` | `disk-composite-preserve-spec-fd`, `disk-qcow-zero-clusters` |
 | `crosvm_bin.annotation(crate = "jail")` | `jail-aarch64-block-pread64`, `jail-gpu-host-graphics-libs-optional` |
 | `crosvm_bin.annotation(crate = "devices")` | `crosvm-resize-display-devices` |
 | `crosvm_bin.annotation(crate = "rutabaga_gfx")` | `rutabaga_gfx_build_rs`, `rutabaga_gfx-gralloc-vulkano-fallback`, `rutabaga_gfx-cleanup-on-drop` |
