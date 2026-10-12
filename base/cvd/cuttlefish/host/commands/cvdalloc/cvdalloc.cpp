@@ -46,6 +46,34 @@ void Usage() {
   LOG(ERROR) << "Should only be invoked from run_cvd.";
 }
 
+bool IfaceExists(const std::string& name) {
+  return access(absl::StrFormat("/sys/class/net/%s", name).c_str(), F_OK) == 0;
+}
+
+// A cvdalloc killed before its teardown (for example with its VM) leaves this
+// instance's tap interfaces behind, and creating them again fails. Removes
+// them; the bridges are shared with other instances and reused as they are.
+void RemoveStaleTaps(int id, bool enable_mobile, bool enable_wifi) {
+  if (enable_mobile && IfaceExists(CvdallocInterfaceName("mtap", id))) {
+    LOG(INFO) << "cvdalloc: removing stale " << CvdallocInterfaceName("mtap", id);
+    DestroyMobileIface(CvdallocInterfaceName("mtap", id), id,
+                       kCvdallocMobileIpPrefix);
+  }
+  if (enable_wifi && IfaceExists(CvdallocInterfaceName("wtap", id))) {
+    LOG(INFO) << "cvdalloc: removing stale " << CvdallocInterfaceName("wtap", id);
+    DestroyEthernetIface(CvdallocInterfaceName("wtap", id));
+  }
+  if (enable_wifi && IfaceExists(CvdallocInterfaceName("wifiap", id))) {
+    LOG(INFO) << "cvdalloc: removing stale " << CvdallocInterfaceName("wifiap", id);
+    DestroyMobileIface(CvdallocInterfaceName("wifiap", id), id,
+                       kCvdallocWirelessApIpPrefix);
+  }
+  if (IfaceExists(CvdallocInterfaceName("etap", id))) {
+    LOG(INFO) << "cvdalloc: removing stale " << CvdallocInterfaceName("etap", id);
+    DestroyEthernetIface(CvdallocInterfaceName("etap", id));
+  }
+}
+
 Result<void> Allocate(int id, std::string_view ethernet_bridge_name,
                       std::string_view wireless_bridge_name,
                       bool enable_mobile, bool enable_wifi) {
@@ -145,6 +173,7 @@ Result<int> CvdallocMain(int argc, char *argv[]) {
                  enable_mobile, enable_wifi);
   };
 
+  RemoveStaleTaps(id, enable_mobile, enable_wifi);
   CF_EXPECT(Allocate(id, kCvdallocEthernetBridgeName,
                      kCvdallocWirelessBridgeName, enable_mobile, enable_wifi));
   CF_EXPECT(cvdalloc::Post(sock));
