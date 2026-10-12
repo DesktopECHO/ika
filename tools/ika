@@ -405,6 +405,7 @@ CVD_TMP_DIR="${CVD_HOME_DIR}/tmp"
 mkdir -p "${CVD_TMP_DIR}"
 export TMPDIR="${CVD_TMP_DIR}"
 DATA_GB_CONFIG_FILE="${CVD_HOME_DIR}/data-gb"
+SERIAL_NUMBER_FILE="${CVD_HOME_DIR}/serial-number"
 START_LOG_FILE="${CVD_HOME_DIR}/ikastart.log"
 SCRCPY_LOG_FILE="${CVD_HOME_DIR}/console.log"
 SCRCPY_WINDOW_STATE_FILE="${CVD_HOME_DIR}/console-window-state"
@@ -2054,6 +2055,31 @@ apply_default_args() {
       fi
     fi
   done
+}
+
+# Gives the device its own serial number, generated on first start and kept
+# across updates and factory resets, instead of Cuttlefish's CUTTLEFISHCVD01,
+# which is the same on every install. Letters and digits only: GMS check-in
+# rejects other serials.
+append_serial_number_args() {
+  local -n args_array="$1"
+  shift
+  local serial=""
+
+  if user_supplied_flag "serial_number" "$@" \
+      || user_supplied_flag "use_random_serial" "$@"; then
+    return 0
+  fi
+
+  if [[ -s "${SERIAL_NUMBER_FILE}" ]]; then
+    IFS= read -r serial < "${SERIAL_NUMBER_FILE}" || true
+  fi
+  if [[ ! "${serial}" =~ ^[A-Z0-9]+$ ]]; then
+    serial="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n' | tr 'a-f' 'A-F')"
+    printf '%s\n' "${serial}" > "${SERIAL_NUMBER_FILE}"
+    log "generated device serial number ${serial}"
+  fi
+  args_array+=("--serial_number=${serial}")
 }
 
 apply_start_default_args() {
@@ -5040,6 +5066,7 @@ start_cvd() {
   apply_start_default_args args "$@"
   append_cuttlefish_audio_args args "$@"
   append_data_storage_args args "$@"
+  append_serial_number_args args "$@"
   append_arm64_kernel_page_args args "$@"
   append_gfxstream_vulkan_args args "$@"
   append_default_display_arg args "${scrcpy_dpi}" "$@"

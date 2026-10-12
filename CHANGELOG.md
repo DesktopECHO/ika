@@ -55,7 +55,7 @@
   `ika.desktop`.
 
 ### Android guest
-- The device is named "Ika Android Environment", with a serial number
+- The device is named "Ika Android", with a serial number
   starting with IKA.
 - The Google Services Framework Android ID, needed to register a device with
   Google, is published as the `sys.ika.gsf_android_id` property.
