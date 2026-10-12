@@ -2,8 +2,8 @@
 
 ### Camera
 - `ika start --camera` passes a host camera to Android: USB webcams, the
-  FaceTime camera of Apple Silicon Macs (Asahi kernel) and Intel Macs, the OBS
-  virtual camera (`--camera=obs`), or a given device (`--camera=video2`). See
+  FaceTime camera of Apple Silicon Macs (Asahi kernel) and Intel Macs, or a
+  given device (`--camera=video2`). See
   [Camera](README.md#camera). Ika now depends on v4l-utils.
 - Android has a single front camera, emulated or passed through. The emulated
   camera is landscape; it used to look like a portrait phone camera.
