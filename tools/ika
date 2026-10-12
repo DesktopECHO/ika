@@ -1129,7 +1129,9 @@ resolve_scrcpy_dpi() {
 
   size="$(host_display_size || true)"
   if [[ ! "${size}" =~ ^([0-9]+)x[0-9]+$ ]]; then
-    die "could not determine host display width for automatic DPI"
+    log "could not determine host display width; defaulting to 144 DPI"
+    printf '%s\n' 144
+    return 0
   fi
 
   # Heuristic: DPI = (native display width / 10)
@@ -1181,9 +1183,37 @@ split_start_args() {
   fi
 }
 
-# Largest "current" Wayland output mode as WxH. Probed at most once per run and
-# cached: a single start queries it more than once (DPI heuristic + display
-# ceiling) and spawning wayland-info is comparatively expensive.
+# Largest enabled, connected DRM connector's preferred (native) mode as WxH,
+# read from sysfs. Used when wayland-info finds nothing, e.g. in an X11 session.
+drm_display_size() {
+  local connector
+  local mode
+  local width
+  local height
+  local best_area=0
+  local best=""
+
+  for connector in /sys/class/drm/card*-*; do
+    [[ "$(cat "${connector}/status" 2>/dev/null)" == "connected" ]] || continue
+    [[ "$(cat "${connector}/enabled" 2>/dev/null)" == "enabled" ]] || continue
+    mode="$(head -n 1 "${connector}/modes" 2>/dev/null || true)"
+    [[ "${mode}" =~ ^([0-9]+)x([0-9]+) ]] || continue
+    width="${BASH_REMATCH[1]}"
+    height="${BASH_REMATCH[2]}"
+    if (( width * height > best_area )); then
+      best_area=$(( width * height ))
+      best="${width}x${height}"
+    fi
+  done
+
+  [[ -n "${best}" ]] || return 0
+  printf '%s\n' "${best}"
+}
+
+# Largest "current" Wayland output mode as WxH, falling back to the DRM
+# connectors in sysfs. Probed at most once per run and cached: a single start
+# queries it more than once (DPI heuristic + display ceiling) and spawning
+# wayland-info is comparatively expensive.
 _host_display_size_probed=""
 _host_display_size_value=""
 host_display_size() {
@@ -1209,6 +1239,9 @@ host_display_size() {
           END { if (best_width && best_height) printf "%sx%s\n", best_width, best_height }
         ' || true
       )"
+    fi
+    if [[ -z "${_host_display_size_value}" ]]; then
+      _host_display_size_value="$(drm_display_size)"
     fi
   fi
 
@@ -1244,6 +1277,10 @@ host_display_logical_size() {
           END { if (best_width && best_height) printf "%sx%s\n", best_width, best_height }
         ' || true
       )"
+    fi
+    # X11 has no output scaling, so the native size is the logical size.
+    if [[ -z "${_host_display_logical_size_value}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+      _host_display_logical_size_value="$(host_display_size || true)"
     fi
   fi
 
