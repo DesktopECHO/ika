@@ -4,7 +4,8 @@
 - Built-in root utility: `ika root` roots Android with Magisk, on user and
   userdebug builds, and turns on developer options. It downloads the latest
   Magisk itself. The first time, it unlocks the bootloader, which
-  factory-resets the device after asking; `ika reset` undoes it. See
+  factory-resets the device after asking. `ika reset` relocks the bootloader
+  and returns the VM to stock Android. See
   [Rooting with Magisk](README.md#rooting-with-magisk).
 - `ika gsf` shows the device's Google Services Framework ID, copies it to the
   clipboard and opens Google's uncertified device page, for when Google
@@ -22,31 +23,31 @@
   only the sizes and settings the camera supports are offered, with noise
   reduction at every level. The preview matches the aspect ratio of the photo
   or video.
-- The FaceTime camera of 2013-2017 Intel Macs (facetimehd driver) works with
-  the stock driver. Ika started cameras like it streaming before Android had
-  set them up, and Android then failed to open them.
+- The FaceTime camera on 2013-2017 Intel Macs (facetimehd driver) works with
+  the stock driver. Ika used to start the camera streaming before Android had
+  set it up, so Android couldn't open it.
 
 ### Display
-- The display client is rebuilt on scrcpy 5.0.1 (it was a fork of 3.3.4).
+- The console and app windows are now based on scrcpy 5.0.1 (previously
+  3.3.4).
 - While the console or an app window is resized, the last complete picture
   is stretched and blurred until Android has drawn the new size, then fades
   to it.
-- The console's resize edges are an invisible 4-pixel margin just outside the
-  window, on GNOME and KDE, Wayland and X11, so they no longer cover the edge
-  of the Android desktop.
-- The console uses about half the CPU while the screen changes: frames are
-  copied straight into shared memory and shown from there without another
-  copy.
+- You resize the console by dragging just outside its edge, so the resize
+  handles no longer cover the edge of the Android desktop. This works on GNOME
+  and KDE, under Wayland and X11.
+- The console no longer makes an extra copy of each frame, which halves its
+  CPU use while the screen changes.
 - App windows decode their video on the GPU through VA-API where the driver
   supports H.264 (Intel, for example): on a 2011 MacBook Pro, an app window
   went from 41% to 4% CPU. Other hosts decode in software as before.
-- Clicks work in app windows on displays with fractional scaling. Some window
-  sizes made Android resize the app's display right after it opened, and the
-  window then ignored every click; app windows now keep an even size in
-  pixels.
-- Ika reads the display size from DRM when wayland-info finds none, and
-  uses 144 DPI when it can't read one at all, so it also starts without a
-  desktop session.
+- App windows no longer ignore clicks on displays with fractional scaling,
+  such as 125%. At some window sizes, Android resized the app's display just
+  after it opened, and the window then stopped responding to clicks. App
+  windows now always use an even pixel size.
+- On X11, Ika now sizes the Android display and chooses the DPI from the
+  screen's resolution, as it already did on Wayland. It used to fall back to
+  144 DPI and a fixed display size.
 
 ### Graphics
 - GLES games no longer lose textures on Apple Silicon hosts. Fruit Ninja drew
@@ -54,8 +55,8 @@
 - Hosts with only a software Vulkan driver (llvmpipe) default to the lighter
   `gfxstream` GPU mode, and gfxstream prefers an integrated GPU over a CPU
   Vulkan device such as llvmpipe.
-- Videos no longer play pink, and the GPU faults that came with them are
-  gone: gfxstream buffers are no longer forced linear.
+- Videos no longer play pink, and the GPU errors that came with them are
+  gone.
 - crosvm, gfxstream, minigbm and Mesa are updated.
 
 ### Launcher, app menu and notifications
@@ -79,7 +80,8 @@
   that starts without one; newer builds closed at startup.
 - Audio recovers when a virtio-snd stream stalls, and playback no longer
   drops buffers.
-- zram is on from zygote-start, not only after boot completes.
+- Compressed memory swap (zram) is on from early in boot, not only after boot
+  completes.
 - The logs show fewer errors that are expected on a desktop VM: power
   statistics without a battery, mobile data without telephony, virtual
   display teardown.
@@ -102,7 +104,8 @@
   built with the default test key get the release key, and 40 hardware and
   Cuttlefish APEXes no longer keep public AOSP keys. Prebuilt Google and
   microG apps keep their upstream signatures.
-- The boot timeout is longer, for older systems.
+- Ika waits longer for Android to boot, so slower machines no longer time
+  out.
 - Packages build against pinned static FFmpeg 9.0.2, SDL 3.4.18 and libusb
   instead of the distribution's libraries. libva is a build dependency; at
   runtime it is loaded only when installed.
