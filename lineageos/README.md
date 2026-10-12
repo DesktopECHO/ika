@@ -62,7 +62,7 @@ without requiring separate fork branches.
 The desktop products split app compatibility identity from windowing behavior:
 
 - Android and app stores see a tablet-shaped, Wi-Fi-only, non-telephony device
-  named "Ika Android", with a single front camera
+  named "Ika" (model "Ika Android"), with a single front camera
 - desktop/freeform mode is re-applied at boot
 - taskbar clicks focus, restore, or open desktop windows instead of entering
   split selection
@@ -89,6 +89,8 @@ The policy is split by layer so it stays reviewable:
 Additional project docs:
 
 - `docs/windowing-policy.md` defines the desktop windowing behavior
+- `docs/display-architecture.md` and `docs/dynamic-display-implementation.md`
+  describe how the display follows the host window
 - `docs/app-compatibility.md` tracks app support by architecture/runtime
 - `docs/release-process.md` documents release inputs and output metadata
 
@@ -173,9 +175,17 @@ Cuttlefish bundles. Signing keys live in `ANDROID_CERTS_DIR` (default:
 after installing build dependencies. Direct ROM builds use `signing_common.sh`
 to run `tools/buildutils/setup_keys.sh` before compiling. That setup prompts
 once for a certificate identity, writes it to `~/.config/ika/signing.conf`, and
-generates any missing APK/APEX keys. `STRICT_APEX_SIGNING=1` and
-`STRICT_PRESIGNED_ALLOWLIST=1` are the defaults; relax them only for local
-debugging.
+generates any missing APK/APEX keys.
+
+Both build variants are signed the same way. Apps built with the default test
+key are signed with `releasekey`, platform, shared, media and other tagged apps
+with their own keys, and every APEX with Ika's key for it. Prebuilt Google and
+microG apps keep their upstream signatures. With the default
+`STRICT_APEX_SIGNING=1`, an APEX without a key fails the build instead of
+keeping a public build key, and `STRICT_PRESIGNED_ALLOWLIST=1` fails it on an
+unexpected presigned APK or APEX; relax them only for local debugging.
+Verified boot (AVB) keeps the AOSP test key, because Cuttlefish's host tools
+sign images with it on the user's machine at every VM start.
 
 If `repo` is not installed, `./ika-build` downloads it during dependency setup
 and installs it to `$HOME/.local/bin/repo`. Missing host tools such as `git`,

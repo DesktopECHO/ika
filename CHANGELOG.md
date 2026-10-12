@@ -1,16 +1,27 @@
-## Ika 261008, changes since release 260930
+## Ika 261012, changes since release 260930
+
+### Root and Google sign-in
+- Built-in root utility: `ika root` roots Android with Magisk, on user and
+  userdebug builds, and turns on developer options. It downloads the latest
+  Magisk itself. The first time, it unlocks the bootloader, which
+  factory-resets the device after asking; `ika reset` undoes it. See
+  [Rooting with Magisk](README.md#rooting-with-magisk).
+- `ika gsf` shows the device's Google Services Framework ID, copies it to the
+  clipboard and opens Google's uncertified device page, for when Google
+  blocks sign-in because the device is not Play Protect certified. See
+  [Google sign-in on uncertified devices](README.md#google-sign-in-on-uncertified-devices).
+  Android also publishes the ID as the `sys.ika.gsf_android_id` property.
 
 ### Camera
 - `ika start --camera` passes a host camera to Android: USB webcams, the
   FaceTime camera of Apple Silicon Macs (Asahi kernel) and Intel Macs, or a
   given device (`--camera=video2`). See
   [Camera](README.md#camera). Ika now depends on v4l-utils.
-- Android has a single front camera, emulated or passed through. The emulated
-  camera is landscape; it used to look like a portrait phone camera.
 - The Camera app (Aperture) is in the app list and menu. Photos default to
   16:9, video records at 640x480, 720p or 1080p with AAC stereo sound, and
   only the sizes and settings the camera supports are offered, with noise
-  reduction at every level.
+  reduction at every level. The preview matches the aspect ratio of the photo
+  or video.
 - The FaceTime camera of 2013-2017 Intel Macs (facetimehd driver) works with
   the stock driver. Ika started cameras like it streaming before Android had
   set them up, and Android then failed to open them.
@@ -23,8 +34,9 @@
 - The console's resize edges are an invisible 4-pixel margin just outside the
   window, on GNOME and KDE, Wayland and X11, so they no longer cover the edge
   of the Android desktop.
-- The console uses about half the CPU while the screen changes: it shows
-  frames from shared memory without copying them.
+- The console uses about half the CPU while the screen changes: frames are
+  copied straight into shared memory and shown from there without another
+  copy.
 - App windows decode their video on the GPU through VA-API where the driver
   supports H.264 (Intel, for example): on a 2011 MacBook Pro, an app window
   went from 41% to 4% CPU. Other hosts decode in software as before.
@@ -32,20 +44,23 @@
   sizes made Android resize the app's display right after it opened, and the
   window then ignored every click; app windows now keep an even size in
   pixels.
-- When Android disconnects, the console shows Ika's squid instead of a red
-  cross.
+- Ika reads the display size from DRM when wayland-info finds none, and
+  uses 144 DPI when it can't read one at all, so it also starts without a
+  desktop session.
 
 ### Graphics
 - GLES games no longer lose textures on Apple Silicon hosts. Fruit Ninja drew
   its fruit as black shapes and was missing its menu artwork.
 - Hosts with only a software Vulkan driver (llvmpipe) default to the lighter
-  `gfxstream` GPU mode.
+  `gfxstream` GPU mode, and gfxstream prefers an integrated GPU over a CPU
+  Vulkan device such as llvmpipe.
 - Videos no longer play pink, and the GPU faults that came with them are
   gone: gfxstream buffers are no longer forced linear.
-- On hosts without a hardware Vulkan driver, `getchromium` installs a Chromium
-  build that starts without one; newer builds closed at startup.
+- crosvm, gfxstream, minigbm and Mesa are updated.
 
-### App menu and notifications
+### Launcher, app menu and notifications
+- The Ika launcher's right-click menu has Stop, Restart and Start with
+  Camera, and "Start Ika" replaces "New Window".
 - Newly installed apps appear inside the "Android Apps (Ika)" folder on
   GNOME instead of loose in the app grid.
 - Notifications show up on every desktop (Ika now depends on notify-send)
@@ -55,12 +70,19 @@
   `ika.desktop`.
 
 ### Android guest
-- The device is named "Ika Android", with a serial number
-  starting with IKA.
-- The Google Services Framework Android ID, needed to register a device with
-  Google, is published as the `sys.ika.gsf_android_id` property.
-- Fewer errors expected on a desktop VM in the logs: power statistics without
-  a battery, mobile data without telephony, virtual display teardown.
+- Each device has its own serial number, made on its first start and kept
+  across updates and factory resets; it used to be the same on every
+  install. The device is named "Ika" and its model is "Ika Android".
+- Chromium opens without its first-run screens, on user builds too. Its APK
+  is kept as `~/ika/Chromium.apk` and installed on new devices. On hosts
+  without a hardware Vulkan driver, `getchromium` installs a Chromium build
+  that starts without one; newer builds closed at startup.
+- Audio recovers when a virtio-snd stream stalls, and playback no longer
+  drops buffers.
+- zram is on from zygote-start, not only after boot completes.
+- The logs show fewer errors that are expected on a desktop VM: power
+  statistics without a battery, mobile data without telephony, virtual
+  display teardown.
 - The desktop tile in Overview has a solid background. Its wallpaper
   background was drawn unscaled and left part of the tile empty on large
   displays.
@@ -70,7 +92,16 @@
   `~/.android/adbkey` to the guest at each start, and only that key is
   accepted.
 
+### Fixes
+- `ika start` right after a VM stops no longer fails with "Startup Failed."
+- A factory reset no longer fills the host's disk.
+- Flashing with `ika root` no longer hangs on x86 VMs with 2 GB of RAM.
+
 ### Other
+- Every app and APEX module in the ROM is signed with Ika's own keys: apps
+  built with the default test key get the release key, and 40 hardware and
+  Cuttlefish APEXes no longer keep public AOSP keys. Prebuilt Google and
+  microG apps keep their upstream signatures.
 - The boot timeout is longer, for older systems.
 - Packages build against pinned static FFmpeg 9.0.2, SDL 3.4.18 and libusb
   instead of the distribution's libraries. libva is a build dependency; at

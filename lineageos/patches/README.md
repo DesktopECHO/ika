@@ -63,6 +63,7 @@ cross-project index.
 | [`device-google-cuttlefish-secure-env-cppcose-compat.patch`](device-google-cuttlefish-secure-env-cppcose-compat.patch) | `device/google/cuttlefish` | Adapts secure-env remote provisioning to this branch's generic cppcose signing helper. |
 | [`device-google-cuttlefish-front-camera.patch`](device-google-cuttlefish-front-camera.patch) | `device/google/cuttlefish` | Single front camera. |
 | [`device-google-cuttlefish-camcorder-profiles.patch`](device-google-cuttlefish-camcorder-profiles.patch) | `device/google/cuttlefish` | Front camera video: 640x480, 720p, 1080p; AAC stereo. |
+| [`device-google-cuttlefish-zram-at-boot.patch`](device-google-cuttlefish-zram-at-boot.patch) | `device/google/cuttlefish` | Enables zram at zygote-start instead of after boot completes, so first-boot dexopt has swap on hosts that give the guest little RAM. |
 | [`frameworks-av.patch`](frameworks-av.patch) | `frameworks/av` | Raises software AVC encoder advertised and actual limits to support high-resolution desktop capture/playback, including larger sizes (each side up to 4096, area up to Level 5.1's 36864 macroblocks, rejected at configure time beyond that), higher bitrate, and AVC level 5.1. |
 | [`frameworks-native-logspam.patch`](frameworks-native-logspam.patch) | `frameworks/native` | Demotes the benign InputDispatcher task-input-sink token correction that is expected in desktop/freeform mode, keeping the self-heal without flooding error logs. |
 | [`frameworks-native-vulkan-profile-timestamps.patch`](frameworks-native-vulkan-profile-timestamps.patch) | `frameworks/native` | Lets explicitly opted-in Ika products expose Vulkan display timing without changing the default SurfaceFlinger reliability policy. |
@@ -97,6 +98,16 @@ cross-project index.
 | [`frameworks-libs-binary-translation-arm64-host.patch`](frameworks-libs-binary-translation-arm64-host.patch) | `frameworks/libs/binary_translation` | Broadens binary-translation host helper defaults so required host-side tools can be built from ARM64 hosts without x86-only defaults. |
 | [`build-make-releasetools.patch`](build-make-releasetools.patch) | `build/make` | Fixes target-files signing for embedded boot OTA zips that are intentionally not regenerated, and preserves signed `boot_16k.img` when present. |
 | [`build-release.patch`](build-release.patch) | `build/release` | Sets release aconfig defaults for desktop builds: keeps SystemUI Quick Settings on the classic implementation and enables Launcher3 desktop visual effects and mouse behavior, Bubble Anything with its trunk stability fixes, PiP box shadows, and cutout-aware bubble-bar behavior in generated release flag sets. |
+
+## Conditional Patches
+
+These are not in `series`. `scripts/lib/sources.sh` applies them to the
+MindTheGapps tree (`vendor/gapps`) for x86-64 targets of `--mtg` builds:
+
+| Patch | Purpose |
+| --- | --- |
+| [`vendor-gapps-x86_64-4k-prebuilt.patch`](vendor-gapps-x86_64-4k-prebuilt.patch) | Lets the proprietary x86-64 `libjni_latinimegoogle.so`, linked with 4 KiB segments, pass the max-page-size check; the x86-64 kernel uses 4 KiB pages. |
+| [`vendor-gapps-x86_64-modern-gms.patch`](vendor-gapps-x86_64-modern-gms.patch) | Installs the Play-delivered x86-64 Google Play services with its split APKs, and grants the privileged permissions that version needs. |
 
 ## Maintenance Notes
 

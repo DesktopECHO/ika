@@ -45,9 +45,9 @@ patches expect.
 | `arm64` ROM | ✅ (cross) | ✅ (native) |
 
 - x86_64 ROMs can only be built on an x86_64 host, as enforced in
-  [build_lineageos_desktop.sh](lineageos/scripts/build_lineageos_desktop.sh)
-  and the ELF arch checks in
-  [signing_common.sh](lineageos/scripts/signing_common.sh).
+  [build_lineageos_desktop.sh](lineageos/scripts/build_lineageos_desktop.sh).
+  The ELF checks in [signing_common.sh](lineageos/scripts/signing_common.sh)
+  make sure the signing tools it picks are native host binaries.
 - ARM64 host builds run **natively** with real `linux-arm64` host prebuilts.
   The build scripts refuse symlinked `linux-x86` substitutions and log the host
   page size, but they no longer wrap the Android build in a guest VM.
@@ -75,8 +75,8 @@ The build engine provisions most prebuilts itself, but the host must supply:
 All ARM64-host patches live under [lineageos/patches/](lineageos/patches/) and
 are applied in [series](lineageos/patches/series) order by
 [apply_source_patches.sh](lineageos/scripts/apply_source_patches.sh). The
-application script verifies that every entry resolves to a file and that no
-patch is orphaned.
+application script stops when an entry's project or patch file is missing or a
+patch does not apply cleanly.
 
 | Patch | Project | What it unlocks |
 |---|---|---|
@@ -256,7 +256,7 @@ rechecking that patch against the new diagnostics.
 ./lineageos/scripts/build_lineageos_desktop.sh arm64
 
 # Incremental rebuild (skip sync + patch, reuse the tree)
-REBUILD=1 ./lineageos/scripts/rebuild_cf_desktop_arm64.sh
+./lineageos/scripts/rebuild_cf_desktop_arm64.sh
 ```
 
 The build appends a row to `buildtimes.log` with its start time, end time,
@@ -284,7 +284,7 @@ In-tree:
 
 - Engine: [build_lineageos_desktop.sh](lineageos/scripts/build_lineageos_desktop.sh) · ARM64 setup: [build_exec.sh](lineageos/scripts/lib/build_exec.sh) · prebuilts: [prebuilts.sh](lineageos/scripts/lib/prebuilts.sh)
 - Patches: [apply_source_patches.sh](lineageos/scripts/apply_source_patches.sh) · [patches/series](lineageos/patches/series) · [patches/README.md](lineageos/patches/README.md)
-- Arch enforcement: [signing_common.sh](lineageos/scripts/signing_common.sh)
+- Arch enforcement: [build_lineageos_desktop.sh](lineageos/scripts/build_lineageos_desktop.sh) · native signing tools: [signing_common.sh](lineageos/scripts/signing_common.sh)
 
 External resources (Google does not officially support ARM64 build hosts; these
 are community references):

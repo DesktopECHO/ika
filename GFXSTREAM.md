@@ -31,6 +31,9 @@ loses its 3D pass in direct `gfxstream` mode but works with
 `gfxstream_guest_angle`, where ANGLE handles GLES and gfxstream transports
 Vulkan.
 
+On a host whose only Vulkan driver is llvmpipe, `ika` defaults to `gfxstream`
+instead, which is much lighter on the CPU.
+
 To explicitly select the default mode on a system with a working hardware
 Vulkan driver, run:
 

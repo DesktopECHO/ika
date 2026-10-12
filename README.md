@@ -4,13 +4,14 @@
 
 **Ika** _/ee-kah/_, the Japanese word for squid or cuttlefish, began as an effort to
 run the [Cuttlefish](https://source.android.com/setup/create/cuttlefish) Android emulator
-on [Fedora Asahi Remix](https://asahilinux.org/). It later evolved into a desktop-centric Android build for Apple Silicon and x86-64 hosts, but the name already stuck.
+on [Fedora Asahi Remix](https://asahilinux.org/). It later grew into a desktop-centric Android build for Apple Silicon and x86-64 hosts, but the name stuck.
 
 ## Features
 
 - **LineageOS 23.2** (Android 16) reimagined as a desktop-first operating system.
-- **Native builds** for **Apple Silicon** or **x86-64** systems with as little as 16 GB RAM,
-  on **Fedora**, **Debian/Ubuntu** and **Arch Linux**.
+- **Native builds** for **Apple Silicon** and **x86-64** hosts on **Fedora**,
+  **Debian/Ubuntu** and **Arch Linux**. Ika runs on machines with as little as
+  4 GB of RAM; building it from source needs 16 GB.
 - **X11** and **Wayland** desktop sessions are both supported.
 - **Dynamic display** window resizing that preserves DPI settings.
 - **GPU acceleration** with support for OpenGL ES and Vulkan.
@@ -19,7 +20,7 @@ on [Fedora Asahi Remix](https://asahilinux.org/). It later evolved into a deskto
   (see [App windows](#app-windows)).
 - **Camera**: use a webcam or a Mac's FaceTime camera as Android's front camera
   (see [Camera](#camera)).
-- **Root**: `ika root` roots the VM with Magisk (see
+- **Built-in root utility**: `ika root` roots the VM with Magisk (see
   [Rooting with Magisk](#rooting-with-magisk)).
 - **Flexible build options** for **MindTheGapps**, **microG**, or a fully
   de-Googled ROM without an app store.
@@ -27,15 +28,13 @@ on [Fedora Asahi Remix](https://asahilinux.org/). It later evolved into a deskto
 Changes since the last published binaries are listed in [CHANGELOG.md](CHANGELOG.md).
 
 The Apple Silicon Vulkan memory-sharing path, including its 16 KiB-page and
-udmabuf handling, is documented in [GFXSTREAM-VULKAN.md](GFXSTREAM-VULKAN.md).
-The implementation patch inventory is maintained in
-[lineageos/patches/README.md](lineageos/patches/README.md); known graphics-path
-limitations are recorded in that Vulkan document rather than presented as
-completed compatibility fixes.
+udmabuf handling, and the known graphics limitations are documented in
+[GFXSTREAM-VULKAN.md](GFXSTREAM-VULKAN.md). The source patches are listed in
+[lineageos/patches/README.md](lineageos/patches/README.md).
 
 ## Ika Binaries (Updated 2026-09-30)
 
-Ika consists of two packages: An Android disk image (informally, the device ROM)
+Ika consists of two packages: an Android disk image (informally, the device ROM)
 and a matching Cuttlefish virtual machine application. Prebuilt Fedora 44
 (`.rpm`), Debian 13/Ubuntu 26.04 (`.deb`) and Arch Linux x86_64 (`.pkg.tar.zst`)
 packages are available below. Select your distribution and CPU architecture, then
@@ -61,11 +60,12 @@ download the corresponding application and disk image.
 
 ## Build Ika from Source
 
-A successful build requires a minimum of 16GB RAM and 300GB storage.
-The initial build will take 3–6 hours or more, depending on your hardware and internet bandwidth.
-It's advisable to just let run it overnight. The *ika-build* script handles the prerequisite
-steps and produces installable .rpm, .deb or Arch Linux packages for your distribution.
-Prebuilt binaries are published for Fedora, Debian/Ubuntu and Arch Linux x86_64; on Arch Linux ARM64, build from source.
+Building requires at least 16 GB of RAM and 300 GB of storage. The first build
+takes 3–6 hours or more, depending on your hardware and internet bandwidth, so
+it's best left to run overnight. The `ika-build` script handles the prerequisite
+steps and produces installable .rpm, .deb or Arch Linux packages for your
+distribution. Prebuilt binaries are published for Fedora, Debian/Ubuntu and
+Arch Linux x86_64; on Arch Linux ARM64, build from source.
 
 ```bash
 # 1. Download and extract:
@@ -77,7 +77,7 @@ unzip ika-main.zip && rm ika-main.zip && cd ika-main
 
 # Prepares signing certificates, installs build dependencies, downloads the
 # LineageOS 23.2 source, applies the overlay and source patches, builds the
-# Cuttlefish target for the host architecture, creates RPM or Debian packages,
+# Cuttlefish target for the host architecture, creates RPM, Debian or Arch packages,
 # and prints the package installation command when the build is complete.
 
 ./ika-build
@@ -115,11 +115,11 @@ builds that loader from the pinned Debian Salsa packaging source.
 After the initial build, use the narrowest command that matches your changes:
 
 - **Full build** — re-run `./ika-build`, then run the installation command it
-  prints. Extra arguments are forwarded to the ROM build, for example
-  `./ika-build x86_64`, `./ika-build arm64 --microg`, or
-  `./ika-build x86_64 --mtg`. With no arguments, `ika-build` prompts for microG,
-  MindTheGapps, or a de-Googled image without an app store before building the
-  host-native ROM.
+  prints. By default it builds the host's native ROM; pass `all`, `arm64` or
+  `x86_64` to choose the targets, and `--microg` or `--mtg` to choose the
+  Google integration, for example `./ika-build all --mtg`. With no arguments,
+  `ika-build` asks whether to use microG, MindTheGapps, or a de-Googled image
+  without an app store.
 - **ROM only** — re-run `./lineageos/scripts/build_lineageos_desktop.sh` (or
   pass `arm64` / `x86_64` to limit it to one target). Use this after editing
   patches or overlays under `lineageos/`. Pass `RESET_PATCHED_PROJECTS=1` if
@@ -131,22 +131,22 @@ After the initial build, use the narrowest command that matches your changes:
   to repackage `ika-lineageos` with the new contents. Install the outputs
   directly with your distribution's package manager.
 
-See [lineageos/README.md](lineageos/README.md) for ROM-build options; provider
-selection, target subsets, microG release pinning, native-bridge sources,
+See [lineageos/README.md](lineageos/README.md) for ROM build options: provider
+selection, target subsets, microG release pinning, native-bridge sources and
 workspace overrides.
 
 ## Window Handling
 
-The clock at the top-left of the console window is also a **hot corner**. 
-Click+hold the hot corner to move the console window. If the window is maximized
-or in fullscreen mode, click the hot corner once to return to windowed mode.
+The clock at the top left of the console window is also a **hot corner**.
+Click and hold it to move the console window. If the window is maximized or
+fullscreen, click it once to return to windowed mode.
 
 Drag the window to the left or right edge of the screen to fill half
 of the desktop, or drag it to the top edge to maximize the window.
 
-Super (Command) + F Switches in and out of fullscreen mode.
+Super (Command) + F switches fullscreen mode on and off.
 
-Super (Command) + T Switches the title bar on and off. 
+Super (Command) + T switches the title bar on and off.
 
 Without a title bar, resize the console by dragging just outside its edges:
 the window keeps an invisible 4-pixel margin for that, so the edge of the
@@ -156,7 +156,9 @@ picture is stretched and blurred until Android has drawn the new size.
 ## Managing the VM with `ika`
 
 After the packages are installed, `ika` is available on your `PATH`. Use it to
-start, stop, and restart the packaged Cuttlefish environment.
+start, stop, and restart the packaged Cuttlefish environment. Right-click the
+Ika icon in the dock or app menu for **Stop Ika**, **Restart Ika** and
+**Start with Camera**.
 
 ```bash
 # Start a windowed VM
@@ -187,7 +189,8 @@ ika root
 # Print the GSF ID, copy it and open Google's uncertified device page
 ika gsf
 
-# Game Mode will start Ika fullscreen and enable HID keyboard and mouse 
+# Game mode: start Ika fullscreen, passing the gamepad, keyboard and mouse
+# through as HID devices
 ika start --game
 
 # Use the host's camera as Android's camera (auto-detected, or a given node)
@@ -213,8 +216,7 @@ ika help
 
 ### Camera
 
-Android has a single camera, the front camera. It is emulated (a landscape
-test scene) unless Ika is started with `--camera`, which passes a host camera through instead (crosvm
+`--camera` passes a host camera to Android as its front camera (crosvm
 virtio-media, served by Android's external camera HAL):
 
 - `ika start --camera` (or `ika restart --camera`) uses the first video
@@ -259,8 +261,8 @@ Play, showing a "Device is not Play Protect certified" notification. Many
 devices never see this. If yours does, register its Google Services Framework
 (GSF) ID with your Google account:
 
-1. Run `ika gsf`. It prints the ID, copies it to the clipboard (with
-   `wl-copy`, `xclip` or `xsel`) and opens
+1. Run `ika gsf`. It copies the ID to the clipboard (with `wl-copy`,
+   `xclip` or `xsel`), prints it and opens
    [google.com/android/uncertified](https://www.google.com/android/uncertified)
    in the default browser. If the VM is not running, it is started first.
 2. Paste the ID on that page and register it.
@@ -269,8 +271,8 @@ devices never see this. If yours does, register its Google Services Framework
 Registering lifts the sign-in block only. The device stays uncertified, so
 apps that check Play Integrity still fail. A factory reset (`ika reset`, or
 rooting for the first time) gives the device a new ID, which has to be
-registered again. Builds with microG instead of Google Play Services have no
-GSF ID.
+registered again. `ika gsf` needs Google Play Services, so it works on
+MindTheGapps builds only.
 
 ### App windows
 
@@ -361,9 +363,9 @@ stretching it. Super + T and Super + F work as they do in the console.
 `ika start` and `ika restart` pass extra arguments directly to
 `cvd_internal_start`, so you can override launch settings on the command line.
 `ika stop` calls the matching low-level stop helper and then cleans up local
-Cuttlefish processes. `ika reset` is the destructive variant; it passes
-`--clear_instance_dirs` and removes the local Chromium-install stamp. It also
-relocks the bootloader and removes root.
+Cuttlefish processes. `ika reset` is the destructive variant: it passes
+`--clear_instance_dirs`, removes the local Chromium-install stamp, relocks the
+bootloader and removes root.
 
 Default `ika` settings and configuration:
 
@@ -442,7 +444,7 @@ subdirectory by `tools/buildutils/build_packages.sh`.
 - `ika-metrics` — Metrics transmitter binary
 - `ika-common` — Compatibility metapackage for the primary host packages
 
-The majority of users will need only `ika-base` and `ika-lineageos`
+Most users need only `ika-base` and `ika-lineageos`.
 
 ## Notes
 
@@ -457,7 +459,7 @@ fallback for isolating host GPU issues.
 `video`. The `ika-base` package adds the installing user to these groups during
 package configuration, but the active session, its PAM resource limits, and the
 live `/dev/kvm` udev permissions don't pick up the new state without a
-reboot—see step 3 under [Building from Source](#build-ika-from-source) for the
+reboot—see step 3 under [Build Ika from Source](#build-ika-from-source) for the
 full list of deferred changes.
 
 Bazel is installed automatically through Bazelisk by `./ika-build`, which runs

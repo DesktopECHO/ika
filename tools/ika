@@ -677,11 +677,11 @@ save_data_gb_configuration() {
 #
 # '--camera' passes a host V4L2 camera to the guest with crosvm virtio-media
 # (cvd --media=type=v4l2_proxy,device=...). The guest's external camera HAL
-# serves it as the front camera, in place of the emulated one. Without a value,
-# the first video capture device offering MJPEG, NV12 or YUYV is used: USB
-# (UVC) webcams, the FaceTime camera of Apple Silicon Macs (Asahi apple-isp)
-# and of older Intel Macs (facetimehd). Virtual cameras (v4l2loopback and
-# vivid) are used only when there is no other.
+# serves it as the front camera. Without a value, the first video capture
+# device offering MJPEG, NV12 or YUYV is used: USB (UVC) webcams, the FaceTime
+# camera of Apple Silicon Macs (Asahi apple-isp) and of older Intel Macs
+# (facetimehd). Virtual cameras (v4l2loopback and vivid) are used only when
+# there is no other.
 
 # True when DEVICE is a camera the guest can use: a video capture node offering
 # MJPEG, NV12 or YUYV. Without v4l2-ctl, accepts the first node of each device
@@ -946,9 +946,10 @@ Example:
 
 Options:
 
-  --game                 Start scrcpy fullscreen with UHID gamepad
-                         keyboard and mouse input. With app, use UHID
-                         input but keep the window unless -f is given.
+  --game                 Start the console fullscreen, passing the gamepad,
+                         keyboard and mouse through as HID devices (UHID).
+                         With app, use UHID input but keep the window unless
+                         -f is given.
   --touch                With app, send left-button clicks and drags as real
                          touch input instead of mouse input, for games that
                          ignore the mouse. The right and middle buttons and
@@ -962,14 +963,17 @@ Options:
   --no-console           With start or restart, run the VM without opening the
                          desktop console window (app windows still work).
   --camera[=videoN]      With start or restart, pass a host camera to Android
-                         as its front camera, in place of the emulated one.
-                         Without a value, the first video capture device
-                         offering MJPEG, NV12 or YUYV is used (USB webcams,
-                         the Mac FaceTime camera), and a virtual camera only
-                         when there is no other; videoN or /dev/videoN picks
-                         one. Applies until the next start or restart without
-                         it. Needs the video group. start only adds a camera
-                         when Android is off; use restart while it runs.
+                         as its front camera. Without a value, the first
+                         video capture device offering MJPEG, NV12 or YUYV
+                         is used (USB webcams, the Mac FaceTime camera), and
+                         a virtual camera only when there is no other; videoN
+                         or /dev/videoN picks one. Applies until the next
+                         start or restart without it. Needs the video group.
+                         start only adds a camera when Android is off; use
+                         restart while it runs.
+  --dpi=N                With start or restart, set the display density
+                         (default: from the host display, or 144 when no
+                         display size can be read; IKADPI does the same).
   --memory_mb=MB         Override the default guest RAM setting.
                          Normally ~25% of host RAM, capped at 32 GB.
   --data_gb=GB           With reset, configure the userdata size used by the
@@ -994,9 +998,8 @@ App windows:
   passthrough. Leaving fullscreen or closing that window ends the session:
   the window closes, the game is sent to the background (it keeps its state
   and resumes next time), and the desktop console comes back if it was open
-  before. '--window' opens a game
-  in its own window instead. '--game' forwards the gamepad and keyboard and
-  mouse as HID devices in an app window.
+  before. '--window' opens a game in its own window instead. '--game' passes
+  the gamepad, keyboard and mouse through as HID devices in an app window.
 
   '${SCRIPT_NAME} app' alone lists the apps that can be launched, with apps
   already open in their own window in bold (marked "(open)" when the output
@@ -1006,11 +1009,10 @@ App windows:
   case-insensitively, exactly or by a unique part ('app setti' opens
   Settings), and need no quotes when they contain spaces.
 
-  '${SCRIPT_NAME} app sync' adds each launchable app to the desktop's app menu,
-  as "🎮 ∙ LABEL" for games or "ᗩ ∙ LABEL" for other apps, with its own icon, in an
-  "Android Apps (Ika)" group (a GNOME
-  app-grid folder, or a submenu on KDE Plasma, XFCE, Cinnamon and MATE), and
-  removes entries for
+  '${SCRIPT_NAME} app sync' adds each launchable app to the desktop's app
+  menu, as "🎮 ∙ LABEL" for games or "ᗩ ∙ LABEL" for other apps, with its own
+  icon, in an "Android Apps (Ika)" group (a GNOME app-grid folder, or a
+  submenu on KDE Plasma, XFCE, Cinnamon and MATE), and removes entries for
   apps that were uninstalled. While the VM runs, a watcher started by 'start'
   keeps the menu in sync as apps are installed or removed (log:
   ~/ika/app-menu.log). '--remove' deletes the entries and the group and turns
@@ -1043,6 +1045,7 @@ Environment variables:
                          Silicon hosts with 16 KiB pages, gfxstream modes route
                          host-visible guest Vulkan memory through udmabuf-backed
                          dma-bufs (the path the Apple GPU supports).
+  IKADPI                 Display density, as --dpi.
   IKA_SCRCPY             Extra whitespace-separated args appended to the console.
                          Equivalent command-line option: --ika_scrcpy=ARGS
                          (example: --keyboard=uhid --no-clipboard-autosync)
