@@ -680,9 +680,8 @@ save_data_gb_configuration() {
 # serves it as the front camera, in place of the emulated one. Without a value,
 # the first video capture device offering MJPEG, NV12 or YUYV is used: USB
 # (UVC) webcams, the FaceTime camera of Apple Silicon Macs (Asahi apple-isp)
-# and of older Intel Macs (facetimehd). Virtual cameras (v4l2loopback, such as
-# the OBS virtual camera, and vivid) are used only when there is no other;
-# '--camera=obs' picks the OBS virtual camera.
+# and of older Intel Macs (facetimehd). Virtual cameras (v4l2loopback and
+# vivid) are used only when there is no other.
 
 # True when DEVICE is a camera the guest can use: a video capture node offering
 # MJPEG, NV12 or YUYV. Without v4l2-ctl, accepts the first node of each device
@@ -713,8 +712,8 @@ camera_v4l2_driver() {
     | sed -n 's/^[[:space:]]*Driver name[[:space:]]*:[[:space:]]*//p' | head -n 1
 }
 
-# True when DEVICE is a virtual camera: v4l2loopback (OBS and other virtual
-# cameras) or the vivid test driver. These have no parent device in sysfs.
+# True when DEVICE is a virtual camera: v4l2loopback or the vivid test driver.
+# These have no parent device in sysfs.
 is_virtual_camera_device() {
   local device="$1"
 
@@ -751,26 +750,8 @@ detect_host_camera() {
   printf '%s\n' "${virtual}"
 }
 
-# Prints the OBS virtual camera: the v4l2loopback device named after OBS, or
-# else the first v4l2loopback device.
-detect_obs_camera() {
-  local device
-  local loopback=""
-
-  while IFS= read -r device; do
-    [[ "$(camera_v4l2_driver "${device}")" == "v4l2 loopback" ]] || continue
-    if [[ "$(cat "/sys/class/video4linux/${device##*/}/name" 2>/dev/null)" == *OBS* ]]; then
-      printf '%s\n' "${device}"
-      return 0
-    fi
-    [[ -n "${loopback}" ]] || loopback="${device}"
-  done < <(list_video_devices)
-  [[ -n "${loopback}" ]] || return 1
-  printf '%s\n' "${loopback}"
-}
-
-# Prints the host camera for --camera: "auto" (or empty) detects one, "obs"
-# picks the OBS virtual camera, "videoN" or "/dev/videoN" names one.
+# Prints the host camera for --camera: "auto" (or empty) detects one,
+# "videoN" or "/dev/videoN" names one.
 resolve_camera_device() {
   local requested="${1:-auto}"
   local device
@@ -784,15 +765,9 @@ resolve_camera_device() {
         || die_with_notification "No usable camera found." \
           "no usable camera found (a video capture device offering MJPEG, NV12 or YUYV); name one with --camera=videoN"
       ;;
-    obs)
-      device="$(detect_obs_camera)" \
-        || die "no OBS virtual camera found; click Start Virtual Camera in OBS first"
-      is_usable_camera_device "${device}" \
-        || log "warning: ${device} is not capturing yet; start the virtual camera in OBS before Android opens the camera"
-      ;;
     *)
       [[ "${requested}" =~ ^(/dev/)?video[0-9]+$ ]] \
-        || die "--camera expects obs, videoN or /dev/videoN, got '${requested}'"
+        || die "--camera expects videoN or /dev/videoN, got '${requested}'"
       device="/dev/${requested#/dev/}"
       [[ -c "${device}" ]] || die "camera ${device} does not exist"
       is_usable_camera_device "${device}" \
@@ -868,7 +843,7 @@ parse_start_options() {
         camera_device="auto"
         if [[ "$1" == --camera=* ]]; then
           camera_device="${1#--camera=}"
-        elif [[ $# -gt 1 && "$2" =~ ^(obs|(/dev/)?video[0-9]+)$ ]]; then
+        elif [[ $# -gt 1 && "$2" =~ ^(/dev/)?video[0-9]+$ ]]; then
           camera_device="$2"
           shift
         fi
@@ -942,9 +917,9 @@ usage() {
 
 Usage:
 
-  ${SCRIPT_NAME} start [-f|--fullscreen|--game|--no-console] [--camera[=obs|videoN]] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] [--setting=arg] ...
+  ${SCRIPT_NAME} start [-f|--fullscreen|--game|--no-console] [--camera[=videoN]] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] [--setting=arg] ...
   ${SCRIPT_NAME} stop
-  ${SCRIPT_NAME} restart [-f|--fullscreen|--game|--no-console] [--camera[=obs|videoN]] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] ...
+  ${SCRIPT_NAME} restart [-f|--fullscreen|--game|--no-console] [--camera[=videoN]] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] ...
   ${SCRIPT_NAME} reset [--data_gb=GB]
   ${SCRIPT_NAME} root
   ${SCRIPT_NAME} gsf
@@ -966,7 +941,6 @@ Example:
   ${SCRIPT_NAME} start --game
   ${SCRIPT_NAME} restart --camera
   ${SCRIPT_NAME} restart --camera=video2
-  ${SCRIPT_NAME} restart --camera=obs
   ${SCRIPT_NAME} app com.gameloft.android.ANMP.GloftA8HM --game
   ${SCRIPT_NAME} app Asphalt 8 --touch
 
@@ -987,16 +961,15 @@ Options:
                          '${SCRIPT_NAME} start --game'.
   --no-console           With start or restart, run the VM without opening the
                          desktop console window (app windows still work).
-  --camera[=obs|videoN]  With start or restart, pass a host camera to Android
+  --camera[=videoN]      With start or restart, pass a host camera to Android
                          as its front camera, in place of the emulated one.
                          Without a value, the first video capture device
                          offering MJPEG, NV12 or YUYV is used (USB webcams,
                          the Mac FaceTime camera), and a virtual camera only
-                         when there is no other; obs picks the OBS virtual
-                         camera; videoN or /dev/videoN picks one. Applies
-                         until the next start or restart without it. Needs
-                         the video group. start only adds a camera when
-                         Android is off; use restart while it runs.
+                         when there is no other; videoN or /dev/videoN picks
+                         one. Applies until the next start or restart without
+                         it. Needs the video group. start only adds a camera
+                         when Android is off; use restart while it runs.
   --memory_mb=MB         Override the default guest RAM setting.
                          Normally ~25% of host RAM, capped at 32 GB.
   --data_gb=GB           With reset, configure the userdata size used by the

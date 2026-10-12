@@ -192,7 +192,6 @@ ika start --game
 # Use the host's camera as Android's camera (auto-detected, or a given node)
 ika restart --camera
 ika restart --camera=video2
-ika restart --camera=obs
 
 # List launchable apps (open app windows in bold), open one in its own
 # window by label or package name, close it
@@ -224,9 +223,6 @@ virtio-media, served by Android's external camera HAL):
   models). Metadata nodes, such as the second node of a UVC webcam, are
   skipped, and virtual cameras (v4l2loopback, vivid) are used only when there
   is no other.
-- `--camera=obs` picks the OBS virtual camera. Click Start Virtual Camera in
-  OBS first: OBS creates the device then, and Android needs it to be capturing
-  when it opens the camera.
 - `--camera=video2` or `--camera=/dev/video2` picks a device; `v4l2-ctl
   --list-devices` lists them.
 - The camera is attached when Android starts: `ika start --camera` refuses
