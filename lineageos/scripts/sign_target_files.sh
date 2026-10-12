@@ -361,9 +361,11 @@ done
 # (build/make/target/product/security/<tag>.{pk8,x509.pem}), which doesn't
 # exist in the host sandbox, and signapk.jar aborts with FileNotFoundException.
 # `-d` populates the top-level apk_keys but doesn't propagate into APEX
-# payload re-signing, so we explicitly enumerate.
+# payload re-signing, so we explicitly enumerate. Apps built with the default
+# testkey get the release key, as `-d` maps them.
 apk_overrides=0
 while IFS=$'\t' read -r apk cert_name; do
+  [[ "$cert_name" == testkey ]] && cert_name=releasekey
   if [[ -f "$ANDROID_CERTS_DIR/$cert_name.pk8" && -f "$ANDROID_CERTS_DIR/$cert_name.x509.pem" ]]; then
     sign_args+=(--extra_apks "$apk=$ANDROID_CERTS_DIR/$cert_name")
     apk_overrides=$((apk_overrides + 1))
@@ -456,15 +458,23 @@ for apex_file in "${apex_basenames[@]}"; do
   fi
   payload_key_name="$(basename "$payload_rel" .pem)"
   container_key_name="$(basename "$container_rel")"
+  # A few module APEXes are built with the testkey as their container key;
+  # they get their own key.
+  if [[ "$container_key_name" == testkey ]]; then
+    container_key_name="$apex_name"
+  fi
   if [[ -f "$ANDROID_CERTS_DIR/$payload_key_name.pem" \
         && -f "$ANDROID_CERTS_DIR/$container_key_name.pk8" \
         && -f "$ANDROID_CERTS_DIR/$container_key_name.x509.pem" ]]; then
     sign_args+=(--extra_apks "$apex_file=$ANDROID_CERTS_DIR/$container_key_name")
     sign_args+=(--extra_apex_payload_key "$apex_file=$ANDROID_CERTS_DIR/$payload_key_name.pem")
     apex_signed=$((apex_signed + 1))
+  elif [[ "$strict_apex_signing" == "1" ]]; then
+    missing_apex_keys+=("$apex_name: $payload_key_name.pem, $container_key_name.{pk8,x509.pem}")
   else
     # No user key for this apex_key_name; pin to the absolutized build path
     # so sign_target_files_apks doesn't silently generate an ephemeral key.
+    printf '[lineage-desktop] warning: no key for %s; keeping the build key\n' "$apex_file" >&2
     sign_args+=(--extra_apks "$apex_file=$repo_root/${container_rel}")
     sign_args+=(--extra_apex_payload_key "$apex_file=$repo_root/${payload_rel}")
     apex_build_default=$((apex_build_default + 1))
@@ -483,11 +493,8 @@ fi
 if (( ${#missing_apex_keys[@]} > 0 && strict_apex_signing == 1 )); then
   printf '[lineage-desktop] error: missing signing keys for %d shipped APEX module(s):\n' \
     "${#missing_apex_keys[@]}" >&2
-  for apex_name in "${missing_apex_keys[@]}"; do
-    printf '[lineage-desktop]   %s (expected %s/%s.pk8 and %s/%s.pem)\n' \
-      "$apex_name" "$ANDROID_CERTS_DIR" "$apex_name" "$ANDROID_CERTS_DIR" "$apex_name" >&2
-    printf '[lineage-desktop]     plus container cert %s/%s.x509.pem\n' \
-      "$ANDROID_CERTS_DIR" "$apex_name" >&2
+  for entry in "${missing_apex_keys[@]}"; do
+    printf '[lineage-desktop]   %s (in %s)\n' "$entry" "$ANDROID_CERTS_DIR" >&2
   done
   printf '[lineage-desktop] generate missing keys with: ANDROID_CERTS_DIR=%q %q\n' \
     "$ANDROID_CERTS_DIR" "$script_dir/generate_signing_keys.sh" >&2
