@@ -11,6 +11,7 @@ on [Fedora Asahi Remix](https://asahilinux.org/). It later evolved into a deskto
 - **LineageOS 23.2** (Android 16) reimagined as a desktop-first operating system.
 - **Native builds** for **Apple Silicon** or **x86-64** systems with as little as 16 GB RAM,
   on **Fedora**, **Debian/Ubuntu** and **Arch Linux**.
+- **X11** and **Wayland** desktop sessions are both supported.
 - **Dynamic display** window resizing that preserves DPI settings.
 - **GPU acceleration** with support for OpenGL ES and Vulkan.
 - **App windows**: run single Android apps in their own desktop windows, listed
