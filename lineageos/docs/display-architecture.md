@@ -10,13 +10,13 @@ experience from a phone emulator in a browser to a native desktop window.
 |---|---|---|
 | Frame transport | WebRTC over network | Unix domain socket → scrcpy native window |
 | Host frontend | WebRTC browser viewer (HTML/JavaScript) | scrcpy with `--cuttlefish-frames-socket=…` |
-| Window resize | Client scales frames; guest display geometry is static | Client sends an Android logical resize request; the raw-frame path also attempts a physical Cuttlefish resize |
+| Window resize | Client scales frames; guest display geometry is static | Client sends an Android logical resize request; the physical Cuttlefish display keeps its launch size |
 | Resize event flow | None (visual scaling only) | SDL → scrcpy → `TYPE_RESIZE_DISPLAY` → forced logical size (scaling off) → `DISPLAY_READY` → DisplayManager listeners |
-| DPI selection | Static at launch (`--display=…,dpi=…`) | Computed from host width; user can override with `--dpi` or `IKADPI` |
+| DPI selection | Static at launch (`--display=…,dpi=…`) | Computed from the host display, 144 when no size can be read; user can override with `--dpi` or `IKADPI` |
 | Input transport | WebRTC data channel | scrcpy control channel using Android input APIs; UHID in game mode |
 | Audio transport | WebRTC media stream | Cuttlefish virtio-snd → host PipeWire stream |
 | Multi-display / hotplug | `cvd display add/list/remove` CLI | Same CLI is available; Ika does not currently drive add/remove operations |
-| GPU path | Varies (host, gfxstream, virgl) | `gpu_mode=gfxstream_guest_angle`, `enable_gpu_udmabuf=true`, `gpu_vhost_user_mode=off`, `use_cvdalloc=true` |
+| GPU path | Varies (host, gfxstream, virgl) | `gpu_mode=gfxstream_guest_angle` (`gfxstream` with only llvmpipe), `enable_gpu_udmabuf=true`, `gpu_vhost_user_mode=off`, `use_cvdalloc=true` |
 | CPU policy | No Ika-specific policy | Guest vCPUs prefer performance cores; the default count is the available/performance-core count minus two, capped at 12 |
 
 ## 1. Frame transport
@@ -95,8 +95,8 @@ decisions tied to live window bounds.
 stored in the `--display=…,dpi=N` flag. It has no automatic relationship to the
 host hardware.
 
-**Ika:** DPI is derived from the host display at launch. Override it with
-`--dpi=<value>` or `IKADPI=<value>`.
+**Ika:** DPI is derived from the host display at launch, or 144 when no display
+size can be read. Override it with `--dpi=<value>` or `IKADPI=<value>`.
 
 DPI does **not** change when the scrcpy window is resized; only the resolution
 changes. Content gets larger or smaller in absolute screen pixels, as it does
@@ -152,7 +152,8 @@ enable_bootanimation=false      # skip the dancing-bug splash
 prefer_performance_cores=true
 ```
 
-`gfxstream_guest_angle` is the default GPU mode. Direct `gfxstream` remains
+`gfxstream_guest_angle` is the default GPU mode, except on hosts whose only
+Vulkan driver is llvmpipe, which get `gfxstream`. Direct `gfxstream` remains
 available for testing the native gfxstream GLES translator, while
 `guest_swiftshader` is a diagnostic fallback that removes host GPU acceleration
 from the equation.
@@ -163,9 +164,8 @@ SwiftShader, drm_hwcomposer, gfxstream, rutabaga_gfx, crosvm, minigbm, and
 Vulkan-Headers revisions in `manifests/lineageos-desktop.xml`. Both guest
 architectures pin their kernels and virtual-device modules to the same Android
 16 6.12.74 GKI build; ARM64 also pins the corresponding 16 KiB variant.
-ROM builds omit the Vulkan dEQP binary and CTS dEQP package by default.
-Set `BUILD_VULKAN_TESTS=1` to opt in to building and bundling those diagnostics
-for either architecture.
+ROM builds include the Vulkan dEQP binary and CTS dEQP package by default
+(`BUILD_VULKAN_TESTS=1`); set `BUILD_VULKAN_TESTS=0` to leave them out.
 Set `BUILD_NATIVE_BRIDGE_TESTS=1` to additionally ship the ARM64 static and
 dynamic NDK suites under `testcases/native_bridge/`; `run-tests.sh` verifies
 every installed translator file against the pinned payload manifest, checks the

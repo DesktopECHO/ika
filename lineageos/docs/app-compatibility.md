@@ -246,7 +246,9 @@ Two behaviours to plan around when grading other apps:
 - **Sign-in state is fragile across a factory reset.** `ika reset` clears it
   along with everything else, and re-signing in can take the VM through a
   reboot that silently uninstalls anything sideloaded beforehand. Install games
-  *after* Play is signed in, not before.
+  *after* Play is signed in, not before. A reset also gives the device a new
+  GSF ID; if Google then blocks sign-in as uncertified, register the new ID
+  with `ika gsf`.
 
 Also clean under ANGLE on x86-64: storefront, promo banners and install
 buttons all render correctly. The ARM cells are used routinely for installs but
@@ -387,7 +389,8 @@ results carry across neither axis, so a pass elsewhere is not evidence here.
    without any texture being at fault, and coarse block noise does not register
    as striping in a naive filter.
 8. Confirm the process survived: still alive and foreground, no fatal signals in
-   `adb logcat -b crash`, and no new files in `/data/tombstones`.
+   `adb logcat -b crash`, and no new files in `/data/tombstones` (readable on
+   userdebug builds, or after `ika root` on user builds).
 
 **Recording**
 

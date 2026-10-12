@@ -89,6 +89,20 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Mon Oct 12 2026 DesktopECHO <build@desktopecho.com> - 261012-1
+- Name the device "Ika" and its model "Ika Android".
+- Recover stalled virtio-snd streams and stop dropping playback buffers.
+- Enable zram at zygote-start, not after boot completes.
+- Match the Camera app's preview to the photo's or video's aspect ratio.
+- Add the Camera app (Aperture) with 16:9 photos, 640x480 to 1080p video
+  with AAC stereo sound, and only the sizes and settings the camera supports.
+- Fix the facetimehd camera of 2013-2017 Intel Macs.
+- Publish the GSF Android ID as sys.ika.gsf_android_id, on user builds too.
+- Sign apps built with testkey with releasekey, and every APEX with Ika's
+  own key.
+- Quiet errors expected on a desktop VM, and give the Overview desktop tile
+  a solid background.
+
 * Thu Sep 24 2026 DesktopECHO <build@desktopecho.com> - 260924-1
 - Fetch the x86-64 Google Play services APKs from Git LFS when the checkout only
   has pointer files (source ZIP or clone without git-lfs) (issue #10).

@@ -549,6 +549,38 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/lib/cuttlefish-metrics
 
 %changelog
+* Mon Oct 12 2026 DesktopECHO <build@desktopecho.com> - 261012-1
+- Add 'ika root' to root the VM with Magisk, on user and userdebug builds.
+- Add 'ika gsf' to show the GSF ID and open Google's uncertified device page.
+- Give each device its own serial number, kept across factory resets.
+- Add Stop, Restart and Start with Camera to the launcher's right-click
+  menu; "Start Ika" replaces "New Window".
+- Keep the Chromium APK in ~/ika and skip Chromium's first-run screens.
+- Fix starts failing with "Startup Failed." right after a VM stops.
+- Fix flashing hanging on x86 VMs with 2 GB of RAM.
+- Stop factory resets from filling the host disk.
+- Prefer integrated GPUs over CPU Vulkan devices.
+- Copy console frames straight into the client's shared memory.
+- Detect the display size from DRM when wayland-info finds none, and
+  default to 144 DPI otherwise.
+- Update crosvm, gfxstream, minigbm and Mesa.
+- Pass a host camera to Android with 'ika start --camera'; depend on
+  v4l-utils.
+- Rebuild the display client on scrcpy 5.0.1.
+- Blur the last picture while a window is resized, and move the console's
+  resize edges outside the window.
+- Decode app window video on the GPU through VA-API where supported.
+- Fix clicks in app windows on displays with fractional scaling.
+- Fix lost GLES textures on Apple Silicon and pink video playback.
+- Default to the gfxstream GPU mode with only a software Vulkan driver.
+- Install a Chromium that starts without hardware Vulkan where needed.
+- Put new apps in the "Android Apps (Ika)" folder, show notifications on
+  every desktop (depend on notify-send) and give app windows their app's
+  icon; the desktop entry is now ika.desktop.
+- Pass ~/.android/adbkey to user builds so ADB works with authentication.
+- Lengthen the boot timeout for older systems.
+- Build against pinned static FFmpeg 9.0.2, SDL 3.4.18 and libusb.
+
 * Thu Sep 24 2026 DesktopECHO <build@desktopecho.com> - 260924-1
 - Update Ika host package metadata to 260924-1.
 
