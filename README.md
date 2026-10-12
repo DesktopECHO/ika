@@ -183,6 +183,9 @@ ika reset --data_gb=128
 # unlocks its bootloader, after asking to confirm
 ika root
 
+# Print the GSF ID, copy it and open Google's uncertified device page
+ika gsf
+
 # Game Mode will start Ika fullscreen and enable HID keyboard and mouse 
 ika start --game
 
@@ -251,6 +254,26 @@ the VM is not running, it is started first.
   to the latest release.
 - `ika reset` undoes it: it relocks the bootloader and returns the VM to
   stock Android.
+
+### Google sign-in on uncertified devices
+
+Ika is not Play Protect certified, so Google may block signing in to Google
+Play, showing a "Device is not Play Protect certified" notification. Many
+devices never see this. If yours does, register its Google Services Framework
+(GSF) ID with your Google account:
+
+1. Run `ika gsf`. It prints the ID, copies it to the clipboard (with
+   `wl-copy`, `xclip` or `xsel`) and opens
+   [google.com/android/uncertified](https://www.google.com/android/uncertified)
+   in the default browser. If the VM is not running, it is started first.
+2. Paste the ID on that page and register it.
+3. Wait a few minutes, then run `ika restart`.
+
+Registering lifts the sign-in block only. The device stays uncertified, so
+apps that check Play Integrity still fail. A factory reset (`ika reset`, or
+rooting for the first time) gives the device a new ID, which has to be
+registered again. Builds with microG instead of Google Play Services have no
+GSF ID.
 
 ### App windows
 

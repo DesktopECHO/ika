@@ -45,7 +45,7 @@ index 000000000..2a063b9b3
 +# gmscore_app.te already does for system_adbd_prop.
 +dontaudit gmscore_app adbd_prop:file r_file_perms;
 +
-+# IkaGsfId (platform-signed, so system_app) publishes the GMS Android ID in hex;
++# IkaGsfId (platform-signed, so system_app) publishes the GMS Android ID in decimal;
 +# adb shell reads it.
 +system_internal_prop(ika_gsf_prop)
 +set_prop(system_app, ika_gsf_prop)
