@@ -947,6 +947,7 @@ Usage:
   ${SCRIPT_NAME} restart [-f|--fullscreen|--game|--no-console] [--camera[=obs|videoN]] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] ...
   ${SCRIPT_NAME} reset [--data_gb=GB]
   ${SCRIPT_NAME} root
+  ${SCRIPT_NAME} gsf
   ${SCRIPT_NAME} status
   ${SCRIPT_NAME} app NAME|PACKAGE [-f|--fullscreen] [--game] [--touch] [--window] [--title=TEXT] [--size=WxH] [--ika_scrcpy=ARGS]
   ${SCRIPT_NAME} app --info NAME|PACKAGE
@@ -1050,6 +1051,15 @@ Root:
   and wipes it, after asking to confirm; later runs update Magisk and keep the
   data. 'reset' undoes it.
 
+GSF ID:
+
+  '${SCRIPT_NAME} gsf' prints the Google Services Framework ID, copies it to
+  the clipboard (wl-copy, xclip or xsel) and opens Google's uncertified device
+  page in the default browser. Register the ID there if Google blocks sign-in
+  because the device is not Play Protect certified; it does not make the
+  device certified. A factory reset gives the device a new ID. If the VM is
+  not running, it is started first.
+
 Environment variables:
 
   GFXSTREAM_VULKAN       auto, on, or off. With --gpu_mode=gfxstream, auto
@@ -1069,6 +1079,8 @@ Environment variables:
   IKA_APP_CODEC_OPTIONS  scrcpy --video-codec-options for app windows
                          (default: video-qp-max:int=18, which caps the encoder's
                          quantizer to keep text sharp; empty removes it).
+  IKA_GSF_ID_TIMEOUT_SEC Seconds 'gsf' waits for Google Play Services to
+                         assign the ID (default: 120).
   IKA_STOP_GRACE_SEC     Seconds to allow Cuttlefish and gfxstream to clean up
                          before forcing surviving processes to exit (default: 30).
   IKA_SCRCPY_REBOOT_TIMEOUT_SEC
@@ -5180,6 +5192,90 @@ stop_cvd_internal() {
 
 }
 
+# ============================================================================
+# GSF ID (ika gsf)
+# ============================================================================
+#
+# Google may block sign-in on devices that are not Play Protect certified until
+# their Google Services Framework (GSF) Android ID is registered on Google's
+# uncertified device page. IkaGsfId publishes that ID, in decimal, as
+# sys.ika.gsf_android_id once GMS check-in has assigned it. In older images,
+# IkaGsfId only finds it on userdebug builds, so when the property is not set
+# 'gsf' reads it here from the dump of GMS's GCM service, as IkaGsfId now does.
+
+readonly GSF_REGISTRATION_URL="https://www.google.com/android/uncertified"
+readonly GCM_SERVICE="com.google.android.gms/.gcm.GcmService"
+: "${IKA_GSF_ID_TIMEOUT_SEC:=120}"
+
+# Copies stdin to the desktop clipboard. Returns 1 without a graphical session
+# or a clipboard tool. The tools stay in the background to serve the clipboard,
+# so their output goes to /dev/null rather than to a pipe a caller may read.
+copy_to_clipboard() {
+  if [[ -n "${WAYLAND_DISPLAY:-}" ]] && command -v wl-copy >/dev/null 2>&1; then
+    wl-copy >/dev/null 2>&1
+  elif [[ -n "${DISPLAY:-}" ]] && command -v xclip >/dev/null 2>&1; then
+    xclip -selection clipboard >/dev/null 2>&1
+  elif [[ -n "${DISPLAY:-}" ]] && command -v xsel >/dev/null 2>&1; then
+    xsel --clipboard --input >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+
+# Opens a URL in the default browser, detached: xdg-open can wait for a browser
+# it starts until the browser exits.
+open_in_browser() {
+  [[ -n "${WAYLAND_DISPLAY:-}" || -n "${DISPLAY:-}" ]] || return 1
+  command -v xdg-open >/dev/null 2>&1 || return 1
+  setsid xdg-open "$1" </dev/null >/dev/null 2>&1 &
+}
+
+run_gsf_id_command() {
+  local adb_serial
+  local deadline
+  local gsf_id=""
+  local waited="false"
+
+  ensure_guest_ready
+  adb_serial="$(resolve_adb_serial)"
+
+  if ! app_is_installed com.google.android.gms "${adb_serial}"; then
+    die "this Android image has no Google Play Services, so it has no GSF ID"
+  fi
+
+  # GMS check-in assigns the ID shortly after Android first reaches the network.
+  deadline="$(make_deadline "${IKA_GSF_ID_TIMEOUT_SEC}")"
+  while true; do
+    gsf_id="$(guest_adb "${adb_serial}" shell getprop sys.ika.gsf_android_id 2>/dev/null \
+      | tr -d '\r' || true)"
+    if ! [[ "${gsf_id}" =~ ^[1-9][0-9]*$ ]]; then
+      gsf_id="$(guest_adb "${adb_serial}" shell dumpsys activity service "${GCM_SERVICE}" 2>/dev/null \
+        | tr -d '\r' | sed -n 's/^[[:space:]]*DeviceID:[[:space:]]*\([0-9]*\).*/\1/p' | head -n1 || true)"
+    fi
+    [[ "${gsf_id}" =~ ^[1-9][0-9]*$ ]] && break
+    within_deadline "${deadline}" \
+      || die "Google Play Services has not assigned a GSF ID yet; check that Android is online and try again"
+    if [[ "${waited}" != "true" ]]; then
+      printf 'Waiting for Google Play Services to assign the GSF ID...\n' >&2
+      waited="true"
+    fi
+    sleep 2
+  done
+
+  if printf '%s' "${gsf_id}" | copy_to_clipboard; then
+    respond "Copied GSF ID ${gsf_id} to the clipboard."
+  else
+    respond "GSF ID ${gsf_id}"
+  fi
+  if open_in_browser "${GSF_REGISTRATION_URL}"; then
+    printf 'Paste it on the registration page opened in your browser:\n' >&2
+  else
+    printf 'Register it on:\n' >&2
+  fi
+  printf '  %s\n' "${GSF_REGISTRATION_URL}" >&2
+  printf "Then wait a few minutes and run '%s restart'.\n" "${SCRIPT_NAME}" >&2
+}
+
 exec_start_command() {
   local fullscreen_mode="$1"
   local game_mode="$2"
@@ -5283,6 +5379,9 @@ main() {
     app)
       shift
       run_app_command "$@"
+      ;;
+    gsf)
+      run_gsf_id_command
       ;;
     root)
       shift
