@@ -62,7 +62,7 @@ without requiring separate fork branches.
 The desktop products split app compatibility identity from windowing behavior:
 
 - Android and app stores see a tablet-shaped, Wi-Fi-only, non-telephony device
-  named "Ika Android Environment", with a single front camera
+  named "Ika Android", with a single front camera
 - desktop/freeform mode is re-applied at boot
 - taskbar clicks focus, restore, or open desktop windows instead of entering
   split selection

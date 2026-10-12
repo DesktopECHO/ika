@@ -19,4 +19,7 @@
     <!-- Disable automatic OTA updates on the desktop VM (1==disabled). Seeded by
          the def_ota_disable_automatic_update hook in SettingsProvider. -->
     <integer name="def_ota_disable_automatic_update">1</integer>
+    <!-- Device name (Settings.Global.DEVICE_NAME) instead of the model; it is
+         also the DHCP hostname. -->
+    <string name="def_device_name_simple" translatable="false">Ika</string>
 </resources>
