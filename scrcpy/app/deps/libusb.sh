@@ -24,6 +24,12 @@ mkdir -p "$BUILD_DIR/$PROJECT_DIR"
 cd "$BUILD_DIR/$PROJECT_DIR"
 
 export CFLAGS='-O2'
+if [[ "$HOST" == linux && "$BUILD_TYPE" == native ]]
+then
+    # RPM-family toolchains enable PIE at link time; compile configure probes as
+    # PIE too, otherwise they fail with absolute-relocation errors.
+    CFLAGS+=' -fPIE'
+fi
 export CXXFLAGS="$CFLAGS"
 
 mkdir -p "$DIRNAME"
@@ -53,10 +59,9 @@ then
     )
 fi
 
-if [[ ! -x "$SOURCES_DIR/$PROJECT_DIR/configure" ]]
-then
-    "$SOURCES_DIR/$PROJECT_DIR"/bootstrap.sh
-fi
+# Regenerate autotools files on each run so an interrupted bootstrap cannot
+# leave an executable but incomplete configure script behind.
+"$SOURCES_DIR/$PROJECT_DIR"/bootstrap.sh
 
 # Configure on every invocation so a directory left by an interrupted setup
 # cannot be mistaken for a usable build tree.

@@ -1,8 +1,8 @@
 # this needs to be at parity with with build_external/crosvm/crosvm.config.toml
 CROSVM_REMOTE = "https://chromium.googlesource.com/crosvm/crosvm"
-CROSVM_REV = "78c5df67a6ff5548157d8d12618162b91ae12d47"
+CROSVM_REV = "22f6be24c5ef49f99c164bb3bd063ace509fb96a"
 MINIGBM_REMOTE = "https://chromium.googlesource.com/chromiumos/platform/minigbm"
-MINIGBM_REV = "37fa33b3d823a84816ea8dd32dd7f543f8a2a5fa"
+MINIGBM_REV = "a2d42f09d696b04e6ded5ad38596d8554ffd8988"
 
 # note that this won't use the same source checkout as the git_repository directive below
 #
@@ -79,6 +79,7 @@ crosvm_bin.annotation(
     ],
     deps = [
         "@@//:gfxstream_backend_import",
+        "@crosvm_bin__ffmpeg-0.1.0//:build_script_build",
     ],
     rustc_flags = [
         # Look for shared libraries in the same directory as the binary.
@@ -88,11 +89,6 @@ crosvm_bin.annotation(
 
 crosvm_bin.annotation(
     crate = "ffmpeg",
-    build_script_env = {
-        # Keep Fedora's system-header location as a fallback. The patch below
-        # also forwards pkg-config include paths for private static builds.
-        "BINDGEN_EXTRA_CLANG_ARGS": "-I/usr/include/ffmpeg",
-    },
     patch_args = ["-p1"],
     patches = [
         # crate_universe applies annotation patches in sorted label order, not
@@ -111,6 +107,9 @@ crosvm_bin.annotation(
     patch_args = ["-p1"],
     patches = [
         "@//build_external/crosvm:PATCH.disk-composite-preserve-spec-fd.patch",
+        # Guest discards on the qcow2 overlay (a factory reset discards all of
+        # userdata) become zero clusters instead of allocated zeroed clusters.
+        "@//build_external/crosvm:PATCH.disk-qcow-zero-clusters.patch",
     ],
 )
 
@@ -121,6 +120,12 @@ crosvm_bin.annotation(
         # includes libc headers from Debian's multiarch include directory.
         "BINDGEN_EXTRA_CLANG_ARGS": "-I/usr/include/aarch64-linux-gnu -I/usr/include/x86_64-linux-gnu",
     },
+    patch_args = ["-p1"],
+    patches = [
+        # The --v4l2-proxy device polls through v4l2r's Poller; its EPOLLIN probe
+        # starts read() streaming on host cameras whose driver supports read().
+        "@//build_external/crosvm:PATCH.v4l2r-poller-no-epollin-probe.patch",
+    ],
 )
 
 crosvm_bin.annotation(

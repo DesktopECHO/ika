@@ -1,0 +1,1578 @@
+Patch summary:
+External camera HAL for virtio-media host cameras:
+- NV12/YUYV via libyuv; MJPEG preferred
+- sizes and rates for range-reporting cameras
+- fps: no 1 fps SIGFPE; rounding; fixed ranges
+- per-stream crop; smallest covering mode
+- buffers mapped once, at QUERYBUF offsets
+- dequeue-time timestamps
+- errored buffers skipped (10th used)
+- vivid and v4l2loopback ignored
+- buffers of an earlier stream not queued back after a restart
+- a stream that gives no frame for 2 s is restarted, not waited on for good
+- <LensFacing>
+- temporal noise reduction: minimal, fast (default), high quality;
+  edge-preserving chroma smoothing (3x3 fast, 5x5 high quality)
+
+diff --git a/camera/device/default/ExternalCameraDevice.cpp b/camera/device/default/ExternalCameraDevice.cpp
+index 8e84748..4a4ff56 100644
+--- a/camera/device/default/ExternalCameraDevice.cpp
++++ b/camera/device/default/ExternalCameraDevice.cpp
+@@ -23,6 +23,8 @@
+ #include <aidl/android/hardware/camera/common/Status.h>
+ #include <convert.h>
+ #include <linux/videodev2.h>
++#include <algorithm>
++#include <cmath>
+ #include <regex>
+ #include <set>
+ 
+@@ -35,12 +37,27 @@ namespace implementation {
+ using ::aidl::android::hardware::camera::common::Status;
+ 
+ namespace {
+-// Only support MJPEG for now as it seems to be the one supports higher fps
++// Color formats in order of preference: MJPEG usually supports higher fps on USB cameras,
++// while NV12 and YUYV cover cameras without MJPEG, such as the Apple Silicon FaceTime camera
++// (NV12 only) and YUYV-only webcams. Each device streams a single color format.
+ // Other formats to consider in the future:
+ // * V4L2_PIX_FMT_YVU420 (== YV12)
+ // * V4L2_PIX_FMT_YVYU (YVYU: can be converted to YV12 or other YUV420_888 formats)
+-const std::array<uint32_t, /*size*/ 2> kSupportedFourCCs{
+-        {V4L2_PIX_FMT_MJPEG, V4L2_PIX_FMT_Z16}};  // double braces required in C++11
++const std::array<uint32_t, /*size*/ 3> kColorFourCCs{
++        {V4L2_PIX_FMT_MJPEG, V4L2_PIX_FMT_NV12, V4L2_PIX_FMT_YUYV}};
++const std::array<uint32_t, /*size*/ 4> kSupportedFourCCs{
++        {V4L2_PIX_FMT_MJPEG, V4L2_PIX_FMT_NV12, V4L2_PIX_FMT_YUYV,
++         V4L2_PIX_FMT_Z16}};  // double braces required in C++11
++
++// Sizes offered for cameras that report a stepwise or continuous size range instead of
++// discrete sizes, such as the Intel Mac FaceTime HD camera (facetimehd driver)
++const std::array<Size, /*size*/ 4> kRangeFrameSizes{
++        {{640, 480}, {1280, 720}, {1280, 960}, {1920, 1080}}};
++
++// Frame rates offered for cameras that report a stepwise or continuous frame interval range
++// instead of discrete intervals, as frame durations: 60, 30, 25, 24, 20, 15, 10, 7.5 and 5 fps
++const std::array<SupportedV4L2Format::FrameRate, /*size*/ 9> kRangeFrameRates{
++        {{1, 60}, {1, 30}, {1, 25}, {1, 24}, {1, 20}, {1, 15}, {1, 10}, {2, 15}, {1, 5}}};
+ 
+ constexpr int MAX_RETRY = 5;                  // Allow retry v4l2 open failures a few times.
+ constexpr int OPEN_RETRY_SLEEP_US = 100'000;  // 100ms * MAX_RETRY = 0.5 seconds
+@@ -147,8 +164,8 @@ ndk::ScopedAStatus ExternalCameraDevice::open(
+         return fromStatus(Status::INTERNAL_ERROR);
+     }
+ 
+-    session = createSession(in_callback, mCfg, mSupportedFormats, mCroppingType,
+-                            mCameraCharacteristics, mCameraId, std::move(fd));
++    session = createSession(in_callback, mCfg, mSupportedFormats, mCameraCharacteristics, mCameraId,
++                            std::move(fd));
+     if (session == nullptr) {
+         ALOGE("%s: camera device session allocation failed", __FUNCTION__);
+         return fromStatus(Status::INTERNAL_ERROR);
+@@ -183,11 +200,11 @@ ndk::ScopedAStatus ExternalCameraDevice::getTorchStrengthLevel(int32_t*) {
+ 
+ std::shared_ptr<ExternalCameraDeviceSession> ExternalCameraDevice::createSession(
+         const std::shared_ptr<ICameraDeviceCallback>& cb, const ExternalCameraConfig& cfg,
+-        const std::vector<SupportedV4L2Format>& sortedFormats, const CroppingType& croppingType,
++        const std::vector<SupportedV4L2Format>& sortedFormats,
+         const common::V1_0::helper::CameraMetadata& chars, const std::string& cameraId,
+         unique_fd v4l2Fd) {
+-    return ndk::SharedRefBase::make<ExternalCameraDeviceSession>(
+-            cb, cfg, sortedFormats, croppingType, chars, cameraId, std::move(v4l2Fd));
++    return ndk::SharedRefBase::make<ExternalCameraDeviceSession>(cb, cfg, sortedFormats, chars,
++                                                                 cameraId, std::move(v4l2Fd));
+ }
+ 
+ bool ExternalCameraDevice::isInitFailed() {
+@@ -327,15 +344,12 @@ status_t ExternalCameraDevice::initAvailableCapabilities(
+     bool hasDepth = false;
+     bool hasColor = false;
+     for (const auto& fmt : mSupportedFormats) {
+-        switch (fmt.fourcc) {
+-            case V4L2_PIX_FMT_Z16:
+-                hasDepth = true;
+-                break;
+-            case V4L2_PIX_FMT_MJPEG:
+-                hasColor = true;
+-                break;
+-            default:
+-                ALOGW("%s: Unsupported format found", __FUNCTION__);
++        if (fmt.fourcc == V4L2_PIX_FMT_Z16) {
++            hasDepth = true;
++        } else if (isColorV4L2Format(fmt.fourcc)) {
++            hasColor = true;
++        } else {
++            ALOGW("%s: Unsupported format found", __FUNCTION__);
+         }
+     }
+ 
+@@ -420,12 +434,18 @@ status_t ExternalCameraDevice::initDefaultCharsKeys(
+     const uint8_t opticalStabilizationMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
+     UPDATE(ANDROID_LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION, &opticalStabilizationMode, 1);
+ 
+-    const uint8_t facing = ANDROID_LENS_FACING_EXTERNAL;
++    const uint8_t facing = mCfg.lensFacing;
+     UPDATE(ANDROID_LENS_FACING, &facing, 1);
+ 
+-    // android.noiseReduction
+-    const uint8_t noiseReductionMode = ANDROID_NOISE_REDUCTION_MODE_OFF;
+-    UPDATE(ANDROID_NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES, &noiseReductionMode, 1);
++    // android.noiseReduction: the session's temporal noise reduction, from light (minimal) to
++    // strong (high quality)
++    const uint8_t noiseReductionModes[] = {ANDROID_NOISE_REDUCTION_MODE_OFF,
++                                           ANDROID_NOISE_REDUCTION_MODE_FAST,
++                                           ANDROID_NOISE_REDUCTION_MODE_HIGH_QUALITY,
++                                           ANDROID_NOISE_REDUCTION_MODE_MINIMAL};
++    UPDATE(ANDROID_NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES, noiseReductionModes,
++           ARRAY_SIZE(noiseReductionModes));
++    const uint8_t noiseReductionMode = ANDROID_NOISE_REDUCTION_MODE_FAST;
+     UPDATE(ANDROID_NOISE_REDUCTION_MODE, &noiseReductionMode, 1);
+ 
+     const int32_t partialResultCount = 1;
+@@ -633,25 +653,24 @@ status_t ExternalCameraDevice::initOutputCharsKeys(
+ 
+     bool hasDepth = false;
+     bool hasColor = false;
++    uint32_t colorFourcc = 0;
+ 
+     // For V4L2_PIX_FMT_Z16
+     std::array<int, /*size*/ 1> halDepthFormats{{HAL_PIXEL_FORMAT_Y16}};
+-    // For V4L2_PIX_FMT_MJPEG
++    // For the color formats (MJPEG, NV12, YUYV)
+     std::array<int, /*size*/ 3> halFormats{{HAL_PIXEL_FORMAT_BLOB, HAL_PIXEL_FORMAT_YCbCr_420_888,
+                                             HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED}};
+ 
+     for (const auto& supportedFormat : mSupportedFormats) {
+-        switch (supportedFormat.fourcc) {
+-            case V4L2_PIX_FMT_Z16:
+-                hasDepth = true;
+-                break;
+-            case V4L2_PIX_FMT_MJPEG:
+-                hasColor = true;
+-                break;
+-            default:
+-                ALOGW("%s: format %c%c%c%c is not supported!", __FUNCTION__,
+-                      supportedFormat.fourcc & 0xFF, (supportedFormat.fourcc >> 8) & 0xFF,
+-                      (supportedFormat.fourcc >> 16) & 0xFF, (supportedFormat.fourcc >> 24) & 0xFF);
++        if (supportedFormat.fourcc == V4L2_PIX_FMT_Z16) {
++            hasDepth = true;
++        } else if (isColorV4L2Format(supportedFormat.fourcc)) {
++            hasColor = true;
++            colorFourcc = supportedFormat.fourcc;
++        } else {
++            ALOGW("%s: format %c%c%c%c is not supported!", __FUNCTION__,
++                  supportedFormat.fourcc & 0xFF, (supportedFormat.fourcc >> 8) & 0xFF,
++                  (supportedFormat.fourcc >> 16) & 0xFF, (supportedFormat.fourcc >> 24) & 0xFF);
+         }
+     }
+ 
+@@ -670,7 +689,7 @@ status_t ExternalCameraDevice::initOutputCharsKeys(
+     }
+     if (hasColor) {
+         status_t ret =
+-                initOutputCharsKeysByFormat(metadata, V4L2_PIX_FMT_MJPEG, halFormats,
++                initOutputCharsKeysByFormat(metadata, colorFourcc, halFormats,
+                                             ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_OUTPUT,
+                                             ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS,
+                                             ANDROID_SCALER_AVAILABLE_MIN_FRAME_DURATIONS,
+@@ -779,7 +798,12 @@ status_t ExternalCameraDevice::calculateMinFps(
+ 
+     for (const auto& supportedFormat : mSupportedFormats) {
+         for (const auto& fr : supportedFormat.frameRates) {
+-            int32_t frameRateInt = static_cast<int32_t>(fr.getFramesPerSecond());
++            // Round, so that 29.97 fps (common on USB webcams) counts as 30
++            int32_t frameRateInt = static_cast<int32_t>(std::lround(fr.getFramesPerSecond()));
++            // Rates below 1 fps can't be expressed as an integer fps range
++            if (frameRateInt < 1) {
++                continue;
++            }
+             if (minFps > frameRateInt) {
+                 minFps = frameRateInt;
+             }
+@@ -787,14 +811,26 @@ status_t ExternalCameraDevice::calculateMinFps(
+         }
+     }
+ 
++    if (framerates.empty()) {
++        ALOGE("%s: no frame rate of at least 1 fps", __FUNCTION__);
++        return UNKNOWN_ERROR;
++    }
++
+     std::vector<int32_t> fpsRanges;
+     // FPS ranges
+     for (const auto& framerate : framerates) {
+         // Empirical: webcams often have close to 2x fps error and cannot support fixed fps range
+-        fpsRanges.push_back(framerate / 2);
++        // Keep the lower bound at 1 fps or more: cameras that list 1 fps would otherwise get 0
++        fpsRanges.push_back(std::max(framerate / 2, 1));
+         fpsRanges.push_back(framerate);
++        // Also offer the fixed range: video recording apps (e.g. CameraX-based ones) only
++        // offer frame rates that have one, and the session streams at the closest V4L2 rate
++        if (std::max(framerate / 2, 1) != framerate) {
++            fpsRanges.push_back(framerate);
++            fpsRanges.push_back(framerate);
++        }
+     }
+-    minFps /= 2;
++    minFps = std::max(minFps / 2, 1);
+     int64_t maxFrameDuration = 1000000000LL / minFps;
+ 
+     UPDATE(ANDROID_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES, fpsRanges.data(), fpsRanges.size());
+@@ -836,7 +872,30 @@ void ExternalCameraDevice::getFrameRateList(int fd, double fpsUpperBound,
+                       frameInterval.height, framerate);
+                 format->frameRates.push_back(fr);
+             }
++            continue;
++        }
++
++        // A stepwise or continuous range is reported as a single entry: offer the standard
++        // rates whose frame duration falls inside it. Steps are not checked, as drivers round
++        // the interval set with VIDIOC_S_PARM to the nearest one they support.
++        const v4l2_frmival_stepwise& range = frameInterval.stepwise;
++        if (range.min.denominator == 0 || range.max.denominator == 0) {
++            break;
+         }
++        // Relative slack, so that a 29.97 fps limit still offers 30 fps
++        constexpr double kTolerance = 0.002;
++        const double minDuration = static_cast<double>(range.min.numerator) / range.min.denominator;
++        const double maxDuration = static_cast<double>(range.max.numerator) / range.max.denominator;
++        for (const auto& fr : kRangeFrameRates) {
++            const double duration =
++                    static_cast<double>(fr.durationNumerator) / fr.durationDenominator;
++            if (fr.getFramesPerSecond() <= fpsUpperBound &&
++                duration >= minDuration * (1 - kTolerance) &&
++                duration <= maxDuration * (1 + kTolerance)) {
++                format->frameRates.push_back(fr);
++            }
++        }
++        break;
+     }
+ 
+     if (format->frameRates.empty()) {
+@@ -904,41 +963,78 @@ std::vector<SupportedV4L2Format> ExternalCameraDevice::getCandidateSupportedForm
+         }
+ 
+         // Found supported format
++        std::vector<Size> frameSizes;
+         v4l2_frmsizeenum frameSize{.index = 0, .pixel_format = fmtdesc.pixelformat};
+         for (; TEMP_FAILURE_RETRY(ioctl(fd, VIDIOC_ENUM_FRAMESIZES, &frameSize)) == 0;
+              ++frameSize.index) {
+             if (frameSize.type == V4L2_FRMSIZE_TYPE_DISCRETE) {
+-                ALOGV("index:%d, format:%c%c%c%c, w %d, h %d", frameSize.index,
+-                      fmtdesc.pixelformat & 0xFF, (fmtdesc.pixelformat >> 8) & 0xFF,
+-                      (fmtdesc.pixelformat >> 16) & 0xFF, (fmtdesc.pixelformat >> 24) & 0xFF,
+-                      frameSize.discrete.width, frameSize.discrete.height);
+-
+-                // Disregard h > w formats so all aspect ratio (h/w) <= 1.0
+-                // This will simplify the crop/scaling logic down the road
+-                if (frameSize.discrete.height > frameSize.discrete.width) {
+-                    continue;
+-                }
++                frameSizes.push_back({static_cast<int32_t>(frameSize.discrete.width),
++                                      static_cast<int32_t>(frameSize.discrete.height)});
++                continue;
++            }
+ 
+-                // Discard all formats which is smaller than minStreamSize
+-                if (frameSize.discrete.width < minStreamSize.width ||
+-                    frameSize.discrete.height < minStreamSize.height) {
+-                    continue;
++            // A stepwise or continuous range is reported as a single entry: offer the
++            // standard sizes that fall inside it on a step boundary
++            const v4l2_frmsize_stepwise& range = frameSize.stepwise;
++            const uint32_t stepWidth = std::max(range.step_width, 1u);
++            const uint32_t stepHeight = std::max(range.step_height, 1u);
++            for (const Size& size : kRangeFrameSizes) {
++                const uint32_t width = size.width;
++                const uint32_t height = size.height;
++                if (width >= range.min_width && width <= range.max_width &&
++                    height >= range.min_height && height <= range.max_height &&
++                    (width - range.min_width) % stepWidth == 0 &&
++                    (height - range.min_height) % stepHeight == 0) {
++                    frameSizes.push_back(size);
+                 }
++            }
++            break;
++        }
+ 
+-                SupportedV4L2Format format{
+-                        .width = static_cast<int32_t>(frameSize.discrete.width),
+-                        .height = static_cast<int32_t>(frameSize.discrete.height),
+-                        .fourcc = fmtdesc.pixelformat};
++        for (const Size& size : frameSizes) {
++            ALOGV("format:%c%c%c%c, w %d, h %d", fmtdesc.pixelformat & 0xFF,
++                  (fmtdesc.pixelformat >> 8) & 0xFF, (fmtdesc.pixelformat >> 16) & 0xFF,
++                  (fmtdesc.pixelformat >> 24) & 0xFF, size.width, size.height);
+ 
+-                if (format.fourcc == V4L2_PIX_FMT_Z16 && depthEnabled) {
+-                    updateFpsBounds(fd, cropType, depthFpsLimits, format, outFmts);
+-                } else {
+-                    updateFpsBounds(fd, cropType, fpsLimits, format, outFmts);
+-                }
++            // Disregard h > w formats so all aspect ratio (h/w) <= 1.0
++            // This will simplify the crop/scaling logic down the road
++            if (size.height > size.width) {
++                continue;
++            }
++
++            // Discard all formats which is smaller than minStreamSize
++            if (size.width < minStreamSize.width || size.height < minStreamSize.height) {
++                continue;
++            }
++
++            SupportedV4L2Format format{
++                    .width = size.width, .height = size.height, .fourcc = fmtdesc.pixelformat};
++
++            if (format.fourcc == V4L2_PIX_FMT_Z16 && depthEnabled) {
++                updateFpsBounds(fd, cropType, depthFpsLimits, format, outFmts);
++            } else {
++                updateFpsBounds(fd, cropType, fpsLimits, format, outFmts);
+             }
+         }
+         fmtdesc.index++;
+     }
++
++    // Keep only the most preferred color format, so every output size maps to one V4L2 format
++    for (uint32_t colorFourcc : kColorFourCCs) {
++        auto hasFourcc = [colorFourcc](const SupportedV4L2Format& fmt) {
++            return fmt.fourcc == colorFourcc;
++        };
++        if (std::any_of(outFmts.begin(), outFmts.end(), hasFourcc)) {
++            outFmts.erase(std::remove_if(outFmts.begin(), outFmts.end(),
++                                         [colorFourcc](const SupportedV4L2Format& fmt) {
++                                             return isColorV4L2Format(fmt.fourcc) &&
++                                                    fmt.fourcc != colorFourcc;
++                                         }),
++                          outFmts.end());
++            break;
++        }
++    }
++
+     trimSupportedFormats(cropType, &outFmts);
+     return outFmts;
+ }
+@@ -970,22 +1066,16 @@ void ExternalCameraDevice::trimSupportedFormats(CroppingType cropType,
+     }
+ 
+     const auto& maxSize = sortedFmts[sortedFmts.size() - 1];
+-    float maxSizeAr = ASPECT_RATIO(maxSize);
+ 
+-    // Remove formats that has aspect ratio not croppable from largest size
++    // Remove formats that don't fit in the largest size. The session crops each stream in the
++    // direction its aspect ratio needs, so every size that fits can be cropped from it.
+     std::vector<SupportedV4L2Format> out;
+     for (const auto& fmt : sortedFmts) {
+-        float ar = ASPECT_RATIO(fmt);
+-        if (isAspectRatioClose(ar, maxSizeAr)) {
+-            out.push_back(fmt);
+-        } else if (cropType == HORIZONTAL && ar < maxSizeAr) {
+-            out.push_back(fmt);
+-        } else if (cropType == VERTICAL && ar > maxSizeAr) {
++        if (fmt.width <= maxSize.width && fmt.height <= maxSize.height) {
+             out.push_back(fmt);
+         } else {
+-            ALOGV("%s: size (%d,%d) is removed due to unable to crop %s from (%d,%d)", __FUNCTION__,
+-                  fmt.width, fmt.height, cropType == VERTICAL ? "vertically" : "horizontally",
+-                  maxSize.width, maxSize.height);
++            ALOGV("%s: size (%d,%d) is removed as it doesn't fit in (%d,%d)", __FUNCTION__,
++                  fmt.width, fmt.height, maxSize.width, maxSize.height);
+         }
+     }
+     sortedFmts = out;
+diff --git a/camera/device/default/ExternalCameraDevice.h b/camera/device/default/ExternalCameraDevice.h
+index bcae194..7ca4274 100644
+--- a/camera/device/default/ExternalCameraDevice.h
++++ b/camera/device/default/ExternalCameraDevice.h
+@@ -73,7 +73,7 @@ class ExternalCameraDevice : public BnCameraDevice {
+   private:
+     virtual std::shared_ptr<ExternalCameraDeviceSession> createSession(
+             const std::shared_ptr<ICameraDeviceCallback>&, const ExternalCameraConfig& cfg,
+-            const std::vector<SupportedV4L2Format>& sortedFormats, const CroppingType& croppingType,
++            const std::vector<SupportedV4L2Format>& sortedFormats,
+             const common::V1_0::helper::CameraMetadata& chars, const std::string& cameraId,
+             unique_fd v4l2Fd);
+ 
+diff --git a/camera/device/default/ExternalCameraDeviceSession.cpp b/camera/device/default/ExternalCameraDeviceSession.cpp
+index 4e90a67..51251d5 100644
+--- a/camera/device/default/ExternalCameraDeviceSession.cpp
++++ b/camera/device/default/ExternalCameraDeviceSession.cpp
+@@ -35,6 +35,7 @@
+ #include <aidlcommonsupport/NativeHandle.h>
+ #include <convert.h>
+ #include <linux/videodev2.h>
++#include <poll.h>
+ #include <sync/sync.h>
+ #include <utils/Trace.h>
+ #include <deque>
+@@ -57,6 +58,12 @@ static constexpr size_t kMetadataMsgQueueSize = 1 << 18 /* 256kB */;
+ const int kBadFramesAfterStreamOn = 1;  // drop x frames after streamOn to get rid of some initial
+                                         // bad frames. TODO: develop a better bad frame detection
+                                         // method
++// A camera that delivers no frame for this long has stopped: the stream is restarted instead of
++// blocking the session in VIDIOC_DQBUF for good
++constexpr int kFrameTimeoutMs = 2000;
++// Before such a restart, frames still being processed get this long to come back
++constexpr int kRestartDrainMs = 500;
++
+ constexpr int MAX_RETRY = 15;  // Allow retry some ioctl failures a few times to account for some
+                                // webcam showing temporarily ioctl failures.
+ constexpr int IOCTL_RETRY_SLEEP_US = 33000;  // 33ms * MAX_RETRY = 0.5 seconds
+@@ -65,6 +72,85 @@ constexpr int IOCTL_RETRY_SLEEP_US = 33000;  // 33ms * MAX_RETRY = 0.5 seconds
+ static constexpr int kDumpLockRetries = 50;
+ static constexpr int kDumpLockSleep = 60000;
+ 
++// Temporal noise reduction: a pixel that changed by less than the threshold since the previous
++// output frame is mostly sensor noise and is blended into it; a larger change is motion and is
++// kept. The new frame's weight, out of 256, rises from newWeight for an unchanged pixel to 256 at
++// the threshold. cur becomes the output and prev (tightly packed) the history for the next frame.
++void denoisePlane(uint8_t* cur, size_t curStride, uint8_t* prev, size_t width, size_t height,
++                  int threshold, int newWeight) {
++    // Weight added per level of change, in 1/65536ths
++    const int step = ((256 - newWeight) << 16) / threshold;
++    for (size_t y = 0; y < height; y++) {
++        uint8_t* c = cur + y * curStride;
++        uint8_t* p = prev + y * width;
++        for (size_t x = 0; x < width; x++) {
++            const int d = c[x] - p[x];
++            const int ad = d < 0 ? -d : d;
++            int w = newWeight + ((ad * step) >> 16);
++            w = w > 256 ? 256 : w;
++            const int v = p[x] + ((d * w + 128) >> 8);
++            c[x] = p[x] = static_cast<uint8_t>(v);
++        }
++    }
++}
++
++// Edge-preserving smoothing of chroma: each pixel becomes the mean of the pixels in its
++// (2 * R + 1)-square neighborhood that are within kChromaSigmaRange of it, so color noise is
++// averaged but color doesn't bleed across edges. rows holds the unfiltered rows around the current
++// one, each padded by R repeated edge pixels.
++constexpr int kChromaSigmaRange = 8;
++
++template <int R>
++void sigmaRow(const uint8_t* const* rows, uint8_t* __restrict out, size_t width) {
++    const uint8_t* center = rows[R] + R;
++    for (size_t x = 0; x < width; x++) {
++        const int c = center[x];
++        int sum = 0;
++        int count = 0;
++        for (int dy = 0; dy <= 2 * R; dy++) {
++            for (int dx = 0; dx <= 2 * R; dx++) {
++                const int q = rows[dy][x + dx];
++                const int d = q - c;
++                const int near = (d < 0 ? -d : d) <= kChromaSigmaRange ? 1 : 0;
++                sum += near * q;
++                count += near;
++            }
++        }
++        // Rounded mean; float division is exact enough here and vectorizes
++        out[x] = static_cast<uint8_t>(static_cast<float>(sum) / static_cast<float>(count) + 0.5f);
++    }
++}
++
++template <int R>
++void sigmaPlane(uint8_t* plane, size_t stride, size_t width, size_t height,
++                std::vector<uint8_t>& scratch) {
++    constexpr size_t kSpan = 2 * R + 1;
++    const size_t padded = width + 2 * R;
++    scratch.resize(kSpan * padded);
++    // Row y lives in slot y % kSpan until row y + kSpan replaces it
++    auto load = [&](size_t y) {
++        uint8_t* dst = &scratch[(y % kSpan) * padded];
++        const uint8_t* src = plane + y * stride;
++        memset(dst, src[0], R);
++        memcpy(dst + R, src, width);
++        memset(dst + R + width, src[width - 1], R);
++    };
++    for (size_t y = 0; y < std::min<size_t>(R, height); y++) {
++        load(y);
++    }
++    const uint8_t* rows[kSpan];
++    for (size_t y = 0; y < height; y++) {
++        if (y + R < height) {
++            load(y + R);
++        }
++        for (int dy = -R; dy <= R; dy++) {
++            const long yy = std::clamp<long>(static_cast<long>(y) + dy, 0, static_cast<long>(height) - 1);
++            rows[dy + R] = &scratch[(static_cast<size_t>(yy) % kSpan) * padded];
++        }
++        sigmaRow<R>(rows, plane + y * stride, width);
++    }
++}
++
+ bool tryLock(Mutex& mutex) {
+     bool locked = false;
+     for (int i = 0; i < kDumpLockRetries; ++i) {
+@@ -112,14 +198,13 @@ HandleImporter ExternalCameraDeviceSession::sHandleImporter;
+ 
+ ExternalCameraDeviceSession::ExternalCameraDeviceSession(
+         const std::shared_ptr<ICameraDeviceCallback>& callback, const ExternalCameraConfig& cfg,
+-        const std::vector<SupportedV4L2Format>& sortedFormats, const CroppingType& croppingType,
++        const std::vector<SupportedV4L2Format>& sortedFormats,
+         const common::V1_0::helper::CameraMetadata& chars, const std::string& cameraId,
+         unique_fd v4l2Fd)
+     : mCallback(callback),
+       mCfg(cfg),
+       mCameraCharacteristics(chars),
+       mSupportedFormats(sortedFormats),
+-      mCroppingType(croppingType),
+       mCameraId(cameraId),
+       mV4l2Fd(std::move(v4l2Fd)),
+       mMaxThumbResolution(getMaxThumbResolution()),
+@@ -219,8 +304,8 @@ void ExternalCameraDeviceSession::initOutputThread() {
+ 
+     mBufferRequestThread = std::make_shared<BufferRequestThread>(/*parent=*/thiz, mCallback);
+     mBufferRequestThread->run();
+-    mOutputThread = std::make_shared<OutputThread>(/*parent=*/thiz, mCroppingType,
+-                                                   mCameraCharacteristics, mBufferRequestThread);
++    mOutputThread = std::make_shared<OutputThread>(/*parent=*/thiz, mCameraCharacteristics,
++                                                   mBufferRequestThread);
+ }
+ 
+ void ExternalCameraDeviceSession::closeOutputThread() {
+@@ -341,57 +426,53 @@ ScopedAStatus ExternalCameraDeviceSession::configureStreams(
+         }
+     }
+ 
+-    // Now select a V4L2 format to produce all output streams
+-    float desiredAr = (mCroppingType == VERTICAL) ? kMaxAspectRatio : kMinAspectRatio;
+-    uint32_t maxDim = 0;
++    // Now select a V4L2 format to produce all output streams. Each stream is a centered crop of
++    // the frame in whichever direction its aspect ratio needs, so use the smallest format whose
++    // crop for every stream is at least as large as the stream, preferring the native aspect
++    // ratio (that of the largest format) on a tie. A 4:3 preview with a 16:9 recording then runs
++    // from a 4:3 mode the size of the preview, with no scaling, instead of a larger 16:9 mode.
+     for (const auto& stream : in_requestedConfiguration.streams) {
+-        float aspectRatio = ASPECT_RATIO(stream);
+         ALOGI("%s: request stream %dx%d", __FUNCTION__, stream.width, stream.height);
+-        if ((mCroppingType == VERTICAL && aspectRatio < desiredAr) ||
+-            (mCroppingType == HORIZONTAL && aspectRatio > desiredAr)) {
+-            desiredAr = aspectRatio;
++    }
++    auto area = [](const SupportedV4L2Format& fmt) {
++        return static_cast<int64_t>(fmt.width) * fmt.height;
++    };
++    auto covers = [&](const SupportedV4L2Format& fmt) {
++        for (const auto& stream : in_requestedConfiguration.streams) {
++            IMapper::Rect crop;
++            if (getCropRect({fmt.width, fmt.height}, {stream.width, stream.height}, &crop) != 0 ||
++                crop.width + 2 < stream.width || crop.height + 2 < stream.height) {
++                return false;
++            }
+         }
+-
+-        // The dimension that's not cropped
+-        uint32_t dim = (mCroppingType == VERTICAL) ? stream.width : stream.height;
+-        if (dim > maxDim) {
+-            maxDim = dim;
++        return true;
++    };
++    SupportedV4L2Format v4l2Fmt{.width = 0, .height = 0};
++    SupportedV4L2Format largest{.width = 0, .height = 0};
++    for (const auto& fmt : mSupportedFormats) {
++        if (area(fmt) > area(largest)) {
++            largest = fmt;
+         }
+     }
+-
+-    // Find the smallest format that matches the desired aspect ratio and is wide/high enough
+-    SupportedV4L2Format v4l2Fmt{.width = 0, .height = 0};
++    const float nativeAr = largest.height != 0 ? ASPECT_RATIO(largest) : 0;
+     for (const auto& fmt : mSupportedFormats) {
+-        uint32_t dim = (mCroppingType == VERTICAL) ? fmt.width : fmt.height;
+-        if (dim >= maxDim) {
+-            float aspectRatio = ASPECT_RATIO(fmt);
+-            if (isAspectRatioClose(aspectRatio, desiredAr)) {
+-                v4l2Fmt = fmt;
+-                // since mSupportedFormats is sorted by width then height, the first matching fmt
+-                // will be the smallest one with matching aspect ratio
+-                break;
+-            }
++        if (!covers(fmt)) {
++            continue;
++        }
++        if (v4l2Fmt.width == 0 || area(fmt) < area(v4l2Fmt) ||
++            (area(fmt) == area(v4l2Fmt) && isAspectRatioClose(ASPECT_RATIO(fmt), nativeAr) &&
++             !isAspectRatioClose(ASPECT_RATIO(v4l2Fmt), nativeAr))) {
++            v4l2Fmt = fmt;
+         }
+     }
+ 
+     if (v4l2Fmt.width == 0) {
+-        // Cannot find exact good aspect ratio candidate, try to find a close one
+-        for (const auto& fmt : mSupportedFormats) {
+-            uint32_t dim = (mCroppingType == VERTICAL) ? fmt.width : fmt.height;
+-            if (dim >= maxDim) {
+-                float aspectRatio = ASPECT_RATIO(fmt);
+-                if ((mCroppingType == VERTICAL && aspectRatio < desiredAr) ||
+-                    (mCroppingType == HORIZONTAL && aspectRatio > desiredAr)) {
+-                    v4l2Fmt = fmt;
+-                    break;
+-                }
+-            }
+-        }
++        // No format is large enough for every stream: use the largest one and scale up
++        v4l2Fmt = largest;
+     }
+ 
+     if (v4l2Fmt.width == 0) {
+-        ALOGE("%s: unable to find a resolution matching (%s at least %d, aspect ratio %f)",
+-              __FUNCTION__, (mCroppingType == VERTICAL) ? "width" : "height", maxDim, desiredAr);
++        ALOGE("%s: no V4L2 format to produce the requested streams", __FUNCTION__);
+         return fromStatus(Status::ILLEGAL_ARGUMENT);
+     }
+ 
+@@ -847,7 +928,7 @@ Status ExternalCameraDeviceSession::switchToOffline(
+ 
+     std::shared_ptr<ExternalCameraOfflineSession> sessionImpl =
+             ndk::SharedRefBase::make<ExternalCameraOfflineSession>(
+-                    mCroppingType, mCameraCharacteristics, mCameraId, mExifMake, mExifModel,
++                    mCameraCharacteristics, mCameraId, mExifMake, mExifModel,
+                     mBlobBufferSize, afTrigger, streamInfos, offlineReqs, circulatingBuffers);
+ 
+     bool initFailed = sessionImpl->initialize();
+@@ -946,7 +1027,7 @@ status_t ExternalCameraDeviceSession::initDefaultRequests() {
+     const uint8_t oisMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
+     UPDATE(md, ANDROID_LENS_OPTICAL_STABILIZATION_MODE, &oisMode, 1);
+ 
+-    const uint8_t nrMode = ANDROID_NOISE_REDUCTION_MODE_OFF;
++    const uint8_t nrMode = ANDROID_NOISE_REDUCTION_MODE_FAST;
+     UPDATE(md, ANDROID_NOISE_REDUCTION_MODE, &nrMode, 1);
+ 
+     const int32_t testPatternModes = ANDROID_SENSOR_TEST_PATTERN_MODE_OFF;
+@@ -962,7 +1043,7 @@ status_t ExternalCameraDeviceSession::initDefaultRequests() {
+     int32_t maxFps = std::numeric_limits<int32_t>::min();
+     for (const auto& supportedFormat : mSupportedFormats) {
+         for (const auto& fr : supportedFormat.frameRates) {
+-            int32_t framerateInt = static_cast<int32_t>(fr.getFramesPerSecond());
++            int32_t framerateInt = static_cast<int32_t>(std::lround(fr.getFramesPerSecond()));
+             if (maxFps < framerateInt) {
+                 maxFps = framerateInt;
+             }
+@@ -1007,6 +1088,10 @@ status_t ExternalCameraDeviceSession::initDefaultRequests() {
+                 continue;
+         }
+         UPDATE(mdCopy, ANDROID_CONTROL_CAPTURE_INTENT, &intent, 1);
++        if (type == RequestTemplate::STILL_CAPTURE) {
++            const uint8_t stillNrMode = ANDROID_NOISE_REDUCTION_MODE_HIGH_QUALITY;
++            UPDATE(mdCopy, ANDROID_NOISE_REDUCTION_MODE, &stillNrMode, 1);
++        }
+         camera_metadata_t* mdPtr = mdCopy.release();
+         uint8_t* rawMd = reinterpret_cast<uint8_t*>(mdPtr);
+         CameraMetadata aidlMd;
+@@ -1060,7 +1145,8 @@ int ExternalCameraDeviceSession::configureV4l2StreamLocked(const SupportedV4L2Fo
+     }
+ 
+     // VIDIOC_S_FMT w/h/fmt
+-    v4l2_format fmt;
++    // Zero-initialize so drivers see bytesperline = 0 and pick their own row stride
++    v4l2_format fmt{};
+     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+     fmt.fmt.pix.width = v4l2Fmt.width;
+     fmt.fmt.pix.height = v4l2Fmt.height;
+@@ -1108,6 +1194,7 @@ int ExternalCameraDeviceSession::configureV4l2StreamLocked(const SupportedV4L2Fo
+         bufferSize = expectedMaxBufferSize;
+     }
+     mMaxV4L2BufferSize = bufferSize;
++    mV4l2BytesPerLine = fmt.fmt.pix.bytesperline;
+ 
+     const double kDefaultFps = 30.0;
+     double fps = std::numeric_limits<double>::max();
+@@ -1164,6 +1251,14 @@ int ExternalCameraDeviceSession::configureV4l2StreamLocked(const SupportedV4L2Fo
+     // VIDIOC_QUERYBUF:  get buffer offset in the V4L2 fd
+     // VIDIOC_QBUF: send buffer to driver
+     mV4L2BufferCount = req_buffers.count;
++    {
++        // A new set of buffers: a frame from an earlier stream is no longer queued back, as its
++        // index now names one of these
++        std::lock_guard<std::mutex> lk(mV4l2BufferLock);
++        mV4l2Generation++;
++        mNumDequeuedV4l2Buffers = 0;
++    }
++    unmapV4l2BuffersLocked();
+     for (uint32_t i = 0; i < req_buffers.count; i++) {
+         v4l2_buffer buffer = {
+                 .index = i, .type = V4L2_BUF_TYPE_VIDEO_CAPTURE, .memory = V4L2_MEMORY_MMAP};
+@@ -1172,6 +1267,13 @@ int ExternalCameraDeviceSession::configureV4l2StreamLocked(const SupportedV4L2Fo
+             ALOGE("%s: QUERYBUF %d failed: %s", __FUNCTION__, i, strerror(errno));
+             return -errno;
+         }
++        void* data = mmap(nullptr, buffer.length, PROT_READ, MAP_SHARED, mV4l2Fd.get(),
++                          buffer.m.offset);
++        if (data == MAP_FAILED) {
++            ALOGE("%s: mmap of buffer %d failed: %s", __FUNCTION__, i, strerror(errno));
++            return -errno;
++        }
++        mV4l2BufferMappings.push_back({static_cast<uint8_t*>(data), buffer.length});
+ 
+         if (TEMP_FAILURE_RETRY(ioctl(mV4l2Fd.get(), VIDIOC_QBUF, &buffer)) < 0) {
+             ALOGE("%s: QBUF %d failed: %s", __FUNCTION__, i, strerror(errno));
+@@ -1203,6 +1305,10 @@ int ExternalCameraDeviceSession::configureV4l2StreamLocked(const SupportedV4L2Fo
+ 
+     // Swallow first few frames after streamOn to account for bad frames from some devices
+     for (int i = 0; i < kBadFramesAfterStreamOn; i++) {
++        if (int waitRet = waitForV4l2FrameLocked(); waitRet != 0) {
++            ALOGE("%s: no frame after stream on: %s", __FUNCTION__, strerror(-waitRet));
++            return waitRet;
++        }
+         v4l2_buffer buffer{};
+         buffer.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+         buffer.memory = V4L2_MEMORY_MMAP;
+@@ -1243,7 +1349,27 @@ std::unique_ptr<V4L2Frame> ExternalCameraDeviceSession::dequeueV4l2FrameLocked(n
+ 
+     uint64_t lagNs = 0;
+     v4l2_buffer buffer{};
++    // Errored buffers skipped in one dequeue before the last one is used anyway
++    constexpr int kMaxBufferErrors = 10;
++    int bufferErrors = 0;
++    // Set when the dequeued buffer was queued again and the next one is needed
++    bool requeued;
++    bool restarted = false;
+     do {
++        requeued = false;
++        int waitRet = waitForV4l2FrameLocked();
++        if (waitRet == -ETIMEDOUT && !restarted) {
++            ALOGE("%s: no frame for %d ms, restarting the stream", __FUNCTION__, kFrameTimeoutMs);
++            restarted = true;
++            if (restartV4l2StreamLocked() != 0) {
++                return ret;
++            }
++            waitRet = waitForV4l2FrameLocked();
++        }
++        if (waitRet != 0) {
++            ALOGE("%s: no frame: %s", __FUNCTION__, strerror(-waitRet));
++            return ret;
++        }
+         ATRACE_BEGIN("VIDIOC_DQBUF");
+         buffer.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+         buffer.memory = V4L2_MEMORY_MMAP;
+@@ -1260,10 +1386,23 @@ std::unique_ptr<V4L2Frame> ExternalCameraDeviceSession::dequeueV4l2FrameLocked(n
+ 
+         if (buffer.flags & V4L2_BUF_FLAG_ERROR) {
+             ALOGE("%s: v4l2 buf error! buf flag 0x%x", __FUNCTION__, buffer.flags);
+-            // TODO: try to dequeue again
++            if (++bufferErrors < kMaxBufferErrors) {
++                int retVal = TEMP_FAILURE_RETRY(ioctl(mV4l2Fd.get(), VIDIOC_QBUF, &buffer));
++                if (retVal < 0) {
++                    ALOGE("%s: QBUF index %d fails: %s", __FUNCTION__, buffer.index,
++                          strerror(errno));
++                    return ret;
++                }
++                requeued = true;
++                continue;
++            }
++            // Use it anyway: at worst its conversion fails and only this request fails,
++            // where failing the dequeue would be a fatal device error
++            ALOGW("%s: %d v4l2 buffer errors, using the last buffer", __FUNCTION__, bufferErrors);
+         }
+ 
+-        if (buffer.bytesused > mMaxV4L2BufferSize) {
++        if (buffer.bytesused > mMaxV4L2BufferSize ||
++            buffer.bytesused > mV4l2BufferMappings[buffer.index].length) {
+             ALOGE("%s: v4l2 buffer bytes used: %u maximum %u", __FUNCTION__, buffer.bytesused,
+                   mMaxV4L2BufferSize);
+             return ret;
+@@ -1283,11 +1422,17 @@ std::unique_ptr<V4L2Frame> ExternalCameraDeviceSession::dequeueV4l2FrameLocked(n
+         // The tactic only takes effect on v4l2 buffers with flag V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC.
+         // Most USB cameras should have the feature.
+         if (curTimeNs < *shutterTs) {
++            // The timestamp is from another clock: virtio-media passes the host's
++            // CLOCK_MONOTONIC through, assumed ahead of the guest's (the VM starts later).
++            // Use the dequeue time; stale frames can no longer be detected.
++            if (!mForeignTimestamps) {
++                ALOGW("%s: buffer timestamp %" PRId64 " is ahead of the monotonic clock %" PRId64
++                      "; using dequeue times instead",
++                      __func__, *shutterTs, curTimeNs);
++                mForeignTimestamps = true;
++            }
++            *shutterTs = curTimeNs;
+             lagNs = 0;
+-            ALOGW("%s: should not happen, the monotonic clock has issue, shutterTs is in the "
+-                  "future, curTimeNs %" PRId64 "  < "
+-                  "shutterTs %" PRId64 "",
+-                  __func__, curTimeNs, *shutterTs);
+         } else {
+             lagNs = curTimeNs - *shutterTs;
+         }
+@@ -1300,37 +1445,89 @@ std::unique_ptr<V4L2Frame> ExternalCameraDeviceSession::dequeueV4l2FrameLocked(n
+                 ALOGE("%s: unexpected VIDIOC_QBUF failed, retVal %d", __FUNCTION__, retVal);
+                 return ret;
+             }
++            requeued = true;
+         }
+-    } while (lagNs > mMaxLagNs);
++    } while (requeued);
+ 
++    uint32_t generation;
+     {
+         std::lock_guard<std::mutex> lk(mV4l2BufferLock);
+         mNumDequeuedV4l2Buffers++;
++        generation = mV4l2Generation;
+     }
+ 
+-    return std::make_unique<V4L2Frame>(mV4l2StreamingFmt.width, mV4l2StreamingFmt.height,
+-                                       mV4l2StreamingFmt.fourcc, buffer.index, mV4l2Fd.get(),
+-                                       buffer.bytesused, buffer.m.offset);
++    ret = std::make_unique<V4L2Frame>(mV4l2StreamingFmt.width, mV4l2StreamingFmt.height,
++                                      mV4l2StreamingFmt.fourcc, mV4l2BytesPerLine, buffer.index,
++                                      mV4l2BufferMappings[buffer.index].data, buffer.bytesused);
++    ret->mGeneration = generation;
++    return ret;
++}
++
++void ExternalCameraDeviceSession::unmapV4l2BuffersLocked() {
++    for (const auto& mapping : mV4l2BufferMappings) {
++        if (munmap(mapping.data, mapping.length) != 0) {
++            ALOGE("%s: V4L2 buffer unmap failed: %s", __FUNCTION__, strerror(errno));
++        }
++    }
++    mV4l2BufferMappings.clear();
++}
++
++// Waits up to kFrameTimeoutMs for a frame to dequeue: 0, -ETIMEDOUT, or another -errno
++int ExternalCameraDeviceSession::waitForV4l2FrameLocked() {
++    pollfd pfd{.fd = mV4l2Fd.get(), .events = POLLIN};
++    const int ret = TEMP_FAILURE_RETRY(poll(&pfd, 1, kFrameTimeoutMs));
++    if (ret < 0) {
++        return -errno;
++    }
++    if (ret == 0) {
++        return -ETIMEDOUT;
++    }
++    return (pfd.revents & POLLIN) ? 0 : -EIO;
++}
++
++// Restarts a stream that stopped delivering frames, at the same format and rate. Buffers it lost
++// are written off; frames still out come back dropped, being of the earlier stream.
++int ExternalCameraDeviceSession::restartV4l2StreamLocked() {
++    {
++        std::unique_lock<std::mutex> lk(mV4l2BufferLock);
++        mV4L2BufferReturned.wait_for(lk, std::chrono::milliseconds(kRestartDrainMs),
++                                     [this] { return mNumDequeuedV4l2Buffers == 0; });
++        if (mNumDequeuedV4l2Buffers != 0) {
++            ALOGW("%s: restarting with %zu buffers still out", __FUNCTION__,
++                  mNumDequeuedV4l2Buffers);
++            mNumDequeuedV4l2Buffers = 0;
++        }
++    }
++    const SupportedV4L2Format fmt = mV4l2StreamingFmt;
++    const int ret = configureV4l2StreamLocked(fmt, mV4l2StreamingFps);
++    if (ret != 0) {
++        ALOGE("%s: restart failed: %d", __FUNCTION__, ret);
++    }
++    return ret;
+ }
+ 
+ void ExternalCameraDeviceSession::enqueueV4l2Frame(const std::shared_ptr<V4L2Frame>& frame) {
+     ATRACE_CALL();
+-    frame->unmap();
++    std::lock_guard<std::mutex> lk(mV4l2BufferLock);
++    if (frame->mGeneration != mV4l2Generation) {
++        // Dequeued before the stream restarted: its buffer is gone, and its index now names a
++        // buffer of the new stream
++        ALOGW("%s: dropping buffer %d of stream %u, now at stream %u", __FUNCTION__,
++              frame->mBufferIndex, frame->mGeneration, mV4l2Generation);
++        return;
++    }
+     ATRACE_BEGIN("VIDIOC_QBUF");
+     v4l2_buffer buffer{};
+     buffer.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+     buffer.memory = V4L2_MEMORY_MMAP;
+     buffer.index = frame->mBufferIndex;
+-    if (TEMP_FAILURE_RETRY(ioctl(mV4l2Fd.get(), VIDIOC_QBUF, &buffer)) < 0) {
++    const int qbufRet = TEMP_FAILURE_RETRY(ioctl(mV4l2Fd.get(), VIDIOC_QBUF, &buffer));
++    ATRACE_END();
++    if (qbufRet < 0) {
+         ALOGE("%s: QBUF index %d fails: %s", __FUNCTION__, frame->mBufferIndex, strerror(errno));
+         return;
+     }
+-    ATRACE_END();
+-
+-    {
+-        std::lock_guard<std::mutex> lk(mV4l2BufferLock);
+-        mNumDequeuedV4l2Buffers--;
+-    }
++    mNumDequeuedV4l2Buffers--;
+     mV4L2BufferReturned.notify_one();
+ }
+ 
+@@ -1446,6 +1643,8 @@ ScopedAStatus ExternalCameraDeviceSession::repeatingRequestEnd(
+ 
+ int ExternalCameraDeviceSession::v4l2StreamOffLocked() {
+     if (!mV4l2Streaming) {
++        // A failed configureV4l2StreamLocked can leave buffers mapped
++        unmapV4l2BuffersLocked();
+         return OK;
+     }
+ 
+@@ -1464,6 +1663,7 @@ int ExternalCameraDeviceSession::v4l2StreamOffLocked() {
+         ALOGE("%s: STREAMOFF failed: %s", __FUNCTION__, strerror(errno));
+         return -errno;
+     }
++    unmapV4l2BuffersLocked();
+ 
+     // VIDIOC_REQBUFS: clear buffers
+     v4l2_requestbuffers req_buffers{};
+@@ -1922,8 +2122,7 @@ binder_status_t ExternalCameraDeviceSession::dump(int fd, const char** /*args*/,
+         }
+     }
+ 
+-    dprintf(fd, "External camera %s V4L2 FD %d, cropping type %s, %s\n", mCameraId.c_str(),
+-            mV4l2Fd.get(), (mCroppingType == VERTICAL) ? "vertical" : "horizontal",
++    dprintf(fd, "External camera %s V4L2 FD %d, %s\n", mCameraId.c_str(), mV4l2Fd.get(),
+             streaming ? "streaming" : "not streaming");
+ 
+     if (streaming) {
+@@ -2161,11 +2360,10 @@ bool ExternalCameraDeviceSession::BufferRequestThread::threadLoop() {
+ // Start ExternalCameraDeviceSession::OutputThread functions
+ 
+ ExternalCameraDeviceSession::OutputThread::OutputThread(
+-        std::weak_ptr<OutputThreadInterface> parent, CroppingType ct,
++        std::weak_ptr<OutputThreadInterface> parent,
+         const common::V1_0::helper::CameraMetadata& chars,
+         std::shared_ptr<BufferRequestThread> bufReqThread)
+     : mParent(parent),
+-      mCroppingType(ct),
+       mCameraCharacteristics(chars),
+       mBufferRequestThread(bufReqThread) {}
+ 
+@@ -2246,6 +2444,9 @@ Status ExternalCameraDeviceSession::OutputThread::allocateIntermediateBuffers(
+     // Allocate mute test pattern frame
+     mMuteTestPatternFrame.resize(mYu12Frame->mWidth * mYu12Frame->mHeight * 3);
+ 
++    // A new stream starts a new noise reduction history
++    mDenoisePrev.clear();
++
+     mBlobBufferSize = blobBufferSize;
+     return Status::OK;
+ }
+@@ -2400,7 +2601,7 @@ int ExternalCameraDeviceSession::OutputThread::cropAndScaleLocked(
+ 
+     // Cropping to output aspect ratio
+     IMapper::Rect inputCrop;
+-    ret = getCropRect(mCroppingType, inSz, outSz, &inputCrop);
++    ret = getCropRect(inSz, outSz, &inputCrop);
+     if (ret != 0) {
+         ALOGE("%s: failed to compute crop rect for output size %dx%d", __FUNCTION__, outSz.width,
+               outSz.height);
+@@ -2415,8 +2616,7 @@ int ExternalCameraDeviceSession::OutputThread::cropAndScaleLocked(
+         return ret;
+     }
+ 
+-    if ((mCroppingType == VERTICAL && inSz.width == outSz.width) ||
+-        (mCroppingType == HORIZONTAL && inSz.height == outSz.height)) {
++    if (inputCrop.width == outSz.width && inputCrop.height == outSz.height) {
+         // No scale is needed
+         *out = croppedLayout;
+         return 0;
+@@ -2751,9 +2951,84 @@ void ExternalCameraDeviceSession::OutputThread::clearIntermediateBuffers() {
+     mYu12ThumbFrame.reset();
+     mIntermediateBuffers.clear();
+     mMuteTestPatternFrame.clear();
++    mDenoisePrev.clear();
+     mBlobBufferSize = 0;
+ }
+ 
++void ExternalCameraDeviceSession::OutputThread::denoiseYu12Locked(
++        const common::V1_0::helper::CameraMetadata& settings) {
++    auto mode = settings.find(ANDROID_NOISE_REDUCTION_MODE);
++    if (mCameraMuted ||
++        (mode.count == 1 && mode.data.u8[0] == ANDROID_NOISE_REDUCTION_MODE_OFF)) {
++        mDenoisePrev.clear();
++        return;
++    }
++
++    const size_t width = mYu12Frame->mWidth;
++    const size_t height = mYu12Frame->mHeight;
++    const size_t cWidth = width / 2;
++    const size_t cHeight = height / 2;
++    uint8_t* planes[3] = {static_cast<uint8_t*>(mYu12FrameLayout.y),
++                          static_cast<uint8_t*>(mYu12FrameLayout.cb),
++                          static_cast<uint8_t*>(mYu12FrameLayout.cr)};
++    const size_t strides[3] = {mYu12FrameLayout.yStride, mYu12FrameLayout.cStride,
++                               mYu12FrameLayout.cStride};
++    const size_t widths[3] = {width, cWidth, cWidth};
++    const size_t heights[3] = {height, cHeight, cHeight};
++    const size_t offsets[3] = {0, width * height, width * height + cWidth * cHeight};
++
++    // The first frame, or the first after a size change, starts the history.
++    const size_t size = width * height + 2 * cWidth * cHeight;
++    const bool start = mDenoisePrev.size() != size;
++    if (start) {
++        mDenoisePrev.resize(size);
++    }
++
++    // Strength by mode: the threshold under which a change counts as noise, and the new frame's
++    // weight (/256) for an unchanged pixel, for luma and for chroma; chroma is then smoothed over a
++    // 3x3 (fast) or 5x5 (high quality) neighborhood, keeping edges. Fast is the default.
++    struct Strength {
++        int lumaThreshold, lumaWeight, chromaThreshold, chromaWeight;
++        int chromaRadius;  // 0: none
++    };
++    static constexpr Strength kMinimal = {8, 128, 8, 102, 0};
++    static constexpr Strength kFast = {12, 77, 10, 64, 1};
++    static constexpr Strength kHighQuality = {18, 51, 14, 38, 2};
++    Strength strength = kFast;
++    if (mode.count == 1) {
++        switch (mode.data.u8[0]) {
++            case ANDROID_NOISE_REDUCTION_MODE_MINIMAL:
++                strength = kMinimal;
++                break;
++            case ANDROID_NOISE_REDUCTION_MODE_HIGH_QUALITY:
++                strength = kHighQuality;
++                break;
++            default:
++                break;
++        }
++    }
++
++    for (int i = 0; i < 3; i++) {
++        uint8_t* prev = &mDenoisePrev[offsets[i]];
++        if (start) {
++            for (size_t y = 0; y < heights[i]; y++) {
++                memcpy(prev + y * widths[i], planes[i] + y * strides[i], widths[i]);
++            }
++        } else if (i == 0) {
++            denoisePlane(planes[i], strides[i], prev, widths[i], heights[i],
++                         strength.lumaThreshold, strength.lumaWeight);
++        } else {
++            denoisePlane(planes[i], strides[i], prev, widths[i], heights[i],
++                         strength.chromaThreshold, strength.chromaWeight);
++        }
++        if (i > 0 && strength.chromaRadius == 1) {
++            sigmaPlane<1>(planes[i], strides[i], widths[i], heights[i], mDenoiseRows);
++        } else if (i > 0 && strength.chromaRadius == 2) {
++            sigmaPlane<2>(planes[i], strides[i], widths[i], heights[i], mDenoiseRows);
++        }
++    }
++}
++
+ bool ExternalCameraDeviceSession::OutputThread::threadLoop() {
+     std::shared_ptr<HalRequest> req;
+     auto parent = mParent.lock();
+@@ -2778,7 +3053,7 @@ bool ExternalCameraDeviceSession::OutputThread::threadLoop() {
+         return false;
+     };
+ 
+-    if (req->frameIn->mFourcc != V4L2_PIX_FMT_MJPEG && req->frameIn->mFourcc != V4L2_PIX_FMT_Z16) {
++    if (!isColorV4L2Format(req->frameIn->mFourcc) && req->frameIn->mFourcc != V4L2_PIX_FMT_Z16) {
+         return onDeviceError("%s: do not support V4L2 format %c%c%c%c", __FUNCTION__,
+                              req->frameIn->mFourcc & 0xFF, (req->frameIn->mFourcc >> 8) & 0xFF,
+                              (req->frameIn->mFourcc >> 16) & 0xFF,
+@@ -2826,8 +3101,8 @@ bool ExternalCameraDeviceSession::OutputThread::threadLoop() {
+     }
+ 
+     // TODO: in some special case maybe we can decode jpg directly to gralloc output?
+-    if (req->frameIn->mFourcc == V4L2_PIX_FMT_MJPEG) {
+-        ATRACE_BEGIN("MJPGtoI420");
++    if (isColorV4L2Format(req->frameIn->mFourcc)) {
++        ATRACE_BEGIN("V4L2toI420");
+         res = 0;
+         if (mCameraMuted) {
+             res = libyuv::ConvertToI420(
+@@ -2838,12 +3113,9 @@ bool ExternalCameraDeviceSession::OutputThread::threadLoop() {
+                     mYu12Frame->mWidth, mYu12Frame->mHeight, mYu12Frame->mWidth,
+                     mYu12Frame->mHeight, libyuv::kRotate0, libyuv::FOURCC_RAW);
+         } else {
+-            res = libyuv::MJPGToI420(
+-                    inData, inDataSize, static_cast<uint8_t*>(mYu12FrameLayout.y),
+-                    mYu12FrameLayout.yStride, static_cast<uint8_t*>(mYu12FrameLayout.cb),
+-                    mYu12FrameLayout.cStride, static_cast<uint8_t*>(mYu12FrameLayout.cr),
+-                    mYu12FrameLayout.cStride, mYu12Frame->mWidth, mYu12Frame->mHeight,
+-                    mYu12Frame->mWidth, mYu12Frame->mHeight);
++            res = convertV4L2FrameToYu12(req->frameIn->mFourcc, inData, inDataSize,
++                                         req->frameIn->mBytesPerLine, mYu12FrameLayout,
++                                         mYu12Frame->mWidth, mYu12Frame->mHeight);
+         }
+         ATRACE_END();
+ 
+@@ -2863,6 +3135,10 @@ bool ExternalCameraDeviceSession::OutputThread::threadLoop() {
+             signalRequestDone();
+             return true;
+         }
++
++        ATRACE_BEGIN("denoise");
++        denoiseYu12Locked(req->setting);
++        ATRACE_END();
+     }
+ 
+     ATRACE_BEGIN("Wait for BufferRequest done");
+diff --git a/camera/device/default/ExternalCameraDeviceSession.h b/camera/device/default/ExternalCameraDeviceSession.h
+index 7fee1a4..cbf9ef7 100644
+--- a/camera/device/default/ExternalCameraDeviceSession.h
++++ b/camera/device/default/ExternalCameraDeviceSession.h
+@@ -66,7 +66,6 @@ class ExternalCameraDeviceSession : public BnCameraDeviceSession, public OutputT
+     ExternalCameraDeviceSession(const std::shared_ptr<ICameraDeviceCallback>&,
+                                 const ExternalCameraConfig& cfg,
+                                 const std::vector<SupportedV4L2Format>& sortedFormats,
+-                                const CroppingType& croppingType,
+                                 const common::V1_0::helper::CameraMetadata& chars,
+                                 const std::string& cameraId, unique_fd v4l2Fd);
+     ~ExternalCameraDeviceSession() override;
+@@ -163,7 +162,7 @@ class ExternalCameraDeviceSession : public BnCameraDeviceSession, public OutputT
+ 
+     class OutputThread : public SimpleThread {
+       public:
+-        OutputThread(std::weak_ptr<OutputThreadInterface> parent, CroppingType,
++        OutputThread(std::weak_ptr<OutputThreadInterface> parent,
+                      const common::V1_0::helper::CameraMetadata&,
+                      std::shared_ptr<BufferRequestThread> bufReqThread);
+         ~OutputThread();
+@@ -205,8 +204,10 @@ class ExternalCameraDeviceSession : public BnCameraDeviceSession, public OutputT
+ 
+         void clearIntermediateBuffers();
+ 
++        // Temporal noise reduction of mYu12Frame unless the request turns it off
++        void denoiseYu12Locked(const common::V1_0::helper::CameraMetadata& settings);
++
+         const std::weak_ptr<OutputThreadInterface> mParent;
+-        const CroppingType mCroppingType;
+         const common::V1_0::helper::CameraMetadata mCameraCharacteristics;
+ 
+         mutable std::mutex mRequestListLock;       // Protect access to mRequestList,
+@@ -231,6 +232,8 @@ class ExternalCameraDeviceSession : public BnCameraDeviceSession, public OutputT
+         std::vector<uint8_t> mMuteTestPatternFrame;
+         uint32_t mTestPatternData[4] = {0, 0, 0, 0};
+         bool mCameraMuted = false;
++        std::vector<uint8_t> mDenoisePrev;  // previous denoised YU12 frame, packed; empty: none
++        std::vector<uint8_t> mDenoiseRows;  // chroma smoothing scratch
+         uint32_t mBlobBufferSize = 0;  // 0 -> HAL derive buffer size, else: use given size
+ 
+         std::string mExifMake;
+@@ -258,8 +261,11 @@ class ExternalCameraDeviceSession : public BnCameraDeviceSession, public OutputT
+ 
+     std::unique_ptr<V4L2Frame> dequeueV4l2FrameLocked(
+             /*out*/ nsecs_t* shutterTs);  // Called with mLock held
++    int waitForV4l2FrameLocked();
++    int restartV4l2StreamLocked();
+ 
+     void enqueueV4l2Frame(const std::shared_ptr<V4L2Frame>&);
++    void unmapV4l2BuffersLocked();
+ 
+     // Check if input Stream is one of supported stream setting on this device
+     static bool isSupported(const Stream& stream,
+@@ -311,7 +317,6 @@ class ExternalCameraDeviceSession : public BnCameraDeviceSession, public OutputT
+     const ExternalCameraConfig& mCfg;
+     const common::V1_0::helper::CameraMetadata mCameraCharacteristics;
+     const std::vector<SupportedV4L2Format> mSupportedFormats;
+-    const CroppingType mCroppingType;
+     const std::string mCameraId;
+ 
+     // Not protected by mLock, this is almost a const.
+@@ -332,12 +337,25 @@ class ExternalCameraDeviceSession : public BnCameraDeviceSession, public OutputT
+     SupportedV4L2Format mV4l2StreamingFmt;
+     double mV4l2StreamingFps = 0.0;
+     size_t mV4L2BufferCount = 0;
++    // The V4L2 buffers, mapped once per stream: through virtio-media every map and unmap is a
++    // round trip to the host. They are mapped at the VIDIOC_QUERYBUF offsets, as the guest
++    // virtio-media driver returns whatever m.offset VIDIOC_QBUF was given from VIDIOC_DQBUF.
++    struct V4l2BufferMapping {
++        uint8_t* data;
++        size_t length;
++    };
++    std::vector<V4l2BufferMapping> mV4l2BufferMappings;
+ 
+     static const int kBufferWaitTimeoutSec = 3;  // TODO: handle long exposure (or not allowing)
+     std::mutex mV4l2BufferLock;                  // protect the buffer count and condition below
+     std::condition_variable mV4L2BufferReturned;
+     size_t mNumDequeuedV4l2Buffers = 0;
++    uint32_t mV4l2Generation = 0;  // counts stream restarts, each with a new set of buffers
+     uint32_t mMaxV4L2BufferSize = 0;
++    // Row stride of the streaming format, from VIDIOC_S_FMT
++    uint32_t mV4l2BytesPerLine = 0;
++    // Buffer timestamps from another clock (e.g. the host's, through virtio-media) were seen
++    bool mForeignTimestamps = false;
+ 
+     // Not protected by mLock (but might be used when mLock is locked)
+     std::shared_ptr<OutputThread> mOutputThread;
+diff --git a/camera/device/default/ExternalCameraOfflineSession.cpp b/camera/device/default/ExternalCameraOfflineSession.cpp
+index 2d4e2e0..66387d6 100644
+--- a/camera/device/default/ExternalCameraOfflineSession.cpp
++++ b/camera/device/default/ExternalCameraOfflineSession.cpp
+@@ -54,13 +54,12 @@ using ::aidl::android::hardware::camera::device::StreamBuffer;
+ HandleImporter ExternalCameraOfflineSession::sHandleImporter;
+ 
+ ExternalCameraOfflineSession::ExternalCameraOfflineSession(
+-        const CroppingType& croppingType, const common::V1_0::helper::CameraMetadata& chars,
+-        const std::string& cameraId, const std::string& exifMake, const std::string& exifModel,
+-        uint32_t blobBufferSize, bool afTrigger, const std::vector<Stream>& offlineStreams,
++        const common::V1_0::helper::CameraMetadata& chars, const std::string& cameraId,
++        const std::string& exifMake, const std::string& exifModel, uint32_t blobBufferSize,
++        bool afTrigger, const std::vector<Stream>& offlineStreams,
+         std::deque<std::shared_ptr<HalRequest>>& offlineReqs,
+         const std::map<int, CirculatingBuffers>& circulatingBuffers)
+-    : mCroppingType(croppingType),
+-      mChars(chars),
++    : mChars(chars),
+       mCameraId(cameraId),
+       mExifMake(exifMake),
+       mExifModel(exifModel),
+@@ -308,8 +307,8 @@ void ExternalCameraOfflineSession::initOutputThread() {
+             /*parent=*/thiz, mCallback);
+     mBufferRequestThread->run();
+ 
+-    mOutputThread = std::make_shared<OutputThread>(/*parent=*/thiz, mCroppingType, mChars,
+-                                                   mBufferRequestThread, mOfflineReqs);
++    mOutputThread = std::make_shared<OutputThread>(/*parent=*/thiz, mChars, mBufferRequestThread,
++                                                   mOfflineReqs);
+ 
+     mOutputThread->setExifMakeModel(mExifMake, mExifModel);
+ 
+@@ -389,7 +388,7 @@ bool ExternalCameraOfflineSession::OutputThread::threadLoop() {
+         return false;
+     };
+ 
+-    if (req->frameIn->mFourcc != V4L2_PIX_FMT_MJPEG && req->frameIn->mFourcc != V4L2_PIX_FMT_Z16) {
++    if (!isColorV4L2Format(req->frameIn->mFourcc) && req->frameIn->mFourcc != V4L2_PIX_FMT_Z16) {
+         return onDeviceError("%s: do not support V4L2 format %c%c%c%c", __FUNCTION__,
+                              req->frameIn->mFourcc & 0xFF, (req->frameIn->mFourcc >> 8) & 0xFF,
+                              (req->frameIn->mFourcc >> 16) & 0xFF,
+@@ -413,14 +412,11 @@ bool ExternalCameraOfflineSession::OutputThread::threadLoop() {
+     }
+ 
+     // TODO: in some special case maybe we can decode jpg directly to gralloc output?
+-    if (req->frameIn->mFourcc == V4L2_PIX_FMT_MJPEG) {
+-        ATRACE_BEGIN("MJPGtoI420");
+-        int convRes = libyuv::MJPGToI420(
+-                inData, inDataSize, static_cast<uint8_t*>(mYu12FrameLayout.y),
+-                mYu12FrameLayout.yStride, static_cast<uint8_t*>(mYu12FrameLayout.cb),
+-                mYu12FrameLayout.cStride, static_cast<uint8_t*>(mYu12FrameLayout.cr),
+-                mYu12FrameLayout.cStride, mYu12Frame->mWidth, mYu12Frame->mHeight,
+-                mYu12Frame->mWidth, mYu12Frame->mHeight);
++    if (isColorV4L2Format(req->frameIn->mFourcc)) {
++        ATRACE_BEGIN("V4L2toI420");
++        int convRes = convertV4L2FrameToYu12(req->frameIn->mFourcc, inData, inDataSize,
++                                             req->frameIn->mBytesPerLine, mYu12FrameLayout,
++                                             mYu12Frame->mWidth, mYu12Frame->mHeight);
+         ATRACE_END();
+ 
+         if (convRes != 0) {
+diff --git a/camera/device/default/ExternalCameraOfflineSession.h b/camera/device/default/ExternalCameraOfflineSession.h
+index 1d0c057..872844c 100644
+--- a/camera/device/default/ExternalCameraOfflineSession.h
++++ b/camera/device/default/ExternalCameraOfflineSession.h
+@@ -43,8 +43,7 @@ class ExternalCameraOfflineSession final : public BnCameraOfflineSession,
+                                            public virtual RefBase,
+                                            public virtual OutputThreadInterface {
+   public:
+-    ExternalCameraOfflineSession(const CroppingType& croppingType,
+-                                 const common::V1_0::helper::CameraMetadata& chars,
++    ExternalCameraOfflineSession(const common::V1_0::helper::CameraMetadata& chars,
+                                  const std::string& cameraId, const std::string& exifMake,
+                                  const std::string& exifModel, uint32_t blobBufferSize,
+                                  bool afTrigger, const std::vector<Stream>& offlineStreams,
+@@ -78,11 +77,11 @@ class ExternalCameraOfflineSession final : public BnCameraOfflineSession,
+   private:
+     class OutputThread : public ExternalCameraDeviceSession::OutputThread {
+       public:
+-        OutputThread(std::weak_ptr<OutputThreadInterface> parent, CroppingType ct,
++        OutputThread(std::weak_ptr<OutputThreadInterface> parent,
+                      const common::V1_0::helper::CameraMetadata& chars,
+                      std::shared_ptr<ExternalCameraDeviceSession::BufferRequestThread> bufReqThread,
+                      std::deque<std::shared_ptr<HalRequest>>& offlineReqs)
+-            : ExternalCameraDeviceSession::OutputThread(std::move(parent), ct, chars,
++            : ExternalCameraDeviceSession::OutputThread(std::move(parent), chars,
+                                                         std::move(bufReqThread)),
+               mOfflineReqs(offlineReqs) {}
+ 
+@@ -103,7 +102,6 @@ class ExternalCameraOfflineSession final : public BnCameraOfflineSession,
+     mutable Mutex mLock;  // Protect all data members except otherwise noted
+ 
+     bool mClosed = false;
+-    const CroppingType mCroppingType;
+     const common::V1_0::helper::CameraMetadata mChars;
+     const std::string mCameraId;
+     const std::string mExifMake;
+diff --git a/camera/device/default/ExternalCameraUtils.cpp b/camera/device/default/ExternalCameraUtils.cpp
+index 2dc3c77..b7907a0 100644
+--- a/camera/device/default/ExternalCameraUtils.cpp
++++ b/camera/device/default/ExternalCameraUtils.cpp
+@@ -25,6 +25,7 @@
+ #include <log/log.h>
+ #include <algorithm>
+ #include <cinttypes>
++#include <cstring>
+ #include <cmath>
+ 
+ #define HAVE_JPEG  // required for libyuv.h to export MJPEG decode APIs
+@@ -168,6 +169,21 @@ ExternalCameraConfig ExternalCameraConfig::loadFromCfg(const char* cfgPath) {
+         ret.orientation = orientation->IntAttribute("degree", /*Default*/ kDefaultOrientation);
+     }
+ 
++    XMLElement* lensFacing = deviceCfg->FirstChildElement("LensFacing");
++    if (lensFacing == nullptr) {
++        ALOGI("%s: no lens facing specified", __FUNCTION__);
++    } else {
++        const char* value = lensFacing->Attribute("value");
++        if (value != nullptr && strcmp(value, "front") == 0) {
++            ret.lensFacing = ANDROID_LENS_FACING_FRONT;
++        } else if (value != nullptr && strcmp(value, "back") == 0) {
++            ret.lensFacing = ANDROID_LENS_FACING_BACK;
++        } else if (value == nullptr || strcmp(value, "external") != 0) {
++            ALOGW("%s: unknown lens facing '%s', using external", __FUNCTION__,
++                  value != nullptr ? value : "");
++        }
++    }
++
+     ALOGI("%s: external camera cfg loaded: maxJpgBufSize %d,"
+           " num video buffers %d, num still buffers %d, orientation %d",
+           __FUNCTION__, ret.maxJpegBufSize, ret.numVideoBuffers, ret.numStillBuffers,
+@@ -220,7 +236,8 @@ ExternalCameraConfig::ExternalCameraConfig()
+       numVideoBuffers(kDefaultNumVideoBuffer),
+       numStillBuffers(kDefaultNumStillBuffer),
+       depthEnabled(false),
+-      orientation(kDefaultOrientation) {
++      orientation(kDefaultOrientation),
++      lensFacing(ANDROID_LENS_FACING_EXTERNAL) {
+     fpsLimits.push_back({/* size */ {/* width */ 640, /* height */ 480}, /* fpsUpperBound */ 30.0});
+     fpsLimits.push_back({/* size */ {/* width */ 1280, /* height */ 720}, /* fpsUpperBound */ 7.5});
+     fpsLimits.push_back(
+@@ -238,55 +255,24 @@ double SupportedV4L2Format::FrameRate::getFramesPerSecond() const {
+     return static_cast<double>(durationDenominator) / durationNumerator;
+ }
+ 
+-Frame::Frame(uint32_t width, uint32_t height, uint32_t fourcc)
+-    : mWidth(width), mHeight(height), mFourcc(fourcc) {}
++Frame::Frame(uint32_t width, uint32_t height, uint32_t fourcc, uint32_t bytesPerLine)
++    : mWidth(width), mHeight(height), mFourcc(fourcc), mBytesPerLine(bytesPerLine) {}
+ Frame::~Frame() {}
+ 
+-V4L2Frame::V4L2Frame(uint32_t w, uint32_t h, uint32_t fourcc, int bufIdx, int fd, uint32_t dataSize,
+-                     uint64_t offset)
+-    : Frame(w, h, fourcc), mBufferIndex(bufIdx), mFd(fd), mDataSize(dataSize), mOffset(offset) {}
++V4L2Frame::V4L2Frame(uint32_t w, uint32_t h, uint32_t fourcc, uint32_t bytesPerLine, int bufIdx,
++                     uint8_t* data, uint32_t dataSize)
++    : Frame(w, h, fourcc, bytesPerLine), mBufferIndex(bufIdx), mData(data), mDataSize(dataSize) {}
+ 
+-V4L2Frame::~V4L2Frame() {
+-    unmap();
+-}
++V4L2Frame::~V4L2Frame() {}
+ 
+ int V4L2Frame::getData(uint8_t** outData, size_t* dataSize) {
+-    return map(outData, dataSize);
+-}
+-
+-int V4L2Frame::map(uint8_t** data, size_t* dataSize) {
+-    if (data == nullptr || dataSize == nullptr) {
+-        ALOGI("%s: V4L2 buffer map bad argument: data %p, dataSize %p", __FUNCTION__, data,
++    if (outData == nullptr || dataSize == nullptr) {
++        ALOGI("%s: V4L2 buffer map bad argument: data %p, dataSize %p", __FUNCTION__, outData,
+               dataSize);
+         return -EINVAL;
+     }
+-
+-    std::lock_guard<std::mutex> lk(mLock);
+-    if (!mMapped) {
+-        void* addr = mmap(nullptr, mDataSize, PROT_READ, MAP_SHARED, mFd, mOffset);
+-        if (addr == MAP_FAILED) {
+-            ALOGE("%s: V4L2 buffer map failed: %s", __FUNCTION__, strerror(errno));
+-            return -EINVAL;
+-        }
+-        mData = static_cast<uint8_t*>(addr);
+-        mMapped = true;
+-    }
+-    *data = mData;
++    *outData = mData;
+     *dataSize = mDataSize;
+-    ALOGV("%s: V4L map FD %d, data %p size %zu", __FUNCTION__, mFd, mData, mDataSize);
+-    return 0;
+-}
+-
+-int V4L2Frame::unmap() {
+-    std::lock_guard<std::mutex> lk(mLock);
+-    if (mMapped) {
+-        ALOGV("%s: V4L unmap data %p size %zu", __FUNCTION__, mData, mDataSize);
+-        if (munmap(mData, mDataSize) != 0) {
+-            ALOGE("%s: V4L2 buffer unmap failed: %s", __FUNCTION__, strerror(errno));
+-            return -EINVAL;
+-        }
+-        mMapped = false;
+-    }
+     return 0;
+ }
+ 
+@@ -452,7 +438,57 @@ uint32_t getFourCcFromLayout(const YCbCrLayout& layout) {
+     }
+ }
+ 
+-int getCropRect(CroppingType ct, const Size& inSize, const Size& outSize, IMapper::Rect* out) {
++bool isColorV4L2Format(uint32_t fourcc) {
++    switch (fourcc) {
++        case V4L2_PIX_FMT_MJPEG:
++        case V4L2_PIX_FMT_NV12:
++        case V4L2_PIX_FMT_YUYV:
++            return true;
++        default:
++            return false;
++    }
++}
++
++int convertV4L2FrameToYu12(uint32_t fourcc, const uint8_t* inData, size_t inDataSize,
++                           uint32_t bytesPerLine, const YCbCrLayout& out, int width, int height) {
++    uint8_t* y = static_cast<uint8_t*>(out.y);
++    uint8_t* cb = static_cast<uint8_t*>(out.cb);
++    uint8_t* cr = static_cast<uint8_t*>(out.cr);
++
++    switch (fourcc) {
++        case V4L2_PIX_FMT_MJPEG:
++            return libyuv::MJPGToI420(inData, inDataSize, y, out.yStride, cb, out.cStride, cr,
++                                      out.cStride, width, height, width, height);
++        case V4L2_PIX_FMT_NV12: {
++            // Single-plane NV12: the interleaved CbCr plane follows the Y plane
++            const size_t stride = bytesPerLine != 0 ? bytesPerLine : width;
++            const size_t ySize = stride * height;
++            if (inDataSize < ySize + stride * ((height + 1) / 2)) {
++                ALOGE("%s: NV12 frame too small: %zu bytes for %dx%d, stride %zu", __FUNCTION__,
++                      inDataSize, width, height, stride);
++                return -EINVAL;
++            }
++            return libyuv::NV12ToI420(inData, stride, inData + ySize, stride, y, out.yStride, cb,
++                                      out.cStride, cr, out.cStride, width, height);
++        }
++        case V4L2_PIX_FMT_YUYV: {
++            const size_t stride = bytesPerLine != 0 ? bytesPerLine : width * 2;
++            if (inDataSize < stride * height) {
++                ALOGE("%s: YUYV frame too small: %zu bytes for %dx%d, stride %zu", __FUNCTION__,
++                      inDataSize, width, height, stride);
++                return -EINVAL;
++            }
++            return libyuv::YUY2ToI420(inData, stride, y, out.yStride, cb, out.cStride, cr,
++                                      out.cStride, width, height);
++        }
++        default:
++            ALOGE("%s: unsupported V4L2 format %c%c%c%c", __FUNCTION__, fourcc & 0xFF,
++                  (fourcc >> 8) & 0xFF, (fourcc >> 16) & 0xFF, (fourcc >> 24) & 0xFF);
++            return -EINVAL;
++    }
++}
++
++int getCropRect(const Size& inSize, const Size& outSize, IMapper::Rect* out) {
+     if (out == nullptr) {
+         ALOGE("%s: out is null", __FUNCTION__);
+         return -1;
+@@ -475,7 +511,7 @@ int getCropRect(CroppingType ct, const Size& inSize, const Size& outSize, IMappe
+         return 0;
+     }
+ 
+-    if (ct == VERTICAL) {
++    if (arOut > arIn) {
+         uint64_t scaledOutH = static_cast<uint64_t>(outH) * inW / outW;
+         if (scaledOutH > inH) {
+             ALOGE("%s: Output size %dx%d cannot be vertically cropped from input size %dx%d",
+@@ -825,7 +861,7 @@ status_t fillCaptureResultCommon(CameraMetadata& md, nsecs_t timestamp,
+ #undef UPDATE
+ 
+ AllocatedV4L2Frame::AllocatedV4L2Frame(std::shared_ptr<V4L2Frame> frameIn)
+-    : Frame(frameIn->mWidth, frameIn->mHeight, frameIn->mFourcc) {
++    : Frame(frameIn->mWidth, frameIn->mHeight, frameIn->mFourcc, frameIn->mBytesPerLine) {
+     uint8_t* dataIn;
+     size_t dataSize;
+     if (frameIn->getData(&dataIn, &dataSize) != 0) {
+diff --git a/camera/device/default/ExternalCameraUtils.h b/camera/device/default/ExternalCameraUtils.h
+index d434905..07fe778 100644
+--- a/camera/device/default/ExternalCameraUtils.h
++++ b/camera/device/default/ExternalCameraUtils.h
+@@ -107,6 +107,9 @@ struct ExternalCameraConfig {
+     // The value of android.sensor.orientation
+     int32_t orientation;
+ 
++    // The value of android.lens.facing
++    uint8_t lensFacing;
++
+   private:
+     ExternalCameraConfig();
+     static bool updateFpsList(tinyxml2::XMLElement* fpsList, std::vector<FpsLimitation>& fpsLimits);
+@@ -137,11 +140,13 @@ struct SupportedV4L2Format {
+ // A Base class with basic information about a frame
+ struct Frame : public std::enable_shared_from_this<Frame> {
+   public:
+-    Frame(uint32_t width, uint32_t height, uint32_t fourcc);
++    Frame(uint32_t width, uint32_t height, uint32_t fourcc, uint32_t bytesPerLine = 0);
+     virtual ~Frame();
+     const int32_t mWidth;
+     const int32_t mHeight;
+     const uint32_t mFourcc;
++    // V4L2 row stride of uncompressed formats; 0 when unknown or compressed
++    const uint32_t mBytesPerLine;
+ 
+     // getData might involve map/allocation
+     virtual int getData(uint8_t** outData, size_t* dataSize) = 0;
+@@ -151,23 +156,19 @@ struct Frame : public std::enable_shared_from_this<Frame> {
+ // Also contains necessary information to enqueue the buffer back to V4L2 buffer queue
+ class V4L2Frame : public Frame {
+   public:
+-    V4L2Frame(uint32_t w, uint32_t h, uint32_t fourcc, int bufIdx, int fd, uint32_t dataSize,
+-              uint64_t offset);
++    // data is the buffer's mapping, which the session keeps while the buffer can be dequeued
++    V4L2Frame(uint32_t w, uint32_t h, uint32_t fourcc, uint32_t bytesPerLine, int bufIdx,
++              uint8_t* data, uint32_t dataSize);
+     virtual ~V4L2Frame();
+ 
+     virtual int getData(uint8_t** outData, size_t* dataSize) override;
+ 
+     const int mBufferIndex;  // for later enqueue
+-    int map(uint8_t** data, size_t* dataSize);
+-    int unmap();
++    uint32_t mGeneration = 0;  // the stream it was dequeued from, counting restarts
+ 
+   private:
+-    std::mutex mLock;
+-    const int mFd;  // used for mmap but doesn't claim ownership
++    uint8_t* const mData;
+     const size_t mDataSize;
+-    const uint64_t mOffset;  // used for mmap
+-    uint8_t* mData = nullptr;
+-    bool mMapped = false;
+ };
+ 
+ // A RAII class representing a CPU allocated YUV frame used as intermediate buffers
+@@ -242,8 +243,18 @@ static const uint32_t FLEX_YUV_GENERIC =
+ // returns FLEX_YUV_GENERIC for formats other than YV12/YU12/NV12/NV21
+ uint32_t getFourCcFromLayout(const YCbCrLayout&);
+ 
++// True for the V4L2 color formats the HAL can capture from: MJPEG, NV12 and YUYV
++bool isColorV4L2Format(uint32_t fourcc);
++
++// Converts a captured color V4L2 frame to the YU12 layout `out` of the same size.
++// bytesPerLine is the V4L2 row stride, used by the uncompressed formats.
++int convertV4L2FrameToYu12(uint32_t fourcc, const uint8_t* inData, size_t inDataSize,
++                           uint32_t bytesPerLine, const YCbCrLayout& out, int width, int height);
++
+ using ::android::hardware::camera::external::common::Size;
+-int getCropRect(CroppingType ct, const Size& inSize, const Size& outSize, IMapper::Rect* out);
++// Centered crop of inSize to outSize's aspect ratio: a wider output keeps the full width (the
++// top and bottom are cropped), a narrower one the full height (the sides are cropped).
++int getCropRect(const Size& inSize, const Size& outSize, IMapper::Rect* out);
+ 
+ int formatConvert(const YCbCrLayout& in, const YCbCrLayout& out, Size sz, uint32_t format);
+ 
+diff --git a/camera/provider/default/ExternalCameraProvider.cpp b/camera/provider/default/ExternalCameraProvider.cpp
+index 54875ab..8dc0d66 100644
+--- a/camera/provider/default/ExternalCameraProvider.cpp
++++ b/camera/provider/default/ExternalCameraProvider.cpp
+@@ -26,6 +26,7 @@
+ #include <linux/videodev2.h>
+ #include <log/log.h>
+ #include <sys/inotify.h>
++#include <cstring>
+ #include <regex>
+ 
+ namespace android {
+@@ -205,6 +206,16 @@ void ExternalCameraProvider::deviceAdded(const char* devName) {
+             ALOGW("%s device %s does not support VIDEO_CAPTURE", __FUNCTION__, devName);
+             return;
+         }
++
++        // Test and loopback drivers are not cameras. They offer NV12/YUYV, which the HAL
++        // accepts, so they would otherwise show up next to the real cameras.
++        const std::string driver(reinterpret_cast<const char*>(capability.driver),
++                                 strnlen(reinterpret_cast<const char*>(capability.driver),
++                                         sizeof(capability.driver)));
++        if (driver == "vivid" || driver == "v4l2 loopback") {
++            ALOGI("%s: ignoring %s device %s", __FUNCTION__, driver.c_str(), devName);
++            return;
++        }
+     }
+ 
+     // See if we can initialize ExternalCameraDevice correctly

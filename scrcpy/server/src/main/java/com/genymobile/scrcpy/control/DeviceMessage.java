@@ -13,7 +13,6 @@ public final class DeviceMessage {
     private long sequence;
     private int id;
     private byte[] data;
-    private int displayId;
     private int width;
     private int height;
 
@@ -45,7 +44,7 @@ public final class DeviceMessage {
     public static DeviceMessage createDisplayReady(int displayId, int width, int height) {
         DeviceMessage event = new DeviceMessage();
         event.type = TYPE_DISPLAY_READY;
-        event.displayId = displayId;
+        event.id = displayId;
         event.width = width;
         event.height = height;
         return event;
@@ -75,10 +74,6 @@ public final class DeviceMessage {
 
     public byte[] getData() {
         return data;
-    }
-
-    public int getDisplayId() {
-        return displayId;
     }
 
     public int getWidth() {

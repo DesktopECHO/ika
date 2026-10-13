@@ -11,10 +11,9 @@ work, hosts without it report the native unsupported result, and non-sparse
 compressed images retain the existing emulation path.
 
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
-index 15fcc847..bd1cf308 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -178,6 +178,16 @@ static constexpr const char* const kEmulatedInstanceExtensions[] = {
+@@ -179,6 +179,16 @@ static constexpr const char* const kEmulatedInstanceExtensions[] = {
  static const uint64_t kPageSizeforBlob = static_cast<uint64_t>(getpagesize());
  static const uint64_t kPageMaskForBlob = ~(static_cast<uint64_t>(getpagesize()) - 1);
  
@@ -31,7 +30,7 @@ index 15fcc847..bd1cf308 100644
  static std::atomic<uint64_t> sNextHostBlobId{1};
  static std::atomic<uint64_t> sUniqueShmemId = 0;
  
-@@ -1584,7 +1594,8 @@ class VkDecoderGlobalState::Impl {
+@@ -1745,7 +1755,8 @@ class VkDecoderGlobalState::Impl {
          VkImageFormatProperties* pImageFormatProperties) {
          auto physicalDevice = unbox_VkPhysicalDevice(boxed_physicalDevice);
          auto vk = dispatch_VkPhysicalDevice(boxed_physicalDevice);
@@ -41,7 +40,7 @@ index 15fcc847..bd1cf308 100644
          if (emulatedTexture) {
              if (!supportEmulatedCompressedImageFormatProperty(format, type, tiling, usage, flags)) {
                  memset(pImageFormatProperties, 0, sizeof(VkImageFormatProperties));
-@@ -1616,7 +1627,8 @@ class VkDecoderGlobalState::Impl {
+@@ -1777,7 +1788,8 @@ class VkDecoderGlobalState::Impl {
          auto vk = dispatch_VkPhysicalDevice(boxed_physicalDevice);
          VkPhysicalDeviceImageFormatInfo2 imageFormatInfo;
          VkFormat format = pImageFormatInfo->format;
@@ -51,17 +50,19 @@ index 15fcc847..bd1cf308 100644
          if (emulatedTexture) {
              if (!supportEmulatedCompressedImageFormatProperty(
                      pImageFormatInfo->format, pImageFormatInfo->type, pImageFormatInfo->tiling,
-@@ -2733,7 +2745,8 @@ class VkDecoderGlobalState::Impl {
-             return;
-         }
+@@ -2897,8 +2909,9 @@ class VkDecoderGlobalState::Impl {
+         auto& physicalDeviceMemHelper = physicalDeviceInfo->memoryPropertiesHelper;
  
--        needDecompression = deviceInfo->needEmulatedDecompression(format);
-+        needDecompression = !usesSparseImageBinding(pInfo->pCreateInfo->flags) &&
-+                            deviceInfo->needEmulatedDecompression(format);
+         const VkFormat format = pInfo->pCreateInfo->format;
+-        const bool needDecompression =
+-            (isEtc2(format) || isAstc(format)) && deviceInfo->needEmulatedDecompression(format);
++        const bool needDecompression = !usesSparseImageBinding(pInfo->pCreateInfo->flags) &&
++                                       (isEtc2(format) || isAstc(format)) &&
++                                       deviceInfo->needEmulatedDecompression(format);
          if (!needDecompression) {
-             // No modifications needed
-             return;
-@@ -3064,7 +3077,8 @@ class VkDecoderGlobalState::Impl {
+             physicalDeviceMemHelper->transformToGuestImageMemoryRequirements(
+                 pInfo->pCreateInfo->tiling, &pMemoryRequirements->memoryRequirements);
+@@ -3257,7 +3270,8 @@ class VkDecoderGlobalState::Impl {
  
          // Change creation parameters before the validation checks below as the
          // creation format and its device properties may change

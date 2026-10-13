@@ -40,13 +40,11 @@ public class DeviceMessageWriter {
                 dos.write(data);
                 break;
             case DeviceMessage.TYPE_DISPLAY_READY:
-                // type(1) + display_id(4) + width(2) + height(2) = 9
-                dos.writeInt(msg.getDisplayId());
+                dos.writeInt(msg.getId());
                 dos.writeShort(msg.getWidth());
                 dos.writeShort(msg.getHeight());
                 break;
             case DeviceMessage.TYPE_APP_ENDED:
-                // type(1) only
                 break;
             default:
                 throw new ControlProtocolException("Unknown event type: " + type);

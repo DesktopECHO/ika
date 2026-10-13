@@ -1,0 +1,348 @@
+Patch summary:
+Drop settings with no effect on Ika's cameras or in a VM (ZSL, RAW, Ultra HDR,
+video stabilization, leveler, bright screen, save location, processing other
+than denoising) and clear their stored values; Denoising moves to the main
+settings screen.
+
+diff --git a/app/src/main/java/org/lineageos/aperture/SettingsActivity.kt b/app/src/main/java/org/lineageos/aperture/SettingsActivity.kt
+index 9198171..7f7ed1f 100644
+--- a/app/src/main/java/org/lineageos/aperture/SettingsActivity.kt
++++ b/app/src/main/java/org/lineageos/aperture/SettingsActivity.kt
+@@ -13,7 +13,6 @@ import android.view.LayoutInflater
+ import android.view.MenuItem
+ import android.view.View
+ import android.view.ViewGroup
+-import android.widget.Toast
+ import androidx.activity.enableEdgeToEdge
+ import androidx.annotation.CallSuper
+ import androidx.annotation.Px
+@@ -23,19 +22,14 @@ import androidx.coordinatorlayout.widget.CoordinatorLayout
+ import androidx.core.view.ViewCompat
+ import androidx.core.view.WindowInsetsCompat
+ import androidx.core.view.updatePadding
+-import androidx.lifecycle.lifecycleScope
+ import androidx.preference.ListPreference
+-import androidx.preference.Preference
+ import androidx.preference.PreferenceCategory
+ import androidx.preference.PreferenceFragmentCompat
+ import androidx.preference.SwitchPreference
+ import com.google.android.material.appbar.AppBarLayout
+ import com.google.android.material.appbar.MaterialToolbar
+-import kotlinx.coroutines.launch
+ import org.lineageos.aperture.ext.setOffset
+ import org.lineageos.aperture.models.HardwareKey
+-import org.lineageos.aperture.models.Permission
+-import org.lineageos.aperture.models.PermissionState
+ import org.lineageos.aperture.repositories.PreferencesRepository.Companion.preferenceStringToGestureAction
+ import org.lineageos.aperture.repositories.PreferencesRepository.Companion.sharedPreferencesKeyPrefix
+ import org.lineageos.aperture.repositories.PreferencesRepository.Companion.toPreferenceString
+@@ -153,63 +147,12 @@ class SettingsActivity : AppCompatActivity(R.layout.activity_settings) {
+     }
+ 
+     class RootSettingsFragment : SettingsFragment(R.xml.root_preferences) {
+-        private val enableZsl by lazy { findPreference<SwitchPreference>("enable_zsl")!! }
+-        private val photoCaptureMode by lazy {
+-            findPreference<ListPreference>("photo_capture_mode")!!
+-        }
+-        private val saveLocation by lazy { findPreference<SwitchPreference>("save_location") }
+         private val shutterSound by lazy { findPreference<SwitchPreference>("shutter_sound") }
+ 
+-        private val photoCaptureModePreferenceChangeListener =
+-            Preference.OnPreferenceChangeListener { preference, newValue ->
+-                val currentPhotoCaptureMode = if (preference == photoCaptureMode) {
+-                    newValue as String
+-                } else {
+-                    photoCaptureMode.value
+-                }
+-
+-                val enableZslCanBeEnabled = currentPhotoCaptureMode == "minimize_latency"
+-                enableZsl.isChecked = enableZsl.isChecked && enableZslCanBeEnabled
+-                enableZsl.isEnabled = enableZslCanBeEnabled
+-
+-                true
+-            }
+-
+-        @Suppress("UnsafeOptInUsageError")
+         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
+             super.onCreatePreferences(savedInstanceState, rootKey)
+ 
+-            saveLocation?.let {
+-                // Reset location back to off if permissions aren't granted
+-                it.isChecked = it.isChecked && permissionsManager.permissionState(
+-                    Permission.LOCATION
+-                ) == PermissionState.GRANTED
+-                it.onPreferenceChangeListener =
+-                    Preference.OnPreferenceChangeListener { _, newValue ->
+-                        if (newValue as Boolean) {
+-                            viewLifecycleOwner.lifecycleScope.launch {
+-                                val result = permissionsManager.requestPermission(
+-                                    Permission.LOCATION
+-                                )
+-
+-                                if (result != PermissionState.GRANTED) {
+-                                    saveLocation?.isChecked = false
+-                                    Toast.makeText(
+-                                        requireContext(),
+-                                        getString(R.string.save_location_toast),
+-                                        Toast.LENGTH_SHORT
+-                                    ).show()
+-                                }
+-                            }
+-                        }
+-                        true
+-                    }
+-            }
+             shutterSound?.isVisible = !CameraSoundsUtils.mustPlaySounds
+-
+-            // Photo capture mode
+-            photoCaptureMode.onPreferenceChangeListener = photoCaptureModePreferenceChangeListener
+-            enableZsl.isEnabled = photoCaptureMode.value == "minimize_latency"
+         }
+     }
+ 
+@@ -374,8 +317,6 @@ class SettingsActivity : AppCompatActivity(R.layout.activity_settings) {
+             get() = "${sharedPreferencesKeyPrefix}_invert"
+     }
+ 
+-    class ProcessingSettingsFragment : SettingsFragment(R.xml.processing_preferences)
+-
+     companion object {
+         private val LOG_TAG = SettingsActivity::class.simpleName!!
+     }
+diff --git a/app/src/main/java/org/lineageos/aperture/repositories/PreferencesRepository.kt b/app/src/main/java/org/lineageos/aperture/repositories/PreferencesRepository.kt
+index 17ef837..f326c35 100644
+--- a/app/src/main/java/org/lineageos/aperture/repositories/PreferencesRepository.kt
++++ b/app/src/main/java/org/lineageos/aperture/repositories/PreferencesRepository.kt
+@@ -64,6 +64,14 @@ class PreferencesRepository(
+ 
+     private val sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
+ 
++    init {
++        // Settings without a use in Ika, removed from the settings screen: drop
++        // any stored value so they stay at their defaults
++        sharedPreferences.edit {
++            removedKeys.forEach { remove(it) }
++        }
++    }
++
+     /**
+      * The last [CameraFacing] used.
+      */
+@@ -278,7 +286,7 @@ class PreferencesRepository(
+      */
+     val saveLocation = primitivePreference<Boolean?>(
+         key = "save_location",
+-        defaultValue = null,
++        defaultValue = false,
+     ).asPreferenceHolder()
+ 
+     /**
+@@ -481,6 +489,22 @@ class PreferencesRepository(
+     )
+ 
+     companion object {
++        private val removedKeys = listOf(
++            "bright_screen",
++            "color_correction_aberration_mode",
++            "disable_jpeg_with_raw",
++            "distortion_correction_mode",
++            "edge_mode",
++            "enable_raw_image_capture",
++            "enable_zsl",
++            "hot_pixel_mode",
++            "leveler",
++            "save_location",
++            "shading_mode",
++            "use_photo_jpeg_ultra_hdr",
++            "video_stabilization",
++        )
++
+         val HardwareKey.sharedPreferencesKeyPrefix: String
+             get() = when (this) {
+                 HardwareKey.CAMERA -> "camera_button"
+diff --git a/app/src/main/res/xml/processing_preferences.xml b/app/src/main/res/xml/processing_preferences.xml
+deleted file mode 100644
+index 13209d1..0000000
+--- a/app/src/main/res/xml/processing_preferences.xml
++++ /dev/null
+@@ -1,73 +0,0 @@
+-<?xml version="1.0" encoding="utf-8"?>
+-<!--
+-     SPDX-FileCopyrightText: The LineageOS Project
+-     SPDX-License-Identifier: Apache-2.0
+--->
+-<PreferenceScreen xmlns:app="http://schemas.android.com/apk/res-auto">
+-
+-    <PreferenceCategory
+-        app:iconSpaceReserved="false"
+-        app:title="@string/processing_title">
+-
+-        <Preference
+-            app:icon="@drawable/ic_info"
+-            app:selectable="false"
+-            app:summary="@string/processing_info" />
+-
+-        <ListPreference
+-            app:defaultValue="default"
+-            app:entries="@array/edge_mode_entries"
+-            app:entryValues="@array/edge_mode_values"
+-            app:iconSpaceReserved="false"
+-            app:key="edge_mode"
+-            app:summary="@string/edge_mode_summary"
+-            app:title="@string/edge_mode_title" />
+-
+-        <ListPreference
+-            app:defaultValue="default"
+-            app:entries="@array/noise_reduction_mode_entries"
+-            app:entryValues="@array/noise_reduction_mode_values"
+-            app:iconSpaceReserved="false"
+-            app:key="noise_reduction_mode"
+-            app:summary="@string/noise_reduction_mode_summary"
+-            app:title="@string/noise_reduction_mode_title" />
+-
+-        <ListPreference
+-            app:defaultValue="default"
+-            app:entries="@array/shading_mode_entries"
+-            app:entryValues="@array/shading_mode_values"
+-            app:iconSpaceReserved="false"
+-            app:key="shading_mode"
+-            app:summary="@string/shading_mode_summary"
+-            app:title="@string/shading_mode_title" />
+-
+-        <ListPreference
+-            app:defaultValue="default"
+-            app:entries="@array/color_correction_aberration_mode_entries"
+-            app:entryValues="@array/color_correction_aberration_mode_values"
+-            app:iconSpaceReserved="false"
+-            app:key="color_correction_aberration_mode"
+-            app:summary="@string/color_correction_aberration_mode_summary"
+-            app:title="@string/color_correction_aberration_mode_title" />
+-
+-        <ListPreference
+-            app:defaultValue="default"
+-            app:entries="@array/distortion_correction_mode_entries"
+-            app:entryValues="@array/distortion_correction_mode_values"
+-            app:iconSpaceReserved="false"
+-            app:key="distortion_correction_mode"
+-            app:summary="@string/distortion_correction_mode_summary"
+-            app:title="@string/distortion_correction_mode_title" />
+-
+-        <ListPreference
+-            app:defaultValue="default"
+-            app:entries="@array/hot_pixel_mode_entries"
+-            app:entryValues="@array/hot_pixel_mode_values"
+-            app:iconSpaceReserved="false"
+-            app:key="hot_pixel_mode"
+-            app:summary="@string/hot_pixel_mode_summary"
+-            app:title="@string/hot_pixel_mode_title" />
+-
+-    </PreferenceCategory>
+-
+-</PreferenceScreen>
+diff --git a/app/src/main/res/xml/root_preferences.xml b/app/src/main/res/xml/root_preferences.xml
+index e3f847b..6fee8f0 100644
+--- a/app/src/main/res/xml/root_preferences.xml
++++ b/app/src/main/res/xml/root_preferences.xml
+@@ -9,20 +9,6 @@
+         app:iconSpaceReserved="false"
+         app:title="@string/general_header">
+ 
+-        <SwitchPreference
+-            app:defaultValue="false"
+-            app:iconSpaceReserved="false"
+-            app:key="bright_screen"
+-            app:summary="@string/bright_screen_summary"
+-            app:title="@string/bright_screen_title" />
+-
+-        <SwitchPreference
+-            app:defaultValue="false"
+-            app:iconSpaceReserved="false"
+-            app:key="save_location"
+-            app:summary="@string/save_location_summary"
+-            app:title="@string/save_location_title" />
+-
+         <SwitchPreference
+             app:defaultValue="true"
+             app:iconSpaceReserved="false"
+@@ -30,13 +16,6 @@
+             app:summary="@string/shutter_sound_summary"
+             app:title="@string/shutter_sound_title" />
+ 
+-        <SwitchPreference
+-            app:defaultValue="false"
+-            app:iconSpaceReserved="false"
+-            app:key="leveler"
+-            app:summary="@string/leveler_summary"
+-            app:title="@string/leveler_title" />
+-
+         <Preference
+             app:fragment="org.lineageos.aperture.SettingsActivity$GesturesSettingsFragment"
+             app:iconSpaceReserved="false"
+@@ -57,35 +36,6 @@
+             app:title="@string/photo_capture_mode_title"
+             app:useSimpleSummaryProvider="true" />
+ 
+-        <SwitchPreference
+-            app:defaultValue="false"
+-            app:iconSpaceReserved="false"
+-            app:key="enable_zsl"
+-            app:summary="@string/enable_zsl_summary"
+-            app:title="@string/enable_zsl_title" />
+-
+-        <SwitchPreference
+-            app:defaultValue="true"
+-            app:iconSpaceReserved="false"
+-            app:key="use_photo_jpeg_ultra_hdr"
+-            app:summary="@string/use_photo_jpeg_ultra_hdr_summary"
+-            app:title="@string/use_photo_jpeg_ultra_hdr_title" />
+-
+-        <SwitchPreference
+-            app:defaultValue="false"
+-            app:iconSpaceReserved="false"
+-            app:key="enable_raw_image_capture"
+-            app:summary="@string/enable_raw_image_capture_summary"
+-            app:title="@string/enable_raw_image_capture_title" />
+-
+-        <SwitchPreference
+-            app:defaultValue="false"
+-            app:dependency="enable_raw_image_capture"
+-            app:iconSpaceReserved="false"
+-            app:key="disable_jpeg_with_raw"
+-            app:summary="@string/disable_jpeg_with_raw_summary"
+-            app:title="@string/disable_jpeg_with_raw_title" />
+-
+         <SwitchPreference
+             app:defaultValue="true"
+             app:iconSpaceReserved="false"
+@@ -99,13 +49,6 @@
+         app:iconSpaceReserved="false"
+         app:title="@string/video_header">
+ 
+-        <SwitchPreference
+-            app:defaultValue="true"
+-            app:iconSpaceReserved="false"
+-            app:key="video_stabilization"
+-            app:summary="@string/video_stabilization_summary"
+-            app:title="@string/video_stabilization_title" />
+-
+         <ListPreference
+             app:defaultValue="off"
+             app:entries="@array/video_mirror_mode_entries"
+@@ -121,10 +64,14 @@
+         app:iconSpaceReserved="false"
+         app:title="@string/advanced_header">
+ 
+-        <Preference
+-            app:fragment="org.lineageos.aperture.SettingsActivity$ProcessingSettingsFragment"
++        <ListPreference
++            app:defaultValue="default"
++            app:entries="@array/noise_reduction_mode_entries"
++            app:entryValues="@array/noise_reduction_mode_values"
+             app:iconSpaceReserved="false"
+-            app:title="@string/processing_title" />
++            app:key="noise_reduction_mode"
++            app:summary="@string/noise_reduction_mode_summary"
++            app:title="@string/noise_reduction_mode_title" />
+ 
+     </PreferenceCategory>
+ 

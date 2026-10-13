@@ -58,10 +58,10 @@ struct sc_server_params {
     bool audio_dup;
     bool show_touches;
     bool stay_awake;
-    uint16_t flex_display_dpi;
     bool force_adb_forward;
     bool power_off_on_close;
     bool clipboard_autosync;
+    bool downsize_on_error;
     bool tcpip;
     const char *tcpip_dst;
     bool select_usb;
@@ -73,7 +73,10 @@ struct sc_server_params {
     bool camera_torch;
     bool vd_destroy_content;
     bool vd_system_decorations;
+    bool keep_active;
     bool flex_display;
+    uint16_t flex_display_dpi;
+    bool ignore_video_encoder_constraints;
     uint8_t list;
 };
 
@@ -82,7 +85,7 @@ struct sc_server {
     struct sc_server_params params;
     char *serial;
     char *device_socket_name;
-    // "CLASSPATH=" followed by this instance's server path on the device
+    // "CLASSPATH=<path of the server pushed by this client>"
     char device_server_classpath[64];
 
     sc_thread thread;

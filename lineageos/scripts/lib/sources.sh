@@ -1214,10 +1214,12 @@ apply_local_overlay() {
 
   need_cmd rsync
   log "applying local overlay from $overlay_dir"
+  # Exclude the checkout's own src/ and out/ only (leading /), not every
+  # directory of that name: app sources such as packages/IkaGsfId/src are needed.
   rsync -a --delete \
     --exclude='.git' \
-    --exclude='out' \
-    --exclude='src' \
+    --exclude='/out' \
+    --exclude='/src' \
     --exclude='prebuilts/native_bridge/Android.bp' \
     --exclude='prebuilts/native_bridge/manifest.json' \
     --exclude='prebuilts/native_bridge/system' \
@@ -1246,8 +1248,8 @@ local_overlay_rsync_differs() {
   changes="$(
     rsync -ain --delete \
       --exclude='.git' \
-      --exclude='out' \
-      --exclude='src' \
+      --exclude='/out' \
+      --exclude='/src' \
       --exclude='prebuilts/native_bridge/Android.bp' \
       --exclude='prebuilts/native_bridge/manifest.json' \
       --exclude='prebuilts/native_bridge/system' \

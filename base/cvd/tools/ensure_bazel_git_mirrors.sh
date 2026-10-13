@@ -69,10 +69,29 @@ ensure_remote_origin() {
 
 fetch_mirror() {
   local repo_path="$1"
+  local staged_ref
+  local branch
+  local commit
 
   git_clean -C "${repo_path}" fetch --prune origin \
-    '+refs/heads/*:refs/heads/*' \
+    '+refs/heads/*:refs/mirror/heads/*' \
     '+refs/tags/*:refs/tags/*'
+
+  while IFS= read -r staged_ref; do
+    branch="${staged_ref#refs/mirror/heads/}"
+    commit="$(git_clean -C "${repo_path}" rev-parse "${staged_ref}^{commit}")"
+    git_clean -C "${repo_path}" update-ref "refs/heads/${branch}" "${commit}"
+  done < <(git_clean -C "${repo_path}" for-each-ref \
+    --format='%(refname)' refs/mirror/heads)
+
+  while IFS= read -r staged_ref; do
+    branch="${staged_ref#refs/heads/}"
+    if ! git_clean -C "${repo_path}" show-ref --verify --quiet \
+      "refs/mirror/heads/${branch}"; then
+      git_clean -C "${repo_path}" update-ref -d "${staged_ref}"
+    fi
+  done < <(git_clean -C "${repo_path}" for-each-ref \
+    --format='%(refname)' refs/heads)
 }
 
 clone_mirror() {
@@ -80,7 +99,9 @@ clone_mirror() {
   local tmp_path="$2"
 
   rm -rf "${tmp_path}"
-  git_clean clone --mirror "${remote_url}" "${tmp_path}"
+  git_clean init --bare "${tmp_path}"
+  ensure_remote_origin "${tmp_path}" "${remote_url}"
+  fetch_mirror "${tmp_path}"
 }
 
 configure_rewrite() {

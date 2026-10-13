@@ -31,8 +31,11 @@ constexpr const char kMediaHelp[] =
     "    'v4l2_emulated_camera_mplane': emulated media capture device (multi-plane)\n"
     "    'v4l2_proxy': proxy a host V4L2 device into the guest\n"
     " 'lens_facing': optional, supported values: 'FRONT', 'BACK', 'EXTERNAL'\n"
+    " 'device': optional, for 'v4l2_proxy': host V4L2 device to proxy, defaults "
+    "to '/dev/video0'\n"
     "Example usage:\n"
-    "  --media=type=v4l2_emulated_camera_splane,lens_facing=BACK\n";
+    "  --media=type=v4l2_emulated_camera_splane,lens_facing=BACK\n"
+    "  --media=type=v4l2_proxy,device=/dev/video1\n";
 
 Result<std::optional<CuttlefishConfig::MediaConfig>> ParseMediaConfig(
     const std::string& flag);

@@ -453,6 +453,7 @@ build_target() {
   fi
 
   package_cvd_bundle "$arch" "$product" "$product_out" "$host_package" "$signed_images_dir" "$bundle_name" "${thin_files[@]}"
+  printf '%s\n' "$build_variant" > "$output_dir/$bundle_name/ika-build-variant"
   bundle_dir_complete "$arch" "$output_dir/$bundle_name" "${thin_files[@]}" || \
     die "packaging completed but $bundle_name/ is incomplete"
 }

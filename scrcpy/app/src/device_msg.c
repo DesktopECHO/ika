@@ -72,9 +72,8 @@ sc_device_msg_deserialize(const uint8_t *buf, size_t len,
             return 5 + size;
         }
         case DEVICE_MSG_TYPE_DISPLAY_READY: {
-            // type(1) + display_id(4) + width(2) + height(2) = 9
             if (len < 9) {
-                return 0;
+                return 0; // no complete message
             }
             msg->display_ready.display_id = sc_read32be(&buf[1]);
             msg->display_ready.width = sc_read16be(&buf[5]);
@@ -82,7 +81,6 @@ sc_device_msg_deserialize(const uint8_t *buf, size_t len,
             return 9;
         }
         case DEVICE_MSG_TYPE_APP_ENDED:
-            // type(1) only
             return 1;
         default:
             LOGW("Unknown device message type: %d", (int) msg->type);

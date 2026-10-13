@@ -256,7 +256,8 @@ its own ways of producing black surfaces, fixed in `external-mesa3d.patch`:
   Apple-only; native Vulkan apps could hit it on any host. The host now drops
   the extension, reports `hostImageCopy = VK_FALSE` (extension struct and
   Vulkan 1.4 core) and clears `VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT`, so
-  ANGLE and native Vulkan apps use staging-buffer uploads. The guest needs no change: it only forwards host-listed extensions.
+  ANGLE and native Vulkan apps use staging-buffer uploads. The guest needs no
+  change: it only forwards host-listed extensions.
   Capability detection no longer sees host image copy; restore it together with
   the calls once the payload is marshalled.
 

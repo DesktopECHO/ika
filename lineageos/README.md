@@ -49,6 +49,8 @@ This repository owns product policy only:
 - build/package helper scripts
 - documentation and validation scripts
 - source-level patches for the projects that cannot be customized by overlays
+- small desktop helper apps under `packages/` (`IkaGsfId` publishes the Google
+  Services Framework Android ID as `sys.ika.gsf_android_id`)
 
 Behavioral framework, Launcher, SystemUI, Shell, and Cuttlefish changes are
 stored under `patches/` and applied to an official LineageOS 23.2 checkout.
@@ -60,6 +62,7 @@ without requiring separate fork branches.
 The desktop products split app compatibility identity from windowing behavior:
 
 - Android and app stores see a tablet-shaped, Wi-Fi-only, non-telephony device
+  named "Ika" (model "Ika Android"), with a single front camera
 - desktop/freeform mode is re-applied at boot
 - taskbar clicks focus, restore, or open desktop windows instead of entering
   split selection
@@ -86,6 +89,8 @@ The policy is split by layer so it stays reviewable:
 Additional project docs:
 
 - `docs/windowing-policy.md` defines the desktop windowing behavior
+- `docs/display-architecture.md` and `docs/dynamic-display-implementation.md`
+  describe how the display follows the host window
 - `docs/app-compatibility.md` tracks app support by architecture/runtime
 - `docs/release-process.md` documents release inputs and output metadata
 
@@ -138,9 +143,11 @@ BUILD_VARIANT=user ./lineageos/scripts/build_lineageos_desktop.sh x86_64
 
 `eng` is accepted for experiments, but release bundles should use `user` and the
 normal signing flow. `WITH_ADB_INSECURE` is only enabled for `userdebug` builds;
-`scrcpy` does not require root or insecure ADB. Cuttlefish keeps release-style
-`user` builds reachable by enabling guest TCP ADB on port `5555`, disabling ADB
-key authorization with `ro.adb.secure=0`, and exposing the host ADB proxy only on
+`scrcpy` does not require root or insecure ADB. For `user` builds, `ika` uses
+the host user's `~/.android/adbkey` and passes its public key to the guest in
+bootconfig. The guest installs that key during `post-fs-data`; this replaces
+the guest's ADB key list on each boot.
+Cuttlefish exposes guest TCP ADB on port `5555` through the host proxy at
 `127.0.0.1:6520` for the first instance.
 
 The resulting `lineageos-arm64/` and/or `lineageos-x86_64/` directories at the
@@ -168,9 +175,17 @@ Cuttlefish bundles. Signing keys live in `ANDROID_CERTS_DIR` (default:
 after installing build dependencies. Direct ROM builds use `signing_common.sh`
 to run `tools/buildutils/setup_keys.sh` before compiling. That setup prompts
 once for a certificate identity, writes it to `~/.config/ika/signing.conf`, and
-generates any missing APK/APEX keys. `STRICT_APEX_SIGNING=1` and
-`STRICT_PRESIGNED_ALLOWLIST=1` are the defaults; relax them only for local
-debugging.
+generates any missing APK/APEX keys.
+
+Both build variants are signed the same way. Apps built with the default test
+key are signed with `releasekey`, platform, shared, media and other tagged apps
+with their own keys, and every APEX with Ika's key for it. Prebuilt Google and
+microG apps keep their upstream signatures. With the default
+`STRICT_APEX_SIGNING=1`, an APEX without a key fails the build instead of
+keeping a public build key, and `STRICT_PRESIGNED_ALLOWLIST=1` fails it on an
+unexpected presigned APK or APEX; relax them only for local debugging.
+Verified boot (AVB) keeps the AOSP test key, because Cuttlefish's host tools
+sign images with it on the user's machine at every VM start.
 
 If `repo` is not installed, `./ika-build` downloads it during dependency setup
 and installs it to `$HOME/.local/bin/repo`. Missing host tools such as `git`,

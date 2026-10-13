@@ -9,14 +9,14 @@ experience from a phone emulator in a browser to a native desktop window.
 | Concern | Upstream Cuttlefish | Ika |
 |---|---|---|
 | Frame transport | WebRTC over network | Unix domain socket → scrcpy native window |
-| Host frontend | WebRTC browser viewer (HTML/JavaScript) | ika-scrcpy with `--cuttlefish-frames-socket=…` |
-| Window resize | Client scales frames; guest display geometry is static | Client sends an Android logical resize request; the raw-frame path also attempts a physical Cuttlefish resize |
-| Resize event flow | None (visual scaling only) | SDL → ika-scrcpy → physical resize attempt for raw frames + `TYPE_RESIZE_DISPLAY`/`DISPLAY_READY` settle tracking → DisplayManager listeners |
-| DPI selection | Static at launch (`--display=…,dpi=…`) | Computed from host width; user can override with `--dpi` or `IKADPI` |
+| Host frontend | WebRTC browser viewer (HTML/JavaScript) | scrcpy with `--cuttlefish-frames-socket=…` |
+| Window resize | Client scales frames; guest display geometry is static | Client sends an Android logical resize request; the physical Cuttlefish display keeps its launch size |
+| Resize event flow | None (visual scaling only) | SDL → scrcpy → `TYPE_RESIZE_DISPLAY` → forced logical size (scaling off) → `DISPLAY_READY` → DisplayManager listeners |
+| DPI selection | Static at launch (`--display=…,dpi=…`) | Computed from the host display, 144 when no size can be read; user can override with `--dpi` or `IKADPI` |
 | Input transport | WebRTC data channel | scrcpy control channel using Android input APIs; UHID in game mode |
 | Audio transport | WebRTC media stream | Cuttlefish virtio-snd → host PipeWire stream |
 | Multi-display / hotplug | `cvd display add/list/remove` CLI | Same CLI is available; Ika does not currently drive add/remove operations |
-| GPU path | Varies (host, gfxstream, virgl) | `gpu_mode=gfxstream_guest_angle`, `enable_gpu_udmabuf=true`, `gpu_vhost_user_mode=off`, `use_cvdalloc=true` |
+| GPU path | Varies (host, gfxstream, virgl) | `gpu_mode=gfxstream_guest_angle` (`gfxstream` with only llvmpipe), `enable_gpu_udmabuf=true`, `gpu_vhost_user_mode=off`, `use_cvdalloc=true` |
 | CPU policy | No Ika-specific policy | Guest vCPUs prefer performance cores; the default count is the available/performance-core count minus two, capped at 12 |
 
 ## 1. Frame transport
@@ -28,13 +28,16 @@ them over a WebRTC peer connection to a browser tab. The viewer is a generic
 remote-desktop client with no knowledge of the Android device that produced the
 frames.
 
-**Ika:** The scrcpy fork in this repository (`scrcpy/`) reads frames directly
+**Ika:** The scrcpy client in this repository (`scrcpy/`) reads frames directly
 from a Cuttlefish-internal Unix-domain socket. Ika passes that socket path to
 scrcpy with `--cuttlefish-frames-socket=...`. The socket is normally
 `…/cvd-1/internal/ika_frames.sock`, derived from the `frame_sock_path` field in
 `cuttlefish_config.json`. Bypassing WebRTC removes the encode/decode round trip
-and browser intermediary; frames arrive at scrcpy's SDL renderer over a local
-socket.
+and browser intermediary. `ika_stream` writes each raw frame into one of four
+shared-memory slots (or passes a DMA-BUF), and the socket only carries a short
+notice per frame. scrcpy uploads the slot to its texture without copying it
+first and hands the slot back afterwards; `ika_stream` does not rewrite a slot
+until then.
 
 ## 2. Window resize: scaling vs. device resize requests
 
@@ -54,20 +57,21 @@ following:
 - `cvd display add --display=width=…,height=…` to add a **new** virtual display
   with its own `DisplayInfo` and `displayId`, then move the activity to it
 
-**Ika:** The scrcpy fork has a `flex_display` mode that:
-1. Catches SDL window-resize events in
-   [`scrcpy/app/src/screen.c`](../../scrcpy/app/src/screen.c).
-2. Debounces via `FLEX_DISPLAY_RESIZE_QUIET_DELAY` and rate-limits requests with
-   `FLEX_DISPLAY_REQUEST_MIN_INTERVAL` so a continuous drag does not flood the
-   control path.
-3. For raw Cuttlefish frames, attempts to spawn `cvd display resize` with the
-   new physical display size and the current Ika DPI.
-4. Sends `TYPE_RESIZE_DISPLAY` to the scrcpy server for both raw and encoded
-   capture. The server calls
-   `Device.setDisplaySizeAndDensity(displayId, size, dpi)` and reports
-   `DISPLAY_READY` when the logical display settles.
-5. The framework propagates the display change through DisplayManager listeners
+**Ika:** The scrcpy client has a flex display mode (`--dpi=N`) that:
+1. Follows the window size in pixels, debounced while the window is being
+   resized, in [`scrcpy/app/src/ika/flex.c`](../../scrcpy/app/src/ika/flex.c).
+2. Sends `TYPE_RESIZE_DISPLAY` to the scrcpy server. For the main display, the
+   server forces the logical size (as `wm size`, and `wm density N` once)
+   through IWindowManager, with scaling off when it fits the physical display,
+   and reports `DISPLAY_READY` once the display has the size and its new
+   configuration was dispatched.
+3. The physical Cuttlefish display keeps its size: Android draws the logical
+   display 1:1 in it, and the client shows that region unscaled. Until the
+   guest has drawn the new size, the window shows a blurred preview.
+4. The framework propagates the display change through DisplayManager listeners
    and normal configuration updates.
+
+See [`scrcpy/IKA.md`](../../scrcpy/IKA.md).
 
 The Android-side request updates the logical display configuration. Launcher3's
 `DisplayController` sees the change, and
@@ -76,16 +80,14 @@ refreshes the cached invariant/device profile so the workspace grid, hotseat
 columns, and all-apps layout recompute. The same patch keeps placement and popup
 decisions tied to live window bounds.
 
-### Current resize limitation
+### Physical display size
 
-> [!IMPORTANT]
+> [!NOTE]
 > The current Cuttlefish 1.55 command dispatcher exposes `add`, `list`,
 > `remove`, and `screenshot`, but not `resize`; see
 > [`host/commands/display/main.cpp`](../../base/cvd/cuttlefish/host/commands/display/main.cpp).
-> Consequently, `ika-scrcpy`'s raw-frame physical-resize child exits without
-> applying the new Cuttlefish hardware size. The Android logical resize and
-> `DISPLAY_READY` path still run. Restoring the host `resize` subcommand is
-> required for true window-to-physical-display resizing.
+> The physical display therefore keeps its launch size, and a window larger
+> than it is shown scaled.
 
 ## 3. DPI policy
 
@@ -93,8 +95,8 @@ decisions tied to live window bounds.
 stored in the `--display=…,dpi=N` flag. It has no automatic relationship to the
 host hardware.
 
-**Ika:** DPI is derived from the host display at launch. Override it with
-`--dpi=<value>` or `IKADPI=<value>`.
+**Ika:** DPI is derived from the host display at launch, or 144 when no display
+size can be read. Override it with `--dpi=<value>` or `IKADPI=<value>`.
 
 DPI does **not** change when the scrcpy window is resized; only the resolution
 changes. Content gets larger or smaller in absolute screen pixels, as it does
@@ -150,20 +152,20 @@ enable_bootanimation=false      # skip the dancing-bug splash
 prefer_performance_cores=true
 ```
 
-`gfxstream_guest_angle` is the default GPU mode. Direct `gfxstream` remains
+`gfxstream_guest_angle` is the default GPU mode, except on hosts whose only
+Vulkan driver is llvmpipe, which get `gfxstream`. Direct `gfxstream` remains
 available for testing the native gfxstream GLES translator, while
 `guest_swiftshader` is a diagnostic fallback that removes host GPU acceleration
 from the equation.
 
-The production guest Vulkan stack pins patched Mesa 26.1.7 at
-`e8617e4ca95f`. That revision is verified with the pinned ANGLE, guest
+The production guest Vulkan stack pins patched Mesa 26.1.8 at
+`0fadfea4f394`. That revision is verified with the pinned ANGLE, guest
 SwiftShader, drm_hwcomposer, gfxstream, rutabaga_gfx, crosvm, minigbm, and
 Vulkan-Headers revisions in `manifests/lineageos-desktop.xml`. Both guest
 architectures pin their kernels and virtual-device modules to the same Android
 16 6.12.74 GKI build; ARM64 also pins the corresponding 16 KiB variant.
-ROM builds omit the Vulkan dEQP binary and CTS dEQP package by default.
-Set `BUILD_VULKAN_TESTS=1` to opt in to building and bundling those diagnostics
-for either architecture.
+ROM builds include the Vulkan dEQP binary and CTS dEQP package by default
+(`BUILD_VULKAN_TESTS=1`); set `BUILD_VULKAN_TESTS=0` to leave them out.
 Set `BUILD_NATIVE_BRIDGE_TESTS=1` to additionally ship the ARM64 static and
 dynamic NDK suites under `testcases/native_bridge/`; `run-tests.sh` verifies
 every installed translator file against the pinned payload manifest, checks the

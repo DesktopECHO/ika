@@ -55,13 +55,14 @@ trap "rm -f $tmp1 $tmp2" 0
 # Initial attempt for uncompressed images or objects:
 dump_config "$img"
 
-# That didn't work, so retry after decompression.
+# That didn't work, so retry after decompression. lz4 first: Cuttlefish kernels
+# are lz4-compressed, and each failed attempt rescans the whole boot image.
+try_decompress '\002\041\114\030' xyy 'lz4 -d -l'
 try_decompress '\037\213\010' xy    gunzip
 try_decompress '\3757zXZ\000' abcde unxz
 try_decompress 'BZh'          xy    bunzip2
 try_decompress '\135\0\0\0'   xxx   unlzma
 try_decompress '\211\114\132' xy    'lzop -d'
-try_decompress '\002\041\114\030' xyy 'lz4 -d -l'
 
 # Bail out:
 echo "$me: Cannot find kernel config." >&2

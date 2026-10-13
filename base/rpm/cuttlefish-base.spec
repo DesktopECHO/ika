@@ -23,23 +23,29 @@ BuildRequires:  fmt-devel
 BuildRequires:  gcc-c++
 BuildRequires:  gflags-devel
 BuildRequires:  git
+BuildRequires:  libtool
 BuildRequires:  glog-devel
 BuildRequires:  gtest-devel
 BuildRequires:  jsoncpp-devel
 BuildRequires:  libX11-devel
+BuildRequires:  libXcursor-devel
 BuildRequires:  libXext-devel
+BuildRequires:  libXfixes-devel
+BuildRequires:  libXi-devel
+BuildRequires:  libXrandr-devel
+BuildRequires:  libXScrnSaver-devel
 BuildRequires:  libcurl-devel
-# Accept either Fedora's FFmpeg-free headers or RPM Fusion's FFmpeg headers.
-BuildRequires:  pkgconfig(libavdevice)
+BuildRequires:  libxkbcommon-devel
 BuildRequires:  pkgconfig(libv4l2)
 BuildRequires:  libcap-devel
+BuildRequires:  libdecor-devel
 BuildRequires:  libdrm-devel
+BuildRequires:  libva-devel
 BuildRequires:  libicu-devel
 BuildRequires:  libxcrypt-compat
 BuildRequires:  libuuid-devel
 BuildRequires:  libxml2-devel
 BuildRequires:  libsrtp-devel
-BuildRequires:  pkgconfig(libswscale)
 BuildRequires:  opus-devel
 BuildRequires:  openssl-devel
 BuildRequires:  perl-FindBin
@@ -49,29 +55,31 @@ BuildRequires:  protobuf-compiler
 BuildRequires:  protobuf-devel
 BuildRequires:  python3
 BuildRequires:  systemd-rpm-macros
+BuildRequires:  systemd-devel
 BuildRequires:  mesa-libgbm-devel
 BuildRequires:  virglrenderer-devel
 BuildRequires:  vulkan-headers
 BuildRequires:  wayland-devel
+BuildRequires:  wayland-protocols-devel
 BuildRequires:  which
 BuildRequires:  xxd
 BuildRequires:  xz-devel
 BuildRequires:  z3-devel
 # scrcpy viewer (Meson C build), folded into ika-base.
 BuildRequires:  meson
+BuildRequires:  nasm
 BuildRequires:  ninja-build
-BuildRequires:  SDL3-devel
+BuildRequires:  wget
+BuildRequires:  pkgconfig(gl)
+BuildRequires:  alsa-lib-devel
 BuildRequires:  pipewire-devel
-BuildRequires:  libusb1-devel
-BuildRequires:  pkgconfig(libavcodec)
-BuildRequires:  pkgconfig(libavformat)
-BuildRequires:  pkgconfig(libavutil)
-BuildRequires:  pkgconfig(libswresample)
 
 Requires:       bsdtar
 Requires:       curl
 # ika app sync edits desktop menu launchers.
 Requires:       desktop-file-utils
+# ika app reports progress and errors from menu launchers with notify-send.
+Requires:       libnotify
 Requires:       dnsmasq
 Requires:       iproute
 Requires:       libX11
@@ -89,6 +97,7 @@ Requires:       nftables
 Requires:       openssl
 Requires:       python3
 Requires:       python3-requests
+Requires:       v4l-utils
 Requires:       xdg-utils
 # Linked library dependencies are generated from ELF SONAMEs. Keep only the
 # scrcpy runtime tools that RPM cannot discover from the packaged binaries.
@@ -207,6 +216,10 @@ pushd base/cvd >/dev/null
 # under the repository's ika-work directory.
 REPO_ROOT="$(realpath ../..)"
 WORK_ROOT="${IKA_WORK_ROOT:-$REPO_ROOT/ika-work}"
+SCRCPY_DEPS_WORK_DIR="$WORK_ROOT/scrcpy-deps"
+SCRCPY_STATIC_DEPS="$SCRCPY_DEPS_WORK_DIR/install/linux-native-static"
+# FFmpeg with VA-API, for scrcpy only (crosvm must not depend on libva)
+SCRCPY_VAAPI_DEPS="$SCRCPY_STATIC_DEPS-vaapi"
 BAZEL_CACHE_ROOT="${CUTTLEFISH_BAZEL_CACHE_ROOT:-$WORK_ROOT/cuttlefish-bazel}"
 BAZEL_OUTPUT_USER_ROOT="${CUTTLEFISH_BAZEL_OUTPUT_USER_ROOT:-$WORK_ROOT}"
 BAZEL_REPOSITORY_CACHE="$BAZEL_CACHE_ROOT/repository"
@@ -221,6 +234,12 @@ mkdir -p "$BAZEL_OUTPUT_USER_ROOT" "$BAZEL_REPOSITORY_CACHE" "$BAZEL_DISK_CACHE"
 # rpmbuild BUILD directory. That directory is transient and can hit space
 # limits while external git repos are materialized.
 export TMPDIR="$BAZEL_TMPDIR"
+
+SCRCPY_DEPS_WORK_DIR="$SCRCPY_DEPS_WORK_DIR" ../../scrcpy/app/deps/libusb.sh linux native static
+SCRCPY_DEPS_WORK_DIR="$SCRCPY_DEPS_WORK_DIR" ../../scrcpy/app/deps/sdl.sh linux native static
+SCRCPY_DEPS_WORK_DIR="$SCRCPY_DEPS_WORK_DIR" ../../scrcpy/app/deps/dav1d.sh linux native static
+SCRCPY_DEPS_WORK_DIR="$SCRCPY_DEPS_WORK_DIR" ../../scrcpy/app/deps/ffmpeg.sh linux native static
+SCRCPY_FFMPEG_VAAPI=1 SCRCPY_DEPS_WORK_DIR="$SCRCPY_DEPS_WORK_DIR" ../../scrcpy/app/deps/ffmpeg.sh linux native static
 
 # Shut down stale Bazel servers from earlier or concurrent builds that share
 # this --output_user_root. Two servers racing on the shared caches and the
@@ -267,6 +286,10 @@ while true; do
     --repo_env=CARGO_BAZEL_TIMEOUT="$CARGO_BAZEL_TIMEOUT" \
     --repo_env=GIT_CONFIG_GLOBAL="$BAZEL_GIT_CONFIG" \
     --repo_env=GIT_CONFIG_NOSYSTEM=1 \
+    --action_env=PKG_CONFIG_PATH="$SCRCPY_STATIC_DEPS/lib/pkgconfig" \
+    --action_env=LIBAVCODEC_STATIC=1 \
+    --action_env=LIBAVUTIL_STATIC=1 \
+    --action_env=LIBSWSCALE_STATIC=1 \
     --workspace_status_command=../stamp_helper.sh \
     --build_tag_filters=-clang-tidy; then
     break
@@ -289,18 +312,32 @@ while true; do
   echo "Bazel build failed, retrying in ${retry_delay}s (${retry_count}/${max_retries})..." >&2
   sleep "$retry_delay"
 done
+if readelf -d bazel-bin/cuttlefish/package/cuttlefish-common/bin/crosvm | grep -Eq 'Shared library: \[(libav|libsw)'; then
+  echo "Error: crosvm still has a shared FFmpeg dependency" >&2
+  readelf -d bazel-bin/cuttlefish/package/cuttlefish-common/bin/crosvm | grep 'Shared library' >&2
+  exit 1
+fi
 popd >/dev/null
 
 # Build the scrcpy viewer (folded in from the former ika-scrcpy package). The
 # prebuilt scrcpy-server APK is bundled in the source tarball at
 # scrcpy/scrcpy-server (refreshed by tools/buildutils/build_package.sh).
 meson setup scrcpy _build_scrcpy \
+  --pkg-config-path="$SCRCPY_VAAPI_DEPS/lib/pkgconfig:$SCRCPY_STATIC_DEPS/lib/pkgconfig" \
+  -Dc_args="-I$SCRCPY_VAAPI_DEPS/include -I$SCRCPY_STATIC_DEPS/include" \
+  -Dc_link_args="-L$SCRCPY_VAAPI_DEPS/lib -L$SCRCPY_STATIC_DEPS/lib" \
     --buildtype=release \
     --prefix=/usr/lib/cuttlefish-common \
     --bindir=bin \
+    -Dstatic=true \
     -Dprebuilt_server=scrcpy-server \
     -Dcompile_server=true
 meson compile -C _build_scrcpy
+if readelf -d _build_scrcpy/app/scrcpy | grep -Eq 'Shared library: \[(libav|libsw|libva|libdrm)'; then
+  echo "Error: scrcpy still has a shared FFmpeg or VA-API dependency" >&2
+  readelf -d _build_scrcpy/app/scrcpy | grep 'Shared library' >&2
+  exit 1
+fi
 
 %install
 rm -rf %{buildroot}
@@ -325,19 +362,10 @@ DESTDIR=%{buildroot} meson install -C _build_scrcpy
 install -d %{buildroot}/usr/share/applications
 install -d %{buildroot}/usr/share/icons/hicolor/256x256/apps
 
-install -m 0644 \
-  %{buildroot}/usr/lib/cuttlefish-common/share/applications/scrcpy.desktop \
-  %{buildroot}/usr/share/applications/ika-scrcpy.desktop
+install -m 0644 tools/ika.desktop %{buildroot}/usr/share/applications/ika.desktop
 install -m 0644 \
   %{buildroot}/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps/scrcpy.png \
   %{buildroot}/usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
-
-sed -i \
-  -e 's#^Exec=.*#Exec=ika start#' \
-  -e 's#^Name=.*#Name=Ika#' \
-  -e 's#^Icon=.*#Icon=ika-scrcpy#' \
-  -e '/^StartupNotify=/a StartupWMClass=scrcpy' \
-  %{buildroot}/usr/share/applications/ika-scrcpy.desktop
 
 # Bazel package outputs are copied with their original mode bits, which can
 # leave files read-only in BUILDROOT. Keep staging copies writable so any later
@@ -364,6 +392,7 @@ find %{buildroot}/usr/lib/cuttlefish-common/usr/share/webrtc/assets -type f -exe
 install -Dpm0755 base/host/deploy/capability_query.py %{buildroot}/usr/lib/cuttlefish-common/bin/capability_query.py
 install -Dpm0755 tools/getchromium %{buildroot}/usr/lib/cuttlefish-common/bin/getchromium
 install -Dpm0755 tools/ika %{buildroot}/bin/ika
+install -Dpm0755 tools/ika-root %{buildroot}/usr/lib/cuttlefish-common/bin/ika-root
 install -Dpm0644 base/host/packages/cuttlefish-base/etc/NetworkManager/conf.d/99-cuttlefish.conf %{buildroot}/etc/NetworkManager/conf.d/99-cuttlefish.conf
 install -Dpm0644 base/rpm/99-cuttlefish.conf %{buildroot}/etc/sysctl.d/99-cuttlefish.conf
 install -Dpm0644 base/host/packages/cuttlefish-base/etc/modules-load.d/cuttlefish-common.conf %{buildroot}/etc/modules-load.d/cuttlefish-common.conf
@@ -482,7 +511,7 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /bin/ika
 /usr/bin/cvd
 /usr/lib/cuttlefish-common
-/usr/share/applications/ika-scrcpy.desktop
+/usr/share/applications/ika.desktop
 /usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
 %config(noreplace) /etc/firewalld/zones/cuttlefish.xml
 /etc/NetworkManager/conf.d/99-cuttlefish.conf
@@ -520,6 +549,38 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/lib/cuttlefish-metrics
 
 %changelog
+* Mon Oct 12 2026 DesktopECHO <build@desktopecho.com> - 261012-1
+- Add 'ika root' to root the VM with Magisk, on user and userdebug builds.
+- Add 'ika gsf' to show the GSF ID and open Google's uncertified device page.
+- Give each device its own serial number, kept across factory resets.
+- Add Stop, Restart and Start with Camera to the launcher's right-click
+  menu; "Start Ika" replaces "New Window".
+- Keep the Chromium APK in ~/ika and skip Chromium's first-run screens.
+- Fix starts failing with "Startup Failed." right after a VM stops.
+- Fix flashing hanging on x86 VMs with 2 GB of RAM.
+- Stop factory resets from filling the host disk.
+- Prefer integrated GPUs over CPU Vulkan devices.
+- Copy console frames straight into the client's shared memory.
+- Detect the display size from DRM when wayland-info finds none, and
+  default to 144 DPI otherwise.
+- Update crosvm, gfxstream, minigbm and Mesa.
+- Pass a host camera to Android with 'ika start --camera'; depend on
+  v4l-utils.
+- Rebuild the display client on scrcpy 5.0.1.
+- Blur the last picture while a window is resized, and move the console's
+  resize edges outside the window.
+- Decode app window video on the GPU through VA-API where supported.
+- Fix clicks in app windows on displays with fractional scaling.
+- Fix lost GLES textures on Apple Silicon and pink video playback.
+- Default to the gfxstream GPU mode with only a software Vulkan driver.
+- Install a Chromium that starts without hardware Vulkan where needed.
+- Put new apps in the "Android Apps (Ika)" folder, show notifications on
+  every desktop (depend on notify-send) and give app windows their app's
+  icon; the desktop entry is now ika.desktop.
+- Pass ~/.android/adbkey to user builds so ADB works with authentication.
+- Lengthen the boot timeout for older systems.
+- Build against pinned static FFmpeg 9.0.2, SDL 3.4.18 and libusb.
+
 * Thu Sep 24 2026 DesktopECHO <build@desktopecho.com> - 260924-1
 - Update Ika host package metadata to 260924-1.
 
