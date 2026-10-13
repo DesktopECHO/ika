@@ -72,9 +72,20 @@ Result<std::optional<CuttlefishConfig::MediaConfig>> ParseMediaConfig(
               "Invalid lens_facing value: " << lens_facing);
   }
 
+  std::string device = "";
+  auto device_it = props.find("device");
+  if (device_it != props.end()) {
+    CF_EXPECT(type == CuttlefishConfig::MediaType::kV4l2Proxy,
+              "'device' is only supported for type=v4l2_proxy");
+    device = device_it->second;
+    CF_EXPECT(device.starts_with("/dev/") && device.find("..") == std::string::npos,
+              "Invalid media device, expected a /dev path: " << device);
+  }
+
   return CuttlefishConfig::MediaConfig{
       .type = type,
       .lens_facing = lens_facing,
+      .device = device,
   };
 }
 

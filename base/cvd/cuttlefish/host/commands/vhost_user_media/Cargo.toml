@@ -12,6 +12,8 @@ image = "0.24"
 libc = "0.2"
 log = "0.4"
 thiserror = "2.0"
+# uuid 1.27 requires Rust 1.89; Cuttlefish Bazel currently builds with Rust 1.86.
+uuid = "=1.26.1"
 v4l2r = { version = "0.0.6", features = ["arch64"] }
 vhost = { version = "0.16.0", features = ["vhost-user-backend"] }
 vhost-user-backend = {  version = "0.22.0" }

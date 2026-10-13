@@ -9,6 +9,13 @@ LINEAGE_SKIP_JELLY := true
 ifeq ($(TARGET_BUILD_VARIANT),userdebug)
 WITH_ADB_INSECURE := true
 endif
+
+ifeq ($(TARGET_BUILD_VARIANT),user)
+# `ika` supplies the user's public key in bootconfig at VM start.
+PRODUCT_COPY_FILES += \
+    vendor/lineage_desktop/prebuilts/adb/ika_adb_keys.rc:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/init/ika_adb_keys.rc
+endif
+
 # The build entry point exports this variable from --microg / --mtg. Keep the
 # product usable directly as well: an unset value includes neither provider.
 WITH_GMS := false
@@ -61,6 +68,12 @@ PRODUCT_VENDOR_PROPERTIES += \
 PRODUCT_COPY_FILES += \
     vendor/lineage_desktop/prebuilts/display_settings/display_settings.xml:$(TARGET_COPY_OUT_VENDOR)/etc/display_settings.xml
 
+# Host cameras passed through with `ika start --camera` are served by the
+# external camera HAL, which reads this config: 30 fps up to 1080p, landscape
+# orientation, and reported as the front camera.
+PRODUCT_COPY_FILES += \
+    vendor/lineage_desktop/prebuilts/camera/external_camera_config.xml:$(TARGET_COPY_OUT_VENDOR)/etc/external_camera_config.xml
+
 # Host-window-resize listener (R5). /usr/bin/ika sets
 # vendor.cuttlefish.display.size (and optionally .dpi) when the user resizes
 # the Cuttlefish host window; init triggers cvd_display_resize.sh, which fans
@@ -69,6 +82,10 @@ PRODUCT_COPY_FILES += \
 PRODUCT_COPY_FILES += \
     vendor/lineage_desktop/prebuilts/cvd_display_resize/cvd_display_resize.sh:$(TARGET_COPY_OUT_SYSTEM_EXT)/bin/cvd_display_resize.sh \
     vendor/lineage_desktop/prebuilts/cvd_display_resize/cvd_display_resize.rc:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/init/cvd_display_resize.rc
+
+# Publishes the GMS Android ID in decimal as sys.ika.gsf_android_id once device
+# check-in has assigned it. A platform-signed app, so it works in user builds.
+PRODUCT_PACKAGES += IkaGsfId
 
 PRODUCT_PACKAGES += \
     LineageDesktopConnectivityOverlay \

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    External camera HAL config for host cameras passed through with crosvm
+    virtio-media (the ika start camera option). Read from /vendor/etc by the
+    v4l2 camera provider APEX; see hardware-interfaces-camera-external-nv12.patch.
+    XML comments can't contain a double hyphen, so don't spell out the flag.
+-->
+<ExternalCamera>
+    <Provider>
+        <!-- Camera IDs follow the /dev/videoN number instead of starting at 100 -->
+        <CameraIdOffset>0</CameraIdOffset>
+        <!-- Must be present: the HAL stops reading the config without it -->
+        <ignore/>
+    </Provider>
+    <Device>
+        <!-- One limit, so every size up to 1080p streams at up to 30 fps. The
+             HAL's defaults cap 720p at 7.5 fps and 1080p at 5 fps. -->
+        <FpsList>
+            <Limit width="1920" height="1080" fpsBound="30.0"/>
+        </FpsList>
+        <!-- Laptop cameras face the user on a landscape display -->
+        <Orientation degree="0"/>
+        <LensFacing value="front"/>
+    </Device>
+</ExternalCamera>

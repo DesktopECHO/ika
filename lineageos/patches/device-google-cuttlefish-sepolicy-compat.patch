@@ -1,12 +1,5 @@
 Patch summary:
-Adapt the pinned Cuttlefish system_ext policy to this branch's platform sepolicy
-API. This tree exposes date-based compat types such as platform_app_202504, not
-platform_app_36, and does not define the newer platform_app_all aggregate. It
-also only declares the older Trusty accessor service labels. Use the live
-platform_app domain for the current platform app permissions, drop the
-unsupported versioned fragment, keep the Trusty launcher registrations to
-services this branch actually defines, and drop newer vendor policy fragments
-unsupported by this branch's checkpolicy/sepolicy API.
+Fit Cuttlefish policy to this branch's sepolicy API.
 
 diff --git a/shared/sepolicy/system_ext/private/platform_app_36.te b/shared/sepolicy/system_ext/private/platform_app_36.te
 deleted file mode 100644
@@ -46,6 +39,21 @@ index f53e777cd..d114d4e44 100644
  
      allow trusty_security_vm_launcher kmsg_debug_device:chr_file rw_file_perms;
      use_bootstrap_libs(trusty_security_vm_launcher)
+diff --git a/shared/sepolicy/vendor/file_contexts b/shared/sepolicy/vendor/file_contexts
+index db60d30..3d0aa93 100644
+--- a/shared/sepolicy/vendor/file_contexts
++++ b/shared/sepolicy/vendor/file_contexts
+@@ -129,9 +129,7 @@ starting_at_board_api(202604, `
+ /vendor/bin/hw/android\.hardware\.authsecret-service.example u:object_r:hal_authsecret_default_exec:s0
+ /vendor/bin/dlkm_loader  u:object_r:dlkm_loader_exec:s0
+ /vendor/bin/init\.wifi    u:object_r:init_wifi_sh_exec:s0
+-starting_at_board_api(202604, `
+-    /vendor/bin/init_dev_config u:object_r:init_dev_config_exec:s0
+-')
++/vendor/bin/init_dev_config u:object_r:init_dev_config_exec:s0
+ /vendor/bin/snapshot_hook_post_resume u:object_r:snapshot_hook_sh:s0
+ /vendor/bin/snapshot_hook_pre_suspend u:object_r:snapshot_hook_sh:s0
+ 
 diff --git a/shared/sepolicy/vendor/policy_capabilities b/shared/sepolicy/vendor/policy_capabilities
 deleted file mode 100644
 index 16773190a..000000000
@@ -69,3 +77,14 @@ index d5bd4efcb..000000000
 -  init_daemon_domain(hal_npu_scheduling_cuttlefish)
 -')
 \ No newline at end of file
+diff --git a/shared/sepolicy/vendor/service_contexts b/shared/sepolicy/vendor/service_contexts
+--- a/shared/sepolicy/vendor/service_contexts
++++ b/shared/sepolicy/vendor/service_contexts
+@@ -5,7 +5,6 @@
+ android.hardware.security.keymint.IKeyMintDevice/strongbox      u:object_r:hal_keymint_service:s0
+ android.hardware.security.sharedsecret.ISharedSecret/strongbox  u:object_r:hal_sharedsecret_service:s0
+ android.hardware.security.keymint.IRemotelyProvisionedComponent/strongbox u:object_r:hal_keymint_service:s0
+-android.hardware.secure_element.ISecureElement/eSE1 u:object_r:hal_secure_element_service:s0
+ 
+ # Binder service mappings
+ gce                                       u:object_r:gce_service:s0

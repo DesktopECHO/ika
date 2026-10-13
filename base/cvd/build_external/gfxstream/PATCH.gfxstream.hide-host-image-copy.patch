@@ -1,27 +1,6 @@
 Patch summary:
-Stop advertising host image copy to the guest.
-
-PATCH.gfxstream.host-image-copy-refuse-unmarshalled.patch makes the decoder
-fail vkCopyMemoryToImage/vkCopyImageToMemory (and the EXT aliases) because
-their pHostPointer payload is not marshalled. The host still listed
-VK_EXT_host_image_copy and reported hostImageCopy = VK_TRUE, so guests kept
-using it. ANGLE uploads textures through vkCopyMemoryToImageEXT when the
-extension is present; every such upload failed and the texture stayed empty.
-In Fruit Ninja (Unity on ANGLE) the 3D fruit drew as black silhouettes and
-the dojo background, menu rings, logo and top bar were missing. Disabling
-ANGLE's supportsHostImageCopy feature alone made the scene render correctly.
-
-ANGLE only takes that path when the host reports
-identicalMemoryTypeRequirements, which Honeykrisp does and RADV and llvmpipe
-do not, so the GLES symptom is Apple-only. Native Vulkan apps could pick the
-extension up on any host.
-
-Remove VK_EXT_host_image_copy from the device extensions, clear
-hostImageCopy in VkPhysicalDeviceHostImageCopyFeatures and
-VkPhysicalDeviceVulkan14Features (it is an optional Vulkan 1.4 feature), and
-clear VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT from VkFormatProperties3, so
-guests fall back to staging-buffer uploads. Drop this once the payload is
-marshalled and the calls are re-enabled.
+Hide VK_EXT_host_image_copy until its calls are marshalled; ANGLE texture
+uploads through it came out empty.
 
 diff --git a/host/vulkan/cereal/common/vk_struct_id.h b/host/vulkan/cereal/common/vk_struct_id.h
 index c8e9841e8..3e7a4578f 100644

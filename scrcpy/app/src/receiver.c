@@ -7,7 +7,6 @@
 
 #include "device_msg.h"
 #include "events.h"
-#include "screen.h"
 #include "util/log.h"
 #include "util/str.h"
 #include "util/thread.h"
@@ -17,13 +16,6 @@ struct sc_uhid_output_task_data {
     uint16_t id;
     uint16_t size;
     uint8_t *data;
-};
-
-struct sc_display_ready_task_data {
-    struct sc_screen *screen;
-    uint32_t display_id;
-    uint16_t width;
-    uint16_t height;
 };
 
 bool
@@ -37,7 +29,6 @@ sc_receiver_init(struct sc_receiver *receiver, sc_socket control_socket,
     receiver->control_socket = control_socket;
     receiver->acksync = NULL;
     receiver->uhid_devices = NULL;
-    receiver->screen = NULL;
 
     assert(cbs && cbs->on_ended);
     receiver->cbs = cbs;
@@ -53,7 +44,7 @@ sc_receiver_destroy(struct sc_receiver *receiver) {
 
 static void
 task_set_clipboard(void *userdata) {
-    assert(sc_thread_get_id() == SC_MAIN_THREAD_ID);
+    assert(sc_thread_is_main());
 
     char *text = userdata;
 
@@ -76,7 +67,7 @@ task_set_clipboard(void *userdata) {
 
 static void
 task_uhid_output(void *userdata) {
-    assert(sc_thread_get_id() == SC_MAIN_THREAD_ID);
+    assert(sc_thread_is_main());
 
     struct sc_uhid_output_task_data *data = userdata;
 
@@ -88,23 +79,13 @@ task_uhid_output(void *userdata) {
 }
 
 static void
-task_display_ready(void *userdata) {
-    assert(sc_thread_get_id() == SC_MAIN_THREAD_ID);
-
-    struct sc_display_ready_task_data *data = userdata;
-    sc_screen_on_display_ready(data->screen, data->display_id, data->width,
-                               data->height);
-    free(data);
-}
-
-static void
 process_msg(struct sc_receiver *receiver, struct sc_device_msg *msg) {
     switch (msg->type) {
         case DEVICE_MSG_TYPE_CLIPBOARD: {
             // Take ownership of the text (do not destroy the msg)
             char *text = msg->clipboard.text;
 
-            bool ok = sc_post_to_main_thread(task_set_clipboard, text);
+            bool ok = sc_run_on_main_thread(task_set_clipboard, text, false);
             if (!ok) {
                 LOGW("Could not post clipboard to main thread");
                 free(text);
@@ -158,14 +139,13 @@ process_msg(struct sc_receiver *receiver, struct sc_device_msg *msg) {
 
             // It is guaranteed that these pointers will still be valid when
             // the main thread will process them (the main thread will stop
-            // processing SC_EVENT_RUN_ON_MAIN_THREAD on exit, when everything
-            // gets deinitialized)
+            // processing on exit, when everything gets deinitialized)
             data->uhid_devices = receiver->uhid_devices;
             data->id = msg->uhid_output.id;
             data->data = msg->uhid_output.data; // take ownership
             data->size = msg->uhid_output.size;
 
-            bool ok = sc_post_to_main_thread(task_uhid_output, data);
+            bool ok = sc_run_on_main_thread(task_uhid_output, data, false);
             if (!ok) {
                 LOGW("Could not post UHID output to main thread");
                 free(data->data);
@@ -174,31 +154,16 @@ process_msg(struct sc_receiver *receiver, struct sc_device_msg *msg) {
             }
 
             break;
-        case DEVICE_MSG_TYPE_DISPLAY_READY: {
-            if (!receiver->screen) {
-                // Screen isn't wired (e.g. no video). Nothing to ack.
-                break;
-            }
-            struct sc_display_ready_task_data *data = malloc(sizeof(*data));
-            if (!data) {
-                LOG_OOM();
-                return;
-            }
-            data->screen = receiver->screen;
-            data->display_id = msg->display_ready.display_id;
-            data->width = msg->display_ready.width;
-            data->height = msg->display_ready.height;
-            bool dr_ok = sc_post_to_main_thread(task_display_ready, data);
-            if (!dr_ok) {
-                LOGW("Could not post display_ready to main thread");
-                free(data);
-            }
+        case DEVICE_MSG_TYPE_DISPLAY_READY:
+            LOGD("Display %" PRIu32 " ready at %" PRIu16 "x%" PRIu16,
+                 msg->display_ready.display_id, msg->display_ready.width,
+                 msg->display_ready.height);
+            sc_push_event_with_data(SC_EVENT_DISPLAY_READY,
+                SC_EVENT_SIZE_PACK(msg->display_ready.width,
+                                   msg->display_ready.height));
             break;
-        }
         case DEVICE_MSG_TYPE_APP_ENDED:
-            if (!sc_push_event(SC_EVENT_APP_ENDED)) {
-                LOGW("Could not report the end of the app");
-            }
+            sc_push_event(SC_EVENT_APP_ENDED);
             break;
     }
 }

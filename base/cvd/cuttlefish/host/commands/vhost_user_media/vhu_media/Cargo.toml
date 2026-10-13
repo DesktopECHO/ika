@@ -12,6 +12,7 @@ vhost-user-backend = { workspace = true }
 virtio-bindings = { workspace = true }
 virtio-media = { workspace = true }
 virtio-queue = { workspace = true }
+uuid = { workspace = true }
 vm-allocator = { workspace = true }
 vm-memory = { workspace = true }
 vmm-sys-util = { workspace = true }

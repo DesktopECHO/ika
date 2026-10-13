@@ -1,0 +1,73 @@
+Patch summary:
+Allow one video quality change every 2 s; each restarts the camera stream, and
+changes faster than that can hang the external camera HAL.
+
+diff --git a/app/src/main/java/org/lineageos/aperture/CameraActivity.kt b/app/src/main/java/org/lineageos/aperture/CameraActivity.kt
+index 9068c5d..c3a53b2 100644
+--- a/app/src/main/java/org/lineageos/aperture/CameraActivity.kt
++++ b/app/src/main/java/org/lineageos/aperture/CameraActivity.kt
+@@ -78,8 +78,11 @@ import coil3.video.VideoFrameDecoder
+ import com.google.android.material.snackbar.Snackbar
+ import kotlinx.coroutines.CoroutineScope
+ import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.flow.MutableStateFlow
+ import kotlinx.coroutines.flow.collect
+ import kotlinx.coroutines.flow.collectLatest
++import kotlinx.coroutines.flow.combine
+ import kotlinx.coroutines.guava.await
+ import kotlinx.coroutines.launch
+ import kotlinx.coroutines.withContext
+@@ -255,6 +258,9 @@ open class CameraActivity : AppCompatActivity(R.layout.activity_camera) {
+     }
+     private var zoomGestureDetectorIsInProgress = false
+ 
++    // Each video quality change restarts the camera stream; false for a while after one
++    private val videoQualityChangeAllowed = MutableStateFlow(true)
++
+     private val handler = object : Handler(Looper.getMainLooper()) {
+         override fun handleMessage(msg: Message) {
+             super.handleMessage(msg)
+@@ -433,7 +439,15 @@ open class CameraActivity : AppCompatActivity(R.layout.activity_camera) {
+ 
+         // Set secondary top bar button callbacks
+         aspectRatioButton.setOnClickListener { viewModel.cyclePhotoAspectRatio() }
+-        videoQualityButton.setOnClickListener { viewModel.cycleVideoQuality() }
++        videoQualityButton.setOnClickListener {
++            if (!videoQualityChangeAllowed.value) return@setOnClickListener
++            videoQualityChangeAllowed.value = false
++            viewModel.cycleVideoQuality()
++            lifecycleScope.launch {
++                delay(VIDEO_QUALITY_CHANGE_INTERVAL_MS)
++                videoQualityChangeAllowed.value = true
++            }
++        }
+         videoFrameRateButton.setOnClickListener { viewModel.cycleVideoFrameRate() }
+         videoDynamicRangeButton.setOnClickListener { viewModel.cycleVideoDynamicRange() }
+         effectButton.setOnClickListener { viewModel.cycleExtensionMode() }
+@@ -1239,8 +1253,13 @@ open class CameraActivity : AppCompatActivity(R.layout.activity_camera) {
+         }
+ 
+         launch {
+-            viewModel.isVideoQualityButtonEnabled.collectLatest { isVideoQualityButtonEnabled ->
+-                videoQualityButton.isEnabled = isVideoQualityButtonEnabled
++            combine(
++                viewModel.isVideoQualityButtonEnabled,
++                videoQualityChangeAllowed,
++            ) { isVideoQualityButtonEnabled, isChangeAllowed ->
++                isVideoQualityButtonEnabled && isChangeAllowed
++            }.collectLatest { isEnabled ->
++                videoQualityButton.isEnabled = isEnabled
+             }
+         }
+ 
+@@ -2126,6 +2145,9 @@ open class CameraActivity : AppCompatActivity(R.layout.activity_camera) {
+         private const val MSG_HIDE_EXPOSURE_SLIDER = 2
+         private const val MSG_ON_PINCH_TO_ZOOM = 3
+ 
++        // Shortest time between video quality changes
++        private const val VIDEO_QUALITY_CHANGE_INTERVAL_MS = 2000L
++
+         // We need to return something small enough so as not to overwhelm Binder. 1MB is the
+         // per-process limit across all transactions. Camera2 sets a max pixel count of 51200.
+         // We set a max side length of 256, for a max pixel count of 65536. Even at 4 bytes per

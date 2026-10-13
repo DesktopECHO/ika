@@ -82,6 +82,14 @@ void WriteAndroidEnvironment(
   if (!instance.boot_slot().empty()) {
     env << "android_slot_suffix=_" << instance.boot_slot() << '\0';
   }
+  // U-Boot's x86 fastboot buffer is at 2 GiB, beyond the RAM of a 2 GiB guest:
+  // downloads crawl into unbacked memory and flashing hangs. Keep the buffer,
+  // as large as the default max-download-size, at 1 GiB instead.
+  if (instance.target_arch() == Arch::X86 ||
+      instance.target_arch() == Arch::X86_64) {
+    env << "fastbootcmd=fastboot -l 0x40000000 -s 0x07000000 tcp -ipv6 && boot"
+        << '\0';
+  }
   env << '\0';
 }
 

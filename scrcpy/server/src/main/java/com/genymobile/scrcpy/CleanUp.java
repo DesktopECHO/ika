@@ -1,11 +1,12 @@
 package com.genymobile.scrcpy;
 
 import com.genymobile.scrcpy.device.Device;
-import com.genymobile.scrcpy.device.Size;
+import com.genymobile.scrcpy.model.Size;
 import com.genymobile.scrcpy.util.Ln;
 import com.genymobile.scrcpy.util.Settings;
 import com.genymobile.scrcpy.util.SettingsException;
 import com.genymobile.scrcpy.wrappers.ServiceManager;
+import com.genymobile.scrcpy.wrappers.WindowManager;
 
 import android.os.BatteryManager;
 import android.os.Looper;
@@ -102,16 +103,6 @@ public final class CleanUp {
 
         int displayId = options.getDisplayId();
 
-        boolean restorePrimaryDisplay = options.getFlexDisplay()
-                && displayId == 0;
-        Size restoreDisplaySizeOverride = null;
-        int restoreDisplayDensityOverride = -1;
-        if (restorePrimaryDisplay) {
-            restoreDisplaySizeOverride = Device.getDisplaySizeOverride(displayId);
-            restoreDisplayDensityOverride =
-                    Device.getDisplayDensityOverride(displayId);
-        }
-
         int restoreDisplayImePolicy = -1;
         if (displayId > 0) {
             int displayImePolicy = options.getDisplayImePolicy();
@@ -126,20 +117,25 @@ public final class CleanUp {
 
         boolean powerOffScreen = options.getPowerOffScreenOnClose();
 
+        // Flex display of the main display: restore the size and density it had before
+        boolean restoreMainDisplay = options.getFlexDisplay() && options.getNewDisplay() == null && displayId == 0;
+        Size restoreMainDisplaySize = null;
+        int restoreMainDisplayDensity = 0;
+        if (restoreMainDisplay) {
+            restoreMainDisplaySize = ServiceManager.getWindowManager().getForcedDisplaySize(displayId);
+            restoreMainDisplayDensity = ServiceManager.getWindowManager().getForcedDisplayDensity(displayId);
+        }
+
         try {
-            run(displayId, restoreStayOn, disableShowTouches, powerOffScreen,
-                    restoreScreenOffTimeout, restoreDisplayImePolicy,
-                    restorePrimaryDisplay, restoreDisplaySizeOverride,
-                    restoreDisplayDensityOverride);
+            run(displayId, restoreStayOn, disableShowTouches, powerOffScreen, restoreScreenOffTimeout, restoreDisplayImePolicy, restoreMainDisplay,
+                    restoreMainDisplaySize, restoreMainDisplayDensity);
         } catch (IOException e) {
             Ln.e("Clean up I/O exception", e);
         }
     }
 
     private void run(int displayId, int restoreStayOn, boolean disableShowTouches, boolean powerOffScreen, int restoreScreenOffTimeout,
-            int restoreDisplayImePolicy, boolean restorePrimaryDisplay,
-            Size restoreDisplaySizeOverride,
-            int restoreDisplayDensityOverride) throws IOException {
+            int restoreDisplayImePolicy, boolean restoreMainDisplay, Size restoreMainDisplaySize, int restoreMainDisplayDensity) throws IOException {
         String[] cmd = {
                 "app_process",
                 "/",
@@ -150,12 +146,10 @@ public final class CleanUp {
                 String.valueOf(powerOffScreen),
                 String.valueOf(restoreScreenOffTimeout),
                 String.valueOf(restoreDisplayImePolicy),
-                String.valueOf(restorePrimaryDisplay),
-                String.valueOf(restoreDisplaySizeOverride != null
-                        ? restoreDisplaySizeOverride.getWidth() : -1),
-                String.valueOf(restoreDisplaySizeOverride != null
-                        ? restoreDisplaySizeOverride.getHeight() : -1),
-                String.valueOf(restoreDisplayDensityOverride),
+                String.valueOf(restoreMainDisplay),
+                String.valueOf(restoreMainDisplaySize != null ? restoreMainDisplaySize.getWidth() : 0),
+                String.valueOf(restoreMainDisplaySize != null ? restoreMainDisplaySize.getHeight() : 0),
+                String.valueOf(restoreMainDisplayDensity),
         };
 
         ProcessBuilder builder = new ProcessBuilder(cmd);
@@ -226,10 +220,10 @@ public final class CleanUp {
         boolean powerOffScreen = Boolean.parseBoolean(args[3]);
         int restoreScreenOffTimeout = Integer.parseInt(args[4]);
         int restoreDisplayImePolicy = Integer.parseInt(args[5]);
-        boolean restorePrimaryDisplay = Boolean.parseBoolean(args[6]);
-        int restoreDisplayWidth = Integer.parseInt(args[7]);
-        int restoreDisplayHeight = Integer.parseInt(args[8]);
-        int restoreDisplayDensity = Integer.parseInt(args[9]);
+        boolean restoreMainDisplay = Boolean.parseBoolean(args[6]);
+        int restoreMainDisplayWidth = Integer.parseInt(args[7]);
+        int restoreMainDisplayHeight = Integer.parseInt(args[8]);
+        int restoreMainDisplayDensity = Integer.parseInt(args[9]);
 
         // Dynamic option
         boolean restoreDisplayPower = false;
@@ -280,13 +274,13 @@ public final class CleanUp {
             ServiceManager.getWindowManager().setDisplayImePolicy(displayId, restoreDisplayImePolicy);
         }
 
-        if (restorePrimaryDisplay) {
-            Ln.i("Restoring primary display size/density");
-            Size restoreSize = restoreDisplayWidth > 0 && restoreDisplayHeight > 0
-                    ? new Size(restoreDisplayWidth, restoreDisplayHeight)
-                    : null;
-            Device.restoreDisplaySizeAndDensity(displayId, restoreSize,
-                    restoreDisplayDensity);
+        if (restoreMainDisplay) {
+            Ln.i("Restoring main display size and density");
+            WindowManager wm = ServiceManager.getWindowManager();
+            wm.setDisplayScalingDisabled(displayId, false);
+            Size size = restoreMainDisplayWidth > 0 ? new Size(restoreMainDisplayWidth, restoreMainDisplayHeight) : null;
+            wm.setForcedDisplaySize(displayId, size);
+            wm.setForcedDisplayDensity(displayId, restoreMainDisplayDensity);
         }
 
         // Change the power of the main display when mirroring a virtual display

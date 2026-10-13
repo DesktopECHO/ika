@@ -5,6 +5,7 @@ package(
 )
 
 exports_files([
+    "PATCH.gfxstream.integrated-gpu-score.patch",
     "PATCH.gfxstream.build_variables.patch",
     "PATCH.gfxstream.protobuf-deprecation-warning.patch",
     "PATCH.protobuf_deprecation_warning.patch",

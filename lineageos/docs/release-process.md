@@ -6,7 +6,10 @@ Before building:
 
 1. Set the release version in `packaging/VERSION`. It is the only place the
    version is recorded: the RPM specs, Arch PKGBUILDs and Debian packages all
-   take it from there at build time.
+   take it from there at build time. Add the release notes to `CHANGELOG.md`
+   and to the package changelogs: `base/debian/changelog`,
+   `tools/lineageos/debian/changelog`, `frontend/debian/changelog` and the
+   `%changelog` of each spec in `base/rpm/` and `frontend/rpm/`.
 2. Choose the LineageOS branch and manifest revision.
 3. Choose `--microg` or `--mtg` when that provider should be included. For
    microG, the newest published, non-draft GmsCore entry (including prereleases)

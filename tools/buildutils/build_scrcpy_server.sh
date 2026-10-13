@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRCPY_DIR="$ROOT_DIR/scrcpy"
+SCRCPY_DIR="${SCRCPY_DIR:-$ROOT_DIR/scrcpy}"
 BUILD_DIR="${BUILD_DIR:-$ROOT_DIR/out/build-scrcpy-server}"
 ANDROID_CACHE_DIR="${ANDROID_CACHE_DIR:-$ROOT_DIR/out/android-sdk-cache}"
 JDK_DIR="${JDK_DIR:-$ROOT_DIR/toolchain/jdk-17.0.18+8}"
@@ -27,7 +27,7 @@ if [[ -z "${SCRCPY_VERSION_NAME}" ]]; then
     SCRCPY_VERSION_NAME="$(sed -n "s/.*version: '\\([^']*\\)'.*/\\1/p" "${SCRCPY_DIR}/meson.build" | head -n1)"
 fi
 if [[ -z "${SCRCPY_VERSION_NAME}" ]]; then
-    SCRCPY_VERSION_NAME="3.3.4"
+    SCRCPY_VERSION_NAME="5.0.1"
 fi
 
 JAVA=""

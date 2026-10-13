@@ -368,10 +368,11 @@ Result<std::unordered_map<std::string, std::string>> BootconfigArgsFromConfig(
     if (kv.empty()) {
       continue;
     }
-    const std::vector<std::string_view> parts = absl::StrSplit(kv, '=');
-    CF_EXPECT_EQ(parts.size(), 2,
-                 "Failed to parse --extra_bootconfig_args: \"" << kv << "\"");
-    bootconfig_args.emplace(parts[0], parts[1]);
+    const size_t separator = kv.find('=');
+    CF_EXPECT(separator != std::string::npos,
+              "Failed to parse --extra_bootconfig_args: \"" << kv << "\"");
+    bootconfig_args.emplace(kv.substr(0, separator),
+                            kv.substr(separator + 1));
   }
 
   return bootconfig_args;

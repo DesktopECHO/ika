@@ -1,5 +1,5 @@
 [patch.crates-io]
 # this needs to be at parity with MODULE.bazel
-audio_streams = { git = "https://chromium.googlesource.com/crosvm/crosvm", rev = "78c5df67a6ff5548157d8d12618162b91ae12d47" }
+audio_streams = { git = "https://chromium.googlesource.com/crosvm/crosvm", rev = "22f6be24c5ef49f99c164bb3bd063ace509fb96a" }
 # Keep this at parity with the minijail mirror configured by ensure_bazel_git_mirrors.sh.
 minijail = { git = "https://chromium.googlesource.com/chromiumos/platform/minijail", rev = "7845d89927a82dbdcdee6276837cd0978f69ba19" }

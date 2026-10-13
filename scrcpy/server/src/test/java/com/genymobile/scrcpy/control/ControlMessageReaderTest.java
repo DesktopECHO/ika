@@ -423,26 +423,6 @@ public class ControlMessageReaderTest {
     }
 
     @Test
-    public void testParseResizeDisplay() throws IOException {
-        ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        DataOutputStream dos = new DataOutputStream(bos);
-        dos.writeByte(ControlMessage.TYPE_RESIZE_DISPLAY);
-        dos.writeShort(1920);
-        dos.writeShort(1080);
-        byte[] packet = bos.toByteArray();
-
-        ByteArrayInputStream bis = new ByteArrayInputStream(packet);
-        ControlMessageReader reader = new ControlMessageReader(bis);
-
-        ControlMessage event = reader.read();
-        Assert.assertEquals(ControlMessage.TYPE_RESIZE_DISPLAY, event.getType());
-        Assert.assertEquals(1920, event.getWidth());
-        Assert.assertEquals(1080, event.getHeight());
-
-        Assert.assertEquals(-1, bis.read()); // EOS
-    }
-
-    @Test
     public void testParseCameraSetTorch() throws IOException {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         DataOutputStream dos = new DataOutputStream(bos);
@@ -488,6 +468,47 @@ public class ControlMessageReaderTest {
 
         ControlMessage event = reader.read();
         Assert.assertEquals(ControlMessage.TYPE_CAMERA_ZOOM_OUT, event.getType());
+
+        Assert.assertEquals(-1, bis.read()); // EOS
+    }
+
+    @Test
+    public void testParseResizeDisplay() throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        DataOutputStream dos = new DataOutputStream(bos);
+        dos.writeByte(ControlMessage.TYPE_RESIZE_DISPLAY);
+        dos.writeShort(1920);
+        dos.writeShort(1080);
+        byte[] packet = bos.toByteArray();
+
+        ByteArrayInputStream bis = new ByteArrayInputStream(packet);
+        ControlMessageReader reader = new ControlMessageReader(bis);
+
+        ControlMessage event = reader.read();
+        Assert.assertEquals(ControlMessage.TYPE_RESIZE_DISPLAY, event.getType());
+        Assert.assertEquals(1920, event.getWidth());
+        Assert.assertEquals(1080, event.getHeight());
+
+        Assert.assertEquals(-1, bis.read()); // EOS
+    }
+
+    @Test
+    public void testParseScanFile() throws IOException {
+        byte[] path = "/sdcard/Download".getBytes(StandardCharsets.UTF_8);
+
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        DataOutputStream dos = new DataOutputStream(bos);
+        dos.writeByte(ControlMessage.TYPE_SCAN_FILE);
+        dos.writeInt(path.length);
+        dos.write(path);
+        byte[] packet = bos.toByteArray();
+
+        ByteArrayInputStream bis = new ByteArrayInputStream(packet);
+        ControlMessageReader reader = new ControlMessageReader(bis);
+
+        ControlMessage event = reader.read();
+        Assert.assertEquals(ControlMessage.TYPE_SCAN_FILE, event.getType());
+        Assert.assertEquals("/sdcard/Download", event.getText());
 
         Assert.assertEquals(-1, bis.read()); // EOS
     }

@@ -264,7 +264,10 @@ regular_keys=(
 # APEX keys: SHA256_RSA4096 per the LineageOS signing wiki. Many of these
 # don't ship in a Cuttlefish desktop build; sign_target_files.sh only passes
 # flags for APEXes actually present in the target_files.zip, so extras here
-# are harmless storage cost.
+# are harmless storage cost. com.android.hardware and com.google.cf.apex are
+# the build's shared keys for the hardware and Cuttlefish APEXes; those
+# APEXes are signed by key name, not APEX name, so multi-install variants
+# such as the keymint APEXes keep sharing one key.
 apex_keys=(
   com.android.adbd
   com.android.adservices
@@ -284,6 +287,7 @@ apex_keys=(
   com.android.devicelock
   com.android.extservices
   com.android.graphics.pdf
+  com.android.hardware
   com.android.hardware.authsecret
   com.android.hardware.audio
   com.android.hardware.biometrics.face.virtual
@@ -354,6 +358,7 @@ apex_keys=(
   com.android.wifi
   com.android.wifi.dialog
   com.android.wifi.resources
+  com.google.cf.apex
   com.google.cf.bt
   com.google.cf.confirmationui
   com.google.cf.disabled

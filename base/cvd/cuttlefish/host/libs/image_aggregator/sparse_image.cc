@@ -23,10 +23,10 @@
 #include <string_view>
 #include <utility>
 
-#include <android-base/logging.h>
 #include <android-base/unique_fd.h>
 #include <sparse/sparse.h>
 
+#include "absl/log/log.h"
 
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/files.h"

@@ -1940,6 +1940,7 @@ CuttlefishConfig::InstanceSpecific::audio_settings() const {
 static constexpr char kMediaConfigs[] = "media_configs";
 static constexpr char kMediaType[] = "type";
 static constexpr char kMediaLensFacing[] = "lens_facing";
+static constexpr char kMediaDevice[] = "device";
 std::vector<CuttlefishConfig::MediaConfig>
 CuttlefishConfig::InstanceSpecific::media_configs() const {
   std::vector<MediaConfig> configs;
@@ -1949,6 +1950,9 @@ CuttlefishConfig::InstanceSpecific::media_configs() const {
         static_cast<CuttlefishConfig::MediaType>(json[kMediaType].asInt());
     if (json.isMember(kMediaLensFacing)) {
       config.lens_facing = json[kMediaLensFacing].asString();
+    }
+    if (json.isMember(kMediaDevice)) {
+      config.device = json[kMediaDevice].asString();
     }
     configs.emplace_back(config);
   }
@@ -1963,6 +1967,7 @@ void CuttlefishConfig::MutableInstanceSpecific::set_media_configs(
     Json::Value json(Json::objectValue);
     json[kMediaType] = static_cast<int>(config.type);
     json[kMediaLensFacing] = config.lens_facing;
+    json[kMediaDevice] = config.device;
     configs_json.append(json);
   }
 

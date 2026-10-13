@@ -10,8 +10,6 @@
 #include "util/net.h"
 #include "util/thread.h"
 
-struct sc_screen;
-
 // receive events from the device
 // managed by the controller
 struct sc_receiver {
@@ -21,9 +19,6 @@ struct sc_receiver {
 
     struct sc_acksync *acksync;
     struct sc_uhid_devices *uhid_devices;
-    // Optional. Receives DEVICE_MSG_TYPE_DISPLAY_READY dispatch via a task
-    // posted to the main thread. NULL if the screen isn't initialised yet.
-    struct sc_screen *screen;
 
     const struct sc_receiver_callbacks *cbs;
     void *cbs_userdata;

@@ -12,6 +12,7 @@ DEFAULT_CVD_PRODUCT_OUT="/usr/share/cuttlefish-common/lineageos"
 PACKAGED_SCRCPY_BIN="/usr/lib/cuttlefish-common/bin/scrcpy"
 PACKAGED_SCRCPY_SERVER="/usr/lib/cuttlefish-common/share/scrcpy/scrcpy-server"
 PACKAGED_GETCHROMIUM_BIN="/usr/lib/cuttlefish-common/bin/getchromium"
+PACKAGED_IKA_ROOT_BIN="/usr/lib/cuttlefish-common/bin/ika-root"
 SCRCPY_ICON_DIR_DEFAULT="/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps"
 IKA_SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 
@@ -392,11 +393,19 @@ CVD_GPU_MODE="${CVD_GPU_DEFAULTS[gpu_mode]}"
 : "${CVD_HOST_OUT:=${PACKAGED_CVD_HOST_OUT}}"
 : "${CVD_PRODUCT_OUT:=${DEFAULT_CVD_PRODUCT_OUT}}"
 : "${CVD_HOME_DIR:=${HOME}/ika}"
+HOST_HOME="${HOME}"
+USER_ADB_PRIVATE_KEY="${HOST_HOME}/.android/adbkey"
+USER_ADB_PUBLIC_KEY="${USER_ADB_PRIVATE_KEY}.pub"
+CVD_BUILD_VARIANT=""
+if [[ -r "${CVD_PRODUCT_OUT}/ika-build-variant" ]]; then
+  IFS= read -r CVD_BUILD_VARIANT < "${CVD_PRODUCT_OUT}/ika-build-variant" || true
+fi
 mkdir -p "${CVD_HOME_DIR}"
 CVD_TMP_DIR="${CVD_HOME_DIR}/tmp"
 mkdir -p "${CVD_TMP_DIR}"
 export TMPDIR="${CVD_TMP_DIR}"
 DATA_GB_CONFIG_FILE="${CVD_HOME_DIR}/data-gb"
+SERIAL_NUMBER_FILE="${CVD_HOME_DIR}/serial-number"
 START_LOG_FILE="${CVD_HOME_DIR}/ikastart.log"
 SCRCPY_LOG_FILE="${CVD_HOME_DIR}/console.log"
 SCRCPY_WINDOW_STATE_FILE="${CVD_HOME_DIR}/console-window-state"
@@ -425,6 +434,7 @@ CVD_INSTANCE_DIR="${CVD_HOME_DIR}/cuttlefish/instances/cvd-1"
 CVD_LAUNCHER_LOG="${CVD_INSTANCE_DIR}/logs/launcher.log"
 CVD_CONFIG_PATH="${CVD_INSTANCE_DIR}/cuttlefish_config.json"
 CHROMIUM_INSTALL_STAMP="${CVD_HOME_DIR}/chromium-installed-cvd-1"
+CHROMIUM_APK="${CVD_HOME_DIR}/Chromium.apk"
 UDMABUF_BASELINE_FILE="${CVD_HOME_DIR}/udmabuf-baseline"
 SCRCPY_BIN="${PACKAGED_SCRCPY_BIN}"
 SCRCPY_SERVER_PATH_OVERRIDE=""
@@ -446,11 +456,12 @@ RADV_VEGA_OR_OLDER_FAMILY_REGEX='(TAHITI|PITCAIRN|VERDE|OLAND|HAINAN|BONAIRE|KAB
 GFXSTREAM_APPLE_16K_VULKAN_RENDERER_FEATURES="ExternalBlob:enabled;SystemBlob:disabled;VulkanAllocateHostVisibleAsUdmabuf:enabled;VulkanUseDedicatedAhbMemoryType:enabled"
 CVD_GRAPHICS_DRIVER_MESSAGE=""
 CVD_DATA_STORAGE_MESSAGE=""
-CVD_NEWLY_PROVISIONED="false"
 # Set to false by --no-console: start the VM without the desktop console.
 START_CONSOLE="true"
 # Set by the internal --game-session start option.
 START_GAME_SESSION="false"
+# Set by 'start', which keeps a running VM: --camera then can't take effect.
+START_KEEPS_RUNNING_VM="false"
 : "${IKA_STOP_GRACE_SEC:=30}"
 : "${IKA_SCRCPY_REBOOT_TIMEOUT_SEC:=120}"
 
@@ -469,12 +480,20 @@ log_file_only() {
 }
 
 die() {
+  die_with_notification "$*" "$*"
+}
+
+# Like die, with a separate (shorter) message for the desktop notification.
+die_with_notification() {
+  local notification="$1"
+  shift
+
   log "error: $*"
   if [[ -n "${CONSOLE_FAILURE_MESSAGE:-}" ]]; then
     printf '%s\n' "${CONSOLE_FAILURE_MESSAGE}" >&3
   fi
   close_progress_notifications
-  notify_user "$*"
+  notify_user "${notification}"
   exit 1
 }
 
@@ -652,10 +671,131 @@ save_data_gb_configuration() {
   log "userdata size configured: ${data_gb} GB (applies on next start)"
 }
 
+# ============================================================================
+# Host camera passthrough (--camera)
+# ============================================================================
+#
+# '--camera' passes a host V4L2 camera to the guest with crosvm virtio-media
+# (cvd --media=type=v4l2_proxy,device=...). The guest's external camera HAL
+# serves it as the front camera. Without a value, the first video capture
+# device offering MJPEG, NV12 or YUYV is used: USB (UVC) webcams, the FaceTime
+# camera of Apple Silicon Macs (Asahi apple-isp) and of older Intel Macs
+# (facetimehd). Virtual cameras (v4l2loopback and vivid) are used only when
+# there is no other.
+
+# True when DEVICE is a camera the guest can use: a video capture node offering
+# MJPEG, NV12 or YUYV. Without v4l2-ctl, accepts the first node of each device
+# (sysfs index 0), as UVC cameras add metadata nodes after their capture node.
+is_usable_camera_device() {
+  local device="$1"
+  local info
+  local caps
+  local formats
+
+  if ! command -v v4l2-ctl >/dev/null 2>&1; then
+    [[ "$(cat "/sys/class/video4linux/${device##*/}/index" 2>/dev/null)" == "0" ]]
+    return
+  fi
+
+  info="$(v4l2-ctl -d "${device}" --info 2>/dev/null)" || return 1
+  caps="$(awk '/Device Caps/ { print $NF; exit }' <<<"${info}")"
+  [[ "${caps}" =~ ^0x[0-9a-fA-F]+$ ]] || return 1
+  # V4L2_CAP_VIDEO_CAPTURE
+  (( caps & 0x1 )) || return 1
+  formats="$(v4l2-ctl -d "${device}" --list-formats 2>/dev/null)" || return 1
+  [[ "${formats}" =~ \'(MJPG|NV12|YUYV)\' ]]
+}
+
+# Prints the V4L2 driver name of DEVICE (e.g. "uvcvideo", "v4l2 loopback").
+camera_v4l2_driver() {
+  v4l2-ctl -d "$1" --info 2>/dev/null \
+    | sed -n 's/^[[:space:]]*Driver name[[:space:]]*:[[:space:]]*//p' | head -n 1
+}
+
+# True when DEVICE is a virtual camera: v4l2loopback or the vivid test driver.
+# These have no parent device in sysfs.
+is_virtual_camera_device() {
+  local device="$1"
+
+  case "$(camera_v4l2_driver "${device}")" in
+    "v4l2 loopback"|vivid) return 0 ;;
+  esac
+  [[ ! -e "/sys/class/video4linux/${device##*/}/device" ]]
+}
+
+# Prints the host's video nodes as /dev/videoN, in number order.
+list_video_devices() {
+  local node
+
+  while IFS= read -r node; do
+    [[ -c "/dev/${node}" ]] && printf '/dev/%s\n' "${node}"
+  done < <(find /sys/class/video4linux -maxdepth 1 -name 'video*' -printf '%f\n' 2>/dev/null | sort -V)
+}
+
+# Prints the first usable host camera in /dev/videoN order, preferring a
+# physical camera over a virtual one.
+detect_host_camera() {
+  local device
+  local virtual=""
+
+  while IFS= read -r device; do
+    is_usable_camera_device "${device}" || continue
+    if ! is_virtual_camera_device "${device}"; then
+      printf '%s\n' "${device}"
+      return 0
+    fi
+    [[ -n "${virtual}" ]] || virtual="${device}"
+  done < <(list_video_devices)
+  [[ -n "${virtual}" ]] || return 1
+  printf '%s\n' "${virtual}"
+}
+
+# Prints the host camera for --camera: "auto" (or empty) detects one,
+# "videoN" or "/dev/videoN" names one.
+resolve_camera_device() {
+  local requested="${1:-auto}"
+  local device
+  local sysfs
+  local name
+  local driver
+
+  case "${requested}" in
+    auto)
+      device="$(detect_host_camera)" \
+        || die_with_notification "No usable camera found." \
+          "no usable camera found (a video capture device offering MJPEG, NV12 or YUYV); name one with --camera=videoN"
+      ;;
+    *)
+      [[ "${requested}" =~ ^(/dev/)?video[0-9]+$ ]] \
+        || die "--camera expects videoN or /dev/videoN, got '${requested}'"
+      device="/dev/${requested#/dev/}"
+      [[ -c "${device}" ]] || die "camera ${device} does not exist"
+      is_usable_camera_device "${device}" \
+        || log "warning: ${device} does not look like a camera (a video capture device offering MJPEG, NV12 or YUYV); Android may show none"
+      ;;
+  esac
+
+  [[ -r "${device}" && -w "${device}" ]] \
+    || die "no access to camera ${device}; add your user to the video group and log in again"
+  sysfs="/sys/class/video4linux/${device##*/}"
+  name="$(cat "${sysfs}/name" 2>/dev/null || true)"
+  # uvcvideo names nodes "PRODUCT: ENTITY" (cut at 31 characters); keep PRODUCT
+  name="${name%: *}"
+  driver="$(readlink -f "${sysfs}/device/driver" 2>/dev/null || true)"
+  driver="${driver##*/}"
+  # Virtual cameras have no parent device in sysfs
+  [[ -n "${driver}" ]] || driver="$(camera_v4l2_driver "${device}")"
+  # The Asahi driver names the Apple Silicon FaceTime HD camera after itself
+  [[ "${driver}" == "apple-isp" ]] && name="FaceTime HD Camera (Built-in)"
+  log "camera${driver:+ ${driver}}: ${name:+${name} at }${device}"
+  printf '%s\n' "${device}"
+}
+
 parse_start_options() {
   local -n fullscreen_mode_ref="$1"
   local -n game_mode_ref="$2"
   local -n start_args_ref="$3"
+  local camera_device=""
   shift 3
 
   fullscreen_mode_ref="false"
@@ -697,6 +837,24 @@ parse_start_options() {
       --data_gb=*|--data_gb)
         respond_console "Use '${SCRIPT_NAME} reset --data_gb=GB' to change userdata size."
         die "--data_gb is only valid with '${SCRIPT_NAME} reset'"
+        ;;
+      --camera|--camera=*)
+        [[ -z "${camera_device}" ]] || die "--camera given more than once"
+        camera_device="auto"
+        if [[ "$1" == --camera=* ]]; then
+          camera_device="${1#--camera=}"
+        elif [[ $# -gt 1 && "$2" =~ ^(/dev/)?video[0-9]+$ ]]; then
+          camera_device="$2"
+          shift
+        fi
+        # The camera is attached when the VM starts
+        if [[ "${START_KEEPS_RUNNING_VM}" == "true" ]] && has_live_cvd_processes; then
+          [[ "${camera_device}" == "auto" ]] && camera_device=""
+          die "Unable to add camera to a powered-on instance, try '${SCRIPT_NAME} restart --camera${camera_device:+=${camera_device}}'"
+        fi
+        camera_device="$(resolve_camera_device "${camera_device}")" || exit 1
+        start_args_ref+=("--media=type=v4l2_proxy,device=${camera_device}")
+        shift
         ;;
       --ika_scrcpy=*)
         IKA_SCRCPY="${1#*=}"
@@ -759,10 +917,12 @@ usage() {
 
 Usage:
 
-  ${SCRIPT_NAME} start [-f|--fullscreen|--game|--no-console] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] [--setting=arg] ...
+  ${SCRIPT_NAME} start [-f|--fullscreen|--game|--no-console] [--camera[=videoN]] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] [--setting=arg] ...
   ${SCRIPT_NAME} stop
-  ${SCRIPT_NAME} restart [-f|--fullscreen|--game|--no-console] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] ...
+  ${SCRIPT_NAME} restart [-f|--fullscreen|--game|--no-console] [--camera[=videoN]] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] ...
   ${SCRIPT_NAME} reset [--data_gb=GB]
+  ${SCRIPT_NAME} root
+  ${SCRIPT_NAME} gsf
   ${SCRIPT_NAME} status
   ${SCRIPT_NAME} app NAME|PACKAGE [-f|--fullscreen] [--game] [--touch] [--window] [--title=TEXT] [--size=WxH] [--ika_scrcpy=ARGS]
   ${SCRIPT_NAME} app --info NAME|PACKAGE
@@ -779,14 +939,17 @@ Example:
   ${SCRIPT_NAME} restart --gpu_mode=gfxstream --gfxstream_vulkan=on
   ${SCRIPT_NAME} restart --ika_scrcpy="--no-clipboard-autosync"
   ${SCRIPT_NAME} start --game
+  ${SCRIPT_NAME} restart --camera
+  ${SCRIPT_NAME} restart --camera=video2
   ${SCRIPT_NAME} app com.gameloft.android.ANMP.GloftA8HM --game
   ${SCRIPT_NAME} app Asphalt 8 --touch
 
 Options:
 
-  --game                 Start scrcpy fullscreen with UHID gamepad
-                         keyboard and mouse input. With app, use UHID
-                         input but keep the window unless -f is given.
+  --game                 Start the console fullscreen, passing the gamepad,
+                         keyboard and mouse through as HID devices (UHID).
+                         With app, use UHID input but keep the window unless
+                         -f is given.
   --touch                With app, send left-button clicks and drags as real
                          touch input instead of mouse input, for games that
                          ignore the mouse. The right and middle buttons and
@@ -799,6 +962,18 @@ Options:
                          '${SCRIPT_NAME} start --game'.
   --no-console           With start or restart, run the VM without opening the
                          desktop console window (app windows still work).
+  --camera[=videoN]      With start or restart, pass a host camera to Android
+                         as its front camera. Without a value, the first
+                         video capture device offering MJPEG, NV12 or YUYV
+                         is used (USB webcams, the Mac FaceTime camera), and
+                         a virtual camera only when there is no other; videoN
+                         or /dev/videoN picks one. Applies until the next
+                         start or restart without it. Needs the video group.
+                         start only adds a camera when Android is off; use
+                         restart while it runs.
+  --dpi=N                With start or restart, set the display density
+                         (default: from the host display, or 144 when no
+                         display size can be read; IKADPI does the same).
   --memory_mb=MB         Override the default guest RAM setting.
                          Normally ~25% of host RAM, capped at 32 GB.
   --data_gb=GB           With reset, configure the userdata size used by the
@@ -823,9 +998,8 @@ App windows:
   passthrough. Leaving fullscreen or closing that window ends the session:
   the window closes, the game is sent to the background (it keeps its state
   and resumes next time), and the desktop console comes back if it was open
-  before. '--window' opens a game
-  in its own window instead. '--game' forwards the gamepad and keyboard and
-  mouse as HID devices in an app window.
+  before. '--window' opens a game in its own window instead. '--game' passes
+  the gamepad, keyboard and mouse through as HID devices in an app window.
 
   '${SCRIPT_NAME} app' alone lists the apps that can be launched, with apps
   already open in their own window in bold (marked "(open)" when the output
@@ -835,16 +1009,31 @@ App windows:
   case-insensitively, exactly or by a unique part ('app setti' opens
   Settings), and need no quotes when they contain spaces.
 
-  '${SCRIPT_NAME} app sync' adds each launchable app to the desktop's app menu,
-  as "🎮 ∙ LABEL" for games or "ᗩ ∙ LABEL" for other apps, with its own icon, in an
-  "Android Apps (Ika)" group (a GNOME
-  app-grid folder, or a submenu on KDE Plasma, XFCE, Cinnamon and MATE), and
-  removes entries for
+  '${SCRIPT_NAME} app sync' adds each launchable app to the desktop's app
+  menu, as "🎮 ∙ LABEL" for games or "ᗩ ∙ LABEL" for other apps, with its own
+  icon, in an "Android Apps (Ika)" group (a GNOME app-grid folder, or a
+  submenu on KDE Plasma, XFCE, Cinnamon and MATE), and removes entries for
   apps that were uninstalled. While the VM runs, a watcher started by 'start'
   keeps the menu in sync as apps are installed or removed (log:
   ~/ika/app-menu.log). '--remove' deletes the entries and the group and turns
   the automatic sync off until 'app sync' is run again. 'reset' removes the
   entries as well; the next 'start' rebuilds them.
+
+Root:
+
+  '${SCRIPT_NAME} root' runs ika-root, which roots the VM with the latest Magisk
+  release and enables developer options. Rooting a VM the first time unlocks
+  and wipes it, after asking to confirm; later runs update Magisk and keep the
+  data. 'reset' undoes it.
+
+GSF ID:
+
+  '${SCRIPT_NAME} gsf' prints the Google Services Framework ID, copies it to
+  the clipboard (wl-copy, xclip or xsel) and opens Google's uncertified device
+  page in the default browser. Register the ID there if Google blocks sign-in
+  because the device is not Play Protect certified; it does not make the
+  device certified. A factory reset gives the device a new ID. If the VM is
+  not running, it is started first.
 
 Environment variables:
 
@@ -856,6 +1045,7 @@ Environment variables:
                          Silicon hosts with 16 KiB pages, gfxstream modes route
                          host-visible guest Vulkan memory through udmabuf-backed
                          dma-bufs (the path the Apple GPU supports).
+  IKADPI                 Display density, as --dpi.
   IKA_SCRCPY             Extra whitespace-separated args appended to the console.
                          Equivalent command-line option: --ika_scrcpy=ARGS
                          (example: --keyboard=uhid --no-clipboard-autosync)
@@ -865,6 +1055,8 @@ Environment variables:
   IKA_APP_CODEC_OPTIONS  scrcpy --video-codec-options for app windows
                          (default: video-qp-max:int=18, which caps the encoder's
                          quantizer to keep text sharp; empty removes it).
+  IKA_GSF_ID_TIMEOUT_SEC Seconds 'gsf' waits for Google Play Services to
+                         assign the ID (default: 120).
   IKA_STOP_GRACE_SEC     Seconds to allow Cuttlefish and gfxstream to clean up
                          before forcing surviving processes to exit (default: 30).
   IKA_SCRCPY_REBOOT_TIMEOUT_SEC
@@ -944,7 +1136,9 @@ resolve_scrcpy_dpi() {
 
   size="$(host_display_size || true)"
   if [[ ! "${size}" =~ ^([0-9]+)x[0-9]+$ ]]; then
-    die "could not determine host display width for automatic DPI"
+    log "could not determine host display width; defaulting to 144 DPI"
+    printf '%s\n' 144
+    return 0
   fi
 
   # Heuristic: DPI = (native display width / 10)
@@ -996,9 +1190,37 @@ split_start_args() {
   fi
 }
 
-# Largest "current" Wayland output mode as WxH. Probed at most once per run and
-# cached: a single start queries it more than once (DPI heuristic + display
-# ceiling) and spawning wayland-info is comparatively expensive.
+# Largest enabled, connected DRM connector's preferred (native) mode as WxH,
+# read from sysfs. Used when wayland-info finds nothing, e.g. in an X11 session.
+drm_display_size() {
+  local connector
+  local mode
+  local width
+  local height
+  local best_area=0
+  local best=""
+
+  for connector in /sys/class/drm/card*-*; do
+    [[ "$(cat "${connector}/status" 2>/dev/null)" == "connected" ]] || continue
+    [[ "$(cat "${connector}/enabled" 2>/dev/null)" == "enabled" ]] || continue
+    mode="$(head -n 1 "${connector}/modes" 2>/dev/null || true)"
+    [[ "${mode}" =~ ^([0-9]+)x([0-9]+) ]] || continue
+    width="${BASH_REMATCH[1]}"
+    height="${BASH_REMATCH[2]}"
+    if (( width * height > best_area )); then
+      best_area=$(( width * height ))
+      best="${width}x${height}"
+    fi
+  done
+
+  [[ -n "${best}" ]] || return 0
+  printf '%s\n' "${best}"
+}
+
+# Largest "current" Wayland output mode as WxH, falling back to the DRM
+# connectors in sysfs. Probed at most once per run and cached: a single start
+# queries it more than once (DPI heuristic + display ceiling) and spawning
+# wayland-info is comparatively expensive.
 _host_display_size_probed=""
 _host_display_size_value=""
 host_display_size() {
@@ -1024,6 +1246,9 @@ host_display_size() {
           END { if (best_width && best_height) printf "%sx%s\n", best_width, best_height }
         ' || true
       )"
+    fi
+    if [[ -z "${_host_display_size_value}" ]]; then
+      _host_display_size_value="$(drm_display_size)"
     fi
   fi
 
@@ -1059,6 +1284,10 @@ host_display_logical_size() {
           END { if (best_width && best_height) printf "%sx%s\n", best_width, best_height }
         ' || true
       )"
+    fi
+    # X11 has no output scaling, so the native size is the logical size.
+    if [[ -z "${_host_display_logical_size_value}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+      _host_display_logical_size_value="$(host_display_size || true)"
     fi
   fi
 
@@ -1791,8 +2020,6 @@ append_data_storage_args() {
     args_array+=("--blank_data_image_mb=${data_mb}")
   fi
 
-  CVD_NEWLY_PROVISIONED="true"
-
   if [[ -n "${configured_data_gb}" ]]; then
     CVD_DATA_STORAGE_MESSAGE="Provisioning ${data_gb} GB userdata..."
     log "fresh userdata target: ${data_mb} MiB"
@@ -1816,6 +2043,31 @@ apply_default_args() {
       fi
     fi
   done
+}
+
+# Gives the device its own serial number, generated on first start and kept
+# across updates and factory resets, instead of Cuttlefish's CUTTLEFISHCVD01,
+# which is the same on every install. Letters and digits only: GMS check-in
+# rejects other serials.
+append_serial_number_args() {
+  local -n args_array="$1"
+  shift
+  local serial=""
+
+  if user_supplied_flag "serial_number" "$@" \
+      || user_supplied_flag "use_random_serial" "$@"; then
+    return 0
+  fi
+
+  if [[ -s "${SERIAL_NUMBER_FILE}" ]]; then
+    IFS= read -r serial < "${SERIAL_NUMBER_FILE}" || true
+  fi
+  if [[ ! "${serial}" =~ ^[A-Z0-9]+$ ]]; then
+    serial="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n' | tr 'a-f' 'A-F')"
+    printf '%s\n' "${serial}" > "${SERIAL_NUMBER_FILE}"
+    log "generated device serial number ${serial}"
+  fi
+  args_array+=("--serial_number=${serial}")
 }
 
 apply_start_default_args() {
@@ -1870,15 +2122,27 @@ host_color_scheme() {
   esac
 }
 
-append_host_timezone_arg() {
+append_bootconfig_args() {
   local -n args_array="$1"
   local tz
+  local bootconfig_value=""
 
   tz="$(host_timezone)"
-  [[ -n "${tz}" ]] || return 0
+  if [[ -n "${tz}" ]]; then
+    bootconfig_value="androidboot.timezone=\"${tz}\" androidboot.cuttlefish_service_bluetooth_checker=false"
+    log "timezone: ${tz}"
+  fi
 
-  args_array+=("--extra_bootconfig_args=androidboot.timezone=\"${tz}\" androidboot.cuttlefish_service_bluetooth_checker=false")
-  log "timezone: ${tz}"
+  if is_user_build; then
+    [[ -n "${USER_ADB_PUBLIC_KEY_VALUE:-}" ]] || {
+      log "public ADB key was not prepared for ${USER_ADB_PRIVATE_KEY}"
+      return 1
+    }
+    bootconfig_value+="${bootconfig_value:+ }androidboot.ika.adb_pubkey=${USER_ADB_PUBLIC_KEY_VALUE}"
+  fi
+
+  [[ -n "${bootconfig_value}" ]] || return 0
+  args_array+=("--extra_bootconfig_args=${bootconfig_value}")
 }
 
 append_cvd_env_args() {
@@ -1886,6 +2150,7 @@ append_cvd_env_args() {
   local config_path="${2:-}"
   local glibc_tunables
   local radv_debug
+  local adb_vendor_keys
 
   env_args_ref+=(
     "HOME=${CVD_HOME_DIR}"
@@ -1894,6 +2159,12 @@ append_cvd_env_args() {
     "ANDROID_SOONG_HOST_OUT=${CVD_HOST_OUT}"
     "ANDROID_PRODUCT_OUT=${CVD_PRODUCT_OUT}"
   )
+
+  if is_user_build; then
+    adb_vendor_keys="${USER_ADB_PRIVATE_KEY}"
+    [[ -n "${ADB_VENDOR_KEYS:-}" ]] && adb_vendor_keys+=":${ADB_VENDOR_KEYS}"
+    env_args_ref+=("ADB_VENDOR_KEYS=${adb_vendor_keys}")
+  fi
 
   # gfxstream creates its host EGL display without a window-system surface.
   # Selecting this explicitly also avoids inheriting a broken/unavailable X11
@@ -2250,37 +2521,85 @@ make_deadline() {
   fi
 }
 
+resolve_adb_bin() {
+  if [[ -x "${CVD_ADB_BIN}" ]]; then
+    printf '%s\n' "${CVD_ADB_BIN}"
+  else
+    command -v adb || true
+  fi
+}
+
+is_user_build() {
+  [[ "${CVD_BUILD_VARIANT}" == "user" ]]
+}
+
+prepare_user_adb_key() {
+  is_user_build || return 0
+
+  local adb_bin
+  local public_key_tmp
+  local public_key
+  mkdir -p "${HOST_HOME}/.android" || return 1
+  adb_bin="$(resolve_adb_bin)"
+  [[ -n "${adb_bin}" ]] || {
+    log "adb is required to provision the user ADB key"
+    return 1
+  }
+
+  if [[ ! -s "${USER_ADB_PRIVATE_KEY}" ]]; then
+    "${adb_bin}" keygen "${USER_ADB_PRIVATE_KEY}" >/dev/null || {
+      log "could not generate the user ADB key: ${USER_ADB_PRIVATE_KEY}"
+      return 1
+    }
+  fi
+  public_key="$("${adb_bin}" pubkey "${USER_ADB_PRIVATE_KEY}")" || {
+    log "could not derive the public user ADB key: ${USER_ADB_PRIVATE_KEY}"
+    return 1
+  }
+  USER_ADB_PUBLIC_KEY_VALUE="${public_key%% *}"
+  [[ -n "${USER_ADB_PUBLIC_KEY_VALUE}" ]] || {
+    log "adb returned an empty public key for ${USER_ADB_PRIVATE_KEY}"
+    return 1
+  }
+  if ! printf '%s\n' "${public_key}" | cmp -s - "${USER_ADB_PUBLIC_KEY}"; then
+    public_key_tmp="$(mktemp "${USER_ADB_PUBLIC_KEY}.XXXXXX")" || return 1
+    if ! printf '%s\n' "${public_key}" > "${public_key_tmp}"; then
+      rm -f "${public_key_tmp}"
+      return 1
+    fi
+    mv -f "${public_key_tmp}" "${USER_ADB_PUBLIC_KEY}"
+  fi
+  chmod 600 "${USER_ADB_PRIVATE_KEY}" || return 1
+  chmod 644 "${USER_ADB_PUBLIC_KEY}" || return 1
+}
+
+host_adb() {
+  local timeout_seconds="$1"
+  shift
+  local adb_bin
+
+  adb_bin="$(resolve_adb_bin)"
+  [[ -n "${adb_bin}" ]] || return 1
+  timeout "${timeout_seconds}" "${adb_bin}" "$@"
+}
+
 adb_boot_completed() {
   local adb_serial="$1"
-  local adb_bin
   local boot_completed
-
-  if [[ -x "${CVD_ADB_BIN}" ]]; then
-    adb_bin="${CVD_ADB_BIN}"
-  else
-    adb_bin="$(command -v adb || true)"
-  fi
-  [[ -n "${adb_bin}" ]] || return 1
 
   # timeout guards against the dead-guest host proxy accepting the connection
   # and never answering, which would stall wait_for_boot's poll loop.
-  boot_completed="$(timeout 5 "${adb_bin}" -s "${adb_serial}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+  boot_completed="$(host_adb 5 -s "${adb_serial}" shell getprop sys.boot_completed 2>/dev/null \
+    | tr -d '\r' || true)"
   [[ "${boot_completed}" == "1" ]]
 }
 
 adb_guest_boot_id() {
   local adb_serial="$1"
-  local adb_bin
   local boot_id
 
-  if [[ -x "${CVD_ADB_BIN}" ]]; then
-    adb_bin="${CVD_ADB_BIN}"
-  else
-    adb_bin="$(command -v adb || true)"
-  fi
-  [[ -n "${adb_bin}" ]] || return 1
-
-  boot_id="$(timeout 5 "${adb_bin}" -s "${adb_serial}" shell cat /proc/sys/kernel/random/boot_id 2>/dev/null | tr -d '\r' || true)"
+  boot_id="$(host_adb 5 -s "${adb_serial}" shell cat /proc/sys/kernel/random/boot_id 2>/dev/null \
+    | tr -d '\r' || true)"
   [[ "${boot_id}" =~ ^[0-9a-fA-F-]{36}$ ]] || return 1
   printf '%s\n' "${boot_id}"
 }
@@ -2516,24 +2835,28 @@ wait_for_boot() {
   return 1
 }
 
-ensure_chromium_before_scrcpy() {
+# Installs Chromium until it has succeeded once for this VM. 'ika reset'
+# removes the stamp, so a reset VM gets it again; one removed by the user stays
+# removed. Runs before the console opens: getchromium drives the guest UI.
+ensure_chromium() {
   local adb_serial="$1"
 
-  if [[ "${CVD_NEWLY_PROVISIONED}" != "true" ]]; then
+  if [[ -e "${CHROMIUM_INSTALL_STAMP}" ]]; then
     return 0
   fi
 
   if [[ ! -x "${PACKAGED_GETCHROMIUM_BIN}" ]]; then
-    log "${PACKAGED_GETCHROMIUM_BIN} is unavailable; continuing to the console."
+    log "${PACKAGED_GETCHROMIUM_BIN} is unavailable; skipping Chromium."
     return 0
   fi
 
-  if ANDROID_SERIAL="${adb_serial}" IKA_CHROMIUM_STAMP="${CHROMIUM_INSTALL_STAMP}" "${PACKAGED_GETCHROMIUM_BIN}" >&3 2>&3; then
+  if ANDROID_SERIAL="${adb_serial}" IKA_CHROMIUM_APK="${CHROMIUM_APK}" \
+      "${PACKAGED_GETCHROMIUM_BIN}" >&3 2>&3; then
     mkdir -p "$(dirname "${CHROMIUM_INSTALL_STAMP}")"
     : > "${CHROMIUM_INSTALL_STAMP}"
     log "getchromium completed."
   else
-    log "getchromium failed; continuing to the console."
+    log "getchromium failed; it runs again on the next start."
   fi
 }
 
@@ -2691,6 +3014,9 @@ start_scrcpy_with_retries() {
 
   append_scrcpy_extra_args scrcpy_cmd console
   append_scrcpy_env scrcpy_env
+  # ika.desktop's ID. Otherwise SDL uses the executable name, scrcpy, which
+  # KDE's taskbar also derives for app windows and would match to the console.
+  scrcpy_env+=("SDL_APP_ID=ika")
 
   if [[ "${#scrcpy_env[@]}" -gt 0 ]]; then
     scrcpy_cmd=(
@@ -2703,7 +3029,7 @@ start_scrcpy_with_retries() {
   mkdir -p "$(dirname "${scrcpy_log}")"
   : > "${scrcpy_log}"
 
-  ensure_chromium_before_scrcpy "${adb_serial}"
+  ensure_chromium "${adb_serial}"
 
   flock -u "${scrcpy_lock_fd}"
   exec {scrcpy_lock_fd}>&-
@@ -2797,16 +3123,7 @@ use_app_window_paths() {
 guest_adb() {
   local adb_serial="$1"
   shift
-  local adb_bin
-
-  if [[ -x "${CVD_ADB_BIN}" ]]; then
-    adb_bin="${CVD_ADB_BIN}"
-  else
-    adb_bin="$(command -v adb || true)"
-  fi
-  [[ -n "${adb_bin}" ]] || return 1
-
-  timeout "${GUEST_ADB_TIMEOUT:-10}" "${adb_bin}" -s "${adb_serial}" "$@"
+  host_adb "${GUEST_ADB_TIMEOUT:-10}" -s "${adb_serial}" "$@"
 }
 
 app_is_installed() {
@@ -2885,8 +3202,11 @@ guest_display_density() {
 # Like the desktop display, size an app window's virtual display in native
 # host pixels rather than logical window points, so on HiDPI hosts the app
 # draws at native resolution instead of being upscaled. Scale the logical window
-# size by the host's native/logical ratio and round down to the even size the
-# guest's software H.264 encoder needs.
+# size by the host's native/logical ratio and round to the nearest pixel, as SDL
+# does for the window pixel size that the scrcpy client requests, then round
+# down to the even size the guest's software H.264 encoder needs, as the scrcpy
+# server does. Any other initial size makes the server resize the display right
+# after start, and its input mapping then rejects every click.
 app_window_display_size() {
   local window_size="$1"
   local native
@@ -2907,8 +3227,8 @@ app_window_display_size() {
     if [[ "${logical}" =~ ^([0-9]+)x([0-9]+)$ ]]; then
       logical_max=$(( BASH_REMATCH[1] > BASH_REMATCH[2] ? BASH_REMATCH[1] : BASH_REMATCH[2] ))
       if (( native_max > 0 && logical_max > 0 )); then
-        width=$(( width * native_max / logical_max ))
-        height=$(( height * native_max / logical_max ))
+        width=$(( (width * native_max + logical_max / 2) / logical_max ))
+        height=$(( (height * native_max + logical_max / 2) / logical_max ))
       fi
     fi
   fi
@@ -2948,7 +3268,6 @@ default_app_window_size() {
 # still be opened by giving their full package name.
 IKA_HIDDEN_APPS=(
   com.google.android.apps.restore
-  org.lineageos.aperture
   com.google.android.googlequicksearchbox
   com.android.calculator2
   org.lineageos.etar
@@ -3023,7 +3342,7 @@ query_guest_apps() {
     | tr -d '\r' \
     | awk '
         function is_package(s) {
-          return s ~ /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/
+          return s ~ /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/
         }
         function emit_same_line(    name, package) {
           name = pending
@@ -3040,6 +3359,8 @@ query_guest_apps() {
             emit_same_line()
           }
           pending = substr($0, 4)
+          # The app list is tab-separated, so a tab in a label would split it.
+          gsub(/\t/, " ", pending)
           next
         }
         pending != "" && /^[[:space:]]+[^[:space:]]+[[:space:]]*$/ && is_package($1) {
@@ -3085,6 +3406,30 @@ app_window_title() {
   fi
 
   printf '%s\n' "${title:-${package}}"
+}
+
+# Prints the app's name as its menu launcher shows it, without the game/app
+# marker (see app_launcher_name), for messages and notifications. It comes from
+# the launcher, the cached app list, or the cached window title, without asking
+# the guest, and falls back to the package name.
+app_display_name() {
+  local package="$1"
+  local launcher
+  local name=""
+
+  launcher="$(app_menu_data_dir)/applications/ika-${package}.desktop"
+  if [[ -f "${launcher}" ]]; then
+    name="$(sed -n '/^Name=/{s///p;q}' "${launcher}")"
+    name="${name#* ∙ }"
+    name="${name//\\\\/\\}"
+  fi
+  if [[ -z "${name}" && -s "${APP_LIST_CACHE}" ]]; then
+    name="$(awk -F '\t' -v pkg="${package}" '$2 == pkg { print $1; exit }' "${APP_LIST_CACHE}")"
+  fi
+  if [[ -z "${name}" && -s "${IKA_APPS_DIR}/${package}/title" ]]; then
+    name="$(<"${IKA_APPS_DIR}/${package}/title")"
+  fi
+  printf '%s\n' "${name:-${package}}"
 }
 
 # Resolves NAME to "LABEL<TAB>PACKAGE" among the launchable apps. The app list
@@ -3367,7 +3712,7 @@ start_game_session() {
     exec {autostart_lock_fd}>"${CVD_HOME_DIR}/autostart.lock"
     flock -w "$((CVD_BOOT_TIMEOUT_SEC + 60))" "${autostart_lock_fd}" \
       || die "timed out waiting for Ika to start"
-    "${IKA_SCRIPT_PATH}" start --game --game-session </dev/null >/dev/null 2>&1 \
+    IKA_NOTIFY=false "${IKA_SCRIPT_PATH}" start --game --game-session </dev/null >/dev/null 2>&1 \
       {autostart_lock_fd}>&- {game_session_lock_fd}>&- \
       || die "could not start the game session; see ${START_LOG_FILE}"
     exec {autostart_lock_fd}>&-
@@ -3405,10 +3750,10 @@ ensure_guest_ready() {
     || die "timed out waiting for Ika to start"
   if ! has_live_cvd_processes; then
     log "Android virtual device not running; starting it without the console"
-    notify_progress "Starting Android… Virtual machine needs a moment to get ready"
+    notify_progress "Starting Android virtual machine, one moment..."
     # Close the lock for the child: the VM processes it starts outlive this
     # command and would otherwise hold the lock for as long as the VM runs.
-    "${IKA_SCRIPT_PATH}" start --no-console </dev/null >/dev/null 2>&1 \
+    IKA_NOTIFY=false "${IKA_SCRIPT_PATH}" start --no-console </dev/null >/dev/null 2>&1 \
       {autostart_lock_fd}>&- \
       || die "could not start the Android virtual device; see ${START_LOG_FILE}"
   fi
@@ -3460,6 +3805,10 @@ resolve_app_name() {
   fi
 
   if [[ "${count}" -eq 0 ]]; then
+    # Menu launchers pass the package of an app that may since have been removed.
+    if is_app_package_name "${name}"; then
+      die "$(app_display_name "${name}") is not installed in Android; see '${SCRIPT_NAME} app'"
+    fi
     die "no ${what} matches '${name}'; see '${SCRIPT_NAME} app'"
   fi
   log "'${name}' matches several ${what}s:"
@@ -3484,6 +3833,7 @@ open_app_window() {
   local dpi
   local display_size
   local codec_options
+  local app_icon
   local saved_width=""
   local saved_height=""
   local saved_fullscreen=""
@@ -3495,17 +3845,20 @@ open_app_window() {
   ensure_guest_ready
   adb_serial="$(resolve_adb_serial)"
 
-  # A package name is used as given; anything else is looked up by label.
+  # A package name is used as given (menu launchers pass one); anything else is
+  # looked up by label.
   if is_app_package_name "${name}" \
       && app_is_installed "${name}" "${adb_serial}"; then
     package="${name}"
+    label="$(app_display_name "${package}")"
+    [[ "${label}" != "${package}" ]] || label=""
   else
     resolved="$(resolve_launchable_app "${name}" "${adb_serial}")" || exit 1
     package="${resolved#*$'\t'}"
     label="${resolved%%$'\t'*}"
-    if [[ -z "${title}" ]]; then
-      title="${label}"
-    fi
+  fi
+  if [[ -z "${title}" ]]; then
+    title="${label}"
   fi
   validate_app_package "${package}"
   scrcpy_env=("IKA_APP_PACKAGE=${package}")
@@ -3513,9 +3866,6 @@ open_app_window() {
   # Before use_app_window_paths, which repoints the supervisor paths from the
   # console to this app's window.
   if [[ "${window_mode}" != "true" ]] && is_game_app "${package}" "${adb_serial}"; then
-    if [[ -z "${label}" && -s "${IKA_APPS_DIR}/${package}/title" ]]; then
-      label="$(<"${IKA_APPS_DIR}/${package}/title")"
-    fi
     start_game_session "${package}" "${label:-${package}}"
     return 0
   fi
@@ -3528,7 +3878,7 @@ open_app_window() {
   fi
 
   if supervisor_pid_from_file "${SCRCPY_SUPERVISOR_PID_FILE}" __app_supervisor >/dev/null; then
-    respond "${package} is already open in its own window"
+    respond "${label:-${package}} is already open in its own window"
     return 0
   fi
 
@@ -3585,6 +3935,12 @@ open_app_window() {
   # group instead of stacking it under the Ika console.
   append_scrcpy_env scrcpy_env
   scrcpy_env+=("SDL_APP_ID=ika-${package}")
+  # Without the app's own icon, the window would set the generic Ika icon,
+  # which taskbars prefer over the launcher's.
+  app_icon="$(app_menu_icon "${package}")"
+  if [[ -f "${app_icon}" ]]; then
+    scrcpy_env+=("IKA_WINDOW_ICON=${app_icon}")
+  fi
   scrcpy_cmd=(env "${scrcpy_env[@]}" "${scrcpy_cmd[@]}")
 
   : > "${SCRCPY_LOG_FILE}"
@@ -3603,7 +3959,7 @@ open_app_window() {
     sleep 0.05
   done
 
-  die "could not open a window for ${package}; see ${SCRCPY_LOG_FILE}"
+  die "could not open a window for ${label:-${title}}; see ${SCRCPY_LOG_FILE}"
 }
 
 # Opens Android's App info page for NAME in the Settings app window: the page
@@ -3627,16 +3983,7 @@ open_app_info() {
   if is_app_package_name "${name}" \
       && app_is_installed "${name}" "${adb_serial}"; then
     package="${name}"
-    label="${name}"
-    if [[ -s "${IKA_APPS_DIR}/${package}/title" ]]; then
-      label="$(<"${IKA_APPS_DIR}/${package}/title")"
-    elif [[ -f "$(app_menu_data_dir)/applications/ika-${package}.desktop" ]]; then
-      # The launcher name carries a game/app marker (see app_launcher_name).
-      label="$(sed -n 's/^Name=//p' \
-        "$(app_menu_data_dir)/applications/ika-${package}.desktop" | head -n1)"
-      label="${label#* ∙ }"
-      label="${label:-${package}}"
-    fi
+    label="$(app_display_name "${package}")"
   else
     resolved="$(resolve_launchable_app "${name}" "${adb_serial}")" || exit 1
     package="${resolved#*$'\t'}"
@@ -3883,7 +4230,7 @@ refresh_app_games_file() {
   grep -v '^ika-games-done' <<<"${output//$'\r'/}" | grep -v '^$' > "${APP_GAMES_FILE}" || true
 }
 
-# Prints a launcher's menu name: the app label, marked as a game or an app.
+# Prints the launcher's menu name: the app label, marked as a game or an app.
 app_launcher_name() {
   local label="$1"
   local package="$2"
@@ -3893,6 +4240,12 @@ app_launcher_name() {
   else
     printf 'ᗩ ∙ %s\n' "${label}"
   fi
+}
+
+# Prints a desktop entry string value as desktop-file-edit writes it: with each
+# backslash doubled. Launcher keys are compared in that form.
+desktop_entry_escape() {
+  printf '%s\n' "${1//\\/\\\\}"
 }
 
 # Creates or updates one launcher and returns 1 when it was already current.
@@ -3918,14 +4271,15 @@ write_app_launcher() {
     touch_exec="ika app --touch ${package}"
   fi
   if [[ -f "${file}" ]] \
-      && grep -qxF "Name=${name}" "${file}" \
+      && grep -qxF "Name=$(desktop_entry_escape "${name}")" "${file}" \
       && grep -qxF "Icon=${icon}" "${file}" \
       && grep -qxF "Actions=${actions}" "${file}" \
       && { [[ -z "${touch_exec}" ]] || grep -qxF "Exec=${touch_exec}" "${file}"; } \
       && grep -qxF "Exec=ika app --info ${package}" "${file}" \
       && grep -qxF "Icon=${settings_icon}" "${file}" \
       && grep -qxF "X-Ika-Package=${package}" "${file}" \
-      && grep -qxF "X-Ika-Version=${IKA_MENU_VERSION}" "${file}"; then
+      && grep -qxF "X-Ika-Version=${IKA_MENU_VERSION}" "${file}" \
+      && grep -qE "^Categories=(.*;)?${IKA_MENU_CATEGORY}(;|$)" "${file}"; then
     return 1
   fi
 
@@ -3953,12 +4307,12 @@ write_app_launcher() {
     cat > "${file}" <<EOF
 [Desktop Entry]
 Type=Application
-Name=${name}
+Name=$(desktop_entry_escape "${name}")
 Exec=ika app ${package}
 Icon=${icon}
 Terminal=false
 StartupWMClass=ika-${package}
-Keywords=${keywords}
+Keywords=$(desktop_entry_escape "${keywords}")
 Actions=${actions}
 Categories=${IKA_MENU_CATEGORY};
 X-Ika-Package=${package}
@@ -4053,22 +4407,92 @@ EOF
 EOF
 }
 
-# GNOME Shell settings are only usable inside a desktop session.
+# Prints the desktop session's bus. The app menu watcher and commands run over
+# SSH lack DBUS_SESSION_BUS_ADDRESS, so fall back to the user bus socket.
+app_menu_session_bus() {
+  local socket="${XDG_RUNTIME_DIR:-/run/user/${UID}}/bus"
+
+  if [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
+    printf '%s\n' "${DBUS_SESSION_BUS_ADDRESS}"
+  elif [[ -S "${socket}" ]]; then
+    printf 'unix:path=%s\n' "${socket}"
+  else
+    return 1
+  fi
+}
+
+# GNOME Shell settings are only usable inside a desktop session. grep reads
+# the whole schema list: with -q it could exit first, and gsettings' SIGPIPE
+# would fail the pipeline under pipefail, skipping the folder setup.
 gnome_app_folders_available() {
   [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]] || return 1
   command -v gsettings >/dev/null 2>&1 || return 1
-  gsettings list-schemas 2>/dev/null | grep -qx 'org.gnome.desktop.app-folders'
+  gsettings list-schemas 2>/dev/null | grep -x 'org.gnome.desktop.app-folders' >/dev/null
 }
 
 gnome_app_folder_schema() {
   printf 'org.gnome.desktop.app-folders.folder:/org/gnome/desktop/app-folders/folders/%s/\n' \
-    "${IKA_MENU_ID}"
+    "${1:-${IKA_MENU_ID}}"
 }
 
+# Prints the items of a gsettings string array ("['a', 'b']" or "@as []"), one
+# per line. Desktop file IDs contain neither quotes nor commas.
+gsettings_strv_items() {
+  local value="$1"
+  local item
+  local -a items=()
+
+  value="${value#@as }"
+  value="${value#[}"
+  value="${value%]}"
+  IFS=',' read -r -a items <<<"${value}"
+  for item in "${items[@]+"${items[@]}"}"; do
+    item="${item# }"
+    item="${item#\'}"
+    item="${item%\'}"
+    [[ -z "${item}" ]] || printf '%s\n' "${item}"
+  done
+}
+
+# Formats the lines read from stdin as a gsettings string array.
+gsettings_strv() {
+  local item
+  local value=""
+
+  while IFS= read -r item; do
+    [[ -n "${item}" ]] && value+="${value:+, }'${item}'"
+  done
+  if [[ -n "${value}" ]]; then
+    printf '[%s]\n' "${value}"
+  else
+    printf '@as []\n'
+  fi
+}
+
+# Prints a folder's string array key without the Ika launchers in it.
+gsettings_strv_without_launchers() {
+  gsettings_strv_items "$(gsettings get "$1" "$2")" \
+    | { grep -v '^ika-.*\.desktop$' || true; }
+}
+
+# Creates the GNOME Shell app-grid folder and puts the given launchers
+# (desktop file IDs) in it. Matching on the category alone is not enough:
+# when an app is installed, GNOME Shell refreshes its folders from the app
+# list it had before the install (js/ui/appDisplay.js, AppDisplay._redisplay),
+# so a new launcher would appear in the main grid. Listing the launchers in the
+# folder's 'apps' key, before they are written, avoids that. Launchers dragged
+# out of the folder, or into another folder, are moved back.
 install_gnome_app_folder() {
+  local bus
   local schema
   local children
+  local folder
+  local folder_schema
+  local current
+  local wanted
 
+  bus="$(app_menu_session_bus)" || return 0
+  local -x DBUS_SESSION_BUS_ADDRESS="${bus}"
   gnome_app_folders_available || return 0
   schema="$(gnome_app_folder_schema)"
 
@@ -4091,12 +4515,37 @@ install_gnome_app_folder() {
     fi
     gsettings set org.gnome.desktop.app-folders folder-children "${children}"
   fi
+
+  current="$(gsettings_strv_items "$(gsettings get "${schema}" apps)" | gsettings_strv)"
+  wanted="$( { gsettings_strv_without_launchers "${schema}" apps; printf '%s\n' "$@"; } \
+    | gsettings_strv)"
+  if [[ "${wanted}" != "${current}" ]]; then
+    gsettings set "${schema}" apps "${wanted}"
+  fi
+  current="$(gsettings_strv_items "$(gsettings get "${schema}" excluded-apps)" | gsettings_strv)"
+  wanted="$(gsettings_strv_without_launchers "${schema}" excluded-apps | gsettings_strv)"
+  if [[ "${wanted}" != "${current}" ]]; then
+    gsettings set "${schema}" excluded-apps "${wanted}"
+  fi
+
+  for folder in $(gsettings_strv_items "${children}"); do
+    [[ "${folder}" != "${IKA_MENU_ID}" ]] || continue
+    folder_schema="$(gnome_app_folder_schema "${folder}")"
+    current="$(gsettings get "${folder_schema}" apps 2>/dev/null)" || continue
+    if [[ "${current}" == *"'ika-"*".desktop'"* ]]; then
+      gsettings set "${folder_schema}" apps \
+        "$(gsettings_strv_without_launchers "${folder_schema}" apps | gsettings_strv)"
+    fi
+  done
 }
 
 remove_gnome_app_folder() {
+  local bus
   local children
   local item="'${IKA_MENU_ID}'"
 
+  bus="$(app_menu_session_bus)" || return 0
+  local -x DBUS_SESSION_BUS_ADDRESS="${bus}"
   gnome_app_folders_available || return 0
   children="$(gsettings get org.gnome.desktop.app-folders folder-children)"
   if [[ "${children}" == *"${item}"* ]]; then
@@ -4157,7 +4606,8 @@ refresh_renamed_launchers() {
     is_app_package_name "${package}" || continue
     file="${apps_dir}/ika-${package}.desktop"
     if [[ -f "${file}" ]] && grep -q '^X-Ika-Version=' "${file}" \
-        && ! grep -qxF "Name=$(app_launcher_name "${label}" "${package}")" "${file}"; then
+        && ! grep -qxF "Name=$(desktop_entry_escape "$(app_launcher_name "${label}" "${package}")")" \
+          "${file}"; then
       labels+=("${label}")
       packages+=("${package}")
     fi
@@ -4196,6 +4646,7 @@ sync_app_menu() {
   local icons="unchanged"
   local sync_lock_fd
   local -A current=()
+  local -a desktop_ids=()
 
   require_executable "${SCRCPY_BIN}" "console client"
   has_live_cvd_processes || die "Android virtual device not running; start it with '${SCRIPT_NAME} start'"
@@ -4219,6 +4670,19 @@ sync_app_menu() {
 
   apps_dir="$(app_menu_data_dir)/applications"
   mkdir -p "${apps_dir}"
+  # Set up the group, with every launcher in it, before any launcher is
+  # written: an app whose launcher appears first can end up outside it.
+  # Launchers the user hid stay out of the GNOME folder's explicit list.
+  while IFS=$'\t' read -r label package; do
+    is_app_package_name "${package}" || continue
+    file="${apps_dir}/ika-${package}.desktop"
+    if [[ ! -f "${file}" ]] || ! grep -qx 'NoDisplay=true' "${file}"; then
+      desktop_ids+=("ika-${package}.desktop")
+    fi
+  done <<<"${list}"
+  install_xdg_app_menu
+  install_gnome_app_folder "${desktop_ids[@]+"${desktop_ids[@]}"}"
+
   updated="$(refresh_renamed_launchers "${apps_dir}" "${list}")"
   while IFS=$'\t' read -r label package; do
     is_app_package_name "${package}" || continue
@@ -4238,8 +4702,6 @@ sync_app_menu() {
     fi
   done < <(list_app_launchers)
 
-  install_xdg_app_menu
-  install_gnome_app_folder
   refresh_app_menu_caches
   # Release the lock now: a watcher started after this would inherit the
   # descriptor and block on it.
@@ -4544,6 +5006,25 @@ log_start_context() {
   emit_launch_command "$@"
 }
 
+# After a VM stops, its cvdalloc may still be removing the VM's network
+# interfaces (cvd-pi-*); a new cvdalloc fails to create them while they exist.
+# Gives it time to finish. Interfaces of a VM that was killed, with no cvdalloc
+# left to remove them, are removed by the next cvdalloc itself.
+wait_for_cvdalloc_teardown() {
+  local deadline
+
+  pgrep -u "$(id -u)" -x cvdalloc >/dev/null 2>&1 || return 0
+  log "waiting for the previous VM's network interfaces to be removed"
+  deadline="$(make_deadline 15)"
+  while pgrep -u "$(id -u)" -x cvdalloc >/dev/null 2>&1; do
+    if ! within_deadline "${deadline}"; then
+      log "warning: cvdalloc of the previous VM is still running; starting anyway"
+      return 0
+    fi
+    sleep 0.5
+  done
+}
+
 start_cvd() {
   local fullscreen_mode="${1:-false}"
   local game_mode="${2:-false}"
@@ -4574,11 +5055,15 @@ start_cvd() {
     respond "Android virtual device running"
     if [[ "${START_CONSOLE}" == "true" ]]; then
       maybe_start_scrcpy "${adb_serial}" "${fullscreen_mode}" "${game_mode}" || true
+    else
+      ensure_chromium "${adb_serial}"
     fi
     start_app_menu_watcher
     return 0
   fi
 
+  notify_progress "Starting Android virtual machine, one moment..."
+  wait_for_cvdalloc_teardown
   record_udmabuf_baseline
   protect_overlay_resume
 
@@ -4589,10 +5074,12 @@ start_cvd() {
   apply_start_default_args args "$@"
   append_cuttlefish_audio_args args "$@"
   append_data_storage_args args "$@"
+  append_serial_number_args args "$@"
   append_arm64_kernel_page_args args "$@"
   append_gfxstream_vulkan_args args "$@"
   append_default_display_arg args "${scrcpy_dpi}" "$@"
-  append_host_timezone_arg args
+  prepare_user_adb_key || return 1
+  append_bootconfig_args args
   append_cvd_env_args cvd_env_args
 
   log_start_context "${launcher_log}" "${args[@]}"
@@ -4621,9 +5108,11 @@ start_cvd() {
   respond "Android virtual device running"
   if [[ "${START_CONSOLE}" == "true" ]]; then
     maybe_start_scrcpy "${adb_serial}" "${fullscreen_mode}" "${game_mode}" || true
+  else
+    ensure_chromium "${adb_serial}"
   fi
   start_app_menu_watcher
-
+  close_progress_notifications
 }
 
 stop_cvd_internal() {
@@ -4679,6 +5168,90 @@ stop_cvd_internal() {
 
 }
 
+# ============================================================================
+# GSF ID (ika gsf)
+# ============================================================================
+#
+# Google may block sign-in on devices that are not Play Protect certified until
+# their Google Services Framework (GSF) Android ID is registered on Google's
+# uncertified device page. IkaGsfId publishes that ID, in decimal, as
+# sys.ika.gsf_android_id once GMS check-in has assigned it. In older images,
+# IkaGsfId only finds it on userdebug builds, so when the property is not set
+# 'gsf' reads it here from the dump of GMS's GCM service, as IkaGsfId now does.
+
+readonly GSF_REGISTRATION_URL="https://www.google.com/android/uncertified"
+readonly GCM_SERVICE="com.google.android.gms/.gcm.GcmService"
+: "${IKA_GSF_ID_TIMEOUT_SEC:=120}"
+
+# Copies stdin to the desktop clipboard. Returns 1 without a graphical session
+# or a clipboard tool. The tools stay in the background to serve the clipboard,
+# so their output goes to /dev/null rather than to a pipe a caller may read.
+copy_to_clipboard() {
+  if [[ -n "${WAYLAND_DISPLAY:-}" ]] && command -v wl-copy >/dev/null 2>&1; then
+    wl-copy >/dev/null 2>&1
+  elif [[ -n "${DISPLAY:-}" ]] && command -v xclip >/dev/null 2>&1; then
+    xclip -selection clipboard >/dev/null 2>&1
+  elif [[ -n "${DISPLAY:-}" ]] && command -v xsel >/dev/null 2>&1; then
+    xsel --clipboard --input >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+
+# Opens a URL in the default browser, detached: xdg-open can wait for a browser
+# it starts until the browser exits.
+open_in_browser() {
+  [[ -n "${WAYLAND_DISPLAY:-}" || -n "${DISPLAY:-}" ]] || return 1
+  command -v xdg-open >/dev/null 2>&1 || return 1
+  setsid xdg-open "$1" </dev/null >/dev/null 2>&1 &
+}
+
+run_gsf_id_command() {
+  local adb_serial
+  local deadline
+  local gsf_id=""
+  local waited="false"
+
+  ensure_guest_ready
+  adb_serial="$(resolve_adb_serial)"
+
+  if ! app_is_installed com.google.android.gms "${adb_serial}"; then
+    die "this Android image has no Google Play Services, so it has no GSF ID"
+  fi
+
+  # GMS check-in assigns the ID shortly after Android first reaches the network.
+  deadline="$(make_deadline "${IKA_GSF_ID_TIMEOUT_SEC}")"
+  while true; do
+    gsf_id="$(guest_adb "${adb_serial}" shell getprop sys.ika.gsf_android_id 2>/dev/null \
+      | tr -d '\r' || true)"
+    if ! [[ "${gsf_id}" =~ ^[1-9][0-9]*$ ]]; then
+      gsf_id="$(guest_adb "${adb_serial}" shell dumpsys activity service "${GCM_SERVICE}" 2>/dev/null \
+        | tr -d '\r' | sed -n 's/^[[:space:]]*DeviceID:[[:space:]]*\([0-9]*\).*/\1/p' | head -n1 || true)"
+    fi
+    [[ "${gsf_id}" =~ ^[1-9][0-9]*$ ]] && break
+    within_deadline "${deadline}" \
+      || die "Google Play Services has not assigned a GSF ID yet; check that Android is online and try again"
+    if [[ "${waited}" != "true" ]]; then
+      printf 'Waiting for Google Play Services to assign the GSF ID...\n' >&2
+      waited="true"
+    fi
+    sleep 2
+  done
+
+  if printf '%s' "${gsf_id}" | copy_to_clipboard; then
+    respond "Copied GSF ID ${gsf_id} to the clipboard."
+  else
+    respond "GSF ID ${gsf_id}"
+  fi
+  if open_in_browser "${GSF_REGISTRATION_URL}"; then
+    printf 'Paste it on the registration page opened in your browser:\n' >&2
+  else
+    printf 'Register it on:\n' >&2
+  fi
+  printf '  %s\n' "${GSF_REGISTRATION_URL}" >&2
+  printf "Then wait a few minutes and run '%s restart'.\n" "${SCRIPT_NAME}" >&2
+}
+
 exec_start_command() {
   local fullscreen_mode="$1"
   local game_mode="$2"
@@ -4710,6 +5283,7 @@ main() {
       CONSOLE_FAILURE_MESSAGE="Startup Failed."
       shift
       start_args=()
+      START_KEEPS_RUNNING_VM="true"
       parse_start_options fullscreen_mode game_mode start_args "$@"
       if [[ "${START_GAME_SESSION}" != "true" ]]; then
         clear_game_session
@@ -4754,11 +5328,13 @@ main() {
       ;;
     restart)
       shift
+      start_args=()
+      # Before stopping anything: a bad option (or --camera finding no camera)
+      # must leave the running VM and its console as they are
+      parse_start_options fullscreen_mode game_mode start_args "$@"
       stop_startup_packaged_scrcpy
       stop_app_menu_watcher
       clear_game_session
-      start_args=()
-      parse_start_options fullscreen_mode game_mode start_args "$@"
       protect_overlay_resume
       if has_live_cvd_processes; then
         stop_cvd_internal false
@@ -4779,6 +5355,14 @@ main() {
     app)
       shift
       run_app_command "$@"
+      ;;
+    gsf)
+      run_gsf_id_command
+      ;;
+    root)
+      shift
+      require_executable "${PACKAGED_IKA_ROOT_BIN}" "ika-root"
+      exec "${PACKAGED_IKA_ROOT_BIN}" "$@"
       ;;
     __console_supervisor)
       shift

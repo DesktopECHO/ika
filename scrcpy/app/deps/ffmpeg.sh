@@ -3,9 +3,9 @@ set -ex
 . $(dirname ${BASH_SOURCE[0]})/_init
 process_args "$@"
 
-VERSION=7.1.1
+VERSION=9.0.2
 URL="https://ffmpeg.org/releases/ffmpeg-$VERSION.tar.xz"
-SHA256SUM=733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1
+SHA256SUM=8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
 
 PROJECT_DIR="ffmpeg-$VERSION"
 FILENAME="$PROJECT_DIR.tar.xz"
@@ -20,11 +20,22 @@ else
     tar xf "$FILENAME"  # First level directory is "$PROJECT_DIR"
 fi
 
+# SCRCPY_FFMPEG_VAAPI=1 builds FFmpeg with VA-API hardware decoding, into its
+# own prefix: crosvm links the default build, which must not depend on libva
+# (scrcpy loads libva at runtime, see app/src/vaapi_shim.c)
+FFMPEG_DIRNAME="$DIRNAME"
+VAAPI=false
+if [[ "${SCRCPY_FFMPEG_VAAPI:-}" == 1 && "$HOST" == linux ]]
+then
+    FFMPEG_DIRNAME="$DIRNAME-vaapi"
+    VAAPI=true
+fi
+
 mkdir -p "$BUILD_DIR/$PROJECT_DIR"
 cd "$BUILD_DIR/$PROJECT_DIR"
 
-mkdir -p "$DIRNAME"
-cd "$DIRNAME"
+mkdir -p "$FFMPEG_DIRNAME"
+cd "$FFMPEG_DIRNAME"
 
 if [[ "$HOST" == win* ]]
 then
@@ -41,18 +52,16 @@ fi
 export PKG_CONFIG_PATH="$INSTALL_DIR/$DIRNAME/lib/pkgconfig:$PKG_CONFIG_PATH"
 
 conf=(
-    --prefix="$INSTALL_DIR/$DIRNAME"
+    --prefix="$INSTALL_DIR/$FFMPEG_DIRNAME"
     --pkg-config-flags="--static"
     --extra-cflags="-O2 -fPIC"
     --disable-programs
     --disable-doc
     --disable-autodetect
-    --disable-postproc
     --disable-avfilter
     --disable-network
     --disable-everything
     --disable-vulkan
-    --disable-vaapi
     --disable-vdpau
     --enable-swresample
     --enable-swscale
@@ -76,6 +85,21 @@ conf=(
     --enable-muxer=flac
     --enable-muxer=wav
 )
+
+if [[ "$VAAPI" == true ]]
+then
+    conf+=(
+        --enable-vaapi
+        --enable-libdrm
+        --enable-hwaccel=h264_vaapi
+        --enable-hwaccel=hevc_vaapi
+        --enable-hwaccel=av1_vaapi
+    )
+else
+    conf+=(
+        --disable-vaapi
+    )
+fi
 
 if [[ "$HOST" == linux ]]
 then

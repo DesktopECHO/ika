@@ -12,6 +12,7 @@ _scrcpy() {
         --audio-source=
         --audio-output-buffer=
         -b --video-bit-rate=
+        --background-color=
         --camera-ar=
         --camera-id=
         --camera-facing=
@@ -33,7 +34,10 @@ _scrcpy() {
         -G
         --gamepad=
         -h --help
+        --hwdec=
+        --ignore-video-encoder-constraints
         -K
+        --keep-active
         --keyboard=
         --kill-adb-on-close
         --legacy-paste
@@ -56,10 +60,12 @@ _scrcpy() {
         --no-audio-playback
         --no-cleanup
         --no-clipboard-autosync
+        --no-downsize-on-error
         --no-key-repeat
         --no-mipmaps
         --no-mouse-hover
         --no-power-on
+        --no-terminal-title
         --no-vd-destroy-content
         --no-vd-system-decorations
         --no-video
@@ -109,14 +115,13 @@ _scrcpy() {
         --window-y=
         --window-width=
         --window-height=
-        -x --dpi
-        --dpi="
+        -x --flex-display"
 
     _init_completion -s || return
 
     case "$prev" in
         --video-codec)
-            COMPREPLY=($(compgen -W 'h264 h265 av1' -- "$cur"))
+            COMPREPLY=($(compgen -W 'h264 h265 av1 vp8 vp9' -- "$cur"))
             return
             ;;
         --audio-codec)
@@ -180,7 +185,7 @@ _scrcpy() {
             return
             ;;
         --render-fit)
-            COMPREPLY=($(compgen -W 'natural disabled' -- "$cur"))
+            COMPREPLY=($(compgen -W 'letterbox stretched unscaled' -- "$cur"))
             return
             ;;
         --shortcut-mod)
@@ -198,7 +203,11 @@ _scrcpy() {
             return
             ;;
         --min-size-alignment)
-            COMPREPLY=($(compgen -> '1 2 4 8 16' -- "$cur"))
+            COMPREPLY=($(compgen -W '1 2 4 8 16' -- "$cur"))
+            return
+            ;;
+        --hwdec)
+            COMPREPLY=($(compgen -W 'auto disabled vaapi d3d11va videotoolbox' -- "$cur"))
             return
             ;;
         --audio-bit-rate \
@@ -207,6 +216,7 @@ _scrcpy() {
         |--audio-codec-options \
         |--audio-encoder \
         |--audio-output-buffer \
+        |--background-color \
         |--camera-ar \
         |--camera-id \
         |--camera-fps \
@@ -218,7 +228,6 @@ _scrcpy() {
         |--max-fps \
         |-m|--max-size \
         |--new-display \
-        |--dpi \
         |-p|--port \
         |--push-target \
         |--rotation \

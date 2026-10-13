@@ -3,10 +3,10 @@ package com.genymobile.scrcpy;
 import com.genymobile.scrcpy.audio.AudioCodec;
 import com.genymobile.scrcpy.audio.AudioSource;
 import com.genymobile.scrcpy.device.Device;
-import com.genymobile.scrcpy.device.NewDisplay;
-import com.genymobile.scrcpy.device.Orientation;
-import com.genymobile.scrcpy.device.Size;
-import com.genymobile.scrcpy.util.CodecOption;
+import com.genymobile.scrcpy.model.CodecOption;
+import com.genymobile.scrcpy.model.NewDisplay;
+import com.genymobile.scrcpy.model.Orientation;
+import com.genymobile.scrcpy.model.Size;
 import com.genymobile.scrcpy.util.Ln;
 import com.genymobile.scrcpy.video.CameraAspectRatio;
 import com.genymobile.scrcpy.video.CameraFacing;
@@ -65,10 +65,13 @@ public class Options {
     private boolean powerOn = true;
 
     private NewDisplay newDisplay;
-    private boolean flexDisplay = true;
-    private int flexDisplayDpi;
     private boolean vdDestroyContent = true;
     private boolean vdSystemDecorations = true;
+    private boolean flexDisplay;
+    private int flexDisplayDpi;
+
+    private boolean keepActive;
+    private boolean ignoreVideoEncoderConstraints;
 
     private Orientation.Lock captureOrientationLock = Orientation.Lock.Unlocked;
     private Orientation captureOrientation = Orientation.Orient0;
@@ -83,7 +86,7 @@ public class Options {
     private boolean sendDeviceMeta = true; // send device name and size
     private boolean sendFrameMeta = true; // send PTS so that the client may record properly
     private boolean sendDummyByte = true; // write a byte on start to detect connection issues
-    private boolean sendCodecMeta = true; // write the codec metadata before the stream
+    private boolean sendStreamMeta = true; // write the stream metadata (codec and session)
 
     public Ln.Level getLogLevel() {
         return logLevel;
@@ -265,12 +268,20 @@ public class Options {
         return vdSystemDecorations;
     }
 
+    public boolean getKeepActive() {
+        return keepActive;
+    }
+
     public boolean getFlexDisplay() {
         return flexDisplay;
     }
 
     public int getFlexDisplayDpi() {
         return flexDisplayDpi;
+    }
+
+    public boolean getIgnoreVideoEncoderConstraints() {
+        return ignoreVideoEncoderConstraints;
     }
 
     public boolean getList() {
@@ -309,8 +320,8 @@ public class Options {
         return sendDummyByte;
     }
 
-    public boolean getSendCodecMeta() {
-        return sendCodecMeta;
+    public boolean getSendStreamMeta() {
+        return sendStreamMeta;
     }
 
     @SuppressWarnings("MethodLength")
@@ -518,23 +529,20 @@ public class Options {
                 case "new_display":
                     options.newDisplay = parseNewDisplay(value);
                     break;
-                case "flex_display":
-                    options.flexDisplay = Boolean.parseBoolean(value);
-                    break;
-                case "dpi":
-                    options.flexDisplayDpi = Integer.parseInt(value);
-                    if (options.flexDisplayDpi < 0
-                            || options.flexDisplayDpi > 0xFFFF) {
-                        throw new IllegalArgumentException("dpi ("
-                                + options.flexDisplayDpi
-                                + ") must be in [0; 65535]");
-                    }
-                    break;
                 case "vd_destroy_content":
                     options.vdDestroyContent = Boolean.parseBoolean(value);
                     break;
                 case "vd_system_decorations":
                     options.vdSystemDecorations = Boolean.parseBoolean(value);
+                    break;
+                case "flex_display":
+                    options.flexDisplay = Boolean.parseBoolean(value);
+                    break;
+                case "flex_display_dpi":
+                    options.flexDisplayDpi = Integer.parseInt(value);
+                    if (options.flexDisplayDpi < 0 || options.flexDisplayDpi > 0xFFFF) {
+                        throw new IllegalArgumentException("flex_display_dpi (" + options.flexDisplayDpi + ") must be in [0; 65535]");
+                    }
                     break;
                 case "capture_orientation":
                     Pair<Orientation.Lock, Orientation> pair = parseCaptureOrientation(value);
@@ -543,6 +551,12 @@ public class Options {
                     break;
                 case "display_ime_policy":
                     options.displayImePolicy = parseDisplayImePolicy(value);
+                    break;
+                case "keep_active":
+                    options.keepActive = Boolean.parseBoolean(value);
+                    break;
+                case "ignore_video_encoder_constraints":
+                    options.ignoreVideoEncoderConstraints = Boolean.parseBoolean(value);
                     break;
                 case "send_device_meta":
                     options.sendDeviceMeta = Boolean.parseBoolean(value);
@@ -553,8 +567,8 @@ public class Options {
                 case "send_dummy_byte":
                     options.sendDummyByte = Boolean.parseBoolean(value);
                     break;
-                case "send_codec_meta":
-                    options.sendCodecMeta = Boolean.parseBoolean(value);
+                case "send_stream_meta":
+                    options.sendStreamMeta = Boolean.parseBoolean(value);
                     break;
                 case "raw_stream":
                     boolean rawStream = Boolean.parseBoolean(value);
@@ -562,7 +576,7 @@ public class Options {
                         options.sendDeviceMeta = false;
                         options.sendFrameMeta = false;
                         options.sendDummyByte = false;
-                        options.sendCodecMeta = false;
+                        options.sendStreamMeta = false;
                     }
                     break;
                 default:

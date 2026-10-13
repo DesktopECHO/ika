@@ -1,0 +1,36 @@
+--- a/src/device/poller.rs
++++ b/src/device/poller.rs
+@@ -184,26 +184,13 @@
+     pub fn new(device: Arc<Device>) -> nix::Result<Self> {
+         let epoll = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC)?;
+ 
+-        // Register our device.
+-        // There is a bug in some Linux kernels (at least 5.9 and older) where EPOLLIN
+-        // and EPOLLOUT events wont be signaled to epoll if the first call to epoll did
+-        // not include at least one of EPOLLIN or EPOLLOUT as desired events.
+-        // Make sure we don't fall into this trap by registering EPOLLIN first and doing
+-        // a dummy poll call. This call will immediately return with an error because the
+-        // CAPTURE queue is not streaming, but it will set the right hooks in the kernel
+-        // and we can now reconfigure our events to only include EPOLLPRI and have poll
+-        // working as expected.
+-        epoll.add(&device, EpollEvent::new(EpollFlags::EPOLLIN, DEVICE_ID))?;
+-        // This call should return an EPOLLERR event immediately. But it will
+-        // also ensure that the CAPTURE and OUTPUT poll handlers are registered
+-        // in the kernel for our device.
+-        epoll.wait(&mut [EpollEvent::empty()], 10u8)?;
+-        // Now reset our device events. We must keep it registered for the
+-        // workaround's effect to persist.
+-        epoll.modify(
+-            &device,
+-            &mut EpollEvent::new(EpollFlags::empty(), DEVICE_ID),
+-        )?;
++        // Register our device with no events: they are enabled later as needed.
++        // Upstream first registers EPOLLIN and does a dummy poll, to work around kernels
++        // (5.9 and older) that only hooked the queue wait queues if the first poll asked for
++        // EPOLLIN or EPOLLOUT. On a queue that has no buffers and supports read(), such as
++        // facetimehd, gspca or pwc, that EPOLLIN poll starts the vb2 read() emulator, which
++        // streams the queue: S_FMT, S_PARM and REQBUFS from the client then fail with EBUSY.
++        epoll.add(&device, EpollEvent::new(EpollFlags::empty(), DEVICE_ID))?;
+ 
+         Ok(Poller {
+             device,
