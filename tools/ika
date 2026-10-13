@@ -4547,6 +4547,17 @@ remove_gnome_app_folder() {
   bus="$(app_menu_session_bus)" || return 0
   local -x DBUS_SESSION_BUS_ADDRESS="${bus}"
   gnome_app_folders_available || return 0
+
+  # Reset the folder's settings while it is still in the app grid, then remove
+  # it. GNOME Shell's folder dialog never disconnects from the folder's name
+  # setting: changing the name after the folder (and its dialog) is gone makes
+  # the shell write to a destroyed label and crash, ending a Wayland session.
+  if command -v dconf >/dev/null 2>&1; then
+    dconf reset -f "/org/gnome/desktop/app-folders/folders/${IKA_MENU_ID}/"
+  else
+    gsettings reset-recursively "$(gnome_app_folder_schema)"
+  fi
+
   children="$(gsettings get org.gnome.desktop.app-folders folder-children)"
   if [[ "${children}" == *"${item}"* ]]; then
     children="${children//", ${item}"/}"
@@ -4556,12 +4567,6 @@ remove_gnome_app_folder() {
       children="@as []"
     fi
     gsettings set org.gnome.desktop.app-folders folder-children "${children}"
-  fi
-
-  if command -v dconf >/dev/null 2>&1; then
-    dconf reset -f "/org/gnome/desktop/app-folders/folders/${IKA_MENU_ID}/"
-  else
-    gsettings reset-recursively "$(gnome_app_folder_schema)"
   fi
 }
 
