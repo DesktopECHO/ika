@@ -189,6 +189,10 @@ ika root
 # Print the GSF ID, copy it and open Google's uncertified device page
 ika gsf
 
+# Back up your apps and files to ~/ika, and restore the latest backup after a reset
+ika backup
+ika restore
+
 # Game mode: start Ika fullscreen, passing the gamepad, keyboard and mouse
 # through as HID devices
 ika start --game
@@ -273,6 +277,33 @@ apps that check Play Integrity still fail. A factory reset (`ika reset`, or
 rooting for the first time) gives the device a new ID, which has to be
 registered again. `ika gsf` needs Google Play Services, so it works on
 MindTheGapps builds only.
+
+### Backing up apps and files
+
+`ika backup [FILE]` saves, as a gzip-compressed tar archive
+(`~/ika/ika-backup-YYYYMMDDHHMMSS.tgz` by default): the apps you installed with
+their split APKs (except Chromium, which Ika installs on new devices), their
+files in `/sdcard/Android/data`, game downloads in `/sdcard/Android/obb`, the
+DCIM, Pictures, Download, Documents, Music, Movies and Recordings folders, and
+your choices: the permissions you granted to apps, special app access (such as
+"Display over other apps"), default apps, apps you disabled, the dark theme,
+and a curated set of settings (font size, keyboard, spell checker, pointer
+speed, screen timeout, accessibility and animation speed). `ika restore [FILE]`
+reinstalls the apps, copies the files back and reapplies those choices, for
+example after `ika reset`; without FILE it restores the latest backup in
+`~/ika`. It asks you to type `y` first, as it replaces the apps, files and
+settings on the device. Backups hold APKs, files and settings rather than disk
+images, so they also work across ROM updates.
+
+Each app is stopped while its files are copied, so close any game you are
+playing first. Files an app keeps readable only to itself are skipped, and
+`ika backup` lists each one as it goes (`skipping /sdcard/Android/data/...`);
+an app's files that cannot be copied at all are skipped too and do not fail
+the backup. App-private data such as logins, in-app settings and saved games
+is not included; many apps restore it from your account when you sign in
+again. The wallpaper and the taskbar layout are not included either. Each
+backup gets a new file, and a backup that fails partway leaves no file behind. Restored apps keep the installer that
+installed them, so Google Play goes on updating its apps.
 
 ### App windows
 

@@ -95,6 +95,8 @@ Requires:       net-tools
 Requires:       NetworkManager
 Requires:       nftables
 Requires:       openssl
+# ika backup compresses with pigz.
+Requires:       pigz
 Requires:       python3
 Requires:       python3-requests
 Requires:       v4l-utils
