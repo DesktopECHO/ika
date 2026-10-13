@@ -206,7 +206,8 @@ function source_tree_exclude_paths() {
     autostart.lock 'chromium-installed-cvd-*' console-launch.lock console.log \
     console-supervisor.lock console-supervisor.pid console-window-state \
     data-gb game-console-window-state game-session game-session.exited \
-    game-session.lock ikastart.log udmabuf-baseline
+    game-session.lock ikastart.log udmabuf-baseline 'ika-backup-*.tgz' \
+    'ika-backup-*.tgz.partial'
 }
 
 # Populate the named array with a find(1) prune expression built from
@@ -292,7 +293,7 @@ function build_tree_manifest() {
     # Cache key embedded as the manifest's first line. Bump it whenever the
     # record format or the exclude set changes in a way that affects tarball
     # contents, to invalidate any tarball cached by an older run.
-    printf 'manifest-cache-version\t15\n'
+    printf 'manifest-cache-version\t17\n'
 
     cd "${REPO_DIR}"
     if [[ -n "${prune_name}" ]]; then
