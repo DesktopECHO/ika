@@ -180,6 +180,21 @@ function source_tree_exclude_paths() {
   # no longer re-tars the multi-GB ROM.
   printf '%s\n' lineageos-arm64 lineageos-x86_64
 
+  # Build output the packages never read: Debian packages and their staging
+  # trees (a Debian build on the same checkout leaves several GB, the
+  # ika-lineageos tree holding a whole ROM), the scrcpy client build, and the
+  # web UI's npm dependencies and Angular cache, which npm ci and ng build
+  # recreate. Staging trees are named per package so tracked debian/ files such
+  # as ika-base.install stay in.
+  printf '%s\n' \
+    deb base/_build_scrcpy \
+    base/debian/.debhelper base/debian/ika-base base/debian/ika-common \
+    base/debian/ika-integration base/debian/ika-defaults base/debian/ika-metrics \
+    frontend/debian/.debhelper frontend/debian/ika-user \
+    frontend/debian/ika-orchestration \
+    tools/lineageos/debian/.debhelper tools/lineageos/debian/ika-lineageos \
+    frontend/src/operator/webui/node_modules frontend/src/operator/webui/.angular
+
   # ika keeps its VM state in CVD_HOME_DIR, ~/ika by default, which is also
   # where `git clone` from $HOME puts this checkout. Leave that state out:
   # instance disks, live sockets, logs and locks, and the downloaded APKs.
@@ -277,7 +292,7 @@ function build_tree_manifest() {
     # Cache key embedded as the manifest's first line. Bump it whenever the
     # record format or the exclude set changes in a way that affects tarball
     # contents, to invalidate any tarball cached by an older run.
-    printf 'manifest-cache-version\t14\n'
+    printf 'manifest-cache-version\t15\n'
 
     cd "${REPO_DIR}"
     if [[ -n "${prune_name}" ]]; then
