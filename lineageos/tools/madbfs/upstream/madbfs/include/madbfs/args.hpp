@@ -69,6 +69,7 @@ namespace madbfs::args
     {
         adb::Abi abi;
         u16      port;
+        bool     su = false;
     };
 
     /**

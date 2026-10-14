@@ -42,6 +42,7 @@ namespace
         int         no_server  = false;
         int         no_cache   = false;
         int         push       = false;
+        int         su         = false;
 
         ~MadbfsOpt()
         {
@@ -66,6 +67,7 @@ namespace
         { "--no-server",     offsetof(MadbfsOpt, no_server),  true },
         { "--no-cache",      offsetof(MadbfsOpt, no_cache),   true },
         { "--push-server",   offsetof(MadbfsOpt, push),       true },
+        { "--su",            offsetof(MadbfsOpt, su),         true },
         // clang-format on
         FUSE_OPT_END,
     });
@@ -257,7 +259,7 @@ namespace
             fmt::println(stderr, "error: device ABI query failed: {}", err_msg(abi.error()));
             co_return 1;
         } else {
-            connection = Server{ .abi = *abi, .port = port };
+            connection = Server{ .abi = *abi, .port = port, .su = madbfs_opt.su != 0 };
         }
 
         // if logfile is set to stdout but not in foreground mode, ignore it.
@@ -360,6 +362,7 @@ namespace
             "    --no-server            don't launch server\n"
             "                             (will still attempt to connect to specified port)\n"
             "                             (useful for debugging the server)\n"
+            "    --su                   run the server as root, with 'su -c'\n"
             "    --no-cache             don't use data caching\n",
             log::level_names
         );

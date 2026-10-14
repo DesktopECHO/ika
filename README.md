@@ -289,9 +289,11 @@ mounts it and `ika stop`, `restart` and `reset` unmount it; while Ika is
 stopped the folder is empty. GNOME's Files lists it in the sidebar, and the
 first mount adds it to KDE's Places as **Android**. Files are read as they are
 used, over Ika's adb connection, so a large video plays without being copied
-first. Files an app keeps to itself are out of reach, as they are for adb. The
-mount uses [madbfs](https://github.com/mrizaln/madbfs); its log is
-`~/ika/madbfs.log`.
+first. Files an app keeps to itself are out of reach, as they are for adb. On
+a rooted ROM (`ika root`) the mount is Android's whole filesystem, `/`, served
+as root: apps' private files in `/data` show up too, and changes there are made
+as root, so take care. The mount uses [madbfs](https://github.com/mrizaln/madbfs);
+its log is `~/ika/madbfs.log`.
 
 ### Backing up apps and files
 

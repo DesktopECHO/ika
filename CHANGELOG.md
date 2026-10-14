@@ -10,7 +10,8 @@
 - While Ika runs, Android's shared storage is mounted on `~/ika/Android`, so
   host programs can open, change and delete its files directly, streamed as
   they are read. It uses [madbfs](https://github.com/mrizaln/madbfs), whose
-  server is built into the ROM. ika-base needs `fuse3`. See
+  server is built into the ROM. ika-base needs `fuse3`. On a rooted ROM
+  (`ika root`) it shows Android's whole filesystem, `/`, served as root. See
   [Android files](README.md#android-files).
 
 ### Faster adb

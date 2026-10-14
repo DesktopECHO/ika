@@ -4861,29 +4861,43 @@ android_storage_mounted() {
   findmnt -rn -M "${ANDROID_STORAGE_DIR}" >/dev/null 2>&1
 }
 
+# Whether 'su' gives root in the guest, as after 'ika root'.
+guest_is_rooted() {
+  local adb_serial="$1"
+
+  [[ "$(guest_adb "${adb_serial}" shell "su -c 'id -u'" 2>/dev/null | tr -d '\r')" == "0" ]]
+}
+
 # Mounts Android's /sdcard on ANDROID_STORAGE_DIR with madbfs, which runs
-# madbfs-server from the ROM and goes on in the background. Ika's adb comes
-# first on PATH: an adb of another version would restart the adb server under
-# the console.
+# madbfs-server from the ROM and goes on in the background. On a rooted ROM
+# (ika root) it mounts the whole filesystem, /, with the server run as root.
+# Ika's adb comes first on PATH: an adb of another version would restart the
+# adb server under the console.
 mount_android_storage() {
   local adb_serial="$1"
+  local -a root_args=(--root=/sdcard)
+  local server_pkill="pkill -x madbfs-server"
 
   [[ -x "${PACKAGED_MADBFS_BIN}" ]] || return 0
   android_storage_mounted && return 0
   mkdir -p "${ANDROID_STORAGE_DIR}"
+  if guest_is_rooted "${adb_serial}"; then
+    root_args=(--root=/ --su)
+    server_pkill="su -c '${server_pkill}'"
+  fi
   # A madbfs that did not exit cleanly leaves its control socket behind, and
   # its server on Android holding the port.
   rm -f "${XDG_RUNTIME_DIR:-/tmp}/madbfs@${adb_serial}.sock"
-  guest_adb "${adb_serial}" shell pkill -x madbfs-server >/dev/null 2>&1 || true
+  guest_adb "${adb_serial}" shell "${server_pkill}" >/dev/null 2>&1 || true
   # Files show as the user's, as Android's owners mean nothing on the host and
   # file managers would treat the folders as read-only. File details are
   # re-read after 2 seconds instead of 60, so files Android apps add or change
   # show up promptly.
   if PATH="${CVD_HOST_OUT}/bin:${PATH}" "${PACKAGED_MADBFS_BIN}" --serial="${adb_serial}" \
-      --root=/sdcard --ttl=2 --log-file="${MADBFS_LOG_FILE}" \
+      "${root_args[@]}" --ttl=2 --log-file="${MADBFS_LOG_FILE}" \
       -o "uid=$(id -u),gid=$(id -g),umask=022" "${ANDROID_STORAGE_DIR}" \
       </dev/null >>"${MADBFS_LOG_FILE}" 2>&1 3>&-; then
-    log "Android storage mounted on ${ANDROID_STORAGE_DIR}"
+    log "Android storage mounted on ${ANDROID_STORAGE_DIR} (${root_args[0]#--root=})"
     edit_android_storage_place add
   else
     log "warning: could not mount Android storage on ${ANDROID_STORAGE_DIR}; see ${MADBFS_LOG_FILE}"

@@ -191,7 +191,7 @@ namespace madbfs
         return connection.visit(Overload{
             [&](args::AdbOnly) { return Connection{ ctx, conn::Adb{} }; },
             [&](args::NoServer c) { return Connection{ ctx, conn::Proxy{ std::nullopt, c.port } }; },
-            [&](args::Server c) { return Connection{ ctx, conn::Proxy{ c.abi, c.port } }; },
+            [&](args::Server c) { return Connection{ ctx, conn::Proxy{ c.abi, c.port, c.su } }; },
         });
     }
 
