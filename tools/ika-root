@@ -84,6 +84,7 @@ config_value() {
 resolve_serials() {
   local adb_ip_and_port
   local fastboot_port
+  local vsock_cid=""
 
   adb_ip_and_port="$(config_value adb_ip_and_port || true)"
   adb_ip_and_port="${adb_ip_and_port:-127.0.0.1:6520}"
@@ -91,6 +92,12 @@ resolve_serials() {
     0.0.0.0:*|'[::]':*) adb_ip_and_port="127.0.0.1:${adb_ip_and_port##*:}" ;;
   esac
   ADB_SERIAL="${adb_ip_and_port}"
+  if grep -q '"native_vsock"' "${CVD_CONFIG_PATH}" 2>/dev/null; then
+    vsock_cid="$(config_value vsock_guest_cid || true)"
+    if [[ "${vsock_cid}" =~ ^[0-9]+$ ]] && (( vsock_cid > 2 )); then
+      ADB_SERIAL="vsock:${vsock_cid}:5555"
+    fi
+  fi
 
   fastboot_port="$(config_value fastboot_host_port || true)"
   FASTBOOT_SERIAL="tcp:127.0.0.1:${fastboot_port:-${adb_ip_and_port##*:}}"

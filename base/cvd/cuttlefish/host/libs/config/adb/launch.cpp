@@ -64,10 +64,14 @@ class AdbHelper {
            ModeEnabled(AdbMode::VsockHalfTunnel);
   }
 
+  // With native vsock the connector only registers vsock:<cid>:5555, so the
+  // host's adb server sees one device. The tunnel still serves the TCP port
+  // for fastboot and manual connections.
   bool TcpConnectorEnabled() const {
     bool vsock_tunnel = VsockTunnelEnabled();
     bool vsock_half_tunnel = VsockHalfTunnelEnabled();
-    return config_.RunConnector() && (vsock_tunnel || vsock_half_tunnel);
+    return config_.RunConnector() && (vsock_tunnel || vsock_half_tunnel) &&
+           !ModeEnabled(AdbMode::NativeVsock);
   }
 
   bool VsockConnectorEnabled() const {
