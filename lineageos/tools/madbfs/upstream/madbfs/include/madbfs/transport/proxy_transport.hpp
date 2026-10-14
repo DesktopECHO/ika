@@ -30,12 +30,13 @@ namespace madbfs::transport
          *
          * @param abi Phone ABI.
          * @param port The port the server will run on.
+         * @param su Run the server as root, with `su -c` (Ika).
          *
          * The construction of the transport may fail like any other.
          *
          * ABI is used to identify which server to be pushed.
          */
-        static AExpect<Uniq<ProxyTransport>> create(Opt<adb::Abi> abi, u16 port);
+        static AExpect<Uniq<ProxyTransport>> create(Opt<adb::Abi> abi, u16 port, bool su = false);
 
         // overrides
         // ---------

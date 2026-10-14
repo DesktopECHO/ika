@@ -2,7 +2,8 @@
 
 [madbfs](https://github.com/mrizaln/madbfs) mounts Android's storage on the
 host as a FUSE filesystem over adb. `ika start` mounts the VM's `/sdcard` on
-`~/ika/Android` with it, and `ika stop`, `restart` and `reset` unmount it.
+`~/ika/Android` with it (the whole filesystem, `/`, on a rooted ROM), and
+`ika stop`, `restart` and `reset` unmount it.
 
 Two halves are built from this folder:
 
@@ -56,6 +57,10 @@ up by the ROM build).
   when it cannot start or connect (madbfs's watchdog retries it every 10
   seconds), and no `--adb-only`. A device whose ABI cannot be read is not
   mounted.
+- `--su` starts the server as `su -c '/system_ext/bin/madbfs-server ...'`, so
+  it runs as root. `ika` passes it, with `--root=/`, when `su -c 'id -u'` gives
+  `0` in the guest (after `ika root`), and mounts `/sdcard` as the shell user
+  otherwise.
 - A page read from the device gets the number of bytes read as its size. Upstream
   used the file offset after them, which wraps to 0 for the page ending at
   4 GiB: reads of larger files stopped there, as if the file ended.

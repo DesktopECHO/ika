@@ -45,6 +45,7 @@ namespace madbfs
         {
             Opt<adb::Abi> abi;
             u16           port;
+            bool          su = false;    // Ika: run the server as root
         };
 
         /**

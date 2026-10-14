@@ -26,8 +26,8 @@ namespace
             co_return custom->create();
         }
         case ConnectionStrategy::index_of<conn::Proxy>(): {
-            const auto& [abi, port] = *strat.as<conn::Proxy>();
-            if (auto transport = co_await transport::ProxyTransport::create(abi, port); transport) {
+            const auto& [abi, port, su] = *strat.as<conn::Proxy>();
+            if (auto transport = co_await transport::ProxyTransport::create(abi, port, su); transport) {
                 co_return std::move(*transport);
             }
             // Ika: no falling back to adb shell commands; the watchdog retries
@@ -57,7 +57,7 @@ namespace
         }
         case ConnectionStrategy::index_of<conn::Proxy>(): {
             auto proxy = strat.as<conn::Proxy>();
-            co_return co_await transport::ProxyTransport::create(proxy->abi, proxy->port);
+            co_return co_await transport::ProxyTransport::create(proxy->abi, proxy->port, proxy->su);
         }
         case ConnectionStrategy::index_of<conn::Adb>(): {
             co_return co_await transport::AdbTransport::create();

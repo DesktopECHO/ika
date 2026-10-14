@@ -53,7 +53,7 @@ namespace
         co_return socket;
     }
 
-    AExpect<Tup<Opt<bp::process>, rpc::Socket>> launch_and_connect(Opt<adb::Abi> abi, u16 port)
+    AExpect<Tup<Opt<bp::process>, rpc::Socket>> launch_and_connect(Opt<adb::Abi> abi, u16 port, bool su)
     {
         auto exec      = co_await async::current_executor();
         // Ika: the ROM ships the server.
@@ -87,12 +87,19 @@ namespace
         }
 
         auto port_str = fmt::format("{}", port);
-        auto args     = std::to_array<boost::string_view>({
-            "shell",
-            { serv_file.data(), serv_file.size() },
-            "--port",
-            port_str,
-        });
+        // Ika: as root, through su; adb passes the command to the device's shell, which keeps the quoted
+        // server command together.
+        auto su_cmd = fmt::format("'{} --port {}'", serv_file, port_str);
+        auto args   = Vec<boost::string_view>{ "shell" };
+        if (su) {
+            args.emplace_back("su");
+            args.emplace_back("-c");
+            args.emplace_back(su_cmd.data(), su_cmd.size());
+        } else {
+            args.emplace_back(serv_file.data(), serv_file.size());
+            args.emplace_back("--port");
+            args.emplace_back(port_str);
+        }
 
         auto cmds = args | sv::transform([](auto s) { return Str{ s.data(), s.size() }; });
         log_d(__func__, "executing adb {}", cmds);
@@ -150,9 +157,9 @@ namespace madbfs::transport
         stop(Errc::operation_canceled);
     }
 
-    AExpect<Uniq<ProxyTransport>> ProxyTransport::create(Opt<adb::Abi> abi, u16 port)
+    AExpect<Uniq<ProxyTransport>> ProxyTransport::create(Opt<adb::Abi> abi, u16 port, bool su)
     {
-        auto conn = co_await launch_and_connect(abi, port);
+        auto conn = co_await launch_and_connect(abi, port, su);
         if (not conn) {
             co_return Unexpect{ conn.error() };
         }
