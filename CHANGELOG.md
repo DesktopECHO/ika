@@ -1,3 +1,21 @@
+## Unreleased, changes since release 261012
+
+### Backup and restore
+- `ika backup [FILE]` saves your apps, their files and settings into one
+  compressed archive, `~/ika/ika-backup-YYYYMMDDHHMMSS.tgz` by default, and
+  `ika restore [FILE]` puts them back, after `ika reset` for example; without
+  FILE it restores the latest backup. No root needed. See [Backing up apps and files](README.md#backing-up-apps-and-files).
+
+### Faster adb
+- Ika talks to Android over native vsock (`vsock:3:5555`) instead of the TCP
+  proxy on port 6520, so copying files from Android runs about 25 times
+  faster. `adb devices` lists one device. Port 6520 still accepts
+  `adb connect` and fastboot.
+
+### Fixes
+- `ika reset` no longer logs you out of GNOME: removing the app folder
+  crashed GNOME Shell.
+
 ## Ika 261012, changes since release 260930
 
 ### Root and Google sign-in
