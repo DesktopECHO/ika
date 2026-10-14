@@ -216,6 +216,11 @@ ika app close Asphalt 8
 ika app sync
 ika app sync --remove
 
+# Install APK files, and uninstall an app by label or package name
+ika install ~/Downloads/some-app.apk
+ika remove Some App
+ika remove com.example.someapp
+
 # Show the built-in usage text
 ika help
 ```
@@ -321,6 +326,18 @@ is not included; many apps restore it from your account when you sign in
 again. The wallpaper and the taskbar layout are not included either. Each
 backup gets a new file, and a backup that fails partway leaves no file behind. Restored apps keep the installer that
 installed them, so Google Play goes on updating its apps.
+
+### Installing and removing apps
+
+`ika install FILE.apk...` installs APK files in Android; an app that is
+already installed is replaced, keeping its data. The file manager offers it as
+**Ika APK installer** in the Open With menu of APK files, so an APK can be
+installed without a terminal, and the result shows as a notification.
+`ika remove NAME` uninstalls an app and deletes its data. NAME is a package
+name or the label shown by `ika app`, matched as `ika app` does, and an
+ambiguous name lists the matching apps instead of guessing. Apps that come
+with Android cannot be removed. If the VM is not running, either command
+starts it without the console first.
 
 ### App windows
 
