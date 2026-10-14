@@ -3,6 +3,10 @@ Teach the Goldfish sensors transport interface about split CONTROL and DATA
 message paths so Cuttlefish's separate sensors vconsoles can compile and route
 traffic correctly, while Ranchu/qemud keeps using its existing single fd.
 
+Also read the DATA message before taking m_mtx: a blocked read inside the lock
+stalled activate() and SensorService init, so the guest never finished booting
+after a restart.
+
 diff --git a/hals/sensors/entry.cpp b/hals/sensors/entry.cpp
 index 170f3fc2..f9fd2a58 100644
 --- a/hals/sensors/entry.cpp
@@ -30,6 +34,20 @@ index 170f3fc2..f9fd2a58 100644
          return m_qemuSensorsFd.get();
      }
  
+diff --git a/hals/sensors/include/multihal_sensors.h b/hals/sensors/include/multihal_sensors.h
+index 1f50b0bc..a647bb4a 100644
+--- a/hals/sensors/include/multihal_sensors.h
++++ b/hals/sensors/include/multihal_sensors.h
+@@ -106,7 +106,8 @@ private:
+                                        uint32_t availableSensorsMask, bool enabled);
+     static bool setSensorsGuestTime(SensorsTransport& st, int64_t value);
+     static bool setSensorsUpdateIntervalMs(SensorsTransport& st, uint32_t value);
+-    void parseQemuSensorEventLocked(QemuSensorsProtocolState* state);
++    void parseQemuSensorEventLocked(QemuSensorsProtocolState* state,
++                                    const char* buf, int len);
+     void postSensorEventLocked(const Event& event);
+     void doPostSensorEventLocked(const SensorInfo& sensor, const Event& event);
+     void setAdditionalInfoFrames();
 diff --git a/hals/sensors/include/multihal_sensors_transport.h b/hals/sensors/include/multihal_sensors_transport.h
 index d5de1501..35f3f52f 100644
 --- a/hals/sensors/include/multihal_sensors_transport.h
@@ -97,8 +115,34 @@ index 2d553cc3..0cca2c00 100644
  
          {
              std::unique_lock<std::mutex> lock(m_mtx);
+diff --git a/hals/sensors/multihal_sensors_epoll.cpp b/hals/sensors/multihal_sensors_epoll.cpp
+index 5ce6eb6a..151a9f0d 100644
+--- a/hals/sensors/multihal_sensors_epoll.cpp
++++ b/hals/sensors/multihal_sensors_epoll.cpp
+@@ -69,8 +69,20 @@ bool MultihalSensors::qemuSensorListenerThreadImpl(const int transportFd) {
+                           "ev_events=%x", __func__, __LINE__, ev_events);
+                     return true;
+                 } else if (ev_events & EPOLLIN) {
++                    // Receive() can block on a partial message; never hold m_mtx
++                    // across it or activate() deadlocks and boot never completes.
++                    // m_sensorsTransport is only written by this thread.
++                    char buf[256];
++                    const int len = m_sensorsTransport->Receive(
++                        SensorsMessageType::DATA, buf, sizeof(buf) - 1);
++                    if (len < 0) {
++                        ALOGE("%s:%d: receive for %s failed", __func__, __LINE__,
++                              m_sensorsTransport->Name());
++                        continue;
++                    }
++                    buf[len] = 0;
+                     std::unique_lock<std::mutex> lock(m_mtx);
+-                    parseQemuSensorEventLocked(&m_protocolState);
++                    parseQemuSensorEventLocked(&m_protocolState, buf, len);
+                 }
+             } else if (fd == m_sensorThreadFd.get()) {
+                 if (ev_events & (EPOLLERR | EPOLLHUP)) {
 diff --git a/hals/sensors/multihal_sensors_qemu.cpp b/hals/sensors/multihal_sensors_qemu.cpp
-index e30223b0..f2aa0ccc 100644
+index e30223b0..007c35e7 100644
 --- a/hals/sensors/multihal_sensors_qemu.cpp
 +++ b/hals/sensors/multihal_sensors_qemu.cpp
 @@ -62,7 +62,7 @@ bool MultihalSensors::setSensorsReportingImpl(SensorsTransport& st,
@@ -128,12 +172,20 @@ index e30223b0..f2aa0ccc 100644
          ALOGE("%s:%d: send for %s failed", __func__, __LINE__, st.Name());
          return false;
      } else {
-@@ -114,7 +114,7 @@ double MultihalSensors::randomError(float lo, float hi) {
+@@ -112,14 +112,9 @@ double MultihalSensors::randomError(float lo, float hi) {
+     return distribution(gen);
+ }
  
- void MultihalSensors::parseQemuSensorEventLocked(QemuSensorsProtocolState* state) {
-     char buf[256];
+-void MultihalSensors::parseQemuSensorEventLocked(QemuSensorsProtocolState* state) {
+-    char buf[256];
 -    const int len = m_sensorsTransport->Receive(buf, sizeof(buf) - 1);
-+    const int len = m_sensorsTransport->Receive(SensorsMessageType::DATA, buf, sizeof(buf) - 1);
-     if (len < 0) {
-         ALOGE("%s:%d: receive for %s failed", __func__, __LINE__, m_sensorsTransport->Name());
-     }
+-    if (len < 0) {
+-        ALOGE("%s:%d: receive for %s failed", __func__, __LINE__, m_sensorsTransport->Name());
+-    }
++void MultihalSensors::parseQemuSensorEventLocked(QemuSensorsProtocolState* state,
++                                                 const char* buf, const int len) {
+     const int64_t nowNs = ::android::elapsedRealtimeNano();
+-    buf[len] = 0;
+     const char* end = buf + len;
+     bool parsed = false;
+     Event event;
