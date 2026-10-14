@@ -187,7 +187,7 @@ function source_tree_exclude_paths() {
   # recreate. Staging trees are named per package so tracked debian/ files such
   # as ika-base.install stay in.
   printf '%s\n' \
-    deb base/_build_scrcpy \
+    deb base/_build_scrcpy base/_build_madbfs \
     base/debian/.debhelper base/debian/ika-base base/debian/ika-common \
     base/debian/ika-integration base/debian/ika-defaults base/debian/ika-metrics \
     frontend/debian/.debhelper frontend/debian/ika-user \
@@ -197,7 +197,8 @@ function source_tree_exclude_paths() {
 
   # ika keeps its VM state in CVD_HOME_DIR, ~/ika by default, which is also
   # where `git clone` from $HOME puts this checkout. Leave that state out:
-  # instance disks, live sockets, logs and locks, and the downloaded APKs.
+  # instance disks, live sockets, logs and locks, the downloaded APKs, and the
+  # Android folder, where Android's storage is mounted.
   printf '%s\n' \
     tmp cuttlefish cuttlefish_assembly cuttlefish_runtime 'cuttlefish_runtime.*' \
     Chromium.apk Chromium.apk.part 'Magisk-v*.apk' 'Magisk-v*.apk.part' \
@@ -207,7 +208,7 @@ function source_tree_exclude_paths() {
     console-supervisor.lock console-supervisor.pid console-window-state \
     data-gb game-console-window-state game-session game-session.exited \
     game-session.lock ikastart.log udmabuf-baseline 'ika-backup-*.tgz' \
-    'ika-backup-*.tgz.partial'
+    'ika-backup-*.tgz.partial' Android madbfs.log android-place-kde
 }
 
 # Populate the named array with a find(1) prune expression built from
@@ -293,7 +294,7 @@ function build_tree_manifest() {
     # Cache key embedded as the manifest's first line. Bump it whenever the
     # record format or the exclude set changes in a way that affects tarball
     # contents, to invalidate any tarball cached by an older run.
-    printf 'manifest-cache-version\t17\n'
+    printf 'manifest-cache-version\t18\n'
 
     cd "${REPO_DIR}"
     if [[ -n "${prune_name}" ]]; then
