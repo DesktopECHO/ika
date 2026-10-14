@@ -1,0 +1,423 @@
+#include "madbfs/madbfs.hpp"
+
+#include <madbfs-common/log.hpp>
+
+#define FUSE_USE_VERSION 31
+#include <fuse.h>
+
+#include <boost/json.hpp>
+
+namespace json = boost::json;
+
+// madbfs.hpp impl: Madbfs::IpcHandler
+namespace madbfs
+{
+    constexpr usize lowest_page_size  = 64 * 1024;
+    constexpr usize highest_page_size = 4 * 1024 * 1024;
+    constexpr usize lowest_max_pages  = 128;
+
+    // NOTE: normally, I'd use overloads of coro-lambdas with `this auto` as 1st param, but gcc segfaulted.
+    // see: https://gcc.gnu.org/bugzilla/show_bug.cgi?format=multiple&id=114632.
+    // last-checked: 2026-02-13 21:15.
+    // on: gcc (GCC) 15.2.1 20251211 (Red Hat 15.2.1-5).
+    struct Madbfs::IpcHandler
+    {
+        AExpect<json::value> handle(ipc::op::Info)
+        {
+            const auto& cache = madbfs.fs().cache();
+
+            const auto ttl_sec     = madbfs.fs().ttl().transform(&Seconds::count).value_or(0);
+            const auto timeout_sec = madbfs.m_timeout.transform(&Seconds::count).value_or(0);
+
+            if (cache) {
+                const auto page_size     = cache->page_size();
+                const auto max_pages     = cache->max_pages();
+                const auto current_pages = cache->current_pages();
+
+                co_return json::value{
+                    { "serial", std::getenv("ANDROID_SERIAL") },
+                    { "transport", madbfs.m_connection.name() },
+                    { "root", madbfs.m_root.str() },
+                    { "log_level", log::level_to_str(log::get_level()) },
+                    { "ttl", ttl_sec },
+                    { "timeout", timeout_sec },
+                    { "cache",
+                      { { "page_size", page_size / 1024 },
+                        { "cache_size",
+                          { { "max", page_size * max_pages / 1024 / 1024 },
+                            { "current", page_size * current_pages / 1024 / 1024 } } } } }
+                };
+            } else {
+                co_return json::value{
+                    { "serial", std::getenv("ANDROID_SERIAL") },
+                    { "transport", madbfs.m_connection.name() },
+                    { "root", madbfs.m_root.str() },
+                    { "log_level", log::level_to_str(log::get_level()) },
+                    { "ttl", ttl_sec },
+                    { "timeout", timeout_sec },
+                    { "cache", nullptr },
+                };
+            }
+        }
+
+        AExpect<json::value> handle(ipc::op::InvalidateCache)
+        {
+            auto& cache = madbfs.fs().cache();
+            if (not cache) {
+                co_return Unexpect{ Errc::operation_not_supported };
+            }
+
+            const auto page_size     = cache->page_size();
+            const auto current_pages = cache->current_pages();
+
+            co_await cache->invalidate_all();
+
+            co_return json::value{ { "size", page_size * current_pages / 1024 / 1024 } };
+        }
+
+        AExpect<json::value> handle(ipc::op::ExpireStat)
+        {
+            auto count = madbfs.fs().expires_all();
+            co_return json::value{ { "count", count } };
+        }
+
+        AExpect<json::value> handle(ipc::op::SetPageSize size)
+        {
+            auto& cache = madbfs.fs().cache();
+            if (not cache) {
+                co_return Unexpect{ Errc::operation_not_supported };
+            }
+
+            const auto old_size = cache->page_size();
+            const auto old_max  = cache->max_pages();
+
+            auto new_size = std::bit_ceil(size.kib * 1024);
+            new_size      = std::clamp(new_size, lowest_page_size, highest_page_size);
+
+            auto new_max = std::bit_ceil(old_max * old_size / new_size);
+            new_max      = std::max(new_max, lowest_max_pages);
+
+            co_await cache->set_page_size(new_size);
+            co_await cache->set_max_pages(new_max);
+
+            co_return json::value{
+                { "page_size",
+                  { { "old", old_size / 1024 },    //
+                    { "new", new_size / 1024 } } },
+                { "cache_size",
+                  { { "old", old_max * old_size / 1024 / 1024 },
+                    { "new", new_max * new_size / 1024 / 1024 } } },
+            };
+        }
+
+        AExpect<json::value> handle(ipc::op::SetCacheSize size)
+        {
+            auto& cache = madbfs.fs().cache();
+            if (not cache) {
+                co_return Unexpect{ Errc::operation_not_supported };
+            }
+
+            const auto page    = cache->page_size();
+            const auto old_max = cache->max_pages();
+
+            auto new_max = std::bit_ceil(size.mib * 1024 * 1024 / std::max(page, 1uz));
+            new_max      = std::max(new_max, lowest_max_pages);
+
+            if (cache) {
+                co_await cache->set_max_pages(new_max);
+            } else {
+                new_max = 0;
+            }
+
+            co_return json::value{
+                { "cache_size",
+                  { { "old", old_max * page / 1024 / 1024 },    //
+                    { "new", new_max * page / 1024 / 1024 } } },
+            };
+        }
+
+        AExpect<json::value> handle(ipc::op::SetTTL ttl)
+        {
+            const auto new_ttl = ttl.sec < 1 ? std::nullopt : Opt<Seconds>{ ttl.sec };
+            const auto old_ttl = madbfs.fs().set_ttl(new_ttl);
+
+            co_return json::value{
+                { "ttl",
+                  { { "old", old_ttl.transform(&Seconds::count).value_or(0) },    //
+                    { "new", new_ttl.transform(&Seconds::count).value_or(0) } } },
+            };
+        }
+
+        AExpect<json::value> handle(ipc::op::SetTimeout ttl)
+        {
+            auto old = std::exchange(madbfs.m_timeout, ttl.sec < 1 ? std::nullopt : Opt<Seconds>{ ttl.sec });
+            co_return json::value{
+                { "timeout",
+                  { { "old", old.transform(&Seconds::count).value_or(0) },    //
+                    { "new", madbfs.m_timeout.transform(&Seconds::count).value_or(0) } } },
+            };
+        }
+
+        AExpect<json::value> handle(ipc::op::SetLogLevel op)
+        {
+            const auto prev_level = log::get_level();
+            const auto new_level  = log::level_from_str(op.lvl).value_or(prev_level);
+
+            log::set_level(new_level);
+
+            co_return json::value{
+                { "log_level",
+                  { { "old", log::level_to_str(prev_level) },    //
+                    { "new", log::level_to_str(new_level) } } },
+            };
+        }
+
+        AExpect<json::value> handle(ipc::op::Unmount)
+        {
+            ::fuse_exit(madbfs.m_fuse);
+            co_return json::value{ nullptr };
+        }
+
+        Madbfs& madbfs;
+    };
+}
+
+// madbfs.hpp impl: Madbfs
+namespace madbfs
+{
+    Connection Madbfs::prepare_connection(async::Context& ctx, args::Connection connection)
+    {
+        namespace conn = connection_strategy;
+        return connection.visit(Overload{
+            [&](args::AdbOnly) { return Connection{ ctx, conn::Adb{} }; },
+            [&](args::NoServer c) { return Connection{ ctx, conn::Proxy{ std::nullopt, c.port } }; },
+            [&](args::Server c) { return Connection{ ctx, conn::Proxy{ c.abi, c.port } }; },
+        });
+    }
+
+    Opt<ipc::Server> Madbfs::create_ipc(async::Context& ctx)
+    {
+        auto socket_path = [] -> String {
+            const auto* res = std::getenv("XDG_RUNTIME_DIR");
+            return res ? res : "/tmp";
+        }();
+
+        const auto* serial = std::getenv("ANDROID_SERIAL");
+        if (serial == nullptr) {
+            return {};
+        }
+
+        socket_path += '/';
+        socket_path += "madbfs@";
+        socket_path += serial;
+        socket_path += ".sock";
+
+        auto ipc = ipc::Server::create(ctx, socket_path);
+        if (not ipc.has_value()) {
+            log_e(__func__, "failed to initialize ipc: {}", err_msg(ipc.error()));
+            return {};
+        }
+
+        log_i(__func__, "succesfully created ipc: {}", ipc->path());
+        return std::move(*ipc);
+    }
+
+    void Madbfs::work_thread_function(async::Context& ctx)
+    {
+        try {
+            log_i(__func__, "io_context running...");
+            auto num_handlers = ctx.run();
+            log_i(__func__, "io_context stopped with {} handlers executed", num_handlers);
+        } catch (const std::exception& e) {
+            log_w(__func__, "io_context stopped with an exception: {}", e.what());
+        } catch (...) {
+            log_w(__func__, "io_context stopped with an exception (unknown type)");
+        }
+    }
+
+    Madbfs::Madbfs(
+        struct fuse*     fuse,
+        args::Connection connection,
+        Opt<Caching>     caching,
+        path::Path       custom_root,
+        Str              mountpoint,
+        Opt<Seconds>     ttl,
+        Opt<Seconds>     timeout
+    )
+        : m_fuse{ fuse }
+        , m_async_ctx{}
+        , m_work_guard{ m_async_ctx.get_executor() }
+        , m_work_thread{ [this] { work_thread_function(m_async_ctx); } }
+        , m_connection{ prepare_connection(m_async_ctx, connection) }
+        , m_fs{ m_async_ctx, m_connection, caching, ttl }
+        , m_ipc{ create_ipc(m_async_ctx) }
+        , m_watchdog_timer{ m_async_ctx }
+        , m_reaper_timer{ m_async_ctx }
+        , m_signal{ m_async_ctx, SIGINT, SIGTERM }
+        , m_root{ custom_root.owned() }
+        , m_mountpoint{ mountpoint }
+        , m_timeout{ timeout }
+    {
+        if (m_ipc) {
+            auto coro = m_ipc->launch([this](ipc::FsOp op) { return ipc_handler(op); });
+            async::spawn(m_async_ctx, std::move(coro), [](std::exception_ptr e) {
+                log::log_exception(e, "Madbfs");
+            });
+        }
+
+        async::spawn(m_async_ctx, watchdog(), [](std::exception_ptr e) { log::log_exception(e, "Madbfs"); });
+        async::spawn(m_async_ctx, reaper(), [](std::exception_ptr e) { log::log_exception(e, "Madbfs"); });
+
+        async::spawn(m_async_ctx, m_connection.start(), [](std::exception_ptr e) {
+            log::log_exception(e, "Madbfs");
+        });
+
+        m_signal.async_wait([this, pid = ::getpid()](net::error_code ec, int sig) {
+            if (not ec) {
+                assert(m_fuse != nullptr);
+                log_w("Madbfs", "signal raised: SIG{} ({})", ::sigabbrev_np(sig), sig);
+                ::fuse_exit(m_fuse);
+                ::kill(pid, SIGPIPE);
+            }
+        });
+
+        if (auto result = async::block(m_async_ctx, m_fs.initialize(m_root)); not result) {
+            log_c(__func__, "Failed to initialize filesystem");
+        }
+    }
+
+    Madbfs::~Madbfs()
+    {
+        m_signal.cancel();
+
+        if (m_ipc) {
+            m_ipc->stop();
+        }
+
+        m_watchdog_timer.cancel();
+        m_reaper_timer.cancel();
+
+        async::block(m_async_ctx, m_fs.shutdown());
+        m_connection.cancel(Errc::operation_canceled);
+
+        m_work_guard.reset();
+        m_async_ctx.stop();
+        m_work_thread.join();
+    }
+
+    Expect<path::Path> Madbfs::create_path(const char* path)
+    {
+        thread_local static auto string = String{};
+        thread_local static auto comps  = Vec<util::Slice>{};
+
+        if (m_root.is_root()) {
+            return ok_or(path::create_with(comps, path), Errc::invalid_argument);
+        }
+
+        string.clear();
+        string.assign(m_root.str());
+        string.ends_with('/') ? void() : string.push_back('/');
+        string.append(path);
+
+        return ok_or(path::create_with(comps, string), Errc::invalid_argument);
+    }
+
+    Expect<Array<path::Path, 2>> Madbfs::create_path2(const char* path1, const char* path2)
+    {
+        thread_local static auto strings = Array<String, 2>{};
+        thread_local static auto compss  = Array<Vec<util::Slice>, 2>{};
+
+        auto paths  = Array{ path1, path2 };
+        auto result = Array<path::Path, 2>{};
+
+        for (auto i : sv::iota(0uz, 2uz)) {
+            if (m_root.is_root()) {
+                auto path = path::create_with(compss[i], paths[i]);
+                if (not path) {
+                    return Unexpect{ Errc::invalid_argument };
+                }
+                result[i] = std::move(*path);
+                continue;
+            }
+
+            strings[i].clear();
+            strings[i].assign(m_root.str());
+            strings[i].ends_with('/') ? void() : strings[i].push_back('/');
+            strings[i].append(paths[i]);
+
+            auto path = path::create_with(compss[i], strings[i]);
+            if (not path) {
+                return Unexpect{ Errc::invalid_argument };
+            }
+            result[i] = std::move(*path);
+        }
+
+        return result;
+    }
+
+    AExpect<json::value> Madbfs::ipc_handler(ipc::FsOp op)
+    {
+        auto handler = IpcHandler{ *this };
+        co_return co_await op.visit([&](auto&& op) { return handler.handle(op); });
+    }
+
+    Await<void> Madbfs::watchdog()
+    {
+        using namespace std::chrono_literals;
+        constexpr auto interval = 10s;
+
+        while (true) {
+            m_watchdog_timer.expires_after(interval);
+            if (auto res = co_await m_watchdog_timer.async_wait(); not res) {
+                break;
+            }
+
+            log_d(__func__, "checking connection");
+            auto ok = co_await m_connection.ping(m_timeout);
+
+            if (not ok) {
+                log_i(__func__, "connection is timed out");
+                if (auto res = co_await m_connection.reconnect(); res) {
+                    if (auto& cache = m_fs.cache(); cache) {
+                        co_await cache->invalidate_fds(false);
+                    }
+                    co_await m_connection.start();
+                }
+            } else if (not m_connection.is_optimal()) {
+                log_i(__func__, "connection is ok but not optimized. trying to optimize...");
+                if (auto res = co_await m_connection.optimize(); res) {
+                    if (auto& cache = m_fs.cache(); cache) {
+                        co_await cache->invalidate_fds(false);
+                    }
+                    co_await m_connection.start();
+                }
+            } else {
+                log_d(__func__, "connection is ok");
+            }
+        }
+    }
+
+    Await<void> Madbfs::reaper()
+    {
+        using namespace std::chrono_literals;
+        constexpr auto interval = 10s;
+
+        while (true) {
+            m_reaper_timer.expires_after(interval);
+            if (auto res = co_await m_reaper_timer.async_wait(); not res) {
+                break;
+            }
+
+            if (auto& cache = m_fs.cache(); cache) {
+                co_await cache->clean_stale_fds();
+            }
+
+            const auto& handles = m_fs.handles();
+
+            auto cap   = handles.capacity();
+            auto empty = handles.count_empty();
+
+            log_i(__func__, "file handles [cap={:>04d}|open={:>04d}|empty={:>04d}]", cap, cap - empty, empty);
+        }
+    }
+}
