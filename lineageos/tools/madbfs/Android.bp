@@ -1,0 +1,57 @@
+package {
+    default_applicable_licenses: ["vendor_ika_madbfs_license"],
+}
+
+license {
+    name: "vendor_ika_madbfs_license",
+    visibility: [":__subpackages__"],
+    license_kinds: [
+        "SPDX-license-identifier-BSL-1.0",
+        "SPDX-license-identifier-MIT",
+    ],
+    license_text: [
+        "upstream/LICENSE",
+        "third_party/asio/LICENSE_1_0.txt",
+        "third_party/fmt/LICENSE",
+        "third_party/saf/LICENSE",
+        "third_party/spdlog/LICENSE",
+    ],
+}
+
+// madbfs-server, the device half of madbfs (see README.md). The madbfs client
+// in ika-base starts it over adb as the shell user, from here, instead of
+// pushing a copy.
+cc_binary {
+    name: "madbfs-server",
+    srcs: [
+        "upstream/madbfs-server/src/*.cpp",
+        "upstream/madbfs-common/src/rpc.cpp",
+        "android/version.cpp",
+    ],
+    local_include_dirs: [
+        "android",
+        "upstream/madbfs-server/include",
+        "upstream/madbfs-common/include",
+        "third_party/asio/include",
+        "third_party/fmt/include",
+        "third_party/saf/include",
+        "third_party/spdlog/include",
+    ],
+    cflags: [
+        // Standalone asio, header-only spdlog and fmt, as upstream's server
+        // build uses them.
+        "-DMADBFS_NON_BOOST_ASIO=1",
+        "-DSAF_ASIO_STANDALONE",
+        "-DSPDLOG_HEADER_ONLY",
+        "-DSPDLOG_FMT_EXTERNAL",
+        "-DFMT_HEADER_ONLY",
+        "-Wall",
+        "-Wno-error",
+    ],
+    // C++23; asio reports errors with exceptions.
+    cpp_std: "experimental",
+    cppflags: ["-fexceptions"],
+    rtti: true,
+    system_ext_specific: true,
+    compile_multilib: "64",
+}

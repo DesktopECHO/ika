@@ -1,0 +1,352 @@
+#include "madbfs/transport/proxy_transport.hpp"
+
+#include "madbfs/adb.hpp"
+#include "madbfs/cmd.hpp"
+
+#include <madbfs-common/log.hpp>
+#include <madbfs-common/rpc.hpp>
+
+#include <cstdlib>
+#include <random>
+
+#define BOOST_PROCESS_VERSION 2
+#include <boost/process.hpp>
+
+namespace bp = boost::process::v2;
+
+using namespace madbfs;
+
+// helper functions/classes
+namespace
+{
+    // Ika: a fresh secret for each server it starts, sent on the server's standard input and proved in
+    // the handshake, so no other program that reaches the port can use the server.
+    String make_secret()
+    {
+        auto device = std::random_device{};
+        auto secret = String{};
+        for (auto i = 0; i < 4; ++i) {
+            auto value  = (static_cast<u64>(device()) << 32) | device();
+            secret     += fmt::format("{:016x}", value);
+        }
+        return secret;
+    }
+
+    AExpect<rpc::Socket> connect_to_server(u16 port, Str secret)
+    {
+        auto exec   = co_await async::current_executor();
+        auto socket = async::tcp::Socket{ exec };
+
+        auto address  = net::ip::address_v4{ { 127, 0, 0, 1 } };    // localhost
+        auto endpoint = net::ip::tcp::endpoint{ address, port };
+
+        if (auto res = co_await socket.async_connect(endpoint); not res) {
+            log_e(__func__, "failed to connect to server at port {}", port);
+            auto errc = async::to_generic_err(res.error(), Errc::not_connected);
+            co_return Unexpect{ errc };
+        }
+
+        if (auto res = co_await rpc::handshake(socket, secret); not res) {
+            co_return Unexpect{ res.error() };
+        }
+
+        co_return socket;
+    }
+
+    AExpect<Tup<Opt<bp::process>, rpc::Socket>> launch_and_connect(Opt<adb::Abi> abi, u16 port)
+    {
+        auto exec      = co_await async::current_executor();
+        // Ika: the ROM ships the server.
+        auto serv_file = Str{ "/system_ext/bin/madbfs-server" };
+
+        // enable port forwarding
+        auto forward = fmt::format("tcp:{}", port);
+        if (auto res = co_await cmd::exec({ "adb", "forward", forward, forward }); not res) {
+            log_e(__func__, "failed to enable forwarding at port {}: {}", port, err_msg(res.error()));
+            co_return Unexpect{ res.error() };
+        }
+
+        if (not abi) {
+            log_i(__func__, "ABI is not set, try connect existing server");
+            const auto* env    = std::getenv("MADBFS_SECRET");    // Ika: the running server's secret
+            auto        socket = co_await async::timeout(connect_to_server(port, env ? env : ""), Seconds{ 5 });
+            if (not socket) {
+                co_return Unexpect{ socket.error() };
+            }
+
+            log_i(__func__, "server is already running, continue normally");
+            co_return Tup{ Opt<bp::process>{}, std::move(*socket) };
+        }
+
+        log_i(__func__, "phone ABI is set to {}, trying to run server", to_string(*abi));
+
+        // run server
+        auto cmd = bp::environment::find_executable("adb");
+        if (cmd.empty()) {
+            co_return Unexpect{ Errc::no_such_file_or_directory };
+        }
+
+        auto port_str = fmt::format("{}", port);
+        auto args     = std::to_array<boost::string_view>({
+            "shell",
+            { serv_file.data(), serv_file.size() },
+            "--port",
+            port_str,
+        });
+
+        auto cmds = args | sv::transform([](auto s) { return Str{ s.data(), s.size() }; });
+        log_d(__func__, "executing adb {}", cmds);
+
+        auto secret = make_secret();
+        auto in     = async::pipe::Write{ exec };
+        auto out    = async::pipe::Read{ exec };
+        auto err    = async::pipe::Read{ exec };
+        auto proc   = bp::process{ exec, cmd, args, bp::process_stdio{ in, out, err } };
+
+        auto line = secret + '\n';
+        if (auto n = co_await async::write_exact<char>(in, Span<const char>{ line.data(), line.size() }); not n) {
+            log_e(__func__, "failed to send the secret to the server: {}", n.error().message());
+            co_return Unexpect{ async::to_generic_err(n.error(), Errc::broken_pipe) };
+        }
+
+        auto buf = String(rpc::server_ready_string.size(), '\0');
+        auto res = co_await async::timeout(async::read_exact<char>(out, buf), Seconds{ 5 });
+
+        if (not res) {
+            log_e(__func__, "waited for 5 seconds, server is timed out");
+            co_return Unexpect{ Errc::timed_out };
+        } else if (auto n = res.value(); not n) {
+            log_e(__func__, "failed to read output: {}", n.error().message());
+            co_return Unexpect{ async::to_generic_err(n.error(), Errc::not_connected) };
+        } else if (n.value() != buf.size()) {
+            log_e(__func__, "server process broken pipe");
+            co_return Unexpect{ Errc::broken_pipe };
+        } else if (buf != rpc::server_ready_string) {
+            log_e(__func__, "server process is responding, but incorrect response: {:?}", buf);
+            co_return Unexpect{ Errc::broken_pipe };
+        }
+
+        auto socket = co_await connect_to_server(port, secret);
+        if (not socket) {
+            co_return Unexpect{ socket.error() };
+        }
+
+        log_i(__func__, "server is running and ready to be used");
+
+        co_return Tup{ std::move(proc), std::move(*socket) };
+    }
+}
+
+// proxy_transport.hpp impl
+namespace madbfs::transport
+{
+    struct ProxyTransport::Process
+    {
+        bp::process proc;
+    };
+
+    ProxyTransport::~ProxyTransport()
+    {
+        stop(Errc::operation_canceled);
+    }
+
+    AExpect<Uniq<ProxyTransport>> ProxyTransport::create(Opt<adb::Abi> abi, u16 port)
+    {
+        auto conn = co_await launch_and_connect(abi, port);
+        if (not conn) {
+            co_return Unexpect{ conn.error() };
+        }
+
+        auto [proc, sock] = std::move(*conn);
+        co_return Uniq<ProxyTransport>{ new ProxyTransport{
+            Uniq<Process>{ proc ? new Process{ std::move(*proc) } : nullptr },
+            std::move(sock),
+        } };
+    }
+
+    ProxyTransport::ProxyTransport(Uniq<Process> process, rpc::Socket socket)
+        : m_process{ std::move(process) }
+        , m_socket{ std::move(socket) }
+        , m_channel{ m_socket.get_executor() }
+    {
+    }
+
+    void ProxyTransport::stop(rpc::Status status)
+    {
+        if (m_running) {
+            m_running = false;
+
+            for (auto& [id, promise] : m_requests) {
+                promise.result.set_value(Unexpect{ status });
+            }
+            m_requests.clear();
+
+            m_channel.cancel();
+            m_channel.close();
+        }
+
+        if (m_socket.is_open()) {
+            m_socket.cancel();
+            m_socket.close();
+        }
+
+        if (m_process) {
+            auto ec      = net::error_code{};
+            auto running = m_process->proc.running(ec);
+            if (ec) {
+                log_w(__func__, "error terminating server: {}", ec.message());
+                return;
+            }
+
+            if (running) {
+                m_process->proc.terminate(ec);
+                if (ec) {
+                    log_w(__func__, "error terminating server: {}", ec.message());
+                } else {
+                    log_i(__func__, "successfully terminating server");
+                }
+            }
+            m_process.reset();
+        }
+    }
+
+    Await<void> ProxyTransport::start()
+    {
+        log_d(__func__, "called");
+
+        m_running = true;
+        auto exec = co_await async::current_executor();
+
+        async::spawn(exec, response_receive(), [&](std::exception_ptr e, Expect<void> res) {
+            m_running = false;
+
+            log::log_exception(e, "response_receive");
+            if (not res) {
+                log_w("response_receive", "finished with error: {}", err_msg(res.error()));
+            }
+
+            if (not m_requests.empty()) {
+                log_e("response_receive", "there are {} promises unhandled", m_requests.size());
+                for (auto& [id, p] : m_requests) {
+                    p.result.set_value(Unexpect{ Errc::operation_canceled });
+                }
+            }
+
+            m_requests.clear();
+            m_channel.cancel();
+            m_channel.reset();
+        });
+
+        async::spawn(exec, request_send(), [&](std::exception_ptr e, Expect<void> res) {
+            log::log_exception(e, "request_send");
+            if (not res) {
+                log_w("request_send", "finished with error: {}", err_msg(res.error()));
+            }
+        });
+    }
+
+    AExpect<rpc::Response> ProxyTransport::send(rpc::Request req)
+    {
+        if (not m_running) {
+            co_return Unexpect{ Errc::resource_unavailable_try_again };
+        }
+
+        auto id      = next_id();
+        auto promise = saf::promise<Expect<rpc::Response>>{ co_await async::current_executor() };
+        auto future  = promise.get_future();
+
+        auto [_, ok] = m_requests.try_emplace(id, req, std::move(promise));
+        assert(ok and "id is always incremented, insertion should always happens");
+
+        if (auto res = co_await m_channel.async_send({}, { id, req }); not res) {
+            log_e(__func__, "failed to send payload to channel: {}", res.error().message());
+            co_return Unexpect{ async::to_generic_err(res.error(), Errc::broken_pipe) };
+        }
+
+        log_d(__func__, "REQ QUEUED {} [{}]", id.inner(), rpc::to_string(req));
+
+        co_return co_await future.async_extract();
+    }
+
+    AExpect<rpc::Response> ProxyTransport::send(rpc::Request req, Milliseconds timeout)
+    {
+        if (not m_running) {
+            co_return Unexpect{ Errc::resource_unavailable_try_again };
+        }
+
+        auto id      = next_id();
+        auto promise = saf::promise<Expect<rpc::Response>>{ co_await async::current_executor() };
+        auto future  = promise.get_future();
+
+        auto [_, ok] = m_requests.try_emplace(id, req, std::move(promise));
+        assert(ok and "id is always incremented, insertion should always happens");
+
+        if (auto res = co_await m_channel.async_send({}, { id, req }); not res) {
+            log_e(__func__, "failed to send payload to channel: {}", res.error().message());
+            co_return Unexpect{ async::to_generic_err(res.error(), Errc::broken_pipe) };
+        }
+
+        log_d(__func__, "REQ QUEUED {} [{}]", id.inner(), rpc::to_string(req));
+
+        co_await async::timeout(future.async_wait(async::use_awaitable), timeout, [&] {
+            if (auto entry = m_requests.extract(id); not entry.empty()) {
+                log_d("send", "REQ CANCELLED {} [{}]", id.inner(), rpc::to_string(req));
+                entry.mapped().result.set_value(Unexpect{ Errc::timed_out });
+            }
+        });
+
+        co_return future.is_ready() ? future.extract() : Unexpect{ Errc::timed_out };
+    }
+
+    AExpect<void> ProxyTransport::request_send()
+    {
+        auto payload_buf = Vec<u8>{};
+
+        while (m_running and m_channel.is_open()) {
+            auto id_req = co_await m_channel.async_receive();
+            if (not id_req) {
+                log_e(__func__, "failed to recv payload from channel: {}", id_req.error().message());
+                co_return Unexpect{ async::to_generic_err(id_req.error(), Errc::broken_pipe) };
+            }
+
+            auto [id, req] = std::move(*id_req);
+
+            if (auto res = co_await rpc::send_request(m_socket, payload_buf, req, id); not res) {
+                log_e(__func__, "failed to send request [{}]: {}", id.inner(), err_msg(res.error()));
+                if (auto entry = m_requests.find(id); entry != m_requests.end()) {
+                    entry->second.result.set_value(Unexpect{ res.error() });
+                    m_requests.erase(entry);
+                }
+            }
+        }
+
+        co_return Expect<void>{};
+    }
+
+    AExpect<void> ProxyTransport::response_receive()
+    {
+        auto payload_buf = Vec<u8>{};
+
+        while (m_running) {
+            auto header = co_await rpc::receive_response_header(m_socket);
+            if (not header) {
+                log_e(__func__, "failed to read response header: {}", err_msg(header.error()));
+                co_return Unexpect{ header.error() };
+            }
+
+            log_d(__func__, "RESP RECV {} [{}]", header->id.inner(), rpc::to_string(header->proc));
+
+            auto entry = m_requests.extract(header->id);
+            if (entry.empty()) {
+                log_e(__func__, "response incoming for id {} but no promise", header->id.inner());
+                std::ignore = async::discard(m_socket, header->size);
+                continue;
+            }
+
+            auto& [req, res] = entry.mapped();
+            res.set_value(co_await rpc::receive_response(m_socket, payload_buf, *header, req));
+        }
+
+        co_return Expect<void>{};
+    }
+}

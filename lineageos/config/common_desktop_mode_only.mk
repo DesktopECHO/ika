@@ -101,6 +101,10 @@ PRODUCT_PACKAGES += \
 PRODUCT_PACKAGES += \
     vulkaninfo \
     zipalign
+
+# Serves ~/ika/Android on the host: the madbfs client in ika-base runs it.
+PRODUCT_PACKAGES += \
+    madbfs-server
 # The arm64 pgagnostic (GSI-style) product enforces a /system artifact-path
 # requirement; allow the device zipalign binary. vulkaninfo lives on system_ext.
 PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST += \
