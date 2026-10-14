@@ -318,6 +318,8 @@ declare -A CVD_GPU_DEFAULTS=(
 declare -A CVD_NETWORK_DEFAULTS=(
   [vhost_net]="true"
   [vhost_user_vsock]="false"
+  # Native vsock carries adb; the half tunnel keeps TCP 6520 for fastboot.
+  [adb_mode]="native_vsock,vsock_half_tunnel"
   [enable_wifi]="false"
   [enable_host_bluetooth]="false"
   [netsim_bt]="false"
@@ -2314,8 +2316,16 @@ EOF
 
 resolve_adb_serial() {
   local adb_ip_and_port=""
+  local vsock_cid=""
 
   if [[ -f "${CVD_CONFIG_PATH}" ]]; then
+    if grep -q '"native_vsock"' "${CVD_CONFIG_PATH}"; then
+      vsock_cid="$(grep -oE '"vsock_guest_cid"[[:space:]]*:[[:space:]]*[0-9]+' "${CVD_CONFIG_PATH}" | head -n1 | grep -oE '[0-9]+$' || true)"
+      if [[ -n "${vsock_cid}" ]] && (( vsock_cid > 2 )); then
+        printf 'vsock:%s:5555\n' "${vsock_cid}"
+        return 0
+      fi
+    fi
     adb_ip_and_port="$(grep -oE '"adb_ip_and_port"[[:space:]]*:[[:space:]]*"[^"]+"' "${CVD_CONFIG_PATH}" | head -n1 | sed -E 's/.*"([^"]+)"$/\1/' || true)"
   fi
 
@@ -2826,7 +2836,7 @@ wait_for_boot() {
   local launcher_log="$1"
   local deadline="$2"
   local min_mtime="${3:-0}"
-  local adb_serial="$4"
+  local adb_serial=""
   local crosvm_command_reported="false"
 
   while within_deadline "${deadline}"; do
@@ -2839,7 +2849,12 @@ wait_for_boot() {
         fi
       fi
     fi
-    if adb_boot_completed "${adb_serial}"; then
+    # The serial depends on this launch's adb mode, so wait for its config.
+    if [[ -z "${adb_serial}" ]] \
+        && (( $(stat -c '%Y' "${CVD_CONFIG_PATH}" 2>/dev/null || echo 0) >= min_mtime )); then
+      adb_serial="$(resolve_adb_serial)"
+    fi
+    if [[ -n "${adb_serial}" ]] && adb_boot_completed "${adb_serial}"; then
       return 0
     fi
     if ! has_live_cvd_processes; then
@@ -3705,7 +3720,6 @@ start_game_session() {
   if touch_enabled; then
     touch_mode="true"
   fi
-  adb_serial="$(resolve_adb_serial)"
   lock_game_session || die "timed out waiting for another game session to start or end"
   console_was_open="$(desktop_console_was_open)"
 
@@ -3734,6 +3748,7 @@ start_game_session() {
     exec {autostart_lock_fd}>&-
   fi
 
+  adb_serial="$(resolve_adb_serial)"
   component="$(guest_adb "${adb_serial}" shell cmd package resolve-activity --brief \
     -a android.intent.action.MAIN -c android.intent.category.LAUNCHER "${package}" \
     </dev/null 2>/dev/null | tr -d '\r' | tail -n1)"
@@ -5116,12 +5131,13 @@ start_cvd() {
   log "launcher pid: ${launcher_pid}"
 
   boot_deadline="$(make_deadline "${CVD_BOOT_TIMEOUT_SEC}")"
-  if ! wait_for_boot "${launcher_log}" "${boot_deadline}" "${start_epoch}" "${adb_serial}"; then
+  if ! wait_for_boot "${launcher_log}" "${boot_deadline}" "${start_epoch}"; then
     if [[ -f "${launcher_log}" ]]; then
       tail -n 80 "${launcher_log}" >&2 || true
     fi
     die "Cuttlefish did not reach boot completion"
   fi
+  adb_serial="$(resolve_adb_serial)"
 
   log "boot completed after seeing: adb sys.boot_completed=1"
   disable_guest_bluetooth "${adb_serial}" "$@"
