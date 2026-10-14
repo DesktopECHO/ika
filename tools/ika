@@ -13,6 +13,7 @@ PACKAGED_SCRCPY_BIN="/usr/lib/cuttlefish-common/bin/scrcpy"
 PACKAGED_SCRCPY_SERVER="/usr/lib/cuttlefish-common/share/scrcpy/scrcpy-server"
 PACKAGED_GETCHROMIUM_BIN="/usr/lib/cuttlefish-common/bin/getchromium"
 PACKAGED_IKA_ROOT_BIN="/usr/lib/cuttlefish-common/bin/ika-root"
+PACKAGED_MADBFS_BIN="/usr/lib/cuttlefish-common/bin/madbfs"
 SCRCPY_ICON_DIR_DEFAULT="/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps"
 IKA_SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 
@@ -419,6 +420,9 @@ APP_MENU_WATCHER_LOCK_FILE="${CVD_HOME_DIR}/app-menu-watcher.lock"
 APP_MENU_SYNC_LOCK_FILE="${CVD_HOME_DIR}/app-menu-sync.lock"
 APP_MENU_LOG_FILE="${CVD_HOME_DIR}/app-menu.log"
 APP_MENU_DISABLED_FILE="${CVD_HOME_DIR}/app-menu-disabled"
+# Android's shared storage (/sdcard), mounted with madbfs while the VM runs.
+ANDROID_STORAGE_DIR="${CVD_HOME_DIR}/Android"
+MADBFS_LOG_FILE="${CVD_HOME_DIR}/madbfs.log"
 APP_LIST_CACHE="${IKA_APPS_DIR}/app-list"
 # Game session started by 'ika app <game>': see start_game_session.
 GAME_SESSION_FILE="${CVD_HOME_DIR}/game-session"
@@ -1035,6 +1039,13 @@ GSF ID:
   because the device is not Play Protect certified; it does not make the
   device certified. A factory reset gives the device a new ID. If the VM is
   not running, it is started first.
+
+Android files:
+
+  While the VM runs, Android's shared storage (/sdcard) is mounted on
+  ~/ika/Android, where host programs can open, change and delete its files.
+  'start' mounts it; 'stop', 'restart' and 'reset' unmount it. Its log is
+  ~/ika/madbfs.log.
 
 Backup:
 
@@ -4846,6 +4857,107 @@ stop_app_menu_watcher() {
   stop_supervisor_from_file "${APP_MENU_WATCHER_PID_FILE}" __app_menu_watcher
 }
 
+android_storage_mounted() {
+  findmnt -rn -M "${ANDROID_STORAGE_DIR}" >/dev/null 2>&1
+}
+
+# Mounts Android's /sdcard on ANDROID_STORAGE_DIR with madbfs, which runs
+# madbfs-server from the ROM and goes on in the background. Ika's adb comes
+# first on PATH: an adb of another version would restart the adb server under
+# the console.
+mount_android_storage() {
+  local adb_serial="$1"
+
+  [[ -x "${PACKAGED_MADBFS_BIN}" ]] || return 0
+  android_storage_mounted && return 0
+  mkdir -p "${ANDROID_STORAGE_DIR}"
+  # A madbfs that did not exit cleanly leaves its control socket behind, and
+  # its server on Android holding the port.
+  rm -f "${XDG_RUNTIME_DIR:-/tmp}/madbfs@${adb_serial}.sock"
+  guest_adb "${adb_serial}" shell pkill -x madbfs-server >/dev/null 2>&1 || true
+  # Files show as the user's, as Android's owners mean nothing on the host and
+  # file managers would treat the folders as read-only. File details are
+  # re-read after 2 seconds instead of 60, so files Android apps add or change
+  # show up promptly.
+  if PATH="${CVD_HOST_OUT}/bin:${PATH}" "${PACKAGED_MADBFS_BIN}" --serial="${adb_serial}" \
+      --root=/sdcard --ttl=2 --log-file="${MADBFS_LOG_FILE}" \
+      -o "uid=$(id -u),gid=$(id -g),umask=022" "${ANDROID_STORAGE_DIR}" \
+      </dev/null >>"${MADBFS_LOG_FILE}" 2>&1 3>&-; then
+    log "Android storage mounted on ${ANDROID_STORAGE_DIR}"
+    edit_android_storage_place add
+  else
+    log "warning: could not mount Android storage on ${ANDROID_STORAGE_DIR}; see ${MADBFS_LOG_FILE}"
+  fi
+}
+
+kde_places_file() {
+  printf '%s\n' "${XDG_DATA_HOME:-${HOST_HOME}/.local/share}/user-places.xbel"
+}
+
+# Adds ("add") or removes ("remove") ANDROID_STORAGE_DIR, named "Android", in
+# KDE's Places: Dolphin lists only disks and network shares by itself, where
+# GNOME's Files shows the mount. The places file is only edited once it exists:
+# creating it would keep KDE from adding its default places.
+edit_android_storage_place() {
+  local action="$1"
+  local places
+  local uri
+
+  places="$(kde_places_file)"
+  [[ -f "${places}" ]] || return 0
+  uri="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).as_uri())' \
+    "${ANDROID_STORAGE_DIR}")" || return 0
+  python3 - "${action}" "${places}" "${uri}" <<'PY' || true
+import re
+import sys
+action, path, uri = sys.argv[1:]
+text = open(path, encoding="utf-8").read()
+entry_re = re.compile(
+    r'[ \t]*<bookmark href="' + re.escape(uri) + r'">.*?</bookmark>\n?', re.DOTALL)
+if action == "remove":
+    text, count = entry_re.subn("", text)
+    if count == 0:
+        sys.exit(0)
+elif not entry_re.search(text):
+    end = text.rindex("</xbel>")
+    text = text[:end] + (
+        f' <bookmark href="{uri}">\n'
+        '  <title>Android</title>\n'
+        '  <info>\n'
+        '   <metadata owner="http://freedesktop.org">\n'
+        '    <bookmark:icon name="smartphone"/>\n'
+        '   </metadata>\n'
+        '  </info>\n'
+        ' </bookmark>\n'
+    ) + text[end:]
+else:
+    sys.exit(0)
+with open(path, "w", encoding="utf-8") as f:
+    f.write(text)
+PY
+}
+
+# Unmounts ANDROID_STORAGE_DIR: lazily when a program still has a file open
+# there, so that does not hold the VM up. madbfs then gets a few seconds to
+# write out what it has cached and exit; one kept alive by such a program is
+# ended, as the device it serves is going away.
+unmount_android_storage() {
+  local pattern="^${PACKAGED_MADBFS_BIN} .* ${ANDROID_STORAGE_DIR}\$"
+  local deadline
+
+  if android_storage_mounted; then
+    fusermount3 -u "${ANDROID_STORAGE_DIR}" >/dev/null 2>&1 \
+      || fusermount3 -u -z "${ANDROID_STORAGE_DIR}" >/dev/null 2>&1 \
+      || log "warning: could not unmount ${ANDROID_STORAGE_DIR}"
+  fi
+  deadline="$(make_deadline 5)"
+  while pgrep -f "${pattern}" >/dev/null && within_deadline "${deadline}"; do
+    sleep 0.2
+  done
+  pkill -KILL -f "${pattern}" 2>/dev/null || true
+  edit_android_storage_place remove
+}
+
 # Prints "LABEL<TAB>PACKAGE" for each open app window, using the cached title.
 list_open_app_windows() {
   local pid_file
@@ -5094,11 +5206,15 @@ start_cvd() {
     else
       ensure_chromium "${adb_serial}"
     fi
+    mount_android_storage "${adb_serial}"
     start_app_menu_watcher
     return 0
   fi
 
   notify_progress "Starting Android virtual machine, one moment..."
+  # A mount left from a VM that stopped by itself points at a device that is
+  # gone.
+  unmount_android_storage
   wait_for_cvdalloc_teardown
   record_udmabuf_baseline
   protect_overlay_resume
@@ -5148,6 +5264,7 @@ start_cvd() {
   else
     ensure_chromium "${adb_serial}"
   fi
+  mount_android_storage "${adb_serial}"
   start_app_menu_watcher
   close_progress_notifications
 }
@@ -5740,6 +5857,7 @@ main() {
       shift
       stop_startup_packaged_scrcpy
       stop_app_menu_watcher
+      unmount_android_storage
       clear_game_session
       if ! has_live_cvd_processes; then
         stop_dnsmasq
@@ -5761,6 +5879,7 @@ main() {
       # watcher and a game session alone.
       stop_startup_packaged_scrcpy
       stop_app_menu_watcher
+      unmount_android_storage
       clear_game_session
       stop_cvd_internal true "${reset_args[@]}"
       save_data_gb_configuration "${reset_data_gb}"
@@ -5776,6 +5895,7 @@ main() {
       parse_start_options fullscreen_mode game_mode start_args "$@"
       stop_startup_packaged_scrcpy
       stop_app_menu_watcher
+      unmount_android_storage
       clear_game_session
       protect_overlay_resume
       if has_live_cvd_processes; then

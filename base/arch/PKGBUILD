@@ -12,7 +12,7 @@ pkgdesc='Cuttlefish Android Virtual Device host packages'
 arch=(x86_64 aarch64)
 url='https://github.com/google/android-cuttlefish'
 license=(Apache-2.0)
-makedepends=(alsa-lib aom clang cmake curl fmt gcc gflags git google-glog gtest
+makedepends=(alsa-lib aom boost clang cmake curl fmt gcc gflags git google-glog gtest
              icu jsoncpp libcap libdecor libdrm libpipewire libsrtp libva libx11 libxcrypt-compat
              libxext libxfixes libxi libxkbcommon libxml2 libxml2-legacy libxcursor
              libxrandr libxss mesa meson nasm ninja openssl opus perl
@@ -171,6 +171,11 @@ build() {
     readelf -d _build_scrcpy/app/scrcpy | grep 'Shared library' >&2
     return 1
   fi
+
+  # madbfs, which mounts Android's storage on ~/ika/Android; its server is
+  # built into the ROM. See lineageos/tools/madbfs/README.md.
+  cmake -S lineageos/tools/madbfs -B _build_madbfs -G Ninja -DCMAKE_BUILD_TYPE=Release
+  cmake --build _build_madbfs
 }
 
 _package_output_root() {
@@ -181,7 +186,7 @@ package_ika-base() {
   pkgdesc='Cuttlefish host binaries, networking helpers, and system services'
   # Arch's Mesa packages use epoch 1; preserve it so 1:25.x cannot satisfy
   # the Mesa 26.1 runtime floor.
-  depends=(curl desktop-file-utils dnsmasq gtk3 iproute2 libarchive libcap libdecor libdrm libnotify libx11
+  depends=(curl desktop-file-utils boost-libs dnsmasq fuse3 gtk3 iproute2 libarchive libcap libdecor libdrm libnotify libx11
            libxext lsof lz4 'mesa>=1:26.1' mesa-utils
            net-tools networkmanager nftables openssl pigz python python-requests
            pipewire procps-ng shadow systemd v4l-utils virglrenderer vulkan-icd-loader
@@ -245,6 +250,8 @@ package_ika-base() {
   # and expose the "Ika" desktop launcher.
   cd "${root}"
   DESTDIR="${pkgdir}" meson install -C _build_scrcpy
+  install -m 0755 _build_madbfs/upstream/madbfs/madbfs _build_madbfs/upstream/madbfs-msg/madbfs-msg \
+    "${pkgdir}/usr/lib/cuttlefish-common/bin/"
 
   install -d "${pkgdir}/usr/share/applications"
   install -d "${pkgdir}/usr/share/icons/hicolor/256x256/apps"
