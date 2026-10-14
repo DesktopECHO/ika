@@ -376,6 +376,7 @@ install -d %{buildroot}/usr/share/applications
 install -d %{buildroot}/usr/share/icons/hicolor/256x256/apps
 
 install -m 0644 tools/ika.desktop %{buildroot}/usr/share/applications/ika.desktop
+install -m 0644 tools/ika-install.desktop %{buildroot}/usr/share/applications/ika-install.desktop
 install -m 0644 \
   %{buildroot}/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps/scrcpy.png \
   %{buildroot}/usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
@@ -525,6 +526,7 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/bin/cvd
 /usr/lib/cuttlefish-common
 /usr/share/applications/ika.desktop
+/usr/share/applications/ika-install.desktop
 /usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
 %config(noreplace) /etc/firewalld/zones/cuttlefish.xml
 /etc/NetworkManager/conf.d/99-cuttlefish.conf

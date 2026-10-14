@@ -1,5 +1,12 @@
 ## Unreleased, changes since release 261012
 
+### Installing and removing apps
+- `ika install FILE.apk...` installs APK files in Android, replacing an
+  installed version of the app and keeping its data, and APK files in the file
+  manager get an **Ika APK installer** action (Open With). `ika remove NAME`
+  uninstalls an app by its label or package name, as `ika app` finds apps. If
+  the VM is not running, either command starts it without the console.
+
 ### Backup and restore
 - `ika backup [FILE]` saves your apps, their files and settings into one
   compressed archive, `~/ika/ika-backup-YYYYMMDDHHMMSS.tgz` by default, and
