@@ -1,3 +1,5 @@
+[README](README.md) | [UI Intro](UI-INTRO.md) | [Ika commands](USAGE.md) | **Changelog** | [Downloads](DOWNLOADS.md)
+
 ## Unreleased, changes since release 261012
 
 ### Settings file
@@ -6,7 +8,7 @@
   each setting with a comment: guest CPUs and memory, GPU mode, data size, app
   window quality, hidden apps, timeouts and more. Ika writes it, with every
   default in place, the first time it runs. Command-line options and environment variables still override
-  it. See [Settings](README.md#settings).
+  it. See [Settings](USAGE.md#settings).
 
 ### Installing and removing apps
 - `ika install FILE.apk...` installs APK files in Android, replacing an
@@ -19,7 +21,7 @@
 - `ika backup [FILE]` saves your apps, their files and settings into one
   compressed archive, `~/ika/ika-backup-YYYYMMDDHHMMSS.tgz` by default, and
   `ika restore [FILE]` puts them back, after `ika reset` for example; without
-  FILE it restores the latest backup. No root needed. See [Backing up apps and files](README.md#backing-up-apps-and-files).
+  FILE it restores the latest backup. No root needed. See [Backing up apps and files](USAGE.md#backing-up-apps-and-files).
 
 ### Android files on the host
 - While Ika runs, Android's shared storage is mounted on `~/ika/Android`, so
@@ -27,7 +29,7 @@
   they are read. It uses [madbfs](https://github.com/mrizaln/madbfs), whose
   server is built into the ROM. ika-base needs `fuse3`. On a rooted ROM
   (`ika root`) it shows Android's whole filesystem, `/`, served as root. See
-  [Android files](README.md#android-files).
+  [Android files](USAGE.md#android-files).
 
 ### Faster adb
 - Ika talks to Android over native vsock (`vsock:3:5555`) instead of the TCP
@@ -47,18 +49,18 @@
   Magisk itself. The first time, it unlocks the bootloader, which
   factory-resets the device after asking. `ika reset` relocks the bootloader
   and returns the VM to stock Android. See
-  [Rooting with Magisk](README.md#rooting-with-magisk).
+  [Rooting with Magisk](USAGE.md#rooting-with-magisk).
 - `ika gsf` shows the device's Google Services Framework ID, copies it to the
   clipboard and opens Google's uncertified device page, for when Google
   blocks sign-in because the device is not Play Protect certified. See
-  [Google sign-in on uncertified devices](README.md#google-sign-in-on-uncertified-devices).
+  [Google sign-in on uncertified devices](USAGE.md#google-sign-in-on-uncertified-devices).
   Android also publishes the ID as the `sys.ika.gsf_android_id` property.
 
 ### Camera
 - `ika start --camera` passes a host camera to Android: USB webcams, the
   FaceTime camera of Apple Silicon Macs (Asahi kernel) and Intel Macs, or a
   given device (`--camera=video2`). See
-  [Camera](README.md#camera). Ika now depends on v4l-utils.
+  [Camera](USAGE.md#camera). Ika now depends on v4l-utils.
 - The Camera app (Aperture) is in the app list and menu. Photos default to
   16:9, video records at 640x480, 720p or 1080p with AAC stereo sound, and
   only the sizes and settings the camera supports are offered, with noise
