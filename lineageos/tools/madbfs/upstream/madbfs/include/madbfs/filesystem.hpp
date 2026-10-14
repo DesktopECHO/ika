@@ -6,6 +6,7 @@
 #include "madbfs/path.hpp"
 
 #include <madbfs-common/async/async.hpp>
+#include <madbfs-common/rpc.hpp>
 #include <madbfs-common/util/var_wrapper.hpp>
 
 #include <functional>
@@ -84,6 +85,8 @@ namespace madbfs
         AExpect<void>      rename(path::Path from, path::Path to, u32 flags);
         AExpect<void>      utimens(path::Path path, timespec atime, timespec mtime);
         AExpect<void>      truncate(path::Path path, off_t size);
+
+        AExpect<rpc::resp::Statfs> statfs(path::Path path);
 
         AExpect<u64>   open(path::Path path, int flags);
         AExpect<usize> read(u64 fd, Span<char> out, off_t offset);

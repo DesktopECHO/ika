@@ -9,6 +9,7 @@
 #include <dirent.h>
 #include <linux/fs.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -424,5 +425,27 @@ namespace madbfs::server
     rpc::ResponseResult RequestHandler::handle_req(rpc::req::Ping req)
     {
         return rpc::resp::Ping{ .num = req.num };
+    }
+
+    rpc::ResponseResult RequestHandler::handle_req(rpc::req::Statfs req)
+    {
+        const auto& [path] = req;
+        log_d("statfs", "path={:?}", path.data());
+
+        struct statvfs fsstat = {};
+        if (::statvfs(path.data(), &fsstat) < 0) {
+            return failed(req, errno_status(__func__, path, "failed to statvfs"));
+        }
+
+        return rpc::resp::Statfs{
+            .bsize   = static_cast<u64>(fsstat.f_bsize),
+            .frsize  = static_cast<u64>(fsstat.f_frsize),
+            .blocks  = static_cast<u64>(fsstat.f_blocks),
+            .bfree   = static_cast<u64>(fsstat.f_bfree),
+            .bavail  = static_cast<u64>(fsstat.f_bavail),
+            .files   = static_cast<u64>(fsstat.f_files),
+            .ffree   = static_cast<u64>(fsstat.f_ffree),
+            .namemax = static_cast<u64>(fsstat.f_namemax),
+        };
     }
 }

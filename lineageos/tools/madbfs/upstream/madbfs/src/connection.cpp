@@ -334,6 +334,12 @@ namespace madbfs
         co_return (co_await send_req(req)).transform(proj(&rpc::resp::Write::size));
     }
 
+    AExpect<rpc::resp::Statfs> Connection::statfs(path::Path path)
+    {
+        auto req = rpc::req::Statfs{ .path = path };
+        co_return co_await send_req(req);
+    }
+
     Await<Opt<Errc>> Connection::check_reconnection()
     {
         if (m_reconnection) {

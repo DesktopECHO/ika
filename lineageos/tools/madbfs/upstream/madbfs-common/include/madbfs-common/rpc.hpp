@@ -87,6 +87,7 @@ namespace madbfs::rpc
         Read,
         Write,
         Ping,    // special procedure for checking aliveness
+        Statfs,
     };
 
     enum class OpenMode : u8
@@ -145,6 +146,7 @@ namespace madbfs::rpc
         struct Read          { u64 fd; off_t offset; Span<u8> out; };
         struct Write         { u64 fd; off_t offset; Span<const u8> in; };
         struct Ping          { u64 num; };
+        struct Statfs        { Str path; };
         // clang-format on
     }
 
@@ -170,7 +172,8 @@ namespace madbfs::rpc
               req::Close,
               req::Read,
               req::Write,
-              req::Ping>
+              req::Ping,
+              req::Statfs>
     {
         // make the base constructor visible
         using VarWrapper::VarWrapper;
@@ -207,6 +210,7 @@ namespace madbfs::rpc
         struct Read          { Span<const u8> read; };          // uses corresponding `req::Read` out
         struct Write         { usize size; };
         struct Ping          { u64 num; };
+        struct Statfs        { u64 bsize; u64 frsize; u64 blocks; u64 bfree; u64 bavail; u64 files; u64 ffree; u64 namemax; };
         // clang-format on
 
         struct Stat
@@ -244,7 +248,8 @@ namespace madbfs::rpc
               resp::Close,
               resp::Read,
               resp::Write,
-              resp::Ping>
+              resp::Ping,
+              resp::Statfs>
     {
         // make the base constructor visible
         using VarWrapper::VarWrapper;

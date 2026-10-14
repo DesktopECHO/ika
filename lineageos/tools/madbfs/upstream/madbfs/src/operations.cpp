@@ -326,6 +326,29 @@ namespace madbfs::operations
         return res.has_value() ? static_cast<i32>(res.value()) : fuse_err(__func__, path)(res.error());
     }
 
+    i32 statfs(const char* path, struct statvfs* stbuf) noexcept
+    {
+        log_i(__func__, "{:?}", path);
+
+        return get_data()
+            .create_path(path)
+            .and_then([](path::Path p) { return invoke_fs(&Filesystem::statfs, p); })
+            .transform([&](rpc::resp::Statfs fs) {
+                std::memset(stbuf, 0, sizeof(struct statvfs));
+                stbuf->f_bsize   = static_cast<unsigned long>(fs.bsize);
+                stbuf->f_frsize  = static_cast<unsigned long>(fs.frsize);
+                stbuf->f_blocks  = static_cast<fsblkcnt_t>(fs.blocks);
+                stbuf->f_bfree   = static_cast<fsblkcnt_t>(fs.bfree);
+                stbuf->f_bavail  = static_cast<fsblkcnt_t>(fs.bavail);
+                stbuf->f_files   = static_cast<fsfilcnt_t>(fs.files);
+                stbuf->f_ffree   = static_cast<fsfilcnt_t>(fs.ffree);
+                stbuf->f_favail  = static_cast<fsfilcnt_t>(fs.ffree);
+                stbuf->f_namemax = static_cast<unsigned long>(fs.namemax);
+            })
+            .transform_error(fuse_err(__func__, path))
+            .error_or(0);
+    }
+
     i32 flush(const char* path, fuse_file_info* fi) noexcept
     {
         log_i(__func__, "{:?}", path);

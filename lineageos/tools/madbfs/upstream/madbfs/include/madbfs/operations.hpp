@@ -22,6 +22,7 @@ namespace madbfs::operations
     i32 open(const char*, fuse_file_info*) noexcept;
     i32 read(const char*, char*, usize, off_t, fuse_file_info*) noexcept;
     i32 write(const char*, const char*, usize, off_t, fuse_file_info*) noexcept;
+    i32 statfs(const char*, struct statvfs*) noexcept;
     i32 flush(const char*, fuse_file_info*) noexcept;
     i32 release(const char*, fuse_file_info*) noexcept;
     i32 readdir(const char*, void*, fuse_fill_dir_t, off_t, fuse_file_info*, fuse_readdir_flags) noexcept;
@@ -55,7 +56,7 @@ namespace madbfs::operations
         .open            = madbfs::operations::open,
         .read            = madbfs::operations::read,
         .write           = madbfs::operations::write,
-        .statfs          = nullptr,
+        .statfs          = madbfs::operations::statfs,
         .flush           = madbfs::operations::flush,
         .release         = madbfs::operations::release,
         .fsync           = nullptr,

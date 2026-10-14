@@ -68,6 +68,12 @@ up by the ROM build).
   version stayed stale for good.
 - `operations.hpp` no longer sets the `statx` member, which libfuse 3.17 lacks;
   madbfs set it to null anyway.
+- `statfs` reports the size and free space of the device's filesystem, from
+  `statvfs()` in the server (a new `Statfs` RPC procedure, after `Ping`), so
+  `df` and file managers show the storage. Upstream left it unimplemented. The
+  protocol change bumps the version to 0.12.0.1: the handshake compares
+  versions, so a host and a ROM built from different protocols refuse each
+  other instead of misreading requests.
 - The version comes from `madbfs-common/cmake/version.cmake` only, not git,
   which would describe the Ika repository. `android/version.cpp` is the ROM
   build's copy of the generated file: keep the two in step.
