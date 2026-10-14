@@ -17,6 +17,313 @@ PACKAGED_MADBFS_BIN="/usr/lib/cuttlefish-common/bin/madbfs"
 SCRCPY_ICON_DIR_DEFAULT="/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps"
 IKA_SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 
+# ============================================================================
+# Settings file (~/ika/ika.ini)
+# ============================================================================
+# The defaults below can be changed in ~/ika/ika.ini, which ika_ini_write_default
+# generates when it is missing. Precedence: command line, then environment
+# variable, then ika.ini, then the default in this script. Runs before log()
+# exists, so it writes to stderr itself.
+IKA_INI_FILE="${CVD_HOME_DIR:-${HOME}/ika}/ika.ini"
+declare -A IKA_INI=()
+declare -A IKA_INI_USED=()
+
+ika_ini_warn() {
+  printf '[%s] %s\n' "${SCRIPT_NAME}" "$*" >&2
+}
+
+# Reads "[section]" headers and "key = value" lines into IKA_INI as
+# "section.key". Lines starting with # or ; are comments; values are literal.
+ika_ini_load() {
+  local file="$1"
+  local line section="" key value
+  local line_number=0
+
+  [[ -r "${file}" ]] || return 0
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    line_number=$((line_number + 1))
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    case "${line}" in
+      ""|"#"*|";"*)
+        ;;
+      "["*"]")
+        section="${line:1:${#line}-2}"
+        section="${section#"${section%%[![:space:]]*}"}"
+        section="${section%"${section##*[![:space:]]}"}"
+        section="${section,,}"
+        ;;
+      *=*)
+        if [[ -z "${section}" ]]; then
+          ika_ini_warn "${file}:${line_number}: setting outside a [section]; ignored"
+          continue
+        fi
+        key="${line%%=*}"
+        value="${line#*=}"
+        key="${key%"${key##*[![:space:]]}"}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        IKA_INI["${section}.${key,,}"]="${value}"
+        ;;
+      *)
+        ika_ini_warn "${file}:${line_number}: not a setting; ignored"
+        ;;
+    esac
+  done <"${file}"
+}
+
+# ika_ini_get VAR SECTION KEY DEFAULT [uint]: sets VAR to the ika.ini value, or
+# to DEFAULT when the file has none. With "uint" a value that is not a positive
+# whole number is reported and replaced by DEFAULT. Not a command substitution,
+# so that IKA_INI_USED records the key.
+ika_ini_get() {
+  local -n _ika_out="$1"
+  local _ika_key="$2.$3"
+  local _ika_val="$4"
+
+  IKA_INI_USED["${_ika_key}"]=1
+  if [[ -n "${IKA_INI[${_ika_key}]+set}" ]]; then
+    _ika_val="${IKA_INI[${_ika_key}]}"
+    if [[ "${5:-}" == "uint" && ! "${_ika_val}" =~ ^[1-9][0-9]*$ ]]; then
+      ika_ini_warn "${IKA_INI_FILE}: ${2}.${3} must be a positive whole number, not '${_ika_val}'; using $4"
+      _ika_val="$4"
+    fi
+  fi
+  _ika_out="${_ika_val}"
+}
+
+# ika_ini_default VAR SECTION KEY DEFAULT [uint]: like ika_ini_get, but an
+# environment variable VAR that is already set wins.
+ika_ini_default() {
+  local ini_value
+
+  IKA_INI_USED["$2.$3"]=1
+  [[ -z "${!1:-}" ]] || return 0
+  ika_ini_get ini_value "$2" "$3" "$4" "${5:-}"
+  printf -v "$1" '%s' "${ini_value}"
+}
+
+# ika_ini_list ARRAY SECTION KEY: replaces ARRAY with the words of the ika.ini
+# value, when the file has the key.
+ika_ini_list() {
+  local -n _ika_list="$1"
+  local ini_key="$2.$3"
+  local words
+
+  IKA_INI_USED["${ini_key}"]=1
+  [[ -n "${IKA_INI[${ini_key}]+set}" ]] || return 0
+  words="${IKA_INI[${ini_key}]//,/ }"
+  _ika_list=()
+  read -r -a _ika_list <<<"${words}"
+}
+
+# ika_ini_apply_map MAP SECTION: overrides each entry of an associative array of
+# cvd_internal_start defaults with the same key in ika.ini.
+ika_ini_apply_map() {
+  local -n _ika_map="$1"
+  local section="$2"
+  local key value
+
+  for key in "${!_ika_map[@]}"; do
+    ika_ini_get value "${section}" "${key}" "${_ika_map[${key}]}"
+    case "${section}.${key}" in
+      compute.cpus|compute.memory_mb)
+        # "auto" keeps the value calculated from the host.
+        if [[ "${value}" == "auto" ]]; then
+          continue
+        elif [[ ! "${value}" =~ ^[1-9][0-9]*$ ]]; then
+          ika_ini_warn "${IKA_INI_FILE}: ${section}.${key} must be auto or a positive whole number, not '${value}'; using auto"
+          continue
+        fi
+        ;;
+    esac
+    _ika_map["${key}"]="${value}"
+  done
+}
+
+ika_ini_warn_unknown() {
+  local ini_key
+
+  for ini_key in "${!IKA_INI[@]}"; do
+    [[ -n "${IKA_INI_USED[${ini_key}]+set}" ]] \
+      || ika_ini_warn "${IKA_INI_FILE}: unknown setting '${ini_key}'; ignored"
+  done
+}
+
+# Keep the values here equal to the defaults in this script; the test
+# tools/tests/test_ika_settings.sh checks that they are.
+ika_ini_write_default() {
+  cat <<'EOF'
+# Ika settings. Ika writes this file the first time it runs; edit it to change
+# Ika's defaults. Delete it to get a fresh copy, or delete a line to use the
+# built-in default for that setting.
+#
+# A line starting with # or ; is a comment. Values are written as they are,
+# without quotes, and a # after a value is part of the value. Command-line
+# options override this file, and an environment variable named in a
+# comment below overrides its setting. Changes apply the next time Ika starts
+# the VM (or the console, for [console] and [apps]).
+
+
+# ----------------------------------------------------------------------------
+[compute]
+# Virtual CPUs and guest memory. "auto" sizes them from the host: the number of
+# performance cores minus 2 (at most cpu_cap), and a quarter of the host's
+# memory rounded up to a multiple of memory_step_mb (at most memory_cap_mb).
+# Command-line equivalents: --cpus=, --memory_mb=
+cpus = auto
+memory_mb = auto
+cpu_cap = 12
+memory_step_mb = 2048
+memory_cap_mb = 32768
+# Used when the host's memory cannot be read.
+memory_fallback_mb = 4096
+prefer_performance_cores = true
+enable_bootanimation = false
+enable_sandbox = false
+
+
+# ----------------------------------------------------------------------------
+[gpu]
+# gfxstream_guest_angle, gfxstream, guest_swiftshader, ... Command-line
+# equivalent: --gpu_mode=. Hosts with only software Vulkan devices use
+# gfxstream whatever is set here.
+gpu_mode = gfxstream_guest_angle
+gpu_vhost_user_mode = auto
+enable_gpu_udmabuf = true
+use_cvdalloc = true
+# Features of gfxstream's renderer, separated by semicolons.
+gpu_renderer_features = MinimalLogging:disabled;VulkanBatchedDescriptorSetUpdate:disabled
+# auto, on or off. With gfxstream_guest_angle this is ignored.
+# Command-line equivalent: --gfxstream_vulkan=. Environment variable:
+# GFXSTREAM_VULKAN
+gfxstream_vulkan = auto
+
+
+# ----------------------------------------------------------------------------
+[network]
+vhost_net = true
+vhost_user_vsock = false
+# Native vsock carries adb; the half tunnel keeps TCP 6520 for fastboot.
+adb_mode = native_vsock,vsock_half_tunnel
+enable_wifi = false
+enable_host_bluetooth = false
+netsim_bt = false
+enable_host_nfc = false
+netsim_nfc = false
+casimir_instance_num = 1
+enable_host_uwb = false
+netsim_uwb = false
+pica_instance_num = 1
+start_gnss_proxy = false
+enable_modem_simulator = false
+
+
+# ----------------------------------------------------------------------------
+[storage]
+# Size of the data partition in decimal GB for a new VM. 'ika reset
+# --data_gb=N' sets a different size and remembers it.
+data_gb = 64
+use_overlay = true
+use_sdcard = false
+
+
+# ----------------------------------------------------------------------------
+[logging]
+# VERBOSE, DEBUG, INFO, WARNING, ERROR or FATAL.
+file_verbosity = WARNING
+verbosity = WARNING
+
+
+# ----------------------------------------------------------------------------
+[reporting]
+# y or n: send anonymous usage statistics to Google.
+report_anonymous_usage_stats = n
+
+
+# ----------------------------------------------------------------------------
+[launcher]
+daemon = true
+start_webrtc = false
+
+
+# ----------------------------------------------------------------------------
+[boot]
+# Seconds to wait for Android to finish booting.
+# Environment variable: CVD_BOOT_TIMEOUT_SEC
+boot_timeout_sec = 150
+
+
+# ----------------------------------------------------------------------------
+[console]
+# Display density. "auto" calculates it from the host's display.
+# Command-line equivalent: --dpi=. Environment variable: IKADPI
+dpi = auto
+# Extra arguments for the console, separated by spaces, for example
+# --keyboard=uhid --no-clipboard-autosync
+# Command-line equivalent: --ika_scrcpy=. Environment variable: IKA_SCRCPY
+scrcpy_args =
+# Seconds to wait for the guest to reboot before leaving the console closed.
+# Environment variable: IKA_SCRCPY_REBOOT_TIMEOUT_SEC
+reboot_timeout_sec = 120
+
+
+# ----------------------------------------------------------------------------
+[apps]
+# Seconds between checks for installed or removed apps while the app menu
+# watcher runs. Environment variable: IKA_APP_MENU_POLL_SEC
+menu_poll_sec = 5
+# Video bit rate of app windows. Environment variable: IKA_APP_BIT_RATE
+bit_rate = 80M
+# scrcpy --video-codec-options for app windows. video-qp-max:int=18 caps the
+# encoder's quantizer to keep text sharp; leave it empty to remove it.
+# Environment variable: IKA_APP_CODEC_OPTIONS
+codec_options = video-qp-max:int=18
+# Apps kept out of the app list, name matching and the desktop menu, as package
+# names separated by spaces. They can still be opened by their package name.
+hidden_apps = com.google.android.apps.restore com.google.android.googlequicksearchbox com.android.calculator2 org.lineageos.etar com.android.deskclock com.android.contacts org.lineageos.recorder org.lineageos.audiofx
+# Apps opened as games, in a fullscreen game session, even though they do not
+# declare themselves as games. Package names separated by spaces.
+game_apps =
+
+
+# ----------------------------------------------------------------------------
+[timeouts]
+# Seconds 'ika install' allows for each APK. Environment variable:
+# IKA_INSTALL_TIMEOUT_SEC
+install_timeout_sec = 1800
+# Seconds 'ika gsf' waits for Google Play Services to assign the ID.
+# Environment variable: IKA_GSF_ID_TIMEOUT_SEC
+gsf_id_timeout_sec = 120
+# Seconds 'ika backup' and 'ika restore' allow for listing apps, and for
+# copying one app's files.
+backup_list_timeout_sec = 120
+backup_copy_timeout_sec = 3600
+
+
+# ----------------------------------------------------------------------------
+[system]
+# Seconds to allow Cuttlefish and gfxstream to clean up before forcing
+# surviving processes to exit. Environment variable: IKA_STOP_GRACE_SEC
+stop_grace_sec = 30
+# Open-file limit Ika raises its processes to when it is lower.
+# Environment variable: IKA_MIN_OPEN_FILES
+min_open_files = 65536
+# Page size of the guest kernel on ARM64 hosts: auto, 4k or 16k.
+# Environment variable: IKA_KERNEL_PAGE_SIZE
+kernel_page_size = auto
+EOF
+}
+
+if [[ ! -e "${IKA_INI_FILE}" ]]; then
+  if mkdir -p "${IKA_INI_FILE%/*}" 2>/dev/null \
+      && ika_ini_write_default >"${IKA_INI_FILE}.$$" 2>/dev/null; then
+    mv -n -- "${IKA_INI_FILE}.$$" "${IKA_INI_FILE}" 2>/dev/null || true
+  fi
+  rm -f -- "${IKA_INI_FILE}.$$"
+fi
+ika_ini_load "${IKA_INI_FILE}"
+
 # Prints the pid recorded in a supervisor pid file if it is still a live
 # supervisor of the given kind (__console_supervisor or __app_supervisor).
 supervisor_pid_from_file() {
@@ -202,10 +509,12 @@ performance_core_ids() {
 
 # Upper bound on the auto-selected guest vCPU count. The default heuristic
 # never exceeds this; pass --cpus= to request more.
-readonly DEFAULT_GUEST_CPU_CAP=12
-readonly DEFAULT_GUEST_MEMORY_STEP_MB=2048
-readonly DEFAULT_GUEST_MEMORY_CAP_MB=32768
-readonly DEFAULT_GUEST_MEMORY_FALLBACK_MB=4096
+ika_ini_get DEFAULT_GUEST_CPU_CAP compute cpu_cap 12 uint
+ika_ini_get DEFAULT_GUEST_MEMORY_STEP_MB compute memory_step_mb 2048 uint
+ika_ini_get DEFAULT_GUEST_MEMORY_CAP_MB compute memory_cap_mb 32768 uint
+ika_ini_get DEFAULT_GUEST_MEMORY_FALLBACK_MB compute memory_fallback_mb 4096 uint
+readonly DEFAULT_GUEST_CPU_CAP DEFAULT_GUEST_MEMORY_STEP_MB \
+  DEFAULT_GUEST_MEMORY_CAP_MB DEFAULT_GUEST_MEMORY_FALLBACK_MB
 
 default_guest_cpus() {
   local cores guest_cpus
@@ -358,7 +667,8 @@ declare -A CVD_BOOT_DEFAULTS=(
 
 # Android Settings reports internal storage capacity in decimal GB. Cuttlefish's
 # blank_data_image_mb flag is MiB, so keep the default just under 64 GB decimal.
-readonly DEFAULT_DATA_GB=64
+ika_ini_get DEFAULT_DATA_GB storage data_gb 64 uint
+readonly DEFAULT_DATA_GB
 
 # ============================================================================
 # Launcher Lifecycle Defaults (passed to cvd_internal_start)
@@ -386,9 +696,18 @@ CVD_DEFAULT_ARG_MAPS=(
   CVD_LAUNCHER_DEFAULTS
 )
 
+ika_ini_apply_map CVD_COMPUTE_DEFAULTS compute
+ika_ini_apply_map CVD_GPU_DEFAULTS gpu
+ika_ini_apply_map CVD_NETWORK_DEFAULTS network
+ika_ini_apply_map CVD_REPORT_DEFAULTS reporting
+ika_ini_apply_map CVD_LOGGING_DEFAULTS logging
+ika_ini_apply_map CVD_OVERLAY_DEFAULTS storage
+ika_ini_apply_map CVD_LAUNCHER_DEFAULTS launcher
+
 # Convenience variables
 CVD_GPU_MODE="${CVD_GPU_DEFAULTS[gpu_mode]}"
-: "${CVD_BOOT_TIMEOUT_SEC:=${CVD_BOOT_DEFAULTS[boot_timeout_sec]}}"
+ika_ini_default CVD_BOOT_TIMEOUT_SEC boot boot_timeout_sec \
+  "${CVD_BOOT_DEFAULTS[boot_timeout_sec]}" uint
 
 # ============================================================================
 # Environment Paths
@@ -431,7 +750,7 @@ GAME_SESSION_LOCK_FILE="${CVD_HOME_DIR}/game-session.lock"
 game_session_lock_fd=""
 GAME_CONSOLE_WINDOW_STATE_FILE="${CVD_HOME_DIR}/game-console-window-state"
 APP_GAMES_FILE="${IKA_APPS_DIR}/games"
-: "${IKA_APP_MENU_POLL_SEC:=5}"
+ika_ini_default IKA_APP_MENU_POLL_SEC apps menu_poll_sec 5 uint
 CVD_BIN="${CVD_HOST_OUT}/bin/cvd_internal_start"
 CVD_CLI_BIN="${CVD_HOST_OUT}/bin/cvd"
 CVD_STOP_BIN="${CVD_HOST_OUT}/bin/cvd_internal_stop"
@@ -448,7 +767,8 @@ if [[ -f "${PACKAGED_SCRCPY_SERVER}" ]]; then
   SCRCPY_SERVER_PATH_OVERRIDE="${PACKAGED_SCRCPY_SERVER}"
 fi
 SCRCPY_DPI=""
-GFXSTREAM_VULKAN_MODE="${GFXSTREAM_VULKAN:-auto}"
+ika_ini_default GFXSTREAM_VULKAN gpu gfxstream_vulkan auto
+GFXSTREAM_VULKAN_MODE="${GFXSTREAM_VULKAN}"
 GFXSTREAM_GLES_CONTEXT_TYPES="gfxstream-gles:gfxstream-composer"
 GFXSTREAM_VULKAN_CONTEXT_TYPES="gfxstream-gles:gfxstream-vulkan:gfxstream-composer"
 GFXSTREAM_RADV_VULKAN_RENDERER_FEATURES="VulkanAllocateDeviceMemoryOnly:enabled"
@@ -468,8 +788,20 @@ START_CONSOLE="true"
 START_GAME_SESSION="false"
 # Set by 'start', which keeps a running VM: --camera then can't take effect.
 START_KEEPS_RUNNING_VM="false"
-: "${IKA_STOP_GRACE_SEC:=30}"
-: "${IKA_SCRCPY_REBOOT_TIMEOUT_SEC:=120}"
+ika_ini_default IKA_STOP_GRACE_SEC system stop_grace_sec 30 uint
+ika_ini_default IKA_SCRCPY_REBOOT_TIMEOUT_SEC console reboot_timeout_sec 120 uint
+ika_ini_default IKA_MIN_OPEN_FILES system min_open_files 65536 uint
+ika_ini_default IKA_KERNEL_PAGE_SIZE system kernel_page_size auto
+ika_ini_default IKADPI console dpi auto
+ika_ini_default IKA_SCRCPY console scrcpy_args ""
+ika_ini_default IKA_APP_BIT_RATE apps bit_rate 80M
+ika_ini_default IKA_INSTALL_TIMEOUT_SEC timeouts install_timeout_sec 1800 uint
+# An empty IKA_APP_CODEC_OPTIONS is a choice (no quantizer cap), not unset.
+if [[ -z "${IKA_APP_CODEC_OPTIONS+set}" ]]; then
+  ika_ini_get IKA_APP_CODEC_OPTIONS apps codec_options "video-qp-max:int=18"
+else
+  IKA_INI_USED[apps.codec_options]=1
+fi
 
 readonly SCRCPY_EXIT_DISCONNECTED=2
 # scrcpy --ika-game-session: the window left fullscreen or was closed.
@@ -1075,6 +1407,14 @@ Backup:
   FILE it restores the latest backup in ~/ika. It asks before it starts, as
   it replaces what is on the device. If the VM is not running, it is started
   first.
+
+Settings:
+
+  Ika's defaults are in ~/ika/ika.ini, which Ika writes the first time it
+  runs. Edit it to change them: it has a section for each area ([compute],
+  [gpu], [network], [apps] and others) and a comment for each setting.
+  Command-line options override it, and so do the environment variables below.
+  Delete the file to get a fresh copy.
 
 Environment variables:
 
@@ -3332,11 +3672,13 @@ IKA_HIDDEN_APPS=(
   org.lineageos.recorder
   org.lineageos.audiofx
 )
+ika_ini_list IKA_HIDDEN_APPS apps hidden_apps
 
 # Apps treated as games even though they do not declare
 # android:appCategory="game", which Android uses to identify games.
 IKA_GAME_APPS=(
 )
+ika_ini_list IKA_GAME_APPS apps game_apps
 
 # Games are apps that declare themselves as such (recorded by the last sync in
 # APP_GAMES_FILE, see IkaAppIcons) or that are listed in IKA_GAME_APPS. Given
@@ -5501,7 +5843,7 @@ stop_cvd_internal() {
 
 readonly GSF_REGISTRATION_URL="https://www.google.com/android/uncertified"
 readonly GCM_SERVICE="com.google.android.gms/.gcm.GcmService"
-: "${IKA_GSF_ID_TIMEOUT_SEC:=120}"
+ika_ini_default IKA_GSF_ID_TIMEOUT_SEC timeouts gsf_id_timeout_sec 120 uint
 
 # Copies stdin to the desktop clipboard. Returns 1 without a graphical session
 # or a clipboard tool. The tools stay in the background to serve the clipboard,
@@ -5613,8 +5955,9 @@ readonly -a BACKUP_SETTINGS=(
 )
 # Listing and dumping every package is slow on small hosts; copies of large
 # games take minutes.
-readonly BACKUP_LIST_ADB_TIMEOUT_SEC=120
-readonly BACKUP_COPY_ADB_TIMEOUT_SEC=3600
+ika_ini_get BACKUP_LIST_ADB_TIMEOUT_SEC timeouts backup_list_timeout_sec 120 uint
+ika_ini_get BACKUP_COPY_ADB_TIMEOUT_SEC timeouts backup_copy_timeout_sec 3600 uint
+readonly BACKUP_LIST_ADB_TIMEOUT_SEC BACKUP_COPY_ADB_TIMEOUT_SEC
 
 # Prints COUNT with the singular or plural NOUN, e.g. "1 app", "3 apps".
 count_noun() {
@@ -6001,6 +6344,8 @@ main() {
   local reset_data_gb
   local -a reset_args
   local -a start_args
+
+  ika_ini_warn_unknown
 
   case "${command}" in
     start)
