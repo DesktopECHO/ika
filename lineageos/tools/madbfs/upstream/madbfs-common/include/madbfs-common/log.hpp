@@ -5,7 +5,7 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <spdlog/pattern_formatter.h>
-#include <spdlog/sinks/rotating_file_sink.h>
+#include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
@@ -75,13 +75,11 @@ namespace madbfs::log
      * @param log_file The log file to write to.
      *
      * If the `log_file` is set to "-", the logger will write to stdout. If the `log_file` is set to "" (empty
-     * string) logger will be created with empty sinks.
+     * string) logger will be created with empty sinks. Otherwise the file is truncated on open and never
+     * rotated.
      */
     inline bool init(spdlog::level::level_enum level, Str log_file) noexcept(false)
     {
-        constexpr auto max_size  = 10 * 1000 * 1000_usize;    // 10 MB
-        constexpr auto max_files = 5_usize;
-
         auto logger = std::make_shared<spdlog::logger>(logger_name);
 
         if (log_file == "-") {
@@ -89,9 +87,9 @@ namespace madbfs::log
                 std::make_shared<spdlog::sinks::stdout_color_sink_mt>(spdlog::color_mode::always)
             );
         } else if (not log_file.empty()) {
-            logger->sinks().push_back(std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-                log_file.data(), max_size, max_files, true
-            ));
+            logger->sinks().push_back(
+                std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_file.data(), true)
+            );
         }
 
         logger->set_pattern(logger_pattern);
