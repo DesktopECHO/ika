@@ -377,7 +377,7 @@ stop_scrcpy_supervisor() {
 stop_app_supervisors() {
   local pid_file
 
-  for pid_file in "${IKA_APPS_DIR}"/*/supervisor.pid; do
+  for pid_file in "${CVD_TMP_DIR}"/app-supervisor-*.pid; do
     [[ -f "${pid_file}" ]] || continue
     stop_supervisor_from_file "${pid_file}" __app_supervisor
   done
@@ -726,17 +726,23 @@ mkdir -p "${CVD_HOME_DIR}"
 CVD_TMP_DIR="${CVD_HOME_DIR}/tmp"
 mkdir -p "${CVD_TMP_DIR}"
 export TMPDIR="${CVD_TMP_DIR}"
+
+# The pid or lock file (EXT is pid or lock) of an app window's supervisor. The
+# app-supervisor- prefix keeps app-menu-watcher's files out of its glob.
+app_supervisor_file() {
+  printf '%s\n' "${CVD_TMP_DIR}/app-supervisor-$1.$2"
+}
 DATA_GB_CONFIG_FILE="${CVD_HOME_DIR}/data-gb"
 SERIAL_NUMBER_FILE="${CVD_HOME_DIR}/serial-number"
 START_LOG_FILE="${CVD_HOME_DIR}/ikastart.log"
 SCRCPY_LOG_FILE="${CVD_HOME_DIR}/console.log"
 SCRCPY_WINDOW_STATE_FILE="${CVD_HOME_DIR}/console-window-state"
-SCRCPY_SUPERVISOR_PID_FILE="${CVD_HOME_DIR}/console-supervisor.pid"
-SCRCPY_SUPERVISOR_LOCK_FILE="${CVD_HOME_DIR}/console-supervisor.lock"
+SCRCPY_SUPERVISOR_PID_FILE="${CVD_TMP_DIR}/console-supervisor.pid"
+SCRCPY_SUPERVISOR_LOCK_FILE="${CVD_TMP_DIR}/console-supervisor.lock"
 IKA_APPS_DIR="${CVD_HOME_DIR}/apps"
-APP_MENU_WATCHER_PID_FILE="${CVD_HOME_DIR}/app-menu-watcher.pid"
-APP_MENU_WATCHER_LOCK_FILE="${CVD_HOME_DIR}/app-menu-watcher.lock"
-APP_MENU_SYNC_LOCK_FILE="${CVD_HOME_DIR}/app-menu-sync.lock"
+APP_MENU_WATCHER_PID_FILE="${CVD_TMP_DIR}/app-menu-watcher.pid"
+APP_MENU_WATCHER_LOCK_FILE="${CVD_TMP_DIR}/app-menu-watcher.lock"
+APP_MENU_SYNC_LOCK_FILE="${CVD_TMP_DIR}/app-menu-sync.lock"
 APP_MENU_LOG_FILE="${CVD_HOME_DIR}/app-menu.log"
 APP_MENU_DISABLED_FILE="${CVD_HOME_DIR}/app-menu-disabled"
 # Android's shared storage (/sdcard), mounted with madbfs while the VM runs.
@@ -746,7 +752,7 @@ APP_LIST_CACHE="${IKA_APPS_DIR}/app-list"
 # Game session started by 'ika app <game>': see start_game_session.
 GAME_SESSION_FILE="${CVD_HOME_DIR}/game-session"
 GAME_SESSION_EXITED_FILE="${CVD_HOME_DIR}/game-session.exited"
-GAME_SESSION_LOCK_FILE="${CVD_HOME_DIR}/game-session.lock"
+GAME_SESSION_LOCK_FILE="${CVD_TMP_DIR}/game-session.lock"
 game_session_lock_fd=""
 GAME_CONSOLE_WINDOW_STATE_FILE="${CVD_HOME_DIR}/game-console-window-state"
 APP_GAMES_FILE="${IKA_APPS_DIR}/games"
@@ -3355,7 +3361,7 @@ start_scrcpy_with_retries() {
   local game_mode="${3:-false}"
   local cuttlefish_frames_socket
   local scrcpy_log="${SCRCPY_LOG_FILE}"
-  local scrcpy_lock_file="${CVD_HOME_DIR}/console-launch.lock"
+  local scrcpy_lock_file="${CVD_TMP_DIR}/console-launch.lock"
   local scrcpy_lock_fd=""
   local scrcpy_window_size
   local scrcpy_window_width
@@ -3510,8 +3516,8 @@ validate_app_package() {
 use_app_window_paths() {
   local app_dir="${IKA_APPS_DIR}/$1"
 
-  SCRCPY_SUPERVISOR_PID_FILE="${app_dir}/supervisor.pid"
-  SCRCPY_SUPERVISOR_LOCK_FILE="${app_dir}/supervisor.lock"
+  SCRCPY_SUPERVISOR_PID_FILE="$(app_supervisor_file "$1" pid)"
+  SCRCPY_SUPERVISOR_LOCK_FILE="$(app_supervisor_file "$1" lock)"
   SCRCPY_WINDOW_STATE_FILE="${app_dir}/window-state"
   SCRCPY_LOG_FILE="${app_dir}/window.log"
 }
@@ -4092,7 +4098,7 @@ start_game_session() {
 
   # A game runs in one place only: close its app window if it has one.
   if app_window_is_open "${package}"; then
-    stop_supervisor_from_file "${IKA_APPS_DIR}/${package}/supervisor.pid" __app_supervisor
+    stop_supervisor_from_file "$(app_supervisor_file "${package}" pid)" __app_supervisor
   fi
 
   # The input mode of the session console running now, read before it is
@@ -4106,7 +4112,7 @@ start_game_session() {
   if ! game_session_console_running \
       || [[ "${session_touch:-false}" != "${touch_mode}" ]]; then
     notify_progress "Starting ${label}…"
-    exec {autostart_lock_fd}>"${CVD_HOME_DIR}/autostart.lock"
+    exec {autostart_lock_fd}>"${CVD_TMP_DIR}/autostart.lock"
     flock -w "$((CVD_BOOT_TIMEOUT_SEC + 60))" "${autostart_lock_fd}" \
       || die "timed out waiting for Ika to start"
     IKA_NOTIFY=false "${IKA_SCRIPT_PATH}" start --game --game-session </dev/null >/dev/null 2>&1 \
@@ -4143,7 +4149,7 @@ ensure_guest_ready() {
   local autostart_lock_fd
 
   # Serialize concurrent launches, so only one of them starts the VM.
-  exec {autostart_lock_fd}>"${CVD_HOME_DIR}/autostart.lock"
+  exec {autostart_lock_fd}>"${CVD_TMP_DIR}/autostart.lock"
   flock -w "$((CVD_BOOT_TIMEOUT_SEC + 60))" "${autostart_lock_fd}" \
     || die "timed out waiting for Ika to start"
   if ! has_live_cvd_processes; then
@@ -4427,7 +4433,7 @@ run_app_supervisor() {
 }
 
 app_window_is_open() {
-  supervisor_pid_from_file "${IKA_APPS_DIR}/$1/supervisor.pid" __app_supervisor >/dev/null
+  supervisor_pid_from_file "$(app_supervisor_file "$1" pid)" __app_supervisor >/dev/null
 }
 
 # Lists launchable apps sorted by label. Apps already open in their own window
@@ -5335,11 +5341,12 @@ list_open_app_windows() {
   local package
   local title
 
-  for pid_file in "${IKA_APPS_DIR}"/*/supervisor.pid; do
+  for pid_file in "${CVD_TMP_DIR}"/app-supervisor-*.pid; do
     [[ -f "${pid_file}" ]] || continue
     supervisor_pid_from_file "${pid_file}" __app_supervisor >/dev/null || continue
-    app_dir="$(dirname "${pid_file}")"
-    package="$(basename "${app_dir}")"
+    package="${pid_file##*/app-supervisor-}"
+    package="${package%.pid}"
+    app_dir="${IKA_APPS_DIR}/${package}"
     title="${package}"
     if [[ -s "${app_dir}/title" ]]; then
       title="$(<"${app_dir}/title")"
@@ -5363,7 +5370,7 @@ close_app_window() {
   package="${resolved#*$'\t'}"
   validate_app_package "${package}"
 
-  stop_supervisor_from_file "${IKA_APPS_DIR}/${package}/supervisor.pid" __app_supervisor
+  stop_supervisor_from_file "$(app_supervisor_file "${package}" pid)" __app_supervisor
   respond "Closed ${resolved%%$'\t'*}"
 }
 
@@ -5613,7 +5620,7 @@ run_remove_command() {
   validate_app_package "${package}"
 
   if app_window_is_open "${package}"; then
-    stop_supervisor_from_file "${IKA_APPS_DIR}/${package}/supervisor.pid" __app_supervisor
+    stop_supervisor_from_file "$(app_supervisor_file "${package}" pid)" __app_supervisor
   fi
   output="$(host_adb 120 -s "${adb_serial}" uninstall "${package}" </dev/null 2>&1 \
     | tr -d '\r' || true)"
