@@ -491,6 +491,29 @@ In direct `gfxstream` mode, the guest advertises OpenGL ES 3.2, including
 the host translator cannot provide 3.2. Vulkan remains the preferred accelerated
 API for applications that support it.
 
+### Settings
+
+Ika's defaults live in `~/ika/ika.ini`, which Ika writes, with every default
+in place, the first time it runs. The file is divided into sections, such as `[compute]`, `[gpu]`,
+`[network]`, `[storage]`, `[console]` and `[apps]`, and each setting has a
+comment. Edit it to change what `ika start` uses by default: the guest's CPUs
+and memory, the GPU mode, the data size of a new VM, the app windows' bit rate,
+the apps hidden from the app list, timeouts and more.
+
+```ini
+[compute]
+cpus = 8
+memory_mb = auto
+
+[apps]
+bit_rate = 40M
+```
+
+Command-line options override the file, and so do the environment variables
+that `ika help` lists. Delete a line to use the built-in default for that
+setting, or delete the file to get a fresh copy. Ika reports lines it does not
+understand, and a package update does not change your copy.
+
 ## Host Packages
 
 The repository builds the host package names listed below. On RPM distributions,
