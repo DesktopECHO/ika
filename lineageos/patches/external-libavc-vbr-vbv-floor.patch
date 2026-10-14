@@ -1,0 +1,45 @@
+Patch summary:
+Keep the VBR storage VBV fullness from going below zero in the H.264 encoder's
+rate control. C2SoftAvcEnc runs libavc in IVE_RC_STORAGE mode. Its buffer,
+sized from the level's CPB, gains 4 Mbit per frame (the 240 Mbit/s peak rate
+at the nominal 60 fps) and loses each frame's bits.
+The fullness had no lower bound, so frames that stayed larger than the inflow
+left a growing debt. Full-motion video in a 3456x2160 `ika app` window, with
+the QP capped at 18, produced such frames continuously. After 25-35 s the
+fullness passed INT32_MIN and the integer-overflow sanitizer aborted
+media.swcodec in irc_update_vbr_vbv.
+
+A storage-model decoder stalls on a frame that is larger than its buffer and
+resumes with the buffer empty, so the fullness now stops at zero. This also
+ends the long stretch at maximum QP that repaying the debt caused once motion
+stopped. Streams whose frames fit the buffer are unchanged. The SVC encoder
+shares this file.
+
+diff --git a/encoder/irc_vbr_storage_vbv.c b/encoder/irc_vbr_storage_vbv.c
+index aaf0d6e..7ea35a5 100644
+--- a/encoder/irc_vbr_storage_vbv.c
++++ b/encoder/irc_vbr_storage_vbv.c
+@@ -145,7 +145,22 @@ void irc_update_vbr_vbv(vbr_storage_vbv_t *ps_vbr_storage_vbv,
+                         ps_vbr_storage_vbv->i4_max_buf_size;
+     }
+ 
+-    ps_vbr_storage_vbv->i4_cur_buf_size -= i4_total_bits_decoded;
++    /*
++     * Ika: a VBR storage decoder stalls on a frame larger than its buffer and
++     * resumes empty, so the fullness bottoms out at zero. Letting it go
++     * negative accumulated a debt that kept growing while frames stayed above
++     * the peak inflow (for example a QP ceiling on large full-motion frames),
++     * pinned the QP at its maximum until it was repaid, and finally overflowed
++     * WORD32.
++     */
++    if(i4_total_bits_decoded > ps_vbr_storage_vbv->i4_cur_buf_size)
++    {
++        ps_vbr_storage_vbv->i4_cur_buf_size = 0;
++    }
++    else
++    {
++        ps_vbr_storage_vbv->i4_cur_buf_size -= i4_total_bits_decoded;
++    }
+ 
+     /* Update the error bits state */
+     irc_update_error_bits(ps_vbr_storage_vbv->ps_error_bits);
