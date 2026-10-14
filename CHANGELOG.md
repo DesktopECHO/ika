@@ -1,5 +1,13 @@
 ## Unreleased, changes since release 261012
 
+### Settings file
+- `~/ika/ika.ini` holds Ika's defaults in sections (`[compute]`, `[gpu]`,
+  `[network]`, `[storage]`, `[console]`, `[apps]`, `[timeouts]` and others),
+  each setting with a comment: guest CPUs and memory, GPU mode, data size, app
+  window quality, hidden apps, timeouts and more. Ika writes it, with every
+  default in place, the first time it runs. Command-line options and environment variables still override
+  it. See [Settings](README.md#settings).
+
 ### Installing and removing apps
 - `ika install FILE.apk...` installs APK files in Android, replacing an
   installed version of the app and keeping its data, and APK files in the file
