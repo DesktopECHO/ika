@@ -1,0 +1,312 @@
+#pragma once
+
+#include "madbfs-common/aliases.hpp"
+
+#include <fmt/format.h>
+#include <fmt/ranges.h>
+#include <spdlog/pattern_formatter.h>
+#include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/spdlog.h>
+
+#include <source_location>
+
+namespace madbfs::log
+{
+    using Level = spdlog::level::level_enum;
+
+    // I need to use const char* here because spdlog doesn't support std::string_view... :(
+    static constexpr auto logger_pattern = "[%Y-%m-%d|%H:%M:%S] [%^-%L-%$] [%-20!s|%3#] %-20!!: %v";
+    static constexpr auto logger_name    = "madbfs-log";
+
+    // I have to do this conversion gymnastics because somehow spdlog's string_view is not compaitble with
+    // std's string_view.
+    static constexpr auto level_names = []() {
+        auto names = Array<Str, Level::n_levels>{};
+        for (auto level = 0uz; auto name : std::to_array(SPDLOG_LEVEL_NAMES)) {
+            names[level++] = { name.begin(), name.end() };
+        }
+        return names;
+    }();
+
+    /**
+     * @brief Convert std::source_location to spdlog compatible one.
+     */
+    constexpr static spdlog::source_loc to_spdlog_source_loc(const std::source_location& loc) noexcept
+    {
+        return { loc.file_name(), static_cast<int>(loc.line()), loc.function_name() };
+    }
+
+    /**
+     * @class FmtWithLoc
+     *
+     * @brief Format string with location.
+     *
+     * Inspired by this issue on spdlog: https://github.com/gabime/spdlog/issues/1959
+     */
+    template <typename... Args>
+    struct FmtWithLoc
+    {
+        spdlog::format_string_t<Args...> fmt;
+        spdlog::source_loc               loc;
+
+        template <typename Str>
+        consteval FmtWithLoc(Str&& fmt, const std::source_location& loc = std::source_location::current())
+            : fmt{ std::forward<Str>(fmt) }
+            , loc{ to_spdlog_source_loc(loc) }
+        {
+        }
+
+        FmtWithLoc(FmtWithLoc&& other)
+            : fmt{ std::move(other.fmt) }
+            , loc{ std::move(other.loc) }
+        {
+        }
+
+        FmtWithLoc(const FmtWithLoc& other)            = delete;
+        FmtWithLoc& operator=(const FmtWithLoc& other) = delete;
+        FmtWithLoc& operator=(FmtWithLoc&& other)      = delete;
+    };
+
+    /**
+     * @brief Initialize logger at a specific log level with predefined pattern.
+     *
+     * @param level The log level to use.
+     * @param log_file The log file to write to.
+     *
+     * If the `log_file` is set to "-", the logger will write to stdout. If the `log_file` is set to "" (empty
+     * string) logger will be created with empty sinks. Otherwise the file is truncated on open and never
+     * rotated.
+     */
+    inline bool init(spdlog::level::level_enum level, Str log_file) noexcept(false)
+    {
+        auto logger = std::make_shared<spdlog::logger>(logger_name);
+
+        if (log_file == "-") {
+            logger->sinks().push_back(
+                std::make_shared<spdlog::sinks::stdout_color_sink_mt>(spdlog::color_mode::always)
+            );
+        } else if (not log_file.empty()) {
+            logger->sinks().push_back(
+                std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_file.data(), true)
+            );
+        }
+
+        logger->set_pattern(logger_pattern);
+
+        spdlog::register_logger(logger);
+        spdlog::set_default_logger(logger);
+        spdlog::set_level(level);
+
+        return true;
+    }
+
+    /**
+     * @brief Shut down logger.
+     *
+     * This function explicitly flushes the logger.
+     */
+    inline void shutdown() noexcept
+    {
+        if (auto logger = spdlog::get(logger_name); logger) {
+            logger->flush();
+        }
+        spdlog::shutdown();
+    }
+
+    /**
+     * @brief Get default logger used by madbfs.
+     *
+     * @return Logger.
+     */
+    inline Shared<spdlog::logger> get_logger() noexcept
+    {
+        return spdlog::get(logger_name);
+    }
+
+    /**
+     * @brief Get log level.
+     */
+    inline Level get_level() noexcept
+    {
+        return spdlog::get_level();
+    }
+
+    /**
+     * @brief Set log level.
+     *
+     * @param level New log level.
+     */
+    inline void set_level(Level level) noexcept
+    {
+        spdlog::set_level(level);
+    }
+
+    /**
+     * @brief Helper function for creating formatter for logger.
+     *
+     * @param eol Whether to add eol at each message or not.
+     *
+     * https://github.com/gabime/spdlog/issues/579
+     */
+    inline Uniq<spdlog::pattern_formatter> create_formatter(std::string_view pattern, bool eol)
+    {
+        if (eol) {
+            return std::make_unique<spdlog::pattern_formatter>(String{ pattern });
+        } else {
+            return std::make_unique<spdlog::pattern_formatter>(
+                String{ pattern }, spdlog::pattern_time_type::local, std::string("")
+            );
+        }
+    }
+
+    /**
+     * @brief Convert log level string into its enum.
+     *
+     * @param level Level string.
+     *
+     * @return Level enum.
+     */
+    inline Opt<Level> level_from_str(Str level) noexcept
+    {
+        for (auto i = 0uz; i < level_names.size(); ++i) {
+            if (level == level_names[i]) {
+                return static_cast<Level>(i);
+            }
+        }
+        return std::nullopt;
+    }
+
+    /**
+     * @brief Convert log level enum into its string representation.
+     *
+     * @param level Level enum.
+     *
+     * @return Level string.
+     */
+    inline Str level_to_str(Level level) noexcept
+    {
+        auto str = spdlog::level::to_string_view(level);
+        return { str.begin(), str.end() };
+    }
+
+    /**
+     * @brief Log a message with a specific log level.
+     *
+     * @param level Severity.
+     */
+    template <typename... Args>
+    inline void log(
+        spdlog::level::level_enum                 level,
+        FmtWithLoc<std::type_identity_t<Args>...> fmt,
+        Args&&... args
+    )
+    {
+        spdlog::log(fmt.loc, level, fmt.fmt, std::forward<Args>(args)...);
+    }
+
+    /**
+     * @brief Log a message with a specific log level and name.
+     *
+     * @param level Severity of the message.
+     * @param name The name of the message.
+     *
+     * Normally log message use name based on the function it's called on, with this function you can change
+     * the name. Although keep in mind that the name needs to live for the entire program (static storage).
+     */
+    template <typename... Args>
+    inline void log_named(
+        spdlog::level::level_enum                 level,
+        const char*                               name,
+        FmtWithLoc<std::type_identity_t<Args>...> fmt,
+        Args&&... args
+    )
+    {
+        fmt.loc.funcname = name;
+        spdlog::log(fmt.loc, level, fmt.fmt, std::forward<Args>(args)...);
+    }
+
+    /**
+     * @brief Log a message with specific log level and location.
+     *
+     * @param loc Location.
+     * @param level Severity.
+     */
+    template <typename... Args>
+    inline void log_loc(
+        std::source_location             loc,
+        spdlog::level::level_enum        level,
+        spdlog::format_string_t<Args...> fmt,
+        Args&&... args
+    )
+    {
+        spdlog::log(to_spdlog_source_loc(loc), level, fmt, std::forward<Args>(args)...);
+    }
+
+    /**
+     * @brief Log a message with specific log level, location, and name.
+     *
+     * @param loc Location.
+     * @param level Severity.
+     */
+    template <typename... Args>
+    inline void log_loc_named(
+        std::source_location             loc,
+        spdlog::level::level_enum        level,
+        const char*                      name,
+        spdlog::format_string_t<Args...> fmt,
+        Args&&... args
+    )
+    {
+        auto new_loc     = to_spdlog_source_loc(loc);
+        new_loc.funcname = name;
+        spdlog::log(new_loc, level, fmt, std::forward<Args>(args)...);
+    }
+
+    /**
+     * @brief Log an exception pointer.
+     *
+     * @param e Exception pointer.
+     * @param prefix Prefix to be added before exception message.
+     * @param loc Location.
+     *
+     * This function will rethrow the exception and them immediately catch it before logging it to be able to
+     * get the message contained within the exception. The exception will be logged at critical severity. The
+     * prefix must have static storage duration.
+     */
+    template <typename... Args>
+    inline void log_exception(
+        std::exception_ptr   e,
+        const char*          prefix,
+        std::source_location loc = std::source_location::current()
+    )
+    {
+        try {
+            e ? std::rethrow_exception(e) : void();
+        } catch (const std::exception& e) {
+            log_loc_named(loc, Level::critical, prefix, "exception occurred: {}", e.what());
+        } catch (...) {
+            log_loc_named(loc, Level::critical, prefix, "exception occurred (unknown exception)");
+        }
+    }
+}
+
+namespace madbfs
+{
+#define MADBFS_LOG_LOG_ENTRY(Name, Level)                                                                    \
+    template <typename... Args>                                                                              \
+    inline void Name(const char* name, log::FmtWithLoc<std::type_identity_t<Args>...> fmt, Args&&... args)   \
+    {                                                                                                        \
+        log::log_named(spdlog::level::Level, name, std::move(fmt), std::forward<Args>(args)...);             \
+    }
+
+    // Handy aliases with dedicated severity suffix to `log::log_named` function.
+    MADBFS_LOG_LOG_ENTRY(log_t, trace)
+    MADBFS_LOG_LOG_ENTRY(log_d, debug)
+    MADBFS_LOG_LOG_ENTRY(log_i, info)
+    MADBFS_LOG_LOG_ENTRY(log_w, warn)
+    MADBFS_LOG_LOG_ENTRY(log_e, err)
+    MADBFS_LOG_LOG_ENTRY(log_c, critical)
+
+#undef MADBFS_LOG_LOG_ENTRY
+}

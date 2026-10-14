@@ -1,0 +1,105 @@
+#pragma once
+
+#include <madbfs-common/aliases.hpp>
+
+#include <sys/types.h>
+
+#include <atomic>
+
+namespace madbfs
+{
+    class Node;
+}
+
+namespace madbfs
+{
+    /**
+     * @class Id
+     *
+     * @brief Strong type for identifying a node entry in `Filesystem`.
+     */
+    class Id
+    {
+    public:
+        friend Node;
+
+        Id() = default;
+        u64 inner() const { return m_inner; }
+
+        auto operator<=>(const Id&) const = default;
+
+    private:
+        inline static std::atomic<u64> s_id_counter = 0;
+
+        static Id incr() { return { s_id_counter.fetch_add(1, std::memory_order::relaxed) + 1 }; }
+
+        Id(u64 inner)
+            : m_inner{ inner }
+        {
+        }
+
+        u64 m_inner = 0;
+    };
+
+    /**
+     * @class Stat
+     *
+     * @brief File status information.
+     *
+     * This is a simplified `struct stat` (see man(3) stat). On creation, id shouldn't be set manually.
+     */
+    struct Stat
+    {
+        nlink_t  links = 1;
+        off_t    size  = 0;
+        timespec mtime = {};    // last modification time
+        timespec atime = {};
+        timespec ctime = {};
+        mode_t   mode  = 0;    // -rwxrwxrwx
+        uid_t    uid   = 0;
+        gid_t    gid   = 0;
+    };
+
+    /**
+     * @class NamedStat
+     *
+     * @brief File status information and its unique identifier.
+     */
+    struct NamedStat
+    {
+        Id   id;
+        Stat stat;
+    };
+
+    /**
+     * @brief Detect modification in remote.
+     *
+     * @param host Host side of stat.
+     * @param remote Remote side of stat.
+     *
+     * This function only considers a modification in the remote is made when the remote stat is newer than
+     * the host.
+     *
+     * TODO: Maybe store inode on the Stat then use it to detect modification? At least for files
+     */
+    inline bool detect_modification(const Stat& host, const Stat& remote)
+    {
+        // Ika: any change of size or of the modification time, to the nanosecond (the server sends
+        // st_mtim). Upstream only took an mtime more than 2 seconds newer as a change, so a file the device
+        // changed within 2 seconds of the cached version stayed stale for good. The cost is one extra
+        // re-read after madbfs's own writes, whose mtime it sets from the host clock; files with unflushed
+        // writes are not refreshed.
+        return remote.size != host.size or remote.mtime.tv_sec != host.mtime.tv_sec
+            or remote.mtime.tv_nsec != host.mtime.tv_nsec;
+    }
+
+    /**
+     * @brief File open mode.
+     */
+    enum class OpenMode : u8
+    {
+        Read      = 0,
+        Write     = 1,
+        ReadWrite = 2,
+    };
+}

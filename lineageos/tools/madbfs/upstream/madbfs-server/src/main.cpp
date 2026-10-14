@@ -1,0 +1,123 @@
+#include <madbfs-common/log.hpp>
+#include <madbfs-common/rpc.hpp>
+#include <madbfs-server/server.hpp>
+
+#include <madbfs-gen/version.hpp>
+
+#include <fmt/base.h>
+
+#include <charconv>
+#include <csignal>
+#include <cstdio>
+#include <cstring>
+#include <string>
+
+struct Exit
+{
+    int ret;
+};
+
+struct Args
+{
+    madbfs::log::Level log_level = madbfs::log::Level::warn;
+    madbfs::u16        port      = 23237;
+};
+
+std::variant<Exit, Args> parse_args(int argc, char** argv)
+{
+    using madbfs::log::Level;
+    auto args = Args{};
+
+    for (auto i = 1; i < argc; ++i) {
+        auto arg = madbfs::Str{ argv[i] };
+        if (arg == "--help" or arg == "-h") {
+            fmt::println("{} [--port PORT] [--debug] [--verbose]\n", argv[0]);
+            fmt::println("  --port PORT       Port number the server listen on (default: 23237");
+            fmt::println("  --debug           Enable debug logging.");
+            fmt::println("  --verbose         Enable verbose logging.");
+            fmt::println("  --version         Print madbfs-server version.");
+            return Exit{ 0 };
+        } else if (arg == "--debug") {
+            args.log_level = Level::debug;
+        } else if (arg == "--verbose") {
+            args.log_level = Level::info;
+        } else if (arg == "--port") {
+            if (i + 1 >= argc) {
+                fmt::println(stderr, "expecting port number after '--port' argument");
+                return Exit{ 1 };
+            }
+
+            arg = madbfs::Str{ argv[++i] };
+
+            auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), args.port);
+            if (ec != std::errc{}) {
+                fmt::println(stderr, "failed to parse port number '{}': {}", arg, madbfs::err_msg(ec));
+                return Exit{ 1 };
+            } else if (ptr != arg.data() + arg.size()) {
+                fmt::println(stderr, "failed to parse port number '{}': invalid trailing characters", arg);
+                return Exit{ 1 };
+            }
+        } else if (arg == "--version") {
+            fmt::println("{}", madbfs::version::get_version_full());
+            return Exit{ 0 };
+        } else {
+            fmt::println(stderr, "unknown argument: {}", arg);
+            return Exit{ 1 };
+        }
+    }
+
+    return args;
+}
+
+int main(int argc, char** argv)
+try {
+    auto parsed = parse_args(argc, argv);
+    if (parsed.index() == 0) {
+        return std::get<0>(parsed).ret;
+    }
+
+    auto args = std::get<1>(parsed);
+    madbfs::log::init(args.log_level, "-");
+
+    auto context = madbfs::async::Context{};
+    // Ika: the client sends a secret on the first line of standard input, rather than as an argument other
+    // processes could read; only a client that knows it is served.
+    auto secret = std::string(256, '\0');
+    if (std::fgets(secret.data(), static_cast<int>(secret.size()), stdin) == nullptr) {
+        fmt::println(stderr, "error: expecting the secret on standard input");
+        return 1;
+    }
+    secret.resize(std::strcspn(secret.c_str(), "\r\n"));
+    if (secret.empty()) {
+        fmt::println(stderr, "error: expecting the secret on standard input");
+        return 1;
+    }
+
+    auto server  = madbfs::server::Server{ context, args.port, std::move(secret) };    // may throw
+
+    auto sig_set = madbfs::net::signal_set{ context, SIGINT, SIGTERM };
+    sig_set.async_wait([&](auto, auto) { server.stop(); });
+
+    auto task = [&](this auto) -> madbfs::AExpect<void> {
+        auto res = co_await server.run();
+        sig_set.cancel();
+        co_return res;
+    };
+
+    fmt::println(madbfs::rpc::server_ready_string);
+    std::fflush(stdout);    // ensure the message is sent
+
+    madbfs::log_i(__func__, "madbfs-server version {}", madbfs::version::get_version_full());
+    madbfs::log_i(__func__, "launching tcp server on port: {}", args.port);
+
+    auto res = madbfs::async::once(context, task());
+
+    madbfs::log_i(__func__, "server exited normally: {}", madbfs::err_msg(res.error_or({})));
+    return 0;
+} catch (const std::exception& e) {
+    madbfs::log_c(__func__, "exception: {}", e.what());
+    return 1;
+} catch (...) {
+    madbfs::log_c(__func__, "exception (unknown type)");
+    return 1;
+}

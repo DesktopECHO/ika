@@ -1,0 +1,476 @@
+#include "madbfs-common/ipc.hpp"
+#include "madbfs-common/log.hpp"
+
+#include <madbfs-gen/version.hpp>
+
+#include <boost/json.hpp>
+
+#include <filesystem>
+
+using namespace madbfs;
+
+// helper functions/classes
+namespace
+{
+    namespace json = boost::json;
+
+    constexpr auto max_msg_len = 4 * 1024uz;    // 4 KiB
+
+    /**
+     * @brief Get message from socket.
+     *
+     * @param sock Socket.
+     *
+     * @return Awaitable that returns message or error.
+     */
+    AExpect<String> receive_message(ipc::Socket& sock)
+    {
+        auto buffer = String{};
+        if (auto n = co_await async::read_lv(sock, buffer, max_msg_len); not n) {
+            co_return Unexpect{ async::to_generic_err(n.error(), Errc::io_error) };
+        }
+        co_return buffer;
+    }
+
+    /**
+     * @brief Send message through socket.
+     *
+     * @param sock Socket.
+     * @param msg Message to send.
+     *
+     * @return Awaitable that returns nothing or error.
+     */
+    AExpect<void> send_message(ipc::Socket& sock, Str msg)
+    {
+        if (auto n = co_await async::write_lv<char>(sock, msg); not n) {
+            co_return Unexpect{ async::to_generic_err(n.error(), Errc::not_connected) };
+        }
+        co_return Expect<void>{};
+    }
+
+    /**
+     * @brief Parse message to `Op`.
+     *
+     * @param msg Message to parse.
+     *
+     * @return Parsed `Op` or error string.
+     */
+    Expect<ipc::Op, String> parse_op(Str msg)
+    {
+        namespace op = ipc::op;
+        using ipc::Op;
+
+        try {
+            const auto json = json::parse(msg);
+            const auto op   = json::value_to<String>(json.at("op"));
+
+            if (op == op::name::help) {
+                return Op{ op::Help{} };
+            } else if (op == op::name::version) {
+                return Op{ op::Version{} };
+            } else if (op == op::name::info) {
+                return Op{ op::Info{} };
+            } else if (op == op::name::invalidate_cache) {
+                return Op{ op::InvalidateCache{} };
+            } else if (op == op::name::expire_stat) {
+                return Op{ op::ExpireStat{} };
+            } else if (op == op::name::set_page_size) {
+                return Op{ op::SetPageSize{ .kib = json::value_to<u32>(json.at("value")) } };
+            } else if (op == op::name::set_cache_size) {
+                return Op{ op::SetCacheSize{ .mib = json::value_to<u32>(json.at("value")) } };
+            } else if (op == op::name::set_ttl) {
+                return Op{ op::SetTTL{ .sec = json::value_to<u32>(json.at("value")) } };
+            } else if (op == op::name::set_timeout) {
+                return Op{ op::SetTimeout{ .sec = json::value_to<u32>(json.at("value")) } };
+            } else if (op == op::name::set_log_level) {
+                auto level = json::value_to<String>(json.at("value"));
+                if (not log::level_from_str(level)) {
+                    return Unexpect{
+                        fmt::format("'{}' is not a valid log level {::}", level, log::level_names)
+                    };
+                }
+                return Op{ op::SetLogLevel{ .lvl = level } };
+            } else if (op == op::name::logcat) {
+                return op::Logcat{ .color = json::value_to<bool>(json.at("value")) };
+            } else if (op == op::name::unmount) {
+                return Op{ op::Unmount{} };
+            }
+
+            return Unexpect{ fmt::format("'{}' is not a valid operation, try 'help'", op) };
+        } catch (const boost::system::system_error& e) {
+            return Unexpect{ e.code().message() };
+        } catch (...) {
+            return Unexpect{ "unknown error" };
+        }
+    }
+}
+
+// ipc.hpp impl: LogcatSink
+namespace madbfs::ipc
+{
+    std::deque<LogcatSink::Msg>& LogcatSink::swap()
+    {
+        auto new_index = (m_index + 1) % 2;
+        return m_queue[std::exchange(m_index, new_index)];
+    }
+
+    void LogcatSink::sink_it_(const spdlog::details::log_msg& msg)
+    {
+        m_buf.clear();
+
+        msg.color_range_start = 0;
+        msg.color_range_end   = 0;
+
+        this->formatter_->format(msg, m_buf);
+
+        auto& queue = m_queue[m_index];
+        while (queue.size() >= m_max_queue) {
+            queue.pop_front();
+        }
+
+        auto string = fmt::to_string(m_buf);
+        auto level  = static_cast<usize>(msg.level);
+
+        queue.emplace_back(std::move(string), msg.color_range_start, msg.color_range_end, level);
+    }
+}
+
+// ipc.hpp impl: Client
+namespace madbfs::ipc
+{
+    Expect<Client> Client::create(async::Context& context, Str socket_path)
+    {
+        auto path = std::filesystem::absolute(socket_path);
+        auto ep   = async::unix_socket::Endpoint{ path.c_str() };
+
+        auto ec   = net::error_code{};
+        auto sock = Socket{ context };
+
+        sock.open(ep.protocol(), ec);
+        sock.connect(ep, ec);
+
+        if (ec) {
+            log_e(__func__, "failed to connect to remote {:?}: {}", path.c_str(), ec.message());
+            return Unexpect{ async::to_generic_err(ec, Errc::address_not_available) };
+        }
+
+        return Client{ path.c_str(), std::move(sock) };
+    }
+
+    void Client::stop()
+    {
+        m_socket.cancel();
+        m_socket.close();
+    }
+
+    AExpect<json::value> Client::send(FsOp op)
+    {
+        namespace n = op::name;
+
+        // clang-format off
+        auto op_json = std::move(op).visit(Overload{
+            [&](op::Info           ) { return json::value{ { "op", n::info             }                      }; },
+            [&](op::InvalidateCache) { return json::value{ { "op", n::invalidate_cache }                      }; },
+            [&](op::ExpireStat     ) { return json::value{ { "op", n::expire_stat      }                      }; },
+            [&](op::SetPageSize  op) { return json::value{ { "op", n::set_page_size    }, { "value", op.kib } }; },
+            [&](op::SetCacheSize op) { return json::value{ { "op", n::set_cache_size   }, { "value", op.mib } }; },
+            [&](op::SetTTL       op) { return json::value{ { "op", n::set_ttl          }, { "value", op.sec } }; },
+            [&](op::SetTimeout   op) { return json::value{ { "op", n::set_timeout      }, { "value", op.sec } }; },
+            [&](op::SetLogLevel  op) { return json::value{ { "op", n::set_log_level    }, { "value", op.lvl } }; },
+            [&](op::Unmount        ) { return json::value{ { "op", n::unmount          }                      }; },
+        });
+        // clang-format on
+
+        if (auto res = co_await send_message(m_socket, json::serialize(op_json)); not res) {
+            co_return Unexpect{ res.error() };
+        }
+
+        auto response_str = co_await receive_message(m_socket);
+        if (not response_str) {
+            co_return Unexpect{ response_str.error() };
+        }
+
+        try {
+            co_return json::parse(*response_str);
+        } catch (const std::exception& e) {
+            log_e(__func__, "failed to deserialize response: {}", e.what());
+            co_return Unexpect{ Errc::bad_message };
+        }
+    }
+
+    AExpect<json::value> Client::help()
+    {
+        auto op_json = json::value{ { "op", op::name::help } };
+        if (auto res = co_await send_message(m_socket, json::serialize(op_json)); not res) {
+            co_return Unexpect{ res.error() };
+        }
+
+        auto response_str = co_await receive_message(m_socket);
+        if (not response_str) {
+            co_return Unexpect{ response_str.error() };
+        }
+
+        try {
+            co_return json::parse(*response_str);
+        } catch (const std::exception& e) {
+            log_e(__func__, "failed to deserialize response: {}", e.what());
+            co_return Unexpect{ Errc::bad_message };
+        }
+    }
+
+    AExpect<json::value> Client::version()
+    {
+        auto op_json = json::value{ { "op", op::name::version } };
+        if (auto res = co_await send_message(m_socket, json::serialize(op_json)); not res) {
+            co_return Unexpect{ res.error() };
+        }
+
+        auto response_str = co_await receive_message(m_socket);
+        if (not response_str) {
+            co_return Unexpect{ response_str.error() };
+        }
+
+        try {
+            co_return json::parse(*response_str);
+        } catch (const std::exception& e) {
+            log_e(__func__, "failed to deserialize response: {}", e.what());
+            co_return Unexpect{ Errc::bad_message };
+        }
+    }
+
+    AExpect<Gen<AExpect<String>>> Client::logcat(op::Logcat opt)
+    {
+        auto op_json = json::value{ { "op", op::name::logcat }, { "value", opt.color } };
+        if (auto res = co_await send_message(m_socket, json::serialize(op_json)); not res) {
+            co_return Unexpect{ res.error() };
+        }
+
+        co_return [sock = &m_socket](this auto) -> Gen<AExpect<String>> {
+            while (sock->is_open()) {
+                co_yield receive_message(*sock);
+            }
+        }();
+    }
+}
+
+// ipc.hpp impl: Server
+namespace madbfs::ipc
+{
+    Server::~Server()
+    {
+        if (m_running) {
+            stop();
+        }
+        if (not m_socket_path.empty()) {
+            if (auto sock = m_socket_path.c_str(); ::unlink(sock) < 0) {
+                log_e(__func__, "failed to unlink socket: {} [{}]", sock, strerror(errno));
+            }
+        }
+    }
+
+    Expect<Server> Server::create(async::Context& context, Str socket_path)
+    {
+        auto path = std::filesystem::absolute(socket_path);
+        auto ep   = async::unix_socket::Endpoint{ path.c_str() };
+
+        auto ec  = net::error_code{};
+        auto acc = Acceptor{ context };
+
+        acc.open(ep.protocol(), ec);
+        acc.set_option(Acceptor::reuse_address(true));
+        acc.bind(ep, ec);
+        acc.listen(acc.max_listen_connections, ec);
+
+        if (ec) {
+            log_e(__func__, "failed to construct acceptor {:?}: {}", path.c_str(), ec.message());
+            return Unexpect{ async::to_generic_err(ec, Errc::address_not_available) };
+        }
+
+        return Server{ path.c_str(), std::move(acc) };
+    }
+
+    Await<void> Server::launch(OnFsOp on_op)
+    {
+        log_d(__func__, "ipc launched!");
+
+        m_running = true;
+        m_on_op   = std::move(on_op);
+
+        auto logger = log::get_logger();
+        if (not logger) {
+            log_e(__func__, "can't find logger with name '{}', logcat won't function", log::logger_name);
+            co_await run();
+            co_return;
+        }
+
+        if (not m_logcat_sink) {
+            m_logcat_sink = std::make_shared<LogcatSink>();
+            m_logcat_sink->set_level(log::Level::off);
+            m_logcat_sink->set_formatter(log::create_formatter(log::logger_pattern, false));
+
+            auto& sinks = logger->sinks();
+            sinks.push_back(m_logcat_sink);
+        }
+
+        co_await async::wait_all(run(), logcat_handler());
+    }
+
+    void Server::stop()
+    {
+        m_running = false;
+        m_logcat_timer.cancel();
+        m_socket.cancel();
+        m_socket.close();
+    }
+
+    Await<void> Server::run()
+    {
+        while (m_running) {
+            auto res = co_await m_socket.async_accept();
+            if (not res) {
+                log_e(__func__, "socket accept failed: {}", res.error().message());
+                continue;
+            }
+
+            log_i(__func__, "new ipc connection from peer");
+            co_await handle_peer(std::move(res).value());
+        }
+    }
+
+    Await<void> Server::handle_peer(Socket sock)
+    {
+        auto op_str = co_await receive_message(sock);
+        if (not op_str) {
+            co_return;
+        }
+
+        log_d(__func__, "op sent by peer: {:?}", *op_str);
+
+        auto op     = parse_op(op_str.value());
+        auto status = Str{};
+        auto value  = json::value{};
+
+        if (op) {
+            status = "success";
+
+            switch (op->index()) {
+            case Op::index_of<FsOp>(): {
+                auto res = co_await m_on_op(std::move(*op->as<FsOp>()));
+                status   = res ? "success" : "error";
+                value    = res ? res.value() : json::value{ err_msg(res.error()) };
+            } break;
+            case Op::index_of<op::Help>():
+                value = json::value{ { "operations", json::value_from(op::names) } };
+                break;
+            case Op::index_of<op::Version>():
+                value = json::value{ { "version", version::get_version_full() } };
+                break;
+            case Op::index_of<op::Logcat>():
+                m_logcat_subscribers.emplace_back(std::move(sock), op->as<op::Logcat>()->color);
+                co_return;
+            default:
+                log_c(__func__, "[BUG] not all op variants are handled!");    //
+                co_return;
+            }
+        } else {
+            status = "error";
+            value  = op.error();
+        }
+
+        auto response = json::serialize(json::value{
+            { "status", status },
+            { "value", value },
+        });
+
+        if (auto res = co_await send_message(sock, response); not res) {
+            log_w(__func__, "failed to send message: {}", err_msg(res.error()));
+        }
+    }
+
+    Await<void> Server::logcat_handler()
+    {
+        using namespace std::chrono_literals;
+
+        log_i(__func__, "start");
+
+        // copying what spdlog do on ansicolor_sink :P
+        const auto colors = Array<Str, log::Level::n_levels>{
+            "\033[37m",           // trace    | white
+            "\033[36m",           // debug    | cyan
+            "\033[32m",           // info     | green
+            "\033[33m\033[1m",    // warn     | yellow_bold
+            "\033[31m\033[1m",    // error    | red bold
+            "\033[1m\033[41m",    // critical | bold on red
+            "\033[m",             // off      | reset
+        };
+
+        auto inactive_subscribers = Vec<isize>{};
+        auto prev_empty           = m_logcat_subscribers.empty();
+
+        while (m_running) {
+            m_logcat_timer.expires_after(100ms);
+            if (auto res = co_await m_logcat_timer.async_wait(); not res) {
+                break;
+            }
+
+            if (m_logcat_subscribers.empty()) {
+                if (not prev_empty) {
+                    log_i(__func__, "no subscribers, turning off logcat sink");
+                    m_logcat_sink->set_level(log::Level::off);
+                    m_logcat_sink->swap().clear();
+                    m_logcat_sink->swap().clear();
+                }
+                prev_empty = true;
+                continue;
+            } else if (prev_empty) {
+                log_i(__func__, "subscribers not empty anymore, turning on logcat sink");
+                m_logcat_sink->set_level(log::Level::trace);    // capture all
+                prev_empty = false;
+            }
+
+            auto& messages = m_logcat_sink->swap();
+            auto  buffer   = String{};
+
+            for (auto&& [i, sub] : m_logcat_subscribers | sv::enumerate) {
+                auto& [sock, should_color] = sub;
+                for (auto& [message, col_start, col_end, level] : messages) {
+                    auto res = Expect<void>{};
+
+                    if (should_color) {
+                        auto it = message.begin();
+                        buffer.append(it, it + col_start);              // before
+                        buffer.append(colors.at(level));                // color code
+                        buffer.append(it + col_start, it + col_end);    // color range
+                        buffer.append(colors.back());                   // reset code
+                        buffer.append(it + col_end, message.end());     // after
+                        res = co_await send_message(sock, buffer);
+                        buffer.clear();
+                    } else {
+                        res = co_await send_message(sock, message);
+                    }
+
+                    if (not res) {
+                        inactive_subscribers.emplace_back(i);
+                        break;
+                    }
+                }
+            }
+
+            for (auto idx : inactive_subscribers | sv::reverse) {
+                m_logcat_subscribers.erase(m_logcat_subscribers.begin() + idx);
+            }
+
+            inactive_subscribers.clear();
+            messages.clear();
+        }
+
+        for (auto& [sock, _] : m_logcat_subscribers) {
+            sock.cancel();
+            sock.close();
+        }
+
+        m_logcat_subscribers.clear();
+
+        log_i(__func__, "end");
+    }
+}
