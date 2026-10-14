@@ -1,0 +1,10 @@
+# Offers "Ika APK installer" for APK files in the file manager's Open With menu.
+# Without a terminal, IKA_NOTIFY reports progress and errors as notifications.
+[Desktop Entry]
+Type=Application
+Name=Ika APK installer
+NoDisplay=true
+MimeType=application/vnd.android.package-archive;
+Exec=env IKA_NOTIFY=true ika install %F
+Icon=ika-scrcpy
+Terminal=false
