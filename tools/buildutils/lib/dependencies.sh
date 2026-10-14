@@ -52,6 +52,9 @@ function rpm_build_dependency_packages() {
     meson ninja-build java-25-openjdk-devel libglvnd-devel alsa-lib-devel pipewire-devel
     vulkan-headers libicu-devel
 
+    # madbfs (mounts Android's storage on ~/ika/Android)
+    boost-devel fuse3-devel
+
     # Runtime tools needed during rpmbuild
     rsync pigz
 
@@ -92,6 +95,12 @@ function deb_build_dependency_packages() {
     libdbus-1-dev libibus-1.0-dev libpulse-dev libsndio-dev libx11-dev libxext-dev
     zlib1g-dev
 
+    # madbfs (mounts Android's storage on ~/ika/Android): Boost 1.88 is not the
+    # default Boost on Debian trixie (1.83) or Ubuntu 26.04 (1.90), but both
+    # ship it under these names.
+    libboost1.88-dev libboost-filesystem1.88-dev libboost-json1.88-dev
+    libboost-program-options1.88-dev libfuse3-dev
+
     # LineageOS Desktop ROM host tools + Bazelisk prerequisites — previously
     # installed on demand by lineageos/scripts/lib/host_env.sh and
     # installbazel.sh.
@@ -126,6 +135,7 @@ function arch_build_dependency_packages() {
     android-tools
     7zip
     binutils
+    boost
     ccache
     clang
     cmake
@@ -136,6 +146,7 @@ function arch_build_dependency_packages() {
     file
     findutils
     fmt
+    fuse3
     gawk
     gcc
     gflags

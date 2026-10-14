@@ -18,8 +18,10 @@ Source0:        ika-base-%{version}.tar.gz
 
 BuildRequires:  libaom-devel
 BuildRequires:  clang-devel
+BuildRequires:  boost-devel >= 1.88
 BuildRequires:  cmake
 BuildRequires:  fmt-devel
+BuildRequires:  fuse3-devel
 BuildRequires:  gcc-c++
 BuildRequires:  gflags-devel
 BuildRequires:  git
@@ -97,6 +99,8 @@ Requires:       nftables
 Requires:       openssl
 # ika backup compresses with pigz.
 Requires:       pigz
+# madbfs mounts Android's storage on ~/ika/Android.
+Requires:       fuse3
 Requires:       python3
 Requires:       python3-requests
 Requires:       v4l-utils
@@ -341,6 +345,11 @@ if readelf -d _build_scrcpy/app/scrcpy | grep -Eq 'Shared library: \[(libav|libs
   exit 1
 fi
 
+# madbfs, which mounts Android's storage on ~/ika/Android; its server is
+# built into the ROM. See lineageos/tools/madbfs/README.md.
+cmake -S lineageos/tools/madbfs -B _build_madbfs -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build _build_madbfs
+
 %install
 rm -rf %{buildroot}
 
@@ -360,6 +369,8 @@ cp -a base/cvd/bazel-out/${bazel_arch}-opt/bin/cuttlefish/package/cuttlefish-met
 # Install the scrcpy viewer (folded in from the former ika-scrcpy package) into
 # the shared cuttlefish-common tree, then expose the "Ika" desktop launcher.
 DESTDIR=%{buildroot} meson install -C _build_scrcpy
+install -m 0755 _build_madbfs/upstream/madbfs/madbfs _build_madbfs/upstream/madbfs-msg/madbfs-msg \
+  %{buildroot}/usr/lib/cuttlefish-common/bin/
 
 install -d %{buildroot}/usr/share/applications
 install -d %{buildroot}/usr/share/icons/hicolor/256x256/apps

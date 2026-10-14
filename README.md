@@ -20,6 +20,8 @@ on [Fedora Asahi Remix](https://asahilinux.org/). It later grew into a desktop-c
   (see [App windows](#app-windows)).
 - **Camera**: use a webcam or a Mac's FaceTime camera as Android's front camera
   (see [Camera](#camera)).
+- **Android files on the host**: Android's storage is mounted on `~/ika/Android`
+  while Ika runs (see [Android files](#android-files)).
 - **Built-in root utility**: `ika root` roots the VM with Magisk (see
   [Rooting with Magisk](#rooting-with-magisk)).
 - **Flexible build options** for **MindTheGapps**, **microG**, or a fully
@@ -277,6 +279,21 @@ apps that check Play Integrity still fail. A factory reset (`ika reset`, or
 rooting for the first time) gives the device a new ID, which has to be
 registered again. `ika gsf` needs Google Play Services, so it works on
 MindTheGapps builds only.
+
+### Android files
+
+While the VM runs, Android's shared storage (`/sdcard`: DCIM, Download,
+Pictures and the rest) is mounted on `~/ika/Android`, so any file manager or
+program on the host can open, copy, change and delete files there. `ika start`
+mounts it and `ika stop`, `restart` and `reset` unmount it; while Ika is
+stopped the folder is empty. GNOME's Files lists it in the sidebar, and the
+first mount adds it to KDE's Places as **Android**. Files are read as they are
+used, over Ika's adb connection, so a large video plays without being copied
+first. Files an app keeps to itself are out of reach, as they are for adb. On
+a rooted ROM (`ika root`) the mount is Android's whole filesystem, `/`, served
+as root: apps' private files in `/data` show up too, and changes there are made
+as root, so take care. The mount uses [madbfs](https://github.com/mrizaln/madbfs);
+its log is `~/ika/madbfs.log`.
 
 ### Backing up apps and files
 

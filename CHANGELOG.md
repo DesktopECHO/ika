@@ -6,6 +6,14 @@
   `ika restore [FILE]` puts them back, after `ika reset` for example; without
   FILE it restores the latest backup. No root needed. See [Backing up apps and files](README.md#backing-up-apps-and-files).
 
+### Android files on the host
+- While Ika runs, Android's shared storage is mounted on `~/ika/Android`, so
+  host programs can open, change and delete its files directly, streamed as
+  they are read. It uses [madbfs](https://github.com/mrizaln/madbfs), whose
+  server is built into the ROM. ika-base needs `fuse3`. On a rooted ROM
+  (`ika root`) it shows Android's whole filesystem, `/`, served as root. See
+  [Android files](README.md#android-files).
+
 ### Faster adb
 - Ika talks to Android over native vsock (`vsock:3:5555`) instead of the TCP
   proxy on port 6520, so copying files from Android runs about 25 times
