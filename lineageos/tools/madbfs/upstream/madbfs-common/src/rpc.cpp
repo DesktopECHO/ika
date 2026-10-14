@@ -205,7 +205,8 @@ namespace
                 case Procedure::Close:
                 case Procedure::Read:
                 case Procedure::Write:
-                case Procedure::Ping: return proc;
+                case Procedure::Ping:
+                case Procedure::Statfs: return proc;
                 }
                 return std::nullopt;
             });
@@ -437,6 +438,11 @@ namespace
                     .write_int<u64>(req.num)
                     .build();
             },
+            [&](req::Statfs req) {
+                return builder    //
+                    .write_path(req.path)
+                    .build();
+            },
         });
     }
 
@@ -513,6 +519,18 @@ namespace
             [&](const resp::Read&          resp) { return builder.write_bytes   (resp.read).build(); },
             [&](const resp::Write&         resp) { return builder.write_int<u64>(resp.size).build(); },
             [&](const resp::Ping&          resp) { return builder.write_int<u64>(resp.num ).build(); },
+            [&](const resp::Statfs&        resp) {
+                return builder    //
+                    .write_int<u64>(resp.bsize)
+                    .write_int<u64>(resp.frsize)
+                    .write_int<u64>(resp.blocks)
+                    .write_int<u64>(resp.bfree)
+                    .write_int<u64>(resp.bavail)
+                    .write_int<u64>(resp.files)
+                    .write_int<u64>(resp.ffree)
+                    .write_int<u64>(resp.namemax)
+                    .build();
+            },
             // clang-format on
         });
     }
@@ -648,6 +666,11 @@ namespace
         case Procedure::Ping: {
             TRY(num, reader.read_int<u64>())
             return req::Ping{ .num = *num };
+        }
+
+        case Procedure::Statfs: {
+            TRY(path, reader.read_path());
+            return req::Statfs{ .path = *path };
         }
         }
 
@@ -797,6 +820,27 @@ namespace
             TRY(num, reader.read_int<u64>())
             return resp::Ping{ .num = *num };
         }
+
+        case Procedure::Statfs: {
+            TRY(bsize, reader.read_int<u64>());
+            TRY(frsize, reader.read_int<u64>());
+            TRY(blocks, reader.read_int<u64>());
+            TRY(bfree, reader.read_int<u64>());
+            TRY(bavail, reader.read_int<u64>());
+            TRY(files, reader.read_int<u64>());
+            TRY(ffree, reader.read_int<u64>());
+            TRY(namemax, reader.read_int<u64>());
+            return resp::Statfs{
+                .bsize   = *bsize,
+                .frsize  = *frsize,
+                .blocks  = *blocks,
+                .bfree   = *bfree,
+                .bavail  = *bavail,
+                .files   = *files,
+                .ffree   = *ffree,
+                .namemax = *namemax,
+            };
+        }
         }
 
         return std::nullopt;
@@ -825,6 +869,7 @@ namespace madbfs::rpc
         case Procedure::Read: return "Read";
         case Procedure::Write: return "Write";
         case Procedure::Ping: return "Ping";
+        case Procedure::Statfs: return "Statfs";
         }
 
         return "Unknown";

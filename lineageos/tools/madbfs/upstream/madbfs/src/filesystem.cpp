@@ -884,6 +884,11 @@ namespace madbfs
         return dir.insert(std::move(node), false).transform(sink_void);
     }
 
+    AExpect<rpc::resp::Statfs> Filesystem::statfs(path::Path path)
+    {
+        co_return co_await m_connection.statfs(path);
+    }
+
     AExpect<void> Filesystem::initialize(path::Path path)
     {
         if (auto stat = co_await m_connection.stat(path::Path{}); stat.has_value()) {

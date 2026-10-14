@@ -334,6 +334,13 @@ namespace madbfs
          */
         AExpect<usize> write(u64 fd, Span<const char> in, off_t offset);
 
+        /**
+         * @brief Get the space of the filesystem that holds a path on the device.
+         *
+         * @param path Path on the device.
+         */
+        AExpect<rpc::resp::Statfs> statfs(path::Path path);
+
         // ---------------
     private:
         /**

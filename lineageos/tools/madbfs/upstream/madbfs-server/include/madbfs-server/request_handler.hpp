@@ -27,6 +27,7 @@ namespace madbfs::server
         rpc::ResponseResult handle_req(rpc::req::Read req);
         rpc::ResponseResult handle_req(rpc::req::Write req);
         rpc::ResponseResult handle_req(rpc::req::Ping req);
+        rpc::ResponseResult handle_req(rpc::req::Statfs req);
 
     private:
         bool m_renameat2_impl       = true;

@@ -473,6 +473,11 @@ namespace
             co_return res.transform([&] { return rpc::resp::Ping{ .num = req.num }; });
         }
 
+        AExpect<rpc::Response> handle_req(rpc::req::Statfs)
+        {
+            co_return Unexpect{ Errc::function_not_supported };
+        }
+
     private:
         using FdMap = std::unordered_map<u64, String>;
 
