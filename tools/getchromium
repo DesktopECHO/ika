@@ -10,7 +10,7 @@ import time
 
 STORAGE_URL = "https://commondatastorage.googleapis.com/chromium-browser-snapshots"
 # The browser APK (~0.4 GB) is kept on disk, so a factory reset reinstalls it.
-CHROMIUM_APK = os.environ.get("IKA_CHROMIUM_APK") or os.path.expanduser("~/ika/Chromium.apk")
+CHROMIUM_APK = os.environ.get("IKA_CHROMIUM_APK") or os.path.expanduser("~/ika/apps/Chromium.apk")
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 DOWNLOAD_PROGRESS_DOT_PERCENT = 20
 DOWNLOAD_PROGRESS_UNKNOWN_CHUNKS = 2

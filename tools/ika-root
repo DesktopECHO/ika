@@ -35,8 +35,8 @@ CHROMIUM_INSTALL_STAMP="${CVD_HOME_DIR}/chromium-installed-cvd-1"
 ADB_BIN="${CVD_HOST_OUT}/bin/adb"
 FASTBOOT_BIN="${CVD_HOST_OUT}/bin/fastboot"
 MAGISK_RELEASES_URL="https://github.com/topjohnwu/Magisk/releases"
-# The latest Magisk APK is kept next to the VM, like Chromium.apk.
-MAGISK_APK_DIR="${CVD_HOME_DIR}"
+# The latest Magisk APK is kept in ~/ika/apps, like Chromium.apk.
+MAGISK_APK_DIR="${CVD_HOME_DIR}/apps"
 GUEST_STAGE_DIR="/data/local/tmp/ika-magisk"
 # Installed in /data/adb/magisk, as the Magisk app's direct install does.
 MAGISK_BINARIES=(busybox magisk magiskboot magiskinit magiskpolicy init-ld)
