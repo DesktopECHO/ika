@@ -362,7 +362,7 @@ def extract_browser_apk(snapshot_zip):
     member = select_browser_apk(snapshot_zip.namelist())
     with snapshot_zip.open(member) as source:
         copy_with_progress(source, CHROMIUM_APK, snapshot_zip.getinfo(member).file_size)
-    print(f" {CHROMIUM_APK}")
+    print(" OK")
 
 def download_browser_apk(prefix, revision):
     # Fetch only the browser APK out of the snapshot zip: the zip also carries
