@@ -8,6 +8,7 @@ import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.content.IContentProvider;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.IBinder;
@@ -26,6 +27,7 @@ public final class ActivityManager {
     private Method startActivityAsUserMethod;
     private Method forceStopPackageMethod;
     private Method broadcastIntentMethod;
+    private Method getConfigurationMethod;
 
     static ActivityManager create() {
         try {
@@ -187,6 +189,18 @@ public final class ActivityManager {
             method.invoke(manager, null, intent, null, null, 0, null, null, null, -1, null, true, false, /* userId */ -2);
         } catch (Throwable e) {
             Ln.e("Could not invoke method", e);
+        }
+    }
+
+    public Configuration getConfiguration() {
+        try {
+            if (getConfigurationMethod == null) {
+                getConfigurationMethod = manager.getClass().getMethod("getConfiguration");
+            }
+            return (Configuration) getConfigurationMethod.invoke(manager);
+        } catch (ReflectiveOperationException e) {
+            Ln.e("Could not invoke method", e);
+            return null;
         }
     }
 }

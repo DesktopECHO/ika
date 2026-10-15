@@ -17,6 +17,7 @@ enum sc_device_msg_type {
     DEVICE_MSG_TYPE_UHID_OUTPUT,
     DEVICE_MSG_TYPE_DISPLAY_READY,
     DEVICE_MSG_TYPE_APP_ENDED,
+    DEVICE_MSG_TYPE_THEME_BACKGROUND,
 };
 
 struct sc_device_msg {
@@ -38,6 +39,9 @@ struct sc_device_msg {
             uint16_t width;
             uint16_t height;
         } display_ready;
+        struct {
+            uint32_t color; // 0xAARRGGBB
+        } theme_background;
     };
 };
 

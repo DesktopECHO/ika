@@ -364,4 +364,18 @@ public final class WindowManager {
             return false;
         }
     }
+
+    /**
+     * Make the removal of a display finish its activities, instead of moving them to the main display.
+     */
+    public boolean setDisplayRemoveDestroysContent(int displayId) {
+        try {
+            // WindowManager.REMOVE_CONTENT_MODE_DESTROY
+            manager.getClass().getMethod("setRemoveContentMode", int.class, int.class).invoke(manager, displayId, 2);
+            return true;
+        } catch (ReflectiveOperationException e) {
+            Ln.e("Could not set the display remove content mode", e);
+            return false;
+        }
+    }
 }

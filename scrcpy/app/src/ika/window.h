@@ -46,6 +46,9 @@ struct sc_ika_window {
     int snap_width;
     int snap_height;
 
+    // The border of a borderless window
+    uint8_t border_color[3];
+
     // A left click started in the corner of a fullscreen/maximized window
     bool corner_press;
     sc_tick corner_press_tick;
@@ -105,6 +108,11 @@ sc_ika_window_handle_event(struct sc_ika_window *iw, const SDL_Event *event);
 // Draw the border of a borderless window, around the content
 void
 sc_ika_window_render_border(struct sc_ika_window *iw, SDL_Renderer *renderer);
+
+// Derive the border color from the background color of the content
+void
+sc_ika_window_set_border_from_background(struct sc_ika_window *iw, uint8_t r,
+                                         uint8_t g, uint8_t b);
 
 // The size to restore the window content to: its current size if windowed
 struct sc_size

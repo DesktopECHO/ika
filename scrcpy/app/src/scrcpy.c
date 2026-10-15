@@ -475,6 +475,7 @@ scrcpy(struct scrcpy_options *options) {
         .capture_orientation_lock = options->capture_orientation_lock,
         .control = options->control,
         .display_id = options->display_id,
+        .cuttlefish_display = options->cuttlefish_display,
         .new_display = options->new_display,
         .display_ime_policy = options->display_ime_policy,
         .video = device_video,
@@ -850,8 +851,12 @@ aoa_complete:
             .camera = options->video_source == SC_VIDEO_SOURCE_CAMERA,
             .flex_display = options->flex_display,
             .raw = cuttlefish,
+            .app_window = cuttlefish && options->cuttlefish_display,
             .window_state_file = options->window_state_file,
             .game_session = options->ika_game_session,
+#ifndef _WIN32
+            .cf_source = cuttlefish ? &s->cf_source : NULL,
+#endif
             .controller = controller,
             .fp = fp,
             .kp = kp,
@@ -868,6 +873,8 @@ aoa_complete:
             .window_width = options->window_width,
             .window_height = options->window_height,
             .background_color = options->background_color,
+            .background_follows_theme = !options->background_color_set
+                                     && !options->ika_game_session,
             .window_aspect_ratio_lock = options->window_aspect_ratio_lock,
             .window_borderless = options->window_borderless,
             .render_fit = options->render_fit,
@@ -935,9 +942,18 @@ aoa_complete:
 #ifndef _WIN32
     if (cuttlefish) {
         assert(screen_initialized);
+        // An app window opens at once (its app starts once the window has sent
+        // its size), the console on the first frame
+        struct sc_size open_size = {0, 0};
+        if (options->cuttlefish_display) {
+            open_size.width = options->window_width ? options->window_width
+                                                    : 1280;
+            open_size.height = options->window_height ? options->window_height
+                                                      : 720;
+        }
         if (!sc_cf_source_init(&s->cf_source,
                                options->cuttlefish_frames_socket,
-                               options->display_id)) {
+                               options->cuttlefish_display, open_size)) {
             goto end;
         }
         cf_source_initialized = true;

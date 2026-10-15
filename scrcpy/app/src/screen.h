@@ -30,6 +30,8 @@
 # define SC_DISPLAY_FORCE_OPENGL_CORE_PROFILE
 #endif
 
+struct sc_cf_source;
+
 struct sc_screen {
     struct sc_frame_sink frame_sink; // frame sink trait
 
@@ -55,12 +57,19 @@ struct sc_screen {
     const char *window_state_file;
     bool game_session;
     bool game_session_fullscreen; // the game session went fullscreen
+    // The source of Cuttlefish frames, told when the window is hidden so that
+    // it stops receiving frames (NULL without Cuttlefish frames)
+    struct sc_cf_source *cf_source;
+    bool window_minimized;
+    bool window_hidden;
+    bool window_occluded;
 
     struct sc_screen_bg_color {
         uint8_t r;
         uint8_t g;
         uint8_t b;
     } bg;
+    bool bg_follows_theme;
     // Ika: in pixel mode, the color of the top-right pixel of the last frame,
     // used around the content instead of bg
     struct sc_screen_bg_color content_bg;
@@ -140,8 +149,12 @@ struct sc_screen_params {
     bool camera;
     bool flex_display;
     bool raw;
+    // App window: the device starts the app on a display of its own, once
+    // it has the window size
+    bool app_window;
     const char *window_state_file;
     bool game_session;
+    struct sc_cf_source *cf_source;
 
     struct sc_controller *controller;
     struct sc_file_pusher *fp;
@@ -163,6 +176,9 @@ struct sc_screen_params {
     uint16_t window_height;
 
     uint32_t background_color;
+    // Ika: replace the background color by the background of the Android
+    // theme, once the device sends it
+    bool background_follows_theme;
 
     bool window_aspect_ratio_lock;
     bool window_borderless;

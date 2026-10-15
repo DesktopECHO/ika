@@ -1,0 +1,49 @@
+Patch summary:
+No recents or home on displays without system decorations (app windows).
+
+diff --git a/quickstep/src/com/android/quickstep/OverviewCommandHelper.kt b/quickstep/src/com/android/quickstep/OverviewCommandHelper.kt
+--- a/quickstep/src/com/android/quickstep/OverviewCommandHelper.kt
++++ b/quickstep/src/com/android/quickstep/OverviewCommandHelper.kt
+@@ -20,11 +20,13 @@ import android.animation.AnimatorListenerAdapter
+ import android.annotation.ElapsedRealtimeLong
+ import android.content.Intent
+ import android.graphics.PointF
++import android.os.RemoteException
+ import android.os.Trace
+ import android.util.Log
+ import android.view.Display.DEFAULT_DISPLAY
+ import android.view.KeyEvent
+ import android.view.View
++import android.view.WindowManagerGlobal
+ import android.window.TransitionInfo
+ import androidx.annotation.BinderThread
+ import androidx.annotation.UiThread
+@@ -112,6 +114,15 @@ constructor(
+     private fun getVisibleRecentsView(displayId: Int) =
+         getContainerInterface(displayId)?.getVisibleRecentsView<RecentsView<*, *>>()
+ 
++    private fun displayShowsSystemDecors(displayId: Int): Boolean {
++        if (displayId == DEFAULT_DISPLAY) return true
++        return try {
++            WindowManagerGlobal.getWindowManagerService()?.shouldShowSystemDecors(displayId) ?: true
++        } catch (e: RemoteException) {
++            true
++        }
++    }
++
+     /**
+      * Adds a command to be executed next, after all pending tasks are completed. Max commands that
+      * can be queued is [.MAX_QUEUE_SIZE]. Requests after reaching that limit will be silently
+@@ -127,6 +138,12 @@ constructor(
+         displayId: Int = DEFAULT_DISPLAY,
+         isLastOfBatch: Boolean = true,
+     ): CommandInfo? {
++        if (!displayShowsSystemDecors(displayId)) {
++            // Ika: a display without system decorations (an app window) has no launcher: recents
++            // or home there would start one on the default display, behind its launcher
++            Log.d(TAG, "Ignoring $type on display $displayId without system decorations")
++            return null
++        }
+         if (commandQueue.size >= MAX_QUEUE_SIZE) {
+             OverviewCommandHelperProtoLogProxy.logCommandQueueFull(type, commandQueue)
+             return null

@@ -8,6 +8,7 @@
 #include <libavutil/buffer.h>
 #include <libavutil/frame.h>
 
+#include "coords.h"
 #include "trait/frame_source.h"
 #include "util/thread.h"
 
@@ -27,7 +28,12 @@ struct sc_cf_source {
     struct sc_frame_source frame_source; // frame source trait
 
     char *socket_path;
-    uint32_t display_id;
+    uint32_t display_number; // the Cuttlefish (crosvm) display number
+    // If set, the window is opened at this size as soon as the socket is
+    // connected, instead of on the first frame: the display of a new app window
+    // may present nothing until the app is started, which waits for the window
+    // size
+    struct sc_size open_size;
 
     sc_thread thread;
     sc_mutex mutex;
@@ -42,17 +48,28 @@ struct sc_cf_source {
     size_t pool_size;
     AVFrame *frame;
     bool sinks_open;
+
+    // The window is hidden: the server keeps the frames instead of sending them
+    // (protected by mutex)
+    bool window_hidden;
 };
 
 bool
 sc_cf_source_init(struct sc_cf_source *source, const char *socket_path,
-                  uint32_t display_id);
+                  uint32_t display_number, struct sc_size open_size);
 
 bool
 sc_cf_source_start(struct sc_cf_source *source);
 
 void
 sc_cf_source_stop(struct sc_cf_source *source);
+
+/**
+ * Tell the server whether the window is hidden (minimized or occluded): it
+ * then stops sending frames, and sends the latest one when the window is shown.
+ */
+void
+sc_cf_source_set_window_hidden(struct sc_cf_source *source, bool hidden);
 
 void
 sc_cf_source_join(struct sc_cf_source *source);

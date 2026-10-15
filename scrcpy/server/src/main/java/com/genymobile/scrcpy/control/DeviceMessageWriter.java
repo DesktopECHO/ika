@@ -46,6 +46,9 @@ public class DeviceMessageWriter {
                 break;
             case DeviceMessage.TYPE_APP_ENDED:
                 break;
+            case DeviceMessage.TYPE_THEME_BACKGROUND:
+                dos.writeInt(msg.getId());
+                break;
             default:
                 throw new ControlProtocolException("Unknown event type: " + type);
         }
