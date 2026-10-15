@@ -30,6 +30,11 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** Supports qcow2 version 3 zero clusters (L2 entry bit 0). Discarding or write-zeroing a full cluster of a qcow2 image that has a backing file now frees the cluster's storage and marks it zero, instead of allocating a cluster and writing zeroes into it. Zero clusters read as zeroes rather than from the backing file, and a later write into one starts from zeroes.
 - **Why:** Cuttlefish's `overlay.img` is a qcow2 over `os_composite.img`, so every guest discard took that allocate-and-zero path. A factory reset (Settings, recovery, RescueParty) discards the whole userdata partition, which grew `overlay.img` by the partition size (64 GB by default) and filled the host disk; an `fstrim` of `/data` did the same for its free space.
 
+#### `PATCH.gpu_display-nonblocking-dispatch.patch`
+- **Targets:** `gpu_display` crate. File: `src/display_wl.c`.
+- **What it does:** `dwl_context_dispatch()` reads the Wayland connection only when data is waiting (`wl_display_prepare_read`, a zero-timeout `poll`, `wl_display_read_events`) and dispatches what is pending, instead of calling the blocking `wl_display_dispatch()`.
+- **Why:** The GPU worker dispatches display events once per wake when the display fd was readable, after handling the other events of that wake. A GPU control request in the same wake (adding or removing a display, as every Ika app window does) makes a `wl_display_roundtrip()` that reads and dispatches those events first, and `wl_display_dispatch()` then blocked the worker until the compositor (ika_stream) sent something, which it only does in reply to the worker. The guest's GPU requests stopped being processed: SurfaceFlinger froze, every later display request hung in crosvm's control loop, and crosvm did not exit when the guest rebooted.
+
 #### `PATCH.crosvm-resize-display.patch`
 - **Targets:** `crosvm_bin` and the source `git_repository`. File: `devices/src/virtio/gpu/virtio_gpu.rs`.
 - **What it does:** Adds `VirtioGpu::resize_display(display_id, DisplayParameters)` that updates an existing scanout's `width`, `height`, and stored `display_params`, then flips `scanouts_updated` so the GPU thread re-syncs.
