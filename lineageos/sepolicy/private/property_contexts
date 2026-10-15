@@ -1,0 +1,2 @@
+# Ika's interface mode, "tv" or "desktop", which IkaMode's switcher sets.
+persist.sys.ika.mode    u:object_r:ika_mode_prop:s0 exact string

@@ -1,0 +1,11 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+// In both modes: the Leanback keyboard is not one of the keyboards Android
+// enables by itself. IkaMode makes it the keyboard of TV mode.
+runtime_resource_overlay {
+    name: "LineageDesktopLeanbackImeOverlay",
+    product_specific: true,
+    sdk_version: "current",
+}

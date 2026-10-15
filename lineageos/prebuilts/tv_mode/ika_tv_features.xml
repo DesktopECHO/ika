@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Features of Ika's TV mode, read by SystemConfig only when
+     Android boots with persist.sys.ika.mode=tv (frameworks-base-ika-mode.patch),
+     that is, with the TV launcher as the Home app. IkaMode also tells from
+     leanback which mode Android booted in.
+
+     From device/google/atv/permissions/tv_core_hardware.xml: leanback, which
+     also puts the UI in television mode (UiModeManager) and lets apps show
+     their TV activities; leanback_only, which tells apps and Google Play that
+     the device runs TV apps only, as a TV does (Play may then hide apps
+     without TV support, and phone apps already installed may show as not
+     compatible there); and live TV, which starts TvInputManagerService.
+     Left out: the deprecated android.hardware.type.television, which
+     leanback replaces. The touchscreen stays, for the desktop's apps.
+     Freeform windowing is the desktop's and is turned off for the 10-foot
+     UI. -->
+<permissions>
+    <feature name="android.software.leanback" />
+    <feature name="android.software.leanback_only" />
+    <feature name="android.software.live_tv" />
+    <unavailable-feature name="android.software.freeform_window_management" />
+</permissions>

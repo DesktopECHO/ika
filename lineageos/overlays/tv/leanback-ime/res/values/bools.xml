@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Otherwise the input method service could enable it, or pick it as
+         the default keyboard, in desktop mode too. -->
+    <bool name="im_is_default">false</bool>
+</resources>

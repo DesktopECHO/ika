@@ -1,0 +1,214 @@
+Patch summary:
+Support Ika's interface modes. persist.sys.ika.mode ("tv" or "desktop"), which
+IkaMode's switcher sets, takes effect at boot. SystemConfig also reads
+etc/sysconfig/ika_<mode> and etc/permissions/ika_<mode> on /system_ext, which
+hold TV mode's features, so that they exist only in a TV boot. PackageManager
+scans the Android TV SystemUI, package installer and framework stubs only in
+TV mode, and the desktop SystemUI and package installer only in desktop mode
+(PackageInstaller_tv no longer overrides PackageInstaller at build time), and
+keeps a separate package parser cache in TV mode: overlays gated on the mode
+with requiredSystemPropertyName are skipped while parsing, but a cached parse
+from the other mode would install them anyway. In TV mode the freeform
+developer setting, which Cuttlefish's set_adb.sh keeps on for the desktop, no
+longer turns freeform windowing back on.
+
+Where the image also has the Android TV build of the Play Store (Tubesky,
+which images with MindTheGapps carry next to the phone build, Phonesky),
+PackageManager scans Tubesky only in TV mode and Phonesky only in desktop
+mode, as the phone Play Store refuses to run on a TV. Images without Tubesky
+keep the phone Play Store in both modes.
+
+diff --git a/packages/PackageInstaller/Android.bp b/packages/PackageInstaller/Android.bp
+index 0f8c690633cc..4c85f8b96215 100644
+--- a/packages/PackageInstaller/Android.bp
++++ b/packages/PackageInstaller/Android.bp
+@@ -89,7 +89,8 @@ android_app {
+     name: "PackageInstaller_tv",
+     defaults: ["package_installer_defaults"],
+ 
+-    overrides: ["PackageInstaller"],
++    // Ika: installed next to PackageInstaller; PackageManager picks the one of the
++    // interface mode at boot (InstallPackageHelper).
+ 
+     aaptflags: ["--product tv"],
+ }
+diff --git a/services/core/java/com/android/server/SystemConfig.java b/services/core/java/com/android/server/SystemConfig.java
+index 2dca73ff7864..4abc07f98689 100644
+--- a/services/core/java/com/android/server/SystemConfig.java
++++ b/services/core/java/com/android/server/SystemConfig.java
+@@ -111,6 +111,9 @@ public class SystemConfig {
+     // property for runtime configuration differentation in product
+     private static final String PRODUCT_SKU_PROPERTY = "ro.boot.hardware.sku";
+ 
++    // Ika: the interface mode, "tv" or "desktop", which IkaMode's switcher sets.
++    private static final String IKA_MODE_PROPERTY = "persist.sys.ika.mode";
++
+     private static final ArrayMap<String, ArraySet<String>> EMPTY_PERMISSIONS =
+             new ArrayMap<>();
+ 
+@@ -776,6 +779,21 @@ public class SystemConfig {
+         readPermissions(parser, Environment.buildPath(
+                 Environment.getSystemExtDirectory(), "etc", "permissions"), ALLOW_ALL);
+ 
++        // Ika: configuration of one interface mode, read only when Android boots in
++        // that mode: TV mode adds the leanback and live TV features and drops
++        // freeform windowing. It lives in etc/sysconfig/ika_<mode> and
++        // etc/permissions/ika_<mode>.
++        final String ikaMode = SystemProperties.get(IKA_MODE_PROPERTY, "");
++        if (ikaMode.matches("[a-z]+")) {
++            for (String configDir : new String[] {"sysconfig", "permissions"}) {
++                final File ikaModeDir = Environment.buildPath(
++                        Environment.getSystemExtDirectory(), "etc", configDir, "ika_" + ikaMode);
++                if (ikaModeDir.isDirectory()) {
++                    readPermissions(parser, ikaModeDir, ALLOW_ALL);
++                }
++            }
++        }
++
+         // Skip loading configuration from apex if it is not a system process.
+         if (!isSystemProcess()) {
+             return;
+diff --git a/services/core/java/com/android/server/pm/InstallPackageHelper.java b/services/core/java/com/android/server/pm/InstallPackageHelper.java
+index f3c62ebc4f48..4d4c2018f63c 100644
+--- a/services/core/java/com/android/server/pm/InstallPackageHelper.java
++++ b/services/core/java/com/android/server/pm/InstallPackageHelper.java
+@@ -139,6 +139,7 @@ import android.os.Process;
+ import android.os.RemoteException;
+ import android.os.SELinux;
+ import android.os.SystemClock;
++import android.os.SystemProperties;
+ import android.os.Trace;
+ import android.os.UserHandle;
+ import android.os.UserManager;
+@@ -214,6 +215,21 @@ final class InstallPackageHelper {
+     private static final long WAKELOCK_TIMEOUT_MS = WATCHDOG_TIMEOUT + 1000 * 60;
+     private static final String INSTALLER_WAKE_LOCK_TAG = "installer:packages";
+ 
++    // Ika: apps of one interface mode only (persist.sys.ika.mode, which IkaMode's switcher sets),
++    // as "<app dir>/<module>" on their partition. TV mode runs the Android TV SystemUI and
++    // package installer, which have the package names of the desktop's, and the TV stubs for
++    // intents a TV does not handle. The other mode's are not scanned, so a mode switch takes
++    // effect at the next boot.
++    private static final Set<String> IKA_TV_ONLY_APPS = Set.of(
++            "priv-app/TvSystemUI", "priv-app/PackageInstaller_tv", "app/TvFrameworkPackageStubs",
++            "priv-app/Tubesky");
++    private static final Set<String> IKA_DESKTOP_ONLY_APPS = Set.of(
++            "priv-app/SystemUI", "priv-app/PackageInstaller");
++    // Ika: desktop apps that TV mode replaces only where the image also has their TV build,
++    // next to them: the phone Play Store, whose TV build (Tubesky) MindTheGapps images carry.
++    private static final Map<String, String> IKA_DESKTOP_APPS_WITH_TV_BUILD = Map.of(
++            "priv-app/Phonesky", "Tubesky");
++
+     private final PackageManagerService mPm;
+     private final AppDataHelper mAppDataHelper;
+     private final BroadcastHelper mBroadcastHelper;
+@@ -3853,6 +3869,23 @@ final class InstallPackageHelper {
+         }
+     }
+ 
++    /** Ika: whether FILE is an app of the interface mode Android did not boot in. */
++    private static boolean isOtherIkaModeApp(File file) {
++        final File appDir = file.getParentFile();
++        if (appDir == null) {
++            return false;
++        }
++        final String app = appDir.getName() + "/" + file.getName();
++        if (!"tv".equals(SystemProperties.get("persist.sys.ika.mode"))) {
++            return IKA_TV_ONLY_APPS.contains(app);
++        }
++        if (IKA_DESKTOP_ONLY_APPS.contains(app)) {
++            return true;
++        }
++        final String tvBuild = IKA_DESKTOP_APPS_WITH_TV_BUILD.get(app);
++        return tvBuild != null && new File(appDir, tvBuild).isDirectory();
++    }
++
+     @GuardedBy({"mPm.mInstallLock", "mPm.mLock"})
+     private int scanDirectoryForFilesToParse(ParallelPackageParser parallelPackageParser,
+             ScanParams scanParams) {
+@@ -3877,6 +3910,9 @@ final class InstallPackageHelper {
+                 // Ignore entries which are not packages
+                 continue;
+             }
++            if (isOtherIkaModeApp(file)) {
++                continue;
++            }
+             if ((scanParams.scanFlags & SCAN_DROP_CACHE) != 0) {
+                 final PackageCacher cacher = new PackageCacher(mPm.getCacheDir(),
+                         mPm.mPackageParserCallback);
+@@ -3916,6 +3952,9 @@ final class InstallPackageHelper {
+                 // Ignore entries which are not packages
+                 continue;
+             }
++            if (isOtherIkaModeApp(file)) {
++                continue;
++            }
+             if ((scanParams.scanFlags & SCAN_DROP_CACHE) != 0) {
+                 final PackageCacher cacher = new PackageCacher(mPm.getCacheDir(),
+                         mPm.mPackageParserCallback);
+diff --git a/services/core/java/com/android/server/pm/PackageManagerServiceUtils.java b/services/core/java/com/android/server/pm/PackageManagerServiceUtils.java
+index 121dc089d666..96e1780c9de6 100644
+--- a/services/core/java/com/android/server/pm/PackageManagerServiceUtils.java
++++ b/services/core/java/com/android/server/pm/PackageManagerServiceUtils.java
+@@ -1301,12 +1301,20 @@ public class PackageManagerServiceUtils {
+         // There are several items that need to be combined together to safely
+         // identify cached items. In particular, changing the value of certain
+         // feature flags should cause us to invalidate any caches.
+-        final String cacheName = FORCE_PACKAGE_PARSED_CACHE_ENABLED ? "debug"
++        final String defaultCacheName = FORCE_PACKAGE_PARSED_CACHE_ENABLED ? "debug"
+                 : PackagePartitions.FINGERPRINT;
++        // Ika: overlays gated on persist.sys.ika.mode by requiredSystemPropertyName are installed
++        // in one interface mode only, and a cached parse would skip that check. TV mode keeps a
++        // cache of its own next to the default one, so a mode switch neither applies the other
++        // mode's overlays nor reparses every package.
++        final String ikaTvCacheName = defaultCacheName + "-ika_tv";
++        final String cacheName = "tv".equals(SystemProperties.get("persist.sys.ika.mode"))
++                ? ikaTvCacheName : defaultCacheName;
+ 
+         // Reconcile cache directories, keeping only what we'd actually use.
+         for (File cacheDir : FileUtils.listFilesOrEmpty(cacheBaseDir)) {
+-            if (Objects.equals(cacheName, cacheDir.getName())) {
++            if (Objects.equals(defaultCacheName, cacheDir.getName())
++                    || Objects.equals(ikaTvCacheName, cacheDir.getName())) {
+                 Slog.d(TAG, "Keeping known cache " + cacheDir.getName());
+             } else {
+                 Slog.d(TAG, "Destroying unknown cache " + cacheDir.getName());
+diff --git a/services/core/java/com/android/server/wm/ActivityTaskManagerService.java b/services/core/java/com/android/server/wm/ActivityTaskManagerService.java
+index c695279f5b59..aa879d38fa78 100644
+--- a/services/core/java/com/android/server/wm/ActivityTaskManagerService.java
++++ b/services/core/java/com/android/server/wm/ActivityTaskManagerService.java
+@@ -926,10 +926,13 @@ public class ActivityTaskManagerService extends IActivityTaskManager.Stub {
+     }
+ 
+     public void retrieveSettings(ContentResolver resolver) {
++        // Ika: TV mode runs apps fullscreen. The desktop keeps the freeform developer
++        // setting on, which would otherwise bring freeform windowing back.
+         final boolean freeformWindowManagement =
+                 mContext.getPackageManager().hasSystemFeature(FEATURE_FREEFORM_WINDOW_MANAGEMENT)
+-                        || Settings.Global.getInt(
+-                        resolver, DEVELOPMENT_ENABLE_FREEFORM_WINDOWS_SUPPORT, 0) != 0;
++                        || (Settings.Global.getInt(
++                        resolver, DEVELOPMENT_ENABLE_FREEFORM_WINDOWS_SUPPORT, 0) != 0
++                        && !"tv".equals(SystemProperties.get("persist.sys.ika.mode")));
+ 
+         final boolean supportsMultiWindow = ActivityTaskManager.supportsMultiWindow(mContext);
+         final boolean supportsPictureInPicture = supportsMultiWindow &&
+diff --git a/services/core/java/com/android/server/wm/WindowManagerService.java b/services/core/java/com/android/server/wm/WindowManagerService.java
+index d6862c296fe4..3c8a18e66ca6 100644
+--- a/services/core/java/com/android/server/wm/WindowManagerService.java
++++ b/services/core/java/com/android/server/wm/WindowManagerService.java
+@@ -998,9 +998,12 @@ public class WindowManagerService extends IWindowManager.Stub
+ 
+         void updateFreeformWindowManagement() {
+             ContentResolver resolver = mContext.getContentResolver();
++            // Ika: as in ActivityTaskManagerService#retrieveSettings, the freeform developer
++            // setting does not apply in TV mode.
+             final boolean freeformWindowManagement = mContext.getPackageManager().hasSystemFeature(
+-                    FEATURE_FREEFORM_WINDOW_MANAGEMENT) || Settings.Global.getInt(
+-                    resolver, DEVELOPMENT_ENABLE_FREEFORM_WINDOWS_SUPPORT, 0) != 0;
++                    FEATURE_FREEFORM_WINDOW_MANAGEMENT) || (Settings.Global.getInt(
++                    resolver, DEVELOPMENT_ENABLE_FREEFORM_WINDOWS_SUPPORT, 0) != 0
++                    && !"tv".equals(SystemProperties.get("persist.sys.ika.mode")));
+ 
+             if (mAtmService.mSupportsFreeformWindowManagement != freeformWindowManagement) {
+                 mAtmService.mSupportsFreeformWindowManagement = freeformWindowManagement;

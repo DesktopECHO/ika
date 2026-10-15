@@ -1,0 +1,17 @@
+Patch summary:
+Give the Home role a configurable default holder, config_defaultHome
+(frameworks-base-default-home-role.patch), like the browser, dialer and SMS
+roles. A default holder is granted only when the role is first set up, so the
+user's later choice of Home app stands.
+
+diff --git a/PermissionController/res/xml/roles.xml b/PermissionController/res/xml/roles.xml
+--- a/PermissionController/res/xml/roles.xml
++++ b/PermissionController/res/xml/roles.xml
+@@ -436,6 +436,7 @@
+     <role
+         name="android.app.role.HOME"
+         behavior="HomeRoleBehavior"
++        defaultHolders="config_defaultHome"
+         description="@string/role_home_description"
+         exclusive="true"
+         exclusivity="user"

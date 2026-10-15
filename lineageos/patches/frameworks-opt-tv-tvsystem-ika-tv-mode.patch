@@ -1,0 +1,19 @@
+Patch summary:
+Start the TV key input service of tv-services only when Ika boots in TV mode
+(persist.sys.ika.mode=tv): its overlay, which lists the service, is skipped in
+desktop mode.
+
+diff --git a/services/TvServicesOverlay/AndroidManifest.xml b/services/TvServicesOverlay/AndroidManifest.xml
+index 57ff368..f3370bc 100644
+--- a/services/TvServicesOverlay/AndroidManifest.xml
++++ b/services/TvServicesOverlay/AndroidManifest.xml
+@@ -2,5 +2,8 @@
+     package="com.android.tv.services.overlay"
+     android:versionCode="1"
+     android:versionName="1.0">
+-    <overlay android:targetPackage="android" android:priority="1" android:isStatic="true" />
++    <!-- Ika: TvKeyInputManagerService runs only in TV mode (persist.sys.ika.mode=tv). -->
++    <overlay android:targetPackage="android" android:priority="1" android:isStatic="true"
++        android:requiredSystemPropertyName="persist.sys.ika.mode"
++        android:requiredSystemPropertyValue="tv" />
+ </manifest>

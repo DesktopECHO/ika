@@ -1,0 +1,30 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.lineageos.desktop.mode"
+    android:sharedUserId="android.uid.system">
+
+    <!-- Persistent, so that it applies Ika's mode as Android starts. -->
+    <application
+        android:name=".IkaModeApplication"
+        android:label="@string/app_name"
+        android:persistent="true"
+        android:directBootAware="true"
+        android:allowBackup="false"
+        android:supportsRtl="true">
+        <!-- Desktop/TV, in the desktop's app drawer, the host's app menu and
+             the TV launcher's apps: chooses the desktop or a TV launcher. -->
+        <activity
+            android:name=".SwitcherActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:icon="@drawable/ic_switch"
+            android:label="@string/app_name"
+            android:taskAffinity=""
+            android:theme="@style/RestartDialogTheme">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

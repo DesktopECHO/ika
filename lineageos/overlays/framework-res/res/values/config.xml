@@ -12,6 +12,9 @@
     <bool name="config_multi_audio_focus_enabled_default">true</bool>
     <bool name="config_showHomeBehindDesktop">true</bool>
     <bool name="config_disableLockscreenByDefault">true</bool>
+    <!-- The desktop shell holds the Home role on a new device; choosing the TV
+         launcher instead switches to TV mode (IkaMode). -->
+    <string name="config_defaultHome" translatable="false">com.android.launcher3</string>
 
     <!-- Make freeform / multi-window / per-display focus product-owned instead
          of relying on the Cuttlefish base. Closes the implicit contract the

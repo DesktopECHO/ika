@@ -1,0 +1,61 @@
+Patch summary:
+Install the Android TV framework, network stack, settings provider and Wi-Fi
+overlays only when Ika boots in TV mode (persist.sys.ika.mode=tv, set by
+IkaMode's Desktop/TV switcher), so that one image also boots the unchanged
+desktop.
+
+diff --git a/overlay/TvFrameworkOverlay/AndroidManifest.xml b/overlay/TvFrameworkOverlay/AndroidManifest.xml
+index 7a7b69c..9198892 100644
+--- a/overlay/TvFrameworkOverlay/AndroidManifest.xml
++++ b/overlay/TvFrameworkOverlay/AndroidManifest.xml
+@@ -23,6 +23,8 @@
+     <overlay
+         android:targetPackage="android"
+         android:priority="0"
+-        android:isStatic="true" />
++        android:isStatic="true"
++        android:requiredSystemPropertyName="persist.sys.ika.mode"
++        android:requiredSystemPropertyValue="tv" />
+ 
+ </manifest>
+diff --git a/overlay/TvNetworkStackOverlay/AndroidManifest.xml b/overlay/TvNetworkStackOverlay/AndroidManifest.xml
+index c518f56..a102350 100644
+--- a/overlay/TvNetworkStackOverlay/AndroidManifest.xml
++++ b/overlay/TvNetworkStackOverlay/AndroidManifest.xml
+@@ -24,5 +24,7 @@
+         android:targetPackage="com.android.networkstack"
+         android:targetName="NetworkStackConfig"
+         android:priority="0"
+-        android:isStatic="true" />
++        android:isStatic="true"
++        android:requiredSystemPropertyName="persist.sys.ika.mode"
++        android:requiredSystemPropertyValue="tv" />
+ </manifest>
+diff --git a/overlay/TvSettingsProviderOverlay/AndroidManifest.xml b/overlay/TvSettingsProviderOverlay/AndroidManifest.xml
+index 413d9ec..b306eeb 100644
+--- a/overlay/TvSettingsProviderOverlay/AndroidManifest.xml
++++ b/overlay/TvSettingsProviderOverlay/AndroidManifest.xml
+@@ -23,6 +23,8 @@
+     <overlay
+         android:targetPackage="com.android.providers.settings"
+         android:priority="0"
+-        android:isStatic="true" />
++        android:isStatic="true"
++        android:requiredSystemPropertyName="persist.sys.ika.mode"
++        android:requiredSystemPropertyValue="tv" />
+ 
+ </manifest>
+diff --git a/overlay/TvWifiOverlay/AndroidManifest.xml b/overlay/TvWifiOverlay/AndroidManifest.xml
+index 9ea1edf..422cdf6 100644
+--- a/overlay/TvWifiOverlay/AndroidManifest.xml
++++ b/overlay/TvWifiOverlay/AndroidManifest.xml
+@@ -24,6 +24,8 @@
+         android:targetPackage="com.android.wifi.resources"
+         android:targetName="WifiCustomization"
+         android:priority="0"
+-        android:isStatic="true" />
++        android:isStatic="true"
++        android:requiredSystemPropertyName="persist.sys.ika.mode"
++        android:requiredSystemPropertyValue="tv" />
+ 
+ </manifest>
