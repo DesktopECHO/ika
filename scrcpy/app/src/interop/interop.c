@@ -3,9 +3,6 @@
 #include <assert.h>
 
 #include "interop_software.h"
-#ifdef HAVE_VAAPI
-# include "interop_vaapi.h"
-#endif
 #ifdef HAVE_D3D11VA
 # include "interop_d3d11va.h"
 #endif
@@ -18,21 +15,6 @@ struct sc_interop *
 sc_interop_new(enum sc_hwdec_mode hwdec_mode, SDL_Renderer *renderer,
                struct sc_opengl *gl, bool mipmaps) {
     bool any = hwdec_mode == SC_HWDEC_MODE_AUTO;
-
-#ifdef HAVE_VAAPI
-    if (any || hwdec_mode == SC_HWDEC_MODE_VAAPI) {
-        struct sc_interop_vaapi *vaapi =
-            sc_interop_vaapi_new(renderer, gl, mipmaps);
-        if (vaapi) {
-            return &vaapi->interop;
-        }
-        if (!any) {
-            LOGE("VA-API interop unavailable");
-            return NULL;
-        }
-        LOGI("VA-API interop unavailable");
-    }
-#endif
 
 #ifdef HAVE_D3D11VA
     if (any || hwdec_mode == SC_HWDEC_MODE_D3D11VA) {

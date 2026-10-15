@@ -20,22 +20,11 @@ else
     tar xf "$FILENAME"  # First level directory is "$PROJECT_DIR"
 fi
 
-# SCRCPY_FFMPEG_VAAPI=1 builds FFmpeg with VA-API hardware decoding, into its
-# own prefix: crosvm links the default build, which must not depend on libva
-# (scrcpy loads libva at runtime, see app/src/vaapi_shim.c)
-FFMPEG_DIRNAME="$DIRNAME"
-VAAPI=false
-if [[ "${SCRCPY_FFMPEG_VAAPI:-}" == 1 && "$HOST" == linux ]]
-then
-    FFMPEG_DIRNAME="$DIRNAME-vaapi"
-    VAAPI=true
-fi
-
 mkdir -p "$BUILD_DIR/$PROJECT_DIR"
 cd "$BUILD_DIR/$PROJECT_DIR"
 
-mkdir -p "$FFMPEG_DIRNAME"
-cd "$FFMPEG_DIRNAME"
+mkdir -p "$DIRNAME"
+cd "$DIRNAME"
 
 if [[ "$HOST" == win* ]]
 then
@@ -52,7 +41,7 @@ fi
 export PKG_CONFIG_PATH="$INSTALL_DIR/$DIRNAME/lib/pkgconfig:$PKG_CONFIG_PATH"
 
 conf=(
-    --prefix="$INSTALL_DIR/$FFMPEG_DIRNAME"
+    --prefix="$INSTALL_DIR/$DIRNAME"
     --pkg-config-flags="--static"
     --extra-cflags="-O2 -fPIC"
     --disable-programs
@@ -63,6 +52,7 @@ conf=(
     --disable-everything
     --disable-vulkan
     --disable-vdpau
+    --disable-vaapi
     --enable-swresample
     --enable-swscale
     --enable-libdav1d
@@ -85,21 +75,6 @@ conf=(
     --enable-muxer=flac
     --enable-muxer=wav
 )
-
-if [[ "$VAAPI" == true ]]
-then
-    conf+=(
-        --enable-vaapi
-        --enable-libdrm
-        --enable-hwaccel=h264_vaapi
-        --enable-hwaccel=hevc_vaapi
-        --enable-hwaccel=av1_vaapi
-    )
-else
-    conf+=(
-        --disable-vaapi
-    )
-fi
 
 if [[ "$HOST" == linux ]]
 then
