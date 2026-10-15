@@ -99,10 +99,7 @@ from gray.
 - `com.genymobile.scrcpy.IkaAppIcons` renders the icons of the launchable apps
   and lists the games, for `ika app sync`.
 - `app/deps` holds Ika's pinned static FFmpeg, SDL, libusb and dav1d builds,
-  shared with crosvm. scrcpy links a second FFmpeg build with VA-API
-  (`SCRCPY_FFMPEG_VAAPI=1`, in its own prefix), so that app windows decode on
-  the GPU where the driver supports H.264. libva is loaded at runtime
-  (`app/src/vaapi_shim.c`): without it, or without H.264 support in the
-  driver, decoding falls back to software. crosvm keeps the build without
-  VA-API, so it does not depend on libva.
+  shared with crosvm.
+- No VA-API: Ika's windows show raw frames, so scrcpy never decodes video with
+  the GPU; `--hwdec` keeps only the Windows and macOS decoders.
 - App windows are shown 1:1, so their textures have no mipmaps.

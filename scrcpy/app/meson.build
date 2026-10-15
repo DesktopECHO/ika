@@ -114,11 +114,6 @@ if v4l2_support
     src += [ 'src/v4l2_sink.c' ]
 endif
 
-vaapi_support = get_option('vaapi') and host_machine.system() == 'linux'
-if vaapi_support
-    src += [ 'src/interop/interop_vaapi.c' ]
-endif
-
 d3d11va_support = get_option('d3d11va') and host_machine.system() == 'windows'
 if d3d11va_support
     src += [ 'src/interop/interop_d3d11va.c' ]
@@ -156,22 +151,6 @@ dependencies = [
 
 if v4l2_support
     dependencies += dependency('libavdevice', static: static)
-endif
-
-if vaapi_support
-    libdrm_dep = dependency('libdrm')
-    dependencies += libdrm_dep.partial_dependency(compile_args: true,
-                                                  includes: true)
-    if static
-        # libva and libdrm are loaded at runtime by a shim (which only needs
-        # their headers), so that the static binary does not depend on them
-        libva_drm_dep = dependency('libva-drm')
-        dependencies += libva_drm_dep.partial_dependency(compile_args: true,
-                                                         includes: true)
-        # "required: false" because dlopen() may be provided by libc itself
-        dependencies += cc.find_library('dl', required: false)
-        src += [ 'src/vaapi_shim.c' ]
-    endif
 endif
 
 if usb_support
@@ -222,9 +201,6 @@ conf.set('SERVER_DEBUGGER', get_option('server_debugger'))
 
 # enable V4L2 support (linux only)
 conf.set('HAVE_V4L2', v4l2_support)
-
-# enable VA-API hardware decoding (linux only)
-conf.set('HAVE_VAAPI', vaapi_support)
 
 # enable D3D11 hardware decoding (windows only)
 conf.set('HAVE_D3D11VA', d3d11va_support)
