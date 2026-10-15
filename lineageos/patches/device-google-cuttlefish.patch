@@ -572,7 +572,7 @@ diff --git a/shared/set_adb/set_adb.sh b/shared/set_adb/set_adb.sh
 index 67aece73f..931e14695 100644
 --- a/shared/set_adb/set_adb.sh
 +++ b/shared/set_adb/set_adb.sh
-@@ -1,2 +1,64 @@
+@@ -1,2 +1,71 @@
  #!/system/bin/sh
 -settings put global adb_enabled 1
 +
@@ -618,6 +618,10 @@ index 67aece73f..931e14695 100644
 +# com.google.android.gms may be absent when no provider is selected.
 +cmd appops set com.google.android.gms SYSTEM_ALERT_WINDOW allow >/dev/null 2>&1
 +
++# Start each boot without recent apps: Android restores the last session's tasks
++# without windows, and app windows reopen on displays added later.
++am clear-recent-apps >/dev/null 2>&1
++
 +# Keep crash evidence in logcat/dropbox but avoid modal crash-report loops on the desktop.
 +put_global send_action_app_error 0
 +put_global show_first_crash_dialog 0
@@ -636,6 +640,9 @@ index 67aece73f..931e14695 100644
 +    # Settings is not clobbered on the next reboot. (R15)
 +    put_system pointer_speed -7
 +    put_system screen_off_timeout 2147483647
++    # No window blurs: a blurred launcher or taskbar makes SurfaceFlinger compose the console on
++    # the GPU and send it to the host again whenever any app window changes.
++    put_global disable_window_blurs 1
 +    put_global lineage_desktop_provisioned 1
 +fi
 diff --git a/shared/x86_16kb/android-info.txt b/shared/x86_16kb/android-info.txt

@@ -62,3 +62,4 @@ com.android.window.flags/enable_fullscreen_window_controls
 com.android.window.flags/enable_taskbar_connected_displays
 com.android.window.flags/polish_close_wallpaper_includes_open_change
 com.android.window.flags/port_window_size_animation
+android.media.audio/audio_focus_desktop
