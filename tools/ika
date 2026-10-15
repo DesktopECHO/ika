@@ -3055,6 +3055,36 @@ scrcpy_supervisor_cleanup() {
   fi
 }
 
+# scrcpy reaches its server through an "adb forward" of a local port, and adb
+# rebinds a port that is already forwarded. Clients connecting at the same time
+# (app windows opened together from the menu) would take over, and on failure
+# remove, each other's forward, so each supervisor locks a port of its own for
+# as long as it runs.
+SCRCPY_FORWARD_PORT_FIRST=27183
+SCRCPY_FORWARD_PORT_LAST=27299
+
+# Sets the variables named by $1 and $2 to a free forward port and the open
+# file descriptor that holds its lock.
+lock_scrcpy_forward_port() {
+  local -n port_ref="$1"
+  local -n port_fd_ref="$2"
+  local dir="${CVD_TMP_DIR}/scrcpy-ports"
+  local port
+  local fd
+
+  mkdir -p "${dir}" || return 1
+  for (( port = SCRCPY_FORWARD_PORT_FIRST; port <= SCRCPY_FORWARD_PORT_LAST; port++ )); do
+    exec {fd}>"${dir}/${port}.lock" || continue
+    if flock -n "${fd}"; then
+      port_ref="${port}"
+      port_fd_ref="${fd}"
+      return 0
+    fi
+    exec {fd}>&-
+  done
+  return 1
+}
+
 run_scrcpy_supervisor() {
   local adb_serial="$1"
   local initial_fullscreen="$2"
@@ -3070,8 +3100,15 @@ run_scrcpy_supervisor() {
   local fullscreen="${initial_fullscreen}"
   local status
   local started_at
-  local initial_attempt=1
+  # Quick failures are retried: the guest may still be settling at the first
+  # launch and right after a reboot.
+  local quick_retries=4
+  local quick_retry_sec=5
   local supervisor_lock_fd
+  local forward_port=""
+  local forward_port_fd=""
+  local port_given="false"
+  local arg
   local game_session="false"
   local session_watch_pid=""
 
@@ -3096,6 +3133,20 @@ run_scrcpy_supervisor() {
   scrcpy_supervisor_child_pid=""
   trap 'exit 0' INT TERM HUP
   trap scrcpy_supervisor_cleanup EXIT
+
+  for arg in "${base_command[@]}"; do
+    case "${arg}" in
+      --port|--port=*|-p|-p[0-9]*) port_given="true" ;;
+    esac
+  done
+  if [[ "${port_given}" != "true" ]]; then
+    if lock_scrcpy_forward_port forward_port forward_port_fd; then
+      base_command+=(--port="${forward_port}")
+      log "using adb forward port ${forward_port}"
+    else
+      log "no free adb forward port; using the scrcpy default"
+    fi
+  fi
 
   previous_boot_id="$(adb_guest_boot_id "${adb_serial}" || true)"
   local saved_fullscreen
@@ -3140,6 +3191,9 @@ run_scrcpy_supervisor() {
       # Release this console's lock and pid file first: the desktop console
       # restored by end_game_session must not find them held.
       exec {supervisor_lock_fd}>&-
+      if [[ -n "${forward_port_fd}" ]]; then
+        exec {forward_port_fd}>&-
+      fi
       trap - EXIT
       lock_game_session || log "game session lock timed out; ending the session anyway"
       scrcpy_supervisor_cleanup
@@ -3155,10 +3209,10 @@ run_scrcpy_supervisor() {
     fi
 
     if [[ "${status}" -ne "${SCRCPY_EXIT_DISCONNECTED}" ]]; then
-      if (( initial_attempt < 5 && SECONDS - started_at < 5 )) \
+      if (( quick_retries > 0 && SECONDS - started_at < quick_retry_sec )) \
           && has_live_cvd_processes; then
         log "console exited quickly with status ${status}; retrying"
-        initial_attempt=$((initial_attempt + 1))
+        quick_retries=$((quick_retries - 1))
         sleep 1
         continue
       fi
@@ -3166,7 +3220,14 @@ run_scrcpy_supervisor() {
       return "${status}"
     fi
 
-    initial_attempt=5
+    quick_retries=0
+    if [[ "${APP_WINDOW_SUPERVISOR:-false}" == "true" ]]; then
+      # App windows do not reopen after a reboot: Android starts clean. The
+      # display goes now, while its number cannot yet be another window's.
+      log "guest disconnected; closing the app window"
+      remove_app_cuttlefish_display
+      return 0
+    fi
     if ! read_scrcpy_window_state "${SCRCPY_WINDOW_STATE_FILE}" \
         window_width window_height fullscreen; then
       log "console window state was unavailable; retaining the previous launch size and mode"
@@ -3186,6 +3247,9 @@ run_scrcpy_supervisor() {
     fi
 
     previous_boot_id="${new_boot_id}"
+    # Connecting can take scrcpy's server about 10s on a freshly booted guest.
+    quick_retries=4
+    quick_retry_sec=30
     log "guest reboot completed; relaunching console at ${window_width:-default}x${window_height:-default}"
   done
 }
@@ -4498,6 +4562,7 @@ run_app_supervisor() {
 
   validate_app_package "${package}"
   use_app_window_paths "${package}"
+  APP_WINDOW_SUPERVISOR="true"
   for arg in "$@"; do
     if [[ "${arg}" =~ ^--cuttlefish-display=([0-9]+)$ ]]; then
       APP_CUTTLEFISH_DISPLAY="${BASH_REMATCH[1]}"
