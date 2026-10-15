@@ -4393,7 +4393,7 @@ open_app_window() {
     --window-state-file="${SCRCPY_WINDOW_STATE_FILE}"
     --window-width="${window_size%x*}"
     --window-height="${window_size#*x}"
-    --mouse-bind=+hsn:b+++
+    --mouse-bind=++++:b+++
     --force-adb-forward
     --render-driver=opengl
     --no-audio
