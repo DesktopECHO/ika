@@ -873,6 +873,8 @@ aoa_complete:
             .window_width = options->window_width,
             .window_height = options->window_height,
             .background_color = options->background_color,
+            .background_follows_theme = !options->background_color_set
+                                     && !options->ika_game_session,
             .window_aspect_ratio_lock = options->window_aspect_ratio_lock,
             .window_borderless = options->window_borderless,
             .render_fit = options->render_fit,

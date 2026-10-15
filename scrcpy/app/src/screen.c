@@ -793,6 +793,7 @@ sc_screen_init(struct sc_screen *screen,
     screen->bg.r = (params->background_color >> 16) & 0xFF;
     screen->bg.g = (params->background_color >> 8) & 0xFF;
     screen->bg.b = params->background_color & 0xFF;
+    screen->bg_follows_theme = params->background_follows_theme;
     screen->has_content_bg = false;
     screen->content_bg_from_render = false;
     screen->content_bg_read = false;
@@ -1492,6 +1493,24 @@ sc_screen_update_window_hidden(struct sc_screen *screen) {
 #endif
 }
 
+// The background color of the Android theme (0xAARRGGBB) is shown until the
+// content arrives, around it, and in the border of a borderless window
+static void
+sc_screen_set_theme_background(struct sc_screen *screen, uint32_t color) {
+    struct sc_screen_bg_color bg = {color >> 16, color >> 8, color};
+    if (screen->bg_follows_theme) {
+        screen->bg = bg;
+    }
+    sc_ika_window_set_border_from_background(&screen->ika_window, bg.r, bg.g,
+                                             bg.b);
+    if (screen->flex_display) {
+        sc_flex_set_background(&screen->flex, color);
+    }
+    if (screen->window_shown) {
+        sc_screen_render(screen, false);
+    }
+}
+
 void
 sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
     switch (event->type) {
@@ -1547,13 +1566,8 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
             }
             return;
         case SC_EVENT_THEME_BACKGROUND:
-            if (screen->flex_display) {
-                uint32_t color = (uint32_t) (uintptr_t) event->user.data1;
-                if (sc_flex_set_background(&screen->flex, color)
-                        && screen->window_shown) {
-                    sc_screen_render(screen, false);
-                }
-            }
+            sc_screen_set_theme_background(screen,
+                (uint32_t) (uintptr_t) event->user.data1);
             return;
         case SC_EVENT_FLEX_TIMER:
             if (screen->flex_display && sc_flex_on_timer(&screen->flex)

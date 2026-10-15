@@ -69,6 +69,7 @@ struct sc_screen {
         uint8_t g;
         uint8_t b;
     } bg;
+    bool bg_follows_theme;
     // Ika: in pixel mode, the color of the top-right pixel of the last frame,
     // used around the content instead of bg
     struct sc_screen_bg_color content_bg;
@@ -175,6 +176,9 @@ struct sc_screen_params {
     uint16_t window_height;
 
     uint32_t background_color;
+    // Ika: replace the background color by the background of the Android
+    // theme, once the device sends it
+    bool background_follows_theme;
 
     bool window_aspect_ratio_lock;
     bool window_borderless;
