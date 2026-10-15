@@ -154,10 +154,40 @@ public final class DisplayManager {
 
     public int[] getDisplayIds() {
         try {
-            return (int[]) manager.getClass().getMethod("getDisplayIds").invoke(manager);
+            try {
+                return (int[]) manager.getClass().getMethod("getDisplayIds").invoke(manager);
+            } catch (NoSuchMethodException e) {
+                // Android 16: getDisplayIds(boolean includeDisabled)
+                return (int[]) manager.getClass().getMethod("getDisplayIds", boolean.class).invoke(manager, false);
+            }
         } catch (ReflectiveOperationException e) {
             throw new AssertionError(e);
         }
+    }
+
+    /**
+     * Return the id of the local (physical) display connected to a port, or -1 if there is none.
+     * <p/>
+     * On Cuttlefish, the port is the crosvm display number: the Nth display (from 0) of the GPU device.
+     */
+    public int findLocalDisplayIdByPort(int port) {
+        for (int displayId : getDisplayIds()) {
+            DisplayInfo info = getDisplayInfo(displayId);
+            String uniqueId = info != null ? info.getUniqueId() : null;
+            if (uniqueId == null || !uniqueId.startsWith("local:")) {
+                continue;
+            }
+            try {
+                // As DisplayAddress.Physical.getPort(): the low byte of the physical display id
+                long physicalDisplayId = Long.parseLong(uniqueId.substring("local:".length()));
+                if ((physicalDisplayId & 0xFF) == port) {
+                    return displayId;
+                }
+            } catch (NumberFormatException e) {
+                // Not a physical display id
+            }
+        }
+        return -1;
     }
 
     private Method getCreateVirtualDisplayMethod() throws NoSuchMethodException {

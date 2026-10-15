@@ -82,6 +82,12 @@ sc_device_msg_deserialize(const uint8_t *buf, size_t len,
         }
         case DEVICE_MSG_TYPE_APP_ENDED:
             return 1;
+        case DEVICE_MSG_TYPE_THEME_BACKGROUND:
+            if (len < 5) {
+                return 0; // no complete message
+            }
+            msg->theme_background.color = sc_read32be(&buf[1]);
+            return 5;
         default:
             LOGW("Unknown device message type: %d", (int) msg->type);
             return -1; // error, we cannot recover

@@ -92,10 +92,21 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     private final ControlChannel controlChannel;
     private final CleanUp cleanUp;
     private final DeviceMessageSender sender;
+    private int themeBackground; // 0 until sent (always opaque once resolved)
+
+    // An app started on a Cuttlefish display waits for the first resize to the window size, so that it does not first draw at the size
+    // of the whole display, and that size is confirmed to the client once the app is started, so that it reveals the app
+    private static final long INITIAL_SIZE_TIMEOUT_MS = 2000;
+    private final Object initialSizeLock = new Object();
+    private boolean displayResized;
+    private boolean appStartWaiting;
+    private DeviceMessage heldDisplayReady;
     // Resizes the main display for flex display without a new virtual display, null otherwise
     private final PrimaryDisplayResizer primaryDisplayResizer;
-    // Watches the app of a new virtual display, null otherwise
+    // Watches the app of a new virtual display or a Cuttlefish display, null otherwise
     private final AppEndWatcher appEndWatcher;
+    // Keeps the apps of a Cuttlefish display out of desktop mode, null otherwise
+    private final DeskTaskMover deskTaskMover;
     private final boolean clipboardAutosync;
     private final boolean powerOn;
     private final boolean keepActive;
@@ -132,6 +143,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
             this.keepActive = false;
             this.primaryDisplayResizer = null;
             this.appEndWatcher = null;
+            this.deskTaskMover = null;
             return;
         }
 
@@ -143,13 +155,30 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         initPointers();
         sender = new DeviceMessageSender(controlChannel);
 
-        if (options.getFlexDisplay() && options.getNewDisplay() == null && displayId == 0) {
-            primaryDisplayResizer = new PrimaryDisplayResizer(options.getFlexDisplayDpi(),
-                    (readyDisplayId, size) -> sender.send(DeviceMessage.createDisplayReady(readyDisplayId, size.getWidth(), size.getHeight())));
+        if (options.getFlexDisplay() && options.getNewDisplay() == null && displayId != Device.DISPLAY_ID_NONE) {
+            primaryDisplayResizer = new PrimaryDisplayResizer(displayId, options.getFlexDisplayDpi(),
+                    (readyDisplayId, size) -> {
+                        // The theme may have changed since the last resize
+                        sendThemeBackground();
+                        DeviceMessage msg = DeviceMessage.createDisplayReady(readyDisplayId, size.getWidth(), size.getHeight());
+                        synchronized (initialSizeLock) {
+                            displayResized = true;
+                            if (appStartWaiting) {
+                                // Confirmed once the app is started (see startApp())
+                                heldDisplayReady = msg;
+                                initialSizeLock.notifyAll();
+                                return;
+                            }
+                        }
+                        sender.send(msg);
+                    });
         } else {
             primaryDisplayResizer = null;
         }
-        appEndWatcher = options.getNewDisplay() != null ? new AppEndWatcher(() -> sender.send(DeviceMessage.createAppEnded())) : null;
+        boolean cuttlefishDisplay = options.getCuttlefishDisplay() > 0;
+        appEndWatcher = options.getNewDisplay() != null || cuttlefishDisplay
+                ? new AppEndWatcher(() -> sender.send(DeviceMessage.createAppEnded())) : null;
+        deskTaskMover = cuttlefishDisplay ? new DeskTaskMover(displayId) : null;
 
         supportsInputEvents = Device.supportsInputEvents(displayId);
         if (!supportsInputEvents) {
@@ -288,13 +317,28 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         keepActiveThread.start();
     }
 
+    private synchronized void sendThemeBackground() {
+        int color = ThemeBackground.resolve();
+        if (color != themeBackground) {
+            themeBackground = color;
+            sender.send(DeviceMessage.createThemeBackground(color));
+        }
+    }
+
     @Override
     public void start(TerminationListener listener) {
         if (keepActive) {
             startKeepActiveThread();
         }
         if (primaryDisplayResizer != null) {
+            sendThemeBackground();
             primaryDisplayResizer.start();
+        }
+        if (deskTaskMover != null) {
+            // Closing the window removes the display: close its app too, as for a new display
+            ServiceManager.getWindowManager().setDisplayRemoveDestroysContent(displayId);
+            deskTaskMover.start();
+            appEndWatcher.watch(displayId);
         }
 
         thread = new Thread(() -> {
@@ -326,6 +370,9 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         }
         if (appEndWatcher != null) {
             appEndWatcher.stop();
+        }
+        if (deskTaskMover != null) {
+            deskTaskMover.stop();
         }
         if (thread != null) {
             thread.interrupt();
@@ -838,8 +885,45 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
             return;
         }
 
+        if (deskTaskMover != null && primaryDisplayResizer != null && !waitForInitialSize()) {
+            return;
+        }
+
         Ln.i("Starting app \"" + app.getName() + "\" [" + app.getPackageName() + "] on display " + startAppDisplayId + "...");
         Device.startApp(app.getPackageName(), startAppDisplayId, forceStopBeforeStart);
+
+        DeviceMessage ready;
+        synchronized (initialSizeLock) {
+            ready = heldDisplayReady;
+            heldDisplayReady = null;
+        }
+        if (ready != null) {
+            sender.send(ready);
+        }
+    }
+
+    // Return false if interrupted
+    private boolean waitForInitialSize() {
+        synchronized (initialSizeLock) {
+            appStartWaiting = true;
+            try {
+                long deadline = SystemClock.uptimeMillis() + INITIAL_SIZE_TIMEOUT_MS;
+                long remaining = INITIAL_SIZE_TIMEOUT_MS;
+                while (!displayResized && remaining > 0) {
+                    initialSizeLock.wait(remaining);
+                    remaining = deadline - SystemClock.uptimeMillis();
+                }
+                if (!displayResized) {
+                    Ln.w("Display not resized to the window size, starting the app anyway");
+                }
+                return true;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            } finally {
+                appStartWaiting = false;
+            }
+        }
     }
 
     private int getStartAppDisplayId() {

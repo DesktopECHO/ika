@@ -6,7 +6,8 @@ import com.genymobile.scrcpy.wrappers.ServiceManager;
 import com.genymobile.scrcpy.wrappers.WindowManager;
 
 /**
- * Resizes the main display to follow the client window (flex display without a new virtual display).
+ * Resizes the main display, or another physical display (a Cuttlefish display), to follow the client window (flex display without a new
+ * virtual display).
  * <p/>
  * The physical display keeps its size: the requested size is forced on it (as "wm size"), and when it fits, Android's scaling is turned off
  * so that it is drawn 1:1 in the physical frame instead of stretched to fill it. The client then shows that region unscaled.
@@ -23,8 +24,7 @@ public final class PrimaryDisplayResizer {
     private static final int MIN_WIDTH = 360;
     private static final int MIN_HEIGHT = 540;
 
-    private static final int DISPLAY_ID = 0;
-
+    private final int displayId;
     private final int dpi;
     private final Listener listener;
     private final DisplayMonitor displayMonitor = new DisplayMonitor();
@@ -36,17 +36,18 @@ public final class PrimaryDisplayResizer {
     // The size the client waits for, null if none
     private Size pendingSize;
 
-    public PrimaryDisplayResizer(int dpi, Listener listener) {
+    public PrimaryDisplayResizer(int displayId, int dpi, Listener listener) {
+        this.displayId = displayId;
         this.dpi = dpi;
         this.listener = listener;
     }
 
     public void start() {
-        DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(DISPLAY_ID);
+        DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(displayId);
         if (info != null) {
             displayMonitor.setSessionDisplayProperties(new DisplayProperties(info.getSize(), info.getRotation()));
         }
-        displayMonitor.start(DISPLAY_ID, props -> checkReady());
+        displayMonitor.start(displayId, props -> checkReady());
     }
 
     public void stop() {
@@ -62,36 +63,36 @@ public final class PrimaryDisplayResizer {
         WindowManager wm = ServiceManager.getWindowManager();
 
         if (physicalSize == null) {
-            physicalSize = wm.getInitialDisplaySize(DISPLAY_ID);
+            physicalSize = wm.getInitialDisplaySize(displayId);
         }
         boolean fits = physicalSize != null && size.getWidth() <= physicalSize.getWidth() && size.getHeight() <= physicalSize.getHeight();
         if (scalingDisabled == null || scalingDisabled != fits) {
             // Before the size, so that the new size is never shown stretched
-            if (wm.setDisplayScalingDisabled(DISPLAY_ID, fits)) {
+            if (wm.setDisplayScalingDisabled(displayId, fits)) {
                 scalingDisabled = fits;
             }
         }
 
         if (!densityApplied && dpi > 0) {
-            wm.setForcedDisplayDensity(DISPLAY_ID, dpi);
+            wm.setForcedDisplayDensity(displayId, dpi);
             densityApplied = true;
         }
 
-        DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(DISPLAY_ID);
+        DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(displayId);
         if (info != null && size.equals(info.getSize())) {
             // Nothing will change, the display is already ready
             synchronized (this) {
                 pendingSize = null;
             }
-            listener.onDisplayReady(DISPLAY_ID, size);
+            listener.onDisplayReady(displayId, size);
             return;
         }
 
         synchronized (this) {
             pendingSize = size;
         }
-        Ln.i("Resize main display to " + size.getWidth() + "x" + size.getHeight() + (dpi > 0 ? "/" + dpi : ""));
-        if (!wm.setForcedDisplaySize(DISPLAY_ID, size)) {
+        Ln.i("Resize display " + displayId + " to " + size.getWidth() + "x" + size.getHeight() + (dpi > 0 ? "/" + dpi : ""));
+        if (!wm.setForcedDisplaySize(displayId, size)) {
             synchronized (this) {
                 pendingSize = null;
             }
@@ -99,7 +100,7 @@ public final class PrimaryDisplayResizer {
     }
 
     private void checkReady() {
-        DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(DISPLAY_ID);
+        DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(displayId);
         if (info == null) {
             return;
         }
@@ -111,6 +112,6 @@ public final class PrimaryDisplayResizer {
             }
             pendingSize = null;
         }
-        listener.onDisplayReady(DISPLAY_ID, size);
+        listener.onDisplayReady(displayId, size);
     }
 }

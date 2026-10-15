@@ -26,12 +26,33 @@ Frames become `AVFrame`s: packed RGB, or `AV_PIX_FMT_DRM_PRIME` for DMA-BUFs.
 `app/src/interop/interop_raw.c` uploads the former and imports the latter
 through EGL. Alpha is ignored.
 
-The client sends `IKAH` (version 2) on connection. A server that knows it
-sends `IKAS` version 2, with a generation: the frames then point into the
-slots without a copy, and the client sends `IKAR` (generation, slot index)
-when the last reference to a frame is dropped. The server does not rewrite a
-slot until it is released. Otherwise (`IKAS` version 1, from an older server)
-the client copies each slot as soon as it is notified.
+The client sends `IKAH` (version 2) on connection, with the display it shows.
+A server that knows it sends `IKAS` version 2, with a generation: the frames
+then point into the slots without a copy, and the client sends `IKAR`
+(generation, slot index) when the last reference to a frame is dropped. The
+server does not rewrite a slot until it is released. Otherwise (`IKAS`
+version 1, from an older server) the client copies each slot as soon as it is
+notified.
+
+While its window is hidden (minimized or occluded), the client sends `IKAP`:
+`ika_stream` then keeps the display's latest frame without sending it, and
+sends it when the window is shown again (`IKAP` with 0).
+
+`ika_stream` keeps the frames of each display apart and serves several clients
+at once, one per display: a second client of the same display waits until the
+first one leaves. An older `ika_stream` serves one client, with the frames of
+all displays; the client ignores the other displays.
+
+`--cuttlefish-display=N` shows another Cuttlefish display than the main one:
+the Nth display of crosvm's GPU device, added at runtime with
+`crosvm gpu add-displays` on its control socket (`vhost-user-gpu-control`).
+The server sends control to the Android display connected to port N (the low
+byte of its physical display id), waiting up to 5 s for it to appear, and
+resizes it as the console does with `--dpi`. The guest reports every
+Cuttlefish display as internal, so the WM Shell opens apps there in a desk, as
+freeform windows: the server moves such tasks out of the desk into fullscreen
+(`WMShell desktopmode moveTaskOutOfDesk`). As for a new display, `APP_ENDED`
+is sent when the display has no app left.
 
 ## Flex display in pixels
 
@@ -48,9 +69,12 @@ pixels, so that it is shown 1:1 on HiDPI desktops too.
 - App windows (`--new-display`): upstream flex display, requested in pixels.
 
 `app/src/ika/flex.c` debounces the requests while the window is resized. For
-the console, the window holds a blurred preview of the last content until the
-guest has drawn the new size (`DISPLAY_READY`, then no new frame for 120 ms),
-then the blur fades out. The first content fades in from gray.
+Cuttlefish displays, the window holds a blurred preview of the last content
+until the guest has drawn the new size: `DISPLAY_READY`, two frames since the
+request (a resize first shows the app's previous buffer in the resized display,
+then the app's redraw), and no new frame for 120 ms, or 1 s after
+`DISPLAY_READY` at most. Then the blur fades out. The first content fades in
+from gray.
 
 ## Other changes
 

@@ -273,12 +273,6 @@ reboot_timeout_sec = 120
 # Seconds between checks for installed or removed apps while the app menu
 # watcher runs. Environment variable: IKA_APP_MENU_POLL_SEC
 menu_poll_sec = 5
-# Video bit rate of app windows. Environment variable: IKA_APP_BIT_RATE
-bit_rate = 80M
-# scrcpy --video-codec-options for app windows. video-qp-max:int=18 caps the
-# encoder's quantizer to keep text sharp; leave it empty to remove it.
-# Environment variable: IKA_APP_CODEC_OPTIONS
-codec_options = video-qp-max:int=18
 # Apps kept out of the app list, name matching and the desktop menu, as package
 # names separated by spaces. They can still be opened by their package name.
 hidden_apps = com.google.android.apps.restore com.google.android.googlequicksearchbox com.android.calculator2 org.lineageos.etar com.android.deskclock com.android.contacts org.lineageos.recorder org.lineageos.audiofx
@@ -800,14 +794,10 @@ ika_ini_default IKA_MIN_OPEN_FILES system min_open_files 65536 uint
 ika_ini_default IKA_KERNEL_PAGE_SIZE system kernel_page_size auto
 ika_ini_default IKADPI console dpi auto
 ika_ini_default IKA_SCRCPY console scrcpy_args ""
-ika_ini_default IKA_APP_BIT_RATE apps bit_rate 80M
 ika_ini_default IKA_INSTALL_TIMEOUT_SEC timeouts install_timeout_sec 1800 uint
-# An empty IKA_APP_CODEC_OPTIONS is a choice (no quantizer cap), not unset.
-if [[ -z "${IKA_APP_CODEC_OPTIONS+set}" ]]; then
-  ika_ini_get IKA_APP_CODEC_OPTIONS apps codec_options "video-qp-max:int=18"
-else
-  IKA_INI_USED[apps.codec_options]=1
-fi
+# Settings of the former H.264 app windows, still in older ika.ini files
+IKA_INI_USED[apps.bit_rate]=1
+IKA_INI_USED[apps.codec_options]=1
 
 readonly SCRCPY_EXIT_DISCONNECTED=2
 # scrcpy --ika-game-session: the window left fullscreen or was closed.
@@ -1331,11 +1321,11 @@ Options:
 App windows:
 
   '${SCRIPT_NAME} app NAME' opens one app in its own resizable, titled
-  window backed by a separate Android virtual display. The app is restarted
-  on that display if it was already running, and closing the window closes
-  the app. App windows use encoded video (IKA_APP_BIT_RATE, default 80M)
-  rather than the console's raw frames. 'stop', 'reset', and 'restart' close
-  all app windows; 'start' leaves them open.
+  window backed by a Cuttlefish display of its own, added while the VM runs
+  and shown with raw frames like the console. The app is restarted on that
+  display if it was already running, and closing the window closes the app
+  and removes the display. 'stop', 'reset', and 'restart' close all app
+  windows; 'start' leaves them open.
 
   Games (apps declaring android:appCategory="game", or listed in
   IKA_GAME_APPS in this script) start in a game session instead: fullscreen
@@ -1438,12 +1428,8 @@ Environment variables:
                          (example: --keyboard=uhid --no-clipboard-autosync)
   IKA_APP_MENU_POLL_SEC  Seconds between checks for installed or removed
                          apps while the app menu watcher runs (default: 5).
-  IKA_APP_BIT_RATE       Video bit rate of app windows (default: 80M).
   IKA_INSTALL_TIMEOUT_SEC
                          Seconds 'install' allows for each APK (default: 1800).
-  IKA_APP_CODEC_OPTIONS  scrcpy --video-codec-options for app windows
-                         (default: video-qp-max:int=18, which caps the encoder's
-                         quantizer to keep text sharp; empty removes it).
   IKA_GSF_ID_TIMEOUT_SEC Seconds 'gsf' waits for Google Play Services to
                          assign the ID (default: 120).
   IKA_STOP_GRACE_SEC     Seconds to allow Cuttlefish and gfxstream to clean up
@@ -3062,6 +3048,7 @@ scrcpy_supervisor_cleanup() {
     kill "${scrcpy_supervisor_child_pid}" >/dev/null 2>&1 || true
     wait "${scrcpy_supervisor_child_pid}" 2>/dev/null || true
   fi
+  remove_app_cuttlefish_display
   if [[ -f "${SCRCPY_SUPERVISOR_PID_FILE}" \
       && "$(<"${SCRCPY_SUPERVISOR_PID_FILE}")" == "$$" ]]; then
     rm -f "${SCRCPY_SUPERVISOR_PID_FILE}"
@@ -3601,14 +3588,10 @@ guest_display_density() {
   printf '%s\n' "${override:-${physical}}"
 }
 
-# Like the desktop display, size an app window's virtual display in native
-# host pixels rather than logical window points, so on HiDPI hosts the app
-# draws at native resolution instead of being upscaled. Scale the logical window
-# size by the host's native/logical ratio and round to the nearest pixel, as SDL
-# does for the window pixel size that the scrcpy client requests, then round
-# down to the even size the guest's software H.264 encoder needs, as the scrcpy
-# server does. Any other initial size makes the server resize the display right
-# after start, and its input mapping then rejects every click.
+# The size of an app window in native host pixels rather than logical window
+# points, so that on HiDPI hosts the app draws at native resolution instead of
+# being upscaled: the logical window size scaled by the host's native/logical
+# ratio, rounded to the nearest pixel as SDL does, then down to an even size.
 app_window_display_size() {
   local window_size="$1"
   local native
@@ -3638,6 +3621,89 @@ app_window_display_size() {
   width=$(( width / 2 * 2 ))
   height=$(( height / 2 * 2 ))
   (( width > 0 && height > 0 )) || return 1
+  printf '%sx%s\n' "${width}" "${height}"
+}
+
+# App windows show a Cuttlefish display of their own, added to crosvm's GPU
+# device while the VM runs, through ika_stream's raw frames (scrcpy
+# --cuttlefish-display), as the console shows the main display.
+
+# The control socket of crosvm's GPU device, which adds and removes displays:
+# the vhost-user GPU's own socket when the GPU runs in its own process, else the
+# VM's control socket. ('cvd display' always sends to the VM's control socket,
+# which cannot reach a vhost-user GPU.)
+cuttlefish_gpu_control_socket() {
+  local dir
+  dir="$(dirname "$(resolve_cuttlefish_frames_socket)")"
+  if [[ -S "${dir}/vhost-user-gpu-control" ]]; then
+    printf '%s/vhost-user-gpu-control\n' "${dir}"
+  else
+    printf '%s/crosvm_control.sock\n' "${dir}"
+  fi
+}
+
+# Prints the numbers of the Cuttlefish displays, one per line.
+cuttlefish_display_numbers() {
+  timeout 10 "${CVD_HOST_OUT}/bin/crosvm" gpu list-displays "$1" 2>/dev/null \
+    | tr -d ' \n' | grep -o '"[0-9][0-9]*":{' | tr -dc '0-9\n'
+}
+
+# Adds a Cuttlefish display of WIDTHxHEIGHT pixels at DPI and prints its
+# number, which crosvm picks.
+add_cuttlefish_display() {
+  local size="$1"
+  local dpi="$2"
+  local socket
+  local lock_fd
+  local before
+  local number
+  local added=""
+
+  socket="$(cuttlefish_gpu_control_socket)"
+  exec {lock_fd}>"${CVD_TMP_DIR}/cuttlefish-displays.lock"
+  if flock -w 10 "${lock_fd}"; then
+    before="$(cuttlefish_display_numbers "${socket}")"
+    if timeout 10 "${CVD_HOST_OUT}/bin/crosvm" gpu add-displays \
+        "--gpu-display=mode=windowed[${size/x/,}],dpi=[${dpi},${dpi}],refresh-rate=60" \
+        "${socket}" >/dev/null 2>&1; then
+      while read -r number; do
+        if [[ -n "${number}" ]] && ! grep -qx "${number}" <<<"${before}"; then
+          added="${number}"
+          break
+        fi
+      done < <(cuttlefish_display_numbers "${socket}")
+    fi
+  fi
+  exec {lock_fd}>&-
+  [[ -n "${added}" ]] || return 1
+  printf '%s\n' "${added}"
+}
+
+remove_cuttlefish_display() {
+  timeout 10 "${CVD_HOST_OUT}/bin/crosvm" gpu remove-displays --display-id="$1" \
+    "$(cuttlefish_gpu_control_socket)" >/dev/null 2>&1
+}
+
+# The size of an app window's Cuttlefish display: the host screen, the largest
+# the window can get (else the window's own size in pixels). Like the
+# console's display, the app is drawn at the window size inside it.
+app_cuttlefish_display_size() {
+  host_display_size || printf '%s\n' "$1"
+}
+
+# Limits a window size in logical points to the host screen: a size saved
+# under another desktop or scale can be larger.
+clamp_app_window_size() {
+  local width
+  local height
+
+  [[ "$1" =~ ^([0-9]+)x([0-9]+)$ ]] || return 1
+  width="${BASH_REMATCH[1]}"
+  height="${BASH_REMATCH[2]}"
+  if [[ "$(host_display_logical_size || true)" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+    (( width <= BASH_REMATCH[1] )) || width="${BASH_REMATCH[1]}"
+    (( height <= BASH_REMATCH[2] )) || height="${BASH_REMATCH[2]}"
+  fi
   printf '%sx%s\n' "${width}" "${height}"
 }
 
@@ -4236,7 +4302,7 @@ open_app_window() {
   local guest_dpi
   local dpi
   local display_size
-  local codec_options
+  local cuttlefish_display
   local app_icon
   local saved_width=""
   local saved_height=""
@@ -4300,6 +4366,7 @@ open_app_window() {
   fi
   [[ "${window_size}" =~ ^[1-9][0-9]*x[1-9][0-9]*$ ]] \
     || die "--size must be WIDTHxHEIGHT (example: 1600x900)"
+  window_size="$(clamp_app_window_size "${window_size}")"
 
   guest_dpi="$(guest_display_density "${adb_serial}")"
   [[ "${guest_dpi}" =~ ^[1-9][0-9]*$ ]] || die "could not read the guest display density"
@@ -4307,31 +4374,30 @@ open_app_window() {
   display_size="$(app_window_display_size "${window_size}")" \
     || die "could not size the app window display for ${window_size}"
 
-  # --dpi enables flex resizing: the virtual display follows the window size
-  # at a fixed density. "+" force-stops the app first so it starts on the new
-  # display instead of resurfacing an existing task on the desktop. Closing the
-  # window destroys the virtual display and the app with it.
+  # The app gets a Cuttlefish display of its own, as large as the host screen;
+  # --dpi enables flex resizing: the app is drawn at the window size inside it,
+  # as the console is. "+" force-stops the app first so it starts on that
+  # display instead of resurfacing an existing task on the desktop. The
+  # supervisor removes the display when the window closes.
+  cuttlefish_display="$(add_cuttlefish_display \
+    "$(app_cuttlefish_display_size "${display_size}")" "${dpi}")" \
+    || die "could not add a Cuttlefish display for ${label:-${package}}"
   scrcpy_cmd=(
     "${SCRCPY_BIN}"
     -s "${adb_serial}"
-    --new-display="${display_size}/${dpi}"
+    --cuttlefish-frames-socket="$(resolve_cuttlefish_frames_socket)"
+    --cuttlefish-display="${cuttlefish_display}"
     --dpi="${dpi}"
     --start-app="+${package}"
-    --no-vd-system-decorations
     --window-title="${title}"
     --window-state-file="${SCRCPY_WINDOW_STATE_FILE}"
-    --video-bit-rate="${IKA_APP_BIT_RATE:-80M}"
+    --window-width="${window_size%x*}"
+    --window-height="${window_size#*x}"
     --mouse-bind=+hsn:b+++
     --force-adb-forward
     --render-driver=opengl
     --no-audio
   )
-  # Cap the encoder's quantizer so text stays sharp; the connection is local,
-  # so the extra bit rate is cheap. An empty IKA_APP_CODEC_OPTIONS removes it.
-  codec_options="${IKA_APP_CODEC_OPTIONS-video-qp-max:int=18}"
-  if [[ -n "${codec_options}" ]]; then
-    scrcpy_cmd+=(--video-codec-options="${codec_options}")
-  fi
   append_scrcpy_input_args scrcpy_cmd "${game_mode}" "app window"
   append_scrcpy_extra_args scrcpy_cmd "app window"
 
@@ -4348,7 +4414,7 @@ open_app_window() {
   scrcpy_cmd=(env "${scrcpy_env[@]}" "${scrcpy_cmd[@]}")
 
   : > "${SCRCPY_LOG_FILE}"
-  log "opening ${package} (${window_size}/${dpi}) as \"${title}\""
+  log "opening ${package} (${window_size}/${dpi}) on Cuttlefish display ${cuttlefish_display} as \"${title}\""
   setsid --fork "${IKA_SCRIPT_PATH}" __app_supervisor "${package}" \
     "${adb_serial}" "${fullscreen_mode}" -- "${scrcpy_cmd[@]}" \
     </dev/null >>"${SCRCPY_LOG_FILE}" 2>&1 3>&- &
@@ -4363,6 +4429,7 @@ open_app_window() {
     sleep 0.05
   done
 
+  remove_cuttlefish_display "${cuttlefish_display}" || true
   die "could not open a window for ${label:-${title}}; see ${SCRCPY_LOG_FILE}"
 }
 
@@ -4425,11 +4492,28 @@ open_app_info() {
 
 run_app_supervisor() {
   local package="$1"
+  local arg
+  local status=0
   shift
 
   validate_app_package "${package}"
   use_app_window_paths "${package}"
-  run_scrcpy_supervisor "$@"
+  for arg in "$@"; do
+    if [[ "${arg}" =~ ^--cuttlefish-display=([0-9]+)$ ]]; then
+      APP_CUTTLEFISH_DISPLAY="${BASH_REMATCH[1]}"
+    fi
+  done
+  run_scrcpy_supervisor "$@" || status="$?"
+  remove_app_cuttlefish_display
+  return "${status}"
+}
+
+# Removes the Cuttlefish display of the app window this supervisor runs, once.
+remove_app_cuttlefish_display() {
+  if [[ -n "${APP_CUTTLEFISH_DISPLAY:-}" ]]; then
+    remove_cuttlefish_display "${APP_CUTTLEFISH_DISPLAY}" || true
+    APP_CUTTLEFISH_DISPLAY=""
+  fi
 }
 
 app_window_is_open() {

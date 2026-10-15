@@ -9,6 +9,9 @@
 #include "options.h"
 #include "util/log.h"
 #include "util/sdl.h"
+#ifndef _WIN32
+# include "ika/cf_source.h"
+#endif
 
 #define DISPLAY_MARGINS 96
 
@@ -778,6 +781,10 @@ sc_screen_init(struct sc_screen *screen,
     // Ika: flex display always follows the window in pixels
     screen->pixel_mode = params->flex_display;
     screen->window_state_file = params->window_state_file;
+    screen->cf_source = params->cf_source;
+    screen->window_minimized = false;
+    screen->window_hidden = false;
+    screen->window_occluded = false;
     screen->game_session = params->game_session;
     screen->game_session_fullscreen = false;
     screen->windowed_size.width = params->window_width;
@@ -909,7 +916,7 @@ sc_screen_init(struct sc_screen *screen,
     sc_ika_window_init(&screen->ika_window, screen->window);
     if (screen->flex_display) {
         sc_flex_init(&screen->flex, params->controller, screen->renderer,
-                     params->raw);
+                     params->raw, params->app_window);
     }
 
     ok = SDL_StartTextInput(screen->window);
@@ -1471,6 +1478,20 @@ sc_disconnect_on_timeout(struct sc_disconnect *d, void *userdata) {
     (void) ok; // ignore failure
 }
 
+// Ika: ika_stream stops sending the frames of a hidden window
+static void
+sc_screen_update_window_hidden(struct sc_screen *screen) {
+#ifndef _WIN32
+    if (screen->cf_source) {
+        bool hidden = screen->window_minimized || screen->window_hidden
+                   || screen->window_occluded;
+        sc_cf_source_set_window_hidden(screen->cf_source, hidden);
+    }
+#else
+    (void) screen;
+#endif
+}
+
 void
 sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
     switch (event->type) {
@@ -1500,8 +1521,22 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
             return;
         }
         case SDL_EVENT_WINDOW_EXPOSED:
+            screen->window_occluded = false;
+            sc_screen_update_window_hidden(screen);
             sc_screen_render(screen, true);
             return;
+        case SDL_EVENT_WINDOW_OCCLUDED:
+            screen->window_occluded = true;
+            sc_screen_update_window_hidden(screen);
+            break;
+        case SDL_EVENT_WINDOW_MINIMIZED:
+            screen->window_minimized = true;
+            sc_screen_update_window_hidden(screen);
+            break;
+        case SDL_EVENT_WINDOW_HIDDEN:
+            screen->window_hidden = true;
+            sc_screen_update_window_hidden(screen);
+            break;
         case SC_EVENT_DISPLAY_READY:
             if (screen->flex_display) {
                 struct sc_size size = {
@@ -1509,6 +1544,15 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
                     SC_EVENT_SIZE_HEIGHT(event->user.data1),
                 };
                 sc_flex_on_display_ready(&screen->flex, size);
+            }
+            return;
+        case SC_EVENT_THEME_BACKGROUND:
+            if (screen->flex_display) {
+                uint32_t color = (uint32_t) (uintptr_t) event->user.data1;
+                if (sc_flex_set_background(&screen->flex, color)
+                        && screen->window_shown) {
+                    sc_screen_render(screen, false);
+                }
             }
             return;
         case SC_EVENT_FLEX_TIMER:
@@ -1530,9 +1574,13 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
             sc_ika_window_update_min_size(&screen->ika_window);
             return;
         case SDL_EVENT_WINDOW_SHOWN:
+            screen->window_hidden = false;
+            sc_screen_update_window_hidden(screen);
             sc_ika_window_on_changed(&screen->ika_window);
             return;
         case SDL_EVENT_WINDOW_MAXIMIZED:
+            screen->window_minimized = false;
+            sc_screen_update_window_hidden(screen);
             sc_ika_window_on_changed(&screen->ika_window);
             if (screen->flex_display) {
                 sc_flex_on_window_state_changed(&screen->flex);
@@ -1546,6 +1594,8 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
             return;
 #endif
         case SDL_EVENT_WINDOW_RESTORED:
+            screen->window_minimized = false;
+            sc_screen_update_window_hidden(screen);
             sc_ika_window_on_changed(&screen->ika_window);
             if (screen->flex_display) {
                 sc_flex_on_window_state_changed(&screen->flex);

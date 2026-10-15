@@ -17,18 +17,22 @@
 // relayout. Cuttlefish only sends the frames the guest presents, so no new frame
 // for this long means that the guest has finished drawing the new layout.
 #define SC_FLEX_GUEST_IDLE SC_TICK_FROM_MS(120)
-// For guests that keep presenting (video, animations), and for a resize that
-// produced no frame
-#define SC_FLEX_MAX_SETTLE SC_TICK_FROM_MS(1250)
+// A resize first presents the app's previous buffer in the resized display,
+// and the app's own redraw follows, up to a second later for slow apps: the
+// guest has drawn the new layout once two frames came since the request
+#define SC_FLEX_MIN_FRAMES 2
+// For guests that keep presenting (video, animations), for apps that never
+// redraw, and for a resize that produced no frame
+#define SC_FLEX_MAX_SETTLE SC_TICK_FROM_MS(1000)
 
 #define SC_FLEX_BLUR_FADE_IN SC_TICK_FROM_MS(500)
-#define SC_FLEX_BLUR_FADE_OUT SC_TICK_FROM_MS(500)
-#define SC_FLEX_REVEAL SC_TICK_FROM_MS(500)
+#define SC_FLEX_BLUR_FADE_OUT SC_TICK_FROM_MS(300)
+#define SC_FLEX_REVEAL SC_TICK_FROM_MS(250)
 // Opacity of the blurred layer over the preview at full intensity
 #define SC_FLEX_BLUR_OPACITY 0.66f
 #define SC_FLEX_ANIMATION_INTERVAL SC_TICK_FROM_MS(16)
-// Shown until the content is first revealed, and faded from
-#define SC_FLEX_GRAY 0x33
+// Background until the device sends the color of its theme
+#define SC_FLEX_DEFAULT_BACKGROUND 0x33
 // The device may make a display a bit smaller than requested, to align its size
 // for the encoder
 #define SC_FLEX_MAX_ALIGNMENT 16
@@ -103,10 +107,11 @@ sc_flex_destroy_preview(struct sc_flex *flex) {
 
 void
 sc_flex_init(struct sc_flex *flex, struct sc_controller *controller,
-             SDL_Renderer *renderer, bool raw) {
+             SDL_Renderer *renderer, bool raw, bool app_window) {
     flex->controller = controller;
     flex->renderer = renderer;
     flex->raw = raw;
+    flex->app_window = raw && app_window;
 
     flex->pending.width = 0;
     flex->pending.height = 0;
@@ -119,6 +124,7 @@ sc_flex_init(struct sc_flex *flex, struct sc_controller *controller,
     flex->ready_tick = 0;
     flex->ready_unchanged = false;
     flex->frame_tick = 0;
+    flex->frames_since_request = 0;
 
     // Until the first size is confirmed, the raw content is unknown
     flex->holding = raw;
@@ -128,6 +134,9 @@ sc_flex_init(struct sc_flex *flex, struct sc_controller *controller,
     flex->hold_tick = 0;
     flex->release_tick = 0;
     flex->release_reveal = false;
+    for (unsigned i = 0; i < 3; ++i) {
+        flex->background[i] = SC_FLEX_DEFAULT_BACKGROUND;
+    }
     for (unsigned i = 0; i < SC_FLEX_BLUR_LEVELS; ++i) {
         flex->blur_levels[i] = NULL;
     }
@@ -298,12 +307,23 @@ sc_flex_capture_preview(struct sc_flex *flex, SDL_Texture *live,
     flex->preview = preview;
 }
 
+static float
+sc_flex_progress(sc_tick start, sc_tick duration, sc_tick now);
+
 static void
 sc_flex_start_hold(struct sc_flex *flex, SDL_Texture *live,
                    const SDL_FRect *live_src, sc_tick now) {
     assert(!flex->holding);
+    // A hold starting while the previous release still fades out (the window
+    // snapping to an even size, or resized again) continues the blur from its
+    // current intensity, instead of showing the preview sharp
+    float intensity = 0;
+    if (flex->release_tick && !flex->release_reveal) {
+        intensity = 1 - sc_flex_progress(flex->release_tick,
+                                         SC_FLEX_BLUR_FADE_OUT, now);
+    }
     flex->holding = true;
-    flex->hold_tick = now;
+    flex->hold_tick = now - (sc_tick) (intensity * SC_FLEX_BLUR_FADE_IN);
     flex->release_tick = 0;
     // A previous request is settled, wait for the next one
     flex->ready_tick = 0;
@@ -343,8 +363,13 @@ sc_flex_on_window_size(struct sc_flex *flex, struct sc_size size,
     bool discrete = flex->state_change_tick
                  && now - flex->state_change_tick < SC_FLEX_STATE_CHANGE_WINDOW;
     flex->pending = size;
-    flex->pending_deadline = now + (discrete ? SC_FLEX_DISCRETE_DELAY
-                                             : SC_FLEX_DRAG_DELAY);
+    if (!sc_size_is_set(flex->requested)) {
+        // The initial size, on which an app window waits to start its app
+        flex->pending_deadline = now;
+    } else {
+        flex->pending_deadline = now + (discrete ? SC_FLEX_DISCRETE_DELAY
+                                                 : SC_FLEX_DRAG_DELAY);
+    }
 
     // Before the first video frame, there is nothing to blur
     bool has_content = flex->raw || sc_size_is_set(flex->shown);
@@ -358,6 +383,16 @@ sc_flex_on_window_size(struct sc_flex *flex, struct sc_size size,
 void
 sc_flex_on_window_state_changed(struct sc_flex *flex) {
     flex->state_change_tick = sc_tick_now();
+}
+
+bool
+sc_flex_set_background(struct sc_flex *flex, uint32_t color) {
+    flex->background[0] = color >> 16;
+    flex->background[1] = color >> 8;
+    flex->background[2] = color;
+    // Visible while there is nothing to show yet, or during the reveal
+    return flex->raw && ((flex->holding && !flex->preview)
+                      || (flex->release_tick && flex->release_reveal));
 }
 
 void
@@ -387,8 +422,10 @@ sc_flex_on_frame(struct sc_flex *flex, struct sc_size frame_size) {
     flex->frame_tick = now;
 
     if (flex->raw) {
+        ++flex->frames_since_request;
         if (flex->holding && flex->ready_tick) {
-            sc_flex_schedule(flex, now + SC_FLEX_GUEST_IDLE);
+            bool first = flex->app_window && !flex->revealed;
+            sc_flex_schedule(flex, first ? now : now + SC_FLEX_GUEST_IDLE);
         }
         return;
     }
@@ -414,6 +451,7 @@ sc_flex_on_timer(struct sc_flex *flex) {
         if (now >= flex->pending_deadline) {
             flex->requested = flex->pending;
             flex->ready_tick = 0;
+            flex->frames_since_request = 0;
             if (!flex->raw) {
                 // No DISPLAY_READY: the frames at the new size tell it
                 flex->ready_tick = now;
@@ -433,11 +471,17 @@ sc_flex_on_timer(struct sc_flex *flex) {
     bool render = false;
     if (flex->holding && flex->ready_tick) {
         sc_tick max_deadline = flex->ready_tick + SC_FLEX_MAX_SETTLE;
-        // Raw frames are only sent when the guest draws: wait for it to stop
+        // Raw frames are only sent when the guest draws: wait for the app's
+        // redraw, then for the guest to stop
         sc_tick idle_deadline = flex->frame_tick + SC_FLEX_GUEST_IDLE;
-        bool drawn = flex->raw && flex->frame_tick > flex->ready_tick
-                  && now >= idle_deadline;
-        if (flex->ready_unchanged || drawn || now >= max_deadline) {
+        bool redrawn = flex->frames_since_request >= SC_FLEX_MIN_FRAMES;
+        bool drawn = flex->raw && redrawn && now >= idle_deadline;
+        // The device confirms the initial size of an app window once the app
+        // is started on the resized display: any frame since then is the app
+        bool first_drawn = flex->app_window && !flex->revealed
+                        && flex->frame_tick >= flex->ready_tick;
+        if (flex->ready_unchanged || drawn || first_drawn
+                || now >= max_deadline) {
             if (sc_size_equals(flex->pending, flex->requested)) {
                 sc_flex_release(flex, now);
             } else {
@@ -454,7 +498,7 @@ sc_flex_on_timer(struct sc_flex *flex) {
                 }
             }
             render = true;
-        } else if (flex->raw && flex->frame_tick > flex->ready_tick) {
+        } else if (flex->raw && redrawn) {
             SC_NEXT(MIN(idle_deadline, max_deadline));
         } else {
             SC_NEXT(max_deadline);
@@ -506,8 +550,9 @@ sc_flex_render_raw(struct sc_flex *flex, SDL_Texture *live,
 
         if (!flex->preview) {
             // Nothing to show yet
-            SDL_SetRenderDrawColor(renderer, SC_FLEX_GRAY, SC_FLEX_GRAY,
-                                   SC_FLEX_GRAY, 0xFF);
+            SDL_SetRenderDrawColor(renderer, flex->background[0],
+                                   flex->background[1], flex->background[2],
+                                   0xFF);
             return SDL_RenderFillRect(renderer, dst);
         }
 
@@ -537,12 +582,13 @@ sc_flex_render_raw(struct sc_flex *flex, SDL_Texture *live,
 
     if (flex->release_tick) {
         if (flex->release_reveal) {
-            // Fade in from gray
+            // Fade in from the theme background
             float t = sc_flex_progress(flex->release_tick, SC_FLEX_REVEAL, now);
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-            SDL_SetRenderDrawColorFloat(renderer, SC_FLEX_GRAY / 255.f,
-                                        SC_FLEX_GRAY / 255.f,
-                                        SC_FLEX_GRAY / 255.f, 1 - t);
+            SDL_SetRenderDrawColorFloat(renderer,
+                                        flex->background[0] / 255.f,
+                                        flex->background[1] / 255.f,
+                                        flex->background[2] / 255.f, 1 - t);
             ok &= SDL_RenderFillRect(renderer, dst);
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
         } else {
