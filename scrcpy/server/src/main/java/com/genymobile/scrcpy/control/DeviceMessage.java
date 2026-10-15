@@ -7,6 +7,7 @@ public final class DeviceMessage {
     public static final int TYPE_UHID_OUTPUT = 2;
     public static final int TYPE_DISPLAY_READY = 3;
     public static final int TYPE_APP_ENDED = 4;
+    public static final int TYPE_THEME_BACKGROUND = 5;
 
     private int type;
     private String text;
@@ -53,6 +54,13 @@ public final class DeviceMessage {
     public static DeviceMessage createAppEnded() {
         DeviceMessage event = new DeviceMessage();
         event.type = TYPE_APP_ENDED;
+        return event;
+    }
+
+    public static DeviceMessage createThemeBackground(int color) {
+        DeviceMessage event = new DeviceMessage();
+        event.type = TYPE_THEME_BACKGROUND;
+        event.id = color;
         return event;
     }
 

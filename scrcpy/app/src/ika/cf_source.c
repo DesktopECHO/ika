@@ -22,6 +22,7 @@
 #define SC_CF_MAGIC_SHM_FRAME 0x4e414b49u // IKAN: a slot holds a new frame
 #define SC_CF_MAGIC_HELLO 0x48414b49u // IKAH: sent by the client on connection
 #define SC_CF_MAGIC_SHM_RELEASE 0x52414b49u // IKAR: sent when a slot is free
+#define SC_CF_MAGIC_PAUSE 0x50414b49u // IKAP: sent when the window is hidden
 #define SC_CF_VERSION 1
 // IKAS with a generation: the client must release the slots (IKAR)
 #define SC_CF_VERSION_SHM_RELEASE 2
@@ -66,8 +67,8 @@ struct sc_cf_shm_init_header {
     uint32_t slot_size;
 };
 
-// Client messages: IKAH (arg0 = 1: releases slots), IKAR (arg0 = generation,
-// arg1 = slot index)
+// Client messages: IKAH (arg0 = 1: releases slots, arg1 = display number),
+// IKAR (arg0 = generation, arg1 = slot index), IKAP (arg0 = 1: window hidden)
 struct sc_cf_client_msg {
     uint32_t magic;
     uint32_t version;
@@ -240,22 +241,30 @@ sc_cf_free_slot(void *opaque, uint8_t *data) {
 }
 
 static bool
+sc_cf_open_sinks(struct sc_cf_source *source, struct sc_size size) {
+    struct sc_stream_session session = {
+        .video = {
+            .width = size.width,
+            .height = size.height,
+            .client_resized = false,
+        },
+    };
+    if (!sc_frame_source_sinks_open(&source->frame_source, NULL, &session)) {
+        return false;
+    }
+    source->sinks_open = true;
+    return true;
+}
+
+static bool
 sc_cf_push(struct sc_cf_source *source) {
     AVFrame *frame = source->frame;
 
     if (!source->sinks_open) {
-        struct sc_stream_session session = {
-            .video = {
-                .width = frame->width,
-                .height = frame->height,
-                .client_resized = false,
-            },
-        };
-        if (!sc_frame_source_sinks_open(&source->frame_source, NULL,
-                                        &session)) {
+        struct sc_size size = {frame->width, frame->height};
+        if (!sc_cf_open_sinks(source, size)) {
             return false;
         }
-        source->sinks_open = true;
     }
 
     enum sc_sink_result result =
@@ -418,7 +427,7 @@ sc_cf_process_msg(struct sc_cf_source *source, int fd) {
                 LOGE("Invalid Cuttlefish raw frame");
                 goto error;
             }
-            if (h.display_number != source->display_id
+            if (h.display_number != source->display_number
                     || sc_cf_get_pix_fmt(h.fourcc) == AV_PIX_FMT_NONE) {
                 // Skip the payload
                 uint8_t skip[4096];
@@ -509,7 +518,7 @@ sc_cf_process_msg(struct sc_cf_source *source, int fd) {
                 LOGE("Invalid Cuttlefish shared memory frame");
                 goto error;
             }
-            if (h.display_number != source->display_id
+            if (h.display_number != source->display_number
                     || sc_cf_get_pix_fmt(h.fourcc) == AV_PIX_FMT_NONE) {
                 sc_cf_release_slot(shm, h.slot_index);
                 break;
@@ -539,7 +548,7 @@ sc_cf_process_msg(struct sc_cf_source *source, int fd) {
                 LOGE("Invalid Cuttlefish DMA-BUF frame");
                 goto error;
             }
-            if (h.display_number != source->display_id
+            if (h.display_number != source->display_number
                     || sc_cf_get_pix_fmt(h.fourcc) == AV_PIX_FMT_NONE) {
                 break;
             }
@@ -623,13 +632,25 @@ run_cf_source(void *data) {
         error_logged = false;
         LOGD("Connected to Cuttlefish frame socket %s", source->socket_path);
 
-        // Ask for the slots to be released by the client instead of copied (an
-        // older server ignores it)
-        if (!sc_cf_send_msg(fd, SC_CF_MAGIC_HELLO, 1, 0)) {
+        // Ask for the slots to be released by the client instead of copied,
+        // and for the frames of our display only (an older server ignores it,
+        // and sends the frames of all the displays)
+        if (!sc_cf_send_msg(fd, SC_CF_MAGIC_HELLO, 1,
+                            source->display_number)) {
             LOGW("Could not send Cuttlefish frame socket hello");
         }
+        sc_mutex_lock(&source->mutex);
+        if (source->window_hidden) {
+            sc_cf_send_msg(fd, SC_CF_MAGIC_PAUSE, 1, 0);
+        }
+        sc_mutex_unlock(&source->mutex);
 
-        while (sc_cf_process_msg(source, fd));
+        bool opened = source->sinks_open || !source->open_size.width
+                   || !source->open_size.height
+                   || sc_cf_open_sinks(source, source->open_size);
+        if (opened) {
+            while (sc_cf_process_msg(source, fd));
+        }
 
         sc_mutex_lock(&source->mutex);
         source->fd = -1;
@@ -639,6 +660,9 @@ run_cf_source(void *data) {
         av_buffer_unref(&source->shm);
         av_frame_unref(source->frame);
 
+        if (!opened) {
+            break;
+        }
         if (!stopped) {
             LOGW("Cuttlefish frame socket disconnected, reconnecting");
             SDL_Delay(250);
@@ -655,7 +679,7 @@ run_cf_source(void *data) {
 
 bool
 sc_cf_source_init(struct sc_cf_source *source, const char *socket_path,
-                  uint32_t display_id) {
+                  uint32_t display_number, struct sc_size open_size) {
     source->socket_path = strdup(socket_path);
     if (!source->socket_path) {
         LOG_OOM();
@@ -675,7 +699,9 @@ sc_cf_source_init(struct sc_cf_source *source, const char *socket_path,
         return false;
     }
 
-    source->display_id = display_id;
+    source->display_number = display_number;
+    source->open_size = open_size;
+    source->window_hidden = false;
     source->stopped = false;
     source->fd = -1;
     source->shm = NULL;
@@ -704,6 +730,20 @@ sc_cf_source_stop(struct sc_cf_source *source) {
     if (source->fd != -1) {
         // Unblock the reader
         shutdown(source->fd, SHUT_RDWR);
+    }
+    sc_mutex_unlock(&source->mutex);
+}
+
+void
+sc_cf_source_set_window_hidden(struct sc_cf_source *source, bool hidden) {
+    sc_mutex_lock(&source->mutex);
+    if (source->window_hidden != hidden) {
+        source->window_hidden = hidden;
+        LOGD("Cuttlefish frames %s", hidden ? "paused" : "resumed");
+        // An older server ignores it
+        if (source->fd != -1) {
+            sc_cf_send_msg(source->fd, SC_CF_MAGIC_PAUSE, hidden, 0);
+        }
     }
     sc_mutex_unlock(&source->mutex);
 }

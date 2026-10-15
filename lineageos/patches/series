@@ -45,6 +45,7 @@ art patches/art.patch
 device/generic/goldfish patches/device-generic-goldfish.patch
 device/generic/goldfish patches/device-generic-goldfish-sensors-transport-compat.patch
 device/generic/goldfish patches/device-generic-goldfish-hwc3-guest-composer-rgba.patch
+device/generic/goldfish patches/device-generic-goldfish-hwc3-skip-unchanged-present.patch
 device/google/cuttlefish patches/device-google-cuttlefish.patch
 device/google/cuttlefish patches/device-google-cuttlefish-secure-user-adb.patch
 device/google/cuttlefish patches/device-google-cuttlefish-light-compat.patch
@@ -75,6 +76,7 @@ frameworks/base patches/frameworks-base-settingsprovider-deviceconfig-quiet-deny
 frameworks/base patches/frameworks-base-virtual-display-teardown-quiet.patch
 frameworks/base patches/frameworks-base-powerstats-no-battery-bluetooth.patch
 frameworks/base patches/frameworks-base-telephony-no-data-quiet.patch
+frameworks/base patches/frameworks-base-systemui-no-connected-display-ui.patch
 system/core patches/system-core.patch
 system/sepolicy patches/system-sepolicy.patch
 system/sepolicy patches/system-sepolicy-checkfc-arm64-getopt.patch
@@ -84,6 +86,7 @@ packages/apps/Aperture patches/packages-apps-Aperture-video-denoise.patch
 packages/apps/Aperture patches/packages-apps-Aperture-ika-settings.patch
 packages/apps/Aperture patches/packages-apps-Aperture-video-quality-interval.patch
 packages/apps/Launcher3 patches/packages-apps-Launcher3.patch
+packages/apps/Launcher3 patches/packages-apps-Launcher3-no-recents-on-app-displays.patch
 packages/apps/Settings patches/packages-apps-Settings.patch
 vendor/lineage patches/vendor-lineage.patch
 vendor/lineage patches/vendor-lineage-arm64-host-tools.patch

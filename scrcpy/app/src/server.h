@@ -51,6 +51,7 @@ struct sc_server_params {
     enum sc_orientation_lock capture_orientation_lock;
     bool control;
     uint32_t display_id;
+    uint8_t cuttlefish_display;
     const char *new_display;
     enum sc_display_ime_policy display_ime_policy;
     bool video;

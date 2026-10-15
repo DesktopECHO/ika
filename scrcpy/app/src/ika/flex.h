@@ -5,6 +5,7 @@
 
 #include <stdbool.h>
 #include <SDL3/SDL.h>
+#include <libavutil/frame.h>
 
 #include "controller.h"
 #include "coords.h"
@@ -16,6 +17,8 @@
 #define SC_FLEX_MIN_HEIGHT 540
 
 #define SC_FLEX_BLUR_LEVELS 3
+// Display sizes requested recently, to recognize late frames drawn at one
+#define SC_FLEX_RECENT_SIZES 8
 
 /**
  * Flex display: the device display follows the window size, in pixels, so that
@@ -41,6 +44,9 @@ struct sc_flex {
     struct sc_controller *controller;
     SDL_Renderer *renderer;
     bool raw;
+    // The device confirms the initial size once the app is started on the
+    // resized display (raw only)
+    bool app_window;
 
     // In pixels, in device orientation
     struct sc_size pending; // window size, to request once it settles
@@ -52,6 +58,8 @@ struct sc_flex {
     sc_tick ready_tick; // DISPLAY_READY received for the requested size
     bool ready_unchanged; // the requested size was already the shown one
     sc_tick frame_tick; // last frame received
+    // Raw frames received since the last resize request
+    unsigned frames_since_request;
 
     // Raw only
     bool holding;
@@ -63,6 +71,20 @@ struct sc_flex {
     sc_tick hold_tick; // blur fade-in start
     sc_tick release_tick; // blur fade-out (or reveal) start
     bool release_reveal; // the release reveals the window content
+    // Shown until the content is first revealed, and faded from: the
+    // background color of the Android theme
+    uint8_t background[3]; // RGB
+
+    // Raw only: the display sizes requested recently (a ring), and the last
+    // request time. After a resize, a late frame can still have the content
+    // of one of them, surrounded by black (the rest of the physical display).
+    struct sc_size recent_sizes[SC_FLEX_RECENT_SIZES];
+    unsigned recent_next;
+    sc_tick request_tick;
+    // The content of the last frame in frame coordinates, if it is a late
+    // frame of another size than the shown one
+    bool has_late_content;
+    SDL_FRect late_content;
 
     SDL_Texture *blur_levels[SC_FLEX_BLUR_LEVELS];
     struct sc_size blur_source_size;
@@ -74,7 +96,7 @@ struct sc_flex {
 
 void
 sc_flex_init(struct sc_flex *flex, struct sc_controller *controller,
-             SDL_Renderer *renderer, bool raw);
+             SDL_Renderer *renderer, bool raw, bool app_window);
 
 void
 sc_flex_destroy(struct sc_flex *flex);
@@ -93,6 +115,16 @@ sc_flex_on_window_state_changed(struct sc_flex *flex);
 
 void
 sc_flex_on_display_ready(struct sc_flex *flex, struct sc_size size);
+
+// A raw frame was received: recognize a late frame of a recently requested
+// display size (only its content is drawn, the rest in the theme background)
+void
+sc_flex_on_raw_frame_pixels(struct sc_flex *flex, const AVFrame *frame);
+
+// Set the background color of the Android theme (0xAARRGGBB, alpha ignored).
+// Return true if it is currently visible, so the screen must be rendered.
+bool
+sc_flex_set_background(struct sc_flex *flex, uint32_t color);
 
 // A frame was received (frame_size is only used for video frames, which have
 // the display size)

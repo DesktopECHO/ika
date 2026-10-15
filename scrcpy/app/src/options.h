@@ -312,6 +312,7 @@ struct scrcpy_options {
     uint16_t window_height;
     uint32_t display_id;
     uint32_t background_color;
+    bool background_color_set; // --background-color was given
     sc_tick video_buffer;
     sc_tick audio_buffer;
     sc_tick audio_output_buffer;
@@ -376,6 +377,7 @@ struct scrcpy_options {
 
     // Ika
     const char *cuttlefish_frames_socket;
+    uint8_t cuttlefish_display; // the crosvm display number, 0 for the main one
     uint16_t flex_display_dpi; // density of the resized main display, 0 to keep
     const char *window_state_file;
     bool ika_game_session;

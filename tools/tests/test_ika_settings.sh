@@ -46,8 +46,7 @@ settings() {
           DEFAULT_GUEST_MEMORY_CAP_MB DEFAULT_GUEST_MEMORY_FALLBACK_MB \
           DEFAULT_DATA_GB CVD_BOOT_TIMEOUT_SEC IKA_STOP_GRACE_SEC \
           IKA_SCRCPY_REBOOT_TIMEOUT_SEC IKA_MIN_OPEN_FILES \
-          IKA_KERNEL_PAGE_SIZE IKADPI IKA_SCRCPY IKA_APP_BIT_RATE \
-          IKA_INSTALL_TIMEOUT_SEC IKA_APP_CODEC_OPTIONS \
+          IKA_KERNEL_PAGE_SIZE IKADPI IKA_SCRCPY IKA_INSTALL_TIMEOUT_SEC \
           IKA_APP_MENU_POLL_SEC IKA_GSF_ID_TIMEOUT_SEC GFXSTREAM_VULKAN \
           BACKUP_LIST_ADB_TIMEOUT_SEC BACKUP_COPY_ADB_TIMEOUT_SEC; do
         printf "%s=%s\n" "${var}" "${!var}"
@@ -81,7 +80,6 @@ rm "${T}/generated/ika.ini"
 settings "${T}/generated" >/dev/null
 [[ "$(<"${T}/generated/ika.ini")" == "${generated_file}" ]] || fail "the regenerated ika.ini differs"
 expect_line "${builtin_settings}" "CVD_GPU_DEFAULTS.gpu_mode=gfxstream_guest_angle" "built-in gpu_mode"
-expect_line "${builtin_settings}" "IKA_APP_CODEC_OPTIONS=video-qp-max:int=18" "built-in codec options"
 
 # Edits override the defaults; "auto" keeps the calculated value.
 cat >"${T}/edited/ika.ini" <<'EOF'
@@ -105,6 +103,7 @@ adb_mode = native_vsock
 data_gb = 128
 
 [apps]
+menu_poll_sec = 9
 bit_rate = 40M
 codec_options =
 hidden_apps = com.example.one, com.example.two
@@ -124,8 +123,10 @@ expect_line "${edited}" "CVD_GPU_DEFAULTS.gpu_mode=guest_swiftshader" "gpu_mode 
 expect_line "${edited}" "CVD_GPU_DEFAULTS.gpu_renderer_features=A:enabled;B:disabled" "value containing semicolons"
 expect_line "${edited}" "CVD_NETWORK_DEFAULTS.adb_mode=native_vsock" "adb_mode"
 expect_line "${edited}" "DEFAULT_DATA_GB=128" "data_gb"
-expect_line "${edited}" "IKA_APP_BIT_RATE=40M" "bit rate"
-expect_line "${edited}" "IKA_APP_CODEC_OPTIONS=" "empty codec options are kept"
+expect_line "${edited}" "IKA_APP_MENU_POLL_SEC=9" "menu poll"
+# Settings of the former H.264 app windows are ignored without a warning.
+reject_line "${edited}" "[ika] ${T}/edited/ika.ini: unknown setting 'apps.bit_rate'; ignored" "former bit rate"
+reject_line "${edited}" "[ika] ${T}/edited/ika.ini: unknown setting 'apps.codec_options'; ignored" "former codec options"
 expect_line "${edited}" "IKA_HIDDEN_APPS=com.example.one com.example.two" "hidden apps"
 expect_line "${edited}" "IKA_GAME_APPS=com.example.game" "game apps"
 expect_line "${edited}" "IKA_INSTALL_TIMEOUT_SEC=90" "install timeout"
@@ -145,13 +146,11 @@ expect_line "${mistakes}" "[ika] ${T}/edited/ika.ini: unknown setting 'gpu.gpu_m
 expect_line "${mistakes}" "[ika] ${T}/edited/ika.ini: compute.cpus must be auto or a positive whole number, not 'many'; using auto" "bad cpus"
 expect_line "${mistakes}" "$(grep '^CVD_COMPUTE_DEFAULTS.cpus=' <<<"${builtin_settings}")" "bad cpus keeps the calculated value"
 
-# An environment variable wins over the file, and an empty codec option set in
-# the environment is a choice too.
-printf '[apps]\nbit_rate = 40M\ncodec_options = from-file\n[system]\nstop_grace_sec = 10\n' >"${T}/edited/ika.ini"
-from_env="$(settings "${T}/edited" IKA_APP_BIT_RATE=20M IKA_APP_CODEC_OPTIONS= IKA_STOP_GRACE_SEC=5)"
-expect_line "${from_env}" "IKA_APP_BIT_RATE=20M" "env bit rate"
-expect_line "${from_env}" "IKA_APP_CODEC_OPTIONS=" "env empty codec options"
+# An environment variable wins over the file.
+printf '[apps]\nmenu_poll_sec = 9\n[system]\nstop_grace_sec = 10\n' >"${T}/edited/ika.ini"
+from_env="$(settings "${T}/edited" IKA_APP_MENU_POLL_SEC=3 IKA_STOP_GRACE_SEC=5)"
+expect_line "${from_env}" "IKA_APP_MENU_POLL_SEC=3" "env menu poll"
 expect_line "${from_env}" "IKA_STOP_GRACE_SEC=5" "env stop grace"
-reject_line "${from_env}" "IKA_APP_CODEC_OPTIONS=from-file" "env beats file"
+reject_line "${from_env}" "IKA_APP_MENU_POLL_SEC=9" "env beats file"
 
 printf 'ika settings tests passed\n'

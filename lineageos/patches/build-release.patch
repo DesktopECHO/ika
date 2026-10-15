@@ -18,6 +18,10 @@ path and its trunk stability fixes, and related correctness fixes without
 enabling diagnostic logging, Launcher model rewrites, or the experimental
 WindowDecoration2 refactor.
 
+Audio focus follows desktop behavior (audio_focus_desktop): with the
+framework overlay's config_multi_audio_focus_enabled_default, apps in different
+windows keep playing at the same time instead of pausing each other.
+
 The Overview desktop tile keeps its solid background: the wallpaper-screenshot
 background (enable_overview_desktop_tile_wallpaper_background) is drawn
 unscaled and leaves part of the tile empty on large displays. Android 17
@@ -35,6 +39,18 @@ index 22f6c87ee..dcaaa919c 100644
 +  state: DISABLED
    permission: READ_WRITE
  }
+diff --git a/aconfig/bp4a/android.media.audio/audio_focus_desktop_flag_values.textproto b/aconfig/bp4a/android.media.audio/audio_focus_desktop_flag_values.textproto
+new file mode 100644
+index 000000000..d7ad76851
+--- /dev/null
++++ b/aconfig/bp4a/android.media.audio/audio_focus_desktop_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "android.media.audio"
++  name: "audio_focus_desktop"
++  state: ENABLED
++  permission: READ_ONLY
++}
 diff --git a/aconfig/bp4a/com.android.launcher3/avoid_display_cutout_bubble_bar_flag_values.textproto b/aconfig/bp4a/com.android.launcher3/avoid_display_cutout_bubble_bar_flag_values.textproto
 new file mode 100644
 index 000000000..f50a36a3e

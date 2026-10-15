@@ -4,6 +4,12 @@
     <bool name="config_canInternalDisplayHostDesktops">true</bool>
     <bool name="config_enterDesktopByDefaultOnFreeformDisplay">true</bool>
     <bool name="config_dragToMaximizeInDesktopMode">true</bool>
+    <!-- Displays added at runtime (Cuttlefish displays shown in app windows)
+         own their content: no status bar, taskbar, wallpaper or launcher. -->
+    <bool name="config_localDisplaysMirrorContent">false</bool>
+    <!-- Apps in different windows keep playing media at the same time, as on a
+         desktop (needs android.media.audio.audio_focus_desktop). -->
+    <bool name="config_multi_audio_focus_enabled_default">true</bool>
     <bool name="config_showHomeBehindDesktop">true</bool>
     <bool name="config_disableLockscreenByDefault">true</bool>
 

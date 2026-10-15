@@ -12,9 +12,11 @@ import com.genymobile.scrcpy.video.CameraAspectRatio;
 import com.genymobile.scrcpy.video.CameraFacing;
 import com.genymobile.scrcpy.video.VideoCodec;
 import com.genymobile.scrcpy.video.VideoSource;
+import com.genymobile.scrcpy.wrappers.ServiceManager;
 import com.genymobile.scrcpy.wrappers.WindowManager;
 
 import android.graphics.Rect;
+import android.os.SystemClock;
 import android.util.Pair;
 
 import java.util.List;
@@ -41,6 +43,7 @@ public class Options {
     private Rect crop;
     private boolean control = true;
     private int displayId;
+    private int cuttlefishDisplay;
     private String cameraId;
     private Size cameraSize;
     private CameraFacing cameraFacing;
@@ -162,6 +165,10 @@ public class Options {
 
     public int getDisplayId() {
         return displayId;
+    }
+
+    public int getCuttlefishDisplay() {
+        return cuttlefishDisplay;
     }
 
     public String getCameraId() {
@@ -430,6 +437,12 @@ public class Options {
                 case "display_id":
                     options.displayId = Integer.parseInt(value);
                     break;
+                case "cuttlefish_display":
+                    options.cuttlefishDisplay = Integer.parseInt(value);
+                    if (options.cuttlefishDisplay < 0 || options.cuttlefishDisplay > 0xFF) {
+                        throw new IllegalArgumentException("cuttlefish_display (" + options.cuttlefishDisplay + ") must be in [0; 255]");
+                    }
+                    break;
                 case "show_touches":
                     options.showTouches = Boolean.parseBoolean(value);
                     break;
@@ -590,7 +603,30 @@ public class Options {
             options.displayId = Device.DISPLAY_ID_NONE;
         }
 
+        if (options.cuttlefishDisplay > 0) {
+            assert options.displayId == 0 : "Must not set both displayId and cuttlefishDisplay";
+            options.displayId = findCuttlefishDisplayId(options.cuttlefishDisplay);
+        }
+
         return options;
+    }
+
+    // A display just added to Cuttlefish may take a moment to appear
+    private static final long CUTTLEFISH_DISPLAY_TIMEOUT_MS = 5000;
+
+    private static int findCuttlefishDisplayId(int cuttlefishDisplay) {
+        long deadline = SystemClock.uptimeMillis() + CUTTLEFISH_DISPLAY_TIMEOUT_MS;
+        while (true) {
+            int displayId = ServiceManager.getDisplayManager().findLocalDisplayIdByPort(cuttlefishDisplay);
+            if (displayId != -1) {
+                Ln.i("Cuttlefish display " + cuttlefishDisplay + " is display " + displayId);
+                return displayId;
+            }
+            if (SystemClock.uptimeMillis() >= deadline) {
+                throw new IllegalArgumentException("No Android display for Cuttlefish display " + cuttlefishDisplay);
+            }
+            SystemClock.sleep(100);
+        }
     }
 
     private static Rect parseCrop(String crop) {
