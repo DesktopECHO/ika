@@ -86,6 +86,7 @@ packages/apps/Aperture patches/packages-apps-Aperture-video-denoise.patch
 packages/apps/Aperture patches/packages-apps-Aperture-ika-settings.patch
 packages/apps/Aperture patches/packages-apps-Aperture-video-quality-interval.patch
 packages/apps/Launcher3 patches/packages-apps-Launcher3.patch
+packages/apps/Launcher3 patches/packages-apps-Launcher3-no-recents-on-app-displays.patch
 packages/apps/Settings patches/packages-apps-Settings.patch
 vendor/lineage patches/vendor-lineage.patch
 vendor/lineage patches/vendor-lineage-arm64-host-tools.patch
