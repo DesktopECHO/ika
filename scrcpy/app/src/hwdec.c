@@ -84,20 +84,6 @@ sc_hwdec_init(struct sc_hwdec *hwdec, enum AVHWDeviceType hw_type,
             hwdec->name = "software";
             hwdec->hw_device_ctx = NULL;
             break;
-#ifdef HAVE_VAAPI
-        case AV_HWDEVICE_TYPE_VAAPI: {
-            LOGD("VA-API device: %s", hw_device ? hw_device : "(default)");
-            int ret = av_hwdevice_ctx_create(&hwdec->hw_device_ctx, hw_type,
-                                             hw_device, NULL, 0);
-            if (ret < 0) {
-                LOGE("Could not create VA-API device: %s", av_err2str(ret));
-                return false;
-            }
-
-            hwdec->name = "vaapi";
-            break;
-        }
-#endif
 #ifdef HAVE_D3D11VA
         case AV_HWDEVICE_TYPE_D3D11VA:
             if (!sc_hwdec_init_d3d11va(hwdec, renderer)) {
