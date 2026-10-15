@@ -201,6 +201,7 @@ if [[ "${LINEAGE_DESKTOP_GMS_PROVIDER:-none}" == "mtg" ]]; then
     PrebuiltGmsCoreVic.apk
     SetupWizard.apk
     SpeechServicesByGoogle.apk
+    Tubesky.apk
     Velvet.apk
     VelvetTitan.apk
     Wellbeing.apk

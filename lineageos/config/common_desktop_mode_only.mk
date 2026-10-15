@@ -34,6 +34,10 @@ PRODUCT_DEXPREOPT_SPEED_APPS := $(filter-out Launcher3 Launcher3Go Launcher3Quic
 PRODUCT_PACKAGES += Launcher3QuickStep
 PRODUCT_DEXPREOPT_SPEED_APPS += Launcher3QuickStep
 
+# Android TV mode, switched to with IkaMode's Desktop/TV entry. Desktop mode,
+# the default, is unchanged by it.
+$(call inherit-product, vendor/lineage_desktop/config/tv_mode.mk)
+
 # Keep the app compatibility surface tablet-shaped. Desktop behavior is layered
 # on top via the windowing overlays/settings below, but app stores and many apps
 # key their phone/tablet choice from ro.build.characteristics.

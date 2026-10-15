@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The icon of Desktop/TV, the mode switcher: the art on white, as the other
+     apps' icons are. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@android:color/white" />
+    <foreground>
+        <!-- 48 of the 72dp the launcher shows: the art's corners stay inside
+             the 66dp safe zone of any icon mask. -->
+        <inset
+            android:drawable="@drawable/ic_switch_art"
+            android:inset="30dp" />
+    </foreground>
+</adaptive-icon>

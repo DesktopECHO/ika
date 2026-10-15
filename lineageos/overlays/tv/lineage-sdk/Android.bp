@@ -1,0 +1,11 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+// Lineage platform settings of TV mode (vendor/lineage/overlay/tv), applied
+// only when persist.sys.ika.mode=tv.
+runtime_resource_overlay {
+    name: "LineageDesktopTvLineageSdkOverlay",
+    product_specific: true,
+    sdk_version: "current",
+}

@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.lineageos.desktop.overlay.leanbackime">
+    <application android:hasCode="false" />
+    <overlay
+        android:targetPackage="com.android.inputmethod.leanback"
+        android:isStatic="true"
+        android:priority="200" />
+</manifest>

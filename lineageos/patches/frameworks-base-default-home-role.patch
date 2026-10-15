@@ -1,0 +1,19 @@
+Patch summary:
+Add config_defaultHome, the package that holds the Home role by default, as
+config_defaultBrowser does for the browser role. PermissionController reads it
+through roles.xml (packages-modules-Permission-default-home-role.patch); empty
+keeps the stock fallback to the highest-priority Home app.
+
+diff --git a/core/res/res/values/config.xml b/core/res/res/values/config.xml
+--- a/core/res/res/values/config.xml
++++ b/core/res/res/values/config.xml
+@@ -2482,6 +2482,9 @@
+     <bool name="config_showDefaultAssistant">true</bool>
+     <!-- The name of the package that will hold the browser role by default. -->
+     <string name="config_defaultBrowser" translatable="false">@string/default_browser</string>
++    <!-- Ika: the name of the package that will hold the home role by default. Empty leaves
++         the choice to the home app priorities, as before. -->
++    <string name="config_defaultHome" translatable="false"></string>
+     <!-- The name of the package that will hold the dialer role by default. -->
+     <string name="config_defaultDialer" translatable="false">com.android.dialer</string>
+     <!-- The name of the package that will hold the SMS role by default. -->

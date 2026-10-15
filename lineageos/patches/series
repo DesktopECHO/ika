@@ -56,6 +56,7 @@ device/google/cuttlefish patches/device-google-cuttlefish-secure-env-cppcose-com
 device/google/cuttlefish patches/device-google-cuttlefish-front-camera.patch
 device/google/cuttlefish patches/device-google-cuttlefish-camcorder-profiles.patch
 device/google/cuttlefish patches/device-google-cuttlefish-zram-at-boot.patch
+device/google/atv patches/device-google-atv-ika-tv-mode.patch
 frameworks/av patches/frameworks-av.patch
 frameworks/native patches/frameworks-native-logspam.patch
 frameworks/native patches/frameworks-native-vulkan-profile-timestamps.patch
@@ -77,9 +78,16 @@ frameworks/base patches/frameworks-base-virtual-display-teardown-quiet.patch
 frameworks/base patches/frameworks-base-powerstats-no-battery-bluetooth.patch
 frameworks/base patches/frameworks-base-telephony-no-data-quiet.patch
 frameworks/base patches/frameworks-base-systemui-no-connected-display-ui.patch
+frameworks/base patches/frameworks-base-systemui-app-window-displays.patch
+frameworks/base patches/frameworks-base-ika-mode.patch
+frameworks/base patches/frameworks-base-default-home-role.patch
+frameworks/base patches/frameworks-base-tv-advanced-protection.patch
+frameworks/opt/tv/tvsystem patches/frameworks-opt-tv-tvsystem-ika-tv-mode.patch
 system/core patches/system-core.patch
 system/sepolicy patches/system-sepolicy.patch
 system/sepolicy patches/system-sepolicy-checkfc-arm64-getopt.patch
+packages/modules/Permission patches/packages-modules-Permission-default-home-role.patch
+packages/apps/Catapult patches/packages-apps-Catapult-mouse-clicks.patch
 packages/apps/Aperture patches/packages-apps-Aperture-16-9.patch
 packages/apps/Aperture patches/packages-apps-Aperture-camera-sizes.patch
 packages/apps/Aperture patches/packages-apps-Aperture-video-denoise.patch
@@ -88,6 +96,7 @@ packages/apps/Aperture patches/packages-apps-Aperture-video-quality-interval.pat
 packages/apps/Launcher3 patches/packages-apps-Launcher3.patch
 packages/apps/Launcher3 patches/packages-apps-Launcher3-no-recents-on-app-displays.patch
 packages/apps/Settings patches/packages-apps-Settings.patch
+packages/apps/TvSystemUI patches/packages-apps-TvSystemUI-ika-tv-mode.patch
 vendor/lineage patches/vendor-lineage.patch
 vendor/lineage patches/vendor-lineage-arm64-host-tools.patch
 build/soong patches/build-soong-arm64-host.patch

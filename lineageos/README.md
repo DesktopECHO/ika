@@ -50,7 +50,8 @@ This repository owns product policy only:
 - documentation and validation scripts
 - source-level patches for the projects that cannot be customized by overlays
 - small desktop helper apps under `packages/` (`IkaGsfId` publishes the Google
-  Services Framework Android ID as `sys.ika.gsf_android_id`)
+  Services Framework Android ID as `sys.ika.gsf_android_id`; `IkaMode` applies
+  the boot mode, see [TV Mode](#tv-mode))
 
 Behavioral framework, Launcher, SystemUI, Shell, and Cuttlefish changes are
 stored under `patches/` and applied to an official LineageOS 23.2 checkout.
@@ -93,6 +94,56 @@ Additional project docs:
   describe how the display follows the host window
 - `docs/app-compatibility.md` tracks app support by architecture/runtime
 - `docs/release-process.md` documents release inputs and output metadata
+
+## TV Mode
+
+The same image also runs an Android TV interface. Desktop is the default.
+`packages/IkaMode`, a persistent system app, holds the mode in
+`persist.sys.ika.mode` (`tv` or `desktop`), which only its **Desktop/TV**
+entry, in the desktop's app drawer and in the TV launcher's apps, changes. It
+lists Desktop Mode and each TV launcher (Home apps that declare the leanback
+feature or have a TV launcher entry, Catapult first). In TV mode a TV launcher
+becomes the Home app at once, as TV Settings has no Home app choice; switching
+modes asks first, then switches the Settings app (only one of TV Settings and
+Settings is enabled, as they answer the same intents), the keyboard (Leanback
+in TV mode) and the Home app (the chosen TV launcher, or the desktop's again),
+and restarts Android for the parts that are set up at boot. Launcher3 is off in
+TV mode and Catapult on the desktop.
+`config/tv_mode.mk` lists the pieces:
+
+- installed in both modes: Catapult, TvProvider, TV Settings (two-panel), the
+  Leanback keyboard (kept from enabling itself on the desktop by
+  `overlays/tv/leanback-ime`), LineageCustomizer, tv-services,
+  `tv_input.default`, the TV tuner and remote-provider libraries, Lineage TV's
+  remote and gamepad layouts and the gamepad feature
+- gated on `persist.sys.ika.mode=tv` with `requiredSystemPropertyName`: the AOSP
+  TV overlays (`patches/device-google-atv-ika-tv-mode.patch`,
+  `patches/frameworks-opt-tv-tvsystem-ika-tv-mode.patch`) and Ika's own
+  `overlays/tv/framework-res` (no desktop windowing, split screen or navigation
+  bar, which also removes the Launcher3 taskbar) and `overlays/tv/lineage-sdk`
+- read only in TV mode, by `patches/frameworks-base-ika-mode.patch`:
+  `/system_ext/etc/permissions/ika_tv` (leanback, leanback-only, live TV,
+  freeform windowing unavailable). The same patch keeps a package parser cache per
+  mode and ignores the freeform developer setting in TV mode
+- scanned only in TV mode, also by that patch: TvSystemUI, PackageInstaller_tv
+  and TvFrameworkPackageStubs; SystemUI and PackageInstaller are scanned only
+  in desktop mode. With MindTheGapps, the Android TV build of the Play Store
+  (Tubesky, MindTheGapps' arm64 build, kept in Git LFS in
+  `prebuilts/mindthegapps/arm64/tubesky`; x86-64 runs it through the ARM native
+  bridge) is scanned only in TV mode and the phone build (Phonesky) only in
+  desktop mode (`patches/frameworks-base-ika-mode.patch`); as an update
+  replaces either build, IkaMode saves the update for the mode it leaves and
+  removes it (or cancels the switch), then reinstalls the new mode's saved
+  update after boot when it is newer than that mode's build. TvSystemUI and
+  PackageInstaller_tv share their package names with the desktop's, so each
+  mode boots with its own (`patches/packages-apps-TvSystemUI-ika-tv-mode.patch`
+  keeps TvSystemUI from replacing SystemUI at build time), and
+  `atv-component-overrides.xml` is read only in TV mode from
+  `/system_ext/etc/sysconfig/ika_tv`
+- `sepolicy/private` gives the property its own type, readable by the zygote
+  (which checks the overlays), system_server and adb shell
+
+`config/tv_mode.mk` explains the TV pieces left out.
 
 ## Host Requirements
 

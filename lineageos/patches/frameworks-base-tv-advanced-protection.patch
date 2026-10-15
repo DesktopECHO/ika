@@ -1,0 +1,21 @@
+Patch summary:
+Start AdvancedProtectionService in Ika's TV mode too. Android skips it on TV
+devices (the leanback feature), but TV mode runs the phone Google Play
+services, which ask for it and crash at boot without it; a real TV ships the
+TV build of Play services, which does not. The service does nothing until
+Advanced Protection is turned on, as in desktop mode.
+
+diff --git a/services/java/com/android/server/SystemServer.java b/services/java/com/android/server/SystemServer.java
+--- a/services/java/com/android/server/SystemServer.java
++++ b/services/java/com/android/server/SystemServer.java
+@@ -1830,7 +1830,9 @@
+                 t.traceEnd();
+             }
+ 
+-            if (!isWatch && !isTv && !isAutomotive
++            // Ika: also in TV mode, whose phone Google Play services ask for this
++            // service and crash without it (a real TV ships their TV build).
++            if (!isWatch && !isAutomotive
+                     && android.security.Flags.aapmApi()) {
+                 t.traceBegin("StartAdvancedProtectionService");
+                 mSystemServiceManager.startService(AdvancedProtectionService.Lifecycle.class);
