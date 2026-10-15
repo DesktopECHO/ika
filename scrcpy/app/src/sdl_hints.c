@@ -44,15 +44,13 @@ sc_sdl_set_hints(const char *render_driver, bool disable_screensaver) {
         LOGW("Could not enable screensaver");
     }
 
-#if defined(HAVE_VAAPI) || defined(__linux__)
+#if defined(__linux__)
     // On X11, SDL creates the OpenGL contexts with GLX by default, but
-    // importing hardware decoded frames (VA-API) or Cuttlefish DMA-BUF frames
-    // requires EGL. Always use EGL,
-    // so that the rendering does not depend on the hardware decoding mode.
+    // importing Cuttlefish DMA-BUF frames requires EGL. Always use EGL.
     // Do not force it on other platforms: on Windows and macOS, it would try to
     // load libEGL.dll.
     // The environment variable SDL_VIDEO_FORCE_EGL=0 takes priority to restore
-    // GLX (hardware decoding is then unavailable).
+    // GLX (DMA-BUF frames are then unavailable).
     if (!SDL_SetHint(SDL_HINT_VIDEO_FORCE_EGL, "1")) {
         LOGW("Could not force EGL");
     }
