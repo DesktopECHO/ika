@@ -2416,7 +2416,7 @@ index 9ecffdc6b3..bc72bb4c13 100644
          }
          WindowInsets.Builder updatedInsetsBuilder = new WindowInsets.Builder(oldInsets);
 diff --git a/quickstep/src/com/android/launcher3/uioverrides/QuickstepLauncher.java b/quickstep/src/com/android/launcher3/uioverrides/QuickstepLauncher.java
-index 3b96a74f11..412b401c54 100644
+index 3b96a74f11..be616bf1c5 100644
 --- a/quickstep/src/com/android/launcher3/uioverrides/QuickstepLauncher.java
 +++ b/quickstep/src/com/android/launcher3/uioverrides/QuickstepLauncher.java
 @@ -53,7 +53,6 @@ import static com.android.launcher3.logging.StatsLogManager.LauncherEvent.LAUNCH
@@ -2499,15 +2499,18 @@ index 3b96a74f11..412b401c54 100644
          }
          shortcuts.add(DONT_SUGGEST_APP);
          shortcuts.add(PRIVATE_PROFILE_INSTALL);
-@@ -949,6 +958,66 @@ public class QuickstepLauncher extends Launcher implements RecentsViewContainer,
+@@ -949,6 +958,69 @@ public class QuickstepLauncher extends Launcher implements RecentsViewContainer,
          if (mTaskbarInteractor != null && FeatureFlags.enableHomeTransitionListener()) {
              mTaskbarInteractor.onLauncherResume();
          }
 +
 +        // Only hide Launcher behind desktop when we're resuming back to home itself. Other
-+        // Launcher surfaces like All Apps need to stay visible after resume.
++        // Launcher surfaces like All Apps need to stay visible after resume. Ika: and only while a
++        // desk is active, as without desktop windows, nothing covers the hidden home.
 +        if (shouldHideHomeBehindDesktopOnResume(
-+                shouldShowHomeBehindDesktop(),
++                shouldShowHomeBehindDesktop()
++                        && DesktopVisibilityController.INSTANCE.get(this)
++                                .isInDesktopMode(getDisplayId()),
 +                getStateManager().getState(),
 +                getStateManager().getTargetState())) {
 +            getStateManager().goToState(LauncherState.BACKGROUND_APP, false /* animated */);
@@ -2566,7 +2569,7 @@ index 3b96a74f11..412b401c54 100644
      }
  
      @Override
-@@ -985,6 +1054,14 @@ public class QuickstepLauncher extends Launcher implements RecentsViewContainer,
+@@ -985,6 +1057,14 @@ public class QuickstepLauncher extends Launcher implements RecentsViewContainer,
      @Override
      protected void onNewIntent(Intent intent) {
          boolean intentHasGnc = GestureNavContract.canBuildFromIntent(intent);
@@ -2581,7 +2584,7 @@ index 3b96a74f11..412b401c54 100644
          super.onNewIntent(intent);
          OverviewCommandHelper overviewCommandHelper = mTISBindHelper.getOverviewCommandHelper();
          if (overviewCommandHelper != null) {
-@@ -1366,6 +1443,7 @@ public class QuickstepLauncher extends Launcher implements RecentsViewContainer,
+@@ -1366,6 +1446,7 @@ public class QuickstepLauncher extends Launcher implements RecentsViewContainer,
      @Override
      public void finishBindingItems(IntSet pagesBoundFirst) {
          super.finishBindingItems(pagesBoundFirst);
@@ -2589,7 +2592,7 @@ index 3b96a74f11..412b401c54 100644
          // Instantiate and initialize WellbeingModel now that its loading won't interfere with
          // populating workspace.
          // TODO: Find a better place for this
-@@ -1377,6 +1455,109 @@ public class QuickstepLauncher extends Launcher implements RecentsViewContainer,
+@@ -1377,6 +1458,109 @@ public class QuickstepLauncher extends Launcher implements RecentsViewContainer,
          }
      }
  
