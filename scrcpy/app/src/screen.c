@@ -1286,6 +1286,9 @@ sc_screen_apply_frame(struct sc_screen *screen, bool can_resize) {
     }
 
     if (screen->flex_display) {
+        if (screen->raw) {
+            sc_flex_on_raw_frame_pixels(&screen->flex, frame);
+        }
         sc_flex_on_frame(&screen->flex, new_frame_size);
     }
 

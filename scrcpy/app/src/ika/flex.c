@@ -33,6 +33,8 @@
 #define SC_FLEX_ANIMATION_INTERVAL SC_TICK_FROM_MS(16)
 // Background until the device sends the color of its theme
 #define SC_FLEX_DEFAULT_BACKGROUND 0x33
+// How long after a resize request a frame can still be late
+#define SC_FLEX_LATE_FRAME_WINDOW SC_TICK_FROM_MS(3000)
 // The device may make a display a bit smaller than requested, to align its size
 // for the encoder
 #define SC_FLEX_MAX_ALIGNMENT 16
@@ -134,6 +136,13 @@ sc_flex_init(struct sc_flex *flex, struct sc_controller *controller,
     flex->hold_tick = 0;
     flex->release_tick = 0;
     flex->release_reveal = false;
+    for (unsigned i = 0; i < SC_FLEX_RECENT_SIZES; ++i) {
+        flex->recent_sizes[i].width = 0;
+        flex->recent_sizes[i].height = 0;
+    }
+    flex->recent_next = 0;
+    flex->request_tick = 0;
+    flex->has_late_content = false;
     for (unsigned i = 0; i < 3; ++i) {
         flex->background[i] = SC_FLEX_DEFAULT_BACKGROUND;
     }
@@ -272,6 +281,37 @@ sc_flex_render_blur(struct sc_flex *flex, SDL_Texture *blur,
         && SDL_RenderTexture(flex->renderer, blur, NULL, dst);
 }
 
+// Draw the live frame region live_src to dst. A late frame of another size has
+// only its content drawn, where the shown content is, and the rest (black in
+// the frame) in the theme background.
+static bool
+sc_flex_draw_live(struct sc_flex *flex, SDL_Texture *live,
+                  const SDL_FRect *live_src, const SDL_FRect *dst) {
+    SDL_Renderer *renderer = flex->renderer;
+    SDL_SetTextureBlendMode(live, SDL_BLENDMODE_NONE);
+
+    SDL_FRect src;
+    if (!flex->has_late_content
+            || !SDL_GetRectIntersectionFloat(live_src, &flex->late_content,
+                                             &src)) {
+        return SDL_RenderTexture(renderer, live, live_src, dst);
+    }
+
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(renderer, flex->background[0], flex->background[1],
+                           flex->background[2], 0xFF);
+    bool ok = SDL_RenderFillRect(renderer, dst);
+    float sx = dst->w / live_src->w;
+    float sy = dst->h / live_src->h;
+    SDL_FRect part = {
+        .x = dst->x + (src.x - live_src->x) * sx,
+        .y = dst->y + (src.y - live_src->y) * sy,
+        .w = src.w * sx,
+        .h = src.h * sy,
+    };
+    return ok && SDL_RenderTexture(renderer, live, &src, &part);
+}
+
 static void
 sc_flex_capture_preview(struct sc_flex *flex, SDL_Texture *live,
                         const SDL_FRect *live_src) {
@@ -292,9 +332,9 @@ sc_flex_capture_preview(struct sc_flex *flex, SDL_Texture *live,
     SDL_SetTextureScaleMode(preview, SDL_SCALEMODE_LINEAR);
 
     SDL_Texture *target = SDL_GetRenderTarget(renderer);
-    SDL_SetTextureBlendMode(live, SDL_BLENDMODE_NONE);
+    SDL_FRect whole = {0, 0, live_src->w, live_src->h};
     bool ok = SDL_SetRenderTarget(renderer, preview)
-           && SDL_RenderTexture(renderer, live, live_src, NULL);
+           && sc_flex_draw_live(flex, live, live_src, &whole);
     if (!SDL_SetRenderTarget(renderer, target)) {
         LOGW("Could not restore render target: %s", SDL_GetError());
     }
@@ -385,6 +425,130 @@ sc_flex_on_window_state_changed(struct sc_flex *flex) {
     flex->state_change_tick = sc_tick_now();
 }
 
+// Byte offset of the red, green and blue components in a 4-byte pixel of a
+// packed RGB format, or -1 if the format is not one
+static int
+sc_flex_rgb_offset(enum AVPixelFormat format) {
+    switch (format) {
+        case AV_PIX_FMT_BGR0:
+        case AV_PIX_FMT_RGB0:
+        case AV_PIX_FMT_BGRA:
+        case AV_PIX_FMT_RGBA:
+            return 0;
+        case AV_PIX_FMT_0BGR:
+        case AV_PIX_FMT_0RGB:
+        case AV_PIX_FMT_ABGR:
+        case AV_PIX_FMT_ARGB:
+            return 1;
+        default:
+            return -1;
+    }
+}
+
+// Samples along each side of a candidate content rectangle
+#define SC_FLEX_LATE_SAMPLES 12
+
+struct sc_flex_pixels {
+    const uint8_t *data;
+    int stride;
+    int width;
+    int height;
+    int offset; // of the red, green and blue components in a pixel
+};
+
+static bool
+sc_flex_is_black(const struct sc_flex_pixels *px, int x, int y) {
+    const uint8_t *p = px->data + y * px->stride + x * 4 + px->offset;
+    return !(p[0] | p[1] | p[2]);
+}
+
+// Whether the frame has the content of a display of this size: everything
+// around it (to the frame edges) is black, and its edge is not all black.
+// The bands are checked on their first pixels and halfway to the frame edge,
+// so that a band only a pixel wide in the window is recognized too.
+static bool
+sc_flex_has_content_of_size(const struct sc_flex_pixels *px,
+                            struct sc_size size) {
+    // LogicalDisplay rounds the offsets down
+    int x0 = (px->width - size.width) / 2;
+    int y0 = (px->height - size.height) / 2;
+    int x1 = x0 + size.width; // exclusive
+    int y1 = y0 + size.height;
+    if (!x0 && !y0) {
+        return false; // no band: the size of the whole frame
+    }
+
+    bool edge_has_content = false;
+    for (int i = 0; i < SC_FLEX_LATE_SAMPLES; ++i) {
+        int x = x0 + (int) ((i + 0.5f) * size.width / SC_FLEX_LATE_SAMPLES);
+        int y = y0 + (int) ((i + 0.5f) * size.height / SC_FLEX_LATE_SAMPLES);
+        if (y0) {
+            // Top and bottom bands
+            if (!sc_flex_is_black(px, x, y0 - 1)
+                    || !sc_flex_is_black(px, x, (y0 - 1) / 2)
+                    || !sc_flex_is_black(px, x, y1)
+                    || !sc_flex_is_black(px, x, (y1 + px->height - 1) / 2)) {
+                return false;
+            }
+            edge_has_content |= !sc_flex_is_black(px, x, y0)
+                             || !sc_flex_is_black(px, x, y1 - 1);
+        }
+        if (x0) {
+            // Left and right bands
+            if (!sc_flex_is_black(px, x0 - 1, y)
+                    || !sc_flex_is_black(px, (x0 - 1) / 2, y)
+                    || !sc_flex_is_black(px, x1, y)
+                    || !sc_flex_is_black(px, (x1 + px->width - 1) / 2, y)) {
+                return false;
+            }
+            edge_has_content |= !sc_flex_is_black(px, x0, y)
+                             || !sc_flex_is_black(px, x1 - 1, y);
+        }
+    }
+    // Content black up to its edges is not told apart from its bands, but its
+    // black bands do not show either
+    return edge_has_content;
+}
+
+void
+sc_flex_on_raw_frame_pixels(struct sc_flex *flex, const AVFrame *frame) {
+    flex->has_late_content = false;
+    if (!flex->raw || !flex->request_tick
+            || sc_tick_now() - flex->request_tick > SC_FLEX_LATE_FRAME_WINDOW) {
+        return;
+    }
+    int offset = sc_flex_rgb_offset(frame->format);
+    if (offset < 0 || !frame->data[0]) {
+        return;
+    }
+
+    struct sc_flex_pixels px = {
+        .data = frame->data[0],
+        .stride = frame->linesize[0],
+        .width = frame->width,
+        .height = frame->height,
+        .offset = offset,
+    };
+
+    // A late frame has the content of another size requested recently, with
+    // the rest of the physical display black around it
+    for (unsigned i = 0; i < SC_FLEX_RECENT_SIZES; ++i) {
+        struct sc_size size = flex->recent_sizes[i];
+        if (!sc_size_is_set(size) || sc_size_equals(size, flex->shown)
+                || size.width > px.width || size.height > px.height) {
+            continue;
+        }
+        if (sc_flex_has_content_of_size(&px, size)) {
+            flex->late_content.x = (px.width - size.width) / 2;
+            flex->late_content.y = (px.height - size.height) / 2;
+            flex->late_content.w = size.width;
+            flex->late_content.h = size.height;
+            flex->has_late_content = true;
+            return;
+        }
+    }
+}
+
 bool
 sc_flex_set_background(struct sc_flex *flex, uint32_t color) {
     flex->background[0] = color >> 16;
@@ -452,6 +616,9 @@ sc_flex_on_timer(struct sc_flex *flex) {
             flex->requested = flex->pending;
             flex->ready_tick = 0;
             flex->frames_since_request = 0;
+            flex->recent_sizes[flex->recent_next] = flex->requested;
+            flex->recent_next = (flex->recent_next + 1) % SC_FLEX_RECENT_SIZES;
+            flex->request_tick = now;
             if (!flex->raw) {
                 // No DISPLAY_READY: the frames at the new size tell it
                 flex->ready_tick = now;
@@ -576,9 +743,8 @@ sc_flex_render_raw(struct sc_flex *flex, SDL_Texture *live,
         return true;
     }
 
-    SDL_SetTextureBlendMode(live, SDL_BLENDMODE_NONE);
     SDL_SetTextureAlphaMod(live, 255);
-    bool ok = SDL_RenderTexture(renderer, live, live_src, dst);
+    bool ok = sc_flex_draw_live(flex, live, live_src, dst);
 
     if (flex->release_tick) {
         if (flex->release_reveal) {
@@ -592,12 +758,15 @@ sc_flex_render_raw(struct sc_flex *flex, SDL_Texture *live,
             ok &= SDL_RenderFillRect(renderer, dst);
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
         } else {
-            // The new content sharpens up
+            // The new content sharpens up (except over a late frame, whose
+            // blur would smear the black around its content)
             float t = sc_flex_progress(flex->release_tick,
                                        SC_FLEX_BLUR_FADE_OUT, now);
             flex->preview_blur_valid = false;
-            SDL_Texture *blur = sc_flex_build_blur(flex, live, live_src);
-            ok &= sc_flex_render_blur(flex, blur, dst, 1 - t);
+            if (!flex->has_late_content) {
+                SDL_Texture *blur = sc_flex_build_blur(flex, live, live_src);
+                ok &= sc_flex_render_blur(flex, blur, dst, 1 - t);
+            }
         }
     }
 
