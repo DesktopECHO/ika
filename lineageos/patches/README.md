@@ -80,6 +80,7 @@ cross-project index.
 | [`frameworks-base-virtual-display-teardown-quiet.patch`](frameworks-base-virtual-display-teardown-quiet.patch) | `frameworks/base` | Quiet virtual display teardown. |
 | [`frameworks-base-powerstats-no-battery-bluetooth.patch`](frameworks-base-powerstats-no-battery-bluetooth.patch) | `frameworks/base` | No power-stats errors without battery. |
 | [`frameworks-base-telephony-no-data-quiet.patch`](frameworks-base-telephony-no-data-quiet.patch) | `frameworks/base` | Quiet `isDataEnabled` without telephony data. |
+| [`frameworks-base-systemui-no-connected-display-ui.patch`](frameworks-base-systemui-no-connected-display-ui.patch) | `frameworks/base` | SystemUI shows no connected display icon, status bar event or "Connected to external display" toast: the external displays are app windows on the host. |
 | [`system-core.patch`](system-core.patch) | `system/core` | Copies the host-supplied `ro.boot.timezone` into `persist.sys.timezone` during init so the guest boots with the host timezone. |
 | [`system-sepolicy.patch`](system-sepolicy.patch) | `system/sepolicy` | Desktop SELinux policy and labels. |
 | [`system-sepolicy-checkfc-arm64-getopt.patch`](system-sepolicy-checkfc-arm64-getopt.patch) | `system/sepolicy` | Stores `checkfc`'s `getopt()` result in an `int` so ARM64 hosts correctly see the `-1` end-of-options sentinel instead of falling through to usage output. |

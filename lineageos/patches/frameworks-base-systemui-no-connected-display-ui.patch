@@ -1,0 +1,30 @@
+Patch summary:
+No connected display icon, status bar event or toast for app windows.
+
+diff --git a/packages/SystemUI/src/com/android/systemui/display/domain/interactor/ConnectedDisplayInteractor.kt b/packages/SystemUI/src/com/android/systemui/display/domain/interactor/ConnectedDisplayInteractor.kt
+--- a/packages/SystemUI/src/com/android/systemui/display/domain/interactor/ConnectedDisplayInteractor.kt
++++ b/packages/SystemUI/src/com/android/systemui/display/domain/interactor/ConnectedDisplayInteractor.kt
+@@ -175,7 +175,9 @@ constructor(
+         }
+ 
+     private fun isExternalDisplay(display: Display): Boolean {
+-        return display.type == Display.TYPE_EXTERNAL
++        // Ika: the external displays are app windows on the host, not monitors,
++        // so there is no connected display icon or connection event for them
++        return false
+     }
+ 
+     private fun isSecureDisplay(display: Display): Boolean {
+diff --git a/packages/SystemUI/src/com/android/systemui/display/ui/viewmodel/ConnectingDisplayViewModel.kt b/packages/SystemUI/src/com/android/systemui/display/ui/viewmodel/ConnectingDisplayViewModel.kt
+--- a/packages/SystemUI/src/com/android/systemui/display/ui/viewmodel/ConnectingDisplayViewModel.kt
++++ b/packages/SystemUI/src/com/android/systemui/display/ui/viewmodel/ConnectingDisplayViewModel.kt
+@@ -204,8 +204,8 @@ constructor(
+                 pendingDisplay.showNewDialog(concurrentDisplaysInProgress, isInKioskMode = true)
+             }
+             isInExtendedMode -> {
++                // Ika: no toast, the external displays are app windows on the host
+                 pendingDisplay.enableForDesktop()
+-                showExtendedDisplayConnectionToast()
+             }
+             else -> {
+                 when (pendingDisplay.connectionType) {
