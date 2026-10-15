@@ -309,6 +309,7 @@ struct scrcpy_options {
     uint16_t window_height;
     uint32_t display_id;
     uint32_t background_color;
+    bool background_color_set; // --background-color was given
     sc_tick video_buffer;
     sc_tick audio_buffer;
     sc_tick audio_output_buffer;

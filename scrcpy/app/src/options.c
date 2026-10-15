@@ -67,6 +67,7 @@ const struct scrcpy_options scrcpy_options_default = {
     .window_height = 0,
     .display_id = 0,
     .background_color = 0x222222, // dark gray
+    .background_color_set = false,
     .video_buffer = 0,
     .audio_buffer = -1, // depends on the audio format,
     .audio_output_buffer = SC_TICK_FROM_MS(10),

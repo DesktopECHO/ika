@@ -24,7 +24,11 @@
 #define SC_WINDOW_CLICK_DELAY SC_TICK_FROM_MS(220)
 #define SC_WINDOW_CLICK_MOVE_TOLERANCE 8.0f
 #define SC_WINDOW_BORDER 2
+// Until the background color of the content is known
 #define SC_WINDOW_BORDER_GRAY 0x33
+// Percentage of the way from the background color to white (dark background)
+// or black (light background)
+#define SC_WINDOW_BORDER_CONTRAST 18
 
 // xdg_surface.set_window_geometry, see xdg-shell.xml
 #define SC_XDG_SURFACE_SET_WINDOW_GEOMETRY 3
@@ -318,6 +322,9 @@ void
 sc_ika_window_init(struct sc_ika_window *iw, SDL_Window *window) {
     iw->window = window;
     iw->corner_press = false;
+    for (unsigned i = 0; i < 3; ++i) {
+        iw->border_color[i] = SC_WINDOW_BORDER_GRAY;
+    }
 
     bool borderless = SDL_GetWindowFlags(window) & SDL_WINDOW_BORDERLESS;
     iw->margin_backend = sc_ika_window_get_margin_backend(borderless);
@@ -580,6 +587,20 @@ sc_ika_window_handle_event(struct sc_ika_window *iw, const SDL_Event *event) {
 }
 
 void
+sc_ika_window_set_border_from_background(struct sc_ika_window *iw, uint8_t r,
+                                         uint8_t g, uint8_t b) {
+    // A shade apart from the background: lighter on a dark one, darker on a
+    // light one
+    uint8_t bg[3] = {r, g, b};
+    bool dark = 299 * r + 587 * g + 114 * b < 128 * 1000;
+    for (unsigned i = 0; i < 3; ++i) {
+        int target = dark ? 0xFF : 0x00;
+        iw->border_color[i] =
+            bg[i] + (target - bg[i]) * SC_WINDOW_BORDER_CONTRAST / 100;
+    }
+}
+
+void
 sc_ika_window_render_border(struct sc_ika_window *iw, SDL_Renderer *renderer) {
     SDL_WindowFlags flags = SDL_GetWindowFlags(iw->window);
     if (!(flags & SDL_WINDOW_BORDERLESS) || (flags & SDL_WINDOW_FULLSCREEN)) {
@@ -603,8 +624,8 @@ sc_ika_window_render_border(struct sc_ika_window *iw, SDL_Renderer *renderer) {
         {x + w - t, y + t, t, h - 2 * t},
     };
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
-    SDL_SetRenderDrawColor(renderer, SC_WINDOW_BORDER_GRAY,
-                           SC_WINDOW_BORDER_GRAY, SC_WINDOW_BORDER_GRAY, 0xFF);
+    SDL_SetRenderDrawColor(renderer, iw->border_color[0], iw->border_color[1],
+                           iw->border_color[2], 0xFF);
     SDL_RenderFillRects(renderer, rects, ARRAY_LEN(rects));
 }
 
