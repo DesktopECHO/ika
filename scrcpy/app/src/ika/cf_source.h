@@ -8,6 +8,7 @@
 #include <libavutil/buffer.h>
 #include <libavutil/frame.h>
 
+#include "coords.h"
 #include "trait/frame_source.h"
 #include "util/thread.h"
 
@@ -28,6 +29,11 @@ struct sc_cf_source {
 
     char *socket_path;
     uint32_t display_number; // the Cuttlefish (crosvm) display number
+    // If set, the window is opened at this size as soon as the socket is
+    // connected, instead of on the first frame: the display of a new app window
+    // may present nothing until the app is started, which waits for the window
+    // size
+    struct sc_size open_size;
 
     sc_thread thread;
     sc_mutex mutex;
@@ -50,7 +56,7 @@ struct sc_cf_source {
 
 bool
 sc_cf_source_init(struct sc_cf_source *source, const char *socket_path,
-                  uint32_t display_number);
+                  uint32_t display_number, struct sc_size open_size);
 
 bool
 sc_cf_source_start(struct sc_cf_source *source);

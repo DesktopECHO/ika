@@ -942,9 +942,18 @@ aoa_complete:
 #ifndef _WIN32
     if (cuttlefish) {
         assert(screen_initialized);
+        // An app window opens at once (its app starts once the window has sent
+        // its size), the console on the first frame
+        struct sc_size open_size = {0, 0};
+        if (options->cuttlefish_display) {
+            open_size.width = options->window_width ? options->window_width
+                                                    : 1280;
+            open_size.height = options->window_height ? options->window_height
+                                                      : 720;
+        }
         if (!sc_cf_source_init(&s->cf_source,
                                options->cuttlefish_frames_socket,
-                               options->cuttlefish_display)) {
+                               options->cuttlefish_display, open_size)) {
             goto end;
         }
         cf_source_initialized = true;

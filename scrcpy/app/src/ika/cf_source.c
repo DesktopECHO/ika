@@ -241,22 +241,30 @@ sc_cf_free_slot(void *opaque, uint8_t *data) {
 }
 
 static bool
+sc_cf_open_sinks(struct sc_cf_source *source, struct sc_size size) {
+    struct sc_stream_session session = {
+        .video = {
+            .width = size.width,
+            .height = size.height,
+            .client_resized = false,
+        },
+    };
+    if (!sc_frame_source_sinks_open(&source->frame_source, NULL, &session)) {
+        return false;
+    }
+    source->sinks_open = true;
+    return true;
+}
+
+static bool
 sc_cf_push(struct sc_cf_source *source) {
     AVFrame *frame = source->frame;
 
     if (!source->sinks_open) {
-        struct sc_stream_session session = {
-            .video = {
-                .width = frame->width,
-                .height = frame->height,
-                .client_resized = false,
-            },
-        };
-        if (!sc_frame_source_sinks_open(&source->frame_source, NULL,
-                                        &session)) {
+        struct sc_size size = {frame->width, frame->height};
+        if (!sc_cf_open_sinks(source, size)) {
             return false;
         }
-        source->sinks_open = true;
     }
 
     enum sc_sink_result result =
@@ -637,7 +645,12 @@ run_cf_source(void *data) {
         }
         sc_mutex_unlock(&source->mutex);
 
-        while (sc_cf_process_msg(source, fd));
+        bool opened = source->sinks_open || !source->open_size.width
+                   || !source->open_size.height
+                   || sc_cf_open_sinks(source, source->open_size);
+        if (opened) {
+            while (sc_cf_process_msg(source, fd));
+        }
 
         sc_mutex_lock(&source->mutex);
         source->fd = -1;
@@ -647,6 +660,9 @@ run_cf_source(void *data) {
         av_buffer_unref(&source->shm);
         av_frame_unref(source->frame);
 
+        if (!opened) {
+            break;
+        }
         if (!stopped) {
             LOGW("Cuttlefish frame socket disconnected, reconnecting");
             SDL_Delay(250);
@@ -663,7 +679,7 @@ run_cf_source(void *data) {
 
 bool
 sc_cf_source_init(struct sc_cf_source *source, const char *socket_path,
-                  uint32_t display_number) {
+                  uint32_t display_number, struct sc_size open_size) {
     source->socket_path = strdup(socket_path);
     if (!source->socket_path) {
         LOG_OOM();
@@ -684,6 +700,7 @@ sc_cf_source_init(struct sc_cf_source *source, const char *socket_path,
     }
 
     source->display_number = display_number;
+    source->open_size = open_size;
     source->window_hidden = false;
     source->stopped = false;
     source->fd = -1;
