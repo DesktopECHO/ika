@@ -1,0 +1,21 @@
+Patch summary:
+Keep the home screen on resume unless a desk is active.
+
+diff --git a/quickstep/src/com/android/launcher3/uioverrides/QuickstepLauncher.java b/quickstep/src/com/android/launcher3/uioverrides/QuickstepLauncher.java
+--- a/quickstep/src/com/android/launcher3/uioverrides/QuickstepLauncher.java
++++ b/quickstep/src/com/android/launcher3/uioverrides/QuickstepLauncher.java
+@@ -960,9 +960,12 @@
+         }
+ 
+         // Only hide Launcher behind desktop when we're resuming back to home itself. Other
+-        // Launcher surfaces like All Apps need to stay visible after resume.
++        // Launcher surfaces like All Apps need to stay visible after resume. Ika: and only while a
++        // desk is active, as without desktop windows, nothing covers the hidden home.
+         if (shouldHideHomeBehindDesktopOnResume(
+-                shouldShowHomeBehindDesktop(),
++                shouldShowHomeBehindDesktop()
++                        && DesktopVisibilityController.INSTANCE.get(this)
++                                .isInDesktopMode(getDisplayId()),
+                 getStateManager().getState(),
+                 getStateManager().getTargetState())) {
+             getStateManager().goToState(LauncherState.BACKGROUND_APP, false /* animated */);
