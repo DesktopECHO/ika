@@ -18,10 +18,12 @@
 
 #include <stdint.h>
 
+#include <atomic>
 #include <condition_variable>
+#include <map>
 #include <memory>
 #include <mutex>
-#include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -94,45 +96,68 @@ class RawFrameStreamer {
     // Survive CloseClientShm(), they belong to the connection
     bool client_releases_slots = false;
     uint32_t last_generation = 0;
+    // The display the client shows, from its hello (0 without one)
+    uint32_t display_number = 0;
+    // The client's window is hidden: frames are kept, not sent (IKAP)
+    bool paused = false;
     uint8_t message[16] = {};
     size_t message_size = 0;
   };
 
+  // The frames of one display, and the client showing it. Each display has at
+  // most one client; another client of the same display waits for it to leave.
+  struct DisplayStream {
+    int client_fd = -1;
+    uint64_t generation = 0;
+    bool suppress_next_raw = false;
+    Frame latest_frame;
+    ClientShm shm;
+  };
+
+  struct ClientThread {
+    std::thread thread;
+    std::shared_ptr<std::atomic<bool>> done;
+  };
+
   void ServerLoop();
   void ClientLoop(int client_fd);
+  void StreamToClient(int client_fd, DisplayStream& display);
   bool SendAll(int fd, const void* data, size_t size);
   bool SendDmabufFrame(int fd, const Frame& frame);
-  bool SendRawFrame(int fd, const Frame& frame, ClientShm& shm);
-  FrameSendResult SendShmInit(int fd, ClientShm& shm, size_t payload_size);
-  FrameSendResult SendShmFrame(int fd, const Frame& frame, ClientShm& shm);
+  bool SendRawFrame(int fd, const Frame& frame, DisplayStream& display);
+  FrameSendResult SendShmInit(int fd, DisplayStream& display,
+                              size_t payload_size);
+  FrameSendResult SendShmFrame(int fd, const Frame& frame,
+                               DisplayStream& display);
   bool SendShmNotify(int fd, const Frame& frame, uint32_t slot_index);
   bool ReadClientMessages(int fd, ClientShm& shm);
   bool AcquireShmSlot(int fd, ClientShm& shm, uint32_t* slot_index);
   void CloseClientShm(ClientShm& shm) const;
-  void EndClientLocked();
-  bool WriteSlotFrameLocked(const RawFrameHeader& header,
+  DisplayStream& GetDisplayLocked(uint32_t display_number);
+  void EndClientLocked(DisplayStream& display);
+  bool WriteSlotFrameLocked(DisplayStream& display,
+                            const RawFrameHeader& header,
                             const uint8_t* pixels);
-  void DetachLatestFrameFromShmLocked();
-  void ReplaceLatestFrameLocked(Frame frame);
-  Frame CopyLatestFrameLocked();
+  void DetachLatestFrameFromShmLocked(DisplayStream& display);
+  void ReplaceLatestFrameLocked(DisplayStream& display, Frame frame);
+  Frame CopyLatestFrameLocked(DisplayStream& display);
   void CloseFrameFd(Frame& frame) const;
   std::shared_ptr<std::vector<uint8_t>> AcquireRawBufferLocked(size_t size);
 
   std::string socket_path_;
   std::thread server_thread_;
   int server_fd_ = -1;
-  int current_client_fd_ = -1;
+  // Only used by the server thread
+  std::vector<ClientThread> client_threads_;
 
   std::mutex mutex_;
   std::condition_variable frame_cv_;
   bool stopped_ = false;
-  uint64_t generation_ = 0;
-  std::optional<uint32_t> suppress_next_raw_display_;
-  Frame latest_frame_;
-  // The connected client's slots. Only the client thread maps, unmaps and
-  // reconfigures them, under mutex_; OnFrame() writes frames into free slots
-  // under mutex_ too.
-  ClientShm shm_;
+  std::set<int> client_fds_;
+  // By display number, never removed. A display's client slots: only its
+  // client thread maps, unmaps and reconfigures them, under mutex_; OnFrame()
+  // writes frames into free slots under mutex_ too.
+  std::map<uint32_t, std::unique_ptr<DisplayStream>> displays_;
   std::vector<std::shared_ptr<std::vector<uint8_t>>> raw_buffers_;
   size_t next_raw_buffer_ = 0;
 };

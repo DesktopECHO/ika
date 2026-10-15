@@ -165,6 +165,12 @@ process_msg(struct sc_receiver *receiver, struct sc_device_msg *msg) {
         case DEVICE_MSG_TYPE_APP_ENDED:
             sc_push_event(SC_EVENT_APP_ENDED);
             break;
+        case DEVICE_MSG_TYPE_THEME_BACKGROUND:
+            LOGD("Theme background: #%06" PRIx32,
+                 msg->theme_background.color & 0xFFFFFF);
+            sc_push_event_with_data(SC_EVENT_THEME_BACKGROUND,
+                (void *) (uintptr_t) msg->theme_background.color);
+            break;
     }
 }
 

@@ -125,6 +125,7 @@ const struct scrcpy_options scrcpy_options_default = {
     .ignore_video_encoder_constraints = false,
     .update_terminal_title = true,
     .cuttlefish_frames_socket = NULL,
+    .cuttlefish_display = 0,
     .flex_display_dpi = 0,
     .window_state_file = NULL,
     .ika_game_session = false,

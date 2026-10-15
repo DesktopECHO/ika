@@ -24,9 +24,10 @@ picture is stretched and blurred until Android has drawn the new size.
 
 With the VM running, `ika app PACKAGE` opens a single app in its own
 resizable window with a normal title bar, separate from the desktop console.
-Each window is backed by its own Android virtual display that follows the
-window size, so resizing the window gives the app more room rather than
-stretching it. Super + T and Super + F work as they do in the console.
+Each window is backed by a Cuttlefish display of its own, added while the VM
+runs and removed when the window closes, and shown with raw frames like the
+console. The app is drawn at the window size, so resizing the window gives
+the app more room rather than stretching it. Super + T and Super + F work as they do in the console.
 
 - The app is restarted on the new display if it was already running on the
   desktop, and closing the window closes the app.
@@ -68,13 +69,6 @@ stretching it. Super + T and Super + F work as they do in the console.
   windows too, and `IKA_TOUCH=1 ika start --game` does the same for the
   console. Most desktop apps should not use it: some route mouse clicks
   differently from touch, for example Chromium's tab strip.
-- App windows stream encoded H.264 video from the guest rather than the
-  console's raw frames, which costs guest CPU time. Set `IKA_APP_BIT_RATE`
-  (default `80M`) to trade quality for bandwidth. `IKA_APP_CODEC_OPTIONS`
-  (default `video-qp-max:int=18`) caps the encoder's quantizer to keep text
-  sharp; set it empty to remove the cap. Where the host's VA-API driver
-  decodes H.264 (Intel GPUs, for example), the video is decoded on the GPU;
-  otherwise in software.
 - `ika app sync` adds every launchable app to the desktop's app menu, as
   "🎮 ∙ LABEL" for games (apps declaring `android:appCategory="game"`, or listed
   in `IKA_GAME_APPS` in `tools/ika`) and "ᗩ ∙ LABEL" for other apps, in an

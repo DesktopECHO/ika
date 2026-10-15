@@ -117,8 +117,8 @@ public final class CleanUp {
 
         boolean powerOffScreen = options.getPowerOffScreenOnClose();
 
-        // Flex display of the main display: restore the size and density it had before
-        boolean restoreMainDisplay = options.getFlexDisplay() && options.getNewDisplay() == null && displayId == 0;
+        // Flex display of the main display (or a Cuttlefish display): restore the size and density it had before
+        boolean restoreMainDisplay = options.getFlexDisplay() && options.getNewDisplay() == null && displayId != Device.DISPLAY_ID_NONE;
         Size restoreMainDisplaySize = null;
         int restoreMainDisplayDensity = 0;
         if (restoreMainDisplay) {

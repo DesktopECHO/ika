@@ -113,6 +113,7 @@ enum {
     OPT_NO_TERMINAL_TITLE,
     OPT_HWDEC,
     OPT_CUTTLEFISH_FRAMES_SOCKET,
+    OPT_CUTTLEFISH_DISPLAY,
     OPT_DPI,
     OPT_WINDOW_STATE_FILE,
     OPT_IKA_GAME_SESSION,
@@ -1086,6 +1087,15 @@ static const struct sc_option options[] = {
         .text = "Show the frames of a Cuttlefish display, read from the Ika "
                 "frame socket, instead of a video stream. Control still goes "
                 "through the server.",
+    },
+    {
+        .longopt_id = OPT_CUTTLEFISH_DISPLAY,
+        .longopt = "cuttlefish-display",
+        .argdesc = "n",
+        .text = "With --cuttlefish-frames-socket, show this Cuttlefish "
+                "display (the crosvm display number) instead of the main one. "
+                "Control goes to the Android display connected to it.\n"
+                "Default is 0.",
     },
     {
         .longopt_id = OPT_DPI,
@@ -3023,6 +3033,15 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
             case OPT_CUTTLEFISH_FRAMES_SOCKET:
                 opts->cuttlefish_frames_socket = optarg;
                 break;
+            case OPT_CUTTLEFISH_DISPLAY: {
+                long value;
+                if (!parse_integer_arg(optarg, &value, false, 0, 0xFF,
+                                       "cuttlefish display")) {
+                    return false;
+                }
+                opts->cuttlefish_display = (uint8_t) value;
+                break;
+            }
             case OPT_DPI: {
                 long value;
                 if (!parse_integer_arg(optarg, &value, false, 1, 0xFFFF,
@@ -3098,12 +3117,17 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
             return false;
         }
         if (opts->video_source != SC_VIDEO_SOURCE_DISPLAY
-                || opts->new_display || opts->record_filename || v4l2) {
-            LOGE("--cuttlefish-frames-socket only shows the main display");
+                || opts->new_display || opts->display_id
+                || opts->record_filename || v4l2) {
+            LOGE("--cuttlefish-frames-socket only shows a Cuttlefish display "
+                 "(see --cuttlefish-display)");
             return false;
         }
         opts->video = true;
         opts->hwdec_mode = SC_HWDEC_MODE_DISABLED;
+    } else if (opts->cuttlefish_display) {
+        LOGE("--cuttlefish-display requires --cuttlefish-frames-socket");
+        return false;
     }
 
     if (!opts->window) {

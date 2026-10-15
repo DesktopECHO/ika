@@ -475,6 +475,7 @@ scrcpy(struct scrcpy_options *options) {
         .capture_orientation_lock = options->capture_orientation_lock,
         .control = options->control,
         .display_id = options->display_id,
+        .cuttlefish_display = options->cuttlefish_display,
         .new_display = options->new_display,
         .display_ime_policy = options->display_ime_policy,
         .video = device_video,
@@ -850,8 +851,12 @@ aoa_complete:
             .camera = options->video_source == SC_VIDEO_SOURCE_CAMERA,
             .flex_display = options->flex_display,
             .raw = cuttlefish,
+            .app_window = cuttlefish && options->cuttlefish_display,
             .window_state_file = options->window_state_file,
             .game_session = options->ika_game_session,
+#ifndef _WIN32
+            .cf_source = cuttlefish ? &s->cf_source : NULL,
+#endif
             .controller = controller,
             .fp = fp,
             .kp = kp,
@@ -937,7 +942,7 @@ aoa_complete:
         assert(screen_initialized);
         if (!sc_cf_source_init(&s->cf_source,
                                options->cuttlefish_frames_socket,
-                               options->display_id)) {
+                               options->cuttlefish_display)) {
             goto end;
         }
         cf_source_initialized = true;
