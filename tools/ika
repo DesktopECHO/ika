@@ -4284,7 +4284,7 @@ ensure_guest_ready() {
     || die "timed out waiting for Ika to start"
   if ! has_live_cvd_processes; then
     log "Android virtual device not running; starting it without the console"
-    notify_progress "Starting Android virtual machine, one moment..."
+    notify_progress "Starting Android, one moment..."
     # Close the lock for the child: the VM processes it starts outlive this
     # command and would otherwise hold the lock for as long as the VM runs.
     IKA_NOTIFY=false "${IKA_SCRIPT_PATH}" start --no-console </dev/null >/dev/null 2>&1 \
@@ -5875,7 +5875,7 @@ start_cvd() {
     return 0
   fi
 
-  notify_progress "Starting Android virtual machine, one moment..."
+  notify_progress "Starting Android, one moment..."
   # A mount left from a VM that stopped by itself points at a device that is
   # gone.
   unmount_android_storage
