@@ -1,0 +1,28 @@
+diff --git a/src/display_wl.c b/src/display_wl.c
+--- a/src/display_wl.c
++++ b/src/display_wl.c
+@@ -799,7 +799,23 @@
+ 
+ void dwl_context_dispatch(struct dwl_context *self)
+ {
+-	wl_display_dispatch(self->display);
++	// Ika: only read what is there, never block. The GPU worker calls this
++	// when the display fd was readable, but a roundtrip it made meanwhile (to
++	// add or remove a display) can have read and dispatched those events
++	// already: wl_display_dispatch() then blocked the worker until the
++	// compositor sent something, which it only does in reply to the worker.
++	while (wl_display_prepare_read(self->display) != 0)
++		wl_display_dispatch_pending(self->display);
++	wl_display_flush(self->display);
++	struct pollfd pfd = {
++		.fd = wl_display_get_fd(self->display),
++		.events = POLLIN,
++	};
++	if (poll(&pfd, 1, 0) > 0)
++		wl_display_read_events(self->display);
++	else
++		wl_display_cancel_read(self->display);
++	wl_display_dispatch_pending(self->display);
+ 	if (self->output_added) {
+ 		self->output_added = false;
+ 		dwl_context_output_get_aura(self);
