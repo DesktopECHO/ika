@@ -113,7 +113,9 @@ a data-channel message; a host-side WebRTC handler relays them to the guest's
 the guest (uploaded over ADB at startup) and uses framework input APIs to dispatch
 events. Mouse, keyboard, gamepad, and clipboard traffic use the same channel;
 `--mouse-bind=+hsn:b+++` configures secondary- and middle-click behavior for a
-desktop-oriented mouse contract.
+desktop-oriented mouse contract. App windows use `--mouse-bind=++++:b+++`: every
+button goes to the app, since recents on an app window's display would start a
+launcher on the main display.
 
 ## 5. Audio transport
 
