@@ -1,0 +1,179 @@
+Patch summary:
+Keep the Cuttlefish displays added at runtime (Ika's app windows) from being
+composed and posted again when nothing on them changed.
+
+- Report every display after the first as EXTERNAL. As INTERNAL displays they
+  could host desktops, so WM Shell opened apps there in a desk, with a window
+  frame (box shadow and border) that forced client composition of the whole
+  display. External displays without system decorations are not desktop
+  capable: apps open fullscreen and are composed on the host.
+- SurfaceFlinger presents every display whenever one of them changes. With
+  host composition, skip a display's present when its layers, their buffers
+  and the client target are the same as at its last present and no layer
+  reports surface damage (one empty damage rect means unchanged), so that the
+  host does not compose, post and stream the same picture again.
+
+--- a/hals/hwc3/Display.cpp
++++ b/hals/hwc3/Display.cpp
+@@ -307,7 +307,9 @@
+ }
+ 
+ HWC3::Error Display::getDisplayConnectionType(DisplayConnectionType* outType) {
+-    *outType = DisplayConnectionType::INTERNAL;
++    // Displays added after the first one (Cuttlefish displays added at
++    // runtime) are external: they host no desktop of their own
++    *outType = mId == 0 ? DisplayConnectionType::INTERNAL : DisplayConnectionType::EXTERNAL;
+     return HWC3::Error::None;
+ }
+ 
+--- a/hals/hwc3/HostFrameComposer.cpp
++++ b/hals/hwc3/HostFrameComposer.cpp
+@@ -229,6 +229,7 @@
+ 
+     HostComposerDisplayInfo& displayInfo = mDisplayInfos[displayId];
+ 
++    displayInfo.lastComposition.clear();
+     displayInfo.hostDisplayId = hostDisplayId;
+     displayInfo.swapchain = DrmSwapchain::create(
+         static_cast<uint32_t>(displayWidth), static_cast<uint32_t>(displayHeight),
+@@ -484,6 +485,61 @@
+     return HWC3::Error::None;
+ }
+ 
++namespace {
++
++template <typename T>
++uint64_t bitsOf(T value) {
++    uint64_t bits = 0;
++    static_assert(sizeof(T) <= sizeof(bits));
++    memcpy(&bits, &value, sizeof(value));
++    return bits;
++}
++
++// Describes what a host composition of these layers draws: when nothing in it
++// changed and no layer has new contents, the same picture would be composed
++// and posted again.
++std::vector<uint64_t> describeHostComposition(Display* display,
++                                              const std::vector<Layer*>& layers) {
++    std::vector<uint64_t> words;
++    words.push_back(display->hasColorTransform());
++    // SurfaceFlinger draws client composition into a new client target buffer
++    words.push_back(reinterpret_cast<uintptr_t>(display->getClientTarget().getBuffer()));
++    for (auto layer : layers) {
++        const Composition type = layer->getCompositionType();
++        if (type != Composition::DEVICE && type != Composition::SOLID_COLOR) {
++            continue;
++        }
++        const common::Rect frame = layer->getDisplayFrame();
++        const common::FRect crop = layer->getSourceCrop();
++        const Color color = layer->getColor();
++        words.insert(words.end(), {
++            static_cast<uint64_t>(layer->getId()),
++            static_cast<uint64_t>(type),
++            reinterpret_cast<uintptr_t>(layer->getBuffer().getBuffer()),
++            bitsOf(frame.left), bitsOf(frame.top), bitsOf(frame.right), bitsOf(frame.bottom),
++            bitsOf(crop.left), bitsOf(crop.top), bitsOf(crop.right), bitsOf(crop.bottom),
++            static_cast<uint64_t>(layer->getBlendMode()),
++            bitsOf(layer->getPlaneAlpha()),
++            bitsOf(layer->getBrightness()),
++            bitsOf(color.r), bitsOf(color.g), bitsOf(color.b), bitsOf(color.a),
++            static_cast<uint64_t>(layer->getTransform()),
++            bitsOf(layer->getZOrder()),
++        });
++    }
++    return words;
++}
++
++bool hasModifiedContent(const std::vector<Layer*>& layers) {
++    for (auto layer : layers) {
++        if (layer->getCompositionType() == Composition::DEVICE && layer->isContentModified()) {
++            return true;
++        }
++    }
++    return false;
++}
++
++}  // namespace
++
+ HWC3::Error HostFrameComposer::presentDisplay(
+         Display* display, ::android::base::unique_fd* outDisplayFence,
+         std::unordered_map<int64_t, ::android::base::unique_fd>* outLayerFences) {
+@@ -516,6 +572,20 @@
+     }
+ 
+ 
++    const std::vector<Layer*> layers = display->getOrderedLayers();
++
++    // SurfaceFlinger presents every display whenever one of them changes: do
++    // not compose and post a display again when it would show the same
++    // picture, so that the host does not get the same frame again
++    if (hostCompositionV2 || hostCompositionV1) {
++        std::vector<uint64_t> composition = describeHostComposition(display, layers);
++        if (!hasModifiedContent(layers) && composition == displayInfo.lastComposition) {
++            ATRACE_FORMAT("Skip unchanged display");
++            return HWC3::Error::None;
++        }
++        displayInfo.lastComposition = std::move(composition);
++    }
++
+     auto compositionResult = displayInfo.swapchain->getNextImage();
+     {
+         ATRACE_FORMAT("Wait for Previous Composition");
+@@ -525,7 +595,6 @@
+     // Virtio-gpu usage is proxied by minigbm
+     const bool isVirtioGPU = mIsMinigbm;
+ 
+-    const std::vector<Layer*> layers = display->getOrderedLayers();
+     if (hostCompositionV2 || hostCompositionV1) {
+         uint32_t numLayer = 0;
+         for (auto layer : layers) {
+--- a/hals/hwc3/HostFrameComposer.h
++++ b/hals/hwc3/HostFrameComposer.h
+@@ -86,6 +86,9 @@
+         std::unique_ptr<DrmSwapchain> swapchain = {};
+         // Drm info for the displays client target buffer.
+         std::shared_ptr<DrmBuffer> clientTargetDrmBuffer;
++        // What the last host composition composed, to skip composing and
++        // posting the same picture again
++        std::vector<uint64_t> lastComposition;
+     };
+ 
+     std::unique_ptr<gfxstream::SyncHelper> mSyncHelper = nullptr;
+--- a/hals/hwc3/Layer.cpp
++++ b/hals/hwc3/Layer.cpp
+@@ -81,9 +81,14 @@
+     return mBuffer.getBuffer();
+ }
+ 
+-HWC3::Error Layer::setSurfaceDamage(const std::vector<std::optional<common::Rect>>& /*damage*/) {
++HWC3::Error Layer::setSurfaceDamage(const std::vector<std::optional<common::Rect>>& damage) {
+     DEBUG_LOG("%s: layer:%" PRId64, __FUNCTION__, mId);
+ 
++    // A single empty rect means the contents did not change since the last
++    // frame, and no rect that the whole buffer did
++    mContentModified = !(damage.size() == 1 && damage[0] &&
++                         damage[0]->left >= damage[0]->right &&
++                         damage[0]->top >= damage[0]->bottom);
+     return HWC3::Error::None;
+ }
+ 
+--- a/hals/hwc3/Layer.h
++++ b/hals/hwc3/Layer.h
+@@ -45,6 +45,9 @@
+     buffer_handle_t waitAndGetBuffer();
+ 
+     HWC3::Error setSurfaceDamage(const std::vector<std::optional<common::Rect>>& damage);
++    // Whether the buffer contents changed since the last frame, from the
++    // surface damage
++    bool isContentModified() const { return mContentModified; }
+ 
+     HWC3::Error setBlendMode(common::BlendMode mode);
+     common::BlendMode getBlendMode() const;
+@@ -101,6 +104,7 @@
+     const int64_t mId;
+     common::Point mCursorPosition;
+     FencedBuffer mBuffer;
++    bool mContentModified = true;
+     common::BlendMode mBlendMode = common::BlendMode::NONE;
+     Color mColor = {0, 0, 0, 0};
+     Composition mCompositionType = Composition::INVALID;
