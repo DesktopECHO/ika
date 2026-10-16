@@ -5585,8 +5585,11 @@ run_app_menu_watcher() {
   adb_serial="$(resolve_adb_serial)"
   log "app menu watcher started"
   while has_live_cvd_processes && [[ ! -f "${APP_MENU_DISABLED_FILE}" ]]; do
-    if adb_boot_completed "${adb_serial}" \
-        && fingerprint="$(guest_package_fingerprint "${adb_serial}")" \
+    # The adb calls go without the watcher's lock, like the sync below: one
+    # may start the adb server, which would otherwise keep the lock after this
+    # watcher exits and stop every later one from starting.
+    if ( exec {watcher_lock_fd}>&-; adb_boot_completed "${adb_serial}" ) \
+        && fingerprint="$(exec {watcher_lock_fd}>&-; guest_package_fingerprint "${adb_serial}")" \
         && [[ "${fingerprint}" != "${synced}" ]]; then
       if [[ -n "${synced}" ]]; then
         log "guest packages changed; updating the app menu"
