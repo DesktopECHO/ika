@@ -1,0 +1,24 @@
+Patch summary:
+Skip LineageOS Trust's "Discover Trust" onboarding notification. At boot the
+user counts as onboarded instead, so Trust's SELinux and signing key warnings
+still post and the Trust page in Settings keeps working.
+
+diff --git a/lineage/lib/main/java/org/lineageos/platform/internal/TrustInterfaceService.java b/lineage/lib/main/java/org/lineageos/platform/internal/TrustInterfaceService.java
+--- a/lineage/lib/main/java/org/lineageos/platform/internal/TrustInterfaceService.java
++++ b/lineage/lib/main/java/org/lineageos/platform/internal/TrustInterfaceService.java
+@@ -78,11 +78,11 @@ public class TrustInterfaceService extends LineageSystemService {
+         if (phase == PHASE_BOOT_COMPLETED) {
+             mNotificationManager = mContext.getSystemService(NotificationManager.class);
+ 
+-            // Onboard
++            // Onboard without the "Discover Trust" notification: the user counts
++            // as onboarded, so Trust's SELinux and signing key warnings still post.
+             if (!hasOnboardedUser()) {
+-                postOnBoardingNotification();
+-                registerLocaleChangedReceiver();
+-                return;
++                LineageSettings.System.putInt(mContext.getContentResolver(),
++                        LineageSettings.System.TRUST_INTERFACE_HINTED, 1);
+             }
+ 
+             runTestInternal();

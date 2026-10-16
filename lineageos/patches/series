@@ -97,6 +97,7 @@ packages/apps/Launcher3 patches/packages-apps-Launcher3.patch
 packages/apps/Launcher3 patches/packages-apps-Launcher3-no-recents-on-app-displays.patch
 packages/apps/Settings patches/packages-apps-Settings.patch
 packages/apps/TvSystemUI patches/packages-apps-TvSystemUI-ika-tv-mode.patch
+lineage-sdk patches/lineage-sdk-trust-no-onboarding.patch
 vendor/lineage patches/vendor-lineage.patch
 vendor/lineage patches/vendor-lineage-arm64-host-tools.patch
 build/soong patches/build-soong-arm64-host.patch
