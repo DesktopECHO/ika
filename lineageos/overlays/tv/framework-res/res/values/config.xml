@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- TV mode runs apps fullscreen on the console: no desktop windowing or
+         split screen. Freeform windowing is unavailable as well
+         (system_ext/etc/permissions/ika_tv), so the display that the desktop
+         keeps in freeform mode falls back to fullscreen. -->
+    <bool name="config_isDesktopModeSupported">false</bool>
+    <bool name="config_isDesktopModeDevOptionSupported">false</bool>
+    <bool name="config_canInternalDisplayHostDesktops">false</bool>
+    <bool name="config_enterDesktopByDefaultOnFreeformDisplay">false</bool>
+    <bool name="config_dragToMaximizeInDesktopMode">false</bool>
+    <bool name="config_showHomeBehindDesktop">false</bool>
+    <bool name="config_supportsSplitScreenMultiWindow">false</bool>
+
+    <!-- No navigation bar, as on Android TV: the desktop overlay turns it on.
+         The remote, gamepad or keyboard navigate. -->
+    <bool name="config_showNavigationBar">false</bool>
+
+    <!-- Undo TvFrameworkOverlay where Ika differs from a TV. The UI is not
+         capped at 1920 pixels wide: Ika chooses the density for the
+         console's size (values-tvdpi, values-xhdpi and values-xxxhdpi
+         undo the per-density caps). App windows on other displays keep their
+         decorations policy. -->
+    <integer name="config_maxUiWidth">0</integer>
+    <bool name="config_supportsSystemDecorsOnSecondaryDisplays">true</bool>
+</resources>

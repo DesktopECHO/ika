@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Privileged permissions of the Android TV Play Store (MindTheGapps
+     Tubesky) that the phone Play Store's allowlist does not grant. -->
+<permissions>
+    <privapp-permissions package="com.android.vending">
+        <permission name="android.permission.ACCESS_DOWNLOAD_MANAGER" />
+        <permission name="android.permission.ACCESS_DOWNLOAD_MANAGER_ADVANCED" />
+        <permission name="android.permission.HIDE_STATUS_BAR_NOTIFICATION" />
+        <permission name="com.android.vending.BIOAUTH_CONSENT" />
+        <permission name="com.android.vending.TOS_ACKED" />
+        <permission name="com.google.android.gms.WRITE_VERIFY_APPS_CONSENT" />
+        <permission name="com.google.android.partnersetup.permission.WRITE_APP_PROVIDER" />
+        <permission name="com.google.android.setupwizard.READ_DEVICE_ORIGIN" />
+        <permission name="com.google.android.setupwizard.SETUP_PROGRESS_SERVICE" />
+    </privapp-permissions>
+</permissions>

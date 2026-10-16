@@ -1,0 +1,12 @@
+# persist.sys.ika.mode, Ika's interface mode. IkaMode (platform-signed, so
+# system_app) sets it when the Home app changes; it takes effect at the next
+# boot. Its own type rather than system_prop, which the zygote cannot read.
+system_internal_prop(ika_mode_prop)
+set_prop(system_app, ika_mode_prop)
+# The zygote's overlay scan checks requiredSystemPropertyName of the TV
+# overlays; system_server reads it for SystemConfig, package parsing and
+# windowing.
+get_prop(zygote, ika_mode_prop)
+get_prop(system_server, ika_mode_prop)
+# adb shell (tools/ika and debugging) reads it.
+get_prop(shell, ika_mode_prop)

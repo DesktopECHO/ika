@@ -167,10 +167,11 @@ ika_ini_write_default() {
 
 # ----------------------------------------------------------------------------
 [compute]
-# Virtual CPUs and guest memory. "auto" sizes them from the host: the number of
-# performance cores minus 2 (at most cpu_cap), and a quarter of the host's
-# memory rounded up to a multiple of memory_step_mb (at most memory_cap_mb).
-# Command-line equivalents: --cpus=, --memory_mb=
+# Virtual CPUs and guest memory. "auto" sizes them from the host: half the
+# performance cores, counting each hardware thread (at most cpu_cap), and a
+# quarter of the host's memory rounded up to a multiple of memory_step_mb (at
+# most memory_cap_mb). Each vCPU is pinned to a host CPU, from the highest CPU
+# number down. Command-line equivalents: --cpus=, --memory_mb=
 cpus = auto
 memory_mb = auto
 cpu_cap = 12
@@ -178,7 +179,6 @@ memory_step_mb = 2048
 memory_cap_mb = 32768
 # Used when the host's memory cannot be read.
 memory_fallback_mb = 4096
-prefer_performance_cores = true
 enable_bootanimation = false
 enable_sandbox = false
 
@@ -259,6 +259,11 @@ boot_timeout_sec = 150
 # Display density. "auto" calculates it from the host's display.
 # Command-line equivalent: --dpi=. Environment variable: IKADPI
 dpi = auto
+# Display density in Android's TV mode. "auto" is 1.5 times the density "auto"
+# calculates for dpi, so that the TV interface is larger.
+# Command-line equivalent: --dpi=, in either mode. Environment variable:
+# IKA_TV_DPI
+tv_dpi = auto
 # Extra arguments for the console, separated by spaces, for example
 # --keyboard=uhid --no-clipboard-autosync
 # Command-line equivalent: --ika_scrcpy=. Environment variable: IKA_SCRCPY
@@ -479,26 +484,139 @@ stop_startup_packaged_scrcpy() {
   done < <(packaged_scrcpy_pids "${scope}" | sort -u)
 }
 
+# Prints "<cpu> <cpu_capacity>" for each online host CPU: the kernel's own
+# measure of each CPU's performance, which its scheduler uses, with the
+# difference in work per cycle as well as in frequency (Apple, Intel P and E
+# cores, AMD Zen 5 and 5c).
+host_cpu_performance() {
+  local path
+  for path in /sys/devices/system/cpu/cpu[0-9]*; do
+    if [[ -r "${path}/online" && "$(<"${path}/online")" != 1 ]]; then
+      continue
+    fi
+    printf '%s %s\n' "${path##*/cpu}" "$(<"${path}/cpu_capacity")"
+  done
+}
+
+# Performance cores are those within 85% of the fastest: a hybrid CPU's
+# efficiency cores are well below that, while the few percent between the
+# preferred cores of other CPUs are not.
+performance_core_ids() {
+  host_cpu_performance | awk '
+    { cpu[NR] = $1; perf[NR] = $2; if ($2 > max) max = $2 }
+    END { for (i = 1; i <= NR; i++) if (perf[i] * 100 >= max * 85) print cpu[i] }' | sort -n
+}
+
 count_performance_cores() {
   performance_core_ids | wc -l
 }
 
-performance_core_ids() {
-  local max_cap
-  local path
-  local cap
+# The host CPUs the vCPUs are pinned to, in vCPU order: the performance cores
+# from the highest CPU number down, then any other CPUs the same way. Linux
+# numbers a core's second hardware thread after every core's first, so the
+# top half of the performance CPUs is one thread on each of the upper cores,
+# and the lower ones are left to the host.
+host_cpus_for_vcpus() {
+  local -A performance=()
   local cpu
-  max_cap="$(cat /sys/devices/system/cpu/cpu*/cpu_capacity 2>/dev/null | sort -n | tail -1)"
-  [[ -n "${max_cap}" ]] || return 0
 
-  for path in /sys/devices/system/cpu/cpu[0-9]*/cpu_capacity; do
-    [[ -r "${path}" ]] || continue
-    cap="$(<"${path}")"
-    [[ "${cap}" == "${max_cap}" ]] || continue
-    cpu="${path%/cpu_capacity}"
-    cpu="${cpu##*/cpu}"
-    printf '%s\n' "${cpu}"
-  done | sort -n
+  for cpu in $(performance_core_ids); do
+    performance["${cpu}"]=1
+  done
+  for cpu in $(host_cpu_performance | awk '{ print $1 }' | sort -nr); do
+    if [[ -n "${performance[${cpu}]:-}" ]]; then
+      echo "${cpu}"
+    fi
+  done
+  for cpu in $(host_cpu_performance | awk '{ print $1 }' | sort -nr); do
+    if [[ -z "${performance[${cpu}]:-}" ]]; then
+      echo "${cpu}"
+    fi
+  done
+}
+
+# Upstream Cuttlefish's Virtual Cpufreq configuration (--vcpu_config_path)
+# pins each vCPU to a host CPU (host_cpus_for_vcpus). On arm64 the guest also
+# sees that CPU's capacity, frequencies and frequency domain, and its frequency
+# requests reach the host scheduler as uclamp on the vCPU threads. crosvm has
+# no Virtual Cpufreq on x86, where it only takes the pinning.
+
+# Writes the configuration for CPUS vCPUs, whose cgroup is CGROUP, to OUT.
+write_vcpu_config() {
+  local cpus="$1"
+  local cgroup="$2"
+  local out="$3"
+  local -a order
+  local -A domains=()
+  local max_khz
+  local cpu
+  local vcpu
+  local path
+  local khz
+  local freqs
+  local capacity
+  local policy
+  local domain
+  local separator=""
+
+  mapfile -t order < <(host_cpus_for_vcpus)
+  if host_is_arm64; then
+    max_khz="$(sort -n /sys/devices/system/cpu/cpu[0-9]*/cpufreq/cpuinfo_max_freq | tail -n1)"
+  fi
+
+  {
+    printf '{\n  "guest_soc": "ika",\n  "cgroup_path": "%s",\n  "cpus": {' "${cgroup}"
+    for (( vcpu = 0; vcpu < cpus; vcpu++ )); do
+      cpu="${order[vcpu % ${#order[@]}]}"
+      path="/sys/devices/system/cpu/cpu${cpu}"
+      if host_is_arm64; then
+        khz="$(<"${path}/cpufreq/cpuinfo_max_freq")"
+        policy="$(readlink -f "${path}/cpufreq")"
+        [[ -n "${domains[${policy}]:-}" ]] || domains["${policy}"]="${#domains[@]}"
+        domain="${domains[${policy}]}"
+        freqs="$(tr ' ' '\n' < "${path}/cpufreq/scaling_available_frequencies" | grep . | sort -n | paste -sd,)"
+        # crosvm's capacity is per MHz (capacity-dmips-mhz), which the guest
+        # scales by the frequencies: take them out of the kernel's capacity.
+        capacity="$(( ($(<"${path}/cpu_capacity") * max_khz + khz / 2) / khz ))"
+      else
+        # Not passed to crosvm on x86, which takes only the pinning.
+        freqs=0
+        capacity=1024
+        domain=0
+      fi
+      printf '%s\n    "cpu%d": { "affinity": %d, "frequencies": "%s", "capacity": %d, "ipc_ratio": 1024, "freq_domain": %d }' \
+        "${separator}" "${vcpu}" "${cpu}" "${freqs}" "${capacity}" "${domain}"
+      separator=","
+    done
+    printf '\n  }\n}\n'
+  } > "${out}"
+}
+
+# Runs in the systemd scope that start_cvd launches Cuttlefish in, with the
+# cgroup delegated to the user: moves itself to a leaf, so that the scope can
+# give the cpu controller to "android", where the launcher and crosvm run.
+# "android" is a threaded domain: crosvm adds a threaded vcpu-domainN for each
+# frequency domain, and the launcher moves the other threads to "workers" once
+# Android has booted. Then writes the configuration and runs the launcher.
+launch_in_vcpu_scope() {
+  local cpus="$1"
+  shift
+  local scope
+  local cgroup
+  local config="${CVD_TMP_DIR}/vcpu-config.json"
+
+  scope="/sys/fs/cgroup$(sed -n 's/^0:://p' /proc/self/cgroup)"
+  cgroup="${scope}/android"
+  mkdir "${scope}/launcher" "${cgroup}" "${cgroup}/workers" \
+    && echo "$$" > "${scope}/launcher/cgroup.procs" \
+    && echo threaded > "${cgroup}/workers/cgroup.type" \
+    && echo +cpu > "${scope}/cgroup.subtree_control" \
+    && echo +cpu > "${cgroup}/cgroup.subtree_control" \
+    || die "could not set up the vCPU cgroup in ${scope}"
+  mkdir -p "${CVD_TMP_DIR}"
+  write_vcpu_config "${cpus}" "${cgroup}" "${config}" \
+    || die "could not write ${config} from the host's cpufreq"
+  exec "$@" "--vcpu_config_path=${config}"
 }
 
 # Upper bound on the auto-selected guest vCPU count. The default heuristic
@@ -511,30 +629,13 @@ readonly DEFAULT_GUEST_CPU_CAP DEFAULT_GUEST_MEMORY_STEP_MB \
   DEFAULT_GUEST_MEMORY_CAP_MB DEFAULT_GUEST_MEMORY_FALLBACK_MB
 
 default_guest_cpus() {
-  local cores guest_cpus
-  cores="$(count_performance_cores)"
-  cores="${cores//[!0-9]/}"
+  local guest_cpus
 
-  # Homogeneous hosts (x86_64, or ARM without cpu_capacity) report no
-  # performance cores; fall back to the online (available) CPU count.
-  if [[ -z "${cores}" ]] || (( cores <= 0 )); then
-    cores="$(nproc 2>/dev/null || true)"
-    cores="${cores//[!0-9]/}"
-  fi
-
-  # Reserve 2 cores for the host and floor at 1. Last-ditch default of 2 if
-  # neither probe produced a usable count.
-  if [[ -z "${cores}" ]] || (( cores <= 0 )); then
-    guest_cpus=2
-  elif (( cores > 2 )); then
-    guest_cpus=$((cores - 2))
-  else
-    guest_cpus=1
-  fi
-
-  # Cap the auto-selected default; --cpus= bypasses this entirely.
+  # Half the performance cores (counting each hardware thread), the rest for
+  # the host; at least 1, at most cpu_cap. --cpus= bypasses this.
+  guest_cpus=$(( $(count_performance_cores) / 2 ))
+  (( guest_cpus >= 1 )) || guest_cpus=1
   (( guest_cpus <= DEFAULT_GUEST_CPU_CAP )) || guest_cpus=${DEFAULT_GUEST_CPU_CAP}
-
   echo "${guest_cpus}"
 }
 
@@ -595,7 +696,6 @@ default_guest_memory_mb() {
 declare -A CVD_COMPUTE_DEFAULTS=(
   [cpus]="$(default_guest_cpus)"
   [memory_mb]="$(default_guest_memory_mb)"
-  [prefer_performance_cores]="true"
   [enable_bootanimation]="false"
   [enable_sandbox]="false"
 )
@@ -749,6 +849,9 @@ GAME_SESSION_EXITED_FILE="${CVD_HOME_DIR}/game-session.exited"
 GAME_SESSION_LOCK_FILE="${CVD_TMP_DIR}/game-session.lock"
 game_session_lock_fd=""
 GAME_CONSOLE_WINDOW_STATE_FILE="${CVD_HOME_DIR}/game-console-window-state"
+# The console of Android's TV mode keeps its own window state, so that it does
+# not replace the desktop console's size.
+TV_CONSOLE_WINDOW_STATE_FILE="${CVD_HOME_DIR}/tv-console-window-state"
 APP_GAMES_FILE="${IKA_APPS_DIR}/games"
 ika_ini_default IKA_APP_MENU_POLL_SEC apps menu_poll_sec 5 uint
 CVD_BIN="${CVD_HOST_OUT}/bin/cvd_internal_start"
@@ -767,6 +870,8 @@ if [[ -f "${PACKAGED_SCRCPY_SERVER}" ]]; then
   SCRCPY_SERVER_PATH_OVERRIDE="${PACKAGED_SCRCPY_SERVER}"
 fi
 SCRCPY_DPI=""
+# Set to true when --dpi gives the density.
+SCRCPY_DPI_GIVEN="false"
 ika_ini_default GFXSTREAM_VULKAN gpu gfxstream_vulkan auto
 GFXSTREAM_VULKAN_MODE="${GFXSTREAM_VULKAN}"
 GFXSTREAM_GLES_CONTEXT_TYPES="gfxstream-gles:gfxstream-composer"
@@ -793,6 +898,7 @@ ika_ini_default IKA_SCRCPY_REBOOT_TIMEOUT_SEC console reboot_timeout_sec 120 uin
 ika_ini_default IKA_MIN_OPEN_FILES system min_open_files 65536 uint
 ika_ini_default IKA_KERNEL_PAGE_SIZE system kernel_page_size auto
 ika_ini_default IKADPI console dpi auto
+ika_ini_default IKA_TV_DPI console tv_dpi auto
 ika_ini_default IKA_SCRCPY console scrcpy_args ""
 ika_ini_default IKA_INSTALL_TIMEOUT_SEC timeouts install_timeout_sec 1800 uint
 # Settings of the former H.264 app windows, still in older ika.ini files
@@ -1307,8 +1413,10 @@ Options:
                          start only adds a camera when Android is off; use
                          restart while it runs.
   --dpi=N                With start or restart, set the display density
-                         (default: from the host display, or 144 when no
-                         display size can be read; IKADPI does the same).
+                         in either mode (default: from the host display, or
+                         144 when no display size can be read, and 1.5 times
+                         that in TV mode; IKADPI does the same, and
+                         IKA_TV_DPI in TV mode).
   --memory_mb=MB         Override the default guest RAM setting.
                          Normally ~25% of host RAM, capped at 32 GB.
   --data_gb=GB           With reset, configure the userdata size used by the
@@ -1317,6 +1425,20 @@ Options:
                          app's label).
   --size=WxH             With app, set the initial window size in logical
                          points (default: last size, or 60% of the screen).
+
+TV mode:
+
+  "Desktop/TV", in the desktop's app menu and the TV launcher's apps, lists
+  Desktop Mode and each TV launcher; nothing else changes the mode. Switching
+  modes asks, then Android restarts in the other mode; in TV mode, a TV
+  launcher becomes the Home app at once. '${SCRIPT_NAME} app Desktop/TV' opens
+  it in the console. In TV mode the console opens fullscreen, at 1.5 times the
+  desktop's automatic density (tv_dpi in ika.ini; --dpi overrides it), and
+  passes the gamepad through as the remote: the D-pad or left stick moves, A selects, B goes back
+  and the guide button goes Home. The keyboard and mouse work as on the
+  desktop, except that a right click goes back (Shift and right-click for a
+  right click). Apps opened from the desktop's app menu or with
+  '${SCRIPT_NAME} app' still open in their own windows.
 
 App windows:
 
@@ -1423,6 +1545,8 @@ Environment variables:
                          host-visible guest Vulkan memory through udmabuf-backed
                          dma-bufs (the path the Apple GPU supports).
   IKADPI                 Display density, as --dpi.
+  IKA_TV_DPI             Display density in TV mode (default: 1.5 times the
+                         automatic density).
   IKA_SCRCPY             Extra whitespace-separated args appended to the console.
                          Equivalent command-line option: --ika_scrcpy=ARGS
                          (example: --keyboard=uhid --no-clipboard-autosync)
@@ -1493,11 +1617,9 @@ emit_launch_command() {
   log "launch command: cd $(printf '%q' "${CVD_PRODUCT_OUT}") && ${launch_command}"
 }
 
+# resolve_scrcpy_dpi [DPI]: DPI when given, else IKADPI, else auto_scrcpy_dpi.
 resolve_scrcpy_dpi() {
   local explicit_dpi="${1:-}"
-  local size
-  local width
-  local dpi
 
   if [[ -n "${explicit_dpi}" ]]; then
     printf '%s\n' "${explicit_dpi}"
@@ -1508,6 +1630,30 @@ resolve_scrcpy_dpi() {
     printf '%s\n' "${IKADPI}"
     return 0
   fi
+
+  auto_scrcpy_dpi
+}
+
+# resolve_tv_dpi: the console's density in Android's TV mode, IKA_TV_DPI when it
+# is a number, else 1.5 times auto_scrcpy_dpi, so that the TV interface is
+# larger than the desktop.
+resolve_tv_dpi() {
+  local dpi
+
+  if [[ "${IKA_TV_DPI:-}" =~ ^[1-9][0-9]*$ ]]; then
+    printf '%s\n' "${IKA_TV_DPI}"
+    return 0
+  fi
+
+  dpi="$(auto_scrcpy_dpi)"
+  printf '%s\n' "$(( dpi * 3 / 2 / 8 * 8 ))"
+}
+
+# auto_scrcpy_dpi: a density from the host display's width.
+auto_scrcpy_dpi() {
+  local size
+  local width
+  local dpi
 
   size="$(host_display_size || true)"
   if [[ ! "${size}" =~ ^([0-9]+)x[0-9]+$ ]]; then
@@ -1560,6 +1706,7 @@ split_start_args() {
   done
 
   scrcpy_dpi_ref="$(resolve_scrcpy_dpi "${scrcpy_dpi_ref}")"
+  SCRCPY_DPI_GIVEN="${dpi_user_supplied}"
   if [[ "${dpi_user_supplied}" != "true" ]]; then
     args_array+=("--dpi=${scrcpy_dpi_ref}")
   fi
@@ -2977,6 +3124,22 @@ adb_boot_completed() {
   [[ "${boot_completed}" == "1" ]]
 }
 
+# Prints the mode Android booted in, tv or desktop, or nothing when the guest
+# does not answer. Android's mode is switched by IkaMode's Desktop/TV entry
+# and takes effect at boot, when TV mode adds the leanback feature.
+guest_ui_mode() {
+  local adb_serial="$1"
+  local leanback
+
+  leanback="$(host_adb 10 -s "${adb_serial}" shell cmd package has-feature \
+    android.software.leanback 2>/dev/null | tr -d '\r' || true)"
+  case "${leanback}" in
+    true) printf 'tv\n' ;;
+    false) printf 'desktop\n' ;;
+  esac
+  return 0
+}
+
 adb_guest_boot_id() {
   local adb_serial="$1"
   local boot_id
@@ -3111,10 +3274,15 @@ run_scrcpy_supervisor() {
   local arg
   local game_session="false"
   local session_watch_pid=""
+  local console_mode="desktop"
+  local guest_mode
 
   if [[ " ${base_command[*]} " == *" --ika-game-session "* ]]; then
     game_session="true"
     SCRCPY_WINDOW_STATE_FILE="${GAME_CONSOLE_WINDOW_STATE_FILE}"
+  elif [[ " ${base_command[*]} " == *" --window-state-file=${TV_CONSOLE_WINDOW_STATE_FILE} "* ]]; then
+    console_mode="tv"
+    SCRCPY_WINDOW_STATE_FILE="${TV_CONSOLE_WINDOW_STATE_FILE}"
   fi
 
   if [[ ! "${IKA_SCRCPY_REBOOT_TIMEOUT_SEC}" =~ ^[1-9][0-9]*$ ]]; then
@@ -3247,6 +3415,21 @@ run_scrcpy_supervisor() {
     fi
 
     previous_boot_id="${new_boot_id}"
+    # IkaMode's switcher changes Android's mode at a restart. Hand over to a console for the new mode: started once this
+    # supervisor has released its lock.
+    guest_mode="$(guest_ui_mode "${adb_serial}")"
+    if [[ "${game_session}" != "true" && -n "${guest_mode}" \
+        && "${guest_mode}" != "${console_mode}" ]]; then
+      log "Android restarted in ${guest_mode} mode; opening its console"
+      exec {supervisor_lock_fd}>&-
+      if [[ -n "${forward_port_fd}" ]]; then
+        exec {forward_port_fd}>&-
+      fi
+      setsid --fork bash -c 'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done
+          exec "$2" start' ika-console-switch "$$" "${IKA_SCRIPT_PATH}" \
+        </dev/null >/dev/null 2>&1 3>&-
+      return 0
+    fi
     # Connecting can take scrcpy's server about 10s on a freshly booted guest.
     quick_retries=4
     quick_retry_sec=30
@@ -3321,9 +3504,10 @@ touch_enabled() {
 }
 
 # Game mode uses UHID for all input devices; normal mode keeps text-friendly
-# SDK keyboard injection. Touch needs the SDK mouse, so in game mode only the
-# mouse leaves UHID and the gamepad and keyboard are still forwarded as HID
-# devices. A finger does not hover.
+# SDK keyboard injection, and TV mode ("tv") adds the UHID gamepad to it.
+# Touch needs the SDK mouse, so in game mode only the mouse leaves UHID and the
+# gamepad and keyboard are still forwarded as HID devices. A finger does not
+# hover.
 append_scrcpy_input_args() {
   local -n input_args_ref="$1"
   local game_mode="$2"
@@ -3343,6 +3527,14 @@ append_scrcpy_input_args() {
       --gamepad=uhid
       --keyboard=uhid
       --mouse=uhid
+    )
+  elif [[ "${game_mode}" == "tv" ]]; then
+    # The gamepad is the remote; the keyboard and mouse stay as on the desktop.
+    log "${label} TV mode: UHID gamepad"
+    input_args_ref+=(
+      --gamepad=uhid
+      --keyboard=sdk
+      --prefer-text
     )
   else
     input_args_ref+=(
@@ -3416,12 +3608,25 @@ start_scrcpy_with_retries() {
   local scrcpy_lock_fd=""
   local scrcpy_window_size
   local scrcpy_window_width
+  local console_dpi="${SCRCPY_DPI}"
   local scrcpy_window_height
   local -a scrcpy_env=()
   local -a scrcpy_cmd=(
     "${SCRCPY_BIN}"
     -s "${adb_serial}"
   )
+
+  # In Android's TV mode the console is the TV screen: fullscreen, at the TV
+  # density (--dpi wins in either mode), with the gamepad as the remote. A game
+  # session keeps its input.
+  if [[ "$(guest_ui_mode "${adb_serial}")" == "tv" ]]; then
+    log "Android is in TV mode"
+    fullscreen_mode="true"
+    [[ "${game_mode}" == "true" ]] || game_mode="tv"
+    if [[ "${SCRCPY_DPI_GIVEN}" != "true" ]]; then
+      console_dpi="$(resolve_tv_dpi)"
+    fi
+  fi
 
   exec {scrcpy_lock_fd}>"${scrcpy_lock_file}"
   if ! flock "${scrcpy_lock_fd}"; then
@@ -3438,11 +3643,19 @@ start_scrcpy_with_retries() {
     scrcpy_window_height=720
   fi
 
-  if [[ -n "${SCRCPY_DPI}" ]]; then
-    scrcpy_cmd+=("--dpi=${SCRCPY_DPI}")
+  if [[ -n "${console_dpi}" ]]; then
+    scrcpy_cmd+=("--dpi=${console_dpi}")
+  fi
+  # Right, middle, 4th and 5th buttons, then the same with Shift: a right click
+  # is a right click on the desktop (Back with Shift), and Back in TV mode, as
+  # a remote's Back button (a right click with Shift). The middle button is
+  # Home, the 4th and 5th the recent apps and the notifications.
+  if [[ "${game_mode}" == "tv" ]]; then
+    scrcpy_cmd+=(--mouse-bind=bhsn:++++)
+  else
+    scrcpy_cmd+=(--mouse-bind=+hsn:b+++)
   fi
   scrcpy_cmd+=(
-    --mouse-bind=+hsn:b+++
     --force-adb-forward
     --render-driver=opengl
     --window-borderless
@@ -3460,6 +3673,8 @@ start_scrcpy_with_retries() {
     # not replace the desktop console's size.
     scrcpy_cmd+=(--ika-game-session)
     scrcpy_cmd+=(--window-state-file="${GAME_CONSOLE_WINDOW_STATE_FILE}")
+  elif [[ "${game_mode}" == "tv" ]]; then
+    scrcpy_cmd+=(--window-state-file="${TV_CONSOLE_WINDOW_STATE_FILE}")
   else
     scrcpy_cmd+=(--window-state-file="${SCRCPY_WINDOW_STATE_FILE}")
   fi
@@ -4271,6 +4486,36 @@ start_game_session() {
   respond "Started ${label} in a game session; leave fullscreen to end it"
 }
 
+# Android's mode switch ("Desktop/TV" in the app menu, IkaMode in Android)
+# asks whether to switch the whole interface, so it opens on the primary
+# display, in the console, rather than in a window of its own.
+IKA_MODE_PACKAGE="org.lineageos.desktop.mode"
+
+open_in_console() {
+  local package="$1"
+  local label="$2"
+  local adb_serial
+  local component
+  local output
+
+  if ! scrcpy_supervisor_pid >/dev/null; then
+    IKA_NOTIFY=false "${IKA_SCRIPT_PATH}" start </dev/null >/dev/null 2>&1 3>&- \
+      || die "could not open the console; see ${START_LOG_FILE}"
+  fi
+  adb_serial="$(resolve_adb_serial)"
+  component="$(guest_adb "${adb_serial}" shell cmd package resolve-activity --brief \
+    -a android.intent.action.MAIN -c android.intent.category.LAUNCHER "${package}" \
+    </dev/null 2>/dev/null | tr -d '\r' | tail -n1)"
+  [[ "${component}" == */* ]] || die "${label} has no launcher activity"
+  output="$(guest_adb "${adb_serial}" shell am start --display 0 \
+    -a android.intent.action.MAIN -c android.intent.category.LAUNCHER \
+    -f 0x10000000 -n "${component}" </dev/null 2>&1 | tr -d '\r' || true)"
+  if [[ "${output}" == *Error* || "${output}" == *Exception* ]]; then
+    die "could not start ${label}: ${output}"
+  fi
+  respond "Opened ${label} in the console"
+}
+
 # Starts the VM without its console when it is not running, so that menu
 # launchers work while Ika is stopped, then waits for the guest to boot.
 ensure_guest_ready() {
@@ -4399,6 +4644,10 @@ open_app_window() {
 
   # Before use_app_window_paths, which repoints the supervisor paths from the
   # console to this app's window.
+  if [[ "${package}" == "${IKA_MODE_PACKAGE}" ]]; then
+    open_in_console "${package}" "${label:-${package}}"
+    return 0
+  fi
   if [[ "${window_mode}" != "true" ]] && is_game_app "${package}" "${adb_serial}"; then
     start_game_session "${package}" "${label:-${package}}"
     return 0
@@ -4432,9 +4681,15 @@ open_app_window() {
     || die "--size must be WIDTHxHEIGHT (example: 1600x900)"
   window_size="$(clamp_app_window_size "${window_size}")"
 
-  guest_dpi="$(guest_display_density "${adb_serial}")"
-  [[ "${guest_dpi}" =~ ^[1-9][0-9]*$ ]] || die "could not read the guest display density"
-  dpi="${guest_dpi}"
+  # App windows are desktop windows: at the console's density on the desktop,
+  # and in TV mode, where the console runs at the TV density, at the desktop's.
+  if [[ "$(guest_ui_mode "${adb_serial}")" == "tv" ]]; then
+    dpi="$(resolve_scrcpy_dpi "")"
+  else
+    guest_dpi="$(guest_display_density "${adb_serial}")"
+    [[ "${guest_dpi}" =~ ^[1-9][0-9]*$ ]] || die "could not read the guest display density"
+    dpi="${guest_dpi}"
+  fi
   display_size="$(app_window_display_size "${window_size}")" \
     || die "could not size the app window display for ${window_size}"
 
@@ -5330,8 +5585,11 @@ run_app_menu_watcher() {
   adb_serial="$(resolve_adb_serial)"
   log "app menu watcher started"
   while has_live_cvd_processes && [[ ! -f "${APP_MENU_DISABLED_FILE}" ]]; do
-    if adb_boot_completed "${adb_serial}" \
-        && fingerprint="$(guest_package_fingerprint "${adb_serial}")" \
+    # The adb calls go without the watcher's lock, like the sync below: one
+    # may start the adb server, which would otherwise keep the lock after this
+    # watcher exits and stop every later one from starting.
+    if ( exec {watcher_lock_fd}>&-; adb_boot_completed "${adb_serial}" ) \
+        && fingerprint="$(exec {watcher_lock_fd}>&-; guest_package_fingerprint "${adb_serial}")" \
         && [[ "${fingerprint}" != "${synced}" ]]; then
       if [[ -n "${synced}" ]]; then
         log "guest packages changed; updating the app menu"
@@ -5903,7 +6161,13 @@ start_cvd() {
   (
     cd "${CVD_PRODUCT_OUT}"
     exec 3>&-
-    exec "${cvd_env_args[@]}" "${CVD_BIN}" "${args[@]}"
+    # systemd-run --scope runs the command in this process: launcher_pid stays
+    # the launcher's.
+    exec systemd-run --user --scope --quiet --collect -p Delegate=yes \
+      --unit="ika-android-$(date +%s)" -- \
+      "${IKA_SCRIPT_PATH}" __launch-in-vcpu-scope \
+      "$(start_arg_value "cpus" "${CVD_COMPUTE_DEFAULTS[cpus]}" "$@")" \
+      "${cvd_env_args[@]}" "${CVD_BIN}" "${args[@]}"
   ) &
   launcher_pid="$!"
   disown "${launcher_pid}" || true
@@ -6504,6 +6768,10 @@ main() {
   ika_ini_warn_unknown
 
   case "${command}" in
+    __launch-in-vcpu-scope)
+      shift
+      launch_in_vcpu_scope "$@"
+      ;;
     start)
       CONSOLE_FAILURE_MESSAGE="Startup Failed."
       shift

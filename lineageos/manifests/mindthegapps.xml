@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Android 16 QPR2 / LineageOS 23.2 inline MindTheGapps vendor tree. -->
+<!-- Android 16 QPR2 / LineageOS 23.2 inline MindTheGapps vendor tree.
+     Fetched from GitLab, whose baklava branch stopped getting updates in June
+     2026 (f8cdcff): MindTheGapps continues baklava on GitHub, but as a separate
+     history for arm and arm64 only, and Ika's x86-64 images need this tree's
+     x86_64 support. -->
 <manifest>
   <remote
       name="mindthegapps"

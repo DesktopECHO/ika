@@ -1,0 +1,21 @@
+Patch summary:
+Install TvSystemUI next to the desktop SystemUI instead of in its place.
+Both are com.android.systemui; PackageManager scans TvSystemUI only when Ika
+boots in TV mode (frameworks-base-ika-mode.patch).
+
+diff --git a/Android.bp b/Android.bp
+index ba6fccf..38385d2 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -68,9 +68,8 @@ android_app {
+     static_libs: [
+         "TvSystemUI-core",
+     ],
+-    overrides: [
+-        "SystemUI",
+-    ],
++    // Ika: installed next to SystemUI; PackageManager picks the one of the interface
++    // mode at boot (frameworks-base-ika-mode.patch).
+     resource_dirs: [],
+     use_resource_processor: true,
+ 

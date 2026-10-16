@@ -1468,6 +1468,22 @@ sync_mindthegapps_lfs_prebuilts() {
   apply_mindthegapps_x86_64_compat_patch "$gapps" "$@"
   install_mindthegapps_x86_64_modern_gms "$gapps" "$@"
   apply_mindthegapps_x86_64_modern_gms_patch "$gapps" "$@"
+  fetch_tv_play_store
+}
+
+# TV mode runs the Android TV build of the Play Store, on both architectures,
+# which Ika keeps in Git LFS (prebuilts/mindthegapps/arm64/tubesky) and builds
+# from there, so it must be downloaded before the overlay is copied into the
+# source tree.
+fetch_tv_play_store() {
+  local source="$overlay_dir/prebuilts/mindthegapps/arm64/tubesky"
+
+  [[ -f "$source/SHA256SUMS" ]] || \
+    die "missing Android TV Play Store checksum manifest: $source/SHA256SUMS"
+  ensure_git_lfs_files "$source"
+  if ! (cd "$source" && sha256sum --check --strict SHA256SUMS >/dev/null); then
+    die "the Android TV Play Store prebuilt is missing or corrupt: $source"
+  fi
 }
 
 targets_include_x86_64() {

@@ -1,0 +1,14 @@
+// The Android TV build of the Google Play Store, for TV mode (see README.md),
+// MindTheGapps' arm64 build, which x86-64 runs through the native bridge. Declared like MindTheGapps' own TV GApps declare it.
+android_app_import {
+    name: "Tubesky",
+    owner: "gapps_tv",
+    apk: "Tubesky.apk",
+    preprocessed: true,
+    presigned: true,
+    dex_preopt: {
+        enabled: false,
+    },
+    privileged: true,
+    product_specific: true,
+}

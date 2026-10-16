@@ -1,0 +1,10 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.lineageos.desktop.overlay.tv.lineagesdk">
+    <application android:hasCode="false" />
+    <overlay
+        android:targetPackage="lineageos.platform"
+        android:isStatic="true"
+        android:priority="300"
+        android:requiredSystemPropertyName="persist.sys.ika.mode"
+        android:requiredSystemPropertyValue="tv" />
+</manifest>

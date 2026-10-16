@@ -1,6 +1,26 @@
 [README](README.md) | [UI Intro](UI-INTRO.md) | [Ika commands](USAGE.md) | **Changelog** | [Downloads](DOWNLOADS.md)
 
-## Unreleased, changes since release 261012
+## Ika 261016, changes since release 261012
+
+### TV mode
+- Android has a TV interface as well as the desktop, in the same ROM:
+  **Desktop/TV** in the app drawer, the desktop's app menu and the TV
+  launcher's apps lists Desktop Mode and each TV launcher, such as Catapult or
+  one from Google Play. Switching modes asks, then Android reboots in the other
+  mode; in TV mode, choosing a TV launcher makes it the Home app straight away.
+  TV mode has the Android TV system UI, TV Settings and the Leanback keyboard,
+  runs apps fullscreen without a status bar or taskbar, and the console shows
+  it fullscreen with the gamepad as the remote. In TV mode, apps and Google
+  Play see a TV-only device, and the Google Play Store is its Android TV build.
+  App windows on the Linux desktop work in both modes. Desktop mode is
+  unchanged. See [TV mode](USAGE.md#tv-mode).
+
+### App windows
+- App windows show their app on a Cuttlefish display of their own and get its
+  frames straight from the VM, as the console does, instead of a video that
+  Android encoded: sharper, with less work for both Android and the host. The
+  display client no longer uses VA-API. App windows close when Android
+  restarts, and open at the desktop's density in TV mode too.
 
 ### Settings file
 - `~/ika/ika.ini` holds Ika's defaults in sections (`[compute]`, `[gpu]`,
@@ -40,6 +60,8 @@
 ### Fixes
 - `ika reset` no longer logs you out of GNOME: removing the app folder
   crashed GNOME Shell.
+- The Chromium and Magisk APKs that Ika downloads are kept in `~/ika/apps`, and
+  Ika's pid and lock files in `~/ika/tmp`.
 
 ## Ika 261012, changes since release 260930
 

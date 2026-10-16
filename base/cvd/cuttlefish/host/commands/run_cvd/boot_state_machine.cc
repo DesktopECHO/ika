@@ -49,6 +49,7 @@
 #include "cuttlefish/common/libs/fs/shared_buf.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/common/libs/utils/json.h"
 #include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/common/libs/utils/tee_logging.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags_defaults.h"
@@ -84,8 +85,18 @@ DEFINE_int32(boot_timeout_secs, 600,
 namespace cuttlefish {
 namespace {
 
-Result<void> MoveSelfToCgroup(const std::string& id) {
-  auto to_path_file = "/sys/fs/cgroup/vsoc-" + id + "-cf/cgroup.procs";
+// The cgroup that the launcher, crosvm and its vCPU domains run in: the
+// "cgroup_path" of the Virtual Cpufreq configuration, which crosvm also uses
+// (--vcpu-cgroup-path), so that it can live in a cgroup delegated to the user
+// instead of under /sys/fs/cgroup.
+Result<std::string> VcpuCgroupPath(
+    const CuttlefishConfig::InstanceSpecific& instance) {
+  auto vcpu_config_json = CF_EXPECT(LoadFromFile(instance.vcpu_config_path()));
+  return CF_EXPECT(GetValue<std::string>(vcpu_config_json, {"cgroup_path"}));
+}
+
+Result<void> MoveSelfToCgroup(const std::string& root_path) {
+  auto to_path_file = root_path + "/cgroup.procs";
   auto pid = std::to_string(getpid());
   SharedFD fd = SharedFD::Open(to_path_file, O_WRONLY | O_APPEND);
   CF_EXPECT(fd->IsOpen(),
@@ -141,8 +152,7 @@ Result<void> MoveThreadsToCgroup(const std::string& from_path,
 
 // See go/vcpuinheritance for more context on why this Rebalance is
 // required and what the stop gap/longterm solutions are.
-Result<void> WattsonRebalanceThreads(const std::string& id) {
-  auto root_path = "/sys/fs/cgroup/vsoc-" + id + "-cf";
+Result<void> WattsonRebalanceThreads(const std::string& root_path) {
   const auto files = CF_EXPECT(DirectoryContents(root_path));
 
   CF_EXPECT(MoveThreadsToCgroup(root_path, root_path + "/workers"));
@@ -153,6 +163,12 @@ Result<void> WattsonRebalanceThreads(const std::string& id) {
                                     root_path + "/workers"));
     }
   }
+  return {};
+}
+
+Result<void> RebalanceVcpuThreads(
+    const CuttlefishConfig::InstanceSpecific& instance) {
+  CF_EXPECT(WattsonRebalanceThreads(CF_EXPECT(VcpuCgroupPath(instance))));
   return {};
 }
 
@@ -182,7 +198,7 @@ Result<SharedFD> DaemonizeLauncher(const CuttlefishConfig& config) {
       } else {
         LOG(INFO) << "Virtual device booted successfully";
         if (!instance.vcpu_config_path().empty()) {
-          CF_EXPECT(WattsonRebalanceThreads(instance.id()));
+          CF_EXPECT(RebalanceVcpuThreads(instance));
         }
       }
     } else if (exit_code == RunnerExitCodes::kVirtualDeviceBootFailed) {
@@ -255,7 +271,7 @@ Result<SharedFD> ProcessLeader(
 
   // Move to designated cgroup path when running with vcpufreq enabled.
   if (!instance.vcpu_config_path().empty()) {
-    CF_EXPECT(MoveSelfToCgroup(instance.id()));
+    CF_EXPECT(MoveSelfToCgroup(CF_EXPECT(VcpuCgroupPath(instance))));
   }
 
   /* These two paths result in pretty different process state, but both
@@ -649,7 +665,7 @@ class CvdBootStateMachine : public SetupFeature, public KernelLogPipeConsumer {
         if ((*read_result)->event == monitor::Event::BootCompleted) {
           LOG(INFO) << "Virtual device rebooted successfully";
           if (!instance_.vcpu_config_path().empty()) {
-            auto res = WattsonRebalanceThreads(instance_.id());
+            auto res = RebalanceVcpuThreads(instance_);
             if (!res.ok()) {
               LOG(ERROR) << res.error();
             }
@@ -677,7 +693,7 @@ class CvdBootStateMachine : public SetupFeature, public KernelLogPipeConsumer {
     if ((*read_result)->event == monitor::Event::BootCompleted) {
       state_ |= kGuestBootCompleted;
       if (!instance_.vcpu_config_path().empty()) {
-        auto res = WattsonRebalanceThreads(instance_.id());
+        auto res = RebalanceVcpuThreads(instance_);
         if (!res.ok()) {
           LOG(ERROR) << res.error();
         }

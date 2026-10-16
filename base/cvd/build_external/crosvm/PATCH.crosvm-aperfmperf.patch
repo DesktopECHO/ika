@@ -1,0 +1,90 @@
+diff --git a/src/crosvm/cmdline.rs b/src/crosvm/cmdline.rs
+index bebc8d2..862f323 100644
+--- a/src/crosvm/cmdline.rs
++++ b/src/crosvm/cmdline.rs
+@@ -840,6 +840,11 @@ pub struct RunCommand {
+     /// path to Android fstab
+     pub android_fstab: Option<PathBuf>,
+ 
++    #[cfg(target_arch = "x86_64")]
++    #[argh(switch)]
++    /// let the guest read IA32_APERF/IA32_MPERF, so it sees the effective vCPU frequency
++    pub aperfmperf: Option<bool>,
++
+     /// configure async executor backend; "uring" or "epoll" on Linux, "handle" or "overlapped" on
+     /// Windows. If this option is omitted on Linux, "epoll" is used by default.
+     #[argh(option, arg_name = "EXECUTOR")]
+@@ -3198,6 +3203,7 @@ impl TryFrom<RunCommand> for super::config::Config {
+         #[cfg(target_arch = "x86_64")]
+         {
+             cfg.break_linux_pci_config_io = cmd.break_linux_pci_config_io.unwrap_or_default();
++            cfg.aperfmperf = cmd.aperfmperf.unwrap_or_default();
+             cfg.enable_hwp = cmd.enable_hwp.unwrap_or_default();
+             cfg.force_s2idle = cmd.s2idle.unwrap_or_default();
+             cfg.no_i8042 = cmd.no_i8042.unwrap_or_default();
+diff --git a/src/crosvm/config.rs b/src/crosvm/config.rs
+index 9eda2bc..ccaee5f 100644
+--- a/src/crosvm/config.rs
++++ b/src/crosvm/config.rs
+@@ -592,6 +592,8 @@ pub struct Config {
+     #[cfg(feature = "android_display")]
+     pub android_display_service: Option<String>,
+     pub android_fstab: Option<PathBuf>,
++    #[cfg(target_arch = "x86_64")]
++    pub aperfmperf: bool,
+     pub async_executor: Option<ExecutorKind>,
+     #[cfg(feature = "balloon")]
+     pub balloon: bool,
+@@ -826,6 +828,8 @@ impl Default for Config {
+             #[cfg(feature = "android_display")]
+             android_display_service: None,
+             android_fstab: None,
++            #[cfg(target_arch = "x86_64")]
++            aperfmperf: false,
+             async_executor: None,
+             #[cfg(feature = "balloon")]
+             balloon: true,
+diff --git a/src/crosvm/sys/linux.rs b/src/crosvm/sys/linux.rs
+index 1972d75..c298bfa 100644
+--- a/src/crosvm/sys/linux.rs
++++ b/src/crosvm/sys/linux.rs
+@@ -1933,7 +1933,11 @@ fn run_halla(
+     )
+ }
+ 
+-fn run_kvm(device_path: Option<&Path>, cfg: Config, components: VmComponents) -> Result<ExitState> {
++fn run_kvm(
++    device_path: Option<&Path>,
++    #[cfg_attr(not(target_arch = "x86_64"), allow(unused_mut))] mut cfg: Config,
++    components: VmComponents,
++) -> Result<ExitState> {
+     use devices::KvmKernelIrqChip;
+     #[cfg(target_arch = "x86_64")]
+     use devices::KvmSplitIrqChip;
+@@ -1967,6 +1971,18 @@ fn run_kvm(device_path: Option<&Path>, cfg: Config, components: VmComponents) ->
+             .context("failed to disable MSR_PLATFORM_INFO read access")?;
+     }
+ 
++    // Before the vCPUs exist: KVM refuses to change exit controls afterwards. The vCPUs only
++    // advertise APERF/MPERF to the guest if this succeeded.
++    #[cfg(target_arch = "x86_64")]
++    if cfg.aperfmperf
++        && !vm
++            .enable_aperfmperf_passthrough()
++            .context("failed to pass APERF/MPERF reads through")?
++    {
++        warn!("--aperfmperf: host KVM does not support APERF/MPERF passthrough");
++        cfg.aperfmperf = false;
++    }
++
+     // Check that the VM was actually created in protected mode as expected.
+     // This check is only needed on aarch64. On x86_64, protected VM creation will fail
+     // if protected mode is not supported.
+@@ -4175,6 +4191,7 @@ fn run_control(
+             cfg.itmt,
+             vcpu_hybrid_type,
+             cfg.nested.mode,
++            cfg.aperfmperf,
+         ));
+         #[cfg(target_arch = "x86_64")]
+         let bus_lock_ratelimit_ctrl = Arc::clone(&bus_lock_ratelimit_ctrl);

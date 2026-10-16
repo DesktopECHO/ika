@@ -1,0 +1,27 @@
+Patch summary:
+Enable a newly connected external display without the "Connect to external
+display" dialog when no choice is saved for it. Ika's external displays are
+app windows on the host, and SystemUI enables them on its own only where
+desktop mode is supported on the default display. In TV mode (TvSystemUI uses
+the same code) the display stayed disabled behind the dialog, and the app
+window gave up waiting for it.
+
+diff --git a/packages/SystemUI/src/com/android/systemui/display/ui/viewmodel/ConnectingDisplayViewModel.kt b/packages/SystemUI/src/com/android/systemui/display/ui/viewmodel/ConnectingDisplayViewModel.kt
+--- a/packages/SystemUI/src/com/android/systemui/display/ui/viewmodel/ConnectingDisplayViewModel.kt
++++ b/packages/SystemUI/src/com/android/systemui/display/ui/viewmodel/ConnectingDisplayViewModel.kt
+@@ -211,11 +211,10 @@
+                 when (pendingDisplay.connectionType) {
+                     DESKTOP -> pendingDisplay.enableForDesktop()
+                     MIRROR -> pendingDisplay.enableForMirroring()
+-                    NOT_SPECIFIED ->
+-                        pendingDisplay.showNewDialog(
+-                            concurrentDisplaysInProgress,
+-                            isInKioskMode = false,
+-                        )
++                    // Ika: the external displays are app windows on the host, so they extend
++                    // the screen without asking, as in desktop mode, also in TV mode, where
++                    // the app window would otherwise wait for the user to answer the dialog.
++                    NOT_SPECIFIED -> pendingDisplay.enableForDesktop()
+                 }
+             }
+         }

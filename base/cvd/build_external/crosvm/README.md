@@ -143,3 +143,8 @@ See `crosvm.MODULE.bazel`. The relevant blocks:
 #### `PATCH.crosvm-aarch64-block-pread64-source.patch`
 - **Targets:** Source `git_repository` checkout.
 - **What it does:** Equivalent full-tree version of `PATCH.jail-aarch64-block-pread64.patch`.
+
+#### `PATCH.crosvm-aperfmperf.patch`, `PATCH.hypervisor-aperfmperf.patch`, `PATCH.x86_64-aperfmperf.patch`
+- **Targets:** `crosvm`, `hypervisor` and `x86_64` crates. Files: `src/crosvm/{cmdline,config}.rs`, `src/crosvm/sys/linux.rs`; `src/kvm/x86_64.rs`, `src/x86_64.rs`; `src/cpuid.rs`.
+- **What it does:** Adds an x86_64 `--aperfmperf` switch. Before the vCPUs are created, crosvm enables `KVM_X86_DISABLE_EXITS_APERFMPERF` (host Linux 6.17+), and the vCPUs then advertise APERF/MPERF in CPUID leaf 6. If the host kernel lacks the capability, crosvm logs a warning and the guest sees no APERF/MPERF, as before.
+- **Why:** x86 guests have no cpufreq device: virt-cpufreq is aarch64-only, so the guest's `/proc/cpuinfo` reported no real frequency. With the counters the guest kernel computes each vCPU's effective MHz, read from the host core it runs on (KVM passes the raw counters through, so the value includes time the host spends in KVM for that vCPU).

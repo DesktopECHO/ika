@@ -1,0 +1,18 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+// Ika's mode, TV or desktop, kept in persist.sys.ika.mode: this persistent
+// app's Desktop/TV entry switches it, once the user confirms, with the
+// Settings app, keyboard, launcher and Home app, and restarts Android. In TV
+// mode it also chooses the TV launcher. Runs as the system uid to change roles,
+// secure settings, package states and the property, to remove Play Store
+// updates, and to restart Android.
+android_app {
+    name: "IkaMode",
+    srcs: ["src/**/*.java"],
+    platform_apis: true,
+    certificate: "platform",
+    privileged: true,
+    system_ext_specific: true,
+}
