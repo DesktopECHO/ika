@@ -245,7 +245,8 @@ Default `ika` settings and configuration:
 - instance state under `~/ika`
 - ~64 GB thin-provisioned ext4 userdata image
 - Chromium installed as the default browser on new devices
-- guest vCPUs set to the available/performance-core count minus two, capped at 12
+- guest vCPUs set to half the performance cores (counting hardware threads),
+  capped at 12, each pinned to a host CPU from the highest CPU number down
 - guest RAM set to one quarter of host RAM, capped at 32 GB
 - Ethernet-only guest networking by default; Wi-Fi, Bluetooth, NFC, UWB, GNSS,
   and the modem simulator remain off unless explicitly enabled

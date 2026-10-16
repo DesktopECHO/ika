@@ -264,7 +264,3 @@
 
 // Virtual Cpufreq default configuration path
 #define CF_DEFAULTS_VCPU_CONFIG_PATH ""
-
-// Prefer running guest vCPUs on the host CPUs with the highest scheduler
-// capacity values.
-#define CF_DEFAULTS_PREFER_PERFORMANCE_CORES false

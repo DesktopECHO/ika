@@ -112,6 +112,7 @@ Result<std::vector<std::string>> CrosvmCpuArguments(
     cpu_arguments.emplace_back(std::move(cpu_cluster));
   }
 
+#if defined(__aarch64__)
   cpu_arguments.emplace_back(std::move(affinity_arg));
   cpu_arguments.emplace_back(std::move(capacity_arg));
   cpu_arguments.emplace_back(std::move(ipc_ratio_arg));
@@ -121,6 +122,15 @@ Result<std::vector<std::string>> CrosvmCpuArguments(
 
   cpu_arguments.emplace_back(
       fmt::format("--cpus={},freq-domains={}", cpus, freq_domain_arg));
+#else
+  // Ika: crosvm's Virtual Cpufreq, its frequency domains and CPU clusters are
+  // aarch64 only. Elsewhere the configuration still places each vCPU on its
+  // host CPU, such as the performance cores of a hybrid x86 CPU.
+  cpu_arguments.clear();
+  cpu_arguments.emplace_back(std::move(affinity_arg));
+  cpu_arguments.emplace_back(std::move(cgroup_path_arg));
+  cpu_arguments.emplace_back(fmt::format("--cpus={}", cpus));
+#endif
 
   return cpu_arguments;
 }
