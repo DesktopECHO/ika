@@ -43,7 +43,7 @@ final class ModeController {
     private static final String MODE_DESKTOP = "desktop";
 
     static final String TV_LAUNCHER = "org.lineageos.tv.launcher";
-    private static final String DESKTOP_LAUNCHER = "com.android.launcher3";
+    static final String DESKTOP_LAUNCHER = "com.android.launcher3";
     private static final String TV_SETTINGS = "com.android.tv.settings";
     private static final String DESKTOP_SETTINGS = "com.android.settings";
     private static final String LEANBACK_IME_PACKAGE = "com.android.inputmethod.leanback";

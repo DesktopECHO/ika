@@ -3,7 +3,6 @@ package org.lineageos.desktop.mode;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
-import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.FeatureInfo;
 import android.content.pm.PackageInfo;
@@ -17,6 +16,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
 import android.widget.LinearLayout;
+import android.widget.ListView;
 import android.widget.TextView;
 
 import java.util.ArrayList;
@@ -26,18 +26,23 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Desktop/TV: Desktop Mode, then a TV mode heading over each TV launcher, Catapult first. In TV
- * mode, a TV launcher becomes the Home app at once, and Desktop Mode asks to restart in the
- * desktop. On the desktop, a TV launcher asks to restart in TV mode, with it as the Home app.
+ * Desktop/TV: the desktop's launcher (Trebuchet) under a Desktop mode heading, then each TV
+ * launcher, Catapult first, under a TV mode heading. In TV mode, a TV launcher becomes the Home
+ * app at once, and the desktop's launcher asks to restart in the desktop. On the desktop, a TV
+ * launcher asks to restart in TV mode, with it as the Home app.
  */
 public class SwitcherActivity extends Activity {
     private static final String TV_SETTINGS = "com.android.tv.settings";
     private static final String LEANBACK = "android.software.leanback";
-    private static final int DESKTOP = 0;
-    private static final int TV_HEADING = 1;
+    private static final int DESKTOP_HEADING = 0;
+    private static final int DESKTOP = 1;
+    private static final int TV_HEADING = 2;
 
-    // Set while the restart question replaces the list, so that closing the list does not
-    // finish the activity.
+    // How long the list shows a new choice before the restart question covers it.
+    private static final long ASK_DELAY_MS = 300;
+
+    // Set from a choice that needs a restart until the question about it is answered: the list
+    // takes no other choice meanwhile.
     private boolean mAsking;
 
     @Override
@@ -47,24 +52,30 @@ public class SwitcherActivity extends Activity {
         PackageManager pm = getPackageManager();
         List<String> launchers = tvLaunchers(pm);
         List<CharSequence> labels = new ArrayList<>();
-        labels.add(getString(R.string.desktop_mode_item));
+        labels.add(getString(R.string.desktop_mode_heading));
+        labels.add(label(pm, ModeController.DESKTOP_LAUNCHER));
         labels.add(getString(R.string.tv_mode_heading));
         for (String packageName : launchers) {
             labels.add(label(pm, packageName));
         }
-        int checked = DESKTOP;
+        final int checked;
         if (tv) {
             List<String> holders = ModeController.homeHolders(this);
             int home = holders.isEmpty() ? -1 : launchers.indexOf(holders.get(0));
             checked = home < 0 ? -1 : TV_HEADING + 1 + home;
+        } else {
+            checked = DESKTOP;
         }
         new AlertDialog.Builder(this)
                 .setTitle(R.string.switcher_title)
                 .setIcon(R.drawable.ic_ika)
                 .setSingleChoiceItems(new RowAdapter(this, labels), checked, (dialog, which) -> {
+                    if (mAsking) {
+                        return;
+                    }
                     if (which == DESKTOP) {
                         if (tv) {
-                            ask(dialog, false, null);
+                            ask((AlertDialog) dialog, checked, false, null);
                         } else {
                             dialog.dismiss();
                         }
@@ -76,30 +87,52 @@ public class SwitcherActivity extends Activity {
                                 getApplicationContext(), launcher, success -> {}));
                         dialog.dismiss();
                     } else {
-                        ask(dialog, true, launcher);
+                        ask((AlertDialog) dialog, checked, true, launcher);
                     }
                 })
                 .setNegativeButton(android.R.string.cancel, null)
-                .setOnDismissListener(dialog -> {
-                    if (!mAsking) {
-                        finish();
-                    }
-                })
+                .setOnDismissListener(dialog -> finish())
                 .show();
     }
 
-    /** Closes the list and asks to restart in the other mode, with HOME as its Home app. */
-    private void ask(DialogInterface list, boolean tv, String home) {
+    /**
+     * Asks, over the list, which shows the new choice, to restart in the other mode with HOME as
+     * its Home app. Otherwise it goes back to the list, with the current choice, CHECKED, again.
+     */
+    private void ask(AlertDialog list, int checked, boolean tv, String home) {
         mAsking = true;
-        list.dismiss();
+        list.getListView().postDelayed(() -> showQuestion(list, checked, tv, home),
+                ASK_DELAY_MS);
+    }
+
+    private void showQuestion(AlertDialog list, int checked, boolean tv, String home) {
+        if (isFinishing()) {
+            return;
+        }
+        boolean[] switching = {false};
         new AlertDialog.Builder(this)
                 .setTitle(tv ? R.string.tv_mode_title : R.string.desktop_mode_title)
                 .setMessage(tv ? R.string.tv_mode_text : R.string.desktop_mode_text)
-                .setPositiveButton(R.string.switch_mode, (dialog, which) ->
-                        ModeController.EXECUTOR.execute(() -> ModeController.switchTo(
-                                getApplicationContext(), tv, home)))
+                .setPositiveButton(R.string.switch_mode, (dialog, which) -> {
+                    switching[0] = true;
+                    list.dismiss();
+                    ModeController.EXECUTOR.execute(() -> ModeController.switchTo(
+                            getApplicationContext(), tv, home));
+                })
                 .setNegativeButton(android.R.string.cancel, null)
-                .setOnDismissListener(dialog -> finish())
+                .setOnDismissListener(dialog -> {
+                    if (switching[0]) {
+                        return;
+                    }
+                    mAsking = false;
+                    ListView rows = list.getListView();
+                    if (checked < 0) {
+                        rows.clearChoices();
+                        rows.requestLayout();
+                    } else {
+                        rows.setItemChecked(checked, true);
+                    }
+                })
                 .show();
     }
 
@@ -162,7 +195,7 @@ public class SwitcherActivity extends Activity {
         }
     }
 
-    /** The choices as the dialog's own single-choice rows, with the TV mode heading between. */
+    /** The choices as the dialog's own single-choice rows, under a heading for each mode. */
     private static final class RowAdapter extends BaseAdapter {
         private final Context mContext;
         private final List<CharSequence> mLabels;
@@ -194,23 +227,23 @@ public class SwitcherActivity extends Activity {
 
         @Override
         public boolean isEnabled(int position) {
-            return position != TV_HEADING;
+            return position != DESKTOP_HEADING && position != TV_HEADING;
         }
 
         @Override
         public int getViewTypeCount() {
-            return 2;
+            return 3;
         }
 
         @Override
         public int getItemViewType(int position) {
-            return position == TV_HEADING ? 1 : 0;
+            return position == DESKTOP_HEADING ? 1 : position == TV_HEADING ? 2 : 0;
         }
 
         @Override
         public View getView(int position, View convertView, ViewGroup parent) {
-            if (position == TV_HEADING) {
-                return convertView != null ? convertView : heading();
+            if (position == DESKTOP_HEADING || position == TV_HEADING) {
+                return convertView != null ? convertView : heading(position);
             }
             TextView row = (TextView) (convertView != null ? convertView
                     : LayoutInflater.from(mContext).inflate(
@@ -220,24 +253,30 @@ public class SwitcherActivity extends Activity {
             return row;
         }
 
-        /** A line, then the heading in the accent colour, lined up with the rows' text. */
-        private View heading() {
+        /**
+         * The heading in the accent colour, lined up with the rows' text: below the title for
+         * desktop mode, below a line for TV mode.
+         */
+        private View heading(int position) {
             float density = mContext.getResources().getDisplayMetrics().density;
             LinearLayout heading = new LinearLayout(mContext);
             heading.setOrientation(LinearLayout.VERTICAL);
-            View line = new View(mContext);
-            line.setBackground(themeDrawable(android.R.attr.listDivider));
-            LinearLayout.LayoutParams lineParams = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, Math.round(density)));
-            lineParams.topMargin = Math.round(8 * density);
-            heading.addView(line, lineParams);
+            if (position == TV_HEADING) {
+                View line = new View(mContext);
+                line.setBackground(themeDrawable(android.R.attr.listDivider));
+                LinearLayout.LayoutParams lineParams = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, Math.round(density)));
+                lineParams.topMargin = Math.round(8 * density);
+                heading.addView(line, lineParams);
+            }
             TextView title = new TextView(mContext);
             title.setTextAppearance(android.R.style.TextAppearance_Material_Body2);
             title.setTextColor(themeColor(android.R.attr.colorAccent));
-            title.setText(mLabels.get(TV_HEADING));
+            title.setText(mLabels.get(position));
             int padding = themeSize(android.R.attr.dialogPreferredPadding,
                     Math.round(24 * density));
-            title.setPaddingRelative(padding, Math.round(16 * density), padding,
+            title.setPaddingRelative(padding,
+                    Math.round((position == DESKTOP_HEADING ? 20 : 16) * density), padding,
                     Math.round(10 * density));
             heading.addView(title);
             return heading;

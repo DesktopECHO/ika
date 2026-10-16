@@ -94,12 +94,13 @@ virtio-media, served by Android's external camera HAL):
 Android has a TV interface as well as the desktop. Desktop is the default, and
 only **Desktop/TV** changes the mode. Open it from the app drawer or the
 desktop's "Android Apps (Ika)" menu in desktop mode (it opens in the console),
-or from the TV launcher's apps in TV mode. It lists **Desktop Mode**, then,
-under a **TV mode** heading, each TV launcher on the system by name, such as
-**Catapult** (LineageOS's TV launcher) or one from Google Play:
+or from the TV launcher's apps in TV mode. It lists **Trebuchet**, the
+desktop's launcher, under a **Desktop mode** heading, then each TV launcher on
+the system by name under a **TV mode** heading, such as **Catapult**
+(LineageOS's TV launcher) or one from Google Play:
 
 - In TV mode, choosing a TV launcher makes it the Home app straight away.
-  Choosing **Desktop Mode** asks whether to reboot into the desktop.
+  Choosing **Trebuchet** asks whether to reboot into the desktop.
 - In desktop mode, choosing a TV launcher asks whether to reboot into TV mode
   with that launcher as the Home app.
 - **Reboot** switches Settings (TV Settings in TV mode), the keyboard (the
