@@ -34,6 +34,10 @@ PRODUCT_DEXPREOPT_SPEED_APPS := $(filter-out Launcher3 Launcher3Go Launcher3Quic
 PRODUCT_PACKAGES += Launcher3QuickStep
 PRODUCT_DEXPREOPT_SPEED_APPS += Launcher3QuickStep
 
+# Compile all of system_server ahead of time, not only its profiled code
+# (speed-profile), so that it doesn't wait for the JIT after a boot.
+PRODUCT_SYSTEM_SERVER_COMPILER_FILTER := speed
+
 # Android TV mode, switched to with IkaMode's Desktop/TV entry. Desktop mode,
 # the default, is unchanged by it.
 $(call inherit-product, vendor/lineage_desktop/config/tv_mode.mk)

@@ -45,6 +45,12 @@ PRODUCT_PACKAGES += \
     Catapult \
     TvProvider
 
+# TV mode's System UI and launcher are compiled ahead of time like the
+# desktop's (SystemUI and Launcher3QuickStep).
+PRODUCT_DEXPREOPT_SPEED_APPS += \
+    Catapult \
+    TvSystemUI
+
 # The Android TV build of the Play Store, with MindTheGapps
 # (prebuilts/mindthegapps/arm64/tubesky). It is MindTheGapps' arm64 build, as
 # MindTheGapps has no TV build for x86-64, where its native code runs through
