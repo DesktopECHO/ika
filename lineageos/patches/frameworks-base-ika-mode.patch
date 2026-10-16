@@ -16,7 +16,13 @@ Where the image also has the Android TV build of the Play Store (Tubesky,
 which images with MindTheGapps carry next to the phone build, Phonesky),
 PackageManager scans Tubesky only in TV mode and Phonesky only in desktop
 mode, as the phone Play Store refuses to run on a TV. Images without Tubesky
-keep the phone Play Store in both modes.
+keep the phone Play Store in both modes. As the two builds swap at a mode
+switch, PackageManager derives a package's ABI again when its APK moved since
+the last boot: Tubesky is arm64-only, and on x86-64 it would otherwise keep
+the phone build's x86_64. The swap can also revoke the Play Store's
+notification permission while packages are scanned at boot, and
+PermissionService then reads a setting before ActivityManager is up: that read
+finds no setting instead of crashing system_server.
 
 diff --git a/packages/PackageInstaller/Android.bp b/packages/PackageInstaller/Android.bp
 index 0f8c690633cc..4c85f8b96215 100644
@@ -173,6 +179,21 @@ index 121dc089d666..96e1780c9de6 100644
                  Slog.d(TAG, "Keeping known cache " + cacheDir.getName());
              } else {
                  Slog.d(TAG, "Destroying unknown cache " + cacheDir.getName());
+diff --git a/services/core/java/com/android/server/pm/ScanPackageUtils.java b/services/core/java/com/android/server/pm/ScanPackageUtils.java
+--- a/services/core/java/com/android/server/pm/ScanPackageUtils.java
++++ b/services/core/java/com/android/server/pm/ScanPackageUtils.java
+@@ -164,6 +164,11 @@ final class ScanPackageUtils {
+                 // check after we fix the stub generation.
+                 if (pkgSetting.getPkg() != null && pkgSetting.getPkg().isStub()) {
+                     needToDeriveAbi = true;
++                } else if (!pkgSetting.getPathString().equals(parsedPackage.getPath())) {
++                    // Ika: the package's APK moved since the last boot, as the
++                    // Play Store's does between Ika's interface modes (Phonesky,
++                    // Tubesky): its native code can be for other ABIs.
++                    needToDeriveAbi = true;
+                 } else {
+                     primaryCpuAbiFromSettings = pkgSetting.getPrimaryCpuAbiLegacy();
+                     secondaryCpuAbiFromSettings = pkgSetting.getSecondaryCpuAbiLegacy();
 diff --git a/services/core/java/com/android/server/wm/ActivityTaskManagerService.java b/services/core/java/com/android/server/wm/ActivityTaskManagerService.java
 index c695279f5b59..aa879d38fa78 100644
 --- a/services/core/java/com/android/server/wm/ActivityTaskManagerService.java
@@ -212,3 +233,18 @@ index d6862c296fe4..3c8a18e66ca6 100644
  
              if (mAtmService.mSupportsFreeformWindowManagement != freeformWindowManagement) {
                  mAtmService.mSupportsFreeformWindowManagement = freeformWindowManagement;
+diff --git a/services/permission/java/com/android/server/permission/access/permission/PermissionService.kt b/services/permission/java/com/android/server/permission/access/permission/PermissionService.kt
+--- a/services/permission/java/com/android/server/permission/access/permission/PermissionService.kt
++++ b/services/permission/java/com/android/server/permission/access/permission/PermissionService.kt
+@@ -2789,6 +2789,11 @@ class PermissionService(private val service: AccessCheckingService) :
+             } catch (e: Settings.SettingNotFoundException) {
+                 Slog.i(LOG_TAG, "Setting $settingName not found", e)
+                 null
++            } catch (e: NullPointerException) {
++                // Ika: permissions can change while packages are scanned at boot, before
++                // ActivityManager and the settings provider are up; there is no setting yet.
++                Slog.i(LOG_TAG, "Setting $settingName not available yet", e)
++                null
+             }
+     }
+ 

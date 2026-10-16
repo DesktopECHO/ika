@@ -9,5 +9,5 @@
     <string name="desktop_mode_title">Switch to desktop mode?</string>
     <string name="desktop_mode_text">Android reboots in the desktop.</string>
     <string name="switch_mode">Reboot</string>
-    <string name="switch_failed">Couldn\'t switch modes. The Play Store update couldn\'t be removed.</string>
+    <string name="switch_failed">Couldn\'t switch modes. The Play Store couldn\'t be changed over.</string>
 </resources>
