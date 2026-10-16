@@ -34,6 +34,14 @@ PRODUCT_DEXPREOPT_SPEED_APPS := $(filter-out Launcher3 Launcher3Go Launcher3Quic
 PRODUCT_PACKAGES += Launcher3QuickStep
 PRODUCT_DEXPREOPT_SPEED_APPS += Launcher3QuickStep
 
+# Compile all of system_server ahead of time, not only its profiled code
+# (speed-profile), so that it doesn't wait for the JIT after a boot.
+PRODUCT_SYSTEM_SERVER_COMPILER_FILTER := speed
+
+# Android TV mode, switched to with IkaMode's Desktop/TV entry. Desktop mode,
+# the default, is unchanged by it.
+$(call inherit-product, vendor/lineage_desktop/config/tv_mode.mk)
+
 # Keep the app compatibility surface tablet-shaped. Desktop behavior is layered
 # on top via the windowing overlays/settings below, but app stores and many apps
 # key their phone/tablet choice from ro.build.characteristics.
@@ -86,6 +94,10 @@ PRODUCT_COPY_FILES += \
 # Publishes the GMS Android ID in decimal as sys.ika.gsf_android_id once device
 # check-in has assigned it. A platform-signed app, so it works in user builds.
 PRODUCT_PACKAGES += IkaGsfId
+
+# Leaves out the phone stack and Digital Wellbeing (see its Android.bp). A
+# filter-out here can't: inherited products add their packages later.
+PRODUCT_PACKAGES += ika_removed_packages
 
 PRODUCT_PACKAGES += \
     LineageDesktopConnectivityOverlay \

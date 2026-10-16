@@ -1,0 +1,75 @@
+Patch summary:
+Let a mouse click or a touch open an app card. The card's inner layout was
+clickable and long-clickable without listeners, so it took the clicks and long
+presses meant for the card, which launches the app and opens its menu; only
+the D-pad, which focuses the card itself, worked. The arrows of a favorite
+being moved also had no listeners: a click on one now moves the favorite, as
+the D-pad does, and a click on the card puts it down.
+
+diff --git a/app/src/main/java/org/lineageos/tv/launcher/adapter/FavoritesAdapter.kt b/app/src/main/java/org/lineageos/tv/launcher/adapter/FavoritesAdapter.kt
+--- a/app/src/main/java/org/lineageos/tv/launcher/adapter/FavoritesAdapter.kt
++++ b/app/src/main/java/org/lineageos/tv/launcher/adapter/FavoritesAdapter.kt
+@@ -10,6 +10,7 @@ import android.content.Intent
+ import android.view.KeyEvent
+ import android.view.ViewGroup
+ import androidx.appcompat.content.res.AppCompatResources
++import androidx.recyclerview.widget.RecyclerView
+ import org.lineageos.tv.launcher.AddFavoriteActivity
+ import org.lineageos.tv.launcher.ModifyChannelsActivity
+ import org.lineageos.tv.launcher.R
+@@ -29,7 +30,24 @@ class FavoritesAdapter : TvAdapter<Launchable, FavoriteCard>() {
+             )
+             descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+         }
+-    )
++    ).also { holder ->
++        // Ika: a mouse click or a touch on the arrows of a favorite being moved moves it, as the
++        // D-pad does; a click on the card then puts it down.
++        val card = holder.itemView as FavoriteCard
++        card.moveLeftImageButton.setOnClickListener {
++            moveByClick(card, holder, KeyEvent.KEYCODE_DPAD_LEFT)
++        }
++        card.moveRightImageButton.setOnClickListener {
++            moveByClick(card, holder, KeyEvent.KEYCODE_DPAD_RIGHT)
++        }
++    }
++
++    private fun moveByClick(card: FavoriteCard, holder: ViewHolder, keyCode: Int) {
++        val position = holder.bindingAdapterPosition
++        if (position != RecyclerView.NO_POSITION) {
++            handleKey(card, keyCode, KeyEvent(KeyEvent.ACTION_DOWN, keyCode), position)
++        }
++    }
+ 
+     override fun handleKey(
+         card: FavoriteCard,
+diff --git a/app/src/main/res/layout/app_card.xml b/app/src/main/res/layout/app_card.xml
+--- a/app/src/main/res/layout/app_card.xml
++++ b/app/src/main/res/layout/app_card.xml
+@@ -9,11 +9,9 @@
+     android:layout_height="wrap_content"
+     android:layout_marginHorizontal="6dp"
+     android:background="@drawable/card_border_only"
+-    android:clickable="true"
+     android:clipChildren="false"
+     android:clipToPadding="false"
+     android:duplicateParentState="true"
+-    android:longClickable="true"
+     android:orientation="vertical">
+ 
+     <FrameLayout
+diff --git a/app/src/main/res/layout/favorites_app_card.xml b/app/src/main/res/layout/favorites_app_card.xml
+--- a/app/src/main/res/layout/favorites_app_card.xml
++++ b/app/src/main/res/layout/favorites_app_card.xml
+@@ -9,11 +9,9 @@
+     android:layout_width="@dimen/favorite_card_width"
+     android:layout_height="wrap_content"
+     android:layout_marginHorizontal="6dp"
+-    android:clickable="true"
+     android:clipChildren="false"
+     android:clipToPadding="false"
+     android:duplicateParentState="true"
+-    android:longClickable="true"
+     android:orientation="vertical">
+ 
+     <FrameLayout

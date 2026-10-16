@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     Copyright (C) 2026 LineageOS Desktop Project
+     SPDX-License-Identifier: Apache-2.0
+-->
+<resources>
+    <!-- TvFrameworkOverlay caps the UI width for this density as well, and a
+         density-specific value beats values/config.xml whichever overlay
+         holds it. -->
+    <integer name="config_maxUiWidth">0</integer>
+</resources>

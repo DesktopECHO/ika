@@ -1,10 +1,16 @@
 Patch summary:
 User builds: adb key authorization; rkp_only=0.
+No remote key provisioning server: Google's rejects these devices, and RKPD
+retried it in the background; Keystore keeps the device's own attestation keys.
 
 diff --git a/shared/device.mk b/shared/device.mk
 --- a/shared/device.mk
 +++ b/shared/device.mk
-@@ -76,11 +76,6 @@ PRODUCT_PRODUCT_PROPERTIES += \
+@@ -72,15 +72,9 @@ PRODUCT_PRODUCT_PROPERTIES += \
+ PRODUCT_PRODUCT_PROPERTIES += \
+-    remote_provisioning.hostname=preprod-remoteprovisioning.googleapis.com \
+     persist.adb.tcp.port=5555 \
+     ro.com.google.locationfeatures=1 \
      persist.sys.fuse.passthrough.enable=true \
 -    remote_provisioning.tee.rkp_only=1
 +    remote_provisioning.tee.rkp_only=0

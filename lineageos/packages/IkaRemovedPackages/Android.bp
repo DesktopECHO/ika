@@ -1,0 +1,35 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+// Leaves out of the image what the tablet and TV products it builds on bring
+// in but Ika has no use for, through the overrides: Make installs none of the
+// modules it lists. The list itself goes in as a file, which says why.
+prebuilt_etc {
+    name: "ika_removed_packages",
+    src: "removed-packages.txt",
+    filename: "removed-packages.txt",
+    sub_dir: "ika",
+    system_ext_specific: true,
+    overrides: [
+        // The phone stack. Ika has no modem, SIM or cell network, and declares
+        // no telephony features, so nothing expects these. com.android.phone
+        // (TeleService, TelephonyProvider, ONS) is persistent and runs even
+        // when disabled.
+        "TeleService",
+        "TelephonyProvider",
+        "ONS",
+        "Stk",
+        "SimAppDialog",
+        "CallLogBackup",
+        "MmsService",
+        "QualifiedNetworksService",
+        "CFSatelliteService",
+        "CellBroadcastLegacyApp",
+        "com.android.cellbroadcast",
+
+        // Digital Wellbeing, from MindTheGapps: screen time and bedtime for a
+        // phone, with nothing to do in a VM.
+        "Wellbeing",
+    ],
+}

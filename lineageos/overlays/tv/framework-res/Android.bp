@@ -1,0 +1,11 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+// Framework settings of TV mode, applied only when persist.sys.ika.mode=tv. Above
+// the desktop overlay (LineageDesktopFrameworkResOverlay) and TvFrameworkOverlay.
+runtime_resource_overlay {
+    name: "LineageDesktopTvFrameworkResOverlay",
+    product_specific: true,
+    sdk_version: "current",
+}

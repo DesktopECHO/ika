@@ -89,6 +89,52 @@ virtio-media, served by Android's external camera HAL):
   next `ika start` or `ika restart` without `--camera`. It needs the `video`
   group, and while Android streams from it, other programs on the host can't.
 
+## TV mode
+
+Android has a TV interface as well as the desktop. Desktop is the default, and
+only **Desktop/TV** changes the mode. Open it from the app drawer or the
+desktop's "Android Apps (Ika)" menu in desktop mode (it opens in the console),
+or from the TV launcher's apps in TV mode. It lists **Trebuchet**, the
+desktop's launcher, under a **Desktop mode** heading, then each TV launcher on
+the system by name under a **TV mode** heading, such as **Catapult**
+(LineageOS's TV launcher) or one from Google Play:
+
+- In TV mode, choosing a TV launcher makes it the Home app straight away.
+  Choosing **Trebuchet** asks whether to reboot into the desktop.
+- In desktop mode, choosing a TV launcher asks whether to reboot into TV mode
+  with that launcher as the Home app.
+- **Reboot** switches Settings (TV Settings in TV mode), the keyboard (the
+  Leanback keyboard in TV mode) and the Home app, and restarts Android in the
+  other mode, as much of the interface is set up when it starts. **Cancel**
+  keeps the mode. Back in desktop mode, the desktop's Home app comes back.
+- In TV mode Android runs the Android TV system UI (its notification panel,
+  picture-in-picture and volume controls), and apps run fullscreen, without a
+  status bar, taskbar or desktop windows. Apps and Google Play see an Android
+  TV device that runs TV apps only (the leanback, leanback-only and live TV
+  features, television UI mode), so apps with a TV version show it. Google
+  Play may then hide apps without TV support, and show phone apps you
+  installed in desktop mode as not compatible; they still run. Unlike a TV,
+  Ika keeps its touchscreen, for the desktop's apps.
+- TV mode has the Android TV build of the Google Play Store, and desktop mode
+  the phone build: the phone build does not run on a TV. Switching modes sets
+  the Play Store's update aside for the mode you leave and puts back the one
+  the other mode had last time, so each mode keeps its own Play Store version
+  (about 60 MB each). If the update can't be removed, the switch doesn't
+  happen. On x86-64 hosts the TV build is MindTheGapps' ARM64 one, which runs
+  through Android's ARM translation, as other ARM-only apps do.
+- The console follows the mode Android is in: in TV mode it opens fullscreen,
+  at 1.5 times the density Ika would pick automatically for the desktop, so
+  the TV interface is larger (`tv_dpi` in `ika.ini` sets it, and `--dpi`
+  applies in either mode), and passes the gamepad through as the remote: the
+  D-pad or left stick moves, A selects, B goes back and the guide button goes
+  Home. The keyboard and mouse work as on the desktop, except that a right
+  click goes back, as a remote's Back button does (Shift and right- click for
+  a right click). When Android restarts in the other mode, the console reopens
+  for it.
+- Apps opened from the desktop's app menu or with `ika app` still open in
+  their own windows on the Linux desktop, at the desktop's density, and games
+  in a game session.
+
 ## Rooting with Magisk
 
 `ika root` roots the VM with [Magisk](https://github.com/topjohnwu/Magisk).
@@ -200,7 +246,8 @@ Default `ika` settings and configuration:
 - instance state under `~/ika`
 - ~64 GB thin-provisioned ext4 userdata image
 - Chromium installed as the default browser on new devices
-- guest vCPUs set to the available/performance-core count minus two, capped at 12
+- guest vCPUs set to half the performance cores (counting hardware threads),
+  capped at 12, each pinned to a host CPU from the highest CPU number down
 - guest RAM set to one quarter of host RAM, capped at 32 GB
 - Ethernet-only guest networking by default; Wi-Fi, Bluetooth, NFC, UWB, GNSS,
   and the modem simulator remain off unless explicitly enabled

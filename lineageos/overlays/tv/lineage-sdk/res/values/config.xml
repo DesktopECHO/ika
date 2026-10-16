@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- As Lineage TV: double-pressing Home opens recent apps. -->
+    <integer name="config_doubleTapOnHomeBehavior">2</integer>
+</resources>

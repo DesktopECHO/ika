@@ -1,0 +1,25 @@
+diff --git a/src/cpuid.rs b/src/cpuid.rs
+index 5105914..51f7bc7 100644
+--- a/src/cpuid.rs
++++ b/src/cpuid.rs
+@@ -235,6 +235,12 @@ pub fn adjust_cpuid(entry: &mut CpuIdEntry, ctx: &CpuIdContext) {
+                     entry.cpuid.eax |= result.eax & (1 << EAX_ITMT_SHIFT);
+                 }
+             }
++
++            // KVM does not advertise this bit; the VMM sets it once the guest's
++            // IA32_APERF/IA32_MPERF reads pass through to the host.
++            if ctx.cpu_config.aperfmperf {
++                entry.cpuid.ecx |= result.ecx & (1 << ECX_HCFC_PERF_SHIFT);
++            }
+         }
+         7 => {
+             if ctx.cpu_config.host_cpu_topology && entry.index == 0 {
+@@ -458,6 +464,7 @@ mod tests {
+                 itmt: false,
+                 hybrid_type: None,
+                 nested,
++                aperfmperf: false,
+             },
+             cpuid_count: fake_cpuid_count,
+             cpuid: fake_cpuid,

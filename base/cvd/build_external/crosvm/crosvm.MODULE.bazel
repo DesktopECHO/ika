@@ -67,6 +67,10 @@ crosvm_bin.annotation(
     gen_all_binaries = True,
     patch_args = ["-p1"],
     patches = [
+        # --aperfmperf: x86 guests read the host's APERF/MPERF counters, so they
+        # see their vCPUs' effective frequency (needs the hypervisor and x86_64
+        # crate patches below).
+        "@//build_external/crosvm:PATCH.crosvm-aperfmperf.patch",
         "@//build_external/crosvm:PATCH.crosvm-composite-duplicate-components.patch",
         # Sandbox fixes also need crate-specific variants below because
         # crates_universe checks out each published crate with its own root.
@@ -217,6 +221,22 @@ crosvm_bin.annotation(
     # crates_universe checks out only a subdirectory of the repository, so the
     # file paths in this patch are relative to that directory.
     patches = ["@//build_external/crosvm:PATCH.proto_build_tools.patch"],
+)
+
+crosvm_bin.annotation(
+    crate = "hypervisor",
+    patch_args = ["-p1"],
+    patches = [
+        "@//build_external/crosvm:PATCH.hypervisor-aperfmperf.patch",
+    ],
+)
+
+crosvm_bin.annotation(
+    crate = "x86_64",
+    patch_args = ["-p1"],
+    patches = [
+        "@//build_external/crosvm:PATCH.x86_64-aperfmperf.patch",
+    ],
 )
 
 crosvm_bin.annotation(

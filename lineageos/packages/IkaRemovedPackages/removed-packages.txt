@@ -1,0 +1,17 @@
+# Left out of this image by Ika (vendor/ika/lineageos/packages/IkaRemovedPackages).
+#
+# The phone stack: Ika has no modem, SIM or cell network.
+TeleService
+TelephonyProvider
+ONS
+Stk
+SimAppDialog
+CallLogBackup
+MmsService
+QualifiedNetworksService
+CFSatelliteService
+CellBroadcastLegacyApp
+com.android.cellbroadcast
+#
+# Digital Wellbeing, from MindTheGapps.
+Wellbeing

@@ -658,7 +658,7 @@ new file mode 100644
 index 000000000..9f7af06cb
 --- /dev/null
 +++ b/ika_arm64/BoardConfig.mk
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,89 @@
 +#
 +# Copyright 2026 The Android Open-Source Project
 +#
@@ -742,6 +742,12 @@ index 000000000..9f7af06cb
 +# audio into the loopback instead of the host virtio-snd server.
 +BOARD_VENDOR_RAMDISK_KERNEL_MODULES := $(filter-out %/snd-aloop.ko,$(BOARD_VENDOR_RAMDISK_KERNEL_MODULES))
 +BOARD_KERNEL_MODULES_16K := $(filter-out %/snd-aloop.ko,$(BOARD_KERNEL_MODULES_16K))
++
++# Keep dummy-cpufreq out of the 16K ramdisk for the same reason: the
++# modules_aarch64.blocklist entry only stops it in second stage, and once it
++# registers, virtual-cpufreq cannot, so --vcpu_config_path guests report the
++# dummy 1/2 kHz table.
++BOARD_KERNEL_MODULES_16K := $(filter-out %/dummy-cpufreq.ko,$(BOARD_KERNEL_MODULES_16K))
 diff --git a/ika_arm64/desktop/aosp_cf.mk b/ika_arm64/desktop/aosp_cf.mk
 new file mode 100644
 index 000000000..868258978
@@ -1021,7 +1027,7 @@ new file mode 100644
 index 000000000..fb1c2783f
 --- /dev/null
 +++ b/ika_x86_64/BoardConfig.mk
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,61 @@
 +#
 +# Copyright 2026 The Android Open-Source Project
 +#
@@ -1078,6 +1084,11 @@ index 000000000..fb1c2783f
 +# card 0 ahead of virtio-snd and swallow guest audio (see ika_arm64/BoardConfig.mk).
 +BOARD_VENDOR_RAMDISK_KERNEL_MODULES := $(filter-out %/snd-aloop.ko,$(BOARD_VENDOR_RAMDISK_KERNEL_MODULES))
 +BOARD_KERNEL_MODULES_16K := $(filter-out %/snd-aloop.ko,$(BOARD_KERNEL_MODULES_16K))
++
++# Leave out dummy-cpufreq, as arm64 Cuttlefish already blocklists it. Its fake
++# 1/2 kHz table is what /proc/cpuinfo reported; without it the guest kernel
++# derives each vCPU's frequency from APERF/MPERF (crosvm --aperfmperf).
++BOARD_VENDOR_KERNEL_MODULES := $(filter-out %/dummy-cpufreq.ko,$(BOARD_VENDOR_KERNEL_MODULES))
 diff --git a/ika_x86_64/desktop/aosp_cf.mk b/ika_x86_64/desktop/aosp_cf.mk
 new file mode 100644
 index 000000000..41e06bf4c
