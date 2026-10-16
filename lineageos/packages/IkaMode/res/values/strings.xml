@@ -2,12 +2,12 @@
 <resources>
     <string name="app_name">Desktop/TV</string>
     <string name="switcher_title">Android Experience Switcher</string>
-    <string name="desktop_mode_item">Desktop Mode</string>
+    <string name="desktop_mode_heading">Desktop mode</string>
     <string name="tv_mode_heading">TV mode</string>
     <string name="tv_mode_title">Switch to TV mode?</string>
-    <string name="tv_mode_text">Android reboots in TV mode.</string>
+    <string name="tv_mode_text">Next reboot starts in Android TV</string>
     <string name="desktop_mode_title">Switch to desktop mode?</string>
-    <string name="desktop_mode_text">Android reboots in the desktop.</string>
+    <string name="desktop_mode_text">Next reboot starts in Android Desktop</string>
     <string name="switch_mode">Reboot</string>
     <string name="switch_failed">Couldn\'t switch modes. The Play Store couldn\'t be changed over.</string>
 </resources>
