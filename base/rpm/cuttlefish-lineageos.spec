@@ -89,6 +89,19 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Fri Oct 16 2026 DesktopECHO <build@desktopecho.com> - 261016-1
+- Add an Android TV mode: the Desktop/TV entry restarts Android in it, with
+  the Android TV system UI, TV Settings, the Leanback keyboard and the Android
+  TV Play Store.
+- Make Launcher3 the default Home app through the Home role.
+- Open the TV launcher's app cards, and move favorites with their arrows, with
+  a mouse click or a touch.
+- Enable app window displays without asking, with no connected display icon
+  or toast, and let apps in different windows play media together.
+- Keep libavc's VBR VBV fullness at or above zero.
+- Turn ethernet icon into a squid
+- Read the sensors' DATA message before taking the HAL mutex.
+
 * Mon Oct 12 2026 DesktopECHO <build@desktopecho.com> - 261012-1
 - Name the device "Ika" and its model "Ika Android".
 - Recover stalled virtio-snd streams and stop dropping playback buffers.

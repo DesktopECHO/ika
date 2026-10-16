@@ -1,3 +1,24 @@
+ika-base (261016-1) unstable; urgency=medium
+
+  * Show app windows on Cuttlefish displays of their own, with the VM's frames
+    instead of a video stream; drop VA-API decoding from the display client.
+  * Follow Android's TV mode in the console: fullscreen, the gamepad as the
+    remote, a right click for Back, at 1.5 times the automatic density
+    (tv_dpi in ika.ini).
+  * Keep Ika's defaults in ~/ika/ika.ini, written when missing.
+  * Add 'ika install' and 'ika remove', and Install in Ika for APK files.
+  * Add 'ika backup' and 'ika restore'.
+  * Mount Android's shared storage on ~/ika/Android.
+  * Talk to Android over native vsock adb.
+  * Keep pid and lock files in ~/ika/tmp, and the Chromium and Magisk APKs in
+    ~/ika/apps.
+  * Close app windows when Android restarts.
+  * Fix 'ika reset' crashing GNOME Shell.
+  * Never block crosvm's GPU worker on a Wayland dispatch, and stop
+    advertising host image copy in gfxstream.
+
+ -- DesktopECHO <build@desktopecho.com>  Fri, 16 Oct 2026 00:00:00 +0000
+
 ika-base (261012-1) unstable; urgency=medium
 
   * Add 'ika root' to root the VM with Magisk, on user and userdebug builds.
