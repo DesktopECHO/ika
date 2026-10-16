@@ -56,14 +56,15 @@ PRODUCT_DEXPREOPT_SPEED_APPS += \
 # MindTheGapps has no TV build for x86-64, where its native code runs through
 # the ARM native bridge: not without the bridge. PackageManager scans it in TV
 # mode and the phone build in desktop mode
-# (frameworks-base-ika-mode.patch); its allowlist, for privileged
-# permissions the phone build does not request, is read in TV mode only.
+# (frameworks-base-ika-mode.patch). Its allowlist, for privileged permissions
+# the phone build does not request, is on /product with it: Android checks an
+# app against the allowlists of its own partition.
 ifeq ($(LINEAGE_DESKTOP_GMS_PROVIDER),mtg)
 ifneq ($(LINEAGE_DESKTOP_MTG_ARCH)_$(LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE),x86_64_false)
 PRODUCT_PACKAGES += \
     Tubesky
 PRODUCT_COPY_FILES += \
-    vendor/lineage_desktop/prebuilts/mindthegapps/arm64/tubesky/privapp-permissions-ika-tubesky.xml:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/permissions/ika_tv/privapp-permissions-ika-tubesky.xml
+    vendor/lineage_desktop/prebuilts/mindthegapps/arm64/tubesky/privapp-permissions-ika-tubesky.xml:$(TARGET_COPY_OUT_PRODUCT)/etc/permissions/privapp-permissions-ika-tubesky.xml
 endif
 endif
 

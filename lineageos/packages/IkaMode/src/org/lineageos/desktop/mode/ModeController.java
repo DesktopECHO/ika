@@ -63,11 +63,12 @@ final class ModeController {
         return MODE_TV.equals(SystemProperties.get(MODE_PROP, MODE_DESKTOP));
     }
 
-    /** Applies the mode Android booted in, and brings back its Play Store update. */
+    /** Applies the mode Android booted in and brings back its Play Store update. */
     static void apply(Context context) {
         boolean tv = isTvMode();
         apply(context, tv);
         PlayStoreUpdates.restore(context, tv);
+        PlayStoreUpdates.forget(context, tv);
     }
 
     private static void apply(Context context, boolean tv) {
@@ -105,10 +106,17 @@ final class ModeController {
      * comes back: the one it had last time, or its own launcher.
      */
     static void switchTo(Context context, boolean tv, String home) {
-        // First, as the other mode's Play Store must not start with this mode's update.
+        // First, as the other mode's Play Store must not start with this mode's update or data.
+        // The TV Play Store goes in before the reboot, so that Android starts it as arm64 from the
+        // first moment in TV mode.
         if (!PlayStoreUpdates.leave(context, !tv)) {
-            new Handler(Looper.getMainLooper()).post(() -> Toast.makeText(context,
-                    R.string.switch_failed, Toast.LENGTH_LONG).show());
+            switchFailed(context);
+            return;
+        }
+        if (!PlayStoreUpdates.clearData(context)
+                || (tv && !PlayStoreUpdates.restore(context, true))) {
+            PlayStoreUpdates.restore(context, !tv);
+            switchFailed(context);
             return;
         }
         PackageManager pm = context.getPackageManager();
@@ -160,7 +168,11 @@ final class ModeController {
 
     private static void restartIn(Context context, boolean tv, boolean homeSet) {
         if (!homeSet) {
-            // Staying in this mode: its Play Store update comes back.
+            // Staying in this mode: the TV Play Store, already in for the switch, goes, and this
+            // mode's update comes back.
+            if (tv) {
+                PlayStoreUpdates.leave(context, true);
+            }
             PlayStoreUpdates.restore(context, !tv);
             return;
         }
@@ -168,6 +180,11 @@ final class ModeController {
         SystemProperties.set(MODE_PROP, tv ? MODE_TV : MODE_DESKTOP);
         apply(context, tv);
         context.getSystemService(PowerManager.class).reboot(null);
+    }
+
+    private static void switchFailed(Context context) {
+        new Handler(Looper.getMainLooper()).post(() -> Toast.makeText(context,
+                R.string.switch_failed, Toast.LENGTH_LONG).show());
     }
 
     // Device-protected, so that it can be read before the user is unlocked.
