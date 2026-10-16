@@ -1,0 +1,75 @@
+diff --git a/src/kvm/x86_64.rs b/src/kvm/x86_64.rs
+index 0e6439b..b55ddd4 100644
+--- a/src/kvm/x86_64.rs
++++ b/src/kvm/x86_64.rs
+@@ -433,6 +433,40 @@ impl KvmVm {
+         }
+     }
+ 
++    /// Let the guest read IA32_APERF and IA32_MPERF without exiting, so it can compute the
++    /// effective frequency of its vCPUs. Must be called before any vCPU is created.
++    ///
++    /// Returns false if the host kernel does not support it.
++    pub fn enable_aperfmperf_passthrough(&self) -> Result<bool> {
++        // Not in the kvm_sys bindings yet (Linux 6.17+).
++        const KVM_X86_DISABLE_EXITS_APERFMPERF: u64 = 1 << 4;
++
++        // SAFETY:
++        // Safe because we know that our file is a VM fd and KVM_CHECK_EXTENSION takes no pointer.
++        let supported =
++            unsafe { ioctl_with_val(self, KVM_CHECK_EXTENSION, KVM_CAP_X86_DISABLE_EXITS as u64) };
++        if supported < 0 || (supported as u64) & KVM_X86_DISABLE_EXITS_APERFMPERF == 0 {
++            return Ok(false);
++        }
++
++        let mut cap = kvm_enable_cap {
++            cap: KVM_CAP_X86_DISABLE_EXITS,
++            ..Default::default()
++        };
++        cap.args[0] = KVM_X86_DISABLE_EXITS_APERFMPERF;
++
++        // SAFETY:
++        // Safe because we know that our file is a VM fd, we know that the
++        // kernel will only read correct amount of memory from our pointer, and
++        // we verify the return result.
++        let ret = unsafe { ioctl_with_ref(self, KVM_ENABLE_CAP, &cap) };
++        if ret < 0 {
++            errno_result()
++        } else {
++            Ok(true)
++        }
++    }
++
+     /// Enable support for split-irqchip.
+     pub fn enable_split_irqchip(&self, ioapic_pins: usize) -> Result<()> {
+         let mut cap = kvm_enable_cap {
+diff --git a/src/x86_64.rs b/src/x86_64.rs
+index ac79e24..21de45e 100644
+--- a/src/x86_64.rs
++++ b/src/x86_64.rs
+@@ -370,6 +370,9 @@ pub struct CpuConfigX86_64 {
+ 
+     /// how to expose nested virtualization to the guest.
+     pub nested: NestedMode,
++
++    /// whether the guest can read IA32_APERF and IA32_MPERF.
++    pub aperfmperf: bool,
+ }
+ 
+ impl CpuConfigX86_64 {
+@@ -381,6 +384,7 @@ impl CpuConfigX86_64 {
+         itmt: bool,
+         hybrid_type: Option<CpuHybridType>,
+         nested: NestedMode,
++        aperfmperf: bool,
+     ) -> Self {
+         CpuConfigX86_64 {
+             force_calibrated_tsc_leaf,
+@@ -390,6 +394,7 @@ impl CpuConfigX86_64 {
+             itmt,
+             hybrid_type,
+             nested,
++            aperfmperf,
+         }
+     }
+ }

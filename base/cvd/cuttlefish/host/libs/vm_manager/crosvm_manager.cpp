@@ -775,6 +775,13 @@ Result<std::vector<MonitorCommand>> CrosvmManager::StartCommands(
 
   CF_EXPECT(crosvm_cmd.AddCpus(instance.cpus(), instance.vcpu_config_path()));
 
+  // x86 guests have no virtual cpufreq device; reading the host's APERF/MPERF
+  // counters, they still see each vCPU's effective frequency. crosvm leaves
+  // this out with a warning when the host kernel cannot pass them through.
+  if (instance.target_arch() == Arch::X86_64) {
+    crosvm_cmd.Cmd().AddParameter("--aperfmperf");
+  }
+
   auto disk_num = instance.virtual_disk_paths().size();
   CF_EXPECT(VmManager::kMaxDisks >= disk_num,
             "Provided too many disks (" << disk_num << "), maximum "
