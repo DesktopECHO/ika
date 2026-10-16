@@ -561,6 +561,24 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/lib/cuttlefish-metrics
 
 %changelog
+* Fri Oct 16 2026 DesktopECHO <build@desktopecho.com> - 261016-1
+- Show app windows on Cuttlefish displays of their own, with the VM's frames
+  instead of a video stream; drop VA-API decoding from the display client.
+- Follow Android's TV mode in the console: fullscreen, the gamepad as the
+  remote, a right click for Back, at 1.5 times the automatic density
+  (tv_dpi in ika.ini).
+- Keep Ika's defaults in ~/ika/ika.ini, written when missing.
+- Add 'ika install' and 'ika remove', and Install in Ika for APK files.
+- Add 'ika backup' and 'ika restore'.
+- Mount Android's shared storage on ~/ika/Android.
+- Talk to Android over native vsock adb.
+- Keep pid and lock files in ~/ika/tmp, and the Chromium and Magisk APKs in
+  ~/ika/apps.
+- Close app windows when Android restarts.
+- Fix 'ika reset' crashing GNOME Shell.
+- Never block crosvm's GPU worker on a Wayland dispatch, and stop
+  advertising host image copy in gfxstream.
+
 * Mon Oct 12 2026 DesktopECHO <build@desktopecho.com> - 261012-1
 - Add 'ika root' to root the VM with Magisk, on user and userdebug builds.
 - Add 'ika gsf' to show the GSF ID and open Google's uncertified device page.

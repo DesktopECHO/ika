@@ -1,3 +1,19 @@
+ika-lineageos (261016-1) unstable; urgency=medium
+
+  * Add an Android TV mode: the Desktop/TV entry restarts Android in it, with
+    the Android TV system UI, TV Settings, the Leanback keyboard and the Android
+    TV Play Store.
+  * Make Launcher3 the default Home app through the Home role.
+  * Open the TV launcher's app cards, and move favorites with their arrows, with
+    a mouse click or a touch.
+  * Enable app window displays without asking, with no connected display icon
+    or toast, and let apps in different windows play media together.
+  * Keep libavc's VBR VBV fullness at or above zero.
+  * Turn ethernet icon into a squid
+  * Read the sensors' DATA message before taking the HAL mutex.
+
+ -- DesktopECHO <build@desktopecho.com>  Fri, 16 Oct 2026 00:00:00 +0000
+
 ika-lineageos (261012-1) unstable; urgency=medium
 
   * Name the device "Ika" and its model "Ika Android".
