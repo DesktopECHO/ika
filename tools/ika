@@ -167,10 +167,11 @@ ika_ini_write_default() {
 
 # ----------------------------------------------------------------------------
 [compute]
-# Virtual CPUs and guest memory. "auto" sizes them from the host: the number of
-# performance cores minus 2 (at most cpu_cap), and a quarter of the host's
-# memory rounded up to a multiple of memory_step_mb (at most memory_cap_mb).
-# Command-line equivalents: --cpus=, --memory_mb=
+# Virtual CPUs and guest memory. "auto" sizes them from the host: half the
+# performance cores, counting each hardware thread (at most cpu_cap), and a
+# quarter of the host's memory rounded up to a multiple of memory_step_mb (at
+# most memory_cap_mb). Each vCPU is pinned to a host CPU, from the highest CPU
+# number down. Command-line equivalents: --cpus=, --memory_mb=
 cpus = auto
 memory_mb = auto
 cpu_cap = 12
@@ -178,7 +179,6 @@ memory_step_mb = 2048
 memory_cap_mb = 32768
 # Used when the host's memory cannot be read.
 memory_fallback_mb = 4096
-prefer_performance_cores = true
 enable_bootanimation = false
 enable_sandbox = false
 
@@ -484,26 +484,139 @@ stop_startup_packaged_scrcpy() {
   done < <(packaged_scrcpy_pids "${scope}" | sort -u)
 }
 
+# Prints "<cpu> <cpu_capacity>" for each online host CPU: the kernel's own
+# measure of each CPU's performance, which its scheduler uses, with the
+# difference in work per cycle as well as in frequency (Apple, Intel P and E
+# cores, AMD Zen 5 and 5c).
+host_cpu_performance() {
+  local path
+  for path in /sys/devices/system/cpu/cpu[0-9]*; do
+    if [[ -r "${path}/online" && "$(<"${path}/online")" != 1 ]]; then
+      continue
+    fi
+    printf '%s %s\n' "${path##*/cpu}" "$(<"${path}/cpu_capacity")"
+  done
+}
+
+# Performance cores are those within 85% of the fastest: a hybrid CPU's
+# efficiency cores are well below that, while the few percent between the
+# preferred cores of other CPUs are not.
+performance_core_ids() {
+  host_cpu_performance | awk '
+    { cpu[NR] = $1; perf[NR] = $2; if ($2 > max) max = $2 }
+    END { for (i = 1; i <= NR; i++) if (perf[i] * 100 >= max * 85) print cpu[i] }' | sort -n
+}
+
 count_performance_cores() {
   performance_core_ids | wc -l
 }
 
-performance_core_ids() {
-  local max_cap
-  local path
-  local cap
+# The host CPUs the vCPUs are pinned to, in vCPU order: the performance cores
+# from the highest CPU number down, then any other CPUs the same way. Linux
+# numbers a core's second hardware thread after every core's first, so the
+# top half of the performance CPUs is one thread on each of the upper cores,
+# and the lower ones are left to the host.
+host_cpus_for_vcpus() {
+  local -A performance=()
   local cpu
-  max_cap="$(cat /sys/devices/system/cpu/cpu*/cpu_capacity 2>/dev/null | sort -n | tail -1)"
-  [[ -n "${max_cap}" ]] || return 0
 
-  for path in /sys/devices/system/cpu/cpu[0-9]*/cpu_capacity; do
-    [[ -r "${path}" ]] || continue
-    cap="$(<"${path}")"
-    [[ "${cap}" == "${max_cap}" ]] || continue
-    cpu="${path%/cpu_capacity}"
-    cpu="${cpu##*/cpu}"
-    printf '%s\n' "${cpu}"
-  done | sort -n
+  for cpu in $(performance_core_ids); do
+    performance["${cpu}"]=1
+  done
+  for cpu in $(host_cpu_performance | awk '{ print $1 }' | sort -nr); do
+    if [[ -n "${performance[${cpu}]:-}" ]]; then
+      echo "${cpu}"
+    fi
+  done
+  for cpu in $(host_cpu_performance | awk '{ print $1 }' | sort -nr); do
+    if [[ -z "${performance[${cpu}]:-}" ]]; then
+      echo "${cpu}"
+    fi
+  done
+}
+
+# Upstream Cuttlefish's Virtual Cpufreq configuration (--vcpu_config_path)
+# pins each vCPU to a host CPU (host_cpus_for_vcpus). On arm64 the guest also
+# sees that CPU's capacity, frequencies and frequency domain, and its frequency
+# requests reach the host scheduler as uclamp on the vCPU threads. crosvm has
+# no Virtual Cpufreq on x86, where it only takes the pinning.
+
+# Writes the configuration for CPUS vCPUs, whose cgroup is CGROUP, to OUT.
+write_vcpu_config() {
+  local cpus="$1"
+  local cgroup="$2"
+  local out="$3"
+  local -a order
+  local -A domains=()
+  local max_khz
+  local cpu
+  local vcpu
+  local path
+  local khz
+  local freqs
+  local capacity
+  local policy
+  local domain
+  local separator=""
+
+  mapfile -t order < <(host_cpus_for_vcpus)
+  if host_is_arm64; then
+    max_khz="$(sort -n /sys/devices/system/cpu/cpu[0-9]*/cpufreq/cpuinfo_max_freq | tail -n1)"
+  fi
+
+  {
+    printf '{\n  "guest_soc": "ika",\n  "cgroup_path": "%s",\n  "cpus": {' "${cgroup}"
+    for (( vcpu = 0; vcpu < cpus; vcpu++ )); do
+      cpu="${order[vcpu % ${#order[@]}]}"
+      path="/sys/devices/system/cpu/cpu${cpu}"
+      if host_is_arm64; then
+        khz="$(<"${path}/cpufreq/cpuinfo_max_freq")"
+        policy="$(readlink -f "${path}/cpufreq")"
+        [[ -n "${domains[${policy}]:-}" ]] || domains["${policy}"]="${#domains[@]}"
+        domain="${domains[${policy}]}"
+        freqs="$(tr ' ' '\n' < "${path}/cpufreq/scaling_available_frequencies" | grep . | sort -n | paste -sd,)"
+        # crosvm's capacity is per MHz (capacity-dmips-mhz), which the guest
+        # scales by the frequencies: take them out of the kernel's capacity.
+        capacity="$(( ($(<"${path}/cpu_capacity") * max_khz + khz / 2) / khz ))"
+      else
+        # Not passed to crosvm on x86, which takes only the pinning.
+        freqs=0
+        capacity=1024
+        domain=0
+      fi
+      printf '%s\n    "cpu%d": { "affinity": %d, "frequencies": "%s", "capacity": %d, "ipc_ratio": 1024, "freq_domain": %d }' \
+        "${separator}" "${vcpu}" "${cpu}" "${freqs}" "${capacity}" "${domain}"
+      separator=","
+    done
+    printf '\n  }\n}\n'
+  } > "${out}"
+}
+
+# Runs in the systemd scope that start_cvd launches Cuttlefish in, with the
+# cgroup delegated to the user: moves itself to a leaf, so that the scope can
+# give the cpu controller to "android", where the launcher and crosvm run.
+# "android" is a threaded domain: crosvm adds a threaded vcpu-domainN for each
+# frequency domain, and the launcher moves the other threads to "workers" once
+# Android has booted. Then writes the configuration and runs the launcher.
+launch_in_vcpu_scope() {
+  local cpus="$1"
+  shift
+  local scope
+  local cgroup
+  local config="${CVD_TMP_DIR}/vcpu-config.json"
+
+  scope="/sys/fs/cgroup$(sed -n 's/^0:://p' /proc/self/cgroup)"
+  cgroup="${scope}/android"
+  mkdir "${scope}/launcher" "${cgroup}" "${cgroup}/workers" \
+    && echo "$$" > "${scope}/launcher/cgroup.procs" \
+    && echo threaded > "${cgroup}/workers/cgroup.type" \
+    && echo +cpu > "${scope}/cgroup.subtree_control" \
+    && echo +cpu > "${cgroup}/cgroup.subtree_control" \
+    || die "could not set up the vCPU cgroup in ${scope}"
+  mkdir -p "${CVD_TMP_DIR}"
+  write_vcpu_config "${cpus}" "${cgroup}" "${config}" \
+    || die "could not write ${config} from the host's cpufreq"
+  exec "$@" "--vcpu_config_path=${config}"
 }
 
 # Upper bound on the auto-selected guest vCPU count. The default heuristic
@@ -516,30 +629,13 @@ readonly DEFAULT_GUEST_CPU_CAP DEFAULT_GUEST_MEMORY_STEP_MB \
   DEFAULT_GUEST_MEMORY_CAP_MB DEFAULT_GUEST_MEMORY_FALLBACK_MB
 
 default_guest_cpus() {
-  local cores guest_cpus
-  cores="$(count_performance_cores)"
-  cores="${cores//[!0-9]/}"
+  local guest_cpus
 
-  # Homogeneous hosts (x86_64, or ARM without cpu_capacity) report no
-  # performance cores; fall back to the online (available) CPU count.
-  if [[ -z "${cores}" ]] || (( cores <= 0 )); then
-    cores="$(nproc 2>/dev/null || true)"
-    cores="${cores//[!0-9]/}"
-  fi
-
-  # Reserve 2 cores for the host and floor at 1. Last-ditch default of 2 if
-  # neither probe produced a usable count.
-  if [[ -z "${cores}" ]] || (( cores <= 0 )); then
-    guest_cpus=2
-  elif (( cores > 2 )); then
-    guest_cpus=$((cores - 2))
-  else
-    guest_cpus=1
-  fi
-
-  # Cap the auto-selected default; --cpus= bypasses this entirely.
+  # Half the performance cores (counting each hardware thread), the rest for
+  # the host; at least 1, at most cpu_cap. --cpus= bypasses this.
+  guest_cpus=$(( $(count_performance_cores) / 2 ))
+  (( guest_cpus >= 1 )) || guest_cpus=1
   (( guest_cpus <= DEFAULT_GUEST_CPU_CAP )) || guest_cpus=${DEFAULT_GUEST_CPU_CAP}
-
   echo "${guest_cpus}"
 }
 
@@ -600,7 +696,6 @@ default_guest_memory_mb() {
 declare -A CVD_COMPUTE_DEFAULTS=(
   [cpus]="$(default_guest_cpus)"
   [memory_mb]="$(default_guest_memory_mb)"
-  [prefer_performance_cores]="true"
   [enable_bootanimation]="false"
   [enable_sandbox]="false"
 )
@@ -6063,7 +6158,13 @@ start_cvd() {
   (
     cd "${CVD_PRODUCT_OUT}"
     exec 3>&-
-    exec "${cvd_env_args[@]}" "${CVD_BIN}" "${args[@]}"
+    # systemd-run --scope runs the command in this process: launcher_pid stays
+    # the launcher's.
+    exec systemd-run --user --scope --quiet --collect -p Delegate=yes \
+      --unit="ika-android-$(date +%s)" -- \
+      "${IKA_SCRIPT_PATH}" __launch-in-vcpu-scope \
+      "$(start_arg_value "cpus" "${CVD_COMPUTE_DEFAULTS[cpus]}" "$@")" \
+      "${cvd_env_args[@]}" "${CVD_BIN}" "${args[@]}"
   ) &
   launcher_pid="$!"
   disown "${launcher_pid}" || true
@@ -6664,6 +6765,10 @@ main() {
   ika_ini_warn_unknown
 
   case "${command}" in
+    __launch-in-vcpu-scope)
+      shift
+      launch_in_vcpu_scope "$@"
+      ;;
     start)
       CONSOLE_FAILURE_MESSAGE="Startup Failed."
       shift

@@ -151,7 +151,6 @@ gpu_vhost_user_mode=off
 enable_gpu_udmabuf=true         # zero-copy virtio-gpu path when supported
 use_cvdalloc=true
 enable_bootanimation=false      # skip the dancing-bug splash
-prefer_performance_cores=true
 ```
 
 `gfxstream_guest_angle` is the default GPU mode, except on hosts whose only

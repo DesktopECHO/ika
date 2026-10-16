@@ -205,8 +205,6 @@ DECLARE_vec(enable_tap_devices);
 
 DECLARE_vec(vcpu_config_path);
 
-DECLARE_vec(prefer_performance_cores);
-
 DECLARE_string(kvm_path);
 
 DECLARE_string(vhost_vsock_path);
