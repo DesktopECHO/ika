@@ -95,6 +95,10 @@ PRODUCT_COPY_FILES += \
 # check-in has assigned it. A platform-signed app, so it works in user builds.
 PRODUCT_PACKAGES += IkaGsfId
 
+# Leaves out the phone stack and Digital Wellbeing (see its Android.bp). A
+# filter-out here can't: inherited products add their packages later.
+PRODUCT_PACKAGES += ika_removed_packages
+
 PRODUCT_PACKAGES += \
     LineageDesktopConnectivityOverlay \
     LineageDesktopFrameworkResOverlay \
