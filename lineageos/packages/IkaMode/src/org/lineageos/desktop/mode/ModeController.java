@@ -1,14 +1,20 @@
 package org.lineageos.desktop.mode;
 
+import android.app.ActivityTaskManager;
 import android.app.role.RoleManager;
+import android.content.BroadcastReceiver;
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.RemoteException;
 import android.os.SystemProperties;
+import android.os.UserManager;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Log;
@@ -66,9 +72,35 @@ final class ModeController {
     /** Applies the mode Android booted in and brings back its Play Store update. */
     static void apply(Context context) {
         boolean tv = isTvMode();
+        if (!tv) {
+            startClean(context);
+        }
         apply(context, tv);
         PlayStoreUpdates.restore(context, tv);
         PlayStoreUpdates.forget(context, tv);
+    }
+
+    /**
+     * The desktop starts clean: the recent apps go as the user is unlocked, so that the desktop
+     * doesn't open their windows again and the taskbar doesn't show them. Only as Android starts:
+     * this app can also start again later, when its process has gone.
+     */
+    private static void startClean(Context context) {
+        if (context.getSystemService(UserManager.class).isUserUnlocked()) {
+            return;
+        }
+        context.registerReceiver(new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, Intent intent) {
+                c.unregisterReceiver(this);
+                try {
+                    ActivityTaskManager.getService().removeAllVisibleRecentTasks();
+                    Log.i(TAG, "Cleared the recent apps");
+                } catch (RemoteException e) {
+                    Log.w(TAG, "Could not clear the recent apps", e);
+                }
+            }
+        }, new IntentFilter(Intent.ACTION_USER_UNLOCKED));
     }
 
     private static void apply(Context context, boolean tv) {
