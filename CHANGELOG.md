@@ -33,6 +33,10 @@
 - The adb server's log, `~/ika/tmp/adb.<uid>.log`, keeps only its last 24
   hours: `ika start` trims it when Android starts. It used to grow by about
   1 MB a day for as long as the adb server ran.
+- `~/ika/ikastart.log` keeps its last 1,000 lines across `ika start` runs,
+  each run under a dated header line, instead of only the latest run.
+- `~/ika/madbfs.log` keeps its last 1,000 lines across mounts of Android's
+  storage. madbfs emptied it each time `ika start` mounted the storage.
 
 ## Ika 261016, changes since release 261012
 

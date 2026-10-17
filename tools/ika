@@ -1353,10 +1353,15 @@ run_timed_operation() {
   console_notify "${action}" "${elapsed_sec}"
 }
 
+# Each 'ika start' adds its output to the start log under a dated header line.
+readonly START_LOG_RUN_PREFIX="==== "
+
 redirect_start_logs() {
   mkdir -p "$(dirname "${START_LOG_FILE}")"
-  : > "${START_LOG_FILE}"
-  exec >"${START_LOG_FILE}" 2>&1
+  trim_log_lines "${START_LOG_FILE}"
+  exec >>"${START_LOG_FILE}" 2>&1
+  printf '%s%s %s start\n' "${START_LOG_RUN_PREFIX}" "$(date '+%Y-%m-%d %H:%M:%S')" \
+    "${SCRIPT_NAME}"
 }
 
 usage() {
@@ -3139,16 +3144,51 @@ format_epoch() {
   date -d "@$1" "+$2" 2>/dev/null || date -r "$1" "+$2"
 }
 
+# Drops the lines of a log before line $2, or all of them when $2 is empty.
+# The file is rewritten in place, so a process that keeps it open for
+# appending goes on writing to it; lines written during the rewrite may be
+# lost.
+drop_log_lines_before() {
+  local log_file="$1"
+  local first_kept="$2"
+  local kept
+
+  [[ "${first_kept}" != "1" ]] || return 0
+  if [[ -z "${first_kept}" ]]; then
+    : > "${log_file}" || true
+    return 0
+  fi
+  kept="$(mktemp "${log_file}.XXXXXX")" || return 0
+  if tail -n "+${first_kept}" "${log_file}" > "${kept}"; then
+    cat "${kept}" > "${log_file}" || true
+  fi
+  rm -f "${kept}"
+}
+
+# ikastart.log and madbfs.log keep this many of their last lines.
+readonly LOG_MAX_LINES=1000
+
+# Keeps the last LOG_MAX_LINES lines of a log.
+trim_log_lines() {
+  local log_file="$1"
+  local line_count
+
+  [[ -s "${log_file}" ]] || return 0
+  line_count="$(wc -l <"${log_file}" 2>/dev/null || true)"
+  line_count="${line_count//[[:space:]]/}"
+  [[ "${line_count}" =~ ^[0-9]+$ ]] || return 0
+  (( line_count > LOG_MAX_LINES )) || return 0
+  drop_log_lines_before "${log_file}" "$(( line_count - LOG_MAX_LINES + 1 ))"
+}
+
 # Keeps the last 24 hours of the adb server's log. The server outlives VM
 # restarts and never trims its log, which grows by about 1 MB a day from
-# adb_connector's checks every 5 seconds. The file is rewritten in place
-# because a running server keeps it open for appending; lines it writes during
-# the rewrite may be lost.
+# adb_connector's checks every 5 seconds; a running server keeps the file open
+# for appending.
 trim_adb_server_log() {
   local log_file="${ADB_SERVER_LOG}"
   local cutoff
   local first_kept
-  local kept
 
   [[ -s "${log_file}" ]] || return 0
   cutoff="$(( $(date +%s) - 86400 ))"
@@ -3162,17 +3202,7 @@ trim_adb_server_log() {
       print NR
       exit
     }' "${log_file}" || true)"
-
-  [[ "${first_kept}" != "1" ]] || return 0
-  if [[ -z "${first_kept}" ]]; then
-    : > "${log_file}" || true
-    return 0
-  fi
-  kept="$(mktemp "${log_file}.XXXXXX")" || return 0
-  if tail -n "+${first_kept}" "${log_file}" > "${kept}"; then
-    cat "${kept}" > "${log_file}" || true
-  fi
-  rm -f "${kept}"
+  drop_log_lines_before "${log_file}" "${first_kept}"
 }
 
 adb_boot_completed() {
@@ -5766,6 +5796,7 @@ mount_android_storage() {
   # its server on Android holding the port.
   rm -f "${XDG_RUNTIME_DIR:-/tmp}/madbfs@${adb_serial}.sock"
   guest_adb "${adb_serial}" shell "${server_pkill}" >/dev/null 2>&1 || true
+  trim_log_lines "${MADBFS_LOG_FILE}"
   # Files show as the user's, as Android's owners mean nothing on the host and
   # file managers would treat the folders as read-only. File details are
   # re-read after 2 seconds instead of 60, so files Android apps add or change
