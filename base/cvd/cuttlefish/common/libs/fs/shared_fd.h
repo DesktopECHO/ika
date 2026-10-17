@@ -191,7 +191,7 @@ class SharedFD {
   bool operator==(const SharedFD& other) const { return value_ == other.value_; }
   bool operator!=(const SharedFD& other) const { return !(*this == other); }
   bool operator<(const SharedFD& other) const {
-    return std::less<std::shared_ptr<FileInstance>>{}(value_, other.value_);
+    return std::less<std::shared_ptr<Fd>>{}(value_, other.value_);
   }
 
   std::shared_ptr<Fd> operator->() const { return value_; }
