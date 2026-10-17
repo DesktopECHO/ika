@@ -391,6 +391,7 @@ cf_cc_library(
         "//cuttlefish/files:file_exists",
         "//cuttlefish/files:is_symlink",
         "//cuttlefish/posix:readlink",
+        "//cuttlefish/posix:realpath",
         "//cuttlefish/posix:strerror",
         "//cuttlefish/posix:symlink",
         "//cuttlefish/result",

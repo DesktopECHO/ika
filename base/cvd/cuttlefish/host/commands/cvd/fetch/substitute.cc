@@ -38,6 +38,7 @@
 #include "cuttlefish/files/is_symlink.h"
 #include "cuttlefish/host/commands/cvd/fetch/host_pkg_migration.pb.h"
 #include "cuttlefish/posix/readlink.h"
+#include "cuttlefish/posix/realpath.h"
 #include "cuttlefish/posix/strerror.h"
 #include "cuttlefish/posix/symlink.h"
 #include "cuttlefish/result/result.h"
@@ -70,6 +71,16 @@ Result<void> Substitute(const std::string& target,
   if (Result<std::string> existing = ReadLink(full_link_name);
       existing.has_value() && *existing == target) {
     return {};
+  }
+
+  // Nothing to substitute when the link would replace its own target, as when
+  // the host package is the installed cuttlefish-common directory itself.
+  if (Result<std::string, int> real_target = RealPath(target);
+      real_target.has_value()) {
+    Result<std::string, int> real_link = RealPath(full_link_name);
+    if (real_link.has_value() && *real_link == *real_target) {
+      return {};
+    }
   }
 
   CF_EXPECT(EnsureDirectoryExists(android::base::Dirname(full_link_name)));
