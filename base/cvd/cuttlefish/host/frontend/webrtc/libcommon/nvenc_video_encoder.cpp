@@ -460,7 +460,7 @@ Result<void> NvencVideoEncoder::EncodeInner(
       lock_bs.bitstreamSizeInBytes));
   encoded_image._encodedWidth = width_;
   encoded_image._encodedHeight = height_;
-  encoded_image.SetTimestamp(frame.timestamp());
+  encoded_image.SetRtpTimestamp(frame.timestamp());
   encoded_image.ntp_time_ms_ = frame.ntp_time_ms();
   encoded_image._frameType = (lock_bs.pictureType == NV_ENC_PIC_TYPE_IDR ||
                               lock_bs.pictureType == NV_ENC_PIC_TYPE_I)
