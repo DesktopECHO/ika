@@ -454,6 +454,17 @@ ln -sfn ../bin/libvk_swiftshader.so %{buildroot}/usr/lib/cuttlefish-common/lib64
 install -d %{buildroot}/usr/bin
 ln -sfn ../lib/cuttlefish-common/bin/cvd %{buildroot}/usr/bin/cvd
 
+%pretrans -p <lua>
+-- ika-lineageos' %post links each ROM etc/ entry that ika-base does not ship
+-- into /usr/lib/cuttlefish-common. ika-base now ships etc/cvd_config as a
+-- directory, and an old link to the ROM's copy would send its files into
+-- ika-lineageos' tree, so remove that link before the files go in.
+local path = "/usr/lib/cuttlefish-common/etc/cvd_config"
+local target = posix.readlink(path)
+if target and target:find("^/usr/share/cuttlefish%-common/lineageos/") then
+  os.remove(path)
+end
+
 %post
 if ! getent group cvdnetwork >/dev/null 2>&1; then
   groupadd -r cvdnetwork >/dev/null 2>&1 || :
