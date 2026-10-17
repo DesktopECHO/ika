@@ -15,8 +15,10 @@
   off.
 - `--media` takes upstream's new form, `--media=TYPE:KEY=VALUE`; `ika start`
   passes the camera as `--media=v4l2_proxy:device=/dev/videoN`.
-- Android's UI still renders with SkiaGL in the gfxstream ANGLE modes, where
-  upstream now chooses SkiaVK. `--guest_hwui_renderer=skiavk` opts in.
+- Android's UI renders with SkiaVK in the gfxstream ANGLE modes, as upstream
+  now chooses, with gfxstream emulating the second Vulkan queue when the host
+  driver has only one. GLES-only hosts keep SkiaGL;
+  `--guest_hwui_renderer=skiagl` returns to it on any host.
 
 ### Hardware video decoding (groundwork)
 - `ika start` gives Android a V4L2 video decoder backed by the host's VA-API
