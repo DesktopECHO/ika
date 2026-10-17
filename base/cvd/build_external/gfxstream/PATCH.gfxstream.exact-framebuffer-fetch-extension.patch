@@ -1,0 +1,35 @@
+diff --git a/host/gl/glestranslator/common/gles_context.cpp b/host/gl/glestranslator/common/gles_context.cpp
+index df539a4..c198a59 100644
+--- a/host/gl/glestranslator/common/gles_context.cpp
++++ b/host/gl/glestranslator/common/gles_context.cpp
+@@ -1805,6 +1805,19 @@ void GLEScontext::releaseGlobalLock() {
+     s_lock.unlock();
+ }
+ 
++// Whether the space-separated extension list names |name| exactly. strstr()
++// alone also finds a name inside a longer one, such as
++// GL_EXT_shader_framebuffer_fetch in GL_EXT_shader_framebuffer_fetch_non_coherent.
++static bool hasExtension(const char* extensions, const char* name) {
++    const size_t len = strlen(name);
++    for (const char* p = extensions; (p = strstr(p, name)) != NULL; p += len) {
++        if ((p == extensions || p[-1] == ' ') && (p[len] == ' ' || p[len] == '\0')) {
++            return true;
++        }
++    }
++    return false;
++}
++
+ void GLEScontext::initCapsLocked(const GLubyte * extensionString, bool nativeTextureDecompressionEnabled, GLSupport& glSupport)
+ {
+     const char* cstring = (const char*)extensionString;
+@@ -1973,7 +1986,9 @@ void GLEScontext::initCapsLocked(const GLubyte * extensionString, bool nativeTex
+ 
+     // b/203446380
+     // Does not really work on hardware GPUs
+-    if (strstr(cstring,"GL_EXT_shader_framebuffer_fetch")!=NULL
++    // Hosts that only offer the _non_coherent variant (Mesa on older Intel GPUs)
++    // must not advertise it: guest shaders using it fail to compile there.
++    if (hasExtension(cstring, "GL_EXT_shader_framebuffer_fetch")
+             && isGles2Gles()) {
+         glSupport.ext_GL_EXT_shader_framebuffer_fetch = true;
+     }

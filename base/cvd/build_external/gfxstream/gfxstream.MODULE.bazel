@@ -10,6 +10,10 @@ git_repository(
         "@//build_external/gfxstream:PATCH.gfxstream.protobuf-deprecation-warning.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.blob_page_size_runtime.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.gles1-alpha-test-core-profile.patch",
+        # Advertise GL_EXT_shader_framebuffer_fetch only when the host names it
+        # exactly, not just GL_EXT_shader_framebuffer_fetch_non_coherent (older
+        # Intel hosts): Chromium's GPU process aborted on its failed shaders.
+        "@//build_external/gfxstream:PATCH.gfxstream.exact-framebuffer-fetch-extension.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.linux_udmabuf_creator.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.memfd_udmabuf_seals.patch",
         # Keep the advertised Vulkan feature/extension set internally
