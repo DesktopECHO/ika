@@ -249,7 +249,8 @@ start_webrtc = false
 
 # ----------------------------------------------------------------------------
 [boot]
-# Seconds to wait for Android to finish booting.
+# Seconds to wait for Android to finish booting. Past them, a start keeps
+# waiting while Android still makes progress, for up to four times as long.
 # Environment variable: CVD_BOOT_TIMEOUT_SEC
 boot_timeout_sec = 150
 
@@ -802,6 +803,13 @@ ika_ini_apply_map CVD_LAUNCHER_DEFAULTS launcher
 CVD_GPU_MODE="${CVD_GPU_DEFAULTS[gpu_mode]}"
 ika_ini_default CVD_BOOT_TIMEOUT_SEC boot boot_timeout_sec \
   "${CVD_BOOT_DEFAULTS[boot_timeout_sec]}" uint
+# A slow host, or the first boot of a new ROM, can take longer than
+# boot_timeout_sec. Past it, a start keeps waiting while the guest's logs still
+# grow, until they stop for CVD_BOOT_STALL_SEC or CVD_BOOT_MAX_SEC have passed.
+# The default limit matches run_cvd's own boot timeout of 600 seconds.
+CVD_BOOT_MAX_SEC="$((CVD_BOOT_TIMEOUT_SEC * 4))"
+readonly CVD_BOOT_MAX_SEC
+readonly CVD_BOOT_STALL_SEC=90
 
 # ============================================================================
 # Environment Paths
@@ -3437,14 +3445,46 @@ run_scrcpy_supervisor() {
   done
 }
 
+# Prints the combined size of the guest's logs, which grow while it boots.
+guest_log_bytes() {
+  local total=0
+  local size
+  local log_file
+
+  for log_file in "${CVD_INSTANCE_DIR}"/logs/{kernel.log,logcat,launcher.log}; do
+    size="$(stat -L -c '%s' "${log_file}" 2>/dev/null || echo 0)"
+    total=$((total + size))
+  done
+  printf '%s\n' "${total}"
+}
+
+# Succeeds while process PID runs. A zombie has exited.
+process_is_running() {
+  local state
+
+  state="$(sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f1 || true)"
+  [[ -n "${state}" && "${state}" != "Z" ]]
+}
+
+# Waits up to CVD_BOOT_TIMEOUT_SEC for Android to boot, and past it while the
+# guest's logs still grow (see CVD_BOOT_MAX_SEC). LAUNCHER_PID counts as a live
+# VM process: cvd_internal_start replaces itself with 'cvd create', which
+# CVD_PROCESS_REGEX does not match, and run_cvd only starts after it.
 wait_for_boot() {
   local launcher_log="$1"
-  local deadline="$2"
-  local min_mtime="${3:-0}"
+  local min_mtime="${2:-0}"
+  local launcher_pid="${3:-}"
   local adb_serial=""
   local crosvm_command_reported="false"
+  local deadline
+  local max_deadline
+  local stall_deadline=0
+  local log_bytes
+  local last_log_bytes=""
 
-  while within_deadline "${deadline}"; do
+  deadline="$(make_deadline "${CVD_BOOT_TIMEOUT_SEC}")"
+  max_deadline="$(make_deadline "${CVD_BOOT_MAX_SEC}")"
+  while within_deadline "${max_deadline}"; do
     if [[ -f "${launcher_log}" ]]; then
       local log_mtime
       log_mtime="$(stat -c '%Y' "${launcher_log}" 2>/dev/null || echo 0)"
@@ -3462,8 +3502,22 @@ wait_for_boot() {
     if [[ -n "${adb_serial}" ]] && adb_boot_completed "${adb_serial}"; then
       return 0
     fi
-    if ! has_live_cvd_processes; then
+    if ! has_live_cvd_processes \
+        && ! { [[ -n "${launcher_pid}" ]] && process_is_running "${launcher_pid}"; }; then
       return 1
+    fi
+    if ! within_deadline "${deadline}"; then
+      log_bytes="$(guest_log_bytes)"
+      if [[ -z "${last_log_bytes}" ]]; then
+        log "Android has not finished booting after ${CVD_BOOT_TIMEOUT_SEC}s; waiting while it makes progress"
+      fi
+      if [[ "${log_bytes}" != "${last_log_bytes}" ]]; then
+        last_log_bytes="${log_bytes}"
+        stall_deadline="$(make_deadline "${CVD_BOOT_STALL_SEC}")"
+      elif ! within_deadline "${stall_deadline}"; then
+        log "the guest logs have not changed for ${CVD_BOOT_STALL_SEC}s"
+        return 1
+      fi
     fi
     sleep 0.5
   done
@@ -4458,7 +4512,7 @@ start_game_session() {
       || [[ "${session_touch:-false}" != "${touch_mode}" ]]; then
     notify_progress "Starting ${label}…"
     exec {autostart_lock_fd}>"${CVD_TMP_DIR}/autostart.lock"
-    flock -w "$((CVD_BOOT_TIMEOUT_SEC + 60))" "${autostart_lock_fd}" \
+    flock -w "$((CVD_BOOT_MAX_SEC + 60))" "${autostart_lock_fd}" \
       || die "timed out waiting for Ika to start"
     IKA_NOTIFY=false "${IKA_SCRIPT_PATH}" start --game --game-session </dev/null >/dev/null 2>&1 \
       {autostart_lock_fd}>&- {game_session_lock_fd}>&- \
@@ -4525,7 +4579,7 @@ ensure_guest_ready() {
 
   # Serialize concurrent launches, so only one of them starts the VM.
   exec {autostart_lock_fd}>"${CVD_TMP_DIR}/autostart.lock"
-  flock -w "$((CVD_BOOT_TIMEOUT_SEC + 60))" "${autostart_lock_fd}" \
+  flock -w "$((CVD_BOOT_MAX_SEC + 60))" "${autostart_lock_fd}" \
     || die "timed out waiting for Ika to start"
   if ! has_live_cvd_processes; then
     log "Android virtual device not running; starting it without the console"
@@ -4539,7 +4593,7 @@ ensure_guest_ready() {
   exec {autostart_lock_fd}>&-
 
   adb_serial="$(resolve_adb_serial)"
-  deadline="$(make_deadline "${CVD_BOOT_TIMEOUT_SEC}")"
+  deadline="$(make_deadline "${CVD_BOOT_MAX_SEC}")"
   until adb_boot_completed "${adb_serial}"; do
     has_live_cvd_processes || die "the Android virtual device stopped while booting"
     within_deadline "${deadline}" || die "the Android virtual device did not finish booting"
@@ -6095,6 +6149,24 @@ wait_for_cvdalloc_teardown() {
   done
 }
 
+# cvd records each instance group's state in its own database. A VM that stops
+# without 'cvd stop' (ika stops it with cvd_internal_stop, and it also exits by
+# itself when Android powers off or fails to boot) stays recorded as Running,
+# or as Unreachable once cvd fails to reach it, and cvd_internal_start, which
+# runs 'cvd create --reuse', then refuses to start it again with "Group is
+# already running". 'cvd stop' records it as stopped; disks are kept.
+clear_stale_cvd_group() {
+  local states
+
+  has_live_cvd_processes && return 0
+  states="$(run_with_cvd_env timeout 30 "${CVD_CLI_BIN}" ps 2>/dev/null \
+    | awk 'NR > 1 { print $4 }' || true)"
+  grep -qxE 'Running|Starting|Stopping|Preparing|Unreachable' <<<"${states}" || return 0
+  log_file_only "clearing the state cvd kept for the stopped VM:$(tr '\n' ' ' <<<"${states}")"
+  run_with_cvd_env timeout 60 "${CVD_CLI_BIN}" stop --wait_for_launcher=0 >/dev/null 2>&1 \
+    || log "warning: cvd stop could not clear the state of the stopped VM"
+}
+
 start_cvd() {
   local fullscreen_mode="${1:-false}"
   local game_mode="${2:-false}"
@@ -6102,7 +6174,6 @@ start_cvd() {
   local -a args=()
   local launcher_log
   local adb_serial
-  local boot_deadline
   local launcher_pid
   local start_epoch
   local scrcpy_dpi
@@ -6138,6 +6209,7 @@ start_cvd() {
   # gone.
   unmount_android_storage
   wait_for_cvdalloc_teardown
+  clear_stale_cvd_group
   record_udmabuf_baseline
   protect_overlay_resume
 
@@ -6174,8 +6246,7 @@ start_cvd() {
 
   log "launcher pid: ${launcher_pid}"
 
-  boot_deadline="$(make_deadline "${CVD_BOOT_TIMEOUT_SEC}")"
-  if ! wait_for_boot "${launcher_log}" "${boot_deadline}" "${start_epoch}"; then
+  if ! wait_for_boot "${launcher_log}" "${start_epoch}" "${launcher_pid}"; then
     if [[ -f "${launcher_log}" ]]; then
       tail -n 80 "${launcher_log}" >&2 || true
     fi
@@ -6243,6 +6314,7 @@ stop_cvd_internal() {
   if has_live_cvd_processes; then
     die "Cuttlefish processes are still running after stop attempt"
   fi
+  clear_stale_cvd_group
 
   if [[ "${stop_ok}" != "true" ]]; then
     log "stop helper reported no active device; no live Cuttlefish processes remain"
@@ -6797,6 +6869,7 @@ main() {
       if ! has_live_cvd_processes; then
         stop_dnsmasq
         report_udmabuf_leaks
+        clear_stale_cvd_group
         respond "Android virtual device not running"
         return 0
       fi

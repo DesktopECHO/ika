@@ -18,6 +18,17 @@
 - Android's UI still renders with SkiaGL in the gfxstream ANGLE modes, where
   upstream now chooses SkiaVK. `--guest_hwui_renderer=skiavk` opts in.
 
+### Starting and stopping
+- `ika start` works again after `ika stop`, and after Android powers off or
+  fails to boot. Cuttlefish 1.58 starts the VM through `cvd create`, which
+  kept such a VM recorded as running ("Group is already running"); `ika stop`
+  and `ika start` now clear that record. Android's data is kept.
+- `ika start` no longer gives up on a slow host or the first boot of a new
+  ROM: past `boot_timeout_sec` it keeps waiting while Android still makes
+  progress, for up to four times as long, then opens the console.
+- `ika start` no longer fails at random right after launching the VM, while
+  `cvd create` is still setting it up.
+
 ## Ika 261016, changes since release 261012
 
 ### TV mode
