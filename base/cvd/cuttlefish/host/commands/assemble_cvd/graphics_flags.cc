@@ -784,10 +784,14 @@ Result<GuestHwuiRenderer> SelectGuestHwuiRenderer(
     return GuestHwuiRenderer::kUnknown;
   }
 
-  // Upstream selects SkiaVk for the GfxstreamGuestAngle* modes here. Ika
-  // leaves the choice to the guest (SkiaGL) until SkiaVk has been verified on
-  // the Apple Silicon gfxstream Vulkan path; use --guest_hwui_renderer=skiavk
-  // to opt in.
+  // TODO(b/533056543): after testing Gfxstream's virtual queue support.
+  if (IsGfxstreamGuestAngleMode(gpu_mode) &&
+      gpu_mode != GpuMode::GfxstreamGuestAngleHostSwiftshader) {
+    VLOG(0) << "Selecting SkiaVk as the HWUI renderer for "
+            << GpuModeString(gpu_mode)
+            << " GPU mode which is GfxstreamGuestAngle* based.";
+    return GuestHwuiRenderer::kSkiaVk;
+  }
 
   if (gpu_mode == GpuMode::GuestLavapipe || gpu_mode == GpuMode::Venus) {
     VLOG(0) << "Selecting SkiaVk as the HWUI renderer for "
