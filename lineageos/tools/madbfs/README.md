@@ -84,9 +84,9 @@ up by the ROM build).
   build's copy of the generated file: keep the two in step.
 - `madbfs-common/cmake/fetched-libs.cmake` uses `third_party/saf` instead of
   downloading it.
-- `--log-file` names one file, truncated when madbfs starts. Upstream rotated
-  it (`madbfs.1.log` to `madbfs.5.log`, 10 MB each), keeping the logs of
-  earlier mounts.
+- `--log-file` names one file, which madbfs appends to and never rotates;
+  `ika` trims it to its last 1,000 lines before each mount. Upstream rotated
+  it (`madbfs.1.log` to `madbfs.5.log`, 10 MB each).
 - `as_expected.hpp` finds Asio's handler-continuation helper under either
   name: Boost 1.91 and later call its namespace `asio_handler_cont_helpers`
   (through `BOOST_ASIO_VERSIONED_NAME`) where 1.90 and earlier call it

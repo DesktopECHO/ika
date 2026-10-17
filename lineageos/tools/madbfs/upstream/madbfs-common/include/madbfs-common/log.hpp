@@ -75,7 +75,7 @@ namespace madbfs::log
      * @param log_file The log file to write to.
      *
      * If the `log_file` is set to "-", the logger will write to stdout. If the `log_file` is set to "" (empty
-     * string) logger will be created with empty sinks. Otherwise the file is truncated on open and never
+     * string) logger will be created with empty sinks. Otherwise the file is appended to, never truncated or
      * rotated.
      */
     inline bool init(spdlog::level::level_enum level, Str log_file) noexcept(false)
@@ -88,7 +88,7 @@ namespace madbfs::log
             );
         } else if (not log_file.empty()) {
             logger->sinks().push_back(
-                std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_file.data(), true)
+                std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_file.data(), false)
             );
         }
 
