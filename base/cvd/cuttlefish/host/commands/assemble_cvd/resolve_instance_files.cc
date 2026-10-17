@@ -16,16 +16,16 @@
 
 #include "cuttlefish/host/commands/assemble_cvd/resolve_instance_files.h"
 
-#include <sys/statvfs.h>
-
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "absl/strings/str_split.h"
-#include <gflags/gflags.h>
+#include "fmt/format.h"
+#include "gflags/gflags.h"
 
 #include "cuttlefish/host/commands/assemble_cvd/assemble_cvd_flags.h"
+#include "cuttlefish/host/commands/assemble_cvd/flags/boot_image.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/initramfs_path.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/kernel_path.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/super_image.h"
@@ -44,7 +44,7 @@ Result<void> ResolveInstanceFiles(
   // It is conflict (invalid) to pass both kernel_path/initramfs_path
   // and image file paths.
   bool flags_kernel_initramfs_has_input =
-      kernel_path.HasValue() || initramfs_path.HasValue();
+      (kernel_path.HasValue() || initramfs_path.HasValue());
   bool flags_image_has_input =
       (!super_image.IsDefault()) || (!vendor_boot_image.IsDefault()) ||
       (!FLAGS_vbmeta_vendor_dlkm_image.empty()) ||

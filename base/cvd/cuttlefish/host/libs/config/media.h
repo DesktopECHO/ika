@@ -17,31 +17,44 @@
 #include <optional>
 #include <string>
 
-#include "cuttlefish/result/result.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
+#include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
 
 constexpr const char kMediaFlag[] = "media";
 constexpr const char kMediaHelp[] =
-    "Comma separated key=value pairs of media device properties. Supported "
-    "properties:\n"
-    " 'type': optional, defaults to 'v4l2_emulated_camera_splane', supported values:\n"
-    "    'v4l2_emulated_camera_splane': emulated media capture device (single-plane)\n"
-    "    'v4l2_emulated_camera_mplane': emulated media capture device (multi-plane)\n"
+    "Colon separated media device properties: "
+    "\"[type]:[key1]=[val1]:[key2]=[val2]\". "
+    "Supported types:\n"
+    "    'v4l2_emulated_camera_splane': emulated media capture device "
+    "(single-plane)\n"
+    "    'v4l2_emulated_camera_mplane': emulated media capture device "
+    "(multi-plane)\n"
     "    'v4l2_proxy': proxy a host V4L2 device into the guest\n"
-    " 'lens_facing': optional, supported values: 'FRONT', 'BACK', 'EXTERNAL'\n"
-    " 'device': optional, for 'v4l2_proxy': host V4L2 device to proxy, defaults "
-    "to '/dev/video0'\n"
+    "    'v4l2_stream_proxy': stream video from a host named pipe into the "
+    "guest\n\n"
+    "v4l2_stream_proxy properties:\n"
+    "    'input_path': path to the host named pipe\n"
+    "    'input_width': width of the video stream in pixels\n"
+    "    'input_height': height of the video stream in pixels\n"
+    "    'input_fps': frames per second (e.g., 30 or 30000/1001)\n\n"
+    "v4l2_proxy properties:\n"
+    "    'device': optional, host V4L2 device to proxy, defaults to "
+    "'/dev/video0'\n\n"
+    "Supported keys:\n"
+    "    'lens_facing': optional, supported values: 'FRONT', 'BACK', "
+    "'EXTERNAL'\n\n"
     "Example usage:\n"
-    "  --media=type=v4l2_emulated_camera_splane,lens_facing=BACK\n"
-    "  --media=type=v4l2_proxy,device=/dev/video1\n";
+    "  --media=v4l2_emulated_camera_mplane:lens_facing=BACK\n"
+    "  --media=v4l2_proxy:device=/dev/video1\n"
+    "  --media=v4l2_stream_proxy:input_path=/tmp/fifo:"
+    "input_width=640:input_height=480:input_fps=30\n";
 
 Result<std::optional<CuttlefishConfig::MediaConfig>> ParseMediaConfig(
     const std::string& flag);
 
-Result<std::vector<CuttlefishConfig::MediaConfig>> ParseMediaConfigsFromArgs(
-    std::vector<std::string>& args);
+Result<std::vector<std::vector<CuttlefishConfig::MediaConfig>>>
+ParseMediaConfigsFromArgs(std::vector<std::string>& args, int num_instances);
 
 }  // namespace cuttlefish
-

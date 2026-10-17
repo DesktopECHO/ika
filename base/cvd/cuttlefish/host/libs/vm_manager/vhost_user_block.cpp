@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-#include "cuttlefish/host/libs/vm_manager/vhost_user.h"
-
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -27,13 +25,17 @@
 #include <string>
 #include <utility>
 
-#include <vulkan/vulkan.h>
+#include "vulkan/vulkan.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
+#include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
+#include "cuttlefish/files/directory_exists.h"
 #include "cuttlefish/host/libs/config/config_constants.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/vm_manager/crosvm_builder.h"
+#include "cuttlefish/host/libs/vm_manager/vhost_user.h"
+#include "cuttlefish/process/command.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -50,8 +52,8 @@ Result<VhostUserDeviceCommands> VhostUserBlockDevice(
       fmt::format("vhost-user-block-{}-socket", num));
   auto block_device_logs_path = instance.PerInstanceInternalPath(
       fmt::format("crosvm_vhost_user_block_{}.fifo", num));
-  auto block_device_logs =
-      CF_EXPECT(SharedFD::Fifo(block_device_logs_path, 0666));
+  SharedFD block_device_logs =
+      CF_EXPECT(Fd::Fifo(block_device_logs_path, 0666));
 
   Command block_device_logs_cmd(HostBinaryPath("log_tee"));
   block_device_logs_cmd.AddParameter("--process_name=crosvm_block_", num);
@@ -60,7 +62,7 @@ Result<VhostUserDeviceCommands> VhostUserBlockDevice(
     // Ask nicely so that log_tee gets a chance to process all the logs.
     // TODO: b/335934714 - Make sure the process actually exits
     bool res = kill(proc->pid(), SIGINT) == 0;
-    return res ? StopperResult::kStopSuccess : StopperResult::kStopFailure;
+    return res ? StopperResult::kSuccess : StopperResult::kFailure;
   }));
 
   const std::string crosvm_path = config.crosvm_binary();

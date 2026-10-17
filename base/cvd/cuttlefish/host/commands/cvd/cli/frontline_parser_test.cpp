@@ -15,19 +15,22 @@
 
 #include "cuttlefish/host/commands/cvd/cli/frontline_parser.h"
 
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 #include "cuttlefish/host/commands/cvd/cli/selector/selector_common_parser.h"
+#include "cuttlefish/result/result.h"
 #include "cuttlefish/result/result_matchers.h"
 
 namespace cuttlefish {
 
 struct ExtractCvdArgsTestParams {
-  cvd_common::Args input_args;
-  cvd_common::Args expected_args;
+  std::vector<std::string> input_args;
+  std::vector<std::string> expected_args;
   selector::SelectorOptions expected_options;
 };
 
@@ -35,7 +38,7 @@ class FrontlineParserTestFixture
     : public ::testing::TestWithParam<ExtractCvdArgsTestParams> {};
 
 TEST_P(FrontlineParserTestFixture, FrontlineParserTest) {
-  cvd_common::Args args = GetParam().input_args;
+  std::vector<std::string> args = GetParam().input_args;
 
   Result<selector::SelectorOptions> options_result = ExtractCvdArgs(args);
 

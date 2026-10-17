@@ -308,26 +308,45 @@ AudioHandler::AudioHandler(
     std::shared_ptr<webrtc_streaming::AudioSource> audio_source,
     const std::vector<AudioStreamSettings>& stream_settings,
     const AudioMixerSettings& mixer_settings)
+    : AudioHandler(std::move(audio_server), std::move(audio_sink),
+                   std::move(audio_source), nullptr, stream_settings,
+                   mixer_settings) {}
+
+AudioHandler::AudioHandler(
+    std::unique_ptr<AudioServer> audio_server,
+    std::shared_ptr<webrtc_streaming::AudioSink> audio_sink,
+    std::shared_ptr<webrtc_streaming::AudioSource> audio_source,
+    std::shared_ptr<webrtc_streaming::AudioSource> virtual_tuner_source,
+    const std::vector<AudioStreamSettings>& stream_settings,
+    const AudioMixerSettings& mixer_settings)
     : audio_server_(std::move(audio_server)),
-      audio_source_(audio_source),
+      capture_sources_(stream_settings.size()),
       stream_descs_(stream_settings.size()),
       chmaps_(stream_descs_.size()),
       audio_mixer_(
           std::make_unique<AudioMixer>(std::move(audio_sink), mixer_settings)) {
   streams_ = std::vector<virtio_snd_pcm_info>(stream_descs_.size());
-  const auto input_streams_count = static_cast<size_t>(std::count_if(
-      stream_settings.cbegin(), stream_settings.cend(),
-      [](const AudioStreamSettings& settings) {
-        return settings.direction == AudioStreamSettings::Direction::Capture;
-      }));
-  for (const auto& settings : stream_settings) {
-    const auto stream_id =
-        settings.id +
-        (settings.direction == AudioStreamSettings::Direction::Playback
-             ? input_streams_count
-             : 0);
+  std::vector<AudioStreamSettings> sorted_settings = stream_settings;
+  std::stable_sort(
+      sorted_settings.begin(), sorted_settings.end(),
+      [](const AudioStreamSettings& a, const AudioStreamSettings& b) {
+        return a.direction == AudioStreamSettings::Direction::Capture &&
+               b.direction == AudioStreamSettings::Direction::Playback;
+      });
+  for (size_t stream_id = 0; stream_id < sorted_settings.size(); ++stream_id) {
+    const auto& settings = sorted_settings[stream_id];
     streams_[stream_id] = GetVirtioSndPcmInfo(settings);
     chmaps_[stream_id] = GetVirtioSndChmapInfo(settings);
+    if (settings.virtual_tuner) {
+      CHECK(settings.direction == AudioStreamSettings::Direction::Capture)
+          << "The virtual tuner stream must be a capture stream";
+      CHECK(virtual_tuner_source != nullptr)
+          << "A stream is marked virtual_tuner, but no virtual tuner source "
+             "was given";
+      capture_sources_[stream_id] = virtual_tuner_source;
+    } else if (settings.direction == AudioStreamSettings::Direction::Capture) {
+      capture_sources_[stream_id] = audio_source;
+    }
 
     constexpr uint32_t kCardId = 0;  // As of now only one card is supported
     if (settings.has_mute_control) {
@@ -446,7 +465,7 @@ void AudioHandler::ReleaseStream(StreamControlCommand& cmd) {
   }
   if (was_active) {
     if (is_capture) {
-      audio_source_->Stop();
+      capture_sources_[cmd.stream_id()]->Stop();
     } else {
       audio_mixer_->OnStreamStopped(cmd.stream_id());
     }
@@ -473,7 +492,10 @@ void AudioHandler::StartStream(StreamControlCommand& cmd) {
       sample_rate = stream_desc.sample_rate;
       stream_desc.holding_buffer.clear();
     }
-    audio_source_->Start(bytes_per_sample, channels, sample_rate);
+    // Drop audio the source buffered while the stream was stopped.
+    capture_sources_[cmd.stream_id()]->Reset();
+    capture_sources_[cmd.stream_id()]->Start(bytes_per_sample, channels,
+                                             sample_rate);
   }
   {
     std::lock_guard<std::mutex> lock(stream_desc.mtx);
@@ -496,7 +518,7 @@ void AudioHandler::StopStream(StreamControlCommand& cmd) {
     stream_desc.holding_buffer.clear();
   }
   if (is_capture) {
-    audio_source_->Stop();
+    capture_sources_[cmd.stream_id()]->Stop();
   } else {
     audio_mixer_->OnStreamStopped(cmd.stream_id());
   }
@@ -685,7 +707,7 @@ void AudioHandler::OnCaptureBuffer(RxBuffer buffer) {
       // Skip the holding buffer in as many reads as possible to avoid the extra
       // copies
       const auto write_pos = rx_buffer + bytes_read;
-      auto res = audio_source_->GetMoreAudioData(
+      int res = capture_sources_[stream_id]->GetMoreAudioData(
           write_pos, bytes_per_sample, samples_per_channel,
           stream_desc.channels, stream_desc.sample_rate, muted);
       if (res < 0) {
@@ -707,7 +729,7 @@ void AudioHandler::OnCaptureBuffer(RxBuffer buffer) {
       // There is some buffer left to fill, but it's less than 10ms, read into
       // holding buffer to ensure the remainder is kept around for future reads
       holding_buffer.resize(bytes_per_request);
-      auto res = audio_source_->GetMoreAudioData(
+      int res = capture_sources_[stream_id]->GetMoreAudioData(
           holding_buffer.data(), bytes_per_sample, samples_per_channel,
           stream_desc.channels, stream_desc.sample_rate, muted);
       if (res < 0) {

@@ -14,13 +14,16 @@
  * limitations under the License.
  */
 
-#include <cstdlib>
+#include <stdlib.h>
+
+#include <chrono>
 #include <string>
 
 #include "absl/log/log.h"
 #include "gflags/gflags.h"
 
 #include "cuttlefish/common/libs/utils/tee_logging.h"
+#include "cuttlefish/host/libs/config/config_utils.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/screen_recording_controls/screen_recording_controls.h"
 #include "cuttlefish/result/result.h"
@@ -69,7 +72,7 @@ int main(int argc, char* argv[]) {
   google::ParseCommandLineFlags(&argc, &argv, true);
 
   cuttlefish::Result<void> result = cuttlefish::RecordCvdMain(argc, argv);
-  if (!result.ok()) {
+  if (!result.has_value()) {
     LOG(ERROR) << result.error();
     return EXIT_FAILURE;
   }

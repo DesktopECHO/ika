@@ -15,12 +15,17 @@
  */
 #include "allocd/alloc_utils.h"
 
+#include <fcntl.h>
+#include <pwd.h>
 #include <stdint.h>
+#include <string.h>
 #include <unistd.h>
 
 #include <fstream>
-#include <string_view>
+#include <optional>
 #include <sstream>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "absl/log/log.h"
@@ -28,9 +33,10 @@
 #include "absl/strings/str_format.h"
 
 #include "allocd/alloc_driver.h"
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/commands/cvd/utils/common.h"
+#include "cuttlefish/process/execute.h"
 #include "cuttlefish/result/result.h"
 
 #ifdef __linux__
@@ -56,7 +62,7 @@ static const std::string kDnsmasq = FindDnsmasq();
 Result<std::string> SearchForNft() {
   cuttlefish::Result<std::string> nft_path =
       cuttlefish::Search(cuttlefish::Path(), "nft");
-  if (nft_path.ok()) {
+  if (nft_path.has_value()) {
     return *nft_path;
   }
   return cuttlefish::Search({"/usr/sbin", "/sbin"}, "nft");
@@ -133,7 +139,7 @@ bool CreateEthernetIface(std::string_view name, std::string_view bridge_name) {
     return false;
   }
 
-  if (!LinkTapToBridge(name, bridge_name).ok()) {
+  if (!LinkTapToBridge(name, bridge_name).has_value()) {
     CleanupEthernetIface(name);
     return false;
   }
@@ -175,13 +181,13 @@ bool CreateMobileIface(std::string_view name, uint16_t id,
     return false;
   }
 
-  if (!AddGateway(name, gateway, netmask).ok()) {
+  if (!AddGateway(name, gateway, netmask).has_value()) {
     DestroyIface(name);
   }
 
-  if (!NftConfig(network, true).ok()) {
-    DestroyGateway(name, gateway, netmask);
-    DestroyIface(name);
+  if (!NftConfig(network, true).has_value()) {
+    (void)DestroyGateway(name, gateway, netmask);
+    (void)DestroyIface(name);
     return false;
   };
 
@@ -199,8 +205,8 @@ bool DestroyMobileIface(std::string_view name, uint16_t id,
   auto gateway = MobileGatewayName(ipaddr, id);
   auto network = MobileNetworkName(ipaddr, netmask, id);
 
-  NftConfig(network, false);
-  DestroyGateway(name, gateway, netmask);
+  (void)NftConfig(network, false);
+  (void)DestroyGateway(name, gateway, netmask);
   return DestroyIface(name);
 }
 
@@ -210,14 +216,14 @@ void CleanupEthernetIface(std::string_view name) { DestroyIface(name); }
 
 bool CreateTap(std::string_view name) {
   LOG(INFO) << "Attempt to create tap interface: " << name;
-  if (!AddTapIface(name).ok()) {
+  if (!AddTapIface(name).has_value()) {
     LOG(WARNING) << "Failed to create tap interface: " << name;
     return false;
   }
 
-  if (!BringUpIface(name).ok()) {
+  if (!BringUpIface(name).has_value()) {
     LOG(WARNING) << "Failed to bring up tap interface: " << name;
-    DeleteIface(name);
+    (void)DeleteIface(name);
     return false;
   }
 
@@ -228,32 +234,30 @@ bool CreateTap(std::string_view name) {
 Result<void> ValidateTapInterfaceIsUsable(const std::string& interface_name) {
   constexpr auto kTunTapDev = "/dev/net/tun";
 
-  auto tap_fd = SharedFD::Open(kTunTapDev, O_RDWR | O_NONBLOCK);
-  CF_EXPECTF(tap_fd->IsOpen(), "Unable to open tun device: {}",
-             tap_fd->StrError());
+  Fd tap_fd = CF_EXPECT(Fd::Open(kTunTapDev, O_RDWR | O_NONBLOCK));
 
   struct ifreq ifr;
   memset(&ifr, 0, sizeof(ifr));
   ifr.ifr_flags = IFF_TAP | IFF_NO_PI | IFF_VNET_HDR;
   strncpy(ifr.ifr_name, interface_name.c_str(), IFNAMSIZ);
 
-  int err = tap_fd->Ioctl(TUNSETIFF, &ifr);
+  int err = tap_fd.Ioctl(TUNSETIFF, &ifr);
   CF_EXPECTF(err == 0, "Unable to connect to {} tap interface: {}",
-             interface_name, tap_fd->StrError());
+             interface_name, tap_fd.StrError());
 
   return {};
 }
 #endif
 
 bool DestroyIface(std::string_view name) {
-  if (!ShutdownIface(name).ok()) {
+  if (!ShutdownIface(name).has_value()) {
     LOG(WARNING) << "Failed to shutdown tap interface: " << name;
     // the interface might have already shutdown ... so ignore and try to remove
     // the interface. In the future we could read from the pipe and handle this
     // case more elegantly
   }
 
-  if (!DeleteIface(name).ok()) {
+  if (!DeleteIface(name).has_value()) {
     LOG(WARNING) << "Failed to delete tap interface: " << name;
     return false;
   }
@@ -272,7 +276,7 @@ std::optional<std::string> GetUserName(uid_t uid) {
 
 bool DestroyBridge(std::string_view name) {
   Result<bool> r = BridgeInUse(name);
-  if (!r.ok()) {
+  if (!r.has_value()) {
     return false;
   }
 
@@ -281,7 +285,7 @@ bool DestroyBridge(std::string_view name) {
     return true;
   }
 
-  return DeleteIface(name).ok();
+  return DeleteIface(name).has_value();
 }
 
 bool SetupBridgeGateway(std::string_view bridge_name,
@@ -292,7 +296,7 @@ bool SetupBridgeGateway(std::string_view bridge_name,
   auto network = absl::StrFormat("%s.0%s", ipaddr, netmask);
   auto dhcp_range = absl::StrFormat("%s.2,%s.255", ipaddr, ipaddr);
 
-  if (!AddGateway(bridge_name, gateway, netmask).ok()) {
+  if (!AddGateway(bridge_name, gateway, netmask).has_value()) {
     return false;
   }
 
@@ -310,7 +314,7 @@ bool SetupBridgeGateway(std::string_view bridge_name,
   FirewallAddTrustedInterface(bridge_name);
   config.has_firewall = true;
 
-  auto ret = NftConfig(network, true).ok();
+  auto ret = NftConfig(network, true).has_value();
   if (!ret) {
     CleanupBridgeGateway(bridge_name, ipaddr, config);
     LOG(WARNING) << "Failed to setup ip tables";
@@ -327,7 +331,7 @@ void CleanupBridgeGateway(std::string_view name, std::string_view ipaddr,
   auto dhcp_range = absl::StrFormat("%s.2,%s.255", ipaddr, ipaddr);
 
   if (config.has_iptable) {
-    NftConfig(network, false);
+    (void)NftConfig(network, false);
   }
 
   if (config.has_firewall) {
@@ -339,7 +343,7 @@ void CleanupBridgeGateway(std::string_view name, std::string_view ipaddr,
   }
 
   if (config.has_gateway) {
-    DestroyGateway(name, gateway, netmask);
+    (void)DestroyGateway(name, gateway, netmask);
   }
 }
 
@@ -406,18 +410,18 @@ bool StopDnsmasq(std::string_view name) {
 bool CreateEthernetBridgeIface(std::string_view name,
                                std::string_view ipaddr) {
   auto exists = BridgeExists(name);
-  if (exists.ok() && *exists) {
+  if (exists.has_value() && *exists) {
     LOG(INFO) << "Bridge " << name
               << " exists already, ensuring it is administratively up.";
     FirewallAddTrustedInterface(name);
-    return BringUpIface(name).ok();
+    return BringUpIface(name).has_value();
   }
 
-  if (!CreateBridge(name).ok()) {
+  if (!CreateBridge(name).has_value()) {
     return false;
   }
 
-  if (!BringUpIface(name).ok()) {
+  if (!BringUpIface(name).has_value()) {
     DestroyBridge(name);
     return false;
   }

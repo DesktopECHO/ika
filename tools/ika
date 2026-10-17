@@ -1113,7 +1113,7 @@ save_data_gb_configuration() {
 # ============================================================================
 #
 # '--camera' passes a host V4L2 camera to the guest with crosvm virtio-media
-# (cvd --media=type=v4l2_proxy,device=...). The guest's external camera HAL
+# (cvd --media=v4l2_proxy:device=...). The guest's external camera HAL
 # serves it as the front camera. Without a value, the first video capture
 # device offering MJPEG, NV12 or YUYV is used: USB (UVC) webcams, the FaceTime
 # camera of Apple Silicon Macs (Asahi apple-isp) and of older Intel Macs
@@ -1290,7 +1290,7 @@ parse_start_options() {
           die "Unable to add camera to a powered-on instance, try '${SCRIPT_NAME} restart --camera${camera_device:+=${camera_device}}'"
         fi
         camera_device="$(resolve_camera_device "${camera_device}")" || exit 1
-        start_args_ref+=("--media=type=v4l2_proxy,device=${camera_device}")
+        start_args_ref+=("--media=v4l2_proxy:device=${camera_device}")
         shift
         ;;
       --ika_scrcpy=*)

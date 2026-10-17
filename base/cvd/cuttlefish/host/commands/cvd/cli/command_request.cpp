@@ -15,16 +15,19 @@
  */
 
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
-#include "cuttlefish/flag_parser/gflags_compat.h"
-#include "cuttlefish/flag_parser/flag.h"
 
+#include <array>
+#include <initializer_list>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include <android-base/file.h>
+#include "android-base/file.h"
 
+#include "cuttlefish/flag_parser/flag.h"
+#include "cuttlefish/flag_parser/gflags_compat.h"
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
 #include "cuttlefish/host/commands/cvd/cli/selector/selector_common_parser.h"
 #include "cuttlefish/result/result.h"
@@ -46,7 +49,8 @@ constexpr std::array help_str_opts{
 };
 
 }  // namespace
-CommandRequest::CommandRequest(cvd_common::Args args, cvd_common::Envs env,
+CommandRequest::CommandRequest(std::vector<std::string> args,
+                               std::unordered_map<std::string, std::string> env,
                                selector::SelectorOptions selectors)
     : args_(std::move(args)),
       env_(std::move(env)),
@@ -67,7 +71,7 @@ CommandRequest::CommandRequest(cvd_common::Args args, cvd_common::Envs env,
 
   //  transform `cvd -h` or `cvd --help` requests into `cvd help`
   Result<bool> is_top_level_help_flag = HasHelpFlag({subcommand_});
-  if (is_top_level_help_flag.ok() && *is_top_level_help_flag) {
+  if (is_top_level_help_flag.has_value() && *is_top_level_help_flag) {
     subcommand_ = "help";
   }
 }
@@ -82,12 +86,14 @@ CommandRequestBuilder CommandRequestBuilder::AddArguments(
   return AddArguments(std::vector<std::string_view>(args));
 }
 
-CommandRequestBuilder& CommandRequestBuilder::SetEnv(cvd_common::Envs env) & {
+CommandRequestBuilder& CommandRequestBuilder::SetEnv(
+    std::unordered_map<std::string, std::string> env) & {
   env_ = std::move(env);
   return *this;
 }
 
-CommandRequestBuilder CommandRequestBuilder::SetEnv(cvd_common::Envs env) && {
+CommandRequestBuilder CommandRequestBuilder::SetEnv(
+    std::unordered_map<std::string, std::string> env) && {
   env_ = std::move(env);
   return *this;
 }

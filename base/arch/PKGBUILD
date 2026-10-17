@@ -107,7 +107,7 @@ build() {
       --host_cxxopt=-Wno-thread-safety-reference-return \
       --conlyopt=-Wno-error=incompatible-pointer-types-discards-qualifiers \
       --host_conlyopt=-Wno-error=incompatible-pointer-types-discards-qualifiers \
-      'cuttlefish/package:cvd' \
+      'cuttlefish/package:common' \
       'cuttlefish/package:defaults' \
       'cuttlefish/package:metrics' \
       --spawn_strategy=local \
@@ -204,6 +204,8 @@ package_ika-base() {
 
   install -d "${pkgdir}/usr/lib"
   cp -a "${out}/cuttlefish-common" "${pkgdir}/usr/lib/"
+  # Bazel leaves its tree artifacts read-only; more files are installed below.
+  chmod -R u+w "${pkgdir}/usr/lib/cuttlefish-common"
   rm -rf "${pkgdir}/usr/lib/cuttlefish-common/bin/cvd.repo_mapping" \
          "${pkgdir}/usr/lib/cuttlefish-common/bin"/cvd.runfiles* \
          "${pkgdir}/usr/lib/cuttlefish-common/bin/crosvm.repo_mapping" \

@@ -7,27 +7,23 @@ package(
 cf_cc_binary(
     name = "cvd_internal_start",
     srcs = [
-        "filesystem_explorer.cc",
-        "filesystem_explorer.h",
         "flag_forwarder.cc",
         "flag_forwarder.h",
         "main.cc",
         "override_bool_arg.cpp",
         "override_bool_arg.h",
-        "validate_metrics_confirmation.cpp",
-        "validate_metrics_confirmation.h",
     ],
-    clang_format_enabled = False,
     # `layering_check` conflicts with the combination of the clang prebuilt and
     # the cmake build rules used for @libxml2.
     features = ["-layering_check"],
+    include_cleaner_enabled = False,
     deps = [
         "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/common/libs/utils:environment",
         "//cuttlefish/common/libs/utils:gflags_xml_parser",
-        "//cuttlefish/common/libs/utils:subprocess",
-        "//cuttlefish/common/libs/utils:subprocess_managed_stdio",
         "//cuttlefish/common/libs/utils:tee_logging",
+        "//cuttlefish/files:file_exists",
         "//cuttlefish/flag_parser",
         "//cuttlefish/host/commands/start:start_flags",
         "//cuttlefish/host/libs/config:config_constants",
@@ -35,9 +31,15 @@ cf_cc_binary(
         "//cuttlefish/host/libs/config:host_tools_version",
         "//cuttlefish/host/libs/config:instance_nums",
         "//cuttlefish/host/libs/log_names",
-        "//cuttlefish/host/libs/metrics:notification",
         "//cuttlefish/host/libs/vm_manager",
-        "//libbase",
+        "//cuttlefish/metrics/io:notification",
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/posix:symlink",
+        "//cuttlefish/process:command",
+        "//cuttlefish/process:managed_stdio",
+        "//cuttlefish/process:proc_file_utils",
+        "//cuttlefish/process:subprocess",
+        "//cuttlefish/process:subprocess_options",
         "@abseil-cpp//absl/base:no_destructor",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/log:check",
@@ -50,12 +52,8 @@ cf_cc_binary(
 
 cf_cc_library(
     name = "start_flags",
-    srcs = [
-        "start_flags.cpp",
-    ],
-    hdrs = [
-        "start_flags.h",
-    ],
+    srcs = ["start_flags.cpp"],
+    hdrs = ["start_flags.h"],
     deps = [
         "//cuttlefish/host/commands/assemble_cvd:flags_defaults",
         "@gflags",

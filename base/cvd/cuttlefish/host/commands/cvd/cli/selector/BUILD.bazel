@@ -1,25 +1,24 @@
-load("//cuttlefish/bazel:rules.bzl", "cf_cc_library", "cf_cc_test")
+load("//cuttlefish/bazel:rules.bzl", "cf_build_test", "cf_cc_library", "cf_cc_test")
 
 package(
     default_visibility = ["//:android_cuttlefish"],
 )
+
+cf_build_test(name = "selector_build_test")
 
 cf_cc_library(
     name = "creation_analyzer",
     srcs = ["creation_analyzer.cpp"],
     hdrs = ["creation_analyzer.h"],
     deps = [
-        "//cuttlefish/common/libs/utils:contains",
         "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/common/libs/utils:users",
+        "//cuttlefish/host/commands/cvd/cli:utils",
         "//cuttlefish/host/commands/cvd/cli/selector:selector_common_parser",
-        "//cuttlefish/host/commands/cvd/instances",
-        "//cuttlefish/host/commands/cvd/instances:cvd_persistent_data",
         "//cuttlefish/host/commands/cvd/instances:instance_manager",
-        "//cuttlefish/host/commands/cvd/instances/lock",
         "//cuttlefish/host/commands/cvd/utils:common",
-        "//cuttlefish/result",
-        "//libbase",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/strings",
     ],
@@ -53,9 +52,8 @@ cf_cc_test(
         ":num_instances_parser",
         ":selector_common_parser",
         "//cuttlefish/flag_parser",
-        "//cuttlefish/host/commands/cvd/cli:types",
-        "//cuttlefish/result",
         "//cuttlefish/result:result_matchers",
+        "//cuttlefish/result:result_type",
     ],
 )
 
@@ -64,15 +62,16 @@ cf_cc_library(
     srcs = ["selector.cpp"],
     hdrs = ["selector.h"],
     deps = [
-        "//cuttlefish/common/libs/utils:users",
+        "//cuttlefish/ansi_codes:terminal_colors",
         "//cuttlefish/host/commands/cvd/cli:command_request",
         "//cuttlefish/host/commands/cvd/cli:interruptible_terminal",
-        "//cuttlefish/host/commands/cvd/cli:utils",
+        "//cuttlefish/host/commands/cvd/cli/selector:selector_common_parser",
         "//cuttlefish/host/commands/cvd/instances",
         "//cuttlefish/host/commands/cvd/instances:instance_manager",
-        "//cuttlefish/result",
-        "//libbase",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
         "@abseil-cpp//absl/strings",
+        "@fmt",
     ],
 )
 
@@ -83,11 +82,9 @@ cf_cc_library(
     deps = [
         "//cuttlefish/common/libs/utils:contains",
         "//cuttlefish/flag_parser",
-        "//cuttlefish/host/commands/cvd/cli:types",
         "//cuttlefish/host/commands/cvd/cli/selector:selector_constants",
         "//cuttlefish/host/commands/cvd/instances:device_name",
         "//cuttlefish/result",
-        "//libbase",
     ],
 )
 

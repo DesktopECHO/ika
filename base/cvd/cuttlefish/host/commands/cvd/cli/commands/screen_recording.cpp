@@ -18,7 +18,6 @@
 
 #include <chrono>
 #include <iostream>
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -29,9 +28,7 @@
 #include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/flag_parser/gflags_compat.h"
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
-#include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
 #include "cuttlefish/host/commands/cvd/cli/selector/selector.h"
-#include "cuttlefish/host/commands/cvd/cli/types.h"
 #include "cuttlefish/host/commands/cvd/instances/instance_manager.h"
 #include "cuttlefish/host/commands/cvd/instances/local_instance.h"
 #include "cuttlefish/result/result.h"
@@ -94,7 +91,7 @@ Result<void> StartStopRecording(const RecordingFlags& flags,
         flags.subcmd == kStartSubcmd
             ? instance.StartRecording(std::chrono::seconds(flags.timeout))
             : instance.StopRecording(std::chrono::seconds(flags.timeout));
-    if (!result.ok()) {
+    if (!result.has_value()) {
       LOG(ERROR) << "Failed to " << flags.subcmd
                  << " screen recording for instance " << instance.Name() << ": "
                  << result.error();
@@ -118,7 +115,7 @@ Result<void> ListRecordings(const LocalInstanceGroup& group,
     Json::Value recordings_array(Json::arrayValue);
     std::vector<std::string> recordings;
     Result<std::vector<std::string>> result = instance.ListRecordings();
-    if (result.ok()) {
+    if (result.has_value()) {
       recordings = std::move(*result);
     } else {
       LOG(ERROR) << "Failed to list screen recording for instance "
@@ -160,7 +157,7 @@ Result<void> ScreenRecordingCommandHandler::Handle(
   return {};
 }
 
-cvd_common::Args ScreenRecordingCommandHandler::CmdList() const {
+std::vector<std::string> ScreenRecordingCommandHandler::CmdList() const {
   return {kScreenRecordingCmd};
 }
 
@@ -190,12 +187,6 @@ ScreenRecordingCommandHandler::SelectInstances(const CommandRequest& request) {
     return std::pair<LocalInstanceGroup, std::vector<LocalInstance>>(
         group, group.Instances());
   }
-}
-
-std::unique_ptr<CvdCommandHandler> NewScreenRecordingCommandHandler(
-    InstanceManager& instance_manager) {
-  return std::unique_ptr<CvdCommandHandler>(
-      new ScreenRecordingCommandHandler(instance_manager));
 }
 
 }  // namespace cuttlefish

@@ -1,0 +1,208 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(
+    default_visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "cmsg",
+    srcs = ["cmsg.cpp"],
+    hdrs = ["include/android-base/cmsg.h"],
+    strip_include_prefix = "include",
+    deps = [
+        ":collections",
+        ":file_logging",
+        ":macros",
+        ":unique_fd",
+    ],
+)
+
+cc_library(
+    name = "collections",
+    hdrs = ["include/android-base/collections.h"],
+    strip_include_prefix = "include",
+)
+
+cc_library(
+    name = "endian",
+    hdrs = ["include/android-base/endian.h"],
+    strip_include_prefix = "include",
+)
+
+cc_library(
+    name = "errno_restorer",
+    hdrs = ["include/android-base/errno_restorer.h"],
+    strip_include_prefix = "include",
+)
+
+cc_library(
+    name = "errors",
+    srcs = ["errors_unix.cpp"],
+    hdrs = ["include/android-base/errors.h"],
+    strip_include_prefix = "include",
+)
+
+cc_library(
+    name = "expected",
+    hdrs = ["include/android-base/expected.h"],
+    strip_include_prefix = "include",
+)
+
+cc_library(
+    name = "file_logging",
+    srcs = [
+        "file.cpp",
+        "logging.cpp",
+        "logging_splitters.h",
+    ],
+    hdrs = [
+        "include/android-base/file.h",
+        "include/android-base/logging.h",
+        "include/android-base/utf8.h",
+    ],
+    strip_include_prefix = "include",
+    deps = [
+        ":macros",
+        ":off64_t",
+        ":strings",
+        ":threads",
+        ":unique_fd",
+        "@android_system_logging//:liblog",
+    ],
+)
+
+cc_library(
+    name = "format",
+    hdrs = ["include/android-base/format.h"],
+    strip_include_prefix = "include",
+    deps = ["@fmt"],
+)
+
+cc_library(
+    name = "macros",
+    hdrs = ["include/android-base/macros.h"],
+    strip_include_prefix = "include",
+)
+
+cc_library(
+    name = "mapped_file",
+    srcs = ["mapped_file.cpp"],
+    hdrs = ["include/android-base/mapped_file.h"],
+    strip_include_prefix = "include",
+    deps = [
+        ":macros",
+        ":off64_t",
+        ":unique_fd",
+    ],
+)
+
+cc_library(
+    name = "no_destructor",
+    hdrs = ["include/android-base/no_destructor.h"],
+    strip_include_prefix = "include",
+)
+
+cc_library(
+    name = "off64_t",
+    hdrs = ["include/android-base/off64_t.h"],
+    strip_include_prefix = "include",
+)
+
+cc_library(
+    name = "parsebool",
+    srcs = ["parsebool.cpp"],
+    hdrs = ["include/android-base/parsebool.h"],
+    strip_include_prefix = "include",
+)
+
+cc_library(
+    name = "parseint",
+    hdrs = ["include/android-base/parseint.h"],
+    strip_include_prefix = "include",
+)
+
+cc_library(
+    name = "parsenetaddress",
+    srcs = ["parsenetaddress.cpp"],
+    hdrs = ["include/android-base/parsenetaddress.h"],
+    strip_include_prefix = "include",
+    deps = [
+        ":stringprintf",
+        ":strings",
+    ],
+)
+
+cc_library(
+    name = "posix_strerror_r",
+    srcs = ["posix_strerror_r.cpp"],
+    copts = ["-D_POSIX_C_SOURCE=200112"],
+)
+
+cc_library(
+    name = "properties",
+    srcs = ["properties.cpp"],
+    hdrs = ["include/android-base/properties.h"],
+    strip_include_prefix = "include",
+    deps = [
+        ":parsebool",
+        ":parseint",
+        ":strings",
+        ":thread_annotations",
+    ],
+)
+
+cc_library(
+    name = "result",
+    srcs = ["result.cpp"],
+    hdrs = ["include/android-base/result.h"],
+    strip_include_prefix = "include",
+    deps = [
+        ":errors",
+        ":expected",
+        ":format",
+    ],
+)
+
+cc_library(
+    name = "scopeguard",
+    hdrs = ["include/android-base/scopeguard.h"],
+    strip_include_prefix = "include",
+)
+
+cc_library(
+    name = "stringprintf",
+    srcs = ["stringprintf.cpp"],
+    hdrs = ["include/android-base/stringprintf.h"],
+    strip_include_prefix = "include",
+)
+
+cc_library(
+    name = "strings",
+    srcs = ["strings.cpp"],
+    hdrs = ["include/android-base/strings.h"],
+    cxxopts = ["-std=c++20"],
+    strip_include_prefix = "include",
+    deps = [
+        ":posix_strerror_r",
+        ":stringprintf",
+    ],
+)
+
+cc_library(
+    name = "thread_annotations",
+    hdrs = ["include/android-base/thread_annotations.h"],
+    strip_include_prefix = "include",
+)
+
+cc_library(
+    name = "threads",
+    srcs = ["threads.cpp"],
+    hdrs = ["include/android-base/threads.h"],
+    strip_include_prefix = "include",
+)
+
+cc_library(
+    name = "unique_fd",
+    hdrs = ["include/android-base/unique_fd.h"],
+    strip_include_prefix = "include",
+)

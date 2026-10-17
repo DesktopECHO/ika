@@ -6,8 +6,6 @@ package(
     default_visibility = ["//:android_cuttlefish"],
 )
 
-exports_files([".clang-tidy"])
-
 cf_cc_library(
     name = "chroot",
     srcs = ["chroot.cc"],
@@ -68,6 +66,8 @@ cf_cc_library(
     hdrs = ["copy.h"],
     deps = [
         "//cuttlefish/io",
+        "//cuttlefish/io:reader",
+        "//cuttlefish/io:writer",
         "//cuttlefish/result:expect",
         "//cuttlefish/result:result_type",
     ],
@@ -107,7 +107,6 @@ cf_cc_test(
         "//cuttlefish/io",
         "//cuttlefish/io:cpio",
         "//cuttlefish/io:in_memory",
-        "//cuttlefish/io:read_exact",
         "//cuttlefish/io:string",
         "//cuttlefish/result",
         "//cuttlefish/result:result_matchers",
@@ -122,7 +121,8 @@ cf_cc_library(
         "//cuttlefish/io",
         "//cuttlefish/io:concat",
         "//cuttlefish/io:read_window_view",
-        "//cuttlefish/io:shared_fd",
+        "//cuttlefish/io:reader",
+        "//cuttlefish/io:writer",
         "//cuttlefish/result:expect",
         "//cuttlefish/result:result_type",
     ],
@@ -133,7 +133,6 @@ cf_cc_library(
     srcs = ["disjoint_range_set.cc"],
     hdrs = ["disjoint_range_set.h"],
     deps = [
-        "//libbase",
         "@abseil-cpp//absl/log:check",
     ],
 )
@@ -214,7 +213,6 @@ cf_cc_test(
         "//cuttlefish/io",
         "//cuttlefish/io:in_memory",
         "//cuttlefish/result:result_matchers",
-        "//cuttlefish/result:result_type",
         "@abseil-cpp//absl/strings",
     ],
 )
@@ -224,6 +222,9 @@ cf_cc_library(
     srcs = ["io.cc"],
     hdrs = ["io.h"],
     deps = [
+        "//cuttlefish/io:reader",
+        "//cuttlefish/io:visitable",
+        "//cuttlefish/io:writer",
         "//cuttlefish/result:expect",
         "//cuttlefish/result:result_type",
     ],
@@ -234,11 +235,13 @@ cf_cc_library(
     srcs = ["lazily_loaded_file.cc"],
     hdrs = ["lazily_loaded_file.h"],
     deps = [
-        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/io",
         "//cuttlefish/io:disjoint_range_set",
         "//cuttlefish/io:serialize_disjoint_range_set",
+        "//cuttlefish/io:string",
+        "//cuttlefish/io:write_exact",
         "//cuttlefish/result",
         "@abseil-cpp//absl/log",
     ],
@@ -271,9 +274,11 @@ cf_cc_library(
     srcs = ["lz4_legacy.cc"],
     hdrs = ["lz4_legacy.h"],
     deps = [
-        "//cuttlefish/io",
         "//cuttlefish/io:read_exact",
+        "//cuttlefish/io:reader",
+        "//cuttlefish/io:visitable",
         "//cuttlefish/io:write_exact",
+        "//cuttlefish/io:writer",
         "//cuttlefish/result:expect",
         "//cuttlefish/result:result_type",
         "@lz4",
@@ -288,9 +293,10 @@ cf_cc_test(
         "//cuttlefish/io:filesystem",
         "//cuttlefish/io:in_memory",
         "//cuttlefish/io:lz4_legacy",
-        "//cuttlefish/io:read_exact",
+        "//cuttlefish/io:reader",
         "//cuttlefish/io:string",
         "//cuttlefish/io:write_exact",
+        "//cuttlefish/io:writer",
         "//cuttlefish/result",
         "//cuttlefish/result:result_matchers",
     ],
@@ -301,11 +307,11 @@ cf_cc_library(
     srcs = ["native_filesystem.cc"],
     hdrs = ["native_filesystem.h"],
     deps = [
-        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/io",
         "//cuttlefish/io:filesystem",
-        "//cuttlefish/io:shared_fd",
-        "//cuttlefish/posix:strerror",
+        "//cuttlefish/posix:remove",
+        "//cuttlefish/posix:stat",
         "//cuttlefish/result:expect",
         "//cuttlefish/result:result_type",
     ],
@@ -317,6 +323,7 @@ cf_cc_library(
     hdrs = ["read_exact.h"],
     deps = [
         "//cuttlefish/io",
+        "//cuttlefish/io:reader",
         "//cuttlefish/result:expect",
         "//cuttlefish/result:result_type",
     ],
@@ -343,6 +350,14 @@ cf_cc_test(
         "//cuttlefish/io:read_window_view",
         "//cuttlefish/io:string",
         "//cuttlefish/result:result_matchers",
+    ],
+)
+
+cf_cc_library(
+    name = "reader",
+    hdrs = ["reader.h"],
+    deps = [
+        "//cuttlefish/io:visitable",
         "//cuttlefish/result:result_type",
     ],
 )
@@ -364,20 +379,7 @@ cf_cc_test(
     deps = [
         "//cuttlefish/io:disjoint_range_set",
         "//cuttlefish/io:serialize_disjoint_range_set",
-        "//cuttlefish/result",
         "//cuttlefish/result:result_matchers",
-    ],
-)
-
-cf_cc_library(
-    name = "shared_fd",
-    srcs = ["shared_fd.cc"],
-    hdrs = ["shared_fd.h"],
-    deps = [
-        "//cuttlefish/common/libs/fs",
-        "//cuttlefish/io",
-        "//cuttlefish/result:expect",
-        "//cuttlefish/result:result_type",
     ],
 )
 
@@ -386,8 +388,16 @@ cf_cc_library(
     srcs = ["string.cc"],
     hdrs = ["string.h"],
     deps = [
-        "//cuttlefish/io",
+        "//cuttlefish/io:reader",
         "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+    ],
+)
+
+cf_cc_library(
+    name = "visitable",
+    hdrs = ["visitable.h"],
+    deps = [
         "//cuttlefish/result:result_type",
     ],
 )
@@ -397,8 +407,17 @@ cf_cc_library(
     srcs = ["write_exact.cc"],
     hdrs = ["write_exact.h"],
     deps = [
-        "//cuttlefish/io",
+        "//cuttlefish/io:writer",
         "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+    ],
+)
+
+cf_cc_library(
+    name = "writer",
+    hdrs = ["writer.h"],
+    deps = [
+        "//cuttlefish/io:visitable",
         "//cuttlefish/result:result_type",
     ],
 )

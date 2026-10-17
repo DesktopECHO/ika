@@ -17,23 +17,28 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
+#include <memory>
+#include <set>
+#include <string>
 #include <vector>
 
-#include <android-base/file.h>
-#include "absl/strings/str_join.h"
-#include "absl/strings/str_split.h"
-#include <fmt/ranges.h>  // NOLINT(misc-include-cleaner): version difference
 #include "absl/log/log.h"
+#include "absl/strings/str_join.h"
+#include "android-base/file.h"
+#include "fmt/format.h"
+#include "fmt/ranges.h"
 
-#include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/in_sandbox.h"
-#include "cuttlefish/common/libs/utils/proc_file_utils.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
-#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
+#include "cuttlefish/files/directory_contents.h"
 #include "cuttlefish/host/libs/config/config_utils.h"
+#include "cuttlefish/posix/stat.h"
 #include "cuttlefish/posix/strerror.h"
+#include "cuttlefish/process/proc_file_utils.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -61,11 +66,12 @@ Result<void> CleanPriorFiles(const std::string& path,
     }
     return {};
   }
-  std::unique_ptr<DIR, int(*)(DIR*)> dir(opendir(path.c_str()), closedir);
+  std::unique_ptr<DIR, int (*)(DIR*)> dir(opendir(path.c_str()), closedir);
   if (!dir) {
     return CF_ERRNO("Could not clean \"" << path << "\"");
   }
-  for (auto entity = readdir(dir.get()); entity != nullptr; entity = readdir(dir.get())) {
+  for (auto entity = readdir(dir.get()); entity != nullptr;
+       entity = readdir(dir.get())) {
     std::string entity_name(entity->d_name);
     if (entity_name == "." || entity_name == "..") {
       continue;
@@ -105,7 +111,7 @@ Result<std::vector<pid_t>> GetPidsUsingFiles(
     Result<std::vector<std::string>> entity_names =
         DirectoryContents(fd_dir_path);
 
-    if (!entity_names.ok()) {
+    if (!entity_names.has_value()) {
       continue;
     }
 
@@ -144,14 +150,14 @@ Result<void> CleanPriorFiles(const std::vector<std::string>& paths,
   std::set<std::string> prior_dirs;
   std::set<std::string> prior_files;
   for (const auto& path : paths) {
-    struct stat statbuf;
-    if (stat(path.c_str(), &statbuf) < 0) {
+    Result<struct stat> statbuf = Stat(path);
+    if (!statbuf.has_value()) {
       if (errno == ENOENT) {
         continue;  // it doesn't exist yet, so there is no work to do
       }
       return CF_ERRNO("Could not stat \"" << path << "\"");
     }
-    bool is_directory = (statbuf.st_mode & S_IFMT) == S_IFDIR;
+    bool is_directory = (statbuf->st_mode & S_IFMT) == S_IFDIR;
     (is_directory ? prior_dirs : prior_files).emplace(path);
   }
   VLOG(0) << fmt::format("Prior dirs: {}", fmt::join(prior_dirs, ", "));
@@ -173,7 +179,7 @@ Result<void> CleanPriorFiles(const std::vector<std::string>& paths,
   return {};
 }
 
-} // namespace
+}  // namespace
 
 Result<void> CleanPriorFiles(const std::set<std::string>& preserving,
                              const std::vector<std::string>& clean_dirs) {
@@ -184,10 +190,10 @@ Result<void> CleanPriorFiles(const std::set<std::string>& preserving,
   paths.insert(paths.end(), clean_dirs.begin(), clean_dirs.end());
   using absl::StrJoin;
   CF_EXPECT(CleanPriorFiles(paths, preserving),
-            "CleanPriorFiles("
-                << "paths = {" << StrJoin(paths, ", ") << "}, "
-                << "preserving = {" << StrJoin(preserving, ", ") << "}) failed");
+            "CleanPriorFiles(" << "paths = {" << StrJoin(paths, ", ") << "}, "
+                               << "preserving = {" << StrJoin(preserving, ", ")
+                               << "}) failed");
   return {};
 }
 
-} // namespace cuttlefish
+}  // namespace cuttlefish

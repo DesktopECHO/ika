@@ -20,10 +20,11 @@
 #include <vector>
 
 #include "absl/strings/str_split.h"
-#include <gflags/gflags.h>
+#include "gflags/gflags.h"
 
 #include "cuttlefish/host/commands/assemble_cvd/flags/flag_base.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags_defaults.h"
+#include "cuttlefish/host/libs/config/config_utils.h"
 #include "cuttlefish/result/result.h"
 
 DEFINE_string(system_image_dir, CF_DEFAULTS_SYSTEM_IMAGE_DIR,
@@ -45,8 +46,7 @@ Result<SystemImageDirFlag> SystemImageDirFlag::FromGlobalGflags() {
   CF_EXPECTF(!system_image_dir_flag.empty(), "--{} must be specified.",
              kFlagName);
 
-  std::vector<std::string> paths =
-      absl::StrSplit(system_image_dir_flag, ',');
+  std::vector<std::string> paths = absl::StrSplit(system_image_dir_flag, ',');
   return SystemImageDirFlag(std::move(paths), flag_info.is_default);
 }
 

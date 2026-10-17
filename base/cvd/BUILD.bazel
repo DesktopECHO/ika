@@ -1,5 +1,6 @@
 load("@rules_cc//cc:cc_import.bzl", "cc_import")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//cuttlefish/bazel:rules.bzl", "cf_build_test")
 
 package_group(
     name = "android_cuttlefish",
@@ -12,29 +13,23 @@ package(
     default_visibility = ["//:android_cuttlefish"],
 )
 
-exports_files([".clang-tidy"])
+cf_build_test(
+    name = "cf_build_test",
+    srcs = [
+        "MODULE.bazel",
+        "build_variables.bzl",
+    ],
+)
+
+exports_files([
+    ".clang-tidy",
+    ".shellcheckrc",
+])
 
 genrule(
     name = "build_compilation_mode_txt",
     outs = ["build/compilation_mode.txt"],
     cmd = "echo $(COMPILATION_MODE) > $@",
-)
-
-filegroup(
-    name = "clang_tidy_config",
-    srcs = [
-        ".clang-tidy",
-        "//cuttlefish/host/commands/assemble_cvd/android_build:.clang-tidy",
-        "//cuttlefish/host/commands/cvd/cli/commands:.clang-tidy",
-        "//cuttlefish/host/commands/kernel_log_monitor:.clang-tidy",
-        "//cuttlefish/host/commands/mkenvimage_slim:.clang-tidy",
-        "//cuttlefish/host/commands/run_cvd:.clang-tidy",
-        "//cuttlefish/host/libs/config:.clang-tidy",
-        "//cuttlefish/host/libs/config/esp:.clang-tidy",
-        "//cuttlefish/host/libs/web:.clang-tidy",
-        "//cuttlefish/host/libs/zip:.clang-tidy",
-        "//cuttlefish/host/libs/zip/libzip_cc:.clang-tidy",
-    ],
 )
 
 # for crosvm/jail. Has to be in the base repository, as the @crosvm repository isn't visible.
@@ -80,5 +75,23 @@ alias(
 cc_import(
     name = "gfxstream_backend_import",
     shared_library = ":gfxstream_backend",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "virglrenderer",
+    actual = "@virglrenderer//:libvirglrenderer.so.1",
+    visibility = ["//visibility:public"],
+)
+
+cc_import(
+    name = "virglrenderer_import",
+    shared_library = ":virglrenderer",
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "gbm",
+    linkopts = ["-lgbm"],
     visibility = ["//visibility:public"],
 )

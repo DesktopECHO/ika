@@ -1,9 +1,11 @@
 load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
-load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
 
 package(
     default_visibility = ["//:android_cuttlefish"],
 )
+
+exports_files([".clang-tidy"])
 
 string_flag(
     name = "driver",
@@ -11,77 +13,64 @@ string_flag(
 )
 
 config_setting(
-  name = "netlink",
-  flag_values = {
-    ":driver": "netlink"
-  }
+    name = "netlink",
+    flag_values = {
+        ":driver": "netlink",
+    },
 )
 
 config_setting(
-  name = "iproute2",
-  flag_values = {
-    ":driver": "iproute2"
-  }
+    name = "iproute2",
+    flag_values = {
+        ":driver": "iproute2",
+    },
 )
 
-cc_library(
+cf_cc_library(
     name = "alloc_utils",
-    srcs = [
-        "alloc_utils.cpp",
-    ],
-    hdrs = [
-        "alloc_utils.h",
-    ],
+    srcs = ["alloc_utils.cpp"],
+    hdrs = ["alloc_utils.h"],
     deps = select({
         ":netlink": [":alloc_netlink"],
         "//conditions:default": [":alloc_iproute2"],
     }) + [
-        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/common/libs/utils:files",
-        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/common/libs/utils:network",
         "//cuttlefish/host/commands/cvd/utils:common",
-        "//cuttlefish/host/libs/config:logging",
+        "//cuttlefish/process:execute",
         "//cuttlefish/result",
+        "@abseil-cpp//absl/base:no_destructor",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/strings:str_format",
     ],
 )
 
-cc_library(
+cf_cc_library(
     name = "alloc_iproute2",
-    srcs = [
-        "alloc_iproute2.cpp",
-    ],
-    hdrs = [
-        "alloc_driver.h",
-    ],
+    srcs = ["alloc_iproute2.cpp"],
+    hdrs = ["alloc_driver.h"],
     deps = [
+        "//cuttlefish/process:execute",
         "//cuttlefish/result",
-        "//cuttlefish/common/libs/utils:subprocess",
+        "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/strings:str_format",
-        "@abseil-cpp//absl/log",
     ],
 )
 
-cc_library(
+cf_cc_library(
     name = "alloc_netlink",
-    srcs = [
-        "alloc_netlink.cpp",
-    ],
-    hdrs = [
-        "alloc_driver.h",
-    ],
+    srcs = ["alloc_netlink.cpp"],
+    hdrs = ["alloc_driver.h"],
     deps = [
         "//allocd/net:netlink",
-        "//cuttlefish/common/libs/fs",
-        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/common/libs/fs:fd",
+        "//cuttlefish/process:execute",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/log:check",
         "@abseil-cpp//absl/strings",
-        "@abseil-cpp//absl/strings:str_format",
     ],
 )

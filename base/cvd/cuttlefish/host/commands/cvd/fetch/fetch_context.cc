@@ -24,6 +24,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/log/log.h"
 #include "absl/strings/match.h"
 #include "absl/strings/strip.h"
 #include "android-base/file.h"
@@ -31,17 +32,25 @@
 #include "fmt/ranges.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/files/copy.h"
+#include "cuttlefish/files/directory_exists.h"
+#include "cuttlefish/files/file_exists.h"
+#include "cuttlefish/files/link_or_copy.h"
+#include "cuttlefish/files/recursively_remove_directory.h"
 #include "cuttlefish/host/commands/cvd/fetch/builds.h"
 #include "cuttlefish/host/commands/cvd/fetch/de_android_sparse.h"
 #include "cuttlefish/host/commands/cvd/fetch/fetch_tracer.h"
 #include "cuttlefish/host/commands/cvd/fetch/target_directories.h"
+#include "cuttlefish/host/libs/avb/avb.h"
 #include "cuttlefish/host/libs/config/fetcher_config.h"
 #include "cuttlefish/host/libs/config/file_source.h"
-#include "cuttlefish/host/libs/web/android_build_api.h"
+#include "cuttlefish/host/libs/web/android_build.h"
 #include "cuttlefish/host/libs/web/build_api.h"
 #include "cuttlefish/host/libs/web/build_api_zip.h"
+#include "cuttlefish/host/libs/web/url_namespace.h"
 #include "cuttlefish/host/libs/zip/libzip_cc/archive.h"
 #include "cuttlefish/host/libs/zip/zip_file.h"
+#include "cuttlefish/posix/remove.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -49,6 +58,40 @@ namespace cuttlefish {
 static constexpr mode_t kRwxAllMode = S_IRWXU | S_IRWXG | S_IRWXO;
 
 using android::base::Dirname;
+
+namespace {
+
+bool IsVbmetaImage(std::string_view path) {
+  return absl::EndsWith(path, "/vbmeta.img") ||
+         absl::EndsWith(path, "/vbmeta_system.img") ||
+         absl::EndsWith(path, "/vbmeta_system_dlkm.img") ||
+         absl::EndsWith(path, "/vbmeta_vendor_dlkm.img");
+}
+
+void PadVbmetaImage(const std::string& path) {
+  /*
+   * Try enforcing the vbmeta size now. If it fails, then let
+   * `assemble_cvd` trip on it later; don't fail the fetch.
+   */
+  if (Result<void> result = EnforceVbMetaSize(path); !result.has_value()) {
+    LOG(WARNING) << "PadVbmetaImage: failed padding " << path << ": "
+                 << result.error();
+  }
+}
+
+Result<size_t> DirectoryContentsSize(const std::string& dir) {
+  size_t size = 0;
+  CF_EXPECT(
+      WalkDirectory(dir, [&size](const std::string& path) -> Result<void> {
+        if (!DirectoryExists(path)) {
+          size += FileSize(path);
+        }
+        return {};
+      }));
+  return size;
+}
+
+}  // namespace
 
 FetchArtifact::FetchArtifact(FetchBuildContext& context,
                              std::string artifact_name)
@@ -68,20 +111,39 @@ Result<void> FetchArtifact::DownloadTo(std::string local_path) {
         CF_EXPECT(fetch_build_context_.fetch_context_.build_api_.DownloadFile(
             fetch_build_context_.build_, fetch_build_context_.target_directory_,
             artifact_name_));
-    size_t size = FileSize(downloaded);
+    is_directory_ = DirectoryExists(downloaded);
+    const size_t size = is_directory_
+                            ? CF_EXPECT(DirectoryContentsSize(downloaded))
+                            : FileSize(downloaded);
     std::string download_phase = fmt::format("Downloaded '{}'", artifact_name_);
     fetch_build_context_.trace_.CompletePhase(download_phase, size);
-    CF_EXPECT(fetch_build_context_.DesparseFiles({artifact_name_}));
+    if (!is_directory_) {
+      CF_EXPECT(fetch_build_context_.DesparseFiles({artifact_name_}));
+    }
 
     CF_EXPECT(EnsureDirectoryExists(android::base::Dirname(new_path)));
     CF_EXPECT(RenameFile(downloaded, new_path));
 
     downloaded_path_ = new_path;
-    if (absl::EndsWith(downloaded_path_, ".zip")) {
+    if (!is_directory_ && absl::EndsWith(downloaded_path_, ".zip")) {
       zip_ = CF_EXPECT(ZipOpenRead(downloaded_path_));
     }
   } else {
-    CF_EXPECT(Copy(downloaded_path_, new_path));
+    if (is_directory_) {
+      CF_EXPECT(
+          LinkOrCopyDirectoryContentsRecursively(downloaded_path_, new_path));
+    } else {
+      CF_EXPECT(Copy(downloaded_path_, new_path));
+    }
+  }
+
+  if (is_directory_) {
+    // Only the files extracted from the directory go in the fetcher config.
+    return {};
+  }
+
+  if (IsVbmetaImage(new_path)) {
+    PadVbmetaImage(new_path);
   }
 
   CF_EXPECT(fetch_build_context_.AddFileToConfig(downloaded_path_));
@@ -104,6 +166,23 @@ Result<void> FetchArtifact::ExtractAll() {
 }
 
 Result<void> FetchArtifact::ExtractAll(const std::string& local_path) {
+  if (is_directory_) {
+    std::vector<std::string> members;
+    CF_EXPECT(WalkDirectory(
+        downloaded_path_,
+        [this, &members](const std::string& path) -> Result<void> {
+          if (!DirectoryExists(path)) {
+            members.emplace_back(path.substr(downloaded_path_.size() + 1));
+          }
+          return {};
+        }));
+    for (const std::string& member_name : members) {
+      const std::string extract_path =
+          fmt::format("{}/{}", local_path, member_name);
+      CF_EXPECT(ExtractOneTo(member_name, extract_path));
+    }
+    return {};
+  }
   ReadableZip* zip = CF_EXPECT(AsZip());
   size_t entries = CF_EXPECT(zip->NumEntries());
   for (uint64_t i = 0; i < entries; i++) {
@@ -126,7 +205,6 @@ Result<void> FetchArtifact::ExtractOne(const std::string& member_name) {
 
 Result<void> FetchArtifact::ExtractOneTo(const std::string& member_name,
                                          const std::string& local_path) {
-  ReadableZip* zip = CF_EXPECT(AsZip());
   std::string extract_path =
       fmt::format("{}/{}", fetch_build_context_.target_directory_, local_path);
 
@@ -134,8 +212,29 @@ Result<void> FetchArtifact::ExtractOneTo(const std::string& member_name,
     CF_EXPECT(EnsureDirectoryExists(dir, kRwxAllMode));
   }
 
-  CF_EXPECT(ExtractFile(*zip, member_name, extract_path),
-            "Failed to extract " << member_name << " to " << extract_path);
+  if (is_directory_) {
+    const std::string member_path =
+        fmt::format("{}/{}", downloaded_path_, member_name);
+    CF_EXPECTF(FileExists(member_path) && !DirectoryExists(member_path),
+               "'{}' not found in '{}'", member_name, downloaded_path_);
+    if (IsVbmetaImage(extract_path)) {
+      // Padding below resizes the file in place, so don't share its inode
+      // with the source, which may be a download cache entry.
+      if (FileExists(extract_path)) {
+        CF_EXPECT(RemoveFile(extract_path));
+      }
+      CF_EXPECT(Copy(member_path, extract_path));
+    } else {
+      // De-sparsing below replaces the file rather than writing to it, so a
+      // hard link is safe.
+      CF_EXPECT(LinkOrCopy(member_path, extract_path,
+                           /* overwrite_existing = */ true));
+    }
+  } else {
+    ReadableZip* zip = CF_EXPECT(AsZip());
+    CF_EXPECT(ExtractFile(*zip, member_name, extract_path),
+              "Failed to extract " << member_name << " to " << extract_path);
+  }
 
   CF_EXPECT(fetch_build_context_.AddFileToConfig(extract_path, artifact_name_,
                                                  local_path));
@@ -148,11 +247,20 @@ Result<void> FetchArtifact::ExtractOneTo(const std::string& member_name,
   // TODO: b/471069557 - diagnose unused
   Result<void> unused = fetch_build_context_.DesparseFiles({local_path});
 
+  if (IsVbmetaImage(extract_path)) {
+    PadVbmetaImage(extract_path);
+  }
+
   return {};
 }
 
 Result<void> FetchArtifact::DeleteLocalFile() {
   if (downloaded_path_.empty()) {
+    return {};
+  }
+  if (is_directory_) {
+    CF_EXPECT(RecursivelyRemoveDirectory(downloaded_path_));
+    downloaded_path_ = "";
     return {};
   }
   CF_EXPECT(RemoveFile(downloaded_path_));
@@ -178,13 +286,28 @@ FetchBuildContext::FetchBuildContext(FetchContext& fetch_context,
       file_source_(file_source),
       trace_(trace) {}
 
-const Build& FetchBuildContext::Build() const { return build_; }
+const cuttlefish::Build& FetchBuildContext::Build() const { return build_; }
 
-std::string FetchBuildContext::GetBuildZipName(const std::string& name) const {
-  std::string product =
+Result<std::string> FetchBuildContext::GetBuildZipName(
+    BuildZipKind kind) const {
+  if (const GcsBuild* gcs = std::get_if<GcsBuild>(&build_)) {
+    if (gcs->object.has_value()) {
+      return CF_EXPECT(ResolveUrlZipName(*gcs->object, kind));
+    }
+    return CF_EXPECT(ResolveUrlZipName(GcsArtifactNames(*gcs), kind));
+  }
+  if (const HttpBuild* http = std::get_if<HttpBuild>(&build_)) {
+    CF_EXPECTF(http->object.has_value(),
+               "Cannot discover the '{}' zip of a directory that has no "
+               "listing.  Name the archive itself in the URL, or use a "
+               "'gs://' URL, which lists its contents.",
+               kind);
+    return CF_EXPECT(ResolveUrlZipName(*http->object, kind));
+  }
+  const std::string product =
       std::visit([](auto&& arg) { return arg.product; }, build_);
-  std::string id = std::get<0>(GetBuildIdAndTarget(build_));
-  return product + "-" + name + "-" + id + ".zip";
+  const std::string id = std::get<0>(GetBuildIdAndTarget(build_));
+  return fmt::format("{}-{}-{}.zip", product, kind, id);
 }
 
 std::optional<std::string> FetchBuildContext::GetFilepath() const {
@@ -229,7 +352,7 @@ Result<void> FetchBuildContext::AddFileToConfig(std::string file,
 }
 
 std::ostream& operator<<(std::ostream& out, const FetchBuildContext& context) {
-  return out << context.Build();
+  return out << FetchLabel(context.Build());
 }
 
 FetchContext::FetchContext(BuildApi& build_api,

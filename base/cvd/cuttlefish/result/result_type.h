@@ -15,7 +15,7 @@
 
 #pragma once
 
-#include "android-base/result.h"  // IWYU pragma: export
+#include "tl/expected.hpp"  // IWYU pragma: export
 
 #include "cuttlefish/result/error_type.h"
 
@@ -26,7 +26,7 @@ namespace cuttlefish {
  * but specialized to use a specific error type. The error type tracks a stack
  * trace of the failure that is built as a failure unrolls the call stack.
  */
-template <typename T>
-using Result = android::base::expected<T, StackTraceError>;
+template <typename T, typename E = void>
+using Result = tl::expected<T, StackTraceError<E>>;
 
 }  // namespace cuttlefish

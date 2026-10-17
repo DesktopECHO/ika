@@ -4,7 +4,7 @@ git_repository(
     name = "gfxstream",
     commit = "07ee40efb0e7037a9a9b7fe59071e7c4997e7cbe",
     remote = "https://github.com/google/gfxstream.git",
-    patch_strip = 1,
+    patch_args = ["-p1"],
     patches = [
         "@//build_external/gfxstream:PATCH.gfxstream.integrated-gpu-score.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.protobuf-deprecation-warning.patch",

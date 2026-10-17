@@ -14,9 +14,6 @@
  * limitations under the License.
  */
 
-#include "cuttlefish/host/commands/run_cvd/server_loop_impl.h"
-
-#include <fcntl.h>
 #include <sys/wait.h>  // IWYU pragma: keep (siginfo_t)
 
 #include <ostream>
@@ -29,12 +26,10 @@
 #include "android-base/file.h"
 #include "json/value.h"
 
-#include "cuttlefish/common/libs/fs/shared_buf.h"
-#include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/contains.h"
-#include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/json.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
+#include "cuttlefish/files/file_exists.h"
+#include "cuttlefish/host/commands/run_cvd/server_loop_impl.h"
 #include "cuttlefish/host/libs/command_util/runner/run_cvd.pb.h"
 #include "cuttlefish/host/libs/command_util/snapshot_utils.h"
 #include "cuttlefish/host/libs/config/ap_boot_flow.h"
@@ -43,6 +38,9 @@
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/config/vmm_mode.h"
 #include "cuttlefish/host/libs/process_monitor/process_monitor.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/execute.h"
+#include "cuttlefish/process/subprocess_options.h"
 #include "cuttlefish/result/result.h"
 
 #ifndef WEXITED
@@ -190,8 +188,8 @@ static Result<void> RunAdbShellCommand(
 Result<void> ServerLoopImpl::HandleSuspend(ProcessMonitor& process_monitor) {
   // right order: guest -> host
   VLOG(0) << "Suspending the guest..";
-  CF_EXPECT(
-      RunAdbShellCommand(instance_, {"/vendor/bin/snapshot_hook_pre_suspend"}));
+  CF_EXPECT(RunAdbShellCommand(
+      instance_, {"su", "root", "/vendor/bin/snapshot_hook_pre_suspend"}));
   CF_EXPECT(SuspendGuest());
   VLOG(0) << "The guest is suspended.";
   CF_EXPECT(process_monitor.SuspendMonitoredProcesses(),
@@ -207,8 +205,8 @@ Result<void> ServerLoopImpl::HandleResume(ProcessMonitor& process_monitor) {
   VLOG(0) << "The host processes are resumed.";
   VLOG(0) << "Resuming the guest..";
   CF_EXPECT(ResumeGuest());
-  CF_EXPECT(
-      RunAdbShellCommand(instance_, {"/vendor/bin/snapshot_hook_post_resume"}));
+  CF_EXPECT(RunAdbShellCommand(
+      instance_, {"su", "root", "/vendor/bin/snapshot_hook_post_resume"}));
   VLOG(0) << "The guest resumed.";
   return {};
 }
@@ -267,13 +265,7 @@ Result<void> ServerLoopImpl::TakeGuestSnapshot(VmmMode vm_manager,
                                                const std::string& json_path) {
   // common code across vm_manager
   CF_EXPECTF(FileExists(json_path), "{} must exist but does not.", json_path);
-  SharedFD json_fd = SharedFD::Open(json_path, O_RDONLY);
-  CF_EXPECTF(json_fd->IsOpen(), "Failed to open {}", json_path);
-  std::string json_contents;
-  CF_EXPECT_GE(ReadAll(json_fd, &json_contents), 0,
-               std::string("Failed to read from ") + json_path);
-  Json::Value meta_json = CF_EXPECTF(
-      ParseJson(json_contents), "Failed to parse json: \n{}", json_contents);
+  Json::Value meta_json = CF_EXPECT(LoadFromFile(json_path));
   CF_EXPECTF(VmManagerIsCrosvm(vm_manager),
              "{}, which is not crosvm, is not yet supported.", vm_manager);
   CF_EXPECT(TakeCrosvmGuestSnapshot(meta_json),

@@ -22,9 +22,9 @@
 #include <utility>
 #include <vector>
 
-#include <fmt/core.h>
-#include <fmt/format.h>
 #include "absl/log/log.h"
+#include "fmt/core.h"
+#include "fmt/format.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/flag_parser/flag.h"
@@ -36,7 +36,6 @@
 #include "cuttlefish/host/commands/cvd/cli/parser/load_config.pb.h"
 #include "cuttlefish/host/commands/cvd/cli/parser/load_configs_parser.h"
 #include "cuttlefish/host/commands/cvd/cli/selector/selector_common_parser.h"
-#include "cuttlefish/host/commands/cvd/cli/types.h"
 #include "cuttlefish/host/commands/cvd/fetch/fetch_cvd.h"
 #include "cuttlefish/host/commands/cvd/instances/cvd_persistent_data.pb.h"
 #include "cuttlefish/host/commands/cvd/instances/instance_manager.h"
@@ -55,7 +54,6 @@ constexpr char kLoadSubCmd[] = "load";
 
 constexpr char kSummaryHelpText[] =
     "Creates and starts an instance group from a JSON configuration file";
-
 
 Result<CommandRequest> BuildFetchCmd(const CommandRequest& request,
                                      const CvdFlags& cvd_flags) {
@@ -150,7 +148,7 @@ Result<void> LoadConfigsCommand::Handle(const CommandRequest& request) {
           std::lock_guard lock(group_creation_mtx);
           auto group_res =
               instance_manager_.FindGroup({.group_name = group_name});
-          if (!group_res.ok()) {
+          if (!group_res.has_value()) {
             LOG(ERROR) << "Failed to load group from database: "
                        << group_res.error().Message();
             // Abort while holding the lock to prevent the group from being
@@ -160,7 +158,7 @@ Result<void> LoadConfigsCommand::Handle(const CommandRequest& request) {
           auto& group = *group_res;
           group.SetAllStates(cvd::INSTANCE_STATE_CANCELLED);
           auto update_res = instance_manager_.UpdateInstanceGroup(group);
-          if (!update_res.ok()) {
+          if (!update_res.has_value()) {
             LOG(ERROR) << "Failed to update groups status: "
                        << update_res.error().Message();
           }
@@ -171,9 +169,8 @@ Result<void> LoadConfigsCommand::Handle(const CommandRequest& request) {
 
   group_creation_mtx.lock();
   // Don't use CF_EXPECT here or the mutex will be left locked.
-  auto group_res =
-      CreateGroup(instance_manager_, flags_.base_dir, env_spec);
-  if (group_res.ok()) {
+  auto group_res = CreateGroup(instance_manager_, flags_.base_dir, env_spec);
+  if (group_res.has_value()) {
     // Have to initialize the group_name variable before releasing the mutex.
     group_name = (*group_res).GroupName();
   }
@@ -183,7 +180,7 @@ Result<void> LoadConfigsCommand::Handle(const CommandRequest& request) {
   auto cvd_flags = CF_EXPECT(ParseCvdConfigs(env_spec, group));
 
   auto res = LoadGroup(request, group, std::move(cvd_flags));
-  if (!res.ok()) {
+  if (!res.has_value()) {
     auto first_instance_state = group.Instances()[0].State();
     // The failure could have occurred during prepare(fetch) or start
     auto failed_state = first_instance_state == cvd::INSTANCE_STATE_PREPARING
@@ -203,7 +200,7 @@ Result<void> LoadConfigsCommand::LoadGroup(const CommandRequest& request,
                                            CvdFlags cvd_flags) {
   auto mkdir_res =
       EnsureDirectoryExists(group.HomeDir(), 0775, /* group_name */ "");
-  if (!mkdir_res.ok()) {
+  if (!mkdir_res.has_value()) {
     group.SetAllStates(cvd::INSTANCE_STATE_PREPARE_FAILED);
     // TODO: b/471069557 - diagnose unused
     Result<void> unused = instance_manager_.UpdateInstanceGroup(group);
@@ -213,9 +210,9 @@ Result<void> LoadConfigsCommand::LoadGroup(const CommandRequest& request,
   if (!cvd_flags.fetch_cvd_flags.empty()) {
     CommandRequest fetch_cmd = CF_EXPECT(BuildFetchCmd(request, cvd_flags));
     std::unique_ptr<CvdCommandHandler> fetch_handler =
-        NewCvdFetchCommandHandler();
+        std::make_unique<CvdFetchCommandHandler>();
     Result<void> fetch_res = fetch_handler->Handle(fetch_cmd);
-    if (!fetch_res.ok()) {
+    if (!fetch_res.has_value()) {
       group.SetAllStates(cvd::INSTANCE_STATE_PREPARE_FAILED);
       // TODO: b/471069557 - diagnose unused
       Result<void> unused = instance_manager_.UpdateInstanceGroup(group);
@@ -232,12 +229,14 @@ Result<void> LoadConfigsCommand::LoadGroup(const CommandRequest& request,
   CommandRequest start_cmd =
       CF_EXPECT(BuildStartCommand(request, cvd_flags, group));
   std::unique_ptr<CvdCommandHandler> start_handler =
-      NewCvdStartCommandHandler(instance_manager_);
+      std::make_unique<CvdStartCommandHandler>(instance_manager_);
   CF_EXPECT(start_handler->Handle(start_cmd));
   return {};
 }
 
-cvd_common::Args LoadConfigsCommand::CmdList() const { return {kLoadSubCmd}; }
+std::vector<std::string> LoadConfigsCommand::CmdList() const {
+  return {kLoadSubCmd};
+}
 
 std::string LoadConfigsCommand::SummaryHelp() const { return kSummaryHelpText; }
 
@@ -293,10 +292,14 @@ std::vector<HelpParagraph> LoadConfigsCommand::CommonCommandDescription() {
   description.emplace_back(
       "While most config file properties are self explanatory, the build "
       "properties (default_build, kernel.build, bootloader.build, etc) require "
-      "more explanation. These properties support two types of values:");
+      "more explanation. These properties support the following values:");
 
   description.emplace_back(HelpParagraph::Raw(
       R"( - "@ab/<branch_or_build_id>[/<target>[{<filepath>}]]"
+ - "gs://<bucket>/<prefix>/"
+ - "gs://<bucket>/<object>[{<filepath>}]"
+ - "https://<host>/<directory>/"
+ - "https://<host>/<object>[{<filepath>}]"
  - "<absolute_path>")"));
 
   description.emplace_back(
@@ -307,6 +310,18 @@ std::vector<HelpParagraph> LoadConfigsCommand::CommonCommandDescription() {
       "server can be specified with the <filepath> optional parameter in curly "
       "braces. For more information on build fetching and caching operations "
       "refer to `cvd help fetch`.");
+
+  description.emplace_back(
+      "A \"gs://\" or \"https://\" value names a build outside the Android "
+      "build servers. A URL ending in '/' names the directory holding the "
+      "build's artifacts, which cvd picks from by name; a URL naming a single "
+      "object is a build of just that artifact, and <filepath> then selects a "
+      "member of it if it is a zip. A \"gs://\" build is read with the "
+      "credentials `cvd fetch` would use for the build servers, while an "
+      "\"https://\" build is read as given, so any credential has to travel "
+      "in the URL itself as in a pre-signed URL. A directory URL over plain "
+      "\"https://\" cannot be listed, so a build named that way needs the "
+      "host package named separately.");
 
   description.emplace_back(
       "Alternatively, the build value may point to an absolute path (starts "
@@ -321,12 +336,6 @@ std::vector<HelpParagraph> LoadConfigsCommand::CommonCommandDescription() {
 Result<std::vector<Flag>> LoadConfigsCommand::Flags(
     const CommandRequest& request) {
   return BuildCvdLoadFlags(flags_);
-}
-
-std::unique_ptr<CvdCommandHandler> NewLoadConfigsCommand(
-    InstanceManager& instance_manager) {
-  return std::unique_ptr<CvdCommandHandler>(
-      new LoadConfigsCommand(instance_manager));
 }
 
 }  // namespace cuttlefish

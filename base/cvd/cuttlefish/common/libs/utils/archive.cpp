@@ -19,16 +19,17 @@
 #include <unistd.h>
 
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "absl/strings/strip.h"
 #include "absl/log/log.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_split.h"
+#include "absl/strings/strip.h"
 
-#include "cuttlefish/common/libs/utils/subprocess.h"
-#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/managed_stdio.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -60,7 +61,7 @@ Result<std::vector<std::string>> ExtractHelper(
 Result<std::vector<std::string>> ExtractFiles(
     const std::string& archive, const std::vector<std::string>& to_extract,
     const std::string& target_directory) {
-  Command bsdtar_cmd = Command("/usr/bin/bsdtar")
+  Command bsdtar_cmd = Command("bsdtar")
                            .AddParameter("-x")
                            .AddParameter("-v")
                            .AddParameter("-C")
@@ -84,7 +85,7 @@ Result<std::vector<std::string>> ExtractFiles(
   std::vector<std::string_view> split = absl::StrSplit(bsdtar_stderr, '\n');
   std::vector<std::string> outputs;
   outputs.reserve(split.size());
-  for (std::string_view& view: split) {
+  for (std::string_view& view : split) {
     absl::ConsumePrefix(&view, "x ");
     outputs.emplace_back(view);
   }
@@ -134,14 +135,14 @@ Result<std::vector<std::string>> ExtractArchiveContents(
 
 std::string ExtractArchiveToMemory(const std::string& archive_filepath,
                                    const std::string& archive_member) {
-  Command bsdtar_cmd("/usr/bin/bsdtar");
+  Command bsdtar_cmd("bsdtar");
   bsdtar_cmd.AddParameter("-xf");
   bsdtar_cmd.AddParameter(archive_filepath);
   bsdtar_cmd.AddParameter("-O");
   bsdtar_cmd.AddParameter(archive_member);
   Result<std::string> stdout_str = RunAndCaptureStdout(std::move(bsdtar_cmd));
 
-  if (!stdout_str.ok()) {
+  if (!stdout_str.has_value()) {
     LOG(ERROR) << "Could not extract \"" << archive_member << "\" from \""
                << archive_filepath << "\" to memory: " << stdout_str.error();
     return "";
@@ -150,13 +151,13 @@ std::string ExtractArchiveToMemory(const std::string& archive_filepath,
 }
 
 std::vector<std::string> ArchiveContents(const std::string& archive) {
-  Command bsdtar_cmd("/usr/bin/bsdtar");
+  Command bsdtar_cmd("bsdtar");
   bsdtar_cmd.AddParameter("-tf");
   bsdtar_cmd.AddParameter(archive);
 
   Result<std::string> bsdtar_output =
       RunAndCaptureStdout(std::move(bsdtar_cmd));
-  if (bsdtar_output.ok()) {
+  if (bsdtar_output.has_value()) {
     return absl::StrSplit(*bsdtar_output, '\n');
   } else {
     LOG(ERROR) << "`bsdtar -tf '" << archive
@@ -165,4 +166,4 @@ std::vector<std::string> ArchiveContents(const std::string& archive) {
   }
 }
 
-} // namespace cuttlefish
+}  // namespace cuttlefish

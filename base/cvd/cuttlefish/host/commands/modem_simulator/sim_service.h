@@ -42,6 +42,8 @@ class SimService : public ModemService, public std::enable_shared_from_this<SimS
   void HandleCSIM_IO(const Client& client, const std::string& command);
   void HandleGetIMSI(const Client& client);
   void HandleGetIccId(const Client& client);
+  void HandleGetEid(const Client& client);
+  void HandleGetAtr(const Client& client);
   void HandleFacilityLock(const Client& client, const std::string& command);
   void HandleOpenLogicalChannel(const Client& client,
                                 const std::string& command);
@@ -200,11 +202,11 @@ class SimService : public ModemService, public std::enable_shared_from_this<SimS
 
     bool CheckPasswordValid(std::string_view password);
 
-    bool VerifyPIN(const std::string_view pin);
-    bool VerifyPUK(const std::string_view puk);
-    bool ChangePIN(ChangeMode mode, const std::string_view pin_or_puk,
-                   const std::string_view new_pin);
-    bool ChangePUK(const std::string_view puk, const std::string_view new_puk);
+    bool VerifyPIN(std::string_view pin);
+    bool VerifyPUK(std::string_view puk);
+    bool ChangePIN(ChangeMode mode, std::string_view pin_or_puk,
+                   std::string_view new_pin);
+    bool ChangePUK(std::string_view puk, std::string_view new_puk);
   };
   PinStatus pin1_status_;
   PinStatus pin2_status_;

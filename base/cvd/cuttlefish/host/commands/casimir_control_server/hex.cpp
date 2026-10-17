@@ -16,7 +16,14 @@
 
 #include "cuttlefish/host/commands/casimir_control_server/hex.h"
 
-#include "cuttlefish/result/result.h"
+#include <ctype.h>
+#include <stdint.h>
+
+#include <string>
+#include <vector>
+
+#include "cuttlefish/result/expect.h"
+#include "cuttlefish/result/result_type.h"
 
 namespace cuttlefish {
 namespace {

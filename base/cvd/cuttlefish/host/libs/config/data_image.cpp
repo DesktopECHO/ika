@@ -27,12 +27,12 @@
 
 #include "absl/log/log.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_buf.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/host_info.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
-#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
+#include "cuttlefish/files/copy.h"
 #include "cuttlefish/host/libs/config/ap_boot_flow.h"
 #include "cuttlefish/host/libs/config/boot_flow.h"
 #include "cuttlefish/host/libs/config/config_utils.h"
@@ -43,6 +43,10 @@
 #include "cuttlefish/host/libs/config/openwrt_args.h"
 #include "cuttlefish/host/libs/image_aggregator/mbr.h"
 #include "cuttlefish/host/libs/image_aggregator/sparse_image.h"
+#include "cuttlefish/posix/remove.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/execute.h"
+#include "cuttlefish/process/managed_stdio.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -78,10 +82,9 @@ Result<void> ResizeImage(const std::string& data_image, int data_image_mb,
     return {};
   }
   off_t raw_target = static_cast<off_t>(data_image_mb) << 20;
-  auto fd = SharedFD::Open(data_image, O_RDWR);
-  CF_EXPECTF(fd->IsOpen(), "Can't open '{}': '{}'", data_image, fd->StrError());
-  CF_EXPECTF(fd->Truncate(raw_target) == 0, "`truncate --size={}M {} fail: {}",
-             data_image_mb, data_image, fd->StrError());
+  Fd fd = CF_EXPECT(Fd::Open(data_image, O_RDWR));
+  CF_EXPECTF(fd.Truncate(raw_target), "`truncate --size={}M {} fail: {}",
+             data_image_mb, data_image, fd.StrError());
   CF_EXPECT(ForceFsckImage(data_image, instance));
   std::string resize_path;
   if (instance.userdata_format() == "f2fs") {
@@ -103,7 +106,7 @@ std::string GetFsType(const std::string& path) {
   command.AddParameter(path);
 
   Result<std::string> blkid_out = RunAndCaptureStdout(std::move(command));
-  if (!blkid_out.ok()) {
+  if (!blkid_out.has_value()) {
     LOG(ERROR) << "`blkid '" << path << "'` failed: " << blkid_out.error();
     return "";
   }
@@ -167,18 +170,16 @@ static Result<DataImageDecision> ChooseDataImageAction(
   return DataImageDecision{DataImageAction::kNoAction};
 }
 
-} // namespace
+}  // namespace
 
 Result<void> CreateBlankEmptyImage(std::string_view image, int num_mb) {
   VLOG(0) << "Creating " << image;
 
   uint64_t image_size_bytes = static_cast<uint64_t>(num_mb) << 20;
-  SharedFD fd =
-      SharedFD::Open(std::string(image), O_CREAT | O_TRUNC | O_RDWR, 0666);
-  CF_EXPECTF(fd->IsOpen(), "Failed to open '{}': '{}'", image, fd->StrError());
-  CF_EXPECTF(fd->Truncate(image_size_bytes) == 0,
+  Fd fd = CF_EXPECT(Fd::Open(image, O_CREAT | O_TRUNC | O_RDWR, 0666));
+  CF_EXPECTF(fd.Truncate(image_size_bytes),
              "`truncate --size={}M '{}'` failed: {}", num_mb, image,
-             fd->StrError());
+             fd.StrError());
   return {};
 }
 
@@ -219,8 +220,7 @@ Result<void> CreateBlankSdcardImage(std::string_view image, int num_mb) {
       }},
       .boot_signature = {0x55, 0xAA},
   };
-  SharedFD fd = SharedFD::Open(std::string(image), O_RDWR);
-  CF_EXPECTF(fd->IsOpen(), "Failed to open '{}': '{}'", image, fd->StrError());
+  SharedFD fd = CF_EXPECT(Fd::Open(image, O_RDWR));
   CF_EXPECTF(WriteAllBinary(fd, &mbr) == sizeof(MasterBootRecord),
              "Writing MBR to '{}' failed: '{}'", image, fd->StrError());
   return {};
@@ -281,19 +281,32 @@ Result<void> InitializeDataImage(
   }
 }
 
-static bool EspRequiredForBootFlow(BootFlow flow) {
-  return flow == BootFlow::AndroidEfiLoader || flow == BootFlow::ChromeOs ||
-         flow == BootFlow::Linux || flow == BootFlow::Fuchsia;
+static bool GeneratedEspRequired(
+    const CuttlefishConfig::InstanceSpecific& instance) {
+  switch (instance.boot_flow()) {
+    case BootFlow::AndroidEfiLoader:
+      // Empty means a prebuilt android_esp image is used as-is.
+      return !instance.android_efi_loader().empty();
+    case BootFlow::ChromeOs:
+    case BootFlow::Linux:
+    case BootFlow::Fuchsia:
+      return true;
+    default:
+      return false;
+  }
 }
 
 static bool EspRequiredForAPBootFlow(APBootFlow ap_boot_flow) {
   return ap_boot_flow == APBootFlow::Grub;
 }
 
-static void InitLinuxArgs(Arch target_arch, LinuxEspBuilder& linux_esp_builder) {
+static void InitLinuxArgs(Arch target_arch,
+                          LinuxEspBuilder& linux_esp_builder) {
   linux_esp_builder.Root("/dev/vda2");
 
-  linux_esp_builder.Argument("console", "hvc0").Argument("panic", "-1").Argument("noefi");
+  linux_esp_builder.Argument("console", "hvc0")
+      .Argument("panic", "-1")
+      .Argument("noefi");
 
   switch (target_arch) {
     case Arch::Arm:
@@ -357,13 +370,14 @@ static bool BuildOSImage(const CuttlefishConfig::InstanceSpecific& instance) {
   switch (instance.boot_flow()) {
     case BootFlow::AndroidEfiLoader: {
       auto android_efi_loader =
-          AndroidEfiLoaderEspBuilder(instance.esp_image_path());
+          AndroidEfiLoaderEspBuilder(instance.generated_esp_image_path());
       android_efi_loader.EfiLoaderPath(instance.android_efi_loader())
           .Architecture(instance.target_arch());
       return android_efi_loader.Build();
     }
     case BootFlow::ChromeOs: {
-      auto linux_esp_builder = LinuxEspBuilder(instance.esp_image_path());
+      auto linux_esp_builder =
+          LinuxEspBuilder(instance.generated_esp_image_path());
       InitChromeOsArgs(linux_esp_builder);
 
       linux_esp_builder.Root("/dev/vda3")
@@ -373,7 +387,8 @@ static bool BuildOSImage(const CuttlefishConfig::InstanceSpecific& instance) {
       return linux_esp_builder.Build();
     }
     case BootFlow::Linux: {
-      auto linux_esp_builder = LinuxEspBuilder(instance.esp_image_path());
+      auto linux_esp_builder =
+          LinuxEspBuilder(instance.generated_esp_image_path());
       InitLinuxArgs(instance.target_arch(), linux_esp_builder);
 
       linux_esp_builder.Root("/dev/vda2")
@@ -387,7 +402,7 @@ static bool BuildOSImage(const CuttlefishConfig::InstanceSpecific& instance) {
       return linux_esp_builder.Build();
     }
     case BootFlow::Fuchsia: {
-      auto fuchsia = FuchsiaEspBuilder(instance.esp_image_path());
+      auto fuchsia = FuchsiaEspBuilder(instance.generated_esp_image_path());
       return fuchsia.Architecture(instance.target_arch())
           .Zedboot(instance.fuchsia_zedboot_path())
           .MultibootBinary(instance.fuchsia_multiboot_bin_path())
@@ -407,12 +422,11 @@ Result<void> InitializeEspImage(
     VLOG(0) << "creating esp_image: " << instance.ap_esp_image_path();
     CF_EXPECT(BuildAPImage(config, instance));
   }
-  if (EspRequiredForBootFlow(instance.boot_flow()) &&
-      !VmManagerIsGem5(config)) {
-    VLOG(0) << "creating esp_image: " << instance.esp_image_path();
+  if (GeneratedEspRequired(instance) && !VmManagerIsGem5(config)) {
+    VLOG(0) << "creating esp_image: " << instance.generated_esp_image_path();
     CF_EXPECT(BuildOSImage(instance));
   }
   return {};
 }
 
-} // namespace cuttlefish
+}  // namespace cuttlefish

@@ -1,8 +1,10 @@
-load("//cuttlefish/bazel:rules.bzl", "cf_cc_library", "cf_cc_test")
+load("//cuttlefish/bazel:rules.bzl", "cf_build_test", "cf_cc_library", "cf_cc_test")
 
 package(
     default_visibility = ["//:android_cuttlefish"],
 )
+
+cf_build_test(name = "boot_image_build_test")
 
 cf_cc_library(
     name = "boot_image",
@@ -12,7 +14,6 @@ cf_cc_library(
         "//cuttlefish/io",
         "//cuttlefish/io:copy",
         "//cuttlefish/io:filesystem",
-        "//cuttlefish/io:length",
         "//cuttlefish/io:read_exact",
         "//cuttlefish/io:read_window_view",
         "//cuttlefish/result",
@@ -41,7 +42,6 @@ cf_cc_test(
     deps = [
         "//cuttlefish/host/commands/assemble_cvd/boot_image",
         "//cuttlefish/host/commands/assemble_cvd/boot_image:boot_image_builder",
-        "//cuttlefish/io",
         "//cuttlefish/io:concat",
         "//cuttlefish/io:in_memory",
         "//cuttlefish/io:read_window_view",
@@ -86,12 +86,11 @@ cf_cc_test(
     deps = [
         "//cuttlefish/host/commands/assemble_cvd/boot_image:vendor_boot_image",
         "//cuttlefish/host/commands/assemble_cvd/boot_image:vendor_boot_image_builder",
-        "//cuttlefish/io",
         "//cuttlefish/io:concat",
         "//cuttlefish/io:in_memory",
         "//cuttlefish/io:read_window_view",
         "//cuttlefish/io:string",
-        "//cuttlefish/result",
+        "//cuttlefish/result:assert",
         "//cuttlefish/result:result_matchers",
     ],
 )

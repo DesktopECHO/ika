@@ -18,6 +18,7 @@
 
 #include <errno.h>
 #include <sys/utsname.h>
+
 #include <string>
 #include <vector>
 
@@ -28,6 +29,7 @@
 #include "allocd/alloc_utils.h"
 #include "cuttlefish/common/libs/utils/in_sandbox.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
+#include "cuttlefish/host/libs/config/external_network_mode.h"
 #include "cuttlefish/host/libs/vm_manager/host_configuration.h"
 #include "cuttlefish/posix/strerror.h"
 #include "cuttlefish/result/result.h"
@@ -36,9 +38,20 @@ namespace cuttlefish {
 
 static Result<void> TestTapDevices(
     const CuttlefishConfig::InstanceSpecific& instance) {
+  /*
+   * Check pre-created tap devices are available.
+   *
+   * This check should be skipped when we do not expect these tap devices
+   * to be available, such as sandbox environments; when the instance is
+   * not configured to use tap devices, such as when tap devices are
+   * disabled or when using user-mode networking; or when tap devices
+   * will not be created yet, such as when cvdalloc is being used which
+   * creates the tap devices when the instance is started.
+   */
 #ifdef __linux__
-  // cvdalloc owns its own resources, so they can't be validated here.
-  if (InSandbox() || instance.use_cvdalloc()) {
+  if (InSandbox() || instance.use_cvdalloc() ||
+      instance.external_network_mode() == ExternalNetworkMode::kSlirp ||
+      !instance.enable_tap_devices()) {
     return {};
   }
   if (instance.has_wifi_card()) {
@@ -62,9 +75,10 @@ static Result<void> TestTapDevices(
 
 Result<void> ValidateTapDevices(
     const CuttlefishConfig::InstanceSpecific& instance) {
-  CF_EXPECT(TestTapDevices(instance),
-            "Failed to validate tap devices. Try `cvd reset` or `pkill run_cvd` "
-            "and `pkill crosvm`");
+  CF_EXPECT(
+      TestTapDevices(instance),
+      "Failed to validate tap devices. Try `cvd reset` or `pkill run_cvd` "
+      "and `pkill crosvm`");
   return {};
 }
 

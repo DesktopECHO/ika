@@ -1,7 +1,7 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 
 package(
-    default_visibility = ["@//:android_cuttlefish"],
+    default_visibility = ["//visibility:public"],
 )
 
 cc_library(
@@ -46,14 +46,14 @@ cc_library(
         "libavb/boringssl/mldsa.c",
         "libavb/boringssl/sha.c",
     ],
-    includes = [
-        ".",
-        "libavb/boringssl",
-    ],
     hdrs = ["libavb/libavb.h"],
     copts = [
         "-DAVB_ENABLE_DEBUG",
         "-DAVB_COMPILATION",
+    ],
+    includes = [
+        ".",
+        "libavb/boringssl",
     ],
     deps = ["@boringssl//:crypto"],
 )

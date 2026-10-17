@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-#include <gflags/gflags.h>
+#include "gflags/gflags.h"
 
 #include "cuttlefish/result/result.h"
 
@@ -29,6 +29,7 @@ template <typename T>
 struct FromGflags {
   std::vector<T> values;
   bool is_default;
+  std::vector<bool> is_default_values;
 };
 
 extern template struct FromGflags<bool>;

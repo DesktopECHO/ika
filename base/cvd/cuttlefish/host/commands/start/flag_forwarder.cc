@@ -25,15 +25,16 @@
 #include <unordered_set>
 #include <vector>
 
-#include "absl/strings/strip.h"
-#include <gflags/gflags.h>
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "absl/strings/strip.h"
+#include "gflags/gflags.h"
 
 #include "cuttlefish/common/libs/utils/contains.h"
 #include "cuttlefish/common/libs/utils/gflags_xml_parser.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
-#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/managed_stdio.h"
+#include "cuttlefish/process/subprocess_options.h"
 
 namespace cuttlefish {
 
@@ -52,10 +53,10 @@ namespace cuttlefish {
 class SubprocessFlag {
   std::string subprocess_;
   std::string name_;
-public:
+
+ public:
   SubprocessFlag(const std::string& subprocess, const std::string& name)
-      : subprocess_(subprocess), name_(name) {
-  }
+      : subprocess_(subprocess), name_(name) {}
   virtual ~SubprocessFlag() = default;
   SubprocessFlag(const SubprocessFlag&) = delete;
   SubprocessFlag& operator=(const SubprocessFlag&) = delete;
@@ -76,22 +77,25 @@ public:
  * that normally expects memory to be held statically. The other reason is to
  * subclass class SubprocessFlag to fit into the flag-forwarding scheme.
  */
-template<typename T>
+template <typename T>
 class DynamicFlag : public SubprocessFlag {
   std::string help_;
   std::string filename_;
   T current_storage_;
   T defvalue_storage_;
   gflags::FlagRegisterer registerer_;
-public:
+
+ public:
   DynamicFlag(const std::string& subprocess, const std::string& name,
               const std::string& help, const std::string& filename,
               const T& current, const T& defvalue)
-      : SubprocessFlag(subprocess, name), help_(help), filename_(filename),
-        current_storage_(current), defvalue_storage_(defvalue),
+      : SubprocessFlag(subprocess, name),
+        help_(help),
+        filename_(filename),
+        current_storage_(current),
+        defvalue_storage_(defvalue),
         registerer_(Name().c_str(), help_.c_str(), filename_.c_str(),
-                    &current_storage_, &defvalue_storage_) {
-  }
+                    &current_storage_, &defvalue_storage_) {}
 };
 
 namespace {
@@ -110,9 +114,7 @@ std::map<std::string, std::string> CurrentFlagsToTypes() {
   return name_to_type;
 }
 
-
-
-template<typename T>
+template <typename T>
 T FromString(const std::string& str) {
   std::stringstream stream(str);
   T output;
@@ -129,53 +131,47 @@ std::unique_ptr<SubprocessFlag> MakeDynamicFlag(
   std::unique_ptr<SubprocessFlag> ptr;
   if (flag_info.type == "bool") {
     ptr.reset(new DynamicFlag<bool>(subprocess, flag_info.name,
-                                    flag_info.description,
-                                    flag_info.filename,
+                                    flag_info.description, flag_info.filename,
                                     FromString<bool>(flag_info.default_value),
                                     FromString<bool>(flag_info.current_value)));
   } else if (flag_info.type == "int32") {
-    ptr.reset(new DynamicFlag<int32_t>(subprocess, flag_info.name,
-                                       flag_info.description,
-                                       flag_info.filename,
-                                       FromString<int32_t>(flag_info.default_value),
-                                       FromString<int32_t>(flag_info.current_value)));
+    ptr.reset(new DynamicFlag<int32_t>(
+        subprocess, flag_info.name, flag_info.description, flag_info.filename,
+        FromString<int32_t>(flag_info.default_value),
+        FromString<int32_t>(flag_info.current_value)));
   } else if (flag_info.type == "uint32") {
-    ptr.reset(new DynamicFlag<uint32_t>(subprocess, flag_info.name,
-                                        flag_info.description,
-                                        flag_info.filename,
-                                        FromString<uint32_t>(flag_info.default_value),
-                                        FromString<uint32_t>(flag_info.current_value)));
+    ptr.reset(new DynamicFlag<uint32_t>(
+        subprocess, flag_info.name, flag_info.description, flag_info.filename,
+        FromString<uint32_t>(flag_info.default_value),
+        FromString<uint32_t>(flag_info.current_value)));
   } else if (flag_info.type == "int64") {
-    ptr.reset(new DynamicFlag<int64_t>(subprocess, flag_info.name,
-                                       flag_info.description,
-                                       flag_info.filename,
-                                       FromString<int64_t>(flag_info.default_value),
-                                       FromString<int64_t>(flag_info.current_value)));
+    ptr.reset(new DynamicFlag<int64_t>(
+        subprocess, flag_info.name, flag_info.description, flag_info.filename,
+        FromString<int64_t>(flag_info.default_value),
+        FromString<int64_t>(flag_info.current_value)));
   } else if (flag_info.type == "uint64") {
-    ptr.reset(new DynamicFlag<uint64_t>(subprocess, flag_info.name,
-                                        flag_info.description,
-                                        flag_info.filename,
-                                        FromString<uint64_t>(flag_info.default_value),
-                                        FromString<uint64_t>(flag_info.current_value)));
+    ptr.reset(new DynamicFlag<uint64_t>(
+        subprocess, flag_info.name, flag_info.description, flag_info.filename,
+        FromString<uint64_t>(flag_info.default_value),
+        FromString<uint64_t>(flag_info.current_value)));
   } else if (flag_info.type == "double") {
-    ptr.reset(new DynamicFlag<double>(subprocess, flag_info.name,
-                                      flag_info.description,
-                                      flag_info.filename,
-                                      FromString<double>(flag_info.default_value),
-                                      FromString<double>(flag_info.current_value)));
+    ptr.reset(new DynamicFlag<double>(
+        subprocess, flag_info.name, flag_info.description, flag_info.filename,
+        FromString<double>(flag_info.default_value),
+        FromString<double>(flag_info.current_value)));
   } else if (flag_info.type == "string") {
-    ptr.reset(new DynamicFlag<std::string>(subprocess, flag_info.name,
-                                           flag_info.description,
-                                           flag_info.filename,
-                                           flag_info.default_value,
-                                           flag_info.current_value));
+    ptr.reset(new DynamicFlag<std::string>(
+        subprocess, flag_info.name, flag_info.description, flag_info.filename,
+        flag_info.default_value, flag_info.current_value));
   } else {
-    LOG(FATAL) << "Unknown type \"" << flag_info.type << "\" for flag " << flag_info.name;
+    LOG(FATAL) << "Unknown type \"" << flag_info.type << "\" for flag "
+               << flag_info.name;
   }
   return ptr;
 }
 
-std::vector<gflags::CommandLineFlagInfo> FlagsForSubprocess(std::string helpxml_output) {
+std::vector<gflags::CommandLineFlagInfo> FlagsForSubprocess(
+    std::string helpxml_output) {
   auto xml_begin = helpxml_output.find("<?xml");
   CHECK(xml_begin != std::string::npos)
       << "No xml found in '" << helpxml_output << "'";
@@ -183,8 +179,9 @@ std::vector<gflags::CommandLineFlagInfo> FlagsForSubprocess(std::string helpxml_
   helpxml_output = helpxml_output.substr(xml_begin);
 
   auto parse_result = ParseGflagsXmlHelp(helpxml_output);
-  CHECK(parse_result.ok()) << "Could not parse xml of subprocess `--helpxml`: "
-                           << parse_result.error();
+  CHECK(parse_result.has_value())
+      << "Could not parse xml of subprocess `--helpxml`: "
+      << parse_result.error();
 
   std::vector<gflags::CommandLineFlagInfo> flags;
   for (const auto& flag_desc : *parse_result) {
@@ -200,7 +197,7 @@ std::vector<gflags::CommandLineFlagInfo> FlagsForSubprocess(std::string helpxml_
   return flags;
 }
 
-} // namespace
+}  // namespace
 
 FlagForwarder::FlagForwarder(std::set<std::string> subprocesses,
                              const std::vector<std::vector<std::string>>& args)
@@ -235,7 +232,8 @@ FlagForwarder::FlagForwarder(std::set<std::string> subprocesses,
     for (const auto& flag : subprocess_flags) {
       if (flag_to_type.count(flag.name)) {
         if (flag_to_type[flag.name] == flag.type) {
-          flags_.emplace(std::make_unique<SubprocessFlag>(subprocess, flag.name));
+          flags_.emplace(
+              std::make_unique<SubprocessFlag>(subprocess, flag.name));
         } else {
           LOG(FATAL) << flag.name << "defined as " << flag_to_type[flag.name]
                      << " and " << flag.type;
@@ -254,7 +252,6 @@ FlagForwarder::FlagForwarder(std::set<std::string> subprocesses,
 FlagForwarder::~FlagForwarder() = default;
 
 void FlagForwarder::UpdateFlagDefaults() const {
-
   for (const auto& subprocess : subprocesses_) {
     Command cmd(subprocess);
     std::vector<std::string> invocation = {subprocess};
@@ -286,8 +283,7 @@ void FlagForwarder::UpdateFlagDefaults() const {
     auto subprocess_flags = FlagsForSubprocess(helpxml_output);
     for (const auto& flag : subprocess_flags) {
       gflags::SetCommandLineOptionWithMode(
-          flag.name.c_str(),
-          flag.default_value.c_str(),
+          flag.name.c_str(), flag.default_value.c_str(),
           gflags::FlagSettingMode::SET_FLAGS_DEFAULT);
     }
   }
@@ -315,8 +311,7 @@ std::vector<std::string> FlagForwarder::ArgvForSubprocess(
         // but it only apply to repeatable flag case
         if (Contains(kRepeatableFlags, argument)) {
           // matched
-          LOG(FATAL) << subprocess
-                     << " has wrong flag input: " << args[index];
+          LOG(FATAL) << subprocess << " has wrong flag input: " << args[index];
         }
         continue;
       }

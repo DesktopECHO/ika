@@ -18,26 +18,29 @@
 #include <dirent.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <string>
 #include <string_view>
 #include <thread>
-#include <tuple>
 #include <unordered_set>
-#include <utility>
 #include <variant>
 #include <vector>
 
-#include <json/value.h>
+#include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "android-base/file.h"
+#include "fmt/format.h"
+#include "json/value.h"
 
-#include <android-base/file.h>
 #include "cuttlefish/common/libs/utils/contains.h"
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/json.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/libs/web/android_build.h"
 #include "cuttlefish/host/libs/web/android_build_api_key.h"
 #include "cuttlefish/host/libs/web/android_build_string.h"
@@ -47,6 +50,7 @@
 #include "cuttlefish/host/libs/web/http_client/http_client.h"
 #include "cuttlefish/host/libs/web/http_client/http_file.h"
 #include "cuttlefish/host/libs/web/http_client/http_json.h"
+#include "cuttlefish/host/libs/web/parse_time.h"
 #include "cuttlefish/host/libs/zip/libzip_cc/seekable_source.h"
 #include "cuttlefish/host/libs/zip/libzip_cc/writable_source.h"
 #include "cuttlefish/host/libs/zip/remote_zip.h"
@@ -69,19 +73,11 @@ struct CloseDir {
 
 Result<Json::Value> GetResponseJson(const HttpResponse<Json::Value>& response,
                                     const bool allow_redirect = false) {
-  //  debug information in error responses floods stderr with too much text
-  //  logged at a level that still ends up in the log file
-  VLOG(0) << "API response data:\n" << response.data;
-  const bool response_code_allowed =
-      response.HttpSuccess() || (allow_redirect && response.HttpRedirect());
-  CF_EXPECTF(std::move(response_code_allowed),
-             "Error response from Android Build API - {}:{}\nCheck log file "
-             "for full response",
-             response.http_code, response.StatusDescription());
-  CF_EXPECT(!response.data.isMember("error"),
-            "Response was successful, but contains error information.  Check "
-            "log file for full response.");
-  return response.data;
+  return JsonFromResponse(response, JsonResponseOptions{
+                                        .source = "Android Build API",
+                                        .allow_redirect = allow_redirect,
+                                        .reject_error_member = true,
+                                    });
 }
 
 }  // namespace
@@ -97,18 +93,21 @@ AndroidBuildApi::AndroidBuildApi(HttpClient& http_client,
       retry_period_(retry_period),
       cas_downloader_(cas_downloader) {}
 
-Result<Build> AndroidBuildApi::GetBuild(const DeviceBuildString& build_string) {
+Result<DeviceBuild> AndroidBuildApi::GetBuild(
+    const DeviceBuildString& build_string) {
   CF_EXPECT(
       build_string.target.has_value(),
       "Given build string must have a target with the branch or build id");
   std::string proposed_build_id = build_string.branch_or_id;
-  auto latest_build_id =
-      CF_EXPECT(LatestBuildId(proposed_build_id, *build_string.target));
-  if (latest_build_id) {
-    proposed_build_id = *latest_build_id;
-    LOG(INFO) << "Latest build id for branch '" << build_string.branch_or_id
-              << "' and target '" << *build_string.target << "' is '"
-              << proposed_build_id << "'";
+  SafeLevel proposed_safe_level = SafeLevel::kSafeLevelUnspecified;
+  const std::optional<CandidateBuild> latest_build_candidate =
+      CF_EXPECT(LatestBuildCandidate(proposed_build_id, *build_string.target));
+  if (latest_build_candidate) {
+    proposed_build_id = latest_build_candidate->build_id;
+    proposed_safe_level = latest_build_candidate->safe_level;
+    VLOG(0) << fmt::format(
+        "Build id({}) to be fetched for branch({}), target({}).",
+        proposed_build_id, build_string.branch_or_id, *build_string.target);
   }
 
   AndroidBuildApi::BuildInfo build_info =
@@ -123,22 +122,29 @@ Result<Build> AndroidBuildApi::GetBuild(const DeviceBuildString& build_string) {
       .is_signed = build_info.is_signed,
       .status_blocked = blocked_on_status,
       .filepath = build_string.filepath,
+      .safe_level = proposed_safe_level,
   };
 }
 
-Result<Build> AndroidBuildApi::GetBuild(
+Result<DirectoryBuild> AndroidBuildApi::GetBuild(
     const DirectoryBuildString& build_string) {
   return DirectoryBuild(build_string.paths, build_string.target,
                         build_string.filepath);
 }
 
-Result<Build> AndroidBuildApi::GetBuild(const BuildString& build_string) {
-  Result<Build> result =
-      std::visit([this](auto&& arg) { return GetBuild(arg); }, build_string);
-  return CF_EXPECT(std::move(result));
+Result<std::string> AndroidBuildApi::DownloadFile(
+    const DeviceBuild& build, const std::string& target_directory,
+    const std::string& artifact_name) {
+  return CF_EXPECT(DownloadArtifact(build, target_directory, artifact_name));
 }
 
 Result<std::string> AndroidBuildApi::DownloadFile(
+    const DirectoryBuild& build, const std::string& target_directory,
+    const std::string& artifact_name) {
+  return CF_EXPECT(DownloadArtifact(build, target_directory, artifact_name));
+}
+
+Result<std::string> AndroidBuildApi::DownloadArtifact(
     const Build& build, const std::string& target_directory,
     const std::string& artifact_name) {
   std::unordered_set<std::string> artifacts =
@@ -146,16 +152,6 @@ Result<std::string> AndroidBuildApi::DownloadFile(
   CF_EXPECT(Contains(artifacts, artifact_name),
             "Target " << build << " did not contain " << artifact_name);
   return DownloadTargetFile(build, target_directory, artifact_name);
-}
-
-
-Result<SeekableZipSource> AndroidBuildApi::FileReader(
-    const Build& build, const std::string& artifact_name) {
-  Result<SeekableZipSource> res =
-      std::visit([this, &artifact_name](
-                     auto&& arg) { return FileReader(arg, artifact_name); },
-                 build);
-  return CF_EXPECT(std::move(res));
 }
 
 Result<SeekableZipSource> AndroidBuildApi::FileReader(
@@ -184,7 +180,7 @@ Result<AndroidBuildApi::BuildInfo> AndroidBuildApi::GetBuildInfo(
 
   std::string no_auth_error_message;
   if (credential_source_ == nullptr && response.http_code == 404) {
-    // In LatestBuildId we currently cannot distinguish between the cases:
+    // In LatestBuildCandidate we cannot distinguish between the cases:
     //    - user provided a build ID (not an error)
     //    - user provided a branch with a typo
     //    - user provided a branch without the necessary authentication
@@ -262,22 +258,25 @@ Result<std::vector<std::string>> AndroidBuildApi::Headers() {
   return headers;
 }
 
-Result<std::optional<std::string>> AndroidBuildApi::LatestBuildId(
-    const std::string& branch, const std::string& target) {
+Result<std::optional<AndroidBuildApi::CandidateBuild>>
+AndroidBuildApi::LatestBuildCandidate(const std::string& branch,
+                                      const std::string& target) {
+  // Find the latest build at every safe level
+  std::vector<AndroidBuildApi::CandidateBuild> candidates;
   for (const SafeLevel safe_level : kAllSafeLevels) {
     VLOG(0) << "Attempting to download build at safe level '" << safe_level
             << "' for branch '" << branch << "' and target '" << target << "'";
-    const std::string url =
-        android_build_url_.GetLatestBuildIdUrl(branch, target, safe_level);
+    const std::string url = android_build_url_.GetLatestBuildCandidateUrl(
+        branch, target, safe_level);
     const std::vector<std::string> headers = CF_EXPECT(Headers());
     const HttpResponse<Json::Value> response =
         CF_EXPECT(HttpGetToJson(http_client_, url, headers));
 
     Result<Json::Value> json_res = GetResponseJson(response);
-    if (!json_res.ok()) {
+    if (!json_res.has_value()) {
       continue;
     }
-    const Json::Value json = *json_res;
+    const Json::Value& json = *json_res;
 
     if (!json.isMember("builds")) {
       continue;
@@ -288,9 +287,30 @@ Result<std::optional<std::string>> AndroidBuildApi::LatestBuildId(
                "target \"{}\" in the response array, "
                "but found {}",
                branch, target, json["builds"].size());
-    return CF_EXPECT(GetValue<std::string>(json["builds"][0], {"buildId"}));
+
+    const Json::Value& build = json["builds"][0];
+    const std::string& completion = build["completionTimestamp"].asString();
+    candidates.emplace_back(AndroidBuildApi::CandidateBuild{
+        .build_id = build["buildId"].asString(),
+        .creation_time = CF_EXPECT(ParseTime(completion)),
+        .safe_level = safe_level,
+    });
   }
-  return std::nullopt;
+  if (candidates.empty()) {
+    return std::nullopt;
+  }
+  // Drop candidate builds 1 week older than the latest
+  auto creation = [](const auto& cd) { return cd.creation_time; };
+  std::chrono::system_clock::time_point latest =
+      std::ranges::max(std::views::transform(candidates, creation));
+  auto recent = [latest](const auto& cd) {
+    // NOLINTNEXTLINE(misc-include-cleaner): <chrono>
+    return latest - cd.creation_time < std::chrono::weeks(1);
+  };
+  // Return the first valid build (which will have the highest safe level)
+  auto it = std::find_if(candidates.begin(), candidates.end(), recent);
+  CHECK(it != candidates.end());
+  return *it;
 }
 
 Result<std::unordered_set<std::string>> AndroidBuildApi::Artifacts(
@@ -339,25 +359,27 @@ Result<std::unordered_set<std::string>> AndroidBuildApi::Artifacts(
 
 Result<std::unordered_set<std::string>> AndroidBuildApi::Artifacts(
     const Build& build, const std::vector<std::string>& artifact_filenames) {
-  auto res =
-      std::visit([this, &artifact_filenames](
-                     auto&& arg) { return Artifacts(arg, artifact_filenames); },
-                 build);
-  return CF_EXPECT(std::move(res));
+  if (const DeviceBuild* device = std::get_if<DeviceBuild>(&build)) {
+    return CF_EXPECT(Artifacts(*device, artifact_filenames));
+  }
+  if (const DirectoryBuild* directory = std::get_if<DirectoryBuild>(&build)) {
+    return CF_EXPECT(Artifacts(*directory, artifact_filenames));
+  }
+  return CF_ERRF("AndroidBuildApi cannot handle '{}'", FetchLabel(build));
 }
 
 Result<std::string> AndroidBuildApi::GetArtifactDownloadUrl(
     const DeviceBuild& build, const std::string& artifact) {
   const std::string download_url_endpoint =
       android_build_url_.GetArtifactDownloadUrl(build.id, build.target,
-                                                 artifact);
+                                                artifact);
   auto response = CF_EXPECT(
       HttpGetToJson(http_client_, download_url_endpoint, CF_EXPECT(Headers())));
   const Json::Value json =
       CF_EXPECTF(GetResponseJson(response, /* allow redirect response */ true),
                  "Error fetching download URL for \"{}\" from build ID \"{}\"",
                  artifact, build.id);
-  return CF_EXPECT(GetValue<std::string>(json, { "signedUrl" }));
+  return CF_EXPECT(GetValue<std::string>(json, {"signedUrl"}));
 }
 
 Result<void> AndroidBuildApi::ArtifactToFile(const DeviceBuild& build,
@@ -389,13 +411,15 @@ Result<void> AndroidBuildApi::ArtifactToFile(const DirectoryBuild& build,
 Result<void> AndroidBuildApi::ArtifactToFile(const Build& build,
                                              const std::string& artifact,
                                              const std::string& path) {
-  auto res = std::visit(
-      [this, &artifact, &path](auto&& arg) {
-        return ArtifactToFile(arg, artifact, path);
-      },
-      build);
-  CF_EXPECT(std::move(res));
-  return {};
+  if (const DeviceBuild* device = std::get_if<DeviceBuild>(&build)) {
+    CF_EXPECT(ArtifactToFile(*device, artifact, path));
+    return {};
+  }
+  if (const DirectoryBuild* directory = std::get_if<DirectoryBuild>(&build)) {
+    CF_EXPECT(ArtifactToFile(*directory, artifact, path));
+    return {};
+  }
+  return CF_ERRF("AndroidBuildApi cannot handle '{}'", FetchLabel(build));
 }
 
 Result<std::string> AndroidBuildApi::DownloadTargetFileFromCas(
@@ -410,7 +434,7 @@ Result<std::string> AndroidBuildApi::DownloadTargetFileFromCas(
   DigestsFetcher digests_fetcher =
       [&build, &target_directory,
        this](std::string filename) -> Result<std::string> {
-    CF_EXPECTF(DownloadFile(build, target_directory, filename),
+    CF_EXPECTF(DownloadArtifact(build, target_directory, filename),
                "Failed to download '{}' from AB.", filename);
     return ConstructTargetFilepath(target_directory, filename);
   };
@@ -431,7 +455,7 @@ Result<std::string> AndroidBuildApi::DownloadTargetFile(
       artifact_name.find("-img-") != std::string::npos) {
     Result<std::string> result =
         DownloadTargetFileFromCas(build, target_directory, artifact_name);
-    if (result.ok()) {
+    if (result.has_value()) {
       return {target_filepath};
     }
     // Fallback to download from AB.
@@ -442,21 +466,6 @@ Result<std::string> AndroidBuildApi::DownloadTargetFile(
             "Unable to download " << build << ":" << artifact_name << " to "
                                   << target_filepath);
   return {target_filepath};
-}
-
-std::tuple<std::string, std::string> GetBuildIdAndTarget(const Build& build) {
-  auto id = std::visit([](auto&& arg) { return arg.id; }, build);
-  auto target = std::visit([](auto&& arg) { return arg.target; }, build);
-  return {id, target};
-}
-
-std::optional<std::string> GetFilepath(const Build& build) {
-  return std::visit([](auto&& arg) { return arg.filepath; }, build);
-}
-
-std::string ConstructTargetFilepath(const std::string& directory,
-                                    const std::string& filename) {
-  return directory + "/" + filename;
 }
 
 }  // namespace cuttlefish

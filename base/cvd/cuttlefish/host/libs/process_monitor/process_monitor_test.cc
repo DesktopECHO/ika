@@ -20,7 +20,7 @@
 #include <utility>
 
 #include "cuttlefish/common/libs/fs/shared_fd.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
+#include "cuttlefish/process/command.h"
 #include "cuttlefish/host/libs/feature/command_source.h"
 #include "cuttlefish/result/result.h"
 #include "gtest/gtest.h"
@@ -53,7 +53,7 @@ Result<ProcessMonitorExit> RunMonitoredExit(int exit_code,
 TEST(ProcessMonitorTest, ExpectedCriticalExitIsClean) {
   auto result = RunMonitoredExit(0, {0}, false, ProcessCategory::kVmm);
 
-  ASSERT_TRUE(result.ok()) << result.error().Trace();
+  ASSERT_TRUE(result.has_value()) << result.error().Trace();
   EXPECT_EQ(*result, ProcessMonitorExit::kExpected);
 }
 
@@ -61,14 +61,14 @@ TEST(ProcessMonitorTest, ExpectedCriticalExitIsNotRestarted) {
   auto result = RunMonitoredExit(0, {0}, /* restart_subprocesses= */ true,
                                  ProcessCategory::kVmm);
 
-  ASSERT_TRUE(result.ok()) << result.error().Trace();
+  ASSERT_TRUE(result.has_value()) << result.error().Trace();
   EXPECT_EQ(*result, ProcessMonitorExit::kExpected);
 }
 
 TEST(ProcessMonitorTest, UnlistedVmmExitIsUnexpected) {
   auto result = RunMonitoredExit(7, {0}, false, ProcessCategory::kVmm);
 
-  ASSERT_TRUE(result.ok()) << result.error().Trace();
+  ASSERT_TRUE(result.has_value()) << result.error().Trace();
   EXPECT_EQ(*result, ProcessMonitorExit::kUnexpected);
 }
 
@@ -76,21 +76,21 @@ TEST(ProcessMonitorTest, ListedSupportExitIsUnexpected) {
   // Expected exit codes only let the VMM end the monitor cleanly.
   auto result = RunMonitoredExit(0, {0});
 
-  ASSERT_TRUE(result.ok()) << result.error().Trace();
+  ASSERT_TRUE(result.has_value()) << result.error().Trace();
   EXPECT_EQ(*result, ProcessMonitorExit::kUnexpected);
 }
 
 TEST(ProcessMonitorTest, UnlistedCriticalExitRemainsUnexpected) {
   auto result = RunMonitoredExit(7, {0});
 
-  ASSERT_TRUE(result.ok()) << result.error().Trace();
+  ASSERT_TRUE(result.has_value()) << result.error().Trace();
   EXPECT_EQ(*result, ProcessMonitorExit::kUnexpected);
 }
 
 TEST(ProcessMonitorTest, UnannotatedZeroExitRemainsUnexpected) {
   auto result = RunMonitoredExit(0, {});
 
-  ASSERT_TRUE(result.ok()) << result.error().Trace();
+  ASSERT_TRUE(result.has_value()) << result.error().Trace();
   EXPECT_EQ(*result, ProcessMonitorExit::kUnexpected);
 }
 

@@ -18,9 +18,9 @@
 #include <optional>
 #include <thread>
 
-#include <gflags/gflags.h>
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "gflags/gflags.h"
 
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/transport/channel_sharedfd.h"
@@ -106,7 +106,7 @@ std::thread StartKernelEventMonitor(SharedFD kernel_events_fd,
   return std::thread([kernel_events_fd, &oemlock_lock]() {
     while (kernel_events_fd->IsOpen()) {
       auto read_result = monitor::ReadEvent(kernel_events_fd);
-      CHECK(read_result.ok()) << read_result.error();
+      CHECK(read_result.has_value()) << read_result.error();
       CHECK(read_result->has_value()) << "EOF in kernel log monitor";
       if ((*read_result)->event == monitor::Event::BootloaderLoaded) {
         VLOG(0) << "secure_env detected guest reboot, restarting.";
@@ -148,6 +148,8 @@ Result<void> SecureEnvMain(int argc, char** argv) {
       CF_EXPECT(SharedFD::SocketPair(AF_UNIX, SOCK_STREAM, 0));
   auto [oemlock_snapshot_socket1, oemlock_snapshot_socket2] =
       CF_EXPECT(SharedFD::SocketPair(AF_UNIX, SOCK_STREAM, 0));
+  auto [weaver_snapshot_socket1, weaver_snapshot_socket2] =
+      CF_EXPECT(SharedFD::SocketPair(AF_UNIX, SOCK_STREAM, 0));
   SharedFD channel_to_run_cvd = DupFdFlag(FLAGS_snapshot_control_fd);
 
   SnapshotCommandHandler suspend_resume_handler(
@@ -157,8 +159,8 @@ Result<void> SecureEnvMain(int argc, char** argv) {
           .keymaster = std::move(keymaster_snapshot_socket1),
           .gatekeeper = std::move(gatekeeper_snapshot_socket1),
           .oemlock = std::move(oemlock_snapshot_socket1),
+          .weaver = std::move(weaver_snapshot_socket1),
       });
-
 
   std::vector<std::thread> threads;
 
@@ -172,17 +174,35 @@ Result<void> SecureEnvMain(int argc, char** argv) {
           oemlock::OemLockResponder responder(channel, oemlock, oemlock_lock);
 
           std::function<bool()> oemlock_process_cb = [&responder]() -> bool {
-            return (responder.ProcessMessage().ok());
+            return (responder.ProcessMessage().has_value());
           };
 
           // infinite loop that returns if resetting responder is needed
           auto result = secure_env_impl::WorkerInnerLoop(
               oemlock_process_cb, oemlock_in, oemlock_snapshot_socket2);
-          if (!result.ok()) {
-            LOG(FATAL) << "oemlock worker failed: " << result.error().Trace();
+          if (!result.has_value()) {
+            LOG(FATAL) << "oemlock worker failed: " << result.error();
           }
         }
       });
+
+  std::vector<SharedFD> stub_snapshot_handlers = {
+      rust_snapshot_socket2,
+      keymaster_snapshot_socket2,
+      gatekeeper_snapshot_socket2,
+      weaver_snapshot_socket2,
+  };
+  for (SharedFD snapshot_socket : stub_snapshot_handlers) {
+    threads.emplace_back([snapshot_socket]() {
+      while (true) {
+        // infinite loop that returns if resetting responder is needed
+        Result<void> result = secure_env_impl::WorkerStubLoop(snapshot_socket);
+        if (!result.has_value()) {
+          LOG(FATAL) << "oemlock worker failed: " << result.error();
+        }
+      }
+    });
+  }
 
   auto kernel_events_fd = DupFdFlag(FLAGS_kernel_events_fd);
   threads.emplace_back(StartKernelEventMonitor(kernel_events_fd, oemlock_lock));
@@ -198,9 +218,9 @@ Result<void> SecureEnvMain(int argc, char** argv) {
 
 int main(int argc, char** argv) {
   auto result = cuttlefish::SecureEnvMain(argc, argv);
-  if (result.ok()) {
+  if (result.has_value()) {
     return 0;
   }
-  LOG(FATAL) << result.error().Trace();
+  LOG(FATAL) << result.error();
   return -1;
 }

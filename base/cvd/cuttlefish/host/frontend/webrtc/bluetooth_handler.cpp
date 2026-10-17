@@ -20,6 +20,8 @@
 
 #include "absl/log/log.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
+
 using namespace android;
 
 namespace cuttlefish {
@@ -31,7 +33,7 @@ BluetoothHandler::BluetoothHandler(
     : send_to_client_(send_to_client),
       rootcanal_socket_(
           SharedFD::SocketLocalClient(rootCanalTestPort, SOCK_STREAM)),
-      shutdown_(SharedFD::Event(0, 0)) {
+      shutdown_(Fd::Event(0, 0).value_or(Fd())) {
   std::thread loop([this]() { ReadLoop(); });
   read_thread_.swap(loop);
 }
@@ -39,7 +41,8 @@ BluetoothHandler::BluetoothHandler(
 BluetoothHandler::~BluetoothHandler() {
   // Send a message to the looper to shut down.
   uint64_t v = 1;
-  shutdown_->Write(&v, sizeof(v));
+  // TODO(schuffelen): Handle unused result
+  (void)shutdown_->Write(&v, sizeof(v));
   // Shut down the socket as well.  Not strictly necessary.
   rootcanal_socket_->Shutdown(SHUT_RDWR);
   read_thread_.join();
@@ -54,13 +57,14 @@ void BluetoothHandler::ReadLoop() {
     Select(&read_set_, nullptr, nullptr, nullptr);
 
     if (read_set_.IsSet(rootcanal_socket_)) {
-      auto read = rootcanal_socket_->Read(buffer, sizeof(buffer));
-      if (read < 0) {
+      Result<uint64_t> data_read =
+          rootcanal_socket_->Read(buffer, sizeof(buffer));
+      if (!data_read.has_value()) {
         PLOG(ERROR) << "Error on reading from RootCanal socket.";
         break;
       }
-      if (read) {
-        send_to_client_(buffer, read);
+      if (*data_read > 0) {
+        send_to_client_(buffer, *data_read);
       }
     }
 
@@ -74,12 +78,13 @@ void BluetoothHandler::ReadLoop() {
 void BluetoothHandler::handleMessage(const uint8_t *msg, size_t len) {
   size_t sent = 0;
   while (sent < len) {
-    auto this_sent = rootcanal_socket_->Write(&msg[sent], len - sent);
-    if (this_sent < 0) {
+    Result<uint64_t> this_sent =
+        rootcanal_socket_->Write(&msg[sent], len - sent);
+    if (!this_sent.has_value()) {
       PLOG(ERROR) << "Error writing to rootcanal socket.";
       return;
     }
-    sent += this_sent;
+    sent += *this_sent;
   }
 }
 

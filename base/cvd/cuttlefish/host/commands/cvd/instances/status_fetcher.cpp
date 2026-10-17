@@ -23,20 +23,20 @@
 #include <utility>
 #include <vector>
 
-#include <fmt/core.h>
-#include <json/json.h>
-#include "absl/strings/match.h"
 #include "absl/log/log.h"
+#include "absl/strings/match.h"
+#include "fmt/core.h"
+#include "json/value.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/common/libs/utils/json.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
-#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
 #include "cuttlefish/common/libs/utils/gflags_xml_parser.h"
+#include "cuttlefish/common/libs/utils/json.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/host_tool_target.h"
 #include "cuttlefish/host/commands/cvd/cli/utils.h"
 #include "cuttlefish/host/commands/cvd/instances/cvd_persistent_data.pb.h"
 #include "cuttlefish/host/libs/config/config_constants.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/managed_stdio.h"
 
 namespace cuttlefish {
 namespace {
@@ -48,33 +48,6 @@ struct IdAndPerInstanceName {
   std::string per_instance_name;
   unsigned id;
 };
-
-// The most important thing this function does is turn "INSTANCE_STATE_RUNNING"
-// into "Running". Some external tools (like the host orchestrator) already
-// depend on this string.
-std::string HumanFriendlyStateName(cvd::InstanceState state) {
-  std::string name = cvd::InstanceState_Name(state);
-  // Drop the enum name prefix
-  std::string_view prefix = "INSTANCE_STATE_";
-  if (absl::StartsWith(name, prefix)) {
-    name = name.substr(prefix.size());
-  }
-
-  for (size_t i = 0; i < name.size(); ++i) {
-    // Replace underscores with spaces
-    if (name[i] == '_') {
-      name[i] = ' ';
-      continue;
-    }
-    // All characters but the first of each word should be lowercase
-    bool first = (i == 0 || name[i - 1] == ' ');
-    if (!first) {
-      name[i] = std::tolower(static_cast<unsigned char>(name[i]));
-    }
-  }
-
-  return name;
-}
 
 // Adds more information to the json object returned by cvd_internal_status,
 // including some that cvd_internal_status normally returns but doesn't when the
@@ -124,7 +97,7 @@ Result<Json::Value> FetchInstanceStatus(LocalInstance& instance,
   auto bin = CF_EXPECT(GetBin(android_host_out));
   auto bin_path = fmt::format("{}/bin/{}", android_host_out, bin);
 
-  cvd_common::Envs envs;
+  std::unordered_map<std::string, std::string> envs;
   envs["HOME"] = home;
   // old cvd_internal_status expects CUTTLEFISH_INSTANCE=<k>
   envs[kCuttlefishInstanceEnvVarName] = std::to_string(instance.Id());
@@ -142,11 +115,34 @@ Result<Json::Value> FetchInstanceStatus(LocalInstance& instance,
   std::string stdout_str, stderr_str;
   RunWithManagedStdio(std::move(help_cmd), nullptr, &stdout_str, &stderr_str);
 
-  std::vector<GflagDescription> internal_flags =
-      CF_EXPECT(ParseGflagsXmlHelp(stdout_str));
-  bool has_print = std::any_of(
-      internal_flags.begin(), internal_flags.end(),
-      [](const GflagDescription& desc) { return desc.name == "print"; });
+  bool has_print = false;
+  Result<std::vector<GflagDescription>> internal_flags =
+      ParseGflagsXmlHelp(stdout_str);
+  if (internal_flags.has_value()) {
+    has_print = std::any_of(
+        internal_flags->begin(), internal_flags->end(),
+        [](const GflagDescription& desc) { return desc.name == "print"; });
+  } else {
+    LOG(INFO) << bin << " does not support --helpxml. Falling back to --help.";
+    ConstructCommandParam fallback_help_cmd_param{
+        .bin_path = bin_path,
+        .home = home,
+        .args = {"--help"},
+        .envs = envs,
+        .working_dir = working_dir,
+        .command_name = bin,
+    };
+    if (Result<Command> fallback_cmd =
+            ConstructCommand(fallback_help_cmd_param);
+        fallback_cmd.has_value()) {
+      stdout_str.clear();
+      stderr_str.clear();
+      RunWithManagedStdio(std::move(*fallback_cmd), nullptr, &stdout_str,
+                          &stderr_str);
+      has_print = stdout_str.find("--print") != std::string::npos ||
+                  stderr_str.find("--print") != std::string::npos;
+    }
+  }
 
   std::vector<std::string> args{"--wait_for_launcher",
                                 std::to_string(timeout.count())};
@@ -197,6 +193,30 @@ Result<Json::Value> FetchInstanceStatus(LocalInstance& instance,
   OverrideInstanceJson(instance, instance_status_json);
 
   return instance_status_json;
+}
+
+std::string HumanFriendlyStateName(cvd::InstanceState state) {
+  std::string name = cvd::InstanceState_Name(state);
+  // Drop the enum name prefix
+  std::string_view prefix = "INSTANCE_STATE_";
+  if (absl::StartsWith(name, prefix)) {
+    name = name.substr(prefix.size());
+  }
+
+  for (size_t i = 0; i < name.size(); ++i) {
+    // Replace underscores with spaces
+    if (name[i] == '_') {
+      name[i] = ' ';
+      continue;
+    }
+    // All characters but the first of each word should be lowercase
+    bool first = (i == 0 || name[i - 1] == ' ');
+    if (!first) {
+      name[i] = std::tolower(static_cast<unsigned char>(name[i]));
+    }
+  }
+
+  return name;
 }
 
 }  // namespace cuttlefish

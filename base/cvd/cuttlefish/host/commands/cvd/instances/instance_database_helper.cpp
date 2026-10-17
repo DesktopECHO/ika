@@ -15,17 +15,14 @@
 
 #include "cuttlefish/host/commands/cvd/instances/instance_database_helper.h"
 
-#include <cstdlib>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <android-base/file.h>
-
-#include "cuttlefish/common/libs/fs/shared_fd.h"
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/host/commands/cvd/instances/instance_manager.h"
+#include "cuttlefish/files/recursively_remove_directory.h"
 #include "cuttlefish/posix/strerror.h"
 
 namespace cuttlefish {
@@ -42,15 +39,15 @@ std::optional<std::string> CreateTempDirectory(
     return {std::string(ptr)};
   }
   std::string default_path = "/tmp/" + subdir + "." + default_suffix;
-  return (EnsureDirectoryExists(default_path).ok() ? std::optional(default_path)
-                                                   : std::nullopt);
+  return (EnsureDirectoryExists(default_path).has_value()
+              ? std::optional(default_path)
+              : std::nullopt);
 }
 
 // Linux "touch" a(n empty) file
 bool Touch(const std::string& full_path) {
   // this file is required only to make FileExists() true.
-  SharedFD new_file = SharedFD::Creat(full_path, S_IRUSR | S_IWUSR);
-  return new_file->IsOpen();
+  return Fd::Creat(full_path, S_IRUSR | S_IWUSR).has_value();
 }
 
 }  // namespace
@@ -104,12 +101,12 @@ bool CvdInstanceDatabaseTest::InitMockAndroidHostOut() {
    *
    */
   std::string android_host_out = workspace_dir_ + "/android_host_out";
-  if (!EnsureDirectoryExists(android_host_out).ok()) {
+  if (!EnsureDirectoryExists(android_host_out).has_value()) {
     SetErrorCode(ErrorCode::kFileError, "Failed to create " + android_host_out);
     return false;
   }
   android_artifacts_path_ = android_host_out;
-  if (!EnsureDirectoryExists(android_artifacts_path_ + "/bin").ok()) {
+  if (!EnsureDirectoryExists(android_artifacts_path_ + "/bin").has_value()) {
     SetErrorCode(ErrorCode::kFileError,
                  "Failed to create " + android_artifacts_path_ + "/bin");
     return false;
@@ -126,14 +123,13 @@ bool CvdInstanceDatabaseTest::AddGroup(
     const std::vector<std::pair<unsigned, std::string>>& instances) {
   LocalInstanceGroup::Builder builder(base_name);
   for (const auto& instance : instances) {
-    builder.AddInstance(instance.first,
-        instance.second);
+    builder.AddInstance(instance.first, instance.second);
   }
   Result<LocalInstanceGroup> create_res = builder.Build();
-  if (!create_res.ok()) {
+  if (!create_res.has_value()) {
     return false;
   }
-  if (!db_.AddInstanceGroup(create_res.value()).ok()) {
+  if (!db_.AddInstanceGroup(create_res.value()).has_value()) {
     SetErrorCode(ErrorCode::kInstanceDabaseError, "Failed to add group");
     return false;
   }

@@ -24,9 +24,10 @@
 #include "absl/log/log.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/libs/config/esp/make_fat_image.h"
 #include "cuttlefish/host/libs/config/known_paths.h"
+#include "cuttlefish/process/execute.h"
 
 namespace cuttlefish {
 
@@ -90,7 +91,8 @@ bool EspBuilder::Build() {
   // newfs_msdos won't make a partition smaller than 257 mb
   // this should be enough for anybody..
   const auto tmp_esp_image = image_path_ + ".tmp";
-  if (!MakeFatImage(tmp_esp_image, 257 /* mb */, 0 /* mb (offset) */).ok()) {
+  if (!MakeFatImage(tmp_esp_image, 257 /* mb */, 0 /* mb (offset) */)
+           .has_value()) {
     LOG(ERROR) << "Failed to create filesystem for " << tmp_esp_image;
     return false;
   }
@@ -117,7 +119,7 @@ bool EspBuilder::Build() {
     }
   }
 
-  if (!RenameFile(tmp_esp_image, image_path_).ok()) {
+  if (!RenameFile(tmp_esp_image, image_path_).has_value()) {
     LOG(ERROR) << "Renaming " << tmp_esp_image << " to " << image_path_
                << " failed";
     return false;

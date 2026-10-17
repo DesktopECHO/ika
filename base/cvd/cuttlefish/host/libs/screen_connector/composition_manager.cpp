@@ -20,7 +20,7 @@
  * Currently the Composition algorithm implemented in
  * this module has a known limitation.  It uses IPC buffers in such a way where
  * it is currently possible for frames to be simultaneously
- * read and written from the same memory lcoation.  It's therefore possible to
+ * read and written from the same memory location.  It's therefore possible to
  * have some display artifacts as partial frames are read.  To remedy there is
  * follow-up work (documented in b/384939093) planned.
  */
@@ -34,13 +34,13 @@
 #include <string_view>
 #include <vector>
 
-#include "absl/strings/ascii.h"
-#include "absl/strings/str_split.h"
 #include "absl/log/log.h"
+#include "absl/strings/ascii.h"
 #include "absl/strings/numbers.h"
+#include "absl/strings/str_split.h"
+#include "drm/drm_fourcc.h"
 #include "libyuv.h"
 
-#include <drm/drm_fourcc.h>
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/screen_connector/ring_buffer_manager.h"
 #include "cuttlefish/host/libs/wayland/wayland_server_callbacks.h"
@@ -182,7 +182,7 @@ void CompositionManager::OnDisplayCreated(const DisplayCreatedEvent& e) {
   auto result = display_ring_buffer_manager_.CreateLocalDisplayBuffer(
       cluster_index_, e.display_number, e.display_width, e.display_height);
 
-  if (!result.ok()) {
+  if (!result.has_value()) {
     LOG(FATAL) << "OnDisplayCreated failed: " << result.error();
   }
 }
@@ -216,7 +216,7 @@ void CompositionManager::OnFrame(uint32_t display_number, uint32_t frame_width,
 // triggered by a thread to force displays to constantly update so that when
 // layers are updated, the user will see the blended result.
 void CompositionManager::ComposeFrame(
-    int display_index, std::shared_ptr<VideoFrameBuffer> buffer) {
+    int display_index, std::shared_ptr<PlanarVideoFrameBuffer> buffer) {
   if (!last_frame_info_map_.count(display_index)) {
     return;
   }
@@ -263,7 +263,8 @@ uint8_t* CompositionManager::AlphaBlendLayers(uint8_t* frame_pixels,
 
 void CompositionManager::ComposeFrame(
     int display, int width, int height, uint32_t frame_fourcc_format,
-    uint32_t frame_stride_bytes, std::shared_ptr<VideoFrameBuffer> buffer) {
+    uint32_t frame_stride_bytes,
+    std::shared_ptr<PlanarVideoFrameBuffer> buffer) {
   uint8_t* shmem_local_display = display_ring_buffer_manager_.ReadFrame(
       cluster_index_, display, width, height);
 

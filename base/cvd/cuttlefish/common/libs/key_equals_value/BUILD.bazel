@@ -1,10 +1,10 @@
-load("//cuttlefish/bazel:rules.bzl", "cf_cc_library", "cf_cc_test")
+load("//cuttlefish/bazel:rules.bzl", "cf_build_test", "cf_cc_library", "cf_cc_test")
 
 package(
     default_visibility = ["//:android_cuttlefish"],
 )
 
-exports_files([".clang-tidy"])
+cf_build_test(name = "key_equals_value_build_test")
 
 cf_cc_library(
     name = "key_equals_value",
@@ -12,7 +12,7 @@ cf_cc_library(
     hdrs = ["key_equals_value.h"],
     deps = [
         "//cuttlefish/common/libs/fs",
-        "//cuttlefish/common/libs/utils:contains",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/result",
         "@abseil-cpp//absl/strings",
     ],
@@ -23,7 +23,6 @@ cf_cc_test(
     srcs = ["key_equals_value_test.cc"],
     deps = [
         "//cuttlefish/common/libs/key_equals_value",
-        "//cuttlefish/result",
         "//cuttlefish/result:result_matchers",
     ],
 )

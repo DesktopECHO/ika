@@ -21,16 +21,15 @@
 #include <string>
 #include <vector>
 
-#include <gflags/gflags.h>
-#include <json/value.h>
 #include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
+#include "json/value.h"
 
 #include "cuttlefish/common/libs/fs/shared_fd.h"
-#include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/common/libs/utils/tee_logging.h"
+#include "cuttlefish/files/file_is_socket.h"
 #include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/flag_parser/gflags_compat.h"
-#include "cuttlefish/common/libs/utils/tee_logging.h"
 #include "cuttlefish/host/libs/command_util/runner/defs.h"
 #include "cuttlefish/host/libs/command_util/util.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
@@ -152,13 +151,13 @@ int main(int argc, char** argv) {
   cuttlefish::LogToStderr();
   cuttlefish::Result<cuttlefish::StatusFlags> flag_result =
       cuttlefish::GetFlagValues(argc, argv);
-  if (!flag_result.ok()) {
+  if (!flag_result.has_value()) {
     LOG(ERROR) << flag_result.error();
     return EXIT_FAILURE;
   }
 
   auto result = cuttlefish::CvdStatusMain(flag_result.value());
-  if (!result.ok()) {
+  if (!result.has_value()) {
     LOG(ERROR) << result.error();
     return EXIT_FAILURE;
   }

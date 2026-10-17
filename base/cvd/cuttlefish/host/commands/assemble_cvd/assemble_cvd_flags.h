@@ -69,6 +69,7 @@ DECLARE_vec(netsim);
 DECLARE_vec(netsim_bt);
 DECLARE_vec(netsim_uwb);
 DECLARE_vec(netsim_nfc);
+DECLARE_vec(netsim_modem);
 DECLARE_string(netsim_args);
 
 DECLARE_bool(enable_automotive_proxy);
@@ -108,7 +109,6 @@ DECLARE_vec(enable_bootanimation);
 
 DECLARE_vec(extra_bootconfig_args_base64);
 
-DECLARE_string(qemu_binary_dir);
 DECLARE_string(crosvm_binary);
 DECLARE_vec(gem5_binary_dir);
 DECLARE_vec(gem5_checkpoint_dir);
@@ -161,6 +161,8 @@ DECLARE_vec(protected_vm);
 
 DECLARE_vec(mte);
 
+DECLARE_vec(enable_pkvm);
+
 DECLARE_vec(enable_audio);
 
 DECLARE_vec(enable_jcard_simulator);
@@ -186,6 +188,11 @@ DECLARE_vec(crosvm_simple_media_device);
 DECLARE_vec(crosvm_v4l2_proxy);
 
 DECLARE_vec(use_pmem);
+
+DECLARE_vec(crosvm_acpi_table);
+DECLARE_vec(crosvm_device_tree_overlay);
+DECLARE_vec(crosvm_file_backed_mapping);
+DECLARE_vec(crosvm_file_backed_mapping_base64);
 
 DECLARE_vec(enable_wifi);
 

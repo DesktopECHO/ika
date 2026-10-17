@@ -18,16 +18,18 @@
 #include <optional>
 #include <string>
 
-#include <json/value.h>
+#include "json/value.h"
 
-#include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/libs/vm_manager/pci.h"
+#include "cuttlefish/process/command.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
 
 class CrosvmBuilder {
  public:
+  static std::string FormatPciArgument(std::optional<pci::Address> pci);
+
   CrosvmBuilder();
 
   void ApplyProcessRestarter(const std::string& crosvm_binary,
@@ -46,8 +48,10 @@ class CrosvmBuilder {
 
   void AddKvmPath(const std::string& path);
 
-  void AddReadOnlyDisk(const std::string& path);
-  void AddReadWriteDisk(const std::string& path);
+  void AddReadOnlyDisk(const std::string& path,
+                       std::optional<pci::Address> pci = std::nullopt);
+  void AddReadWriteDisk(const std::string& path,
+                        std::optional<pci::Address> pci = std::nullopt);
 
   void AddSerialSink();
   void AddSerialConsoleReadOnly(const std::string& output);

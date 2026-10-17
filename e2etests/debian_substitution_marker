@@ -125,11 +125,6 @@ symlinks {
   link_name: "bin/logcat_receiver"
 }
 
-symlinks {
-  target: "/usr/lib/cuttlefish-common/bin/metrics_launcher"
-  link_name: "bin/metrics_launcher"
-}
-
 symlinks: {
   target: "/usr/lib/cuttlefish-common/bin/mkbootfs"
   link_name: "bin/mkbootfs"
@@ -221,8 +216,23 @@ symlinks: {
 }
 
 symlinks: {
+  target: "/usr/lib/cuttlefish-common/bin/vhost_device_vsock"
+  link_name: "bin/vhost_device_vsock"
+}
+
+symlinks: {
   target: "/usr/lib/cuttlefish-common/bin/vhu_media_simple_device"
   link_name: "bin/vhu_media_simple_device"
+}
+
+symlinks: {
+  target: "/usr/lib/cuttlefish-common/bin/vhu_media_emulated_camera_mplane"
+  link_name: "bin/vhu_media_emulated_camera_mplane"
+}
+
+symlinks: {
+  target: "/usr/lib/cuttlefish-common/bin/vhu_media_v4l2_stream_proxy"
+  link_name: "bin/vhu_media_v4l2_stream_proxy"
 }
 
 symlinks: {
@@ -278,6 +288,16 @@ symlinks: {
 symlinks: {
   target: "/usr/lib/cuttlefish-common/etc/modem_simulator/files/iccprofile_for_sim0.xml"
   link_name: "etc/modem_simulator/files/iccprofile_for_sim0.xml"
+}
+
+symlinks: {
+  target: "/usr/lib/cuttlefish-common/etc/modem_simulator/files/iccprofile_for_sim1_for_CtsCarrierApiTestCases.xml"
+  link_name: "etc/modem_simulator/files/iccprofile_for_sim1_for_CtsCarrierApiTestCases.xml"
+}
+
+symlinks: {
+  target: "/usr/lib/cuttlefish-common/etc/modem_simulator/files/iccprofile_for_sim1.xml"
+  link_name: "etc/modem_simulator/files/iccprofile_for_sim1.xml"
 }
 
 symlinks: {

@@ -4,8 +4,6 @@ package(
     default_visibility = ["//:android_cuttlefish"],
 )
 
-exports_files([".clang-tidy"])
-
 cf_cc_library(
     name = "container",
     srcs = ["container.cc"],
@@ -103,7 +101,6 @@ cf_cc_test(
         "//cuttlefish/pretty:unique_ptr",
         "//cuttlefish/pretty:vector",
         "@abseil-cpp//absl/strings",
-        "@fmt",
     ],
 )
 

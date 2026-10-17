@@ -26,10 +26,11 @@
 #include "fmt/ranges.h"  // NOLINT(misc-include-cleaner): version difference
 
 #include "cuttlefish/common/libs/utils/contains.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/commands/process_restarter/parser.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/config/logging.h"
+#include "cuttlefish/process/execute.h"
+#include "cuttlefish/process/subprocess_options.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -118,7 +119,7 @@ int main(int argc, char** argv) {
   cuttlefish::DefaultSubprocessLogging(argv);
   auto result = cuttlefish::RunProcessRestarter(
       std::vector<std::string>(argv + 1, argv + argc));
-  if (!result.ok()) {
+  if (!result.has_value()) {
     VLOG(0) << result.error();
     return EXIT_FAILURE;
   }

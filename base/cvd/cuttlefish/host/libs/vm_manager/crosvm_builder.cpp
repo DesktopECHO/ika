@@ -20,11 +20,11 @@
 
 #include "cuttlefish/common/libs/utils/json.h"
 #include "cuttlefish/common/libs/utils/network.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/libs/command_util/snapshot_utils.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/config/known_paths.h"
 #include "cuttlefish/host/libs/vm_manager/crosvm_cpu.h"
+#include "cuttlefish/process/command.h"
 
 namespace cuttlefish {
 namespace {
@@ -33,12 +33,12 @@ std::string MacCrosvmArgument(std::optional<std::string_view> mac) {
   return mac.has_value() ? fmt::format(",mac={}", mac.value()) : "";
 }
 
-std::string PciCrosvmArgument(std::optional<pci::Address> pci) {
+}  // namespace
+
+std::string CrosvmBuilder::FormatPciArgument(std::optional<pci::Address> pci) {
   return pci.has_value() ? fmt::format(",pci-address={}", pci.value().Id())
                          : "";
 }
-
-}  // namespace
 
 CrosvmBuilder::CrosvmBuilder() : command_("crosvm") {}
 
@@ -63,8 +63,8 @@ void CrosvmBuilder::AddControlSocket(const std::string& control_socket,
     Command stop_cmd(executable_path);
     stop_cmd.AddParameter("stop");
     stop_cmd.AddParameter(control_socket);
-    return stop_cmd.Start().Wait() == 0 ? StopperResult::kStopSuccess
-                                        : StopperResult::kStopFailure;
+    return stop_cmd.Start().Wait() == 0 ? StopperResult::kSuccess
+                                        : StopperResult::kFailure;
   };
   command_.SetStopper(KillSubprocessFallback(stopper));
   command_.AddParameter("--socket=", control_socket);
@@ -120,12 +120,15 @@ void CrosvmBuilder::AddKvmPath(const std::string& path) {
   command_.AddParameter("--hypervisor=kvm[device=", path, "]");
 }
 
-void CrosvmBuilder::AddReadOnlyDisk(const std::string& path) {
-  command_.AddParameter("--block=path=", path, ",ro=true");
+void CrosvmBuilder::AddReadOnlyDisk(const std::string& path,
+                                    std::optional<pci::Address> pci) {
+  command_.AddParameter("--block=path=", path, ",ro=true",
+                        FormatPciArgument(pci));
 }
 
-void CrosvmBuilder::AddReadWriteDisk(const std::string& path) {
-  command_.AddParameter("--block=path=", path);
+void CrosvmBuilder::AddReadWriteDisk(const std::string& path,
+                                     std::optional<pci::Address> pci) {
+  command_.AddParameter("--block=path=", path, FormatPciArgument(pci));
 }
 
 void CrosvmBuilder::AddSerialSink() {
@@ -154,7 +157,7 @@ void CrosvmBuilder::AddTap(const std::string& tap_name,
                            std::optional<std::string_view> mac,
                            const std::optional<pci::Address>& pci) {
   command_.AddParameter("--net=tap-name=", tap_name, MacCrosvmArgument(mac),
-                        PciCrosvmArgument(pci));
+                        FormatPciArgument(pci));
 }
 #endif
 
