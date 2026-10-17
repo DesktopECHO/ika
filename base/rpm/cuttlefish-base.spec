@@ -20,9 +20,11 @@ Source0:        ika-base-%{version}.tar.gz
 # packages' dependencies. A bundled libvirglrenderer.so.1 would otherwise
 # stand in for Fedora's virglrenderer, which crosvm links.
 %global __provides_exclude_from ^/usr/lib/cuttlefish-common/.*$
-# Sonames that only the bundled copies provide; libvirglrenderer is left out
-# because it comes from Fedora's virglrenderer.
-%global __requires_exclude ^(libgfxstream_backend|libvk_swiftshader|libvk_lavapipe|libmem_overrides)\\.so
+# Sonames that only the bundled copies provide. libvirglrenderer.so.1 stays,
+# because crosvm links Fedora's virglrenderer; the unversioned
+# libvirglrenderer.so comes from the bundled, SONAME-less copy that upstream
+# packages for Venus, and only virglrenderer-devel would provide it.
+%global __requires_exclude ^((libgfxstream_backend|libvk_swiftshader|libvk_lavapipe|libmem_overrides)\\.so|libvirglrenderer\\.so\\(\\))
 
 BuildRequires:  libaom-devel
 BuildRequires:  clang-devel
