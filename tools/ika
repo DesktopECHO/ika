@@ -828,6 +828,9 @@ mkdir -p "${CVD_HOME_DIR}"
 CVD_TMP_DIR="${CVD_HOME_DIR}/tmp"
 mkdir -p "${CVD_TMP_DIR}"
 export TMPDIR="${CVD_TMP_DIR}"
+# adb servers started by Ika log here, in TMPDIR, unless ANDROID_ADB_LOG_PATH
+# names another file.
+ADB_SERVER_LOG="${ANDROID_ADB_LOG_PATH:-${CVD_TMP_DIR}/adb.${UID}.log}"
 
 # The pid or lock file (EXT is pid or lock) of an app window's supervisor. The
 # app-supervisor- prefix keeps app-menu-watcher's files out of its glob.
@@ -3119,6 +3122,57 @@ host_adb() {
   adb_bin="$(resolve_adb_bin)"
   [[ -n "${adb_bin}" ]] || return 1
   timeout "${timeout_seconds}" "${adb_bin}" "$@"
+}
+
+# Drops the guest's adb transport once the VM has stopped. Otherwise the adb
+# server keeps reconnecting to it about four times a second until the VM
+# starts again. Starts no adb server when none is running.
+disconnect_guest_adb() {
+  local adb_serial="$1"
+
+  pgrep -u "${UID}" -f '(^|/)adb .*fork-server server' >/dev/null 2>&1 || return 0
+  host_adb 5 disconnect "${adb_serial}" >/dev/null 2>&1 || true
+}
+
+# Prints an epoch time in a date(1) format, with GNU or BSD date.
+format_epoch() {
+  date -d "@$1" "+$2" 2>/dev/null || date -r "$1" "+$2"
+}
+
+# Keeps the last 24 hours of the adb server's log. The server outlives VM
+# restarts and never trims its log, which grows by about 1 MB a day from
+# adb_connector's checks every 5 seconds. The file is rewritten in place
+# because a running server keeps it open for appending; lines it writes during
+# the rewrite may be lost.
+trim_adb_server_log() {
+  local log_file="${ADB_SERVER_LOG}"
+  local cutoff
+  local first_kept
+  local kept
+
+  [[ -s "${log_file}" ]] || return 0
+  cutoff="$(( $(date +%s) - 86400 ))"
+  # Lines start with "MM-DD HH:MM:SS.mmm", without the year: a line is recent
+  # when it is from today, or from yesterday at or after the cutoff time.
+  first_kept="$(awk -v yesterday="$(format_epoch "${cutoff}" '%m-%d')" \
+      -v cutoff_time="$(format_epoch "${cutoff}" '%H:%M:%S')" \
+      -v today="$(date +%m-%d)" '
+    { day = substr($0, 1, 5) }
+    day == today || (day == yesterday && substr($0, 7, 8) >= cutoff_time) {
+      print NR
+      exit
+    }' "${log_file}" || true)"
+
+  [[ "${first_kept}" != "1" ]] || return 0
+  if [[ -z "${first_kept}" ]]; then
+    : > "${log_file}" || true
+    return 0
+  fi
+  kept="$(mktemp "${log_file}.XXXXXX")" || return 0
+  if tail -n "+${first_kept}" "${log_file}" > "${kept}"; then
+    cat "${kept}" > "${log_file}" || true
+  fi
+  rm -f "${kept}"
 }
 
 adb_boot_completed() {
@@ -6212,6 +6266,7 @@ start_cvd() {
   clear_stale_cvd_group
   record_udmabuf_baseline
   protect_overlay_resume
+  trim_adb_server_log
 
   if ! user_supplied_flag "gpu_mode" "$@"; then
     CVD_GPU_DEFAULTS[gpu_mode]="$(default_gpu_mode_for_start)"
@@ -6272,10 +6327,13 @@ stop_cvd_internal() {
   local clear_instance_dirs="${1:-false}"
   shift || true
   local stop_ok="false"
+  local adb_serial
   local -a run_with_args=()
   local -a stop_args=()
 
   normalize_stop_grace_seconds
+  # Before the stop, which can clear the config the serial comes from.
+  adb_serial="$(resolve_adb_serial)"
 
   if [[ "${clear_instance_dirs}" == "true" ]]; then
     stop_args+=("--clear_instance_dirs")
@@ -6309,6 +6367,7 @@ stop_cvd_internal() {
 
   stop_dnsmasq
   cleanup_user_processes
+  disconnect_guest_adb "${adb_serial}"
   report_udmabuf_leaks
 
   if has_live_cvd_processes; then

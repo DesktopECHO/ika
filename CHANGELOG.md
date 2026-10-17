@@ -28,6 +28,11 @@
   progress, for up to four times as long, then opens the console.
 - `ika start` no longer fails at random right after launching the VM, while
   `cvd create` is still setting it up.
+- `ika stop` disconnects adb from Android, so the adb server no longer keeps
+  trying to reconnect to the stopped VM several times a second.
+- The adb server's log, `~/ika/tmp/adb.<uid>.log`, keeps only its last 24
+  hours: `ika start` trims it when Android starts. It used to grow by about
+  1 MB a day for as long as the adb server ran.
 
 ## Ika 261016, changes since release 261012
 
