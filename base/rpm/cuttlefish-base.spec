@@ -370,6 +370,11 @@ mkdir -p %{buildroot}/usr/lib
 cp -a base/cvd/bazel-out/${bazel_arch}-opt/bin/cuttlefish/package/cuttlefish-common %{buildroot}/usr/lib/
 # Bazel leaves its tree artifacts read-only; more files are installed below.
 chmod -R u+w %{buildroot}/usr/lib/cuttlefish-common
+# Upstream's host package ships etc/cvd_config, which Ika's ROM package
+# already provides through the link ika-lineageos makes at
+# etc/cvd_config. Leave it to the ROM so the two packages don't both
+# claim those files.
+rm -rf %{buildroot}/usr/lib/cuttlefish-common/etc/cvd_config
 mkdir -p %{buildroot}/usr/bin
 cp -a base/cvd/bazel-out/${bazel_arch}-opt/bin/cuttlefish/package/cuttlefish-integration/bin/* %{buildroot}/usr/bin/
 mkdir -p %{buildroot}/usr/lib/cuttlefish-metrics/bin

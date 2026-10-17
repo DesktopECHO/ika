@@ -206,6 +206,11 @@ package_ika-base() {
   cp -a "${out}/cuttlefish-common" "${pkgdir}/usr/lib/"
   # Bazel leaves its tree artifacts read-only; more files are installed below.
   chmod -R u+w "${pkgdir}/usr/lib/cuttlefish-common"
+  # Upstream's host package ships etc/cvd_config, which Ika's ROM package
+  # already provides through the link ika-lineageos makes at
+  # etc/cvd_config. Leave it to the ROM so the two packages don't both
+  # claim those files.
+  rm -rf "${pkgdir}/usr/lib/cuttlefish-common/etc/cvd_config"
   rm -rf "${pkgdir}/usr/lib/cuttlefish-common/bin/cvd.repo_mapping" \
          "${pkgdir}/usr/lib/cuttlefish-common/bin"/cvd.runfiles* \
          "${pkgdir}/usr/lib/cuttlefish-common/bin/crosvm.repo_mapping" \
