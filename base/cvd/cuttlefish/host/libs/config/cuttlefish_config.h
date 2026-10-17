@@ -526,6 +526,9 @@ class CuttlefishConfig {
     std::string gpu_gfxstream_transport() const;
     std::string gpu_renderer_features() const;
     std::string gpu_context_types() const;
+    // The host GLES version gfxstream renders with, as (major << 16) | minor,
+    // or 0 when unknown.
+    int gpu_host_gles_version() const;
     GuestHwuiRenderer guest_hwui_renderer() const;
     GuestRendererPreload guest_renderer_preload() const;
     std::string guest_vulkan_driver() const;
@@ -762,6 +765,7 @@ class CuttlefishConfig {
     void set_gpu_gfxstream_transport(const std::string& transport);
     void set_gpu_renderer_features(const std::string& features);
     void set_gpu_context_types(const std::string& context_types);
+    void set_gpu_host_gles_version(int version);
     void set_guest_hwui_renderer(GuestHwuiRenderer renderer);
     void set_guest_renderer_preload(GuestRendererPreload preload);
     void set_guest_vulkan_driver(const std::string& driver);

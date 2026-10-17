@@ -66,6 +66,39 @@ bool IsLikelySoftwareRenderer(const std::string& renderer) {
          lower_renderer.find("lavapipe") != std::string::npos;
 }
 
+// The host EGL driver's GLES version, as (major << 16) | minor, read from a
+// version string such as "OpenGL ES 3.0 Mesa 26.2.4"; 0 when unknown.
+CF_UNUSED_ON_MACOS
+int HostGlesVersion(
+    const gfxstream::proto::GraphicsAvailability& availability) {
+  if (!availability.has_egl()) {
+    return 0;
+  }
+  const auto& egl = availability.egl();
+  std::string_view version;
+  if (egl.has_gles3_availability() && egl.gles3_availability().has_version()) {
+    version = egl.gles3_availability().version();
+  } else if (egl.has_gles2_availability() &&
+             egl.gles2_availability().has_version()) {
+    version = egl.gles2_availability().version();
+  }
+  constexpr std::string_view kPrefix = "OpenGL ES ";
+  const auto start = version.find(kPrefix);
+  if (start == std::string_view::npos) {
+    return 0;
+  }
+  const std::vector<std::string_view> parts =
+      absl::StrSplit(version.substr(start + kPrefix.size()),
+                     absl::MaxSplits(absl::ByAnyChar(". "), 2));
+  int major = 0;
+  int minor = 0;
+  if (parts.size() < 2 || !absl::SimpleAtoi(parts[0], &major) ||
+      !absl::SimpleAtoi(parts[1], &minor)) {
+    return 0;
+  }
+  return (major << 16) | minor;
+}
+
 bool HasHardwareBackedVulkan(
     const gfxstream::proto::GraphicsAvailability& availability) {
   if (!availability.has_vulkan()) {
@@ -748,6 +781,11 @@ Result<void> SetGfxstreamFlags(
   }
 
   instance.set_gpu_gfxstream_transport(gfxstream_transport);
+
+  // Unless ANGLE runs in the guest, the guest's GLES runs on the host's GLES
+  // driver, so the guest should not advertise a newer version than the host's.
+  instance.set_gpu_host_gles_version(
+      IsGfxstreamGuestAngleMode(gpu_mode) ? 0 : HostGlesVersion(availability));
   return {};
 }
 

@@ -209,6 +209,14 @@ CrosvmManager::ConfigureGraphics(
               "Invalid Gfxstream transport option: \"" << gfxstream_transport
                                                        << "\"");
 
+    // Advertise no newer GLES than the host driver gfxstream renders with, so
+    // apps do not ask for contexts the host cannot create.
+    int gles_version = (3 << 16) | 2;  // OpenGL ES 3.2
+    if (const int host_gles_version = instance.gpu_host_gles_version();
+        host_gles_version > 0) {
+      gles_version = std::min(gles_version, host_gles_version);
+    }
+
     bootconfig_args = {
         {"androidboot.cpuvulkan.version", "0"},
         {"androidboot.hardware.gralloc", "minigbm"},
@@ -217,10 +225,18 @@ CrosvmManager::ConfigureGraphics(
         {"androidboot.hardware.hwcomposer.display_framebuffer_format",
          instance.guest_uses_bgra_framebuffers() ? "bgra" : "rgba"},
         {"androidboot.hardware.egl", gles_impl},
-        {"androidboot.hardware.vulkan", "ranchu"},
         {"androidboot.hardware.gltransport", gfxstream_transport},
-        {"androidboot.opengles.version", "196610"},  // OpenGL ES 3.2
+        {"androidboot.opengles.version", std::to_string(gles_version)},
     };
+
+    // Without gfxstream's Vulkan context type the guest's ranchu driver has no
+    // host Vulkan behind it, and apps probing it only fail; leave the driver
+    // unset, as for virgl.
+    if (IsGfxstreamGuestAngleMode(instance.gpu_mode()) ||
+        GfxstreamContextTypesIncludeVulkan(
+            GfxstreamContextTypes(instance, kGfxstreamContextTypes))) {
+      bootconfig_args["androidboot.hardware.vulkan"] = "ranchu";
+    }
   } else if (instance.gpu_mode() == GpuMode::Custom) {
     bootconfig_args = {
         {"androidboot.cpuvulkan.version", "0"},
