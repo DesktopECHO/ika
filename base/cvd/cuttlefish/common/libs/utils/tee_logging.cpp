@@ -13,10 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "tee_logging.h"
+#include "cuttlefish/common/libs/utils/tee_logging.h"
 
 #include <fcntl.h>
+#include <stdint.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -24,17 +26,17 @@
 #include <cinttypes>
 #include <cstring>
 #include <ctime>
+#include <iterator>
 #include <limits>
-#include <ostream>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include <android-base/file.h>
-#include <android-base/macros.h>
-#include <android-base/threads.h>
+#include "absl/base/log_severity.h"
 #include "absl/log/globals.h"
 #include "absl/log/initialize.h"
 #include "absl/log/log.h"
@@ -43,20 +45,25 @@
 #include "absl/log/log_sink_registry.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_format.h"
+#include "android-base/file.h"
+#include "android-base/threads.h"
+#include "fmt/format.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_buf.h"
+#include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/environment.h"
-#include "cuttlefish/common/libs/utils/proc_file_utils.h"
+#include "cuttlefish/process/proc_file_utils.h"
 #include "cuttlefish/result/result.h"
 
-using android::base::GetThreadId;
 using absl::StrFormat;
+using android::base::GetThreadId;
 
 namespace cuttlefish {
 namespace {
 
-std::string ToUpper(const std::string& input) {
-  std::string output = input;
+std::string ToUpper(std::string_view input) {
+  std::string output(input);
   std::transform(output.begin(), output.end(), output.begin(),
                  [](unsigned char ch) { return std::toupper(ch); });
   return output;
@@ -134,18 +141,17 @@ std::string StderrOutputGenerator(const struct tm& now, int pid, uint64_t tid,
 
   static const char log_characters[] = "VDIWEF";
   static_assert(
-      arraysize(log_characters) - 1 == static_cast<int>(LogSeverity::Fatal) + 1,
+      std::size(log_characters) - 1 == static_cast<int>(LogSeverity::Fatal) + 1,
       "Mismatch in size of log_characters and values in LogSeverity");
   char severity_char = log_characters[static_cast<int>(severity)];
   std::string line_prefix;
   if (file != nullptr) {
     line_prefix =
         StrFormat("%s %c %s %5d %5" PRIu64 " %s:%u] ", tag ? tag : "nullptr",
-                     severity_char, timestamp, pid, tid, file, line);
+                  severity_char, timestamp, pid, tid, file, line);
   } else {
-    line_prefix =
-        StrFormat("%s %c %s %5d %5" PRIu64 " ", tag ? tag : "nullptr",
-                     severity_char, timestamp, pid, tid);
+    line_prefix = StrFormat("%s %c %s %5d %5" PRIu64 " ", tag ? tag : "nullptr",
+                            severity_char, timestamp, pid, tid);
   }
 
   auto [size, new_lines] = CountSizeAndNewLines(message);
@@ -187,9 +193,10 @@ std::string StripColorCodes(const std::string& str) {
 SeverityTarget SeverityTarget::FromFile(const std::string& path,
                                         MetadataLevel metadata_level,
                                         LogSeverity severity) {
-  auto log_file_fd =
-      SharedFD::Open(path, O_CREAT | O_WRONLY | O_APPEND,
-                     S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+  SharedFD log_file_fd =
+      Fd::Open(path, O_CREAT | O_WRONLY | O_APPEND,
+               S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH)
+          .value_or(Fd());
   if (!log_file_fd->IsOpen()) {
     LOG(FATAL) << "Failed to create log file: " << log_file_fd->StrError();
   }
@@ -206,7 +213,7 @@ class LogSink : public absl::LogSink {
   LogSink(SeverityTarget destination, const std::string& prefix)
       : destination_(std::move(destination)), prefix_(prefix) {
     Result<std::string> exe = GetExecutablePath(getpid());
-    if (!exe.ok()) {
+    if (!exe.has_value()) {
       executable_ = std::to_string(getpid());
       return;
     }
@@ -273,7 +280,7 @@ std::string FromSeverity(LogSeverity severity) {
   return "Unexpected severity";
 }
 
-Result<LogSeverity> ToSeverity(const std::string& value) {
+Result<LogSeverity> ToSeverity(std::string_view value) {
   const std::unordered_map<std::string, LogSeverity> string_to_severity{
       {"VERBOSE", LogSeverity::Verbose}, {"DEBUG", LogSeverity::Debug},
       {"INFO", LogSeverity::Info},       {"WARNING", LogSeverity::Warning},
@@ -356,9 +363,10 @@ void LogToStderrAndFiles(const std::vector<std::string>& files,
                          MetadataLevel stderr_level,
                          std::optional<LogSeverity> stderr_severity) {
   std::vector<SeverityTarget> log_severities = SeverityTargetsForFiles(files);
+  SharedFD std_err_fd = Fd::Dup(2).value_or(Fd());
   log_severities.push_back(
       SeverityTarget{stderr_severity ? *stderr_severity : ConsoleSeverity(),
-                     SharedFD::Dup(/* stderr */ 2), stderr_level});
+                     std_err_fd, stderr_level});
   SetLoggers(log_severities, log_prefix);
 }
 

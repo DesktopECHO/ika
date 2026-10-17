@@ -15,13 +15,17 @@
  */
 #include "cuttlefish/host/commands/assemble_cvd/flags.h"
 
+#include <stddef.h>
 #include <stdint.h>
-#include <sys/types.h>
+#include <stdlib.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <iomanip>
 #include <iostream>
+#include <map>
+#include <memory>
 #include <optional>
 #include <regex>
 #include <set>
@@ -29,26 +33,29 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "absl/log/log.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_replace.h"
 #include "absl/strings/str_split.h"
-#include "android-base/file.h"
 #include "fmt/format.h"
-#include "fruit/fruit.h"
+#include "fruit/fruit_forward_decls.h"
+#include "fruit/injector.h"
 #include "gflags/gflags.h"
-#include "json/json.h"
-#include "json/writer.h"
 
 #include "cuttlefish/common/libs/utils/base64.h"
 #include "cuttlefish/common/libs/utils/container.h"
 #include "cuttlefish/common/libs/utils/contains.h"
+#include "cuttlefish/common/libs/utils/environment.h"
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/host_info.h"
 #include "cuttlefish/common/libs/utils/known_paths.h"
 #include "cuttlefish/common/libs/utils/network.h"
+#include "cuttlefish/files/directory_exists.h"
+#include "cuttlefish/files/file_exists.h"
+#include "cuttlefish/files/is_directory_empty.h"
 #include "cuttlefish/host/commands/assemble_cvd/alloc.h"
 #include "cuttlefish/host/commands/assemble_cvd/assemble_cvd_flags.h"
 #include "cuttlefish/host/commands/assemble_cvd/disk_image_flags_vectorization.h"
@@ -69,7 +76,9 @@
 #include "cuttlefish/host/commands/assemble_cvd/flags/mcu_config_path.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/memory_mb.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/parser.h"
+#include "cuttlefish/host/commands/assemble_cvd/flags/qemu_binary_dir.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/restart_subprocesses.h"
+#include "cuttlefish/host/commands/assemble_cvd/flags/super_image.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/system_image_dir.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/use_cvdalloc.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/vendor_boot_image.h"
@@ -78,12 +87,17 @@
 #include "cuttlefish/host/commands/assemble_cvd/guest_config.h"
 #include "cuttlefish/host/commands/assemble_cvd/media.h"
 #include "cuttlefish/host/commands/assemble_cvd/network_flags.h"
+#include "cuttlefish/host/commands/assemble_cvd/proto/guest_config.pb.h"
 #include "cuttlefish/host/commands/assemble_cvd/touchpad.h"
 #include "cuttlefish/host/commands/cvdalloc/interface.h"
 #include "cuttlefish/host/libs/config/ap_boot_flow.h"
 #include "cuttlefish/host/libs/config/config_constants.h"
+#include "cuttlefish/host/libs/config/config_fragment.h"
+#include "cuttlefish/host/libs/config/config_utils.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
+#include "cuttlefish/host/libs/config/defaults/defaults.h"
 #include "cuttlefish/host/libs/config/display.h"
+#include "cuttlefish/host/libs/config/external_network_mode.h"
 #include "cuttlefish/host/libs/config/fetcher_configs.h"
 #include "cuttlefish/host/libs/config/gpu_mode.h"
 #include "cuttlefish/host/libs/config/host_tools_version.h"
@@ -409,17 +423,10 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
   tmp_config_obj.set_ap_vm_manager(ToString(vm_manager_flag.Mode()) +
                                    "_openwrt");
 
-  // TODO: schuffelen - fix behavior on riscv64
-  if (guest_configs[0].target_arch == Arch::RiscV64) {
-    static constexpr char kRiscv64Secure[] = "keymint,gatekeeper,oemlock";
-    SetCommandLineOptionWithMode("secure_hals", kRiscv64Secure,
-                                 google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  } else {
-    static constexpr char kDefaultSecure[] =
-        "oemlock,guest_keymint_insecure,guest_gatekeeper_insecure";
-    SetCommandLineOptionWithMode("secure_hals", kDefaultSecure,
-                                 google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  }
+  static constexpr char kDefaultSecure[] =
+      "oemlock,guest_keymint_insecure,guest_gatekeeper_insecure";
+  SetCommandLineOptionWithMode("secure_hals", kDefaultSecure,
+                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
   auto secure_hals = CF_EXPECT(ParseSecureHals(FLAGS_secure_hals));
   CF_EXPECT(ValidateSecureHals(secure_hals));
   tmp_config_obj.set_secure_hals(secure_hals);
@@ -436,9 +443,6 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
   tmp_config_obj.set_gem5_debug_flags(FLAGS_gem5_debug_flags);
 
   tmp_config_obj.set_sig_server_address(FLAGS_webrtc_sig_server_addr);
-
-  tmp_config_obj.set_enable_metrics(FLAGS_report_anonymous_usage_stats);
-  // TODO(moelsherif): Handle this flag (set_metrics_binary) in the future
 
   std::optional<bool> guest_config_mac80211_hwsim =
       guest_configs[0].enforce_mac80211_hwsim;
@@ -463,9 +467,6 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
   tmp_config_obj.set_ap_rootfs_image(ap_rootfs_image);
   tmp_config_obj.set_ap_kernel_image(FLAGS_ap_kernel_image);
 
-  tmp_config_obj.set_enable_host_nfc(FLAGS_enable_host_nfc);
-  tmp_config_obj.set_enable_host_nfc_connector(FLAGS_enable_host_nfc);
-
   // get flag default values and store into map
   auto name_to_default_value = CurrentFlagsToDefaultValue();
   // old flags but vectorized for multi-device instances
@@ -474,33 +475,15 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
   // netsim flags allow all radios or selecting a specific radio
   std::vector<bool> netsim_all_radios_vec =
       CF_EXPECT(GET_FLAG_BOOL_VALUE(netsim));
-  bool any_netsim_all_radios =
-      std::any_of(netsim_all_radios_vec.begin(), netsim_all_radios_vec.end(),
-                  [](bool e) { return e; });
   std::vector<bool> netsim_bt_vec = CF_EXPECT(GET_FLAG_BOOL_VALUE(netsim_bt));
-  bool any_netsim_bt = std::any_of(netsim_bt_vec.begin(), netsim_bt_vec.end(),
-                                   [](bool e) { return e; });
   std::vector<bool> netsim_uwb_vec = CF_EXPECT(GET_FLAG_BOOL_VALUE(netsim_uwb));
   bool any_netsim_uwb = std::any_of(
       netsim_uwb_vec.begin(), netsim_uwb_vec.end(), [](bool e) { return e; });
   std::vector<bool> netsim_nfc_vec = CF_EXPECT(GET_FLAG_BOOL_VALUE(netsim_nfc));
   bool any_netsim_nfc = std::any_of(
       netsim_nfc_vec.begin(), netsim_nfc_vec.end(), [](bool e) { return e; });
-  bool netsim_has_bt = any_netsim_all_radios || any_netsim_bt;
-  bool netsim_has_uwb = any_netsim_all_radios || any_netsim_uwb;
-  bool netsim_has_nfc = any_netsim_all_radios || any_netsim_nfc;
-
-  // These flags inform NetsimServer::ResultSetup which radios it owns.
-  if (netsim_has_bt) {
-    tmp_config_obj.netsim_radio_enable(
-        CuttlefishConfig::NetsimRadio::Bluetooth);
-  }
-  if (netsim_has_uwb) {
-    tmp_config_obj.netsim_radio_enable(CuttlefishConfig::NetsimRadio::Uwb);
-  }
-  if (netsim_has_nfc) {
-    tmp_config_obj.netsim_radio_enable(CuttlefishConfig::NetsimRadio::Nfc);
-  }
+  std::vector<bool> netsim_modem_vec =
+      CF_EXPECT(GET_FLAG_BOOL_VALUE(netsim_modem));
 
   bool any_not_netsim_bt = false;
   bool any_not_netsim_uwb = false;
@@ -603,6 +586,8 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
   std::vector<bool> vhost_net_vec = CF_EXPECT(GET_FLAG_BOOL_VALUE(vhost_net));
   std::vector<std::string> vhost_user_vsock_vec =
       CF_EXPECT(GET_FLAG_STR_VALUE(vhost_user_vsock));
+  std::vector<bool> enable_pkvm_vec =
+      CF_EXPECT(GET_FLAG_BOOL_VALUE(enable_pkvm));
   std::vector<std::string> ril_dns_vec = CF_EXPECT(GET_FLAG_STR_VALUE(ril_dns));
   std::vector<bool> enable_jcard_simulator_vec =
       CF_EXPECT(GET_FLAG_BOOL_VALUE(enable_jcard_simulator));
@@ -641,10 +626,18 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
   std::vector<bool> smt_vec = CF_EXPECT(GET_FLAG_BOOL_VALUE(smt));
   std::vector<std::string> crosvm_binary_vec =
       CF_EXPECT(GET_FLAG_STR_VALUE(crosvm_binary));
+  std::vector<std::string> crosvm_acpi_table_vec =
+      CF_EXPECT(GET_FLAG_STR_VALUE(crosvm_acpi_table));
+  std::vector<std::string> crosvm_device_tree_overlay_vec =
+      CF_EXPECT(GET_FLAG_STR_VALUE(crosvm_device_tree_overlay));
+  std::vector<std::string> crosvm_file_backed_mapping_vec =
+      CF_EXPECT(GET_FLAG_STR_VALUE(crosvm_file_backed_mapping));
+  std::vector<std::string> crosvm_file_backed_mapping_base64_vec =
+      CF_EXPECT(GET_FLAG_STR_VALUE(crosvm_file_backed_mapping_base64));
   std::vector<std::string> seccomp_policy_dir_vec =
       CF_EXPECT(GET_FLAG_STR_VALUE(seccomp_policy_dir));
-  std::vector<std::string> qemu_binary_dir_vec =
-      CF_EXPECT(GET_FLAG_STR_VALUE(qemu_binary_dir));
+  QemuBinaryDirFlag qemu_binary_dir_values =
+      CF_EXPECT(QemuBinaryDirFlag::FromGlobalGflags());
 
   // new instance specific flags (moved from common flags)
   std::vector<std::string> gem5_binary_dir_vec =
@@ -753,7 +746,7 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
   auto env_config = const_cast<const CuttlefishConfig&>(tmp_config_obj)
                         .ForEnvironment(environment_name);
 
-  mutable_env_config.set_group_uuid(std::time(0));
+  mutable_env_config.set_group_uuid(time(0));
 
   std::vector<bool> enable_wifi_vec =
       CF_EXPECT(GET_FLAG_BOOL_VALUE(enable_wifi));
@@ -797,19 +790,21 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
   auto num_to_webrtc_device_id_flag_map =
       CF_EXPECT(CreateNumToWebrtcDeviceIdMap(tmp_config_obj, instance_nums,
                                              FLAGS_webrtc_device_id));
-  size_t provided_serials_cnt =
-      std::count(FLAGS_serial_number.begin(), FLAGS_serial_number.end(), ',') +
-      1;
-  CF_EXPECTF(
-      provided_serials_cnt == 1 || provided_serials_cnt == instances_size,
-      "Must have a single serial number prefix or one serial number per "
-      "instance, have {} but expectected {}",
-      provided_serials_cnt, instances_size);
-  if (provided_serials_cnt == 1 && instances_size > 1) {
-    // Make sure the serial numbers are different when running multiple
-    // instances and using the default value for the flag
-    for (size_t i = 0; i < instance_nums.size(); ++i) {
-      serial_number_vec[i] += std::to_string(instance_nums[i]);
+  if (!FLAGS_serial_number.empty()) {
+    size_t provided_serials_cnt = std::count(FLAGS_serial_number.begin(),
+                                             FLAGS_serial_number.end(), ',') +
+                                  1;
+    CF_EXPECTF(
+        provided_serials_cnt == 1 || provided_serials_cnt == instances_size,
+        "Must have a single serial number prefix or one serial number per "
+        "instance, have {} but expectected {}",
+        provided_serials_cnt, instances_size);
+    if (provided_serials_cnt == 1 && instances_size > 1) {
+      // Make sure the serial numbers are different when running multiple
+      // instances and using the default value for the flag
+      for (size_t i = 0; i < instance_nums.size(); ++i) {
+        serial_number_vec[i] += std::to_string(instance_nums[i]);
+      }
     }
   }
   for (const auto& num : instance_nums) {
@@ -866,8 +861,21 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
     }
 
     instance.set_crosvm_binary(crosvm_binary_vec[instance_index]);
+    instance.set_crosvm_acpi_table(crosvm_acpi_table_vec[instance_index]);
+    instance.set_crosvm_device_tree_overlay(
+        crosvm_device_tree_overlay_vec[instance_index]);
+    instance.set_crosvm_file_backed_mapping(
+        crosvm_file_backed_mapping_vec[instance_index]);
+    if (!crosvm_file_backed_mapping_base64_vec[instance_index].empty()) {
+      std::vector<uint8_t> decoded_mapping = CF_EXPECT(
+          DecodeBase64(crosvm_file_backed_mapping_base64_vec[instance_index]));
+      std::string decoded_mapping_str(decoded_mapping.begin(),
+                                      decoded_mapping.end());
+      instance.set_crosvm_file_backed_mapping(decoded_mapping_str);
+    }
     instance.set_seccomp_policy_dir(seccomp_policy_dir_vec[instance_index]);
-    instance.set_qemu_binary_dir(qemu_binary_dir_vec[instance_index]);
+    instance.set_qemu_binary_dir(
+        qemu_binary_dir_values.ForIndex(instance_index));
 
     // wifi, bluetooth, Thread, connectivity setup
 
@@ -908,9 +916,10 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
       if (guest_configs[instance_index].vhost_user_vsock) {
         instance.set_vhost_user_vsock(true);
       } else if (VmManagerIsCrosvm(tmp_config_obj) &&
-                 default_on_arch.find(
-                     guest_configs[instance_index].target_arch) !=
-                     default_on_arch.end()) {
+                 (default_on_arch.find(
+                      guest_configs[instance_index].target_arch) !=
+                      default_on_arch.end() ||
+                  StringFromEnv("CVD_INVOKER").value_or("") == "podcvd")) {
         instance.set_vhost_user_vsock(true);
       } else {
         instance.set_vhost_user_vsock(false);
@@ -930,11 +939,21 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
           vhost_user_vsock_vec[instance_index]);
     }
 
-    if (use_random_serial_vec[instance_index]) {
+    if (enable_pkvm_vec[instance_index]) {
+      CF_EXPECT_EQ(tmp_config_obj.vm_manager(), VmmMode::kCrosvm,
+                   "Only crosvm supports --enable_pkvm");
+      CF_EXPECT_EQ(guest_configs[instance_index].target_arch, Arch::Arm64,
+                   "--enable_pkvm requires an arm64 guest");
+    }
+    instance.set_enable_pkvm(enable_pkvm_vec[instance_index]);
+
+    if (!serial_number_vec[instance_index].empty()) {
+      instance.set_serial_number(serial_number_vec[instance_index]);
+    } else if (use_random_serial_vec[instance_index]) {
       instance.set_serial_number(
           RandomSerialNumber("CFCVD" + std::to_string(num)));
     } else {
-      instance.set_serial_number(serial_number_vec[instance_index]);
+      instance.set_serial_number(StrForInstance("CUTTLEFISHCVD", num));
     }
 
     instance.set_grpc_socket_path(const_instance.PerInstanceGrpcSocketPath(""));
@@ -1036,9 +1055,12 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
         guest_enforce_security_values.ForIndex(instance_index));
     instance.set_pause_in_bootloader(pause_in_bootloader_vec[instance_index]);
     instance.set_run_as_daemon(daemon_values.ForIndex(instance_index));
+    bool is_modem_netsim = netsim_all_radios_vec[instance_index] ||
+                           netsim_modem_vec[instance_index];
     instance.set_enable_modem_simulator(
         enable_modem_simulator_vec[instance_index] &&
-        !enable_minimal_mode_vec[instance_index]);
+        !enable_minimal_mode_vec[instance_index] && !is_modem_netsim);
+    instance.set_enable_modem_netsim(is_modem_netsim);
     instance.set_modem_simulator_instance_number(
         modem_simulator_count_vec[instance_index]);
     instance.set_modem_simulator_sim_type(
@@ -1062,8 +1084,15 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
     }
     instance.set_mobile_tap_name(iface_config.mobile_tap.name);
 
-    CF_EXPECT(ConfigureNetworkSettings(ril_dns_vec[instance_index],
-                                       const_instance, instance));
+    auto external_network_mode = CF_EXPECT(
+        ParseExternalNetworkMode(device_external_network_vec[instance_index]));
+    CF_EXPECT(external_network_mode == ExternalNetworkMode::kTap ||
+                  external_network_mode == ExternalNetworkMode::kSlirp,
+              "Unknown external_network_mode");
+    instance.set_external_network_mode(external_network_mode);
+
+    CF_EXPECT(ConfigureNetworkSettings(
+        ril_dns_vec[instance_index], tmp_config_obj, const_instance, instance));
 
     bool use_non_bridged_wireless =
         (NetworkInterfaceExists(iface_config.non_bridged_wireless_tap.name) ||
@@ -1094,7 +1123,9 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
     instance.set_enable_host_uwb_connector(FLAGS_enable_host_uwb &&
                                            !is_uwb_netsim);
 
-    bool is_any_netsim = is_netsim_all || is_bt_netsim || is_uwb_netsim;
+    bool is_nfc_netsim = is_netsim_all || netsim_nfc_vec[instance_index];
+    bool is_any_netsim = is_netsim_all || is_bt_netsim || is_uwb_netsim ||
+                         is_nfc_netsim || is_modem_netsim;
 
     instance.set_uuid(uuid_vec[instance_index]);
 
@@ -1134,16 +1165,50 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
     }
 
     // gpu related settings
-    const GpuMode gpu_mode = CF_EXPECT(ConfigureGpuSettings(
-        graphics_availability, gpu_mode_values.ForIndex(instance_index),
-        gpu_vhost_user_mode_vec[instance_index],
-        gpu_renderer_features_vec[instance_index],
-        gpu_context_types_vec[instance_index],
-        guest_hwui_renderer_vec[instance_index],
-        guest_renderer_preload_vec[instance_index], vm_manager_flag.Mode(),
-        guest_configs[instance_index], instance));
-    calculated_gpu_mode_vec[instance_index] =
-        gpu_mode_values.ForIndex(instance_index);
+    instance.set_has_vulkan_gfxstream_apex(
+        guest_configs[instance_index].has_vulkan_gfxstream_apex);
+    instance.set_has_vulkan_lavapipe_apex(
+        guest_configs[instance_index].has_vulkan_lavapipe_apex);
+    instance.set_has_vulkan_swiftshader_apex(
+        guest_configs[instance_index].has_vulkan_swiftshader_apex);
+    instance.set_has_vulkan_venus_apex(
+        guest_configs[instance_index].has_vulkan_venus_apex);
+
+    const GpuMode gpu_mode = CF_EXPECT(SelectGpuMode(
+        gpu_mode_values.ForIndex(instance_index), vm_manager_flag.Mode(),
+        guest_configs[instance_index], gpu_context_types_vec[instance_index],
+        graphics_availability));
+    instance.set_gpu_mode(gpu_mode);
+
+#ifdef __APPLE__
+    instance.set_enable_gpu_vhost_user(false);
+#else
+    const GraphicsSettings graphics_settings = CF_EXPECT(GetGraphicsSettings(
+        gpu_mode, gpu_vhost_user_mode_vec[instance_index],
+        vm_manager_flag.Mode(), graphics_availability,
+        guest_configs[instance_index], guest_hwui_renderer_vec[instance_index],
+        guest_renderer_preload_vec[instance_index],
+        gpu_renderer_features_vec[instance_index]));
+    instance.set_enable_gpu_vhost_user(graphics_settings.enable_gpu_vhost_user);
+    instance.set_enable_gpu_external_blob(
+        graphics_settings.enable_gpu_external_blob);
+    instance.set_enable_gpu_system_blob(
+        graphics_settings.enable_gpu_system_blob);
+    instance.set_gpu_angle_feature_overrides_enabled(
+        graphics_settings.angle_feature_overrides_enabled);
+    instance.set_gpu_angle_feature_overrides_disabled(
+        graphics_settings.angle_feature_overrides_disabled);
+    instance.set_guest_hwui_renderer(graphics_settings.hwui_renderer);
+    instance.set_guest_renderer_preload(
+        graphics_settings.guest_renderer_preload);
+    instance.set_gpu_gfxstream_transport(graphics_settings.gfxstream_transport);
+    instance.set_gpu_host_gles_version(graphics_settings.gpu_host_gles_version);
+    if (!graphics_settings.gfxstream_features_string.empty()) {
+      instance.set_gpu_renderer_features(
+          graphics_settings.gfxstream_features_string);
+    }
+#endif
+    calculated_gpu_mode_vec[instance_index] = gpu_mode;
 
     instance.set_restart_subprocesses(
         restart_subprocesses_values.ForIndex(instance_index));
@@ -1168,7 +1233,7 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
     }
 
     if (hwcomposer_vec[instance_index] == kHwComposerAuto) {
-      if (gpu_mode == GpuMode::DrmVirgl) {
+      if (gpu_mode == GpuMode::DrmVirgl || gpu_mode == GpuMode::Venus) {
         instance.set_hwcomposer(kHwComposerDrm);
       } else if (gpu_mode == GpuMode::None) {
         instance.set_hwcomposer(kHwComposerNone);
@@ -1199,10 +1264,12 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
     // then SetCommandLineOptionWithMode false as original code did,
     // otherwise keep default enable_sandbox value.
     // 3. Sepolicy rules need to be updated to support gpu mode. Temporarily
-    // disable auto-enabling sandbox when gpu is enabled (b/152323505).
+    // disable auto-enabling sandbox when gpu is enabled for gfxstream
+    // (b/152323505). This doesn't affect Venus, which can support full
+    // sandboxing.
     default_enable_sandbox += comma_str;
     default_enable_virtiofs += comma_str;
-    if (gpu_mode != GpuMode::GuestSwiftshader) {
+    if (gpu_mode != GpuMode::GuestSwiftshader && gpu_mode != GpuMode::Venus) {
       // original code, just moved to each instance setting block
       default_enable_sandbox += "false";
       default_enable_virtiofs += "false";
@@ -1338,13 +1405,6 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
       instance.set_modem_simulator_ports("");
     }
 
-    auto external_network_mode = CF_EXPECT(
-        ParseExternalNetworkMode(device_external_network_vec[instance_index]));
-    CF_EXPECT(external_network_mode == ExternalNetworkMode::kTap ||
-                  VmManagerIsQemu(vm_manager_flag),
-              "TODO(b/286284441): slirp only works on QEMU");
-    instance.set_external_network_mode(external_network_mode);
-
     instance.set_mcu(CF_EXPECT(mcu_config_paths.JsonForIndex(instance_index)));
 
     if (!vcpu_config_vec[instance_index].empty()) {
@@ -1363,10 +1423,12 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
 
     instance.set_enable_tap_devices(enable_tap_devices_vec[instance_index]);
 
-    auto media_configs_bindings = injector.getMultibindings<MediaConfigs>();
+    const auto media_configs_bindings =
+        injector.getMultibindings<MediaConfigs>();
     CF_EXPECT_EQ(media_configs_bindings.size(), 1,
                  "Expected a single binding?");
-    auto media_configs = media_configs_bindings[0]->GetConfigs();
+    const std::vector<CuttlefishConfig::MediaConfig>& media_configs =
+        media_configs_bindings[0]->GetConfigs(instance_index);
     instance.set_media_configs(media_configs);
 
     instance_index++;
@@ -1440,7 +1502,7 @@ Result<void> SetDefaultFlagsForCrosvm(
   std::set<Arch> supported_archs{Arch::X86_64};
   bool default_enable_sandbox =
       supported_archs.find(HostArch()) != supported_archs.end() &&
-      EnsureDirectoryExists(kCrosvmVarEmptyDir).ok() &&
+      EnsureDirectoryExists(kCrosvmVarEmptyDir).has_value() &&
       CF_EXPECT(IsDirectoryEmpty(kCrosvmVarEmptyDir)) &&
       !IsRunningInContainer();
 

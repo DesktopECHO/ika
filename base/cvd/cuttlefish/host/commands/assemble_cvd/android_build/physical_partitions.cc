@@ -41,27 +41,22 @@ class PhysicalPartitionsImpl : public AndroidBuild {
   }
 
   Result<std::set<std::string, std::less<void>>> PhysicalPartitions() override {
-    if (auto res = build_.PhysicalPartitions(); res.ok()) {
+    if (auto res = build_.PhysicalPartitions(); res.has_value()) {
       return *res;
     }
 
-    std::set<std::string, std::less<void>> partitions = CF_EXPECT(build_.Images());
+    std::set<std::string, std::less<void>> partitions =
+        CF_EXPECT(build_.Images());
     Result<std::set<std::string, std::less<void>>> logical_partitions =
         build_.LogicalPartitions();
-    if (!logical_partitions.ok()) {
+    if (!logical_partitions.has_value()) {
       if (partitions.count("super")) {
         // Best effort attempt to remove all partitions we know that could be in
         // the super image, since we both couldn't read the super image and have
         // no other metadata, from e.g. the misc info text file.
         logical_partitions = std::set<std::string, std::less<void>>{
-            "odm",
-            "odm_dlkm",
-            "product",
-            "system",
-            "system_dlkm",
-            "system_ext",
-            "vendor",
-            "vendor_dlkm",
+            "odm",         "odm_dlkm",   "product", "system",
+            "system_dlkm", "system_ext", "vendor",  "vendor_dlkm",
         };
       } else {
         // Assume every image is a physical partition.

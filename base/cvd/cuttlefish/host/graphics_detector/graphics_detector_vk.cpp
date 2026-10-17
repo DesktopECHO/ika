@@ -35,15 +35,41 @@ gfxstream::expected<Ok, vk::Result> PopulateVulkanAvailabilityImpl(
 
     const auto props = physicalDevice.getProperties();
     outPhysicalDevice->set_name(std::string(props.deviceName));
-    outPhysicalDevice->set_type(
-        props.deviceType == vk::PhysicalDeviceType::eDiscreteGpu
-            ? ::gfxstream::proto::VulkanPhysicalDevice::TYPE_DISCRETE_GPU
-            : ::gfxstream::proto::VulkanPhysicalDevice::TYPE_OTHER);
+    switch (props.deviceType) {
+      case vk::PhysicalDeviceType::eDiscreteGpu:
+        outPhysicalDevice->set_type(
+            ::gfxstream::proto::VulkanPhysicalDevice::TYPE_DISCRETE_GPU);
+        break;
+      case vk::PhysicalDeviceType::eIntegratedGpu:
+        outPhysicalDevice->set_type(
+            ::gfxstream::proto::VulkanPhysicalDevice::TYPE_INTEGRATED_GPU);
+        break;
+      case vk::PhysicalDeviceType::eCpu:
+        outPhysicalDevice->set_type(
+            ::gfxstream::proto::VulkanPhysicalDevice::TYPE_CPU);
+        break;
+      default:
+        outPhysicalDevice->set_type(
+            ::gfxstream::proto::VulkanPhysicalDevice::TYPE_OTHER);
+        break;
+    }
 
     const auto exts =
         VK_EXPECT_RV(physicalDevice.enumerateDeviceExtensionProperties());
     for (const auto& ext : exts) {
       outPhysicalDevice->add_extensions(std::string(ext.extensionName));
+    }
+
+    const auto queueFamilies = physicalDevice.getQueueFamilyProperties();
+    for (const auto& queueFamily : queueFamilies) {
+      auto* outQueueFamily = outPhysicalDevice->add_queue_families();
+      outQueueFamily->set_supports_compute(static_cast<bool>(
+          queueFamily.queueFlags & vk::QueueFlagBits::eCompute));
+      outQueueFamily->set_supports_graphics(static_cast<bool>(
+          queueFamily.queueFlags & vk::QueueFlagBits::eGraphics));
+      outQueueFamily->set_supports_transfer(static_cast<bool>(
+          queueFamily.queueFlags & vk::QueueFlagBits::eTransfer));
+      outQueueFamily->set_queue_count(queueFamily.queueCount);
     }
   }
 

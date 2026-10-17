@@ -20,25 +20,23 @@
 #include <stdlib.h>
 
 #include <iostream>
-#include <memory>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "absl/log/log.h"
 #include "android-base/file.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
-#include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/host_tool_target.h"
 #include "cuttlefish/host/commands/cvd/cli/selector/selector.h"
-#include "cuttlefish/host/commands/cvd/cli/types.h"
 #include "cuttlefish/host/commands/cvd/cli/utils.h"
 #include "cuttlefish/host/commands/cvd/instances/instance_manager.h"
 #include "cuttlefish/host/commands/cvd/instances/local_instance_group.h"
 #include "cuttlefish/host/commands/cvd/utils/common.h"
+#include "cuttlefish/process/command.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -93,14 +91,14 @@ Result<void> CvdSnapshotCommandHandler::Handle(const CommandRequest& request) {
   Command command =
       CF_EXPECT(GenerateCommand(request, subcmd, subcmd_args, request.Env()));
 
-  siginfo_t infop;  // NOLINT(misc-include-cleaner)
-  command.Start().Wait(&infop, WEXITED);
+  // NOLINTNEXTLINE(misc-include-cleaner)
+  siginfo_t infop = CF_EXPECT(command.Start().Wait(WEXITED));
 
   CF_EXPECT(CheckProcessExitedNormally(infop));
   return {};
 }
 
-cvd_common::Args CvdSnapshotCommandHandler::CmdList() const {
+std::vector<std::string> CvdSnapshotCommandHandler::CmdList() const {
   return {"suspend", "resume", "snapshot_take"};
 }
 
@@ -115,7 +113,8 @@ Result<std::string> CvdSnapshotCommandHandler::DetailedHelp(
 
 Result<Command> CvdSnapshotCommandHandler::GenerateCommand(
     const CommandRequest& request, const std::string& subcmd,
-    cvd_common::Args& subcmd_args, cvd_common::Envs envs) {
+    std::vector<std::string>& subcmd_args,
+    std::unordered_map<std::string, std::string> envs) {
   // create a string that is comma-separated instance IDs
   auto instance_group =
       CF_EXPECT(selector::SelectGroup(instance_manager_, request));
@@ -125,7 +124,7 @@ Result<Command> CvdSnapshotCommandHandler::GenerateCommand(
   auto cvd_snapshot_bin_path =
       android_host_out + "/bin/" + CF_EXPECT(GetBin(android_host_out));
   const std::string& snapshot_util_cmd = subcmd;
-  cvd_common::Args cvd_snapshot_args{"--subcmd=" + snapshot_util_cmd};
+  std::vector<std::string> cvd_snapshot_args{"--subcmd=" + snapshot_util_cmd};
   cvd_snapshot_args.insert(cvd_snapshot_args.end(), subcmd_args.begin(),
                            subcmd_args.end());
   // This helps snapshot_util find CuttlefishConfig and figure out
@@ -151,12 +150,6 @@ Result<Command> CvdSnapshotCommandHandler::GenerateCommand(
   };
   Command command = CF_EXPECT(ConstructCommand(construct_cmd_param));
   return command;
-}
-
-std::unique_ptr<CvdCommandHandler> NewCvdSnapshotCommandHandler(
-    InstanceManager& instance_manager) {
-  return std::unique_ptr<CvdCommandHandler>(
-      new CvdSnapshotCommandHandler(instance_manager));
 }
 
 }  // namespace cuttlefish

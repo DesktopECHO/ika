@@ -18,8 +18,8 @@
 #include <string>
 #include <string_view>
 
-#include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
+#include "cuttlefish/process/command.h"
 
 namespace cuttlefish {
 namespace vm_manager {
@@ -32,6 +32,11 @@ struct VhostUserDeviceCommands {
 
 Result<VhostUserDeviceCommands> VhostUserBlockDevice(
     const CuttlefishConfig& config, int num, std::string_view disk_path);
+
+Result<VhostUserDeviceCommands> VhostUserNetDevice(
+    const CuttlefishConfig& config, const std::string& name,
+    const std::string& ipaddr, int prefixlen, const std::string& gateway,
+    const std::string& dns);
 
 }  // namespace vm_manager
 }  // namespace cuttlefish

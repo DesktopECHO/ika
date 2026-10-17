@@ -31,6 +31,8 @@ enum class GpuMode {
   GfxstreamGuestAngle,
   GfxstreamGuestAngleHostLavapipe,
   GfxstreamGuestAngleHostSwiftshader,
+  Venus,
+  GuestLavapipe,
   GuestSwiftshader,
   None,
 };
@@ -45,6 +47,8 @@ inline constexpr std::string_view kGpuModeGfxstreamGuestAngleHostLavapipe =
     "gfxstream_guest_angle_host_lavapipe";
 inline constexpr std::string_view kGpuModeGfxstreamGuestAngleHostSwiftshader =
     "gfxstream_guest_angle_host_swiftshader";
+inline constexpr std::string_view kGpuModeVenus = "venus";
+inline constexpr std::string_view kGpuModeGuestLavapipe = "guest_lavapipe";
 inline constexpr std::string_view kGpuModeGuestSwiftshader =
     "guest_swiftshader";
 inline constexpr std::string_view kGpuModeNone = "none";
@@ -73,6 +77,12 @@ void AbslStringify(Sink& sink, GpuMode mode) {
     case GpuMode::GfxstreamGuestAngleHostSwiftshader:
       sink.Append(kGpuModeGfxstreamGuestAngleHostSwiftshader);
       break;
+    case GpuMode::Venus:
+      sink.Append(kGpuModeVenus);
+      break;
+    case GpuMode::GuestLavapipe:
+      sink.Append(kGpuModeGuestLavapipe);
+      break;
     case GpuMode::GuestSwiftshader:
       sink.Append(kGpuModeGuestSwiftshader);
       break;
@@ -88,5 +98,7 @@ std::string_view format_as(GpuMode mode);  // For libfmt
 
 bool IsGfxstreamMode(GpuMode mode);
 bool IsGfxstreamGuestAngleMode(GpuMode mode);
+
+bool IsGuestRenderingMode(GpuMode mode);
 
 }  // namespace cuttlefish

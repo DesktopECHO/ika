@@ -26,14 +26,14 @@
 #include <unordered_map>
 #include <vector>
 
-#include <fruit/fruit.h>
-#include <teeui/utils.h>
 #include "absl/log/log.h"
+#include "fruit/fruit.h"
+#include "teeui/utils.h"
 
 #include "cuttlefish/common/libs/concurrency/multiplexer.h"
 #include "cuttlefish/common/libs/concurrency/semaphore.h"
 #include "cuttlefish/common/libs/concurrency/thread_safe_queue.h"
-#include "cuttlefish/common/libs/confui/confui.h"
+#include "cuttlefish/common/libs/confui/protocol.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/host/commands/kernel_log_monitor/utils.h"
 #include "cuttlefish/host/libs/config/logging.h"
@@ -58,7 +58,7 @@ class HostServer {
   virtual ~HostServer() {}
 
   // implement input interfaces. called by webRTC
-  void TouchEvent(const int x, const int y, const bool is_down);
+  void TouchEvent(int x, int y, bool is_down);
   void UserAbortEvent();
 
  private:

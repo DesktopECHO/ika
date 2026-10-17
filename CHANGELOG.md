@@ -1,5 +1,23 @@
 [README](README.md) | [UI Intro](UI-INTRO.md) | [Ika commands](USAGE.md) | **Changelog** | [Downloads](DOWNLOADS.md)
 
+## Changes since release 261016
+
+### Cuttlefish 1.58 (development)
+- The host tools are updated from upstream Cuttlefish main of 2026-06-16 to
+  the 1.58.0 development head (google/android-cuttlefish 8bed5e228), about
+  1,100 upstream changes: passt user-mode networking for crosvm, Venus and
+  guest Lavapipe GPU modes, the `v4l2_stream_proxy` camera type, integrated
+  GPU detection for host Vulkan, crosvm built with `-c opt`, and the
+  `cuttlefish/package:common` packaging rule.
+- Ika keeps its own graphics pins (crosvm, gfxstream, Mesa, minigbm, SPIR-V
+  and Vulkan headers), its nftables networking, the system Wayland library,
+  and its launcher behaviour: the launcher still exits when Android powers
+  off.
+- `--media` takes upstream's new form, `--media=TYPE:KEY=VALUE`; `ika start`
+  passes the camera as `--media=v4l2_proxy:device=/dev/videoN`.
+- Android's UI still renders with SkiaGL in the gfxstream ANGLE modes, where
+  upstream now chooses SkiaVK. `--guest_hwui_renderer=skiavk` opts in.
+
 ## Ika 261016, changes since release 261012
 
 ### TV mode

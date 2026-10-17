@@ -16,6 +16,7 @@
 
 #include "cuttlefish/host/libs/config/media.h"
 
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -23,6 +24,7 @@
 #include <vector>
 
 #include "absl/strings/str_split.h"
+#include "android-base/parseint.h"
 
 #include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
@@ -35,40 +37,48 @@ static constexpr char kMediaTypeV4l2EmulatedCameraSPlane[] =
 static constexpr char kMediaTypeV4l2EmulatedCameraMPlane[] =
     "v4l2_emulated_camera_mplane";
 static constexpr char kMediaTypeV4l2Proxy[] = "v4l2_proxy";
+static constexpr char kMediaTypeV4l2Stream[] = "v4l2_stream_proxy";
 
 Result<std::optional<CuttlefishConfig::MediaConfig>> ParseMediaConfig(
     const std::string& flag) {
-  std::unordered_map<std::string, std::string> props;
-  if (!flag.empty()) {
-    const std::vector<std::string> pairs = absl::StrSplit(flag, ",");
-    for (const std::string& pair : pairs) {
-      const std::vector<std::string> keyvalue = absl::StrSplit(pair, "=");
-      CF_EXPECT_EQ(keyvalue.size(), 2,
-                   "Invalid media flag key-value: \"" << flag << "\"");
-      const std::string& prop_key = keyvalue[0];
-      const std::string& prop_val = keyvalue[1];
-      props[prop_key] = prop_val;
-    }
+  if (flag.empty()) {
+    return std::nullopt;
   }
 
-  auto type_it = props.find("type");
-  CF_EXPECT(type_it != props.end(), "Missing media type");
+  const std::vector<std::string> parts = absl::StrSplit(flag, ":");
+  CF_EXPECT(!parts.empty(), "Invalid media flag: \"" << flag << "\"");
+
+  const std::string& type_str = parts[0];
   CuttlefishConfig::MediaType type{CuttlefishConfig::MediaType::kUnknown};
-  if (type_it->second == kMediaTypeV4l2EmulatedCameraSPlane) {
+  if (type_str == kMediaTypeV4l2EmulatedCameraSPlane) {
     type = CuttlefishConfig::MediaType::kV4l2EmulatedCameraSPlane;
-  } else if (type_it->second == kMediaTypeV4l2EmulatedCameraMPlane) {
+  } else if (type_str == kMediaTypeV4l2EmulatedCameraMPlane) {
     type = CuttlefishConfig::MediaType::kV4l2EmulatedCameraMPlane;
-  } else if (type_it->second == kMediaTypeV4l2Proxy) {
+  } else if (type_str == kMediaTypeV4l2Proxy) {
     type = CuttlefishConfig::MediaType::kV4l2Proxy;
+  } else if (type_str == kMediaTypeV4l2Stream) {
+    type = CuttlefishConfig::MediaType::kV4l2StreamProxy;
   } else {
-    return CF_ERRF("Unknown media type value: \"{}\"", type_it->second);
+    return CF_ERRF("Unknown media type value: \"{}\"", type_str);
+  }
+
+  std::unordered_map<std::string, std::string> props;
+  for (size_t i = 1; i < parts.size(); ++i) {
+    const std::vector<std::string> keyvalue = absl::StrSplit(parts[i], "=");
+    CF_EXPECT_EQ(keyvalue.size(), 2,
+                 "Invalid media flag key-value: \"" << parts[i] << "\" in \""
+                                                    << flag << "\"");
+    const std::string& prop_key = keyvalue[0];
+    const std::string& prop_val = keyvalue[1];
+    props[prop_key] = prop_val;
   }
 
   std::string lens_facing = "";
   auto lens_facing_it = props.find("lens_facing");
   if (lens_facing_it != props.end()) {
     lens_facing = lens_facing_it->second;
-    CF_EXPECT(lens_facing == "FRONT" || lens_facing == "BACK" || lens_facing == "EXTERNAL",
+    CF_EXPECT(lens_facing == "FRONT" || lens_facing == "BACK" ||
+                  lens_facing == "EXTERNAL",
               "Invalid lens_facing value: " << lens_facing);
   }
 
@@ -76,21 +86,58 @@ Result<std::optional<CuttlefishConfig::MediaConfig>> ParseMediaConfig(
   auto device_it = props.find("device");
   if (device_it != props.end()) {
     CF_EXPECT(type == CuttlefishConfig::MediaType::kV4l2Proxy,
-              "'device' is only supported for type=v4l2_proxy");
+              "'device' is only supported for v4l2_proxy");
     device = device_it->second;
     CF_EXPECT(device.starts_with("/dev/") && device.find("..") == std::string::npos,
               "Invalid media device, expected a /dev path: " << device);
+  }
+
+  std::optional<CuttlefishConfig::MediaConfig::V4l2StreamProxyConfig>
+      v4l2_stream_proxy;
+  if (type == CuttlefishConfig::MediaType::kV4l2StreamProxy) {
+    CuttlefishConfig::MediaConfig::V4l2StreamProxyConfig stream_config = {};
+
+    auto source_it = props.find("input_path");
+    CF_EXPECT(source_it != props.end(),
+              "Missing 'input_path' for v4l2_stream_proxy");
+    stream_config.input_path = source_it->second;
+
+    auto width_it = props.find("input_width");
+    CF_EXPECT(width_it != props.end(),
+              "Missing 'input_width' for v4l2_stream_proxy");
+    CF_EXPECT(
+        android::base::ParseInt(width_it->second, &stream_config.input_width),
+        "Failed to parse input_width");
+    CF_EXPECT(stream_config.input_width > 0,
+              "input_width must be positive: " << stream_config.input_width);
+
+    auto height_it = props.find("input_height");
+    CF_EXPECT(height_it != props.end(),
+              "Missing 'input_height' for v4l2_stream_proxy");
+    CF_EXPECT(
+        android::base::ParseInt(height_it->second, &stream_config.input_height),
+        "Failed to parse input_height");
+    CF_EXPECT(stream_config.input_height > 0,
+              "input_height must be positive: " << stream_config.input_height);
+
+    auto fps_it = props.find("input_fps");
+    CF_EXPECT(fps_it != props.end(),
+              "Missing 'input_fps' for v4l2_stream_proxy");
+    stream_config.input_fps = fps_it->second;
+
+    v4l2_stream_proxy = stream_config;
   }
 
   return CuttlefishConfig::MediaConfig{
       .type = type,
       .lens_facing = lens_facing,
       .device = device,
+      .v4l2_stream_proxy = v4l2_stream_proxy,
   };
 }
 
-Result<std::vector<CuttlefishConfig::MediaConfig>> ParseMediaConfigsFromArgs(
-    std::vector<std::string>& args) {
+Result<std::vector<std::vector<CuttlefishConfig::MediaConfig>>>
+ParseMediaConfigsFromArgs(std::vector<std::string>& args, int num_instances) {
   std::vector<std::string> repeated_media_flag_values;
   const std::vector<Flag> media_flags = {
       Flag::StringFlag(kMediaFlag)
@@ -101,15 +148,32 @@ Result<std::vector<CuttlefishConfig::MediaConfig>> ParseMediaConfigsFromArgs(
           }),
   };
   CF_EXPECT(ConsumeFlags(media_flags, args), "Failed to parse media flags.");
-  std::vector<CuttlefishConfig::MediaConfig> configs;
-  for (const std::string& param : repeated_media_flag_values) {
-    auto config = CF_EXPECT(ParseMediaConfig(param));
-    if (config) {
-      configs.push_back(*config);
+
+  CF_EXPECT_GT(num_instances, 0,
+               "num_instances must be positive: " << num_instances);
+
+  std::vector<std::vector<CuttlefishConfig::MediaConfig>> configs(
+      num_instances);
+  for (const std::string& flag_val : repeated_media_flag_values) {
+    const std::vector<std::string_view> per_instance =
+        absl::StrSplit(flag_val, ',');
+    CF_EXPECTF(per_instance.size() == static_cast<size_t>(num_instances),
+               "Invalid media flag, number of comma separated values ({}) does "
+               "not match the number of instances ({}) for --media=\"{}\"",
+               per_instance.size(), num_instances, flag_val);
+
+    for (int i = 0; i < num_instances; ++i) {
+      const std::string media_str(per_instance[i]);
+      if (!media_str.empty()) {
+        const std::optional<CuttlefishConfig::MediaConfig> config =
+            CF_EXPECT(ParseMediaConfig(media_str));
+        if (config.has_value()) {
+          configs[i].push_back(*config);
+        }
+      }
     }
   }
   return configs;
 }
 
 }  // namespace cuttlefish
-

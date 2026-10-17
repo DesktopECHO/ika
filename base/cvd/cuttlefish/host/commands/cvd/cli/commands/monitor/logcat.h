@@ -16,11 +16,11 @@
 
 #pragma once
 
-#include <cstddef>
 #include <string>
 #include <string_view>
 
-#include "cuttlefish/result/result.h"
+#include "cuttlefish/host/commands/cvd/cli/commands/monitor/severity.h"
+#include "cuttlefish/result/result_type.h"
 
 namespace cuttlefish {
 
@@ -29,11 +29,14 @@ struct LogcatLine {
   std::string_view time;
   std::string_view uid;
   std::string_view pid;
-  char verbosity;
+  char severity;
   std::string_view tag;
   std::string_view message;
 };
+
 Result<LogcatLine> ParseLogcatLine(std::string_view line);
 std::string FormatLogcatLine(const LogcatLine& line);
+Result<std::string> ColorLogcatLine(std::string_view line);
+Result<bool> FilterLogcatLine(LogSeverity filter, std::string_view line);
 
 }  // namespace cuttlefish

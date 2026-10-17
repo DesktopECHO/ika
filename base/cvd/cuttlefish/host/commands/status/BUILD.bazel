@@ -1,27 +1,24 @@
-load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary")
+load("//cuttlefish/bazel:rules.bzl", "cf_build_test", "cf_cc_binary")
 
 package(
     default_visibility = ["//:android_cuttlefish"],
 )
 
+cf_build_test(name = "status_build_test")
+
 cf_cc_binary(
     name = "cvd_internal_status",
-    srcs = [
-        "main.cc",
-    ],
-    clang_format_enabled = False,
+    srcs = ["main.cc"],
     deps = [
         "//cuttlefish/common/libs/fs",
-        "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/common/libs/utils:tee_logging",
+        "//cuttlefish/files:file_is_socket",
         "//cuttlefish/flag_parser",
         "//cuttlefish/host/libs/command_util",
         "//cuttlefish/host/libs/config:cuttlefish_config",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/strings",
-        "@gflags",
         "@jsoncpp",
     ],
 )

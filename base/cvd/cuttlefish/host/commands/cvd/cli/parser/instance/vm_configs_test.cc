@@ -14,12 +14,10 @@
  * limitations under the License.
  */
 
-#include <algorithm>
 #include <string>
 #include <vector>
 
-#include <android-base/file.h>
-#include <gtest/gtest.h>
+#include "gtest/gtest.h"
 
 #include "cuttlefish/common/libs/utils/json.h"
 #include "cuttlefish/host/commands/cvd/cli/parser/test_common.h"
@@ -55,7 +53,7 @@ TEST(VmFlagsParserTest, ParseTwoInstancesCpuFlagPartialJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
+  ASSERT_THAT(serialized_data, IsOk());
   EXPECT_TRUE(FindConfig(*serialized_data, "--cpus=4,8"))
       << "cpus flag is missing or wrongly formatted";
 }
@@ -87,7 +85,7 @@ TEST(VmFlagsParserTest, ParseTwoInstancesQemu) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
+  ASSERT_THAT(serialized_data, IsOk());
   EXPECT_TRUE(FindConfig(*serialized_data, "--vm_manager=qemu_cli,qemu_cli"))
       << "vm_manager flag is missing or wrongly formatted";
 }
@@ -121,7 +119,7 @@ TEST(VmFlagsParserTest, ParseTwoInstancesCpuFlagFullJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
+  ASSERT_THAT(serialized_data, IsOk());
   EXPECT_TRUE(FindConfig(*serialized_data, "--cpus=6,8"))
       << "cpus flag is missing or wrongly formatted";
 }
@@ -154,7 +152,7 @@ TEST(VmFlagsParserTest, ParseTwoInstancesMemoryFlagPartialJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
+  ASSERT_THAT(serialized_data, IsOk());
   EXPECT_TRUE(FindConfig(*serialized_data, "--memory_mb=2048,4096"))
       << "memory_mb flag is missing or wrongly formatted";
 }
@@ -188,7 +186,7 @@ TEST(VmFlagsParserTest, ParseTwoInstancesMemoryFlagFullJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
+  ASSERT_THAT(serialized_data, IsOk());
   EXPECT_TRUE(FindConfig(*serialized_data, "--memory_mb=4096,8192"))
       << "memory_mb flag is missing or wrongly formatted";
 }
@@ -215,7 +213,7 @@ TEST(VmFlagsParserTest, ParseTwoInstancesSdCardFlagPartialJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
+  ASSERT_THAT(serialized_data, IsOk());
   EXPECT_TRUE(FindConfig(*serialized_data, "--use_sdcard=true,false"))
       << "use_sdcard flag is missing or wrongly formatted";
 }
@@ -245,7 +243,7 @@ TEST(VmFlagsParserTest, ParseTwoInstancesSdCardFlagFullJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
+  ASSERT_THAT(serialized_data, IsOk());
   EXPECT_TRUE(FindConfig(*serialized_data, "--use_sdcard=false,false"))
       << "use_sdcard flag is missing or wrongly formatted";
 }
@@ -277,7 +275,7 @@ TEST(VmFlagsParserTest, ParseTwoInstancesVmManagerFlagEmptyJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
+  ASSERT_THAT(serialized_data, IsOk());
   EXPECT_TRUE(FindConfig(*serialized_data, R"(--vm_manager=crosvm,crosvm)"))
       << "vm_manager flag is missing or wrongly formatted";
 }
@@ -303,7 +301,7 @@ TEST(VmFlagsParserTest, ParseTwoInstancesVmManagerFlagDefault) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
+  ASSERT_THAT(serialized_data, IsOk());
   EXPECT_TRUE(FindConfig(*serialized_data, R"(--vm_manager=crosvm,crosvm)"))
       << "vm_manager flag is missing or wrongly formatted";
 }
@@ -329,7 +327,7 @@ TEST(VmFlagsParserTest, ParseOneInstanceSetupWizardInvalidValue) {
 
   EXPECT_TRUE(ParseJsonString(json_text, json_configs));
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_FALSE(serialized_data.ok());
+  EXPECT_FALSE(serialized_data.has_value());
 }
 
 TEST(VmFlagsParserTest, ParseTwoInstancesSetupWizardFlagPartialJson) {
@@ -360,7 +358,7 @@ TEST(VmFlagsParserTest, ParseTwoInstancesSetupWizardFlagPartialJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
+  ASSERT_THAT(serialized_data, IsOk());
   EXPECT_TRUE(
       FindConfig(*serialized_data, R"(--setupwizard_mode=DISABLED,REQUIRED)"))
       << "setupwizard_mode flag is missing or wrongly formatted";
@@ -395,7 +393,7 @@ TEST(VmFlagsParserTest, ParseTwoInstancesSetupWizardFlagFullJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
+  ASSERT_THAT(serialized_data, IsOk());
   EXPECT_TRUE(
       FindConfig(*serialized_data, R"(--setupwizard_mode=OPTIONAL,REQUIRED)"))
       << "setupwizard_mode flag is missing or wrongly formatted";
@@ -429,7 +427,7 @@ TEST(VmFlagsParserTest, ParseTwoInstancesUuidFlagPartialJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
+  ASSERT_THAT(serialized_data, IsOk());
   EXPECT_TRUE(FindConfig(
       *serialized_data,
       R"(--uuid=699acfc4-c8c4-11e7-882b-5065f31dc101,870acfc4-c8c4-11e7-99ac-5065f31dc250)"))
@@ -465,7 +463,7 @@ TEST(VmFlagsParserTest, ParseTwoInstancesUuidFlagFullJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
+  ASSERT_THAT(serialized_data, IsOk());
   EXPECT_TRUE(FindConfig(
       *serialized_data,
       R"(--uuid=870acfc4-c8c4-11e7-99ac-5065f31dc250,870acfc4-c8c4-11e7-99ac-5065f31dc251)"))
@@ -500,7 +498,7 @@ TEST(VmFlagsParserTest, ParseTwoInstancesSandboxFlagPartialJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
+  ASSERT_THAT(serialized_data, IsOk());
   EXPECT_TRUE(FindConfig(*serialized_data, R"(--enable_sandbox=false,true)"))
       << "enable_sandbox flag is missing or wrongly formatted";
 }
@@ -534,7 +532,7 @@ TEST(VmFlagsParserTest, ParseTwoInstancesSandboxFlagFullJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
+  ASSERT_THAT(serialized_data, IsOk());
   EXPECT_TRUE(FindConfig(*serialized_data, R"(--enable_sandbox=true,true)"))
       << "enable_sandbox flag is missing or wrongly formatted";
 }
@@ -567,8 +565,9 @@ TEST(VmFlagsParserTest, ParseTwoInstancesSimpleMediaDeviceFlagPartialJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
-  EXPECT_TRUE(FindConfig(*serialized_data, R"(--crosvm_simple_media_device=false,true)"))
+  ASSERT_THAT(serialized_data, IsOk());
+  EXPECT_TRUE(FindConfig(*serialized_data,
+                         R"(--crosvm_simple_media_device=false,true)"))
       << "crosvm_simple_media_device flag is missing or wrongly formatted";
 }
 
@@ -601,8 +600,9 @@ TEST(VmFlagsParserTest, ParseTwoInstancesSimpleMediaDeviceFlagFullJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
-  EXPECT_TRUE(FindConfig(*serialized_data, R"(--crosvm_simple_media_device=true,true)"))
+  ASSERT_THAT(serialized_data, IsOk());
+  EXPECT_TRUE(
+      FindConfig(*serialized_data, R"(--crosvm_simple_media_device=true,true)"))
       << "crosvm_simple_media_device flag is missing or wrongly formatted";
 }
 
@@ -634,8 +634,9 @@ TEST(VmFlagsParserTest, ParseTwoInstancesV4l2ProxyFlagPartialJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
-  EXPECT_TRUE(FindConfig(*serialized_data, R"(--crosvm_v4l2_proxy=,/dev/video0)"))
+  ASSERT_THAT(serialized_data, IsOk());
+  EXPECT_TRUE(
+      FindConfig(*serialized_data, R"(--crosvm_v4l2_proxy=,/dev/video0)"))
       << "crosvm_v4l2_proxy flag is missing or wrongly formatted";
 }
 
@@ -668,8 +669,9 @@ TEST(VmFlagsParserTest, ParseTwoInstancesV4l2ProxyFlagFullJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
-  EXPECT_TRUE(FindConfig(*serialized_data, R"(--crosvm_v4l2_proxy=/dev/video0,/dev/video1)"))
+  ASSERT_THAT(serialized_data, IsOk());
+  EXPECT_TRUE(FindConfig(*serialized_data,
+                         R"(--crosvm_v4l2_proxy=/dev/video0,/dev/video1)"))
       << "crosvm_v4l2_proxy flag is missing or wrongly formatted";
 }
 
@@ -690,7 +692,7 @@ TEST(VmFlagsParserTest, ParseTwoInstancesCustomActionsFlagEmptyJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
+  ASSERT_THAT(serialized_data, IsOk());
   EXPECT_FALSE(FindConfig(*serialized_data, R"(--custom_actions=)"))
       << "custom_actions flag is set";
 }
@@ -726,7 +728,7 @@ TEST(VmFlagsParserTest, ParseTwoInstancesCustomActionsFlagPartialJson) {
   EXPECT_TRUE(ParseJsonString(json_text, json_configs))
       << "Invalid Json string";
   auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
+  ASSERT_THAT(serialized_data, IsOk());
 
   std::vector<std::string> custom_actions;
   for (const auto& flag : *serialized_data) {
@@ -741,6 +743,73 @@ TEST(VmFlagsParserTest, ParseTwoInstancesCustomActionsFlagPartialJson) {
   expected_actions[0]["device_states"][0]["lid_switch_open"] = false;
   expected_actions[0]["device_states"][0]["hinge_angle_value"] = 0;
   EXPECT_THAT(ParseJson(custom_actions[0]), IsOkAndValue(expected_actions));
+}
+
+TEST(VmFlagsParserTest, ParseTwoInstancesVhostUserVsockFlagPartialJson) {
+  const char* test_string = R""""(
+{
+    "instances" :
+    [
+        {
+            "vm": {
+                "crosvm":{
+                }
+            }
+        },
+        {
+            "vm": {
+                "crosvm":{
+                    "vhost_user_vsock": "true"
+                }
+            }
+        }
+    ]
+}
+  )"""";
+
+  Json::Value json_configs;
+  std::string json_text(test_string);
+
+  EXPECT_TRUE(ParseJsonString(json_text, json_configs))
+      << "Invalid Json string";
+  auto serialized_data = LaunchCvdParserTester(json_configs);
+  ASSERT_THAT(serialized_data, IsOk());
+  EXPECT_TRUE(FindConfig(*serialized_data, R"(--vhost_user_vsock=auto,true)"))
+      << "vhost_user_vsock flag is missing or wrongly formatted";
+}
+
+TEST(VmFlagsParserTest, ParseTwoInstancesVhostUserVsockFlagFullJson) {
+  const char* test_string = R""""(
+{
+    "instances" :
+    [
+        {
+            "vm": {
+                "crosvm":{
+                    "vhost_user_vsock": "true"
+                }
+            }
+        },
+        {
+            "vm": {
+                "crosvm":{
+                    "vhost_user_vsock": "false"
+                }
+            }
+        }
+    ]
+}
+  )"""";
+
+  Json::Value json_configs;
+  std::string json_text(test_string);
+
+  EXPECT_TRUE(ParseJsonString(json_text, json_configs))
+      << "Invalid Json string";
+  auto serialized_data = LaunchCvdParserTester(json_configs);
+  ASSERT_THAT(serialized_data, IsOk());
+  EXPECT_TRUE(FindConfig(*serialized_data, R"(--vhost_user_vsock=true,false)"))
+      << "vhost_user_vsock flag is missing or wrongly formatted";
 }
 
 }  // namespace cuttlefish

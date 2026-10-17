@@ -14,70 +14,48 @@
  * limitations under the License.
  */
 
-#include <sstream>
+#include "cuttlefish/common/libs/fs/shared_buf.h"
+
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "cuttlefish/common/libs/fs/shared_buf.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 
 namespace cuttlefish {
 
-namespace {
-
-const size_t BUFF_SIZE = 1 << 14;
-
-} // namespace
-
 ssize_t WriteAll(SharedFD fd, const char* buf, size_t size) {
   size_t total_written = 0;
-  ssize_t written = 0;
+  Result<uint64_t> write_res;
   do {
-    written = fd->Write((void*)&(buf[total_written]), size - total_written);
-    if (written <= 0) {
-      if (written < 0) {
-        errno = fd->GetErrno();
-        return written;
-      }
+    write_res = fd->Write((void*)&(buf[total_written]), size - total_written);
+    if (!write_res.has_value()) {
+      errno = fd->GetErrno();
+      return -1;
+    }
+    if (*write_res == 0) {
       return total_written;
     }
-    total_written += written;
+    total_written += *write_res;
   } while (total_written < size);
   return total_written;
 }
 
 ssize_t ReadExact(SharedFD fd, char* buf, size_t size) {
   size_t total_read = 0;
-  ssize_t read = 0;
+  Result<uint64_t> read_res;
   do {
-    read = fd->Read((void*)&(buf[total_read]), size - total_read);
-    if (read <= 0) {
-      if (read < 0) {
-        errno = fd->GetErrno();
-        return read;
-      }
+    read_res = fd->Read((void*)&(buf[total_read]), size - total_read);
+    if (!read_res.has_value()) {
+      errno = fd->GetErrno();
+      return -1;
+    }
+    if (*read_res == 0) {
       return total_read;
     }
-    total_read += read;
+    total_read += *read_res;
   } while (total_read < size);
   return total_read;
-}
-
-ssize_t ReadAll(SharedFD fd, std::string* buf) {
-  char buff[BUFF_SIZE];
-  std::stringstream ss;
-  ssize_t read;
-  while ((read = fd->Read(buff, BUFF_SIZE - 1)) > 0) {
-    // this is necessary to avoid problems with having a '\0' in the middle of the buffer
-    ss << std::string(buff, read);
-  }
-  if (read < 0) {
-    errno = fd->GetErrno();
-    return read;
-  }
-  *buf = ss.str();
-  return buf->size();
 }
 
 ssize_t ReadExact(SharedFD fd, std::string* buf) {
@@ -112,20 +90,4 @@ bool SendAll(SharedFD sock, std::string_view msg) {
   return true;
 }
 
-std::string RecvAll(SharedFD sock, const size_t count) {
-  size_t total_read{};
-  if (!sock->IsOpen()) {
-    return {};
-  }
-  std::unique_ptr<char[]> data(new char[count]);
-  while (total_read < count) {
-    auto just_read = sock->Read(data.get() + total_read, count - total_read);
-    if (just_read <= 0) {
-      return {};
-    }
-    total_read += just_read;
-  }
-  return {data.get(), count};
-}
-
-} // namespace cuttlefish
+}  // namespace cuttlefish

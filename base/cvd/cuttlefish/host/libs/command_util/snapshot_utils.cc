@@ -16,23 +16,33 @@
 
 #include "cuttlefish/host/libs/command_util/snapshot_utils.h"
 
-#include <unistd.h>
-#include <utime.h>
+#include <fcntl.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <time.h>
 
-#include <cstdlib>
-#include <cstring>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "absl/log/log.h"
 #include "absl/strings/strip.h"
-#include "android-base/file.h"
+#include "json/value.h"
 
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/environment.h"
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/json.h"
+#include "cuttlefish/files/copy.h"
+#include "cuttlefish/files/directory_contents.h"
+#include "cuttlefish/files/directory_exists.h"
+#include "cuttlefish/files/file_exists.h"
+#include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/posix/readlink.h"
+#include "cuttlefish/posix/realpath.h"
+#include "cuttlefish/posix/remove.h"
 #include "cuttlefish/posix/symlink.h"
 #include "cuttlefish/result/result.h"
 
@@ -115,23 +125,21 @@ Result<void> CopyDirectoryImpl(
     CF_EXPECTF(Copy(src_path, dest_path), "Copy from {} to {} failed", src_path,
                dest_path);
 
-    auto dest_fd = SharedFD::Open(dest_path, O_RDONLY);
-    CF_EXPECT(dest_fd->IsOpen(), "Failed to open \"" << dest_path << "\"");
+    Fd dest_fd = CF_EXPECT(Fd::Open(dest_path, O_RDONLY));
     // Copy the mtime from the src file. The mtime of the disk image files can
     // be important because we later validate that the disk overlays are not
     // older than the disk components.
     const struct timespec times[2] = {
 #if defined(__APPLE__)
-      src_stat.st_atimespec,
-      src_stat.st_mtimespec
+        src_stat.st_atimespec, src_stat.st_mtimespec
 #else
-      src_stat.st_atim,
-      src_stat.st_mtim,
+        src_stat.st_atim,
+        src_stat.st_mtim,
 #endif
     };
-    if (dest_fd->Futimens(times) != 0) {
-      return CF_ERR("futimens(\""
-                    << dest_path << "\", ...) failed: " << dest_fd->StrError());
+    if (dest_fd.Futimens(times) != 0) {
+      return CF_ERRF("futimens('{}', ...) failed: {}", dest_path,
+                     dest_fd.StrError());
     }
   }
   return {};
@@ -144,11 +152,11 @@ Result<void> CopyDirectoryImpl(
  */
 std::string RealpathOrSelf(const std::string& path) {
   Result<std::string> output = RealPath(path);
-  if (output.ok()) {
+  if (output.has_value()) {
     return *output;
   }
   auto absolute_path = RealPath(path);
-  return absolute_path.ok() ? *absolute_path : path;
+  return absolute_path.has_value() ? *absolute_path : path;
 }
 
 }  // namespace

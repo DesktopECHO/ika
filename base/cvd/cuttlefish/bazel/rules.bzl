@@ -12,27 +12,129 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Macros wrapping executable, library, and test targets that generate linter
+invocation targets.
+"""
+
 load("@aspect_rules_lint//format:defs.bzl", "format_test")
+load("@bazel_features//:features.bzl", "bazel_features")
 load("@cc_compatibility_proxy//:proxy.bzl", "cc_binary", "cc_library", "cc_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_library.bzl", "sh_library")
 load("//:build_variables.bzl", BUILD_VAR_COPTS = "COPTS", BUILD_VAR_LINKOPTS = "LINKOPTS")
-load("//tools/lint:linters.bzl", "clang_tidy_test")
-load("//tools/lint:linters.bzl", "shellcheck_test")
+load("//tools/lint:linters.bzl", "buildifier_test", "clang_tidy_include_cleaner_test", "clang_tidy_test", "dwyu_rule", "shellcheck_test")
 
 visibility(["//..."])
 
 COPTS = BUILD_VAR_COPTS
 LINKOPTS = BUILD_VAR_LINKOPTS
 
-def _cf_cc_binary_implementation(name, clang_format_enabled, clang_tidy_enabled, copts, linkopts, **kwargs):
-    cc_binary(
-        name = name,
-        copts = (copts or []) + COPTS,
-        linkopts = (linkopts or []) + LINKOPTS,
-        **kwargs,
+# buildifier: disable=unused-variable
+def _fallback_macro(inherit_attrs = None, attrs = {}, implementation = None):
+    def _wrapper(name, **kwargs):
+        call_kwargs = dict(kwargs)
+        call_kwargs.setdefault("deprecation", None)
+        for k, a in attrs.items():
+            if k not in call_kwargs:
+                if type(a) in ["string", "bool", "int", "list"]:
+                    call_kwargs[k] = a
+                elif hasattr(a, "default"):
+                    call_kwargs[k] = a.default
+                elif k.endswith("_enabled"):
+                    call_kwargs[k] = True
+                elif k in ["copts", "linkopts", "srcs", "hdrs", "deps", "data", "features"]:
+                    call_kwargs[k] = []
+        return implementation(name = name, **call_kwargs)
+
+    return _wrapper
+
+_macro = getattr(bazel_features.globals, "macro", None)
+macro = _macro if _macro != None else _fallback_macro
+
+def _wrap_attr_fn(default_val):
+    def _wrapped(**kwargs):
+        return struct(default = kwargs.get("default", default_val))
+
+    return _wrapped
+
+_attr = attr if _macro != None else struct(
+    bool = _wrap_attr_fn(False),
+    label_list = _wrap_attr_fn([]),
+    string = _wrap_attr_fn(""),
+    string_list = _wrap_attr_fn([]),
+)
+
+def _cf_build_test_implementation(name, srcs, **kwargs):
+    native.filegroup(
+        name = name + "_LINT_TEST_starlark_files",
+        srcs = (srcs or []) + ["BUILD.bazel"],
+        tags = ["lint-with-buildifier"],
     )
-    if clang_format_enabled:
+    buildifier_test(
+        name = name + "_LINT_TEST",
+        srcs = [":" + name + "_LINT_TEST_starlark_files"],
+        **kwargs
+    )
+
+cf_build_test = macro(
+    inherit_attrs = "common",
+    attrs = {
+        "srcs": _attr.label_list(
+            configurable = False,
+            default = [],
+        ),
+    },
+    implementation = _cf_build_test_implementation,
+)
+
+def _cf_cc_target_implementation(
+        name,
+        clang_format_enabled,
+        clang_tidy_enabled,
+        copts,
+        depend_on_what_you_use_enabled,
+        deps,
+        features,
+        include_cleaner_enabled,
+        linkopts,
+        _target_type,
+        **kwargs):
+    if _target_type == "cc_binary":
+        cc_binary(
+            name = name,
+            copts = (copts or []) + COPTS,
+            deps = deps,
+            features = features,
+            linkopts = (linkopts or []) + LINKOPTS,
+            **kwargs
+        )
+    elif _target_type == "cc_library":
+        cc_library(
+            name = name,
+            copts = (copts or []) + COPTS,
+            deps = deps,
+            features = features,
+            linkopts = linkopts,
+            **kwargs
+        )
+    elif _target_type == "cc_test":
+        cc_test(
+            name = name,
+            copts = (copts or []) + COPTS,
+            deps = deps + [
+                "@googletest//:gtest",
+                "@googletest//:gtest_main",
+            ],
+            features = features,
+            linkopts = linkopts,
+            **kwargs
+        )
+    else:
+        fail("Unknown target type " + _target_type)
+
+    if clang_format_enabled and (kwargs.get("srcs") or kwargs.get("hdrs")):
         format_test(
             name = name + "_format_test",
             cc = "//tools/format:clang_format",
@@ -41,97 +143,112 @@ def _cf_cc_binary_implementation(name, clang_format_enabled, clang_tidy_enabled,
             visibility = ["//visibility:private"],
         )
     if clang_tidy_enabled:
-        clang_tidy_test(
-            name = name + "_clang_tidy",
-            srcs = [":" + name],
-            tags = ["clang_tidy", "clang-tidy"],
+        if include_cleaner_enabled:
+            clang_tidy_include_cleaner_test(
+                name = name + "_clang_tidy",
+                srcs = [":" + name],
+                tags = ["clang_tidy", "clang-tidy"],
+                visibility = ["//visibility:private"],
+            )
+        else:
+            clang_tidy_test(
+                name = name + "_clang_tidy",
+                srcs = [":" + name],
+                tags = ["clang_tidy", "clang-tidy"],
+                visibility = ["//visibility:private"],
+            )
+    if depend_on_what_you_use_enabled and not "-layering_check" in features:
+        dwyu_rule(
+            name = name + "_depend_on_what_you_use",
+            deps = [":" + name],
+            testonly = True,
             visibility = ["//visibility:private"],
         )
+
+_CC_COMMON_ATTRS = {
+    "clang_format_enabled": _attr.bool(
+        configurable = False,
+        default = True,
+        doc = "Decide if a corresponding format_test target is generated",
+    ),
+    "clang_tidy_enabled": _attr.bool(
+        configurable = False,
+        default = True,
+        doc = "Decide if a corresponding clang_tidy_test target is generated",
+    ),
+    "copts": _attr.string_list(
+        configurable = False,
+        default = [],
+    ),
+    "depend_on_what_you_use_enabled": _attr.bool(
+        configurable = False,
+        default = True,
+        doc = "Decide if a corresponding depend-on-what-you-use target is generated",
+    ),
+    "features": _attr.string_list(
+        configurable = False,
+        default = [],
+    ),
+    "include_cleaner_enabled": _attr.bool(
+        configurable = False,
+        default = True,
+        doc = "Run clang-tidy with misc-include-cleaner",
+    ),
+    "linkopts": _attr.string_list(
+        configurable = True,
+        default = [],
+    ),
+}
 
 cf_cc_binary = macro(
     inherit_attrs = cc_binary,
-    attrs = {
-        "clang_format_enabled": attr.bool(configurable = False, default = True, doc = "Decide if a corresponding format_test target is generated"),
-        "clang_tidy_enabled": attr.bool(configurable = False, default = True, doc = "Decide if a corresponding clang_tidy_test target is generated"),
-        "copts": attr.string_list(configurable = False, default = []),
-        "linkopts": attr.string_list(configurable = False, default = []),
+    attrs = _CC_COMMON_ATTRS | {
+        "deps": _attr.label_list(configurable = True),
+        "_target_type": _attr.string(configurable = False, default = "cc_binary"),
     },
-    implementation = _cf_cc_binary_implementation,
+    implementation = _cf_cc_target_implementation,
 )
-
-def _cf_cc_library_implementation(name, clang_format_enabled, clang_tidy_enabled, copts, **kwargs):
-    cc_library(
-        name = name,
-        copts = (copts or []) + COPTS,
-        **kwargs,
-    )
-    if clang_format_enabled:
-        format_test(
-            name = name + "_format_test",
-            cc = "//tools/format:clang_format",
-            disable_git_attribute_checks = True,
-            srcs = (kwargs.get("srcs") or []) + (kwargs.get("hdrs") or []),
-            visibility = ["//visibility:private"],
-        )
-    if clang_tidy_enabled:
-        clang_tidy_test(
-            name = name + "_clang_tidy",
-            srcs = [":" + name],
-            tags = ["clang_tidy", "clang-tidy"],
-            visibility = ["//visibility:private"],
-        )
 
 cf_cc_library = macro(
     inherit_attrs = cc_library,
-    attrs = {
-        "clang_format_enabled": attr.bool(configurable = False, default = True, doc = "Decide if a corresponding format_test target is generated"),
-        "clang_tidy_enabled": attr.bool(configurable = False, default = True, doc = "Decide if a corresponding clang_tidy_test target is generated"),
-        "copts": attr.string_list(configurable = False, default = []),
+    attrs = _CC_COMMON_ATTRS | {
+        "deps": _attr.label_list(configurable = True),
+        "_target_type": _attr.string(configurable = False, default = "cc_library"),
     },
-    implementation = _cf_cc_library_implementation,
+    implementation = _cf_cc_target_implementation,
 )
-
-def _cf_cc_test_implementation(name, clang_format_enabled, clang_tidy_enabled, copts, deps, **kwargs):
-    cc_test(
-        name = name,
-        copts = (copts or []) + COPTS,
-        deps = deps + [
-            "@googletest//:gtest",
-            "@googletest//:gtest_main",
-        ],
-        **kwargs,
-    )
-    if clang_format_enabled:
-        format_test(
-            name = name + "_format_test",
-            cc = "//tools/format:clang_format",
-            disable_git_attribute_checks = True,
-            srcs = (kwargs.get("srcs") or []) + (kwargs.get("hdrs") or []),
-            visibility = ["//visibility:private"],
-        )
-    if clang_tidy_enabled:
-        clang_tidy_test(
-            name = name + "_clang_tidy",
-            srcs = [":" + name],
-            tags = ["clang_tidy", "clang-tidy"],
-            visibility = ["//visibility:private"],
-        )
 
 cf_cc_test = macro(
     inherit_attrs = cc_test,
-    attrs = {
-        "clang_format_enabled": attr.bool(configurable = False, default = True, doc = "Decide if a corresponding format_test target is generated"),
-        "clang_tidy_enabled": attr.bool(configurable = False, default = True, doc = "Decide if a corresponding clang_tidy_test target is generated"),
-        "copts": attr.string_list(configurable = False, default = []),
-        "deps": attr.label_list(configurable = False),
+    attrs = _CC_COMMON_ATTRS | {
+        "deps": _attr.label_list(configurable = False),
+        "_target_type": _attr.string(configurable = False, default = "cc_test"),
     },
-    implementation = _cf_cc_test_implementation,
+    implementation = _cf_cc_target_implementation,
+)
+
+def _cf_rust_binary_implementation(name, **kwargs):
+    rust_binary(
+        name = name,
+        **kwargs
+    )
+    format_test(
+        name = name + "_format_test",
+        rust = "@rules_rust//tools/upstream_wrapper:rustfmt",
+        disable_git_attribute_checks = True,
+        srcs = (kwargs.get("srcs") or []),
+        visibility = ["//visibility:private"],
+    )
+
+cf_rust_binary = macro(
+    inherit_attrs = rust_binary,
+    implementation = _cf_rust_binary_implementation,
 )
 
 def _cf_sh_binary_implementation(name, shellcheck_enabled, **kwargs):
     sh_binary(
         name = name,
-        **kwargs,
+        **kwargs
     )
     if shellcheck_enabled:
         shellcheck_test(
@@ -144,7 +261,7 @@ def _cf_sh_binary_implementation(name, shellcheck_enabled, **kwargs):
 cf_sh_binary = macro(
     inherit_attrs = sh_binary,
     attrs = {
-        "shellcheck_enabled": attr.bool(configurable = False, default = True, doc = "Decide if a corresponding shellcheck_test target is generated"),
+        "shellcheck_enabled": _attr.bool(configurable = False, default = True, doc = "Decide if a corresponding shellcheck_test target is generated"),
     },
     implementation = _cf_sh_binary_implementation,
 )
@@ -152,7 +269,7 @@ cf_sh_binary = macro(
 def _cf_sh_library_implementation(name, shellcheck_enabled, **kwargs):
     sh_library(
         name = name,
-        **kwargs,
+        **kwargs
     )
     if shellcheck_enabled:
         shellcheck_test(
@@ -165,7 +282,7 @@ def _cf_sh_library_implementation(name, shellcheck_enabled, **kwargs):
 cf_sh_library = macro(
     inherit_attrs = sh_library,
     attrs = {
-        "shellcheck_enabled": attr.bool(configurable = False, default = True, doc = "Decide if a corresponding shellcheck_test target is generated"),
+        "shellcheck_enabled": _attr.bool(configurable = False, default = True, doc = "Decide if a corresponding shellcheck_test target is generated"),
     },
     implementation = _cf_sh_library_implementation,
 )

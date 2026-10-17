@@ -16,16 +16,17 @@
 
 #include "cuttlefish/common/libs/utils/host_info.h"
 
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/utsname.h>
 
-#include <cstdlib>
 #include <cstring>
 #include <ostream>
 #include <string>
 #include <string_view>
 
 #include "absl/base/no_destructor.h"
-#include <android-base/strings.h>
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 
@@ -55,7 +56,7 @@ Arch HostArch(std::string_view arch_str) {
     return Arch::Arm;
   } else if (arch_str == "riscv64") {
     return Arch::RiscV64;
-  } else if (arch_str == "x86_64") {
+  } else if (arch_str == "x86_64" || arch_str == "amd64") {
     return Arch::X86_64;
   } else if (arch_str.size() == 4 && arch_str[0] == 'i' && arch_str[2] == '8' &&
              arch_str[3] == '6') {

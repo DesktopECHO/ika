@@ -19,8 +19,9 @@
 #include <vector>
 
 #include "absl/strings/str_split.h"
-#include <gflags/gflags.h>
+#include "gflags/gflags.h"
 
+#include "cuttlefish/common/libs/utils/host_info.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags_defaults.h"
 #include "cuttlefish/host/commands/assemble_cvd/guest_config.h"
 #include "cuttlefish/host/libs/config/vmm_mode.h"

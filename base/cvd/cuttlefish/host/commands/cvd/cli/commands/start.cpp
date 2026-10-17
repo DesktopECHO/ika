@@ -24,6 +24,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -32,29 +33,34 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include <fmt/core.h>
-#include <fmt/format.h>
 #include "absl/log/log.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
+#include "fmt/core.h"
+#include "fmt/format.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/contains.h"
 #include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/common/libs/utils/json.h"
+#include "cuttlefish/common/libs/utils/users.h"
+#include "cuttlefish/files/directory_contents.h"
+#include "cuttlefish/files/directory_exists.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/flag_parser/gflags_compat.h"
-#include "cuttlefish/common/libs/utils/json.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
-#include "cuttlefish/common/libs/utils/users.h"
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
-#include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/host_tool_target.h"
+#include "cuttlefish/host/commands/cvd/cli/commands/monitor/monitor.h"
 #include "cuttlefish/host/commands/cvd/cli/help_format.h"
 #include "cuttlefish/host/commands/cvd/cli/selector/selector.h"
-#include "cuttlefish/host/commands/cvd/cli/types.h"
 #include "cuttlefish/host/commands/cvd/cli/utils.h"
 #include "cuttlefish/host/commands/cvd/fetch/substitute.h"
 #include "cuttlefish/host/commands/cvd/instances/cvd_persistent_data.pb.h"
@@ -68,20 +74,24 @@
 #include "cuttlefish/host/commands/cvd/utils/subprocess_waiter.h"
 #include "cuttlefish/host/libs/config/config_constants.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
-#include "cuttlefish/host/libs/metrics/device_metrics_orchestration.h"
+#include "cuttlefish/host/libs/log_names/log_names.h"
+#include "cuttlefish/io/string.h"
+#include "cuttlefish/metrics/device_metrics_orchestration.h"
+#include "cuttlefish/posix/remove.h"
 #include "cuttlefish/posix/symlink.h"
+#include "cuttlefish/process/command.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
 namespace {
 
-std::optional<std::string> GetConfigPath(cvd_common::Args& args) {
+std::optional<std::string> GetConfigPath(std::vector<std::string>& args) {
   size_t initial_size = args.size();
   std::string config_file;
   std::vector<Flag> config_flags = {
       GflagsCompatFlag("config_file", config_file)};
   auto result = ConsumeFlags(config_flags, args);
-  if (!result.ok() || initial_size == args.size()) {
+  if (!result.has_value() || initial_size == args.size()) {
     return std::nullopt;
   }
   return config_file;
@@ -97,7 +107,7 @@ bool PotentiallyHostArtifactsPath(const std::string& host_artifacts_path) {
   }
   const auto host_bin_path = host_artifacts_path + "/bin";
   auto contents_result = DirectoryContents(host_bin_path);
-  if (!contents_result.ok()) {
+  if (!contents_result.has_value()) {
     return false;
   }
   std::vector<std::string> contents = std::move(*contents_result);
@@ -112,7 +122,7 @@ bool PotentiallyHostArtifactsPath(const std::string& host_artifacts_path) {
 }
 
 Result<std::vector<std::string>> ExtractWebRTCDeviceIds(
-    cvd_common::Args& args) {
+    std::vector<std::string>& args) {
   std::string flag_value;
   std::vector<Flag> webrtc_device_id_flag{
       GflagsCompatFlag("webrtc_device_id", flag_value)};
@@ -158,7 +168,7 @@ Result<std::vector<std::string>> ReplaceEmptyWebRTCDeviceIds(
   return webrtc_ids;
 }
 
-Result<void> UpdateWebrtcDeviceIds(cvd_common::Args& args,
+Result<void> UpdateWebrtcDeviceIds(std::vector<std::string>& args,
                                    LocalInstanceGroup& group) {
   std::vector<std::string> webrtc_ids = CF_EXPECT(ReplaceEmptyWebRTCDeviceIds(
       group, CF_EXPECT(ExtractWebRTCDeviceIds(args))));
@@ -177,7 +187,7 @@ Result<void> UpdateWebrtcDeviceIds(cvd_common::Args& args,
  * 3. If not, --instance_nums=<ids>
  *
  */
-static Result<void> UpdateInstanceArgs(cvd_common::Args& args,
+static Result<void> UpdateInstanceArgs(std::vector<std::string>& args,
                                        const LocalInstanceGroup& group) {
   CF_EXPECT(!group.Instances().empty());
 
@@ -221,7 +231,8 @@ static Result<void> UpdateInstanceArgs(cvd_common::Args& args,
 Result<void> SymlinkPreviousConfig(const std::string& group_home_dir) {
   auto system_wide_home = CF_EXPECT(SystemWideUserHome());
   auto config_from_home = system_wide_home + "/.cuttlefish_config.json";
-  if (!FileExists(config_from_home) || !LoadFromFile(config_from_home).ok()) {
+  if (!FileExists(config_from_home) ||
+      !LoadFromFile(config_from_home).has_value()) {
     // Skip if the file doesn't exist or can't be parsed as JSON
     return {};
   }
@@ -253,7 +264,7 @@ Result<void> CvdResetGroup(const LocalInstanceGroup& group) {
   return {};
 }
 
-Result<void> UpdateEnvs(cvd_common::Envs& envs,
+Result<void> UpdateEnvs(std::unordered_map<std::string, std::string>& envs,
                         const LocalInstanceGroup& group) {
   CF_EXPECT(!group.Instances().empty());
   envs[kCuttlefishInstanceEnvVarName] =
@@ -275,11 +286,11 @@ Result<std::string> FindStartBin(const std::string& android_host_out) {
   return CF_EXPECT(HostToolTarget(android_host_out).GetStartBinName());
 }
 
-Result<Command> ConstructCvdNonHelpCommand(const std::string& bin_file,
-                                           const LocalInstanceGroup& group,
-                                           const cvd_common::Args& args,
-                                           const cvd_common::Envs& envs,
-                                           const CommandRequest& request) {
+Result<Command> ConstructCvdNonHelpCommand(
+    const std::string& bin_file, const LocalInstanceGroup& group,
+    const std::vector<std::string>& args,
+    const std::unordered_map<std::string, std::string>& envs,
+    const CommandRequest& request, SharedFD output_fd = SharedFD()) {
   auto bin_path = group.HostArtifactsPath();
   CF_EXPECTF(PotentiallyHostArtifactsPath(bin_path),
              "ANDROID_HOST_OUT, \"{}\" is not a tool directory", bin_path);
@@ -292,56 +303,74 @@ Result<Command> ConstructCvdNonHelpCommand(const std::string& bin_file,
                                             .working_dir = CurrentDirectory(),
                                             .command_name = bin_file};
   Command non_help_command = CF_EXPECT(ConstructCommand(construct_cmd_param));
-  // Print everything to stderr, cvd needs to print JSON to stdout which
-  // would be unparseable with the subcommand's output.
-  non_help_command.RedirectStdIO(Subprocess::StdIOChannel::kStdOut,
-                                 Subprocess::StdIOChannel::kStdErr);
+  if (output_fd->IsOpen()) {
+    non_help_command.RedirectStdIO(Command::StdIoChannel::kStdOut, output_fd);
+    non_help_command.RedirectStdIO(Command::StdIoChannel::kStdErr, output_fd);
+  } else {
+    // Print everything to stderr, cvd needs to print JSON to stdout which
+    // would be unparseable with the subcommand's output.
+    non_help_command.RedirectStdIO(Command::StdIoChannel::kStdOut,
+                                   Command::StdIoChannel::kStdErr);
+  }
   return non_help_command;
 }
 
 Result<std::vector<Flag>> GetCvdInternalStartFlags(
-    cvd_common::Args args, const cvd_common::Envs& env) {
+    std::vector<std::string> args,
+    const std::unordered_map<std::string, std::string>& env) {
   std::vector<Flag> flags =
       CF_EXPECT(GetSiblingCommandFlags("cvd_internal_start", env, args));
   // Remove flags set by cvd and intented to be exposed to the user
   const std::vector<std::string> to_remove = {
-      "daemon", "instance_nums", "num_instances", "base_instance_num"};
+      "daemon", "instance_nums", "num_instances", "base_instance_num",
+      "report_anonymous_usage_stats"};
   std::erase_if(flags,
                 [&to_remove](Flag f) { return Contains(to_remove, f.Name()); });
   return flags;
+}
+
+bool CanBypassToSingleInstance(const LocalInstance& instance,
+                               const LocalInstanceGroup& group,
+                               const std::vector<std::string>& subcmd_args) {
+  if (instance.State() != cvd::INSTANCE_STATE_STOPPED) {
+    return false;
+  }
+  if (group.StartTime() == TimeStamp{}) {
+    return false;
+  }
+
+  std::vector<std::string> args_copy = subcmd_args;
+  bool daemon = true;
+  std::vector<Flag> safe_flags = {
+      GflagsCompatFlag("daemon", daemon),
+  };
+  const Result<void> res = ConsumeFlags(safe_flags, args_copy);
+  if (!res.has_value() || !daemon || !args_copy.empty()) {
+    return false;
+  }
+
+  const std::vector<LocalInstance>& instances = group.Instances();
+  if (instances.empty()) {
+    return false;
+  }
+  const LocalInstance& main_instance = instances[0];
+  if (instance.Id() == main_instance.Id()) {
+    return false;
+  }
+  if (main_instance.State() != cvd::INSTANCE_STATE_RUNNING) {
+    return false;
+  }
+
+  return true;
 }
 
 }  // namespace
 
 CvdStartCommandHandler::CvdStartCommandHandler(
     InstanceManager& instance_manager)
-    : instance_manager_(instance_manager) {}
-
-static Result<void> ConsumeDaemonModeFlag(cvd_common::Args& args) {
-  bool daemon = true;
-  Flag flag =
-      GflagsCompatFlag("daemon", daemon)
-          .AddValidator([&daemon]() -> Result<void> {
-            CF_EXPECT(!!daemon, "`cvd start` must always run in daemon mode.");
-            return {};
-          });
-  CF_EXPECT(ConsumeFlags({flag}, args));
-  return {};
-}
-
-static bool HasUnsafeFlagsForBypass(const std::vector<std::string>& args) {
-  std::vector<std::string> args_copy = args;
-  bool daemon = true;
-  std::string report_anonymous = "";
-  std::vector<Flag> safe_flags = {
-      GflagsCompatFlag("daemon", daemon),
-      GflagsCompatFlag("report_anonymous_usage_stats", report_anonymous),
-  };
-  auto res = ConsumeFlags(safe_flags, args_copy);
-  if (!res.ok()) {
-    return true;
-  }
-  return !args_copy.empty();
+    : instance_manager_(instance_manager) {
+  own_flags_.daemon = true;
+  own_flags_.print_group_format = isatty(0) ? "human" : "json";
 }
 
 Result<void> CvdStartCommandHandler::Handle(const CommandRequest& request) {
@@ -359,18 +388,16 @@ Result<void> CvdStartCommandHandler::Handle(const CommandRequest& request) {
     auto [instance, group] =
         CF_EXPECT(selector::SelectInstance(instance_manager_, request));
 
-    if (instance.State() == cvd::INSTANCE_STATE_STOPPED &&
-        group.StartTime() != TimeStamp{} &&
-        !HasUnsafeFlagsForBypass(subcmd_args)) {
+    if (CanBypassToSingleInstance(instance, group, subcmd_args)) {
       CF_EXPECT(LaunchSingleInstance(instance, group, request));
       return {};
     } else {
-      VLOG(1) << "Instance is not in stopped state. Proceeding with "
+      VLOG(1) << "Cannot bypass to single instance start. Proceeding with "
                  "normal group start.";
     }
   }
 
-  CF_EXPECT(ConsumeDaemonModeFlag(subcmd_args));
+  CF_EXPECT(ConsumeFlags(BuildOwnFlags(), subcmd_args));
   subcmd_args.push_back("--daemon=true");
 
   LocalInstanceGroup group =
@@ -381,82 +408,146 @@ Result<void> CvdStartCommandHandler::Handle(const CommandRequest& request) {
             "Selected instance group is already started, use `cvd create` to "
             "create a new one.");
 
-  cvd_common::Envs envs = request.Env();
+  std::unordered_map<std::string, std::string> envs = request.Env();
 
   CF_EXPECT(UpdateInstanceArgs(subcmd_args, group));
   CF_EXPECT(UpdateWebrtcDeviceIds(subcmd_args, group));
   CF_EXPECT(UpdateEnvs(envs, group));
   const auto bin = CF_EXPECT(FindStartBin(group.HostArtifactsPath()));
 
-  CF_EXPECT(ConsumeFlags(BuildOwnFlags(), subcmd_args));
-
   CF_EXPECT(HostPackageSubstitution(group.HostArtifactsPath(),
                                     own_flags_.host_substitutions));
 
-  Command command = CF_EXPECT(
-      ConstructCvdNonHelpCommand(bin, group, subcmd_args, envs, request));
+  SharedFD memfd;
+  SharedFD stop_eventfd;
+  if (!own_flags_.daemon) {
+    memfd = CF_EXPECT(Fd::MemfdCreate("cvd_internal_start_output"));
 
-  // The instance database needs to be updated if an interrupt is received.
-  auto handle_res = PushInterruptListener([this, &group](int signal) {
-    LOG(WARNING) << strsignal(signal) << " signal received, cleanning up";
-    auto interrupt_res = subprocess_waiter_.Interrupt();
-    if (!interrupt_res.ok()) {
-      LOG(ERROR) << "Failed to stop subprocesses: " << interrupt_res.error();
-      LOG(ERROR) << "Devices may still be executing in the background, run "
-                    "`cvd reset` to ensure a clean state";
-    }
+    stop_eventfd = CF_EXPECT(Fd::Event());
+  }
 
-    group.SetAllStates(cvd::INSTANCE_STATE_CANCELLED);
-    auto update_res = instance_manager_.UpdateInstanceGroup(group);
-    if (!update_res.ok()) {
-      LOG(ERROR) << "Failed to update group status: " << update_res.error();
-    }
-    // It's technically possible for the group's state to be set to
-    // "running" before abort has a chance to run, but that can only happen
-    // if the instances are indeed running, so it's OK.
+  Command command = CF_EXPECT(ConstructCvdNonHelpCommand(
+      bin, group, subcmd_args, envs, request, memfd));
 
-    std::abort();
-  });
-  auto listener_handle = CF_EXPECT(std::move(handle_res));
+  Result<std::unique_ptr<InterruptListenerHandle>> handle_res =
+      PushInterruptListener([this, &group, stop_eventfd](int signal) {
+        LOG(WARNING) << strsignal(signal) << " signal received, cleanning up";
+        if (stop_eventfd->IsOpen()) {
+          stop_eventfd->EventfdWrite(1);
+        }
+        Result<void> interrupt_res = subprocess_waiter_.Interrupt();
+        if (!interrupt_res.has_value()) {
+          LOG(ERROR) << "Failed to stop subprocesses: "
+                     << interrupt_res.error();
+          LOG(ERROR) << "Devices may still be executing in the background, "
+                        "run `cvd reset` to ensure a clean state";
+        }
+
+        group.SetAllStates(cvd::INSTANCE_STATE_CANCELLED);
+        Result<void> update_res = instance_manager_.UpdateInstanceGroup(group);
+        if (!update_res.has_value()) {
+          LOG(ERROR) << "Failed to update group status: " << update_res.error();
+        }
+        // It's technically possible for the group's state to be set to
+        // "running" before abort has a chance to run, but that can only happen
+        // if the instances are indeed running, so it's OK.
+
+        std::abort();
+      });
+
+  std::unique_ptr<InterruptListenerHandle> listener_handle =
+      CF_EXPECT(std::move(handle_res));
   group.SetAllStates(cvd::INSTANCE_STATE_STARTING);
   group.SetStartTime(CvdServerClock::now());
   CF_EXPECT(instance_manager_.UpdateInstanceGroup(group));
-  CF_EXPECT(
-      LaunchDeviceInterruptible(std::move(command), group, envs, request));
+
+  std::thread monitor_thread;
+  Result<void> monitor_res;
+
+  if (!own_flags_.daemon) {
+    const LocalInstance& instance = *group.Instances().begin();
+    const std::string assemble_log =
+        absl::StrCat(instance.AssemblyDirectory(), "/", kLogNameAssembleCvd);
+    (void)RemoveFile(assemble_log);
+    for (const auto& log : CF_EXPECT(instance.LogsFilenames())) {
+      (void)RemoveFile(log);
+    }
+    monitor_thread = std::thread([&group, stop_eventfd, &monitor_res]() {
+      const LocalInstance& first_instance = *group.Instances().begin();
+      monitor_res = MonitorLogs(first_instance, stop_eventfd);
+    });
+  }
+
+  Result<void> launch_res =
+      LaunchDeviceInterruptible(std::move(command), group, envs, request);
+
+  if (!launch_res.has_value()) {
+    if (!own_flags_.daemon) {
+      if (stop_eventfd->IsOpen()) {
+        stop_eventfd->EventfdWrite(1);
+      }
+      if (monitor_thread.joinable()) {
+        monitor_thread.join();
+      }
+      memfd->LSeek(0, SEEK_SET);
+      std::cout << ReadToString(*memfd).value_or("") << std::flush;
+    }
+    return launch_res;
+  }
+
   group.SetAllStates(cvd::INSTANCE_STATE_RUNNING);
   CF_EXPECT(instance_manager_.UpdateInstanceGroup(group));
+
+  if (!own_flags_.daemon) {
+    listener_handle.reset();
+    std::unique_ptr<InterruptListenerHandle> stop_listener =
+        CF_EXPECT(PushInterruptListener(
+            [stop_eventfd](int) { stop_eventfd->EventfdWrite(1); }));
+
+    if (monitor_thread.joinable()) {
+      monitor_thread.join();
+    }
+    stop_listener.reset();
+
+    LOG(INFO) << "Stopping device...";
+    CF_EXPECT(instance_manager_.StopInstanceGroup(
+        group, InstanceDirActionOnStop::Keep));
+    LOG(INFO) << "Device stopped.";
+    return monitor_res;
+  }
+
   listener_handle.reset();
 
-  // show user a more succinct output
-  if (isatty(0)) {
+  if (own_flags_.print_group_format == "json") {
+    auto group_json = CF_EXPECT(group.FetchStatus());
+    std::cout << group_json.toStyledString();
+  } else if (own_flags_.print_group_format == "human") {
     std::vector<std::string> instance_names;
     for (const auto& instance : group.Instances()) {
       instance_names.push_back(instance.Name());
     }
     std::cout << fmt::format("group:{}|instance(s):{}\n", group.GroupName(),
                              absl::StrJoin(instance_names, ","));
-  } else {
-    auto group_json = CF_EXPECT(group.FetchStatus());
-    std::cout << group_json.toStyledString();
   }
 
   return {};
 }
 
-cvd_common::Args CvdStartCommandHandler::CmdList() const {
+std::vector<std::string> CvdStartCommandHandler::CmdList() const {
   return {"start", "launch_cvd"};
 }
 
 Result<void> CvdStartCommandHandler::LaunchDevice(
     Command launch_command, LocalInstanceGroup& group,
-    const cvd_common::Envs& envs, const CommandRequest& request) {
+    const std::unordered_map<std::string, std::string>& envs,
+    const CommandRequest& request) {
   // Don't destroy the returned object until after the devices have started, it
   // holds a connection to the orchestrator that ensures the devices remain
   // pre-registered there. If the connection is lost before the devices register
   // themselves the pre-registration is lost and group information won't be
   // shown in the UI.
   auto conn_res = PreregisterGroup(group);
-  if (!conn_res.ok()) {
+  if (!conn_res.has_value()) {
     LOG(ERROR) << "Failed to pre-register devices with operator, group "
                   "information won't show in the UI: "
                << conn_res.error();
@@ -483,20 +574,23 @@ Result<void> CvdStartCommandHandler::LaunchDevice(
 }
 
 Result<void> CvdStartCommandHandler::LaunchDeviceInterruptible(
-    Command command, LocalInstanceGroup& group, const cvd_common::Envs& envs,
+    Command command, LocalInstanceGroup& group,
+    const std::unordered_map<std::string, std::string>& envs,
     const CommandRequest& request) {
   // cvd_internal_start uses the config from the previous invocation to
   // determine the default value for the -report_anonymous_usage_stats flag so
   // we symlink that to the group's home directory, this link will be
   // overwritten later by cvd_internal_start itself.
+  // NOTE: --report_anonymous_usage_stats flag and its value in the config are
+  // deprecated
   auto symlink_config_res = SymlinkPreviousConfig(group.HomeDir());
-  if (!symlink_config_res.ok()) {
+  if (!symlink_config_res.has_value()) {
     LOG(ERROR) << "Failed to symlink the config file at system wide home: "
                << symlink_config_res.error();
   }
   Result<void> start_res =
       LaunchDevice(std::move(command), group, envs, request);
-  if (!start_res.ok()) {
+  if (!start_res.has_value()) {
     group.SetAllStates(cvd::INSTANCE_STATE_BOOT_FAILED);
     CF_EXPECT(instance_manager_.UpdateInstanceGroup(group));
     return start_res;
@@ -508,8 +602,8 @@ Result<void> CvdStartCommandHandler::LaunchDeviceInterruptible(
 Result<void> CvdStartCommandHandler::LaunchSingleInstance(
     LocalInstance& instance, LocalInstanceGroup& group,
     const CommandRequest& request) {
-  auto bin_path = group.HostArtifactsPath() + "/bin/run_cvd";
-  cvd_common::Envs run_cvd_envs = request.Env();
+  const std::string bin_path = group.HostArtifactsPath() + "/bin/run_cvd";
+  std::unordered_map<std::string, std::string> run_cvd_envs = request.Env();
   run_cvd_envs[kCuttlefishInstanceEnvVarName] = std::to_string(instance.Id());
   run_cvd_envs["HOME"] = group.HomeDir();
   run_cvd_envs[kAndroidHostOut] = group.HostArtifactsPath();
@@ -519,23 +613,24 @@ Result<void> CvdStartCommandHandler::LaunchSingleInstance(
 
   ConstructCommandParam construct_cmd_param{.bin_path = bin_path,
                                             .home = group.HomeDir(),
-                                            .args = cvd_common::Args{},
+                                            .args = std::vector<std::string>{},
                                             .envs = run_cvd_envs,
                                             .working_dir = CurrentDirectory(),
                                             .command_name = "run_cvd"};
 
   Command command = CF_EXPECT(ConstructCommand(construct_cmd_param));
-  command.RedirectStdIO(Subprocess::StdIOChannel::kStdOut,
-                        Subprocess::StdIOChannel::kStdErr);
-  SharedFD dev_null = SharedFD::Open("/dev/null", O_RDONLY);
-  if (dev_null->IsOpen()) {
-    command.RedirectStdIO(Subprocess::StdIOChannel::kStdIn, dev_null);
+  command.RedirectStdIO(Command::StdIoChannel::kStdOut,
+                        Command::StdIoChannel::kStdErr);
+  Result<Fd> dev_null = Fd::Open("/dev/null", O_RDONLY);
+  if (dev_null.has_value()) {
+    command.RedirectStdIO(Command::StdIoChannel::kStdIn, std::move(*dev_null));
   } else {
-    LOG(ERROR) << "Failed to open /dev/null: " << dev_null->StrError();
+    LOG(ERROR) << "Failed to open /dev/null: " << dev_null.error();
   }
 
-  auto symlink_config_res = SymlinkPreviousConfig(group.HomeDir());
-  if (!symlink_config_res.ok()) {
+  const Result<void> symlink_config_res =
+      SymlinkPreviousConfig(group.HomeDir());
+  if (!symlink_config_res.has_value()) {
     LOG(ERROR) << "Failed to symlink the config file at system wide home: "
                << symlink_config_res.error();
   }
@@ -556,7 +651,7 @@ Result<void> CvdStartCommandHandler::LaunchSingleInstance(
   Result<void> start_res =
       LaunchDevice(std::move(command), group, run_cvd_envs, request);
 
-  if (!start_res.ok()) {
+  if (!start_res.has_value()) {
     set_instance_state(cvd::INSTANCE_STATE_BOOT_FAILED);
     CF_EXPECT(instance_manager_.UpdateInstanceGroup(group));
     return start_res;
@@ -565,7 +660,7 @@ Result<void> CvdStartCommandHandler::LaunchSingleInstance(
   set_instance_state(cvd::INSTANCE_STATE_RUNNING);
   CF_EXPECT(instance_manager_.UpdateInstanceGroup(group));
 
-  auto group_json = CF_EXPECT(group.FetchStatus());
+  const Json::Value group_json = CF_EXPECT(group.FetchStatus());
   std::cout << group_json.toStyledString();
 
   return {};
@@ -593,8 +688,9 @@ Result<std::vector<Flag>> CvdStartCommandHandler::Flags(
     const CommandRequest& request) {
   std::vector<Flag> own_flags = BuildOwnFlags();
 
-  std::vector<Flag> internal_flags = CF_EXPECT(GetCvdInternalStartFlags(
-      request.SubcommandArguments(), cvd_common::Envs()));
+  std::vector<Flag> internal_flags = CF_EXPECT(
+      GetCvdInternalStartFlags(request.SubcommandArguments(),
+                               std::unordered_map<std::string, std::string>()));
 
   std::vector<Flag> flags = std::move(own_flags);
   flags.insert(flags.end(), internal_flags.begin(), internal_flags.end());
@@ -603,19 +699,22 @@ Result<std::vector<Flag>> CvdStartCommandHandler::Flags(
 }
 
 std::vector<Flag> CvdStartCommandHandler::BuildOwnFlags() {
-  return {GflagsCompatFlag("host_substitutions", own_flags_.host_substitutions)
-              .Help("Comma separated list of files to replace in the host "
-                    "artifacts from the android build with artifacts from the "
-                    "cuttlefish-base package. The special value \"all\" causes "
-                    "it to replace everything it can, while with an empty it "
-                    "will replace what the android build specifies in the "
-                    "'debian_substitution_marker' file.")};
-}
-
-std::unique_ptr<CvdCommandHandler> NewCvdStartCommandHandler(
-    InstanceManager& instance_manager) {
-  return std::unique_ptr<CvdCommandHandler>(
-      new CvdStartCommandHandler(instance_manager));
+  return {
+      GflagsCompatFlag("host_substitutions", own_flags_.host_substitutions)
+          .Help("Comma separated list of files to replace in the host "
+                "artifacts from the android build with artifacts from the "
+                "cuttlefish-base package. The special value \"all\" causes "
+                "it to replace everything it can, while with an empty it "
+                "will replace what the android build specifies in the "
+                "'debian_substitution_marker' file."),
+      GflagsCompatFlag("daemon", own_flags_.daemon)
+          .Help("Run the start command in the background as a daemon. "
+                "If false, the command runs in the foreground and monitors "
+                "logs."),
+      GflagsCompatFlag("print_group_format", own_flags_.print_group_format)
+          .Help("The format in which to print group information after start. "
+                "Supported values are \"human\", \"json\", and \"none\"."),
+  };
 }
 
 }  // namespace cuttlefish

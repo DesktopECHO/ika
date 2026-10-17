@@ -16,8 +16,6 @@
 
 #include "cuttlefish/host/commands/cvd/cli/commands/remove.h"
 
-#include <chrono>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -25,10 +23,8 @@
 
 #include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
-#include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
 #include "cuttlefish/host/commands/cvd/cli/help_format.h"
 #include "cuttlefish/host/commands/cvd/cli/selector/selector.h"
-#include "cuttlefish/host/commands/cvd/cli/types.h"
 #include "cuttlefish/host/commands/cvd/cli/utils.h"
 #include "cuttlefish/host/commands/cvd/instances/instance_manager.h"
 #include "cuttlefish/host/commands/cvd/instances/local_instance_group.h"
@@ -39,7 +35,7 @@ RemoveCvdCommandHandler::RemoveCvdCommandHandler(
     InstanceManager& instance_manager)
     : instance_manager_(instance_manager) {}
 
-cvd_common::Args RemoveCvdCommandHandler::CmdList() const {
+std::vector<std::string> RemoveCvdCommandHandler::CmdList() const {
   return {"remove", "rm"};
 }
 
@@ -80,7 +76,7 @@ Result<void> RemoveCvdCommandHandler::Handle(const CommandRequest& request) {
   auto group = CF_EXPECT(selector::SelectGroup(instance_manager_, request));
 
   Result<void> stop_res = StopGroup(group);
-  if (!stop_res.ok()) {
+  if (!stop_res.has_value()) {
     LOG(ERROR) << stop_res.error();
     LOG(ERROR) << "Unable to stop devices first, run `cvd reset` to forcibly "
                   "kill any remaining device processes.";
@@ -97,14 +93,8 @@ Result<void> RemoveCvdCommandHandler::StopGroup(
     return {};
   }
   CF_EXPECT(instance_manager_.StopInstanceGroup(
-      group, std::chrono::seconds(5), InstanceDirActionOnStop::Clear));
+      group, InstanceDirActionOnStop::Clear));
   return {};
-}
-
-std::unique_ptr<CvdCommandHandler> NewRemoveCvdCommandHandler(
-    InstanceManager& instance_manager) {
-  return std::unique_ptr<CvdCommandHandler>(
-      new RemoveCvdCommandHandler(instance_manager));
 }
 
 }  // namespace cuttlefish

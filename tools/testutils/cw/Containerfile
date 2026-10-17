@@ -6,6 +6,9 @@ ENV PATH="/root/.local/bin:${PATH}"
 RUN dnf -y upgrade --refresh
 RUN dnf -y install sudo systemd systemd-journal-remote nginx jq android-tools
 
+# Packages needed to run CTS
+RUN apt-get install -y aapt
+
 RUN groupadd kvm
 COPY tools/testutils/cw/setup.service /etc/systemd/system/setup.service
 RUN systemctl enable setup

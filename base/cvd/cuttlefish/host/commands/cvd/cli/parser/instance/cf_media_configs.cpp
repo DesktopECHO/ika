@@ -16,47 +16,83 @@
 
 #include "cuttlefish/host/commands/cvd/cli/parser/instance/cf_media_configs.h"
 
+#include <algorithm>
+#include <cstddef>
+#include <numeric>
 #include <string>
 #include <vector>
+
+#include "fmt/format.h"
 
 #include "cuttlefish/host/commands/cvd/cli/parser/cf_configs_common.h"
 #include "cuttlefish/host/commands/cvd/cli/parser/load_config.pb.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
+namespace {
 
 using cvd::config::EnvironmentSpecification;
 using cvd::config::Instance;
+using cvd::config::MediaDevice;
+using cvd::config::V4l2StreamProxy;
+
+std::string MediaDeviceToFlagValue(const MediaDevice& device) {
+  std::string res;
+  if (device.has_v4l2_emulated_camera_splane()) {
+    res = "v4l2_emulated_camera_splane";
+  } else if (device.has_v4l2_emulated_camera_mplane()) {
+    res = "v4l2_emulated_camera_mplane";
+  } else if (device.has_v4l2_proxy()) {
+    res = "v4l2_proxy";
+    if (device.v4l2_proxy().has_device_path()) {
+      res += ":device=" + device.v4l2_proxy().device_path();
+    }
+  } else if (device.has_v4l2_stream_proxy()) {
+    const V4l2StreamProxy& v4l2_stream_proxy = device.v4l2_stream_proxy();
+    res = fmt::format(
+        "v4l2_stream_proxy:input_path={}:input_width={}:input_height={}:"
+        "input_fps={}",
+        v4l2_stream_proxy.input_path(), v4l2_stream_proxy.input_width(),
+        v4l2_stream_proxy.input_height(), v4l2_stream_proxy.input_fps());
+  }
+  if (device.has_lens_facing()) {
+    res += ":lens_facing=" + device.lens_facing();
+  }
+  return res;
+}
+
+}  // namespace
 
 Result<std::vector<std::string>> GenerateMediaFlags(
     const EnvironmentSpecification& cfg) {
-  int has_media_count =
-      std::count_if(cfg.instances().rbegin(), cfg.instances().rend(),
-                    [](const auto& v) { return v.has_media(); });
-  CF_EXPECT(has_media_count == 0 || cfg.instances().size() == 1,
-            "TODO(b/520098369): support media devices for multiple instances");
+  if (cfg.instances().empty()) {
+    return {};
+  }
+
+  // Maximum number of media devices among all the instances which determines
+  // the number of "--media" flags that would be used in downstream cvd CLI.
+  const int max_devs = std::accumulate(
+      cfg.instances().begin(), cfg.instances().end(), 0,
+      [](int current_max, const Instance& ins) {
+        return std::max(current_max, ins.media().devices().size());
+      });
+  if (max_devs == 0) {
+    return {};
+  }
+
   std::vector<std::string> flags;
-  for (const auto& instance : cfg.instances()) {
-    if (instance.has_media()) {
-      for (const auto& device : instance.media().devices()) {
-        std::string flag = "--media=";
-        if (device.has_v4l2_emulated_camera_splane()) {
-          flag += "type=v4l2_emulated_camera_splane";
-        } else if (device.has_v4l2_emulated_camera_mplane()) {
-          flag += "type=v4l2_emulated_camera_mplane";
-        } else if (device.has_v4l2_proxy()) {
-          flag += "type=v4l2_proxy";
-          if (device.v4l2_proxy().has_device_path()) {
-            flag += ",device=" + device.v4l2_proxy().device_path();
-          }
-        }
-        if (device.has_lens_facing()) {
-          flag += ",lens_facing=" + device.lens_facing();
-        }
-        flags.push_back(flag);
+  for (int idx = 0; idx < max_devs; idx++) {
+    std::vector<std::string> values;
+    for (const Instance& ins : cfg.instances()) {
+      if (idx < ins.media().devices().size()) {
+        values.push_back(MediaDeviceToFlagValue(ins.media().devices()[idx]));
+      } else {
+        values.push_back("");
       }
     }
+    flags.push_back(GenerateVecFlag("media", values));
   }
+
   return flags;
 }
 

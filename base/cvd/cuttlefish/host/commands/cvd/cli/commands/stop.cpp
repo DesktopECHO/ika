@@ -20,7 +20,6 @@
 #include <stdlib.h>
 
 #include <chrono>
-#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -29,14 +28,12 @@
 #include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/flag_parser/gflags_compat.h"
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
-#include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
 #include "cuttlefish/host/commands/cvd/cli/help_format.h"
 #include "cuttlefish/host/commands/cvd/cli/selector/selector.h"
-#include "cuttlefish/host/commands/cvd/cli/types.h"
 #include "cuttlefish/host/commands/cvd/cli/utils.h"
 #include "cuttlefish/host/commands/cvd/instances/instance_manager.h"
 #include "cuttlefish/host/commands/cvd/instances/local_instance.h"
-#include "cuttlefish/host/libs/metrics/device_metrics_orchestration.h"
+#include "cuttlefish/metrics/device_metrics_orchestration.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -44,10 +41,6 @@ namespace {
 
 constexpr char kSummaryHelpText[] = "Stop Cuttlefish instances";
 
-struct StopFlags {
-  size_t wait_for_launcher_secs = 5;
-  bool clear_instance_dirs = false;
-};
 }  // namespace
 
 CvdStopCommandHandler::CvdStopCommandHandler(InstanceManager& instance_manager)
@@ -83,10 +76,10 @@ Result<void> CvdStopCommandHandler::Handle(const CommandRequest& request) {
   }
 
   Result<void> stop_outcome = instance_manager_.StopInstanceGroup(
-      group, launcher_timeout,
+      group,
       flags_.clear_instance_dirs ? InstanceDirActionOnStop::Clear
                                  : InstanceDirActionOnStop::Keep,
-      instance_nums);
+      launcher_timeout.value_or(std::chrono::seconds(0)), instance_nums);
 
   GatherVmStopMetrics(group);
 
@@ -94,7 +87,7 @@ Result<void> CvdStopCommandHandler::Handle(const CommandRequest& request) {
   return {};
 }
 
-cvd_common::Args CvdStopCommandHandler::CmdList() const {
+std::vector<std::string> CvdStopCommandHandler::CmdList() const {
   return {"stop", "stop_cvd"};
 }
 
@@ -139,12 +132,6 @@ Result<std::vector<Flag>> CvdStopCommandHandler::Flags(const CommandRequest&) {
                 "not delete the original disk images, but reverts any "
                 "changes the instance may have written to disk."),
   };
-}
-
-std::unique_ptr<CvdCommandHandler> NewCvdStopCommandHandler(
-    InstanceManager& instance_manager) {
-  return std::unique_ptr<CvdCommandHandler>(
-      new CvdStopCommandHandler(instance_manager));
 }
 
 }  // namespace cuttlefish

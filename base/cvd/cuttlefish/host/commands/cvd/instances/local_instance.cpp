@@ -21,14 +21,18 @@
 
 #include <fstream>
 #include <memory>
+#include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "absl/log/log.h"
-#include "cuttlefish/common/libs/utils/contains.h"
+#include "absl/strings/str_join.h"
+#include "absl/strings/strip.h"
+
 #include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
-#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
+#include "cuttlefish/files/directory_contents.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/host_tool_target.h"
 #include "cuttlefish/host/commands/cvd/cli/utils.h"
 #include "cuttlefish/host/commands/cvd/instances/status_fetcher.h"
@@ -37,6 +41,8 @@
 #include "cuttlefish/host/libs/command_util/util.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/screen_recording_controls/screen_recording_controls.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/managed_stdio.h"
 
 namespace cuttlefish {
 
@@ -115,12 +121,13 @@ Result<Json::Value> LocalInstance::FetchStatus(std::chrono::seconds timeout) {
 
 Result<void> LocalInstance::PressPowerBtn() {
   auto bin_check = HostToolTarget(HostArtifactsPath()).GetPowerBtnBinPath();
-  if (bin_check.ok()) {
+  if (bin_check.has_value()) {
     return PressPowerBtnLegacy();
   }
 
   std::unique_ptr<const CuttlefishConfig> config =
-      CuttlefishConfig::GetFromFile(InstanceDirectory() + "/cuttlefish_config.json");
+      CuttlefishConfig::GetFromFile(InstanceDirectory() +
+                                    "/cuttlefish_config.json");
   CF_EXPECT_EQ(config->vm_manager(), VmmMode::kCrosvm,
                "powerbtn not supported in vm manager " << config->vm_manager());
   auto instance = config->ForInstance(Id());
@@ -144,8 +151,7 @@ Result<void> LocalInstance::PressPowerBtnLegacy() {
 
   VLOG(0) << "Executing: " << cmd.ToString();
 
-  siginfo_t infop;
-  cmd.Start().Wait(&infop, WEXITED);
+  siginfo_t infop = CF_EXPECT(cmd.Start().Wait(WEXITED));
   CF_EXPECT(CheckProcessExitedNormally(infop));
 
   return {};
@@ -253,6 +259,19 @@ LocalInstance::GetInstanceConfig() {
   return config->ForInstance(Id());
 }
 
+Result<std::string> LocalInstance::UDSDirectory() const {
+  // Newer cuttlefish instances put launcher monitor socket in a directory
+  // under /tmp, and store this path in the config. Older instances just put
+  // them in the instance directory.
+  Json::Value config = CF_EXPECT(ReadJsonConfig());
+  if (config.isMember("instances_uds_dir") &&
+      config["instances_uds_dir"].isString()) {
+    return fmt::format("{}/cvd-{}", config["instances_uds_dir"].asString(),
+                       Id());
+  }
+  return InstanceDirectory();
+}
+
 Result<SharedFD> LocalInstance::GetLauncherMonitor(
     std::chrono::seconds timeout) const {
   // Newer cuttlefish instances put launcher monitor socket in a directory
@@ -276,7 +295,8 @@ Result<SharedFD> LocalInstance::GetLauncherMonitor(
 
 Result<std::vector<std::string>> LocalInstance::LogsFilenames() const {
   if (!FileExists(InstanceDirectory())) {
-    VLOG(0) << "Instance directory \"" << InstanceDirectory() << "\" does not exist";
+    VLOG(0) << "Instance directory \"" << InstanceDirectory()
+            << "\" does not exist";
     return {};
   }
   std::string logs_dir = InstanceDirectory() + "/logs";
@@ -291,6 +311,49 @@ Result<std::vector<std::string>> LocalInstance::LogsFilenames() const {
   };
   CF_EXPECT(WalkDirectory(logs_dir, callback));
   return result;
+}
+
+Result<std::set<std::string>> LocalInstance::InputDevices() const {
+  std::string uds_dir =
+      CF_EXPECT(UDSDirectory(), "Unable to get instance's UDS directory") +
+      "/internal";
+  std::vector<std::string> files = CF_EXPECT(DirectoryContents(uds_dir));
+  std::set<std::string> event_devices;
+  for (std::string_view file : files) {
+    if (absl::ConsumeSuffix(&file, ".events.in") ||
+        absl::ConsumeSuffix(&file, ".events.out")) {
+      event_devices.emplace(file);
+    }
+  }
+  return event_devices;
+}
+
+Result<Fd> LocalInstance::NewCaptureInputDeviceEventsConn(
+    const std::string& device_name) const {
+  std::set<std::string> devices = CF_EXPECT(InputDevices());
+  CF_EXPECTF(devices.find(device_name) != devices.end(),
+             "'{}' not found among existing input devices ({})", device_name,
+             absl::StrJoin(devices, ", "));
+  std::string uds_dir =
+      CF_EXPECT(UDSDirectory(), "Unable to get instance's UDS directory");
+  std::string socket =
+      fmt::format("{}/internal/{}.events.out", uds_dir, device_name);
+  return CF_EXPECTF(Fd::SocketLocalClient(socket, false, SOCK_STREAM),
+                    "Unable to connect to {}'s capture socket", device_name);
+}
+
+Result<Fd> LocalInstance::NewInjectInputDeviceEventsConn(
+    const std::string& device_name) const {
+  std::set<std::string> devices = CF_EXPECT(InputDevices());
+  CF_EXPECTF(devices.find(device_name) != devices.end(),
+             "'{}' not found among existing input devices ({})", device_name,
+             absl::StrJoin(devices, ", "));
+  std::string uds_dir =
+      CF_EXPECT(UDSDirectory(), "Unable to get instance's UDS directory");
+  std::string socket =
+      fmt::format("{}/internal/{}.events.in", uds_dir, device_name);
+  return CF_EXPECTF(Fd::SocketLocalClient(socket, false, SOCK_STREAM),
+                    "Unable to connect to {}'s inject socket", device_name);
 }
 
 }  // namespace cuttlefish

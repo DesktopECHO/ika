@@ -16,16 +16,20 @@
 
 #include "cuttlefish/common/libs/utils/wait_for_unix_socket.h"
 
+#include <sched.h>
+
 #include <chrono>
 #include <regex>
 #include <string>
+#include <utility>
 
 #include "absl/log/log.h"
 
-#include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
-#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
+#include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/wait_for_file.h"
+#include "cuttlefish/files/file_is_socket.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/managed_stdio.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {

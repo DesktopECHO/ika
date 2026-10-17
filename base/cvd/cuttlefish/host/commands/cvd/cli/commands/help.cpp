@@ -33,7 +33,6 @@
 #include "cuttlefish/host/commands/cvd/cli/help_format.h"
 #include "cuttlefish/host/commands/cvd/cli/request_context.h"
 #include "cuttlefish/host/commands/cvd/cli/selector/selector_common_parser.h"
-#include "cuttlefish/host/commands/cvd/cli/types.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -136,11 +135,9 @@ Result<void> CvdHelpHandler::Handle(const CommandRequest& request) {
   return {};
 }
 
-cvd_common::Args CvdHelpHandler::CmdList() const { return {"help"}; }
+std::vector<std::string> CvdHelpHandler::CmdList() const { return {"help"}; }
 
 std::string CvdHelpHandler::SummaryHelp() const { return kSummaryHelpText; }
-
-bool CvdHelpHandler::RequiresHostConfiguration() const { return false; }
 
 std::vector<HelpParagraph> CvdHelpHandler::Description() const {
   return {
@@ -269,12 +266,6 @@ Result<std::string> CvdHelpHandler::SubCommandHelp(
   std::stringstream help_message;
   help_message << CF_EXPECT(handler->DetailedHelp(subcmd_request)) << std::endl;
   return help_message.str();
-}
-
-std::unique_ptr<CvdCommandHandler> NewCvdHelpHandler(
-    const std::vector<std::unique_ptr<CvdCommandHandler>>& server_handlers) {
-  return std::unique_ptr<CvdCommandHandler>(
-      new CvdHelpHandler(server_handlers));
 }
 
 }  // namespace cuttlefish

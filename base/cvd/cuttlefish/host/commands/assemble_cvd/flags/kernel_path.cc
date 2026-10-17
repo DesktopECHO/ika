@@ -15,13 +15,15 @@
  */
 #include "cuttlefish/host/commands/assemble_cvd/flags/kernel_path.h"
 
+#include <stddef.h>
+
 #include <algorithm>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/strings/str_split.h"
-#include <gflags/gflags.h>
+#include "gflags/gflags.h"
 
 #include "cuttlefish/host/commands/assemble_cvd/flags_defaults.h"
 #include "cuttlefish/host/libs/config/fetcher_config.h"

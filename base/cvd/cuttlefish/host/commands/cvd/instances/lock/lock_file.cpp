@@ -26,13 +26,14 @@
 #include <utility>
 #include <vector>
 
-#include <android-base/file.h>
-#include <android-base/strings.h>
 #include "absl/log/log.h"
+#include "android-base/file.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/environment.h"
 #include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/files/directory_exists.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -40,7 +41,7 @@ namespace cuttlefish {
 static Result<void> SetStatus(SharedFD& fd, const InUseState state) {
   CF_EXPECT(fd->LSeek(0, SEEK_SET) == 0, fd->StrError());
   char state_char = static_cast<char>(state);
-  CF_EXPECT(fd->Write(&state_char, 1) == 1, fd->StrError());
+  CF_EXPECT(fd->Write(&state_char, 1) == 1u, fd->StrError());
   return {};
 }
 
@@ -54,10 +55,10 @@ LockFile::LockFileReleaser::~LockFileReleaser() {
                << " is closed and unable to un-flock()";
     return;
   }
-  auto funlock_result = flocked_file_fd_->Flock(LOCK_UN | LOCK_NB);
-  if (!funlock_result.ok()) {
+  Result<void, int> funlock_result = flocked_file_fd_->Flock(LOCK_UN | LOCK_NB);
+  if (!funlock_result.has_value()) {
     LOG(ERROR) << "Unlock the \"" << lock_file_path_
-               << "\" failed: " << funlock_result.error().Trace();
+               << "\" failed: " << funlock_result.error();
   }
 }
 
@@ -70,7 +71,7 @@ LockFile::LockFile(SharedFD fd, const std::string& lock_file_path)
 Result<InUseState> LockFile::Status() const {
   CF_EXPECT(fd_->LSeek(0, SEEK_SET) == 0, fd_->StrError());
   char state_char = static_cast<char>(InUseState::kNotInUse);
-  CF_EXPECT(fd_->Read(&state_char, 1) >= 0, fd_->StrError());
+  CF_EXPECT(fd_->Read(&state_char, 1).has_value(), fd_->StrError());
   switch (state_char) {
     case static_cast<char>(InUseState::kInUse):
       return InUseState::kInUse;
@@ -99,10 +100,10 @@ bool LockFile::operator<(const LockFile& other) const {
                            other.LockFilePath().size())) < 0);
 }
 
-Result<SharedFD> LockFileManager::OpenLockFile(const std::string& file_path) {
+Result<Fd> LockFileManager::OpenLockFile(const std::string& file_path) {
   auto parent_dir = android::base::Dirname(file_path);
   CF_EXPECT(EnsureDirectoryExists(parent_dir));
-  auto fd = SharedFD::Open(file_path.data(), O_CREAT | O_RDWR, 0666);
+  Fd fd = CF_EXPECT(Fd::Open(file_path.data(), O_CREAT | O_RDWR, 0666));
   int result = chmod(file_path.c_str(), 0666);
   if (result) {
     VLOG(0) << "failed: chmod 666 " << file_path;
@@ -111,26 +112,23 @@ Result<SharedFD> LockFileManager::OpenLockFile(const std::string& file_path) {
   if (result) {
     VLOG(0) << "failed: chmod 755 " << parent_dir;
   }
-  CF_EXPECTF(fd->IsOpen(), "open(\"{}\"): {}", file_path, fd->StrError());
   return fd;
 }
 
 Result<LockFile> LockFileManager::AcquireLock(
     const std::string& lock_file_path) {
-  auto fd = CF_EXPECT(OpenLockFile(lock_file_path));
+  SharedFD fd = CF_EXPECT(OpenLockFile(lock_file_path));
   CF_EXPECT(fd->Flock(LOCK_EX));
   return LockFile(fd, lock_file_path);
 }
 
-
 Result<std::optional<LockFile>> LockFileManager::TryAcquireLock(
     const std::string& lock_file_path) {
-  auto fd = CF_EXPECT(OpenLockFile(lock_file_path));
-  auto flock_result = fd->Flock(LOCK_EX | LOCK_NB);
-  if (flock_result.ok()) {
+  SharedFD fd = CF_EXPECT(OpenLockFile(lock_file_path));
+  Result<void, int> flock_result = fd->Flock(LOCK_EX | LOCK_NB);
+  if (flock_result) {
     return std::optional<LockFile>(LockFile(fd, lock_file_path));
-    // TODO(schuffelen): Include the error code in the Result
-  } else if (!flock_result.ok() && fd->GetErrno() == EWOULDBLOCK) {
+  } else if (!flock_result && *flock_result.error() == EWOULDBLOCK) {
     return {};
   }
   CF_EXPECT(std::move(flock_result));

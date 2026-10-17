@@ -12,14 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::VecDeque;
-use std::io::BufWriter;
+use anyhow::{Context, Result as AnyhowResult};
 use std::io::Result as IoResult;
-use std::io::Seek;
-use std::io::SeekFrom;
-use std::io::Write;
-use std::os::fd::AsFd;
-use std::os::fd::BorrowedFd;
+use std::os::fd::{AsFd, BorrowedFd};
+use std::str::FromStr;
+use std::sync::{Arc, Mutex};
+
+use crate::pattern::FramePattern;
+use crate::pattern::julia_set::JuliaSet;
+use crate::pattern::pulse::Pulse;
+use crate::pattern::smpte::SmpteBars;
+use crate::capture_channel::{CaptureChannel, CapturePlanes};
 
 use v4l2r::PixelFormat;
 use v4l2r::QueueType;
@@ -30,6 +33,11 @@ use v4l2r::bindings::v4l2_requestbuffers;
 use v4l2r::ioctl::BufferCapabilities;
 use v4l2r::ioctl::BufferField;
 use v4l2r::ioctl::BufferFlags;
+use v4l2r::ioctl::CtrlId;
+use v4l2r::ioctl::CtrlWhich;
+use v4l2r::ioctl::EventType as V4l2EventType;
+use v4l2r::ioctl::QueryCtrlFlags;
+use v4l2r::ioctl::SubscribeEventFlags;
 use v4l2r::ioctl::V4l2Buffer;
 use v4l2r::ioctl::V4l2PlanesWithBackingMut;
 use v4l2r::memory::MemoryType;
@@ -45,10 +53,151 @@ use virtio_media::ioctl::virtio_media_dispatch_ioctl;
 use virtio_media::memfd::MemFdBuffer;
 use virtio_media::mmap::MmapMappingManager;
 use virtio_media::protocol::DequeueBufferEvent;
+use virtio_media::protocol::SessionEvent;
 use virtio_media::protocol::SgEntry;
 use virtio_media::protocol::V4l2Event;
 use virtio_media::protocol::V4l2Ioctl;
 use virtio_media::protocol::VIRTIO_MEDIA_MMAP_FLAG_RW;
+
+/// Rust equivalent of the V4L2_CTRL_ID2WHICH C preprocessor macro.
+/// Extracts the control class ID from a control ID by masking out the lower 16 bits
+/// and any reserved top bits (uses mask 0x0fff0000).
+/// See: https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/control.html
+const fn v4l2_ctrl_id2which(id: u32) -> u32 {
+    id & 0x0fff0000
+}
+
+/// https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#LENS_FACING_FRONT
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LensFacing {
+    Front = 0,
+    Back = 1,
+    External = 2,
+}
+
+impl FromStr for LensFacing {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "FRONT" => Ok(LensFacing::Front),
+            "BACK" => Ok(LensFacing::Back),
+            "EXTERNAL" => Ok(LensFacing::External),
+            _ => Err(format!(
+                "Invalid lens facing: {}. Expected FRONT, BACK, or EXTERNAL",
+                s
+            )),
+        }
+    }
+}
+
+/// Encapsulates the camera gain value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Gain(i32);
+
+impl Gain {
+    pub const MIN: i32 = 100;
+    pub const MAX: i32 = 1600;
+    pub const DEFAULT: i32 = 100;
+
+    pub fn new(value: i32) -> Result<Self, libc::c_int> {
+        if value < Self::MIN || value > Self::MAX {
+            Err(libc::ERANGE)
+        } else {
+            Ok(Gain(value))
+        }
+    }
+
+    pub fn value(&self) -> i32 {
+        self.0
+    }
+}
+
+impl Default for Gain {
+    fn default() -> Self {
+        Gain(Self::DEFAULT)
+    }
+}
+
+/// Test pattern selectable through `V4L2_CID_TEST_PATTERN`.
+///
+/// The discriminants double as the menu indices reported by `VIDIOC_QUERYMENU`, so they
+/// must stay contiguous and start at [`TestPattern::MIN`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestPattern {
+    Pulse = 0,
+    SmpteBars = 1,
+    JuliaSet = 2,
+}
+
+impl TestPattern {
+    /// Lowest menu index, reported as `minimum` for `V4L2_CID_TEST_PATTERN`.
+    const MIN: i32 = TestPattern::Pulse as i32;
+    /// Highest menu index, reported as `maximum` for `V4L2_CID_TEST_PATTERN`.
+    const MAX: i32 = TestPattern::JuliaSet as i32;
+    /// Pattern selected until the guest asks for something else.
+    const DEFAULT: TestPattern = TestPattern::Pulse;
+
+    /// Human readable name reported by `VIDIOC_QUERYMENU`.
+    fn name(self) -> &'static str {
+        match self {
+            TestPattern::Pulse => "Pulse",
+            TestPattern::SmpteBars => "SMPTE + Bouncing Box",
+            TestPattern::JuliaSet => "Animated Julia Set",
+        }
+    }
+
+    /// Frame generator backing this pattern.
+    pub(crate) fn generator(self) -> &'static dyn FramePattern {
+        match self {
+            TestPattern::Pulse => &Pulse,
+            TestPattern::SmpteBars => &SmpteBars,
+            TestPattern::JuliaSet => &JuliaSet,
+        }
+    }
+}
+
+impl TryFrom<i32> for TestPattern {
+    /// Raw `errno` reported to the guest for an out-of-range menu index.
+    type Error = i32;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(TestPattern::Pulse),
+            1 => Ok(TestPattern::SmpteBars),
+            2 => Ok(TestPattern::JuliaSet),
+            _ => Err(libc::ERANGE),
+        }
+    }
+}
+
+/// State of all camera controls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CameraControls {
+    pub lens_facing: LensFacing,
+    pub gain: Gain,
+    pub test_pattern: TestPattern,
+}
+
+impl CameraControls {
+    pub fn new(lens_facing: LensFacing) -> Self {
+        Self {
+            lens_facing,
+            gain: Gain::default(),
+            test_pattern: TestPattern::DEFAULT,
+        }
+    }
+}
+
+/// Formats an ASCII name for a `v4l2_query_ext_ctrl` or `v4l2_querymenu` response, NUL-padding
+/// the remainder of the 32-byte array. If `name` is longer than 31 bytes it is truncated and
+/// the last byte is still forced to NUL.
+fn ctrl_name(name: &str) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    let copy_len = std::cmp::min(name.len(), 31);
+    out[..copy_len].copy_from_slice(&name.as_bytes()[..copy_len]);
+    out
+}
 
 /// Current status of a buffer.
 #[derive(Debug, PartialEq, Eq)]
@@ -98,18 +247,18 @@ impl Buffer {
             BufferState::New => {
                 let planes = self.v4l2_buffer.planes_with_backing_iter_mut();
                 if let V4l2PlanesWithBackingMut::Mmap(mut planes) = planes {
-                    *planes.next().unwrap().bytesused = 0;
-                    *planes.next().unwrap().bytesused = 0;
-                    *planes.next().unwrap().bytesused = 0;
+                    while let Some(mut plane) = planes.next() {
+                        *plane.bytesused = 0;
+                    }
                 }
                 flags &= !BufferFlags::QUEUED;
             }
             BufferState::Incoming => {
                 let planes = self.v4l2_buffer.planes_with_backing_iter_mut();
                 if let V4l2PlanesWithBackingMut::Mmap(mut planes) = planes {
-                    *planes.next().unwrap().bytesused = 0;
-                    *planes.next().unwrap().bytesused = 0;
-                    *planes.next().unwrap().bytesused = 0;
+                    while let Some(mut plane) = planes.next() {
+                        *plane.bytesused = 0;
+                    }
                 }
                 flags |= BufferFlags::QUEUED;
             }
@@ -117,15 +266,23 @@ impl Buffer {
                 {
                     let planes = self.v4l2_buffer.planes_with_backing_iter_mut();
                     if let V4l2PlanesWithBackingMut::Mmap(mut planes) = planes {
-                        *planes.next().unwrap().bytesused = WIDTH * HEIGHT;
-                        *planes.next().unwrap().bytesused = WIDTH * HEIGHT / 4;
-                        *planes.next().unwrap().bytesused = WIDTH * HEIGHT / 4;
+                        while let Some(mut plane) = planes.next() {
+                            *plane.bytesused = *plane.length;
+                        }
                     }
                 }
                 self.v4l2_buffer.set_sequence(sequence);
+                let mut ts = libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                };
+                // SAFETY: clock_gettime is a standard POSIX libc call with a valid pointer.
+                unsafe {
+                    libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
+                }
                 self.v4l2_buffer.set_timestamp(bindings::timeval {
-                    tv_sec: (sequence + 1) as bindings::__time_t / 1000,
-                    tv_usec: (sequence + 1) as bindings::__time_t % 1000,
+                    tv_sec: ts.tv_sec as bindings::__time_t,
+                    tv_usec: (ts.tv_nsec / 1000) as bindings::__time_t,
                 });
                 flags &= !BufferFlags::QUEUED;
             }
@@ -139,14 +296,14 @@ impl Buffer {
 pub struct EmulatedCameraSession {
     /// Id of the session.
     id: u32,
-    /// Current iteration of the pattern generation cycle.
-    iteration: u64,
     /// Buffers currently allocated for this session.
-    buffers: Vec<Buffer>,
-    /// Queue of buffers awaiting processing.
-    queued_buffers: VecDeque<usize>,
+    buffers: Arc<Mutex<Vec<Buffer>>>,
     /// Is the session currently streaming?
-    streaming: bool,
+    streaming: Arc<Mutex<bool>>,
+    /// Virtual capture channel driving capture and frame pacing for this session.
+    channel: CaptureChannel,
+    /// Handle to the capture completed listener thread.
+    capture_completed_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl VirtioMediaDeviceSession for EmulatedCameraSession {
@@ -155,77 +312,11 @@ impl VirtioMediaDeviceSession for EmulatedCameraSession {
     }
 }
 
-impl EmulatedCameraSession {
-    fn write_pattern<WY: std::io::Write, WU: std::io::Write, WV: std::io::Write>(
-        iteration: u64,
-        mut sink_y: WY,
-        mut sink_u: WU,
-        mut sink_v: WV,
-    ) -> IoctlResult<()> {
-        let mut writer_y = BufWriter::new(&mut sink_y);
-        let mut writer_u = BufWriter::new(&mut sink_u);
-        let mut writer_v = BufWriter::new(&mut sink_v);
-        let y = (iteration % 256) as u8;
-        let u = ((iteration + 64) % 256) as u8;
-        let v = ((iteration + 128) % 256) as u8;
-        for _ in 0..(WIDTH * HEIGHT) {
-            writer_y.write_all(&[y]).map_err(|_| libc::EIO)?;
-        }
-        for _ in 0..(WIDTH * HEIGHT / 4) {
-            writer_u.write_all(&[u]).map_err(|_| libc::EIO)?;
-        }
-        for _ in 0..(WIDTH * HEIGHT / 4) {
-            writer_v.write_all(&[v]).map_err(|_| libc::EIO)?;
-        }
-        Ok(())
-    }
-
-    /// Write basic pattern into the queued buffers
-    fn process_queued_buffers<Q: VirtioMediaEventQueue>(
-        &mut self,
-        evt_queue: &mut Q,
-    ) -> IoctlResult<()> {
-        while let Some(buf_id) = self.queued_buffers.pop_front() {
-            let iteration = self.iteration;
-            let buffer = self.buffers.get_mut(buf_id).ok_or(libc::EIO)?;
-
-            for plane in &mut buffer.planes {
-                plane
-                    .fd
-                    .as_file()
-                    .seek(SeekFrom::Start(0))
-                    .map_err(|_| libc::EIO)?;
-            }
-
-            Self::write_pattern(
-                iteration,
-                buffer.planes[0].fd.as_file(),
-                buffer.planes[1].fd.as_file(),
-                buffer.planes[2].fd.as_file(),
-            )?;
-
-            buffer.set_state(BufferState::Outgoing {
-                sequence: iteration as u32,
-            });
-            evt_queue.send_event(V4l2Event::DequeueBuffer(DequeueBufferEvent::new(
-                self.id,
-                buffer.v4l2_buffer.clone(),
-            )));
-
-            self.iteration += 1;
-        }
-
-        Ok(())
-    }
-}
-
 /// Emulated camera used for testing Android camera stack.
 ///
 /// This implementation looks forward to have feature parity with existing Android Guest Emulated
 /// camera https://cs.android.com/android/platform/superproject/main/+/main:hardware/google/camera/devices/EmulatedCamera/
 pub struct EmulatedCamera<Q: VirtioMediaEventQueue, HM: VirtioMediaHostMemoryMapper> {
-    /// Queue used to send events to the guest.
-    evt_queue: Q,
     /// Host MMAP mapping manager.
     mmap_manager: MmapMappingManager<HM>,
     /// ID of the session with allocated buffers, if any.
@@ -235,25 +326,187 @@ pub struct EmulatedCamera<Q: VirtioMediaEventQueue, HM: VirtioMediaHostMemoryMap
     /// same time. It will fails if we allow simultaneous sessions to be active, so we need this
     /// artificial limitation to make it pass fully.
     active_session: Option<u32>,
+    /// Queue used to send events to the guest.
+    evt_queue: Arc<Mutex<Q>>,
+    /// Camera controls (gain, lens facing, test pattern).
+    controls: CameraControls,
+    /// Width of the video.
+    width: u32,
+    /// Height of the video.
+    height: u32,
 }
 
 impl<Q, HM> EmulatedCamera<Q, HM>
 where
-    Q: VirtioMediaEventQueue,
+    Q: VirtioMediaEventQueue + Send + 'static,
     HM: VirtioMediaHostMemoryMapper,
 {
-    pub fn new(evt_queue: Q, mapper: HM) -> Self {
+    pub fn new(evt_queue: Q, mapper: HM, lens_facing: LensFacing) -> Self {
         Self {
-            evt_queue,
             mmap_manager: MmapMappingManager::from(mapper),
             active_session: None,
+            evt_queue: Arc::new(Mutex::new(evt_queue)),
+            controls: CameraControls::new(lens_facing),
+            width: WIDTH,
+            height: HEIGHT,
         }
+    }
+
+    fn lens_facing_query_ext_ctrl(&self) -> bindings::v4l2_query_ext_ctrl {
+        let lens_facing = self.controls.lens_facing;
+        bindings::v4l2_query_ext_ctrl {
+            id: CID_LENS_FACING,
+            type_: bindings::v4l2_ctrl_type_V4L2_CTRL_TYPE_INTEGER,
+            name: ctrl_name("LENS_FACING").map(|b| b as i8),
+            minimum: LensFacing::Front as i64,
+            maximum: LensFacing::External as i64,
+            step: 1,
+            default_value: lens_facing as i64,
+            flags: bindings::V4L2_CTRL_FLAG_READ_ONLY,
+            elems: 1,
+            elem_size: std::mem::size_of::<u32>() as u32,
+            ..Default::default()
+        }
+    }
+
+    fn gain_query_ext_ctrl(&self) -> bindings::v4l2_query_ext_ctrl {
+        let name_str = "Gain";
+        let mut name = [0u8; 32];
+        name[0..name_str.len()].copy_from_slice(name_str.as_bytes());
+        bindings::v4l2_query_ext_ctrl {
+            id: bindings::V4L2_CID_GAIN,
+            type_: bindings::v4l2_ctrl_type_V4L2_CTRL_TYPE_INTEGER,
+            name: name.map(|b| b as i8),
+            minimum: Gain::MIN as i64,
+            maximum: Gain::MAX as i64,
+            step: 1,
+            default_value: Gain::DEFAULT as i64,
+            flags: 0,
+            elems: 1,
+            elem_size: std::mem::size_of::<i32>() as u32,
+            ..Default::default()
+        }
+    }
+
+    fn user_class_query_ext_ctrl(&self) -> bindings::v4l2_query_ext_ctrl {
+        let name_str = "User Controls";
+        let mut name = [0u8; 32];
+        name[0..name_str.len()].copy_from_slice(name_str.as_bytes());
+        bindings::v4l2_query_ext_ctrl {
+            id: bindings::V4L2_CID_USER_CLASS,
+            type_: bindings::v4l2_ctrl_type_V4L2_CTRL_TYPE_CTRL_CLASS,
+            name: name.map(|b| b as i8),
+            // V4L2 standard requires control class headers to be marked as both RO and WO.
+            flags: bindings::V4L2_CTRL_FLAG_READ_ONLY | bindings::V4L2_CTRL_FLAG_WRITE_ONLY,
+            ..Default::default()
+        }
+    }
+
+    fn camera_class_query_ext_ctrl(&self) -> bindings::v4l2_query_ext_ctrl {
+        let name_str = "Camera Controls";
+        let mut name = [0u8; 32];
+        name[0..name_str.len()].copy_from_slice(name_str.as_bytes());
+        bindings::v4l2_query_ext_ctrl {
+            id: bindings::V4L2_CID_CAMERA_CLASS,
+            type_: bindings::v4l2_ctrl_type_V4L2_CTRL_TYPE_CTRL_CLASS,
+            name: name.map(|b| b as i8),
+            // V4L2 standard requires control class headers to be marked as both RO and WO.
+            flags: bindings::V4L2_CTRL_FLAG_READ_ONLY | bindings::V4L2_CTRL_FLAG_WRITE_ONLY,
+            ..Default::default()
+        }
+    }
+
+    fn image_proc_class_query_ext_ctrl(&self) -> bindings::v4l2_query_ext_ctrl {
+        bindings::v4l2_query_ext_ctrl {
+            id: bindings::V4L2_CID_IMAGE_PROC_CLASS,
+            type_: bindings::v4l2_ctrl_type_V4L2_CTRL_TYPE_CTRL_CLASS,
+            name: ctrl_name("Image Processing Controls").map(|b| b as i8),
+            minimum: 0,
+            maximum: 0,
+            step: 0,
+            default_value: 0,
+            // A control class holds no value of its own, so it can be neither read nor
+            // written. This mirrors what `v4l2_ctrl_fill()` does in the kernel.
+            flags: bindings::V4L2_CTRL_FLAG_READ_ONLY | bindings::V4L2_CTRL_FLAG_WRITE_ONLY,
+            elems: 1,
+            elem_size: std::mem::size_of::<u32>() as u32,
+            ..Default::default()
+        }
+    }
+
+    fn test_pattern_query_ext_ctrl(&self) -> bindings::v4l2_query_ext_ctrl {
+        bindings::v4l2_query_ext_ctrl {
+            id: bindings::V4L2_CID_TEST_PATTERN,
+            type_: bindings::v4l2_ctrl_type_V4L2_CTRL_TYPE_MENU,
+            name: ctrl_name("Test Pattern").map(|b| b as i8),
+            minimum: TestPattern::MIN as i64,
+            maximum: TestPattern::MAX as i64,
+            step: 1,
+            default_value: TestPattern::DEFAULT as i64,
+            flags: 0,
+            elems: 1,
+            elem_size: std::mem::size_of::<u32>() as u32,
+            ..Default::default()
+        }
+    }
+
+    /// Builds the `V4L2_EVENT_CTRL` payload describing the current state of `id`.
+    fn ctrl_event(controls: &CameraControls, id: u32) -> IoctlResult<bindings::v4l2_event> {
+        let mut event = bindings::v4l2_event {
+            type_: bindings::V4L2_EVENT_CTRL,
+            id,
+            ..Default::default()
+        };
+        match id {
+            CID_LENS_FACING => {
+                event.u.ctrl.type_ = bindings::v4l2_ctrl_type_V4L2_CTRL_TYPE_INTEGER;
+                event.u.ctrl.__bindgen_anon_1.value = controls.lens_facing as i32;
+                event.u.ctrl.minimum = LensFacing::Front as i32;
+                event.u.ctrl.maximum = LensFacing::External as i32;
+                event.u.ctrl.step = 1;
+                event.u.ctrl.default_value = LensFacing::Front as i32;
+            }
+            bindings::V4L2_CID_GAIN => {
+                event.u.ctrl.type_ = bindings::v4l2_ctrl_type_V4L2_CTRL_TYPE_INTEGER;
+                event.u.ctrl.__bindgen_anon_1.value = controls.gain.value();
+                event.u.ctrl.minimum = Gain::MIN;
+                event.u.ctrl.maximum = Gain::MAX;
+                event.u.ctrl.step = 1;
+                event.u.ctrl.default_value = Gain::DEFAULT;
+            }
+            bindings::V4L2_CID_TEST_PATTERN => {
+                event.u.ctrl.type_ = bindings::v4l2_ctrl_type_V4L2_CTRL_TYPE_MENU;
+                event.u.ctrl.__bindgen_anon_1.value = controls.test_pattern as i32;
+                event.u.ctrl.minimum = TestPattern::MIN;
+                event.u.ctrl.maximum = TestPattern::MAX;
+                event.u.ctrl.step = 1;
+                event.u.ctrl.default_value = TestPattern::DEFAULT as i32;
+            }
+            _ => return Err(libc::EINVAL),
+        }
+        // Listeners gate on this mask, so an event without it is silently ignored.
+        event.u.ctrl.changes = bindings::V4L2_EVENT_CTRL_CH_VALUE;
+        Ok(event)
+    }
+
+    /// Applies `pattern`, signalling subscribers if the value actually changed.
+    fn set_test_pattern(&mut self, session_id: u32, pattern: TestPattern) -> IoctlResult<()> {
+        if self.controls.test_pattern == pattern {
+            return Ok(());
+        }
+        self.controls.test_pattern = pattern;
+        let event = Self::ctrl_event(&self.controls, bindings::V4L2_CID_TEST_PATTERN)?;
+        self.evt_queue
+            .lock()
+            .unwrap()
+            .send_event(V4l2Event::Event(SessionEvent::new(session_id, event)));
+        Ok(())
     }
 }
 
 impl<Q, HM, Reader, Writer> VirtioMediaDevice<Reader, Writer> for EmulatedCamera<Q, HM>
 where
-    Q: VirtioMediaEventQueue,
+    Q: VirtioMediaEventQueue + Send + 'static,
     HM: VirtioMediaHostMemoryMapper,
     Reader: ReadFromDescriptorChain,
     Writer: WriteToDescriptorChain,
@@ -261,16 +514,65 @@ where
     type Session = EmulatedCameraSession;
 
     fn new_session(&mut self, session_id: u32) -> std::result::Result<Self::Session, i32> {
-        Ok(EmulatedCameraSession {
-            id: session_id,
-            iteration: 0,
-            buffers: Default::default(),
-            queued_buffers: Default::default(),
-            streaming: false,
+        let session = (|| -> AnyhowResult<Self::Session> {
+            let buffers = Arc::new(Mutex::new(Vec::<Buffer>::new()));
+            let streaming = Arc::new(Mutex::new(false));
+            let (capture_completed_tx, capture_completed_rx) = std::sync::mpsc::channel();
+
+            let channel = CaptureChannel::new(
+                session_id,
+                self.controls.clone(),
+                capture_completed_tx,
+            )
+            .context("Failed to initialize capture channel")?;
+
+            let buffers_clone = Arc::clone(&buffers);
+            let streaming_clone = Arc::clone(&streaming);
+            let evt_queue_clone = Arc::clone(&self.evt_queue);
+
+            let capture_completed_thread = std::thread::Builder::new()
+                .name(format!("capture-completed-thread{}", session_id))
+                .spawn(move || {
+                    while let Ok(ev) = capture_completed_rx.recv() {
+                        let is_streaming = *streaming_clone.lock().unwrap();
+                        if !is_streaming {
+                            continue;
+                        }
+                        let mut buffers = buffers_clone.lock().unwrap();
+                        if let Some(buf) = buffers.get_mut(ev.buffer_id) {
+                            buf.set_state(BufferState::Outgoing {
+                                sequence: ev.sequence,
+                            });
+                            let v4l2_buf = buf.v4l2_buffer.clone();
+                            evt_queue_clone.lock().unwrap().send_event(V4l2Event::DequeueBuffer(
+                                DequeueBufferEvent::new(session_id, v4l2_buf),
+                            ));
+                        }
+                    }
+                })
+                .context("Failed to spawn capture completed thread")?;
+
+            Ok(EmulatedCameraSession {
+                id: session_id,
+                buffers,
+                streaming,
+                channel,
+                capture_completed_thread: Some(capture_completed_thread),
+            })
+        })();
+
+        session.map_err(|e| {
+            log::error!("Failed to create session {}: {:#}", session_id, e);
+            libc::EIO
         })
     }
 
-    fn close_session(&mut self, session: Self::Session) {
+    fn close_session(&mut self, mut session: Self::Session) {
+        session.channel.shutdown();
+        if let Some(handle) = session.capture_completed_thread.take() {
+            let _ = handle.join();
+        }
+
         // Nothing to cleanup when `close_session` is called for sessions without
         // allocated buffers, hence the early return.
         if self.active_session != Some(session.id) {
@@ -279,7 +581,8 @@ where
 
         self.active_session = None;
 
-        for buffer in &session.buffers {
+        let buffers = session.buffers.lock().unwrap();
+        for buffer in &*buffers {
             for plane in &buffer.planes {
                 self.mmap_manager.unregister_buffer(plane.offset);
             }
@@ -302,8 +605,8 @@ where
         flags: u32,
         offset: u32,
     ) -> std::result::Result<(u64, u64), i32> {
-        let buffer = session
-            .buffers
+        let mut buffers = session.buffers.lock().unwrap();
+        let buffer = buffers
             .iter_mut()
             .find(|b| b.planes.iter().any(|p| p.offset == offset))
             .ok_or(libc::EINVAL)?;
@@ -329,10 +632,16 @@ where
     }
 }
 
+// Use an offset for virtio-media custom camera class control id values.
+const CID_OFFSET: u32 = bindings::V4L2_CID_CAMERA_CLASS_BASE + 0x100;
+const CID_LENS_FACING: u32 = CID_OFFSET + 1;
+
 const PIXELFORMAT: u32 = PixelFormat::from_fourcc(b"YM12").to_u32();
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 480;
 const FRAME_RATE: u32 = 30;
+
+const SUPPORTED_SIZES: [(u32, u32); 3] = [(320, 240), (640, 480), (1280, 720)];
 
 const INPUTS: [bindings::v4l2_input; 1] = [bindings::v4l2_input {
     index: 0,
@@ -350,28 +659,34 @@ fn default_fmtdesc(queue: QueueType) -> v4l2_fmtdesc {
     }
 }
 
-fn default_fmt(queue: QueueType) -> v4l2_format {
+fn session_fmt(queue: QueueType, width: u32, height: u32) -> v4l2_format {
     let pix_mp = bindings::v4l2_pix_format_mplane {
-        width: WIDTH,
-        height: HEIGHT,
+        width,
+        height,
         pixelformat: PIXELFORMAT,
         field: bindings::v4l2_field_V4L2_FIELD_NONE,
         colorspace: bindings::v4l2_colorspace_V4L2_COLORSPACE_SRGB,
         num_planes: 3,
         plane_fmt: [
             bindings::v4l2_plane_pix_format {
-                sizeimage: WIDTH * HEIGHT,
-                bytesperline: WIDTH,
+                // Size of Y plane
+                sizeimage: width * height,
+                // Bytes per line for Y plane
+                bytesperline: width,
                 ..Default::default()
             },
             bindings::v4l2_plane_pix_format {
-                sizeimage: WIDTH * HEIGHT / 4,
-                bytesperline: WIDTH / 2,
+                // Size of U plane (chroma subsampled by 2 in both directions)
+                sizeimage: width * height / 4,
+                // Bytes per line for U plane
+                bytesperline: width / 2,
                 ..Default::default()
             },
             bindings::v4l2_plane_pix_format {
-                sizeimage: WIDTH * HEIGHT / 4,
-                bytesperline: WIDTH / 2,
+                // Size of V plane
+                sizeimage: width * height / 4,
+                // Bytes per line for V plane
+                bytesperline: width / 2,
                 ..Default::default()
             },
             Default::default(),
@@ -392,7 +707,7 @@ fn default_fmt(queue: QueueType) -> v4l2_format {
 /// Implementations of the ioctls required by a v4l2 CAPTURE device.
 impl<Q, HM> VirtioMediaIoctlHandler for EmulatedCamera<Q, HM>
 where
-    Q: VirtioMediaEventQueue,
+    Q: VirtioMediaEventQueue + Send + 'static,
     HM: VirtioMediaHostMemoryMapper,
 {
     type Session = EmulatedCameraSession;
@@ -417,31 +732,62 @@ where
         if queue != QueueType::VideoCaptureMplane {
             return Err(libc::EINVAL);
         }
-        Ok(default_fmt(queue))
+        log::info!("g_fmt: returning {}x{}", self.width, self.height);
+        Ok(session_fmt(queue, self.width, self.height))
     }
 
     fn s_fmt(
         &mut self,
         _session: &mut Self::Session,
         queue: QueueType,
-        _format: v4l2_format,
+        format: v4l2_format,
     ) -> IoctlResult<v4l2_format> {
         if queue != QueueType::VideoCaptureMplane {
             return Err(libc::EINVAL);
         }
-        Ok(default_fmt(queue))
+
+        let pix_mp = unsafe { format.fmt.pix_mp };
+        let req_width = pix_mp.width;
+        let req_height = pix_mp.height;
+        log::info!("s_fmt: requested {}x{}", req_width, req_height);
+
+        if SUPPORTED_SIZES.contains(&(req_width, req_height)) {
+            self.width = req_width;
+            self.height = req_height;
+            log::info!("s_fmt: set resolution to {}x{}", req_width, req_height);
+        } else {
+            log::info!(
+                "s_fmt: requested resolution {}x{} not supported, keeping {}x{}",
+                req_width,
+                req_height,
+                self.width,
+                self.height
+            );
+        }
+
+        Ok(session_fmt(queue, self.width, self.height))
     }
 
     fn try_fmt(
         &mut self,
         _session: &Self::Session,
         queue: QueueType,
-        _format: v4l2_format,
+        format: v4l2_format,
     ) -> IoctlResult<v4l2_format> {
         if queue != QueueType::VideoCaptureMplane {
             return Err(libc::EINVAL);
         }
-        Ok(default_fmt(queue))
+
+        let pix_mp = unsafe { format.fmt.pix_mp };
+        let req_width = pix_mp.width;
+        let req_height = pix_mp.height;
+        log::info!("try_fmt: requested {}x{}", req_width, req_height);
+
+        if SUPPORTED_SIZES.contains(&(req_width, req_height)) {
+            Ok(session_fmt(queue, req_width, req_height))
+        } else {
+            Ok(session_fmt(queue, self.width, self.height))
+        }
     }
 
     fn g_parm(
@@ -503,7 +849,7 @@ where
         if memory != MemoryType::Mmap {
             return Err(libc::EINVAL);
         }
-        if session.streaming {
+        if *session.streaming.lock().unwrap() {
             return Err(libc::EBUSY);
         }
         // Buffers cannot be requested on a session if there is already another session with
@@ -513,14 +859,17 @@ where
             _ => (),
         }
 
+        let width = self.width;
+        let height = self.height;
+        let mut buffers = session.buffers.lock().unwrap();
+
         // Reqbufs(0) is an implicit streamoff.
         if count == 0 {
             self.active_session = None;
-            self.streamoff(session, queue)?;
+            *session.streaming.lock().unwrap() = false;
+            let _ = session.channel.stop_capture();
         } else {
-            // TODO factorize with streamoff.
-            session.queued_buffers.clear();
-            for buffer in session.buffers.iter_mut() {
+            for buffer in buffers.iter_mut() {
                 buffer.set_state(BufferState::New);
             }
             self.active_session = Some(session.id);
@@ -528,17 +877,17 @@ where
 
         let count = std::cmp::min(count, 32);
 
-        for buffer in &session.buffers {
+        for buffer in &*buffers {
             for plane in &buffer.planes {
                 self.mmap_manager.unregister_buffer(plane.offset);
             }
         }
 
-        let size_y = (WIDTH * HEIGHT) as u64;
-        let size_u = (WIDTH * HEIGHT / 4) as u64;
-        let size_v = (WIDTH * HEIGHT / 4) as u64;
+        let size_y = (width * height) as u64;
+        let size_u = (width * height / 4) as u64;
+        let size_v = (width * height / 4) as u64;
 
-        session.buffers = (0..count)
+        *buffers = (0..count)
             .map(|i| -> std::result::Result<Buffer, i32> {
                 let fd_y = MemFdBuffer::new(size_y).map_err(|e| {
                     log::error!("failed to allocate MMAP buffer Y: {:#}", e);
@@ -636,7 +985,8 @@ where
         if queue != QueueType::VideoCaptureMplane {
             return Err(libc::EINVAL);
         }
-        let buffer = session.buffers.get(index as usize).ok_or(libc::EINVAL)?;
+        let buffers = session.buffers.lock().unwrap();
+        let buffer = buffers.get(index as usize).ok_or(libc::EINVAL)?;
 
         Ok(buffer.v4l2_buffer.clone())
     }
@@ -647,34 +997,47 @@ where
         buffer: v4l2r::ioctl::V4l2Buffer,
         _guest_regions: Vec<Vec<SgEntry>>,
     ) -> IoctlResult<v4l2r::ioctl::V4l2Buffer> {
-        let host_buffer = session
-            .buffers
-            .get_mut(buffer.index() as usize)
-            .ok_or(libc::EINVAL)?;
+        let buffer_idx = buffer.index() as usize;
+
+        let mut buffers = session.buffers.lock().unwrap();
+        let host_buffer = buffers.get_mut(buffer_idx).ok_or(libc::EINVAL)?;
         // Attempt to queue already queued buffer.
         if matches!(host_buffer.state, BufferState::Incoming) {
             return Err(libc::EINVAL);
         }
 
         host_buffer.set_state(BufferState::Incoming);
-        session.queued_buffers.push_back(buffer.index() as usize);
-
         let buffer = host_buffer.v4l2_buffer.clone();
 
-        if session.streaming {
-            session.process_queued_buffers(&mut self.evt_queue)?;
-        }
+        let planes = CapturePlanes {
+            y: host_buffer.planes[0].fd.as_file().try_clone().map_err(|_| libc::EIO)?,
+            u: host_buffer.planes[1].fd.as_file().try_clone().map_err(|_| libc::EIO)?,
+            v: host_buffer.planes[2].fd.as_file().try_clone().map_err(|_| libc::EIO)?,
+        };
+        drop(buffers);
+
+        session
+            .channel
+            .queue_buffer(buffer_idx, planes)
+            .map_err(|_| libc::EIO)?;
 
         Ok(buffer)
     }
 
     fn streamon(&mut self, session: &mut Self::Session, queue: QueueType) -> IoctlResult<()> {
-        if queue != QueueType::VideoCaptureMplane || session.buffers.is_empty() {
+        if queue != QueueType::VideoCaptureMplane {
             return Err(libc::EINVAL);
         }
-        session.streaming = true;
-
-        session.process_queued_buffers(&mut self.evt_queue)?;
+        let buffers = session.buffers.lock().unwrap();
+        if buffers.is_empty() {
+            return Err(libc::EINVAL);
+        }
+        drop(buffers);
+        *session.streaming.lock().unwrap() = true;
+        session
+            .channel
+            .start_capture(self.width, self.height)
+            .map_err(|_| libc::EIO)?;
 
         Ok(())
     }
@@ -683,11 +1046,13 @@ where
         if queue != QueueType::VideoCaptureMplane {
             return Err(libc::EINVAL);
         }
-        session.streaming = false;
-        session.queued_buffers.clear();
-        for buffer in session.buffers.iter_mut() {
+        *session.streaming.lock().unwrap() = false;
+        let mut buffers = session.buffers.lock().unwrap();
+        for buffer in buffers.iter_mut() {
             buffer.set_state(BufferState::New);
         }
+        drop(buffers);
+        session.channel.stop_capture().map_err(|_| libc::EIO)?;
 
         Ok(())
     }
@@ -714,22 +1079,24 @@ where
         index: u32,
         pixel_format: u32,
     ) -> IoctlResult<bindings::v4l2_frmsizeenum> {
+        log::info!("enum_framesizes: index {}, format {}", index, pixel_format);
         if pixel_format != PIXELFORMAT {
-            return Err(libc::EINVAL);
-        }
-        if index > 0 {
+            log::info!("enum_framesizes: format {} not supported", pixel_format);
             return Err(libc::EINVAL);
         }
 
+        let &(width, height) = SUPPORTED_SIZES.get(index as usize).ok_or_else(|| {
+            log::info!("enum_framesizes: index {} out of bounds", index);
+            libc::EINVAL
+        })?;
+
+        log::info!("enum_framesizes: returning {}x{}", width, height);
         Ok(bindings::v4l2_frmsizeenum {
             index,
             pixel_format,
             type_: bindings::v4l2_frmsizetypes_V4L2_FRMSIZE_TYPE_DISCRETE,
             __bindgen_anon_1: bindings::v4l2_frmsizeenum__bindgen_ty_1 {
-                discrete: bindings::v4l2_frmsize_discrete {
-                    width: WIDTH,
-                    height: HEIGHT,
-                },
+                discrete: bindings::v4l2_frmsize_discrete { width, height },
             },
             ..Default::default()
         })
@@ -743,13 +1110,27 @@ where
         width: u32,
         height: u32,
     ) -> IoctlResult<bindings::v4l2_frmivalenum> {
+        log::info!(
+            "enum_frameintervals: index {}, format {}, {}x{}",
+            index,
+            pixel_format,
+            width,
+            height
+        );
         if pixel_format != PIXELFORMAT {
+            log::info!("enum_frameintervals: format {} not supported", pixel_format);
             return Err(libc::EINVAL);
         }
-        if width != WIDTH || height != HEIGHT {
+        if !SUPPORTED_SIZES.contains(&(width, height)) {
+            log::info!(
+                "enum_frameintervals: size {}x{} not supported",
+                width,
+                height
+            );
             return Err(libc::EINVAL);
         }
         if index > 0 {
+            log::info!("enum_frameintervals: index {} > 0 not supported", index);
             return Err(libc::EINVAL);
         }
 
@@ -767,5 +1148,402 @@ where
             },
             ..Default::default()
         })
+    }
+
+    /// https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/vidioc-queryctrl.html#control-flags
+    fn query_ext_ctrl(
+        &mut self,
+        _session: &Self::Session,
+        id: CtrlId,
+        flags: QueryCtrlFlags,
+    ) -> IoctlResult<bindings::v4l2_query_ext_ctrl> {
+        let requested_id: u32 = unsafe { std::mem::transmute(id) };
+
+        if flags.contains(QueryCtrlFlags::NEXT) {
+            if requested_id < bindings::V4L2_CID_USER_CLASS {
+                return Ok(self.user_class_query_ext_ctrl());
+            } else if requested_id < bindings::V4L2_CID_GAIN {
+                return Ok(self.gain_query_ext_ctrl());
+            } else if requested_id < bindings::V4L2_CID_CAMERA_CLASS {
+                return Ok(self.camera_class_query_ext_ctrl());
+            } else if requested_id < CID_LENS_FACING {
+                return Ok(self.lens_facing_query_ext_ctrl());
+            } else if requested_id < bindings::V4L2_CID_IMAGE_PROC_CLASS {
+                return Ok(self.image_proc_class_query_ext_ctrl());
+            } else if requested_id < bindings::V4L2_CID_TEST_PATTERN {
+                return Ok(self.test_pattern_query_ext_ctrl());
+            }
+        } else {
+            match requested_id {
+                bindings::V4L2_CID_USER_CLASS => return Ok(self.user_class_query_ext_ctrl()),
+                bindings::V4L2_CID_GAIN => return Ok(self.gain_query_ext_ctrl()),
+                bindings::V4L2_CID_CAMERA_CLASS => return Ok(self.camera_class_query_ext_ctrl()),
+                CID_LENS_FACING => return Ok(self.lens_facing_query_ext_ctrl()),
+                bindings::V4L2_CID_IMAGE_PROC_CLASS => {
+                    return Ok(self.image_proc_class_query_ext_ctrl());
+                }
+                bindings::V4L2_CID_TEST_PATTERN => {
+                    return Ok(self.test_pattern_query_ext_ctrl());
+                }
+                _ => {}
+            }
+        }
+
+        Err(libc::EINVAL)
+    }
+
+    fn querymenu(
+        &mut self,
+        _session: &Self::Session,
+        id: u32,
+        index: u32,
+    ) -> IoctlResult<bindings::v4l2_querymenu> {
+        if id != bindings::V4L2_CID_TEST_PATTERN {
+            return Err(libc::EINVAL);
+        }
+        // Menu indices are the `TestPattern` discriminants, so the enum decides the range.
+        let pattern = i32::try_from(index)
+            .ok()
+            .and_then(|index| TestPattern::try_from(index).ok())
+            .ok_or(libc::EINVAL)?;
+
+        Ok(bindings::v4l2_querymenu {
+            id,
+            index,
+            __bindgen_anon_1: bindings::v4l2_querymenu__bindgen_ty_1 {
+                name: ctrl_name(pattern.name()),
+            },
+            ..Default::default()
+        })
+    }
+
+    fn g_ctrl(&mut self, _session: &Self::Session, id: u32) -> IoctlResult<bindings::v4l2_control> {
+        let value = match id {
+            CID_LENS_FACING => self.controls.lens_facing as i32,
+            bindings::V4L2_CID_GAIN => self.controls.gain.value(),
+            bindings::V4L2_CID_TEST_PATTERN => self.controls.test_pattern as i32,
+            bindings::V4L2_CID_USER_CLASS
+            | bindings::V4L2_CID_CAMERA_CLASS
+            | bindings::V4L2_CID_IMAGE_PROC_CLASS => return Err(libc::EACCES),
+            _ => return Err(libc::EINVAL),
+        };
+        Ok(bindings::v4l2_control { id, value })
+    }
+
+    fn s_ctrl(
+        &mut self,
+        session: &mut Self::Session,
+        id: u32,
+        value: i32,
+    ) -> IoctlResult<bindings::v4l2_control> {
+        match id {
+            CID_LENS_FACING
+            | bindings::V4L2_CID_USER_CLASS
+            | bindings::V4L2_CID_CAMERA_CLASS
+            | bindings::V4L2_CID_IMAGE_PROC_CLASS => Err(libc::EACCES),
+            bindings::V4L2_CID_GAIN => {
+                let gain = Gain::new(value)?;
+                if self.controls.gain != gain {
+                    self.controls.gain = gain;
+                    let event = Self::ctrl_event(&self.controls, bindings::V4L2_CID_GAIN)?;
+                    self.evt_queue
+                        .lock()
+                        .unwrap()
+                        .send_event(V4l2Event::Event(SessionEvent::new(session.id, event)));
+                    let _ = session.channel.set_controls(self.controls.clone());
+                }
+                Ok(bindings::v4l2_control {
+                    id,
+                    value: gain.value(),
+                })
+            }
+            bindings::V4L2_CID_TEST_PATTERN => {
+                let pattern = TestPattern::try_from(value)?;
+                self.set_test_pattern(session.id, pattern)?;
+                let _ = session.channel.set_controls(self.controls.clone());
+                Ok(bindings::v4l2_control {
+                    id,
+                    value: pattern as i32,
+                })
+            }
+            _ => Err(libc::EINVAL),
+        }
+    }
+
+    fn g_ext_ctrls(
+        &mut self,
+        _session: &Self::Session,
+        which: CtrlWhich,
+        ctrls: &mut bindings::v4l2_ext_controls,
+        ctrl_array: &mut Vec<bindings::v4l2_ext_control>,
+        _user_regions: Vec<Vec<SgEntry>>,
+    ) -> IoctlResult<()> {
+        // Validate control class. Also handles class support queries when count == 0.
+        match which {
+            CtrlWhich::Current | CtrlWhich::Default => {}
+            CtrlWhich::Class(class) => {
+                if class != bindings::V4L2_CTRL_CLASS_USER
+                    && class != bindings::V4L2_CTRL_CLASS_CAMERA
+                    && class != bindings::V4L2_CTRL_CLASS_IMAGE_PROC
+                {
+                    ctrls.error_idx = ctrls.count;
+                    return Err(libc::EINVAL);
+                }
+            }
+            _ => {
+                ctrls.error_idx = ctrls.count;
+                return Err(libc::EINVAL);
+            }
+        }
+
+        // Ensure all requested controls belong to the selected class.
+        if let CtrlWhich::Class(class_id) = which {
+            for ctrl in ctrl_array.iter() {
+                if v4l2_ctrl_id2which(ctrl.id) != class_id {
+                    ctrls.error_idx = ctrls.count;
+                    return Err(libc::EINVAL);
+                }
+            }
+        }
+
+        // Process controls. Class controls are write-only headers and must fail on read.
+        for ctrl in ctrl_array.iter_mut() {
+            match ctrl.id {
+                bindings::V4L2_CID_USER_CLASS
+                | bindings::V4L2_CID_CAMERA_CLASS
+                | bindings::V4L2_CID_IMAGE_PROC_CLASS => {
+                    ctrls.error_idx = ctrls.count;
+                    return Err(libc::EACCES);
+                }
+                bindings::V4L2_CID_GAIN => {
+                    ctrl.__bindgen_anon_1.value = match which {
+                        CtrlWhich::Default => Gain::DEFAULT,
+                        _ => self.controls.gain.value(),
+                    };
+                }
+                CID_LENS_FACING => {
+                    ctrl.__bindgen_anon_1.value = self.controls.lens_facing as i32;
+                }
+                bindings::V4L2_CID_TEST_PATTERN => {
+                    ctrl.__bindgen_anon_1.value = match which {
+                        CtrlWhich::Default => TestPattern::DEFAULT as i32,
+                        _ => self.controls.test_pattern as i32,
+                    };
+                }
+                _ => {
+                    ctrls.error_idx = ctrls.count;
+                    return Err(libc::EINVAL);
+                }
+            }
+        }
+        ctrls.error_idx = ctrls.count;
+        Ok(())
+    }
+
+    fn try_ext_ctrls(
+        &mut self,
+        _session: &Self::Session,
+        which: CtrlWhich,
+        ctrls: &mut bindings::v4l2_ext_controls,
+        ctrl_array: &mut Vec<bindings::v4l2_ext_control>,
+        _user_regions: Vec<Vec<SgEntry>>,
+    ) -> IoctlResult<()> {
+        // Validate control class. Setting defaults is not allowed for TRY/SET.
+        match which {
+            CtrlWhich::Current => {}
+            CtrlWhich::Class(class) => {
+                if class != bindings::V4L2_CTRL_CLASS_USER
+                    && class != bindings::V4L2_CTRL_CLASS_CAMERA
+                    && class != bindings::V4L2_CTRL_CLASS_IMAGE_PROC
+                {
+                    ctrls.error_idx = ctrls.count;
+                    return Err(libc::EINVAL);
+                }
+            }
+            _ => {
+                ctrls.error_idx = ctrls.count;
+                return Err(libc::EINVAL);
+            }
+        }
+
+        // Ensure all requested controls belong to the selected class.
+        if let CtrlWhich::Class(class_id) = which {
+            for (idx, ctrl) in ctrl_array.iter().enumerate() {
+                if v4l2_ctrl_id2which(ctrl.id) != class_id {
+                    ctrls.error_idx = idx as u32;
+                    return Err(libc::EINVAL);
+                }
+            }
+        }
+
+        // Validate control values. Class controls are read-only headers and must fail on write/try.
+        for (idx, ctrl) in ctrl_array.iter_mut().enumerate() {
+            match ctrl.id {
+                bindings::V4L2_CID_USER_CLASS
+                | bindings::V4L2_CID_CAMERA_CLASS
+                | bindings::V4L2_CID_IMAGE_PROC_CLASS
+                | CID_LENS_FACING => {
+                    ctrls.error_idx = idx as u32;
+                    return Err(libc::EACCES);
+                }
+                bindings::V4L2_CID_GAIN => {
+                    let value = unsafe { ctrl.__bindgen_anon_1.value };
+                    if let Err(err) = Gain::new(value) {
+                        ctrls.error_idx = idx as u32;
+                        return Err(err);
+                    }
+                }
+                bindings::V4L2_CID_TEST_PATTERN => {
+                    let value = unsafe { ctrl.__bindgen_anon_1.value };
+                    if let Err(err) = TestPattern::try_from(value) {
+                        ctrls.error_idx = idx as u32;
+                        return Err(err);
+                    }
+                }
+                _ => {
+                    ctrls.error_idx = idx as u32;
+                    return Err(libc::EINVAL);
+                }
+            }
+        }
+        ctrls.error_idx = ctrls.count;
+        Ok(())
+    }
+
+    fn s_ext_ctrls(
+        &mut self,
+        session: &mut Self::Session,
+        which: CtrlWhich,
+        ctrls: &mut bindings::v4l2_ext_controls,
+        ctrl_array: &mut Vec<bindings::v4l2_ext_control>,
+        user_regions: Vec<Vec<SgEntry>>,
+    ) -> IoctlResult<()> {
+        // Validate control class, selection, and values via try_ext_ctrls.
+        if let Err(err) = self.try_ext_ctrls(session, which, ctrls, ctrl_array, user_regions) {
+            ctrls.error_idx = ctrls.count;
+            return Err(err);
+        }
+
+        // Apply control values. Class controls are read-only headers and must fail on write/try.
+        for ctrl in ctrl_array.iter_mut() {
+            match ctrl.id {
+                bindings::V4L2_CID_GAIN => {
+                    let value = unsafe { ctrl.__bindgen_anon_1.value };
+                    if let Ok(gain) = Gain::new(value) {
+                        if self.controls.gain != gain {
+                            self.controls.gain = gain;
+                            if let Ok(event) =
+                                Self::ctrl_event(&self.controls, bindings::V4L2_CID_GAIN)
+                            {
+                                self.evt_queue.lock().unwrap().send_event(
+                                    V4l2Event::Event(SessionEvent::new(session.id, event)),
+                                );
+                            }
+                        }
+                    }
+                }
+                bindings::V4L2_CID_TEST_PATTERN => {
+                    let value = unsafe { ctrl.__bindgen_anon_1.value };
+                    if let Ok(pattern) = TestPattern::try_from(value) {
+                        self.set_test_pattern(session.id, pattern)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let _ = session.channel.set_controls(self.controls.clone());
+        ctrls.error_idx = ctrls.count;
+        Ok(())
+    }
+
+    fn subscribe_event(
+        &mut self,
+        session: &mut Self::Session,
+        event: V4l2EventType,
+        flags: SubscribeEventFlags,
+    ) -> IoctlResult<()> {
+        if !flags.contains(SubscribeEventFlags::SEND_INITIAL) {
+            return Err(libc::EINVAL);
+        }
+        match event {
+            V4l2EventType::Ctrl(id) => match id {
+                CID_LENS_FACING | bindings::V4L2_CID_GAIN | bindings::V4L2_CID_TEST_PATTERN => {
+                    let ctrl_event = Self::ctrl_event(&self.controls, id)?;
+                    self.evt_queue
+                        .lock()
+                        .unwrap()
+                        .send_event(V4l2Event::Event(SessionEvent::new(session.id, ctrl_event)));
+                    Ok(())
+                }
+                bindings::V4L2_CID_USER_CLASS
+                | bindings::V4L2_CID_CAMERA_CLASS
+                | bindings::V4L2_CID_IMAGE_PROC_CLASS => {
+                    // Subscription succeeds, but we do not send any initial event.
+                    Ok(())
+                }
+                _ => Err(libc::EINVAL),
+            },
+            _ => Err(libc::EINVAL),
+        }
+    }
+
+    fn unsubscribe_event(
+        &mut self,
+        _session: &mut Self::Session,
+        event: bindings::v4l2_event_subscription,
+    ) -> IoctlResult<()> {
+        return if event.type_ == bindings::V4L2_EVENT_CTRL
+            && (event.id == CID_LENS_FACING
+                || event.id == bindings::V4L2_CID_GAIN
+                || event.id == bindings::V4L2_CID_TEST_PATTERN
+                || event.id == bindings::V4L2_CID_USER_CLASS
+                || event.id == bindings::V4L2_CID_CAMERA_CLASS
+                || event.id == bindings::V4L2_CID_IMAGE_PROC_CLASS)
+        {
+            Ok(())
+        } else {
+            Err(libc::EINVAL)
+        };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every index between `MIN` and `MAX` is advertised as a menu entry, so each one has
+    /// to map back to a pattern with a name and a generator.
+    #[test]
+    fn every_advertised_menu_index_maps_to_a_pattern() {
+        for value in TestPattern::MIN..=TestPattern::MAX {
+            let pattern = TestPattern::try_from(value).expect("advertised index must be valid");
+            assert_eq!(pattern as i32, value);
+            assert!(!pattern.name().is_empty());
+        }
+    }
+
+    #[test]
+    fn out_of_range_menu_index_is_rejected() {
+        assert_eq!(
+            TestPattern::try_from(TestPattern::MIN - 1),
+            Err(libc::ERANGE)
+        );
+        assert_eq!(
+            TestPattern::try_from(TestPattern::MAX + 1),
+            Err(libc::ERANGE)
+        );
+    }
+
+    #[test]
+    fn ctrl_name_is_nul_padded() {
+        let name = ctrl_name("Test Pattern");
+        assert_eq!(&name[..12], b"Test Pattern");
+        assert!(name[12..].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn ctrl_name_truncates_and_stays_nul_terminated() {
+        let name = ctrl_name("This control name is definitely far too long to fit");
+        assert_eq!(name[31], 0);
     }
 }

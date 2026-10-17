@@ -1,0 +1,113 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_build_test", "cf_cc_library", "cf_cc_test")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_build_test(name = "cf_build_test")
+
+cf_cc_library(
+    name = "command",
+    srcs = ["command.cc"],
+    hdrs = ["command.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/fs:fd",
+        "//cuttlefish/common/libs/utils:contains",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/process:subprocess",
+        "//cuttlefish/process:subprocess_options",
+        "//cuttlefish/result",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "envp_to_map",
+    srcs = ["envp_to_map.cc"],
+    hdrs = ["envp_to_map.h"],
+    deps = [
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cf_cc_library(
+    name = "execute",
+    srcs = ["execute.cc"],
+    hdrs = ["execute.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/process:command",
+        "//cuttlefish/process:subprocess",
+        "//cuttlefish/process:subprocess_options",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+    ],
+)
+
+cf_cc_library(
+    name = "managed_stdio",
+    srcs = ["managed_stdio.cc"],
+    hdrs = ["managed_stdio.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/io:string",
+        "//cuttlefish/process:command",
+        "//cuttlefish/process:subprocess",
+        "//cuttlefish/process:subprocess_options",
+        "//cuttlefish/result",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_library(
+    name = "proc_file_utils",
+    srcs = ["proc_file_utils.cc"],
+    hdrs = ["proc_file_utils.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/fs:fd",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/files:directory_contents",
+        "//cuttlefish/files:directory_exists",
+        "//cuttlefish/posix:readlink",
+        "//cuttlefish/posix:stat",
+        "//cuttlefish/result",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/strings",
+        "@android_system_libbase//:file_logging",
+        "@fmt",
+    ],
+)
+
+cf_cc_test(
+    name = "proc_file_utils_test",
+    srcs = ["proc_file_utils_test.cc"],
+    deps = [
+        "//cuttlefish/common/libs/utils:contains",
+        "//cuttlefish/process:proc_file_utils",
+        "//cuttlefish/result:result_matchers",
+    ],
+)
+
+cf_cc_library(
+    name = "subprocess",
+    srcs = ["subprocess.cc"],
+    hdrs = ["subprocess.h"],
+    deps = [
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/posix:temp_failure_retry",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_library(
+    name = "subprocess_options",
+    srcs = ["subprocess_options.cc"],
+    hdrs = ["subprocess_options.h"],
+)

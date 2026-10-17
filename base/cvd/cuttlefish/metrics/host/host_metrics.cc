@@ -1,0 +1,58 @@
+/*
+ * Copyright (C) 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "cuttlefish/metrics/host/host_metrics.h"
+
+#include <optional>
+#include <string_view>
+
+#include "cuttlefish/common/libs/utils/environment.h"
+#include "cuttlefish/common/libs/utils/host_info.h"
+#include "cuttlefish/metrics/host/gce_environment.h"
+#include "cuttlefish/metrics/host/github_environment.h"
+#include "cuttlefish/metrics/host/invoker.h"
+#include "cuttlefish/result/result.h"
+
+namespace cuttlefish {
+namespace {
+
+constexpr std::string_view kUserVariable = "USER";
+
+Result<Environment> GetEnvironment() {
+  const std::optional<GitHubRepository> github_environment =
+      DetectGitHubRepository();
+  if (github_environment) {
+    return *github_environment;
+  }
+
+  const std::optional gce_environment = CF_EXPECT(DetectGceEnvironment());
+  if (gce_environment) {
+    return *gce_environment;
+  }
+
+  return UnknownEnvironment{};
+}
+
+}  // namespace
+
+Result<HostMetrics> GetHostMetrics() {
+  return HostMetrics{.os = GetHostInfo(),
+                     .invoker = GetInvoker(),
+                     .environment = CF_EXPECT(GetEnvironment()),
+                     .username = StringFromEnv(kUserVariable, "")};
+}
+
+}  // namespace cuttlefish

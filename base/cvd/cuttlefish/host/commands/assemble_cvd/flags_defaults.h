@@ -94,12 +94,12 @@
 
 // Security default parameters
 #define CF_DEFAULTS_GUEST_ENFORCE_SECURITY true
-#define CF_DEFAULTS_USE_RANDOM_SERIAL false
-#define CF_DEFAULTS_SERIAL_NUMBER \
-  cuttlefish::ForCurrentInstance("CUTTLEFISHCVD")
+#define CF_DEFAULTS_USE_RANDOM_SERIAL true
+#define CF_DEFAULTS_SERIAL_NUMBER CF_DEFAULTS_DYNAMIC_STRING
 #define CF_DEFAULTS_SECURE_HALS CF_DEFAULTS_DYNAMIC_STRING
 #define CF_DEFAULTS_PROTECTED_VM false
 #define CF_DEFAULTS_MTE false
+#define CF_DEFAULTS_ENABLE_PKVM false
 
 // Kernel default parameters
 #define CF_DEFAULTS_ENABLE_KERNEL_LOG true
@@ -175,6 +175,7 @@
 #define CF_DEFAULTS_NETSIM_BT true
 #define CF_DEFAULTS_NETSIM_UWB true
 #define CF_DEFAULTS_NETSIM_NFC false
+#define CF_DEFAULTS_NETSIM_MODEM false
 
 // Netsim default parameters
 #define CF_DEFAULTS_NETSIM_ARGS ""
@@ -241,10 +242,6 @@
 #define CF_DEFAULTS_START_GNSS_PROXY true
 #define CF_DEFAULTS_FIXED_LOCATION_FILE_PATH CF_DEFAULTS_DYNAMIC_STRING
 #define CF_DEFAULTS_GNSS_FILE_PATH CF_DEFAULTS_DYNAMIC_STRING
-
-// Metrics default parameters
-// TODO: Defined twice , please remove redundant definitions
-#define CF_DEFAULTS_REPORT_ANONYMOUS_USAGE_STATS CF_DEFAULTS_DYNAMIC_STRING
 
 // MCU emulator default configuration path
 #define CF_DEFAULTS_MCU_CONFIG_PATH CF_DEFAULTS_DYNAMIC_STRING

@@ -16,12 +16,16 @@
 
 #include "cuttlefish/host/commands/assemble_cvd/guest_config.h"
 
-#include <sys/types.h>
+#include <fcntl.h>
 #include <unistd.h>
 
+#include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "absl/strings/match.h"
@@ -33,12 +37,12 @@
 #include "google/protobuf/text_format.h"
 
 #include "cuttlefish/common/libs/key_equals_value/key_equals_value.h"
+#include "cuttlefish/common/libs/utils/device_type.h"
 #include "cuttlefish/common/libs/utils/environment.h"
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/host_info.h"
 #include "cuttlefish/common/libs/utils/in_sandbox.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
-#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/commands/assemble_cvd/boot_image_utils.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/boot_image.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/kernel_path.h"
@@ -47,8 +51,12 @@
 #include "cuttlefish/host/libs/config/config_utils.h"
 #include "cuttlefish/host/libs/config/display.h"
 #include "cuttlefish/host/libs/config/gpu_mode.h"
-#include "cuttlefish/pretty/optional.h"
-#include "cuttlefish/pretty/string.h"
+#include "cuttlefish/pretty/optional.h"  // IWYU pragma: keep: overloads
+#include "cuttlefish/pretty/pretty.h"
+#include "cuttlefish/pretty/string.h"  // IWYU pragma: keep: overloads
+#include "cuttlefish/pretty/struct.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/managed_stdio.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -93,8 +101,9 @@ Result<void> ParseGuestConfigTextProto(const std::string& guest_config_path,
   CF_EXPECT(file_descriptor >= 0);
 
   google::protobuf::io::FileInputStream file_stream(file_descriptor);
-  const auto result =
-      google::protobuf::TextFormat::Parse(&file_stream, &proto_config);
+  google::protobuf::TextFormat::Parser parser;
+  parser.AllowUnknownField(true);
+  const bool result = parser.Parse(&file_stream, &proto_config);
   CF_EXPECT(close(file_descriptor) == 0);
   CF_EXPECT(result == true);
 
@@ -130,6 +139,23 @@ Result<void> ParseGuestConfigTextProto(const std::string& guest_config_path,
     guest_config.gpu_mode_candidates.push_back(it->second);
   }
 
+  if (graphics_config.has_vulkan_gfxstream_apex_supported()) {
+    guest_config.has_vulkan_gfxstream_apex =
+        graphics_config.vulkan_gfxstream_apex_supported();
+  }
+  if (graphics_config.has_vulkan_lavapipe_apex_supported()) {
+    guest_config.has_vulkan_lavapipe_apex =
+        graphics_config.vulkan_lavapipe_apex_supported();
+  }
+  if (graphics_config.has_vulkan_swiftshader_apex_supported()) {
+    guest_config.has_vulkan_swiftshader_apex =
+        graphics_config.vulkan_swiftshader_apex_supported();
+  }
+  if (graphics_config.has_vulkan_venus_apex_supported()) {
+    guest_config.has_vulkan_venus_apex =
+        graphics_config.vulkan_venus_apex_supported();
+  }
+
   const auto& input_config = proto_config.input();
   if (input_config.has_mouse_supported()) {
     guest_config.mouse_supported = input_config.mouse_supported();
@@ -146,7 +172,7 @@ Result<void> ParseGuestConfigTextProto(const std::string& guest_config_path,
         DefaultHostArtifactsPath(input_config.domkey_mapping_config());
   }
 
-  if(proto_config.has_audio()) {
+  if (proto_config.has_audio()) {
     guest_config.audio_settings = proto_config.audio();
   }
 
@@ -205,11 +231,11 @@ Result<void> ParseGuestConfigTxt(const std::string& guest_config_path,
 
   guest_config.gfxstream_supported =
       MapHasValue(info, "gfxstream", "supported");
-
   guest_config.gfxstream_gl_program_binary_link_status_supported =
       MapHasValue(info, "gfxstream_gl_program_binary_link_status", "supported");
 
-  if (const auto res = MapGetResult(info, "gpu_mode_candidates"); res.ok()) {
+  if (const auto res = MapGetResult(info, "gpu_mode_candidates");
+      res.has_value()) {
     const std::string& gpu_mode_candidates_str = *res;
     for (const std::string_view candidate_str :
          absl::StrSplit(gpu_mode_candidates_str, ",")) {
@@ -221,17 +247,26 @@ Result<void> ParseGuestConfigTxt(const std::string& guest_config_path,
     }
   }
 
+  guest_config.has_vulkan_gfxstream_apex =
+      MapHasValue(info, "vulkan_gfxstream_apex", "supported");
+  guest_config.has_vulkan_lavapipe_apex =
+      MapHasValue(info, "vulkan_lavapipe_apex", "supported");
+  guest_config.has_vulkan_swiftshader_apex =
+      MapHasValue(info, "vulkan_swiftshader_apex", "supported");
+  guest_config.has_vulkan_venus_apex =
+      MapHasValue(info, "vulkan_venus_apex", "supported");
+
   guest_config.mouse_supported = MapHasValue(info, "mouse", "supported");
 
   guest_config.gamepad_supported = MapHasValue(info, "gamepad", "supported");
 
   if (const Result<std::string> res = MapGetResult(info, "custom_keyboard");
-      res.ok()) {
+      res.has_value()) {
     guest_config.custom_keyboard_config = DefaultHostArtifactsPath(*res);
   }
 
   if (const Result<std::string> res = MapGetResult(info, "domkey_mapping");
-      res.ok()) {
+      res.has_value()) {
     guest_config.domkey_mapping_config = DefaultHostArtifactsPath(*res);
   }
 
@@ -247,15 +282,15 @@ Result<void> ParseGuestConfigTxt(const std::string& guest_config_path,
 
   if (const Result<std::string> res =
           MapGetResult(info, "output_audio_streams_count");
-      res.ok()) {
-    CF_EXPECTF(
-        absl::SimpleAtoi(*res, &guest_config.output_audio_streams_count),
-        "Failed to parse value '{}' for output audio stream count", *res);
+      res.has_value()) {
+    CF_EXPECTF(absl::SimpleAtoi(*res, &guest_config.output_audio_streams_count),
+               "Failed to parse value '{}' for output audio stream count",
+               *res);
   }
 
   if (const Result<std::string> res =
           MapGetResult(info, "enforce_mac80211_hwsim");
-      res.ok()) {
+      res.has_value()) {
     if (*res == "true") {
       guest_config.enforce_mac80211_hwsim = true;
     } else if (*res == "false") {
@@ -264,14 +299,14 @@ Result<void> ParseGuestConfigTxt(const std::string& guest_config_path,
   }
 
   if (const Result<std::string> res = MapGetResult(info, "blank_data_image_mb");
-      res.ok()) {
+      res.has_value()) {
     CF_EXPECTF(absl::SimpleAtoi(*res, &guest_config.blank_data_image_mb),
                "Failed to parse value '{}' for blank data image size", *res);
   }
 
   if (const Result<std::string> res =
           MapGetResult(info, "lights_server_enabled");
-      res.ok()) {
+      res.has_value()) {
     bool value;
     if (absl::SimpleAtob(*res, &value)) {
       guest_config.lights_server_enabled = value;

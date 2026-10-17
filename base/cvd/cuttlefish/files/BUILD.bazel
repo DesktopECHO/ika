@@ -1,0 +1,133 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_build_test", "cf_cc_library")
+
+package(
+    default_visibility = ["//:android_cuttlefish"],
+)
+
+cf_build_test(name = "files_build_test")
+
+cf_cc_library(
+    name = "are_hard_linked",
+    srcs = ["are_hard_linked.cc"],
+    hdrs = ["are_hard_linked.h"],
+    deps = [
+        "//cuttlefish/files:file_device_id",
+        "//cuttlefish/posix:stat",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+    ],
+)
+
+cf_cc_library(
+    name = "copy",
+    srcs = ["copy.cc"],
+    hdrs = ["copy.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs:fd",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+    ],
+)
+
+cf_cc_library(
+    name = "copy_with_attributes",
+    srcs = ["copy_with_attributes.cc"],
+    hdrs = ["copy_with_attributes.h"],
+    deps = [
+        "//cuttlefish/files:copy",
+        "//cuttlefish/posix:stat",
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+    ],
+)
+
+cf_cc_library(
+    name = "directory_contents",
+    srcs = ["directory_contents.cc"],
+    hdrs = ["directory_contents.h"],
+    deps = [
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+    ],
+)
+
+cf_cc_library(
+    name = "directory_exists",
+    srcs = ["directory_exists.cc"],
+    hdrs = ["directory_exists.h"],
+)
+
+cf_cc_library(
+    name = "file_device_id",
+    srcs = ["file_device_id.cc"],
+    hdrs = ["file_device_id.h"],
+    deps = [
+        "//cuttlefish/posix:stat",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+    ],
+)
+
+cf_cc_library(
+    name = "file_exists",
+    srcs = ["file_exists.cc"],
+    hdrs = ["file_exists.h"],
+)
+
+cf_cc_library(
+    name = "file_is_socket",
+    srcs = ["file_is_socket.cc"],
+    hdrs = ["file_is_socket.h"],
+    deps = [
+        "//cuttlefish/posix:stat",
+    ],
+)
+
+cf_cc_library(
+    name = "is_directory_empty",
+    srcs = ["is_directory_empty.cc"],
+    hdrs = ["is_directory_empty.h"],
+    deps = [
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+    ],
+)
+
+cf_cc_library(
+    name = "is_symlink",
+    srcs = ["is_symlink.cc"],
+    hdrs = ["is_symlink.h"],
+    deps = [
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+    ],
+)
+
+cf_cc_library(
+    name = "link_or_copy",
+    srcs = ["link_or_copy.cc"],
+    hdrs = ["link_or_copy.h"],
+    deps = [
+        "//cuttlefish/files:are_hard_linked",
+        "//cuttlefish/files:copy_with_attributes",
+        "//cuttlefish/files:file_exists",
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_library(
+    name = "recursively_remove_directory",
+    srcs = ["recursively_remove_directory.cc"],
+    hdrs = ["recursively_remove_directory.h"],
+    deps = [
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+        "@abseil-cpp//absl/log",
+    ],
+)

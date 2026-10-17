@@ -35,7 +35,7 @@
 #include "liblp/liblp.h"
 #include "liblp/metadata_format.h"
 
-#include "cuttlefish/common/libs/fs/shared_fd.h"
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/host/commands/assemble_cvd/android_build/android_build.h"
 #include "cuttlefish/pretty/liblp/liblp.h"  // IWYU pragma: keep: overloads
 #include "cuttlefish/pretty/map.h"          // IWYU pragma: keep: overloads
@@ -51,14 +51,15 @@ namespace {
 bool IsAndroidSparseImage(const std::string& path) {
   static constexpr uint32_t kAndroidSparseMagic = 0xed26ff3a;
 
-  SharedFD fd = SharedFD::Open(path, O_RDONLY);
-  if (!fd->IsOpen()) {
+  Result<Fd> fd = Fd::Open(path, O_RDONLY);
+  if (!fd.has_value()) {
     return false;
   }
 
   uint32_t magic = 0;
-  ssize_t bytes_read = fd->Read(&magic, sizeof(magic));
-  return bytes_read == sizeof(magic) && magic == kAndroidSparseMagic;
+  Result<uint64_t> bytes_read = fd->Read(&magic, sizeof(magic));
+  return bytes_read.has_value() && *bytes_read == sizeof(magic) &&
+         magic == kAndroidSparseMagic;
 }
 
 bool HasSlotSuffix(const std::string_view name) {
@@ -90,25 +91,20 @@ Result<std::vector<LpMetadataExtent>> PartitionExtents(
   return CF_ERRF("Could not find partition with name '{}'", name);
 }
 
-Result<void> ExtractPartition(SharedFD source,
+Result<void> ExtractPartition(Fd& source,
                               const std::vector<LpMetadataExtent>& extents,
-                              SharedFD destination) {
-  CF_EXPECT_EQ(destination->LSeek(0, SEEK_SET), 0, destination->StrError());
+                              Fd& destination) {
+  CF_EXPECT(destination.SeekSet(0));
   for (const LpMetadataExtent& extent : extents) {
-    uint64_t length = extent.num_sectors * LP_SECTOR_SIZE;
+    const uint64_t length = extent.num_sectors * LP_SECTOR_SIZE;
     switch (extent.target_type) {
-      case LP_TARGET_TYPE_LINEAR: {
-        uint64_t offset = extent.target_data * LP_SECTOR_SIZE;
-        CF_EXPECT_EQ(source->LSeek(offset, SEEK_SET), offset,
-                     source->StrError());
-        CF_EXPECT(destination->CopyFrom(*source, length));
+      case LP_TARGET_TYPE_LINEAR:
+        CF_EXPECT(source.SeekSet(extent.target_data * LP_SECTOR_SIZE));
+        CF_EXPECT(destination.CopyFrom(source, length));
         break;
-      };
-      case LP_TARGET_TYPE_ZERO: {
-        CF_EXPECT_GE(destination->LSeek(length, SEEK_CUR), 0,
-                     destination->StrError());
+      case LP_TARGET_TYPE_ZERO:
+        CF_EXPECT(destination.SeekSet(length));
         break;
-      };
       default:
         return CF_ERRF("Unknown target_type '{}'", extent.target_type);
     }
@@ -154,15 +150,12 @@ class SuperImageAsBuildImpl : public AndroidBuild {
 
     std::string super_path =
         CF_EXPECT(android_build_->ImageFile("super", true));
-    SharedFD super_fd = SharedFD::Open(super_path, O_RDONLY);
-    CF_EXPECT(super_fd->IsOpen(), super_fd->StrError());
+    Fd super_fd = CF_EXPECT(Fd::Open(super_path, O_RDONLY));
 
     std::string extract_path = absl::StrCat(extract_dir_, "/", name, ".img");
     unlink(extract_path.c_str());  // Ignore errors
-    SharedFD extract_fd =
-        SharedFD::Open(extract_path, O_RDWR | O_CREAT | O_EXCL, 0644);
-    CF_EXPECTF(extract_fd->IsOpen(), "Failed to open '{}': ", extract_path,
-               extract_fd->StrError());
+    Fd extract_fd =
+        CF_EXPECT(Fd::Open(extract_path, O_RDWR | O_CREAT | O_EXCL, 0644));
 
     CF_EXPECT(super_metadata_.get());
     std::vector<LpMetadataExtent> extents =
@@ -189,7 +182,8 @@ class SuperImageAsBuildImpl : public AndroidBuild {
     return ret;
   }
 
-  Result<std::set<std::string, std::less<void>>> PartitionsInGroup(std::string_view match) {
+  Result<std::set<std::string, std::less<void>>> PartitionsInGroup(
+      std::string_view match) {
     std::set<std::string, std::less<void>> ret;
     for (const LpMetadataPartition& partition : super_metadata_->partitions) {
       CF_EXPECT_LE(partition.group_index, super_metadata_->groups.size());
@@ -238,9 +232,9 @@ Result<std::unique_ptr<android::fs_mgr::LpMetadata>> SuperImageFromAndroidBuild(
   // it is smaller.
   Result<std::string> path;
   std::unique_ptr<android::fs_mgr::LpMetadata> metadata;
-  if (path = build.ImageFile(kSuperEmpty); path.ok()) {
+  if (path = build.ImageFile(kSuperEmpty); path.has_value()) {
     metadata = android::fs_mgr::ReadFromImageFile(*path);
-  } else if (path = build.ImageFile(kSuper); path.ok()) {
+  } else if (path = build.ImageFile(kSuper); path.has_value()) {
     if (IsAndroidSparseImage(*path)) {
       return CF_ERRF("Skipping sparse super image metadata probe for '{}'",
                      *path);

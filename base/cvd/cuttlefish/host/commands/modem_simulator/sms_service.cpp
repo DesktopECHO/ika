@@ -261,8 +261,9 @@ void SmsService::SendSmsToRemote(std::string remote_port, PDUParser& sms_pdu) {
 
   std::string command = "AT+REMOTESMS=" + pdu + "\r";
   std::string token = "REM0";
-  remote_client->Write(token.data(), token.size());
-  remote_client->Write(command.data(), command.size());
+  // TODO(schuffelen): handle result values
+  Result<uint64_t> unused = remote_client->Write(token.data(), token.size());
+  unused = remote_client->Write(command.data(), command.size());
 }
 
 /* process AT+CMGS PDU */
@@ -297,7 +298,7 @@ void SmsService::HandleSendSMSPDU(const Client& client, std::string& command) {
       thread_looper_->Post(
           makeSafeCallback<SmsService>(
               this,
-              [&sms_pdu](SmsService* me) { me->HandleReceiveSMS(sms_pdu); }),
+              [sms_pdu](SmsService* me) { me->HandleReceiveSMS(sms_pdu); }),
           std::chrono::seconds(1));
     } else {  // Send SMS to remote host port
       SendSmsToRemote(remote_host_port, sms_pdu);

@@ -14,6 +14,11 @@
  * limitations under the License.
  */
 
+#pragma once
+
+#include <stdint.h>
+
+#include <memory>
 #include <string>
 
 #include "cuttlefish/host/libs/image_aggregator/disk_image.h"
@@ -24,6 +29,8 @@ namespace cuttlefish {
 Result<void> ForceRawImage(const std::string& image_path);
 Result<bool> IsSparseImage(const std::string& image_path);
 Result<void> ThinProvisionImage(const std::string& image_path);
+Result<void> ConvertSparseImageToRaw(const std::string& source_path,
+                                     const std::string& destination_path);
 
 /** Image file format comprised of a list of chunks of "raw data" and "fill
  * data" that is a repeated byte string.  */

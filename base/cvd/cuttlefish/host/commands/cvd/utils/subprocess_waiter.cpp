@@ -16,10 +16,14 @@
 
 #include "cuttlefish/host/commands/cvd/utils/subprocess_waiter.h"
 
+#include <signal.h>  // IWYU pragma: keep: siginfo_t
+#include <stdint.h>
+#include <sys/wait.h>  // IWYU pragma: keep: WEXITED, WNOWAIT
+
 #include <mutex>
 
-#include "cuttlefish/common/libs/utils/subprocess.h"
-#include "cuttlefish/posix/strerror.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/subprocess.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -33,22 +37,21 @@ Result<void> SubprocessWaiter::Setup(Command& command) {
   return {};
 }
 
+// NOLINTNEXTLINE(misc-include-cleaner): <signal.h>
 Result<siginfo_t> SubprocessWaiter::Wait() {
   std::unique_lock interrupt_lock(interruptible_);
   CF_EXPECT(!interrupted_, "Interrupted");
   CF_EXPECT(subprocess_.has_value());
 
-  siginfo_t infop{};
-
   interrupt_lock.unlock();
 
   // This blocks until the process exits, but doesn't reap it.
-  auto result = subprocess_->Wait(&infop, WEXITED | WNOWAIT);
-  CF_EXPECTF(result != -1, "Lost track of subprocess pid: {}", StrError(errno));
+  // NOLINTNEXTLINE(misc-include-cleaner): <sys/wait.h>
+  siginfo_t infop = CF_EXPECT(subprocess_->Wait(WEXITED | WNOWAIT));
   interrupt_lock.lock();
   // Perform a reaping wait on the process (which should already have exited).
-  result = subprocess_->Wait(&infop, WEXITED);
-  CF_EXPECT(result != -1, "Lost track of subprocess pid");
+  // NOLINTNEXTLINE(misc-include-cleaner): <sys/wait.h>
+  infop = CF_EXPECT(subprocess_->Wait(WEXITED));
   // The double wait avoids a race around the kernel reusing pids. Waiting
   // with WNOWAIT won't cause the child process to be reaped, so the kernel
   // won't reuse the pid until the Wait call below, and any kill signals won't
@@ -64,11 +67,11 @@ Result<void> SubprocessWaiter::Interrupt() {
   if (subprocess_) {
     auto stop_result = subprocess_->Stop();
     switch (stop_result) {
-      case StopperResult::kStopFailure:
+      case StopperResult::kFailure:
         return CF_ERR("Failed to stop subprocess");
-      case StopperResult::kStopCrash:
+      case StopperResult::kCrash:
         return CF_ERR("Stopper caused process to crash");
-      case StopperResult::kStopSuccess:
+      case StopperResult::kSuccess:
         return {};
       default:
         return CF_ERRF("Unknown stop result: {}", (uint64_t)stop_result);

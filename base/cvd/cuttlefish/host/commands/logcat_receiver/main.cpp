@@ -14,69 +14,64 @@
  * limitations under the License.
  */
 
+#include <fcntl.h>
 #include <signal.h>
+#include <stdint.h>
+#include <unistd.h>
 
-#include <gflags/gflags.h>
+#include <utility>
+
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "gflags/gflags.h"
 
-#include "cuttlefish/common/libs/fs/shared_buf.h"
-#include "cuttlefish/common/libs/fs/shared_fd.h"
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/host/libs/config/config_instance_derived.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/config/logging.h"
+#include "cuttlefish/io/write_exact.h"
+#include "cuttlefish/result/expect.h"
+#include "cuttlefish/result/result_type.h"
 
 DEFINE_int32(log_pipe_fd, -1,
              "A file descriptor representing a (UNIX) socket from which to "
              "read the logs. If -1 is given the socket is created according to "
              "the instance configuration");
 
-int main(int argc, char** argv) {
-  cuttlefish::DefaultSubprocessLogging(argv);
+namespace cuttlefish {
+namespace {
+
+Result<void> Main(int argc, char** argv) {
+  DefaultSubprocessLogging(argv);
   google::ParseCommandLineFlags(&argc, &argv, true);
 
-  auto config = cuttlefish::CuttlefishConfig::Get();
-
-  CHECK(config) << "Could not open cuttlefish config";
-
-  auto instance = config->ForDefaultInstance();
+  const CuttlefishConfig::InstanceSpecific& instance =
+      CF_EXPECT(CuttlefishConfig::Get())->ForDefaultInstance();
 
   // Disable default handling of SIGPIPE
-  struct sigaction new_action {
-  }, old_action{};
+  struct sigaction new_action{};
   new_action.sa_handler = SIG_IGN;
-  sigaction(SIGPIPE, &new_action, &old_action);
+  sigaction(SIGPIPE, &new_action, nullptr);
 
-  cuttlefish::SharedFD pipe;
+  SharedFD pipe;
 
   if (FLAGS_log_pipe_fd < 0) {
-    const std::string log_name = cuttlefish::LogcatPipeName(instance);
-    pipe = cuttlefish::SharedFD::Open(log_name, O_RDONLY);
+    pipe = CF_EXPECT(Fd::Open(LogcatPipeName(instance), O_RDONLY));
   } else {
-    pipe = cuttlefish::SharedFD::Dup(FLAGS_log_pipe_fd);
+    pipe = CF_EXPECT(Fd::Dup(FLAGS_log_pipe_fd));
     close(FLAGS_log_pipe_fd);
   }
 
-  if (!pipe->IsOpen()) {
-    LOG(ERROR) << "Error opening log pipe: " << pipe->StrError();
-    return 2;
-  }
-
-  auto path = cuttlefish::LogcatPath(instance);
-  auto logcat_file =
-      cuttlefish::SharedFD::Open(path.c_str(), O_CREAT | O_APPEND | O_WRONLY, 0666);
+  Fd logcat_file = CF_EXPECT(
+      Fd::Open(LogcatPath(instance), O_CREAT | O_APPEND | O_WRONLY, 0666));
 
   // Server loop
   size_t dropped_bytes = 0;
   while (true) {
     char buff[1024];
-    auto read = pipe->Read(buff, sizeof(buff));
-    if (read < 0) {
-      LOG(ERROR) << "Could not read logcat: " << pipe->StrError();
-      break;
-    }
-    auto written = cuttlefish::WriteAll(logcat_file, buff, read);
-    if (written == read) {
+    uint64_t data_read = CF_EXPECT(pipe->Read(buff, sizeof(buff)));
+    Result<void> written = WriteExact(logcat_file, buff, data_read);
+    if (written.has_value()) {
       if (dropped_bytes > 0) {
         LOG(ERROR) << "Log file writable again after dropping " << dropped_bytes
                    << " bytes of guest logs";
@@ -91,15 +86,28 @@ int main(int argc, char** argv) {
     // first failed write of a streak so a persistent failure cannot flood the
     // launcher log.
     if (dropped_bytes == 0) {
-      LOG(ERROR) << "Error writing to log file: " << logcat_file->StrError()
+      LOG(ERROR) << "Error writing to log file: " << written.error()
                  << "; dropping guest log data and reopening the file";
     }
-    dropped_bytes += read - (written > 0 ? written : 0);
-    logcat_file = cuttlefish::SharedFD::Open(path.c_str(),
-                                             O_CREAT | O_APPEND | O_WRONLY, 0666);
+    dropped_bytes += data_read;
+    Result<Fd> reopened =
+        Fd::Open(LogcatPath(instance), O_CREAT | O_APPEND | O_WRONLY, 0666);
+    if (reopened.has_value()) {
+      logcat_file = std::move(*reopened);
+    }
   }
 
-  logcat_file->Close();
-  pipe->Close();
+  return {};
+}
+
+}  // namespace
+}  // namespace cuttlefish
+
+int main(int argc, char** argv) {
+  cuttlefish::Result<void> res = cuttlefish::Main(argc, argv);
+  if (!res.has_value()) {
+    LOG(ERROR) << res.error();
+    return -1;
+  }
   return 0;
 }

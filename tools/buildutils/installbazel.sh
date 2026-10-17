@@ -21,7 +21,7 @@
 
 set -e
 
-BAZELISK_VERSION=v1.25.0
+BAZELISK_VERSION=v1.29.0
 BAZEL_INSTALL_PATH="${BAZEL_INSTALL_PATH:-${HOME}/.local/bin/bazel}"
 
 function install_bazel_binary() {

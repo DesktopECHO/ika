@@ -29,6 +29,7 @@
 #include "gflags/gflags.h"
 #include "json/value.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/fs/shared_select.h"
 #include "cuttlefish/host/commands/kernel_log_monitor/kernel_log_server.h"
@@ -63,10 +64,9 @@ std::vector<SharedFD> SubscribersFromCmdline() {
   std::vector<std::string> fds = absl::StrSplit(FLAGS_subscriber_fds, ',');
   std::vector<SharedFD> shared_fds;
   for (auto& fd_str : fds) {
-    auto fd = std::stoi(fd_str);
-    auto shared_fd = SharedFD::Dup(fd);
-    close(fd);
-    shared_fds.push_back(shared_fd);
+    auto fd_num = std::stoi(fd_str);
+    shared_fds.push_back(Fd::Dup(fd_num).value_or(Fd()));
+    close(fd_num);
   }
 
   return shared_fds;
@@ -92,9 +92,9 @@ int KernelLogMonitorMain(int argc, char** argv) {
   SharedFD pipe;
   if (FLAGS_log_pipe_fd < 0) {
     std::string log_name = KernelLogPipeName(instance);
-    pipe = SharedFD::Open(log_name, O_RDONLY);
+    pipe = Fd::Open(log_name, O_RDONLY).value_or(Fd());
   } else {
-    pipe = SharedFD::Dup(FLAGS_log_pipe_fd);
+    pipe = Fd::Dup(FLAGS_log_pipe_fd).value_or(Fd());
     close(FLAGS_log_pipe_fd);
   }
 

@@ -24,7 +24,7 @@
 #include <string_view>
 #include <utility>
 
-#include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/libs/zip/libzip_cc/archive.h"
 #include "cuttlefish/host/libs/zip/libzip_cc/readable_source.h"
 #include "cuttlefish/host/libs/zip/libzip_cc/writable_source.h"
@@ -71,11 +71,11 @@ Result<void> ExtractFile(ReadableZip& zip, std::string_view zip_path,
 
   CF_EXPECT(SparseCopy(*reader, *writer));
 
-  if (Result<uint32_t> attr = zip.FileAttributes(zip_path); attr.ok()) {
+  if (Result<uint32_t> attr = zip.FileAttributes(zip_path); attr.has_value()) {
     // The fetcher must occasionally download archives from Android 10 or 11
     // which incorrectly had the file attributes set to 0. To remedy this
     // set them to a safe 0640.
-    if(*attr == 0) {
+    if (*attr == 0) {
       *attr = 0640;
     }
     CF_EXPECT_EQ(chmod(host_path.c_str(), *attr), 0, StrError(errno));

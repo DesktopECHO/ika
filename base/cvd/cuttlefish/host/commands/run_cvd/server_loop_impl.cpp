@@ -24,7 +24,9 @@
 #include <algorithm>
 #include <cstdlib>
 #include <memory>
+#include <ostream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -33,11 +35,11 @@
 #include "fruit/injector.h"
 #include "gflags/gflags.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_buf.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/fs/shared_select.h"
 #include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/commands/run_cvd/launch/snapshot_control_files.h"
 #include "cuttlefish/host/commands/run_cvd/launch/webrtc_controller.h"
 #include "cuttlefish/host/libs/command_util/runner/defs.h"
@@ -51,18 +53,38 @@
 #include "cuttlefish/host/libs/feature/command_source.h"
 #include "cuttlefish/host/libs/image_aggregator/qcow2.h"
 #include "cuttlefish/host/libs/process_monitor/process_monitor.h"
+#include "cuttlefish/posix/remove.h"
 #include "cuttlefish/posix/strerror.h"
+#include "cuttlefish/process/command.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
 namespace run_cvd_impl {
+
+std::string_view format_as(ServerLoopImpl::DeviceStatus status) {
+  switch (status) {
+    case ServerLoopImpl::DeviceStatus::kUnknown:
+      return "Unknown";
+    case ServerLoopImpl::DeviceStatus::kActive:
+      return "Active";
+    case ServerLoopImpl::DeviceStatus::kSuspended:
+      return "Suspended";
+    case ServerLoopImpl::DeviceStatus::kGuestOff:
+      return "GuestOff";
+  }
+}
+
+std::ostream& operator<<(std::ostream& out,
+                         ServerLoopImpl::DeviceStatus status) {
+  return out << format_as(status);
+}
 
 bool ServerLoopImpl::CreateQcowOverlay(const std::string& crosvm_path,
                                        const std::string& backing_file,
                                        const std::string& output_overlay_path) {
   Result<Qcow2Image> overlay =
       Qcow2Image::Create(crosvm_path, backing_file, output_overlay_path);
-  if (!overlay.ok()) {
+  if (!overlay.has_value()) {
     LOG(ERROR) << "Unable to create qcow2 overlay at " << output_overlay_path
                << ": " << overlay.error();
     return false;
@@ -111,15 +133,21 @@ Result<void> ServerLoopImpl::Run() {
   CF_EXPECT(process_monitor.StartAndMonitorProcesses());
   device_status_ = DeviceStatus::kActive;
 
+  bool process_monitor_active = true;
   while (true) {
     // TODO: use select to handle simultaneous connections.
     SharedFDSet read_set;
     read_set.Set(server_);
-    read_set.Set(process_monitor.status());
+    if (process_monitor_active) {
+      read_set.Set(process_monitor.status());
+    }
 
     Select(&read_set, nullptr, nullptr, nullptr);
 
-    if (read_set.IsSet(process_monitor.status())) {
+    if (process_monitor_active && read_set.IsSet(process_monitor.status())) {
+      // Ika exits the launcher when the guest powers off, rather than keeping
+      // it in DeviceStatus::kGuestOff for `cvd restart`: the desktop session
+      // tracks the VM through the launcher process.
       auto monitor_exit = CF_EXPECT(process_monitor.WaitForMonitor());
       if (monitor_exit == ProcessMonitorExit::kExpected) {
         LOG(INFO) << "Guest stopped; exiting launcher cleanly";
@@ -129,10 +157,10 @@ Result<void> ServerLoopImpl::Run() {
     }
 
     CF_EXPECT(read_set.IsSet(server_));
-    auto client = SharedFD::Accept(*server_);
+    SharedFD client = Fd::Accept(*server_).value_or(Fd());
     while (client->IsOpen()) {
       auto launcher_action_with_info_result = ReadLauncherActionFromFd(client);
-      if (!launcher_action_with_info_result.ok()) {
+      if (!launcher_action_with_info_result.has_value()) {
         LOG(ERROR) << "Reading launcher command from monitor failed: "
                    << launcher_action_with_info_result.error();
         break;
@@ -149,7 +177,7 @@ Result<void> ServerLoopImpl::Run() {
       }
       auto result = HandleExtended(launcher_action, process_monitor);
       auto response = LauncherResponse::kSuccess;
-      if (!result.ok()) {
+      if (!result.has_value()) {
         LOG(ERROR) << "Failed to handle extended action request.";
         LOG(ERROR) << result.error();
         response = LauncherResponse::kError;
@@ -183,6 +211,8 @@ Result<void> ServerLoopImpl::HandleExtended(
   switch (action_info.extended_action.actions_case()) {
     case ActionsCase::kSuspend: {
       VLOG(0) << "Run_cvd received suspend request.";
+      CF_EXPECT_NE(device_status_.load(), DeviceStatus::kGuestOff,
+                   "Device is powered off, cannot suspend");
       if (device_status_.load() == DeviceStatus::kActive) {
         CF_EXPECT(HandleSuspend(process_monitor));
       }
@@ -191,6 +221,8 @@ Result<void> ServerLoopImpl::HandleExtended(
     }
     case ActionsCase::kResume: {
       VLOG(0) << "Run_cvd received resume request.";
+      CF_EXPECT_NE(device_status_.load(), DeviceStatus::kGuestOff,
+                   "Device is powered off, cannot resume");
       if (device_status_.load() == DeviceStatus::kSuspended) {
         CF_EXPECT(HandleResume(process_monitor));
       }
@@ -199,30 +231,30 @@ Result<void> ServerLoopImpl::HandleExtended(
     }
     case ActionsCase::kSnapshotTake: {
       VLOG(0) << "Run_cvd received snapshot request.";
-      CF_EXPECT(device_status_.load() == DeviceStatus::kSuspended,
-                "The device is not suspended, and snapshot cannot be taken");
+      CF_EXPECT_EQ(device_status_.load(), DeviceStatus::kSuspended,
+                   "The device is not suspended, and snapshot cannot be taken");
       CF_EXPECT(
           HandleSnapshotTake(action_info.extended_action.snapshot_take()));
       return {};
     }
     case ActionsCase::kStartScreenRecording: {
       VLOG(0) << "Run_cvd received start screen recording request.";
-      CF_EXPECT(device_status_.load() == DeviceStatus::kActive,
-                "Device is not active, cannot start screen recording");
+      CF_EXPECT_EQ(device_status_.load(), DeviceStatus::kActive,
+                   "Device is not active, cannot start screen recording");
       CF_EXPECT(HandleStartScreenRecording());
       return {};
     }
     case ActionsCase::kStopScreenRecording: {
       VLOG(0) << "Run_cvd received stop screen recording request.";
-      CF_EXPECT(device_status_.load() == DeviceStatus::kActive,
-                "Device is not active, cannot stop screen recording");
+      CF_EXPECT_EQ(device_status_.load(), DeviceStatus::kActive,
+                   "Device is not active, cannot stop screen recording");
       CF_EXPECT(HandleStopScreenRecording());
       return {};
     }
     case ActionsCase::kScreenshotDisplay: {
       VLOG(0) << "Run_cvd received screenshot display request.";
-      CF_EXPECT(device_status_.load() == DeviceStatus::kActive,
-                "Device is not active, cannot take screenshot");
+      CF_EXPECT_EQ(device_status_.load(), DeviceStatus::kActive,
+                   "Device is not active, cannot take screenshot");
       const auto& request = action_info.extended_action.screenshot_display();
       CF_EXPECT(HandleScreenshotDisplay(request));
       return {};
@@ -238,34 +270,45 @@ void ServerLoopImpl::HandleActionWithNoData(const LauncherAction action,
   switch (action) {
     case LauncherAction::kStop: {
       auto stop = process_monitor.StopMonitoredProcesses();
-      if (stop.ok()) {
+      if (stop.has_value()) {
         auto response = LauncherResponse::kSuccess;
-        client->Write(&response, sizeof(response));
+        // TODO(schuffelen): Handle unused result
+        (void)client->Write(&response, sizeof(response));
         std::exit(0);
       } else {
         LOG(ERROR) << "Failed to stop subprocesses:\n" << stop.error();
         auto response = LauncherResponse::kError;
-        client->Write(&response, sizeof(response));
+        // TODO(schuffelen): Handle unused result
+        (void)client->Write(&response, sizeof(response));
       }
       break;
     }
     case LauncherAction::kFail: {
       auto stop = process_monitor.StopMonitoredProcesses();
-      if (stop.ok()) {
+      if (stop.has_value()) {
         auto response = LauncherResponse::kSuccess;
-        client->Write(&response, sizeof(response));
+        // TODO(schuffelen): Handle unused result
+        (void)client->Write(&response, sizeof(response));
         std::exit(RunnerExitCodes::kVirtualDeviceBootFailed);
       } else {
         auto response = LauncherResponse::kError;
-        client->Write(&response, sizeof(response));
+        // TODO(schuffelen): Handle unused result
+        (void)client->Write(&response, sizeof(response));
         LOG(ERROR) << "Failed to stop subprocesses:\n" << stop.error();
       }
       break;
     }
     case LauncherAction::kStatus: {
-      // TODO(schuffelen): Return more information on a side channel
+      // TODO(schuffelen): Return more information on a side channel.
+      // Note: When device_status_ == DeviceStatus::kGuestOff, returning
+      // kSuccess keeps the socket responsive so that `cvd restart` can power
+      // the VM back on. Because `cvd status` hardcodes "Running" upon
+      // receiving LauncherResponse::kSuccess, reporting a distinct
+      // "Powered Off" status requires extending the
+      // LauncherAction/LauncherResponse protocol.
       auto response = LauncherResponse::kSuccess;
-      client->Write(&response, sizeof(response));
+      // TODO(schuffelen): Handle unused result
+      (void)client->Write(&response, sizeof(response));
       break;
     }
     case LauncherAction::kPowerwash: {
@@ -275,49 +318,57 @@ void ServerLoopImpl::HandleActionWithNoData(const LauncherAction action,
       if (std::find(disks.begin(), disks.end(), overlay) == disks.end()) {
         LOG(ERROR) << "Powerwash unsupported with --use_overlay=false";
         auto response = LauncherResponse::kError;
-        client->Write(&response, sizeof(response));
+        // TODO(schuffelen): Handle unused result
+        (void)client->Write(&response, sizeof(response));
         break;
       }
 
       auto stop = process_monitor.StopMonitoredProcesses();
-      if (!stop.ok()) {
+      if (!stop.has_value()) {
         LOG(ERROR) << "Stopping processes failed:\n" << stop.error();
         auto response = LauncherResponse::kError;
-        client->Write(&response, sizeof(response));
+        // TODO(schuffelen): Handle unused result
+        (void)client->Write(&response, sizeof(response));
         break;
       }
       if (!PowerwashFiles()) {
         LOG(ERROR) << "Powerwashing files failed.";
         auto response = LauncherResponse::kError;
-        client->Write(&response, sizeof(response));
+        // TODO(schuffelen): Handle unused result
+        (void)client->Write(&response, sizeof(response));
         break;
       }
       auto response = LauncherResponse::kSuccess;
-      client->Write(&response, sizeof(response));
+      // TODO(schuffelen): Handle unused result
+      (void)client->Write(&response, sizeof(response));
 
       RestartRunCvd(client->UNMANAGED_Dup());
       // RestartRunCvd should not return, so something went wrong.
       response = LauncherResponse::kError;
-      client->Write(&response, sizeof(response));
+      // TODO(schuffelen): Handle unused result
+      (void)client->Write(&response, sizeof(response));
       LOG(FATAL) << "run_cvd in a bad state";
       break;
     }
     case LauncherAction::kRestart: {
       auto stop = process_monitor.StopMonitoredProcesses();
-      if (!stop.ok()) {
+      if (!stop.has_value()) {
         LOG(ERROR) << "Stopping processes failed:\n" << stop.error();
         auto response = LauncherResponse::kError;
-        client->Write(&response, sizeof(response));
+        // TODO(schuffelen): Handle unused result
+        (void)client->Write(&response, sizeof(response));
         break;
       }
       DeleteFifos();
 
       auto response = LauncherResponse::kSuccess;
-      client->Write(&response, sizeof(response));
+      // TODO(schuffelen): Handle unused result
+      (void)client->Write(&response, sizeof(response));
       RestartRunCvd(client->UNMANAGED_Dup());
       // RestartRunCvd should not return, so something went wrong.
       response = LauncherResponse::kError;
-      client->Write(&response, sizeof(response));
+      // TODO(schuffelen): Handle unused result
+      (void)client->Write(&response, sizeof(response));
       LOG(FATAL) << "run_cvd in a bad state";
       break;
     }
@@ -325,7 +376,8 @@ void ServerLoopImpl::HandleActionWithNoData(const LauncherAction action,
       LOG(ERROR) << "Unrecognized launcher action: "
                  << static_cast<char>(action);
       auto response = LauncherResponse::kError;
-      client->Write(&response, sizeof(response));
+      // TODO(schuffelen): Handle unused result
+      (void)client->Write(&response, sizeof(response));
       break;
   }
 }
@@ -437,10 +489,10 @@ void ServerLoopImpl::RestartRunCvd(int notification_fd) {
   // undesired behavior. Always try to delete the file "restore" if a restart is
   // requested.
   if (IsRestoring(config_)) {
-    CHECK(RemoveFile(config_.AssemblyPath("restore")).ok());
+    CHECK(RemoveFile(config_.AssemblyPath("restore")).has_value());
   }
   auto config_path = config_.AssemblyPath("cuttlefish_config.json");
-  auto followup_stdin = SharedFD::MemfdCreate("pseudo_stdin");
+  SharedFD followup_stdin = Fd::MemfdCreate("pseudo_stdin").value_or(Fd());
   WriteAll(followup_stdin, config_path + "\n");
   // NOLINTNEXTLINE(misc-include-cleaner): unistd.h provides SEEK_SET
   followup_stdin->LSeek(0, SEEK_SET);

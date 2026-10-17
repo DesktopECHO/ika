@@ -27,8 +27,8 @@
 #include <variant>
 #include <vector>
 
-#include <android-base/file.h>
 #include "absl/log/log.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
 
 #include "cuttlefish/common/libs/utils/archive.h"
@@ -43,17 +43,18 @@
 #include "cuttlefish/host/commands/cvd/fetch/fetch_tracer.h"
 #include "cuttlefish/host/commands/cvd/fetch/host_package.h"
 #include "cuttlefish/host/commands/cvd/fetch/host_tools_target.h"
+#include "cuttlefish/host/commands/cvd/fetch/symlink_host_package.h"
 #include "cuttlefish/host/commands/cvd/fetch/target_directories.h"
 #include "cuttlefish/host/commands/cvd/utils/common.h"
 #include "cuttlefish/host/libs/config/fetcher_config.h"
 #include "cuttlefish/host/libs/config/file_source.h"
 #include "cuttlefish/host/libs/log_names/log_names.h"
-#include "cuttlefish/host/libs/image_aggregator/sparse_image.h"
 #include "cuttlefish/host/libs/web/android_build.h"
 #include "cuttlefish/host/libs/web/android_build_string.h"
 #include "cuttlefish/host/libs/web/chrome_os_build_string.h"
 #include "cuttlefish/host/libs/web/http_client/curl_global_init.h"
 #include "cuttlefish/host/libs/web/luci_build_api.h"
+#include "cuttlefish/host/libs/web/url_namespace.h"
 #include "cuttlefish/host/libs/zip/libzip_cc/archive.h"
 #include "cuttlefish/io/io.h"
 #include "cuttlefish/io/string.h"
@@ -107,7 +108,8 @@ Result<void> EnsureDirectoriesExist(const std::string& host_tools_directory,
   for (const auto& target : targets) {
     CF_EXPECT(EnsureDirectoryExists(target.directories.root, kRwxAllMode));
     CF_EXPECT(EnsureDirectoryExists(target.directories.otatools, kRwxAllMode));
-    CF_EXPECT(EnsureDirectoryExists(target.directories.test_suites, kRwxAllMode));
+    CF_EXPECT(
+        EnsureDirectoryExists(target.directories.test_suites, kRwxAllMode));
     CF_EXPECT(EnsureDirectoryExists(target.directories.chrome_os, kRwxAllMode));
   }
   return {};
@@ -126,7 +128,7 @@ Result<std::optional<Build>> GetBuildHelper(
 
 Result<Builds> GetBuilds(BuildApi& build_api,
                          const BuildStrings& build_sources) {
-  Builds result = Builds{
+  return Builds{
       .default_build = CF_EXPECT(GetBuildHelper(
           build_api, build_sources.default_build, kDefaultBuildTarget)),
       .system = CF_EXPECT(GetBuildHelper(build_api, build_sources.system_build,
@@ -146,14 +148,6 @@ Result<Builds> GetBuilds(BuildApi& build_api,
           build_api, build_sources.test_suites_build, kDefaultBuildTarget)),
       .chrome_os = build_sources.chrome_os_build,
   };
-  if (!result.otatools) {
-    if (result.system) {
-      result.otatools = result.system;
-    } else if (result.kernel) {
-      result.otatools = result.default_build;
-    }
-  }
-  return {result};
 }
 
 Result<void> UpdateTargetsWithBuilds(BuildApi& build_api,
@@ -178,6 +172,43 @@ Result<Build> GetHostBuild(BuildApi& build_api,
       "Either `--host_package_build` or `--default_build` needs to be "
       "specified. Try `--default_build=aosp-android-latest-release/"
       "aosp_cf_x86_64_only_phone-userdebug");
+}
+
+template <typename UrlBuild>
+Result<void> CheckObjectIsNamed(const UrlBuild& build,
+                                const std::string& name) {
+  CF_EXPECTF(name == *build.object ||
+                 IsArchiveMember(build.object, build.filepath, name),
+             "The build '{}' holds only '{}', so it has no '{}'.", build.id,
+             *build.object, name);
+  return {};
+}
+
+// The host package is fetched asynchronously, so without this check a build
+// that has none only says so after every target has been fetched.
+Result<void> CheckHostPackagePresent(const Build& build) {
+  const std::string name = HostPackageName(build);
+  if (const GcsBuild* gcs = std::get_if<GcsBuild>(&build)) {
+    if (gcs->object.has_value()) {
+      CF_EXPECT(CheckObjectIsNamed(*gcs, name),
+                "Name a build that has a host package with "
+                "`--host_package_build`.");
+    } else {
+      CF_EXPECTF(BuildHasArtifact(build, name),
+                 "The build '{}' has no host package '{}'.  It holds [{}].  "
+                 "Name a build that has one with `--host_package_build`.",
+                 gcs->id, name, absl::StrJoin(GcsArtifactNames(*gcs), ", "));
+    }
+  } else if (const HttpBuild* http = std::get_if<HttpBuild>(&build)) {
+    // A plain HTTPS directory has no listing, so its host package is only
+    // known to be absent when the download answers 404.
+    if (http->object.has_value()) {
+      CF_EXPECT(CheckObjectIsNamed(*http, name),
+                "Name a build that has a host package with "
+                "`--host_package_build`.");
+    }
+  }
+  return {};
 }
 
 Result<std::string> SaveConfig(FetcherConfig& config,
@@ -207,17 +238,18 @@ Result<void> FetchDefaultTarget(FetchBuildContext& context,
   constexpr char kSignedPrefix[] = "signed/signed-";
   // Some older builds might not have misc_info.txt, so permit errors on
   // fetching misc_info.txt
-  if (!context.Artifact("misc_info.txt").Download().ok()) {
+  if (!context.Artifact("misc_info.txt").Download().has_value()) {
     VLOG(0) << "Failed to download misc_info.txt, continuing";
   }
   if (flags.download_img_zip) {
     LOG(INFO) << "Downloading image zip for " << context;
-    std::string img_zip_name = context.GetBuildZipName("img");
+    const std::string img_zip_name =
+        CF_EXPECT(context.GetBuildZipName(BuildZipKind::kImages));
     std::string img_zip_artifact_name = img_zip_name;
     if (IsSignedBuild(context.Build())) {
       img_zip_artifact_name = kSignedPrefix + img_zip_artifact_name;
       LOG(INFO) << "Attempting to fetch SIGNED default image zip: "
-                  << img_zip_artifact_name;
+                << img_zip_artifact_name;
     }
     FetchArtifact img_zip = context.Artifact(img_zip_artifact_name);
     CF_EXPECT(img_zip.Download());
@@ -226,35 +258,40 @@ Result<void> FetchDefaultTarget(FetchBuildContext& context,
       CF_EXPECT(img_zip.DeleteLocalFile());
     }
   }
-  std::string target_files_name = context.GetBuildZipName("target_files");
-  FetchArtifact target_files = context.Artifact(target_files_name);
-  if (has_system_build || flags.download_target_files_zip) {
-    LOG(INFO) << "Downloading target files zip for " << context;
-    std::string download_location =
-        fmt::format("default/{}", target_files_name);
-    CF_EXPECT(target_files.DownloadTo(download_location));
-  }
-  if (flags.dynamic_super_image) {
-    ReadableZip* target_files_zip = CF_EXPECT(target_files.AsZip());
-    std::unique_ptr<ReaderSeeker> ab_partitions_source =
-        CF_EXPECT(target_files_zip->OpenReadOnly("META/ab_partitions.txt"));
-    CF_EXPECT(ab_partitions_source.get());
-    std::string ab_partitions_contents =
-        CF_EXPECT(ReadToString(*ab_partitions_source));
+  const bool download_target_files =
+      has_system_build || flags.download_target_files_zip;
+  if (download_target_files || flags.dynamic_super_image) {
+    const std::string target_files_name =
+        CF_EXPECT(context.GetBuildZipName(BuildZipKind::kTargetFiles));
+    FetchArtifact target_files = context.Artifact(target_files_name);
+    if (download_target_files) {
+      LOG(INFO) << "Downloading target files zip for " << context;
+      const std::string download_location =
+          fmt::format("default/{}", target_files_name);
+      CF_EXPECT(target_files.DownloadTo(download_location));
+    }
+    if (flags.dynamic_super_image) {
+      ReadableZip* target_files_zip = CF_EXPECT(target_files.AsZip());
+      std::unique_ptr<ReaderSeeker> ab_partitions_source =
+          CF_EXPECT(target_files_zip->OpenReadOnly("META/ab_partitions.txt"));
+      CF_EXPECT(ab_partitions_source.get());
+      const std::string ab_partitions_contents =
+          CF_EXPECT(ReadToString(*ab_partitions_source));
 
-    CF_EXPECT(target_files.ExtractOneTo("META/ab_partitions.txt",
-                                        "default/ab_partitions.txt"));
+      CF_EXPECT(target_files.ExtractOneTo("META/ab_partitions.txt",
+                                          "default/ab_partitions.txt"));
 
-    std::vector<std::string_view> ab_files =
-        absl::StrSplit(ab_partitions_contents, '\n');
-    ab_files.emplace_back("super_empty");
-    for (std::string_view ab_file : ab_files) {
-      if (ab_file.empty()) {
-        continue;
+      std::vector<std::string_view> ab_files =
+          absl::StrSplit(ab_partitions_contents, '\n');
+      ab_files.emplace_back("super_empty");
+      for (std::string_view ab_file : ab_files) {
+        if (ab_file.empty()) {
+          continue;
+        }
+        const std::string member = fmt::format("IMAGES/{}.img", ab_file);
+        const std::string output = fmt::format("default/{}.img", ab_file);
+        CF_EXPECT(target_files.ExtractOneTo(member, output));
       }
-      std::string member = fmt::format("IMAGES/{}.img", ab_file);
-      std::string output = fmt::format("default/{}.img", ab_file);
-      CF_EXPECT(target_files.ExtractOneTo(member, output));
     }
   }
   return {};
@@ -263,7 +300,8 @@ Result<void> FetchDefaultTarget(FetchBuildContext& context,
 Result<void> FetchSystemTarget(FetchBuildContext& context,
                                bool download_img_zip,
                                const bool keep_downloaded_archives) {
-  std::string target_files_name = context.GetBuildZipName("target_files");
+  const std::string target_files_name =
+      CF_EXPECT(context.GetBuildZipName(BuildZipKind::kTargetFiles));
   FetchArtifact target_files = context.Artifact(target_files_name);
 
   CF_EXPECT(
@@ -271,10 +309,12 @@ Result<void> FetchSystemTarget(FetchBuildContext& context,
 
   if (download_img_zip) {
     LOG(INFO) << "Downloading system image zip for " << context;
-    if (!target_files.ExtractOneTo("IMAGES/system.img", "system.img").ok()) {
+    if (!target_files.ExtractOneTo("IMAGES/system.img", "system.img")
+             .has_value()) {
       LOG(INFO) << "Unable to retrieve system.img from target files, falling "
                    "back to system *-img-*.zip for system image";
-      std::string system_img_zip_name = context.GetBuildZipName("img");
+      const std::string system_img_zip_name =
+          CF_EXPECT(context.GetBuildZipName(BuildZipKind::kImages));
       FetchArtifact system_files = context.Artifact(system_img_zip_name);
 
       CF_EXPECT(system_files.Download());
@@ -287,15 +327,12 @@ Result<void> FetchSystemTarget(FetchBuildContext& context,
     }
 
     static constexpr std::string_view kSystemImageFiles[] = {
-        "init_boot",
-        "product",
-        "system_ext",
-        "vbmeta_system",
+        "init_boot", "product", "pvmfw", "system_ext", "vbmeta_system",
     };
     for (std::string_view system_image : kSystemImageFiles) {
       std::string member = fmt::format("IMAGES/{}.img", system_image);
       std::string rename_to = fmt::format("{}.img", system_image);
-      if (!target_files.ExtractOneTo(member, rename_to).ok()) {
+      if (!target_files.ExtractOneTo(member, rename_to).has_value()) {
         VLOG(0) << "Failed to extract " << member;
       }
     }
@@ -304,14 +341,16 @@ Result<void> FetchSystemTarget(FetchBuildContext& context,
 }
 
 Result<void> FetchKernelTarget(FetchBuildContext context) {
-  // If the kernel is from an arm/aarch64 build, the artifact will be called
-  // Image.
-  if (!context.Artifact("bzImage").DownloadTo("kernel").ok()) {
+  if (std::optional<std::string> filepath = context.GetFilepath()) {
+    CF_EXPECT(context.Artifact(*filepath).DownloadTo("kernel"));
+  } else if (!context.Artifact("bzImage").DownloadTo("kernel").has_value()) {
+    // If the kernel is from an arm/aarch64 build, the artifact will be called
+    // Image.
     CF_EXPECT(context.Artifact("Image").DownloadTo("kernel"));
   }
 
   // Certain kernel builds do not have corresponding ramdisks.
-  if (!context.Artifact("initramfs.img").Download().ok()) {
+  if (!context.Artifact("initramfs.img").Download().has_value()) {
     VLOG(0) << "No initramfs.img for kernel build, ignoring";
   }
   return {};
@@ -319,12 +358,15 @@ Result<void> FetchKernelTarget(FetchBuildContext context) {
 
 Result<void> FetchBootTarget(FetchBuildContext& context,
                              bool keep_downloaded_archives) {
-  std::string img_zip = context.GetBuildZipName("img");
-  std::string to_download = context.GetFilepath().value_or(img_zip);
+  const std::optional<std::string> filepath = context.GetFilepath();
+  const std::string to_download =
+      filepath.has_value()
+          ? *filepath
+          : CF_EXPECT(context.GetBuildZipName(BuildZipKind::kImages));
   FetchArtifact artifact = context.Artifact(to_download);
   CF_EXPECT(artifact.Download());
 
-  if (to_download == img_zip) {
+  if (!filepath.has_value()) {
     CF_EXPECT(artifact.ExtractOne("boot.img"));
     CF_EXPECT(artifact.ExtractOne("vendor_boot.img"));
     if (!keep_downloaded_archives) {
@@ -336,9 +378,13 @@ Result<void> FetchBootTarget(FetchBuildContext& context,
 }
 
 Result<void> FetchBootloaderTarget(FetchBuildContext& context) {
-  // If the bootloader is from an arm/aarch64 build, the artifact will be of
-  // filetype bin.
-  if (!context.Artifact("u-boot.rom").DownloadTo("bootloader").ok()) {
+  if (std::optional<std::string> filepath = context.GetFilepath()) {
+    CF_EXPECT(context.Artifact(*filepath).DownloadTo("bootloader"));
+  } else if (!context.Artifact("u-boot.rom")
+                  .DownloadTo("bootloader")
+                  .has_value()) {
+    // If the bootloader is from an arm/aarch64 build, the artifact will be of
+    // filetype bin.
     CF_EXPECT(context.Artifact("u-boot.bin").DownloadTo("bootloader"));
   }
   return {};
@@ -460,26 +506,34 @@ Result<FetchResult> Fetch(const FetchFlags& flags,
 
   FetchTracer tracer;
   FetchTracer::Trace prefetch_trace = tracer.NewTrace("PreFetch actions");
-  CF_EXPECT(UpdateTargetsWithBuilds(downloaders.AndroidBuild(), targets));
+  CF_EXPECT(UpdateTargetsWithBuilds(downloaders.Builds(), targets));
   std::optional<Build> fallback_host_build = std::nullopt;
   if (!targets.empty()) {
     fallback_host_build = targets[0].builds.default_build;
   }
-  const auto host_target_build = CF_EXPECT(GetHostBuild(
-      downloaders.AndroidBuild(), host_target, fallback_host_build));
+  const Build host_target_build = CF_EXPECT(
+      GetHostBuild(downloaders.Builds(), host_target, fallback_host_build));
   prefetch_trace.CompletePhase("GetBuilds");
 
-  auto host_package_future = std::async(
-      std::launch::async, FetchHostPackage,
-      std::ref(downloaders.AndroidBuild()), std::cref(host_target_build),
-      std::cref(host_target.host_tools_directory),
-      std::cref(flags.keep_downloaded_archives),
-      std::cref(flags.host_substitutions), tracer.NewTrace("Host Package"));
+  std::future<Result<void>> host_package_future;
+  if (flags.host_substitutions == std::vector<std::string>{"only"}) {
+    host_package_future =
+        std::async(std::launch::async, SymlinkHostPackage,
+                   std::cref(host_target.host_tools_directory));
+  } else {
+    CF_EXPECT(CheckHostPackagePresent(host_target_build));
+    host_package_future = std::async(
+        std::launch::async, FetchHostPackage, std::ref(downloaders.Builds()),
+        std::cref(host_target_build),
+        std::cref(host_target.host_tools_directory),
+        std::cref(flags.keep_downloaded_archives),
+        std::cref(flags.host_substitutions), tracer.NewTrace("Host Package"));
+  }
   size_t count = 1;
   FetchResult fetch_result;
   for (const auto& target : targets) {
     FetcherConfig config;
-    FetchContext fetch_context(downloaders.AndroidBuild(), target.directories,
+    FetchContext fetch_context(downloaders.Builds(), target.directories,
                                target.builds, config, tracer);
     LOG(INFO) << "Starting fetch to \"" << target.directories.root << "\"";
     CF_EXPECT(FetchTarget(fetch_context, target.download_flags,

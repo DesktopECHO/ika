@@ -16,14 +16,19 @@
 
 #include "cuttlefish/host/libs/image_aggregator/qcow2.h"
 
+#include <fcntl.h>
+#include <stdint.h>
+
+#include <memory>
 #include <string>
 #include <utility>
 
-#include "cuttlefish/common/libs/fs/shared_buf.h"
-#include "cuttlefish/common/libs/fs/shared_fd.h"
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/utils/cf_endian.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
-#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
+#include "cuttlefish/io/read_exact.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/managed_stdio.h"
+#include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
 
@@ -68,15 +73,13 @@ Result<Qcow2Image> Qcow2Image::Create(const std::string& crosvm_path,
 }
 
 Result<Qcow2Image> Qcow2Image::OpenExisting(std::string path) {
-  SharedFD fd = SharedFD::Open(path, O_CLOEXEC, O_RDONLY);
-  CF_EXPECT(fd->IsOpen(), fd->StrError());
+  Fd fd = CF_EXPECT(Fd::Open(path, O_CLOEXEC, O_RDONLY));
 
-  std::unique_ptr<Impl> impl(new Impl());
-  CF_EXPECT(impl.get());
+  std::unique_ptr<Impl> impl(CF_EXPECT(new Impl()));
 
-  CF_EXPECT_EQ(ReadExactBinary(fd, &impl->header_), sizeof(QcowHeader));
+  impl->header_ = CF_EXPECT(ReadExactBinary<QcowHeader>(fd));
 
-  std::string magic(reinterpret_cast<char*>(&impl->header_),
+  std::string magic(reinterpret_cast<char*>(&impl->header_.magic),
                     MagicString().size());
   CF_EXPECT_EQ(magic, MagicString());
 

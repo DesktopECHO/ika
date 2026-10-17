@@ -14,26 +14,33 @@
  * limitations under the License.
  */
 
-#include <string>
+#include <errno.h>
+#include <stdlib.h>
 
-#include <android-base/file.h>
-#include <android-base/strings.h>
-#include <fmt/format.h>
-#include <gflags/gflags.h>
+#include <string>
+#include <utility>
+
 #include "absl/log/check.h"
 #include "absl/log/log.h"
-#include "absl/strings/str_join.h"
+#include "absl/strings/str_cat.h"
+#include "android-base/file.h"
+#include "fmt/format.h"
+#include "gflags/gflags.h"
 
-#include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/environment.h"
-#include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/known_paths.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/common/libs/utils/tee_logging.h"
+#include "cuttlefish/files/directory_contents.h"
+#include "cuttlefish/files/directory_exists.h"
+#include "cuttlefish/files/file_exists.h"
+#include "cuttlefish/host/libs/config/config_utils.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/log_names/log_names.h"
+#include "cuttlefish/host/libs/zip/libzip_cc/archive.h"
 #include "cuttlefish/host/libs/zip/zip_file.h"
+#include "cuttlefish/posix/remove.h"
 #include "cuttlefish/posix/strerror.h"
+#include "cuttlefish/process/command.h"
 #include "cuttlefish/result/result.h"
 
 DEFINE_string(output, "host_bugreport.zip", "Where to write the output");
@@ -44,7 +51,7 @@ namespace {
 
 template <typename T>
 void LogError(Result<T> res) {
-  if (!res.ok()) {
+  if (!res.has_value()) {
     LOG(ERROR) << res.error().FormatForEnv(/* color = */ false);
   }
 }
@@ -125,8 +132,9 @@ Result<void> AddAdbBugreport(const CuttlefishConfig::InstanceSpecific& instance,
 // the fact that something was missing/inaccessible is still useful debugging
 // information.
 void TakeHostBugreport(const CuttlefishConfig* config, WritableZip& archive) {
-  LogError(AddFileAt(archive, config->AssemblyPath(kLogNameAssembleCvd),
-                     absl::StrCat("cuttlefish_assembly", "/", kLogNameAssembleCvd)));
+  LogError(
+      AddFileAt(archive, config->AssemblyPath(kLogNameAssembleCvd),
+                absl::StrCat("cuttlefish_assembly", "/", kLogNameAssembleCvd)));
   LogError(AddFileAt(archive, config->AssemblyPath("cuttlefish_config.json"),
                      "cuttlefish_assembly/cuttlefish_config.json"));
 
@@ -140,7 +148,7 @@ void TakeHostBugreport(const CuttlefishConfig* config, WritableZip& archive) {
     save("disk_config.txt");
     if (DirectoryExists(instance.PerInstancePath("logs"))) {
       auto result = DirectoryContents(instance.PerInstancePath("logs"));
-      if (result.ok()) {
+      if (result.has_value()) {
         for (const auto& log : result.value()) {
           save("logs/" + log);
         }
@@ -157,7 +165,7 @@ void TakeHostBugreport(const CuttlefishConfig* config, WritableZip& archive) {
 
     {
       auto result = DirectoryContents(instance.PerInstancePath("tombstones"));
-      if (result.ok()) {
+      if (result.has_value()) {
         for (const auto& tombstone : result.value()) {
           save("tombstones/" + tombstone);
         }
@@ -169,7 +177,7 @@ void TakeHostBugreport(const CuttlefishConfig* config, WritableZip& archive) {
 
     {
       auto result = DirectoryContents(instance.PerInstancePath("recording"));
-      if (result.ok()) {
+      if (result.has_value()) {
         for (const auto& recording : result.value()) {
           save("recording/" + recording);
         }
@@ -207,7 +215,7 @@ Result<void> CvdHostBugreportMain(int argc, char** argv) {
 
   LogError(WritableZip::Finalize(std::move(archive)));
 
-  if (Result<void> res = RemoveFile(log_filename); !res.ok()) {
+  if (Result<void, int> res = RemoveFile(log_filename); !res.has_value()) {
     LOG(INFO) << "Failed to remove host bug report log file '" << log_filename
               << "': " << res.error();
   }
@@ -220,6 +228,6 @@ Result<void> CvdHostBugreportMain(int argc, char** argv) {
 
 int main(int argc, char** argv) {
   auto result = cuttlefish::CvdHostBugreportMain(argc, argv);
-  CHECK(result.ok()) << result.error();
+  CHECK(result.has_value()) << result.error();
   return 0;
 }

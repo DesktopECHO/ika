@@ -26,14 +26,15 @@
 #include <vector>
 
 #include "absl/log/log.h"
-#include "absl/strings/str_cat.h"
 #include "absl/strings/numbers.h"
+#include "absl/strings/str_cat.h"
+#include "android-base/file.h"
 
 #include "cuttlefish/common/libs/utils/contains.h"
-#include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/common/libs/utils/proc_file_utils.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/commands/cvd/utils/common.h"
 #include "cuttlefish/host/libs/config/config_constants.h"
+#include "cuttlefish/process/proc_file_utils.h"
 
 namespace cuttlefish {
 namespace {
@@ -79,7 +80,7 @@ static Result<std::string> StopCvdPath(const RunCvdProcInfo& info) {
   if (info.android_host_out_) {
     auto result =
         SearchFilesInPath(info.android_host_out_.value() + "/bin", stop_bins);
-    if (result.ok()) {
+    if (result.has_value()) {
       return *result;
     }
     LOG(ERROR) << result.error();
@@ -92,7 +93,8 @@ static Result<std::string> StopCvdPath(const RunCvdProcInfo& info) {
   return SearchFilesInPath(cvd_dir, stop_bins);
 }
 
-static std::optional<std::string> HostOut(const cvd_common::Envs& envs) {
+static std::optional<std::string> HostOut(
+    const std::unordered_map<std::string, std::string>& envs) {
   if (auto it = envs.find(kAndroidHostOut); it != envs.end()) {
     return it->second;
   }
@@ -148,7 +150,7 @@ Result<std::vector<RunCvdProcInfo>> ExtractAllRunCvdInfo(
   run_cvd_proc_infos.reserve(run_cvd_pids.size());
   for (const auto run_cvd_pid : run_cvd_pids) {
     auto proc_info_result = ExtractRunCvdInfo(run_cvd_pid);
-    if (!proc_info_result.ok()) {
+    if (!proc_info_result.has_value()) {
       VLOG(0) << "Failed to fetch run_cvd process info for " << run_cvd_pid;
       // perhaps, not my process
       continue;
@@ -220,7 +222,7 @@ Result<std::vector<GroupProcInfo>> RunCvdProcessCollector::CollectInfo() {
       const auto& instance_run_cvd_pids = instance.pids_;
       for (const auto run_cvd_pid : instance_run_cvd_pids) {
         auto ppid_result = Ppid(run_cvd_pid);
-        if (!ppid_result.ok()) {
+        if (!ppid_result.has_value()) {
           VLOG(1) << "Failed to fetch the parent id of " << run_cvd_pid;
           continue;
         }

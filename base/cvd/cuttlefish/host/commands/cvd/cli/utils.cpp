@@ -15,40 +15,56 @@
  */
 
 #include "cuttlefish/host/commands/cvd/cli/utils.h"
-#include "cuttlefish/flag_parser/gflags_compat.h"
-#include "cuttlefish/flag_parser/flag.h"
 
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>  // IWYU pragma: keep: siginfo_t
+#include <stddef.h>
+#include <string.h>
+#ifdef __linux__
+#include <asm-generic/ioctls.h>  // IWYU pragma: keep: TIOCGWINSZ
+#endif
 #include <sys/ioctl.h>
 #include <unistd.h>
+
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_split.h"
 #include "absl/strings/strip.h"
 #include "android-base/file.h"
 #include "fmt/format.h"
 #include "fmt/ranges.h"  // NOLINT(misc-include-cleaner): version difference
 
-#include "cuttlefish/common/libs/fs/shared_fd.h"
+#include "cuttlefish/ansi_codes/terminal_colors.h"
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/utils/contains.h"
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/gflags_xml_parser.h"
-#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
 #include "cuttlefish/common/libs/utils/in_sandbox.h"
 #include "cuttlefish/common/libs/utils/users.h"
+#include "cuttlefish/files/file_exists.h"
+#include "cuttlefish/flag_parser/flag.h"
+#include "cuttlefish/host/commands/cvd/cli/command_request.h"
 #include "cuttlefish/host/commands/cvd/instances/config_path.h"
 #include "cuttlefish/host/commands/cvd/utils/common.h"
 #include "cuttlefish/host/libs/config/config_constants.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/managed_stdio.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
 
+// NOLINTNEXTLINE(misc-include-cleaner): <signal.h>
 Result<void> CheckProcessExitedNormally(siginfo_t infop,
                                         int expected_exit_code) {
+  // NOLINTNEXTLINE(misc-include-cleaner): <signal.h>
   if (infop.si_code == CLD_EXITED && infop.si_status == expected_exit_code) {
     return {};
   }
@@ -89,7 +105,7 @@ Result<Command> ConstructCommand(const ConstructCommandParam& param) {
   // used by subcommands when locating the CuttlefishConfig.
   if (param.envs.count(cuttlefish::kCuttlefishConfigEnvVarName) == 0) {
     auto config_path = GetCuttlefishConfigPath(param.home);
-    if (config_path.ok()) {
+    if (config_path.has_value()) {
       command.AddEnvironmentVariable(cuttlefish::kCuttlefishConfigEnvVarName,
                                      *config_path);
     }
@@ -100,22 +116,20 @@ Result<Command> ConstructCommand(const ConstructCommandParam& param) {
   }
 
   if (!param.working_dir.empty()) {
-    auto fd =
-        SharedFD::Open(param.working_dir, O_RDONLY | O_PATH | O_DIRECTORY);
-    CF_EXPECT(fd->IsOpen(), "Couldn't open \"" << param.working_dir
-                                               << "\": " << fd->StrError());
-    command.SetWorkingDirectory(fd);
+    command.SetWorkingDirectory(
+        CF_EXPECT(Fd::Open(param.working_dir, O_RDONLY | O_DIRECTORY)));
   }
   return {std::move(command)};
 }
 
 Result<Command> ConstructCvdHelpCommand(
-    const std::string& bin_file, cvd_common::Envs envs,
+    const std::string& bin_file,
+    std::unordered_map<std::string, std::string> envs,
     const std::vector<std::string>& subcmd_args,
     const CommandRequest& request) {
   auto client_pwd = CurrentDirectory();
   const auto home = (Contains(envs, "HOME") ? envs.at("HOME") : client_pwd);
-  cvd_common::Envs envs_copy{envs};
+  std::unordered_map<std::string, std::string> envs_copy{envs};
   envs_copy["HOME"] = AbsolutePath(home);
   auto android_host_out = CF_EXPECT(AndroidHostPath(envs));
   const auto bin_path = android_host_out + "/bin/" + bin_file;
@@ -126,16 +140,15 @@ Result<Command> ConstructCvdHelpCommand(
                                             .args = subcmd_args,
                                             .envs = std::move(envs_copy),
                                             .working_dir = client_pwd,
-                                            .command_name = bin_file
-  };
+                                            .command_name = bin_file};
   Command help_command = CF_EXPECT(ConstructCommand(construct_cmd_param));
   return help_command;
 }
 
 Result<Command> ConstructSiblingHelpCommand(
     const std::string& bin_name,
-    const cvd_common::Envs& env,
-    const cvd_common::Args& subcmd_args) {
+    const std::unordered_map<std::string, std::string>& env,
+    const std::vector<std::string>& subcmd_args) {
   std::string exec_dir = android::base::GetExecutableDirectory();
 
   std::string bin_path = exec_dir + "/" + bin_name;
@@ -145,7 +158,7 @@ Result<Command> ConstructSiblingHelpCommand(
 
   Command command(bin_name);
   command.SetExecutable(bin_path);
-  for (const auto& [var, value]: env) {
+  for (const auto& [var, value] : env) {
     if (var == kAndroidHostOut || var == kAndroidSoongHostOut) {
       // These variables will cause cvd_internal_start to find the wrong
       // assemble_cvd binary. $HOME could cause the same problem, but we need
@@ -154,7 +167,7 @@ Result<Command> ConstructSiblingHelpCommand(
     }
     command.AddEnvironmentVariable(var, value);
   }
-  for (const std::string& arg: subcmd_args) {
+  for (const std::string& arg : subcmd_args) {
     command.AddParameter(arg);
   }
   return command;
@@ -162,7 +175,7 @@ Result<Command> ConstructSiblingHelpCommand(
 
 Result<Command> ConstructCvdGenericNonHelpCommand(
     const ConstructNonHelpForm& request_form, const CommandRequest& request) {
-  cvd_common::Envs envs{request_form.envs};
+  std::unordered_map<std::string, std::string> envs{request_form.envs};
   envs["HOME"] = request_form.home;
   envs[kAndroidHostOut] = request_form.android_host_out;
   envs[kAndroidSoongHostOut] = request_form.android_host_out;
@@ -192,14 +205,14 @@ Result<Command> ConstructCvdGenericNonHelpCommand(
       .args = request_form.cmd_args,
       .envs = envs,
       .working_dir = CurrentDirectory(),
-      .command_name = request_form.bin_file
-  };
+      .command_name = request_form.bin_file};
   return CF_EXPECT(ConstructCommand(construct_cmd_param));
 }
 
-Result<std::vector<Flag>> GetSiblingCommandFlags(const std::string& bin_name,
-                                                 const cvd_common::Envs& env,
-                                                 cvd_common::Args args) {
+Result<std::vector<Flag>> GetSiblingCommandFlags(
+    const std::string& bin_name,
+    const std::unordered_map<std::string, std::string>& env,
+    std::vector<std::string> args) {
   // Remove help-like flags to ensure --helpxml takes effect
   std::erase_if(args, [](std::string_view arg) {
     if (!absl::ConsumePrefix(&arg, "-")) {
@@ -211,18 +224,18 @@ Result<std::vector<Flag>> GetSiblingCommandFlags(const std::string& bin_name,
     return arg.starts_with("help") || arg == "version" || arg == "h";
   });
   args.emplace_back("-helpxml");
-  Command command =
-      CF_EXPECT(ConstructSiblingHelpCommand(bin_name, env, args));
-  std::string stdout;
-  std::string stderr;
-  int res = RunWithManagedStdio(std::move(command), nullptr, &stdout, &stderr);
+  Command command = CF_EXPECT(ConstructSiblingHelpCommand(bin_name, env, args));
+  std::string stdout_str;
+  std::string stderr_str;
+  int res = RunWithManagedStdio(std::move(command), nullptr, &stdout_str,
+                                &stderr_str);
   // gflags returns exit code 1 when --help is given
   if (res != 0 && res != 1) {
     return CF_ERRF("Failed to execute start binary, exit code: {}, stderr: {}",
-                   res, stderr);
+                   res, stderr_str);
   }
   std::vector<GflagDescription> gflag_descs =
-      CF_EXPECT(ParseGflagsXmlHelp(stdout));
+      CF_EXPECT(ParseGflagsXmlHelp(stdout_str));
   std::vector<Flag> flags;
   for (const GflagDescription& desc : gflag_descs) {
     if (desc.name != "help" &&
@@ -245,27 +258,6 @@ Result<std::vector<Flag>> GetSiblingCommandFlags(const std::string& bin_name,
   return flags;
 }
 
-static constexpr char kTerminalBoldRed[] = "\033[0;1;31m";
-static constexpr char kTerminalCyan[] = "\033[0;36m";
-static constexpr char kTerminalRed[] = "\033[0;31m";
-static constexpr char kTerminalReset[] = "\033[0m";
-
-std::string_view TerminalColors::Reset() const {
-  return is_tty_ ? kTerminalReset : "";
-}
-
-std::string_view TerminalColors::BoldRed() const {
-  return is_tty_ ? kTerminalBoldRed : "";
-}
-
-std::string_view TerminalColors::Red() const {
-  return is_tty_ ? kTerminalRed : "";
-}
-
-std::string_view TerminalColors::Cyan() const {
-  return is_tty_ ? kTerminalCyan : "";
-}
-
 std::string NoGroupMessage(const CommandRequest& request) {
   TerminalColors colors(isatty(1));
   return fmt::format("{}Command `{}{}{}{}` is not applicable: {}{}{}",
@@ -280,6 +272,17 @@ Result<TerminalSize> GetTerminalSize() {
   CF_EXPECT(ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) != -1,
             "Failed to get terminal size: " << strerror(errno));
   return TerminalSize{.rows = w.ws_row, .columns = w.ws_col};
+}
+
+std::vector<std::string> ExpandProductPaths(const std::string& product_path,
+                                            size_t num_instances) {
+  const std::vector<std::string_view> split = absl::StrSplit(product_path, ',');
+  std::vector<std::string> expanded;
+  expanded.reserve(num_instances);
+  for (size_t i = 0; i < num_instances; i++) {
+    expanded.emplace_back(i < split.size() ? split[i] : split[0]);
+  }
+  return expanded;
 }
 
 }  // namespace cuttlefish

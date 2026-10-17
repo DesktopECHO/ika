@@ -160,7 +160,7 @@ override_dh_auto_build:
 	         --cxxopt=-Wno-thread-safety-reference-return \
 	         --host_cxxopt=-Wno-thread-safety-reference-return \
          -c opt ${compilation_mode} ${conlyopts} ${copts} ${cxxopts} ${linkopts} \
-	         'cuttlefish/package:cvd' 'cuttlefish/package:defaults' 'cuttlefish/package:metrics' \
+	         'cuttlefish/package:common' 'cuttlefish/package:defaults' 'cuttlefish/package:metrics' \
 	         --spawn_strategy=local \
 	         --workspace_status_command=../stamp_helper.sh \
 	         --build_tag_filters=-clang-tidy; then \
@@ -183,6 +183,10 @@ override_dh_auto_build:
 	  readelf -d $(crosvm_bin) | grep 'Shared library' >&2; \
 	  exit 1; \
 	fi
+	# https://github.com/bazelbuild/bazel/issues/5588
+	# The package directories are Bazel tree artifacts, which Bazel leaves
+	# read-only. ika-base.install inserts additional files into them.
+	chmod -R u+w cvd/bazel-bin/cuttlefish/package/cuttlefish-common
 	dh_auto_build
 	# Build the scrcpy viewer. The prebuilt scrcpy-server APK is staged at
 	# repo_root/scrcpy/scrcpy-server by tools/buildutils/build_packages.sh.
@@ -251,9 +255,20 @@ override_dh_install:
 	    ${cuttlefish_common}/share/icons/hicolor/256x256/apps/scrcpy.png \
 	    debian/ika-base/usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
 
+# Some bundled shared libraries lack standard Debian shlib metadata.
+.PHONY: override_dh_shlibdeps
+override_dh_shlibdeps:
+	dh_shlibdeps --dpkg-shlibdeps-params=--ignore-missing-info
+
 # Repair output files bazel actions made executable
 .PHONY: override_dh_fixperms
 override_dh_fixperms:
 	dh_fixperms
 	chmod -x ${cuttlefish_common}/bin/*.json
 	find ${cuttlefish_common}/etc -type f -exec chmod -x '{}' ';'
+
+# Deal with unwriteable files left in the output directory
+.PHONY: override_dh_clean
+override_dh_clean:
+	-chmod -R +w ${cuttlefish_common}
+	dh_clean

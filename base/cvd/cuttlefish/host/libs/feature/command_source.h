@@ -15,14 +15,16 @@
 
 #pragma once
 
+#include <ostream>
 #include <set>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include <fruit/fruit.h>
+#include "fruit/fruit.h"
 
-#include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/libs/feature/feature.h"
+#include "cuttlefish/process/command.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -32,6 +34,21 @@ enum class ProcessCategory {
   kCriticalSupport,
   kVmm,
 };
+
+inline constexpr std::string_view format_as(ProcessCategory category) {
+  switch (category) {
+    case ProcessCategory::kVmm:
+      return "vmm";
+    case ProcessCategory::kCriticalSupport:
+      return "critical support";
+    case ProcessCategory::kNonCriticalSupport:
+      return "non-critical support";
+  }
+}
+
+inline std::ostream& operator<<(std::ostream& out, ProcessCategory category) {
+  return out << format_as(category);
+}
 
 struct MonitorCommand {
   Command command;
@@ -54,10 +71,10 @@ struct MonitorCommand {
   MonitorCommand(Command command, ProcessCategory category)
       : command(std::move(command)),
         is_critical(category != ProcessCategory::kNonCriticalSupport),
-    category(category),
-    expected_exit_codes(category == ProcessCategory::kVmm
-          ? std::set<int>{0}
-          : std::set<int>{}) {}
+        category(category),
+        expected_exit_codes(category == ProcessCategory::kVmm
+                                ? std::set<int>{0}
+                                : std::set<int>{}) {}
 };
 
 class CommandSource : public virtual SetupFeature {

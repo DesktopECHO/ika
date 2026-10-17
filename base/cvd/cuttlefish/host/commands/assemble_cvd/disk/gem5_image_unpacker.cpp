@@ -16,10 +16,17 @@
 
 #include "cuttlefish/host/commands/assemble_cvd/disk/gem5_image_unpacker.h"
 
+#include <errno.h>
+#include <fcntl.h>  // IWYU pragma: keep
+#include <sys/stat.h>
+
+#include <string>
+
 #include "absl/log/log.h"
 #include "android-base/file.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/files/copy.h"
 #include "cuttlefish/host/commands/assemble_cvd/boot_image_utils.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/boot_image.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"

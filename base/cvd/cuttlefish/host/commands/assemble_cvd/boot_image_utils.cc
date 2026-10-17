@@ -16,26 +16,34 @@
 
 #include "cuttlefish/host/commands/assemble_cvd/boot_image_utils.h"
 
+#include <fcntl.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
-#include <unistd.h>
 
+#include <array>
 #include <fstream>
+#include <ios>
+#include <memory>
 #include <optional>
 #include <regex>
 #include <string>
+#include <string_view>
+#include <utility>
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/strings/str_replace.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/commands/assemble_cvd/boot_image/boot_image.h"
 #include "cuttlefish/host/commands/assemble_cvd/boot_image/boot_image_builder.h"
 #include "cuttlefish/host/commands/assemble_cvd/boot_image/vendor_boot_image.h"
 #include "cuttlefish/host/commands/assemble_cvd/boot_image/vendor_boot_image_builder.h"
+#include "cuttlefish/host/commands/assemble_cvd/disk/generate_persistent_bootconfig.h"
 #include "cuttlefish/host/libs/avb/avb.h"
 #include "cuttlefish/host/libs/avb/parser.h"
 #include "cuttlefish/host/libs/config/config_utils.h"
@@ -47,9 +55,13 @@
 #include "cuttlefish/io/length.h"
 #include "cuttlefish/io/lz4_legacy.h"
 #include "cuttlefish/io/native_filesystem.h"
-#include "cuttlefish/io/shared_fd.h"
+#include "cuttlefish/io/reader.h"
 #include "cuttlefish/io/string.h"
 #include "cuttlefish/io/write_exact.h"
+#include "cuttlefish/io/writer.h"
+#include "cuttlefish/posix/remove.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/execute.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -64,13 +76,12 @@ constexpr char kSystemLz4Binary[] = "/usr/bin/lz4";
 
 Result<void> RunMkBootFs(const std::string& input_dir,
                          const std::string& output) {
-  SharedFD output_fd = SharedFD::Open(output, O_CREAT | O_RDWR | O_TRUNC, 0644);
-  CF_EXPECTF(output_fd->IsOpen(), "Failed to open '{}': '{}'", output,
-             output_fd->StrError());
+  SharedFD output_fd =
+      CF_EXPECT(Fd::Open(output, O_CREAT | O_RDWR | O_TRUNC, 0644));
 
   int success = Command(HostBinaryPath("mkbootfs"))
                     .AddParameter(input_dir)
-                    .RedirectStdIO(Subprocess::StdIOChannel::kStdOut, output_fd)
+                    .RedirectStdIO(Command::StdIoChannel::kStdOut, output_fd)
                     .Start()
                     .Wait();
   CF_EXPECT_EQ(success, 0, "`mkbootfs` failed.");
@@ -95,40 +106,43 @@ Result<void> RunSystemLz4Decompress(const std::string& input,
              "Missing '{}'. Install the distro lz4 package.",
              kSystemLz4Binary);
 
-  SharedFD output_fd = SharedFD::Open(output, O_CREAT | O_RDWR | O_TRUNC, 0644);
-  CF_EXPECTF(output_fd->IsOpen(), "Failed to open '{}': '{}'", output,
-             output_fd->StrError());
+  Fd output_fd =
+      CF_EXPECTF(Fd::Open(output, O_CREAT | O_RDWR | O_TRUNC, 0644),
+                 "Failed to open '{}'", output);
 
   int success = Command(kSystemLz4Binary)
                     .AddParameter("-d")
                     .AddParameter("-c")
                     .AddParameter(input)
-                    .RedirectStdIO(Subprocess::StdIOChannel::kStdOut,
-                                   output_fd)
+                    .RedirectStdIO(Command::StdIoChannel::kStdOut,
+                                   std::move(output_fd))
                     .Start()
                     .Wait();
   CF_EXPECT_EQ(success, 0, "`/usr/bin/lz4` failed to decompress ramdisk.");
   return {};
 }
 
-// Though it is just as fast to overwrite the existing boot images with the newly generated ones,
-// the cuttlefish composite disk generator checks the age of each of the components and
-// regenerates the disk outright IF any one of the components is younger/newer than the current
-// composite disk. If this file overwrite occurs, that condition is fulfilled. This action then
-// causes data in the userdata partition from previous boots to be lost (which is not expected by
-// the user if they've been booting the same kernel/ramdisk combination repeatedly).
-// Consequently, the file is checked for differences and ONLY overwritten if there is a diff.
-bool DeleteTmpFileIfNotChanged(const std::string& tmp_file, const std::string& current_file) {
+// Though it is just as fast to overwrite the existing boot images with the
+// newly generated ones, the cuttlefish composite disk generator checks the age
+// of each of the components and regenerates the disk outright IF any one of the
+// components is younger/newer than the current composite disk. If this file
+// overwrite occurs, that condition is fulfilled. This action then causes data
+// in the userdata partition from previous boots to be lost (which is not
+// expected by the user if they've been booting the same kernel/ramdisk
+// combination repeatedly). Consequently, the file is checked for differences
+// and ONLY overwritten if there is a diff.
+bool DeleteTmpFileIfNotChanged(const std::string& tmp_file,
+                               const std::string& current_file) {
   if (!FileExists(current_file) ||
       ReadFile(current_file) != ReadFile(tmp_file)) {
-    if (!RenameFile(tmp_file, current_file).ok()) {
+    if (!RenameFile(tmp_file, current_file).has_value()) {
       LOG(ERROR) << "Unable to delete " << current_file;
       return false;
     }
     VLOG(0) << "Updated " << current_file;
   } else {
     VLOG(0) << "Didn't update " << current_file;
-    if (Result<void> res = RemoveFile(tmp_file); !res.ok()) {
+    if (Result<void, int> res = RemoveFile(tmp_file); !res.has_value()) {
       LOG(ERROR) << res.error();
     }
   }
@@ -150,8 +164,10 @@ Result<void> RepackVendorRamdisk(const std::string& kernel_modules_ramdisk_path,
 
   CF_EXPECT(PackRamdisk(ramdisk_stage_dir, stripped_ramdisk_path));
 
-  // Concatenates the stripped ramdisk and input ramdisk and places the result at new_ramdisk_path
-  std::ofstream final_rd(new_ramdisk_path, std::ios_base::binary | std::ios_base::trunc);
+  // Concatenates the stripped ramdisk and input ramdisk and places the result
+  // at new_ramdisk_path
+  std::ofstream final_rd(new_ramdisk_path,
+                         std::ios_base::binary | std::ios_base::trunc);
   std::ifstream ramdisk_a(stripped_ramdisk_path, std::ios_base::binary);
   std::ifstream ramdisk_b(kernel_modules_ramdisk_path, std::ios_base::binary);
   final_rd << ramdisk_a.rdbuf() << ramdisk_b.rdbuf();
@@ -161,9 +177,9 @@ Result<void> RepackVendorRamdisk(const std::string& kernel_modules_ramdisk_path,
 
 bool IsCpioArchive(const std::string& path) {
   static constexpr std::string_view CPIO_MAGIC = "070701";
-  auto fd = SharedFD::Open(path, O_RDONLY);
+  Fd fd = Fd::Open(path, O_RDONLY).value_or(Fd());
   std::array<char, CPIO_MAGIC.size()> buf{};
-  if (fd->Read(buf.data(), buf.size()) != CPIO_MAGIC.size()) {
+  if (fd.Read(buf.data(), buf.size()) != CPIO_MAGIC.size()) {
     return false;
   }
   return memcmp(buf.data(), CPIO_MAGIC.data(), CPIO_MAGIC.size()) == 0;
@@ -183,12 +199,13 @@ Result<void> UnpackRamdisk(const std::string& original_ramdisk_path,
   NativeFilesystem fs;
 
   const std::string output_path = original_ramdisk_path + kCpioExt;
-  (void) fs.DeleteFile(output_path);
+  (void)fs.DeleteFile(output_path);
   if (IsCpioArchive(original_ramdisk_path)) {
     std::unique_ptr<Reader> ramdisk_input =
         CF_EXPECT(fs.OpenReadOnly(original_ramdisk_path));
     CF_EXPECT(ramdisk_input.get());
-    std::unique_ptr<WriterSeeker> output = CF_EXPECT(fs.CreateFile(output_path));
+    std::unique_ptr<WriterSeeker> output =
+        CF_EXPECT(fs.CreateFile(output_path));
     CF_EXPECTF(Copy(*ramdisk_input, *output), "Failed to copy '{}' to '{}'",
                original_ramdisk_path, output_path);
   } else {
@@ -197,11 +214,12 @@ Result<void> UnpackRamdisk(const std::string& original_ramdisk_path,
 
   CF_EXPECT(EnsureDirectoryExists(ramdisk_stage_dir));
 
-  SharedFD input = SharedFD::Open(original_ramdisk_path + kCpioExt, O_RDONLY);
+  SharedFD input =
+      Fd::Open(original_ramdisk_path + kCpioExt, O_RDONLY).value_or(Fd());
   Command(CpioBinary())
       .AddParameter("-idu")
       .SetWorkingDirectory(ramdisk_stage_dir)
-      .RedirectStdIO(Subprocess::StdIOChannel::kStdIn, input)
+      .RedirectStdIO(Command::StdIoChannel::kStdIn, input)
       .Start()
       .Wait();
   return {};
@@ -226,12 +244,10 @@ Result<void> UnpackBootImage(const std::string& boot_image_path,
 
 Result<VendorBootImage> UnpackVendorBootImageIfNotUnpacked(
     const std::string& vendor_boot_image_path, const std::string& unpack_dir) {
-  SharedFD vendor_boot_fd = SharedFD::Open(vendor_boot_image_path, O_RDONLY);
-  CF_EXPECTF(vendor_boot_fd->IsOpen(), "Failed to open '{}': '{}'",
-             vendor_boot_image_path, vendor_boot_fd->StrError());
+  Fd vendor_boot_fd = CF_EXPECT(Fd::Open(vendor_boot_image_path, O_RDONLY));
 
   VendorBootImage vendor_boot = CF_EXPECT(
-      VendorBootImage::Read(std::make_unique<SharedFdIo>(vendor_boot_fd)));
+      VendorBootImage::Read(std::make_unique<Fd>(std::move(vendor_boot_fd))));
   // The ramdisk file is created during the first unpack. If it's already there,
   // a unpack has occurred and there's no need to repeat the process.
   std::string concat_file_path = unpack_dir + "/" + kConcatenatedVendorRamdisk;
@@ -240,30 +256,21 @@ Result<VendorBootImage> UnpackVendorBootImageIfNotUnpacked(
   }
 
   // Concatenates all vendor ramdisk into one single ramdisk.
-  SharedFD concat_file = SharedFD::Creat(concat_file_path, 0666);
-  CF_EXPECTF(concat_file->IsOpen(),
-             "Unable to create concatenated vendor ramdisk file: '{}'",
-             concat_file->StrError());
-  SharedFdIo concat_file_io(concat_file);
+  Fd concat_file = CF_EXPECT(Fd::Creat(concat_file_path, 0666));
+
   ReadWindowView ramdisk_in = vendor_boot.VendorRamdisk();
-  CF_EXPECT(Copy(ramdisk_in, concat_file_io));
+  CF_EXPECT(Copy(ramdisk_in, concat_file));
 
-  std::string dtb_path = unpack_dir + "/dtb";
-  SharedFD dtb_fd = SharedFD::Creat(dtb_path, 0644);
-  CF_EXPECTF(dtb_fd->IsOpen(), "Failed to open '{}': '{}'", dtb_path,
-             dtb_fd->StrError());
-  SharedFdIo dtb_io(dtb_fd);
+  Fd dtb_fd = CF_EXPECT(Fd::Creat(unpack_dir + "/dtb", 0644));
+
   ReadWindowView dtb_in = vendor_boot.Dtb();
-  CF_EXPECT(Copy(dtb_in, dtb_io));
+  CF_EXPECT(Copy(dtb_in, dtb_fd));
 
-  std::string bootconfig_path = unpack_dir + "/bootconfig";
-  SharedFD bootconfig_fd = SharedFD::Creat(bootconfig_path, 0644);
-  CF_EXPECTF(bootconfig_fd->IsOpen(), "Failed to open '{}': '{}'",
-             bootconfig_path, bootconfig_fd->StrError());
-  SharedFdIo bootconfig_io(bootconfig_fd);
+  Fd bootconfig_fd = CF_EXPECT(Fd::Creat(unpack_dir + "/bootconfig", 0644));
+
   std::optional<ReadWindowView> bootconfig_in = vendor_boot.Bootconfig();
   if (bootconfig_in.has_value()) {
-    CF_EXPECT(Copy(*bootconfig_in, bootconfig_io));
+    CF_EXPECT(Copy(*bootconfig_in, bootconfig_fd));
   }
 
   return vendor_boot;
@@ -305,7 +312,8 @@ Result<void> RepackBootImage(const std::string& new_kernel_path,
   } else {
     CF_EXPECT(Avb().AddHashFooter(tmp_boot_image_path, "boot", 0));
   }
-  CF_EXPECT(DeleteTmpFileIfNotChanged(tmp_boot_image_path, new_boot_image_path));
+  CF_EXPECT(
+      DeleteTmpFileIfNotChanged(tmp_boot_image_path, new_boot_image_path));
 
   return {};
 }
@@ -385,10 +393,9 @@ Result<void> RepackVendorBootImageWithEmptyRamdisk(
     const std::string& vendor_boot_image_path,
     const std::string& new_vendor_boot_image_path,
     const std::string& unpack_dir, bool bootconfig_supported) {
-  std::string empty_ramdisk_path = unpack_dir + "/empty_ramdisk";
-  SharedFD empty_ramdisk = SharedFD::Creat(empty_ramdisk_path, 0666);
-  CF_EXPECTF(empty_ramdisk->IsOpen(), "Failed to open '{}': '{}'",
-             empty_ramdisk_path, empty_ramdisk->StrError());
+  const std::string empty_ramdisk_path = unpack_dir + "/empty_ramdisk";
+  CF_EXPECT(Fd::Creat(empty_ramdisk_path, 0666));
+
   CF_EXPECT(RepackVendorBootImage(empty_ramdisk_path, vendor_boot_image_path,
                                   new_vendor_boot_image_path, unpack_dir,
                                   bootconfig_supported));
@@ -404,22 +411,23 @@ Result<void> RepackGem5BootImage(
   std::ofstream final_rd(initrd_path,
                          std::ios_base::binary | std::ios_base::trunc);
 
-  std::ifstream boot_ramdisk(unpack_dir + "/ramdisk",
-                             std::ios_base::binary);
+  std::ifstream boot_ramdisk(unpack_dir + "/ramdisk", std::ios_base::binary);
   std::string new_ramdisk_path = unpack_dir + "/vendor_ramdisk_repacked";
-  // Test to make sure new ramdisk hasn't already been repacked if input ramdisk is provided
+  // Test to make sure new ramdisk hasn't already been repacked if input ramdisk
+  // is provided
   if (FileExists(input_ramdisk_path) && !FileExists(new_ramdisk_path)) {
     CF_EXPECT(RepackVendorRamdisk(input_ramdisk_path,
                                   unpack_dir + "/" + kConcatenatedVendorRamdisk,
                                   new_ramdisk_path, unpack_dir));
   }
-  std::ifstream vendor_boot_ramdisk(FileExists(new_ramdisk_path) ? new_ramdisk_path : unpack_dir +
-                                    "/concatenated_vendor_ramdisk",
-                                    std::ios_base::binary);
+  std::ifstream vendor_boot_ramdisk(
+      FileExists(new_ramdisk_path)
+          ? new_ramdisk_path
+          : unpack_dir + "/concatenated_vendor_ramdisk",
+      std::ios_base::binary);
 
-  std::ifstream vendor_boot_bootconfig(unpack_dir + "/bootconfig",
-                                       std::ios_base::binary |
-                                       std::ios_base::ate);
+  std::ifstream vendor_boot_bootconfig(
+      unpack_dir + "/bootconfig", std::ios_base::binary | std::ios_base::ate);
 
   auto vb_size = vendor_boot_bootconfig.tellg();
   vendor_boot_bootconfig.seekg(0);
@@ -437,9 +445,9 @@ Result<void> RepackGem5BootImage(
   // and trailer bytes
 
   std::string bootconfig =
-    "androidboot.slot_suffix=_a\n"
-    "androidboot.force_normal_boot=1\n"
-    "androidboot.verifiedbootstate=orange\n";
+      "androidboot.slot_suffix=_a\n"
+      "androidboot.force_normal_boot=1\n"
+      "androidboot.verifiedbootstate=orange\n";
   auto bootconfig_size = bootconfig.size();
   bootconfig.resize(bootconfig_size + (uint64_t)(vb_size + pb_size), '\0');
   vendor_boot_bootconfig.read(&bootconfig[bootconfig_size], vb_size);
@@ -448,12 +456,11 @@ Result<void> RepackGem5BootImage(
   bootconfig.erase(bootconfig.find_last_not_of('\0'));
 
   // Write out the ramdisks and bootconfig blocks
-  final_rd << boot_ramdisk.rdbuf() << vendor_boot_ramdisk.rdbuf()
-           << bootconfig;
+  final_rd << boot_ramdisk.rdbuf() << vendor_boot_ramdisk.rdbuf() << bootconfig;
 
   // Append bootconfig length
   bootconfig_size = bootconfig.size();
-  final_rd.write(reinterpret_cast<const char *>(&bootconfig_size),
+  final_rd.write(reinterpret_cast<const char*>(&bootconfig_size),
                  sizeof(uint32_t));
 
   // Append bootconfig checksum
@@ -461,7 +468,7 @@ Result<void> RepackGem5BootImage(
   for (auto i = 0; i < bootconfig_size; i++) {
     bootconfig_csum += bootconfig[i];
   }
-  final_rd.write(reinterpret_cast<const char *>(&bootconfig_csum),
+  final_rd.write(reinterpret_cast<const char*>(&bootconfig_csum),
                  sizeof(uint32_t));
 
   // Append bootconfig trailer
@@ -484,7 +491,7 @@ Result<std::string> ReadAndroidVersionFromBootImage(
       avb_parser.LookupProperty("com.android.build.boot.os_version");
   // if the OS version is "None", or the prop does not exist, it wasn't set
   // when the boot image was made.
-  if (!os_version.ok() || *os_version == "None") {
+  if (!os_version.has_value() || *os_version == "None") {
     LOG(INFO) << "Could not extract os version from " << boot_image_path
               << ". Defaulting to 0.0.0.";
     return "0.0.0";
@@ -495,4 +502,4 @@ Result<std::string> ReadAndroidVersionFromBootImage(
              "Version string is not a valid version: '{}'", *os_version);
   return os_version;
 }
-} // namespace cuttlefish
+}  // namespace cuttlefish

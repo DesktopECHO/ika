@@ -13,24 +13,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <fcntl.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <iostream>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <set>
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
-#include "absl/strings/str_split.h"
-#include <gflags/gflags.h>
 #include "absl/log/log.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
+#include "fmt/format.h"
+#include "fruit/component.h"
+#include "fruit/injector.h"
+#include "gflags/gflags.h"
 
-#include "cuttlefish/common/libs/fs/shared_buf.h"
-#include "cuttlefish/common/libs/fs/shared_fd.h"
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/utils/contains.h"
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/in_sandbox.h"
 #include "cuttlefish/common/libs/utils/known_paths.h"
 #include "cuttlefish/common/libs/utils/tee_logging.h"
+#include "cuttlefish/files/directory_contents.h"
+#include "cuttlefish/files/directory_exists.h"
+#include "cuttlefish/files/file_exists.h"
+#include "cuttlefish/files/is_directory_empty.h"
+#include "cuttlefish/files/recursively_remove_directory.h"
 #include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/flag_parser/gflags_compat.h"
 #include "cuttlefish/host/commands/assemble_cvd/android_build/android_build.h"
@@ -40,11 +58,13 @@
 #include "cuttlefish/host/commands/assemble_cvd/clean.h"
 #include "cuttlefish/host/commands/assemble_cvd/create_dynamic_disk_files.h"
 #include "cuttlefish/host/commands/assemble_cvd/disk/ap_composite_disk.h"
+#include "cuttlefish/host/commands/assemble_cvd/disk/chromeos_state.h"
 #include "cuttlefish/host/commands/assemble_cvd/disk/factory_reset_protected.h"
 #include "cuttlefish/host/commands/assemble_cvd/disk/image_file.h"
 #include "cuttlefish/host/commands/assemble_cvd/disk/metadata_image.h"
 #include "cuttlefish/host/commands/assemble_cvd/disk/misc_image.h"
 #include "cuttlefish/host/commands/assemble_cvd/disk/os_composite_disk.h"
+#include "cuttlefish/host/commands/assemble_cvd/disk_builder.h"
 #include "cuttlefish/host/commands/assemble_cvd/display.h"
 #include "cuttlefish/host/commands/assemble_cvd/flag_feature.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags.h"
@@ -56,6 +76,7 @@
 #include "cuttlefish/host/commands/assemble_cvd/flags/vendor_boot_image.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/vm_manager.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags_defaults.h"
+#include "cuttlefish/host/commands/assemble_cvd/guest_config.h"
 #include "cuttlefish/host/commands/assemble_cvd/instance_image_files.h"
 #include "cuttlefish/host/commands/assemble_cvd/media.h"
 #include "cuttlefish/host/commands/assemble_cvd/required_directories.h"
@@ -63,15 +84,23 @@
 #include "cuttlefish/host/commands/assemble_cvd/touchpad.h"
 #include "cuttlefish/host/libs/command_util/snapshot_utils.h"
 #include "cuttlefish/host/libs/config/adb/adb.h"
+#include "cuttlefish/host/libs/config/ap_boot_flow.h"
+#include "cuttlefish/host/libs/config/config_constants.h"
 #include "cuttlefish/host/libs/config/config_flag.h"
+#include "cuttlefish/host/libs/config/config_utils.h"
 #include "cuttlefish/host/libs/config/custom_actions.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/config/defaults/defaults.h"
 #include "cuttlefish/host/libs/config/fastboot/fastboot.h"
 #include "cuttlefish/host/libs/config/fetcher_configs.h"
+#include "cuttlefish/host/libs/config/file_source.h"
+#include "cuttlefish/host/libs/config/instance_nums.h"
 #include "cuttlefish/host/libs/config/log_string_to_dir.h"
+#include "cuttlefish/host/libs/feature/feature.h"
 #include "cuttlefish/host/libs/feature/inject.h"
 #include "cuttlefish/host/libs/log_names/log_names.h"
+#include "cuttlefish/io/write_exact.h"
+#include "cuttlefish/posix/remove.h"
 #include "cuttlefish/posix/symlink.h"
 #include "cuttlefish/pretty/vector.h"
 #include "cuttlefish/result/result.h"
@@ -103,18 +132,15 @@ Result<void> SaveConfig(const CuttlefishConfig& tmp_config_obj) {
 }
 
 #ifndef O_TMPFILE
-# define O_TMPFILE (020000000 | O_DIRECTORY)
+#define O_TMPFILE (020000000 | O_DIRECTORY)
 #endif
 
 Result<void> CreateLegacySymlinks(
     const CuttlefishConfig::InstanceSpecific& instance,
     const CuttlefishConfig::EnvironmentSpecific& environment) {
-  std::string log_files[] = {kLogNameKernel,
-                             kLogNameLauncher,
-                             kLogNameLogcat,
-                             kLogNameMetrics,
-                             kLogNameModemSimulator,
-                             kLogNameCrosvmOpenWrt,
+  std::string log_files[] = {kLogNameKernel,           kLogNameLauncher,
+                             kLogNameLogcat,           kLogNameMetrics,
+                             kLogNameModemSimulator,   kLogNameCrosvmOpenWrt,
                              kLogNameCrosvmOpenWrtBoot};
   for (const auto& log_file : log_files) {
     auto symlink_location = instance.PerInstancePath(log_file);
@@ -195,7 +221,7 @@ Result<std::set<std::string>> PreservingOnResume(
   if (creating_os_disk) {
     // not snapshot restore, must be --resume
     VLOG(0) << "Trying to resume previous session, but base images have "
-                 "changed.  Wiping overlay files.";
+               "changed.  Wiping overlay files.";
     if (InSandbox()) {
       return {{kLogNameLauncher}};
     } else {
@@ -211,6 +237,8 @@ Result<std::set<std::string>> PreservingOnResume(
   preserving.insert("ap_composite_gpt_footer.img");
   preserving.insert("ap_composite_gpt_header.img");
   preserving.insert("ap_overlay.img");
+  preserving.insert("metadata");
+  preserving.insert("misc");
   preserving.insert("os_composite_disk_config.txt");
   preserving.insert("os_composite_gpt_header.img");
   preserving.insert("os_composite_gpt_footer.img");
@@ -229,6 +257,7 @@ Result<std::set<std::string>> PreservingOnResume(
   preserving.insert("gatekeeper_secure");
   preserving.insert("gatekeeper_insecure");
   preserving.insert("keymint_secure_deletion_data");
+  preserving.insert("weaver_storage.json");
   preserving.insert("modem_nvram.json");
   preserving.insert("recording");
   preserving.insert("persistent_composite_disk_config.txt");
@@ -268,13 +297,13 @@ Result<std::set<std::string>> PreservingOnResume(
   return preserving;
 }
 
-Result<SharedFD> SetLogger(std::string runtime_dir_parent) {
-  SharedFD log_file;
+SharedFD SetLogger(std::string runtime_dir_parent) {
+  Result<SharedFD> log_file;
   if (InSandbox()) {
-    log_file = SharedFD::Open(
-        absl::StrCat(runtime_dir_parent, "/instances/cvd-1/logs/",
-                     kLogNameLauncher),
-        O_WRONLY | O_APPEND);
+    log_file =
+        Fd::Open(absl::StrCat(runtime_dir_parent, "/instances/cvd-1/logs/",
+                              kLogNameLauncher),
+                 O_WRONLY | O_APPEND);
   } else {
     while (runtime_dir_parent[runtime_dir_parent.size() - 1] == '/') {
       runtime_dir_parent =
@@ -282,22 +311,22 @@ Result<SharedFD> SetLogger(std::string runtime_dir_parent) {
     }
     runtime_dir_parent =
         runtime_dir_parent.substr(0, FLAGS_instance_dir.rfind('/'));
-    log_file = SharedFD::Open(runtime_dir_parent, O_WRONLY | O_TMPFILE,
-                              S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+    log_file = Fd::Open(runtime_dir_parent, O_WRONLY | O_TMPFILE,
+                        S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
   }
-  if (!log_file->IsOpen()) {
-    LOG(ERROR) << "Could not open initial log file: " << log_file->StrError();
+  if (!log_file.has_value()) {
+    LOG(ERROR) << "Could not open initial log file: " << log_file.error();
   } else {
     std::vector<SeverityTarget> log_destinations = {
         SeverityTarget::FromFd(SharedFD::Dup(2), MetadataLevel::ONLY_MESSAGE,
                                ConsoleSeverity()),
-        SeverityTarget::FromFd(log_file, MetadataLevel::FULL,
+        SeverityTarget::FromFd(*log_file, MetadataLevel::FULL,
                                LogFileSeverity()),
 
     };
     SetLoggers(std::move(log_destinations), "");
   }
-  return log_file;
+  return log_file.value_or(Fd());
 }
 
 Result<const CuttlefishConfig*> InitFilesystemAndCreateConfig(
@@ -328,24 +357,20 @@ Result<const CuttlefishConfig*> InitFilesystemAndCreateConfig(
 
       // Add a delimiter to each log file so that we can clearly tell what
       // happened before vs after the restore.
-      const std::string snapshot_delimiter =
+      static constexpr std::string_view kSnapshotDelimiter =
           "\n\n\n"
           "============ SNAPSHOT RESTORE POINT ============\n"
           "Lines above are pre-snapshot.\n"
           "Lines below are post-restore.\n"
           "================================================\n"
           "\n\n\n";
-      for (const auto& instance : config.Instances()) {
-        const auto log_files =
-            CF_EXPECT(DirectoryContents(instance.PerInstanceLogPath("")));
-        for (const auto& filename : log_files) {
-          const std::string path = instance.PerInstanceLogPath(filename);
-          auto fd = SharedFD::Open(path, O_WRONLY | O_APPEND);
-          CF_EXPECT(fd->IsOpen(),
-                    "failed to open " << path << ": " << fd->StrError());
-          const ssize_t n = WriteAll(fd, snapshot_delimiter);
-          CF_EXPECT(n == snapshot_delimiter.size(),
-                    "failed to write to " << path << ": " << fd->StrError());
+      for (const CuttlefishConfig::InstanceSpecific& ins : config.Instances()) {
+        const std::vector<std::string> log_files =
+            CF_EXPECT(DirectoryContents(ins.PerInstanceLogPath("")));
+        for (const std::string_view filename : log_files) {
+          const std::string path = ins.PerInstanceLogPath(filename);
+          Fd fd = CF_EXPECT(Fd::Open(path, O_WRONLY | O_APPEND));
+          CF_EXPECT(WriteExact(fd, kSnapshotDelimiter));
         }
       }
     }
@@ -353,50 +378,49 @@ Result<const CuttlefishConfig*> InitFilesystemAndCreateConfig(
     // take the max value of modem_simulator_instance_number in each instance
     // which is used for preserving/deleting iccprofile_for_simX.xml files
     int modem_simulator_count = 0;
+    for (const auto& instance : config.Instances()) {
+      if (instance.modem_simulator_instance_number() > modem_simulator_count) {
+        modem_simulator_count = instance.modem_simulator_instance_number();
+      }
+    }
 
     bool creating_os_disk = false;
-    // if any device needs to rebuild its composite disk,
-    // then don't preserve any files and delete everything.
-
-    std::vector<std::vector<std::unique_ptr<ImageFile>>> image_files =
-        InstanceImageFiles(config, boot_image);
-
     size_t index = 0;
-    for (const auto& instance : config.Instances()) {
-      CF_EXPECT_LE(index, image_files.size());
-      const std::vector<std::unique_ptr<ImageFile>>& instance_image_files =
-          image_files[index];
+    if (snapshot_path.empty()) {
+      // if any device needs to rebuild its composite disk,
+      // then don't preserve any files and delete everything.
 
-      Result<std::optional<ChromeOsStateImage>> chrome_os_state =
-          CF_EXPECT(ChromeOsStateImage::Reuse(instance));
-      if (chrome_os_state.ok()) {
+      std::vector<std::vector<std::unique_ptr<ImageFile>>> image_files =
+          InstanceImageFiles(config, boot_image);
+
+      for (const auto& instance : config.Instances()) {
+        CF_EXPECT_LE(index, image_files.size());
+        const std::vector<std::unique_ptr<ImageFile>>& instance_image_files =
+            image_files[index];
+
+        std::optional<ChromeOsStateImage> chrome_os_state =
+            CF_EXPECT(ChromeOsStateImage::Reuse(instance));
         Result<DiskBuilder> os_builder = OsCompositeDiskBuilder(
-            config, instance, *chrome_os_state, instance_image_files,
+            config, instance, chrome_os_state, instance_image_files,
             android_builds.ForIndex(index), system_image_dir);
-        if (!os_builder.ok()) {
+        if (!os_builder.has_value()) {
           creating_os_disk = true;
         } else {
           creating_os_disk |= CF_EXPECT(os_builder->WillRebuildCompositeDisk());
         }
-      } else {
-        creating_os_disk = true;
-        break;
+        if (instance.ap_boot_flow() != APBootFlow::None) {
+          auto ap_builder = ApCompositeDiskBuilder(config, instance);
+          creating_os_disk |= CF_EXPECT(ap_builder.WillRebuildCompositeDisk());
+        }
+        index++;
       }
-      if (instance.ap_boot_flow() != APBootFlow::None) {
-        auto ap_builder = ApCompositeDiskBuilder(config, instance);
-        creating_os_disk |= CF_EXPECT(ap_builder.WillRebuildCompositeDisk());
-      }
-      if (instance.modem_simulator_instance_number() > modem_simulator_count) {
-        modem_simulator_count = instance.modem_simulator_instance_number();
-      }
-      index++;
+      // TODO(schuffelen): Add smarter decision for when to delete runtime
+      // files. Files like NVChip are tightly bound to Android keymint and
+      // should be deleted when userdata is reset. However if the user has ever
+      // run without the overlay, then we want to keep this until userdata.img
+      // was externally replaced.
+      creating_os_disk &= FLAGS_use_overlay;
     }
-    // TODO(schuffelen): Add smarter decision for when to delete runtime files.
-    // Files like NVChip are tightly bound to Android keymint and should be
-    // deleted when userdata is reset. However if the user has ever run without
-    // the overlay, then we want to keep this until userdata.img was externally
-    // replaced.
-    creating_os_disk &= FLAGS_use_overlay;
 
     std::set<std::string> preserving =
         CF_EXPECT(PreservingOnResume(creating_os_disk, modem_simulator_count),
@@ -428,10 +452,7 @@ Result<const CuttlefishConfig*> InitFilesystemAndCreateConfig(
     }
 
     if (!snapshot_path.empty()) {
-      SharedFD temp = SharedFD::Creat(config.AssemblyPath("restore"), 0660);
-      if (!temp->IsOpen()) {
-        return CF_ERR("Failed to create restore file: " << temp->StrError());
-      }
+      CF_EXPECT(Fd::Creat(config.AssemblyPath("restore"), 0660));
     }
 
     auto environment =
@@ -509,6 +530,23 @@ Result<void> VerifyConditionsOnSnapshotRestore(
                "--snapshot_path does not allow customizing --instance_dir");
   CF_EXPECT_EQ(assembly_dir, CF_DEFAULTS_ASSEMBLY_DIR,
                "--snapshot_path does not allow customizing --assembly_dir");
+
+  // We can't change the instance num as part of restore, so error early if it
+  // doesn't match.
+  const auto meta_json = CF_EXPECT(LoadMetaJson(snapshot_path));
+  CF_EXPECT(meta_json.isMember(kGuestSnapshotField),
+            "Snapshot meta json missing guest_snapshot field.");
+  const auto& guest_snapshot = meta_json[kGuestSnapshotField];
+  CF_EXPECT_EQ(guest_snapshot.size(), 1,
+               "Snapshot must contain exactly one instance");
+  const std::vector<int> target_nums =
+      CF_EXPECT(InstanceNumsCalculator().FromGlobalGflags().Calculate());
+  CF_EXPECT_EQ(target_nums.size(), 1,
+               "Restoring multiple instances is not supported");
+  const std::string snapshot_num = guest_snapshot.getMemberNames()[0];
+  const std::string target_num = std::to_string(target_nums[0]);
+  CF_EXPECT_EQ(target_num, snapshot_num,
+               "Requested instance num does not match snapshot");
   return {};
 }
 
@@ -534,29 +572,6 @@ fruit::Component<> FlagsComponent(SystemImageDirFlag* system_image_dir) {
       .install(MediaConfigsFragmentComponent);
 }
 
-Result<void> CheckNoTTY() {
-  int tty = isatty(0);
-  int error_num = errno;
-  CF_EXPECT(tty == 0,
-            "stdin was a tty, expected to be passed the output of a "
-            "previous stage. Did you mean to run launch_cvd?");
-  CF_EXPECT(error_num != EBADF,
-            "stdin was not a valid file descriptor, expected to be "
-            "passed the output of launch_cvd. Did you mean to run launch_cvd?");
-  return {};
-}
-
-Result<std::vector<std::string>> ReadInputFiles() {
-  std::string input_files_str;
-  auto input_fd = SharedFD::Dup(0);
-  CF_EXPECTF(input_fd->IsOpen(), "Failed to dup stdin: {}",
-             input_fd->StrError());
-  auto bytes_read = ReadAll(input_fd, &input_files_str);
-  CF_EXPECT(bytes_read >= 0, "Failed to read input files. Error was \""
-                                 << input_fd->StrError() << "\"");
-  return absl::StrSplit(input_files_str, "\n");
-}
-
 Result<AndroidBuilds> FindAndroidBuilds(
     const SystemImageDirFlag& system_image_dir,
     const FetcherConfigs& fetcher_configs) {
@@ -573,21 +588,15 @@ Result<AndroidBuilds> FindAndroidBuilds(
   return CF_EXPECT(AndroidBuilds::Identify(std::move(keys)));
 }
 
-} // namespace
+}  // namespace
 
 Result<int> AssembleCvdMain(int argc, char** argv) {
-  auto log = CF_EXPECT(SetLogger(AbsolutePath(FLAGS_instance_dir)));
+  SharedFD log = SetLogger(AbsolutePath(FLAGS_instance_dir));
   VLOG(0) << "received flags: "
           << absl::StrJoin(std::vector<std::string>(argv + 1, argv + argc),
                            " ");
 
-  CF_EXPECT(CheckNoTTY());
-
-  // Read everything that cvd_internal_start writes, but ignore it since
-  // fetcher_config.json will be searched for in the system image directory.
-  (void) CF_EXPECT(ReadInputFiles());
-
-  std::vector<std::string> args(argv+1, argv + argc);
+  std::vector<std::string> args(argv + 1, argv + argc);
 
   bool help = false;
   std::string help_str;
@@ -625,7 +634,8 @@ Result<int> AssembleCvdMain(int argc, char** argv) {
 
   InitramfsPathFlag initramfs_path =
       InitramfsPathFlag::FromGlobalGflags(fetcher_configs);
-  KernelPathFlag kernel_path = KernelPathFlag::FromGlobalGflags(fetcher_configs);
+  KernelPathFlag kernel_path =
+      KernelPathFlag::FromGlobalGflags(fetcher_configs);
 
   SuperImageFlag super_image =
       SuperImageFlag::FromGlobalGflags(system_image_dir);
@@ -686,7 +696,7 @@ Result<int> AssembleCvdMain(int argc, char** argv) {
       SetFlagDefaultsForVmm(guest_configs, system_image_dir, vm_manager_flag));
 
   Result<Defaults> defaults = GetFlagDefaultsFromConfig();
-  if (!defaults.ok()) {
+  if (!defaults.has_value()) {
     LOG(FATAL) << "assemble_cvd: Couldn't get flag defaults from config; "
                   "aborting: "
                << defaults.error().Message();
@@ -704,11 +714,11 @@ Result<int> AssembleCvdMain(int argc, char** argv) {
   return 0;
 }
 
-} // namespace cuttlefish
+}  // namespace cuttlefish
 
 int main(int argc, char** argv) {
   auto res = cuttlefish::AssembleCvdMain(argc, argv);
-  if (res.ok()) {
+  if (res.has_value()) {
     return *res;
   }
   LOG(ERROR) << "assemble_cvd failed: \n" << res.error();
