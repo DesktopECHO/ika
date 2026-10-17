@@ -25,6 +25,7 @@
 #endif
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <atomic>
@@ -38,7 +39,6 @@
 #include "absl/log/log.h"
 #include "absl/strings/match.h"
 #include "android-base/file.h"
-#include "android-base/macros.h"
 
 #include "cuttlefish/common/libs/transport/channel.h"
 #include "cuttlefish/common/libs/transport/channel_sharedfd.h"
