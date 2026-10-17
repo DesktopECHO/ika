@@ -18,6 +18,24 @@
 - Android's UI still renders with SkiaGL in the gfxstream ANGLE modes, where
   upstream now chooses SkiaVK. `--guest_hwui_renderer=skiavk` opts in.
 
+### Hardware video decoding (groundwork)
+- `ika start` gives Android a V4L2 video decoder backed by the host's VA-API
+  (crosvm `--media-decoder=vaapi`, through the new cvd flag
+  `--crosvm_media_decoder`) when vainfo finds a working VA-API driver that
+  decodes H.264, HEVC, VP8 or VP9. Android only uses it once the ROM has a
+  V4L2 Codec2 HAL; until then video still decodes in software.
+- On a GPU that has VA-API decoding but no VA-API driver installed, `ika start`
+  says "VA-API Capable device but drivers are not installed".
+- On Fedora, whose own VA-API drivers leave out H.264 and HEVC, `ika start`
+  warns that those need the driver from RPM Fusion and names the package
+  (`mesa-va-drivers-freeworld` for AMD, `intel-media-driver` for Intel).
+  ika-base also recommends both packages, so dnf installs them on hosts where
+  the RPM Fusion repositories are enabled. RPM Fusion's Mesa driver follows
+  Fedora's Mesa version exactly, so it waits until Mesa is up to date.
+- `hw_video_decode = off` in ika.ini, `--hw_video_decode=off` or
+  `IKA_HW_VIDEO_DECODE=off` leaves the decoder out.
+- ika-base depends on vainfo (libva-utils).
+
 ### Starting and stopping
 - `ika start` works again after `ika stop`, and after Android powers off or
   fails to boot. Cuttlefish 1.58 starts the VM through `cvd create`, which

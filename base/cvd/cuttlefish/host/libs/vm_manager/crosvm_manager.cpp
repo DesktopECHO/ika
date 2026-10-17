@@ -859,6 +859,14 @@ Result<std::vector<MonitorCommand>> CrosvmManager::StartCommands(
                                   instance.crosvm_v4l2_proxy());
   }
 
+  // A virtio-media V4L2 stateful decoder backed by the host (VA-API or
+  // FFmpeg). Kept out of media_configs so it does not switch the guest to the
+  // V4L2 camera HAL.
+  if (!instance.crosvm_media_decoder().empty()) {
+    crosvm_cmd.Cmd().AddParameter("--media-decoder=",
+                                  instance.crosvm_media_decoder());
+  }
+
   if (instance.gdb_port() > 0) {
     CF_EXPECT(instance.cpus() == 1, "CPUs must be 1 for crosvm gdb mode");
     crosvm_cmd.Cmd().AddParameter("--gdb=", instance.gdb_port());

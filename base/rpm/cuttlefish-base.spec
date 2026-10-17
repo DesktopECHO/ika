@@ -114,6 +114,14 @@ Requires:       fuse3
 Requires:       python3
 Requires:       python3-requests
 Requires:       v4l-utils
+# vainfo: ika start checks the host's VA-API decoders.
+Requires:       libva-utils
+# Fedora's VA-API drivers leave out H.264 and HEVC. RPM Fusion's builds put
+# them back, installed beside Fedora's; dnf pulls them in only when the RPM
+# Fusion repositories are enabled and skips them otherwise. Fedora 44 ships
+# Mesa's VA-API driver in mesa-dri-drivers; there is no mesa-va-drivers.
+Recommends:     (mesa-va-drivers-freeworld if mesa-dri-drivers)
+Recommends:     (intel-media-driver if libva-intel-media-driver)
 Requires:       xdg-utils
 # Linked library dependencies are generated from ELF SONAMEs. Keep only the
 # scrcpy runtime tools that RPM cannot discover from the packaged binaries.

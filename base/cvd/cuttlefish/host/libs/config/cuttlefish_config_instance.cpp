@@ -1933,6 +1933,15 @@ std::string CuttlefishConfig::InstanceSpecific::crosvm_v4l2_proxy() const {
   return (*Dictionary())[kCrosvmV4l2Proxy].asString();
 }
 
+static constexpr char kCrosvmMediaDecoder[] = "crosvm_media_decoder";
+void CuttlefishConfig::MutableInstanceSpecific::set_crosvm_media_decoder(
+    const std::string& backend) {
+  (*Dictionary())[kCrosvmMediaDecoder] = backend;
+}
+std::string CuttlefishConfig::InstanceSpecific::crosvm_media_decoder() const {
+  return (*Dictionary())[kCrosvmMediaDecoder].asString();
+}
+
 static constexpr char kCrosvmUsePmem[] = "use_pmem";
 void CuttlefishConfig::MutableInstanceSpecific::set_use_pmem(
     const bool use_pmem) {

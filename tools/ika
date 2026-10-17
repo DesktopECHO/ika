@@ -198,6 +198,11 @@ gpu_renderer_features = MinimalLogging:disabled;VulkanBatchedDescriptorSetUpdate
 # Command-line equivalent: --gfxstream_vulkan=. Environment variable:
 # GFXSTREAM_VULKAN
 gfxstream_vulkan = auto
+# auto or off. auto gives Android a video decoder backed by the host's VA-API
+# (H.264, HEVC, VP8 and VP9, as far as the host decodes them) when vainfo
+# finds a working VA-API driver. Command-line equivalent: --hw_video_decode=.
+# Environment variable: IKA_HW_VIDEO_DECODE
+hw_video_decode = auto
 
 
 # ----------------------------------------------------------------------------
@@ -884,6 +889,7 @@ SCRCPY_DPI=""
 # Set to true when --dpi gives the density.
 SCRCPY_DPI_GIVEN="false"
 ika_ini_default GFXSTREAM_VULKAN gpu gfxstream_vulkan auto
+ika_ini_default IKA_HW_VIDEO_DECODE gpu hw_video_decode auto
 GFXSTREAM_VULKAN_MODE="${GFXSTREAM_VULKAN}"
 GFXSTREAM_GLES_CONTEXT_TYPES="gfxstream-gles:gfxstream-composer"
 GFXSTREAM_VULKAN_CONTEXT_TYPES="gfxstream-gles:gfxstream-vulkan:gfxstream-composer"
@@ -1023,6 +1029,20 @@ ensure_open_file_limit() {
   else
     log "could not raise open-file soft limit from ${soft_limit} to ${min_open_files}"
   fi
+}
+
+normalize_hw_video_decode_mode() {
+  case "${1,,}" in
+    ""|auto|1|true|yes|on|enable|enabled)
+      echo "auto"
+      ;;
+    0|false|no|off|disable|disabled)
+      echo "off"
+      ;;
+    *)
+      die "invalid hardware video decoding mode '${1}' (expected auto or off)"
+      ;;
+  esac
 }
 
 normalize_gfxstream_vulkan_mode() {
@@ -1239,12 +1259,156 @@ resolve_camera_device() {
   printf '%s\n' "${device}"
 }
 
+# Prints the VA-API driver names libva would try for the GPU behind render
+# node NODE, from its kernel driver. Prints nothing for a GPU without VA-API
+# video decoding.
+vaapi_driver_names() {
+  local node="$1"
+  local kernel_driver
+
+  kernel_driver="$(readlink -f "/sys/class/drm/$(basename "${node}")/device/driver" 2>/dev/null)"
+  case "$(basename "${kernel_driver}")" in
+    i915) printf '%s\n' iHD i965 ;;
+    xe) printf '%s\n' iHD ;;
+    amdgpu) printf '%s\n' radeonsi ;;
+    radeon) printf '%s\n' radeonsi r600 ;;
+    nouveau) printf '%s\n' nouveau ;;
+  esac
+}
+
+# True when one of the VA-API drivers named on stdin is installed where libva
+# looks for it (LIBVA_DRIVERS_PATH, or the distribution's driver directories).
+vaapi_driver_installed() {
+  local name
+  local dir
+  local -a dirs=()
+
+  if [[ -n "${LIBVA_DRIVERS_PATH:-}" ]]; then
+    IFS=: read -r -a dirs <<<"${LIBVA_DRIVERS_PATH}"
+  else
+    dirs=(/usr/lib64/dri /usr/lib64/dri-freeworld /usr/lib64/dri-nonfree
+      "/usr/lib/$(uname -m)-linux-gnu/dri" /usr/lib/dri)
+  fi
+  while IFS= read -r name; do
+    for dir in "${dirs[@]}"; do
+      [[ -e "${dir}/${name}_drv_video.so" ]] && return 0
+    done
+  done
+  return 1
+}
+
+# Checks whether crosvm's VA-API decoder backend can be used. On success sets
+# CODECS_REF to the codecs it would decode (H.264, HEVC, VP8, VP9) that the
+# host's VA-API driver also decodes. Otherwise sets REASON_REF to why not and
+# fails. Like crosvm's libva, uses the first render node whose VA driver
+# loads, and sets NODE_REF to it.
+vaapi_decoder_check() {
+  local -n codecs_ref="$1"
+  local -n reason_ref="$2"
+  local -n node_ref="$3"
+  local node
+  local profiles
+  local capable="false"
+  local driver_installed="false"
+  local have_vainfo="false"
+
+  codecs_ref=""
+  reason_ref=""
+  node_ref=""
+  command -v vainfo >/dev/null 2>&1 && have_vainfo="true"
+  for node in /dev/dri/renderD*; do
+    [[ -c "${node}" ]] || continue
+    if [[ -n "$(vaapi_driver_names "${node}")" ]]; then
+      capable="true"
+      vaapi_driver_names "${node}" | vaapi_driver_installed && driver_installed="true"
+    fi
+    [[ "${have_vainfo}" == "true" ]] || continue
+    profiles="$(timeout 10 vainfo --display drm --device "${node}" 2>/dev/null)" || continue
+    node_ref="${node}"
+    codecs_ref="$(sed -n 's/^[[:space:]]*VAProfile\([A-Za-z0-9_]*\)[[:space:]]*:[[:space:]]*VAEntrypointVLD.*/\1/p' \
+        <<<"${profiles}" \
+      | sed -n -e 's/^H264\(Baseline\|Main\|High\|StereoHigh\|MultiviewHigh\)$/H.264/p' \
+        -e 's/^HEVC\(Main\|Main10\)$/HEVC/p' \
+        -e 's/^VP8Version0_3$/VP8/p' \
+        -e 's/^VP9Profile[0-3]$/VP9/p' \
+      | sort -u | paste -sd ' ')"
+    [[ -n "${codecs_ref}" ]] && return 0
+    reason_ref="the VA-API driver for ${node} decodes none of H.264, HEVC, VP8 or VP9"
+    return 1
+  done
+
+  if [[ "${capable}" != "true" ]]; then
+    reason_ref="no VA-API capable GPU found"
+  elif [[ "${driver_installed}" != "true" || "${have_vainfo}" == "true" ]]; then
+    # No driver, or vainfo could not initialize the one that is there.
+    reason_ref="VA-API Capable device but drivers are not installed"
+  else
+    reason_ref="vainfo not found; install libva-utils so Ika can check VA-API decoding"
+  fi
+  return 1
+}
+
+# Fedora's own VA-API drivers leave out H.264 and HEVC, which every GPU they
+# drive decodes; RPM Fusion's builds put them back, installed beside Fedora's
+# in directories libva searches first. Prints a warning naming the RPM Fusion
+# package when the driver for render node NODE decodes CODECS without H.264,
+# and nothing otherwise.
+vaapi_rpmfusion_warning() {
+  local node="$1"
+  local codecs="$2"
+  local package
+  local driver
+
+  [[ -n "${node}" && " ${codecs} " != *" H.264 "* ]] || return 0
+  grep -qsE '^(ID|ID_LIKE)=.*fedora' /etc/os-release || return 0
+  case "$(vaapi_driver_names "${node}" | head -n 1)" in
+    radeonsi) package="mesa-va-drivers-freeworld" driver="/usr/lib64/dri-freeworld/radeonsi_drv_video.so" ;;
+    iHD) package="intel-media-driver" driver="/usr/lib64/dri-nonfree/iHD_drv_video.so" ;;
+    *) return 0 ;;
+  esac
+  [[ -e "${driver}" ]] && return 0
+  printf '%s\n' "H.264/HEVC hardware video decoding needs the VA-API driver from RPM Fusion: sudo dnf install ${package}"
+}
+
+# Attaches the virtio-media video decoder when the host's VA-API driver
+# decodes video Android would use it for, unless hw_video_decode is off or the
+# start args name a decoder. Android only uses it with a V4L2 Codec2 HAL in the
+# ROM; without one it decodes in software as before. Runs once the start log
+# is set up, so what it finds is logged there.
+append_hw_video_decode_args() {
+  local -n args_array="$1"
+  shift
+  local vaapi_codecs
+  local vaapi_reason
+  local vaapi_node
+  local vaapi_warning
+
+  [[ "$(normalize_hw_video_decode_mode "${IKA_HW_VIDEO_DECODE}")" == "auto" ]] || return 0
+  user_supplied_flag "crosvm_media_decoder" "$@" && return 0
+  if vaapi_decoder_check vaapi_codecs vaapi_reason vaapi_node; then
+    log "hardware video decoding: VA-API ${vaapi_codecs}"
+    args_array+=("--crosvm_media_decoder=vaapi")
+  else
+    [[ "${vaapi_reason}" == "VA-API Capable device but drivers are not installed" ]] \
+      && respond_console "${vaapi_reason}"
+    log "hardware video decoding: ${vaapi_reason}; decoding in software"
+  fi
+  vaapi_warning="$(vaapi_rpmfusion_warning "${vaapi_node}" "${vaapi_codecs}")"
+  if [[ -n "${vaapi_warning}" ]]; then
+    respond_console "${vaapi_warning}"
+    log "${vaapi_warning}"
+  fi
+}
+
 parse_start_options() {
   local -n fullscreen_mode_ref="$1"
   local -n game_mode_ref="$2"
   local -n start_args_ref="$3"
   local camera_device=""
+  local hw_video_decode_mode
   shift 3
+
+  hw_video_decode_mode="$(normalize_hw_video_decode_mode "${IKA_HW_VIDEO_DECODE}")"
 
   fullscreen_mode_ref="false"
   game_mode_ref="false"
@@ -1302,6 +1466,19 @@ parse_start_options() {
         fi
         camera_device="$(resolve_camera_device "${camera_device}")" || exit 1
         start_args_ref+=("--media=v4l2_proxy:device=${camera_device}")
+        shift
+        ;;
+      --hw_video_decode=*)
+        hw_video_decode_mode="$(normalize_hw_video_decode_mode "${1#*=}")"
+        # 'restart' hands its options to 'start' without this one.
+        export IKA_HW_VIDEO_DECODE="${hw_video_decode_mode}"
+        shift
+        ;;
+      --hw_video_decode)
+        shift
+        [[ $# -gt 0 ]] || die "--hw_video_decode requires a value: auto or off"
+        hw_video_decode_mode="$(normalize_hw_video_decode_mode "$1")"
+        export IKA_HW_VIDEO_DECODE="${hw_video_decode_mode}"
         shift
         ;;
       --ika_scrcpy=*)
@@ -6309,6 +6486,7 @@ start_cvd() {
   append_serial_number_args args "$@"
   append_arm64_kernel_page_args args "$@"
   append_gfxstream_vulkan_args args "$@"
+  append_hw_video_decode_args args "$@"
   append_default_display_arg args "${scrcpy_dpi}" "$@"
   prepare_user_adb_key || return 1
   append_bootconfig_args args

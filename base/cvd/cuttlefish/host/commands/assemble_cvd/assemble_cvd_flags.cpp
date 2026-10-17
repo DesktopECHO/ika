@@ -386,6 +386,12 @@ DEFINE_vec(
     "literal. "
     "When this flag is set, crosvm_simple_media_device becomes ineffective.");
 
+DEFINE_vec(crosvm_media_decoder, CF_DEFAULTS_CROSVM_MEDIA_DECODER,
+           "Adds a crosvm virtio-media video decoder (--media-decoder) "
+           "backed by the given host backend: 'vaapi' or 'ffmpeg'. "
+           "Empty adds no decoder. The guest needs a V4L2 Codec2 HAL to use "
+           "it.");
+
 DEFINE_vec(use_pmem, "true",
            "Make this flag false to disable pmem with crosvm");
 
