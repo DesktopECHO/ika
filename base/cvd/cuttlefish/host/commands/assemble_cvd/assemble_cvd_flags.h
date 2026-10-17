@@ -187,6 +187,8 @@ DECLARE_vec(crosvm_simple_media_device);
 
 DECLARE_vec(crosvm_v4l2_proxy);
 
+DECLARE_vec(crosvm_media_decoder);
+
 DECLARE_vec(use_pmem);
 
 DECLARE_vec(crosvm_acpi_table);

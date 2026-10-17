@@ -659,6 +659,8 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
       CF_EXPECT(GET_FLAG_BOOL_VALUE(crosvm_simple_media_device));
   std::vector<std::string> v4l2_proxy_vec =
       CF_EXPECT(GET_FLAG_STR_VALUE(crosvm_v4l2_proxy));
+  std::vector<std::string> media_decoder_vec =
+      CF_EXPECT(GET_FLAG_STR_VALUE(crosvm_media_decoder));
   std::vector<bool> use_pmem_vec = CF_EXPECT(GET_FLAG_BOOL_VALUE(use_pmem));
   std::vector<std::string> device_external_network_vec =
       CF_EXPECT(GET_FLAG_STR_VALUE(device_external_network));
@@ -822,6 +824,13 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
     instance.set_crosvm_simple_media_device(
         simple_media_device_vec[instance_index]);
     instance.set_crosvm_v4l2_proxy(v4l2_proxy_vec[instance_index]);
+    const std::string& media_decoder = media_decoder_vec[instance_index];
+    CF_EXPECTF(media_decoder.empty() || media_decoder == "vaapi" ||
+                   media_decoder == "ffmpeg",
+               "Invalid --crosvm_media_decoder '{}', expected 'vaapi' or "
+               "'ffmpeg'",
+               media_decoder);
+    instance.set_crosvm_media_decoder(media_decoder);
     instance.set_use_pmem(use_pmem_vec[instance_index]);
     instance.set_bootconfig_supported(
         guest_configs[instance_index].bootconfig_supported);

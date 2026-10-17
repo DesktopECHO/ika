@@ -1,0 +1,15 @@
+--- a/src/virtio/media/decoder_adapter.rs
++++ b/src/virtio/media/decoder_adapter.rs
+@@ -42,8 +42,10 @@
+ use crate::virtio::video::resource::GuestResource;
+ use crate::virtio::video::resource::GuestResourceHandle;
+ 
+-/// Use 1 MB input buffers by default. This should probably be resolution-dependent.
+-const INPUT_BUFFER_SIZE: u32 = 1024 * 1024;
++/// Size of every input buffer. A buffer holds a whole compressed frame, and 1 MB was too
++/// small for the keyframes of high-bitrate 1080p and of 4K video. Buffers are sparse memfds,
++/// so only the pages a frame writes take host memory.
++const INPUT_BUFFER_SIZE: u32 = 8 * 1024 * 1024;
+ 
+ /// Returns the V4L2 `(bytesperline, sizeimage)` for the given `format` and `coded_size`.
+ fn buffer_sizes_for_format(format: Format, coded_size: (u32, u32)) -> (u32, u32) {

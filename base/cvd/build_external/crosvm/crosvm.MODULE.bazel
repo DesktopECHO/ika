@@ -148,6 +148,10 @@ crosvm_bin.annotation(
     crate = "devices",
     patch_args = ["-p1"],
     patches = [
+        # The virtio-media video decoder's input buffers hold a whole
+        # compressed frame: 8 MB rather than 1 MB, so 4K and high-bitrate
+        # keyframes fit (Android's V4L2 Codec2 HAL offers 4K only when they do).
+        "@//build_external/crosvm:PATCH.crosvm-media-decoder-input-size.patch",
         "@//build_external/crosvm:PATCH.crosvm-resize-display-devices.patch",
     ],
 )
