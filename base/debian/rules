@@ -230,6 +230,11 @@ override_dh_strip:
 .PHONY: override_dh_install
 override_dh_install:
 	dh_install
+	# Upstream's host package ships etc/cvd_config, which Ika's ROM package
+	# already provides through the link ika-lineageos makes at
+	# etc/cvd_config. Leave it to the ROM so the two packages don't both
+	# claim those files.
+	rm -rf ${cuttlefish_common}/etc/cvd_config
 	install -Dpm0755 ../tools/ika debian/ika-base/usr/bin/ika
 	install -Dpm0755 ../tools/ika-root ${cuttlefish_common}/bin/ika-root
 	install -Dpm0755 ../tools/getchromium ${cuttlefish_common}/bin/getchromium

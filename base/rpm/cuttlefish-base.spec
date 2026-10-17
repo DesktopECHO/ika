@@ -370,6 +370,11 @@ mkdir -p %{buildroot}/usr/lib
 cp -a base/cvd/bazel-out/${bazel_arch}-opt/bin/cuttlefish/package/cuttlefish-common %{buildroot}/usr/lib/
 # Bazel leaves its tree artifacts read-only; more files are installed below.
 chmod -R u+w %{buildroot}/usr/lib/cuttlefish-common
+# Upstream's host package ships etc/cvd_config, which Ika's ROM package
+# already provides through the link ika-lineageos makes at
+# etc/cvd_config. Leave it to the ROM so the two packages don't both
+# claim those files.
+rm -rf %{buildroot}/usr/lib/cuttlefish-common/etc/cvd_config
 mkdir -p %{buildroot}/usr/bin
 cp -a base/cvd/bazel-out/${bazel_arch}-opt/bin/cuttlefish/package/cuttlefish-integration/bin/* %{buildroot}/usr/bin/
 mkdir -p %{buildroot}/usr/lib/cuttlefish-metrics/bin
@@ -453,17 +458,6 @@ ln -sfn ../bin/libvk_swiftshader.so %{buildroot}/usr/lib/cuttlefish-common/lib64
 # directly; without this symlink only the ika wrapper finds it.
 install -d %{buildroot}/usr/bin
 ln -sfn ../lib/cuttlefish-common/bin/cvd %{buildroot}/usr/bin/cvd
-
-%pretrans -p <lua>
--- ika-lineageos' %post links each ROM etc/ entry that ika-base does not ship
--- into /usr/lib/cuttlefish-common. ika-base now ships etc/cvd_config as a
--- directory, and an old link to the ROM's copy would send its files into
--- ika-lineageos' tree, so remove that link before the files go in.
-local path = "/usr/lib/cuttlefish-common/etc/cvd_config"
-local target = posix.readlink(path)
-if target and target:find("^/usr/share/cuttlefish%-common/lineageos/") then
-  os.remove(path)
-end
 
 %post
 if ! getent group cvdnetwork >/dev/null 2>&1; then
