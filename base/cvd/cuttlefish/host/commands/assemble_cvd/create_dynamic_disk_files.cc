@@ -16,16 +16,23 @@
 
 #include "cuttlefish/host/commands/assemble_cvd/create_dynamic_disk_files.h"
 
+#include <errno.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
 #include <sys/statvfs.h>
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "absl/log/log.h"
 #include "absl/strings/match.h"
-#include "gflags/gflags.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/commands/assemble_cvd/android_build/android_builds.h"
 #include "cuttlefish/host/commands/assemble_cvd/boot_config.h"
 #include "cuttlefish/host/commands/assemble_cvd/boot_image_utils.h"
@@ -108,7 +115,7 @@ Result<void> CreateDynamicDiskFiles(
 
     if (Result<BuildArchive> img_zip =
             FindImgZip(fetcher_config, system_image_dir);
-        img_zip.ok()) {
+        img_zip.has_value()) {
       VLOG(0) << "Found image zip: " << *img_zip;
     } else {
       VLOG(0) << "Error accessing '-img-*.zip', expected for a local build.";

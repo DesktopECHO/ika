@@ -15,18 +15,19 @@
  */
 
 #include <iostream>
+#include <optional>
 #include <ostream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
 #include "absl/base/no_destructor.h"
-#include <android-base/strings.h>
 
 #include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/common/libs/utils/tee_logging.h"
 #include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/flag_parser/gflags_compat.h"
-#include "cuttlefish/common/libs/utils/tee_logging.h"
 #include "cuttlefish/host/libs/command_util/runner/run_cvd.pb.h"
 #include "cuttlefish/host/libs/command_util/util.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
@@ -105,8 +106,7 @@ Result<int> DoHelp(std::vector<std::string>& args) {
     return 0;
   }
 
-  static const absl::NoDestructor<
-      std::unordered_map<std::string, std::string>>
+  static const absl::NoDestructor<std::unordered_map<std::string, std::string>>
       kSubCommandUsages({
           {"add", kAddUsage},
           {"list", kListUsage},
@@ -155,7 +155,7 @@ Result<int> DoRemove(std::vector<std::string>& args) {
 
   std::vector<std::string> displays;
   const std::vector<Flag> remove_displays_flags = {
-    Flag::StringFlag(kDisplayFlag)
+      Flag::StringFlag(kDisplayFlag)
           .Help("Display id of a display to remove.")
           .Setter([&](std::string_view arg) -> Result<void> {
             displays.emplace_back(arg);
@@ -163,7 +163,7 @@ Result<int> DoRemove(std::vector<std::string>& args) {
           }),
   };
   auto parse_res = ConsumeFlags(remove_displays_flags, args);
-  if (!parse_res.ok()) {
+  if (!parse_res.has_value()) {
     std::cerr << parse_res.error() << std::endl;
     std::cerr << "Failed to parse flags. Usage:" << std::endl;
     std::cerr << kRemoveUsage << std::endl;
@@ -200,7 +200,7 @@ Result<int> DoScreenshot(std::vector<std::string>& args) {
           .Help("Path for the resulting screenshot file."),
   };
   auto parse_res = ConsumeFlags(screenshot_flags, args);
-  if (!parse_res.ok()) {
+  if (!parse_res.has_value()) {
     std::cerr << parse_res.error() << std::endl;
     std::cerr << "Failed to parse flags. Usage:" << std::endl;
     std::cerr << kScreenshotUsage << std::endl;
@@ -255,7 +255,7 @@ int DisplayMain(int argc, char** argv) {
   }
 
   auto result = command_func_it->second(args);
-  if (!result.ok()) {
+  if (!result.has_value()) {
     std::cerr << result.error();
     return 1;
   }

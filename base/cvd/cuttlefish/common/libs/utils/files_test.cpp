@@ -15,8 +15,12 @@
 
 #include "cuttlefish/common/libs/utils/files.h"
 
+#include <stdlib.h>
+#include <unistd.h>
+
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include "absl/cleanup/cleanup.h"
 #include "absl/strings/str_cat.h"
@@ -24,6 +28,9 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
+#include "cuttlefish/files/are_hard_linked.h"
+#include "cuttlefish/files/file_exists.h"
+#include "cuttlefish/files/is_directory_empty.h"
 #include "cuttlefish/result/result.h"
 #include "cuttlefish/result/result_matchers.h"
 
@@ -53,7 +60,7 @@ class FilesTests : public ::testing::Test {
 
   void SetUp() override {
     Result<void> result = CreateTestDirs();
-    if (!result.ok()) {
+    if (!result.has_value()) {
       FAIL() << result.error();
     }
   }
@@ -63,15 +70,16 @@ class FilesTests : public ::testing::Test {
   std::string dst_dir_;
 };
 
-TEST_F(FilesTests, HardLinkRecursivelyFailsIfSourceIsNotADirectory) {
-  Result<void> result = HardLinkDirecoryContentsRecursively(
+TEST_F(FilesTests, LinkOrCopyRecursivelyFailsIfSourceIsNotADirectory) {
+  Result<void> result = LinkOrCopyDirectoryContentsRecursively(
       src_dir_ + "/file1.txt", dst_dir_ + "/file1.txt");
 
   EXPECT_THAT(result, IsError());
 }
 
-TEST_F(FilesTests, HardLinkRecursively) {
-  Result<void> result = HardLinkDirecoryContentsRecursively(src_dir_, dst_dir_);
+TEST_F(FilesTests, LinkOrCopyRecursively) {
+  Result<void> result =
+      LinkOrCopyDirectoryContentsRecursively(src_dir_, dst_dir_);
 
   EXPECT_THAT(result, IsOk());
   Result<bool> resultHardLinked =
@@ -140,7 +148,7 @@ TEST(FilesTest, SearchFileNotFoundReturnsError) {
   EXPECT_FALSE(FileExists(absl::StrCat(temp_dir, "/search_non_existent_file")));
 
   auto result = Search({temp_dir}, "search_non_existent_file");
-  EXPECT_FALSE(result.ok());
+  EXPECT_FALSE(result.has_value());
 }
 
 }  // namespace cuttlefish

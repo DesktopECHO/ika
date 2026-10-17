@@ -12,15 +12,19 @@ cf_cc_library(
     hdrs = [
         "xdg.h",
     ],
+    include_cleaner_enabled = False,
     deps = [
         "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/common/libs/utils:environment",
         "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/common/libs/utils:users",
+        "//cuttlefish/io:write_exact",
         "//cuttlefish/posix:rename",
+        "//cuttlefish/posix:stat",
         "//cuttlefish/posix:strerror",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/strings",
+        "@android_system_libbase//:file_logging",
     ],
 )

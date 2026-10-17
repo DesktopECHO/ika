@@ -19,10 +19,10 @@
 #include "absl/log/log.h"
 #include "gflags/gflags.h"
 
-#include "cuttlefish/common/libs/utils/subprocess.h"
-#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
 #include "cuttlefish/common/libs/utils/tee_logging.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/managed_stdio.h"
 #include "cuttlefish/result/result.h"
 
 DEFINE_int32(instance_num, cuttlefish::GetInstance(),
@@ -52,7 +52,7 @@ int main(int argc, char** argv) {
   cuttlefish::LogToStderr();
   google::ParseCommandLineFlags(&argc, &argv, true);
   cuttlefish::Result<void> result = cuttlefish::PowerbtnCvdMain();
-  if (!result.ok()) {
+  if (!result.has_value()) {
     LOG(ERROR) << result.error();
     return EXIT_FAILURE;
   }

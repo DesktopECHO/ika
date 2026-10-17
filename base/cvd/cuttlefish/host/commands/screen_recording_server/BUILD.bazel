@@ -33,6 +33,8 @@ cf_cc_binary(
     srcs = [
         "main.cpp",
     ],
+    depend_on_what_you_use_enabled = False,
+    include_cleaner_enabled = False,
     deps = [
         ":libscreen_recording_server",
         "//cuttlefish/common/libs/fs",
@@ -42,7 +44,6 @@ cf_cc_binary(
         "//cuttlefish/host/libs/config:logging",
         "//cuttlefish/host/libs/screen_recording_controls",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/log",
         "@gflags",
         "@grpc",

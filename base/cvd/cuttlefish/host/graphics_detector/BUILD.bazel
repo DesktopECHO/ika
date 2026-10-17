@@ -35,6 +35,8 @@ cf_cc_binary(
         "graphics_detector_vk.h",
         "graphics_detector_vk_external_memory_host.cpp",
         "graphics_detector_vk_external_memory_host.h",
+        "graphics_detector_vk_loader.cpp",
+        "graphics_detector_vk_loader.h",
         "graphics_detector_vk_precision_qualifiers_on_yuv_samplers.cpp",
         "graphics_detector_vk_precision_qualifiers_on_yuv_samplers.h",
         "image.cpp",
@@ -58,6 +60,7 @@ cf_cc_binary(
         "-Wno-deprecated-declarations",
         "-Wno-module-import-in-extern-c",
     ],
+    depend_on_what_you_use_enabled = False,
     deps = [
         ":graphics_detector_cc_proto",
         "//cuttlefish/host/graphics_detector/shaders:graphics_detector_shaders",

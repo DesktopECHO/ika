@@ -33,8 +33,10 @@
 #include "gtest/gtest.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/libs/web/android_build.h"
 #include "cuttlefish/host/libs/web/cas/cas_flags.h"
+#include "cuttlefish/posix/remove.h"
 #include "cuttlefish/result/result.h"
 #include "cuttlefish/result/result_matchers.h"
 
@@ -123,7 +125,7 @@ class CasDownloaderTests : public ::testing::Test {
       std::string service_account_filepath, CasDownloaderFlags flags) {
     Result<std::unique_ptr<CasDownloader>> result =
         CasDownloader::Create(flags, service_account_filepath);
-    if (result.ok()) {
+    if (result.has_value()) {
       return std::move(result.value());
     }
     return nullptr;
@@ -139,7 +141,7 @@ class CasDownloaderTests : public ::testing::Test {
     flags.cas_config_filepath.set_value(cas_config_filepath);
     Result<std::unique_ptr<CasDownloader>> result =
         CasDownloader::Create(flags, service_account_filepath);
-    if (result.ok()) {
+    if (result.has_value()) {
       return std::move(result.value());
     }
     return nullptr;
@@ -166,7 +168,7 @@ class CasDownloaderTests : public ::testing::Test {
     }
     std::string create_artifact_string = "touch " + artifact_path;
     std::string script =
-        fmt::format(R"(#!/bin/bash
+        fmt::format(R"(#!/usr/bin/env bash
 if [[ "$1" == "-help" ]]; then
   echo "Usage of casdownloader:" >&2
   {FLAGS}
@@ -237,7 +239,7 @@ fi
 
   void SetUp() override {
     Result<void> result = CreateTestDirs();
-    if (!result.ok()) {
+    if (!result.has_value()) {
       FAIL() << result.error();
     }
   }
@@ -309,6 +311,64 @@ TEST_F(CasDownloaderTests, UsesServiceAccountIfAvailable) {
   EXPECT_THAT(output, HasSubstr("-service-account-json"));
 }
 
+TEST_F(CasDownloaderTests, UsesServiceAccountFromConfig) {
+  downloader_path_ =
+      FakeDownloaderForArtifactAndFlags(target_dir_ + "/artifact_name");
+  const std::string config_service_account_filepath = CreateTempFileWithText(
+      std::string(temp_dir_.path) + "/config_sa.json", "service_account");
+  std::unique_ptr<CasDownloader> cas =
+      CasUsingConfig("service-account-json=" + config_service_account_filepath);
+  ASSERT_THAT(cas, Not(Eq(nullptr)));
+
+  Result<void> download = cas->DownloadFile(
+      MakeDeviceBuild("build_id", "build_target"), "artifact_name", target_dir_,
+      [this](std::string filename) -> Result<std::string> {
+        return CasDigestsFile(filename, "_chunked_artifact_name=digest");
+      });
+
+  EXPECT_THAT(download, IsOk());
+  std::string output = ReadFile(cas_output_filepath_);
+  EXPECT_THAT(output, Not(HasSubstr("-use-adc")));
+  EXPECT_THAT(output, HasSubstr("-service-account-json=" +
+                                config_service_account_filepath));
+}
+
+TEST_F(CasDownloaderTests, ConfigServiceAccountOverridesCommandLine) {
+  downloader_path_ =
+      FakeDownloaderForArtifactAndFlags(target_dir_ + "/artifact_name");
+  const std::string config_service_account_filepath = CreateTempFileWithText(
+      std::string(temp_dir_.path) + "/config_sa.json", "service_account");
+  service_account_filepath_ = CreateTempFileWithText(
+      std::string(temp_dir_.path) + "/cli_sa.json", "service_account");
+  std::unique_ptr<CasDownloader> cas = CasWithServiceAccountUsingConfig(
+      service_account_filepath_, false,
+      "service-account-json=" + config_service_account_filepath);
+  ASSERT_THAT(cas, Not(Eq(nullptr)));
+
+  Result<void> download = cas->DownloadFile(
+      MakeDeviceBuild("build_id", "build_target"), "artifact_name", target_dir_,
+      [this](std::string filename) -> Result<std::string> {
+        return CasDigestsFile(filename, "_chunked_artifact_name=digest");
+      });
+
+  EXPECT_THAT(download, IsOk());
+  std::string output = ReadFile(cas_output_filepath_);
+  EXPECT_THAT(output, Not(HasSubstr("-use-adc")));
+  EXPECT_THAT(output, HasSubstr("-service-account-json=" +
+                                config_service_account_filepath));
+  EXPECT_THAT(output, Not(HasSubstr(service_account_filepath_)));
+}
+
+TEST_F(CasDownloaderTests, FailsToCreateWithMissingConfigServiceAccount) {
+  downloader_path_ =
+      FakeDownloaderForArtifactAndFlags(target_dir_ + "/artifact_name");
+  std::unique_ptr<CasDownloader> cas =
+      CasUsingConfig("service-account-json=" + std::string(temp_dir_.path) +
+                     "/does_not_exist.json");
+
+  EXPECT_THAT(cas, Eq(nullptr));
+}
+
 TEST_F(CasDownloaderTests, IgnoresUnsupportedFlags) {
   downloader_path_ =
       FakeDownloaderForArtifactAndFlags(target_dir_ + "/artifact_name");
@@ -361,7 +421,7 @@ TEST_F(CasDownloaderTests, HandlesInvocationIdFlag) {
 
 TEST_F(CasDownloaderTests, HandlesUnexpectedHelpOutput) {
   std::string script = fmt::format(
-      R"(#!/bin/bash
+      R"(#!/usr/bin/env bash
 if [[ "$1" == "-help" ]]; then
   echo "Usage of casdownloader:" >&2
   echo "  -use-hardlink" >&2  # missing the ending "=...", should never occur.

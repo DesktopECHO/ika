@@ -4,8 +4,6 @@ package(
     default_visibility = ["//:android_cuttlefish"],
 )
 
-exports_files([".clang-tidy"])
-
 cf_cc_library(
     name = "rename",
     srcs = ["rename.cc"],
@@ -43,4 +41,44 @@ cf_cc_library(
         "//cuttlefish/posix:strerror",
         "//cuttlefish/result",
     ],
+)
+
+cf_cc_library(
+    name = "realpath",
+    srcs = ["realpath.cc"],
+    hdrs = ["realpath.h"],
+    deps = [
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+    ],
+)
+
+cf_cc_library(
+    name = "remove",
+    srcs = ["remove.cc"],
+    hdrs = ["remove.h"],
+    deps = [
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+        "@abseil-cpp//absl/log",
+    ],
+)
+
+cf_cc_library(
+    name = "stat",
+    srcs = ["stat.cc"],
+    hdrs = ["stat.h"],
+    deps = [
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/posix:temp_failure_retry",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+    ],
+)
+
+cf_cc_library(
+    name = "temp_failure_retry",
+    hdrs = ["temp_failure_retry.h"],
 )

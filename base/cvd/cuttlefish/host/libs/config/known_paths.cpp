@@ -18,7 +18,7 @@
 
 #include <string>
 
-#include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/libs/config/config_utils.h"
 
 namespace cuttlefish {
@@ -109,12 +109,10 @@ std::string LogcatReceiverBinary() { return HostBinaryPath("logcat_receiver"); }
 
 std::string McopyBinary() { return HostBinaryPath("mcopy"); }
 
-std::string MetricsBinary() { return HostBinaryPath("metrics"); }
-
 std::string MkfsFat() { return HostBinaryPath("mkfs.fat"); }
 
 std::string MkuserimgMke2fsBinary() {
-    return HostBinaryPath("mkuserimg_mke2fs.py");
+  return HostBinaryPath("mkuserimg_mke2fs.py");
 }
 
 std::string MmdBinary() { return HostBinaryPath("mmd"); }
@@ -151,9 +149,7 @@ std::string SensorsSimulatorBinary() {
   return HostBinaryPath("sensors_simulator");
 }
 
-std::string Simg2ImgBinary() {
-  return HostBinaryPath("simg2img");
-}
+std::string Simg2ImgBinary() { return HostBinaryPath("simg2img"); }
 
 std::string SocketVsockProxyBinary() {
   return HostBinaryPath("socket_vsock_proxy");
@@ -168,7 +164,8 @@ std::string TestKeyRsa2048() {
 }
 
 std::string TestKeyRsa4096() {
-  const std::string rsa_4096 = DefaultHostArtifactsPath("etc/cvd_avb_testkey_rsa4096.pem");
+  const std::string rsa_4096 =
+      DefaultHostArtifactsPath("etc/cvd_avb_testkey_rsa4096.pem");
   if (FileExists(rsa_4096)) {
     return rsa_4096;
   } else {
@@ -181,7 +178,8 @@ std::string TestPubKeyRsa2048() {
 }
 
 std::string TestPubKeyRsa4096() {
-  const std::string rsa_4096 = DefaultHostArtifactsPath("etc/cvd_rsa4096.avbpubkey");
+  const std::string rsa_4096 =
+      DefaultHostArtifactsPath("etc/cvd_rsa4096.avbpubkey");
   if (FileExists(rsa_4096)) {
     return rsa_4096;
   } else {
@@ -231,6 +229,10 @@ std::string VhostUserMediaEmulatedCameraSPlaneBinary() {
 
 std::string VhostUserMediaEmulatedCameraMPlaneBinary() {
   return HostBinaryPath("vhu_media_emulated_camera_mplane");
+}
+
+std::string VhostUserMediaV4l2StreamProxyBinary() {
+  return HostBinaryPath("vhu_media_v4l2_stream_proxy");
 }
 
 }  // namespace cuttlefish

@@ -21,36 +21,34 @@
 
 #include "absl/log/check.h"
 
-#include "cuttlefish/common/libs/fs/shared_buf.h"
+#include "cuttlefish/common/libs/fs/fd.h"
+#include "cuttlefish/common/libs/fs/shared_fd.h"
+#include "cuttlefish/io/string.h"
+#include "cuttlefish/io/write_exact.h"
 
 namespace cuttlefish {
 
 Result<SharedFD> DataViewer::LockBackingFile(int op) const {
-  auto fd = SharedFD::Open(backing_file_, O_CREAT | O_RDWR, 0640);
-  CF_EXPECTF(fd->IsOpen(), "Failed to open instance database backing file: {}",
-             fd->StrError());
-  CF_EXPECTF(fd->Flock(op),
+  Fd fd = CF_EXPECT(Fd::Open(backing_file_, O_CREAT | O_RDWR, 0640));
+  CF_EXPECTF(fd.Flock(op),
              "Failed to acquire lock for instance database backing file: {}",
-             fd->StrError());
+             fd.StrError());
   return fd;
 }
 
 Result<cvd::PersistentData> DataViewer::LoadData(SharedFD fd) const {
-  std::string str;
-  auto read_size = ReadAll(fd, &str);
-  CF_EXPECTF(read_size >= 0, "Failed to read from backing file: {}",
-             fd->StrError());
+  const std::string str =
+      CF_EXPECT(ReadToString(*fd), "Failed to read from backing file");
   cvd::PersistentData data;
-  data.ParseFromString(str);
+  CF_EXPECT(data.ParseFromString(str));
   return std::move(data);
 }
 
-Result<void> DataViewer::StoreData(SharedFD fd, cvd::PersistentData data) {
+Result<void> DataViewer::StoreData(SharedFD fd,
+                                   const cvd::PersistentData& data) {
   std::string str;
   CF_EXPECT(data.SerializeToString(&str), "Failed to serialize data");
-  auto write_size = WriteAll(fd, str);
-  CF_EXPECTF(write_size == (ssize_t)str.size(),
-             "Failed to write to backing file: {}", fd->StrError());
+  CF_EXPECT(WriteExact(*fd, str), "Failed to write to backing file");
   return {};
 }
 

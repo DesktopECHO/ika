@@ -25,6 +25,7 @@
 
 #include "absl/log/log.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/fs/shared_select.h"
 
@@ -55,7 +56,7 @@ SharedFD SetupAdbSocket(const std::string &adb_host_and_port) {
   if (!local_client->IsOpen()) {
     LOG(WARNING) << "Failed to connect to ADB server socket (non-Android guest?) Using /dev/null workaround."
                  << local_client->StrError();
-    return SharedFD::Open("/dev/null", O_RDWR);
+    return Fd::Open("/dev/null", O_RDWR).value_or(Fd());
   }
   return local_client;
 }
@@ -67,7 +68,7 @@ AdbHandler::AdbHandler(
     std::function<void(const uint8_t *, size_t)> send_to_client)
     : send_to_client_(send_to_client),
       adb_socket_(SetupAdbSocket(adb_host_and_port)),
-      shutdown_(SharedFD::Event(0,0))
+      shutdown_(Fd::Event(0, 0).value_or(Fd()))
 {
     std::thread loop([this]() { ReadLoop(); });
     read_thread_.swap(loop);
@@ -77,7 +78,8 @@ AdbHandler::AdbHandler(
 AdbHandler::~AdbHandler() {
     // Send a message to the looper to shut down.
     uint64_t v = 1;
-    shutdown_->Write(&v, sizeof(v));
+    // TODO(schuffelen): Handle unused result
+    (void)shutdown_->Write(&v, sizeof(v));
     // Shut down the socket as well.  Not srictly necessary.
     adb_socket_->Shutdown(SHUT_RDWR);
     read_thread_.join();
@@ -92,15 +94,15 @@ void AdbHandler::ReadLoop() {
     Select(&read_set_, nullptr, nullptr, nullptr);
 
     if (read_set_.IsSet(adb_socket_)) {
-        auto read = adb_socket_->Read(buffer, sizeof(buffer));
-        if (read < 0) {
-          LOG(ERROR) << "Error on reading from ADB socket: "
-                     << adb_socket_->StrError();
-          break;
-        }
-        if (read) {
-            send_to_client_(buffer, read);
-        }
+      Result<uint64_t> data_read = adb_socket_->Read(buffer, sizeof(buffer));
+      if (!data_read.has_value()) {
+        LOG(ERROR) << "Error on reading from ADB socket: "
+                   << adb_socket_->StrError();
+        break;
+      }
+      if (*data_read > 0) {
+        send_to_client_(buffer, *data_read);
+      }
     }
 
     if (read_set_.IsSet(shutdown_)) {
@@ -113,12 +115,12 @@ void AdbHandler::ReadLoop() {
 void AdbHandler::handleMessage(const uint8_t *msg, size_t len) {
   size_t sent = 0;
   while (sent < len) {
-    auto this_sent = adb_socket_->Write(&msg[sent], len - sent);
-    if (this_sent < 0) {
+    Result<uint64_t> this_sent = adb_socket_->Write(&msg[sent], len - sent);
+    if (!this_sent.has_value()) {
       LOG(ERROR) << "Error writing to adb socket: " << adb_socket_->StrError();
       return;
     }
-    sent += this_sent;
+    sent += *this_sent;
   }
 }
 

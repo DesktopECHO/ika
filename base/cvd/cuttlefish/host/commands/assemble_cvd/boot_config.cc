@@ -16,13 +16,20 @@
 
 #include "cuttlefish/host/commands/assemble_cvd/boot_config.h"
 
-#include <stdint.h>
-#include <sys/stat.h>
+#include <stddef.h>
+#include <sys/types.h>
 
 #include <fstream>
+#include <functional>
+#include <ios>
+#include <map>
+#include <optional>
+#include <ostream>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <utility>
 
 #include "absl/log/log.h"
 #include "absl/strings/str_join.h"
@@ -30,6 +37,7 @@
 
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/size_utils.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/commands/assemble_cvd/bootconfig_args.h"
 #include "cuttlefish/host/libs/avb/avb.h"
 #include "cuttlefish/host/libs/config/ap_boot_flow.h"
@@ -38,6 +46,7 @@
 #include "cuttlefish/host/libs/config/kernel_args.h"
 #include "cuttlefish/host/libs/config/mkenvimage_slim.h"
 #include "cuttlefish/host/libs/vm_manager/crosvm_manager.h"
+#include "cuttlefish/posix/remove.h"
 #include "cuttlefish/result/result.h"
 
 using cuttlefish::vm_manager::CrosvmManager;
@@ -66,7 +75,8 @@ void WritePausedEntrypoint(std::string_view entrypoint,
                            const CuttlefishConfig::InstanceSpecific& instance,
                            std::ostream& env) {
   if (instance.pause_in_bootloader()) {
-    env << "if test $paused -ne 1; then paused=1; else " << entrypoint << "; fi";
+    env << "if test $paused -ne 1; then paused=1; else " << entrypoint
+        << "; fi";
   } else {
     env << entrypoint;
   }
@@ -75,9 +85,15 @@ void WritePausedEntrypoint(std::string_view entrypoint,
 }
 
 void WriteAndroidEnvironment(
-    std::ostream& env,
-    const CuttlefishConfig::InstanceSpecific& instance) {
-  WritePausedEntrypoint("run bootcmd_android", instance, env);
+    std::ostream& env, const CuttlefishConfig::InstanceSpecific& instance) {
+  const std::string entrypoint =
+      "bcb load virtio 0 misc; "
+      "if bcb test command = boot-quiescent; then "
+      "setenv bootargs \"$bootargs androidboot.quiescent=1\"; "
+      "bcb clear command; bcb store; "
+      "fi; "
+      "run bootcmd_android";
+  WritePausedEntrypoint(entrypoint, instance, env);
 
   if (!instance.boot_slot().empty()) {
     env << "android_slot_suffix=_" << instance.boot_slot() << '\0';
@@ -151,8 +167,8 @@ Result<void> PrepareBootEnvImage(
   // protect kvm which is running a kernel with bootconfig support.
   if (!instance.bootconfig_supported()) {
     std::map<std::string, std::string, std::less<void>> builtin_bootconfig_args;
-    auto bootconfig_args =
-        CF_EXPECT(BootconfigArgsFromConfig(config, instance, builtin_bootconfig_args));
+    auto bootconfig_args = CF_EXPECT(
+        BootconfigArgsFromConfig(config, instance, builtin_bootconfig_args));
 
     // "androidboot.hardware" kernel parameter has changed to "hardware" in
     // bootconfig and needs to be replaced before being used in the kernel
@@ -189,7 +205,8 @@ Result<void> PrepareBootEnvImage(
     CF_EXPECT(RenameFile(tmp_boot_env_image_path, image_path),
               "Unable to delete the old env image");
     VLOG(0) << "Updated bootloader environment image.";
-  } else if (Result<void> rs = RemoveFile(tmp_boot_env_image_path); !rs.ok()) {
+  } else if (Result<void, int> rs = RemoveFile(tmp_boot_env_image_path);
+             !rs.has_value()) {
     LOG(WARNING) << rs.error();
   }
 
@@ -225,4 +242,4 @@ ApBootloaderEnvPartition::Create(
   return ApBootloaderEnvPartition();
 }
 
-} // namespace cuttlefish
+}  // namespace cuttlefish

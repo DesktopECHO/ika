@@ -1,29 +1,26 @@
 load("@grpc//bazel:cc_grpc_library.bzl", "cc_grpc_library")
 load("@protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
 load("@protobuf//bazel:proto_library.bzl", "proto_library")
-load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary", "cf_cc_library")
+load("//cuttlefish/bazel:rules.bzl", "cf_build_test", "cf_cc_binary", "cf_cc_library")
 
 package(
     default_visibility = ["//:android_cuttlefish"],
 )
 
+cf_build_test(name = "casimir_control_server_test")
+
 cf_cc_binary(
     name = "casimir_control_server",
-    srcs = [
-        "main.cpp",
-    ],
-    clang_format_enabled = False,
+    srcs = ["main.cpp"],
     deps = [
-        ":libcasimir",
-        ":libcasimir_control_server",
-        "//cuttlefish/common/libs/fs",
-        "//cuttlefish/host/libs/command_util",
+        "//cuttlefish/host/commands/casimir_control_server:casimir_control_server_cc_proto",
+        "//cuttlefish/host/commands/casimir_control_server:casimir_controller",
+        "//cuttlefish/host/commands/casimir_control_server:hex",
+        "//cuttlefish/host/commands/casimir_control_server:libcasimir_control_server",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/strings",
         "@gflags",
-        "@grpc",
         "@grpc//:grpc++",
         "@grpc//:grpc++_reflection",
         "@protobuf//:empty_cc_proto",
@@ -31,24 +28,39 @@ cf_cc_binary(
 )
 
 cf_cc_library(
-    name = "libcasimir",
+    name = "casimir_controller",
     srcs = [
         "casimir_controller.cpp",
-        "crc.cpp",
-        "hex.cpp",
-    ],
-    hdrs = [
-        "casimir_controller.h",
-        "crc.h",
-        "hex.h",
         # TODO: b/416777029 - stop using a copy of these two files
         "packet_runtime.h",
         "rf_packets.h",
     ],
+    hdrs = ["casimir_controller.h"],
     deps = [
-        ":libcasimir_control_server",
         "//cuttlefish/common/libs/fs",
-        "//cuttlefish/result",
+        "//cuttlefish/host/commands/casimir_control_server:crc",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+    ],
+)
+
+cf_cc_library(
+    name = "crc",
+    srcs = ["crc.cpp"],
+    hdrs = ["crc.h"],
+    deps = [
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+    ],
+)
+
+cf_cc_library(
+    name = "hex",
+    srcs = ["hex.cpp"],
+    hdrs = ["hex.h"],
+    deps = [
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
     ],
 )
 

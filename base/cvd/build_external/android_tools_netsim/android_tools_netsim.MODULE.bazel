@@ -105,5 +105,5 @@ git_repository(
         "@//build_external/android_tools_netsim:0003-Pin-cxx.patch",
         "@//build_external/android_tools_netsim:0004-Remove-unused-global-grpc-ClientContext.patch",
     ],
-    patch_strip = 1,
+    patch_args = ["-p1"],
 )

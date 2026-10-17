@@ -13,18 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "allocd/alloc_driver.h"
-
-#include <cstdint>
-#include <fstream>
-#include <string_view>
 #include <unistd.h>
 
-#include "absl/log/log.h"
-#include "absl/strings/str_cat.h"
-#include "absl/strings/str_format.h"
+#include <string>
+#include <string_view>
 
-#include "cuttlefish/common/libs/utils/subprocess.h"
+#include "absl/strings/str_cat.h"
+
+#include "allocd/alloc_driver.h"
+#include "cuttlefish/process/execute.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {

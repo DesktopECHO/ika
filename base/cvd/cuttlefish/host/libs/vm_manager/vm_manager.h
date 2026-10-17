@@ -20,7 +20,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <fruit/fruit.h>
+#include "fruit/fruit.h"
 
 #include "cuttlefish/common/libs/utils/host_info.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
@@ -61,7 +61,7 @@ class VmManager {
   // - /dev/hvc10 = oemlock
   // - /dev/hvc11 = keymint
   // - /dev/hvc12 = NFC
-  // - /dev/hvc13 = vacant (sink, so feel free to use)
+  // - /dev/hvc13 = weaver
   // - /dev/hvc14 = MCU control
   // - /dev/hvc15 = MCU UART
   // - /dev/hvc16 = Ti50 TPM FIFO
@@ -128,9 +128,11 @@ VmManagerComponent();
 
 std::unique_ptr<VmManager> GetVmManager(VmmMode vmm, Arch arch);
 
+// Formats androidboot.boot_devices property to include the disks at a range of
+// PCI slots.
 Result<std::unordered_map<std::string, std::string>>
-ConfigureMultipleBootDevices(const std::string& pci_path, int pci_offset,
+ConfigureMultipleBootDevices(const std::string& pci_path, int disk_pci_offset,
                              int num_disks);
 
-} // namespace vm_manager
-} // namespace cuttlefish
+}  // namespace vm_manager
+}  // namespace cuttlefish

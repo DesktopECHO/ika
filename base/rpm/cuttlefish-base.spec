@@ -15,6 +15,14 @@ Source0:        ika-base-%{version}.tar.gz
 %global __brp_strip %{nil}
 %global __brp_strip_comment_note %{nil}
 %global __brp_strip_lto %{nil}
+# The shared libraries under /usr/lib/cuttlefish-common are private to the
+# host tools, found by rpath or dlopen, so they must not satisfy other
+# packages' dependencies. A bundled libvirglrenderer.so.1 would otherwise
+# stand in for Fedora's virglrenderer, which crosvm links.
+%global __provides_exclude_from ^/usr/lib/cuttlefish-common/.*$
+# Sonames that only the bundled copies provide; libvirglrenderer is left out
+# because it comes from Fedora's virglrenderer.
+%global __requires_exclude ^(libgfxstream_backend|libvk_swiftshader|libvk_lavapipe|libmem_overrides)\\.so
 
 BuildRequires:  libaom-devel
 BuildRequires:  clang-devel
@@ -281,7 +289,7 @@ while true; do
     --host_cxxopt=-Wno-thread-safety-reference-return \
     --conlyopt=-Wno-error=incompatible-pointer-types-discards-qualifiers \
     --host_conlyopt=-Wno-error=incompatible-pointer-types-discards-qualifiers \
-    'cuttlefish/package:cvd' \
+    'cuttlefish/package:common' \
     'cuttlefish/package:defaults' \
     'cuttlefish/package:metrics' \
     --spawn_strategy=local \
@@ -358,6 +366,8 @@ esac
 
 mkdir -p %{buildroot}/usr/lib
 cp -a base/cvd/bazel-out/${bazel_arch}-opt/bin/cuttlefish/package/cuttlefish-common %{buildroot}/usr/lib/
+# Bazel leaves its tree artifacts read-only; more files are installed below.
+chmod -R u+w %{buildroot}/usr/lib/cuttlefish-common
 mkdir -p %{buildroot}/usr/bin
 cp -a base/cvd/bazel-out/${bazel_arch}-opt/bin/cuttlefish/package/cuttlefish-integration/bin/* %{buildroot}/usr/bin/
 mkdir -p %{buildroot}/usr/lib/cuttlefish-metrics/bin

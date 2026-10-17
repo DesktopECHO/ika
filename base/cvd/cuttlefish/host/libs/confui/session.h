@@ -24,9 +24,8 @@
 #include <string>
 #include <vector>
 
-#include <teeui/msg_formatting.h>
+#include "teeui/msg_formatting.h"
 
-#include "cuttlefish/common/libs/confui/confui.h"
 #include "cuttlefish/host/libs/confui/confui_cbor.h"
 #include "cuttlefish/host/libs/confui/host_mode_ctrl.h"
 #include "cuttlefish/host/libs/confui/host_renderer.h"
@@ -45,7 +44,7 @@ namespace confui {
  */
 class Session {
  public:
-  Session(const std::string& session_name, const uint32_t display_num,
+  Session(const std::string& session_name, uint32_t display_num,
           ConfUiRenderer& host_renderer, HostModeCtrl& host_mode_ctrl,
           const std::string& locale = "en");
 
@@ -53,7 +52,7 @@ class Session {
 
   MainLoopState GetState() { return state_; }
 
-  MainLoopState Transition(SharedFD& hal_cli, const FsmInput fsm_input,
+  MainLoopState Transition(SharedFD& hal_cli, FsmInput fsm_input,
                            const ConfUiMessage& conf_ui_message);
 
   /**
@@ -101,12 +100,12 @@ class Session {
   //
   // when false is returned, the FSM must terminate
   // and, no need to let the guest know
-  bool HandleInit(SharedFD hal_cli, const FsmInput fsm_input,
+  bool HandleInit(SharedFD hal_cli, FsmInput fsm_input,
                   const ConfUiMessage& conf_ui_message);
 
-  bool HandleWaitStop(SharedFD hal_cli, const FsmInput fsm_input);
+  bool HandleWaitStop(SharedFD hal_cli, FsmInput fsm_input);
 
-  bool HandleInSession(SharedFD hal_cli, const FsmInput fsm_input,
+  bool HandleInSession(SharedFD hal_cli, FsmInput fsm_input,
                        const ConfUiMessage& conf_ui_msg);
 
   // report with an error ack to HAL, and reset the FSM

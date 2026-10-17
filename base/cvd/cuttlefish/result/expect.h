@@ -19,8 +19,8 @@
 #include <type_traits>
 #include <utility>
 
-#include "android-base/format.h"  // IWYU pragma: export
-#include "android-base/result.h"  // IWYU pragma: export
+#include "fmt/format.h"     // IWYU pragma: keep: preprocessor
+#include "tl/expected.hpp"  // IWYU pragma: export
 
 #include "cuttlefish/result/error_type.h"
 #include "cuttlefish/result/result_type.h"  // IWYU pragma: export
@@ -45,20 +45,25 @@ namespace cuttlefish {
  *       at path/to/file.cpp:50
  *       in Result<std::string> MyFunction()
  */
-#define CF_ERR(MSG) (CF_STACK_TRACE_ENTRY("") << MSG)
-#define CF_ERRNO(MSG) (CF_STACK_TRACE_ENTRY("") << MSG)
-#define CF_ERRF(MSG, ...) \
-  (CF_STACK_TRACE_ENTRY("") << fmt::format(FMT_STRING(MSG), __VA_ARGS__))
+#define CF_ERR(MSG) StackTraceError<void>(CF_STACK_TRACE_ENTRY("") << MSG)
+#define CF_ERRNO(MSG) StackTraceError<void>(CF_STACK_TRACE_ENTRY("") << MSG)
+#define CF_ERRF(MSG, ...)                        \
+  StackTraceError<void>(CF_STACK_TRACE_ENTRY("") \
+                        << fmt::format(FMT_STRING(MSG), __VA_ARGS__))
+#define CF_ERRVF(VALUE, MSG, ...)                 \
+  StackTraceError(VALUE, CF_STACK_TRACE_ENTRY("") \
+                             << fmt::format(FMT_STRING(MSG), __VA_ARGS__))
 
 template <typename T>
 T OutcomeDereference(std::optional<T>&& value) {
   return std::move(*value);
 }
 
-inline void OutcomeDereference(Result<void>&&) {}
+template <typename E>
+inline void OutcomeDereference(Result<void, E>&&) {}
 
-template <typename T>
-T OutcomeDereference(Result<T>&& result) {
+template <typename T, typename E>
+T OutcomeDereference(Result<T, E>&& result) {
   return std::move(*result);
 }
 
@@ -75,20 +80,20 @@ bool TypeIsSuccess(std::optional<T>& value) {
   return value.has_value();
 }
 
-template <typename T>
-bool TypeIsSuccess(Result<T>& value) {
-  return value.ok();
+template <typename T, typename E>
+bool TypeIsSuccess(Result<T, E>& value) {
+  return value.has_value();
 }
 
-inline auto ErrorFromType(bool) { return StackTraceError(); }
+inline auto ErrorFromType(bool) { return StackTraceError<void>(); }
 
 template <typename T>
 inline auto ErrorFromType(std::optional<T>) {
-  return StackTraceError();
+  return StackTraceError<void>();
 }
 
-template <typename T>
-auto ErrorFromType(Result<T>& value) {
+template <typename T, typename E>
+auto ErrorFromType(Result<T, E>& value) {
   return value.error();
 }
 
@@ -102,12 +107,25 @@ auto ErrorFromType(Result<T>& value) {
       current_entry << MSG;                                   \
       auto error = ErrorFromType(macro_intermediate_result);  \
       error.PushEntry(std::move(current_entry));              \
-      return std::move(error);                                \
+      return tl::unexpected(std::move(error));                \
     };                                                        \
     OutcomeDereference(std::move(macro_intermediate_result)); \
   })
 
 #define CF_EXPECT1(RESULT) CF_EXPECT2(RESULT, "")
+
+#define CF_EXPECTV(RESULT, VALUE, MSG)                                        \
+  ({                                                                          \
+    decltype(RESULT)&& macro_intermediate_result = RESULT;                    \
+    if (!TypeIsSuccess(macro_intermediate_result)) {                          \
+      auto current_entry = CF_STACK_TRACE_ENTRY(#RESULT);                     \
+      current_entry << MSG;                                                   \
+      auto error = ErrorFromType(macro_intermediate_result).WithValue(VALUE); \
+      error.PushEntry(std::move(current_entry));                              \
+      return tl::unexpected(std::move(error));                                \
+    };                                                                        \
+    OutcomeDereference(std::move(macro_intermediate_result));                 \
+  })
 
 /**
  * Error propagation macro that can be used as an expression.
@@ -144,12 +162,31 @@ auto ErrorFromType(Result<T>& value) {
  *        at /path/to/file.cpp:81:
  *        in Result<std::string> CreatePopulatedTempDir()
  *        for CF_EXPECT(CreateTempDir())
+ *
+ * Error values can contain additional information about the error. It is
+ * possible to return more information to a caller with CF_EXPECTVF.
+ *
+ *     Result<void, int> Mkdir(const std::string& path) {
+ *       CF_EXPECTVF(mkdir(path.c_str()), errno, "{}", StrError(errno));
+ *       return {};
+ *     }
+ *
+ *     Result<void> DoWork() {
+ *       Result<void, int> res = Mkdir("/my/path");
+ *       if (!res && *res.error() == EACCES) {
+ *         CF_EXPECT(Mkdir("/backup/path"));
+ *       }
+ *       return {};
+ *     }
  */
 #define CF_EXPECT(...) \
   CF_EXPECT_OVERLOAD(__VA_ARGS__, CF_EXPECT2, CF_EXPECT1)(__VA_ARGS__)
 
 #define CF_EXPECTF(RESULT, MSG, ...) \
   CF_EXPECT(RESULT, fmt::format(FMT_STRING(MSG), __VA_ARGS__))
+
+#define CF_EXPECTVF(RESULT, VALUE, MSG, ...) \
+  CF_EXPECTV(RESULT, VALUE, fmt::format(FMT_STRING(MSG), __VA_ARGS__))
 
 #define CF_COMPARE_EXPECT4(COMPARE_OP, LHS_RESULT, RHS_RESULT, MSG)         \
   ({                                                                        \
@@ -166,7 +203,7 @@ auto ErrorFromType(Result<T>& value) {
       current_entry << MSG;                                                 \
       auto error = ErrorFromType(false);                                    \
       error.PushEntry(std::move(current_entry));                            \
-      return std::move(error);                                              \
+      return tl::unexpected(std::move(error));                              \
     };                                                                      \
     comparison_result;                                                      \
   })

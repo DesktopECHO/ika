@@ -25,6 +25,7 @@
 #endif
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <atomic>
@@ -38,15 +39,16 @@
 #include "absl/log/log.h"
 #include "absl/strings/match.h"
 #include "android-base/file.h"
-#include "android-base/macros.h"
 
 #include "cuttlefish/common/libs/transport/channel.h"
 #include "cuttlefish/common/libs/transport/channel_sharedfd.h"
 #include "cuttlefish/common/libs/utils/contains.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/libs/command_util/util.h"
 #include "cuttlefish/host/libs/config/known_paths.h"
 #include "cuttlefish/posix/strerror.h"
+#include "cuttlefish/posix/temp_failure_retry.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/subprocess.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -182,19 +184,22 @@ Result<ProcessMonitorExit> MonitorLoop(std::atomic_bool& running,
 Result<void> StopSubprocesses(std::vector<MonitorEntry>& monitored) {
   VLOG(0) << "Stopping monitored subprocesses";
   auto stop = [](const auto& it) {
+    if (!it.proc) {
+      return true;
+    }
     auto stop_result = it.proc->Stop();
-    if (stop_result == StopperResult::kStopFailure) {
+    if (stop_result == StopperResult::kFailure) {
       LOG(WARNING) << "Error in stopping \"" << it.cmd->GetShortName() << "\"";
       return false;
     }
-    siginfo_t infop;
-    auto success = it.proc->Wait(&infop, WEXITED);
-    if (success < 0) {
-      LOG(WARNING) << "Failed to wait for process " << it.cmd->GetShortName();
+    Result<siginfo_t> infop = it.proc->Wait(WEXITED);
+    if (!infop.has_value()) {
+      LOG(WARNING) << "Failed to wait for process " << it.cmd->GetShortName()
+                   << ": " << infop.error();
       return false;
     }
-    if (stop_result == StopperResult::kStopCrash) {
-      LogSubprocessExit(it.cmd->GetShortName(), infop);
+    if (stop_result == StopperResult::kCrash) {
+      LogSubprocessExit(it.cmd->GetShortName(), *infop);
     }
     return true;
   };
@@ -307,7 +312,7 @@ Result<void> ProcessMonitor::ReadMonitorSocketLoop(std::atomic_bool& running) {
   VLOG(0) << "Waiting for a `stop` message from the parent";
   while (running.load()) {
     auto message_res = child_channel_->ReceiveMessage();
-    if (!message_res.ok()) {
+    if (!message_res.has_value()) {
       if (!running.load()) {
         // We were shut down intentionally, ignore error
         return {};
@@ -483,7 +488,7 @@ Result<void> ProcessMonitor::StartAndMonitorProcesses() {
     child_sock_ = std::move(child_sock);
     Result<ProcessMonitorExit> monitor_result = MonitorRoutine();
     int monitor_exit_code = kMonitorErrorExitCode;
-    if (!monitor_result.ok()) {
+    if (!monitor_result.has_value()) {
       LOG(ERROR) << "Monitoring processes failed:\n" << monitor_result.error();
     } else if (*monitor_result == ProcessMonitorExit::kUnexpected) {
       monitor_exit_code = kUnexpectedCriticalProcessExitCode;
@@ -521,15 +526,25 @@ Result<ProcessMonitorExit> ProcessMonitor::MonitorRoutine() {
   auto parent_comms = std::async(std::launch::async, read_monitor_socket_loop,
                                  std::ref(running));
 
-  auto monitor_exit = CF_EXPECT(MonitorLoop(running, properties_mutex_,
-                                            properties_.restart_subprocesses_,
-                                            properties_.entries_));
+  auto monitor_loop_result =
+      MonitorLoop(running, properties_mutex_, properties_.restart_subprocesses_,
+                  properties_.entries_);
+  running.store(false);
   if (child_sock_->IsOpen()) {
     child_sock_->Shutdown(SHUT_RDWR);
   }
-  CF_EXPECT(parent_comms.get(), "Should have exited if monitoring stopped");
+  auto parent_comms_result = parent_comms.get();
+  if (!parent_comms_result.has_value()) {
+    LOG(WARNING) << "Parent comms thread failed: "
+                 << parent_comms_result.error();
+  }
 
-  CF_EXPECT(StopSubprocesses(properties_.entries_));
+  auto stop_result = StopSubprocesses(properties_.entries_);
+  if (!stop_result.has_value()) {
+    LOG(WARNING) << "Failed to stop subprocesses: " << stop_result.error();
+  }
+  ProcessMonitorExit monitor_exit = CF_EXPECT(std::move(monitor_loop_result));
+  CF_EXPECT(std::move(stop_result));
   VLOG(0) << "Done monitoring subprocesses";
   return monitor_exit;
 }

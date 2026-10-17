@@ -21,11 +21,12 @@
 
 #include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/host/commands/cvd/cli/selector/selector_common_parser.h"
-#include "cuttlefish/host/commands/cvd/cli/types.h"
+#include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
 
-Result<selector::SelectorOptions> ExtractCvdArgs(cvd_common::Args& args) {
+Result<selector::SelectorOptions> ExtractCvdArgs(
+    std::vector<std::string>& args) {
   CF_EXPECT(!args.empty());
   // Remove the first argument before parsing selectors
   std::string program = args[0];

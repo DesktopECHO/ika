@@ -1,19 +1,41 @@
-load("//cuttlefish/bazel:rules.bzl", "cf_cc_library", "cf_cc_test")
+load("//cuttlefish/bazel:rules.bzl", "cf_build_test", "cf_cc_library", "cf_cc_test")
 
 package(
     default_visibility = ["//:android_cuttlefish"],
 )
 
+cf_build_test(name = "fs_build_test")
+
 cf_cc_library(
     name = "epoll",
     srcs = ["epoll.cpp"],
     hdrs = ["epoll.h"],
+    include_cleaner_enabled = False,
     target_compatible_with = [
         "@platforms//os:linux",
     ],
     deps = [
         "//cuttlefish/common/libs/fs",
         "//cuttlefish/result",
+    ],
+)
+
+cf_cc_library(
+    name = "fd",
+    srcs = ["fd.cc"],
+    hdrs = ["fd.h"],
+    include_cleaner_enabled = False,
+    deps = [
+        "//cuttlefish/common/libs/fs:scoped_mmap",
+        "//cuttlefish/common/libs/utils:environment",
+        "//cuttlefish/io",
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
+        "@android_system_libbase//:cmsg",
+        "@fmt",
     ],
 )
 
@@ -28,16 +50,15 @@ cf_cc_library(
         "shared_fd.h",
         "shared_select.h",
     ],
-    clang_format_enabled = False,
+    include_cleaner_enabled = False,
     linkopts = select({
         "@platforms//os:linux": ["-lrt"],
         "//conditions:default": [],
     }),
     deps = [
-        "//cuttlefish/common/libs/utils:environment",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/posix:strerror",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/log:check",
         "@fmt",
@@ -46,20 +67,35 @@ cf_cc_library(
 
 cf_cc_test(
     name = "fs_test",
-    srcs = [
-        "shared_fd_test.cpp",
-    ],
+    srcs = ["shared_fd_test.cpp"],
+    include_cleaner_enabled = False,
     deps = [
-        ":fs",
-        "//libbase",
+        "//cuttlefish/common/libs/fs",
     ],
+)
+
+cf_cc_library(
+    name = "recv_all",
+    srcs = ["recv_all.cc"],
+    hdrs = ["recv_all.h"],
+    deps = [
+        "//cuttlefish/common/libs/fs:fd",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
+    ],
+)
+
+cf_cc_library(
+    name = "scoped_mmap",
+    srcs = ["scoped_mmap.cc"],
+    hdrs = ["scoped_mmap.h"],
 )
 
 cf_cc_library(
     name = "shared_fd_stream",
     srcs = ["shared_fd_stream.cpp"],
     hdrs = ["shared_fd_stream.h"],
-    clang_format_enabled = False,
+    include_cleaner_enabled = False,
     deps = [
         "//cuttlefish/common/libs/fs",
     ],

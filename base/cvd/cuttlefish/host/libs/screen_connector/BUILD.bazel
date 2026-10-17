@@ -1,30 +1,25 @@
-load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+load("//cuttlefish/bazel:rules.bzl", "cf_build_test", "cf_cc_library")
 
 package(
     default_visibility = ["//:android_cuttlefish"],
 )
 
+cf_build_test(name = "screen_connector_build_test")
+
 cf_cc_library(
     name = "screen_connector_common",
-    srcs = [
-        "screen_connector_common.cc",
-    ],
-    hdrs = [
-        "screen_connector_common.h",
-    ],
+    srcs = ["screen_connector_common.cc"],
+    hdrs = ["screen_connector_common.h"],
     deps = [
         "//cuttlefish/common/libs/utils:size_utils",
         "//cuttlefish/host/libs/config:cuttlefish_config",
-        "//libbase",
         "@abseil-cpp//absl/log:check",
     ],
 )
 
 cf_cc_library(
     name = "video_frame_buffer",
-    hdrs = [
-        "video_frame_buffer.h",
-    ],
+    hdrs = ["video_frame_buffer.h"],
 )
 
 cf_cc_library(
@@ -44,21 +39,21 @@ cf_cc_library(
         "screen_connector_queue.h",
         "wayland_screen_connector.h",
     ],
-    clang_format_enabled = False,
+    include_cleaner_enabled = False,
     deps = [
         ":screen_connector_common",
         ":video_frame_buffer",
         "//cuttlefish/common/libs/concurrency",
-        "//cuttlefish/common/libs/confui",
         "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/fs:scoped_mmap",
         "//cuttlefish/common/libs/utils:contains",
         "//cuttlefish/common/libs/utils:size_utils",
         "//cuttlefish/host/libs/config:cuttlefish_config",
         "//cuttlefish/host/libs/config:gpu_mode",
         "//cuttlefish/host/libs/confui:host_confui",
-        "//cuttlefish/host/libs/wayland:cuttlefish_wayland_server",
+        "//cuttlefish/host/libs/wayland:wayland_server",
+        "//cuttlefish/host/libs/wayland:wayland_server_callbacks",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/log:check",
         "@abseil-cpp//absl/strings",

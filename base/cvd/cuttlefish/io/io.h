@@ -17,40 +17,15 @@
 
 #include <stdint.h>
 
+#include "cuttlefish/io/reader.h"
+#include "cuttlefish/io/visitable.h"
+#include "cuttlefish/io/writer.h"
 #include "cuttlefish/result/result_type.h"
 
 namespace cuttlefish {
 
 class ConcatReaderSeeker;
-class IoVisitor;
 class ReadWindowView;
-class SharedFdIo;
-
-/** Used to determine the runtime type of an IO instance object. */
-class IoVisitable {
- public:
-  virtual ~IoVisitable() = default;
-
-  virtual Result<void> Visit(IoVisitor&) = 0;
-};
-
-class Reader : public virtual IoVisitable {
- public:
-  virtual ~Reader() = default;
-
-  Result<void> Visit(IoVisitor&) override;
-  // Has the semantics of read(2)
-  virtual Result<uint64_t> Read(void* buf, uint64_t count) = 0;
-};
-
-class Writer : public virtual IoVisitable {
- public:
-  virtual ~Writer() = default;
-
-  Result<void> Visit(IoVisitor&) override;
-  // Has the semantics of write(2)
-  virtual Result<uint64_t> Write(const void* buf, uint64_t count) = 0;
-};
 
 class Seeker : public virtual IoVisitable {
  public:
@@ -58,11 +33,11 @@ class Seeker : public virtual IoVisitable {
 
   Result<void> Visit(IoVisitor&) override;
   // Has the semantics of lseek(2) with SEEK_SET
-  virtual Result<uint64_t> SeekSet(uint64_t offset) = 0;
+  virtual Result<uint64_t, int> SeekSet(uint64_t offset) = 0;
   // Has the semantics of lseek(2) with SEEK_CUR
-  virtual Result<uint64_t> SeekCur(int64_t offset) = 0;
+  virtual Result<uint64_t, int> SeekCur(int64_t offset) = 0;
   // Has the semantics of lseek(2) with SEEK_END
-  virtual Result<uint64_t> SeekEnd(int64_t offset) = 0;
+  virtual Result<uint64_t, int> SeekEnd(int64_t offset) = 0;
 };
 
 class ReaderSeeker : public Reader, public Seeker {
@@ -90,9 +65,9 @@ class ReaderWriterSeeker : public ReaderSeeker, public WriterSeeker {
 
   Result<uint64_t> Read(void* buf, uint64_t count) override = 0;
   Result<uint64_t> Write(const void* buf, uint64_t count) override = 0;
-  Result<uint64_t> SeekSet(uint64_t offset) override = 0;
-  Result<uint64_t> SeekCur(int64_t offset) override = 0;
-  Result<uint64_t> SeekEnd(int64_t offset) override = 0;
+  Result<uint64_t, int> SeekSet(uint64_t offset) override = 0;
+  Result<uint64_t, int> SeekCur(int64_t offset) override = 0;
+  Result<uint64_t, int> SeekEnd(int64_t offset) override = 0;
   Result<uint64_t> PRead(void* buf, uint64_t count,
                          uint64_t offset) const override = 0;
   Result<uint64_t> PWrite(const void* buf, uint64_t count,
@@ -121,7 +96,6 @@ class IoVisitor {
   virtual Result<void> Accept(ReaderSeeker&) = 0;
   virtual Result<void> Accept(ReaderWriterSeeker&) = 0;
   virtual Result<void> Accept(Seeker&) = 0;
-  virtual Result<void> Accept(SharedFdIo&) = 0;
   virtual Result<void> Accept(Writer&) = 0;
   virtual Result<void> Accept(WriterSeeker&) = 0;
 };

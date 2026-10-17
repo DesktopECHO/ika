@@ -1,6 +1,7 @@
 common --vendor_dir=vendor_src
 common --experimental_isolated_extension_usages
 
+build --incompatible_strict_action_env
 build --build_tag_filters=-clang_tidy,-clang-tidy
 build --copt=-fdiagnostics-color=always
 build --output_filter='^//((?!(external/libarchive|external/libevent|external/rules_flex|external/rules_m4):).)*$'

@@ -16,13 +16,19 @@
 #include "cuttlefish/host/commands/assemble_cvd/vendor_dlkm_utils.h"
 
 #include <fcntl.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
 
 #include <algorithm>
+#include <array>
 #include <deque>
 #include <map>
 #include <set>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "absl/log/log.h"
@@ -32,19 +38,23 @@
 #include "android-base/file.h"
 #include "fmt/format.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_buf.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/contains.h"
 #include "cuttlefish/common/libs/utils/disk_usage.h"
 #include "cuttlefish/common/libs/utils/environment.h"
 #include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
+#include "cuttlefish/files/directory_exists.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/commands/assemble_cvd/boot_image_utils.h"
 #include "cuttlefish/host/commands/assemble_cvd/kernel_module_parser.h"
 #include "cuttlefish/host/libs/avb/avb.h"
 #include "cuttlefish/host/libs/config/config_utils.h"
 #include "cuttlefish/host/libs/config/known_paths.h"
-#include "cuttlefish/io/shared_fd.h"
+#include "cuttlefish/io/write_exact.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/execute.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -61,7 +71,8 @@ constexpr size_t RoundUp(size_t a, size_t divisor) {
 
 template <typename Container>
 bool WriteLinesToFile(const Container& lines, const std::string& path) {
-  SharedFD fd = SharedFD::Open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0640);
+  SharedFD fd = Fd::Open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0640)
+                    .value_or(Fd());
   if (!fd->IsOpen()) {
     PLOG(ERROR) << "Failed to open " << path;
     return false;
@@ -84,14 +95,12 @@ bool WriteLinesToFile(const Container& lines, const std::string& path) {
 Result<void> WriteFsConfig(const std::string& output_path,
                            const std::string& fs_root,
                            const std::string& mount_point) {
-  SharedFD fd = SharedFD::Open(output_path,
-                               O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-  CF_EXPECTF(fd->IsOpen(), "Couldn't open '{}': '{}'", output_path,
-             fd->StrError());
+  Fd fd = CF_EXPECT(
+      Fd::Open(output_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644));
   static constexpr std::string_view kBeginning =
       " 0 0 755 selabel=u:object_r:rootfs:s0 capabilities=0x0\n";
-  CF_EXPECTF(WriteAll(fd, kBeginning) == kBeginning.size(),
-             "Failed to write to '{}'", output_path);
+  CF_EXPECTF(WriteExact(fd, kBeginning), "Failed to write to '{}'",
+             output_path);
   Result<void> res = WalkDirectory(
       fs_root,
       [&fd, &output_path, &mount_point,
@@ -102,9 +111,8 @@ Result<void> WriteFsConfig(const std::string& output_path,
                                            ? " 0 0 755 capabilities=0x0\n"
                                            : " 0 0 644 capabilities=0x0\n";
         std::string to_write = mount_point + "/" + filename + fs_context;
-        CF_EXPECTF(WriteAll(fd, to_write) == to_write.size(),
-                   "Failed to write to '{}': '{}'", output_path,
-                   fd->StrError());
+        CF_EXPECTF(WriteExact(fd, to_write), "Failed to write to '{}'",
+                   output_path);
         return {};
       });
   CF_EXPECT(std::move(res));
@@ -131,6 +139,7 @@ std::vector<std::string> GetRamdiskModules(
       "vmw_vsock_virtio_transport.ko",
       "vmw_vsock_virtio_transport_common.ko",
       "vsock.ko",
+      "pkvm_iommu_temp.ko",
       // TODO(b/176860479) once virt_wifi is deprecated fully,
       // these following modules can be loaded in second stage init
       "libarc4.ko",
@@ -278,13 +287,12 @@ Result<void> GenerateFileContexts(const std::string& output_path,
                                   std::string_view mount_point,
                                   std::string_view file_label) {
   const std::string file_contexts_txt = output_path + ".txt";
-  SharedFD fd = SharedFD::Open(file_contexts_txt,
-                               O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-  CF_EXPECTF(fd->IsOpen(), "Can't open '{}': {}", output_path, fd->StrError());
+  Fd fd = CF_EXPECT(Fd::Open(file_contexts_txt,
+                             O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644));
 
   std::string line = fmt::format("{}(/.*)?         u:object_r:{}:s0\n",
                                  mount_point, file_label);
-  CF_EXPECT_EQ(WriteAll(fd, line), line.size(), fd->StrError());
+  CF_EXPECT(WriteExact(fd, line));
 
   int exit_code = Execute({
       HostBinaryPath("sefcontext_compile"),
@@ -462,11 +470,9 @@ Result<void> SplitRamdiskModules(const std::string& ramdisk_path,
     if (!FileExists(module_location)) {
       continue;
     }
-    SharedFD module_fd = SharedFD::Open(module_location, O_RDONLY);
-    CF_EXPECT(module_fd->IsOpen(), module_fd->StrError());
-    SharedFdIo module_io(module_fd);
+    Fd module_fd = CF_EXPECT(Fd::Open(module_location, O_RDONLY));
 
-    if (IsKernelModuleSigned(module_io).value_or(false)) {
+    if (IsKernelModuleSigned(module_fd).value_or(false)) {
       const auto system_dlkm_module_location =
           fmt::format("{}/{}", system_modules_dir, module_path);
 
@@ -534,16 +540,16 @@ bool FileEquals(const std::string& file1, const std::string& file2) {
   }
   std::array<uint8_t, 1024 * 16> buf1{};
   std::array<uint8_t, 1024 * 16> buf2{};
-  auto fd1 = SharedFD::Open(file1, O_RDONLY);
-  auto fd2 = SharedFD::Open(file2, O_RDONLY);
+  Fd fd1 = Fd::Open(file1, O_RDONLY).value_or(Fd());
+  Fd fd2 = Fd::Open(file2, O_RDONLY).value_or(Fd());
   auto bytes_remain = FileSize(file1);
   while (bytes_remain > 0) {
     const auto bytes_to_read = std::min<size_t>(bytes_remain, buf1.size());
-    if (fd1->Read(buf1.data(), bytes_to_read) != bytes_to_read) {
+    if (fd1.Read(buf1.data(), bytes_to_read) != bytes_to_read) {
       LOG(ERROR) << "Failed to read from " << file1;
       return false;
     }
-    if (!fd2->Read(buf2.data(), bytes_to_read)) {
+    if (!fd2.Read(buf2.data(), bytes_to_read)) {
       LOG(ERROR) << "Failed to read from " << file2;
       return false;
     }
@@ -559,7 +565,7 @@ bool MoveIfChanged(const std::string& src, const std::string& dst) {
     return false;
   }
   const auto ret = RenameFile(src, dst);
-  if (!ret.ok()) {
+  if (!ret.has_value()) {
     LOG(ERROR) << ret.error();
     return false;
   }

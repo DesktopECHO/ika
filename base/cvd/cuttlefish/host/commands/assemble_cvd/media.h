@@ -16,6 +16,8 @@
 #pragma once
 
 #include <fruit/fruit.h>
+
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -32,10 +34,13 @@ class MediaConfigs {
 
   virtual std::string Name() const = 0;
 
-  virtual const std::vector<CuttlefishConfig::MediaConfig>& GetConfigs()
-      const = 0;
+  virtual const std::vector<CuttlefishConfig::MediaConfig>& GetConfigs(
+      size_t instance_index) const = 0;
+  virtual const std::vector<std::vector<CuttlefishConfig::MediaConfig>>&
+  GetAllConfigs() const = 0;
   virtual void SetConfigs(
-      const std::vector<CuttlefishConfig::MediaConfig>& configs) = 0;
+      const std::vector<std::vector<CuttlefishConfig::MediaConfig>>&
+          configs) = 0;
 };
 
 // Component to parse the --media command line flag and update the
@@ -47,8 +52,7 @@ class MediaConfigsFragment : public ConfigFragment {};
 
 fruit::Component<MediaConfigs> MediaConfigsComponent();
 
-fruit::Component<fruit::Required<MediaConfigs, ConfigFlag>,
-                 MediaConfigsFlag>
+fruit::Component<fruit::Required<MediaConfigs, ConfigFlag>, MediaConfigsFlag>
 MediaConfigsFlagComponent();
 
 fruit::Component<fruit::Required<MediaConfigs>, MediaConfigsFragment>

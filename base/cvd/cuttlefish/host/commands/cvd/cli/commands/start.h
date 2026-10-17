@@ -16,15 +16,15 @@
 
 #pragma once
 
-#include <memory>
+#include <optional>
 #include <string>
 
 #include "cuttlefish/flag_parser/flag.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
 #include "cuttlefish/host/commands/cvd/instances/instance_manager.h"
 #include "cuttlefish/host/commands/cvd/instances/local_instance_group.h"
 #include "cuttlefish/host/commands/cvd/utils/subprocess_waiter.h"
+#include "cuttlefish/process/command.h"
 
 namespace cuttlefish {
 
@@ -33,7 +33,7 @@ class CvdStartCommandHandler : public CvdCommandHandler {
   CvdStartCommandHandler(InstanceManager& instance_manager);
 
   Result<void> Handle(const CommandRequest& request) override;
-  cvd_common::Args CmdList() const override;
+  std::vector<std::string> CmdList() const override;
   std::string SummaryHelp() const override {
     return "Start all Cuttlefish Instances in a group";
   }
@@ -41,20 +41,22 @@ class CvdStartCommandHandler : public CvdCommandHandler {
   Result<std::vector<Flag>> Flags(const CommandRequest&) override;
 
   bool RequiresDeviceExists() const override { return true; }
+  bool RequiresHostConfiguration() const override { return true; }
 
  private:
   Result<void> LaunchSingleInstance(LocalInstance& instance,
                                     LocalInstanceGroup& group,
                                     const CommandRequest& request);
 
-  Result<void> LaunchDevice(Command command, LocalInstanceGroup& group,
-                            const cvd_common::Envs& envs,
-                            const CommandRequest& request);
+  Result<void> LaunchDevice(
+      Command command, LocalInstanceGroup& group,
+      const std::unordered_map<std::string, std::string>& envs,
+      const CommandRequest& request);
 
-  Result<void> LaunchDeviceInterruptible(Command command,
-                                         LocalInstanceGroup& group,
-                                         const cvd_common::Envs& envs,
-                                         const CommandRequest& request);
+  Result<void> LaunchDeviceInterruptible(
+      Command command, LocalInstanceGroup& group,
+      const std::unordered_map<std::string, std::string>& envs,
+      const CommandRequest& request);
 
   // Flags handled by `cvd start` itself, not cvd_internal_start.
   std::vector<Flag> BuildOwnFlags();
@@ -63,10 +65,9 @@ class CvdStartCommandHandler : public CvdCommandHandler {
   SubprocessWaiter subprocess_waiter_;
   struct {
     std::vector<std::string> host_substitutions;
+    bool daemon;
+    std::string print_group_format;
   } own_flags_;
 };
-
-std::unique_ptr<CvdCommandHandler> NewCvdStartCommandHandler(
-    InstanceManager& instance_manager);
 
 }  // namespace cuttlefish

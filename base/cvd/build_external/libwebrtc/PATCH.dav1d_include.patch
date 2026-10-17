@@ -1,0 +1,16 @@
+diff --git modules/video_coding/codecs/av1/dav1d_decoder.cc modules/video_coding/codecs/av1/dav1d_decoder.cc
+--- modules/video_coding/codecs/av1/dav1d_decoder.cc
++++ modules/video_coding/codecs/av1/dav1d_decoder.cc
+@@ -18,9 +18,9 @@
+ #include "common_video/include/video_frame_buffer.h"
+ #include "modules/video_coding/include/video_error_codes.h"
+ #include "rtc_base/logging.h"
+-#include "third_party/dav1d/libdav1d/include/dav1d/dav1d.h"
+-#include "third_party/libyuv/include/libyuv/convert.h"
+-#include "third_party/libyuv/include/libyuv/planar_functions.h"
++#include <dav1d/dav1d.h>
++#include "libyuv/convert.h"
++#include "libyuv/planar_functions.h"
+ 
+ namespace webrtc {
+ namespace {

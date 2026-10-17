@@ -24,8 +24,8 @@
 #include <vector>
 
 #include "cuttlefish/common/libs/transport/channel_sharedfd.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/libs/feature/command_source.h"
+#include "cuttlefish/process/command.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -56,10 +56,10 @@ struct MonitorEntry {
   MonitorEntry(Command command, ProcessCategory category)
       : cmd(new Command(std::move(command))),
         is_critical(category != ProcessCategory::kNonCriticalSupport),
-    category(category),
-    expected_exit_codes(category == ProcessCategory::kVmm
-          ? std::set<int>{0}
-          : std::set<int>{}) {}
+        category(category),
+        expected_exit_codes(category == ProcessCategory::kVmm
+                                ? std::set<int>{0}
+                                : std::set<int>{}) {}
 };
 
 // Launches and keeps track of subprocesses, decides response if they

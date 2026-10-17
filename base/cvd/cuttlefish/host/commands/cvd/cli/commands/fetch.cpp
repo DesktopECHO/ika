@@ -16,7 +16,6 @@
 
 #include "cuttlefish/host/commands/cvd/cli/commands/fetch.h"
 
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -29,37 +28,16 @@
 #include "cuttlefish/common/libs/utils/tee_logging.h"
 #include "cuttlefish/host/commands/cvd/cache/cache.h"
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
-#include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
-#include "cuttlefish/host/commands/cvd/cli/types.h"
-#include "cuttlefish/host/commands/cvd/fetch/auto_login.h"
 #include "cuttlefish/host/commands/cvd/fetch/build_api_flags.h"
 #include "cuttlefish/host/commands/cvd/fetch/fetch_cvd.h"
 #include "cuttlefish/host/commands/cvd/fetch/fetch_cvd_parser.h"
 #include "cuttlefish/host/commands/cvd/utils/common.h"
-#include "cuttlefish/host/libs/metrics/fetch_metrics_orchestration.h"
+#include "cuttlefish/metrics/fetch_metrics_orchestration.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
 
 namespace {
-
-Result<void> RunAutoLogin(const BuildApiFlags& build_api_flags) {
-  if (!CF_EXPECT(ShouldAutoLogin(build_api_flags))) {
-    return {};
-  }
-  LOG(INFO) << "\nNo credentials detected on corp, running credential "
-               "workflow.  Please follow prompts.\n";
-  if (!CanRunAutoLogin()) {
-    LOG(INFO) << "\nUnable to detect necessary files for credentialing.  Do "
-                 "you need to run `gcert`?\n";
-    return {};
-  }
-
-  CF_EXPECT(RunLogin());
-  LOG(INFO)
-      << "\nLogin successful.  This will persist across future executions.";
-  return {};
-}
 
 Result<void> RunCacheCleanup(const BuildApiFlags& build_api_flags) {
   if (!build_api_flags.enable_caching) {
@@ -73,7 +51,7 @@ Result<void> RunCacheCleanup(const BuildApiFlags& build_api_flags) {
                  "Error pruning cache at {} to {}GB", cache_directory,
                  build_api_flags.max_cache_size_gb);
   if (prune_result.before > prune_result.after) {
-    LOG(INFO) << fmt::format(
+    VLOG(0) << fmt::format(
         "Cache at \"{}\" pruned from ~{}GB to ~{}GB of {}GB max size",
         cache_directory, prune_result.before, prune_result.after,
         build_api_flags.max_cache_size_gb);
@@ -87,12 +65,6 @@ Result<void> CvdFetchCommandHandler::Handle(const CommandRequest& request) {
   std::vector<std::string> args = request.SubcommandArguments();
   const FetchFlags flags = CF_EXPECT(FetchFlags::Parse(args));
   CF_EXPECT(EnsureDirectoryExists(flags.target_directory));
-  Result<void> ensure_credentials_result = RunAutoLogin(flags.build_api_flags);
-  if (!ensure_credentials_result.ok()) {
-    LOG(INFO) << "Auto-login failed with the following error:\n"
-              << ensure_credentials_result.error() << "\n";
-    LOG(INFO) << "Still running the fetch operation.";
-  }
 
   GatherFetchStartMetrics(flags);
   std::string log_file = GetFetchLogsFileName(flags.target_directory);
@@ -101,7 +73,7 @@ Result<void> CvdFetchCommandHandler::Handle(const CommandRequest& request) {
   Result<FetchResult> result = FetchCvdMain(flags);
   CF_EXPECT(RunCacheCleanup(flags.build_api_flags));
 
-  if (result.ok()) {
+  if (result.has_value()) {
     GatherFetchCompleteMetrics(flags.target_directory, *result);
   } else {
     GatherFetchFailedMetrics(flags.target_directory);
@@ -110,7 +82,7 @@ Result<void> CvdFetchCommandHandler::Handle(const CommandRequest& request) {
   return {};
 }
 
-cvd_common::Args CvdFetchCommandHandler::CmdList() const {
+std::vector<std::string> CvdFetchCommandHandler::CmdList() const {
   return {"fetch", "fetch_cvd"};
 }
 
@@ -124,10 +96,6 @@ Result<std::string> CvdFetchCommandHandler::DetailedHelp(
   // TODO: b/389119573 - Should return the help text instead of printing it
   CF_EXPECT(FetchFlags::Parse(args));
   return {};
-}
-
-std::unique_ptr<CvdCommandHandler> NewCvdFetchCommandHandler() {
-  return std::unique_ptr<CvdCommandHandler>(new CvdFetchCommandHandler());
 }
 
 }  // namespace cuttlefish

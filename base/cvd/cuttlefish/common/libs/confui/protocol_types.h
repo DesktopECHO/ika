@@ -21,16 +21,15 @@
 #include <utility>
 #include <vector>
 
-#include <teeui/common_message_types.h>  // /system/teeui/libteeui/.../include
+#include "teeui/common_message_types.h"  // /system/teeui/libteeui/.../include
 
 #include "cuttlefish/common/libs/confui/packet.h"
 #include "cuttlefish/common/libs/confui/packet_types.h"
-
 #include "cuttlefish/common/libs/confui/utils.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 
-namespace cuttlefish {
-namespace confui {
+namespace cuttlefish::confui {
+
 // When you update this, please update all the utility functions
 // in conf.cpp: e.g. ToString, etc
 enum class ConfUiCmd : uint32_t {
@@ -48,11 +47,11 @@ enum class ConfUiCmd : uint32_t {
 constexpr const ssize_t kMaxMessageLength = packet::kMaxPayloadLength;
 
 std::string ToString(const ConfUiCmd& cmd);
-std::string ToDebugString(const ConfUiCmd& cmd, const bool is_verbose);
+std::string ToDebugString(const ConfUiCmd& cmd, bool is_verbose);
 ConfUiCmd ToCmd(const std::string& cmd_str);
 ConfUiCmd ToCmd(uint32_t i);
 
-std::string ToString(const teeui::UIOption ui_opt);
+std::string ToString(teeui::UIOption ui_opt);
 std::optional<teeui::UIOption> ToUiOption(const std::string&);
 
 struct HostError {
@@ -152,8 +151,8 @@ class ConfUiCliResponseMessage : public ConfUiMessage {
   bool SendOver(SharedFD fd) override;
 
  private:
-  UserResponse::type response_;     // plain format
-  std::vector<uint8_t> sign_;       // signed format
+  UserResponse::type response_;  // plain format
+  std::vector<uint8_t> sign_;    // signed format
   // second argument to pass via resultCB of promptUserConfirmation
   std::vector<uint8_t> message_;
 };
@@ -229,5 +228,4 @@ class ConfUiUserTouchMessage : public ConfUiMessage {
 using ConfUiAbortMessage = ConfUiGenericMessage<ConfUiCmd::kAbort>;
 using ConfUiStopMessage = ConfUiGenericMessage<ConfUiCmd::kStop>;
 
-}  // end of namespace confui
-}  // end of namespace cuttlefish
+}  // namespace cuttlefish::confui

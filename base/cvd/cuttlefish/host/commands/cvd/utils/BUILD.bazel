@@ -1,25 +1,27 @@
 load("//:build_variables.bzl", "COPTS")
-load("//cuttlefish/bazel:rules.bzl", "cf_cc_library")
+load("//cuttlefish/bazel:rules.bzl", "cf_build_test", "cf_cc_library")
 
 package(
     default_visibility = ["//:android_cuttlefish"],
 )
 
+cf_build_test(name = "utils_build_test")
+
 cf_cc_library(
     name = "common",
     srcs = ["common.cpp"],
     hdrs = ["common.h"],
-    clang_format_enabled = False,
     copts = COPTS + ["-Werror=sign-compare"],
     deps = [
-        "//cuttlefish/common/libs/utils:contains",
         "//cuttlefish/common/libs/utils:files",
-        "//cuttlefish/host/commands/cvd/cli:types",
+        "//cuttlefish/files:directory_exists",
+        "//cuttlefish/files:file_exists",
+        "//cuttlefish/files:is_directory_empty",
         "//cuttlefish/host/libs/config:config_utils",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/strings:str_format",
+        "@fmt",
     ],
 )
 
@@ -29,7 +31,6 @@ cf_cc_library(
     hdrs = ["flags_collector.h"],
     copts = COPTS + ["-Werror=sign-compare"],
     deps = [
-        "//libbase",
         "@abseil-cpp//absl/log",
         "@tinyxml2",
     ],
@@ -43,8 +44,8 @@ cf_cc_library(
     deps = [
         "//cuttlefish/common/libs/utils:signals",
         "//cuttlefish/posix:strerror",
+        "//cuttlefish/posix:temp_failure_retry",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/log:check",
     ],
@@ -56,29 +57,8 @@ cf_cc_library(
     hdrs = ["subprocess_waiter.h"],
     copts = COPTS + ["-Werror=sign-compare"],
     deps = [
-        "//cuttlefish/common/libs/utils:subprocess",
-        "//cuttlefish/posix:strerror",
+        "//cuttlefish/process:command",
+        "//cuttlefish/process:subprocess",
         "//cuttlefish/result",
-    ],
-)
-
-cf_cc_library(
-    name = "utils",
-    hdrs = [
-        "common.h",
-        "flags_collector.h",
-        "interrupt_listener.h",
-        "subprocess_waiter.h",
-    ],
-    copts = COPTS + ["-Werror=sign-compare"],
-    deps = [
-        "//cuttlefish/common/libs/utils:subprocess",
-        "//cuttlefish/host/commands/cvd/cli:types",
-        "//cuttlefish/host/commands/cvd/utils:common",
-        "//cuttlefish/host/commands/cvd/utils:flags_collector",
-        "//cuttlefish/host/commands/cvd/utils:interrupt_listener",
-        "//cuttlefish/host/commands/cvd/utils:subprocess_waiter",
-        "//cuttlefish/result",
-        "//libbase",
     ],
 )

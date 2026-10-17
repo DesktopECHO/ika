@@ -1,21 +1,20 @@
-load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary")
+load("//cuttlefish/bazel:rules.bzl", "cf_build_test", "cf_cc_binary")
 
 package(
     default_visibility = ["//:android_cuttlefish"],
 )
 
+cf_build_test(name = "defaults_build_test")
+
 cf_cc_binary(
     name = "cf_defaults",
-    srcs = [
-        "defaults.cpp",
-    ],
-    clang_format_enabled = False,
+    srcs = ["defaults.cpp"],
     deps = [
         "//cuttlefish/common/libs/key_equals_value",
         "//cuttlefish/host/libs/web/http_client:curl_http_client",
         "//cuttlefish/host/libs/web/http_client:http_string",
-        "//cuttlefish/result",
-        "@abseil-cpp//absl/cleanup:cleanup",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
         "@abseil-cpp//absl/flags:flag",
         "@abseil-cpp//absl/flags:parse",
         "@abseil-cpp//absl/log",

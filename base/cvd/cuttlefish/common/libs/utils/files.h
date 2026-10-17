@@ -24,38 +24,26 @@
 #include <string_view>
 #include <vector>
 
-#include "cuttlefish/result/result.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
+#include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
-bool FileExists(const std::string& path, bool follow_symlinks = true);
-Result<dev_t> FileDeviceId(const std::string& path);
 Result<bool> CanHardLink(const std::string& source,
                          const std::string& destination);
 inline Result<bool> CanRename(const std::string& source,
                               const std::string& destination) {
   return CanHardLink(source, destination);
 }
-Result<ino_t> FileInodeNumber(const std::string& path);
-Result<bool> AreHardLinked(const std::string& source,
-                           const std::string& destination);
-Result<std::string> CreateHardLink(const std::string& target,
-                                   const std::string& hardlink,
-                                   bool overwrite_existing = false);
-Result<void> HardLinkDirecoryContentsRecursively(
+
+Result<void> LinkOrCopyDirectoryContentsRecursively(
     const std::string& source, const std::string& destination);
 // Merges the contents of the source directory into the destination directory.
 // The source directory is empty after this operation.
 Result<void> MoveDirectoryContents(const std::string& source,
                                    const std::string& destination);
 bool FileHasContent(const std::string& path);
-Result<std::vector<std::string>> DirectoryContents(const std::string& path);
 Result<std::vector<std::string>> DirectoryContentsPaths(
     const std::string& path);
-bool DirectoryExists(const std::string& path, bool follow_symlinks = true);
-inline bool IsDirectory(const std::string& path) {
-  return DirectoryExists(path);
-};
 Result<void> EnsureDirectoryExists(const std::string& directory_path,
                                    mode_t mode = S_IRWXU | S_IRWXG | S_IROTH |
                                                  S_IXOTH,
@@ -63,29 +51,21 @@ Result<void> EnsureDirectoryExists(const std::string& directory_path,
 Result<void> ChangeGroup(const std::string& path,
                          const std::string& group_name);
 bool CanAccess(const std::string& path, int mode);
-Result<bool> IsDirectoryEmpty(const std::string& path);
-Result<void> RecursivelyRemoveDirectory(const std::string& path);
-bool Copy(const std::string& from, const std::string& to);
 off_t FileSize(const std::string& path);
-Result<void> RemoveFile(const std::string& file);
 Result<std::string> RenameFile(const std::string& current_filepath,
                                const std::string& target_filepath);
 std::string ReadFile(const std::string& file);
-Result<std::string> ReadFileContents(const std::string& filepath);
+Result<std::string> ReadFileContents(const std::string& path);
 Result<void> WriteNewFile(const std::string& filepath, std::string_view content,
                           mode_t mode = S_IRWXU | S_IRGRP | S_IROTH);
 bool MakeFileExecutable(const std::string& path);
 Result<std::chrono::system_clock::time_point> FileModificationTime(
     const std::string& path);
-// Whether a file exists and is a unix socket
-bool FileIsSocket(const std::string& path);
 Result<uid_t> FileOwner(const std::string& path);
 
 // The returned value may contain .. or . if these are present in the path
 // argument.
 std::string AbsolutePath(std::string_view path);
-
-Result<std::string> RealPath(const std::string& path);
 
 std::string CurrentDirectory();
 
@@ -110,6 +90,7 @@ std::vector<std::string> Path(const std::string& env_name = "PATH");
 Result<std::string> Search(const std::vector<std::string>& path,
                            std::string_view name);
 
-Result<SharedFD> CreateOrReuseAndDrainFifo(const std::string& path, mode_t mode);
+Result<SharedFD> CreateOrReuseAndDrainFifo(const std::string& path,
+                                           mode_t mode);
 
 }  // namespace cuttlefish

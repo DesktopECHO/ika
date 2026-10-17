@@ -17,19 +17,16 @@
 #include "cuttlefish/host/commands/cvd/cli/commands/version.h"
 
 #include <iostream>
-#include <memory>
 #include <string>
 #include <vector>
 
-#include <fmt/ranges.h>
-#include <json/value.h>
+#include "fmt/ranges.h"
+#include "json/value.h"
 
+#include "cuttlefish/common/libs/utils/proto.h"
 #include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/flag_parser/gflags_compat.h"
-#include "cuttlefish/common/libs/utils/proto.h"
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
-#include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
-#include "cuttlefish/host/commands/cvd/cli/types.h"
 #include "cuttlefish/host/commands/cvd/version/version.h"
 #include "cuttlefish/result/result.h"
 
@@ -70,17 +67,15 @@ Result<void> CvdVersionHandler::Handle(const CommandRequest& request) {
   return {};
 }
 
-cvd_common::Args CvdVersionHandler::CmdList() const { return {"version"}; }
+std::vector<std::string> CvdVersionHandler::CmdList() const {
+  return {"version"};
+}
 
 std::string CvdVersionHandler::SummaryHelp() const { return kSummaryHelpText; }
 
 Result<std::string> CvdVersionHandler::DetailedHelp(
     const CommandRequest& request) {
   return kSummaryHelpText;
-}
-
-std::unique_ptr<CvdCommandHandler> NewCvdVersionHandler() {
-  return std::unique_ptr<CvdCommandHandler>(new CvdVersionHandler());
 }
 
 }  // namespace cuttlefish

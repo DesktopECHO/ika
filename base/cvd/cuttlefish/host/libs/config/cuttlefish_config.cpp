@@ -37,6 +37,7 @@
 
 #include "cuttlefish/common/libs/utils/environment.h"
 #include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/libs/config/config_constants.h"
 #include "cuttlefish/host/libs/config/config_fragment.h"
 #include "cuttlefish/host/libs/config/config_utils.h"
@@ -132,7 +133,8 @@ static constexpr char kGem5DebugFlags[] = "gem5_debug_flags";
 std::string CuttlefishConfig::gem5_debug_flags() const {
   return (*dictionary_)[kGem5DebugFlags].asString();
 }
-void CuttlefishConfig::set_gem5_debug_flags(const std::string& gem5_debug_flags) {
+void CuttlefishConfig::set_gem5_debug_flags(
+    const std::string& gem5_debug_flags) {
   (*dictionary_)[kGem5DebugFlags] = gem5_debug_flags;
 }
 
@@ -269,21 +271,6 @@ int CuttlefishConfig::casimir_rf_port() const {
   return (*dictionary_)[kCasimirRfPort].asInt();
 }
 
-static constexpr char kNetsimRadios[] = "netsim_radios";
-
-void CuttlefishConfig::netsim_radio_enable(NetsimRadio flag) {
-  if (dictionary_->isMember(kNetsimRadios)) {
-    // OR the radio to current set of radios
-    (*dictionary_)[kNetsimRadios] = (*dictionary_)[kNetsimRadios].asInt() | flag;
-  } else {
-    (*dictionary_)[kNetsimRadios] = flag;
-  }
-}
-
-bool CuttlefishConfig::netsim_radio_enabled(NetsimRadio flag) const {
-  return (*dictionary_)[kNetsimRadios].asInt() & flag;
-}
-
 static constexpr char kNetsimInstanceNum[] = "netsim_instance_num";
 int CuttlefishConfig::netsim_instance_num() const {
   return (*dictionary_)[kNetsimInstanceNum].asInt();
@@ -317,51 +304,6 @@ std::vector<std::string> CuttlefishConfig::netsim_args() const {
     netsim_args.push_back(arg.asString());
   }
   return netsim_args;
-}
-
-static constexpr char kEnableMetrics[] = "enable_metrics";
-void CuttlefishConfig::set_enable_metrics(std::string enable_metrics) {
-  (*dictionary_)[kEnableMetrics] =
-      static_cast<int>(cuttlefish::CuttlefishConfig::Answer::kUnknown);
-  if (!enable_metrics.empty()) {
-    switch (enable_metrics.at(0)) {
-      case 'y':
-      case 'Y':
-        (*dictionary_)[kEnableMetrics] =
-            static_cast<int>(cuttlefish::CuttlefishConfig::Answer::kYes);
-        break;
-      case 'n':
-      case 'N':
-        (*dictionary_)[kEnableMetrics] =
-            static_cast<int>(cuttlefish::CuttlefishConfig::Answer::kNo);
-        break;
-    }
-  }
-}
-
-// validate the casting and conversion from json configs to
-// CuttlefishConfig::Answer class
-bool IsValidMetricsConfigs(int value) {
-  return value == static_cast<int>(CuttlefishConfig::Answer::kUnknown) ||
-         value == static_cast<int>(CuttlefishConfig::Answer::kNo) ||
-         value == static_cast<int>(CuttlefishConfig::Answer::kYes);
-}
-
-CuttlefishConfig::Answer CuttlefishConfig::enable_metrics() const {
-  int value = (*dictionary_)[kEnableMetrics].asInt();
-  if (!IsValidMetricsConfigs(value)) {
-    LOG(ERROR) << "Invalid integer value for Answer enum";
-    return static_cast<Answer>(CuttlefishConfig::Answer::kUnknown);
-  }
-  return static_cast<Answer>(value);
-}
-
-static constexpr char kMetricsBinary[] = "metrics_binary";
-void CuttlefishConfig::set_metrics_binary(const std::string& metrics_binary) {
-  (*dictionary_)[kMetricsBinary] = metrics_binary;
-}
-std::string CuttlefishConfig::metrics_binary() const {
-  return (*dictionary_)[kMetricsBinary].asString();
 }
 
 static constexpr char kExtraKernelCmdline[] = "extra_kernel_cmdline";
@@ -525,8 +467,8 @@ CuttlefishConfig::GetFromFile(const std::string& path) {
 }
 
 /*static*/ bool CuttlefishConfig::ConfigExists() {
-  auto config_file_path = StringFromEnv(kCuttlefishConfigEnvVarName,
-                                        GetGlobalConfigFileLink());
+  auto config_file_path =
+      StringFromEnv(kCuttlefishConfigEnvVarName, GetGlobalConfigFileLink());
   auto real_file_path = AbsolutePath(config_file_path.c_str());
   return FileExists(real_file_path);
 }
@@ -615,11 +557,13 @@ std::string CuttlefishConfig::EnvironmentsUdsPath(
   return AbsolutePath(absl::StrCat(environments_uds_dir(), "/", file_name));
 }
 
-CuttlefishConfig::MutableInstanceSpecific CuttlefishConfig::ForInstance(int num) {
+CuttlefishConfig::MutableInstanceSpecific CuttlefishConfig::ForInstance(
+    int num) {
   return MutableInstanceSpecific(this, std::to_string(num));
 }
 
-CuttlefishConfig::InstanceSpecific CuttlefishConfig::ForInstance(int num) const {
+CuttlefishConfig::InstanceSpecific CuttlefishConfig::ForInstance(
+    int num) const {
   return InstanceSpecific(this, std::to_string(num));
 }
 
@@ -628,11 +572,13 @@ CuttlefishConfig::InstanceSpecific CuttlefishConfig::ForInstanceName(
   return ForInstance(InstanceFromString(name));
 }
 
-CuttlefishConfig::InstanceSpecific CuttlefishConfig::ForDefaultInstance() const {
+CuttlefishConfig::InstanceSpecific CuttlefishConfig::ForDefaultInstance()
+    const {
   return ForInstance(GetInstance());
 }
 
-std::vector<CuttlefishConfig::InstanceSpecific> CuttlefishConfig::Instances() const {
+std::vector<CuttlefishConfig::InstanceSpecific> CuttlefishConfig::Instances()
+    const {
   const auto& json = (*dictionary_)[kInstances];
   std::vector<CuttlefishConfig::InstanceSpecific> instances;
   for (const auto& name : json.getMemberNames()) {
@@ -705,6 +651,10 @@ std::vector<std::string> CuttlefishConfig::environment_dirs() const {
   result.push_back(environment.environment_uds_dir());
 
   return result;
+}
+
+bool EnableNetsimNfc(const CuttlefishConfig& config) {
+  return config.enable_host_nfc() && !config.enable_host_nfc_connector();
 }
 
 bool VmManagerIsCrosvm(const CuttlefishConfig& config) {

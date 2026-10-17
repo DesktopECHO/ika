@@ -13,23 +13,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <errno.h>
 #include <signal.h>
+#include <stdint.h>
 #ifdef __linux__
 #include <sys/signalfd.h>
 #endif
+#include <unistd.h>
 
 #include <regex>
+#include <string>
+#include <vector>
 
-#include "absl/strings/ascii.h"
-#include <gflags/gflags.h>
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
+#include "gflags/gflags.h"
 
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/tee_logging.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/posix/strerror.h"
+#include "cuttlefish/result/result_type.h"
 
 using cuttlefish::StrError;
 
@@ -69,13 +75,13 @@ int main(int argc, char** argv) {
   auto instance = config->ForDefaultInstance();
 
   if (instance.run_as_daemon()) {
-        cuttlefish::LogToFiles({instance.launcher_log_path()});
+    cuttlefish::LogToFiles({instance.launcher_log_path()});
   } else {
-        cuttlefish::LogToStderrAndFiles({instance.launcher_log_path()});
+    cuttlefish::LogToStderrAndFiles({instance.launcher_log_path()});
   }
 
   auto log_fd = cuttlefish::SharedFD::Dup(FLAGS_log_fd_in);
-  CHECK(log_fd->IsOpen()) << "Failed to dup log_fd_in: " <<  log_fd->StrError();
+  CHECK(log_fd->IsOpen()) << "Failed to dup log_fd_in: " << log_fd->StrError();
   close(FLAGS_log_fd_in);
 
   if (!FLAGS_process_name.empty()) {
@@ -84,10 +90,10 @@ int main(int argc, char** argv) {
   }
 
   // mask SIGINT and handle it using signalfd
-  sigset_t mask;
+  sigset_t mask;  // NOLINT(misc-include-cleaner): <signal.h>
   sigemptyset(&mask);
   sigaddset(&mask, SIGINT);
-  CHECK(sigprocmask(SIG_BLOCK, &mask, NULL) == 0)
+  CHECK_EQ(sigprocmask(SIG_BLOCK, &mask, nullptr), 0)
       << "sigprocmask failed: " << StrError(errno);
 #ifdef __linux__
   int sfd = signalfd(-1, &mask, 0);
@@ -114,7 +120,7 @@ int main(int argc, char** argv) {
   VLOG(0) << "Starting to read from process " << FLAGS_process_name;
 
   char buf[1 << 16];
-  ssize_t chars_read = 0;
+  cuttlefish::Result<uint64_t> chars_read = 0;
   for (;;) {
     // We can assume all writers to `log_fd` have completed before a SIGINT is
     // sent, but we need to make sure we've actually read all the data before
@@ -128,16 +134,16 @@ int main(int argc, char** argv) {
         << "poll failed: " << StrError(errno);
     if (poll_fds[0].revents) {
       chars_read = log_fd->Read(buf, sizeof(buf));
-      if (chars_read < 0) {
+      if (!chars_read.has_value()) {
         VLOG(0) << "Failed to read from process " << FLAGS_process_name << ": "
                 << log_fd->StrError();
         break;
       }
-      if (chars_read == 0) {
+      if (*chars_read == 0) {
         break;
       }
       std::string trimmed(
-          absl::StripAsciiWhitespace(std::string_view(buf, chars_read)));
+          absl::StripAsciiWhitespace(std::string_view(buf, *chars_read)));
       // Newlines inside `trimmed` are handled by the android logging code.
       // These checks attempt to determine the log severity coming from crosvm.
       // There is no guarantee of success all the time since log line boundaries
@@ -187,7 +193,7 @@ int main(int argc, char** argv) {
 #ifdef __linux__
     if (poll_fds[1].revents) {
       struct signalfd_siginfo siginfo;
-      int s = int_fd->Read(&siginfo, sizeof(siginfo));
+      uint64_t s = int_fd->Read(&siginfo, sizeof(siginfo)).value_or(0);
       CHECK(s == sizeof(siginfo)) << "bad read size on signalfd, expected "
                                   << sizeof(siginfo) << " got " << s;
       CHECK(siginfo.ssi_signo == SIGINT)

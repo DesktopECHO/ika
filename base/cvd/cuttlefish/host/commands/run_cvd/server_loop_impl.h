@@ -17,12 +17,14 @@
 #pragma once
 
 #include <atomic>
+#include <ostream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-#include <fruit/fruit.h>
+#include "fruit/fruit.h"
 
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/json.h"
@@ -62,6 +64,7 @@ class ServerLoopImpl : public ServerLoop,
     kUnknown = 0,
     kActive = 1,
     kSuspended = 2,
+    kGuestOff = 3,
   };
 
  private:
@@ -79,8 +82,7 @@ class ServerLoopImpl : public ServerLoop,
   Result<void> HandleScreenshotDisplay(
       const run_cvd::ScreenshotDisplay& request);
 
-  void HandleActionWithNoData(const LauncherAction action,
-                              const SharedFD& client,
+  void HandleActionWithNoData(LauncherAction action, const SharedFD& client,
                               ProcessMonitor& process_monitor);
 
   void DeleteFifos();
@@ -114,6 +116,15 @@ class ServerLoopImpl : public ServerLoop,
   std::unordered_map<std::string, std::string> vm_name_to_control_sock_;
   std::atomic<DeviceStatus> device_status_;
 };
+
+std::string_view format_as(ServerLoopImpl::DeviceStatus status);
+std::ostream& operator<<(std::ostream& out,
+                         ServerLoopImpl::DeviceStatus status);
+
+template <typename Sink>
+void AbslStringify(Sink& sink, ServerLoopImpl::DeviceStatus status) {
+  sink.Append(format_as(status));
+}
 
 }  // namespace run_cvd_impl
 }  // namespace cuttlefish

@@ -16,16 +16,23 @@
 
 #include "cuttlefish/host/commands/cvd/utils/common.h"
 
+#include <stddef.h>
+#include <unistd.h>
+
 #include <ostream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
-#include <android-base/file.h>
-#include "absl/strings/strip.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/strip.h"
+#include "fmt/format.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/files/directory_exists.h"
+#include "cuttlefish/files/file_exists.h"
+#include "cuttlefish/files/is_directory_empty.h"
 #include "cuttlefish/host/libs/config/config_utils.h"
 #include "cuttlefish/result/result.h"
 
@@ -57,7 +64,7 @@ bool ShouldUsePreviousCvdLocation() {
     return false;
   }
   Result<bool> is_empty_res = IsDirectoryEmpty(old_locks_path);
-  return is_empty_res.ok() && !is_empty_res.value();
+  return is_empty_res.has_value() && !is_empty_res.value();
 }
 
 }  // namespace
@@ -71,7 +78,8 @@ bool ShouldUsePreviousCvdLocation() {
  * - envs["HOME"] if envs["HOME"] + "/bin/cvd_internal_start" exists.
  * - current working directory
  */
-Result<std::string> AndroidHostPath(const cvd_common::Envs& envs) {
+Result<std::string> AndroidHostPath(
+    const std::unordered_map<std::string, std::string>& envs) {
   auto it = envs.find(kAndroidHostOut);
   if (it != envs.end() && IsValidAndroidHostOutPath(it->second)) {
     return it->second;
@@ -139,7 +147,7 @@ Result<std::string> GroupDirFromHome(std::string_view dir) {
 
 std::string AssemblyDirFromHome(const std::string& group_home_dir) {
   std::string to_ret = group_home_dir + "/cuttlefish/assembly";
-  if(!FileExists(to_ret)) {
+  if (!FileExists(to_ret)) {
     // Legacy launchers create cuttlefish_assembly instead
     to_ret = group_home_dir + "/cuttlefish_assembly";
   }

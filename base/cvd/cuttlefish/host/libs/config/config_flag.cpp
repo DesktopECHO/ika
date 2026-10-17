@@ -29,23 +29,26 @@
 #include <utility>
 #include <vector>
 
-#include "absl/strings/strip.h"
-#include <fmt/ranges.h>
-#include <fruit/component.h>
-#include <fruit/fruit_forward_decls.h>
-#include <fruit/macro.h>
-#include <gflags/gflags.h>
-#include <json/value.h>
-#include <json/writer.h>
 #include "absl/log/log.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
+#include "absl/strings/strip.h"
+#include "fmt/ranges.h"
+#include "fruit/component.h"
+#include "fruit/fruit_forward_decls.h"
+#include "fruit/macro.h"
+#include "gflags/gflags.h"
+#include "json/value.h"
+#include "json/writer.h"
 
 #include "cuttlefish/common/libs/key_equals_value/key_equals_value.h"
 #include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/common/libs/utils/json.h"
+#include "cuttlefish/files/directory_contents.h"
+#include "cuttlefish/files/directory_exists.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/flag_parser/gflags_compat.h"
-#include "cuttlefish/common/libs/utils/json.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/system_image_dir.h"
 #include "cuttlefish/host/libs/config/config_utils.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
@@ -150,7 +153,7 @@ class ConfigFlagImpl : public ConfigFlag {
     for (size_t i = 0; i < configs_.size(); ++i) {
       Result<Json::Value> config_values_res =
           config_reader_.ReadConfig(configs_[i]);
-      if (!config_values_res.ok()) {
+      if (!config_values_res.has_value()) {
         LOG(WARNING) << "Config '" << configs_[i]
                      << "' not found: " << config_values_res.error();
         continue;
@@ -202,13 +205,13 @@ class ConfigFlagImpl : public ConfigFlag {
     }
     VLOG(0) << "Reading --config option from: " << info_path;
     Result<std::string> android_info_result = ReadFileContents(info_path);
-    if (!android_info_result.ok()) {
+    if (!android_info_result.has_value()) {
       return {};
     }
     std::string android_info = std::move(*android_info_result);
     Result<std::map<std::string, std::string, std::less<void>>> parsed_config =
         ParseKeyEqualsValue(android_info);
-    if (!parsed_config.ok()) {
+    if (!parsed_config.has_value()) {
       return {};
     }
     auto config_it = parsed_config->find("config");

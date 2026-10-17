@@ -24,12 +24,14 @@
 #include <utility>
 #include <vector>
 
-#include <android-base/file.h>
-#include <fmt/format.h>
 #include "absl/log/log.h"
 #include "absl/strings/match.h"
+#include "android-base/file.h"
+#include "fmt/format.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/files/directory_exists.h"
+#include "cuttlefish/files/recursively_remove_directory.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/host_tool_target.h"
 #include "cuttlefish/host/commands/cvd/instances/local_instance.h"
 #include "cuttlefish/host/commands/cvd/instances/local_instance_group.h"
@@ -38,7 +40,8 @@
 #include "cuttlefish/host/commands/cvd/instances/stop.h"
 #include "cuttlefish/host/commands/cvd/utils/common.h"
 #include "cuttlefish/host/libs/config/config_utils.h"
-#include "cuttlefish/host/libs/metrics/device_metrics_orchestration.h"
+#include "cuttlefish/metrics/device_metrics_orchestration.h"
+#include "cuttlefish/posix/remove.h"
 #include "cuttlefish/posix/symlink.h"
 #include "cuttlefish/result/result.h"
 
@@ -196,7 +199,8 @@ Result<bool> InstanceManager::RemoveInstanceGroup(LocalInstanceGroup group) {
     if (instance.Id() == 0) {
       continue;
     }
-    if (auto res = lock_manager_.RemoveLockFile(instance.Id()); !res.ok()) {
+    if (auto res = lock_manager_.RemoveLockFile(instance.Id());
+        !res.has_value()) {
       LOG(ERROR) << "Failed to remove instance id lock: " << res.error();
     }
   }
@@ -212,9 +216,8 @@ Result<void> InstanceManager::UpdateInstanceGroup(
 }
 
 Result<void> InstanceManager::StopInstanceGroup(
-    LocalInstanceGroup& group,
-    std::optional<std::chrono::seconds> launcher_timeout,
-    InstanceDirActionOnStop instance_dir_action,
+    LocalInstanceGroup& group, InstanceDirActionOnStop instance_dir_action,
+    std::chrono::seconds launcher_timeout,
     const std::vector<unsigned>& instance_nums) {
   // Validate that the requested instances actually belong to this group
   std::set<unsigned> valid_ids;
@@ -231,19 +234,15 @@ Result<void> InstanceManager::StopInstanceGroup(
 
   const auto stop_bin = CF_EXPECT(StopBin(group.HostArtifactsPath()));
   const auto stop_bin_path = group.HostArtifactsPath() + "/bin/" + stop_bin;
-  int wait_for_launcher_secs = 0;
-  if (launcher_timeout.has_value()) {
-    wait_for_launcher_secs = launcher_timeout->count();
-  }
   Result<void> cmd_result = RunStopCvd(StopCvdParams{
       .bin_path = stop_bin_path,
       .home_dir = group.HomeDir(),
-      .wait_for_launcher_secs = wait_for_launcher_secs,
+      .wait_for_launcher_secs = static_cast<int>(launcher_timeout.count()),
       .clear_runtime_dirs =
           instance_dir_action == InstanceDirActionOnStop::Clear,
       .instance_nums = instance_nums,
   });
-  if (!cmd_result.ok()) {
+  if (!cmd_result.has_value()) {
     LOG(WARNING)
         << "Warning: error stopping instances for dir \"" + group.HomeDir() +
                "\".\nThis can happen if instances are already stopped.\n";
@@ -271,9 +270,9 @@ Result<void> InstanceManager::Clear() {
   for (auto& group : instance_groups) {
     // Only stop running instances.
     if (group.HasActiveInstances()) {
-      auto stop_result = StopInstanceGroup(group, std::chrono::seconds(5),
-                                           InstanceDirActionOnStop::Clear);
-      if (!stop_result.ok()) {
+      Result<void> stop_result =
+          StopInstanceGroup(group, InstanceDirActionOnStop::Clear);
+      if (!stop_result.has_value()) {
         LOG(ERROR) << stop_result.error();
       }
     }
@@ -282,17 +281,17 @@ Result<void> InstanceManager::Clear() {
         continue;
       }
       auto res = lock_manager_.RemoveLockFile(instance.Id());
-      if (!res.ok()) {
+      if (!res.has_value()) {
         LOG(ERROR) << "Failed to remove lock file for instance: "
                    << res.error();
       }
     }
     std::string runtime_link = group.HomeDir() + "/cuttlefish_runtime";
-    if (Result<void> res = RemoveFile(runtime_link);!res.ok()) {
+    if (Result<void, int> res = RemoveFile(runtime_link); !res.has_value()) {
       LOG(ERROR) << res.error();
     }
     std::string config_link = group.HomeDir() + "/" + config_json_name;
-    if (Result<void> res = RemoveFile(config_link);!res.ok()) {
+    if (Result<void, int> res = RemoveFile(config_link); !res.has_value()) {
       LOG(ERROR) << res.error();
     }
     // TODO: b/471069557 - diagnose unused

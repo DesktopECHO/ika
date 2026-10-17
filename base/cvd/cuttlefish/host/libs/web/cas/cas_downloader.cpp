@@ -28,23 +28,23 @@
 #include <utility>
 #include <vector>
 
-#include <android-base/expected.h>
-#include "absl/strings/str_join.h"
-#include <json/value.h>
 #include "absl/log/log.h"
 #include "absl/strings/match.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
+#include "json/value.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/json.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
-#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/libs/web/android_build.h"
 #include "cuttlefish/host/libs/web/cas/cas_flags.h"
+#include "cuttlefish/posix/remove.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/managed_stdio.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
-
 namespace {
 
 std::set<std::string> GetSupportedFlags(const std::string& go_binary_path) {
@@ -102,10 +102,11 @@ std::vector<std::string> CreateCasFlags(std::string downloader_path,
     return supported_flags.find(flag) != supported_flags.end();
   };
 
-  std::set<std::string> auto_populated_flags = {
-      kFlagCasInstance, kFlagCasAddr,      kFlagDigest,
-      kFlagDir,         kFlagDisableCache, kFlagServiceAccountJson,
-      kFlagUseAdc};
+  // service-account-json is accepted in the config and handled by
+  // CasDownloader::CreateImpl, which removes it before calling this function.
+  std::set<std::string> auto_populated_flags = {kFlagCasInstance,  kFlagCasAddr,
+                                                kFlagDigest,       kFlagDir,
+                                                kFlagDisableCache, kFlagUseAdc};
   auto is_autopopulated = [&auto_populated_flags](std::string flag) {
     return auto_populated_flags.find(flag) != auto_populated_flags.end();
   };
@@ -292,13 +293,13 @@ Result<std::unique_ptr<CasDownloader>> CasDownloader::Create(
     const CasDownloaderFlags& cas_downloader_flags,
     const std::string& service_account_filepath) {
   auto result = CreateImpl(cas_downloader_flags, service_account_filepath);
-  if (result.ok()) {
+  if (result.has_value()) {
     return result;
   }
   // Ensure callers and logs clearly indicate that CAS downloading is
   // disabled and why, using the same environment-aware formatting that
   // test helpers use.
-  LOG(INFO) << "CAS downloading disabled, see log for reason.";
+  VLOG(0) << "CAS downloading disabled, see log for reason.";
   VLOG(0) << "CAS downloading disabled: " << result.error();
   return result;
 }
@@ -311,6 +312,7 @@ Result<std::unique_ptr<CasDownloader>> CasDownloader::CreateImpl(
   std::string downloader_path = cas_downloader_flags.downloader_path.value();
   bool prefer_uncompressed = cas_downloader_flags.prefer_uncompressed.value();
   std::vector<std::string> cas_flags;
+  std::string config_service_account_filepath;
 
   Json::Value config_flags;
   bool has_config_file =
@@ -322,9 +324,9 @@ Result<std::unique_ptr<CasDownloader>> CasDownloader::CreateImpl(
         cas_downloader_flags.cas_config_filepath.value();
     bool is_default_config = (config_filepath == kDefaultCasConfigFilePath);
     if (is_default_config) {
-      LOG(INFO) << "Using default CAS config from: " << config_filepath;
+      VLOG(0) << "Using default CAS config from: " << config_filepath;
     } else {
-      LOG(INFO) << "Using CAS config from: " << config_filepath;
+      VLOG(0) << "Using CAS config from: " << config_filepath;
     }
     std::string config_contents = CF_EXPECT(ReadFileContents(config_filepath));
     Json::Value config = CF_EXPECT(ParseJson(config_contents));
@@ -344,6 +346,15 @@ Result<std::unique_ptr<CasDownloader>> CasDownloader::CreateImpl(
         prefer_uncompressed = config["prefer-uncompressed"].asBool();
       }
     }
+    // service-account-json is a casdownloader flag, but it is mutually
+    // exclusive with -use-adc and with the service account from the command
+    // line. Take it out of the pass-through flags so that the credential
+    // selection below emits exactly one credential flag.
+    if (config_flags.isMember(kFlagServiceAccountJson)) {
+      config_service_account_filepath =
+          config_flags[kFlagServiceAccountJson].asString();
+      config_flags.removeMember(kFlagServiceAccountJson);
+    }
 
     // For each supported flag key we merge CLI values (if provided) on top of
     // the config file values so CLI wins. Use the same keys as
@@ -356,7 +367,7 @@ Result<std::unique_ptr<CasDownloader>> CasDownloader::CreateImpl(
     // No config file available: use CLI values (or defaults if CLI didn't set
     // them). Convert current flag values into config_flags for downstream
     // processing.
-    LOG(INFO) << "Using CAS downloader flags from command line or defaults.";
+    VLOG(0) << "Using CAS downloader flags from command line or defaults.";
     config_flags = ConvertToConfigFlags(cas_downloader_flags);
   }
 
@@ -371,11 +382,36 @@ Result<std::unique_ptr<CasDownloader>> CasDownloader::CreateImpl(
   // above)
   cas_flags = CreateCasFlags(downloader_path, config_flags);
 
-  if (!service_account_filepath.empty() &&
-      FileExists(service_account_filepath)) {
+  // Credential precedence: service-account-json from the config file, which is
+  // specific to CAS; then the Android Build API service account
+  // (--service_account_filepath), which is reused for CAS when present; then
+  // application default credentials. Exactly one credential flag is passed to
+  // casdownloader.
+  if (!config_service_account_filepath.empty()) {
+    // Fail rather than fall back to other credentials: a configured key that
+    // is missing is a deployment error that should be visible.
+    CF_EXPECTF(FileExists(config_service_account_filepath),
+               "CAS service account key from config file not found: '{}'",
+               config_service_account_filepath);
+    VLOG(0) << "CAS credentials: service account from config file: "
+            << config_service_account_filepath;
     cas_flags.push_back("-" + std::string(kFlagServiceAccountJson) + "=" +
-                        std::string(service_account_filepath));
+                        config_service_account_filepath);
+  } else if (!service_account_filepath.empty() &&
+             FileExists(service_account_filepath)) {
+    // The Build API service account may not have CAS access, in which case
+    // CAS downloads fail and fall back to Android Build. Make the implicit
+    // reuse visible so the CAS credential can be configured explicitly.
+    LOG(WARNING) << "CAS credentials: reusing the Android Build API service "
+                    "account '"
+                 << service_account_filepath
+                 << "', which may not have CAS access. Set "
+                    "flags.service-account-json in the CAS config to use a "
+                    "specific key.";
+    cas_flags.push_back("-" + std::string(kFlagServiceAccountJson) + "=" +
+                        service_account_filepath);
   } else {
+    VLOG(0) << "CAS credentials: application default credentials";
     cas_flags.push_back("-" + std::string(kFlagUseAdc));
   }
 
@@ -430,7 +466,7 @@ Result<void> CasDownloader::DownloadFile(
   AppendBuildInfoToInvocationId(build, flags_);
   Command cmd = GetCommand(downloader_path_, flags_, cas_identifier,
                            download_directory, stats_filepath);
-  LOG(INFO) << "CAS Downloader Command: '" << cmd.AsBashScript() << "'";
+  VLOG(0) << "CAS Downloader Command: '" << cmd.AsBashScript() << "'";
   int ret_code = cmd.Start().Wait();
   if (ret_code != 0) {
     return CF_ERRF("Failed to download file with CAS downloader ({}).",
@@ -454,7 +490,8 @@ Result<CasIdentifier> CasDownloader::GetCasIdentifier(
     const std::string digests_filename = "cas_digests.json";
     std::string digests_filepath = CF_EXPECT(digests_fetcher(digests_filename));
     Json::Value cas_digests = CF_EXPECT(ParseJson(ReadFile(digests_filepath)));
-    if (Result<void> res = RemoveFile(digests_filepath); !res.ok()) {
+    if (Result<void, int> res = RemoveFile(digests_filepath);
+        !res.has_value()) {
       LOG(ERROR) << res.error();
     }
     std::vector<std::string> mandatory_keys{

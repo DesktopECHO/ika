@@ -18,98 +18,108 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <poll.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <sys/eventfd.h>
 #include <sys/inotify.h>
-#include <sys/types.h>
+#include <sys/poll.h>
 #include <unistd.h>
 
 #include <chrono>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <vector>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/strings/str_cat.h"
 
+#include "cuttlefish/ansi_codes/ansi_codes.h"
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
-#include "cuttlefish/host/commands/cvd/cli/commands/monitor/ansi_codes.h"
+#include "cuttlefish/common/libs/utils/tee_logging.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/monitor/display.h"
+#include "cuttlefish/host/commands/cvd/cli/commands/monitor/drain_inotify.h"
+#include "cuttlefish/host/commands/cvd/cli/commands/monitor/log_sources.h"
+#include "cuttlefish/host/commands/cvd/cli/commands/monitor/monitor_source.h"
 #include "cuttlefish/host/commands/cvd/cli/utils.h"
 #include "cuttlefish/host/commands/cvd/instances/local_instance.h"
-#include "cuttlefish/host/libs/log_names/log_names.h"
-#include "cuttlefish/result/result.h"
+#include "cuttlefish/posix/strerror.h"
+#include "cuttlefish/result/expect.h"
+#include "cuttlefish/result/result_type.h"
 
 namespace cuttlefish {
 
-namespace {
-
-void ClearLastNLines(int n) {
-  if (n > 0) {
-    // Move cursor up N lines and clear to end of screen
-    std::cout << AnsiCursorUp(n) << kAnsiClearScreenAfterCursor << std::flush;
-  }
-}
-
-void UpdateFileAndWatch(const SharedFD& inotify_fd, const std::string& path,
-                        SharedFD& fd, int& watch) {
-  if (!fd->IsOpen()) {
-    fd = SharedFD::Open(path, O_RDONLY);
-  }
-  if (fd->IsOpen() && watch == -1) {
-    watch = inotify_fd->InotifyAddWatch(path, IN_MODIFY);
-  }
-}
-
-}  // namespace
-
-Result<void> MonitorLogs(const LocalInstance& instance) {
+Result<void> MonitorLogs(const LocalInstance& instance, SharedFD stop_eventfd,
+                         LogSeverity severity) {
   CF_EXPECT(isatty(0), "The monitor command requires an interactive terminal.");
 
-  const std::string kernel_log =
-      absl::StrCat(instance.InstanceDirectory(), "/logs/", kLogNameKernel);
-  const std::string launcher_log =
-      absl::StrCat(instance.InstanceDirectory(), "/logs/", kLogNameLauncher);
-  const std::string logcat =
-      absl::StrCat(instance.InstanceDirectory(), "/logs/", kLogNameLogcat);
+  std::unique_ptr<MonitorSource> kernel_monitor_source;
+  std::unique_ptr<MonitorSource> launcher_monitor_source;
+  std::unique_ptr<MonitorSource> logcat_monitor_source;
 
-  SharedFD kernel_fd;
-  SharedFD launcher_fd;
-  SharedFD logcat_fd;
-
-  const SharedFD inotify_fd = SharedFD::InotifyFd();
-  CF_EXPECT(inotify_fd->IsOpen(), "Failed to create inotify fd");
-  const int flags = inotify_fd->Fcntl(F_GETFL, 0);
-  CF_EXPECT(inotify_fd->Fcntl(F_SETFL, flags | O_NONBLOCK) != -1,
+  const SharedFD dir_inotify_fd = CF_EXPECT(Fd::InotifyFd());
+  const int flags = dir_inotify_fd->Fcntl(F_GETFL, 0);
+  CF_EXPECT(dir_inotify_fd->Fcntl(F_SETFL, flags | O_NONBLOCK) != -1,
             "Failed to set inotify fd to non-blocking");
 
   const std::string logs_dir =
       absl::StrCat(instance.InstanceDirectory(), "/logs");
-  const int dir_watch = inotify_fd->InotifyAddWatch(logs_dir, IN_CREATE);
+  dir_inotify_fd->InotifyAddWatch(logs_dir, IN_CREATE | IN_DELETE);
 
-  int kernel_watch = -1;
-  int launcher_watch = -1;
-  int logcat_watch = -1;
   std::chrono::steady_clock::time_point last_draw_time =
       std::chrono::steady_clock::time_point();
 
+  std::cout << kXtermUseAlternateScreen;
+  std::cout.flush();
+  absl::Cleanup clean_terminal = [] {
+    std::cout << kAnsiReset << kAnsiClearScreen << kXtermUseMainScreen;
+    std::cout.flush();
+  };
+
   while (true) {
-    UpdateFileAndWatch(inotify_fd, kernel_log, kernel_fd, kernel_watch);
-    UpdateFileAndWatch(inotify_fd, launcher_log, launcher_fd, launcher_watch);
-    UpdateFileAndWatch(inotify_fd, logcat, logcat_fd, logcat_watch);
-
-    const Result<TerminalSize> term_size_result = GetTerminalSize();
-    int width = 79;  // Default fallback width (80 - 1)
-    if (term_size_result.ok()) {
-      width = term_size_result->columns - 1;
+    if (!kernel_monitor_source.get()) {
+      kernel_monitor_source = KernelLogMonitorSource(instance);
     }
-    LogMonitorDisplay display(width);
+    if (!logcat_monitor_source.get()) {
+      logcat_monitor_source = LogcatMonitorSource(instance, severity);
+    }
+    if (!launcher_monitor_source.get()) {
+      launcher_monitor_source = LauncherLogMonitorSource(instance, severity);
+    }
 
-    display.DrawFile(launcher_fd, kLogNameLauncher);
-    display.DrawFile(kernel_fd, kLogNameKernel);
-    display.DrawFile(logcat_fd, kLogNameLogcat);
+    TerminalSize term_size =
+        GetTerminalSize().value_or(TerminalSize{.rows = 35, .columns = 80});
+    term_size.rows -= 3;
+    term_size.columns -= 1;
+    LogMonitorDisplay display(term_size.columns);
+
+    bool missing_source = false;
+    const std::vector<MonitorSource*> sources = {
+        launcher_monitor_source.get(),
+        kernel_monitor_source.get(),
+        logcat_monitor_source.get(),
+    };
+
+    for (size_t i = 0; i < sources.size(); i++) {
+      MonitorSource* source = sources[i];
+      if (source == nullptr) {
+        missing_source = true;
+      }
+      size_t lines = (term_size.rows / 3) - 1;
+      while (i + 1 < sources.size() && sources[i + 1] == nullptr) {
+        lines += (term_size.rows / 3) - 1;
+        i++;
+        missing_source = true;
+      }
+      display.DrawReport(source, lines);
+    }
 
     const auto [output, total_lines_drawn] = display.Finalize();
-    std::cout << output << std::flush;
+    std::cout << kAnsiClearScreen << kAnsiCursorTopLeft << output << std::flush;
+
     // Enforce a maximum framerate (max 20 FPS / min 50ms between draws)
     // so we don't saturate SSH bandwidth or CPU during heavy, continuous
     // logging.
@@ -122,36 +132,52 @@ Result<void> MonitorLogs(const LocalInstance& instance) {
     }
     last_draw_time = std::chrono::steady_clock::now();
 
-    // Block until file changes occur. If any watch failed or is missing, use
-    // a 1-second fallback timeout to awake and retry.
-    // NOLINTNEXTLINE(misc-include-cleaner)
-    PollSharedFd poll_fd = {inotify_fd, POLLIN, 0};
-    int timeout_ms = -1;
-    if (dir_watch == -1 || kernel_watch == -1 || launcher_watch == -1 ||
-        logcat_watch == -1) {
-      timeout_ms = 1000;
+    // Setup poll_fds
+    std::vector<PollSharedFd> poll_fds = {
+        PollSharedFd{.fd = dir_inotify_fd, .events = POLLIN, .revents = 0},
+    };
+    if (stop_eventfd->IsOpen()) {
+      poll_fds.push_back(
+          PollSharedFd{.fd = stop_eventfd, .events = POLLIN, .revents = 0});
     }
-
-    // NOLINTNEXTLINE(misc-include-cleaner)
-    if (SharedFD::Poll(&poll_fd, 1, timeout_ms) > 0 &&
-        (poll_fd.revents & POLLIN)) {
-      // Exhaustively drain all available events from the non-blocking
-      // descriptor to coalesce rapid file modifications.
-      char buf[4096]
-          __attribute__((aligned(__alignof__(struct inotify_event))));
-      ssize_t read_res = 0;
-      while ((read_res = inotify_fd->Read(buf, sizeof(buf))) > 0) {
+    for (MonitorSource* source : sources) {
+      if (source == nullptr) {
+        continue;
       }
-      CF_EXPECT(read_res != 0,
-                "Unexpected End-of-File reading inotify descriptor");
-      const int err = inotify_fd->GetErrno();
-      CF_EXPECTF(err == EAGAIN || err == EWOULDBLOCK,
-                 "Unexpected error reading inotify descriptor: {} ({})",
-                 inotify_fd->StrError(), err);
+      SharedFD ready_fd = source->ReadyFd();
+      if (!ready_fd->IsOpen()) {
+        missing_source = true;
+        continue;
+      }
+      poll_fds.push_back(
+          PollSharedFd{.fd = ready_fd, .events = POLLIN, .revents = 0});
     }
-    ClearLastNLines(total_lines_drawn);
-  }
 
+    // Block until file changes occur. If any watch failed or is missing, use
+    // a fallback timeout to awake and retry.
+    int poll_res = SharedFD::Poll(poll_fds, missing_source ? 200 : -1);
+    CF_EXPECT_GE(poll_res, 0, StrError(errno));
+
+    if (stop_eventfd->IsOpen() && (poll_fds[1].revents & POLLIN)) {
+      // Stop requested via eventfd
+      eventfd_t val;
+      stop_eventfd->EventfdRead(&val);
+      return {};
+    }
+
+    if (poll_fds[0].revents & POLLIN) {
+      uint32_t events = DrainInotifyEvents(dir_inotify_fd).value_or(IN_DELETE);
+      if ((events & IN_DELETE) > 0) {
+        launcher_monitor_source.reset();
+        kernel_monitor_source.reset();
+        logcat_monitor_source.reset();
+      }
+    }
+
+    if (missing_source) {
+      launcher_monitor_source.reset();  // will cut over to launcher.log soon
+    }
+  }
   return {};
 }
 

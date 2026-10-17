@@ -17,16 +17,15 @@
 #include "cuttlefish/host/libs/wayland/wayland_surface.h"
 
 #include <stdint.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include <mutex>
 
-#include <drm/drm_fourcc.h>
-#include <sys/mman.h>
-#include <unistd.h>
-#include <wayland-server-protocol.h>
-
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "drm/drm_fourcc.h"
+#include "wayland-server-protocol.h"
 
 #include "cuttlefish/host/libs/wayland/wayland_dmabuf.h"
 #include "cuttlefish/host/libs/wayland/wayland_surfaces.h"
@@ -156,7 +155,6 @@ void Surface::Commit() {
           }
         }
       }
-
     }
 
     if (!state_.has_notified_surface_create) {

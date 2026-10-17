@@ -24,12 +24,14 @@
 #include "absl/strings/str_split.h"
 #include "android-base/file.h"
 
-#include "cuttlefish/common/libs/fs/shared_buf.h"
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/environment.h"
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/users.h"
+#include "cuttlefish/io/write_exact.h"
 #include "cuttlefish/posix/rename.h"
+#include "cuttlefish/posix/stat.h"
 #include "cuttlefish/posix/strerror.h"
 #include "cuttlefish/result/result.h"
 
@@ -124,7 +126,7 @@ Result<std::string> ReadCvdDataFile(std::string_view path) {
   for (const auto& dir : CF_EXPECT(CvdDataDirs())) {
     Result<std::string> contents =
         ReadFileContents(fmt::format("{}/{}", dir, path));
-    if (contents.ok()) {
+    if (contents.has_value()) {
       return std::move(*contents);
     }
   }
@@ -134,12 +136,12 @@ Result<std::string> ReadCvdDataFile(std::string_view path) {
 Result<std::vector<std::string>> FindCvdDataFiles(std::string_view path) {
   std::vector<std::string> results;
   for (const std::string& dir : CF_EXPECT(CvdDataDirs())) {
-    struct stat statbuf;
     std::string test_path = fmt::format("{}/{}", dir, path);
-    if (stat(test_path.c_str(), &statbuf) != 0) {
+    Result<struct stat> statbuf = Stat(test_path);
+    if (!statbuf.has_value()) {
       continue;
     }
-    if (!S_ISDIR(statbuf.st_mode)) {
+    if (!S_ISDIR(statbuf->st_mode)) {
       results.emplace_back(std::move(test_path));
       continue;
     }
@@ -167,11 +169,10 @@ Result<void> WriteCvdDataFile(std::string_view path, std::string contents) {
   CF_EXPECTF(file_raw_fd >= 0, "Failed to create '{}': '{}'",
              full_path_template, StrError(errno));
 
-  SharedFD file_fd = SharedFD::Dup(file_raw_fd);
+  Fd file_fd = CF_EXPECT(Fd::Dup(file_raw_fd));
   CF_EXPECT_EQ(close(file_raw_fd), 0, StrError(errno));
 
-  CF_EXPECT_EQ(WriteAll(file_fd, contents), contents.size(),
-               file_fd->StrError());
+  CF_EXPECT(WriteExact(file_fd, contents));
 
   CF_EXPECT(Rename(full_path_template, full_path));
 

@@ -16,11 +16,9 @@
 
 #pragma once
 
-#include <memory>
 #include <string>
 
 #include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
-#include "cuttlefish/host/commands/cvd/cli/types.h"
 #include "cuttlefish/host/commands/cvd/instances/instance_manager.h"
 #include "cuttlefish/result/result.h"
 
@@ -33,7 +31,7 @@ class CvdFleetCommandHandler : public CvdCommandHandler {
   CvdFleetCommandHandler(InstanceManager& instance_manager);
 
   Result<void> Handle(const CommandRequest& request) override;
-  cvd_common::Args CmdList() const override;
+  std::vector<std::string> CmdList() const override;
 
   std::string SummaryHelp() const override;
 
@@ -44,8 +42,5 @@ class CvdFleetCommandHandler : public CvdCommandHandler {
  private:
   InstanceManager& instance_manager_;
 };
-
-std::unique_ptr<CvdCommandHandler> NewCvdFleetCommandHandler(
-    InstanceManager& instance_manager);
 
 }  // namespace cuttlefish

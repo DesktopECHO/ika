@@ -16,21 +16,23 @@
 
 #include "cuttlefish/host/commands/assemble_cvd/disk/android_composite_disk_config.h"
 
-#include <sys/statvfs.h>
-
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/commands/assemble_cvd/android_build/android_build.h"
+#include "cuttlefish/host/commands/assemble_cvd/disk/image_file.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/build_super_image.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/system_image_dir.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
@@ -50,6 +52,7 @@ constexpr struct {
   std::string_view init_boot = "init_boot";
   std::string_view metadata = "metadata";
   std::string_view misc = "misc";
+  std::string_view pvmfw = "pvmfw";
   std::string_view super = "super";
   std::string_view userdata = "userdata";
   std::string_view vbmeta = "vbmeta";
@@ -83,6 +86,7 @@ Result<std::vector<ImagePartition>> AndroidCompositeDiskConfig(
   const std::set<std::string_view> ab_partitions = {
       kPartitions.boot,
       kPartitions.init_boot,
+      kPartitions.pvmfw,
       kPartitions.vbmeta,
       kPartitions.vbmeta_system,
       kPartitions.vbmeta_system_dlkm,

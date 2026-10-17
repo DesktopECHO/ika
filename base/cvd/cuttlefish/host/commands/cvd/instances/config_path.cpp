@@ -16,9 +16,12 @@
 
 #include "cuttlefish/host/commands/cvd/instances/config_path.h"
 
-#include "android-base/file.h"
+#include <string>
 
 #include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/files/directory_exists.h"
+#include "cuttlefish/files/file_exists.h"
+#include "cuttlefish/posix/realpath.h"
 
 namespace cuttlefish {
 

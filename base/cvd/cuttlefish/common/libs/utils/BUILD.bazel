@@ -1,19 +1,19 @@
-load("//cuttlefish/bazel:rules.bzl", "cf_cc_library", "cf_cc_test")
+load("//cuttlefish/bazel:rules.bzl", "cf_build_test", "cf_cc_library", "cf_cc_test")
 
 package(
     default_visibility = ["//:android_cuttlefish"],
 )
 
+cf_build_test(name = "utils_build_test")
+
 cf_cc_library(
     name = "archive",
     srcs = ["archive.cpp"],
     hdrs = ["archive.h"],
-    clang_format_enabled = False,
     deps = [
-        "//cuttlefish/common/libs/utils:subprocess",
-        "//cuttlefish/common/libs/utils:subprocess_managed_stdio",
+        "//cuttlefish/process:command",
+        "//cuttlefish/process:managed_stdio",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/strings",
     ],
@@ -33,7 +33,6 @@ cf_cc_library(
 cf_cc_test(
     name = "base64_test",
     srcs = ["base64_test.cpp"],
-    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:base64",
         "//cuttlefish/result:result_matchers",
@@ -44,16 +43,16 @@ cf_cc_test(
 cf_cc_library(
     name = "cf_endian",
     hdrs = ["cf_endian.h"],
-    deps = [
-        "//libbase",
-    ],
 )
 
 cf_cc_library(
     name = "container",
     srcs = ["container.cpp"],
     hdrs = ["container.h"],
-    deps = ["//cuttlefish/common/libs/utils:files"],
+    deps = [
+        "//cuttlefish/files:directory_exists",
+        "//cuttlefish/files:file_exists",
+    ],
 )
 
 cf_cc_library(
@@ -74,12 +73,10 @@ cf_cc_library(
     name = "disk_usage",
     srcs = ["disk_usage.cpp"],
     hdrs = ["disk_usage.h"],
-    clang_format_enabled = False,
     deps = [
-        "//cuttlefish/common/libs/utils:subprocess",
-        "//cuttlefish/common/libs/utils:subprocess_managed_stdio",
+        "//cuttlefish/process:command",
+        "//cuttlefish/process:managed_stdio",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/strings",
     ],
 )
@@ -93,9 +90,6 @@ cf_cc_library(
     hdrs = [
         "environment.h",
         "known_paths.h",
-    ],
-    deps = [
-        "//libbase",
     ],
 )
 
@@ -112,24 +106,32 @@ cf_cc_library(
     name = "files",
     srcs = ["files.cpp"],
     hdrs = ["files.h"],
-    clang_format_enabled = False,
     target_compatible_with = [
         "@platforms//os:linux",  # SEEK_DATA
     ],
     deps = [
         ":environment",
         "//cuttlefish/common/libs/fs",
-        "//cuttlefish/common/libs/utils:contains",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/common/libs/utils:in_sandbox",
         "//cuttlefish/common/libs/utils:users",
+        "//cuttlefish/files:copy",
+        "//cuttlefish/files:directory_contents",
+        "//cuttlefish/files:directory_exists",
+        "//cuttlefish/files:file_device_id",
+        "//cuttlefish/files:file_exists",
+        "//cuttlefish/files:link_or_copy",
+        "//cuttlefish/io:string",
+        "//cuttlefish/posix:realpath",
+        "//cuttlefish/posix:remove",
         "//cuttlefish/posix:rename",
+        "//cuttlefish/posix:stat",
         "//cuttlefish/posix:strerror",
-        "//cuttlefish/posix:symlink",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/log:check",
         "@abseil-cpp//absl/strings",
+        "@android_system_libbase//:file_logging",
         "@fmt",
     ],
 )
@@ -139,11 +141,14 @@ cf_cc_test(
     srcs = ["files_test.cpp"],
     deps = [
         "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/files:are_hard_linked",
+        "//cuttlefish/files:file_exists",
+        "//cuttlefish/files:is_directory_empty",
         "//cuttlefish/result",
         "//cuttlefish/result:result_matchers",
-        "//libbase",
         "@abseil-cpp//absl/cleanup",
         "@abseil-cpp//absl/strings",
+        "@android_system_libbase//:file_logging",
     ],
 )
 
@@ -152,7 +157,8 @@ cf_cc_library(
     srcs = ["flags_validator.cpp"],
     hdrs = ["flags_validator.h"],
     deps = [
-        "//cuttlefish/result",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
     ],
 )
 
@@ -180,9 +186,7 @@ cf_cc_library(
     name = "host_info",
     srcs = ["host_info.cpp"],
     hdrs = ["host_info.h"],
-    clang_format_enabled = False,
     deps = [
-        "//libbase",
         "@abseil-cpp//absl/base:no_destructor",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/log:check",
@@ -203,7 +207,6 @@ cf_cc_library(
         "@platforms//os:linux",
     ],
     deps = [
-        "//libbase",
         "@abseil-cpp//absl/log",
     ],
 )
@@ -213,7 +216,7 @@ cf_cc_library(
     srcs = ["is_google_corp.cpp"],
     hdrs = ["is_google_corp.h"],
     deps = [
-        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/files:directory_exists",
     ],
 )
 
@@ -222,7 +225,9 @@ cf_cc_library(
     srcs = ["json.cpp"],
     hdrs = ["json.h"],
     deps = [
-        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/fs:fd",
+        "//cuttlefish/io:reader",
+        "//cuttlefish/io:string",
         "//cuttlefish/result",
         "@jsoncpp",
     ],
@@ -232,15 +237,7 @@ cf_cc_library(
     name = "network",
     srcs = ["network.cpp"],
     hdrs = ["network.h"],
-    clang_format_enabled = False,
     deps = [
-        "//cuttlefish/common/libs/utils:files",
-        "//cuttlefish/common/libs/utils:subprocess",
-        "//cuttlefish/common/libs/utils:subprocess_managed_stdio",
-        "//cuttlefish/result",
-        "//libbase",
-        "@abseil-cpp//absl/log",
-        "@abseil-cpp//absl/strings",
         "@fmt",
     ],
 )
@@ -249,32 +246,6 @@ cf_cc_test(
     name = "network_test",
     srcs = ["network_test.cpp"],
     deps = [":network"],
-)
-
-cf_cc_library(
-    name = "proc_file_utils",
-    srcs = ["proc_file_utils.cpp"],
-    hdrs = ["proc_file_utils.h"],
-    deps = [
-        "//cuttlefish/common/libs/fs",
-        "//cuttlefish/common/libs/utils:files",
-        "//cuttlefish/posix:readlink",
-        "//cuttlefish/result",
-        "//libbase",
-        "@abseil-cpp//absl/log",
-        "@abseil-cpp//absl/strings",
-        "@fmt",
-    ],
-)
-
-cf_cc_test(
-    name = "proc_file_utils_test",
-    srcs = ["proc_file_utils_test.cpp"],
-    deps = [
-        "//cuttlefish/common/libs/utils:contains",
-        "//cuttlefish/common/libs/utils:proc_file_utils",
-        "//cuttlefish/result",
-    ],
 )
 
 cf_cc_library(
@@ -303,7 +274,6 @@ cf_cc_library(
     hdrs = ["semver.h"],
     deps = [
         "//cuttlefish/result",
-        "//cuttlefish/result:expect",
         "@abseil-cpp//absl/strings",
     ],
 )
@@ -314,7 +284,6 @@ cf_cc_test(
     deps = [
         "//cuttlefish/common/libs/utils:semver",
         "//cuttlefish/result:result_matchers",
-        "//cuttlefish/result:result_type",
     ],
 )
 
@@ -323,7 +292,6 @@ cf_cc_library(
     srcs = ["signals.cpp"],
     hdrs = ["signals.h"],
     deps = [
-        "//libbase",
         "@abseil-cpp//absl/log:check",
     ],
 )
@@ -342,37 +310,7 @@ cf_cc_library(
     ],
     deps = [
         "//cuttlefish/common/libs/fs",
-        "//libbase",
-        "@abseil-cpp//absl/log",
-    ],
-)
-
-cf_cc_library(
-    name = "subprocess",
-    srcs = ["subprocess.cpp"],
-    hdrs = ["subprocess.h"],
-    deps = [
-        "//cuttlefish/common/libs/fs",
-        "//cuttlefish/common/libs/utils:contains",
-        "//cuttlefish/common/libs/utils:files",
-        "//cuttlefish/result",
-        "//libbase",
-        "@abseil-cpp//absl/log",
-        "@abseil-cpp//absl/log:check",
-        "@abseil-cpp//absl/strings",
-    ],
-)
-
-cf_cc_library(
-    name = "subprocess_managed_stdio",
-    srcs = ["subprocess_managed_stdio.cc"],
-    hdrs = ["subprocess_managed_stdio.h"],
-    clang_format_enabled = False,
-    deps = [
-        "//cuttlefish/common/libs/fs",
-        "//cuttlefish/common/libs/utils:subprocess",
-        "//cuttlefish/result",
-        "//libbase",
+        "//cuttlefish/common/libs/fs:fd",
         "@abseil-cpp//absl/log",
     ],
 )
@@ -381,14 +319,13 @@ cf_cc_library(
     name = "tee_logging",
     srcs = ["tee_logging.cpp"],
     hdrs = ["tee_logging.h"],
-    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/fs",
-        "//cuttlefish/common/libs/utils:contains",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/common/libs/utils:environment",
-        "//cuttlefish/common/libs/utils:proc_file_utils",
+        "//cuttlefish/process:proc_file_utils",
         "//cuttlefish/result",
-        "//libbase",
+        "@abseil-cpp//absl/base:log_severity",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/log:globals",
         "@abseil-cpp//absl/log:initialize",
@@ -397,6 +334,9 @@ cf_cc_library(
         "@abseil-cpp//absl/log:log_sink_registry",
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/strings:str_format",
+        "@android_system_libbase//:file_logging",
+        "@android_system_libbase//:threads",
+        "@fmt",
     ],
 )
 
@@ -424,8 +364,8 @@ cf_cc_library(
     hdrs = ["unix_sockets.h"],
     deps = [
         "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/log:check",
     ],
@@ -436,9 +376,11 @@ cf_cc_test(
     srcs = ["unix_sockets_test.cpp"],
     deps = [
         "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/common/libs/utils:unix_sockets",
+        "//cuttlefish/io:string",
         "//cuttlefish/result",
-        "//libbase",
+        "//cuttlefish/result:result_matchers",
         "@abseil-cpp//absl/log:check",
     ],
 )
@@ -447,11 +389,9 @@ cf_cc_library(
     name = "users",
     srcs = ["users.cpp"],
     hdrs = ["users.h"],
-    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/utils:contains",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/log",
     ],
 )
@@ -466,7 +406,7 @@ cf_cc_library(
     ],
     deps = [
         "//cuttlefish/common/libs/fs",
-        "//libbase",
+        "//cuttlefish/common/libs/fs:fd",
         "@abseil-cpp//absl/log",
         "@jsoncpp",
     ],
@@ -478,10 +418,11 @@ cf_cc_library(
     hdrs = ["wait_for_file.h"],
     deps = [
         "//cuttlefish/common/libs/utils:contains",
-        "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/common/libs/utils:inotify",
+        "//cuttlefish/files:file_exists",
         "//cuttlefish/result",
-        "//libbase",
+        "@android_system_libbase//:file_logging",
+        "@android_system_libbase//:unique_fd",
     ],
 )
 
@@ -490,10 +431,11 @@ cf_cc_library(
     srcs = ["wait_for_unix_socket.cpp"],
     hdrs = ["wait_for_unix_socket.h"],
     deps = [
-        "//cuttlefish/common/libs/utils:files",
-        "//cuttlefish/common/libs/utils:subprocess",
-        "//cuttlefish/common/libs/utils:subprocess_managed_stdio",
+        "//cuttlefish/common/libs/fs",
         "//cuttlefish/common/libs/utils:wait_for_file",
+        "//cuttlefish/files:file_is_socket",
+        "//cuttlefish/process:command",
+        "//cuttlefish/process:managed_stdio",
         "//cuttlefish/result",
         "@abseil-cpp//absl/log",
     ],

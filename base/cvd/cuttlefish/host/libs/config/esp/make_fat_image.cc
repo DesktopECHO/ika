@@ -21,10 +21,10 @@
 #include <string>
 #include <vector>
 
-#include "cuttlefish/common/libs/fs/shared_fd.h"
-#include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
+#include "cuttlefish/common/libs/fs/fd.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/libs/config/known_paths.h"
+#include "cuttlefish/process/execute.h"
 #include "cuttlefish/result/expect.h"
 #include "cuttlefish/result/result_type.h"
 
@@ -36,10 +36,10 @@ Result<void> MakeFatImage(const std::string& data_image, int data_image_mb,
   off_t image_size_bytes = static_cast<off_t>(data_image_mb) << 20;
 
   if (FileExists(MkfsFat())) {
-    auto fd = SharedFD::Open(data_image, O_CREAT | O_TRUNC | O_RDWR, 0666);
-    CF_EXPECTF(fd->Truncate(image_size_bytes) == 0,
+    Fd fd = CF_EXPECT(Fd::Open(data_image, O_CREAT | O_TRUNC | O_RDWR, 0666));
+    CF_EXPECTF(fd.Truncate(image_size_bytes),
                "`truncate --size={}M '{}'` failed: {}", data_image_mb,
-               data_image, fd->StrError());
+               data_image, fd.StrError());
 
     CF_EXPECT_EQ(
         Execute({MkfsFat(), "-F", "32", "-M", "0xf8", "-h", "0", "-s", "8",

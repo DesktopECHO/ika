@@ -1,7 +1,6 @@
 load("@protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
 load("@protobuf//bazel:proto_library.bzl", "proto_library")
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
-
 load("//:build_variables.bzl", "COPTS")
 
 package(
@@ -180,8 +179,15 @@ cc_binary(
     local_defines = ["ADB_HOST=1"],
     deps = [
         ":libadb_cc_protos",
-        "//libbase",
         "@android_system_core//:libcutils",
+        "@android_system_libbase//:endian",
+        "@android_system_libbase//:errors",
+        "@android_system_libbase//:mapped_file",
+        "@android_system_libbase//:no_destructor",
+        "@android_system_libbase//:parsebool",
+        "@android_system_libbase//:parsenetaddress",
+        "@android_system_libbase//:scopeguard",
+        "@android_system_libbase//:thread_annotations",
         "@boringssl//:crypto",
         "@boringssl//:ssl",
         "@brotli//:brotlidec",

@@ -17,44 +17,50 @@
 
 #include <fcntl.h>
 
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include <fruit/component.h>
-#include <fruit/fruit_forward_decls.h>
-#include <fruit/macro.h>
+#include "fruit/component.h"
+#include "fruit/fruit_forward_decls.h"
+#include "fruit/macro.h"
 
-#include "cuttlefish/common/libs/fs/shared_fd.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/host/commands/run_cvd/launch/log_tee_creator.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/config/known_paths.h"
 #include "cuttlefish/host/libs/feature/command_source.h"
 #include "cuttlefish/host/libs/feature/feature.h"
+#include "cuttlefish/process/command.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
 namespace {
 
-using Subprocess::StdIOChannel::kStdErr;
+using Command::StdIoChannel::kStdErr;
 
-Command NewCommand(const std::string& binary_path, const std::string& socket_path, const std::string& lens_facing) {
+Command NewCommand(const std::string& binary_path,
+                   const std::string& socket_path,
+                   const std::string& lens_facing) {
   Command cmd(binary_path);
   cmd.AddParameter("--socket-path=", socket_path);
   cmd.AddParameter("--verbosity=", "debug");
   if (!lens_facing.empty()) {
     cmd.AddParameter("--lens-facing=", lens_facing);
   }
-  cmd.RedirectStdIO(Subprocess::StdIOChannel::kStdOut,
-                    SharedFD::Open("/dev/null", O_WRONLY));
+  cmd.RedirectStdIO(Command::StdIoChannel::kStdOut,
+                    Fd::Open("/dev/null", O_WRONLY).value_or(Fd()));
   return cmd;
 }
 
 class VhostUserMediaDevices : public CommandSource {
  public:
-  INJECT(VhostUserMediaDevices(const CuttlefishConfig::InstanceSpecific& instance, LogTeeCreator& log_tee)) : instance_(instance), log_tee_(log_tee) {}
+  INJECT(
+      VhostUserMediaDevices(const CuttlefishConfig::InstanceSpecific& instance,
+                            LogTeeCreator& log_tee))
+      : instance_(instance), log_tee_(log_tee) {}
 
   // CommandSource
   Result<std::vector<MonitorCommand>> Commands() override {
@@ -62,19 +68,44 @@ class VhostUserMediaDevices : public CommandSource {
     for (int index = 0; index < instance_.media_configs().size(); index++) {
       auto config = instance_.media_configs()[index];
       std::string binary_path;
-      if (config.type == CuttlefishConfig::MediaType::kV4l2EmulatedCameraMPlane) {
+      std::optional<Command> cmd;
+      if (config.type ==
+          CuttlefishConfig::MediaType::kV4l2EmulatedCameraMPlane) {
         binary_path = VhostUserMediaEmulatedCameraMPlaneBinary();
-      } else if (config.type == CuttlefishConfig::MediaType::kV4l2EmulatedCameraSPlane) {
+        cmd.emplace(NewCommand(binary_path, instance_.media_socket_path(index),
+                               config.lens_facing));
+      } else if (config.type ==
+                 CuttlefishConfig::MediaType::kV4l2EmulatedCameraSPlane) {
         binary_path = VhostUserMediaEmulatedCameraSPlaneBinary();
+        cmd.emplace(NewCommand(binary_path, instance_.media_socket_path(index),
+                               config.lens_facing));
+      } else if (config.type == CuttlefishConfig::MediaType::kV4l2StreamProxy) {
+        CF_EXPECT(config.v4l2_stream_proxy.has_value(),
+                  "Missing v4l2_stream_proxy config");
+        binary_path = VhostUserMediaV4l2StreamProxyBinary();
+        cmd.emplace(
+            NewCommand(binary_path, instance_.media_socket_path(index), ""));
+        cmd->AddParameter("--input_path=",
+                          config.v4l2_stream_proxy->input_path);
+        cmd->AddParameter(
+            "--input_width=",
+            std::to_string(config.v4l2_stream_proxy->input_width));
+        cmd->AddParameter(
+            "--input_height=",
+            std::to_string(config.v4l2_stream_proxy->input_height));
+        cmd->AddParameter("--input_fps=", config.v4l2_stream_proxy->input_fps);
       } else if (config.type == CuttlefishConfig::MediaType::kV4l2Proxy) {
         continue;
       } else {
         CF_EXPECT(false, "unknown media type");
       }
-      Command cmd = NewCommand(binary_path, instance_.media_socket_path(index), config.lens_facing);
+
+      CF_EXPECT(cmd.has_value(), "Command was not initialized");
+
       Command cmd_log_tee = CF_EXPECT(
-          log_tee_.CreateLogTee(cmd, "vhu_media_simple_device", kStdErr), "Failed to create log tee command for media device");
-      commands.emplace_back(std::move(cmd));
+          log_tee_.CreateLogTee(*cmd, "vhu_media_simple_device", kStdErr),
+          "Failed to create log tee command for media device");
+      commands.emplace_back(std::move(*cmd));
       commands.emplace_back(std::move(cmd_log_tee));
     }
     return commands;
@@ -92,11 +123,11 @@ class VhostUserMediaDevices : public CommandSource {
 
 }  // namespace
 
-fruit::Component<fruit::Required<const CuttlefishConfig::InstanceSpecific, LogTeeCreator>>
+fruit::Component<
+    fruit::Required<const CuttlefishConfig::InstanceSpecific, LogTeeCreator>>
 VhostUserMediaDevicesComponent() {
   return fruit::createComponent()
       .addMultibinding<CommandSource, VhostUserMediaDevices>();
 }
 
 }  // namespace cuttlefish
-

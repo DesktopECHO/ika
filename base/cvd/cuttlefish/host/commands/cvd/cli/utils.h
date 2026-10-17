@@ -19,13 +19,11 @@
 #include <signal.h>
 
 #include <string>
-#include <string_view>
 #include <vector>
 
 #include "cuttlefish/flag_parser/flag.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
-#include "cuttlefish/host/commands/cvd/cli/types.h"
+#include "cuttlefish/process/command.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -37,28 +35,28 @@ struct ConstructCommandParam {
   const std::string& bin_path;
   const std::string& home;
   const std::vector<std::string>& args;
-  const cvd_common::Envs& envs;
+  const std::unordered_map<std::string, std::string>& envs;
   const std::string& working_dir;
   const std::string& command_name;
 };
 Result<Command> ConstructCommand(const ConstructCommandParam& cmd_param);
 
 // Constructs a command for cvd whatever --help or --help-related-option
-Result<Command> ConstructCvdHelpCommand(const std::string& bin_file,
-                                        cvd_common::Envs envs,
-                                        const cvd_common::Args& _args,
-                                        const CommandRequest& request);
+Result<Command> ConstructCvdHelpCommand(
+    const std::string& bin_file,
+    std::unordered_map<std::string, std::string> envs,
+    const std::vector<std::string>& _args, const CommandRequest& request);
 
 Result<Command> ConstructSiblingHelpCommand(
     const std::string& bin_name,
-    const cvd_common::Envs& env,
-    const cvd_common::Args& subcmd_args);
+    const std::unordered_map<std::string, std::string>& env,
+    const std::vector<std::string>& subcmd_args);
 
 // Constructs a command for cvd non-start-op
 struct ConstructNonHelpForm {
   std::string bin_file;
-  cvd_common::Envs envs;
-  cvd_common::Args cmd_args;
+  std::unordered_map<std::string, std::string> envs;
+  std::vector<std::string> cmd_args;
   std::string android_host_out;
   std::string home;
   bool verbose;
@@ -72,9 +70,10 @@ Result<Command> ConstructCvdGenericNonHelpCommand(
 // the given arguments and environment plus the --helpxml flag.
 // Gflags-specific flags (except --help) are filtered out to keep the output
 // size reasonable.
-Result<std::vector<Flag>> GetSiblingCommandFlags(const std::string& bin_name,
-                                                 const cvd_common::Envs& env,
-                                                 cvd_common::Args args);
+Result<std::vector<Flag>> GetSiblingCommandFlags(
+    const std::string& bin_name,
+    const std::unordered_map<std::string, std::string>& env,
+    std::vector<std::string> args);
 
 // Call this when there is no instance group is running
 // The function does not verify that.
@@ -86,15 +85,7 @@ struct TerminalSize {
 };
 Result<TerminalSize> GetTerminalSize();
 
-class TerminalColors {
- public:
-  TerminalColors(bool is_tty): is_tty_(is_tty){}
-  std::string_view Reset() const;
-  std::string_view BoldRed() const;
-  std::string_view Red() const;
-  std::string_view Cyan() const;
- private:
-  bool is_tty_;
-};
+std::vector<std::string> ExpandProductPaths(const std::string& product_path,
+                                            size_t num_instances);
 
 }  // namespace cuttlefish

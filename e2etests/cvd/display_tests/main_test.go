@@ -24,14 +24,14 @@ func addDisplay(c e2etests.TestContext, t *testing.T) {
 	c.SetUp(t)
 	defer c.TearDown()
 
-	if err := c.CVDFetch(e2etests.FetchArgs{
+	if res, err := c.CVDFetch(e2etests.FetchArgs{
 		DefaultBuildBranch: "aosp-android-latest-release",
 		DefaultBuildTarget: "aosp_cf_x86_64_only_phone-userdebug",
 	}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("cvd fetch failed with %v, stderr:%s", err, res.Stderr)
 	}
 
-	if err := c.CVDCreate(e2etests.CreateArgs{}); err != nil {
+	if _, err := c.CVDCreate(e2etests.CreateArgs{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -44,14 +44,14 @@ func listDisplays(c e2etests.TestContext, t *testing.T) {
 	c.SetUp(t)
 	defer c.TearDown()
 
-	if err := c.CVDFetch(e2etests.FetchArgs{
+	if _, err := c.CVDFetch(e2etests.FetchArgs{
 		DefaultBuildBranch: "aosp-android-latest-release",
 		DefaultBuildTarget: "aosp_cf_x86_64_only_phone-userdebug",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := c.CVDCreate(e2etests.CreateArgs{}); err != nil {
+	if _, err := c.CVDCreate(e2etests.CreateArgs{}); err != nil {
 		t.Fatal(err)
 	}
 

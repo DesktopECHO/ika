@@ -13,25 +13,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "cuttlefish/host/libs/config/adb/adb.h"
-
 #include <set>
 #include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include <fruit/component.h>
-#include <fruit/fruit_forward_decls.h>
-#include <fruit/macro.h>
+#include "fruit/component.h"
+#include "fruit/fruit_forward_decls.h"
+#include "fruit/macro.h"
 
-#include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/commands/kernel_log_monitor/kernel_log_server.h"
+#include "cuttlefish/host/libs/config/adb/adb.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/config/known_paths.h"
 #include "cuttlefish/host/libs/feature/command_source.h"
 #include "cuttlefish/host/libs/feature/feature.h"
 #include "cuttlefish/host/libs/feature/kernel_log_pipe_provider.h"
+#include "cuttlefish/metrics/host/invoker.h"
+#include "cuttlefish/process/command.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -49,6 +49,10 @@ class AdbHelper {
 
   std::string ConnectorTcpArg() const {
     return "127.0.0.1:" + std::to_string(instance_.adb_host_port());
+  }
+
+  std::string LegacyConnectorTcpArg() const {
+    return "0.0.0.0:" + std::to_string(instance_.adb_host_port());
   }
 
   std::string ConnectorVsockArg() const {
@@ -94,7 +98,13 @@ class AdbConnector : public CommandSource {
 
     if (helper_.TcpConnectorEnabled()) {
       addresses.insert(helper_.ConnectorTcpArg());
+      // TODO(b/556848408): Downstream infra expects serial 0.0.0.0:port
+      // connected.
+      if (GetInvoker() == Invoker::HostOrchestrator) {
+        addresses.insert(helper_.LegacyConnectorTcpArg());
+      }
     }
+
     if (helper_.VsockConnectorEnabled()) {
       addresses.insert(helper_.ConnectorVsockArg());
     }

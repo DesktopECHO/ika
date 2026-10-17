@@ -13,12 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <string.h>
+
+#include <errno.h>
+#include <stdlib.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include <string_view>
+#include <utility>
+#include <vector>
 
-#include <android-base/macros.h>
 #include "absl/cleanup/cleanup.h"
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
@@ -26,12 +30,14 @@
 #include "absl/strings/str_format.h"
 
 #include "allocd/alloc_utils.h"
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
-#include "cuttlefish/common/libs/fs/shared_select.h"
 #include "cuttlefish/host/commands/cvdalloc/interface.h"
 #include "cuttlefish/host/commands/cvdalloc/privilege.h"
 #include "cuttlefish/host/commands/cvdalloc/sem.h"
 #include "cuttlefish/posix/strerror.h"
+#include "cuttlefish/result/expect.h"
+#include "cuttlefish/result/result_type.h"
 
 ABSL_FLAG(int, id, 0, "Id");
 ABSL_FLAG(int, socket, 0, "Socket");
@@ -122,8 +128,8 @@ Result<void> Teardown(int id, std::string_view ethernet_bridge_name,
 
 }  // namespace
 
-Result<int> CvdallocMain(int argc, char *argv[]) {
-  std::vector<char *> args = absl::ParseCommandLine(argc, argv);
+Result<int> CvdallocMain(int argc, char* argv[]) {
+  std::vector<char*> args = absl::ParseCommandLine(argc, argv);
 
   if (absl::GetFlag(FLAGS_id) == 0 || absl::GetFlag(FLAGS_socket) == 0) {
     Usage();
@@ -135,18 +141,13 @@ Result<int> CvdallocMain(int argc, char *argv[]) {
   bool enable_mobile = absl::GetFlag(FLAGS_enable_mobile);
   bool enable_wifi = absl::GetFlag(FLAGS_enable_wifi);
 
-  auto sock = SharedFD::Dup(absl::GetFlag(FLAGS_socket));
-  if (!sock->IsOpen()) {
-    return CF_ERRNO("cvdalloc: socket is closed: " << sock->StrError());
-  }
+  SharedFD sock = CF_EXPECT(Fd::Dup(absl::GetFlag(FLAGS_socket)));
   int r = TEMP_FAILURE_RETRY(close(absl::GetFlag(FLAGS_socket)));
   if (r == -1) {
     return CF_ERRNO("close: " << StrError(errno));
   }
 
-  absl::Cleanup shutdown = [sock]() {
-    sock->Shutdown(SHUT_RDWR);
-  };
+  absl::Cleanup shutdown = [sock]() { sock->Shutdown(SHUT_RDWR); };
 
   /*
    * Save our current uid, so we can restore it to drop privileges later.
@@ -189,9 +190,9 @@ Result<int> CvdallocMain(int argc, char *argv[]) {
 
 }  // namespace cuttlefish
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
   auto res = cuttlefish::CvdallocMain(argc, argv);
-  if (!res.ok()) {
+  if (!res.has_value()) {
     LOG(ERROR) << "cvdalloc failed: \n" << res.error();
     abort();
   }

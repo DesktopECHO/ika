@@ -1,16 +1,80 @@
-load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary", "cf_cc_library")
+load("//cuttlefish/bazel:rules.bzl", "cf_build_test", "cf_cc_binary", "cf_cc_library")
 
 package(
     default_visibility = ["//:android_cuttlefish"],
 )
 
+cf_build_test(name = "cf_build_test")
+
 cf_cc_binary(
     name = "generate_shader_embed",
     srcs = ["generate_shader_embed.cpp"],
+    include_cleaner_enabled = False,
+)
+
+genrule(
+    name = "gen_blit_texture.frag.inl",
+    srcs = [
+        "blit_texture.frag",
+        "blit_texture.frag.spv",
+    ],
+    outs = ["blit_texture.frag.inl"],
+    cmd = "$(location :generate_shader_embed) $(location :blit_texture.frag) $(location :blit_texture.frag.spv) kBlitTextureFrag $@",
+    tools = [":generate_shader_embed"],
+)
+
+genrule(
+    name = "gen_blit_texture.vert.inl",
+    srcs = [
+        "blit_texture.vert",
+        "blit_texture.vert.spv",
+    ],
+    outs = ["blit_texture.vert.inl"],
+    cmd = "$(location :generate_shader_embed) $(location :blit_texture.vert) $(location :blit_texture.vert.spv) kBlitTextureVert $@",
+    tools = [":generate_shader_embed"],
+)
+
+genrule(
+    name = "gen_blit_texture_highp.frag.inl",
+    srcs = [
+        "blit_texture_highp.frag",
+        "blit_texture_highp.frag.spv",
+    ],
+    outs = ["blit_texture_highp.frag.inl"],
+    cmd = "$(location :generate_shader_embed) $(location :blit_texture_highp.frag) $(location :blit_texture_highp.frag.spv) kBlitTextureHighpFrag $@",
+    tools = [":generate_shader_embed"],
+)
+
+genrule(
+    name = "gen_blit_texture_lowp.frag.inl",
+    srcs = [
+        "blit_texture_lowp.frag",
+        "blit_texture_lowp.frag.spv",
+    ],
+    outs = ["blit_texture_lowp.frag.inl"],
+    cmd = "$(location :generate_shader_embed) $(location :blit_texture_lowp.frag) $(location :blit_texture_lowp.frag.spv) kBlitTextureLowpFrag $@",
+    tools = [":generate_shader_embed"],
+)
+
+genrule(
+    name = "gen_blit_texture_mediump.frag.inl",
+    srcs = [
+        "blit_texture_mediump.frag",
+        "blit_texture_mediump.frag.spv",
+    ],
+    outs = ["blit_texture_mediump.frag.inl"],
+    cmd = "$(location :generate_shader_embed) $(location :blit_texture_mediump.frag) $(location :blit_texture_mediump.frag.spv) kBlitTextureMediumpFrag $@",
+    tools = [":generate_shader_embed"],
 )
 
 cf_cc_library(
     name = "graphics_detector_shaders",
     clang_format_enabled = False,
-    textual_hdrs = glob(["*.inl"]),
+    textual_hdrs = [
+        ":gen_blit_texture.frag.inl",
+        ":gen_blit_texture.vert.inl",
+        ":gen_blit_texture_highp.frag.inl",
+        ":gen_blit_texture_lowp.frag.inl",
+        ":gen_blit_texture_mediump.frag.inl",
+    ],
 )

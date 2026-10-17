@@ -15,12 +15,20 @@
 
 #include "cuttlefish/common/libs/utils/json.h"
 
+#include <fcntl.h>
+
 #include <memory>
 #include <string>
 #include <string_view>
 
-#include "cuttlefish/common/libs/fs/shared_buf.h"
-#include "cuttlefish/common/libs/fs/shared_fd.h"
+#include "json/config.h"
+#include "json/reader.h"
+#include "json/value.h"
+
+#include "cuttlefish/common/libs/fs/fd.h"
+#include "cuttlefish/io/reader.h"
+#include "cuttlefish/io/string.h"
+#include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
 
@@ -35,22 +43,16 @@ Result<Json::Value> ParseJson(std::string_view input) {
   return root;
 }
 
-Result<Json::Value> LoadFromFile(SharedFD json_fd) {
-  CF_EXPECT(json_fd->IsOpen(), "json_fd is not open.");
-  std::string json_contents;
-  // on success, this must return a positive integer
-  CF_EXPECT_GE(ReadAll(json_fd, &json_contents), 0,
-               "ReadAll() failed and returned 0 or -1");
+Result<Json::Value> LoadFromFile(Reader& json_reader) {
+  const std::string json_contents = CF_EXPECT(ReadToString(json_reader));
   Json::Value json_value = CF_EXPECTF(
       ParseJson(json_contents), "Failed to parse json: \n{}", json_contents);
   return json_value;
 }
 
 Result<Json::Value> LoadFromFile(const std::string& path_to_file) {
-  SharedFD json_fd = SharedFD::Open(path_to_file, O_RDONLY);
-  auto json_value =
-      CF_EXPECTF(LoadFromFile(json_fd), "Failed to open {}", path_to_file);
-  return json_value;
+  Fd json_fd = CF_EXPECT(Fd::Open(path_to_file, O_RDONLY));
+  return CF_EXPECT(LoadFromFile(json_fd));
 }
 
 }  // namespace cuttlefish

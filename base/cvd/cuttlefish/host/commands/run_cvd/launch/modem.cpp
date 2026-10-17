@@ -24,11 +24,13 @@
 
 #include "absl/log/log.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/config/known_paths.h"
 #include "cuttlefish/host/libs/feature/command_source.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/subprocess.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -39,27 +41,27 @@ static StopperResult StopModemSimulator(int id) {
       SharedFD::SocketLocalClient(socket_name, true, SOCK_STREAM);
   if (!monitor_sock->IsOpen()) {
     LOG(ERROR) << "The connection to modem simulator is closed";
-    return StopperResult::kStopFailure;
+    return StopperResult::kFailure;
   }
   std::string msg("STOP");
-  if (monitor_sock->Write(msg.data(), msg.size()) < 0) {
+  if (!monitor_sock->Write(msg.data(), msg.size()).has_value()) {
     monitor_sock->Close();
     LOG(ERROR) << "Failed to send 'STOP' to modem simulator";
-    return StopperResult::kStopFailure;
+    return StopperResult::kFailure;
   }
   char buf[64] = {0};
-  if (monitor_sock->Read(buf, sizeof(buf)) <= 0) {
+  if (monitor_sock->Read(buf, sizeof(buf)).value_or(0) == 0) {
     monitor_sock->Close();
     LOG(ERROR) << "Failed to read message from modem simulator";
-    return StopperResult::kStopFailure;
+    return StopperResult::kFailure;
   }
   if (strcmp(buf, "OK")) {
     monitor_sock->Close();
     LOG(ERROR) << "Read '" << buf << "' instead of 'OK' from modem simulator";
-    return StopperResult::kStopFailure;
+    return StopperResult::kFailure;
   }
 
-  return StopperResult::kStopSuccess;
+  return StopperResult::kSuccess;
 }
 
 Result<std::optional<MonitorCommand>> ModemSimulator(
@@ -72,22 +74,19 @@ Result<std::optional<MonitorCommand>> ModemSimulator(
   CF_EXPECT(instance_number >= 0 && instance_number < 4,
             "Modem simulator instance number should range between 0 and 3");
   auto ports = instance.modem_simulator_ports();
-  std::vector<SharedFD> sockets;
+  std::vector<Fd> sockets;
   for (int i = 0; i < instance_number; ++i) {
     auto pos = ports.find(',');
     auto temp = (pos != std::string::npos) ? ports.substr(0, pos) : ports;
     auto port = std::stoi(temp);
     ports = ports.substr(pos + 1);
 
-    auto modem_sim_socket = SharedFD::VsockServer(
-        port, SOCK_STREAM,
-        instance.vhost_user_vsock()
-            ? std::make_optional(instance.vsock_guest_cid())
-            : std::nullopt);
-    CF_EXPECT(
-        modem_sim_socket->IsOpen(),
-        modem_sim_socket->StrError()
-            << " (try `cvd reset`, or `pkill run_cvd` and `pkill crosvm`)");
+    Fd modem_sim_socket = CF_EXPECT(
+        Fd::VsockServer(port, SOCK_STREAM,
+                        instance.vhost_user_vsock()
+                            ? std::make_optional(instance.vsock_guest_cid())
+                            : std::nullopt),
+        " (try `cvd reset`, or `pkill run_cvd` and `pkill crosvm`)");
     sockets.emplace_back(std::move(modem_sim_socket));
   }
 
@@ -99,11 +98,11 @@ Result<std::optional<MonitorCommand>> ModemSimulator(
   cmd.AddParameter(std::string{"-sim_type="} + std::to_string(sim_type));
   cmd.AddParameter("-server_fds=");
   bool first_socket = true;
-  for (const auto& socket : sockets) {
+  for (auto& socket : sockets) {
     if (!first_socket) {
       cmd.AppendToLastParameter(",");
     }
-    cmd.AppendToLastParameter(socket);
+    cmd.AppendToLastParameter(SharedFD(std::move(socket)));
     first_socket = false;
   }
   return cmd;

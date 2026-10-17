@@ -16,23 +16,22 @@
 
 #pragma once
 
-#include <memory>
 #include <string>
 
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
-#include "cuttlefish/host/commands/cvd/cli/types.h"
 #include "cuttlefish/host/commands/cvd/instances/instance_manager.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
 
+// restart, powerwash, powerbtn
 class CvdDeviceRestartCommandHandler : public CvdCommandHandler {
  public:
   CvdDeviceRestartCommandHandler(InstanceManager& instance_manager);
 
   Result<void> Handle(const CommandRequest& request) override;
-  cvd_common::Args CmdList() const override;
+  std::vector<std::string> CmdList() const override;
 
   std::string SummaryHelp() const override;
   bool RequiresDeviceExists() const override;
@@ -41,9 +40,5 @@ class CvdDeviceRestartCommandHandler : public CvdCommandHandler {
  private:
   InstanceManager& instance_manager_;
 };
-
-// restart, powerwash, powerbtn
-std::unique_ptr<CvdCommandHandler> NewCvdDeviceRestartCommandHandler(
-    InstanceManager& instance_manager);
 
 }  // namespace cuttlefish

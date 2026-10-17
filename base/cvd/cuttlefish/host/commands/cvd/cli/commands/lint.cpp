@@ -17,15 +17,12 @@
 #include "cuttlefish/host/commands/cvd/cli/commands/lint.h"
 
 #include <iostream>
-#include <memory>
 #include <string>
 #include <vector>
 
 #include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
-#include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
 #include "cuttlefish/host/commands/cvd/cli/parser/load_configs_parser.h"
-#include "cuttlefish/host/commands/cvd/cli/types.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -54,7 +51,9 @@ Result<void> LintCommandHandler::Handle(const CommandRequest& request) {
   return {};
 }
 
-cvd_common::Args LintCommandHandler::CmdList() const { return {kLintSubCmd}; }
+std::vector<std::string> LintCommandHandler::CmdList() const {
+  return {kLintSubCmd};
+}
 
 std::string LintCommandHandler::SummaryHelp() const { return kSummaryHelpText; }
 
@@ -74,10 +73,6 @@ Result<std::string> LintCommandHandler::ValidateConfig(
   std::string& config_path = args.front();
   CF_EXPECT(GetEnvironmentSpecification(config_path, load_flags.overrides));
   return config_path;
-}
-
-std::unique_ptr<CvdCommandHandler> NewLintCommand() {
-  return std::unique_ptr<CvdCommandHandler>(new LintCommandHandler());
 }
 
 }  // namespace cuttlefish

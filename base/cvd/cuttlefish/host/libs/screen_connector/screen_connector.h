@@ -25,10 +25,9 @@
 #include <type_traits>
 #include <unordered_set>
 
-#include <fruit/fruit.h>
 #include "absl/log/log.h"
+#include "fruit/fruit.h"
 
-#include "cuttlefish/common/libs/confui/confui.h"
 #include "cuttlefish/common/libs/utils/contains.h"
 #include "cuttlefish/common/libs/utils/size_utils.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
@@ -72,6 +71,8 @@ class ScreenConnector : public ScreenConnectorFrameRenderer {
         GpuMode::GfxstreamGuestAngle,
         GpuMode::GfxstreamGuestAngleHostSwiftshader,
         GpuMode::GfxstreamGuestAngleHostLavapipe,
+        GpuMode::Venus,
+        GpuMode::GuestLavapipe,
         GpuMode::GuestSwiftshader,
     };
     if (!Contains(valid_gpu_modes, instance.gpu_mode())) {

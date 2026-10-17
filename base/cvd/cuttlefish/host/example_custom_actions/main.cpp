@@ -13,9 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <sys/socket.h>
-
 #include <stddef.h>
+#include <sys/socket.h>
 
 #include <cstdlib>
 #include <string>
@@ -25,9 +24,10 @@
 #include "absl/log/log.h"
 #include "absl/strings/str_split.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_buf.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
-#include "cuttlefish/host/libs/config/cuttlefish_config.h"
+#include "cuttlefish/host/libs/config/config_utils.h"
 
 // Messages are always 128 bytes.
 static constexpr size_t kMessageSize = 128;
@@ -40,7 +40,8 @@ int main(int argc, char** argv) {
   // Connect to WebRTC
   int fd = std::atoi(argv[1]);
   LOG(INFO) << "Connecting to WebRTC server...";
-  cuttlefish::SharedFD webrtc_socket = cuttlefish::SharedFD::Dup(fd);
+  cuttlefish::SharedFD webrtc_socket =
+      cuttlefish::Fd::Dup(fd).value_or(cuttlefish::Fd());
   close(fd);
   if (webrtc_socket->IsOpen()) {
     LOG(INFO) << "Connected";
@@ -77,8 +78,7 @@ int main(int argc, char** argv) {
 
     // Demonstrate two commands. For demonstration purposes these two
     // commands use adb shell, but commands can execute any action you choose.
-    std::string adb_shell_command =
-        cuttlefish::HostBinaryPath("adb");
+    std::string adb_shell_command = cuttlefish::HostBinaryPath("adb");
     if (command == "settings") {
       adb_shell_command += " shell cmd statusbar ";
       adb_shell_command += statusbar_expanded ? "collapse" : "expand-settings";

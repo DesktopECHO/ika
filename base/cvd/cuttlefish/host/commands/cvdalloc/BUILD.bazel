@@ -1,8 +1,10 @@
-load("//cuttlefish/bazel:rules.bzl", "cf_cc_binary", "cf_cc_library")
+load("//cuttlefish/bazel:rules.bzl", "cf_build_test", "cf_cc_binary", "cf_cc_library")
 
 package(
     default_visibility = ["//:android_cuttlefish"],
 )
+
+cf_build_test(name = "cvdalloc_build_test")
 
 cf_cc_library(
     name = "interface",
@@ -24,7 +26,8 @@ cf_cc_library(
     deps = [
         "//cuttlefish/common/libs/fs",
         "//cuttlefish/host/libs/command_util",
-        "//cuttlefish/result",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
     ],
 )
 
@@ -33,28 +36,27 @@ cf_cc_library(
     srcs = ["privilege.cpp"],
     hdrs = ["privilege.h"],
     deps = [
+        "//cuttlefish/posix:stat",
         "//cuttlefish/posix:strerror",
-        "//cuttlefish/result",
-        "//libbase",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
         "@abseil-cpp//absl/log",
     ],
 )
 
 cf_cc_binary(
     name = "cvdalloc",
-    srcs = [
-        "cvdalloc.cpp",
-    ],
-    clang_format_enabled = False,
+    srcs = ["cvdalloc.cpp"],
     deps = [
         ":interface",
         ":privilege",
         ":sem",
         "//allocd:alloc_utils",
         "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/posix:strerror",
-        "//cuttlefish/result",
-        "//libbase",
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_type",
         "@abseil-cpp//absl/cleanup:cleanup",
         "@abseil-cpp//absl/flags:flag",
         "@abseil-cpp//absl/flags:parse",

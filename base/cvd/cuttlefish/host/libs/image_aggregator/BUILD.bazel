@@ -1,10 +1,12 @@
 load("@protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
 load("@protobuf//bazel:proto_library.bzl", "proto_library")
-load("//cuttlefish/bazel:rules.bzl", "COPTS", "cf_cc_library")
+load("//cuttlefish/bazel:rules.bzl", "COPTS", "cf_build_test", "cf_cc_library")
 
 package(
     default_visibility = ["//:android_cuttlefish"],
 )
+
+cf_build_test(name = "image_aggregator_build_test")
 
 proto_library(
     name = "cdisk_spec_proto",
@@ -20,16 +22,13 @@ cf_cc_library(
     name = "composite_disk",
     srcs = ["composite_disk.cc"],
     hdrs = ["composite_disk.h"],
-    clang_format_enabled = False,
     deps = [
-        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/host/libs/image_aggregator:cdisk_spec_cc_proto",
         "//cuttlefish/host/libs/image_aggregator:disk_image",
-        "//cuttlefish/io",
         "//cuttlefish/io:read_exact",
-        "//cuttlefish/io:shared_fd",
+        "//cuttlefish/io:reader",
         "//cuttlefish/io:string",
-        "//cuttlefish/posix:strerror",
         "//cuttlefish/result",
     ],
 )
@@ -64,9 +63,9 @@ cf_cc_library(
     name = "image_from_file",
     srcs = ["image_from_file.cc"],
     hdrs = ["image_from_file.h"],
-    clang_format_enabled = False,
     deps = [
         "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/host/libs/image_aggregator:composite_disk",
         "//cuttlefish/host/libs/image_aggregator:disk_image",
@@ -86,20 +85,21 @@ cf_cc_library(
         "-Wno-packed-non-pod",
     ],
     deps = [
-        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/common/libs/utils:size_utils",
-        "//cuttlefish/common/libs/utils:subprocess",
         "//cuttlefish/host/libs/image_aggregator:cdisk_spec_cc_proto",
         "//cuttlefish/host/libs/image_aggregator:composite_disk",
+        "//cuttlefish/host/libs/image_aggregator:disk_image",
         "//cuttlefish/host/libs/image_aggregator:gpt",
         "//cuttlefish/host/libs/image_aggregator:gpt_type_guid",
         "//cuttlefish/host/libs/image_aggregator:image_from_file",
         "//cuttlefish/host/libs/image_aggregator:mbr",
         "//cuttlefish/host/libs/image_aggregator:sparse_image",
+        "//cuttlefish/io:write_exact",
+        "//cuttlefish/io:writer",
         "//cuttlefish/result",
-        "//libbase",
-        "@android_system_core//:libsparse",
+        "@abseil-cpp//absl/log",
         "@protobuf",
         "@protobuf//:differencer",
         "@zlib",
@@ -128,18 +128,17 @@ cf_cc_library(
     name = "sparse_image",
     srcs = ["sparse_image.cc"],
     hdrs = ["sparse_image.h"],
-    clang_format_enabled = False,
     deps = [
-        "//cuttlefish/common/libs/fs",
-        "//cuttlefish/common/libs/utils:files",
-        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/host/libs/config:known_paths",
         "//cuttlefish/host/libs/image_aggregator:disk_image",
+        "//cuttlefish/posix:realpath",
         "//cuttlefish/posix:rename",
+        "//cuttlefish/process:execute",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/log",
         "@android_system_core//:libsparse",
+        "@android_system_libbase//:unique_fd",
     ],
 )
 
@@ -148,16 +147,16 @@ cf_cc_library(
     srcs = ["super_builder.cc"],
     hdrs = ["super_builder.h"],
     deps = [
-        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/host/libs/config:log_string_to_dir",
         "//cuttlefish/host/libs/image_aggregator:cdisk_spec_cc_proto",
         "//cuttlefish/host/libs/image_aggregator:composite_disk",
         "//cuttlefish/host/libs/image_aggregator:disk_image",
         "//cuttlefish/host/libs/image_aggregator:image_from_file",
+        "//cuttlefish/io:write_exact",
         "//cuttlefish/pretty:unique_ptr",
         "//cuttlefish/pretty/liblp",
         "//cuttlefish/result",
-        "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/strings",
         "@android_system_core//:liblp",
         "@boringssl//:crypto",
@@ -172,11 +171,12 @@ cf_cc_library(
         "-Wno-packed-non-pod",
     ],
     deps = [
-        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/common/libs/utils:cf_endian",
-        "//cuttlefish/common/libs/utils:subprocess",
-        "//cuttlefish/common/libs/utils:subprocess_managed_stdio",
         "//cuttlefish/host/libs/image_aggregator:disk_image",
+        "//cuttlefish/io:read_exact",
+        "//cuttlefish/process:command",
+        "//cuttlefish/process:managed_stdio",
         "//cuttlefish/result",
     ],
 )

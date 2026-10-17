@@ -12,18 +12,21 @@ cf_cc_library(
     hdrs = [
         "process_monitor.h",
     ],
+    include_cleaner_enabled = False,
     deps = [
         "//cuttlefish/common/libs/transport",
         "//cuttlefish/common/libs/utils:contains",
-        "//cuttlefish/common/libs/utils:subprocess",
         "//cuttlefish/host/libs/command_util",
         "//cuttlefish/host/libs/config:known_paths",
         "//cuttlefish/host/libs/feature",
         "//cuttlefish/posix:strerror",
+        "//cuttlefish/posix:temp_failure_retry",
+        "//cuttlefish/process:command",
+        "//cuttlefish/process:subprocess",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/strings",
+        "@android_system_libbase//:file_logging",
     ],
 )
 
@@ -33,7 +36,7 @@ cf_cc_test(
     deps = [
         ":process_monitor",
         "//cuttlefish/common/libs/fs",
-        "//cuttlefish/common/libs/utils:subprocess",
+        "//cuttlefish/process:command",
         "//cuttlefish/host/libs/feature",
         "//cuttlefish/result",
     ],

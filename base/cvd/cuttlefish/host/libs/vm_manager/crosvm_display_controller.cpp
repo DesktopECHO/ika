@@ -20,12 +20,12 @@
 #include <string>
 #include <vector>
 
-#include "absl/strings/str_join.h"
 #include "absl/log/log.h"
+#include "absl/strings/str_join.h"
 
-#include "cuttlefish/common/libs/utils/subprocess.h"
-#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/managed_stdio.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -103,7 +103,7 @@ Result<int> CrosvmDisplayController::RunCrosvmDisplayCommand(
   command.AddParameter(crosvm_control_path);
 
   Result<std::string> res = RunAndCaptureStdout(std::move(command));
-  if (res.ok()) {
+  if (res.has_value()) {
     if (stdout_str != nullptr) {
       *stdout_str = std::move(*res);
     }

@@ -17,21 +17,33 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <string.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <unistd.h>
 #if defined(__linux__)
+#include <elf.h>
 #include <linux/capability.h>
 #include <linux/prctl.h>
 #include <linux/xattr.h>
+#include <sys/auxv.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
-#include <sys/types.h>
 #include <sys/xattr.h>
 #endif
-#include <sys/stat.h>
+
+#include <optional>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 #include "absl/log/log.h"
 
+#include "cuttlefish/posix/stat.h"
 #include "cuttlefish/posix/strerror.h"
+#include "cuttlefish/result/expect.h"
+#include "cuttlefish/result/result_type.h"
+
+extern char** environ;
 
 namespace cuttlefish {
 
@@ -87,16 +99,14 @@ static int SetAmbientCapabilities() {
 #endif
 
 Result<void> ValidateCvdallocBinary(std::string_view path) {
-  struct stat st;
-  int r = stat(path.data(), &st);
-  CF_EXPECTF(r == 0, "Could not stat the cvdalloc binary at '{}': '{}'", path,
-             StrError(errno));
+  struct stat st = CF_EXPECT(Stat(path));
 #if defined(__linux__)
+  (void)st;
   /* Try and determine if the cvdalloc binary has any capabilities. */
-  struct vfs_cap_data cap;
+  struct vfs_cap_data cap = {};
   ssize_t s = getxattr(path.data(), XATTR_NAME_CAPS, &cap, sizeof(cap));
   CF_EXPECTF(
-      s != 1 && (cap.data[0].permitted & (1 << CAP_NET_ADMIN)) != 0,
+      s != -1 && (cap.data[0].permitted & (1 << CAP_NET_ADMIN)) != 0,
       "cvdalloc binary does not have permissions to allocate resources.\n"
       "As root, please\n\n    setcap cap_net_admin,cap_net_bind_service,"
       "cap_net_raw=+ep `realpath {}`",
@@ -153,6 +163,85 @@ int DropPrivileges(uid_t orig) {
 #endif
 
   return setuid(orig);
+}
+
+namespace {
+
+constexpr char kTrustedPath[] = "/usr/sbin:/usr/bin:/sbin:/bin";
+
+// Shallow copy environ.
+// Keep pointers alive, since some libcs (e.g. musl)
+// will free them if setenv() is used.
+std::vector<char*> CopyEnv() {
+  std::vector<char*> env;
+  for (char** var = environ; var != nullptr && *var != nullptr; ++var) {
+    env.push_back(*var);
+  }
+  env.push_back(nullptr);
+  return env;
+}
+
+// POSIX allows us to simply restore the saved environment
+// directly into environ.
+void RestoreEnv(std::vector<char*> env) {
+  // Keep restored alive to mirror CopyEnv.
+  static std::vector<char*>& restored = *new std::vector<char*>();
+  restored.swap(env);
+  environ = restored.data();
+}
+
+}  // namespace
+
+// Gains privileges until the returned instance is destroyed. If this process
+// gained privilege at exec, the environment is also replaced with a minimal
+// trusted one until then. Call this, and destroy the result, while no other
+// threads exist. The environment is shared by every thread, and on Linux,
+// the destructor only drops capabilities for its own thread, so threads
+// started in between would stay privileged.
+Result<ScopedPrivileges> ScopedPrivileges::Elevate() {
+  // Constructed first so that a failure below drops any partially raised
+  // capabilities and restores the environment.
+  ScopedPrivileges privileges(getuid());
+  bool should_sanitize_env = true;
+#if defined(__linux__)
+  // The child processes we exec run with elevated privilege (CAP_NET_ADMIN via
+  // ambient caps) but with AT_SECURE=0, so the dynamic linker won't scrub their
+  // environment for us. Only sanitize the environment when this exec actually
+  // gained privilege (e.g. via file caps), as signalled by AT_SECURE.
+  should_sanitize_env = getauxval(AT_SECURE) != 0;
+#endif
+  if (should_sanitize_env) {
+    privileges.saved_env_ = CopyEnv();
+    // Swap the environment out rather than clearenv() it, so that libc doesn't
+    // free the strings saved_env_ points at (see CopyEnv()).
+    static char* empty_env[] = {nullptr};
+    environ = empty_env;
+    CF_EXPECTF(setenv("PATH", kTrustedPath, /*overwrite=*/1) == 0,
+               "Couldn't set PATH: {}", StrError(errno));
+  }
+  CF_EXPECTF(BeginElevatedPrivileges() != -1,
+             "Couldn't elevate permissions: {}", StrError(errno));
+  return privileges;
+}
+
+ScopedPrivileges::ScopedPrivileges(uid_t orig) : orig_(orig) {}
+
+ScopedPrivileges::ScopedPrivileges(ScopedPrivileges&& other) noexcept
+    : orig_(std::exchange(other.orig_, std::nullopt)),
+      saved_env_(std::exchange(other.saved_env_, std::nullopt)) {}
+
+ScopedPrivileges::~ScopedPrivileges() {
+  if (!orig_.has_value()) {
+    return;
+  }
+  if (DropPrivileges(*orig_) == -1) {
+    // We may still be privileged, so keep the trusted environment.
+    LOG(ERROR) << "cvdalloc: couldn't drop privileges: " << StrError(errno);
+    return;
+  }
+  if (saved_env_.has_value()) {
+    RestoreEnv(std::move(*saved_env_));
+  }
 }
 
 }  // namespace cuttlefish

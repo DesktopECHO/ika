@@ -24,9 +24,8 @@
 #include <utility>
 #include <vector>
 
-#include <android-base/file.h>
-#include <fmt/format.h>
 #include "absl/log/check.h"
+#include "fmt/format.h"
 
 #include "cuttlefish/common/libs/utils/contains.h"
 #include "cuttlefish/host/commands/cvd/instances/cvd_persistent_data.pb.h"
@@ -218,8 +217,9 @@ std::vector<LocalInstanceGroup> InstanceDatabase::FindGroups(
       continue;
     }
     auto group_res = LocalInstanceGroup::Create(group);
-    CHECK(group_res.ok()) << "Instance group from database fails validation: "
-                          << group_res.error();
+    CHECK(group_res.has_value())
+        << "Instance group from database fails validation: "
+        << group_res.error();
     ret.push_back(*group_res);
   }
   return ret;

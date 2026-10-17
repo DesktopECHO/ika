@@ -32,16 +32,17 @@
 #include "fruit/fruit_forward_decls.h"
 #include "fruit/macro.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_buf.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/socket2socket_proxy.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/common/libs/utils/wait_for_unix_socket.h"
 #include "cuttlefish/host/commands/run_cvd/launch/log_tee_creator.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/feature/command_source.h"
 #include "cuttlefish/host/libs/feature/feature.h"
 #include "cuttlefish/host/libs/vm_manager/vm_manager.h"
+#include "cuttlefish/process/command.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -86,10 +87,11 @@ class Ti50Emulator : public vm_manager::VmmDependencyCommand {
     }
 
     // Wait for control socket sending "READY".
-    SharedFD sock = SharedFD::Accept(*ctrl_sock_);
+    SharedFD sock = Fd::Accept(*ctrl_sock_).value_or(Fd());
     const char kExpectedReadyStr[] = "READY";
     char buf[std::size(kExpectedReadyStr)];
-    CF_EXPECT_NE(sock->Read(buf, sizeof(buf)), 0);
+    Result<uint64_t> data_read = sock->Read(buf, sizeof(buf));
+    CF_EXPECT(!data_read.has_value() || *data_read != 0);
     CF_EXPECT(!strcmp(buf, "READY"), "Ti50 emulator should return 'READY'");
 
     CF_EXPECT(ResetGPIO());
@@ -132,7 +134,8 @@ class Ti50Emulator : public vm_manager::VmmDependencyCommand {
     if (!cl->IsOpen()) {
       return CF_ERR("Failed to connect to gpioPltRst");
     }
-    CF_EXPECT_EQ(cl->Write("1", 1), 1);
+    uint64_t written = CF_EXPECT(cl->Write("1", 1));
+    CF_EXPECT_EQ(written, 1);
 
     LOG(INFO) << "ti50 emulator: reset GPIO!";
     return {};

@@ -18,6 +18,7 @@
 
 #include <fcntl.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <sys/types.h>
 
 #include <string>
@@ -29,10 +30,12 @@
 #include "absl/strings/ascii.h"
 #include "absl/strings/str_split.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/fs/shared_select.h"
 #include "cuttlefish/host/libs/config/config_constants.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
+#include "cuttlefish/result/result_type.h"
 
 namespace cuttlefish::monitor {
 namespace {
@@ -100,8 +103,8 @@ void ProcessSubscriptions(Json::Value message,
 
 KernelLogServer::KernelLogServer(SharedFD pipe_fd, const std::string& log_name)
     : pipe_fd_(pipe_fd),
-      log_fd_(SharedFD::Open(log_name.c_str(), O_CREAT | O_RDWR | O_APPEND,
-                             0666)) {}
+      log_fd_(Fd::Open(log_name, O_CREAT | O_RDWR | O_APPEND, 0666)
+                  .value_or(Fd())) {}
 
 void KernelLogServer::BeforeSelect(SharedFDSet* fd_read) const {
   fd_read->Set(pipe_fd_);
@@ -120,22 +123,22 @@ void KernelLogServer::SubscribeToEvents(EventCallback callback) {
 bool KernelLogServer::HandleIncomingMessage() {
   const size_t buf_len = 256;
   char buf[buf_len];
-  ssize_t ret = pipe_fd_->Read(buf, buf_len);
-  if (ret < 0) {
+  Result<uint64_t> ret = pipe_fd_->Read(buf, buf_len);
+  if (!ret.has_value()) {
     LOG(ERROR) << "Could not read kernel logs: " << pipe_fd_->StrError();
     return false;
   }
-  if (ret == 0) {
+  if (*ret == 0) {
     return false;
   }
   // Write the log to a file
-  if (log_fd_->Write(buf, ret) < 0) {
+  if (!log_fd_->Write(buf, *ret).has_value()) {
     LOG(ERROR) << "Could not write kernel log to file: " << log_fd_->StrError();
     return false;
   }
 
   // Detect VIRTUAL_DEVICE_BOOT_*
-  for (ssize_t i = 0; i < ret; i++) {
+  for (ssize_t i = 0; i < *ret; i++) {
     if ('\n' == buf[i]) {
       for (auto& [match, prefix] : kInformationalPatterns) {
         auto pos = line_.find(match);

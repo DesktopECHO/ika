@@ -34,6 +34,18 @@ func TestCvdCreate(t *testing.T) {
 			branch: "git_main",
 			target: "aosp_cf_x86_64_only_phone-trunk_staging-userdebug",
 		},
+		{
+			branch: "git_main-throttled-nightly",
+			target: "aosp_cf_x86_64_auto-trunk_staging-userdebug",
+		},
+		{
+			branch: "git_main-swcar-dev",
+			target: "aosp_cf_x86_64_sdv_core-trunk_staging-userdebug",
+		},
+		{
+			branch: "git_main-swcar-dev",
+			target: "aosp_cf_x86_64_sdv_media-trunk_staging-userdebug",
+		},
 	}
 	c := e2etests.TestContext{}
 	for _, tc := range testcases {
@@ -41,14 +53,14 @@ func TestCvdCreate(t *testing.T) {
 			c.SetUp(t)
 			defer c.TearDown()
 
-			if err := c.CVDFetch(e2etests.FetchArgs{
+			if _, err := c.CVDFetch(e2etests.FetchArgs{
 				DefaultBuildBranch: tc.branch,
 				DefaultBuildTarget: tc.target,
 			}); err != nil {
 				t.Fatal(err)
 			}
 
-			if err := c.CVDCreate(e2etests.CreateArgs{}); err != nil {
+			if _, err := c.CVDCreate(e2etests.CreateArgs{}); err != nil {
 				t.Fatal(err)
 			}
 

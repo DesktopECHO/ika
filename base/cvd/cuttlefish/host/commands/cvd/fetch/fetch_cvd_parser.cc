@@ -15,7 +15,6 @@
 
 #include "cuttlefish/host/commands/cvd/fetch/fetch_cvd_parser.h"
 
-#include <cstddef>
 #include <iostream>
 #include <optional>
 #include <sstream>
@@ -103,7 +102,7 @@ Result<FetchFlags> FetchFlags::Parse(std::vector<std::string>& args) {
 
   if (!fetch_flags.vector_flags.boot_artifact.empty()) {
     LOG(WARNING) << "Please use the build string filepath syntax instead of "
-                  "deprecated --boot_artifact";
+                    "deprecated --boot_artifact";
     for (const auto& build_string : fetch_flags.vector_flags.boot_build) {
       if (build_string) {
         CF_EXPECT(!GetFilepath(*build_string),
@@ -116,7 +115,7 @@ Result<FetchFlags> FetchFlags::Parse(std::vector<std::string>& args) {
 
   if (!fetch_flags.build_api_flags.credential_source.empty()) {
     LOG(WARNING) << "Please use the new, specific credential flags instead of "
-                  "the deprecated --credential_source";
+                    "the deprecated --credential_source";
   }
   CredentialFlags& credential_flags =
       fetch_flags.build_api_flags.credential_flags;

@@ -14,24 +14,32 @@
  * limitations under the License.
  */
 
+#include <stddef.h>
+#include <stdint.h>
+#include <sys/time.h>  // IWYU pragma: keep: struct timeval
 
 #include <chrono>
 #include <fstream>
+#include <string>
+#include <vector>
 
-#include <fmt/format.h>
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "fmt/chrono.h"  // IWYU pragma: keep
+#include "fmt/format.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/fs/shared_select.h"
 #include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/flag_parser/gflags_compat.h"
 #include "cuttlefish/flag_parser/shared_fd_flag.h"
 #include "cuttlefish/host/libs/config/logging.h"
+#include "cuttlefish/result/result_type.h"
 
 namespace cuttlefish {
 
-static uint num_tombstones_in_last_second = 0;
+static uint64_t num_tombstones_in_last_second = 0;
 static std::string last_tombstone_name = "";
 
 static std::string next_tombstone_path(const std::string& dir) {
@@ -39,7 +47,7 @@ static std::string next_tombstone_path(const std::string& dir) {
   auto retval = fmt::format("{}/tombstone_{:%Y-%m-%d-%H%M%S}", dir, in_time);
 
   // Gives tombstones unique names
-  if(retval == last_tombstone_name) {
+  if (retval == last_tombstone_name) {
     num_tombstones_in_last_second++;
     retval += "_" + std::to_string(num_tombstones_in_last_second);
   } else {
@@ -73,8 +81,8 @@ int TombstoneReceiverMain(int argc, char** argv) {
   std::vector<std::string> args(argv + 1, argv + argc);  // Skip argv[0]
   Result<void> parse_res =
       ConsumeFlags(flags, args, {.fail_on_unexpected_argument = true});
-  CHECK(parse_res.ok()) << "Could not process command line flags. "
-                        << parse_res.error();
+  CHECK(parse_res.has_value())
+      << "Could not process command line flags. " << parse_res.error();
 
   CHECK(server_fd->IsOpen()) << "Did not receive a server fd";
 
@@ -82,7 +90,7 @@ int TombstoneReceiverMain(int argc, char** argv) {
 
   // Server loop
   while (true) {
-    auto conn = SharedFD::Accept(*server_fd);
+    SharedFD conn = Fd::Accept(*server_fd).value_or(Fd());
     std::ofstream file(next_tombstone_path(tombstone_dir),
                        std::ofstream::out | std::ofstream::binary);
     auto acc = 0;
@@ -94,6 +102,7 @@ int TombstoneReceiverMain(int argc, char** argv) {
     SharedFDSet error_set;
     error_set.Set(conn);
     while (file.is_open()) {
+      // NOLINTNEXTLINE(misc-include-cleaner): struct timeval
       struct timeval timeout = {TIMEOUT_SEC, 0};
       auto val = Select(&read_set, nullptr, &error_set, &timeout);
       if (val == 0) {

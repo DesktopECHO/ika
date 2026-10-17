@@ -20,6 +20,8 @@
 
 #include "cuttlefish/common/libs/utils/archive.h"
 #include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/files/directory_exists.h"
+#include "cuttlefish/files/recursively_remove_directory.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -27,7 +29,7 @@ namespace cuttlefish {
 Result<std::vector<std::string>> ExtractImageContents(
     const std::string& image_filepath, const std::string& target_dir,
     const bool keep_archive) {
-  if (!IsDirectory(image_filepath)) {
+  if (!DirectoryExists(image_filepath)) {
     return CF_EXPECT(
         ExtractArchiveContents(image_filepath, target_dir, keep_archive));
   }
@@ -39,7 +41,7 @@ Result<std::vector<std::string>> ExtractImageContents(
        &target_dir](const std::string& filepath) mutable -> Result<void> {
     std::string target_filepath =
         target_dir + "/" + filepath.substr(image_filepath.size() + 1);
-    if (!IsDirectory(filepath)) {
+    if (!DirectoryExists(filepath)) {
       files.push_back(target_filepath);
     }
     return {};
@@ -47,8 +49,9 @@ Result<std::vector<std::string>> ExtractImageContents(
   CF_EXPECT(WalkDirectory(image_filepath, file_collector));
 
   if (keep_archive) {
-    // Must use hard linking due to the way fetch_cvd uses the cache.
-    CF_EXPECT(HardLinkDirecoryContentsRecursively(image_filepath, target_dir));
+    // Prefer hard linking, but fallback to copy if necessary.
+    CF_EXPECT(
+        LinkOrCopyDirectoryContentsRecursively(image_filepath, target_dir));
   } else {
     CF_EXPECT(MoveDirectoryContents(image_filepath, target_dir));
     // Ignore even if removing directory fails - harmless.

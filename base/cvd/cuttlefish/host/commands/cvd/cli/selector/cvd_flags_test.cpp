@@ -15,24 +15,25 @@
  */
 
 #include "cuttlefish/host/commands/cvd/unittests/selector/cvd_flags_helper.h"
+#include "cuttlefish/result/result_matchers.h"
 
 namespace cuttlefish {
 
 TEST_F(CvdFlagCollectionTest, Init) {
   auto output_result = flag_collection_.FilterFlags(input_);
-  ASSERT_TRUE(output_result.ok()) << output_result.error().Trace();
+  ASSERT_THAT(output_result, IsOk());
 }
 
 TEST_F(CvdFlagCollectionTest, Leftover) {
   auto output_result = flag_collection_.FilterFlags(input_);
-  ASSERT_TRUE(output_result.ok()) << output_result.error().Trace();
-  ASSERT_EQ(input_, cvd_common::Args{"--not_consumed"});
+  ASSERT_THAT(output_result, IsOk());
+  ASSERT_EQ(input_, std::vector<std::string>{"--not_consumed"});
 }
 
 TEST_F(CvdFlagCollectionTest, AllGivenFlagsListed) {
   auto output_result = flag_collection_.FilterFlags(input_);
-  ASSERT_TRUE(output_result.ok()) << output_result.error().Trace();
-  ASSERT_EQ(input_, cvd_common::Args{"--not_consumed"});
+  ASSERT_THAT(output_result, IsOk());
+  ASSERT_EQ(input_, std::vector<std::string>{"--not_consumed"});
   auto output = std::move(*output_result);
 
   ASSERT_FALSE(Contains(output, "help"));
@@ -45,29 +46,29 @@ TEST_F(CvdFlagCollectionTest, AllGivenFlagsListed) {
 
 TEST(CvdFlagTest, FlagProxyFilter) {
   CvdFlag<std::string> no_default("no_default");
-  cvd_common::Args has_flag_args{"--no_default=Hello"};
-  cvd_common::Args not_has_flag_args{"--bar --foo=name --enable_vnc"};
-  cvd_common::Args empty_args{""};
+  std::vector<std::string> has_flag_args{"--no_default=Hello"};
+  std::vector<std::string> not_has_flag_args{"--bar --foo=name --enable_vnc"};
+  std::vector<std::string> empty_args{""};
 
   CvdFlagProxy no_default_proxy(std::move(no_default));
   auto expected_hello_opt_result = no_default_proxy.FilterFlag(has_flag_args);
   auto expected_null_result = no_default_proxy.FilterFlag(not_has_flag_args);
   auto expected_null_result2 = no_default_proxy.FilterFlag(empty_args);
 
-  ASSERT_TRUE(expected_hello_opt_result.ok());
-  ASSERT_TRUE(expected_null_result.ok());
-  ASSERT_TRUE(expected_null_result2.ok());
+  ASSERT_TRUE(expected_hello_opt_result, IsOk());
+  ASSERT_TRUE(expected_null_result, IsOk());
+  ASSERT_TRUE(expected_null_result2, IsOk());
 
   ASSERT_TRUE(*expected_hello_opt_result);
   auto value_result = Get<std::string>(**expected_hello_opt_result);
-  ASSERT_TRUE(value_result.ok());
+  ASSERT_TRUE(value_result.has_value());
   ASSERT_EQ(*value_result, "Hello");
   ASSERT_FALSE(*expected_null_result);
   ASSERT_FALSE(*expected_null_result2);
 
   ASSERT_TRUE(has_flag_args.empty());
   ASSERT_EQ(not_has_flag_args,
-            cvd_common::Args{"--bar --foo=name --enable_vnc"});
+            std::vector<std::string>{"--bar --foo=name --enable_vnc"});
 }
 
 }  // namespace cuttlefish

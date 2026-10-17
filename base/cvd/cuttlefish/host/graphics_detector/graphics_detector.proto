@@ -53,16 +53,27 @@ message VulkanQuirks {
   optional VulkanExternalMemoryHostQuirks external_memory_host_quirks = 2;
 }
 
+message VulkanQueueFamily {
+  optional bool supports_compute = 1;
+  optional bool supports_graphics = 2;
+  optional bool supports_transfer = 3;
+  optional uint32 queue_count = 4;
+}
+
 message VulkanPhysicalDevice {
   optional string name = 1;
   repeated string extensions = 2;
   enum Type {
     TYPE_OTHER = 0;
     TYPE_DISCRETE_GPU = 1;
+    TYPE_INTEGRATED_GPU = 2;
+    TYPE_CPU = 3;
   }
   optional Type type = 3;
 
   optional VulkanQuirks quirks = 4;
+
+  repeated VulkanQueueFamily queue_families = 5;
 }
 
 message VulkanAvailability {
@@ -76,4 +87,6 @@ message GraphicsAvailability {
   optional VulkanAvailability vulkan = 2;
 
   repeated string errors = 3;
+
+  optional bool vulkan_loader_available = 4;
 }

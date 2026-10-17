@@ -14,34 +14,39 @@
  * limitations under the License.
  */
 
-#include <sys/types.h>
-
+#include <dirent.h>
+#include <errno.h>
+#include <inttypes.h>
+#include <signal.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 
-#include <cinttypes>
-#include <csignal>
-#include <cstdio>
-#include <cstdlib>
 #include <future>
 #include <iostream>
 #include <memory>
+#include <set>
+#include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/strings/match.h"
+#include "absl/strings/numbers.h"
 
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/environment.h"
-#include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/common/libs/utils/tee_logging.h"
+#include "cuttlefish/files/directory_exists.h"
+#include "cuttlefish/files/recursively_remove_directory.h"
 #include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/flag_parser/gflags_compat.h"
-#include "cuttlefish/common/libs/utils/tee_logging.h"
 #include "cuttlefish/host/libs/command_util/runner/defs.h"
 #include "cuttlefish/host/libs/command_util/util.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
-#include "cuttlefish/host/libs/metrics/metrics_receiver.h"
 #include "cuttlefish/posix/strerror.h"
 #include "cuttlefish/result/result.h"
 
@@ -58,12 +63,14 @@ std::set<std::string> FallbackDirs() {
   std::string parent_path = StringFromEnv("HOME", ".");
   paths.insert(parent_path + "/cuttlefish_assembly");
 
-  std::unique_ptr<DIR, int(*)(DIR*)> dir(opendir(parent_path.c_str()), closedir);
+  std::unique_ptr<DIR, int (*)(DIR*)> dir(opendir(parent_path.c_str()),
+                                          closedir);
   if (!dir) {
     return paths;
   }
 
-  for (auto entity = readdir(dir.get()); entity != nullptr; entity = readdir(dir.get())) {
+  for (auto entity = readdir(dir.get()); entity != nullptr;
+       entity = readdir(dir.get())) {
     std::string subdir(entity->d_name);
     if (!absl::StartsWith(subdir, "cuttlefish_runtime.")) {
       continue;
@@ -98,7 +105,7 @@ std::set<pid_t> GetCandidateProcessGroups(const std::set<std::string>& dirs) {
   }
   int64_t pid;
   std::set<pid_t> ret{};
-  while(fscanf(cmd_out.get(), "%" PRId64, &pid) != EOF) {
+  while (fscanf(cmd_out.get(), "%" PRId64, &pid) != EOF) {
     pid_t pgid = getpgid(static_cast<pid_t>(pid));
     if (pgid < 0) {
       LOG(ERROR) << "Unable to get process group of " << pid << ": "
@@ -116,7 +123,7 @@ int FallBackStop(const std::set<std::string>& dirs) {
   auto exit_code = 0;
 
   auto process_groups = GetCandidateProcessGroups(dirs);
-  for (auto pgid: process_groups) {
+  for (auto pgid : process_groups) {
     LOG(INFO) << "Sending SIGKILL to process group " << pgid;
     auto retval = killpg(pgid, SIGKILL);
     if (retval < 0) {
@@ -131,7 +138,7 @@ int FallBackStop(const std::set<std::string>& dirs) {
 
 Result<void> CleanStopInstance(
     const CuttlefishConfig::InstanceSpecific& instance_config,
-    const std::int32_t wait_for_launcher) {
+    const int32_t wait_for_launcher) {
   SharedFD monitor_socket = CF_EXPECT(
       GetLauncherMonitorFromInstance(instance_config, wait_for_launcher));
 
@@ -146,9 +153,9 @@ Result<void> CleanStopInstance(
 
 int StopInstance(const CuttlefishConfig& config,
                  const CuttlefishConfig::InstanceSpecific& instance,
-                 const std::int32_t wait_for_launcher) {
+                 const int32_t wait_for_launcher) {
   auto result = CleanStopInstance(instance, wait_for_launcher);
-  if (!result.ok()) {
+  if (!result.has_value()) {
     LOG(ERROR) << "Clean stop failed: " << result.error();
     return FallBackStop(DirsForInstance(config, instance));
   }
@@ -157,14 +164,14 @@ int StopInstance(const CuttlefishConfig& config,
 }
 
 struct FlagVaules {
-  std::int32_t wait_for_launcher;
+  int32_t wait_for_launcher;
   bool clear_instance_dirs;
   std::vector<unsigned> instance_nums;
   bool helpxml;
 };
 
 FlagVaules GetFlagValues(int argc, char** argv) {
-  std::int32_t wait_for_launcher = 5;
+  int32_t wait_for_launcher = 5;
   bool clear_instance_dirs = false;
   std::vector<unsigned> instance_nums;
   std::vector<Flag> flags;
@@ -185,13 +192,13 @@ FlagVaules GetFlagValues(int argc, char** argv) {
   std::vector<std::string> args(argv + 1, argv + argc);  // Skip argv[0]
   Result<void> parse_res =
       ConsumeFlags(flags, args, {.fail_on_unexpected_argument = true});
-  CHECK(parse_res.ok() || helpxml) << "Could not process command line flags.";
+  CHECK(parse_res.has_value() || helpxml)
+      << "Could not process command line flags.";
 
   return {wait_for_launcher, clear_instance_dirs, instance_nums, helpxml};
 }
 
-int StopCvdMain(const std::int32_t wait_for_launcher,
-                const bool clear_instance_dirs,
+int StopCvdMain(const int32_t wait_for_launcher, const bool clear_instance_dirs,
                 const std::vector<unsigned>& instance_nums) {
   auto config = CuttlefishConfig::Get();
   if (!config) {
@@ -222,7 +229,8 @@ int StopCvdMain(const std::int32_t wait_for_launcher,
   for (const auto& instance : instances) {
     unsigned id;
     if (!absl::SimpleAtoi(instance.id(), &id)) {
-      LOG(ERROR) << "Failed to parse instance ID \"" << instance.id() << "\" as unsigned";
+      LOG(ERROR) << "Failed to parse instance ID \"" << instance.id()
+                 << "\" as unsigned";
       exit_code |= 1;
       continue;
     }
@@ -236,7 +244,8 @@ int StopCvdMain(const std::int32_t wait_for_launcher,
           int exit_status = StopInstance(*config, instance, wait_for_launcher);
           if (clear_instance_dirs && DirectoryExists(instance.instance_dir())) {
             LOG(INFO) << "Deleting instance dir " << instance.instance_dir();
-            if (!RecursivelyRemoveDirectory(instance.instance_dir()).ok()) {
+            if (!RecursivelyRemoveDirectory(instance.instance_dir())
+                     .has_value()) {
               LOG(ERROR) << "Unable to rmdir " << instance.instance_dir();
             }
           }
@@ -250,8 +259,8 @@ int StopCvdMain(const std::int32_t wait_for_launcher,
   return exit_code;
 }
 
-} // namespace
-} // namespace cuttlefish
+}  // namespace
+}  // namespace cuttlefish
 
 int main(int argc, char** argv) {
   const auto [wait_for_launcher, clear_instance_dirs, instance_nums, helpxml] =
@@ -269,11 +278,6 @@ int main(int argc, char** argv) {
     return 134;
   }
 
-  if (cuttlefish::CuttlefishConfig::Get() &&
-      cuttlefish::CuttlefishConfig::Get()->enable_metrics() ==
-      cuttlefish::CuttlefishConfig::Answer::kYes) {
-    cuttlefish::MetricsReceiver::LogMetricsVMStop();
-  }
-
-  return cuttlefish::StopCvdMain(wait_for_launcher, clear_instance_dirs, instance_nums);
+  return cuttlefish::StopCvdMain(wait_for_launcher, clear_instance_dirs,
+                                 instance_nums);
 }

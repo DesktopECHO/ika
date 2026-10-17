@@ -22,10 +22,13 @@
 #include "cuttlefish/host/commands/cvd/instances/instance_manager.h"
 #include "cuttlefish/host/commands/cvd/instances/local_instance.h"
 #include "cuttlefish/host/commands/cvd/instances/local_instance_group.h"
-#include "cuttlefish/result/result.h"
+#include "cuttlefish/result/result_type.h"
 
 namespace cuttlefish {
 namespace selector {
+
+InstanceDatabase::Filter BuildFilterFromSelectors(
+    const SelectorOptions& selectors);
 
 // Selects a single group based on the request's selector options. Asks the user
 // to manually choose a single group if multiple groups match the selector
@@ -33,12 +36,22 @@ namespace selector {
 Result<LocalInstanceGroup> SelectGroup(const InstanceManager& instance_manager,
                                        const CommandRequest& request);
 
-// Selects a single instance based on the request's selector options. Unlike
-// SelectGroup it doesn't ask the user to refine the selection in case multiple
-// instances match, it just fails instead. Also returns the group the selected
-// instance belongs to.
+// Selects a single instance based on the request's selector options. Asks the
+// user to manually choose a single instance if multiple instances match the
+// selector options and stdin is a terminal. Also returns the group the
+// selected instance belongs to.
 Result<std::pair<LocalInstance, LocalInstanceGroup>> SelectInstance(
     const InstanceManager& instance_manager, const CommandRequest& request);
+
+// Selects all instances matching the request's selector options.
+//
+// Returns a vector of pairs, where each pair contains a matching
+// LocalInstanceGroup and a vector of its matching LocalInstance member
+// instances. Unlike SelectInstance, this method does not fail or prompt the
+// user if multiple instances match.
+Result<std::vector<std::pair<LocalInstanceGroup, std::vector<LocalInstance>>>>
+SelectInstances(const InstanceManager& instance_manager,
+                const CommandRequest& request);
 
 }  // namespace selector
 }  // namespace cuttlefish

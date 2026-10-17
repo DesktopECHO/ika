@@ -28,12 +28,14 @@
 #include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_buf.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
-#include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/host_info.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/libs/config/esp/esp_builder.h"
+#include "cuttlefish/process/execute.h"
+#include "cuttlefish/result/result_type.h"
 
 namespace cuttlefish {
 
@@ -112,8 +114,8 @@ static bool GrubMakeImage(const std::string& prefix, const std::string& format,
                           const std::string& directory,
                           const std::string& output, const T& modules) {
   std::vector<std::string> command = {"grub-mkimage", "--prefix", prefix,
-                                      "--format", format, "--directory", directory,
-                                      "--output", output};
+                                      "--format",     format,     "--directory",
+                                      directory,      "--output", output};
   std::move(modules.begin(), modules.end(), std::back_inserter(command));
 
   const auto success = Execute(command);
@@ -165,13 +167,13 @@ EspBuilder AddGrubConfig(const std::string& config) {
   auto builder = EspBuilder();
 
   builder.Directory("boot")
-         .Directory("EFI/debian")
-         .Directory("EFI/ubuntu")
-         .Directory("boot/grub");
+      .Directory("EFI/debian")
+      .Directory("EFI/ubuntu")
+      .Directory("boot/grub");
 
   builder.File(config, kGrubDebianConfigDestPath, /*required*/ true)
-         .File(config, kGrubUbuntuConfigDestPath, /*required*/ true)
-         .File(config, kGrubConfigDestPath, /*required*/ true);
+      .File(config, kGrubUbuntuConfigDestPath, /*required*/ true)
+      .File(config, kGrubConfigDestPath, /*required*/ true);
 
   return builder;
 }
@@ -214,7 +216,8 @@ bool AndroidEfiLoaderEspBuilder::Build() const {
   return builder.Build();
 }
 
-LinuxEspBuilder& LinuxEspBuilder::Argument(std::string key, std::string value) & {
+LinuxEspBuilder& LinuxEspBuilder::Argument(std::string key,
+                                           std::string value) & {
   arguments_.push_back({std::move(key), std::move(value)});
   return *this;
 }
@@ -261,14 +264,14 @@ bool LinuxEspBuilder::Build() const {
   auto builder = PrepareGrubESP(image_path_, *arch_);
 
   const auto tmp_grub_config = image_path_ + ".grub.cfg";
-  const auto config_file = SharedFD::Creat(tmp_grub_config, 0644);
-  if (!config_file->IsOpen()) {
-    LOG(ERROR) << "Cannot create temporary grub config: " << tmp_grub_config;
+  const Result<SharedFD> config_file = Fd::Creat(tmp_grub_config, 0644);
+  if (!config_file.has_value()) {
+    LOG(ERROR) << "Cannot create tmp grub config: " << config_file.error();
     return false;
   }
 
   const auto dumped = DumpConfig();
-  if (WriteAll(config_file, dumped) != dumped.size()) {
+  if (WriteAll(*config_file, dumped) != dumped.size()) {
     LOG(ERROR) << "Failed to write grub config content to: " << tmp_grub_config;
     return false;
   }
@@ -323,7 +326,8 @@ FuchsiaEspBuilder& FuchsiaEspBuilder::Architecture(Arch arch) & {
 
 bool FuchsiaEspBuilder::Build() const {
   if (multiboot_bin_.empty()) {
-    LOG(ERROR) << "Multiboot esp path is required argument for FuchsiaEspBuilder";
+    LOG(ERROR)
+        << "Multiboot esp path is required argument for FuchsiaEspBuilder";
     return false;
   }
   if (zedboot_.empty()) {
@@ -338,14 +342,14 @@ bool FuchsiaEspBuilder::Build() const {
   auto builder = PrepareGrubESP(image_path_, *arch_);
 
   const auto tmp_grub_config = image_path_ + ".grub.cfg";
-  const auto config_file = SharedFD::Creat(tmp_grub_config, 0644);
-  if (!config_file->IsOpen()) {
-    LOG(ERROR) << "Cannot create temporary grub config: " << tmp_grub_config;
+  const Result<SharedFD> config_file = Fd::Creat(tmp_grub_config, 0644);
+  if (!config_file.has_value()) {
+    LOG(ERROR) << "Cannot create tmp grub config: " << config_file.error();
     return false;
   }
 
   const auto dumped = DumpConfig();
-  if (WriteAll(config_file, dumped) != dumped.size()) {
+  if (WriteAll(*config_file, dumped) != dumped.size()) {
     LOG(ERROR) << "Failed to write grub config content to: " << tmp_grub_config;
     return false;
   }
@@ -370,4 +374,4 @@ std::string FuchsiaEspBuilder::DumpConfig() const {
   return o.str();
 }
 
-} // namespace cuttlefish
+}  // namespace cuttlefish

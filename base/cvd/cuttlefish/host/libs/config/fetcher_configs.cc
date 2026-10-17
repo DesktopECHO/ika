@@ -25,8 +25,9 @@
 #include "absl/strings/str_cat.h"
 #include "absl/types/span.h"
 
-#include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/libs/config/fetcher_config.h"
+#include "cuttlefish/posix/realpath.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -41,8 +42,8 @@ FetcherConfigs FetcherConfigs::ReadFromDirectories(
 
   for (const std::string& dir : directories) {
     std::string real;
-    Result<std::string> real_res = cuttlefish::RealPath(dir);
-    if (!real_res.ok()) {
+    Result<std::string> real_res = RealPath(dir);
+    if (!real_res.has_value()) {
       LOG(WARNING) << "Failed to resolve real path for '" << dir
                    << "': " << real_res.error();
       real = dir;

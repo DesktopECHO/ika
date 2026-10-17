@@ -40,6 +40,8 @@ struct GuestConfig {
   std::string android_version_number;
   bool gfxstream_supported = false;
   bool gfxstream_gl_program_binary_link_status_supported = false;
+  bool guest_lavapipe_supported = false;
+  bool venus_supported = false;
   bool vhost_user_vsock = false;
   bool supports_bgra_framebuffers = false;
   bool prefer_drm_virgl_when_supported = false;
@@ -52,8 +54,12 @@ struct GuestConfig {
   std::optional<::cuttlefish::config::Audio> audio_settings;
   std::optional<bool> enforce_mac80211_hwsim;
   int blank_data_image_mb = 0;
-  bool lights_server_enabled = true; // true for backwards compatibility
+  bool lights_server_enabled = true;  // true for backwards compatibility
   std::vector<GpuMode> gpu_mode_candidates;
+  bool has_vulkan_lavapipe_apex = false;
+  bool has_vulkan_gfxstream_apex = false;
+  bool has_vulkan_swiftshader_apex = false;
+  bool has_vulkan_venus_apex = false;
 };
 
 PrettyStruct Pretty(const GuestConfig&,
@@ -62,5 +68,4 @@ PrettyStruct Pretty(const GuestConfig&,
 Result<std::vector<GuestConfig>> ReadGuestConfig(
     const BootImageFlag&, const KernelPathFlag& kernel_path,
     const SystemImageDirFlag& system_image_dir);
-}
-
+}  // namespace cuttlefish

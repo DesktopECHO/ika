@@ -19,7 +19,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <stdint.h>
 #include <sys/poll.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <chrono>
@@ -29,12 +31,14 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_set>
 #include <vector>
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "absl/strings/str_cat.h"
 #include "absl/time/time.h"
 #include "android-base/file.h"
 #include "fruit/component.h"
@@ -46,12 +50,14 @@
 #include "grpcpp/security/credentials.h"
 #include "grpcpp/support/status.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_buf.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/json.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/common/libs/utils/tee_logging.h"
+#include "cuttlefish/files/directory_contents.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags_defaults.h"
 #include "cuttlefish/host/commands/kernel_log_monitor/kernel_log_server.h"
 #include "cuttlefish/host/commands/kernel_log_monitor/utils.h"
@@ -67,7 +73,9 @@
 #include "cuttlefish/host/libs/feature/feature.h"
 #include "cuttlefish/host/libs/feature/kernel_log_pipe_provider.h"
 #include "cuttlefish/host/libs/vm_manager/vm_manager.h"
+#include "cuttlefish/io/write_exact.h"
 #include "cuttlefish/posix/strerror.h"
+#include "cuttlefish/process/command.h"
 #include "cuttlefish/result/result.h"
 
 using grpc::ClientContext;
@@ -80,7 +88,8 @@ DEFINE_int32(reboot_notification_fd, CF_DEFAULTS_REBOOT_NOTIFICATION_FD,
              "A file descriptor to notify when boot completes.");
 
 DEFINE_int32(boot_timeout_secs, 600,
-             "Wait for completed boot before failing. On qemu and gem5, this timeout is disabled unless flag is specified");
+             "Wait for completed boot before failing. On qemu and gem5, this "
+             "timeout is disabled unless flag is specified");
 
 namespace cuttlefish {
 namespace {
@@ -95,15 +104,10 @@ Result<std::string> VcpuCgroupPath(
   return CF_EXPECT(GetValue<std::string>(vcpu_config_json, {"cgroup_path"}));
 }
 
-Result<void> MoveSelfToCgroup(const std::string& root_path) {
-  auto to_path_file = root_path + "/cgroup.procs";
-  auto pid = std::to_string(getpid());
-  SharedFD fd = SharedFD::Open(to_path_file, O_WRONLY | O_APPEND);
-  CF_EXPECT(fd->IsOpen(),
-            "failed to open " << to_path_file << ": " << fd->StrError());
-  if (WriteAll(fd, pid) != pid.size()) {
-    return CF_ERR("failed to write to" << to_path_file);
-  }
+Result<void> MoveSelfToCgroup(std::string_view root_path) {
+  const std::string to_path_file = absl::StrCat(root_path, "/cgroup.procs");
+  Fd fd = CF_EXPECT(Fd::Open(to_path_file, O_WRONLY | O_APPEND));
+  CF_EXPECT(WriteExact(fd, std::to_string(getpid())));
 
   return {};
 }
@@ -114,7 +118,7 @@ Result<void> MoveThreadsToCgroup(const std::string& from_path,
 
   if (FileExists(file_path)) {
     Result<std::string> content_result = ReadFileContents(file_path);
-    if (!content_result.ok()) {
+    if (!content_result.has_value()) {
       LOG(INFO) << "Failed to open threads file and assume it is empty: "
                 << file_path;
       return {};
@@ -126,7 +130,7 @@ Result<void> MoveThreadsToCgroup(const std::string& from_path,
       std::string proc_status_path = "/proc/" + each_id;
       proc_status_path.append("/status");
       Result<std::string> proc_status = ReadFileContents(proc_status_path);
-      if (!proc_status.ok()) {
+      if (!proc_status.has_value()) {
         LOG(INFO) << "Failed to open proc status file and skip: "
                   << proc_status_path;
         continue;
@@ -137,12 +141,9 @@ Result<void> MoveThreadsToCgroup(const std::string& from_path,
           proc_status_str.find("vcpu_throttle") == std::string::npos) {
         // other proc moved to workers cgroup
         std::string to_path_file = to_path + "/cgroup.threads";
-        SharedFD fd = SharedFD::Open(to_path_file, O_WRONLY | O_APPEND);
-        CF_EXPECT(fd->IsOpen(),
-                  "failed to open " << to_path_file << ": " << fd->StrError());
-        if (WriteAll(fd, each_id) != each_id.size()) {
-          return CF_ERR("failed to write to" << to_path_file);
-        }
+        Fd fd = CF_EXPECT(Fd::Open(to_path_file, O_WRONLY | O_APPEND));
+        CF_EXPECTF(WriteExact(fd, each_id), "Failed to write to '{}'",
+                   to_path_file);
       }
     }
   }
@@ -187,7 +188,8 @@ Result<SharedFD> DaemonizeLauncher(const CuttlefishConfig& config) {
     // child process dies.
     write_end->Close();
     RunnerExitCodes exit_code;
-    auto bytes_read = read_end->Read(&exit_code, sizeof(exit_code));
+    uint64_t bytes_read =
+        read_end->Read(&exit_code, sizeof(exit_code)).value_or(0);
     if (bytes_read != sizeof(exit_code)) {
       LOG(ERROR) << "Failed to read a complete exit code, read " << bytes_read
                  << " bytes only instead of the expected " << sizeof(exit_code);
@@ -229,17 +231,18 @@ Result<SharedFD> DaemonizeLauncher(const CuttlefishConfig& config) {
     }
     // Redirect standard I/O
     auto log_path = instance.launcher_log_path();
-    auto log = SharedFD::Open(log_path.c_str(), O_CREAT | O_WRONLY | O_APPEND,
-                              S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+    SharedFD log = Fd::Open(log_path, O_CREAT | O_WRONLY | O_APPEND,
+                            S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
+                       .value_or(Fd());
     if (!log->IsOpen()) {
       LOG(ERROR) << "Failed to create launcher log file: " << log->StrError();
       std::exit(RunnerExitCodes::kDaemonizationError);
     }
     SetLoggers(
         {SeverityTarget::FromFd(log, MetadataLevel::FULL, LogFileSeverity())});
-    auto dev_null = SharedFD::Open("/dev/null", O_RDONLY);
-    if (!dev_null->IsOpen()) {
-      LOG(ERROR) << "Failed to open /dev/null: " << dev_null->StrError();
+    Result<Fd> dev_null = Fd::Open("/dev/null", O_RDONLY);
+    if (!dev_null.has_value()) {
+      LOG(ERROR) << "Failed to open /dev/null: " << dev_null.error();
       std::exit(RunnerExitCodes::kDaemonizationError);
     }
     if (dev_null->UNMANAGED_Dup2(0) < 0) {
@@ -265,7 +268,7 @@ Result<SharedFD> ProcessLeader(
     const CuttlefishConfig::InstanceSpecific& instance,
     AutoSetup<ValidateTapDevices>::Type& /* dependency */) {
   if (IsRestoring(config)) {
-    CF_EXPECT(SharedFD::Fifo(RestoreAdbdPipeName(instance), 0600),
+    CF_EXPECT(Fd::Fifo(RestoreAdbdPipeName(instance), 0600),
               "Unable to create adbd restore fifo");
   }
 
@@ -383,20 +386,21 @@ class CvdBootStateMachine : public SetupFeature, public KernelLogPipeConsumer {
           [this, restore_complete_pipe_write, restore_complete_stop_read]() {
             const auto result =
                 vm_manager_.WaitForRestoreComplete(restore_complete_stop_read);
-            CHECK(result.ok())
+            CHECK(result.has_value())
                 << "Failed to wait for restore complete: " << result.error();
             if (!result.value()) {
               return;
             }
 
-            SharedFD restore_adbd_pipe = SharedFD::Open(
+            Result<Fd> restore_adbd_pipe = Fd::Open(
                 RestoreAdbdPipeName(config_.ForDefaultInstance()), O_WRONLY);
-            CHECK(restore_adbd_pipe->IsOpen())
+            CHECK(restore_adbd_pipe.has_value())
                 << "Error opening adbd restore pipe: "
-                << restore_adbd_pipe->StrError();
-            CHECK(cuttlefish::WriteAll(restore_adbd_pipe, "2") == 1)
-                << "Error writing to adbd restore pipe: "
-                << restore_adbd_pipe->StrError() << ". This is unrecoverable.";
+                << restore_adbd_pipe.error();
+            Result<void> write_res = WriteExact(*restore_adbd_pipe, "2");
+            CHECK(write_res.has_value())
+                << "Error writing to adbd restore pipe: " << write_res.error()
+                << ". This is unrecoverable.";
 
             // Restart network service in OpenWRT, broken on restore.
             CHECK(FileExists(instance_.grpc_socket_path() +
@@ -430,6 +434,13 @@ class CvdBootStateMachine : public SetupFeature, public KernelLogPipeConsumer {
               }
               return subtool_path;
             };
+            // Connect adb.
+            Command adb_connect(SubtoolPath("adb"));
+            adb_connect.SetWorkingDirectory("/");
+            adb_connect.AddParameter("connect").AddParameter(
+                instance_.adb_ip_and_port());
+            CHECK_EQ(adb_connect.Start().Wait(), 0)
+                << "Failed to run adb connect";
             // Run the in-guest post-restore script.
             Command adb_command(SubtoolPath("adb"));
             // Avoid the adb server being started in the runtime directory and
@@ -439,9 +450,11 @@ class CvdBootStateMachine : public SetupFeature, public KernelLogPipeConsumer {
                 instance_.adb_ip_and_port());
             adb_command.AddParameter("wait-for-device");
             adb_command.AddParameter("shell");
-            adb_command.AddParameter("/vendor/bin/snapshot_hook_post_resume");
+            adb_command.AddParameter(
+                "su root /vendor/bin/snapshot_hook_post_resume");
             CHECK_EQ(adb_command.Start().Wait(), 0)
-                << "Failed to run /vendor/bin/snapshot_hook_post_resume";
+                << "Failed to run su root "
+                   "/vendor/bin/snapshot_hook_post_resume";
             // Done last so that adb is more likely to be ready.
             CHECK(cuttlefish::WriteAll(restore_complete_pipe_write, "1") == 1)
                 << "Error writing to restore complete pipe: "
@@ -520,10 +533,10 @@ class CvdBootStateMachine : public SetupFeature, public KernelLogPipeConsumer {
               break;
             }
             auto monitor_res = GetLauncherMonitorFromInstance(instance_, 5);
-            CHECK(monitor_res.ok()) << monitor_res.error();
+            CHECK(monitor_res.has_value()) << monitor_res.error();
             auto fail_res = RunLauncherAction(
                 *monitor_res, LauncherAction::kFail, std::optional<int>());
-            CHECK(fail_res.ok()) << fail_res.error();
+            CHECK(fail_res.has_value()) << fail_res.error();
           }
           break;
         }
@@ -531,8 +544,7 @@ class CvdBootStateMachine : public SetupFeature, public KernelLogPipeConsumer {
       // restore_complete_pipe
       if (poll_shared_fd[1].revents & POLLIN) {
         char buff[1];
-        auto read = restore_complete_pipe->Read(buff, 1);
-        if (read <= 0) {
+        if (!restore_complete_pipe->Read(buff, 1).has_value()) {
           LOG(ERROR) << "Could not read restore pipe: "
                      << restore_complete_pipe->StrError();
           state_ |= kGuestBootFailed;
@@ -588,16 +600,16 @@ class CvdBootStateMachine : public SetupFeature, public KernelLogPipeConsumer {
         << formatted_timeout;
     auto monitor_res =
         GetLauncherMonitorFromInstance(instance_, /* timeout_seconds= */ 5);
-    if (!monitor_res.ok()) {
+    if (!monitor_res.has_value()) {
       LOG(ERROR) << "TimeoutThreadLoop: Failed to get launcher monitor: "
                  << monitor_res.error();
       LOG(FATAL) << "TimeoutThreadLoop: Startup timeout expired and couldn't "
                     "cleanly shut down.";
     }
 
-    auto fail_res = RunLauncherAction(
-        *monitor_res, LauncherAction::kFail, std::optional<int>());
-    if (!fail_res.ok()) {
+    auto fail_res = RunLauncherAction(*monitor_res, LauncherAction::kFail,
+                                      std::optional<int>());
+    if (!fail_res.has_value()) {
       LOG(ERROR) << "TimeoutThreadLoop: Failed to send fail action: "
                  << fail_res.error();
       LOG(FATAL) << "TimeoutThreadLoop: Startup timeout expired and couldn't "
@@ -659,14 +671,14 @@ class CvdBootStateMachine : public SetupFeature, public KernelLogPipeConsumer {
         // Fully parse the message and throw it away.
         Result<std::optional<monitor::ReadEventResult>> read_result =
             monitor::ReadEvent(boot_events_pipe);
-        if (!read_result.ok()) {
+        if (!read_result.has_value()) {
           return;
         }
         if ((*read_result)->event == monitor::Event::BootCompleted) {
           LOG(INFO) << "Virtual device rebooted successfully";
           if (!instance_.vcpu_config_path().empty()) {
             auto res = RebalanceVcpuThreads(instance_);
-            if (!res.ok()) {
+            if (!res.has_value()) {
               LOG(ERROR) << res.error();
             }
           }
@@ -679,7 +691,7 @@ class CvdBootStateMachine : public SetupFeature, public KernelLogPipeConsumer {
   bool OnBootEvtReceived(SharedFD boot_events_pipe) {
     Result<std::optional<monitor::ReadEventResult>> read_result =
         monitor::ReadEvent(boot_events_pipe);
-    if (!read_result.ok()) {
+    if (!read_result.has_value()) {
       LOG(ERROR) << "Failed to read a complete kernel log boot event: "
                  << read_result.error();
       state_ |= kGuestBootFailed;
@@ -694,7 +706,7 @@ class CvdBootStateMachine : public SetupFeature, public KernelLogPipeConsumer {
       state_ |= kGuestBootCompleted;
       if (!instance_.vcpu_config_path().empty()) {
         auto res = RebalanceVcpuThreads(instance_);
-        if (!res.ok()) {
+        if (!res.has_value()) {
           LOG(ERROR) << res.error();
         }
       }
@@ -709,7 +721,8 @@ class CvdBootStateMachine : public SetupFeature, public KernelLogPipeConsumer {
   bool BootFailed() const { return state_ & kGuestBootFailed; }
 
   void SendExitCode(RunnerExitCodes exit_code, SharedFD fd) {
-    fd->Write(&exit_code, sizeof(exit_code));
+    // TODO(schuffelen): Handle unused result
+    (void)fd->Write(&exit_code, sizeof(exit_code));
     // The foreground process will exit after receiving the exit code, if we try
     // to write again we'll get a SIGPIPE
     fd->Close();

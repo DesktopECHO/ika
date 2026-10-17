@@ -18,8 +18,10 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
+#include "cuttlefish/host/libs/config/boot_flow.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/result/result_type.h"
 
@@ -32,7 +34,12 @@ std::optional<EfiLoaderImage> EfiLoaderImage::Create(
   if (instance.boot_flow() != BootFlow::AndroidEfiLoader) {
     return std::nullopt;
   }
-  return EfiLoaderImage(instance.esp_image_path());
+  if (instance.android_efi_loader().empty()) {
+    // Prebuilt by the Android build.
+    return EfiLoaderImage(instance.android_esp_image());
+  }
+  // Generated from the EFI loader, see InitializeEspImage.
+  return EfiLoaderImage(instance.generated_esp_image_path());
 }
 
 std::string EfiLoaderImage::Name() const { return std::string(kName); }

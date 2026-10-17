@@ -34,7 +34,9 @@
 #include "absl/log/log.h"
 #include "json/json.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_buf.h"
+#include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/fs/shared_select.h"
 
 namespace cuttlefish {
@@ -238,11 +240,11 @@ void VsockServerConnection::ServerShutdown() {
 bool VsockServerConnection::Connect(unsigned int port, unsigned int cid,
                                     std::optional<int> vhost_user_vsock_cid) {
   if (!server_fd_->IsOpen()) {
-    server_fd_ = cuttlefish::SharedFD::VsockServer(port, SOCK_STREAM,
-                                                   vhost_user_vsock_cid, cid);
+    server_fd_ = Fd::VsockServer(port, SOCK_STREAM, vhost_user_vsock_cid, cid)
+                     .value_or(Fd());
   }
   if (server_fd_->IsOpen()) {
-    fd_ = SharedFD::Accept(*server_fd_);
+    fd_ = Fd::Accept(*server_fd_).value_or(Fd());
     return fd_->IsOpen();
   } else {
     return false;

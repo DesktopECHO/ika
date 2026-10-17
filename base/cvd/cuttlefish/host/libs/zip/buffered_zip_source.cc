@@ -27,6 +27,7 @@
 
 #include "absl/log/log.h"
 
+#include "cuttlefish/host/libs/zip/libzip_cc/archive.h"
 #include "cuttlefish/host/libs/zip/libzip_cc/seekable_source.h"
 #include "cuttlefish/host/libs/zip/libzip_cc/source_callback.h"
 #include "cuttlefish/io/io.h"
@@ -77,17 +78,17 @@ class BufferedZipSourceCallbacks : public SeekableZipSourceCallback {
     offset_in_buffer_ = 0;
     buffer_remaining_ = 0;
 
-    return data_provider_->SeekSet(0).ok();
+    return data_provider_->SeekSet(0).has_value();
   }
   int64_t Read(char* data, uint64_t len) override {
     if (len > buffer_.size()) {
       buffer_remaining_ = 0;
-      if (!data_provider_->SeekSet(offset_).ok()) {
+      if (!data_provider_->SeekSet(offset_).has_value()) {
         return false;
       }
       VLOG(1) << "Bypassing buffer, reading " << len;
       if (Result<uint64_t> read_len = data_provider_->Read(data, len);
-          read_len.ok()) {
+          read_len.has_value()) {
         offset_ += *read_len;
         return *read_len;
       } else {
@@ -95,7 +96,7 @@ class BufferedZipSourceCallbacks : public SeekableZipSourceCallback {
       }
     }
     if (buffer_remaining_ > 0) {
-      uint64_t to_read = std::min(len, buffer_remaining_);
+      size_t to_read = std::min<size_t>(len, buffer_remaining_);
       memcpy(data, &buffer_[offset_in_buffer_], to_read);
       buffer_remaining_ -= to_read;
       offset_in_buffer_ += to_read;
@@ -109,13 +110,13 @@ class BufferedZipSourceCallbacks : public SeekableZipSourceCallback {
     if (buffer_fill == 0) {
       return 0;
     }
-    if (!data_provider_->SeekSet(offset_).ok()) {
+    if (!data_provider_->SeekSet(offset_).has_value()) {
       return -1;
     }
     VLOG(1) << "Filling buffer with " << buffer_fill;
     Result<size_t> data_provider_read =
         data_provider_->Read(buffer_.data(), buffer_fill);
-    if (!data_provider_read.ok()) {
+    if (!data_provider_read.has_value()) {
       return -1;
     }
     buffer_remaining_ = *data_provider_read;
@@ -165,6 +166,13 @@ Result<SeekableZipSource> BufferZipSource(SeekableZipSource source,
       BufferedZipSourceCallbacks::Create(std::move(source), buffer_size));
 
   return CF_EXPECT(SeekableZipSource::FromCallbacks(std::move(callbacks)));
+}
+
+Result<ReadableZip> BufferAndOpenZip(SeekableZipSource source) {
+  SeekableZipSource buffered =
+      CF_EXPECT(BufferZipSource(std::move(source), 1 << 26));
+
+  return CF_EXPECT(ReadableZip::FromSource(std::move(buffered)));
 }
 
 }  // namespace cuttlefish

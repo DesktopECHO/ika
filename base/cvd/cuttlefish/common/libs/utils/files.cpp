@@ -17,55 +17,51 @@
 #include "cuttlefish/common/libs/utils/files.h"
 
 #ifdef __linux__
-#include <linux/fiemap.h>
 #include <linux/fs.h>
-#include <sys/sendfile.h>
 #endif
-
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <ftw.h>
-#include <libgen.h>
-#include <sched.h>
+#include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
-#include <sys/select.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/uio.h>
 #include <unistd.h>
 
-#include <array>
 #include <chrono>
 #include <fstream>
 #include <ios>
 #include <iosfwd>
-#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include <android-base/file.h>
-#include <android-base/macros.h>
-#include "absl/strings/str_join.h"
-#include "absl/strings/str_split.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
+#include "absl/strings/str_split.h"
+#include "android-base/file.h"
 #include "fmt/format.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_buf.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/environment.h"
 #include "cuttlefish/common/libs/utils/in_sandbox.h"
 #include "cuttlefish/common/libs/utils/users.h"
+#include "cuttlefish/files/copy.h"
+#include "cuttlefish/files/directory_contents.h"
+#include "cuttlefish/files/directory_exists.h"
+#include "cuttlefish/files/file_device_id.h"
+#include "cuttlefish/files/file_exists.h"
+#include "cuttlefish/files/link_or_copy.h"
+#include "cuttlefish/io/string.h"
+#include "cuttlefish/posix/realpath.h"
+#include "cuttlefish/posix/remove.h"
 #include "cuttlefish/posix/rename.h"
+#include "cuttlefish/posix/stat.h"
 #include "cuttlefish/posix/strerror.h"
 #include "cuttlefish/result/result.h"
 
@@ -76,104 +72,42 @@
 
 namespace cuttlefish {
 
-bool FileExists(const std::string& path, bool follow_symlinks) {
-  struct stat st {};
-  return (follow_symlinks ? stat : lstat)(path.c_str(), &st) == 0;
-}
-
-Result<dev_t> FileDeviceId(const std::string& path) {
-  struct stat out;
-  CF_EXPECTF(
-      stat(path.c_str(), &out) == 0,
-      "stat() failed trying to retrieve device ID information for \"{}\" "
-      "with error: {}",
-      path, strerror(errno));
-  return out.st_dev;
-}
-
 Result<bool> CanHardLink(const std::string& source,
                          const std::string& destination) {
   return CF_EXPECT(FileDeviceId(source)) ==
          CF_EXPECT(FileDeviceId(destination));
 }
 
-Result<ino_t> FileInodeNumber(const std::string& path) {
-  struct stat out;
-  CF_EXPECTF(
-      stat(path.c_str(), &out) == 0,
-      "stat() failed trying to retrieve inode num information for \"{}\" "
-      "with error: {}",
-      path, strerror(errno));
-  return out.st_ino;
-}
+bool FileHasContent(const std::string& path) { return FileSize(path) > 0; }
 
-Result<bool> AreHardLinked(const std::string& source,
-                           const std::string& destination) {
-  return (CF_EXPECT(FileDeviceId(source)) ==
-          CF_EXPECT(FileDeviceId(destination))) &&
-         (CF_EXPECT(FileInodeNumber(source)) ==
-          CF_EXPECT(FileInodeNumber(destination)));
-}
-
-Result<std::string> CreateHardLink(const std::string& target,
-                                   const std::string& hardlink,
-                                   const bool overwrite_existing) {
-  if (FileExists(hardlink)) {
-    if (CF_EXPECT(AreHardLinked(target, hardlink))) {
-      return hardlink;
-    }
-    if (!overwrite_existing) {
-      return CF_ERRF(
-          "Cannot hardlink from \"{}\" to \"{}\", the second file already "
-          "exists and is not hardlinked to the first",
-          target, hardlink);
-    }
-    LOG(WARNING) << "Overwriting existing file \"" << hardlink << "\" with \""
-                 << target << "\" from the cache";
-    CF_EXPECTF(unlink(hardlink.c_str()) == 0,
-               "Failed to unlink \"{}\" with error: {}", hardlink,
-               strerror(errno));
-  }
-  CF_EXPECTF(link(target.c_str(), hardlink.c_str()) == 0,
-             "link() failed trying to create hardlink from \"{}\" to \"{}\" "
-             "with error: {}",
-             target, hardlink, strerror(errno));
-  VLOG(1) << "Created hard link from \"" << target << "\" to \"" << hardlink
-          << "\"";
-  return hardlink;
-}
-
-bool FileHasContent(const std::string& path) {
-  return FileSize(path) > 0;
-}
-
-Result<void> HardLinkDirecoryContentsRecursively(
+Result<void> LinkOrCopyDirectoryContentsRecursively(
     const std::string& source, const std::string& destination) {
-  CF_EXPECTF(IsDirectory(source), "Source '{}' is not a directory", source);
+  CF_EXPECTF(DirectoryExists(source), "Source '{}' is not a directory", source);
 
   CF_EXPECT(EnsureDirectoryExists(destination, 0755));
 
-  auto linker = [&source, &destination](
-                    const std::string& filepath) mutable -> Result<void> {
+  auto linker_or_copier =
+      [&source,
+       &destination](const std::string& filepath) mutable -> Result<void> {
     const std::string src_path = filepath;
     const std::string dst_path =
         destination + "/" + filepath.substr(source.size() + 1);
-    if (IsDirectory(src_path)) {
+    if (DirectoryExists(src_path)) {
       CF_EXPECT(EnsureDirectoryExists(dst_path));
       return {};
     }
     const bool overwrite_existing = true;
-    CF_EXPECT(CreateHardLink(src_path, dst_path, overwrite_existing));
+    CF_EXPECT(LinkOrCopy(src_path, dst_path, overwrite_existing));
     return {};
   };
-  CF_EXPECT(WalkDirectory(source, linker));
+  CF_EXPECT(WalkDirectory(source, linker_or_copier));
 
   return {};
 }
 
 Result<void> MoveDirectoryContents(const std::string& source,
                                    const std::string& destination) {
-  CF_EXPECTF(IsDirectory(source), "Source '{}' is not a directory", source);
+  CF_EXPECTF(DirectoryExists(source), "Source '{}' is not a directory", source);
   CF_EXPECT(EnsureDirectoryExists(destination));
 
   bool should_rename = CF_EXPECT(CanRename(source, destination));
@@ -193,20 +127,6 @@ Result<void> MoveDirectoryContents(const std::string& source,
   return {};
 }
 
-Result<std::vector<std::string>> DirectoryContents(const std::string& path) {
-  std::vector<std::string> ret;
-  std::unique_ptr<DIR, int(*)(DIR*)> dir(opendir(path.c_str()), closedir);
-  CF_EXPECTF(dir != nullptr, "Could not read from dir \"{}\"", path);
-  struct dirent* ent{};
-  while ((ent = readdir(dir.get()))) {
-    if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
-      continue;
-    }
-    ret.emplace_back(ent->d_name);
-  }
-  return ret;
-}
-
 Result<std::vector<std::string>> DirectoryContentsPaths(
     const std::string& path) {
   std::vector<std::string> result = CF_EXPECT(DirectoryContents(path));
@@ -214,17 +134,6 @@ Result<std::vector<std::string>> DirectoryContentsPaths(
     filename = fmt::format("{}/{}", path, filename);
   }
   return result;
-}
-
-bool DirectoryExists(const std::string& path, bool follow_symlinks) {
-  struct stat st {};
-  if ((follow_symlinks ? stat : lstat)(path.c_str(), &st) == -1) {
-    return false;
-  }
-  if ((st.st_mode & S_IFMT) != S_IFDIR) {
-    return false;
-  }
-  return true;
 }
 
 Result<void> EnsureDirectoryExists(const std::string& directory_path,
@@ -269,7 +178,7 @@ Result<void> ChangeGroup(const std::string& path,
   auto groupId = GroupIdFromName(group_name);
 
   if (groupId == -1) {
-    return CF_ERR("Failed to get group id: ") << group_name;
+    return CF_ERRF("Failed to get group id: {}", group_name);
   }
 
   if (chown(path.c_str(), -1, groupId) != 0) {
@@ -284,115 +193,6 @@ bool CanAccess(const std::string& path, const int mode) {
   return access(path.c_str(), mode) == 0;
 }
 
-Result<bool> IsDirectoryEmpty(const std::string& path) {
-  std::unique_ptr<DIR, int (*)(DIR*)> direc(opendir(path.c_str()), closedir);
-  CF_EXPECTF(direc.get(), "opendir('{}') failed: {}", path, StrError(errno));
-
-  int cnt = 0;
-  while (::readdir(direc.get())) {
-    cnt++;
-    if (cnt > 2) {
-      return false;
-    }
-  }
-  return true;
-}
-
-Result<void> RecursivelyRemoveDirectory(const std::string& path) {
-  // Copied from libbase TemporaryDir destructor.
-  auto callback = [](const char* child, const struct stat*, int file_type,
-                     struct FTW*) -> int {
-    switch (file_type) {
-      case FTW_D:
-      case FTW_DP:
-      case FTW_DNR:
-        if (rmdir(child) == -1) {
-          PLOG(ERROR) << "rmdir " << child;
-          return -1;
-        }
-        break;
-      case FTW_NS:
-      default:
-        if (rmdir(child) != -1) {
-          break;
-        }
-        // FALLTHRU (for gcc, lint, pcc, etc; and following for clang)
-        FALLTHROUGH_INTENDED;
-      case FTW_F:
-      case FTW_SL:
-      case FTW_SLN:
-        if (unlink(child) == -1) {
-          PLOG(ERROR) << "unlink " << child;
-          return -1;
-        }
-        break;
-    }
-    return 0;
-  };
-
-  if (nftw(path.c_str(), callback, 128, FTW_DEPTH | FTW_PHYS) < 0) {
-    return CF_ERRNO("Failed to remove directory \""
-                    << path << "\": " << strerror(errno));
-  }
-  return {};
-}
-
-bool Copy(const std::string& from, const std::string& to) {
-  SharedFD fd_from = SharedFD::Open(from, O_RDONLY);
-  SharedFD fd_to = SharedFD::Open(to, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-
-  if (!fd_from->IsOpen() || !fd_to->IsOpen()) {
-    return false;
-  }
-
-  off_t farthest_seek = fd_from->LSeek(0, SEEK_END);
-  if (farthest_seek == -1) {
-    LOG(ERROR) << "Could not lseek in \"" << from
-               << "\": " << fd_from->StrError();
-    return false;
-  }
-  if (fd_to->Truncate(farthest_seek) < 0) {
-    LOG(ERROR) << "Failed to truncate " << to << ": " << fd_to->StrError();
-  }
-  off_t offset = 0;
-  while (offset < farthest_seek) {
-    off_t new_offset = fd_from->LSeek(offset, SEEK_HOLE);
-    if (new_offset == -1) {
-      if (fd_from->GetErrno() == ENXIO) {
-        return true;
-      }
-      LOG(ERROR) << "Could not lseek in \"" << from
-                 << "\": " << fd_from->StrError();
-      return false;
-    }
-    auto data_bytes = new_offset - offset;
-    if (fd_to->LSeek(offset, SEEK_SET) < 0) {
-      LOG(ERROR) << "lseek() on " << to << " failed: " << fd_to->StrError();
-      return false;
-    }
-    if (!fd_to->SendFile(*fd_from, &offset, data_bytes)) {
-      LOG(ERROR) << "SendFile failed: " << fd_to->StrError();
-      return false;
-    }
-    CHECK_EQ(offset, new_offset);
-
-    if (offset >= farthest_seek) {
-      return true;
-    }
-    new_offset = fd_from->LSeek(offset, SEEK_DATA);
-    if (new_offset == -1) {
-      if (fd_from->GetErrno() == ENXIO) {
-        return true;
-      }
-      LOG(ERROR) << "Could not lseek in \"" << from
-                 << "\": " << fd_from->StrError();
-      return false;
-    }
-    offset = new_offset;
-  }
-  return true;
-}
-
 std::string AbsolutePath(std::string_view path) {
   if (path.empty()) {
     return {};
@@ -402,7 +202,7 @@ std::string AbsolutePath(std::string_view path) {
   }
 
   Result<std::string> real_cwd = RealPath(".");
-  if (!real_cwd.ok()) {
+  if (!real_cwd.has_value()) {
     LOG(WARNING) << "Could not get real path for current directory \".\": "
                  << real_cwd.error();
     return {};
@@ -410,31 +210,13 @@ std::string AbsolutePath(std::string_view path) {
   return absl::StrCat(*real_cwd, "/", path);
 }
 
-Result<std::string> RealPath(const std::string& path) {
-  std::array<char, PATH_MAX> buffer{};
-  char* res;
-  do {
-    res = realpath(path.c_str(), buffer.data());
-  } while (res == nullptr && errno == EINTR);
-  CF_EXPECTF(res != nullptr, "Could not get real path for path \"{}\": {}",
-             path, StrError(errno));
-  return std::string(buffer.data());
-}
-
 off_t FileSize(const std::string& path) {
-  struct stat st {};
-  if (stat(path.c_str(), &st) == -1) {
-    return 0;
-  }
-  return st.st_size;
+  static auto get_size = [](const struct stat& st) { return st.st_size; };
+  return Stat(path).transform(get_size).value_or(0);
 }
 
 Result<uid_t> FileOwner(const std::string& path) {
-  struct stat st{};
-  if (stat(path.c_str(), &st) == -1) {
-    return CF_ERRF("Failed to stat file '{}' : {}", path, StrError(errno));
-  }
-  return st.st_uid;
+  return CF_EXPECT(Stat(path)).st_uid;
 }
 
 bool MakeFileExecutable(const std::string& path) {
@@ -444,11 +226,7 @@ bool MakeFileExecutable(const std::string& path) {
 
 Result<std::chrono::system_clock::time_point> FileModificationTime(
     const std::string& path) {
-  struct stat st;
-  CF_EXPECTF(stat(path.c_str(), &st) == 0,
-             "stat() failed retrieving file modification time on \"{}\" with "
-             "error: {}",
-             path, strerror(errno));
+  struct stat st = CF_EXPECT(Stat(path));
 #ifdef __linux__
   std::chrono::seconds seconds(st.st_mtim.tv_sec);
 #elif defined(__APPLE__)
@@ -465,15 +243,6 @@ Result<std::string> RenameFile(const std::string& current_filepath,
     CF_EXPECT(Rename(current_filepath, target_filepath));
   }
   return target_filepath;
-}
-
-Result<void> RemoveFile(const std::string& file) {
-  VLOG(0) << "Removing file " << file;
-  if (remove(file.c_str()) != 0) {
-    return CF_ERRF("Failed to remove file '{}' : {}", file,
-                   StrError(errno));
-  }
-  return {};
 }
 
 std::string ReadFile(const std::string& file) {
@@ -494,27 +263,18 @@ std::string ReadFile(const std::string& file) {
     in.read(&contents[0], contents.size());
   }
   in.close();
-  return(contents);
+  return (contents);
 }
 
-Result<std::string> ReadFileContents(const std::string& filepath) {
-  CF_EXPECTF(FileExists(filepath), "The file at \"{}\" does not exist.",
-             filepath);
-  auto file = SharedFD::Open(filepath, O_RDONLY);
-  CF_EXPECTF(file->IsOpen(), "Failed to open file \"{}\".  Error: {}\n",
-             filepath, file->StrError());
-  std::string file_content;
-  auto size = ReadAll(file, &file_content);
-  CF_EXPECTF(size >= 0, "Failed to read file contents.  Error: {}\n",
-             file->StrError());
-  return file_content;
+Result<std::string> ReadFileContents(const std::string& path) {
+  CF_EXPECTF(FileExists(path), "The file at '{}' does not exist.", path);
+  Fd file = CF_EXPECT(Fd::Open(path, O_RDONLY));
+  return CF_EXPECT(ReadToString(file));
 }
 Result<void> WriteNewFile(const std::string& filepath, std::string_view content,
                           mode_t mode) {
-  CF_EXPECTF(!FileExists(filepath), "File already exists: {}", filepath);
-  SharedFD file_fd = SharedFD::Open(filepath, O_CREAT | O_WRONLY, mode);
-  CF_EXPECTF(file_fd->IsOpen(), "Failed to open file \"{}\" for writing: {}",
-             filepath, file_fd->StrError());
+  SharedFD file_fd =
+      CF_EXPECT(Fd::Open(filepath, O_CREAT | O_EXCL | O_WRONLY, mode));
   const auto written_size = WriteAll(file_fd, content);
   CF_EXPECTF(written_size == content.size(),
              "Failed to write all content to file. Error:\n",
@@ -537,7 +297,7 @@ std::string CurrentDirectory() {
 }
 
 FileSizes SparseFileSizes(const std::string& path) {
-  auto fd = SharedFD::Open(path, O_RDONLY);
+  SharedFD fd = Fd::Open(path, O_RDONLY).value_or(Fd());
   if (!fd->IsOpen()) {
     LOG(ERROR) << "Could not open \"" << path << "\": " << fd->StrError();
     return {};
@@ -557,7 +317,8 @@ FileSizes SparseFileSizes(const std::string& path) {
       if (fd->GetErrno() == ENXIO) {
         break;
       } else {
-        LOG(ERROR) << "Could not lseek in \"" << path << "\": " << fd->StrError();
+        LOG(ERROR) << "Could not lseek in \"" << path
+                   << "\": " << fd->StrError();
         return {};
       }
     } else {
@@ -573,19 +334,15 @@ FileSizes SparseFileSizes(const std::string& path) {
       if (fd->GetErrno() == ENXIO) {
         break;
       } else {
-        LOG(ERROR) << "Could not lseek in \"" << path << "\": " << fd->StrError();
+        LOG(ERROR) << "Could not lseek in \"" << path
+                   << "\": " << fd->StrError();
         return {};
       }
     } else {
       offset = new_offset;
     }
   }
-  return (FileSizes) { .sparse_size = farthest_seek, .disk_size = data_bytes };
-}
-
-bool FileIsSocket(const std::string& path) {
-  struct stat st {};
-  return stat(path.c_str(), &st) == 0 && S_ISSOCK(st.st_mode);
+  return (FileSizes){.sparse_size = farthest_seek, .disk_size = data_bytes};
 }
 
 Result<std::string> FindFile(const std::string& path,
@@ -635,34 +392,31 @@ Result<std::string> Search(const std::vector<std::string>& path,
       return abs_path;
     }
   }
-  return CF_ERR("Not found: ") << name << ", path " << absl::StrJoin(path, ":");
+  return CF_ERRF("Not found: '{}', path '{}'", name, absl::StrJoin(path, ":"));
 }
 
-Result<SharedFD> CreateOrReuseAndDrainFifo(const std::string& path, mode_t mode) {
-  struct stat st {};
-  bool existed = false;
-  if (TEMP_FAILURE_RETRY(stat(path.c_str(), &st)) != 0) {
-    CF_EXPECTF(TEMP_FAILURE_RETRY(mkfifo(path.c_str(), mode)) == 0,
-               "Failed to mkfifo('{}', {:o}): {}", path, mode,
-               ::cuttlefish::StrError(errno));
+Result<SharedFD> CreateOrReuseAndDrainFifo(const std::string& path,
+                                           mode_t mode) {
+  Result<struct stat> st = Stat(path);
+  if (st.has_value()) {
+    CF_EXPECTF(S_ISFIFO(st->st_mode), "File at '{}' exists but is not a FIFO",
+               path);
   } else {
-    CF_EXPECTF(S_ISFIFO(st.st_mode),
-               "File at '{}' exists but is not a FIFO", path);
-    existed = true;
+    CF_EXPECTF(TEMP_FAILURE_RETRY(mkfifo(path.c_str(), mode)) == 0,
+               "Failed to mkfifo('{}', {:o}): {}", path, mode, StrError(errno));
   }
 
-  auto ret = SharedFD::Open(path, O_RDWR);
-  CF_EXPECTF(ret->IsOpen(), "Failed to open '{}': '{}'", path, ret->StrError());
+  Fd ret = CF_EXPECT(Fd::Open(path, O_RDWR));
 
-  if (existed) {
-    int flags = ret->Fcntl(F_GETFL, 0);
+  if (st.has_value()) {
+    int flags = ret.Fcntl(F_GETFL, 0);
     if (flags >= 0) {
-      ret->Fcntl(F_SETFL, flags | O_NONBLOCK);
+      ret.Fcntl(F_SETFL, flags | O_NONBLOCK);
       char buf[4096];
-      while (ret->Read(buf, sizeof(buf)) > 0) {
+      while (ret.Read(buf, sizeof(buf)).value_or(0) > 0) {
         // Reading while there is data to read
       }
-      ret->Fcntl(F_SETFL, flags);
+      ret.Fcntl(F_SETFL, flags);
     }
   }
 

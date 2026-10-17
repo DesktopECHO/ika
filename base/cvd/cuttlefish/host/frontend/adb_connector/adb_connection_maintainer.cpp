@@ -29,6 +29,7 @@
 #include "absl/log/log.h"
 #include "absl/strings/match.h"
 
+#include "cuttlefish/common/libs/fs/recv_all.h"
 #include "cuttlefish/common/libs/fs/shared_buf.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 
@@ -76,7 +77,7 @@ constexpr size_t kAdbMessageLengthLength = 4;
 
 constexpr int kAdbDaemonPort = 5037;
 
-bool AdbSendMessage(const SharedFD& sock, const std::string& message) {
+bool AdbSendMessage(SharedFD sock, const std::string& message) {
   if (!sock->IsOpen()) {
     return false;
   }
@@ -85,7 +86,8 @@ bool AdbSendMessage(const SharedFD& sock, const std::string& message) {
     return false;
   }
 
-  return RecvAll(sock, kAdbStatusResponseLength) == kAdbOkayStatusResponse;
+  return RecvAll(*sock, kAdbStatusResponseLength).value_or("") ==
+         kAdbOkayStatusResponse;
 }
 
 bool AdbSendMessage(const std::string& message) {
@@ -112,14 +114,14 @@ bool IsInteger(const std::string& str) {
 }
 
 // assumes the OKAY/FAIL status has already been read
-std::string RecvAdbResponse(const SharedFD& sock) {
-  auto length_as_hex_str = RecvAll(sock, kAdbMessageLengthLength);
+std::string RecvAdbResponse(SharedFD sock) {
+  auto length_as_hex_str = RecvAll(*sock, kAdbMessageLengthLength).value_or("");
   if (!IsHexInteger(length_as_hex_str)) {
     LOG(ERROR) << "invalid adb response prefix: " << length_as_hex_str;
     return {};
   }
   auto length = std::stoi(length_as_hex_str, nullptr, 16);
-  return RecvAll(sock, length);
+  return RecvAll(*sock, length).value_or("");
 }
 
 // Returns a negative value if uptime result couldn't be read for
@@ -128,12 +130,12 @@ int RecvUptimeResult(const SharedFD& sock) {
   std::vector<char> uptime_vec{};
   std::vector<char> just_read(16);
   do {
-    auto count = sock->Read(just_read.data(), just_read.size());
-    if (count < 0) {
+    Result<uint64_t> count = sock->Read(just_read.data(), just_read.size());
+    if (!count.has_value()) {
       LOG(WARNING) << "couldn't receive adb shell output";
       return -1;
     }
-    just_read.resize(count);
+    just_read.resize(*count);
     uptime_vec.insert(uptime_vec.end(), just_read.begin(), just_read.end());
   } while (!just_read.empty());
 
@@ -159,12 +161,12 @@ int RecvGetStatusResult(const SharedFD& sock) {
   std::vector<char> status_vec{};
   std::vector<char> just_read(16);
   do {
-    auto count = sock->Read(just_read.data(), just_read.size());
-    if (count < 0) {
+    Result<uint64_t> count = sock->Read(just_read.data(), just_read.size());
+    if (!count.has_value()) {
       LOG(WARNING) << "couldn't receive adb shell output";
       return -1;
     }
-    just_read.resize(count);
+    just_read.resize(*count);
     status_vec.insert(status_vec.end(), just_read.begin(), just_read.end());
   } while (!just_read.empty());
 
@@ -196,7 +198,8 @@ bool WaitForAdbAuthorization(const std::string& address) {
     return false;
   }
 
-  const std::string status = RecvAll(sock, kAdbStatusResponseLength);
+  const std::string status =
+      RecvAll(*sock, kAdbStatusResponseLength).value_or("");
   // Stop waiting because the authorization check passed.
   if (status == kAdbOkayStatusResponse) {
     return false;

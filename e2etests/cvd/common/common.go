@@ -30,9 +30,11 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/bazelbuild/rules_go/go/runfiles"
 )
@@ -63,28 +65,38 @@ func DirectoryExists(d string) bool {
 
 // Common state while running an e2etest.
 type TestContext struct {
-	t *testing.T
+	t       *testing.T
 	tempdir string
 
 	// This is used instead of `T.Cleanup()` to support running commands during
 	// cleanup. The context from `T.Context()` is cancelled before `T.Cleanup()`
 	// registered cleanup functions are invoked.
-	cleanups []func()
+	cleanups       []func()
 	teardownCalled bool
 
-	context context.Context
+	context   context.Context
 	cancelled bool
+
+	usePodcvd bool
 }
 
-func runCmdWithContextEnv(ctx context.Context, command []string, envvars map[string]string) (string, error) {
+// Output of running a command.
+type CommandOutput struct {
+	Stdout string
+	Stderr string
+}
+
+func runCmdWithContextEnv(ctx context.Context, command []string, envvars map[string]string) (CommandOutput, error) {
 	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
 
-	cmdOutputBuf := bytes.Buffer{}
-	cmdWriter := io.MultiWriter(&cmdOutputBuf, log.Writer())
-	cmd.Stdout = cmdWriter
-	cmd.Stderr = cmdWriter
+	stdOutBuf := bytes.Buffer{}
+	stdErrBuf := bytes.Buffer{}
+	stdOutWriter := io.MultiWriter(&stdOutBuf, log.Writer())
+	stdErrWriter := io.MultiWriter(&stdErrBuf, log.Writer())
+	cmd.Stdout = stdOutWriter
+	cmd.Stderr = stdErrWriter
 
-	envvarPairs := []string{};
+	envvarPairs := []string{}
 	for k, v := range envvars {
 		envvarPairs = append(envvarPairs, fmt.Sprintf("%s=%s", k, v))
 	}
@@ -94,45 +106,84 @@ func runCmdWithContextEnv(ctx context.Context, command []string, envvars map[str
 	log.Printf("Running `%s %s`\n", strings.Join(envvarPairs, " "), strings.Join(command, " "))
 	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("`%s` failed: %w", strings.Join(command, " "), err)
+		return CommandOutput{}, fmt.Errorf("`%s` failed: %w", strings.Join(command, " "), err)
 	}
 
-	return cmdOutputBuf.String(), nil
+	return CommandOutput{Stdout: stdOutBuf.String(), Stderr: stdErrBuf.String()}, nil
 }
 
 // Runs the given command with the given set of envvars overrided.
-func (tc *TestContext) RunCmdWithEnv(command []string, envvars map[string]string) (string, error) {
+func (tc *TestContext) RunCmdWithEnv(command []string, envvars map[string]string) (CommandOutput, error) {
 	return runCmdWithContextEnv(tc.context, command, envvars)
 }
 
 // Waits for a device to be available via adb.
 func (tc *TestContext) RunAdbWaitForDevice() error {
-	adbCommand := []string{
-		"timeout",
-		"--kill-after=30s",
-		"29s",
-		"adb",
-		"wait-for-device",
-	}
-	if _, err := tc.RunCmd(adbCommand...); err != nil {
+	ctx, cancel := context.WithTimeout(tc.context, 30*time.Second)
+	defer cancel()
+	if _, err := runCmdWithContextEnv(ctx, []string{"adb", "wait-for-device"}, map[string]string{}); err != nil {
 		return fmt.Errorf("timed out waiting for Cuttlefish device to connect to adb: %w", err)
 	}
 	return nil
 }
 
+// Waits for a specific device serial to be available via adb.
+func (tc *TestContext) RunAdbWaitForDeviceSerial(serial string) error {
+	ctx, cancel := context.WithTimeout(tc.context, 30*time.Second)
+	defer cancel()
+	if _, err := runCmdWithContextEnv(ctx, []string{"adb", "-s", serial, "wait-for-device"}, map[string]string{}); err != nil {
+		return fmt.Errorf("timed out waiting for device %s to connect to adb: %w", serial, err)
+	}
+	return nil
+}
+
+// Checks if adb shell is reachable for a given device serial.
+func (tc *TestContext) IsAdbShellReachable(serial string) bool {
+	ctx, cancel := context.WithTimeout(tc.context, 5*time.Second)
+	defer cancel()
+	res, err := runCmdWithContextEnv(ctx, []string{"adb", "-s", serial, "shell", "echo", "ping"}, map[string]string{})
+	return err == nil && strings.Contains(res.Stdout, "ping")
+}
+
+// Waits for a device serial to disconnect from adb within the given timeout.
+func (tc *TestContext) WaitForDeviceOffline(serial string, timeoutSeconds int) error {
+	ctx, cancel := context.WithTimeout(tc.context, time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+	if _, err := runCmdWithContextEnv(ctx, []string{"adb", "-s", serial, "wait-for-disconnect"}, map[string]string{}); err != nil {
+		return fmt.Errorf("device %s did not disconnect within %d seconds: %w", serial, timeoutSeconds, err)
+	}
+	return nil
+}
+
 // Runs the given command with the existing envvars.
-func (tc *TestContext) RunCmd(args... string) (string, error) {
+func (tc *TestContext) RunCmd(args ...string) (CommandOutput, error) {
 	command := []string{}
 	command = append(command, args...)
 	return tc.RunCmdWithEnv(command, map[string]string{})
 }
 
+// Returns the binary name to test.
+func (tc *TestContext) TargetBin() string {
+	if tc.usePodcvd {
+		return "podcvd"
+	}
+	return "cvd"
+}
+
+// Returns the test's temporary directory.
+func (tc *TestContext) TempDir() string {
+	return tc.tempdir
+}
+
 // Common parameters passed to `cvd fetch`.
 type FetchArgs struct {
-    DefaultBuildBranch string
-	DefaultBuildTarget string
-	TestSuiteBuildBranch string
-	TestSuiteBuildTarget string
+	BootloaderBuildBranch string
+	BootloaderBuildTarget string
+	DefaultBuildBranch    string
+	DefaultBuildTarget    string
+	SubstituteOnly        bool
+	TestSuiteBuildBranch  string
+	TestSuiteBuildTarget  string
 }
 
 // Common parameters passed to `cvd create`.
@@ -142,30 +193,37 @@ type CreateArgs struct {
 
 // Common parameters to fetch and create a Cuttlefish device.
 type FetchAndCreateArgs struct {
-	Fetch FetchArgs
+	Fetch  FetchArgs
 	Create CreateArgs
 }
 
 // Performs `cvd fetch <args>`.
-func (tc *TestContext) CVDFetch(args FetchArgs) error {
+func (tc *TestContext) CVDFetch(args FetchArgs) (CommandOutput, error) {
 	log.Printf("Fetching...")
 	fetchCmd := []string{
-		"cvd",
+		tc.TargetBin(),
 		"fetch",
 		fmt.Sprintf("--default_build=%s/%s", args.DefaultBuildBranch, args.DefaultBuildTarget),
 		fmt.Sprintf("--target_directory=%s", tc.tempdir),
 	}
+	if args.BootloaderBuildBranch != "" && args.BootloaderBuildTarget != "" {
+		fetchCmd = append(fetchCmd, fmt.Sprintf("--bootloader_build=%s/%s", args.BootloaderBuildBranch, args.BootloaderBuildTarget))
+	}
 	if args.TestSuiteBuildBranch != "" && args.TestSuiteBuildTarget != "" {
 		fetchCmd = append(fetchCmd, fmt.Sprintf("--test_suites_build=%s/%s", args.TestSuiteBuildBranch, args.TestSuiteBuildTarget))
+	}
+	if args.SubstituteOnly {
+		fetchCmd = append(fetchCmd, "--host_substitutions=only")
 	}
 
 	credentialArg := os.Getenv("CREDENTIAL_SOURCE")
 	if credentialArg != "" {
 		fetchCmd = append(fetchCmd, fmt.Sprintf("--credential_source=%s", credentialArg))
 	}
-	if _, err := tc.RunCmd(fetchCmd...); err != nil {
+	res, err := tc.RunCmd(fetchCmd...)
+	if err != nil {
 		log.Printf("Failed to fetch: %w", err)
-		return err
+		return res, err
 	}
 
 	// Android CTS includes some files with a `kernel` suffix which confuses the
@@ -176,43 +234,41 @@ func (tc *TestContext) CVDFetch(args FetchArgs) error {
 
 	log.Printf("Fetch completed!")
 
-	return nil
+	return res, nil
 }
 
 // Performs `cvd create <args>`.
-func (tc *TestContext) CVDCreate(args CreateArgs) error {
+func (tc *TestContext) CVDCreate(args CreateArgs) (CommandOutput, error) {
 	tempdirEnv := map[string]string{
 		"HOME": tc.tempdir,
 	}
 
-	createCmd := []string{"cvd", "create"};
+	createCmd := []string{tc.TargetBin(), "--verbosity=DEBUG", "create"}
 	createCmd = append(createCmd, "--report_anonymous_usage_stats=y")
 	createCmd = append(createCmd, "--undefok=report_anonymous_usage_stats")
+	if os.Getenv("DISABLE_CROSVM_SANDBOX") == "true" {
+		createCmd = append(createCmd, "--enable_sandbox=false")
+	}
 	if len(args.Args) > 0 {
 		createCmd = append(createCmd, args.Args...)
 	}
-	if _, err := tc.RunCmdWithEnv(createCmd, tempdirEnv); err != nil {
+	res, err := tc.RunCmdWithEnv(createCmd, tempdirEnv)
+	if err != nil {
 		log.Printf("Failed to create instance(s): %w", err)
-		return err
+		return res, err
 	}
 
 	tc.Cleanup(func() { tc.CVDStop() })
-	return nil
+	return res, nil
 }
 
-// Performs `cvd stop`.
-func (tc *TestContext) CVDStop() error {
+// Runs a cvd command with the test environment (HOME=tempdir).
+func (tc *TestContext) RunCVD(args ...string) (CommandOutput, error) {
 	tempdirEnv := map[string]string{
 		"HOME": tc.tempdir,
 	}
-
-	stopCmd := []string{"cvd", "stop"};
-	if _, err := tc.RunCmdWithEnv(stopCmd, tempdirEnv); err != nil {
-		log.Printf("Failed to stop instance(s): %w", err)
-		return err
-	}
-
-	return nil
+	cvdCmd := append([]string{tc.TargetBin()}, args...)
+	return tc.RunCmdWithEnv(cvdCmd, tempdirEnv)
 }
 
 // Performs `HOME=<testdir> bin/launch_cvd <args>`.
@@ -232,7 +288,6 @@ func (tc *TestContext) LaunchCVD(args CreateArgs) error {
 		return err
 	}
 
-
 	tc.Cleanup(func() { tc.StopCVD() })
 	return nil
 }
@@ -243,7 +298,7 @@ func (tc *TestContext) StopCVD() error {
 		"HOME": tc.tempdir,
 	}
 
-	stopCmd := []string{"bin/stop_cvd"};
+	stopCmd := []string{"bin/stop_cvd"}
 	if _, err := tc.RunCmdWithEnv(stopCmd, tempdirEnv); err != nil {
 		log.Printf("Failed to stop instance(s): %w", err)
 		return err
@@ -258,7 +313,7 @@ func (tc *TestContext) CVDPowerwash() error {
 		"HOME": tc.tempdir,
 	}
 
-	createCmd := []string{"cvd", "powerwash"};
+	createCmd := []string{tc.TargetBin(), "powerwash"}
 	if _, err := tc.RunCmdWithEnv(createCmd, tempdirEnv); err != nil {
 		log.Printf("Failed to powerwash instance(s): %w", err)
 		return err
@@ -267,13 +322,14 @@ func (tc *TestContext) CVDPowerwash() error {
 	return nil
 }
 
-// Common parameters for `cvd load`.
+// Common parameters for `cvd create --config_file`.
 type LoadArgs struct {
 	LoadConfig string
+	Env        map[string]string
 }
 
-// Performs `cvd load`.
-func  (tc *TestContext) CVDLoad(load LoadArgs) error {
+// Performs `cvd create --config_file`.
+func (tc *TestContext) CVDCreateWithConfigFile(load LoadArgs) error {
 	configpath := path.Join(tc.tempdir, "cvd_load_config.json")
 
 	log.Printf("Writing config to %s", configpath)
@@ -284,24 +340,60 @@ func  (tc *TestContext) CVDLoad(load LoadArgs) error {
 		return err
 	}
 
-	log.Printf("Creating instance(s) via `cvd load`...")
+	log.Printf("Creating instance(s) via `cvd create --config_file`...")
 	loadCmd := []string{
-		"cvd",
-		"load",
-		configpath,
-	};
+		tc.TargetBin(),
+		"create",
+		"--config_file=" + configpath,
+		"--base_directory=" + tc.tempdir,
+	}
 	credentialArg := os.Getenv("CREDENTIAL_SOURCE")
 	if credentialArg != "" {
 		loadCmd = append(loadCmd, fmt.Sprintf("--credential_source=%s", credentialArg))
 	}
-	if _, err := tc.RunCmd(loadCmd...); err != nil {
-		log.Printf("Failed to perform `cvd load`: %w", err)
+	if _, err := tc.RunCmdWithEnv(loadCmd, load.Env); err != nil {
+		log.Printf("Failed to perform `cvd create --config_file`: %w", err)
 		return err
 	}
-	log.Printf("Created instance(s) via `cvd load`!")
+	log.Printf("Created instance(s) via `cvd create --config_file`!")
 
 	tc.Cleanup(func() { tc.CVDStop() })
 	return nil
+}
+
+func (tc *TestContext) GetMetricsDir() (string, error) {
+	res, err := tc.RunCmd(tc.TargetBin(), "fleet")
+	if err != nil {
+		return "", fmt.Errorf("failed to run `cvd fleet`")
+	}
+
+	re := regexp.MustCompile(`"metrics_dir" : "(.*)",`)
+	matches := re.FindStringSubmatch(res.Stdout)
+	if len(matches) != 2 {
+		return "", fmt.Errorf("failed to find metrics directory")
+	}
+
+	metricsdir := matches[1]
+	if !DirectoryExists(metricsdir) {
+		return "", fmt.Errorf("failed to find directory %s", metricsdir)
+	}
+	return metricsdir, nil
+}
+
+func (tc *TestContext) GetSyspropString(key string) (string, error) {
+	res, err := tc.RunCmd("adb", "shell", "getprop", key)
+	if err != nil {
+		return "", fmt.Errorf("failed to get sysprop %s: %w", key, err)
+	}
+	return strings.TrimSpace(res.Stdout), nil
+}
+
+func (tc *TestContext) GetSyspropStringForDevice(serial, key string) (string, error) {
+	res, err := tc.RunCmd("adb", "-s", serial, "shell", "getprop", key)
+	if err != nil {
+		return "", fmt.Errorf("failed to get sysprop %s on device %s: %w", key, serial, err)
+	}
+	return strings.TrimSpace(res.Stdout), nil
 }
 
 // Creates a standard environment for an e2etests.
@@ -310,14 +402,20 @@ func (tc *TestContext) SetUp(t *testing.T) {
 	tc.teardownCalled = false
 	cancellableContext, cancel := context.WithCancel(t.Context())
 	tc.context = cancellableContext
+	tc.usePodcvd = os.Getenv("USE_PODCVD") == "true"
 
 	log.Printf("Initializing %s test...", tc.t.Name())
 
 	log.Printf("Cleaning up any pre-existing instances...")
-	if _, err := tc.RunCmd("cvd", "reset", "-y"); err != nil {
+	if _, err := tc.RunCmd(tc.TargetBin(), "reset", "-y"); err != nil {
 		log.Printf("Failed to cleanup any pre-existing instances: %w", err)
 	}
 	log.Printf("Finished cleaning up any pre-existing instances!")
+
+	log.Printf("Starting adb server...")
+	if _, err := tc.RunCmd("adb", "start-server"); err != nil {
+		log.Printf("Failed to start adb server: %v", err)
+	}
 
 	tc.tempdir = tc.t.TempDir()
 
@@ -391,6 +489,12 @@ func (tc *TestContext) TearDown() {
 				"cuttlefish_runtime/cuttlefish_config.json",
 				"cuttlefish_runtime/logcat",
 				"cuttlefish_runtime/*.log",
+				"fetch.log",
+				// `cvd create --config_file=` cases have an extra directory layer
+				"home/cuttlefish_runtime/cuttlefish_config.json",
+				"home/cuttlefish_runtime/logcat",
+				"home/cuttlefish_runtime/*.log",
+				"artifacts/fetch.log",
 			}
 			for _, pattern := range patterns {
 				matches, err := filepath.Glob(path.Join(tc.tempdir, pattern))
@@ -406,19 +510,40 @@ func (tc *TestContext) TearDown() {
 				}
 			}
 
-			matches, err := filepath.Glob(path.Join(tc.tempdir, "cuttlefish/instances/*"))
-			if err == nil {
-				for _, instancedir := range matches {
-					instance := filepath.Base(instancedir)
+			instancePatterns := [...]string{
+				"cuttlefish/instances/*",
+				"home/cuttlefish/instances/*",
+			}
+			for _, pattern := range instancePatterns {
+				matches, err := filepath.Glob(path.Join(tc.tempdir, pattern))
+				if err == nil {
+					for _, instancedir := range matches {
+						instance := filepath.Base(instancedir)
 
-					outinstancedir := path.Join(testoutdir, fmt.Sprintf("instance_%s", instance))
-					err := os.MkdirAll(outinstancedir, os.ModePerm)
-					if err == nil {
-						logdir := path.Join(instancedir, "logs")
-						_, err := runCmdWithContextEnv(context.TODO(), []string{"cp", "-r", "--dereference", logdir, outinstancedir}, map[string]string{})
-						if err != nil {
-							log.Printf("failed to copy %s to %s: %w", logdir, outinstancedir, err)
+						outinstancedir := path.Join(testoutdir, fmt.Sprintf("instance_%s", instance))
+						err := os.MkdirAll(outinstancedir, os.ModePerm)
+						if err == nil {
+							logdir := path.Join(instancedir, "logs")
+							_, err := runCmdWithContextEnv(context.TODO(), []string{"cp", "-r", "--dereference", logdir, outinstancedir}, map[string]string{})
+							if err != nil {
+								log.Printf("failed to copy %s to %s: %w", logdir, outinstancedir, err)
+							}
 						}
+					}
+				}
+			}
+
+			// gather cvd V2 metrics files, if they exist
+			metricsdir, err := tc.GetMetricsDir()
+			if err != nil {
+				log.Printf("Failed to find v2 metrics directory: %w", err)
+			} else {
+				outmetricsdir := path.Join(testoutdir, "metrics_files")
+				err := os.MkdirAll(outmetricsdir, os.ModePerm)
+				if err == nil {
+					_, err := runCmdWithContextEnv(context.TODO(), []string{"cp", "-r", "--dereference", metricsdir, outmetricsdir}, map[string]string{})
+					if err != nil {
+						log.Printf("failed to copy %s to %s: %w", metricsdir, outmetricsdir, err)
 					}
 				}
 			}
@@ -429,7 +554,7 @@ func (tc *TestContext) TearDown() {
 		}
 	}
 
-	runCmdWithContextEnv(context.TODO(), []string{"cvd", "reset", "-y"}, map[string]string{})
+	runCmdWithContextEnv(context.TODO(), []string{tc.TargetBin(), "reset", "-y"}, map[string]string{})
 
 	log.Printf("Finished cleaning up after test!")
 }
@@ -442,13 +567,13 @@ func findLocalXTS(cuttlefishArgs FetchAndCreateArgs, xtsArgs XtsArgs) string {
 	// TODO: explore adding a non-user-specific cache option to cvd.
 
 	homedir, err := os.UserHomeDir()
-    if err != nil {
+	if err != nil {
 		user := os.Getenv("USER")
 		if user == "" {
 			return ""
 		}
 		homedir = path.Join("/home", user)
-    }
+	}
 
 	possibleDir := path.Join(homedir, cuttlefishArgs.Fetch.TestSuiteBuildBranch, cuttlefishArgs.Fetch.TestSuiteBuildTarget)
 	log.Printf("Checking %s", possibleDir)
@@ -465,29 +590,29 @@ func findLocalXTS(cuttlefishArgs FetchAndCreateArgs, xtsArgs XtsArgs) string {
 }
 
 type xtsTest struct {
-	Name string `xml:"name,attr"`
+	Name   string `xml:"name,attr"`
 	Result string `xml:"result,attr"`
 }
 
 type xtsTestCase struct {
-	Name string `xml:"name,attr"`
+	Name  string    `xml:"name,attr"`
 	Tests []xtsTest `xml:"Test"`
 }
 
 type xtsModule struct {
-	Name string `xml:"name,attr"`
+	Name      string        `xml:"name,attr"`
 	TestCases []xtsTestCase `xml:"TestCase"`
 }
 
 type xtsSummary struct {
-	Pass int `xml:"pass,attr"`
-	Failed int `xml:"failed,attr"`
-	ModulesDone int `xml:"modules_done,attr"`
+	Pass         int `xml:"pass,attr"`
+	Failed       int `xml:"failed,attr"`
+	ModulesDone  int `xml:"modules_done,attr"`
 	ModulesTotal int `xml:"modules_total,attr"`
 }
 
 type xtsResult struct {
-    Summary xtsSummary `xml:"Summary"`
+	Summary xtsSummary  `xml:"Summary"`
 	Modules []xtsModule `xml:"Module"`
 }
 
@@ -512,11 +637,11 @@ func RunXts(t *testing.T, cuttlefishArgs FetchAndCreateArgs, xtsArgs XtsArgs) {
 		log.Printf("Failed to find existing XTS, will fetch.")
 	}
 
-	if err := tc.CVDFetch(cuttlefishArgs.Fetch); err != nil {
+	if _, err := tc.CVDFetch(cuttlefishArgs.Fetch); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := tc.CVDCreate(cuttlefishArgs.Create); err != nil {
+	if _, err := tc.CVDCreate(cuttlefishArgs.Create); err != nil {
 		t.Fatal(err)
 	}
 
@@ -539,7 +664,7 @@ func RunXts(t *testing.T, cuttlefishArgs FetchAndCreateArgs, xtsArgs XtsArgs) {
 		"commandAndExit",
 		xtsArgs.XtsType,
 		"--log-level-display=INFO",
-	};
+	}
 	xtsCommand = append(xtsCommand, xtsArgs.XtsArgs...)
 	if _, err := tc.RunCmd(xtsCommand...); err != nil {
 		t.Fatalf("failed to fully run XTS: %w", err)
@@ -558,13 +683,13 @@ func RunXts(t *testing.T, cuttlefishArgs FetchAndCreateArgs, xtsArgs XtsArgs) {
 		t.Fatalf("failed to parse XTS XML results from %s: %w", xtsResultsPath, err)
 	}
 
-	for _, xtsModule := range(xtsResult.Modules) {
-		for _, xtsTestCase := range(xtsModule.TestCases) {
-			for _, xtsTest := range(xtsTestCase.Tests) {
+	for _, xtsModule := range xtsResult.Modules {
+		for _, xtsTestCase := range xtsModule.TestCases {
+			for _, xtsTest := range xtsTestCase.Tests {
 				testname := fmt.Sprintf("%s#%s", xtsTestCase.Name, xtsTest.Name)
 				t.Run(testname, func(t *testing.T) {
 					log.Printf("%s result: %s", testname, xtsTest.Result)
-					if xtsTest.Result == "failed" {
+					if strings.HasPrefix(xtsTest.Result, "fail") {
 						t.Error("XTS test failed, see logs")
 					}
 				})

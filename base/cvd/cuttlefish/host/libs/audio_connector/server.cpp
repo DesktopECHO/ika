@@ -15,30 +15,43 @@
 
 #include "cuttlefish/host/libs/audio_connector/server.h"
 
-#include <fcntl.h>
-#include <strings.h>
-#include <unistd.h>
+#include <stdint.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/types.h>
 
+#include <functional>
+#include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
+#include "cuttlefish/common/libs/fs/scoped_mmap.h"
+#include "cuttlefish/common/libs/fs/shared_fd.h"
+#include "cuttlefish/host/libs/audio_connector/buffers.h"
+#include "cuttlefish/host/libs/audio_connector/commands.h"
+#include "cuttlefish/host/libs/audio_connector/shm_layout.h"
+#include "cuttlefish/result/result.h"
+
 namespace cuttlefish {
 
 namespace {
 
 ScopedMMap AllocateShm(size_t size, const std::string& name, SharedFD* shm_fd) {
-  *shm_fd = SharedFD::MemfdCreate(name, 0);
+  *shm_fd = Fd::MemfdCreate(name, 0).value_or(Fd());
   if (!(*shm_fd)->IsOpen()) {
     LOG(FATAL) << "Unable to allocate create file for " << name << ": "
                << (*shm_fd)->StrError();
     return ScopedMMap();
   }
 
-  auto truncate_ret = (*shm_fd)->Truncate(size);
-  if (truncate_ret != 0) {
+  Result<void> truncate_ret = (*shm_fd)->Truncate(size);
+  if (!truncate_ret.has_value()) {
     LOG(FATAL) << "Unable to resize " << name << " to " << size
                << " bytes: " << (*shm_fd)->StrError();
     return ScopedMMap();
@@ -99,21 +112,23 @@ std::function<void(AudioStatus, uint32_t, uint32_t)> SendStatusCallback(
 }  // namespace
 
 std::unique_ptr<AudioClientConnection> AudioServer::AcceptClient(
-    uint32_t num_streams, uint32_t num_jacks, uint32_t num_chmaps, uint32_t num_controls,
-    size_t tx_shm_len, size_t rx_shm_len) {
-  auto conn_fd = SharedFD::Accept(*server_socket_, nullptr, 0);
+    uint32_t num_streams, uint32_t num_jacks, uint32_t num_chmaps,
+    uint32_t num_controls, size_t tx_shm_len, size_t rx_shm_len) {
+  SharedFD conn_fd = Fd::Accept(*server_socket_).value_or(Fd());
   if (!conn_fd->IsOpen()) {
     LOG(ERROR) << "Connection failed on audio server: " << conn_fd->StrError();
     return nullptr;
   }
   return AudioClientConnection::Create(conn_fd, num_streams, num_jacks,
-                                       num_chmaps, num_controls, tx_shm_len, rx_shm_len);
+                                       num_chmaps, num_controls, tx_shm_len,
+                                       rx_shm_len);
 }
 
 /* static */
 std::unique_ptr<AudioClientConnection> AudioClientConnection::Create(
     SharedFD client_socket, uint32_t num_streams, uint32_t num_jacks,
-    uint32_t num_chmaps, uint32_t num_controls, size_t tx_shm_len, size_t rx_shm_len) {
+    uint32_t num_chmaps, uint32_t num_controls, size_t tx_shm_len,
+    size_t rx_shm_len) {
   SharedFD event_socket, event_pair;
   SharedFD tx_socket, tx_pair;
   SharedFD rx_socket, rx_pair;
@@ -186,7 +201,8 @@ std::unique_ptr<AudioClientConnection> AudioClientConnection::Create(
 }
 
 bool AudioClientConnection::ReceiveCommands(AudioServerExecutor& executor) {
-  constexpr auto kBufSize = sizeof(virtio_snd_ctl_hdr) + sizeof(virtio_snd_ctl_value);
+  constexpr auto kBufSize =
+      sizeof(virtio_snd_ctl_hdr) + sizeof(virtio_snd_ctl_value);
   alignas(uint64_t) uint8_t recv_buffer[kBufSize];
   const auto recv_size =
       ReceiveMsg(control_socket_, &recv_buffer, sizeof(recv_buffer));
@@ -328,23 +344,26 @@ bool AudioClientConnection::ReceiveCommands(AudioServerExecutor& executor) {
         VLOG(0) << "Received QUERY_INFO message is too small: " << recv_size;
         return false;
       }
-      const auto& query_info = *reinterpret_cast<const virtio_snd_query_info*>(recv_buffer);
+      const auto& query_info =
+          *reinterpret_cast<const virtio_snd_query_info*>(recv_buffer);
       const auto info_count = query_info.count.as_uint32_t();
       const auto start_id = query_info.start_id.as_uint32_t();
       std::vector<virtio_snd_ctl_info> reply(info_count);
       ControlInfoCommand cmd(start_id, info_count, reply.data());
       VLOG(0) << "VIRTIO_SND_R_CTL_INFO: start_id=" << start_id
-                 << ", count=" << info_count;
+              << ", count=" << info_count;
 
       executor.ControlsInfo(cmd);
-      return CmdReply(cmd.status(), reply.data(), reply.size() * sizeof(virtio_snd_ctl_info));
+      return CmdReply(cmd.status(), reply.data(),
+                      reply.size() * sizeof(virtio_snd_ctl_info));
     }
     case AudioCommandType::VIRTIO_SND_R_CTL_READ: {
       if (recv_size < sizeof(virtio_snd_ctl_hdr)) {
         VLOG(0) << "Received CTL_READ message is too small: " << recv_size;
         return false;
       }
-      const auto& ctl_hdr = *reinterpret_cast<const virtio_snd_ctl_hdr*>(recv_buffer);
+      const auto& ctl_hdr =
+          *reinterpret_cast<const virtio_snd_ctl_hdr*>(recv_buffer);
       virtio_snd_ctl_value reply_value = {};
       ControlCommand cmd(AudioCommandType::VIRTIO_SND_R_CTL_READ,
                          ctl_hdr.control_id.as_uint32_t(), &reply_value);
@@ -357,10 +376,12 @@ bool AudioClientConnection::ReceiveCommands(AudioServerExecutor& executor) {
         VLOG(0) << "Received CTL_WRITE message is too small: " << recv_size;
         return false;
       }
-      const auto& ctl_hdr = *reinterpret_cast<const virtio_snd_ctl_hdr*>(recv_buffer);
+      const auto& ctl_hdr =
+          *reinterpret_cast<const virtio_snd_ctl_hdr*>(recv_buffer);
       const auto ctl_value =
           reinterpret_cast<virtio_snd_ctl_value*>(&recv_buffer[kHdrSize]);
-      ControlCommand cmd(AudioCommandType::VIRTIO_SND_R_CTL_WRITE, ctl_hdr.control_id.as_uint32_t(), ctl_value);
+      ControlCommand cmd(AudioCommandType::VIRTIO_SND_R_CTL_WRITE,
+                         ctl_hdr.control_id.as_uint32_t(), ctl_value);
       executor.OnControlCommand(cmd);
       return CmdReply(cmd.status());
     }
@@ -432,9 +453,9 @@ bool AudioClientConnection::CmdReply(AudioStatus status, const void* data,
       .code = Le32(static_cast<uint32_t>(status)),
   };
   std::vector<uint8_t> buffer(sizeof(vio_status) + size, 0);
-  std::memcpy(buffer.data(), &vio_status, sizeof(vio_status));
+  memcpy(buffer.data(), &vio_status, sizeof(vio_status));
   if (data) {
-    std::memcpy(buffer.data() + sizeof(vio_status), data, size);
+    memcpy(buffer.data() + sizeof(vio_status), data, size);
   }
   auto status_sent = control_socket_->Send(buffer.data(), buffer.size(), 0);
   if (status_sent < sizeof(vio_status) + size) {

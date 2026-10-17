@@ -17,22 +17,27 @@
 
 #include <unistd.h>
 
-#include <functional>
+#include <cerrno>
 #include <optional>
+#include <random>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include <android-base/file.h>
-#include <android-base/strings.h>
-#include "absl/strings/strip.h"
-#include <google/protobuf/text_format.h>
 #include "absl/log/log.h"
 #include "absl/strings/match.h"
+#include "absl/strings/strip.h"
+#include "android-base/file.h"
+#include "fmt/format.h"
+#include "google/protobuf/text_format.h"
 
 #include "cuttlefish/common/libs/utils/environment.h"
 #include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/files/directory_exists.h"
+#include "cuttlefish/files/file_exists.h"
+#include "cuttlefish/files/is_symlink.h"
 #include "cuttlefish/host/commands/cvd/fetch/host_pkg_migration.pb.h"
+#include "cuttlefish/posix/readlink.h"
 #include "cuttlefish/posix/strerror.h"
 #include "cuttlefish/posix/symlink.h"
 #include "cuttlefish/result/result.h"
@@ -62,12 +67,35 @@ Result<void> Substitute(const std::string& target,
     return {};
   }
 
+  if (Result<std::string> existing = ReadLink(full_link_name);
+      existing.has_value() && *existing == target) {
+    return {};
+  }
+
   CF_EXPECT(EnsureDirectoryExists(android::base::Dirname(full_link_name)));
 
-  int unlink_res = unlink(full_link_name.c_str());
-  CF_EXPECTF(unlink_res == 0 || errno == ENOENT, "{}", StrError(errno));
+  std::random_device rd;
+  std::string tmp_link_name;
+  constexpr int kMaxRetries = 10;
+  for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
+    tmp_link_name = fmt::format("{}.tmp_{}_{}", full_link_name, getpid(), rd());
+    Result<void, int> symlink_res = Symlink(target, tmp_link_name);
+    if (symlink_res.has_value()) {
+      break;
+    }
+    if (*symlink_res.error() == EEXIST && attempt + 1 < kMaxRetries) {
+      continue;
+    }
+    CF_EXPECT(std::move(symlink_res));
+    return CF_ERR("unreachable");
+  }
 
-  CF_EXPECT(Symlink(target, full_link_name));
+  if (rename(tmp_link_name.c_str(), full_link_name.c_str()) != 0) {
+    const int err = errno;
+    unlink(tmp_link_name.c_str());
+    return CF_ERRF("Failed to rename symlink: {}", StrError(err));
+  }
+
   return {};
 }
 
@@ -80,9 +108,9 @@ Result<void> SubstituteWithFlag(
   const std::string bin_dir_parent = CF_EXPECT(GetCuttlefishCommonDir());
 
   if (host_substitutions == std::vector<std::string>{"all"}) {
-    auto callback = [&bin_dir_parent,
-                     &target_dir](const std::string& path) -> Result<void> {
-      if (IsDirectory(path)) {
+    auto make_substitution = [&bin_dir_parent, &target_dir](
+                                 const std::string& path) -> Result<void> {
+      if (DirectoryExists(path)) {
         return {};
       }
       std::string_view local_path(path);
@@ -93,11 +121,23 @@ Result<void> SubstituteWithFlag(
       CF_EXPECT(Substitute(path, to_substitute));
       return {};
     };
-    CF_EXPECT(WalkDirectory(bin_dir_parent, callback));
+    CF_EXPECT(WalkDirectory(bin_dir_parent, make_substitution));
+    auto detect_not_substituted = [](const std::string& path) -> Result<void> {
+      if (!CF_EXPECT(IsSymlink(path)) && !DirectoryExists(path)) {
+        VLOG(0) << "Not substituted: " << path;
+      }
+      return {};
+    };
+    Result<void> detect_res = WalkDirectory(target_dir, detect_not_substituted);
+    if (!detect_res.has_value()) {
+      VLOG(0) << "Failed to produce substitution report: "
+              << detect_res.error();
+    }
   } else {
     for (const std::string& substitution : host_substitutions) {
       std::string source = fmt::format("{}/{}", bin_dir_parent, substitution);
-      std::string to_substitute = fmt::format("{}/{}", target_dir, substitution);
+      std::string to_substitute =
+          fmt::format("{}/{}", target_dir, substitution);
       CF_EXPECT(Substitute(source, to_substitute));
     }
   }
@@ -160,7 +200,6 @@ Result<void> SubstituteWithMarker(const std::string& target_dir,
 Result<void> HostPackageSubstitution(
     const std::string& target_dir,
     const std::vector<std::string>& host_substitutions) {
-
   // TODO: remove when we can safely add this to the marker file.
   std::string cvdalloc_src =
       fmt::format("{}/bin/{}", CF_EXPECT(GetCuttlefishCommonDir()), "cvdalloc");
@@ -172,7 +211,8 @@ Result<void> HostPackageSubstitution(
     return SubstituteWithFlag(target_dir, host_substitutions);
   }
 
-  // [DEVELOPMENT ONLY] Substitute when LOCAL_DEBIAN_SUBSTITUTION_MARKER_FILE is set.
+  // [DEVELOPMENT ONLY] Substitute when LOCAL_DEBIAN_SUBSTITUTION_MARKER_FILE is
+  // set.
   std::optional<std::string> local_marker_file =
       StringFromEnv("LOCAL_DEBIAN_SUBSTITUTION_MARKER_FILE");
   if (local_marker_file.has_value()) {

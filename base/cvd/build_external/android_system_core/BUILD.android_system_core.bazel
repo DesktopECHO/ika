@@ -6,6 +6,18 @@ package(
 )
 
 cc_library(
+    name = "cutils_android_filesystem_config",
+    hdrs = ["libcutils/include/private/android_filesystem_config.h"],
+    strip_include_prefix = "libcutils/include",
+)
+
+cc_library(
+    name = "cutils_list",
+    hdrs = ["libcutils/include/cutils/list.h"],
+    strip_include_prefix = "libcutils/include",
+)
+
+cc_library(
     name = "liblp",
     srcs = [
         "fs_mgr/liblp/builder.cpp",
@@ -37,8 +49,11 @@ cc_library(
     ],
     deps = [
         ":libsparse",
-        "@@//libbase",
-        "@@//libext4_utils",
+        "@//libext4_utils",
+        "@android_system_libbase//:file_logging",
+        "@android_system_libbase//:parseint",
+        "@android_system_libbase//:properties",
+        "@android_system_libbase//:result",
         "@boringssl//:crypto",
     ],
 )
@@ -70,7 +85,8 @@ cc_library(
     ],
     includes = ["libsparse/include"],
     deps = [
-        "@@//libbase",
+        "@android_system_libbase//:mapped_file",
+        "@android_system_libbase//:stringprintf",
         "@zlib",
     ],
 )
@@ -104,7 +120,7 @@ cc_library(
     ]),
     strip_include_prefix = "libcutils/include",
     deps = [
-        "@//android:log_header",
-        "@//libbase",
+        "@android_system_libbase//:file_logging",
+        "@android_system_logging//:liblog",
     ],
 )

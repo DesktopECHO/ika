@@ -23,7 +23,7 @@
 #include "cuttlefish/common/libs/utils/contains.h"
 #include "cuttlefish/common/libs/utils/environment.h"
 #include "cuttlefish/common/libs/utils/files.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
+#include "cuttlefish/process/command.h"
 #include "cuttlefish/host/commands/cvd/cli/types.h"
 
 namespace cuttlefish {

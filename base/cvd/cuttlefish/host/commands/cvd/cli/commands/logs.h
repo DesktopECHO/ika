@@ -1,6 +1,6 @@
 #pragma once
 
-#include <memory>
+#include <optional>
 #include <string>
 
 #include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
@@ -14,17 +14,21 @@ class CvdLogsHandler : public CvdCommandHandler {
   CvdLogsHandler(InstanceManager& instance_manager);
 
   Result<void> Handle(const CommandRequest& request) override;
-  cvd_common::Args CmdList() const override;
+  std::vector<std::string> CmdList() const override;
 
   std::string SummaryHelp() const override;
   bool RequiresDeviceExists() const override;
-  Result<std::string> DetailedHelp(const CommandRequest& request) override;
+  std::vector<HelpParagraph> Description() const override;
+  Result<std::vector<Flag>> Flags(const CommandRequest& request) override;
 
  private:
-  InstanceManager& instance_manager_;
-};
+  Result<void> HandlePrint(const CommandRequest& request);
+  Result<void> HandleList(const CommandRequest& request);
 
-std::unique_ptr<CvdCommandHandler> NewCvdLogsHandler(
-    InstanceManager& instance_manager);
+  InstanceManager& instance_manager_;
+  std::optional<std::string> print_target_flag_;
+  bool pretty_;
+  bool pager_;
+};
 
 }  // namespace cuttlefish

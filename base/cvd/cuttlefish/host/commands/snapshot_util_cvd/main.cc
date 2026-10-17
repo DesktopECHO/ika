@@ -20,13 +20,15 @@
 #include <vector>
 
 #include "absl/cleanup/cleanup.h"
-#include <fmt/core.h>
-#include <google/protobuf/text_format.h>
 #include "absl/log/log.h"
+#include "fmt/core.h"
+#include "google/protobuf/text_format.h"
 
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/tee_logging.h"
+#include "cuttlefish/files/file_exists.h"
+#include "cuttlefish/files/recursively_remove_directory.h"
 #include "cuttlefish/host/commands/snapshot_util_cvd/parse.h"
 #include "cuttlefish/host/commands/snapshot_util_cvd/snapshot_taker.h"
 #include "cuttlefish/host/libs/command_util/runner/run_cvd.pb.h"
@@ -92,17 +94,17 @@ Result<void> SnapshotCvdMain(std::vector<std::string> args) {
         CF_EXPECT(BroadcastLauncherAction(*config, parsed, extended_action));
       }
       absl::Cleanup maybe_resume_on_exit = [&parsed, &config]() {
-            if (!parsed.auto_suspend) {
-              return;
-            }
-            run_cvd::ExtendedLauncherAction extended_action;
-            extended_action.mutable_resume();
-            Result<void> result =
-                BroadcastLauncherAction(*config, parsed, extended_action);
-            if (!result.ok()) {
-              LOG(FATAL) << "RunLauncherAction failed: " << result.error();
-            }
-          };
+        if (!parsed.auto_suspend) {
+          return;
+        }
+        run_cvd::ExtendedLauncherAction extended_action;
+        extended_action.mutable_resume();
+        Result<void> result =
+            BroadcastLauncherAction(*config, parsed, extended_action);
+        if (!result.has_value()) {
+          LOG(FATAL) << "RunLauncherAction failed: " << result.error();
+        }
+      };
 
       // Delete incomplete snapshot if we fail partway.
       absl::Cleanup delete_snapshot_on_fail = [&parsed]() {
@@ -111,7 +113,7 @@ Result<void> SnapshotCvdMain(std::vector<std::string> args) {
         }
         LOG(ERROR) << "Snapshot take failed, so running clean-up.";
         Result<void> result = RecursivelyRemoveDirectory(parsed.snapshot_path);
-        if (!result.ok()) {
+        if (!result.has_value()) {
           LOG(ERROR) << "Failed to delete incomplete snapshot: "
                      << result.error();
         }
@@ -143,7 +145,7 @@ int main(int argc, char** argv) {
   cuttlefish::LogToStderr();
   std::vector<std::string> all_args(argv, argv + argc);
   auto result = cuttlefish::SnapshotCvdMain(std::move(all_args));
-  if (!result.ok()) {
+  if (!result.has_value()) {
     LOG(ERROR) << result.error();
     return EXIT_FAILURE;
   }

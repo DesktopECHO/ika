@@ -21,10 +21,10 @@
 #include "absl/log/log.h"
 #include "gflags/gflags.h"
 
-#include "cuttlefish/common/libs/utils/subprocess.h"
-#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
 #include "cuttlefish/common/libs/utils/tee_logging.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/managed_stdio.h"
 
 std::string GetControlSocketPath(const cuttlefish::CuttlefishConfig& config) {
   return config.ForDefaultInstance().CrosvmSocketPath();
@@ -128,7 +128,7 @@ int main(int argc, char** argv) {
 
   cuttlefish::Result<std::string> res =
       cuttlefish::RunAndCaptureStdout(std::move(command));
-  if (res.ok()) {
+  if (res.has_value()) {
     return 0;
   } else {
     LOG(ERROR) << "goldfish battery failed: " << res.error();

@@ -20,6 +20,7 @@
 #include <signal.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 #include <atomic>
 #include <memory>
@@ -32,6 +33,7 @@
 
 #include "cuttlefish/common/libs/utils/signals.h"
 #include "cuttlefish/posix/strerror.h"
+#include "cuttlefish/posix/temp_failure_retry.h"  // IWYU pragma: keep
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {

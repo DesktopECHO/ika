@@ -24,13 +24,14 @@
 #include <utility>
 #include <vector>
 
-#include <fruit/component.h>
-#include <fruit/fruit_forward_decls.h>
-#include <fruit/injector.h>
-#include <fruit/macro.h>
 #include "absl/log/check.h"
+#include "fruit/component.h"
+#include "fruit/fruit_forward_decls.h"
+#include "fruit/injector.h"
+#include "fruit/macro.h"
 
-#include "cuttlefish/common/libs/utils/subprocess.h"
+#include "cuttlefish/common/libs/fs/fd.h"
+#include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/host/libs/config/config_instance_derived.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/config/known_paths.h"
@@ -39,6 +40,7 @@
 #include "cuttlefish/host/libs/feature/inject.h"
 #include "cuttlefish/host/libs/feature/kernel_log_pipe_provider.h"
 #include "cuttlefish/posix/strerror.h"
+#include "cuttlefish/process/command.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -78,9 +80,10 @@ class KernelLogMonitor : public CommandSource,
 
   // KernelLogPipeProvider
   SharedFD KernelLogPipe() override {
-    CHECK(!event_pipe_read_ends_.empty()) << "No more kernel pipes left. Make sure you inherited "
-                                             "KernelLogPipeProvider and provided multibinding "
-                                             "from KernelLogPipeConsumer to your type.";
+    CHECK(!event_pipe_read_ends_.empty())
+        << "No more kernel pipes left. Make sure you inherited "
+           "KernelLogPipeProvider and provided multibinding "
+           "from KernelLogPipeConsumer to your type.";
     SharedFD ret = event_pipe_read_ends_.back();
     event_pipe_read_ends_.pop_back();
     return ret;
@@ -98,7 +101,7 @@ class KernelLogMonitor : public CommandSource,
     // due to the usage counters in the kernel reaching zero. If this is not
     // done and the kernel_log_monitor crashes for some reason the VMM may get
     // SIGPIPE.
-    fifo_ = CF_EXPECT(SharedFD::Fifo(log_name, 0600));
+    fifo_ = CF_EXPECT(Fd::Fifo(log_name, 0600));
 
     for (unsigned int i = 0; i < number_of_event_pipes_; ++i) {
       SharedFD event_pipe_write_end, event_pipe_read_end;

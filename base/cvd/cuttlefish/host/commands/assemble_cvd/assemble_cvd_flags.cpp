@@ -142,6 +142,8 @@ DEFINE_vec(netsim_uwb, fmt::format("{}", CF_DEFAULTS_NETSIM_UWB),
            "[Experimental] Connect Uwb radio to netsim.");
 DEFINE_vec(netsim_nfc, fmt::format("{}", CF_DEFAULTS_NETSIM_NFC),
            "[Experimental] Connect Nfc radio to netsim.");
+DEFINE_vec(netsim_modem, fmt::format("{}", CF_DEFAULTS_NETSIM_MODEM),
+           "[Experimental] Connect Modem radio to netsim.");
 DEFINE_string(netsim_args, CF_DEFAULTS_NETSIM_ARGS,
               "Space-separated list of netsim args.");
 
@@ -212,8 +214,6 @@ DEFINE_vec(extra_bootconfig_args_base64, CF_DEFAULTS_EXTRA_BOOTCONFIG_ARGS,
            "This is base64 encoded version of extra_bootconfig_args"
            "Used for multi device clusters.");
 
-DEFINE_string(qemu_binary_dir, CF_DEFAULTS_QEMU_BINARY_DIR,
-              "Path to the directory containing the qemu binary to use");
 DEFINE_string(crosvm_binary, CF_DEFAULTS_CROSVM_BINARY,
               "The Crosvm binary to use");
 DEFINE_vec(gem5_binary_dir, CF_DEFAULTS_GEM5_BINARY_DIR,
@@ -235,10 +235,7 @@ DEFINE_int32(num_instances, CF_DEFAULTS_NUM_INSTANCES,
 DEFINE_string(instance_nums, CF_DEFAULTS_INSTANCE_NUMS,
               "A comma-separated list of instance numbers "
               "to use. Mutually exclusive with base_instance_num.");
-DEFINE_string(report_anonymous_usage_stats,
-              CF_DEFAULTS_REPORT_ANONYMOUS_USAGE_STATS,
-              "Report anonymous usage "
-              "statistics for metrics collection and analysis.");
+DEFINE_string(report_anonymous_usage_stats, "", "Deprecated, no usage.");
 DEFINE_vec(ril_dns, CF_DEFAULTS_RIL_DNS, "DNS address of mobile network (RIL)");
 DEFINE_vec(kgdb, fmt::format("{}", CF_DEFAULTS_KGDB),
            "Configure the virtual device for debugging the kernel "
@@ -337,6 +334,11 @@ DEFINE_vec(protected_vm, fmt::format("{}", CF_DEFAULTS_PROTECTED_VM),
 
 DEFINE_vec(mte, fmt::format("{}", CF_DEFAULTS_MTE), "Enable MTE");
 
+DEFINE_vec(enable_pkvm, fmt::format("{}", CF_DEFAULTS_ENABLE_PKVM),
+           "Provision the guest to run pKVM so it can host its own protected "
+           "VMs; requires a nested-virt capable host, --vm_manager=crosvm "
+           "and an arm64 guest.");
+
 DEFINE_vec(enable_audio, fmt::format("{}", CF_DEFAULTS_ENABLE_AUDIO),
            "Whether to play or capture audio");
 
@@ -386,6 +388,24 @@ DEFINE_vec(
 
 DEFINE_vec(use_pmem, "true",
            "Make this flag false to disable pmem with crosvm");
+
+DEFINE_vec(crosvm_acpi_table, "",
+           "Passed directly to crosvm as --acpi-table. "
+           "Path to user provided ACPI table");
+
+DEFINE_vec(crosvm_device_tree_overlay, "",
+           "Passed directly to crosvm as --device-tree-overlay. "
+           "Path to user provided device tree overlay");
+
+DEFINE_vec(crosvm_file_backed_mapping, "",
+           "Passed directly to crosvm as --file-backed-mapping. "
+           "Map the given file into guest memory at the specified address. "
+           "Parameters (addr, size, path are required): "
+           "addr=NUM,size=NUM,path=PATH,offset=NUM,rw,sync,align,ram");
+
+DEFINE_vec(crosvm_file_backed_mapping_base64, "",
+           "This is base64 encoded version of crosvm_file_backed_mapping. "
+           "Used for multi device clusters.");
 
 DEFINE_vec(enable_wifi, fmt::format("{}", CF_DEFAULTS_ENABLE_WIFI),
            "Enables the guest WIFI. Mainly for Minidroid");

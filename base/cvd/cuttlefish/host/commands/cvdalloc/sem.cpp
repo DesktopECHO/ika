@@ -15,7 +15,14 @@
  */
 #include "cuttlefish/host/commands/cvdalloc/sem.h"
 
+#include <stdint.h>
+
+#include <chrono>
+
+#include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/host/libs/command_util/util.h"
+#include "cuttlefish/result/expect.h"
+#include "cuttlefish/result/result_type.h"
 
 namespace cuttlefish::cvdalloc {
 
@@ -29,7 +36,7 @@ Result<void> Wait(const SharedFD socket, std::chrono::seconds timeout) {
   CF_EXPECT(socket->IsOpen(), "IsOpen: " << socket->StrError());
   CF_EXPECT(WaitForRead(socket, timeout.count()), "WaitForRead");
   char i = -1;
-  int r = socket->Read(&i, sizeof(i));
+  uint64_t r = CF_EXPECT(socket->Read(&i, sizeof(i)));
   CF_EXPECT_GT(r, 0, socket->StrError());
   CF_EXPECT(i == 0, "Unexpected read");
   return {};

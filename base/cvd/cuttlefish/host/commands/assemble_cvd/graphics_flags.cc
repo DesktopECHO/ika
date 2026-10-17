@@ -16,41 +16,64 @@
 
 #include "cuttlefish/host/commands/assemble_cvd/graphics_flags.h"
 
+#include <stddef.h>
+
+#include <functional>
 #include <ostream>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
-#include <android-base/file.h>
-#include "absl/strings/str_join.h"
-#include <fmt/format.h>
-#include <google/protobuf/text_format.h>
 #include "absl/log/log.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/numbers.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
+#include "android-base/file.h"
+#include "fmt/base.h"
+#include "fmt/ostream.h"
+#include "google/protobuf/io/tokenizer.h"
+#include "google/protobuf/text_format.h"
 
 #include "cuttlefish/common/libs/utils/contains.h"
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/host_info.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
-#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
+#include "cuttlefish/host/commands/assemble_cvd/guest_config.h"
 #include "cuttlefish/host/graphics_detector/graphics_detector.pb.h"
 #include "cuttlefish/host/libs/config/config_constants.h"
-#include "cuttlefish/host/libs/config/cuttlefish_config.h"
+#include "cuttlefish/host/libs/config/config_utils.h"
 #include "cuttlefish/host/libs/config/gpu_mode.h"
 #include "cuttlefish/host/libs/config/guest_hwui_renderer.h"
 #include "cuttlefish/host/libs/config/guest_renderer_preload.h"
 #include "cuttlefish/host/libs/config/vmm_mode.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/managed_stdio.h"
 #include "cuttlefish/result/result.h"
-
-#ifdef __APPLE__
-#define CF_UNUSED_ON_MACOS [[maybe_unused]]
-#else
-#define CF_UNUSED_ON_MACOS
-#endif
 
 namespace cuttlefish {
 namespace {
+
+#ifndef __APPLE__
+
+struct AggregatingErrorCollector : public google::protobuf::io::ErrorCollector {
+  void RecordError(int /* line */, int /* column */,
+                   const std::string_view message) override {
+    if (!error_message.empty()) {
+      absl::StrAppend(&error_message, "; ");
+    }
+    absl::StrAppend(&error_message, message);
+  }
+
+  void RecordWarning(int /* line */, int /* column */,
+                     const std::string_view /* message */) override {
+    // Ignore warnings
+  }
+
+  std::string error_message;
+};
 
 struct CommonState {
   const VmmMode vmm_mode;
@@ -68,8 +91,7 @@ bool IsLikelySoftwareRenderer(const std::string& renderer) {
 
 // The host EGL driver's GLES version, as (major << 16) | minor, read from a
 // version string such as "OpenGL ES 3.0 Mesa 26.2.4"; 0 when unknown.
-CF_UNUSED_ON_MACOS
-int HostGlesVersion(
+[[maybe_unused]] int HostGlesVersion(
     const gfxstream::proto::GraphicsAvailability& availability) {
   if (!availability.has_egl()) {
     return 0;
@@ -99,6 +121,8 @@ int HostGlesVersion(
   return (major << 16) | minor;
 }
 
+// Whether any host Vulkan physical device is backed by real hardware. Not only
+// the first device is checked: a software ICD may be enumerated first.
 bool HasHardwareBackedVulkan(
     const gfxstream::proto::GraphicsAvailability& availability) {
   if (!availability.has_vulkan()) {
@@ -199,12 +223,37 @@ GetGpuModeRequirementsMap() {
   const RequirementWithReason kGuestSupportsGfxstream{
       .func =
           [](const CommonState& common) {
-            return common.guest_config.gfxstream_supported;
+            return common.guest_config.gfxstream_supported ||
+                   common.guest_config.has_vulkan_gfxstream_apex;
           },
       .success_explanation = "The guest supports Gfxstream.",
       .failure_explanation =
           "The guest does not support Gfxstream. This is configured in the "
           "`android-info.txt` file associated with the guest target build.",
+  };
+  const RequirementWithReason kGuestSupportsVenus{
+      .func =
+          [](const CommonState& common) {
+            return common.guest_config.venus_supported ||
+                   common.guest_config.has_vulkan_venus_apex;
+          },
+      .success_explanation = "The guest supports Venus.",
+      .failure_explanation =
+          "The guest does not claim support for Venus. This is "
+          "configured in the `android-info.txt` file associated with the guest "
+          "target build.",
+  };
+  const RequirementWithReason kGuestSupportsLavapipe{
+      .func =
+          [](const CommonState& common) {
+            return common.guest_config.guest_lavapipe_supported ||
+                   common.guest_config.has_vulkan_lavapipe_apex;
+          },
+      .success_explanation = "The guest supports Lavapipe.",
+      .failure_explanation =
+          "The guest does not claim support for Lavapipe. This is "
+          "configured in the `android-info.txt` file associated with the guest "
+          "target build.",
   };
   const RequirementWithReason kHostGlesAvailable{
       .func =
@@ -246,18 +295,29 @@ GetGpuModeRequirementsMap() {
           "Consider enabling --gpu_mode=gfxstream_guest_angle_host_swiftshader "
           "for host software rendering which has a vetted software renderer.",
   };
-  // TODO: separate host vulkan loader check out.
-  const RequirementWithReason kHostVulkanAvailable{
+  const RequirementWithReason kHostVulkanLoaderAvailable{
+      .func =
+          [](const CommonState& common) {
+            const auto& availability = common.graphics_availability;
+            return availability.vulkan_loader_available();
+          },
+      .success_explanation =
+          "The host has the Vulkan loader installed and "
+          "available.",
+      .failure_explanation =
+          "The host does not have the Vulkan loader installed. Please ensure "
+          "the Vulkan loader is installed and available.",
+  };
+  const RequirementWithReason kHostVulkanDriverAvailable{
       .func =
           [](const CommonState& common) {
             const auto& availability = common.graphics_availability;
             return availability.has_vulkan();
           },
-      .success_explanation = "The host has Vulkan support.",
+      .success_explanation = "The host has a Vulkan driver available.",
       .failure_explanation =
-          "The host does not have Vulkan support. Please ensure the Vulkan "
-          "userspace drivers and the Vulkan loader are installed and "
-          "available.",
+          "The host does not have a Vulkan driver available. Please ensure "
+          "a Vulkan driver is installed.",
   };
   const RequirementWithReason kHostVulkanIsNonSoftwareRenderer{
       .func =
@@ -309,7 +369,8 @@ GetGpuModeRequirementsMap() {
                   kHostGlesAvailable,
                   kHostGlesIsNonSoftwareRenderer,
                   kHostIsNonArm,
-                  kHostVulkanAvailable,
+                  kHostVulkanLoaderAvailable,
+                  kHostVulkanDriverAvailable,
                   kHostVulkanIsNonSoftwareRenderer,
               },
           },
@@ -318,7 +379,8 @@ GetGpuModeRequirementsMap() {
               {
                   kGuestSupportsGfxstream,
                   kHostIsNonArm,
-                  kHostVulkanAvailable,
+                  kHostVulkanLoaderAvailable,
+                  kHostVulkanDriverAvailable,
                   kHostVulkanIsNonSoftwareRenderer,
                   kHostVulkanMemoryCanBeMappedIntoKvm,
                   kNotUsingHostQemu,
@@ -329,7 +391,7 @@ GetGpuModeRequirementsMap() {
               {
                   kGuestSupportsGfxstream,
                   kHostIsNonArm,
-                  kHostVulkanAvailable,
+                  kHostVulkanLoaderAvailable,
                   kNotUsingHostQemu,
               },
           },
@@ -338,8 +400,24 @@ GetGpuModeRequirementsMap() {
               {
                   kGuestSupportsGfxstream,
                   kHostIsNonArm,
-                  kHostVulkanAvailable,
+                  kHostVulkanLoaderAvailable,
                   kNotUsingHostQemu,
+              },
+          },
+          {
+              GpuMode::Venus,
+              {
+                  kGuestSupportsVenus,
+                  kHostVulkanLoaderAvailable,
+                  kHostVulkanDriverAvailable,
+                  kHostVulkanIsNonSoftwareRenderer,
+                  kNotUsingHostQemu,
+              },
+          },
+          {
+              GpuMode::GuestLavapipe,
+              {
+                  kGuestSupportsLavapipe,
               },
           },
           {
@@ -352,6 +430,254 @@ GetGpuModeRequirementsMap() {
           },
       };
   return *kGpuModeRequirements;
+};
+
+// TODO(b/503397840): remove after default updated.
+bool EnableHostRenderingByDefault() { return false; }
+
+std::vector<GpuMode> GetGpuModeCandidates(const GuestConfig& guest_config) {
+  if (!guest_config.gpu_mode_candidates.empty()) {
+    VLOG(0) << "GPU mode candidates provided by guest.";
+    return guest_config.gpu_mode_candidates;
+  }
+
+  VLOG(0) << "GPU mode candidates not provided by guest config. "
+             "Assuming the historically accepted modes.";
+
+  std::vector<GpuMode> gpu_mode_candidates;
+  if (guest_config.prefer_drm_virgl_when_supported) {
+    gpu_mode_candidates.push_back(GpuMode::DrmVirgl);
+  }
+
+  if (EnableHostRenderingByDefault()) {
+    gpu_mode_candidates.push_back(GpuMode::GfxstreamGuestAngle);
+    gpu_mode_candidates.push_back(GpuMode::Gfxstream);
+    gpu_mode_candidates.push_back(GpuMode::GfxstreamGuestAngleHostSwiftshader);
+    gpu_mode_candidates.push_back(GpuMode::GfxstreamGuestAngleHostLavapipe);
+    gpu_mode_candidates.push_back(GpuMode::GuestSwiftshader);
+    if (guest_config.venus_supported) {
+      gpu_mode_candidates.push_back(GpuMode::Venus);
+    }
+    if (guest_config.guest_lavapipe_supported) {
+      gpu_mode_candidates.push_back(GpuMode::GuestLavapipe);
+    }
+  } else {
+    gpu_mode_candidates.push_back(GpuMode::Gfxstream);
+    gpu_mode_candidates.push_back(GpuMode::GuestSwiftshader);
+    gpu_mode_candidates.push_back(GpuMode::GfxstreamGuestAngle);
+    gpu_mode_candidates.push_back(GpuMode::GfxstreamGuestAngleHostSwiftshader);
+    gpu_mode_candidates.push_back(GpuMode::GfxstreamGuestAngleHostLavapipe);
+    if (guest_config.venus_supported) {
+      gpu_mode_candidates.push_back(GpuMode::Venus);
+    }
+    if (guest_config.guest_lavapipe_supported) {
+      gpu_mode_candidates.push_back(GpuMode::GuestLavapipe);
+    }
+  }
+
+  gpu_mode_candidates.push_back(GpuMode::None);
+
+  return gpu_mode_candidates;
+}
+
+Result<bool> GpuModeRequirementsMet(const CommonState& common,
+                                    const GpuMode gpu_mode) {
+  const auto& requirements_map = GetGpuModeRequirementsMap();
+  const auto requirements_it = requirements_map.find(gpu_mode);
+  CF_EXPECTF(requirements_it != requirements_map.end(),
+             "Failed to find requirements for mode {}", gpu_mode);
+  const auto& requirements = requirements_it->second;
+
+  VLOG(0) << "Checking requirements for --gpu_mode=" << GpuModeString(gpu_mode);
+  bool all_requirements_met = true;
+  for (size_t i = 0; i < requirements.size(); i++) {
+    const RequirementWithReason& requirement = requirements[i];
+    const bool meets_requirement = requirement.func(common);
+    VLOG(0) << "  " << (i + 1) << ". "
+            << (meets_requirement ? "PASSED: " : "FAILED: ")
+            << (meets_requirement ? requirement.success_explanation
+                                  : requirement.failure_explanation);
+    all_requirements_met &= meets_requirement;
+  }
+  return all_requirements_met;
+}
+
+Result<std::vector<GpuMode>> GetSupportedGpuModeCandidates(
+    const CommonState& common, const std::vector<GpuMode>& candidates) {
+  std::vector<GpuMode> supported_candidates;
+  supported_candidates.reserve(candidates.size());
+  for (const GpuMode candidate : candidates) {
+    if (CF_EXPECT(GpuModeRequirementsMet(common, candidate))) {
+      VLOG(0) << "  All requirements met.";
+      supported_candidates.push_back(candidate);
+    } else {
+      VLOG(0)
+          << "  All requirements not met. Removing mode from candidate modes.";
+    }
+    VLOG(0) << "";
+  }
+  return supported_candidates;
+}
+
+const std::string kGfxstreamTransportAsg = "virtio-gpu-asg";
+const std::string kGfxstreamTransportPipe = "virtio-gpu-pipe";
+
+Result<std::unordered_map<std::string, bool>> ParseGfxstreamRendererFlag(
+    const std::string& gpu_renderer_features_arg) {
+  std::unordered_map<std::string, bool> features;
+
+  for (const std::string_view feature :
+       absl::StrSplit(gpu_renderer_features_arg, ';')) {
+    if (feature.empty()) {
+      continue;
+    }
+
+    const std::vector<std::string_view> feature_parts =
+        absl::StrSplit(feature, ':');
+    CF_EXPECT(feature_parts.size() == 2,
+              "Failed to parse renderer features from --gpu_renderer_features="
+                  << gpu_renderer_features_arg);
+
+    const std::string_view feature_name = feature_parts[0];
+    const std::string_view feature_enabled = feature_parts[1];
+    CF_EXPECT(feature_enabled == "enabled" || feature_enabled == "disabled",
+              "Failed to parse renderer features from --gpu_renderer_features="
+                  << gpu_renderer_features_arg);
+
+    features.emplace(feature_name, feature_enabled == "enabled");
+  }
+
+  return features;
+}
+
+std::string GetGfxstreamRendererFeaturesString(
+    const std::unordered_map<std::string, bool>& features) {
+  std::vector<std::string> parts;
+  for (const auto& [feature_name, feature_enabled] : features) {
+    parts.push_back(feature_name + ":" +
+                    (feature_enabled ? "enabled" : "disabled"));
+  }
+  return absl::StrJoin(parts, ",");
+}
+
+bool HasMultipleGraphicsQueues(
+    const gfxstream::proto::GraphicsAvailability& availability) {
+  if (!availability.has_vulkan()) {
+    return false;
+  }
+  const gfxstream::proto::VulkanAvailability& vulkan_availability =
+      availability.vulkan();
+  if (vulkan_availability.physical_devices().empty()) {
+    return false;
+  }
+  const auto& physical_device = vulkan_availability.physical_devices(0);
+  for (const auto& queue_family : physical_device.queue_families()) {
+    if (!queue_family.has_supports_graphics()) continue;
+    if (!queue_family.supports_graphics()) continue;
+
+    // HWUI seems to only check the first queue family supporting graphics:
+    return queue_family.has_queue_count() && queue_family.queue_count() >= 2;
+  }
+  return false;
+}
+
+static std::unordered_set<std::string> kSupportedGpuContexts{
+    "gfxstream-vulkan", "gfxstream-composer", "cross-domain", "magma"};
+
+Result<bool> SelectGpuVhostUserMode(const GpuMode gpu_mode,
+                                    const std::string& gpu_vhost_user_mode_arg,
+                                    VmmMode vmm) {
+  CF_EXPECT(gpu_vhost_user_mode_arg == kGpuVhostUserModeAuto ||
+            gpu_vhost_user_mode_arg == kGpuVhostUserModeOn ||
+            gpu_vhost_user_mode_arg == kGpuVhostUserModeOff);
+  if (gpu_vhost_user_mode_arg == kGpuVhostUserModeAuto) {
+    if (IsGuestRenderingMode(gpu_mode) || gpu_mode == GpuMode::Venus) {
+      VLOG(0) << "GPU vhost user auto mode: not needed for --gpu_mode="
+              << GpuModeString(gpu_mode) << ". Not enabling vhost user gpu.";
+      return false;
+    }
+
+    if (!VmManagerIsCrosvm(vmm)) {
+      VLOG(0) << "GPU vhost user auto mode: not yet supported with " << vmm
+              << ". Not enabling vhost user gpu.";
+      return false;
+    }
+
+    // Android built ARM host tools seem to be incompatible with host GPU
+    // libraries. Enable vhost user gpu which will run the virtio GPU device
+    // in a separate process with a VMM prebuilt. See b/200592498.
+    const auto host_arch = HostArch();
+    if (host_arch == Arch::Arm64) {
+      VLOG(0) << "GPU vhost user auto mode: detected arm64 host. Enabling "
+                 "vhost user gpu.";
+      return true;
+    }
+
+    VLOG(0) << "GPU vhost user auto mode: not needed. Not enabling vhost "
+               "user gpu.";
+    return false;
+  }
+
+  return gpu_vhost_user_mode_arg == kGpuVhostUserModeOn;
+}
+
+struct VhostUserGpuHostRendererFeatures {
+  // If true, host Virtio GPU blob resources will be allocated with
+  // external memory and exported file descriptors will be shared
+  // with the VMM for mapping resources into the guest address space.
+  bool external_blob = false;
+
+  // If true, host Virtio GPU blob resources will be allocated with
+  // shmem and exported file descriptors will be shared with the VMM
+  // for mapping resources into the guest address space.
+  //
+  // This is an extension of the above external_blob that allows the
+  // VMM to map resources without graphics API support but requires
+  // additional features (VK_EXT_external_memory_host) from the GPU
+  // driver and is potentially less performant.
+  bool system_blob = false;
+};
+
+Result<VhostUserGpuHostRendererFeatures>
+GetNeededVhostUserGpuHostRendererFeatures(
+    GpuMode mode,
+    const ::gfxstream::proto::GraphicsAvailability& availability) {
+  VhostUserGpuHostRendererFeatures features = {};
+
+  // No features needed for guest rendering.
+  if (mode == GpuMode::GuestSwiftshader) {
+    return features;
+  }
+
+  // For any passthrough graphics mode, external blob is needed for sharing
+  // buffers between the vhost-user-gpu VMM process and the main VMM process.
+  features.external_blob = true;
+
+  // Prebuilt SwiftShader includes VK_EXT_external_memory_host.
+  if (mode == GpuMode::GfxstreamGuestAngleHostSwiftshader) {
+    features.system_blob = true;
+  } else {
+    const bool has_external_memory_host =
+        availability.has_vulkan() &&
+        !availability.vulkan().physical_devices().empty() &&
+        Contains(availability.vulkan().physical_devices(0).extensions(),
+                 "VK_EXT_external_memory_host");
+
+    if (!has_external_memory_host && mode == GpuMode::GfxstreamGuestAngle) {
+      LOG(WARNING) << "VK_EXT_external_memory_host not supported by the host "
+                      "GPU driver, using external-blob for --gpu_mode="
+                   << GpuModeString(mode);
+    }
+
+    features.system_blob = has_external_memory_host;
+  }
+
+  return features;
+}
+
+struct AngleFeatureOverrides {
+  std::string angle_feature_overrides_enabled;
+  std::string angle_feature_overrides_disabled;
 };
 
 struct AngleFeatures {
@@ -411,12 +737,6 @@ Result<AngleFeatures> GetNeededAngleFeaturesBasedOnQuirks(
   return features;
 }
 
-struct AngleFeatureOverrides {
-  std::string angle_feature_overrides_enabled;
-  std::string angle_feature_overrides_disabled;
-};
-
-CF_UNUSED_ON_MACOS
 Result<AngleFeatureOverrides> GetNeededAngleFeatures(
     const GpuMode mode,
     const ::gfxstream::proto::GraphicsAvailability& availability) {
@@ -447,164 +767,222 @@ Result<AngleFeatureOverrides> GetNeededAngleFeatures(
   };
 }
 
-struct VhostUserGpuHostRendererFeatures {
-  // If true, host Virtio GPU blob resources will be allocated with
-  // external memory and exported file descriptors will be shared
-  // with the VMM for mapping resources into the guest address space.
-  bool external_blob = false;
-
-  // If true, host Virtio GPU blob resources will be allocated with
-  // shmem and exported file descriptors will be shared with the VMM
-  // for mapping resources into the guest address space.
-  //
-  // This is an extension of the above external_blob that allows the
-  // VMM to map resources without graphics API support but requires
-  // additional features (VK_EXT_external_memory_host) from the GPU
-  // driver and is potentially less performant.
-  bool system_blob = false;
-};
-
-CF_UNUSED_ON_MACOS
-Result<VhostUserGpuHostRendererFeatures>
-GetNeededVhostUserGpuHostRendererFeatures(
-    GpuMode mode,
-    const ::gfxstream::proto::GraphicsAvailability& availability) {
-  VhostUserGpuHostRendererFeatures features = {};
-
-  // No features needed for guest rendering.
-  if (mode == GpuMode::GuestSwiftshader) {
-    return features;
+Result<GuestHwuiRenderer> SelectGuestHwuiRenderer(
+    const GpuMode gpu_mode, const GuestConfig& guest_config,
+    const std::string& guest_hwui_renderer_arg) {
+  if (!guest_hwui_renderer_arg.empty()) {
+    GuestHwuiRenderer hwui_renderer = CF_EXPECT(
+        ParseGuestHwuiRenderer(guest_hwui_renderer_arg),
+        "Failed to parse HWUI renderer flag: " << guest_hwui_renderer_arg);
+    VLOG(0) << "Using explicitly provided HWUI renderer: "
+            << ToString(hwui_renderer);
+    return hwui_renderer;
   }
 
-  // For any passthrough graphics mode, external blob is needed for sharing
-  // buffers between the vhost-user-gpu VMM process and the main VMM process.
-  features.external_blob = true;
-
-  // Prebuilt SwiftShader includes VK_EXT_external_memory_host.
-  if (mode == GpuMode::GfxstreamGuestAngleHostSwiftshader) {
-    features.system_blob = true;
-  } else {
-    const bool has_external_memory_host =
-        availability.has_vulkan() &&
-        !availability.vulkan().physical_devices().empty() &&
-        Contains(availability.vulkan().physical_devices(0).extensions(),
-                 "VK_EXT_external_memory_host");
-
-    if (!has_external_memory_host && mode == GpuMode::GfxstreamGuestAngle) {
-      LOG(WARNING) << "VK_EXT_external_memory_host not supported by the host "
-                       "GPU driver, using external-blob for --gpu_mode="
-                    << GpuModeString(mode);
-    }
-
-    features.system_blob = has_external_memory_host;
+  // Only makes sense for Android guests:
+  if (guest_config.android_version_number.empty()) {
+    return GuestHwuiRenderer::kUnknown;
   }
 
-  return features;
+  // Upstream selects SkiaVk for the GfxstreamGuestAngle* modes here. Ika
+  // leaves the choice to the guest (SkiaGL) until SkiaVk has been verified on
+  // the Apple Silicon gfxstream Vulkan path; use --guest_hwui_renderer=skiavk
+  // to opt in.
+
+  if (gpu_mode == GpuMode::GuestLavapipe || gpu_mode == GpuMode::Venus) {
+    VLOG(0) << "Selecting SkiaVk as the HWUI renderer for "
+            << GpuModeString(gpu_mode) << " GPU mode.";
+    return GuestHwuiRenderer::kSkiaVk;
+  }
+
+  return GuestHwuiRenderer::kUnknown;
 }
 
-#ifndef __APPLE__
+Result<GuestRendererPreload> SelectGuestRendererPreload(
+    const GpuMode gpu_mode, const GuestHwuiRenderer guest_hwui_renderer,
+    const std::string& guest_renderer_preload_arg) {
+  GuestRendererPreload guest_renderer_preload =
+      GuestRendererPreload::kGuestDefault;
 
-// TODO(b/503397840): remove after default updated.
-bool EnableHostRenderingByDefault() { return false; }
+  if (!guest_renderer_preload_arg.empty()) {
+    guest_renderer_preload =
+        CF_EXPECT(ParseGuestRendererPreload(guest_renderer_preload_arg));
+  }
 
-std::vector<GpuMode> GetGpuModeCandidates(
+  if (guest_renderer_preload == GuestRendererPreload::kAuto) {
+    if (guest_hwui_renderer == GuestHwuiRenderer::kSkiaVk &&
+        (gpu_mode == GpuMode::GfxstreamGuestAngle ||
+         gpu_mode == GpuMode::GfxstreamGuestAngleHostSwiftshader)) {
+      VLOG(0) << "Disabling guest renderer preload for Gfxstream based mode "
+                 "when running with SkiaVk.";
+      guest_renderer_preload = GuestRendererPreload::kDisabled;
+    }
+  }
+
+  return guest_renderer_preload;
+}
+
+std::string SelectGfxstreamTransport(const GuestConfig& guest_config) {
+  std::string gfxstream_transport = kGfxstreamTransportAsg;
+  // Some older R branches are missing some Gfxstream backports
+  // which introduced a backward incompatible change (b/267483000).
+  if (guest_config.android_version_number == "11.0.0") {
+    gfxstream_transport = kGfxstreamTransportPipe;
+  }
+  return gfxstream_transport;
+}
+
+Result<std::string> GetGfxstreamFeatures(
+    const GpuMode gpu_mode, const GuestHwuiRenderer hwui_renderer,
+    const std::string& gpu_renderer_features_arg,
     const GuestConfig& guest_config,
-    const gfxstream::proto::GraphicsAvailability&) {
-  if (!guest_config.gpu_mode_candidates.empty()) {
-    VLOG(0) << "GPU mode candidates provided by guest.";
-    return guest_config.gpu_mode_candidates;
+    const gfxstream::proto::GraphicsAvailability& availability) {
+  std::unordered_map<std::string, bool> features;
+
+  // Apply features from host/mode requirements.
+  if (gpu_mode == GpuMode::GfxstreamGuestAngleHostSwiftshader) {
+    features["VulkanUseDedicatedAhbMemoryType"] = true;
   }
 
-  VLOG(0) << "GPU mode candidates not provided by guest config. "
-             "Assuming the historically accepted modes.";
-
-  std::vector<GpuMode> gpu_mode_candidates;
-  if (guest_config.prefer_drm_virgl_when_supported) {
-    gpu_mode_candidates.push_back(GpuMode::DrmVirgl);
+  // Apply features from guest/mode requirements.
+  if (guest_config.gfxstream_gl_program_binary_link_status_supported) {
+    features["GlProgramBinaryLinkStatus"] = true;
   }
 
-  if (EnableHostRenderingByDefault()) {
-    gpu_mode_candidates.push_back(GpuMode::GfxstreamGuestAngle);
-    gpu_mode_candidates.push_back(GpuMode::Gfxstream);
-    gpu_mode_candidates.push_back(GpuMode::GfxstreamGuestAngleHostSwiftshader);
-    gpu_mode_candidates.push_back(GpuMode::GfxstreamGuestAngleHostLavapipe);
-    gpu_mode_candidates.push_back(GpuMode::GuestSwiftshader);
-  } else {
-    gpu_mode_candidates.push_back(GpuMode::Gfxstream);
-    gpu_mode_candidates.push_back(GpuMode::GuestSwiftshader);
-    gpu_mode_candidates.push_back(GpuMode::GfxstreamGuestAngle);
-    gpu_mode_candidates.push_back(GpuMode::GfxstreamGuestAngleHostSwiftshader);
-    gpu_mode_candidates.push_back(GpuMode::GfxstreamGuestAngleHostLavapipe);
-  }
+  if (hwui_renderer == GuestHwuiRenderer::kSkiaVk) {
+    // SkiaVK requires a second graphics queue for AHB transfers.
+    const bool needs_multi_queue_emulation =
+        (gpu_mode == GpuMode::GfxstreamGuestAngleHostLavapipe ||
+         gpu_mode == GpuMode::GfxstreamGuestAngleHostSwiftshader)
+            ?
+            // The SwiftShader driver packaged with the Cuttlefish host tools
+            // does not appear in `availability` and does not have multiple
+            // queues.
+            true
+            : !HasMultipleGraphicsQueues(availability);
 
-  gpu_mode_candidates.push_back(GpuMode::None);
-
-  return gpu_mode_candidates;
-}
-
-Result<bool> GpuModeRequirementsMet(const CommonState& common,
-                                    const GpuMode gpu_mode) {
-  const auto& requirements_map = GetGpuModeRequirementsMap();
-  const auto requirements_it = requirements_map.find(gpu_mode);
-  CF_EXPECTF(requirements_it != requirements_map.end(),
-             "Failed to find requirements for mode {}", gpu_mode);
-  const auto& requirements = requirements_it->second;
-
-  VLOG(0) << "Checking requirements for --gpu_mode=" << GpuModeString(gpu_mode);
-  bool all_requirements_met = true;
-  for (size_t i = 0; i < requirements.size(); i++) {
-    const RequirementWithReason& requirement = requirements[i];
-    const bool meets_requirement = requirement.func(common);
-    VLOG(0) << "  " << (i + 1) << ". "
-            << (meets_requirement ? "PASSED: " : "FAILED: ")
-            << (meets_requirement ? requirement.success_explanation
-                                  : requirement.failure_explanation);
-    all_requirements_met &= meets_requirement;
-  }
-  return all_requirements_met;
-}
-
-Result<std::vector<GpuMode>> GetSupportedGpuModeCandidates(
-    const CommonState& common, const std::vector<GpuMode>& candidates) {
-  std::vector<GpuMode> supported_candidates;
-  supported_candidates.reserve(candidates.size());
-  for (const GpuMode candidate : candidates) {
-    if (CF_EXPECT(GpuModeRequirementsMet(common, candidate))) {
-      VLOG(0) << "  All requirements met.";
-      supported_candidates.push_back(candidate);
-    } else {
-      VLOG(0)
-          << "  All requirements not met. Removing mode from candidate modes.";
+    if (needs_multi_queue_emulation) {
+      features["VulkanVirtualQueue"] = true;
     }
-    VLOG(0) << "";
   }
-  return supported_candidates;
+
+  // Apply feature overrides from --gpu_renderer_features.
+  const auto feature_overrides =
+      CF_EXPECT(ParseGfxstreamRendererFlag(gpu_renderer_features_arg));
+  for (const auto& [feature_name, feature_enabled] : feature_overrides) {
+    VLOG(0) << "GPU renderer feature " << feature_name << " overridden to "
+            << (feature_enabled ? "enabled" : "disabled")
+            << " via command line argument.";
+    features[feature_name] = feature_enabled;
+  }
+
+  // Convert features back to a string for passing to the VMM.
+  return GetGfxstreamRendererFeaturesString(features);
+}
+
+#endif
+
+}  // namespace
+
+gfxstream::proto::GraphicsAvailability
+GetGraphicsAvailabilityWithSubprocessCheck() {
+#ifdef __APPLE__
+  return {};
+#else
+  TemporaryFile graphics_availability_file;
+
+  Command graphics_detector_cmd(HostBinaryPath("graphics_detector"));
+  graphics_detector_cmd.AddParameter(graphics_availability_file.path);
+
+  Result<std::string> graphics_detector_stdout =
+      RunAndCaptureStdout(std::move(graphics_detector_cmd));
+  if (!graphics_detector_stdout.has_value()) {
+    LOG(ERROR)
+        << "Failed to run graphics detector, assuming no availability: \n"
+        << graphics_detector_stdout.error();
+    return {};
+  }
+  VLOG(0) << *graphics_detector_stdout;
+
+  auto graphics_availability_content_result =
+      ReadFileContents(graphics_availability_file.path);
+  if (!graphics_availability_content_result.has_value()) {
+    LOG(ERROR) << "Failed to read graphics availability from file "
+               << graphics_availability_file.path << ":"
+               << graphics_availability_content_result.error()
+               << ". Assuming no availability.";
+    return {};
+  }
+  const std::string& graphics_availability_content =
+      graphics_availability_content_result.value();
+
+  gfxstream::proto::GraphicsAvailability availability;
+
+  google::protobuf::TextFormat::Parser parser;
+  parser.AllowUnknownField(true);
+  AggregatingErrorCollector error_collector;
+  parser.RecordErrorsTo(&error_collector);
+  if (!parser.ParseFromString(graphics_availability_content, &availability)) {
+    LOG(ERROR) << "Failed to parse graphics detector output: "
+               << graphics_availability_content
+               << ". Error(s): " << error_collector.error_message
+               << ". Assuming no availability.";
+    return {};
+  }
+
+  VLOG(0) << "Host Graphics Availability:";
+  for (std::string_view line :
+       absl::StrSplit(graphics_availability_content, '\n')) {
+    VLOG(0) << line;
+  }
+
+  return availability;
+#endif
 }
 
 Result<GpuMode> SelectGpuMode(
-    const GpuMode gpu_mode_arg, VmmMode vmm, const GuestConfig& guest_config,
+    const GpuMode requested_gpu_mode, VmmMode vmm,
+    const GuestConfig& guest_config, const std::string& gpu_context_types,
     const gfxstream::proto::GraphicsAvailability& graphics_availability) {
+#ifdef __APPLE__
+
+  (void)vmm;
+  (void)guest_config;
+  (void)gpu_context_types;
+  (void)graphics_availability;
+
+  CF_EXPECT(given_gpu_mode == GpuMode::Auto ||
+            requested_gpu_mode == GpuMode::GuestSwiftshader ||
+            requested_gpu_mode == GpuMode::DrmVirgl ||
+            requested_gpu_mode == GpuMode::None);
+  if (requested_gpu_mode == GpuMode::Auto) {
+    return GpuMode::GuestSwiftshader;
+  }
+  return requested_gpu_mode;
+
+#else
+
   const CommonState common = {
       .vmm_mode = vmm,
       .guest_config = guest_config,
       .host_info = GetHostInfo(),
       .graphics_availability = graphics_availability,
   };
-  if (gpu_mode_arg != GpuMode::Auto) {
+  if (requested_gpu_mode != GpuMode::Auto) {
     // User explicitly supplied a mode. Double check the requirements but only
     // log warnings and respect their choice:
-    if (!CF_EXPECT(GpuModeRequirementsMet(common, gpu_mode_arg))) {
+    if (!CF_EXPECT(GpuModeRequirementsMet(common, requested_gpu_mode))) {
       LOG(ERROR)
-          << "--gpu_mode=" << GpuModeString(gpu_mode_arg)
+          << "--gpu_mode=" << GpuModeString(requested_gpu_mode)
           << " was requested but the prerequisites were not detected "
              "so the device may not function correctly. Please consider "
              "switching to --gpu_mode=auto or --gpu_mode=guest_swiftshader.";
     }
-    return gpu_mode_arg;
+    return requested_gpu_mode;
   }
 
   const std::vector<GpuMode> gpu_mode_candidates =
-      GetGpuModeCandidates(guest_config, graphics_availability);
+      GetGpuModeCandidates(guest_config);
   VLOG(0) << "Initial GPU mode candidates:";
   for (size_t i = 0; i < gpu_mode_candidates.size(); i++) {
     VLOG(0) << "  " << (i + 1) << ": " << GpuModeString(gpu_mode_candidates[i]);
@@ -628,297 +1006,73 @@ Result<GpuMode> SelectGpuMode(
 
   const GpuMode selected_gpu_mode = supported_gpu_mode_candidates[0];
   VLOG(0) << "GPU auto mode: selecting --gpu_mode=" << selected_gpu_mode;
-  return selected_gpu_mode;
-}
 
-Result<bool> SelectGpuVhostUserMode(const GpuMode gpu_mode,
-                                    const std::string& gpu_vhost_user_mode_arg,
-                                    VmmMode vmm) {
-  CF_EXPECT(gpu_vhost_user_mode_arg == kGpuVhostUserModeAuto ||
-            gpu_vhost_user_mode_arg == kGpuVhostUserModeOn ||
-            gpu_vhost_user_mode_arg == kGpuVhostUserModeOff);
-  if (gpu_vhost_user_mode_arg == kGpuVhostUserModeAuto) {
-    if (gpu_mode == GpuMode::GuestSwiftshader) {
-      VLOG(0) << "GPU vhost user auto mode: not needed for --gpu_mode="
-              << GpuModeString(gpu_mode) << ". Not enabling vhost user gpu.";
-      return false;
-    }
-
-    if (!VmManagerIsCrosvm(vmm)) {
-      VLOG(0) << "GPU vhost user auto mode: not yet supported with " << vmm
-              << ". Not enabling vhost user gpu.";
-      return false;
-    }
-
-    // Android built ARM host tools seem to be incompatible with host GPU
-    // libraries. Enable vhost user gpu which will run the virtio GPU device
-    // in a separate process with a VMM prebuilt. See b/200592498.
-    const auto host_arch = HostArch();
-    if (host_arch == Arch::Arm64) {
-      VLOG(0) << "GPU vhost user auto mode: detected arm64 host. Enabling "
-                 "vhost user gpu.";
-      return true;
-    }
-
-    VLOG(0) << "GPU vhost user auto mode: not needed. Not enabling vhost "
-               "user gpu.";
-    return false;
-  }
-
-  return gpu_vhost_user_mode_arg == kGpuVhostUserModeOn;
-}
-
-Result<GuestRendererPreload> SelectGuestRendererPreload(
-    const GpuMode gpu_mode, const GuestHwuiRenderer guest_hwui_renderer,
-    const std::string& guest_renderer_preload_arg) {
-  GuestRendererPreload guest_renderer_preload =
-      GuestRendererPreload::kGuestDefault;
-
-  if (!guest_renderer_preload_arg.empty()) {
-    guest_renderer_preload =
-        CF_EXPECT(ParseGuestRendererPreload(guest_renderer_preload_arg));
-  }
-
-  if (guest_renderer_preload == GuestRendererPreload::kAuto) {
-    if (guest_hwui_renderer == GuestHwuiRenderer::kSkiaVk &&
-        (gpu_mode == GpuMode::GfxstreamGuestAngle ||
-         gpu_mode == GpuMode::GfxstreamGuestAngleHostSwiftshader)) {
-      LOG(INFO) << "Disabling guest renderer preload for Gfxstream based mode "
-                   "when running with SkiaVk.";
-      guest_renderer_preload = GuestRendererPreload::kDisabled;
-    }
-  }
-
-  return guest_renderer_preload;
-}
-
-#endif
-
-const std::string kGfxstreamTransportAsg = "virtio-gpu-asg";
-const std::string kGfxstreamTransportPipe = "virtio-gpu-pipe";
-
-CF_UNUSED_ON_MACOS
-Result<std::unordered_map<std::string, bool>> ParseGfxstreamRendererFlag(
-    const std::string& gpu_renderer_features_arg) {
-  std::unordered_map<std::string, bool> features;
-
-  for (const std::string_view feature :
-       absl::StrSplit(gpu_renderer_features_arg, ';')) {
-    if (feature.empty()) {
-      continue;
-    }
-
-    const std::vector<std::string_view> feature_parts =
-        absl::StrSplit(feature, ':');
-    CF_EXPECT(feature_parts.size() == 2,
-              "Failed to parse renderer features from --gpu_renderer_features="
-                  << gpu_renderer_features_arg);
-
-    const std::string_view feature_name = feature_parts[0];
-    const std::string_view feature_enabled = feature_parts[1];
-    CF_EXPECT(feature_enabled == "enabled" || feature_enabled == "disabled",
-              "Failed to parse renderer features from --gpu_renderer_features="
-                  << gpu_renderer_features_arg);
-
-    features.emplace(feature_name, feature_enabled == "enabled");
-  }
-
-  return features;
-}
-
-CF_UNUSED_ON_MACOS
-std::string GetGfxstreamRendererFeaturesString(
-    const std::unordered_map<std::string, bool>& features) {
-  std::vector<std::string> parts;
-  for (const auto& [feature_name, feature_enabled] : features) {
-    parts.push_back(feature_name + ":" +
-                    (feature_enabled ? "enabled" : "disabled"));
-  }
-  return absl::StrJoin(parts, ",");
-}
-
-CF_UNUSED_ON_MACOS
-Result<void> SetGfxstreamFlags(
-    const GpuMode gpu_mode, const std::string& gpu_renderer_features_arg,
-    const GuestConfig& guest_config,
-    const gfxstream::proto::GraphicsAvailability& availability,
-    CuttlefishConfig::MutableInstanceSpecific& instance) {
-  std::string gfxstream_transport = kGfxstreamTransportAsg;
-
-  // Some older R branches are missing some Gfxstream backports
-  // which introduced a backward incompatible change (b/267483000).
-  if (guest_config.android_version_number == "11.0.0") {
-    gfxstream_transport = kGfxstreamTransportPipe;
-  }
-
-  std::unordered_map<std::string, bool> features;
-
-  // Apply features from host/mode requirements.
-  if (gpu_mode == GpuMode::GfxstreamGuestAngleHostSwiftshader) {
-    features["VulkanUseDedicatedAhbMemoryType"] = true;
-  }
-
-  // Apply features from guest/mode requirements.
-  if (guest_config.gfxstream_gl_program_binary_link_status_supported) {
-    features["GlProgramBinaryLinkStatus"] = true;
-  }
-
-  // Apply feature overrides from --gpu_renderer_features.
-  const auto feature_overrides =
-      CF_EXPECT(ParseGfxstreamRendererFlag(gpu_renderer_features_arg));
-  for (const auto& [feature_name, feature_enabled] : feature_overrides) {
-    VLOG(0) << "GPU renderer feature " << feature_name << " overridden to "
-            << (feature_enabled ? "enabled" : "disabled")
-            << " via command line argument.";
-    features[feature_name] = feature_enabled;
-  }
-
-  // Convert features back to a string for passing to the VMM.
-  const std::string features_string =
-      GetGfxstreamRendererFeaturesString(features);
-  if (!features_string.empty()) {
-    instance.set_gpu_renderer_features(features_string);
-  }
-
-  instance.set_gpu_gfxstream_transport(gfxstream_transport);
-
-  // Unless ANGLE runs in the guest, the guest's GLES runs on the host's GLES
-  // driver, so the guest should not advertise a newer version than the host's.
-  instance.set_gpu_host_gles_version(
-      IsGfxstreamGuestAngleMode(gpu_mode) ? 0 : HostGlesVersion(availability));
-  return {};
-}
-
-static std::unordered_set<std::string> kSupportedGpuContexts{
-    "gfxstream-vulkan", "gfxstream-composer", "cross-domain", "magma"};
-
-}  // namespace
-
-gfxstream::proto::GraphicsAvailability
-GetGraphicsAvailabilityWithSubprocessCheck() {
-#ifdef __APPLE__
-  return {};
-#else
-  TemporaryFile graphics_availability_file;
-
-  Command graphics_detector_cmd(HostBinaryPath("graphics_detector"));
-  graphics_detector_cmd.AddParameter(graphics_availability_file.path);
-
-  Result<std::string> graphics_detector_stdout =
-      RunAndCaptureStdout(std::move(graphics_detector_cmd));
-  if (!graphics_detector_stdout.ok()) {
-    LOG(ERROR)
-        << "Failed to run graphics detector, assuming no availability: \n"
-        << graphics_detector_stdout.error();
-    return {};
-  }
-  VLOG(0) << *graphics_detector_stdout;
-
-  auto graphics_availability_content_result =
-      ReadFileContents(graphics_availability_file.path);
-  if (!graphics_availability_content_result.ok()) {
-    LOG(ERROR) << "Failed to read graphics availability from file "
-               << graphics_availability_file.path << ":"
-               << graphics_availability_content_result.error()
-               << ". Assuming no availability.";
-    return {};
-  }
-  const std::string& graphics_availability_content =
-      graphics_availability_content_result.value();
-
-  gfxstream::proto::GraphicsAvailability availability;
-  google::protobuf::TextFormat::Parser parser;
-  if (!parser.ParseFromString(graphics_availability_content, &availability)) {
-    LOG(ERROR) << "Failed to parse graphics detector output: "
-               << graphics_availability_content
-               << ". Assuming no availability.";
-    return {};
-  }
-
-  VLOG(0) << "Host Graphics Availability:" << availability.DebugString();
-  return availability;
-#endif
-}
-
-Result<GpuMode> ConfigureGpuSettings(
-    const gfxstream::proto::GraphicsAvailability& graphics_availability,
-    GpuMode gpu_mode_arg, const std::string& gpu_vhost_user_mode_arg,
-    const std::string& gpu_renderer_features_arg,
-    std::string& gpu_context_types_arg,
-    const std::string& guest_hwui_renderer_arg,
-    const std::string& guest_renderer_preload_arg, VmmMode vmm,
-    const GuestConfig& guest_config,
-    CuttlefishConfig::MutableInstanceSpecific& instance) {
-#ifdef __APPLE__
-  (void)graphics_availability;
-  (void)gpu_vhost_user_mode_arg;
-  (void)vmm;
-  (void)guest_config;
-  CF_EXPECT(gpu_mode_arg == GpuMode::Auto ||
-            gpu_mode_arg == GpuMode::GuestSwiftshader ||
-            gpu_mode_arg == GpuMode::DrmVirgl || gpu_mode_arg == GpuMode::None);
-  if (gpu_mode_arg == GpuMode::Auto) {
-    gpu_mode_arg = GpuMode::GuestSwiftshader;
-  }
-  instance.set_gpu_mode(gpu_mode_arg);
-  instance.set_enable_gpu_vhost_user(false);
-#else
-  const GpuMode gpu_mode = CF_EXPECT(
-      SelectGpuMode(gpu_mode_arg, vmm, guest_config, graphics_availability));
-  const bool enable_gpu_vhost_user =
-      CF_EXPECT(SelectGpuVhostUserMode(gpu_mode, gpu_vhost_user_mode_arg, vmm));
-
-  if (IsGfxstreamMode(gpu_mode)) {
-    CF_EXPECT(SetGfxstreamFlags(gpu_mode, gpu_renderer_features_arg,
-                                guest_config, graphics_availability, instance));
-  }
-
-  if (gpu_mode == GpuMode::Custom) {
+  if (selected_gpu_mode == GpuMode::Custom) {
     std::vector<std::string> requested_types =
-        absl::StrSplit(gpu_context_types_arg, ':');
+        absl::StrSplit(gpu_context_types, ':');
     for (const std::string& requested : requested_types) {
       CF_EXPECT(kSupportedGpuContexts.count(requested) == 1,
                 "unsupported context type: " + requested);
     }
   }
 
-  const auto angle_features = CF_EXPECT(GetNeededAngleFeatures(
-      gpu_mode, graphics_availability));
-  instance.set_gpu_angle_feature_overrides_enabled(
-      angle_features.angle_feature_overrides_enabled);
-  instance.set_gpu_angle_feature_overrides_disabled(
-      angle_features.angle_feature_overrides_disabled);
+  return selected_gpu_mode;
+#endif
+}
 
-  if (enable_gpu_vhost_user) {
-    const auto gpu_vhost_user_features =
+#ifndef __APPLE__
+
+Result<GraphicsSettings> GetGraphicsSettings(
+    const GpuMode gpu_mode, const std::string& gpu_vhost_user_mode,
+    const VmmMode vmm_mode,
+    const ::gfxstream::proto::GraphicsAvailability& graphics_availability,
+    const GuestConfig& guest_config, const std::string& guest_hwui_renderer,
+    const std::string& guest_renderer_preload,
+    const std::string& gpu_renderer_features) {
+  auto graphics_settings = GraphicsSettings{
+      .enable_gpu_vhost_user = CF_EXPECT(
+          SelectGpuVhostUserMode(gpu_mode, gpu_vhost_user_mode, vmm_mode)),
+      .hwui_renderer = CF_EXPECT(
+          SelectGuestHwuiRenderer(gpu_mode, guest_config, guest_hwui_renderer)),
+  };
+  const AngleFeatureOverrides angle_features =
+      CF_EXPECT(GetNeededAngleFeatures(gpu_mode, graphics_availability));
+  graphics_settings.angle_feature_overrides_enabled =
+      angle_features.angle_feature_overrides_enabled;
+  graphics_settings.angle_feature_overrides_disabled =
+      angle_features.angle_feature_overrides_disabled;
+
+  if (graphics_settings.enable_gpu_vhost_user) {
+    const VhostUserGpuHostRendererFeatures gpu_vhost_user_features =
         CF_EXPECT(GetNeededVhostUserGpuHostRendererFeatures(
             gpu_mode, graphics_availability));
-    instance.set_enable_gpu_external_blob(
-        gpu_vhost_user_features.external_blob);
-    instance.set_enable_gpu_system_blob(gpu_vhost_user_features.system_blob);
-  } else {
-    instance.set_enable_gpu_external_blob(false);
-    instance.set_enable_gpu_system_blob(false);
+    graphics_settings.enable_gpu_external_blob =
+        gpu_vhost_user_features.external_blob;
+    graphics_settings.enable_gpu_system_blob =
+        gpu_vhost_user_features.system_blob;
+  }
+  graphics_settings.guest_renderer_preload =
+      CF_EXPECT(SelectGuestRendererPreload(
+          gpu_mode, graphics_settings.hwui_renderer, guest_renderer_preload));
+  if (IsGfxstreamMode(gpu_mode)) {
+    graphics_settings.gfxstream_transport =
+        SelectGfxstreamTransport(guest_config);
+    // Unless ANGLE runs in the guest, the guest's GLES runs on the host's GLES
+    // driver, so the guest should not advertise a newer version than the
+    // host's.
+    graphics_settings.gpu_host_gles_version =
+        IsGfxstreamGuestAngleMode(gpu_mode)
+            ? 0
+            : HostGlesVersion(graphics_availability);
+    graphics_settings.gfxstream_features_string =
+        CF_EXPECT(GetGfxstreamFeatures(
+            gpu_mode, graphics_settings.hwui_renderer, gpu_renderer_features,
+            guest_config, graphics_availability));
   }
 
-  GuestHwuiRenderer hwui_renderer = GuestHwuiRenderer::kUnknown;
-  if (!guest_hwui_renderer_arg.empty()) {
-    hwui_renderer = CF_EXPECT(
-        ParseGuestHwuiRenderer(guest_hwui_renderer_arg),
-        "Failed to parse HWUI renderer flag: " << guest_hwui_renderer_arg);
-  }
-  instance.set_guest_hwui_renderer(hwui_renderer);
-
-  const auto guest_renderer_preload = CF_EXPECT(SelectGuestRendererPreload(
-      gpu_mode, hwui_renderer, guest_renderer_preload_arg));
-  instance.set_guest_renderer_preload(guest_renderer_preload);
-
-  instance.set_gpu_mode(gpu_mode);
-  instance.set_enable_gpu_vhost_user(enable_gpu_vhost_user);
+  return graphics_settings;
+}
 
 #endif
-
-  return gpu_mode;
-}
 
 }  // namespace cuttlefish

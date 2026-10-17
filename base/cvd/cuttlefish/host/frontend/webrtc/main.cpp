@@ -28,6 +28,7 @@
 #include "google/protobuf/text_format.h"
 #include "google/rpc/code.pb.h"
 #include "google/rpc/status.pb.h"
+#include "rtc_base/logging.h"
 
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/files.h"
@@ -44,6 +45,7 @@
 #include "cuttlefish/host/frontend/webrtc/libdevice/video_sink.h"
 #include "cuttlefish/host/frontend/webrtc/ika_stream.h"
 #include "cuttlefish/host/frontend/webrtc/screenshot_handler.h"
+#include "cuttlefish/host/frontend/webrtc/tuner_audio_source.h"
 #include "cuttlefish/host/frontend/webrtc/webrtc_command_channel.h"
 #include "cuttlefish/host/frontend/webrtc/webrtc_commands.pb.h"
 #include "cuttlefish/host/libs/audio_connector/server.h"
@@ -58,13 +60,20 @@
 
 DEFINE_bool(multitouch, true,
             "Whether to send multi-touch or single-touch events");
-DEFINE_string(touch_fds, "",
-              "A list of fds to listen on for touch connections.");
-DEFINE_int32(mouse_fd, -1, "An fd to listen on for mouse connections.");
-DEFINE_int32(gamepad_fd, -1, "An fd to listen on for gamepad connections.");
-DEFINE_int32(rotary_fd, -1, "An fd to listen on for rotary connections.");
-DEFINE_int32(keyboard_fd, -1, "An fd to listen on for keyboard connections.");
-DEFINE_int32(switches_fd, -1, "An fd to listen on for switch connections.");
+DEFINE_string(touch_fds, "", "DEPRECATED: Use --touch_server_paths instead.");
+DEFINE_string(
+    touch_server_paths, "",
+    "A list of input server paths to connect to for touchscreen events.");
+DEFINE_int32(mouse_fd, -1, "DEPRECATED: Use --mouse_server_path instead.");
+DEFINE_string(mouse_server_path, "", "Mouse input server path.");
+DEFINE_int32(gamepad_fd, -1, "DEPRECATED: Use --gamepad_server_path instead.");
+DEFINE_string(gamepad_server_path, "", "Gamepad input server path.");
+DEFINE_int32(rotary_fd, -1, "DEPRECATED: Use --rotary_server_path instead.");
+DEFINE_string(rotary_server_path, "", "Rotary input server path.");
+DEFINE_int32(keyboard_fd, -1, "DEPRECATED: Use --rotary_server_path instead.");
+DEFINE_string(keyboard_server_path, "", "Keyboard input server path.");
+DEFINE_int32(switches_fd, -1, "DEPRECATED: Use --rotary_server_path instead.");
+DEFINE_string(switches_server_path, "", "Switches input server path.");
 DEFINE_int32(frame_server_fd, -1, "An fd to listen on for frame updates");
 DEFINE_string(raw_frame_socket_path, "",
               "Optional unix socket path to stream raw frames for local viewers");
@@ -79,6 +88,10 @@ DEFINE_string(action_servers, "",
               "A comma-separated list of server_name:fd pairs, "
               "where each entry corresponds to one custom action server.");
 DEFINE_int32(audio_server_fd, -1, "An fd to listen on for audio frames");
+DEFINE_string(tuner_pcm_socket_path, "",
+              "Path to the virtual tuner daemon's PCM socket. Feeds the "
+              "capture stream marked virtual_tuner in the guest audio "
+              "config.");
 DEFINE_int32(camera_streamer_fd, -1, "An fd to send client camera frames");
 DEFINE_int32(sensors_fd, -1, "An fd to communicate with sensors_simulator.");
 DEFINE_string(client_dir, "webrtc", "Location of the client files");
@@ -168,7 +181,7 @@ Result<void> ControlLoop(SharedFD control_socket,
 
       display_handler.RemoveDisplayClient();
 
-      if (!command_result.ok()) {
+      if (!command_result.has_value()) {
         LOG(ERROR) << "Failed to screenshot display "
                    << screenshot_request.display_number() << " to "
                    << screenshot_request.screenshot_path() << ":"
@@ -180,7 +193,7 @@ Result<void> ControlLoop(SharedFD control_socket,
 
     webrtc::WebrtcCommandResponse response;
     auto* response_status = response.mutable_status();
-    if (command_result.ok()) {
+    if (command_result.has_value()) {
       response_status->set_code(google::rpc::Code::OK);
     } else {
       response_status->set_code(google::rpc::Code::INTERNAL);
@@ -239,6 +252,8 @@ cuttlefish::AudioStreamSettings ParseAudioStreamSettings(
   if (stream.has_controls()) {
     const auto& controls = stream.controls();
     settings.has_mute_control = controls.mute_control_enabled();
+    settings.has_duck_control = controls.duck_control_enabled();
+    settings.has_fade_balance_control = controls.fade_balance_control_enabled();
     if (controls.has_volume_control()) {
       const auto& volume = controls.volume_control();
       settings.master_volume_control = {{
@@ -260,6 +275,7 @@ std::shared_ptr<AudioHandler> SetupAudio(
 
   AudioMixerSettings mixer_settings;
   std::vector<cuttlefish::AudioStreamSettings> streams;
+  std::shared_ptr<TunerAudioSource> tuner_source;
   const auto audio_settings = instance.audio_settings();
   if (!audio_settings.has_value()) {
     const auto output_streams_count = instance.audio_output_streams_count();
@@ -286,6 +302,17 @@ std::shared_ptr<AudioHandler> SetupAudio(
       streams.push_back(ParseAudioStreamSettings(
           stream, AudioStreamSettings::Direction::Capture));
     }
+    if (pcm.has_virtual_tuner()) {
+      CHECK(!FLAGS_tuner_pcm_socket_path.empty())
+          << "The guest audio config has a virtual_tuner stream, but "
+             "--tuner_pcm_socket_path is not set";
+      AudioStreamSettings tuner = ParseAudioStreamSettings(
+          pcm.virtual_tuner(), AudioStreamSettings::Direction::Capture);
+      tuner.virtual_tuner = true;
+      tuner_source = std::make_shared<TunerAudioSource>(
+          FLAGS_tuner_pcm_socket_path, GetChannelsCount(tuner.channels_layout));
+      streams.push_back(tuner);
+    }
     if (pcm.has_mixer()) {
       const auto& mixer = pcm.mixer();
       if (mixer.has_channel_layout()) {
@@ -303,6 +330,15 @@ std::shared_ptr<AudioHandler> SetupAudio(
   auto audio_server = CreateAudioServer();
   auto audio_source = streamer.GetAudioSource();
 
+  if (tuner_source) {
+    return std::make_shared<AudioHandler>(
+        std::move(audio_server), std::move(audio_sink), audio_source,
+        std::move(tuner_source), streams, mixer_settings);
+  }
+  if (!FLAGS_tuner_pcm_socket_path.empty()) {
+    LOG(WARNING) << "--tuner_pcm_socket_path is set, but the guest audio "
+                    "config has no virtual_tuner stream";
+  }
   return std::make_shared<AudioHandler>(std::move(audio_server),
                                         std::move(audio_sink), audio_source,
                                         streams, mixer_settings);
@@ -318,47 +354,109 @@ int CuttlefishMain() {
   cuttlefish::InputConnectorBuilder inputs_builder;
 
   const auto display_count = instance.display_configs().size();
-  const std::vector<std::string_view> touch_fds =
-      absl::StrSplit(FLAGS_touch_fds, ',');
-  CHECK(touch_fds.size() == display_count + instance.touchpad_configs().size())
-      << "Number of touch FDs does not match the number of configured displays "
-         "and touchpads";
-  for (int i = 0; i < touch_fds.size(); i++) {
-    int touch_fd;
-    CHECK(absl::SimpleAtoi(touch_fds[i], &touch_fd))
-        << "Invalid touch_fd: " << touch_fds[i];
-    // Displays are listed first, then touchpads
-    auto label_prefix =
-        i < display_count ? kTouchscreenPrefix : kTouchpadPrefix;
-    auto device_idx = i < display_count ? i : i - display_count;
-    auto device_label = fmt::format("{}{}", label_prefix, device_idx);
-    auto touch_shared_fd = SharedFD::Dup(touch_fd);
-    if (FLAGS_multitouch) {
-      inputs_builder.WithMultitouchDevice(device_label, touch_shared_fd);
-    } else {
-      inputs_builder.WithTouchDevice(device_label, touch_shared_fd);
+  CHECK(FLAGS_touch_fds.empty() || FLAGS_touch_server_paths.empty())
+      << "Only one of --touch_fds or --touch_server_paths can be used at a "
+         "time";
+  if (!FLAGS_touch_fds.empty()) {
+    std::vector<std::string_view> touch_fds =
+        absl::StrSplit(FLAGS_touch_fds, ',');
+    CHECK_EQ(touch_fds.size(),
+             display_count + instance.touchpad_configs().size())
+        << "Number of touch FDs does not match the number of configured "
+           "displays "
+           "and touchpads";
+    for (int i = 0; i < touch_fds.size(); i++) {
+      int touch_fd;
+      CHECK(absl::SimpleAtoi(touch_fds[i], &touch_fd))
+          << "Invalid touch_fd: " << touch_fds[i];
+      // Displays are listed first, then touchpads
+      auto label_prefix =
+          i < display_count ? kTouchscreenPrefix : kTouchpadPrefix;
+      auto device_idx = i < display_count ? i : i - display_count;
+      auto device_label = fmt::format("{}{}", label_prefix, device_idx);
+      auto touch_shared_fd = SharedFD::Dup(touch_fd);
+      if (FLAGS_multitouch) {
+        inputs_builder.WithMultitouchDevice(device_label, touch_shared_fd);
+      } else {
+        inputs_builder.WithTouchDevice(device_label, touch_shared_fd);
+      }
+      close(touch_fd);
     }
-    close(touch_fd);
+  } else if (!FLAGS_touch_server_paths.empty()) {
+    std::vector<std::string> touch_paths =
+        absl::StrSplit(FLAGS_touch_server_paths, ',');
+    CHECK_EQ(touch_paths.size(),
+             display_count + instance.touchpad_configs().size())
+        << "Number of touch servers does not match the number of configured "
+           "displays and touchpads";
+    for (int i = 0; i < touch_paths.size(); i++) {
+      const std::string& touch_path = touch_paths[i];
+      // Displays are listed first, then touchpads
+      auto label_prefix =
+          i < display_count ? kTouchscreenPrefix : kTouchpadPrefix;
+      int device_idx = i < display_count ? i : i - display_count;
+      std::string device_label = fmt::format("{}{}", label_prefix, device_idx);
+      SharedFD touch_fd =
+          Fd::SocketLocalClient(touch_path, false, SOCK_STREAM).value_or(Fd());
+      if (FLAGS_multitouch) {
+        inputs_builder.WithMultitouchDevice(device_label, touch_fd);
+      } else {
+        inputs_builder.WithTouchDevice(device_label, touch_fd);
+      }
+    }
+  } else {
+    CHECK_EQ(0, display_count + instance.touchpad_configs().size())
+        << "Number of touch devices does not match the number of configured "
+           "displays and touchpads";
   }
-  if (FLAGS_rotary_fd >= 0) {
-    inputs_builder.WithRotary(SharedFD::Dup(FLAGS_rotary_fd));
-    close(FLAGS_rotary_fd);
-  }
+  CHECK(FLAGS_mouse_fd < 0 || FLAGS_mouse_server_path.empty())
+      << "Only one of --mouse_fd or --mouse_server_path can be used at a time";
   if (FLAGS_mouse_fd >= 0) {
     inputs_builder.WithMouse(SharedFD::Dup(FLAGS_mouse_fd));
     close(FLAGS_mouse_fd);
+  } else if (!FLAGS_mouse_server_path.empty()) {
+    inputs_builder.WithMouse(SharedFD::SocketLocalClient(
+        FLAGS_mouse_server_path, false, SOCK_STREAM));
   }
+  CHECK(FLAGS_gamepad_fd < 0 || FLAGS_gamepad_server_path.empty())
+      << "Only one of --gamepad_fd or --gamepad_server_path can be used at a "
+         "time";
   if (FLAGS_gamepad_fd >= 0) {
     inputs_builder.WithGamepad(SharedFD::Dup(FLAGS_gamepad_fd));
     close(FLAGS_gamepad_fd);
+  } else if (!FLAGS_gamepad_server_path.empty()) {
+    inputs_builder.WithGamepad(SharedFD::SocketLocalClient(
+        FLAGS_gamepad_server_path, false, SOCK_STREAM));
   }
+  CHECK(FLAGS_rotary_fd < 0 || FLAGS_rotary_server_path.empty())
+      << "Only one of --rotary_fd or --rotary_server_path can be used at a "
+         "time";
+  if (FLAGS_rotary_fd >= 0) {
+    inputs_builder.WithRotary(SharedFD::Dup(FLAGS_rotary_fd));
+    close(FLAGS_rotary_fd);
+  } else if (!FLAGS_rotary_server_path.empty()) {
+    inputs_builder.WithRotary(SharedFD::SocketLocalClient(
+        FLAGS_rotary_server_path, false, SOCK_STREAM));
+  }
+  CHECK(FLAGS_keyboard_fd < 0 || FLAGS_keyboard_server_path.empty())
+      << "Only one of --keyboard_fd or --keyboard_server_path can be used at a "
+         "time";
   if (FLAGS_keyboard_fd >= 0) {
     inputs_builder.WithKeyboard(SharedFD::Dup(FLAGS_keyboard_fd));
     close(FLAGS_keyboard_fd);
+  } else if (!FLAGS_keyboard_server_path.empty()) {
+    inputs_builder.WithKeyboard(SharedFD::SocketLocalClient(
+        FLAGS_keyboard_server_path, false, SOCK_STREAM));
   }
+  CHECK(FLAGS_switches_fd < 0 || FLAGS_switches_server_path.empty())
+      << "Only one of --switches_fd or --switches_server_path can be used at a "
+         "time";
   if (FLAGS_switches_fd >= 0) {
     inputs_builder.WithSwitches(SharedFD::Dup(FLAGS_switches_fd));
     close(FLAGS_switches_fd);
+  } else if (!FLAGS_switches_server_path.empty()) {
+    inputs_builder.WithSwitches(SharedFD::SocketLocalClient(
+        FLAGS_switches_server_path, false, SOCK_STREAM));
   }
 
   auto input_connector = std::move(inputs_builder).Build();
@@ -441,7 +539,7 @@ int CuttlefishMain() {
   if (cvd_config->OverlaysEnabled()) {
     Result<std::unique_ptr<CompositionManager>> composition_manager_result =
         CompositionManager::Create();
-    if (composition_manager_result.ok() && *composition_manager_result) {
+    if (composition_manager_result.has_value() && *composition_manager_result) {
       composition_manager = std::optional<std::unique_ptr<CompositionManager>>(
           std::move(*composition_manager_result));
     }
@@ -481,7 +579,9 @@ int CuttlefishMain() {
                             std::to_string(instance.memory_mb()) + " mb");
 
   std::string user_friendly_gpu_mode;
-  if (instance.gpu_mode() == GpuMode::GuestSwiftshader) {
+  if (instance.gpu_mode() == GpuMode::GuestLavapipe) {
+    user_friendly_gpu_mode = "Lavapipe (Guest GPU Rendering)";
+  } else if (instance.gpu_mode() == GpuMode::GuestSwiftshader) {
     user_friendly_gpu_mode = "SwiftShader (Guest CPU Rendering)";
   } else if (instance.gpu_mode() == GpuMode::DrmVirgl) {
     user_friendly_gpu_mode =
@@ -492,6 +592,8 @@ int CuttlefishMain() {
   } else if (instance.gpu_mode() == GpuMode::GfxstreamGuestAngle) {
     user_friendly_gpu_mode =
         "Gfxstream (Accelerated Rendering using Host Vulkan)";
+  } else if (instance.gpu_mode() == GpuMode::Venus) {
+    user_friendly_gpu_mode = "Venus (Accelerated Rendering using Host Vulkan)";
   } else {
     user_friendly_gpu_mode = GpuModeString(instance.gpu_mode());
   }
@@ -566,6 +668,8 @@ int CuttlefishMain() {
         custom_action.device_states);
   }
 
+  std::shared_ptr<AudioHandler> audio_handler = SetupAudio(instance, *streamer);
+
   std::shared_ptr<webrtc_streaming::OperatorObserver> operator_observer(
       new CfOperatorObserver());
   streamer->Register(operator_observer);
@@ -573,13 +677,12 @@ int CuttlefishMain() {
   std::thread control_thread([&]() {
     auto result = ControlLoop(control_socket, *display_handler,
                               recording_manager, screenshot_handler);
-    if (!result.ok()) {
+    if (!result.has_value()) {
       LOG(ERROR) << "Webrtc control loop error: " << result.error().Message();
     }
     VLOG(0) << "Webrtc control thread exiting.";
   });
 
-  auto audio_handler = SetupAudio(instance, *streamer);
   if (audio_handler) {
     audio_handler->Start();
   }
@@ -600,6 +703,7 @@ int CuttlefishMain() {
 
 int main(int argc, char** argv) {
   cuttlefish::DefaultSubprocessLogging(argv);
+  rtc::LogMessage::LogToDebug(rtc::LS_WARNING);
   ::gflags::ParseCommandLineFlags(&argc, &argv, true);
   return cuttlefish::CuttlefishMain();
 }

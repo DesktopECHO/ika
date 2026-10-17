@@ -16,17 +16,19 @@
 #include "cuttlefish/host/commands/assemble_cvd/flags/mcu_config_path.h"
 
 #include <stddef.h>
+#include <unistd.h>
 
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/strings/str_split.h"
-#include <gflags/gflags.h>
-#include <json/value.h>
+#include "gflags/gflags.h"
+#include "json/value.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/json.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags_defaults.h"
 #include "cuttlefish/host/libs/config/config_utils.h"
 #include "cuttlefish/result/result.h"
@@ -48,8 +50,7 @@ McuConfigPathFlag McuConfigPathFlag::FromGlobalGflags() {
   std::string mcu_config_path_flag =
       flag_info.is_default ? default_path : flag_info.current_value;
 
-  std::vector<std::string> paths =
-      absl::StrSplit(mcu_config_path_flag, ',');
+  std::vector<std::string> paths = absl::StrSplit(mcu_config_path_flag, ',');
 
   if (paths.empty()) {
     paths.emplace_back("");

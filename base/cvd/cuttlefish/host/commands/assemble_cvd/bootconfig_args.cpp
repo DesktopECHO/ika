@@ -16,20 +16,31 @@
 
 #include "cuttlefish/host/commands/assemble_cvd/bootconfig_args.h"
 
+#include <stdint.h>
+
 #include <array>
+#include <functional>
+#include <map>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
-#include "absl/strings/str_join.h"
-#include "absl/strings/str_split.h"
 #include "absl/log/log.h"
 #include "absl/strings/numbers.h"
+#include "absl/strings/str_join.h"
+#include "absl/strings/str_split.h"
+#include "fmt/format.h"
 
-#include "cuttlefish/common/libs/utils/contains.h"
+#include "cuttlefish/common/libs/utils/device_type.h"
+#include "cuttlefish/common/libs/utils/host_info.h"
 #include "cuttlefish/common/libs/utils/json.h"
 #include "cuttlefish/host/libs/config/config_constants.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
+#include "cuttlefish/host/libs/config/gpu_mode.h"
+#include "cuttlefish/host/libs/config/secure_hals.h"
+#include "cuttlefish/host/libs/config/vmm_mode.h"
 #include "cuttlefish/host/libs/vm_manager/crosvm_manager.h"
 #include "cuttlefish/host/libs/vm_manager/qemu_manager.h"
 #include "cuttlefish/host/libs/vm_manager/vm_manager.h"
@@ -43,10 +54,13 @@ using vm_manager::QemuManager;
 namespace {
 
 static constexpr std::string_view kLegacyBoardBootconfigKeysShared[] = {
+    // clang-format off
     "androidboot.hardware",
+    "androidboot.vendor.apex.com.android.wifi.hal",
     "androidboot.vendor.apex.com.google.emulated.camera.provider.hal",
-    "kernel.vmw_vsock_virtio_transport_common.virtio_transport_max_vsock_pkt_"
-    "buf_size",
+    "kernel.mac80211_hwsim.radios",
+    "kernel.vmw_vsock_virtio_transport_common.virtio_transport_max_vsock_pkt_buf_size",
+    // clang-format on
 };
 
 static constexpr std::string_view kLegacyBoardBootconfigKeysAuto[] = {
@@ -120,35 +134,39 @@ Result<std::unordered_map<std::string, std::string>> ConsoleBootconfig(
 Result<void> ValidateBoardBootconfigKeys(
     const cuttlefish::DeviceType type,
     const std::map<std::string, std::string, std::less<void>> args) {
-  std::vector<std::string> allowed_args(
+  std::unordered_set<std::string> used_args;
+  used_args.reserve(args.size());
+  for (const auto& [arg, unused_arg_value] : args) {
+    used_args.insert(arg);
+  }
+
+  std::unordered_set<std::string> allowed_args(
       std::begin(kLegacyBoardBootconfigKeysShared),
       std::end(kLegacyBoardBootconfigKeysShared));
   if (type == cuttlefish::DeviceType::Auto) {
-    allowed_args.insert(allowed_args.end(),
-                        std::begin(kLegacyBoardBootconfigKeysAuto),
+    allowed_args.insert(std::begin(kLegacyBoardBootconfigKeysAuto),
                         std::end(kLegacyBoardBootconfigKeysAuto));
   } else if (type == cuttlefish::DeviceType::Minidroid) {
-    allowed_args.insert(allowed_args.end(),
-                        std::begin(kLegacyBoardBootconfigKeysMinidroid),
+    allowed_args.insert(std::begin(kLegacyBoardBootconfigKeysMinidroid),
                         std::end(kLegacyBoardBootconfigKeysMinidroid));
   } else if (type == cuttlefish::DeviceType::Desktop) {
-    allowed_args.insert(allowed_args.end(),
-                        std::begin(kLegacyBoardBootconfigKeysDesktop),
+    allowed_args.insert(std::begin(kLegacyBoardBootconfigKeysDesktop),
                         std::end(kLegacyBoardBootconfigKeysDesktop));
   } else if (type == cuttlefish::DeviceType::Unknown) {
     // Sdv core targets don't define device type yet.
-    allowed_args.insert(allowed_args.end(),
-                        std::begin(kLegacyBoardBootconfigKeysSdvCore),
+    allowed_args.insert(std::begin(kLegacyBoardBootconfigKeysSdvCore),
                         std::end(kLegacyBoardBootconfigKeysSdvCore));
   }
 
-  for (auto iter = args.begin(); iter != args.end(); iter++) {
-    CF_EXPECTF(Contains(allowed_args, iter->first),
-               "Error: detected new `BOARD_BOOTCONFIG` key: \"{}\" for device "
-               "type: \"{}\"!!! Please "
-               "add new bootconfig args to the `cvd` launcher.",
-               iter->first, static_cast<int>(type));
+  for (const std::string& arg : allowed_args) {
+    used_args.erase(arg);
   }
+
+  CF_EXPECTF(used_args.empty(),
+             "Error: detected new `BOARD_BOOTCONFIG` key(s): \"{}\" for device "
+             "type: \"{}\"!!! Please "
+             "add new bootconfig args to the `cvd` launcher.",
+             absl::StrJoin(used_args, "\", \""), static_cast<int>(type));
 
   return {};
 }
@@ -156,8 +174,10 @@ Result<void> ValidateBoardBootconfigKeys(
 Result<std::unordered_map<std::string, std::string>> BootconfigArgsFromConfig(
     const CuttlefishConfig& config,
     const CuttlefishConfig::InstanceSpecific& instance,
-    const std::map<std::string, std::string, std::less<void>> builtin_bootconfig_args) {
-  CF_EXPECT(ValidateBoardBootconfigKeys(instance.device_type(), builtin_bootconfig_args));
+    const std::map<std::string, std::string, std::less<void>>
+        builtin_bootconfig_args) {
+  CF_EXPECT(ValidateBoardBootconfigKeys(instance.device_type(),
+                                        builtin_bootconfig_args));
 
   std::unordered_map<std::string, std::string> bootconfig_args;
 
@@ -231,7 +251,11 @@ Result<std::unordered_map<std::string, std::string>> BootconfigArgsFromConfig(
         std::to_string(instance.vsock_guest_cid());
   }
 
-  if (instance.enable_modem_simulator() &&
+  // Export modem simulator ports for both standalone modem_simulator and
+  // netsim. The guest RIL (ag/40529282) polls ro.boot.modem_simulator_ports on
+  // startup to connect over VSOCK regardless of which daemon handles the host
+  // connection.
+  if ((instance.enable_modem_simulator() || instance.enable_modem_netsim()) &&
       !instance.modem_simulator_ports().empty()) {
     bootconfig_args["androidboot.modem_simulator_ports"] =
         instance.modem_simulator_ports();
@@ -259,15 +283,23 @@ Result<std::unordered_map<std::string, std::string>> BootconfigArgsFromConfig(
   }
 
   // TODO(b/217564326): improve this checks for a hypervisor in the VM.
-  if (instance.target_arch() == Arch::X86 ||
-      instance.target_arch() == Arch::X86_64) {
-    bootconfig_args["androidboot.hypervisor.version"] =
-        "cf-" + ToString(config.vm_manager());
-    bootconfig_args["androidboot.hypervisor.vm.supported"] = "1";
-  } else {
-    bootconfig_args["androidboot.hypervisor.vm.supported"] = "0";
+  switch (instance.target_arch()) {
+    case Arch::Arm64:
+      // The guest bootloader reports the hypervisor properties.
+      break;
+    case Arch::X86:
+    case Arch::X86_64:
+      bootconfig_args["androidboot.hypervisor.version"] =
+          "cf-" + ToString(config.vm_manager());
+      bootconfig_args["androidboot.hypervisor.vm.supported"] = "1";
+      bootconfig_args["androidboot.hypervisor.protected_vm.supported"] = "0";
+      break;
+    case Arch::Arm:
+    case Arch::RiscV64:
+      bootconfig_args["androidboot.hypervisor.vm.supported"] = "0";
+      bootconfig_args["androidboot.hypervisor.protected_vm.supported"] = "0";
+      break;
   }
-  bootconfig_args["androidboot.hypervisor.protected_vm.supported"] = "0";
   if (!instance.kernel_path().empty()) {
     bootconfig_args["androidboot.kernel_hotswapped"] = "1";
   }
@@ -308,11 +340,50 @@ Result<std::unordered_map<std::string, std::string>> BootconfigArgsFromConfig(
         "none";
   }
 
+  // Weaver HAL
+  if (secure_hals.count(SecureHal::kHostWeaverSecure)) {
+    bootconfig_args["androidboot.vendor.apex.com.android.hardware.weaver"] =
+        "com.android.hardware.weaver.cf";
+  } else {
+    bootconfig_args["androidboot.vendor.apex.com.android.hardware.weaver"] =
+        "none";
+  }
+
   bootconfig_args
       ["androidboot.vendor.apex.com.android.hardware.graphics.composer"] =
           instance.hwcomposer() == kHwComposerDrm
               ? "com.android.hardware.graphics.composer.drm_hwcomposer"
               : "com.android.hardware.graphics.composer.ranchu";
+
+  const GpuMode gpu_mode = instance.gpu_mode();
+  if (gpu_mode != GpuMode::None) {
+    if (IsGfxstreamMode(gpu_mode)) {
+      if (instance.has_vulkan_gfxstream_apex()) {
+        bootconfig_args["androidboot.vendor.apex.com.google.cf.vulkan"] =
+            "com.google.cf.vulkan.gfxstream";
+      }
+    } else if (gpu_mode == GpuMode::GuestLavapipe) {
+      if (instance.has_vulkan_lavapipe_apex()) {
+        bootconfig_args["androidboot.vendor.apex.com.google.cf.vulkan"] =
+            "com.google.cf.vulkan.lavapipe";
+      }
+    } else if (gpu_mode == GpuMode::GuestSwiftshader) {
+      if (instance.has_vulkan_swiftshader_apex()) {
+        bootconfig_args["androidboot.vendor.apex.com.google.cf.vulkan"] =
+            "com.google.cf.vulkan.swiftshader";
+      }
+    } else if (gpu_mode == GpuMode::Venus) {
+      if (instance.has_vulkan_venus_apex()) {
+        bootconfig_args["androidboot.vendor.apex.com.google.cf.vulkan"] =
+            "com.google.cf.vulkan.venus";
+      }
+    }
+  }
+
+  if (gpu_mode == GpuMode::GuestLavapipe || gpu_mode == GpuMode::Venus) {
+    bootconfig_args["androidboot.hardware.guest_renderengine_backend"] =
+        "skiavkthreaded";
+  }
 
   if (instance.vhal_proxy_server_port()) {
     bootconfig_args["androidboot.vhal_proxy_server_port"] =
@@ -331,7 +402,8 @@ Result<std::unordered_map<std::string, std::string>> BootconfigArgsFromConfig(
     bootconfig_args["androidboot.wifi_impl"] = "virt_wifi";
   }
 
-  if (!builtin_bootconfig_args.count("androidboot.vendor.apex.com.google.emulated.camera.provider.hal")){
+  if (!builtin_bootconfig_args.count(
+          "androidboot.vendor.apex.com.google.emulated.camera.provider.hal")) {
     bootconfig_args
         ["androidboot.vendor.apex.com.google.emulated.camera.provider.hal"] =
             // Camera configs is only populated for virtio-media host camera
@@ -343,9 +415,11 @@ Result<std::unordered_map<std::string, std::string>> BootconfigArgsFromConfig(
   }
 
   if (instance.device_type() == cuttlefish::DeviceType::Auto) {
-    if (!builtin_bootconfig_args.count("androidboot.cuttlefish_service_bluetooth_checker")) {
+    if (!builtin_bootconfig_args.count(
+            "androidboot.cuttlefish_service_bluetooth_checker")) {
       // # TODO (b/405655265) Remove once the BT issue is fixed
-      bootconfig_args["androidboot.cuttlefish_service_bluetooth_checker"] = "false";
+      bootconfig_args["androidboot.cuttlefish_service_bluetooth_checker"] =
+          "false";
     }
   }
 
@@ -368,11 +442,12 @@ Result<std::unordered_map<std::string, std::string>> BootconfigArgsFromConfig(
     if (kv.empty()) {
       continue;
     }
+    // Split on the first '=' only, so that values may contain '='.
     const size_t separator = kv.find('=');
     CF_EXPECT(separator != std::string::npos,
               "Failed to parse --extra_bootconfig_args: \"" << kv << "\"");
-    bootconfig_args.emplace(kv.substr(0, separator),
-                            kv.substr(separator + 1));
+    bootconfig_args.insert_or_assign(kv.substr(0, separator),
+                                     kv.substr(separator + 1));
   }
 
   return bootconfig_args;

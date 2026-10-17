@@ -18,9 +18,11 @@
 
 #include <algorithm>
 
-#include "absl/strings/str_replace.h"
 #include "absl/log/log.h"
+#include "absl/strings/str_replace.h"
 
+#include "cuttlefish/common/libs/fs/fd.h"
+#include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/fs/shared_select.h"
 #include "cuttlefish/host/commands/modem_simulator/virtual_modem_simulator.h"
 
@@ -58,7 +60,8 @@ ClientId ChannelMonitor::SetRemoteClient(SharedFD client, bool is_accepted) {
 
   // Trigger monitor loop
   if (write_pipe_->IsOpen()) {
-    write_pipe_->Write("OK", sizeof("OK"));
+    // TODO(schuffelen): Handle unused result
+    Result<uint64_t> unused = write_pipe_->Write("OK", sizeof("OK"));
   } else {
     LOG(ERROR) << "Pipe created fail, can't trigger monitor loop";
   }
@@ -66,28 +69,31 @@ ClientId ChannelMonitor::SetRemoteClient(SharedFD client, bool is_accepted) {
 }
 
 void ChannelMonitor::AcceptIncomingConnection() {
-  auto client_fd = SharedFD::Accept(*server_);
+  SharedFD client_fd = Fd::Accept(*server_).value_or(Fd());
   if (!client_fd->IsOpen()) {
-    LOG(ERROR) << "Error accepting connection on socket: " << client_fd->StrError();
+    LOG(ERROR) << "Error accepting connection on socket: "
+               << client_fd->StrError();
   } else {
     auto client = std::make_unique<Client>(client_fd);
     VLOG(0) << "added one RIL client";
     clients_.push_back(std::move(client));
     if (clients_.size() == 1) {
-      // The first connected client default to be the unsolicited commands channel
+      // The first connected client default to be the unsolicited commands
+      // channel
       modem_.OnFirstClientConnected();
     }
   }
 }
 
 void ChannelMonitor::ReadCommand(Client& client) {
-  std::vector<char> buffer(kMaxCommandLength);
-  auto bytes_read = client.client_read_fd_->Read(buffer.data(), buffer.size());
-  if (bytes_read <= 0) {
+  char buffer[kMaxCommandLength];
+  Result<uint64_t> bytes_read =
+      client.client_read_fd_->Read(buffer, kMaxCommandLength);
+  if (bytes_read.value_or(0) == 0) {
     if (errno == EAGAIN && client.type == Client::REMOTE &&
         client.first_read_command_) {
       LOG(ERROR) << "After read 'REM' from remote client, and before select "
-          "no new data come.";
+                    "no new data come.";
       return;
     }
     VLOG(0) << "Error reading from client fd: "
@@ -105,13 +111,9 @@ void ChannelMonitor::ReadCommand(Client& client) {
     return;
   }
 
-  std::string& incomplete_command = client.incomplete_command;
-
   // Add the incomplete command from the last read
-  auto commands = std::string{incomplete_command.data()};
-  commands.append(buffer.data());
-
-  incomplete_command.clear();
+  std::string commands(std::move(client.incomplete_command));
+  commands.append(buffer, *bytes_read);
 
   // Replacing '\n' with '\r'
   absl::StrReplaceAll({{"\n", "\r"}}, &commands);
@@ -130,10 +132,10 @@ void ChannelMonitor::ReadCommand(Client& client) {
         VLOG(1) << "AT> " << command;
         modem_.DispatchCommand(client, command);
       }
-      pos = r_pos + 1;  // Skip '\r'
+      pos = r_pos + 1;                     // Skip '\r'
     } else if (pos < commands.length()) {  // Incomplete command
-      incomplete_command = commands.substr(pos);
-      VLOG(1) << "incomplete command: " << incomplete_command;
+      client.incomplete_command = commands.substr(pos);
+      VLOG(1) << "incomplete command: " << client.incomplete_command;
     }
   }
 }
@@ -169,7 +171,8 @@ void ChannelMonitor::CloseRemoteConnection(ClientId client) {
 
       // Trigger monitor loop
       if (write_pipe_->IsOpen()) {
-        write_pipe_->Write("OK", sizeof("OK"));
+        // TODO(schuffelen): Handle unused result
+        Result<uint64_t> unused = write_pipe_->Write("OK", sizeof("OK"));
         VLOG(0) << "asking to remove clients";
       } else {
         LOG(ERROR) << "Pipe created fail, can't trigger monitor loop";
@@ -182,7 +185,8 @@ void ChannelMonitor::CloseRemoteConnection(ClientId client) {
 
 ChannelMonitor::~ChannelMonitor() {
   if (write_pipe_->IsOpen()) {
-    write_pipe_->Write("KO", sizeof("KO"));
+    // TODO(schuffelen): Handle unused result
+    Result<uint64_t> unused = write_pipe_->Write("KO", sizeof("KO"));
   }
 
   if (monitor_thread_.joinable()) {
@@ -230,7 +234,8 @@ void ChannelMonitor::MonitorLoop() {
       }
       if (read_set.IsSet(read_pipe_)) {
         std::string buf(2, ' ');
-        read_pipe_->Read(buf.data(), buf.size());  // Empty pipe
+        Result<uint64_t> unused =
+            read_pipe_->Read(buf.data(), buf.size());  // Empty pipe
         if (buf == std::string("KO")) {
           VLOG(0) << "requested to exit now";
           break;

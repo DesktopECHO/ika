@@ -19,25 +19,22 @@
 #include <stdlib.h>
 
 #include <iostream>
-#include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
+#include "android-base/file.h"
 #include "fmt/core.h"
 
-#include "absl/log/log.h"
-#include "android-base/file.h"
 #include "cuttlefish/common/libs/utils/files.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/flag_parser/flag.h"
 #include "cuttlefish/flag_parser/gflags_compat.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
-#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
-#include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
 #include "cuttlefish/host/commands/cvd/cli/selector/selector.h"
-#include "cuttlefish/host/commands/cvd/cli/types.h"
 #include "cuttlefish/host/commands/cvd/cli/utils.h"
 #include "cuttlefish/host/commands/cvd/instances/instance_manager.h"
 #include "cuttlefish/host/commands/cvd/instances/local_instance_group.h"
@@ -45,6 +42,8 @@
 #include "cuttlefish/host/libs/log_names/log_names.h"
 #include "cuttlefish/host/libs/zip/libzip_cc/archive.h"
 #include "cuttlefish/host/libs/zip/zip_file.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/managed_stdio.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -55,7 +54,7 @@ constexpr char kSummaryHelpText[] =
     "Run cvd bugreport --help for command description";
 
 // Accepts a copy of the args to not modify the original.
-Result<std::string> OutputFileFromArgs(cvd_common::Args args) {
+Result<std::string> OutputFileFromArgs(std::vector<std::string> args) {
   // This flag must match the one defined in
   // //cuttlefish/host/commands/host_bugreport/main.cc
   std::string output = "host_bugreport.zip";
@@ -95,7 +94,7 @@ CvdBugreportCommandHandler::CvdBugreportCommandHandler(
 
 Result<void> CvdBugreportCommandHandler::Handle(const CommandRequest& request) {
   std::vector<std::string> cmd_args = request.SubcommandArguments();
-  cvd_common::Envs env = request.Env();
+  std::unordered_map<std::string, std::string> env = request.Env();
 
   std::string output_file =
       CF_EXPECT(OutputFileFromArgs(cmd_args), "Failed to parse output flag");
@@ -127,7 +126,7 @@ Result<void> CvdBugreportCommandHandler::Handle(const CommandRequest& request) {
   (void)command.Start().Wait();
 
   auto result = AddFetchLogIfPresent(instance_group, output_file);
-  if (!result.ok()) {
+  if (!result.has_value()) {
     LOG(ERROR) << "Failed to add fetch log to bugreport: " << result.error();
   }
 
@@ -148,21 +147,16 @@ Result<std::string> CvdBugreportCommandHandler::DetailedHelp(
     const CommandRequest& request) {
   Command command = CF_EXPECT(ConstructSiblingHelpCommand(
       kHostBugreportBin, request.Env(), request.SubcommandArguments()));
-  std::string stdout;
-  std::string stderr;
-  int res = RunWithManagedStdio(std::move(command), nullptr, &stdout, &stderr);
+  std::string stdout_str;
+  std::string stderr_str;
+  int res = RunWithManagedStdio(std::move(command), nullptr, &stdout_str,
+                                &stderr_str);
   // gflags returns exit code 1 when --help is given
   if (res != 0 && res != 1) {
-    std::cerr << stderr;
+    std::cerr << stderr_str;
     return CF_ERRF("Failed to execute bugreport binary, exit code: {}", res);
   }
-  return stdout;
-}
-
-std::unique_ptr<CvdCommandHandler> NewCvdBugreportCommandHandler(
-    InstanceManager& instance_manager) {
-  return std::unique_ptr<CvdCommandHandler>(
-      new CvdBugreportCommandHandler(instance_manager));
+  return stdout_str;
 }
 
 }  // namespace cuttlefish

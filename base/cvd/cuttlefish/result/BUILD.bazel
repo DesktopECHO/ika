@@ -4,16 +4,28 @@ package(
     default_visibility = ["//:android_cuttlefish"],
 )
 
-exports_files([".clang-tidy"])
+cf_cc_library(
+    name = "assert",
+    testonly = 1,
+    hdrs = ["assert.h"],
+    deps = [
+        "//cuttlefish/result:expect",
+        "//cuttlefish/result:result_matchers",
+        "@googletest//:gtest",
+    ],
+)
 
 cf_cc_library(
     name = "error_type",
     srcs = ["error_type.cc"],
     hdrs = ["error_type.h"],
     deps = [
-        "//libbase",
-        "@abseil-cpp//absl/log",
+        "//cuttlefish/ansi_codes",
+        "//cuttlefish/ansi_codes:should_color",
+        "//cuttlefish/result:stack_trace_entry",
+        "@abseil-cpp//absl/strings",
         "@fmt",
+        "@tl-expected",
     ],
 )
 
@@ -23,9 +35,8 @@ cf_cc_library(
     deps = [
         "//cuttlefish/result:error_type",
         "//cuttlefish/result:result_type",
-        "//libbase",
-        "@abseil-cpp//absl/log",
         "@fmt",
+        "@tl-expected",
     ],
 )
 
@@ -44,7 +55,6 @@ cf_cc_test(
     deps = [
         "//cuttlefish/result",
         "//cuttlefish/result:result_matchers",
-        "//libbase",
     ],
 )
 
@@ -53,8 +63,7 @@ cf_cc_library(
     hdrs = ["result_type.h"],
     deps = [
         "//cuttlefish/result:error_type",
-        "//libbase",
-        "@fmt",
+        "@tl-expected",
     ],
 )
 
@@ -64,7 +73,13 @@ cf_cc_library(
     hdrs = ["result_matchers.h"],
     deps = [
         "//cuttlefish/result",
-        "//libbase",
         "@googletest//:gtest",
+        "@tl-expected",
     ],
+)
+
+cf_cc_library(
+    name = "stack_trace_entry",
+    srcs = ["stack_trace_entry.cc"],
+    hdrs = ["stack_trace_entry.h"],
 )

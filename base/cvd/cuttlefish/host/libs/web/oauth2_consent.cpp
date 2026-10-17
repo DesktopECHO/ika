@@ -18,7 +18,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <zlib.h>
 
 #include <iostream>
 #include <memory>
@@ -26,28 +25,29 @@
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <string_view>
 #include <utility>
 #include <vector>
 
+#include "absl/strings/match.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
-#include <fmt/core.h>
-#include <fmt/format.h>
-#include <json/value.h>
-#include "absl/strings/match.h"
+#include "fmt/core.h"
+#include "fmt/format.h"
+#include "json/value.h"
+#include <zlib.h>
 
+#include "cuttlefish/common/libs/fs/fd.h"
 #include "cuttlefish/common/libs/fs/shared_buf.h"
 #include "cuttlefish/common/libs/fs/shared_fd.h"
 #include "cuttlefish/common/libs/utils/contains.h"
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/json.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
 #include "cuttlefish/host/libs/directories/xdg.h"
 #include "cuttlefish/host/libs/web/credential_source.h"
 #include "cuttlefish/host/libs/web/http_client/http_client.h"
 #include "cuttlefish/host/libs/web/http_client/http_json.h"
 #include "cuttlefish/host/libs/web/http_client/url_escape.h"
+#include "cuttlefish/process/execute.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -85,13 +85,13 @@ class HttpServer {
   uint16_t Port() { return 8888; }
 
   Result<std::string> CodeFromClient() {
-    SharedFD client = SharedFD::Accept(*server_);
-    CF_EXPECT(client->IsOpen(), client->StrError());
+    SharedFD client = CF_EXPECT(Fd::Accept(*server_));
 
     std::stringstream request;
     char buffer[512];
     ssize_t bytes_read;
-    while ((bytes_read = client->Read(buffer, sizeof(buffer))) > 0) {
+    while ((bytes_read = client->Read(buffer, sizeof(buffer)).value_or(0)) >
+           0) {
       request.write(buffer, bytes_read);
       std::string_view buffer_view(buffer, bytes_read);
       if (buffer_view.find("\r\n\r\n") != std::string_view::npos) {
@@ -221,8 +221,8 @@ static constexpr char kCredentials[] = "credentials";
 Result<std::unique_ptr<CredentialSource>> CredentialForScopes(
     HttpClient& http_client, const std::vector<std::string>& scopes,
     const std::string& file_path) {
-  std::string contents = CF_EXPECTF(ReadFileContents(file_path),
-                                    "Failed to read '{}'", file_path);
+  std::string contents =
+      CF_EXPECTF(ReadFileContents(file_path), "Failed to read '{}'", file_path);
 
   Json::Value json = CF_EXPECT(ParseJson(contents));
 
@@ -290,7 +290,7 @@ Result<std::unique_ptr<CredentialSource>> CredentialForScopes(
   for (const std::string& credential_path : credential_paths) {
     Result<std::unique_ptr<CredentialSource>> credential =
         CredentialForScopes(http_client, scopes, credential_path);
-    if (credential.ok() && *credential != nullptr) {
+    if (credential.has_value() && *credential != nullptr) {
       return std::move(*credential);
     }
   }

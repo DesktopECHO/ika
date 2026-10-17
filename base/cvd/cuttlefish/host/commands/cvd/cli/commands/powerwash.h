@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include <memory>
-
 #include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
 #include "cuttlefish/host/commands/cvd/instances/instance_manager.h"
 
@@ -28,7 +26,7 @@ class CvdDevicePowerwashCommandHandler : public CvdCommandHandler {
   CvdDevicePowerwashCommandHandler(InstanceManager& instance_manager);
 
   Result<void> Handle(const CommandRequest& request) override;
-  cvd_common::Args CmdList() const override;
+  std::vector<std::string> CmdList() const override;
 
   std::string SummaryHelp() const override;
   bool RequiresDeviceExists() const override;
@@ -37,8 +35,5 @@ class CvdDevicePowerwashCommandHandler : public CvdCommandHandler {
  private:
   InstanceManager& instance_manager_;
 };
-
-std::unique_ptr<CvdCommandHandler> NewCvdDevicePowerwashCommandHandler(
-    InstanceManager& instance_manager);
 
 }  // namespace cuttlefish

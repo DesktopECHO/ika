@@ -9,12 +9,13 @@ cf_cc_binary(
     srcs = [
         "main.cc",
     ],
+    depend_on_what_you_use_enabled = False,
+    include_cleaner_enabled = False,
     deps = [
         ":libcvd_update_security_algorithm_builder",
         "//cuttlefish/common/libs/fs",
         "//cuttlefish/common/libs/utils:tee_logging",
         "//cuttlefish/host/libs/config:cuttlefish_config",
-        "//libbase",
         "@abseil-cpp//absl/log",
         "@gflags",
     ],
@@ -28,6 +29,7 @@ cf_cc_library(
     hdrs = [
         "update_security_algorithm_command_builder.h",
     ],
+    include_cleaner_enabled = False,
     deps = [
         "@fmt",
     ],
@@ -38,5 +40,6 @@ cf_cc_test(
     srcs = [
         "unittest/update_security_algorithm_command_builder_test.cc",
     ],
+    include_cleaner_enabled = False,
     deps = [":libcvd_update_security_algorithm_builder"],
 )

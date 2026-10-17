@@ -19,11 +19,14 @@
 #include <iostream>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
+#include "cuttlefish/host/commands/cvd/cli/commands/command_handler.h"
 #include "cuttlefish/host/commands/cvd/cli/frontline_parser.h"
 #include "cuttlefish/host/commands/cvd/cli/request_context.h"
+#include "cuttlefish/host/commands/cvd/cli/selector/selector_common_parser.h"
 #include "cuttlefish/host/commands/cvd/instances/instance_manager.h"
 #include "cuttlefish/host/commands/cvd/instances/lock/instance_lock.h"
 #include "cuttlefish/host/libs/vm_manager/host_configuration.h"
@@ -39,7 +42,7 @@ Cvd::Cvd(InstanceManager& instance_manager,
 static Result<void> EnforceHostConfigured() {
   std::vector<vm_manager::HostConfigurationAction> actions =
       CF_EXPECT(vm_manager::ValidateHostConfiguration());
-  CF_EXPECT(actions.empty(), "Run `cvd setup` to configure the host.");
+  CF_EXPECT(actions.empty(), "Host configuration is invalid.");
   return {};
 }
 
@@ -63,7 +66,13 @@ Result<void> Cvd::HandleCommand(
   }
 
   if (handler->RequiresHostConfiguration()) {
-    CF_EXPECT(EnforceHostConfigured());
+    Result<void> enforce_result = EnforceHostConfigured();
+    if (!enforce_result.has_value()) {
+      std::cerr << "Host configuration requirements not met.  Run `cvd setup` "
+                   "to configure the host."
+                << std::endl;
+      CF_EXPECT(std::move(enforce_result));
+    }
   }
 
   CF_EXPECT(handler->Handle(request));
@@ -77,7 +86,7 @@ Result<void> Cvd::HandleCvdCommand(
   CF_EXPECT(!all_args.empty());
   std::vector<std::string> args = all_args;
   if (args.size() == 1ul) {
-    args = cvd_common::Args{"cvd", "help"};
+    args = std::vector<std::string>{"cvd", "help"};
   }
   selector::SelectorOptions selector_args = CF_EXPECT(ExtractCvdArgs(args));
   // TODO(schuffelen): Deduplicate cvd process split.

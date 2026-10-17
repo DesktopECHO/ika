@@ -16,11 +16,14 @@
 
 #include "cuttlefish/host/commands/cvd/cli/request_context.h"
 
+#include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include <fmt/ranges.h>  // NOLINT(misc-include-cleaner): version difference
+#include "fmt/base.h"
+#include "fmt/ostream.h"
+#include "fmt/ranges.h"
 
 #include "cuttlefish/common/libs/utils/contains.h"
 #include "cuttlefish/host/commands/cvd/cli/command_request.h"
@@ -31,6 +34,7 @@
 #include "cuttlefish/host/commands/cvd/cli/commands/create.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/display.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/env.h"
+#include "cuttlefish/host/commands/cvd/cli/commands/event_devices.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/fetch.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/fleet.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/help.h"
@@ -41,6 +45,7 @@
 #include "cuttlefish/host/commands/cvd/cli/commands/monitor/command_handler.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/power_btn.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/powerwash.h"
+#include "cuttlefish/host/commands/cvd/cli/commands/ps.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/remove.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/reset.h"
 #include "cuttlefish/host/commands/cvd/cli/commands/restart.h"
@@ -59,7 +64,8 @@ namespace cuttlefish {
 
 namespace {
 
-bool CanHandle(const CvdCommandHandler& handler, const CommandRequest& request) {
+bool CanHandle(const CvdCommandHandler& handler,
+               const CommandRequest& request) {
   return Contains(handler.CmdList(), request.Subcommand());
 }
 
@@ -82,44 +88,100 @@ std::vector<std::string> GetPossibleCommands(
   return possibilities;
 }
 
+bool HandleDeprecatedCommands(const CommandRequest& request) {
+  if (request.Subcommand() == "acloud") {
+    std::cerr << "If you are seeing this error when you tried to run `acloud` "
+                 "in an Android lunch environment, you are likely running into "
+                 "an error with an outdated `acloud_translator` symlink.  You "
+                 "can verify "
+                 "with `where acloud`, and there should be two results.\n\nTo "
+                 "fix, run `rm $ANDROID_HOST_OUT/bin/acloud` to remove the "
+                 "deprecated `acloud_translator` binary symlink.  `m clean; m` "
+                 "should also remove the symlink.\n";
+    return true;
+  }
+  return false;
+}
+
+void SuggestAlternativeCommands(
+    const CommandRequest& request,
+    const std::vector<std::unique_ptr<CvdCommandHandler>>& handlers) {
+  fmt::print(std::cerr,
+             "Unable to find a matching command for \"cvd {}\".\nMaybe there "
+             "is a typo?  Run `cvd help` for a list of commands.",
+             request.Subcommand());
+  const std::vector<std::string> possible_commands =
+      GetPossibleCommands(request, handlers);
+  std::string addendum;
+  if (!possible_commands.empty()) {
+    fmt::print(std::cerr, "\n\nDid you mean one of:\n\t{}\n",
+               fmt::join(possible_commands, "\n\t"));
+  }
+}
+
+void HandleNoMatches(
+    const CommandRequest& request,
+    const std::vector<std::unique_ptr<CvdCommandHandler>>& handlers) {
+  if (!HandleDeprecatedCommands(request)) {
+    SuggestAlternativeCommands(request, handlers);
+  }
+}
+
 }  //  namespace
 
 RequestContext::RequestContext(InstanceManager& instance_manager,
                                InstanceLockFileManager& lock_file_manager) {
-  request_handlers_.emplace_back(NewCvdCacheCommandHandler());
+  request_handlers_.emplace_back(std::make_unique<CvdCacheCommandHandler>());
 
-  request_handlers_.emplace_back(NewCvdCreateCommandHandler(instance_manager));
-  request_handlers_.emplace_back(NewCvdDisplayCommandHandler(instance_manager));
-  request_handlers_.emplace_back(NewCvdEnvCommandHandler(instance_manager));
-  request_handlers_.emplace_back(NewCvdFetchCommandHandler());
-  request_handlers_.emplace_back(NewCvdFleetCommandHandler(instance_manager));
-  request_handlers_.emplace_back(NewCvdClearCommandHandler(instance_manager));
   request_handlers_.emplace_back(
-      NewCvdBugreportCommandHandler(instance_manager));
-  request_handlers_.emplace_back(NewCvdStopCommandHandler(instance_manager));
+      std::make_unique<CvdCreateCommandHandler>(instance_manager));
   request_handlers_.emplace_back(
-      NewCvdHelpHandler(this->request_handlers_));
-  request_handlers_.emplace_back(NewLintCommand());
-  request_handlers_.emplace_back(NewLoadConfigsCommand(instance_manager));
-  request_handlers_.emplace_back(NewLoginCommand());
+      std::make_unique<CvdDisplayCommandHandler>(instance_manager));
   request_handlers_.emplace_back(
-      NewCvdDevicePowerBtnCommandHandler(instance_manager));
+      std::make_unique<CvdEnvCommandHandler>(instance_manager));
+  request_handlers_.emplace_back(std::make_unique<CvdFetchCommandHandler>());
   request_handlers_.emplace_back(
-      NewCvdDevicePowerwashCommandHandler(instance_manager));
-  request_handlers_.emplace_back(NewCvdMonitorCommandHandler(instance_manager));
+      std::make_unique<CvdFleetCommandHandler>(instance_manager));
   request_handlers_.emplace_back(
-      NewCvdDeviceRestartCommandHandler(instance_manager));
-  request_handlers_.emplace_back(NewRemoveCvdCommandHandler(instance_manager));
-  request_handlers_.emplace_back(NewCvdResetCommandHandler(instance_manager));
+      std::make_unique<CvdClearCommandHandler>(instance_manager));
   request_handlers_.emplace_back(
-      NewScreenRecordingCommandHandler(instance_manager));
+      std::make_unique<CvdBugreportCommandHandler>(instance_manager));
   request_handlers_.emplace_back(
-      NewCvdSnapshotCommandHandler(instance_manager));
-  request_handlers_.emplace_back(NewCvdSetupHandler());
-  request_handlers_.emplace_back(NewCvdStartCommandHandler(instance_manager));
-  request_handlers_.emplace_back(NewCvdStatusCommandHandler(instance_manager));
-  request_handlers_.emplace_back(NewCvdVersionHandler());
-  request_handlers_.emplace_back(NewCvdLogsHandler(instance_manager));
+      std::make_unique<CvdStopCommandHandler>(instance_manager));
+  request_handlers_.emplace_back(
+      std::make_unique<CvdHelpHandler>(this->request_handlers_));
+  request_handlers_.emplace_back(
+      std::make_unique<CvdInputDevicesHandler>(instance_manager));
+  request_handlers_.emplace_back(std::make_unique<LintCommandHandler>());
+  request_handlers_.emplace_back(
+      std::make_unique<LoadConfigsCommand>(instance_manager));
+  request_handlers_.emplace_back(std::make_unique<CvdLoginCommand>());
+  request_handlers_.emplace_back(
+      std::make_unique<CvdDevicePowerBtnCommandHandler>(instance_manager));
+  request_handlers_.emplace_back(
+      std::make_unique<CvdDevicePowerwashCommandHandler>(instance_manager));
+  request_handlers_.emplace_back(
+      std::make_unique<CvdMonitorCommandHandler>(instance_manager));
+  request_handlers_.emplace_back(
+      std::make_unique<CvdDeviceRestartCommandHandler>(instance_manager));
+  request_handlers_.emplace_back(
+      std::make_unique<RemoveCvdCommandHandler>(instance_manager));
+  request_handlers_.emplace_back(
+      std::make_unique<CvdResetCommandHandler>(instance_manager));
+  request_handlers_.emplace_back(
+      std::make_unique<ScreenRecordingCommandHandler>(instance_manager));
+  request_handlers_.emplace_back(
+      std::make_unique<CvdSnapshotCommandHandler>(instance_manager));
+  request_handlers_.emplace_back(std::make_unique<CvdSetupHandler>());
+  request_handlers_.emplace_back(
+      std::make_unique<CvdStartCommandHandler>(instance_manager));
+  request_handlers_.emplace_back(
+      std::make_unique<CvdStatusCommandHandler>(instance_manager));
+  request_handlers_.emplace_back(
+      std::make_unique<CvdPsCommandHandler>(instance_manager));
+  request_handlers_.emplace_back(std::make_unique<CvdVersionHandler>());
+  request_handlers_.emplace_back(
+      std::make_unique<CvdLogsHandler>(instance_manager));
 }
 
 Result<CvdCommandHandler*> RequestContext::Handler(
@@ -137,23 +199,15 @@ Result<CvdCommandHandler*> RequestHandler(
     }
   }
 
-  CF_EXPECT(compatible_handlers.size() < 2,
-            "The command matched multiple handlers which should not happen.  "
-            "Please open a bug with the cvd/Cuttlefish team and include the "
-            "exact command that raised the error so it can be fixed.");
+  CF_EXPECT_LE(compatible_handlers.size(), 1,
+               "The command matched multiple handlers, which should not "
+               "happen.  Please open a bug with the Cuttlefish team and "
+               "include the exact command that raised the error.");
 
   if (compatible_handlers.size() != 1) {
-    const std::vector<std::string> possible_commands =
-        GetPossibleCommands(request, handlers);
-    std::string addendum;
-    if (!possible_commands.empty()) {
-      addendum = fmt::format("\n\nDid you mean one of:\n\t{}",
-                             fmt::join(possible_commands, "\n\t"));
-    }
-    return CF_ERRF(
-        "Unable to find a matching command for \"cvd {}\".\nMaybe there "
-        "is a typo?  Run `cvd help` for a list of commands.{}",
-        request.Subcommand(), addendum);
+    HandleNoMatches(request, handlers);
+    return CF_ERRF("Unable to find matching command for \"cvd {}\".",
+                   request.Subcommand());
   }
   return compatible_handlers[0];
 }

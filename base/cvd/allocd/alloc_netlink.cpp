@@ -13,9 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "allocd/alloc_driver.h"
 
 #include <arpa/inet.h>
+#include <asm/types.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
 #include <linux/if_tun.h>
@@ -25,24 +26,24 @@
 #include <net/if_arp.h>
 #include <netinet/in.h>
 #include <string.h>
-#include <sys/ioctl.h>
-#include <sys/socket.h>
-#include <sys/types.h>
+#include <sys/socket.h>  // IWYU pragma: keep
 
 #include <cstdint>
-#include <fstream>
+#include <memory>
+#include <string>
 #include <string_view>
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
-#include "absl/strings/str_format.h"
 #include "absl/strings/strip.h"
 
+#include "allocd/alloc_driver.h"
 #include "allocd/net/netlink_client.h"
-#include "cuttlefish/common/libs/fs/shared_fd.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
+#include "allocd/net/netlink_request.h"
+#include "cuttlefish/common/libs/fs/fd.h"
+#include "cuttlefish/process/execute.h"
 #include "cuttlefish/result/result.h"
 
 namespace cuttlefish {
@@ -71,27 +72,26 @@ int Prefix(std::string_view textual_netmask) {
 }  // namespace
 
 Result<void> AddTapIface(std::string_view name) {
-  SharedFD tunfd = SharedFD::Open("/dev/net/tun", O_RDWR | O_CLOEXEC);
-  CF_EXPECT(tunfd->IsOpen(), "AddTapIface: open: " << tunfd->StrError());
+  Fd tunfd = CF_EXPECT(Fd::Open("/dev/net/tun", O_RDWR | O_CLOEXEC),
+                       "AddTapIface: open");
 
   struct ifreq ifr;
   strncpy(ifr.ifr_name, std::string(name).c_str(), IFNAMSIZ);
   ifr.ifr_name[IFNAMSIZ - 1] = '\0';
   ifr.ifr_flags = IFF_TAP | IFF_VNET_HDR;
   ifr.ifr_flags |= IFF_TUN_EXCL;
-  int r = tunfd->Ioctl(TUNSETIFF, (void*)&ifr);
-  CF_EXPECT(r != -1, "AddTapIface: TUNSETIFF: " << tunfd->StrError());
+  int r = tunfd.Ioctl(TUNSETIFF, (void*)&ifr);
+  CF_EXPECT(r != -1, "AddTapIface: TUNSETIFF: " << tunfd.StrError());
 
   struct group* g = getgrnam(kCvdNetworkGroupName);
-  CF_EXPECT(g != NULL, "AddTapIface: getgrnam: " << tunfd->StrError());
+  CF_EXPECT(g != NULL, "AddTapIface: getgrnam: " << tunfd.StrError());
 
-  r = tunfd->Ioctl(TUNSETGROUP, (void*)(intptr_t)g->gr_gid);
-  CF_EXPECT(r != -1, "AddTapIface: TUNSETGROUP: " << tunfd->StrError());
+  r = tunfd.Ioctl(TUNSETGROUP, (void*)(intptr_t)g->gr_gid);
+  CF_EXPECT(r != -1, "AddTapIface: TUNSETGROUP: " << tunfd.StrError());
 
-  r = tunfd->Ioctl(TUNSETPERSIST, (void*)1);
-  CF_EXPECT(r != -1, "AddTapIface: TUNSETPERSIST: " << tunfd->StrError());
+  r = tunfd.Ioctl(TUNSETPERSIST, (void*)1);
+  CF_EXPECT(r != -1, "AddTapIface: TUNSETPERSIST: " << tunfd.StrError());
 
-  tunfd->Close();
   return {};
 }
 
@@ -100,8 +100,10 @@ Result<void> ShutdownIface(std::string_view name) {
   auto factory = NetlinkClientFactory::Default();
   std::unique_ptr<NetlinkClient> nl = factory->New(NETLINK_ROUTE);
 
+  // NOLINTNEXTLINE(misc-include-cleaner): rtnetlink
   NetlinkRequest req(RTM_NEWLINK, NLM_F_REQUEST | NLM_F_ACK);
   req.AddIfInfo(0, false);
+  // NOLINTNEXTLINE(misc-include-cleaner): rtnetlink
   req.AddString(IFLA_IFNAME, std::string(name));
   CF_EXPECT(nl->Send(req), "ShutdownIface");
   return {};
@@ -112,6 +114,7 @@ Result<void> BringUpIface(std::string_view name) {
   auto factory = NetlinkClientFactory::Default();
   std::unique_ptr<NetlinkClient> nl = factory->New(NETLINK_ROUTE);
 
+  // NOLINTNEXTLINE(misc-include-cleaner): rtnetlink
   NetlinkRequest req(RTM_NEWLINK, NLM_F_REQUEST | NLM_F_ACK);
   req.AddIfInfo(0, true);
   req.AddString(IFLA_IFNAME, std::string(name));
@@ -123,7 +126,7 @@ Result<void> AddGateway(std::string_view name, std::string_view gateway,
                         std::string_view netmask) {
   VLOG(0) << "AddGateway: " << name << ", " << gateway << netmask;
   auto index = Index(name);
-  PCHECK(index.ok()) << "Index: " << name;
+  PCHECK(index.has_value()) << "Index: " << name;
 
   auto factory = NetlinkClientFactory::Default();
   std::unique_ptr<NetlinkClient> nl = factory->New(NETLINK_ROUTE);
@@ -131,8 +134,8 @@ Result<void> AddGateway(std::string_view name, std::string_view gateway,
   NetlinkRequest req(RTM_NEWADDR, NLM_F_REQUEST | NLM_F_ACK);
   req.AddAddrInfo(*index, Prefix(netmask));
   in_addr_t inaddr = inet_addr(std::string(gateway).c_str());
-  req.AddInAddr(IFA_LOCAL, &inaddr);
-  req.AddInAddr(IFA_ADDRESS, &inaddr);
+  req.AddInAddr(IFA_LOCAL, &inaddr);    // NOLINT(misc-include-cleaner): netlink
+  req.AddInAddr(IFA_ADDRESS, &inaddr);  // NOLINT(misc-include-cleaner): netlink
 
   CF_EXPECT(nl->Send(req), "AddGateway");
   return {};
@@ -142,7 +145,7 @@ Result<void> DestroyGateway(std::string_view name, std::string_view gateway,
                             std::string_view netmask) {
   VLOG(0) << "DestroyGateway: " << name << ", " << gateway << netmask;
   auto index = Index(name);
-  if (!index.ok()) {
+  if (!index.has_value()) {
     return {};  // Nothing to delete.
   }
 
@@ -163,9 +166,9 @@ Result<void> LinkTapToBridge(std::string_view tap_name,
                              std::string_view bridge_name) {
   VLOG(0) << "LinkTapToBridge: " << tap_name << ", " << bridge_name;
   auto tap_index = Index(tap_name);
-  PCHECK(tap_index.ok()) << "Index: " << tap_name;
+  PCHECK(tap_index.has_value()) << "Index: " << tap_name;
   auto bridge_index = Index(bridge_name);
-  PCHECK(bridge_index.ok()) << "Index: " << bridge_name;
+  PCHECK(bridge_index.has_value()) << "Index: " << bridge_name;
 
   auto factory = NetlinkClientFactory::Default();
   std::unique_ptr<NetlinkClient> nl = factory->New(NETLINK_ROUTE);
@@ -181,7 +184,7 @@ Result<void> LinkTapToBridge(std::string_view tap_name,
 Result<void> DeleteIface(std::string_view name) {
   VLOG(0) << "DeleteIface: " << name;
   auto index = Index(name);
-  if (!index.ok()) {
+  if (!index.has_value()) {
     return {};  // Nothing to delete.
   }
 
@@ -198,7 +201,7 @@ Result<void> DeleteIface(std::string_view name) {
 Result<bool> BridgeExists(std::string_view name) {
   VLOG(0) << "BridgeExists: " << name;
   auto index = Index(name);
-  if (!index.ok()) {
+  if (!index.has_value()) {
     CF_EXPECT(errno == ENODEV);
     return false;
   }
@@ -221,12 +224,14 @@ Result<void> CreateBridge(std::string_view name) {
   req.Append(ifinfomsg{
       .ifi_type = ARPHRD_NETROM,
   });
+  // NOLINTBEGIN(misc-include-cleaner): rtnetlink
   req.AddString(IFLA_IFNAME, std::string(name));
   req.PushList(IFLA_LINKINFO);
   req.AddString(IFLA_INFO_KIND, "bridge");
   req.PushList(IFLA_INFO_DATA);
   req.AddInt(IFLA_BR_FORWARD_DELAY, 0);
   req.AddInt(IFLA_BR_STP_STATE, 0);
+  // NOLINTEND(misc-include-cleaner): rtnetlink
   req.PopList();
   req.PopList();
 
@@ -266,5 +271,10 @@ Result<void> NftConfig(std::string_view network, bool add) {
             "NftConfig");
   return {};
 }
+
+// firewalld zone assignment for the bridge interfaces is handled statically
+// by the zone file the host packages install; see alloc_iproute2.cpp.
+void FirewallAddTrustedInterface(std::string_view) {}
+void FirewallRemoveTrustedInterface(std::string_view) {}
 
 }  // namespace cuttlefish

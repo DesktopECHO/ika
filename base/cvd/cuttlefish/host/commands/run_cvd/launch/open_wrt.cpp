@@ -20,11 +20,12 @@
 #include <utility>
 #include <vector>
 
-#include <fruit/component.h>
-#include <fruit/fruit_forward_decls.h>
-#include <fruit/macro.h>
 #include "absl/log/log.h"
+#include "fruit/component.h"
+#include "fruit/fruit_forward_decls.h"
+#include "fruit/macro.h"
 
+#include "cuttlefish/common/libs/utils/in_sandbox.h"
 #include "cuttlefish/common/libs/utils/json.h"
 #include "cuttlefish/host/commands/run_cvd/launch/cvdalloc.h"
 #include "cuttlefish/host/commands/run_cvd/launch/log_tee_creator.h"
@@ -67,7 +68,7 @@ class OpenWrt : public CommandSource {
     ap_cmd.Cmd().AddPrerequisite([this]() -> Result<void> {
       if (cvdalloc_.Enabled()) {
         CF_EXPECT(cvdalloc_.WaitForAvailability());
-        LOG(INFO) << "openwrt (run_cvd): cvdalloc is available."; 
+        LOG(INFO) << "openwrt (run_cvd): cvdalloc is available.";
       }
       CF_EXPECT(wmediumd_server_.WaitForAvailability());
       return {};
@@ -112,7 +113,7 @@ class OpenWrt : public CommandSource {
                                 environment_.vhost_user_mac80211_hwsim());
     }
     if (environment_.enable_wifi() && instance_.has_wifi_card() &&
-        instance_.enable_tap_devices()) {
+        instance_.enable_tap_devices() && !InSandbox()) {
       ap_cmd.AddTap(instance_.wifi_tap_name());
     }
 

@@ -19,6 +19,8 @@
 #include <functional>
 #include <string>
 
+#include "json/value.h"
+
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/result/result.h"
 
@@ -30,7 +32,7 @@ namespace cuttlefish {
  */
 Result<void> CopyDirectoryRecursively(
     const std::string& src_dir_path, const std::string& dest_dir_path,
-    const bool verify_dest_dir_empty = false,
+    bool verify_dest_dir_empty = false,
     std::function<bool(const std::string&)> predicate = [](const std::string&) {
       return true;
     });

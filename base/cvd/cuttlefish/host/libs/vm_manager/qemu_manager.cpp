@@ -30,15 +30,15 @@
 #include <utility>
 #include <vector>
 
-#include <vulkan/vulkan.h>
 #include "absl/log/log.h"
 #include "absl/strings/str_split.h"
+#include "vulkan/vulkan.h"
 
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/host_info.h"
-#include "cuttlefish/common/libs/utils/subprocess.h"
-#include "cuttlefish/common/libs/utils/subprocess_managed_stdio.h"
+#include "cuttlefish/common/libs/utils/in_sandbox.h"
 #include "cuttlefish/common/libs/utils/wait_for_unix_socket.h"
+#include "cuttlefish/files/file_exists.h"
 #include "cuttlefish/host/libs/config/config_constants.h"
 #include "cuttlefish/host/libs/config/config_instance_derived.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
@@ -46,6 +46,8 @@
 #include "cuttlefish/host/libs/config/gpu_mode.h"
 #include "cuttlefish/host/libs/feature/command_source.h"
 #include "cuttlefish/host/libs/vm_manager/vhost_user.h"
+#include "cuttlefish/process/command.h"
+#include "cuttlefish/process/managed_stdio.h"
 #include "cuttlefish/result/result.h"
 
 // This is the QEMU default, but set it explicitly just in case it
@@ -64,31 +66,31 @@ std::string GetMonitorPath(const CuttlefishConfig& config) {
 StopperResult Stop() {
   auto config = CuttlefishConfig::Get();
   auto monitor_path = GetMonitorPath(*config);
-  auto monitor_sock = SharedFD::SocketLocalClient(
-      monitor_path.c_str(), false, SOCK_STREAM);
+  auto monitor_sock =
+      SharedFD::SocketLocalClient(monitor_path.c_str(), false, SOCK_STREAM);
 
   if (!monitor_sock->IsOpen()) {
     LOG(ERROR) << "The connection to qemu is closed, is it still running?";
-    return StopperResult::kStopFailure;
+    return StopperResult::kFailure;
   }
   char msg[] = "{\"execute\":\"qmp_capabilities\"}{\"execute\":\"quit\"}";
   ssize_t len = sizeof(msg) - 1;
   while (len > 0) {
-    int tmp = monitor_sock->Write(msg, len);
-    if (tmp < 0) {
+    Result<uint64_t> tmp = monitor_sock->Write(msg, len);
+    if (!tmp.has_value()) {
       LOG(ERROR) << "Error writing to socket: " << monitor_sock->StrError();
-      return StopperResult::kStopFailure;
+      return StopperResult::kFailure;
     }
-    len -= tmp;
+    len -= *tmp;
   }
   // Log the reply
   char buff[1000];
-  while ((len = monitor_sock->Read(buff, sizeof(buff) - 1)) > 0) {
+  while ((len = monitor_sock->Read(buff, sizeof(buff) - 1).value_or(0)) > 0) {
     buff[len] = '\0';
     LOG(INFO) << "From qemu monitor: " << buff;
   }
 
-  return StopperResult::kStopSuccess;
+  return StopperResult::kSuccess;
 }
 
 Result<std::pair<int, int>> GetQemuVersion(const std::string& qemu_binary) {
@@ -114,9 +116,7 @@ Result<std::pair<int, int>> GetQemuVersion(const std::string& qemu_binary) {
 
 QemuManager::QemuManager(Arch arch) : arch_(arch) {}
 
-bool QemuManager::IsSupported() {
-  return HostSupportsQemuCli();
-}
+bool QemuManager::IsSupported() { return HostSupportsQemuCli(); }
 
 Result<std::unordered_map<std::string, std::string>>
 QemuManager::ConfigureGraphics(
@@ -128,7 +128,18 @@ QemuManager::ConfigureGraphics(
 
   std::unordered_map<std::string, std::string> bootconfig_args;
   const GpuMode gpu_mode = instance.gpu_mode();
-  if (gpu_mode == GpuMode::GuestSwiftshader) {
+  if (gpu_mode == GpuMode::GuestLavapipe) {
+    bootconfig_args = {
+        {"androidboot.cpuvulkan.version", std::to_string(VK_API_VERSION_1_4)},
+        {"androidboot.hardware.gralloc", "minigbm"},
+        {"androidboot.hardware.hwcomposer", instance.hwcomposer()},
+        {"androidboot.hardware.hwcomposer.mode", "client"},
+        {"androidboot.hardware.egl", "angle"},
+        {"androidboot.hardware.vulkan", "lvp"},
+        // OpenGL ES 3.1
+        {"androidboot.opengles.version", "196609"},
+    };
+  } else if (gpu_mode == GpuMode::GuestSwiftshader) {
     bootconfig_args = {
         {"androidboot.cpuvulkan.version", std::to_string(VK_API_VERSION_1_2)},
         {"androidboot.hardware.gralloc", "minigbm"},
@@ -212,9 +223,9 @@ QemuManager::ConfigureBootDevices(
       // QEMU has additional PCI devices for an ISA bridge and PIIX4
       // virtio_gpu precedes the first console or disk
       // TODO(schuffelen): Simplify this logic when crosvm uses multiport
-      int pci_offset = 3 + num_gpu - VmManager::kDefaultNumHvcs;
-      return ConfigureMultipleBootDevices("pci0000:00/0000:00:", pci_offset,
-                                          num_disks);
+      int disk_pci_offset = 3 + num_gpu + VmManager::kMaxDisks - num_disks;
+      return ConfigureMultipleBootDevices(
+          "pci0000:00/0000:00:", disk_pci_offset, num_disks);
     }
   }
 }
@@ -326,8 +337,8 @@ Result<std::vector<MonitorCommand>> QemuManager::StartCommands(
   if (FileExists(access_kregistry)) {
     access_kregistry_size_bytes = FileSize(access_kregistry);
     CF_EXPECTF((access_kregistry_size_bytes & (1024 * 1024 - 1)) == 0,
-               "'{}' file size ({}) not a multiple of 1MB",
-               access_kregistry, access_kregistry_size_bytes);
+               "'{}' file size ({}) not a multiple of 1MB", access_kregistry,
+               access_kregistry_size_bytes);
   }
 
   auto hwcomposer_pmem_size_bytes = 0;
@@ -350,7 +361,8 @@ Result<std::vector<MonitorCommand>> QemuManager::StartCommands(
   }
 
   qemu_cmd.AddParameter("-name");
-  qemu_cmd.AddParameter("guest=", instance.instance_name(), ",debug-threads=on");
+  qemu_cmd.AddParameter("guest=", instance.instance_name(),
+                        ",debug-threads=on");
 
   std::string machine = is_x86 ? "pc,nvdimm=on" : "virt";
   if (is_arm) {
@@ -366,11 +378,12 @@ Result<std::vector<MonitorCommand>> QemuManager::StartCommands(
     machine += ",mte=on";
   }
   qemu_cmd.AddParameter("-machine");
-  qemu_cmd.AddParameter(machine, ",usb=off,dump-guest-core=off,memory-backend=vm_ram");
+  qemu_cmd.AddParameter(machine,
+                        ",usb=off,dump-guest-core=off,memory-backend=vm_ram");
 
   if (IsHostCompatible(arch_)) {
     qemu_cmd.AddParameter("-accel");
-    std::string accel;
+    std::string accel = "tcg";
 #ifdef __linux__
     accel = "kvm";
     if (!config.kvm_path().empty()) {
@@ -378,8 +391,6 @@ Result<std::vector<MonitorCommand>> QemuManager::StartCommands(
     }
 #elif defined(__APPLE__)
     accel = "hvf";
-#else
-#error "Unknown OS"
 #endif
     qemu_cmd.AddParameter(accel);
   }
@@ -399,8 +410,8 @@ Result<std::vector<MonitorCommand>> QemuManager::StartCommands(
                 (hwcomposer_pmem_size_bytes / 1024 / 1024) +
                 (is_x86 ? pstore_size_bytes / 1024 / 1024 : 0);
   auto slots = is_x86 ? ",slots=2" : "";
-  qemu_cmd.AddParameter("size=", instance.memory_mb(), "M",
-                        ",maxmem=", maxmem, "M", slots);
+  qemu_cmd.AddParameter("size=", instance.memory_mb(), "M", ",maxmem=", maxmem,
+                        "M", slots);
 
   qemu_cmd.AddParameter("-overcommit");
   qemu_cmd.AddParameter("mem-lock=off");
@@ -411,11 +422,11 @@ Result<std::vector<MonitorCommand>> QemuManager::StartCommands(
   if (instance.smt()) {
     CF_EXPECT(instance.cpus() % 2 == 0,
               "CPUs must be a multiple of 2 in SMT mode");
-    qemu_cmd.AddParameter(instance.cpus(), ",cores=",
-                          instance.cpus() / 2, ",threads=2");
+    qemu_cmd.AddParameter(instance.cpus(), ",cores=", instance.cpus() / 2,
+                          ",threads=2");
   } else {
-    qemu_cmd.AddParameter(instance.cpus(), ",cores=",
-                          instance.cpus(), ",threads=1");
+    qemu_cmd.AddParameter(instance.cpus(), ",cores=", instance.cpus(),
+                          ",threads=1");
   }
 
   qemu_cmd.AddParameter("-uuid");
@@ -445,8 +456,7 @@ Result<std::vector<MonitorCommand>> QemuManager::StartCommands(
 
     qemu_cmd.AddParameter("-vnc");
     qemu_cmd.AddParameter("127.0.0.1:", instance.qemu_vnc_server_port());
-  } else if (gpu_mode == GpuMode::GuestSwiftshader ||
-             IsGfxstreamMode(gpu_mode)) {
+  } else if (IsGuestRenderingMode(gpu_mode) || IsGfxstreamMode(gpu_mode)) {
     qemu_cmd.AddParameter("-vnc");
     qemu_cmd.AddParameter("127.0.0.1:", instance.qemu_vnc_server_port());
   } else {
@@ -510,9 +520,8 @@ Result<std::vector<MonitorCommand>> QemuManager::StartCommands(
   }
 
   qemu_cmd.AddParameter("-device");
-  qemu_cmd.AddParameter(
-      "virtio-serial-pci-non-transitional,max_ports=", kMaxSerialPorts,
-      ",id=virtio-serial");
+  qemu_cmd.AddParameter("virtio-serial-pci-non-transitional,max_ports=",
+                        kMaxSerialPorts, ",id=virtio-serial");
 
   // /dev/hvc0 = kernel console
   // If kernel log is enabled, the virtio-console port will be specified as
@@ -614,8 +623,8 @@ Result<std::vector<MonitorCommand>> QemuManager::StartCommands(
     add_hvc_sink();
   }
 
-  // /dev/hvc13 is vacant, feel free to use
-  add_hvc_sink();
+  // /dev/hvc13 = Weaver
+  add_hvc(instance.PerInstanceInternalPath("weaver_fifo_vm"));
 
   // /dev/hvc14 = MCU CONTROL
   if (instance.mcu()["control"]["type"].asString() == "serial") {
@@ -726,8 +735,7 @@ Result<std::vector<MonitorCommand>> QemuManager::StartCommands(
       qemu_cmd.AddParameter("-object");
       qemu_cmd.AddParameter(
           "memory-backend-file,id=objpmem1,share=on,mem-path=",
-          AccessKregistryPath(instance),
-          ",size=", access_kregistry_size_bytes);
+          AccessKregistryPath(instance), ",size=", access_kregistry_size_bytes);
 
       qemu_cmd.AddParameter("-device");
       qemu_cmd.AddParameter(
@@ -781,7 +789,7 @@ Result<std::vector<MonitorCommand>> QemuManager::StartCommands(
   bool has_network_devices = false;
   switch (instance.external_network_mode()) {
     case ExternalNetworkMode::kTap:
-      if (instance.enable_tap_devices()) {
+      if (instance.enable_tap_devices() && !InSandbox()) {
         has_network_devices = true;
         if (instance.enable_modem_simulator()) {
           qemu_cmd.AddParameter("-netdev");
@@ -862,8 +870,7 @@ Result<std::vector<MonitorCommand>> QemuManager::StartCommands(
   // behavior changes upstream.
   if (is_riscv64) {
     qemu_cmd.AddParameter("-cpu");
-    qemu_cmd.AddParameter("rv64",
-                          ",v=true,elen=64,vlen=128",
+    qemu_cmd.AddParameter("rv64", ",v=true,elen=64,vlen=128",
                           ",zba=true,zbb=true,zbs=true");
   }
 
@@ -915,7 +922,7 @@ Result<std::vector<MonitorCommand>> QemuManager::StartCommands(
     add_hvc_sink();
   }
 
-  commands.emplace_back(std::move(qemu_cmd), true);
+  commands.emplace_back(std::move(qemu_cmd), ProcessCategory::kVmm);
   return commands;
 }
 

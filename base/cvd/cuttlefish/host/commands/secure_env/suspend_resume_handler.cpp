@@ -24,16 +24,18 @@ namespace {
 
 Result<void> WriteSuspendRequest(const SharedFD& socket) {
   const SnapshotSocketMessage suspend_request = SnapshotSocketMessage::kSuspend;
-  CF_EXPECT_EQ(sizeof(suspend_request),
-               socket->Write(&suspend_request, sizeof(suspend_request)),
+  uint64_t written =
+      CF_EXPECT(socket->Write(&suspend_request, sizeof(suspend_request)));
+  CF_EXPECT_EQ(sizeof(suspend_request), written,
                "socket write failed: " << socket->StrError());
   return {};
 }
 
 Result<void> ReadSuspendAck(const SharedFD& socket) {
   SnapshotSocketMessage ack_response;
-  CF_EXPECT_EQ(sizeof(ack_response),
-               socket->Read(&ack_response, sizeof(ack_response)),
+  uint64_t data_read =
+      CF_EXPECT(socket->Read(&ack_response, sizeof(ack_response)).value_or(0));
+  CF_EXPECT_EQ(sizeof(ack_response), data_read,
                "socket read failed: " << socket->StrError());
   CF_EXPECT_EQ(SnapshotSocketMessage::kSuspendAck, ack_response);
   return {};
@@ -41,8 +43,9 @@ Result<void> ReadSuspendAck(const SharedFD& socket) {
 
 Result<void> WriteResumeRequest(const SharedFD& socket) {
   const SnapshotSocketMessage resume_request = SnapshotSocketMessage::kResume;
-  CF_EXPECT_EQ(sizeof(resume_request),
-               socket->Write(&resume_request, sizeof(resume_request)),
+  uint64_t written =
+      CF_EXPECT(socket->Write(&resume_request, sizeof(resume_request)));
+  CF_EXPECT_EQ(sizeof(resume_request), written,
                "socket write failed: " << socket->StrError());
   return {};
 }
@@ -64,8 +67,8 @@ SnapshotCommandHandler::SnapshotCommandHandler(SharedFD channel_to_run_cvd,
   handler_thread_ = std::thread([this]() {
     while (true) {
       auto result = SuspendResumeHandler();
-      if (!result.ok()) {
-        LOG(ERROR) << result.error().Trace();
+      if (!result.has_value()) {
+        LOG(ERROR) << result.error();
         return;
       }
     }
@@ -91,15 +94,17 @@ Result<void> SnapshotCommandHandler::SuspendResumeHandler() {
       CF_EXPECT(WriteSuspendRequest(snapshot_sockets_.keymaster));
       CF_EXPECT(WriteSuspendRequest(snapshot_sockets_.gatekeeper));
       CF_EXPECT(WriteSuspendRequest(snapshot_sockets_.oemlock));
+      CF_EXPECT(WriteSuspendRequest(snapshot_sockets_.weaver));
       // Wait for ACKs from worker threads.
       CF_EXPECT(ReadSuspendAck(snapshot_sockets_.rust));
       CF_EXPECT(ReadSuspendAck(snapshot_sockets_.keymaster));
       CF_EXPECT(ReadSuspendAck(snapshot_sockets_.gatekeeper));
       CF_EXPECT(ReadSuspendAck(snapshot_sockets_.oemlock));
+      CF_EXPECT(ReadSuspendAck(snapshot_sockets_.weaver));
       // Write response to run_cvd.
       auto response = LauncherResponse::kSuccess;
-      const auto n_written =
-          channel_to_run_cvd_->Write(&response, sizeof(response));
+      const uint64_t n_written =
+          CF_EXPECT(channel_to_run_cvd_->Write(&response, sizeof(response)));
       CF_EXPECT_EQ(sizeof(response), n_written);
       return {};
     };
@@ -110,10 +115,11 @@ Result<void> SnapshotCommandHandler::SuspendResumeHandler() {
       CF_EXPECT(WriteResumeRequest(snapshot_sockets_.keymaster));
       CF_EXPECT(WriteResumeRequest(snapshot_sockets_.gatekeeper));
       CF_EXPECT(WriteResumeRequest(snapshot_sockets_.oemlock));
+      CF_EXPECT(WriteResumeRequest(snapshot_sockets_.weaver));
       // Write response to run_cvd.
       auto response = LauncherResponse::kSuccess;
-      const auto n_written =
-          channel_to_run_cvd_->Write(&response, sizeof(response));
+      const uint64_t n_written =
+          CF_EXPECT(channel_to_run_cvd_->Write(&response, sizeof(response)));
       CF_EXPECT_EQ(sizeof(response), n_written);
       return {};
     };

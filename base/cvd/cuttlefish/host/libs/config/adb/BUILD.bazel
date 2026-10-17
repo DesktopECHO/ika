@@ -13,39 +13,34 @@ cf_cc_library(
         "launch.cpp",
         "strings.cpp",
     ],
-    hdrs = [
-        "adb.h",
-    ],
-    clang_format_enabled = False,
+    hdrs = ["adb.h"],
     deps = [
         "//cuttlefish/common/libs/utils:container",
-        "//cuttlefish/common/libs/utils:subprocess",
         "//cuttlefish/flag_parser",
-        "//cuttlefish/host/commands/kernel_log_monitor:kernel_log_monitor_utils",
+        "//cuttlefish/host/commands/kernel_log_monitor:kernel_log_server",
         "//cuttlefish/host/libs/config:config_flag",
         "//cuttlefish/host/libs/config:config_fragment",
         "//cuttlefish/host/libs/config:cuttlefish_config",
         "//cuttlefish/host/libs/config:known_paths",
         "//cuttlefish/host/libs/feature",
+        "//cuttlefish/metrics/host:invoker",
+        "//cuttlefish/process:command",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/strings",
         "@fruit",
-        "@gflags",
         "@jsoncpp",
     ],
 )
 
 cf_cc_test(
     name = "adb_test",
-    srcs = [
-        "test.cpp",
-    ],
+    srcs = ["test.cpp"],
     deps = [
         ":adb",
         "//cuttlefish/host/libs/config:config_flag",
         "//cuttlefish/host/libs/feature",
+        "//cuttlefish/result:result_matchers",
         "@fruit",
     ],
 )

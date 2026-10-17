@@ -1,16 +1,15 @@
-load("//cuttlefish/bazel:rules.bzl", "cf_cc_library", "cf_cc_test")
+load("//cuttlefish/bazel:rules.bzl", "cf_build_test", "cf_cc_library", "cf_cc_test")
 
 package(
     default_visibility = ["//:android_cuttlefish"],
 )
 
-exports_files([".clang-tidy"])
+cf_build_test(name = "android_build_test")
 
 cf_cc_library(
     name = "android_build",
     srcs = ["android_build.cc"],
     hdrs = ["android_build.h"],
-    clang_format_enabled = False,
     deps = [
         "//cuttlefish/pretty",
         "//cuttlefish/pretty:struct",
@@ -41,15 +40,15 @@ cf_cc_library(
     srcs = ["android_dist_build.cc"],
     hdrs = ["android_dist_build.h"],
     deps = [
-        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/files:directory_exists",
         "//cuttlefish/host/commands/assemble_cvd/android_build",
         "//cuttlefish/host/commands/assemble_cvd/android_build:android_product_dir",
         "//cuttlefish/host/commands/assemble_cvd/android_build:combined_android_build",
         "//cuttlefish/host/commands/assemble_cvd/android_build:img_zip",
         "//cuttlefish/host/commands/assemble_cvd/android_build:target_files",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/strings",
+        "@android_system_libbase//:file_logging",
     ],
 )
 
@@ -58,14 +57,14 @@ cf_cc_library(
     srcs = ["android_product_dir.cc"],
     hdrs = ["android_product_dir.h"],
     deps = [
-        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/files:directory_contents",
+        "//cuttlefish/files:file_exists",
         "//cuttlefish/host/commands/assemble_cvd/android_build",
         "//cuttlefish/pretty:result",
         "//cuttlefish/pretty:set",
         "//cuttlefish/pretty:struct",
         "//cuttlefish/result",
         "@abseil-cpp//absl/strings",
-        "@abseil-cpp//absl/strings:str_format",
     ],
 )
 
@@ -119,7 +118,6 @@ cf_cc_library(
     srcs = ["fetched_android_build.cc"],
     hdrs = ["fetched_android_build.h"],
     deps = [
-        "//cuttlefish/common/libs/key_equals_value",
         "//cuttlefish/host/commands/assemble_cvd/android_build",
         "//cuttlefish/host/commands/assemble_cvd/android_build:combined_android_build",
         "//cuttlefish/host/commands/assemble_cvd/android_build:img_zip",
@@ -127,7 +125,6 @@ cf_cc_library(
         "//cuttlefish/host/libs/config:fetcher_config",
         "//cuttlefish/host/libs/config:file_source",
         "//cuttlefish/result",
-        "//libbase",
     ],
 )
 
@@ -136,7 +133,7 @@ cf_cc_library(
     srcs = ["find_build_archive.cc"],
     hdrs = ["find_build_archive.h"],
     deps = [
-        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/files:directory_contents",
         "//cuttlefish/host/libs/config:build_archive",
         "//cuttlefish/host/libs/config:fetcher_config",
         "//cuttlefish/host/libs/config:file_source",
@@ -151,9 +148,7 @@ cf_cc_library(
     name = "identify_build",
     srcs = ["identify_build.cc"],
     hdrs = ["identify_build.h"],
-    clang_format_enabled = False,
     deps = [
-        "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/host/commands/assemble_cvd/android_build",
         "//cuttlefish/host/commands/assemble_cvd/android_build:android_dist_build",
         "//cuttlefish/host/commands/assemble_cvd/android_build:android_product_dir",
@@ -166,7 +161,6 @@ cf_cc_library(
         "//cuttlefish/pretty",
         "//cuttlefish/pretty:struct",
         "//cuttlefish/result",
-        "//libbase",
         "@abseil-cpp//absl/strings",
     ],
 )
@@ -213,7 +207,6 @@ cf_cc_library(
     name = "physical_partitions",
     srcs = ["physical_partitions.cc"],
     hdrs = ["physical_partitions.h"],
-    clang_format_enabled = False,
     deps = [
         "//cuttlefish/host/commands/assemble_cvd/android_build",
         "//cuttlefish/pretty:result",
@@ -227,11 +220,9 @@ cf_cc_library(
     name = "super_image",
     srcs = ["super_image.cc"],
     hdrs = ["super_image.h"],
-    clang_format_enabled = False,
     deps = [
-        "//cuttlefish/common/libs/fs",
+        "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/host/commands/assemble_cvd/android_build",
-        "//cuttlefish/pretty",
         "//cuttlefish/pretty:map",
         "//cuttlefish/pretty:result",
         "//cuttlefish/pretty:set",
@@ -264,6 +255,5 @@ cf_cc_library(
         "//cuttlefish/pretty:struct",
         "//cuttlefish/result",
         "@abseil-cpp//absl/strings",
-        "@abseil-cpp//absl/strings:str_format",
     ],
 )

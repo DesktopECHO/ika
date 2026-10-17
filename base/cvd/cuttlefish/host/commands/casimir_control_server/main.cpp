@@ -14,20 +14,28 @@
  * limitations under the License.
  */
 
+#include <stdint.h>
+
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include <gflags/gflags.h>
-#include <google/protobuf/empty.pb.h>
-#include <grpcpp/ext/proto_server_reflection_plugin.h>
-#include <grpcpp/grpcpp.h>
-#include <grpcpp/health_check_service_interface.h>
 #include "absl/log/log.h"
 #include "absl/strings/escaping.h"
+#include "gflags/gflags.h"
+#include "google/protobuf/empty.pb.h"
+#include "grpcpp/ext/proto_server_reflection_plugin.h"
+#include "grpcpp/grpcpp.h"
+#include "grpcpp/health_check_service_interface.h"
+#include "grpcpp/security/server_credentials.h"
+#include "grpcpp/support/status.h"
+#include "grpcpp/support/status_code_enum.h"
 
 #include "cuttlefish/host/commands/casimir_control_server/casimir_control.grpc.pb.h"
+#include "cuttlefish/host/commands/casimir_control_server/casimir_control.pb.h"
 #include "cuttlefish/host/commands/casimir_control_server/casimir_controller.h"
 #include "cuttlefish/host/commands/casimir_control_server/hex.h"
 #include "cuttlefish/result/result.h"
@@ -72,7 +80,7 @@ Result<CasimirController> ConnectToCasimir() {
 }
 
 Status ResultToStatus(Result<void> res) {
-  if (res.ok()) {
+  if (res.has_value()) {
     return Status::OK;
   } else {
     LOG(ERROR) << "RPC failed: " << res.error();
@@ -207,8 +215,8 @@ class CasimirControlServiceImpl final : public CasimirControlService::Service {
       std::vector<uint8_t> bytes =
           CF_EXPECT(device_->SendApdu(id, std::move(apdu_bytes[i])),
                     "Failed to send APDU bytes");
-      std::string resp = absl::BytesToHexString(
-          std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+      std::string resp = absl::BytesToHexString(std::string_view(
+          reinterpret_cast<const char*>(bytes.data()), bytes.size()));
       response->add_response_hex_strings(std::move(resp));
     }
 
