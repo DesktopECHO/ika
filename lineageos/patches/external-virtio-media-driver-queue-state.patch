@@ -1,0 +1,337 @@
+Patch summary:
+Fix the virtio-media guest driver's poll() and buffer queue state.
+
+poll() reported EPOLLOUT whenever an OUTPUT buffer slot was free and EPOLLERR
+whenever no CAPTURE buffer was queued, so it returned at once while nothing
+could be dequeued. The V4L2 Codec2 HAL polls with both and then spun between
+its poll thread and its decode thread at up to 150k wakeups/s, which starved
+decoding: HEVC 1080p60 on ryzen9 played at 0.5-35 fps, and at 60 fps only
+while atrace slowed the loop down. poll() now reports EPOLLIN/EPOLLOUT when a
+CAPTURE/OUTPUT buffer can be dequeued and EPOLLERR when the queue is not
+streaming, as vb2 does.
+
+crosvm still signals buffers after acknowledging the STREAMOFF that returned
+them, as the player closes or seeks. Those buffers were added to the cleared
+pending_dqbufs list, and once the client queued them again their next
+completion added them a second time, corrupting the list: a guest kernel panic
+on LIST_POISON2 in virtio_media_dqbuf(). Completions are now taken only for
+buffers marked queued, events already received are processed before a queue
+is cleared, QBUF refuses a buffer that is queued or waiting to be dequeued, as
+vb2 does, and DQBUF checks the list under its lock. The buffer array is
+replaced under that lock too (event processing reads it), CREATE_BUFS relinks
+the pending buffers into the new array, and closing a session waits for event
+processing that may have found it.
+
+diff --git a/driver/virtio_media_driver.c b/driver/virtio_media_driver.c
+index 3ab7013..641f5ac 100644
+--- a/driver/virtio_media_driver.c
++++ b/driver/virtio_media_driver.c
+@@ -118,6 +118,13 @@ static void virtio_media_session_close(struct virtio_media *vv,
+ 	list_del(&session->list);
+ 	mutex_unlock(&vv->sessions_lock);
+ 
++	/*
++	 * Event processing may have looked the session up before it left the
++	 * list: wait until it is done with it.
++	 */
++	mutex_lock(&vv->events_process_lock);
++	mutex_unlock(&vv->events_process_lock);
++
+ 	v4l2_fh_del(&session->fh);
+ 	v4l2_fh_exit(&session->fh);
+ 
+@@ -335,15 +342,31 @@ virtio_media_process_dqbuf_event(struct virtio_media *vv,
+ 	}
+ 	queue = &session->queues[queue_type];
+ 
++	/*
++	 * The buffer array and flags change under this lock in the ioctls, which
++	 * run concurrently with event processing.
++	 */
++	mutex_lock(&session->dqbufs_lock);
++
+ 	if (dqbuf_evt->buffer.index >= queue->allocated_bufs) {
+ 		v4l2_err(&vv->v4l2_dev,
+ 			 "invalid buffer ID %d for queue %d in dqbuf event",
+ 			 dqbuf_evt->buffer.index, dqbuf_evt->buffer.type);
+-		return;
++		goto out;
+ 	}
+ 
+ 	dqbuf = &queue->buffers[dqbuf_evt->buffer.index];
+ 
++	/*
++	 * Only a buffer queued to the host can complete. crosvm still signals
++	 * buffers after acknowledging the STREAMOFF that returned them to
++	 * user-space, which may have queued them again since: adding one to
++	 * pending_dqbufs a second time corrupted the list.
++	 */
++	if ((dqbuf->buffer.flags & V4L2_BUF_FLAG_DONE) ||
++	    !(dqbuf->buffer.flags & V4L2_BUF_FLAG_QUEUED))
++		goto out;
++
+ 	/*
+ 	 * Preserve the 'm' union that was passed to us during QBUF so userspace
+ 	 * gets back the information it submitted.
+@@ -357,7 +380,7 @@ virtio_media_process_dqbuf_event(struct virtio_media *vv,
+ 				&vv->v4l2_dev,
+ 				"invalid number of planes received from host for "
+ 				"a multiplanar buffer\n");
+-			return;
++			goto out;
+ 		}
+ 		for (i = 0; i < dqbuf->buffer.length; i++) {
+ 			plane_m = dqbuf->planes[i].m;
+@@ -370,11 +393,14 @@ virtio_media_process_dqbuf_event(struct virtio_media *vv,
+ 	/* Set the DONE flag as the buffer is waiting for being dequeued. */
+ 	dqbuf->buffer.flags |= V4L2_BUF_FLAG_DONE;
+ 
+-	mutex_lock(&session->dqbufs_lock);
+ 	list_add_tail(&dqbuf->list, &queue->pending_dqbufs);
+-	mutex_unlock(&session->dqbufs_lock);
+ 	queue->queued_bufs -= 1;
++	mutex_unlock(&session->dqbufs_lock);
+ 	wake_up(&session->dqbufs_wait);
++	return;
++
++out:
++	mutex_unlock(&session->dqbufs_lock);
+ }
+ 
+ void virtio_media_process_events(struct virtio_media *vv)
+@@ -577,11 +603,17 @@ static __poll_t virtio_media_device_poll(struct file *file, poll_table *wait)
+ 	poll_wait(file, &session->dqbufs_wait, wait);
+ 	poll_wait(file, &session->fh.wait, wait);
+ 
++	/*
++	 * Same semantics as vb2: EPOLLIN/EPOLLOUT mean a CAPTURE/OUTPUT buffer
++	 * can be dequeued, and EPOLLERR that the queue is not streaming.
++	 * Reporting EPOLLOUT for a free OUTPUT slot, or EPOLLERR while the
++	 * client holds all CAPTURE buffers, made poll() return at once while no
++	 * buffer could be dequeued, and Android's V4L2 Codec2 HAL then spun at
++	 * ~150k wakeups/s, starving its decode thread.
++	 */
+ 	mutex_lock(&session->dqbufs_lock);
+ 	if (req_events & (EPOLLIN | EPOLLRDNORM)) {
+-		if (!capture_queue->streaming ||
+-		    (capture_queue->queued_bufs == 0 &&
+-		     list_empty(&capture_queue->pending_dqbufs)))
++		if (!capture_queue->streaming)
+ 			rc |= EPOLLERR;
+ 		else if (!list_empty(&capture_queue->pending_dqbufs))
+ 			rc |= EPOLLIN | EPOLLRDNORM;
+@@ -589,8 +621,7 @@ static __poll_t virtio_media_device_poll(struct file *file, poll_table *wait)
+ 	if (req_events & (EPOLLOUT | EPOLLWRNORM)) {
+ 		if (!output_queue->streaming)
+ 			rc |= EPOLLERR;
+-		else if (output_queue->queued_bufs <
+-			 output_queue->allocated_bufs)
++		else if (!list_empty(&output_queue->pending_dqbufs))
+ 			rc |= EPOLLOUT | EPOLLWRNORM;
+ 	}
+ 	mutex_unlock(&session->dqbufs_lock);
+diff --git a/driver/virtio_media_ioctls.c b/driver/virtio_media_ioctls.c
+index 2bbcf98..335cd96 100644
+--- a/driver/virtio_media_ioctls.c
++++ b/driver/virtio_media_ioctls.c
+@@ -416,6 +416,12 @@ static void virtio_media_clear_queue(struct virtio_media *vv,
+ 	struct list_head *p, *n;
+ 	int i;
+ 
++	/*
++	 * Process the events already received, so the buffers they signal are
++	 * dropped with the queue.
++	 */
++	virtio_media_process_events(vv);
++
+ 	mutex_lock(&session->dqbufs_lock);
+ 
+ 	list_for_each_safe(p, n, &queue->pending_dqbufs) {
+@@ -425,9 +431,10 @@ static void virtio_media_clear_queue(struct virtio_media *vv,
+ 		list_del(&dqbuf->list);
+ 	}
+ 
+-	mutex_unlock(&session->dqbufs_lock);
+-
+-	/* All buffers are now dequeued. */
++	/*
++	 * All buffers are now dequeued. Events still to come for them are
++	 * dropped, as they are no longer marked queued.
++	 */
+ 	for (i = 0; i < queue->allocated_bufs; i++) {
+ 		queue->buffers[i].buffer.flags = 0;
+ 	}
+@@ -435,6 +442,8 @@ static void virtio_media_clear_queue(struct virtio_media *vv,
+ 	queue->queued_bufs = 0;
+ 	queue->streaming = false;
+ 	queue->is_capture_last = false;
++
++	mutex_unlock(&session->dqbufs_lock);
+ }
+ 
+ /*
+@@ -697,6 +706,7 @@ static int virtio_media_reqbufs(struct file *file, void *fh,
+ 	struct video_device *video_dev = video_devdata(file);
+ 	struct virtio_media *vv = to_virtio_media(video_dev);
+ 	struct virtio_media_session *session = fh_to_session(fh);
++	struct virtio_media_buffer *buffers, *old_buffers;
+ 	struct virtio_media_queue_state *queue;
+ 	int ret;
+ 
+@@ -710,23 +720,26 @@ static int virtio_media_reqbufs(struct file *file, void *fh,
+ 
+ 	queue = &session->queues[b->type];
+ 
+-	/* REQBUFS(0) is an implicit STREAMOFF. */
+-	if (b->count == 0) {
+-		virtio_media_clear_queue(vv, session, queue);
+-	}
+-
+-	vfree(queue->buffers);
+-	queue->buffers = NULL;
++	/*
++	 * REQBUFS(0) is an implicit STREAMOFF, and the host only reallocates
++	 * buffers of a queue that is not streaming: none can be pending.
++	 */
++	virtio_media_clear_queue(vv, session, queue);
+ 
++	buffers = NULL;
+ 	if (b->count > 0) {
+-		queue->buffers =
+-			vzalloc(sizeof(struct virtio_media_buffer) * b->count);
+-		if (!queue->buffers) {
++		buffers = vzalloc(sizeof(struct virtio_media_buffer) * b->count);
++		if (!buffers)
+ 			return -ENOMEM;
+-		}
+ 	}
+ 
++	/* Event processing reads the buffer array under this lock. */
++	mutex_lock(&session->dqbufs_lock);
++	old_buffers = queue->buffers;
++	queue->buffers = buffers;
+ 	queue->allocated_bufs = b->count;
++	mutex_unlock(&session->dqbufs_lock);
++	vfree(old_buffers);
+ 
+ 	/*
+ 	 * If a multiplanar queue is successfully used here, this means
+@@ -772,8 +785,9 @@ static int virtio_media_create_bufs(struct file *file, void *fh,
+ 				    struct v4l2_create_buffers *b)
+ {
+ 	struct virtio_media_session *session = fh_to_session(fh);
++	struct virtio_media_buffer *buffers, *old_buffers, *buffer;
+ 	struct virtio_media_queue_state *queue;
+-	struct virtio_media_buffer *buffers;
++	struct list_head pending;
+ 	u32 type = b->format.type;
+ 	int ret;
+ 
+@@ -791,20 +805,26 @@ static int virtio_media_create_bufs(struct file *file, void *fh,
+ 	if (b->count == 0)
+ 		return 0;
+ 
+-	buffers = queue->buffers;
+-
+-	queue->buffers = vzalloc(sizeof(struct virtio_media_buffer) *
+-				 (b->index + b->count));
+-	if (!queue->buffers) {
+-		queue->buffers = buffers;
++	buffers = vzalloc(sizeof(struct virtio_media_buffer) *
++			  (b->index + b->count));
++	if (!buffers)
+ 		return -ENOMEM;
+-	}
+-
+-	memcpy(queue->buffers, buffers,
+-	       sizeof(*buffers) * queue->allocated_bufs);
+-	vfree(buffers);
+ 
++	mutex_lock(&session->dqbufs_lock);
++	old_buffers = queue->buffers;
++	memcpy(buffers, old_buffers, sizeof(*buffers) * queue->allocated_bufs);
++	/*
++	 * Buffers waiting to be dequeued are linked through the old array: link
++	 * their copies instead, in the same order.
++	 */
++	INIT_LIST_HEAD(&pending);
++	list_for_each_entry(buffer, &queue->pending_dqbufs, list)
++		list_add_tail(&buffers[buffer - old_buffers].list, &pending);
++	list_replace_init(&pending, &queue->pending_dqbufs);
++	queue->buffers = buffers;
+ 	queue->allocated_bufs = b->index + b->count;
++	mutex_unlock(&session->dqbufs_lock);
++	vfree(old_buffers);
+ 
+ 	return 0;
+ }
+@@ -856,7 +876,20 @@ static int virtio_media_qbuf(struct file *file, void *fh, struct v4l2_buffer *b)
+ 	if (b->index >= queue->allocated_bufs)
+ 		return -EINVAL;
+ 	buffer = &queue->buffers[b->index];
+-	prepared = buffer->buffer.flags & V4L2_BUF_FLAG_PREPARED;
++
++	/*
++	 * Like vb2, refuse a buffer that is still queued or waiting to be
++	 * dequeued: its completion would add it to pending_dqbufs twice.
++	 */
++	mutex_lock(&session->dqbufs_lock);
++	old_flags = buffer->buffer.flags;
++	if (old_flags & (V4L2_BUF_FLAG_QUEUED | V4L2_BUF_FLAG_DONE)) {
++		mutex_unlock(&session->dqbufs_lock);
++		return -EINVAL;
++	}
++	mutex_unlock(&session->dqbufs_lock);
++
++	prepared = old_flags & V4L2_BUF_FLAG_PREPARED;
+ 
+ 	/*
+ 	 * Store the buffer and plane `m` information so we can retrieve it again
+@@ -871,18 +904,22 @@ static int virtio_media_qbuf(struct file *file, void *fh, struct v4l2_buffer *b)
+ 				buffer->planes[i].m = b->m.planes[i].m;
+ 		}
+ 	}
+-	old_flags = buffer->buffer.flags;
++	/* Mark it queued before the host can complete it. */
++	mutex_lock(&session->dqbufs_lock);
+ 	buffer->buffer.flags = V4L2_BUF_FLAG_QUEUED;
++	queue->queued_bufs += 1;
++	mutex_unlock(&session->dqbufs_lock);
+ 
+ 	ret = virtio_media_send_buffer_ioctl(fh, VIDIOC_QBUF, b);
+ 	if (ret) {
+ 		/* Rollback the previous flags as the buffer is not queued. */
++		mutex_lock(&session->dqbufs_lock);
+ 		buffer->buffer.flags = old_flags;
++		queue->queued_bufs -= 1;
++		mutex_unlock(&session->dqbufs_lock);
+ 		return ret;
+ 	}
+ 
+-	queue->queued_bufs += 1;
+-
+ 	return 0;
+ }
+ 
+@@ -931,13 +968,17 @@ static int virtio_media_dqbuf(struct file *file, void *fh,
+ 	}
+ 
+ 	mutex_lock(&session->dqbufs_lock);
+-	dqbuf = list_first_entry(buffer_queue, struct virtio_media_buffer,
+-				 list);
++	/* The queue may have been cleared since it was checked. */
++	dqbuf = list_first_entry_or_null(buffer_queue,
++					 struct virtio_media_buffer, list);
++	if (!dqbuf) {
++		mutex_unlock(&session->dqbufs_lock);
++		return session->nonblocking_dequeue ? -EAGAIN : -EINVAL;
++	}
+ 	list_del(&dqbuf->list);
+-	mutex_unlock(&session->dqbufs_lock);
+-
+ 	/* Clear the DONE flag as the buffer is now being dequeued. */
+ 	dqbuf->buffer.flags &= ~V4L2_BUF_FLAG_DONE;
++	mutex_unlock(&session->dqbufs_lock);
+ 
+ 	if (is_multiplanar) {
+ 		size_t nb_planes = min(b->length, (u32)VIDEO_MAX_PLANES);

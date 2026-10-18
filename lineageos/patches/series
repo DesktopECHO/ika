@@ -30,6 +30,11 @@ external/mesa3d patches/external-mesa3d-gfxstream-descriptor-deepcopy-filter.pat
 external/libavc patches/external-libavc-encoder-max-size.patch
 external/libavc patches/external-libavc-vbr-vbv-floor.patch
 external/v4l2_codec2 patches/external-v4l2_codec2-virtio-media.patch
+# The virtio-media modules below are built from this driver source by
+# scripts/build_virtio_media_module.sh; regenerate them when it changes.
+external/virtio-media patches/external-virtio-media-driver-queue-state.patch
+kernel/prebuilts/common-modules/virtual-device/6.12/x86-64 patches/kernel-prebuilts-virtual-device-x86-64-virtio-media.patch
+kernel/prebuilts/common-modules/virtual-device/6.12/arm64 patches/kernel-prebuilts-virtual-device-arm64-virtio-media.patch
 hardware/google/gfxstream patches/hardware-google-gfxstream-descriptor-deepcopy-filter.patch
 hardware/google/gfxstream patches/hardware-google-gfxstream-opengles-3.2.patch
 hardware/google/gfxstream patches/hardware-google-gfxstream-guest-egl-attrib-safety.patch
