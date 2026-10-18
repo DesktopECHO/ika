@@ -5,6 +5,27 @@ package(
 )
 
 cf_cc_library(
+    name = "cache",
+    srcs = ["cache.cpp"],
+    hdrs = ["cache.h"],
+    deps = [
+        ":directories",
+        "//cuttlefish/common/libs/fs:fd",
+        "//cuttlefish/common/libs/utils:files",
+        "//cuttlefish/files:file_exists",
+        "//cuttlefish/host/libs/web:digest",
+        "//cuttlefish/io:write_exact",
+        "//cuttlefish/posix:rename",
+        "//cuttlefish/posix:stat",
+        "//cuttlefish/posix:strerror",
+        "//cuttlefish/result",
+        "@abseil-cpp//absl/log",
+        "@android_system_libbase//:file_logging",
+        "@fmt",
+    ],
+)
+
+cf_cc_library(
     name = "directories",
     srcs = [
         "xdg.cpp",

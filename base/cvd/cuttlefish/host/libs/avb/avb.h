@@ -19,6 +19,7 @@
 #include <sys/types.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "cuttlefish/process/command.h"
@@ -59,6 +60,8 @@ class Avb {
       const std::vector<std::string>& extra_arguments);
 
  private:
+  // Describes avbtool and the key it signs with, for a cache key.
+  std::string CacheKeyInputs(std::string_view operation) const;
   Command GenerateAddHashFooter(const std::string& image_path,
                                 const std::string& partition_name,
                                 off_t partition_size_bytes) const;

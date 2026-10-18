@@ -48,6 +48,7 @@
 #include "cuttlefish/host/commands/assemble_cvd/flags/kernel_path.h"
 #include "cuttlefish/host/commands/assemble_cvd/flags/system_image_dir.h"
 #include "cuttlefish/host/commands/assemble_cvd/proto/guest_config.pb.h"
+#include "cuttlefish/host/libs/directories/cache.h"
 #include "cuttlefish/host/libs/config/config_utils.h"
 #include "cuttlefish/host/libs/config/display.h"
 #include "cuttlefish/host/libs/config/gpu_mode.h"
@@ -316,6 +317,33 @@ Result<void> ParseGuestConfigTxt(const std::string& guest_config_path,
   return {};
 }
 
+constexpr char kKernelConfigCacheEntry[] = "kernel_config";
+
+// Returns the configuration built into the kernel at `kernel_image_path`.
+// extract-ikconfig scans the image for it and decompresses it, which takes a
+// few tenths of a second, so its output is kept until the image changes.
+Result<std::string> ReadKernelConfig(const std::string& kernel_image_path,
+                                     const std::string& env_path) {
+  const std::string extract_ikconfig = HostBinaryPath("extract-ikconfig");
+  const std::string cache_key = CvdCacheKey(absl::StrCat(
+      CvdCacheFileStamp(extract_ikconfig), "\n",
+      CvdCacheFileStamp(AbsolutePath(kernel_image_path)), "\n"));
+  if (std::optional<std::string> cached =
+          ReadCvdCacheEntry(kKernelConfigCacheEntry, cache_key)) {
+    return *cached;
+  }
+
+  Command ikconfig_cmd = Command(extract_ikconfig)
+                             .AddParameter(kernel_image_path)
+                             .UnsetFromEnvironment("PATH")
+                             .AddEnvironmentVariable("PATH", env_path);
+  std::string config = CF_EXPECT(RunAndCaptureStdout(std::move(ikconfig_cmd)));
+  if (!config.empty()) {
+    WriteCvdCacheEntry(kKernelConfigCacheEntry, cache_key, config);
+  }
+  return config;
+}
+
 }  // namespace
 
 PrettyStruct Pretty(const GuestConfig& config, PrettyAdlPlaceholder) {
@@ -377,13 +405,8 @@ Result<std::vector<GuestConfig>> ReadGuestConfig(
       guest_config.bootconfig_supported = true;
       guest_config.hctr2_supported = true;
     } else {
-      Command ikconfig_cmd = Command(HostBinaryPath("extract-ikconfig"))
-                                 .AddParameter(kernel_image_path)
-                                 .UnsetFromEnvironment("PATH")
-                                 .AddEnvironmentVariable("PATH", env_path);
-
       const std::string config =
-          CF_EXPECT(RunAndCaptureStdout(std::move(ikconfig_cmd)));
+          CF_EXPECT(ReadKernelConfig(kernel_image_path, env_path));
 
       if (absl::StrContains(config, "\nCONFIG_ARM=y")) {
         guest_config.target_arch = Arch::Arm;

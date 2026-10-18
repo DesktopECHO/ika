@@ -62,7 +62,7 @@ Result<std::string> XdgStateHome() {
 
 Result<std::string> XdgCacheHome() {
   std::string home = CF_EXPECT(SystemWideUserHome());
-  return NonEmptyEnv("XDG_CACHE_HOME").value_or(home + ".cache");
+  return NonEmptyEnv("XDG_CACHE_HOME").value_or(home + "/.cache");
 }
 
 std::string XdgRuntimeDir() {

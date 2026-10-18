@@ -17,8 +17,12 @@
 #include "cuttlefish/host/commands/assemble_cvd/graphics_flags.h"
 
 #include <stddef.h>
+#include <sys/utsname.h>
+#include <unistd.h>
 
+#include <algorithm>
 #include <functional>
+#include <optional>
 #include <ostream>
 #include <string_view>
 #include <unordered_map>
@@ -28,6 +32,7 @@
 
 #include "absl/log/log.h"
 #include "absl/strings/ascii.h"
+#include "absl/strings/match.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
@@ -39,10 +44,13 @@
 #include "google/protobuf/text_format.h"
 
 #include "cuttlefish/common/libs/utils/contains.h"
+#include "cuttlefish/common/libs/utils/environment.h"
 #include "cuttlefish/common/libs/utils/files.h"
 #include "cuttlefish/common/libs/utils/host_info.h"
+#include "cuttlefish/common/libs/utils/users.h"
 #include "cuttlefish/host/commands/assemble_cvd/guest_config.h"
 #include "cuttlefish/host/graphics_detector/graphics_detector.pb.h"
+#include "cuttlefish/host/libs/directories/cache.h"
 #include "cuttlefish/host/libs/config/config_constants.h"
 #include "cuttlefish/host/libs/config/config_utils.h"
 #include "cuttlefish/host/libs/config/gpu_mode.h"
@@ -52,6 +60,8 @@
 #include "cuttlefish/process/command.h"
 #include "cuttlefish/process/managed_stdio.h"
 #include "cuttlefish/result/result.h"
+
+extern char** environ;
 
 namespace cuttlefish {
 namespace {
@@ -884,15 +894,109 @@ Result<std::string> GetGfxstreamFeatures(
   return GetGfxstreamRendererFeaturesString(features);
 }
 
-#endif
+constexpr char kGraphicsAvailabilityCacheEntry[] = "graphics_availability";
 
-}  // namespace
+std::vector<std::string> SortedDirectoryPaths(const std::string& dir) {
+  Result<std::vector<std::string>> paths = DirectoryContentsPaths(dir);
+  if (!paths.has_value()) {
+    return {};
+  }
+  std::sort(paths->begin(), paths->end());
+  return *paths;
+}
 
-gfxstream::proto::GraphicsAvailability
-GetGraphicsAvailabilityWithSubprocessCheck() {
-#ifdef __APPLE__
-  return {};
-#else
+// What graphics_detector finds depends on the host's GPUs and their drivers, on
+// the user's access to them and on the environment the drivers read. Describes
+// all of these without loading a driver, so that its result can be reused until
+// one of them changes.
+std::string GraphicsAvailabilityCacheKey() {
+  std::string inputs;
+  const auto add = [&inputs](std::string_view line) {
+    absl::StrAppend(&inputs, line, "\n");
+  };
+
+  add(CvdCacheFileStamp(HostBinaryPath("graphics_detector")));
+
+  struct utsname host;
+  if (uname(&host) == 0) {
+    add(absl::StrCat("kernel ", host.release, " ", host.version));
+  }
+  add(absl::StrCat("uid ", getuid()));
+  int group_count = getgroups(0, nullptr);
+  std::vector<gid_t> groups(std::max(group_count, 0));
+  group_count = getgroups(static_cast<int>(groups.size()), groups.data());
+  groups.resize(std::max(group_count, 0));
+  add(absl::StrCat("groups ", absl::StrJoin(groups, ",")));
+
+  for (char** env = environ; *env != nullptr; env++) {
+    static constexpr std::string_view kPrefixes[] = {
+        "ANGLE_",       "ANV_",        "DISPLAY=",    "DRI_",
+        "EGL_",         "GALLIUM_",    "LD_LIBRARY_PATH=",
+        "LD_PRELOAD=",  "LIBGL_",      "LP_",         "MESA_",
+        "NIR_",         "RADV_",       "VK_",         "WAYLAND_DISPLAY=",
+        "XDG_CONFIG_",  "XDG_DATA_",   "ZINK_",       "__EGL_",
+        "__GLX_",       "__GL_",       "__NV_",
+    };
+    const std::string_view var(*env);
+    for (std::string_view prefix : kPrefixes) {
+      if (absl::StartsWith(var, prefix)) {
+        add(absl::StrCat("env ", var));
+        break;
+      }
+    }
+  }
+
+  // Package managers update these when they install or update a driver.
+  for (const char* package_db :
+       {"/var/lib/rpm/rpmdb.sqlite", "/var/lib/rpm/Packages",
+        "/var/lib/dpkg/status", "/var/lib/pacman/local"}) {
+    add(CvdCacheFileStamp(package_db));
+  }
+
+  // The Vulkan loader's and libglvnd's driver and layer manifests, including
+  // any installed outside a package manager.
+  std::vector<std::string> roots = {"/etc", "/etc/xdg", "/usr/local/share",
+                                    "/usr/share"};
+  if (Result<std::string> home = SystemWideUserHome(); home.has_value()) {
+    roots.push_back(*home + "/.config");
+    roots.push_back(*home + "/.local/share");
+  }
+  for (const char* var : {"XDG_CONFIG_HOME", "XDG_CONFIG_DIRS",
+                          "XDG_DATA_HOME", "XDG_DATA_DIRS"}) {
+    for (std::string_view root : absl::StrSplit(StringFromEnv(var, ""), ':',
+                                                absl::SkipEmpty())) {
+      roots.emplace_back(root);
+    }
+  }
+  for (const std::string& root : roots) {
+    for (const char* manifests :
+         {"vulkan/icd.d", "vulkan/implicit_layer.d", "vulkan/explicit_layer.d",
+          "glvnd/egl_vendor.d"}) {
+      const std::string dir = absl::StrCat(root, "/", manifests);
+      add(CvdCacheFileStamp(dir));
+      for (const std::string& path : SortedDirectoryPaths(dir)) {
+        add(CvdCacheFileStamp(path));
+      }
+    }
+  }
+
+  // The GPUs, their drivers and the device nodes they are reached by.
+  for (const std::string& path : SortedDirectoryPaths("/dev/dri")) {
+    add(CvdCacheFileStamp(path));
+  }
+  for (const std::string& card : SortedDirectoryPaths("/sys/class/drm")) {
+    std::string driver;
+    android::base::Readlink(card + "/device/driver", &driver);
+    add(absl::StrCat(card, " ", ReadFile(card + "/device/vendor"), " ",
+                     ReadFile(card + "/device/device"), " ", driver));
+  }
+  add(ReadFile("/proc/driver/nvidia/version"));
+
+  return CvdCacheKey(inputs);
+}
+
+// Returns the text format GraphicsAvailability that graphics_detector writes.
+std::optional<std::string> RunGraphicsDetector() {
   TemporaryFile graphics_availability_file;
 
   Command graphics_detector_cmd(HostBinaryPath("graphics_detector"));
@@ -904,7 +1008,7 @@ GetGraphicsAvailabilityWithSubprocessCheck() {
     LOG(ERROR)
         << "Failed to run graphics detector, assuming no availability: \n"
         << graphics_detector_stdout.error();
-    return {};
+    return std::nullopt;
   }
   VLOG(0) << *graphics_detector_stdout;
 
@@ -915,11 +1019,13 @@ GetGraphicsAvailabilityWithSubprocessCheck() {
                << graphics_availability_file.path << ":"
                << graphics_availability_content_result.error()
                << ". Assuming no availability.";
-    return {};
+    return std::nullopt;
   }
-  const std::string& graphics_availability_content =
-      graphics_availability_content_result.value();
+  return std::move(graphics_availability_content_result.value());
+}
 
+std::optional<gfxstream::proto::GraphicsAvailability>
+ParseGraphicsAvailability(const std::string& graphics_availability_content) {
   gfxstream::proto::GraphicsAvailability availability;
 
   google::protobuf::TextFormat::Parser parser;
@@ -931,16 +1037,55 @@ GetGraphicsAvailabilityWithSubprocessCheck() {
                << graphics_availability_content
                << ". Error(s): " << error_collector.error_message
                << ". Assuming no availability.";
-    return {};
+    return std::nullopt;
+  }
+  return availability;
+}
+
+#endif
+
+}  // namespace
+
+gfxstream::proto::GraphicsAvailability
+GetGraphicsAvailabilityWithSubprocessCheck() {
+#ifdef __APPLE__
+  return {};
+#else
+  // graphics_detector takes about a second, loading each driver in turn, so
+  // its result is kept for the next launch on the same host.
+  const std::string cache_key = GraphicsAvailabilityCacheKey();
+  std::optional<std::string> graphics_availability_content =
+      ReadCvdCacheEntry(kGraphicsAvailabilityCacheEntry, cache_key);
+  std::optional<gfxstream::proto::GraphicsAvailability> availability;
+  if (graphics_availability_content.has_value()) {
+    availability = ParseGraphicsAvailability(*graphics_availability_content);
+  }
+  if (availability.has_value()) {
+    VLOG(0) << "Using the graphics availability cached for this host.";
+  } else {
+    graphics_availability_content = RunGraphicsDetector();
+    if (!graphics_availability_content.has_value()) {
+      return {};
+    }
+    availability = ParseGraphicsAvailability(*graphics_availability_content);
+    if (!availability.has_value()) {
+      return {};
+    }
+    // A check that failed may pass next time, so only complete results are
+    // kept.
+    if (availability->errors_size() == 0) {
+      WriteCvdCacheEntry(kGraphicsAvailabilityCacheEntry, cache_key,
+                         *graphics_availability_content);
+    }
   }
 
   VLOG(0) << "Host Graphics Availability:";
   for (std::string_view line :
-       absl::StrSplit(graphics_availability_content, '\n')) {
+       absl::StrSplit(*graphics_availability_content, '\n')) {
     VLOG(0) << line;
   }
 
-  return availability;
+  return *availability;
 #endif
 }
 
