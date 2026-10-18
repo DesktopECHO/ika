@@ -53,6 +53,11 @@
   over all of memory at boot. Linux mapped device memory such as the
   decoder's buffers uncached because of it, and AMD hosts honour that, so
   hardware-decoded video played at about 2 fps on them.
+- The ROM's virtio-media driver, rebuilt from fixed source for the same
+  kernel, no longer wakes the decoder in a loop: HEVC 1080p60 played at
+  0.5-35 fps on an AMD host and now plays at 60 fps. It also no longer
+  crashes Android (a kernel panic) when a video player closes or seeks while
+  crosvm still returns decoded frames.
 
 ### Starting and stopping
 - `ika start` works again after `ika stop`, and after Android powers off or
