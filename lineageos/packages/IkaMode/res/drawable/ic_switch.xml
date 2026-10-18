@@ -4,10 +4,12 @@
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@android:color/white" />
     <foreground>
-        <!-- 56 of the 72dp the launcher shows: the art's corners stay inside
-             the 66dp safe zone of any icon mask. -->
+        <!-- 66 of the 72dp the launcher shows, a thin white border inside
+             Ika's rounded-square icon mask. A fraction (21 of 108dp), so that
+             the border stays when the icon is drawn at another size, such as
+             Ika's desktop menu icons. -->
         <inset
             android:drawable="@drawable/ic_switch_art"
-            android:inset="26dp" />
+            android:inset="19.5%" />
     </foreground>
 </adaptive-icon>
