@@ -108,7 +108,8 @@ modes asks first, then switches the Settings app (only one of TV Settings and
 Settings is enabled, as they answer the same intents), the keyboard (Leanback
 in TV mode) and the Home app (the chosen TV launcher, or the desktop's again),
 and restarts Android for the parts that are set up at boot. Launcher3 is off in
-TV mode and Catapult on the desktop.
+TV mode and the TV launchers on the desktop, so that none starts in a window
+there; TV mode turns back on only the ones the desktop turned off.
 `config/tv_mode.mk` lists the pieces:
 
 - installed in both modes: Catapult, TvProvider, TV Settings (two-panel), the

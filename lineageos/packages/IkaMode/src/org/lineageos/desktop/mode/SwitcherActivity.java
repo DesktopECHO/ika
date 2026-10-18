@@ -3,11 +3,7 @@ package org.lineageos.desktop.mode;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
-import android.content.Intent;
-import android.content.pm.FeatureInfo;
-import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
 import android.content.res.TypedArray;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
@@ -21,9 +17,7 @@ import android.widget.TextView;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
  * Desktop/TV: the desktop's launcher (Trebuchet) under a Desktop mode heading, then each TV
@@ -32,8 +26,6 @@ import java.util.Set;
  * launcher asks to restart in TV mode, with it as the Home app.
  */
 public class SwitcherActivity extends Activity {
-    private static final String TV_SETTINGS = "com.android.tv.settings";
-    private static final String LEANBACK = "android.software.leanback";
     private static final int DESKTOP_HEADING = 0;
     private static final int DESKTOP = 1;
     private static final int TV_HEADING = 2;
@@ -136,25 +128,9 @@ public class SwitcherActivity extends Activity {
                 .show();
     }
 
-    /**
-     * The TV launchers: Home apps made for TV, which declare the leanback feature or have a TV
-     * launcher entry, Catapult first. TV Settings' Home is only there for when there is no
-     * other. Each mode's launcher is off in the other mode, so disabled apps count too.
-     */
+    /** The TV launchers, Catapult first, then by name. */
     private static List<String> tvLaunchers(PackageManager pm) {
-        List<String> launchers = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
-        for (ResolveInfo info : pm.queryIntentActivities(
-                new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
-                PackageManager.MATCH_DISABLED_COMPONENTS)) {
-            String packageName = info.activityInfo.packageName;
-            if (TV_SETTINGS.equals(packageName) || !seen.add(packageName)) {
-                continue;
-            }
-            if (ModeController.TV_LAUNCHER.equals(packageName) || isTvApp(pm, packageName)) {
-                launchers.add(packageName);
-            }
-        }
+        List<String> launchers = ModeController.tvLaunchers(pm);
         Collections.sort(launchers, (a, b) -> {
             if (a.equals(b)) {
                 return 0;
@@ -165,25 +141,6 @@ public class SwitcherActivity extends Activity {
             return label(pm, a).toString().compareToIgnoreCase(label(pm, b).toString());
         });
         return launchers;
-    }
-
-    private static boolean isTvApp(PackageManager pm, String packageName) {
-        try {
-            PackageInfo info = pm.getPackageInfo(packageName,
-                    PackageManager.GET_CONFIGURATIONS | PackageManager.MATCH_DISABLED_COMPONENTS);
-            if (info.reqFeatures != null) {
-                for (FeatureInfo feature : info.reqFeatures) {
-                    if (LEANBACK.equals(feature.name)) {
-                        return true;
-                    }
-                }
-            }
-        } catch (PackageManager.NameNotFoundException e) {
-            return false;
-        }
-        return !pm.queryIntentActivities(new Intent(Intent.ACTION_MAIN)
-                        .addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER).setPackage(packageName),
-                PackageManager.MATCH_DISABLED_COMPONENTS).isEmpty();
     }
 
     private static CharSequence label(PackageManager pm, String packageName) {
