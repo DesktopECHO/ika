@@ -8,7 +8,10 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.FeatureInfo;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
@@ -21,7 +24,9 @@ import android.util.Log;
 import android.widget.Toast;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
@@ -34,8 +39,8 @@ import java.util.function.Consumer;
  * TV overlays, TV services and windowing, so a switch always restarts Android. This app applies
  * the rest for the mode Android booted in: the Settings app (TV Settings or the desktop's; they
  * answer the same intents, so only one is enabled), the keyboard (the Leanback keyboard in TV
- * mode, the previous one otherwise) and the launcher: Launcher3 is off in TV mode and the TV
- * launcher on the desktop. TV mode's Home app is the TV launcher chosen in Desktop/TV, such as
+ * mode, the previous one otherwise) and the launchers: Launcher3 is off in TV mode and the TV
+ * launchers on the desktop. TV mode's Home app is the TV launcher chosen in Desktop/TV, such as
  * Catapult or a TV launcher from Google Play, and the desktop's comes back when switching back to
  * it. Choosing a Home app never changes the mode on its own.
  */
@@ -52,6 +57,7 @@ final class ModeController {
     static final String DESKTOP_LAUNCHER = "com.android.launcher3";
     private static final String TV_SETTINGS = "com.android.tv.settings";
     private static final String DESKTOP_SETTINGS = "com.android.settings";
+    private static final String LEANBACK = "android.software.leanback";
     private static final String LEANBACK_IME_PACKAGE = "com.android.inputmethod.leanback";
     private static final String LEANBACK_IME =
             LEANBACK_IME_PACKAGE + "/.service.LeanbackImeService";
@@ -61,6 +67,11 @@ final class ModeController {
     private static final String KEY_DESKTOP_IME = "desktop_ime";
     private static final String KEY_TV_HOME = "tv_home";
     private static final String KEY_DESKTOP_HOME = "desktop_home";
+    private static final String KEY_TV_LAUNCHERS_OFF = "tv_launchers_off";
+
+    // Disabled apps too, and before the user is unlocked, when this app first applies the mode.
+    private static final int MATCH_ALL = PackageManager.MATCH_DISABLED_COMPONENTS
+            | PackageManager.MATCH_DIRECT_BOOT_AWARE | PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
 
     private ModeController() {}
 
@@ -115,8 +126,15 @@ final class ModeController {
         // that it is no Home app to choose there.
         setPackageEnabled(pm, tv ? TV_LAUNCHER : DESKTOP_LAUNCHER, true);
         setPackageEnabled(pm, tv ? DESKTOP_LAUNCHER : TV_LAUNCHER, false);
-
+        // So are the other TV launchers, such as those from Google Play, which would otherwise
+        // start in a window on the desktop.
         SharedPreferences prefs = prefs(context);
+        if (tv) {
+            restoreTvLaunchers(pm, prefs);
+        } else {
+            turnOffTvLaunchers(pm, prefs);
+        }
+
         String mode = tv ? MODE_TV : MODE_DESKTOP;
         // A new device starts in desktop mode, with the image's own defaults.
         if (!mode.equals(prefs.getString(KEY_APPLIED_MODE, MODE_DESKTOP))) {
@@ -163,6 +181,9 @@ final class ModeController {
         }
         // A disabled app cannot hold the role: each launcher is off in the other mode.
         setPackageEnabled(pm, launcher, true);
+        if (tv) {
+            restoreTvLaunchers(pm, prefs);
+        }
         if (!isEnabled(pm, home)) {
             home = launcher;
         }
@@ -198,6 +219,82 @@ final class ModeController {
         }
     }
 
+    /**
+     * The TV launchers: Home apps made for TV, which declare the leanback feature or have a TV
+     * launcher entry, and Catapult. TV Settings' Home is only there for when there is no other.
+     * Each mode's launchers are off in the other mode, so disabled apps count too.
+     */
+    static List<String> tvLaunchers(PackageManager pm) {
+        List<String> launchers = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (ResolveInfo info : pm.queryIntentActivities(
+                new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), MATCH_ALL)) {
+            String packageName = info.activityInfo.packageName;
+            if (TV_SETTINGS.equals(packageName) || !seen.add(packageName)) {
+                continue;
+            }
+            if (TV_LAUNCHER.equals(packageName) || isTvApp(pm, packageName)) {
+                launchers.add(packageName);
+            }
+        }
+        return launchers;
+    }
+
+    private static boolean isTvApp(PackageManager pm, String packageName) {
+        try {
+            PackageInfo info = pm.getPackageInfo(packageName,
+                    PackageManager.GET_CONFIGURATIONS | MATCH_ALL);
+            if (info.reqFeatures != null) {
+                for (FeatureInfo feature : info.reqFeatures) {
+                    if (LEANBACK.equals(feature.name)) {
+                        return true;
+                    }
+                }
+            }
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        }
+        return !pm.queryIntentActivities(new Intent(Intent.ACTION_MAIN)
+                        .addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER).setPackage(packageName),
+                MATCH_ALL).isEmpty();
+    }
+
+    /**
+     * Turns off the TV launchers other than Catapult, which apply() turns off itself, and keeps
+     * them, so that TV mode turns them back on. One the user turned off stays theirs.
+     */
+    private static void turnOffTvLaunchers(PackageManager pm, SharedPreferences prefs) {
+        Set<String> off = new HashSet<>(prefs.getStringSet(KEY_TV_LAUNCHERS_OFF, Set.of()));
+        List<String> turnOff = new ArrayList<>();
+        for (String packageName : tvLaunchers(pm)) {
+            if (!TV_LAUNCHER.equals(packageName) && isEnabled(pm, packageName)) {
+                turnOff.add(packageName);
+            }
+        }
+        if (turnOff.isEmpty()) {
+            return;
+        }
+        // Kept first, so that none is left off for good.
+        off.addAll(turnOff);
+        prefs.edit().putStringSet(KEY_TV_LAUNCHERS_OFF, off).commit();
+        for (String packageName : turnOff) {
+            Log.i(TAG, "Turning off the TV launcher " + packageName + " on the desktop");
+            setPackageEnabled(pm, packageName, false);
+        }
+    }
+
+    /** Turns the TV launchers that turnOffTvLaunchers() turned off back on. */
+    private static void restoreTvLaunchers(PackageManager pm, SharedPreferences prefs) {
+        Set<String> off = prefs.getStringSet(KEY_TV_LAUNCHERS_OFF, Set.of());
+        if (off.isEmpty()) {
+            return;
+        }
+        for (String packageName : off) {
+            setPackageEnabled(pm, packageName, true);
+        }
+        prefs.edit().remove(KEY_TV_LAUNCHERS_OFF).commit();
+    }
+
     private static void restartIn(Context context, boolean tv, boolean homeSet) {
         if (!homeSet) {
             // Staying in this mode: the TV Play Store, already in for the switch, goes, and this
@@ -227,7 +324,7 @@ final class ModeController {
 
     private static boolean isEnabled(PackageManager pm, String packageName) {
         try {
-            return pm.getApplicationInfo(packageName, 0).enabled;
+            return pm.getApplicationInfo(packageName, MATCH_ALL).enabled;
         } catch (PackageManager.NameNotFoundException e) {
             return false;
         }
