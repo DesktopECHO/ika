@@ -1,0 +1,1073 @@
+Patch summary:
+Run the V4L2 Codec2 HAL on crosvm's virtio-media video decoder.
+
+virtio-media takes MMAP buffers only, so when the device rejects DMABUF buffers
+the decoder copies each bitstream buffer into an MMAP input buffer and copies
+every decoded picture out of its MMAP output buffer into a YV12 block allocated
+like the software decoders allocate theirs, keeping pictures, drains and
+resolution changes in decode order. Until the first resolution change only the
+EOS buffer is queued, as with DMABUF: crosvm keeps the first capture buffer for
+EOS and decodes into any other, at the size it had when it was queued. crosvm
+can return pictures of bitstreams that were decoding when a flush came, so
+those are recycled rather than passed on as work the flush abandoned. A device
+without V4L2 controls (virtio-media) gets the largest H.264 DPB as its minimum
+number of output buffers.
+
+The component store lists a decoder only when a /dev/video device takes its
+codec, so a VM started without the decoder falls back to the software codecs,
+and only once vendor.dlkm.modules.ready says the virtio-media driver has
+loaded. A decoder is listed under a ".uhd" name, which media_codecs_c2.xml
+gives 4K limits, only when the device decodes pictures up to 4096x4096 and
+gives input buffers of at least 4 MB; otherwise it keeps its 1080p name and
+limits, and larger video plays on the software decoders. The service joins the
+camera group that owns /dev/video*.
+
+diff --git a/components/DecodeComponent.cpp b/components/DecodeComponent.cpp
+index 00880d7..d7bb445 100644
+--- a/components/DecodeComponent.cpp
++++ b/components/DecodeComponent.cpp
+@@ -175,7 +175,8 @@ c2_status_t DecodeComponent::start() {
+ 
+ std::unique_ptr<VideoFramePool> DecodeComponent::getVideoFramePool(const ui::Size& size,
+                                                                    HalPixelFormat pixelFormat,
+-                                                                   size_t numBuffers) {
++                                                                   size_t numBuffers,
++                                                                   bool cpuWrite) {
+     ALOGV("%s()", __func__);
+     ALOG_ASSERT(mDecoderTaskRunner->RunsTasksInCurrentSequence());
+ 
+@@ -206,7 +207,7 @@ std::unique_ptr<VideoFramePool> DecodeComponent::getVideoFramePool(const ui::Siz
+     }
+ 
+     return VideoFramePool::Create(std::move(blockPool), numBuffers, size, pixelFormat, mIsSecure,
+-                                  mDecoderTaskRunner);
++                                  cpuWrite, mDecoderTaskRunner);
+ }
+ 
+ c2_status_t DecodeComponent::stop() {
+diff --git a/components/VideoFrame.cpp b/components/VideoFrame.cpp
+index b7481ad..e2d235b 100644
+--- a/components/VideoFrame.cpp
++++ b/components/VideoFrame.cpp
+@@ -54,4 +54,8 @@ C2ConstGraphicBlock VideoFrame::getGraphicBlock() {
+     return mGraphicBlock->share(C2Rect(mVisibleRect.width(), mVisibleRect.height()), C2Fence());
+ }
+ 
++C2GraphicBlock& VideoFrame::getWritableGraphicBlock() {
++    return *mGraphicBlock;
++}
++
+ }  // namespace android
+diff --git a/components/VideoFramePool.cpp b/components/VideoFramePool.cpp
+index ae5cd34..ead35f9 100644
+--- a/components/VideoFramePool.cpp
++++ b/components/VideoFramePool.cpp
+@@ -94,7 +94,7 @@ std::optional<uint32_t> VideoFramePool::getBufferIdFromGraphicBlock(C2BlockPool&
+ // static
+ std::unique_ptr<VideoFramePool> VideoFramePool::Create(
+         std::shared_ptr<C2BlockPool> blockPool, const size_t numBuffers, const ui::Size& size,
+-        HalPixelFormat pixelFormat, bool isSecure,
++        HalPixelFormat pixelFormat, bool isSecure, bool cpuWrite,
+         scoped_refptr<::base::SequencedTaskRunner> taskRunner) {
+     ALOG_ASSERT(blockPool != nullptr);
+ 
+@@ -105,6 +105,11 @@ std::unique_ptr<VideoFramePool> VideoFramePool::Create(
+         // CPU access to buffers is only required in byte buffer mode.
+         usage |= C2MemoryUsage::CPU_READ;
+     }
++    // Decoders that cannot decode into the block copy each picture in with the
++    // CPU. Ask for the usage the software decoders allocate their blocks with.
++    if (cpuWrite && !isSecure) {
++        usage = C2MemoryUsage::CPU_READ | C2MemoryUsage::CPU_WRITE;
++    }
+     const C2MemoryUsage memoryUsage(usage);
+ 
+     std::unique_ptr<VideoFramePool> pool =
+diff --git a/components/include/v4l2_codec2/components/DecodeComponent.h b/components/include/v4l2_codec2/components/DecodeComponent.h
+index 27905c7..f2b60a9 100644
+--- a/components/include/v4l2_codec2/components/DecodeComponent.h
++++ b/components/include/v4l2_codec2/components/DecodeComponent.h
+@@ -72,7 +72,7 @@ protected:
+     // Get the buffer pool.
+     std::unique_ptr<VideoFramePool> getVideoFramePool(const ui::Size& size,
+                                                       HalPixelFormat pixelFormat,
+-                                                      size_t numBuffers);
++                                                      size_t numBuffers, bool cpuWrite);
+     // Detect and report works with no-show frame, only used at VP8 and VP9.
+     void detectNoShowFrameWorksAndReportIfFinished(const C2WorkOrdinalStruct& currOrdinal);
+ 
+diff --git a/components/include/v4l2_codec2/components/VideoDecoder.h b/components/include/v4l2_codec2/components/VideoDecoder.h
+index 3e3fec4..1d1f78d 100644
+--- a/components/include/v4l2_codec2/components/VideoDecoder.h
++++ b/components/include/v4l2_codec2/components/VideoDecoder.h
+@@ -27,7 +27,8 @@ public:
+     static const char* DecodeStatusToString(DecodeStatus status);
+ 
+     using GetPoolCB = ::base::RepeatingCallback<std::unique_ptr<VideoFramePool>(
+-            const ui::Size& size, HalPixelFormat pixelFormat, size_t numOutputBuffers)>;
++            const ui::Size& size, HalPixelFormat pixelFormat, size_t numOutputBuffers,
++            bool cpuWrite)>;
+     using DecodeCB = ::base::OnceCallback<void(DecodeStatus)>;
+     using OutputCB = ::base::RepeatingCallback<void(std::unique_ptr<VideoFrame>)>;
+     using ErrorCB = ::base::RepeatingCallback<void()>;
+diff --git a/components/include/v4l2_codec2/components/VideoFrame.h b/components/include/v4l2_codec2/components/VideoFrame.h
+index b5d7b99..37fef84 100644
+--- a/components/include/v4l2_codec2/components/VideoFrame.h
++++ b/components/include/v4l2_codec2/components/VideoFrame.h
+@@ -35,6 +35,9 @@ public:
+     // Get the read-only C2GraphicBlock, should be called after calling setVisibleRect().
+     C2ConstGraphicBlock getGraphicBlock();
+ 
++    // Get the writable C2GraphicBlock, for decoders that copy pictures into it.
++    C2GraphicBlock& getWritableGraphicBlock();
++
+ private:
+     VideoFrame(std::shared_ptr<C2GraphicBlock> block, std::vector<int> fds);
+ 
+diff --git a/components/include/v4l2_codec2/components/VideoFramePool.h b/components/include/v4l2_codec2/components/VideoFramePool.h
+index 6bebc37..b6886e3 100644
+--- a/components/include/v4l2_codec2/components/VideoFramePool.h
++++ b/components/include/v4l2_codec2/components/VideoFramePool.h
+@@ -32,7 +32,7 @@ public:
+ 
+     static std::unique_ptr<VideoFramePool> Create(
+             std::shared_ptr<C2BlockPool> blockPool, const size_t numBuffers, const ui::Size& size,
+-            HalPixelFormat pixelFormat, bool isSecure,
++            HalPixelFormat pixelFormat, bool isSecure, bool cpuWrite,
+             scoped_refptr<::base::SequencedTaskRunner> taskRunner);
+     ~VideoFramePool();
+ 
+diff --git a/service/Android.bp b/service/Android.bp
+index 408f229..15dce2a 100644
+--- a/service/Android.bp
++++ b/service/Android.bp
+@@ -24,6 +24,7 @@ cc_defaults {
+         "libv4l2_codec2_v4l2",
+         "libv4l2_codec2_components",
+         "libavservices_minijail",
++        "libbase",
+         "libchrome",
+         "libcutils",
+         "liblog",
+diff --git a/service/android.hardware.media.c2-service-v4l2.rc b/service/android.hardware.media.c2-service-v4l2.rc
+index f42824b..7982e52 100644
+--- a/service/android.hardware.media.c2-service-v4l2.rc
++++ b/service/android.hardware.media.c2-service-v4l2.rc
+@@ -1,7 +1,7 @@
+ service android-hardware-media-c2-v4l2-hal /vendor/bin/hw/android.hardware.media.c2-service-v4l2
+     class hal
+     user media
+-    group mediadrm drmrpc
++    group mediadrm drmrpc camera
+     ioprio rt 4
+     task_profiles ProcessCapacityHigh
+     setenv MESA_GLSL_CACHE_DISABLE 1
+diff --git a/service/service.cpp b/service/service.cpp
+index 610bc18..dff167f 100644
+--- a/service/service.cpp
++++ b/service/service.cpp
+@@ -9,7 +9,10 @@
+ #error "V4L2_CODEC2_SERVICE_V4L2_STORE has to be defined"
+ #endif
+ 
++#include <chrono>
++
+ #include <C2Component.h>
++#include <android-base/properties.h>
+ #include <android/binder_manager.h>
+ #include <android/binder_process.h>
+ #include <base/logging.h>
+@@ -47,6 +50,15 @@ int main(int /* argc */, char** /* argv */) {
+     logging::SetMinLogLevel(-5);
+ #endif
+ 
++    // The store lists the codecs of the V4L2 devices present when it is created.
++    // Cuttlefish's dlkm_loader loads their drivers (virtio-media) in parallel with
++    // the HAL services, so wait until it has finished; a device absent by then is
++    // absent for this boot.
++    if (!android::base::WaitForProperty("vendor.dlkm.modules.ready", "true",
++                                        std::chrono::seconds(10))) {
++        ALOGW("Vendor kernel modules not ready after 10 s, listing devices anyway");
++    }
++
+     // Create IComponentStore service.
+     {
+         using namespace ::aidl::android::hardware::media::c2;
+diff --git a/v4l2/Android.bp b/v4l2/Android.bp
+index fe8043b..755d1ff 100644
+--- a/v4l2/Android.bp
++++ b/v4l2/Android.bp
+@@ -47,6 +47,9 @@ cc_library {
+         "libv4l2_codec2_common",
+         "libv4l2_codec2_components",
+     ],
++    static_libs: [
++        "libyuv_static",
++    ],
+ 
+     cflags: [
+       "-Werror",
+diff --git a/v4l2/V4L2ComponentCommon.cpp b/v4l2/V4L2ComponentCommon.cpp
+index d05b72d..5740b9b 100644
+--- a/v4l2/V4L2ComponentCommon.cpp
++++ b/v4l2/V4L2ComponentCommon.cpp
+@@ -25,13 +25,19 @@ const std::string V4L2ComponentName::kH264SecureDecoder = "c2.v4l2.avc.decoder.s
+ const std::string V4L2ComponentName::kVP8SecureDecoder = "c2.v4l2.vp8.decoder.secure";
+ const std::string V4L2ComponentName::kVP9SecureDecoder = "c2.v4l2.vp9.decoder.secure";
+ const std::string V4L2ComponentName::kHEVCSecureDecoder = "c2.v4l2.hevc.decoder.secure";
++const std::string V4L2ComponentName::kH264UhdDecoder = "c2.v4l2.avc.decoder.uhd";
++const std::string V4L2ComponentName::kVP8UhdDecoder = "c2.v4l2.vp8.decoder.uhd";
++const std::string V4L2ComponentName::kVP9UhdDecoder = "c2.v4l2.vp9.decoder.uhd";
++const std::string V4L2ComponentName::kHEVCUhdDecoder = "c2.v4l2.hevc.decoder.uhd";
+ 
+ // static
+ bool V4L2ComponentName::isValid(const std::string& name) {
+     return name == kH264Encoder || name == kVP8Encoder || name == kVP9Encoder ||
+            name == kH264Decoder || name == kVP8Decoder || name == kVP9Decoder ||
+            name == kHEVCDecoder || name == kAV1Decoder || name == kH264SecureDecoder ||
+-	   name == kVP8SecureDecoder || name == kVP9SecureDecoder || name == kHEVCSecureDecoder;
++	   name == kVP8SecureDecoder || name == kVP9SecureDecoder || name == kHEVCSecureDecoder ||
++           name == kH264UhdDecoder || name == kVP8UhdDecoder || name == kVP9UhdDecoder ||
++           name == kHEVCUhdDecoder;
+ }
+ 
+ // static
+@@ -47,7 +53,8 @@ bool V4L2ComponentName::isDecoder(const std::string& name) {
+     static const std::set<std::string> kValidDecoders = {
+             kH264Decoder, kH264SecureDecoder, kVP8Decoder,  kVP8SecureDecoder,
+             kVP9Decoder,  kVP9SecureDecoder,  kHEVCDecoder, kHEVCSecureDecoder,
+-            kAV1Decoder
++            kAV1Decoder,
++            kH264UhdDecoder, kVP8UhdDecoder, kVP9UhdDecoder, kHEVCUhdDecoder,
+     };
+ 
+     return kValidDecoders.find(name) != kValidDecoders.end();
+@@ -69,6 +76,9 @@ std::optional<VideoCodec> V4L2ComponentName::getCodec(const std::string& name) {
+             {kHEVCDecoder, VideoCodec::HEVC}, {kHEVCSecureDecoder, VideoCodec::HEVC},
+ 
+             {kAV1Decoder, VideoCodec::AV1},
++
++            {kH264UhdDecoder, VideoCodec::H264}, {kVP8UhdDecoder, VideoCodec::VP8},
++            {kVP9UhdDecoder, VideoCodec::VP9},   {kHEVCUhdDecoder, VideoCodec::HEVC},
+     };
+ 
+     auto iter = kNameToCodecs.find(name);
+diff --git a/v4l2/V4L2ComponentStore.cpp b/v4l2/V4L2ComponentStore.cpp
+index d5b4901..614acac 100644
+--- a/v4l2/V4L2ComponentStore.cpp
++++ b/v4l2/V4L2ComponentStore.cpp
+@@ -22,8 +22,44 @@
+ #include <v4l2_codec2/components/ComponentStore.h>
+ #include <v4l2_codec2/v4l2/V4L2ComponentCommon.h>
+ #include <v4l2_codec2/v4l2/V4L2ComponentFactory.h>
++#include <v4l2_codec2/v4l2/V4L2Device.h>
+ 
+ namespace android {
++namespace {
++
++// The decoders are listed only when a device can decode them, so that a VM
++// started without a decoder device, or one without some codec, falls back to the
++// software decoders.
++bool hasDecoderFor(VideoCodec codec) {
++    if (V4L2Device::hasDeviceFor(V4L2Device::Type::kDecoder,
++                                 V4L2Device::videoCodecToPixFmt(codec))) {
++        return true;
++    }
++    ALOGI("No V4L2 device decodes %s", VideoCodecToString(codec));
++    return false;
++}
++
++// A decoder is listed under its 4K name, which media_codecs_c2.xml gives 4K
++// limits, only when a device decodes pictures up to 4096x4096 and its input
++// buffers hold a 4K keyframe. Otherwise it keeps its 1080p limits, and apps
++// play larger video with the software decoders.
++constexpr int kUhdMaxDimension = 4096;
++constexpr size_t kUhdInputBufferSize = 4 * 1024 * 1024;
++
++bool decodesUhd(VideoCodec codec) {
++    const uint32_t pixFmt = V4L2Device::videoCodecToPixFmt(codec);
++    const ui::Size maxSize = V4L2Device::getMaxDecodeResolution(pixFmt);
++    const size_t inputBufferSize =
++            V4L2Device::getDecodeInputBufferSize(pixFmt, kUhdInputBufferSize);
++    const bool uhd = maxSize.width >= kUhdMaxDimension && maxSize.height >= kUhdMaxDimension &&
++                     inputBufferSize >= kUhdInputBufferSize;
++    ALOGI("%s: device decodes up to %dx%d with %zu-byte input buffers, listing it for %s",
++          VideoCodecToString(codec), maxSize.width, maxSize.height, inputBufferSize,
++          uhd ? "4K" : "1080p");
++    return uhd;
++}
++
++}  // namespace
+ 
+ // static
+ std::shared_ptr<C2ComponentStore> V4L2ComponentStore::Create() {
+@@ -48,32 +84,45 @@ std::shared_ptr<C2ComponentStore> V4L2ComponentStore::Create() {
+         builder.encoder(V4L2ComponentName::kVP9Encoder, VideoCodec::VP9,
+                         &V4L2ComponentFactory::create);
+ 
+-    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.h264", false))
+-        builder.decoder(V4L2ComponentName::kH264Decoder, VideoCodec::H264,
+-                        &V4L2ComponentFactory::create);
+-    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.vp8", false))
+-        builder.decoder(V4L2ComponentName::kVP8Decoder, VideoCodec::VP8,
+-                        &V4L2ComponentFactory::create);
+-    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.vp9", false))
+-        builder.decoder(V4L2ComponentName::kVP9Decoder, VideoCodec::VP9,
+-                        &V4L2ComponentFactory::create);
+-    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.hevc", false))
+-        builder.decoder(V4L2ComponentName::kHEVCDecoder, VideoCodec::HEVC,
+-                        &V4L2ComponentFactory::create);
+-    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.av1", false))
++    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.h264", false) &&
++        hasDecoderFor(VideoCodec::H264))
++        builder.decoder(decodesUhd(VideoCodec::H264) ? V4L2ComponentName::kH264UhdDecoder
++                                                     : V4L2ComponentName::kH264Decoder,
++                        VideoCodec::H264, &V4L2ComponentFactory::create);
++    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.vp8", false) &&
++        hasDecoderFor(VideoCodec::VP8))
++        builder.decoder(decodesUhd(VideoCodec::VP8) ? V4L2ComponentName::kVP8UhdDecoder
++                                                     : V4L2ComponentName::kVP8Decoder,
++                        VideoCodec::VP8, &V4L2ComponentFactory::create);
++    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.vp9", false) &&
++        hasDecoderFor(VideoCodec::VP9))
++        builder.decoder(decodesUhd(VideoCodec::VP9) ? V4L2ComponentName::kVP9UhdDecoder
++                                                     : V4L2ComponentName::kVP9Decoder,
++                        VideoCodec::VP9, &V4L2ComponentFactory::create);
++    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.hevc", false) &&
++        hasDecoderFor(VideoCodec::HEVC))
++        builder.decoder(decodesUhd(VideoCodec::HEVC) ? V4L2ComponentName::kHEVCUhdDecoder
++                                                     : V4L2ComponentName::kHEVCDecoder,
++                        VideoCodec::HEVC, &V4L2ComponentFactory::create);
++    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.av1", false) &&
++        hasDecoderFor(VideoCodec::AV1))
+         builder.decoder(V4L2ComponentName::kAV1Decoder, VideoCodec::AV1,
+                         &V4L2ComponentFactory::create);
+ 
+-    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.h264.secure", false))
++    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.h264.secure", false) &&
++        hasDecoderFor(VideoCodec::H264))
+         builder.decoder(V4L2ComponentName::kH264SecureDecoder, VideoCodec::H264,
+                         &V4L2ComponentFactory::create);
+-    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.vp8.secure", false))
++    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.vp8.secure", false) &&
++        hasDecoderFor(VideoCodec::VP8))
+         builder.decoder(V4L2ComponentName::kVP8SecureDecoder, VideoCodec::VP8,
+                         &V4L2ComponentFactory::create);
+-    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.vp9.secure", false))
++    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.vp9.secure", false) &&
++        hasDecoderFor(VideoCodec::VP9))
+         builder.decoder(V4L2ComponentName::kVP9SecureDecoder, VideoCodec::VP9,
+                         &V4L2ComponentFactory::create);
+-    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.hevc.secure", false))
++    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.hevc.secure", false) &&
++        hasDecoderFor(VideoCodec::HEVC))
+         builder.decoder(V4L2ComponentName::kHEVCSecureDecoder, VideoCodec::HEVC,
+                         &V4L2ComponentFactory::create);
+ 
+diff --git a/v4l2/V4L2Decoder.cpp b/v4l2/V4L2Decoder.cpp
+index 09799eb..d99ae52 100644
+--- a/v4l2/V4L2Decoder.cpp
++++ b/v4l2/V4L2Decoder.cpp
+@@ -16,6 +16,7 @@
+ #include <base/bind.h>
+ #include <base/files/scoped_file.h>
+ #include <base/memory/ptr_util.h>
++#include <libyuv/planar_functions.h>
+ #include <log/log.h>
+ #include <utils/Trace.h>
+ 
+@@ -31,6 +32,10 @@ namespace {
+ // Extra buffers for transmitting in the whole video pipeline.
+ constexpr size_t kNumExtraOutputBuffers = 4;
+ 
++// Output buffers the decoder holds when the device cannot report it: the 16
++// reference frames of the largest H.264 DPB, plus the picture being decoded.
++constexpr int kDefaultMinBuffersForCapture = 17;
++
+ bool waitForDRC(const C2ConstLinearBlock& input, std::optional<VideoCodec> codec) {
+     C2ReadView view = input.map().get();
+     const uint8_t* pos = view.data();
+@@ -94,6 +99,9 @@ V4L2Decoder::~V4L2Decoder() {
+ 
+     mWeakThisFactory.InvalidateWeakPtrs();
+ 
++    // Return the decoded MMAP buffers to their queue before it is torn down.
++    mDecodedMmapBuffers = {};
++
+     // Streamoff input and output queue.
+     if (mOutputQueue) {
+         mOutputQueue->streamoff();
+@@ -210,8 +218,14 @@ bool V4L2Decoder::setupInputFormat(const uint32_t inputPixelFormat, const size_t
+     ALOG_ASSERT(format->fmt.pix_mp.pixelformat == inputPixelFormat);
+ 
+     if (mInputQueue->allocateBuffers(kNumInputBuffers, V4L2_MEMORY_DMABUF) == 0) {
+-        ALOGE("Failed to allocate input buffer.");
+-        return false;
++        // virtio-media devices only take MMAP buffers. Copy through those instead,
++        // on both queues.
++        ALOGI("Device does not take DMABUF buffers, using MMAP buffers.");
++        mMemory = V4L2_MEMORY_MMAP;
++        if (mInputQueue->allocateBuffers(kNumInputBuffers, V4L2_MEMORY_MMAP) == 0) {
++            ALOGE("Failed to allocate input buffer.");
++            return false;
++        }
+     }
+     if (!mInputQueue->streamon()) {
+         ALOGE("Failed to streamon input queue.");
+@@ -230,11 +244,23 @@ bool V4L2Decoder::setupInitialOutput() {
+         return false;
+     }
+ 
+-    if (!startOutputQueue(1, V4L2_MEMORY_DMABUF)) {
++    if (!startOutputQueue(1, mMemory)) {
+         ALOGE("Failed to start initialy output queue");
+         return false;
+     }
+ 
++    if (isMmapMode()) {
++        // Queue only the buffer that carries EOS, as below. A device may decode
++        // into any other buffer queued now, at the minimal size set above.
++        std::optional<V4L2WritableBufferRef> eosBuffer = mOutputQueue->getFreeBuffer();
++        if (!eosBuffer || !std::move(*eosBuffer).queueMMap()) {
++            ALOGE("Failed to queue initial EOS buffer");
++            return false;
++        }
++        mHasInitialOutput = true;
++        return true;
++    }
++
+     std::optional<V4L2WritableBufferRef> eosBuffer = mOutputQueue->getFreeBuffer();
+     if (!eosBuffer) {
+         ALOGE("Failed to acquire initial EOS buffer");
+@@ -260,6 +286,7 @@ bool V4L2Decoder::setupInitialOutput() {
+         return false;
+     }
+ 
++    mHasInitialOutput = true;
+     return true;
+ }
+ 
+@@ -299,6 +326,8 @@ bool V4L2Decoder::startOutputQueue(size_t minOutputBuffersCount, enum v4l2_memor
+     }
+     *numOutputBuffers = std::max(*numOutputBuffers, minOutputBuffersCount);
+ 
++    mDecodedMmapBuffers = {};
++
+     if (mOutputQueue->isStreaming()) {
+         mOutputQueue->streamoff();
+     }
+@@ -317,6 +346,8 @@ bool V4L2Decoder::startOutputQueue(size_t minOutputBuffersCount, enum v4l2_memor
+     }
+     mCodedSize.set(adjustedFormat->fmt.pix_mp.width, adjustedFormat->fmt.pix_mp.height);
+     mVisibleRect = getVisibleRect(mCodedSize);
++    mOutputFourcc = adjustedFormat->fmt.pix_mp.pixelformat;
++    mOutputBytesPerLine = adjustedFormat->fmt.pix_mp.plane_fmt[0].bytesperline;
+ 
+     ALOGI("Need %zu output buffers. coded size: %s, visible rect: %s", *numOutputBuffers,
+           toString(mCodedSize).c_str(), toString(mVisibleRect).c_str());
+@@ -366,7 +397,7 @@ void V4L2Decoder::decode(std::unique_ptr<ConstBitstreamBuffer> buffer, DecodeCB
+     // To determine if the DRC is pending, the access to the frame data is
+     // required. It's not possible to access the frame directly for the secure
+     // playback, so this check must be skipped. b/279834186
+-    if (!mIsSecure && mInitialEosBuffer && !mPendingDRC)
++    if (!mIsSecure && mHasInitialOutput && !mPendingDRC)
+         mPendingDRC = waitForDRC(buffer->dmabuf, mCodec);
+ 
+     mDecodeRequests.push(DecodeRequest(std::move(buffer), std::move(decodeCb)));
+@@ -445,7 +476,7 @@ void V4L2Decoder::pumpDecodeRequest() {
+             // may trigger config from host side.
+             // Drain can only be finished if we are sure there was no stream = no
+             // single frame in the stack.
+-            if (mInitialEosBuffer && !mPendingDRC) {
++            if (mHasInitialOutput && !mPendingDRC) {
+                 ALOGV("Terminate drain, because there was no stream");
+                 mTaskRunner->PostTask(FROM_HERE, ::base::BindOnce(std::move(request.decodeCb),
+                                                                   VideoDecoder::DecodeStatus::kOk));
+@@ -462,6 +493,21 @@ void V4L2Decoder::pumpDecodeRequest() {
+             return;
+         }
+ 
++        std::optional<V4L2WritableBufferRef> inputBuffer;
++        if (isMmapMode()) {
++            // MMAP buffers are copied into, so any free one will do.
++            inputBuffer = mInputQueue->getFreeBuffer();
++            if (!inputBuffer) {
++                ALOGV("There is no free input buffer.");
++                return;
++            }
++            if (!queueMmapInput(std::move(*inputBuffer))) {
++                onError();
++                return;
++            }
++            continue;
++        }
++
+         auto dma_buf_id = getDmabufId(mDecodeRequests.front().buffer->dmabuf.handle()->data[0]);
+         if (!dma_buf_id) {
+             ALOGE("Failed to get dmabuf id");
+@@ -469,7 +515,6 @@ void V4L2Decoder::pumpDecodeRequest() {
+             return;
+         }
+ 
+-        std::optional<V4L2WritableBufferRef> inputBuffer;
+         size_t targetIndex = 0;
+ 
+         // If there's an existing input buffer for this dma buffer, use it.
+@@ -557,6 +602,9 @@ void V4L2Decoder::flush() {
+     // Streamoff both V4L2 queues to drop input and output buffers.
+     const bool isOutputStreaming = mOutputQueue->isStreaming();
+     mDevice->stopPolling();
++    mDecodedMmapBuffers = {};
++    mMmapDrainPending = false;
++    mFlushedBitstreamIdsUpTo = mLastQueuedBitstreamId;
+     mOutputQueue->streamoff();
+ 
+     // Extract currently enqueued output picture buffers to be queued later first.
+@@ -582,10 +630,29 @@ void V4L2Decoder::flush() {
+         mOutputQueue->streamon();
+     }
+ 
+-    // If there is no free buffer at mOutputQueue, tryFetchVideoFrame() should be triggerred after
+-    // a buffer is DQBUF from output queue. Now all the buffers are dropped at mOutputQueue, we
+-    // have to trigger tryFetchVideoFrame() here.
+-    if (mVideoFramePool) {
++    if (isMmapMode()) {
++        // The decoded pictures were dropped above. Hand the device every buffer
++        // again, or the new ones a pending resolution change needs.
++        bool ok = true;
++        if (mMmapResolutionChangePending) {
++            mMmapResolutionChangePending = false;
++            ok = changeResolution();
++        } else if (isOutputStreaming && mHasInitialOutput) {
++            // Before the first resolution change, only the EOS buffer goes back.
++            std::optional<V4L2WritableBufferRef> eosBuffer = mOutputQueue->getFreeBuffer();
++            ok = eosBuffer && std::move(*eosBuffer).queueMMap();
++        } else if (isOutputStreaming) {
++            ok = queueMmapOutputBuffers();
++        }
++        if (!ok) {
++            ALOGE("Failed to restart the output queue after flush.");
++            onError();
++            return;
++        }
++    } else if (mVideoFramePool) {
++        // If there is no free buffer at mOutputQueue, tryFetchVideoFrame() should be triggerred
++        // after a buffer is DQBUF from output queue. Now all the buffers are dropped at
++        // mOutputQueue, we have to trigger tryFetchVideoFrame() here.
+         tryFetchVideoFrame();
+     }
+ 
+@@ -662,6 +729,36 @@ void V4L2Decoder::serviceDeviceTask(bool event) {
+         ALOGV("DQBUF from output queue, bufferId=%zu, bitstreamId=%d, bytesused=%zu, isLast=%d",
+               bufferId, bitstreamId, bytesUsed, isLast);
+ 
++        if (isMmapMode()) {
++            // Bitstream IDs only grow, so a picture at or below the last ID queued before a
++            // flush belongs to work the flush abandoned: recycle its buffer like an empty one.
++            const bool flushed = bytesUsed > 0 && bitstreamId <= mFlushedBitstreamIdsUpTo;
++            if (flushed) ALOGV("Drop picture of flushed bitstream %d", bitstreamId);
++            if (bytesUsed > 0 && !flushed) {
++                // Copied out once a block is available, see onMmapVideoFrameReady().
++                mDecodedMmapBuffers.push(std::move(dequeuedBuffer));
++            } else {
++                dequeuedBuffer.reset();
++                auto outputBuffer = mOutputQueue->getFreeBuffer(bufferId);
++                if (!outputBuffer || !std::move(*outputBuffer).queueMMap()) {
++                    ALOGE("%s(): Failed to recycle empty buffer to output queue.", __func__);
++                    onError();
++                    return;
++                }
++            }
++
++            if (mDrainCb && isLast) {
++                sendV4L2DecoderCmd(true);
++                // The drain is done once the pictures decoded before it are out.
++                if (mDecodedMmapBuffers.empty()) {
++                    finishDrain();
++                } else {
++                    mMmapDrainPending = true;
++                }
++            }
++            continue;
++        }
++
+         // Get the corresponding VideoFrame of the dequeued buffer.
+         auto it = mFrameAtDevice.find(bufferId);
+         if (it == mFrameAtDevice.end() && isLast) continue;
+@@ -701,7 +798,12 @@ void V4L2Decoder::serviceDeviceTask(bool event) {
+ 
+     // Handle resolution change event.
+     if (event && dequeueResolutionChangeEvent()) {
+-        if (!changeResolution()) {
++        if (isMmapMode() && !mDecodedMmapBuffers.empty()) {
++            // Reallocating the output buffers would lose the pictures still in
++            // them, so change once they are copied out.
++            ALOGV("Defer resolution change until decoded pictures are out.");
++            mMmapResolutionChangePending = true;
++        } else if (!changeResolution()) {
+             onError();
+             return;
+         }
+@@ -743,8 +845,9 @@ bool V4L2Decoder::changeResolution() {
+     if (mInitialEosBuffer) {
+         mInitialEosBuffer = nullptr;
+     }
++    mHasInitialOutput = false;
+ 
+-    if (!startOutputQueue(mMinNumOutputBuffers, V4L2_MEMORY_DMABUF)) {
++    if (!startOutputQueue(mMinNumOutputBuffers, mMemory)) {
+         ALOGE("Failed to start output queue during DRC.");
+         return false;
+     }
+@@ -761,16 +864,25 @@ bool V4L2Decoder::changeResolution() {
+     // exists at the same time.
+     mVideoFramePool.reset();
+     // Use flexible pixel 420 format YCBCR_420_888 for 8-bit and P010 for 10-bit.
++    // MMAP mode copies 8-bit pictures into YV12, the format the software decoders
++    // write: gfxstream displays CPU-written YV12 far more cheaply than NV12, whose
++    // unlock uploads the picture at once and drops frames in composition.
+     const std::optional<struct v4l2_format> format = getFormatInfo();
+     HalPixelFormat outputFormat = format->fmt.pix_mp.pixelformat == V4L2_PIX_FMT_P010 ?
+-            HalPixelFormat::YCBCR_P010 : HalPixelFormat::YCBCR_420_888;
++            HalPixelFormat::YCBCR_P010 :
++            (isMmapMode() ? HalPixelFormat::YV12 : HalPixelFormat::YCBCR_420_888);
+     mVideoFramePool = mGetPoolCb.Run(mCodedSize, outputFormat,
+-                                     mOutputQueue->allocatedBuffersCount());
++                                     mOutputQueue->allocatedBuffersCount(), isMmapMode());
+     if (!mVideoFramePool) {
+         ALOGE("Failed to get block pool with size: %s", toString(mCodedSize).c_str());
+         return false;
+     }
+ 
++    if (isMmapMode() && !queueMmapOutputBuffers()) {
++        ALOGE("Failed to queue output buffers during DRC.");
++        return false;
++    }
++
+     tryFetchVideoFrame();
+     return true;
+ }
+@@ -808,12 +920,24 @@ void V4L2Decoder::tryFetchVideoFrame() {
+     ALOGV("%s()", __func__);
+     ALOG_ASSERT(mTaskRunner->RunsTasksInCurrentSequence());
+ 
++    // MMAP mode needs a block only for a decoded picture to copy into it, and
++    // gets its block pool at the first resolution change.
++    if (isMmapMode() && (mDecodedMmapBuffers.empty() || !mVideoFramePool)) return;
++
+     if (!mVideoFramePool) {
+         ALOGE("mVideoFramePool is null, failed to get the instance after resolution change?");
+         onError();
+         return;
+     }
+ 
++    if (isMmapMode()) {
++        if (!mVideoFramePool->getVideoFrame(
++                    ::base::BindOnce(&V4L2Decoder::onVideoFrameReady, mWeakThis))) {
++            ALOGV("%s(): Previous callback is running, ignore.", __func__);
++        }
++        return;
++    }
++
+     if (mOutputQueue->freeBuffersCount() == 0) {
+         ALOGV("No free V4L2 output buffers, ignore.");
+         return;
+@@ -857,6 +981,11 @@ void V4L2Decoder::onVideoFrameReady(
+     uint32_t blockId;
+     std::tie(frame, blockId) = std::move(*frameWithBlockId);
+ 
++    if (isMmapMode()) {
++        onMmapVideoFrameReady(std::move(frame));
++        return;
++    }
++
+     std::optional<V4L2WritableBufferRef> outputBuffer;
+     // Find the V4L2 buffer that is associated with this block.
+     auto iter = mBlockIdToV4L2Id.find(blockId);
+@@ -912,6 +1041,223 @@ void V4L2Decoder::onVideoFrameReady(
+     tryFetchVideoFrame();
+ }
+ 
++bool V4L2Decoder::queueMmapInput(V4L2WritableBufferRef inputBuffer) {
++    ALOG_ASSERT(mTaskRunner->RunsTasksInCurrentSequence());
++
++    auto request = std::move(mDecodeRequests.front());
++    mDecodeRequests.pop();
++
++    const int32_t bitstreamId = request.buffer->id;
++    const size_t size = request.buffer->size;
++    ALOGV("QBUF to input queue, bitstreadId=%d", bitstreamId);
++    if (size > inputBuffer.getPlaneSize(0)) {
++        ALOGE("The input size (%zu) is not enough, we need %zu", inputBuffer.getPlaneSize(0),
++              size);
++        return false;
++    }
++
++    // The view starts at the block's offset.
++    C2ReadView view = request.buffer->dmabuf.map().get();
++    void* dst = inputBuffer.getPlaneMapping(0);
++    if (view.error() != C2_OK || view.capacity() < size || dst == nullptr) {
++        ALOGE("%s(): Failed to map the bitstream or input buffer, bitstreamId=%d", __func__,
++              bitstreamId);
++        return false;
++    }
++    memcpy(dst, view.data(), size);
++
++    inputBuffer.setTimeStamp({.tv_sec = bitstreamId});
++    inputBuffer.setPlaneDataOffset(0, 0);
++    inputBuffer.setPlaneBytesUsed(0, size);
++    if (!std::move(inputBuffer).queueMMap()) {
++        ALOGE("%s(): Failed to QBUF to input queue, bitstreamId=%d", __func__, bitstreamId);
++        return false;
++    }
++
++    mPendingDecodeCbs.insert(std::make_pair(bitstreamId, std::move(request.decodeCb)));
++    mLastQueuedBitstreamId = bitstreamId;
++    return true;
++}
++
++bool V4L2Decoder::queueMmapOutputBuffers() {
++    ALOG_ASSERT(mTaskRunner->RunsTasksInCurrentSequence());
++
++    for (;;) {
++        std::optional<V4L2WritableBufferRef> buffer = mOutputQueue->getFreeBuffer();
++        if (!buffer) return true;
++        if (!std::move(*buffer).queueMMap()) {
++            ALOGE("%s(): Failed to QBUF to output queue", __func__);
++            return false;
++        }
++    }
++}
++
++void V4L2Decoder::onMmapVideoFrameReady(std::unique_ptr<VideoFrame> frame) {
++    ALOG_ASSERT(mTaskRunner->RunsTasksInCurrentSequence());
++
++    // A flush dropped the picture this block was fetched for.
++    if (mDecodedMmapBuffers.empty()) return;
++
++    V4L2ReadableBufferRef buffer = std::move(mDecodedMmapBuffers.front());
++    mDecodedMmapBuffers.pop();
++    const size_t bufferId = buffer->bufferId();
++    const int32_t bitstreamId = static_cast<int32_t>(buffer->getTimeStamp().tv_sec);
++
++    if (!copyMmapPicture(buffer, *frame)) {
++        onError();
++        return;
++    }
++
++    // Give the buffer back to the device as soon as the picture is out of it.
++    buffer.reset();
++    auto outputBuffer = mOutputQueue->getFreeBuffer(bufferId);
++    if (!outputBuffer || !std::move(*outputBuffer).queueMMap()) {
++        ALOGE("%s(): Failed to QBUF to output queue, V4L2Id=%zu", __func__, bufferId);
++        onError();
++        return;
++    }
++
++    ALOGV("Send output frame(bitstreamId=%d) to client", bitstreamId);
++    frame->setBitstreamId(bitstreamId);
++    frame->setVisibleRect(mVisibleRect);
++    mOutputCb.Run(std::move(frame));
++
++    if (!mDecodedMmapBuffers.empty()) {
++        tryFetchVideoFrame();
++        return;
++    }
++    if (mMmapResolutionChangePending) {
++        mMmapResolutionChangePending = false;
++        if (!changeResolution()) {
++            onError();
++            return;
++        }
++    }
++    if (mMmapDrainPending) {
++        mMmapDrainPending = false;
++        finishDrain();
++    }
++}
++
++bool V4L2Decoder::copyMmapPicture(const V4L2ReadableBufferRef& buffer, VideoFrame& frame) {
++    ATRACE_CALL();
++
++    const int width = mCodedSize.width;
++    const int height = mCodedSize.height;
++    const int chromaWidth = (width + 1) / 2;
++    const int chromaHeight = (height + 1) / 2;
++
++    // Source planes in the V4L2 buffer. srcStep is the distance between two
++    // samples of a chroma plane: 2 when U and V are interleaved.
++    const auto* srcY = static_cast<const uint8_t*>(buffer->getPlaneMapping(0));
++    const int srcStride = static_cast<int>(mOutputBytesPerLine);
++    const uint8_t* srcU = nullptr;
++    const uint8_t* srcV = nullptr;
++    int srcChromaStride = srcStride;
++    int srcStep = 2;
++    if (srcY == nullptr) {
++        ALOGE("%s(): Failed to map V4L2 output buffer", __func__);
++        return false;
++    }
++    switch (mOutputFourcc) {
++    case V4L2_PIX_FMT_NV12:
++        srcU = srcY + srcStride * height;
++        srcV = srcU + 1;
++        break;
++    case V4L2_PIX_FMT_NV21:
++        srcV = srcY + srcStride * height;
++        srcU = srcV + 1;
++        break;
++    case V4L2_PIX_FMT_NV12M:
++    case V4L2_PIX_FMT_NV21M: {
++        if (buffer->planesCount() < 2) break;
++        const auto* chroma = static_cast<const uint8_t*>(buffer->getPlaneMapping(1));
++        if (chroma == nullptr) break;
++        const bool uFirst = mOutputFourcc == V4L2_PIX_FMT_NV12M;
++        srcU = uFirst ? chroma : chroma + 1;
++        srcV = uFirst ? chroma + 1 : chroma;
++        break;
++    }
++    case V4L2_PIX_FMT_YUV420:
++    case V4L2_PIX_FMT_YVU420: {
++        srcChromaStride = srcStride / 2;
++        srcStep = 1;
++        const uint8_t* first = srcY + srcStride * height;
++        const uint8_t* second = first + srcChromaStride * chromaHeight;
++        const bool uFirst = mOutputFourcc == V4L2_PIX_FMT_YUV420;
++        srcU = uFirst ? first : second;
++        srcV = uFirst ? second : first;
++        break;
++    }
++    }
++    if (srcU == nullptr || srcV == nullptr) {
++        ALOGE("%s(): Cannot copy pictures in %s", __func__, fourccToString(mOutputFourcc).c_str());
++        return false;
++    }
++
++    C2GraphicView view = frame.getWritableGraphicBlock().map().get();
++    if (view.error() != C2_OK) {
++        ALOGE("%s(): Failed to map output block: %d", __func__, view.error());
++        return false;
++    }
++    const C2PlanarLayout& layout = view.layout();
++    const C2PlaneInfo& yInfo = layout.planes[C2PlanarLayout::PLANE_Y];
++    const C2PlaneInfo& uInfo = layout.planes[C2PlanarLayout::PLANE_U];
++    const C2PlaneInfo& vInfo = layout.planes[C2PlanarLayout::PLANE_V];
++    if (layout.type != C2PlanarLayout::TYPE_YUV || layout.numPlanes < 3 || yInfo.colInc != 1 ||
++        view.width() < static_cast<uint32_t>(width) ||
++        view.height() < static_cast<uint32_t>(height)) {
++        ALOGE("%s(): Unsupported output block layout", __func__);
++        return false;
++    }
++    uint8_t* const* dst = view.data();
++    uint8_t* dstY = dst[C2PlanarLayout::PLANE_Y];
++    uint8_t* dstU = dst[C2PlanarLayout::PLANE_U];
++    uint8_t* dstV = dst[C2PlanarLayout::PLANE_V];
++
++    libyuv::CopyPlane(srcY, srcStride, dstY, yInfo.rowInc, width, height);
++
++    if (srcStep == 2 && uInfo.colInc == 2 && vInfo.colInc == 2 && uInfo.rowInc == vInfo.rowInc &&
++        (dstV - dstU) == (srcV - srcU) && (dstV - dstU == 1 || dstU - dstV == 1)) {
++        // Semi-planar into the same semi-planar order, NV12 into NV12: copy the
++        // interleaved rows whole.
++        libyuv::CopyPlane(std::min(srcU, srcV), srcChromaStride, std::min(dstU, dstV),
++                          uInfo.rowInc, chromaWidth * 2, chromaHeight);
++    } else if (srcStep == 2 && uInfo.colInc == 1 && vInfo.colInc == 1) {
++        // Semi-planar into planar, the usual NV12 into YV12.
++        if (srcV == srcU + 1) {
++            libyuv::SplitUVPlane(srcU, srcChromaStride, dstU, uInfo.rowInc, dstV, vInfo.rowInc,
++                                 chromaWidth, chromaHeight);
++        } else {
++            libyuv::SplitUVPlane(srcV, srcChromaStride, dstV, vInfo.rowInc, dstU, uInfo.rowInc,
++                                 chromaWidth, chromaHeight);
++        }
++    } else if (srcStep == 1 && uInfo.colInc == 1 && vInfo.colInc == 1) {
++        libyuv::CopyPlane(srcU, srcChromaStride, dstU, uInfo.rowInc, chromaWidth, chromaHeight);
++        libyuv::CopyPlane(srcV, srcChromaStride, dstV, vInfo.rowInc, chromaWidth, chromaHeight);
++    } else {
++        for (int row = 0; row < chromaHeight; ++row) {
++            const uint8_t* su = srcU + row * srcChromaStride;
++            const uint8_t* sv = srcV + row * srcChromaStride;
++            uint8_t* du = dstU + row * uInfo.rowInc;
++            uint8_t* dv = dstV + row * vInfo.rowInc;
++            for (int col = 0; col < chromaWidth; ++col) {
++                du[col * uInfo.colInc] = su[col * srcStep];
++                dv[col * vInfo.colInc] = sv[col * srcStep];
++            }
++        }
++    }
++    return true;
++}
++
++void V4L2Decoder::finishDrain() {
++    ALOGV("All buffers are drained.");
++    ALOG_ASSERT(mDrainCb);
++
++    std::move(mDrainCb).Run(VideoDecoder::DecodeStatus::kOk);
++    setState(State::Idle);
++}
++
+ std::optional<size_t> V4L2Decoder::getNumOutputBuffers() {
+     ALOGV("%s()", __func__);
+     ALOG_ASSERT(mTaskRunner->RunsTasksInCurrentSequence());
+@@ -920,8 +1266,9 @@ std::optional<size_t> V4L2Decoder::getNumOutputBuffers() {
+     memset(&ctrl, 0, sizeof(ctrl));
+     ctrl.id = V4L2_CID_MIN_BUFFERS_FOR_CAPTURE;
+     if (mDevice->ioctl(VIDIOC_G_CTRL, &ctrl) != 0) {
+-        ALOGE("ioctl() failed: VIDIOC_G_CTRL");
+-        return std::nullopt;
++        // virtio-media decoders have no controls. Assume the largest H.264 DPB.
++        ALOGW("ioctl() failed: VIDIOC_G_CTRL, assuming %d buffers", kDefaultMinBuffersForCapture);
++        ctrl.value = kDefaultMinBuffersForCapture;
+     }
+     ALOGV("%s() V4L2_CID_MIN_BUFFERS_FOR_CAPTURE returns %u", __func__, ctrl.value);
+ 
+diff --git a/v4l2/V4L2Device.cpp b/v4l2/V4L2Device.cpp
+index bb020ba..bcd8f96 100644
+--- a/v4l2/V4L2Device.cpp
++++ b/v4l2/V4L2Device.cpp
+@@ -2361,6 +2361,60 @@ C2Config::level_t V4L2Device::getDefaultLevel(VideoCodec codec) {
+     return C2Config::LEVEL_UNUSED;
+ }
+ 
++// static
++bool V4L2Device::hasDeviceFor(Type type, uint32_t pixFmt) {
++    for (const auto& info : getDeviceInfosForType(type)) {
++        if (std::find(info.second.begin(), info.second.end(), pixFmt) != info.second.end())
++            return true;
++    }
++    return false;
++}
++
++// static
++ui::Size V4L2Device::getMaxDecodeResolution(uint32_t pixFmt) {
++    ui::Size maxResolution(0, 0);
++    for (const auto& info : getDeviceInfosForType(Type::kDecoder)) {
++        if (std::find(info.second.begin(), info.second.end(), pixFmt) == info.second.end())
++            continue;
++
++        scoped_refptr<V4L2Device> device = V4L2Device::create();
++        if (!device->openDevicePath(info.first, Type::kDecoder)) continue;
++
++        ui::Size minSize, maxSize;
++        device->getSupportedResolution(pixFmt, &minSize, &maxSize);
++        device->closeDevice();
++        if (maxSize.width >= maxResolution.width && maxSize.height >= maxResolution.height)
++            maxResolution = maxSize;
++    }
++    return maxResolution;
++}
++
++// static
++size_t V4L2Device::getDecodeInputBufferSize(uint32_t pixFmt, size_t requestedSize) {
++    size_t bufferSize = 0;
++    for (const auto& info : getDeviceInfosForType(Type::kDecoder)) {
++        if (std::find(info.second.begin(), info.second.end(), pixFmt) == info.second.end())
++            continue;
++
++        scoped_refptr<V4L2Device> device = V4L2Device::create();
++        if (!device->openDevicePath(info.first, Type::kDecoder)) continue;
++
++        // The same request V4L2Decoder makes before it allocates input buffers.
++        struct v4l2_format format;
++        memset(&format, 0, sizeof(format));
++        format.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
++        format.fmt.pix_mp.pixelformat = pixFmt;
++        format.fmt.pix_mp.num_planes = 1;
++        format.fmt.pix_mp.plane_fmt[0].sizeimage = base::checked_cast<__u32>(requestedSize);
++        if (device->ioctl(VIDIOC_S_FMT, &format) == 0) {
++            bufferSize = std::max(bufferSize,
++                                  static_cast<size_t>(format.fmt.pix_mp.plane_fmt[0].sizeimage));
++        }
++        device->closeDevice();
++    }
++    return bufferSize;
++}
++
+ // static
+ SupportedCapabilities V4L2Device::queryDecodingCapabilities(VideoCodec codec) {
+     SupportedCapabilities caps;
+diff --git a/v4l2/include/v4l2_codec2/v4l2/V4L2ComponentCommon.h b/v4l2/include/v4l2_codec2/v4l2/V4L2ComponentCommon.h
+index 1e7996c..19f6d7e 100644
+--- a/v4l2/include/v4l2_codec2/v4l2/V4L2ComponentCommon.h
++++ b/v4l2/include/v4l2_codec2/v4l2/V4L2ComponentCommon.h
+@@ -26,6 +26,12 @@ struct V4L2ComponentName {
+     static const std::string kVP8SecureDecoder;
+     static const std::string kVP9SecureDecoder;
+     static const std::string kHEVCSecureDecoder;
++    // The same decoders, listed under these names instead when the device
++    // decodes 4K, so that media_codecs_c2.xml can give them 4K limits.
++    static const std::string kH264UhdDecoder;
++    static const std::string kVP8UhdDecoder;
++    static const std::string kVP9UhdDecoder;
++    static const std::string kHEVCUhdDecoder;
+ 
+     // Return true if |name| is a valid component name.
+     static bool isValid(const std::string& name);
+diff --git a/v4l2/include/v4l2_codec2/v4l2/V4L2Decoder.h b/v4l2/include/v4l2_codec2/v4l2/V4L2Decoder.h
+index c825f74..404c3a8 100644
+--- a/v4l2/include/v4l2_codec2/v4l2/V4L2Decoder.h
++++ b/v4l2/include/v4l2_codec2/v4l2/V4L2Decoder.h
+@@ -93,6 +93,16 @@ private:
+     void tryFetchVideoFrame();
+     void onVideoFrameReady(std::optional<VideoFramePool::FrameWithBlockId> frameWithBlockId);
+ 
++    // MMAP mode, for devices that cannot import DMA buffers (virtio-media): the
++    // bitstream is copied into the V4L2 input buffers and every decoded picture is
++    // copied out of its V4L2 output buffer into a block from the frame pool.
++    bool isMmapMode() const { return mMemory == V4L2_MEMORY_MMAP; }
++    bool queueMmapInput(V4L2WritableBufferRef inputBuffer);
++    bool queueMmapOutputBuffers();
++    void onMmapVideoFrameReady(std::unique_ptr<VideoFrame> frame);
++    bool copyMmapPicture(const V4L2ReadableBufferRef& buffer, VideoFrame& frame);
++    void finishDrain();
++
+     std::optional<size_t> getNumOutputBuffers();
+     std::optional<struct v4l2_format> getFormatInfo();
+     Rect getVisibleRect(const ui::Size& codedSize);
+@@ -112,6 +122,26 @@ private:
+ 
+     // Contains the initial EOS buffer, until DRC event is dequeued.
+     sp<GraphicBuffer> mInitialEosBuffer;
++    // True from setupInitialOutput() until the first DRC event, in either memory mode.
++    bool mHasInitialOutput = false;
++
++    // Memory type of both V4L2 queues: DMABUF, or MMAP when the device rejects DMABUF.
++    enum v4l2_memory mMemory = V4L2_MEMORY_DMABUF;
++    // MMAP mode: decoded output buffers waiting for a block to be copied into, in
++    // decode order.
++    std::queue<V4L2ReadableBufferRef> mDecodedMmapBuffers;
++    // MMAP mode: the LAST buffer arrived while decoded pictures were still waiting
++    // for a block, so the drain finishes once they are out.
++    bool mMmapDrainPending = false;
++    // MMAP mode: a resolution change waits for those pictures too.
++    bool mMmapResolutionChangePending = false;
++    // MMAP mode: the last bitstream ID queued, and the last one queued before the latest
++    // flush. crosvm can still return pictures of bitstreams decoding when the flush came.
++    int32_t mLastQueuedBitstreamId = -1;
++    int32_t mFlushedBitstreamIdsUpTo = -1;
++    // MMAP mode: layout of the decoded pictures in the V4L2 output buffers.
++    uint32_t mOutputFourcc = 0;
++    size_t mOutputBytesPerLine = 0;
+ 
+     std::queue<DecodeRequest> mDecodeRequests;
+     std::map<int32_t, DecodeCB> mPendingDecodeCbs;
+diff --git a/v4l2/include/v4l2_codec2/v4l2/V4L2Device.h b/v4l2/include/v4l2_codec2/v4l2/V4L2Device.h
+index b243d47..6976ef9 100644
+--- a/v4l2/include/v4l2_codec2/v4l2/V4L2Device.h
++++ b/v4l2/include/v4l2_codec2/v4l2/V4L2Device.h
+@@ -409,6 +409,16 @@ public:
+     // Gets all capabilites of the decoder devices.
+     static SupportedCapabilities queryDecodingCapabilities(VideoCodec codec);
+ 
++    // Returns whether any device of |type| takes |pixFmt|.
++    static bool hasDeviceFor(Type type, uint32_t pixFmt);
++
++    // Returns the largest picture size a decoder device decodes in |pixFmt|.
++    static ui::Size getMaxDecodeResolution(uint32_t pixFmt);
++
++    // Returns the size of the input buffers a decoder device gives for |pixFmt|
++    // when asked for |requestedSize|, or 0 if no device takes |pixFmt|.
++    static size_t getDecodeInputBufferSize(uint32_t pixFmt, size_t requestedSize);
++
+     // Gets all capabilites of the encoder devices.
+     static SupportedCapabilities queryEncodingCapabilities(VideoCodec codec);
+ 

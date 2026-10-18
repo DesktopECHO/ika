@@ -1,0 +1,22 @@
+# Added to android.hardware.media.c2-default-seccomp_policy for the V4L2 Codec2
+# HAL: libchrome's message loops and the V4L2 device poller wait on epoll,
+# eventfds and poll. Names a given architecture lacks are ignored.
+epoll_create1: 1
+epoll_ctl: 1
+epoll_pwait: 1
+epoll_wait: 1
+eventfd2: 1
+pipe2: 1
+poll: 1
+ppoll: 1
+pselect6: 1
+fcntl: 1
+fcntl64: 1
+getdents64: 1
+getcwd: 1
+getrandom: 1
+sysinfo: 1
+statfs: 1
+fstatfs: 1
+rt_sigprocmask: 1
+sched_getaffinity: 1

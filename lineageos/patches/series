@@ -29,6 +29,7 @@ external/mesa3d patches/external-mesa3d.patch
 external/mesa3d patches/external-mesa3d-gfxstream-descriptor-deepcopy-filter.patch
 external/libavc patches/external-libavc-encoder-max-size.patch
 external/libavc patches/external-libavc-vbr-vbv-floor.patch
+external/v4l2_codec2 patches/external-v4l2_codec2-virtio-media.patch
 hardware/google/gfxstream patches/hardware-google-gfxstream-descriptor-deepcopy-filter.patch
 hardware/google/gfxstream patches/hardware-google-gfxstream-opengles-3.2.patch
 hardware/google/gfxstream patches/hardware-google-gfxstream-guest-egl-attrib-safety.patch

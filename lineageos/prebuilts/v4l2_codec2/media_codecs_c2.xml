@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+     Copyright (C) 2026 LineageOS Desktop Project
+     SPDX-License-Identifier: Apache-2.0
+
+     V4L2 Codec2 decoders on crosvm's virtio-media VA-API decoder
+     (config/hw_video_decode.mk). The HAL lists only the codecs the host
+     decodes, and Android skips the entries here it does not list.
+
+     Apps choose a decoder from these limits, so they must not promise more
+     than the host decodes. Each decoder is listed under one of two names:
+     - c2.v4l2.*.decoder: 1080p in either orientation (8160 macroblocks is
+       1920x1088), which every VA-API driver decodes;
+     - c2.v4l2.*.decoder.uhd: 4K, only when the host decodes pictures up to
+       4096x4096 and crosvm's input buffers hold a 4K keyframe (4 MB).
+     Video larger than the listed decoder takes goes to the software decoders.
+-->
+<MediaCodecs>
+    <Decoders>
+        <MediaCodec name="c2.v4l2.avc.decoder" type="video/avc">
+            <Limit name="size" min="16x16" max="1920x1920" />
+            <Limit name="alignment" value="2x2" />
+            <Limit name="block-size" value="16x16" />
+            <Limit name="block-count" range="1-8160" />
+            <Limit name="blocks-per-second" min="1" max="1966080" />
+            <Limit name="bitrate" range="1-62500000" />
+            <Limit name="concurrent-instances" max="8" />
+            <Feature name="adaptive-playback" />
+        </MediaCodec>
+        <MediaCodec name="c2.v4l2.hevc.decoder" type="video/hevc">
+            <Limit name="size" min="16x16" max="1920x1920" />
+            <Limit name="alignment" value="2x2" />
+            <Limit name="block-size" value="16x16" />
+            <Limit name="block-count" range="1-8160" />
+            <Limit name="blocks-per-second" min="1" max="1966080" />
+            <Limit name="bitrate" range="1-62500000" />
+            <Limit name="concurrent-instances" max="8" />
+            <Feature name="adaptive-playback" />
+        </MediaCodec>
+        <MediaCodec name="c2.v4l2.vp8.decoder" type="video/x-vnd.on2.vp8">
+            <Limit name="size" min="16x16" max="1920x1920" />
+            <Limit name="alignment" value="2x2" />
+            <Limit name="block-size" value="16x16" />
+            <Limit name="block-count" range="1-8160" />
+            <Limit name="blocks-per-second" min="1" max="1966080" />
+            <Limit name="bitrate" range="1-62500000" />
+            <Limit name="concurrent-instances" max="8" />
+            <Feature name="adaptive-playback" />
+        </MediaCodec>
+        <MediaCodec name="c2.v4l2.vp9.decoder" type="video/x-vnd.on2.vp9">
+            <Limit name="size" min="16x16" max="1920x1920" />
+            <Limit name="alignment" value="2x2" />
+            <Limit name="block-size" value="16x16" />
+            <Limit name="block-count" range="1-8160" />
+            <Limit name="blocks-per-second" min="1" max="1966080" />
+            <Limit name="bitrate" range="1-62500000" />
+            <Limit name="concurrent-instances" max="8" />
+            <Feature name="adaptive-playback" />
+        </MediaCodec>
+        <MediaCodec name="c2.v4l2.avc.decoder.uhd" type="video/avc">
+            <Limit name="size" min="16x16" max="4096x4096" />
+            <Limit name="alignment" value="2x2" />
+            <Limit name="block-size" value="16x16" />
+            <Limit name="block-count" range="1-36864" />
+            <Limit name="blocks-per-second" min="1" max="2211840" />
+            <Limit name="bitrate" range="1-160000000" />
+            <Limit name="concurrent-instances" max="8" />
+            <Feature name="adaptive-playback" />
+        </MediaCodec>
+        <MediaCodec name="c2.v4l2.hevc.decoder.uhd" type="video/hevc">
+            <Limit name="size" min="16x16" max="4096x4096" />
+            <Limit name="alignment" value="2x2" />
+            <Limit name="block-size" value="16x16" />
+            <Limit name="block-count" range="1-36864" />
+            <Limit name="blocks-per-second" min="1" max="2211840" />
+            <Limit name="bitrate" range="1-160000000" />
+            <Limit name="concurrent-instances" max="8" />
+            <Feature name="adaptive-playback" />
+        </MediaCodec>
+        <MediaCodec name="c2.v4l2.vp8.decoder.uhd" type="video/x-vnd.on2.vp8">
+            <Limit name="size" min="16x16" max="4096x4096" />
+            <Limit name="alignment" value="2x2" />
+            <Limit name="block-size" value="16x16" />
+            <Limit name="block-count" range="1-36864" />
+            <Limit name="blocks-per-second" min="1" max="2211840" />
+            <Limit name="bitrate" range="1-160000000" />
+            <Limit name="concurrent-instances" max="8" />
+            <Feature name="adaptive-playback" />
+        </MediaCodec>
+        <MediaCodec name="c2.v4l2.vp9.decoder.uhd" type="video/x-vnd.on2.vp9">
+            <Limit name="size" min="16x16" max="4096x4096" />
+            <Limit name="alignment" value="2x2" />
+            <Limit name="block-size" value="16x16" />
+            <Limit name="block-count" range="1-36864" />
+            <Limit name="blocks-per-second" min="1" max="2211840" />
+            <Limit name="bitrate" range="1-160000000" />
+            <Limit name="concurrent-instances" max="8" />
+            <Feature name="adaptive-playback" />
+        </MediaCodec>
+    </Decoders>
+</MediaCodecs>
