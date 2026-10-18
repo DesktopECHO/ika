@@ -1,0 +1,3 @@
+# The V4L2 Codec2 HAL waits for vendor.dlkm.modules.ready before it lists the
+# decoders, so the virtio-media driver has been loaded.
+get_prop(mediacodec, vendor_device_prop)

@@ -37,6 +37,18 @@
 - `hw_video_decode = off` in ika.ini, `--hw_video_decode=off` or
   `IKA_HW_VIDEO_DECODE=off` leaves the decoder out.
 - ika-base depends on vainfo (libva-utils).
+- The ROM has the V4L2 Codec2 HAL, which offers the host's decoder to apps as
+  `c2.v4l2.avc.decoder` (and the HEVC, VP8 and VP9 decoders when the host
+  decodes those), ahead of the software decoders. It lists only the codecs
+  the host's decoder takes, so with the decoder left out Android decodes in
+  software as before. crosvm's decoder takes MMAP buffers only, so the HAL
+  copies each frame in and each picture out. It takes video up to 1080p, in
+  either orientation, and up to 4K (listed as `c2.v4l2.avc.decoder.uhd` and
+  so on) when the host's VA-API driver decodes 4096x4096; larger video
+  decodes in software.
+- crosvm's video decoder takes compressed frames of up to 8 MB instead of
+  1 MB, so 4K and high-bitrate keyframes decode. A frame over the limit
+  stopped playback.
 
 ### Starting and stopping
 - `ika start` works again after `ika stop`, and after Android powers off or

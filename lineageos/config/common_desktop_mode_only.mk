@@ -76,6 +76,10 @@ PRODUCT_VENDOR_PROPERTIES += \
 PRODUCT_COPY_FILES += \
     vendor/lineage_desktop/prebuilts/display_settings/display_settings.xml:$(TARGET_COPY_OUT_VENDOR)/etc/display_settings.xml
 
+# Hardware video decoding through the host's VA-API driver, when `ika start`
+# adds crosvm's virtio-media decoder.
+$(call inherit-product, vendor/lineage_desktop/config/hw_video_decode.mk)
+
 # Host cameras passed through with `ika start --camera` are served by the
 # external camera HAL, which reads this config: 30 fps up to 1080p, landscape
 # orientation, and reported as the front camera.
