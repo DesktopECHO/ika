@@ -49,6 +49,10 @@
 - crosvm's video decoder takes compressed frames of up to 8 MB instead of
   1 MB, so 4K and high-bitrate keyframes decode. A frame over the limit
   stopped playback.
+- On x86_64 the ROM removes the write-combining MTRR the bootloader leaves
+  over all of memory at boot. Linux mapped device memory such as the
+  decoder's buffers uncached because of it, and AMD hosts honour that, so
+  hardware-decoded video played at about 2 fps on them.
 
 ### Starting and stopping
 - `ika start` works again after `ika stop`, and after Android powers off or

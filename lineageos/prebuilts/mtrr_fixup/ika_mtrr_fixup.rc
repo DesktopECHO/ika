@@ -1,0 +1,3 @@
+# Before any service maps device memory (ika_mtrr_fixup.sh).
+on early-init
+    exec -- /vendor/bin/ika_mtrr_fixup.sh

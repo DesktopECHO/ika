@@ -1,0 +1,1 @@
+genfscon proc /mtrr u:object_r:proc_mtrr:s0
