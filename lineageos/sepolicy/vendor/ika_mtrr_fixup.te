@@ -1,0 +1,12 @@
+# ika_mtrr_fixup.sh, run by init at early-init on x86_64: removes the
+# bootloader's write-combining MTRRs through /proc/mtrr.
+type ika_mtrr_fixup, domain;
+type ika_mtrr_fixup_exec, exec_type, vendor_file_type, file_type;
+init_daemon_domain(ika_mtrr_fixup)
+
+type proc_mtrr, fs_type, proc_type;
+
+allow ika_mtrr_fixup vendor_shell_exec:file rx_file_perms;
+allow ika_mtrr_fixup proc_mtrr:file rw_file_perms;
+# The kernel requires CAP_SYS_ADMIN to change MTRRs.
+allow ika_mtrr_fixup self:capability sys_admin;

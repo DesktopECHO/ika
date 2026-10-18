@@ -12,6 +12,13 @@ LINEAGE_DESKTOP_MTG_ARCH := x86_64
 $(call inherit-product, vendor/lineage_desktop/config/common_desktop_mode_only.mk)
 $(call inherit-product, vendor/lineage_desktop/config/x86_arm_native_bridge.mk)
 
+# The x86_64 bootloader leaves a write-combining MTRR over all of memory, which
+# makes Linux map device memory uncached; remove it at early-init. Its SELinux
+# domain is in sepolicy/vendor (config/hw_video_decode.mk adds the directory).
+PRODUCT_COPY_FILES += \
+    vendor/lineage_desktop/prebuilts/mtrr_fixup/ika_mtrr_fixup.sh:$(TARGET_COPY_OUT_VENDOR)/bin/ika_mtrr_fixup.sh \
+    vendor/lineage_desktop/prebuilts/mtrr_fixup/ika_mtrr_fixup.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/ika_mtrr_fixup.rc
+
 PRODUCT_NAME := lineage_desktop_cf_x86_64
 PRODUCT_BRAND := LineageOS
 PRODUCT_MANUFACTURER := DesktopECHO
