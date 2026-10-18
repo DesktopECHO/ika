@@ -408,6 +408,7 @@ class CuttlefishConfig {
     std::string crosvm_v4l2_proxy() const;
     std::string crosvm_media_decoder() const;
     bool use_pmem() const;
+    bool crosvm_hugepages() const;
     bool enable_pkvm() const;
     std::string crosvm_acpi_table() const;
     std::string crosvm_device_tree_overlay() const;
@@ -671,6 +672,7 @@ class CuttlefishConfig {
     void set_crosvm_v4l2_proxy(std::string v4l2_proxy);
     void set_crosvm_media_decoder(const std::string& backend);
     void set_use_pmem(bool use_pmem);
+    void set_crosvm_hugepages(bool hugepages);
     void set_enable_pkvm(bool enable_pkvm);
     void set_crosvm_acpi_table(const std::string& acpi_table);
     void set_crosvm_device_tree_overlay(const std::string& device_tree_overlay);

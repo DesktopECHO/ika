@@ -191,6 +191,8 @@ DECLARE_vec(crosvm_media_decoder);
 
 DECLARE_vec(use_pmem);
 
+DECLARE_vec(crosvm_hugepages);
+
 DECLARE_vec(crosvm_acpi_table);
 DECLARE_vec(crosvm_device_tree_overlay);
 DECLARE_vec(crosvm_file_backed_mapping);

@@ -662,6 +662,8 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
   std::vector<std::string> media_decoder_vec =
       CF_EXPECT(GET_FLAG_STR_VALUE(crosvm_media_decoder));
   std::vector<bool> use_pmem_vec = CF_EXPECT(GET_FLAG_BOOL_VALUE(use_pmem));
+  const std::vector<bool> hugepages_vec =
+      CF_EXPECT(GET_FLAG_BOOL_VALUE(crosvm_hugepages));
   std::vector<std::string> device_external_network_vec =
       CF_EXPECT(GET_FLAG_STR_VALUE(device_external_network));
 
@@ -832,6 +834,7 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
                media_decoder);
     instance.set_crosvm_media_decoder(media_decoder);
     instance.set_use_pmem(use_pmem_vec[instance_index]);
+    instance.set_crosvm_hugepages(hugepages_vec[instance_index]);
     instance.set_bootconfig_supported(
         guest_configs[instance_index].bootconfig_supported);
     instance.set_enable_mouse(guest_configs[instance_index].mouse_supported);
