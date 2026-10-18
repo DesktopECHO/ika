@@ -2184,13 +2184,36 @@ append_arm64_kernel_page_args() {
   esac
 }
 
-vulkaninfo_summary() {
+VULKANINFO_SUMMARY=""
+# Empty until load_vulkaninfo_summary has run; then "ok" or "none".
+VULKANINFO_SUMMARY_STATE=""
+
+probe_vulkaninfo_summary() {
   command -v vulkaninfo >/dev/null 2>&1 || return 1
 
   # GPU classification does not need a presentation surface. Keep the probe
   # independent of X11/Wayland authentication, especially for SSH launches
   # that inherit DISPLAY without a usable authorization cookie.
   env -u DISPLAY -u WAYLAND_DISPLAY vulkaninfo --summary 2>/dev/null
+}
+
+# Runs vulkaninfo once and keeps its summary for the GPU checks that follow,
+# which each took a tenth of a second to run it again. Call it outside a
+# command substitution, which would keep the result in a subshell.
+load_vulkaninfo_summary() {
+  [[ -z "${VULKANINFO_SUMMARY_STATE}" ]] || return 0
+  if VULKANINFO_SUMMARY="$(probe_vulkaninfo_summary)"; then
+    VULKANINFO_SUMMARY_STATE="ok"
+  else
+    VULKANINFO_SUMMARY=""
+    VULKANINFO_SUMMARY_STATE="none"
+  fi
+}
+
+vulkaninfo_summary() {
+  load_vulkaninfo_summary
+  [[ "${VULKANINFO_SUMMARY_STATE}" == "ok" ]] || return 1
+  printf '%s\n' "${VULKANINFO_SUMMARY}"
 }
 
 vulkan_summary_has_only_software_devices() {
@@ -6476,6 +6499,7 @@ start_cvd() {
   protect_overlay_resume
   trim_adb_server_log
 
+  load_vulkaninfo_summary
   if ! user_supplied_flag "gpu_mode" "$@"; then
     CVD_GPU_DEFAULTS[gpu_mode]="$(default_gpu_mode_for_start)"
   fi

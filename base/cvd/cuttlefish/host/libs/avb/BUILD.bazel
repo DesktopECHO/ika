@@ -12,8 +12,11 @@ cf_cc_library(
         "//cuttlefish/common/libs/fs:fd",
         "//cuttlefish/common/libs/utils:files",
         "//cuttlefish/host/libs/config:known_paths",
+        "//cuttlefish/host/libs/directories:cache",
         "//cuttlefish/process:command",
         "//cuttlefish/result",
+        "@abseil-cpp//absl/strings",
+        "@android_system_libbase//:file_logging",
     ],
 )
 
