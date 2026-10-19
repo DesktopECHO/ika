@@ -6108,6 +6108,7 @@ mount_android_storage() {
   local adb_serial="$1"
   local -a root_args=(--root=/sdcard)
   local server_pkill="pkill -x madbfs-server"
+  local deadline
 
   [[ -x "${PACKAGED_MADBFS_BIN}" ]] || return 0
   android_storage_mounted && return 0
@@ -6115,6 +6116,17 @@ mount_android_storage() {
   if guest_is_rooted "${adb_serial}"; then
     root_args=(--root=/ --su)
     server_pkill="su -c '${server_pkill}'"
+  else
+    # Android mounts /sdcard some seconds after its first frame, when the
+    # console opens: 6 s later on a 2-vCPU guest. madbfs gives up at once on a
+    # missing root, so wait for it, for up to 30 s.
+    deadline=$((SECONDS + 30))
+    until guest_adb "${adb_serial}" shell 'test -d /sdcard/' >/dev/null 2>&1 \
+        || (( SECONDS >= deadline )); do
+      sleep 0.5
+    done
+    # Another start may have mounted it during the wait.
+    android_storage_mounted && return 0
   fi
   # A madbfs that did not exit cleanly leaves its control socket behind, and
   # its server on Android holding the port.
@@ -6675,7 +6687,8 @@ start_cvd() {
   else
     ensure_chromium "${adb_serial}"
   fi
-  mount_android_storage "${adb_serial}"
+  # In the background, as it waits for Android to mount /sdcard.
+  mount_android_storage "${adb_serial}" 3>&- &
   start_app_menu_watcher
   close_progress_notifications
 }
