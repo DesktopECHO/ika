@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Desktop/TV's banner in the TV launcher: its icon's art on white, as the
+     Settings and Play Store banners are. The white layer gives the banner the
+     320x180dp size of TV banners: a layer list takes its size from its layers. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@android:color/white" />
+            <size
+                android:width="320dp"
+                android:height="180dp" />
+        </shape>
+    </item>
+    <item
+        android:width="144dp"
+        android:height="144dp"
+        android:gravity="center"
+        android:drawable="@drawable/ic_switch_art" />
+</layer-list>
