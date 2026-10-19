@@ -2,6 +2,15 @@
 
 ## Ika 261018, changes since release 261016
 
+### Low-CPU mode
+- `ika start` runs a low-CPU mode on weak hosts: the display refreshes at
+  30 Hz instead of 60, window blurs are off and animations run at half their
+  length, with the display's size and density unchanged. It is on by itself
+  when the host has no hardware Vulkan driver, gives the guest 2 vCPUs or
+  fewer, or has less than 8 GB of memory; `--lowcpu`, `--no-lowcpu`,
+  `IKA_LOWCPU` and the `[lowcpu]` section of ika.ini (`mode`,
+  `refresh_rate_hz`) set it.
+
 ### Cuttlefish 1.58 (development)
 - The host tools are updated from upstream Cuttlefish main of 2026-06-16 to
   the 1.58.0 development head (google/android-cuttlefish 8bed5e228), about

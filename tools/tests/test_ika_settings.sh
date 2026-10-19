@@ -48,7 +48,7 @@ settings() {
           IKA_SCRCPY_REBOOT_TIMEOUT_SEC IKA_MIN_OPEN_FILES \
           IKA_KERNEL_PAGE_SIZE IKADPI IKA_SCRCPY IKA_INSTALL_TIMEOUT_SEC \
           IKA_APP_MENU_POLL_SEC IKA_GSF_ID_TIMEOUT_SEC GFXSTREAM_VULKAN \
-          IKA_CAMERA_POWER_LINE_FREQUENCY \
+          IKA_CAMERA_POWER_LINE_FREQUENCY IKA_LOWCPU IKA_LOWCPU_REFRESH_RATE_HZ \
           BACKUP_LIST_ADB_TIMEOUT_SEC BACKUP_COPY_ADB_TIMEOUT_SEC; do
         printf "%s=%s\n" "${var}" "${!var}"
       done
@@ -120,8 +120,14 @@ stop_grace_sec = 10
 
 [camera]
 power_line_frequency = 60
+
+[lowcpu]
+mode = on
+refresh_rate_hz = 40
 EOF
 edited="$(settings "${T}/edited")"
+expect_line "${edited}" "IKA_LOWCPU=on" "low-CPU mode"
+expect_line "${edited}" "IKA_LOWCPU_REFRESH_RATE_HZ=40" "low-CPU refresh rate"
 expect_line "${edited}" "CVD_COMPUTE_DEFAULTS.cpus=3" "cpus"
 expect_line "${edited}" "DEFAULT_GUEST_CPU_CAP=6" "cpu cap"
 expect_line "${edited}" "CVD_GPU_DEFAULTS.gpu_mode=guest_swiftshader" "gpu_mode with padding"
@@ -146,8 +152,10 @@ expect_line "${edited}" "[ika] ${T}/edited/ika.ini:3: setting outside a [section
 expect_line "${edited}" "[ika] ${T}/edited/ika.ini: timeouts.gsf_id_timeout_sec must be a positive whole number, not 'soon'; using 120" "bad number"
 expect_line "${edited}" "IKA_GSF_ID_TIMEOUT_SEC=120" "bad number falls back"
 
-printf '[gpu]\ngpu_mod = oops\n[compute]\ncpus = many\n' >"${T}/edited/ika.ini"
+printf '[gpu]\ngpu_mod = oops\n[compute]\ncpus = many\n[lowcpu]\nrefresh_rate_hz = slow\n' >"${T}/edited/ika.ini"
 mistakes="$(settings "${T}/edited")"
+expect_line "${mistakes}" "[ika] ${T}/edited/ika.ini: lowcpu.refresh_rate_hz must be a positive whole number, not 'slow'; using 30" "bad low-CPU refresh rate"
+expect_line "${mistakes}" "IKA_LOWCPU_REFRESH_RATE_HZ=30" "bad low-CPU refresh rate falls back"
 expect_line "${mistakes}" "[ika] ${T}/edited/ika.ini: unknown setting 'gpu.gpu_mod'; ignored" "unknown key"
 expect_line "${mistakes}" "[ika] ${T}/edited/ika.ini: compute.cpus must be auto or a positive whole number, not 'many'; using auto" "bad cpus"
 expect_line "${mistakes}" "$(grep '^CVD_COMPUTE_DEFAULTS.cpus=' <<<"${builtin_settings}")" "bad cpus keeps the calculated value"
