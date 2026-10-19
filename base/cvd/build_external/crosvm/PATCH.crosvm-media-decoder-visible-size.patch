@@ -1,0 +1,18 @@
+--- a/src/virtio/media/decoder_adapter.rs
++++ b/src/virtio/media/decoder_adapter.rs
+@@ -326,7 +326,14 @@
+                             height: visible_rect.bottom.saturating_sub(visible_rect.top) as u32,
+                         },
+                     };
+-                    self.coded_size = self.stream_params.coded_size;
++                    // CAPTURE buffers are guest memory, and the backend writes each picture into
++                    // one packed at its visible size (cros-codecs' `Image::read`), not laid out at
++                    // the coded size. Describe the buffers at the size the pictures are written
++                    // at: at the coded size, a 1080p stream (coded 1920x1088) has its chroma read
++                    // 8 lines past where it was written, shifting colors up by 16 lines over a
++                    // green band. `stream_params` keeps the coded size for the selection bounds.
++                    let visible = &self.stream_params.visible_rect;
++                    self.coded_size = (visible.width, visible.height);
+                     self.need_set_output_params = true;
+                     self.initial_drc_received = true;
+
