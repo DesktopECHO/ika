@@ -169,7 +169,7 @@ build() {
     return 1
   fi
 
-  # madbfs, which mounts Android's storage on ~/ika/Android; its server is
+  # madbfs, which mounts Android's storage on the host; its server is
   # built into the ROM. See lineageos/tools/madbfs/README.md.
   cmake -S lineageos/tools/madbfs -B _build_madbfs -G Ninja -DCMAKE_BUILD_TYPE=Release
   cmake --build _build_madbfs

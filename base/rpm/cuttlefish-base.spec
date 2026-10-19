@@ -109,7 +109,7 @@ Requires:       nftables
 Requires:       openssl
 # ika backup compresses with pigz.
 Requires:       pigz
-# madbfs mounts Android's storage on ~/ika/Android.
+# madbfs mounts Android's storage on the host.
 Requires:       fuse3
 Requires:       python3
 Requires:       python3-requests
@@ -360,7 +360,7 @@ if readelf -d _build_scrcpy/app/scrcpy | grep -Eq 'Shared library: \[(libav|libs
   exit 1
 fi
 
-# madbfs, which mounts Android's storage on ~/ika/Android; its server is
+# madbfs, which mounts Android's storage on the host; its server is
 # built into the ROM. See lineageos/tools/madbfs/README.md.
 cmake -S lineageos/tools/madbfs -B _build_madbfs -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build _build_madbfs

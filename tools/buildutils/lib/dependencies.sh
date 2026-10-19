@@ -52,7 +52,7 @@ function rpm_build_dependency_packages() {
     meson ninja-build java-25-openjdk-devel libglvnd-devel alsa-lib-devel pipewire-devel
     vulkan-headers libicu-devel
 
-    # madbfs (mounts Android's storage on ~/ika/Android)
+    # madbfs (mounts Android's storage on the host)
     boost-devel fuse3-devel
 
     # Runtime tools needed during rpmbuild
@@ -95,7 +95,7 @@ function deb_build_dependency_packages() {
     libdbus-1-dev libibus-1.0-dev libpulse-dev libsndio-dev libx11-dev libxext-dev
     zlib1g-dev
 
-    # madbfs (mounts Android's storage on ~/ika/Android): Boost 1.88 is not the
+    # madbfs (mounts Android's storage on the host): Boost 1.88 is not the
     # default Boost on Debian trixie (1.83) or Ubuntu 26.04 (1.90), but both
     # ship it under these names.
     libboost1.88-dev libboost-filesystem1.88-dev libboost-json1.88-dev

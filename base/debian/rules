@@ -66,7 +66,7 @@ scrcpy_src := $(CURDIR)/../scrcpy
 scrcpy_build_dir := $(CURDIR)/_build_scrcpy
 scrcpy_deps_work_dir := $(ika_work_root)/scrcpy-deps
 scrcpy_static_deps := $(scrcpy_deps_work_dir)/install/linux-native-static
-# madbfs, which mounts Android's storage on ~/ika/Android; its server is
+# madbfs, which mounts Android's storage on the host; its server is
 # built into the ROM. See lineageos/tools/madbfs/README.md.
 madbfs_src := $(CURDIR)/../lineageos/tools/madbfs
 madbfs_build_dir := $(CURDIR)/_build_madbfs
