@@ -112,8 +112,8 @@
   `etc/cvd_config`.
 - LineageOS Trust no longer posts its onboarding notification at every boot.
 - Switching back to the desktop turns off any TV launcher from Google Play
-  chosen in TV mode, not only Catapult. The Desktop/TV icon keeps a thin
-  border at any size.
+  chosen in TV mode, not only Catapult. The Desktop/TV icon has as much
+  white around its art as the other apps' icons, at any size.
 
 ## Ika 261016, changes since release 261012
 
