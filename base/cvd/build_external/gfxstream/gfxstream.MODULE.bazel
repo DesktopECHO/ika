@@ -53,5 +53,8 @@ git_repository(
         # The VMM scans ColorBuffers out as dma-bufs and needs the pitch the
         # driver laid the image out with, not the packed one.
         "@//build_external/gfxstream:PATCH.gfxstream.color-buffer-row-pitch.patch",
+        # GL-only hosts export a ColorBuffer's texture through the host EGL's
+        # dma-buf export, so their console is scanned out without a copy too.
+        "@//build_external/gfxstream:PATCH.gfxstream.gl-color-buffer-dmabuf-export.patch",
     ],
 )
