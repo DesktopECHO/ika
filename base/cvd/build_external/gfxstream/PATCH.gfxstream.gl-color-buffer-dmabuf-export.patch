@@ -1,0 +1,463 @@
+Patch summary:
+Export GL-only ColorBuffers as dma-bufs, for hosts without Vulkan (the
+gfxstream GLES path). The translator gains eglExportDmabufImageANDROID: an
+image of a GL texture is re-created as a native EGLImage of the texture's
+global name and exported with the host EGL's EGL_MESA_image_dma_buf_export,
+whose fd, stride, offset and modifier come back to ColorBufferGl. The
+ColorBuffer's blob export falls back to it when there is no Vulkan image, and
+the row pitch reported by stream_renderer_resource_get_info takes the pitch
+of the last GL export when there is no Vulkan layout to ask.
+
+diff --git a/host/color_buffer.cpp b/host/color_buffer.cpp
+index 274cba56..ba01ebcd 100644
+--- a/host/color_buffer.cpp
++++ b/host/color_buffer.cpp
+@@ -19,6 +19,7 @@
+ #endif
+ #include "frame_buffer.h"
+ #include "gfxstream/common/logging.h"
++#include "gfxstream/virtio-gpu-gfxstream-renderer.h"
+ #include "gfxstream/host/gfxstream_format.h"
+ #include "vulkan/color_buffer_vk.h"
+ #include "vulkan/vk_common_operations.h"
+@@ -83,6 +84,7 @@ class ColorBuffer::Impl : public LazySnapshotObj<ColorBuffer::Impl> {
+     bool importHandle(void* handle, bool preserveContent);
+ 
+     std::optional<BlobDescriptorInfo> exportBlob();
++    std::optional<uint32_t> getRowPitch();
+ 
+     gl::ColorBufferGl* getColorBufferGl() const {
+ #if GFXSTREAM_ENABLE_HOST_GLES
+@@ -456,11 +458,42 @@ bool ColorBuffer::Impl::invalidateForVk() {
+ }
+ 
+ std::optional<BlobDescriptorInfo> ColorBuffer::Impl::exportBlob() {
+-    if (!mColorBufferVk) {
+-        return std::nullopt;
++    if (mColorBufferVk) {
++        return mColorBufferVk->exportBlob();
++    }
++
++#if GFXSTREAM_ENABLE_HOST_GLES && !defined(__ANDROID__)
++    // GL-only hosts: the texture's memory, through the host EGL's dma-buf export.
++    if (mColorBufferGl) {
++        auto exported = mColorBufferGl->exportDmabuf();
++        if (!exported) {
++            return std::nullopt;
++        }
++        return BlobDescriptorInfo{
++            .descriptorInfo =
++                {
++                    .descriptor = gfxstream::base::ManagedDescriptor(exported->fd),
++                    .streamHandleType = STREAM_HANDLE_TYPE_MEM_DMABUF,
++                },
++            .caching = 0,
++            .vulkanInfoOpt = std::nullopt,
++        };
+     }
++#endif
+ 
+-    return mColorBufferVk->exportBlob();
++    return std::nullopt;
++}
++
++std::optional<uint32_t> ColorBuffer::Impl::getRowPitch() {
++    if (mColorBufferVk) {
++        return mColorBufferVk->getRowPitch();
++    }
++#if GFXSTREAM_ENABLE_HOST_GLES
++    if (mColorBufferGl) {
++        return mColorBufferGl->getExportedRowPitch();
++    }
++#endif
++    return std::nullopt;
+ }
+ 
+ ////////////////////////////////////////////////////////////////////////////////////////////////
+@@ -563,5 +596,7 @@ bool ColorBuffer::flushFromVkBytes(const void* bytes, size_t bytesSize) {
+ 
+ std::optional<BlobDescriptorInfo> ColorBuffer::exportBlob() { return mImpl->exportBlob(); }
+ 
++std::optional<uint32_t> ColorBuffer::getRowPitch() { return mImpl->getRowPitch(); }
++
+ }  // namespace host
+ }  // namespace gfxstream
+diff --git a/host/color_buffer.h b/host/color_buffer.h
+index 01b89757..b17bb6ad 100644
+--- a/host/color_buffer.h
++++ b/host/color_buffer.h
+@@ -93,6 +93,9 @@ class ColorBuffer : public IColorBuffer, public LazySnapshotObj<ColorBuffer> {
+     bool flushFromVkBytes(const void* bytes, size_t bytesSize);
+ 
+     std::optional<BlobDescriptorInfo> exportBlob() override;
++    // The row pitch of the exported memory: the Vulkan image's layout, or the pitch the
++    // GL export reported. Empty until known.
++    std::optional<uint32_t> getRowPitch() override;
+ 
+    private:
+     ColorBuffer() = default;
+diff --git a/host/common/include/gfxstream/host/color_buffer_interface.h b/host/common/include/gfxstream/host/color_buffer_interface.h
+index 2b13a7b1..e9a2e279 100644
+--- a/host/common/include/gfxstream/host/color_buffer_interface.h
++++ b/host/common/include/gfxstream/host/color_buffer_interface.h
+@@ -68,6 +68,8 @@ class IColorBuffer {
+                                  const void* pixels, void* metadata = nullptr) = 0;
+ 
+     virtual std::optional<BlobDescriptorInfo> exportBlob() = 0;
++    // The row pitch of the memory exportBlob() hands out, when known.
++    virtual std::optional<uint32_t> getRowPitch() = 0;
+ };
+ 
+ // A (mostly) generic shared owning reference  to a `ColorBuffer` so that the
+diff --git a/host/frame_buffer.cpp b/host/frame_buffer.cpp
+index a385ef6c..0e10e305 100644
+--- a/host/frame_buffer.cpp
++++ b/host/frame_buffer.cpp
+@@ -595,7 +595,7 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
+ 
+     std::optional<BlobDescriptorInfo> exportColorBuffer(HandleType colorBufferHandle);
+     std::optional<BlobDescriptorInfo> exportBuffer(HandleType bufferHandle);
+-    std::optional<uint32_t> getColorBufferVkRowPitch(HandleType colorBufferHandle);
++    std::optional<uint32_t> getColorBufferRowPitch(HandleType colorBufferHandle);
+ 
+ #if GFXSTREAM_ENABLE_HOST_GLES
+     // Retrieves the color buffer handle associated with |p_surface|.
+@@ -3878,11 +3878,15 @@ std::optional<BlobDescriptorInfo> FrameBuffer::Impl::exportColorBuffer(
+     return colorBuffer->exportBlob();
+ }
+ 
+-std::optional<uint32_t> FrameBuffer::Impl::getColorBufferVkRowPitch(HandleType colorBufferHandle) {
+-    if (!m_emulationVk) {
++std::optional<uint32_t> FrameBuffer::Impl::getColorBufferRowPitch(HandleType colorBufferHandle) {
++    AutoLock mutex(m_lock);
++
++    auto colorBuffer = findColorBuffer(colorBufferHandle);
++    if (!colorBuffer) {
+         return std::nullopt;
+     }
+-    return m_emulationVk->getColorBufferRowPitch(colorBufferHandle);
++
++    return colorBuffer->getRowPitch();
+ }
+ 
+ std::optional<BlobDescriptorInfo> FrameBuffer::Impl::exportBuffer(HandleType bufferHandle) {
+@@ -4858,8 +4862,8 @@ std::optional<BlobDescriptorInfo> FrameBuffer::exportBuffer(HandleType bufferHan
+     return mImpl->exportBuffer(bufferHandle);
+ }
+ 
+-std::optional<uint32_t> FrameBuffer::getColorBufferVkRowPitch(HandleType colorBufferHandle) {
+-    return mImpl->getColorBufferVkRowPitch(colorBufferHandle);
++std::optional<uint32_t> FrameBuffer::getColorBufferRowPitch(HandleType colorBufferHandle) {
++    return mImpl->getColorBufferRowPitch(colorBufferHandle);
+ }
+ 
+ bool FrameBuffer::hasEmulationGl() const { return mImpl->hasEmulationGl(); }
+diff --git a/host/frame_buffer.h b/host/frame_buffer.h
+index 6d31d9eb..fdfec970 100644
+--- a/host/frame_buffer.h
++++ b/host/frame_buffer.h
+@@ -433,8 +433,8 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
+ 
+     std::optional<BlobDescriptorInfo> exportColorBuffer(HandleType colorBufferHandle);
+     std::optional<BlobDescriptorInfo> exportBuffer(HandleType bufferHandle);
+-    // The row pitch of the ColorBuffer's Vulkan image, when it has one.
+-    std::optional<uint32_t> getColorBufferVkRowPitch(HandleType colorBufferHandle);
++    // The row pitch of the ColorBuffer's exportable memory, when known.
++    std::optional<uint32_t> getColorBufferRowPitch(HandleType colorBufferHandle);
+ 
+     bool hasEmulationGl() const;
+     bool hasEmulationVk() const;
+diff --git a/host/gl/color_buffer_gl.cpp b/host/gl/color_buffer_gl.cpp
+index a7fa337a..0ec672dc 100644
+--- a/host/gl/color_buffer_gl.cpp
++++ b/host/gl/color_buffer_gl.cpp
+@@ -1304,6 +1304,39 @@ bool ColorBufferGl::importMemory(ManagedDescriptor externalDescriptor, uint64_t
+     return true;
+ }
+ 
++std::optional<ColorBufferGl::DmabufExport> ColorBufferGl::exportDmabuf() {
++    typedef EGLBoolean(EGLAPIENTRY * ExportDmabufImageFn)(EGLDisplay, EGLImageKHR, int*,
++                                                          EGLuint64KHR*, int*, EGLint*, EGLint*);
++    static const ExportDmabufImageFn exportImage = reinterpret_cast<ExportDmabufImageFn>(
++        s_egl.eglGetProcAddress("eglExportDmabufImageANDROID"));
++    if (!exportImage || !m_eglImage) {
++        return std::nullopt;
++    }
++
++    RecursiveScopedContextBind context(m_helper);
++    if (!context.isOk()) {
++        return std::nullopt;
++    }
++
++    int fourcc = 0;
++    EGLuint64KHR modifier = 0;
++    int fd = -1;
++    EGLint stride = 0;
++    EGLint offset = 0;
++    if (!exportImage(m_display, m_eglImage, &fourcc, &modifier, &fd, &stride, &offset) ||
++        fd < 0) {
++        return std::nullopt;
++    }
++    m_exportedRowPitch = static_cast<uint32_t>(stride);
++    return DmabufExport{
++        .fd = fd,
++        .fourcc = static_cast<uint32_t>(fourcc),
++        .stride = static_cast<uint32_t>(stride),
++        .offset = static_cast<uint32_t>(offset),
++        .modifier = modifier,
++    };
++}
++
+ bool ColorBufferGl::importEglNativePixmap(void* pixmap, bool preserveContent) {
+     EGLImageKHR image = s_egl.eglCreateImageKHR(m_display, EGL_NO_CONTEXT, EGL_NATIVE_PIXMAP_KHR, pixmap, nullptr);
+ 
+diff --git a/host/gl/color_buffer_gl.h b/host/gl/color_buffer_gl.h
+index 937434b6..db64da11 100644
+--- a/host/gl/color_buffer_gl.h
++++ b/host/gl/color_buffer_gl.h
+@@ -198,6 +198,19 @@ class ColorBufferGl {
+     HandleType getHndl() const;
+     GLuint getTexture() const { return m_tex; }
+ 
++    // The texture's memory as a dma-buf (EGL_MESA_image_dma_buf_export through the
++    // translator), for the VMM's display. The caller owns the fd.
++    struct DmabufExport {
++        int fd;
++        uint32_t fourcc;
++        uint32_t stride;
++        uint32_t offset;
++        uint64_t modifier;
++    };
++    std::optional<DmabufExport> exportDmabuf();
++    // The row pitch the last export reported, once there was one.
++    std::optional<uint32_t> getExportedRowPitch() const { return m_exportedRowPitch; }
++
+     bool isFastBlitSupported() const { return m_fastBlitSupported; }
+     void postLayer(const ComposeLayer& l, int frameWidth, int frameHeight,
+                    const std::optional<std::array<float, 16>>& colorTransform);
+@@ -235,6 +248,7 @@ class ColorBufferGl {
+     EGLImageKHR m_eglImage = nullptr;
+     EGLImageKHR m_blitEGLImage = nullptr;
+     GLuint m_fbo = 0;
++    std::optional<uint32_t> m_exportedRowPitch;
+ 
+     // This is helpful for bindFbo which may skip too many steps after the egl
+     // image is replaced.
+diff --git a/host/gl/glestranslator/egl/egl_display.h b/host/gl/glestranslator/egl/egl_display.h
+index 26244476..15d2f616 100644
+--- a/host/gl/glestranslator/egl/egl_display.h
++++ b/host/gl/glestranslator/egl/egl_display.h
+@@ -87,6 +87,12 @@ public:
+         return nativeType()->getNative();
+     }
+ 
++    bool exportNativeDmabufImage(EGLImage image, int* fourcc, uint64_t* modifier, int* fd,
++                                 int* stride, int* offset) {
++        return nativeType()->exportDmabufImage(getHostDriverDisplay(), image, fourcc, modifier,
++                                               fd, stride, offset);
++    }
++
+     void* getNativeContext(EGLContext ctx) const {
+         auto dispContext = getContext(ctx);
+         if (!dispContext) return nullptr;
+diff --git a/host/gl/glestranslator/egl/egl_imp.cpp b/host/gl/glestranslator/egl/egl_imp.cpp
+index 700d128d..9e980bf5 100644
+--- a/host/gl/glestranslator/egl/egl_imp.cpp
++++ b/host/gl/glestranslator/egl/egl_imp.cpp
+@@ -124,6 +124,9 @@ EGLAPI void EGLAPIENTRY eglBlitFromCurrentReadBufferANDROID(EGLDisplay display,
+ EGLAPI void* EGLAPIENTRY eglSetImageFenceANDROID(EGLDisplay display, EGLImageKHR image);
+ EGLAPI void EGLAPIENTRY eglWaitImageFenceANDROID(EGLDisplay display, void* fence);
+ EGLAPI EGLBoolean EGLAPIENTRY eglQueryVulkanInteropSupportANDROID(void);
++EGLAPI EGLBoolean EGLAPIENTRY eglExportDmabufImageANDROID(EGLDisplay display, EGLImageKHR image,
++                                                          int* fourcc, EGLuint64KHR* modifier,
++                                                          int* fd, EGLint* stride, EGLint* offset);
+ EGLAPI EGLBoolean EGLAPIENTRY eglGetSyncAttribKHR(EGLDisplay display, EGLSyncKHR sync, EGLint attribute, EGLint *value);
+ EGLAPI EGLBoolean EGLAPIENTRY eglSetNativeTextureDecompressionEnabledANDROID(EGLDisplay display, EGLBoolean enabled);
+ EGLAPI EGLBoolean EGLAPIENTRY eglSetProgramBinaryLinkStatusEnabledANDROID(EGLDisplay display, EGLBoolean enabled);
+@@ -184,6 +187,8 @@ static const ExtensionDescriptor s_eglExtensions[] = {
+                 (__eglMustCastToProperFunctionPointerType)eglWaitImageFenceANDROID },
+         {"eglQueryVulkanInteropSupportANDROID",
+                 (__eglMustCastToProperFunctionPointerType)eglQueryVulkanInteropSupportANDROID },
++        {"eglExportDmabufImageANDROID",
++                (__eglMustCastToProperFunctionPointerType)eglExportDmabufImageANDROID },
+         {"eglGetSyncAttribKHR",
+                 (__eglMustCastToProperFunctionPointerType)eglGetSyncAttribKHR },
+         {"eglSetNativeTextureDecompressionEnabledANDROID",
+@@ -1467,6 +1472,58 @@ EGLAPI EGLImageKHR EGLAPIENTRY eglCreateImageKHR(EGLDisplay display, EGLContext
+ }
+ 
+ 
++// Exports the memory behind an EGLImage as a dma-buf (EGL_MESA_image_dma_buf_export on the
++// host EGL), so that the VMM can hand a ColorBuffer to its display without a copy. An image
++// of a GL texture is exported through a native image of the texture's global name, created
++// with the native context of the current (translator) context; a native image is exported
++// as it is. The caller owns the returned fd.
++EGLAPI EGLBoolean EGLAPIENTRY eglExportDmabufImageANDROID(EGLDisplay display, EGLImageKHR image,
++                                                          int* fourcc, EGLuint64KHR* modifier,
++                                                          int* fd, EGLint* stride, EGLint* offset)
++{
++    VALIDATE_DISPLAY(display);
++    ImagePtr img = getEGLImage(SafeUIntFromPointer(image));
++    if (!img || !fourcc || !modifier || !fd || !stride || !offset) {
++        return EGL_FALSE;
++    }
++
++    EGLImage nativeImage = img->nativeImage;
++    bool ownsNativeImage = false;
++    if (!img->isNative) {
++        if (!img->globalTexObj) {
++            return EGL_FALSE;
++        }
++        ThreadInfo* thread = getThreadInfo();
++        if (!thread->eglContext) {
++            return EGL_FALSE;
++        }
++        EGLContext nativeContext = (EGLContext)thread->eglContext->nativeType()->getNative();
++        nativeImage = dpy->createNativeImage(
++            dpy->getHostDriverDisplay(), nativeContext, EGL_GL_TEXTURE_2D_KHR,
++            (EGLClientBuffer)SafePointerFromUInt(img->globalTexObj->getGlobalName()), nullptr);
++        if (nativeImage == (EGLImage)0) {
++            return EGL_FALSE;
++        }
++        ownsNativeImage = true;
++    }
++
++    uint64_t exportedModifier = 0;
++    int exportedStride = 0;
++    int exportedOffset = 0;
++    const bool exported = dpy->exportNativeDmabufImage(nativeImage, fourcc, &exportedModifier,
++                                                       fd, &exportedStride, &exportedOffset);
++    if (ownsNativeImage) {
++        dpy->destroyNativeImage(dpy->getHostDriverDisplay(), nativeImage);
++    }
++    if (!exported) {
++        return EGL_FALSE;
++    }
++    *modifier = exportedModifier;
++    *stride = exportedStride;
++    *offset = exportedOffset;
++    return EGL_TRUE;
++}
++
+ EGLAPI EGLBoolean EGLAPIENTRY eglDestroyImageKHR(EGLDisplay display, EGLImageKHR image)
+ {
+     VALIDATE_DISPLAY(display);
+diff --git a/host/gl/glestranslator/egl/egl_os_api.h b/host/gl/glestranslator/egl/egl_os_api.h
+index de60c1c2..7889093a 100644
+--- a/host/gl/glestranslator/egl/egl_os_api.h
++++ b/host/gl/glestranslator/egl/egl_os_api.h
+@@ -206,6 +206,16 @@ public:
+             EGLDisplay,
+             EGLImage) { return EGL_FALSE; }
+ 
++    // EGL_MESA_image_dma_buf_export of a native image: its dma-buf fd and
++    // single-plane layout. False when the host EGL cannot export it.
++    virtual bool exportDmabufImage(EGLDisplay,
++                                   EGLImage,
++                                   int* /*fourcc*/,
++                                   uint64_t* /*modifier*/,
++                                   int* /*fd*/,
++                                   int* /*stride*/,
++                                   int* /*offset*/) { return false; }
++
+     virtual EGLDisplay getNative() { return (EGLDisplay)0; }
+ 
+     virtual bool releasePbuffer(Surface* pb) = 0;
+diff --git a/host/gl/glestranslator/egl/egl_os_api_egl.cpp b/host/gl/glestranslator/egl/egl_os_api_egl.cpp
+index f137fd1f..3870a5f5 100644
+--- a/host/gl/glestranslator/egl/egl_os_api_egl.cpp
++++ b/host/gl/glestranslator/egl/egl_os_api_egl.cpp
+@@ -297,6 +297,9 @@ public:
+     virtual EGLBoolean destroyImageKHR(
+             EGLDisplay dpy,
+             EGLImage image);
++    virtual bool exportDmabufImage(EGLDisplay dpy, EGLImage image, int* fourcc,
++                                   uint64_t* modifier, int* fd, int* stride,
++                                   int* offset) override;
+     virtual EGLDisplay getNative();
+     void queryConfigs(int renderableType,
+                       AddConfigCallback* addConfigFunc,
+@@ -500,6 +503,38 @@ EGLImage EglOsEglDisplay::createImageKHR(
+     }
+ }
+ 
++bool EglOsEglDisplay::exportDmabufImage(EGLDisplay dpy, EGLImage image, int* fourcc,
++                                        uint64_t* modifier, int* fd, int* stride,
++                                        int* offset) {
++    const char* extensions = mDispatcher.eglQueryString(dpy, EGL_EXTENSIONS);
++    if (!extensions || !strstr(extensions, "EGL_MESA_image_dma_buf_export")) {
++        return false;
++    }
++    auto query = reinterpret_cast<PFNEGLEXPORTDMABUFIMAGEQUERYMESAPROC>(
++        mDispatcher.eglGetProcAddress("eglExportDMABUFImageQueryMESA"));
++    auto exportImage = reinterpret_cast<PFNEGLEXPORTDMABUFIMAGEMESAPROC>(
++        mDispatcher.eglGetProcAddress("eglExportDMABUFImageMESA"));
++    if (!query || !exportImage) {
++        return false;
++    }
++    int planes = 0;
++    EGLuint64KHR mod = 0;
++    if (!query(dpy, image, fourcc, &planes, &mod) || planes != 1) {
++        return false;
++    }
++    int fds[1] = {-1};
++    EGLint strides[1] = {0};
++    EGLint offsets[1] = {0};
++    if (!exportImage(dpy, image, fds, strides, offsets) || fds[0] < 0) {
++        return false;
++    }
++    *modifier = mod;
++    *fd = fds[0];
++    *stride = strides[0];
++    *offset = offsets[0];
++    return true;
++}
++
+ EGLBoolean EglOsEglDisplay::destroyImageKHR(
+         EGLDisplay dpy,
+         EGLImage image) {
+diff --git a/host/virtio_gpu_resource.cpp b/host/virtio_gpu_resource.cpp
+index 5d098ef1..d346ed57 100644
+--- a/host/virtio_gpu_resource.cpp
++++ b/host/virtio_gpu_resource.cpp
+@@ -426,9 +426,9 @@ int VirtioGpuResource::GetInfo(struct stream_renderer_resource_info* outInfo) co
+     outInfo->stride = AlignUp(mCreateArgs->width * formatInfo->bpp, 16U);
+     if (mResourceType == VirtioGpuResourceType::COLOR_BUFFER) {
+         // The VMM exports this resource's memory to its display as a dma-buf (scanout) and
+-        // describes it with this stride, so report the pitch the Vulkan driver chose for
+-        // the image rather than the packed one.
+-        auto pitch = FrameBuffer::getFB()->getColorBufferVkRowPitch(mId);
++        // describes it with this stride, so report the pitch the driver chose for the
++        // image rather than the packed one.
++        auto pitch = FrameBuffer::getFB()->getColorBufferRowPitch(mId);
+         if (pitch && *pitch >= mCreateArgs->width * formatInfo->bpp) {
+             outInfo->stride = *pitch;
+         }
+diff --git a/host/vulkan/color_buffer_vk.cpp b/host/vulkan/color_buffer_vk.cpp
+index b61d0a9d..c8a2dbc5 100644
+--- a/host/vulkan/color_buffer_vk.cpp
++++ b/host/vulkan/color_buffer_vk.cpp
+@@ -116,6 +116,10 @@ std::unique_ptr<ColorBufferVkImageInfo> ColorBufferVk::prepareForDisplay() {
+     return mVkEmulation.prepareColorBufferForDisplay(mHandle);
+ }
+ 
++std::optional<uint32_t> ColorBufferVk::getRowPitch() {
++    return mVkEmulation.getColorBufferRowPitch(mHandle);
++}
++
+ std::optional<BlobDescriptorInfo> ColorBufferVk::exportBlob() {
+     auto info = mVkEmulation.exportColorBufferMemory(mHandle);
+     if (info) {
+diff --git a/host/vulkan/color_buffer_vk.h b/host/vulkan/color_buffer_vk.h
+index a400e3ff..d7d3f01d 100644
+--- a/host/vulkan/color_buffer_vk.h
++++ b/host/vulkan/color_buffer_vk.h
+@@ -80,6 +80,8 @@ class ColorBufferVk {
+     void onSave(gfxstream::Stream* stream, SaveImageBehavior behavior);
+ 
+     std::optional<BlobDescriptorInfo> exportBlob();
++    // The row pitch of the image as the driver laid it out.
++    std::optional<uint32_t> getRowPitch();
+ 
+    private:
+     ColorBufferVk(VkEmulation& emulationVk, uint32_t handle);
