@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The pulled-down shade's header, which shows the clock and the status
+         icons, is as tall as the status bar, so that they stay at the same
+         height as it opens. System UI makes it at least that tall
+         (LargeScreenHeaderHelper); its own heights for large screens (42dp
+         and 56dp) put them lower. Across, the header takes the status bar's
+         paddings (frameworks-base-systemui-shade-header-padding.patch). Set
+         for each screen size System UI sets it for, so that its own values do
+         not win. -->
+    <dimen name="large_screen_shade_header_height">0dp</dimen>
+
+    <!-- The status icons end as far from the right edge on a narrow screen as
+         on a large one (values-sw600dp in System UI), not 4dp further. -->
+    <dimen name="status_bar_padding_end">0dp</dimen>
+</resources>
