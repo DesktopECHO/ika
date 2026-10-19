@@ -193,6 +193,9 @@ crosvm_bin.annotation(
         # Give crosvm the format and stride of gfxstream's 3D resources, so a
         # scanout goes to the display as a dma-buf instead of a GPU-to-CPU copy.
         "@//build_external/crosvm:PATCH.rutabaga_gfx-gfxstream-3d-resource-info.patch",
+        # Export gfxstream resources on demand and read their layout lazily,
+        # after gfxstream gave the scanout its explicit DRM modifier.
+        "@//build_external/crosvm:PATCH.rutabaga_gfx-on-demand-export-and-query.patch",
     ],
 )
 

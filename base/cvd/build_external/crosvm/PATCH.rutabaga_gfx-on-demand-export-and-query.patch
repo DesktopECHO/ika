@@ -1,0 +1,230 @@
+Export gfxstream resources on demand and query their layout lazily.
+
+gfxstream gives a color buffer its final, importable layout (an explicit DRM
+modifier) when the VMM first exports it for scanout, so exporting every 3D
+resource at creation would freeze the wrong layout and keep an fd per
+resource. Add export_blob and query to the RutabagaComponent trait, let
+Rutabaga::export_blob ask the component when no handle was cached, let
+Rutabaga::resource3d_info ask the component when the resource carries no 3D
+info, and stop create_3d from exporting and querying eagerly. The query also
+reads the offset and modifier gfxstream now reports.
+
+diff --git a/src/gfxstream.rs b/src/gfxstream.rs
+index 4f03f0b..17a49d1 100644
+--- a/src/gfxstream.rs
++++ b/src/gfxstream.rs
+@@ -78,10 +78,6 @@ const STREAM_RENDERER_PARAM_WIN0_HEIGHT: u64 = 5;
+ const STREAM_RENDERER_PARAM_DEBUG_CALLBACK: u64 = 6;
+ const STREAM_RENDERER_PARAM_RENDERER_FEATURES: u64 = 11;
+ 
+-// gfxstream does not report the layout of its resources (they are tiled host images); the
+-// importer of an exported resource has to derive it from the dma-buf itself.
+-const DRM_FORMAT_MOD_INVALID: u64 = 0x00ff_ffff_ffff_ffff;
+-
+ #[cfg(gfxstream_unstable)]
+ const STREAM_RENDERER_IMPORT_FLAG_VULKAN_INFO: u32 = RUTABAGA_IMPORT_FLAG_VULKAN_INFO;
+ #[cfg(gfxstream_unstable)]
+@@ -114,6 +110,8 @@ pub struct stream_renderer_resource_info {
+     pub tex_id: u32,
+     pub stride: u32,
+     pub drm_fourcc: c_int,
++    pub offset: u32,
++    pub modifier: u64,
+ }
+ 
+ #[repr(C)]
+@@ -551,6 +549,50 @@ impl Gfxstream {
+         })
+     }
+ 
++}
++
++impl Drop for Gfxstream {
++    fn drop(&mut self) {
++        // SAFETY: Safe because Gfxstream was successfully initialized.
++        unsafe {
++            stream_renderer_teardown();
++        }
++    }
++}
++
++impl RutabagaComponent for Gfxstream {
++    fn get_capset_info(&self, capset_id: u32) -> (u32, u32) {
++        let mut version = 0;
++        let mut size = 0;
++        // SAFETY:
++        // Safe because gfxstream is initialized by now and properly size stack variables are
++        // used for the pointers.
++        unsafe {
++            stream_renderer_get_cap_set(capset_id, &mut version, &mut size);
++        }
++        (version, size)
++    }
++
++    fn get_capset(&self, capset_id: u32, version: u32) -> Vec<u8> {
++        let (_, max_size) = self.get_capset_info(capset_id);
++        let mut buf = vec![0u8; max_size as usize];
++        // SAFETY:
++        // Safe because gfxstream is initialized by now and the given buffer is sized properly
++        // for the given cap id/version.
++        unsafe {
++            stream_renderer_fill_caps(capset_id, version, buf.as_mut_ptr() as *mut c_void);
++        }
++
++        buf
++    }
++
++    fn create_fence(&mut self, fence: RutabagaFence) -> RutabagaResult<()> {
++        // SAFETY:
++        // Safe because RutabagaFences and stream_renderer_fence are ABI identical
++        let ret = unsafe { stream_renderer_create_fence(&fence as *const stream_renderer_fence) };
++        ret_to_res(ret)
++    }
++
+     fn export_blob(&self, resource_id: u32) -> RutabagaResult<Arc<RutabagaHandle>> {
+         let mut stream_handle: stream_renderer_handle = Default::default();
+         // TODO(b/315870313): Add safety comment
+@@ -628,53 +670,10 @@ impl Gfxstream {
+             height: info.height,
+             drm_fourcc: info.drm_fourcc as u32,
+             strides: [info.stride, 0, 0, 0],
+-            offsets: [0, 0, 0, 0],
+-            modifier: DRM_FORMAT_MOD_INVALID,
++            offsets: [info.offset, 0, 0, 0],
++            modifier: info.modifier,
+         })
+     }
+-}
+-
+-impl Drop for Gfxstream {
+-    fn drop(&mut self) {
+-        // SAFETY: Safe because Gfxstream was successfully initialized.
+-        unsafe {
+-            stream_renderer_teardown();
+-        }
+-    }
+-}
+-
+-impl RutabagaComponent for Gfxstream {
+-    fn get_capset_info(&self, capset_id: u32) -> (u32, u32) {
+-        let mut version = 0;
+-        let mut size = 0;
+-        // SAFETY:
+-        // Safe because gfxstream is initialized by now and properly size stack variables are
+-        // used for the pointers.
+-        unsafe {
+-            stream_renderer_get_cap_set(capset_id, &mut version, &mut size);
+-        }
+-        (version, size)
+-    }
+-
+-    fn get_capset(&self, capset_id: u32, version: u32) -> Vec<u8> {
+-        let (_, max_size) = self.get_capset_info(capset_id);
+-        let mut buf = vec![0u8; max_size as usize];
+-        // SAFETY:
+-        // Safe because gfxstream is initialized by now and the given buffer is sized properly
+-        // for the given cap id/version.
+-        unsafe {
+-            stream_renderer_fill_caps(capset_id, version, buf.as_mut_ptr() as *mut c_void);
+-        }
+-
+-        buf
+-    }
+-
+-    fn create_fence(&mut self, fence: RutabagaFence) -> RutabagaResult<()> {
+-        // SAFETY:
+-        // Safe because RutabagaFences and stream_renderer_fence are ABI identical
+-        let ret = unsafe { stream_renderer_create_fence(&fence as *const stream_renderer_fence) };
+-        ret_to_res(ret)
+-    }
+ 
+     fn create_3d(
+         &self,
+@@ -701,23 +700,18 @@ impl RutabagaComponent for Gfxstream {
+         let ret = unsafe { stream_renderer_resource_create(&mut args, null_mut(), 0) };
+         ret_to_res(ret)?;
+ 
+-        // Always attempt to export when possible to potentially enable flows which share
+-        // memory directly.
+-        let exported_handle = self.export_blob(resource_id).ok();
+-
+-        // The VMM needs the resource's format and stride to hand the exported memory to a
+-        // display (scanout as a dma-buf) or to another process.
+-        let info_3d = self.query(resource_id).ok();
+-
++        // Exported on demand (Rutabaga::export_blob) rather than here: gfxstream gives a
++        // resource its final, importable layout when it is first exported for scanout, and
++        // its format and stride (Rutabaga::resource3d_info) are read after that.
+         Ok(RutabagaResource {
+             resource_id,
+-            handle: exported_handle,
++            handle: None,
+             blob: false,
+             blob_mem: 0,
+             blob_flags: 0,
+             map_info: None,
+             info_2d: None,
+-            info_3d,
++            info_3d: None,
+             vulkan_info: None,
+             backing_iovecs: None,
+             component_mask: 1 << (RutabagaComponentType::Gfxstream as u8),
+diff --git a/src/rutabaga_core.rs b/src/rutabaga_core.rs
+index 8238559..3057d0b 100644
+--- a/src/rutabaga_core.rs
++++ b/src/rutabaga_core.rs
+@@ -337,6 +337,16 @@ pub trait RutabagaComponent {
+     }
+ 
+     /// Implementations must return a MagmaGpuHandle of the fence on success.
++    /// Exports the resource's memory for import into other processes (or the VMM's display).
++    fn export_blob(&self, _resource_id: u32) -> RutabagaResult<Arc<RutabagaHandle>> {
++        Err(MagmaGpuError::Unsupported.into())
++    }
++
++    /// The format and layout of a 3D resource, for a display or process that imports it.
++    fn query(&self, _resource_id: u32) -> RutabagaResult<Resource3DInfo> {
++        Err(MagmaGpuError::Unsupported.into())
++    }
++
+     fn export_fence(&self, _fence_id: u64) -> RutabagaResult<MagmaGpuHandle> {
+         Err(MagmaGpuError::Unsupported.into())
+     }
+@@ -1116,9 +1126,18 @@ impl Rutabaga {
+             .get(&resource_id)
+             .ok_or(RutabagaError::InvalidResourceId)?;
+ 
+-        resource
+-            .info_3d
+-            .ok_or(MagmaGpuError::WithContext("no 3d info available").into())
++        if let Some(info) = resource.info_3d {
++            return Ok(info);
++        }
++
++        // Components that give a resource its final layout only when it is exported (gfxstream)
++        // answer at query time instead.
++        let component_type = calculate_component(resource.component_mask)?;
++        let component = self
++            .components
++            .get(&component_type)
++            .ok_or(RutabagaError::InvalidComponent)?;
++        component.query(resource_id)
+     }
+ 
+     /// Exports a blob resource.  See virtio-gpu spec for blob flag use flags.
+@@ -1132,6 +1151,15 @@ impl Rutabaga {
+         let share_mask = RUTABAGA_BLOB_FLAG_USE_SHAREABLE | RUTABAGA_BLOB_FLAG_USE_CROSS_DEVICE;
+         let shareable = (resource.blob_flags & share_mask != 0) || !resource.blob;
+ 
++        // A resource its component did not export at creation is exported on demand, e.g. when
++        // the VMM scans it out to a dma-buf capable display.
++        if resource.handle.is_none() && shareable {
++            let component_type = calculate_component(resource.component_mask)?;
++            if let Some(component) = self.components.get(&component_type) {
++                resource.handle = component.export_blob(resource_id).ok();
++            }
++        }
++
+         let opt = resource.handle.take();
+ 
+         match (opt, shareable) {

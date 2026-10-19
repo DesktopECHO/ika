@@ -25,4 +25,5 @@ exports_files([
     "PATCH.gfxstream.color-buffer-row-pitch.patch",
     "PATCH.gfxstream.gl-color-buffer-dmabuf-export.patch",
     "PATCH.gfxstream.scanout-dmabuf-export-feature.patch",
+    "PATCH.gfxstream.scanout-drm-modifier-export.patch",
 ])
