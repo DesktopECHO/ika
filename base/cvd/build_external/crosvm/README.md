@@ -72,7 +72,7 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 
 #### `PATCH.rutabaga_gfx-gfxstream-3d-resource-info.patch`
 - **Targets:** `rutabaga_gfx` crate. Files: `src/gfxstream.rs`, `src/rutabaga_core.rs`.
-- **What it does:** Fills a gfxstream 3D resource's `info_3d` (DRM format and stride) from `stream_renderer_resource_get_info` when it is created, with no known modifier, and makes `Rutabaga::export_blob` ask the component for a handle when none was cached at creation.
+- **What it does:** Fills a gfxstream 3D resource's `info_3d` (DRM format and stride) from `stream_renderer_resource_get_info` when it is created, with no known modifier (gfxstream's images are tiled host images; the importer takes the layout from the dma-buf).
 - **Why:** crosvm's `import_resource_to_display` sends a scanout to the Wayland compositor (run_cvd, then `ika_stream` and the console) as a dma-buf only when both `export_blob` and `resource3d_info` succeed. The export already worked, but the missing 3D info failed the lookup for every non-blob resource, so the console frames always went through the GPU-to-CPU readback into a `wl_shm` buffer.
 
 #### `PATCH.v4l2r-poller-no-epollin-probe.patch`
