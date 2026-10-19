@@ -109,39 +109,55 @@ the system by name under a **TV mode** heading, such as **Catapult**
 
 - In TV mode, choosing a TV launcher makes it the Home app straight away.
   Choosing **Trebuchet** asks whether to reboot into the desktop.
-- In desktop mode, choosing a TV launcher asks whether to reboot into TV mode
-  with that launcher as the Home app.
-- **Reboot** switches Settings (TV Settings in TV mode), the keyboard (the
-  Leanback keyboard in TV mode) and the Home app, and restarts Android in the
-  other mode, as much of the interface is set up when it starts. **Cancel**
-  keeps the mode. Back in desktop mode, the desktop's Home app comes back.
-- In TV mode Android runs the Android TV system UI (its notification panel,
-  picture-in-picture and volume controls), and apps run fullscreen, without a
-  status bar, taskbar or desktop windows. Apps and Google Play see an Android
-  TV device that runs TV apps only (the leanback, leanback-only and live TV
-  features, television UI mode), so apps with a TV version show it. Google
-  Play may then hide apps without TV support, and show phone apps you
-  installed in desktop mode as not compatible; they still run. Unlike a TV,
-  Ika keeps its touchscreen, for the desktop's apps.
-- TV mode has the Android TV build of the Google Play Store, and desktop mode
-  the phone build: the phone build does not run on a TV. Switching modes sets
-  the Play Store's update aside for the mode you leave and puts back the one
-  the other mode had last time, so each mode keeps its own Play Store version
-  (about 60 MB each). If the update can't be removed, the switch doesn't
-  happen. On x86-64 hosts the TV build is MindTheGapps' ARM64 one, which runs
-  through Android's ARM translation, as other ARM-only apps do.
-- The console follows the mode Android is in: in TV mode it opens fullscreen,
-  at 1.5 times the density Ika would pick automatically for the desktop, so
-  the TV interface is larger (`tv_dpi` in `ika.ini` sets it, and `--dpi`
-  applies in either mode), and passes the gamepad through as the remote: the
-  D-pad or left stick moves, A selects, B goes back and the guide button goes
-  Home. The keyboard and mouse work as on the desktop, except that a right
-  click goes back, as a remote's Back button does (Shift and right- click for
-  a right click). When Android restarts in the other mode, the console reopens
-  for it.
-- Apps opened from the desktop's app menu or with `ika app` still open in
-  their own windows on the Linux desktop, at the desktop's density, and games
-  in a game session.
+- In desktop mode, when switching to TV mode you may choose the default
+  launcher (Catapult) or select any TV launcher installed to be the default
+  launcher.
+- **Reboot** switches the Android Settings UI, Google Play Store, onscreen
+  keyboard, Home app, and restarts Android in the new mode. **Cancel** keeps
+  the mode. Back in desktop mode, the desktop's Home app comes back.
+- When Android restarts in the other mode, the console reopens for it.
+
+### TV mode compared with desktop mode
+
+|                          | Desktop mode                                            | TV mode                                                                                         |
+| ------------------------ | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Console window           | Opens windowed or fullscreen, as asked                  | Always opens fullscreen (Super + F still leaves it); its windowed size is kept apart from the desktop console's |
+| Interface size           | Density from the host display (`dpi`, `IKADPI`)         | 1.5 times the desktop's automatic density, so everything is 50% larger (`tv_dpi`, `IKA_TV_DPI`) |
+| Right click              | Right click; Shift + right click is Back                | Back, as a remote's Back button; Shift + right click is a right click                           |
+| Middle, 4th, 5th buttons | Home, recent apps, notifications                        | The same                                                                                        |
+| Gamepad                  | Not passed to Android (except in game mode)             | The remote: D-pad or left stick moves, A selects, B goes back, the guide button goes Home       |
+| Keyboard                 | Typed as text                                           | The same                                                                                        |
+| Home app                 | Trebuchet, with its taskbar                             | The TV launcher chosen in Desktop/TV: Catapult, or one from Google Play                         |
+| Home key                 | Home                                                    | Home; pressed twice, the recent apps                                                            |
+| System UI                | Status bar, taskbar, navigation bar, notification shade | Android TV's system UI: its notification panel, picture-in-picture and volume controls; no status bar, taskbar or navigation bar |
+| Apps in Android          | Desktop windows, split screen                           | Fullscreen only                                                                                 |
+| Apps from the Linux desktop's app menu or `ika app` | Their own windows, at the console's density | Still their own windows, at the desktop's density rather than the TV's |
+| Settings                 | Settings                                                | TV Settings                                                                                     |
+| On-screen keyboard       | The desktop's                                           | The Leanback keyboard                                                                           |
+| Google Play Store        | The phone build                                         | The Android TV build; on x86-64 hosts MindTheGapps' ARM64 one, through Android's ARM translation |
+| What apps see            | A tablet                                                | An Android TV that runs TV apps only, with a touchscreen                                        |
+| Recent apps at startup   | Cleared, so the desktop doesn't reopen their windows    | Kept                                                                                            |
+
+- **Interface size.** `tv_dpi = auto` in `ika.ini` is 1.5 times the density
+  `dpi = auto` gives, rounded down to a multiple of 8; a number sets it.
+  `--dpi` on `ika start` or `ika restart` sets the density in either mode, and
+  wins over both settings.
+- **Mouse and keyboard.** Right click and Shift + right click swap places:
+  on the desktop a right click opens context menus, and on a TV the button
+  that is always under your hand should go back. The keyboard works as on the
+  desktop. `ika start --game` keeps game mode's input (gamepad, keyboard and
+  mouse passed through as HID devices) in either mode.
+- **What apps see.** In TV mode Android has the leanback, leanback-only and
+  live TV features and the television UI mode, so apps with a TV version show
+  it. Google Play may then hide apps without TV support, and show phone apps
+  you installed in desktop mode as not compatible; they still run. Unlike a
+  TV, Ika keeps its touchscreen, for the desktop's apps.
+- **Google Play Store.** The phone build does not run on a TV, so each mode
+  has its own build and keeps its own updates.
+- **Apps opened from the Linux desktop.** Only the console becomes the TV
+  screen: Android apps opened from the desktop's "Android Apps (Ika)" menu or
+  with `ika app` still open in their own windows on the Linux desktop, and
+  games in a game session, in either mode.
 
 ## Rooting with Magisk
 
