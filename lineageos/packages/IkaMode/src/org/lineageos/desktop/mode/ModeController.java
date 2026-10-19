@@ -1,8 +1,10 @@
 package org.lineageos.desktop.mode;
 
 import android.app.ActivityTaskManager;
+import android.app.NotificationManager;
 import android.app.role.RoleManager;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
@@ -54,6 +56,8 @@ final class ModeController {
     private static final String MODE_DESKTOP = "desktop";
 
     static final String TV_LAUNCHER = "org.lineageos.tv.launcher";
+    private static final ComponentName TV_LAUNCHER_LISTENER = new ComponentName(TV_LAUNCHER,
+            TV_LAUNCHER + ".notification.TvNotificationListener");
     static final String DESKTOP_LAUNCHER = "com.android.launcher3";
     private static final String TV_SETTINGS = "com.android.tv.settings";
     private static final String DESKTOP_SETTINGS = "com.android.settings";
@@ -131,6 +135,7 @@ final class ModeController {
         SharedPreferences prefs = prefs(context);
         if (tv) {
             restoreTvLaunchers(pm, prefs);
+            allowTvLauncherNotifications(context);
         } else {
             turnOffTvLaunchers(pm, prefs);
         }
@@ -293,6 +298,24 @@ final class ModeController {
             setPackageEnabled(pm, packageName, true);
         }
         prefs.edit().remove(KEY_TV_LAUNCHERS_OFF).commit();
+    }
+
+    /**
+     * Catapult lists the notifications in TV mode, which takes notification access: it has it
+     * from the start, as on LineageOS's TV builds (config_defaultListenerAccessPackages), which
+     * grant it only on a new device. Given at every start in TV mode, so that a device switched
+     * to it has it too.
+     */
+    private static void allowTvLauncherNotifications(Context context) {
+        NotificationManager nm = context.getSystemService(NotificationManager.class);
+        try {
+            if (!nm.isNotificationListenerAccessGranted(TV_LAUNCHER_LISTENER)) {
+                nm.setNotificationListenerAccessGranted(TV_LAUNCHER_LISTENER, true);
+                Log.i(TAG, "Gave Catapult notification access");
+            }
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Could not give Catapult notification access", e);
+        }
     }
 
     private static void restartIn(Context context, boolean tv, boolean homeSet) {
