@@ -50,5 +50,8 @@ git_repository(
         # Round texel row length/image height up to whole compressed blocks,
         # matching the rounded-up copy extent (e.g. 128-wide ASTC 6x6).
         "@//build_external/gfxstream:PATCH.gfxstream.compressed-row-length-round-up.patch",
+        # The VMM scans ColorBuffers out as dma-bufs and needs the pitch the
+        # driver laid the image out with, not the packed one.
+        "@//build_external/gfxstream:PATCH.gfxstream.color-buffer-row-pitch.patch",
     ],
 )

@@ -22,4 +22,5 @@ exports_files([
     "PATCH.gfxstream.copy-buffer-to-image2-init.patch",
     "PATCH.gfxstream.compressed-row-length-round-up.patch",
     "PATCH.gfxstream.hide-host-image-copy.patch",
+    "PATCH.gfxstream.color-buffer-row-pitch.patch",
 ])

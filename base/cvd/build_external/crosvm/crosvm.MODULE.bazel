@@ -190,6 +190,10 @@ crosvm_bin.annotation(
         # Drain renderer resources and contexts while the component is alive,
         # so clean VMM shutdown reaches gfxstream's normal unbind paths.
         "@//build_external/crosvm:PATCH.rutabaga_gfx-cleanup-on-drop.patch",
+        # Give crosvm the format and stride of gfxstream's 3D resources, and
+        # export them on demand, so a scanout goes to the display as a dma-buf
+        # instead of a GPU-to-CPU copy.
+        "@//build_external/crosvm:PATCH.rutabaga_gfx-gfxstream-3d-resource-info.patch",
     ],
 )
 

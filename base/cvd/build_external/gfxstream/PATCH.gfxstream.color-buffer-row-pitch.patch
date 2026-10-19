@@ -1,0 +1,130 @@
+Patch summary:
+Report the Vulkan image's row pitch from stream_renderer_resource_get_info.
+The VMM exports a ColorBuffer's memory as a dma-buf when the guest scans it
+out, and describes it to the display with this stride. The packed width * bpp
+is wrong for the padded or tiled layouts the driver picks (RADV aligns pitches
+to its swizzle block), so ask vkGetImageSubresourceLayout when the ColorBuffer
+has a Vulkan image and report that pitch instead.
+
+diff --git a/host/frame_buffer.cpp b/host/frame_buffer.cpp
+index 473fcea7..a385ef6c 100644
+--- a/host/frame_buffer.cpp
++++ b/host/frame_buffer.cpp
+@@ -595,6 +595,7 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
+ 
+     std::optional<BlobDescriptorInfo> exportColorBuffer(HandleType colorBufferHandle);
+     std::optional<BlobDescriptorInfo> exportBuffer(HandleType bufferHandle);
++    std::optional<uint32_t> getColorBufferVkRowPitch(HandleType colorBufferHandle);
+ 
+ #if GFXSTREAM_ENABLE_HOST_GLES
+     // Retrieves the color buffer handle associated with |p_surface|.
+@@ -3877,6 +3878,13 @@ std::optional<BlobDescriptorInfo> FrameBuffer::Impl::exportColorBuffer(
+     return colorBuffer->exportBlob();
+ }
+ 
++std::optional<uint32_t> FrameBuffer::Impl::getColorBufferVkRowPitch(HandleType colorBufferHandle) {
++    if (!m_emulationVk) {
++        return std::nullopt;
++    }
++    return m_emulationVk->getColorBufferRowPitch(colorBufferHandle);
++}
++
+ std::optional<BlobDescriptorInfo> FrameBuffer::Impl::exportBuffer(HandleType bufferHandle) {
+     AutoLock mutex(m_lock);
+ 
+@@ -4850,6 +4858,10 @@ std::optional<BlobDescriptorInfo> FrameBuffer::exportBuffer(HandleType bufferHan
+     return mImpl->exportBuffer(bufferHandle);
+ }
+ 
++std::optional<uint32_t> FrameBuffer::getColorBufferVkRowPitch(HandleType colorBufferHandle) {
++    return mImpl->getColorBufferVkRowPitch(colorBufferHandle);
++}
++
+ bool FrameBuffer::hasEmulationGl() const { return mImpl->hasEmulationGl(); }
+ 
+ bool FrameBuffer::hasEmulationVk() const { return mImpl->hasEmulationVk(); }
+diff --git a/host/frame_buffer.h b/host/frame_buffer.h
+index adb25ced..6d31d9eb 100644
+--- a/host/frame_buffer.h
++++ b/host/frame_buffer.h
+@@ -433,6 +433,8 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
+ 
+     std::optional<BlobDescriptorInfo> exportColorBuffer(HandleType colorBufferHandle);
+     std::optional<BlobDescriptorInfo> exportBuffer(HandleType bufferHandle);
++    // The row pitch of the ColorBuffer's Vulkan image, when it has one.
++    std::optional<uint32_t> getColorBufferVkRowPitch(HandleType colorBufferHandle);
+ 
+     bool hasEmulationGl() const;
+     bool hasEmulationVk() const;
+diff --git a/host/virtio_gpu_resource.cpp b/host/virtio_gpu_resource.cpp
+index cffb8923..5d098ef1 100644
+--- a/host/virtio_gpu_resource.cpp
++++ b/host/virtio_gpu_resource.cpp
+@@ -424,6 +424,15 @@ int VirtioGpuResource::GetInfo(struct stream_renderer_resource_info* outInfo) co
+ 
+     outInfo->drm_fourcc = formatInfo->drm_fourcc;
+     outInfo->stride = AlignUp(mCreateArgs->width * formatInfo->bpp, 16U);
++    if (mResourceType == VirtioGpuResourceType::COLOR_BUFFER) {
++        // The VMM exports this resource's memory to its display as a dma-buf (scanout) and
++        // describes it with this stride, so report the pitch the Vulkan driver chose for
++        // the image rather than the packed one.
++        auto pitch = FrameBuffer::getFB()->getColorBufferVkRowPitch(mId);
++        if (pitch && *pitch >= mCreateArgs->width * formatInfo->bpp) {
++            outInfo->stride = *pitch;
++        }
++    }
+     outInfo->virgl_format = mCreateArgs->format;
+     outInfo->handle = mCreateArgs->handle;
+     outInfo->height = mCreateArgs->height;
+diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operations.cpp
+index a8856283..bbe0af32 100644
+--- a/host/vulkan/vk_common_operations.cpp
++++ b/host/vulkan/vk_common_operations.cpp
+@@ -3376,6 +3376,31 @@ std::optional<VkEmulation::VkColorBufferMemoryExport> VkEmulation::exportColorBu
+     };
+ }
+ 
++std::optional<uint32_t> VkEmulation::getColorBufferRowPitch(uint32_t colorBufferHandle) {
++    std::lock_guard<std::mutex> lock(mMutex);
++
++    auto info = gfxstream::base::find(mColorBuffers, colorBufferHandle);
++    if (!info || info->image == VK_NULL_HANDLE) {
++        return std::nullopt;
++    }
++    // Multi-planar formats have no single color plane layout.
++    if (IsYuvFormat(info->format)) {
++        return std::nullopt;
++    }
++
++    const VkImageSubresource subresource = {
++        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
++        .mipLevel = 0,
++        .arrayLayer = 0,
++    };
++    VkSubresourceLayout layout = {};
++    mDvk->vkGetImageSubresourceLayout(mDevice, info->image, &subresource, &layout);
++    if (layout.rowPitch == 0 || layout.rowPitch > UINT32_MAX) {
++        return std::nullopt;
++    }
++    return static_cast<uint32_t>(layout.rowPitch);
++}
++
+ bool VkEmulation::teardownVkColorBufferLocked(uint32_t colorBufferHandle) {
+     auto vk = mDvk;
+ 
+diff --git a/host/vulkan/vk_common_operations.h b/host/vulkan/vk_common_operations.h
+index 6b60ac1a..a0daa032 100644
+--- a/host/vulkan/vk_common_operations.h
++++ b/host/vulkan/vk_common_operations.h
+@@ -428,6 +428,11 @@ class VkEmulation {
+     };
+     std::optional<VkColorBufferMemoryExport> exportColorBufferMemory(uint32_t colorBufferHandle);
+ 
++    // The row pitch, in bytes, of the ColorBuffer's VkImage as the driver laid it out. This is
++    // what an importer of the exported memory (the VMM's display) has to use, not the pitch
++    // computed from the width.
++    std::optional<uint32_t> getColorBufferRowPitch(uint32_t colorBufferHandle);
++
+     bool setColorBufferVulkanMode(uint32_t colorBufferHandle, uint32_t vulkanMode);
+     int32_t mapGpaToBufferHandle(uint32_t bufferHandle, uint64_t gpa, uint64_t size = 0);
+ 
