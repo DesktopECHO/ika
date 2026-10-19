@@ -17,7 +17,9 @@
  * X11 it gets an invisible margin, outside of its content, like the shadow of
  * client-side decorations: the compositor is told that the window is the
  * content (Wayland window geometry, X11 _GTK_FRAME_EXTENTS), and the margin
- * holds the resize edges. Maximized and fullscreen windows have no margin.
+ * holds the resize edges. Maximized and fullscreen windows have no margin,
+ * and a window created fullscreen has none at all: its surface is opaque, so
+ * that the compositor can scan it out directly.
  *
  * In fullscreen or maximized, a click in the top-left corner leaves it.
  */
@@ -56,9 +58,11 @@ struct sc_ika_window {
     float corner_press_y;
 };
 
-// Window flags to create a window with (before sc_ika_window_init())
+// Window flags to create a window with (before sc_ika_window_init()). A
+// window that starts fullscreen is opaque: it has no margin, and the
+// compositor can scan its buffers out directly instead of blending them.
 SDL_WindowFlags
-sc_ika_window_get_creation_flags(bool borderless);
+sc_ika_window_get_creation_flags(bool borderless, bool fullscreen);
 
 void
 sc_ika_window_init(struct sc_ika_window *iw, SDL_Window *window);
