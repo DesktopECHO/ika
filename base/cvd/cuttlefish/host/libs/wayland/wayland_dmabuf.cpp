@@ -27,34 +27,34 @@
 namespace wayland {
 namespace {
 
+// The resource's destructor, which libwayland calls as it destroys the
+// resource: on the client's destroy request or when the client goes away. It
+// frees the buffer's data. Destroying the resource again here recursed until
+// the stack overflowed, once a client with dma-buf buffers disconnected.
 void buffer_destroy_resource(struct wl_resource* buffer_resource) {
-  wl_resource_destroy(buffer_resource);
+  delete GetUserData<Dmabuf>(buffer_resource);
 }
 
 void buffer_destroy(wl_client*, wl_resource* dmabuf_resource) {
   VLOG(1) << __FUNCTION__ << " buffer=" << dmabuf_resource;
 
-  Dmabuf* dmabuf = GetUserData<Dmabuf>(dmabuf_resource);
-  if (dmabuf != nullptr) {
-    delete dmabuf;
-  }
+  wl_resource_destroy(dmabuf_resource);
 }
 
 const struct wl_buffer_interface buffer_implementation = {
     .destroy = buffer_destroy,
 };
 
+// As for buffers: the destructor frees the data, the request destroys the
+// resource.
 void params_destroy_resource(struct wl_resource* params_resource) {
-  wl_resource_destroy(params_resource);
+  delete GetUserData<DmabufParams>(params_resource);
 }
 
 void params_destroy(struct wl_client*, struct wl_resource* params_resource) {
   VLOG(1) << __FUNCTION__ << " params=" << params_resource;
 
-  DmabufParams* dmabuf_params = GetUserData<DmabufParams>(params_resource);
-  if (dmabuf_params != nullptr) {
-    delete dmabuf_params;
-  }
+  wl_resource_destroy(params_resource);
 }
 
 void params_add(wl_client*, wl_resource* params, int32_t fd, uint32_t plane,
