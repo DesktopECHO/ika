@@ -106,6 +106,7 @@ PRODUCT_PACKAGES += ika_removed_packages
 PRODUCT_PACKAGES += \
     LineageDesktopConnectivityOverlay \
     LineageDesktopFrameworkResOverlay \
+    LineageDesktopLineageSdkOverlay \
     LineageDesktopLineageSettingsProviderOverlay \
     LineageDesktopNetworkStackOverlay \
     LineageDesktopSettingsOverlay \
