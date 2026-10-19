@@ -280,6 +280,10 @@ void WaitForAdbDisconnection(const std::string& address) {
         break;
       }
     }
+    // Closed before the sleep: the adb server, having closed its end, waits
+    // up to a second for this one and otherwise logs "timeout expired while
+    // flushing socket" for every check.
+    sock->Close();
     sleep(kAdbCommandGapTime);
   }
   VLOG(0) << "Sending adb disconnect";
