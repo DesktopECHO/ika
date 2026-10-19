@@ -206,6 +206,18 @@ hw_video_decode = auto
 
 
 # ----------------------------------------------------------------------------
+[camera]
+# Anti-flicker of the camera passed to Android with --camera: auto, 50, 60 or
+# off. Lights flicker at twice the mains frequency; a camera set for the wrong
+# one shows bands and in dim light can run slower. auto takes the mains
+# frequency of the country of the host's timezone, and leaves the camera's own
+# setting where that country has two (Japan). Command-line equivalent:
+# --camera_power_line_frequency=. Environment variable:
+# IKA_CAMERA_POWER_LINE_FREQUENCY
+power_line_frequency = auto
+
+
+# ----------------------------------------------------------------------------
 [network]
 vhost_net = true
 vhost_user_vsock = false
@@ -890,6 +902,7 @@ SCRCPY_DPI=""
 SCRCPY_DPI_GIVEN="false"
 ika_ini_default GFXSTREAM_VULKAN gpu gfxstream_vulkan auto
 ika_ini_default IKA_HW_VIDEO_DECODE gpu hw_video_decode auto
+ika_ini_default IKA_CAMERA_POWER_LINE_FREQUENCY camera power_line_frequency auto
 GFXSTREAM_VULKAN_MODE="${GFXSTREAM_VULKAN}"
 GFXSTREAM_GLES_CONTEXT_TYPES="gfxstream-gles:gfxstream-composer"
 GFXSTREAM_VULKAN_CONTEXT_TYPES="gfxstream-gles:gfxstream-vulkan:gfxstream-composer"
@@ -1259,6 +1272,87 @@ resolve_camera_device() {
   printf '%s\n' "${device}"
 }
 
+normalize_camera_power_line_frequency() {
+  case "${1,,}" in
+    ""|auto) echo "auto" ;;
+    50|50hz) echo "50" ;;
+    60|60hz) echo "60" ;;
+    0|off|no|false|disable|disabled) echo "off" ;;
+    *) die "invalid camera power line frequency '${1}' (expected auto, 50, 60 or off)" ;;
+  esac
+}
+
+# Prints the ISO 3166 code of the country of timezone ZONE, from tzdata.
+timezone_country() {
+  awk -v zone="$1" '!/^#/ && $3 == zone { print $1; exit }' \
+    "${IKA_ZONE_TAB:-/usr/share/zoneinfo/zone.tab}" 2>/dev/null
+}
+
+# Prints the mains frequency of COUNTRY, 50 or 60, or nothing where it differs
+# within the country (Japan, French Polynesia) or the country is unknown.
+country_mains_frequency() {
+  case "$1" in
+    "") ;;
+    JP|PF) ;;
+    AG|AI|AS|AW|BM|BR|BS|BZ|CA|CO|CR|CU|DO|EC|FM|GT|GU|GY|HN|HT|KN|KR|KY|LR|MF|MS|MX|NI|PA|PE|PH|PR|PW|SA|SR|SV|SX|TT|TW|US|VE|VG|VI)
+      echo "60" ;;
+    *) echo "50" ;;
+  esac
+}
+
+# Sets the anti-flicker (power line frequency) control of camera DEVICE to the
+# mains frequency of the host's lights: IKA_CAMERA_POWER_LINE_FREQUENCY, or with
+# "auto" that of the country of the host's timezone (the one Android gets).
+# Lights flicker at twice the mains frequency; set for the wrong one, a camera
+# shows bands, and in dim light it can lower its frame rate further than needed
+# (a 2011 MacBook Pro camera: 14 fps at 50 Hz, 17 fps at 60 Hz, in the same
+# room). Nothing in Android sets the control, and it stays set until the camera
+# is reset.
+apply_camera_power_line_frequency() {
+  local device="$1"
+  local mode
+  local hz
+  local reason=""
+  local zone
+  local country
+  local value
+  local label
+
+  mode="$(normalize_camera_power_line_frequency "${IKA_CAMERA_POWER_LINE_FREQUENCY}")"
+  command -v v4l2-ctl >/dev/null 2>&1 || return 0
+  if ! v4l2-ctl -d "${device}" --list-ctrls 2>/dev/null | grep -qw power_line_frequency; then
+    log "camera anti-flicker: the camera has no such control"
+    return 0
+  fi
+
+  case "${mode}" in
+    auto)
+      zone="$(host_timezone)"
+      country="$(timezone_country "${zone}")"
+      hz="$(country_mains_frequency "${country}")"
+      if [[ -z "${hz}" ]]; then
+        log "camera anti-flicker: left as the camera has it (no single mains frequency for timezone '${zone:-unknown}'); set camera.power_line_frequency in ${IKA_INI_FILE}"
+        return 0
+      fi
+      reason=" (timezone ${zone})"
+      ;;
+    off) hz="" ;;
+    *) hz="${mode}" ;;
+  esac
+
+  # V4L2_CID_POWER_LINE_FREQUENCY: 0 disabled, 1 50 Hz, 2 60 Hz
+  case "${hz}" in
+    50) value=1; label="50 Hz" ;;
+    60) value=2; label="60 Hz" ;;
+    *) value=0; label="off" ;;
+  esac
+  if v4l2-ctl -d "${device}" -c "power_line_frequency=${value}" 2>/dev/null; then
+    log "camera anti-flicker: ${label}${reason}"
+  else
+    log "warning: could not set the anti-flicker of camera ${device} to ${label}"
+  fi
+}
+
 # Prints the VA-API driver names libva would try for the GPU behind render
 # node NODE, from its kernel driver. Prints nothing for a GPU without VA-API
 # video decoding.
@@ -1409,6 +1503,8 @@ parse_start_options() {
   shift 3
 
   hw_video_decode_mode="$(normalize_hw_video_decode_mode "${IKA_HW_VIDEO_DECODE}")"
+  IKA_CAMERA_POWER_LINE_FREQUENCY="$(normalize_camera_power_line_frequency \
+    "${IKA_CAMERA_POWER_LINE_FREQUENCY}")"
 
   fullscreen_mode_ref="false"
   game_mode_ref="false"
@@ -1468,6 +1564,16 @@ parse_start_options() {
         start_args_ref+=("--media=v4l2_proxy:device=${camera_device}")
         shift
         ;;
+      --camera_power_line_frequency=*)
+        IKA_CAMERA_POWER_LINE_FREQUENCY="$(normalize_camera_power_line_frequency "${1#*=}")"
+        shift
+        ;;
+      --camera_power_line_frequency)
+        shift
+        [[ $# -gt 0 ]] || die "--camera_power_line_frequency requires a value: auto, 50, 60 or off"
+        IKA_CAMERA_POWER_LINE_FREQUENCY="$(normalize_camera_power_line_frequency "$1")"
+        shift
+        ;;
       --hw_video_decode=*)
         hw_video_decode_mode="$(normalize_hw_video_decode_mode "${1#*=}")"
         # 'restart' hands its options to 'start' without this one.
@@ -1499,6 +1605,9 @@ parse_start_options() {
         ;;
     esac
   done
+
+  # After all options, as --camera_power_line_frequency may follow --camera
+  [[ -z "${camera_device}" ]] || apply_camera_power_line_frequency "${camera_device}"
 }
 
 console_notify() {
@@ -1605,6 +1714,11 @@ Options:
                          start or restart without it. Needs the video group.
                          start only adds a camera when Android is off; use
                          restart while it runs.
+  --camera_power_line_frequency=auto|50|60|off
+                         With --camera, set the camera's anti-flicker to the
+                         mains frequency of the room's lights (default auto:
+                         that of the country of the host's timezone; ika.ini
+                         camera.power_line_frequency).
   --dpi=N                With start or restart, set the display density
                          in either mode (default: from the host display, or
                          144 when no display size can be read, and 1.5 times

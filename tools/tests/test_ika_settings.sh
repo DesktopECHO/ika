@@ -48,6 +48,7 @@ settings() {
           IKA_SCRCPY_REBOOT_TIMEOUT_SEC IKA_MIN_OPEN_FILES \
           IKA_KERNEL_PAGE_SIZE IKADPI IKA_SCRCPY IKA_INSTALL_TIMEOUT_SEC \
           IKA_APP_MENU_POLL_SEC IKA_GSF_ID_TIMEOUT_SEC GFXSTREAM_VULKAN \
+          IKA_CAMERA_POWER_LINE_FREQUENCY \
           BACKUP_LIST_ADB_TIMEOUT_SEC BACKUP_COPY_ADB_TIMEOUT_SEC; do
         printf "%s=%s\n" "${var}" "${!var}"
       done
@@ -80,6 +81,7 @@ rm "${T}/generated/ika.ini"
 settings "${T}/generated" >/dev/null
 [[ "$(<"${T}/generated/ika.ini")" == "${generated_file}" ]] || fail "the regenerated ika.ini differs"
 expect_line "${builtin_settings}" "CVD_GPU_DEFAULTS.gpu_mode=gfxstream_guest_angle" "built-in gpu_mode"
+expect_line "${builtin_settings}" "IKA_CAMERA_POWER_LINE_FREQUENCY=auto" "built-in camera anti-flicker"
 
 # Edits override the defaults; "auto" keeps the calculated value.
 cat >"${T}/edited/ika.ini" <<'EOF'
@@ -115,6 +117,9 @@ gsf_id_timeout_sec = soon
 
 [system]
 stop_grace_sec = 10
+
+[camera]
+power_line_frequency = 60
 EOF
 edited="$(settings "${T}/edited")"
 expect_line "${edited}" "CVD_COMPUTE_DEFAULTS.cpus=3" "cpus"
@@ -131,6 +136,7 @@ expect_line "${edited}" "IKA_HIDDEN_APPS=com.example.one com.example.two" "hidde
 expect_line "${edited}" "IKA_GAME_APPS=com.example.game" "game apps"
 expect_line "${edited}" "IKA_INSTALL_TIMEOUT_SEC=90" "install timeout"
 expect_line "${edited}" "IKA_STOP_GRACE_SEC=10" "stop grace"
+expect_line "${edited}" "IKA_CAMERA_POWER_LINE_FREQUENCY=60" "camera anti-flicker"
 # Untouched settings keep their defaults.
 expect_line "${edited}" "CVD_LAUNCHER_DEFAULTS.start_webrtc=false" "untouched default"
 expect_line "${edited}" "$(grep '^CVD_COMPUTE_DEFAULTS.memory_mb=' <<<"${builtin_settings}")" "auto memory"

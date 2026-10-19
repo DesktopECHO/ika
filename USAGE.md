@@ -84,6 +84,14 @@ virtio-media, served by Android's external camera HAL):
   is no other.
 - `--camera=video2` or `--camera=/dev/video2` picks a device; `v4l2-ctl
   --list-devices` lists them.
+- The camera's anti-flicker is set to the mains frequency of the country of
+  the host's timezone (60 Hz in most of the Americas, Taiwan, South Korea, the
+  Philippines and Saudi Arabia, 50 Hz elsewhere). Lights flicker at twice that
+  frequency; a camera set for the wrong one shows bands, and in dim light can
+  run slower. `--camera_power_line_frequency=50|60|off`, or
+  `power_line_frequency` in the `[camera]` section of ika.ini, sets it instead;
+  in Japan, which has both, set it this way. Cameras without the control, such
+  as the FaceTime cameras on `facetimehd` and `apple-isp`, are left alone.
 - The camera is attached when Android starts: `ika start --camera` refuses
   while it runs, so use `ika restart --camera` then. It is used until the
   next `ika start` or `ika restart` without `--camera`. It needs the `video`
