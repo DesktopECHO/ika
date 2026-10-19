@@ -59,6 +59,15 @@
   crashes Android (a kernel panic) when a video player closes or seeks while
   crosvm still returns decoded frames.
 
+### Camera
+- `ika start --camera` sets the camera's anti-flicker to the mains frequency
+  of the country of the host's timezone (60 Hz in most of the Americas, 50 Hz
+  in most other places). Cameras that start at 50 Hz showed bands under 60 Hz
+  lights and ran slower in dim light: the FaceTime camera of a 2011 MacBook
+  Pro went from 14 to 17 fps in the same room.
+  `--camera_power_line_frequency=50|60|off`, or `power_line_frequency` in the
+  new `[camera]` section of ika.ini, sets it instead.
+
 ### Starting and stopping
 - `ika start` works again after `ika stop`, and after Android powers off or
   fails to boot. Cuttlefish 1.58 starts the VM through `cvd create`, which
