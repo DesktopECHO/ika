@@ -1,0 +1,157 @@
+Patch summary:
+Keep the pulled-down shade's clock and status icons where the status bar's
+are. The header takes the status bar's paddings (its content insets, then
+status_bar_padding_start at the start; status_bar_padding_end and the icons'
+end padding at the end) instead of its own 16dp to 40dp, and its clock the
+status bar clock's start padding (status_bar_clock_starting_padding) instead
+of 0dp. They are applied again at every inset, configuration and resource
+change, once more after a configuration change, and when the status bar's
+content insets change: read during a change, the insets could still be the
+old ones. The header's own values put the clock and icons elsewhere, by an
+amount that changed with the layout and as the screen was resized. A mouse
+click on the header's status icons closes the shade, as one on the status
+bar's opened it in the same place; the narrow layout's header ignored it.
+Ika's System UI overlay makes the header as tall as the status bar.
+
+diff --git a/packages/SystemUI/src/com/android/systemui/shade/ShadeHeaderController.kt b/packages/SystemUI/src/com/android/systemui/shade/ShadeHeaderController.kt
+--- a/packages/SystemUI/src/com/android/systemui/shade/ShadeHeaderController.kt
++++ b/packages/SystemUI/src/com/android/systemui/shade/ShadeHeaderController.kt
+@@ -30,6 +30,8 @@
+ import android.os.Trace.TRACE_TAG_APP
+ import android.provider.AlarmClock
+ import android.view.DisplayCutout
++import android.view.InputDevice
++import android.view.MotionEvent
+ import android.view.View
+ import android.view.ViewGroup
+ import android.view.WindowInsets
+@@ -76,6 +78,7 @@
+ import com.android.systemui.statusbar.core.NewStatusBarIcons
+ import com.android.systemui.statusbar.core.RudimentaryBattery
+ import com.android.systemui.statusbar.data.repository.StatusBarContentInsetsProviderStore
++import com.android.systemui.statusbar.layout.StatusBarContentInsetsChangedListener
+ import com.android.systemui.statusbar.phone.StatusBarLocation
+ import com.android.systemui.statusbar.phone.StatusIconContainer
+ import com.android.systemui.statusbar.phone.StatusOverlayHoverListenerFactory
+@@ -265,6 +268,19 @@
+             }
+         }
+ 
++    // Ika: realigns with the status bar once its insets have been updated for a change: during
++    // the configuration change, they can still be the old ones.
++    private val statusBarInsetsListener =
++        object : StatusBarContentInsetsChangedListener {
++            override fun onStatusBarContentInsetsChanged() {
++                realignWithStatusBar()
++            }
++        }
++
++    private fun realignWithStatusBar() {
++        lastInsets?.let { updateConstraintsForInsets(header, it) } ?: alignWithStatusBar()
++    }
++
+     private val insetListener =
+         View.OnApplyWindowInsetsListener { view, insets ->
+             val windowInsets = WindowInsets(insets)
+@@ -305,16 +321,10 @@
+     private val configurationControllerListener =
+         object : ConfigurationController.ConfigurationListener {
+             override fun onConfigChanged(newConfig: Configuration?) {
+-                val left =
+-                    header.resources.getDimensionPixelSize(
+-                        R.dimen.large_screen_shade_header_left_padding
+-                    )
+-                header.setPadding(
+-                    left,
+-                    header.paddingTop,
+-                    header.paddingRight,
+-                    header.paddingBottom,
+-                )
++                // Ika: the header follows the status bar, not a padding of its own, again once
++                // the status bar's insets are those of the new configuration.
++                alignWithStatusBar()
++                header.post { realignWithStatusBar() }
+                 systemIconsHoverContainer.setPaddingRelative(
+                     resources.getDimensionPixelSize(
+                         R.dimen.hover_system_icons_container_padding_start
+@@ -493,10 +503,24 @@
+         systemIconsHoverContainer.setOnHoverListener(
+             statusOverlayHoverListenerFactory.createListener(systemIconsHoverContainer)
+         )
++        // Ika: a mouse click on the status icons closes the shade, as one on the status bar's
++        // opened it, in the same place. The narrow layout's header ignored it.
++        statusBarContentInsetsProvider?.addCallback(statusBarInsetsListener)
++        systemIconsHoverContainer.setOnTouchListener { _, event ->
++            if (event.source != InputDevice.SOURCE_MOUSE) {
++                return@setOnTouchListener false
++            }
++            if (event.action == MotionEvent.ACTION_UP) {
++                context.getSystemService(StatusBarManager::class.java)?.collapsePanels()
++            }
++            true
++        }
+     }
+ 
+     override fun onViewDetached() {
+         clock.setOnClickListener(null)
++        systemIconsHoverContainer.setOnTouchListener(null)
++        statusBarContentInsetsProvider?.removeCallback(statusBarInsetsListener)
+         privacyIconsController.chipVisibilityListener = null
+         dumpManager.unregisterDumpable(this::class.java.simpleName)
+         configurationController.removeCallback(configurationControllerListener)
+@@ -572,6 +596,7 @@
+ 
+     private fun updateConstraintsForInsets(view: MotionLayout, insets: WindowInsets) {
+         val insetsProvider = statusBarContentInsetsProvider ?: return
++        alignWithStatusBar()
+         val cutout = insets.displayCutout.also { this.cutout = it }
+ 
+         val sbInsets: Insets = insetsProvider.getStatusBarContentInsetsForCurrentRotation()
+@@ -715,15 +740,44 @@
+ 
+     private fun updateResources() {
+         roundedCorners = resources.getDimensionPixelSize(R.dimen.rounded_corner_content_padding)
+-        val padding = resources.getDimensionPixelSize(R.dimen.qs_panel_padding)
+-        header.setPadding(padding, header.paddingTop, padding, header.paddingBottom)
++        alignWithStatusBar()
+         updateQQSPaddings()
+         qsBatteryModeController.updateResources()
+     }
+ 
++    /**
++     * Ika: puts the header's clock and status icons where the status bar's are, so that they stay
++     * in place as the shade opens, at any size of screen and after any change of it. The header
++     * takes the status bar's paddings: its content insets, then status_bar_padding_start at the
++     * start, and status_bar_padding_end and the icons' end padding at the end, less the end
++     * padding the header's icons have of their own. Its own paddings (16dp to 40dp) put them
++     * elsewhere, by an amount that changed with the layout.
++     */
++    private fun alignWithStatusBar() {
++        val insets =
++            statusBarContentInsetsProvider?.getStatusBarContentInsetsForCurrentRotation() ?: return
++        val rtl = header.isLayoutRtl
++        val start =
++            (if (rtl) insets.right else insets.left) +
++                resources.getDimensionPixelSize(R.dimen.status_bar_padding_start)
++        val end =
++            (if (rtl) insets.left else insets.right) +
++                resources.getDimensionPixelSize(R.dimen.status_bar_padding_end) +
++                resources.getDimensionPixelSize(R.dimen.status_bar_icons_padding_end) -
++                resources.getDimensionPixelSize(R.dimen.hover_system_icons_container_padding_end)
++        header.setPaddingRelative(
++            start,
++            header.paddingTop,
++            end.coerceAtLeast(0),
++            header.paddingBottom,
++        )
++    }
++
+     private fun updateQQSPaddings() {
++        // Ika: the status bar clock's start padding (Clock.reloadDimens()), so that the header's
++        // starts where it does.
+         val clockPaddingStart =
+-            resources.getDimensionPixelSize(R.dimen.status_bar_left_clock_starting_padding)
++            resources.getDimensionPixelSize(R.dimen.status_bar_clock_starting_padding)
+         val clockPaddingEnd =
+             resources.getDimensionPixelSize(R.dimen.status_bar_left_clock_end_padding)
+         clock.setPaddingRelative(

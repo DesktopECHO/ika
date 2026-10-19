@@ -85,6 +85,7 @@ frameworks/base patches/frameworks-base-powerstats-no-battery-bluetooth.patch
 frameworks/base patches/frameworks-base-telephony-no-data-quiet.patch
 frameworks/base patches/frameworks-base-systemui-no-connected-display-ui.patch
 frameworks/base patches/frameworks-base-systemui-app-window-displays.patch
+frameworks/base patches/frameworks-base-systemui-shade-header-padding.patch
 frameworks/base patches/frameworks-base-ika-mode.patch
 frameworks/base patches/frameworks-base-default-home-role.patch
 frameworks/base patches/frameworks-base-tv-advanced-protection.patch
