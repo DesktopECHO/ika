@@ -19,5 +19,4 @@ PRODUCT_ARTIFACT_PATH_REQUIREMENT_SYSPROP_ALLOWED_LIST += \
     persist.wm.debug.force_desktop_first_on_default_display_for_testing
 
 PRODUCT_PRODUCT_PROPERTIES += \
-    persist.wm.debug.desktop_experience_devopts=true \
-    persist.wm.debug.enable_drag_to_maximize=true
+    persist.wm.debug.desktop_experience_devopts=true

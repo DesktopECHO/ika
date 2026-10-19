@@ -3,7 +3,10 @@
     <bool name="config_isDesktopModeSupported">true</bool>
     <bool name="config_canInternalDisplayHostDesktops">true</bool>
     <bool name="config_enterDesktopByDefaultOnFreeformDisplay">true</bool>
-    <bool name="config_dragToMaximizeInDesktopMode">true</bool>
+    <!-- Dragging a window's title bar to the top edge leaves the desktop and
+         runs the app fullscreen on the console, like a single app; the
+         maximize button fills the desktop instead. -->
+    <bool name="config_dragToMaximizeInDesktopMode">false</bool>
     <!-- Displays added at runtime (Cuttlefish displays shown in app windows)
          own their content: no status bar, taskbar, wallpaper or launcher. -->
     <bool name="config_localDisplaysMirrorContent">false</bool>
