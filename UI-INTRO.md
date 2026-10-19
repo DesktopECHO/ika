@@ -20,6 +20,16 @@ the window keeps an invisible 4-pixel margin for that, so the edge of the
 Android desktop stays clickable. While a window is resized, its last complete
 picture is stretched and blurred until Android has drawn the new size.
 
+## TV mode
+
+In Android's TV mode the console is the TV screen: it always opens
+fullscreen, as every app inside it does, the interface is 1.5 times its
+desktop size, a right click goes Back (Shift + right click for a right click)
+and the gamepad is the remote. Android apps opened from the Linux desktop's
+app menu or with `ika app` still open in their own windows.
+See [TV mode compared with desktop mode](USAGE.md#tv-mode-compared-with-desktop-mode)
+for every difference, and [TV mode](USAGE.md#tv-mode) for switching.
+
 ## App windows
 
 With the VM running, `ika app PACKAGE` opens a single app in its own
