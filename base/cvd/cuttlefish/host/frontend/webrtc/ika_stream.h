@@ -112,6 +112,8 @@ class RawFrameStreamer {
     bool suppress_next_raw = false;
     Frame latest_frame;
     ClientShm shm;
+    // The last DMA-BUF geometry logged for this display, to log it once.
+    std::string dmabuf_description;
   };
 
   struct ClientThread {

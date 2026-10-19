@@ -1,4 +1,4 @@
-Report gfxstream 3D resources' layout and export them on demand.
+Report gfxstream 3D resources' layout to the VMM.
 
 crosvm's display path (VirtioGpuScanout::import_resource_to_display) hands a
 scanout resource to the Wayland compositor as a dma-buf, instead of reading it
@@ -6,10 +6,9 @@ back into a wl_shm buffer, when export_blob and resource3d_info both succeed.
 For gfxstream, create_3d already exports the color buffer's memory but left
 info_3d empty, so the lookup failed for every non-blob resource (the guest's
 hwcomposer framebuffers) and the console always took the GPU-to-CPU copy. Fill
-it from stream_renderer_resource_get_info (format and stride, no known
-modifier: gfxstream's images are tiled host images whose layout the importer
-has to take from the dma-buf itself), and let Rutabaga::export_blob ask the
-component when no handle was cached at creation.
+it from stream_renderer_resource_get_info: format and stride, with no known
+modifier, since gfxstream's images are tiled host images whose layout the
+importer has to take from the dma-buf itself.
 
 diff --git a/src/gfxstream.rs b/src/gfxstream.rs
 index 936894e..4f03f0b 100644
@@ -113,23 +112,3 @@ index 936894e..4f03f0b 100644
              vulkan_info: None,
              backing_iovecs: None,
              component_mask: 1 << (RutabagaComponentType::Gfxstream as u8),
-diff --git a/src/rutabaga_core.rs b/src/rutabaga_core.rs
-index 8238559..19b9f75 100644
---- a/src/rutabaga_core.rs
-+++ b/src/rutabaga_core.rs
-@@ -1132,6 +1132,15 @@ impl Rutabaga {
-         let share_mask = RUTABAGA_BLOB_FLAG_USE_SHAREABLE | RUTABAGA_BLOB_FLAG_USE_CROSS_DEVICE;
-         let shareable = (resource.blob_flags & share_mask != 0) || !resource.blob;
- 
-+        // A resource whose component did not export it at creation (or could not yet) is
-+        // exported on demand, e.g. when the VMM scans it out to a dma-buf capable display.
-+        if resource.handle.is_none() && shareable {
-+            let component_type = calculate_component(resource.component_mask)?;
-+            if let Some(component) = self.components.get(&component_type) {
-+                resource.handle = component.export_blob(resource_id).ok();
-+            }
-+        }
-+
-         let opt = resource.handle.take();
- 
-         match (opt, shareable) {

@@ -30,6 +30,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <iomanip>
+#include <sstream>
 #include <utility>
 
 #include "absl/log/log.h"
@@ -379,9 +381,22 @@ bool RawFrameStreamer::OnDmabufFrame(uint32_t display_number, uint32_t width,
   frame.modifier_hi = modifier_hi;
   frame.modifier_lo = modifier_lo;
 
+  std::ostringstream description;
+  description << width << "x" << height << " "
+              << static_cast<char>(fourcc & 0xff)
+              << static_cast<char>((fourcc >> 8) & 0xff)
+              << static_cast<char>((fourcc >> 16) & 0xff)
+              << static_cast<char>((fourcc >> 24) & 0xff) << " stride "
+              << stride_bytes << " offset " << offset << " modifier 0x" << std::hex
+              << modifier_hi << std::setw(8) << std::setfill('0') << modifier_lo;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     DisplayStream& display = GetDisplayLocked(display_number);
+    if (display.dmabuf_description != description.str()) {
+      LOG(INFO) << "Display " << display_number << " frames arrive as DMA-BUFs: "
+                << description.str();
+      display.dmabuf_description = description.str();
+    }
     ReplaceLatestFrameLocked(display, std::move(frame));
     display.suppress_next_raw = true;
     ++display.generation;
