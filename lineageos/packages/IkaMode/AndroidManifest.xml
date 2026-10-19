@@ -2,9 +2,13 @@
     package="org.lineageos.desktop.mode"
     android:sharedUserId="android.uid.system">
 
-    <!-- Persistent, so that it applies Ika's mode as Android starts. -->
+    <!-- Persistent, so that it applies Ika's mode as Android starts. The TV
+         launcher draws a favorite with the app's icon and banner, not the
+         activity's. -->
     <application
         android:name=".IkaModeApplication"
+        android:banner="@drawable/banner_switch"
+        android:icon="@drawable/ic_switch"
         android:label="@string/app_name"
         android:persistent="true"
         android:directBootAware="true"
@@ -15,6 +19,7 @@
         <activity
             android:name=".SwitcherActivity"
             android:exported="true"
+            android:banner="@drawable/banner_switch"
             android:excludeFromRecents="true"
             android:icon="@drawable/ic_switch"
             android:label="@string/app_name"
