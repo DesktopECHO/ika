@@ -206,6 +206,20 @@ hw_video_decode = auto
 
 
 # ----------------------------------------------------------------------------
+[lowcpu]
+# Low-CPU mode for weak hosts: the display refreshes at refresh_rate_hz
+# instead of 60 Hz, window blurs are off and animations run at half their
+# length; the display's size and density stay as they are. auto, on or off.
+# auto turns it on when vulkaninfo finds no hardware Vulkan device on the
+# host, when the GPU mode is guest_swiftshader, when the guest gets 2 vCPUs
+# or fewer, or when the host has less than 8 GB of memory. Command-line
+# equivalents: --lowcpu, --no-lowcpu. Environment variable: IKA_LOWCPU
+mode = auto
+# Display refresh rate in low-CPU mode, in Hz. A --display= option wins.
+refresh_rate_hz = 30
+
+
+# ----------------------------------------------------------------------------
 [camera]
 # Anti-flicker of the camera passed to Android with --camera: auto, 50, 60 or
 # off. Lights flicker at twice the mains frequency; a camera set for the wrong
@@ -911,6 +925,11 @@ SCRCPY_DPI=""
 SCRCPY_DPI_GIVEN="false"
 ika_ini_default GFXSTREAM_VULKAN gpu gfxstream_vulkan auto
 ika_ini_default IKA_HW_VIDEO_DECODE gpu hw_video_decode auto
+ika_ini_default IKA_LOWCPU lowcpu mode auto
+ika_ini_get IKA_LOWCPU_REFRESH_RATE_HZ lowcpu refresh_rate_hz 30 uint
+# Whether the VM runs low-CPU mode, decided at start (resolve_lowcpu_mode).
+LOWCPU_MODE_ACTIVE="false"
+LOWCPU_MODE_REASON=""
 ika_ini_default IKA_CAMERA_POWER_LINE_FREQUENCY camera power_line_frequency auto
 GFXSTREAM_VULKAN_MODE="${GFXSTREAM_VULKAN}"
 GFXSTREAM_GLES_CONTEXT_TYPES="gfxstream-gles:gfxstream-composer"
@@ -1068,6 +1087,23 @@ normalize_hw_video_decode_mode() {
       ;;
     *)
       die "invalid hardware video decoding mode '${1}' (expected auto or off)"
+      ;;
+  esac
+}
+
+normalize_lowcpu_mode() {
+  case "${1,,}" in
+    ""|auto)
+      echo "auto"
+      ;;
+    1|true|yes|on|enable|enabled)
+      echo "on"
+      ;;
+    0|false|no|off|disable|disabled)
+      echo "off"
+      ;;
+    *)
+      die "invalid low-CPU mode '${1}' (expected auto, on, or off)"
       ;;
   esac
 }
@@ -1538,6 +1574,19 @@ parse_start_options() {
         START_CONSOLE="false"
         shift
         ;;
+      # Exported, as restart runs start again
+      --lowcpu)
+        export IKA_LOWCPU="on"
+        shift
+        ;;
+      --lowcpu=*)
+        export IKA_LOWCPU="$(normalize_lowcpu_mode "${1#*=}")"
+        shift
+        ;;
+      --no-lowcpu)
+        export IKA_LOWCPU="off"
+        shift
+        ;;
       --game-session)
         # Internal, used by 'ika app <game>': the console ends the game
         # session when it leaves fullscreen or is closed.
@@ -1670,9 +1719,9 @@ usage() {
 
 Usage:
 
-  ${SCRIPT_NAME} start [-f|--fullscreen|--game|--no-console] [--camera[=videoN]] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] [--setting=arg] ...
+  ${SCRIPT_NAME} start [-f|--fullscreen|--game|--no-console] [--lowcpu|--no-lowcpu] [--camera[=videoN]] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] [--setting=arg] ...
   ${SCRIPT_NAME} stop
-  ${SCRIPT_NAME} restart [-f|--fullscreen|--game|--no-console] [--camera[=videoN]] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] ...
+  ${SCRIPT_NAME} restart [-f|--fullscreen|--game|--no-console] [--lowcpu|--no-lowcpu] [--camera[=videoN]] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] ...
   ${SCRIPT_NAME} reset [--data_gb=GB]
   ${SCRIPT_NAME} root
   ${SCRIPT_NAME} gsf
@@ -1719,6 +1768,14 @@ Options:
                          '${SCRIPT_NAME} start --game'.
   --no-console           With start or restart, run the VM without opening the
                          desktop console window (app windows still work).
+  --lowcpu, --no-lowcpu  With start or restart, run low-CPU mode for
+                         weak hosts, or not: the display refreshes at 30 Hz
+                         (refresh_rate_hz in ika.ini), window blurs are off
+                         and animations are shorter; the display's size and
+                         density stay as they are. By default it is on when
+                         the host has no hardware Vulkan driver, gives the
+                         guest 2 vCPUs or fewer, or has less than 8 GB of
+                         memory (IKA_LOWCPU=auto|on|off does the same).
   --camera[=videoN]      With start or restart, pass a host camera to Android
                          as its front camera. Without a value, the first
                          video capture device offering MJPEG, NV12 or YUYV
@@ -1867,6 +1924,8 @@ Environment variables:
                          host-visible guest Vulkan memory through udmabuf-backed
                          dma-bufs (the path the Apple GPU supports).
   IKADPI                 Display density, as --dpi.
+  IKA_LOWCPU             auto, on or off: low-CPU mode, as --lowcpu and
+                         --no-lowcpu.
   IKA_TV_DPI             Display density in TV mode (default: 1.5 times the
                          automatic density).
   IKA_SCRCPY             Extra whitespace-separated args appended to the console.
@@ -2173,6 +2232,49 @@ has_display_size_override() {
   return 1
 }
 
+# Decides whether this start runs low-CPU mode, from IKA_LOWCPU (auto, on
+# or off) and, for auto, the host: no hardware Vulkan driver, guest_swiftshader,
+# 2 vCPUs or fewer, or less than 8 GB of host memory. Sets
+# LOWCPU_MODE_ACTIVE and LOWCPU_MODE_REASON.
+resolve_lowcpu_mode() {
+  local mode
+  local gpu_mode
+  local cpus
+  local mem_mb
+  local summary
+  local reason=""
+
+  mode="$(normalize_lowcpu_mode "${IKA_LOWCPU:-auto}")"
+  case "${mode}" in
+    on)
+      reason="requested"
+      ;;
+    auto)
+      gpu_mode="$(start_gpu_mode_value "$@")"
+      cpus="$(start_arg_value "cpus" "${CVD_COMPUTE_DEFAULTS[cpus]}" "$@")"
+      mem_mb="$(host_physical_memory_mb || true)"
+      summary="$(vulkaninfo_summary || true)"
+      if [[ "${gpu_mode}" == "guest_swiftshader" ]]; then
+        reason="software rendering"
+      elif [[ -n "${summary}" ]] && vulkan_summary_has_only_software_devices "${summary}"; then
+        reason="no hardware Vulkan driver"
+      elif [[ "${cpus}" =~ ^[0-9]+$ ]] && (( cpus <= 2 )); then
+        reason="$(count_noun "${cpus}" vCPU vCPUs)"
+      elif [[ "${mem_mb}" =~ ^[0-9]+$ ]] && (( mem_mb > 0 && mem_mb < 8192 )); then
+        reason="${mem_mb} MB of host memory"
+      fi
+      ;;
+  esac
+
+  LOWCPU_MODE_REASON="${reason}"
+  if [[ -n "${reason}" ]]; then
+    LOWCPU_MODE_ACTIVE="true"
+    log "low-CPU mode: on (${reason})"
+  else
+    LOWCPU_MODE_ACTIVE="false"
+  fi
+}
+
 append_default_display_arg() {
   local -n args_array="$1"
   local dpi="$2"
@@ -2180,6 +2282,7 @@ append_default_display_arg() {
   local size
   local width
   local height
+  local refresh_rate_hz=60
 
   if has_display_size_override "$@"; then
     return 0
@@ -2194,8 +2297,12 @@ append_default_display_arg() {
   width="${BASH_REMATCH[1]}"
   height="${BASH_REMATCH[2]}"
 
-  args_array+=("--display=width=${width},height=${height},dpi=${dpi},refresh_rate_hz=60")
-  log "display ceiling: ${width}x${height}/${dpi}"
+  if [[ "${LOWCPU_MODE_ACTIVE}" == "true" ]]; then
+    refresh_rate_hz="${IKA_LOWCPU_REFRESH_RATE_HZ}"
+  fi
+
+  args_array+=("--display=width=${width},height=${height},dpi=${dpi},refresh_rate_hz=${refresh_rate_hz}")
+  log "display ceiling: ${width}x${height}/${dpi} at ${refresh_rate_hz} Hz"
 }
 
 host_is_apple_silicon() {
@@ -4104,7 +4211,6 @@ start_scrcpy_with_retries() {
       console_dpi="$(resolve_tv_dpi)"
     fi
   fi
-
   exec {scrcpy_lock_fd}>"${scrcpy_lock_file}"
   if ! flock "${scrcpy_lock_fd}"; then
     log "unable to acquire console launch lock: ${scrcpy_lock_file}"
@@ -4328,6 +4434,54 @@ seed_guest_theme() {
   guest_adb "${adb_serial}" shell cmd uimode night "${night}" >/dev/null 2>&1 || true
   log "set the guest theme to ${scheme} to match the host"
   guest_adb "${adb_serial}" shell settings put global ika_theme_seeded 1 >/dev/null 2>&1 || true
+}
+
+# Applies low-CPU mode's guest settings once Android is up: window blurs
+# off and animations at half their length. The values they replace are kept
+# in the global setting ika_lowcpu_mode, so that a start without the
+# profile puts them back.
+apply_lowcpu_mode_guest_settings() {
+  local adb_serial="$1"
+  local saved
+  local blurs
+  local window
+  local transition
+  local animator
+
+  saved="$(guest_adb "${adb_serial}" shell settings get global ika_lowcpu_mode 2>/dev/null | tr -d '\r' || true)"
+  if [[ "${LOWCPU_MODE_ACTIVE}" == "true" ]]; then
+    if [[ "${saved}" == "null" || -z "${saved}" ]]; then
+      saved="$(guest_adb "${adb_serial}" shell "echo \$(settings get global disable_window_blurs),\$(settings get global window_animation_scale),\$(settings get global transition_animation_scale),\$(settings get global animator_duration_scale)" 2>/dev/null | tr -d '\r ' || true)"
+      [[ "${saved}" =~ ^[^,]*,[^,]*,[^,]*,[^,]*$ ]] || return 0
+    fi
+    guest_adb "${adb_serial}" shell "settings put global ika_lowcpu_mode '${saved}'; \
+      settings put global disable_window_blurs 1; \
+      settings put global window_animation_scale 0.5; \
+      settings put global transition_animation_scale 0.5; \
+      settings put global animator_duration_scale 0.5" >/dev/null 2>&1 || return 0
+    log "low-CPU mode: window blurs off, animations at half length"
+  elif [[ "${saved}" =~ ^([^,]*),([^,]*),([^,]*),([^,]*)$ ]]; then
+    blurs="${BASH_REMATCH[1]}"
+    window="${BASH_REMATCH[2]}"
+    transition="${BASH_REMATCH[3]}"
+    animator="${BASH_REMATCH[4]}"
+    guest_adb "${adb_serial}" shell "$(lowcpu_mode_restore_command disable_window_blurs "${blurs}"); \
+      $(lowcpu_mode_restore_command window_animation_scale "${window}"); \
+      $(lowcpu_mode_restore_command transition_animation_scale "${transition}"); \
+      $(lowcpu_mode_restore_command animator_duration_scale "${animator}"); \
+      settings delete global ika_lowcpu_mode" >/dev/null 2>&1 || return 0
+    log "low-CPU mode off: window blurs and animations restored"
+  fi
+}
+
+# The shell command that puts the global setting NAME back to VALUE, as
+# 'settings get' printed it: "null" means it was unset.
+lowcpu_mode_restore_command() {
+  if [[ "$2" == "null" || -z "$2" ]]; then
+    printf 'settings delete global %s' "$1"
+  else
+    printf 'settings put global %s %s' "$1" "$(shell_quote "$2")"
+  fi
 }
 
 # Density of the desktop display, preferring the override that ika applies
@@ -6588,6 +6742,9 @@ log_start_context() {
   if [[ -n "${CVD_GRAPHICS_DRIVER_MESSAGE}" ]]; then
     start_message+=", ${CVD_GRAPHICS_DRIVER_MESSAGE}"
   fi
+  if [[ "${LOWCPU_MODE_ACTIVE}" == "true" ]]; then
+    start_message+=", low-CPU mode (${IKA_LOWCPU_REFRESH_RATE_HZ} Hz)"
+  fi
   start_message+=" ${scrcpy_dpi} DPI"
   log "${start_message}"
   printf '%s\n' "${start_message}" >&3
@@ -6692,6 +6849,7 @@ start_cvd() {
   if ! user_supplied_flag "gpu_mode" "$@"; then
     CVD_GPU_DEFAULTS[gpu_mode]="$(default_gpu_mode_for_start)"
   fi
+  resolve_lowcpu_mode "$@"
 
   apply_start_default_args args "$@"
   append_cuttlefish_audio_args args "$@"
@@ -6733,7 +6891,11 @@ start_cvd() {
 
   log "Ika console ready"
   # Alongside the console, which they would otherwise hold up.
-  { disable_guest_bluetooth "${adb_serial}" "$@"; seed_guest_theme "${adb_serial}"; } 3>&- &
+  {
+    disable_guest_bluetooth "${adb_serial}" "$@"
+    seed_guest_theme "${adb_serial}"
+    apply_lowcpu_mode_guest_settings "${adb_serial}"
+  } 3>&- &
   respond "Android virtual device running"
   if [[ "${START_CONSOLE}" == "true" ]]; then
     maybe_start_scrcpy "${adb_serial}" "${fullscreen_mode}" "${game_mode}" || true

@@ -296,6 +296,29 @@ of newly created userdata. The selected size is stored under `~/ika` and takes
 effect on the next `ika start`. It remains the configured size for later factory
 resets until changed by another `ika reset --data_gb=...`.
 
+## Low-CPU mode
+
+Weak hosts get a lighter desktop: the display refreshes at 30 Hz instead of
+60, window blurs are off and animations run at half their length. The
+display keeps its size and density, and the console works as it always
+does.
+
+`ika start` turns it on by itself when `vulkaninfo` finds no hardware Vulkan
+device on the host, when the GPU mode is `guest_swiftshader`, when the guest
+gets 2 vCPUs or fewer, or when the host has less than 8 GB of memory; the
+start log says why. `--lowcpu` and `--no-lowcpu` decide it by hand, for `start` and
+`restart`, as does `IKA_LOWCPU=auto|on|off`:
+
+```bash
+ika restart --lowcpu
+ika restart --no-lowcpu
+```
+
+The `[lowcpu]` section of `ika.ini` holds the default (`mode`) and the
+refresh rate (`refresh_rate_hz`); a `--display=` option sets the display
+itself. Starting without low-CPU mode puts the guest's blurs and animations
+back.
+
 ## gfxstream Vulkan switch
 
 The `--gfxstream_vulkan` switch controls the optional Vulkan context only when
