@@ -1,3 +1,17 @@
+ika-lineageos (261018-1) unstable; urgency=medium
+
+  * Add the V4L2 Codec2 HAL, which decodes H.264, HEVC, VP8 and VP9 on the
+    host's VA-API through crosvm's virtio-media decoder.
+  * Remove the bootloader's write-combining MTRR on x86_64, which made
+    decoded video crawl on AMD hosts.
+  * Fix the virtio-media driver's poll() spin (HEVC at 0.5-35 fps) and the
+    kernel panic when a player closes or seeks.
+  * Don't post LineageOS Trust's onboarding notification at every boot.
+  * Turn off every TV launcher on the desktop, not only Catapult, and keep a
+    thin border around the Desktop/TV icon.
+
+ -- DesktopECHO <build@desktopecho.com>  Sun, 18 Oct 2026 00:00:00 +0000
+
 ika-lineageos (261016-1) unstable; urgency=medium
 
   * Add an Android TV mode: the Desktop/TV entry restarts Android in it, with

@@ -89,6 +89,17 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Sun Oct 18 2026 DesktopECHO <build@desktopecho.com> - 261018-1
+- Add the V4L2 Codec2 HAL, which decodes H.264, HEVC, VP8 and VP9 on the
+  host's VA-API through crosvm's virtio-media decoder.
+- Remove the bootloader's write-combining MTRR on x86_64, which made
+  decoded video crawl on AMD hosts.
+- Fix the virtio-media driver's poll() spin (HEVC at 0.5-35 fps) and the
+  kernel panic when a player closes or seeks.
+- Don't post LineageOS Trust's onboarding notification at every boot.
+- Turn off every TV launcher on the desktop, not only Catapult, and keep a
+  thin border around the Desktop/TV icon.
+
 * Fri Oct 16 2026 DesktopECHO <build@desktopecho.com> - 261016-1
 - Add an Android TV mode: the Desktop/TV entry restarts Android in it, with
   the Android TV system UI, TV Settings, the Leanback keyboard and the Android

@@ -1,3 +1,28 @@
+ika-base (261018-1) unstable; urgency=medium
+
+  * Update the host tools to the Cuttlefish 1.58 development head.
+  * Give Android a VA-API video decoder (crosvm --media-decoder=vaapi) when
+    the host has a working VA-API driver; hw_video_decode in ika.ini turns it
+    off. Depend on vainfo and recommend RPM Fusion's VA-API drivers on Fedora.
+  * Take compressed frames of up to 8 MB in crosvm's video decoder, and size
+    its picture buffers at the visible size (no green band on 1080p video).
+  * Set the anti-flicker of a camera passed with --camera to the local mains
+    frequency ([camera] power_line_frequency in ika.ini).
+  * Use SkiaVK for Android's UI in the gfxstream ANGLE modes.
+  * Recover the stale cvd group after a stop and wait out slow boots.
+  * Disconnect adb on stop; keep 24 hours of the adb log and the last 1,000
+    lines of ikastart.log and madbfs.log.
+  * Open the console at Android's first frame, and cache host probes between
+    launches.
+  * Back guest memory with transparent huge pages.
+  * Handle EVENT_IDX in vhost-user input, advertise framebuffer fetch only
+    when the host has it exactly, and match the guest's GLES version and Vulkan
+    driver to the host.
+  * Fix installing on Fedora (libvirglrenderer.so) and upgrade conflicts over
+    etc/cvd_config.
+
+ -- DesktopECHO <build@desktopecho.com>  Sun, 18 Oct 2026 00:00:00 +0000
+
 ika-base (261016-1) unstable; urgency=medium
 
   * Show app windows on Cuttlefish displays of their own, with the VM's frames

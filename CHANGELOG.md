@@ -1,6 +1,6 @@
 [README](README.md) | [UI Intro](UI-INTRO.md) | [Ika commands](USAGE.md) | **Changelog** | [Downloads](DOWNLOADS.md)
 
-## Changes since release 261016
+## Ika 261018, changes since release 261016
 
 ### Cuttlefish 1.58 (development)
 - The host tools are updated from upstream Cuttlefish main of 2026-06-16 to
@@ -20,12 +20,11 @@
   driver has only one. GLES-only hosts keep SkiaGL;
   `--guest_hwui_renderer=skiagl` returns to it on any host.
 
-### Hardware video decoding (groundwork)
+### Hardware video decoding
 - `ika start` gives Android a V4L2 video decoder backed by the host's VA-API
   (crosvm `--media-decoder=vaapi`, through the new cvd flag
   `--crosvm_media_decoder`) when vainfo finds a working VA-API driver that
-  decodes H.264, HEVC, VP8 or VP9. Android only uses it once the ROM has a
-  V4L2 Codec2 HAL; until then video still decodes in software.
+  decodes H.264, HEVC, VP8 or VP9.
 - On a GPU that has VA-API decoding but no VA-API driver installed, `ika start`
   says "VA-API Capable device but drivers are not installed".
 - On Fedora, whose own VA-API drivers leave out H.264 and HEVC, `ika start`
@@ -58,6 +57,9 @@
   0.5-35 fps on an AMD host and now plays at 60 fps. It also no longer
   crashes Android (a kernel panic) when a video player closes or seeks while
   crosvm still returns decoded frames.
+- Hardware-decoded video no longer shows a green band at the bottom, with the
+  colors shifted up, when its coded size differs from its visible size, as it
+  does for every 1080p H.264 stream.
 
 ### Camera
 - `ika start --camera` sets the camera's anti-flicker to the mains frequency
@@ -87,6 +89,31 @@
   each run under a dated header line, instead of only the latest run.
 - `~/ika/madbfs.log` keeps its last 1,000 lines across mounts of Android's
   storage. madbfs emptied it each time `ika start` mounted the storage.
+- The console opens at Android's first frame instead of after boot
+  completes: 0.4 s sooner on a 2011 MacBook Pro, 1.5 s on a 2015 MacBook Air.
+- `ika start` keeps the results of its host probes (GPU detection, the
+  kernel config, image signing, vulkaninfo) between launches, which saves
+  about 2 s per start on a 2011 MacBook Pro.
+- crosvm asks the host to back guest memory with transparent huge pages,
+  which upstream measured as an 11% faster cold boot. It takes effect where
+  `/sys/kernel/mm/transparent_hugepage/shmem_enabled` is `advise`,
+  `within_size` or `always`.
+
+### Fixes
+- Input events and status feedback no longer sit in crosvm's virtio input
+  queues until the next event (vhost-user input with EVENT_IDX).
+- On hosts whose GL driver has only non-coherent framebuffer fetch, such as
+  Mesa on Intel HD 3000, the guest no longer gets framebuffer fetch: Skia's
+  shaders failed and Chromium's GPU process aborted.
+- In gfxstream mode Android advertises no newer OpenGL ES than the host
+  driver, and no Vulkan driver when gfxstream's Vulkan is off.
+- ika-base installs on Fedora again (it required the unversioned
+  libvirglrenderer.so) and upgrades without file conflicts over
+  `etc/cvd_config`.
+- LineageOS Trust no longer posts its onboarding notification at every boot.
+- Switching back to the desktop turns off any TV launcher from Google Play
+  chosen in TV mode, not only Catapult. The Desktop/TV icon keeps a thin
+  border at any size.
 
 ## Ika 261016, changes since release 261012
 
