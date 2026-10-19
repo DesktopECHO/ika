@@ -75,6 +75,11 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** Fills a gfxstream 3D resource's `info_3d` (DRM format and stride) from `stream_renderer_resource_get_info` when it is created, with no known modifier (gfxstream's images are tiled host images; the importer takes the layout from the dma-buf).
 - **Why:** crosvm's `import_resource_to_display` sends a scanout to the Wayland compositor (run_cvd, then `ika_stream` and the console) as a dma-buf only when both `export_blob` and `resource3d_info` succeed. The export already worked, but the missing 3D info failed the lookup for every non-blob resource, so the console frames always went through the GPU-to-CPU readback into a `wl_shm` buffer.
 
+#### `PATCH.rutabaga_gfx-on-demand-export-and-query.patch`
+- **Targets:** `rutabaga_gfx` crate. Files: `src/gfxstream.rs`, `src/rutabaga_core.rs`. Applied after `PATCH.rutabaga_gfx-gfxstream-3d-resource-info.patch`.
+- **What it does:** Adds `export_blob` and `query` to the `RutabagaComponent` trait; `Rutabaga::export_blob` asks the component when no handle was cached and `Rutabaga::resource3d_info` asks it when the resource has no 3D info; gfxstream's `create_3d` no longer exports and queries eagerly; the query carries the offset and DRM modifier gfxstream reports.
+- **Why:** gfxstream re-creates a color buffer with an explicit DRM format modifier when the VMM first exports it for scanout, so the layout must be read after that export, and exporting every 3D resource at creation would freeze the wrong layout and hold an fd per resource.
+
 #### `PATCH.v4l2r-poller-no-epollin-probe.patch`
 - **Targets:** `v4l2r` crate. File: `src/device/poller.rs`.
 - **What it does:** `Poller::new` registers the device with no events, instead of registering `EPOLLIN`, doing a dummy `epoll_wait` and clearing the events again.
@@ -117,7 +122,7 @@ See `crosvm.MODULE.bazel`. The relevant blocks:
 | `crosvm_bin.annotation(crate = "disk")` | `disk-composite-preserve-spec-fd`, `disk-qcow-zero-clusters` |
 | `crosvm_bin.annotation(crate = "jail")` | `jail-aarch64-block-pread64`, `jail-gpu-host-graphics-libs-optional` |
 | `crosvm_bin.annotation(crate = "devices")` | `crosvm-resize-display-devices` |
-| `crosvm_bin.annotation(crate = "rutabaga_gfx")` | `rutabaga_gfx_build_rs`, `rutabaga_gfx-gralloc-vulkano-fallback`, `rutabaga_gfx-cleanup-on-drop`, `rutabaga_gfx-gfxstream-3d-resource-info` |
+| `crosvm_bin.annotation(crate = "rutabaga_gfx")` | `rutabaga_gfx_build_rs`, `rutabaga_gfx-gralloc-vulkano-fallback`, `rutabaga_gfx-cleanup-on-drop`, `rutabaga_gfx-gfxstream-3d-resource-info`, `rutabaga_gfx-on-demand-export-and-query` |
 | `crosvm_bin.annotation(crate = "minijail-sys")` | `minijail-sys_build_rs` |
 | `crosvm_bin.annotation(crate = "proto_build_tools")` | `proto_build_tools` |
 | `crosvm_bin.annotation(crate = "vm_control")` | `crosvm-resize-display-vm-control` |

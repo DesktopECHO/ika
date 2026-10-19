@@ -1,0 +1,933 @@
+Patch summary:
+Give a scanned-out ColorBuffer an explicit DRM format modifier. When the VMM
+first exports a color buffer (crosvm does so to hand a scanout to its
+display), VkEmulation re-creates the image with VK_EXT_image_drm_format_modifier
+from the modifiers the driver can export the format with, in dedicated
+dma-buf exportable memory, copies the content over, and reports the chosen
+modifier, row pitch and offset through stream_renderer_resource_get_info
+(new offset and modifier fields). Any importer (radeonsi, iris on i915 or Xe,
+NVIDIA, Asahi) then reads the tiled image correctly, instead of relying on
+the layout being implicit in the buffer, which only RADV provides. The
+migration is skipped while a guest image or GL texture shares the memory, for
+host-visible or multi-planar buffers, and where the driver has no exportable
+modifier; those keep the implicit layout (RADV) or stay on readback. The GL
+export reports the modifier EGL returns.
+
+diff --git a/host/color_buffer.cpp b/host/color_buffer.cpp
+index ba01ebcd..807e439d 100644
+--- a/host/color_buffer.cpp
++++ b/host/color_buffer.cpp
+@@ -84,7 +84,8 @@ class ColorBuffer::Impl : public LazySnapshotObj<ColorBuffer::Impl> {
+     bool importHandle(void* handle, bool preserveContent);
+ 
+     std::optional<BlobDescriptorInfo> exportBlob();
+-    std::optional<uint32_t> getRowPitch();
++    bool prepareForScanout();
++    std::optional<DmabufLayout> getDmabufLayout();
+ 
+     gl::ColorBufferGl* getColorBufferGl() const {
+ #if GFXSTREAM_ENABLE_HOST_GLES
+@@ -484,13 +485,25 @@ std::optional<BlobDescriptorInfo> ColorBuffer::Impl::exportBlob() {
+     return std::nullopt;
+ }
+ 
+-std::optional<uint32_t> ColorBuffer::Impl::getRowPitch() {
++bool ColorBuffer::Impl::prepareForScanout() {
+     if (mColorBufferVk) {
+-        return mColorBufferVk->getRowPitch();
++        return mColorBufferVk->prepareForScanout();
++    }
++#if GFXSTREAM_ENABLE_HOST_GLES
++    // The GL export reports the texture's own modifier; nothing to re-create.
++    return mColorBufferGl != nullptr;
++#else
++    return false;
++#endif
++}
++
++std::optional<DmabufLayout> ColorBuffer::Impl::getDmabufLayout() {
++    if (mColorBufferVk) {
++        return mColorBufferVk->getDmabufLayout();
+     }
+ #if GFXSTREAM_ENABLE_HOST_GLES
+     if (mColorBufferGl) {
+-        return mColorBufferGl->getExportedRowPitch();
++        return mColorBufferGl->getExportedLayout();
+     }
+ #endif
+     return std::nullopt;
+@@ -596,7 +609,9 @@ bool ColorBuffer::flushFromVkBytes(const void* bytes, size_t bytesSize) {
+ 
+ std::optional<BlobDescriptorInfo> ColorBuffer::exportBlob() { return mImpl->exportBlob(); }
+ 
+-std::optional<uint32_t> ColorBuffer::getRowPitch() { return mImpl->getRowPitch(); }
++bool ColorBuffer::prepareForScanout() { return mImpl->prepareForScanout(); }
++
++std::optional<DmabufLayout> ColorBuffer::getDmabufLayout() { return mImpl->getDmabufLayout(); }
+ 
+ }  // namespace host
+ }  // namespace gfxstream
+diff --git a/host/color_buffer.h b/host/color_buffer.h
+index b17bb6ad..21b33724 100644
+--- a/host/color_buffer.h
++++ b/host/color_buffer.h
+@@ -93,9 +93,8 @@ class ColorBuffer : public IColorBuffer, public LazySnapshotObj<ColorBuffer> {
+     bool flushFromVkBytes(const void* bytes, size_t bytesSize);
+ 
+     std::optional<BlobDescriptorInfo> exportBlob() override;
+-    // The row pitch of the exported memory: the Vulkan image's layout, or the pitch the
+-    // GL export reported. Empty until known.
+-    std::optional<uint32_t> getRowPitch() override;
++    bool prepareForScanout() override;
++    std::optional<DmabufLayout> getDmabufLayout() override;
+ 
+    private:
+     ColorBuffer() = default;
+diff --git a/host/common/include/gfxstream/host/color_buffer_interface.h b/host/common/include/gfxstream/host/color_buffer_interface.h
+index e9a2e279..eaddbea4 100644
+--- a/host/common/include/gfxstream/host/color_buffer_interface.h
++++ b/host/common/include/gfxstream/host/color_buffer_interface.h
+@@ -39,6 +39,14 @@ enum class Backend { GL, VK };
+ // A (mostly) generic interface to a `ColorBuffer` so that the various backends
+ // interact with `ColorBuffer`s without needing to depend on all of the various
+ // underlying `ColorBuffer` implementations.
++// The single-plane layout of an exported dma-buf. A modifier of DRM_FORMAT_MOD_INVALID means
++// the importer has to take the layout from the buffer itself.
++struct DmabufLayout {
++    uint64_t modifier;
++    uint32_t stride;
++    uint32_t offset;
++};
++
+ class IColorBuffer {
+    public:
+     virtual ~IColorBuffer() = default;
+@@ -68,8 +76,11 @@ class IColorBuffer {
+                                  const void* pixels, void* metadata = nullptr) = 0;
+ 
+     virtual std::optional<BlobDescriptorInfo> exportBlob() = 0;
+-    // The row pitch of the memory exportBlob() hands out, when known.
+-    virtual std::optional<uint32_t> getRowPitch() = 0;
++    // Makes the memory exportBlob() hands out importable by a display: an explicit DRM
++    // modifier where the backend can re-create the image for it. Returns whether it could.
++    virtual bool prepareForScanout() = 0;
++    // The layout a dma-buf importer needs for the memory exportBlob() hands out, when known.
++    virtual std::optional<DmabufLayout> getDmabufLayout() = 0;
+ };
+ 
+ // A (mostly) generic shared owning reference  to a `ColorBuffer` so that the
+diff --git a/host/frame_buffer.cpp b/host/frame_buffer.cpp
+index 03adecef..c0a5e3f5 100644
+--- a/host/frame_buffer.cpp
++++ b/host/frame_buffer.cpp
+@@ -595,7 +595,8 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
+ 
+     std::optional<BlobDescriptorInfo> exportColorBuffer(HandleType colorBufferHandle);
+     std::optional<BlobDescriptorInfo> exportBuffer(HandleType bufferHandle);
+-    std::optional<uint32_t> getColorBufferRowPitch(HandleType colorBufferHandle);
++    bool prepareColorBufferForScanout(HandleType colorBufferHandle);
++    std::optional<DmabufLayout> getColorBufferDmabufLayout(HandleType colorBufferHandle);
+ 
+ #if GFXSTREAM_ENABLE_HOST_GLES
+     // Retrieves the color buffer handle associated with |p_surface|.
+@@ -3881,7 +3882,19 @@ std::optional<BlobDescriptorInfo> FrameBuffer::Impl::exportColorBuffer(
+     return colorBuffer->exportBlob();
+ }
+ 
+-std::optional<uint32_t> FrameBuffer::Impl::getColorBufferRowPitch(HandleType colorBufferHandle) {
++bool FrameBuffer::Impl::prepareColorBufferForScanout(HandleType colorBufferHandle) {
++    AutoLock mutex(m_lock);
++
++    auto colorBuffer = findColorBuffer(colorBufferHandle);
++    if (!colorBuffer) {
++        return false;
++    }
++
++    return colorBuffer->prepareForScanout();
++}
++
++std::optional<DmabufLayout> FrameBuffer::Impl::getColorBufferDmabufLayout(
++    HandleType colorBufferHandle) {
+     AutoLock mutex(m_lock);
+ 
+     auto colorBuffer = findColorBuffer(colorBufferHandle);
+@@ -3889,7 +3902,7 @@ std::optional<uint32_t> FrameBuffer::Impl::getColorBufferRowPitch(HandleType col
+         return std::nullopt;
+     }
+ 
+-    return colorBuffer->getRowPitch();
++    return colorBuffer->getDmabufLayout();
+ }
+ 
+ std::optional<BlobDescriptorInfo> FrameBuffer::Impl::exportBuffer(HandleType bufferHandle) {
+@@ -4865,8 +4878,12 @@ std::optional<BlobDescriptorInfo> FrameBuffer::exportBuffer(HandleType bufferHan
+     return mImpl->exportBuffer(bufferHandle);
+ }
+ 
+-std::optional<uint32_t> FrameBuffer::getColorBufferRowPitch(HandleType colorBufferHandle) {
+-    return mImpl->getColorBufferRowPitch(colorBufferHandle);
++bool FrameBuffer::prepareColorBufferForScanout(HandleType colorBufferHandle) {
++    return mImpl->prepareColorBufferForScanout(colorBufferHandle);
++}
++
++std::optional<DmabufLayout> FrameBuffer::getColorBufferDmabufLayout(HandleType colorBufferHandle) {
++    return mImpl->getColorBufferDmabufLayout(colorBufferHandle);
+ }
+ 
+ bool FrameBuffer::hasEmulationGl() const { return mImpl->hasEmulationGl(); }
+diff --git a/host/frame_buffer.h b/host/frame_buffer.h
+index 5120dd77..63209530 100644
+--- a/host/frame_buffer.h
++++ b/host/frame_buffer.h
+@@ -433,8 +433,10 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
+ 
+     std::optional<BlobDescriptorInfo> exportColorBuffer(HandleType colorBufferHandle);
+     std::optional<BlobDescriptorInfo> exportBuffer(HandleType bufferHandle);
+-    // The row pitch of the ColorBuffer's exportable memory, when known.
+-    std::optional<uint32_t> getColorBufferRowPitch(HandleType colorBufferHandle);
++    // Scanout: an explicit layout for the ColorBuffer's exported memory where the backend
++    // can provide one, and the layout a dma-buf importer needs, when known.
++    bool prepareColorBufferForScanout(HandleType colorBufferHandle);
++    std::optional<DmabufLayout> getColorBufferDmabufLayout(HandleType colorBufferHandle);
+ 
+     bool hasEmulationGl() const;
+     bool hasEmulationVk() const;
+diff --git a/host/gl/color_buffer_gl.cpp b/host/gl/color_buffer_gl.cpp
+index 0ec672dc..7293fb31 100644
+--- a/host/gl/color_buffer_gl.cpp
++++ b/host/gl/color_buffer_gl.cpp
+@@ -1327,7 +1327,11 @@ std::optional<ColorBufferGl::DmabufExport> ColorBufferGl::exportDmabuf() {
+         fd < 0) {
+         return std::nullopt;
+     }
+-    m_exportedRowPitch = static_cast<uint32_t>(stride);
++    m_exportedLayout = DmabufLayout{
++        .modifier = modifier,
++        .stride = static_cast<uint32_t>(stride),
++        .offset = static_cast<uint32_t>(offset),
++    };
+     return DmabufExport{
+         .fd = fd,
+         .fourcc = static_cast<uint32_t>(fourcc),
+diff --git a/host/gl/color_buffer_gl.h b/host/gl/color_buffer_gl.h
+index db64da11..4a810012 100644
+--- a/host/gl/color_buffer_gl.h
++++ b/host/gl/color_buffer_gl.h
+@@ -29,6 +29,7 @@
+ 
+ #include "context_helper.h"
+ #include "gfxstream/ManagedDescriptor.h"
++#include "gfxstream/host/color_buffer_interface.h"
+ #include "gfxstream/host/features.h"
+ #include "gfxstream/host/gfxstream_format.h"
+ #include "gfxstream/host/hwc2.h"
+@@ -208,8 +209,8 @@ class ColorBufferGl {
+         uint64_t modifier;
+     };
+     std::optional<DmabufExport> exportDmabuf();
+-    // The row pitch the last export reported, once there was one.
+-    std::optional<uint32_t> getExportedRowPitch() const { return m_exportedRowPitch; }
++    // The layout the last export reported, once there was one.
++    std::optional<DmabufLayout> getExportedLayout() const { return m_exportedLayout; }
+ 
+     bool isFastBlitSupported() const { return m_fastBlitSupported; }
+     void postLayer(const ComposeLayer& l, int frameWidth, int frameHeight,
+@@ -248,7 +249,7 @@ class ColorBufferGl {
+     EGLImageKHR m_eglImage = nullptr;
+     EGLImageKHR m_blitEGLImage = nullptr;
+     GLuint m_fbo = 0;
+-    std::optional<uint32_t> m_exportedRowPitch;
++    std::optional<DmabufLayout> m_exportedLayout;
+ 
+     // This is helpful for bindFbo which may skip too many steps after the egl
+     // image is replaced.
+diff --git a/host/include/gfxstream/virtio-gpu-gfxstream-renderer-unstable.h b/host/include/gfxstream/virtio-gpu-gfxstream-renderer-unstable.h
+index 5f5eae0a..ff3ddd3f 100644
+--- a/host/include/gfxstream/virtio-gpu-gfxstream-renderer-unstable.h
++++ b/host/include/gfxstream/virtio-gpu-gfxstream-renderer-unstable.h
+@@ -74,6 +74,11 @@ struct stream_renderer_resource_info {
+     uint32_t tex_id;
+     uint32_t stride;
+     int drm_fourcc;
++    // The single-plane dma-buf layout of an exportable resource: the plane's offset and its
++    // DRM format modifier, DRM_FORMAT_MOD_INVALID when the importer must take the layout from
++    // the buffer itself.
++    uint32_t offset;
++    uint64_t modifier;
+ };
+ 
+ VG_EXPORT int stream_renderer_resource_get_info(int res_handle,
+diff --git a/host/virtio_gpu_frontend.cpp b/host/virtio_gpu_frontend.cpp
+index 9aaa144b..211ff672 100644
+--- a/host/virtio_gpu_frontend.cpp
++++ b/host/virtio_gpu_frontend.cpp
+@@ -828,12 +828,12 @@ int VirtioGpuFrontend::getResourceInfo(uint32_t resourceId,
+     if (resource.ResourceType() == VirtioGpuResourceType::COLOR_BUFFER) {
+         // Without the info the VMM keeps reading the scanout back instead of importing it.
+         // The feature's default is only a start: an explicit override is honored as given,
+-        // otherwise the Vulkan driver must also let the display import the exported image
+-        // with an implicit layout.
++        // otherwise the ColorBuffer must have a layout a display can import (an explicit
++        // DRM modifier, or a driver that leaves the layout in the buffer).
+         const auto& feature = mFeatures.ScanoutDmabufExport;
+         const bool overridden = feature.getReason().find("Overridden") != std::string::npos;
+         if (!feature.enabled() ||
+-            (!overridden && !FrameBuffer::getFB()->supportsImplicitDmabufLayout())) {
++            (!overridden && !FrameBuffer::getFB()->getColorBufferDmabufLayout(resourceId))) {
+             return EINVAL;
+         }
+     }
+diff --git a/host/virtio_gpu_resource.cpp b/host/virtio_gpu_resource.cpp
+index d346ed57..efa18a1a 100644
+--- a/host/virtio_gpu_resource.cpp
++++ b/host/virtio_gpu_resource.cpp
+@@ -424,13 +424,17 @@ int VirtioGpuResource::GetInfo(struct stream_renderer_resource_info* outInfo) co
+ 
+     outInfo->drm_fourcc = formatInfo->drm_fourcc;
+     outInfo->stride = AlignUp(mCreateArgs->width * formatInfo->bpp, 16U);
++    outInfo->offset = 0;
++    outInfo->modifier = DRM_FORMAT_MOD_INVALID;
+     if (mResourceType == VirtioGpuResourceType::COLOR_BUFFER) {
+         // The VMM exports this resource's memory to its display as a dma-buf (scanout) and
+-        // describes it with this stride, so report the pitch the driver chose for the
+-        // image rather than the packed one.
+-        auto pitch = FrameBuffer::getFB()->getColorBufferRowPitch(mId);
+-        if (pitch && *pitch >= mCreateArgs->width * formatInfo->bpp) {
+-            outInfo->stride = *pitch;
++        // describes it with this layout, so report the one the driver gave the image rather
++        // than the packed stride.
++        auto layout = FrameBuffer::getFB()->getColorBufferDmabufLayout(mId);
++        if (layout && layout->stride >= mCreateArgs->width * formatInfo->bpp) {
++            outInfo->stride = layout->stride;
++            outInfo->offset = layout->offset;
++            outInfo->modifier = layout->modifier;
+         }
+     }
+     outInfo->virgl_format = mCreateArgs->format;
+@@ -800,6 +804,9 @@ int VirtioGpuResource::ExportBlob(struct stream_renderer_handle* outHandle) {
+     // For non-blob COLOR_BUFFER resources (CREATE_3D path), there is no mBlobMemory
+     // set. Attempt to export the ColorBuffer's external memory.
+     if (!mBlobMemory && mResourceType == VirtioGpuResourceType::COLOR_BUFFER) {
++        // The VMM exports a resource when it scans it out: give the ColorBuffer an explicit
++        // layout first where the backend can, so that any display imports it correctly.
++        FrameBuffer::getFB()->prepareColorBufferForScanout(mId);
+         auto descriptorInfoOpt = FrameBuffer::getFB()->exportColorBuffer(mId);
+         if (!descriptorInfoOpt) {
+             return -EINVAL;
+diff --git a/host/vulkan/color_buffer_vk.cpp b/host/vulkan/color_buffer_vk.cpp
+index c8a2dbc5..625ddadf 100644
+--- a/host/vulkan/color_buffer_vk.cpp
++++ b/host/vulkan/color_buffer_vk.cpp
+@@ -116,8 +116,20 @@ std::unique_ptr<ColorBufferVkImageInfo> ColorBufferVk::prepareForDisplay() {
+     return mVkEmulation.prepareColorBufferForDisplay(mHandle);
+ }
+ 
+-std::optional<uint32_t> ColorBufferVk::getRowPitch() {
+-    return mVkEmulation.getColorBufferRowPitch(mHandle);
++bool ColorBufferVk::prepareForScanout() {
++    return mVkEmulation.prepareColorBufferForScanout(mHandle);
++}
++
++std::optional<DmabufLayout> ColorBufferVk::getDmabufLayout() {
++    auto layout = mVkEmulation.getColorBufferScanoutLayout(mHandle);
++    if (!layout) {
++        return std::nullopt;
++    }
++    return DmabufLayout{
++        .modifier = layout->modifier,
++        .stride = layout->stride,
++        .offset = layout->offset,
++    };
+ }
+ 
+ std::optional<BlobDescriptorInfo> ColorBufferVk::exportBlob() {
+diff --git a/host/vulkan/color_buffer_vk.h b/host/vulkan/color_buffer_vk.h
+index d7d3f01d..6e826c58 100644
+--- a/host/vulkan/color_buffer_vk.h
++++ b/host/vulkan/color_buffer_vk.h
+@@ -19,6 +19,7 @@
+ #include <memory>
+ #include <vector>
+ 
++#include "gfxstream/host/color_buffer_interface.h"
+ #include "gfxstream/host/external_object_manager.h"
+ #include "gfxstream/host/gfxstream_format.h"
+ #include "render-utils/Renderer.h"
+@@ -80,8 +81,8 @@ class ColorBufferVk {
+     void onSave(gfxstream::Stream* stream, SaveImageBehavior behavior);
+ 
+     std::optional<BlobDescriptorInfo> exportBlob();
+-    // The row pitch of the image as the driver laid it out.
+-    std::optional<uint32_t> getRowPitch();
++    bool prepareForScanout();
++    std::optional<DmabufLayout> getDmabufLayout();
+ 
+    private:
+     ColorBufferVk(VkEmulation& emulationVk, uint32_t handle);
+diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operations.cpp
+index effb13ae..b3eca4a5 100644
+--- a/host/vulkan/vk_common_operations.cpp
++++ b/host/vulkan/vk_common_operations.cpp
+@@ -1189,6 +1189,11 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
+         deviceInfos[i].supportsDmaBuf =
+             vk_util::extensionSupported(deviceExts, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME) &&
+             !dmaBufBlockList;
++        // Explicit modifiers do not depend on the block list above: the driver states which
++        // modifiers it can export for the format and the image is created for that.
++        deviceInfos[i].supportsDrmFormatModifier =
++            vk_util::extensionSupported(deviceExts, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME) &&
++            vk_util::extensionSupported(deviceExts, VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME);
+ #endif
+ 
+         deviceInfos[i].hasSamplerYcbcrConversionExtension =
+@@ -1433,6 +1438,14 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
+     if (emulation->mDeviceInfo.supportsDmaBuf) {
+         selectedDeviceExtensionNames.emplace(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
+     }
++    if (emulation->mDeviceInfo.supportsDrmFormatModifier) {
++        selectedDeviceExtensionNames.emplace(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
++        selectedDeviceExtensionNames.emplace(VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME);
++        if (vk_util::extensionSupported(emulation->mDeviceInfo.extensions,
++                                        VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME)) {
++            selectedDeviceExtensionNames.emplace(VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME);
++        }
++    }
+ #endif
+ 
+     // We need to enable swapchain extensions to be able to use this device
+@@ -2903,6 +2916,8 @@ bool VkEmulation::getColorBufferAllocationInfoLocked(uint32_t colorBufferHandle,
+     if (!info) {
+         return false;
+     }
++    // The caller binds a guest image to this memory: its layout is fixed from now on.
++    info->guestBound = true;
+ 
+     if (outSize) {
+         *outSize = info->memory.size;
+@@ -3380,15 +3395,12 @@ std::optional<VkEmulation::VkColorBufferMemoryExport> VkEmulation::exportColorBu
+     };
+ }
+ 
+-std::optional<uint32_t> VkEmulation::getColorBufferRowPitch(uint32_t colorBufferHandle) {
+-    std::lock_guard<std::mutex> lock(mMutex);
+-
+-    auto info = gfxstream::base::find(mColorBuffers, colorBufferHandle);
+-    if (!info || info->image == VK_NULL_HANDLE) {
++std::optional<uint32_t> VkEmulation::getColorBufferRowPitchLocked(const ColorBufferInfo& info) {
++    if (info.image == VK_NULL_HANDLE) {
+         return std::nullopt;
+     }
+     // Multi-planar formats have no single color plane layout.
+-    if (IsYuvFormat(info->format)) {
++    if (IsYuvFormat(info.format)) {
+         return std::nullopt;
+     }
+ 
+@@ -3398,13 +3410,440 @@ std::optional<uint32_t> VkEmulation::getColorBufferRowPitch(uint32_t colorBuffer
+         .arrayLayer = 0,
+     };
+     VkSubresourceLayout layout = {};
+-    mDvk->vkGetImageSubresourceLayout(mDevice, info->image, &subresource, &layout);
++    mDvk->vkGetImageSubresourceLayout(mDevice, info.image, &subresource, &layout);
+     if (layout.rowPitch == 0 || layout.rowPitch > UINT32_MAX) {
+         return std::nullopt;
+     }
+     return static_cast<uint32_t>(layout.rowPitch);
+ }
+ 
++std::optional<VkEmulation::ScanoutLayout> VkEmulation::getColorBufferScanoutLayout(
++    uint32_t colorBufferHandle) {
++    std::lock_guard<std::mutex> lock(mMutex);
++
++    auto info = gfxstream::base::find(mColorBuffers, colorBufferHandle);
++    if (!info || info->image == VK_NULL_HANDLE) {
++        return std::nullopt;
++    }
++    if (info->scanoutLayout) {
++        return info->scanoutLayout;
++    }
++    if (!supportsImplicitDmabufLayout()) {
++        return std::nullopt;
++    }
++    auto pitch = getColorBufferRowPitchLocked(*info);
++    if (!pitch) {
++        return std::nullopt;
++    }
++    // DRM_FORMAT_MOD_INVALID: the importer takes the layout from the buffer itself.
++    return ScanoutLayout{
++        .modifier = 0x00ffffffffffffffull,
++        .stride = *pitch,
++        .offset = 0,
++    };
++}
++
++bool VkEmulation::prepareColorBufferForScanout(uint32_t colorBufferHandle) {
++    std::lock_guard<std::mutex> lock(mMutex);
++
++    auto info = gfxstream::base::find(mColorBuffers, colorBufferHandle);
++    if (!info || !info->initialized) {
++        return false;
++    }
++    if (info->scanoutLayout) {
++        return true;
++    }
++    if (!mDeviceInfo.supportsDrmFormatModifier) {
++        return false;
++    }
++    // The memory can only be replaced while nobody else refers to it: no guest image, no GL
++    // texture importing it, no host-visible mapping handed out, and a single color plane.
++    if (info->guestBound || info->vulkanMode != VkEmulation::VulkanMode::VulkanOnly ||
++        info->memory.mappedPtr != nullptr || info->memory.gpa != 0u ||
++        IsYuvFormat(info->format)) {
++        return false;
++    }
++    return migrateColorBufferToDrmModifierLocked(info);
++}
++
++bool VkEmulation::migrateColorBufferToDrmModifierLocked(ColorBufferInfo* info) {
++#if defined(__linux__) && !defined(__ANDROID__)
++    auto vk = mDvk;
++    const VkFormat format = info->imageCreateInfoShallow.format;
++    const uint32_t width = info->imageCreateInfoShallow.extent.width;
++    const uint32_t height = info->imageCreateInfoShallow.extent.height;
++    const VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
++                                    VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
++                                    VK_IMAGE_USAGE_TRANSFER_DST_BIT;
++    const VkFormatFeatureFlags requiredFeatures =
++        VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
++        VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
++
++    auto getFormatProperties2 = mIvk->vkGetPhysicalDeviceFormatProperties2
++                                    ? mIvk->vkGetPhysicalDeviceFormatProperties2
++                                    : mIvk->vkGetPhysicalDeviceFormatProperties2KHR;
++    auto getImageFormatProperties2 = mGetImageFormatProperties2Func
++                                         ? mGetImageFormatProperties2Func
++                                         : mIvk->vkGetPhysicalDeviceImageFormatProperties2;
++    if (!getFormatProperties2 || !getImageFormatProperties2 ||
++        !vk->vkGetImageDrmFormatModifierPropertiesEXT || !vk->vkGetMemoryFdKHR) {
++        return false;
++    }
++
++    // The modifiers the driver can export the format with, for the usage the compositor and
++    // readback need.
++    VkDrmFormatModifierPropertiesListEXT modifierList = {
++        .sType = VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT,
++        .pNext = nullptr,
++        .drmFormatModifierCount = 0,
++        .pDrmFormatModifierProperties = nullptr,
++    };
++    VkFormatProperties2 formatProperties = {
++        .sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2,
++        .pNext = &modifierList,
++    };
++    getFormatProperties2(mPhysicalDevice, format, &formatProperties);
++    std::vector<VkDrmFormatModifierPropertiesEXT> modifierProperties(
++        modifierList.drmFormatModifierCount);
++    modifierList.pDrmFormatModifierProperties = modifierProperties.data();
++    getFormatProperties2(mPhysicalDevice, format, &formatProperties);
++
++    std::vector<uint64_t> modifiers;
++    for (const VkDrmFormatModifierPropertiesEXT& properties : modifierProperties) {
++        if (properties.drmFormatModifierPlaneCount != 1 ||
++            (properties.drmFormatModifierTilingFeatures & requiredFeatures) != requiredFeatures) {
++            continue;
++        }
++        VkPhysicalDeviceExternalImageFormatInfo externalInfo = {
++            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO,
++            .pNext = nullptr,
++            .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
++        };
++        VkPhysicalDeviceImageDrmFormatModifierInfoEXT modifierInfo = {
++            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT,
++            .pNext = &externalInfo,
++            .drmFormatModifier = properties.drmFormatModifier,
++            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
++            .queueFamilyIndexCount = 0,
++            .pQueueFamilyIndices = nullptr,
++        };
++        VkPhysicalDeviceImageFormatInfo2 imageFormatInfo = {
++            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2,
++            .pNext = &modifierInfo,
++            .format = format,
++            .type = VK_IMAGE_TYPE_2D,
++            .tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
++            .usage = usage,
++            .flags = 0,
++        };
++        VkExternalImageFormatProperties externalProperties = {
++            .sType = VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES,
++            .pNext = nullptr,
++        };
++        VkImageFormatProperties2 imageFormatProperties = {
++            .sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2,
++            .pNext = &externalProperties,
++        };
++        if (getImageFormatProperties2(mPhysicalDevice, &imageFormatInfo, &imageFormatProperties) !=
++            VK_SUCCESS) {
++            continue;
++        }
++        if (!(externalProperties.externalMemoryProperties.externalMemoryFeatures &
++              VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT)) {
++            continue;
++        }
++        const VkExtent3D& maxExtent = imageFormatProperties.imageFormatProperties.maxExtent;
++        if (maxExtent.width < width || maxExtent.height < height) {
++            continue;
++        }
++        modifiers.push_back(properties.drmFormatModifier);
++    }
++    if (modifiers.empty()) {
++        GFXSTREAM_INFO("ColorBuffer %u: no exportable DRM modifier for %s, keeping its layout",
++                       info->handle, string_VkFormat(format));
++        return false;
++    }
++
++    // The image: the driver picks one of the modifiers.
++    VkExternalMemoryImageCreateInfo externalImageCi = {
++        .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
++        .pNext = nullptr,
++        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
++    };
++    VkImageDrmFormatModifierListCreateInfoEXT modifierListCi = {
++        .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT,
++        .pNext = &externalImageCi,
++        .drmFormatModifierCount = static_cast<uint32_t>(modifiers.size()),
++        .pDrmFormatModifiers = modifiers.data(),
++    };
++    VkImageCreateInfo imageCi = {
++        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
++        .pNext = &modifierListCi,
++        .flags = 0,
++        .imageType = VK_IMAGE_TYPE_2D,
++        .format = format,
++        .extent = {.width = width, .height = height, .depth = 1},
++        .mipLevels = 1,
++        .arrayLayers = 1,
++        .samples = VK_SAMPLE_COUNT_1_BIT,
++        .tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
++        .usage = usage,
++        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
++        .queueFamilyIndexCount = 0,
++        .pQueueFamilyIndices = nullptr,
++        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
++    };
++    VkImage image = VK_NULL_HANDLE;
++    VkResult result = vk->vkCreateImage(mDevice, &imageCi, nullptr, &image);
++    if (result != VK_SUCCESS) {
++        GFXSTREAM_ERROR("ColorBuffer %u: failed to create the DRM modifier image: %s",
++                        info->handle, string_VkResult(result));
++        return false;
++    }
++
++    // Dedicated, dma-buf exportable memory.
++    VkMemoryDedicatedRequirements dedicatedRequirements = {
++        .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS,
++        .pNext = nullptr,
++    };
++    VkMemoryRequirements2 requirements = {
++        .sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2,
++        .pNext = &dedicatedRequirements,
++    };
++    const VkImageMemoryRequirementsInfo2 requirementsInfo = {
++        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2,
++        .pNext = nullptr,
++        .image = image,
++    };
++    if (vk->vkGetImageMemoryRequirements2) {
++        vk->vkGetImageMemoryRequirements2(mDevice, &requirementsInfo, &requirements);
++    } else if (vk->vkGetImageMemoryRequirements2KHR) {
++        vk->vkGetImageMemoryRequirements2KHR(mDevice, &requirementsInfo, &requirements);
++    } else {
++        vk->vkGetImageMemoryRequirements(mDevice, image, &requirements.memoryRequirements);
++    }
++    const uint32_t memoryTypeIndex = getValidMemoryTypeIndex(
++        requirements.memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++    VkMemoryDedicatedAllocateInfo dedicatedAi = {
++        .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
++        .pNext = nullptr,
++        .image = image,
++        .buffer = VK_NULL_HANDLE,
++    };
++    VkExportMemoryAllocateInfo exportAi = {
++        .sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
++        .pNext = &dedicatedAi,
++        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
++    };
++    VkMemoryAllocateInfo allocateInfo = {
++        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
++        .pNext = &exportAi,
++        .allocationSize = requirements.memoryRequirements.size,
++        .memoryTypeIndex = memoryTypeIndex,
++    };
++    VkDeviceMemory memory = VK_NULL_HANDLE;
++    result = vk->vkAllocateMemory(mDevice, &allocateInfo, nullptr, &memory);
++    if (result != VK_SUCCESS) {
++        GFXSTREAM_ERROR("ColorBuffer %u: failed to allocate the DRM modifier image's memory: %s",
++                        info->handle, string_VkResult(result));
++        vk->vkDestroyImage(mDevice, image, nullptr);
++        return false;
++    }
++    result = vk->vkBindImageMemory(mDevice, image, memory, 0);
++    if (result != VK_SUCCESS) {
++        GFXSTREAM_ERROR("ColorBuffer %u: failed to bind the DRM modifier image: %s", info->handle,
++                        string_VkResult(result));
++        vk->vkFreeMemory(mDevice, memory, nullptr);
++        vk->vkDestroyImage(mDevice, image, nullptr);
++        return false;
++    }
++
++    // The dma-buf and its layout.
++    const VkMemoryGetFdInfoKHR getFdInfo = {
++        .sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
++        .pNext = nullptr,
++        .memory = memory,
++        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
++    };
++    int fd = -1;
++    result = vk->vkGetMemoryFdKHR(mDevice, &getFdInfo, &fd);
++    VkImageDrmFormatModifierPropertiesEXT chosenModifier = {
++        .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT,
++        .pNext = nullptr,
++        .drmFormatModifier = 0,
++    };
++    if (result == VK_SUCCESS && fd >= 0) {
++        result = vk->vkGetImageDrmFormatModifierPropertiesEXT(mDevice, image, &chosenModifier);
++    }
++    if (result != VK_SUCCESS || fd < 0) {
++        GFXSTREAM_ERROR("ColorBuffer %u: failed to export the DRM modifier image: %s",
++                        info->handle, string_VkResult(result));
++        if (fd >= 0) close(fd);
++        vk->vkFreeMemory(mDevice, memory, nullptr);
++        vk->vkDestroyImage(mDevice, image, nullptr);
++        return false;
++    }
++    const VkImageSubresource planeSubresource = {
++        .aspectMask = VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT,
++        .mipLevel = 0,
++        .arrayLayer = 0,
++    };
++    VkSubresourceLayout planeLayout = {};
++    vk->vkGetImageSubresourceLayout(mDevice, image, &planeSubresource, &planeLayout);
++
++    const VkImageViewCreateInfo imageViewCi = {
++        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
++        .pNext = nullptr,
++        .flags = 0,
++        .image = image,
++        .viewType = VK_IMAGE_VIEW_TYPE_2D,
++        .format = format,
++        .components =
++            {
++                .r = VK_COMPONENT_SWIZZLE_IDENTITY,
++                .g = VK_COMPONENT_SWIZZLE_IDENTITY,
++                .b = VK_COMPONENT_SWIZZLE_IDENTITY,
++                .a = VK_COMPONENT_SWIZZLE_IDENTITY,
++            },
++        .subresourceRange =
++            {
++                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
++                .baseMipLevel = 0,
++                .levelCount = 1,
++                .baseArrayLayer = 0,
++                .layerCount = 1,
++            },
++    };
++    VkImageView imageView = VK_NULL_HANDLE;
++    result = vk->vkCreateImageView(mDevice, &imageViewCi, nullptr, &imageView);
++    if (result != VK_SUCCESS) {
++        GFXSTREAM_ERROR("ColorBuffer %u: failed to create the DRM modifier image view: %s",
++                        info->handle, string_VkResult(result));
++        close(fd);
++        vk->vkFreeMemory(mDevice, memory, nullptr);
++        vk->vkDestroyImage(mDevice, image, nullptr);
++        return false;
++    }
++
++    // Keep the content: copy the old image over when it has any.
++    VkImageLayout newLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    if (info->currentLayout != VK_IMAGE_LAYOUT_UNDEFINED &&
++        info->currentLayout != VK_IMAGE_LAYOUT_PREINITIALIZED) {
++        const VkCommandBufferBeginInfo beginInfo = {
++            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
++            .pNext = nullptr,
++            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
++        };
++        VK_CHECK(vk->vkBeginCommandBuffer(mCommandBuffer, &beginInfo));
++        const VkImageMemoryBarrier barriers[2] = {
++            {
++                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
++                .pNext = nullptr,
++                .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
++                .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
++                .oldLayout = info->currentLayout,
++                .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++                .image = info->image,
++                .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
++            },
++            {
++                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
++                .pNext = nullptr,
++                .srcAccessMask = 0,
++                .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
++                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
++                .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
++                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++                .image = image,
++                .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
++            },
++        };
++        vk->vkCmdPipelineBarrier(mCommandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
++                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2,
++                                 barriers);
++        const VkImageCopy region = {
++            .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
++            .srcOffset = {0, 0, 0},
++            .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
++            .dstOffset = {0, 0, 0},
++            .extent = {width, height, 1},
++        };
++        vk->vkCmdCopyImage(mCommandBuffer, info->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++                           image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
++        VK_CHECK(vk->vkEndCommandBuffer(mCommandBuffer));
++        const VkSubmitInfo submitInfo = {
++            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
++            .pNext = nullptr,
++            .waitSemaphoreCount = 0,
++            .pWaitSemaphores = nullptr,
++            .pWaitDstStageMask = nullptr,
++            .commandBufferCount = 1,
++            .pCommandBuffers = &mCommandBuffer,
++            .signalSemaphoreCount = 0,
++            .pSignalSemaphores = nullptr,
++        };
++        {
++            gfxstream::base::AutoLock queueLock(*mQueueLock);
++            VK_CHECK(vk->vkQueueSubmit(mQueue, 1, &submitInfo, mCommandBufferFence));
++        }
++        static constexpr uint64_t kMaxWaitNs = 5ULL * 1000ULL * 1000ULL * 1000ULL;
++        VK_CHECK(vk->vkWaitForFences(mDevice, 1, &mCommandBufferFence, VK_TRUE, kMaxWaitNs));
++        VK_CHECK(vk->vkResetFences(mDevice, 1, &mCommandBufferFence));
++        newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
++    }
++
++    // Retire the old image once nothing uses it any more.
++    {
++        gfxstream::base::AutoLock queueLock(*mQueueLock);
++        VK_CHECK(vk->vkQueueWaitIdle(mQueue));
++    }
++    vk->vkDestroyImageView(mDevice, info->imageView, nullptr);
++    vk->vkDestroyImage(mDevice, info->image, nullptr);
++    freeExternalMemoryLocked(vk, &info->memory);
++    if (Compositor* c = getCompositor()) {
++        c->onImageDestroyed(info->handle);
++    }
++
++    info->image = image;
++    info->imageView = imageView;
++    info->imageCreateInfoShallow = vk_make_orphan_copy(imageCi);
++    info->imageMemReqs = requirements.memoryRequirements;
++    info->currentLayout = newLayout;
++    info->memory = ExternalMemoryInfo{};
++    info->memory.size = requirements.memoryRequirements.size;
++    info->memory.typeIndex = memoryTypeIndex;
++    info->memory.memory = memory;
++    info->memory.dedicatedAllocation = true;
++    info->memory.bindOffset = 0;
++    info->memory.handleInfo = ExternalHandleInfo{
++        .handle = static_cast<ExternalHandleType>(fd),
++        .streamHandleType = STREAM_HANDLE_TYPE_MEM_DMABUF,
++    };
++    info->externalMemoryCompatible = true;
++    info->scanoutLayout = ScanoutLayout{
++        .modifier = chosenModifier.drmFormatModifier,
++        .stride = static_cast<uint32_t>(planeLayout.rowPitch),
++        .offset = static_cast<uint32_t>(planeLayout.offset),
++    };
++    mDebugUtilsHelper.addDebugLabel(image, "ColorBuffer:%d", info->handle);
++    mDebugUtilsHelper.addDebugLabel(imageView, "ColorBuffer:%d", info->handle);
++    mDebugUtilsHelper.addDebugLabel(memory, "ColorBuffer:%d", info->handle);
++    GFXSTREAM_INFO("ColorBuffer %u (%ux%u %s) re-created for scanout: DRM modifier 0x%" PRIx64
++                   ", pitch %u, offset %u",
++                   info->handle, width, height, string_VkFormat(format),
++                   static_cast<uint64_t>(chosenModifier.drmFormatModifier),
++                   static_cast<uint32_t>(planeLayout.rowPitch),
++                   static_cast<uint32_t>(planeLayout.offset));
++    return true;
++#else
++    (void)info;
++    return false;
++#endif
++}
++
+ bool VkEmulation::teardownVkColorBufferLocked(uint32_t colorBufferHandle) {
+     auto vk = mDvk;
+ 
+diff --git a/host/vulkan/vk_common_operations.h b/host/vulkan/vk_common_operations.h
+index 78dd5dcc..2ad65cc4 100644
+--- a/host/vulkan/vk_common_operations.h
++++ b/host/vulkan/vk_common_operations.h
+@@ -357,6 +357,12 @@ class VkEmulation {
+         VulkanOnly = 1,
+     };
+ 
++    struct ScanoutLayout {
++        uint64_t modifier;
++        uint32_t stride;
++        uint32_t offset;
++    };
++
+     struct ColorBufferInfo {
+         ExternalMemoryInfo memory;
+ 
+@@ -383,8 +389,17 @@ class VkEmulation {
+         bool externalMemoryCompatible = false;
+ 
+         VulkanMode vulkanMode = VulkanMode::Default;
++
++        // A guest VkDevice bound an image of its own to this memory, so the layout and the
++        // memory can no longer be replaced.
++        bool guestBound = false;
++        // Set once the ColorBuffer was re-created for scanout with an explicit DRM modifier.
++        std::optional<ScanoutLayout> scanoutLayout;
+     };
+ 
++    std::optional<uint32_t> getColorBufferRowPitchLocked(const ColorBufferInfo& info);
++    bool migrateColorBufferToDrmModifierLocked(ColorBufferInfo* info);
++
+     bool allocExternalMemory(
+         VulkanDispatch* vk, ExternalMemoryInfo* info,
+         gfxstream::base::Optional<uint64_t> deviceAlignment = gfxstream::base::kNullopt,
+@@ -432,10 +447,16 @@ class VkEmulation {
+     };
+     std::optional<VkColorBufferMemoryExport> exportColorBufferMemory(uint32_t colorBufferHandle);
+ 
+-    // The row pitch, in bytes, of the ColorBuffer's VkImage as the driver laid it out. This is
+-    // what an importer of the exported memory (the VMM's display) has to use, not the pitch
+-    // computed from the width.
+-    std::optional<uint32_t> getColorBufferRowPitch(uint32_t colorBufferHandle);
++    // The layout a dma-buf importer (the VMM's display) needs for the exported ColorBuffer
++    // memory: the explicit DRM modifier of a ColorBuffer prepared for scanout, or, on drivers
++    // that leave the layout in the buffer itself, the driver's row pitch with no modifier.
++    std::optional<ScanoutLayout> getColorBufferScanoutLayout(uint32_t colorBufferHandle);
++
++    // Re-creates the ColorBuffer's image with VK_EXT_image_drm_format_modifier and dma-buf
++    // exportable dedicated memory, keeping its content, so that any importer can read it.
++    // Only possible while no guest image shares the memory and GL does not share it either;
++    // returns whether the ColorBuffer now has an explicit layout.
++    bool prepareColorBufferForScanout(uint32_t colorBufferHandle);
+ 
+     bool setColorBufferVulkanMode(uint32_t colorBufferHandle, uint32_t vulkanMode);
+     int32_t mapGpaToBufferHandle(uint32_t bufferHandle, uint64_t gpa, uint64_t size = 0);
+@@ -549,6 +570,9 @@ class VkEmulation {
+         bool supportsExternalMemoryImport = false;
+         bool supportsExternalMemoryExport = false;
+         bool supportsDmaBuf = false;
++        // VK_EXT_image_drm_format_modifier together with dma-buf export: images can be
++        // created with an explicit layout that any importer understands.
++        bool supportsDrmFormatModifier = false;
+         bool supportsDriverProperties = false;
+         bool supportsExternalMemoryHostProps = false;
+         bool supportsSwapchain = false;
