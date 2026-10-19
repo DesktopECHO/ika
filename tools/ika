@@ -6929,7 +6929,7 @@ append_guest_path() {
   while IFS= read -r skipped; do
     log "skipping ${parent}/${skipped}"
   done < <(sed -n "s/^tar: can't open '\(.*\)': Permission denied$/\1/p" <<<"${errors}")
-  [[ "${prefix}" == apps/* ]] \
+  [[ "${prefix}" == apps/* || "${prefix}" == libs/* ]] \
     || BACKUP_FILE_COUNT=$((BACKUP_FILE_COUNT + $(grep -c "^${prefix}/.*[^/]$" <<<"${errors}" || true)))
 }
 
@@ -6950,15 +6950,50 @@ cleanup_backup_temp() {
   return 0
 }
 
+# Prints the device's package dump: every package's state, permissions and the
+# libraries it uses.
+guest_package_dump() {
+  local adb_serial="$1"
+  local dump
+
+  dump="$(GUEST_ADB_TIMEOUT="${BACKUP_LIST_ADB_TIMEOUT_SEC}" guest_adb "${adb_serial}" \
+    shell dumpsys package packages | tr -d '\r')" || return 1
+  [[ "${dump}" == *"Package ["* ]] || return 1
+  printf '%s\n' "${dump}"
+}
+
+# Prints "LIBRARY<TAB>CODE_PATH" for each static shared library the packages
+# in APPS (space-separated) use, from DUMP, the output of guest_package_dump.
+# Android keeps such a library, Trichrome's for Chrome, as the package
+# NAME_VERSION, which 'pm list packages' leaves out, and refuses to install an
+# app without it.
+static_libraries_used() {
+  local dump="$1"
+  local apps="$2"
+
+  awk -v apps=" ${apps} " '
+    /^Hidden system packages:/ { exit }
+    /^  Package \[/ { pkg = $2; gsub(/[][]/, "", pkg); libs = 0; next }
+    /^    codePath=/ { path[pkg] = $0; sub(/^ *codePath=/, "", path[pkg]); next }
+    /^    usesStaticLibraries:/ { libs = index(apps, " " pkg " "); next }
+    libs && /^      [^ ]+ version:[0-9]+$/ {
+      version = $2; sub(/^version:/, "", version); used[$1 "_" version] = 1; next
+    }
+    { libs = 0 }
+    END { for (lib in used) if (lib in path) print lib "\t" path[lib] }
+  ' <<<"${dump}" | sort
+}
+
 # Writes the user's Android choices into DEST: runtime permissions granted to
 # the backed-up apps (any) and to built-in apps (only those the user set),
 # special app access, default apps, apps the user disabled, the dark theme and
-# BACKUP_SETTINGS. APPS lists the backed-up packages, space-separated.
+# BACKUP_SETTINGS. APPS lists the backed-up packages, space-separated; DUMP is
+# the output of guest_package_dump.
 backup_device_settings() {
   local adb_serial="$1"
   local dest="$2"
   local apps="$3"
-  local dump
+  local dump="$4"
   local op
   local pkg
   local role
@@ -6966,10 +7001,6 @@ backup_device_settings() {
   local value
 
   mkdir -p "${dest}"
-
-  dump="$(GUEST_ADB_TIMEOUT="${BACKUP_LIST_ADB_TIMEOUT_SEC}" guest_adb "${adb_serial}" \
-    shell dumpsys package packages | tr -d '\r')" || return 1
-  [[ "${dump}" == *"Package ["* ]] || return 1
 
   awk -v apps=" ${apps} " '
     /^  Package \[/ { pkg = $2; gsub(/[][]/, "", pkg); runtime = 0; next }
@@ -7069,11 +7100,14 @@ run_backup_command() {
   local staging
   local archive
   local listing
+  local dump
   local pkg
   local installer
   local apk
   local area
   local name
+  local lib
+  local path
   local backed_up=0
   local -a apks=()
   local -a saved=()
@@ -7136,6 +7170,23 @@ run_backup_command() {
     backed_up=$((backed_up + 1))
   done <<<"$(sort <<<"${listing}")"
 
+  dump="$(guest_package_dump "${adb_serial}")" \
+    || die "could not read the installed packages"
+
+  # Saved apart from the apps, as libs/LIBRARY, so a restore installs them
+  # first.
+  while IFS=$'\t' read -r lib path; do
+    [[ -n "${lib}" ]] || continue
+    log "backing up ${lib}"
+    mapfile -t apks < <(guest_adb "${adb_serial}" shell "ls $(shell_quote "${path}")" </dev/null \
+      | tr -d '\r' | grep '\.apk$')
+    (( ${#apks[@]} > 0 )) || die "could not find the APKs of ${lib}"
+    for apk in "${apks[@]}"; do
+      append_guest_path "${adb_serial}" "${archive}" "libs/${lib}" "${path}" "${apk}" \
+        || die "could not copy ${lib}"
+    done
+  done <<<"$(static_libraries_used "${dump}" "${saved[*]}")"
+
   for name in "${BACKUP_STORAGE_DIRS[@]}"; do
     guest_dir_has_files "${adb_serial}" "/sdcard/${name}" || continue
     log "backing up /sdcard/${name}"
@@ -7144,7 +7195,7 @@ run_backup_command() {
   done
 
   log "backing up permissions and settings"
-  backup_device_settings "${adb_serial}" "${staging}/settings" "${saved[*]}" \
+  backup_device_settings "${adb_serial}" "${staging}/settings" "${saved[*]}" "${dump}" \
     || die "could not read the permissions and settings"
   append_host_path "${archive}" "${staging}" settings
 
@@ -7161,6 +7212,8 @@ run_restore_command() {
   local adb_serial
   local pkg_dir
   local pkg
+  local lib_dir
+  local lib
   local installer
   local area
   local src
@@ -7181,10 +7234,21 @@ run_restore_command() {
   # --ignore-zeros reads on past the end of each tar stream in the archive.
   tar -xizf "${source}" -C "${dir}" && [[ -f "${dir}/${BACKUP_INFO_FILE}" ]] \
     || die "${source} is not an Ika backup"
-  files="$(find "${dir}/data" "${dir}/obb" "${dir}/storage" -type f 2>/dev/null | wc -l)"
+  # A backup has only the folders it found files for.
+  files="$( { find "${dir}/data" "${dir}/obb" "${dir}/storage" -type f 2>/dev/null || true; } | wc -l)"
 
   ensure_guest_ready
   adb_serial="$(resolve_adb_serial)"
+
+  # The static libraries first: Android refuses an app whose library is
+  # missing. Backups made before these were saved have none.
+  for lib_dir in "${dir}"/libs/*/; do
+    [[ -d "${lib_dir}" ]] || continue
+    lib="$(basename -- "${lib_dir}")"
+    log "installing ${lib}"
+    backup_adb "${adb_serial}" install-multiple -r "${lib_dir}"*.apk >/dev/null 2>&1 \
+      || log "warning: could not install ${lib}"
+  done
 
   for pkg_dir in "${dir}"/apps/*/; do
     [[ -d "${pkg_dir}" ]] || continue
