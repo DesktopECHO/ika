@@ -56,5 +56,8 @@ git_repository(
         # GL-only hosts export a ColorBuffer's texture through the host EGL's
         # dma-buf export, so their console is scanned out without a copy too.
         "@//build_external/gfxstream:PATCH.gfxstream.gl-color-buffer-dmabuf-export.patch",
+        # ScanoutDmabufExport renderer feature: off on the udmabuf (Apple) path,
+        # whose display cannot import the GPU's layout without a modifier.
+        "@//build_external/gfxstream:PATCH.gfxstream.scanout-dmabuf-export-feature.patch",
     ],
 )

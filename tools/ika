@@ -924,6 +924,10 @@ RADV_VEGA_OR_OLDER_FAMILY_REGEX='(TAHITI|PITCAIRN|VERDE|OLAND|HAINAN|BONAIRE|KAB
 # udmabuf-backed dma-bufs instead; the packaged gfxstream build links the real
 # Linux UdmabufCreator so this can initialize on hosts with /dev/udmabuf.
 GFXSTREAM_APPLE_16K_VULKAN_RENDERER_FEATURES="ExternalBlob:enabled;SystemBlob:disabled;VulkanAllocateHostVisibleAsUdmabuf:enabled;VulkanUseDedicatedAhbMemoryType:enabled"
+# gfxstream turns its ScanoutDmabufExport feature (the console scanned out as
+# a dma-buf instead of read back) off by itself when
+# VulkanAllocateHostVisibleAsUdmabuf is enabled, so it is not listed here and
+# a --gpu_renderer_features=ScanoutDmabufExport:... override is kept as given.
 CVD_GRAPHICS_DRIVER_MESSAGE=""
 CVD_DATA_STORAGE_MESSAGE=""
 # Set to false by --no-console: start the VM without the desktop console.
