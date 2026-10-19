@@ -1,0 +1,87 @@
+Patch summary:
+Give apps without a TV banner, made for phones, a banner made from their
+adaptive icon, so that their cards are filled as those of TV apps are instead
+of showing a small icon on a plain card. The icon, unmasked, is drawn in the
+middle with the 72dp that launchers show as tall as the card, and its left and
+right edges are stretched out to the card's sides. Apps whose icon is not
+adaptive keep the plain card.
+
+diff --git a/app/src/main/java/org/lineageos/tv/launcher/model/LeanbackAppInfo.kt b/app/src/main/java/org/lineageos/tv/launcher/model/LeanbackAppInfo.kt
+--- a/app/src/main/java/org/lineageos/tv/launcher/model/LeanbackAppInfo.kt
++++ b/app/src/main/java/org/lineageos/tv/launcher/model/LeanbackAppInfo.kt
+@@ -10,6 +10,8 @@
+ import android.content.pm.PackageManager
+ import android.content.pm.ResolveInfo
+ import android.graphics.Canvas
++import android.graphics.Paint
++import android.graphics.Rect
+ import android.graphics.drawable.AdaptiveIconDrawable
+ import android.graphics.drawable.Drawable
+ import androidx.core.graphics.createBitmap
+@@ -32,6 +34,7 @@
+         val rawBanner = resolveInfo.activityInfo.loadBanner(packageManager)
+             ?: resolveInfo.activityInfo.applicationInfo.loadBanner(packageManager)
+         banner = rawBanner?.let { flattenAdaptiveBanner(it, context) }
++            ?: iconBanner(icon, context)
+     }
+ 
+     constructor(app: ApplicationInfo, context: Context) : super(
+@@ -42,6 +45,7 @@
+     ) {
+         applicationInfo = app
+         banner = app.loadBanner(packageManager)?.let { flattenAdaptiveBanner(it, context) }
++            ?: iconBanner(icon, context)
+     }
+ 
+     override fun setIntent() = packageManager.getLeanbackLaunchIntentForPackage(packageName)
+@@ -72,4 +76,50 @@
+ 
+         return bitmap.toDrawable(context.resources)
+     }
++
++    // Ika: an app without a banner, made for phones, gets one from its adaptive icon, so that
++    // its card is filled as those of TV apps are. The icon, unmasked, is drawn in the middle,
++    // the 72dp of its 108dp layers that launchers show as tall as the card, and its left and
++    // right edges are stretched out to the card's sides: the icon keeps its proportions and
++    // shows no edge, whatever its layers draw. Other icons keep the plain card. A copy of the
++    // icon is drawn, as the card may show the icon itself.
++    private fun iconBanner(icon: Drawable, context: Context): Drawable? {
++        val adaptive = icon.constantState?.newDrawable()?.mutate()
++        if (adaptive !is AdaptiveIconDrawable) {
++            return null
++        }
++
++        val width = context.resources.getDimensionPixelSize(R.dimen.app_card_width)
++        val height = context.resources.getDimensionPixelSize(R.dimen.app_card_height)
++
++        val size = height * 108 / 72
++        val square = createBitmap(size, size)
++        Canvas(square).let { canvas ->
++            adaptive.background?.apply {
++                setBounds(0, 0, size, size)
++                draw(canvas)
++            }
++            adaptive.foreground?.apply {
++                setBounds(0, 0, size, size)
++                draw(canvas)
++            }
++        }
++
++        val bitmap = createBitmap(width, height)
++        val canvas = Canvas(bitmap)
++        val left = (width - size) / 2
++        val top = (size - height) / 2
++        val paint = Paint(Paint.FILTER_BITMAP_FLAG)
++        canvas.drawBitmap(square, Rect(0, top, 1, top + height), Rect(0, 0, left, height), paint)
++        canvas.drawBitmap(
++            square, Rect(size - 1, top, size, top + height), Rect(left + size, 0, width, height),
++            paint
++        )
++        canvas.drawBitmap(
++            square, Rect(0, top, size, top + height), Rect(left, 0, left + size, height), null
++        )
++        square.recycle()
++
++        return bitmap.toDrawable(context.resources)
++    }
+ }
