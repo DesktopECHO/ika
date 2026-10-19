@@ -70,6 +70,11 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** Releases gfxstream contexts and resources before the renderer component is destroyed.
 - **Why:** Orderly teardown reaches gfxstream's normal unbind paths instead of leaving renderer-owned resources alive during process shutdown.
 
+#### `PATCH.rutabaga_gfx-gfxstream-3d-resource-info.patch`
+- **Targets:** `rutabaga_gfx` crate. Files: `src/gfxstream.rs`, `src/rutabaga_core.rs`.
+- **What it does:** Fills a gfxstream 3D resource's `info_3d` (DRM format and stride) from `stream_renderer_resource_get_info` when it is created, with no known modifier, and makes `Rutabaga::export_blob` ask the component for a handle when none was cached at creation.
+- **Why:** crosvm's `import_resource_to_display` sends a scanout to the Wayland compositor (run_cvd, then `ika_stream` and the console) as a dma-buf only when both `export_blob` and `resource3d_info` succeed. The export already worked, but the missing 3D info failed the lookup for every non-blob resource, so the console frames always went through the GPU-to-CPU readback into a `wl_shm` buffer.
+
 #### `PATCH.v4l2r-poller-no-epollin-probe.patch`
 - **Targets:** `v4l2r` crate. File: `src/device/poller.rs`.
 - **What it does:** `Poller::new` registers the device with no events, instead of registering `EPOLLIN`, doing a dummy `epoll_wait` and clearing the events again.
@@ -112,7 +117,7 @@ See `crosvm.MODULE.bazel`. The relevant blocks:
 | `crosvm_bin.annotation(crate = "disk")` | `disk-composite-preserve-spec-fd`, `disk-qcow-zero-clusters` |
 | `crosvm_bin.annotation(crate = "jail")` | `jail-aarch64-block-pread64`, `jail-gpu-host-graphics-libs-optional` |
 | `crosvm_bin.annotation(crate = "devices")` | `crosvm-resize-display-devices` |
-| `crosvm_bin.annotation(crate = "rutabaga_gfx")` | `rutabaga_gfx_build_rs`, `rutabaga_gfx-gralloc-vulkano-fallback`, `rutabaga_gfx-cleanup-on-drop` |
+| `crosvm_bin.annotation(crate = "rutabaga_gfx")` | `rutabaga_gfx_build_rs`, `rutabaga_gfx-gralloc-vulkano-fallback`, `rutabaga_gfx-cleanup-on-drop`, `rutabaga_gfx-gfxstream-3d-resource-info` |
 | `crosvm_bin.annotation(crate = "minijail-sys")` | `minijail-sys_build_rs` |
 | `crosvm_bin.annotation(crate = "proto_build_tools")` | `proto_build_tools` |
 | `crosvm_bin.annotation(crate = "vm_control")` | `crosvm-resize-display-vm-control` |

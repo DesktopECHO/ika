@@ -1,0 +1,135 @@
+Report gfxstream 3D resources' layout and export them on demand.
+
+crosvm's display path (VirtioGpuScanout::import_resource_to_display) hands a
+scanout resource to the Wayland compositor as a dma-buf, instead of reading it
+back into a wl_shm buffer, when export_blob and resource3d_info both succeed.
+For gfxstream, create_3d already exports the color buffer's memory but left
+info_3d empty, so the lookup failed for every non-blob resource (the guest's
+hwcomposer framebuffers) and the console always took the GPU-to-CPU copy. Fill
+it from stream_renderer_resource_get_info (format and stride, no known
+modifier: gfxstream's images are tiled host images whose layout the importer
+has to take from the dma-buf itself), and let Rutabaga::export_blob ask the
+component when no handle was cached at creation.
+
+diff --git a/src/gfxstream.rs b/src/gfxstream.rs
+index 936894e..4f03f0b 100644
+--- a/src/gfxstream.rs
++++ b/src/gfxstream.rs
+@@ -45,6 +45,7 @@ use crate::rutabaga_core::RutabagaContext;
+ use crate::rutabaga_core::RutabagaResource;
+ use crate::rutabaga_utils::DeviceId;
+ use crate::rutabaga_utils::GfxstreamFlags;
++use crate::rutabaga_utils::Resource3DInfo;
+ use crate::rutabaga_utils::ResourceCreate3D;
+ use crate::rutabaga_utils::ResourceCreateBlob;
+ use crate::rutabaga_utils::RutabagaComponentType;
+@@ -77,6 +78,10 @@ const STREAM_RENDERER_PARAM_WIN0_HEIGHT: u64 = 5;
+ const STREAM_RENDERER_PARAM_DEBUG_CALLBACK: u64 = 6;
+ const STREAM_RENDERER_PARAM_RENDERER_FEATURES: u64 = 11;
+ 
++// gfxstream does not report the layout of its resources (they are tiled host images); the
++// importer of an exported resource has to derive it from the dma-buf itself.
++const DRM_FORMAT_MOD_INVALID: u64 = 0x00ff_ffff_ffff_ffff;
++
+ #[cfg(gfxstream_unstable)]
+ const STREAM_RENDERER_IMPORT_FLAG_VULKAN_INFO: u32 = RUTABAGA_IMPORT_FLAG_VULKAN_INFO;
+ #[cfg(gfxstream_unstable)]
+@@ -96,6 +101,21 @@ pub struct stream_renderer_handle {
+     pub handle_type: u32,
+ }
+ 
++// See `virtio-gpu-gfxstream-renderer-unstable.h`
++#[repr(C)]
++#[derive(Copy, Clone, Default)]
++pub struct stream_renderer_resource_info {
++    pub handle: u32,
++    pub virgl_format: u32,
++    pub width: u32,
++    pub height: u32,
++    pub depth: u32,
++    pub flags: u32,
++    pub tex_id: u32,
++    pub stride: u32,
++    pub drm_fourcc: c_int,
++}
++
+ #[repr(C)]
+ #[derive(Copy, Clone, Default)]
+ pub struct stream_renderer_vulkan_info {
+@@ -169,6 +189,11 @@ extern "C" {
+         num_iovs: u32,
+     ) -> c_int;
+ 
++    fn stream_renderer_resource_get_info(
++        res_handle: c_int,
++        info: *mut stream_renderer_resource_info,
++    ) -> c_int;
++
+     fn stream_renderer_resource_unref(res_handle: u32);
+     fn stream_renderer_context_destroy(handle: u32);
+     fn stream_renderer_transfer_read_iov(
+@@ -589,6 +614,24 @@ impl Gfxstream {
+             ))
+         }
+     }
++
++    fn query(&self, resource_id: u32) -> RutabagaResult<Resource3DInfo> {
++        let mut info: stream_renderer_resource_info = Default::default();
++        // SAFETY:
++        // Safe because gfxstream is initialized by now and `info` is a properly sized stack
++        // variable that gfxstream only writes to.
++        let ret = unsafe { stream_renderer_resource_get_info(resource_id as c_int, &mut info) };
++        ret_to_res(ret)?;
++
++        Ok(Resource3DInfo {
++            width: info.width,
++            height: info.height,
++            drm_fourcc: info.drm_fourcc as u32,
++            strides: [info.stride, 0, 0, 0],
++            offsets: [0, 0, 0, 0],
++            modifier: DRM_FORMAT_MOD_INVALID,
++        })
++    }
+ }
+ 
+ impl Drop for Gfxstream {
+@@ -662,6 +705,10 @@ impl RutabagaComponent for Gfxstream {
+         // memory directly.
+         let exported_handle = self.export_blob(resource_id).ok();
+ 
++        // The VMM needs the resource's format and stride to hand the exported memory to a
++        // display (scanout as a dma-buf) or to another process.
++        let info_3d = self.query(resource_id).ok();
++
+         Ok(RutabagaResource {
+             resource_id,
+             handle: exported_handle,
+@@ -670,7 +717,7 @@ impl RutabagaComponent for Gfxstream {
+             blob_flags: 0,
+             map_info: None,
+             info_2d: None,
+-            info_3d: None,
++            info_3d,
+             vulkan_info: None,
+             backing_iovecs: None,
+             component_mask: 1 << (RutabagaComponentType::Gfxstream as u8),
+diff --git a/src/rutabaga_core.rs b/src/rutabaga_core.rs
+index 8238559..19b9f75 100644
+--- a/src/rutabaga_core.rs
++++ b/src/rutabaga_core.rs
+@@ -1132,6 +1132,15 @@ impl Rutabaga {
+         let share_mask = RUTABAGA_BLOB_FLAG_USE_SHAREABLE | RUTABAGA_BLOB_FLAG_USE_CROSS_DEVICE;
+         let shareable = (resource.blob_flags & share_mask != 0) || !resource.blob;
+ 
++        // A resource whose component did not export it at creation (or could not yet) is
++        // exported on demand, e.g. when the VMM scans it out to a dma-buf capable display.
++        if resource.handle.is_none() && shareable {
++            let component_type = calculate_component(resource.component_mask)?;
++            if let Some(component) = self.components.get(&component_type) {
++                resource.handle = component.export_blob(resource_id).ok();
++            }
++        }
++
+         let opt = resource.handle.take();
+ 
+         match (opt, shareable) {
