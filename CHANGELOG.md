@@ -114,6 +114,9 @@
 - Switching back to the desktop turns off any TV launcher from Google Play
   chosen in TV mode, not only Catapult. The Desktop/TV icon has as much
   white around its art as the other apps' icons, at any size.
+- Dragging an app window's title bar to the top edge of the desktop takes
+  the app out of the desktop, fullscreen on the console, instead of
+  maximizing it; the maximize button still fills the desktop.
 - LineageOS's "Tap to sleep" is off and no longer listed in Settings >
   Display. In Ika that gesture opened and closed the shade on a double tap of
   the status bar or the lock screen, so that double tap does nothing now.

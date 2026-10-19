@@ -15,8 +15,9 @@ Runtime rules:
   taskbar, each member opens as a desktop app instead of creating a split pair.
 - Pressing Home keeps the user in the desktop session instead of collapsing back
   to a phone-style home grid.
-- Drag-to-top maximization is allowed only when it does not exit the desktop
-  session.
+- Dragging a window to the top edge moves the app out of the desk into
+  fullscreen on the console (`config_dragToMaximizeInDesktopMode` is off);
+  the maximize button fills the desktop without leaving it.
 - Resize and freeform compatibility flags are reapplied on every boot.
 
 Source ownership:
