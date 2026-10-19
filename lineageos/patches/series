@@ -94,6 +94,7 @@ system/sepolicy patches/system-sepolicy.patch
 system/sepolicy patches/system-sepolicy-checkfc-arm64-getopt.patch
 packages/modules/Permission patches/packages-modules-Permission-default-home-role.patch
 packages/apps/Catapult patches/packages-apps-Catapult-mouse-clicks.patch
+packages/apps/Catapult patches/packages-apps-Catapult-icon-banners.patch
 packages/apps/Aperture patches/packages-apps-Aperture-16-9.patch
 packages/apps/Aperture patches/packages-apps-Aperture-camera-sizes.patch
 packages/apps/Aperture patches/packages-apps-Aperture-video-denoise.patch
