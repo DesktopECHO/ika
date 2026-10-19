@@ -3530,6 +3530,16 @@ adb_boot_completed() {
   [[ "${boot_completed}" == "1" ]]
 }
 
+# True once Android has shown its first frame (SurfaceFlinger's
+# sf_stop_bootanim event), seconds before sys.boot_completed on slow hosts.
+adb_first_frame_shown() {
+  local output
+
+  output="$(host_adb 5 -s "$1" shell 'getprop sys.boot_completed; logcat -b events -d -m 1 -s sf_stop_bootanim' \
+    2>/dev/null | tr -d '\r' || true)"
+  [[ "${output}" == 1* || "${output}" == *sf_stop_bootanim* ]]
+}
+
 # Prints the mode Android booted in, tv or desktop, or nothing when the guest
 # does not answer. Android's mode is switched by IkaMode's Desktop/TV entry
 # and takes effect at boot, when TV mode adds the leanback feature.
@@ -3897,7 +3907,7 @@ wait_for_boot() {
         && (( $(stat -c '%Y' "${CVD_CONFIG_PATH}" 2>/dev/null || echo 0) >= min_mtime )); then
       adb_serial="$(resolve_adb_serial)"
     fi
-    if [[ -n "${adb_serial}" ]] && adb_boot_completed "${adb_serial}"; then
+    if [[ -n "${adb_serial}" ]] && adb_first_frame_shown "${adb_serial}"; then
       return 0
     fi
     if ! has_live_cvd_processes \
@@ -3917,7 +3927,7 @@ wait_for_boot() {
         return 1
       fi
     fi
-    sleep 0.5
+    sleep 0.1
   done
 
   return 1
@@ -4176,21 +4186,21 @@ schedule_scrcpy_when_launcher_ready() {
 
   (
     while has_live_cvd_processes; do
-      if adb_boot_completed "${adb_serial}"; then
+      if adb_first_frame_shown "${adb_serial}"; then
         break
       fi
-      sleep 0.5
+      sleep 0.1
     done
 
     if ! has_live_cvd_processes; then
-      log "deferred console watcher stopped because Cuttlefish exited before sys.boot_completed=1."
+      log "deferred console watcher stopped because Cuttlefish exited before Android's first frame."
       exit 0
     fi
     start_scrcpy_with_retries "${adb_serial}" "${fullscreen_mode}" "${game_mode}" || true
   ) &
 
   disown || true
-  log "scheduled console launch when adb reports sys.boot_completed=1"
+  log "scheduled console launch for Android's first frame"
 }
 
 maybe_start_scrcpy() {
@@ -4203,13 +4213,13 @@ maybe_start_scrcpy() {
     return 0
   fi
 
-  if adb_boot_completed "${adb_serial}"; then
-    log "adb reports sys.boot_completed=1; starting the console immediately."
+  if adb_first_frame_shown "${adb_serial}"; then
+    log "Ika console ready; starting the console immediately."
     start_scrcpy_with_retries "${adb_serial}" "${fullscreen_mode}" "${game_mode}" || true
     return 0
   fi
 
-  log "adb has not reported sys.boot_completed=1; deferring console launch."
+  log "Android has not shown its first frame; deferring console launch."
   schedule_scrcpy_when_launcher_ready "${adb_serial}" "${fullscreen_mode}" "${game_mode}"
   return 0
 }
@@ -6656,9 +6666,9 @@ start_cvd() {
   fi
   adb_serial="$(resolve_adb_serial)"
 
-  log "boot completed after seeing: adb sys.boot_completed=1"
-  disable_guest_bluetooth "${adb_serial}" "$@"
-  seed_guest_theme "${adb_serial}"
+  log "Ika console ready"
+  # Alongside the console, which they would otherwise hold up.
+  { disable_guest_bluetooth "${adb_serial}" "$@"; seed_guest_theme "${adb_serial}"; } 3>&- &
   respond "Android virtual device running"
   if [[ "${START_CONSOLE}" == "true" ]]; then
     maybe_start_scrcpy "${adb_serial}" "${fullscreen_mode}" "${game_mode}" || true
