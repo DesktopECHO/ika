@@ -351,3 +351,6 @@ Linux GPU host. Most of the effort was convincing four codebases of that one fac
 | `vk_decoder_global_state.cpp` (`48669f9`) | gfxstream host | Refuse host image copy calls whose pixel payload cereal cannot marshal, instead of crashing the renderer |
 | `PATCH.gfxstream.hide-host-image-copy.patch` | gfxstream host | Stop advertising host image copy, so guests do not upload textures through the refused calls |
 | `tools/ika` | launcher | Apple Silicon 16 KiB gating: udmabuf-backed ExternalBlob, SystemBlob off |
+| `PATCH.rutabaga_gfx-gfxstream-3d-resource-info.patch` | crosvm (rutabaga) | Report gfxstream 3D resources' format and stride, so crosvm scans the console out as a dma-buf instead of reading it back (x86) |
+| `PATCH.gfxstream.color-buffer-row-pitch.patch`, `PATCH.gfxstream.gl-color-buffer-dmabuf-export.patch` | gfxstream host | Driver row pitch for exported color buffers; dma-buf export of GL-only color buffers (GLES hosts) |
+| `PATCH.gfxstream.scanout-dmabuf-export-feature.patch` | gfxstream host | `ScanoutDmabufExport` feature, off on the udmabuf path: Asahi cannot import the GPU's layout without a modifier, so the Apple console stays on readback |
