@@ -68,8 +68,14 @@ sc_ika_window_get_margin_backend(bool borderless) {
 }
 
 SDL_WindowFlags
-sc_ika_window_get_creation_flags(bool borderless) {
-    // The margin is transparent
+sc_ika_window_get_creation_flags(bool borderless, bool fullscreen) {
+    // The margin is transparent. A window that starts fullscreen does without
+    // it (the resize edges are then inside the content once it leaves
+    // fullscreen): an opaque surface is what lets the compositor scan a
+    // fullscreen window out directly, without compositing it.
+    if (fullscreen) {
+        return 0;
+    }
     return sc_ika_window_get_margin_backend(borderless)
                 != SC_IKA_WINDOW_MARGIN_NONE ? SDL_WINDOW_TRANSPARENT : 0;
 }
@@ -326,8 +332,12 @@ sc_ika_window_init(struct sc_ika_window *iw, SDL_Window *window) {
         iw->border_color[i] = SC_WINDOW_BORDER_GRAY;
     }
 
-    bool borderless = SDL_GetWindowFlags(window) & SDL_WINDOW_BORDERLESS;
-    iw->margin_backend = sc_ika_window_get_margin_backend(borderless);
+    SDL_WindowFlags flags = SDL_GetWindowFlags(window);
+    bool borderless = flags & SDL_WINDOW_BORDERLESS;
+    // Only a transparent window can hold the invisible margin
+    iw->margin_backend = flags & SDL_WINDOW_TRANSPARENT
+                       ? sc_ika_window_get_margin_backend(borderless)
+                       : SC_IKA_WINDOW_MARGIN_NONE;
     iw->margin = iw->margin_backend != SC_IKA_WINDOW_MARGIN_NONE
                ? SC_WINDOW_MARGIN : 0;
     iw->expected_width = 0;

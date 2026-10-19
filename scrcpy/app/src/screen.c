@@ -841,7 +841,8 @@ sc_screen_init(struct sc_screen *screen,
     if (params->window_borderless) {
         window_flags |= SDL_WINDOW_BORDERLESS;
     }
-    window_flags |= sc_ika_window_get_creation_flags(params->window_borderless);
+    window_flags |= sc_ika_window_get_creation_flags(params->window_borderless,
+                                                     params->fullscreen);
     if (params->video) {
         // The window will be shown on first frame
         window_flags |= SDL_WINDOW_RESIZABLE;
