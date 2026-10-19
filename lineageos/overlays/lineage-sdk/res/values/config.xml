@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- No "Tap to sleep": it is off, and Settings does not offer it
+         (requiresConfig). In Ika, its double tap on the status bar or the
+         lock screen opens and closes the shade (frameworks-base.patch)
+         rather than turning the display off. -->
+    <bool name="config_dt2sGestureAvailable">false</bool>
+    <bool name="config_dt2sGestureEnabledByDefault">false</bool>
+</resources>
