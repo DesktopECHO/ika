@@ -423,7 +423,7 @@ index effb13ae..b3eca4a5 100644
          return std::nullopt;
      }
  
-@@ -3398,13 +3410,440 @@ std::optional<uint32_t> VkEmulation::getColorBufferRowPitch(uint32_t colorBuffer
+@@ -3398,13 +3410,448 @@ std::optional<uint32_t> VkEmulation::getColorBufferRowPitch(uint32_t colorBuffer
          .arrayLayer = 0,
      };
      VkSubresourceLayout layout = {};
@@ -475,10 +475,18 @@ index effb13ae..b3eca4a5 100644
 +        return false;
 +    }
 +    // The memory can only be replaced while nobody else refers to it: no guest image, no GL
-+    // texture importing it, no host-visible mapping handed out, and a single color plane.
++    // texture importing it, no guest mapping, not created host visible (linear, written by
++    // the host through its mapping), and a single color plane. A mapping that exists only
++    // because the device's memory is host visible anyway (unified memory, Apple Silicon) is
++    // handed out to nobody and goes away with the memory.
++    const bool hostVisible = (info->memoryProperty & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
 +    if (info->guestBound || info->vulkanMode != VkEmulation::VulkanMode::VulkanOnly ||
-+        info->memory.mappedPtr != nullptr || info->memory.gpa != 0u ||
-+        IsYuvFormat(info->format)) {
++        hostVisible || info->memory.gpa != 0u || IsYuvFormat(info->format)) {
++        GFXSTREAM_INFO("ColorBuffer %u keeps its layout: guest bound %d, Vulkan mode %d, host "
++                       "visible %d, guest mapped %d, YUV %d",
++                       colorBufferHandle, info->guestBound ? 1 : 0,
++                       static_cast<int>(info->vulkanMode), hostVisible ? 1 : 0,
++                       info->memory.gpa != 0u ? 1 : 0, IsYuvFormat(info->format) ? 1 : 0);
 +        return false;
 +    }
 +    return migrateColorBufferToDrmModifierLocked(info);

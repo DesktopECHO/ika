@@ -8,9 +8,11 @@ with an implicit layout (no DRM modifier), which only works where the driver
 leaves the layout in the buffer: RADV (BO metadata) and the host GL drivers
 (GEM tiling). ANV does not (Intel HD 6000: the console came out as horizontal
 bands), and the udmabuf path (Apple Silicon) has no such information. So the
-default is off on the udmabuf path, and on Vulkan hosts the info is only
-given when the driver is RADV, unless --gpu_renderer_features overrides the
-feature explicitly, which is honored as given.
+feature is on by default but on Vulkan hosts the info is only given when the
+driver is RADV (the scanout-drm-modifier-export patch widens this to any color
+buffer with an explicit DRM modifier, which is how Apple Silicon gets its
+console), unless --gpu_renderer_features overrides the feature explicitly,
+which is honored as given.
 
 diff --git a/host/features/include/gfxstream/host/features.h b/host/features/include/gfxstream/host/features.h
 index b54911f0..b0ea79de 100644
@@ -22,9 +24,9 @@ index b54911f0..b0ea79de 100644
      };
 +    BoolFeatureInfo ScanoutDmabufExport = {
 +        "ScanoutDmabufExport",
-+        "If enabled, resource info describes color buffers (format, driver row pitch) so the "
-+        "VMM can scan them out as dma-bufs. Off where the host display cannot import the "
-+        "GPU's tiled layout without an explicit modifier.",
++        "If enabled, resource info describes color buffers (format, layout) so the VMM can "
++        "scan them out as dma-bufs; the info is only given for layouts the host display can "
++        "import (an explicit DRM modifier, or a driver that leaves the layout in the buffer).",
 +        &map,
 +    };
      BoolFeatureInfo VulkanEnsureCachedCoherentMemoryAvailable = {
@@ -95,15 +97,14 @@ diff --git a/host/virtio_gpu_gfxstream_renderer.cpp b/host/virtio_gpu_gfxstream_
 index f5a4d35b..626d2f31 100644
 --- a/host/virtio_gpu_gfxstream_renderer.cpp
 +++ b/host/virtio_gpu_gfxstream_renderer.cpp
-@@ -133,6 +133,11 @@ ParseGfxstreamFeatures(const int rendererFlags,
+@@ -133,6 +133,10 @@ ParseGfxstreamFeatures(const int rendererFlags,
      GFXSTREAM_SET_BOOL_FEATURE_ON_CONDITION(&features, ExternalBlob,
                                         rendererFlags & STREAM_RENDERER_FLAGS_USE_EXTERNAL_BLOB ||
                                             features.VulkanAllocateHostVisibleAsUdmabuf.enabled());
-+    // The VMM's display imports exported color buffers with an implicit layout (no modifier),
-+    // which RADV, Intel and the host GL drivers resolve from the buffer itself; the udmabuf
-+    // path (Apple Silicon) has no such layout information, so keep its console on readback.
-+    GFXSTREAM_SET_BOOL_FEATURE_ON_CONDITION(&features, ScanoutDmabufExport,
-+                                            !features.VulkanAllocateHostVisibleAsUdmabuf.enabled());
++    // On by default: the resource info is only given for color buffers whose layout the VMM's
++    // display can import (VirtioGpuFrontend::getResourceInfo), so the feature itself needs no
++    // host-specific default; an explicit override is honored as given.
++    GFXSTREAM_SET_BOOL_FEATURE_ON_CONDITION(&features, ScanoutDmabufExport, true);
      GFXSTREAM_SET_BOOL_FEATURE_ON_CONDITION(&features, VulkanEnsureCachedCoherentMemoryAvailable, true);
  
      for (const std::string& rendererFeature : gfxstream::Split(rendererFeatures, ",;")) {
