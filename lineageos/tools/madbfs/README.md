@@ -2,7 +2,8 @@
 
 [madbfs](https://github.com/mrizaln/madbfs) mounts Android's storage on the
 host as a FUSE filesystem over adb. `ika start` mounts the VM's `/sdcard` on
-`~/ika/Android` with it (the whole filesystem, `/`, on a rooted ROM), and
+`$XDG_RUNTIME_DIR/ika/Android` with it (the whole filesystem, `/`, on a rooted
+ROM), and
 `ika stop`, `restart` and `reset` unmount it.
 
 Two halves are built from this folder:

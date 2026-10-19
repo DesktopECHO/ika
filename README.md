@@ -22,8 +22,9 @@ on [Fedora Asahi Remix](https://asahilinux.org/). It later grew into a desktop-c
   (see [App windows](UI-INTRO.md#app-windows)).
 - **Camera**: use a webcam or a Mac's FaceTime camera as Android's front camera
   (see [Camera](USAGE.md#camera)).
-- **Android files on the host**: Android's storage is mounted on `~/ika/Android`
-  while Ika runs (see [Android files](USAGE.md#android-files)).
+- **Android files on the host**: Android's storage is mounted while Ika runs,
+  under **Android** in the file manager's sidebar (see
+  [Android files](USAGE.md#android-files)).
 - **Built-in root utility**: `ika root` roots the VM with Magisk (see
   [Rooting with Magisk](USAGE.md#rooting-with-magisk)).
 - **Flexible build options** for **MindTheGapps**, **microG**, or a fully

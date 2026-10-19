@@ -867,8 +867,17 @@ APP_MENU_WATCHER_LOCK_FILE="${CVD_TMP_DIR}/app-menu-watcher.lock"
 APP_MENU_SYNC_LOCK_FILE="${CVD_TMP_DIR}/app-menu-sync.lock"
 APP_MENU_LOG_FILE="${CVD_HOME_DIR}/app-menu.log"
 APP_MENU_DISABLED_FILE="${CVD_HOME_DIR}/app-menu-disabled"
-# Android's shared storage (/sdcard), mounted with madbfs while the VM runs.
-ANDROID_STORAGE_DIR="${CVD_HOME_DIR}/Android"
+# Android's shared storage (/sdcard), mounted with madbfs while the VM runs. It
+# goes in the session's runtime directory, outside the home folder, so that
+# backups and other programs walking the home folder do not go through adb into
+# the VM; and a crash leaves no mount behind there. Ika mounted it in its home
+# folder before, where it still does without a runtime directory.
+LEGACY_ANDROID_STORAGE_DIR="${CVD_HOME_DIR}/Android"
+if [[ -d "${XDG_RUNTIME_DIR:-/run/user/${UID}}" && -w "${XDG_RUNTIME_DIR:-/run/user/${UID}}" ]]; then
+  ANDROID_STORAGE_DIR="${XDG_RUNTIME_DIR:-/run/user/${UID}}/ika/Android"
+else
+  ANDROID_STORAGE_DIR="${LEGACY_ANDROID_STORAGE_DIR}"
+fi
 MADBFS_LOG_FILE="${CVD_HOME_DIR}/madbfs.log"
 APP_LIST_CACHE="${IKA_APPS_DIR}/app-list"
 # Game session started by 'ika app <game>': see start_game_session.
@@ -1812,9 +1821,10 @@ GSF ID:
 Android files:
 
   While the VM runs, Android's shared storage (/sdcard) is mounted on
-  ~/ika/Android, where host programs can open, change and delete its files.
-  'start' mounts it; 'stop', 'restart' and 'reset' unmount it. Its log is
-  ~/ika/madbfs.log.
+  \$XDG_RUNTIME_DIR/ika/Android (~/ika/Android without one), where host
+  programs can open, change and delete its files; the file manager's sidebar
+  lists it as Android. 'start' mounts it; 'stop', 'restart' and 'reset'
+  unmount it. Its log is ~/ika/madbfs.log.
 
 Backup:
 
@@ -6089,7 +6099,7 @@ stop_app_menu_watcher() {
 }
 
 android_storage_mounted() {
-  findmnt -rn -M "${ANDROID_STORAGE_DIR}" >/dev/null 2>&1
+  findmnt -rn -M "${1:-${ANDROID_STORAGE_DIR}}" >/dev/null 2>&1
 }
 
 # Whether 'su' gives root in the guest, as after 'ika root'.
@@ -6112,6 +6122,9 @@ mount_android_storage() {
 
   [[ -x "${PACKAGED_MADBFS_BIN}" ]] || return 0
   android_storage_mounted && return 0
+  if [[ "${LEGACY_ANDROID_STORAGE_DIR}" != "${ANDROID_STORAGE_DIR}" ]]; then
+    unmount_android_storage_at "${LEGACY_ANDROID_STORAGE_DIR}"
+  fi
   mkdir -p "${ANDROID_STORAGE_DIR}"
   if guest_is_rooted "${adb_serial}"; then
     root_args=(--root=/ --su)
@@ -6152,19 +6165,44 @@ kde_places_file() {
   printf '%s\n' "${XDG_DATA_HOME:-${HOST_HOME}/.local/share}/user-places.xbel"
 }
 
-# Adds ("add") or removes ("remove") ANDROID_STORAGE_DIR, named "Android", in
-# KDE's Places: Dolphin lists only disks and network shares by itself, where
-# GNOME's Files shows the mount. The places file is only edited once it exists:
-# creating it would keep KDE from adding its default places.
+gtk_bookmarks_file() {
+  printf '%s\n' "${XDG_CONFIG_HOME:-${HOST_HOME}/.config}/gtk-3.0/bookmarks"
+}
+
+# Adds ("add") or removes ("remove") $2, or ANDROID_STORAGE_DIR, named
+# "Android", in the file manager's sidebar: Dolphin and GNOME's Files list only
+# disks, network shares and mounts in the home folder by themselves. On GNOME
+# it goes in GTK's bookmarks. KDE's places file is only edited once it exists:
+# creating it would keep KDE from adding its default places. Removing takes the
+# entry out of both, whatever the desktop.
 edit_android_storage_place() {
   local action="$1"
+  local dir="${2:-${ANDROID_STORAGE_DIR}}"
   local places
+  local bookmarks
+  local kept
   local uri
+
+  uri="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).as_uri())' \
+    "${dir}")" || return 0
+  bookmarks="$(gtk_bookmarks_file)"
+  if [[ "${action}" == "remove" ]]; then
+    if grep -qxF "${uri} Android" "${bookmarks}" 2>/dev/null \
+        && kept="$(mktemp "${bookmarks}.XXXXXX")"; then
+      # Rewritten in place, keeping the file's mode.
+      if grep -vxF "${uri} Android" "${bookmarks}" >"${kept}" || [[ ! -s "${kept}" ]]; then
+        cat "${kept}" >"${bookmarks}" || true
+      fi
+      rm -f "${kept}"
+    fi
+  elif [[ ":${XDG_CURRENT_DESKTOP:-}:" == *:GNOME:* ]] \
+      && ! grep -qxF "${uri} Android" "${bookmarks}" 2>/dev/null; then
+    mkdir -p "$(dirname "${bookmarks}")" \
+      && printf '%s Android\n' "${uri}" >>"${bookmarks}" || true
+  fi
 
   places="$(kde_places_file)"
   [[ -f "${places}" ]] || return 0
-  uri="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).as_uri())' \
-    "${ANDROID_STORAGE_DIR}")" || return 0
   python3 - "${action}" "${places}" "${uri}" <<'PY' || true
 import re
 import sys
@@ -6195,25 +6233,35 @@ with open(path, "w", encoding="utf-8") as f:
 PY
 }
 
-# Unmounts ANDROID_STORAGE_DIR: lazily when a program still has a file open
-# there, so that does not hold the VM up. madbfs then gets a few seconds to
+# Unmounts Android's storage from $1: lazily when a program still has a file
+# open there, so that does not hold the VM up. madbfs then gets a few seconds to
 # write out what it has cached and exit; one kept alive by such a program is
 # ended, as the device it serves is going away.
-unmount_android_storage() {
-  local pattern="^${PACKAGED_MADBFS_BIN} .* ${ANDROID_STORAGE_DIR}\$"
+unmount_android_storage_at() {
+  local dir="$1"
+  local pattern="^${PACKAGED_MADBFS_BIN} .* ${dir}\$"
   local deadline
 
-  if android_storage_mounted; then
-    fusermount3 -u "${ANDROID_STORAGE_DIR}" >/dev/null 2>&1 \
-      || fusermount3 -u -z "${ANDROID_STORAGE_DIR}" >/dev/null 2>&1 \
-      || log "warning: could not unmount ${ANDROID_STORAGE_DIR}"
+  if android_storage_mounted "${dir}"; then
+    fusermount3 -u "${dir}" >/dev/null 2>&1 \
+      || fusermount3 -u -z "${dir}" >/dev/null 2>&1 \
+      || log "warning: could not unmount ${dir}"
   fi
   deadline="$(make_deadline 5)"
   while pgrep -f "${pattern}" >/dev/null && within_deadline "${deadline}"; do
     sleep 0.2
   done
   pkill -KILL -f "${pattern}" 2>/dev/null || true
-  edit_android_storage_place remove
+  edit_android_storage_place remove "${dir}"
+}
+
+# Also from where an older Ika mounted it, and removes that folder once empty.
+unmount_android_storage() {
+  unmount_android_storage_at "${ANDROID_STORAGE_DIR}"
+  if [[ "${LEGACY_ANDROID_STORAGE_DIR}" != "${ANDROID_STORAGE_DIR}" ]]; then
+    unmount_android_storage_at "${LEGACY_ANDROID_STORAGE_DIR}"
+    rmdir "${LEGACY_ANDROID_STORAGE_DIR}" 2>/dev/null || true
+  fi
 }
 
 # Prints "LABEL<TAB>PACKAGE" for each open app window, using the cached title.

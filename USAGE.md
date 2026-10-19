@@ -187,11 +187,14 @@ MindTheGapps builds only.
 ## Android files
 
 While the VM runs, Android's shared storage (`/sdcard`: DCIM, Download,
-Pictures and the rest) is mounted on `~/ika/Android`, so any file manager or
-program on the host can open, copy, change and delete files there. `ika start`
-mounts it and `ika stop`, `restart` and `reset` unmount it; while Ika is
-stopped the folder is empty. GNOME's Files lists it in the sidebar, and the
-first mount adds it to KDE's Places as **Android**. Files are read as they are
+Pictures and the rest) is mounted on `/run/user/<uid>/ika/Android` (in
+`$XDG_RUNTIME_DIR`), so any file manager or program on the host can open,
+copy, change and delete files there. Being outside the home folder, it is left
+alone by backups and other programs that go through the home folder. Without a
+runtime directory it is mounted on `~/ika/Android`. `ika start` mounts it and
+adds it to the file manager's sidebar as **Android** (GNOME's bookmarks or
+KDE's Places), and `ika stop`, `restart` and `reset` unmount it and take it out
+of the sidebar again. Files are read as they are
 used, over Ika's adb connection, so a large video plays without being copied
 first. Files an app keeps to itself are out of reach, as they are for adb. On
 a rooted ROM (`ika root`) the mount is Android's whole filesystem, `/`, served
