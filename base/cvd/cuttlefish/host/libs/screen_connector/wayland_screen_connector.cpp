@@ -52,4 +52,8 @@ void WaylandScreenConnector::SetDisplayEventCallback(
   server_->SetDisplayEventCallback(std::move(event_callback));
 }
 
+void WaylandScreenConnector::ReleaseDmabufFrame(uint32_t frame_id) {
+  server_->ReleaseDmabufFrame(frame_id);
+}
+
 }  // namespace cuttlefish

@@ -50,6 +50,7 @@ uint32_t GetDrmFormat(uint32_t wl_shm_format) {
 Surface::Surface(Surfaces& surfaces) : surfaces_(surfaces) {}
 
 Surface::~Surface() {
+  surfaces_.ReleaseHeldDmabufBuffers(this);
   if (state_.virtio_gpu_metadata_.scanout_id.has_value()) {
     const uint32_t display_number = *state_.virtio_gpu_metadata_.scanout_id;
     surfaces_.HandleSurfaceDestroyed(display_number);
@@ -74,6 +75,10 @@ void Surface::Commit() {
   if (state_.current_buffer == nullptr) {
     return;
   }
+
+  // The consumer keeps a dma-buf after the commit: its buffer is released
+  // when the consumer releases the frame, not now
+  bool buffer_held = false;
 
   if (state_.virtio_gpu_metadata_.scanout_id.has_value()) {
     const uint32_t display_number = *state_.virtio_gpu_metadata_.scanout_id;
@@ -116,10 +121,13 @@ void Surface::Commit() {
           surfaces_.HandleSurfaceCreated(display_number, buffer_w, buffer_h);
           state_.has_notified_surface_create = true;
         }
-        frame_delivered = surfaces_.HandleSurfaceDmabufFrame(
-            display_number, buffer_w, buffer_h, buffer_drm_format,
-            dmabuf_plane.fd.get(), dmabuf_plane.offset, buffer_stride_bytes,
-            dmabuf_plane.modifier_hi, dmabuf_plane.modifier_lo);
+        const DmabufFrameResult result = surfaces_.HandleSurfaceDmabufFrame(
+            this, state_.current_buffer, display_number, buffer_w, buffer_h,
+            buffer_drm_format, dmabuf_plane.fd.get(), dmabuf_plane.offset,
+            buffer_stride_bytes, dmabuf_plane.modifier_hi,
+            dmabuf_plane.modifier_lo);
+        frame_delivered = result != DmabufFrameResult::kNotDelivered;
+        buffer_held = result == DmabufFrameResult::kHeld;
         size_t buffer_size = static_cast<size_t>(buffer_h) * buffer_stride_bytes;
         if (frame_delivered) {
           buffer_pixels = nullptr;
@@ -177,8 +185,10 @@ void Surface::Commit() {
     }
   }
 
-  wl_buffer_send_release(state_.current_buffer);
-  wl_client_flush(wl_resource_get_client(state_.current_buffer));
+  if (!buffer_held) {
+    wl_buffer_send_release(state_.current_buffer);
+    wl_client_flush(wl_resource_get_client(state_.current_buffer));
+  }
 
   state_.current_buffer = nullptr;
   state_.current_frame_number++;

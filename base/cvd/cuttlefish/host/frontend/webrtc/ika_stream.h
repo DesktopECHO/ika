@@ -20,6 +20,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -27,6 +28,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#include "cuttlefish/host/libs/wayland/wayland_server_callbacks.h"
 
 namespace cuttlefish {
 
@@ -51,10 +54,17 @@ class RawFrameStreamer {
 
   void OnFrame(uint32_t display_number, uint32_t width, uint32_t height,
                uint32_t fourcc, uint32_t stride_bytes, const uint8_t* pixels);
-  bool OnDmabufFrame(uint32_t display_number, uint32_t width, uint32_t height,
-                     uint32_t fourcc, int dmabuf_fd, uint32_t offset,
-                     uint32_t stride_bytes, uint32_t modifier_hi,
-                     uint32_t modifier_lo);
+  // Returns kHeld when the frame goes to a client that releases dma-buf
+  // frames: the release callback is then called with the frame id once the
+  // client has released it, or when the frame is dropped before that.
+  DmabufFrameResult OnDmabufFrame(uint32_t display_number, uint32_t width,
+                                  uint32_t height, uint32_t fourcc,
+                                  int dmabuf_fd, uint32_t offset,
+                                  uint32_t stride_bytes, uint32_t modifier_hi,
+                                  uint32_t modifier_lo, uint32_t frame_id);
+  // Called for each frame OnDmabufFrame() returned kHeld for, from any
+  // thread. Set it before the first frame.
+  void SetDmabufReleaseCallback(std::function<void(uint32_t)> callback);
 
  private:
   enum class FrameType {
@@ -81,6 +91,12 @@ class RawFrameStreamer {
     // holding the pixels, and whether the client thread has taken the frame
     int slot = -1;
     bool slot_sent = false;
+    // DMA-BUF frames whose buffer the Wayland server holds until the client
+    // releases them: the frame id to release, 0 if the buffer was released
+    // at once, and whether the client thread has taken the frame (the hold
+    // then belongs to the client, ClientShm::held_dmabufs)
+    uint32_t hold_id = 0;
+    bool hold_taken = false;
   };
 
   // The memfd of frame slots shared with the client, unmapped and closed with
@@ -109,6 +125,10 @@ class RawFrameStreamer {
     // Survive CloseClientShm(), they belong to the connection
     bool client_releases_slots = false;
     uint32_t last_generation = 0;
+    // The client releases DMA-BUF frames (IKAB): their buffers are held until
+    // then, and IKAD carries their ids. The frames it holds, oldest first.
+    bool client_releases_dmabufs = false;
+    std::vector<uint32_t> held_dmabufs;
     // The display the client shows, from its hello (0 without one)
     uint32_t display_number = 0;
     // The client's window is hidden: frames are kept, not sent (IKAP)
@@ -157,7 +177,7 @@ class RawFrameStreamer {
   void ClientLoop(int client_fd);
   void StreamToClient(int client_fd, DisplayStream& display);
   bool SendAll(int fd, const void* data, size_t size);
-  bool SendDmabufFrame(int fd, const Frame& frame);
+  bool SendDmabufFrame(int fd, const Frame& frame, bool with_frame_id);
   bool SendRawFrame(int fd, const Frame& frame, DisplayStream& display);
   FrameSendResult SendShmInit(int fd, DisplayStream& display,
                               size_t payload_size);
@@ -177,9 +197,13 @@ class RawFrameStreamer {
   bool WaitForClientOrFrame(int client_fd, int wake_fd);
   Frame CopyLatestFrameLocked(DisplayStream& display);
   void CloseFrameFd(Frame& frame) const;
+  void ReleaseDmabufHold(uint32_t hold_id);
+  // The hold of a frame never taken by a client, if any, ends
+  void ReleaseLatestHoldLocked(DisplayStream& display);
   std::shared_ptr<std::vector<uint8_t>> AcquireRawBufferLocked(size_t size);
 
   std::string socket_path_;
+  std::function<void(uint32_t)> dmabuf_release_callback_;
   std::thread server_thread_;
   int server_fd_ = -1;
   // Only used by the server thread

@@ -13,6 +13,7 @@ cf_cc_library(
     deps = [
         "//cuttlefish/common/libs/utils:size_utils",
         "//cuttlefish/host/libs/config:cuttlefish_config",
+        "//cuttlefish/host/libs/wayland:wayland_server_callbacks",
         "@abseil-cpp//absl/log:check",
     ],
 )

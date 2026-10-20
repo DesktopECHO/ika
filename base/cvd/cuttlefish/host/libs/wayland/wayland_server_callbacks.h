@@ -33,3 +33,15 @@ struct DisplayDestroyedEvent {
 
 using DisplayEvent = std::variant<DisplayCreatedEvent, DisplayDestroyedEvent>;
 using DisplayEventCallback = std::function<void(const DisplayEvent&)>;
+
+// What the consumer of a dma-buf frame did with it.
+enum class DmabufFrameResult {
+  // Not taken: the frame is delivered another way (the pixels are copied).
+  kNotDelivered,
+  // Taken, and done with the buffer once the callback returns: the client's
+  // buffer is released at once.
+  kDelivered,
+  // Taken, and still in use after the callback returns: the client's buffer
+  // stays held until the consumer releases the frame by its id.
+  kHeld,
+};

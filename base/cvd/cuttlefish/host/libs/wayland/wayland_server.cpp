@@ -94,7 +94,10 @@ void WaylandServer::ServerLoop(int fd, bool frames_are_rgba) {
   }
   server_ready_cv_.notify_one();
 
+  server_state_->surfaces_.AttachEventLoop(
+      wl_display_get_event_loop(server_state_->display_));
   wl_display_run(server_state_->display_);
+  server_state_->surfaces_.DetachEventLoop();
   wl_display_destroy(server_state_->display_);
 }
 
@@ -109,6 +112,10 @@ void WaylandServer::SetDmabufFrameCallback(
 
 void WaylandServer::SetDisplayEventCallback(DisplayEventCallback callback) {
   server_state_->surfaces_.SetDisplayEventCallback(std::move(callback));
+}
+
+void WaylandServer::ReleaseDmabufFrame(uint32_t frame_id) {
+  server_state_->surfaces_.ReleaseDmabufFrame(frame_id);
 }
 
 }  // namespace wayland
