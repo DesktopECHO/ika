@@ -52,6 +52,7 @@ device/generic/goldfish patches/device-generic-goldfish.patch
 device/generic/goldfish patches/device-generic-goldfish-sensors-transport-compat.patch
 device/generic/goldfish patches/device-generic-goldfish-hwc3-guest-composer-rgba.patch
 device/generic/goldfish patches/device-generic-goldfish-hwc3-skip-unchanged-present.patch
+device/generic/goldfish patches/device-generic-goldfish-hwc3-compose-client-target.patch
 device/google/cuttlefish patches/device-google-cuttlefish.patch
 device/google/cuttlefish patches/device-google-cuttlefish-secure-user-adb.patch
 device/google/cuttlefish patches/device-google-cuttlefish-light-compat.patch
