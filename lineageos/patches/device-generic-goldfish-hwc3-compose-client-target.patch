@@ -1,0 +1,119 @@
+Patch summary:
+With every layer client composed (a desktop with an app window: its shadow
+and frame force SurfaceFlinger to compose everything itself), hwc3's host
+composer had no device layer and flushed SurfaceFlinger's client target to
+the display as it was. On virtio-gpu that buffer is guest rendered, and the
+host cannot name its layout (gfxstream: "Failed to get info: resource N
+missing args"), so crosvm read every frame back and copied it to the console
+instead of handing it over as a dma-buf: on an Apple Silicon host the
+console's frames cost crosvm a third of a core and scrcpy and ika_stream a
+sixth each while a window was open, and nothing at all with none. Now the
+client target is composed into the next swapchain image as a single
+full-display layer, as a mixed composition is, so the scanout is always a
+swapchain image, which gfxstream re-creates with an exportable DRM modifier
+when the VMM first exports it. The goldfish (non-virtio-gpu) path still
+posts the client target directly. The skip-unchanged-present check already
+keys on the client target buffer, so an unchanged picture is still skipped.
+
+--- a/hals/hwc3/HostFrameComposer.cpp
++++ b/hals/hwc3/HostFrameComposer.cpp
+@@ -231,6 +231,8 @@
+ 
+     displayInfo.lastComposition.clear();
+     displayInfo.hostDisplayId = hostDisplayId;
++    displayInfo.width = displayWidth;
++    displayInfo.height = displayHeight;
+     displayInfo.swapchain = DrmSwapchain::create(
+         static_cast<uint32_t>(displayWidth), static_cast<uint32_t>(displayHeight),
+         ::android::GraphicBuffer::USAGE_HW_COMPOSER | ::android::GraphicBuffer::USAGE_HW_RENDER,
+@@ -607,25 +609,33 @@
+         DEBUG_LOG("%s: presenting display:%" PRIu32 " with %d layers", __FUNCTION__, displayId,
+                   static_cast<int>(layers.size()));
+ 
+-        if (numLayer == 0) {
+-            ALOGV("%s display has no layers to compose, flushing client target buffer.",
+-                  __FUNCTION__);
+-
++        // With every layer client composed, the client target is the whole
++        // picture. On virtio-gpu it is still composed into the swapchain image
++        // rather than flushed to the display itself: the swapchain images are
++        // what the host can scan out as dma-bufs (gfxstream re-creates them
++        // with an exportable DRM modifier on first export), while the client
++        // target is a guest-rendered buffer whose layout the host cannot name,
++        // so flushing it made crosvm read every frame back and copy it.
++        bool composeClientTarget = false;
++        if (numLayer == 0) {
+             FencedBuffer& displayClientTarget = display->getClientTarget();
+-            if (displayClientTarget.getBuffer() != nullptr) {
++            if (displayClientTarget.getBuffer() == nullptr) {
++                ALOGV("%s display has no layers and no client target.", __FUNCTION__);
++                return HWC3::Error::None;
++            }
++            if (mIsMinigbm) {
++                ALOGV("%s display has no layers to compose, composing the client target.",
++                      __FUNCTION__);
++                composeClientTarget = true;
++                numLayer = 1;
++            } else {
++                ALOGV("%s display has no layers to compose, flushing client target buffer.",
++                      __FUNCTION__);
+                 ::android::base::unique_fd fence = displayClientTarget.getFence();
+-                if (mIsMinigbm) {
+-                    auto [_, flushCompleteFence] = mDrmClient->flushToDisplay(
+-                        displayId, displayInfo.clientTargetDrmBuffer, fence);
+-
+-                    *outDisplayFence = std::move(flushCompleteFence);
+-                } else {
+-                    post(hostCon, rcEnc, displayInfo.hostDisplayId,
+-                         displayClientTarget.getBuffer());
+-                    *outDisplayFence = std::move(fence);
+-                }
++                post(hostCon, rcEnc, displayInfo.hostDisplayId, displayClientTarget.getBuffer());
++                *outDisplayFence = std::move(fence);
++                return HWC3::Error::None;
+             }
+-            return HWC3::Error::None;
+         }
+ 
+         std::unique_ptr<ComposeMsg> composeMsg;
+@@ -716,6 +726,28 @@
+                 l->cbHandle, l->blendMode, l->alpha, l->displayFrame.left, l->displayFrame.top,
+                 l->displayFrame.right, l->displayFrame.bottom, layer->getZOrder(), l->composeMode,
+                 l->transform);
++            l++;
++        }
++
++        if (composeClientTarget) {
++            FencedBuffer& displayClientTarget = display->getClientTarget();
++            ::android::base::unique_fd fence = displayClientTarget.getFence();
++            if (fence.ok()) {
++                int err = sync_wait(fence.get(), 3000);
++                if (err < 0 && errno == ETIME) {
++                    ALOGE("%s waited on client target fence %d for 3000 ms", __FUNCTION__,
++                          fence.get());
++                }
++            }
++            l->cbHandle = hostCon->grallocHelper()->getHostHandle(displayClientTarget.getBuffer());
++            l->composeMode = HWC2_COMPOSITION_DEVICE;
++            l->displayFrame = {0, 0, displayInfo.width, displayInfo.height};
++            l->crop = {0.0f, 0.0f, static_cast<float>(displayInfo.width),
++                       static_cast<float>(displayInfo.height)};
++            l->blendMode = static_cast<int32_t>(common::BlendMode::NONE);
++            l->alpha = 1.0f;
++            l->color = {0, 0, 0, 0};
++            l->transform = static_cast<hwc_transform_t>(0);
+             l++;
+         }
+ 
+--- a/hals/hwc3/HostFrameComposer.h
++++ b/hals/hwc3/HostFrameComposer.h
+@@ -83,6 +83,9 @@
+ 
+     struct HostComposerDisplayInfo {
+         uint32_t hostDisplayId = 0;
++        // The display's size, the swapchain images' and the client target's
++        int32_t width = 0;
++        int32_t height = 0;
+         std::unique_ptr<DrmSwapchain> swapchain = {};
+         // Drm info for the displays client target buffer.
+         std::shared_ptr<DrmBuffer> clientTargetDrmBuffer;
