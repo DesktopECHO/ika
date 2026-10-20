@@ -4217,6 +4217,19 @@ append_scrcpy_env() {
       scrcpy_env_ref+=("GTK_THEME=Adwaita")
     fi
   fi
+
+  # The window follows the session: Wayland on a Wayland session, X11 on an
+  # X11 one. Left to itself, scrcpy's SDL opens an X11 window through
+  # Xwayland on a Wayland compositor without the fifo-v1 protocol (KWin
+  # before 6.4), and every frame then crosses Xwayland. A driver set in the
+  # environment is kept.
+  if [[ -z "${SDL_VIDEO_DRIVER:-}${SDL_VIDEODRIVER:-}" ]]; then
+    if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+      scrcpy_env_ref+=("SDL_VIDEO_DRIVER=wayland" "SDL_VIDEODRIVER=wayland")
+    elif [[ -n "${DISPLAY:-}" ]]; then
+      scrcpy_env_ref+=("SDL_VIDEO_DRIVER=x11" "SDL_VIDEODRIVER=x11")
+    fi
+  fi
 }
 
 start_scrcpy_with_retries() {

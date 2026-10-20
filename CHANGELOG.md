@@ -11,6 +11,13 @@
   `IKA_LOWCPU` and the `[lowcpu]` section of ika.ini (`mode`,
   `refresh_rate_hz`) set it.
 
+### Console window
+- The console and app windows are Wayland windows on a Wayland session and
+  X11 windows on an X11 session. scrcpy's SDL used to open an X11 window
+  through Xwayland on a Wayland compositor without the fifo-v1 protocol
+  (KWin before 6.4), which put Xwayland in the path of every frame; Ika now
+  sets SDL's video driver from the session unless `SDL_VIDEO_DRIVER` is set.
+
 ### Cuttlefish 1.58 (development)
 - The host tools are updated from upstream Cuttlefish main of 2026-06-16 to
   the 1.58.0 development head (google/android-cuttlefish 8bed5e228), about
