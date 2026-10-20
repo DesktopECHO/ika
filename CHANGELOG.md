@@ -129,6 +129,11 @@
 - LineageOS's "Tap to sleep" is off and no longer listed in Settings >
   Display. In Ika that gesture opened and closed the shade on a double tap of
   the status bar or the lock screen, so that double tap does nothing now.
+- `ika start` recovers from a host that crashed or lost power while the
+  VM was being assembled: it removes the empty or truncated
+  `cuttlefish_config.json` such a crash leaves behind, on which every
+  start failed with "Check failed: previous_config". The VM's disks and
+  data are kept.
 
 ## Ika 261016, changes since release 261012
 
