@@ -35,6 +35,16 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** `dwl_context_dispatch()` reads the Wayland connection only when data is waiting (`wl_display_prepare_read`, a zero-timeout `poll`, `wl_display_read_events`) and dispatches what is pending, instead of calling the blocking `wl_display_dispatch()`.
 - **Why:** The GPU worker dispatches display events once per wake when the display fd was readable, after handling the other events of that wake. A GPU control request in the same wake (adding or removing a display, as every Ika app window does) makes a `wl_display_roundtrip()` that reads and dispatches those events first, and `wl_display_dispatch()` then blocked the worker until the compositor (ika_stream) sent something, which it only does in reply to the worker. The guest's GPU requests stopped being processed: SurfaceFlinger froze, every later display request hung in crosvm's control loop, and crosvm did not exit when the guest rebooted.
 
+#### `PATCH.gpu_display-dmabuf-in-use.patch`
+- **Targets:** `gpu_display` crate. Files: `src/display_wl.c`, `src/dwl.rs`, `src/gpu_display_wl.rs`, `src/lib.rs`.
+- **What it does:** Adds `dwl_surface_dmabuf_in_use()`, `GpuDisplaySurface::import_in_use()` and `GpuDisplay::import_in_use()`: whether the compositor still uses an imported dma-buf other than the one on screen (its `in_use` flag, set by `dwl_surface_flip_to()` and cleared by the compositor's `wl_buffer.release`, which nothing read before). The surface remembers the import it last flipped to.
+- **Why:** `ika_stream` holds the buffer of a dma-buf frame until the console has released the frame (IKAB). The device needs to know, see the next patch. The buffer on screen is exempt because the guest may flush it again (a single-buffer scanout, or a redraw into it), which the compositor takes as the release of the earlier frame.
+
+#### `PATCH.crosvm-flush-held-dmabuf.patch`, `PATCH.crosvm-flush-held-dmabuf-devices.patch`
+- **Targets:** `crosvm_bin` (source tree, `devices/src/virtio/gpu/virtio_gpu.rs`) and the `devices` crate (`src/virtio/gpu/virtio_gpu.rs`), the same change with the two path prefixes.
+- **What it does:** `VirtioGpuScanout::flush()` drops a flush whose imported dma-buf the compositor still holds (`GpuDisplay::import_in_use()`), as the copy path already drops a frame whose `wl_shm` buffer is in use.
+- **Why:** With the hold, flipping to a held buffer would show the guest's next composition inside the frame the console is sampling. The guest's next flush, into another buffer of its swapchain, gets through; nothing waits.
+
 #### `PATCH.crosvm-resize-display.patch`
 - **Targets:** `crosvm_bin` and the source `git_repository`. File: `devices/src/virtio/gpu/virtio_gpu.rs`.
 - **What it does:** Adds `VirtioGpu::resize_display(display_id, DisplayParameters)` that updates an existing scanout's `width`, `height`, and stored `display_params`, then flips `scanouts_updated` so the GPU thread re-syncs.
@@ -118,10 +128,10 @@ See `crosvm.MODULE.bazel`. The relevant blocks:
 
 | Target | Patches |
 |---|---|
-| `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-composite-preserve-spec-fd`, `crosvm-gpu-2d-sandbox`, `crosvm-gpu-unref-shmem-mapping`, `crosvm-resize-display`, `crosvm-enable-vulkano-gralloc`, `minijail-sys_common_mk` |
+| `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-composite-preserve-spec-fd`, `crosvm-gpu-2d-sandbox`, `crosvm-gpu-unref-shmem-mapping`, `crosvm-resize-display`, `crosvm-flush-held-dmabuf`, `crosvm-enable-vulkano-gralloc`, `minijail-sys_common_mk` |
 | `crosvm_bin.annotation(crate = "disk")` | `disk-composite-preserve-spec-fd`, `disk-qcow-zero-clusters` |
 | `crosvm_bin.annotation(crate = "jail")` | `jail-aarch64-block-pread64`, `jail-gpu-host-graphics-libs-optional` |
-| `crosvm_bin.annotation(crate = "devices")` | `crosvm-resize-display-devices` |
+| `crosvm_bin.annotation(crate = "devices")` | `crosvm-resize-display-devices`, `crosvm-flush-held-dmabuf-devices` |
 | `crosvm_bin.annotation(crate = "rutabaga_gfx")` | `rutabaga_gfx_build_rs`, `rutabaga_gfx-gralloc-vulkano-fallback`, `rutabaga_gfx-cleanup-on-drop`, `rutabaga_gfx-gfxstream-3d-resource-info`, `rutabaga_gfx-on-demand-export-and-query` |
 | `crosvm_bin.annotation(crate = "minijail-sys")` | `minijail-sys_build_rs` |
 | `crosvm_bin.annotation(crate = "proto_build_tools")` | `proto_build_tools` |

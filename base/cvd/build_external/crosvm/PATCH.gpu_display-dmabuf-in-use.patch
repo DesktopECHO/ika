@@ -1,0 +1,112 @@
+Tell whether the compositor still uses an imported dma-buf.
+
+The Wayland display backend already tracks each imported dma-buf's in_use
+flag (set by dwl_surface_flip_to, cleared by the compositor's wl_buffer
+release) but nothing read it. Ika's compositor (ika_stream) holds the buffer
+of a dma-buf frame until the console has released the frame, so a scanout
+flushed into a buffer still in use would be shown while it is on screen.
+dwl_surface_dmabuf_in_use() reports that, except for the buffer the surface
+shows right now: the guest may flush the same buffer again (a single-buffer
+scanout, or a redraw into the buffer on screen), which supersedes the hold
+and must not be skipped forever. GpuDisplaySurface::import_in_use() and
+GpuDisplay::import_in_use() expose it to the virtio-gpu device.
+
+diff --git a/src/display_wl.c b/src/display_wl.c
+--- a/src/display_wl.c
++++ b/src/display_wl.c
+@@ -141,6 +141,8 @@ struct dwl_surface {
+ 	double scale;
+ 	bool close_requested;
+ 	size_t buffer_count;
++	// The dma-buf import last flipped to, 0 if none
++	uint32_t current_import_id;
+ 	uint64_t buffer_use_bit_mask;
+ 	struct wl_buffer *buffers[0];
+ };
+@@ -1250,6 +1252,17 @@ bool dwl_surface_buffer_in_use(struct dwl_surface *self, size_t buffer_index)
+ 	return (self->buffer_use_bit_mask & (1 << buffer_index)) != 0;
+ }
+ 
++bool dwl_surface_dmabuf_in_use(struct dwl_surface *self, uint32_t import_id)
++{
++	// Ika: the compositor holds the buffer of a frame while the console
++	// shows it. The buffer on screen may be flushed again: the compositor
++	// takes the new commit as the release of the old one.
++	struct dwl_dmabuf *dmabuf = dwl_context_get_dmabuf(self->context,
++							   import_id);
++	return dmabuf && dmabuf->in_use &&
++	       import_id != self->current_import_id;
++}
++
+ void dwl_surface_flip(struct dwl_surface *self, size_t buffer_index)
+ {
+ 	if (buffer_index >= self->buffer_count)
+@@ -1274,6 +1287,7 @@ void dwl_surface_flip_to(struct dwl_surface *self, uint32_t import_id)
+ 	wl_surface_damage(self->wl_surface, 0, 0, self->width, self->height);
+ 	dwl_surface_commit(self);
+ 	dmabuf->in_use = true;
++	self->current_import_id = import_id;
+ }
+ 
+ bool dwl_surface_close_requested(const struct dwl_surface *self)
+diff --git a/src/dwl.rs b/src/dwl.rs
+--- a/src/dwl.rs
++++ b/src/dwl.rs
+@@ -154,6 +154,9 @@ extern "C" {
+     pub fn dwl_surface_buffer_in_use(self_: *mut dwl_surface, buffer_index: usize) -> bool;
+ }
+ extern "C" {
++    pub fn dwl_surface_dmabuf_in_use(self_: *mut dwl_surface, import_id: u32) -> bool;
++}
++extern "C" {
+     pub fn dwl_surface_flip(self_: *mut dwl_surface, buffer_index: usize);
+ }
+ extern "C" {
+diff --git a/src/gpu_display_wl.rs b/src/gpu_display_wl.rs
+--- a/src/gpu_display_wl.rs
++++ b/src/gpu_display_wl.rs
+@@ -145,6 +145,12 @@ impl GpuDisplaySurface for WlSurface {
+         unsafe { dwl_surface_buffer_in_use(self.surface(), next_buffer_index) }
+     }
+ 
++    fn import_in_use(&self, import_id: u32) -> bool {
++        // SAFETY:
++        // Safe because only a valid surface and import_id is used.
++        unsafe { dwl_surface_dmabuf_in_use(self.surface(), import_id) }
++    }
++
+     fn close_requested(&self) -> bool {
+         // SAFETY:
+         // Safe because only a valid surface is used.
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -225,6 +225,12 @@ pub trait GpuDisplaySurface {
+         false
+     }
+ 
++    /// Returns true if the compositor still uses the identified imported buffer, other than the
++    /// one on screen: it was flipped to earlier and not released yet.
++    fn import_in_use(&self, _import_id: u32) -> bool {
++        false
++    }
++
+     /// Returns true if the surface should be closed.
+     fn close_requested(&self) -> bool {
+         false
+@@ -633,6 +639,15 @@ impl GpuDisplay {
+             .unwrap_or(false)
+     }
+ 
++    /// Returns true if the compositor still uses an imported buffer of the identified surface
++    /// that is not the one on screen: flipping to it would show the guest's drawing into it.
++    pub fn import_in_use(&self, surface_id: u32, import_id: u32) -> bool {
++        self.surfaces
++            .get(&surface_id)
++            .map(|s| s.import_in_use(import_id))
++            .unwrap_or(false)
++    }
++
+     /// Changes the visible contents of the identified surface to the contents of the framebuffer
+     /// last returned by `framebuffer_memory` for this surface.
+     pub fn flip(&mut self, surface_id: u32) {

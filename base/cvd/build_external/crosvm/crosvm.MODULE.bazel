@@ -78,6 +78,7 @@ crosvm_bin.annotation(
         "@//build_external/crosvm:PATCH.crosvm-gpu-2d-sandbox.patch",
         "@//build_external/crosvm:PATCH.crosvm-gpu-unref-shmem-mapping.patch",
         "@//build_external/crosvm:PATCH.crosvm-resize-display.patch",
+        "@//build_external/crosvm:PATCH.crosvm-flush-held-dmabuf.patch",
         "@//build_external/crosvm:PATCH.crosvm-enable-vulkano-gralloc.patch",
         "@//build_external/crosvm:PATCH.minijail-sys_common_mk.patch",
     ],
@@ -126,6 +127,9 @@ crosvm_bin.annotation(
     patch_args = ["-p1"],
     patches = [
         "@//build_external/crosvm:PATCH.gpu_display-nonblocking-dispatch.patch",
+        # Whether the compositor still holds an imported dma-buf (ika_stream
+        # holds the frame the console shows), for the virtio-gpu device.
+        "@//build_external/crosvm:PATCH.gpu_display-dmabuf-in-use.patch",
     ],
 )
 
@@ -157,6 +161,9 @@ crosvm_bin.annotation(
         # otherwise 1080p shows a green band and colors shifted up 16 lines.
         "@//build_external/crosvm:PATCH.crosvm-media-decoder-visible-size.patch",
         "@//build_external/crosvm:PATCH.crosvm-resize-display-devices.patch",
+        # A scanout flush into a dma-buf the compositor still holds is dropped
+        # instead of shown into the frame on screen.
+        "@//build_external/crosvm:PATCH.crosvm-flush-held-dmabuf-devices.patch",
     ],
 )
 
