@@ -13,14 +13,16 @@
 #include "opengl.h"
 
 // The guest's hwcomposer cycles through a few color buffers, so the DMA-BUFs
-// of consecutive frames are the same handful of buffers: keep their EGLImages
+// of consecutive frames are the same handful of buffers: keep their EGLImages.
+// An EGLImage keeps the DMA-BUF alive by itself, so the entries hold no frame:
+// each frame is released to the server as soon as it is no longer shown.
 #define SC_INTEROP_RAW_DMA_BUF_CACHE_SIZE 6
 
 /**
  * An imported DMA-BUF: its EGLImage, attached once to its own texture
  */
 struct sc_interop_raw_dma_buf {
-    AVFrame *frame; // NULL if the entry is free; keeps a fd of the DMA-BUF open
+    bool used; // false if the entry is free
 
     // The DMA-BUF is identified by the inode of its fd
     dev_t dev;

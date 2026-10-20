@@ -65,7 +65,7 @@ sc_interop_raw_get_opaque_drm_format(uint32_t fourcc) {
 static void
 sc_interop_raw_release_dma_buf(struct sc_interop_raw *raw,
                                struct sc_interop_raw_dma_buf *entry) {
-    assert(entry->frame);
+    assert(entry->used);
     if (raw->interop.texture == entry->texture) {
         // The entry on screen is dropped
         raw->interop.texture = NULL;
@@ -74,14 +74,14 @@ sc_interop_raw_release_dma_buf(struct sc_interop_raw *raw,
     entry->image = EGL_NO_IMAGE_KHR;
     SDL_DestroyTexture(entry->texture);
     entry->texture = NULL;
-    av_frame_free(&entry->frame);
+    entry->used = false;
 }
 
 static void
 sc_interop_raw_clear_dma_bufs(struct sc_interop_raw *raw) {
     for (size_t i = 0; i < ARRAY_LEN(raw->dma_bufs); ++i) {
         struct sc_interop_raw_dma_buf *entry = &raw->dma_bufs[i];
-        if (entry->frame) {
+        if (entry->used) {
             sc_interop_raw_release_dma_buf(raw, entry);
         }
     }
@@ -150,7 +150,7 @@ static struct sc_interop_raw_dma_buf *
 sc_interop_raw_find_dma_buf(struct sc_interop_raw *raw, dev_t dev, ino_t ino) {
     for (size_t i = 0; i < ARRAY_LEN(raw->dma_bufs); ++i) {
         struct sc_interop_raw_dma_buf *entry = &raw->dma_bufs[i];
-        if (entry->frame && entry->dev == dev && entry->ino == ino) {
+        if (entry->used && entry->dev == dev && entry->ino == ino) {
             return entry;
         }
     }
@@ -163,7 +163,7 @@ sc_interop_raw_get_free_dma_buf(struct sc_interop_raw *raw) {
     struct sc_interop_raw_dma_buf *lru = NULL;
     for (size_t i = 0; i < ARRAY_LEN(raw->dma_bufs); ++i) {
         struct sc_interop_raw_dma_buf *entry = &raw->dma_bufs[i];
-        if (!entry->frame) {
+        if (!entry->used) {
             return entry;
         }
         if (!lru || entry->last_use < lru->last_use) {
@@ -185,7 +185,7 @@ sc_interop_raw_create_dma_buf(struct sc_interop_raw *raw,
                               const AVFrame *frame, dev_t dev, ino_t ino,
                               uint32_t drm_format,
                               const struct sc_egl_dma_buf_plane *plane) {
-    assert(!entry->frame);
+    assert(!entry->used);
 
     // The EGLImage replaces the texture storage, the format only tells SDL to
     // sample it without swizzling
@@ -237,13 +237,9 @@ sc_interop_raw_create_dma_buf(struct sc_interop_raw *raw,
         goto error_destroy_image;
     }
 
-    AVFrame *ref = av_frame_clone(frame);
-    if (!ref) {
-        LOG_OOM();
-        goto error_destroy_image;
-    }
-
-    entry->frame = ref;
+    // The EGLImage keeps its own reference to the DMA-BUF: the frame (and its
+    // fd) can go, which lets the server know the frame is no longer shown
+    entry->used = true;
     entry->dev = dev;
     entry->ino = ino;
     entry->drm_format = drm_format;
@@ -330,7 +326,7 @@ sc_interop_raw_import_dma_buf(struct sc_interop_raw *raw,
         // alive (the fds pin their memory)
         for (size_t i = 0; i < ARRAY_LEN(raw->dma_bufs); ++i) {
             struct sc_interop_raw_dma_buf *old = &raw->dma_bufs[i];
-            if (old->frame && (old->width != frame->width
+            if (old->used && (old->width != frame->width
                                || old->height != frame->height)) {
                 sc_interop_raw_release_dma_buf(raw, old);
             }
@@ -354,7 +350,7 @@ sc_interop_raw_import_dma_buf(struct sc_interop_raw *raw,
     if (imports % SC_INTEROP_RAW_DMA_BUF_STATS_PERIOD == 0) {
         unsigned cached = 0;
         for (size_t i = 0; i < ARRAY_LEN(raw->dma_bufs); ++i) {
-            cached += raw->dma_bufs[i].frame != NULL;
+            cached += raw->dma_bufs[i].used;
         }
         LOGD("DMA-BUF cache: %" PRIu64 " hits, %" PRIu64 " misses, "
              "%u buffers cached", raw->dma_buf_hits, raw->dma_buf_misses,
