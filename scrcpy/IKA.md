@@ -32,9 +32,9 @@ fd of one of them). The interop identifies a DMA-BUF by the inode of its fd
 (`fstat`, unique per DMA-BUF for its lifetime) and keeps up to 6 of them
 imported, each as an `EGLImage` attached once to its own SDL texture: a frame
 of a known buffer only switches the texture shown, with no EGL or GL call.
-Each entry keeps a reference to its frame, so its fd holds the buffer alive
-while it is cached. A buffer that comes back with another layout is
-reimported, buffers of another size than the current frame are dropped, the
+The `EGLImage` keeps the buffer alive by itself, so an entry holds no frame:
+the frame's fd is closed, and its `IKAB` sent, as soon as the frame is no
+longer shown. A buffer that comes back with another layout is reimported, buffers of another size than the current frame are dropped, the
 least recently used entry is evicted when the cache is full, and a reset of
 the texture (`sc_texture_reset()`) drops them all. With `-V debug`, every
 import is logged, and the hit/miss counts every 1000 frames.
