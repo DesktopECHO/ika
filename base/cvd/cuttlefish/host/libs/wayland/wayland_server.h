@@ -57,6 +57,10 @@ class WaylandServer {
 
   void SetDisplayEventCallback(DisplayEventCallback callback);
 
+  // Releases the client's buffer of a dma-buf frame that the frame callback
+  // kept (DmabufFrameResult::kHeld). Callable from any thread.
+  void ReleaseDmabufFrame(uint32_t frame_id);
+
  private:
   void ServerLoop(int wayland_socket_fd, bool wayland_frames_are_rgba);
 

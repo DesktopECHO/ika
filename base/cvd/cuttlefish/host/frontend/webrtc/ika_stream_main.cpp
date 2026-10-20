@@ -113,12 +113,17 @@ int RawFrameStreamerMain(int argc, char** argv) {
                     uint32_t frame_height, uint32_t frame_fourcc_format,
                     int dmabuf_fd, uint32_t frame_offset,
                     uint32_t frame_stride_bytes, uint32_t modifier_hi,
-                    uint32_t modifier_lo) {
+                    uint32_t modifier_lo, uint32_t frame_id) {
         return ika_stream.OnDmabufFrame(
             display_number, frame_width, frame_height, frame_fourcc_format,
             dmabuf_fd, frame_offset, frame_stride_bytes, modifier_hi,
-            modifier_lo);
+            modifier_lo, frame_id);
       });
+  // The frames a console holds keep their buffers from the guest until the
+  // console has released them
+  ika_stream.SetDmabufReleaseCallback([&screen_connector](uint32_t frame_id) {
+    screen_connector.ReleaseDmabufFrame(frame_id);
+  });
 
   SleepForever();
 }

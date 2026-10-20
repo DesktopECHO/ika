@@ -21,6 +21,8 @@
 #include <functional>
 #include <type_traits>
 
+#include "cuttlefish/host/libs/wayland/wayland_server_callbacks.h"
+
 namespace cuttlefish {
 
 template <typename T>
@@ -39,16 +41,20 @@ using GenerateProcessedFrameCallbackImpl =
                        uint32_t /*frame_stride_bytes*/,   //
                        uint8_t* /*frame_pixels*/)>;
 
+// The frame id identifies a frame kept (DmabufFrameResult::kHeld) for the
+// release of its buffer, WaylandScreenConnector::ReleaseDmabufFrame().
 using GenerateDmabufFrameCallbackImpl =
-    std::function<bool(uint32_t /*display_number*/,       //
-                       uint32_t /*frame_width*/,          //
-                       uint32_t /*frame_height*/,         //
-                       uint32_t /*frame_fourcc_format*/,  //
-                       int /*dmabuf_fd*/,                 //
-                       uint32_t /*frame_offset*/,         //
-                       uint32_t /*frame_stride_bytes*/,   //
-                       uint32_t /*modifier_hi*/,          //
-                       uint32_t /*modifier_lo*/)>;
+    std::function<DmabufFrameResult(
+        uint32_t /*display_number*/,       //
+        uint32_t /*frame_width*/,          //
+        uint32_t /*frame_height*/,         //
+        uint32_t /*frame_fourcc_format*/,  //
+        int /*dmabuf_fd*/,                 //
+        uint32_t /*frame_offset*/,         //
+        uint32_t /*frame_stride_bytes*/,   //
+        uint32_t /*modifier_hi*/,          //
+        uint32_t /*modifier_lo*/,          //
+        uint32_t /*frame_id*/)>;
 
 namespace ScreenConnectorInfo {
 

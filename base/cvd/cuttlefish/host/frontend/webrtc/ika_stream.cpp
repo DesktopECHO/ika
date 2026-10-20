@@ -44,6 +44,8 @@ constexpr uint32_t kRawFrameMagic = 0x46414b49;  // "IKAF", little-endian.
 constexpr uint32_t kRawFrameVersion = 1;
 constexpr uint32_t kDmabufFrameMagic = 0x44414b49;  // "IKAD", little-endian.
 constexpr uint32_t kDmabufFrameVersion = 1;
+// IKAD with a frame id, for clients that release DMA-BUF frames (IKAB)
+constexpr uint32_t kDmabufFrameIdVersion = 2;
 constexpr uint32_t kShmInitMagic = 0x53414b49;    // "IKAS", little-endian.
 constexpr uint32_t kShmNotifyMagic = 0x4e414b49;  // "IKAN", little-endian.
 constexpr uint32_t kShmFrameVersion = 1;
@@ -53,6 +55,12 @@ constexpr uint32_t kShmReleaseVersion = 2;
 constexpr uint32_t kClientHelloMagic = 0x48414b49;   // "IKAH", little-endian.
 constexpr uint32_t kSlotReleaseMagic = 0x52414b49;   // "IKAR", little-endian.
 constexpr uint32_t kClientPauseMagic = 0x50414b49;   // "IKAP", little-endian.
+constexpr uint32_t kDmabufReleaseMagic = 0x42414b49;  // "IKAB", little-endian.
+// IKAH whose arg0 is a bitmask of what the client releases, sent after the
+// version 2 hello (which older servers need exactly as it is)
+constexpr uint32_t kClientHelloFlagsVersion = 3;
+constexpr uint32_t kHelloReleasesSlots = 1u << 0;
+constexpr uint32_t kHelloReleasesDmabufs = 1u << 1;
 constexpr int kClientHelloTimeoutMs = 100;
 constexpr int kListenBacklog = 4;
 constexpr size_t kRawBufferPoolSize = 4;
@@ -79,6 +87,12 @@ struct DmabufFrameHeader {
   uint32_t modifier_lo;
 };
 
+// IKAD version 2
+struct DmabufFrameIdHeader {
+  DmabufFrameHeader frame;
+  uint32_t frame_id;
+};
+
 struct ShmInitHeader {
   uint32_t magic;
   uint32_t version;
@@ -95,8 +109,10 @@ struct ShmInitReleaseHeader {
 };
 
 // Sent by the client: IKAH (arg0 = 1 if it releases slots, arg1 = the display
-// it shows) on connection, then IKAR (arg0 = generation, arg1 = slot index),
-// and IKAP (arg0 = 1 while its window is hidden, 0 when shown again)
+// it shows) on connection, with IKAH version 3 (arg0 = kHelloReleases* bits)
+// if it releases more, then IKAR (arg0 = generation, arg1 = slot index), IKAB
+// (arg0 = the id of a DMA-BUF frame it no longer uses) and IKAP (arg0 = 1
+// while its window is hidden, 0 when shown again)
 struct ClientMessage {
   uint32_t magic;
   uint32_t version;
@@ -386,6 +402,8 @@ void RawFrameStreamer::ReplaceLatestFrameLocked(DisplayStream& display,
       latest_frame.slot != frame.slot) {
     display.shm.busy_slots &= ~(1u << latest_frame.slot);
   }
+  // So is the buffer of a DMA-BUF frame never sent
+  ReleaseLatestHoldLocked(display);
   CloseFrameFd(latest_frame);
   latest_frame = std::move(frame);
 }
@@ -396,20 +414,38 @@ void RawFrameStreamer::FrameChangedLocked(DisplayStream& display) {
   SignalWakeFd(display.wake_fd);
 }
 
-bool RawFrameStreamer::OnDmabufFrame(uint32_t display_number, uint32_t width,
-                                     uint32_t height, uint32_t fourcc,
-                                     int dmabuf_fd, uint32_t offset,
-                                     uint32_t stride_bytes,
-                                     uint32_t modifier_hi,
-                                     uint32_t modifier_lo) {
+void RawFrameStreamer::SetDmabufReleaseCallback(
+    std::function<void(uint32_t)> callback) {
+  dmabuf_release_callback_ = std::move(callback);
+}
+
+void RawFrameStreamer::ReleaseDmabufHold(uint32_t hold_id) {
+  if (hold_id != 0 && dmabuf_release_callback_) {
+    dmabuf_release_callback_(hold_id);
+  }
+}
+
+void RawFrameStreamer::ReleaseLatestHoldLocked(DisplayStream& display) {
+  Frame& latest_frame = display.latest_frame;
+  if (latest_frame.hold_id != 0 && !latest_frame.hold_taken) {
+    ReleaseDmabufHold(latest_frame.hold_id);
+  }
+  latest_frame.hold_id = 0;
+  latest_frame.hold_taken = false;
+}
+
+DmabufFrameResult RawFrameStreamer::OnDmabufFrame(
+    uint32_t display_number, uint32_t width, uint32_t height, uint32_t fourcc,
+    int dmabuf_fd, uint32_t offset, uint32_t stride_bytes,
+    uint32_t modifier_hi, uint32_t modifier_lo, uint32_t frame_id) {
   if (width == 0 || height == 0 || stride_bytes == 0 || dmabuf_fd < 0) {
-    return false;
+    return DmabufFrameResult::kNotDelivered;
   }
 
   int duplicated_fd = fcntl(dmabuf_fd, F_DUPFD_CLOEXEC, 3);
   if (duplicated_fd < 0) {
     PLOG(WARNING) << "Failed to duplicate DMA-BUF fd";
-    return false;
+    return DmabufFrameResult::kNotDelivered;
   }
 
   Frame frame;
@@ -438,6 +474,7 @@ bool RawFrameStreamer::OnDmabufFrame(uint32_t display_number, uint32_t width,
       .modifier_hi = modifier_hi,
       .modifier_lo = modifier_lo,
   };
+  bool held = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     DisplayStream& display = GetDisplayLocked(display_number);
@@ -455,11 +492,19 @@ bool RawFrameStreamer::OnDmabufFrame(uint32_t display_number, uint32_t width,
       LOG(INFO) << "Display " << display_number
                 << " frames arrive as DMA-BUFs: " << description.str();
     }
+    // The buffer is held only for a client that will release it: a paused
+    // client gets the frame later, if at all, and must not keep the guest
+    // from drawing meanwhile
+    held = display.client_fd >= 0 && display.shm.client_releases_dmabufs &&
+           !display.shm.paused && frame_id != 0;
+    if (held) {
+      frame.hold_id = frame_id;
+    }
     ReplaceLatestFrameLocked(display, std::move(frame));
     display.suppress_next_raw = true;
     FrameChangedLocked(display);
   }
-  return true;
+  return held ? DmabufFrameResult::kHeld : DmabufFrameResult::kDelivered;
 }
 
 void RawFrameStreamer::ServerLoop() {
@@ -752,7 +797,17 @@ void RawFrameStreamer::StreamToClient(int client_fd, DisplayStream& display) {
     } else if (frame.type == FrameType::kRaw) {
       ok = SendRawFrame(client_fd, frame, display);
     } else {
-      ok = SendDmabufFrame(client_fd, frame);
+      ok = SendDmabufFrame(client_fd, frame,
+                           display.shm.client_releases_dmabufs);
+      if (frame.hold_id != 0) {
+        if (ok) {
+          // The client holds it until its IKAB, or until it leaves
+          std::lock_guard<std::mutex> lock(mutex_);
+          display.shm.held_dmabufs.push_back(frame.hold_id);
+        } else {
+          ReleaseDmabufHold(frame.hold_id);
+        }
+      }
     }
     CloseFrameFd(frame);
     if (!ok) {
@@ -763,6 +818,13 @@ void RawFrameStreamer::StreamToClient(int client_fd, DisplayStream& display) {
 
 void RawFrameStreamer::EndClientLocked(DisplayStream& display) {
   DetachLatestFrameFromShmLocked(display);
+  // The client releases nothing anymore: its buffers go back to the guest,
+  // and the next client gets the latest frame without a hold
+  for (uint32_t hold_id : display.shm.held_dmabufs) {
+    ReleaseDmabufHold(hold_id);
+  }
+  display.shm.held_dmabufs.clear();
+  ReleaseLatestHoldLocked(display);
   CloseClientShm(display.shm);
 }
 
@@ -984,13 +1046,28 @@ bool RawFrameStreamer::ReadClientMessages(int fd, ClientShm& shm) {
 
     ClientMessage message;
     memcpy(&message, shm.message, sizeof(message));
-    if (message.version != kShmReleaseVersion) {
+    const bool hello_flags = message.magic == kClientHelloMagic &&
+                             message.version == kClientHelloFlagsVersion;
+    if (message.version != kShmReleaseVersion && !hello_flags) {
       continue;
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    if (message.magic == kClientHelloMagic) {
+    if (hello_flags) {
+      shm.client_releases_slots =
+          (message.arg0 & kHelloReleasesSlots) != 0;
+      shm.client_releases_dmabufs =
+          (message.arg0 & kHelloReleasesDmabufs) != 0;
+      shm.display_number = message.arg1;
+    } else if (message.magic == kClientHelloMagic) {
       shm.client_releases_slots = message.arg0 == 1;
       shm.display_number = message.arg1;
+    } else if (message.magic == kDmabufReleaseMagic) {
+      auto& held = shm.held_dmabufs;
+      auto it = std::find(held.begin(), held.end(), message.arg0);
+      if (it != held.end()) {
+        held.erase(it);
+        ReleaseDmabufHold(message.arg0);
+      }
     } else if (message.magic == kClientPauseMagic) {
       shm.paused = message.arg0 == 1;
       LOG(INFO) << "Raw frame client of display " << shm.display_number
@@ -1042,27 +1119,36 @@ bool RawFrameStreamer::AcquireShmSlot(int fd, ClientShm& shm,
   }
 }
 
-bool RawFrameStreamer::SendDmabufFrame(int fd, const Frame& frame) {
+bool RawFrameStreamer::SendDmabufFrame(int fd, const Frame& frame,
+                                       bool with_frame_id) {
   if (frame.dmabuf_fd < 0) {
     return false;
   }
 
-  DmabufFrameHeader header = {
-      .magic = kDmabufFrameMagic,
-      .version = kDmabufFrameVersion,
-      .display_number = frame.header.display_number,
-      .width = frame.header.width,
-      .height = frame.header.height,
-      .fourcc = frame.header.fourcc,
-      .offset = frame.offset,
-      .stride_bytes = frame.header.stride_bytes,
-      .modifier_hi = frame.modifier_hi,
-      .modifier_lo = frame.modifier_lo,
+  // Only a client that asked for frame ids knows the longer header
+  DmabufFrameIdHeader header = {
+      .frame =
+          {
+              .magic = kDmabufFrameMagic,
+              .version = with_frame_id ? kDmabufFrameIdVersion
+                                       : kDmabufFrameVersion,
+              .display_number = frame.header.display_number,
+              .width = frame.header.width,
+              .height = frame.header.height,
+              .fourcc = frame.header.fourcc,
+              .offset = frame.offset,
+              .stride_bytes = frame.header.stride_bytes,
+              .modifier_hi = frame.modifier_hi,
+              .modifier_lo = frame.modifier_lo,
+          },
+      .frame_id = frame.hold_id,
   };
+  const size_t header_size =
+      with_frame_id ? sizeof(DmabufFrameIdHeader) : sizeof(DmabufFrameHeader);
 
   iovec iov = {};
   iov.iov_base = &header;
-  iov.iov_len = sizeof(header);
+  iov.iov_len = header_size;
 
   alignas(struct cmsghdr) char control[CMSG_SPACE(sizeof(int))] = {};
   msghdr msg = {};
@@ -1077,7 +1163,7 @@ bool RawFrameStreamer::SendDmabufFrame(int fd, const Frame& frame) {
   cmsg->cmsg_len = CMSG_LEN(sizeof(int));
   memcpy(CMSG_DATA(cmsg), &frame.dmabuf_fd, sizeof(int));
 
-  return SendMessageWithDeadline(fd, &msg, sizeof(header));
+  return SendMessageWithDeadline(fd, &msg, header_size);
 }
 
 // Drop the slots. A copy in flight in OnFrame() keeps the mapping until it is
@@ -1105,6 +1191,11 @@ RawFrameStreamer::Frame RawFrameStreamer::CopyLatestFrameLocked(
   frame.slot = latest_frame.slot;
   if (latest_frame.slot >= 0) {
     latest_frame.slot_sent = true;
+  }
+  // And the DMA-BUF's buffer likewise
+  if (latest_frame.hold_id != 0 && !latest_frame.hold_taken) {
+    frame.hold_id = latest_frame.hold_id;
+    latest_frame.hold_taken = true;
   }
   if (latest_frame.dmabuf_fd >= 0) {
     frame.dmabuf_fd = fcntl(latest_frame.dmabuf_fd, F_DUPFD_CLOEXEC, 3);

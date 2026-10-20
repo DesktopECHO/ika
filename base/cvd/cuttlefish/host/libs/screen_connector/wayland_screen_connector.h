@@ -38,6 +38,9 @@ class WaylandScreenConnector {
 
   void SetDisplayEventCallback(DisplayEventCallback event_callback);
 
+  // Releases the buffer of a dma-buf frame the callback kept. Any thread.
+  void ReleaseDmabufFrame(uint32_t frame_id);
+
  private:
   std::unique_ptr<wayland::WaylandServer> server_;
 };

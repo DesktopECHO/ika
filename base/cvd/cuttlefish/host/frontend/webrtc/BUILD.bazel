@@ -268,7 +268,10 @@ cf_cc_library(
     name = "libcuttlefish_webrtc_ika_stream",
     srcs = ["ika_stream.cpp"],
     hdrs = ["ika_stream.h"],
-    deps = ["@abseil-cpp//absl/log"],
+    deps = [
+        "//cuttlefish/host/libs/wayland:wayland_server_callbacks",
+        "@abseil-cpp//absl/log",
+    ],
 )
 
 cf_cc_binary(
