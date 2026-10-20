@@ -6234,14 +6234,21 @@ app_menu_watcher_cleanup() {
   fi
 }
 
+# Seconds after Android completes a boot before the app menu watcher syncs:
+# the app list is served by scrcpy's server in the guest, which cannot connect
+# while Android runs its boot-completed work.
+APP_MENU_BOOT_GRACE_SEC=10
+
 # Keeps the desktop menu in sync while the VM runs: syncs once the guest has
-# booted, then whenever its packages change. Polling one package listing costs
-# a few tens of milliseconds and needs nothing running in the guest. Exits
-# when the VM stops or the menu is removed with 'ika app sync --remove'.
+# booted and settled, then whenever its packages change. Polling one package
+# listing costs a few tens of milliseconds and needs nothing running in the
+# guest. Exits when the VM stops or the menu is removed with
+# 'ika app sync --remove'.
 run_app_menu_watcher() {
   local adb_serial
   local fingerprint
   local synced=""
+  local booted_at=""
   local watcher_lock_fd
 
   exec {watcher_lock_fd}>"${APP_MENU_WATCHER_LOCK_FILE}"
@@ -6249,6 +6256,10 @@ run_app_menu_watcher() {
   printf '%s\n' "$$" > "${APP_MENU_WATCHER_PID_FILE}"
   trap 'exit 0' INT TERM HUP
   trap app_menu_watcher_cleanup EXIT
+  # A failed sync is logged and retried, never reported as a notification:
+  # the watcher inherits IKA_NOTIFY from the menu launcher's 'ika start', and
+  # its failures (a guest that stops answering) are the log's business.
+  IKA_NOTIFY=false
 
   adb_serial="$(resolve_adb_serial)"
   log "app menu watcher started"
@@ -6256,7 +6267,15 @@ run_app_menu_watcher() {
     # The adb calls go without the watcher's lock, like the sync below: one
     # may start the adb server, which would otherwise keep the lock after this
     # watcher exits and stop every later one from starting.
-    if ( exec {watcher_lock_fd}>&-; adb_boot_completed "${adb_serial}" ) \
+    if ! ( exec {watcher_lock_fd}>&-; adb_boot_completed "${adb_serial}" ); then
+      # Not booted, or restarting: a mode switch restarts Android with other
+      # packages, and the sync waits for the new boot to settle.
+      booted_at=""
+    elif [[ -z "${booted_at}" ]]; then
+      booted_at="${SECONDS}"
+    fi
+    if [[ -n "${booted_at}" ]] \
+        && (( SECONDS - booted_at >= APP_MENU_BOOT_GRACE_SEC )) \
         && fingerprint="$(exec {watcher_lock_fd}>&-; guest_package_fingerprint "${adb_serial}")" \
         && [[ "${fingerprint}" != "${synced}" ]]; then
       if [[ -n "${synced}" ]]; then
