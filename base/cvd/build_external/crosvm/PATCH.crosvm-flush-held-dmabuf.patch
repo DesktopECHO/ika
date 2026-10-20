@@ -1,0 +1,26 @@
+Skip a scanout flush into a dma-buf the compositor still holds.
+
+Ika's compositor (ika_stream) holds the buffer of a dma-buf frame until the
+console has released the frame. Flipping the scanout to a buffer still held
+would show the guest's next composition in the frame on screen, so the flush
+is dropped instead, as the copy path already drops a frame whose buffer the
+compositor has not released: the guest's next flush, into another buffer of
+its swapchain, gets through. The buffer on screen is exempt (see
+dwl_surface_dmabuf_in_use), so a single-buffer scanout keeps updating.
+
+diff --git a/devices/src/virtio/gpu/virtio_gpu.rs b/devices/src/virtio/gpu/virtio_gpu.rs
+--- a/devices/src/virtio/gpu/virtio_gpu.rs
++++ b/devices/src/virtio/gpu/virtio_gpu.rs
+@@ -413,6 +413,12 @@ impl VirtioGpuScanout {
+         if let Some(import_id) =
+             VirtioGpuScanout::import_resource_to_display(display, surface_id, resource, rutabaga)
+         {
++            // Ika: the compositor holds the buffer of a frame while the console shows it. Drop
++            // this flush rather than show the guest drawing into that frame; the next flush
++            // comes in another buffer.
++            if display.borrow().import_in_use(surface_id, import_id) {
++                return Ok(OkNoData);
++            }
+             display
+                 .borrow_mut()
+                 .flip_to(surface_id, import_id, None, None, None)
