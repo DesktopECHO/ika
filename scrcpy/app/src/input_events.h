@@ -415,6 +415,8 @@ struct sc_touch_event {
 
 struct sc_gamepad_device_event {
     uint32_t gamepad_id;
+    // NULL: the name of the SDL gamepad with this id
+    const char *name;
 };
 
 struct sc_gamepad_button_event {

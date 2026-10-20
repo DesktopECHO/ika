@@ -130,6 +130,7 @@ const struct scrcpy_options scrcpy_options_default = {
     .flex_display_dpi = 0,
     .window_state_file = NULL,
     .ika_game_session = false,
+    .keyboard_gamepad = NULL,
 };
 
 enum sc_orientation

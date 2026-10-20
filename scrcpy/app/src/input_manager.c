@@ -1,5 +1,7 @@
 #include "input_manager.h"
 
+#include "ika/keyboard_gamepad.h"
+
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +30,7 @@ sc_input_manager_init(struct sc_input_manager *im,
     im->kp = params->kp;
     im->mp = params->mp;
     im->gp = params->gp;
+    im->kg = params->kg;
     im->camera = params->camera;
 
     im->mouse_bindings = params->mouse_bindings;
@@ -450,6 +453,14 @@ sc_input_manager_process_key(struct sc_input_manager *im,
         }
     }
 
+    // Ika: the release of a held gamepad key reaches the gamepad before the
+    // shortcuts and the modifier check, whatever modifier is down by now,
+    // so that a modifier pressed meanwhile (or Alt+Tab, which releases the
+    // keys with Alt still down) cannot leave the button pressed on the device
+    if (im->kg && !down && sc_keyboard_gamepad_handle_key(im->kg, event)) {
+        return;
+    }
+
     // Shortcuts that do not involve the MOD key
     switch (sdl_keycode) {
         case SDLK_F11:
@@ -671,6 +682,12 @@ sc_input_manager_process_key(struct sc_input_manager *im,
             }
         }
 
+        return;
+    }
+
+    // Ika: a key of the keyboard gamepad drives the gamepad instead of typing
+    if (im->kg && control && !paused && !disconnected
+            && sc_keyboard_gamepad_handle_key(im->kg, event)) {
         return;
     }
 

@@ -378,6 +378,8 @@ struct scrcpy_options {
     uint16_t flex_display_dpi; // density of the resized main display, 0 to keep
     const char *window_state_file;
     bool ika_game_session;
+    // Ika: NULL (no keyboard gamepad), "" (default keys) or a spec
+    const char *keyboard_gamepad;
 };
 
 extern const struct scrcpy_options scrcpy_options_default;
