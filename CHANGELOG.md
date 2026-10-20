@@ -123,6 +123,11 @@
 - Switching back to the desktop turns off any TV launcher from Google Play
   chosen in TV mode, not only Catapult. The Desktop/TV icon has as much
   white around its art as the other apps' icons, at any size.
+- Switching between the desktop and TV mode no longer shows a "could not
+  list apps from the Android virtual device" notification: the app menu
+  watcher, started by the Ika launcher, waits 10 seconds after Android
+  boots before it syncs the menu, and retries a sync that fails instead of
+  reporting it.
 - Dragging an app window's title bar to the top edge of the desktop takes
   the app out of the desktop, fullscreen on the console, instead of
   maximizing it; the maximize button still fills the desktop.
