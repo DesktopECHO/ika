@@ -26,6 +26,19 @@ Frames become `AVFrame`s: packed RGB, or `AV_PIX_FMT_DRM_PRIME` for DMA-BUFs.
 `app/src/interop/interop_raw.c` uploads the former and imports the latter
 through EGL. Alpha is ignored.
 
+The guest's hwcomposer cycles through a few color buffers, so the DMA-BUFs of
+consecutive frames are the same handful of buffers (each `IKAD` carries a new
+fd of one of them). The interop identifies a DMA-BUF by the inode of its fd
+(`fstat`, unique per DMA-BUF for its lifetime) and keeps up to 6 of them
+imported, each as an `EGLImage` attached once to its own SDL texture: a frame
+of a known buffer only switches the texture shown, with no EGL or GL call.
+Each entry keeps a reference to its frame, so its fd holds the buffer alive
+while it is cached. A buffer that comes back with another layout is
+reimported, buffers of another size than the current frame are dropped, the
+least recently used entry is evicted when the cache is full, and a reset of
+the texture (`sc_texture_reset()`) drops them all. With `-V debug`, every
+import is logged, and the hit/miss counts every 1000 frames.
+
 The client sends `IKAH` (version 2) on connection, with the display it shows.
 A server that knows it sends `IKAS` version 2, with a generation: the frames
 then point into the slots without a copy, and the client sends `IKAR`
