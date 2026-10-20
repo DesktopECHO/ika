@@ -13,8 +13,15 @@ host-visible or multi-planar buffers, and where the driver has no exportable
 modifier; those keep the implicit layout (RADV) or stay on readback. The GL
 export reports the modifier EGL returns.
 
+A guest image bound to the memory through VkNativeBufferANDROID (the gralloc
+path, which does not go through getColorBufferAllocationInfoLocked) marks the
+ColorBuffer guest bound too, so its memory is never replaced under the guest;
+and a guest image bound to a ColorBuffer already re-created for scanout is
+created with the same explicit modifier and plane layout, as DRM format
+modifier tiling requires, so it reads the memory as the host does.
+
 diff --git a/host/color_buffer.cpp b/host/color_buffer.cpp
-index ba01ebcd..807e439d 100644
+index ba01ebcd3..807e439db 100644
 --- a/host/color_buffer.cpp
 +++ b/host/color_buffer.cpp
 @@ -84,7 +84,8 @@ class ColorBuffer::Impl : public LazySnapshotObj<ColorBuffer::Impl> {
@@ -68,7 +75,7 @@ index ba01ebcd..807e439d 100644
  }  // namespace host
  }  // namespace gfxstream
 diff --git a/host/color_buffer.h b/host/color_buffer.h
-index b17bb6ad..21b33724 100644
+index b17bb6adc..21b337247 100644
 --- a/host/color_buffer.h
 +++ b/host/color_buffer.h
 @@ -93,9 +93,8 @@ class ColorBuffer : public IColorBuffer, public LazySnapshotObj<ColorBuffer> {
@@ -84,7 +91,7 @@ index b17bb6ad..21b33724 100644
     private:
      ColorBuffer() = default;
 diff --git a/host/common/include/gfxstream/host/color_buffer_interface.h b/host/common/include/gfxstream/host/color_buffer_interface.h
-index e9a2e279..eaddbea4 100644
+index e9a2e279f..eaddbea45 100644
 --- a/host/common/include/gfxstream/host/color_buffer_interface.h
 +++ b/host/common/include/gfxstream/host/color_buffer_interface.h
 @@ -39,6 +39,14 @@ enum class Backend { GL, VK };
@@ -117,7 +124,7 @@ index e9a2e279..eaddbea4 100644
  
  // A (mostly) generic shared owning reference  to a `ColorBuffer` so that the
 diff --git a/host/frame_buffer.cpp b/host/frame_buffer.cpp
-index 03adecef..c0a5e3f5 100644
+index 03adecefe..c0a5e3f56 100644
 --- a/host/frame_buffer.cpp
 +++ b/host/frame_buffer.cpp
 @@ -595,7 +595,8 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
@@ -176,7 +183,7 @@ index 03adecef..c0a5e3f5 100644
  
  bool FrameBuffer::hasEmulationGl() const { return mImpl->hasEmulationGl(); }
 diff --git a/host/frame_buffer.h b/host/frame_buffer.h
-index 5120dd77..63209530 100644
+index 5120dd77d..63209530b 100644
 --- a/host/frame_buffer.h
 +++ b/host/frame_buffer.h
 @@ -433,8 +433,10 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
@@ -193,7 +200,7 @@ index 5120dd77..63209530 100644
      bool hasEmulationGl() const;
      bool hasEmulationVk() const;
 diff --git a/host/gl/color_buffer_gl.cpp b/host/gl/color_buffer_gl.cpp
-index 0ec672dc..7293fb31 100644
+index 0ec672dcb..7293fb317 100644
 --- a/host/gl/color_buffer_gl.cpp
 +++ b/host/gl/color_buffer_gl.cpp
 @@ -1327,7 +1327,11 @@ std::optional<ColorBufferGl::DmabufExport> ColorBufferGl::exportDmabuf() {
@@ -210,7 +217,7 @@ index 0ec672dc..7293fb31 100644
          .fd = fd,
          .fourcc = static_cast<uint32_t>(fourcc),
 diff --git a/host/gl/color_buffer_gl.h b/host/gl/color_buffer_gl.h
-index db64da11..4a810012 100644
+index db64da113..4a8100120 100644
 --- a/host/gl/color_buffer_gl.h
 +++ b/host/gl/color_buffer_gl.h
 @@ -29,6 +29,7 @@
@@ -242,7 +249,7 @@ index db64da11..4a810012 100644
      // This is helpful for bindFbo which may skip too many steps after the egl
      // image is replaced.
 diff --git a/host/include/gfxstream/virtio-gpu-gfxstream-renderer-unstable.h b/host/include/gfxstream/virtio-gpu-gfxstream-renderer-unstable.h
-index 5f5eae0a..ff3ddd3f 100644
+index 5f5eae0a7..ff3ddd3ff 100644
 --- a/host/include/gfxstream/virtio-gpu-gfxstream-renderer-unstable.h
 +++ b/host/include/gfxstream/virtio-gpu-gfxstream-renderer-unstable.h
 @@ -74,6 +74,11 @@ struct stream_renderer_resource_info {
@@ -258,7 +265,7 @@ index 5f5eae0a..ff3ddd3f 100644
  
  VG_EXPORT int stream_renderer_resource_get_info(int res_handle,
 diff --git a/host/virtio_gpu_frontend.cpp b/host/virtio_gpu_frontend.cpp
-index 9aaa144b..211ff672 100644
+index 9aaa144b6..211ff672a 100644
 --- a/host/virtio_gpu_frontend.cpp
 +++ b/host/virtio_gpu_frontend.cpp
 @@ -828,12 +828,12 @@ int VirtioGpuFrontend::getResourceInfo(uint32_t resourceId,
@@ -278,7 +285,7 @@ index 9aaa144b..211ff672 100644
          }
      }
 diff --git a/host/virtio_gpu_resource.cpp b/host/virtio_gpu_resource.cpp
-index d346ed57..efa18a1a 100644
+index d346ed57d..efa18a1a0 100644
 --- a/host/virtio_gpu_resource.cpp
 +++ b/host/virtio_gpu_resource.cpp
 @@ -424,13 +424,17 @@ int VirtioGpuResource::GetInfo(struct stream_renderer_resource_info* outInfo) co
@@ -315,7 +322,7 @@ index d346ed57..efa18a1a 100644
          if (!descriptorInfoOpt) {
              return -EINVAL;
 diff --git a/host/vulkan/color_buffer_vk.cpp b/host/vulkan/color_buffer_vk.cpp
-index c8a2dbc5..625ddadf 100644
+index c8a2dbc56..625ddadf8 100644
 --- a/host/vulkan/color_buffer_vk.cpp
 +++ b/host/vulkan/color_buffer_vk.cpp
 @@ -116,8 +116,20 @@ std::unique_ptr<ColorBufferVkImageInfo> ColorBufferVk::prepareForDisplay() {
@@ -342,7 +349,7 @@ index c8a2dbc5..625ddadf 100644
  
  std::optional<BlobDescriptorInfo> ColorBufferVk::exportBlob() {
 diff --git a/host/vulkan/color_buffer_vk.h b/host/vulkan/color_buffer_vk.h
-index d7d3f01d..6e826c58 100644
+index d7d3f01d1..6e826c586 100644
 --- a/host/vulkan/color_buffer_vk.h
 +++ b/host/vulkan/color_buffer_vk.h
 @@ -19,6 +19,7 @@
@@ -364,8 +371,46 @@ index d7d3f01d..6e826c58 100644
  
     private:
      ColorBufferVk(VkEmulation& emulationVk, uint32_t handle);
+diff --git a/host/vulkan/vk_android_native_buffer_operations.cpp b/host/vulkan/vk_android_native_buffer_operations.cpp
+index 51923e3f5..ad99fc20a 100644
+--- a/host/vulkan/vk_android_native_buffer_operations.cpp
++++ b/host/vulkan/vk_android_native_buffer_operations.cpp
+@@ -197,6 +197,33 @@ std::unique_ptr<AndroidNativeBufferInfo> AndroidNativeBufferInfo::create(
+         createImageCi.flags = importedColorBufferInfo.imageCreateInfoShallow.flags;
+         createImageCi.tiling = importedColorBufferInfo.imageCreateInfoShallow.tiling;
+ 
++        // A ColorBuffer re-created for scanout has DRM format modifier tiling, which an
++        // image can only be created with when its chain names the modifier: give the
++        // guest's image the ColorBuffer's modifier and plane layout, so that it reads the
++        // memory as the host and the display do.
++        VkSubresourceLayout scanoutPlaneLayout = {};
++        VkImageDrmFormatModifierExplicitCreateInfoEXT scanoutModifierCi = {
++            VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
++            nullptr,
++            0,
++            1,
++            &scanoutPlaneLayout,
++        };
++        if (createImageCi.tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT) {
++            if (!importedColorBufferInfo.scanoutLayout) {
++                VK_ANB_ERR(
++                    "Failed to prepare ANB image: ColorBuffer:%d has DRM format modifier "
++                    "tiling but no scanout layout.",
++                    importedColorBufferHandle);
++                return nullptr;
++            }
++            const auto& scanoutLayout = *importedColorBufferInfo.scanoutLayout;
++            scanoutPlaneLayout.offset = scanoutLayout.offset;
++            scanoutPlaneLayout.rowPitch = scanoutLayout.stride;
++            scanoutModifierCi.drmFormatModifier = scanoutLayout.modifier;
++            vk_insert_struct(createImageCi, scanoutModifierCi);
++        }
++
+         const auto& importedColorBufferMemoryInfo = importedColorBufferInfo.memory;
+ 
+         // VkBindImageMemorySwapchainInfoKHR may be included from the guest but
 diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operations.cpp
-index effb13ae..b3eca4a5 100644
+index effb13ae3..fc19b9bd6 100644
 --- a/host/vulkan/vk_common_operations.cpp
 +++ b/host/vulkan/vk_common_operations.cpp
 @@ -1189,6 +1189,11 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
@@ -873,8 +918,19 @@ index effb13ae..b3eca4a5 100644
  bool VkEmulation::teardownVkColorBufferLocked(uint32_t colorBufferHandle) {
      auto vk = mDvk;
  
+@@ -5142,6 +5589,10 @@ void VkEmulation::releaseColorBufferForGuestUse(uint32_t colorBufferHandle) {
+                         static_cast<int>(colorBufferHandle));
+         return;
+     }
++    // The guest binds an image of its own (VkNativeBufferANDROID) to this memory: its
++    // layout is fixed from now on, as after getColorBufferAllocationInfoLocked. A scanout
++    // migration would otherwise leave the guest drawing into the memory it replaced.
++    infoPtr->guestBound = true;
+ 
+     const auto kGuestUseDefaultImageLayout = adjustImageLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+     std::optional<VkImageMemoryBarrier> layoutTransitionBarrier;
 diff --git a/host/vulkan/vk_common_operations.h b/host/vulkan/vk_common_operations.h
-index 78dd5dcc..2ad65cc4 100644
+index 78dd5dcc5..2ad65cc44 100644
 --- a/host/vulkan/vk_common_operations.h
 +++ b/host/vulkan/vk_common_operations.h
 @@ -357,6 +357,12 @@ class VkEmulation {
