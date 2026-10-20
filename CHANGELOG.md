@@ -11,23 +11,41 @@
   `IKA_LOWCPU` and the `[lowcpu]` section of ika.ini (`mode`,
   `refresh_rate_hz`) set it.
 
-### Gamepad
-- The gamepad passed through to Android as a HID device (`--gamepad=uhid`)
-  follows a new `gamepad` setting in the `[console]` section of ika.ini
-  (`IKA_GAMEPAD`), `off` by default: no gamepad is passed in any mode, where
-  game mode and TV mode used to pass one unconditionally. `gamepad = on`
-  passes one: the desktop console passes a gamepad the host has when the
-  console starts, so a plugged-in gamepad no longer needs
-  `--ika_scrcpy=--gamepad=uhid` on every start, and game mode and TV mode
-  always pass the gamepad, so a pad plugged in later is picked up. `disabled`
-  is the same as `off`, and a `--gamepad=` or `--gamekb` option among the
-  extra console args still wins.
-- With `gamepad = on`, when the host has no gamepad as the console starts in
-  game mode or TV mode, the keyboard is the gamepad (scrcpy's new
-  `--gamekb`): arrows or WASD steer, Space is A, Esc is B, C is X, V is Y,
-  Enter is Start, Backspace is Back, Q and E the shoulders, Z and X the
-  triggers; those keys no longer type, other keys still do. The keys are set
-  in the `[keyboard_gamepad]` section of ika.ini, one line per control.
+### App start options and input
+- Each app's entry in the desktop's app menu has a new right-click action,
+  "Ika Startup Options...", which opens a window (yad) with a checkbox for
+  each option the app can start with: fullscreen; the keyboard, the mouse
+  and gamepads, each passed through to Android as a HID device
+  (`--keyboard=uhid`, `--mouse=uhid`, `--gamepad=uhid`); the keyboard as a
+  gamepad (scrcpy's new `--gamekb`); and touch input (`--touch`). The ticked
+  options are saved in `~/ika/app-options.ini`, one section per app, and
+  apply whenever the app's window opens, from the menu or a terminal. "Apply
+  settings" saves the ticked options, "Apply and start" saves them and
+  starts the app with them, and Cancel leaves them as they were;
+  `ika app --options NAME` opens the window from a terminal. The packages now depend on yad. A game added
+  to the menu starts with fullscreen ticked.
+- Game mode and game sessions are gone. `--game` is no longer an option of
+  `ika start`, `ika restart` or `ika app`, and `ika app` has no `--window`:
+  games open in their own windows like any other app, with the input ticked
+  in their start options, so a game without them gets the desktop's
+  keyboard and mouse and no gamepad. scrcpy's `--ika-game-session` is gone
+  too. For the console, `--ika_scrcpy=` (or `scrcpy_args` in ika.ini) still
+  passes scrcpy's `--keyboard=uhid`, `--mouse=uhid` or `--gamepad=uhid`.
+- Games' menu entries no longer have "Play with Touch Input": touch input is
+  one of every app's start options, and `ika app NAME --touch` still turns
+  it on for one start.
+- "App Settings" is now "Android App Settings...", and opens the app's App
+  info page alone in the Settings window: as the window's first page, with
+  no Settings home page shown before it and no list of settings beside it.
+  scrcpy's `--start-app` takes `info:PACKAGE` for it.
+- The keyboard as a gamepad: arrows or WASD steer, Space is A, Esc is B, C is
+  X, V is Y, Enter is Start, Backspace is Back, Q and E the shoulders, Z and
+  X the triggers; those keys no longer type, other keys still do. The keys
+  are set in the new `[keyboard_gamepad]` section of ika.ini, one line per
+  control.
+- The desktop console passes no gamepad, and the TV console always passes
+  the gamepad through, as the remote. A `--gamepad=` or `--gamekb` option
+  among the extra console args still wins.
 
 ### Console window
 - The console and app windows are Wayland windows on a Wayland session and

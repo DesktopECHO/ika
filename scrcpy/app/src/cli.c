@@ -116,7 +116,6 @@ enum {
     OPT_CUTTLEFISH_DISPLAY,
     OPT_DPI,
     OPT_WINDOW_STATE_FILE,
-    OPT_IKA_GAME_SESSION,
     OPT_KEYBOARD_GAMEPAD,
 };
 
@@ -904,7 +903,10 @@ static const struct sc_option options[] = {
                 "Add a '+' prefix to force-stop before starting the app:\n"
                 "    scrcpy --new-display --start-app=+org.mozilla.firefox\n"
                 "Both prefixes can be used, in that order:\n"
-                "    scrcpy --start-app=+?firefox",
+                "    scrcpy --start-app=+?firefox\n"
+                "Use 'info:' before a package name to open its App info page "
+                "instead:\n"
+                "    scrcpy --new-display --start-app=+info:org.mozilla.firefox",
     },
     {
         .shortopt = 't',
@@ -1111,12 +1113,6 @@ static const struct sc_option options[] = {
         .argdesc = "path",
         .text = "Save the windowed size and the fullscreen state to this "
                 "file on exit.",
-    },
-    {
-        .longopt_id = OPT_IKA_GAME_SESSION,
-        .longopt = "ika-game-session",
-        .text = "Exit with status 3 when the window leaves fullscreen or is "
-                "closed.",
     },
     {
         .longopt_id = OPT_KEYBOARD_GAMEPAD,
@@ -3077,9 +3073,6 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
             case OPT_WINDOW_STATE_FILE:
                 opts->window_state_file = optarg;
                 break;
-            case OPT_IKA_GAME_SESSION:
-                opts->ika_game_session = true;
-                break;
             case OPT_KEYBOARD_GAMEPAD:
                 opts->keyboard_gamepad = optarg ? optarg : "";
                 break;
@@ -3392,7 +3385,7 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
 
     if (opts->mouse_input_mode != SC_MOUSE_INPUT_MODE_SDK
             && !opts->mouse_hover) {
-        LOGE("--no-mouse-over is specific to --mouse=sdk");
+        LOGE("--no-mouse-hover is specific to --mouse=sdk");
         return false;
     }
 

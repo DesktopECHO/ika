@@ -123,6 +123,8 @@ Requires:       libva-utils
 Recommends:     (mesa-va-drivers-freeworld if mesa-dri-drivers)
 Recommends:     (intel-media-driver if libva-intel-media-driver)
 Requires:       xdg-utils
+# Draws the start options window of an app's launcher (ika app --options).
+Requires:       yad
 # Linked library dependencies are generated from ELF SONAMEs. Keep only the
 # scrcpy runtime tools that RPM cannot discover from the packaged binaries.
 Requires:       wayland-utils

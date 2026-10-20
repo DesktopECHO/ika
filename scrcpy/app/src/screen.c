@@ -786,8 +786,6 @@ sc_screen_init(struct sc_screen *screen,
     screen->window_minimized = false;
     screen->window_hidden = false;
     screen->window_occluded = false;
-    screen->game_session = params->game_session;
-    screen->game_session_fullscreen = false;
     screen->windowed_size.width = params->window_width;
     screen->windowed_size.height = params->window_height;
 
@@ -1632,7 +1630,6 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
             if (screen->flex_display) {
                 sc_flex_on_window_state_changed(&screen->flex);
             }
-            screen->game_session_fullscreen = true;
             return;
         case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
             LOGD("Switched to windowed mode");
@@ -1644,11 +1641,6 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
             if (is_windowed(screen)) {
                 apply_pending_resize(screen);
                 sc_screen_render(screen, true);
-            }
-            if (screen->game_session && screen->game_session_fullscreen) {
-                LOGI("Left fullscreen, ending the game session");
-                bool ok = sc_push_event(SC_EVENT_GAME_SESSION_ENDED);
-                (void) ok; // ignore failure
             }
             return;
         case SC_EVENT_DEVICE_DISCONNECTED:

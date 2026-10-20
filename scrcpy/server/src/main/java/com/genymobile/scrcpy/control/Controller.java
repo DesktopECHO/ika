@@ -94,6 +94,9 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     private final DeviceMessageSender sender;
     private int themeBackground; // 0 until sent (always opaque once resolved)
 
+    // Ika: a start-app name opening the App info page of the package following it
+    private static final String APP_INFO_PREFIX = "info:";
+
     // An app started on a Cuttlefish display waits for the first resize to the window size, so that it does not first draw at the size
     // of the whole display, and that size is confirmed to the client once the app is started, so that it reveals the app
     private static final long INITIAL_SIZE_TIMEOUT_MS = 2000;
@@ -852,6 +855,12 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
             name = name.substring(1);
         }
 
+        // Ika: "info:PACKAGE" opens the App info page of PACKAGE
+        if (name.startsWith(APP_INFO_PREFIX)) {
+            startAppInfo(name.substring(APP_INFO_PREFIX.length()), forceStopBeforeStart);
+            return;
+        }
+
         DeviceApp app;
         boolean searchByName = name.startsWith("?");
         if (searchByName) {
@@ -891,7 +900,26 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
 
         Ln.i("Starting app \"" + app.getName() + "\" [" + app.getPackageName() + "] on display " + startAppDisplayId + "...");
         Device.startApp(app.getPackageName(), startAppDisplayId, forceStopBeforeStart);
+        sendHeldDisplayReady();
+    }
 
+    private void startAppInfo(String packageName, boolean forceStopBeforeStart) {
+        int startAppDisplayId = getStartAppDisplayId();
+        if (startAppDisplayId == Device.DISPLAY_ID_NONE) {
+            Ln.e("No known display id to open the App info of \"" + packageName + "\"");
+            return;
+        }
+
+        if (deskTaskMover != null && primaryDisplayResizer != null && !waitForInitialSize()) {
+            return;
+        }
+
+        Ln.i("Starting app info [" + packageName + "] on display " + startAppDisplayId + "...");
+        Device.startAppInfo(packageName, startAppDisplayId, forceStopBeforeStart);
+        sendHeldDisplayReady();
+    }
+
+    private void sendHeldDisplayReady() {
         DeviceMessage ready;
         synchronized (initialSizeLock) {
             ready = heldDisplayReady;
