@@ -134,6 +134,10 @@
   `cuttlefish_config.json` such a crash leaves behind, on which every
   start failed with "Check failed: previous_config". The VM's disks and
   data are kept.
+- The desktop console comes back as it was after a round trip through TV
+  mode: fullscreen when it was fullscreen, else windowed at its last size.
+  The console opened after a mode switch ignored the saved fullscreen state,
+  so the desktop always returned windowed.
 
 ## Ika 261016, changes since release 261012
 

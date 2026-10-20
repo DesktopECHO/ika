@@ -119,4 +119,108 @@ open_in_console "${IKA_MODE_PACKAGE}" "Desktop/TV" >/dev/null 2>&1
 grep -q -- "am start --display 0 .* -n org.lineageos.desktop.mode/.SwitcherActivity" "${T}/adb.log" \
   || fail "Desktop/TV did not open on the primary display: $(cat "${T}/adb.log")"
 
+# A mode switch brings each console back as it was last used in its mode:
+# the console that opens after Android restarted in the other mode takes
+# --fullscreen from that mode's own saved window state.
+rm -f "${DESKTOP_CONSOLE_WINDOW_STATE_FILE}" "${TV_CONSOLE_WINDOW_STATE_FILE}"
+write_window_state() {
+  printf 'version=1\nwidth=%s\nheight=%s\nfullscreen=%s\n' "$2" "$3" "$4" >"$1"
+}
+switch_options=()
+console_switch_start_options switch_options desktop
+assert_equal "" "${switch_options[*]}" "desktop console without saved state"
+console_switch_start_options switch_options tv
+assert_equal "" "${switch_options[*]}" "TV console without saved state"
+write_window_state "${DESKTOP_CONSOLE_WINDOW_STATE_FILE}" 1280 720 true
+console_switch_start_options switch_options desktop
+assert_equal "--fullscreen" "${switch_options[*]}" "desktop console last fullscreen"
+console_switch_start_options switch_options tv
+assert_equal "" "${switch_options[*]}" "TV state is not the desktop's"
+write_window_state "${DESKTOP_CONSOLE_WINDOW_STATE_FILE}" 1600 900 false
+write_window_state "${TV_CONSOLE_WINDOW_STATE_FILE}" 1280 720 true
+console_switch_start_options switch_options desktop
+assert_equal "" "${switch_options[*]}" "desktop console last windowed"
+console_switch_start_options switch_options tv
+assert_equal "--fullscreen" "${switch_options[*]}" "TV console last fullscreen"
+printf 'version=2\nfullscreen=true\n' >"${DESKTOP_CONSOLE_WINDOW_STATE_FILE}"
+console_switch_start_options switch_options desktop
+assert_equal "" "${switch_options[*]}" "unreadable saved state"
+
+# The supervisor's round trip through TV mode, with scrcpy stubbed: it saves
+# its window state as the real one does on exit, and exits as disconnected
+# by Android's restart. The supervisor then hands over to 'ika start' for the
+# new mode, whose options the setsid stub records.
+mkdir -p "${CVD_TMP_DIR}"
+scrcpy_stub="${T}/scrcpy"
+cat >"${scrcpy_stub}" <<'EOF'
+#!/usr/bin/env bash
+state_file="" width="" height="" fullscreen=false
+for arg in "$@"; do
+  case "${arg}" in
+    --window-state-file=*) state_file="${arg#*=}" ;;
+    --window-width=*) width="${arg#*=}" ;;
+    --window-height=*) height="${arg#*=}" ;;
+    --fullscreen) fullscreen=true ;;
+  esac
+done
+printf '%s\n' "$*" >>"${SCRCPY_STUB_LOG}"
+printf 'version=1\nwidth=%s\nheight=%s\nfullscreen=%s\n' \
+  "${width}" "${height}" "${fullscreen}" >"${state_file}"
+exit "${SCRCPY_STUB_STATUS}"
+EOF
+chmod +x "${scrcpy_stub}"
+export SCRCPY_STUB_LOG="${T}/scrcpy.log" SCRCPY_STUB_STATUS="${SCRCPY_EXIT_DISCONNECTED}"
+flock() { :; }
+lock_scrcpy_forward_port() { return 1; }
+has_live_cvd_processes() { return 0; }
+remove_app_cuttlefish_display() { :; }
+adb_guest_boot_id() { printf 'boot-0\n'; }
+wait_for_guest_reboot() { printf 'boot-%s\n' "${RANDOM}"; }
+guest_ui_mode() { printf '%s\n' "${GUEST_MODE}"; }
+# setsid --fork bash -c SCRIPT ika-console-switch PID IKA OPTIONS...
+setsid() {
+  local options="${*:8}"
+  printf 'start%s\n' "${options:+ ${options}}" >"${T}/switch"
+}
+# Runs the console of MODE until Android restarts in NEW_MODE; prints the
+# 'ika start' the supervisor handed over to.
+console_round() {
+  local mode="$1"
+  local fullscreen="$2"
+  local new_mode="$3"
+  local state_file
+
+  state_file="$(mode_console_window_state_file "${mode}")"
+  rm -f "${T}/switch"
+  : >"${SCRCPY_STUB_LOG}"
+  ( GUEST_MODE="${new_mode}"
+    run_scrcpy_supervisor serial "${fullscreen}" -- "${scrcpy_stub}" \
+      --window-width=1280 --window-height=720 \
+      --window-state-file="${state_file}" ) 2>/dev/null \
+    || fail "console supervisor of ${mode} mode failed"
+  cat "${T}/switch" 2>/dev/null || true
+}
+
+# Fullscreen in desktop mode, to TV mode and back: fullscreen again.
+rm -f "${DESKTOP_CONSOLE_WINDOW_STATE_FILE}" "${TV_CONSOLE_WINDOW_STATE_FILE}"
+assert_equal "start" "$(console_round desktop true tv)" "switch to TV mode"
+assert_equal "start --fullscreen" "$(console_round tv true desktop)" "switch back to the desktop"
+[[ "$(cat "${SCRCPY_STUB_LOG}")" != *"${DESKTOP_CONSOLE_WINDOW_STATE_FILE}"* ]] \
+  || fail "the TV console used the desktop console's window state"
+assert_equal "fullscreen=true" "$(grep fullscreen "${DESKTOP_CONSOLE_WINDOW_STATE_FILE}")" \
+  "desktop state after the round trip"
+
+# Windowed at 1600x900 in desktop mode, to TV mode and back: that size, not
+# fullscreen. The TV console, last fullscreen, keeps that from its own state.
+write_window_state "${DESKTOP_CONSOLE_WINDOW_STATE_FILE}" 1600 900 false
+assert_equal "start --fullscreen" "$(console_round desktop false tv)" "windowed switch to TV mode"
+assert_equal "start" "$(console_round tv true desktop)" "switch back to the desktop"
+assert_equal "start --fullscreen" "$(console_round desktop false tv)" "desktop console reopened windowed"
+[[ "$(cat "${SCRCPY_STUB_LOG}")" == *"--window-width=1600 --window-height=900"* ]] \
+  || fail "desktop console size after the round trip: $(cat "${SCRCPY_STUB_LOG}")"
+[[ "$(cat "${SCRCPY_STUB_LOG}")" != *"--fullscreen"* ]] \
+  || fail "desktop console went fullscreen after the round trip"
+assert_equal "fullscreen=true" "$(grep fullscreen "${TV_CONSOLE_WINDOW_STATE_FILE}")" \
+  "TV state after the round trip"
+
 printf 'ika TV mode tests passed\n'

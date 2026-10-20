@@ -872,7 +872,11 @@ DATA_GB_CONFIG_FILE="${CVD_HOME_DIR}/data-gb"
 SERIAL_NUMBER_FILE="${CVD_HOME_DIR}/serial-number"
 START_LOG_FILE="${CVD_HOME_DIR}/ikastart.log"
 SCRCPY_LOG_FILE="${CVD_HOME_DIR}/console.log"
-SCRCPY_WINDOW_STATE_FILE="${CVD_HOME_DIR}/console-window-state"
+# The desktop console's window state; SCRCPY_WINDOW_STATE_FILE is the state
+# file of the console a supervisor runs, which app windows, game sessions and
+# the TV console point at files of their own.
+DESKTOP_CONSOLE_WINDOW_STATE_FILE="${CVD_HOME_DIR}/console-window-state"
+SCRCPY_WINDOW_STATE_FILE="${DESKTOP_CONSOLE_WINDOW_STATE_FILE}"
 SCRCPY_SUPERVISOR_PID_FILE="${CVD_TMP_DIR}/console-supervisor.pid"
 SCRCPY_SUPERVISOR_LOCK_FILE="${CVD_TMP_DIR}/console-supervisor.lock"
 IKA_APPS_DIR="${CVD_HOME_DIR}/apps"
@@ -901,7 +905,7 @@ GAME_SESSION_LOCK_FILE="${CVD_TMP_DIR}/game-session.lock"
 game_session_lock_fd=""
 GAME_CONSOLE_WINDOW_STATE_FILE="${CVD_HOME_DIR}/game-console-window-state"
 # The console of Android's TV mode keeps its own window state, so that it does
-# not replace the desktop console's size.
+# not replace the desktop console's size and fullscreen state.
 TV_CONSOLE_WINDOW_STATE_FILE="${CVD_HOME_DIR}/tv-console-window-state"
 APP_GAMES_FILE="${IKA_APPS_DIR}/games"
 ika_ini_default IKA_APP_MENU_POLL_SEC apps menu_poll_sec 5 uint
@@ -3722,6 +3726,33 @@ read_scrcpy_window_state() {
   fullscreen_ref="${fullscreen}"
 }
 
+# The window state file of the console of MODE, desktop or tv.
+mode_console_window_state_file() {
+  case "$1" in
+    tv) printf '%s\n' "${TV_CONSOLE_WINDOW_STATE_FILE}" ;;
+    *) printf '%s\n' "${DESKTOP_CONSOLE_WINDOW_STATE_FILE}" ;;
+  esac
+}
+
+# Sets the array named by $1 to the options of the 'ika start' that opens the
+# console after Android restarted in MODE ($2): --fullscreen when that mode's
+# console was last used fullscreen, so that a mode switch brings each console
+# back as it was. Its size comes from the same file when the console starts.
+console_switch_start_options() {
+  local -n options_ref="$1"
+  local mode="$2"
+  local saved_width=""
+  local saved_height=""
+  local saved_fullscreen=""
+
+  options_ref=()
+  if read_scrcpy_window_state "$(mode_console_window_state_file "${mode}")" \
+      saved_width saved_height saved_fullscreen \
+      && [[ "${saved_fullscreen}" == "true" ]]; then
+    options_ref+=(--fullscreen)
+  fi
+}
+
 wait_for_guest_reboot() {
   local adb_serial="$1"
   local previous_boot_id="$2"
@@ -3816,6 +3847,7 @@ run_scrcpy_supervisor() {
   local session_watch_pid=""
   local console_mode="desktop"
   local guest_mode
+  local -a switch_options=()
 
   if [[ " ${base_command[*]} " == *" --ika-game-session "* ]]; then
     game_session="true"
@@ -3955,19 +3987,22 @@ run_scrcpy_supervisor() {
     fi
 
     previous_boot_id="${new_boot_id}"
-    # IkaMode's switcher changes Android's mode at a restart. Hand over to a console for the new mode: started once this
-    # supervisor has released its lock.
+    # IkaMode's switcher changes Android's mode at a restart. Hand over to a
+    # console for the new mode, started once this supervisor has released its
+    # lock, as that mode's console was last used: fullscreen or windowed, from
+    # its own window state, which the other mode's console does not touch.
     guest_mode="$(guest_ui_mode "${adb_serial}")"
     if [[ "${game_session}" != "true" && -n "${guest_mode}" \
         && "${guest_mode}" != "${console_mode}" ]]; then
-      log "Android restarted in ${guest_mode} mode; opening its console"
+      console_switch_start_options switch_options "${guest_mode}"
+      log "Android restarted in ${guest_mode} mode; opening its console${switch_options[0]:+ ${switch_options[*]}}"
       exec {supervisor_lock_fd}>&-
       if [[ -n "${forward_port_fd}" ]]; then
         exec {forward_port_fd}>&-
       fi
       setsid --fork bash -c 'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done
-          exec "$2" start' ika-console-switch "$$" "${IKA_SCRIPT_PATH}" \
-        </dev/null >/dev/null 2>&1 3>&-
+          exec "$2" start "${@:3}"' ika-console-switch "$$" "${IKA_SCRIPT_PATH}" \
+        "${switch_options[@]}" </dev/null >/dev/null 2>&1 3>&-
       return 0
     fi
     # Connecting can take scrcpy's server about 10s on a freshly booted guest.
