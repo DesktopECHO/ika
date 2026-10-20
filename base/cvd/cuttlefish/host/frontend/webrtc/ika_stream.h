@@ -83,11 +83,24 @@ class RawFrameStreamer {
     bool slot_sent = false;
   };
 
+  // The memfd of frame slots shared with the client, unmapped and closed with
+  // its last reference: OnFrame() keeps one while it copies a frame into a
+  // slot without holding mutex_, so the client thread's unmap waits for it
+  struct ShmMapping {
+    ShmMapping(int fd, uint8_t* data, size_t size);
+    ~ShmMapping();
+    ShmMapping(const ShmMapping&) = delete;
+    ShmMapping& operator=(const ShmMapping&) = delete;
+
+    const int fd;
+    uint8_t* const data;
+    const size_t size;
+  };
+
   struct ClientShm {
-    int fd = -1;
-    uint8_t* data = nullptr;
+    std::shared_ptr<ShmMapping> mapping;
     size_t slot_size = 0;
-    uint32_t slot_count = 4;
+    uint32_t slot_count = 0;
     uint32_t next_slot = 0;
     // Non-zero if the client releases the slots: a slot is only rewritten
     // once the client has released it, tagged with this generation
@@ -106,14 +119,33 @@ class RawFrameStreamer {
 
   // The frames of one display, and the client showing it. Each display has at
   // most one client; another client of the same display waits for it to leave.
+  struct DmabufGeometry {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t fourcc = 0;
+    uint32_t stride_bytes = 0;
+    uint32_t offset = 0;
+    uint32_t modifier_hi = 0;
+    uint32_t modifier_lo = 0;
+
+    bool operator==(const DmabufGeometry& other) const {
+      return width == other.width && height == other.height &&
+             fourcc == other.fourcc && stride_bytes == other.stride_bytes &&
+             offset == other.offset && modifier_hi == other.modifier_hi &&
+             modifier_lo == other.modifier_lo;
+    }
+  };
+
   struct DisplayStream {
     int client_fd = -1;
+    // The client thread's eventfd, written when generation changes
+    int wake_fd = -1;
     uint64_t generation = 0;
     bool suppress_next_raw = false;
     Frame latest_frame;
     ClientShm shm;
     // The last DMA-BUF geometry logged for this display, to log it once.
-    std::string dmabuf_description;
+    DmabufGeometry dmabuf_geometry;
   };
 
   struct ClientThread {
@@ -137,11 +169,12 @@ class RawFrameStreamer {
   void CloseClientShm(ClientShm& shm) const;
   DisplayStream& GetDisplayLocked(uint32_t display_number);
   void EndClientLocked(DisplayStream& display);
-  bool WriteSlotFrameLocked(DisplayStream& display,
-                            const RawFrameHeader& header,
-                            const uint8_t* pixels);
+  bool ReserveSlotLocked(DisplayStream& display, uint32_t payload_size,
+                         uint32_t* slot_index);
   void DetachLatestFrameFromShmLocked(DisplayStream& display);
   void ReplaceLatestFrameLocked(DisplayStream& display, Frame frame);
+  void FrameChangedLocked(DisplayStream& display);
+  bool WaitForClientOrFrame(int client_fd, int wake_fd);
   Frame CopyLatestFrameLocked(DisplayStream& display);
   void CloseFrameFd(Frame& frame) const;
   std::shared_ptr<std::vector<uint8_t>> AcquireRawBufferLocked(size_t size);
@@ -158,7 +191,8 @@ class RawFrameStreamer {
   std::set<int> client_fds_;
   // By display number, never removed. A display's client slots: only its
   // client thread maps, unmaps and reconfigures them, under mutex_; OnFrame()
-  // writes frames into free slots under mutex_ too.
+  // reserves a free slot under mutex_, copies the frame into it without the
+  // lock, and publishes it under mutex_ again.
   std::map<uint32_t, std::unique_ptr<DisplayStream>> displays_;
   std::vector<std::shared_ptr<std::vector<uint8_t>>> raw_buffers_;
   size_t next_raw_buffer_ = 0;
