@@ -296,6 +296,16 @@ dpi = auto
 # Command-line equivalent: --dpi=, in either mode. Environment variable:
 # IKA_TV_DPI
 tv_dpi = auto
+# Gamepad passed through to Android as a HID device: on, off or disabled.
+# on passes a gamepad the host has when the console starts (the desktop
+# console: one plugged in later needs 'ika start' again) and, in game mode
+# and TV mode, any gamepad plugged in later too, with the keyboard as the
+# gamepad when the host has none: arrows or WASD steer, Space is A, Esc is B,
+# C is X, V is Y, Enter is Start, Backspace is Back, Q and E the shoulders, Z
+# and X the triggers, see [keyboard_gamepad]; those keys then no longer type.
+# off (or disabled), the default, never passes one. Environment variable:
+# IKA_GAMEPAD
+gamepad = off
 # Extra arguments for the console, separated by spaces, for example
 # --keyboard=uhid --no-clipboard-autosync
 # Command-line equivalent: --ika_scrcpy=. Environment variable: IKA_SCRCPY
@@ -303,6 +313,35 @@ scrcpy_args =
 # Seconds to wait for the guest to reboot before leaving the console closed.
 # Environment variable: IKA_SCRCPY_REBOOT_TIMEOUT_SEC
 reboot_timeout_sec = 120
+
+
+# ----------------------------------------------------------------------------
+[keyboard_gamepad]
+# The keys of the keyboard gamepad, used in game mode and TV mode when the
+# host has no gamepad (gamepad = on). One or more key names per control,
+# separated by spaces; SDL's key names (Up, Space, Return, Escape, Backspace,
+# Tab, F1, A, 1, ...), with _ for a space in a name (Keypad_Enter, Left_Shift,
+# Page_Up). An empty value leaves the control without a key. Mapped keys
+# drive the gamepad instead of typing. Keys that Ika does not know are
+# reported in the console log and skipped. The direction keys also move the
+# left stick.
+dpad_up = Up W
+dpad_down = Down S
+dpad_left = Left A
+dpad_right = Right D
+a = Space
+b = Escape
+x = C
+y = V
+start = Return Keypad_Enter
+back = Backspace
+guide =
+left_shoulder = Q
+right_shoulder = E
+left_stick =
+right_stick =
+left_trigger = Z
+right_trigger = X
 
 
 # ----------------------------------------------------------------------------
@@ -968,6 +1007,24 @@ ika_ini_default IKA_MIN_OPEN_FILES system min_open_files 65536 uint
 ika_ini_default IKA_KERNEL_PAGE_SIZE system kernel_page_size auto
 ika_ini_default IKADPI console dpi auto
 ika_ini_default IKA_TV_DPI console tv_dpi auto
+ika_ini_default IKA_GAMEPAD console gamepad off
+# The keys of the keyboard gamepad, in the order of keyboard_gamepad_spec.
+KEYBOARD_GAMEPAD_CONTROLS=(dpad_up dpad_down dpad_left dpad_right a b x y
+  start back guide left_shoulder right_shoulder left_stick right_stick
+  left_trigger right_trigger)
+declare -A KEYBOARD_GAMEPAD_KEYS=(
+  [dpad_up]="Up W" [dpad_down]="Down S" [dpad_left]="Left A"
+  [dpad_right]="Right D" [a]="Space" [b]="Escape" [x]="C" [y]="V"
+  [start]="Return Keypad_Enter" [back]="Backspace" [guide]=""
+  [left_shoulder]="Q" [right_shoulder]="E" [left_stick]="" [right_stick]=""
+  [left_trigger]="Z" [right_trigger]="X"
+)
+for keyboard_gamepad_control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+  ika_ini_get "KEYBOARD_GAMEPAD_KEYS[${keyboard_gamepad_control}]" \
+    keyboard_gamepad "${keyboard_gamepad_control}" \
+    "${KEYBOARD_GAMEPAD_KEYS[${keyboard_gamepad_control}]}"
+done
+unset keyboard_gamepad_control
 ika_ini_default IKA_SCRCPY console scrcpy_args ""
 ika_ini_default IKA_INSTALL_TIMEOUT_SEC timeouts install_timeout_sec 1800 uint
 # Settings of the former H.264 app windows, still in older ika.ini files
@@ -1758,8 +1815,9 @@ Example:
 
 Options:
 
-  --game                 Start the console fullscreen, passing the gamepad,
-                         keyboard and mouse through as HID devices (UHID).
+  --game                 Start the console fullscreen, passing the keyboard
+                         and mouse through as HID devices (UHID), and the
+                         gamepad with gamepad = on in ika.ini.
                          With app, use UHID input but keep the window unless
                          -f is given.
   --touch                With app, send left-button clicks and drags as real
@@ -1934,6 +1992,12 @@ Environment variables:
                          --no-lowcpu.
   IKA_TV_DPI             Display density in TV mode (default: 1.5 times the
                          automatic density).
+  IKA_GAMEPAD            on, off or disabled: on passes a gamepad the host
+                         has when the console starts through to Android and,
+                         in game mode and TV mode, any gamepad plugged in
+                         later, with the keyboard as the gamepad when the host
+                         has none; off or disabled (the default) never passes
+                         one.
   IKA_SCRCPY             Extra whitespace-separated args appended to the console.
                          Equivalent command-line option: --ika_scrcpy=ARGS
                          (example: --keyboard=uhid --no-clipboard-autosync)
@@ -4124,8 +4188,91 @@ touch_enabled() {
   [[ -n "${IKA_TOUCH:-}" && "${IKA_TOUCH}" != "0" ]]
 }
 
+# The gamepad setting (IKA_GAMEPAD, console.gamepad in ika.ini): on, off or
+# disabled (as scrcpy's --gamepad=disabled). Anything else is reported and
+# taken as off, the default.
+normalize_gamepad_mode() {
+  case "${1,,}" in
+    1|true|yes|on|enable|enabled)
+      echo "on"
+      ;;
+    ""|0|false|no|off|disable|disabled)
+      echo "off"
+      ;;
+    *)
+      log "${IKA_INI_FILE}: console.gamepad must be on, off or disabled, not '${1}'; using off"
+      echo "off"
+      ;;
+  esac
+}
+
+# Prints the name of a gamepad attached to the host and succeeds, or fails
+# when there is none. A gamepad is an input device udev tagged
+# ID_INPUT_JOYSTICK, which is what SDL, and so scrcpy, opens.
+host_gamepad_name() {
+  local input_dir="${IKA_INPUT_DEVICES_DIR:-/dev/input}"
+  local sys_input_dir="${IKA_SYS_INPUT_DIR:-/sys/class/input}"
+  local event_device properties name
+
+  for event_device in "${input_dir}"/event*; do
+    [[ -e "${event_device}" ]] || continue
+    properties="$(udevadm info --query=property --name="${event_device}" 2>/dev/null)" || continue
+    [[ $'\n'"${properties}"$'\n' == *$'\nID_INPUT_JOYSTICK=1\n'* ]] || continue
+    name="$(cat "${sys_input_dir}/${event_device##*/}/device/name" 2>/dev/null || true)"
+    printf '%s\n' "${name:-${event_device}}"
+    return 0
+  done
+  return 1
+}
+
+# Whether the extra console args (IKA_SCRCPY) set the gamepad themselves, as
+# --gamepad=MODE, scrcpy's -G, or --gamekb (the keyboard as the gamepad).
+scrcpy_extra_args_set_gamepad() {
+  local -a scrcpy_extra_args=()
+  local arg
+
+  [[ -n "${IKA_SCRCPY:-}" ]] || return 1
+  read -r -a scrcpy_extra_args <<<"${IKA_SCRCPY}"
+  for arg in "${scrcpy_extra_args[@]}"; do
+    case "${arg}" in
+      --gamepad|--gamepad=*|--gamekb|--gamekb=*)
+        return 0
+        ;;
+      -[!-]*)
+        [[ "${arg}" != *G* ]] || return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+# Prints scrcpy's --gamekb spec from the [keyboard_gamepad] keys:
+# control=key/key,control=key, controls without keys left out.
+keyboard_gamepad_spec() {
+  local control keys spec=""
+  local -a words
+
+  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+    read -r -a words <<<"${KEYBOARD_GAMEPAD_KEYS[${control}]}"
+    [[ "${#words[@]}" -gt 0 ]] || continue
+    keys="$(IFS=/; printf '%s' "${words[*]}")"
+    spec+="${spec:+,}${control}=${keys}"
+  done
+  printf '%s\n' "${spec}"
+}
+
 # Game mode uses UHID for all input devices; normal mode keeps text-friendly
-# SDK keyboard injection, and TV mode ("tv") adds the UHID gamepad to it.
+# SDK keyboard injection. The gamepad follows gamepad in ika.ini (IKA_GAMEPAD),
+# off by default: nothing is passed then. With gamepad = on, the desktop
+# console adds the UHID gamepad when the host has one as the console starts
+# (one plugged in later needs 'ika start' again), and game mode and TV mode
+# ("tv"), where games run, always pass the gamepad: scrcpy picks up a pad
+# plugged in, or a virtual one created, while the console runs, and when the
+# host has none as it starts, the keyboard is the gamepad (scrcpy's --gamekb:
+# arrows or WASD, Space, Esc, C, V, Enter, Backspace, Q, E, Z and X drive it;
+# those keys no longer type, other keys still do). App windows that are not
+# games never get one, and extra args that set --gamepad or --gamekb
+# themselves win.
 # Touch needs the SDK mouse, so in game mode only the mouse leaves UHID and the
 # gamepad and keyboard are still forwarded as HID devices. A finger does not
 # hover.
@@ -4133,32 +4280,56 @@ append_scrcpy_input_args() {
   local -n input_args_ref="$1"
   local game_mode="$2"
   local label="$3"
+  local gamepad_name
+  local -a gamepad_args=()
+
+  if scrcpy_extra_args_set_gamepad; then
+    log "${label} gamepad: set by the extra args"
+  elif [[ "$(normalize_gamepad_mode "${IKA_GAMEPAD:-off}")" == "off" ]]; then
+    log "${label} gamepad: off (gamepad = off)"
+  elif [[ "${game_mode}" == "true" || "${game_mode}" == "tv" ]]; then
+    if gamepad_name="$(host_gamepad_name)"; then
+      log "${label} gamepad: ${gamepad_name} found, adding --gamepad=uhid"
+      gamepad_args=(--gamepad=uhid)
+    else
+      log "${label} gamepad: none found, the keyboard is the gamepad ($(keyboard_gamepad_spec))"
+      gamepad_args=(--gamepad=uhid "--gamekb=$(keyboard_gamepad_spec)")
+    fi
+  elif [[ "${label}" == "console" ]]; then
+    if gamepad_name="$(host_gamepad_name)"; then
+      log "${label} gamepad: ${gamepad_name} found, adding --gamepad=uhid"
+      gamepad_args=(--gamepad=uhid)
+    else
+      log "${label} gamepad: none found, not adding --gamepad"
+    fi
+  fi
 
   if [[ "${game_mode}" == "true" ]] && touch_enabled; then
-    log "${label} game mode: UHID gamepad and keyboard, touch input"
+    log "${label} game mode: UHID ${gamepad_args[0]:+gamepad and }keyboard, touch input"
     input_args_ref+=(
-      --gamepad=uhid
+      "${gamepad_args[@]}"
       --keyboard=uhid
       --mouse=sdk
       --no-mouse-hover
     )
   elif [[ "${game_mode}" == "true" ]]; then
-    log "${label} game mode: UHID gamepad, keyboard, and mouse"
+    log "${label} game mode: UHID ${gamepad_args[0]:+gamepad, }keyboard, and mouse"
     input_args_ref+=(
-      --gamepad=uhid
+      "${gamepad_args[@]}"
       --keyboard=uhid
       --mouse=uhid
     )
   elif [[ "${game_mode}" == "tv" ]]; then
     # The gamepad is the remote; the keyboard and mouse stay as on the desktop.
-    log "${label} TV mode: UHID gamepad"
+    log "${label} TV mode: desktop keyboard and mouse"
     input_args_ref+=(
-      --gamepad=uhid
+      "${gamepad_args[@]}"
       --keyboard=sdk
       --prefer-text
     )
   else
     input_args_ref+=(
+      "${gamepad_args[@]}"
       --keyboard=sdk
       --prefer-text
     )
@@ -5043,8 +5214,9 @@ watch_game_session() {
 # Prints the home screen's state as Launcher3 reports it (Normal, Background,
 # ...), or nothing for another launcher.
 launcher_state() {
+  # grep stops at the first match; tr must not report the closed pipe.
   guest_adb "$1" shell dumpsys activity "$2" </dev/null 2>/dev/null \
-    | tr -d '\r' | grep -a -m1 -o 'mState:[A-Za-z]*' | cut -d: -f2
+    | tr -d '\r' 2>/dev/null | grep -a -m1 -o 'mState:[A-Za-z]*' | cut -d: -f2
 }
 
 # Returns the primary display to the home screen with the Home key. On Ika's

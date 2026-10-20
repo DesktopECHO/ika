@@ -28,6 +28,7 @@
 #include "sdl_hints.h"
 #include "server.h"
 #include "uhid/gamepad_uhid.h"
+#include "ika/keyboard_gamepad.h"
 #include "uhid/keyboard_uhid.h"
 #include "uhid/mouse_uhid.h"
 #ifdef HAVE_USB
@@ -57,6 +58,7 @@
 struct scrcpy {
     struct sc_server server;
     struct sc_screen screen;
+    struct sc_keyboard_gamepad keyboard_gamepad;
     struct sc_audio_player audio_player;
     struct sc_demuxer video_demuxer;
     struct sc_demuxer audio_demuxer;
@@ -683,6 +685,7 @@ scrcpy(struct scrcpy_options *options) {
     struct sc_key_processor *kp = NULL;
     struct sc_mouse_processor *mp = NULL;
     struct sc_gamepad_processor *gp = NULL;
+    struct sc_keyboard_gamepad *kg = NULL;
 
     if (options->control) {
         static const struct sc_controller_callbacks controller_cbs = {
@@ -826,6 +829,11 @@ aoa_complete:
         if (options->gamepad_input_mode == SC_GAMEPAD_INPUT_MODE_UHID) {
             sc_gamepad_uhid_init(&s->gamepad_uhid, &s->controller);
             gp = &s->gamepad_uhid.gamepad_processor;
+            if (options->keyboard_gamepad) {
+                sc_keyboard_gamepad_init(&s->keyboard_gamepad, gp,
+                                         options->keyboard_gamepad);
+                kg = &s->keyboard_gamepad;
+            }
         }
 
         struct sc_uhid_devices *uhid_devices = NULL;
@@ -862,6 +870,7 @@ aoa_complete:
             .kp = kp,
             .mp = mp,
             .gp = gp,
+            .kg = kg,
             .mouse_bindings = options->mouse_bindings,
             .legacy_paste = options->legacy_paste,
             .clipboard_autosync = options->clipboard_autosync,
@@ -1084,6 +1093,10 @@ aoa_complete:
     if (options->control
             && options->gamepad_input_mode != SC_GAMEPAD_INPUT_MODE_DISABLED) {
         init_sdl_gamepads();
+    }
+
+    if (kg) {
+        sc_keyboard_gamepad_plug(kg);
     }
 
     if (options->control && options->start_app) {

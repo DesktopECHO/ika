@@ -96,6 +96,21 @@ from gray.
   the console as it was.
 - `--ika-game-session`: leaving fullscreen or closing the window exits with
   status 3.
+- `--gamekb[=SPEC]` (with `--gamepad=uhid`): the keyboard is a
+  gamepad of the device too; other keys still type. SPEC gives the keys of
+  each control as `control=key/key,control=key`: the controls are `dpad_up`,
+  `dpad_down`, `dpad_left`, `dpad_right` (which also move the left stick),
+  `a`, `b`, `x`, `y`, `start`, `back`, `guide`, `left_shoulder`,
+  `right_shoulder`, `left_stick`, `right_stick`, `left_trigger` and
+  `right_trigger`; the keys are SDL key names, with `_` for a space
+  (`Keypad_Enter`); unknown keys and controls are reported and skipped.
+  Without SPEC: arrows or WASD steer, Space is A, Esc is B, C is X, V is Y,
+  Enter is Start, Backspace is Back, Q and E are the shoulders, Z and X the
+  triggers. A held key is released whatever modifier is down by then, and
+  every key when the window loses focus, so no button stays pressed on the
+  device. `ika` passes it, with the keys of `[keyboard_gamepad]` in ika.ini,
+  in game mode and TV mode when `gamepad = on` is set and the host has no
+  gamepad.
 - Exit status 2 on device disconnection (upstream), which `ika` uses to
   reopen the console after a guest reboot.
 - The app of a new display is watched: when it is gone, the server sends

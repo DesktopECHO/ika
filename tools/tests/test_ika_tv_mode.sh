@@ -2,8 +2,8 @@
 
 # IkaMode's switcher changes Android's mode, and the console follows Android: in
 # TV mode it opens fullscreen, at 1.5 times the automatic density unless
-# tv_dpi sets one, with the gamepad passed through, and keeps its own window
-# state.
+# tv_dpi sets one, with a gamepad the host has passed through (the keyboard
+# as one otherwise), and keeps its own window state.
 
 set -euo pipefail
 
@@ -13,6 +13,7 @@ trap 'rm -rf "${T}"' EXIT
 export HOME="${T}/home" CVD_HOME_DIR="${T}/ika" CVD_PRODUCT_OUT="${T}/product"
 mkdir -p "${HOME}" "${CVD_PRODUCT_OUT}"
 unset IKADPI IKA_TV_DPI IKA_SCRCPY
+export IKA_GAMEPAD=on
 source "${ROOT}/tools/ika"
 
 fail() {
@@ -43,10 +44,17 @@ assert_equal "240" "$(IKA_TV_DPI=240 resolve_tv_dpi)" "tv_dpi"
 host_display_size() { return 1; }
 assert_equal "216" "$(resolve_tv_dpi 2>/dev/null)" "TV density without a display size"
 
-# The TV console passes the gamepad through and keeps the SDK keyboard.
+# The TV console passes a gamepad the host has through and keeps the SDK
+# keyboard.
+host_gamepad_name() { printf 'pad\n'; }
 input_args=()
 append_scrcpy_input_args input_args tv console 2>/dev/null
-assert_equal "--gamepad=uhid --keyboard=sdk --prefer-text" "${input_args[*]}" "TV console input"
+assert_equal "--gamepad=uhid --keyboard=sdk --prefer-text" "${input_args[*]}" "TV console input with a gamepad"
+host_gamepad_name() { return 1; }
+input_args=()
+append_scrcpy_input_args input_args tv console 2>/dev/null
+[[ "${input_args[*]}" == "--gamepad=uhid --gamekb=dpad_up=Up/W,"*" --keyboard=sdk --prefer-text" ]] \
+  || fail "TV console input without a gamepad: the keyboard is one: ${input_args[*]}"
 
 # The console launch, with the supervisor stubbed: prints its fullscreen flag
 # and the console command.
@@ -79,7 +87,7 @@ SCRCPY_DPI_GIVEN="false"
 tv_console="$(console_of tv false false)"
 [[ "${tv_console}" == fullscreen=true* ]] || fail "TV console is not fullscreen: ${tv_console}"
 [[ "${tv_console}" == *" --dpi=248 "* ]] || fail "TV console density: ${tv_console}"
-[[ "${tv_console}" == *" --gamepad=uhid "* ]] || fail "TV console gamepad: ${tv_console}"
+[[ "${tv_console}" == *" --gamepad=uhid --gamekb=dpad_up="* ]] || fail "TV console without a gamepad on the host: ${tv_console}"
 [[ "${tv_console}" == *" --window-state-file=${TV_CONSOLE_WINDOW_STATE_FILE} "* ]] \
   || fail "TV console window state: ${tv_console}"
 

@@ -11,6 +11,24 @@
   `IKA_LOWCPU` and the `[lowcpu]` section of ika.ini (`mode`,
   `refresh_rate_hz`) set it.
 
+### Gamepad
+- The gamepad passed through to Android as a HID device (`--gamepad=uhid`)
+  follows a new `gamepad` setting in the `[console]` section of ika.ini
+  (`IKA_GAMEPAD`), `off` by default: no gamepad is passed in any mode, where
+  game mode and TV mode used to pass one unconditionally. `gamepad = on`
+  passes one: the desktop console passes a gamepad the host has when the
+  console starts, so a plugged-in gamepad no longer needs
+  `--ika_scrcpy=--gamepad=uhid` on every start, and game mode and TV mode
+  always pass the gamepad, so a pad plugged in later is picked up. `disabled`
+  is the same as `off`, and a `--gamepad=` or `--gamekb` option among the
+  extra console args still wins.
+- With `gamepad = on`, when the host has no gamepad as the console starts in
+  game mode or TV mode, the keyboard is the gamepad (scrcpy's new
+  `--gamekb`): arrows or WASD steer, Space is A, Esc is B, C is X, V is Y,
+  Enter is Start, Backspace is Back, Q and E the shoulders, Z and X the
+  triggers; those keys no longer type, other keys still do. The keys are set
+  in the `[keyboard_gamepad]` section of ika.ini, one line per control.
+
 ### Console window
 - The console and app windows are Wayland windows on a Wayland session and
   X11 windows on an X11 session. scrcpy's SDL used to open an X11 window

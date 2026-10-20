@@ -52,12 +52,14 @@ the app more room rather than stretching it. Super + T and Super + F work as the
 - The window title is the app's label; override it with `--title=TEXT`. Window
   size is remembered per app under `~/ika/apps/PACKAGE/`; `--size=WxH` sets
   it explicitly.
-- `--game` enables UHID gamepad, keyboard and mouse input without forcing
-  fullscreen; add `-f` for fullscreen.
+- `--game` enables UHID keyboard and mouse input (and the gamepad, with
+  `gamepad = on` in ika.ini) without forcing fullscreen; add `-f` for
+  fullscreen.
 - **Games** (apps that declare `android:appCategory="game"`, or are listed in
   `IKA_GAME_APPS` in `tools/ika`) start in a **game session** instead of an
-  app window: the console switches to fullscreen game mode (gamepad, keyboard
-  and mouse passthrough, raw frames rather than encoded video) and the game
+  app window: the console switches to fullscreen game mode (keyboard and
+  mouse passthrough, the gamepad too with `gamepad = on` in ika.ini, raw
+  frames rather than encoded video) and the game
   runs fullscreen on Android's primary display. Leaving fullscreen or closing
   that window ends the session: the window closes, and the game is sent to
   the background (Home, where it saves its state), so the Android desktop is

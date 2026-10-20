@@ -6,6 +6,7 @@
 
 #include "events.h"
 #include "icon.h"
+#include "ika/keyboard_gamepad.h"
 #include "options.h"
 #include "util/log.h"
 #include "util/sdl.h"
@@ -969,6 +970,7 @@ sc_screen_init(struct sc_screen *screen,
         .kp = params->kp,
         .mp = params->mp,
         .gp = params->gp,
+        .kg = params->kg,
         .camera = params->camera,
         .mouse_bindings = params->mouse_bindings,
         .legacy_paste = params->legacy_paste,
@@ -1680,6 +1682,14 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
             && sc_ika_window_handle_event(&screen->ika_window, event)) {
         // A click in the corner of a fullscreen or maximized window
         return;
+    }
+
+    if (event->type == SDL_EVENT_WINDOW_FOCUS_LOST && screen->im.kg) {
+        // Ika: SDL releases the keys when the window loses focus, with the
+        // modifiers still down and in no particular order; release the
+        // keyboard gamepad's keys ourselves, before the mouse capture handler
+        // consumes the event in relative mode
+        sc_keyboard_gamepad_release_all(screen->im.kg);
     }
 
     if (sc_screen_is_relative_mode(screen)

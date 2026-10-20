@@ -117,6 +117,7 @@ enum {
     OPT_DPI,
     OPT_WINDOW_STATE_FILE,
     OPT_IKA_GAME_SESSION,
+    OPT_KEYBOARD_GAMEPAD,
 };
 
 struct sc_option {
@@ -1116,6 +1117,26 @@ static const struct sc_option options[] = {
         .longopt = "ika-game-session",
         .text = "Exit with status 3 when the window leaves fullscreen or is "
                 "closed.",
+    },
+    {
+        .longopt_id = OPT_KEYBOARD_GAMEPAD,
+        .longopt = "gamekb",
+        .argdesc = "spec",
+        .optional_arg = true,
+        .text = "Make the keyboard a gamepad of the device, besides any "
+                "physical gamepad. Other keys still type.\n"
+                "The spec gives the keys of each control, as "
+                "\"control=key/key,control=key\": the controls are dpad_up, "
+                "dpad_down, dpad_left, dpad_right (which also move the left "
+                "stick), a, b, x, y, start, back, guide, left_shoulder, "
+                "right_shoulder, left_stick, right_stick, left_trigger and "
+                "right_trigger; the keys are SDL key names, with \"_\" for a "
+                "space (Keypad_Enter). Unknown keys and controls are "
+                "reported and skipped.\n"
+                "Without a spec: arrows or WASD steer, Space is A, Esc is B, "
+                "C is X, V is Y, Enter is Start, Backspace is Back, Q and E "
+                "are the shoulders, Z and X the triggers.\n"
+                "Requires --gamepad=uhid.",
     },
 };
 
@@ -3059,6 +3080,9 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
             case OPT_IKA_GAME_SESSION:
                 opts->ika_game_session = true;
                 break;
+            case OPT_KEYBOARD_GAMEPAD:
+                opts->keyboard_gamepad = optarg ? optarg : "";
+                break;
             case OPT_IGNORE_VIDEO_ENCODER_CONSTRAINTS:
                 opts->ignore_video_encoder_constraints = true;
                 break;
@@ -3255,6 +3279,12 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
             opts->gamepad_input_mode = otg ? SC_GAMEPAD_INPUT_MODE_AOA
                                            : SC_GAMEPAD_INPUT_MODE_UHID;
         }
+    }
+
+    if (opts->keyboard_gamepad
+            && opts->gamepad_input_mode != SC_GAMEPAD_INPUT_MODE_UHID) {
+        LOGE("--gamekb requires --gamepad=uhid");
+        return false;
     }
 
     // If mouse bindings are not explicitly set, configure default bindings
