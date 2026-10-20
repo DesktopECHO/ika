@@ -2038,6 +2038,24 @@ latest_launcher_log_message() {
   grep -F "${pattern}" "${launcher_log}" | tail -n 1 || true
 }
 
+# How the console's frames travel from crosvm, from ika_stream's latest log
+# line about it: as DMA-BUFs (no copy), or as pixels read back by crosvm (the
+# costly path, three copies per frame). Silent before the first frame.
+respond_console_frame_path() {
+  local line
+
+  line="$(latest_launcher_log_message "${CVD_LAUNCHER_LOG}" 0 "frames arrive as")" || return 0
+  [[ -n "${line}" ]] || return 0
+  case "${line}" in
+    *"frames arrive as DMA-BUFs"*)
+      respond "Console frames: DMA-BUFs (${line##*"frames arrive as DMA-BUFs: "})"
+      ;;
+    *"frames arrive as pixels"*)
+      respond "Console frames: pixels read back by crosvm (${line##*"read back by crosvm: "}), the slow path"
+      ;;
+  esac
+}
+
 maybe_respond_crosvm_command() {
   local launcher_log="$1"
   local min_mtime="$2"
@@ -7903,6 +7921,7 @@ main() {
     status)
       if has_live_cvd_processes; then
         respond "Android virtual device running."
+        respond_console_frame_path
       else
         respond "Android virtual device not running."
       fi

@@ -166,6 +166,11 @@ class RawFrameStreamer {
     ClientShm shm;
     // The last DMA-BUF geometry logged for this display, to log it once.
     DmabufGeometry dmabuf_geometry;
+    // How the display's frames arrive, to log each change of path: as
+    // DMA-BUFs, or as pixels crosvm read back (kNone until the first frame)
+    FrameType frame_path = FrameType::kNone;
+    FrameType frame_path_candidate = FrameType::kNone;
+    uint32_t frame_path_run = 0;
   };
 
   struct ClientThread {
@@ -194,6 +199,7 @@ class RawFrameStreamer {
   void DetachLatestFrameFromShmLocked(DisplayStream& display);
   void ReplaceLatestFrameLocked(DisplayStream& display, Frame frame);
   void FrameChangedLocked(DisplayStream& display);
+  bool NoteFramePathLocked(DisplayStream& display, FrameType type);
   bool WaitForClientOrFrame(int client_fd, int wake_fd);
   Frame CopyLatestFrameLocked(DisplayStream& display);
   void CloseFrameFd(Frame& frame) const;
