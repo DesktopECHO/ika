@@ -126,7 +126,7 @@ sdl_configure_ctrl_c_windows(void) {
 #endif // _WIN32
 
 static enum scrcpy_exit_code
-event_loop(struct scrcpy *s, bool has_screen, bool game_session) {
+event_loop(struct scrcpy *s, bool has_screen) {
     SDL_Event event;
     while (SDL_WaitEvent(&event)) {
         switch (event.type) {
@@ -156,11 +156,7 @@ event_loop(struct scrcpy *s, bool has_screen, bool game_session) {
                 return SCRCPY_EXIT_SUCCESS;
             case SDL_EVENT_QUIT:
                 LOGD("User requested to quit");
-                // Closing the window of a game session ends it
-                return game_session ? SCRCPY_EXIT_GAME_SESSION_ENDED
-                                    : SCRCPY_EXIT_SUCCESS;
-            case SC_EVENT_GAME_SESSION_ENDED:
-                return SCRCPY_EXIT_GAME_SESSION_ENDED;
+                return SCRCPY_EXIT_SUCCESS;
             case SC_EVENT_APP_ENDED:
                 // The app left its new display: close the window
                 LOGI("App ended");
@@ -861,7 +857,6 @@ aoa_complete:
             .raw = cuttlefish,
             .app_window = cuttlefish && options->cuttlefish_display,
             .window_state_file = options->window_state_file,
-            .game_session = options->ika_game_session,
 #ifndef _WIN32
             .cf_source = cuttlefish ? &s->cf_source : NULL,
 #endif
@@ -882,8 +877,7 @@ aoa_complete:
             .window_width = options->window_width,
             .window_height = options->window_height,
             .background_color = options->background_color,
-            .background_follows_theme = !options->background_color_set
-                                     && !options->ika_game_session,
+            .background_follows_theme = !options->background_color_set,
             .window_aspect_ratio_lock = options->window_aspect_ratio_lock,
             .window_borderless = options->window_borderless,
             .render_fit = options->render_fit,
@@ -1118,7 +1112,7 @@ aoa_complete:
         }
     }
 
-    ret = event_loop(s, options->window, options->ika_game_session);
+    ret = event_loop(s, options->window);
     if (screen_initialized) {
         sc_screen_save_window_state(&s->screen);
     }

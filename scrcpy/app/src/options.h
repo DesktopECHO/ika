@@ -377,7 +377,6 @@ struct scrcpy_options {
     uint8_t cuttlefish_display; // the crosvm display number, 0 for the main one
     uint16_t flex_display_dpi; // density of the resized main display, 0 to keep
     const char *window_state_file;
-    bool ika_game_session;
     // Ika: NULL (no keyboard gamepad), "" (default keys) or a spec
     const char *keyboard_gamepad;
 };

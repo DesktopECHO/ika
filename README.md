@@ -18,8 +18,9 @@ on [Fedora Asahi Remix](https://asahilinux.org/). It later grew into a desktop-c
 - **Dynamic display** window resizing that preserves DPI settings.
 - **GPU acceleration** with support for OpenGL ES and Vulkan.
 - **App windows**: run single Android apps in their own desktop windows, listed
-  in your desktop's app menu; games start fullscreen, with the gamepad
-  passed through when `gamepad = on` is set in ika.ini (see
+  in your desktop's app menu; games start fullscreen. Right-click an app in
+  the menu for **Ika Startup Options...** to pass the keyboard, mouse or
+  gamepads through to it as HID devices (see
   [App windows](UI-INTRO.md#app-windows)).
 - **Camera**: use a webcam or a Mac's FaceTime camera as Android's front camera
   (see [Camera](USAGE.md#camera)).

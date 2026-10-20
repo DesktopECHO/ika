@@ -40,10 +40,6 @@ ika gsf
 ika backup
 ika restore
 
-# Game mode: start Ika fullscreen, passing the gamepad, keyboard and mouse
-# through as HID devices
-ika start --game
-
 # Use the host's camera as Android's camera (auto-detected, or a given node)
 ika restart --camera
 ika restart --camera=video2
@@ -51,10 +47,14 @@ ika restart --camera=video2
 # List launchable apps (open app windows in bold), open one in its own
 # window by label or package name, close it
 ika app
-ika app Asphalt 8 --game
+ika app Asphalt 8 --touch
 ika app com.android.settings
 ika app --info Chromium
 ika app close Asphalt 8
+
+# Choose the options an app always starts with, from the menu or a
+# terminal (also "Ika Startup Options..." on its menu entry)
+ika app --options Asphalt 8
 
 # Sync the Android apps into the desktop's app menu now (ika start keeps
 # it in sync automatically), or remove them and turn that off
@@ -97,29 +97,35 @@ virtio-media, served by Android's external camera HAL):
   next `ika start` or `ika restart` without `--camera`. It needs the `video`
   group, and while Android streams from it, other programs on the host can't.
 
-## Gamepad
+## App input
 
-A gamepad plugged into the host reaches Android as a HID device when the
-console passes it through. The `gamepad` setting in the `[console]` section
-of `ika.ini` decides it, and it is `off` by default: no gamepad is passed in
-any mode. `gamepad = on` passes one, as follows. `disabled` is the same as
-`off`. `IKA_GAMEPAD` is the environment variable, and a `--gamepad=` or
-`--gamekb` option in `scrcpy_args` or `--ika_scrcpy=` wins over the setting.
-The start log says what was passed.
+The desktop console types with Android's text input and uses the mouse as
+the desktop does. An app or game can pass the keyboard, the mouse and
+gamepads through to Android as HID devices instead, as if they were plugged
+into it: right-click it in the desktop's app menu, choose **Ika Startup
+Options...** (`ika app --options NAME` from a terminal), and tick what it
+needs. The choices are saved in `~/ika/app-options.ini` and apply whenever
+the app's window opens.
 
-- The desktop console passes a gamepad the host has at the moment the
-  console starts, and only a physical one; it only looks at the host then, so
-  a gamepad plugged in later needs `ika start` again to reopen the console.
-- In game mode (`ika start --game`, game sessions) and in TV mode, where
-  games run inside the console, the gamepad is always passed, so a gamepad
-  plugged in while the console runs is picked up too, and when the host has
-  none as the console starts the keyboard is the gamepad (scrcpy's
-  `--gamekb`): arrows or WASD steer (D-pad and left stick), Space is A, Esc
-  is B, C is X, V is Y, Enter is Start, Backspace is Back, Q and E are the
-  shoulders, Z and X the triggers. Those keys then drive the pad instead of
-  typing; other keys still type.
+- **Pass the keyboard through as a HID device**: keys reach the app as from
+  a physical keyboard, which many games need.
+- **Pass the mouse through as a HID device**: the mouse moves Android's
+  pointer itself and is captured by the window, for games that steer with
+  it. **Touch input** wins over it, as a finger needs the desktop's mouse.
+- **Enable gamepads when attached**: gamepads plugged into the host, and ones
+  plugged in later, reach Android.
+- **Use the keyboard to emulate a gamepad** (scrcpy's `--gamekb`): arrows or WASD
+  steer (D-pad and left stick), Space is A, Esc is B, C is X, V is Y, Enter
+  is Start, Backspace is Back, Q and E are the shoulders, Z and X the
+  triggers. Those keys then drive the pad instead of typing; other keys still
+  type. Gamepads plugged into the host pass through as well.
 
-The keys are set in the `[keyboard_gamepad]` section of `ika.ini`, one line
+In TV mode the console always passes the gamepad through, as the remote. A
+`--gamepad=` or `--gamekb` option in `scrcpy_args` or `--ika_scrcpy=` wins
+over both. The start log and each app window's log say what was passed.
+
+The keyboard gamepad's keys are set in the `[keyboard_gamepad]` section of
+`ika.ini`, one line
 per control (`dpad_up`, `dpad_down`, `dpad_left`, `dpad_right`, `a`, `b`,
 `x`, `y`, `start`, `back`, `guide`, `left_shoulder`, `right_shoulder`,
 `left_stick`, `right_stick`, `left_trigger`, `right_trigger`) with one or
@@ -164,8 +170,8 @@ the system by name under a **TV mode** heading, such as **Catapult**
 | Interface size           | Density from the host display (`dpi`, `IKADPI`)         | 1.5 times the desktop's automatic density, so everything is 50% larger (`tv_dpi`, `IKA_TV_DPI`) |
 | Right click              | Right click; Shift + right click is Back                | Back, as a remote's Back button; Shift + right click is a right click                           |
 | Middle, 4th, 5th buttons | Home, recent apps, notifications                        | The same                                                                                        |
-| Gamepad (`gamepad = on`; off by default) | A gamepad the host has when the console starts | The remote: D-pad or left stick moves, A selects, B goes back, the guide button goes Home; a gamepad plugged in later is picked up, and the keyboard is the gamepad when the host has none |
-| Keyboard                 | Typed as text                                           | The same, except that with `gamepad = on` and no gamepad on the host the keyboard is the gamepad: the mapped keys (WASD, arrows, Space, Esc, Enter, ...) drive it instead of typing |
+| Gamepad                  | Not passed through                                      | The remote: D-pad or left stick moves, A selects, B goes back, the guide button goes Home; a gamepad plugged in later is picked up |
+| Keyboard                 | Typed as text                                           | The same                                                                                        |
 | Home app                 | Trebuchet, with its taskbar                             | The TV launcher chosen in Desktop/TV: Catapult, or one from Google Play                         |
 | Home key                 | Home                                                    | Home; pressed twice, the recent apps                                                            |
 | System UI                | Status bar, taskbar, navigation bar, notification shade | Android TV's system UI: its notification panel, picture-in-picture and volume controls; no status bar, taskbar or navigation bar |
@@ -184,15 +190,11 @@ the system by name under a **TV mode** heading, such as **Catapult**
 - **Mouse and keyboard.** Right click and Shift + right click swap places:
   on the desktop a right click opens context menus, and on a TV the button
   that is always under your hand should go back. The keyboard types as on
-  the desktop, unless it is the gamepad (below). `ika start --game` keeps
-  game mode's input (keyboard and mouse passed through as HID devices, and
-  the gamepad with `gamepad = on`) in either mode.
-- **Gamepad.** Nothing is passed by default (`gamepad = off`). With
-  `gamepad = on` in `ika.ini`, the desktop console passes a gamepad the host
-  has when it starts, and the TV console always passes the gamepad, as the
-  remote: a gamepad plugged in later is picked up, and when the host has
-  none as the console starts the keyboard is the gamepad, so its mapped keys
-  no longer type (see [Gamepad](#gamepad)).
+  the desktop. App windows keep the input of their start options in either
+  mode (see [App input](#app-input)).
+- **Gamepad.** The desktop console passes no gamepad; the TV console always
+  passes the gamepad through, as the remote, and picks up a gamepad plugged
+  in later.
 - **What apps see.** In TV mode Android has the leanback, leanback-only and
   live TV features and the television UI mode, so apps with a TV version show
   it. Google Play may then hide apps without TV support, and show phone apps
@@ -202,8 +204,8 @@ the system by name under a **TV mode** heading, such as **Catapult**
   has its own build and keeps its own updates.
 - **Apps opened from the Linux desktop.** Only the console becomes the TV
   screen: Android apps opened from the desktop's "Android Apps (Ika)" menu or
-  with `ika app` still open in their own windows on the Linux desktop, and
-  games in a game session, in either mode.
+  with `ika app` still open in their own windows on the Linux desktop, in
+  either mode.
 
 ## Rooting with Magisk
 

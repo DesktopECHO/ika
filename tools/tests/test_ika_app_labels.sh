@@ -120,12 +120,12 @@ command() {
 check_launchers "${T}/apps-plain" "plain writer"
 unset -f command
 
-# GNOME Shell's rename handling must leave launchers with unchanged names alone.
+# GNOME Shell's handling of changed launchers must leave current ones alone.
 pgrep() { return 0; }
 sleep() { :; }
 refresh_app_menu_caches() { :; }
 for apps_dir in "${T}"/apps-*; do
-  parked="$(refresh_renamed_launchers "${apps_dir}" "${list}")"
+  parked="$(refresh_changed_launchers "${apps_dir}" "${list}")"
   [[ "${parked}" == "0" ]] || fail "$(basename "${apps_dir}"): ${parked} unchanged launchers re-added"
 done
 echo "ok: unchanged launchers are not re-added for GNOME Shell"
@@ -149,21 +149,21 @@ assert_name com.example.titled 'Titled App'
 assert_name com.example.unknown com.example.unknown
 echo "ok: app names come from the launcher, the app list, the window title, or the package"
 
-# A menu launcher passes the package: a game session starts with the app name.
+# A menu launcher passes the package: the window is titled with the app name.
 require_executable() { :; }
 ensure_guest_ready() { :; }
 resolve_adb_serial() { printf '127.0.0.1:6520\n'; }
 app_is_installed() { return 0; }
-start_game_session() { printf 'session %s|%s\n' "$1" "$2"; }
-session="$(open_app_window com.example.game false false "" "" false)"
-[[ "${session}" == 'session com.example.game|Back\slash Game' ]] || \
-  fail "game session started as '${session}'"
+use_app_window_paths() { printf 'window %s|%s\n' "$1" "${title}"; exit 0; }
+window="$(open_app_window com.example.game false "" "")"
+[[ "${window}" == 'window com.example.game|Back\slash Game' ]] || \
+  fail "game window opened as '${window}'"
 
 # The launcher of an app removed since: the error notification names the app.
 notify_user() { printf 'notify %s\n' "$1"; }
 message="$( (resolve_app_name com.example.app "" app) 2>/dev/null || true)"
 [[ "${message}" == "notify Tom & Jerry is not installed in Android; see '"*" app'" ]] || \
   fail "removed app notified as '${message}'"
-echo "ok: game sessions and errors started from a launcher use the app name"
+echo "ok: windows and errors started from a launcher use the app name"
 
 printf 'PASS: app labels with unusual characters\n'

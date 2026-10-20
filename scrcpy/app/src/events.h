@@ -29,8 +29,6 @@ enum {
     SC_EVENT_APP_ENDED,
     // Background color of the Android theme (data1 holds 0xAARRGGBB)
     SC_EVENT_THEME_BACKGROUND,
-    // The window left fullscreen in an Ika game session
-    SC_EVENT_GAME_SESSION_ENDED,
     // A flex display resize timer expired
     SC_EVENT_FLEX_TIMER,
 };

@@ -55,8 +55,6 @@ struct sc_screen {
     struct sc_ika_window ika_window;
     struct sc_size windowed_size; // last size while not fullscreen/maximized
     const char *window_state_file;
-    bool game_session;
-    bool game_session_fullscreen; // the game session went fullscreen
     // The source of Cuttlefish frames, told when the window is hidden so that
     // it stops receiving frames (NULL without Cuttlefish frames)
     struct sc_cf_source *cf_source;
@@ -153,7 +151,6 @@ struct sc_screen_params {
     // it has the window size
     bool app_window;
     const char *window_state_file;
-    bool game_session;
     struct sc_cf_source *cf_source;
 
     struct sc_controller *controller;

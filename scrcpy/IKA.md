@@ -106,8 +106,6 @@ from gray.
 - `--window-state-file=PATH`: the windowed size and fullscreen state are saved
   on exit (`version=1`, `width`, `height`, `fullscreen`), for `ika` to reopen
   the console as it was.
-- `--ika-game-session`: leaving fullscreen or closing the window exits with
-  status 3.
 - `--gamekb[=SPEC]` (with `--gamepad=uhid`): the keyboard is a
   gamepad of the device too; other keys still type. SPEC gives the keys of
   each control as `control=key/key,control=key`: the controls are `dpad_up`,
@@ -121,12 +119,14 @@ from gray.
   triggers. A held key is released whatever modifier is down by then, and
   every key when the window loses focus, so no button stays pressed on the
   device. `ika` passes it, with the keys of `[keyboard_gamepad]` in ika.ini,
-  in game mode and TV mode when `gamepad = on` is set and the host has no
-  gamepad.
+  for apps and games whose start options use the keyboard as a gamepad.
 - Exit status 2 on device disconnection (upstream), which `ika` uses to
   reopen the console after a guest reboot.
 - The app of a new display is watched: when it is gone, the server sends
   `APP_ENDED` and the window closes.
+- `--start-app=info:PACKAGE` opens the App info page of PACKAGE, alone, as the
+  first page of the window (`+info:` force-stops Settings first). `ika` uses it
+  for an app's "Android App Settings...".
 - Borderless windows: resize edges, a drag area in the top-left corner (a
   click there leaves fullscreen or maximized), a thin border, a minimum size.
   On X11, `GTK_THEME=...:dark` gives the title bar its dark variant.

@@ -52,35 +52,19 @@ the app more room rather than stretching it. Super + T and Super + F work as the
 - The window title is the app's label; override it with `--title=TEXT`. Window
   size is remembered per app under `~/ika/apps/PACKAGE/`; `--size=WxH` sets
   it explicitly.
-- `--game` enables UHID keyboard and mouse input (and the gamepad, with
-  `gamepad = on` in ika.ini) without forcing fullscreen; add `-f` for
-  fullscreen.
 - **Games** (apps that declare `android:appCategory="game"`, or are listed in
-  `IKA_GAME_APPS` in `tools/ika`) start in a **game session** instead of an
-  app window: the console switches to fullscreen game mode (keyboard and
-  mouse passthrough, the gamepad too with `gamepad = on` in ika.ini, raw
-  frames rather than encoded video) and the game
-  runs fullscreen on Android's primary display. Leaving fullscreen or closing
-  that window ends the session: the window closes, and the game is sent to
-  the background (Home, where it saves its state), so the Android desktop is
-  in front the next time you open Ika; starting the game again resumes it
-  where you left it. The desktop console comes back if it was open before.
-  As on a phone, Android may still reclaim a backgrounded game, which then
-  starts fresh. Starting another game replaces the current one.
-  `ika app NAME --window` opens a game in its own window instead. Only games
-  started with `ika app` (or from the menu) behave this way; `ika start --game`
-  and games opened inside the Android desktop are unaffected.
+  `IKA_GAME_APPS` in `tools/ika`) open in their own windows like any other
+  app. They are marked as games in the app menu, and a game added to the
+  menu starts with **Fullscreen mode** ticked in its start options (below),
+  so its window opens fullscreen.
 - **Touch input** (`ika app NAME --touch`) is for games that ignore the mouse.
   Left-button clicks and drags are sent to Android as a real finger on a
   touchscreen instead of as mouse input, so a drag is a swipe. The right and
   middle buttons and the wheel stay mouse input, Ctrl or Shift with the left
-  button still simulates a pinch, and no hover is sent. In a game session the
-  mouse leaves UHID (the gamepad and keyboard still pass through as HID
-  devices), and a session already running in the other input mode is
-  restarted when you start a game in the new one. `--touch` works with app
-  windows too, and `IKA_TOUCH=1 ika start --game` does the same for the
-  console. Most desktop apps should not use it: some route mouse clicks
-  differently from touch, for example Chromium's tab strip.
+  button still simulates a pinch, and no hover is sent. It wins over passing
+  the mouse through (the keyboard and gamepads still pass through as HID
+  devices when ticked). Most desktop apps should not use it: some route mouse
+  clicks differently from touch, for example Chromium's tab strip.
 - `ika app sync` adds every launchable app to the desktop's app menu, as
   "🎮 ∙ LABEL" for games (apps declaring `android:appCategory="game"`, or listed
   in `IKA_GAME_APPS` in `tools/ika`) and "ᗩ ∙ LABEL" for other apps, in an
@@ -96,11 +80,24 @@ the app more room rather than stretching it. Super + T and Super + F work as the
   without the desktop console (`ika start --no-console`) and opens the app
   once Android has booted. Launched from a menu, `ika app` reports progress
   and errors as desktop notifications.
-- Right-click a menu entry for **App Settings**, which opens the app's
-  Android App info page (permissions, storage, force stop, uninstall) in the
-  Settings window. From a terminal: `ika app --info NAME`. The entries of
-  games also offer **Play with Touch Input**, which runs
-  `ika app --touch PACKAGE`.
+- Right-click a menu entry for **Android App Settings...**, which opens the
+  app's Android App info page (permissions, storage, force stop, uninstall)
+  in the Settings window. From a terminal: `ika app --info NAME`.
+- Right-click a menu entry for **Ika Startup Options...** to choose how that
+  app starts, in a window with a checkbox for each option: **Fullscreen mode**;
+  the keyboard, the mouse and gamepads each passed through to Android as a
+  HID device; **Use the keyboard to emulate a gamepad**
+  (WASD, the arrows, Space, Esc, ...; see
+  [App input](USAGE.md#app-input)); and **Touch input**. Without them an
+  app or game gets the desktop's keyboard and mouse and no gamepad. A game
+  added to the menu starts with **Fullscreen mode** ticked. **Apply settings**
+  saves the ticked options in `~/ika/app-options.ini`, **Apply and start**
+  saves them and starts the app with them, and **Cancel** leaves them as
+  they were. They
+  apply every time the app starts, from the menu or with `ika app NAME`;
+  options typed after `ika app NAME` are added to them. From a terminal:
+  `ika app --options NAME`. yad draws the window, in the desktop's light or
+  dark style.
 - The menu is kept up to date automatically: once the guest has booted,
   `ika start` runs a background watcher that syncs the menu and then checks
   every few seconds (`IKA_APP_MENU_POLL_SEC`, default 5) for installed,

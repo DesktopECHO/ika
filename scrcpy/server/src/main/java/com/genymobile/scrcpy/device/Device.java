@@ -15,9 +15,11 @@ import com.genymobile.scrcpy.wrappers.WindowManager;
 
 import android.annotation.SuppressLint;
 import android.app.ActivityOptions;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
@@ -306,18 +308,38 @@ public final class Device {
 
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
 
-        Bundle options = null;
-        if (Build.VERSION.SDK_INT >= AndroidVersions.API_26_ANDROID_8_0) {
-            ActivityOptions launchOptions = ActivityOptions.makeBasic();
-            launchOptions.setLaunchDisplayId(displayId);
-            options = launchOptions.toBundle();
-        }
-
         ActivityManager am = ServiceManager.getActivityManager();
         if (forceStop) {
             am.forceStopPackage(packageName);
         }
-        am.startActivity(launchIntent, options);
+        am.startActivity(launchIntent, launchOptions(displayId));
+    }
+
+    // Ika: opens the App info page of an app on the display, alone: it is the first page of its task (FLAG_ACTIVITY_CLEAR_TASK), and a
+    // Settings subpage, which Settings does not reopen as a two-pane deep link, with its list of settings beside it, on a large screen
+    public static void startAppInfo(String packageName, int displayId, boolean forceStop) {
+        Intent intent = new Intent("android.settings.APPLICATION_DETAILS_SETTINGS", Uri.fromParts("package", packageName, null));
+        intent.putExtra(":settings:show_fragment_as_subsetting", true);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+
+        ActivityManager am = ServiceManager.getActivityManager();
+        if (forceStop) {
+            // The app showing the page, Settings, so that it starts on the display rather than resurfacing elsewhere
+            ComponentName component = intent.resolveActivity(FakeContext.get().getPackageManager());
+            if (component != null) {
+                am.forceStopPackage(component.getPackageName());
+            }
+        }
+        am.startActivity(intent, launchOptions(displayId));
+    }
+
+    private static Bundle launchOptions(int displayId) {
+        if (Build.VERSION.SDK_INT < AndroidVersions.API_26_ANDROID_8_0) {
+            return null;
+        }
+        ActivityOptions launchOptions = ActivityOptions.makeBasic();
+        launchOptions.setLaunchDisplayId(displayId);
+        return launchOptions.toBundle();
     }
 
     public static void sendBroadcast(Intent intent) {

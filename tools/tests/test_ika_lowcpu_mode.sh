@@ -90,14 +90,14 @@ expect_equal "${args[*]}" "" "a --display= option wins"
 
 # The start options.
 IKA_LOWCPU="auto"
-fullscreen_mode=""; game_mode=""; start_args=()
-parse_start_options fullscreen_mode game_mode start_args --lowcpu -f
+fullscreen_mode=""; start_args=()
+parse_start_options fullscreen_mode start_args --lowcpu -f
 expect_equal "${IKA_LOWCPU}" "on" "--lowcpu"
-parse_start_options fullscreen_mode game_mode start_args --no-lowcpu
+parse_start_options fullscreen_mode start_args --no-lowcpu
 expect_equal "${IKA_LOWCPU}" "off" "--no-lowcpu"
 # restart runs start in a new process
 expect_equal "$(bash -c 'printf %s "${IKA_LOWCPU:-unset}"')" "off" "--no-lowcpu reaches the start that restart runs"
-parse_start_options fullscreen_mode game_mode start_args --lowcpu=auto
+parse_start_options fullscreen_mode start_args --lowcpu=auto
 expect_equal "${IKA_LOWCPU}" "auto" "--lowcpu=auto"
 
 # The guest settings, through a stubbed adb that records the shell commands.

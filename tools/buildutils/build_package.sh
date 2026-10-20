@@ -202,7 +202,7 @@ function source_tree_exclude_paths() {
   printf '%s\n' \
     tmp cuttlefish cuttlefish_assembly cuttlefish_runtime 'cuttlefish_runtime.*' \
     Chromium.apk Chromium.apk.part 'Magisk-v*.apk' 'Magisk-v*.apk.part' \
-    .cuttlefish_config.json apps app-menu-disabled app-menu.log \
+    .cuttlefish_config.json apps app-menu-disabled app-menu.log app-options.ini \
     app-menu-sync.lock app-menu-watcher.lock app-menu-watcher.pid \
     autostart.lock 'chromium-installed-cvd-*' console-launch.lock console.log \
     console-supervisor.lock console-supervisor.pid console-window-state \
