@@ -73,6 +73,9 @@ constexpr int kClientMessagePollMs = 100;
 // the next one, the server holds the latest frame not taken yet and the one
 // it is copying, and two are slack for the releases on their way back
 constexpr uint32_t kSlotCount = 6;
+// Frames of another kind in a row before a display's frame path counts as
+// changed (NoteFramePathLocked)
+constexpr uint32_t kFramePathRunLength = 10;
 
 struct DmabufFrameHeader {
   uint32_t magic;
@@ -299,6 +302,14 @@ void RawFrameStreamer::OnFrame(uint32_t display_number, uint32_t width,
       display->suppress_next_raw = false;
       return;
     }
+    if (NoteFramePathLocked(*display, FrameType::kRaw)) {
+      // The costly path: crosvm reads the scanout back and copies it, and so
+      // does the client. Logged on each change, so that a host that falls off
+      // the DMA-BUF path shows it.
+      LOG(INFO) << "Display " << display_number
+                << " frames arrive as pixels read back by crosvm: " << width
+                << "x" << height << " stride " << stride_bytes;
+    }
     if (ReserveSlotLocked(*display, header.payload_size, &slot_index)) {
       mapping = display->shm.mapping;
       slot_data = mapping->data +
@@ -333,6 +344,31 @@ void RawFrameStreamer::OnFrame(uint32_t display_number, uint32_t width,
   std::lock_guard<std::mutex> lock(mutex_);
   ReplaceLatestFrameLocked(*display, std::move(frame));
   FrameChangedLocked(*display);
+}
+
+// Record how a display's frames arrive. Return true when the path is first
+// known or has changed: a change counts once the new kind has arrived
+// kFramePathRunLength times in a row, so that a stray frame of the other kind
+// (a readback right after a DMA-BUF, which the display drops anyway) does not
+// log a change on every frame.
+bool RawFrameStreamer::NoteFramePathLocked(DisplayStream& display,
+                                           FrameType type) {
+  if (type == display.frame_path) {
+    display.frame_path_run = 0;
+    return false;
+  }
+  if (type != display.frame_path_candidate) {
+    display.frame_path_candidate = type;
+    display.frame_path_run = 0;
+  }
+  ++display.frame_path_run;
+  if (display.frame_path != FrameType::kNone &&
+      display.frame_path_run < kFramePathRunLength) {
+    return false;
+  }
+  display.frame_path = type;
+  display.frame_path_run = 0;
+  return true;
 }
 
 RawFrameStreamer::DisplayStream& RawFrameStreamer::GetDisplayLocked(
@@ -478,7 +514,8 @@ DmabufFrameResult RawFrameStreamer::OnDmabufFrame(
   {
     std::lock_guard<std::mutex> lock(mutex_);
     DisplayStream& display = GetDisplayLocked(display_number);
-    if (!(display.dmabuf_geometry == geometry)) {
+    const bool path_changed = NoteFramePathLocked(display, FrameType::kDmabuf);
+    if (!(display.dmabuf_geometry == geometry) || path_changed) {
       display.dmabuf_geometry = geometry;
       std::ostringstream description;
       description << width << "x" << height << " "
