@@ -20,7 +20,7 @@ message starts with a little-endian magic ("IKA" + a letter) and a version:
 | `IKAS` | a memfd of frame slots (`SCM_RIGHTS`) |
 | `IKAN` | a new frame in a slot: size, DRM format, stride |
 | `IKAF` | a frame with its pixels inline |
-| `IKAD` | a frame as a DMA-BUF (`SCM_RIGHTS`), with offset, stride and modifier |
+| `IKAD` | a frame as a DMA-BUF (`SCM_RIGHTS`), with offset, stride and modifier; version 2 adds a frame id |
 
 Frames become `AVFrame`s: packed RGB, or `AV_PIX_FMT_DRM_PRIME` for DMA-BUFs.
 `app/src/interop/interop_raw.c` uploads the former and imports the latter
@@ -46,6 +46,18 @@ then point into the slots without a copy, and the client sends `IKAR`
 server does not rewrite a slot until it is released. Otherwise (`IKAS`
 version 1, from an older server) the client copies each slot as soon as it is
 notified.
+
+The client then sends `IKAH` version 3, whose first argument is a bitmask of
+what it releases: 1 the slots, 2 the DMA-BUF frames (an older server ignores
+it: it checks the version 2 hello's argument exactly). A server that knows it
+sends `IKAD` version 2, with a frame id, and keeps the guest's Wayland buffer
+of that frame (`wl_buffer.release`) until the client sends `IKAB` (frame id)
+when the last reference to the frame is dropped, so that the guest does not
+draw into a buffer the console still shows. A frame id of 0 means the buffer
+was released at once (the console was paused, for instance). The server holds
+at most three buffers per display, the depth of the guest's swapchain, and
+releases the oldest anyway beyond that; it releases everything the client
+held when it disconnects.
 
 While its window is hidden (minimized or occluded), the client sends `IKAP`:
 `ika_stream` then keeps the display's latest frame without sending it, and

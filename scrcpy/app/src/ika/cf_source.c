@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -23,9 +24,17 @@
 #define SC_CF_MAGIC_HELLO 0x48414b49u // IKAH: sent by the client on connection
 #define SC_CF_MAGIC_SHM_RELEASE 0x52414b49u // IKAR: sent when a slot is free
 #define SC_CF_MAGIC_PAUSE 0x50414b49u // IKAP: sent when the window is hidden
+#define SC_CF_MAGIC_DMA_BUF_RELEASE 0x42414b49u // IKAB: a DMA-BUF frame is free
 #define SC_CF_VERSION 1
 // IKAS with a generation: the client must release the slots (IKAR)
 #define SC_CF_VERSION_SHM_RELEASE 2
+// IKAD with a frame id: the client must release the frame (IKAB)
+#define SC_CF_VERSION_DMA_BUF_RELEASE 2
+// IKAH with a bitmask of what the client releases, after the version 2 hello
+// that older servers expect
+#define SC_CF_VERSION_HELLO_FLAGS 3
+#define SC_CF_HELLO_RELEASES_SLOTS 1u
+#define SC_CF_HELLO_RELEASES_DMA_BUFS 2u
 
 #define SC_CF_MAX_PAYLOAD (256u * 1024 * 1024)
 #define SC_CF_MAX_SLOTS 16
@@ -49,7 +58,7 @@ struct sc_cf_raw_header {
     uint32_t payload_size;
 };
 
-// IKAD
+// IKAD (version 2 appends frame_id)
 struct sc_cf_dma_buf_header {
     uint32_t display_number;
     uint32_t width;
@@ -59,6 +68,7 @@ struct sc_cf_dma_buf_header {
     uint32_t stride;
     uint32_t modifier_hi;
     uint32_t modifier_lo;
+    uint32_t frame_id;
 };
 
 // IKAS
@@ -67,8 +77,9 @@ struct sc_cf_shm_init_header {
     uint32_t slot_size;
 };
 
-// Client messages: IKAH (arg0 = 1: releases slots, arg1 = display number),
-// IKAR (arg0 = generation, arg1 = slot index), IKAP (arg0 = 1: window hidden)
+// Client messages: IKAH (arg0 = 1: releases slots, arg1 = display number;
+// version 3: arg0 = SC_CF_HELLO_* bits), IKAR (arg0 = generation, arg1 = slot
+// index), IKAB (arg0 = frame id), IKAP (arg0 = 1: window hidden)
 struct sc_cf_client_msg {
     uint32_t magic;
     uint32_t version;
@@ -91,6 +102,20 @@ struct sc_cf_shm {
 struct sc_cf_slot {
     AVBufferRef *shm;
     uint32_t index;
+};
+
+// The connection, in an AVBufferRef so that DMA-BUF frames can release
+// themselves after it is gone (the send then fails, the server has forgotten
+// them)
+struct sc_cf_conn {
+    int fd; // the socket (dup)
+};
+
+// A DMA-BUF frame: its descriptor, and what to release when it is freed
+struct sc_cf_dma_buf {
+    AVDRMFrameDescriptor desc;
+    AVBufferRef *conn;
+    uint32_t frame_id; // 0 if the server does not hold the buffer
 };
 
 // IKAN
@@ -196,10 +221,11 @@ sc_cf_recv_header(int fd, struct sc_cf_header *header, int *attached_fd) {
 }
 
 static bool
-sc_cf_send_msg(int fd, uint32_t magic, uint32_t arg0, uint32_t arg1) {
+sc_cf_send_msg_version(int fd, uint32_t magic, uint32_t version,
+                       uint32_t arg0, uint32_t arg1) {
     struct sc_cf_client_msg msg = {
         .magic = magic,
-        .version = SC_CF_VERSION_SHM_RELEASE,
+        .version = version,
         .arg0 = arg0,
         .arg1 = arg1,
     };
@@ -208,6 +234,47 @@ sc_cf_send_msg(int fd, uint32_t magic, uint32_t arg0, uint32_t arg1) {
         w = send(fd, &msg, sizeof(msg), MSG_NOSIGNAL);
     } while (w < 0 && errno == EINTR);
     return w == (ssize_t) sizeof(msg);
+}
+
+static bool
+sc_cf_send_msg(int fd, uint32_t magic, uint32_t arg0, uint32_t arg1) {
+    return sc_cf_send_msg_version(fd, magic, SC_CF_VERSION_SHM_RELEASE, arg0,
+                                  arg1);
+}
+
+static void
+sc_cf_free_conn(void *opaque, uint8_t *data) {
+    (void) opaque;
+    struct sc_cf_conn *conn = (struct sc_cf_conn *) data;
+    close(conn->fd);
+    free(conn);
+}
+
+// Keep the socket for the releases of the DMA-BUF frames of this connection
+static bool
+sc_cf_open_conn(struct sc_cf_source *source, int fd) {
+    struct sc_cf_conn *conn = malloc(sizeof(*conn));
+    if (!conn) {
+        LOG_OOM();
+        return false;
+    }
+    conn->fd = fcntl(fd, F_DUPFD_CLOEXEC, 3);
+    if (conn->fd == -1) {
+        LOGE("Could not duplicate Cuttlefish frame socket: %s",
+             strerror(errno));
+        free(conn);
+        return false;
+    }
+    AVBufferRef *ref = av_buffer_create((uint8_t *) conn, sizeof(*conn),
+                                        sc_cf_free_conn, NULL, 0);
+    if (!ref) {
+        LOG_OOM();
+        sc_cf_free_conn(NULL, (uint8_t *) conn);
+        return false;
+    }
+    av_buffer_unref(&source->conn);
+    source->conn = ref;
+    return true;
 }
 
 static void
@@ -351,24 +418,45 @@ sc_cf_make_slot_frame(struct sc_cf_source *source,
     return true;
 }
 
+// The last reference to a DMA-BUF frame is dropped: the guest may draw into
+// its buffer again
 static void
 sc_cf_free_dma_buf(void *opaque, uint8_t *data) {
     (void) opaque;
-    AVDRMFrameDescriptor *desc = (AVDRMFrameDescriptor *) data;
-    close(desc->objects[0].fd);
-    av_free(desc);
+    struct sc_cf_dma_buf *dma_buf = (struct sc_cf_dma_buf *) data;
+    if (dma_buf->frame_id) {
+        struct sc_cf_conn *conn = (struct sc_cf_conn *) dma_buf->conn->data;
+        // Fails once disconnected, the server released the buffer anyway
+        sc_cf_send_msg(conn->fd, SC_CF_MAGIC_DMA_BUF_RELEASE,
+                       dma_buf->frame_id, 0);
+    }
+    av_buffer_unref(&dma_buf->conn);
+    close(dma_buf->desc.objects[0].fd);
+    av_free(dma_buf);
 }
 
 static bool
 sc_cf_make_dma_buf_frame(struct sc_cf_source *source,
                          const struct sc_cf_dma_buf_header *h, int dma_buf_fd) {
-    AVDRMFrameDescriptor *desc = av_mallocz(sizeof(*desc));
-    if (!desc) {
+    struct sc_cf_dma_buf *dma_buf = av_mallocz(sizeof(*dma_buf));
+    if (!dma_buf) {
         LOG_OOM();
         close(dma_buf_fd);
         return false;
     }
+    dma_buf->frame_id = h->frame_id;
+    if (h->frame_id) {
+        assert(source->conn);
+        dma_buf->conn = av_buffer_ref(source->conn);
+        if (!dma_buf->conn) {
+            LOG_OOM();
+            close(dma_buf_fd);
+            av_free(dma_buf);
+            return false;
+        }
+    }
 
+    AVDRMFrameDescriptor *desc = &dma_buf->desc;
     desc->nb_objects = 1;
     desc->objects[0].fd = dma_buf_fd;
     desc->objects[0].size = 0; // unknown
@@ -381,12 +469,14 @@ sc_cf_make_dma_buf_frame(struct sc_cf_source *source,
     desc->layers[0].planes[0].offset = h->offset;
     desc->layers[0].planes[0].pitch = h->stride;
 
-    AVBufferRef *buf = av_buffer_create((uint8_t *) desc, sizeof(*desc),
+    // The frame's data is the descriptor, the first member
+    AVBufferRef *buf = av_buffer_create((uint8_t *) dma_buf, sizeof(*dma_buf),
                                         sc_cf_free_dma_buf, NULL, 0);
     if (!buf) {
         LOG_OOM();
         close(dma_buf_fd);
-        av_free(desc);
+        av_buffer_unref(&dma_buf->conn);
+        av_free(dma_buf);
         return false;
     }
 
@@ -410,7 +500,9 @@ sc_cf_process_msg(struct sc_cf_source *source, int fd) {
 
     bool shm_release = header.magic == SC_CF_MAGIC_SHM_INIT
                     && header.version == SC_CF_VERSION_SHM_RELEASE;
-    if (header.version != SC_CF_VERSION && !shm_release) {
+    bool dma_buf_release = header.magic == SC_CF_MAGIC_DMA_BUF
+                        && header.version == SC_CF_VERSION_DMA_BUF_RELEASE;
+    if (header.version != SC_CF_VERSION && !shm_release && !dma_buf_release) {
         LOGE("Unsupported Cuttlefish frame version: %" PRIu32, header.version);
         goto error;
     }
@@ -542,14 +634,23 @@ sc_cf_process_msg(struct sc_cf_source *source, int fd) {
             break;
         }
         case SC_CF_MAGIC_DMA_BUF: {
-            struct sc_cf_dma_buf_header h;
-            if (attached_fd == -1 || !sc_cf_read_all(fd, &h, sizeof(h))
+            struct sc_cf_dma_buf_header h = {0};
+            // An older server sends no frame id
+            size_t size = dma_buf_release ? sizeof(h)
+                                          : offsetof(struct sc_cf_dma_buf_header,
+                                                     frame_id);
+            if (attached_fd == -1 || !sc_cf_read_all(fd, &h, size)
                     || !sc_cf_check_size(h.width, h.height, h.stride)) {
                 LOGE("Invalid Cuttlefish DMA-BUF frame");
                 goto error;
             }
             if (h.display_number != source->display_number
                     || sc_cf_get_pix_fmt(h.fourcc) == AV_PIX_FMT_NONE) {
+                if (h.frame_id) {
+                    // Not shown: the guest may have the buffer back
+                    sc_cf_send_msg(fd, SC_CF_MAGIC_DMA_BUF_RELEASE, h.frame_id,
+                                   0);
+                }
                 break;
             }
             int dma_buf_fd = attached_fd;
@@ -632,11 +733,22 @@ run_cf_source(void *data) {
         error_logged = false;
         LOGD("Connected to Cuttlefish frame socket %s", source->socket_path);
 
+        if (!sc_cf_open_conn(source, fd)) {
+            close(fd);
+            break;
+        }
+
         // Ask for the slots to be released by the client instead of copied,
         // and for the frames of our display only (an older server ignores it,
-        // and sends the frames of all the displays)
-        if (!sc_cf_send_msg(fd, SC_CF_MAGIC_HELLO, 1,
-                            source->display_number)) {
+        // and sends the frames of all the displays); then, for the DMA-BUF
+        // frames to be released by the client too (version 3, which an older
+        // server ignores: it checks the version 2 hello's argument exactly)
+        if (!sc_cf_send_msg(fd, SC_CF_MAGIC_HELLO, 1, source->display_number)
+                || !sc_cf_send_msg_version(fd, SC_CF_MAGIC_HELLO,
+                                           SC_CF_VERSION_HELLO_FLAGS,
+                                           SC_CF_HELLO_RELEASES_SLOTS
+                                               | SC_CF_HELLO_RELEASES_DMA_BUFS,
+                                           source->display_number)) {
             LOGW("Could not send Cuttlefish frame socket hello");
         }
         sc_mutex_lock(&source->mutex);
@@ -658,6 +770,7 @@ run_cf_source(void *data) {
         sc_mutex_unlock(&source->mutex);
         close(fd);
         av_buffer_unref(&source->shm);
+        av_buffer_unref(&source->conn);
         av_frame_unref(source->frame);
 
         if (!opened) {
@@ -705,6 +818,7 @@ sc_cf_source_init(struct sc_cf_source *source, const char *socket_path,
     source->stopped = false;
     source->fd = -1;
     source->shm = NULL;
+    source->conn = NULL;
     source->pool = NULL;
     source->pool_size = 0;
     source->sinks_open = false;
@@ -756,6 +870,7 @@ sc_cf_source_join(struct sc_cf_source *source) {
 void
 sc_cf_source_destroy(struct sc_cf_source *source) {
     av_buffer_unref(&source->shm);
+    av_buffer_unref(&source->conn);
     av_buffer_pool_uninit(&source->pool);
     av_frame_free(&source->frame);
     sc_mutex_destroy(&source->mutex);

@@ -22,7 +22,8 @@
  *
  * If the server supports it, the frames point into the shared memory slots
  * without a copy: the server does not rewrite a slot until the client releases
- * it, when the last reference to the frame is dropped.
+ * it, when the last reference to the frame is dropped. Likewise, the server
+ * holds the guest's buffer of a DMA-BUF frame until the frame is released.
  */
 struct sc_cf_source {
     struct sc_frame_source frame_source; // frame source trait
@@ -43,6 +44,9 @@ struct sc_cf_source {
     // Shared memory slots, mapped from the server (IKAS message), a
     // struct sc_cf_shm referenced by the frames pointing into it
     AVBufferRef *shm;
+    // The connection (a struct sc_cf_conn), referenced by the DMA-BUF frames
+    // to release when they are freed
+    AVBufferRef *conn;
 
     AVBufferPool *pool;
     size_t pool_size;
