@@ -100,6 +100,7 @@ else
         'src/sys/unix/file.c',
         'src/sys/unix/process.c',
         'src/ika/cf_source.c',
+        'src/ika/latency.c',
         'src/ika/window.c',
     ]
     if host_machine.system() == 'darwin'

@@ -14,6 +14,7 @@
 #include "coords.h"
 #include "disconnect.h"
 #include "fps_counter.h"
+#include "ika/latency.h"
 #include "frame_buffer.h"
 #include "ika/flex.h"
 #include "ika/window.h"
@@ -81,6 +82,8 @@ struct sc_screen {
     struct sc_input_manager im;
     struct sc_mouse_capture mc; // only used in mouse relative mode
     struct sc_fps_counter fps_counter;
+    // Frame latency statistics (IKA_LATENCY=1)
+    struct sc_latency latency;
 
     struct sc_mutex mutex;
     struct sc_frame_buffer fb; // protected by mutex

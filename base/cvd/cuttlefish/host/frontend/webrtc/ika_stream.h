@@ -97,6 +97,9 @@ class RawFrameStreamer {
     // then belongs to the client, ClientShm::held_dmabufs)
     uint32_t hold_id = 0;
     bool hold_taken = false;
+    // When the frame came from crosvm (CLOCK_MONOTONIC), for the client's
+    // latency statistics (IKAT)
+    uint64_t arrival_ns = 0;
   };
 
   // The memfd of frame slots shared with the client, unmapped and closed with
@@ -128,6 +131,8 @@ class RawFrameStreamer {
     // The client releases DMA-BUF frames (IKAB): their buffers are held until
     // then, and IKAD carries their ids. The frames it holds, oldest first.
     bool client_releases_dmabufs = false;
+    // The client wants IKAT before each frame notice (IKA_LATENCY=1)
+    bool wants_timestamps = false;
     std::vector<uint32_t> held_dmabufs;
     // The display the client shows, from its hello (0 without one)
     uint32_t display_number = 0;
@@ -182,6 +187,7 @@ class RawFrameStreamer {
   void ClientLoop(int client_fd);
   void StreamToClient(int client_fd, DisplayStream& display);
   bool SendAll(int fd, const void* data, size_t size);
+  bool SendTimestamps(int fd, const Frame& frame);
   bool SendDmabufFrame(int fd, const Frame& frame, bool with_frame_id);
   bool SendRawFrame(int fd, const Frame& frame, DisplayStream& display);
   FrameSendResult SendShmInit(int fd, DisplayStream& display,

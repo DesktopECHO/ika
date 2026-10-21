@@ -732,6 +732,9 @@ sc_screen_frame_sink_push(struct sc_frame_sink *sink, const AVFrame *frame) {
     bool previous_skipped = sc_frame_buffer_has_frame(&screen->fb);
     bool ok = sc_frame_buffer_push(&screen->fb, frame);
     screen->prevent_auto_resize = screen->current_session.video.client_resized;
+    if (previous_skipped) {
+        sc_latency_add_skipped(&screen->latency);
+    }
     sc_mutex_unlock(&screen->mutex);
     if (!ok) {
         return SC_SINK_KO;
@@ -823,6 +826,7 @@ sc_screen_init(struct sc_screen *screen,
     if (!sc_fps_counter_init(&screen->fps_counter)) {
         goto error_destroy_frame_buffer;
     }
+    sc_latency_init(&screen->latency);
 
     if (screen->video) {
         screen->orientation = params->orientation;
@@ -1303,6 +1307,13 @@ sc_screen_apply_frame(struct sc_screen *screen, bool can_resize) {
     }
 
     sc_screen_render(screen, false);
+
+    // The frame is presented: its latency, when the frame carries its stamps
+    if (sc_latency_enabled(&screen->latency) && frame->opaque_ref
+            && frame->opaque_ref->size == sizeof(struct sc_latency_stamps)) {
+        sc_latency_add_presented(&screen->latency,
+            (const struct sc_latency_stamps *) frame->opaque_ref->data);
+    }
     return true;
 }
 

@@ -9,6 +9,7 @@
 #include <libavutil/frame.h>
 
 #include "coords.h"
+#include "ika/latency.h"
 #include "trait/frame_source.h"
 #include "util/thread.h"
 
@@ -53,6 +54,13 @@ struct sc_cf_source {
     AVFrame *frame;
     bool sinks_open;
 
+    // Ask the server for the frames' timestamps (IKAT, with IKA_LATENCY=1),
+    // and the ones received for the next frame, attached to it as its
+    // opaque_ref (a struct sc_latency_stamps)
+    bool want_stamps;
+    bool stamps_pending;
+    struct sc_latency_stamps stamps;
+
     // The window is hidden: the server keeps the frames instead of sending them
     // (protected by mutex)
     bool window_hidden;
@@ -60,7 +68,8 @@ struct sc_cf_source {
 
 bool
 sc_cf_source_init(struct sc_cf_source *source, const char *socket_path,
-                  uint32_t display_number, struct sc_size open_size);
+                  uint32_t display_number, struct sc_size open_size,
+                  bool want_stamps);
 
 bool
 sc_cf_source_start(struct sc_cf_source *source);

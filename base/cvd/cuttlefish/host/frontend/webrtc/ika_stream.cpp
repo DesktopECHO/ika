@@ -27,6 +27,7 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -61,6 +62,10 @@ constexpr uint32_t kDmabufReleaseMagic = 0x42414b49;  // "IKAB", little-endian.
 constexpr uint32_t kClientHelloFlagsVersion = 3;
 constexpr uint32_t kHelloReleasesSlots = 1u << 0;
 constexpr uint32_t kHelloReleasesDmabufs = 1u << 1;
+// The client wants the frames' timestamps (IKAT) for its latency statistics
+constexpr uint32_t kHelloWantsTimestamps = 1u << 2;
+constexpr uint32_t kTimestampsMagic = 0x54414b49;  // "IKAT", little-endian.
+constexpr uint32_t kTimestampsVersion = 1;
 constexpr int kClientHelloTimeoutMs = 100;
 constexpr int kListenBacklog = 4;
 constexpr size_t kRawBufferPoolSize = 4;
@@ -94,6 +99,18 @@ struct DmabufFrameHeader {
 struct DmabufFrameIdHeader {
   DmabufFrameHeader frame;
   uint32_t frame_id;
+};
+
+// IKAT: sent before a frame's notice to a client that asked for it. The
+// times are CLOCK_MONOTONIC of this host: when the frame came from crosvm (its
+// Wayland commit) and when the notice is sent.
+struct TimestampsHeader {
+  uint32_t magic;
+  uint32_t version;
+  uint32_t display_number;
+  uint32_t reserved;
+  uint64_t arrival_ns;
+  uint64_t send_ns;
 };
 
 struct ShmInitHeader {
@@ -142,6 +159,13 @@ int MemfdCreate(const char* name) {
   errno = ENOSYS;
   return -1;
 #endif
+}
+
+uint64_t MonotonicNs() {
+  timespec ts = {};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<uint64_t>(ts.tv_sec) * 1000000000ull +
+         static_cast<uint64_t>(ts.tv_nsec);
 }
 
 using SendDeadline = std::chrono::steady_clock::time_point;
@@ -271,6 +295,7 @@ void RawFrameStreamer::OnFrame(uint32_t display_number, uint32_t width,
     return;
   }
 
+  const uint64_t arrival_ns = MonotonicNs();
   const size_t payload_size = static_cast<size_t>(height) * stride_bytes;
   if (payload_size > UINT32_MAX) {
     LOG(WARNING) << "Raw frame too large for stream: " << payload_size;
@@ -322,6 +347,7 @@ void RawFrameStreamer::OnFrame(uint32_t display_number, uint32_t width,
   Frame frame;
   frame.type = FrameType::kRaw;
   frame.header = header;
+  frame.arrival_ns = arrival_ns;
 
   if (mapping) {
     memcpy(slot_data, pixels, payload_size);
@@ -486,6 +512,7 @@ DmabufFrameResult RawFrameStreamer::OnDmabufFrame(
 
   Frame frame;
   frame.type = FrameType::kDmabuf;
+  frame.arrival_ns = MonotonicNs();
   frame.header = {
       .magic = kDmabufFrameMagic,
       .version = kDmabufFrameVersion,
@@ -828,7 +855,11 @@ void RawFrameStreamer::StreamToClient(int client_fd, DisplayStream& display) {
       continue;
     }
 
-    bool ok = false;
+    bool ok = !display.shm.wants_timestamps || SendTimestamps(client_fd, frame);
+    if (!ok) {
+      CloseFrameFd(frame);
+      return;
+    }
     if (frame.type == FrameType::kRaw && frame.slot >= 0) {
       ok = SendShmNotify(client_fd, frame, frame.slot);
     } else if (frame.type == FrameType::kRaw) {
@@ -1043,6 +1074,20 @@ RawFrameStreamer::FrameSendResult RawFrameStreamer::SendShmFrame(
                                               : FrameSendResult::kFailed;
 }
 
+// Tell the client when the frame came from crosvm and when it is sent, for
+// its latency statistics: the next frame notice is the frame these describe
+bool RawFrameStreamer::SendTimestamps(int fd, const Frame& frame) {
+  TimestampsHeader header = {
+      .magic = kTimestampsMagic,
+      .version = kTimestampsVersion,
+      .display_number = frame.header.display_number,
+      .reserved = 0,
+      .arrival_ns = frame.arrival_ns,
+      .send_ns = MonotonicNs(),
+  };
+  return SendAll(fd, &header, sizeof(header));
+}
+
 // Tell the client that a slot holds the frame
 bool RawFrameStreamer::SendShmNotify(int fd, const Frame& frame,
                                      uint32_t slot_index) {
@@ -1094,6 +1139,7 @@ bool RawFrameStreamer::ReadClientMessages(int fd, ClientShm& shm) {
           (message.arg0 & kHelloReleasesSlots) != 0;
       shm.client_releases_dmabufs =
           (message.arg0 & kHelloReleasesDmabufs) != 0;
+      shm.wants_timestamps = (message.arg0 & kHelloWantsTimestamps) != 0;
       shm.display_number = message.arg1;
     } else if (message.magic == kClientHelloMagic) {
       shm.client_releases_slots = message.arg0 == 1;
@@ -1224,6 +1270,7 @@ RawFrameStreamer::Frame RawFrameStreamer::CopyLatestFrameLocked(
   frame.offset = latest_frame.offset;
   frame.modifier_hi = latest_frame.modifier_hi;
   frame.modifier_lo = latest_frame.modifier_lo;
+  frame.arrival_ns = latest_frame.arrival_ns;
   // From now on the client holds the slot, until it releases it
   frame.slot = latest_frame.slot;
   if (latest_frame.slot >= 0) {
