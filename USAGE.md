@@ -190,10 +190,11 @@ released pointer is the usual mouse, so menus can be clicked. With
 Right-click a game in the desktop's app menu and choose **Controller
 mapping...** (`ika app --controller NAME` from a terminal) for a window with
 the keyboard gamepad's keys and settings for that game: a field per control
-with its keys, as above, the stick ramp, the walk speed and the rule for
-opposite keys. **Apply settings** saves them in
-`~/ika/apps/PACKAGE/controller.ini`, where they go over `ika.ini`, and ticks
-**Use the keyboard as a gamepad** in the game's start options if it was not;
+with its keys, as above, the stick ramp, the walk speed, the rule for
+opposite keys, the stick the mouse moves and the mouse's sensitivity.
+**Apply settings** saves them in `~/ika/apps/PACKAGE/controller.ini`, where
+they go over `ika.ini`, and ticks **Use the keyboard to emulate a gamepad**
+in the game's start options if it was not;
 **Apply and start** does that and starts the game; **Reset to ika.ini**
 removes the game's mapping; **Cancel** leaves everything as it was. A key
 typed for one control leaves the control it was shown on, so moving a key
