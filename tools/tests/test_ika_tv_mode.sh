@@ -102,17 +102,72 @@ SCRCPY_DPI="200"
 SCRCPY_DPI_GIVEN="true"
 [[ "$(console_of tv false)" == *" --dpi=200 "* ]] || fail "--dpi in TV mode"
 
-# The mode switch opens in the console on the primary display, not in a window.
-scrcpy_supervisor_pid() { printf '123\n'; }
-guest_adb() {
-  printf '%s\n' "$*" >>"${T}/adb.log"
-  case "$*" in
-    *resolve-activity*) printf 'org.lineageos.desktop.mode/.SwitcherActivity\n' ;;
-  esac
+# The mode switch is an app like any other: it opens in a window of its own,
+# not in the console on the primary display.
+! declare -F open_in_console >/dev/null || fail "Desktop/TV can still open in the console"
+
+# Its window fits the list: 480x560 dp, in logical points, at the guest's
+# density and the host's native/logical ratio, and never larger than the screen.
+host_display_size() { printf '1920x1080\n'; }
+host_display_logical_size() { printf '1920x1080\n'; }
+assert_equal "504x584" "$(mode_app_window_size 168)" "mode window on a 1x screen"
+host_display_size() { printf '3456x2160\n'; }
+host_display_logical_size() { printf '2033x1271\n'; }
+assert_equal "560x656" "$(mode_app_window_size 320)" "mode window on a 1.7x screen"
+host_display_size() { printf '400x300\n'; }
+host_display_logical_size() { printf '400x300\n'; }
+assert_equal "400x300" "$(mode_app_window_size 168)" "mode window on a tiny screen"
+host_display_size() { return 1; }
+host_display_logical_size() { return 1; }
+assert_equal "504x584" "$(mode_app_window_size 168)" "mode window without host sizes"
+! mode_app_window_size "" >/dev/null 2>&1 || fail "mode window without a density"
+
+# Opening it from the menu goes the way of every app window: its own Cuttlefish
+# display, at the mode window's size unless one was saved or given, and no
+# activity started on the primary display.
+host_display_size() { printf '3456x2160\n'; }
+host_display_logical_size() { printf '2033x1271\n'; }
+require_executable() { :; }
+ensure_guest_ready() { :; }
+resolve_adb_serial() { printf 'serial\n'; }
+app_is_installed() { return 0; }
+app_display_name() { printf 'Desktop/TV\n'; }
+guest_ui_mode() { printf 'desktop\n'; }
+guest_display_density() { printf '320\n'; }
+resolve_cuttlefish_frames_socket() { printf '/frames.sock\n'; }
+add_cuttlefish_display() { printf '7\n'; }
+append_scrcpy_input_args() { :; }
+append_scrcpy_extra_args() { :; }
+append_scrcpy_env() { :; }
+app_menu_icon() { printf '/no/icon\n'; }
+guest_adb() { printf '%s\n' "$*" >>"${T}/adb.log"; }
+sleep() { :; }
+polls=0
+supervisor_pid_from_file() { polls=$((polls + 1)); (( polls > 1 )); }
+setsid() { printf '%s\n' "$*" >"${T}/setsid.args"; }
+open_mode_window() {
+  rm -f "${T}/setsid.args"
+  polls=0
+  SCRCPY_WINDOW_STATE_FILE="${T}/none"
+  open_app_window "${IKA_MODE_PACKAGE}" false "" "$1" >"${T}/open.out" 2>&1 \
+    || fail "opening Desktop/TV failed: $(cat "${T}/open.out")"
+  for _ in {1..50}; do [[ -s "${T}/setsid.args" ]] && break; command sleep 0.1; done
+  cat "${T}/setsid.args"
 }
-open_in_console "${IKA_MODE_PACKAGE}" "Desktop/TV" >/dev/null 2>&1
-grep -q -- "am start --display 0 .* -n org.lineageos.desktop.mode/.SwitcherActivity" "${T}/adb.log" \
-  || fail "Desktop/TV did not open on the primary display: $(cat "${T}/adb.log")"
+mode_window="$(open_mode_window "")"
+[[ "${mode_window}" == *" --start-app=+${IKA_MODE_PACKAGE} "* ]] \
+  || fail "Desktop/TV window did not start the app: ${mode_window}"
+[[ "${mode_window}" == *" --window-width=560 --window-height=656 "* ]] \
+  || fail "Desktop/TV window size: ${mode_window}"
+[[ "${mode_window}" == *" --cuttlefish-display=7 "* && "${mode_window}" == *"SDL_APP_ID=ika-${IKA_MODE_PACKAGE}"* ]] \
+  || fail "Desktop/TV window is not an app window of its own: ${mode_window}"
+! grep -q -- "--display 0" "${T}/adb.log" 2>/dev/null \
+  || fail "Desktop/TV started an activity on the primary display: $(cat "${T}/adb.log")"
+grep -q "Opened Desktop/TV in its own window" "${T}/open.out" \
+  || fail "Desktop/TV reply: $(cat "${T}/open.out")"
+# A size given with --size, or saved from resizing the window, wins.
+[[ "$(open_mode_window "900x700")" == *" --window-width=900 --window-height=700 "* ]] \
+  || fail "--size did not win for Desktop/TV"
 
 # A mode switch brings each console back as it was last used in its mode:
 # the console that opens after Android restarted in the other mode takes
