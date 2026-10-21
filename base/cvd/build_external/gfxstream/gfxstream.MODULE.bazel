@@ -62,5 +62,9 @@ git_repository(
         # A scanned-out color buffer is re-created with an explicit DRM format
         # modifier, so any host display driver imports it correctly.
         "@//build_external/gfxstream:PATCH.gfxstream.scanout-drm-modifier-export.patch",
+        # VulkanPreferHostCachedMemory (off by default): guest host-visible
+        # allocations from a cached coherent host type instead of a
+        # write-combined one, which is slow for the guest's uploads.
+        "@//build_external/gfxstream:PATCH.gfxstream.prefer-host-cached-memory.patch",
     ],
 )

@@ -26,4 +26,5 @@ exports_files([
     "PATCH.gfxstream.gl-color-buffer-dmabuf-export.patch",
     "PATCH.gfxstream.scanout-dmabuf-export-feature.patch",
     "PATCH.gfxstream.scanout-drm-modifier-export.patch",
+    "PATCH.gfxstream.prefer-host-cached-memory.patch",
 ])

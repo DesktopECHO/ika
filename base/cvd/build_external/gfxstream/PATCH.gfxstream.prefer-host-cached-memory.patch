@@ -1,0 +1,79 @@
+Patch summary:
+VulkanPreferHostCachedMemory renderer feature, off by default. A guest's
+allocation of host-visible memory that lands on a write-combined host memory
+type (host visible, not cached, not device local) is taken from a host
+visible, coherent and cached type of the same heap instead, when the host has
+one. The guest writes its uploads through its mapping of this memory, and
+write-combined memory is slow for them on some drivers: on an NVIDIA host the
+guest's copy loop into it took 37% of a render thread's samples, 1.5% once
+cached (google/gfxstream issue 198). Memory that imports a color buffer, a
+buffer or a guest handle, and dedicated allocations, keep their type. The
+caching the VMM maps the memory with follows the chosen type, as before.
+
+diff --git a/host/features/include/gfxstream/host/features.h b/host/features/include/gfxstream/host/features.h
+index 88e41ac67..48645adbe 100644
+--- a/host/features/include/gfxstream/host/features.h
++++ b/host/features/include/gfxstream/host/features.h
+@@ -438,6 +438,15 @@ struct FeatureSet {
+         "app-compatiblity for common graphics layers in the guest.",
+         &map,
+     };
++    BoolFeatureInfo VulkanPreferHostCachedMemory = {
++        "VulkanPreferHostCachedMemory",
++        "If enabled, a guest allocation of host-visible memory whose host memory type is neither "
++        "cached nor device-local is taken from a host-visible, coherent and cached type of the "
++        "same heap instead, when the host has one. Write-combined host memory is slow for the "
++        "guest's uploads on some drivers (the guest's copies into it dominated a render thread); "
++        "imports, guest-handle blobs and dedicated allocations keep their type.",
++        &map,
++    };
+     StringFeatureInfo VulkanExternalMemoryMode = {
+         "VulkanExternalMemoryMode",
+         "A string specifying the ExternalMemoryMode for VkEmulation to use, "
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index 5b6a5e8b7..8f2712f54 100644
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -6983,6 +6983,42 @@ class VkDecoderGlobalState::Impl {
+             localAllocInfo.memoryTypeIndex = hostMemoryInfo.index;
+             memoryPropertyFlags = hostMemoryInfo.memoryType.propertyFlags;
+ 
++            // VulkanPreferHostCachedMemory: a plain host-visible allocation that landed on a
++            // write-combined host type (host visible, not cached, not device local) is taken
++            // from a cached coherent type of the same heap instead. The guest's uploads go
++            // through its mapping of this memory, and write-combined memory is slow for them on
++            // some drivers. Memory that imports something, carries a guest handle or is
++            // dedicated to a resource keeps the type it was given.
++            const bool importsMemory = importCbInfoPtr || importBufferInfoPtr ||
++                                       (createBlobInfoPtr &&
++                                        createBlobInfoPtr->blobMem == STREAM_BLOB_MEM_GUEST);
++            if (m_vkEmulation->getFeatures().VulkanPreferHostCachedMemory.enabled() &&
++                !importsMemory && !shouldUseDedicatedAllocInfo &&
++                (memoryPropertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
++                !(memoryPropertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) &&
++                !(memoryPropertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
++                constexpr VkMemoryPropertyFlags kCachedCoherent =
++                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
++                    VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
++                const VkPhysicalDeviceMemoryProperties& hostMemoryProperties =
++                    physicalDeviceInfo->memoryPropertiesHelper->getHostMemoryProperties();
++                for (uint32_t i = 0; i < hostMemoryProperties.memoryTypeCount; ++i) {
++                    const VkMemoryType& candidate = hostMemoryProperties.memoryTypes[i];
++                    if (candidate.heapIndex != hostMemoryInfo.memoryType.heapIndex ||
++                        (candidate.propertyFlags & kCachedCoherent) != kCachedCoherent ||
++                        (candidate.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
++                        continue;
++                    }
++                    GFXSTREAM_DEBUG("vkAllocateMemory: host memory type %u (flags 0x%x) replaced "
++                                    "by cached coherent type %u (flags 0x%x) of heap %u",
++                                    localAllocInfo.memoryTypeIndex, memoryPropertyFlags, i,
++                                    candidate.propertyFlags, candidate.heapIndex);
++                    localAllocInfo.memoryTypeIndex = i;
++                    memoryPropertyFlags = candidate.propertyFlags;
++                    break;
++                }
++            }
++
+             auto virtioGpuContextIdOpt = getContextIdForDeviceLocked(device);
+             if (!virtioGpuContextIdOpt) {
+                 GFXSTREAM_ERROR("VkDevice:%p missing context id for vkAllocateMemory().");
