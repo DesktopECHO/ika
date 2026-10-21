@@ -184,6 +184,16 @@
   `/sys/kernel/mm/transparent_hugepage/shmem_enabled` is `advise`,
   `within_size` or `always`.
 
+### Desktop/TV
+- **Desktop/TV**, opened from the desktop's "Android Apps (Ika)" menu or with
+  `ika app Desktop/TV`, opens in a window of its own like any other app,
+  instead of inside the console. The window is sized to the list (480 by 560
+  dp at the guest's density) rather than to 60% of the screen; resize it and
+  the size is kept. It closes when Android restarts in the other mode, and the
+  console for that mode opens as before. Opened from the app drawer inside
+  the console, it is still a window on the desktop, and opening it from the
+  menu no longer starts the console when Ika is not running.
+
 ### Fixes
 - Input events and status feedback no longer sit in crosvm's virtio input
   queues until the next event (vhost-user input with EVENT_IDX).

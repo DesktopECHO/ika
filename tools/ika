@@ -1871,7 +1871,7 @@ TV mode:
   Desktop Mode and each TV launcher; nothing else changes the mode. Switching
   modes asks, then Android restarts in the other mode; in TV mode, a TV
   launcher becomes the Home app at once. '${SCRIPT_NAME} app Desktop/TV' opens
-  it in the console. In TV mode the console opens fullscreen, at 1.5 times the
+  it in a window of its own. In TV mode the console opens fullscreen, at 1.5 times the
   desktop's automatic density (tv_dpi in ika.ini; --dpi overrides it), and
   passes the gamepad through as the remote: the D-pad or left stick moves, A selects, B goes back
   and the guide button goes Home. The keyboard and mouse work as on the
@@ -5158,34 +5158,42 @@ resolve_launchable_app() {
   resolve_app_name "${name}" "$(list_guest_apps "${adb_serial}")" "launchable app"
 }
 
-# Android's mode switch ("Desktop/TV" in the app menu, IkaMode in Android)
-# asks whether to switch the whole interface, so it opens on the primary
-# display, in the console, rather than in a window of its own.
+# Android's mode switch ("Desktop/TV" in the app menu, IkaMode in Android) is a
+# list and a question, so like any app it opens in a window of its own. The
+# window is sized to that list (in dp, at the guest's density) rather than to
+# 60% of the screen; a size saved from resizing it wins.
 IKA_MODE_PACKAGE="org.lineageos.desktop.mode"
+IKA_MODE_WINDOW_DP_WIDTH=480
+IKA_MODE_WINDOW_DP_HEIGHT=560
 
-open_in_console() {
-  local package="$1"
-  local label="$2"
-  local adb_serial
-  local component
-  local output
+# Prints the size of the Desktop/TV window in logical points, as
+# default_app_window_size does, for a guest display density of DPI: the dp
+# size in the guest's pixels, then in logical points by the host's
+# native/logical ratio (the app is drawn at native resolution), and no larger
+# than the host screen.
+mode_app_window_size() {
+  local dpi="$1"
+  local width
+  local height
+  local native
+  local logical
+  local native_width
 
-  if ! scrcpy_supervisor_pid >/dev/null; then
-    IKA_NOTIFY=false "${IKA_SCRIPT_PATH}" start </dev/null >/dev/null 2>&1 3>&- \
-      || die "could not open the console; see ${START_LOG_FILE}"
+  [[ "${dpi}" =~ ^[1-9][0-9]*$ ]] || return 1
+  width=$(( IKA_MODE_WINDOW_DP_WIDTH * dpi / 160 ))
+  height=$(( IKA_MODE_WINDOW_DP_HEIGHT * dpi / 160 ))
+  native="$(host_display_size || true)"
+  logical="$(host_display_logical_size || true)"
+  if [[ "${native}" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+    native_width="${BASH_REMATCH[1]}"
+    if [[ "${logical}" =~ ^([0-9]+)x([0-9]+)$ ]] && (( native_width > 0 )); then
+      width=$(( width * BASH_REMATCH[1] / native_width ))
+      height=$(( height * BASH_REMATCH[1] / native_width ))
+    fi
   fi
-  adb_serial="$(resolve_adb_serial)"
-  component="$(guest_adb "${adb_serial}" shell cmd package resolve-activity --brief \
-    -a android.intent.action.MAIN -c android.intent.category.LAUNCHER "${package}" \
-    </dev/null 2>/dev/null | tr -d '\r' | tail -n1)"
-  [[ "${component}" == */* ]] || die "${label} has no launcher activity"
-  output="$(guest_adb "${adb_serial}" shell am start --display 0 \
-    -a android.intent.action.MAIN -c android.intent.category.LAUNCHER \
-    -f 0x10000000 -n "${component}" </dev/null 2>&1 | tr -d '\r' || true)"
-  if [[ "${output}" == *Error* || "${output}" == *Exception* ]]; then
-    die "could not start ${label}: ${output}"
-  fi
-  respond "Opened ${label} in the console"
+  (( width >= 320 )) || width=320
+  (( height >= 320 )) || height=320
+  clamp_app_window_size "$(( width / 8 * 8 ))x$(( height / 8 * 8 ))"
 }
 
 # Starts the VM without its console when it is not running, so that menu
@@ -5534,6 +5542,7 @@ open_app_window() {
   local saved_width=""
   local saved_height=""
   local saved_fullscreen=""
+  local window_size_is_default="false"
   local attempt
   local -a scrcpy_env=()
   local -a scrcpy_cmd=()
@@ -5561,12 +5570,6 @@ open_app_window() {
   apply_saved_app_options "${package}" fullscreen_mode
   scrcpy_env=("IKA_APP_PACKAGE=${package}")
 
-  # Before use_app_window_paths, which repoints the supervisor paths from the
-  # console to this app's window.
-  if [[ "${package}" == "${IKA_MODE_PACKAGE}" ]]; then
-    open_in_console "${package}" "${label:-${package}}"
-    return 0
-  fi
   use_app_window_paths "${package}"
   (umask 077 && mkdir -p "${IKA_APPS_DIR}/${package}")
   # Cache the label so the window can later be matched by name.
@@ -5589,6 +5592,7 @@ open_app_window() {
       window_size="${saved_width}x${saved_height}"
     else
       window_size="$(default_app_window_size)"
+      window_size_is_default="true"
     fi
   fi
   [[ "${window_size}" =~ ^[1-9][0-9]*x[1-9][0-9]*$ ]] \
@@ -5603,6 +5607,9 @@ open_app_window() {
     guest_dpi="$(guest_display_density "${adb_serial}")"
     [[ "${guest_dpi}" =~ ^[1-9][0-9]*$ ]] || die "could not read the guest display density"
     dpi="${guest_dpi}"
+  fi
+  if [[ "${window_size_is_default}" == "true" && "${package}" == "${IKA_MODE_PACKAGE}" ]]; then
+    window_size="$(mode_app_window_size "${dpi}")" || window_size="$(default_app_window_size)"
   fi
   display_size="$(app_window_display_size "${window_size}")" \
     || die "could not size the app window display for ${window_size}"

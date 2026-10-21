@@ -145,9 +145,10 @@ left_trigger = Left_Shift
 ## TV mode
 
 Android has a TV interface as well as the desktop. Desktop is the default, and
-only **Desktop/TV** changes the mode. Open it from the app drawer or the
-desktop's "Android Apps (Ika)" menu in desktop mode (it opens in the console),
-or from the TV launcher's apps in TV mode. It lists **Trebuchet**, the
+only **Desktop/TV** changes the mode. Open it from the desktop's "Android Apps
+(Ika)" menu, where it opens in a window of its own like any app, from the app
+drawer in desktop mode (inside the console), or from the TV launcher's apps in
+TV mode. It lists **Trebuchet**, the
 desktop's launcher, under a **Desktop mode** heading, then each TV launcher on
 the system by name under a **TV mode** heading, such as **Catapult**
 (LineageOS's TV launcher) or one from Google Play:
