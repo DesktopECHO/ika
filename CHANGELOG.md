@@ -193,6 +193,10 @@
   console for that mode opens as before. Opened from the app drawer inside
   the console, it is still a window on the desktop, and opening it from the
   menu no longer starts the console when Ika is not running.
+- The question that asks to restart in the other mode covers the list at its
+  size and place, with Cancel and Restart at the bottom, instead of a smaller
+  dialog with the list showing around it. This is in the ROM's IkaMode app, so
+  it arrives with the next ROM build.
 
 ### Fixes
 - Input events and status feedback no longer sit in crosvm's virtio input
