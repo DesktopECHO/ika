@@ -324,6 +324,30 @@ Linux GPU host. Most of the effort was convincing four codebases of that one fac
   off. Not `VK_EXT_host_image_copy` either — there are no such calls in the
   trace. The defect inside ANGLE is not yet pinpointed; `external/angle` is in
   the ROM tree and carries no patches yet.
+- **Host-visible guest memory may be landing on write-combined host types.**
+  A gfxstream report (google/gfxstream issue 198, NVIDIA on Windows) found the
+  guest's uploads into host-visible memory dominated by its copy loop while
+  the memory was write-combined, and fast once allocated from a cached
+  coherent type of the same heap. Whether RADV, ANV or Honeykrisp hand
+  gfxstream a write-combined type for the guest's host-visible allocations is
+  unmeasured. `PATCH.gfxstream.prefer-host-cached-memory.patch` adds the
+  `VulkanPreferHostCachedMemory` feature that makes the substitution, off by
+  default; `host_cached_memory = on` in ika.ini turns it on. Measure it per
+  driver before changing the default.
+- **Mesa 26.3 brings DRM format modifiers to GFX6 through GFX8 RADV.** The
+  modifier export path above needs the driver to export the format with a
+  modifier; on GCN 1.0 through Polaris and Fiji RADV has none before Mesa 26.3
+  (with Linux 7.3 on the kernel side), so those GPUs stay on the implicit
+  layout. Once the host has 26.3, the migration happens on them without any
+  change in Ika.
+- **Venus is not reachable from this ROM.** Cuttlefish 1.58's host tools run
+  `--gpu_mode=venus` (crosvm with the virglrenderer backend, the venus and
+  cross-domain context types, `virgl_render_server`), but the guest needs
+  Mesa's Venus driver (`vulkan.virtio`), gralloc through the cross-domain
+  context and `android-info.txt` declaring the mode, none of which the
+  LineageOS 23.2 ROM has. `ika start --gpu_mode=venus` checks the ROM and
+  stops with that reason. Venus also has no path on Apple Silicon, whose GPU
+  cannot share host memory the way virglrenderer needs.
 - **`gfxstream` mode loses color buffers.** The direct GLES path avoids the ANGLE
   texture corruption, but its renderer drops color buffers across app relaunch
   cycles (`TextureDraw: GL error=0x502`, `Failed to find ColorBuffer: <id>`,
@@ -354,4 +378,5 @@ Linux GPU host. Most of the effort was convincing four codebases of that one fac
 | `PATCH.rutabaga_gfx-gfxstream-3d-resource-info.patch` | crosvm (rutabaga) | Report gfxstream 3D resources' format and stride, so crosvm scans the console out as a dma-buf instead of reading it back (x86) |
 | `PATCH.gfxstream.color-buffer-row-pitch.patch`, `PATCH.gfxstream.gl-color-buffer-dmabuf-export.patch` | gfxstream host | Driver row pitch for exported color buffers; dma-buf export of GL-only color buffers (GLES hosts) |
 | `PATCH.gfxstream.scanout-dmabuf-export-feature.patch` | gfxstream host | `ScanoutDmabufExport` feature, off on the udmabuf path; without an explicit modifier only RADV's implicit layout is importable |
+| `PATCH.gfxstream.prefer-host-cached-memory.patch` | gfxstream host | `VulkanPreferHostCachedMemory` feature, off by default: a guest's host-visible allocation on a write-combined host type is taken from a cached coherent type of the same heap instead (`host_cached_memory = on` in ika.ini) |
 | `PATCH.gfxstream.scanout-drm-modifier-export.patch`, `PATCH.rutabaga_gfx-on-demand-export-and-query.patch` | gfxstream host, crosvm (rutabaga) | The scanned-out color buffer is re-created with an explicit DRM format modifier (`VK_EXT_image_drm_format_modifier`) when crosvm first exports it, so radeonsi, iris, NVIDIA and Asahi all import it correctly; rutabaga exports on demand and reads the layout after that. A color buffer the guest binds an image to through `VkNativeBufferANDROID` is never migrated, and a guest image bound to an already migrated one is created with the same explicit modifier and layout |

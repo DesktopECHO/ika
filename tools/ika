@@ -185,9 +185,11 @@ enable_sandbox = false
 
 # ----------------------------------------------------------------------------
 [gpu]
-# gfxstream_guest_angle, gfxstream, guest_swiftshader, ... Command-line
-# equivalent: --gpu_mode=. Hosts with only software Vulkan devices use
-# gfxstream whatever is set here.
+# gfxstream_guest_angle, gfxstream, guest_swiftshader, venus, ...
+# Command-line equivalent: --gpu_mode=. Hosts with only software Vulkan
+# devices use gfxstream whatever is set here. venus (Mesa's Venus Vulkan
+# driver in the guest over virglrenderer) needs a ROM built with Venus
+# support, which Ika's does not have yet; see USAGE.md.
 gpu_mode = gfxstream_guest_angle
 gpu_vhost_user_mode = auto
 enable_gpu_udmabuf = true
@@ -198,6 +200,13 @@ gpu_renderer_features = MinimalLogging:disabled;VulkanBatchedDescriptorSetUpdate
 # Command-line equivalent: --gfxstream_vulkan=. Environment variable:
 # GFXSTREAM_VULKAN
 gfxstream_vulkan = auto
+# on takes the guest's host-visible Vulkan memory from a cached coherent host
+# memory type instead of a write-combined one (gfxstream's
+# VulkanPreferHostCachedMemory), which is faster for the guest's uploads on
+# some drivers; off, the default, leaves the driver's choice. Command-line
+# equivalent: --host_cached_memory=. Environment variable:
+# IKA_HOST_CACHED_MEMORY
+host_cached_memory = off
 # auto or off. auto gives Android a video decoder backed by the host's VA-API
 # (H.264, HEVC, VP8 and VP9, as far as the host decodes them) when vainfo
 # finds a working VA-API driver. Command-line equivalent: --hw_video_decode=.
@@ -956,6 +965,7 @@ SCRCPY_DPI=""
 # Set to true when --dpi gives the density.
 SCRCPY_DPI_GIVEN="false"
 ika_ini_default GFXSTREAM_VULKAN gpu gfxstream_vulkan auto
+ika_ini_default IKA_HOST_CACHED_MEMORY gpu host_cached_memory off
 ika_ini_default IKA_HW_VIDEO_DECODE gpu hw_video_decode auto
 ika_ini_default IKA_LOWCPU lowcpu mode auto
 ika_ini_get IKA_LOWCPU_REFRESH_RATE_HZ lowcpu refresh_rate_hz 30 uint
@@ -1639,6 +1649,13 @@ parse_start_options() {
         export GFXSTREAM_VULKAN="${GFXSTREAM_VULKAN_MODE}"
         shift
         ;;
+      # Exported, as restart runs start again
+      --host_cached_memory=*)
+        IKA_HOST_CACHED_MEMORY="$(normalize_host_cached_memory_mode "${1#*=}")" \
+          || die "--host_cached_memory requires on or off, not '${1#*=}'"
+        export IKA_HOST_CACHED_MEMORY
+        shift
+        ;;
       --data_gb=*|--data_gb)
         respond_console "Use '${SCRIPT_NAME} reset --data_gb=GB' to change userdata size."
         die "--data_gb is only valid with '${SCRIPT_NAME} reset'"
@@ -1805,6 +1822,14 @@ Options:
                          the host has no hardware Vulkan driver, gives the
                          guest 2 vCPUs or fewer, or has less than 8 GB of
                          memory (IKA_LOWCPU=auto|on|off does the same).
+  --host_cached_memory=on|off
+                         With start or restart, take the guest's host-visible
+                         Vulkan memory from a cached coherent host memory type
+                         instead of a write-combined one, which is faster for
+                         the guest's uploads on some drivers; off, the
+                         default, leaves the driver's choice. Applies to the
+                         gfxstream modes with Vulkan. IKA_HOST_CACHED_MEMORY
+                         and host_cached_memory in ika.ini do the same.
   --camera[=videoN]      With start or restart, pass a host camera to Android
                          as its front camera. Without a value, the first
                          video capture device offering MJPEG, NV12 or YUYV
@@ -1961,6 +1986,7 @@ Environment variables:
                          Silicon hosts with 16 KiB pages, gfxstream modes route
                          host-visible guest Vulkan memory through udmabuf-backed
                          dma-bufs (the path the Apple GPU supports).
+  IKA_HOST_CACHED_MEMORY on or off, as --host_cached_memory.
   IKADPI                 Display density, as --dpi.
   IKA_LOWCPU             auto, on or off: low-CPU mode, as --lowcpu and
                          --no-lowcpu.
@@ -2803,6 +2829,110 @@ set_or_append_start_arg() {
   set_args_array+=("--${flag}=${value}")
 }
 
+# The host-cached memory setting (IKA_HOST_CACHED_MEMORY, gpu.host_cached_memory
+# in ika.ini): on or off. Prints the normalized value; fails on anything else.
+normalize_host_cached_memory_mode() {
+  case "${1,,}" in
+    ""|0|false|no|off|disable|disabled)
+      echo "off"
+      ;;
+    1|true|yes|on|enable|enabled)
+      echo "on"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+host_cached_memory_mode() {
+  local mode
+
+  if ! mode="$(normalize_host_cached_memory_mode "${IKA_HOST_CACHED_MEMORY:-off}")"; then
+    log "${IKA_INI_FILE}: gpu.host_cached_memory must be on or off, not '${IKA_HOST_CACHED_MEMORY}'; using off"
+    mode="off"
+  fi
+  printf '%s\n' "${mode}"
+}
+
+# With host_cached_memory = on, gfxstream takes the guest's host-visible
+# Vulkan memory from a cached coherent host memory type instead of a
+# write-combined one (its VulkanPreferHostCachedMemory feature): the guest
+# writes its uploads through its mapping of that memory, and write-combined
+# memory is slow for them on some drivers. Off by default until measured on
+# the host drivers Ika runs on.
+append_host_cached_memory_args() {
+  local -n cached_args_array="$1"
+
+  [[ "$(host_cached_memory_mode)" == "on" ]] || return 0
+  append_or_merge_gpu_renderer_features \
+    cached_args_array "VulkanPreferHostCachedMemory:enabled"
+  log "host cached memory: on (VulkanPreferHostCachedMemory, guest host-visible Vulkan memory from cached coherent host memory types)"
+}
+
+# Prints the primary Vulkan device's block of the vulkaninfo summary.
+primary_vulkan_device_summary() {
+  local summary
+  local primary_device
+
+  summary="$(vulkaninfo_summary || true)"
+  [[ -n "${summary}" ]] || return 1
+
+  primary_device="$(
+    awk '
+      /^GPU[0-9]+:/ {
+        if (seen) {
+          exit
+        }
+        seen = 1
+        next
+      }
+      seen {
+        print
+      }
+    ' <<<"${summary}"
+  )"
+  [[ -n "${primary_device}" ]] || return 1
+  printf '%s\n' "${primary_device}"
+}
+
+# Whether the ROM's android-info.txt declares Venus support, as Cuttlefish's
+# assemble_cvd reads it: venus among gpu_mode_candidates, or
+# vulkan_venus_apex=supported.
+guest_supports_venus() {
+  local android_info="$1"
+
+  [[ -r "${android_info}" ]] || return 1
+  grep -Eiq '^[[:space:]]*gpu_mode_candidates[[:space:]]*=.*(^|[=,[:space:]])venus([,[:space:]]|$)' \
+    "${android_info}" && return 0
+  grep -Eiq '^[[:space:]]*vulkan_venus_apex[[:space:]]*=[[:space:]]*supported' "${android_info}"
+}
+
+# gpu_mode=venus: the guest's Vulkan is Mesa's Venus driver over virglrenderer
+# on the host, with ANGLE for OpenGL ES, which Cuttlefish 1.58's host tools
+# run (crosvm with the virglrenderer backend and the venus and cross-domain
+# context types). It needs a ROM built with Venus support (Mesa's vulkan.virtio
+# driver, declared in android-info.txt), which Ika's LineageOS ROM does not
+# have yet, and upstream tests it on Intel (ANV) and Qualcomm (Turnip) hosts.
+# Checked here so that the start fails with a reason rather than deep in
+# assemble_cvd.
+check_venus_gpu_mode() {
+  local android_info="${CVD_PRODUCT_OUT}/android-info.txt"
+  local primary_device
+
+  if is_apple_silicon_16k_host; then
+    die "gpu_mode=venus is not available on Apple Silicon hosts: Venus shares host memory the Apple GPU cannot; use gfxstream_guest_angle"
+  fi
+  if ! guest_supports_venus "${android_info}"; then
+    die "gpu_mode=venus: the ROM under ${CVD_PRODUCT_OUT} does not declare Venus support (android-info.txt with venus among gpu_mode_candidates, or vulkan_venus_apex=supported); it needs a ROM built with Mesa's Venus driver"
+  fi
+  primary_device="$(primary_vulkan_device_summary || true)"
+  if [[ -n "${primary_device}" ]] \
+      && ! grep -Eiq '(driverName[[:space:]]*=.*(anv|turnip)|DRIVER_ID_(INTEL_OPEN_SOURCE_MESA|MESA_TURNIP))' <<<"${primary_device}"; then
+    log "gpu_mode=venus: upstream Cuttlefish tests Venus on Intel (ANV) and Qualcomm (Turnip) hosts; this host's primary Vulkan driver is untested with it"
+  fi
+}
+
 append_apple_16k_gfxstream_vulkan_args() {
   local -n apple_args_array="$1"
 
@@ -2846,6 +2976,14 @@ append_gfxstream_vulkan_args() {
       append_apple_16k_gfxstream_vulkan_args args_array
       CVD_GRAPHICS_DRIVER_MESSAGE="${gpu_mode} (ANGLE over gfxstream Vulkan; Apple 16K udmabuf)"
     fi
+    append_host_cached_memory_args args_array
+    return 0
+  fi
+
+  if [[ "${gpu_mode}" == "venus" ]]; then
+    check_venus_gpu_mode
+    CVD_GRAPHICS_DRIVER_MESSAGE="venus (ANGLE over Venus Vulkan)"
+    log "gfxstream-vulkan=${mode} has no effect with gpu_mode=venus"
     return 0
   fi
 
@@ -2867,6 +3005,7 @@ append_gfxstream_vulkan_args() {
     fi
     if gfxstream_context_types_include_vulkan "${effective_context_types}"; then
       append_radv_gfxstream_vulkan_args args_array || true
+      append_host_cached_memory_args args_array
     fi
     return 0
   fi
@@ -2879,11 +3018,13 @@ append_gfxstream_vulkan_args() {
       vulkan_decision="gfxstream-vulkan=auto -> off (primary Vulkan device is llvmpipe)"
     elif is_apple_silicon_16k_host; then
       append_apple_16k_gfxstream_vulkan_args args_array
+      append_host_cached_memory_args args_array
       CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (OpenGL ES + Vulkan, Apple Silicon)"
       log "gfxstream-vulkan=auto; leaving Cuttlefish gfxstream defaults with Apple 16K udmabuf"
       return 0
     else
       append_radv_gfxstream_vulkan_args args_array || true
+      append_host_cached_memory_args args_array
       CVD_GRAPHICS_DRIVER_MESSAGE="gfxstream (Default settings, vulkan=auto)"
       log "gfxstream-vulkan=auto; leaving Cuttlefish gfxstream defaults"
       return 0
@@ -2904,6 +3045,7 @@ append_gfxstream_vulkan_args() {
         append_apple_16k_gfxstream_vulkan_args args_array
       fi
       append_radv_gfxstream_vulkan_args args_array || true
+      append_host_cached_memory_args args_array
       ;;
   esac
 }

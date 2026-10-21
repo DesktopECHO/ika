@@ -49,6 +49,7 @@ settings() {
           IKA_KERNEL_PAGE_SIZE IKADPI IKA_SCRCPY IKA_INSTALL_TIMEOUT_SEC \
           IKA_APP_MENU_POLL_SEC IKA_GSF_ID_TIMEOUT_SEC GFXSTREAM_VULKAN \
           IKA_CAMERA_POWER_LINE_FREQUENCY IKA_LOWCPU IKA_LOWCPU_REFRESH_RATE_HZ \
+          IKA_HOST_CACHED_MEMORY \
           BACKUP_LIST_ADB_TIMEOUT_SEC BACKUP_COPY_ADB_TIMEOUT_SEC; do
         printf "%s=%s\n" "${var}" "${!var}"
       done
@@ -82,6 +83,7 @@ settings "${T}/generated" >/dev/null
 [[ "$(<"${T}/generated/ika.ini")" == "${generated_file}" ]] || fail "the regenerated ika.ini differs"
 expect_line "${builtin_settings}" "CVD_GPU_DEFAULTS.gpu_mode=gfxstream_guest_angle" "built-in gpu_mode"
 expect_line "${builtin_settings}" "IKA_CAMERA_POWER_LINE_FREQUENCY=auto" "built-in camera anti-flicker"
+expect_line "${builtin_settings}" "IKA_HOST_CACHED_MEMORY=off" "built-in host cached memory"
 
 # Edits override the defaults; "auto" keeps the calculated value.
 cat >"${T}/edited/ika.ini" <<'EOF'
@@ -97,6 +99,7 @@ cpu_cap = 6
 [gpu]
 gpu_mode   =   guest_swiftshader
 gpu_renderer_features = A:enabled;B:disabled
+host_cached_memory = on
 
 [network]
 adb_mode = native_vsock
@@ -132,6 +135,7 @@ expect_line "${edited}" "CVD_COMPUTE_DEFAULTS.cpus=3" "cpus"
 expect_line "${edited}" "DEFAULT_GUEST_CPU_CAP=6" "cpu cap"
 expect_line "${edited}" "CVD_GPU_DEFAULTS.gpu_mode=guest_swiftshader" "gpu_mode with padding"
 expect_line "${edited}" "CVD_GPU_DEFAULTS.gpu_renderer_features=A:enabled;B:disabled" "value containing semicolons"
+expect_line "${edited}" "IKA_HOST_CACHED_MEMORY=on" "host cached memory"
 expect_line "${edited}" "CVD_NETWORK_DEFAULTS.adb_mode=native_vsock" "adb_mode"
 expect_line "${edited}" "DEFAULT_DATA_GB=128" "data_gb"
 expect_line "${edited}" "IKA_APP_MENU_POLL_SEC=9" "menu poll"

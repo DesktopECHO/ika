@@ -94,6 +94,15 @@ with `add-apt-repository`, then installs the Mesa packages from Kisak. Set
 Debian trixie also requires Vulkan loader 1.4.341. On trixie only, `ika-build`
 builds that loader from the pinned Debian Salsa packaging source.
 
+Mesa 26.3, due in November 2026, is worth taking when your distribution
+ships it: Intel's Jay shader compiler becomes the default for Xe2 and Xe3
+GPUs (Battlemage, Lunar Lake, Panther Lake), about 10% faster at runtime
+than the compiler before it, and RADV gains DRM format modifiers on GFX6
+through GFX8 AMD GPUs (GCN 1.0 up to Polaris and Fiji, with the kernel side
+in Linux 7.3), which lets Ika scan the console out as a dma-buf with an
+explicit layout on those GPUs as it does on newer ones. Nothing in Ika needs
+to change for either; Ika's own Mesa requirement stays at 26.1.
+
 ### Rebuilding
 
 After the initial build, use the narrowest command that matches your changes:
