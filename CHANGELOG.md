@@ -52,15 +52,54 @@
 - Games' menu entries no longer have "Play with Touch Input": touch input is
   one of every app's start options, and `ika app NAME --touch` still turns
   it on for one start.
+- Games' menu entries have "Controller mapping...", a window (yad) with the
+  keyboard gamepad's keys and settings for that game: a field per control,
+  the stick ramp, the walk speed and the rule for opposite keys. "Apply
+  settings" saves them in `~/ika/apps/PACKAGE/controller.ini`, over
+  `[keyboard_gamepad]` in ika.ini, and ticks the keyboard as a gamepad in the
+  game's start options; "Apply and start" also starts the game; "Reset to
+  ika.ini" removes the mapping. `ika app --controller NAME` opens it from a
+  terminal. A key typed for one control leaves the control it was shown on.
+- The keyboard gamepad's sticks move as a thumb pushes them: a stick takes
+  `stick_ramp_ms` (100) from its center to where a key sends it, so a tap
+  moves a little and a held key all the way, and comes back at once; a new
+  `walk` key (Tab), held, caps the sticks at `walk_percent` (50) of their
+  deflection; `socd` (`last` or `neutral`, per pad with `socd_dpad`,
+  `socd_left_stick`, `socd_right_stick`) says whether two opposite keys held
+  together keep the last pressed or cancel out. All in `[keyboard_gamepad]`
+  in ika.ini, and in scrcpy's `--gamekb` spec as `ramp_ms`, `walk`,
+  `walk_percent` and `socd`. A stick now moves in one HID report instead of
+  one per axis.
+- The mouse is the keyboard gamepad's too: moving it moves the right stick
+  (`mouse_stick = right`, or `left` or `off`), the camera in most games, as
+  fast as the mouse moves, full at 32 pixels per 8 ms at `mouse_sensitivity`
+  100, and back to the center when the mouse stops; the stick's keys win
+  while held. The mouse's buttons and wheel are keys of the mapping
+  (`Mouse_Left`, `Mouse_Right`, `Mouse_Middle`, `Mouse_X1`, `Mouse_X2`,
+  `Wheel_Up`, `Wheel_Down`, `Wheel_Left`, `Wheel_Right`): by default the
+  left button is the right trigger, the right button the left trigger, the
+  middle button the right stick's click and the wheel the shoulders. With
+  any of that, the window captures the pointer as for a HID mouse, Alt
+  releases it and takes it back, and the released pointer is the usual
+  mouse. scrcpy's `--gamekb` takes it as `mouse_stick`, `mouse_sensitivity`
+  and the mouse key names, and the Controller mapping window has fields for
+  the stick the mouse moves and its sensitivity.
 - "App Settings" is now "Android App Settings...", and opens the app's App
   info page alone in the Settings window: as the window's first page, with
   no Settings home page shown before it and no list of settings beside it.
   scrcpy's `--start-app` takes `info:PACKAGE` for it.
-- The keyboard as a gamepad: arrows or WASD steer, Space is A, Esc is B, C is
-  X, V is Y, Enter is Start, Backspace is Back, Q and E the shoulders, Z and
-  X the triggers; those keys no longer type, other keys still do. The keys
+- The keyboard as a gamepad: WASD is the left stick, the arrows the D-pad,
+  IJKL the right stick, Space is A, Esc is B, C is X, V is Y, Enter is
+  Start, Backspace is Back, Q and E the shoulders, Z and X the triggers,
+  Left Shift and F the sticks' clicks; those keys no longer type, other keys
+  still do. It behaves as a physical pad: the D-pad and the sticks are
+  apart, a stick on a diagonal is pushed as far as on an axis (not to the
+  corner of a square, which would move faster on diagonals), of two opposite
+  directions only the last pressed counts and the D-pad never points both
+  ways, and a control stays pressed while any of its keys is held. The keys
   are set in the new `[keyboard_gamepad]` section of ika.ini, one line per
-  control.
+  control; a key given to a control there leaves the control it is a
+  default of.
 - The desktop console passes no gamepad, and the TV console always passes
   the gamepad through, as the remote. A `--gamepad=` or `--gamekb` option
   among the extra console args still wins.

@@ -29,6 +29,7 @@
 #include "server.h"
 #include "uhid/gamepad_uhid.h"
 #include "ika/keyboard_gamepad.h"
+#include "ika/keyboard_gamepad_timer.h"
 #include "uhid/keyboard_uhid.h"
 #include "uhid/mouse_uhid.h"
 #ifdef HAVE_USB
@@ -827,7 +828,8 @@ aoa_complete:
             gp = &s->gamepad_uhid.gamepad_processor;
             if (options->keyboard_gamepad) {
                 sc_keyboard_gamepad_init(&s->keyboard_gamepad, gp,
-                                         options->keyboard_gamepad);
+                                         options->keyboard_gamepad,
+                                         &SC_KEYBOARD_GAMEPAD_SDL_TIMER);
                 kg = &s->keyboard_gamepad;
             }
         }
@@ -1129,6 +1131,9 @@ aoa_complete:
 end:
     if (timeout_started) {
         sc_timeout_stop(&s->timeout);
+    }
+    if (kg) {
+        sc_keyboard_gamepad_timer_destroy();
     }
 
     // The demuxer is not stopped explicitly, because it will stop by itself on

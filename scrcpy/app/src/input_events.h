@@ -431,6 +431,20 @@ struct sc_gamepad_axis_event {
     int16_t value;
 };
 
+enum sc_gamepad_stick {
+    SC_GAMEPAD_STICK_LEFT,
+    SC_GAMEPAD_STICK_RIGHT,
+};
+
+// Both axes of a stick at once (Ika: the keyboard gamepad moves a stick in
+// one report)
+struct sc_gamepad_stick_event {
+    uint32_t gamepad_id;
+    enum sc_gamepad_stick stick;
+    int16_t x;
+    int16_t y;
+};
+
 static inline uint16_t
 sc_mods_state_from_sdl(uint16_t mods_state) {
     return mods_state;

@@ -24,6 +24,7 @@ src = [
     'src/icon.c',
     'src/input_manager.c',
     'src/ika/keyboard_gamepad.c',
+    'src/ika/keyboard_gamepad_timer.c',
     'src/keyboard_sdk.c',
     'src/mouse_capture.c',
     'src/mouse_sdk.c',
@@ -291,6 +292,11 @@ if get_option('buildtype') == 'debug'
         ['test_device_msg_deserialize', [
             'tests/test_device_msg_deserialize.c',
             'src/device_msg.c',
+        ]],
+        ['test_keyboard_gamepad', [
+            'tests/test_keyboard_gamepad.c',
+            'src/ika/keyboard_gamepad.c',
+            'src/util/log.c',
         ]],
         ['test_orientation', [
             'tests/test_orientation.c',

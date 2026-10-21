@@ -746,6 +746,15 @@ sc_input_manager_process_key(struct sc_input_manager *im,
     im->kp->ops->process_key(im->kp, &evt, ack_to_wait);
 }
 
+// Ika: whether the keyboard gamepad has the mouse right now: it takes it
+// (mouse_stick, or a mouse button or the wheel mapped) and the window holds
+// the pointer captured
+static bool
+sc_input_manager_gamepad_has_mouse(struct sc_input_manager *im) {
+    return im->kg && sc_keyboard_gamepad_takes_mouse(im->kg)
+        && sc_mouse_capture_is_active(&im->screen->mc);
+}
+
 static struct sc_position
 sc_input_manager_get_position(struct sc_input_manager *im, int32_t x,
                                                            int32_t y) {
@@ -766,12 +775,24 @@ sc_input_manager_get_position(struct sc_input_manager *im, int32_t x,
 static void
 sc_input_manager_process_mouse_motion(struct sc_input_manager *im,
                                       const SDL_MouseMotionEvent *event) {
-    if (im->camera || !im->mp || im->screen->paused || im->disconnected) {
+    if (im->camera || im->screen->paused || im->disconnected) {
         return;
     }
 
     if (event->which == SDL_TOUCH_MOUSEID) {
         // simulated from touch events, so it's a duplicate
+        return;
+    }
+
+    // Ika: captured, the mouse moves the keyboard gamepad's stick
+    if (sc_input_manager_gamepad_has_mouse(im)) {
+        sc_keyboard_gamepad_handle_mouse_motion(im->kg, event->xrel,
+                                                event->yrel,
+                                                event->timestamp / 1000000);
+        return;
+    }
+
+    if (!im->mp) {
         return;
     }
 
@@ -877,6 +898,14 @@ sc_input_manager_process_mouse_button(struct sc_input_manager *im,
 
     enum sc_mouse_button button = sc_mouse_button_from_sdl(event->button);
     if (button == SC_MOUSE_BUTTON_UNKNOWN) {
+        return;
+    }
+
+    // Ika: captured, the mouse's buttons are the keyboard gamepad's; a
+    // button it does not hold is released where it was pressed
+    if (!paused && sc_input_manager_gamepad_has_mouse(im)
+            && sc_keyboard_gamepad_handle_mouse_button(
+                   im->kg, button, down, event->timestamp / 1000000)) {
         return;
     }
 
@@ -1033,7 +1062,18 @@ sc_input_manager_process_mouse_button(struct sc_input_manager *im,
 static void
 sc_input_manager_process_mouse_wheel(struct sc_input_manager *im,
                                      const SDL_MouseWheelEvent *event) {
-    if (im->camera || !im->kp || im->screen->paused || im->disconnected) {
+    if (im->camera || im->screen->paused || im->disconnected) {
+        return;
+    }
+
+    // Ika: captured, the wheel is the keyboard gamepad's
+    if (sc_input_manager_gamepad_has_mouse(im)) {
+        sc_keyboard_gamepad_handle_mouse_wheel(im->kg, event->x, event->y,
+                                               event->timestamp / 1000000);
+        return;
+    }
+
+    if (!im->kp) {
         return;
     }
 

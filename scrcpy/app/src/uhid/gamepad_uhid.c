@@ -130,6 +130,20 @@ sc_gamepad_processor_process_gamepad_button(struct sc_gamepad_processor *gp,
 
 }
 
+static void
+sc_gamepad_processor_process_gamepad_stick(struct sc_gamepad_processor *gp,
+                                const struct sc_gamepad_stick_event *event) {
+    struct sc_gamepad_uhid *gamepad = DOWNCAST(gp);
+
+    struct sc_hid_input hid_input;
+    if (!sc_hid_gamepad_generate_input_from_stick(&gamepad->hid, &hid_input,
+                                                  event)) {
+        return;
+    }
+
+    sc_gamepad_uhid_send_input(gamepad, &hid_input, "gamepad stick");
+}
+
 void
 sc_gamepad_uhid_init(struct sc_gamepad_uhid *gamepad,
                      struct sc_controller *controller) {
@@ -142,6 +156,7 @@ sc_gamepad_uhid_init(struct sc_gamepad_uhid *gamepad,
         .process_gamepad_removed = sc_gamepad_processor_process_gamepad_removed,
         .process_gamepad_axis = sc_gamepad_processor_process_gamepad_axis,
         .process_gamepad_button = sc_gamepad_processor_process_gamepad_button,
+        .process_gamepad_stick = sc_gamepad_processor_process_gamepad_stick,
     };
 
     gamepad->gamepad_processor.ops = &ops;

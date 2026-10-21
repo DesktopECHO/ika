@@ -114,26 +114,46 @@ the app's window opens.
   it. **Touch input** wins over it, as a finger needs the desktop's mouse.
 - **Enable gamepads when attached**: gamepads plugged into the host, and ones
   plugged in later, reach Android.
-- **Use the keyboard to emulate a gamepad** (scrcpy's `--gamekb`): arrows or WASD
-  steer (D-pad and left stick), Space is A, Esc is B, C is X, V is Y, Enter
-  is Start, Backspace is Back, Q and E are the shoulders, Z and X the
-  triggers. Those keys then drive the pad instead of typing; other keys still
-  type. Gamepads plugged into the host pass through as well.
+- **Use the keyboard to emulate a gamepad** (scrcpy's `--gamekb`): WASD is the left
+  stick, the arrows the D-pad, IJKL the right stick, Space is A, Esc is B, C
+  is X, V is Y, Enter is Start, Backspace is Back, Q and E are the
+  shoulders, Z and X the triggers, Left Shift and F click the left and right
+  sticks, and Tab, held, is walk: the sticks go half as far. The mouse is the
+  pad's too: moving it moves the right stick, the camera in most games, as
+  fast as the mouse moves, the left button is the right trigger, the right
+  button the left trigger, the middle button the right stick's click, and
+  the wheel the shoulders. The window captures the pointer for that; Alt
+  releases it, and the mouse then works as usual, until Alt again. It
+  behaves as a physical pad: the sticks and the D-pad are apart, a stick on
+  a diagonal is pushed as far as on an axis, a stick moves in one report,
+  and of two opposite directions only the last pressed counts. A stick is
+  pushed the way a thumb pushes one: it takes 100 ms from its center to
+  where the key sends it, so a tap moves a little and a held key all the
+  way, and it comes back at once. Those keys then drive the pad instead of
+  typing; other keys still type. Gamepads plugged into the host pass through
+  as well.
 
 In TV mode the console always passes the gamepad through, as the remote. A
 `--gamepad=` or `--gamekb` option in `scrcpy_args` or `--ika_scrcpy=` wins
 over both. The start log and each app window's log say what was passed.
 
 The keyboard gamepad's keys are set in the `[keyboard_gamepad]` section of
-`ika.ini`, one line
-per control (`dpad_up`, `dpad_down`, `dpad_left`, `dpad_right`, `a`, `b`,
-`x`, `y`, `start`, `back`, `guide`, `left_shoulder`, `right_shoulder`,
-`left_stick`, `right_stick`, `left_trigger`, `right_trigger`) with one or
-more key names separated by spaces, as SDL names them: `Up`, `Space`,
-`Return`, `Escape`, `Backspace`, `Tab`, `F1`, letters and digits, and `_` for
-a space in a name (`Keypad_Enter`, `Left_Shift`, `Page_Up`). An empty value
-leaves the control without a key; a key Ika does not know is reported in the
-console log and skipped.
+`ika.ini`, one line per control (`left_stick_up`, `left_stick_down`,
+`left_stick_left`, `left_stick_right`, `dpad_up`, `dpad_down`, `dpad_left`,
+`dpad_right`, `right_stick_up`, `right_stick_down`, `right_stick_left`,
+`right_stick_right`, `a`, `b`, `x`, `y`, `start`, `back`, `guide`,
+`left_shoulder`, `right_shoulder`, `left_stick` and `right_stick` for the
+sticks' clicks, `left_trigger`, `right_trigger`, `walk`) with one or more key names
+separated by spaces, as SDL names them: `Up`, `Space`, `Return`, `Escape`,
+`Backspace`, `Tab`, `F1`, letters and digits, and `_` for a space in a name
+(`Keypad_Enter`, `Left_Shift`, `Page_Up`), or the mouse's buttons and wheel
+(`Mouse_Left`, `Mouse_Right`, `Mouse_Middle`, `Mouse_X1`, `Mouse_X2`,
+`Wheel_Up`, `Wheel_Down`, `Wheel_Left`, `Wheel_Right`; a wheel notch presses
+its control for a moment). An empty value leaves the control
+without a key; a key Ika does not know is reported in the console log and
+skipped. A key given to a control there is no longer a key of the control
+it is a default of, so the lines below move Return from Start and Left Shift
+from the left stick's click:
 
 ```ini
 [keyboard_gamepad]
@@ -141,6 +161,38 @@ a = Space Return
 b = Escape
 left_trigger = Left_Shift
 ```
+
+The section's settings shape the sticks: `stick_ramp_ms` (100) is the time
+a stick takes from its center to where a key pushes it, so that a tap moves
+a little and a held key all the way, as a thumb on a stick; 0 pushes it all
+the way at once. A stick comes back at once. `walk_percent` (50) is how far
+the sticks go, in percent, while the `walk` key is held. `socd` says what two
+opposite keys held together do: `last`, the last pressed counts, or
+`neutral`, they cancel out, as fighting games expect; `socd_dpad`,
+`socd_left_stick` and `socd_right_stick` set one pad, and empty leaves it as
+`socd`. `mouse_stick` (`right`) is the stick the mouse moves, `left` or
+`off`: the faster the mouse moves, the farther the stick, full at 32 pixels
+per 8 ms at `mouse_sensitivity` 100 (percent), and it comes back when the
+mouse stops; the stick's keys win while held. With a stick on the mouse, or
+a mouse button or the wheel among the keys, the window captures the pointer,
+as it does for a HID mouse: Alt releases it and takes it back, and a
+released pointer is the usual mouse, so menus can be clicked. With
+`mouse_stick = off` and no mouse keys, the mouse is left alone.
+
+### Controller mapping per game
+
+Right-click a game in the desktop's app menu and choose **Controller
+mapping...** (`ika app --controller NAME` from a terminal) for a window with
+the keyboard gamepad's keys and settings for that game: a field per control
+with its keys, as above, the stick ramp, the walk speed and the rule for
+opposite keys. **Apply settings** saves them in
+`~/ika/apps/PACKAGE/controller.ini`, where they go over `ika.ini`, and ticks
+**Use the keyboard as a gamepad** in the game's start options if it was not;
+**Apply and start** does that and starts the game; **Reset to ika.ini**
+removes the game's mapping; **Cancel** leaves everything as it was. A key
+typed for one control leaves the control it was shown on, so moving a key
+takes one edit. Only games' entries have the action; the file can be edited
+by hand, with the same lines as `[keyboard_gamepad]`, for any app.
 
 ## TV mode
 

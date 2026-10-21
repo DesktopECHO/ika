@@ -7,6 +7,7 @@
 #include "events.h"
 #include "icon.h"
 #include "ika/keyboard_gamepad.h"
+#include "ika/keyboard_gamepad_timer.h"
 #include "options.h"
 #include "util/log.h"
 #include "util/sdl.h"
@@ -302,6 +303,13 @@ sc_screen_set_texture_from_surface(struct sc_screen *screen,
     screen->is_icon_active = true;
 
     return true;
+}
+
+// Ika: the keyboard gamepad takes the mouse, so the pointer is captured as
+// for a HID mouse; unlike one, the SDK mouse still works while it is not
+static bool
+sc_screen_gamepad_takes_mouse(struct sc_screen *screen) {
+    return screen->im.kg && sc_keyboard_gamepad_takes_mouse(screen->im.kg);
 }
 
 static inline bool
@@ -1015,7 +1023,8 @@ sc_screen_init(struct sc_screen *screen,
         screen->window_shown = true;
         sc_sdl_show_window(screen->window);
 
-        if (sc_screen_is_relative_mode(screen)) {
+        if (sc_screen_is_relative_mode(screen)
+                || sc_screen_gamepad_takes_mouse(screen)) {
             // Capture mouse immediately if video mirroring is disabled
             sc_mouse_capture_set_active(&screen->mc, true);
         }
@@ -1539,7 +1548,8 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
                                                      screen->orientation);
             sc_screen_show_initial_window(screen);
 
-            if (sc_screen_is_relative_mode(screen)) {
+            if (sc_screen_is_relative_mode(screen)
+                    || sc_screen_gamepad_takes_mouse(screen)) {
                 // Capture mouse on start
                 sc_mouse_capture_set_active(&screen->mc, true);
             }
@@ -1583,6 +1593,11 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
         case SC_EVENT_THEME_BACKGROUND:
             sc_screen_set_theme_background(screen,
                 (uint32_t) (uintptr_t) event->user.data1);
+            return;
+        case SC_EVENT_GAMEKB_TIMER:
+            if (screen->im.kg) {
+                sc_keyboard_gamepad_timer_on_event(screen->im.kg);
+            }
             return;
         case SC_EVENT_FLEX_TIMER:
             if (screen->flex_display && sc_flex_on_timer(&screen->flex)
@@ -1699,6 +1714,25 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
             && sc_mouse_capture_handle_event(&screen->mc, event)) {
         // The mouse capture handler consumed the event
         return;
+    }
+
+    if (!sc_screen_is_relative_mode(screen)
+            && sc_screen_gamepad_takes_mouse(screen)) {
+        // Ika: the capture key releases and takes the pointer back, and the
+        // focus loss releases it, as for a HID mouse; the mouse's events
+        // reach the input manager either way, where the gamepad takes them
+        // while the pointer is captured and the SDK mouse otherwise
+        switch (event->type) {
+            case SDL_EVENT_WINDOW_FOCUS_LOST:
+            case SDL_EVENT_KEY_DOWN:
+            case SDL_EVENT_KEY_UP:
+                if (sc_mouse_capture_handle_event(&screen->mc, event)) {
+                    return;
+                }
+                break;
+            default:
+                break;
+        }
     }
 
     sc_input_manager_handle_event(&screen->im, event);

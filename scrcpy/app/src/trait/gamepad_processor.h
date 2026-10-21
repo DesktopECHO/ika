@@ -51,6 +51,17 @@ struct sc_gamepad_processor_ops {
     void
     (*process_gamepad_button)(struct sc_gamepad_processor *gp,
                               const struct sc_gamepad_button_event *event);
+
+    /**
+     * Process a gamepad stick event: both axes of a stick at once, in one
+     * report (Ika: the keyboard gamepad)
+     *
+     * This function is optional (NULL): the caller then sends the two axis
+     * events instead.
+     */
+    void
+    (*process_gamepad_stick)(struct sc_gamepad_processor *gp,
+                             const struct sc_gamepad_stick_event *event);
 };
 
 #endif

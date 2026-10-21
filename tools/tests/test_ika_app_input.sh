@@ -39,12 +39,12 @@ expect_contains() {
 input_args() {
   local -a args=()
 
-  IKA_APP_INPUT="$3" append_scrcpy_input_args args "$1" "$2" 2>"${T}/log"
+  IKA_APP_INPUT="$3" append_scrcpy_input_args args "$1" "$2" "${4:-}" 2>"${T}/log"
   printf '%s\n' "${args[*]}"
   cat "${T}/log"
 }
 
-DEFAULT_SPEC="dpad_up=Up/W,dpad_down=Down/S,dpad_left=Left/A,dpad_right=Right/D,a=Space,b=Escape,x=C,y=V,start=Return/Keypad_Enter,back=Backspace,left_shoulder=Q,right_shoulder=E,left_trigger=Z,right_trigger=X"
+DEFAULT_SPEC="left_stick_up=W,left_stick_down=S,left_stick_left=A,left_stick_right=D,dpad_up=Up,dpad_down=Down,dpad_left=Left,dpad_right=Right,right_stick_up=I,right_stick_down=K,right_stick_left=J,right_stick_right=L,a=Space,b=Escape,x=C,y=V,start=Return/Keypad_Enter,back=Backspace,left_shoulder=Q/Wheel_Up,right_shoulder=E/Wheel_Down,left_stick=Left_Shift,right_stick=F/Mouse_Middle,left_trigger=Z/Mouse_Right,right_trigger=X/Mouse_Left,walk=Tab,ramp_ms=100,walk_percent=50,socd=last,mouse_stick=right,mouse_sensitivity=100"
 expect_equal "$(keyboard_gamepad_spec)" "${DEFAULT_SPEC}" "the default keyboard gamepad spec"
 
 # The consoles: an app's start options never reach them.
@@ -71,7 +71,7 @@ expect_equal "${output%%$'\n'*}" "--gamepad=uhid --keyboard=uhid --mouse=uhid" "
 expect_contains "${output}" "console HID devices: keyboard mouse gamepad" "the HID devices are logged"
 output="$(input_args app "app window" "gamekb")"
 expect_equal "${output%%$'\n'*}" "--gamepad=uhid --gamekb=${DEFAULT_SPEC} --keyboard=sdk --prefer-text" "the keyboard as a gamepad"
-expect_contains "${output}" "app window keyboard gamepad: dpad_up=Up/W," "the keyboard gamepad is logged"
+expect_contains "${output}" "app window keyboard gamepad: left_stick_up=W," "the keyboard gamepad is logged"
 output="$(input_args app "app window" "gamepad gamekb")"
 expect_equal "${output%%$'\n'*}" "--gamepad=uhid --gamekb=${DEFAULT_SPEC} --keyboard=sdk --prefer-text" "gamepads and the keyboard as one"
 
@@ -82,14 +82,31 @@ expect_contains "${output}" "console touch input: the mouse is not a HID device"
 output="$(IKA_TOUCH=1 input_args app console "")"
 expect_equal "${output%%$'\n'*}" "--keyboard=sdk --prefer-text --no-mouse-hover" "touch input alone"
 
-# [keyboard_gamepad] in ika.ini remaps: several keys, none, extra spaces.
-KEYBOARD_GAMEPAD_KEYS[a]="H  J"
-KEYBOARD_GAMEPAD_KEYS[dpad_up]=""
-KEYBOARD_GAMEPAD_KEYS[guide]="F1"
-expect_equal "$(keyboard_gamepad_spec)" "dpad_down=Down/S,dpad_left=Left/A,dpad_right=Right/D,a=H/J,b=Escape,x=C,y=V,start=Return/Keypad_Enter,back=Backspace,guide=F1,left_shoulder=Q,right_shoulder=E,left_trigger=Z,right_trigger=X" "a remapped spec"
-KEYBOARD_GAMEPAD_KEYS[a]="Space"
-KEYBOARD_GAMEPAD_KEYS[dpad_up]="Up W"
-KEYBOARD_GAMEPAD_KEYS[guide]=""
+# [keyboard_gamepad] in ika.ini remaps: several keys, none, extra spaces. A
+# key an ika.ini line gives a control leaves the control it is a default of,
+# whatever its case; keys of other ika.ini lines stay as given.
+keyboard_gamepad_ini() {
+  local line control
+
+  IKA_INI=()
+  for line in "$@"; do
+    control="${line%%=*}"
+    IKA_INI["keyboard_gamepad.${control}"]="${line#*=}"
+  done
+  # As ika reads them: the ika.ini values, or the defaults.
+  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+    ika_ini_get "KEYBOARD_GAMEPAD_KEYS[${control}]" keyboard_gamepad "${control}" \
+      "${DEFAULT_KEYS[${control}]}"
+  done
+}
+declare -A DEFAULT_KEYS=()
+for control in "${!KEYBOARD_GAMEPAD_KEYS[@]}"; do
+  DEFAULT_KEYS["${control}"]="${KEYBOARD_GAMEPAD_KEYS[${control}]}"
+done
+keyboard_gamepad_ini "a=H  J" "dpad_up=" "guide=F1" "left_trigger=left_shift" "start=Return W"
+expect_equal "$(keyboard_gamepad_spec)" "left_stick_down=S,left_stick_left=A,left_stick_right=D,dpad_down=Down,dpad_left=Left,dpad_right=Right,right_stick_up=I,right_stick_down=K,right_stick_right=L,a=H/J,b=Escape,x=C,y=V,start=Return/W,back=Backspace,guide=F1,left_shoulder=Q/Wheel_Up,right_shoulder=E/Wheel_Down,right_stick=F/Mouse_Middle,left_trigger=left_shift,right_trigger=X/Mouse_Left,walk=Tab,ramp_ms=100,walk_percent=50,socd=last,mouse_stick=right,mouse_sensitivity=100" "a remapped spec"
+keyboard_gamepad_ini
+expect_equal "$(keyboard_gamepad_spec)" "${DEFAULT_SPEC}" "the defaults again without ika.ini lines"
 
 # Extra args that set the gamepad are not doubled.
 for extra in "--gamepad=disabled" "--no-clipboard-autosync --gamepad=aoa" "-G" "-fG" "--gamekb=a=K"; do
@@ -103,3 +120,38 @@ output="$(IKA_SCRCPY="--no-clipboard-autosync -f" input_args app console "gamepa
 expect_equal "${output%%$'\n'*}" "--gamepad=uhid --keyboard=sdk --prefer-text" "other extra args do not stand in"
 
 echo "PASS"
+
+# A game's controller mapping (~/ika/apps/PACKAGE/controller.ini) goes over
+# ika.ini: its keys replace the control's, a key it gives leaves the control
+# the key is a default of, and its settings replace ika.ini's; a setting out
+# of range falls back with a log line.
+mkdir -p "${IKA_APPS_DIR}/com.example.game"
+cat >"${IKA_APPS_DIR}/com.example.game/controller.ini" <<'EOF'
+# a comment
+[keyboard_gamepad]
+a = J
+guide = Home
+walk =
+stick_ramp_ms = 0
+socd_dpad = neutral
+walk_percent = 500
+mouse_stick = left
+mouse_sensitivity = 250
+nonsense = 1
+EOF
+spec="$(keyboard_gamepad_spec com.example.game 2>"${T}/log")"
+expect_contains ",${spec}," ",a=J," "the game's key for A"
+[[ ",${spec}," != *",right_stick_left="* ]] || fail "J did not leave the right stick (its default control): ${spec}"
+expect_contains ",${spec}," ",guide=Home," "a control without a default key gets one"
+expect_contains ",${spec}," ",ramp_ms=0," "the game's stick ramp"
+expect_contains ",${spec}," ",socd=last,socd_dpad=neutral" "the game's D-pad SOCD rule"
+expect_contains ",${spec}," ",mouse_stick=left,mouse_sensitivity=250" "the game's mouse settings"
+expect_contains ",${spec}," ",walk_percent=50," "a walk speed out of range falls back"
+[[ ",${spec}," != *",walk="* ]] || fail "an empty value leaves the control without a key: ${spec}"
+expect_contains "$(<"${T}/log")" "walk_percent must be 1 to 100, not '500'; using '50'" "the bad setting is logged"
+expect_contains "$(<"${T}/log")" "'nonsense' is not a control or a setting" "an unknown line is logged"
+expect_equal "$(keyboard_gamepad_spec com.example.other)" "${DEFAULT_SPEC}" "a game without a mapping uses ika.ini"
+output="$(input_args app "app window" "gamekb" com.example.game)"
+expect_contains "${output%%$'\n'*}" "--gamekb=left_stick_up=W," "the app window passes the game's mapping"
+expect_contains "${output%%$'\n'*}" ",a=J," "with the game's keys"
+echo "ok: a game's controller mapping goes over ika.ini"

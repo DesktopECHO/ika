@@ -109,18 +109,47 @@ from gray.
   the console as it was.
 - `--gamekb[=SPEC]` (with `--gamepad=uhid`): the keyboard is a
   gamepad of the device too; other keys still type. SPEC gives the keys of
-  each control as `control=key/key,control=key`: the controls are `dpad_up`,
-  `dpad_down`, `dpad_left`, `dpad_right` (which also move the left stick),
-  `a`, `b`, `x`, `y`, `start`, `back`, `guide`, `left_shoulder`,
-  `right_shoulder`, `left_stick`, `right_stick`, `left_trigger` and
-  `right_trigger`; the keys are SDL key names, with `_` for a space
-  (`Keypad_Enter`); unknown keys and controls are reported and skipped.
-  Without SPEC: arrows or WASD steer, Space is A, Esc is B, C is X, V is Y,
-  Enter is Start, Backspace is Back, Q and E are the shoulders, Z and X the
-  triggers. A held key is released whatever modifier is down by then, and
-  every key when the window loses focus, so no button stays pressed on the
-  device. `ika` passes it, with the keys of `[keyboard_gamepad]` in ika.ini,
-  for apps and games whose start options use the keyboard as a gamepad.
+  each control as `control=key/key,control=key`: the controls are
+  `left_stick_up`, `left_stick_down`, `left_stick_left`, `left_stick_right`,
+  `dpad_up`, `dpad_down`, `dpad_left`, `dpad_right`, `right_stick_up`,
+  `right_stick_down`, `right_stick_left`, `right_stick_right`, `a`, `b`,
+  `x`, `y`, `start`, `back`, `guide`, `left_shoulder`, `right_shoulder`,
+  `left_stick`, `right_stick` (the sticks' clicks), `left_trigger`,
+  `right_trigger` and `walk` (held, it caps the sticks' deflection); the
+  keys are SDL key names, with `_` for a space (`Keypad_Enter`), or the
+  mouse's `Mouse_Left`, `Mouse_Right`, `Mouse_Middle`, `Mouse_X1`,
+  `Mouse_X2`, `Wheel_Up`, `Wheel_Down`, `Wheel_Left` and `Wheel_Right` (a
+  wheel notch presses its control for 40 ms); unknown keys and controls are
+  reported and skipped, as is a key given to a second control. SPEC takes
+  settings too: `mouse_stick=right|left|off` (off) moves that stick with the
+  mouse, as a velocity: full deflection at 32 pixels per 8 ms at
+  `mouse_sensitivity=100`, back to the center 24 ms after the mouse stops,
+  the stick's keys winning while held. With `mouse_stick`, or a mouse button
+  or the wheel mapped, the gamepad takes the mouse: the window captures the
+  pointer as for `--mouse=uhid` (the capture key, Alt, releases it and takes
+  it back; with the SDK mouse the pointer works as usual while released),
+  and while captured the mouse's motion, buttons and wheel reach the gamepad
+  in the input manager, unmapped buttons dropped, a button pressed before
+  the capture released where it was pressed. `ramp_ms=N` (0 by default) pushes a stick
+  from its center to its target over N ms, as a thumb does, and back at
+  once, through an SDL timer (`SC_EVENT_GAMEKB_TIMER`, one report every 8 ms
+  while a stick ramps); `walk_percent=N` (50) is the sticks' deflection with
+  walk held; `socd=last|neutral` is what two opposite directions held
+  together do, the last pressed or nothing, for every pad, and `socd_dpad`,
+  `socd_left_stick`, `socd_right_stick` for one. Without SPEC: WASD is the
+  left stick, the arrows the D-pad, IJKL the right stick, Space is A, Esc is
+  B, C is X, V is Y, Enter is Start, Backspace is Back, Q and E are the
+  shoulders, Z and X the triggers, Left Shift and F the sticks' clicks, Tab
+  is walk. It behaves as a physical pad: the D-pad and the sticks are apart,
+  a stick on a diagonal is as far from its center as on an axis (a round
+  gate, not the corner of a square), no pad points two opposite ways, and a
+  control stays pressed while any of its keys is held. A stick moves in one
+  HID report: the gamepad processor has an optional `process_gamepad_stick`
+  op, which the UHID and AOA gamepads implement. A held key is released
+  whatever modifier is down by then, and every key when the window loses
+  focus, so no button stays pressed on the device. `ika` passes it,
+  with the keys of `[keyboard_gamepad]` in ika.ini, for apps and games whose
+  start options use the keyboard as a gamepad.
 - Exit status 2 on device disconnection (upstream), which `ika` uses to
   reopen the console after a guest reboot.
 - The app of a new display is watched: when it is gone, the server sends

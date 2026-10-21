@@ -452,3 +452,38 @@ sc_hid_gamepad_generate_input_from_axis(struct sc_hid_gamepad *hid,
 
     return true;
 }
+
+bool
+sc_hid_gamepad_generate_input_from_stick(struct sc_hid_gamepad *hid,
+                                         struct sc_hid_input *hid_input,
+                                const struct sc_gamepad_stick_event *event) {
+    uint32_t gamepad_id = event->gamepad_id;
+
+    ssize_t slot_idx = sc_hid_gamepad_slot_find(hid, gamepad_id);
+    if (slot_idx == -1) {
+        LOGW("Stick event for unknown gamepad %" PRIu32, gamepad_id);
+        return false;
+    }
+
+    assert(slot_idx < SC_MAX_GAMEPADS);
+
+    struct sc_hid_gamepad_slot *slot = &hid->slots[slot_idx];
+
+    switch (event->stick) {
+        case SC_GAMEPAD_STICK_LEFT:
+            slot->axis_left_x = AXIS_RESCALE(event->x);
+            slot->axis_left_y = AXIS_RESCALE(event->y);
+            break;
+        case SC_GAMEPAD_STICK_RIGHT:
+            slot->axis_right_x = AXIS_RESCALE(event->x);
+            slot->axis_right_y = AXIS_RESCALE(event->y);
+            break;
+        default:
+            return false;
+    }
+
+    uint16_t hid_id = sc_hid_gamepad_slot_get_id(slot_idx);
+    sc_hid_gamepad_event_from_slot(hid_id, slot, hid_input);
+
+    return true;
+}
