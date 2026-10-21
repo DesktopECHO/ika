@@ -147,6 +147,11 @@ sc_sdl_log_print(void *userdata, int category, SDL_LogPriority priority,
     assert(priority < SDL_LOG_PRIORITY_COUNT);
     const char *prio_name = sc_sdl_log_priority_names[priority];
     fprintf(out, "%s: %s\n", prio_name, message);
+    if (out == stdout) {
+        // Ika: stdout is a log file (console.log), fully buffered: without a
+        // flush, the lines below WARN only appear once the console exits
+        fflush(stdout);
+    }
 }
 
 void
