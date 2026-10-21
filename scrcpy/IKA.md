@@ -21,6 +21,7 @@ message starts with a little-endian magic ("IKA" + a letter) and a version:
 | `IKAN` | a new frame in a slot: size, DRM format, stride |
 | `IKAF` | a frame with its pixels inline |
 | `IKAD` | a frame as a DMA-BUF (`SCM_RIGHTS`), with offset, stride and modifier; version 2 adds a frame id |
+| `IKAT` | the next frame's timestamps: when it came from crosvm and when its notice is sent (`CLOCK_MONOTONIC`), for a client that asked for them |
 
 Frames become `AVFrame`s: packed RGB, or `AV_PIX_FMT_DRM_PRIME` for DMA-BUFs.
 `app/src/interop/interop_raw.c` uploads the former and imports the latter
@@ -130,6 +131,12 @@ from gray.
 - Borderless windows: resize edges, a drag area in the top-left corner (a
   click there leaves fullscreen or maximized), a thin border, a minimum size.
   On X11, `GTK_THEME=...:dark` gives the title bar its dark variant.
+- `IKA_LATENCY=1` logs the frames' latency: the client asks for `IKAT` (bit 2
+  of the `IKAH` version 3 flags) and logs, every 300 frames, the p50/p90/p99
+  in ms of each stage, `server` (arrival from crosvm to the notice's send),
+  `socket` (send to receive), `client` (receive to present) and `total`,
+  with the frames skipped unshown (`app/src/ika/latency.c`). Both ends read
+  the host's `CLOCK_MONOTONIC`.
 - `IKA_TOUCH=1` sends left clicks and drags as a finger; `IKA_WINDOW_ICON` sets
   the window icon of an app window.
 - Primary mouse clicks are injected as mouse events, not touch, for desktop

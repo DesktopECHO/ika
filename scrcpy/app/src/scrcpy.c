@@ -954,9 +954,12 @@ aoa_complete:
             open_size.height = options->window_height ? options->window_height
                                                       : 720;
         }
+        bool want_stamps = screen_initialized
+                        && sc_latency_enabled(&s->screen.latency);
         if (!sc_cf_source_init(&s->cf_source,
                                options->cuttlefish_frames_socket,
-                               options->cuttlefish_display, open_size)) {
+                               options->cuttlefish_display, open_size,
+                               want_stamps)) {
             goto end;
         }
         cf_source_initialized = true;

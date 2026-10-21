@@ -14,6 +14,7 @@
 #include <libavutil/hwcontext_drm.h>
 #include <SDL3/SDL_timer.h>
 
+#include "ika/latency.h"
 #include "util/log.h"
 
 // Little-endian magics spelling "IKA" + a type letter
@@ -25,6 +26,7 @@
 #define SC_CF_MAGIC_SHM_RELEASE 0x52414b49u // IKAR: sent when a slot is free
 #define SC_CF_MAGIC_PAUSE 0x50414b49u // IKAP: sent when the window is hidden
 #define SC_CF_MAGIC_DMA_BUF_RELEASE 0x42414b49u // IKAB: a DMA-BUF frame is free
+#define SC_CF_MAGIC_TIMESTAMPS 0x54414b49u // IKAT: the next frame's timestamps
 #define SC_CF_VERSION 1
 // IKAS with a generation: the client must release the slots (IKAR)
 #define SC_CF_VERSION_SHM_RELEASE 2
@@ -35,6 +37,7 @@
 #define SC_CF_VERSION_HELLO_FLAGS 3
 #define SC_CF_HELLO_RELEASES_SLOTS 1u
 #define SC_CF_HELLO_RELEASES_DMA_BUFS 2u
+#define SC_CF_HELLO_WANTS_TIMESTAMPS 4u
 
 #define SC_CF_MAX_PAYLOAD (256u * 1024 * 1024)
 #define SC_CF_MAX_SLOTS 16
@@ -69,6 +72,15 @@ struct sc_cf_dma_buf_header {
     uint32_t modifier_hi;
     uint32_t modifier_lo;
     uint32_t frame_id;
+};
+
+// IKAT: the host's CLOCK_MONOTONIC times of the next frame's arrival from
+// crosvm and of its notice's send (version 1)
+struct sc_cf_timestamps_header {
+    uint32_t display_number;
+    uint32_t reserved;
+    uint64_t arrival_ns;
+    uint64_t send_ns;
 };
 
 // IKAS
@@ -323,9 +335,37 @@ sc_cf_open_sinks(struct sc_cf_source *source, struct sc_size size) {
     return true;
 }
 
+static void
+sc_cf_free_stamps(void *opaque, uint8_t *data) {
+    (void) opaque;
+    free(data);
+}
+
+// Attach the pending timestamps (IKAT) to the frame, as its opaque_ref
+static void
+sc_cf_attach_stamps(struct sc_cf_source *source, AVFrame *frame) {
+    if (!source->stamps_pending) {
+        return;
+    }
+    source->stamps_pending = false;
+    struct sc_latency_stamps *stamps = malloc(sizeof(*stamps));
+    if (!stamps) {
+        LOG_OOM();
+        return;
+    }
+    *stamps = source->stamps;
+    frame->opaque_ref = av_buffer_create((uint8_t *) stamps, sizeof(*stamps),
+                                         sc_cf_free_stamps, NULL, 0);
+    if (!frame->opaque_ref) {
+        LOG_OOM();
+        free(stamps);
+    }
+}
+
 static bool
 sc_cf_push(struct sc_cf_source *source) {
     AVFrame *frame = source->frame;
+    sc_cf_attach_stamps(source, frame);
 
     if (!source->sinks_open) {
         struct sc_size size = {frame->width, frame->height};
@@ -633,6 +673,20 @@ sc_cf_process_msg(struct sc_cf_source *source, int fd) {
             }
             break;
         }
+        case SC_CF_MAGIC_TIMESTAMPS: {
+            struct sc_cf_timestamps_header h;
+            if (!sc_cf_read_all(fd, &h, sizeof(h))) {
+                goto error;
+            }
+            if (h.display_number != source->display_number) {
+                break;
+            }
+            source->stamps.arrival_ns = h.arrival_ns;
+            source->stamps.send_ns = h.send_ns;
+            source->stamps.recv_ns = sc_latency_now_ns();
+            source->stamps_pending = true;
+            break;
+        }
         case SC_CF_MAGIC_DMA_BUF: {
             struct sc_cf_dma_buf_header h = {0};
             // An older server sends no frame id
@@ -747,7 +801,10 @@ run_cf_source(void *data) {
                 || !sc_cf_send_msg_version(fd, SC_CF_MAGIC_HELLO,
                                            SC_CF_VERSION_HELLO_FLAGS,
                                            SC_CF_HELLO_RELEASES_SLOTS
-                                               | SC_CF_HELLO_RELEASES_DMA_BUFS,
+                                               | SC_CF_HELLO_RELEASES_DMA_BUFS
+                                               | (source->want_stamps
+                                                  ? SC_CF_HELLO_WANTS_TIMESTAMPS
+                                                  : 0),
                                            source->display_number)) {
             LOGW("Could not send Cuttlefish frame socket hello");
         }
@@ -772,6 +829,7 @@ run_cf_source(void *data) {
         av_buffer_unref(&source->shm);
         av_buffer_unref(&source->conn);
         av_frame_unref(source->frame);
+        source->stamps_pending = false;
 
         if (!opened) {
             break;
@@ -792,7 +850,8 @@ run_cf_source(void *data) {
 
 bool
 sc_cf_source_init(struct sc_cf_source *source, const char *socket_path,
-                  uint32_t display_number, struct sc_size open_size) {
+                  uint32_t display_number, struct sc_size open_size,
+                  bool want_stamps) {
     source->socket_path = strdup(socket_path);
     if (!source->socket_path) {
         LOG_OOM();
@@ -819,6 +878,8 @@ sc_cf_source_init(struct sc_cf_source *source, const char *socket_path,
     source->fd = -1;
     source->shm = NULL;
     source->conn = NULL;
+    source->want_stamps = want_stamps;
+    source->stamps_pending = false;
     source->pool = NULL;
     source->pool_size = 0;
     source->sinks_open = false;
