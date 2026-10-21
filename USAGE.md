@@ -51,6 +51,7 @@ ika app Asphalt 8 --touch
 ika app com.android.settings
 ika app --info Chromium
 ika app close Asphalt 8
+ika app close --all
 
 # Choose the options an app always starts with, from the menu or a
 # terminal (also "Ika Startup Options..." on its menu entry)
@@ -213,11 +214,11 @@ the system by name under a **TV mode** heading, such as **Catapult**
 (LineageOS's TV launcher) or one from Google Play:
 
 - In TV mode, choosing a TV launcher makes it the Home app straight away.
-  Choosing **Trebuchet** asks whether to reboot into the desktop.
+  Choosing **Trebuchet** asks whether to restart into the desktop.
 - In desktop mode, when switching to TV mode you may choose the default
   launcher (Catapult) or select any TV launcher installed to be the default
   launcher.
-- **Reboot** switches the Android Settings UI, Google Play Store, onscreen
+- **Restart** switches the Android Settings UI, Google Play Store, onscreen
   keyboard, Home app, and restarts Android in the new mode. **Cancel** keeps
   the mode. Back in desktop mode, the desktop's Home app comes back.
 - When Android restarts in the other mode, the console reopens for it.
@@ -277,7 +278,7 @@ the VM is not running, it is started first.
   bootloader, after asking to confirm. Unlocking changes the keys that
   encrypt Android's data, so the data cannot be kept, just as when a phone's
   bootloader is unlocked.
-- It downloads the latest Magisk release from GitHub into `~/ika` (again only
+- It downloads the latest Magisk release from GitHub into `~/ika/apps` (again only
   when a newer one is out), patches Android's `init_boot` image with Magisk's
   own patcher, flashes it from the bootloader and finishes Magisk's setup.
   The VM reboots a few times along the way.
@@ -330,7 +331,8 @@ its log is `~/ika/madbfs.log`.
 
 `ika backup [FILE]` saves, as a gzip-compressed tar archive
 (`~/ika/ika-backup-YYYYMMDDHHMMSS.tgz` by default): the apps you installed with
-their split APKs (except Chromium, which Ika installs on new devices), their
+their split APKs (except Chromium, which Ika installs on new devices, and the
+Magisk app), their
 files in `/sdcard/Android/data`, game downloads in `/sdcard/Android/obb`, the
 DCIM, Pictures, Download, Documents, Music, Movies and Recordings folders, and
 your choices: the permissions you granted to apps, special app access (such as
@@ -383,7 +385,8 @@ Default `ika` settings and configuration:
 - Chromium installed as the default browser on new devices
 - guest vCPUs set to half the performance cores (counting hardware threads),
   capped at 12, each pinned to a host CPU from the highest CPU number down
-- guest RAM set to one quarter of host RAM, capped at 32 GB
+- guest RAM set to one quarter of host RAM, rounded up to a multiple of 2 GB
+  and capped at 32 GB (`memory_step_mb` and `memory_cap_mb` in `[compute]`)
 - Ethernet-only guest networking by default; Wi-Fi, Bluetooth, NFC, UWB, GNSS,
   and the modem simulator remain off unless explicitly enabled
 
@@ -392,8 +395,7 @@ Android ANGLE over gfxstream Vulkan. If the host only has llvmpipe, `ika` uses
 `gfxstream` instead, which is much lighter on the CPU. Passing `--gpu_mode`
 overrides this. See [GFXSTREAM.md](GFXSTREAM.md) for a comparison. Use
 `gfxstream_guest_angle` for games and Vulkan/CTS; mixed `gfxstream` mode does
-not support data-buffer AHardwareBuffers. Program-binary caching stays disabled
-because it corrupts rendering in some games. On RADV hosts, `ika` adds
+not support data-buffer AHardwareBuffers. On RADV hosts, `ika` adds
 `syncshaders` to `RADV_DEBUG` for gfxstream modes. This prevents asynchronous
 host shader compilation from intermittently executing incomplete
 transform-feedback pipelines; existing caller-provided `RADV_DEBUG` options are
@@ -406,8 +408,8 @@ resets until changed by another `ika reset --data_gb=...`.
 
 ## Low-CPU mode
 
-Weak hosts get a lighter desktop: the display refreshes at 30 Hz instead of
-60, window blurs are off and animations run at half their length. The
+Weak hosts get a lighter desktop: the display refreshes at 30 Hz
+(`refresh_rate_hz` in `[lowcpu]`) instead of the host display's rate, window blurs are off and animations run at half their length. The
 display keeps its size and density, and the console works as it always
 does.
 
@@ -484,13 +486,23 @@ allocations, keep their type either way.
 
 `--gpu_mode=venus` runs the guest's Vulkan on Mesa's Venus driver over
 virglrenderer on the host, with ANGLE for OpenGL ES, instead of gfxstream.
-Cuttlefish 1.58 added the mode, and Ika's host tools carry it, but it also
-needs a ROM built with Venus support (Mesa's `vulkan.virtio` driver, declared
-in the ROM's `android-info.txt`), which Ika's LineageOS ROM does not have
-yet; `ika start --gpu_mode=venus` says so and stops. Upstream tests the mode
+Ika's host tools carry the mode, but it also needs a ROM built with Venus
+support, declared in the ROM's `android-info.txt` (`venus` among
+`gpu_mode_candidates`, or `vulkan_venus_apex=supported`), which Ika's
+LineageOS ROM does not have yet; `ika start --gpu_mode=venus` says so and stops. Upstream tests the mode
 on Intel (ANV) and Qualcomm (Turnip) hosts; it is not available on Apple
 Silicon. It is of interest because one report measured vkmark at 143 fps on
 gfxstream and 800 fps on Venus on the same GPU, though not on Cuttlefish.
+
+### Hardware video decoding
+
+`hw_video_decode = auto` in the `[gpu]` section of `ika.ini`
+(`--hw_video_decode=auto|off`, `IKA_HW_VIDEO_DECODE`) gives Android a video
+decoder backed by the host's VA-API driver, for H.264, HEVC, VP8 and VP9 as
+far as the host decodes them, when `vainfo` finds a working driver; the
+start log says what it found. Android only uses it with a V4L2 Codec2 HAL in
+the ROM and decodes in software otherwise. `off` leaves the decoder out, and
+a `--crosvm_media_decoder=` argument of your own takes precedence.
 
 In direct `gfxstream` mode, the guest advertises OpenGL ES 3.2, including
 `ANDROID_EMU_gles_max_version_3_2`, with fallback to ES 3.1, 3.0, and 2.0 when

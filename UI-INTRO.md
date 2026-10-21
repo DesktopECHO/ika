@@ -13,9 +13,7 @@ of the desktop, or drag it to the top edge to maximize the window.
 
 Super (Command) + F switches fullscreen mode on and off.
 
-Super (Command) + T switches the title bar on and off.
-
-Without a title bar, resize the console by dragging just outside its edges:
+The console has no title bar; resize it by dragging just outside its edges:
 the window keeps an invisible 4-pixel margin for that, so the edge of the
 Android desktop stays clickable. While a window is resized, its last complete
 picture is stretched and blurred until Android has drawn the new size.
@@ -37,7 +35,8 @@ resizable window with a normal title bar, separate from the desktop console.
 Each window is backed by a Cuttlefish display of its own, added while the VM
 runs and removed when the window closes, and shown with raw frames like the
 console. The app is drawn at the window size, so resizing the window gives
-the app more room rather than stretching it. Super + T and Super + F work as they do in the console.
+the app more room rather than stretching it. Super + F works as it does in
+the console.
 
 - The app is restarted on the new display if it was already running on the
   desktop, and closing the window closes the app.
@@ -47,13 +46,13 @@ the app more room rather than stretching it. Super + T and Super + F work as the
   spaces. An ambiguous name lists the matching apps instead of guessing.
 - Some apps are hidden from `ika app`, name matching and the menu: Android
   Switch, the Google search app, Calculator, Calendar, Clock, Contacts,
-  Recorder and AudioFX. See `IKA_HIDDEN_APPS` in `tools/ika`. They
-  still open when given by full package name.
+  Recorder and AudioFX (the `hidden_apps` setting in the `[apps]` section
+  of `ika.ini`). They still open when given by full package name.
 - The window title is the app's label; override it with `--title=TEXT`. Window
   size is remembered per app under `~/ika/apps/PACKAGE/`; `--size=WxH` sets
   it explicitly.
 - **Games** (apps that declare `android:appCategory="game"`, or are listed in
-  `IKA_GAME_APPS` in `tools/ika`) open in their own windows like any other
+  `game_apps` in the `[apps]` section of `ika.ini`) open in their own windows like any other
   app. They are marked as games in the app menu, and a game added to the
   menu starts with **Fullscreen mode** ticked in its start options (below),
   so its window opens fullscreen.
@@ -67,7 +66,7 @@ the app more room rather than stretching it. Super + T and Super + F work as the
   clicks differently from touch, for example Chromium's tab strip.
 - `ika app sync` adds every launchable app to the desktop's app menu, as
   "🎮 ∙ LABEL" for games (apps declaring `android:appCategory="game"`, or listed
-  in `IKA_GAME_APPS` in `tools/ika`) and "ᗩ ∙ LABEL" for other apps, in an
+  in `game_apps` in the `[apps]` section of `ika.ini`) and "ᗩ ∙ LABEL" for other apps, in an
   "Android Apps (Ika)" group: a folder in the GNOME app
   grid, or a submenu on KDE Plasma, XFCE, Cinnamon and MATE. Launchers are
   `~/.local/share/applications/ika-PACKAGE.desktop` and are named after the
@@ -75,7 +74,7 @@ the app more room rather than stretching it. Super + T and Super + F work as the
   under its launcher. Each launcher gets the app's own icon, rendered by
   Android so adaptive icons look as they do in the Ika launcher, and stored
   in `~/ika/apps/icons/`. Edits you make to a launcher are kept unless the
-  app's label or icon changes.
+  app's label, icon or actions change, or Ika updates the launchers.
 - Menu entries work while Ika is stopped: `ika app` then starts the VM
   without the desktop console (`ika start --no-console`) and opens the app
   once Android has booted. Launched from a menu, `ika app` reports progress
@@ -109,7 +108,8 @@ the app more room rather than stretching it. Super + T and Super + F work as the
   [Controller mapping per game](USAGE.md#controller-mapping-per-game)).
 - The menu is kept up to date automatically: once the guest has booted,
   `ika start` runs a background watcher that syncs the menu and then checks
-  every few seconds (`IKA_APP_MENU_POLL_SEC`, default 5) for installed,
+  every few seconds (`menu_poll_sec` in the `[apps]` section of `ika.ini`, or
+  `IKA_APP_MENU_POLL_SEC`; default 5) for installed,
   updated, removed, enabled or disabled apps. It logs to `~/ika/app-menu.log`
   and stops with the VM. `ika app sync` forces a sync. `ika app sync --remove`
   deletes the launchers and the group and turns the automatic sync off until
