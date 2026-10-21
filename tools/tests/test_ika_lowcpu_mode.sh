@@ -39,6 +39,8 @@ VULKAN_SUMMARY=$'GPU0:\n\tdeviceName = Radeon'
 GPU_MODE="gfxstream_guest_angle"
 
 host_display_size() { printf '%s\n' "${HOST_DISPLAY}"; }
+HOST_REFRESH_HZ=60
+host_display_refresh_hz() { printf '%s\n' "${HOST_REFRESH_HZ}"; }
 host_physical_memory_mb() { printf '%s\n' "${HOST_MEMORY_MB}"; }
 vulkaninfo_summary() { [[ -n "${VULKAN_SUMMARY}" ]] && printf '%s\n' "${VULKAN_SUMMARY}"; }
 start_gpu_mode_value() { printf '%s\n' "${GPU_MODE}"; }
@@ -76,8 +78,28 @@ expect_equal "$(decide auto)" "false||" "a fast host again"
 
 args=()
 LOWCPU_MODE_ACTIVE="false"
-append_default_display_arg args 168 2>/dev/null
+append_default_display_arg args 168 2>"${T}/log"
 expect_equal "${args[*]}" "--display=width=1920,height=1200,dpi=168,refresh_rate_hz=60" "the full display without the profile"
+expect_contains "$(cat "${T}/log")" "at 60 Hz (the host display's)" "the host's rate is logged"
+# The refresh rate follows the host display, unless set
+args=()
+HOST_REFRESH_HZ=120
+append_default_display_arg args 168 2>/dev/null
+expect_equal "${args[*]}" "--display=width=1920,height=1200,dpi=168,refresh_rate_hz=120" "a 120 Hz host display"
+args=()
+IKA_REFRESH_RATE_HZ=75 append_default_display_arg args 168 2>"${T}/log"
+expect_equal "${args[*]}" "--display=width=1920,height=1200,dpi=168,refresh_rate_hz=75" "refresh_rate_hz set"
+expect_contains "$(cat "${T}/log")" "at 75 Hz (set by refresh_rate_hz)" "the setting is logged"
+args=()
+IKA_REFRESH_RATE_HZ=fast append_default_display_arg args 168 2>"${T}/log"
+expect_equal "${args[*]}" "--display=width=1920,height=1200,dpi=168,refresh_rate_hz=120" "a bad setting falls back to auto"
+expect_contains "$(cat "${T}/log")" "refresh_rate_hz must be auto or a positive whole number, not 'fast'; using auto" "the bad setting is reported"
+args=()
+host_display_refresh_hz() { return 1; }
+append_default_display_arg args 168 2>"${T}/log"
+expect_equal "${args[*]}" "--display=width=1920,height=1200,dpi=168,refresh_rate_hz=60" "60 Hz when the host's rate is unknown"
+host_display_refresh_hz() { printf '%s\n' "${HOST_REFRESH_HZ}"; }
+HOST_REFRESH_HZ=60
 args=()
 LOWCPU_MODE_ACTIVE="true"
 IKA_LOWCPU_REFRESH_RATE_HZ=30

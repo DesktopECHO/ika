@@ -367,6 +367,17 @@ refresh rate (`refresh_rate_hz`); a `--display=` option sets the display
 itself. Starting without low-CPU mode puts the guest's blurs and animations
 back.
 
+## Display refresh rate
+
+Outside low-CPU mode, the display's refresh rate, which paces Android's
+frames, follows the host display: 120 Hz on a 120 Hz panel, 60 Hz on a 60 Hz
+one, and 60 Hz when the host's rate cannot be read. The start log says which
+(`display ceiling: ... at 120 Hz (the host display's)`). `refresh_rate_hz` in
+the `[console]` section of `ika.ini`, or `IKA_REFRESH_RATE_HZ`, sets a number
+instead, for example 60 on a 120 Hz display to halve the guest's composition
+work; a `--display=` option sets the display itself. App windows' displays
+use the same rate.
+
 ## gfxstream Vulkan switch
 
 The `--gfxstream_vulkan` switch controls the optional Vulkan context only when
