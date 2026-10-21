@@ -10,6 +10,8 @@ import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
 import android.widget.BaseAdapter;
 import android.widget.LinearLayout;
 import android.widget.ListView;
@@ -102,7 +104,7 @@ public class SwitcherActivity extends Activity {
             return;
         }
         boolean[] switching = {false};
-        new AlertDialog.Builder(this)
+        AlertDialog question = new AlertDialog.Builder(this)
                 .setTitle(tv ? R.string.tv_mode_title : R.string.desktop_mode_title)
                 .setMessage(tv ? R.string.tv_mode_text : R.string.desktop_mode_text)
                 .setPositiveButton(R.string.switch_mode, (dialog, which) -> {
@@ -125,7 +127,42 @@ public class SwitcherActivity extends Activity {
                         rows.setItemChecked(checked, true);
                     }
                 })
-                .show();
+                .create();
+        coverList(question, list);
+        question.show();
+    }
+
+    /**
+     * Gives QUESTION the size and place of LIST, which it covers: a dialog of its own size would
+     * leave the list showing around it. The window is created first, as a floating window is
+     * made wrap its content when it is, and a list that has not been laid out yet is left alone.
+     * The dialog's own layout is stretched to the window, so that the buttons stay at the bottom
+     * of it, as the list's Cancel does, instead of sitting under the text.
+     */
+    private static void coverList(AlertDialog question, AlertDialog list) {
+        View decor = list.getWindow().getDecorView();
+        int width = decor.getWidth();
+        int height = decor.getHeight();
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+        question.create();
+        WindowManager.LayoutParams listParams = list.getWindow().getAttributes();
+        Window window = question.getWindow();
+        WindowManager.LayoutParams params = window.getAttributes();
+        params.width = width;
+        params.height = height;
+        params.gravity = listParams.gravity;
+        params.x = listParams.x;
+        params.y = listParams.y;
+        window.setAttributes(params);
+        ViewGroup content = window.findViewById(android.R.id.content);
+        if (content != null && content.getChildCount() > 0) {
+            View panel = content.getChildAt(0);
+            ViewGroup.LayoutParams panelParams = panel.getLayoutParams();
+            panelParams.height = ViewGroup.LayoutParams.MATCH_PARENT;
+            panel.setLayoutParams(panelParams);
+        }
     }
 
     /** The TV launchers, Catapult first, then by name. */
