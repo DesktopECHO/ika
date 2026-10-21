@@ -6,8 +6,9 @@
 - `ika start` runs a low-CPU mode on weak hosts: the display refreshes at
   30 Hz instead of 60, window blurs are off and animations run at half their
   length, with the display's size and density unchanged. It is on by itself
-  when the host has no hardware Vulkan driver, gives the guest 2 vCPUs or
-  fewer, or has less than 8 GB of memory; `--lowcpu`, `--no-lowcpu`,
+  when the host has no hardware Vulkan driver or the GPU mode is
+  `guest_swiftshader`, gives the guest 2 vCPUs or fewer, or has less than
+  8 GB of memory; `--lowcpu`, `--no-lowcpu`,
   `IKA_LOWCPU` and the `[lowcpu]` section of ika.ini (`mode`,
   `refresh_rate_hz`) set it.
 
@@ -21,10 +22,11 @@
   DMA-BUFs (...)` or `pixels read back by crosvm (...), the slow path`, and
   ika_stream logs each change of path.
 - With a window open on the Apple Silicon desktop every frame was read back
-  by crosvm and copied twice: hwc3 flushed SurfaceFlinger's client target to
-  the display as it was, a buffer the host cannot export. It now composes it
-  into its swapchain image, so the console gets DMA-BUFs with windows open
-  too.
+  by crosvm and copied to the console: hwc3 flushed SurfaceFlinger's client
+  target to the display as it was, a buffer the host cannot export. It now
+  composes it into its swapchain image, so the console gets DMA-BUFs with
+  windows open too. This is a change to the ROM's hwc3, so it arrives with
+  the next ROM build.
 - `IKA_LATENCY=1` in the console's environment logs the frames' latency
   (crosvm's commit to the console's present) as percentiles every 300 frames;
   the console's INFO lines now reach `~/ika/console.log` as they are written.
@@ -79,9 +81,9 @@
   `Wheel_Up`, `Wheel_Down`, `Wheel_Left`, `Wheel_Right`): by default the
   left button is the right trigger, the right button the left trigger, the
   middle button the right stick's click and the wheel the shoulders. With
-  any of that, the window captures the pointer as for a HID mouse, Alt
-  releases it and takes it back, and the released pointer is the usual
-  mouse. scrcpy's `--gamekb` takes it as `mouse_stick`, `mouse_sensitivity`
+  any of that, the window captures the pointer as for a HID mouse, left Alt
+  (or left Super, scrcpy's capture keys) releases it and takes it back, and
+  the released pointer is the usual mouse. scrcpy's `--gamekb` takes it as `mouse_stick`, `mouse_sensitivity`
   and the mouse key names, and the Controller mapping window has fields for
   the stick the mouse moves and its sensitivity.
 - "App Settings" is now "Android App Settings...", and opens the app's App
@@ -95,8 +97,9 @@
   still do. It behaves as a physical pad: the D-pad and the sticks are
   apart, a stick on a diagonal is pushed as far as on an axis (not to the
   corner of a square, which would move faster on diagonals), of two opposite
-  directions only the last pressed counts and the D-pad never points both
-  ways, and a control stays pressed while any of its keys is held. The keys
+  directions only the last pressed counts (by default; `socd` above chooses)
+  and the D-pad never points both ways, and a control stays pressed while
+  any of its keys is held. The keys
   are set in the new `[keyboard_gamepad]` section of ika.ini, one line per
   control; a key given to a control there leaves the control it is a
   default of.

@@ -1885,9 +1885,17 @@ Options:
                          (refresh_rate_hz in ika.ini), window blurs are off
                          and animations are shorter; the display's size and
                          density stay as they are. By default it is on when
-                         the host has no hardware Vulkan driver, gives the
-                         guest 2 vCPUs or fewer, or has less than 8 GB of
-                         memory (IKA_LOWCPU=auto|on|off does the same).
+                         the host has no hardware Vulkan driver or the GPU
+                         mode is guest_swiftshader, gives the guest 2 vCPUs
+                         or fewer, or has less than 8 GB of memory
+                         (--lowcpu=auto|on|off and IKA_LOWCPU=auto|on|off do
+                         the same).
+  --hw_video_decode=auto|off
+                         With start or restart, give Android a video decoder
+                         backed by the host's VA-API when the host has a
+                         working driver (auto, the default), or not.
+                         IKA_HW_VIDEO_DECODE and hw_video_decode in ika.ini
+                         do the same.
   --host_cached_memory=on|off
                          With start or restart, take the guest's host-visible
                          Vulkan memory from a cached coherent host memory type
@@ -1947,8 +1955,8 @@ App windows:
   and removes the display. 'stop', 'reset', and 'restart' close all app
   windows; 'start' leaves them open.
 
-  Games (apps declaring android:appCategory="game", or listed in
-  IKA_GAME_APPS in this script) open in their own windows too. Their menu
+  Games (apps declaring android:appCategory="game", or listed in game_apps
+  under [apps] in ika.ini) open in their own windows too. Their menu
   entries are marked as games, and a game added to the menu starts
   fullscreen (see the start options below).
 
@@ -2068,6 +2076,14 @@ Environment variables:
                          host-visible guest Vulkan memory through udmabuf-backed
                          dma-bufs (the path the Apple GPU supports).
   IKA_HOST_CACHED_MEMORY on or off, as --host_cached_memory.
+  IKA_HW_VIDEO_DECODE    auto or off, as --hw_video_decode.
+  IKA_CAMERA_POWER_LINE_FREQUENCY
+                         auto, 50, 60 or off, as --camera_power_line_frequency.
+  CVD_BOOT_TIMEOUT_SEC   Seconds to wait for Android to boot (default: 150),
+                         kept waiting for up to four times as long while
+                         Android still makes progress.
+  IKA_MIN_OPEN_FILES     The open files limit the VM needs (default: 65536).
+  IKA_KERNEL_PAGE_SIZE   auto, 4k or 16k: the ARM64 guest kernel's page size.
   IKADPI                 Display density, as --dpi.
   IKA_REFRESH_RATE_HZ    The display's refresh rate: auto (the host display's,
                          the default) or a number. Low-CPU mode and --display=

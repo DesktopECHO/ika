@@ -132,8 +132,9 @@ workspace overrides.
 
 The repository builds the host package names listed below. On RPM distributions,
 outputs land under `rpmbuild/RPMS/`; on Debian-family distributions, outputs
-land under `deb/`. Non-primary packages are moved into an `extras/`
-subdirectory by `tools/buildutils/build_packages.sh`.
+land under `deb/`; on Arch Linux, under `archbuild/packages/`. Non-primary
+packages are moved into an `extras/` subdirectory by
+`tools/buildutils/build_packages.sh`.
 
 - `ika-base` — Core host binaries, networking helpers, system services,
   and scrcpy-based virtual console used by the `ika` launcher
@@ -174,10 +175,10 @@ standalone build scripts
 (`build_lineageos_desktop.sh`, `build_packages.sh`) assume dependencies are
 already installed and fail fast when one is missing.
 
-The networking helper uses `nftables` exclusively—both the host-side
-bridge/NAT setup in `cuttlefish-host-resources.sh` and the per-user
-`cvdalloc` daemon manage their rules via native `nft` commands against a
-shared `ip cuttlefish` table. iptables (and `iptables-nft`) and ebtables
+Guest networking is per user: the `cvdalloc` daemon creates its bridge and
+NAT rules with native `nft` commands, in an `ip cuttlefish` table. The
+`cuttlefish-host-resources` service does no networking; it loads and tunes
+the udmabuf kernel module at boot. iptables (and `iptables-nft`) and ebtables
 are no longer runtime dependencies.
 
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/c63c8d08-d11b-4ec0-956a-d2c0220b963a" />
