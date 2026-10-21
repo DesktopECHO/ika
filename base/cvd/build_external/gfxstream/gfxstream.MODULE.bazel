@@ -56,8 +56,10 @@ git_repository(
         # GL-only hosts export a ColorBuffer's texture through the host EGL's
         # dma-buf export, so their console is scanned out without a copy too.
         "@//build_external/gfxstream:PATCH.gfxstream.gl-color-buffer-dmabuf-export.patch",
-        # ScanoutDmabufExport renderer feature: off on the udmabuf (Apple) path,
-        # whose display cannot import the GPU's layout without a modifier.
+        # ScanoutDmabufExport renderer feature, on by default: on Vulkan hosts
+        # the color-buffer info is only given where the display can import the
+        # layout (RADV, or an explicit DRM modifier, as on the udmabuf (Apple)
+        # path, with the patch below).
         "@//build_external/gfxstream:PATCH.gfxstream.scanout-dmabuf-export-feature.patch",
         # A scanned-out color buffer is re-created with an explicit DRM format
         # modifier, so any host display driver imports it correctly.
