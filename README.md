@@ -1,184 +1,97 @@
-**README** | [UI Intro](UI-INTRO.md) | [Ika commands](USAGE.md) | [Changelog](CHANGELOG.md) | [Downloads](DOWNLOADS.md)
+**README** | [Using Ika](USAGE.md) | [Configuration](CONFIGURATION.md) | [Graphics](GRAPHICS.md) | [Building](BUILDING.md) | [Downloads](DOWNLOADS.md) | [Changelog](CHANGELOG.md)
 
 <img width="1920" height="1080" alt="Ika Virtual Desktop" src="https://github.com/user-attachments/assets/ad0213c3-6a9d-45bc-9468-dcdd82abca26" />
 
 # イカ · Ika Virtual Desktop
 
-**Ika** _/ee-kah/_, the Japanese word for squid or cuttlefish, began as an effort to
-run the [Cuttlefish](https://source.android.com/setup/create/cuttlefish) Android emulator
-on [Fedora Asahi Remix](https://asahilinux.org/). It later grew into a desktop-centric Android build for Apple Silicon and x86-64 hosts, but the name stuck.
+**Ika** _/ee-kah/_, Japanese for squid or cuttlefish, runs Android on your
+Linux desktop: LineageOS 23.2 (Android 16), built as a desktop operating
+system, in a [Cuttlefish](https://source.android.com/setup/create/cuttlefish)
+virtual machine, with its apps in windows of their own.
 
 ## Features
 
-- **LineageOS 23.2** (Android 16) reimagined as a desktop-first operating system.
-- **Native builds** for **Apple Silicon** and **x86-64** hosts on **Fedora**,
-  **Debian/Ubuntu** and **Arch Linux**. Ika runs on machines with as little as
-  4 GB of RAM; building it from source needs 16 GB.
-- **X11** and **Wayland** desktop sessions are both supported.
-- **Dynamic display** window resizing that preserves DPI settings.
-- **GPU acceleration** with support for OpenGL ES and Vulkan.
-- **App windows**: run single Android apps in their own desktop windows, listed
-  in your desktop's app menu; games start fullscreen. Right-click an app in
-  the menu for **Ika Startup Options...** to pass the keyboard, mouse or
-  gamepads through to it as HID devices (see
-  [App windows](UI-INTRO.md#app-windows)).
-- **Camera**: use a webcam or a Mac's FaceTime camera as Android's front camera
-  (see [Camera](USAGE.md#camera)).
-- **Android files on the host**: Android's storage is mounted while Ika runs,
-  under **Android** in the file manager's sidebar (see
-  [Android files](USAGE.md#android-files)).
-- **Built-in root utility**: `ika root` roots the VM with Magisk (see
-  [Rooting with Magisk](USAGE.md#rooting-with-magisk)).
-- **Flexible build options** for **MindTheGapps**, **microG**, or a fully
-  de-Googled ROM without an app store.
+- **A desktop Android:** LineageOS 23.2 with resizable app windows, a taskbar
+  and split screen, and a TV mode with Android TV's interface.
+- **The console:** Android's desktop in a window of your Linux desktop. Its
+  display follows the window's size at the host's density, pixel for pixel.
+- **App windows:** each Android app can open in a window of its own, from your
+  desktop's app menu, where Ika lists every Android app.
+- **Start options per app:** fullscreen, the keyboard, the mouse and gamepads
+  passed through to Android, the keyboard as a gamepad, and touch input.
+- **GPU acceleration:** OpenGL ES 3.2 and Vulkan on the host's GPU, through
+  gfxstream.
+- **Your files:** Android's storage is mounted on the host, in the file
+  manager's sidebar, while Ika runs.
+- **Camera:** a webcam, or a Mac's FaceTime camera, as Android's camera.
+- **Backups:** your apps, files and settings, saved and restored with one
+  command.
+- **Root:** `ika root` roots Android with Magisk.
+- **Your choice of Google:** builds with microG, with MindTheGapps (Google
+  Play), or with no Google services at all.
+- **Many hosts:** x86-64 and ARM64, Apple Silicon included, on Fedora,
+  Debian, Ubuntu and Arch Linux, in X11 and Wayland sessions.
 
-Prebuilt packages are on the [Downloads](DOWNLOADS.md) page, the console and app
-windows are described in [UI Intro](UI-INTRO.md), and the `ika` commands in
-[Ika commands](USAGE.md). Changes since the
-last published binaries are listed in [CHANGELOG.md](CHANGELOG.md).
+## Requirements
 
-The Apple Silicon Vulkan memory-sharing path, including its 16 KiB-page and
-udmabuf handling, and the known graphics limitations are documented in
-[GFXSTREAM-VULKAN.md](GFXSTREAM-VULKAN.md). The source patches are listed in
-[lineageos/patches/README.md](lineageos/patches/README.md).
+- An x86-64 or ARM64 computer with hardware virtualization (KVM), and 4 GB of
+  memory or more.
+- Fedora 44, Debian 13, Ubuntu 26.04 or Arch Linux. On Apple Silicon, Fedora
+  Asahi Remix with its 16 KB-page kernel.
+- Mesa 26.1 or newer. Debian 13 gets it from
+  [trixie-backports](https://backports.debian.org/Instructions/), Ubuntu from
+  the [Kisak Mesa PPA](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa);
+  Fedora 44 and Arch Linux have it.
+- A GPU with a Vulkan driver, for the best performance. Without one, Ika
+  renders with the CPU's software driver and runs in a lighter
+  [low-CPU mode](CONFIGURATION.md#low-cpu-mode).
 
-## Build Ika from Source
+## Install
 
-Building requires at least 16 GB of RAM and 300 GB of storage. The first build
-takes 3–6 hours or more, depending on your hardware and internet bandwidth, so
-it's best left to run overnight. The `ika-build` script handles the prerequisite
-steps and produces installable .rpm, .deb or Arch Linux packages for your
-distribution. Prebuilt binaries are published for Fedora, Debian/Ubuntu and
-Arch Linux x86_64; on Arch Linux ARM64, build from source.
+1. Download `ika-base` and `ika-lineageos` for your distribution and
+   architecture from the [Downloads](DOWNLOADS.md) page, or
+   [build them from source](BUILDING.md).
+2. Install both:
 
-```bash
-# 1. Download and extract:
+   ```bash
+   # Fedora
+   sudo dnf install ./ika-base-*.rpm ./ika-lineageos-*.rpm
+   # Debian, Ubuntu
+   sudo apt install ./ika-base_*.deb ./ika-lineageos_*.deb
+   # Arch Linux
+   sudo pacman -U ./ika-base-*.pkg.tar.zst ./ika-lineageos-*.pkg.tar.zst
+   ```
 
-curl -L https://github.com/DesktopECHO/ika/archive/refs/heads/main.zip -o ika-main.zip
-unzip ika-main.zip && rm ika-main.zip && cd ika-main
+3. Reboot after the first install. The packages add you to the `kvm`,
+   `cvdnetwork`, `render` and `video` groups and set up the host's devices and
+   limits, which take effect at the next boot; logging out is not enough.
+   Updates need no reboot.
+4. Start Ika from your desktop's app menu, or with `ika start`.
 
-# 2. Build:
+## First steps
 
-# Prepares signing certificates, installs build dependencies, downloads the
-# LineageOS 23.2 source, applies the overlay and source patches, builds the
-# Cuttlefish target for the host architecture, creates RPM, Debian or Arch packages,
-# and prints the package installation command when the build is complete.
+- `ika start` boots Android and opens the console, Android's desktop in a
+  window. The first start takes longer, as Android sets itself up.
+- Your Android apps appear in your desktop's app menu under
+  **Android Apps (Ika)**. Each opens in a window of its own; right-click one
+  for its **Ika Startup Options...**.
+- `ika stop` stops Android, and `ika help` lists every command.
 
-./ika-build
+[Using Ika](USAGE.md) explains the console, app windows, input and gamepads,
+TV mode and the everyday commands.
 
-# 3. Install packages and reboot.
+## Documentation
 
-# Run the package installation command printed by ika-build, then reboot.
-# Rebooting applies the new group memberships, limits, udev rules, and device
-# permissions. Logging out is not sufficient.
+| Page | Contents |
+| --- | --- |
+| [Using Ika](USAGE.md) | The console, app windows, start options, keyboard, mouse and gamepads, TV mode, files, camera, apps, backups, root |
+| [Configuration](CONFIGURATION.md) | Every command and option, `ika.ini`, environment variables, defaults, files |
+| [Graphics](GRAPHICS.md) | GPU modes, Vulkan, Apple Silicon, graphics troubleshooting |
+| [Building](BUILDING.md) | Building the ROM and the packages from source, on x86-64 and ARM64 |
+| [Downloads](DOWNLOADS.md) | Prebuilt packages |
+| [Changelog](CHANGELOG.md) | Changes in each release |
+| [lineageos/README.md](lineageos/README.md) | The LineageOS Desktop ROM: its products, source layout and build |
+| [scrcpy/IKA.md](scrcpy/IKA.md) | Ika's changes to scrcpy, the console's client |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 
-sudo reboot
-
-# 4. Launch
-
-ika start
-```
-
-Ika requires Mesa 26.1 or newer on Debian/Ubuntu hosts (Fedora and Arch Linux
-already include Mesa 26.1).
-On Debian 13 (trixie), `ika-build` automatically enables `trixie-backports`
-when Mesa 26.1 or newer is not already installed and installs the required Mesa
-packages with explicit `package/trixie-backports` selectors, following the
-[Debian Backports instructions](https://backports.debian.org/Instructions/).
-
-On Ubuntu-family hosts, `ika-build` offers to enable `ppa:kisak/kisak-mesa`
-with `add-apt-repository`, then installs the Mesa packages from Kisak. Set
-`UBUNTU_ENABLE_KISAK_MESA=true` for an unattended build. See the
-[Kisak Mesa PPA instructions](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa).
-
-Debian trixie also requires Vulkan loader 1.4.341. On trixie only, `ika-build`
-builds that loader from the pinned Debian Salsa packaging source.
-
-Mesa 26.3, due in November 2026, is worth taking when your distribution
-ships it: Intel's Jay shader compiler becomes the default for Xe2 and Xe3
-GPUs (Battlemage, Lunar Lake, Panther Lake), about 10% faster at runtime
-than the compiler before it, and RADV gains DRM format modifiers on GFX6
-through GFX8 AMD GPUs (GCN 1.0 up to Polaris and Fiji, with the kernel side
-in Linux 7.3), which lets Ika scan the console out as a dma-buf with an
-explicit layout on those GPUs as it does on newer ones. Nothing in Ika needs
-to change for either; Ika's own Mesa requirement stays at 26.1.
-
-### Rebuilding
-
-After the initial build, use the narrowest command that matches your changes:
-
-- **Full build** — re-run `./ika-build`, then run the installation command it
-  prints. By default it builds the host's native ROM; pass `all`, `arm64` or
-  `x86_64` to choose the targets, and `--microg` or `--mtg` to choose the
-  Google integration, for example `./ika-build all --mtg`. With no arguments,
-  `ika-build` asks whether to use microG, MindTheGapps, or a de-Googled image
-  without an app store.
-- **ROM only** — re-run `./lineageos/scripts/build_lineageos_desktop.sh` (or
-  pass `arm64` / `x86_64` to limit it to one target). Use this after editing
-  patches or overlays under `lineageos/`. Pass `RESET_PATCHED_PROJECTS=1` if
-  you want patched source projects in the workspace reset before re-applying.
-- **Host packages only** — re-run `./tools/buildutils/build_packages.sh`. Use this
-  after editing host sources under `base/` or `frontend/`, after editing the
-  package metadata under `base/rpm/`, `base/debian/`, `frontend/rpm/`, or
-  `frontend/debian/`, or whenever you've finished a fresh ROM rebuild and want
-  to repackage `ika-lineageos` with the new contents. Install the outputs
-  directly with your distribution's package manager.
-
-See [lineageos/README.md](lineageos/README.md) for ROM build options: provider
-selection, target subsets, microG release pinning, native-bridge sources and
-workspace overrides.
-
-## Host Packages
-
-The repository builds the host package names listed below. On RPM distributions,
-outputs land under `rpmbuild/RPMS/`; on Debian-family distributions, outputs
-land under `deb/`; on Arch Linux, under `archbuild/packages/`. Non-primary
-packages are moved into an `extras/` subdirectory by
-`tools/buildutils/build_packages.sh`.
-
-- `ika-base` — Core host binaries, networking helpers, system services,
-  and scrcpy-based virtual console used by the `ika` launcher
-- `ika-lineageos` — Bundled `lineageos/` tree installed under
-  `/usr/share/cuttlefish-common/lineageos`
-- `ika-user` — Browser-facing operator service
-- `ika-orchestration` — Host Orchestrator service and nginx configuration
-- `ika-integration` — Cloud-integration utilities
-- `ika-defaults` — Optional defaults-override service and configuration
-- `ika-metrics` — Metrics transmitter binary
-- `ika-common` — Compatibility metapackage for the primary host packages
-
-Most users need only `ika-base` and `ika-lineageos`.
-
-## Notes
-
-On ARM64 Asahi Linux, this fork uses gfxstream-backed acceleration. The default
-`gfxstream_guest_angle` mode uses guest ANGLE over gfxstream Vulkan, while the
-`auto` policy for direct `gfxstream` mode keeps Cuttlefish's GLES and Vulkan
-contexts enabled on Apple Silicon hosts with 16 KiB pages and applies the
-required udmabuf-backed external-memory path. `guest_swiftshader` remains a
-fallback for isolating host GPU issues.
-
-`ika` expects your login session to be in `kvm`, `cvdnetwork`, `render`, and
-`video`. The `ika-base` package adds the installing user to these groups during
-package configuration, but the active session, its PAM resource limits, and the
-live `/dev/kvm` udev permissions don't pick up the new state without a
-reboot—see step 3 under [Build Ika from Source](#build-ika-from-source) for the
-full list of deferred changes.
-
-Bazel is installed automatically through Bazelisk by `./ika-build`, which runs
-[`tools/buildutils/installbazel.sh`](tools/buildutils/installbazel.sh) during
-the dependency step. That step,
-[`tools/buildutils/lib/dependencies.sh`](tools/buildutils/lib/dependencies.sh),
-installs the main build dependencies near the start of a build. The signing-key
-bootstrap may first install its smaller certificate toolset if needed. The
-standalone build scripts
-(`build_lineageos_desktop.sh`, `build_packages.sh`) assume dependencies are
-already installed and fail fast when one is missing.
-
-Guest networking is per user: the `cvdalloc` daemon creates its bridge and
-NAT rules with native `nft` commands, in an `ip cuttlefish` table. The
-`cuttlefish-host-resources` service does no networking; it loads and tunes
-the udmabuf kernel module at boot. iptables (and `iptables-nft`) and ebtables
-are no longer runtime dependencies.
-
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/c63c8d08-d11b-4ec0-956a-d2c0220b963a" />
+<img width="1920" height="1080" alt="Ika screenshot" src="https://github.com/user-attachments/assets/c63c8d08-d11b-4ec0-956a-d2c0220b963a" />

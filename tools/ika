@@ -189,7 +189,7 @@ enable_sandbox = false
 # Command-line equivalent: --gpu_mode=. Hosts with only software Vulkan
 # devices use gfxstream whatever is set here. venus (Mesa's Venus Vulkan
 # driver in the guest over virglrenderer) needs a ROM built with Venus
-# support, which Ika's does not have yet; see USAGE.md.
+# support, which Ika's does not have; see GRAPHICS.md.
 gpu_mode = gfxstream_guest_angle
 gpu_vhost_user_mode = auto
 enable_gpu_udmabuf = true

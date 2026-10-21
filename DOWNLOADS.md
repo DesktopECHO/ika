@@ -1,15 +1,13 @@
-[README](README.md) | [UI Intro](UI-INTRO.md) | [Ika commands](USAGE.md) | [Changelog](CHANGELOG.md) | **Downloads**
+[README](README.md) | [Using Ika](USAGE.md) | [Configuration](CONFIGURATION.md) | [Graphics](GRAPHICS.md) | [Building](BUILDING.md) | **Downloads** | [Changelog](CHANGELOG.md)
 
 # Downloads (Updated 2026-10-13)
 
-Ika consists of two packages: an Android disk image (informally, the device ROM)
-and a matching Cuttlefish virtual machine application. Prebuilt Fedora 44
-(`.rpm`), Debian 13/Ubuntu 26.04 (`.deb`) and Arch Linux x86_64 (`.pkg.tar.zst`)
-packages are available below. Select your distribution and CPU architecture, then
-download the corresponding application and disk image.
+Ika is two packages: `ika-base`, the application, and `ika-lineageos`, the
+Android disk image. Download both for your distribution and architecture,
+then install them as the [README](README.md#install) shows.
 
 > [!NOTE]
-> Debian and Ubuntu require Mesa 26.1 or newer. Get updated binaries from [Debian trixie-backports](https://backports.debian.org/Instructions/) or the [Kisak Mesa PPA](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa) before installing the Ika packages.
+> Debian and Ubuntu need Mesa 26.1 or newer, from [Debian trixie-backports](https://backports.debian.org/Instructions/) or the [Kisak Mesa PPA](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa), before the Ika packages are installed.
 
 | **Distribution • Architecture** | **Application** | **Disk Image** |
 | --- | --- | --- |
@@ -24,4 +22,7 @@ download the corresponding application and disk image.
 |  |  |  |
 | Arch Linux • x86_64 | [ika-base (220 MB)](https://github.com/DesktopECHO/ika/releases/download/261012/ika-base-261012-1-x86_64.pkg.tar.zst) | [ika-lineageos (1.56 GB)](https://github.com/DesktopECHO/ika/releases/download/261012/ika-lineageos-261012-1-x86_64.pkg.tar.zst) |
 |  |  |  |
-| Arch Linux • ARM64 | [`./ika-build`](README.md#build-ika-from-source) | [`./ika-build`](README.md#build-ika-from-source) |
+| Arch Linux • ARM64 | [`./ika-build`](BUILDING.md) | [`./ika-build`](BUILDING.md) |
+
+To choose the ROM's Google integration, or for Arch Linux ARM, build from
+source: see [Building](BUILDING.md).

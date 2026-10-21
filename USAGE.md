@@ -1,533 +1,486 @@
-[README](README.md) | [UI Intro](UI-INTRO.md) | **Ika commands** | [Changelog](CHANGELOG.md) | [Downloads](DOWNLOADS.md)
+[README](README.md) | **Using Ika** | [Configuration](CONFIGURATION.md) | [Graphics](GRAPHICS.md) | [Building](BUILDING.md) | [Downloads](DOWNLOADS.md) | [Changelog](CHANGELOG.md)
 
-# Ika commands
+# Using Ika
 
-After the packages are installed, `ika` is available on your `PATH`. Use it to
-start, stop, and restart the packaged Cuttlefish environment. Right-click the
-Ika icon in the dock or app menu for **Stop Ika**, **Restart Ika** and
-**Start with Camera**.
+This guide covers the console, Android apps on your desktop, the keyboard,
+mouse and gamepads, TV mode and the everyday commands. Every command and
+setting is listed in [Configuration](CONFIGURATION.md).
+
+## Starting and stopping
 
 ```bash
-# Start a windowed VM
-ika start
-
-# Check whether the VM is running
-ika status
-
-# Stop the VM
-ika stop
-
-# Factory reset the VM and clear instance state
-ika reset
-
-# Restart with new launch arguments
-ika restart --gpu_mode=gfxstream --cpus=8 --memory_mb=8192
-
-# Explicitly force the GLES+Vulkan context set in direct gfxstream mode
-ika restart --gpu_mode=gfxstream --gfxstream_vulkan=on
-
-# Factory reset and use a 128 GB userdata image on the next start
-ika reset --data_gb=128
-
-# Root the VM with Magisk; the first time, this factory-resets the VM and
-# unlocks its bootloader, after asking to confirm
-ika root
-
-# Print the GSF ID, copy it and open Google's uncertified device page
-ika gsf
-
-# Back up your apps and files to ~/ika, and restore the latest backup after a reset
-ika backup
-ika restore
-
-# Use the host's camera as Android's camera (auto-detected, or a given node)
-ika restart --camera
-ika restart --camera=video2
-
-# List launchable apps (open app windows in bold), open one in its own
-# window by label or package name, close it
-ika app
-ika app Asphalt 8 --touch
-ika app com.android.settings
-ika app --info Chromium
-ika app close Asphalt 8
-ika app close --all
-
-# Choose the options an app always starts with, from the menu or a
-# terminal (also "Ika Startup Options..." on its menu entry)
-ika app --options Asphalt 8
-
-# Sync the Android apps into the desktop's app menu now (ika start keeps
-# it in sync automatically), or remove them and turn that off
-ika app sync
-ika app sync --remove
-
-# Install APK files, and uninstall an app by label or package name
-ika install ~/Downloads/some-app.apk
-ika remove Some App
-ika remove com.example.someapp
-
-# Show the built-in usage text
-ika help
+ika start      # boot Android and open the console
+ika status     # is it running?
+ika stop       # stop Android
+ika restart    # stop and start again, with new options if given
 ```
 
-## Camera
+The **Ika** icon in your desktop's app menu runs `ika start`. Right-click it
+for **Start Ika**, **Stop Ika**, **Restart Ika** and **Start with Camera**
+(`ika restart --camera`). Started from the menu, Ika reports its progress and
+errors as desktop notifications.
 
-`--camera` passes a host camera to Android as its front camera (crosvm
-virtio-media, served by Android's external camera HAL):
+- `ika start -f` opens the console fullscreen, and `ika start --no-console`
+  starts Android without it; app windows open either way.
+- `ika start` while Android runs reopens the console. The console also
+  reopens by itself when Android restarts, but not after you close it.
+- **Updating the ROM:** a new `ika-lineageos` would make Cuttlefish rebuild
+  Android's disk and discard its data, so `ika start` refuses to start after
+  one and says so. Run `ika backup` before installing it, then `ika reset` and
+  `ika restore` after (see [Factory reset](CONFIGURATION.md#factory-reset)).
 
-- `ika start --camera` (or `ika restart --camera`) uses the first video
-  capture device that offers MJPEG, NV12 or YUYV: USB webcams, the FaceTime
-  camera of Apple Silicon Macs on an Asahi kernel (`apple-isp`), and that of
-  Intel Macs (UVC on 2011-2012 and T2 models, `facetimehd` on 2013-2017
-  models). Metadata nodes, such as the second node of a UVC webcam, are
-  skipped, and virtual cameras (v4l2loopback, vivid) are used only when there
-  is no other.
-- `--camera=video2` or `--camera=/dev/video2` picks a device; `v4l2-ctl
-  --list-devices` lists them.
-- The camera's anti-flicker is set to the mains frequency of the country of
-  the host's timezone (60 Hz in most of the Americas, Taiwan, South Korea, the
-  Philippines and Saudi Arabia, 50 Hz elsewhere). Lights flicker at twice that
-  frequency; a camera set for the wrong one shows bands, and in dim light can
-  run slower. `--camera_power_line_frequency=50|60|off`, or
-  `power_line_frequency` in the `[camera]` section of ika.ini, sets it instead;
-  in Japan, which has both, set it this way. Cameras without the control, such
-  as the FaceTime cameras on `facetimehd` and `apple-isp`, are left alone.
-- The camera is attached when Android starts: `ika start --camera` refuses
-  while it runs, so use `ika restart --camera` then. It is used until the
-  next `ika start` or `ika restart` without `--camera`. It needs the `video`
-  group, and while Android streams from it, other programs on the host can't.
+## The console
 
-## App input
+The console is Android's desktop in a window. Its display follows the
+window's size at your desktop's density, so resizing the window gives Android
+more room rather than stretching it.
 
-The desktop console types with Android's text input and uses the mouse as
-the desktop does. An app or game can pass the keyboard, the mouse and
-gamepads through to Android as HID devices instead, as if they were plugged
-into it: right-click it in the desktop's app menu, choose **Ika Startup
-Options...** (`ika app --options NAME` from a terminal), and tick what it
-needs. The choices are saved in `~/ika/app-options.ini` and apply whenever
-the app's window opens.
+- **Move it:** drag the top-left corner of the window. Drag it to an edge of
+  the screen to fill half of it, or to the top to maximize it.
+- **Leave fullscreen or maximized:** click the top-left corner once. This
+  works in every Ika window.
+- **Resize it:** drag just outside its edges. The window has no title bar,
+  and keeps an invisible margin of 4 pixels for this, so the edge of Android's
+  desktop stays clickable. While you resize, the last picture is stretched and
+  blurred until Android has drawn the new size.
+- **Fullscreen:** MOD+F or F11.
 
-- **Pass the keyboard through as a HID device**: keys reach the app as from
-  a physical keyboard, which many games need.
-- **Pass the mouse through as a HID device**: the mouse moves Android's
-  pointer itself and is captured by the window, for games that steer with
-  it. **Touch input** wins over it, as a finger needs the desktop's mouse.
-- **Enable gamepads when attached**: gamepads plugged into the host, and ones
-  plugged in later, reach Android.
-- **Use the keyboard to emulate a gamepad** (scrcpy's `--gamekb`): WASD is the left
-  stick, the arrows the D-pad, IJKL the right stick, Space is A, Esc is B, C
-  is X, V is Y, Enter is Start, Backspace is Back, Q and E are the
-  shoulders, Z and X the triggers, Left Shift and F click the left and right
-  sticks, and Tab, held, is walk: the sticks go half as far. The mouse is the
-  pad's too: moving it moves the right stick, the camera in most games, as
-  fast as the mouse moves, the left button is the right trigger, the right
-  button the left trigger, the middle button the right stick's click, and
-  the wheel the shoulders. The window captures the pointer for that; Alt
-  releases it, and the mouse then works as usual, until Alt again. It
-  behaves as a physical pad: the sticks and the D-pad are apart, a stick on
-  a diagonal is pushed as far as on an axis, a stick moves in one report,
-  and of two opposite directions only the last pressed counts. A stick is
-  pushed the way a thumb pushes one: it takes 100 ms from its center to
-  where the key sends it, so a tap moves a little and a held key all the
-  way, and it comes back at once. Those keys then drive the pad instead of
-  typing; other keys still type. Gamepads plugged into the host pass through
-  as well.
+MOD is Left Alt or Left Super (Command on a Mac keyboard). The console
+remembers its size and whether it was fullscreen.
 
-In TV mode the console always passes the gamepad through, as the remote. A
-`--gamepad=` or `--gamekb` option in `scrcpy_args` or `--ika_scrcpy=` wins
-over both. The start log and each app window's log say what was passed.
+The keyboard types into Android as text. The mouse works as on the desktop,
+with these buttons:
 
-In Android a gamepad passed through, a physical one or the keyboard's, is a
-device named **Ika Emulated GamePad** (`adb shell dumpsys input` lists it),
-one for each pad. It has the vendor and product IDs of an Xbox 360 controller
-(045e:028e), which is what gives Android the key layout and games the mapping
-they know.
+| Button | Desktop mode | TV mode |
+| --- | --- | --- |
+| Right | Right click | Back |
+| Shift + right | Back | Right click |
+| Middle | Home | Home |
+| 4th, 5th | Recent apps, notifications (twice: quick settings) | The same |
 
-The keyboard gamepad's keys are set in the `[keyboard_gamepad]` section of
-`ika.ini`, one line per control (`left_stick_up`, `left_stick_down`,
-`left_stick_left`, `left_stick_right`, `dpad_up`, `dpad_down`, `dpad_left`,
-`dpad_right`, `right_stick_up`, `right_stick_down`, `right_stick_left`,
-`right_stick_right`, `a`, `b`, `x`, `y`, `start`, `back`, `guide`,
-`left_shoulder`, `right_shoulder`, `left_stick` and `right_stick` for the
-sticks' clicks, `left_trigger`, `right_trigger`, `walk`) with one or more key names
-separated by spaces, as SDL names them: `Up`, `Space`, `Return`, `Escape`,
-`Backspace`, `Tab`, `F1`, letters and digits, and `_` for a space in a name
-(`Keypad_Enter`, `Left_Shift`, `Page_Up`), or the mouse's buttons and wheel
-(`Mouse_Left`, `Mouse_Right`, `Mouse_Middle`, `Mouse_X1`, `Mouse_X2`,
-`Wheel_Up`, `Wheel_Down`, `Wheel_Left`, `Wheel_Right`; a wheel notch presses
-its control for a moment). An empty value leaves the control
-without a key; a key Ika does not know is reported in the console log and
-skipped. A key given to a control there is no longer a key of the control
-it is a default of, so the lines below move Return from Start and Left Shift
-from the left stick's click:
+Shortcuts, with MOD held:
+
+| Keys | Action |
+| --- | --- |
+| MOD+F | Fullscreen on and off |
+| MOD+Q | Close the window |
+| MOD+H, MOD+B (or MOD+Backspace), MOD+S | Home, Back, recent apps |
+| MOD+N, MOD+Shift+N | Open (twice: quick settings), close the notification panel |
+| MOD+Up, MOD+Down, MOD+P | Volume up, down, power |
+| MOD+C, MOD+X, MOD+V | Copy, cut, paste through Android's clipboard |
+| MOD+Shift+V | Type the clipboard's text |
+| MOD+R | Rotate |
+| MOD+O, MOD+Shift+O | Turn Android's screen off, on |
+
+Ctrl+drag pinches and rotates, Shift+drag and Ctrl+Shift+drag drag with two
+fingers. Drop an APK on the window to install it; any other file dropped there
+goes to Android's Download folder.
+
+## Android apps on your desktop
+
+### The app menu
+
+While Android runs, Ika lists every Android app in your desktop's app menu,
+in an **Android Apps (Ika)** group: a folder in GNOME's app grid, or a submenu
+on KDE Plasma, XFCE, Cinnamon and MATE. Games are named "🎮 ∙ LABEL" and other
+apps "ᗩ ∙ LABEL", with icons Android draws, as its launcher shows them.
+
+- **Open an app** from its menu entry: it opens in a window of its own. This
+  works while Ika is stopped too: Android starts without the console, and the
+  app opens once it has booted.
+- **The menu follows Android:** a watcher adds, updates and removes entries as
+  apps are installed, updated, removed, enabled or disabled, checking every
+  5 seconds (`menu_poll_sec` in `ika.ini`). Its log is `~/ika/app-menu.log`.
+- `ika app sync` updates the menu at once. `ika app sync --remove` removes
+  the entries and the group, and keeps them off until `ika app sync` runs
+  again. `ika reset` removes them too; the next `ika start` puts them back.
+- **Games** are the apps that declare themselves games, and the ones listed in
+  `game_apps` in `ika.ini`. A game starts with **Fullscreen mode** ticked in
+  its start options the first time it is added to the menu.
+- **Hidden apps:** Android Switch, the Google search app, Calculator,
+  Calendar, Clock, Contacts, Recorder and AudioFX stay out of the menu and of
+  `ika app` (`hidden_apps` in `ika.ini`). They still open by package name.
+
+The entries are `~/.local/share/applications/ika-PACKAGE.desktop` files. Each
+sync rewrites the parts Ika manages, such as the name, the icon and the
+actions; lines you add yourself, such as `NoDisplay=true`, stay when
+`desktop-file-edit` is installed.
+
+### App windows
+
+```bash
+ika app                  # list the apps; open windows are in bold
+ika app Asphalt 8        # open an app in its own window
+ika app com.android.settings
+ika app close Asphalt 8  # close one window
+ika app close --all
+```
+
+An app window has a title bar, the app's label and icon, and a display of its
+own, sized to the window, so the app has the window's room. The app is
+restarted on that display if it was running elsewhere.
+
+- **Naming apps:** by package name or by label, without regard to case,
+  exactly or by a part only one app has (`ika app setti` opens Settings),
+  without quotes. A name that matches several apps lists them.
+- **Size:** 60% of the screen's width at 16:9 the first time, then the size
+  you left it at. `--size=WxH` and `--title=TEXT` set them, and `-f` opens it
+  fullscreen.
+- **Closing:** closing the window, MOD+Q or `ika app close` closes the app,
+  and so does the app ending. App windows also close when Android restarts or
+  stops (`ika stop`, `ika restart`, `ika reset`, a switch to TV mode);
+  `ika start` leaves them open.
+- MOD+F and a click in the top-left corner work as in the console. The
+  mouse's buttons all go to the app, except Shift + right click, which is
+  Back.
+
+### Right-click actions
+
+Right-click an app in the menu for:
+
+- **Ika Startup Options...**: how the app starts (below).
+- **Android App Settings...**: Android's App info page for the app, alone in
+  a Settings window, for its permissions, storage, notifications, force stop
+  and uninstall. `ika app --info NAME` from a terminal.
+- **Controller mapping...**, on games: the keyboard gamepad's keys for that
+  game (see [Controller mapping per game](#controller-mapping-per-game)).
+
+### Start options
+
+**Ika Startup Options...** (`ika app --options NAME`) opens a window with a
+checkbox for each way the app can start:
+
+| Option | Effect |
+| --- | --- |
+| **Fullscreen mode** | The window opens fullscreen |
+| **Pass the keyboard through as a HID device** | Keys reach the app as from a physical keyboard, which many games need |
+| **Pass the mouse through as a HID device** | The mouse is a physical mouse of Android's, and the window captures the pointer |
+| **Enable gamepads when attached** | The host's gamepads, and ones plugged in later, reach Android |
+| **Use the keyboard to emulate a gamepad** | The keyboard and mouse drive a gamepad (see [Keyboard as a gamepad](#keyboard-as-a-gamepad)) |
+| **Touch input: Left-click and drag gets interpreted as tap and swipe** | See [Touch input](#touch-input) |
+
+**Apply settings** saves the ticked options, **Apply and start** saves them
+and opens the app, and **Cancel** (or Escape) leaves them as they were. They
+apply every time the app opens, from the menu or with `ika app NAME`, which
+adds the options you type to them. They are saved in `~/ika/app-options.ini`.
+Without them, an app gets the desktop's keyboard and mouse and no gamepad.
+
+## Keyboard, mouse and gamepads
+
+### Passing devices through
+
+The console types with Android's text input. An app window can pass the
+keyboard, the mouse and gamepads through instead, as if they were plugged
+into Android, with its [start options](#start-options).
+
+A window with the mouse passed through captures the pointer. Tap MOD (Left
+Alt or Left Super) to release it; a click in the window captures it again, as
+does tapping MOD. MOD never reaches Android; Right Alt does.
+
+Every gamepad Android sees, physical or the keyboard's, is a device named
+**Ika Emulated GamePad** (`adb shell dumpsys input` lists them), with the
+vendor and product IDs of an Xbox 360 controller (045e:028e), which gives
+Android its key layout and games the mapping they know.
+
+### Touch input
+
+With **Touch input** ticked, or `ika app NAME --touch`, left clicks and drags
+reach Android as a finger on a touchscreen, so a drag is a swipe, for games
+that ignore the mouse. The right and middle buttons and the wheel stay mouse
+input, Ctrl or Shift with the left button still pinch, and no hover is sent.
+Touch input wins over passing the mouse through; the keyboard and gamepads
+still pass through when ticked. Most other apps are better without it: some
+handle mouse clicks differently from touches, such as Chromium's tab strip.
+
+### Keyboard as a gamepad
+
+With **Use the keyboard to emulate a gamepad** ticked, the keyboard and the
+mouse drive a gamepad of Android's, and gamepads plugged into the host pass
+through as well. The keys it uses no longer type; other keys do.
+
+| Keys | Gamepad |
+| --- | --- |
+| W, A, S, D | Left stick |
+| Arrows | D-pad |
+| I, J, K, L | Right stick |
+| Space, Esc, C, V | A, B, X, Y |
+| Enter, Backspace | Start, Back |
+| Q, E | Left and right shoulders |
+| Z, X | Left and right triggers |
+| Left Shift, F | Left and right stick clicks |
+| Tab, held | Walk: the sticks go half as far |
+| Mouse motion | Right stick, the camera in most games: the faster the mouse moves, the farther |
+| Left, right button | Right, left trigger |
+| Middle button | Right stick click |
+| Wheel up, down | Left, right shoulder |
+
+The window captures the pointer for the mouse: tap MOD to release it, and the
+mouse works as usual; tap MOD again to take it back. Keys pressed with Ctrl,
+Alt or Super type instead.
+
+It plays like a physical pad. The sticks and the D-pad are separate, a stick
+on a diagonal goes as far as on an axis, and of two opposite directions only
+the last pressed counts. A key pushes a stick as a thumb does, over 100 ms,
+so a tap moves it a little and a held key all the way, and it comes back at
+once. Keys are physical positions, as on a US keyboard: on AZERTY, `W` is the
+key marked Z.
+
+The keys and these behaviors are set in the `[keyboard_gamepad]` section of
+`ika.ini`; [Configuration](CONFIGURATION.md#keyboard_gamepad) lists every
+control and setting. A key you give a control there is taken from the control
+it is a default of, so moving a key takes one line:
 
 ```ini
 [keyboard_gamepad]
 a = Space Return
-b = Escape
 left_trigger = Left_Shift
 ```
 
-The section's settings shape the sticks: `stick_ramp_ms` (100) is the time
-a stick takes from its center to where a key pushes it, so that a tap moves
-a little and a held key all the way, as a thumb on a stick; 0 pushes it all
-the way at once. A stick comes back at once. `walk_percent` (50) is how far
-the sticks go, in percent, while the `walk` key is held. `socd` says what two
-opposite keys held together do: `last`, the last pressed counts, or
-`neutral`, they cancel out, as fighting games expect; `socd_dpad`,
-`socd_left_stick` and `socd_right_stick` set one pad, and empty leaves it as
-`socd`. `mouse_stick` (`right`) is the stick the mouse moves, `left` or
-`off`: the faster the mouse moves, the farther the stick, full at 32 pixels
-per 8 ms at `mouse_sensitivity` 100 (percent), and it comes back when the
-mouse stops; the stick's keys win while held. With a stick on the mouse, or
-a mouse button or the wheel among the keys, the window captures the pointer,
-as it does for a HID mouse: Alt releases it and takes it back, and a
-released pointer is the usual mouse, so menus can be clicked. With
-`mouse_stick = off` and no mouse keys, the mouse is left alone.
-
 ### Controller mapping per game
 
-Right-click a game in the desktop's app menu and choose **Controller
-mapping...** (`ika app --controller NAME` from a terminal) for a window with
-the keyboard gamepad's keys and settings for that game: a field per control
-with its keys, as above, the stick ramp, the walk speed, the rule for
-opposite keys, the stick the mouse moves and the mouse's sensitivity.
-**Apply settings** saves them in `~/ika/apps/PACKAGE/controller.ini`, where
-they go over `ika.ini`, and ticks **Use the keyboard to emulate a gamepad**
-in the game's start options if it was not;
-**Apply and start** does that and starts the game; **Reset to ika.ini**
-removes the game's mapping; **Cancel** leaves everything as it was. A key
-typed for one control leaves the control it was shown on, so moving a key
-takes one edit. Only games' entries have the action; the file can be edited
-by hand, with the same lines as `[keyboard_gamepad]`, for any app.
+**Controller mapping...** on a game's menu entry (`ika app --controller NAME`,
+for any app) opens a window with the keyboard gamepad's settings for that
+game: a field per control, with its keys, and the stick ramp, the walk speed,
+what opposite keys held together do, which stick the mouse moves, and the
+mouse's sensitivity.
+
+- **Apply settings** saves them in `~/ika/apps/PACKAGE/controller.ini`, and
+  ticks **Use the keyboard to emulate a gamepad** in the game's start options.
+- **Apply and start** saves them and starts the game.
+- **Reset to ika.ini** deletes the game's mapping, so the game uses
+  `[keyboard_gamepad]` again; the start option stays ticked.
+- **Cancel** leaves everything as it was.
+
+A key typed for one control is taken from the control it was shown on. The
+saved mapping holds every key and setting, so later changes to
+`[keyboard_gamepad]` reach the game only after **Reset to ika.ini**. The
+per-pad `socd_dpad`, `socd_left_stick` and `socd_right_stick` settings are not
+in the window; write them in the file by hand.
+
+### Console arguments and logs
+
+The console and app windows are scrcpy windows. `scrcpy_args` in `[console]`
+of `ika.ini`, or `--ika_scrcpy=`, gives them extra scrcpy options; a
+`--gamepad=` or `--gamekb` option there wins over the start options.
+
+The console's input setup is logged in `~/ika/ikastart.log`. An app window's
+log is `~/ika/apps/PACKAGE/window.log`, where the keyboard gamepad reports
+keys it does not know.
 
 ## TV mode
 
-Android has a TV interface as well as the desktop. Desktop is the default, and
-only **Desktop/TV** changes the mode. Open it from the desktop's "Android Apps
-(Ika)" menu, where it opens in a window of its own like any app, from the app
-drawer in desktop mode (inside the console), or from the TV launcher's apps in
-TV mode. It lists **Trebuchet**, the
-desktop's launcher, under a **Desktop mode** heading, then each TV launcher on
-the system by name under a **TV mode** heading, such as **Catapult**
-(LineageOS's TV launcher) or one from Google Play:
+Android has a TV interface as well as the desktop one. **Desktop/TV** changes
+the mode: open it from the desktop's **Android Apps (Ika)** menu, where it
+opens in a window of its own, from Android's app drawer in desktop mode, or
+from the TV launcher's apps in TV mode. It lists **Trebuchet**, the desktop's
+launcher, under **Desktop mode**, and each TV launcher installed under **TV
+mode**, **Catapult** (LineageOS's TV launcher) first:
 
-- In TV mode, choosing a TV launcher makes it the Home app straight away.
-  Choosing **Trebuchet** asks whether to restart into the desktop.
-- In desktop mode, when switching to TV mode you may choose the default
-  launcher (Catapult) or select any TV launcher installed to be the default
-  launcher.
-- **Restart** switches the Android Settings UI, Google Play Store, onscreen
-  keyboard, Home app, and restarts Android in the new mode. **Cancel** keeps
-  the mode. Back in desktop mode, the desktop's Home app comes back.
-- When Android restarts in the other mode, the console reopens for it.
+- In TV mode, choosing another TV launcher makes it the Home app at once.
+- Changing the mode asks first. **Restart** switches Android's Settings,
+  on-screen keyboard, launcher and Google Play Store to the other mode's, and
+  restarts Android in it; **Cancel** keeps the mode. If the Play Store cannot
+  be switched, the mode stays as it was.
+- When Android has restarted, the console reopens in the new mode, and app
+  windows close.
 
 ### TV mode compared with desktop mode
 
-|                          | Desktop mode                                            | TV mode                                                                                         |
-| ------------------------ | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Console window           | Opens windowed or fullscreen, as asked                  | Always opens fullscreen (Super + F still leaves it); its windowed size is kept apart from the desktop console's |
-| Interface size           | Density from the host display (`dpi`, `IKADPI`)         | 1.5 times the desktop's automatic density, so everything is 50% larger (`tv_dpi`, `IKA_TV_DPI`) |
-| Right click              | Right click; Shift + right click is Back                | Back, as a remote's Back button; Shift + right click is a right click                           |
-| Middle, 4th, 5th buttons | Home, recent apps, notifications                        | The same                                                                                        |
-| Gamepad                  | Not passed through                                      | The remote: D-pad or left stick moves, A selects, B goes back, the guide button goes Home; a gamepad plugged in later is picked up |
-| Keyboard                 | Typed as text                                           | The same                                                                                        |
-| Home app                 | Trebuchet, with its taskbar                             | The TV launcher chosen in Desktop/TV: Catapult, or one from Google Play                         |
-| Home key                 | Home                                                    | Home; pressed twice, the recent apps                                                            |
-| System UI                | Status bar, taskbar, navigation bar, notification shade | Android TV's system UI: its notification panel, picture-in-picture and volume controls; no status bar, taskbar or navigation bar |
-| Apps in Android          | Desktop windows, split screen                           | Fullscreen only                                                                                 |
-| Apps from the Linux desktop's app menu or `ika app` | Their own windows, at the console's density | Still their own windows, at the desktop's density rather than the TV's |
-| Settings                 | Settings                                                | TV Settings                                                                                     |
-| On-screen keyboard       | The desktop's                                           | The Leanback keyboard                                                                           |
-| Google Play Store        | The phone build                                         | The Android TV build; on x86-64 hosts MindTheGapps' ARM64 one, through Android's ARM translation |
-| What apps see            | A tablet                                                | An Android TV that runs TV apps only, with a touchscreen                                        |
-| Recent apps at startup   | Cleared, so the desktop doesn't reopen their windows    | Kept                                                                                            |
+|  | Desktop mode | TV mode |
+| --- | --- | --- |
+| Console | Windowed or fullscreen, as asked | Fullscreen at every `ika start`, and as it was after Android restarts; MOD+F or a click in its top-left corner leaves it. Its windowed size is kept apart from the desktop console's |
+| Interface size | The density from the host display (`dpi`) | 1.5 times that, so everything is 50% larger (`tv_dpi`) |
+| Right click | Right click; Shift + right click is Back | Back, as a remote's; Shift + right click is a right click |
+| Gamepad | Not passed through to the console | The remote: the D-pad or left stick moves, A selects, B goes back, the guide button goes Home; a gamepad plugged in later is picked up |
+| Keyboard | Typed as text | The same |
+| Home app | Trebuchet, with its taskbar | The TV launcher chosen in Desktop/TV |
+| Home key | Home | Home; pressed twice, recent apps |
+| System UI | Status bar, taskbar, navigation bar, notification shade | Android TV's: its notification panel, picture-in-picture and volume controls |
+| Apps in Android | Desktop windows, split screen | Fullscreen only |
+| App windows | Their own windows, at the console's density | Still their own windows, at the desktop mode's density |
+| Settings | Settings | TV Settings |
+| On-screen keyboard | The desktop's | The Leanback keyboard |
+| Google Play Store | The phone build | The Android TV build; on x86-64 hosts the ARM64 build, through Android's ARM translation |
+| What apps see | A tablet | An Android TV that runs TV apps, with a touchscreen |
+| Recent apps at startup | Cleared, so that the desktop does not reopen their windows | Kept |
 
-- **Interface size.** `tv_dpi = auto` in `ika.ini` is 1.5 times the density
-  `dpi = auto` gives, rounded down to a multiple of 8; a number sets it.
-  `--dpi` on `ika start` or `ika restart` sets the density in either mode, and
-  wins over both settings.
-- **Mouse and keyboard.** Right click and Shift + right click swap places:
-  on the desktop a right click opens context menus, and on a TV the button
-  that is always under your hand should go back. The keyboard types as on
-  the desktop. App windows keep the input of their start options in either
-  mode (see [App input](#app-input)).
-- **Gamepad.** The desktop console passes no gamepad; the TV console always
-  passes the gamepad through, as the remote, and picks up a gamepad plugged
-  in later.
-- **What apps see.** In TV mode Android has the leanback, leanback-only and
+- **Interface size:** `tv_dpi = auto` is 1.5 times the density `dpi = auto`
+  gives, rounded down to a multiple of 8; a number sets it. `--dpi` on
+  `ika start` or `ika restart` sets the console's density in either mode.
+  App windows use `dpi` from `ika.ini` in both modes.
+- **What apps see:** in TV mode Android has the leanback, leanback-only and
   live TV features and the television UI mode, so apps with a TV version show
-  it. Google Play may then hide apps without TV support, and show phone apps
-  you installed in desktop mode as not compatible; they still run. Unlike a
-  TV, Ika keeps its touchscreen, for the desktop's apps.
-- **Google Play Store.** The phone build does not run on a TV, so each mode
+  it. Google Play may hide apps without TV support, and show phone apps you
+  installed in desktop mode as incompatible; they still run. Unlike a TV, Ika
+  keeps its touchscreen, for the desktop's apps.
+- **Google Play Store:** the phone build does not run on a TV, so each mode
   has its own build and keeps its own updates.
-- **Apps opened from the Linux desktop.** Only the console becomes the TV
-  screen: Android apps opened from the desktop's "Android Apps (Ika)" menu or
-  with `ika app` still open in their own windows on the Linux desktop, in
-  either mode.
+
+## Installing and removing apps
+
+```bash
+ika install ~/Downloads/some-app.apk
+ika remove Some App
+ika remove com.example.someapp
+```
+
+`ika install FILE.apk...` installs APK files; an installed app is replaced and
+keeps its data. Your file manager offers it as **Ika APK installer** in the
+Open With menu of APK files, and reports the result as a notification.
+
+`ika remove NAME` uninstalls an app and deletes its data, closes its window
+and deletes its window state and controller mapping. NAME is matched as
+`ika app` matches it. Apps that come with Android cannot be removed.
+
+Both commands start Android without the console when it is not running.
+
+## Android files
+
+While Android runs, its shared storage (`/sdcard`: DCIM, Download, Pictures
+and the rest) is mounted on `/run/user/<uid>/ika/Android` (in
+`$XDG_RUNTIME_DIR`, or `~/ika/Android` without one), so any program on the
+host can open, copy, change and delete files there. Outside your home folder,
+it is left alone by backups and other programs that walk your home folder.
+
+`ika start` mounts it and adds it to the file manager's sidebar as **Android**:
+GNOME's bookmarks, or KDE's Places once that file exists. `ika stop`,
+`ika restart` and `ika reset` unmount it and take it out of the sidebar.
+
+Files are read as they are used, over Ika's adb connection, so a large video
+plays without being copied first. Files an app keeps to itself are out of
+reach, as they are for adb. On a rooted Android (`ika root`) the mount is
+Android's whole filesystem, served as root: apps' private files in `/data`
+show up too, and changes there are made as root, so take care. The mount uses
+[madbfs](https://github.com/mrizaln/madbfs); its log is `~/ika/madbfs.log`.
+
+## Camera
+
+`--camera` passes a host camera to Android as its front camera:
+
+```bash
+ika restart --camera          # the first suitable camera
+ika restart --camera=video2   # a given one (or --camera=/dev/video2)
+```
+
+- Without a value, Ika uses the first video capture device offering MJPEG,
+  NV12 or YUYV: USB webcams, and the FaceTime cameras of Macs, Apple Silicon
+  ones on an Asahi kernel (`apple-isp`) and Intel ones (UVC, or `facetimehd`).
+  Metadata nodes are skipped, and virtual cameras (v4l2loopback, vivid) are
+  used only when there is no other. `v4l2-ctl --list-devices` lists the
+  devices.
+- The camera is attached when Android starts: `ika start --camera` refuses
+  while Android runs, so use `ika restart --camera` then. It stays while that
+  Android runs; the next start or restart without `--camera` has none. The
+  **Start with Camera** menu action restarts with the camera.
+- It needs the `video` group, and while Android streams from it, other
+  programs on the host cannot use it.
+- **Anti-flicker:** Ika sets the camera to the mains frequency of the country
+  of the host's time zone, as lights flicker at twice that frequency and a
+  camera set for the wrong one shows bands, and in dim light runs slower:
+  60 Hz in most of the Americas, Taiwan, South Korea, the Philippines, Saudi
+  Arabia, Liberia and the US Pacific territories, 50 Hz elsewhere. Where a
+  country has both, such as Japan, the camera's own setting stays.
+  `--camera_power_line_frequency=50|60|off`, or `power_line_frequency` in
+  `[camera]` of `ika.ini`, sets it. Cameras without the control, such as the
+  FaceTime cameras on `facetimehd` and `apple-isp`, are left alone.
+
+## Backing up apps and files
+
+```bash
+ika backup              # to ~/ika/ika-backup-YYYYMMDDHHMMSS.tgz
+ika backup ~/my.tgz
+ika restore             # the latest backup in ~/ika
+ika restore ~/my.tgz
+```
+
+A backup is a gzip-compressed tar archive with:
+
+- the apps you installed, with their split APKs and the shared libraries they
+  use (such as Trichrome), except Chromium, which Ika installs on new devices,
+  and Magisk;
+- their files in `/sdcard/Android/data`, and game downloads in
+  `/sdcard/Android/obb`;
+- the DCIM, Pictures, Download, Documents, Music, Movies and Recordings
+  folders;
+- your choices: the permissions you granted, special app access (such as
+  "Display over other apps"), notification access, default apps (browser,
+  Home, assistant, phone, SMS), apps you disabled, the dark theme, and a set of
+  settings: font size, keyboard and spell checker, showing the on-screen
+  keyboard with a physical one, pointer speed, long-press delay, screen
+  timeout, 12- or 24-hour clock, accessibility and animation speed.
+
+`ika restore` installs the apps, copies the files back and reapplies your
+choices, for example after `ika reset`. It asks you to type `y` first, as it
+replaces what is on the device. Backups hold APKs, files and settings rather
+than disk images, so they work across ROM updates.
+
+- Each app is stopped while its files are copied, so close any game first.
+- Files an app keeps readable only to itself are skipped, and listed as
+  `ika backup` goes. App-private data, such as logins, in-app settings and
+  saved games, is not in the backup; many apps restore it from your account
+  when you sign in again. The wallpaper and the taskbar's layout are not
+  either.
+- A backup that fails leaves no file behind.
+- A restored app keeps the app that installed it, when that app is on the
+  device, so Google Play goes on updating its apps.
+- Both commands start Android without the console when it is not running.
 
 ## Rooting with Magisk
 
-`ika root` roots the VM with [Magisk](https://github.com/topjohnwu/Magisk).
-It works on user and userdebug builds and needs nothing else installed. If
-the VM is not running, it is started first.
+`ika root` roots Android with [Magisk](https://github.com/topjohnwu/Magisk).
+It works on user and userdebug builds and needs nothing else installed, and
+starts Android when it is not running.
 
-- The first time, `ika root` factory-resets the VM and unlocks its
-  bootloader, after asking to confirm. Unlocking changes the keys that
-  encrypt Android's data, so the data cannot be kept, just as when a phone's
-  bootloader is unlocked.
-- It downloads the latest Magisk release from GitHub into `~/ika/apps` (again only
-  when a newer one is out), patches Android's `init_boot` image with Magisk's
-  own patcher, flashes it from the bootloader and finishes Magisk's setup.
-  The VM reboots a few times along the way.
-- Afterwards `adb shell su` works without a prompt, the Magisk app is
-  installed and Android's developer options are enabled.
-- Running `ika root` again on a rooted VM keeps its data and updates Magisk
-  to the latest release.
-- `ika reset` undoes it: it relocks the bootloader and returns the VM to
-  stock Android.
+- The first time, it factory-resets Android and unlocks its bootloader, after
+  asking you to confirm. Unlocking changes the keys that encrypt Android's
+  data, so the data cannot be kept, as when a phone's bootloader is unlocked.
+- It downloads the latest Magisk release from GitHub into `~/ika/apps`, or
+  uses the copy there when it is the latest or GitHub cannot be reached. It
+  patches Android's `init_boot` image with Magisk's own patcher, flashes it
+  from the bootloader and finishes Magisk's setup. Android restarts a few
+  times along the way.
+- Then `adb shell su` works without a prompt, the Magisk app is installed and
+  Android's developer options are on.
+- `ika root` on a rooted Android keeps its data and updates Magisk.
+- `ika reset` undoes it: it relocks the bootloader and returns Android to
+  stock.
 
 ## Google sign-in on uncertified devices
 
 Ika is not Play Protect certified, so Google may block signing in to Google
-Play, showing a "Device is not Play Protect certified" notification. Many
-devices never see this. If yours does, register its Google Services Framework
-(GSF) ID with your Google account:
+Play, with a "Device is not Play Protect certified" notification. If it does,
+register the device's Google Services Framework (GSF) ID with your Google
+account:
 
-1. Run `ika gsf`. It copies the ID to the clipboard (with `wl-copy`,
-   `xclip` or `xsel`), prints it and opens
+1. Run `ika gsf`. It prints the ID, copies it to the clipboard (with
+   `wl-copy`, `xclip` or `xsel`) and opens
    [google.com/android/uncertified](https://www.google.com/android/uncertified)
-   in the default browser. If the VM is not running, it is started first.
+   in your browser.
 2. Paste the ID on that page and register it.
 3. Wait a few minutes, then run `ika restart`.
 
-Registering lifts the sign-in block only. The device stays uncertified, so
+Registering lifts the sign-in block only: the device stays uncertified, so
 apps that check Play Integrity still fail. A factory reset (`ika reset`, or
-rooting for the first time) gives the device a new ID, which has to be
-registered again. `ika gsf` needs Google Play Services, so it works on
-MindTheGapps builds only.
-
-## Android files
-
-While the VM runs, Android's shared storage (`/sdcard`: DCIM, Download,
-Pictures and the rest) is mounted on `/run/user/<uid>/ika/Android` (in
-`$XDG_RUNTIME_DIR`), so any file manager or program on the host can open,
-copy, change and delete files there. Being outside the home folder, it is left
-alone by backups and other programs that go through the home folder. Without a
-runtime directory it is mounted on `~/ika/Android`. `ika start` mounts it and
-adds it to the file manager's sidebar as **Android** (GNOME's bookmarks or
-KDE's Places), and `ika stop`, `restart` and `reset` unmount it and take it out
-of the sidebar again. Files are read as they are
-used, over Ika's adb connection, so a large video plays without being copied
-first. Files an app keeps to itself are out of reach, as they are for adb. On
-a rooted ROM (`ika root`) the mount is Android's whole filesystem, `/`, served
-as root: apps' private files in `/data` show up too, and changes there are made
-as root, so take care. The mount uses [madbfs](https://github.com/mrizaln/madbfs);
-its log is `~/ika/madbfs.log`.
-
-## Backing up apps and files
-
-`ika backup [FILE]` saves, as a gzip-compressed tar archive
-(`~/ika/ika-backup-YYYYMMDDHHMMSS.tgz` by default): the apps you installed with
-their split APKs (except Chromium, which Ika installs on new devices, and the
-Magisk app), their
-files in `/sdcard/Android/data`, game downloads in `/sdcard/Android/obb`, the
-DCIM, Pictures, Download, Documents, Music, Movies and Recordings folders, and
-your choices: the permissions you granted to apps, special app access (such as
-"Display over other apps"), default apps, apps you disabled, the dark theme,
-and a curated set of settings (font size, keyboard, spell checker, pointer
-speed, screen timeout, accessibility and animation speed). `ika restore [FILE]`
-reinstalls the apps, copies the files back and reapplies those choices, for
-example after `ika reset`; without FILE it restores the latest backup in
-`~/ika`. It asks you to type `y` first, as it replaces the apps, files and
-settings on the device. Backups hold APKs, files and settings rather than disk
-images, so they also work across ROM updates.
-
-Each app is stopped while its files are copied, so close any game you are
-playing first. Files an app keeps readable only to itself are skipped, and
-`ika backup` lists each one as it goes (`skipping /sdcard/Android/data/...`);
-an app's files that cannot be copied at all are skipped too and do not fail
-the backup. App-private data such as logins, in-app settings and saved games
-is not included; many apps restore it from your account when you sign in
-again. The wallpaper and the taskbar layout are not included either. Each
-backup gets a new file, and a backup that fails partway leaves no file behind. Restored apps keep the installer that
-installed them, so Google Play goes on updating its apps.
-
-## Installing and removing apps
-
-`ika install FILE.apk...` installs APK files in Android; an app that is
-already installed is replaced, keeping its data. The file manager offers it as
-**Ika APK installer** in the Open With menu of APK files, so an APK can be
-installed without a terminal, and the result shows as a notification.
-`ika remove NAME` uninstalls an app and deletes its data. NAME is a package
-name or the label shown by `ika app`, matched as `ika app` does, and an
-ambiguous name lists the matching apps instead of guessing. Apps that come
-with Android cannot be removed. If the VM is not running, either command
-starts it without the console first.
-
-## Launch arguments and defaults
-
-`ika start` and `ika restart` pass extra arguments directly to
-`cvd_internal_start`, so you can override launch settings on the command line.
-`ika stop` calls the matching low-level stop helper and then cleans up local
-Cuttlefish processes. `ika reset` is the destructive variant: it passes
-`--clear_instance_dirs`, removes the local Chromium-install stamp, relocks the
-bootloader and removes root.
-
-Default `ika` settings and configuration:
-
-- host tools from `/usr/lib/cuttlefish-common`
-- the packaged LineageOS tree from `/usr/share/cuttlefish-common/lineageos`
-- instance state under `~/ika`
-- ~64 GB thin-provisioned ext4 userdata image
-- Chromium installed as the default browser on new devices
-- guest vCPUs set to half the performance cores (counting hardware threads),
-  capped at 12, each pinned to a host CPU from the highest CPU number down
-- guest RAM set to one quarter of host RAM, rounded up to a multiple of 2 GB
-  and capped at 32 GB (`memory_step_mb` and `memory_cap_mb` in `[compute]`)
-- Ethernet-only guest networking by default; Wi-Fi, Bluetooth, NFC, UWB, GNSS,
-  and the modem simulator remain off unless explicitly enabled
-
-`gfxstream_guest_angle` is the default GPU mode. It runs guest OpenGL ES through
-Android ANGLE over gfxstream Vulkan. If the host only has llvmpipe, `ika` uses
-`gfxstream` instead, which is much lighter on the CPU. Passing `--gpu_mode`
-overrides this. See [GFXSTREAM.md](GFXSTREAM.md) for a comparison. Use
-`gfxstream_guest_angle` for games and Vulkan/CTS; mixed `gfxstream` mode does
-not support data-buffer AHardwareBuffers. On RADV hosts, `ika` adds
-`syncshaders` to `RADV_DEBUG` for gfxstream modes. This prevents asynchronous
-host shader compilation from intermittently executing incomplete
-transform-feedback pipelines; existing caller-provided `RADV_DEBUG` options are
-retained. Other Vulkan drivers are unchanged.
-
-Pass `--data_gb=128` to `ika reset` to choose the size, in decimal gigabytes,
-of newly created userdata. The selected size is stored under `~/ika` and takes
-effect on the next `ika start`. It remains the configured size for later factory
-resets until changed by another `ika reset --data_gb=...`.
-
-## Low-CPU mode
-
-Weak hosts get a lighter desktop: the display refreshes at 30 Hz
-(`refresh_rate_hz` in `[lowcpu]`) instead of the host display's rate, window blurs are off and animations run at half their length. The
-display keeps its size and density, and the console works as it always
-does.
-
-`ika start` turns it on by itself when `vulkaninfo` finds no hardware Vulkan
-device on the host, when the GPU mode is `guest_swiftshader`, when the guest
-gets 2 vCPUs or fewer, or when the host has less than 8 GB of memory; the
-start log says why. `--lowcpu` and `--no-lowcpu` decide it by hand, for `start` and
-`restart`, as does `IKA_LOWCPU=auto|on|off`:
-
-```bash
-ika restart --lowcpu
-ika restart --no-lowcpu
-```
-
-The `[lowcpu]` section of `ika.ini` holds the default (`mode`) and the
-refresh rate (`refresh_rate_hz`); a `--display=` option sets the display
-itself. Starting without low-CPU mode puts the guest's blurs and animations
-back.
-
-## Display refresh rate
-
-Outside low-CPU mode, the display's refresh rate, which paces Android's
-frames, follows the host display: 120 Hz on a 120 Hz panel, 60 Hz on a 60 Hz
-one, and 60 Hz when the host's rate cannot be read. The start log says which
-(`display ceiling: ... at 120 Hz (the host display's)`). `refresh_rate_hz` in
-the `[console]` section of `ika.ini`, or `IKA_REFRESH_RATE_HZ`, sets a number
-instead, for example 60 on a 120 Hz display to halve the guest's composition
-work; a `--display=` option sets the display itself. App windows' displays
-use the same rate.
-
-## gfxstream Vulkan switch
-
-The `--gfxstream_vulkan` switch controls the optional Vulkan context only when
-`--gpu_mode=gfxstream` is selected. It has no effect with the default
-`gfxstream_guest_angle` mode because that path requires Vulkan.
-
-```bash
-ika start --gpu_mode=gfxstream --gfxstream_vulkan=auto
-ika restart --gpu_mode=gfxstream --gfxstream_vulkan=off
-ika restart --gpu_mode=gfxstream --gfxstream_vulkan=on
-```
-
-`auto` is the default. When the primary host Vulkan device is llvmpipe, `auto`
-requests GLES-only gfxstream (`gfxstream-gles:gfxstream-composer`). On Apple
-Silicon hosts with 16 KiB pages, `auto` leaves Cuttlefish's normal GLES+Vulkan
-selection in place and routes host-visible guest Vulkan memory through the
-udmabuf-backed path the Apple GPU supports. On other hosts, `auto` leaves the
-normal Cuttlefish gfxstream defaults alone, so systems with hardware Vulkan keep
-Vulkan enabled.
-
-Use `--gfxstream_vulkan=on` to re-enable gfxstream Vulkan for testing, or
-`--gfxstream_vulkan=off` to force GLES-only gfxstream. The same policy can be
-set with `GFXSTREAM_VULKAN=auto|off|on`; an explicit
-`--gpu_context_types=...` argument takes precedence.
-
-### Host cached memory
-
-`host_cached_memory = on` in the `[gpu]` section of `ika.ini`
-(`--host_cached_memory=on`, `IKA_HOST_CACHED_MEMORY=on`) makes gfxstream
-take the guest's host-visible Vulkan memory from a host memory type that is
-cached as well as coherent, instead of the write-combined type the driver
-would pick (gfxstream's `VulkanPreferHostCachedMemory` feature). The guest
-writes its uploads, such as textures and vertex data, through its mapping of
-that memory, and write-combined memory is slow for those writes on some
-drivers: on an NVIDIA host the guest's copies into it took a third of a game's
-render thread, and 1.5% once the memory was cached. It applies to the
-gfxstream modes with Vulkan, and is off by default: it has not been measured
-on the Mesa drivers Ika runs on, so try it on yours (GFXBench's offscreen
-tests inside Android before and after is a fair comparison) and keep it if it
-helps. Memory that imports a color buffer or a buffer, and dedicated
-allocations, keep their type either way.
-
-### Venus
-
-`--gpu_mode=venus` runs the guest's Vulkan on Mesa's Venus driver over
-virglrenderer on the host, with ANGLE for OpenGL ES, instead of gfxstream.
-Ika's host tools carry the mode, but it also needs a ROM built with Venus
-support, declared in the ROM's `android-info.txt` (`venus` among
-`gpu_mode_candidates`, or `vulkan_venus_apex=supported`), which Ika's
-LineageOS ROM does not have yet; `ika start --gpu_mode=venus` says so and stops. Upstream tests the mode
-on Intel (ANV) and Qualcomm (Turnip) hosts; it is not available on Apple
-Silicon. It is of interest because one report measured vkmark at 143 fps on
-gfxstream and 800 fps on Venus on the same GPU, though not on Cuttlefish.
-
-### Hardware video decoding
-
-`hw_video_decode = auto` in the `[gpu]` section of `ika.ini`
-(`--hw_video_decode=auto|off`, `IKA_HW_VIDEO_DECODE`) gives Android a video
-decoder backed by the host's VA-API driver, for H.264, HEVC, VP8 and VP9 as
-far as the host decodes them, when `vainfo` finds a working driver; the
-start log says what it found. Android only uses it with a V4L2 Codec2 HAL in
-the ROM and decodes in software otherwise. `off` leaves the decoder out, and
-a `--crosvm_media_decoder=` argument of your own takes precedence.
-
-In direct `gfxstream` mode, the guest advertises OpenGL ES 3.2, including
-`ANDROID_EMU_gles_max_version_3_2`, with fallback to ES 3.1, 3.0, and 2.0 when
-the host translator cannot provide 3.2. Vulkan remains the preferred accelerated
-API for applications that support it.
+rooting for the first time) gives the device a new ID, to register again.
+`ika gsf` needs Google Play Services, so it works on MindTheGapps builds only.
 
 ## Settings
 
-Ika's defaults live in `~/ika/ika.ini`, which Ika writes, with every default
-in place, the first time it runs. The file is divided into sections, such as `[compute]`, `[gpu]`,
-`[network]`, `[storage]`, `[console]` and `[apps]`, and each setting has a
-comment. Edit it to change what `ika start` uses by default: the guest's CPUs
-and memory, the GPU mode, the data size of a new VM, the apps hidden from the app list,
-timeouts and more.
+Ika's defaults, such as Android's CPUs and memory, the GPU mode, the data
+partition's size, hidden apps and the keyboard gamepad's keys, are in
+`~/ika/ika.ini`, which Ika writes with every default and a comment for each
+the first time it runs. [Configuration](CONFIGURATION.md) lists every setting,
+option and environment variable.
 
-```ini
-[compute]
-cpus = 8
-memory_mb = auto
+## Troubleshooting
 
-[apps]
-game_apps = com.example.game
-```
-
-Command-line options override the file, and so do the environment variables
-that `ika help` lists. Delete a line to use the built-in default for that
-setting, or delete the file to get a fresh copy. Ika reports lines it does not
-understand, and a package update does not change your copy.
+- **What happened at start:** `~/ika/ikastart.log`, and Cuttlefish's logs in
+  `~/ika/cuttlefish/instances/cvd-1/logs/` (`launcher.log`, `kernel.log`,
+  `logcat`).
+- **The console:** `~/ika/console.log`. If it is closed while Android runs,
+  `ika start` reopens it.
+- **An app window:** `~/ika/apps/PACKAGE/window.log`.
+- **The app menu:** `~/ika/app-menu.log`; `ika app sync` rebuilds the menu.
+- **Permissions:** `ika start` checks that your session is in the `kvm`,
+  `cvdnetwork`, `render` and `video` groups, and says how to fix it.
+- **Graphics:** see [Graphics troubleshooting](GRAPHICS.md#troubleshooting).
