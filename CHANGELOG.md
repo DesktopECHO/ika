@@ -11,6 +11,24 @@
   `IKA_LOWCPU` and the `[lowcpu]` section of ika.ini (`mode`,
   `refresh_rate_hz`) set it.
 
+### Display
+- The display's refresh rate follows the host display outside low-CPU mode:
+  120 Hz on a 120 Hz panel instead of a fixed 60, so that the guest's frames
+  land on the host's refreshes. `refresh_rate_hz` in the `[console]` section
+  of ika.ini, or `IKA_REFRESH_RATE_HZ`, sets a number instead; app windows'
+  displays use the same rate.
+- `ika status` says how the console's frames travel: `Console frames:
+  DMA-BUFs (...)` or `pixels read back by crosvm (...), the slow path`, and
+  ika_stream logs each change of path.
+- With a window open on the Apple Silicon desktop every frame was read back
+  by crosvm and copied twice: hwc3 flushed SurfaceFlinger's client target to
+  the display as it was, a buffer the host cannot export. It now composes it
+  into its swapchain image, so the console gets DMA-BUFs with windows open
+  too.
+- `IKA_LATENCY=1` in the console's environment logs the frames' latency
+  (crosvm's commit to the console's present) as percentiles every 300 frames;
+  the console's INFO lines now reach `~/ika/console.log` as they are written.
+
 ### App start options and input
 - Each app's entry in the desktop's app menu has a new right-click action,
   "Ika Startup Options...", which opens a window (yad) with a checkbox for

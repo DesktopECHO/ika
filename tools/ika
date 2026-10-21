@@ -312,6 +312,12 @@ scrcpy_args =
 # Seconds to wait for the guest to reboot before leaving the console closed.
 # Environment variable: IKA_SCRCPY_REBOOT_TIMEOUT_SEC
 reboot_timeout_sec = 120
+# The display's refresh rate in Hz, which paces Android's frames. "auto" takes
+# the host display's rate (60 when it cannot be read), so that the guest's
+# frames land on the host's refreshes; a number sets it, for example 60 on a
+# 120 Hz display to halve the guest's composition work. Low-CPU mode and a
+# --display= option win. Environment variable: IKA_REFRESH_RATE_HZ
+refresh_rate_hz = auto
 
 
 # ----------------------------------------------------------------------------
@@ -1001,6 +1007,7 @@ ika_ini_default IKA_SCRCPY_REBOOT_TIMEOUT_SEC console reboot_timeout_sec 120 uin
 ika_ini_default IKA_MIN_OPEN_FILES system min_open_files 65536 uint
 ika_ini_default IKA_KERNEL_PAGE_SIZE system kernel_page_size auto
 ika_ini_default IKADPI console dpi auto
+ika_ini_default IKA_REFRESH_RATE_HZ console refresh_rate_hz auto
 ika_ini_default IKA_TV_DPI console tv_dpi auto
 # The keys of the keyboard gamepad, in the order of keyboard_gamepad_spec.
 KEYBOARD_GAMEPAD_CONTROLS=(dpad_up dpad_down dpad_left dpad_right a b x y
@@ -1988,6 +1995,9 @@ Environment variables:
                          dma-bufs (the path the Apple GPU supports).
   IKA_HOST_CACHED_MEMORY on or off, as --host_cached_memory.
   IKADPI                 Display density, as --dpi.
+  IKA_REFRESH_RATE_HZ    The display's refresh rate: auto (the host display's,
+                         the default) or a number. Low-CPU mode and --display=
+                         win.
   IKA_LOWCPU             auto, on or off: low-CPU mode, as --lowcpu and
                          --no-lowcpu.
   IKA_TV_DPI             Display density in TV mode (default: 1.5 times the
@@ -2241,6 +2251,62 @@ host_display_size() {
   printf '%s\n' "${_host_display_size_value}"
 }
 
+# The refresh rate of the host display host_display_size picks (the largest
+# current Wayland output mode), in whole Hz. Probed once per run and cached.
+_host_display_refresh_hz_probed=""
+_host_display_refresh_hz_value=""
+host_display_refresh_hz() {
+  if [[ -z "${_host_display_refresh_hz_probed}" ]]; then
+    _host_display_refresh_hz_probed="yes"
+    if command -v wayland-info >/dev/null 2>&1; then
+      _host_display_refresh_hz_value="$(
+        wayland-info 2>/dev/null | awk '
+          /mode:/ { in_mode = 1; width = 0; height = 0; refresh = 0; next }
+          in_mode && /width:/ {
+            w = $0; sub(/.*width:[[:space:]]*/, "", w);  width  = int(w)
+            h = $0; sub(/.*height:[[:space:]]*/, "", h); height = int(h)
+            r = $0; sub(/.*refresh:[[:space:]]*/, "", r); refresh = r + 0
+          }
+          in_mode && /flags:/ {
+            if (/current/ && width && height && refresh > 0) {
+              area = width * height
+              if (area > best_area) {
+                best_area = area; best_refresh = refresh
+              }
+            }
+            in_mode = 0
+          }
+          END { if (best_refresh > 0) printf "%d\n", int(best_refresh + 0.5) }
+        ' || true
+      )"
+    fi
+  fi
+
+  [[ "${_host_display_refresh_hz_value}" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s\n' "${_host_display_refresh_hz_value}"
+}
+
+# The refresh rate of the Cuttlefish display outside low-CPU mode, from
+# IKA_REFRESH_RATE_HZ (console.refresh_rate_hz in ika.ini): a number as given,
+# auto the host display's, 60 when that cannot be read. Prints "RATE SOURCE".
+resolve_display_refresh_hz() {
+  local setting="${IKA_REFRESH_RATE_HZ:-auto}"
+  local host_hz
+
+  if [[ "${setting}" =~ ^[1-9][0-9]*$ ]]; then
+    printf '%s %s\n' "${setting}" "set by refresh_rate_hz"
+    return 0
+  fi
+  if [[ "${setting}" != "auto" ]]; then
+    log "refresh_rate_hz must be auto or a positive whole number, not '${setting}'; using auto"
+  fi
+  if host_hz="$(host_display_refresh_hz)"; then
+    printf '%s %s\n' "${host_hz}" "the host display's"
+  else
+    printf '%s %s\n' 60 "the default, the host display's rate is unknown"
+  fi
+}
+
 _host_display_logical_size_probed=""
 _host_display_logical_size_value=""
 host_display_logical_size() {
@@ -2365,6 +2431,7 @@ append_default_display_arg() {
   local width
   local height
   local refresh_rate_hz=60
+  local refresh_source="low-CPU mode's"
 
   if has_display_size_override "$@"; then
     return 0
@@ -2381,10 +2448,12 @@ append_default_display_arg() {
 
   if [[ "${LOWCPU_MODE_ACTIVE}" == "true" ]]; then
     refresh_rate_hz="${IKA_LOWCPU_REFRESH_RATE_HZ}"
+  else
+    read -r refresh_rate_hz refresh_source < <(resolve_display_refresh_hz)
   fi
 
   args_array+=("--display=width=${width},height=${height},dpi=${dpi},refresh_rate_hz=${refresh_rate_hz}")
-  log "display ceiling: ${width}x${height}/${dpi} at ${refresh_rate_hz} Hz"
+  log "display ceiling: ${width}x${height}/${dpi} at ${refresh_rate_hz} Hz (${refresh_source})"
 }
 
 host_is_apple_silicon() {
@@ -4824,8 +4893,14 @@ add_cuttlefish_display() {
   exec {lock_fd}>"${CVD_TMP_DIR}/cuttlefish-displays.lock"
   if flock -w 10 "${lock_fd}"; then
     before="$(cuttlefish_display_numbers "${socket}")"
+    local app_refresh_hz
+    if [[ "${LOWCPU_MODE_ACTIVE:-false}" == "true" ]]; then
+      app_refresh_hz="${IKA_LOWCPU_REFRESH_RATE_HZ}"
+    else
+      read -r app_refresh_hz _ < <(resolve_display_refresh_hz)
+    fi
     if timeout 10 "${CVD_HOST_OUT}/bin/crosvm" gpu add-displays \
-        "--gpu-display=mode=windowed[${size/x/,}],dpi=[${dpi},${dpi}],refresh-rate=60" \
+        "--gpu-display=mode=windowed[${size/x/,}],dpi=[${dpi},${dpi}],refresh-rate=${app_refresh_hz}" \
         "${socket}" >/dev/null 2>&1; then
       while read -r number; do
         if [[ -n "${number}" ]] && ! grep -qx "${number}" <<<"${before}"; then
