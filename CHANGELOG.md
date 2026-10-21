@@ -47,6 +47,21 @@
   the gamepad through, as the remote. A `--gamepad=` or `--gamekb` option
   among the extra console args still wins.
 
+### Graphics
+- `host_cached_memory = on` in the `[gpu]` section of ika.ini
+  (`--host_cached_memory=on`, `IKA_HOST_CACHED_MEMORY`) makes gfxstream take
+  the guest's host-visible Vulkan memory from a cached coherent host memory
+  type instead of a write-combined one (a new `VulkanPreferHostCachedMemory`
+  renderer feature), which is faster for the guest's uploads on some drivers.
+  Off by default until measured on the drivers Ika runs on; see USAGE.md.
+- `ika start --gpu_mode=venus` (Mesa's Venus Vulkan driver in the guest over
+  virglrenderer, which the Cuttlefish 1.58 host tools run) stops with the
+  reason when the ROM was not built with Venus support, as Ika's is not yet,
+  and on Apple Silicon, where Venus has no path; USAGE.md says what it needs.
+- README notes what Mesa 26.3 brings for Ika's hosts: Intel's Jay shader
+  compiler on Xe2 and Xe3, and DRM format modifiers on GFX6 through GFX8 AMD
+  GPUs, where the console is then scanned out with an explicit layout too.
+
 ### Console window
 - The console and app windows are Wayland windows on a Wayland session and
   X11 windows on an X11 session. scrcpy's SDL used to open an X11 window

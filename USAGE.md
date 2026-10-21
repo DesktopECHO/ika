@@ -392,6 +392,35 @@ Use `--gfxstream_vulkan=on` to re-enable gfxstream Vulkan for testing, or
 set with `GFXSTREAM_VULKAN=auto|off|on`; an explicit
 `--gpu_context_types=...` argument takes precedence.
 
+### Host cached memory
+
+`host_cached_memory = on` in the `[gpu]` section of `ika.ini`
+(`--host_cached_memory=on`, `IKA_HOST_CACHED_MEMORY=on`) makes gfxstream
+take the guest's host-visible Vulkan memory from a host memory type that is
+cached as well as coherent, instead of the write-combined type the driver
+would pick (gfxstream's `VulkanPreferHostCachedMemory` feature). The guest
+writes its uploads, such as textures and vertex data, through its mapping of
+that memory, and write-combined memory is slow for those writes on some
+drivers: on an NVIDIA host the guest's copies into it took a third of a game's
+render thread, and 1.5% once the memory was cached. It applies to the
+gfxstream modes with Vulkan, and is off by default: it has not been measured
+on the Mesa drivers Ika runs on, so try it on yours (GFXBench's offscreen
+tests inside Android before and after is a fair comparison) and keep it if it
+helps. Memory that imports a color buffer or a buffer, and dedicated
+allocations, keep their type either way.
+
+### Venus
+
+`--gpu_mode=venus` runs the guest's Vulkan on Mesa's Venus driver over
+virglrenderer on the host, with ANGLE for OpenGL ES, instead of gfxstream.
+Cuttlefish 1.58 added the mode, and Ika's host tools carry it, but it also
+needs a ROM built with Venus support (Mesa's `vulkan.virtio` driver, declared
+in the ROM's `android-info.txt`), which Ika's LineageOS ROM does not have
+yet; `ika start --gpu_mode=venus` says so and stops. Upstream tests the mode
+on Intel (ANV) and Qualcomm (Turnip) hosts; it is not available on Apple
+Silicon. It is of interest because one report measured vkmark at 143 fps on
+gfxstream and 800 fps on Venus on the same GPU, though not on Cuttlefish.
+
 In direct `gfxstream` mode, the guest advertises OpenGL ES 3.2, including
 `ANDROID_EMU_gles_max_version_3_2`, with fallback to ES 3.1, 3.0, and 2.0 when
 the host translator cannot provide 3.2. Vulkan remains the preferred accelerated
