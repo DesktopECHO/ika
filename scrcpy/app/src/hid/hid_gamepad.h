@@ -51,4 +51,10 @@ sc_hid_gamepad_generate_input_from_axis(struct sc_hid_gamepad *hid,
                                         struct sc_hid_input *hid_input,
                                 const struct sc_gamepad_axis_event *event);
 
+// Both axes of a stick in one report (Ika)
+bool
+sc_hid_gamepad_generate_input_from_stick(struct sc_hid_gamepad *hid,
+                                         struct sc_hid_input *hid_input,
+                                const struct sc_gamepad_stick_event *event);
+
 #endif

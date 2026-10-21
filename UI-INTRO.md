@@ -98,6 +98,15 @@ the app more room rather than stretching it. Super + T and Super + F work as the
   options typed after `ika app NAME` are added to them. From a terminal:
   `ika app --options NAME`. yad draws the window, in the desktop's light or
   dark style.
+- Right-click a game's menu entry for **Controller mapping...**, a window
+  with the keyboard gamepad's keys and settings for that game: the keys of
+  each control, the mouse's buttons and wheel among them, how fast a stick
+  is pushed, how far it goes with the walk key held, what opposite keys do
+  together, and which stick the mouse moves and how fast. **Apply settings** saves
+  them for the game, over `ika.ini`, and ticks **Use the keyboard as a
+  gamepad** in its start options; **Apply and start** also starts it;
+  **Reset to ika.ini** forgets the game's mapping (see
+  [Controller mapping per game](USAGE.md#controller-mapping-per-game)).
 - The menu is kept up to date automatically: once the guest has booted,
   `ika start` runs a background watcher that syncs the menu and then checks
   every few seconds (`IKA_APP_MENU_POLL_SEC`, default 5) for installed,

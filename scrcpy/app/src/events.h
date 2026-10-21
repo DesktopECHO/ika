@@ -31,6 +31,8 @@ enum {
     SC_EVENT_THEME_BACKGROUND,
     // A flex display resize timer expired
     SC_EVENT_FLEX_TIMER,
+    // The keyboard gamepad's ramp timer ticked (Ika)
+    SC_EVENT_GAMEKB_TIMER,
 };
 
 // Pack a 16-bit size into an event pointer, to avoid an allocation

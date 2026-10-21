@@ -328,12 +328,29 @@ refresh_rate_hz = auto
 # Space, Return, Escape, Backspace, Tab, F1, A, 1, ...), with _ for a space in
 # a name (Keypad_Enter, Left_Shift, Page_Up). An empty value leaves the control
 # without a key. Mapped keys drive the gamepad instead of typing. Keys that
-# Ika does not know are reported in the console log and skipped. The
-# direction keys also move the left stick.
-dpad_up = Up W
-dpad_down = Down S
-dpad_left = Left A
-dpad_right = Right D
+# Ika does not know are reported in the console log and skipped. A key given
+# to a control here is no longer a key of the control it is a default of.
+# left_stick and right_stick are the sticks' clicks; walk, held, slows the
+# sticks (walk_percent below). The mouse's buttons and wheel are keys too:
+# Mouse_Left, Mouse_Right, Mouse_Middle, Mouse_X1, Mouse_X2, Wheel_Up,
+# Wheel_Down, Wheel_Left, Wheel_Right (a notch presses the control for a
+# moment); with one mapped, or mouse_stick set, the window captures the
+# pointer (Alt releases it) and the mouse is the gamepad's while captured.
+# A game can have keys and settings of its own,
+# over these: "Controller mapping..." on its launcher (ika app --controller
+# NAME) edits them, in ~/ika/apps/PACKAGE/controller.ini.
+left_stick_up = W
+left_stick_down = S
+left_stick_left = A
+left_stick_right = D
+dpad_up = Up
+dpad_down = Down
+dpad_left = Left
+dpad_right = Right
+right_stick_up = I
+right_stick_down = K
+right_stick_left = J
+right_stick_right = L
 a = Space
 b = Escape
 x = C
@@ -341,12 +358,32 @@ y = V
 start = Return Keypad_Enter
 back = Backspace
 guide =
-left_shoulder = Q
-right_shoulder = E
-left_stick =
-right_stick =
-left_trigger = Z
-right_trigger = X
+left_shoulder = Q Wheel_Up
+right_shoulder = E Wheel_Down
+left_stick = Left_Shift
+right_stick = F Mouse_Middle
+left_trigger = Z Mouse_Right
+right_trigger = X Mouse_Left
+walk = Tab
+# Milliseconds a stick takes from its center to where it is pushed, as a
+# thumb pushing a stick does, so that a tap moves a little and a held key
+# more; 0 pushes it all the way at once. A stick comes back at once.
+stick_ramp_ms = 100
+# The sticks' deflection, in percent, while the walk key is held.
+walk_percent = 50
+# What two opposite directions held together do: last (the last pressed
+# counts) or neutral (they cancel out), on every pad; socd_dpad,
+# socd_left_stick and socd_right_stick set one pad, empty leaves it as socd.
+socd = last
+socd_dpad =
+socd_left_stick =
+socd_right_stick =
+# The stick the mouse moves, as the camera: right, left or off. The faster
+# the mouse moves, the farther the stick, full at 32 pixels per 8 ms at
+# mouse_sensitivity 100 (percent); the stick comes back when the mouse
+# stops, and the stick's keys win while held.
+mouse_stick = right
+mouse_sensitivity = 100
 
 
 # ----------------------------------------------------------------------------
@@ -1010,15 +1047,21 @@ ika_ini_default IKADPI console dpi auto
 ika_ini_default IKA_REFRESH_RATE_HZ console refresh_rate_hz auto
 ika_ini_default IKA_TV_DPI console tv_dpi auto
 # The keys of the keyboard gamepad, in the order of keyboard_gamepad_spec.
-KEYBOARD_GAMEPAD_CONTROLS=(dpad_up dpad_down dpad_left dpad_right a b x y
-  start back guide left_shoulder right_shoulder left_stick right_stick
-  left_trigger right_trigger)
+KEYBOARD_GAMEPAD_CONTROLS=(left_stick_up left_stick_down left_stick_left
+  left_stick_right dpad_up dpad_down dpad_left dpad_right right_stick_up
+  right_stick_down right_stick_left right_stick_right a b x y start back guide
+  left_shoulder right_shoulder left_stick right_stick left_trigger
+  right_trigger walk)
 declare -A KEYBOARD_GAMEPAD_KEYS=(
-  [dpad_up]="Up W" [dpad_down]="Down S" [dpad_left]="Left A"
-  [dpad_right]="Right D" [a]="Space" [b]="Escape" [x]="C" [y]="V"
-  [start]="Return Keypad_Enter" [back]="Backspace" [guide]=""
-  [left_shoulder]="Q" [right_shoulder]="E" [left_stick]="" [right_stick]=""
-  [left_trigger]="Z" [right_trigger]="X"
+  [left_stick_up]="W" [left_stick_down]="S" [left_stick_left]="A"
+  [left_stick_right]="D" [dpad_up]="Up" [dpad_down]="Down"
+  [dpad_left]="Left" [dpad_right]="Right" [right_stick_up]="I"
+  [right_stick_down]="K" [right_stick_left]="J" [right_stick_right]="L"
+  [a]="Space" [b]="Escape" [x]="C" [y]="V" [start]="Return Keypad_Enter"
+  [back]="Backspace" [guide]="" [left_shoulder]="Q Wheel_Up"
+  [right_shoulder]="E Wheel_Down" [left_stick]="Left_Shift"
+  [right_stick]="F Mouse_Middle" [left_trigger]="Z Mouse_Right"
+  [right_trigger]="X Mouse_Left" [walk]="Tab"
 )
 for keyboard_gamepad_control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
   ika_ini_get "KEYBOARD_GAMEPAD_KEYS[${keyboard_gamepad_control}]" \
@@ -1026,6 +1069,21 @@ for keyboard_gamepad_control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
     "${KEYBOARD_GAMEPAD_KEYS[${keyboard_gamepad_control}]}"
 done
 unset keyboard_gamepad_control
+# The keyboard gamepad's settings, see [keyboard_gamepad]; checked as the
+# spec is built (normalize_keyboard_gamepad_setting).
+KEYBOARD_GAMEPAD_SETTINGS=(stick_ramp_ms walk_percent socd socd_dpad
+  socd_left_stick socd_right_stick mouse_stick mouse_sensitivity)
+declare -A KEYBOARD_GAMEPAD_SETTING_VALUES=(
+  [stick_ramp_ms]="100" [walk_percent]="50" [socd]="last" [socd_dpad]=""
+  [socd_left_stick]="" [socd_right_stick]="" [mouse_stick]="right"
+  [mouse_sensitivity]="100"
+)
+for keyboard_gamepad_setting in "${KEYBOARD_GAMEPAD_SETTINGS[@]}"; do
+  ika_ini_get "KEYBOARD_GAMEPAD_SETTING_VALUES[${keyboard_gamepad_setting}]" \
+    keyboard_gamepad "${keyboard_gamepad_setting}" \
+    "${KEYBOARD_GAMEPAD_SETTING_VALUES[${keyboard_gamepad_setting}]}"
+done
+unset keyboard_gamepad_setting
 ika_ini_default IKA_SCRCPY console scrcpy_args ""
 ika_ini_default IKA_INSTALL_TIMEOUT_SEC timeouts install_timeout_sec 1800 uint
 # Settings of the former H.264 app windows, still in older ika.ini files
@@ -1789,6 +1847,7 @@ Usage:
   ${SCRIPT_NAME} app NAME|PACKAGE [-f|--fullscreen] [--touch] [--title=TEXT] [--size=WxH] [--ika_scrcpy=ARGS]
   ${SCRIPT_NAME} app --info NAME|PACKAGE
   ${SCRIPT_NAME} app --options NAME|PACKAGE
+  ${SCRIPT_NAME} app --controller NAME|PACKAGE
   ${SCRIPT_NAME} app
   ${SCRIPT_NAME} app close NAME|PACKAGE|--all
   ${SCRIPT_NAME} app sync [--remove]
@@ -1923,6 +1982,21 @@ App windows:
   is given, from the menu or a terminal. Without them, an app or game gets
   the desktop's keyboard and mouse, and no gamepad. A game added to the menu
   starts with fullscreen ticked.
+
+  Games' entries also offer "Controller mapping...", a window with the
+  keyboard gamepad's keys and settings for that game: a key or more per
+  control (SDL's key names, or the mouse's buttons and wheel: Mouse_Left,
+  Wheel_Up, ...), the stick ramp (the milliseconds a stick takes to go
+  where it is pushed; 0 is at once), the walk speed (the sticks' deflection
+  with the walk key held), what two opposite keys held together do, and
+  which stick the mouse moves (the right one by default, as the camera)
+  and how fast. With the mouse on a stick or a button of it mapped, the
+  window captures the pointer; Alt releases it. "Apply
+  settings" saves them in ~/ika/apps/PACKAGE/controller.ini, over
+  [keyboard_gamepad] in ika.ini, and ticks the keyboard as a gamepad in the
+  game's start options; "Apply and start" also starts the game; "Reset to
+  ika.ini" removes the game's mapping. '${SCRIPT_NAME} app --controller NAME'
+  opens it from a terminal.
 
 Installing and removing apps:
 
@@ -4374,17 +4448,158 @@ scrcpy_extra_args_set_gamepad() {
   return 1
 }
 
-# Prints scrcpy's --gamekb spec from the [keyboard_gamepad] keys:
-# control=key/key,control=key, controls without keys left out.
+# The spec's name of a setting of [keyboard_gamepad]
+keyboard_gamepad_setting_spec_name() {
+  case "$1" in
+    stick_ramp_ms) echo "ramp_ms" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+# Prints the value of the keyboard gamepad setting NAME, or its default with
+# a log line when VALUE is not one: stick_ramp_ms 0 to 5000, walk_percent 1
+# to 100, socd last or neutral, the per-pad socd settings those or empty.
+normalize_keyboard_gamepad_setting() {
+  local name="$1"
+  local value="${2,,}"
+  local default="$3"
+  local ok="false"
+
+  case "${name}" in
+    stick_ramp_ms)
+      [[ "${value}" =~ ^[0-9]+$ && "${value}" -le 5000 ]] && ok="true"
+      ;;
+    walk_percent)
+      [[ "${value}" =~ ^[0-9]+$ && "${value}" -ge 1 && "${value}" -le 100 ]] && ok="true"
+      ;;
+    socd)
+      [[ "${value}" == last || "${value}" == neutral ]] && ok="true"
+      ;;
+    socd_dpad|socd_left_stick|socd_right_stick)
+      [[ "${value}" == last || "${value}" == neutral || -z "${value}" ]] && ok="true"
+      ;;
+    mouse_stick)
+      [[ "${value}" == off || "${value}" == right || "${value}" == left ]] && ok="true"
+      ;;
+    mouse_sensitivity)
+      [[ "${value}" =~ ^[0-9]+$ && "${value}" -ge 1 && "${value}" -le 1000 ]] && ok="true"
+      ;;
+  esac
+  if [[ "${ok}" != "true" ]]; then
+    log "keyboard gamepad: ${name} must be $(keyboard_gamepad_setting_values "${name}"), not '${2}'; using '${default}'"
+    value="${default}"
+  fi
+  printf '%s\n' "${value}"
+}
+
+keyboard_gamepad_setting_values() {
+  case "$1" in
+    stick_ramp_ms) echo "0 to 5000" ;;
+    walk_percent) echo "1 to 100" ;;
+    socd) echo "last or neutral" ;;
+    mouse_stick) echo "off, right or left" ;;
+    mouse_sensitivity) echo "1 to 1000" ;;
+    *) echo "last, neutral or empty" ;;
+  esac
+}
+
+# A game's controller mapping: ~/ika/apps/PACKAGE/controller.ini, the keys
+# and settings of [keyboard_gamepad] for that game, over ika.ini's.
+app_controller_mapping_file() {
+  printf '%s/%s/controller.ini\n' "${IKA_APPS_DIR}" "$1"
+}
+
+# Reads PACKAGE's controller mapping into the associative arrays KEYS (control
+# to its keys) and SETTINGS (setting to its value); nothing when the game has
+# none. Lines that are not a control or a setting are reported and skipped.
+load_app_controller_mapping() {
+  local package="$1"
+  local -n mapping_keys_ref="$2"
+  local -n mapping_settings_ref="$3"
+  local file line name value
+
+  file="$(app_controller_mapping_file "${package}")"
+  [[ -r "${file}" ]] || return 0
+  while IFS= read -r line; do
+    name="${line%%=*}"
+    value="${line#*=}"
+    if [[ " ${KEYBOARD_GAMEPAD_CONTROLS[*]} " == *" ${name} "* ]]; then
+      mapping_keys_ref["${name}"]="${value}"
+    elif [[ " ${KEYBOARD_GAMEPAD_SETTINGS[*]} " == *" ${name} "* ]]; then
+      mapping_settings_ref["${name}"]="${value}"
+    else
+      log "${file}: '${name}' is not a control or a setting of the keyboard gamepad; ignored"
+    fi
+  done < <(awk '
+    { sub(/[[:space:]]+$/, "") }
+    /^[[:space:]]*[#;]/ || /^[[:space:]]*$/ { next }
+    /^\[/ { in_section = (tolower($0) == "[keyboard_gamepad]"); next }
+    in_section && /=/ {
+      name = $0; sub(/[[:space:]]*=.*/, "", name); sub(/^[[:space:]]+/, "", name)
+      value = $0; sub(/^[^=]*=[[:space:]]*/, "", value)
+      print tolower(name) "=" value
+    }' "${file}")
+}
+
+# Prints scrcpy's --gamekb spec from the [keyboard_gamepad] keys and settings,
+# and those of PACKAGE's controller mapping over them when PACKAGE is given:
+# control=key/key,control=key,setting=value, controls without keys left out.
+# A key that an ika.ini line or the game's mapping gives a control is left out
+# of the control it is a default of, so that moving a key takes one line
+# (scrcpy keeps a key given twice for its first control).
 keyboard_gamepad_spec() {
-  local control keys spec=""
-  local -a words
+  local package="${1:-}"
+  local control key keys setting value spec=""
+  local -a words kept
+  local -A given_keys=()
+  local -A app_keys=()
+  local -A app_settings=()
+
+  if [[ -n "${package}" ]]; then
+    load_app_controller_mapping "${package}" app_keys app_settings
+  fi
 
   for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
-    read -r -a words <<<"${KEYBOARD_GAMEPAD_KEYS[${control}]}"
+    if [[ -n "${app_keys[${control}]+set}" ]]; then
+      read -r -a words <<<"${app_keys[${control}]}"
+    elif [[ -n "${IKA_INI[keyboard_gamepad.${control}]+set}" ]]; then
+      read -r -a words <<<"${KEYBOARD_GAMEPAD_KEYS[${control}]}"
+    else
+      continue
+    fi
+    for key in "${words[@]}"; do
+      given_keys["${key,,}"]=1
+    done
+  done
+
+  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+    if [[ -n "${app_keys[${control}]+set}" ]]; then
+      read -r -a words <<<"${app_keys[${control}]}"
+    else
+      read -r -a words <<<"${KEYBOARD_GAMEPAD_KEYS[${control}]}"
+      if [[ -z "${IKA_INI[keyboard_gamepad.${control}]+set}" ]]; then
+        kept=()
+        for key in "${words[@]}"; do
+          [[ -n "${given_keys[${key,,}]+set}" ]] || kept+=("${key}")
+        done
+        words=("${kept[@]}")
+      fi
+    fi
     [[ "${#words[@]}" -gt 0 ]] || continue
     keys="$(IFS=/; printf '%s' "${words[*]}")"
     spec+="${spec:+,}${control}=${keys}"
+  done
+
+  for setting in "${KEYBOARD_GAMEPAD_SETTINGS[@]}"; do
+    if [[ -n "${app_settings[${setting}]+set}" ]]; then
+      value="${app_settings[${setting}]}"
+    else
+      value="${KEYBOARD_GAMEPAD_SETTING_VALUES[${setting}]}"
+    fi
+    value="$(normalize_keyboard_gamepad_setting "${setting}" "${value}" \
+      "${KEYBOARD_GAMEPAD_SETTING_VALUES[${setting}]}")"
+    [[ -n "${value}" ]] || continue
+    spec+="${spec:+,}$(keyboard_gamepad_setting_spec_name "${setting}")=${value}"
   done
   printf '%s\n' "${spec}"
 }
@@ -4410,6 +4625,7 @@ append_scrcpy_input_args() {
   local -n input_args_ref="$1"
   local mode="$2"
   local label="$3"
+  local package="${4:-}"
   local -a gamepad_args=()
 
   if [[ "${mode}" == "tv" ]]; then
@@ -4418,8 +4634,8 @@ append_scrcpy_input_args() {
   elif [[ "${mode}" == "app" ]]; then
     log "${label} HID devices: ${IKA_APP_INPUT:-none}"
     if app_input_enabled gamekb; then
-      log "${label} keyboard gamepad: $(keyboard_gamepad_spec)"
-      gamepad_args=(--gamepad=uhid "--gamekb=$(keyboard_gamepad_spec)")
+      log "${label} keyboard gamepad: $(keyboard_gamepad_spec "${package}")"
+      gamepad_args=(--gamepad=uhid "--gamekb=$(keyboard_gamepad_spec "${package}")")
     elif app_input_enabled gamepad; then
       gamepad_args=(--gamepad=uhid)
     fi
@@ -5524,6 +5740,249 @@ edit_app_options() {
   fi
 }
 
+# The label of a control of the keyboard gamepad in the controller mapping
+# window
+keyboard_gamepad_control_text() {
+  case "$1" in
+    left_stick_up) echo "Left stick up" ;;
+    left_stick_down) echo "Left stick down" ;;
+    left_stick_left) echo "Left stick left" ;;
+    left_stick_right) echo "Left stick right" ;;
+    dpad_up) echo "D-pad up" ;;
+    dpad_down) echo "D-pad down" ;;
+    dpad_left) echo "D-pad left" ;;
+    dpad_right) echo "D-pad right" ;;
+    right_stick_up) echo "Right stick up" ;;
+    right_stick_down) echo "Right stick down" ;;
+    right_stick_left) echo "Right stick left" ;;
+    right_stick_right) echo "Right stick right" ;;
+    a) echo "A" ;;
+    b) echo "B" ;;
+    x) echo "X" ;;
+    y) echo "Y" ;;
+    start) echo "Start" ;;
+    back) echo "Back" ;;
+    guide) echo "Guide" ;;
+    left_shoulder) echo "Left shoulder" ;;
+    right_shoulder) echo "Right shoulder" ;;
+    left_stick) echo "Left stick click" ;;
+    right_stick) echo "Right stick click" ;;
+    left_trigger) echo "Left trigger" ;;
+    right_trigger) echo "Right trigger" ;;
+    walk) echo "Walk (held: slower)" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+# Writes PACKAGE's controller mapping from the associative arrays KEYS and
+# SETTINGS: every control and setting, so that the game's mapping stands on
+# its own, over whatever ika.ini says.
+save_controller_mapping() {
+  local package="$1"
+  local -n saved_keys_ref="$2"
+  local -n saved_settings_ref="$3"
+  local file control setting
+
+  file="$(app_controller_mapping_file "${package}")"
+  mkdir -p "$(dirname "${file}")"
+  {
+    cat <<EOF
+# Controller mapping of ${package}: the keyboard gamepad's keys and settings
+# for this game, over [keyboard_gamepad] in ika.ini. "Controller mapping..."
+# on the game's launcher (ika app --controller NAME) edits it; delete the
+# file, or press "Reset to ika.ini" there, to go back to ika.ini. The keys
+# are SDL's key names, with _ for a space; an empty value leaves the control
+# without a key.
+
+[keyboard_gamepad]
+EOF
+    for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+      printf '%s = %s\n' "${control}" "${saved_keys_ref[${control}]:-}"
+    done
+    for setting in "${KEYBOARD_GAMEPAD_SETTINGS[@]}"; do
+      printf '%s = %s\n' "${setting}" "${saved_settings_ref[${setting}]:-}"
+    done
+  } > "${file}.tmp"
+  mv -f "${file}.tmp" "${file}"
+}
+
+# "Controller mapping..." on a game's launcher (ika app --controller NAME): a
+# window (yad) with the keyboard gamepad's keys and settings for the game,
+# from its mapping, else from ika.ini. "Apply settings" saves them in the
+# game's mapping and ticks "Use the keyboard as a gamepad" in the game's
+# start options if it is not, "Apply and start" does that and starts the
+# game, "Reset to ika.ini" removes the game's mapping, and Cancel leaves
+# everything as it was.
+edit_controller_mapping() {
+  local name="$1"
+  local package
+  local label
+  local resolved
+  local adb_serial
+  local heading
+  local output
+  local status=0
+  local i
+  local control
+  local setting
+  local value
+  local socd_choice
+  local mouse_choice
+  local -a fields=()
+  local -a values=()
+  local -a saved=()
+  local -a yad_env=()
+  local other key
+  local -a words kept
+  local -A keys=()
+  local -A shown=()
+  local -A settings=()
+  local -A app_keys=()
+  local -A app_settings=()
+
+  if is_app_package_name "${name}"; then
+    package="${name}"
+    label="$(app_display_name "${package}")"
+  else
+    ensure_guest_ready
+    adb_serial="$(resolve_adb_serial)"
+    resolved="$(resolve_launchable_app "${name}" "${adb_serial}")" || exit 1
+    package="${resolved#*$'\t'}"
+    label="${resolved%%$'\t'*}"
+  fi
+  validate_app_package "${package}"
+
+  command -v yad >/dev/null 2>&1 \
+    || die "the controller mapping window needs yad; install it"
+
+  # The game's mapping, else ika.ini's keys and settings
+  load_app_controller_mapping "${package}" app_keys app_settings
+  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+    if [[ -n "${app_keys[${control}]+set}" ]]; then
+      keys[${control}]="${app_keys[${control}]}"
+    else
+      keys[${control}]="${KEYBOARD_GAMEPAD_KEYS[${control}]}"
+    fi
+  done
+  for setting in "${KEYBOARD_GAMEPAD_SETTINGS[@]}"; do
+    if [[ -n "${app_settings[${setting}]+set}" ]]; then
+      value="${app_settings[${setting}]}"
+    else
+      value="${KEYBOARD_GAMEPAD_SETTING_VALUES[${setting}]}"
+    fi
+    settings[${setting}]="$(normalize_keyboard_gamepad_setting "${setting}" \
+      "${value}" "${KEYBOARD_GAMEPAD_SETTING_VALUES[${setting}]}")"
+  done
+
+  heading="<span font_size='15pt' weight='bold'>Controller Mapping</span>"
+  heading+=$'\n'"<span font_family='monospace' font_size='11pt' alpha='55%'>"
+  heading+="────────────────────────────────────────────────────────</span>"
+  heading+=$'\n'"<span font_size='15pt' weight='bold'>$(yad_markup_escape "${label}")</span>"
+  heading+=$'\n'" "
+  fields=(--field="Keys of the keyboard gamepad for $(yad_markup_escape "${label}"), as SDL names them (Up, Space, Return, Left_Shift, Keypad_Enter) or the mouse's (Mouse_Left, Mouse_Right, Mouse_Middle, Wheel_Up, Wheel_Down), one or more per control:"$'\n'"<span font_size='5pt'> </span>:LBL" "")
+  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+    fields+=(--field="$(keyboard_gamepad_control_text "${control}"):")
+    fields+=("${keys[${control}]}")
+  done
+  fields+=(--field="Stick ramp, ms (0: at once):NUM" "${settings[stick_ramp_ms]}!0..5000!10")
+  fields+=(--field="Walk speed, %:NUM" "${settings[walk_percent]}!1..100!5")
+  if [[ "${settings[socd]}" == "neutral" ]]; then
+    socd_choice="last!^neutral"
+  else
+    socd_choice="^last!neutral"
+  fi
+  fields+=(--field="Opposite keys held together:CB" "${socd_choice}")
+  case "${settings[mouse_stick]}" in
+    right) mouse_choice="off!^right stick!left stick" ;;
+    left) mouse_choice="off!right stick!^left stick" ;;
+    *) mouse_choice="^off!right stick!left stick" ;;
+  esac
+  fields+=(--field="Mouse moves the:CB" "${mouse_choice}")
+  fields+=(--field="Mouse sensitivity, %:NUM" "${settings[mouse_sensitivity]}!1..1000!10")
+  fields+=(--field="<span font_size='8pt'> </span>:LBL" "")
+  if [[ -z "${GTK_THEME:-}" && "$(host_color_scheme)" == "dark" ]]; then
+    yad_env=(GTK_THEME=Adwaita:dark)
+  fi
+  output="$(env "${yad_env[@]}" yad --form --title="Controller Mapping" \
+    --window-icon="${IKA_MENU_ICON}" --undecorated --center --borders=24 \
+    --text="${heading}" --text-align=center --separator="|" --columns=2 \
+    "${fields[@]}" \
+    --buttons-layout=spread --button="Reset to ika.ini:3" \
+    --button="Apply settings:2" --button="        Apply and start        :0" \
+    --button=Cancel:1)" \
+    || status=$?
+  case "${status}" in
+    0|2)
+      ;;
+    3)
+      rm -f "$(app_controller_mapping_file "${package}")"
+      respond "${label} uses the controller mapping of ika.ini again"
+      return 0
+      ;;
+    1|252)
+      respond "Controller mapping of ${label} left as it was"
+      return 0
+      ;;
+    *)
+      die "could not open the controller mapping window (yad exited with ${status})"
+      ;;
+  esac
+
+  # One value per field, the label's first, then a key field per control,
+  # then the three settings, then the blank label's
+  IFS='|' read -r -a values <<<"${output}"
+  i=1
+  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+    shown[${control}]="${keys[${control}]}"
+    value="${values[i]:-}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    keys[${control}]="${value}"
+    i=$((i + 1))
+  done
+  # A key given to a control in the window leaves the controls that still
+  # have it as they were shown, so that moving a key takes one edit (scrcpy
+  # keeps a key given twice for its first control)
+  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+    [[ "${keys[${control}]}" != "${shown[${control}]}" ]] || continue
+    for other in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+      [[ "${other}" != "${control}" && "${keys[${other}]}" == "${shown[${other}]}" ]] || continue
+      read -r -a words <<<"${keys[${other}]}"
+      kept=()
+      for key in "${words[@]}"; do
+        [[ " ${keys[${control}],,} " == *" ${key,,} "* ]] || kept+=("${key}")
+      done
+      keys[${other}]="${kept[*]}"
+    done
+  done
+  # yad prints numbers with decimals
+  settings[stick_ramp_ms]="${values[i]%%[.,]*}"
+  settings[walk_percent]="${values[i + 1]%%[.,]*}"
+  settings[socd]="${values[i + 2]:-last}"
+  case "${values[i + 3]:-}" in
+    "right stick") settings[mouse_stick]="right" ;;
+    "left stick") settings[mouse_stick]="left" ;;
+    *) settings[mouse_stick]="off" ;;
+  esac
+  settings[mouse_sensitivity]="${values[i + 4]%%[.,]*}"
+  settings[socd_dpad]="${app_settings[socd_dpad]:-}"
+  settings[socd_left_stick]="${app_settings[socd_left_stick]:-}"
+  settings[socd_right_stick]="${app_settings[socd_right_stick]:-}"
+  save_controller_mapping "${package}" keys settings
+
+  # The mapping is of use with the keyboard as a gamepad
+  read -r -a saved <<<"$(saved_app_options "${package}")"
+  if [[ " ${saved[*]} " != *" gamekb "* ]]; then
+    save_app_options "${package}" "${saved[@]}" gamekb
+    respond "Controller mapping of ${label} saved; it starts with the keyboard as a gamepad"
+  else
+    respond "Controller mapping of ${label} saved"
+  fi
+  if [[ "${status}" -eq 0 ]]; then
+    open_app_window "${package}" false "" ""
+  fi
+}
+
 open_app_window() {
   local name="$1"
   local fullscreen_mode="$2"
@@ -5639,7 +6098,7 @@ open_app_window() {
     --render-driver=opengl
     --no-audio
   )
-  append_scrcpy_input_args scrcpy_cmd app "app window"
+  append_scrcpy_input_args scrcpy_cmd app "app window" "${package}"
   append_scrcpy_extra_args scrcpy_cmd "app window"
 
   # A distinct app ID lets the host desktop treat each app as its own window
@@ -5989,7 +6448,8 @@ app_launcher_is_current() {
   [[ -f "${file}" ]] \
     && grep -qxF "Name=$(desktop_entry_escape "$(app_launcher_name "${label}" "${package}")")" "${file}" \
     && grep -qxF "Icon=${icon}" "${file}" \
-    && grep -qxF "Actions=options;app-settings;" "${file}" \
+    && grep -qxF "Actions=$(app_launcher_actions "${package}")" "${file}" \
+    && app_launcher_controller_action_is_current "${file}" "${package}" \
     && grep -qxF "Name=Ika Startup Options..." "${file}" \
     && grep -qxF "Name=Android App Settings..." "${file}" \
     && grep -qxF "Exec=ika app --options ${package}" "${file}" \
@@ -5998,6 +6458,29 @@ app_launcher_is_current() {
     && grep -qxF "X-Ika-Package=${package}" "${file}" \
     && grep -qxF "X-Ika-Version=${IKA_MENU_VERSION}" "${file}" \
     && grep -qE "^Categories=(.*;)?${IKA_MENU_CATEGORY}(;|$)" "${file}"
+}
+
+# The launcher's actions: games also get "Controller mapping...".
+app_launcher_actions() {
+  if is_game_app "$1"; then
+    printf 'options;controller;app-settings;\n'
+  else
+    printf 'options;app-settings;\n'
+  fi
+}
+
+# Whether the launcher FILE has the controller mapping action of PACKAGE
+# when it is a game, and none when it is not.
+app_launcher_controller_action_is_current() {
+  local file="$1"
+  local package="$2"
+
+  if is_game_app "${package}"; then
+    grep -qxF "Name=Controller mapping..." "${file}" \
+      && grep -qxF "Exec=ika app --controller ${package}" "${file}"
+  else
+    ! grep -qxF "[Desktop Action controller]" "${file}"
+  fi
 }
 
 # Creates or updates one launcher and returns 1 when it was already current.
@@ -6011,7 +6494,9 @@ write_app_launcher() {
   local name
   local keywords="${label//;/ };${package};Android;Ika;"
   local settings_icon
-  local actions="options;app-settings;"
+  local actions
+
+  actions="$(app_launcher_actions "${package}")"
 
   if app_launcher_is_current "${apps_dir}" "${label}" "${package}" "${icon}"; then
     return 1
@@ -6058,9 +6543,11 @@ EOF
 }
 
 # Writes the launcher's right-click actions: "Ika Startup Options...", which
-# opens the app's start options window, and "Android App Settings...", which
-# opens Android's App info page for the app. Games' launchers had a "Play with
-# Touch Input" action, which is removed; touch input is a start option now.
+# opens the app's start options window, "Controller mapping..." on a game,
+# which opens the keyboard gamepad's keys and settings for it, and "Android
+# App Settings...", which opens Android's App info page for the app. Games'
+# launchers had a "Play with Touch Input" action, which is removed; touch
+# input is a start option now.
 set_launcher_actions() {
   local file="$1"
   local package="$2"
@@ -6069,6 +6556,12 @@ set_launcher_actions() {
   set_launcher_action "${file}" touch "" ""
   set_launcher_action "${file}" options "Ika Startup Options..." \
     "ika app --options ${package}"
+  if is_game_app "${package}"; then
+    set_launcher_action "${file}" controller "Controller mapping..." \
+      "ika app --controller ${package}" input-gaming
+  else
+    set_launcher_action "${file}" controller "" ""
+  fi
   set_launcher_action "${file}" app-settings "Android App Settings..." \
     "ika app --info ${package}" "${settings_icon}"
 }
@@ -6823,6 +7316,7 @@ run_app_command() {
   local name=""
   local info_mode="false"
   local options_mode="false"
+  local controller_mode="false"
   local fullscreen_mode="false"
   local title=""
   local window_size=""
@@ -6890,6 +7384,10 @@ run_app_command() {
         options_mode="true"
         shift
         ;;
+      --controller)
+        controller_mode="true"
+        shift
+        ;;
       --title=*)
         title="${1#*=}"
         shift
@@ -6938,6 +7436,10 @@ run_app_command() {
   fi
   if [[ "${options_mode}" == "true" ]]; then
     edit_app_options "${name}"
+    return 0
+  fi
+  if [[ "${controller_mode}" == "true" ]]; then
+    edit_controller_mapping "${name}"
     return 0
   fi
   open_app_window "${name}" "${fullscreen_mode}" "${title}" "${window_size}"

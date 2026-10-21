@@ -272,10 +272,22 @@ for package in com.example.game com.example.app; do
     fail "${package}'s launcher was rewritten although it was current"
   fi
 done
-grep -qxF "Actions=options;app-settings;" "${apps_dir}/ika-com.example.game.desktop" \
+grep -qxF "Actions=options;controller;app-settings;" "${apps_dir}/ika-com.example.game.desktop" \
   || fail "a game's actions"
+expect_contains "$(<"${apps_dir}/ika-com.example.game.desktop")" \
+  $'[Desktop Action controller]\nName=Controller mapping...\nExec=ika app --controller com.example.game\nIcon=input-gaming' \
+  "a game's launcher offers the controller mapping"
 grep -qxF "Actions=options;app-settings;" "${apps_dir}/ika-com.example.app.desktop" \
   || fail "an app's actions"
+if grep -q "Desktop Action controller" "${apps_dir}/ika-com.example.app.desktop"; then
+  fail "an app that is not a game offers the controller mapping"
+fi
+# A game's launcher without the controller mapping is updated
+sed -i -e 's/^Actions=.*/Actions=options;app-settings;/' "${apps_dir}/ika-com.example.game.desktop"
+write_app_launcher "${apps_dir}" "Some Label" com.example.game /icons/app.png \
+  || fail "a game's launcher without the controller mapping was kept"
+grep -qxF "Actions=options;controller;app-settings;" "${apps_dir}/ika-com.example.game.desktop" \
+  || fail "the controller mapping was not added to a game's launcher"
 sed -i 's/^Name=Ika Startup Options\.\.\.$/Name=Ika start options.../' \
   "${apps_dir}/ika-com.example.app.desktop"
 write_app_launcher "${apps_dir}" "Some Label" com.example.app /icons/app.png \
@@ -326,7 +338,7 @@ expect_equal "${updated}" "1" "a launcher with old actions is re-added"
 expect_equal "$(<"${T}/refresh")" "parked" "it is out of the applications directory while GNOME Shell rescans"
 app_launcher_is_current "${apps_dir}" "Some Game" com.example.game "$(app_menu_icon com.example.game)" \
   || fail "the re-added launcher is not current"
-grep -qxF "Actions=options;app-settings;" "${apps_dir}/ika-com.example.game.desktop" \
+grep -qxF "Actions=options;controller;app-settings;" "${apps_dir}/ika-com.example.game.desktop" \
   || fail "the re-added launcher has no start options"
 if grep -q -e 'Desktop Action touch' -e 'Play with Touch Input' "${apps_dir}/ika-com.example.game.desktop"; then
   fail "the re-added launcher kept Play with Touch Input"
