@@ -103,6 +103,10 @@
 - The desktop console passes no gamepad, and the TV console always passes
   the gamepad through, as the remote. A `--gamepad=` or `--gamekb` option
   among the extra console args still wins.
+- The gamepad Ika passes through is named **Ika Emulated GamePad** in Android,
+  not "Microsoft X-Box 360 Pad". It keeps an Xbox 360 controller's vendor and
+  product IDs, so the key layout and the mapping games use stay the same. A
+  console that is already open keeps the old name until it is restarted.
 
 ### Graphics
 - `host_cached_memory = on` in the `[gpu]` section of ika.ini
