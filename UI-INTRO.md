@@ -102,9 +102,9 @@ the app more room rather than stretching it. Super + T and Super + F work as the
   with the keyboard gamepad's keys and settings for that game: the keys of
   each control, the mouse's buttons and wheel among them, how fast a stick
   is pushed, how far it goes with the walk key held, what opposite keys do
-  together, and which stick the mouse moves and how fast. **Apply settings** saves
-  them for the game, over `ika.ini`, and ticks **Use the keyboard as a
-  gamepad** in its start options; **Apply and start** also starts it;
+  together, and which stick the mouse moves and how fast. **Apply settings**
+  saves them for the game, over `ika.ini`, and ticks **Use the keyboard to
+  emulate a gamepad** in its start options; **Apply and start** also starts it;
   **Reset to ika.ini** forgets the game's mapping (see
   [Controller mapping per game](USAGE.md#controller-mapping-per-game)).
 - The menu is kept up to date automatically: once the guest has booted,

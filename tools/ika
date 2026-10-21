@@ -5809,7 +5809,7 @@ EOF
 # "Controller mapping..." on a game's launcher (ika app --controller NAME): a
 # window (yad) with the keyboard gamepad's keys and settings for the game,
 # from its mapping, else from ika.ini. "Apply settings" saves them in the
-# game's mapping and ticks "Use the keyboard as a gamepad" in the game's
+# game's mapping and ticks "Use the keyboard to emulate a gamepad" in the game's
 # start options if it is not, "Apply and start" does that and starts the
 # game, "Reset to ika.ini" removes the game's mapping, and Cancel leaves
 # everything as it was.
