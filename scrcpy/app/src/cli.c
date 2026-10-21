@@ -270,7 +270,8 @@ static const struct sc_option options[] = {
         .argdesc = "hexcolor",
         .text = "Set the background color, encoded as hexadecimal color code "
                 "(#RGB or #RRGGBB).\n"
-                "Default is #222 (dark gray).",
+                "Without this option, the background is the Android theme's, "
+                "as the device reports it (#222, dark gray, until it does).",
     },
     {
         .longopt_id = OPT_CAMERA_AR,
@@ -1128,8 +1129,9 @@ static const struct sc_option options[] = {
                 "dpad_right, right_stick_up, right_stick_down, "
                 "right_stick_left, right_stick_right, a, b, x, y, start, "
                 "back, guide, left_shoulder, right_shoulder, left_stick, "
-                "right_stick (the sticks' clicks), left_trigger and "
-                "right_trigger; the keys are SDL key names, with \"_\" for a "
+                "right_stick (the sticks' clicks), left_trigger, "
+                "right_trigger and walk (held, it slows the sticks); the keys "
+                "are SDL scancode names, with \"_\" for a "
                 "space (Keypad_Enter), or Mouse_Left, Mouse_Right, "
                 "Mouse_Middle, Mouse_X1, Mouse_X2, Wheel_Up, Wheel_Down, "
                 "Wheel_Left and Wheel_Right (a notch presses the control for "
@@ -1137,17 +1139,17 @@ static const struct sc_option options[] = {
                 "skipped, as is a key given to a second control.\n"
                 "Without a spec: WASD is the left stick, the arrows the "
                 "D-pad, IJKL the right stick, Space is A, Esc is B, C is X, "
-                "V is Y, Enter is Start, Backspace is Back, Q and E are the "
-                "shoulders, Z and X the triggers, Left Shift and F the "
-                "sticks' clicks.\n"
+                "V is Y, Enter and Keypad_Enter are Start, Backspace is "
+                "Back, Q and E are the shoulders, Z and X the triggers, "
+                "Left Shift and F the sticks' clicks, Tab is walk.\n"
                 "As on a physical gamepad, a stick on a diagonal is as far "
                 "from its center as on an axis, and of two opposite "
                 "directions only the last pressed counts.\n"
                 "Settings go in the spec too: ramp_ms=N pushes a stick "
                 "from its center to its target over N milliseconds "
-                "instead of at once (0, the default, is at once); walk=key "
-                "names a key that, held, caps the sticks at walk_percent=N "
-                "percent of their deflection (50 by default); socd=last or "
+                "instead of at once (0, the default, is at once); "
+                "walk_percent=N caps the sticks at N percent of their "
+                "deflection while walk is held (50 by default); socd=last or "
                 "socd=neutral says what two opposite directions held "
                 "together do, the last pressed or nothing, for every pad, "
                 "and socd_dpad, socd_left_stick and socd_right_stick for "

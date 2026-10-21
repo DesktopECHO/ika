@@ -16,7 +16,7 @@ experience from a phone emulator in a browser to a native desktop window.
 | Input transport | WebRTC data channel | scrcpy control channel using Android input APIs; UHID in game mode |
 | Audio transport | WebRTC media stream | Cuttlefish virtio-snd → host PipeWire stream |
 | Multi-display / hotplug | `cvd display add/list/remove` CLI | Same CLI is available; Ika does not currently drive add/remove operations |
-| GPU path | Varies (host, gfxstream, virgl) | `gpu_mode=gfxstream_guest_angle` (`gfxstream` with only llvmpipe), `enable_gpu_udmabuf=true`, `gpu_vhost_user_mode=off`, `use_cvdalloc=true` |
+| GPU path | Varies (host, gfxstream, virgl) | `gpu_mode=gfxstream_guest_angle` (`gfxstream` with only llvmpipe), `enable_gpu_udmabuf=true`, `gpu_vhost_user_mode=auto`, `use_cvdalloc=true` |
 | CPU policy | No Ika-specific policy | Guest vCPUs prefer performance cores; the default count is the available/performance-core count minus two, capped at 12 |
 
 ## 1. Frame transport
@@ -147,7 +147,7 @@ Ika sets:
 
 ```text
 gpu_mode=gfxstream_guest_angle
-gpu_vhost_user_mode=off
+gpu_vhost_user_mode=auto
 enable_gpu_udmabuf=true         # zero-copy virtio-gpu path when supported
 use_cvdalloc=true
 enable_bootanimation=false      # skip the dancing-bug splash
