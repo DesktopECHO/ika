@@ -137,6 +137,12 @@ In TV mode the console always passes the gamepad through, as the remote. A
 `--gamepad=` or `--gamekb` option in `scrcpy_args` or `--ika_scrcpy=` wins
 over both. The start log and each app window's log say what was passed.
 
+In Android a gamepad passed through, a physical one or the keyboard's, is a
+device named **Ika Emulated GamePad** (`adb shell dumpsys input` lists it),
+one for each pad. It has the vendor and product IDs of an Xbox 360 controller
+(045e:028e), which is what gives Android the key layout and games the mapping
+they know.
+
 The keyboard gamepad's keys are set in the `[keyboard_gamepad]` section of
 `ika.ini`, one line per control (`left_stick_up`, `left_stick_down`,
 `left_stick_left`, `left_stick_right`, `dpad_up`, `dpad_down`, `dpad_left`,

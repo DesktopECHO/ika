@@ -12,10 +12,12 @@
 /** Downcast gamepad processor to sc_gamepad_uhid */
 #define DOWNCAST(GP) container_of(GP, struct sc_gamepad_uhid, gamepad_processor)
 
-// Xbox 360
+// The IDs of an Xbox 360 controller: they give Android its key layout and the
+// mapping that games know. The name is Ika's own, so that a device check can
+// tell the pad apart and the Android Settings and games show what it is.
 #define SC_GAMEPAD_UHID_VENDOR_ID UINT16_C(0x045e)
 #define SC_GAMEPAD_UHID_PRODUCT_ID UINT16_C(0x028e)
-#define SC_GAMEPAD_UHID_NAME "Microsoft X-Box 360 Pad"
+#define SC_GAMEPAD_UHID_NAME "Ika Emulated GamePad"
 
 static void
 sc_gamepad_uhid_send_input(struct sc_gamepad_uhid *gamepad,
