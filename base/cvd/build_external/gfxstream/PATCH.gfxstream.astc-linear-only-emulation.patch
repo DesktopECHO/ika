@@ -1,0 +1,263 @@
+Patch summary:
+On a host that samples ASTC natively with optimal tiling but not linear
+tiling (Honeykrisp on Apple silicon), create optimal-tiled ASTC images
+natively and emulate only linear-tiled ones. Upstream emulates every ASTC
+image there (4e8e7ad8: optimal-only ASTC "is not enough to run Android
+apps"), which gives each texture a decompressed RGBA8 copy in the guest's
+memory, 4-16x its compressed size. The guest still sees linear-tiled ASTC
+support, from emulation: format properties report the host's native
+optimal-tiling features and emulation's linear-tiling features, image
+format queries and image creation decide per tiling, and the host device
+keeps its ASTC feature enabled. Hosts without native ASTC emulate every
+ASTC image as before; hosts with full support do not emulate.
+
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index 9ec2f452..f8c9a509 100644
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -1891,8 +1891,9 @@ class VkDecoderGlobalState::Impl {
+         VkImageFormatProperties* pImageFormatProperties) {
+         auto physicalDevice = unbox_VkPhysicalDevice(boxed_physicalDevice);
+         auto vk = dispatch_VkPhysicalDevice(boxed_physicalDevice);
+-        const bool emulatedTexture = !usesSparseImageBinding(flags) &&
+-                                     isEmulatedCompressedTexture(format, physicalDevice, vk);
++        const bool emulatedTexture =
++            !usesSparseImageBinding(flags) &&
++            isEmulatedCompressedImage(format, tiling, physicalDevice, vk);
+         if (emulatedTexture) {
+             if (!supportEmulatedCompressedImageFormatProperty(format, type, tiling, usage, flags)) {
+                 memset(pImageFormatProperties, 0, sizeof(VkImageFormatProperties));
+@@ -1924,8 +1925,9 @@ class VkDecoderGlobalState::Impl {
+         auto vk = dispatch_VkPhysicalDevice(boxed_physicalDevice);
+         VkPhysicalDeviceImageFormatInfo2 imageFormatInfo;
+         VkFormat format = pImageFormatInfo->format;
+-        const bool emulatedTexture = !usesSparseImageBinding(pImageFormatInfo->flags) &&
+-                                     isEmulatedCompressedTexture(format, physicalDevice, vk);
++        const bool emulatedTexture =
++            !usesSparseImageBinding(pImageFormatInfo->flags) &&
++            isEmulatedCompressedImage(format, pImageFormatInfo->tiling, physicalDevice, vk);
+         if (emulatedTexture) {
+             if (!supportEmulatedCompressedImageFormatProperty(
+                     pImageFormatInfo->format, pImageFormatInfo->type, pImageFormatInfo->tiling,
+@@ -2456,6 +2458,7 @@ class VkDecoderGlobalState::Impl {
+         // used to check for supported properties of individual formats as normal.
+         const bool emulateTextureEtc2 = needEmulatedEtc2(physicalDevice, vk);
+         const bool emulateTextureAstc = needEmulatedAstc(physicalDevice, vk);
++        const bool emulateTextureAstcLinearOnly = needLinearOnlyEmulatedAstc(physicalDevice, vk);
+         const bool emulateProtectedMemory = needEmulatedProtectedMemory(physicalDevice, vk);
+         const bool disableSparseBindingSupport =
+             shouldDisableSparseBindingSupport(physicalDevice, vk);
+@@ -2586,7 +2589,8 @@ class VkDecoderGlobalState::Impl {
+             if (emulateTextureEtc2) {
+                 feature->textureCompressionETC2 = VK_FALSE;
+             }
+-            if (emulateTextureAstc) {
++            // With linear-only emulation, optimal-tiled ASTC images are native.
++            if (emulateTextureAstc && !emulateTextureAstcLinearOnly) {
+                 feature->textureCompressionASTC_LDR = VK_FALSE;
+             }
+ 
+@@ -2758,6 +2762,7 @@ class VkDecoderGlobalState::Impl {
+         deviceInfo.maxImageDimension2D = physicalDeviceInfo.props.limits.maxImageDimension2D;
+         deviceInfo.emulateTextureEtc2 = emulateTextureEtc2;
+         deviceInfo.emulateTextureAstc = emulateTextureAstc;
++        deviceInfo.emulateTextureAstcLinearOnly = emulateTextureAstcLinearOnly;
+         deviceInfo.emulateProtectedMemory = emulateProtectedMemory;
+         deviceInfo.useAstcCpuDecompression =
+             m_vkEmulation->getAstcLdrEmulationMode() == AstcEmulationMode::Cpu &&
+@@ -2776,7 +2781,9 @@ class VkDecoderGlobalState::Impl {
+             "Created VkDevice:%p for application:'%s' instance:%p. ASTC emulation:%s CPU "
+             "decoding:%s. Protected memory:%s",
+             *pDevice, instanceInfo.applicationName.c_str(), physicalDeviceInfo.instance,
+-            deviceInfo.emulateTextureAstc ? "on" : "off",
++            !deviceInfo.emulateTextureAstc            ? "off"
++            : deviceInfo.emulateTextureAstcLinearOnly ? "linear tiling only"
++                                                      : "on",
+             deviceInfo.useAstcCpuDecompression ? "on" : "off",
+             deviceInfo.emulateProtectedMemory ? "on" : "off");
+ 
+@@ -3143,9 +3150,10 @@ class VkDecoderGlobalState::Impl {
+         auto& physicalDeviceMemHelper = physicalDeviceInfo->memoryPropertiesHelper;
+ 
+         const VkFormat format = pInfo->pCreateInfo->format;
+-        const bool needDecompression = !usesSparseImageBinding(pInfo->pCreateInfo->flags) &&
+-                                       (isEtc2(format) || isAstc(format)) &&
+-                                       deviceInfo->needEmulatedDecompression(format);
++        const bool needDecompression =
++            !usesSparseImageBinding(pInfo->pCreateInfo->flags) &&
++            (isEtc2(format) || isAstc(format)) &&
++            deviceInfo->needEmulatedDecompression(format, pInfo->pCreateInfo->tiling);
+         if (!needDecompression) {
+             physicalDeviceMemHelper->transformToGuestImageMemoryRequirements(
+                 pInfo->pCreateInfo->tiling, &pMemoryRequirements->memoryRequirements);
+@@ -3469,8 +3477,9 @@ class VkDecoderGlobalState::Impl {
+ 
+         // Change creation parameters before the validation checks below as the
+         // creation format and its device properties may change
+-        const bool needDecompression = !usesSparseImageBinding(pCreateInfo->flags) &&
+-                                       deviceInfo->needEmulatedDecompression(pCreateInfo->format);
++        const bool needDecompression =
++            !usesSparseImageBinding(pCreateInfo->flags) &&
++            deviceInfo->needEmulatedDecompression(pCreateInfo->format, pCreateInfo->tiling);
+         std::unique_ptr<CompressedImageInfo> cmpInfo = nullptr;
+         VkImageCreateInfo decompInfo;
+         if (needDecompression) {
+@@ -11016,16 +11025,18 @@ class VkDecoderGlobalState::Impl {
+         return !feature.textureCompressionETC2;
+     }
+ 
+-    bool needEmulatedAstc(VkPhysicalDevice physicalDevice, VulkanDispatch* vk) EXCLUDES(mMutex) {
+-        if (!enableEmulatedAstc()) {
+-            return false;
+-        }
++    enum class AstcHostSupport {
++        kNone,         // no usable native ASTC: emulate every ASTC image
++        kOptimalOnly,  // native with optimal tiling only: emulate linear-tiled images
++        kFull,         // native with optimal and linear tiling
++    };
+ 
++    AstcHostSupport getAstcHostSupport(VkPhysicalDevice physicalDevice,
++                                       VulkanDispatch* vk) EXCLUDES(mMutex) {
+         VkPhysicalDeviceFeatures feature;
+         vk->vkGetPhysicalDeviceFeatures(physicalDevice, &feature);
+         if (!feature.textureCompressionASTC_LDR) {
+-            // Feature is not present, emulate
+-            return true;
++            return AstcHostSupport::kNone;
+         }
+ 
+         // If the feature is present, check if it supports required features
+@@ -11036,17 +11047,35 @@ class VkDecoderGlobalState::Impl {
+             VK_FORMAT_ASTC_8x8_UNORM_BLOCK, VK_FORMAT_ASTC_8x8_SRGB_BLOCK};
+         const VkFormatFeatureFlags requiredTilingFeatures =
+             VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
++        bool linearSupported = true;
+         for (auto format : formatsToCheck) {
+             VkFormatProperties props;
+             vk->vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &props);
+-
+-            if ((props.linearTilingFeatures & requiredTilingFeatures) != requiredTilingFeatures ||
+-                (props.optimalTilingFeatures & requiredTilingFeatures) != requiredTilingFeatures) {
+-                // Linear tiling is not supported, emulate
+-                return true;
++            if ((props.optimalTilingFeatures & requiredTilingFeatures) != requiredTilingFeatures) {
++                return AstcHostSupport::kNone;
++            }
++            if ((props.linearTilingFeatures & requiredTilingFeatures) != requiredTilingFeatures) {
++                linearSupported = false;
+             }
+         }
+-        return false;
++        return linearSupported ? AstcHostSupport::kFull : AstcHostSupport::kOptimalOnly;
++    }
++
++    // Whether ASTC emulation is needed for any image. Android apps need linear-tiled ASTC too,
++    // so a host with optimal-only ASTC still needs it, for linear-tiled images only.
++    bool needEmulatedAstc(VkPhysicalDevice physicalDevice, VulkanDispatch* vk) EXCLUDES(mMutex) {
++        if (!enableEmulatedAstc()) {
++            return false;
++        }
++        return getAstcHostSupport(physicalDevice, vk) != AstcHostSupport::kFull;
++    }
++
++    // Whether only linear-tiled ASTC images are emulated. Emulating every ASTC image there
++    // would give each texture a decompressed RGBA8 copy, 4-16x its compressed size.
++    bool needLinearOnlyEmulatedAstc(VkPhysicalDevice physicalDevice,
++                                    VulkanDispatch* vk) EXCLUDES(mMutex) {
++        return enableEmulatedAstc() &&
++               getAstcHostSupport(physicalDevice, vk) == AstcHostSupport::kOptimalOnly;
+     }
+ 
+     bool needEmulatedProtectedMemory(VkPhysicalDevice /*physicalDevice*/, VulkanDispatch* /*vk*/) EXCLUDES(mMutex) {
+@@ -11281,6 +11310,18 @@ class VkDecoderGlobalState::Impl {
+                (isAstc(format) && needEmulatedAstc(physicalDevice, vk));
+     }
+ 
++    bool isEmulatedCompressedImage(VkFormat format, VkImageTiling tiling,
++                                   VkPhysicalDevice physicalDevice,
++                                   VulkanDispatch* vk) EXCLUDES(mMutex) {
++        if (isEtc2(format)) {
++            return needEmulatedEtc2(physicalDevice, vk);
++        }
++        if (!isAstc(format) || !needEmulatedAstc(physicalDevice, vk)) {
++            return false;
++        }
++        return tiling == VK_IMAGE_TILING_LINEAR || !needLinearOnlyEmulatedAstc(physicalDevice, vk);
++    }
++
+     static const VkFormatFeatureFlags kEmulatedTextureBufferFeatureMask =
+         VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+         VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+@@ -11290,6 +11331,18 @@ class VkDecoderGlobalState::Impl {
+         VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+         VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+ 
++    void setLinearTilingFeatures(VkFormatProperties* pFormatProp, VkFormatFeatureFlags features) {
++        pFormatProp->linearTilingFeatures = features;
++    }
++
++    void setLinearTilingFeatures(VkFormatProperties2* pFormatProp, VkFormatFeatureFlags features) {
++        pFormatProp->formatProperties.linearTilingFeatures = features;
++        VkFormatProperties3* formatProps3 = vk_find_struct<VkFormatProperties3>(pFormatProp);
++        if (formatProps3) {
++            formatProps3->linearTilingFeatures = static_cast<VkFormatFeatureFlags2>(features);
++        }
++    }
++
+     void maskFormatPropertiesForEmulatedTextures(VkFormatProperties* pFormatProp) {
+         pFormatProp->linearTilingFeatures &= kEmulatedTextureBufferFeatureMask;
+         pFormatProp->optimalTilingFeatures &= kEmulatedTextureOptimalTilingMask;
+@@ -11346,6 +11399,17 @@ class VkDecoderGlobalState::Impl {
+             getPhysicalDeviceFormatPropertiesFunc,
+         VulkanDispatch* vk, VkPhysicalDevice physicalDevice, VkFormat format,
+         VkFormatProperties1or2* pFormatProperties) EXCLUDES(mMutex) {
++        if (isAstc(format) && needLinearOnlyEmulatedAstc(physicalDevice, vk)) {
++            // Optimal tiling is native; linear tiling is what emulation offers.
++            getPhysicalDeviceFormatPropertiesFunc(physicalDevice, format, pFormatProperties);
++            VkFormatProperties emulated = {};
++            vk->vkGetPhysicalDeviceFormatProperties(
++                physicalDevice, CompressedImageInfo::getOutputFormat(format), &emulated);
++            setLinearTilingFeatures(pFormatProperties,
++                                    emulated.linearTilingFeatures & kEmulatedTextureBufferFeatureMask);
++            maskFormatPropertiesForUnsupportedExtensions(pFormatProperties);
++            return;
++        }
+         if (isEmulatedCompressedTexture(format, physicalDevice, vk)) {
+             getPhysicalDeviceFormatPropertiesFunc(
+                 physicalDevice, CompressedImageInfo::getOutputFormat(format),
+diff --git a/host/vulkan/vk_decoder_internal_structs.h b/host/vulkan/vk_decoder_internal_structs.h
+index b1e847c3..c6a64c72 100644
+--- a/host/vulkan/vk_decoder_internal_structs.h
++++ b/host/vulkan/vk_decoder_internal_structs.h
+@@ -240,6 +240,9 @@ struct DeviceInfo {
+     std::vector<std::string> enabledExtensionNames;
+     bool emulateTextureEtc2 = false;
+     bool emulateTextureAstc = false;
++    // The host samples ASTC natively, but with optimal tiling only (Honeykrisp): optimal-tiled
++    // ASTC images are created natively and only linear-tiled ones are emulated.
++    bool emulateTextureAstcLinearOnly = false;
+     bool useAstcCpuDecompression = false;
+     bool emulateProtectedMemory = false;
+ 
+@@ -253,10 +256,21 @@ struct DeviceInfo {
+     std::optional<uint32_t> virtioGpuContextId;
+     uint32_t maxImageDimension2D = 0;  // Physical device limit cached for efficient validation
+ 
++    // Whether images of this format may be emulated. Per-image code checks the image's
++    // compressInfo, which only emulated images have.
+     bool needEmulatedDecompression(VkFormat format) {
+         return (emulateTextureEtc2 && isEtc2(format)) ||
+                (emulateTextureAstc && isAstc(format));
+     }
++
++    // Whether an image of this format and tiling is emulated.
++    bool needEmulatedDecompression(VkFormat format, VkImageTiling tiling) {
++        if (emulateTextureEtc2 && isEtc2(format)) {
++            return true;
++        }
++        return emulateTextureAstc && isAstc(format) &&
++               (!emulateTextureAstcLinearOnly || tiling == VK_IMAGE_TILING_LINEAR);
++    }
+ };
+ 
+ struct PhysicalQueuePendingOps {
