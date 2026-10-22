@@ -29,4 +29,5 @@ exports_files([
     "PATCH.gfxstream.prefer-host-cached-memory.patch",
     "PATCH.gfxstream.lazy-linear-transfer-buffer.patch",
     "PATCH.gfxstream.trim-heap-after-process-cleanup.patch",
+    "PATCH.gfxstream.astc-linear-only-emulation.patch",
 ])
