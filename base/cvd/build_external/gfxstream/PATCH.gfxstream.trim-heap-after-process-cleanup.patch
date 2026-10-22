@@ -4,35 +4,34 @@ glibc's malloc_trim(0) on the cleanup worker thread. glibc keeps freed pages
 in its arenas, so the memory a closed app (a 3D game) used stayed resident in
 the renderer; trimming handed over 100 MB back in a test on an Apple Silicon
 host. Linux/glibc only.
-
-diff --git a/host/renderer_impl.cpp b/host/renderer_impl.cpp
-index 7c73227..a6f24f1 100644
---- a/host/renderer_impl.cpp
-+++ b/host/renderer_impl.cpp
-@@ -14,6 +14,9 @@
- #include "renderer_impl.h"
- 
- #include <assert.h>
+diff --git a/host/frame_buffer.cpp b/host/frame_buffer.cpp
+index 919474e6..1d0a0c3d 100644
+--- a/host/frame_buffer.cpp
++++ b/host/frame_buffer.cpp
+@@ -20,6 +20,9 @@
+ #include <string.h>
+ #if defined(__linux__)
+ #include <sys/resource.h>
 +#if defined(__linux__) && defined(__GLIBC__)
 +#include <malloc.h>
 +#endif
+ #endif
+ #include <time.h>
  
- #include <algorithm>
- #include <limits>
-@@ -73,8 +76,14 @@ public:
-                 struct {
-                     WorkerProcessingResult operator()(CleanProcessResources resources) {
-                         FrameBuffer::getFB()->cleanupProcGLObjects(resources.puid);
--                        // resources.resource are destroyed automatically when going out of the
--                        // scope.
-+                        resources.resource.reset();
+@@ -2435,8 +2438,15 @@ std::unique_ptr<ProcessResources> FrameBuffer::Impl::removeGraphicsProcessResour
+ void FrameBuffer::Impl::signalGuestProcessDead(uint64_t puid) {
+     std::shared_ptr<GuestProcessResources> processResources = removeGraphicsProcessResources(puid);
+     m_processCleanupThread.enqueueCleanup(
+-        [this, puid, processResources = std::move(processResources)]() {
++        [this, puid, processResources = std::move(processResources)]() mutable {
+             this->cleanupGuestProcess(puid);
++            processResources.reset();
 +#if defined(__linux__) && defined(__GLIBC__)
-+                        // A guest app that exits frees what the host held for it, but glibc
-+                        // keeps the freed pages in its arenas: after a 3D game closed, over
-+                        // 100 MB stayed resident in the renderer. Hand them back to the
-+                        // kernel, off the render threads.
-+                        malloc_trim(0);
++            // A guest app that exits frees what the host held for it, but glibc keeps the
++            // freed pages in its arenas: after a 3D game closed, over 100 MB stayed resident
++            // in the renderer. Hand them back to the kernel, off the render threads.
++            malloc_trim(0);
 +#endif
-                         return WorkerProcessingResult::Continue;
-                     }
-                     WorkerProcessingResult operator()(Exit) {
+         });
+ }
+ 

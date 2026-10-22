@@ -5,12 +5,11 @@ out, and describes it to the display with this stride. The packed width * bpp
 is wrong for the padded or tiled layouts the driver picks (RADV aligns pitches
 to its swizzle block), so ask vkGetImageSubresourceLayout when the ColorBuffer
 has a Vulkan image and report that pitch instead.
-
 diff --git a/host/frame_buffer.cpp b/host/frame_buffer.cpp
-index 473fcea7..a385ef6c 100644
+index 99ea875f..5a01e15b 100644
 --- a/host/frame_buffer.cpp
 +++ b/host/frame_buffer.cpp
-@@ -595,6 +595,7 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
+@@ -612,6 +612,7 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
  
      std::optional<BlobDescriptorInfo> exportColorBuffer(HandleType colorBufferHandle);
      std::optional<BlobDescriptorInfo> exportBuffer(HandleType bufferHandle);
@@ -18,7 +17,7 @@ index 473fcea7..a385ef6c 100644
  
  #if GFXSTREAM_ENABLE_HOST_GLES
      // Retrieves the color buffer handle associated with |p_surface|.
-@@ -3877,6 +3878,13 @@ std::optional<BlobDescriptorInfo> FrameBuffer::Impl::exportColorBuffer(
+@@ -4057,6 +4058,13 @@ std::optional<BlobDescriptorInfo> FrameBuffer::Impl::exportColorBuffer(
      return colorBuffer->exportBlob();
  }
  
@@ -32,7 +31,7 @@ index 473fcea7..a385ef6c 100644
  std::optional<BlobDescriptorInfo> FrameBuffer::Impl::exportBuffer(HandleType bufferHandle) {
      AutoLock mutex(m_lock);
  
-@@ -4850,6 +4858,10 @@ std::optional<BlobDescriptorInfo> FrameBuffer::exportBuffer(HandleType bufferHan
+@@ -5042,6 +5050,10 @@ std::optional<BlobDescriptorInfo> FrameBuffer::exportBuffer(HandleType bufferHan
      return mImpl->exportBuffer(bufferHandle);
  }
  
@@ -44,10 +43,10 @@ index 473fcea7..a385ef6c 100644
  
  bool FrameBuffer::hasEmulationVk() const { return mImpl->hasEmulationVk(); }
 diff --git a/host/frame_buffer.h b/host/frame_buffer.h
-index adb25ced..6d31d9eb 100644
+index 27c1f0a5..c84788ec 100644
 --- a/host/frame_buffer.h
 +++ b/host/frame_buffer.h
-@@ -433,6 +433,8 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
+@@ -435,6 +435,8 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
  
      std::optional<BlobDescriptorInfo> exportColorBuffer(HandleType colorBufferHandle);
      std::optional<BlobDescriptorInfo> exportBuffer(HandleType bufferHandle);
@@ -57,10 +56,10 @@ index adb25ced..6d31d9eb 100644
      bool hasEmulationGl() const;
      bool hasEmulationVk() const;
 diff --git a/host/virtio_gpu_resource.cpp b/host/virtio_gpu_resource.cpp
-index cffb8923..5d098ef1 100644
+index 4531a514..46be30de 100644
 --- a/host/virtio_gpu_resource.cpp
 +++ b/host/virtio_gpu_resource.cpp
-@@ -424,6 +424,15 @@ int VirtioGpuResource::GetInfo(struct stream_renderer_resource_info* outInfo) co
+@@ -444,6 +444,15 @@ int VirtioGpuResource::GetInfo(struct stream_renderer_resource_info* outInfo) co
  
      outInfo->drm_fourcc = formatInfo->drm_fourcc;
      outInfo->stride = AlignUp(mCreateArgs->width * formatInfo->bpp, 16U);
@@ -77,10 +76,10 @@ index cffb8923..5d098ef1 100644
      outInfo->handle = mCreateArgs->handle;
      outInfo->height = mCreateArgs->height;
 diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operations.cpp
-index a8856283..bbe0af32 100644
+index 6e8aa901..7fd90c69 100644
 --- a/host/vulkan/vk_common_operations.cpp
 +++ b/host/vulkan/vk_common_operations.cpp
-@@ -3376,6 +3376,31 @@ std::optional<VkEmulation::VkColorBufferMemoryExport> VkEmulation::exportColorBu
+@@ -3377,6 +3377,31 @@ std::optional<VkEmulation::VkColorBufferMemoryExport> VkEmulation::exportColorBu
      };
  }
  
@@ -113,10 +112,10 @@ index a8856283..bbe0af32 100644
      auto vk = mDvk;
  
 diff --git a/host/vulkan/vk_common_operations.h b/host/vulkan/vk_common_operations.h
-index 6b60ac1a..a0daa032 100644
+index 51a4c35b..0e8a1047 100644
 --- a/host/vulkan/vk_common_operations.h
 +++ b/host/vulkan/vk_common_operations.h
-@@ -428,6 +428,11 @@ class VkEmulation {
+@@ -426,6 +426,11 @@ class VkEmulation {
      };
      std::optional<VkColorBufferMemoryExport> exportColorBufferMemory(uint32_t colorBufferHandle);
  

@@ -1,5 +1,5 @@
 diff --git a/host/gl/glestranslator/common/gles_context.cpp b/host/gl/glestranslator/common/gles_context.cpp
-index df539a4..c198a59 100644
+index df539a4d..c198a59c 100644
 --- a/host/gl/glestranslator/common/gles_context.cpp
 +++ b/host/gl/glestranslator/common/gles_context.cpp
 @@ -1805,6 +1805,19 @@ void GLEScontext::releaseGlobalLock() {

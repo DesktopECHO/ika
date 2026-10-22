@@ -9,8 +9,8 @@ same policy to legacy/Properties2 image-format queries, device image-memory
 requirements, and image creation. Hosts with native sparse ASTC continue to
 work, hosts without it report the native unsupported result, and non-sparse
 compressed images retain the existing emulation path.
-
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index a8a36b37..cb7280b1 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
 @@ -179,6 +179,16 @@ static constexpr const char* const kEmulatedInstanceExtensions[] = {
@@ -27,10 +27,10 @@ diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_gl
 +    return (flags & kSparseImageCreateFlags) != 0;
 +}
 +
- static std::atomic<uint64_t> sNextHostBlobId{1};
  static std::atomic<uint64_t> sUniqueShmemId = 0;
  
-@@ -1745,7 +1755,8 @@ class VkDecoderGlobalState::Impl {
+ static bool isDescriptorTypeImageInfo(VkDescriptorType descType) {
+@@ -1856,7 +1866,8 @@ class VkDecoderGlobalState::Impl {
          VkImageFormatProperties* pImageFormatProperties) {
          auto physicalDevice = unbox_VkPhysicalDevice(boxed_physicalDevice);
          auto vk = dispatch_VkPhysicalDevice(boxed_physicalDevice);
@@ -40,7 +40,7 @@ diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_gl
          if (emulatedTexture) {
              if (!supportEmulatedCompressedImageFormatProperty(format, type, tiling, usage, flags)) {
                  memset(pImageFormatProperties, 0, sizeof(VkImageFormatProperties));
-@@ -1777,7 +1788,8 @@ class VkDecoderGlobalState::Impl {
+@@ -1888,7 +1899,8 @@ class VkDecoderGlobalState::Impl {
          auto vk = dispatch_VkPhysicalDevice(boxed_physicalDevice);
          VkPhysicalDeviceImageFormatInfo2 imageFormatInfo;
          VkFormat format = pImageFormatInfo->format;
@@ -50,7 +50,7 @@ diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_gl
          if (emulatedTexture) {
              if (!supportEmulatedCompressedImageFormatProperty(
                      pImageFormatInfo->format, pImageFormatInfo->type, pImageFormatInfo->tiling,
-@@ -2897,8 +2909,9 @@ class VkDecoderGlobalState::Impl {
+@@ -3093,8 +3105,9 @@ class VkDecoderGlobalState::Impl {
          auto& physicalDeviceMemHelper = physicalDeviceInfo->memoryPropertiesHelper;
  
          const VkFormat format = pInfo->pCreateInfo->format;
@@ -62,7 +62,7 @@ diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_gl
          if (!needDecompression) {
              physicalDeviceMemHelper->transformToGuestImageMemoryRequirements(
                  pInfo->pCreateInfo->tiling, &pMemoryRequirements->memoryRequirements);
-@@ -3257,7 +3270,8 @@ class VkDecoderGlobalState::Impl {
+@@ -3418,7 +3431,8 @@ class VkDecoderGlobalState::Impl {
  
          // Change creation parameters before the validation checks below as the
          // creation format and its device properties may change

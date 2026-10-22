@@ -5,9 +5,8 @@ fallback must use memfd flags rather than FD flags and must request sealing.
 Apply the required shrink/grow/seal seals to Linux shared-memory memfds
 regardless of whether libc or the syscall created them. Keep upstream's macOS
 shm_open path out of Linux's memfd sealing flow.
-
 diff --git a/common/base/SharedMemory_posix.cpp b/common/base/SharedMemory_posix.cpp
-index efd971c4..e67b4821 100644
+index 40cf525f..c7eabb22 100644
 --- a/common/base/SharedMemory_posix.cpp
 +++ b/common/base/SharedMemory_posix.cpp
 @@ -43,6 +43,23 @@
@@ -34,7 +33,7 @@ index efd971c4..e67b4821 100644
  namespace gfxstream {
  namespace base {
  
-@@ -119,7 +136,7 @@ int SharedMemory::openInternal(int oflag, int mode, bool doMapping) {
+@@ -127,7 +144,7 @@ int SharedMemory::openInternal(int oflag, int mode, bool doMapping) {
  #elif defined(HAVE_MEMFD_CREATE)
          mFd = memfd_create(mName.c_str(), MFD_CLOEXEC | MFD_ALLOW_SEALING);
  #else
@@ -43,7 +42,7 @@ index efd971c4..e67b4821 100644
  #endif
      } else {
          mFd = ::open(mName.c_str(), oflag, mode);
-@@ -150,11 +167,13 @@ int SharedMemory::openInternal(int oflag, int mode, bool doMapping) {
+@@ -158,11 +175,13 @@ int SharedMemory::openInternal(int oflag, int mode, bool doMapping) {
              return err;
          }
  

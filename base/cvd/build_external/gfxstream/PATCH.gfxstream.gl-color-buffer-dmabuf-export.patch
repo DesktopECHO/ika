@@ -7,9 +7,8 @@ whose fd, stride, offset and modifier come back to ColorBufferGl. The
 ColorBuffer's blob export falls back to it when there is no Vulkan image, and
 the row pitch reported by stream_renderer_resource_get_info takes the pitch
 of the last GL export when there is no Vulkan layout to ask.
-
 diff --git a/host/color_buffer.cpp b/host/color_buffer.cpp
-index 274cba56..ba01ebcd 100644
+index e64172b2..f3770948 100644
 --- a/host/color_buffer.cpp
 +++ b/host/color_buffer.cpp
 @@ -19,6 +19,7 @@
@@ -20,7 +19,7 @@ index 274cba56..ba01ebcd 100644
  #include "gfxstream/host/gfxstream_format.h"
  #include "vulkan/color_buffer_vk.h"
  #include "vulkan/vk_common_operations.h"
-@@ -83,6 +84,7 @@ class ColorBuffer::Impl : public LazySnapshotObj<ColorBuffer::Impl> {
+@@ -96,6 +97,7 @@ class ColorBuffer::Impl : public LazySnapshotObj<ColorBuffer::Impl> {
      bool importHandle(void* handle, bool preserveContent);
  
      std::optional<BlobDescriptorInfo> exportBlob();
@@ -28,7 +27,7 @@ index 274cba56..ba01ebcd 100644
  
      gl::ColorBufferGl* getColorBufferGl() const {
  #if GFXSTREAM_ENABLE_HOST_GLES
-@@ -456,11 +458,42 @@ bool ColorBuffer::Impl::invalidateForVk() {
+@@ -507,11 +509,42 @@ bool ColorBuffer::Impl::invalidateForVk() {
  }
  
  std::optional<BlobDescriptorInfo> ColorBuffer::Impl::exportBlob() {
@@ -74,7 +73,7 @@ index 274cba56..ba01ebcd 100644
  }
  
  ////////////////////////////////////////////////////////////////////////////////////////////////
-@@ -563,5 +596,7 @@ bool ColorBuffer::flushFromVkBytes(const void* bytes, size_t bytesSize) {
+@@ -628,5 +661,7 @@ bool ColorBuffer::flushFromVkBytes(const void* bytes, size_t bytesSize) {
  
  std::optional<BlobDescriptorInfo> ColorBuffer::exportBlob() { return mImpl->exportBlob(); }
  
@@ -83,10 +82,10 @@ index 274cba56..ba01ebcd 100644
  }  // namespace host
  }  // namespace gfxstream
 diff --git a/host/color_buffer.h b/host/color_buffer.h
-index 01b89757..b17bb6ad 100644
+index 17d305c0..5f43dbf1 100644
 --- a/host/color_buffer.h
 +++ b/host/color_buffer.h
-@@ -93,6 +93,9 @@ class ColorBuffer : public IColorBuffer, public LazySnapshotObj<ColorBuffer> {
+@@ -94,6 +94,9 @@ class ColorBuffer : public IColorBuffer, public LazySnapshotObj<ColorBuffer> {
      bool flushFromVkBytes(const void* bytes, size_t bytesSize);
  
      std::optional<BlobDescriptorInfo> exportBlob() override;
@@ -110,10 +109,10 @@ index 2b13a7b1..e9a2e279 100644
  
  // A (mostly) generic shared owning reference  to a `ColorBuffer` so that the
 diff --git a/host/frame_buffer.cpp b/host/frame_buffer.cpp
-index a385ef6c..0e10e305 100644
+index 5a01e15b..c8ccf583 100644
 --- a/host/frame_buffer.cpp
 +++ b/host/frame_buffer.cpp
-@@ -595,7 +595,7 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
+@@ -612,7 +612,7 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
  
      std::optional<BlobDescriptorInfo> exportColorBuffer(HandleType colorBufferHandle);
      std::optional<BlobDescriptorInfo> exportBuffer(HandleType bufferHandle);
@@ -122,7 +121,7 @@ index a385ef6c..0e10e305 100644
  
  #if GFXSTREAM_ENABLE_HOST_GLES
      // Retrieves the color buffer handle associated with |p_surface|.
-@@ -3878,11 +3878,15 @@ std::optional<BlobDescriptorInfo> FrameBuffer::Impl::exportColorBuffer(
+@@ -4058,11 +4058,15 @@ std::optional<BlobDescriptorInfo> FrameBuffer::Impl::exportColorBuffer(
      return colorBuffer->exportBlob();
  }
  
@@ -141,7 +140,7 @@ index a385ef6c..0e10e305 100644
  }
  
  std::optional<BlobDescriptorInfo> FrameBuffer::Impl::exportBuffer(HandleType bufferHandle) {
-@@ -4858,8 +4862,8 @@ std::optional<BlobDescriptorInfo> FrameBuffer::exportBuffer(HandleType bufferHan
+@@ -5050,8 +5054,8 @@ std::optional<BlobDescriptorInfo> FrameBuffer::exportBuffer(HandleType bufferHan
      return mImpl->exportBuffer(bufferHandle);
  }
  
@@ -153,10 +152,10 @@ index a385ef6c..0e10e305 100644
  
  bool FrameBuffer::hasEmulationGl() const { return mImpl->hasEmulationGl(); }
 diff --git a/host/frame_buffer.h b/host/frame_buffer.h
-index 6d31d9eb..fdfec970 100644
+index c84788ec..33cb622b 100644
 --- a/host/frame_buffer.h
 +++ b/host/frame_buffer.h
-@@ -433,8 +433,8 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
+@@ -435,8 +435,8 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
  
      std::optional<BlobDescriptorInfo> exportColorBuffer(HandleType colorBufferHandle);
      std::optional<BlobDescriptorInfo> exportBuffer(HandleType bufferHandle);
@@ -168,10 +167,10 @@ index 6d31d9eb..fdfec970 100644
      bool hasEmulationGl() const;
      bool hasEmulationVk() const;
 diff --git a/host/gl/color_buffer_gl.cpp b/host/gl/color_buffer_gl.cpp
-index a7fa337a..0ec672dc 100644
+index 7a4be59e..0ba0f17f 100644
 --- a/host/gl/color_buffer_gl.cpp
 +++ b/host/gl/color_buffer_gl.cpp
-@@ -1304,6 +1304,39 @@ bool ColorBufferGl::importMemory(ManagedDescriptor externalDescriptor, uint64_t
+@@ -1328,6 +1328,39 @@ bool ColorBufferGl::importMemory(ManagedDescriptor externalDescriptor, uint64_t
      return true;
  }
  
@@ -212,7 +211,7 @@ index a7fa337a..0ec672dc 100644
      EGLImageKHR image = s_egl.eglCreateImageKHR(m_display, EGL_NO_CONTEXT, EGL_NATIVE_PIXMAP_KHR, pixmap, nullptr);
  
 diff --git a/host/gl/color_buffer_gl.h b/host/gl/color_buffer_gl.h
-index 937434b6..db64da11 100644
+index ac20fac9..b12bcfac 100644
 --- a/host/gl/color_buffer_gl.h
 +++ b/host/gl/color_buffer_gl.h
 @@ -198,6 +198,19 @@ class ColorBufferGl {
@@ -417,10 +416,10 @@ index f137fd1f..3870a5f5 100644
          EGLDisplay dpy,
          EGLImage image) {
 diff --git a/host/virtio_gpu_resource.cpp b/host/virtio_gpu_resource.cpp
-index 5d098ef1..d346ed57 100644
+index 46be30de..b58bc286 100644
 --- a/host/virtio_gpu_resource.cpp
 +++ b/host/virtio_gpu_resource.cpp
-@@ -426,9 +426,9 @@ int VirtioGpuResource::GetInfo(struct stream_renderer_resource_info* outInfo) co
+@@ -446,9 +446,9 @@ int VirtioGpuResource::GetInfo(struct stream_renderer_resource_info* outInfo) co
      outInfo->stride = AlignUp(mCreateArgs->width * formatInfo->bpp, 16U);
      if (mResourceType == VirtioGpuResourceType::COLOR_BUFFER) {
          // The VMM exports this resource's memory to its display as a dma-buf (scanout) and
@@ -434,10 +433,10 @@ index 5d098ef1..d346ed57 100644
              outInfo->stride = *pitch;
          }
 diff --git a/host/vulkan/color_buffer_vk.cpp b/host/vulkan/color_buffer_vk.cpp
-index b61d0a9d..c8a2dbc5 100644
+index b0c4b041..b8621ae7 100644
 --- a/host/vulkan/color_buffer_vk.cpp
 +++ b/host/vulkan/color_buffer_vk.cpp
-@@ -116,6 +116,10 @@ std::unique_ptr<ColorBufferVkImageInfo> ColorBufferVk::prepareForDisplay() {
+@@ -164,6 +164,10 @@ std::unique_ptr<ColorBufferVkImageInfo> ColorBufferVk::prepareForDisplay() {
      return mVkEmulation.prepareColorBufferForDisplay(mHandle);
  }
  
@@ -449,11 +448,11 @@ index b61d0a9d..c8a2dbc5 100644
      auto info = mVkEmulation.exportColorBufferMemory(mHandle);
      if (info) {
 diff --git a/host/vulkan/color_buffer_vk.h b/host/vulkan/color_buffer_vk.h
-index a400e3ff..d7d3f01d 100644
+index 1edbbb15..7910c36e 100644
 --- a/host/vulkan/color_buffer_vk.h
 +++ b/host/vulkan/color_buffer_vk.h
 @@ -80,6 +80,8 @@ class ColorBufferVk {
-     void onSave(gfxstream::Stream* stream, SaveImageBehavior behavior);
+     bool onSave(gfxstream::Stream* stream, SaveImageBehavior behavior);
  
      std::optional<BlobDescriptorInfo> exportBlob();
 +    // The row pitch of the image as the driver laid it out.

@@ -7,14 +7,14 @@ the system page size, 16384) and the import/map fails. kPageMaskForBlob is the
 matching host-VA alignment mask used by the blob mapping guard. All uses are
 runtime (size alignment, pointer-alignment checks, comparisons), so switching
 from constexpr 4096 to getpagesize() is safe; <unistd.h> is already included.
-
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index 90e58ae3..c869081a 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -171,8 +171,12 @@
+@@ -171,8 +171,12 @@ static constexpr const char* const kEmulatedInstanceExtensions[] = {
      VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME,
  };
-
+ 
 -static constexpr uint64_t kPageSizeforBlob = 4096;
 -static constexpr uint64_t kPageMaskForBlob = ~(0xfff);
 +// ika: derive the blob page size from the host page size so the SystemBlob/
@@ -23,6 +23,6 @@ diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_gl
 +// causing UDMABUF_CREATE / mapping failures on 16K pages.
 +static const uint64_t kPageSizeforBlob = static_cast<uint64_t>(getpagesize());
 +static const uint64_t kPageMaskForBlob = ~(static_cast<uint64_t>(getpagesize()) - 1);
-
- static std::atomic<uint64_t> sNextHostBlobId{1};
+ 
  static std::atomic<uint64_t> sUniqueShmemId = 0;
+ 

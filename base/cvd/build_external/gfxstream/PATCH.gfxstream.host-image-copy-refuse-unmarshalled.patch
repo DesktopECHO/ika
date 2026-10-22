@@ -1,8 +1,8 @@
 diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
-index 9728139e..97b71a5f 100644
+index 736f1ab8..195b2f3c 100644
 --- a/host/vulkan/vk_decoder.cpp
 +++ b/host/vulkan/vk_decoder.cpp
-@@ -13161,8 +13161,20 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
+@@ -13192,8 +13192,20 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                  }
                  VkResult vkCopyMemoryToImage_VkResult_return = VK_ERROR_OUT_OF_HOST_MEMORY;
                  if (CC_LIKELY(vk)) {
@@ -25,7 +25,7 @@ index 9728139e..97b71a5f 100644
                  }
                  if ((vkCopyMemoryToImage_VkResult_return) == VK_ERROR_DEVICE_LOST)
                      m_state->on_DeviceLost();
-@@ -13208,8 +13220,20 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
+@@ -13239,8 +13251,20 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                  }
                  VkResult vkCopyImageToMemory_VkResult_return = VK_ERROR_OUT_OF_HOST_MEMORY;
                  if (CC_LIKELY(vk)) {
@@ -48,7 +48,7 @@ index 9728139e..97b71a5f 100644
                  }
                  if ((vkCopyImageToMemory_VkResult_return) == VK_ERROR_DEVICE_LOST)
                      m_state->on_DeviceLost();
-@@ -20685,8 +20709,20 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
+@@ -20717,8 +20741,20 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                  }
                  VkResult vkCopyMemoryToImageEXT_VkResult_return = VK_ERROR_OUT_OF_HOST_MEMORY;
                  if (CC_LIKELY(vk)) {
@@ -71,7 +71,7 @@ index 9728139e..97b71a5f 100644
                  }
                  if ((vkCopyMemoryToImageEXT_VkResult_return) == VK_ERROR_DEVICE_LOST)
                      m_state->on_DeviceLost();
-@@ -20732,8 +20768,20 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
+@@ -20764,8 +20800,20 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                  }
                  VkResult vkCopyImageToMemoryEXT_VkResult_return = VK_ERROR_OUT_OF_HOST_MEMORY;
                  if (CC_LIKELY(vk)) {
