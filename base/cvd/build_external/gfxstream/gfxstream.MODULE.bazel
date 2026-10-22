@@ -68,5 +68,12 @@ git_repository(
         # allocations from a cached coherent host type instead of a
         # write-combined one, which is slow for the guest's uploads.
         "@//build_external/gfxstream:PATCH.gfxstream.prefer-host-cached-memory.patch",
+        # A resource's linear transfer buffer is allocated at its first
+        # transfer, not at attach: each guest color buffer used to cost a
+        # full zero-filled host copy (28 MB at 3456x2160) that the Vulkan
+        # path never touches.
+        "@//build_external/gfxstream:PATCH.gfxstream.lazy-linear-transfer-buffer.patch",
+        # Return the heap pages an exited guest app freed to the kernel.
+        "@//build_external/gfxstream:PATCH.gfxstream.trim-heap-after-process-cleanup.patch",
     ],
 )
