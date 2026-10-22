@@ -13,9 +13,8 @@ driver is RADV (the scanout-drm-modifier-export patch widens this to any color
 buffer with an explicit DRM modifier, which is how Apple Silicon gets its
 console), unless --gpu_renderer_features overrides the feature explicitly,
 which is honored as given.
-
 diff --git a/host/features/include/gfxstream/host/features.h b/host/features/include/gfxstream/host/features.h
-index b54911f0..b0ea79de 100644
+index cdfa4e41..88117dfe 100644
 --- a/host/features/include/gfxstream/host/features.h
 +++ b/host/features/include/gfxstream/host/features.h
 @@ -421,6 +421,13 @@ struct FeatureSet {
@@ -33,10 +32,10 @@ index b54911f0..b0ea79de 100644
          "VulkanEnsureCachedCoherentMemoryAvailable",
          "If enabled, ensures that the at least one memory type that is both cached and coherent is "
 diff --git a/host/frame_buffer.cpp b/host/frame_buffer.cpp
-index 0e10e305..03adecef 100644
+index c8ccf583..347c2cba 100644
 --- a/host/frame_buffer.cpp
 +++ b/host/frame_buffer.cpp
-@@ -675,6 +675,9 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
+@@ -692,6 +692,9 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
  
      vk::VkEmulation& getEmulationVk();
      bool hasEmulationVk() const { return m_emulationVk != nullptr; }
@@ -46,7 +45,7 @@ index 0e10e305..03adecef 100644
  
      bool setColorBufferVulkanMode(HandleType colorBufferHandle, uint32_t mode);
      int32_t mapGpaToBufferHandle(uint32_t bufferHandle, uint64_t gpa, uint64_t size);
-@@ -4870,6 +4873,10 @@ bool FrameBuffer::hasEmulationGl() const { return mImpl->hasEmulationGl(); }
+@@ -5062,6 +5065,10 @@ bool FrameBuffer::hasEmulationGl() const { return mImpl->hasEmulationGl(); }
  
  bool FrameBuffer::hasEmulationVk() const { return mImpl->hasEmulationVk(); }
  
@@ -58,10 +57,10 @@ index 0e10e305..03adecef 100644
      return mImpl->setColorBufferVulkanMode(colorBufferHandle, mode);
  }
 diff --git a/host/frame_buffer.h b/host/frame_buffer.h
-index fdfec970..5120dd77 100644
+index 33cb622b..8521f630 100644
 --- a/host/frame_buffer.h
 +++ b/host/frame_buffer.h
-@@ -438,6 +438,8 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
+@@ -440,6 +440,8 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
  
      bool hasEmulationGl() const;
      bool hasEmulationVk() const;
@@ -71,7 +70,7 @@ index fdfec970..5120dd77 100644
      bool setColorBufferVulkanMode(HandleType colorBufferHandle, uint32_t mode);
      int32_t mapGpaToBufferHandle(uint32_t bufferHandle, uint64_t gpa, uint64_t size = 0);
 diff --git a/host/virtio_gpu_frontend.cpp b/host/virtio_gpu_frontend.cpp
-index 3b5eaaf1..9aaa144b 100644
+index 4c5c3e18..9982c1a7 100644
 --- a/host/virtio_gpu_frontend.cpp
 +++ b/host/virtio_gpu_frontend.cpp
 @@ -825,6 +825,18 @@ int VirtioGpuFrontend::getResourceInfo(uint32_t resourceId,
@@ -94,10 +93,10 @@ index 3b5eaaf1..9aaa144b 100644
  }
  
 diff --git a/host/virtio_gpu_gfxstream_renderer.cpp b/host/virtio_gpu_gfxstream_renderer.cpp
-index f5a4d35b..626d2f31 100644
+index 5608760f..019b8e6e 100644
 --- a/host/virtio_gpu_gfxstream_renderer.cpp
 +++ b/host/virtio_gpu_gfxstream_renderer.cpp
-@@ -133,6 +133,10 @@ ParseGfxstreamFeatures(const int rendererFlags,
+@@ -139,6 +139,10 @@ ParseGfxstreamFeatures(const int rendererFlags,
      GFXSTREAM_SET_BOOL_FEATURE_ON_CONDITION(&features, ExternalBlob,
                                         rendererFlags & STREAM_RENDERER_FLAGS_USE_EXTERNAL_BLOB ||
                                             features.VulkanAllocateHostVisibleAsUdmabuf.enabled());
@@ -109,7 +108,7 @@ index f5a4d35b..626d2f31 100644
  
      for (const std::string& rendererFeature : gfxstream::Split(rendererFeatures, ",;")) {
 diff --git a/host/virtio_gpu_resource.h b/host/virtio_gpu_resource.h
-index 5276ffdd..860f9c34 100644
+index c209bd2f..8c5fe19b 100644
 --- a/host/virtio_gpu_resource.h
 +++ b/host/virtio_gpu_resource.h
 @@ -98,6 +98,8 @@ class VirtioGpuResource {
@@ -122,10 +121,10 @@ index 5276ffdd..860f9c34 100644
  
  #ifdef GFXSTREAM_BUILD_WITH_SNAPSHOT_FRONTEND_SUPPORT
 diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operations.cpp
-index bbe0af32..effb13ae 100644
+index 7fd90c69..25547132 100644
 --- a/host/vulkan/vk_common_operations.cpp
 +++ b/host/vulkan/vk_common_operations.cpp
-@@ -1867,6 +1867,10 @@ bool VkEmulation::supportsExternalMemoryImport() const {
+@@ -1861,6 +1861,10 @@ bool VkEmulation::supportsExternalMemoryImport() const {
  
  bool VkEmulation::supportsDmaBuf() const { return mDeviceInfo.supportsDmaBuf; }
  
@@ -137,10 +136,10 @@ index bbe0af32..effb13ae 100644
      return mDeviceInfo.supportsExternalMemoryHostProps;
  }
 diff --git a/host/vulkan/vk_common_operations.h b/host/vulkan/vk_common_operations.h
-index a0daa032..78dd5dcc 100644
+index 0e8a1047..4d9a353d 100644
 --- a/host/vulkan/vk_common_operations.h
 +++ b/host/vulkan/vk_common_operations.h
-@@ -176,6 +176,10 @@ class VkEmulation {
+@@ -174,6 +174,10 @@ class VkEmulation {
      bool supportsExternalMemoryImport() const;
  
      bool supportsDmaBuf() const;

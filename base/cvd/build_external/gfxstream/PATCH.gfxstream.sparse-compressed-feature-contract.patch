@@ -1,6 +1,8 @@
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index cb7280b1..77f629e5 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -1378,6 +1378,12 @@
+@@ -1712,6 +1712,12 @@ class VkDecoderGlobalState::Impl {
                      physicalDevices[i], &queueFamilyPropCount,
                      queueFamilyProperties.data());
  
@@ -13,7 +15,7 @@
                  physdevInfo.queuePropertiesHelper =
                      std::make_unique<EmulatedPhysicalDeviceQueueProperties>(
                          queueFamilyProperties,
-@@ -1401,10 +1407,12 @@
+@@ -1735,10 +1741,12 @@ class VkDecoderGlobalState::Impl {
  
          vk->vkGetPhysicalDeviceFeatures(physicalDevice, pFeatures);
  
@@ -27,7 +29,7 @@
              pFeatures->sparseBinding = VK_FALSE;
              pFeatures->sparseResidencyBuffer = VK_FALSE;
              pFeatures->sparseResidencyImage2D = VK_FALSE;
-@@ -1453,6 +1461,9 @@
+@@ -1787,6 +1795,9 @@ class VkDecoderGlobalState::Impl {
              vk->vkGetPhysicalDeviceFeatures(physicalDevice, &pFeatures->features);
          }
  
@@ -37,7 +39,7 @@
          pFeatures->features.textureCompressionETC2 |= enableEmulatedEtc2();
          pFeatures->features.textureCompressionASTC_LDR |= enableEmulatedAstc();
  
-@@ -1508,7 +1519,7 @@
+@@ -1846,7 +1857,7 @@ class VkDecoderGlobalState::Impl {
              }
          }
  
@@ -46,7 +48,7 @@
              pFeatures->features.sparseBinding = VK_FALSE;
              pFeatures->features.sparseResidencyBuffer = VK_FALSE;
              pFeatures->features.sparseResidencyImage2D = VK_FALSE;
-@@ -2052,6 +2063,8 @@
+@@ -2421,6 +2432,8 @@ class VkDecoderGlobalState::Impl {
          const bool emulateTextureEtc2 = needEmulatedEtc2(physicalDevice, vk);
          const bool emulateTextureAstc = needEmulatedAstc(physicalDevice, vk);
          const bool emulateProtectedMemory = needEmulatedProtectedMemory(physicalDevice, vk);
@@ -55,7 +57,7 @@
          VkPhysicalDeviceFeatures featuresFiltered;
          std::vector<VkPhysicalDeviceFeatures*> featuresToFilter;
  
-@@ -2193,7 +2206,7 @@
+@@ -2558,7 +2571,7 @@ class VkDecoderGlobalState::Impl {
                  feature->robustBufferAccess = VK_TRUE;
              }
  
@@ -64,7 +66,7 @@
                  GFXSTREAM_WARNING("Unsupported sparse binding feature is requested.");
                  return VK_ERROR_FEATURE_NOT_PRESENT;
              }
-@@ -2603,13 +2616,13 @@
+@@ -2970,13 +2983,13 @@ class VkDecoderGlobalState::Impl {
          VkPhysicalDevice boxed_physicalDevice, VkFormat format, VkImageType type,
          VkSampleCountFlagBits samples, VkImageUsageFlags usage, VkImageTiling tiling,
          uint32_t* pPropertyCount, VkSparseImageFormatProperties* pProperties) {
@@ -81,7 +83,7 @@
          return vk->vkGetPhysicalDeviceSparseImageFormatProperties(
              physicalDevice, format, type, samples, usage, tiling, pPropertyCount, pProperties);
      }
-@@ -2619,13 +2632,13 @@
+@@ -2986,13 +2999,13 @@ class VkDecoderGlobalState::Impl {
          VkPhysicalDevice boxed_physicalDevice,
          const VkPhysicalDeviceSparseImageFormatInfo2* pFormatInfo, uint32_t* pPropertyCount,
          VkSparseImageFormatProperties2* pProperties) {
@@ -98,7 +100,7 @@
          return vk->vkGetPhysicalDeviceSparseImageFormatProperties2(physicalDevice, pFormatInfo,
                                                                     pPropertyCount, pProperties);
      }
-@@ -2635,13 +2648,13 @@
+@@ -3002,13 +3015,13 @@ class VkDecoderGlobalState::Impl {
          VkPhysicalDevice boxed_physicalDevice,
          const VkPhysicalDeviceSparseImageFormatInfo2* pFormatInfo, uint32_t* pPropertyCount,
          VkSparseImageFormatProperties2* pProperties) {
@@ -115,7 +117,7 @@
          return vk->vkGetPhysicalDeviceSparseImageFormatProperties2KHR(physicalDevice, pFormatInfo,
                                                                        pPropertyCount, pProperties);
      }
-@@ -10046,6 +10059,24 @@
+@@ -10861,6 +10874,24 @@ class VkDecoderGlobalState::Impl {
          return (m_vkEmulation->getAstcLdrEmulationMode() != AstcEmulationMode::Disabled);
      }
  

@@ -9,10 +9,11 @@ the DRM file is closed.
 VkDecoderGlobalState already has the dependency-aware destruction path used by
 vkDestroyInstance. Run it for every still-tracked instance from Impl's
 destructor, while VkEmulation and its host Vulkan dispatch are still alive.
-
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index a2c862d8..98f95005 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -215,7 +215,7 @@ class VkDecoderGlobalState::Impl {
+@@ -333,7 +333,7 @@ class VkDecoderGlobalState::Impl {
          }
      }
  
@@ -21,11 +22,10 @@ destructor, while VkEmulation and its host Vulkan dispatch are still alive.
  
      // Resets all internal tracking info.
      // Assumes that the heavyweight cleanup operations have already happened.
-@@ -10975,6 +10975,27 @@ class VkDecoderGlobalState::Impl {
-     std::unordered_map<LinearImageCreateInfo, LinearImageProperties, LinearImageCreateInfo::Hash>
+@@ -11791,6 +11791,27 @@ class VkDecoderGlobalState::Impl {
          mLinearImageProperties GUARDED_BY(mMutex);
  };
-+
+ 
 +VkDecoderGlobalState::Impl::~Impl() {
 +    std::vector<VkInstance> instances;
 +    {
@@ -46,6 +46,7 @@ destructor, while VkEmulation and its host Vulkan dispatch are still alive.
 +        vkDestroyInstanceImpl(instance);
 +    }
 +}
- 
++
  VkDecoderGlobalState::VkDecoderGlobalState(VkEmulation* emulation)
      : mImpl(new VkDecoderGlobalState::Impl(emulation)) {}
+ 

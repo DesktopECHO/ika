@@ -9,9 +9,8 @@ guest's copy loop into it took 37% of a render thread's samples, 1.5% once
 cached (google/gfxstream issue 198). Memory that imports a color buffer, a
 buffer or a guest handle, and dedicated allocations, keep their type. The
 caching the VMM maps the memory with follows the chosen type, as before.
-
 diff --git a/host/features/include/gfxstream/host/features.h b/host/features/include/gfxstream/host/features.h
-index 88e41ac67..48645adbe 100644
+index 88117dfe..1adb8730 100644
 --- a/host/features/include/gfxstream/host/features.h
 +++ b/host/features/include/gfxstream/host/features.h
 @@ -438,6 +438,15 @@ struct FeatureSet {
@@ -31,10 +30,10 @@ index 88e41ac67..48645adbe 100644
          "VulkanExternalMemoryMode",
          "A string specifying the ExternalMemoryMode for VkEmulation to use, "
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
-index 5b6a5e8b7..8f2712f54 100644
+index 4e0b9b78..9ec2f452 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -6983,6 +6983,42 @@ class VkDecoderGlobalState::Impl {
+@@ -7122,6 +7122,42 @@ class VkDecoderGlobalState::Impl {
              localAllocInfo.memoryTypeIndex = hostMemoryInfo.index;
              memoryPropertyFlags = hostMemoryInfo.memoryType.propertyFlags;
  

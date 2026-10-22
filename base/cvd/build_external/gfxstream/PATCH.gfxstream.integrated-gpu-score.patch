@@ -1,7 +1,9 @@
 diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operations.cpp
+index be338218..6e8aa901 100644
 --- a/host/vulkan/vk_common_operations.cpp
 +++ b/host/vulkan/vk_common_operations.cpp
-@@ -736,7 +736,7 @@
+@@ -735,7 +735,7 @@ int VkEmulation::getSelectedGpuIndex(
+         // Matches the ordering in VkPhysicalDeviceType
          const uint32_t deviceTypeScoreTable[] = {
              100,   // VK_PHYSICAL_DEVICE_TYPE_OTHER = 0,
 -            1000,  // VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU = 1,
@@ -9,4 +11,3 @@ diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operat
              2000,  // VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU = 2,
              500,   // VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU = 3,
              600,   // VK_PHYSICAL_DEVICE_TYPE_CPU = 4,
-         };

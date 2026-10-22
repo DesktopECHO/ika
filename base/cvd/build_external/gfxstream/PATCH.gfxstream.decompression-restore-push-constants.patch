@@ -23,12 +23,11 @@ Writes are kept in submission order so overlapping updates replay exactly; a
 write is dropped only once a later one covers all of its stages and bytes
 (regardless of layout, since ANGLE pushes the same range with per-program
 layouts), which keeps the list to one entry per range in practice.
-
 diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
-index 1453596..373a4a2 100644
+index 195b2f3c..3b54b6bd 100644
 --- a/host/vulkan/vk_decoder.cpp
 +++ b/host/vulkan/vk_decoder.cpp
-@@ -7094,8 +7094,9 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
+@@ -7123,8 +7123,9 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                          (unsigned long long)size, (unsigned long long)pValues);
                  }
                  if (CC_LIKELY(vk)) {
@@ -41,10 +40,10 @@ index 1453596..373a4a2 100644
                  vkStream->unsetHandleMapping();
                  if (m_snapshotsEnabled) {
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
-index 504d0b4..4de2d34 100644
+index 98f95005..f60aad6e 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -6120,6 +6120,9 @@ class VkDecoderGlobalState::Impl {
+@@ -6423,6 +6423,9 @@ class VkDecoderGlobalState::Impl {
                  vk, commandBuffer, srcStageMask, dstStageMask, srcBarrier, imageBarriers);
          }
  
@@ -54,7 +53,7 @@ index 504d0b4..4de2d34 100644
          if (needRebind && cmdBufferInfo->computePipeline) {
              // Recover pipeline bindings
              // TODO(gregschlom): instead of doing this here again and again after each image we
-@@ -6271,6 +6274,9 @@ class VkDecoderGlobalState::Impl {
+@@ -6574,6 +6577,9 @@ class VkDecoderGlobalState::Impl {
              }
          }
  
@@ -64,7 +63,7 @@ index 504d0b4..4de2d34 100644
          if (needRebind && cmdBufferInfo->computePipeline) {
              vk->vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                                    cmdBufferInfo->computePipeline);
-@@ -9068,6 +9074,49 @@ class VkDecoderGlobalState::Impl {
+@@ -9402,6 +9408,49 @@ class VkDecoderGlobalState::Impl {
          return true;
      }
  
@@ -114,7 +113,7 @@ index 504d0b4..4de2d34 100644
      void on_vkCmdBeginRenderPass(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
                                   VkCommandBuffer boxed_commandBuffer,
                                   const VkRenderPassBeginInfo* pRenderPassBegin,
-@@ -12344,6 +12393,16 @@ void VkDecoderGlobalState::on_vkCmdWaitEvents2(gfxstream::base::BumpPool* pool,
+@@ -12630,6 +12679,16 @@ void VkDecoderGlobalState::on_vkCmdWaitEvents2(gfxstream::base::BumpPool* pool,
                                 pDependencyInfos);
  }
  
@@ -132,10 +131,10 @@ index 504d0b4..4de2d34 100644
                                                    VkSnapshotApiCallHandle apiCallHandle,
                                                    VkCommandBuffer commandBuffer,
 diff --git a/host/vulkan/vk_decoder_global_state.h b/host/vulkan/vk_decoder_global_state.h
-index add118d..24220b4 100644
+index 164c5aaf..e40e79a5 100644
 --- a/host/vulkan/vk_decoder_global_state.h
 +++ b/host/vulkan/vk_decoder_global_state.h
-@@ -805,6 +805,11 @@ class VkDecoderGlobalState {
+@@ -816,6 +816,11 @@ class VkDecoderGlobalState {
      void on_vkDestroyRenderPass(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle apiCallHandle,
                                  VkDevice device, VkRenderPass renderPass,
                                  const VkAllocationCallbacks* pAllocator);
@@ -148,10 +147,10 @@ index add118d..24220b4 100644
                                   VkCommandBuffer commandBuffer,
                                   const VkRenderPassBeginInfo* pRenderPassBegin,
 diff --git a/host/vulkan/vk_decoder_internal_structs.h b/host/vulkan/vk_decoder_internal_structs.h
-index 711d31a..bd1a326 100644
+index 8cd873d3..b1e847c3 100644
 --- a/host/vulkan/vk_decoder_internal_structs.h
 +++ b/host/vulkan/vk_decoder_internal_structs.h
-@@ -615,6 +615,15 @@ struct CommandBufferInfo {
+@@ -619,6 +619,15 @@ struct CommandBufferInfo {
      std::vector<VkDescriptorSet> currentDescriptorSets;
      std::unordered_set<VkDescriptorSet> allDescriptorSets;
      std::vector<uint32_t> dynamicOffsets;
@@ -167,7 +166,7 @@ index 711d31a..bd1a326 100644
      std::unordered_set<HandleType> acquiredColorBuffers;
      std::unordered_set<HandleType> releasedColorBuffers;
      std::unordered_map<HandleType, VkImageLayout> cbLayouts;
-@@ -631,6 +640,7 @@ struct CommandBufferInfo {
+@@ -635,6 +644,7 @@ struct CommandBufferInfo {
          currentDescriptorSets.clear();
          allDescriptorSets.clear();
          dynamicOffsets.clear();
@@ -176,7 +175,7 @@ index 711d31a..bd1a326 100644
          releasedColorBuffers.clear();
          cbLayouts.clear();
 diff --git a/host/vulkan/vk_sub_decoder.cpp b/host/vulkan/vk_sub_decoder.cpp
-index cbd92ba..85d19b2 100644
+index cbd92ba3..85d19b21 100644
 --- a/host/vulkan/vk_sub_decoder.cpp
 +++ b/host/vulkan/vk_sub_decoder.cpp
 @@ -1050,8 +1050,9 @@ size_t subDecode(VulkanMemReadingStream* readStream, VulkanDispatch* vk,

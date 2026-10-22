@@ -9,9 +9,8 @@ multiple of the block size, e.g. 128 for ASTC 6x6 (21.3 blocks), became a
 row length shorter than the 22-block copy width: invalid usage that drivers
 resolve by reading rows at the wrong stride. Round up, as drivers do for
 native block-compressed formats. A zero (tightly packed) value is unchanged.
-
 diff --git a/host/vulkan/emulated_textures/compressed_image_info.cpp b/host/vulkan/emulated_textures/compressed_image_info.cpp
-index add9dd7..cbca0b5 100644
+index add9dd74..cbca0b55 100644
 --- a/host/vulkan/emulated_textures/compressed_image_info.cpp
 +++ b/host/vulkan/emulated_textures/compressed_image_info.cpp
 @@ -540,8 +540,11 @@ VkBufferImageCopy CompressedImageInfo::getBufferImageCopy(
