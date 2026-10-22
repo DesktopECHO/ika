@@ -27,4 +27,6 @@ exports_files([
     "PATCH.gfxstream.scanout-dmabuf-export-feature.patch",
     "PATCH.gfxstream.scanout-drm-modifier-export.patch",
     "PATCH.gfxstream.prefer-host-cached-memory.patch",
+    "PATCH.gfxstream.lazy-linear-transfer-buffer.patch",
+    "PATCH.gfxstream.trim-heap-after-process-cleanup.patch",
 ])
