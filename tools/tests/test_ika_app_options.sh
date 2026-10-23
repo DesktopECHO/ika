@@ -1,6 +1,6 @@
 #!/usr/bin/bash
 
-# App start options ("Ika startup options" on a launcher, ika app --options):
+# App start options ("Startup options" on a launcher, ika app --options):
 # the window ticks the saved options and saves the ticked ones, yad draws it,
 # ~/ika/app-options.ini keeps one section per app, and
 # 'ika app' adds the saved options to those it is given.
@@ -273,7 +273,7 @@ expect_equal "$(<"${CVD_TMP_DIR}/yad-css/density-window.css")" "spinbutton { mar
   "the density's margin"
 expect_contains "${dialog_args}" $'\n--css='"${CVD_TMP_DIR}"$'/yad-css/density-window.css\n' \
   "the density's box is kept narrow"
-expect_contains "${dialog_args}" $'--field=  Fullscreen mode:CHK\nFALSE\n--field=  Pass the keyboard through as a HID device:CHK\nFALSE\n--field=  Pass the mouse through as a HID device:CHK\nFALSE\n--field=  Enable gamepads when attached:CHK\nFALSE\n--field=  Use the keyboard to emulate a gamepad:CHK\nFALSE\n--field=  Touch input: Left-click and drag gets interpreted as tap and swipe:CHK\nTRUE\n--field=<span font_size=\'8pt\'> </span>:LBL\n\n' \
+expect_contains "${dialog_args}" $'--field=  Fullscreen mode:CHK\nFALSE\n--field=  Send the keyboard straight to Android (many games need this):CHK\nFALSE\n--field=  Send the mouse straight to Android (captures the pointer):CHK\nFALSE\n--field=  Use gamepads, including ones plugged in later:CHK\nFALSE\n--field=  Keyboard as a gamepad (keys on the Gamepad Emulation tab):CHK\nFALSE\n--field=  Mouse as touch: clicks tap, drags swipe:CHK\nTRUE\n--field=<span font_size=\'8pt\'> </span>:LBL\n\n' \
   "the options, saved touch ticked, then space above the buttons"
 expect_contains "${dialog_args}" $'--button=Apply settings:2\n--button=        Apply and start        :0\n--button=Cancel:1' \
   "Apply settings, Apply and start and Cancel, in that order"
@@ -358,7 +358,7 @@ for package in com.example.game com.example.app; do
   file="${apps_dir}/ika-${package}.desktop"
   write_app_launcher "${apps_dir}" "Some Label" "${package}" /icons/app.png
   expect_contains "$(<"${file}")" \
-    $'[Desktop Action options]\nName=Ika startup options\nExec=ika app --options '"${package}" \
+    $'[Desktop Action options]\nName=Startup options\nExec=ika app --options '"${package}" \
     "${package}'s launcher offers the start options"
   # GNOME Shell's "New Window" gives way to "Launch app"; the app has one window
   expect_contains "$(<"${file}")" \
@@ -392,11 +392,11 @@ grep -qxF "Actions=new-window;options;app-settings;" "${apps_dir}/ika-com.exampl
 if grep -q -e "Desktop Action controller" -e "Controller mapping" "${apps_dir}/ika-com.example.game.desktop"; then
   fail "the controller mapping action stayed in a game's launcher"
 fi
-for old_name in "Ika start options..." "Ika Startup Options..." "Ika Startup Options"; do
-  sed -i "s/^Name=Ika startup options$/Name=${old_name}/" "${apps_dir}/ika-com.example.app.desktop"
+for old_name in "Ika start options..." "Ika Startup Options..." "Ika Startup Options" "Ika startup options"; do
+  sed -i "s/^Name=Startup options$/Name=${old_name}/" "${apps_dir}/ika-com.example.app.desktop"
   write_app_launcher "${apps_dir}" "Some Label" com.example.app /icons/app.png \
     || fail "a launcher with the start options action named ${old_name} was kept"
-  grep -qxF "Name=Ika startup options" "${apps_dir}/ika-com.example.app.desktop" \
+  grep -qxF "Name=Startup options" "${apps_dir}/ika-com.example.app.desktop" \
     || fail "the start options action named ${old_name} was not renamed"
 done
 for old_name in "Android App Settings..." "Android App Info..." "App Info"; do
@@ -422,7 +422,7 @@ grep -qxF "Name=Launch app" "${apps_dir}/ika-com.example.old.desktop" \
   || fail "an old launcher did not get Launch app"
 expect_equal "$(grep -c '^\[Desktop Action app-settings\]$' "${apps_dir}/ika-com.example.old.desktop")" "1" \
   "an old launcher's settings action is not doubled"
-echo "ok: launchers offer \"Ika startup options\""
+echo "ok: launchers offer \"Startup options\""
 
 # GNOME Shell does not reload a launcher whose actions change in place, so a
 # launcher written before the window existed leaves the applications directory

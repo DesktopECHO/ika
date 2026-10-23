@@ -278,7 +278,7 @@ and dnsmasq serves its addresses.
 ### [keyboard_gamepad]
 
 The keys and settings of the keyboard gamepad, for apps whose start options
-tick **Use the keyboard to emulate a gamepad**. See
+tick **Keyboard as a gamepad**. See
 [Keyboard as a gamepad](USAGE.md#keyboard-as-a-gamepad) for how it plays.
 
 Each control takes one or more key names separated by spaces: SDL's names
@@ -305,9 +305,9 @@ not know are reported in the console log and skipped.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `stick_ramp_ms` | `100` | Milliseconds a stick takes from its center to where a key pushes it, as a thumb does, so that a tap moves it a little and a held key all the way; `0` pushes it at once. A stick comes back at once |
+| `stick_ramp_ms` | `100` | Milliseconds a stick takes from its center to where a key pushes it, as a thumb does, so that a tap moves it a little and a held key all the way; `0` pushes it at once (**Full tilt, ms** in the Gamepad Emulation tab). A stick comes back at once |
 | `walk_percent` | `50` | How far the sticks go, in percent, while `walk` is held |
-| `socd` | `last` | What two opposite directions held together do: `last`, the last pressed counts, or `neutral`, they cancel out, as fighting games expect |
+| `socd` | `last` | What two opposite directions held together do: `last`, the last pressed counts, or `neutral`, they cancel out, as fighting games expect (**Opposite directions** in the Gamepad Emulation tab: **Last pressed wins** or **Cancel out**) |
 | `socd_dpad`, `socd_left_stick`, `socd_right_stick` | (empty) | `socd` for one pad; empty follows `socd` |
 | `mouse_stick` | `off` | The stick the mouse moves: `off`, `right` (the camera in most games) or `left` |
 | `mouse_sensitivity` | `100` | The mouse stick's speed in percent: at 100, the stick is fully pushed at 32 pixels of motion per 8 ms |

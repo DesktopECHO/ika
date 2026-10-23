@@ -100,7 +100,7 @@ form_output() {
       items+=("${KEYBOARD_GAMEPAD_KEYS[${control}]}")
     fi
   done
-  items+=("${1:-100}" "${2:-50}" "${3:-Last}" "${4:-Off}" "${5:-100}")
+  items+=("${1:-100}" "${2:-50}" "${3:-Last pressed wins}" "${4:-Off}" "${5:-100}")
   half=$(( (${#items[@]} + 1) / 2 ))
   for i in "${!items[@]}"; do
     (( i != half )) || output+="|"
@@ -124,9 +124,9 @@ expect_contains "${dialog_args}" $'--columns=2\n' "two columns"
 expect_contains "${dialog_args}" $'\n--align=right\n' "labels right-justified against their fields"
 expect_contains "${dialog_args}" $'\n--css='"${CVD_TMP_DIR}"$'/yad-css/gamepad.css\n' "a smaller font, in lower rows"
 expect_equal "$(<"${CVD_TMP_DIR}/yad-css/gamepad.css")" "${CONTROLLER_MAPPING_FORM_CSS}" "the gamepad's CSS"
-expect_contains "${dialog_args}" $'\n--text=Keys of the keyboard gamepad, one or more per control: as SDL names them (Up, Space, Return,\nLeft_Shift, Keypad_Enter) or the mouse\'s (Mouse_Left, Mouse_Right, Mouse_Middle, Wheel_Up, Wheel_Down)\n \n' \
+expect_contains "${dialog_args}" $'\n--text=One or more keys per control, separated by spaces: Space, Return, Left_Shift,\nKeypad_Enter, Mouse_Left, Mouse_Right, Mouse_Middle, Wheel_Up, Wheel_Down\n \n' \
   "the explanation is the window's text, in two lines, then a blank line"
-[[ "${dialog_args}" != *"--field=Keys of the keyboard gamepad"* ]] \
+[[ "${dialog_args}" != *"--field=One or more keys per control"* ]] \
   || fail "the explanation is a form field again, which widens the window"
 expect_contains "${dialog_args}" $'\n--field=Left stick up:'"${PLAIN}"$'\nW\n' "the form starts with the first control"
 blanks="$(grep -c -x -- '--field= :LBL' <<<"${dialog_args}")"
@@ -138,9 +138,9 @@ expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Mouse sensitivity, %'"$
 expect_contains "${dialog_args}" $'\n--field=Y:'"${PLAIN}"$'\n' "the first column's labels are not indented"
 expect_contains "${dialog_args}" $'--field=Left stick up:'"${PLAIN}"$'\nW\n--field=Left stick down:'"${PLAIN}"$'\nS\n' "the keys, with their labels"
 expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Start:'"${PLAIN}"$'\nReturn Keypad_Enter\n' "a control with two keys"
-expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Guide:'"${PLAIN}"$'\n\n' "a control without a key"
-expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Walk (held: slower):'"${PLAIN}"$'\nTab\n' "the walk key"
-expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Stick ramp, ms (0: at once)'"${GAP}"$':NUM\n100!0..5000!10\n--field='"${INDENT}"$'Walk speed, %'"${GAP}"$':NUM\n50!1..100!5\n--field='"${INDENT}"$'Opposite keys held together'"${GAP}"$':CB\n^Last!Neutral\n--field='"${INDENT}"$'Mouse emulates thumbstick'"${GAP}"$':CB\n^Off!Right stick!Left stick\n--field='"${INDENT}"$'Mouse sensitivity, %'"${GAP}"$':NUM\n100!1..1000!10\n' \
+expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Guide (Home):'"${PLAIN}"$'\n\n' "a control without a key"
+expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Hold to walk'"${PLAIN}"$'\nTab\n' "the walk key"
+expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Full tilt, ms (0\xe2\x80\xaf=\xe2\x80\xafInstant)'"${GAP}"$':NUM\n100!0..5000!10\n--field='"${INDENT}"$'Walk speed, %'"${GAP}"$':NUM\n50!1..100!5\n--field='"${INDENT}"$'Opposite directions'"${GAP}"$':CB\n^Last pressed wins!Cancel out\n--field='"${INDENT}"$'Mouse → Analog stick'"${GAP}"$':CB\n^Off!Right stick!Left stick\n--field='"${INDENT}"$'Mouse sensitivity, %'"${GAP}"$':NUM\n100!1..1000!10\n' \
   "the settings, from ika.ini"
 expect_contains "${dialog_args}" $'--button=Reset to default:4\n--button=Apply settings:2\n--button=        Apply and start        :0\n--button=Cancel:1' \
   "the buttons, in order"
@@ -168,7 +168,7 @@ echo "ok: Apply settings saves the game's mapping"
 # the settings as yad prints them, and starts the game
 save_app_options com.example.game fullscreen gamekb
 : >"${T}/respond"
-DIALOG_OUTPUT="$(form_output a=J "0.000000" "35" Neutral "Left stick" "150.000000")" DIALOG_STATUS=0 edit_controller_mapping com.example.game
+DIALOG_OUTPUT="$(form_output a=J "0.000000" "35" "Cancel out" "Left stick" "150.000000")" DIALOG_STATUS=0 edit_controller_mapping com.example.game
 dialog_args="$(<"${T}/yad.args")"
 expect_contains "${dialog_args}" $'--field=A:'"${PLAIN}"$'\nJ\n' "the game's key is shown"
 expect_contains "$(<"${file}")" $'\nstick_ramp_ms = 0\nwalk_percent = 35\nsocd = neutral\n' "the settings as entered"
@@ -180,8 +180,8 @@ spec="$(keyboard_gamepad_spec com.example.game)"
 expect_contains ",${spec}," ",ramp_ms=0,walk_percent=35,socd=neutral,mouse_stick=left,mouse_sensitivity=150" "the settings reach the spec"
 DIALOG_OUTPUT="$(form_output)" edit_controller_mapping com.example.game
 dialog_args="$(<"${T}/yad.args")"
-expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Opposite keys held together'"${GAP}"$':CB\nLast!^Neutral\n' "neutral is shown as chosen"
-expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Mouse emulates thumbstick'"${GAP}"$':CB\nOff!Right stick!^Left stick\n' "the left stick is shown as the mouse's"
+expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Opposite directions'"${GAP}"$':CB\nLast pressed wins!^Cancel out\n' "neutral is shown as chosen"
+expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Mouse → Analog stick'"${GAP}"$':CB\nOff!Right stick!^Left stick\n' "the left stick is shown as the mouse's"
 echo "ok: Apply and start saves the game's mapping and starts it"
 
 # Cancel leaves the mapping
@@ -218,7 +218,7 @@ expect_equal "$(wc -l <"${T}/yad.calls")" 3 "the window, the confirmation and th
 [[ ! -e "${file}" ]] || fail "Reset to default kept the mapping"
 dialog_args="$(<"${T}/yad.args")"
 expect_contains "${dialog_args}" $'--field=A:'"${PLAIN}"$'\n'"${KEYBOARD_GAMEPAD_KEYS[a]}"$'\n' "the window shows ika.ini's key"
-expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Opposite keys held together'"${GAP}"$':CB\n^Last!Neutral\n' "and ika.ini's settings"
+expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Opposite directions'"${GAP}"$':CB\n^Last pressed wins!Cancel out\n' "and ika.ini's settings"
 expect_equal "$(saved_app_options com.example.game):$(saved_app_dpi com.example.game)" "fullscreen:" "the default start options"
 expect_equal "$(<"${T}/respond")" "Some Game has its default start options and ika.ini's controller mapping again" "the reset is reported"
 
