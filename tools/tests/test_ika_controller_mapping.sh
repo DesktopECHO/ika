@@ -1,7 +1,6 @@
 #!/usr/bin/bash
 
-# The controller mapping window ("Controller mapping..." on a game's launcher,
-# ika app --controller): it shows the keyboard gamepad's keys and settings
+# The controller mapping window (ika app --controller): it shows the keyboard gamepad's keys and settings
 # for the game, from its mapping else from ika.ini, "Apply settings" saves
 # them in ~/ika/apps/PACKAGE/controller.ini and ticks the keyboard as a
 # gamepad in the game's start options, "Apply and start" starts the game too,

@@ -138,16 +138,17 @@ restarted on that display if it was running elsewhere.
 
 Right-click an app in the menu for:
 
-- **Ika Startup Options...**: how the app starts (below).
-- **Android App Settings...**: Android's App info page for the app, alone in
+- **Ika Startup Options**: how the app starts (below).
+- **App Info**: Android's App info page for the app, alone in
   a Settings window, for its permissions, storage, notifications, force stop
   and uninstall. `ika app --info NAME` from a terminal.
-- **Controller mapping...**, on games: the keyboard gamepad's keys for that
-  game (see [Controller mapping per game](#controller-mapping-per-game)).
+
+A game's keyboard gamepad keys are set from a terminal (see
+[Controller mapping per game](#controller-mapping-per-game)).
 
 ### Start options
 
-**Ika Startup Options...** (`ika app --options NAME`) opens a window with a
+**Ika Startup Options** (`ika app --options NAME`) opens a window with a
 checkbox for each way the app can start:
 
 | Option | Effect |
@@ -246,9 +247,8 @@ left_trigger = Left_Shift
 
 ### Controller mapping per game
 
-**Controller mapping...** on a game's menu entry (`ika app --controller NAME`,
-for any app) opens a window with the keyboard gamepad's settings for that
-game: a field per control, with its keys, and the stick ramp, the walk speed,
+`ika app --controller NAME` (for any app) opens a window with the keyboard
+gamepad's settings for that game: a field per control, with its keys, and the stick ramp, the walk speed,
 what opposite keys held together do, which stick the mouse moves, and the
 mouse's sensitivity.
 

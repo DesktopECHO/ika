@@ -318,7 +318,7 @@ buttons and wheel included, and works as usual.
 
 A game can have keys and settings of its own, in
 `~/ika/apps/PACKAGE/controller.ini`, with the same lines; they go over this
-section. **Controller mapping...** on a game's menu entry edits them (see
+section. `ika app --controller NAME` edits them (see
 [Controller mapping per game](USAGE.md#controller-mapping-per-game)), and the
 file can be written by hand for any app.
 
