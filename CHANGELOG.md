@@ -59,8 +59,9 @@
   the stick ramp, the walk speed and the rule for opposite keys. "Apply
   settings" saves them in `~/ika/apps/PACKAGE/controller.ini`, over
   `[keyboard_gamepad]` in ika.ini, and ticks the keyboard as a gamepad in the
-  game's start options; "Apply and start" also starts the game; "Reset to
-  ika.ini" removes the mapping. `ika app --controller NAME` opens it from a
+  game's start options; "Apply and start" also starts the game; "Default
+  mapping", once confirmed, removes the mapping and shows ika.ini's in the
+  window. `ika app --controller NAME` opens it from a
   terminal. A key typed for one control leaves the control it was shown on.
 - The keyboard gamepad's sticks move as a thumb pushes them: a stick takes
   `stick_ramp_ms` (100) from its center to where a key sends it, so a tap

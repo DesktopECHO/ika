@@ -250,13 +250,14 @@ mouse's sensitivity.
 - **Apply settings** saves them in `~/ika/apps/PACKAGE/controller.ini`, and
   ticks **Use the keyboard to emulate a gamepad** in the game's start options.
 - **Apply and start** saves them and starts the game.
-- **Reset to ika.ini** deletes the game's mapping, so the game uses
-  `[keyboard_gamepad]` again; the start option stays ticked.
+- **Default mapping** asks first, then deletes the game's mapping, so the
+  game uses `[keyboard_gamepad]` again, and shows that mapping in the window;
+  the start option stays ticked.
 - **Cancel** leaves everything as it was.
 
 A key typed for one control is taken from the control it was shown on. The
 saved mapping holds every key and setting, so later changes to
-`[keyboard_gamepad]` reach the game only after **Reset to ika.ini**. The
+`[keyboard_gamepad]` reach the game only after **Default mapping**. The
 per-pad `socd_dpad`, `socd_left_stick` and `socd_right_stick` settings are not
 in the window; write them in the file by hand.
 
