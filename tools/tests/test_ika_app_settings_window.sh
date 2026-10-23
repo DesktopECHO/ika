@@ -110,31 +110,46 @@ options_output() {
   printf '%s\n' "${output}|"
 }
 
-# The Gamepad Emulation tab's output: a value per control, ika.ini's unless
-# given as control=keys, then the settings, with the second column's blank
-# row: the tab has no blank row after the first column.
+# The Gamepad Emulation tab's output: a value per field of
+# CONTROLLER_MAPPING_FORM_LAYOUT, ika.ini's keys unless given as
+# control=keys, and the settings as yad prints them; the shorter column ends
+# with the blank rows' empty values that make it as high as the other, and
+# each column with one more, the tab's small blank row.
 mapping_output() {
-  local control i half output=""
-  local -a items=()
+  local entry column=1 value i rows output=""
+  local -a first=()
+  local -a second=()
   local -A given=()
+  local -A settings=([stick_ramp_ms]="100.000000" [walk_percent]="50.000000"
+    [socd]="Last pressed wins" [mouse_stick]="Off" [mouse_sensitivity]="100.000000")
   while [[ $# -gt 0 && "$1" == *=* ]]; do
     given["${1%%=*}"]="${1#*=}"
     shift
   done
-  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
-    if [[ -n "${given[${control}]+set}" ]]; then
-      items+=("${given[${control}]}")
+  for entry in "${CONTROLLER_MAPPING_FORM_LAYOUT[@]}"; do
+    if [[ "${entry}" == "|" ]]; then
+      column=2
+      continue
+    fi
+    if [[ -n "${settings[${entry}]+set}" ]]; then
+      value="${settings[${entry}]}"
+    elif [[ -n "${given[${entry}]+set}" ]]; then
+      value="${given[${entry}]}"
     else
-      items+=("${KEYBOARD_GAMEPAD_KEYS[${control}]}")
+      value="${KEYBOARD_GAMEPAD_KEYS[${entry}]}"
+    fi
+    if (( column == 1 )); then
+      first+=("${value}")
+    else
+      second+=("${value}")
     fi
   done
-  items+=("100.000000" "50.000000" "Last pressed wins" "Off" "100.000000")
-  half=$(( (${#items[@]} + 1) / 2 ))
-  for i in "${!items[@]}"; do
-    output+="${items[i]}|"
+  rows=$(( (${#first[@]} > ${#second[@]} ? ${#first[@]} : ${#second[@]}) + 1 ))
+  for (( i = 0; i < rows; i++ )); do
+    output+="${first[i]:-}|"
   done
-  for (( i = ${#items[@]}; i < 2 * half; i++ )); do
-    output+="|"
+  for (( i = 0; i < rows; i++ )); do
+    output+="${second[i]:-}|"
   done
   printf '%s\n' "${output}"
 }
@@ -186,6 +201,8 @@ expect_contains "${tab1}" $'\n--field=  Fullscreen mode (F11, Cmd+F or Left-Alt+
 expect_contains "${tab2}" $'\n--columns=2\n' "the controls in two columns"
 expect_contains "${tab2}" $'\n--text=One or more keys per control' "the explanation"
 expect_equal "$(grep -c -x -- '--field= :LBL' <<<"${tab2}")" 1 "one blank row, at the end of the second column"
+expect_equal "$(grep -c -x -- "--field=<span font_size='6pt'> </span>:LBL" <<<"${tab2}")" 2 \
+  "and a small one ending each column, above the buttons"
 expect_equal "$(saved_app_options com.example.game)" "fullscreen touch" "Apply settings saves the start options"
 [[ ! -e "${mapping}" ]] || fail "an untouched mapping became the game's own"
 [[ ! -s "${T}/started" ]] || fail "Apply settings started the game"
@@ -234,7 +251,7 @@ expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=Display density, 0=Auto  
 expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=  Fullscreen mode (F11, Cmd+F or Left-Alt+F exits):CHK\nTRUE\n' "and a game's default start options"
 expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=  Mouse as touch: clicks tap, drags swipe:CHK\nFALSE\n' \
   "the edited ones reset"
-expect_contains "$(<"${T}/yad.tab2.args")" $'\n--field=A:'$'\xc2\xa0\xc2\xa0'$':\xc2\xa0\n'"${KEYBOARD_GAMEPAD_KEYS[a]}"$'\n' \
+expect_contains "$(<"${T}/yad.tab2.args")" $'\n--field=\xe2\x80\x87\xe2\x80\x87A'$'\xc2\xa0'$':\xc2\xa0\n'"${KEYBOARD_GAMEPAD_KEYS[a]}"$'\n' \
   "and ika.ini's mapping"
 [[ ! -e "${mapping}" ]] || fail "the default mapping came back as the game's own"
 expect_equal "$(saved_app_options com.example.game):$(saved_app_dpi com.example.game)" "touch:" "the start options and auto density"

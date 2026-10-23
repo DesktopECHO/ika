@@ -72,10 +72,13 @@
   that CSS and the display density's narrow box come in a theme of each
   window's own, Adwaita (or Adwaita dark) and then the CSS; before, neither
   reached the fields there. Its explanation is shorter, without SDL's
-  name; the walk key's field reads "Hold to walk", the Guide button's
-  "Guide (Home)", and the settings "Full tilt, ms (0 = Instant)"
-  (`stick_ramp_ms`), "Opposite directions" ("Last pressed wins" or "Cancel
-  out", `socd = last` or `neutral`) and "Mouse → Analog stick".
+  name; the walk key's field reads "Hold to walk", Guide's "Guide (Home)",
+  and the settings "Full tilt, ms (0 = Instant)" (`stick_ramp_ms`),
+  "Opposite directions" ("Last pressed wins" or "Cancel out", `socd = last`
+  or `neutral`) and "Mouse → Analog stick". Its fields follow the hands:
+  the left half of the pad, the walk key and the sticks' settings in the
+  left column, the right half, Guide and the mouse's settings in the right;
+  ika.ini and the mappings keep their order.
 - The start options read "Fullscreen mode (F11, Cmd+F or Left-Alt+F
   exits)", "Send the keyboard straight to Android (many games need this)",
   "Send the mouse straight to Android (Cmd or Left-Alt releases pointer)",

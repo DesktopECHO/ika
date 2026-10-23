@@ -267,8 +267,16 @@ keys, and **Full tilt, ms** (how long a stick takes to go where a key
 pushes it), the walk speed, what two opposite directions held together do
 (**Opposite directions**: **Last pressed wins**, or **Cancel out**, as
 fighting games expect), which stick the mouse moves, and the mouse's
-sensitivity. **Guide (Home)** is the pad's middle button, which Android
-takes as Home.
+sensitivity. **Guide (Home)** is the pad's middle button: Android passes
+it to the app as `BUTTON_MODE`, and goes Home when the app does not use it,
+as few games do, so it has no key unless you give it one. Back and B go
+back in the same way: Android takes them as its Back when the app does not
+use them, so Backspace and Escape go back too with the keyboard as a
+gamepad. The fields follow the hands: the left column has the left
+half of the pad (the left stick and its click, the D-pad, the left shoulder
+and trigger, Back), then the walk key with the walk speed under it, and the
+sticks' other settings; the right column the right half (A, B, X, Y, the right stick and its click, the right
+shoulder and trigger, Start), then Guide and the mouse's settings.
 
 - **Apply settings** saves an edited mapping in
   `~/ika/apps/PACKAGE/controller.ini`, and ticks **Keyboard as a gamepad** in
