@@ -33,7 +33,7 @@
 
 ### App start options and input
 - Each app's entry in the desktop's app menu has a new right-click action,
-  "Ika Startup Options", which opens a window (yad) with a checkbox for
+  "Ika startup options", which opens a window (yad) with a checkbox for
   each option the app can start with: fullscreen; the keyboard, the mouse
   and gamepads, each passed through to Android as a HID device
   (`--keyboard=uhid`, `--mouse=uhid`, `--gamepad=uhid`); the keyboard as a
@@ -44,6 +44,30 @@
   starts the app with them, and Cancel leaves them as they were;
   `ika app --options NAME` opens the window from a terminal. The packages now depend on yad. A game added
   to the menu starts with fullscreen ticked.
+- The start options include the app window's display density: "Display
+  density, 0=Auto", 0 for the console's, else 96 to 999 DPI (a number under
+  96 is 96), saved as `dpi =` in the app's section of `app-options.ini`.
+  `ika app NAME --dpi=N` opens the window at a density of its own for one
+  start, over the saved one (`--dpi=auto`: the console's).
+- The start options window has two tabs, "Startup Options" and
+  "Gamepad Emulation" (the app's controller mapping), under a title bar,
+  "Startup Options · APP", the same window for games and other apps;
+  `ika app --controller NAME` opens it on the second tab. "Apply settings"
+  saves the mapping when it was edited or the app already has one of its
+  own, no longer a copy of ika.ini's when it was not touched. yad draws the
+  tabs on X11, which a Wayland session has as XWayland; without it, each tab
+  opens as a window of its own. "Reset to default" asks "Apply defaults to
+  APP" (Ok, Cancel), then resets the start options too, a game's to
+  fullscreen at the console's density, besides deleting the app's mapping.
+- On a KDE Plasma Wayland session whose X11 apps scale themselves, the
+  tabbed window takes the desktop's scale: GDK_SCALE and GDK_DPI_SCALE from
+  `[Xwayland] Scale` in kwinrc (1.7 is 2 and 0.85).
+- The Gamepad Emulation tab, and its window of its own, has a smaller font
+  and lower rows, so that the window fits on a screen 768 pixels high. With
+  Debian's yad 0.40, whose `--gtkrc` styles a window but none of its fields,
+  that CSS and the display density's narrow box come in a theme of each
+  window's own, Adwaita (or Adwaita dark) and then the CSS; before, neither
+  reached the fields there.
 - Game mode and game sessions are gone. `--game` is no longer an option of
   `ika start`, `ika restart` or `ika app`, and `ika app` has no `--window`:
   games open in their own windows like any other app, with the input ticked
@@ -89,7 +113,7 @@
   mouse, its buttons and wheel too, is not the gamepad's at all. scrcpy's `--gamekb` takes it as `mouse_stick`, `mouse_sensitivity`
   and the mouse key names, and the Controller mapping window has fields for
   the stick the mouse moves and its sensitivity.
-- "App Settings" is now "App Info", and opens the app's App
+- "App Settings" is now "App info", and opens the app's App
   info page alone in the Settings window: as the window's first page, with
   no Settings home page shown before it and no list of settings beside it.
   scrcpy's `--start-app` takes `info:PACKAGE` for it.
