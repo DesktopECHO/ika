@@ -7,6 +7,7 @@ import android.content.pm.PackageManager;
 import android.content.res.TypedArray;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
+import android.util.TypedValue;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -60,10 +61,13 @@ public class SwitcherActivity extends Activity {
         } else {
             checked = DESKTOP;
         }
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.switcher_title)
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        // The rows are inflated with the dialog's themed context, not the activity's, so that
+        // their text colors match the dialog's background in either theme.
+        RowAdapter adapter = new RowAdapter(builder.getContext(), labels);
+        builder.setTitle(R.string.switcher_title)
                 .setIcon(R.drawable.ic_ika)
-                .setSingleChoiceItems(new RowAdapter(this, labels), checked, (dialog, which) -> {
+                .setSingleChoiceItems(adapter, checked, (dialog, which) -> {
                     if (mAsking) {
                         return;
                     }
@@ -128,8 +132,27 @@ public class SwitcherActivity extends Activity {
                     }
                 })
                 .create();
+        // The title, text and buttons are 22, 18 and 16sp, a step above the dialog's own sizes
+        // (20, 16 and 14sp). The text starts one line below the title.
+        question.create();
+        setTextSize(question.findViewById(com.android.internal.R.id.alertTitle), 22);
+        setTextSize(question.getButton(AlertDialog.BUTTON_POSITIVE), 16);
+        setTextSize(question.getButton(AlertDialog.BUTTON_NEGATIVE), 16);
+        TextView message = question.findViewById(android.R.id.message);
+        if (message != null) {
+            message.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+            message.setPadding(message.getPaddingLeft(),
+                    message.getPaddingTop() + message.getLineHeight(),
+                    message.getPaddingRight(), message.getPaddingBottom());
+        }
         coverList(question, list);
         question.show();
+    }
+
+    private static void setTextSize(TextView view, float sp) {
+        if (view != null) {
+            view.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
+        }
     }
 
     /**
