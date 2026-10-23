@@ -56,6 +56,7 @@ sc_input_manager_init(struct sc_input_manager *im,
     im->next_sequence = 1; // 0 is reserved for SC_SEQUENCE_INVALID
 
     im->disconnected = false;
+    im->kg_took_key = false;
 }
 
 static void
@@ -368,6 +369,11 @@ sc_input_manager_process_text_input(struct sc_input_manager *im,
         return;
     }
 
+    if (im->kg_took_key) {
+        // Ika: the text of a key that drove the keyboard gamepad
+        return;
+    }
+
     uint16_t mod = sc_sdl_mod_normalize(SDL_GetModState());
     if (sc_shortcut_mods_is_shortcut_mod(im->sdl_shortcut_mods, mod)) {
         // A shortcut must never generate text events
@@ -435,6 +441,10 @@ sc_input_manager_process_key(struct sc_input_manager *im,
     bool ctrl = mod & SDL_KMOD_CTRL;
     bool shift = mod & SDL_KMOD_SHIFT;
     bool repeat = event->repeat;
+
+    if (down) {
+        im->kg_took_key = false;
+    }
 
     // Either the modifier includes a shortcut modifier, or the key
     // press/release is a modifier key.
@@ -689,6 +699,9 @@ sc_input_manager_process_key(struct sc_input_manager *im,
     // Ika: a key of the keyboard gamepad drives the gamepad instead of typing
     if (im->kg && control && !paused && !disconnected
             && sc_keyboard_gamepad_handle_key(im->kg, event)) {
+        // Nor does its text event, which follows (letters and Space are sent
+        // as text with --prefer-text)
+        im->kg_took_key = down;
         return;
     }
 

@@ -57,6 +57,10 @@ struct sc_input_manager {
     uint64_t next_sequence; // used for request acknowledgements
 
     bool disconnected;
+
+    // Ika: the last key pressed drove the keyboard gamepad, so the text it
+    // produces is not typed
+    bool kg_took_key;
 };
 
 struct sc_input_manager_params {

@@ -711,6 +711,43 @@ static void test_spec(void) {
     assert(kg.socd[0] == SC_KEYBOARD_GAMEPAD_SOCD_LAST);
 }
 
+// Holding a trigger (X accelerates in a racing game) leaves the D-pad and the
+// sticks free, through their key repeats and the trigger's
+static void test_trigger_held_with_directions(void) {
+    setup(NULL);
+
+    press(SDL_SCANCODE_X);
+    assert(r.axes[SC_GAMEPAD_AXIS_RIGHT_TRIGGER] == INT16_MAX);
+
+    press(SDL_SCANCODE_LEFT);
+    assert(button_down(&r, SC_GAMEPAD_BUTTON_DPAD_LEFT));
+    // The arrow repeats now, as the last key pressed
+    assert(key_event(SDL_SCANCODE_LEFT, true, SDL_KMOD_NONE, true));
+    assert(button_down(&r, SC_GAMEPAD_BUTTON_DPAD_LEFT));
+    release(SDL_SCANCODE_LEFT);
+    assert(!button_down(&r, SC_GAMEPAD_BUTTON_DPAD_LEFT));
+
+    press(SDL_SCANCODE_RIGHT);
+    assert(button_down(&r, SC_GAMEPAD_BUTTON_DPAD_RIGHT));
+    release(SDL_SCANCODE_RIGHT);
+
+    press(SDL_SCANCODE_A);
+    assert(r.axes[SC_GAMEPAD_AXIS_LEFTX] == INT16_MIN);
+    release(SDL_SCANCODE_A);
+    assert(!r.axes[SC_GAMEPAD_AXIS_LEFTX]);
+
+    // Still accelerating, and a repeat of X changes nothing
+    assert(r.axes[SC_GAMEPAD_AXIS_RIGHT_TRIGGER] == INT16_MAX);
+    assert(key_event(SDL_SCANCODE_X, true, SDL_KMOD_NONE, true));
+    press(SDL_SCANCODE_LEFT);
+    assert(button_down(&r, SC_GAMEPAD_BUTTON_DPAD_LEFT));
+    release(SDL_SCANCODE_X);
+    assert(!r.axes[SC_GAMEPAD_AXIS_RIGHT_TRIGGER]);
+    assert(button_down(&r, SC_GAMEPAD_BUTTON_DPAD_LEFT));
+    release(SDL_SCANCODE_LEFT);
+    assert_neutral();
+}
+
 int main(int argc, char *argv[]) {
     (void) argc;
     (void) argv;
@@ -724,6 +761,7 @@ int main(int argc, char *argv[]) {
     test_walk();
     test_control_held_by_any_key();
     test_default_buttons();
+    test_trigger_held_with_directions();
     test_modifiers_and_repeats();
     test_release_all();
     test_mouse_buttons_and_wheel();

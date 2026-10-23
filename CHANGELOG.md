@@ -115,6 +115,10 @@
   the focus: they disconnect when it loses it and connect again when it gets
   it back. A game in the background has no gamepad, and of several windows
   only the focused one's gamepads reach Android.
+- The keyboard gamepad's letter keys and Space no longer also type into the
+  game: with the console's text input (`--prefer-text`) each press, and each
+  repeat of a held key, still reached Android as a typed letter, so holding
+  X to accelerate typed a stream of x.
 
 ### Graphics
 - A host whose GPU gfxstream passes over for llvmpipe, because the GPU's
