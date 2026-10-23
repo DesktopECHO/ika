@@ -11,19 +11,13 @@ Categories=Utility;RemoteAccess;
 Keywords=adb;android;screen;mirroring;display;control;phone;device;
 StartupNotify=false
 StartupWMClass=ika
-Actions=new-window;options;stop;restart;camera;
+Actions=new-window;stop;restart;options;
 
 # The new-window ID makes GNOME and KDE Plasma show this action in place of
 # their own "New Window" / "Open New Window" item.
 [Desktop Action new-window]
 Name=Start Ika
 Exec=env IKA_NOTIFY=true ika start
-
-# Ika's most used settings of ika.ini, and its keyboard gamepad
-[Desktop Action options]
-Name=Startup options
-Exec=env IKA_NOTIFY=true ika options
-Icon=ika-scrcpy
 
 [Desktop Action stop]
 Name=Stop Ika
@@ -33,7 +27,9 @@ Exec=env IKA_NOTIFY=true ika stop
 Name=Restart Ika
 Exec=env IKA_NOTIFY=true ika restart
 
-# restart starts a stopped VM; start refuses --camera while the VM runs.
-[Desktop Action camera]
-Name=Start with Camera
-Exec=env IKA_NOTIFY=true ika restart --camera
+# Ika's most used settings of ika.ini, the camera among them, and its
+# keyboard gamepad
+[Desktop Action options]
+Name=Startup options
+Exec=env IKA_NOTIFY=true ika options
+Icon=ika-scrcpy

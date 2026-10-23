@@ -16,9 +16,9 @@ ika restart    # stop and start again, with new options if given
 ```
 
 The **Ika** icon in your desktop's app menu runs `ika start`. Right-click it
-for **Start Ika**, **Startup options**, **Stop Ika**, **Restart Ika** and
-**Start with Camera** (`ika restart --camera`). Started from the menu, Ika
-reports its progress and errors as desktop notifications.
+for **Start Ika**, **Stop Ika**, **Restart Ika** and **Startup options**.
+Started from the menu, Ika reports its progress and errors as desktop
+notifications.
 
 **Startup options** (`ika options`) opens **Startup Options · Ika**, a window
 like an app's, for the settings of `ika.ini` you change most, in two tabs:
@@ -29,9 +29,10 @@ like an app's, for the settings of `ika.ini` you change most, in two tabs:
   the **GPU mode** (**gfxstream, OpenGL ES only** is `gpu_mode = gfxstream`
   with `gfxstream_vulkan = off`, and **gfxstream** chosen from another mode
   sets `gfxstream_vulkan = auto`), **Hardware video decoding** and **Low-CPU
-  mode**; and
-  **Keyboard as a gamepad in TV mode** (`tv_keyboard_gamepad`). Low-CPU mode
-  runs the display at its own 30 Hz whatever the refresh rate says.
+  mode**; **Start with the camera** (`device` in `[camera]`, see
+  [Camera](#camera)); and **Keyboard as a gamepad in TV mode**
+  (`tv_keyboard_gamepad`). Low-CPU mode runs the display at its own 30 Hz
+  whatever the refresh rate says.
 - **Gamepad Emulation**: the keyboard gamepad of `[keyboard_gamepad]`, as an
   app's tab shows it (see [Controller mapping per game](#controller-mapping-per-game)),
   which TV mode and the apps without a mapping of their own use.
@@ -431,8 +432,11 @@ ika restart --camera=video2   # a given one (or --camera=/dev/video2)
   devices.
 - The camera is attached when Android starts: `ika start --camera` refuses
   while Android runs, so use `ika restart --camera` then. It stays while that
-  Android runs; the next start or restart without `--camera` has none. The
-  **Start with Camera** menu action restarts with the camera.
+  Android runs; the next start or restart without `--camera` has none.
+- **At every start:** tick **Start with the camera** in **Startup options** on
+  Ika's icon (`device = auto` in `[camera]` of `ika.ini`, or `videoN` for one
+  camera). A camera that is missing then is logged and left out, and Ika
+  starts without one; `--no-camera` starts without it once.
 - It needs the `video` group, and while Android streams from it, other
   programs on the host cannot use it.
 - **Anti-flicker:** Ika sets the camera to the mains frequency of the country

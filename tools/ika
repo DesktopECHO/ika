@@ -288,6 +288,12 @@ refresh_rate_hz = 30
 
 # ----------------------------------------------------------------------------
 [camera]
+# The camera passed to Android at every start, as with --camera: off, auto
+# (the first usable camera of the host) or videoN. A camera that is missing,
+# or that Ika cannot open, is left out, and Ika starts without one. --camera
+# and --no-camera win. "Start with the camera" in Ika's Startup options sets
+# it. Environment variable: IKA_CAMERA
+device = off
 # Anti-flicker of the camera passed to Android with --camera: auto, 50, 60 or
 # off. Lights flicker at twice the mains frequency; a camera set for the wrong
 # one shows bands and in dim light can run slower. auto takes the mains
@@ -1085,6 +1091,7 @@ ika_ini_get IKA_LOWCPU_REFRESH_RATE_HZ lowcpu refresh_rate_hz 30 uint
 # Whether the VM runs low-CPU mode, decided at start (resolve_lowcpu_mode).
 LOWCPU_MODE_ACTIVE="false"
 LOWCPU_MODE_REASON=""
+ika_ini_default IKA_CAMERA camera device off
 ika_ini_default IKA_CAMERA_POWER_LINE_FREQUENCY camera power_line_frequency auto
 GFXSTREAM_VULKAN_MODE="${GFXSTREAM_VULKAN}"
 GFXSTREAM_GLES_CONTEXT_TYPES="gfxstream-gles:gfxstream-composer"
@@ -1480,6 +1487,49 @@ detect_host_camera() {
   printf '%s\n' "${virtual}"
 }
 
+# Prints the camera of ika.ini to pass at start (camera.device, IKA_CAMERA),
+# as resolve_camera_device does: none for off, the first usable camera for
+# auto, else the one named. A camera that is missing, or that Ika cannot
+# open, is logged and left out, and so is any while start keeps a running VM,
+# which cannot take one; Ika then starts without a camera.
+ini_camera_device() {
+  local setting="${IKA_CAMERA:-off}"
+  local device
+
+  case "${setting,,}" in
+    ""|off|false|no|0|none)
+      return 1
+      ;;
+  esac
+  if [[ "${START_KEEPS_RUNNING_VM}" == "true" ]] && has_live_cvd_processes; then
+    return 1
+  fi
+  case "${setting,,}" in
+    auto|on|true|yes|1)
+      if ! device="$(detect_host_camera)"; then
+        log "camera.device = ${setting}: no usable camera found; starting without one"
+        return 1
+      fi
+      ;;
+    *)
+      if [[ ! "${setting}" =~ ^(/dev/)?video[0-9]+$ ]]; then
+        log "camera.device must be off, auto or videoN, not '${setting}'; starting without a camera"
+        return 1
+      fi
+      device="/dev/${setting#/dev/}"
+      if [[ ! -c "${device}" ]]; then
+        log "camera ${device} (camera.device) does not exist; starting without a camera"
+        return 1
+      fi
+      ;;
+  esac
+  if [[ ! -r "${device}" || ! -w "${device}" ]]; then
+    log "no access to camera ${device} (camera.device); add your user to the video group and log in again; starting without a camera"
+    return 1
+  fi
+  resolve_camera_device "${device}"
+}
+
 # Prints the host camera for --camera: "auto" (or empty) detects one,
 # "videoN" or "/dev/videoN" names one.
 resolve_camera_device() {
@@ -1747,6 +1797,7 @@ parse_start_options() {
   local -n fullscreen_mode_ref="$1"
   local -n start_args_ref="$2"
   local camera_device=""
+  local no_camera=false
   local hw_video_decode_mode
   shift 2
 
@@ -1820,6 +1871,10 @@ parse_start_options() {
         start_args_ref+=("--media=v4l2_proxy:device=${camera_device}")
         shift
         ;;
+      --no-camera)
+        no_camera=true
+        shift
+        ;;
       --camera_power_line_frequency=*)
         IKA_CAMERA_POWER_LINE_FREQUENCY="$(normalize_camera_power_line_frequency "${1#*=}")"
         shift
@@ -1861,6 +1916,14 @@ parse_start_options() {
         ;;
     esac
   done
+
+  [[ "${no_camera}" != "true" || -z "${camera_device}" ]] \
+    || die "--camera and --no-camera given together"
+  # Without --camera or --no-camera, the camera of ika.ini, if any
+  if [[ -z "${camera_device}" && "${no_camera}" != "true" ]] \
+      && camera_device="$(ini_camera_device)"; then
+    start_args_ref+=("--media=v4l2_proxy:device=${camera_device}")
+  fi
 
   # After all options, as --camera_power_line_frequency may follow --camera
   [[ -z "${camera_device}" ]] || apply_camera_power_line_frequency "${camera_device}"
@@ -1912,9 +1975,9 @@ usage() {
 
 Usage:
 
-  ${SCRIPT_NAME} start [-f|--fullscreen|--no-console] [--lowcpu|--no-lowcpu] [--camera[=videoN]] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] [--setting=arg] ...
+  ${SCRIPT_NAME} start [-f|--fullscreen|--no-console] [--lowcpu|--no-lowcpu] [--camera[=videoN]|--no-camera] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] [--setting=arg] ...
   ${SCRIPT_NAME} stop
-  ${SCRIPT_NAME} restart [-f|--fullscreen|--no-console] [--lowcpu|--no-lowcpu] [--camera[=videoN]] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] ...
+  ${SCRIPT_NAME} restart [-f|--fullscreen|--no-console] [--lowcpu|--no-lowcpu] [--camera[=videoN]|--no-camera] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] ...
   ${SCRIPT_NAME} reset [--data_gb=GB]
   ${SCRIPT_NAME} root
   ${SCRIPT_NAME} gsf
@@ -1990,7 +2053,11 @@ Options:
                          or /dev/videoN picks one. Applies until the next
                          start or restart without it. Needs the video group.
                          start only adds a camera when Android is off; use
-                         restart while it runs.
+                         restart while it runs. camera.device in ika.ini
+                         (off, auto or videoN; "Start with the camera" in
+                         Ika's Startup options) passes one at every start.
+  --no-camera            With start or restart, start without the camera of
+                         camera.device in ika.ini.
   --camera_power_line_frequency=auto|50|60|off
                          With --camera, set the camera's anti-flicker to the
                          mains frequency of the room's lights (default auto:
@@ -2174,8 +2241,10 @@ Settings:
   Startup Options has the vCPUs and the memory, the console's density on the
   desktop and in TV mode and its refresh rate (0 for auto), the GPU mode
   ("gfxstream, OpenGL ES only" is gfxstream with gfxstream_vulkan = off),
-  hardware video decoding, low-CPU mode, and "Keyboard as a gamepad in TV mode"
-  (tv_keyboard_gamepad). Gamepad Emulation has the keyboard gamepad of
+  hardware video decoding, low-CPU mode, "Start with the camera"
+  (camera.device: ticked, the first usable camera, unless ika.ini names one)
+  and "Keyboard as a gamepad in TV mode" (tv_keyboard_gamepad). Gamepad
+  Emulation has the keyboard gamepad of
   [keyboard_gamepad], which TV mode and the apps without a mapping of their
   own use. "Apply settings" writes the settings changed in ika.ini, in place
   of their lines, "Apply and restart" also restarts Ika, so that they apply,
@@ -6925,12 +6994,12 @@ edit_app_settings() {
 # has them.
 IKA_OPTIONS_SETTINGS=(compute.cpus compute.memory_mb console.dpi console.tv_dpi
   console.refresh_rate_hz gpu.gpu_mode gpu.gfxstream_vulkan gpu.hw_video_decode
-  lowcpu.mode console.tv_keyboard_gamepad)
+  lowcpu.mode camera.device console.tv_keyboard_gamepad)
 declare -A IKA_OPTIONS_DEFAULTS=(
   [console.dpi]="auto" [console.tv_dpi]="auto" [console.refresh_rate_hz]="auto"
   [compute.cpus]="auto" [compute.memory_mb]="auto"
   [gpu.gpu_mode]="gfxstream_guest_angle" [gpu.gfxstream_vulkan]="auto"
-  [gpu.hw_video_decode]="auto" [lowcpu.mode]="auto"
+  [gpu.hw_video_decode]="auto" [lowcpu.mode]="auto" [camera.device]="off"
   [console.tv_keyboard_gamepad]="false"
 )
 # The GPU modes the window offers, one of which is two settings:
@@ -6989,6 +7058,13 @@ ika_option_value() {
         1|true|yes|on|enable|enabled) printf 'on\n' ;;
         0|false|no|off|disable|disabled) printf 'off\n' ;;
         *) printf 'auto\n' ;;
+      esac
+      ;;
+    camera.device)
+      case "${value}" in
+        auto|on|true|yes|1) printf 'auto\n' ;;
+        video[0-9]*|/dev/video[0-9]*) printf '%s\n' "${2}" ;;
+        *) printf 'off\n' ;;
       esac
       ;;
     console.tv_keyboard_gamepad)
@@ -7083,7 +7159,8 @@ ika_option_number() {
 # Sets the array named FIELDS_VAR to the Startup Options tab of Ika's window
 # for the associative array named VALUES_VAR, for yad: the vCPUs and the
 # memory, the densities and the refresh rate, 0 for auto; the GPU mode, hardware
-# video decoding and low-CPU mode; then the keyboard as a gamepad in TV mode.
+# video decoding and low-CPU mode; then the camera at every start and the
+# keyboard as a gamepad in TV mode.
 ika_options_form_fields() {
   local -n form_values_ref="$1"
   local -n ika_fields_ref="$2"
@@ -7130,6 +7207,12 @@ ika_options_form_fields() {
     *) ika_fields_ref+=(--field="Low-CPU mode  :CB" "^Auto!On!Off") ;;
   esac
   ika_fields_ref+=(--field="<span font_size='8pt'> </span>:LBL" "")
+  ika_fields_ref+=(--field="  Start with the camera:CHK")
+  if [[ "${form_values_ref[camera.device]}" == "off" ]]; then
+    ika_fields_ref+=(FALSE)
+  else
+    ika_fields_ref+=(TRUE)
+  fi
   ika_fields_ref+=(--field="  Keyboard as a gamepad in TV mode:CHK")
   if [[ "${form_values_ref[console.tv_keyboard_gamepad]}" == "true" ]]; then
     ika_fields_ref+=(TRUE)
@@ -7178,7 +7261,13 @@ read_ika_options_form() {
   fi
   read_values_ref[gpu.hw_video_decode]="$(ika_option_value gpu.hw_video_decode "${words[6]:-}")"
   read_values_ref[lowcpu.mode]="$(ika_option_value lowcpu.mode "${words[7]:-}")"
-  if [[ "${words[9]:-}" == "TRUE" ]]; then
+  # Ticked, the camera is the first usable one, unless ika.ini names one
+  if [[ "${words[9]:-}" != "TRUE" ]]; then
+    read_values_ref[camera.device]="off"
+  elif [[ "${read_values_ref[camera.device]}" == "off" ]]; then
+    read_values_ref[camera.device]="auto"
+  fi
+  if [[ "${words[10]:-}" == "TRUE" ]]; then
     read_values_ref[console.tv_keyboard_gamepad]="true"
   else
     read_values_ref[console.tv_keyboard_gamepad]="false"
@@ -7247,9 +7336,10 @@ reset_ika_settings_to_default() {
 
 # ika options, and "Startup options" on Ika's launcher: Ika's window, as an
 # app's ("Startup Options · Ika", the same size and buttons), with two tabs:
-# Startup Options, the common settings of ika.ini (the densities, the refresh
-# rate, the vCPUs and memory, the GPU mode, hardware video decoding, low-CPU
-# mode, and the keyboard as a gamepad in TV mode), and Gamepad Emulation,
+# Startup Options, the common settings of ika.ini (the vCPUs and memory, the
+# densities, the refresh rate, the GPU mode, hardware video decoding, low-CPU
+# mode, the camera, and the keyboard as a gamepad in TV mode), and Gamepad
+# Emulation,
 # ika.ini's keyboard gamepad, which TV mode and apps without a mapping of
 # their own use. "Apply settings" writes in ika.ini what was changed, "Apply
 # and restart" also restarts Ika, so that they apply, "Reset to default"

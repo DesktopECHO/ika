@@ -40,7 +40,11 @@
   low-CPU mode and "Keyboard as a gamepad in TV mode", and a Gamepad
   Emulation tab with ika.ini's keyboard gamepad. It writes the settings
   changed in ika.ini, each in place of its line (`ika_ini_set`), and
-  "Apply and restart" restarts Ika too.
+  "Apply and restart" restarts Ika too. Its "Start with the camera" replaces
+  the launcher's "Start with Camera" action: `device` in `[camera]` (off,
+  auto or videoN) passes a camera at every start, a missing one left out
+  without stopping Ika, and `--no-camera` starts without it once. Startup
+  options is the launcher's last action.
 - `tv_keyboard_gamepad = true` in `[console]` of ika.ini makes the keyboard a
   gamepad in TV mode too, with the keys of `[keyboard_gamepad]`; the host's
   gamepads are the TV remote either way.
