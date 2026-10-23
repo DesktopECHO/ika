@@ -212,7 +212,7 @@ game_apps = com.example.game
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `gpu_mode` | `gfxstream_guest_angle` | The GPU mode. `--gpu_mode=`. Hosts with only software Vulkan drivers use `gfxstream` whatever this says. See [Graphics](GRAPHICS.md) |
+| `gpu_mode` | `gfxstream_guest_angle` | The GPU mode. `--gpu_mode=`. Hosts with only software Vulkan drivers, or whose GPU gfxstream passes over for llvmpipe, use `gfxstream` whatever this says. See [Graphics](GRAPHICS.md) |
 | `gfxstream_vulkan` | `auto` | Vulkan in the `gfxstream` mode. `--gfxstream_vulkan=`, `GFXSTREAM_VULKAN` |
 | `host_cached_memory` | `off` | Cached host memory for Vulkan uploads. `--host_cached_memory=`, `IKA_HOST_CACHED_MEMORY` |
 | `hw_video_decode` | `auto` | VA-API video decoding. `--hw_video_decode=`, `IKA_HW_VIDEO_DECODE` |

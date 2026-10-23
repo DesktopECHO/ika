@@ -187,7 +187,9 @@ enable_sandbox = false
 [gpu]
 # gfxstream_guest_angle, gfxstream, guest_swiftshader, venus, ...
 # Command-line equivalent: --gpu_mode=. Hosts with only software Vulkan
-# devices use gfxstream whatever is set here. venus (Mesa's Venus Vulkan
+# devices, or whose GPU gfxstream passes over for llvmpipe (an older Vulkan
+# version, such as Haswell's 1.2), use gfxstream whatever is set here, with
+# OpenGL ES only when gfxstream_vulkan is auto. venus (Mesa's Venus Vulkan
 # driver in the guest over virglrenderer) needs a ROM built with Venus
 # support, which Ika's does not have; see GRAPHICS.md.
 gpu_mode = gfxstream_guest_angle
@@ -2080,7 +2082,8 @@ Environment variables:
 
   GFXSTREAM_VULKAN       auto, on, or off. With --gpu_mode=gfxstream, auto
                          disables Vulkan only when the primary host Vulkan
-                         device is llvmpipe; on forces GLES+Vulkan, and off
+                         device is llvmpipe, or when gfxstream would pick
+                         llvmpipe over the GPU; on forces GLES+Vulkan, and off
                          forces GLES-only. The setting is ignored by the
                          Vulkan-only gfxstream_guest_angle mode. On Apple
                          Silicon hosts with 16 KiB pages, gfxstream modes route
@@ -2739,6 +2742,7 @@ vulkan_summary_has_only_software_devices() {
 
 default_gpu_mode_for_start() {
   local summary
+  local passed_over
 
   if user_supplied_flag "gpu_mode" "$@"; then
     start_arg_value "gpu_mode" "${CVD_GPU_DEFAULTS[gpu_mode]}" "$@"
@@ -2748,6 +2752,12 @@ default_gpu_mode_for_start() {
   summary="$(vulkaninfo_summary || true)"
   if [[ -n "${summary}" ]] && vulkan_summary_has_only_software_devices "${summary}"; then
     log "only software Vulkan devices detected; defaulting gpu_mode=gfxstream"
+    printf '%s\n' "gfxstream"
+    return 0
+  fi
+  # gfxstream_guest_angle would render everything on that software device.
+  if passed_over="$(gfxstream_passes_over_hardware_vulkan)"; then
+    log "gfxstream would render with ${passed_over}; defaulting gpu_mode=gfxstream"
     printf '%s\n' "gfxstream"
     return 0
   fi
@@ -2779,6 +2789,107 @@ primary_vulkan_device_is_llvmpipe() {
   [[ -n "${primary_device}" ]] || return 1
 
   grep -Eiq '(^[[:space:]]*(deviceName|driverName|driverID)[[:space:]]*=.*llvmpipe|DRIVER_ID_MESA_LLVMPIPE)' <<<"${primary_device}"
+}
+
+# Succeeds, printing "<software device> (Vulkan x.y.z) over <hardware device>
+# (Vulkan x.y.z)", when gfxstream would render with a software Vulkan device
+# although the summary lists a hardware one. gfxstream takes the first device
+# with the highest score (getSelectedGpuIndex in
+# host/vulkan/vk_common_operations.cpp, with
+# PATCH.gfxstream.integrated-gpu-score.patch): its type (discrete 2000,
+# integrated 1500, CPU 600, virtual 500, other 100) plus
+# major * 5000 + min(minor, 10) * 500 + min(patch, 400) of its Vulkan version.
+# An older GPU loses to llvmpipe that way: a Haswell GPU's Vulkan 1.2 against
+# llvmpipe's 1.4. Fails when a device's type or version is missing.
+vulkan_summary_gfxstream_passes_over_hardware() {
+  local summary="$1"
+
+  awk '
+    BEGIN {
+      type_score["PHYSICAL_DEVICE_TYPE_OTHER"] = 100
+      type_score["PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU"] = 1500
+      type_score["PHYSICAL_DEVICE_TYPE_DISCRETE_GPU"] = 2000
+      type_score["PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU"] = 500
+      type_score["PHYSICAL_DEVICE_TYPE_CPU"] = 600
+    }
+    function finish_device(    ver, v, minor, patch, score) {
+      if (!in_device) {
+        return
+      }
+      if (!(type in type_score) || !match(version, /[0-9]+\.[0-9]+\.[0-9]+/)) {
+        unknown = 1
+        return
+      }
+      ver = substr(version, RSTART, RLENGTH)
+      split(ver, v, ".")
+      minor = v[2] + 0
+      patch = v[3] + 0
+      if (minor > 10) {
+        minor = 10
+      }
+      if (patch > 400) {
+        patch = 400
+      }
+      score = type_score[type] + (v[1] + 0) * 5000 + minor * 500 + patch
+      if (score > best_score) {
+        best_score = score
+        best_software = software_device
+        best = name " (Vulkan " ver ")"
+      }
+      if (!software_device && score > hardware_score) {
+        hardware_score = score
+        hardware = name " (Vulkan " ver ")"
+      }
+    }
+    /^GPU[0-9]+:/ {
+      finish_device()
+      in_device = 1
+      software_device = 0
+      type = ""
+      version = ""
+      name = ""
+      next
+    }
+    in_device {
+      line = $0
+      if (tolower(line) ~ /(llvmpipe|lavapipe|swiftshader|software rasterizer|software device)/) {
+        software_device = 1
+      }
+      if (line ~ /^[ \t]*[A-Za-z]+[ \t]*=/) {
+        key = line
+        sub(/^[ \t]*/, "", key)
+        sub(/[ \t]*=.*/, "", key)
+        value = line
+        sub(/^[^=]*=[ \t]*/, "", value)
+        sub(/[ \t\r]+$/, "", value)
+        if (key == "deviceType") {
+          type = value
+        } else if (key == "apiVersion") {
+          version = value
+        } else if (key == "deviceName") {
+          name = value
+        }
+      }
+    }
+    END {
+      finish_device()
+      if (unknown || hardware == "" || !best_software) {
+        exit 1
+      }
+      print best " over " hardware
+    }
+  ' <<<"${summary}"
+}
+
+# The same for this host, unless ANDROID_EMU_VK_GPU_SELECT tells gfxstream which
+# device to use.
+gfxstream_passes_over_hardware_vulkan() {
+  local summary
+
+  [[ -z "${ANDROID_EMU_VK_GPU_SELECT:-}" ]] || return 1
+  summary="$(vulkaninfo_summary || true)"
+  [[ -n "${summary}" ]] || return 1
+  vulkan_summary_gfxstream_passes_over_hardware "${summary}"
 }
 
 primary_vulkan_device_is_radv() {
@@ -3131,6 +3242,7 @@ append_gfxstream_vulkan_args() {
   local vulkan_decision
   local user_context_types
   local effective_context_types
+  local passed_over
 
   mode="$(normalize_gfxstream_vulkan_mode "${GFXSTREAM_VULKAN_MODE}")"
   GFXSTREAM_VULKAN_MODE="${mode}"
@@ -3187,6 +3299,9 @@ append_gfxstream_vulkan_args() {
     if primary_vulkan_device_is_llvmpipe; then
       selected_mode="off"
       vulkan_decision="gfxstream-vulkan=auto -> off (primary Vulkan device is llvmpipe)"
+    elif passed_over="$(gfxstream_passes_over_hardware_vulkan)"; then
+      selected_mode="off"
+      vulkan_decision="gfxstream-vulkan=auto -> off (gfxstream would render with ${passed_over})"
     elif is_apple_silicon_16k_host; then
       append_apple_16k_gfxstream_vulkan_args args_array
       append_host_cached_memory_args args_array
@@ -4439,10 +4554,12 @@ ensure_chromium() {
     return 0
   fi
 
-  # Without a hardware Vulkan device (none, or llvmpipe first), getchromium
-  # turns off Chromium's Vulkan-only GPU path
+  # Without a hardware Vulkan device (none, llvmpipe first, or one gfxstream
+  # passes over for a software one), getchromium turns off Chromium's
+  # Vulkan-only GPU path
   load_vulkaninfo_summary
-  if [[ -z "${VULKANINFO_SUMMARY}" ]] || primary_vulkan_device_is_llvmpipe; then
+  if [[ -z "${VULKANINFO_SUMMARY}" ]] || primary_vulkan_device_is_llvmpipe \
+      || gfxstream_passes_over_hardware_vulkan >/dev/null; then
     hardware_vulkan=0
   fi
   if ANDROID_SERIAL="${adb_serial}" IKA_CHROMIUM_APK="${CHROMIUM_APK}" \

@@ -112,6 +112,12 @@
   console that is already open keeps the old name until it is restarted.
 
 ### Graphics
+- A host whose GPU gfxstream passes over for llvmpipe, because the GPU's
+  Vulkan is older (a Haswell GPU offers Vulkan 1.2, llvmpipe 1.4), starts in
+  the `gfxstream` mode with OpenGL ES only, rendered on the GPU, instead of
+  rendering everything on the CPU. On a Haswell MacBook Air a 1080p video
+  dropped 1% of its frames instead of 62%. Its Android has no Vulkan, and the
+  ROM's Chromium gets its no-Vulkan settings.
 - `host_cached_memory = on` in the `[gpu]` section of ika.ini
   (`--host_cached_memory=on`, `IKA_HOST_CACHED_MEMORY`) makes gfxstream take
   the guest's host-visible Vulkan memory from a cached coherent host memory
