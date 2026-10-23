@@ -338,7 +338,8 @@ from the TV launcher's apps in TV mode. It lists **Trebuchet**, the desktop's
 launcher, under **Desktop mode**, and each TV launcher installed under **TV
 mode**, **Catapult** (LineageOS's TV launcher) first:
 
-- In TV mode, choosing another TV launcher makes it the Home app at once.
+- In TV mode, choosing another TV launcher makes it the Home app and opens it
+  at once.
 - Changing the mode asks first. **Restart** switches Android's Settings,
   on-screen keyboard, launcher and Google Play Store to the other mode's, and
   restarts Android in it; **Cancel** keeps the mode. If the Play Store cannot

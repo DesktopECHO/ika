@@ -326,6 +326,8 @@
   size and place, with Cancel and Restart at the bottom, instead of a smaller
   dialog with the list showing around it. This is in the ROM's IkaMode app, so
   it arrives with the next ROM build.
+- In TV mode, choosing another TV launcher in Desktop/TV also opens it, so
+  that Home need not be pressed. This is in the ROM's IkaMode app too.
 
 ### Fixes
 - Input events and status feedback no longer sit in crosvm's virtio input

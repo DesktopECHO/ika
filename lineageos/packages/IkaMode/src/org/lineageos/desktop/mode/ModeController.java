@@ -213,6 +213,12 @@ final class ModeController {
                 });
     }
 
+    /** Shows the Home screen, the Home app's: right after setHome(), the one just chosen. */
+    static void goHome(Context context) {
+        context.startActivity(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+    }
+
     /** The Home app, first if there are several. */
     static List<String> homeHolders(Context context) {
         try {

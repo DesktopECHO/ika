@@ -25,8 +25,8 @@ import java.util.List;
 /**
  * Desktop/TV: the desktop's launcher (Trebuchet) under a Desktop mode heading, then each TV
  * launcher, Catapult first, under a TV mode heading. In TV mode, a TV launcher becomes the Home
- * app at once, and the desktop's launcher asks to restart in the desktop. On the desktop, a TV
- * launcher asks to restart in TV mode, with it as the Home app.
+ * app and comes up at once, and the desktop's launcher asks to restart in the desktop. On the
+ * desktop, a TV launcher asks to restart in TV mode, with it as the Home app.
  */
 public class SwitcherActivity extends Activity {
     private static final int DESKTOP_HEADING = 0;
@@ -81,8 +81,13 @@ public class SwitcherActivity extends Activity {
                     }
                     String launcher = launchers.get(which - TV_HEADING - 1);
                     if (tv) {
+                        Context context = getApplicationContext();
                         ModeController.EXECUTOR.execute(() -> ModeController.setHome(
-                                getApplicationContext(), launcher, success -> {}));
+                                context, launcher, success -> {
+                                    if (success) {
+                                        ModeController.goHome(context);
+                                    }
+                                }));
                         dialog.dismiss();
                     } else {
                         ask((AlertDialog) dialog, checked, true, launcher);
