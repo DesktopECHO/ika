@@ -271,6 +271,7 @@ and dnsmasq serves its addresses.
 | --- | --- | --- |
 | `dpi` | `auto` | The density. `--dpi=`, `IKADPI`. See [Display density](#display-density) |
 | `tv_dpi` | `auto` | The density in TV mode. `IKA_TV_DPI` |
+| `tv_keyboard_gamepad` | `false` | `true` makes the keyboard a gamepad in TV mode too, with the keys of `[keyboard_gamepad]`, which no longer type there; the host's gamepads are the remote either way. `IKA_TV_KEYBOARD_GAMEPAD` |
 | `refresh_rate_hz` | `auto` | The display's refresh rate. `IKA_REFRESH_RATE_HZ`. See [Refresh rate](#refresh-rate) |
 | `scrcpy_args` | (empty) | Extra arguments for the console and app windows, for example `--no-clipboard-autosync`. `--ika_scrcpy=`, `IKA_SCRCPY` |
 | `reboot_timeout_sec` | `120` | Seconds the console waits for Android to come back after a reboot. `IKA_SCRCPY_REBOOT_TIMEOUT_SEC` |
