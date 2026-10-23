@@ -1,0 +1,39 @@
+--- a/src/virtio/media/decoder_adapter.rs
++++ b/src/virtio/media/decoder_adapter.rs
+@@ -389,8 +389,21 @@
+                         }
+                     }
+                 }
+-                DecoderEvent::ResetCompleted(_) => todo!(),
+-                DecoderEvent::NotifyError(_) => todo!(),
++                // The adapter never calls `reset()`, so this is not expected. Ignore it rather
++                // than abort the VMM if it arrives anyway.
++                DecoderEvent::ResetCompleted(res) => {
++                    if let Err(err) = res {
++                        base::error!("reset command failed: {:#}", err);
++                    }
++                    None
++                }
++                // The VA-API backend sends this when decoding a buffer fails, and fails that
++                // `decode()` call too, which the guest sees as EIO from VIDIOC_QBUF. Log it and
++                // keep the VMM running: a `todo!()` here aborted crosvm and the whole VM.
++                DecoderEvent::NotifyError(err) => {
++                    base::error!("decoder session {} error: {:#}", self.id, err);
++                    None
++                }
+             }
+         } else {
+             None
+@@ -431,7 +444,11 @@
+ 
+         backend_session
+             .decode(index, timestamp, resource, 0, bytes_used)
+-            .map_err(|_| libc::EIO)
++            .map_err(|e| {
++                // The backend's error says why; the guest only gets EIO.
++                base::error!("decoding input buffer {} failed: {:#}", index, e);
++                libc::EIO
++            })
+     }
+ 
+     fn use_as_output(&mut self, index: u32, backing: &mut Self::BufferStorage) -> IoctlResult<()> {
