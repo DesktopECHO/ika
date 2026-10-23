@@ -1,251 +1,67 @@
 #!/usr/bin/python3
-import subprocess
-import requests
-import zipfile
+# Installs Chromium for Android desktop in the guest, as its default browser,
+# and writes its command-line flags. The APK comes from Chromium's snapshot
+# storage and is kept on disk, so a factory reset reinstalls it.
 import io
 import os
-import re
+import subprocess
 import sys
 import time
+import zipfile
+
+import requests
 
 STORAGE_URL = "https://commondatastorage.googleapis.com/chromium-browser-snapshots"
-# The browser APK (~0.4 GB) is kept on disk, so a factory reset reinstalls it.
 CHROMIUM_APK = os.environ.get("IKA_CHROMIUM_APK") or os.path.expanduser("~/ika/apps/Chromium.apk")
-DOWNLOAD_CHUNK_BYTES = 1024 * 1024
-DOWNLOAD_PROGRESS_DOT_PERCENT = 20
-DOWNLOAD_PROGRESS_UNKNOWN_CHUNKS = 2
-ARCH_DETECT_ATTEMPTS = 10
-ARCH_DETECT_RETRY_SECONDS = 0.5
-INSTALLED_CHECK_ATTEMPTS = 10
-INSTALLED_CHECK_RETRY_SECONDS = 0.5
 CHROME_PACKAGE = "org.chromium.chrome"
-CHROME_COMMAND_LINE_FILES = (
-    "/data/local/chrome-command-line",
-    "/data/local/tmp/chrome-command-line",
-)
+# The snapshot's browser APKs, best first: the unbranded one avoids
+# ChromePublic's Google account first-run path.
+BROWSER_APKS = ("Chromium.apk", "ChromePublic.apk", "MonochromePublic.apk")
+# On a user build, Chromium reads it as the debug app
+CHROME_COMMAND_LINE_FILE = "/data/local/tmp/chrome-command-line"
 # Skips Chromium's first-run screens.
 CHROMIUM_FLAGS = "_ --disable-fre"
-# Without hardware Vulkan, Android-desktop Chromium has no OpenGL fallback unless
+# Without hardware Vulkan (IKA_HARDWARE_VULKAN=0, from ika's own vulkaninfo
+# probe), Android-desktop Chromium has no OpenGL fallback unless
 # SkipVulkanBlocklist is off, and its GPU process aborts at startup.
 NO_HARDWARE_VULKAN_CHROMIUM_FLAGS = (
     " --disable-features=SkipVulkanBlocklist,DefaultANGLEVulkan,VulkanFromANGLE,SkiaGraphite"
 )
-LLVMPIPE_DRIVER_RE = re.compile(r"^\s*driverName\s*=\s*llvmpipe\b", re.MULTILINE)
-VULKANINFO_TIMEOUT_SECONDS = 30
-BROWSER_APK_PRIORITY = (
-    "Chromium.apk",
-    "ChromePublic.apk",
-    "MonochromePublic.apk",
-)
-BROWSER_APK_NAME_MARKERS = ("Chromium", "Chrome", "Monochrome")
-EXCLUDED_APK_NAME_MARKERS = ("ContentShell", "Test", "Instrumentation", "WebView")
-STOCK_BROWSER_PACKAGES = (
-    "org.lineageos.jelly",
-    "com.android.browser",
-    "org.chromium.content_shell_apk",
-    "org.chromium.webview_shell",
-)
-CHROMIUM_RELAUNCH_CYCLES = 1
-CHROMIUM_RESUMED_CHECK_ATTEMPTS = 60
-CHROMIUM_RESUMED_CHECK_RETRY_SECONDS = 0.5
-CHROMIUM_SETTLE_SECONDS = 3
+CHUNK_BYTES = 1024 * 1024
 
 # Always use the cuttlefish-bundled adb shipped next to this script.
 ADB_BIN = os.path.join(os.path.dirname(os.path.realpath(__file__)), "adb")
 
-def _adb(args, check):
-    try:
-        return subprocess.run([ADB_BIN] + args, capture_output=True, text=True, check=check)
-    except FileNotFoundError:
-        print(f"!!! Error: bundled adb not found at '{ADB_BIN}'.")
-        sys.exit(1)
 
-def run_adb(args):
-    try:
-        return _adb(args, check=True).stdout.strip()
-    except subprocess.CalledProcessError as e:
-        print(f"!!! ADB Error: {e.stderr}")
-        sys.exit(1)
+def adb(*args, check=False):
+    result = subprocess.run([ADB_BIN, *args], capture_output=True, text=True)
+    if check and result.returncode != 0:
+        sys.exit(f"!!! ADB Error: {result.stderr.strip()}")
+    return result
 
-def run_adb_best_effort(args):
-    _adb(args, check=False)
 
-def run_adb_optional(args):
-    return _adb(args, check=False)
-
-def poll_until(predicate, attempts, interval_seconds):
-    for attempt in range(attempts):
-        if predicate():
+def chromium_installed():
+    # Retry only while the package service is not up yet; once it answers,
+    # "not installed" is final.
+    for _ in range(10):
+        result = adb("shell", "pm", "path", CHROME_PACKAGE)
+        if result.returncode == 0 and result.stdout.strip():
             return True
-        if attempt < attempts - 1:
-            time.sleep(interval_seconds)
+        if "Can't find service" not in result.stderr + result.stdout:
+            return False
+        time.sleep(0.5)
     return False
 
-def set_chromium_default_browser():
-    verify_chromium_installed()
-    for package_name in STOCK_BROWSER_PACKAGES:
-        run_adb_best_effort(
-            [
-                "shell",
-                "cmd",
-                "role",
-                "remove-role-holder",
-                "--user",
-                "0",
-                "android.app.role.BROWSER",
-                package_name,
-                "0",
-            ]
-        )
-    run_adb(
-        [
-            "shell",
-            "cmd",
-            "role",
-            "add-role-holder",
-            "--user",
-            "0",
-            "android.app.role.BROWSER",
-            CHROME_PACKAGE,
-            "0",
-        ]
-    )
-
-def disable_stock_browsers():
-    for package_name in STOCK_BROWSER_PACKAGES:
-        run_adb_best_effort(["shell", "pm", "disable-user", "--user", "0", package_name])
-
-def verify_chromium_installed():
-    result = run_adb_optional(["shell", "pm", "path", CHROME_PACKAGE])
-    if result.returncode == 0 and result.stdout.strip():
-        return
-
-    print(f"!!! Error: {CHROME_PACKAGE} was not installed by the selected APK.")
-    sys.exit(1)
-
-def chromium_installed(wait=False):
-    # With wait, retry only while the package service is unavailable; once it
-    # answers, "not installed" is final.
-    answer = None
-
-    def answered():
-        nonlocal answer
-        result = run_adb_optional(["shell", "pm", "path", CHROME_PACKAGE])
-        if result.returncode == 0 and result.stdout.strip():
-            answer = True
-        elif "Can't find service" not in result.stderr + result.stdout:
-            answer = False
-        return answer is not None
-
-    attempts = INSTALLED_CHECK_ATTEMPTS if wait else 1
-    poll_until(answered, attempts, INSTALLED_CHECK_RETRY_SECONDS)
-    return bool(answer)
-
-def is_browser_candidate(apk):
-    apk_name = os.path.basename(apk)
-    if any(marker in apk_name for marker in EXCLUDED_APK_NAME_MARKERS):
-        return False
-    return any(marker in apk_name for marker in BROWSER_APK_NAME_MARKERS)
-
-def launch_chromium():
-    run_adb(["shell", "monkey", "-p", CHROME_PACKAGE, "-c", "android.intent.category.LAUNCHER", "1"])
-
-def close_chromium():
-    run_adb_best_effort(["shell", "am", "force-stop", CHROME_PACKAGE])
-
-def chromium_resumed():
-    result = run_adb_optional(["shell", "dumpsys", "activity", "activities"])
-    # The foreground activity is reported as (m|top)ResumedActivity across
-    # Android versions; the negative lookbehind skips stale mLastResumedActivity.
-    pattern = r"(?<!Last)ResumedActivity[:=].*" + re.escape(CHROME_PACKAGE)
-    return result.returncode == 0 and re.search(pattern, result.stdout) is not None
-
-def relaunch_chromium_cycles():
-    close_chromium()
-    for _ in range(CHROMIUM_RELAUNCH_CYCLES):
-        launch_chromium()
-        poll_until(chromium_resumed, CHROMIUM_RESUMED_CHECK_ATTEMPTS, CHROMIUM_RESUMED_CHECK_RETRY_SECONDS)
-        # Resuming only means it foregrounded; dwell so Chromium actually
-        # writes its first-run state before we stop it.
-        time.sleep(CHROMIUM_SETTLE_SECONDS)
-        close_chromium()
-
-def sync_device_storage():
-    run_adb(["shell", "sync"])
-
-def chromium_snapshot_prefix_for_abi(abi):
-    if "arm64" in abi:
-        return "AndroidDesktop_arm64"
-    if "x86_64" in abi:
-        return "AndroidDesktop_x64"
-    return None
-
-def detect_prefix():
-    abi = ""
-    last_error = ""
-    prefix = None
-
-    for attempt in range(ARCH_DETECT_ATTEMPTS):
-        result = run_adb_optional(["shell", "getprop", "ro.product.cpu.abi"])
-        if result.returncode == 0:
-            abi = result.stdout.strip()
-            prefix = chromium_snapshot_prefix_for_abi(abi)
-            if prefix:
-                break
-        else:
-            last_error = result.stderr.strip() or result.stdout.strip()
-
-        if attempt < ARCH_DETECT_ATTEMPTS - 1:
-            time.sleep(ARCH_DETECT_RETRY_SECONDS)
-
-    if not prefix:
-        print(f"!!! Error: Could not detect supported device architecture after {ARCH_DETECT_ATTEMPTS} attempts.")
-        if abi:
-            print(f"Last ABI: {abi}")
-        elif last_error:
-            print(f"Last error: {last_error}")
-        sys.exit(1)
-
-    return prefix
-
-def fetch_latest_revision(prefix):
-    r = requests.get(f"{STORAGE_URL}/{prefix}/LAST_CHANGE")
-    r.raise_for_status()
-    revision = r.text.strip()
-
-    return revision
-
-def has_hardware_vulkan_device():
-    # Probe without a display so SSH launches with a stale DISPLAY still work.
-    env = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISPLAY")}
-    try:
-        summary = subprocess.run(
-            ["vulkaninfo", "--summary"],
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=VULKANINFO_TIMEOUT_SECONDS,
-        ).stdout
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-
-    if not summary.strip():
-        return False
-
-    # Only the first device (GPU0, "GPUn:" plus indented properties) decides.
-    first_device = re.search(r"^GPU\d+:\n(?:[ \t].*\n?)*", summary, flags=re.MULTILINE)
-    return not LLVMPIPE_DRIVER_RE.search(first_device.group(0) if first_device else summary)
 
 def write_chromium_flags():
     flags = CHROMIUM_FLAGS
-    if not has_hardware_vulkan_device():
+    if os.environ.get("IKA_HARDWARE_VULKAN") == "0":
         print("No hardware Vulkan device found; disabling Chromium's Vulkan-only GPU path.")
         flags += NO_HARDWARE_VULKAN_CHROMIUM_FLAGS
-    for path in CHROME_COMMAND_LINE_FILES:
-        run_adb_best_effort(["shell", f"echo '{flags}' > {path} && chmod 644 {path}"])
-    # On user builds Chromium reads /data/local/tmp/chrome-command-line only as
-    # the debug app.
-    run_adb_best_effort(["shell", "am", "set-debug-app", "--persistent", CHROME_PACKAGE])
+    path = CHROME_COMMAND_LINE_FILE
+    adb("shell", f"echo '{flags}' > {path} && chmod 644 {path}", check=True)
+    adb("shell", "am", "set-debug-app", "--persistent", CHROME_PACKAGE, check=True)
+
 
 class HttpRangeReader(io.RawIOBase):
     """Seekable read-only view of a remote file, fetched with HTTP Range requests.
@@ -264,9 +80,7 @@ class HttpRangeReader(io.RawIOBase):
         self._size = int(response.headers["content-length"])
         self._pos = 0
         self._response = None
-        self._chunks = None
         self._buffer = b""
-        self._stream_pos = None
 
     def readable(self):
         return True
@@ -278,47 +92,36 @@ class HttpRangeReader(io.RawIOBase):
         return self._pos
 
     def seek(self, offset, whence=io.SEEK_SET):
-        if whence == io.SEEK_SET:
-            self._pos = offset
-        elif whence == io.SEEK_CUR:
-            self._pos += offset
-        elif whence == io.SEEK_END:
-            self._pos = self._size + offset
-        else:
-            raise ValueError(f"invalid whence {whence}")
+        base = {io.SEEK_SET: 0, io.SEEK_CUR: self._pos, io.SEEK_END: self._size}[whence]
+        if base + offset != self._pos:
+            # A new position needs a new request
+            self._close_stream()
+        self._pos = base + offset
         return self._pos
 
     def _close_stream(self):
         if self._response is not None:
             self._response.close()
         self._response = None
-        self._chunks = None
         self._buffer = b""
-        self._stream_pos = None
 
     def readinto(self, buffer):
         if self._pos >= self._size:
             return 0
-        if self._stream_pos != self._pos:
-            self._close_stream()
+        if self._response is None:
             self._response = self._session.get(
-                self._url,
-                headers={"Range": f"bytes={self._pos}-"},
-                stream=True,
-            )
+                self._url, headers={"Range": f"bytes={self._pos}-"}, stream=True)
             self._response.raise_for_status()
-            self._chunks = self._response.iter_content(chunk_size=DOWNLOAD_CHUNK_BYTES)
-            self._stream_pos = self._pos
+            self._chunks = self._response.iter_content(chunk_size=CHUNK_BYTES)
         while not self._buffer:
-            self._buffer = next(self._chunks, b"")
-            if not self._buffer:
+            self._buffer = next(self._chunks, None)
+            if self._buffer is None:
                 self._close_stream()
                 return 0
         count = min(len(buffer), len(self._buffer))
         buffer[:count] = self._buffer[:count]
         self._buffer = self._buffer[count:]
         self._pos += count
-        self._stream_pos = self._pos
         return count
 
     def close(self):
@@ -326,87 +129,59 @@ class HttpRangeReader(io.RawIOBase):
         self._session.close()
         super().close()
 
-def select_browser_apk(names):
-    apks = [name for name in names if name.endswith(".apk")]
-    # ContentShell is an APK, but it is not a browser role candidate.
-    candidates = [apk for apk in apks if is_browser_candidate(apk)]
-    # Prefer the unbranded APK, which avoids ChromePublic's Google account
-    # first-run path when the snapshot includes both APKs.
-    for preferred_apk in BROWSER_APK_PRIORITY:
-        for apk in candidates:
-            if os.path.basename(apk) == preferred_apk:
-                return apk
-    if candidates:
-        return candidates[0]
-    print("!!! Error: Could not find the correct browser APK in the package.")
-    print(f"Found files: {apks}")
-    sys.exit(1)
 
-def copy_with_progress(source, apk_path, total_bytes):
-    partial_apk = f"{apk_path}.part"
-    next_progress_percent = DOWNLOAD_PROGRESS_DOT_PERCENT
-    copied_bytes = 0
-    with open(partial_apk, "wb") as output:
-        while chunk := source.read(DOWNLOAD_CHUNK_BYTES):
-            output.write(chunk)
-            copied_bytes += len(chunk)
-            progress_percent = copied_bytes * 100 // max(total_bytes, 1)
-            while progress_percent >= next_progress_percent:
-                sys.stdout.write(".")
-                sys.stdout.flush()
-                next_progress_percent += DOWNLOAD_PROGRESS_DOT_PERCENT
-    # Reading the member to its end checks its CRC, so a complete file is good.
-    os.replace(partial_apk, apk_path)
+def download_browser_apk():
+    abi = adb("shell", "getprop", "ro.product.cpu.abi", check=True).stdout.strip()
+    if "arm64" in abi:
+        prefix = "AndroidDesktop_arm64"
+    elif "x86_64" in abi:
+        prefix = "AndroidDesktop_x64"
+    else:
+        sys.exit(f"!!! Error: unsupported device architecture '{abi}'.")
+    revision = requests.get(f"{STORAGE_URL}/{prefix}/LAST_CHANGE")
+    revision.raise_for_status()
 
-def extract_browser_apk(snapshot_zip):
-    member = select_browser_apk(snapshot_zip.namelist())
-    with snapshot_zip.open(member) as source:
-        copy_with_progress(source, CHROMIUM_APK, snapshot_zip.getinfo(member).file_size)
-    print(" OK")
-
-def download_browser_apk(prefix, revision):
     # Fetch only the browser APK out of the snapshot zip: the zip also carries
     # WebView and ContentShell, more than half of its size.
-    download_url = f"{STORAGE_URL}/{prefix}/{revision}/chrome-android-desktop.zip"
+    url = f"{STORAGE_URL}/{prefix}/{revision.text.strip()}/chrome-android-desktop.zip"
     sys.stdout.write("Downloading Chromium for Android desktop")
     sys.stdout.flush()
-    with HttpRangeReader(download_url) as remote:
-        reader = io.BufferedReader(remote, buffer_size=DOWNLOAD_CHUNK_BYTES)
-        with zipfile.ZipFile(reader) as snapshot_zip:
-            extract_browser_apk(snapshot_zip)
-
-def browser_apk(prefix):
-    # An APK only gets its final name once it is complete and its CRC checked.
-    if not zipfile.is_zipfile(CHROMIUM_APK):
+    with zipfile.ZipFile(io.BufferedReader(HttpRangeReader(url), CHUNK_BYTES)) as snapshot:
+        names = {os.path.basename(name): name for name in snapshot.namelist()}
+        member = next((names[apk] for apk in BROWSER_APKS if apk in names), None)
+        if member is None:
+            sys.exit(f"!!! Error: no browser APK in the snapshot: {sorted(names)}")
+        # The APK only gets its final name once it is complete: reading the
+        # member to its end checks its CRC.
         os.makedirs(os.path.dirname(CHROMIUM_APK), exist_ok=True)
-        download_browser_apk(prefix, fetch_latest_revision(prefix))
-    return CHROMIUM_APK
+        size, done, dots = snapshot.getinfo(member).file_size, 0, 0
+        with snapshot.open(member) as source, open(f"{CHROMIUM_APK}.part", "wb") as output:
+            while chunk := source.read(CHUNK_BYTES):
+                output.write(chunk)
+                done += len(chunk)
+                # A dot every 20%
+                while dots < done * 5 // max(size, 1):
+                    dots += 1
+                    sys.stdout.write(".")
+                    sys.stdout.flush()
+        os.replace(f"{CHROMIUM_APK}.part", CHROMIUM_APK)
+    print(" OK")
 
+
+# Errors exit with a status other than 0 (an exception with its traceback),
+# which ika reports, and it runs getchromium again on the next start
 def main():
-    try:
-        if chromium_installed(wait=True):
-            write_chromium_flags()
-            return
-
-        target_apk = browser_apk(detect_prefix())
-
+    if not chromium_installed():
+        if not zipfile.is_zipfile(CHROMIUM_APK):
+            download_browser_apk()
         # -r: replace, -d: allow downgrade, -g: grant all permissions
-        install_output = run_adb(["install", "-r", "-d", "-g", target_apk])
-        install_lines = install_output.splitlines()
-        if not (install_lines and install_lines[-1] == "Success"):
-            if install_output:
-                print(install_output)
-        verify_chromium_installed()
-        set_chromium_default_browser()
-        disable_stock_browsers()
-        write_chromium_flags()
-        print("Finalizing setup...")
-        relaunch_chromium_cycles()
-        sync_device_storage()
+        adb("install", "-r", "-d", "-g", CHROMIUM_APK, check=True)
+        # Chromium is the browser (the ROM has no other; Jelly is left out),
+        # and this fails if it is not installed
+        adb("shell", "cmd", "role", "add-role-holder", "--user", "0",
+            "android.app.role.BROWSER", CHROME_PACKAGE, "0", check=True)
+    write_chromium_flags()
 
-    except Exception as e:
-        print(f"\n!!! An unexpected error occurred: {e}")
-        return 1
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -219,8 +219,8 @@ unlock_and_wipe() {
   "${ika}" stop
   rm -f "${CVD_INSTANCE_DIR}/overlay.img" "${CHROMIUM_INSTALL_STAMP}"
   log "starting the wiped VM..."
-  # Without the stamp, this start installs Chromium again. getchromium cannot
-  # finish with the console open, so main opens the console at the end.
+  # Without the stamp, this start installs Chromium again; main opens the
+  # console at the end.
   start_ika --no-console
   wait_for_boot
 }
