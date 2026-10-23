@@ -4425,9 +4425,10 @@ wait_for_boot() {
 
 # Installs Chromium until it has succeeded once for this VM. 'ika reset'
 # removes the stamp, so a reset VM gets it again; one removed by the user stays
-# removed. Runs before the console opens: getchromium drives the guest UI.
+# removed.
 ensure_chromium() {
   local adb_serial="$1"
+  local hardware_vulkan=1
 
   if [[ -e "${CHROMIUM_INSTALL_STAMP}" ]]; then
     return 0
@@ -4438,7 +4439,14 @@ ensure_chromium() {
     return 0
   fi
 
+  # Without a hardware Vulkan device (none, or llvmpipe first), getchromium
+  # turns off Chromium's Vulkan-only GPU path
+  load_vulkaninfo_summary
+  if [[ -z "${VULKANINFO_SUMMARY}" ]] || primary_vulkan_device_is_llvmpipe; then
+    hardware_vulkan=0
+  fi
   if ANDROID_SERIAL="${adb_serial}" IKA_CHROMIUM_APK="${CHROMIUM_APK}" \
+      IKA_HARDWARE_VULKAN="${hardware_vulkan}" \
       "${PACKAGED_GETCHROMIUM_BIN}" >&3 2>&3; then
     mkdir -p "$(dirname "${CHROMIUM_INSTALL_STAMP}")"
     : > "${CHROMIUM_INSTALL_STAMP}"

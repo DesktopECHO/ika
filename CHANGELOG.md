@@ -225,6 +225,10 @@
 - `ika start` keeps the results of its host probes (GPU detection, the
   kernel config, image signing, vulkaninfo) between launches, which saves
   about 2 s per start on a 2011 MacBook Pro.
+- Installing Chromium on a new or reset VM no longer opens it: getchromium
+  started Chromium for a few seconds, then stopped it. It also takes
+  `ika start`'s vulkaninfo result instead of running vulkaninfo again, and is
+  half as long.
 - crosvm asks the host to back guest memory with transparent huge pages,
   which upstream measured as an 11% faster cold boot. It takes effect where
   `/sys/kernel/mm/transparent_hugepage/shmem_enabled` is `advise`,
