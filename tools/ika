@@ -182,6 +182,11 @@ ika_ini_apply_map() {
   for key in "${!_ika_map[@]}"; do
     ika_ini_get value "${section}" "${key}" "${_ika_map[${key}]}"
     case "${section}.${key}" in
+      gpu.gpu_mode)
+        # "auto" keeps the built-in mode, which start replaces on a host
+        # whose GPU gfxstream cannot use.
+        [[ "${value,,}" != "auto" ]] || continue
+        ;;
       compute.cpus|compute.memory_mb)
         # "auto" keeps the value calculated from the host.
         if [[ "${value}" == "auto" ]]; then
@@ -240,14 +245,15 @@ enable_sandbox = false
 
 # ----------------------------------------------------------------------------
 [gpu]
-# gfxstream_guest_angle, gfxstream, guest_swiftshader, venus, ...
-# Command-line equivalent: --gpu_mode=. Hosts with only software Vulkan
+# auto, gfxstream_guest_angle, gfxstream, guest_swiftshader, venus, ...
+# auto is gfxstream_guest_angle, except on a host with only software Vulkan
 # devices, or whose GPU gfxstream passes over for llvmpipe (an older Vulkan
-# version, such as Haswell's 1.2), use gfxstream whatever is set here, with
-# OpenGL ES only when gfxstream_vulkan is auto. venus (Mesa's Venus Vulkan
-# driver in the guest over virglrenderer) needs a ROM built with Venus
+# version, such as Haswell's 1.2): that host uses gfxstream, with OpenGL ES
+# only when gfxstream_vulkan is auto, whatever is set here. Command-line
+# equivalent: --gpu_mode=, which wins on every host. venus (Mesa's Venus
+# Vulkan driver in the guest over virglrenderer) needs a ROM built with Venus
 # support, which Ika's does not have; see GRAPHICS.md.
-gpu_mode = gfxstream_guest_angle
+gpu_mode = auto
 gpu_vhost_user_mode = auto
 enable_gpu_udmabuf = true
 use_cvdalloc = true
@@ -2240,7 +2246,8 @@ Settings:
   (yad), "Startup Options · Ika", for its most used settings, with two tabs.
   Startup Options has the vCPUs and the memory, the console's density on the
   desktop and in TV mode and its refresh rate (0 for auto), the GPU mode
-  ("gfxstream, OpenGL ES only" is gfxstream with gfxstream_vulkan = off),
+  (Auto, the default, is gpu_mode = auto; "gfxstream, OpenGL ES only" is
+  gfxstream with gfxstream_vulkan = off),
   hardware video decoding, low-CPU mode, "Start with the camera"
   (camera.device: ticked, the first usable camera, unless ika.ini names one)
   and "Keyboard as a gamepad in TV mode" (tv_keyboard_gamepad). Gamepad
@@ -6998,16 +7005,18 @@ IKA_OPTIONS_SETTINGS=(compute.cpus compute.memory_mb console.dpi console.tv_dpi
 declare -A IKA_OPTIONS_DEFAULTS=(
   [console.dpi]="auto" [console.tv_dpi]="auto" [console.refresh_rate_hz]="auto"
   [compute.cpus]="auto" [compute.memory_mb]="auto"
-  [gpu.gpu_mode]="gfxstream_guest_angle" [gpu.gfxstream_vulkan]="auto"
+  [gpu.gpu_mode]="auto" [gpu.gfxstream_vulkan]="auto"
   [gpu.hw_video_decode]="auto" [lowcpu.mode]="auto" [camera.device]="off"
   [console.tv_keyboard_gamepad]="false"
 )
-# The GPU modes the window offers, one of which is two settings:
+# The GPU modes the window offers, two of which are two settings:
 # IKA_OPTIONS_GLES_ONLY is gfxstream with gfxstream_vulkan = off, and
-# gfxstream chosen from another is gfxstream with gfxstream_vulkan = auto.
-# ika.ini's own GPU mode, when another, is offered too.
+# gfxstream, or IKA_OPTIONS_AUTO (gpu_mode = auto), chosen from another is that
+# mode with gfxstream_vulkan = auto. ika.ini's own GPU mode, when another, such
+# as gfxstream_guest_angle, is offered too.
+IKA_OPTIONS_AUTO="Auto"
 IKA_OPTIONS_GLES_ONLY="gfxstream, OpenGL ES only"
-IKA_OPTIONS_GPU_CHOICES=(gfxstream_guest_angle gfxstream "${IKA_OPTIONS_GLES_ONLY}"
+IKA_OPTIONS_GPU_CHOICES=("${IKA_OPTIONS_AUTO}" gfxstream "${IKA_OPTIONS_GLES_ONLY}"
   guest_swiftshader)
 # The tab's number boxes and choices stretch across their column; a margin
 # on their right keeps a number box about as wide as four digits and its
@@ -7133,14 +7142,16 @@ load_ika_mapping_form() {
 }
 
 # Prints the GPU mode choice of the associative array named VALUES_VAR:
-# IKA_OPTIONS_GLES_ONLY for gfxstream with gfxstream_vulkan = off, else the
-# GPU mode.
+# IKA_OPTIONS_GLES_ONLY for gfxstream with gfxstream_vulkan = off,
+# IKA_OPTIONS_AUTO for auto, else the GPU mode.
 ika_gpu_choice() {
   local -n choice_values_ref="$1"
 
   if [[ "${choice_values_ref[gpu.gpu_mode]}" == "gfxstream" \
       && "${choice_values_ref[gpu.gfxstream_vulkan]}" == "off" ]]; then
     printf '%s\n' "${IKA_OPTIONS_GLES_ONLY}"
+  elif [[ "${choice_values_ref[gpu.gpu_mode]}" == "auto" ]]; then
+    printf '%s\n' "${IKA_OPTIONS_AUTO}"
   else
     printf '%s\n' "${choice_values_ref[gpu.gpu_mode]}"
   fi
@@ -7252,6 +7263,10 @@ read_ika_options_form() {
         ;;
       gfxstream)
         read_values_ref[gpu.gpu_mode]="gfxstream"
+        read_values_ref[gpu.gfxstream_vulkan]="auto"
+        ;;
+      "${IKA_OPTIONS_AUTO}")
+        read_values_ref[gpu.gpu_mode]="auto"
         read_values_ref[gpu.gfxstream_vulkan]="auto"
         ;;
       *)
