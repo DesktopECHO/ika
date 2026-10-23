@@ -32,6 +32,18 @@
   the console's INFO lines now reach `~/ika/console.log` as they are written.
 
 ### App start options and input
+- Ika's own entry in the app menu has a right-click action, "Startup
+  options" (`ika options`), which opens "Startup Options · Ika", a window
+  like an app's: a Startup Options tab with the CPUs and RAM, the desktop
+  and TV densities, the refresh rate, the GPU mode (with "gfxstream, OpenGL
+  ES only" for gfxstream_vulkan = off), hardware video decoding,
+  low-CPU mode and "Keyboard as a gamepad in TV mode", and a Gamepad
+  Emulation tab with ika.ini's keyboard gamepad. It writes the settings
+  changed in ika.ini, each in place of its line (`ika_ini_set`), and
+  "Apply and restart" restarts Ika too.
+- `tv_keyboard_gamepad = true` in `[console]` of ika.ini makes the keyboard a
+  gamepad in TV mode too, with the keys of `[keyboard_gamepad]`; the host's
+  gamepads are the TV remote either way.
 - Each app's entry in the desktop's app menu has a new right-click action,
   "Startup options", which opens a window (yad) with a checkbox for
   each option the app can start with: fullscreen; the keyboard, the mouse

@@ -16,9 +16,31 @@ ika restart    # stop and start again, with new options if given
 ```
 
 The **Ika** icon in your desktop's app menu runs `ika start`. Right-click it
-for **Start Ika**, **Stop Ika**, **Restart Ika** and **Start with Camera**
-(`ika restart --camera`). Started from the menu, Ika reports its progress and
-errors as desktop notifications.
+for **Start Ika**, **Startup options**, **Stop Ika**, **Restart Ika** and
+**Start with Camera** (`ika restart --camera`). Started from the menu, Ika
+reports its progress and errors as desktop notifications.
+
+**Startup options** (`ika options`) opens **Startup Options · Ika**, a window
+like an app's, for the settings of `ika.ini` you change most, in two tabs:
+
+- **Startup Options**: **CPUs** and **RAM** (`cpus`, `memory_mb`), the
+  console's **Desktop display density** and **TV display density** (`dpi`,
+  `tv_dpi`) and its **Refresh rate** (`refresh_rate_hz`), each 0 for auto;
+  the **GPU mode** (**gfxstream, OpenGL ES only** is `gpu_mode = gfxstream`
+  with `gfxstream_vulkan = off`, and **gfxstream** chosen from another mode
+  sets `gfxstream_vulkan = auto`), **Hardware video decoding** and **Low-CPU
+  mode**; and
+  **Keyboard as a gamepad in TV mode** (`tv_keyboard_gamepad`). Low-CPU mode
+  runs the display at its own 30 Hz whatever the refresh rate says.
+- **Gamepad Emulation**: the keyboard gamepad of `[keyboard_gamepad]`, as an
+  app's tab shows it (see [Controller mapping per game](#controller-mapping-per-game)),
+  which TV mode and the apps without a mapping of their own use.
+
+**Apply settings** writes the settings you changed in `ika.ini`, each in place
+of its line, so that the rest of the file stays as it is; they apply the next
+time Ika starts. **Apply and restart** also restarts Ika. **Reset to default**
+asks first, then writes the built-in value of each, and **Cancel** leaves the
+file as it was.
 
 - `ika start -f` opens the console fullscreen, and `ika start --no-console`
   starts Android without it; app windows open either way.

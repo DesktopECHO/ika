@@ -103,6 +103,61 @@ ika_ini_default() {
   printf -v "$1" '%s' "${ini_value}"
 }
 
+# ika_ini_set SECTION KEY VALUE: writes "KEY = VALUE" in [SECTION] of ika.ini,
+# in place of the key's lines there (the last of which ika_ini_load would
+# take), else after the section's last setting, before the comments and blank
+# lines that end it, else in a new section at the end. Comments and every
+# other line stay as they are, and IKA_INI follows. Fails, leaving the file
+# as it was, when it cannot be written.
+ika_ini_set() {
+  local section="${1,,}"
+  local key="${2,,}"
+  local value="$3"
+  local file="${IKA_INI_FILE}"
+
+  if [[ ! -e "${file}" ]]; then
+    mkdir -p "${file%/*}" && ika_ini_write_default >"${file}" || return 1
+  fi
+  awk -v section="${section}" -v key="${key}" -v value="${value}" '
+    function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
+    function setting() { print key (value == "" ? " =" : " = " value); written = 1 }
+    {
+      line = trim($0)
+    }
+    line ~ /^\[.*\]$/ {
+      if (in_section && !written) setting()
+      printf "%s", pending
+      pending = ""
+      in_section = (tolower(trim(substr(line, 2, length(line) - 2))) == section)
+      if (in_section) seen = 1
+      print
+      next
+    }
+    in_section && line != "" && line !~ /^[#;]/ && index(line, "=") {
+      printf "%s", pending
+      pending = ""
+      if (tolower(trim(substr(line, 1, index(line, "=") - 1))) == key) {
+        if (!written) setting()
+        next
+      }
+      print
+      next
+    }
+    in_section {
+      pending = pending $0 "\n"
+      next
+    }
+    { print }
+    END {
+      if (in_section && !written) setting()
+      printf "%s", pending
+      if (!seen) { printf "\n[%s]\n", section; print key (value == "" ? " =" : " = " value) }
+    }' "${file}" >"${file}.$$" || { rm -f "${file}.$$"; return 1; }
+  chmod --reference="${file}" "${file}.$$" 2>/dev/null || true
+  mv -f "${file}.$$" "${file}" || { rm -f "${file}.$$"; return 1; }
+  IKA_INI["${section}.${key}"]="${value}"
+}
+
 # ika_ini_list ARRAY SECTION KEY: replaces ARRAY with the words of the ika.ini
 # value, when the file has the key.
 ika_ini_list() {
@@ -308,6 +363,11 @@ dpi = auto
 # Command-line equivalent: --dpi=, in either mode. Environment variable:
 # IKA_TV_DPI
 tv_dpi = auto
+# Whether the keyboard drives a gamepad in Android's TV mode too, with the
+# keys and settings of [keyboard_gamepad] below: true or false. Those keys no
+# longer type there; the host's gamepads are the TV remote either way.
+# Environment variable: IKA_TV_KEYBOARD_GAMEPAD
+tv_keyboard_gamepad = false
 # Extra arguments for the console and the app windows, separated by spaces, for
 # example --keyboard=uhid --no-clipboard-autosync
 # Command-line equivalent: --ika_scrcpy=. Environment variable: IKA_SCRCPY
@@ -325,8 +385,10 @@ refresh_rate_hz = auto
 
 # ----------------------------------------------------------------------------
 [keyboard_gamepad]
-# The keys of the keyboard gamepad, for apps whose start options ("Ika
-# Startup Options..." on an app's launcher) use the keyboard as a gamepad. One
+# The keys of the keyboard gamepad, for apps whose start options ("Startup
+# options" on an app's launcher) use the keyboard as a gamepad, and for TV
+# mode with tv_keyboard_gamepad = true; "Startup options" on Ika's launcher
+# edits them. One
 # or more key names per control, separated by spaces; SDL's scancode names (Up,
 # Space, Return, Escape, Backspace, Tab, F1, A, 1, ...), the physical positions
 # of keys on a US layout, with _ for a space in a name (Keypad_Enter,
@@ -1054,6 +1116,7 @@ ika_ini_default IKA_KERNEL_PAGE_SIZE system kernel_page_size auto
 ika_ini_default IKADPI console dpi auto
 ika_ini_default IKA_REFRESH_RATE_HZ console refresh_rate_hz auto
 ika_ini_default IKA_TV_DPI console tv_dpi auto
+ika_ini_default IKA_TV_KEYBOARD_GAMEPAD console tv_keyboard_gamepad false
 # The keys of the keyboard gamepad, in the order of keyboard_gamepad_spec.
 KEYBOARD_GAMEPAD_CONTROLS=(left_stick_up left_stick_down left_stick_left
   left_stick_right dpad_up dpad_down dpad_left dpad_right right_stick_up
@@ -1071,7 +1134,12 @@ declare -A KEYBOARD_GAMEPAD_KEYS=(
   [right_stick]="F Mouse_Middle" [left_trigger]="Z Mouse_Right"
   [right_trigger]="X Mouse_Left" [walk]="Tab"
 )
+# The built-in keys and settings stay in KEYBOARD_GAMEPAD_DEFAULT_KEYS and
+# KEYBOARD_GAMEPAD_DEFAULT_SETTING_VALUES, for "Reset to default"
+declare -A KEYBOARD_GAMEPAD_DEFAULT_KEYS=()
+declare -A KEYBOARD_GAMEPAD_DEFAULT_SETTING_VALUES=()
 for keyboard_gamepad_control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+  KEYBOARD_GAMEPAD_DEFAULT_KEYS[${keyboard_gamepad_control}]="${KEYBOARD_GAMEPAD_KEYS[${keyboard_gamepad_control}]}"
   ika_ini_get "KEYBOARD_GAMEPAD_KEYS[${keyboard_gamepad_control}]" \
     keyboard_gamepad "${keyboard_gamepad_control}" \
     "${KEYBOARD_GAMEPAD_KEYS[${keyboard_gamepad_control}]}"
@@ -1087,6 +1155,7 @@ declare -A KEYBOARD_GAMEPAD_SETTING_VALUES=(
   [mouse_sensitivity]="100"
 )
 for keyboard_gamepad_setting in "${KEYBOARD_GAMEPAD_SETTINGS[@]}"; do
+  KEYBOARD_GAMEPAD_DEFAULT_SETTING_VALUES[${keyboard_gamepad_setting}]="${KEYBOARD_GAMEPAD_SETTING_VALUES[${keyboard_gamepad_setting}]}"
   ika_ini_get "KEYBOARD_GAMEPAD_SETTING_VALUES[${keyboard_gamepad_setting}]" \
     keyboard_gamepad "${keyboard_gamepad_setting}" \
     "${KEYBOARD_GAMEPAD_SETTING_VALUES[${keyboard_gamepad_setting}]}"
@@ -1852,6 +1921,7 @@ Usage:
   ${SCRIPT_NAME} backup [FILE]
   ${SCRIPT_NAME} restore [FILE]
   ${SCRIPT_NAME} status
+  ${SCRIPT_NAME} options
   ${SCRIPT_NAME} app NAME|PACKAGE [-f|--fullscreen] [--touch] [--title=TEXT] [--size=WxH] [--dpi=N] [--ika_scrcpy=ARGS]
   ${SCRIPT_NAME} app --info NAME|PACKAGE
   ${SCRIPT_NAME} app --options NAME|PACKAGE
@@ -1958,7 +2028,8 @@ TV mode:
   In TV mode the console is fullscreen at every start (MOD+F leaves it), at
   1.5 times the desktop's automatic density (tv_dpi in ika.ini; --dpi
   overrides it), and passes the gamepad through as the remote: the D-pad or
-  left stick moves, A selects, B goes back and the guide button goes Home. The
+  left stick moves, A selects, B goes back and the guide button goes Home; with
+  tv_keyboard_gamepad = true in ika.ini, the keyboard is a gamepad too. The
   keyboard and mouse work as on the desktop, except that a right click goes
   back (Shift and right-click for a right click). Apps opened from the
   desktop's app menu or with '${SCRIPT_NAME} app' still open in their own
@@ -2098,6 +2169,19 @@ Settings:
   Command-line options override it, and so do the environment variables below.
   Delete the file to get a fresh copy.
 
+  "Startup options" on Ika's launcher ('${SCRIPT_NAME} options') opens a window
+  (yad), "Startup Options · Ika", for its most used settings, with two tabs.
+  Startup Options has the vCPUs and the memory, the console's density on the
+  desktop and in TV mode and its refresh rate (0 for auto), the GPU mode
+  ("gfxstream, OpenGL ES only" is gfxstream with gfxstream_vulkan = off),
+  hardware video decoding, low-CPU mode, and "Keyboard as a gamepad in TV mode"
+  (tv_keyboard_gamepad). Gamepad Emulation has the keyboard gamepad of
+  [keyboard_gamepad], which TV mode and the apps without a mapping of their
+  own use. "Apply settings" writes the settings changed in ika.ini, in place
+  of their lines, "Apply and restart" also restarts Ika, so that they apply,
+  "Reset to default", once confirmed, writes their built-in values, and
+  Cancel leaves the file as it was.
+
 Environment variables:
 
   GFXSTREAM_VULKAN       auto, on, or off. With --gpu_mode=gfxstream, auto
@@ -2126,6 +2210,9 @@ Environment variables:
                          --no-lowcpu.
   IKA_TV_DPI             Display density in TV mode (default: 1.5 times the
                          automatic density).
+  IKA_TV_KEYBOARD_GAMEPAD
+                         true: the keyboard is a gamepad in TV mode too, with
+                         the keys of [keyboard_gamepad] in ika.ini.
   IKA_SCRCPY             Extra whitespace-separated args appended to the console
                          and the app windows.
                          Equivalent command-line option: --ika_scrcpy=ARGS
@@ -4785,9 +4872,20 @@ app_input_enabled() {
   [[ " ${IKA_APP_INPUT:-} " == *" $1 "* ]]
 }
 
+# Whether the TV console also makes the keyboard a gamepad
+# (console.tv_keyboard_gamepad in ika.ini, IKA_TV_KEYBOARD_GAMEPAD).
+tv_keyboard_gamepad_enabled() {
+  case "${IKA_TV_KEYBOARD_GAMEPAD:-false}" in
+    [Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # The input of a console or app window, for MODE: "desktop" (the desktop
-# console), "tv" (the TV console) or "app" (an app window). The consoles keep text-friendly SDK keyboard injection, and the TV
-# console passes the gamepad through as the remote. An app passes through the
+# console), "tv" (the TV console) or "app" (an app window). The consoles keep
+# text-friendly SDK keyboard injection, and the TV console passes the gamepad
+# through as the remote, with the keyboard as a gamepad too when
+# tv_keyboard_gamepad_enabled. An app passes through the
 # HID devices its start options tick (IKA_APP_INPUT), each a UHID device: the
 # keyboard, the mouse, gamepads, and the keyboard as a gamepad (scrcpy's
 # --gamekb, with the [keyboard_gamepad] keys: those keys no longer type, other
@@ -4801,7 +4899,10 @@ append_scrcpy_input_args() {
   local package="${4:-}"
   local -a gamepad_args=()
 
-  if [[ "${mode}" == "tv" ]]; then
+  if [[ "${mode}" == "tv" ]] && tv_keyboard_gamepad_enabled; then
+    log "${label} TV mode: the gamepad is the remote, and the keyboard a gamepad too: $(keyboard_gamepad_spec)"
+    gamepad_args=(--gamepad=uhid "--gamekb=$(keyboard_gamepad_spec)")
+  elif [[ "${mode}" == "tv" ]]; then
     log "${label} TV mode: the gamepad is the remote, desktop keyboard and mouse"
     gamepad_args=(--gamepad=uhid)
   elif [[ "${mode}" == "app" ]]; then
@@ -6196,15 +6297,17 @@ reset_app_to_default() {
 }
 
 # Asks whether the app named LABEL is to have its default start options and
-# controller mapping again (reset_app_to_default): true if so
+# controller mapping again (reset_app_to_default), or what MESSAGE says
+# instead: true if so
 confirm_reset_to_default() {
   local label="$1"
+  local message="${2:-This will reset your app options and gamepad emulation mappings.}"
   local text
   local -a yad_env=()
 
   set_yad_env yad_env
   text="<span font_size='13pt' weight='bold'>Apply defaults to $(yad_markup_escape "${label}")</span>"
-  text+=$'\n\n'"This will reset your app options and gamepad emulation mappings."
+  text+=$'\n\n'"$(yad_markup_escape "${message}")"
   # Some space between the text and the buttons: a tall transparent dot, as
   # yad drops a last line of spaces, and a short line only fills the room
   # the window has at its least height
@@ -6810,6 +6913,496 @@ edit_app_settings() {
   fi
   if [[ "${status}" -eq 0 ]]; then
     open_app_window "${package}" false "" ""
+  fi
+}
+
+# ============================================================================
+# Ika's own start options (ika options): "Startup options" on Ika's launcher
+# ============================================================================
+
+# The ika.ini settings of the Startup Options tab of Ika's window, as
+# SECTION.KEY, in its order, and their built-in values, as ika.ini's template
+# has them.
+IKA_OPTIONS_SETTINGS=(compute.cpus compute.memory_mb console.dpi console.tv_dpi
+  console.refresh_rate_hz gpu.gpu_mode gpu.gfxstream_vulkan gpu.hw_video_decode
+  lowcpu.mode console.tv_keyboard_gamepad)
+declare -A IKA_OPTIONS_DEFAULTS=(
+  [console.dpi]="auto" [console.tv_dpi]="auto" [console.refresh_rate_hz]="auto"
+  [compute.cpus]="auto" [compute.memory_mb]="auto"
+  [gpu.gpu_mode]="gfxstream_guest_angle" [gpu.gfxstream_vulkan]="auto"
+  [gpu.hw_video_decode]="auto" [lowcpu.mode]="auto"
+  [console.tv_keyboard_gamepad]="false"
+)
+# The GPU modes the window offers, one of which is two settings:
+# IKA_OPTIONS_GLES_ONLY is gfxstream with gfxstream_vulkan = off, and
+# gfxstream chosen from another is gfxstream with gfxstream_vulkan = auto.
+# ika.ini's own GPU mode, when another, is offered too.
+IKA_OPTIONS_GLES_ONLY="gfxstream, OpenGL ES only"
+IKA_OPTIONS_GPU_CHOICES=(gfxstream_guest_angle gfxstream "${IKA_OPTIONS_GLES_ONLY}"
+  guest_swiftshader)
+# The tab's number boxes and choices stretch across their column; a margin
+# on their right keeps a number box about as wide as four digits and its
+# buttons, and a choice as wide as the longest GPU mode, and the tab no
+# wider than the Gamepad Emulation tab, so that the window is as wide as an
+# app's.
+IKA_OPTIONS_TAB_CSS='spinbutton { margin-right: 420px; }
+combobox { margin-right: 320px; }'
+
+# Prints VALUE, ika.ini's value of SETTING (SECTION.KEY of the Startup Options
+# tab), as the window shows it: auto or a number for the numbers (a density
+# under 96 is 96), the choices in lowercase, true or false; a value the window
+# cannot show is shown as its built-in one.
+ika_option_value() {
+  local setting="$1"
+  local value="${2,,}"
+
+  case "${setting}" in
+    console.dpi|console.tv_dpi)
+      value="$(app_dpi_value "${value}" 2>/dev/null)" || value=""
+      printf '%s\n' "${value:-auto}"
+      ;;
+    console.refresh_rate_hz|compute.cpus|compute.memory_mb)
+      if [[ "${value}" =~ ^[1-9][0-9]*$ ]]; then
+        printf '%s\n' "${value}"
+      else
+        printf 'auto\n'
+      fi
+      ;;
+    gpu.gpu_mode)
+      printf '%s\n' "${value:-${IKA_OPTIONS_DEFAULTS[${setting}]}}"
+      ;;
+    gpu.gfxstream_vulkan)
+      case "${value}" in
+        1|true|yes|on|enable|enabled) printf 'on\n' ;;
+        0|false|no|off|disable|disabled) printf 'off\n' ;;
+        *) printf 'auto\n' ;;
+      esac
+      ;;
+    gpu.hw_video_decode)
+      case "${value}" in
+        0|false|no|off|disable|disabled) printf 'off\n' ;;
+        *) printf 'auto\n' ;;
+      esac
+      ;;
+    lowcpu.mode)
+      case "${value}" in
+        1|true|yes|on|enable|enabled) printf 'on\n' ;;
+        0|false|no|off|disable|disabled) printf 'off\n' ;;
+        *) printf 'auto\n' ;;
+      esac
+      ;;
+    console.tv_keyboard_gamepad)
+      case "${value}" in
+        1|true|yes|on) printf 'true\n' ;;
+        *) printf 'false\n' ;;
+      esac
+      ;;
+  esac
+}
+
+# Sets the associative array named VALUES_VAR to the Startup Options tab's
+# settings as ika.ini has them, else their built-in values, each as
+# ika_option_value prints it.
+load_ika_options_form() {
+  local -n ika_values_ref="$1"
+  local setting
+  local value
+
+  ika_values_ref=()
+  for setting in "${IKA_OPTIONS_SETTINGS[@]}"; do
+    ika_ini_get value "${setting%%.*}" "${setting#*.}" "${IKA_OPTIONS_DEFAULTS[${setting}]}"
+    ika_values_ref[${setting}]="$(ika_option_value "${setting}" "${value}")"
+  done
+}
+
+# Sets the associative arrays named KEYS_VAR and SETTINGS_VAR to the keyboard
+# gamepad of ika.ini, as keyboard_gamepad_spec gives it to the TV console and
+# to apps without a mapping of their own: a key an ika.ini line gives a
+# control is gone from the control it is a default of.
+load_ika_mapping_form() {
+  local -n ika_keys_ref="$1"
+  local -n ika_settings_ref="$2"
+  local control
+  local setting
+  local key
+  local -a words=()
+  local -a kept=()
+  local -A given_keys=()
+
+  ika_keys_ref=()
+  ika_settings_ref=()
+  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+    [[ -n "${IKA_INI[keyboard_gamepad.${control}]+set}" ]] || continue
+    read -r -a words <<<"${KEYBOARD_GAMEPAD_KEYS[${control}]}"
+    for key in "${words[@]}"; do
+      given_keys["${key,,}"]=1
+    done
+  done
+  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+    read -r -a words <<<"${KEYBOARD_GAMEPAD_KEYS[${control}]}"
+    if [[ -z "${IKA_INI[keyboard_gamepad.${control}]+set}" ]]; then
+      kept=()
+      for key in "${words[@]}"; do
+        [[ -n "${given_keys[${key,,}]+set}" ]] || kept+=("${key}")
+      done
+      words=("${kept[@]}")
+    fi
+    ika_keys_ref[${control}]="${words[*]}"
+  done
+  for setting in "${KEYBOARD_GAMEPAD_SETTINGS[@]}"; do
+    ika_settings_ref[${setting}]="$(normalize_keyboard_gamepad_setting "${setting}" \
+      "${KEYBOARD_GAMEPAD_SETTING_VALUES[${setting}]}" \
+      "${KEYBOARD_GAMEPAD_DEFAULT_SETTING_VALUES[${setting}]}")"
+  done
+}
+
+# Prints the GPU mode choice of the associative array named VALUES_VAR:
+# IKA_OPTIONS_GLES_ONLY for gfxstream with gfxstream_vulkan = off, else the
+# GPU mode.
+ika_gpu_choice() {
+  local -n choice_values_ref="$1"
+
+  if [[ "${choice_values_ref[gpu.gpu_mode]}" == "gfxstream" \
+      && "${choice_values_ref[gpu.gfxstream_vulkan]}" == "off" ]]; then
+    printf '%s\n' "${IKA_OPTIONS_GLES_ONLY}"
+  else
+    printf '%s\n' "${choice_values_ref[gpu.gpu_mode]}"
+  fi
+}
+
+# Prints the number box value of SETTING in the associative array named
+# VALUES_VAR: its number, or 0 for auto.
+ika_option_number() {
+  local -n number_values_ref="$1"
+  local value="${number_values_ref[$2]}"
+
+  [[ "${value}" =~ ^[0-9]+$ ]] || value=0
+  printf '%s\n' "${value}"
+}
+
+# Sets the array named FIELDS_VAR to the Startup Options tab of Ika's window
+# for the associative array named VALUES_VAR, for yad: the vCPUs and the
+# memory, the densities and the refresh rate, 0 for auto; the GPU mode, hardware
+# video decoding and low-CPU mode; then the keyboard as a gamepad in TV mode.
+ika_options_form_fields() {
+  local -n form_values_ref="$1"
+  local -n ika_fields_ref="$2"
+  local host_cpus
+  local host_mb
+  local value
+  local mode
+  local current
+  local choices=""
+  local -a modes=("${IKA_OPTIONS_GPU_CHOICES[@]}")
+
+  host_cpus="$(nproc 2>/dev/null)" || host_cpus=64
+  host_mb="$(awk '/^MemTotal:/ { print int($2 / 1024) }' /proc/meminfo 2>/dev/null)"
+  [[ "${host_mb}" =~ ^[0-9]+$ ]] || host_mb=65536
+  # A value of ika.ini's above the host's stays as it is
+  value="$(ika_option_number form_values_ref compute.cpus)"
+  (( value <= host_cpus )) || host_cpus="${value}"
+  value="$(ika_option_number form_values_ref compute.memory_mb)"
+  (( value <= host_mb )) || host_mb="${value}"
+  current="$(ika_gpu_choice form_values_ref)"
+  for mode in "${modes[@]}"; do
+    [[ "${mode}" != "${current}" ]] || current=""
+  done
+  [[ -z "${current}" ]] || modes+=("${current}")
+  current="$(ika_gpu_choice form_values_ref)"
+  for mode in "${modes[@]}"; do
+    [[ "${mode}" != "${current}" ]] || choices+="^"
+    choices+="${mode}!"
+  done
+
+  ika_fields_ref=(--field="CPUs, 0=Auto  :NUM" "$(ika_option_number form_values_ref compute.cpus)!0..${host_cpus}!1")
+  ika_fields_ref+=(--field="RAM, MB, 0=Auto  :NUM" "$(ika_option_number form_values_ref compute.memory_mb)!0..${host_mb}!1024")
+  ika_fields_ref+=(--field="Desktop display density, 0=Auto  :NUM" "$(ika_option_number form_values_ref console.dpi)!0..999!8")
+  ika_fields_ref+=(--field="TV display density, 0=Auto  :NUM" "$(ika_option_number form_values_ref console.tv_dpi)!0..999!8")
+  ika_fields_ref+=(--field="Refresh rate, Hz, 0=Auto  :NUM" "$(ika_option_number form_values_ref console.refresh_rate_hz)!0..360!1")
+  ika_fields_ref+=(--field="GPU mode  :CB" "${choices%!}")
+  case "${form_values_ref[gpu.hw_video_decode]}" in
+    off) ika_fields_ref+=(--field="Hardware video decoding  :CB" "Auto!^Off") ;;
+    *) ika_fields_ref+=(--field="Hardware video decoding  :CB" "^Auto!Off") ;;
+  esac
+  case "${form_values_ref[lowcpu.mode]}" in
+    on) ika_fields_ref+=(--field="Low-CPU mode  :CB" "Auto!^On!Off") ;;
+    off) ika_fields_ref+=(--field="Low-CPU mode  :CB" "Auto!On!^Off") ;;
+    *) ika_fields_ref+=(--field="Low-CPU mode  :CB" "^Auto!On!Off") ;;
+  esac
+  ika_fields_ref+=(--field="<span font_size='8pt'> </span>:LBL" "")
+  ika_fields_ref+=(--field="  Keyboard as a gamepad in TV mode:CHK")
+  if [[ "${form_values_ref[console.tv_keyboard_gamepad]}" == "true" ]]; then
+    ika_fields_ref+=(TRUE)
+  else
+    ika_fields_ref+=(FALSE)
+  fi
+  ika_fields_ref+=(--field="<span font_size='8pt'> </span>:LBL" "")
+}
+
+# Reads the Startup Options tab's OUTPUT, a value per field in the order of
+# ika_options_form_fields, over the values it showed, into the
+# associative array named VALUES_VAR, as ika_option_value prints them.
+read_ika_options_form() {
+  local output="$1"
+  local -n read_values_ref="$2"
+  local -a words=()
+  local value
+  local choice
+  local i=0
+  local setting
+
+  IFS='|' read -r -a words <<<"${output}"
+  for setting in compute.cpus compute.memory_mb console.dpi console.tv_dpi console.refresh_rate_hz; do
+    value="${words[i]%%[.,]*}"
+    [[ "${value}" =~ ^[1-9][0-9]*$ ]] || value="auto"
+    read_values_ref[${setting}]="$(ika_option_value "${setting}" "${value}")"
+    i=$((i + 1))
+  done
+  # The GPU mode choice, read only when it changed, so that a gfxstream_vulkan
+  # of ika.ini's stays as it is otherwise
+  choice="${words[5]:-}"
+  if [[ -n "${choice}" && "${choice}" != "$(ika_gpu_choice read_values_ref)" ]]; then
+    case "${choice}" in
+      "${IKA_OPTIONS_GLES_ONLY}")
+        read_values_ref[gpu.gpu_mode]="gfxstream"
+        read_values_ref[gpu.gfxstream_vulkan]="off"
+        ;;
+      gfxstream)
+        read_values_ref[gpu.gpu_mode]="gfxstream"
+        read_values_ref[gpu.gfxstream_vulkan]="auto"
+        ;;
+      *)
+        read_values_ref[gpu.gpu_mode]="${choice}"
+        ;;
+    esac
+  fi
+  read_values_ref[gpu.hw_video_decode]="$(ika_option_value gpu.hw_video_decode "${words[6]:-}")"
+  read_values_ref[lowcpu.mode]="$(ika_option_value lowcpu.mode "${words[7]:-}")"
+  if [[ "${words[9]:-}" == "TRUE" ]]; then
+    read_values_ref[console.tv_keyboard_gamepad]="true"
+  else
+    read_values_ref[console.tv_keyboard_gamepad]="false"
+  fi
+}
+
+# Writes the Startup Options tab's settings of the associative array named
+# VALUES_VAR, and the keyboard gamepad of KEYS_VAR and SETTINGS_VAR, in
+# ika.ini: those that differ from what the window showed, SHOWN_VALUES_VAR,
+# SHOWN_KEYS_VAR and SHOWN_SETTINGS_VAR, so that the lines left alone stay as
+# they are. Sets the array named CHANGED_VAR to "KEY = VALUE" for each.
+save_ika_settings_form() {
+  local -n save_values_ref="$1"
+  local -n save_keys_ref="$2"
+  local -n save_settings_ref="$3"
+  local -n shown_values_ref="$4"
+  local -n shown_keys_ref="$5"
+  local -n shown_settings_ref="$6"
+  local -n changed_ref="$7"
+  local setting
+  local control
+
+  changed_ref=()
+  for setting in "${IKA_OPTIONS_SETTINGS[@]}"; do
+    [[ "${save_values_ref[${setting}]}" != "${shown_values_ref[${setting}]}" ]] || continue
+    ika_ini_set "${setting%%.*}" "${setting#*.}" "${save_values_ref[${setting}]}" \
+      || die "could not write ${IKA_INI_FILE}"
+    changed_ref+=("${setting#*.} = ${save_values_ref[${setting}]}")
+  done
+  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+    [[ "${save_keys_ref[${control}]}" != "${shown_keys_ref[${control}]}" ]] || continue
+    ika_ini_set keyboard_gamepad "${control}" "${save_keys_ref[${control}]}" \
+      || die "could not write ${IKA_INI_FILE}"
+    changed_ref+=("${control} = ${save_keys_ref[${control}]}")
+  done
+  for setting in "${CONTROLLER_MAPPING_FORM_SETTINGS[@]}"; do
+    [[ "${save_settings_ref[${setting}]}" != "${shown_settings_ref[${setting}]}" ]] || continue
+    ika_ini_set keyboard_gamepad "${setting}" "${save_settings_ref[${setting}]}" \
+      || die "could not write ${IKA_INI_FILE}"
+    changed_ref+=("${setting} = ${save_settings_ref[${setting}]}")
+  done
+}
+
+# "Reset to default" in Ika's window, once confirmed: ika.ini gets the
+# built-in value of each of the window's settings, and the built-in keys and
+# settings of the keyboard gamepad.
+reset_ika_settings_to_default() {
+  local setting
+  local control
+
+  for setting in "${IKA_OPTIONS_SETTINGS[@]}"; do
+    ika_ini_set "${setting%%.*}" "${setting#*.}" "${IKA_OPTIONS_DEFAULTS[${setting}]}" \
+      || die "could not write ${IKA_INI_FILE}"
+  done
+  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+    ika_ini_set keyboard_gamepad "${control}" "${KEYBOARD_GAMEPAD_DEFAULT_KEYS[${control}]}" \
+      || die "could not write ${IKA_INI_FILE}"
+    KEYBOARD_GAMEPAD_KEYS[${control}]="${KEYBOARD_GAMEPAD_DEFAULT_KEYS[${control}]}"
+  done
+  for setting in "${CONTROLLER_MAPPING_FORM_SETTINGS[@]}"; do
+    ika_ini_set keyboard_gamepad "${setting}" "${KEYBOARD_GAMEPAD_DEFAULT_SETTING_VALUES[${setting}]}" \
+      || die "could not write ${IKA_INI_FILE}"
+    KEYBOARD_GAMEPAD_SETTING_VALUES[${setting}]="${KEYBOARD_GAMEPAD_DEFAULT_SETTING_VALUES[${setting}]}"
+  done
+}
+
+# ika options, and "Startup options" on Ika's launcher: Ika's window, as an
+# app's ("Startup Options · Ika", the same size and buttons), with two tabs:
+# Startup Options, the common settings of ika.ini (the densities, the refresh
+# rate, the vCPUs and memory, the GPU mode, hardware video decoding, low-CPU
+# mode, and the keyboard as a gamepad in TV mode), and Gamepad Emulation,
+# ika.ini's keyboard gamepad, which TV mode and apps without a mapping of
+# their own use. "Apply settings" writes in ika.ini what was changed, "Apply
+# and restart" also restarts Ika, so that they apply, "Reset to default"
+# asks, then writes the built-in values and shows them, and Cancel leaves
+# ika.ini as it was. Without an X display the Startup Options tab opens as a
+# window of its own.
+edit_ika_settings() {
+  local tabs=true
+  local key
+  local status=0
+  local tab_dir
+  local joined=""
+  local default_used=false
+  local -a fields1=()
+  local -a fields2=()
+  local -a changed=()
+  local -a yad_env=()
+  local -a scale_env=()
+  local -a plugs=()
+  local -a window_env=()
+  local -a window_options=()
+  local -a options_env=()
+  local -a options_options=()
+  local -a mapping_env=()
+  local -a mapping_options=()
+  local -A values=()
+  local -A shown_values=()
+  local -A keys=()
+  local -A settings=()
+  local -A shown_keys=()
+  local -A shown_settings=()
+  local -A ini_settings=()
+  local -A blank_at=()
+
+  command -v yad >/dev/null 2>&1 \
+    || die "the start options window needs yad; install it"
+  if ! yad_tabs_available; then
+    log "no X display for yad's tabbed window; opening its Startup Options tab as a window of its own"
+    tabs=false
+  fi
+
+  set_yad_env yad_env
+  if [[ "${tabs}" == "true" ]]; then
+    yad_env+=(GDK_BACKEND=x11)
+    mapfile -t scale_env < <(xwayland_gdk_scale_env)
+    if [[ "${#scale_env[@]}" -gt 0 ]]; then
+      log "X11 apps scale themselves on this desktop: ${scale_env[*]} for the tabbed window"
+      yad_env+=("${scale_env[@]}")
+    fi
+  fi
+  yad_css window_env window_options yad_env window ""
+  yad_css options_env options_options yad_env ika-options "${IKA_OPTIONS_TAB_CSS}"
+  yad_css mapping_env mapping_options yad_env gamepad "${CONTROLLER_MAPPING_FORM_CSS}"
+  tab_dir="$(mktemp -d "${CVD_TMP_DIR}/ika-settings.XXXXXX")"
+
+  # The window is shown again after "Reset to default", on the Startup Options
+  # tab, with the defaults once confirmed, else with the edits as they were
+  load_ika_options_form values
+  load_ika_mapping_form keys settings
+  while true; do
+    for key in "${!values[@]}"; do shown_values[${key}]="${values[${key}]}"; done
+    for key in "${!keys[@]}"; do shown_keys[${key}]="${keys[${key}]}"; done
+    for key in "${!settings[@]}"; do shown_settings[${key}]="${settings[${key}]}"; done
+    for key in "${!settings[@]}"; do ini_settings[${key}]="${settings[${key}]}"; done
+    ika_options_form_fields values fields1
+    controller_mapping_form_fields keys settings fields2 blank_at false
+    status=0
+    if [[ "${tabs}" == "true" ]]; then
+      key=$(( (RANDOM << 15 | RANDOM) + 1 ))
+      env "${yad_env[@]}" "${options_env[@]}" yad --plug="${key}" --tabnum=1 \
+        --form --separator="|" --borders="${APP_OPTIONS_TAB_BORDER_PX}" \
+        "${options_options[@]}" "${fields1[@]}" >"${tab_dir}/1" &
+      plugs=("$!")
+      env "${yad_env[@]}" "${mapping_env[@]}" yad --plug="${key}" --tabnum=2 \
+        --form --separator="|" --text="$(controller_mapping_form_text)" \
+        --text-align=center --columns=2 "${mapping_options[@]}" --align=right \
+        "${fields2[@]}" >"${tab_dir}/2" &
+      plugs+=("$!")
+      env "${yad_env[@]}" "${window_env[@]}" yad \
+        "${APP_SETTINGS_WINDOW_OPTIONS[@]}" --notebook --key="${key}" \
+        "${window_options[@]}" \
+        --tab="Startup Options" --tab="Gamepad Emulation" --active-tab=1 \
+        --title="Startup Options · Ika" --window-icon="${IKA_MENU_ICON}" \
+        --center --borders=12 \
+        --buttons-layout=spread --button="Reset to default:4" \
+        --button="Apply settings:2" --button="      Apply and restart      :0" \
+        --button=Cancel:1 >/dev/null \
+        || status=$?
+      case "${status}" in
+        0|1|2|4|252) ;;
+        *) kill "${plugs[@]}" 2>/dev/null || true ;;
+      esac
+      wait "${plugs[@]}" 2>/dev/null || true
+    else
+      env "${yad_env[@]}" "${options_env[@]}" yad \
+        "${APP_SETTINGS_WINDOW_OPTIONS[@]}" --form \
+        --title="Startup Options · Ika" --window-icon="${IKA_MENU_ICON}" \
+        --center --borders=12 --separator="|" "${options_options[@]}" \
+        "${fields1[@]}" \
+        --buttons-layout=spread --button="Reset to default:4" \
+        --button="Apply settings:2" --button="      Apply and restart      :0" \
+        --button=Cancel:1 >"${tab_dir}/1" \
+        || status=$?
+      printf '' >"${tab_dir}/2"
+    fi
+    case "${status}" in
+      0|2|4)
+        ;;
+      1|252)
+        rm -rf "${tab_dir}"
+        if [[ "${default_used}" == "true" ]]; then
+          respond "ika.ini has Ika's default start options and keyboard gamepad again"
+        else
+          respond "ika.ini left as it was"
+        fi
+        return 0
+        ;;
+      *)
+        rm -rf "${tab_dir}"
+        die "could not open the start options window (yad exited with ${status})"
+        ;;
+    esac
+
+    read_ika_options_form "$(<"${tab_dir}/1")" values
+    if [[ "${tabs}" == "true" ]]; then
+      read_controller_mapping_form "$(<"${tab_dir}/2")" blank_at keys settings ini_settings
+    fi
+    [[ "${status}" -eq 4 ]] || break
+    if confirm_reset_to_default "Ika" \
+        "This will reset Ika's startup options and gamepad emulation mappings."; then
+      reset_ika_settings_to_default
+      default_used=true
+      load_ika_options_form values
+      load_ika_mapping_form keys settings
+    fi
+  done
+  rm -rf "${tab_dir}"
+
+  save_ika_settings_form values keys settings shown_values shown_keys shown_settings changed
+  for key in "${changed[@]}"; do
+    joined+="${joined:+, }${key}"
+  done
+  if [[ "${#changed[@]}" -gt 0 ]]; then
+    respond "ika.ini: ${joined}; they apply the next time Ika starts"
+  elif [[ "${default_used}" == "true" ]]; then
+    respond "ika.ini has Ika's default start options and keyboard gamepad again"
+  else
+    respond "ika.ini left as it was"
+  fi
+  if [[ "${status}" -eq 0 ]]; then
+    respond "Restarting Ika"
+    IKA_NOTIFY=true setsid --fork "${IKA_SCRIPT_PATH}" restart \
+      </dev/null >/dev/null 2>&1
   fi
 }
 
@@ -9408,6 +10001,9 @@ main() {
       ;;
     __app_menu_watcher)
       run_app_menu_watcher
+      ;;
+    options)
+      edit_ika_settings
       ;;
     help|-h|--help)
       usage
