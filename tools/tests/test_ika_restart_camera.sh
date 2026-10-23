@@ -36,12 +36,13 @@ parse() {
       # The host has one usable camera
       detect_host_camera() { printf "%s\n" "${CAMERA}"; }
       resolve_camera_device() { printf "%s\n" "$1"; }
-      apply_camera_power_line_frequency() { :; }
+      apply_camera_power_line_frequency() { log_start_note "camera anti-flicker: test"; }
       args=()
       fullscreen=false
       parse_start_options fullscreen args "$@"
       printf "%s\n" "${args[@]}" | grep -c -- "--media=v4l2_proxy" || true
       printf "IKA_CAMERA=%s\n" "${IKA_CAMERA:-}"
+      printf "notes=%s\n" "${#START_LOG_NOTES[@]}"
     ' ika "$@"
 }
 
@@ -75,5 +76,63 @@ printf '[camera]\ndevice = off\n' >"${T}/home/ika/ika.ini"
 out="$(parse)"
 expect_equal "$(sed -n 1p <<<"${out}")" 0 "camera.device = off passes none"
 expect_equal "$(sed -n 2p <<<"${out}")" "IKA_CAMERA=off" "IKA_CAMERA as ika.ini has it"
+
+# The camera and anti-flicker lines are for the start log, not the console:
+# parsing the options prints nothing, and the notes are written by flush
+out="$(env -i PATH="${PATH}" HOME="${T}/home" CVD_HOME_DIR="${T}/home/ika" \
+    CVD_PRODUCT_OUT="${T}/product" CAMERA="${T}/video7" ROOT="${ROOT}" \
+  bash -c '
+    source "${ROOT}/tools/ika"
+    detect_host_camera() { printf "%s\n" "${CAMERA}"; }
+    resolve_camera_device() { printf "%s\n" "$1"; }
+    apply_camera_power_line_frequency() { log_start_note "camera anti-flicker: test"; }
+    IKA_CAMERA=auto
+    args=()
+    fullscreen=false
+    parse_start_options fullscreen args >"${CVD_HOME_DIR}/console" 2>&1
+    echo "console: $(cat "${CVD_HOME_DIR}/console")"
+    flush_start_log_notes 2>&1
+  ' ika)"
+expect_equal "$(sed -n 1p <<<"${out}")" "console: " "the camera lines are not on the console"
+expect_equal "$(sed -n 2,3p <<<"${out}")" "[ika] camera: ${T}/video7
+[ika] camera anti-flicker: test" "and flush writes them"
+
+# restart gives its notes to the start it runs, and prints nothing itself
+console="$(env -i PATH="${PATH}" HOME="${T}/home" CVD_HOME_DIR="${T}/home/ika" \
+    CVD_PRODUCT_OUT="${T}/product" CAMERA="${T}/video7" ROOT="${ROOT}" HANDOFF="${T}/handoff" \
+  bash -c '
+    source "${ROOT}/tools/ika"
+    detect_host_camera() { printf "%s\n" "${CAMERA}"; }
+    resolve_camera_device() { printf "%s\n" "$1"; }
+    apply_camera_power_line_frequency() { log_start_note "camera anti-flicker: test"; }
+    stop_startup_packaged_scrcpy() { :; }
+    stop_app_menu_watcher() { :; }
+    unmount_android_storage() { :; }
+    protect_overlay_resume() { :; }
+    has_live_cvd_processes() { return 1; }
+    stop_dnsmasq() { :; }
+    respond() { :; }
+    exec_start_command() { printf "%s" "${IKA_START_LOG_NOTES:-}" >"${HANDOFF}"; }
+    IKA_CAMERA=auto
+    main restart 2>&1
+  ' ika)"
+expect_equal "${console}" "" "restart prints no camera lines"
+expect_equal "$(<"${T}/handoff")" "camera: ${T}/video7
+camera anti-flicker: test" "restart hands them to start"
+
+# start writes what restart handed it, then its own, once
+out="$(env -i PATH="${PATH}" HOME="${T}/home" CVD_HOME_DIR="${T}/home/ika" \
+    CVD_PRODUCT_OUT="${T}/product" ROOT="${ROOT}" \
+    IKA_START_LOG_NOTES="camera: handed
+camera anti-flicker: handed" \
+  bash -c '
+    source "${ROOT}/tools/ika"
+    log_start_note "its own"
+    flush_start_log_notes 2>&1
+    flush_start_log_notes 2>&1
+  ' ika)"
+expect_equal "${out}" "[ika] camera: handed
+[ika] camera anti-flicker: handed
+[ika] its own" "start's flush, handed lines first, once"
 
 printf 'ika restart camera tests passed\n'
