@@ -5,7 +5,8 @@
 # for the game, from its mapping else from ika.ini, "Apply settings" saves
 # them in ~/ika/apps/PACKAGE/controller.ini and ticks the keyboard as a
 # gamepad in the game's start options, "Apply and start" starts the game too,
-# and "Reset to ika.ini" removes the mapping.
+# and "Default mapping", once confirmed, removes the mapping and shows
+# ika.ini's.
 
 set -euo pipefail
 
@@ -19,14 +20,27 @@ export CVD_PRODUCT_OUT="${T}/product"
 mkdir -p "${HOME}" "${CVD_PRODUCT_OUT}" "${T}/bin"
 unset GTK_THEME
 
-# A yad stub: it records its arguments, one per line, prints DIALOG_OUTPUT
-# and exits with DIALOG_STATUS: 2 for "Apply settings", 0 for "Apply and
-# start", 3 for "Reset to ika.ini", 1 for Cancel.
+# A yad stub: it records the window's arguments, one per line, in yad.args
+# (the confirmation's in yad.confirm.args), prints DIALOG_OUTPUT for the
+# window and exits with DIALOG_STATUS: 2 for "Apply settings", 0 for "Apply
+# and start", 4 for "Default mapping", 1 for Cancel; in the confirmation, 0
+# for "Use default mapping", 1 for Cancel. DIALOG_STATUS can list one per
+# call, counted in yad.calls; the last one stays.
 cat >"${T}/bin/yad" <<STUB
 #!/usr/bin/bash
-printf '%s\n' "\$@" > "${T}/yad.args"
-printf '%s' "\${DIALOG_OUTPUT:-}"
-exit "\${DIALOG_STATUS:-2}"
+echo >>"${T}/yad.calls"
+read -r -a statuses <<<"\${DIALOG_STATUS:-2}"
+n="\$(wc -l <"${T}/yad.calls")"
+if (( n > \${#statuses[@]} )); then
+  n=\${#statuses[@]}
+fi
+if [[ " \$* " == *" --form "* ]]; then
+  printf '%s\n' "\$@" > "${T}/yad.args"
+  printf '%s' "\${DIALOG_OUTPUT:-}"
+else
+  printf '%s\n' "\$@" > "${T}/yad.confirm.args"
+fi
+exit "\${statuses[n - 1]}"
 STUB
 chmod +x "${T}/bin/yad"
 export PATH="${T}/bin:${PATH}"
@@ -55,10 +69,21 @@ app_display_name() { printf 'Some Game\n'; }
 mkdir -p "${IKA_APPS_DIR}"
 printf 'com.example.game\n' > "${APP_GAMES_FILE}"
 
-# yad's form output: the label's empty value, then a value per control in
-# their order, the three settings, then the blank label's.
+# The second column's labels start with two figure spaces (U+2007)
+INDENT=$'\xe2\x80\x87\xe2\x80\x87'
+# and every label ends with two no-break spaces, before its type
+GAP=$'\xc2\xa0\xc2\xa0'
+# a key field's label ends with a colon: its spaces go before a no-break
+# space as the field's type, which yad shows as a text field
+PLAIN="${GAP}:"$'\xc2\xa0'
+
+# yad's form output: a value per control in their order, then the settings,
+# with the blank rows' empty values where the window has them: after the
+# first column's half of the fields, and at the end, as many as make the
+# two columns the same height.
 form_output() {
-  local control output="|"
+  local control i half output=""
+  local -a items=()
   local -A given=()
   while [[ $# -gt 0 && "$1" == *=* ]]; do
     given["${1%%=*}"]="${1#*=}"
@@ -66,13 +91,21 @@ form_output() {
   done
   for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
     if [[ -n "${given[${control}]+set}" ]]; then
-      output+="${given[${control}]}|"
+      items+=("${given[${control}]}")
     else
-      output+="${KEYBOARD_GAMEPAD_KEYS[${control}]}|"
+      items+=("${KEYBOARD_GAMEPAD_KEYS[${control}]}")
     fi
   done
-  output+="${1:-100}|${2:-50}|${3:-last}|${4:-right stick}|${5:-100}|"
-  printf '%s\n' "${output}|"
+  items+=("${1:-100}" "${2:-50}" "${3:-last}" "${4:-right stick}" "${5:-100}")
+  half=$(( (${#items[@]} + 1) / 2 ))
+  for i in "${!items[@]}"; do
+    (( i != half )) || output+="|"
+    output+="${items[i]}|"
+  done
+  for (( i = ${#items[@]} + 1; i < 2 * (half + 1); i++ )); do
+    output+="|"
+  done
+  printf '%s\n' "${output}"
 }
 
 # The window shows ika.ini's keys and settings for a game without a mapping,
@@ -80,16 +113,29 @@ form_output() {
 : >"${T}/log"
 DIALOG_OUTPUT="$(form_output a=J walk=)" edit_controller_mapping com.example.game
 dialog_args="$(<"${T}/yad.args")"
-expect_contains "${dialog_args}" $'--form\n--title=Controller Mapping\n' "a form titled Controller Mapping"
+expect_contains "${dialog_args}" $'--form\n--title=\n' "a form without a title in the titlebar"
 expect_contains "${dialog_args}" "<span font_size='15pt' weight='bold'>Some Game</span>" "the heading names the game"
 expect_contains "${dialog_args}" $'--columns=2\n' "two columns"
-expect_contains "${dialog_args}" $'--field=Left stick up:\nW\n--field=Left stick down:\nS\n' "the keys, with their labels"
-expect_contains "${dialog_args}" $'--field=Start:\nReturn Keypad_Enter\n' "a control with two keys"
-expect_contains "${dialog_args}" $'--field=Guide:\n\n' "a control without a key"
-expect_contains "${dialog_args}" $'--field=Walk (held: slower):\nTab\n' "the walk key"
-expect_contains "${dialog_args}" $'--field=Stick ramp, ms (0: at once):NUM\n100!0..5000!10\n--field=Walk speed, %:NUM\n50!1..100!5\n--field=Opposite keys held together:CB\n^last!neutral\n--field=Mouse moves the:CB\noff!^right stick!left stick\n--field=Mouse sensitivity, %:NUM\n100!1..1000!10\n' \
+expect_contains "${dialog_args}" $'\n--align=right\n' "labels right-justified against their fields"
+expect_contains "${dialog_args}" $'\nKeys of the keyboard gamepad, one or more per control: as SDL names them (Up, Space, Return,\nLeft_Shift, Keypad_Enter) or the mouse\'s (Mouse_Left, Mouse_Right, Mouse_Middle, Wheel_Up, Wheel_Down)\n' \
+  "the explanation is in the heading, in two lines"
+[[ "${dialog_args}" != *"--field=Keys of the keyboard gamepad"* ]] \
+  || fail "the explanation is a form field again, which widens the window"
+expect_contains "${dialog_args}" $'\n--field=Left stick up:'"${PLAIN}"$'\nW\n' "the form starts with the first control"
+blanks="$(grep -c -x -- '--field= :LBL' <<<"${dialog_args}")"
+expect_equal "${blanks}" 3 "blank rows: one ending the first column, two the second"
+expect_contains "${dialog_args}" $'--field=Y:'"${PLAIN}"$'\nV\n--field= :LBL\n\n--field='"${INDENT}"$'Start:'"${PLAIN}"$'\n' \
+  "the first column ends with Y and a blank row"
+expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Mouse sensitivity, %'"${GAP}"$':NUM\n100!1..1000!10\n--field= :LBL\n\n--field= :LBL\n\n--' \
+  "the second column ends with two blank rows"
+expect_contains "${dialog_args}" $'\n--field=Y:'"${PLAIN}"$'\n' "the first column's labels are not indented"
+expect_contains "${dialog_args}" $'--field=Left stick up:'"${PLAIN}"$'\nW\n--field=Left stick down:'"${PLAIN}"$'\nS\n' "the keys, with their labels"
+expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Start:'"${PLAIN}"$'\nReturn Keypad_Enter\n' "a control with two keys"
+expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Guide:'"${PLAIN}"$'\n\n' "a control without a key"
+expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Walk (held: slower):'"${PLAIN}"$'\nTab\n' "the walk key"
+expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Stick ramp, ms (0: at once)'"${GAP}"$':NUM\n100!0..5000!10\n--field='"${INDENT}"$'Walk speed, %'"${GAP}"$':NUM\n50!1..100!5\n--field='"${INDENT}"$'Opposite keys held together'"${GAP}"$':CB\n^last!neutral\n--field='"${INDENT}"$'Mouse moves the'"${GAP}"$':CB\noff!^right stick!left stick\n--field='"${INDENT}"$'Mouse sensitivity, %'"${GAP}"$':NUM\n100!1..1000!10\n' \
   "the settings, from ika.ini"
-expect_contains "${dialog_args}" $'--button=Reset to ika.ini:3\n--button=Apply settings:2\n--button=        Apply and start        :0\n--button=Cancel:1' \
+expect_contains "${dialog_args}" $'--button=Default mapping:4\n--button=Apply settings:2\n--button=        Apply and start        :0\n--button=Cancel:1' \
   "the buttons, in order"
 
 # "Apply settings" saves every control and setting in the game's mapping,
@@ -117,7 +163,7 @@ save_app_options com.example.game fullscreen gamekb
 : >"${T}/respond"
 DIALOG_OUTPUT="$(form_output a=J "0.000000" "35" neutral "left stick" "150.000000")" DIALOG_STATUS=0 edit_controller_mapping com.example.game
 dialog_args="$(<"${T}/yad.args")"
-expect_contains "${dialog_args}" $'--field=A:\nJ\n' "the game's key is shown"
+expect_contains "${dialog_args}" $'--field=A:'"${PLAIN}"$'\nJ\n' "the game's key is shown"
 expect_contains "$(<"${file}")" $'\nstick_ramp_ms = 0\nwalk_percent = 35\nsocd = neutral\n' "the settings as entered"
 expect_contains "$(<"${file}")" $'\nmouse_stick = left\nmouse_sensitivity = 150' "the mouse settings as entered"
 expect_equal "$(<"${T}/started")" "started com.example.game" "Apply and start starts the game"
@@ -127,18 +173,51 @@ spec="$(keyboard_gamepad_spec com.example.game)"
 expect_contains ",${spec}," ",ramp_ms=0,walk_percent=35,socd=neutral,mouse_stick=left,mouse_sensitivity=150" "the settings reach the spec"
 DIALOG_OUTPUT="$(form_output)" edit_controller_mapping com.example.game
 dialog_args="$(<"${T}/yad.args")"
-expect_contains "${dialog_args}" $'--field=Opposite keys held together:CB\nlast!^neutral\n' "neutral is shown as chosen"
-expect_contains "${dialog_args}" $'--field=Mouse moves the:CB\noff!right stick!^left stick\n' "the left stick is shown as the mouse's"
+expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Opposite keys held together'"${GAP}"$':CB\nlast!^neutral\n' "neutral is shown as chosen"
+expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Mouse moves the'"${GAP}"$':CB\noff!right stick!^left stick\n' "the left stick is shown as the mouse's"
 echo "ok: Apply and start saves the game's mapping and starts it"
 
-# Cancel leaves the mapping; "Reset to ika.ini" removes it
+# Cancel leaves the mapping
 cp "${file}" "${T}/before"
 DIALOG_STATUS=1 edit_controller_mapping com.example.game
 cmp -s "${file}" "${T}/before" || fail "Cancel changed the mapping"
-DIALOG_STATUS=3 edit_controller_mapping com.example.game
-[[ ! -e "${file}" ]] || fail "Reset to ika.ini kept the mapping"
-expect_contains "$(<"${T}/respond")" "uses the controller mapping of ika.ini again" "the reset is reported"
-echo "ok: Cancel and Reset to ika.ini"
+echo "ok: Cancel"
+
+# "Default mapping" asks first: Cancel there brings the window back with the
+# edits as they were, and keeps the mapping
+: >"${T}/yad.calls"
+: >"${T}/respond"
+DIALOG_OUTPUT="$(form_output a=K)" DIALOG_STATUS="4 1 1" edit_controller_mapping com.example.game
+expect_equal "$(wc -l <"${T}/yad.calls")" 3 "the window, the confirmation and the window again"
+confirm_args="$(<"${T}/yad.confirm.args")"
+expect_contains "${confirm_args}" "Use the default mapping for Some Game?" "the confirmation names the game"
+expect_contains "${confirm_args}" $'--button=Use default mapping:0\n--button=Cancel:1' "the confirmation's buttons"
+expect_contains "$(<"${T}/yad.args")" $'--field=A:'"${PLAIN}"$'\nK\n' "the window comes back with the edit"
+cmp -s "${file}" "${T}/before" || fail "a declined Default mapping changed the mapping"
+expect_contains "$(<"${T}/respond")" "Controller mapping of Some Game left as it was" "and nothing changed"
+echo "ok: Default mapping, declined"
+
+# Once confirmed, the mapping is gone and the window comes back with
+# ika.ini's: Cancel then leaves it so
+: >"${T}/yad.calls"
+: >"${T}/respond"
+DIALOG_OUTPUT="$(form_output a=K)" DIALOG_STATUS="4 0 1" edit_controller_mapping com.example.game
+expect_equal "$(wc -l <"${T}/yad.calls")" 3 "the window, the confirmation and the window again"
+[[ ! -e "${file}" ]] || fail "Default mapping kept the mapping"
+dialog_args="$(<"${T}/yad.args")"
+expect_contains "${dialog_args}" $'--field=A:'"${PLAIN}"$'\n'"${KEYBOARD_GAMEPAD_KEYS[a]}"$'\n' "the window shows ika.ini's key"
+expect_contains "${dialog_args}" $'--field='"${INDENT}"$'Opposite keys held together'"${GAP}"$':CB\n^last!neutral\n' "and ika.ini's settings"
+expect_equal "$(<"${T}/respond")" "Some Game uses the controller mapping of ika.ini again" "the reset is reported"
+
+# and "Apply settings" saves the window's mapping as the game's again
+: >"${T}/yad.calls"
+: >"${T}/respond"
+cp "${T}/before" "${file}"
+DIALOG_OUTPUT="$(form_output)" DIALOG_STATUS="4 0 2" edit_controller_mapping com.example.game
+expect_contains "$(<"${file}")" $'\na = '"${KEYBOARD_GAMEPAD_KEYS[a]}"$'\n' "ika.ini's key is saved"
+expect_contains "$(<"${file}")" $'\nsocd = last\n' "with ika.ini's settings"
+expect_contains "$(<"${T}/respond")" "Controller mapping of Some Game saved" "and said so"
+echo "ok: Default mapping, confirmed"
 
 # A host without yad is told so
 command() { [[ "$2" != "yad" ]] && builtin command "$@"; }

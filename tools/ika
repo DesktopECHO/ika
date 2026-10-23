@@ -2016,7 +2016,8 @@ App windows:
   settings" saves them in ~/ika/apps/PACKAGE/controller.ini, over
   [keyboard_gamepad] in ika.ini, and ticks "Use the keyboard to emulate a
   gamepad" in the game's start options; "Apply and start" also starts the
-  game; "Reset to ika.ini" removes the game's mapping.
+  game; "Default mapping", once confirmed, removes the game's mapping and
+  shows ika.ini's in the window.
   '${SCRIPT_NAME} app --controller NAME' opens it from a terminal.
 
 Installing and removing apps:
@@ -5943,7 +5944,7 @@ save_controller_mapping() {
 # Controller mapping of ${package}: the keyboard gamepad's keys and settings
 # for this game, over [keyboard_gamepad] in ika.ini. "Controller mapping..."
 # on the game's launcher (ika app --controller NAME) edits it; delete the
-# file, or press "Reset to ika.ini" there, to go back to ika.ini. The keys
+# file, or press "Default mapping" there, to go back to ika.ini. The keys
 # are SDL's key names, with _ for a space; an empty value leaves the control
 # without a key.
 
@@ -5959,13 +5960,36 @@ EOF
   mv -f "${file}.tmp" "${file}"
 }
 
+# Asks whether the game named LABEL is to use the default mapping (ika.ini's
+# [keyboard_gamepad]) again, deleting its own: true if so
+confirm_default_controller_mapping() {
+  local label="$1"
+  local text
+  local -a yad_env=()
+
+  if [[ -z "${GTK_THEME:-}" && "$(host_color_scheme)" == "dark" ]]; then
+    yad_env=(GTK_THEME=Adwaita:dark)
+  fi
+  text="<span font_size='13pt' weight='bold'>Use the default mapping for $(yad_markup_escape "${label}")?</span>"
+  text+=$'\n\n'"Its own keys and settings are deleted, and it uses the"
+  text+=$'\n'"keyboard gamepad's mapping in ika.ini again."
+  # Some space between the text and the buttons: a tall transparent dot, as
+  # yad drops a last line of spaces, and a short line only fills the room
+  # the window has at its least height
+  text+=$'\n'"<span font_size='16pt' alpha='1'>.</span>"
+  env "${yad_env[@]}" yad --title="" --window-icon="${IKA_MENU_ICON}" \
+    --undecorated --center --borders=24 --text="${text}" --text-align=center \
+    --buttons-layout=spread --button="Use default mapping:0" --button=Cancel:1 \
+    >/dev/null
+}
+
 # "Controller mapping..." on a game's launcher (ika app --controller NAME): a
 # window (yad) with the keyboard gamepad's keys and settings for the game,
 # from its mapping, else from ika.ini. "Apply settings" saves them in the
 # game's mapping and ticks "Use the keyboard to emulate a gamepad" in the game's
 # start options if it is not, "Apply and start" does that and starts the
-# game, "Reset to ika.ini" removes the game's mapping, and Cancel leaves
-# everything as it was.
+# game, "Default mapping" asks whether to remove the game's mapping and, if
+# so, shows ika.ini's in the window, and Cancel leaves the rest as it was.
 edit_controller_mapping() {
   local name="$1"
   local package
@@ -5981,9 +6005,18 @@ edit_controller_mapping() {
   local value
   local socd_choice
   local mouse_choice
+  local half
+  local indent
+  local gap
+  local field
+  local reload=true
+  local default_used=false
   local -a fields=()
   local -a values=()
+  local -a items=()
+  local -a item_values=()
   local -a saved=()
+  local -A blank_at=()
   local -a yad_env=()
   local other key
   local -a words kept
@@ -6008,119 +6041,179 @@ edit_controller_mapping() {
   command -v yad >/dev/null 2>&1 \
     || die "the controller mapping window needs yad; install it"
 
-  # The game's mapping, else ika.ini's keys and settings
-  load_app_controller_mapping "${package}" app_keys app_settings
-  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
-    if [[ -n "${app_keys[${control}]+set}" ]]; then
-      keys[${control}]="${app_keys[${control}]}"
-    else
-      keys[${control}]="${KEYBOARD_GAMEPAD_KEYS[${control}]}"
-    fi
-  done
-  for setting in "${KEYBOARD_GAMEPAD_SETTINGS[@]}"; do
-    if [[ -n "${app_settings[${setting}]+set}" ]]; then
-      value="${app_settings[${setting}]}"
-    else
-      value="${KEYBOARD_GAMEPAD_SETTING_VALUES[${setting}]}"
-    fi
-    settings[${setting}]="$(normalize_keyboard_gamepad_setting "${setting}" \
-      "${value}" "${KEYBOARD_GAMEPAD_SETTING_VALUES[${setting}]}")"
-  done
-
   heading="<span font_size='15pt' weight='bold'>Controller Mapping</span>"
   heading+=$'\n'"<span font_family='monospace' font_size='11pt' alpha='55%'>"
   heading+="────────────────────────────────────────────────────────</span>"
   heading+=$'\n'"<span font_size='15pt' weight='bold'>$(yad_markup_escape "${label}")</span>"
+  # The explanation is broken into two lines here, no wider than the fields:
+  # as a label among them, it widened its column, and the window, to its
+  # whole length
+  heading+=$'\n'"<span font_size='5pt'> </span>"
+  heading+=$'\n'"Keys of the keyboard gamepad, one or more per control: as SDL names them (Up, Space, Return,"
+  heading+=$'\n'"Left_Shift, Keypad_Enter) or the mouse's (Mouse_Left, Mouse_Right, Mouse_Middle, Wheel_Up, Wheel_Down)"
   heading+=$'\n'" "
-  fields=(--field="Keys of the keyboard gamepad for $(yad_markup_escape "${label}"), as SDL names them (Up, Space, Return, Left_Shift, Keypad_Enter) or the mouse's (Mouse_Left, Mouse_Right, Mouse_Middle, Wheel_Up, Wheel_Down), one or more per control:"$'\n'"<span font_size='5pt'> </span>:LBL" "")
-  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
-    fields+=(--field="$(keyboard_gamepad_control_text "${control}"):")
-    fields+=("${keys[${control}]}")
-  done
-  fields+=(--field="Stick ramp, ms (0: at once):NUM" "${settings[stick_ramp_ms]}!0..5000!10")
-  fields+=(--field="Walk speed, %:NUM" "${settings[walk_percent]}!1..100!5")
-  if [[ "${settings[socd]}" == "neutral" ]]; then
-    socd_choice="last!^neutral"
-  else
-    socd_choice="^last!neutral"
-  fi
-  fields+=(--field="Opposite keys held together:CB" "${socd_choice}")
-  case "${settings[mouse_stick]}" in
-    right) mouse_choice="off!^right stick!left stick" ;;
-    left) mouse_choice="off!right stick!^left stick" ;;
-    *) mouse_choice="^off!right stick!left stick" ;;
-  esac
-  fields+=(--field="Mouse moves the:CB" "${mouse_choice}")
-  fields+=(--field="Mouse sensitivity, %:NUM" "${settings[mouse_sensitivity]}!1..1000!10")
-  fields+=(--field="<span font_size='8pt'> </span>:LBL" "")
   if [[ -z "${GTK_THEME:-}" && "$(host_color_scheme)" == "dark" ]]; then
     yad_env=(GTK_THEME=Adwaita:dark)
   fi
-  output="$(env "${yad_env[@]}" yad --form --title="Controller Mapping" \
-    --window-icon="${IKA_MENU_ICON}" --undecorated --center --borders=24 \
-    --text="${heading}" --text-align=center --separator="|" --columns=2 \
-    "${fields[@]}" \
-    --buttons-layout=spread --button="Reset to ika.ini:3" \
-    --button="Apply settings:2" --button="        Apply and start        :0" \
-    --button=Cancel:1)" \
-    || status=$?
-  case "${status}" in
-    0|2)
-      ;;
-    3)
-      rm -f "$(app_controller_mapping_file "${package}")"
-      respond "${label} uses the controller mapping of ika.ini again"
-      return 0
-      ;;
-    1|252)
-      respond "Controller mapping of ${label} left as it was"
-      return 0
-      ;;
-    *)
-      die "could not open the controller mapping window (yad exited with ${status})"
-      ;;
-  esac
 
-  # One value per field, the label's first, then a key field per control,
-  # then the three settings, then the blank label's
-  IFS='|' read -r -a values <<<"${output}"
-  i=1
-  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
-    shown[${control}]="${keys[${control}]}"
-    value="${values[i]:-}"
-    value="${value#"${value%%[![:space:]]*}"}"
-    value="${value%"${value##*[![:space:]]}"}"
-    keys[${control}]="${value}"
-    i=$((i + 1))
-  done
-  # A key given to a control in the window leaves the controls that still
-  # have it as they were shown, so that moving a key takes one edit (scrcpy
-  # keeps a key given twice for its first control)
-  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
-    [[ "${keys[${control}]}" != "${shown[${control}]}" ]] || continue
-    for other in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
-      [[ "${other}" != "${control}" && "${keys[${other}]}" == "${shown[${other}]}" ]] || continue
-      read -r -a words <<<"${keys[${other}]}"
-      kept=()
-      for key in "${words[@]}"; do
-        [[ " ${keys[${control}],,} " == *" ${key,,} "* ]] || kept+=("${key}")
+  # The window is shown again after "Default mapping", with the default
+  # mapping once confirmed, else with the edits as they were
+  while true; do
+    if [[ "${reload}" == "true" ]]; then
+      # The game's mapping, else ika.ini's keys and settings
+      app_keys=()
+      app_settings=()
+      load_app_controller_mapping "${package}" app_keys app_settings
+      for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+        if [[ -n "${app_keys[${control}]+set}" ]]; then
+          keys[${control}]="${app_keys[${control}]}"
+        else
+          keys[${control}]="${KEYBOARD_GAMEPAD_KEYS[${control}]}"
+        fi
       done
-      keys[${other}]="${kept[*]}"
+      for setting in "${KEYBOARD_GAMEPAD_SETTINGS[@]}"; do
+        if [[ -n "${app_settings[${setting}]+set}" ]]; then
+          value="${app_settings[${setting}]}"
+        else
+          value="${KEYBOARD_GAMEPAD_SETTING_VALUES[${setting}]}"
+        fi
+        settings[${setting}]="$(normalize_keyboard_gamepad_setting "${setting}" \
+          "${value}" "${KEYBOARD_GAMEPAD_SETTING_VALUES[${setting}]}")"
+      done
+      reload=false
+    fi
+    items=()
+    item_values=()
+    for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+      items+=("$(keyboard_gamepad_control_text "${control}"):")
+      item_values+=("${keys[${control}]}")
     done
+    items+=("Stick ramp, ms (0: at once):NUM" "Walk speed, %:NUM")
+    item_values+=("${settings[stick_ramp_ms]}!0..5000!10" "${settings[walk_percent]}!1..100!5")
+    if [[ "${settings[socd]}" == "neutral" ]]; then
+      socd_choice="last!^neutral"
+    else
+      socd_choice="^last!neutral"
+    fi
+    items+=("Opposite keys held together:CB")
+    item_values+=("${socd_choice}")
+    case "${settings[mouse_stick]}" in
+      right) mouse_choice="off!^right stick!left stick" ;;
+      left) mouse_choice="off!right stick!^left stick" ;;
+      *) mouse_choice="^off!right stick!left stick" ;;
+    esac
+    items+=("Mouse moves the:CB" "Mouse sensitivity, %:NUM")
+    item_values+=("${mouse_choice}" "${settings[mouse_sensitivity]}!1..1000!10")
+    # yad fills the first of the two columns with half the fields, then the
+    # second: each column ends with a blank row, which leaves a line's worth of
+    # space between the fields and the buttons. The blank rows' values are
+    # left out when the output is read.
+    # The second column's labels start two figure spaces (U+2007, a digit's
+    # width) in: with yad's own spacing, about four characters between them
+    # and the first column's fields. Every label ends with two no-break
+    # spaces, to set it off its field. yad takes what follows a field's last
+    # colon as its type when there is something there, so a key field's label
+    # ("Up:") gets a no-break space as a type after the spaces, which yad does
+    # not know and shows as a text field, as it does without a type.
+    half=$(( (${#items[@]} + 1) / 2 ))
+    indent=$'\xe2\x80\x87\xe2\x80\x87'
+    gap=$'\xc2\xa0\xc2\xa0'
+    fields=()
+    blank_at=()
+    for i in "${!items[@]}"; do
+      if (( i == half )); then
+        blank_at[$(( ${#fields[@]} / 2 ))]=1
+        fields+=(--field=" :LBL" "")
+      fi
+      case "${items[i]}" in
+        *:NUM|*:CB) field="${items[i]%:*}${gap}:${items[i]##*:}" ;;
+        *) field="${items[i]}${gap}:"$'\xc2\xa0' ;;
+      esac
+      (( i < half )) || field="${indent}${field}"
+      fields+=(--field="${field}" "${item_values[i]}")
+    done
+    while (( ${#fields[@]} / 2 < 2 * (half + 1) )); do
+      blank_at[$(( ${#fields[@]} / 2 ))]=1
+      fields+=(--field=" :LBL" "")
+    done
+    status=0
+    output="$(env "${yad_env[@]}" yad --form --title="" \
+      --window-icon="${IKA_MENU_ICON}" --undecorated --center --borders=24 \
+      --text="${heading}" --text-align=center --separator="|" --columns=2 \
+      --align=right "${fields[@]}" \
+      --buttons-layout=spread --button="Default mapping:4" \
+      --button="Apply settings:2" --button="        Apply and start        :0" \
+      --button=Cancel:1)" \
+      || status=$?
+    # yad prints the fields for even exit codes only: "Default mapping" is 4
+    # so that the window can come back with the edits
+    case "${status}" in
+      0|2|4)
+        ;;
+      1|252)
+        if [[ "${default_used}" == "true" ]]; then
+          respond "${label} uses the controller mapping of ika.ini again"
+        else
+          respond "Controller mapping of ${label} left as it was"
+        fi
+        return 0
+        ;;
+      *)
+        die "could not open the controller mapping window (yad exited with ${status})"
+        ;;
+    esac
+
+    # One value per field, the blank rows' left out: a key field per control,
+    # then the settings
+    IFS='|' read -r -a words <<<"${output}"
+    values=()
+    for i in "${!words[@]}"; do
+      [[ -n "${blank_at[${i}]+set}" ]] || values+=("${words[i]}")
+    done
+    i=0
+    for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+      shown[${control}]="${keys[${control}]}"
+      value="${values[i]:-}"
+      value="${value#"${value%%[![:space:]]*}"}"
+      value="${value%"${value##*[![:space:]]}"}"
+      keys[${control}]="${value}"
+      i=$((i + 1))
+    done
+    # A key given to a control in the window leaves the controls that still
+    # have it as they were shown, so that moving a key takes one edit (scrcpy
+    # keeps a key given twice for its first control)
+    for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+      [[ "${keys[${control}]}" != "${shown[${control}]}" ]] || continue
+      for other in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+        [[ "${other}" != "${control}" && "${keys[${other}]}" == "${shown[${other}]}" ]] || continue
+        read -r -a words <<<"${keys[${other}]}"
+        kept=()
+        for key in "${words[@]}"; do
+          [[ " ${keys[${control}],,} " == *" ${key,,} "* ]] || kept+=("${key}")
+        done
+        keys[${other}]="${kept[*]}"
+      done
+    done
+    # yad prints numbers with decimals
+    settings[stick_ramp_ms]="${values[i]%%[.,]*}"
+    settings[walk_percent]="${values[i + 1]%%[.,]*}"
+    settings[socd]="${values[i + 2]:-last}"
+    case "${values[i + 3]:-}" in
+      "right stick") settings[mouse_stick]="right" ;;
+      "left stick") settings[mouse_stick]="left" ;;
+      *) settings[mouse_stick]="off" ;;
+    esac
+    settings[mouse_sensitivity]="${values[i + 4]%%[.,]*}"
+    settings[socd_dpad]="${app_settings[socd_dpad]:-}"
+    settings[socd_left_stick]="${app_settings[socd_left_stick]:-}"
+    settings[socd_right_stick]="${app_settings[socd_right_stick]:-}"
+    [[ "${status}" -eq 4 ]] || break
+    if confirm_default_controller_mapping "${label}"; then
+      rm -f "$(app_controller_mapping_file "${package}")"
+      default_used=true
+      reload=true
+    fi
   done
-  # yad prints numbers with decimals
-  settings[stick_ramp_ms]="${values[i]%%[.,]*}"
-  settings[walk_percent]="${values[i + 1]%%[.,]*}"
-  settings[socd]="${values[i + 2]:-last}"
-  case "${values[i + 3]:-}" in
-    "right stick") settings[mouse_stick]="right" ;;
-    "left stick") settings[mouse_stick]="left" ;;
-    *) settings[mouse_stick]="off" ;;
-  esac
-  settings[mouse_sensitivity]="${values[i + 4]%%[.,]*}"
-  settings[socd_dpad]="${app_settings[socd_dpad]:-}"
-  settings[socd_left_stick]="${app_settings[socd_left_stick]:-}"
-  settings[socd_right_stick]="${app_settings[socd_right_stick]:-}"
   save_controller_mapping "${package}" keys settings
 
   # The mapping is of use with the keyboard as a gamepad
