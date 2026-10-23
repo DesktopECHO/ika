@@ -6637,7 +6637,7 @@ yad_tabs_available() {
 # it. "Apply and start" also starts the app. "Reset to default" asks whether
 # to reset the app's start options and remove the app's mapping
 # (reset_app_to_default) and, if so, shows the default start options and
-# ika.ini's mapping, on the Gamepad Emulation tab. Cancel, or closing the
+# ika.ini's mapping, on the Startup Options tab. Cancel, or closing the
 # window, leaves everything else as it was.
 edit_app_settings() {
   local name="$1"
@@ -6708,9 +6708,9 @@ edit_app_settings() {
   yad_css mapping_env mapping_options yad_env gamepad "${CONTROLLER_MAPPING_FORM_CSS}"
   tab_dir="$(mktemp -d "${CVD_TMP_DIR}/app-settings.XXXXXX")"
 
-  # The window is shown again after "Reset to default", on the Gamepad
-  # Emulation tab, with the default mapping once confirmed, else with the
-  # edits as they were
+  # The window is shown again after "Reset to default", on the Startup
+  # Options tab, with the defaults once confirmed, else with the edits as
+  # they were
   while true; do
     app_options_form_fields "${label}" "${dpi}" ticked fields1
     controller_mapping_form_fields keys settings fields2 blank_at false
@@ -6770,7 +6770,7 @@ edit_app_settings() {
     done
     read_controller_mapping_form "$(<"${tab_dir}/2")" blank_at keys settings app_settings
     [[ "${status}" -eq 4 ]] || break
-    tab=2
+    tab=1
     if confirm_reset_to_default "${label}"; then
       reset_app_to_default "${package}"
       default_used=true

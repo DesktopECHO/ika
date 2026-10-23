@@ -286,7 +286,8 @@ shoulder and trigger, Start), then Guide and the mouse's settings.
 - **Reset to default** asks first (**Apply defaults to APP**, **Ok** or
   **Cancel**), then resets the app's start options, a game's to **Fullscreen
   mode** at the console's density, and deletes the game's mapping, so the
-  game uses `[keyboard_gamepad]` again; the window shows both.
+  game uses `[keyboard_gamepad]` again; the window comes back on the
+  **Startup Options** tab with both.
 - **Cancel** leaves everything as it was.
 
 A key typed for one control is taken from the control it was shown on. The
