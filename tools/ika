@@ -6218,15 +6218,32 @@ confirm_reset_to_default() {
 
 # The controller mapping form's explanation, above its fields: in two lines,
 # no wider than the fields, since as a label among them it widened its column,
-# and the window, to its whole length; then a blank line.
+# and the window, to its whole length; then a small blank line, which keeps
+# the fields up from the buttons as the form's last row does.
 controller_mapping_form_text() {
-  printf '%s\n%s\n ' \
+  printf "%s\n%s\n<span font_size='4pt'> </span>" \
     "One or more keys per control, separated by spaces: Space, Return, Left_Shift," \
     "Keypad_Enter, Mouse_Left, Mouse_Right, Mouse_Middle, Wheel_Up, Wheel_Down"
 }
 
 # The settings the controller mapping form shows, besides the controls' keys.
 CONTROLLER_MAPPING_FORM_SETTINGS=(stick_ramp_ms walk_percent socd mouse_stick mouse_sensitivity)
+
+# The controller mapping form's fields as the hands have them: the first
+# column has the left half of the pad, the left stick and its click, the
+# D-pad, the left shoulder and trigger and Back, then the walk key, its
+# speed and the sticks' other settings; after the "|", the second has the
+# right half, the face buttons, the right stick and its click, the right
+# shoulder and trigger and Start, then Guide and the mouse's settings. Each control and setting is
+# there once; ika.ini, the mappings and the spec keep their own order.
+CONTROLLER_MAPPING_FORM_LAYOUT=(
+  left_stick_up left_stick_down left_stick_left left_stick_right left_stick
+  dpad_up dpad_down dpad_left dpad_right left_shoulder left_trigger back
+  walk walk_percent stick_ramp_ms socd
+  "|"
+  a b x y right_stick_up right_stick_down right_stick_left right_stick_right
+  right_stick right_shoulder right_trigger start guide
+  mouse_stick mouse_sensitivity)
 
 # Sets the associative arrays named KEYS_VAR and SETTINGS_VAR to the controller
 # mapping the form shows for PACKAGE: its own, else ika.ini's keys and
@@ -6285,97 +6302,132 @@ controller_mapping_form_signature() {
 }
 
 # Sets the array named FIELDS_VAR to the controller mapping form of the
-# associative arrays named KEYS_VAR and SETTINGS_VAR, for yad, in two columns,
-# and BLANKS_VAR (an associative array) to the indexes of its blank rows,
-# whose values reading the form leaves out. With BLANK_ROWS true, as a window
-# of its own, each column ends with a blank row, which leaves a line's worth
-# of space between the fields and the buttons; as a tab, whose frame does
-# that, only the second column gets a blank row, to be as high as the first.
+# associative arrays named KEYS_VAR and SETTINGS_VAR, for yad, in the two
+# columns of CONTROLLER_MAPPING_FORM_LAYOUT, and BLANKS_VAR (an associative
+# array) to the indexes of its blank rows, whose values reading the form
+# leaves out. The shorter column ends with blank rows, to be as high as the
+# longer; each column ends with one more, which leaves space between the
+# fields and the buttons: a line's worth with BLANK_ROWS true, as a window of
+# its own, and a small one as a tab, whose frame adds to it.
 controller_mapping_form_fields() {
   local -n fields_keys_ref="$1"
   local -n fields_settings_ref="$2"
   local -n mapping_fields_ref="$3"
   local -n mapping_blanks_ref="$4"
   local blank_rows="$5"
-  local control
+  local entry
+  local column=1
   local label
   local half_space
   local socd_choice
   local mouse_choice
-  local half
-  local rows
+  local rows=0
+  local shown
   local indent
   local gap
   local field
   local i
   local -a items=()
   local -a item_values=()
+  local -a item_columns=()
+  local -a column_rows=([1]=0 [2]=0)
 
-  # A control's label ends with a colon ("Up:"), but "Hold to walk", which
-  # reads as an instruction, as the settings under it do
-  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
-    label="$(keyboard_gamepad_control_text "${control}")"
-    [[ "${control}" == "walk" ]] || label+=":"
-    items+=("${label}")
-    item_values+=("${fields_keys_ref[${control}]}")
-  done
   # A narrow no-break space (U+202F), about half a space, on each side of "="
   half_space=$'\xe2\x80\xaf'
-  items+=("Full tilt, ms (0${half_space}=${half_space}Instant):NUM" "Walk speed, %:NUM")
-  item_values+=("${fields_settings_ref[stick_ramp_ms]}!0..5000!10" "${fields_settings_ref[walk_percent]}!1..100!5")
   if [[ "${fields_settings_ref[socd]}" == "neutral" ]]; then
     socd_choice="Last pressed wins!^Cancel out"
   else
     socd_choice="^Last pressed wins!Cancel out"
   fi
-  items+=("Opposite directions:CB")
-  item_values+=("${socd_choice}")
   case "${fields_settings_ref[mouse_stick]}" in
     right) mouse_choice="Off!^Right stick!Left stick" ;;
     left) mouse_choice="Off!Right stick!^Left stick" ;;
     *) mouse_choice="^Off!Right stick!Left stick" ;;
   esac
-  items+=("Mouse → Analog stick:CB" "Mouse sensitivity, %:NUM")
-  item_values+=("${mouse_choice}" "${fields_settings_ref[mouse_sensitivity]}!1..1000!10")
+  for entry in "${CONTROLLER_MAPPING_FORM_LAYOUT[@]}"; do
+    case "${entry}" in
+      "|")
+        column=2
+        continue
+        ;;
+      stick_ramp_ms)
+        items+=("Full tilt, ms (0${half_space}=${half_space}Instant):NUM")
+        item_values+=("${fields_settings_ref[stick_ramp_ms]}!0..5000!10")
+        ;;
+      walk_percent)
+        items+=("Walk speed, %:NUM")
+        item_values+=("${fields_settings_ref[walk_percent]}!1..100!5")
+        ;;
+      socd)
+        items+=("Opposite directions:CB")
+        item_values+=("${socd_choice}")
+        ;;
+      mouse_stick)
+        items+=("Mouse → Analog stick:CB")
+        item_values+=("${mouse_choice}")
+        ;;
+      mouse_sensitivity)
+        items+=("Mouse sensitivity, %:NUM")
+        item_values+=("${fields_settings_ref[mouse_sensitivity]}!1..1000!10")
+        ;;
+      *)
+        # A control's label has no colon, as the settings' have none
+        label="$(keyboard_gamepad_control_text "${entry}")"
+        items+=("${label}")
+        item_values+=("${fields_keys_ref[${entry}]}")
+        ;;
+    esac
+    item_columns+=("${column}")
+    column_rows[${column}]=$(( column_rows[${column}] + 1 ))
+  done
   # yad fills the first of the two columns with half the fields, then the
-  # second.
+  # second: both columns are as high, blank rows included.
   # The second column's labels start two figure spaces (U+2007, a digit's
   # width) in: with yad's own spacing, about four characters between them
-  # and the first column's fields. Every label ends with two no-break
-  # spaces, to set it off its field. yad takes what follows a field's last
-  # colon as its type when there is something there, so a key field's label
-  # ("Up:") gets a no-break space as a type after the spaces, which yad does
-  # not know and shows as a text field, as it does without a type.
-  half=$(( (${#items[@]} + 1) / 2 ))
-  rows="${half}"
-  [[ "${blank_rows}" != "true" ]] || rows=$(( half + 1 ))
+  # and the first column's fields. Every label ends with a no-break space,
+  # to set it off its field, as close as a colon and a space would. yad
+  # takes what follows a field's last colon as its type, so a key field's
+  # label ("Up") gets a colon and a no-break space as a type after the
+  # space, which yad does not know and shows as a text field, as it does
+  # without a type.
+  for column in 1 2; do
+    (( column_rows[${column}] <= rows )) || rows="${column_rows[${column}]}"
+  done
+  [[ "${blank_rows}" != "true" ]] || rows=$(( rows + 1 ))
   indent=$'\xe2\x80\x87\xe2\x80\x87'
-  gap=$'\xc2\xa0\xc2\xa0'
+  gap=$'\xc2\xa0'
   mapping_fields_ref=()
   mapping_blanks_ref=()
-  for i in "${!items[@]}"; do
-    if [[ "${blank_rows}" == "true" ]] && (( i == half )); then
+  for column in 1 2; do
+    shown=0
+    for i in "${!items[@]}"; do
+      (( item_columns[i] == column )) || continue
+      case "${items[i]}" in
+        *:NUM|*:CB) field="${items[i]%:*}${gap}:${items[i]##*:}" ;;
+        *) field="${items[i]}${gap}:"$'\xc2\xa0' ;;
+      esac
+      (( column == 1 )) || field="${indent}${field}"
+      mapping_fields_ref+=(--field="${field}" "${item_values[i]}")
+      shown=$((shown + 1))
+    done
+    for (( ; shown < rows; shown++ )); do
       mapping_blanks_ref[$(( ${#mapping_fields_ref[@]} / 2 ))]=1
       mapping_fields_ref+=(--field=" :LBL" "")
+    done
+    # As a tab, a small blank row, a little space between the last fields
+    # and the frame above the buttons
+    if [[ "${blank_rows}" != "true" ]]; then
+      mapping_blanks_ref[$(( ${#mapping_fields_ref[@]} / 2 ))]=1
+      mapping_fields_ref+=(--field="<span font_size='6pt'> </span>:LBL" "")
     fi
-    case "${items[i]}" in
-      *:NUM|*:CB) field="${items[i]%:*}${gap}:${items[i]##*:}" ;;
-      *) field="${items[i]}${gap}:"$'\xc2\xa0' ;;
-    esac
-    (( i < half )) || field="${indent}${field}"
-    mapping_fields_ref+=(--field="${field}" "${item_values[i]}")
-  done
-  while (( ${#mapping_fields_ref[@]} / 2 < 2 * rows )); do
-    mapping_blanks_ref[$(( ${#mapping_fields_ref[@]} / 2 ))]=1
-    mapping_fields_ref+=(--field=" :LBL" "")
   done
 }
 
 # Reads the controller mapping form's OUTPUT, the blank rows of BLANKS_VAR left
-# out: a key field per control, then the settings, into the associative
-# arrays named KEYS_VAR and SETTINGS_VAR, which hold the mapping the form
-# showed. The settings the form does not show come from APP_SETTINGS_VAR, the
-# game's own mapping.
+# out: a value per field of CONTROLLER_MAPPING_FORM_LAYOUT, in its order, a
+# control's keys or a setting, into the associative arrays named KEYS_VAR
+# and SETTINGS_VAR, which hold the mapping the form showed. The settings the
+# form does not show come from APP_SETTINGS_VAR, the game's own mapping.
 read_controller_mapping_form() {
   local output="$1"
   local -n read_blanks_ref="$2"
@@ -6383,6 +6435,7 @@ read_controller_mapping_form() {
   local -n read_settings_ref="$4"
   local -n read_app_settings_ref="$5"
   local i
+  local entry
   local control
   local other
   local key
@@ -6391,19 +6444,24 @@ read_controller_mapping_form() {
   local -a values=()
   local -a kept=()
   local -A shown=()
+  local -A form_values=()
 
   IFS='|' read -r -a words <<<"${output}"
   for i in "${!words[@]}"; do
     [[ -n "${read_blanks_ref[${i}]+set}" ]] || values+=("${words[i]}")
   done
   i=0
+  for entry in "${CONTROLLER_MAPPING_FORM_LAYOUT[@]}"; do
+    [[ "${entry}" != "|" ]] || continue
+    form_values[${entry}]="${values[i]:-}"
+    i=$((i + 1))
+  done
   for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
     shown[${control}]="${read_keys_ref[${control}]}"
-    value="${values[i]:-}"
+    value="${form_values[${control}]:-}"
     value="${value#"${value%%[![:space:]]*}"}"
     value="${value%"${value##*[![:space:]]}"}"
     read_keys_ref[${control}]="${value}"
-    i=$((i + 1))
   done
   # A key given to a control in the window leaves the controls that still
   # have it as they were shown, so that moving a key takes one edit (scrcpy
@@ -6421,18 +6479,21 @@ read_controller_mapping_form() {
     done
   done
   # yad prints numbers with decimals, and the choices as shown
-  read_settings_ref[stick_ramp_ms]="${values[i]%%[.,]*}"
-  read_settings_ref[walk_percent]="${values[i + 1]%%[.,]*}"
-  case "${values[i + 2]:-}" in
+  value="${form_values[stick_ramp_ms]:-}"
+  read_settings_ref[stick_ramp_ms]="${value%%[.,]*}"
+  value="${form_values[walk_percent]:-}"
+  read_settings_ref[walk_percent]="${value%%[.,]*}"
+  case "${form_values[socd]:-}" in
     "Cancel out") read_settings_ref[socd]="neutral" ;;
     *) read_settings_ref[socd]="last" ;;
   esac
-  case "${values[i + 3]:-}" in
+  case "${form_values[mouse_stick]:-}" in
     "Right stick") read_settings_ref[mouse_stick]="right" ;;
     "Left stick") read_settings_ref[mouse_stick]="left" ;;
     *) read_settings_ref[mouse_stick]="off" ;;
   esac
-  read_settings_ref[mouse_sensitivity]="${values[i + 4]%%[.,]*}"
+  value="${form_values[mouse_sensitivity]:-}"
+  read_settings_ref[mouse_sensitivity]="${value%%[.,]*}"
   read_settings_ref[socd_dpad]="${read_app_settings_ref[socd_dpad]:-}"
   read_settings_ref[socd_left_stick]="${read_app_settings_ref[socd_left_stick]:-}"
   read_settings_ref[socd_right_stick]="${read_app_settings_ref[socd_right_stick]:-}"
