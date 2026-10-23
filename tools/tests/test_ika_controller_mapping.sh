@@ -118,6 +118,7 @@ form_output() {
 DIALOG_OUTPUT="$(form_output a=J walk=)" edit_controller_mapping com.example.game
 dialog_args="$(<"${T}/yad.args")"
 expect_contains "${dialog_args}" $'--form\n--title=Gamepad Emulation · Some Game\n' "the title names the window and the game"
+expect_contains "${dialog_args}" $'--name=ika-startup-options\n--class=ika-startup-options\n--form\n' "a window class of its own, for the Ika icon"
 [[ "${dialog_args}" != *"weight='bold'"* ]] || fail "the window has a heading again"
 [[ "${dialog_args}" != *$'\n--undecorated\n'* ]] || fail "the window has no title bar"
 expect_contains "${dialog_args}" $'--columns=2\n' "two columns"

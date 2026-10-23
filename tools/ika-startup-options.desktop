@@ -1,0 +1,13 @@
+# Gives the Startup Options windows (yad, run by 'ika app --options' and
+# --controller with this window class) the Ika icon in the dock and the task
+# bar: GNOME shows a window the icon of the desktop entry its class names,
+# and an unknown app's icon without one.
+[Desktop Entry]
+Type=Application
+Name=Startup Options
+NoDisplay=true
+Exec=ika status
+Icon=ika-scrcpy
+StartupWMClass=ika-startup-options
+SingleMainWindow=true
+Terminal=false
