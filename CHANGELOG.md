@@ -59,6 +59,10 @@
   opens as a window of its own. "Reset to default" asks "Apply defaults to
   APP" (Ok, Cancel), then resets the start options too, a game's to
   fullscreen at the console's density, besides deleting the app's mapping.
+- The Startup Options windows show the Ika icon in GNOME's dock and KDE's
+  task bar, instead of an unknown app's: they have a window class of their
+  own, `ika-startup-options`, which a hidden desktop entry the packages
+  install, `ika-startup-options.desktop`, names.
 - On a KDE Plasma Wayland session whose X11 apps scale themselves, the
   tabbed window takes the desktop's scale: GDK_SCALE and GDK_DPI_SCALE from
   `[Xwayland] Scale` in kwinrc (1.7 is 2 and 0.85).

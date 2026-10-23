@@ -262,6 +262,8 @@ package_ika-base() {
   install -m 0644 "${root}/tools/ika.desktop" "${pkgdir}/usr/share/applications/ika.desktop"
   install -m 0644 "${root}/tools/ika-install.desktop" \
     "${pkgdir}/usr/share/applications/ika-install.desktop"
+  install -m 0644 "${root}/tools/ika-startup-options.desktop" \
+    "${pkgdir}/usr/share/applications/ika-startup-options.desktop"
   install -m 0644 \
     "${pkgdir}/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps/scrcpy.png" \
     "${pkgdir}/usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png"

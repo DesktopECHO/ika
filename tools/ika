@@ -5881,6 +5881,13 @@ set_yad_env() {
   fi
 }
 
+# GTK's options giving the Startup Options windows a class of their own (and
+# on Wayland an app ID), which ika-startup-options.desktop names, so that the
+# dock and the task bar show them with the Ika icon: GNOME goes by the
+# desktop entry a window's class names, and yad's own, "yad", names none.
+APP_SETTINGS_WINDOW_CLASS="ika-startup-options"
+APP_SETTINGS_WINDOW_OPTIONS=(--name="${APP_SETTINGS_WINDOW_CLASS}" --class="${APP_SETTINGS_WINDOW_CLASS}")
+
 # Whether yad has --css, which gives its CSS to every widget of the window.
 # Older ones, such as Debian's 0.40, have --gtkrc only, whose CSS reaches the
 # window itself and none of the fields in it, and ignore a --css.
@@ -6070,7 +6077,8 @@ edit_app_options() {
   # yad's buttons are all as wide as the widest, which spaces widen until
   # their row is the window's widest part, so that the window, as wide as its
   # contents, has them fill its bottom. Escape closes it, as Cancel does.
-  output="$(env "${yad_env[@]}" "${density_env[@]}" yad --form \
+  output="$(env "${yad_env[@]}" "${density_env[@]}" yad \
+    "${APP_SETTINGS_WINDOW_OPTIONS[@]}" --form \
     --title="Startup Options · ${label}" --window-icon="${IKA_MENU_ICON}" \
     --center --borders=12 --separator="|" "${density_options[@]}" \
     "${fields[@]}" \
@@ -6195,7 +6203,8 @@ confirm_reset_to_default() {
   # yad drops a last line of spaces, and a short line only fills the room
   # the window has at its least height
   text+=$'\n'"<span font_size='16pt' alpha='1'>.</span>"
-  env "${yad_env[@]}" yad --title="" --window-icon="${IKA_MENU_ICON}" \
+  env "${yad_env[@]}" yad "${APP_SETTINGS_WINDOW_OPTIONS[@]}" \
+    --title="" --window-icon="${IKA_MENU_ICON}" \
     --undecorated --center --borders=24 --text="${text}" --text-align=center \
     --buttons-layout=spread --button=Ok:0 --button=Cancel:1 \
     >/dev/null
@@ -6461,7 +6470,8 @@ edit_controller_mapping() {
   while true; do
     controller_mapping_form_fields keys settings fields blank_at true
     status=0
-    output="$(env "${yad_env[@]}" "${mapping_env[@]}" yad --form \
+    output="$(env "${yad_env[@]}" "${mapping_env[@]}" yad \
+      "${APP_SETTINGS_WINDOW_OPTIONS[@]}" --form \
       --title="Gamepad Emulation · ${label}" --window-icon="${IKA_MENU_ICON}" \
       --center --borders=12 --text="$(controller_mapping_form_text)" \
       --text-align=center --separator="|" --columns=2 "${mapping_options[@]}" \
@@ -6651,7 +6661,8 @@ edit_app_settings() {
       "${fields2[@]}" >"${tab_dir}/2" &
     plugs+=("$!")
     status=0
-    env "${yad_env[@]}" "${window_env[@]}" yad --notebook --key="${key}" \
+    env "${yad_env[@]}" "${window_env[@]}" yad \
+      "${APP_SETTINGS_WINDOW_OPTIONS[@]}" --notebook --key="${key}" \
       "${window_options[@]}" \
       --tab="Startup Options" --tab="Gamepad Emulation" --active-tab="${tab}" \
       --title="Startup Options · ${label}" --window-icon="${IKA_MENU_ICON}" \
