@@ -274,7 +274,7 @@ expect_equal "$(<"${CVD_TMP_DIR}/yad-css/density-window.css")" "spinbutton { mar
   "the density's margin"
 expect_contains "${dialog_args}" $'\n--css='"${CVD_TMP_DIR}"$'/yad-css/density-window.css\n' \
   "the density's box is kept narrow"
-expect_contains "${dialog_args}" $'--field=  Fullscreen mode:CHK\nFALSE\n--field=  Send the keyboard straight to Android (many games need this):CHK\nFALSE\n--field=  Send the mouse straight to Android (captures the pointer):CHK\nFALSE\n--field=  Use gamepads, including ones plugged in later:CHK\nFALSE\n--field=  Keyboard as a gamepad (keys on the Gamepad Emulation tab):CHK\nFALSE\n--field=  Mouse as touch: clicks tap, drags swipe:CHK\nTRUE\n--field=<span font_size=\'8pt\'> </span>:LBL\n\n' \
+expect_contains "${dialog_args}" $'--field=  Fullscreen mode (F11, Cmd+F or Left-Alt+F exits):CHK\nFALSE\n--field=  Send the keyboard straight to Android (many games need this):CHK\nFALSE\n--field=  Send the mouse straight to Android (Cmd or Left-Alt releases pointer):CHK\nFALSE\n--field=  Use gamepads, including ones plugged in later:CHK\nFALSE\n--field=  Keyboard as a gamepad (keys on the Gamepad Emulation tab):CHK\nFALSE\n--field=  Mouse as touch: clicks tap, drags swipe:CHK\nTRUE\n--field=<span font_size=\'8pt\'> </span>:LBL\n\n' \
   "the options, saved touch ticked, then space above the buttons"
 expect_contains "${dialog_args}" $'--button=Apply settings:2\n--button=        Apply and start        :0\n--button=Cancel:1' \
   "Apply settings, Apply and start and Cancel, in that order"

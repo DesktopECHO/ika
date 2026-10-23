@@ -157,9 +157,9 @@ start:
 
 | Option | Effect |
 | --- | --- |
-| **Fullscreen mode** | The window opens fullscreen |
+| **Fullscreen mode (F11, Cmd+F or Left-Alt+F exits)** | The window opens fullscreen; F11, MOD+F or a quick click in its top-left corner leaves it |
 | **Send the keyboard straight to Android (many games need this)** | Keys reach the app as from a physical keyboard, a HID device of Android's |
-| **Send the mouse straight to Android (captures the pointer)** | The mouse is a physical mouse of Android's, and the window captures the pointer |
+| **Send the mouse straight to Android (Cmd or Left-Alt releases pointer)** | The mouse is a physical mouse of Android's, and the window captures the pointer: tap Cmd (Left Super, the Windows key on other keyboards) or Left Alt to release it, click in the window to capture it again |
 | **Use gamepads, including ones plugged in later** | The host's gamepads, and ones plugged in later, reach Android |
 | **Keyboard as a gamepad (keys on the Gamepad Emulation tab)** | The keyboard and mouse drive a gamepad (see [Keyboard as a gamepad](#keyboard-as-a-gamepad)) |
 | **Mouse as touch: clicks tap, drags swipe** | See [Touch input](#touch-input) |
@@ -227,7 +227,7 @@ through as well. The keys it uses no longer type; other keys do.
 | Left Shift, F | Left and right stick clicks |
 | Tab, held | Walk (**Hold to walk** in the window): the sticks go half as far |
 | Mouse motion, with `mouse_stick = right` | Right stick, the camera in most games: the faster the mouse moves, the farther |
-| Left, right button | Right, left trigger |
+| Left, right button | Right, left trigger, crossed as in PC shooters: a left click fires (the right trigger) and a right click aims (the left) |
 | Middle button | Right stick click |
 | Wheel up, down | Left, right shoulder |
 

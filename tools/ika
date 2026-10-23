@@ -338,9 +338,12 @@ refresh_rate_hz = auto
 # sticks (walk_percent below). The mouse's buttons and wheel are keys too:
 # Mouse_Left, Mouse_Right, Mouse_Middle, Mouse_X1, Mouse_X2, Wheel_Up,
 # Wheel_Down, Wheel_Left, Wheel_Right (a notch presses the control for a
-# moment). With mouse_stick set, the window captures the pointer (Alt
-# releases it) and the mouse, buttons and wheel too, is the gamepad's while
-# captured; with mouse_stick = off, the mouse is not the gamepad's at all.
+# moment). The mouse's buttons cross over on the triggers, as in PC shooters:
+# the left button, which fires, is the right trigger, and the right button,
+# which aims, the left. With mouse_stick set, the window captures the pointer
+# (Cmd or Left Alt releases it) and the mouse, buttons and wheel too, is the
+# gamepad's while captured; with mouse_stick = off, the mouse is not the
+# gamepad's at all.
 # A game can have keys and settings of its own,
 # over these: 'ika app --controller NAME' edits them, in
 # ~/ika/apps/PACKAGE/controller.ini.
@@ -1997,15 +2000,18 @@ App windows:
   Right-clicking an app in the menu offers "Startup options", a window
   (yad), "Startup Options · LABEL": the app window's display density ("0=Auto"
   for the console's, else 96 to 999 DPI; 1 to 95 is 96), then a checkbox for
-  each option the app can start with: "Fullscreen mode", "Send the keyboard
-  straight to Android (many games need this)", "Send the mouse straight to
-  Android (captures the pointer)", "Use gamepads, including ones plugged in
-  later", "Keyboard as a gamepad (keys on the Gamepad Emulation tab)" (its
-  keys are in [keyboard_gamepad] in ika.ini) and "Mouse as touch: clicks
-  tap, drags swipe". The keyboard and the mouse sent straight to Android
-  reach it as HID devices (uhid), as gamepads do. "Apply settings"
-  saves them, "Apply and start" saves them and starts the app with them, and
-  Cancel leaves them as they were. '${SCRIPT_NAME} app --options NAME' opens
+  each option the app can start with: "Fullscreen mode (F11, Cmd+F or
+  Left-Alt+F exits)", "Send the keyboard straight to Android (many games
+  need this)", "Send the mouse straight to Android (Cmd or Left-Alt releases
+  pointer)", "Use gamepads, including ones plugged in later", "Keyboard as a
+  gamepad (keys on the Gamepad Emulation tab)" (its keys are in
+  [keyboard_gamepad] in ika.ini) and "Mouse as touch:
+  clicks tap, drags swipe". The keyboard and the mouse sent straight to
+  Android reach it as HID devices (uhid), as gamepads do; the window
+  captures the pointer, and tapping Cmd (Left Super) or Left Alt releases
+  it. "Apply settings" saves them, "Apply and start" saves them and starts
+  the app with them, and Cancel leaves them as they were.
+  '${SCRIPT_NAME} app --options NAME' opens
   it from a terminal. They are saved in ~/ika/app-options.ini, and 'app' adds
   them to the options it is given, from the menu or a terminal ('--dpi' goes
   over the saved density). Without them, an app or game gets the console's
@@ -5818,13 +5824,13 @@ apply_saved_app_options() {
 app_start_option_text() {
   case "$1" in
     fullscreen)
-      echo "Fullscreen mode"
+      echo "Fullscreen mode (F11, Cmd+F or Left-Alt+F exits)"
       ;;
     keyboard)
       echo "Send the keyboard straight to Android (many games need this)"
       ;;
     mouse)
-      echo "Send the mouse straight to Android (captures the pointer)"
+      echo "Send the mouse straight to Android (Cmd or Left-Alt releases pointer)"
       ;;
     gamepad)
       echo "Use gamepads, including ones plugged in later"
