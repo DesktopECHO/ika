@@ -1,6 +1,6 @@
 #!/usr/bin/bash
 
-# App start options ("Ika Startup Options" on a launcher, ika app --options):
+# App start options ("Ika startup options" on a launcher, ika app --options):
 # the window ticks the saved options and saves the ticked ones, yad draws it,
 # ~/ika/app-options.ini keeps one section per app, and
 # 'ika app' adds the saved options to those it is given.
@@ -22,6 +22,10 @@ mkdir -p "${HOME}" "${CVD_PRODUCT_OUT}" "${T}/bin"
 # for "Apply and start", 1 for Cancel.
 cat >"${T}/bin/yad" <<STUB
 #!/usr/bin/env bash
+if [[ "\$1" == "--help-all" ]]; then
+  printf '%s\n' "\${YAD_HELP:-  --css=STRING}"
+  exit 0
+fi
 printf '%s\n' "\$@" > "${T}/yad.args"
 printf '%s\n' "\${GTK_THEME:-}" > "${T}/yad.theme"
 printf '%s' "\${DIALOG_OUTPUT:-}"
@@ -82,6 +86,35 @@ expect_equal "$(saved_app_options com.example.app)" "fullscreen" "other apps kep
 printf '\n[com.example.edited]\nnote = mine\n  options   =  fullscreen   touch \r\n' >> "${APP_OPTIONS_FILE}"
 expect_equal "$(saved_app_options com.example.edited)" "fullscreen   touch" "a hand-edited section"
 echo "ok: options saved and read back per app, others and comments kept"
+
+# The display density: auto (empty, 0 or auto), 96 for 1 to 95, up to 999.
+for case in ":" "0:" "auto:" "AUTO:" "50:96" "96:96" "160.000000:160" "999:999"; do
+  expect_equal "$(app_dpi_value "${case%%:*}")" "${case#*:}" "density ${case%%:*}"
+done
+for bad in 1000 big -5 12x; do
+  if app_dpi_value "${bad}" >/dev/null; then
+    fail "density ${bad} was taken"
+  fi
+done
+# Saved beside the options, kept when only the options change, gone for auto.
+save_app_options_with_dpi com.example.game 240 fullscreen
+expect_equal "$(saved_app_dpi com.example.game):$(saved_app_options com.example.game)" "240:fullscreen" "a density saved"
+save_app_options com.example.game touch
+expect_equal "$(saved_app_dpi com.example.game):$(saved_app_options com.example.game)" "240:touch" "the density is kept"
+expect_contains "$(<"${APP_OPTIONS_FILE}")" $'[com.example.game]\noptions = touch\ndpi = 240' "one line in the app's section"
+save_app_options_with_dpi com.example.game "" touch
+expect_equal "$(saved_app_dpi com.example.game)" "" "auto removes the density"
+if grep -q '^dpi' "${APP_OPTIONS_FILE}"; then
+  fail "auto left a dpi line"
+fi
+# Edited by hand: too low is 96, not a number is reported and left out.
+printf '\n[com.example.lowdpi]\noptions =\ndpi = 50\n[com.example.baddpi]\ndpi = big\n' >> "${APP_OPTIONS_FILE}"
+expect_equal "$(saved_app_dpi com.example.lowdpi)" "96" "a hand-edited density under 96"
+: >"${T}/log"
+expect_equal "$(saved_app_dpi com.example.baddpi)" "" "a hand-edited density that is not one"
+expect_contains "$(<"${T}/log")" "dpi 'big' of com.example.baddpi is not auto or 96 to 999; ignored" "it is reported"
+save_app_options com.example.game
+echo "ok: the display density is saved per app, 96 to 999"
 
 # 'ika app' adds the saved options to those it is given, and the HID devices
 # go to the app's input, replacing any inherited.
@@ -156,11 +189,60 @@ expect_equal "$(start_app_of com.android.settings false "" "" "+info:com.example
   "+info:com.example.game" "a window starts what it is given to start"
 echo "ok: an app window starts its app, or what it is given"
 
-# yad's form output for the options given ticked: the label's empty value,
-# then TRUE or FALSE for each checkbox, in their order, then the blank label's.
+# The window's display density: the console's, else the app's saved one, else
+# the one given to 'ika app' (auto keeps the console's).
+density_of() (
+  use_app_window_paths() { SCRCPY_SUPERVISOR_PID_FILE="${T}/none.pid"; SCRCPY_LOG_FILE="${T}/window.log"; }
+  supervisor_pid_from_file() { [[ -e "${T}/dpi" ]]; }
+  read_scrcpy_window_state() { return 1; }
+  default_app_window_size() { printf '1280x720\n'; }
+  guest_ui_mode() { printf 'desktop\n'; }
+  guest_display_density() { printf '160\n'; }
+  add_cuttlefish_display() { printf '%s\n' "$2" >"${T}/display-dpi"; printf '2\n'; }
+  resolve_cuttlefish_frames_socket() { printf '%s\n' "${T}/frames"; }
+  setsid() {
+    local arg
+    for arg in "$@"; do
+      [[ "${arg}" != --dpi=* ]] || printf '%s\n' "${arg#--dpi=}" >"${T}/dpi"
+    done
+  }
+  rm -f "${T}/dpi" "${T}/display-dpi"
+  open_app_window "$@" >/dev/null
+  printf '%s/%s\n' "$(<"${T}/display-dpi")" "$(<"${T}/dpi")"
+)
+expect_equal "$(density_of com.example.app false "" "")" "160/160" "the console's density"
+save_app_options_with_dpi com.example.app 240 fullscreen
+expect_equal "$(density_of com.example.app false "" "")" "240/240" "the app's saved density"
+expect_equal "$(density_of com.example.app false "" "" "" 320)" "320/320" "a density given to 'ika app'"
+expect_equal "$(density_of com.example.app false "" "" "" auto)" "160/160" "--dpi=auto keeps the console's"
+save_app_options_with_dpi com.example.app "" fullscreen
+echo "ok: an app window has the app's own display density"
+
+# ika app --dpi: auto or 0, 96 to 999, 1 to 95 as 96
+dpi_given_by() (
+  open_app_window() { printf '%s\n' "${6:-}"; }
+  run_app_command com.example.app "$@"
+)
+expect_equal "$(dpi_given_by --dpi=200)" "200" "--dpi=N"
+expect_equal "$(dpi_given_by --dpi 50)" "96" "--dpi N under 96"
+expect_equal "$(dpi_given_by --dpi=0):$(dpi_given_by --dpi=auto)" "auto:auto" "--dpi=0 and --dpi=auto"
+expect_equal "$(dpi_given_by)" "" "without --dpi"
+if (dpi_given_by --dpi=1000) >/dev/null 2>&1; then
+  fail "--dpi=1000 was taken"
+fi
+echo "ok: ika app --dpi"
+
+# yad's form output for the options given ticked, after dpi=N when given: the
+# density as yad prints it, the two labels' empty values, then TRUE or FALSE
+# for each checkbox, in their order, then the blank label's.
 form_output() {
   local option
-  local output="|"
+  local dpi="0.000000"
+  if [[ "${1:-}" == dpi=* ]]; then
+    dpi="${1#dpi=}"
+    shift
+  fi
+  local output="${dpi}|||"
 
   for option in fullscreen keyboard mouse gamepad gamekb touch; do
     if [[ " $* " == *" ${option} "* ]]; then
@@ -176,23 +258,26 @@ form_output() {
 open_app_window() { printf 'started %s %s\n' "$1" "$2" >>"${T}/started"; }
 host_color_scheme() { :; }
 
-# The window: yad lists the options, ticked as saved, under a heading that
-# names the app, and "Apply settings" saves the ticked ones in their usual
-# order.
+# The window: "Startup Options" and the app in its title bar, the display
+# density (0 for auto), then the options, ticked as saved, and "Apply
+# settings" saves the ticked ones in their usual order.
 save_app_options com.example.game touch
 : >"${T}/started"
 DIALOG_OUTPUT="$(form_output touch gamekb fullscreen keyboard)" edit_app_options com.example.game >/dev/null
 dialog_args="$(<"${T}/yad.args")"
-expect_contains "${dialog_args}" $'--form\n--title=\n' "a form without a title, for a blank title bar where KWin draws one"
-expect_contains "${dialog_args}" "<span font_size='15pt' weight='bold'>Ika Startup Options</span>" "the heading"
-expect_contains "${dialog_args}" "<span font_size='15pt' weight='bold'>Some Game</span>" "the heading names the app"
-expect_contains "${dialog_args}" $'\n--field=Start Some Game with:\n<span font_size=\'5pt\'> </span>:LBL\n\n' \
-  "the line above the checkboxes, with a half line of space under it"
+expect_contains "${dialog_args}" $'--form\n--title=Startup Options · Some Game\n' "the title names the window and the app"
+[[ "${dialog_args}" != *"--text="* ]] || fail "the window has a heading again"
+expect_contains "${dialog_args}" $'\n--field=Display density, 0=Auto  :NUM\n0!0..999!8\n--field=<span font_size=\'8pt\'> </span>:LBL\n\n--field=Start Some Game with:\n<span font_size=\'5pt\'> </span>:LBL\n\n' \
+  "the density first, at 0 for auto, then the line above the checkboxes, with a half line of space under it"
+expect_equal "$(<"${CVD_TMP_DIR}/yad-css/density-window.css")" "spinbutton { margin-right: ${APP_DPI_FIELD_MARGIN_PX}px; }" \
+  "the density's margin"
+expect_contains "${dialog_args}" $'\n--css='"${CVD_TMP_DIR}"$'/yad-css/density-window.css\n' \
+  "the density's box is kept narrow"
 expect_contains "${dialog_args}" $'--field=  Fullscreen mode:CHK\nFALSE\n--field=  Pass the keyboard through as a HID device:CHK\nFALSE\n--field=  Pass the mouse through as a HID device:CHK\nFALSE\n--field=  Enable gamepads when attached:CHK\nFALSE\n--field=  Use the keyboard to emulate a gamepad:CHK\nFALSE\n--field=  Touch input: Left-click and drag gets interpreted as tap and swipe:CHK\nTRUE\n--field=<span font_size=\'8pt\'> </span>:LBL\n\n' \
   "the options, saved touch ticked, then space above the buttons"
 expect_contains "${dialog_args}" $'--button=Apply settings:2\n--button=        Apply and start        :0\n--button=Cancel:1' \
   "Apply settings, Apply and start and Cancel, in that order"
-expect_contains "${dialog_args}" $'\n--undecorated\n' "no title bar"
+[[ "${dialog_args}" != *$'\n--undecorated\n'* ]] || fail "the window has no title bar"
 expect_equal "$(saved_app_options com.example.game)" "fullscreen keyboard gamekb touch" "the ticked options are saved in order"
 expect_equal "$(<"${T}/started")" "" "Apply settings does not start the app"
 DIALOG_OUTPUT="$(form_output)" edit_app_options com.example.game >/dev/null
@@ -218,20 +303,30 @@ fi
 expect_equal "$(saved_app_options com.example.app)" "fullscreen mouse" "a failed window keeps the options"
 expect_equal "$(<"${T}/started")" "" "no app starts without Apply and start"
 
+# The density: shown as saved, 1 to 95 saved as 96, 0 saved as auto.
+DIALOG_OUTPUT="$(form_output dpi=50.000000 touch)" edit_app_options com.example.app >/dev/null
+expect_equal "$(saved_app_dpi com.example.app):$(saved_app_options com.example.app)" "96:touch" "a density under 96 is saved as 96"
+output="$(DIALOG_OUTPUT="$(form_output dpi=96.000000 touch)" edit_app_options com.example.app)"
+expect_equal "${output}" "Some App starts with touch at 96 DPI" "the density is reported"
+expect_contains "$(<"${T}/yad.args")" $'\n--field=Display density, 0=Auto  :NUM\n96!0..999!8\n' "the saved density is shown"
+DIALOG_OUTPUT="$(form_output dpi=0.000000 fullscreen mouse)" edit_app_options com.example.app >/dev/null
+expect_equal "$(saved_app_dpi com.example.app):$(saved_app_options com.example.app)" ":fullscreen mouse" "0 is auto"
+
 # A label is looked up among the apps.
 DIALOG_OUTPUT="$(form_output touch)" edit_app_options "some app" >/dev/null
 expect_equal "$(saved_app_options com.example.app)" "touch" "the window opened by label"
 
-# yad reads the heading and the labels as markup with backslash escapes, so a
-# label is escaped; an app without a known label is named by its package.
+# yad reads the labels as markup with backslash escapes, so a label is
+# escaped there, and the title as plain text; an app without a known label is
+# named by its package.
 printf 'Tom & <b>Jerry</b> C:\\new\tcom.example.tricky\n' >> "${APP_LIST_CACHE}"
 DIALOG_OUTPUT="$(form_output)" edit_app_options com.example.tricky >/dev/null
-expect_contains "$(<"${T}/yad.args")" "weight='bold'>Tom &amp; &lt;b&gt;Jerry&lt;/b&gt; C:\\\\new</span>" \
-  "a heading with markup characters and a backslash"
+expect_contains "$(<"${T}/yad.args")" $'\n--title=Startup Options · Tom & <b>Jerry</b> C:\\new\n' \
+  "a title with markup characters and a backslash"
 expect_contains "$(<"${T}/yad.args")" $'\n--field=Start Tom &amp; &lt;b&gt;Jerry&lt;/b&gt; C:\\\\new with:\n' \
   "a label with markup characters and a backslash"
 DIALOG_OUTPUT="$(form_output)" edit_app_options com.example.unknown >/dev/null
-expect_contains "$(<"${T}/yad.args")" "weight='bold'>com.example.unknown</span>" "an app without a label"
+expect_contains "$(<"${T}/yad.args")" $'\n--title=Startup Options · com.example.unknown\n' "an app without a label"
 
 # The window follows a dark desktop, unless GTK_THEME is set.
 expect_equal "$(<"${T}/yad.theme")" "" "a light desktop keeps the GTK theme"
@@ -263,7 +358,7 @@ for package in com.example.game com.example.app; do
   file="${apps_dir}/ika-${package}.desktop"
   write_app_launcher "${apps_dir}" "Some Label" "${package}" /icons/app.png
   expect_contains "$(<"${file}")" \
-    $'[Desktop Action options]\nName=Ika Startup Options\nExec=ika app --options '"${package}" \
+    $'[Desktop Action options]\nName=Ika startup options\nExec=ika app --options '"${package}" \
     "${package}'s launcher offers the start options"
   # GNOME Shell's "New Window" gives way to "Launch app"; the app has one window
   expect_contains "$(<"${file}")" \
@@ -297,18 +392,18 @@ grep -qxF "Actions=new-window;options;app-settings;" "${apps_dir}/ika-com.exampl
 if grep -q -e "Desktop Action controller" -e "Controller mapping" "${apps_dir}/ika-com.example.game.desktop"; then
   fail "the controller mapping action stayed in a game's launcher"
 fi
-for old_name in "Ika start options..." "Ika Startup Options..."; do
-  sed -i "s/^Name=Ika Startup Options$/Name=${old_name}/" "${apps_dir}/ika-com.example.app.desktop"
+for old_name in "Ika start options..." "Ika Startup Options..." "Ika Startup Options"; do
+  sed -i "s/^Name=Ika startup options$/Name=${old_name}/" "${apps_dir}/ika-com.example.app.desktop"
   write_app_launcher "${apps_dir}" "Some Label" com.example.app /icons/app.png \
     || fail "a launcher with the start options action named ${old_name} was kept"
-  grep -qxF "Name=Ika Startup Options" "${apps_dir}/ika-com.example.app.desktop" \
+  grep -qxF "Name=Ika startup options" "${apps_dir}/ika-com.example.app.desktop" \
     || fail "the start options action named ${old_name} was not renamed"
 done
-for old_name in "Android App Settings..." "Android App Info..."; do
-  sed -i "s/^Name=App Info$/Name=${old_name}/" "${apps_dir}/ika-com.example.app.desktop"
+for old_name in "Android App Settings..." "Android App Info..." "App Info"; do
+  sed -i "s/^Name=App info$/Name=${old_name}/" "${apps_dir}/ika-com.example.app.desktop"
   write_app_launcher "${apps_dir}" "Some Label" com.example.app /icons/app.png \
     || fail "a launcher with the App info action named ${old_name} was kept"
-  grep -qxF "Name=App Info" "${apps_dir}/ika-com.example.app.desktop" \
+  grep -qxF "Name=App info" "${apps_dir}/ika-com.example.app.desktop" \
     || fail "the App info action named ${old_name} was not renamed"
 done
 sed -i 's/^Exec=ika app --options .*/Exec=ika app --options com.example.other/' \
@@ -327,7 +422,7 @@ grep -qxF "Name=Launch app" "${apps_dir}/ika-com.example.old.desktop" \
   || fail "an old launcher did not get Launch app"
 expect_equal "$(grep -c '^\[Desktop Action app-settings\]$' "${apps_dir}/ika-com.example.old.desktop")" "1" \
   "an old launcher's settings action is not doubled"
-echo "ok: launchers offer \"Ika Startup Options\""
+echo "ok: launchers offer \"Ika startup options\""
 
 # GNOME Shell does not reload a launcher whose actions change in place, so a
 # launcher written before the window existed leaves the applications directory
@@ -389,7 +484,7 @@ sync_app_menu >/dev/null 2>&1
 expect_equal "$(saved_app_options com.example.newgame)" "" "a game unticked before comes back without the default"
 echo "ok: a game added to the menu starts with Fullscreen mode ticked"
 
-# "App Info" opens the Settings window with App info as its
+# "App info" opens the Settings window with App info as its
 # first page, so the Settings home page never shows.
 app_window_is_open() { return 1; }
 open_app_window() { printf '%s|' "$@" >"${T}/opened"; }

@@ -17,8 +17,9 @@ virtual machine, with its apps in windows of their own.
   display follows the window's size at the host's density, pixel for pixel.
 - **App windows:** each Android app can open in a window of its own, from your
   desktop's app menu, where Ika lists every Android app.
-- **Start options per app:** fullscreen, the keyboard, the mouse and gamepads
-  passed through to Android, the keyboard as a gamepad, and touch input.
+- **Start options per app:** the window's display density, fullscreen, the
+  keyboard, the mouse and gamepads passed through to Android, the keyboard as
+  a gamepad, and touch input.
 - **GPU acceleration:** OpenGL ES 3.2 and Vulkan on the host's GPU, through
   gfxstream.
 - **Your files:** Android's storage is mounted on the host, in the file
@@ -74,7 +75,7 @@ virtual machine, with its apps in windows of their own.
   window. The first start takes longer, as Android sets itself up.
 - Your Android apps appear in your desktop's app menu under
   **Android Apps (Ika)**. Each opens in a window of its own; right-click one
-  for its **Ika Startup Options**.
+  for its **Ika startup options**.
 - `ika stop` stops Android, and `ika help` lists every command.
 
 [Using Ika](USAGE.md) explains the console, app windows, input and gamepads,

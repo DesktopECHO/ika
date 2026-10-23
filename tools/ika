@@ -1849,7 +1849,7 @@ Usage:
   ${SCRIPT_NAME} backup [FILE]
   ${SCRIPT_NAME} restore [FILE]
   ${SCRIPT_NAME} status
-  ${SCRIPT_NAME} app NAME|PACKAGE [-f|--fullscreen] [--touch] [--title=TEXT] [--size=WxH] [--ika_scrcpy=ARGS]
+  ${SCRIPT_NAME} app NAME|PACKAGE [-f|--fullscreen] [--touch] [--title=TEXT] [--size=WxH] [--dpi=N] [--ika_scrcpy=ARGS]
   ${SCRIPT_NAME} app --info NAME|PACKAGE
   ${SCRIPT_NAME} app --options NAME|PACKAGE
   ${SCRIPT_NAME} app --controller NAME|PACKAGE
@@ -1881,7 +1881,7 @@ Options:
                          left button still simulates a pinch, and the
                          keyboard and gamepads chosen in the app's start
                          options still pass through; the mouse does not.
-                         It is also a start option ("Ika Startup Options"
+                         It is also a start option ("Ika startup options"
                          on an app's menu entry).
   --no-console           With start or restart, run the VM without opening the
                          desktop console window (app windows still work).
@@ -1937,6 +1937,9 @@ Options:
   --size=WxH             With app, set the initial window size in logical
                          points (default: last size, or 60% of the screen's
                          width at 16:9).
+  --dpi=N                With app, set the window's display density for this
+                         start, 96 to 999 (1 to 95 is 96), over the app's
+                         start options; auto or 0 is the console's.
 
 TV mode:
 
@@ -1991,36 +1994,41 @@ App windows:
   the automatic sync off until 'app sync' is run again. 'reset' removes the
   entries as well; the next 'start' rebuilds them.
 
-  Right-clicking an app in the menu offers "Ika Startup Options", a window
-  (yad) with a checkbox for each option the app can start with: "Fullscreen
-  mode", "Pass the keyboard through as a HID device", "Pass the mouse through
-  as a HID device", "Enable gamepads when attached", "Use the keyboard to
-  emulate a gamepad" (its keys are in [keyboard_gamepad] in ika.ini) and
-  "Touch input: Left-click and drag gets interpreted as tap and swipe".
-  "Apply settings" saves the ticked options, "Apply and start" saves them and
-  starts the app with them, and Cancel leaves them as they were.
-  '${SCRIPT_NAME} app --options NAME' opens it from a terminal. The options
-  are saved in ~/ika/app-options.ini, and 'app' adds them to the options it
-  is given, from the menu or a terminal. Without them, an app or game gets
-  the desktop's keyboard and mouse, and no gamepad. A game starts with
-  "Fullscreen mode" ticked the first time it is added to the menu.
+  Right-clicking an app in the menu offers "Ika startup options", a window
+  (yad), "Startup Options · LABEL": the app window's display density ("0=Auto"
+  for the console's, else 96 to 999 DPI; 1 to 95 is 96), then a checkbox for
+  each option the app can start with: "Fullscreen mode", "Pass the keyboard
+  through as a HID device", "Pass the mouse through as a HID device",
+  "Enable gamepads when attached", "Use the keyboard to emulate a gamepad"
+  (its keys are in [keyboard_gamepad] in ika.ini) and "Touch input:
+  Left-click and drag gets interpreted as tap and swipe". "Apply settings"
+  saves them, "Apply and start" saves them and starts the app with them, and
+  Cancel leaves them as they were. '${SCRIPT_NAME} app --options NAME' opens
+  it from a terminal. They are saved in ~/ika/app-options.ini, and 'app' adds
+  them to the options it is given, from the menu or a terminal ('--dpi' goes
+  over the saved density). Without them, an app or game gets the console's
+  density, the desktop's keyboard and mouse, and no gamepad. A game starts
+  with "Fullscreen mode" ticked the first time it is added to the menu.
 
-  '${SCRIPT_NAME} app --controller NAME' opens a window with the keyboard
-  gamepad's keys and settings for a game: a key or more per
-  control (SDL's scancode names, or the mouse's buttons and wheel: Mouse_Left,
-  Wheel_Up, ...), the stick ramp (the milliseconds a stick takes to go
-  where it is pushed; 0 is at once), the walk speed (the sticks' deflection
-  with the walk key held), what two opposite keys held together do, and
-  which stick the mouse moves (none by default; the right one is the camera
-  in most games) and how fast. With the mouse on a stick, the window
-  captures the pointer (Alt releases it); with "Off", the mouse is not the
-  gamepad's. "Apply
-  settings" saves them in ~/ika/apps/PACKAGE/controller.ini, over
-  [keyboard_gamepad] in ika.ini, and ticks "Use the keyboard to emulate a
-  gamepad" in the game's start options; "Apply and start" also starts the
-  game; "Default mapping", once confirmed, removes the game's mapping and
-  shows ika.ini's in the window.
-  '${SCRIPT_NAME} app --controller NAME' opens it from a terminal.
+  The window has those as its "Startup Options" tab, for games and other
+  apps alike, and a "Gamepad Emulation" tab with the keyboard gamepad's keys
+  and settings for the app:
+  a key or more per control (SDL's scancode names, or the mouse's buttons
+  and wheel: Mouse_Left, Wheel_Up, ...), the stick ramp (the milliseconds a
+  stick takes to go where it is pushed; 0 is at once), the walk speed (the
+  sticks' deflection with the walk key held), what two opposite keys held
+  together do, and which stick the mouse moves (none by default; the right
+  one is the camera in most games) and how fast. With the mouse on a stick,
+  the window captures the pointer (Alt releases it); with "Off", the mouse is
+  not the gamepad's. "Apply settings" also saves an edited mapping in
+  ~/ika/apps/PACKAGE/controller.ini, over [keyboard_gamepad] in ika.ini, and
+  ticks "Use the keyboard to emulate a gamepad" unless it was unticked there;
+  "Reset to default", once confirmed, resets the start options (a game's to
+  "Fullscreen mode", at the console's density) and removes the game's
+  mapping, so that it has ika.ini's. '${SCRIPT_NAME} app --controller NAME'
+  opens the window on that tab. yad draws the tabs on X11,
+  which Wayland sessions have as XWayland; without it, each tab opens as a
+  window of its own.
 
 Installing and removing apps:
 
@@ -5652,28 +5660,66 @@ resolve_app_name() {
 # App start options (ika app --options NAME)
 # ============================================================================
 #
-# "Ika Startup Options" on an app's launcher opens a window with a checkbox
-# for each of the app's start options. "Apply settings" saves the ticked ones
-# in APP_OPTIONS_FILE, one [PACKAGE] section per app, "Apply and start" saves
-# them and starts the app, Cancel changes nothing, and 'ika app' adds the saved
-# options to the options it is given, from the menu or a terminal.
+# "Ika startup options" on an app's launcher opens a window with the app
+# window's display density and a checkbox for each of the app's start options,
+# and its controller mapping on a second tab. "Apply settings"
+# saves them in APP_OPTIONS_FILE, one [PACKAGE] section per app, "Apply and
+# start" saves them and starts the app, Cancel changes nothing, and 'ika app'
+# adds the saved options to the options it is given, from the menu or a
+# terminal.
 
 # The start options an app can save, in the order the window lists them and
 # they are saved in: a fullscreen window, the HID devices passed through to
 # Android (see app_input_enabled), and touch input.
 APP_START_OPTIONS=(fullscreen keyboard mouse gamepad gamekb touch)
 
-# Prints the options saved for PACKAGE, or nothing.
-saved_app_options() {
+# Prints the value of KEY in PACKAGE's section, or nothing.
+saved_app_setting() {
   [[ -r "${APP_OPTIONS_FILE}" ]] || return 0
-  awk -v section="[$1]" '
+  awk -v section="[$1]" -v key="$2" '
     { sub(/[[:space:]]+$/, "") }
     /^\[/ { in_section = ($0 == section); next }
-    in_section && /^[[:space:]]*options[[:space:]]*=/ {
+    in_section && $0 ~ ("^[[:space:]]*" key "[[:space:]]*=") {
       sub(/^[^=]*=[[:space:]]*/, "")
       print
       exit
     }' "${APP_OPTIONS_FILE}"
+}
+
+# Prints the options saved for PACKAGE, or nothing.
+saved_app_options() {
+  saved_app_setting "$1" options
+}
+
+# Prints the display density DPI as an app window takes it: nothing for auto
+# (empty, 0 or auto), 96 for 1 to 95, the number itself up to 999. yad
+# prints a number with decimals, which are dropped. Fails for anything else.
+app_dpi_value() {
+  local dpi="${1,,}"
+
+  dpi="${dpi%%[.,]*}"
+  [[ -n "${dpi}" && "${dpi}" != "auto" ]] || return 0
+  [[ "${dpi}" =~ ^[0-9]+$ ]] || return 1
+  dpi=$((10#${dpi}))
+  (( dpi != 0 )) || return 0
+  (( dpi >= 96 )) || dpi=96
+  (( dpi <= 999 )) || return 1
+  printf '%s\n' "${dpi}"
+}
+
+# Prints the display density saved for PACKAGE, as app_dpi_value takes it:
+# nothing for auto. A value it does not take, from a file edited by hand, is
+# reported and left out.
+saved_app_dpi() {
+  local saved
+  local dpi
+
+  saved="$(saved_app_setting "$1" dpi)"
+  if ! dpi="$(app_dpi_value "${saved}")"; then
+    log "${APP_OPTIONS_FILE}: dpi '${saved}' of $1 is not auto or 96 to 999; ignored"
+    return 0
+  fi
+  [[ -z "${dpi}" ]] || printf '%s\n' "${dpi}"
 }
 
 # Whether PACKAGE has a section, even an empty one: its options were set
@@ -5688,12 +5734,22 @@ app_options_saved() {
 
 # Replaces the options saved for PACKAGE with the OPTIONS given, an empty
 # section when there are none, so that a game whose options were all
-# unticked does not get the new game's default again. Other apps' sections
-# and comments are kept, as in the launcher's action groups, without leaving
-# blank lines behind.
+# unticked does not get the new game's default again. Its display density is
+# kept.
 save_app_options() {
   local package="$1"
   shift
+
+  save_app_options_with_dpi "${package}" "$(saved_app_dpi "${package}")" "$@"
+}
+
+# Replaces PACKAGE's section with the OPTIONS given and the display density
+# DPI, none (auto) when empty. Other apps' sections and comments are kept, as
+# in the launcher's action groups, without leaving blank lines behind.
+save_app_options_with_dpi() {
+  local package="$1"
+  local dpi="$2"
+  shift 2
 
   mkdir -p "$(dirname "${APP_OPTIONS_FILE}")"
   {
@@ -5706,14 +5762,16 @@ save_app_options() {
     else
       cat <<'EOF'
 # Start options of Android apps, one section per app, named by its package.
-# "Ika Startup Options" on an app's launcher in the desktop's app menu sets
+# "Ika startup options" on an app's launcher in the desktop's app menu sets
 # them ('ika app --options NAME' from a terminal), and they apply whenever the
 # app starts, from the menu or 'ika app': fullscreen, keyboard, mouse, gamepad,
 # gamekb and touch, separated by spaces. A game added to the menu starts with
-# fullscreen.
+# fullscreen. dpi, 96 to 999, gives the app's window a display density of its
+# own; without it, the window has the console's.
 EOF
     fi
     printf '\n[%s]\noptions =%s\n' "${package}" "${*:+ $*}"
+    [[ -z "${dpi}" ]] || printf 'dpi = %s\n' "${dpi}"
   } > "${APP_OPTIONS_FILE}.tmp"
   mv -f "${APP_OPTIONS_FILE}.tmp" "${APP_OPTIONS_FILE}"
 }
@@ -5784,42 +5842,217 @@ yad_markup_escape() {
     | sed -e 's/\\/\\\\/g' -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
 }
 
-# The start options window for the app NAME, drawn by yad: a form, which is as
-# high as its checkboxes need on any theme. A package name is used as given,
-# so that a launcher opens it without starting the VM; a label is looked up
-# among the launchable apps. "Apply settings" saves the ticked options, "Apply
-# and start" saves them and starts the app with them, and Cancel, or closing
-# the window, leaves the saved ones as they are.
-edit_app_options() {
+# Sets the variables named PACKAGE_VAR and LABEL_VAR to the app NAME's package
+# and label, for the windows below. A package name is used as given, so that
+# a launcher opens a window without starting the VM; a label is looked up
+# among the launchable apps.
+resolve_settings_app() {
   local name="$1"
-  local package
-  local label
+  local -n settings_package_ref="$2"
+  local -n settings_label_ref="$3"
   local resolved
   local adb_serial
-  local heading
-  local output
-  local status=0
-  local i
-  local option
-  local -a saved=()
-  local -a fields=()
-  local -a values=()
-  local -a options=()
-  local -a yad_env=()
-  local -A ticked=()
 
   if is_app_package_name "${name}"; then
-    package="${name}"
-    label="$(app_display_name "${package}")"
+    settings_package_ref="${name}"
+    settings_label_ref="$(app_display_name "${name}")"
   else
     ensure_guest_ready
     adb_serial="$(resolve_adb_serial)"
     resolved="$(resolve_launchable_app "${name}" "${adb_serial}")" || exit 1
-    package="${resolved#*$'\t'}"
-    label="${resolved%%$'\t'*}"
+    settings_package_ref="${resolved#*$'\t'}"
+    settings_label_ref="${resolved%%$'\t'*}"
   fi
-  validate_app_package "${package}"
+  validate_app_package "${settings_package_ref}"
+}
 
+# Sets the array named ENV_VAR to the environment of the windows' yad: GTK 3
+# windows on GNOME stay light in a dark session unless GTK_THEME says
+# otherwise, as for the console's title bar.
+set_yad_env() {
+  local -n yad_env_ref="$1"
+
+  yad_env_ref=()
+  if [[ -z "${GTK_THEME:-}" && "$(host_color_scheme)" == "dark" ]]; then
+    yad_env_ref=(GTK_THEME=Adwaita:dark)
+  fi
+}
+
+# Whether yad has --css, which gives its CSS to every widget of the window.
+# Older ones, such as Debian's 0.40, have --gtkrc only, whose CSS reaches the
+# window itself and none of the fields in it, and ignore a --css.
+yad_has_css_option() {
+  local help
+
+  if [[ -z "${YAD_CSS_OPTION:-}" ]]; then
+    help="$(yad --help-all 2>/dev/null)" || true
+    if [[ "${help}" != *"--css="* && "${help}" == *"--gtkrc="* ]]; then
+      YAD_CSS_OPTION=no
+    else
+      YAD_CSS_OPTION=yes
+    fi
+  fi
+  [[ "${YAD_CSS_OPTION}" == "yes" ]]
+}
+
+# Sets the arrays named ENV_VAR and OPTIONS_VAR to what a yad window, run
+# with the environment YAD_ENV_VAR (set_yad_env's), needs for the extra CSS
+# given, which goes in CVD_TMP_DIR under NAME: --css=FILE, or, for a yad
+# without --css, a theme of the window's own, ika-NAME: Adwaita (dark when
+# YAD_ENV_VAR or the session asks for Adwaita:dark) and then the CSS, in a
+# data directory ahead of XDG_DATA_DIRS. A GTK_THEME of the user's other than
+# Adwaita is kept, and the CSS given to the window alone (--gtkrc=FILE). With
+# no CSS a yad with --css needs nothing, and an older one still gets the
+# theme, so that its window looks like the others'.
+yad_css() {
+  local -n yad_css_env_ref="$1"
+  local -n yad_css_options_ref="$2"
+  local -n yad_css_base_env_ref="$3"
+  local name="$4"
+  local css="$5"
+  local dir="${CVD_TMP_DIR}/yad-css"
+  local theme="${GTK_THEME:-}"
+  local entry
+  local variant
+  local file
+
+  yad_css_env_ref=()
+  yad_css_options_ref=()
+  mkdir -p "${dir}"
+  if yad_has_css_option; then
+    if [[ -n "${css}" ]]; then
+      printf '%s\n' "${css}" >"${dir}/${name}.css.$$"
+      mv -f "${dir}/${name}.css.$$" "${dir}/${name}.css"
+      yad_css_options_ref=(--css="${dir}/${name}.css")
+    fi
+    return 0
+  fi
+  for entry in "${yad_css_base_env_ref[@]}"; do
+    [[ "${entry}" != GTK_THEME=* ]] || theme="${entry#GTK_THEME=}"
+  done
+  if [[ -n "${theme}" && "${theme}" != "Adwaita" && "${theme}" != "Adwaita:dark" ]]; then
+    printf '%s\n' "${css}" >"${dir}/${name}.css.$$"
+    mv -f "${dir}/${name}.css.$$" "${dir}/${name}.css"
+    yad_css_options_ref=(--gtkrc="${dir}/${name}.css")
+    return 0
+  fi
+  mkdir -p "${dir}/themes/ika-${name}/gtk-3.0"
+  for variant in "" -dark; do
+    file="${dir}/themes/ika-${name}/gtk-3.0/gtk${variant}.css"
+    printf '@import url("resource:///org/gtk/libgtk/theme/Adwaita/gtk-contained%s.css");\n%s\n' \
+      "${variant}" "${css}" >"${file}.$$"
+    mv -f "${file}.$$" "${file}"
+  done
+  if [[ "${theme}" == "Adwaita:dark" ]]; then
+    yad_css_env_ref=(GTK_THEME="ika-${name}:dark")
+  else
+    yad_css_env_ref=(GTK_THEME="ika-${name}")
+  fi
+  yad_css_env_ref+=(XDG_DATA_DIRS="${dir}:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}")
+}
+
+# yad stretches a form's fields across their column, the display density's
+# spin box too. A margin on its right keeps it about as wide as three digits
+# and its buttons: so many pixels in the start options window, as wide as its
+# checkboxes, and in the tabbed window, as wide as the gamepad tab, less its
+# borders.
+APP_DPI_FIELD_MARGIN_PX=330
+APP_DPI_TAB_MARGIN_PX=480
+# The Startup Options tab's border, about two characters: its fields start
+# that far in from the tab's frame, as the window's start in from its edge.
+APP_OPTIONS_TAB_BORDER_PX=20
+# The gamepad's controls and settings in a smaller font, in lower rows, so
+# that their window fits on a screen 768 pixels high.
+CONTROLLER_MAPPING_FORM_CSS='window { font-size: 85%; }
+entry, spinbutton, combobox button { min-height: 20px; padding-top: 1px; padding-bottom: 1px; }
+spinbutton button { min-height: 0; padding-top: 0; padding-bottom: 0; }'
+
+# Sets the array named FIELDS_VAR to the start options form of PACKAGE,
+# labelled LABEL, for yad: the display density (0 for auto), then a checkbox
+# for each start option, ticked as TICKED_VAR (an associative array) says,
+# with DPI, a number or empty for auto.
+app_options_form_fields() {
+  local label="$1"
+  local dpi="$2"
+  local -n options_ticked_ref="$3"
+  local -n options_fields_ref="$4"
+  local option
+
+  # A blank label under the density, the line above the checkboxes with a half
+  # line of space under it, as a smaller blank line, and a blank label between
+  # the checkboxes and the buttons.
+  options_fields_ref=(--field="Display density, 0=Auto  :NUM" "${dpi:-0}!0..999!8")
+  options_fields_ref+=(--field="<span font_size='8pt'> </span>:LBL" "")
+  options_fields_ref+=(--field="Start $(yad_markup_escape "${label}") with:"$'\n'"<span font_size='5pt'> </span>:LBL" "")
+  for option in "${APP_START_OPTIONS[@]}"; do
+    options_fields_ref+=(--field="  $(app_start_option_text "${option}"):CHK")
+    options_fields_ref+=("$([[ -n "${options_ticked_ref[${option}]:-}" ]] && echo TRUE || echo FALSE)")
+  done
+  options_fields_ref+=(--field="<span font_size='8pt'> </span>:LBL" "")
+}
+
+# Reads the start options form's OUTPUT, one value per field: the density,
+# the two labels' empty values, TRUE or FALSE for each checkbox, then the
+# blank label's. Sets the array named OPTIONS_VAR to the ticked options, in
+# their usual order, and the variable named DPI_VAR to the density as
+# app_dpi_value prints it (1 to 95 is 96; 0 is auto, empty).
+read_app_options_form() {
+  local output="$1"
+  local -n read_options_ref="$2"
+  local -n read_dpi_ref="$3"
+  local -a values=()
+  local i
+
+  IFS='|' read -r -a values <<<"${output}"
+  read_options_ref=()
+  for i in "${!APP_START_OPTIONS[@]}"; do
+    if [[ "${values[i + 3]:-}" == "TRUE" ]]; then
+      read_options_ref+=("${APP_START_OPTIONS[i]}")
+    fi
+  done
+  read_dpi_ref="$(app_dpi_value "${values[0]:-}")" || read_dpi_ref=""
+}
+
+# Saves PACKAGE's start OPTIONS and display density DPI, as the start options
+# windows read them, and says so for the app named LABEL.
+save_app_options_form() {
+  local package="$1"
+  local label="$2"
+  local dpi="$3"
+  shift 3
+
+  save_app_options_with_dpi "${package}" "${dpi}" "$@"
+  if [[ "$#" -gt 0 ]]; then
+    respond "${label} starts with $*${dpi:+ at ${dpi} DPI}"
+  else
+    respond "${label} starts without saved options${dpi:+, at ${dpi} DPI}"
+  fi
+}
+
+# The start options window for the app NAME, drawn by yad: a form, which is as
+# high as its fields need on any theme, titled "Startup Options · LABEL" (the
+# app's package when its label is unknown). "Apply settings" saves the ticked
+# options and the display density, "Apply and start" saves them and starts the
+# app with them, and Cancel, or closing the window, leaves the saved ones as
+# they are. edit_app_settings' window has it as a tab; this one is for
+# sessions without an X display.
+edit_app_options() {
+  local name="$1"
+  local package
+  local label
+  local output
+  local status=0
+  local option
+  local dpi
+  local -a saved=()
+  local -a fields=()
+  local -a options=()
+  local -a yad_env=()
+  local -A ticked=()
+  local -a density_env=()
+  local -a density_options=()
+
+  resolve_settings_app "${name}" package label
   command -v yad >/dev/null 2>&1 \
     || die "the start options window needs yad; install it"
 
@@ -5827,40 +6060,16 @@ edit_app_options() {
   for option in "${saved[@]}"; do
     ticked[${option}]="true"
   done
-
-  # The heading names the app, by its package when its label is unknown,
-  # under "Ika Startup Options" and a rule, centered in a large bold font; the
-  # rule is a monospace box-drawing line, as wide on any desktop. A label
-  # above the checkboxes names the app again.
-  heading="<span font_size='15pt' weight='bold'>Ika Startup Options</span>"
-  heading+=$'\n'"<span font_family='monospace' font_size='11pt' alpha='55%'>"
-  heading+="────────────────────────────────────────────────────────</span>"
-  heading+=$'\n'"<span font_size='15pt' weight='bold'>$(yad_markup_escape "${label}")</span>"
-  # An empty line between the heading and the label.
-  heading+=$'\n'" "
-  # A half line of space under it, as a smaller blank line, and a blank label
-  # between the checkboxes and the buttons.
-  fields=(--field="Start $(yad_markup_escape "${label}") with:"$'\n'"<span font_size='5pt'> </span>:LBL" "")
-  for option in "${APP_START_OPTIONS[@]}"; do
-    fields+=(--field="  $(app_start_option_text "${option}"):CHK")
-    fields+=("$([[ -n "${ticked[${option}]:-}" ]] && echo TRUE || echo FALSE)")
-  done
-  fields+=(--field="<span font_size='8pt'> </span>:LBL" "")
-  # GTK 3 windows on GNOME stay light in a dark session unless GTK_THEME says
-  # otherwise, as for the console's title bar.
-  if [[ -z "${GTK_THEME:-}" && "$(host_color_scheme)" == "dark" ]]; then
-    yad_env=(GTK_THEME=Adwaita:dark)
-  fi
-  # No title bar, and no title: the heading names the window. KWin draws a
-  # title bar on KDE Plasma's Wayland session all the same (GTK 3 asks it to
-  # for any window it does not decorate itself, an undecorated one too), which
-  # is blank. yad's buttons are all as wide as the widest, which spaces widen
-  # until their row is the window's widest part, so that the window, as wide
-  # as its contents, has them fill its bottom. Escape closes it, as Cancel
-  # does.
-  output="$(env "${yad_env[@]}" yad --form --title="" \
-    --window-icon="${IKA_MENU_ICON}" --undecorated --center --borders=24 \
-    --text="${heading}" --text-align=center --separator="|" \
+  app_options_form_fields "${label}" "$(saved_app_dpi "${package}")" ticked fields
+  set_yad_env yad_env
+  yad_css density_env density_options yad_env density-window \
+    "spinbutton { margin-right: ${APP_DPI_FIELD_MARGIN_PX}px; }"
+  # yad's buttons are all as wide as the widest, which spaces widen until
+  # their row is the window's widest part, so that the window, as wide as its
+  # contents, has them fill its bottom. Escape closes it, as Cancel does.
+  output="$(env "${yad_env[@]}" "${density_env[@]}" yad --form \
+    --title="Startup Options · ${label}" --window-icon="${IKA_MENU_ICON}" \
+    --center --borders=12 --separator="|" "${density_options[@]}" \
     "${fields[@]}" \
     --buttons-layout=spread --button="Apply settings:2" \
     --button="        Apply and start        :0" --button=Cancel:1)" \
@@ -5877,20 +6086,8 @@ edit_app_options() {
       ;;
   esac
 
-  # One value per field, the label's first: TRUE or FALSE for each checkbox,
-  # then the blank label's.
-  IFS='|' read -r -a values <<<"${output}"
-  for i in "${!APP_START_OPTIONS[@]}"; do
-    if [[ "${values[i + 1]:-}" == "TRUE" ]]; then
-      options+=("${APP_START_OPTIONS[i]}")
-    fi
-  done
-  save_app_options "${package}" "${options[@]}"
-  if [[ "${#options[@]}" -gt 0 ]]; then
-    respond "${label} starts with ${options[*]}"
-  else
-    respond "${label} starts without saved options"
-  fi
+  read_app_options_form "${output}" options dpi
+  save_app_options_form "${package}" "${label}" "${dpi}" "${options[@]}"
   if [[ "${status}" -eq 0 ]]; then
     open_app_window "${package}" false "" ""
   fi
@@ -5945,7 +6142,7 @@ save_controller_mapping() {
     cat <<EOF
 # Controller mapping of ${package}: the keyboard gamepad's keys and settings
 # for this game, over [keyboard_gamepad] in ika.ini. 'ika app --controller
-# NAME' edits it; delete the file, or press "Default mapping" there, to go
+# NAME' edits it; delete the file, or press "Reset to default" there, to go
 # back to ika.ini. The keys
 # are SDL's key names, with _ for a space; an empty value leaves the control
 # without a key.
@@ -5962,198 +6159,312 @@ EOF
   mv -f "${file}.tmp" "${file}"
 }
 
-# Asks whether the game named LABEL is to use the default mapping (ika.ini's
-# [keyboard_gamepad]) again, deleting its own: true if so
-confirm_default_controller_mapping() {
+# Prints the start options PACKAGE has by default: fullscreen for a game, as
+# a game added to the menu gets, none for another app.
+default_app_options() {
+  if is_game_app "$1"; then
+    printf 'fullscreen\n'
+  fi
+}
+
+# "Reset to default" once confirmed: PACKAGE's start options go back to its
+# default ones, at the console's density, and its controller mapping is
+# deleted, so that it uses ika.ini's [keyboard_gamepad] again.
+reset_app_to_default() {
+  local package="$1"
+
+  rm -f "$(app_controller_mapping_file "${package}")"
+  # shellcheck disable=SC2046 # one word per option
+  save_app_options_with_dpi "${package}" "" $(default_app_options "${package}")
+}
+
+# Asks whether the app named LABEL is to have its default start options and
+# controller mapping again (reset_app_to_default): true if so
+confirm_reset_to_default() {
   local label="$1"
   local text
   local -a yad_env=()
 
-  if [[ -z "${GTK_THEME:-}" && "$(host_color_scheme)" == "dark" ]]; then
-    yad_env=(GTK_THEME=Adwaita:dark)
-  fi
-  text="<span font_size='13pt' weight='bold'>Use the default mapping for $(yad_markup_escape "${label}")?</span>"
-  text+=$'\n\n'"Its own keys and settings are deleted, and it uses the"
-  text+=$'\n'"keyboard gamepad's mapping in ika.ini again."
+  set_yad_env yad_env
+  text="<span font_size='13pt' weight='bold'>Apply defaults to $(yad_markup_escape "${label}")</span>"
+  text+=$'\n\n'"This will reset your app options and gamepad emulation mappings."
   # Some space between the text and the buttons: a tall transparent dot, as
   # yad drops a last line of spaces, and a short line only fills the room
   # the window has at its least height
   text+=$'\n'"<span font_size='16pt' alpha='1'>.</span>"
   env "${yad_env[@]}" yad --title="" --window-icon="${IKA_MENU_ICON}" \
     --undecorated --center --borders=24 --text="${text}" --text-align=center \
-    --buttons-layout=spread --button="Use default mapping:0" --button=Cancel:1 \
+    --buttons-layout=spread --button=Ok:0 --button=Cancel:1 \
     >/dev/null
 }
 
-# ika app --controller NAME: a window (yad) with the keyboard gamepad's keys
-# and settings for the game, from its mapping, else from ika.ini. "Apply settings" saves them in the
-# game's mapping and ticks "Use the keyboard to emulate a gamepad" in the game's
-# start options if it is not, "Apply and start" does that and starts the
-# game, "Default mapping" asks whether to remove the game's mapping and, if
-# so, shows ika.ini's in the window, and Cancel leaves the rest as it was.
+# The controller mapping form's explanation, above its fields: in two lines,
+# no wider than the fields, since as a label among them it widened its column,
+# and the window, to its whole length; then a blank line.
+controller_mapping_form_text() {
+  printf '%s\n%s\n ' \
+    "Keys of the keyboard gamepad, one or more per control: as SDL names them (Up, Space, Return," \
+    "Left_Shift, Keypad_Enter) or the mouse's (Mouse_Left, Mouse_Right, Mouse_Middle, Wheel_Up, Wheel_Down)"
+}
+
+# The settings the controller mapping form shows, besides the controls' keys.
+CONTROLLER_MAPPING_FORM_SETTINGS=(stick_ramp_ms walk_percent socd mouse_stick mouse_sensitivity)
+
+# Sets the associative arrays named KEYS_VAR and SETTINGS_VAR to the controller
+# mapping the form shows for PACKAGE: its own, else ika.ini's keys and
+# settings, and APP_SETTINGS_VAR to the settings of its own mapping.
+load_controller_mapping_form() {
+  local package="$1"
+  local -n form_keys_ref="$2"
+  local -n form_settings_ref="$3"
+  local -n form_app_settings_ref="$4"
+  local -A own_keys=()
+  local -A own_settings=()
+  local control
+  local setting
+  local value
+
+  load_app_controller_mapping "${package}" own_keys own_settings
+  form_keys_ref=()
+  form_settings_ref=()
+  form_app_settings_ref=()
+  for setting in "${!own_settings[@]}"; do
+    form_app_settings_ref[${setting}]="${own_settings[${setting}]}"
+  done
+  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+    if [[ -n "${own_keys[${control}]+set}" ]]; then
+      form_keys_ref[${control}]="${own_keys[${control}]}"
+    else
+      form_keys_ref[${control}]="${KEYBOARD_GAMEPAD_KEYS[${control}]}"
+    fi
+  done
+  for setting in "${KEYBOARD_GAMEPAD_SETTINGS[@]}"; do
+    if [[ -n "${own_settings[${setting}]+set}" ]]; then
+      value="${own_settings[${setting}]}"
+    else
+      value="${KEYBOARD_GAMEPAD_SETTING_VALUES[${setting}]}"
+    fi
+    form_settings_ref[${setting}]="$(normalize_keyboard_gamepad_setting "${setting}" \
+      "${value}" "${KEYBOARD_GAMEPAD_SETTING_VALUES[${setting}]}")"
+  done
+}
+
+# Prints what the controller mapping form shows of the associative arrays
+# named KEYS_VAR and SETTINGS_VAR, a line per control and setting, to tell an
+# edited mapping from the one the window opened with.
+controller_mapping_form_signature() {
+  local -n signature_keys_ref="$1"
+  local -n signature_settings_ref="$2"
+  local control
+  local setting
+
+  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+    printf '%s=%s\n' "${control}" "${signature_keys_ref[${control}]:-}"
+  done
+  for setting in "${CONTROLLER_MAPPING_FORM_SETTINGS[@]}"; do
+    printf '%s=%s\n' "${setting}" "${signature_settings_ref[${setting}]:-}"
+  done
+}
+
+# Sets the array named FIELDS_VAR to the controller mapping form of the
+# associative arrays named KEYS_VAR and SETTINGS_VAR, for yad, in two columns,
+# and BLANKS_VAR (an associative array) to the indexes of its blank rows,
+# whose values reading the form leaves out. With BLANK_ROWS true, as a window
+# of its own, each column ends with a blank row, which leaves a line's worth
+# of space between the fields and the buttons; as a tab, whose frame does
+# that, only the second column gets a blank row, to be as high as the first.
+controller_mapping_form_fields() {
+  local -n fields_keys_ref="$1"
+  local -n fields_settings_ref="$2"
+  local -n mapping_fields_ref="$3"
+  local -n mapping_blanks_ref="$4"
+  local blank_rows="$5"
+  local control
+  local socd_choice
+  local mouse_choice
+  local half
+  local rows
+  local indent
+  local gap
+  local field
+  local i
+  local -a items=()
+  local -a item_values=()
+
+  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+    items+=("$(keyboard_gamepad_control_text "${control}"):")
+    item_values+=("${fields_keys_ref[${control}]}")
+  done
+  items+=("Stick ramp, ms (0: at once):NUM" "Walk speed, %:NUM")
+  item_values+=("${fields_settings_ref[stick_ramp_ms]}!0..5000!10" "${fields_settings_ref[walk_percent]}!1..100!5")
+  if [[ "${fields_settings_ref[socd]}" == "neutral" ]]; then
+    socd_choice="Last!^Neutral"
+  else
+    socd_choice="^Last!Neutral"
+  fi
+  items+=("Opposite keys held together:CB")
+  item_values+=("${socd_choice}")
+  case "${fields_settings_ref[mouse_stick]}" in
+    right) mouse_choice="Off!^Right stick!Left stick" ;;
+    left) mouse_choice="Off!Right stick!^Left stick" ;;
+    *) mouse_choice="^Off!Right stick!Left stick" ;;
+  esac
+  items+=("Mouse emulates thumbstick:CB" "Mouse sensitivity, %:NUM")
+  item_values+=("${mouse_choice}" "${fields_settings_ref[mouse_sensitivity]}!1..1000!10")
+  # yad fills the first of the two columns with half the fields, then the
+  # second.
+  # The second column's labels start two figure spaces (U+2007, a digit's
+  # width) in: with yad's own spacing, about four characters between them
+  # and the first column's fields. Every label ends with two no-break
+  # spaces, to set it off its field. yad takes what follows a field's last
+  # colon as its type when there is something there, so a key field's label
+  # ("Up:") gets a no-break space as a type after the spaces, which yad does
+  # not know and shows as a text field, as it does without a type.
+  half=$(( (${#items[@]} + 1) / 2 ))
+  rows="${half}"
+  [[ "${blank_rows}" != "true" ]] || rows=$(( half + 1 ))
+  indent=$'\xe2\x80\x87\xe2\x80\x87'
+  gap=$'\xc2\xa0\xc2\xa0'
+  mapping_fields_ref=()
+  mapping_blanks_ref=()
+  for i in "${!items[@]}"; do
+    if [[ "${blank_rows}" == "true" ]] && (( i == half )); then
+      mapping_blanks_ref[$(( ${#mapping_fields_ref[@]} / 2 ))]=1
+      mapping_fields_ref+=(--field=" :LBL" "")
+    fi
+    case "${items[i]}" in
+      *:NUM|*:CB) field="${items[i]%:*}${gap}:${items[i]##*:}" ;;
+      *) field="${items[i]}${gap}:"$'\xc2\xa0' ;;
+    esac
+    (( i < half )) || field="${indent}${field}"
+    mapping_fields_ref+=(--field="${field}" "${item_values[i]}")
+  done
+  while (( ${#mapping_fields_ref[@]} / 2 < 2 * rows )); do
+    mapping_blanks_ref[$(( ${#mapping_fields_ref[@]} / 2 ))]=1
+    mapping_fields_ref+=(--field=" :LBL" "")
+  done
+}
+
+# Reads the controller mapping form's OUTPUT, the blank rows of BLANKS_VAR left
+# out: a key field per control, then the settings, into the associative
+# arrays named KEYS_VAR and SETTINGS_VAR, which hold the mapping the form
+# showed. The settings the form does not show come from APP_SETTINGS_VAR, the
+# game's own mapping.
+read_controller_mapping_form() {
+  local output="$1"
+  local -n read_blanks_ref="$2"
+  local -n read_keys_ref="$3"
+  local -n read_settings_ref="$4"
+  local -n read_app_settings_ref="$5"
+  local i
+  local control
+  local other
+  local key
+  local value
+  local -a words=()
+  local -a values=()
+  local -a kept=()
+  local -A shown=()
+
+  IFS='|' read -r -a words <<<"${output}"
+  for i in "${!words[@]}"; do
+    [[ -n "${read_blanks_ref[${i}]+set}" ]] || values+=("${words[i]}")
+  done
+  i=0
+  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+    shown[${control}]="${read_keys_ref[${control}]}"
+    value="${values[i]:-}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    read_keys_ref[${control}]="${value}"
+    i=$((i + 1))
+  done
+  # A key given to a control in the window leaves the controls that still
+  # have it as they were shown, so that moving a key takes one edit (scrcpy
+  # keeps a key given twice for its first control)
+  for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+    [[ "${read_keys_ref[${control}]}" != "${shown[${control}]}" ]] || continue
+    for other in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
+      [[ "${other}" != "${control}" && "${read_keys_ref[${other}]}" == "${shown[${other}]}" ]] || continue
+      read -r -a words <<<"${read_keys_ref[${other}]}"
+      kept=()
+      for key in "${words[@]}"; do
+        [[ " ${read_keys_ref[${control}],,} " == *" ${key,,} "* ]] || kept+=("${key}")
+      done
+      read_keys_ref[${other}]="${kept[*]}"
+    done
+  done
+  # yad prints numbers with decimals, and the choices as shown, capitalized
+  read_settings_ref[stick_ramp_ms]="${values[i]%%[.,]*}"
+  read_settings_ref[walk_percent]="${values[i + 1]%%[.,]*}"
+  value="${values[i + 2]:-Last}"
+  read_settings_ref[socd]="${value,,}"
+  case "${values[i + 3]:-}" in
+    "Right stick") read_settings_ref[mouse_stick]="right" ;;
+    "Left stick") read_settings_ref[mouse_stick]="left" ;;
+    *) read_settings_ref[mouse_stick]="off" ;;
+  esac
+  read_settings_ref[mouse_sensitivity]="${values[i + 4]%%[.,]*}"
+  read_settings_ref[socd_dpad]="${read_app_settings_ref[socd_dpad]:-}"
+  read_settings_ref[socd_left_stick]="${read_app_settings_ref[socd_left_stick]:-}"
+  read_settings_ref[socd_right_stick]="${read_app_settings_ref[socd_right_stick]:-}"
+}
+
+# ika app --controller NAME without the tabbed window (see edit_app_settings):
+# a window (yad) of its own, "Gamepad Emulation · LABEL", with the keyboard
+# gamepad's keys and settings for the game, from its mapping, else from
+# ika.ini. "Apply settings" saves them in the game's mapping and ticks "Use the
+# keyboard to emulate a gamepad" in the game's start options if it is not,
+# "Apply and start" does that and starts the game, "Reset to default" asks
+# whether to reset the app's start options and remove the game's mapping
+# (reset_app_to_default) and, if so, shows ika.ini's in the window, and
+# Cancel leaves the rest as it was.
 edit_controller_mapping() {
   local name="$1"
   local package
   local label
-  local resolved
-  local adb_serial
-  local heading
   local output
   local status=0
-  local i
-  local control
-  local setting
-  local value
-  local socd_choice
-  local mouse_choice
-  local half
-  local indent
-  local gap
-  local field
-  local reload=true
   local default_used=false
   local -a fields=()
-  local -a values=()
-  local -a items=()
-  local -a item_values=()
   local -a saved=()
-  local -A blank_at=()
   local -a yad_env=()
-  local other key
-  local -a words kept
+  local -A blank_at=()
   local -A keys=()
-  local -A shown=()
   local -A settings=()
-  local -A app_keys=()
   local -A app_settings=()
+  local -a mapping_env=()
+  local -a mapping_options=()
 
-  if is_app_package_name "${name}"; then
-    package="${name}"
-    label="$(app_display_name "${package}")"
-  else
-    ensure_guest_ready
-    adb_serial="$(resolve_adb_serial)"
-    resolved="$(resolve_launchable_app "${name}" "${adb_serial}")" || exit 1
-    package="${resolved#*$'\t'}"
-    label="${resolved%%$'\t'*}"
-  fi
-  validate_app_package "${package}"
-
+  resolve_settings_app "${name}" package label
   command -v yad >/dev/null 2>&1 \
     || die "the controller mapping window needs yad; install it"
+  set_yad_env yad_env
+  yad_css mapping_env mapping_options yad_env gamepad "${CONTROLLER_MAPPING_FORM_CSS}"
 
-  heading="<span font_size='15pt' weight='bold'>Controller Mapping</span>"
-  heading+=$'\n'"<span font_family='monospace' font_size='11pt' alpha='55%'>"
-  heading+="────────────────────────────────────────────────────────</span>"
-  heading+=$'\n'"<span font_size='15pt' weight='bold'>$(yad_markup_escape "${label}")</span>"
-  # The explanation is broken into two lines here, no wider than the fields:
-  # as a label among them, it widened its column, and the window, to its
-  # whole length
-  heading+=$'\n'"<span font_size='5pt'> </span>"
-  heading+=$'\n'"Keys of the keyboard gamepad, one or more per control: as SDL names them (Up, Space, Return,"
-  heading+=$'\n'"Left_Shift, Keypad_Enter) or the mouse's (Mouse_Left, Mouse_Right, Mouse_Middle, Wheel_Up, Wheel_Down)"
-  heading+=$'\n'" "
-  if [[ -z "${GTK_THEME:-}" && "$(host_color_scheme)" == "dark" ]]; then
-    yad_env=(GTK_THEME=Adwaita:dark)
-  fi
-
-  # The window is shown again after "Default mapping", with the default
+  load_controller_mapping_form "${package}" keys settings app_settings
+  # The window is shown again after "Reset to default", with the default
   # mapping once confirmed, else with the edits as they were
   while true; do
-    if [[ "${reload}" == "true" ]]; then
-      # The game's mapping, else ika.ini's keys and settings
-      app_keys=()
-      app_settings=()
-      load_app_controller_mapping "${package}" app_keys app_settings
-      for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
-        if [[ -n "${app_keys[${control}]+set}" ]]; then
-          keys[${control}]="${app_keys[${control}]}"
-        else
-          keys[${control}]="${KEYBOARD_GAMEPAD_KEYS[${control}]}"
-        fi
-      done
-      for setting in "${KEYBOARD_GAMEPAD_SETTINGS[@]}"; do
-        if [[ -n "${app_settings[${setting}]+set}" ]]; then
-          value="${app_settings[${setting}]}"
-        else
-          value="${KEYBOARD_GAMEPAD_SETTING_VALUES[${setting}]}"
-        fi
-        settings[${setting}]="$(normalize_keyboard_gamepad_setting "${setting}" \
-          "${value}" "${KEYBOARD_GAMEPAD_SETTING_VALUES[${setting}]}")"
-      done
-      reload=false
-    fi
-    items=()
-    item_values=()
-    for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
-      items+=("$(keyboard_gamepad_control_text "${control}"):")
-      item_values+=("${keys[${control}]}")
-    done
-    items+=("Stick ramp, ms (0: at once):NUM" "Walk speed, %:NUM")
-    item_values+=("${settings[stick_ramp_ms]}!0..5000!10" "${settings[walk_percent]}!1..100!5")
-    if [[ "${settings[socd]}" == "neutral" ]]; then
-      socd_choice="Last!^Neutral"
-    else
-      socd_choice="^Last!Neutral"
-    fi
-    items+=("Opposite keys held together:CB")
-    item_values+=("${socd_choice}")
-    case "${settings[mouse_stick]}" in
-      right) mouse_choice="Off!^Right stick!Left stick" ;;
-      left) mouse_choice="Off!Right stick!^Left stick" ;;
-      *) mouse_choice="^Off!Right stick!Left stick" ;;
-    esac
-    items+=("Mouse emulates thumbstick:CB" "Mouse sensitivity, %:NUM")
-    item_values+=("${mouse_choice}" "${settings[mouse_sensitivity]}!1..1000!10")
-    # yad fills the first of the two columns with half the fields, then the
-    # second: each column ends with a blank row, which leaves a line's worth of
-    # space between the fields and the buttons. The blank rows' values are
-    # left out when the output is read.
-    # The second column's labels start two figure spaces (U+2007, a digit's
-    # width) in: with yad's own spacing, about four characters between them
-    # and the first column's fields. Every label ends with two no-break
-    # spaces, to set it off its field. yad takes what follows a field's last
-    # colon as its type when there is something there, so a key field's label
-    # ("Up:") gets a no-break space as a type after the spaces, which yad does
-    # not know and shows as a text field, as it does without a type.
-    half=$(( (${#items[@]} + 1) / 2 ))
-    indent=$'\xe2\x80\x87\xe2\x80\x87'
-    gap=$'\xc2\xa0\xc2\xa0'
-    fields=()
-    blank_at=()
-    for i in "${!items[@]}"; do
-      if (( i == half )); then
-        blank_at[$(( ${#fields[@]} / 2 ))]=1
-        fields+=(--field=" :LBL" "")
-      fi
-      case "${items[i]}" in
-        *:NUM|*:CB) field="${items[i]%:*}${gap}:${items[i]##*:}" ;;
-        *) field="${items[i]}${gap}:"$'\xc2\xa0' ;;
-      esac
-      (( i < half )) || field="${indent}${field}"
-      fields+=(--field="${field}" "${item_values[i]}")
-    done
-    while (( ${#fields[@]} / 2 < 2 * (half + 1) )); do
-      blank_at[$(( ${#fields[@]} / 2 ))]=1
-      fields+=(--field=" :LBL" "")
-    done
+    controller_mapping_form_fields keys settings fields blank_at true
     status=0
-    output="$(env "${yad_env[@]}" yad --form --title="" \
-      --window-icon="${IKA_MENU_ICON}" --undecorated --center --borders=24 \
-      --text="${heading}" --text-align=center --separator="|" --columns=2 \
+    output="$(env "${yad_env[@]}" "${mapping_env[@]}" yad --form \
+      --title="Gamepad Emulation · ${label}" --window-icon="${IKA_MENU_ICON}" \
+      --center --borders=12 --text="$(controller_mapping_form_text)" \
+      --text-align=center --separator="|" --columns=2 "${mapping_options[@]}" \
       --align=right "${fields[@]}" \
-      --buttons-layout=spread --button="Default mapping:4" \
+      --buttons-layout=spread --button="Reset to default:4" \
       --button="Apply settings:2" --button="        Apply and start        :0" \
       --button=Cancel:1)" \
       || status=$?
-    # yad prints the fields for even exit codes only: "Default mapping" is 4
+    # yad prints the fields for even exit codes only: "Reset to default" is 4
     # so that the window can come back with the edits
     case "${status}" in
       0|2|4)
         ;;
       1|252)
         if [[ "${default_used}" == "true" ]]; then
-          respond "${label} uses the controller mapping of ika.ini again"
+          respond "${label} has its default start options and ika.ini's controller mapping again"
         else
           respond "Controller mapping of ${label} left as it was"
         fi
@@ -6164,57 +6475,12 @@ edit_controller_mapping() {
         ;;
     esac
 
-    # One value per field, the blank rows' left out: a key field per control,
-    # then the settings
-    IFS='|' read -r -a words <<<"${output}"
-    values=()
-    for i in "${!words[@]}"; do
-      [[ -n "${blank_at[${i}]+set}" ]] || values+=("${words[i]}")
-    done
-    i=0
-    for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
-      shown[${control}]="${keys[${control}]}"
-      value="${values[i]:-}"
-      value="${value#"${value%%[![:space:]]*}"}"
-      value="${value%"${value##*[![:space:]]}"}"
-      keys[${control}]="${value}"
-      i=$((i + 1))
-    done
-    # A key given to a control in the window leaves the controls that still
-    # have it as they were shown, so that moving a key takes one edit (scrcpy
-    # keeps a key given twice for its first control)
-    for control in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
-      [[ "${keys[${control}]}" != "${shown[${control}]}" ]] || continue
-      for other in "${KEYBOARD_GAMEPAD_CONTROLS[@]}"; do
-        [[ "${other}" != "${control}" && "${keys[${other}]}" == "${shown[${other}]}" ]] || continue
-        read -r -a words <<<"${keys[${other}]}"
-        kept=()
-        for key in "${words[@]}"; do
-          [[ " ${keys[${control}],,} " == *" ${key,,} "* ]] || kept+=("${key}")
-        done
-        keys[${other}]="${kept[*]}"
-      done
-    done
-    # yad prints numbers with decimals
-    settings[stick_ramp_ms]="${values[i]%%[.,]*}"
-    settings[walk_percent]="${values[i + 1]%%[.,]*}"
-    # The choice as shown, capitalized; its value in lower case
-    value="${values[i + 2]:-Last}"
-    settings[socd]="${value,,}"
-    case "${values[i + 3]:-}" in
-      "Right stick") settings[mouse_stick]="right" ;;
-      "Left stick") settings[mouse_stick]="left" ;;
-      *) settings[mouse_stick]="off" ;;
-    esac
-    settings[mouse_sensitivity]="${values[i + 4]%%[.,]*}"
-    settings[socd_dpad]="${app_settings[socd_dpad]:-}"
-    settings[socd_left_stick]="${app_settings[socd_left_stick]:-}"
-    settings[socd_right_stick]="${app_settings[socd_right_stick]:-}"
+    read_controller_mapping_form "${output}" blank_at keys settings app_settings
     [[ "${status}" -eq 4 ]] || break
-    if confirm_default_controller_mapping "${label}"; then
-      rm -f "$(app_controller_mapping_file "${package}")"
+    if confirm_reset_to_default "${label}"; then
+      reset_app_to_default "${package}"
       default_used=true
-      reload=true
+      load_controller_mapping_form "${package}" keys settings app_settings
     fi
   done
   save_controller_mapping "${package}" keys settings
@@ -6232,12 +6498,240 @@ edit_controller_mapping() {
   fi
 }
 
+# Prints GDK_SCALE and GDK_DPI_SCALE assignments, one per line, for yad's
+# tabbed window on XWayland in a KDE Plasma Wayland session whose X11 apps
+# apply scaling themselves ([Xwayland] Scale in kwinrc, such as 1.7 on a
+# HiDPI screen): KWin leaves their windows unscaled, and GTK 3 reads no scale
+# of its own there. GTK 3 scales a window by a whole number, so the scale is
+# rounded for the window and the rest goes to its text: 1.7 is GDK_SCALE=2
+# and GDK_DPI_SCALE=0.85. Nothing on other desktops, at a scale of 1, or when
+# GDK_SCALE is set already.
+xwayland_gdk_scale_env() {
+  local scale
+
+  [[ -n "${WAYLAND_DISPLAY:-}" && -z "${GDK_SCALE:-}" ]] || return 0
+  [[ ":${XDG_CURRENT_DESKTOP:-}:" == *:KDE:* ]] || return 0
+  scale="$(awk -F= '
+    { sub(/\r$/, "") }
+    /^\[/ { in_group = ($0 == "[Xwayland]"); next }
+    in_group && $1 == "Scale" { print $2; exit }' \
+    "${XDG_CONFIG_HOME:-${HOME}/.config}/kwinrc" 2>/dev/null)"
+  [[ "${scale}" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 0
+  awk -v scale="${scale}" 'BEGIN {
+    if (scale <= 1) {
+      exit
+    }
+    whole = int(scale + 0.5)
+    printf "GDK_SCALE=%d\nGDK_DPI_SCALE=%.4g\n", whole, scale / whole
+  }'
+}
+
+# Whether yad can draw the tabbed window: its notebook embeds each tab's form
+# with XEmbed, which GTK 3 has on X11 only. On an X11 session that is the
+# display itself; a Wayland session runs it on XWayland, whose display the
+# session sets in DISPLAY.
+yad_tabs_available() {
+  [[ -n "${DISPLAY:-}" ]]
+}
+
+# "Ika startup options" on a launcher (ika app --options NAME: TAB 1) and ika
+# app --controller NAME (TAB 2): an app's start options and controller mapping
+# in one window, "Startup Options · LABEL", with a tab for each, Startup
+# Options and Gamepad Emulation, opened on TAB, the same for games and other
+# apps. Without an X display each tab opens as a window of its own.
+#
+# "Apply settings" saves the start options and the display density, and the
+# mapping when it was edited or the app has one of its own: an untouched
+# mapping would become the app's own copy of ika.ini's. An edited mapping
+# ticks "Use the keyboard to emulate a gamepad", unless the window unticked
+# it. "Apply and start" also starts the app. "Reset to default" asks whether
+# to reset the app's start options and remove the app's mapping
+# (reset_app_to_default) and, if so, shows the default start options and
+# ika.ini's mapping, on the Gamepad Emulation tab. Cancel, or closing the
+# window, leaves everything else as it was.
+edit_app_settings() {
+  local name="$1"
+  local tab="${2:-1}"
+  local package
+  local label
+  local key
+  local status=0
+  local option
+  local dpi
+  local tab_dir
+  local mapping_file
+  local shown_mapping
+  local mapping_edited=false
+  local mapping_saved=false
+  local default_used=false
+  local -a saved=()
+  local -a options=()
+  local -a kept=()
+  local -a fields1=()
+  local -a fields2=()
+  local -a yad_env=()
+  local -a scale_env=()
+  local -a plugs=()
+  local -A ticked=()
+  local -A blank_at=()
+  local -A keys=()
+  local -A settings=()
+  local -A app_settings=()
+  local -a window_env=()
+  local -a window_options=()
+  local -a density_env=()
+  local -a density_options=()
+  local -a mapping_env=()
+  local -a mapping_options=()
+
+  resolve_settings_app "${name}" package label
+  command -v yad >/dev/null 2>&1 \
+    || die "the start options window needs yad; install it"
+  if ! yad_tabs_available; then
+    log "no X display for yad's tabbed window; opening its tab as a window of its own"
+    if [[ "${tab}" == "1" ]]; then
+      edit_app_options "${package}"
+    else
+      edit_controller_mapping "${package}"
+    fi
+    return 0
+  fi
+
+  read -r -a saved <<<"$(saved_app_options "${package}")"
+  for option in "${saved[@]}"; do
+    ticked[${option}]="true"
+  done
+  dpi="$(saved_app_dpi "${package}")"
+  mapping_file="$(app_controller_mapping_file "${package}")"
+  load_controller_mapping_form "${package}" keys settings app_settings
+  shown_mapping="$(controller_mapping_form_signature keys settings)"
+  set_yad_env yad_env
+  yad_env+=(GDK_BACKEND=x11)
+  mapfile -t scale_env < <(xwayland_gdk_scale_env)
+  if [[ "${#scale_env[@]}" -gt 0 ]]; then
+    log "X11 apps scale themselves on this desktop: ${scale_env[*]} for the tabbed window"
+    yad_env+=("${scale_env[@]}")
+  fi
+  yad_css window_env window_options yad_env window ""
+  yad_css density_env density_options yad_env density-tab \
+    "spinbutton { margin-right: ${APP_DPI_TAB_MARGIN_PX}px; }"
+  yad_css mapping_env mapping_options yad_env gamepad "${CONTROLLER_MAPPING_FORM_CSS}"
+  tab_dir="$(mktemp -d "${CVD_TMP_DIR}/app-settings.XXXXXX")"
+
+  # The window is shown again after "Reset to default", on the Gamepad
+  # Emulation tab, with the default mapping once confirmed, else with the
+  # edits as they were
+  while true; do
+    app_options_form_fields "${label}" "${dpi}" ticked fields1
+    controller_mapping_form_fields keys settings fields2 blank_at false
+    # The notebook and its tabs find each other by a key, a number no other
+    # window uses. A tab prints its fields when the notebook closes with an
+    # even exit code, as a window of its own does.
+    key=$(( (RANDOM << 15 | RANDOM) + 1 ))
+    env "${yad_env[@]}" "${density_env[@]}" yad --plug="${key}" --tabnum=1 \
+      --form --separator="|" --borders="${APP_OPTIONS_TAB_BORDER_PX}" \
+      "${density_options[@]}" "${fields1[@]}" >"${tab_dir}/1" &
+    plugs=("$!")
+    env "${yad_env[@]}" "${mapping_env[@]}" yad --plug="${key}" --tabnum=2 \
+      --form --separator="|" --text="$(controller_mapping_form_text)" \
+      --text-align=center --columns=2 "${mapping_options[@]}" --align=right \
+      "${fields2[@]}" >"${tab_dir}/2" &
+    plugs+=("$!")
+    status=0
+    env "${yad_env[@]}" "${window_env[@]}" yad --notebook --key="${key}" \
+      "${window_options[@]}" \
+      --tab="Startup Options" --tab="Gamepad Emulation" --active-tab="${tab}" \
+      --title="Startup Options · ${label}" --window-icon="${IKA_MENU_ICON}" \
+      --center --borders=12 \
+      --buttons-layout=spread --button="Reset to default:4" \
+      --button="Apply settings:2" --button="        Apply and start        :0" \
+      --button=Cancel:1 >/dev/null \
+      || status=$?
+    # The notebook stops its tabs as it closes; one that did not open leaves
+    # them waiting for it
+    case "${status}" in
+      0|1|2|4|252) ;;
+      *) kill "${plugs[@]}" 2>/dev/null || true ;;
+    esac
+    wait "${plugs[@]}" 2>/dev/null || true
+    case "${status}" in
+      0|2|4)
+        ;;
+      1|252)
+        rm -rf "${tab_dir}"
+        if [[ "${default_used}" == "true" ]]; then
+          respond "${label} has its default start options and ika.ini's controller mapping again"
+        else
+          respond "Start options and controller mapping of ${label} left as they were"
+        fi
+        return 0
+        ;;
+      *)
+        rm -rf "${tab_dir}"
+        die "could not open the start options window (yad exited with ${status})"
+        ;;
+    esac
+
+    read_app_options_form "$(<"${tab_dir}/1")" options dpi
+    ticked=()
+    for option in "${options[@]}"; do
+      ticked[${option}]="true"
+    done
+    read_controller_mapping_form "$(<"${tab_dir}/2")" blank_at keys settings app_settings
+    [[ "${status}" -eq 4 ]] || break
+    tab=2
+    if confirm_reset_to_default "${label}"; then
+      reset_app_to_default "${package}"
+      default_used=true
+      read -r -a saved <<<"$(default_app_options "${package}")"
+      ticked=()
+      for option in "${saved[@]}"; do
+        ticked[${option}]="true"
+      done
+      dpi=""
+      load_controller_mapping_form "${package}" keys settings app_settings
+      shown_mapping="$(controller_mapping_form_signature keys settings)"
+    fi
+  done
+  rm -rf "${tab_dir}"
+
+  if [[ "$(controller_mapping_form_signature keys settings)" != "${shown_mapping}" ]]; then
+    mapping_edited=true
+  fi
+  if [[ "${mapping_edited}" == "true" || -e "${mapping_file}" ]]; then
+    save_controller_mapping "${package}" keys settings
+    mapping_saved=true
+  fi
+  # An edited mapping is of use with the keyboard as a gamepad, unless that
+  # was unticked in the window; the options keep their usual order
+  if [[ "${mapping_edited}" == "true" && " ${saved[*]} " != *" gamekb "* ]]; then
+    ticked[gamekb]="true"
+  fi
+  kept=()
+  for option in "${APP_START_OPTIONS[@]}"; do
+    [[ -z "${ticked[${option}]:-}" ]] || kept+=("${option}")
+  done
+  save_app_options_form "${package}" "${label}" "${dpi}" "${kept[@]}"
+  if [[ "${mapping_saved}" == "true" ]]; then
+    respond "Controller mapping of ${label} saved"
+  elif [[ "${default_used}" == "true" ]]; then
+    respond "${label} uses the controller mapping of ika.ini again"
+  fi
+  if [[ "${status}" -eq 0 ]]; then
+    open_app_window "${package}" false "" ""
+  fi
+}
+
+# open_app_window NAME FULLSCREEN TITLE SIZE [START_APP [DPI]]: DPI is the
+# display density 'ika app --dpi' gives, as app_dpi_value prints it, or auto.
 open_app_window() {
   local name="$1"
   local fullscreen_mode="$2"
   local title="$3"
   local window_size="$4"
   local start_app="${5:-}"
+  local dpi_given="${6:-}"
+  local app_dpi=""
   local package=""
   local label=""
   local resolved
@@ -6315,6 +6809,14 @@ open_app_window() {
     guest_dpi="$(guest_display_density "${adb_serial}")"
     [[ "${guest_dpi}" =~ ^[1-9][0-9]*$ ]] || die "could not read the guest display density"
     dpi="${guest_dpi}"
+  fi
+  # A density of the app's own goes over that: given to 'ika app' (--dpi=auto
+  # keeps the one above), else saved in its start options.
+  if [[ -n "${dpi_given}" ]]; then
+    [[ "${dpi_given}" == "auto" ]] || dpi="${dpi_given}"
+  else
+    app_dpi="$(saved_app_dpi "${package}")"
+    [[ -z "${app_dpi}" ]] || dpi="${app_dpi}"
   fi
   if [[ "${window_size_is_default}" == "true" && "${package}" == "${IKA_MODE_PACKAGE}" ]]; then
     window_size="$(mode_app_window_size "${dpi}")" || window_size="$(default_app_window_size)"
@@ -6702,8 +7204,8 @@ app_launcher_is_current() {
     && grep -qxF "SingleMainWindow=true" "${file}" \
     && grep -qxF "[Desktop Action new-window]" "${file}" \
     && grep -qxF "Name=Launch app" "${file}" \
-    && grep -qxF "Name=Ika Startup Options" "${file}" \
-    && grep -qxF "Name=App Info" "${file}" \
+    && grep -qxF "Name=Ika startup options" "${file}" \
+    && grep -qxF "Name=App info" "${file}" \
     && grep -qxF "Exec=ika app --options ${package}" "${file}" \
     && grep -qxF "Exec=ika app --info ${package}" "${file}" \
     && grep -qxF "Icon=$(app_menu_icon com.android.settings)" "${file}" \
@@ -6779,8 +7281,8 @@ EOF
 }
 
 # Writes the launcher's right-click actions: "Launch app", which opens the
-# app, "Ika Startup Options", which opens the app's start options window, and
-# "App Info", which opens Android's App info page for the app. An app has one
+# app, "Ika startup options", which opens the app's start options window, and
+# "App info", which opens Android's App info page for the app. An app has one
 # window (SingleMainWindow), and GNOME Shell offers "New Window" for an app
 # that is not running whatever the launcher says, unless it has an action of
 # its own with that ID: "Launch app" is that action. It also removes the
@@ -6794,9 +7296,9 @@ set_launcher_actions() {
   set_launcher_action "${file}" touch "" ""
   set_launcher_action "${file}" controller "" ""
   set_launcher_action "${file}" new-window "Launch app" "ika app ${package}"
-  set_launcher_action "${file}" options "Ika Startup Options" \
+  set_launcher_action "${file}" options "Ika startup options" \
     "ika app --options ${package}"
-  set_launcher_action "${file}" app-settings "App Info" \
+  set_launcher_action "${file}" app-settings "App info" \
     "ika app --info ${package}" "${settings_icon}"
 }
 
@@ -7554,6 +8056,7 @@ run_app_command() {
   local fullscreen_mode="false"
   local title=""
   local window_size=""
+  local dpi_given=""
 
   # Without a terminal (a menu launcher), report errors as notifications.
   if [[ ! -t 0 && ! -t 2 ]]; then
@@ -7642,6 +8145,21 @@ run_app_command() {
         window_size="$1"
         shift
         ;;
+      --dpi=*|--dpi)
+        if [[ "$1" == --dpi ]]; then
+          shift
+          [[ $# -gt 0 ]] || die "--dpi requires a value"
+          dpi_given="$1"
+        else
+          dpi_given="${1#*=}"
+        fi
+        shift
+        # auto, or 0, leaves the window at the console's density, whatever
+        # the app's start options say.
+        dpi_given="$(app_dpi_value "${dpi_given}")" \
+          || die "--dpi must be auto, 0, or 96 to 999"
+        dpi_given="${dpi_given:-auto}"
+        ;;
       --ika_scrcpy=*)
         IKA_SCRCPY="${1#*=}"
         shift
@@ -7669,14 +8187,14 @@ run_app_command() {
     return 0
   fi
   if [[ "${options_mode}" == "true" ]]; then
-    edit_app_options "${name}"
+    edit_app_settings "${name}" 1
     return 0
   fi
   if [[ "${controller_mode}" == "true" ]]; then
-    edit_controller_mapping "${name}"
+    edit_app_settings "${name}" 2
     return 0
   fi
-  open_app_window "${name}" "${fullscreen_mode}" "${title}" "${window_size}"
+  open_app_window "${name}" "${fullscreen_mode}" "${title}" "${window_size}" "" "${dpi_given}"
 }
 
 # ============================================================================

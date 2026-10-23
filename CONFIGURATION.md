@@ -25,7 +25,8 @@ A setting is taken from the first of these that gives it:
 | `ika app` | Lists the apps that can be opened, with open app windows in bold. |
 | `ika app NAME [OPTIONS]` | Opens an app in its own window. See [App windows](USAGE.md#app-windows). |
 | `ika app --options NAME` | Opens the app's start options window. |
-| `ika app --controller NAME` | Opens a game's controller mapping window. |
+| `ika app --controller NAME` | Opens the start options window on its Gamepad Emulation tab. |
+| `ika app NAME --dpi=N` | Opens an app window at a display density of 96 to 999 for this start (`auto`: the console's). |
 | `ika app --info NAME` | Opens Android's App info page for the app. |
 | `ika app close NAME` / `--all` | Closes an app window, or all of them. |
 | `ika app sync [--remove]` | Adds the Android apps to the desktop's app menu at once, or removes them and turns the automatic sync off. |
@@ -383,7 +384,7 @@ Ika keeps its files in `~/ika`:
 | Path | What it is |
 | --- | --- |
 | `ika.ini` | Settings |
-| `app-options.ini` | The apps' start options, a section per app |
+| `app-options.ini` | The apps' start options, a section per app: `options =` and the window's display density, `dpi =` (96 to 999; none for the console's) |
 | `apps/PACKAGE/` | An app window's size, title and log (`window.log`), and a game's `controller.ini` |
 | `apps/icons/` | The icons of the apps in the desktop's menu |
 | `apps/Chromium.apk`, `apps/Magisk-*.apk` | Downloads kept for new devices and for `ika root` |

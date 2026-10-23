@@ -140,18 +140,20 @@ Right-click an app in the menu for:
 
 - **Launch app**: opens the app, as clicking it does. An app has one window,
   so GNOME's **New Window** is not offered.
-- **Ika Startup Options**: how the app starts (below).
-- **App Info**: Android's App info page for the app, alone in
+- **Ika startup options**: how the app starts (below), and its keyboard
+  gamepad keys (see
+  [Controller mapping per game](#controller-mapping-per-game)).
+- **App info**: Android's App info page for the app, alone in
   a Settings window, for its permissions, storage, notifications, force stop
   and uninstall. `ika app --info NAME` from a terminal.
 
-A game's keyboard gamepad keys are set from a terminal (see
-[Controller mapping per game](#controller-mapping-per-game)).
-
 ### Start options
 
-**Ika Startup Options** (`ika app --options NAME`) opens a window with a
-checkbox for each way the app can start:
+**Ika startup options** (`ika app --options NAME`) opens a window,
+**Startup Options · APP**. **Display density, 0=Auto** sets the density of
+the app's window: 0 is the console's, as without it, else 96 to 999 DPI (a
+number under 96 is taken as 96). A checkbox follows for each way the app can
+start:
 
 | Option | Effect |
 | --- | --- |
@@ -162,11 +164,20 @@ checkbox for each way the app can start:
 | **Use the keyboard to emulate a gamepad** | The keyboard and mouse drive a gamepad (see [Keyboard as a gamepad](#keyboard-as-a-gamepad)) |
 | **Touch input: Left-click and drag gets interpreted as tap and swipe** | See [Touch input](#touch-input) |
 
-**Apply settings** saves the ticked options, **Apply and start** saves them
-and opens the app, and **Cancel** (or Escape) leaves them as they were. They
-apply every time the app opens, from the menu or with `ika app NAME`, which
-adds the options you type to them. They are saved in `~/ika/app-options.ini`.
-Without them, an app gets the desktop's keyboard and mouse and no gamepad.
+**Apply settings** saves the density and the ticked options, **Apply and
+start** saves them and opens the app, and **Cancel** (or Escape) leaves them
+as they were. They apply every time the app opens, from the menu or with
+`ika app NAME`, which adds the options you type to them; `ika app NAME
+--dpi=N` opens it at another density once (`--dpi=auto` at the console's).
+They are saved in `~/ika/app-options.ini`. Without them, an app gets the
+console's density, the desktop's keyboard and mouse and no gamepad.
+
+The window has these as its **Startup Options** tab, beside a
+**Gamepad Emulation** tab (see
+[Controller mapping per game](#controller-mapping-per-game)), the same
+window for games and other apps. The tabs need
+X11: a Wayland session has it as XWayland, and without it each tab opens as
+a window of its own.
 
 ## Keyboard, mouse and gamepads
 
@@ -249,22 +260,27 @@ left_trigger = Left_Shift
 
 ### Controller mapping per game
 
-`ika app --controller NAME` (for any app) opens a window with the keyboard
-gamepad's settings for that game: a field per control, with its keys, and the stick ramp, the walk speed,
-what opposite keys held together do, which stick the mouse moves, and the
-mouse's sensitivity.
+The **Gamepad Emulation** tab of an app's **Ika startup options** window
+(`ika app --controller NAME` opens the window on it) has the
+keyboard gamepad's settings for that game: a field per control, with its
+keys, and the stick ramp, the walk speed, what opposite keys held together
+do, which stick the mouse moves, and the mouse's sensitivity.
 
-- **Apply settings** saves them in `~/ika/apps/PACKAGE/controller.ini`, and
-  ticks **Use the keyboard to emulate a gamepad** in the game's start options.
+- **Apply settings** saves an edited mapping in
+  `~/ika/apps/PACKAGE/controller.ini`, and ticks **Use the keyboard to emulate
+  a gamepad** in the game's start options, unless you unticked it in the
+  window. A mapping left as shown is saved only when the game already has
+  one of its own, so the game keeps following `[keyboard_gamepad]`.
 - **Apply and start** saves them and starts the game.
-- **Default mapping** asks first, then deletes the game's mapping, so the
-  game uses `[keyboard_gamepad]` again, and shows that mapping in the window;
-  the start option stays ticked.
+- **Reset to default** asks first (**Apply defaults to APP**, **Ok** or
+  **Cancel**), then resets the app's start options, a game's to **Fullscreen
+  mode** at the console's density, and deletes the game's mapping, so the
+  game uses `[keyboard_gamepad]` again; the window shows both.
 - **Cancel** leaves everything as it was.
 
 A key typed for one control is taken from the control it was shown on. The
 saved mapping holds every key and setting, so later changes to
-`[keyboard_gamepad]` reach the game only after **Default mapping**. The
+`[keyboard_gamepad]` reach the game only after **Reset to default**. The
 per-pad `socd_dpad`, `socd_left_stick` and `socd_right_stick` settings are not
 in the window; write them in the file by hand.
 
