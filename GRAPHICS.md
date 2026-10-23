@@ -41,7 +41,12 @@ passes them through without its own settings and does not test them.
 
 `ika start` uses `gfxstream_guest_angle`, unless every Vulkan device
 `vulkaninfo --summary` lists is a software one (llvmpipe, lavapipe or
-SwiftShader): then it uses `gfxstream`, which is much lighter on the CPU there.
+SwiftShader), or gfxstream would pick llvmpipe over the GPU: then it uses
+`gfxstream`, which is much lighter on the CPU there. gfxstream ranks a
+device by its type and its Vulkan version, so a GPU with an older Vulkan
+loses to llvmpipe: a Haswell GPU offers Vulkan 1.2, llvmpipe 1.4. In
+`gfxstream` mode that host renders OpenGL ES on its GPU instead; a 1080p
+video that dropped 62% of its frames with `gfxstream_guest_angle` dropped 1%.
 `--gpu_mode=` on the command line wins over both; `gpu_mode` in the `[gpu]`
 section of `ika.ini` sets the mode for hosts with a hardware Vulkan driver.
 
@@ -61,7 +66,7 @@ mode. The other modes ignore it.
 
 | Value | Effect |
 | --- | --- |
-| `auto` (default) | Vulkan stays on, except when the host's first Vulkan device is llvmpipe: then Android has OpenGL ES only, and no Vulkan driver |
+| `auto` (default) | Vulkan stays on, except when the host's first Vulkan device is llvmpipe, or gfxstream would pick llvmpipe over the GPU: then Android has OpenGL ES only, and no Vulkan driver |
 | `on` | OpenGL ES and Vulkan |
 | `off` | OpenGL ES only, and no Vulkan driver in Android |
 
