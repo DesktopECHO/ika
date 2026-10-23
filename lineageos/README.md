@@ -103,7 +103,8 @@ The same image also runs an Android TV interface. Desktop is the default.
 entry, in the desktop's app drawer and in the TV launcher's apps, changes. It
 lists Desktop Mode and each TV launcher (Home apps that declare the leanback
 feature or have a TV launcher entry, Catapult first). In TV mode a TV launcher
-becomes the Home app at once, as TV Settings has no Home app choice; switching
+becomes the Home app and comes up at once, as TV Settings has no Home app
+choice; switching
 modes asks first, then switches the Settings app (only one of TV Settings and
 Settings is enabled, as they answer the same intents), the keyboard (Leanback
 in TV mode) and the Home app (the chosen TV launcher, or the desktop's again),
