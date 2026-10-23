@@ -45,6 +45,11 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** `VirtioGpuScanout::flush()` drops a flush whose imported dma-buf the compositor still holds (`GpuDisplay::import_in_use()`), as the copy path already drops a frame whose `wl_shm` buffer is in use.
 - **Why:** With the hold, flipping to a held buffer would show the guest's next composition inside the frame the console is sampling. The guest's next flush, into another buffer of its swapchain, gets through; nothing waits.
 
+#### `PATCH.crosvm-media-errors.patch`
+- **Targets:** `devices` crate. File: `src/virtio/media/decoder_adapter.rs`. Made on top of `PATCH.crosvm-media-decoder-input-size.patch` and `PATCH.crosvm-media-decoder-visible-size.patch`, and named to sort after them.
+- **What it does:** The virtio-media video decoder logs a `NotifyError` or `ResetCompleted` event from the backend and carries on, where both were `todo!()`. A failed `decode()` logs the backend's error before the guest gets `EIO`.
+- **Why:** When the VA-API backend fails to decode a buffer, it fails that `decode()` call and queues `NotifyError`. The `todo!()` panicked, and the panic took crosvm and the VM down: an H.264 stream with a level cros-codecs rejects did it on its first frame. The cause was never logged: `decode()` dropped the backend's error.
+
 #### `PATCH.crosvm-resize-display.patch`
 - **Targets:** `crosvm_bin` and the source `git_repository`. File: `devices/src/virtio/gpu/virtio_gpu.rs`.
 - **What it does:** Adds `VirtioGpu::resize_display(display_id, DisplayParameters)` that updates an existing scanout's `width`, `height`, and stored `display_params`, then flips `scanouts_updated` so the GPU thread re-syncs.
@@ -131,7 +136,7 @@ See `crosvm.MODULE.bazel`. The relevant blocks:
 | `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-composite-preserve-spec-fd`, `crosvm-gpu-2d-sandbox`, `crosvm-gpu-unref-shmem-mapping`, `crosvm-resize-display`, `crosvm-flush-held-dmabuf`, `crosvm-enable-vulkano-gralloc`, `minijail-sys_common_mk` |
 | `crosvm_bin.annotation(crate = "disk")` | `disk-composite-preserve-spec-fd`, `disk-qcow-zero-clusters` |
 | `crosvm_bin.annotation(crate = "jail")` | `jail-aarch64-block-pread64`, `jail-gpu-host-graphics-libs-optional` |
-| `crosvm_bin.annotation(crate = "devices")` | `crosvm-resize-display-devices`, `crosvm-flush-held-dmabuf-devices` |
+| `crosvm_bin.annotation(crate = "devices")` | `crosvm-media-decoder-input-size`, `crosvm-media-decoder-visible-size`, `crosvm-media-errors`, `crosvm-resize-display-devices`, `crosvm-flush-held-dmabuf-devices` |
 | `crosvm_bin.annotation(crate = "rutabaga_gfx")` | `rutabaga_gfx_build_rs`, `rutabaga_gfx-gralloc-vulkano-fallback`, `rutabaga_gfx-cleanup-on-drop`, `rutabaga_gfx-gfxstream-3d-resource-info`, `rutabaga_gfx-on-demand-export-and-query` |
 | `crosvm_bin.annotation(crate = "minijail-sys")` | `minijail-sys_build_rs` |
 | `crosvm_bin.annotation(crate = "proto_build_tools")` | `proto_build_tools` |

@@ -160,6 +160,10 @@ crosvm_bin.annotation(
         # VA-API backend writes pictures into them at, not the coded size:
         # otherwise 1080p shows a green band and colors shifted up 16 lines.
         "@//build_external/crosvm:PATCH.crosvm-media-decoder-visible-size.patch",
+        # A decode error from the backend is logged and the VM keeps running,
+        # instead of reaching a todo!() that aborted crosvm. Named to sort
+        # after the two patches above, which it is made on top of.
+        "@//build_external/crosvm:PATCH.crosvm-media-errors.patch",
         "@//build_external/crosvm:PATCH.crosvm-resize-display-devices.patch",
         # A scanout flush into a dma-buf the compositor still holds is dropped
         # instead of shown into the frame on screen.
