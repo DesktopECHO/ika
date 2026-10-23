@@ -146,9 +146,9 @@ reset_calls() {
 
 # The Startup Options tab's output: the vCPUs, the memory, the densities and
 # the refresh rate as yad prints numbers, the three choices, the spacer, the
-# TV gamepad's box, the spacer
+# camera's box and the TV gamepad's, the spacer
 options_output() {
-  printf '%s|%s|%s|%s|%s|%s|%s|%s||%s||\n' "${@}"
+  printf '%s|%s|%s|%s|%s|%s|%s|%s||%s|%s||\n' "${@}"
 }
 
 # The Gamepad Emulation tab's output, as test_ika_app_settings_window.sh's:
@@ -204,7 +204,7 @@ expect_equal "${ini_keys[a]}" "H" "the user's key for A"
 expect_equal "${ini_keys[right_stick_left]}" "J" "J stays the right stick's"
 expect_equal "${ini_keys[left_stick_left]}" "A" "the left stick's default key"
 
-shown_tab1="$(options_output 3.000000 0.000000 160.000000 0.000000 0.000000 gfxstream_guest_angle Auto Auto FALSE)"
+shown_tab1="$(options_output 3.000000 0.000000 160.000000 0.000000 0.000000 gfxstream_guest_angle Auto Auto FALSE FALSE)"
 reset_calls
 cp "${ini}" "${T}/before.ini"
 DIALOG_TAB1="${shown_tab1}" DIALOG_TAB2="$(mapping_output ini_keys)" edit_ika_settings
@@ -223,7 +223,8 @@ expect_contains "${tab1}" $'!1\n--field=RAM, MB, 0=Auto  :NUM\n0!0..' "then the 
 expect_contains "${tab1}" $'\n--field=GPU mode  :CB\n^gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES only!guest_swiftshader\n' "the GPU modes"
 expect_contains "${tab1}" $'\n--field=Hardware video decoding  :CB\n^Auto!Off\n' "video decoding"
 expect_contains "${tab1}" $'\n--field=Low-CPU mode  :CB\n^Auto!On!Off\n' "low-CPU mode"
-expect_contains "${tab1}" $'\n--field=  Keyboard as a gamepad in TV mode:CHK\nFALSE\n' "the TV gamepad, off"
+expect_contains "${tab1}" $'\n--field=  Start with the camera:CHK\nFALSE\n--field=  Keyboard as a gamepad in TV mode:CHK\nFALSE\n' \
+  "the camera, then the TV gamepad, off"
 expect_contains "${tab1}" $'\n--css='"${CVD_TMP_DIR}"$'/yad-css/ika-options.css\n' "narrow boxes"
 expect_contains "${tab2}" $'\n--css='"${CVD_TMP_DIR}"$'/yad-css/gamepad.css\n' "the gamepad tab as an app's"
 expect_contains "${tab2}" $'\n--field=\xe2\x80\x87\xe2\x80\x87A\xc2\xa0:\xc2\xa0\nH\n' "ika.ini's key for A"
@@ -235,7 +236,7 @@ echo "ok: the window shows ika.ini, and writes nothing unchanged"
 # else: J given to A leaves the right stick, which is written without it
 reset_calls
 cp "${ini}" "${T}/before.ini"
-DIALOG_TAB1="$(options_output 3.000000 0.000000 200.000000 0.000000 60.000000 gfxstream Off On TRUE)" \
+DIALOG_TAB1="$(options_output 3.000000 0.000000 200.000000 0.000000 60.000000 gfxstream Off On FALSE TRUE)" \
   DIALOG_TAB2="$(mapping_output ini_keys a=J)" edit_ika_settings
 { diff "${T}/before.ini" "${ini}" || true; } | grep '^>' | sort >"${T}/added"
 expect_equal "$(<"${T}/added")" "> a = J
@@ -255,7 +256,7 @@ echo "ok: Apply settings writes the changes in place"
 # gfxstream chosen from it writes gfxstream_vulkan = auto; a gfxstream_vulkan
 # of ika.ini's stays as it is while the GPU mode is not changed
 tab1_with() {
-  options_output 3.000000 0.000000 200.000000 0.000000 60.000000 "$1" Off On TRUE
+  options_output 3.000000 0.000000 200.000000 0.000000 60.000000 "$1" Off On FALSE TRUE
 }
 reset_calls
 cp "${ini}" "${T}/before.ini"
@@ -278,14 +279,32 @@ DIALOG_TAB1="$(tab1_with gfxstream)" DIALOG_TAB2="$(mapping_output ini_keys a=J 
 cmp -s "${T}/before.ini" "${ini}" || fail "gfxstream_vulkan = on was changed by an untouched GPU mode"
 echo "ok: gfxstream, OpenGL ES only"
 
+# "Start with the camera": ticked, camera.device is auto, unless ika.ini names
+# a camera, which stays; unticked, off
+camera_tab1() {
+  options_output 3.000000 0.000000 200.000000 0.000000 60.000000 gfxstream Off On "$1" TRUE
+}
+reset_calls
+DIALOG_TAB1="$(camera_tab1 TRUE)" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" edit_ika_settings
+grep -qx "device = auto" "${ini}" || fail "the camera ticked did not write device = auto"
+ika_ini_set camera device video2
+reset_calls
+DIALOG_TAB1="$(camera_tab1 TRUE)" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" edit_ika_settings
+expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=  Start with the camera:CHK\nTRUE\n' "a camera of ika.ini's is shown ticked"
+grep -qx "device = video2" "${ini}" || fail "a camera ika.ini names did not stay"
+reset_calls
+DIALOG_TAB1="$(camera_tab1 FALSE)" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" edit_ika_settings
+grep -qx "device = off" "${ini}" || fail "the camera unticked did not write device = off"
+echo "ok: Start with the camera"
+
 # Apply and restart restarts Ika as its launcher does; Cancel leaves ika.ini
 reset_calls
-DIALOG_TAB1="$(options_output 3.000000 0.000000 200.000000 0.000000 60.000000 gfxstream Off On TRUE)" \
+DIALOG_TAB1="$(options_output 3.000000 0.000000 200.000000 0.000000 60.000000 gfxstream Off On FALSE TRUE)" \
   DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" DIALOG_STATUS=0 edit_ika_settings
 expect_equal "$(<"${T}/setsid")" "IKA_NOTIFY=true --fork ${IKA_SCRIPT_PATH} restart" "Apply and restart"
 reset_calls
 cp "${ini}" "${T}/before.ini"
-DIALOG_TAB1="$(options_output 0.000000 0.000000 300.000000 0.000000 0.000000 gfxstream Auto Auto FALSE)" \
+DIALOG_TAB1="$(options_output 0.000000 0.000000 300.000000 0.000000 0.000000 gfxstream Auto Auto FALSE FALSE)" \
   DIALOG_TAB2="$(mapping_output ini_keys)" DIALOG_STATUS=1 edit_ika_settings
 cmp -s "${T}/before.ini" "${ini}" || fail "Cancel changed ika.ini"
 expect_equal "$(<"${T}/respond")" "ika.ini left as it was" "Cancel says so"
@@ -294,12 +313,12 @@ echo "ok: Apply and restart, Cancel"
 # Reset to default, once confirmed, writes the built-in values and keys, and
 # the window comes back with them, on the Startup Options tab
 reset_calls
-DIALOG_TAB1="$(options_output 3.000000 0.000000 200.000000 0.000000 60.000000 gfxstream Off On TRUE)" \
+DIALOG_TAB1="$(options_output 3.000000 0.000000 200.000000 0.000000 60.000000 gfxstream Off On FALSE TRUE)" \
   DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" DIALOG_STATUS="4 0 1" edit_ika_settings
 expect_contains "$(<"${T}/yad.confirm.args")" "Apply defaults to Ika</span>" "the confirmation"
 expect_contains "$(<"${T}/yad.confirm.args")" "This will reset Ika's startup options and gamepad emulation mappings." "and what it resets"
 for line in "dpi = auto" "cpus = auto" "gpu_mode = gfxstream_guest_angle" "gfxstream_vulkan = auto" "hw_video_decode = auto" \
-    "mode = auto" "tv_keyboard_gamepad = false" "a = Space" "right_stick_left = J"; do
+    "mode = auto" "device = off" "tv_keyboard_gamepad = false" "a = Space" "right_stick_left = J"; do
   grep -qxF "${line}" "${ini}" || fail "Reset to default did not write '${line}'"
 done
 expect_contains "$(<"${T}/yad.notebook.args")" $'\n--active-tab=1\n' "back on the first tab"
@@ -310,7 +329,7 @@ echo "ok: Reset to default"
 # Without an X display, the Startup Options tab is a window of its own
 reset_calls
 unset DISPLAY
-DIALOG_FORM="$(options_output 0.000000 0.000000 0.000000 0.000000 0.000000 gfxstream_guest_angle Auto Auto TRUE)" \
+DIALOG_FORM="$(options_output 0.000000 0.000000 0.000000 0.000000 0.000000 gfxstream_guest_angle Auto Auto FALSE TRUE)" \
   edit_ika_settings
 expect_contains "$(<"${T}/yad.form.args")" $'\n--title=Startup Options · Ika\n' "the window of its own"
 grep -qx "tv_keyboard_gamepad = true" "${ini}" || fail "the window of its own did not save"
@@ -330,5 +349,32 @@ input_args=()
 IKA_TV_KEYBOARD_GAMEPAD=true append_scrcpy_input_args input_args desktop Console
 [[ " ${input_args[*]} " != *"--gamekb="* ]] || fail "the desktop console got the keyboard gamepad"
 echo "ok: tv_keyboard_gamepad"
+
+# camera.device at start: off passes none; auto the first usable camera, or
+# none, logged, without one; a videoN that is missing is left out, logged;
+# --no-camera passes none, and --camera wins
+camera_args() (
+  detect_host_camera() { [[ -n "${FAKE_CAMERA:-}" ]] && printf '%s\n' "${FAKE_CAMERA}"; }
+  resolve_camera_device() { printf '%s\n' "${1:-auto}"; }
+  apply_camera_power_line_frequency() { :; }
+  has_live_cvd_processes() { return 1; }
+  fullscreen=""
+  args=()
+  parse_start_options fullscreen args "$@"
+  printf '%s\n' "${args[@]}"
+)
+: >"${T}/log"
+expect_equal "$(IKA_CAMERA=off camera_args)" "" "off"
+expect_equal "$(IKA_CAMERA=auto FAKE_CAMERA=/dev/null camera_args)" "--media=v4l2_proxy:device=/dev/null" "auto"
+expect_equal "$(IKA_CAMERA=auto camera_args)" "" "auto without a camera"
+expect_contains "$(<"${T}/log")" "no usable camera found; starting without one" "logged"
+expect_equal "$(IKA_CAMERA=video97 camera_args)" "" "a missing camera"
+expect_contains "$(<"${T}/log")" "camera /dev/video97 (camera.device) does not exist" "logged"
+expect_equal "$(IKA_CAMERA=auto FAKE_CAMERA=/dev/null camera_args --no-camera)" "" "--no-camera"
+expect_equal "$(IKA_CAMERA=off camera_args --camera=video5)" "--media=v4l2_proxy:device=video5" "--camera wins"
+if (IKA_CAMERA=off camera_args --camera --no-camera) >/dev/null 2>&1; then
+  fail "--camera and --no-camera together were taken"
+fi
+echo "ok: camera.device at start"
 
 printf 'PASS: Ika settings window\n'

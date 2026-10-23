@@ -231,6 +231,7 @@ game_apps = com.example.game
 
 | Key | Default | Meaning |
 | --- | --- | --- |
+| `device` | `off` | The camera passed to Android at every start: `off`, `auto` (the first usable camera) or `videoN`. A camera that is missing is left out, and Ika starts without one; `--camera` and `--no-camera` win. **Start with the camera** in Ika's Startup options sets it. `IKA_CAMERA` |
 | `power_line_frequency` | `auto` | The camera's anti-flicker: `auto`, `50`, `60` or `off`. `--camera_power_line_frequency=`, `IKA_CAMERA_POWER_LINE_FREQUENCY`. See [Camera](USAGE.md#camera) |
 
 ### [network]
