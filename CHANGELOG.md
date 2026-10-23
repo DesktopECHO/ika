@@ -201,9 +201,6 @@
   virglrenderer, which the Cuttlefish 1.58 host tools run) stops with the
   reason when the ROM was not built with Venus support, as Ika's is not yet,
   and on Apple Silicon, where Venus has no path; USAGE.md says what it needs.
-- README notes what Mesa 26.3 brings for Ika's hosts: Intel's Jay shader
-  compiler on Xe2 and Xe3, and DRM format modifiers on GFX6 through GFX8 AMD
-  GPUs, where the console is then scanned out with an explicit layout too.
 - gfxstream is updated to upstream main of 2026-10-19. Its renderer allocates
   the transfer buffer of a guest color buffer at the first transfer, and
   trims its heap when a guest app exits: on an Apple Silicon host its heap
