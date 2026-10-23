@@ -981,6 +981,7 @@ sc_screen_init(struct sc_screen *screen,
         .mp = params->mp,
         .gp = params->gp,
         .kg = params->kg,
+        .gf = params->gf,
         .camera = params->camera,
         .mouse_bindings = params->mouse_bindings,
         .legacy_paste = params->legacy_paste,
@@ -1708,6 +1709,17 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
         // keyboard gamepad's keys ourselves, before the mouse capture handler
         // consumes the event in relative mode
         sc_keyboard_gamepad_release_all(screen->im.kg);
+    }
+
+    // Ika: the device has the host's gamepads only while the window has the
+    // focus, so that a game in the background has none (after the keyboard
+    // gamepad released its keys, above)
+    if (screen->im.gf) {
+        if (event->type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
+            sc_gamepad_focus_set_focused(screen->im.gf, true);
+        } else if (event->type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+            sc_gamepad_focus_set_focused(screen->im.gf, false);
+        }
     }
 
     if (sc_screen_is_relative_mode(screen)

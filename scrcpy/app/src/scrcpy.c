@@ -28,6 +28,7 @@
 #include "sdl_hints.h"
 #include "server.h"
 #include "uhid/gamepad_uhid.h"
+#include "ika/gamepad_focus.h"
 #include "ika/keyboard_gamepad.h"
 #include "ika/keyboard_gamepad_timer.h"
 #include "uhid/keyboard_uhid.h"
@@ -104,6 +105,8 @@ struct scrcpy {
         struct sc_gamepad_aoa gamepad_aoa;
 #endif
     };
+    // Ika: the UHID gamepads, passed only while the window has the focus
+    struct sc_gamepad_focus gamepad_focus;
     struct sc_timeout timeout;
 };
 
@@ -683,6 +686,7 @@ scrcpy(struct scrcpy_options *options) {
     struct sc_mouse_processor *mp = NULL;
     struct sc_gamepad_processor *gp = NULL;
     struct sc_keyboard_gamepad *kg = NULL;
+    struct sc_gamepad_focus *gf = NULL;
 
     if (options->control) {
         static const struct sc_controller_callbacks controller_cbs = {
@@ -825,7 +829,11 @@ aoa_complete:
 
         if (options->gamepad_input_mode == SC_GAMEPAD_INPUT_MODE_UHID) {
             sc_gamepad_uhid_init(&s->gamepad_uhid, &s->controller);
-            gp = &s->gamepad_uhid.gamepad_processor;
+            sc_gamepad_focus_init(&s->gamepad_focus,
+                                  &s->gamepad_uhid.gamepad_processor,
+                                  options->window);
+            gf = &s->gamepad_focus;
+            gp = &gf->gamepad_processor;
             if (options->keyboard_gamepad) {
                 sc_keyboard_gamepad_init(&s->keyboard_gamepad, gp,
                                          options->keyboard_gamepad,
@@ -868,6 +876,7 @@ aoa_complete:
             .mp = mp,
             .gp = gp,
             .kg = kg,
+            .gf = gf,
             .mouse_bindings = options->mouse_bindings,
             .legacy_paste = options->legacy_paste,
             .clipboard_autosync = options->clipboard_autosync,

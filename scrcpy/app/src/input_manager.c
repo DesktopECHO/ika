@@ -31,6 +31,7 @@ sc_input_manager_init(struct sc_input_manager *im,
     im->mp = params->mp;
     im->gp = params->gp;
     im->kg = params->kg;
+    im->gf = params->gf;
     im->camera = params->camera;
 
     im->mouse_bindings = params->mouse_bindings;

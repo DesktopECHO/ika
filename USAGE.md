@@ -180,7 +180,10 @@ does tapping MOD. MOD never reaches Android; Right Alt does.
 Every gamepad Android sees, physical or the keyboard's, is a device named
 **Ika Emulated GamePad** (`adb shell dumpsys input` lists them), with the
 vendor and product IDs of an Xbox 360 controller (045e:028e), which gives
-Android its key layout and games the mapping they know.
+Android its key layout and games the mapping they know. A window's gamepads,
+the keyboard gamepad and the host's real ones, each a gamepad of its own,
+are connected only while the window has the focus: a game in the background
+has none, and they connect again when you click back into its window.
 
 ### Touch input
 
