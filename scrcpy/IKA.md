@@ -110,7 +110,7 @@ resizes it as it resizes the console's.
 - `--start-app=info:PACKAGE` starts `APPLICATION_DETAILS_SETTINGS` for
   PACKAGE as the first page of a new task, as a Settings subpage, so that it
   shows alone, without Settings' two-pane list; `+info:` force-stops Settings
-  first. `ika` uses it for an app's **Android App Settings...**.
+  first. `ika` uses it for an app's **App Info**.
 
 ## Flex display in pixels
 

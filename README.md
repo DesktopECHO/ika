@@ -74,7 +74,7 @@ virtual machine, with its apps in windows of their own.
   window. The first start takes longer, as Android sets itself up.
 - Your Android apps appear in your desktop's app menu under
   **Android Apps (Ika)**. Each opens in a window of its own; right-click one
-  for its **Ika Startup Options...**.
+  for its **Ika Startup Options**.
 - `ika stop` stops Android, and `ika help` lists every command.
 
 [Using Ika](USAGE.md) explains the console, app windows, input and gamepads,

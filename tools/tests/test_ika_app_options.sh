@@ -1,6 +1,6 @@
 #!/usr/bin/bash
 
-# App start options ("Ika Startup Options..." on a launcher, ika app --options):
+# App start options ("Ika Startup Options" on a launcher, ika app --options):
 # the window ticks the saved options and saves the ticked ones, yad draws it,
 # ~/ika/app-options.ini keeps one section per app, and
 # 'ika app' adds the saved options to those it is given.
@@ -263,7 +263,7 @@ for package in com.example.game com.example.app; do
   file="${apps_dir}/ika-${package}.desktop"
   write_app_launcher "${apps_dir}" "Some Label" "${package}" /icons/app.png
   expect_contains "$(<"${file}")" \
-    $'[Desktop Action options]\nName=Ika Startup Options...\nExec=ika app --options '"${package}" \
+    $'[Desktop Action options]\nName=Ika Startup Options\nExec=ika app --options '"${package}" \
     "${package}'s launcher offers the start options"
   if command -v desktop-file-validate >/dev/null 2>&1; then
     desktop-file-validate "${file}" >/dev/null || fail "${package}'s launcher is invalid"
@@ -272,33 +272,39 @@ for package in com.example.game com.example.app; do
     fail "${package}'s launcher was rewritten although it was current"
   fi
 done
-grep -qxF "Actions=options;controller;app-settings;" "${apps_dir}/ika-com.example.game.desktop" \
-  || fail "a game's actions"
-expect_contains "$(<"${apps_dir}/ika-com.example.game.desktop")" \
-  $'[Desktop Action controller]\nName=Controller mapping...\nExec=ika app --controller com.example.game\nIcon=input-gaming' \
-  "a game's launcher offers the controller mapping"
-grep -qxF "Actions=options;app-settings;" "${apps_dir}/ika-com.example.app.desktop" \
-  || fail "an app's actions"
-if grep -q "Desktop Action controller" "${apps_dir}/ika-com.example.app.desktop"; then
-  fail "an app that is not a game offers the controller mapping"
-fi
-# A game's launcher without the controller mapping is updated
-sed -i -e 's/^Actions=.*/Actions=options;app-settings;/' "${apps_dir}/ika-com.example.game.desktop"
+# Games and other apps offer the same actions, without a controller mapping
+for package in com.example.game com.example.app; do
+  grep -qxF "Actions=options;app-settings;" "${apps_dir}/ika-${package}.desktop" \
+    || fail "${package}'s actions"
+  if grep -q "Desktop Action controller" "${apps_dir}/ika-${package}.desktop"; then
+    fail "${package}'s launcher offers the controller mapping"
+  fi
+done
+# A game's launcher with the former "Controller mapping..." action loses it
+sed -i -e 's/^Actions=.*/Actions=options;controller;app-settings;/' "${apps_dir}/ika-com.example.game.desktop"
+printf '\n[Desktop Action controller]\nName=Controller mapping...\nExec=ika app --controller com.example.game\nIcon=input-gaming\n' \
+  >> "${apps_dir}/ika-com.example.game.desktop"
 write_app_launcher "${apps_dir}" "Some Label" com.example.game /icons/app.png \
-  || fail "a game's launcher without the controller mapping was kept"
-grep -qxF "Actions=options;controller;app-settings;" "${apps_dir}/ika-com.example.game.desktop" \
-  || fail "the controller mapping was not added to a game's launcher"
-sed -i 's/^Name=Ika Startup Options\.\.\.$/Name=Ika start options.../' \
-  "${apps_dir}/ika-com.example.app.desktop"
-write_app_launcher "${apps_dir}" "Some Label" com.example.app /icons/app.png \
-  || fail "a launcher with the start options action's old name was kept"
-grep -qxF "Name=Ika Startup Options..." "${apps_dir}/ika-com.example.app.desktop" \
-  || fail "the start options action was not renamed"
-sed -i 's/^Name=Android App Settings\.\.\.$/Name=App Settings/' "${apps_dir}/ika-com.example.app.desktop"
-write_app_launcher "${apps_dir}" "Some Label" com.example.app /icons/app.png \
-  || fail "a launcher with the settings action's old name was kept"
-grep -qxF "Name=Android App Settings..." "${apps_dir}/ika-com.example.app.desktop" \
-  || fail "the settings action was not renamed"
+  || fail "a game's launcher with the controller mapping was kept"
+grep -qxF "Actions=options;app-settings;" "${apps_dir}/ika-com.example.game.desktop" \
+  || fail "the controller mapping stayed in a game's actions"
+if grep -q -e "Desktop Action controller" -e "Controller mapping" "${apps_dir}/ika-com.example.game.desktop"; then
+  fail "the controller mapping action stayed in a game's launcher"
+fi
+for old_name in "Ika start options..." "Ika Startup Options..."; do
+  sed -i "s/^Name=Ika Startup Options$/Name=${old_name}/" "${apps_dir}/ika-com.example.app.desktop"
+  write_app_launcher "${apps_dir}" "Some Label" com.example.app /icons/app.png \
+    || fail "a launcher with the start options action named ${old_name} was kept"
+  grep -qxF "Name=Ika Startup Options" "${apps_dir}/ika-com.example.app.desktop" \
+    || fail "the start options action named ${old_name} was not renamed"
+done
+for old_name in "Android App Settings..." "Android App Info..."; do
+  sed -i "s/^Name=App Info$/Name=${old_name}/" "${apps_dir}/ika-com.example.app.desktop"
+  write_app_launcher "${apps_dir}" "Some Label" com.example.app /icons/app.png \
+    || fail "a launcher with the App info action named ${old_name} was kept"
+  grep -qxF "Name=App Info" "${apps_dir}/ika-com.example.app.desktop" \
+    || fail "the App info action named ${old_name} was not renamed"
+done
 sed -i 's/^Exec=ika app --options .*/Exec=ika app --options com.example.other/' \
   "${apps_dir}/ika-com.example.app.desktop"
 write_app_launcher "${apps_dir}" "Some Label" com.example.app /icons/app.png \
@@ -313,7 +319,7 @@ grep -qxF "Exec=ika app --options com.example.old" "${apps_dir}/ika-com.example.
   || fail "an old launcher did not get the start options"
 expect_equal "$(grep -c '^\[Desktop Action app-settings\]$' "${apps_dir}/ika-com.example.old.desktop")" "1" \
   "an old launcher's settings action is not doubled"
-echo "ok: launchers offer \"Ika Startup Options...\""
+echo "ok: launchers offer \"Ika Startup Options\""
 
 # GNOME Shell does not reload a launcher whose actions change in place, so a
 # launcher written before the window existed leaves the applications directory
@@ -338,7 +344,7 @@ expect_equal "${updated}" "1" "a launcher with old actions is re-added"
 expect_equal "$(<"${T}/refresh")" "parked" "it is out of the applications directory while GNOME Shell rescans"
 app_launcher_is_current "${apps_dir}" "Some Game" com.example.game "$(app_menu_icon com.example.game)" \
   || fail "the re-added launcher is not current"
-grep -qxF "Actions=options;controller;app-settings;" "${apps_dir}/ika-com.example.game.desktop" \
+grep -qxF "Actions=options;app-settings;" "${apps_dir}/ika-com.example.game.desktop" \
   || fail "the re-added launcher has no start options"
 if grep -q -e 'Desktop Action touch' -e 'Play with Touch Input' "${apps_dir}/ika-com.example.game.desktop"; then
   fail "the re-added launcher kept Play with Touch Input"
@@ -375,7 +381,7 @@ sync_app_menu >/dev/null 2>&1
 expect_equal "$(saved_app_options com.example.newgame)" "" "a game unticked before comes back without the default"
 echo "ok: a game added to the menu starts with Fullscreen mode ticked"
 
-# "Android App Settings..." opens the Settings window with App info as its
+# "App Info" opens the Settings window with App info as its
 # first page, so the Settings home page never shows.
 app_window_is_open() { return 1; }
 open_app_window() { printf '%s|' "$@" >"${T}/opened"; }

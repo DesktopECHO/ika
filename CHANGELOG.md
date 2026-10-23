@@ -33,7 +33,7 @@
 
 ### App start options and input
 - Each app's entry in the desktop's app menu has a new right-click action,
-  "Ika Startup Options...", which opens a window (yad) with a checkbox for
+  "Ika Startup Options", which opens a window (yad) with a checkbox for
   each option the app can start with: fullscreen; the keyboard, the mouse
   and gamepads, each passed through to Android as a HID device
   (`--keyboard=uhid`, `--mouse=uhid`, `--gamepad=uhid`); the keyboard as a
@@ -54,8 +54,8 @@
 - Games' menu entries no longer have "Play with Touch Input": touch input is
   one of every app's start options, and `ika app NAME --touch` still turns
   it on for one start.
-- Games' menu entries have "Controller mapping...", a window (yad) with the
-  keyboard gamepad's keys and settings for that game: a field per control,
+- `ika app --controller NAME` opens a window (yad) with the keyboard
+  gamepad's keys and settings for a game: a field per control,
   the stick ramp, the walk speed and the rule for opposite keys. "Apply
   settings" saves them in `~/ika/apps/PACKAGE/controller.ini`, over
   `[keyboard_gamepad]` in ika.ini, and ticks the keyboard as a gamepad in the
@@ -89,7 +89,7 @@
   mouse, its buttons and wheel too, is not the gamepad's at all. scrcpy's `--gamekb` takes it as `mouse_stick`, `mouse_sensitivity`
   and the mouse key names, and the Controller mapping window has fields for
   the stick the mouse moves and its sensitivity.
-- "App Settings" is now "Android App Settings...", and opens the app's App
+- "App Settings" is now "App Info", and opens the app's App
   info page alone in the Settings window: as the window's first page, with
   no Settings home page shown before it and no list of settings beside it.
   scrcpy's `--start-app` takes `info:PACKAGE` for it.

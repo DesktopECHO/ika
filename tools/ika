@@ -342,8 +342,8 @@ refresh_rate_hz = auto
 # releases it) and the mouse, buttons and wheel too, is the gamepad's while
 # captured; with mouse_stick = off, the mouse is not the gamepad's at all.
 # A game can have keys and settings of its own,
-# over these: "Controller mapping..." on its launcher (ika app --controller
-# NAME) edits them, in ~/ika/apps/PACKAGE/controller.ini.
+# over these: 'ika app --controller NAME' edits them, in
+# ~/ika/apps/PACKAGE/controller.ini.
 left_stick_up = W
 left_stick_down = S
 left_stick_left = A
@@ -1881,7 +1881,7 @@ Options:
                          left button still simulates a pinch, and the
                          keyboard and gamepads chosen in the app's start
                          options still pass through; the mouse does not.
-                         It is also a start option ("Ika Startup Options..."
+                         It is also a start option ("Ika Startup Options"
                          on an app's menu entry).
   --no-console           With start or restart, run the VM without opening the
                          desktop console window (app windows still work).
@@ -1991,7 +1991,7 @@ App windows:
   the automatic sync off until 'app sync' is run again. 'reset' removes the
   entries as well; the next 'start' rebuilds them.
 
-  Right-clicking an app in the menu offers "Ika Startup Options...", a window
+  Right-clicking an app in the menu offers "Ika Startup Options", a window
   (yad) with a checkbox for each option the app can start with: "Fullscreen
   mode", "Pass the keyboard through as a HID device", "Pass the mouse through
   as a HID device", "Enable gamepads when attached", "Use the keyboard to
@@ -2005,15 +2005,16 @@ App windows:
   the desktop's keyboard and mouse, and no gamepad. A game starts with
   "Fullscreen mode" ticked the first time it is added to the menu.
 
-  Games' entries also offer "Controller mapping...", a window with the
-  keyboard gamepad's keys and settings for that game: a key or more per
+  '${SCRIPT_NAME} app --controller NAME' opens a window with the keyboard
+  gamepad's keys and settings for a game: a key or more per
   control (SDL's scancode names, or the mouse's buttons and wheel: Mouse_Left,
   Wheel_Up, ...), the stick ramp (the milliseconds a stick takes to go
   where it is pushed; 0 is at once), the walk speed (the sticks' deflection
   with the walk key held), what two opposite keys held together do, and
   which stick the mouse moves (none by default; the right one is the camera
-  in most games) and how fast. With the mouse on a stick, the window captures the pointer
-  (Alt releases it); with "off", the mouse is not the gamepad's. "Apply
+  in most games) and how fast. With the mouse on a stick, the window
+  captures the pointer (Alt releases it); with "Off", the mouse is not the
+  gamepad's. "Apply
   settings" saves them in ~/ika/apps/PACKAGE/controller.ini, over
   [keyboard_gamepad] in ika.ini, and ticks "Use the keyboard to emulate a
   gamepad" in the game's start options; "Apply and start" also starts the
@@ -5651,7 +5652,7 @@ resolve_app_name() {
 # App start options (ika app --options NAME)
 # ============================================================================
 #
-# "Ika Startup Options..." on an app's launcher opens a window with a checkbox
+# "Ika Startup Options" on an app's launcher opens a window with a checkbox
 # for each of the app's start options. "Apply settings" saves the ticked ones
 # in APP_OPTIONS_FILE, one [PACKAGE] section per app, "Apply and start" saves
 # them and starts the app, Cancel changes nothing, and 'ika app' adds the saved
@@ -5705,7 +5706,7 @@ save_app_options() {
     else
       cat <<'EOF'
 # Start options of Android apps, one section per app, named by its package.
-# "Ika Startup Options..." on an app's launcher in the desktop's app menu sets
+# "Ika Startup Options" on an app's launcher in the desktop's app menu sets
 # them ('ika app --options NAME' from a terminal), and they apply whenever the
 # app starts, from the menu or 'ika app': fullscreen, keyboard, mouse, gamepad,
 # gamekb and touch, separated by spaces. A game added to the menu starts with
@@ -5943,9 +5944,9 @@ save_controller_mapping() {
   {
     cat <<EOF
 # Controller mapping of ${package}: the keyboard gamepad's keys and settings
-# for this game, over [keyboard_gamepad] in ika.ini. "Controller mapping..."
-# on the game's launcher (ika app --controller NAME) edits it; delete the
-# file, or press "Default mapping" there, to go back to ika.ini. The keys
+# for this game, over [keyboard_gamepad] in ika.ini. 'ika app --controller
+# NAME' edits it; delete the file, or press "Default mapping" there, to go
+# back to ika.ini. The keys
 # are SDL's key names, with _ for a space; an empty value leaves the control
 # without a key.
 
@@ -5984,9 +5985,8 @@ confirm_default_controller_mapping() {
     >/dev/null
 }
 
-# "Controller mapping..." on a game's launcher (ika app --controller NAME): a
-# window (yad) with the keyboard gamepad's keys and settings for the game,
-# from its mapping, else from ika.ini. "Apply settings" saves them in the
+# ika app --controller NAME: a window (yad) with the keyboard gamepad's keys
+# and settings for the game, from its mapping, else from ika.ini. "Apply settings" saves them in the
 # game's mapping and ticks "Use the keyboard to emulate a gamepad" in the game's
 # start options if it is not, "Apply and start" does that and starts the
 # game, "Default mapping" asks whether to remove the game's mapping and, if
@@ -6698,9 +6698,9 @@ app_launcher_is_current() {
     && grep -qxF "Name=$(desktop_entry_escape "$(app_launcher_name "${label}" "${package}")")" "${file}" \
     && grep -qxF "Icon=${icon}" "${file}" \
     && grep -qxF "Actions=$(app_launcher_actions "${package}")" "${file}" \
-    && app_launcher_controller_action_is_current "${file}" "${package}" \
-    && grep -qxF "Name=Ika Startup Options..." "${file}" \
-    && grep -qxF "Name=Android App Settings..." "${file}" \
+    && ! grep -qxF "[Desktop Action controller]" "${file}" \
+    && grep -qxF "Name=Ika Startup Options" "${file}" \
+    && grep -qxF "Name=App Info" "${file}" \
     && grep -qxF "Exec=ika app --options ${package}" "${file}" \
     && grep -qxF "Exec=ika app --info ${package}" "${file}" \
     && grep -qxF "Icon=$(app_menu_icon com.android.settings)" "${file}" \
@@ -6709,27 +6709,9 @@ app_launcher_is_current() {
     && grep -qE "^Categories=(.*;)?${IKA_MENU_CATEGORY}(;|$)" "${file}"
 }
 
-# The launcher's actions: games also get "Controller mapping...".
+# The launcher's actions, the same for games and other apps.
 app_launcher_actions() {
-  if is_game_app "$1"; then
-    printf 'options;controller;app-settings;\n'
-  else
-    printf 'options;app-settings;\n'
-  fi
-}
-
-# Whether the launcher FILE has the controller mapping action of PACKAGE
-# when it is a game, and none when it is not.
-app_launcher_controller_action_is_current() {
-  local file="$1"
-  local package="$2"
-
-  if is_game_app "${package}"; then
-    grep -qxF "Name=Controller mapping..." "${file}" \
-      && grep -qxF "Exec=ika app --controller ${package}" "${file}"
-  else
-    ! grep -qxF "[Desktop Action controller]" "${file}"
-  fi
+  printf 'options;app-settings;\n'
 }
 
 # Creates or updates one launcher and returns 1 when it was already current.
@@ -6791,26 +6773,21 @@ EOF
   fi
 }
 
-# Writes the launcher's right-click actions: "Ika Startup Options...", which
-# opens the app's start options window, "Controller mapping..." on a game,
-# which opens the keyboard gamepad's keys and settings for it, and "Android
-# App Settings...", which opens Android's App info page for the app. It also
-# removes any "touch" action, since touch input is a start option.
+# Writes the launcher's right-click actions: "Ika Startup Options", which
+# opens the app's start options window, and "App Info", which
+# opens Android's App info page for the app. It also removes the "touch"
+# action, since touch input is a start option, and the "Controller
+# mapping..." action games had ('ika app --controller NAME' opens it).
 set_launcher_actions() {
   local file="$1"
   local package="$2"
   local settings_icon="$3"
 
   set_launcher_action "${file}" touch "" ""
-  set_launcher_action "${file}" options "Ika Startup Options..." \
+  set_launcher_action "${file}" controller "" ""
+  set_launcher_action "${file}" options "Ika Startup Options" \
     "ika app --options ${package}"
-  if is_game_app "${package}"; then
-    set_launcher_action "${file}" controller "Controller mapping..." \
-      "ika app --controller ${package}" input-gaming
-  else
-    set_launcher_action "${file}" controller "" ""
-  fi
-  set_launcher_action "${file}" app-settings "Android App Settings..." \
+  set_launcher_action "${file}" app-settings "App Info" \
     "ika app --info ${package}" "${settings_icon}"
 }
 
