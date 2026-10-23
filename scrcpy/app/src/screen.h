@@ -162,6 +162,7 @@ struct sc_screen_params {
     struct sc_mouse_processor *mp;
     struct sc_gamepad_processor *gp;
     struct sc_keyboard_gamepad *kg;
+    struct sc_gamepad_focus *gf;
 
     struct sc_mouse_bindings mouse_bindings;
     bool legacy_paste;

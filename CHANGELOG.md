@@ -110,6 +110,11 @@
   not "Microsoft X-Box 360 Pad". It keeps an Xbox 360 controller's vendor and
   product IDs, so the key layout and the mapping games use stay the same. A
   console that is already open keeps the old name until it is restarted.
+- A window's gamepads, the keyboard gamepad and the host's real ones (each a
+  gamepad of its own), are connected to Android only while the window has
+  the focus: they disconnect when it loses it and connect again when it gets
+  it back. A game in the background has no gamepad, and of several windows
+  only the focused one's gamepads reach Android.
 
 ### Graphics
 - A host whose GPU gfxstream passes over for llvmpipe, because the GPU's
