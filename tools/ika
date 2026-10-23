@@ -7278,6 +7278,14 @@ desktop_entry_escape() {
   printf '%s\n' "${1//\\/\\\\}"
 }
 
+# Prints the value of KEY in the [Desktop Action ID] group of the launcher
+# FILE, if it has one.
+launcher_action_value() {
+  awk -v group="[Desktop Action $2]" -v key="$3" '
+    /^\[/ { in_group = ($0 == group); next }
+    in_group && index($0, key "=") == 1 { print substr($0, length(key) + 2); exit }' "$1"
+}
+
 # Whether the launcher of PACKAGE in APPS_DIR is as write_app_launcher writes
 # it for LABEL and ICON.
 app_launcher_is_current() {
@@ -7300,6 +7308,8 @@ app_launcher_is_current() {
     && grep -qxF "Exec=ika app --options ${package}" "${file}" \
     && grep -qxF "Exec=ika app --info ${package}" "${file}" \
     && grep -qxF "Icon=$(app_menu_icon com.android.settings)" "${file}" \
+    && [[ "$(launcher_action_value "${file}" new-window Icon)" == "${IKA_MENU_ICON}" ]] \
+    && [[ "$(launcher_action_value "${file}" options Icon)" == "${IKA_MENU_ICON}" ]] \
     && grep -qxF "X-Ika-Package=${package}" "${file}" \
     && grep -qxF "X-Ika-Version=${IKA_MENU_VERSION}" "${file}" \
     && grep -qE "^Categories=(.*;)?${IKA_MENU_CATEGORY}(;|$)" "${file}"
@@ -7372,8 +7382,10 @@ EOF
 }
 
 # Writes the launcher's right-click actions: "Launch app", which opens the
-# app, "Startup options", which opens the app's start options window, and
-# "App info", which opens Android's App info page for the app. An app has one
+# app, "Startup options", which opens the app's start options window, both
+# with the Ika icon, and "App info", which opens Android's App info page for
+# the app, with the Settings app's (KDE Plasma's menu shows an action's icon
+# beside it, GNOME Shell's none). An app has one
 # window (SingleMainWindow), and GNOME Shell offers "New Window" for an app
 # that is not running whatever the launcher says, unless it has an action of
 # its own with that ID: "Launch app" is that action. It also removes the
@@ -7386,9 +7398,10 @@ set_launcher_actions() {
 
   set_launcher_action "${file}" touch "" ""
   set_launcher_action "${file}" controller "" ""
-  set_launcher_action "${file}" new-window "Launch app" "ika app ${package}"
+  set_launcher_action "${file}" new-window "Launch app" "ika app ${package}" \
+    "${IKA_MENU_ICON}"
   set_launcher_action "${file}" options "Startup options" \
-    "ika app --options ${package}"
+    "ika app --options ${package}" "${IKA_MENU_ICON}"
   set_launcher_action "${file}" app-settings "App info" \
     "ika app --info ${package}" "${settings_icon}"
 }

@@ -366,6 +366,12 @@ for package in com.example.game com.example.app; do
     $'[Desktop Action new-window]\nName=Launch app\nExec=ika app '"${package}" \
     "${package}'s launcher offers Launch app"
   grep -qxF "SingleMainWindow=true" "${file}" || fail "${package}'s launcher allows more than one window"
+  # KDE Plasma shows an action's icon: the Ika icon for Launch app and the
+  # start options, the Settings app's for App info
+  expect_equal "$(launcher_action_value "${file}" new-window Icon)" "${IKA_MENU_ICON}" "${package}'s Launch app icon"
+  expect_equal "$(launcher_action_value "${file}" options Icon)" "${IKA_MENU_ICON}" "${package}'s start options icon"
+  expect_equal "$(launcher_action_value "${file}" app-settings Icon)" "$(app_menu_icon com.android.settings)" \
+    "${package}'s App info icon"
   if command -v desktop-file-validate >/dev/null 2>&1; then
     desktop-file-validate "${file}" >/dev/null || fail "${package}'s launcher is invalid"
   fi
@@ -382,6 +388,13 @@ for package in com.example.game com.example.app; do
     fail "${package}'s launcher offers the controller mapping"
   fi
 done
+# A launcher whose Launch app and start options have no icon, as they were
+# written before, gets them
+sed -i "/^Icon=${IKA_MENU_ICON}\$/d" "${apps_dir}/ika-com.example.app.desktop"
+write_app_launcher "${apps_dir}" "Some Label" com.example.app /icons/app.png \
+  || fail "a launcher without the actions' icons was kept"
+expect_equal "$(launcher_action_value "${apps_dir}/ika-com.example.app.desktop" new-window Icon):$(launcher_action_value "${apps_dir}/ika-com.example.app.desktop" options Icon)" \
+  "${IKA_MENU_ICON}:${IKA_MENU_ICON}" "the actions get the Ika icon"
 # A game's launcher with the former "Controller mapping..." action loses it
 sed -i -e 's/^Actions=.*/Actions=options;controller;app-settings;/' "${apps_dir}/ika-com.example.game.desktop"
 printf '\n[Desktop Action controller]\nName=Controller mapping...\nExec=ika app --controller com.example.game\nIcon=input-gaming\n' \
