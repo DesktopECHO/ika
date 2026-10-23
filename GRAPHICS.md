@@ -48,7 +48,8 @@ loses to llvmpipe: a Haswell GPU offers Vulkan 1.2, llvmpipe 1.4. In
 `gfxstream` mode that host renders OpenGL ES on its GPU instead; a 1080p
 video that dropped 62% of its frames with `gfxstream_guest_angle` dropped 1%.
 `--gpu_mode=` on the command line wins over both; `gpu_mode` in the `[gpu]`
-section of `ika.ini` sets the mode for hosts with a hardware Vulkan driver.
+section of `ika.ini` (`auto` unless set, which is `gfxstream_guest_angle`)
+sets the mode for hosts with a hardware Vulkan driver.
 
 ```bash
 ika restart --gpu_mode=gfxstream

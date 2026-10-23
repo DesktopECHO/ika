@@ -26,9 +26,10 @@ like an app's, for the settings of `ika.ini` you change most, in two tabs:
 - **Startup Options**: **CPUs** and **RAM** (`cpus`, `memory_mb`), the
   console's **Desktop display density** and **TV display density** (`dpi`,
   `tv_dpi`) and its **Refresh rate** (`refresh_rate_hz`), each 0 for auto;
-  the **GPU mode** (**gfxstream, OpenGL ES only** is `gpu_mode = gfxstream`
-  with `gfxstream_vulkan = off`, and **gfxstream** chosen from another mode
-  sets `gfxstream_vulkan = auto`), **Hardware video decoding** and **Low-CPU
+  the **GPU mode** (**Auto**, the default, is `gpu_mode = auto`, which Ika
+  resolves for the host; **gfxstream, OpenGL ES only** is `gpu_mode = gfxstream`
+  with `gfxstream_vulkan = off`, and **Auto** or **gfxstream** chosen from
+  another mode sets `gfxstream_vulkan = auto`), **Hardware video decoding** and **Low-CPU
   mode**; **Start with the camera** (`device` in `[camera]`, see
   [Camera](#camera)); and **Keyboard as a gamepad in TV mode**
   (`tv_keyboard_gamepad`). Low-CPU mode runs the display at its own 30 Hz
