@@ -220,7 +220,7 @@ expect_contains "${tab1}" $'\n--field=Desktop display density, 0=Auto  :NUM\n160
 expect_contains "${tab1}" $'\n--field=TV display density, 0=Auto  :NUM\n0!0..999!8\n' "auto as 0"
 expect_contains "${tab1}" $'--css='"${CVD_TMP_DIR}"$'/yad-css/ika-options.css\n--field=CPUs, 0=Auto  :NUM\n3!0..' "the vCPUs first"
 expect_contains "${tab1}" $'!1\n--field=RAM, MB, 0=Auto  :NUM\n0!0..' "then the memory"
-expect_contains "${tab1}" $'\n--field=GPU mode  :CB\n^Auto!gfxstream!gfxstream, OpenGL ES only!guest_swiftshader\n' "the GPU modes, Auto first"
+expect_contains "${tab1}" $'\n--field=GPU mode  :CB\n^Auto!gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES only!guest_swiftshader\n' "the GPU modes, Auto first"
 expect_contains "${tab1}" $'\n--field=Hardware video decoding  :CB\n^Auto!Off\n' "video decoding"
 expect_contains "${tab1}" $'\n--field=Low-CPU mode  :CB\n^Auto!On!Off\n' "low-CPU mode"
 expect_contains "${tab1}" $'\n--field=  Start with the camera:CHK\nFALSE\n--field=  Keyboard as a gamepad in TV mode:CHK\nFALSE\n' \
@@ -263,7 +263,7 @@ cp "${ini}" "${T}/before.ini"
 DIALOG_TAB1="$(tab1_with "gfxstream, OpenGL ES only")" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" \
   edit_ika_settings
 expect_equal "$( { diff "${T}/before.ini" "${ini}" || true; } | grep '^>')" "> gfxstream_vulkan = off" "OpenGL ES only"
-expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=GPU mode  :CB\nAuto!^gfxstream!' "shown as gfxstream before"
+expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=GPU mode  :CB\nAuto!gfxstream_guest_angle!^gfxstream!' "shown as gfxstream before"
 reset_calls
 DIALOG_TAB1="$(tab1_with "gfxstream, OpenGL ES only")" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" \
   edit_ika_settings
@@ -280,8 +280,8 @@ cmp -s "${T}/before.ini" "${ini}" || fail "gfxstream_vulkan = on was changed by 
 echo "ok: gfxstream, OpenGL ES only"
 
 # Auto is gpu_mode = auto, and with gfxstream_vulkan = auto, whatever the
-# choice before it; a gpu_mode of ika.ini's that the list lacks, such as the
-# gfxstream_guest_angle of an ika.ini from before auto, is offered, selected
+# choice before it; the gfxstream_guest_angle of an ika.ini from before auto is
+# shown selected, and stays while the GPU mode is not changed
 ika_ini_set gpu gpu_mode gfxstream
 ika_ini_set gpu gfxstream_vulkan off
 reset_calls
@@ -293,8 +293,8 @@ ika_ini_set gpu gpu_mode gfxstream_guest_angle
 reset_calls
 cp "${ini}" "${T}/before.ini"
 DIALOG_TAB1="$(tab1_with gfxstream_guest_angle)" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" edit_ika_settings
-expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=GPU mode  :CB\nAuto!gfxstream!gfxstream, OpenGL ES only!guest_swiftshader!^gfxstream_guest_angle\n' \
-  "gfxstream_guest_angle offered, selected"
+expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=GPU mode  :CB\nAuto!^gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES only!guest_swiftshader\n' \
+  "gfxstream_guest_angle shown selected"
 cmp -s "${T}/before.ini" "${ini}" || fail "an untouched gfxstream_guest_angle was changed"
 echo "ok: Auto"
 

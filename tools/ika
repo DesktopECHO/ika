@@ -7012,12 +7012,12 @@ declare -A IKA_OPTIONS_DEFAULTS=(
 # The GPU modes the window offers, two of which are two settings:
 # IKA_OPTIONS_GLES_ONLY is gfxstream with gfxstream_vulkan = off, and
 # gfxstream, or IKA_OPTIONS_AUTO (gpu_mode = auto), chosen from another is that
-# mode with gfxstream_vulkan = auto. ika.ini's own GPU mode, when another, such
-# as gfxstream_guest_angle, is offered too.
+# mode with gfxstream_vulkan = auto. ika.ini's own GPU mode, when another, is
+# offered too.
 IKA_OPTIONS_AUTO="Auto"
 IKA_OPTIONS_GLES_ONLY="gfxstream, OpenGL ES only"
-IKA_OPTIONS_GPU_CHOICES=("${IKA_OPTIONS_AUTO}" gfxstream "${IKA_OPTIONS_GLES_ONLY}"
-  guest_swiftshader)
+IKA_OPTIONS_GPU_CHOICES=("${IKA_OPTIONS_AUTO}" gfxstream_guest_angle gfxstream
+  "${IKA_OPTIONS_GLES_ONLY}" guest_swiftshader)
 # The tab's number boxes and choices stretch across their column; a margin
 # on their right keeps a number box about as wide as four digits and its
 # buttons, and a choice as wide as the longest GPU mode, and the tab no
