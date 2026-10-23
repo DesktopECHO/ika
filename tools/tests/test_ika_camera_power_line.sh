@@ -51,11 +51,14 @@ fail() {
 }
 
 # Prints what the camera was set to and Ika's log line, for the host's
-# timezone and the mode.
+# timezone and the mode. The log line is a note for the start log: nothing
+# reaches the console until the notes are flushed, as start does once its log
+# is open.
 run() {
   : >"${V4L2_SET_LOG}"
   FAKE_TIMEZONE="$1" IKA_CAMERA_POWER_LINE_FREQUENCY="$2" \
     apply_camera_power_line_frequency "${3:-/dev/video0}" 2>&1
+  flush_start_log_notes 2>&1
   printf 'set: %s\n' "$(cat "${V4L2_SET_LOG}")"
 }
 
@@ -63,6 +66,11 @@ expect() {
   local output="$1" line="$2" what="$3"
   grep -qxF -- "${line}" <<<"${output}" || fail "${what}: expected '${line}' in:"$'\n'"${output}"
 }
+
+# Setting the camera says nothing on the console
+FAKE_TIMEZONE=America/Halifax IKA_CAMERA_POWER_LINE_FREQUENCY=auto \
+  expect "$(apply_camera_power_line_frequency /dev/video0 2>&1)" "" "nothing on the console"
+START_LOG_NOTES=()
 
 out="$(run America/Halifax auto)"
 expect "${out}" "set: power_line_frequency=2" "Canada is 60 Hz"

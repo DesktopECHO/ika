@@ -1194,6 +1194,29 @@ log_file_only() {
   printf '[%s] %s\n' "${SCRIPT_NAME}" "$*" >>"${START_LOG_FILE}"
 }
 
+# Lines for the start log that come before start has redirected its output to
+# it, as the camera's do in parse_start_options: kept in START_LOG_NOTES, and
+# written by flush_start_log_notes once the log is open, after its header for
+# the run. restart gives the ones it has to the start it runs, in
+# IKA_START_LOG_NOTES. Not for a subshell: its notes are gone with it.
+START_LOG_NOTES=()
+log_start_note() {
+  START_LOG_NOTES+=("$*")
+}
+
+flush_start_log_notes() {
+  local note
+
+  while IFS= read -r note; do
+    [[ -z "${note}" ]] || log "${note}"
+  done <<<"${IKA_START_LOG_NOTES:-}"
+  unset IKA_START_LOG_NOTES
+  for note in "${START_LOG_NOTES[@]}"; do
+    log "${note}"
+  done
+  START_LOG_NOTES=()
+}
+
 die() {
   die_with_notification "$*" "$*"
 }
@@ -1541,9 +1564,6 @@ ini_camera_device() {
 resolve_camera_device() {
   local requested="${1:-auto}"
   local device
-  local sysfs
-  local name
-  local driver
 
   case "${requested}" in
     auto)
@@ -1563,6 +1583,16 @@ resolve_camera_device() {
 
   [[ -r "${device}" && -w "${device}" ]] \
     || die "no access to camera ${device}; add your user to the video group and log in again"
+  printf '%s\n' "${device}"
+}
+
+# Prints what the start log says of camera DEVICE: its driver and name.
+camera_description() {
+  local device="$1"
+  local sysfs
+  local name
+  local driver
+
   sysfs="/sys/class/video4linux/${device##*/}"
   name="$(cat "${sysfs}/name" 2>/dev/null || true)"
   # uvcvideo names nodes "PRODUCT: ENTITY" (cut at 31 characters); keep PRODUCT
@@ -1573,8 +1603,7 @@ resolve_camera_device() {
   [[ -n "${driver}" ]] || driver="$(camera_v4l2_driver "${device}")"
   # The Asahi driver names the Apple Silicon FaceTime HD camera after itself
   [[ "${driver}" == "apple-isp" ]] && name="FaceTime HD Camera (Built-in)"
-  log "camera${driver:+ ${driver}}: ${name:+${name} at }${device}"
-  printf '%s\n' "${device}"
+  printf 'camera%s: %s%s\n' "${driver:+ ${driver}}" "${name:+${name} at }" "${device}"
 }
 
 normalize_camera_power_line_frequency() {
@@ -1626,7 +1655,7 @@ apply_camera_power_line_frequency() {
   mode="$(normalize_camera_power_line_frequency "${IKA_CAMERA_POWER_LINE_FREQUENCY}")"
   command -v v4l2-ctl >/dev/null 2>&1 || return 0
   if ! v4l2-ctl -d "${device}" --list-ctrls 2>/dev/null | grep -qw power_line_frequency; then
-    log "camera anti-flicker: the camera has no such control"
+    log_start_note "camera anti-flicker: the camera has no such control"
     return 0
   fi
 
@@ -1636,7 +1665,7 @@ apply_camera_power_line_frequency() {
       country="$(timezone_country "${zone}")"
       hz="$(country_mains_frequency "${country}")"
       if [[ -z "${hz}" ]]; then
-        log "camera anti-flicker: left as the camera has it (no single mains frequency for timezone '${zone:-unknown}'); set camera.power_line_frequency in ${IKA_INI_FILE}"
+        log_start_note "camera anti-flicker: left as the camera has it (no single mains frequency for timezone '${zone:-unknown}'); set camera.power_line_frequency in ${IKA_INI_FILE}"
         return 0
       fi
       reason=" (timezone ${zone})"
@@ -1652,7 +1681,7 @@ apply_camera_power_line_frequency() {
     *) value=0; label="off" ;;
   esac
   if v4l2-ctl -d "${device}" -c "power_line_frequency=${value}" 2>/dev/null; then
-    log "camera anti-flicker: ${label}${reason}"
+    log_start_note "camera anti-flicker: ${label}${reason}"
   else
     log "warning: could not set the anti-flicker of camera ${device} to ${label}"
   fi
@@ -1874,6 +1903,7 @@ parse_start_options() {
           die "Unable to add camera to a powered-on instance, try '${SCRIPT_NAME} restart --camera${camera_device:+=${camera_device}}'"
         fi
         camera_device="$(resolve_camera_device "${camera_device}")" || exit 1
+        log_start_note "$(camera_description "${camera_device}")"
         start_args_ref+=("--media=v4l2_proxy:device=${camera_device}")
         shift
         ;;
@@ -1928,6 +1958,7 @@ parse_start_options() {
   # Without --camera or --no-camera, the camera of ika.ini, if any
   if [[ -z "${camera_device}" && "${no_camera}" != "true" ]] \
       && camera_device="$(ini_camera_device)"; then
+    log_start_note "$(camera_description "${camera_device}")"
     start_args_ref+=("--media=v4l2_proxy:device=${camera_device}")
   fi
 
@@ -10010,6 +10041,7 @@ main() {
         stop_startup_packaged_scrcpy console
       fi
       redirect_start_logs
+      flush_start_log_notes
       run_timed_operation "started" start_cvd "${fullscreen_mode}" "${start_args[@]}"
       ;;
     stop)
@@ -10061,6 +10093,10 @@ main() {
       else
         stop_dnsmasq
         respond "Android virtual device not running"
+      fi
+      if (( ${#START_LOG_NOTES[@]} > 0 )); then
+        IKA_START_LOG_NOTES="$(printf '%s\n' "${START_LOG_NOTES[@]}")"
+        export IKA_START_LOG_NOTES
       fi
       exec_start_command "${fullscreen_mode}" "${start_args[@]}"
       ;;
