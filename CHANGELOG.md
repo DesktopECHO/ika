@@ -76,11 +76,12 @@
   "Guide (Home)", and the settings "Full tilt, ms (0 = Instant)"
   (`stick_ramp_ms`), "Opposite directions" ("Last pressed wins" or "Cancel
   out", `socd = last` or `neutral`) and "Mouse → Analog stick".
-- The start options read "Send the keyboard straight to Android (many
-  games need this)", "Send the mouse straight to Android (captures the
-  pointer)", "Use gamepads, including ones plugged in later", "Keyboard as
-  a gamepad (keys on the Gamepad Emulation tab)" and "Mouse as touch:
-  clicks tap, drags swipe", instead of HID devices and "Touch input:
+- The start options read "Fullscreen mode (F11, Cmd+F or Left-Alt+F
+  exits)", "Send the keyboard straight to Android (many games need this)",
+  "Send the mouse straight to Android (Cmd or Left-Alt releases pointer)",
+  "Use gamepads, including ones plugged in later",
+  "Keyboard as a gamepad (keys on the Gamepad Emulation tab)" and "Mouse as
+  touch: clicks tap, drags swipe", instead of HID devices and "Touch input:
   Left-click and drag gets interpreted as tap and swipe".
 - Game mode and game sessions are gone. `--game` is no longer an option of
   `ika start`, `ika restart` or `ika app`, and `ika app` has no `--window`:

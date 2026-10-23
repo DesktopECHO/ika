@@ -182,7 +182,7 @@ expect_equal "$(<"${CVD_TMP_DIR}/yad-css/gamepad.css")" "${CONTROLLER_MAPPING_FO
 [[ "${notebook}" != *"--css="* ]] || fail "CSS for the notebook, which has no fields"
 expect_contains "${tab1}" $'\n--borders='"${APP_OPTIONS_TAB_BORDER_PX}"$'\n' "the tab's fields start in from its frame"
 expect_contains "${tab1}" $'\n--field=Display density, 0=Auto  :NUM\n0!0..999!8\n' "the density, auto"
-expect_contains "${tab1}" $'\n--field=  Fullscreen mode:CHK\nTRUE\n' "the saved options"
+expect_contains "${tab1}" $'\n--field=  Fullscreen mode (F11, Cmd+F or Left-Alt+F exits):CHK\nTRUE\n' "the saved options"
 expect_contains "${tab2}" $'\n--columns=2\n' "the controls in two columns"
 expect_contains "${tab2}" $'\n--text=One or more keys per control' "the explanation"
 expect_equal "$(grep -c -x -- '--field= :LBL' <<<"${tab2}")" 1 "one blank row, at the end of the second column"
@@ -231,7 +231,7 @@ expect_contains "$(<"${T}/yad.confirm.args")" "Apply defaults to Some Game</span
 expect_contains "$(<"${T}/yad.confirm.args")" $'--name=ika-startup-options\n--class=ika-startup-options\n' "the confirmation's class"
 expect_contains "$(<"${T}/yad.notebook.args")" $'\n--active-tab=2\n' "the window comes back on the second tab"
 expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=Display density, 0=Auto  :NUM\n0!0..999!8\n' "with the console's density"
-expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=  Fullscreen mode:CHK\nTRUE\n' "and a game's default start options"
+expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=  Fullscreen mode (F11, Cmd+F or Left-Alt+F exits):CHK\nTRUE\n' "and a game's default start options"
 expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=  Mouse as touch: clicks tap, drags swipe:CHK\nFALSE\n' \
   "the edited ones reset"
 expect_contains "$(<"${T}/yad.tab2.args")" $'\n--field=A:'$'\xc2\xa0\xc2\xa0'$':\xc2\xa0\n'"${KEYBOARD_GAMEPAD_KEYS[a]}"$'\n' \
