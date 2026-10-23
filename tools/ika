@@ -1933,6 +1933,12 @@ parse_start_options() {
 
   # After all options, as --camera_power_line_frequency may follow --camera
   [[ -z "${camera_device}" ]] || apply_camera_power_line_frequency "${camera_device}"
+  # Exported, as restart runs start again: the camera is in the arguments now,
+  # or --no-camera said there is none, and start must not add ika.ini's camera
+  # to it (two cameras, both the same device, and Android's camera app quits)
+  if [[ -n "${camera_device}" || "${no_camera}" == "true" ]]; then
+    export IKA_CAMERA=off
+  fi
 }
 
 console_notify() {
