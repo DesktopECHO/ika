@@ -1,6 +1,6 @@
 [README](README.md) | [Using Ika](USAGE.md) | [Configuration](CONFIGURATION.md) | [Graphics](GRAPHICS.md) | [Building](BUILDING.md) | [Downloads](DOWNLOADS.md) | **Changelog**
 
-## Ika 261018, changes since release 261016
+## Ika 261023, changes since release 261016
 
 ### Low-CPU mode
 - `ika start` runs a low-CPU mode on weak hosts: the display refreshes at
@@ -204,6 +204,17 @@
 - README notes what Mesa 26.3 brings for Ika's hosts: Intel's Jay shader
   compiler on Xe2 and Xe3, and DRM format modifiers on GFX6 through GFX8 AMD
   GPUs, where the console is then scanned out with an explicit layout too.
+- gfxstream is updated to upstream main of 2026-10-19. Its renderer allocates
+  the transfer buffer of a guest color buffer at the first transfer, and
+  trims its heap when a guest app exits: on an Apple Silicon host its heap
+  is 4 MB at idle after boot (340 MB without) and 173 MB 45 s after closing
+  Asphalt 9 (754 MB without).
+- On a host that samples ASTC textures with optimal tiling only, such as
+  Apple Silicon's, gfxstream emulates only the linear-tiled ASTC images; the
+  optimal-tiled ones are native, so textures cost their compressed size, not
+  4-16 times that as a decompressed copy in the guest's memory. In an
+  Asphalt 9 race the guest's host-visible Vulkan memory was 549-649 MB
+  (3230 MB with every ASTC image emulated).
 
 ### Console window
 - The console and app windows are Wayland windows on a Wayland session and
@@ -270,6 +281,9 @@
 - Hardware-decoded video no longer shows a green band at the bottom, with the
   colors shifted up, when its coded size differs from its visible size, as it
   does for every 1080p H.264 stream.
+- A buffer the host's VA-API decoder fails to decode, such as a stream with a
+  level it does not support, is logged by crosvm and fails for the guest
+  (EIO); the VM keeps running.
 
 ### Camera
 - `ika start --camera` sets the camera's anti-flicker to the mains frequency
@@ -328,6 +342,9 @@
   it arrives with the next ROM build.
 - In TV mode, choosing another TV launcher in Desktop/TV also opens it, so
   that Home need not be pressed. This is in the ROM's IkaMode app too.
+- Desktop/TV has an app icon and a TV banner, Catapult fills the cards of
+  apps without a TV banner, and gets notification access in TV mode. These
+  are in the ROM too.
 
 ### Fixes
 - Input events and status feedback no longer sit in crosvm's virtio input
@@ -364,6 +381,8 @@
   mode: fullscreen when it was fullscreen, else windowed at its last size.
   The console opened after a mode switch ignored the saved fullscreen state,
   so the desktop always returned windowed.
+- The clock and status icons keep their place as the notification shade
+  opens (the ROM's SystemUI).
 
 ## Ika 261016, changes since release 261012
 
