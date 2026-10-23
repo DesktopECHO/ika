@@ -89,6 +89,20 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Fri Oct 23 2026 DesktopECHO <build@desktopecho.com> - 261023-1
+- Compose hwc3's client target into its swapchain, so that the console gets
+  DMA-BUFs with a window open.
+- Take an app window dragged to the top edge of the desktop fullscreen on the
+  console.
+- Turn off "Tap to sleep" and take it out of Settings.
+- Keep the clock and status icons in place as the notification shade opens.
+- Give Desktop/TV an app icon and a TV banner; ask "Restart" rather than
+  "Reboot"; cover the list with the restart question; open a TV launcher
+  chosen in TV mode at once; and show the launchers' names in the dialog's
+  colors.
+- Fill the cards of apps without a TV banner in Catapult, and give Catapult
+  notification access in TV mode.
+
 * Sun Oct 18 2026 DesktopECHO <build@desktopecho.com> - 261018-1
 - Add the V4L2 Codec2 HAL, which decodes H.264, HEVC, VP8 and VP9 on the
   host's VA-API through crosvm's virtio-media decoder.

@@ -36,7 +36,7 @@ unzip ika-main.zip && rm ika-main.zip && cd ika-main
 ./ika-build
 
 # 3. Install: run the command ika-build prints at the end, for example
-sudo apt install ./deb/ika-base_261018-1_amd64.deb ./deb/ika-lineageos_261018-1_amd64.deb
+sudo apt install ./deb/ika-base_261023-1_amd64.deb ./deb/ika-lineageos_261023-1_amd64.deb
 
 # 4. On a first install, reboot:
 sudo reboot

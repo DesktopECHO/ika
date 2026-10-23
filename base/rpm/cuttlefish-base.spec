@@ -590,6 +590,35 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/lib/cuttlefish-metrics
 
 %changelog
+* Fri Oct 23 2026 DesktopECHO <build@desktopecho.com> - 261023-1
+- Add a low-CPU mode for weak hosts (30 Hz display, no window blurs,
+  half-length animations), and let the display follow the host's refresh rate
+  outside it.
+- Give every app's menu entry a "Startup options" window, and Ika's own (ika
+  options): fullscreen, keyboard, mouse, gamepad and touch input, a display
+  density per app, and for Ika the CPUs, RAM, GPU mode and camera.
+- Make the keyboard gamepad behave as a physical one, with analog sticks, the
+  mouse as a stick and a key mapping per game; connect a window's gamepads
+  only while it has the focus; offer it in TV mode (tv_keyboard_gamepad).
+- Open Desktop/TV in a window of its own.
+- Say in ika status how the console's frames travel, and log their latency
+  with IKA_LATENCY=1.
+- Start in gfxstream with OpenGL ES only where gfxstream would pick llvmpipe
+  over the GPU (a Haswell GPU).
+- Update gfxstream to upstream main of 2026-10-19; keep no idle host copy of
+  each guest color buffer and give the renderer's freed heap back after an app
+  exits.
+- Emulate only linear-tiled ASTC where the host samples ASTC with optimal
+  tiling only (Apple silicon), so that textures cost their compressed size.
+- Add host_cached_memory for gfxstream's host-visible Vulkan memory.
+- Log a video decode error in crosvm's virtio-media decoder and carry on,
+  instead of aborting the VM.
+- Use Wayland windows on Wayland sessions and X11 windows on X11 sessions.
+- Install Chromium without launching it.
+- Recover from a host crash that leaves a truncated cuttlefish_config.json,
+  and bring the desktop console back as it was after a round trip through TV
+  mode.
+
 * Sun Oct 18 2026 DesktopECHO <build@desktopecho.com> - 261018-1
 - Update the host tools to the Cuttlefish 1.58 development head.
 - Give Android a VA-API video decoder (crosvm --media-decoder=vaapi) when
