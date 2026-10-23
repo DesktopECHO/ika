@@ -138,6 +138,8 @@ restarted on that display if it was running elsewhere.
 
 Right-click an app in the menu for:
 
+- **Launch app**: opens the app, as clicking it does. An app has one window,
+  so GNOME's **New Window** is not offered.
 - **Ika Startup Options**: how the app starts (below).
 - **App Info**: Android's App info page for the app, alone in
   a Settings window, for its permissions, storage, notifications, force stop
