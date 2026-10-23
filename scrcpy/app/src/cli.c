@@ -1156,10 +1156,10 @@ static const struct sc_option options[] = {
                 "one; mouse_stick=right or left moves that stick with the "
                 "mouse, as fast as it moves (full at 32 pixels per 8 ms, "
                 "mouse_sensitivity=100 by default), and back to the center "
-                "when it stops. With mouse_stick, or a mouse button or the "
-                "wheel mapped, the window captures the pointer as for "
-                "--mouse=uhid (the capture key releases it), and the mouse "
-                "is the gamepad's while captured.\n"
+                "when it stops. With mouse_stick, the window captures the "
+                "pointer as for --mouse=uhid (the capture key releases it), "
+                "and the mouse, its buttons and wheel too, is the gamepad's "
+                "while captured; without, the mouse is not the gamepad's.\n"
                 "Requires --gamepad=uhid.",
     },
 };

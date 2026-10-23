@@ -212,13 +212,18 @@ through as well. The keys it uses no longer type; other keys do.
 | Z, X | Left and right triggers |
 | Left Shift, F | Left and right stick clicks |
 | Tab, held | Walk: the sticks go half as far |
-| Mouse motion | Right stick, the camera in most games: the faster the mouse moves, the farther |
+| Mouse motion, with `mouse_stick = right` | Right stick, the camera in most games: the faster the mouse moves, the farther |
 | Left, right button | Right, left trigger |
 | Middle button | Right stick click |
 | Wheel up, down | Left, right shoulder |
 
-The window captures the pointer for the mouse: tap MOD to release it, and the
-mouse works as usual; tap MOD again to take it back. Keys pressed with Ctrl,
+By default (`mouse_stick = off`, **Mouse emulates thumbstick: Off** in a
+game's controller mapping), the mouse is not the gamepad's at all, its
+buttons and wheel included, and the pointer stays free. With the mouse on a
+stick (`right` or `left`, **Right stick** or **Left stick**), its buttons and
+wheel are the gamepad's as above, and the window captures the pointer: tap
+MOD to release it, and the mouse works as usual; tap MOD again to take it
+back. Keys pressed with Ctrl,
 Alt or Super type instead.
 
 It plays like a physical pad. The sticks and the D-pad are separate, a stick

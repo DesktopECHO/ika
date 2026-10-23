@@ -53,10 +53,11 @@
  * per 8 ms at mouse_sensitivity=100, and back to the center when the mouse
  * stops; the keys of that stick win while held).
  *
- * The gamepad takes the mouse when mouse_stick is set or a mouse button or
- * wheel is mapped: the window then captures the pointer, as for a HID mouse
- * (the capture key releases it), and while captured the mouse's motion,
- * buttons and wheel are the gamepad's, unmapped ones dropped.
+ * The gamepad takes the mouse when mouse_stick is set: the window then
+ * captures the pointer, as for a HID mouse (the capture key releases it), and
+ * while captured the mouse's motion, buttons and wheel are the gamepad's,
+ * unmapped ones dropped. With mouse_stick=off the mouse is not the gamepad's
+ * at all, its buttons and wheel mapped or not, and works as usual.
  *
  * It behaves as a physical gamepad does: the D-pad and the sticks are apart,
  * a stick pushed on a diagonal is as far from its center as on an axis (a
@@ -125,7 +126,6 @@ struct sc_keyboard_gamepad {
     enum sc_keyboard_gamepad_socd socd[SC_KEYBOARD_GAMEPAD_PAD_COUNT];
     enum sc_keyboard_gamepad_mouse_stick mouse_stick;
     uint32_t mouse_sensitivity;
-    bool has_mouse_keys;
 
     // The mouse's motion since the last tick, the stick position it gives,
     // and when it last moved
@@ -183,9 +183,9 @@ sc_keyboard_gamepad_handle_key(struct sc_keyboard_gamepad *kg,
 bool
 sc_keyboard_gamepad_tick(struct sc_keyboard_gamepad *kg, uint64_t now_ms);
 
-// Whether the mouse is the gamepad's: mouse_stick is set, or a mouse button
-// or the wheel is mapped. The owner then captures the pointer and hands the
-// mouse's events below while it is captured.
+// Whether the mouse is the gamepad's: mouse_stick is set (with it off, mapped
+// mouse buttons and wheel are not used). The owner then captures the pointer
+// and hands the mouse's events below while it is captured.
 bool
 sc_keyboard_gamepad_takes_mouse(const struct sc_keyboard_gamepad *kg);
 
