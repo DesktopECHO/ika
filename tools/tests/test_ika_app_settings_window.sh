@@ -6,8 +6,8 @@
 # other apps. It saves the start options and the display density, and the
 # controller mapping only when it was edited or the app has one of its own;
 # an edited mapping ticks the keyboard as a gamepad unless the window
-# unticked it. "Reset to default" brings the window back on the Gamepad
-# Emulation tab. Without an X display, the windows of their own open instead.
+# unticked it. "Reset to default" brings the window back on the Startup
+# Options tab. Without an X display, the windows of their own open instead.
 
 set -euo pipefail
 
@@ -237,16 +237,17 @@ echo "ok: a game's own mapping is kept, and an unticked option stays unticked"
 
 # "Reset to default", once confirmed, resets the start options to a game's
 # default, at the console's density, removes the game's mapping and brings
-# the window back on the second tab with those and ika.ini's mapping;
+# the window back on the first tab with those and ika.ini's mapping, from
+# either tab;
 # applied untouched, the game keeps ika.ini's. (The stub's tabs print the
 # same both times.)
 reset_calls
 DIALOG_TAB1="$(options_output dpi=0.000000 touch)" DIALOG_TAB2="$(mapping_output)" DIALOG_STATUS="4 0 2" \
-  edit_app_settings com.example.game 1
+  edit_app_settings com.example.game 2
 expect_equal "$(wc -l <"${T}/yad.calls")" 3 "the window, the confirmation and the window again"
 expect_contains "$(<"${T}/yad.confirm.args")" "Apply defaults to Some Game</span>" "the confirmation names the game"
 expect_contains "$(<"${T}/yad.confirm.args")" $'--name=ika-startup-options\n--class=ika-startup-options\n' "the confirmation's class"
-expect_contains "$(<"${T}/yad.notebook.args")" $'\n--active-tab=2\n' "the window comes back on the second tab"
+expect_contains "$(<"${T}/yad.notebook.args")" $'\n--active-tab=1\n' "the window comes back on the Startup Options tab, opened on the other"
 expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=Display density, 0=Auto  :NUM\n0!0..999!8\n' "with the console's density"
 expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=  Fullscreen mode (F11, Cmd+F or Left-Alt+F exits):CHK\nTRUE\n' "and a game's default start options"
 expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=  Mouse as touch: clicks tap, drags swipe:CHK\nFALSE\n' \
