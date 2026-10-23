@@ -1,6 +1,6 @@
 #!/usr/bin/bash
 
-# The tabbed window ("Ika startup options" on an app's launcher, ika app
+# The tabbed window ("Startup options" on an app's launcher, ika app
 # --options and --controller): a yad notebook, "Startup Options · LABEL", with
 # a Startup Options tab and a Gamepad Emulation tab, the same for games and
 # other apps. It saves the start options and the display density, and the
@@ -128,7 +128,7 @@ mapping_output() {
       items+=("${KEYBOARD_GAMEPAD_KEYS[${control}]}")
     fi
   done
-  items+=("100.000000" "50.000000" "Last" "Off" "100.000000")
+  items+=("100.000000" "50.000000" "Last pressed wins" "Off" "100.000000")
   half=$(( (${#items[@]} + 1) / 2 ))
   for i in "${!items[@]}"; do
     output+="${items[i]}|"
@@ -175,7 +175,7 @@ expect_contains "${tab1}" $'\n--borders='"${APP_OPTIONS_TAB_BORDER_PX}"$'\n' "th
 expect_contains "${tab1}" $'\n--field=Display density, 0=Auto  :NUM\n0!0..999!8\n' "the density, auto"
 expect_contains "${tab1}" $'\n--field=  Fullscreen mode:CHK\nTRUE\n' "the saved options"
 expect_contains "${tab2}" $'\n--columns=2\n' "the controls in two columns"
-expect_contains "${tab2}" $'\n--text=Keys of the keyboard gamepad' "the explanation"
+expect_contains "${tab2}" $'\n--text=One or more keys per control' "the explanation"
 expect_equal "$(grep -c -x -- '--field= :LBL' <<<"${tab2}")" 1 "one blank row, at the end of the second column"
 expect_equal "$(saved_app_options com.example.game)" "fullscreen touch" "Apply settings saves the start options"
 [[ ! -e "${mapping}" ]] || fail "an untouched mapping became the game's own"
@@ -222,7 +222,7 @@ expect_contains "$(<"${T}/yad.confirm.args")" "Apply defaults to Some Game</span
 expect_contains "$(<"${T}/yad.notebook.args")" $'\n--active-tab=2\n' "the window comes back on the second tab"
 expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=Display density, 0=Auto  :NUM\n0!0..999!8\n' "with the console's density"
 expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=  Fullscreen mode:CHK\nTRUE\n' "and a game's default start options"
-expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=  Touch input: Left-click and drag gets interpreted as tap and swipe:CHK\nFALSE\n' \
+expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=  Mouse as touch: clicks tap, drags swipe:CHK\nFALSE\n' \
   "the edited ones reset"
 expect_contains "$(<"${T}/yad.tab2.args")" $'\n--field=A:'$'\xc2\xa0\xc2\xa0'$':\xc2\xa0\n'"${KEYBOARD_GAMEPAD_KEYS[a]}"$'\n' \
   "and ika.ini's mapping"

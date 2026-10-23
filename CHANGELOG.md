@@ -33,7 +33,7 @@
 
 ### App start options and input
 - Each app's entry in the desktop's app menu has a new right-click action,
-  "Ika startup options", which opens a window (yad) with a checkbox for
+  "Startup options", which opens a window (yad) with a checkbox for
   each option the app can start with: fullscreen; the keyboard, the mouse
   and gamepads, each passed through to Android as a HID device
   (`--keyboard=uhid`, `--mouse=uhid`, `--gamepad=uhid`); the keyboard as a
@@ -67,7 +67,17 @@
   Debian's yad 0.40, whose `--gtkrc` styles a window but none of its fields,
   that CSS and the display density's narrow box come in a theme of each
   window's own, Adwaita (or Adwaita dark) and then the CSS; before, neither
-  reached the fields there.
+  reached the fields there. Its explanation is shorter, without SDL's
+  name; the walk key's field reads "Hold to walk", the Guide button's
+  "Guide (Home)", and the settings "Full tilt, ms (0 = Instant)"
+  (`stick_ramp_ms`), "Opposite directions" ("Last pressed wins" or "Cancel
+  out", `socd = last` or `neutral`) and "Mouse → Analog stick".
+- The start options read "Send the keyboard straight to Android (many
+  games need this)", "Send the mouse straight to Android (captures the
+  pointer)", "Use gamepads, including ones plugged in later", "Keyboard as
+  a gamepad (keys on the Gamepad Emulation tab)" and "Mouse as touch:
+  clicks tap, drags swipe", instead of HID devices and "Touch input:
+  Left-click and drag gets interpreted as tap and swipe".
 - Game mode and game sessions are gone. `--game` is no longer an option of
   `ika start`, `ika restart` or `ika app`, and `ika app` has no `--window`:
   games open in their own windows like any other app, with the input ticked
@@ -79,9 +89,9 @@
   one of every app's start options, and `ika app NAME --touch` still turns
   it on for one start.
 - `ika app --controller NAME` opens a window (yad) with the keyboard
-  gamepad's keys and settings for a game: a field per control,
-  the stick ramp, the walk speed and the rule for opposite keys. "Apply
-  settings" saves them in `~/ika/apps/PACKAGE/controller.ini`, over
+  gamepad's keys and settings for a game: a field per control, how long a
+  stick takes to full tilt, the walk speed and the rule for opposite keys.
+  "Apply settings" saves them in `~/ika/apps/PACKAGE/controller.ini`, over
   `[keyboard_gamepad]` in ika.ini, and ticks the keyboard as a gamepad in the
   game's start options; "Apply and start" also starts the game; "Default
   mapping", once confirmed, removes the mapping and shows ika.ini's in the

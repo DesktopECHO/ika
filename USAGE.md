@@ -140,7 +140,7 @@ Right-click an app in the menu for:
 
 - **Launch app**: opens the app, as clicking it does. An app has one window,
   so GNOME's **New Window** is not offered.
-- **Ika startup options**: how the app starts (below), and its keyboard
+- **Startup options**: how the app starts (below), and its keyboard
   gamepad keys (see
   [Controller mapping per game](#controller-mapping-per-game)).
 - **App info**: Android's App info page for the app, alone in
@@ -149,7 +149,7 @@ Right-click an app in the menu for:
 
 ### Start options
 
-**Ika startup options** (`ika app --options NAME`) opens a window,
+**Startup options** (`ika app --options NAME`) opens a window,
 **Startup Options · APP**. **Display density, 0=Auto** sets the density of
 the app's window: 0 is the console's, as without it, else 96 to 999 DPI (a
 number under 96 is taken as 96). A checkbox follows for each way the app can
@@ -158,11 +158,11 @@ start:
 | Option | Effect |
 | --- | --- |
 | **Fullscreen mode** | The window opens fullscreen |
-| **Pass the keyboard through as a HID device** | Keys reach the app as from a physical keyboard, which many games need |
-| **Pass the mouse through as a HID device** | The mouse is a physical mouse of Android's, and the window captures the pointer |
-| **Enable gamepads when attached** | The host's gamepads, and ones plugged in later, reach Android |
-| **Use the keyboard to emulate a gamepad** | The keyboard and mouse drive a gamepad (see [Keyboard as a gamepad](#keyboard-as-a-gamepad)) |
-| **Touch input: Left-click and drag gets interpreted as tap and swipe** | See [Touch input](#touch-input) |
+| **Send the keyboard straight to Android (many games need this)** | Keys reach the app as from a physical keyboard, a HID device of Android's |
+| **Send the mouse straight to Android (captures the pointer)** | The mouse is a physical mouse of Android's, and the window captures the pointer |
+| **Use gamepads, including ones plugged in later** | The host's gamepads, and ones plugged in later, reach Android |
+| **Keyboard as a gamepad (keys on the Gamepad Emulation tab)** | The keyboard and mouse drive a gamepad (see [Keyboard as a gamepad](#keyboard-as-a-gamepad)) |
+| **Mouse as touch: clicks tap, drags swipe** | See [Touch input](#touch-input) |
 
 **Apply settings** saves the density and the ticked options, **Apply and
 start** saves them and opens the app, and **Cancel** (or Escape) leaves them
@@ -201,7 +201,7 @@ has none, and they connect again when you click back into its window.
 
 ### Touch input
 
-With **Touch input** ticked, or `ika app NAME --touch`, left clicks and drags
+With **Mouse as touch** ticked, or `ika app NAME --touch`, left clicks and drags
 reach Android as a finger on a touchscreen, so a drag is a swipe, for games
 that ignore the mouse. The right and middle buttons and the wheel stay mouse
 input, Ctrl or Shift with the left button still pinch, and no hover is sent.
@@ -211,7 +211,7 @@ handle mouse clicks differently from touches, such as Chromium's tab strip.
 
 ### Keyboard as a gamepad
 
-With **Use the keyboard to emulate a gamepad** ticked, the keyboard and the
+With **Keyboard as a gamepad** ticked, the keyboard and the
 mouse drive a gamepad of Android's, and gamepads plugged into the host pass
 through as well. The keys it uses no longer type; other keys do.
 
@@ -225,13 +225,13 @@ through as well. The keys it uses no longer type; other keys do.
 | Q, E | Left and right shoulders |
 | Z, X | Left and right triggers |
 | Left Shift, F | Left and right stick clicks |
-| Tab, held | Walk: the sticks go half as far |
+| Tab, held | Walk (**Hold to walk** in the window): the sticks go half as far |
 | Mouse motion, with `mouse_stick = right` | Right stick, the camera in most games: the faster the mouse moves, the farther |
 | Left, right button | Right, left trigger |
 | Middle button | Right stick click |
 | Wheel up, down | Left, right shoulder |
 
-By default (`mouse_stick = off`, **Mouse emulates thumbstick: Off** in a
+By default (`mouse_stick = off`, **Mouse → Analog stick: Off** in a
 game's controller mapping), the mouse is not the gamepad's at all, its
 buttons and wheel included, and the pointer stays free. With the mouse on a
 stick (`right` or `left`, **Right stick** or **Left stick**), its buttons and
@@ -260,16 +260,19 @@ left_trigger = Left_Shift
 
 ### Controller mapping per game
 
-The **Gamepad Emulation** tab of an app's **Ika startup options** window
+The **Gamepad Emulation** tab of an app's **Startup options** window
 (`ika app --controller NAME` opens the window on it) has the
 keyboard gamepad's settings for that game: a field per control, with its
-keys, and the stick ramp, the walk speed, what opposite keys held together
-do, which stick the mouse moves, and the mouse's sensitivity.
+keys, and **Full tilt, ms** (how long a stick takes to go where a key
+pushes it), the walk speed, what two opposite directions held together do
+(**Opposite directions**: **Last pressed wins**, or **Cancel out**, as
+fighting games expect), which stick the mouse moves, and the mouse's
+sensitivity. **Guide (Home)** is the pad's middle button, which Android
+takes as Home.
 
 - **Apply settings** saves an edited mapping in
-  `~/ika/apps/PACKAGE/controller.ini`, and ticks **Use the keyboard to emulate
-  a gamepad** in the game's start options, unless you unticked it in the
-  window. A mapping left as shown is saved only when the game already has
+  `~/ika/apps/PACKAGE/controller.ini`, and ticks **Keyboard as a gamepad** in
+  the app's start options, unless you unticked it in the window. A mapping left as shown is saved only when the game already has
   one of its own, so the game keeps following `[keyboard_gamepad]`.
 - **Apply and start** saves them and starts the game.
 - **Reset to default** asks first (**Apply defaults to APP**, **Ok** or
