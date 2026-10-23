@@ -308,12 +308,13 @@ not know are reported in the console log and skipped.
 | `walk_percent` | `50` | How far the sticks go, in percent, while `walk` is held |
 | `socd` | `last` | What two opposite directions held together do: `last`, the last pressed counts, or `neutral`, they cancel out, as fighting games expect |
 | `socd_dpad`, `socd_left_stick`, `socd_right_stick` | (empty) | `socd` for one pad; empty follows `socd` |
-| `mouse_stick` | `right` | The stick the mouse moves, as a camera: `right`, `left` or `off` |
+| `mouse_stick` | `off` | The stick the mouse moves: `off`, `right` (the camera in most games) or `left` |
 | `mouse_sensitivity` | `100` | The mouse stick's speed in percent: at 100, the stick is fully pushed at 32 pixels of motion per 8 ms |
 
-With `mouse_stick` on, or a mouse button or the wheel among the keys, the
-window captures the pointer; Alt releases it and takes it back. With
-`mouse_stick = off` and no mouse keys, the mouse works as usual.
+With `mouse_stick` on a stick, the window captures the pointer, and the
+mouse's buttons and wheel are keys of the mapping; Alt releases it and takes
+it back. With `mouse_stick = off`, the mouse is not the gamepad's, its mapped
+buttons and wheel included, and works as usual.
 
 A game can have keys and settings of its own, in
 `~/ika/apps/PACKAGE/controller.ini`, with the same lines; they go over this

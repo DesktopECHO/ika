@@ -761,8 +761,7 @@ sc_input_manager_process_key(struct sc_input_manager *im,
 }
 
 // Ika: whether the keyboard gamepad has the mouse right now: it takes it
-// (mouse_stick, or a mouse button or the wheel mapped) and the window holds
-// the pointer captured
+// (mouse_stick) and the window holds the pointer captured
 static bool
 sc_input_manager_gamepad_has_mouse(struct sc_input_manager *im) {
     return im->kg && sc_keyboard_gamepad_takes_mouse(im->kg)

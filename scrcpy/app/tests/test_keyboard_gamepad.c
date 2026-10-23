@@ -559,11 +559,18 @@ static void test_release_all(void) {
 }
 
 static void test_mouse_buttons_and_wheel(void) {
-    // Mouse buttons are keys like any other; the gamepad then takes the mouse
+    // Mouse buttons are keys like any other; the gamepad takes the mouse only
+    // with mouse_stick set, not for its buttons and wheel alone
     setup(NULL);
     assert(!sc_keyboard_gamepad_takes_mouse(&kg));
     setup("a=Mouse_Left,right_trigger=mouse_right,left_shoulder=Wheel_Up,"
           "right_shoulder=Wheel_Down,b=Mouse_X2");
+    assert(!sc_keyboard_gamepad_takes_mouse(&kg));
+    setup("a=Mouse_Left,right_trigger=mouse_right,left_shoulder=Wheel_Up,"
+          "right_shoulder=Wheel_Down,b=Mouse_X2,mouse_stick=off");
+    assert(!sc_keyboard_gamepad_takes_mouse(&kg));
+    setup("a=Mouse_Left,right_trigger=mouse_right,left_shoulder=Wheel_Up,"
+          "right_shoulder=Wheel_Down,b=Mouse_X2,mouse_stick=right");
     assert(sc_keyboard_gamepad_takes_mouse(&kg));
     assert(kg.key_count == 5);
 

@@ -44,7 +44,7 @@ input_args() {
   cat "${T}/log"
 }
 
-DEFAULT_SPEC="left_stick_up=W,left_stick_down=S,left_stick_left=A,left_stick_right=D,dpad_up=Up,dpad_down=Down,dpad_left=Left,dpad_right=Right,right_stick_up=I,right_stick_down=K,right_stick_left=J,right_stick_right=L,a=Space,b=Escape,x=C,y=V,start=Return/Keypad_Enter,back=Backspace,left_shoulder=Q/Wheel_Up,right_shoulder=E/Wheel_Down,left_stick=Left_Shift,right_stick=F/Mouse_Middle,left_trigger=Z/Mouse_Right,right_trigger=X/Mouse_Left,walk=Tab,ramp_ms=100,walk_percent=50,socd=last,mouse_stick=right,mouse_sensitivity=100"
+DEFAULT_SPEC="left_stick_up=W,left_stick_down=S,left_stick_left=A,left_stick_right=D,dpad_up=Up,dpad_down=Down,dpad_left=Left,dpad_right=Right,right_stick_up=I,right_stick_down=K,right_stick_left=J,right_stick_right=L,a=Space,b=Escape,x=C,y=V,start=Return/Keypad_Enter,back=Backspace,left_shoulder=Q/Wheel_Up,right_shoulder=E/Wheel_Down,left_stick=Left_Shift,right_stick=F/Mouse_Middle,left_trigger=Z/Mouse_Right,right_trigger=X/Mouse_Left,walk=Tab,ramp_ms=100,walk_percent=50,socd=last,mouse_stick=off,mouse_sensitivity=100"
 expect_equal "$(keyboard_gamepad_spec)" "${DEFAULT_SPEC}" "the default keyboard gamepad spec"
 
 # The consoles: an app's start options never reach them.
@@ -104,7 +104,7 @@ for control in "${!KEYBOARD_GAMEPAD_KEYS[@]}"; do
   DEFAULT_KEYS["${control}"]="${KEYBOARD_GAMEPAD_KEYS[${control}]}"
 done
 keyboard_gamepad_ini "a=H  J" "dpad_up=" "guide=F1" "left_trigger=left_shift" "start=Return W"
-expect_equal "$(keyboard_gamepad_spec)" "left_stick_down=S,left_stick_left=A,left_stick_right=D,dpad_down=Down,dpad_left=Left,dpad_right=Right,right_stick_up=I,right_stick_down=K,right_stick_right=L,a=H/J,b=Escape,x=C,y=V,start=Return/W,back=Backspace,guide=F1,left_shoulder=Q/Wheel_Up,right_shoulder=E/Wheel_Down,right_stick=F/Mouse_Middle,left_trigger=left_shift,right_trigger=X/Mouse_Left,walk=Tab,ramp_ms=100,walk_percent=50,socd=last,mouse_stick=right,mouse_sensitivity=100" "a remapped spec"
+expect_equal "$(keyboard_gamepad_spec)" "left_stick_down=S,left_stick_left=A,left_stick_right=D,dpad_down=Down,dpad_left=Left,dpad_right=Right,right_stick_up=I,right_stick_down=K,right_stick_right=L,a=H/J,b=Escape,x=C,y=V,start=Return/W,back=Backspace,guide=F1,left_shoulder=Q/Wheel_Up,right_shoulder=E/Wheel_Down,right_stick=F/Mouse_Middle,left_trigger=left_shift,right_trigger=X/Mouse_Left,walk=Tab,ramp_ms=100,walk_percent=50,socd=last,mouse_stick=off,mouse_sensitivity=100" "a remapped spec"
 keyboard_gamepad_ini
 expect_equal "$(keyboard_gamepad_spec)" "${DEFAULT_SPEC}" "the defaults again without ika.ini lines"
 

@@ -194,9 +194,6 @@ kg_add_key(struct sc_keyboard_gamepad *kg,
         .pressed = 0,
         .release_ms = 0,
     };
-    if (input != SC_KEYBOARD_GAMEPAD_INPUT_KEY) {
-        kg->has_mouse_keys = true;
-    }
 }
 
 static bool
@@ -404,7 +401,6 @@ sc_keyboard_gamepad_init(struct sc_keyboard_gamepad *kg,
     }
     kg->mouse_stick = SC_KEYBOARD_GAMEPAD_MOUSE_STICK_OFF;
     kg->mouse_sensitivity = KG_DEFAULT_MOUSE_SENSITIVITY;
-    kg->has_mouse_keys = false;
     kg->mouse_dx = 0;
     kg->mouse_dy = 0;
     kg->mouse_x = 0;
@@ -774,8 +770,7 @@ sc_keyboard_gamepad_tick(struct sc_keyboard_gamepad *kg, uint64_t now_ms) {
 
 bool
 sc_keyboard_gamepad_takes_mouse(const struct sc_keyboard_gamepad *kg) {
-    return kg->mouse_stick != SC_KEYBOARD_GAMEPAD_MOUSE_STICK_OFF
-        || kg->has_mouse_keys;
+    return kg->mouse_stick != SC_KEYBOARD_GAMEPAD_MOUSE_STICK_OFF;
 }
 
 void

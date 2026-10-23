@@ -73,18 +73,20 @@
   in ika.ini, and in scrcpy's `--gamekb` spec as `ramp_ms`, `walk`,
   `walk_percent` and `socd`. A stick now moves in one HID report instead of
   one per axis.
-- The mouse is the keyboard gamepad's too: moving it moves the right stick
-  (`mouse_stick = right`, or `left` or `off`), the camera in most games, as
-  fast as the mouse moves, full at 32 pixels per 8 ms at `mouse_sensitivity`
+- The mouse can be the keyboard gamepad's too: with `mouse_stick = right`
+  (or `left`; `off`, the default, leaves the mouse alone) moving it moves
+  that stick, the right one the camera in most games, as fast as the mouse
+  moves, full at 32 pixels per 8 ms at `mouse_sensitivity`
   100, and back to the center when the mouse stops; the stick's keys win
   while held. The mouse's buttons and wheel are keys of the mapping
   (`Mouse_Left`, `Mouse_Right`, `Mouse_Middle`, `Mouse_X1`, `Mouse_X2`,
   `Wheel_Up`, `Wheel_Down`, `Wheel_Left`, `Wheel_Right`): by default the
   left button is the right trigger, the right button the left trigger, the
   middle button the right stick's click and the wheel the shoulders. With
-  any of that, the window captures the pointer as for a HID mouse, left Alt
-  (or left Super, scrcpy's capture keys) releases it and takes it back, and
-  the released pointer is the usual mouse. scrcpy's `--gamekb` takes it as `mouse_stick`, `mouse_sensitivity`
+  `mouse_stick` set, the window captures the pointer as for a HID mouse, left
+  Alt (or left Super, scrcpy's capture keys) releases it and takes it back,
+  and the released pointer is the usual mouse; with `mouse_stick = off`, the
+  mouse, its buttons and wheel too, is not the gamepad's at all. scrcpy's `--gamekb` takes it as `mouse_stick`, `mouse_sensitivity`
   and the mouse key names, and the Controller mapping window has fields for
   the stick the mouse moves and its sensitivity.
 - "App Settings" is now "Android App Settings...", and opens the app's App
