@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Desktop/TV</string>
-    <string name="switcher_title">Android Experience Switcher</string>
+    <string name="switcher_title">Desktop/TV Mode</string>
     <string name="desktop_mode_heading">Desktop mode</string>
     <string name="tv_mode_heading">TV mode</string>
     <string name="tv_mode_title">Switch to TV mode?</string>
