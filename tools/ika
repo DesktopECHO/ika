@@ -6699,6 +6699,9 @@ app_launcher_is_current() {
     && grep -qxF "Icon=${icon}" "${file}" \
     && grep -qxF "Actions=$(app_launcher_actions "${package}")" "${file}" \
     && ! grep -qxF "[Desktop Action controller]" "${file}" \
+    && grep -qxF "SingleMainWindow=true" "${file}" \
+    && grep -qxF "[Desktop Action new-window]" "${file}" \
+    && grep -qxF "Name=Launch app" "${file}" \
     && grep -qxF "Name=Ika Startup Options" "${file}" \
     && grep -qxF "Name=App Info" "${file}" \
     && grep -qxF "Exec=ika app --options ${package}" "${file}" \
@@ -6711,7 +6714,7 @@ app_launcher_is_current() {
 
 # The launcher's actions, the same for games and other apps.
 app_launcher_actions() {
-  printf 'options;app-settings;\n'
+  printf 'new-window;options;app-settings;\n'
 }
 
 # Creates or updates one launcher and returns 1 when it was already current.
@@ -6748,6 +6751,7 @@ write_app_launcher() {
       --set-icon="${icon}" \
       --set-key=Terminal --set-value=false \
       --set-key=StartupWMClass --set-value="ika-${package}" \
+      --set-key=SingleMainWindow --set-value=true \
       --set-key=Keywords --set-value="${keywords}" \
       --set-key=Actions --set-value="${actions}" \
       --add-category="${IKA_MENU_CATEGORY}" \
@@ -6763,6 +6767,7 @@ Exec=ika app ${package}
 Icon=${icon}
 Terminal=false
 StartupWMClass=ika-${package}
+SingleMainWindow=true
 Keywords=$(desktop_entry_escape "${keywords}")
 Actions=${actions}
 Categories=${IKA_MENU_CATEGORY};
@@ -6773,10 +6778,13 @@ EOF
   fi
 }
 
-# Writes the launcher's right-click actions: "Ika Startup Options", which
-# opens the app's start options window, and "App Info", which
-# opens Android's App info page for the app. It also removes the "touch"
-# action, since touch input is a start option, and the "Controller
+# Writes the launcher's right-click actions: "Launch app", which opens the
+# app, "Ika Startup Options", which opens the app's start options window, and
+# "App Info", which opens Android's App info page for the app. An app has one
+# window (SingleMainWindow), and GNOME Shell offers "New Window" for an app
+# that is not running whatever the launcher says, unless it has an action of
+# its own with that ID: "Launch app" is that action. It also removes the
+# "touch" action, since touch input is a start option, and the "Controller
 # mapping..." action games had ('ika app --controller NAME' opens it).
 set_launcher_actions() {
   local file="$1"
@@ -6785,6 +6793,7 @@ set_launcher_actions() {
 
   set_launcher_action "${file}" touch "" ""
   set_launcher_action "${file}" controller "" ""
+  set_launcher_action "${file}" new-window "Launch app" "ika app ${package}"
   set_launcher_action "${file}" options "Ika Startup Options" \
     "ika app --options ${package}"
   set_launcher_action "${file}" app-settings "App Info" \

@@ -93,6 +93,9 @@
   info page alone in the Settings window: as the window's first page, with
   no Settings home page shown before it and no list of settings beside it.
   scrcpy's `--start-app` takes `info:PACKAGE` for it.
+- An app's menu entry offers "Launch app" first, where GNOME offered "New
+  Window": the launcher has a `new-window` action of its own, which GNOME
+  Shell lists instead, and `SingleMainWindow=true`, as an app has one window.
 - The keyboard as a gamepad: WASD is the left stick, the arrows the D-pad,
   IJKL the right stick, Space is A, Esc is B, C is X, V is Y, Enter is
   Start, Backspace is Back, Q and E the shoulders, Z and X the triggers,
