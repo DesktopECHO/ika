@@ -38,7 +38,7 @@
   and TV densities, the refresh rate, the GPU mode (Auto, the default, is
   `gpu_mode = auto` in ika.ini; "gfxstream, OpenGL ES only" is gfxstream with
   gfxstream_vulkan = off), hardware video decoding,
-  low-CPU mode and "Keyboard as a gamepad in TV mode", and a Gamepad
+  low-CPU mode and "Enable gamepad emulation in TV mode", and a Gamepad
   Emulation tab with ika.ini's keyboard gamepad. It writes the settings
   changed in ika.ini, each in place of its line (`ika_ini_set`), and
   "Apply and restart" restarts Ika too. Its "Start with the camera" replaces

@@ -31,7 +31,7 @@ like an app's, for the settings of `ika.ini` you change most, in two tabs:
   with `gfxstream_vulkan = off`, and **Auto** or **gfxstream** chosen from
   another mode sets `gfxstream_vulkan = auto`), **Hardware video decoding** and **Low-CPU
   mode**; **Start with the camera** (`device` in `[camera]`, see
-  [Camera](#camera)); and **Keyboard as a gamepad in TV mode**
+  [Camera](#camera)); and **Enable gamepad emulation in TV mode**
   (`tv_keyboard_gamepad`). Low-CPU mode runs the display at its own 30 Hz
   whatever the refresh rate says.
 - **Gamepad Emulation**: the keyboard gamepad of `[keyboard_gamepad]`, as an
