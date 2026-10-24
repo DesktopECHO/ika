@@ -1,13 +1,14 @@
 #!/usr/bin/bash
 
 # The tabbed window ("Startup options" on an app's launcher, ika app
-# --options and --controller): a yad notebook, "Startup Options · LABEL", with
-# a Startup Options tab and a Gamepad Emulation tab, the same for games and
-# other apps. It saves the start options and the display density, and the
-# controller mapping only when it was edited or the app has one of its own;
-# an edited mapping ticks the keyboard as a gamepad unless the window
-# unticked it. "Reset to default" brings the window back on the Startup
-# Options tab. Without an X display, the windows of their own open instead.
+# --options and --controller): ika's GTK 3 window, "Startup Options · LABEL",
+# native on Wayland as on X11, with a Startup Options tab and a Gamepad
+# Emulation tab, the same for games and other apps. It saves the start options
+# and the display density, and the controller mapping only when it was edited
+# or the app has one of its own; an edited mapping ticks the keyboard as a
+# gamepad unless the window unticked it. "Reset to default" brings the window
+# back on the Startup Options tab. Without python3's GTK bindings, yad's
+# windows of their own open instead.
 
 set -euo pipefail
 
@@ -21,14 +22,11 @@ export CVD_PRODUCT_OUT="${T}/product"
 mkdir -p "${HOME}" "${CVD_PRODUCT_OUT}" "${T}/bin"
 unset GTK_THEME
 
-# A yad stub, which has --css unless YAD_HELP says otherwise. A tab (--plug)
-# records its arguments, and GTK_THEME and XDG_DATA_DIRS, in yad.tabN.args
-# and prints DIALOG_TABN; the notebook records its arguments, and
-# GDK_BACKEND, GDK_SCALE, GDK_DPI_SCALE and GTK_THEME, in yad.notebook.args,
-# a form of its own in yad.form.args (printing DIALOG_FORM), and the
-# confirmation in yad.confirm.args. The notebook, a form of its own and the
-# confirmation exit with the next of DIALOG_STATUS, counted in yad.calls; the
-# last one stays.
+# A yad stub, which has --css unless YAD_HELP says otherwise. A form of its
+# own records its arguments, and GTK_THEME and XDG_DATA_DIRS, in
+# yad.form.args and prints DIALOG_FORM; the confirmation records its
+# arguments in yad.confirm.args. Both exit with the next of DIALOG_STATUS,
+# counted in yad.calls with ika's windows; the last one stays.
 cat >"${T}/bin/yad" <<STUB
 #!/usr/bin/bash
 if [[ "\$1" == "--help-all" ]]; then
@@ -36,25 +34,14 @@ if [[ "\$1" == "--help-all" ]]; then
   exit 0
 fi
 args=" \$* "
-if [[ "\${args}" == *" --plug="* ]]; then
-  for arg in "\$@"; do
-    [[ "\${arg}" != --tabnum=* ]] || tab="\${arg#--tabnum=}"
-  done
-  { printf '%s\n' "\$@"; printf 'GTK_THEME=%s\nXDG_DATA_DIRS=%s\n' "\${GTK_THEME:-}" "\${XDG_DATA_DIRS:-}"; } > "${T}/yad.tab\${tab}.args"
-  name="DIALOG_TAB\${tab}"
-  printf '%s' "\${!name:-}"
-  exit 0
-fi
 echo >>"${T}/yad.calls"
 read -r -a statuses <<<"\${DIALOG_STATUS:-2}"
 n="\$(wc -l <"${T}/yad.calls")"
 if (( n > \${#statuses[@]} )); then
   n=\${#statuses[@]}
 fi
-if [[ "\${args}" == *" --notebook "* ]]; then
-  { printf '%s\n' "\$@"; printf 'GDK_BACKEND=%s\nGDK_SCALE=%s\nGDK_DPI_SCALE=%s\nGTK_THEME=%s\n' "\${GDK_BACKEND:-}" "\${GDK_SCALE:-}" "\${GDK_DPI_SCALE:-}" "\${GTK_THEME:-}"; } > "${T}/yad.notebook.args"
-elif [[ "\${args}" == *" --form "* ]]; then
-  printf '%s\n' "\$@" > "${T}/yad.form.args"
+if [[ "\${args}" == *" --form "* ]]; then
+  { printf '%s\n' "\$@"; printf 'GTK_THEME=%s\nXDG_DATA_DIRS=%s\n' "\${GTK_THEME:-}" "\${XDG_DATA_DIRS:-}"; } > "${T}/yad.form.args"
   printf '%s' "\${DIALOG_FORM:-}"
 else
   printf '%s\n' "\$@" > "${T}/yad.confirm.args"
@@ -65,6 +52,48 @@ chmod +x "${T}/bin/yad"
 export PATH="${T}/bin:${PATH}"
 
 source "${ROOT}/tools/ika"
+
+# ika's window, stubbed: it records its own arguments, and its environment,
+# in window.args and each tab's (from its --tab on) in window.tabN.args,
+# writes DIALOG_TABN to that tab's --output and exits with the next of
+# DIALOG_STATUS, counted in yad.calls. With WINDOW_DEFAULTS set, the real
+# program writes the outputs instead, as the window shows them untouched.
+eval "real_$(declare -f ika_window)"
+ika_window() {
+  local -n stub_env_ref="$1"
+  shift
+  local arg name n
+  local tab=0
+  local -a statuses=()
+
+  : >"${T}/window.args"
+  for arg in "$@"; do
+    if [[ "${arg}" == --tab=* ]]; then
+      tab=$((tab + 1))
+      : >"${T}/window.tab${tab}.args"
+    fi
+    if (( tab == 0 )); then
+      printf '%s\n' "${arg}" >>"${T}/window.args"
+    else
+      printf '%s\n' "${arg}" >>"${T}/window.tab${tab}.args"
+    fi
+    if [[ "${arg}" == --output=* ]]; then
+      name="DIALOG_TAB${tab}"
+      printf '%s' "${!name:-}" >"${arg#--output=}"
+    fi
+  done
+  printf 'ENV=%s\n' "${stub_env_ref[*]}" >>"${T}/window.args"
+  echo >>"${T}/yad.calls"
+  read -r -a statuses <<<"${DIALOG_STATUS:-2}"
+  n="$(wc -l <"${T}/yad.calls")"
+  (( n <= ${#statuses[@]} )) || n=${#statuses[@]}
+  if [[ -n "${WINDOW_DEFAULTS:-}" ]]; then
+    real_ika_window stub_env_ref --print-defaults --test-status="${statuses[n - 1]}" "$@"
+    return
+  fi
+  return "${statuses[n - 1]}"
+}
+IKA_WINDOW_AVAILABLE=yes
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -87,7 +116,6 @@ app_display_name() { printf 'Some Game\n'; }
 
 mkdir -p "${IKA_APPS_DIR}"
 printf 'com.example.game\n' > "${APP_GAMES_FILE}"
-export DISPLAY=":0"
 mapping="$(app_controller_mapping_file com.example.game)"
 
 # The Startup Options tab's output, after dpi=N when given: the density, the
@@ -158,24 +186,23 @@ reset_calls() {
   : >"${T}/yad.calls"
   : >"${T}/respond"
   : >"${T}/started"
-  rm -f "${T}"/yad.*.args
+  rm -f "${T}"/yad.*.args "${T}"/window*.args
 }
 
 # A game's window: the two tabs, on the first, under "Startup Options · Some
-# Game", on XWayland; the start options with the density, the controls in two
-# columns, and the four buttons
+# Game", native (no GDK_BACKEND); the start options with the density, the
+# controls in two columns, and the four buttons
 reset_calls
 save_app_options com.example.game fullscreen
 DIALOG_TAB1="$(options_output fullscreen touch)" DIALOG_TAB2="$(mapping_output)" \
   edit_app_settings com.example.game 1
-notebook="$(<"${T}/yad.notebook.args")"
-expect_contains "${notebook}" $'--notebook\n' "a notebook"
-expect_contains "${notebook}" $'\n--tab=Startup Options\n--tab=Gamepad Emulation\n--active-tab=1\n' "its tabs, on the first"
-expect_contains "${notebook}" $'\n--title=Startup Options · Some Game\n' "its title"
-expect_contains "${notebook}" $'--button=Reset to default:4\n--button=Apply settings:2\n--button=        Apply and start        :0\n--button=Cancel:1' \
+window="$(<"${T}/window.args")"
+expect_contains "${window}" $'--title=Startup Options · Some Game\n' "its title"
+expect_contains "${window}" $'\n--active-tab=1\n' "on the first tab"
+expect_contains "${window}" $'--button=Reset to default:4\n--button=Apply settings:2\n--button=Apply and start:0\n--button=Cancel:1\n' \
   "the buttons, in order"
-expect_contains "${notebook}" $'\nGDK_BACKEND=x11' "on XWayland, for its tabs"
-expect_contains "${notebook}" $'--name=ika-startup-options\n--class=ika-startup-options\n--notebook\n' "a window class of its own, for the Ika icon"
+[[ "${window}" != *"GDK_BACKEND"* ]] || fail "a GDK backend set, not the session's own: ${window}"
+expect_contains "${window}" $'\n--icon='"${IKA_MENU_ICON}"$'\n--app-id=ika-startup-options\n' "an app ID of its own, for the Ika icon"
 # ika-startup-options.desktop names that class, with the Ika icon, hidden
 desktop_file="${ROOT}/tools/ika-startup-options.desktop"
 grep -qxF "StartupWMClass=${APP_SETTINGS_WINDOW_CLASS}" "${desktop_file}" || fail "the desktop entry names another class"
@@ -184,21 +211,16 @@ grep -qxF "NoDisplay=true" "${desktop_file}" || fail "the desktop entry is in th
 if command -v desktop-file-validate >/dev/null 2>&1; then
   desktop-file-validate "${desktop_file}" || fail "the desktop entry is invalid"
 fi
-tab1="$(<"${T}/yad.tab1.args")"
-tab2="$(<"${T}/yad.tab2.args")"
-key="$(grep -o -m1 -- '--key=[0-9]*' <<<"${notebook}")"
-expect_contains "${tab1}" $'--plug='"${key#--key=}"$'\n--tabnum=1\n' "the first tab plugs into the notebook"
-expect_contains "${tab2}" $'--plug='"${key#--key=}"$'\n--tabnum=2\n' "the second tab plugs into the notebook"
-expect_contains "${tab1}" $'\n--css='"${CVD_TMP_DIR}"$'/yad-css/density-tab.css\n' "the density's box is narrow in the tab"
-expect_equal "$(<"${CVD_TMP_DIR}/yad-css/density-tab.css")" "spinbutton { margin-right: ${APP_DPI_TAB_MARGIN_PX}px; }" \
-  "by a margin"
-expect_contains "${tab2}" $'\n--css='"${CVD_TMP_DIR}"$'/yad-css/gamepad.css\n' "the gamepad's fields are smaller"
-expect_equal "$(<"${CVD_TMP_DIR}/yad-css/gamepad.css")" "${CONTROLLER_MAPPING_FORM_CSS}" "in a smaller font, in lower rows"
-[[ "${notebook}" != *"--css="* ]] || fail "CSS for the notebook, which has no fields"
-expect_contains "${tab1}" $'\n--borders='"${APP_OPTIONS_TAB_BORDER_PX}"$'\n' "the tab's fields start in from its frame"
+tab1="$(<"${T}/window.tab1.args")"
+tab2="$(<"${T}/window.tab2.args")"
+expect_contains "${tab1}" $'--tab=Startup Options\n--output=' "the first tab"
+expect_contains "${tab2}" $'--tab=Gamepad Emulation\n--output=' "the second tab"
+[[ "${window}${tab1}${tab2}" != *"--css="* ]] || fail "yad's CSS for ika's window"
+expect_contains "${tab1}" $'\n--border='"${APP_OPTIONS_TAB_BORDER_PX}"$'\n' "the tab's fields start in from its frame"
 expect_contains "${tab1}" $'\n--field=Display density, 0=Auto  :NUM\n0!0..999!8\n' "the density, auto"
 expect_contains "${tab1}" $'\n--field=  Fullscreen mode (F11, Cmd+F or Left-Alt+F exits):CHK\nTRUE\n' "the saved options"
-expect_contains "${tab2}" $'\n--columns=2\n' "the controls in two columns"
+expect_contains "${tab2}" $'\n--compact\n--columns=2\n--border='"${CONTROLLER_MAPPING_TAB_BORDER_PX}"$'\n--align=right\n' \
+  "the controls in two columns, smaller, labels by their fields"
 expect_contains "${tab2}" $'\n--text=One or more keys per control' "the explanation"
 expect_equal "$(grep -c -x -- '--field= :LBL' <<<"${tab2}")" 1 "one blank row, at the end of the second column"
 expect_equal "$(grep -c -x -- "--field=<span font_size='6pt'> </span>:LBL" <<<"${tab2}")" 2 \
@@ -213,7 +235,7 @@ echo "ok: a game's window, and an untouched mapping stays ika.ini's"
 reset_calls
 DIALOG_TAB1="$(options_output dpi=240.000000 fullscreen touch)" DIALOG_TAB2="$(mapping_output a=J)" \
   edit_app_settings com.example.game 2
-expect_contains "$(<"${T}/yad.notebook.args")" $'\n--active-tab=2\n' "on the second tab"
+expect_contains "$(<"${T}/window.args")" $'\n--active-tab=2\n' "on the second tab"
 [[ -f "${mapping}" ]] || fail "an edited mapping was not saved"
 expect_contains "$(<"${mapping}")" $'\na = J\n' "the edited key"
 expect_equal "$(saved_app_options com.example.game)" "fullscreen gamekb touch" "an edited mapping ticks the keyboard as a gamepad"
@@ -226,7 +248,7 @@ echo "ok: an edited mapping is saved and ticks the keyboard as a gamepad"
 reset_calls
 DIALOG_TAB1="$(options_output dpi=240.000000 fullscreen)" DIALOG_TAB2="$(mapping_output a=K)" \
   edit_app_settings com.example.game 1
-expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=Display density, 0=Auto  :NUM\n240!0..999!8\n' "the saved density is shown"
+expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=Display density, 0=Auto  :NUM\n240!0..999!8\n' "the saved density is shown"
 expect_equal "$(saved_app_options com.example.game)" "fullscreen" "unticked in the window, it stays unticked"
 expect_contains "$(<"${mapping}")" $'\na = K\n' "the game's mapping is saved"
 reset_calls
@@ -247,12 +269,12 @@ DIALOG_TAB1="$(options_output dpi=0.000000 touch)" DIALOG_TAB2="$(mapping_output
 expect_equal "$(wc -l <"${T}/yad.calls")" 3 "the window, the confirmation and the window again"
 expect_contains "$(<"${T}/yad.confirm.args")" "Apply defaults to Some Game</span>" "the confirmation names the game"
 expect_contains "$(<"${T}/yad.confirm.args")" $'--name=ika-startup-options\n--class=ika-startup-options\n' "the confirmation's class"
-expect_contains "$(<"${T}/yad.notebook.args")" $'\n--active-tab=1\n' "the window comes back on the Startup Options tab, opened on the other"
-expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=Display density, 0=Auto  :NUM\n0!0..999!8\n' "with the console's density"
-expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=  Fullscreen mode (F11, Cmd+F or Left-Alt+F exits):CHK\nTRUE\n' "and a game's default start options"
-expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=  Mouse as touch: clicks tap, drags swipe:CHK\nFALSE\n' \
+expect_contains "$(<"${T}/window.args")" $'\n--active-tab=1\n' "the window comes back on the Startup Options tab, opened on the other"
+expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=Display density, 0=Auto  :NUM\n0!0..999!8\n' "with the console's density"
+expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=  Fullscreen mode (F11, Cmd+F or Left-Alt+F exits):CHK\nTRUE\n' "and a game's default start options"
+expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=  Mouse as touch: clicks tap, drags swipe:CHK\nFALSE\n' \
   "the edited ones reset"
-expect_contains "$(<"${T}/yad.tab2.args")" $'\n--field=\xe2\x80\x87\xe2\x80\x87A'$'\xc2\xa0'$':\xc2\xa0\n'"${KEYBOARD_GAMEPAD_KEYS[a]}"$'\n' \
+expect_contains "$(<"${T}/window.tab2.args")" $'\n--field=\xe2\x80\x87\xe2\x80\x87A'$'\xc2\xa0'$':\xc2\xa0\n'"${KEYBOARD_GAMEPAD_KEYS[a]}"$'\n' \
   "and ika.ini's mapping"
 [[ ! -e "${mapping}" ]] || fail "the default mapping came back as the game's own"
 expect_equal "$(saved_app_options com.example.game):$(saved_app_dpi com.example.game)" "touch:" "the start options and auto density"
@@ -260,7 +282,7 @@ expect_contains "$(<"${T}/respond")" "Some Game uses the controller mapping of i
 echo "ok: Reset to default"
 
 # Cancel and closing the window leave everything; Apply and start starts the
-# game; a notebook that fails is an error
+# game; a window that fails is an error
 reset_calls
 save_app_options com.example.game fullscreen
 DIALOG_TAB1="$(options_output touch)" DIALOG_TAB2="$(mapping_output a=K)" DIALOG_STATUS=1 \
@@ -274,16 +296,16 @@ DIALOG_TAB1="$(options_output fullscreen)" DIALOG_TAB2="$(mapping_output)" DIALO
 expect_equal "$(<"${T}/started")" "started com.example.game" "Apply and start starts the game"
 reset_calls
 if (DIALOG_STATUS=70 edit_app_settings com.example.game 1) >/dev/null 2>&1; then
-  fail "a notebook that failed was not an error"
+  fail "a window that failed was not an error"
 fi
 echo "ok: Cancel, Apply and start, a failed window"
 
 # An app that is not a game gets the same window as a game, from its launcher
-# and from --controller: the same notebook, tabs and fields, with the same
+# and from --controller: the same window, tabs and fields, with the same
 # saved options (the stub's app_display_name names both "Some Game")
 window_args() {
-  sed -e 's/^--key=.*/--key=KEY/' -e 's/^--plug=.*/--plug=KEY/' \
-    "${T}/yad.notebook.args" "${T}/yad.tab1.args" "${T}/yad.tab2.args"
+  sed -e 's/^--output=.*/--output=FILE/' \
+    "${T}/window.args" "${T}/window.tab1.args" "${T}/window.tab2.args"
 }
 save_app_options com.example.game fullscreen
 save_app_options com.example.app fullscreen
@@ -294,110 +316,90 @@ game_window="$(window_args)"
 reset_calls
 DIALOG_TAB1="$(options_output fullscreen touch)" DIALOG_TAB2="$(mapping_output)" \
   edit_app_settings com.example.app 1
-[[ -e "${T}/yad.notebook.args" ]] || fail "an app that is not a game did not get the tabbed window"
+[[ -e "${T}/window.args" ]] || fail "an app that is not a game did not get the tabbed window"
 [[ ! -e "${T}/yad.form.args" ]] || fail "an app that is not a game got a window of its own"
 expect_equal "$(window_args)" "${game_window}" "the same window as a game's"
 expect_equal "$(saved_app_options com.example.app)" "fullscreen touch" "and it saves"
 reset_calls
 DIALOG_TAB1="$(options_output touch)" DIALOG_TAB2="$(mapping_output)" edit_app_settings com.example.app 2
-expect_contains "$(<"${T}/yad.notebook.args")" $'\n--active-tab=2\n' "--controller opens it on the second tab"
+expect_contains "$(<"${T}/window.args")" $'\n--active-tab=2\n' "--controller opens it on the second tab"
 echo "ok: an app that is not a game"
 
-# Without an X display, each tab is a window of its own
+# ika's own program reads yad's fields, the label up to the last colon, and
+# writes each tab's values as yad prints them, each followed by "|": a whole
+# number, the chosen item, TRUE or FALSE, a label's empty value, the text;
+# its status is the button's. An argument it does not know is an error.
+declare -a no_env=()
+status=0
+real_ika_window no_env --print-defaults --test-status=2 --title=T --button=OK:0 \
+  --tab=One --output="${T}/one" --border=4 --field="Size, 0=Auto  :NUM" "240!0..999!8" \
+  --field="Mode: x:CB" "a!^b c!d" --field="  Tick:CHK" "TRUE" --field="<b>x</b>:LBL" "" \
+  --field="Keys " "Q Wheel_Up" --field="Mouse → Analog stick:CB" "Off!^Right stick" \
+  --tab=Two --output="${T}/two" --compact --columns=2 --align=right --text="<i>t</i>" \
+  --field="Off:CHK" "false" || status=$?
+expect_equal "${status}" 2 "the status given"
+expect_equal "$(<"${T}/one")" "240|b c|TRUE||Q Wheel_Up|Right stick|" "the first tab's values"
+expect_equal "$(<"${T}/two")" "FALSE|" "the second tab's"
+real_ika_window no_env --parse-only --tab=One --field="Mode: x:CB" "a!^b" >"${T}/parsed"
+expect_contains "$(tr -d ' \n' <"${T}/parsed")" '"label":"Mode:x","type":"CB","value":"a!^b"' "split at the last colon"
+if real_ika_window no_env --print-defaults --tab=One --bogus >/dev/null 2>&1; then
+  fail "an unknown argument was taken"
+fi
+echo "ok: ika's program"
+
+# ika's own program shows what it is given: applied untouched, the window
+# changes nothing, the density, the start options and ika.ini's mapping
+# included (it prints whole numbers, where yad has decimals)
+save_app_options_with_dpi com.example.game 240 fullscreen touch
+rm -f "${mapping}"
 reset_calls
-unset DISPLAY
+WINDOW_DEFAULTS=1 edit_app_settings com.example.game 1
+expect_equal "$(saved_app_options com.example.game):$(saved_app_dpi com.example.game)" "fullscreen touch:240" \
+  "the start options and the density, applied untouched"
+[[ ! -e "${mapping}" ]] || fail "an untouched mapping became the game's own, through ika's program"
+expect_contains "$(<"${T}/respond")" "Some Game starts with fullscreen touch at 240 DPI" "and said so"
+reset_calls
+WINDOW_DEFAULTS=1 DIALOG_STATUS=1 edit_app_settings com.example.game 2
+expect_equal "$(saved_app_options com.example.game)" "fullscreen touch" "Cancel, through ika's program"
+echo "ok: ika's program, applied untouched"
+
+# Without python3's GTK bindings, each tab is a window of its own
+reset_calls
+IKA_WINDOW_AVAILABLE=no
 DIALOG_FORM="$(options_output fullscreen)" edit_app_settings com.example.game 1
-[[ ! -e "${T}/yad.notebook.args" ]] || fail "the tabbed window opened without an X display"
+[[ ! -e "${T}/window.args" ]] || fail "the tabbed window opened without GTK's bindings"
 expect_contains "$(<"${T}/yad.form.args")" $'\n--title=Startup Options · Some Game\n' "the start options window of its own"
 reset_calls
 DIALOG_FORM="$(printf '%s|' W)" DIALOG_STATUS=1 edit_app_settings com.example.game 2
 expect_contains "$(<"${T}/yad.form.args")" $'\n--title=Gamepad Emulation · Some Game\n' "the gamepad window of its own"
-expect_contains "$(<"${T}/log")" "no X display for yad's tabbed window" "and why"
-export DISPLAY=":0"
-echo "ok: without an X display"
-
-# On KDE Plasma's Wayland session, with X11 apps applying scaling themselves
-# ([Xwayland] Scale in kwinrc), the tabbed window gets that scale: rounded for
-# the window, the rest for its text. Not elsewhere, nor over a GDK_SCALE set.
-export XDG_CONFIG_HOME="${T}/config"
-mkdir -p "${XDG_CONFIG_HOME}"
-scale_env_with() (
-  printf '[Compositing]\nBackend=OpenGL\n\n[Xwayland]\nScale=%s\n' "$1" > "${XDG_CONFIG_HOME}/kwinrc"
-  shift
-  export "$@"
-  xwayland_gdk_scale_env | paste -sd" " -
-)
-unset GDK_SCALE GDK_DPI_SCALE
-# No X resources here: xrdb is a stub that prints XRDB_OUTPUT
-cat >"${T}/bin/xrdb" <<'STUB'
-#!/usr/bin/bash
-printf '%s' "${XRDB_OUTPUT:-}"
-STUB
-chmod +x "${T}/bin/xrdb"
-expect_equal "$(scale_env_with 1.7 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE)" "GDK_SCALE=2 GDK_DPI_SCALE=0.85" "KDE at 1.7"
-expect_equal "$(scale_env_with 1.25 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE)" "GDK_SCALE=1 GDK_DPI_SCALE=1.25" "KDE at 1.25"
-expect_equal "$(scale_env_with 2 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE)" "GDK_SCALE=2 GDK_DPI_SCALE=1" "KDE at 2"
-expect_equal "$(scale_env_with 1 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE)" "" "KDE at 1"
-expect_equal "$(scale_env_with 1.7 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=GNOME)" "" "another desktop"
-expect_equal "$(scale_env_with 1.7 WAYLAND_DISPLAY= XDG_CURRENT_DESKTOP=KDE)" "" "an X11 session"
-expect_equal "$(scale_env_with 1.7 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE GDK_SCALE=3)" "" "a GDK_SCALE of the user's"
-expect_equal "$(scale_env_with big WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE)" "" "a scale that is not a number"
-# GTK sizes text by the font DPI too, which KDE sets to 96 times the scale when
-# it forces one: the X resources say so, or kcmfonts does without them
-expect_equal "$(scale_env_with 2.25 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE XRDB_OUTPUT=$'Xft.dpi:\t216\n')" \
-  "GDK_SCALE=2 GDK_DPI_SCALE=0.5" "KDE at 2.25, a font DPI of 216 in the X resources"
-expect_equal "$(scale_env_with 1.7 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE XRDB_OUTPUT=$'Xft.dpi:\t163.2\n')" \
-  "GDK_SCALE=2 GDK_DPI_SCALE=0.5" "KDE at 1.7, a font DPI of 163.2"
-printf '[General]\nforceFontDPI=216\n' >"${XDG_CONFIG_HOME}/kcmfonts"
-expect_equal "$(scale_env_with 2.25 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE)" \
-  "GDK_SCALE=2 GDK_DPI_SCALE=0.5" "KDE at 2.25, forceFontDPI in kcmfonts"
-expect_equal "$(scale_env_with 2.25 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE XRDB_OUTPUT=$'Xft.dpi:\t96\n')" \
-  "GDK_SCALE=2 GDK_DPI_SCALE=1.125" "the X resources win over kcmfonts"
-rm -f "${XDG_CONFIG_HOME}/kcmfonts"
-expect_equal "$(scale_env_with 2.25 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE)" \
-  "GDK_SCALE=2 GDK_DPI_SCALE=1.125" "KDE at 2.25, no font DPI set"
-printf '[Xwayland]\nScale=1.7\n' > "${XDG_CONFIG_HOME}/kwinrc"
-reset_calls
-WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE DIALOG_TAB1="$(options_output fullscreen)" DIALOG_TAB2="$(mapping_output)" \
-  edit_app_settings com.example.game 1
-expect_contains "$(<"${T}/yad.notebook.args")" $'\nGDK_SCALE=2\nGDK_DPI_SCALE=0.85' "the tabbed window gets the scale"
-reset_calls
-WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=GNOME DIALOG_TAB1="$(options_output fullscreen)" DIALOG_TAB2="$(mapping_output)" \
-  edit_app_settings com.example.game 1
-expect_contains "$(<"${T}/yad.notebook.args")" $'\nGDK_SCALE=\nGDK_DPI_SCALE=' "and only there"
-echo "ok: the tabbed window scales with KDE's X11 apps"
+expect_contains "$(<"${T}/log")" "python3's GTK 3 bindings are missing" "and why"
+echo "ok: without python3's GTK bindings"
 
 # A yad without --css (Debian's 0.40, whose --gtkrc styles the window alone)
-# gets each window's CSS in a theme of its own: Adwaita, dark as the desktop
-# is, then the CSS, found ahead of the system's themes. The notebook gets one
-# too, to look like its tabs. A GTK_THEME of the user's stays, with the CSS
-# given to the window alone.
+# gives such a window its CSS in a theme of its own: Adwaita, dark as the
+# desktop is, then the CSS, found ahead of the system's themes. A GTK_THEME
+# of the user's stays, with the CSS given to the window alone.
 unset YAD_CSS_OPTION
 export YAD_HELP="  --gtkrc=FILENAME"
 host_color_scheme() { printf 'dark\n'; }
 reset_calls
-DIALOG_TAB1="$(options_output fullscreen)" DIALOG_TAB2="$(mapping_output)" \
-  edit_app_settings com.example.game 1
-tab1="$(<"${T}/yad.tab1.args")"
-tab2="$(<"${T}/yad.tab2.args")"
-notebook="$(<"${T}/yad.notebook.args")"
-[[ "${tab1}${tab2}${notebook}" != *"--css="* ]] || fail "--css for a yad without it"
-expect_contains "${tab1}" $'\nGTK_THEME=ika-density-tab:dark\n' "the density's theme, dark"
-expect_contains "${tab2}" $'\nGTK_THEME=ika-gamepad:dark\n' "the gamepad's"
-expect_contains "${notebook}" $'\nGTK_THEME=ika-window:dark' "the notebook's"
-expect_contains "${tab2}" $'\nXDG_DATA_DIRS='"${CVD_TMP_DIR}/yad-css:" "found first"
+DIALOG_FORM="$(printf '%s|' W)" DIALOG_STATUS=1 edit_app_settings com.example.game 2
+form="$(<"${T}/yad.form.args")"
+[[ "${form}" != *"--css="* ]] || fail "--css for a yad without it"
+expect_contains "${form}" $'\nGTK_THEME=ika-gamepad:dark\n' "the gamepad's theme, dark"
+expect_contains "${form}" $'\nXDG_DATA_DIRS='"${CVD_TMP_DIR}/yad-css:" "found first"
 theme_dir="${CVD_TMP_DIR}/yad-css/themes/ika-gamepad/gtk-3.0"
 expect_equal "$(<"${theme_dir}/gtk-dark.css")" \
   '@import url("resource:///org/gtk/libgtk/theme/Adwaita/gtk-contained-dark.css");'$'\n'"${CONTROLLER_MAPPING_FORM_CSS}" \
   "Adwaita's dark theme, then the CSS"
 expect_contains "$(<"${theme_dir}/gtk.css")" '/Adwaita/gtk-contained.css");' "and the light one"
 reset_calls
-GTK_THEME=Breeze DIALOG_TAB1="$(options_output fullscreen)" DIALOG_TAB2="$(mapping_output)" \
-  edit_app_settings com.example.game 1
-expect_contains "$(<"${T}/yad.tab2.args")" $'\n--gtkrc='"${CVD_TMP_DIR}"$'/yad-css/gamepad.css\n' "the user's theme, with --gtkrc"
-expect_contains "$(<"${T}/yad.tab2.args")" $'\nGTK_THEME=Breeze\n' "the user's theme stays"
+GTK_THEME=Breeze DIALOG_FORM="$(printf '%s|' W)" DIALOG_STATUS=1 edit_app_settings com.example.game 2
+expect_contains "$(<"${T}/yad.form.args")" $'\n--gtkrc='"${CVD_TMP_DIR}"$'/yad-css/gamepad.css\n' "the user's theme, with --gtkrc"
+expect_contains "$(<"${T}/yad.form.args")" $'\nGTK_THEME=Breeze\n' "the user's theme stays"
 unset YAD_HELP YAD_CSS_OPTION
 host_color_scheme() { :; }
+IKA_WINDOW_AVAILABLE=yes
 echo "ok: a yad without --css"
 
 printf 'PASS: tabbed app settings window\n'

@@ -199,9 +199,10 @@ console's density, the desktop's keyboard and mouse and no gamepad.
 The window has these as its **Startup Options** tab, beside a
 **Gamepad Emulation** tab (see
 [Controller mapping per game](#controller-mapping-per-game)), the same
-window for games and other apps. The tabs need
-X11: a Wayland session has it as XWayland, and without it each tab opens as
-a window of its own.
+window for games and other apps. It is a GTK 3 window, native on Wayland
+(GNOME's and KDE's, no XWayland needed) as on X11; it needs python3's GTK
+bindings (python3-gobject, or python3-gi and gir1.2-gtk-3.0 on Debian), which
+the packages install, and without them each tab opens as a window of its own.
 
 ## Keyboard, mouse and gamepads
 

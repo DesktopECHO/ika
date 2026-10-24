@@ -50,7 +50,7 @@
   gamepad in TV mode too, with the keys of `[keyboard_gamepad]`; the host's
   gamepads are the TV remote either way.
 - Each app's entry in the desktop's app menu has a new right-click action,
-  "Startup options", which opens a window (yad) with a checkbox for
+  "Startup options", which opens a window with a checkbox for
   each option the app can start with: fullscreen; the keyboard, the mouse
   and gamepads, each passed through to Android as a HID device
   (`--keyboard=uhid`, `--mouse=uhid`, `--gamepad=uhid`); the keyboard as a
@@ -59,8 +59,10 @@
   apply whenever the app's window opens, from the menu or a terminal. "Apply
   settings" saves the ticked options, "Apply and start" saves them and
   starts the app with them, and Cancel leaves them as they were;
-  `ika app --options NAME` opens the window from a terminal. The packages now depend on yad. A game added
-  to the menu starts with fullscreen ticked.
+  `ika app --options NAME` opens the window from a terminal. The packages
+  now depend on yad and on python3's GTK 3 bindings (python3-gobject;
+  python3-gi and gir1.2-gtk-3.0 on Debian). A game added to the menu starts
+  with fullscreen ticked.
 - The start options include the app window's display density: "Display
   density, 0=Auto", 0 for the console's, else 96 to 999 DPI (a number under
   96 is 96), saved as `dpi =` in the app's section of `app-options.ini`.
@@ -71,21 +73,20 @@
   "Startup Options · APP", the same window for games and other apps;
   `ika app --controller NAME` opens it on the second tab. "Apply settings"
   saves the mapping when it was edited or the app already has one of its
-  own, no longer a copy of ika.ini's when it was not touched. yad draws the
-  tabs on X11, which a Wayland session has as XWayland; without it, each tab
-  opens as a window of its own. "Reset to default" asks "Apply defaults to
-  APP" (Ok, Cancel), then resets the start options too, a game's to
-  fullscreen at the console's density, besides deleting the app's mapping.
+  own, no longer a copy of ika.ini's when it was not touched. The window is
+  GTK 3's, from python3, native on Wayland (GNOME's and KDE's, without
+  XWayland) as on X11, with yad's fields; without python3's GTK bindings,
+  each tab opens as a yad window of its own. "Reset to default" asks
+  "Apply defaults to APP" (Ok, Cancel), then resets the start options too,
+  a game's to fullscreen at the console's density, besides deleting the
+  app's mapping.
 - The Startup Options windows show the Ika icon in GNOME's dock and KDE's
-  task bar, instead of an unknown app's: they have a window class of their
-  own, `ika-startup-options`, which a hidden desktop entry the packages
-  install, `ika-startup-options.desktop`, names.
-- On a KDE Plasma Wayland session whose X11 apps scale themselves, the
-  tabbed window takes the desktop's scale: GDK_SCALE and GDK_DPI_SCALE from
-  `[Xwayland] Scale` in kwinrc (1.7 is 2 and 0.85).
+  task bar, instead of an unknown app's: they have an app ID (Wayland) and
+  window class (X11) of their own, `ika-startup-options`, which a hidden
+  desktop entry the packages install, `ika-startup-options.desktop`, names.
 - The Gamepad Emulation tab, and its window of its own, has a smaller font
-  and lower rows, so that the window fits on a screen 768 pixels high. With
-  Debian's yad 0.40, whose `--gtkrc` styles a window but none of its fields,
+  and lower rows, so that the window fits on a screen 768 pixels high. For
+  the windows of their own, with Debian's yad 0.40, whose `--gtkrc` styles a window but none of its fields,
   that CSS and the display density's narrow box come in a theme of each
   window's own, Adwaita (or Adwaita dark) and then the CSS; before, neither
   reached the fields there. Its explanation is shorter, without SDL's

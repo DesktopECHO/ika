@@ -1,7 +1,7 @@
 #!/usr/bin/bash
 
-# Ika's own window ("Startup options" on Ika's launcher, ika options): a yad
-# notebook, "Startup Options · Ika", with a Startup Options tab of ika.ini's
+# Ika's own window ("Startup options" on Ika's launcher, ika options): ika's
+# GTK 3 window, "Startup Options · Ika", with a Startup Options tab of ika.ini's
 # most used settings and a Gamepad Emulation tab of its keyboard gamepad. It
 # writes only the settings that changed, in place of their lines in ika.ini
 # (ika_ini_set), "Reset to default" writes their built-in values, and
@@ -39,12 +39,11 @@ ini="${CVD_HOME_DIR}/ika.ini"
 [[ -f "${ini}" ]] || fail "no ika.ini was written"
 sed -i -e 's/^dpi = auto$/dpi = 160/' -e 's/^cpus = auto$/cpus = 3/' -e 's/^a = Space$/a = H/' "${ini}"
 
-# A yad stub, which has --css. A tab (--plug) records its arguments in
-# yad.tabN.args and prints DIALOG_TABN; the notebook records its arguments in
-# yad.notebook.args, a form of its own in yad.form.args (printing
-# DIALOG_FORM), and the confirmation in yad.confirm.args. The notebook, a form
-# of its own and the confirmation exit with the next of DIALOG_STATUS, counted
-# in yad.calls; the last one stays. setsid records what it would start.
+# A yad stub, which has --css. A form of its own records its arguments in
+# yad.form.args (printing DIALOG_FORM), and the confirmation in
+# yad.confirm.args. Both exit with the next of DIALOG_STATUS, counted in
+# yad.calls with ika's windows; the last one stays. setsid records what it
+# would start.
 cat >"${T}/bin/yad" <<STUB
 #!/usr/bin/bash
 if [[ "\$1" == "--help-all" ]]; then
@@ -52,24 +51,13 @@ if [[ "\$1" == "--help-all" ]]; then
   exit 0
 fi
 args=" \$* "
-if [[ "\${args}" == *" --plug="* ]]; then
-  for arg in "\$@"; do
-    [[ "\${arg}" != --tabnum=* ]] || tab="\${arg#--tabnum=}"
-  done
-  printf '%s\n' "\$@" > "${T}/yad.tab\${tab}.args"
-  name="DIALOG_TAB\${tab}"
-  printf '%s' "\${!name:-}"
-  exit 0
-fi
 echo >>"${T}/yad.calls"
 read -r -a statuses <<<"\${DIALOG_STATUS:-2}"
 n="\$(wc -l <"${T}/yad.calls")"
 if (( n > \${#statuses[@]} )); then
   n=\${#statuses[@]}
 fi
-if [[ "\${args}" == *" --notebook "* ]]; then
-  printf '%s\n' "\$@" > "${T}/yad.notebook.args"
-elif [[ "\${args}" == *" --form "* ]]; then
+if [[ "\${args}" == *" --form "* ]]; then
   printf '%s\n' "\$@" > "${T}/yad.form.args"
   printf '%s' "\${DIALOG_FORM:-}"
 else
@@ -89,7 +77,46 @@ source "${ROOT}/tools/ika"
 log() { printf '%s\n' "$*" >>"${T}/log"; }
 respond() { printf '%s\n' "$*" >>"${T}/respond"; }
 host_color_scheme() { :; }
-export DISPLAY=":0"
+
+# ika's window, stubbed as in test_ika_app_settings_window.sh: its own
+# arguments in window.args, each tab's in window.tabN.args, DIALOG_TABN
+# written to that tab's --output, the next of DIALOG_STATUS as its exit
+# status; with WINDOW_DEFAULTS set, the real program writes the outputs.
+eval "real_$(declare -f ika_window)"
+ika_window() {
+  local -n stub_env_ref="$1"
+  shift
+  local arg name n
+  local tab=0
+  local -a statuses=()
+
+  : >"${T}/window.args"
+  for arg in "$@"; do
+    if [[ "${arg}" == --tab=* ]]; then
+      tab=$((tab + 1))
+      : >"${T}/window.tab${tab}.args"
+    fi
+    if (( tab == 0 )); then
+      printf '%s\n' "${arg}" >>"${T}/window.args"
+    else
+      printf '%s\n' "${arg}" >>"${T}/window.tab${tab}.args"
+    fi
+    if [[ "${arg}" == --output=* ]]; then
+      name="DIALOG_TAB${tab}"
+      printf '%s' "${!name:-}" >"${arg#--output=}"
+    fi
+  done
+  echo >>"${T}/yad.calls"
+  read -r -a statuses <<<"${DIALOG_STATUS:-2}"
+  n="$(wc -l <"${T}/yad.calls")"
+  (( n <= ${#statuses[@]} )) || n=${#statuses[@]}
+  if [[ -n "${WINDOW_DEFAULTS:-}" ]]; then
+    real_ika_window stub_env_ref --print-defaults --test-status="${statuses[n - 1]}" "$@"
+    return
+  fi
+  return "${statuses[n - 1]}"
+}
+IKA_WINDOW_AVAILABLE=yes
 
 # ika_ini_set writes a key in place of its lines, whatever their case, keeping
 # comments and every other line; adds a missing key after its section's last
@@ -135,13 +162,13 @@ ika_ini_load "${ini}"
 echo "ok: ika_ini_set"
 
 # The window: the two tabs, under "Startup Options · Ika", with the Ika
-# icon's window class and the buttons; the settings of ika.ini, 0 for auto;
+# icon's app ID and the buttons; the settings of ika.ini, 0 for auto;
 # ika.ini's keyboard gamepad, with a key of the user's moved off its default
 reset_calls() {
   : >"${T}/yad.calls"
   : >"${T}/respond"
   : >"${T}/setsid"
-  rm -f "${T}"/yad.*.args
+  rm -f "${T}"/yad.*.args "${T}"/window*.args
 }
 
 # The Startup Options tab's output: the vCPUs, the memory, the densities and
@@ -208,25 +235,28 @@ shown_tab1="$(options_output 3.000000 0.000000 160.000000 0.000000 0.000000 Auto
 reset_calls
 cp "${ini}" "${T}/before.ini"
 DIALOG_TAB1="${shown_tab1}" DIALOG_TAB2="$(mapping_output ini_keys)" edit_ika_settings
-notebook="$(<"${T}/yad.notebook.args")"
-tab1="$(<"${T}/yad.tab1.args")"
-tab2="$(<"${T}/yad.tab2.args")"
-expect_contains "${notebook}" $'--name=ika-startup-options\n--class=ika-startup-options\n--notebook\n' "the Ika icon's class"
-expect_contains "${notebook}" $'\n--tab=Startup Options\n--tab=Gamepad Emulation\n--active-tab=1\n' "the two tabs, on the first"
-expect_contains "${notebook}" $'\n--title=Startup Options · Ika\n' "the title"
-expect_contains "${notebook}" $'--button=Reset to default:4\n--button=Apply settings:2\n--button=      Apply and restart      :0\n--button=Cancel:1' \
+window="$(<"${T}/window.args")"
+tab1="$(<"${T}/window.tab1.args")"
+tab2="$(<"${T}/window.tab2.args")"
+expect_contains "${window}" $'\n--icon='"${IKA_MENU_ICON}"$'\n--app-id=ika-startup-options\n' "the Ika icon's app ID"
+expect_contains "${window}" $'\n--active-tab=1\n' "on the first tab"
+expect_contains "${tab1}" $'--tab=Startup Options\n' "the Startup Options tab"
+expect_contains "${tab2}" $'--tab=Gamepad Emulation\n' "then the Gamepad Emulation tab"
+expect_contains "${window}" $'--title=Startup Options · Ika\n' "the title"
+expect_contains "${window}" $'--button=Reset to default:4\n--button=Apply settings:2\n--button=Apply and restart:0\n--button=Cancel:1' \
   "the buttons, in order"
 expect_contains "${tab1}" $'\n--field=Desktop display density, 0=Auto  :NUM\n160!0..999!8\n' "ika.ini's desktop density"
 expect_contains "${tab1}" $'\n--field=TV display density, 0=Auto  :NUM\n0!0..999!8\n' "auto as 0"
-expect_contains "${tab1}" $'--css='"${CVD_TMP_DIR}"$'/yad-css/ika-options.css\n--field=CPUs, 0=Auto  :NUM\n3!0..' "the vCPUs first"
+expect_contains "${tab1}" $'\n--border='"${APP_OPTIONS_TAB_BORDER_PX}"$'\n--field=CPUs, 0=Auto  :NUM\n3!0..' "the vCPUs first"
 expect_contains "${tab1}" $'!1\n--field=RAM, MB, 0=Auto  :NUM\n0!0..' "then the memory"
 expect_contains "${tab1}" $'\n--field=GPU mode  :CB\n^Auto!gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES only!guest_swiftshader\n' "the GPU modes, Auto first"
 expect_contains "${tab1}" $'\n--field=Hardware video decoding  :CB\n^Auto!Off\n' "video decoding"
 expect_contains "${tab1}" $'\n--field=Low-CPU mode  :CB\n^Auto!On!Off\n' "low-CPU mode"
 expect_contains "${tab1}" $'\n--field=  Start with the camera:CHK\nFALSE\n--field=  Enable gamepad emulation in TV mode:CHK\nFALSE\n' \
   "the camera, then the TV gamepad, off"
-expect_contains "${tab1}" $'\n--css='"${CVD_TMP_DIR}"$'/yad-css/ika-options.css\n' "narrow boxes"
-expect_contains "${tab2}" $'\n--css='"${CVD_TMP_DIR}"$'/yad-css/gamepad.css\n' "the gamepad tab as an app's"
+[[ "${window}${tab1}${tab2}" != *"--css="* ]] || fail "yad's CSS for ika's window"
+expect_contains "${tab2}" $'\n--compact\n--columns=2\n--border='"${CONTROLLER_MAPPING_TAB_BORDER_PX}"$'\n--align=right\n' \
+  "the gamepad tab as an app's"
 expect_contains "${tab2}" $'\n--field=\xe2\x80\x87\xe2\x80\x87A\xc2\xa0:\xc2\xa0\nH\n' "ika.ini's key for A"
 cmp -s "${T}/before.ini" "${ini}" || fail "Apply settings with nothing changed wrote ika.ini"
 expect_equal "$(<"${T}/respond")" "ika.ini left as it was" "and said so"
@@ -263,11 +293,11 @@ cp "${ini}" "${T}/before.ini"
 DIALOG_TAB1="$(tab1_with "gfxstream, OpenGL ES only")" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" \
   edit_ika_settings
 expect_equal "$( { diff "${T}/before.ini" "${ini}" || true; } | grep '^>')" "> gfxstream_vulkan = off" "OpenGL ES only"
-expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=GPU mode  :CB\nAuto!gfxstream_guest_angle!^gfxstream!' "shown as gfxstream before"
+expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=GPU mode  :CB\nAuto!gfxstream_guest_angle!^gfxstream!' "shown as gfxstream before"
 reset_calls
 DIALOG_TAB1="$(tab1_with "gfxstream, OpenGL ES only")" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" \
   edit_ika_settings
-expect_contains "$(<"${T}/yad.tab1.args")" $'!^gfxstream, OpenGL ES only!' "and as OpenGL ES only after"
+expect_contains "$(<"${T}/window.tab1.args")" $'!^gfxstream, OpenGL ES only!' "and as OpenGL ES only after"
 reset_calls
 cp "${ini}" "${T}/before.ini"
 DIALOG_TAB1="$(tab1_with gfxstream)" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" edit_ika_settings
@@ -293,7 +323,7 @@ ika_ini_set gpu gpu_mode gfxstream_guest_angle
 reset_calls
 cp "${ini}" "${T}/before.ini"
 DIALOG_TAB1="$(tab1_with gfxstream_guest_angle)" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" edit_ika_settings
-expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=GPU mode  :CB\nAuto!^gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES only!guest_swiftshader\n' \
+expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=GPU mode  :CB\nAuto!^gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES only!guest_swiftshader\n' \
   "gfxstream_guest_angle shown selected"
 cmp -s "${T}/before.ini" "${ini}" || fail "an untouched gfxstream_guest_angle was changed"
 echo "ok: Auto"
@@ -309,7 +339,7 @@ grep -qx "device = auto" "${ini}" || fail "the camera ticked did not write devic
 ika_ini_set camera device video2
 reset_calls
 DIALOG_TAB1="$(camera_tab1 TRUE)" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" edit_ika_settings
-expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=  Start with the camera:CHK\nTRUE\n' "a camera of ika.ini's is shown ticked"
+expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=  Start with the camera:CHK\nTRUE\n' "a camera of ika.ini's is shown ticked"
 grep -qx "device = video2" "${ini}" || fail "a camera ika.ini names did not stay"
 reset_calls
 DIALOG_TAB1="$(camera_tab1 FALSE)" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" edit_ika_settings
@@ -340,20 +370,32 @@ for line in "dpi = auto" "cpus = auto" "gpu_mode = auto" "gfxstream_vulkan = aut
     "mode = auto" "device = off" "tv_keyboard_gamepad = false" "a = Space" "right_stick_left = J"; do
   grep -qxF "${line}" "${ini}" || fail "Reset to default did not write '${line}'"
 done
-expect_contains "$(<"${T}/yad.notebook.args")" $'\n--active-tab=1\n' "back on the first tab"
-expect_contains "$(<"${T}/yad.tab1.args")" $'\n--field=Desktop display density, 0=Auto  :NUM\n0!0..999!8\n' "with the defaults"
+expect_contains "$(<"${T}/window.args")" $'\n--active-tab=1\n' "back on the first tab"
+expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=Desktop display density, 0=Auto  :NUM\n0!0..999!8\n' "with the defaults"
 expect_equal "$(tail -1 "${T}/respond")" "ika.ini has Ika's default start options and keyboard gamepad again" "and said so"
 echo "ok: Reset to default"
 
-# Without an X display, the Startup Options tab is a window of its own
+# ika's own program shows ika.ini as it is: applied untouched, the window
+# writes nothing (it prints whole numbers, where yad has decimals)
 reset_calls
-unset DISPLAY
+cp "${ini}" "${T}/before.ini"
+WINDOW_DEFAULTS=1 edit_ika_settings
+cmp -s "${T}/before.ini" "${ini}" || fail "ika's program, applied untouched, changed ika.ini: $(diff "${T}/before.ini" "${ini}")"
+expect_equal "$(<"${T}/respond")" "ika.ini left as it was" "and said so"
+echo "ok: ika's program, applied untouched"
+
+# Without python3's GTK bindings, the Startup Options tab is a window of its
+# own
+reset_calls
+IKA_WINDOW_AVAILABLE=no
 DIALOG_FORM="$(options_output 0.000000 0.000000 0.000000 0.000000 0.000000 Auto Auto Auto FALSE TRUE)" \
   edit_ika_settings
+[[ ! -e "${T}/window.args" ]] || fail "the tabbed window opened without GTK's bindings"
 expect_contains "$(<"${T}/yad.form.args")" $'\n--title=Startup Options · Ika\n' "the window of its own"
+expect_contains "$(<"${T}/yad.form.args")" $'\n--css='"${CVD_TMP_DIR}"$'/yad-css/ika-options.css\n' "with narrow boxes"
 grep -qx "tv_keyboard_gamepad = true" "${ini}" || fail "the window of its own did not save"
-export DISPLAY=":0"
-echo "ok: without an X display"
+IKA_WINDOW_AVAILABLE=yes
+echo "ok: without python3's GTK bindings"
 
 # tv_keyboard_gamepad: the TV console makes the keyboard a gamepad too, with
 # ika.ini's keys; not by default, and never on the desktop console
