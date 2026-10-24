@@ -38,6 +38,18 @@ source "${ROOT}/tools/ika"
 log() { printf '%s\n' "$*" >>"${T}/log"; }
 notify_user() { :; }
 
+# The device is never reached. On a host where Ika runs, 127.0.0.1:6520 (the
+# serial stubbed below) is the live one, and an app window's title lookup asked
+# it for its apps, which replaced the app list cached here. adb and scrcpy
+# fail, as with no device.
+cat >"${T}/bin/no-device" <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+chmod +x "${T}/bin/no-device"
+resolve_adb_bin() { printf '%s\n' "${T}/bin/no-device"; }
+SCRCPY_BIN="${T}/bin/no-device"
+
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
   exit 1
