@@ -1,0 +1,33 @@
+regenerate.sh applies this to its copy of Mesa's
+src/gfxstream/hermetic/android/gfxstream_workaround.txt, the hand-written
+modules the converter appends to the root Android.bp.
+
+aosp_mesa3d.toml builds the device drivers without virtgpu_kumquat, so the
+kumquat FFI and Vulkan mapper exist only for the host test builds; link them
+into mesa_platform_virtgpu only there. On Android the platform library keeps
+Mesa's kumquat stub. Upstream links them everywhere, which pulls
+libmagma_gpu into the device build, and that needs rustix::thread::futex,
+which the ROM's rustix (libc backend, no thread feature) does not have.
+
+--- a/gfxstream_workaround.txt
++++ b/gfxstream_workaround.txt
+@@ -126,8 +126,6 @@ cc_library_static {
+         "platform_virtgpu",
+         "platform_virtgpu_kumquat",
+         "platform_virtgpu_drm",
+-        "libvirtgpu_kumquat_ffi",
+-        "gfxstream_vulkan_mapper",
+     ],
+     static_libs: [
+         "mesa_util",
+@@ -143,6 +141,10 @@ cc_library_static {
+     target: {
+         host: {
+             compile_multilib: "64",
++            whole_static_libs: [
++                "libvirtgpu_kumquat_ffi",
++                "gfxstream_vulkan_mapper",
++            ],
+         },
+         android: {
+             shared_libs: [
