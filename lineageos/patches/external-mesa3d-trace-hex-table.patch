@@ -1,0 +1,24 @@
+Patch summary:
+Spell gallium's trace hex table as a character list. A 16-byte array
+initialized from a 16-character string has no room for the terminator,
+which clang 22 reports as -Wunterminated-string-initialization; Soong
+silences it for device code but not for the host lavapipe that goes into
+the Cuttlefish host package, where Mesa's flags make it an error. Upstream
+Mesa main still has the string form.
+
+diff --git a/src/gallium/auxiliary/driver_trace/tr_dump.c b/src/gallium/auxiliary/driver_trace/tr_dump.c
+index 45d1920eaef813438b0d7ef5d493177890095ed7..395d3ddd683f025dd1c9fc892d5d6b398a5c85e7 100644
+--- a/src/gallium/auxiliary/driver_trace/tr_dump.c
++++ b/src/gallium/auxiliary/driver_trace/tr_dump.c
+@@ -479,7 +479,10 @@ void trace_dump_float(double value)
+ void trace_dump_bytes(const void *data,
+                       size_t size)
+ {
+-   static const char hex_table[16] = "0123456789ABCDEF";
++   static const char hex_table[16] = {
++      '0', '1', '2', '3', '4', '5', '6', '7',
++      '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
++   };
+    const uint8_t *p = data;
+    size_t i;
+ 

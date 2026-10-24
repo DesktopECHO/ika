@@ -222,8 +222,12 @@
   properties); the conformance-only ones it lacks are dropped: global
   priority emulation, protected-pipeline and video format masking, EAC
   transfer bits, device-creation unwinding and the acquire-unmodified
-  extension. `lineageos/scripts/mesa3d/regenerate.sh` writes the Android
-  build files for a new Mesa pin. This arrives with the next ROM build.
+  extension. A third patch keeps clang 22 from failing the host lavapipe on
+  the trace code's hex table. The guest drivers no longer include
+  virtgpu_kumquat, gfxstream's VM-less test transport, which Ika never
+  used and whose new Rust code needs a rustix the ROM does not have.
+  `lineageos/scripts/mesa3d/regenerate.sh` writes the Android build files
+  for a new Mesa pin. This arrives with the next ROM build.
 
 ### Console window
 - The console and app windows are Wayland windows on a Wayland session and

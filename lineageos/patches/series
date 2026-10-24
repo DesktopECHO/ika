@@ -28,6 +28,7 @@ external/deqp-deps/glslang patches/external-deqp-deps-glslang-validator-host.pat
 external/mesa3d patches/external-mesa3d.patch
 external/mesa3d patches/external-mesa3d-gfxstream-sync2-ahb-layouts.patch
 external/mesa3d patches/external-mesa3d-gfxstream-descriptor-deepcopy-filter.patch
+external/mesa3d patches/external-mesa3d-trace-hex-table.patch
 external/libavc patches/external-libavc-encoder-max-size.patch
 external/libavc patches/external-libavc-vbr-vbv-floor.patch
 external/v4l2_codec2 patches/external-v4l2_codec2-virtio-media.patch
