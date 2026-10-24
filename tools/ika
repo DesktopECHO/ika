@@ -2216,9 +2216,9 @@ App windows:
   "Reset to default", once confirmed, resets the start options (a game's to
   "Fullscreen mode", at the console's density) and removes the game's
   mapping, so that it has ika.ini's. '${SCRIPT_NAME} app --controller NAME'
-  opens the window on that tab. yad draws the tabs on X11,
-  which Wayland sessions have as XWayland; without it, each tab opens as a
-  window of its own.
+  opens the window on that tab. The window is GTK 3's (python3 with its GTK
+  bindings), native on Wayland and X11 alike; without the bindings each tab
+  opens as a window of its own (yad).
 
 Installing and removing apps:
 
@@ -6183,16 +6183,18 @@ yad_css() {
 
 # yad stretches a form's fields across their column, the display density's
 # spin box too. A margin on its right keeps it about as wide as three digits
-# and its buttons: so many pixels in the start options window, as wide as its
-# checkboxes, and in the tabbed window, as wide as the gamepad tab, less its
-# borders.
+# and its buttons in the start options window of its own, as wide as its
+# checkboxes.
 APP_DPI_FIELD_MARGIN_PX=330
-APP_DPI_TAB_MARGIN_PX=480
 # The Startup Options tab's border, about two characters: its fields start
 # that far in from the tab's frame, as the window's start in from its edge.
 APP_OPTIONS_TAB_BORDER_PX=20
+# The Gamepad Emulation tab's, smaller: its rows are closer as well (--compact)
+# for the window to fit on a screen 768 pixels high.
+CONTROLLER_MAPPING_TAB_BORDER_PX=8
 # The gamepad's controls and settings in a smaller font, in lower rows, so
-# that their window fits on a screen 768 pixels high.
+# that their window of its own fits on a screen 768 pixels high (ika's
+# window has the same as --compact).
 CONTROLLER_MAPPING_FORM_CSS='window { font-size: 85%; }
 entry, spinbutton, combobox button { min-height: 20px; padding-top: 1px; padding-bottom: 1px; }
 spinbutton button { min-height: 0; padding-top: 0; padding-bottom: 0; }'
@@ -6264,8 +6266,8 @@ save_app_options_form() {
 # app's package when its label is unknown). "Apply settings" saves the ticked
 # options and the display density, "Apply and start" saves them and starts the
 # app with them, and Cancel, or closing the window, leaves the saved ones as
-# they are. edit_app_settings' window has it as a tab; this one is for
-# sessions without an X display.
+# they are. edit_app_settings' window has it as a tab; this one is for hosts
+# without python3's GTK 3 bindings.
 edit_app_options() {
   local name="$1"
   local package
@@ -6804,76 +6806,328 @@ edit_controller_mapping() {
   fi
 }
 
-# Prints the font DPI GTK 3 reads on this X11 display, 96 unless the desktop
-# sets another: the Xft.dpi of the X resources, else forceFontDPI of KDE's
-# kcmfonts. KDE sets it to 96 times the scale of the screen when it forces the
-# font DPI (216 at a scale of 2.25), and GTK 3 sizes its text by it.
-x11_font_dpi() {
-  local dpi=""
-  local xauthority="${XAUTHORITY:-}"
+# The program of ika's window, in Python: yad's form fields in the tabs of a
+# GTK 3 window (Gtk.Notebook), native on Wayland as on X11, where yad's own
+# tabbed window (--notebook) needs X11 and so XWayland. Its arguments are
+# described at its start; ika_window runs it.
+ika_window_py() {
+  cat <<'PYTHON'
+import json
+import sys
 
-  if command -v xrdb >/dev/null 2>&1; then
-    [[ -n "${xauthority}" ]] \
-      || xauthority="$(ls "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/xauth_* 2>/dev/null | head -1)"
-    dpi="$(env ${xauthority:+XAUTHORITY="${xauthority}"} xrdb -query 2>/dev/null \
-      | awk '$1 == "Xft.dpi:" { print $2; exit }')"
-  fi
-  if [[ ! "${dpi}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-    dpi="$(awk -F= '
-      { sub(/\r$/, "") }
-      /^\[/ { in_group = ($0 == "[General]"); next }
-      in_group && $1 == "forceFontDPI" { print $2; exit }' \
-      "${XDG_CONFIG_HOME:-${HOME}/.config}/kcmfonts" 2>/dev/null)"
-  fi
-  awk -v dpi="${dpi}" 'BEGIN { print (dpi + 0 > 0 ? dpi : 96) }'
+# yad's form fields, in tabs of a GTK 3 window of its own (Gtk.Notebook), which
+# runs natively on Wayland and X11 alike, unlike yad's notebook (XEmbed).
+#
+#   --title=TEXT --icon=NAME --app-id=ID --active-tab=N
+#   --button=LABEL:CODE ...
+#   then, per tab: --tab=NAME --output=FILE [--columns=N] [--align=right]
+#   [--text=MARKUP] [--border=PX] [--compact] [--field=LABEL:TYPE VALUE]...
+#
+# A field's TYPE is NUM (VALUE "N!MIN..MAX!STEP"), CB ("a!^b!c", ^ the chosen
+# one), CHK (TRUE or FALSE), LBL (LABEL is markup), or anything else for a
+# text entry; yad splits LABEL from TYPE at the last colon. Fields fill the
+# columns in turn, the first ceil(n / N) the first column. A button, or
+# closing the window (252, as Escape), writes each tab's values to its
+# output as yad prints them, each followed by "|", and exits with its code.
+# --parse-only prints what was parsed, as JSON, and --print-defaults writes
+# the outputs as the window would show them, then exits with
+# --test-status=CODE: neither needs a display.
+
+
+def parse(argv):
+    window = {"title": "", "icon": "", "app_id": "", "active_tab": 1,
+              "buttons": [], "tabs": [], "mode": "", "test_status": 0}
+    tab = None
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        name, _, value = arg.partition("=")
+        if name == "--field":
+            if tab is None:
+                raise SystemExit("ika window: --field before --tab")
+            label, colon, ftype = value.rpartition(":")
+            if not colon:
+                label, ftype = value, ""
+            field_value = argv[i + 1] if i + 1 < len(argv) else ""
+            tab["fields"].append({"label": label, "type": ftype, "value": field_value})
+            i += 2
+            continue
+        i += 1
+        if name == "--tab":
+            tab = {"name": value, "output": "", "columns": 1, "align": "left",
+                   "text": "", "border": 0, "compact": False, "fields": []}
+            window["tabs"].append(tab)
+        elif tab is not None and name in ("--output", "--align", "--text"):
+            tab[name[2:]] = value
+        elif tab is not None and name in ("--columns", "--border"):
+            tab[name[2:]] = max(int(value or 0), 1 if name == "--columns" else 0)
+        elif tab is not None and name == "--compact":
+            tab["compact"] = True
+        elif name == "--button":
+            label, _, code = value.rpartition(":")
+            window["buttons"].append({"label": label.strip(), "code": int(code)})
+        elif name == "--active-tab":
+            window["active_tab"] = int(value or 1)
+        elif name == "--test-status":
+            window["test_status"] = int(value or 0)
+        elif name in ("--title", "--icon", "--app-id"):
+            window[name[2:].replace("-", "_")] = value
+        elif name in ("--parse-only", "--print-defaults"):
+            window["mode"] = name[2:]
+        else:
+            raise SystemExit("ika window: unknown argument " + arg)
+    return window
+
+
+def number_spec(value):
+    """N!MIN..MAX!STEP as numbers, yad's defaults where missing."""
+    parts = value.split("!")
+    number = float(parts[0] or 0)
+    low, high, step = 0.0, 65535.0, 1.0
+    if len(parts) > 1 and ".." in parts[1]:
+        low_text, _, high_text = parts[1].partition("..")
+        low, high = float(low_text or 0), float(high_text or 0)
+    if len(parts) > 2 and parts[2]:
+        step = float(parts[2])
+    return number, low, high, step
+
+
+def choices(value):
+    """The choices of CB's VALUE, and the index of the one marked with ^."""
+    items = []
+    active = 0
+    for item in value.split("!"):
+        if item.startswith("^"):
+            active = len(items)
+            item = item[1:]
+        items.append(item)
+    return items, active
+
+
+def default_value(field):
+    """What the window shows for FIELD before it is changed, as yad prints it."""
+    ftype = field["type"]
+    if ftype == "LBL":
+        return ""
+    if ftype == "NUM":
+        return str(int(number_spec(field["value"])[0]))
+    if ftype == "CB":
+        items, active = choices(field["value"])
+        return items[active] if items else ""
+    if ftype == "CHK":
+        return "TRUE" if field["value"].upper() == "TRUE" else "FALSE"
+    return field["value"]
+
+
+def write_outputs(window, values):
+    for tab, tab_values in zip(window["tabs"], values):
+        if tab["output"]:
+            with open(tab["output"], "w", encoding="utf-8") as output:
+                output.write("".join(value + "|" for value in tab_values) + "\n")
+
+
+CSS = b"""
+.ika-compact { font-size: 85%; }
+.ika-compact entry, .ika-compact spinbutton, .ika-compact combobox button {
+  min-height: 20px; padding-top: 1px; padding-bottom: 1px; }
+.ika-compact spinbutton button { min-height: 0; padding-top: 0; padding-bottom: 0; }
+"""
+
+
+def run(window):
+    from gi.repository import GLib
+    if window["app_id"]:
+        # The app ID on Wayland, the class on X11: the desktop entry of that
+        # name gives the window its icon in the dock and the task bar
+        GLib.set_prgname(window["app_id"])
+    import gi
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("Gdk", "3.0")
+    from gi.repository import Gdk, Gtk
+    if window["app_id"]:
+        Gdk.set_program_class(window["app_id"])
+
+    provider = Gtk.CssProvider()
+    provider.load_from_data(CSS)
+    Gtk.StyleContext.add_provider_for_screen(
+        Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    readers = []
+    result = {"code": 252}
+
+    def finish(code):
+        write_outputs(window, [[read() for read in tab_readers] for tab_readers in readers])
+        result["code"] = code
+        Gtk.main_quit()
+
+    gtk_window = Gtk.Window(title=window["title"])
+    if window["icon"]:
+        gtk_window.set_icon_name(window["icon"])
+        Gtk.Window.set_default_icon_name(window["icon"])
+    gtk_window.set_position(Gtk.WindowPosition.CENTER)
+    gtk_window.connect("delete-event", lambda *_: finish(252) or True)
+    gtk_window.connect(
+        "key-press-event",
+        lambda _, event: (finish(252) or True) if event.keyval == Gdk.KEY_Escape else False)
+
+    notebook = Gtk.Notebook()
+    if len(window["tabs"]) < 2:
+        notebook.set_show_tabs(False)
+        notebook.set_show_border(False)
+    for tab in window["tabs"]:
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        page.set_border_width(tab["border"])
+        if tab["compact"]:
+            page.get_style_context().add_class("ika-compact")
+        if tab["text"]:
+            text = Gtk.Label()
+            text.set_markup(tab["text"])
+            text.set_justify(Gtk.Justification.CENTER)
+            page.pack_start(text, False, False, 0)
+        fields = tab["fields"]
+        columns = tab["columns"]
+        rows = -(-len(fields) // columns) if fields else 0
+        stretch = columns > 1
+        # Several columns are a grid, as yad's; one is rows of their own, a
+        # label and its field beside it, the labels as wide as the widest,
+        # so that a checkbox or a label across the row widens no column
+        row_spacing = 3 if tab["compact"] else 5
+        grid = Gtk.Grid(row_spacing=row_spacing, column_spacing=8)
+        rows_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=row_spacing)
+        captions = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        page.pack_start(grid if stretch else rows_box, False, False, 0)
+
+        def place(widget, row, x, width, caption=None):
+            if stretch:
+                if caption is not None:
+                    grid.attach(caption, x, row, 1, 1)
+                    grid.attach(widget, x + 1, row, 1, 1)
+                else:
+                    grid.attach(widget, x, row, width, 1)
+            elif caption is not None:
+                line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                captions.add_widget(caption)
+                line.pack_start(caption, False, False, 0)
+                line.pack_start(widget, widget.get_hexpand(), widget.get_hexpand(), 0)
+                rows_box.pack_start(line, False, False, 0)
+            else:
+                rows_box.pack_start(widget, False, False, 0)
+
+        tab_readers = []
+        for index, field in enumerate(fields):
+            row, column = index % rows, index // rows
+            x = column * 2
+            label, ftype, value = field["label"], field["type"], field["value"]
+            if ftype == "LBL":
+                widget = Gtk.Label()
+                widget.set_markup(label)
+                widget.set_xalign(0)
+                place(widget, row, x, 2)
+                tab_readers.append(lambda: "")
+                continue
+            if ftype == "CHK":
+                widget = Gtk.CheckButton(label=label)
+                widget.set_active(value.upper() == "TRUE")
+                place(widget, row, x, 2)
+                tab_readers.append(lambda w=widget: "TRUE" if w.get_active() else "FALSE")
+                continue
+            caption = Gtk.Label(label=label)
+            caption.set_xalign(1 if tab["align"] == "right" else 0)
+            if ftype == "NUM":
+                number, low, high, step = number_spec(value)
+                widget = Gtk.SpinButton.new_with_range(low, high, step)
+                widget.set_digits(0)
+                widget.set_value(number)
+                widget.set_width_chars(max(len(str(int(high))), 3))
+                tab_readers.append(lambda w=widget: str(w.get_value_as_int()))
+            elif ftype == "CB":
+                items, active = choices(value)
+                widget = Gtk.ComboBoxText()
+                for item in items:
+                    widget.append_text(item)
+                widget.set_active(active)
+                tab_readers.append(lambda w=widget: w.get_active_text() or "")
+            else:
+                widget = Gtk.Entry()
+                widget.set_text(value)
+                widget.set_width_chars(18)
+                widget.set_activates_default(True)
+                tab_readers.append(lambda w=widget: w.get_text())
+            if stretch or ftype not in ("NUM", "CB"):
+                widget.set_hexpand(True)
+            else:
+                widget.set_halign(Gtk.Align.START)
+            # The second column's labels a little apart from the first's fields
+            if column:
+                caption.set_margin_start(24)
+            place(widget, row, x, 1, caption)
+        readers.append(tab_readers)
+        notebook.append_page(page, Gtk.Label(label=tab["name"]))
+
+    # The buttons as wide as each other, across the window's width
+    buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, homogeneous=True)
+    for button in window["buttons"]:
+        widget = Gtk.Button(label=button["label"])
+        widget.connect("clicked", lambda _, code=button["code"]: finish(code))
+        buttons.pack_start(widget, True, True, 0)
+
+    content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+    content.set_border_width(12)
+    content.pack_start(notebook, True, True, 0)
+    content.pack_start(buttons, False, False, 0)
+    gtk_window.add(content)
+    gtk_window.show_all()
+    notebook.set_current_page(max(window["active_tab"], 1) - 1)
+    Gtk.main()
+    return result["code"]
+
+
+def main(argv):
+    window = parse(argv)
+    if window["mode"] == "parse-only":
+        print(json.dumps(window, indent=1, ensure_ascii=False))
+        return 0
+    if window["mode"] == "print-defaults":
+        write_outputs(window, [[default_value(field) for field in tab["fields"]]
+                               for tab in window["tabs"]])
+        return window["test_status"]
+    return run(window)
+
+
+sys.exit(main(sys.argv[1:]))
+PYTHON
 }
 
-# Prints GDK_SCALE and GDK_DPI_SCALE assignments, one per line, for yad's
-# tabbed window on XWayland in a KDE Plasma Wayland session whose X11 apps
-# apply scaling themselves ([Xwayland] Scale in kwinrc, such as 1.7 on a
-# HiDPI screen): KWin leaves their windows unscaled, and GTK 3 reads no scale
-# of its own there. GTK 3 scales a window by a whole number, so the scale is
-# rounded for the window and the rest goes to its text, which GTK sizes by the
-# font DPI (x11_font_dpi) as well: at the default 96, 1.7 is GDK_SCALE=2 and
-# GDK_DPI_SCALE=0.85, and at a font DPI of 96 times the scale, which KDE sets
-# when it forces one, 2.25 is GDK_SCALE=2 and GDK_DPI_SCALE=0.5, so that text
-# is the size of the desktop's own. Nothing on other desktops, at a scale of
-# 1, or when GDK_SCALE is set already.
-xwayland_gdk_scale_env() {
-  local scale
-  local font_dpi
-
-  [[ -n "${WAYLAND_DISPLAY:-}" && -z "${GDK_SCALE:-}" ]] || return 0
-  [[ ":${XDG_CURRENT_DESKTOP:-}:" == *:KDE:* ]] || return 0
-  scale="$(awk -F= '
-    { sub(/\r$/, "") }
-    /^\[/ { in_group = ($0 == "[Xwayland]"); next }
-    in_group && $1 == "Scale" { print $2; exit }' \
-    "${XDG_CONFIG_HOME:-${HOME}/.config}/kwinrc" 2>/dev/null)"
-  [[ "${scale}" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 0
-  font_dpi="$(x11_font_dpi)"
-  awk -v scale="${scale}" -v font_dpi="${font_dpi}" 'BEGIN {
-    if (scale <= 1) {
-      exit
-    }
-    whole = int(scale + 0.5)
-    printf "GDK_SCALE=%d\nGDK_DPI_SCALE=%.4g\n", whole, 96 * scale / (whole * font_dpi)
-  }'
+# Whether ika's window can open: python3 with GTK 3's bindings (python3-gobject
+# and gtk3 on Fedora, python3-gi and gir1.2-gtk-3.0 on Debian), which the
+# packages depend on.
+ika_window_available() {
+  if [[ -z "${IKA_WINDOW_AVAILABLE:-}" ]]; then
+    if python3 -I -c 'import gi; gi.require_version("Gtk", "3.0")' >/dev/null 2>&1; then
+      IKA_WINDOW_AVAILABLE=yes
+    else
+      IKA_WINDOW_AVAILABLE=no
+    fi
+  fi
+  [[ "${IKA_WINDOW_AVAILABLE}" == "yes" ]]
 }
 
-# Whether yad can draw the tabbed window: its notebook embeds each tab's form
-# with XEmbed, which GTK 3 has on X11 only. On an X11 session that is the
-# display itself; a Wayland session runs it on XWayland, whose display the
-# session sets in DISPLAY.
-yad_tabs_available() {
-  [[ -n "${DISPLAY:-}" ]]
+# Runs ika's window (ika_window_py) with the environment of the array named
+# ENV_VAR and the arguments that follow; its exit status is the code of the
+# button that closed it, 252 when it was closed otherwise. The program comes
+# on its standard input, which keeps its command line short in ps.
+ika_window() {
+  local -n ika_window_env_ref="$1"
+  shift
+  ika_window_py | env "${ika_window_env_ref[@]}" python3 -I - "$@"
 }
 
 # "Startup options" on a launcher (ika app --options NAME: TAB 1) and ika
 # app --controller NAME (TAB 2): an app's start options and controller mapping
 # in one window, "Startup Options · LABEL", with a tab for each, Startup
 # Options and Gamepad Emulation, opened on TAB, the same for games and other
-# apps. Without an X display each tab opens as a window of its own.
+# apps: ika's window (ika_window), native on Wayland and X11. Without
+# python3's GTK 3 bindings each tab opens as a window of its own (yad).
 #
 # "Apply settings" saves the start options and the display density, and the
 # mapping when it was edited or the app has one of its own: an untouched
@@ -6889,7 +7143,6 @@ edit_app_settings() {
   local tab="${2:-1}"
   local package
   local label
-  local key
   local status=0
   local option
   local dpi
@@ -6905,25 +7158,15 @@ edit_app_settings() {
   local -a fields1=()
   local -a fields2=()
   local -a yad_env=()
-  local -a scale_env=()
-  local -a plugs=()
   local -A ticked=()
   local -A blank_at=()
   local -A keys=()
   local -A settings=()
   local -A app_settings=()
-  local -a window_env=()
-  local -a window_options=()
-  local -a density_env=()
-  local -a density_options=()
-  local -a mapping_env=()
-  local -a mapping_options=()
 
   resolve_settings_app "${name}" package label
-  command -v yad >/dev/null 2>&1 \
-    || die "the start options window needs yad; install it"
-  if ! yad_tabs_available; then
-    log "no X display for yad's tabbed window; opening its tab as a window of its own"
+  if ! ika_window_available; then
+    log "python3's GTK 3 bindings are missing (python3-gobject, or python3-gi and gir1.2-gtk-3.0); opening the tab as a window of its own"
     if [[ "${tab}" == "1" ]]; then
       edit_app_options "${package}"
     else
@@ -6941,16 +7184,7 @@ edit_app_settings() {
   load_controller_mapping_form "${package}" keys settings app_settings
   shown_mapping="$(controller_mapping_form_signature keys settings)"
   set_yad_env yad_env
-  yad_env+=(GDK_BACKEND=x11)
-  mapfile -t scale_env < <(xwayland_gdk_scale_env)
-  if [[ "${#scale_env[@]}" -gt 0 ]]; then
-    log "X11 apps scale themselves on this desktop: ${scale_env[*]} for the tabbed window"
-    yad_env+=("${scale_env[@]}")
-  fi
-  yad_css window_env window_options yad_env window ""
-  yad_css density_env density_options yad_env density-tab \
-    "spinbutton { margin-right: ${APP_DPI_TAB_MARGIN_PX}px; }"
-  yad_css mapping_env mapping_options yad_env gamepad "${CONTROLLER_MAPPING_FORM_CSS}"
+  mkdir -p "${CVD_TMP_DIR}"
   tab_dir="$(mktemp -d "${CVD_TMP_DIR}/app-settings.XXXXXX")"
 
   # The window is shown again after "Reset to default", on the Startup
@@ -6959,37 +7193,17 @@ edit_app_settings() {
   while true; do
     app_options_form_fields "${label}" "${dpi}" ticked fields1
     controller_mapping_form_fields keys settings fields2 blank_at false
-    # The notebook and its tabs find each other by a key, a number no other
-    # window uses. A tab prints its fields when the notebook closes with an
-    # even exit code, as a window of its own does.
-    key=$(( (RANDOM << 15 | RANDOM) + 1 ))
-    env "${yad_env[@]}" "${density_env[@]}" yad --plug="${key}" --tabnum=1 \
-      --form --separator="|" --borders="${APP_OPTIONS_TAB_BORDER_PX}" \
-      "${density_options[@]}" "${fields1[@]}" >"${tab_dir}/1" &
-    plugs=("$!")
-    env "${yad_env[@]}" "${mapping_env[@]}" yad --plug="${key}" --tabnum=2 \
-      --form --separator="|" --text="$(controller_mapping_form_text)" \
-      --text-align=center --columns=2 "${mapping_options[@]}" --align=right \
-      "${fields2[@]}" >"${tab_dir}/2" &
-    plugs+=("$!")
     status=0
-    env "${yad_env[@]}" "${window_env[@]}" yad \
-      "${APP_SETTINGS_WINDOW_OPTIONS[@]}" --notebook --key="${key}" \
-      "${window_options[@]}" \
-      --tab="Startup Options" --tab="Gamepad Emulation" --active-tab="${tab}" \
-      --title="Startup Options · ${label}" --window-icon="${IKA_MENU_ICON}" \
-      --center --borders=12 \
-      --buttons-layout=spread --button="Reset to default:4" \
-      --button="Apply settings:2" --button="        Apply and start        :0" \
-      --button=Cancel:1 >/dev/null \
+    ika_window yad_env --title="Startup Options · ${label}" \
+      --icon="${IKA_MENU_ICON}" --app-id="${APP_SETTINGS_WINDOW_CLASS}" \
+      --active-tab="${tab}" --button="Reset to default:4" \
+      --button="Apply settings:2" --button="Apply and start:0" --button="Cancel:1" \
+      --tab="Startup Options" --output="${tab_dir}/1" \
+      --border="${APP_OPTIONS_TAB_BORDER_PX}" "${fields1[@]}" \
+      --tab="Gamepad Emulation" --output="${tab_dir}/2" --compact --columns=2 \
+      --border="${CONTROLLER_MAPPING_TAB_BORDER_PX}" --align=right \
+      --text="$(controller_mapping_form_text)" "${fields2[@]}" \
       || status=$?
-    # The notebook stops its tabs as it closes; one that did not open leaves
-    # them waiting for it
-    case "${status}" in
-      0|1|2|4|252) ;;
-      *) kill "${plugs[@]}" 2>/dev/null || true ;;
-    esac
-    wait "${plugs[@]}" 2>/dev/null || true
     case "${status}" in
       0|2|4)
         ;;
@@ -7004,7 +7218,7 @@ edit_app_settings() {
         ;;
       *)
         rm -rf "${tab_dir}"
-        die "could not open the start options window (yad exited with ${status})"
+        die "could not open the start options window (it exited with ${status})"
         ;;
     esac
 
@@ -7084,11 +7298,10 @@ IKA_OPTIONS_AUTO="Auto"
 IKA_OPTIONS_GLES_ONLY="gfxstream, OpenGL ES only"
 IKA_OPTIONS_GPU_CHOICES=("${IKA_OPTIONS_AUTO}" gfxstream_guest_angle gfxstream
   "${IKA_OPTIONS_GLES_ONLY}" guest_swiftshader)
-# The tab's number boxes and choices stretch across their column; a margin
-# on their right keeps a number box about as wide as four digits and its
-# buttons, and a choice as wide as the longest GPU mode, and the tab no
-# wider than the Gamepad Emulation tab, so that the window is as wide as an
-# app's.
+# In the Startup Options window of its own (yad, without ika's window) the
+# number boxes and choices stretch across their column; a margin on their
+# right keeps a number box about as wide as four digits and its buttons, and
+# a choice as wide as the longest GPU mode.
 IKA_OPTIONS_TAB_CSS='spinbutton { margin-right: 420px; }
 combobox { margin-right: 320px; }'
 
@@ -7425,8 +7638,8 @@ reset_ika_settings_to_default() {
 # their own use. "Apply settings" writes in ika.ini what was changed, "Apply
 # and restart" also restarts Ika, so that they apply, "Reset to default"
 # asks, then writes the built-in values and shows them, and Cancel leaves
-# ika.ini as it was. Without an X display the Startup Options tab opens as a
-# window of its own.
+# ika.ini as it was. Without python3's GTK 3 bindings the Startup Options tab
+# opens as a window of its own (yad).
 edit_ika_settings() {
   local tabs=true
   local key
@@ -7438,14 +7651,8 @@ edit_ika_settings() {
   local -a fields2=()
   local -a changed=()
   local -a yad_env=()
-  local -a scale_env=()
-  local -a plugs=()
-  local -a window_env=()
-  local -a window_options=()
   local -a options_env=()
   local -a options_options=()
-  local -a mapping_env=()
-  local -a mapping_options=()
   local -A values=()
   local -A shown_values=()
   local -A keys=()
@@ -7457,23 +7664,16 @@ edit_ika_settings() {
 
   command -v yad >/dev/null 2>&1 \
     || die "the start options window needs yad; install it"
-  if ! yad_tabs_available; then
-    log "no X display for yad's tabbed window; opening its Startup Options tab as a window of its own"
+  if ! ika_window_available; then
+    log "python3's GTK 3 bindings are missing (python3-gobject, or python3-gi and gir1.2-gtk-3.0); opening the Startup Options tab as a window of its own"
     tabs=false
   fi
 
   set_yad_env yad_env
-  if [[ "${tabs}" == "true" ]]; then
-    yad_env+=(GDK_BACKEND=x11)
-    mapfile -t scale_env < <(xwayland_gdk_scale_env)
-    if [[ "${#scale_env[@]}" -gt 0 ]]; then
-      log "X11 apps scale themselves on this desktop: ${scale_env[*]} for the tabbed window"
-      yad_env+=("${scale_env[@]}")
-    fi
+  if [[ "${tabs}" != "true" ]]; then
+    yad_css options_env options_options yad_env ika-options "${IKA_OPTIONS_TAB_CSS}"
   fi
-  yad_css window_env window_options yad_env window ""
-  yad_css options_env options_options yad_env ika-options "${IKA_OPTIONS_TAB_CSS}"
-  yad_css mapping_env mapping_options yad_env gamepad "${CONTROLLER_MAPPING_FORM_CSS}"
+  mkdir -p "${CVD_TMP_DIR}"
   tab_dir="$(mktemp -d "${CVD_TMP_DIR}/ika-settings.XXXXXX")"
 
   # The window is shown again after "Reset to default", on the Startup Options
@@ -7489,31 +7689,16 @@ edit_ika_settings() {
     controller_mapping_form_fields keys settings fields2 blank_at false
     status=0
     if [[ "${tabs}" == "true" ]]; then
-      key=$(( (RANDOM << 15 | RANDOM) + 1 ))
-      env "${yad_env[@]}" "${options_env[@]}" yad --plug="${key}" --tabnum=1 \
-        --form --separator="|" --borders="${APP_OPTIONS_TAB_BORDER_PX}" \
-        "${options_options[@]}" "${fields1[@]}" >"${tab_dir}/1" &
-      plugs=("$!")
-      env "${yad_env[@]}" "${mapping_env[@]}" yad --plug="${key}" --tabnum=2 \
-        --form --separator="|" --text="$(controller_mapping_form_text)" \
-        --text-align=center --columns=2 "${mapping_options[@]}" --align=right \
-        "${fields2[@]}" >"${tab_dir}/2" &
-      plugs+=("$!")
-      env "${yad_env[@]}" "${window_env[@]}" yad \
-        "${APP_SETTINGS_WINDOW_OPTIONS[@]}" --notebook --key="${key}" \
-        "${window_options[@]}" \
-        --tab="Startup Options" --tab="Gamepad Emulation" --active-tab=1 \
-        --title="Startup Options · Ika" --window-icon="${IKA_MENU_ICON}" \
-        --center --borders=12 \
-        --buttons-layout=spread --button="Reset to default:4" \
-        --button="Apply settings:2" --button="      Apply and restart      :0" \
-        --button=Cancel:1 >/dev/null \
+      ika_window yad_env --title="Startup Options · Ika" \
+        --icon="${IKA_MENU_ICON}" --app-id="${APP_SETTINGS_WINDOW_CLASS}" \
+        --active-tab=1 --button="Reset to default:4" \
+        --button="Apply settings:2" --button="Apply and restart:0" --button="Cancel:1" \
+        --tab="Startup Options" --output="${tab_dir}/1" \
+        --border="${APP_OPTIONS_TAB_BORDER_PX}" "${fields1[@]}" \
+        --tab="Gamepad Emulation" --output="${tab_dir}/2" --compact --columns=2 \
+        --border="${CONTROLLER_MAPPING_TAB_BORDER_PX}" --align=right \
+        --text="$(controller_mapping_form_text)" "${fields2[@]}" \
         || status=$?
-      case "${status}" in
-        0|1|2|4|252) ;;
-        *) kill "${plugs[@]}" 2>/dev/null || true ;;
-      esac
-      wait "${plugs[@]}" 2>/dev/null || true
     else
       env "${yad_env[@]}" "${options_env[@]}" yad \
         "${APP_SETTINGS_WINDOW_OPTIONS[@]}" --form \
@@ -7540,7 +7725,7 @@ edit_ika_settings() {
         ;;
       *)
         rm -rf "${tab_dir}"
-        die "could not open the start options window (yad exited with ${status})"
+        die "could not open the start options window (it exited with ${status})"
         ;;
     esac
 
