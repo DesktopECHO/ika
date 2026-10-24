@@ -1,7 +1,10 @@
 # Ika's copy of Mesa's src/gfxstream/hermetic/android/aosp_mesa3d.toml for
-# lineageos/scripts/mesa3d/regenerate.sh. Two changes from upstream: the
+# lineageos/scripts/mesa3d/regenerate.sh. Three changes from upstream: the
 # Freedreno/Turnip config (aosp_reference_embedded_drivers) is left out, as the
-# Cuttlefish ROM has no Adreno GPU, and the license text is Mesa's own
+# Cuttlefish ROM has no Adreno GPU; the device drivers build without
+# virtgpu_kumquat (Mesa's default), a VM-less test transport Ika does not use,
+# whose Rust library needs a rustix with Mesa's own futex patches (see
+# gfxstream_workaround.patch); and the license text is Mesa's own
 # docs/license.rst, so the patch adds no LICENSE file.
 # Copyright 2026 The Magma GPU Project
 # SPDX-License-Identifier: MIT
@@ -52,7 +55,7 @@ platforms = "android"
 android-strict = false
 vulkan-drivers = "gfxstream,swrast"
 gallium-drivers = ""
-virtgpu_kumquat = true
+virtgpu_kumquat = false
 opengl = false
 egl = "disabled"
 
