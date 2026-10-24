@@ -6804,16 +6804,44 @@ edit_controller_mapping() {
   fi
 }
 
+# Prints the font DPI GTK 3 reads on this X11 display, 96 unless the desktop
+# sets another: the Xft.dpi of the X resources, else forceFontDPI of KDE's
+# kcmfonts. KDE sets it to 96 times the scale of the screen when it forces the
+# font DPI (216 at a scale of 2.25), and GTK 3 sizes its text by it.
+x11_font_dpi() {
+  local dpi=""
+  local xauthority="${XAUTHORITY:-}"
+
+  if command -v xrdb >/dev/null 2>&1; then
+    [[ -n "${xauthority}" ]] \
+      || xauthority="$(ls "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/xauth_* 2>/dev/null | head -1)"
+    dpi="$(env ${xauthority:+XAUTHORITY="${xauthority}"} xrdb -query 2>/dev/null \
+      | awk '$1 == "Xft.dpi:" { print $2; exit }')"
+  fi
+  if [[ ! "${dpi}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    dpi="$(awk -F= '
+      { sub(/\r$/, "") }
+      /^\[/ { in_group = ($0 == "[General]"); next }
+      in_group && $1 == "forceFontDPI" { print $2; exit }' \
+      "${XDG_CONFIG_HOME:-${HOME}/.config}/kcmfonts" 2>/dev/null)"
+  fi
+  awk -v dpi="${dpi}" 'BEGIN { print (dpi + 0 > 0 ? dpi : 96) }'
+}
+
 # Prints GDK_SCALE and GDK_DPI_SCALE assignments, one per line, for yad's
 # tabbed window on XWayland in a KDE Plasma Wayland session whose X11 apps
 # apply scaling themselves ([Xwayland] Scale in kwinrc, such as 1.7 on a
 # HiDPI screen): KWin leaves their windows unscaled, and GTK 3 reads no scale
 # of its own there. GTK 3 scales a window by a whole number, so the scale is
-# rounded for the window and the rest goes to its text: 1.7 is GDK_SCALE=2
-# and GDK_DPI_SCALE=0.85. Nothing on other desktops, at a scale of 1, or when
-# GDK_SCALE is set already.
+# rounded for the window and the rest goes to its text, which GTK sizes by the
+# font DPI (x11_font_dpi) as well: at the default 96, 1.7 is GDK_SCALE=2 and
+# GDK_DPI_SCALE=0.85, and at a font DPI of 96 times the scale, which KDE sets
+# when it forces one, 2.25 is GDK_SCALE=2 and GDK_DPI_SCALE=0.5, so that text
+# is the size of the desktop's own. Nothing on other desktops, at a scale of
+# 1, or when GDK_SCALE is set already.
 xwayland_gdk_scale_env() {
   local scale
+  local font_dpi
 
   [[ -n "${WAYLAND_DISPLAY:-}" && -z "${GDK_SCALE:-}" ]] || return 0
   [[ ":${XDG_CURRENT_DESKTOP:-}:" == *:KDE:* ]] || return 0
@@ -6823,12 +6851,13 @@ xwayland_gdk_scale_env() {
     in_group && $1 == "Scale" { print $2; exit }' \
     "${XDG_CONFIG_HOME:-${HOME}/.config}/kwinrc" 2>/dev/null)"
   [[ "${scale}" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 0
-  awk -v scale="${scale}" 'BEGIN {
+  font_dpi="$(x11_font_dpi)"
+  awk -v scale="${scale}" -v font_dpi="${font_dpi}" 'BEGIN {
     if (scale <= 1) {
       exit
     }
     whole = int(scale + 0.5)
-    printf "GDK_SCALE=%d\nGDK_DPI_SCALE=%.4g\n", whole, scale / whole
+    printf "GDK_SCALE=%d\nGDK_DPI_SCALE=%.4g\n", whole, 96 * scale / (whole * font_dpi)
   }'
 }
 

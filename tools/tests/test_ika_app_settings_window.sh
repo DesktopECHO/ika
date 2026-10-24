@@ -328,6 +328,12 @@ scale_env_with() (
   xwayland_gdk_scale_env | paste -sd" " -
 )
 unset GDK_SCALE GDK_DPI_SCALE
+# No X resources here: xrdb is a stub that prints XRDB_OUTPUT
+cat >"${T}/bin/xrdb" <<'STUB'
+#!/usr/bin/bash
+printf '%s' "${XRDB_OUTPUT:-}"
+STUB
+chmod +x "${T}/bin/xrdb"
 expect_equal "$(scale_env_with 1.7 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE)" "GDK_SCALE=2 GDK_DPI_SCALE=0.85" "KDE at 1.7"
 expect_equal "$(scale_env_with 1.25 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE)" "GDK_SCALE=1 GDK_DPI_SCALE=1.25" "KDE at 1.25"
 expect_equal "$(scale_env_with 2 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE)" "GDK_SCALE=2 GDK_DPI_SCALE=1" "KDE at 2"
@@ -336,6 +342,20 @@ expect_equal "$(scale_env_with 1.7 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP
 expect_equal "$(scale_env_with 1.7 WAYLAND_DISPLAY= XDG_CURRENT_DESKTOP=KDE)" "" "an X11 session"
 expect_equal "$(scale_env_with 1.7 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE GDK_SCALE=3)" "" "a GDK_SCALE of the user's"
 expect_equal "$(scale_env_with big WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE)" "" "a scale that is not a number"
+# GTK sizes text by the font DPI too, which KDE sets to 96 times the scale when
+# it forces one: the X resources say so, or kcmfonts does without them
+expect_equal "$(scale_env_with 2.25 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE XRDB_OUTPUT=$'Xft.dpi:\t216\n')" \
+  "GDK_SCALE=2 GDK_DPI_SCALE=0.5" "KDE at 2.25, a font DPI of 216 in the X resources"
+expect_equal "$(scale_env_with 1.7 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE XRDB_OUTPUT=$'Xft.dpi:\t163.2\n')" \
+  "GDK_SCALE=2 GDK_DPI_SCALE=0.5" "KDE at 1.7, a font DPI of 163.2"
+printf '[General]\nforceFontDPI=216\n' >"${XDG_CONFIG_HOME}/kcmfonts"
+expect_equal "$(scale_env_with 2.25 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE)" \
+  "GDK_SCALE=2 GDK_DPI_SCALE=0.5" "KDE at 2.25, forceFontDPI in kcmfonts"
+expect_equal "$(scale_env_with 2.25 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE XRDB_OUTPUT=$'Xft.dpi:\t96\n')" \
+  "GDK_SCALE=2 GDK_DPI_SCALE=1.125" "the X resources win over kcmfonts"
+rm -f "${XDG_CONFIG_HOME}/kcmfonts"
+expect_equal "$(scale_env_with 2.25 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE)" \
+  "GDK_SCALE=2 GDK_DPI_SCALE=1.125" "KDE at 2.25, no font DPI set"
 printf '[Xwayland]\nScale=1.7\n' > "${XDG_CONFIG_HOME}/kwinrc"
 reset_calls
 WAYLAND_DISPLAY=wayland-0 XDG_CURRENT_DESKTOP=KDE DIALOG_TAB1="$(options_output fullscreen)" DIALOG_TAB2="$(mapping_output)" \
