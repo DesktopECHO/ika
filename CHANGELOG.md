@@ -213,6 +213,16 @@
   4-16 times that as a decompressed copy in the guest's memory. In an
   Asphalt 9 race the guest's host-visible Vulkan memory was 549-649 MB
   (3230 MB with every ASTC image emulated).
+- The ROM's Mesa is 26.3.0-rc2 (was 26.1.8), with two of Ika's gfxstream
+  fixes left on top: sync2 barriers keep imported AHardwareBuffer contents,
+  and deep copies skip inactive descriptor pointers. Upstream now has the
+  others (push-descriptor templates, map-memory2, maintenance6 bind
+  statuses, device memory reports, BGRA AHardwareBuffers, driver and ID
+  properties); the conformance-only ones it lacks are dropped: global
+  priority emulation, protected-pipeline and video format masking, EAC
+  transfer bits, device-creation unwinding and the acquire-unmodified
+  extension. `lineageos/scripts/mesa3d/regenerate.sh` writes the Android
+  build files for a new Mesa pin. This arrives with the next ROM build.
 
 ### Console window
 - The console and app windows are Wayland windows on a Wayland session and

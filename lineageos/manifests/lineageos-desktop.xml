@@ -14,19 +14,19 @@
   <remove-project name="platform/external/vulkan-headers" />
   <remove-project name="platform/external/mesa3d" />
 
-    <!-- Mesa 26.1.8 is paired with generated Android/gfxstream build glue in
-       external-mesa3d.patch. ANGLE and guest SwiftShader follow Android 17
+    <!-- Mesa 26.3.0-rc2 is paired with the generated Android build glue in
+       external-mesa3d.patch: after moving this pin, rerun
+       scripts/mesa3d/regenerate.sh. ANGLE and guest SwiftShader follow Android 17
        release heads, while drm_hwcomposer and minigbm remain on Android 16 QPR2
        with focused upstream backports. This mixed stack depends on the
-       compatibility patches in this repository. Keep the Mesa source pin and
-       integration patch together. Do not move any graphics pin without a boot,
-       vulkaninfo, and Chromium/ANGLE screenshot verification pass on Apple
-       Silicon. -->
+       compatibility patches in this repository. Do not move any graphics pin
+       without a boot, vulkaninfo, and Chromium/ANGLE screenshot verification
+       pass on Apple Silicon. -->
   <project
       name="mesa/mesa"
       path="external/mesa3d"
       remote="mesa"
-    revision="0fadfea4f394211946f308458f614839ef253ee8"
+    revision="b34c71d9ff2f6514a1f947609d00e49be639edf8"
       groups="pdk-cw-fs,pdk-fs" />
 
   <!-- Keep both guest architectures and their virtual-device modules on the
