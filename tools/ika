@@ -2287,7 +2287,7 @@ Settings:
   gfxstream with gfxstream_vulkan = off),
   hardware video decoding, low-CPU mode, "Start with the camera"
   (camera.device: ticked, the first usable camera, unless ika.ini names one)
-  and "Keyboard as a gamepad in TV mode" (tv_keyboard_gamepad). Gamepad
+  and "Enable gamepad emulation in TV mode" (tv_keyboard_gamepad). Gamepad
   Emulation has the keyboard gamepad of
   [keyboard_gamepad], which TV mode and the apps without a mapping of their
   own use. "Apply settings" writes the settings changed in ika.ini, in place
@@ -7237,7 +7237,7 @@ ika_option_number() {
 # for the associative array named VALUES_VAR, for yad: the vCPUs and the
 # memory, the densities and the refresh rate, 0 for auto; the GPU mode, hardware
 # video decoding and low-CPU mode; then the camera at every start and the
-# keyboard as a gamepad in TV mode.
+# keyboard gamepad in TV mode.
 ika_options_form_fields() {
   local -n form_values_ref="$1"
   local -n ika_fields_ref="$2"
@@ -7290,7 +7290,7 @@ ika_options_form_fields() {
   else
     ika_fields_ref+=(TRUE)
   fi
-  ika_fields_ref+=(--field="  Keyboard as a gamepad in TV mode:CHK")
+  ika_fields_ref+=(--field="  Enable gamepad emulation in TV mode:CHK")
   if [[ "${form_values_ref[console.tv_keyboard_gamepad]}" == "true" ]]; then
     ika_fields_ref+=(TRUE)
   else
@@ -7419,7 +7419,7 @@ reset_ika_settings_to_default() {
 # app's ("Startup Options · Ika", the same size and buttons), with two tabs:
 # Startup Options, the common settings of ika.ini (the vCPUs and memory, the
 # densities, the refresh rate, the GPU mode, hardware video decoding, low-CPU
-# mode, the camera, and the keyboard as a gamepad in TV mode), and Gamepad
+# mode, the camera, and the keyboard gamepad in TV mode), and Gamepad
 # Emulation,
 # ika.ini's keyboard gamepad, which TV mode and apps without a mapping of
 # their own use. "Apply settings" writes in ika.ini what was changed, "Apply

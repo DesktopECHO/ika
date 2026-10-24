@@ -223,7 +223,7 @@ expect_contains "${tab1}" $'!1\n--field=RAM, MB, 0=Auto  :NUM\n0!0..' "then the 
 expect_contains "${tab1}" $'\n--field=GPU mode  :CB\n^Auto!gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES only!guest_swiftshader\n' "the GPU modes, Auto first"
 expect_contains "${tab1}" $'\n--field=Hardware video decoding  :CB\n^Auto!Off\n' "video decoding"
 expect_contains "${tab1}" $'\n--field=Low-CPU mode  :CB\n^Auto!On!Off\n' "low-CPU mode"
-expect_contains "${tab1}" $'\n--field=  Start with the camera:CHK\nFALSE\n--field=  Keyboard as a gamepad in TV mode:CHK\nFALSE\n' \
+expect_contains "${tab1}" $'\n--field=  Start with the camera:CHK\nFALSE\n--field=  Enable gamepad emulation in TV mode:CHK\nFALSE\n' \
   "the camera, then the TV gamepad, off"
 expect_contains "${tab1}" $'\n--css='"${CVD_TMP_DIR}"$'/yad-css/ika-options.css\n' "narrow boxes"
 expect_contains "${tab2}" $'\n--css='"${CVD_TMP_DIR}"$'/yad-css/gamepad.css\n' "the gamepad tab as an app's"
