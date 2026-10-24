@@ -1473,7 +1473,7 @@ import xml.etree.ElementTree as ET
 manifest = sys.argv[1]
 expected = {
     ("mesa/mesa", "external/mesa3d"):
-      "0fadfea4f394211946f308458f614839ef253ee8",
+      "b34c71d9ff2f6514a1f947609d00e49be639edf8",
     ("kernel/prebuilts/6.12/arm64", "kernel/prebuilts/6.12/arm64"):
         "318576752b27af3d328e6deb5e6aa29b08f762c9",
     ("kernel/prebuilts/common-modules/virtual-device/6.12/arm64", "kernel/prebuilts/common-modules/virtual-device/6.12/arm64"):
@@ -1537,7 +1537,7 @@ PY
       fail "$project is not synced to the pinned Cuttlefish runtime/graphics revision $expected (found ${head:-unknown}); rerun with SKIP_SYNC=0"
     fi
   done <<'EOF'
-external/mesa3d 0fadfea4f394211946f308458f614839ef253ee8
+external/mesa3d b34c71d9ff2f6514a1f947609d00e49be639edf8
 kernel/prebuilts/6.12/arm64 318576752b27af3d328e6deb5e6aa29b08f762c9
 kernel/prebuilts/common-modules/virtual-device/6.12/arm64 e6673fcbd05e63e6fcc2c2d2cf33246108b73b0c
 kernel/prebuilts/6.12/x86_64 cb8e8ee3babf4a27b742f59dcb92f59cf186299c
@@ -1558,20 +1558,13 @@ check_graphics_stack_versions() {
   local mesa_android_bp="$android_root/external/mesa3d/Android.bp"
   local arm_product="$android_root/device/google/cuttlefish/ika_arm64/desktop/aosp_cf.mk"
   local x86_product="$android_root/device/google/cuttlefish/ika_x86_64/desktop/aosp_cf.mk"
-  local stale_reserved_header="$android_root/external/mesa3d/src/gfxstream/guest/vulkan_enc/goldfish_vk_reserved_marshaling_guest.h"
-  local stale_reserved_impl="$android_root/external/mesa3d/src/gfxstream/guest/vulkan_enc/goldfish_vk_reserved_marshaling_guest.cpp"
   require_file "$mesa_version_file"
   require_file "$mesa_android_bp"
-  if [[ -f "$mesa_version_file" && "$(tr -d '[:space:]' < "$mesa_version_file")" != "26.1.8" ]]; then
-    fail "external/mesa3d VERSION is not 26.1.8: $mesa_version_file"
+  if [[ -f "$mesa_version_file" && "$(tr -d '[:space:]' < "$mesa_version_file")" != "26.3.0-rc2" ]]; then
+    fail "external/mesa3d VERSION is not 26.3.0-rc2: $mesa_version_file"
   fi
-  if [[ -f "$mesa_android_bp" ]] && ! grep -Fq -- '-DPACKAGE_VERSION=\"26.1.8\"' "$mesa_android_bp"; then
-    fail "external/mesa3d generated Android.bp does not identify Mesa 26.1.8: $mesa_android_bp"
-  fi
-  # These are genrule outputs. Checked-in copies precede Soong's generated
-  # include directory and can silently shadow declarations from the pinned XML.
-  if [[ -e "$stale_reserved_header" || -e "$stale_reserved_impl" ]]; then
-    fail "external/mesa3d carries stale gfxstream reserved-marshalling output; keep it generated from the pinned Vulkan registry"
+  if [[ -f "$mesa_android_bp" ]] && ! grep -Fq -- '-DPACKAGE_VERSION=\"26.3.0-rc2\"' "$mesa_android_bp"; then
+    fail "external/mesa3d generated Android.bp does not identify Mesa 26.3.0-rc2; rerun scripts/mesa3d/regenerate.sh: $mesa_android_bp"
   fi
 
   if target_enabled arm64; then

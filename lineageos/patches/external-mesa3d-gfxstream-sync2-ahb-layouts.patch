@@ -1,0 +1,116 @@
+Patch summary:
+Apply gfxstream's imported-AHardwareBuffer layout workaround to
+synchronization2 barriers. Android passes no image layout with an
+AHardwareBuffer, so importers transition it from VK_IMAGE_LAYOUT_UNDEFINED;
+upstream keeps the contents only on the legacy vkCmdPipelineBarrier path, and
+through vkCmdPipelineBarrier2 the host driver may discard them, which left
+Chromium/ANGLE Vulkan content black on Apple Silicon. The func_table.cpp hunk
+is the generator's output for the functable.py change, applied to upstream's
+checked-in file.
+
+diff --git a/src/gfxstream/codegen/scripts/cereal/functable.py b/src/gfxstream/codegen/scripts/cereal/functable.py
+index fad008492e0d20d8d0d4019bf707269f8e6ff0f9..b3d60b24d2aff9b1d2207095b5c41016d43e6900 100644
+--- a/src/gfxstream/codegen/scripts/cereal/functable.py
++++ b/src/gfxstream/codegen/scripts/cereal/functable.py
+@@ -88,6 +88,8 @@ RESOURCE_TRACKER_ENTRIES = [
+     "vkAllocateCommandBuffers",
+     "vkQueueSignalReleaseImageANDROID",
+     "vkCmdPipelineBarrier",
++    "vkCmdPipelineBarrier2",
++    "vkCmdPipelineBarrier2KHR",
+     "vkCreateGraphicsPipelines",
+     "vkCmdClearColorImage",
+     # Fuchsia
+diff --git a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+index d7035ca8c6cbb6d981db099a8cdc9ec2f9144828..859781bde4b53449c84a932d4c6ba64295143784 100644
+--- a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
++++ b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+@@ -8112,6 +8112,47 @@ void ResourceTracker::on_vkCmdPipelineBarrier(
+                               updatedImageMemoryBarriers.data(), true /* do lock */);
+ }
+ 
++// The synchronization2 form of the AHardwareBuffer layout workaround in
++// on_vkCmdPipelineBarrier() above.
++static VkDependencyInfo preserveImportedAhbImageLayouts(
++    const VkDependencyInfo* pDependencyInfo,
++    std::vector<VkImageMemoryBarrier2>& updatedImageMemoryBarriers) {
++    VkDependencyInfo updatedDependencyInfo = *pDependencyInfo;
++#ifdef VK_USE_PLATFORM_ANDROID_KHR
++    updatedImageMemoryBarriers.assign(
++        pDependencyInfo->pImageMemoryBarriers,
++        pDependencyInfo->pImageMemoryBarriers + pDependencyInfo->imageMemoryBarrierCount);
++    for (VkImageMemoryBarrier2& barrier : updatedImageMemoryBarriers) {
++        if (barrier.srcQueueFamilyIndex != barrier.dstQueueFamilyIndex &&
++            (barrier.srcQueueFamilyIndex == VK_QUEUE_FAMILY_EXTERNAL ||
++             barrier.srcQueueFamilyIndex == VK_QUEUE_FAMILY_FOREIGN_EXT) &&
++            barrier.oldLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
++            barrier.oldLayout = barrier.newLayout;
++        }
++    }
++    updatedDependencyInfo.pImageMemoryBarriers = updatedImageMemoryBarriers.data();
++#endif
++    return updatedDependencyInfo;
++}
++
++void ResourceTracker::on_vkCmdPipelineBarrier2(void* context, VkCommandBuffer commandBuffer,
++                                               const VkDependencyInfo* pDependencyInfo) {
++    VkEncoder* enc = (VkEncoder*)context;
++    std::vector<VkImageMemoryBarrier2> updatedImageMemoryBarriers;
++    VkDependencyInfo updatedDependencyInfo =
++        preserveImportedAhbImageLayouts(pDependencyInfo, updatedImageMemoryBarriers);
++    enc->vkCmdPipelineBarrier2(commandBuffer, &updatedDependencyInfo, true /* do lock */);
++}
++
++void ResourceTracker::on_vkCmdPipelineBarrier2KHR(void* context, VkCommandBuffer commandBuffer,
++                                                  const VkDependencyInfo* pDependencyInfo) {
++    VkEncoder* enc = (VkEncoder*)context;
++    std::vector<VkImageMemoryBarrier2> updatedImageMemoryBarriers;
++    VkDependencyInfo updatedDependencyInfo =
++        preserveImportedAhbImageLayouts(pDependencyInfo, updatedImageMemoryBarriers);
++    enc->vkCmdPipelineBarrier2KHR(commandBuffer, &updatedDependencyInfo, true /* do lock */);
++}
++
+ void ResourceTracker::on_vkCmdClearColorImage(void* context, VkCommandBuffer commandBuffer,
+                                               VkImage image, VkImageLayout imageLayout,
+                                               const VkClearColorValue* pColor, uint32_t rangeCount,
+diff --git a/src/gfxstream/guest/vulkan_enc/ResourceTracker.h b/src/gfxstream/guest/vulkan_enc/ResourceTracker.h
+index cacb58d1830afa3cace1d64230edbd1b0e21b108..e67603d5e6744c4a229175d4ebd44f3156a487bd 100644
+--- a/src/gfxstream/guest/vulkan_enc/ResourceTracker.h
++++ b/src/gfxstream/guest/vulkan_enc/ResourceTracker.h
+@@ -544,6 +544,12 @@ class ResourceTracker {
+         uint32_t bufferMemoryBarrierCount, const VkBufferMemoryBarrier* pBufferMemoryBarriers,
+         uint32_t imageMemoryBarrierCount, const VkImageMemoryBarrier* pImageMemoryBarriers);
+ 
++    void on_vkCmdPipelineBarrier2(void* context, VkCommandBuffer commandBuffer,
++                                  const VkDependencyInfo* pDependencyInfo);
++
++    void on_vkCmdPipelineBarrier2KHR(void* context, VkCommandBuffer commandBuffer,
++                                     const VkDependencyInfo* pDependencyInfo);
++
+     void on_vkCmdClearColorImage(void* context, VkCommandBuffer commandBuffer, VkImage image,
+                                  VkImageLayout imageLayout, const VkClearColorValue* pColor,
+                                  uint32_t rangeCount, const VkImageSubresourceRange* pRanges);
+diff --git a/src/gfxstream/guest/vulkan_enc/autogenerated/func_table.cpp b/src/gfxstream/guest/vulkan_enc/autogenerated/func_table.cpp
+index 806b8062de4bec9f3f9b3b07ae7415fbc1c0e5e8..ad3bd38b80848027298e39ed4e0cf8286e2cebfe 100644
+--- a/src/gfxstream/guest/vulkan_enc/autogenerated/func_table.cpp
++++ b/src/gfxstream/guest/vulkan_enc/autogenerated/func_table.cpp
+@@ -1868,7 +1868,8 @@ void gfxstream_vk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
+     MESA_TRACE_SCOPE("vkCmdPipelineBarrier2");
+     {
+         auto vkEnc = gfxstream::vk::ResourceTracker::getCommandBufferEncoder(commandBuffer);
+-        vkEnc->vkCmdPipelineBarrier2(commandBuffer, pDependencyInfo, true /* do lock */);
++        auto resources = gfxstream::vk::ResourceTracker::get();
++        resources->on_vkCmdPipelineBarrier2(vkEnc, commandBuffer, pDependencyInfo);
+     }
+ }
+ void gfxstream_vk_CmdWriteTimestamp2(VkCommandBuffer commandBuffer, VkPipelineStageFlags2 stage,
+@@ -2903,7 +2904,8 @@ void gfxstream_vk_CmdPipelineBarrier2KHR(VkCommandBuffer commandBuffer,
+     MESA_TRACE_SCOPE("vkCmdPipelineBarrier2KHR");
+     {
+         auto vkEnc = gfxstream::vk::ResourceTracker::getCommandBufferEncoder(commandBuffer);
+-        vkEnc->vkCmdPipelineBarrier2KHR(commandBuffer, pDependencyInfo, true /* do lock */);
++        auto resources = gfxstream::vk::ResourceTracker::get();
++        resources->on_vkCmdPipelineBarrier2KHR(vkEnc, commandBuffer, pDependencyInfo);
+     }
+ }
+ void gfxstream_vk_CmdWriteTimestamp2KHR(VkCommandBuffer commandBuffer, VkPipelineStageFlags2 stage,
