@@ -12,10 +12,10 @@ external/.
 
 diff --git a/Android.bp b/Android.bp
 new file mode 100644
-index 0000000000000000000000000000000000000000..4996cb53550d1a43a32fd627593ab2be715fb5b3
+index 0000000000000000000000000000000000000000..d40cf86f44fcc74a0485b299dc08a3628702b6e3
 --- /dev/null
 +++ b/Android.bp
-@@ -0,0 +1,841 @@
+@@ -0,0 +1,851 @@
 +/*
 + * Copyright (C) 2025-2026 The Magma GPU Project
 + * SPDX-License-Identifier: Apache-2.0
@@ -589,72 +589,82 @@ index 0000000000000000000000000000000000000000..4996cb53550d1a43a32fd627593ab2be
 +    name: "rust_2024_lint_args",
 +    vendor: true,
 +    host_supported: true,
-+    flags: select((arch(), os()), {
-+        ("x86_64", "linux_glibc"): [
-+            "-Dboxed_slice_into_iter",
-+            "-Ddeprecated_safe_2024",
-+            "-Dimpl_trait_overcaptures",
-+            "-Dkeyword_idents_2024",
-+            "-Dmissing_unsafe_on_extern",
-+            "-Dnever_type_fallback_flowing_into_unsafe",
-+            "-Drust_2024_guarded_string_incompatible_syntax",
-+            "-Drust_2024_incompatible_pat",
-+            "-Drust_2024_prelude_collisions",
-+            "-Dstatic_mut_refs",
-+            "-Dunsafe_op_in_unsafe_fn",
-+        ],
-+        ("x86_64", "linux_musl"): [
-+            "-Dboxed_slice_into_iter",
-+            "-Ddeprecated_safe_2024",
-+            "-Dimpl_trait_overcaptures",
-+            "-Dkeyword_idents_2024",
-+            "-Dmissing_unsafe_on_extern",
-+            "-Dnever_type_fallback_flowing_into_unsafe",
-+            "-Drust_2024_guarded_string_incompatible_syntax",
-+            "-Drust_2024_incompatible_pat",
-+            "-Drust_2024_prelude_collisions",
-+            "-Dstatic_mut_refs",
-+            "-Dunsafe_op_in_unsafe_fn",
-+        ],
-+        ("arm64", "linux_musl"): [
-+            "-Dboxed_slice_into_iter",
-+            "-Ddeprecated_safe_2024",
-+            "-Dimpl_trait_overcaptures",
-+            "-Dkeyword_idents_2024",
-+            "-Dmissing_unsafe_on_extern",
-+            "-Dnever_type_fallback_flowing_into_unsafe",
-+            "-Drust_2024_guarded_string_incompatible_syntax",
-+            "-Drust_2024_incompatible_pat",
-+            "-Drust_2024_prelude_collisions",
-+            "-Dstatic_mut_refs",
-+            "-Dunsafe_op_in_unsafe_fn",
-+        ],
-+        (default, default): [],
-+    }),
++    target: {
++        linux_glibc_x86_64: {
++            flags: [
++                "-Dboxed_slice_into_iter",
++                "-Ddeprecated_safe_2024",
++                "-Dimpl_trait_overcaptures",
++                "-Dkeyword_idents_2024",
++                "-Dmissing_unsafe_on_extern",
++                "-Dnever_type_fallback_flowing_into_unsafe",
++                "-Drust_2024_guarded_string_incompatible_syntax",
++                "-Drust_2024_incompatible_pat",
++                "-Drust_2024_prelude_collisions",
++                "-Dstatic_mut_refs",
++                "-Dunsafe_op_in_unsafe_fn",
++            ],
++        },
++        linux_musl_x86_64: {
++            flags: [
++                "-Dboxed_slice_into_iter",
++                "-Ddeprecated_safe_2024",
++                "-Dimpl_trait_overcaptures",
++                "-Dkeyword_idents_2024",
++                "-Dmissing_unsafe_on_extern",
++                "-Dnever_type_fallback_flowing_into_unsafe",
++                "-Drust_2024_guarded_string_incompatible_syntax",
++                "-Drust_2024_incompatible_pat",
++                "-Drust_2024_prelude_collisions",
++                "-Dstatic_mut_refs",
++                "-Dunsafe_op_in_unsafe_fn",
++            ],
++        },
++        linux_musl_arm64: {
++            flags: [
++                "-Dboxed_slice_into_iter",
++                "-Ddeprecated_safe_2024",
++                "-Dimpl_trait_overcaptures",
++                "-Dkeyword_idents_2024",
++                "-Dmissing_unsafe_on_extern",
++                "-Dnever_type_fallback_flowing_into_unsafe",
++                "-Drust_2024_guarded_string_incompatible_syntax",
++                "-Drust_2024_incompatible_pat",
++                "-Drust_2024_prelude_collisions",
++                "-Dstatic_mut_refs",
++                "-Dunsafe_op_in_unsafe_fn",
++            ],
++        },
++    },
 +}
 +
 +rust_defaults {
 +    name: "rust_global_args",
 +    vendor: true,
 +    host_supported: true,
-+    flags: select((arch(), os()), {
-+        ("x86_64", "linux_glibc"): [
-+            "-Aclippy::collapsible_else_if",
-+            "-Aclippy::needless_lifetimes",
-+            "-Aclippy::question_mark",
-+        ],
-+        ("x86_64", "linux_musl"): [
-+            "-Aclippy::collapsible_else_if",
-+            "-Aclippy::needless_lifetimes",
-+            "-Aclippy::question_mark",
-+        ],
-+        ("arm64", "linux_musl"): [
-+            "-Aclippy::collapsible_else_if",
-+            "-Aclippy::needless_lifetimes",
-+            "-Aclippy::question_mark",
-+        ],
-+        (default, default): [],
-+    }),
++    target: {
++        linux_glibc_x86_64: {
++            flags: [
++                "-Aclippy::collapsible_else_if",
++                "-Aclippy::needless_lifetimes",
++                "-Aclippy::question_mark",
++            ],
++        },
++        linux_musl_x86_64: {
++            flags: [
++                "-Aclippy::collapsible_else_if",
++                "-Aclippy::needless_lifetimes",
++                "-Aclippy::question_mark",
++            ],
++        },
++        linux_musl_arm64: {
++            flags: [
++                "-Aclippy::collapsible_else_if",
++                "-Aclippy::needless_lifetimes",
++                "-Aclippy::question_mark",
++            ],
++        },
++    },
 +}
 +
 +/*
@@ -8415,10 +8425,10 @@ index 0000000000000000000000000000000000000000..3d06b383d650103c886399ef63591f2c
 +}
 diff --git a/src/util/rust/Android.bp b/src/util/rust/Android.bp
 new file mode 100644
-index 0000000000000000000000000000000000000000..53b19cb964151498264933ab4cd7602a0c83c2e2
+index 0000000000000000000000000000000000000000..ca8a170c13aa6d507163094ca991b40cfbf41672
 --- /dev/null
 +++ b/src/util/rust/Android.bp
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,79 @@
 +/*
 + * Copyright (C) 2025-2026 The Magma GPU Project
 + * SPDX-License-Identifier: Apache-2.0
@@ -8439,45 +8449,50 @@ index 0000000000000000000000000000000000000000..53b19cb964151498264933ab4cd7602a
 +    name: "_util_rust_args",
 +    vendor: true,
 +    host_supported: true,
-+    flags: select((arch(), os()), {
-+        ("x86_64", "linux_glibc"): [
-+            "-Aclippy::identity_op",
-+            "-Aclippy::len_zero",
-+            "-Aclippy::manual_range_contains",
-+            "-Aclippy::needless_range_loop",
-+            "-Aclippy::not_unsafe_ptr_arg_deref",
-+            "-Aclippy::redundant_field_names",
-+            "-Aclippy::upper_case_acronyms",
-+            "-Aclippy::vec_box",
-+            "-Aclippy::write_with_newline",
-+            "-Anon_snake_case",
-+        ],
-+        ("x86_64", "linux_musl"): [
-+            "-Aclippy::identity_op",
-+            "-Aclippy::len_zero",
-+            "-Aclippy::manual_range_contains",
-+            "-Aclippy::needless_range_loop",
-+            "-Aclippy::not_unsafe_ptr_arg_deref",
-+            "-Aclippy::redundant_field_names",
-+            "-Aclippy::upper_case_acronyms",
-+            "-Aclippy::vec_box",
-+            "-Aclippy::write_with_newline",
-+            "-Anon_snake_case",
-+        ],
-+        ("arm64", "linux_musl"): [
-+            "-Aclippy::identity_op",
-+            "-Aclippy::len_zero",
-+            "-Aclippy::manual_range_contains",
-+            "-Aclippy::needless_range_loop",
-+            "-Aclippy::not_unsafe_ptr_arg_deref",
-+            "-Aclippy::redundant_field_names",
-+            "-Aclippy::upper_case_acronyms",
-+            "-Aclippy::vec_box",
-+            "-Aclippy::write_with_newline",
-+            "-Anon_snake_case",
-+        ],
-+        (default, default): [],
-+    }),
++    target: {
++        linux_glibc_x86_64: {
++            flags: [
++                "-Aclippy::identity_op",
++                "-Aclippy::len_zero",
++                "-Aclippy::manual_range_contains",
++                "-Aclippy::needless_range_loop",
++                "-Aclippy::not_unsafe_ptr_arg_deref",
++                "-Aclippy::redundant_field_names",
++                "-Aclippy::upper_case_acronyms",
++                "-Aclippy::vec_box",
++                "-Aclippy::write_with_newline",
++                "-Anon_snake_case",
++            ],
++        },
++        linux_musl_x86_64: {
++            flags: [
++                "-Aclippy::identity_op",
++                "-Aclippy::len_zero",
++                "-Aclippy::manual_range_contains",
++                "-Aclippy::needless_range_loop",
++                "-Aclippy::not_unsafe_ptr_arg_deref",
++                "-Aclippy::redundant_field_names",
++                "-Aclippy::upper_case_acronyms",
++                "-Aclippy::vec_box",
++                "-Aclippy::write_with_newline",
++                "-Anon_snake_case",
++            ],
++        },
++        linux_musl_arm64: {
++            flags: [
++                "-Aclippy::identity_op",
++                "-Aclippy::len_zero",
++                "-Aclippy::manual_range_contains",
++                "-Aclippy::needless_range_loop",
++                "-Aclippy::not_unsafe_ptr_arg_deref",
++                "-Aclippy::redundant_field_names",
++                "-Aclippy::upper_case_acronyms",
++                "-Aclippy::vec_box",
++                "-Aclippy::write_with_newline",
++                "-Anon_snake_case",
++            ],
++        },
++    },
 +}
 +
 +rust_library {

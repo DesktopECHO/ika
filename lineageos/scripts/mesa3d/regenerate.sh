@@ -90,39 +90,89 @@ python3 -I "$meson_dir/meson.py" convert \
 }
 
 # meson2hermetic writes every conditional property as select(), but Android
-# 16's Soong does not allow select() on ldflags (a plain []string in
-# cc/linker.go). Rewrite the one shape it emits for ldflags, Android-only
-# flags, into the target block older converters used, and stop on any other.
-python3 -I - "$work/mesa" <<'PY' || die "could not rewrite ldflags select() for Android 16's Soong"
+# 16's Soong cannot select cc ldflags or rust flags (plain []string in
+# cc/linker.go and rust/compiler.go; the others it selects are configurable).
+# Rewrite those selects into the equivalent target blocks, keyed by os or
+# os_arch, and stop on any shape that has no exact equivalent.
+python3 -I - "$work/mesa" <<'PY' || die "could not rewrite select() for Android 16's Soong"
 import pathlib
 import re
 import sys
 
+NON_CONFIGURABLE = ("ldflags", "flags")
 select_re = re.compile(
-    r'(?m)^    ldflags: select\(os\(\), \{\n'
-    r'        "android": \[\n'
-    r'(?P<flags>(?:            "[^"\n]*",\n)+)'
-    r'        \],\n'
-    r'        default: \[\],\n'
-    r'    \}\),\n')
+    r'(?m)^    (?P<prop>%s): select\((?P<on>os\(\)|\(arch\(\), os\(\)\)), \{\n'
+    r'(?P<body>(?:        .*\n|            .*\n)*?)'
+    r'    \}\),\n' % "|".join(NON_CONFIGURABLE))
+case_re = re.compile(
+    r'(?m)^        (?P<key>"[^"]+"|\("[^"]+", "[^"]+"\)|default|\(default, default\)): '
+    r'(?:\[\],\n|\[\n(?P<values>(?:            "[^"\n]*",\n)+)        \],\n)')
 module_re = re.compile(r'(?ms)^[a-z_]+ \{\n.*?^\}\n')
+target_key_re = re.compile(r'^(android|linux_glibc|linux_musl)(_(x86_64|x86|arm64|arm))?$')
+
+def fail(message):
+    sys.exit(message)
+
+def target_key(key):
+    names = re.findall(r'"([^"]+)"', key)
+    name = names[0] if len(names) == 1 else f"{names[1]}_{names[0]}"
+    if not target_key_re.match(name):
+        fail(f"no target block for select key {key}")
+    return name
+
+def rewrite_one(text, match):
+    prop, body = match.group("prop"), match.group("body")
+    entries = []
+    consumed = 0
+    for case in case_re.finditer(body):
+        if case.start() != consumed:
+            fail(f"unparsed {prop} select() case: {body[consumed:case.start()]!r}")
+        consumed = case.end()
+        if "default" in case.group("key"):
+            if case.group("values"):
+                fail(f"{prop} select() with a non-empty default")
+            continue
+        if case.group("values"):
+            entries.append((target_key(case.group("key")), case.group("values")))
+    if consumed != len(body):
+        fail(f"unparsed {prop} select() tail: {body[consumed:]!r}")
+    block = "".join(
+        f"        {key}: {{\n            {prop}: [\n"
+        + values.replace("            ", "                ")
+        + "            ],\n        },\n"
+        for key, values in entries)
+    text = text[:match.start()] + text[match.end():]
+    existing = re.search(r'(?m)^    target: \{\n', text)
+    if existing:
+        for key, _ in entries:
+            if re.search(r'(?m)^        %s: \{' % key, text):
+                fail(f"target block already has {key}")
+        return text[:existing.end()] + block + text[existing.end():]
+    if not block:
+        return text
+    closing = text.rindex("}\n")
+    return text[:closing] + "    target: {\n" + block + "    },\n" + text[closing:]
 
 def rewrite(module):
-    match = select_re.search(module.group(0))
-    if not match:
-        return module.group(0)
-    if re.search(r'(?m)^    target: \{', module.group(0)):
-        sys.exit("ldflags select() in a module that already has a target block")
-    flags = match.group("flags").replace("            ", "                ")
-    block = ("    target: {\n        android: {\n            ldflags: [\n" + flags +
-             "            ],\n        },\n    },\n")
-    return module.group(0)[:match.start()] + block + module.group(0)[match.end():]
+    text = module.group(0)
+    while match := select_re.search(text):
+        text = rewrite_one(text, match)
+    # Any select() left on these properties (e.g. "[...] + select(...)") has
+    # no rewrite here.
+    prop = None
+    for line in text.split("\n"):
+        start = re.match(r'^    ([a-z_]+): ', line)
+        if start:
+            prop = start.group(1)
+        elif re.match(r'^    \S', line) and not line.startswith("    ]") and not line.startswith("    }"):
+            prop = None
+        if prop in NON_CONFIGURABLE and "select(" in line:
+            fail(f"{prop} select() left in module: {text.splitlines()[1].strip()}")
+    return text
 
 for bp in pathlib.Path(sys.argv[1]).rglob("Android.bp"):
     text = bp.read_text()
     new = module_re.sub(rewrite, text)
-    if "ldflags: select(" in new:
-        sys.exit(f"{bp}: unexpected ldflags select() shape")
     if new != text:
         bp.write_text(new)
 PY
