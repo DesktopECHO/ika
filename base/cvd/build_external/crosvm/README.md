@@ -75,10 +75,25 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** Keeps rutabaga's Vulkano gralloc backend available and preserves an explicit `external_blob` request.
 - **Why:** Minigbm has no Asahi driver. On Apple Silicon Linux, Vulkano is therefore the fallback that imports gfxstream dma-bufs through Honeykrisp. Rutabaga 0.1.80 now provides the cross-domain and atomic-memory support that previously required the removed `mesa3d_util` and `rutabaga_gfx` upstream-sync overlays.
 
+#### `PATCH.crosvm-fixed-blob-mapping-virglrenderer.patch`
+- **Targets:** `crosvm_bin`. File: `src/crosvm/sys/linux/gpu.rs`.
+- **What it does:** Keeps `fixed_blob_mapping` for the virglrenderer backend (`--gpu_mode=venus`) when crosvm is built with Vulkano and Vulkan is on; upstream turns it off then, because opaque-fd blobs need a Vulkan import that fixed mapping cannot do.
+- **Why:** Fixed blob mapping maps each blob into one shared region registered at the first mapping, instead of a KVM memory slot per blob. arm64 KVM refuses a new memory slot over a cacheable `VM_PFNMAP` mapping (a dma-buf or udmabuf `mmap`) on hosts without FEAT_S2FWB, Apple Silicon among them, so every Venus blob mapping failed there and SurfaceFlinger crashed. Asahi's muvm maps GPU memory the same way. Venus's blobs are dma-bufs or shm on the drivers Ika runs on.
+
+#### `PATCH.crosvm-fixed-blob-mapping-dmabuf-devices.patch`
+- **Targets:** `devices` crate. File: `src/virtio/gpu/virtio_gpu.rs`.
+- **What it does:** With fixed blob mapping, maps a dma-buf blob that also carries Vulkan info directly, instead of through a Vulkan import.
+- **Why:** The cross-domain buffers the Vulkano gralloc allocates carry Vulkan info, so they took the Vulkan import path, which fixed mapping cannot take: in Venus mode on Apple Silicon the guest could not map buffers the CPU reads, such as screenshots.
+
 #### `PATCH.rutabaga_gfx-gralloc-vulkano-fallback.patch`
 - **Targets:** `rutabaga_gfx` crate. File: `src/rutabaga_gralloc/gralloc.rs`.
 - **What it does:** Prefers a working minigbm backend and starts Vulkano only when minigbm initialization fails.
 - **Why:** This preserves the established x86_64 path while allowing Apple Silicon hosts to use the upstream Vulkano backend.
+
+#### `PATCH.rutabaga_gfx-vulkano-linear-images.patch`
+- **Targets:** `rutabaga_gfx` crate. File: `src/rutabaga_gralloc/vulkano_gralloc.rs`.
+- **What it does:** Creates the images Vulkano gralloc measures and allocates with linear tiling.
+- **Why:** `get_image_memory_requirements` reads each plane's stride and offset with `vkGetImageSubresourceLayout`, which Vulkan allows only for linear or DRM-modifier images, and vulkano 0.33 defaults to optimal tiling, so every query failed with `OptimalTilingNotSupported`. The cross-domain context, which the guest's minigbm allocates through in `--gpu_mode=venus`, uses this backend on hosts whose GPU the bundled minigbm has no driver for (AMD, Apple Silicon); every guest buffer allocation failed there. Upstream has the same code but disables Vulkano gralloc on Linux.
 
 #### `PATCH.rutabaga_gfx-cleanup-on-drop.patch`
 - **Targets:** `rutabaga_gfx` crate. File: `src/rutabaga_core.rs`.

@@ -1,0 +1,33 @@
+Map dma-buf blobs directly when blobs use fixed mapping.
+
+With fixed blob mapping, each blob is mapped into the prepared shared memory
+region with MAP_FIXED, which cannot take the Vulkan import path
+(VmMemorySource::Vulkan). Resources with Vulkan info, such as the cross-domain
+buffers the Vulkano gralloc allocates, took that path even when their handle
+is a dma-buf, so the guest could not map them (screenshots failed in Venus
+mode on Apple Silicon). Map such a dma-buf itself instead. Only virglrenderer
+(Venus) keeps fixed blob mapping with Vulkano built in
+(PATCH.crosvm-fixed-blob-mapping-virglrenderer.patch).
+
+diff --git a/src/virtio/gpu/virtio_gpu.rs b/src/virtio/gpu/virtio_gpu.rs
+index 8231807..92af8e5 100644
+--- a/src/virtio/gpu/virtio_gpu.rs
++++ b/src/virtio/gpu/virtio_gpu.rs
+@@ -1212,7 +1212,16 @@ impl VirtioGpu {
+             let export = RutabagaMagmaHandle::try_from(export)
+                 .context("failed to retrieve the handle info")
+                 .context(ErrUnspec)?;
+-            if let Ok(vulkan_info) = self.rutabaga.vulkan_info(resource_id) {
++            if self.fixed_blob_mapping && export.handle_type == RUTABAGA_HANDLE_TYPE_MEM_DMABUF {
++                // ika: fixed blob mapping cannot import into Vulkan; map the
++                // dma-buf itself instead (e.g. cross-domain buffers that the
++                // Vulkano gralloc allocated, which also carry Vulkan info).
++                source = Some(VmMemorySource::Descriptor {
++                    descriptor: to_safe_descriptor(export.os_handle),
++                    offset: 0,
++                    size: resource.size,
++                });
++            } else if let Ok(vulkan_info) = self.rutabaga.vulkan_info(resource_id) {
+                 source = Some(VmMemorySource::Vulkan {
+                     descriptor: to_safe_descriptor(export.os_handle),
+                     handle_type: export.handle_type,

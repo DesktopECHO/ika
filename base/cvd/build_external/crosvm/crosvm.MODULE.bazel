@@ -80,6 +80,7 @@ crosvm_bin.annotation(
         "@//build_external/crosvm:PATCH.crosvm-resize-display.patch",
         "@//build_external/crosvm:PATCH.crosvm-flush-held-dmabuf.patch",
         "@//build_external/crosvm:PATCH.crosvm-enable-vulkano-gralloc.patch",
+        "@//build_external/crosvm:PATCH.crosvm-fixed-blob-mapping-virglrenderer.patch",
         "@//build_external/crosvm:PATCH.minijail-sys_common_mk.patch",
     ],
     deps = [
@@ -89,6 +90,11 @@ crosvm_bin.annotation(
     rustc_flags = [
         # Look for shared libraries in the same directory as the binary.
         "-Clink-arg=-Wl,-rpath,$$ORIGIN",
+        # ...and in the package's lib64, where libvirglrenderer.so.1 is:
+        # without it crosvm loads the system's libvirglrenderer, Debian 13's
+        # 1.1.0, whose Venus capset makes the guest's Venus driver stop at
+        # Vulkan 1.3.
+        "-Clink-arg=-Wl,-rpath,$$ORIGIN/../lib64",
     ],
 )
 
@@ -168,6 +174,9 @@ crosvm_bin.annotation(
         # A scanout flush into a dma-buf the compositor still holds is dropped
         # instead of shown into the frame on screen.
         "@//build_external/crosvm:PATCH.crosvm-flush-held-dmabuf-devices.patch",
+        # With fixed blob mapping (Venus), map dma-buf blobs that carry
+        # Vulkan info directly instead of through a Vulkan import.
+        "@//build_external/crosvm:PATCH.crosvm-fixed-blob-mapping-dmabuf-devices.patch",
     ],
 )
 
@@ -198,6 +207,9 @@ crosvm_bin.annotation(
         # initializes (x86-64 and any host with a minigbm driver), start and
         # select Vulkano only when it doesn't (Apple Silicon / Asahi).
         "@//build_external/crosvm:PATCH.rutabaga_gfx-gralloc-vulkano-fallback.patch",
+        # Create Vulkano's layout-query images linear, so the cross-domain
+        # context (Venus mode's gralloc) can read their strides.
+        "@//build_external/crosvm:PATCH.rutabaga_gfx-vulkano-linear-images.patch",
         # Drain renderer resources and contexts while the component is alive,
         # so clean VMM shutdown reaches gfxstream's normal unbind paths.
         "@//build_external/crosvm:PATCH.rutabaga_gfx-cleanup-on-drop.patch",

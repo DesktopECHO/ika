@@ -1,0 +1,22 @@
+--- a/src/rutabaga_gralloc/vulkano_gralloc.rs
++++ b/src/rutabaga_gralloc/vulkano_gralloc.rs
+@@ -31,6 +31,7 @@
+ use vulkano::image;
+ use vulkano::image::ImageDimensions;
+ use vulkano::image::ImageError;
++use vulkano::image::ImageTiling;
+ use vulkano::image::ImageUsage;
+ use vulkano::image::SampleCount;
+ use vulkano::instance::Instance;
+@@ -270,6 +271,11 @@
+                 },
+                 format: Some(vulkan_format),
+                 samples: SampleCount::Sample1,
++                // ika: get_image_memory_requirements() reads each plane's
++                // stride and offset with vkGetImageSubresourceLayout, which
++                // Vulkan allows only for linear (or DRM-modifier) images;
++                // vulkano's default optimal tiling made every query fail.
++                tiling: ImageTiling::Linear,
+                 usage,
+                 mip_levels: 1,
+                 sharing: Sharing::Exclusive,
