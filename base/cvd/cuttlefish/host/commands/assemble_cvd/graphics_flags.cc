@@ -17,6 +17,7 @@
 #include "cuttlefish/host/commands/assemble_cvd/graphics_flags.h"
 
 #include <stddef.h>
+#include <stdint.h>
 #include <sys/utsname.h>
 #include <unistd.h>
 
@@ -129,6 +130,42 @@ bool IsLikelySoftwareRenderer(const std::string& renderer) {
     return 0;
   }
   return (major << 16) | minor;
+}
+
+// The Vulkan version of the host's first physical device, the one gfxstream
+// and Venus render on, as (major << 16) | minor; 0 when unknown.
+[[maybe_unused]] int HostVulkanVersion(
+    const gfxstream::proto::GraphicsAvailability& availability) {
+  if (!availability.has_vulkan() ||
+      availability.vulkan().physical_devices().empty()) {
+    return 0;
+  }
+  const uint32_t api_version =
+      availability.vulkan().physical_devices(0).api_version();
+  // VK_API_VERSION_MAJOR() and VK_API_VERSION_MINOR().
+  return static_cast<int>(((api_version >> 22) & 0x7f) << 16 |
+                          ((api_version >> 12) & 0x3ff));
+}
+
+// Whether ANGLE in the guest can offer OpenGL ES 3.2 on the Vulkan of the
+// host's first physical device as Venus passes it through. ES 3.2 needs ASTC
+// textures, which gfxstream emulates but Venus does not (Intel's Broadwell and
+// Haswell GPUs lack them), geometry and tessellation shaders, and a
+// primitives-generated query or the pipeline-statistics fallback
+// (GetNeededAngleFeaturesBasedOnQuirks).
+[[maybe_unused]] bool AngleGles32OnHostVulkan(
+    const gfxstream::proto::GraphicsAvailability& availability) {
+  if (!availability.has_vulkan() ||
+      availability.vulkan().physical_devices().empty()) {
+    return false;
+  }
+  const auto& physical_device = availability.vulkan().physical_devices(0);
+  const auto& features = physical_device.features();
+  return features.texture_compression_astc_ldr() &&
+         features.geometry_shader() && features.tessellation_shader() &&
+         (Contains(physical_device.extensions(),
+                   "VK_EXT_primitives_generated_query") ||
+          features.pipeline_statistics_query());
 }
 
 // Whether any host Vulkan physical device is backed by real hardware. Not only
@@ -749,15 +786,19 @@ Result<AngleFeatures> GetNeededAngleFeaturesBasedOnQuirks(
             .has_issue_with_precision_qualifiers_on_yuv_samplers()) {
       features.ignore_precision_qualifiers = true;
     }
+  }
 
-    if (availability.has_vulkan() &&
-        !availability.vulkan().physical_devices().empty()) {
-      const auto& physical_device = availability.vulkan().physical_devices(0);
-      features.allow_pipeline_statistics_for_primitives_generated_query =
-          !Contains(physical_device.extensions(),
-                    "VK_EXT_primitives_generated_query") &&
-          physical_device.features().pipeline_statistics_query();
-    }
+  // The guest's ANGLE runs on the host GPU's Vulkan through gfxstream or
+  // Venus: without VK_EXT_primitives_generated_query (Apple's Honeykrisp) it
+  // needs the pipeline-statistics fallback for OpenGL ES 3.2.
+  if ((mode == GpuMode::GfxstreamGuestAngle || mode == GpuMode::Venus) &&
+      availability.has_vulkan() &&
+      !availability.vulkan().physical_devices().empty()) {
+    const auto& physical_device = availability.vulkan().physical_devices(0);
+    features.allow_pipeline_statistics_for_primitives_generated_query =
+        !Contains(physical_device.extensions(),
+                  "VK_EXT_primitives_generated_query") &&
+        physical_device.features().pipeline_statistics_query();
   }
 
   if (mode == GpuMode::GuestSwiftshader ||
@@ -1228,6 +1269,15 @@ Result<GraphicsSettings> GetGraphicsSettings(
   graphics_settings.guest_renderer_preload =
       CF_EXPECT(SelectGuestRendererPreload(
           gpu_mode, graphics_settings.hwui_renderer, guest_renderer_preload));
+  if (gpu_mode == GpuMode::Gfxstream ||
+      gpu_mode == GpuMode::GfxstreamGuestAngle || gpu_mode == GpuMode::Venus) {
+    graphics_settings.gpu_host_vulkan_version =
+        HostVulkanVersion(graphics_availability);
+  }
+  if (gpu_mode == GpuMode::Venus) {
+    graphics_settings.gpu_host_gles_version =
+        AngleGles32OnHostVulkan(graphics_availability) ? 0 : ((3 << 16) | 1);
+  }
   if (IsGfxstreamMode(gpu_mode)) {
     graphics_settings.gfxstream_transport =
         SelectGfxstreamTransport(guest_config);

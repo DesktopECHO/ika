@@ -62,6 +62,12 @@ message VulkanQueueFamily {
 
 message VulkanPhysicalDeviceFeatures {
   optional bool pipeline_statistics_query = 1;
+  optional bool geometry_shader = 2;
+  optional bool tessellation_shader = 3;
+  // ASTC LDR textures can be sampled: the textureCompressionASTC_LDR feature,
+  // or optimal-tiling sampled-image support for VK_FORMAT_ASTC_4x4_UNORM_BLOCK,
+  // probed with vk_require_astc=true as crosvm runs Venus's render server.
+  optional bool texture_compression_astc_ldr = 4;
 }
 
 message VulkanPhysicalDevice {
@@ -80,6 +86,9 @@ message VulkanPhysicalDevice {
   repeated VulkanQueueFamily queue_families = 5;
 
   optional VulkanPhysicalDeviceFeatures features = 6;
+
+  // VkPhysicalDeviceProperties::apiVersion.
+  optional uint32 api_version = 7;
 }
 
 message VulkanAvailability {

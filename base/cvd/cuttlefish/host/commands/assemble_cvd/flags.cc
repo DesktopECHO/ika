@@ -1215,6 +1215,8 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
         graphics_settings.guest_renderer_preload);
     instance.set_gpu_gfxstream_transport(graphics_settings.gfxstream_transport);
     instance.set_gpu_host_gles_version(graphics_settings.gpu_host_gles_version);
+    instance.set_gpu_host_vulkan_version(
+        graphics_settings.gpu_host_vulkan_version);
     if (!graphics_settings.gfxstream_features_string.empty()) {
       instance.set_gpu_renderer_features(
           graphics_settings.gfxstream_features_string);

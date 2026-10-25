@@ -49,8 +49,13 @@ struct GraphicsSettings {
   GuestRendererPreload guest_renderer_preload;
   std::string gfxstream_transport;
   std::string gfxstream_features_string;
-  // The host's GLES version as (major << 16) | minor; 0 when not limited.
+  // The newest GLES version the guest may advertise, as (major << 16) | minor;
+  // 0 when not limited: the host's GLES version in gfxstream mode, 3.1 in
+  // venus mode when ANGLE cannot offer 3.2 over the host GPU.
   int gpu_host_gles_version = 0;
+  // The host GPU's Vulkan version as (major << 16) | minor, for the modes
+  // whose guest Vulkan driver renders on it; 0 otherwise.
+  int gpu_host_vulkan_version = 0;
 };
 
 Result<GraphicsSettings> GetGraphicsSettings(

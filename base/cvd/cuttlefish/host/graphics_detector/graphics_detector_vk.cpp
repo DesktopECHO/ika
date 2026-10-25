@@ -16,6 +16,8 @@
 
 #include "cuttlefish/host/graphics_detector/graphics_detector_vk.h"
 
+#include <stdlib.h>
+
 #include "cuttlefish/host/graphics_detector/vulkan.h"
 
 namespace gfxstream {
@@ -23,6 +25,9 @@ namespace {
 
 gfxstream::expected<Ok, vk::Result> PopulateVulkanAvailabilityImpl(
     ::gfxstream::proto::GraphicsAvailability* availability) {
+  // crosvm starts Venus's render server with vk_require_astc=true, which makes
+  // RADV and ANV emulate ASTC (hasvk cannot): probe ASTC support as it sees it.
+  setenv("vk_require_astc", "true", /*overwrite=*/0);
   auto vk = GFXSTREAM_EXPECT(Vk::Load());
 
   ::gfxstream::proto::VulkanAvailability* vulkanAvailability =
@@ -35,6 +40,7 @@ gfxstream::expected<Ok, vk::Result> PopulateVulkanAvailabilityImpl(
 
     const auto props = physicalDevice.getProperties();
     outPhysicalDevice->set_name(std::string(props.deviceName));
+    outPhysicalDevice->set_api_version(props.apiVersion);
     switch (props.deviceType) {
       case vk::PhysicalDeviceType::eDiscreteGpu:
         outPhysicalDevice->set_type(
@@ -55,8 +61,18 @@ gfxstream::expected<Ok, vk::Result> PopulateVulkanAvailabilityImpl(
     }
 
     const auto features = physicalDevice.getFeatures();
-    outPhysicalDevice->mutable_features()->set_pipeline_statistics_query(
+    auto* outFeatures = outPhysicalDevice->mutable_features();
+    outFeatures->set_pipeline_statistics_query(
         features.pipelineStatisticsQuery == VK_TRUE);
+    outFeatures->set_geometry_shader(features.geometryShader == VK_TRUE);
+    outFeatures->set_tessellation_shader(features.tessellationShader ==
+                                         VK_TRUE);
+    const auto astcProps =
+        physicalDevice.getFormatProperties(vk::Format::eAstc4x4UnormBlock);
+    outFeatures->set_texture_compression_astc_ldr(
+        features.textureCompressionASTC_LDR == VK_TRUE ||
+        static_cast<bool>(astcProps.optimalTilingFeatures &
+                          vk::FormatFeatureFlagBits::eSampledImage));
 
     const auto exts =
         VK_EXPECT_RV(physicalDevice.enumerateDeviceExtensionProperties());
