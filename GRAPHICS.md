@@ -157,6 +157,14 @@ normally uses to share host memory with the guest. On Apple Silicon hosts with
 - In the guest, gfxstream's Vulkan driver passes DRM-modifier queries through
   to the host, and keeps the layout of imported hardware buffers across
   `vkCmdPipelineBarrier2` ownership transfers.
+- Android gets OpenGL ES 3.2 here too. ANGLE offers geometry and tessellation
+  shaders, which 3.2 requires, only if it can count primitives for
+  `GL_PRIMITIVES_GENERATED`, and Honeykrisp has no
+  `VK_EXT_primitives_generated_query`, so ANGLE would stop at 3.1. When the
+  host GPU lacks that extension but has pipeline statistics queries, as
+  Honeykrisp does, the host tools turn on ANGLE's
+  `allowPipelineStatisticsForPrimitivesGeneratedQuery`, which counts them with
+  a pipeline statistics query instead.
 - gfxstream runs with glibc's `arena_max=4` and `trim_threshold=131072`, to
   keep its memory use down.
 

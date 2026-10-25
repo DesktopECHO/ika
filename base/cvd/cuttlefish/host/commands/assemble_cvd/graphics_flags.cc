@@ -710,6 +710,14 @@ struct AngleFeatures {
   // disabled for Cuttlefish as SwiftShader does not have geometry
   // shader nor tesselation shader support.
   bool disable_expose_opengles_3_2_for_testing = false;
+
+  // ANGLE exposes geometry and tessellation shaders, and so OpenGL ES 3.2,
+  // only if it can implement GL_PRIMITIVES_GENERATED. Without
+  // VK_EXT_primitives_generated_query (Honeykrisp, Apple Silicon's driver,
+  // does not have it) it may count clipping invocations with a pipeline
+  // statistics query instead, which it does by itself only on some mobile
+  // drivers.
+  bool allow_pipeline_statistics_for_primitives_generated_query = false;
 };
 
 std::ostream& operator<<(std::ostream& stream, const AngleFeatures& features) {
@@ -720,6 +728,10 @@ std::ostream& operator<<(std::ostream& stream, const AngleFeatures& features) {
              features.map_unspecified_color_space_to_pass_through);
   fmt::print(stream, " - ignore_precision_qualifiers: {}\n",
              features.ignore_precision_qualifiers);
+  fmt::print(stream,
+             " - allow_pipeline_statistics_for_primitives_generated_query: "
+             "{}\n",
+             features.allow_pipeline_statistics_for_primitives_generated_query);
   return stream;
 }
 
@@ -736,6 +748,15 @@ Result<AngleFeatures> GetNeededAngleFeaturesBasedOnQuirks(
             .quirks()
             .has_issue_with_precision_qualifiers_on_yuv_samplers()) {
       features.ignore_precision_qualifiers = true;
+    }
+
+    if (availability.has_vulkan() &&
+        !availability.vulkan().physical_devices().empty()) {
+      const auto& physical_device = availability.vulkan().physical_devices(0);
+      features.allow_pipeline_statistics_for_primitives_generated_query =
+          !Contains(physical_device.extensions(),
+                    "VK_EXT_primitives_generated_query") &&
+          physical_device.features().pipeline_statistics_query();
     }
   }
 
@@ -761,6 +782,10 @@ Result<AngleFeatureOverrides> GetNeededAngleFeatures(
   }
   if (features.map_unspecified_color_space_to_pass_through) {
     enable_feature_strings.push_back("mapUnspecifiedColorSpaceToPassThrough");
+  }
+  if (features.allow_pipeline_statistics_for_primitives_generated_query) {
+    enable_feature_strings.push_back(
+        "allowPipelineStatisticsForPrimitivesGeneratedQuery");
   }
   if (features.ignore_precision_qualifiers) {
     disable_feature_strings.push_back("enablePrecisionQualifiers");

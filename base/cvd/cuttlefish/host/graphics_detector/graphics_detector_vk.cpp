@@ -54,6 +54,10 @@ gfxstream::expected<Ok, vk::Result> PopulateVulkanAvailabilityImpl(
         break;
     }
 
+    const auto features = physicalDevice.getFeatures();
+    outPhysicalDevice->mutable_features()->set_pipeline_statistics_query(
+        features.pipelineStatisticsQuery == VK_TRUE);
+
     const auto exts =
         VK_EXPECT_RV(physicalDevice.enumerateDeviceExtensionProperties());
     for (const auto& ext : exts) {
