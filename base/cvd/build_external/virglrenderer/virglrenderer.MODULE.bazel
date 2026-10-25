@@ -4,5 +4,11 @@ git_repository(
     name = "virglrenderer",
     build_file = "@//build_external/virglrenderer:BUILD.virglrenderer.bazel",
     commit = "32dac0c627fba374709102c114f2896b7c899f46",
+    patch_args = ["-p1"],
+    patches = [
+        # Retry device creation at medium queue priority when the host driver
+        # refuses a raised one (Honeykrisp), so ANGLE gets a device.
+        "@//build_external/virglrenderer:PATCH.venus-global-priority-fallback.patch",
+    ],
     remote = "https://gitlab.freedesktop.org/virgl/virglrenderer",
 )

@@ -1,0 +1,52 @@
+diff --git a/src/venus/vkr_device.c b/src/venus/vkr_device.c
+index 603f45b..25471e7 100644
+--- a/src/venus/vkr_device.c
++++ b/src/venus/vkr_device.c
+@@ -78,6 +78,29 @@ vkr_device_init_proc_table(struct vkr_device *dev,
+                                   api_version, &ext_table, &dev->proc_table);
+ }
+ 
++/* Lower every requested queue global priority above medium to medium.
++ * Returns whether any was lowered.
++ */
++static bool
++vkr_device_lower_queue_global_priorities(const VkDeviceCreateInfo *create_info)
++{
++   bool lowered = false;
++   for (uint32_t i = 0; i < create_info->queueCreateInfoCount; i++) {
++      for (VkBaseOutStructure *s =
++              (VkBaseOutStructure *)create_info->pQueueCreateInfos[i].pNext;
++           s; s = s->pNext) {
++         if (s->sType != VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_EXT)
++            continue;
++         VkDeviceQueueGlobalPriorityCreateInfoEXT *priority = (void *)s;
++         if (priority->globalPriority > VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_EXT) {
++            priority->globalPriority = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_EXT;
++            lowered = true;
++         }
++      }
++   }
++   return lowered;
++}
++
+ static void
+ vkr_dispatch_vkCreateDevice(struct vn_dispatch_context *dispatch,
+                             struct vn_command_vkCreateDevice *args)
+@@ -176,6 +199,17 @@ vkr_dispatch_vkCreateDevice(struct vn_dispatch_context *dispatch,
+    vn_replace_vkCreateDevice_args_handle(args);
+    args->ret = vk->CreateDevice(args->physicalDevice, args->pCreateInfo, NULL,
+                                 &dev->base.handle.device);
++   /* A driver may refuse a raised queue priority to an unprivileged process
++    * (Honeykrisp does), and clients such as ANGLE, asked for a high-priority
++    * context by SurfaceFlinger, do not retry. Give them medium priority
++    * rather than no device.
++    */
++   if (args->ret == VK_ERROR_NOT_PERMITTED_EXT &&
++       vkr_device_lower_queue_global_priorities(args->pCreateInfo)) {
++      vkr_log("queue global priority not permitted; using medium priority");
++      args->ret = vk->CreateDevice(args->physicalDevice, args->pCreateInfo, NULL,
++                                   &dev->base.handle.device);
++   }
+    if (args->ret != VK_SUCCESS) {
+       free(exts);
+       free(dev);
