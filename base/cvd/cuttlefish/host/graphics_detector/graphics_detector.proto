@@ -60,6 +60,10 @@ message VulkanQueueFamily {
   optional uint32 queue_count = 4;
 }
 
+message VulkanPhysicalDeviceFeatures {
+  optional bool pipeline_statistics_query = 1;
+}
+
 message VulkanPhysicalDevice {
   optional string name = 1;
   repeated string extensions = 2;
@@ -74,6 +78,8 @@ message VulkanPhysicalDevice {
   optional VulkanQuirks quirks = 4;
 
   repeated VulkanQueueFamily queue_families = 5;
+
+  optional VulkanPhysicalDeviceFeatures features = 6;
 }
 
 message VulkanAvailability {

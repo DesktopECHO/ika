@@ -228,6 +228,14 @@
   used and whose new Rust code needs a rustix the ROM does not have.
   `lineageos/scripts/mesa3d/regenerate.sh` writes the Android build files
   for a new Mesa pin. This arrives with the next ROM build.
+- Apple Silicon hosts get OpenGL ES 3.2 instead of 3.1 with
+  `gfxstream_guest_angle`. Honeykrisp has no
+  `VK_EXT_primitives_generated_query`, without which ANGLE leaves out
+  geometry and tessellation shaders; the host tools now turn on ANGLE's
+  pipeline-statistics fallback for such GPUs when they have pipeline
+  statistics queries. On an M1 Pro, dEQP's GLES 3.1 geometry-shader query
+  tests (29) and the tessellation winding, draw, state-query and
+  primitive-discard tests (92) pass with it.
 
 ### Console window
 - The console and app windows are Wayland windows on a Wayland session and
