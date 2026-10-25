@@ -274,6 +274,13 @@ CrosvmManager::ConfigureGraphics(
         {"androidboot.opengles.version", "196609"},  // OpenGL ES 3.1
     };
   } else if (instance.gpu_mode() == GpuMode::Venus) {
+    // ANGLE over Venus gives OpenGL ES 3.2 where the host GPU allows it
+    // (assemble_cvd caps it at 3.1 elsewhere).
+    int gles_version = (3 << 16) | 2;  // OpenGL ES 3.2
+    if (const int host_gles_version = instance.gpu_host_gles_version();
+        host_gles_version > 0) {
+      gles_version = std::min(gles_version, host_gles_version);
+    }
     bootconfig_args = {
         {"androidboot.cpuvulkan.version", "0"},
         {"androidboot.hardware.gralloc", "minigbm"},
@@ -282,7 +289,7 @@ CrosvmManager::ConfigureGraphics(
         {"androidboot.hardware.hwcomposer.display_finder_mode", "drm"},
         {"androidboot.hardware.egl", "angle"},
         {"androidboot.hardware.vulkan", "virtio"},
-        {"androidboot.opengles.version", "196609"},  // OpenGL ES 3.1
+        {"androidboot.opengles.version", std::to_string(gles_version)},
     };
   } else if (instance.gpu_mode() == GpuMode::None) {
     return {};

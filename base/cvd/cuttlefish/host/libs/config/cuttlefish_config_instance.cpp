@@ -821,6 +821,15 @@ void CuttlefishConfig::MutableInstanceSpecific::set_gpu_host_gles_version(
   (*Dictionary())[kGpuHostGlesVersion] = version;
 }
 
+static constexpr char kGpuHostVulkanVersion[] = "gpu_host_vulkan_version";
+int CuttlefishConfig::InstanceSpecific::gpu_host_vulkan_version() const {
+  return (*Dictionary())[kGpuHostVulkanVersion].asInt();
+}
+void CuttlefishConfig::MutableInstanceSpecific::set_gpu_host_vulkan_version(
+    int version) {
+  (*Dictionary())[kGpuHostVulkanVersion] = version;
+}
+
 static constexpr char kVulkanDriver[] = "guest_vulkan_driver";
 std::string CuttlefishConfig::InstanceSpecific::guest_vulkan_driver() const {
   return (*Dictionary())[kVulkanDriver].asString();

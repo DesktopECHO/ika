@@ -380,6 +380,55 @@ Result<std::unordered_map<std::string, std::string>> BootconfigArgsFromConfig(
     }
   }
 
+  // A vendor image that declares vulkan_*_apex carries one com.google.cf.vulkan
+  // APEX per guest Vulkan driver, and apexd aborts the boot when none of them
+  // is selected. Select the APEX with the driver the guest loads, whatever the
+  // code above picked for the GPU mode (it leaves some modes out, and picks
+  // gfxstream's also when the guest has OpenGL ES only), or none when the
+  // guest loads no Vulkan driver, so that no APEX declares Vulkan features.
+  const auto vulkan_driver_arg =
+      bootconfig_args.find("androidboot.hardware.vulkan");
+  const std::string vulkan_driver = vulkan_driver_arg != bootconfig_args.end()
+                                        ? vulkan_driver_arg->second
+                                        : "";
+  if (instance.has_vulkan_gfxstream_apex() ||
+      instance.has_vulkan_lavapipe_apex() ||
+      instance.has_vulkan_swiftshader_apex() ||
+      instance.has_vulkan_venus_apex()) {
+    static const std::map<std::string, std::string> kVulkanDriverApexes = {
+        {"lvp", "com.google.cf.vulkan.lavapipe"},
+        {"pastel", "com.google.cf.vulkan.swiftshader"},
+        {"ranchu", "com.google.cf.vulkan.gfxstream"},
+        {"virtio", "com.google.cf.vulkan.venus"},
+    };
+    const auto apex = kVulkanDriverApexes.find(vulkan_driver);
+    bootconfig_args["androidboot.vendor.apex.com.google.cf.vulkan"] =
+        apex != kVulkanDriverApexes.end() ? apex->second : "none";
+  }
+
+  // Ika's desktop ROM declares android.hardware.vulkan.version through vendor
+  // SKUs (/vendor/etc/permissions/sku_vulkan_1_1, _1_3 and _1_4): select the
+  // one for the Vulkan version the guest's driver offers. Lavapipe offers 1.4,
+  // SwiftShader 1.3, gfxstream and Venus the host GPU's version (1.3 when it
+  // is unknown). Android has no feature file for 1.2, so 1.2 gets 1.1.
+  if (!vulkan_driver.empty()) {
+    constexpr int kVulkan1_3 = (1 << 16) | 3;
+    constexpr int kVulkan1_4 = (1 << 16) | 4;
+    int vulkan_version = instance.gpu_host_vulkan_version();
+    if (gpu_mode == GpuMode::GuestLavapipe ||
+        gpu_mode == GpuMode::GfxstreamGuestAngleHostLavapipe) {
+      vulkan_version = kVulkan1_4;
+    } else if (gpu_mode == GpuMode::GuestSwiftshader ||
+               gpu_mode == GpuMode::GfxstreamGuestAngleHostSwiftshader ||
+               vulkan_version == 0) {
+      vulkan_version = kVulkan1_3;
+    }
+    bootconfig_args["androidboot.product.vendor.sku"] =
+        vulkan_version >= kVulkan1_4   ? "vulkan_1_4"
+        : vulkan_version >= kVulkan1_3 ? "vulkan_1_3"
+                                       : "vulkan_1_1";
+  }
+
   if (gpu_mode == GpuMode::GuestLavapipe || gpu_mode == GpuMode::Venus) {
     bootconfig_args["androidboot.hardware.guest_renderengine_backend"] =
         "skiavkthreaded";
