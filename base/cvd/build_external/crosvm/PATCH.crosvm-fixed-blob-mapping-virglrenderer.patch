@@ -1,0 +1,25 @@
+diff --git a/src/crosvm/sys/linux/gpu.rs b/src/crosvm/sys/linux/gpu.rs
+index 721b708..38b8d94 100644
+--- a/src/crosvm/sys/linux/gpu.rs
++++ b/src/crosvm/sys/linux/gpu.rs
+@@ -104,7 +104,19 @@ pub fn create_gpu_device(
+             // GPU pci passthrough.
+             debug!("gpu fixed blob mapping disabled: not compatible with passthrough GPU.");
+             gpu_params.fixed_blob_mapping = false;
+-        } else if cfg!(feature = "vulkano") && gpu_params.use_vulkan.unwrap_or(false) {
++        } else if cfg!(feature = "vulkano")
++            && gpu_params.use_vulkan.unwrap_or(false)
++            // ika: keep fixed blob mapping for virglrenderer (Venus). Its
++            // blobs are dma-bufs or shm on the drivers Ika runs on (RADV, ANV,
++            // Honeykrisp export dma-bufs), and the Vulkano gralloc's dma-bufs
++            // are mapped directly too (see resource_map_blob).
++            // Mapping each blob into the shared region with MAP_FIXED, instead
++            // of a memory slot per blob, is what lets arm64 hosts without
++            // FEAT_S2FWB (Apple Silicon) map GPU memory into the guest at all:
++            // KVM refuses a new memslot over a cacheable VM_PFNMAP VMA (a
++            // dma-buf or udmabuf mmap) there.
++            && gpu_params.mode != virtio::GpuMode::ModeVirglRenderer
++        {
+             // TODO(b/244591751): make fixed_blob_mapping compatible with vulkano for opaque_fd blob
+             // mapping.
+             debug!("gpu fixed blob mapping disabled: not compatible with vulkano");
