@@ -24,11 +24,17 @@ external/drm_hwcomposer patches/external-drm-hwcomposer-upstream-stability.patch
 external/minigbm patches/external-minigbm-upstream-stability.patch
 external/minigbm patches/external-minigbm.patch
 external/minigbm patches/external-minigbm-gfxstream-no-forced-linear.patch
+external/minigbm patches/external-minigbm-virtgpu-param-numbers.patch
 external/deqp-deps/glslang patches/external-deqp-deps-glslang-validator-host.patch
+external/venus-protocol patches/external-venus-protocol-android-build.patch
+external/venus-protocol patches/external-venus-protocol-reply-size-init.patch
 external/mesa3d patches/external-mesa3d.patch
 external/mesa3d patches/external-mesa3d-gfxstream-sync2-ahb-layouts.patch
 external/mesa3d patches/external-mesa3d-gfxstream-descriptor-deepcopy-filter.patch
 external/mesa3d patches/external-mesa3d-trace-hex-table.patch
+external/mesa3d patches/external-mesa3d-venus-queue-family-pnext.patch
+external/mesa3d patches/external-mesa3d-venus-memory-report-import-failure.patch
+external/mesa3d patches/external-mesa3d-venus-yv12-ahb.patch
 external/libavc patches/external-libavc-encoder-max-size.patch
 external/libavc patches/external-libavc-vbr-vbv-floor.patch
 external/v4l2_codec2 patches/external-v4l2_codec2-virtio-media.patch
@@ -65,6 +71,7 @@ device/google/cuttlefish patches/device-google-cuttlefish-secure-env-cppcose-com
 device/google/cuttlefish patches/device-google-cuttlefish-front-camera.patch
 device/google/cuttlefish patches/device-google-cuttlefish-camcorder-profiles.patch
 device/google/cuttlefish patches/device-google-cuttlefish-zram-at-boot.patch
+device/google/cuttlefish patches/device-google-cuttlefish-vulkan-driver-apexes.patch
 device/google/atv patches/device-google-atv-ika-tv-mode.patch
 frameworks/av patches/frameworks-av.patch
 frameworks/native patches/frameworks-native-logspam.patch

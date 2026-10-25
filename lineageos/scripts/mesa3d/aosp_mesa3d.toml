@@ -1,11 +1,13 @@
 # Ika's copy of Mesa's src/gfxstream/hermetic/android/aosp_mesa3d.toml for
-# lineageos/scripts/mesa3d/regenerate.sh. Three changes from upstream: the
+# lineageos/scripts/mesa3d/regenerate.sh. Four changes from upstream: the
 # Freedreno/Turnip config (aosp_reference_embedded_drivers) is left out, as the
 # Cuttlefish ROM has no Adreno GPU; the device drivers build without
 # virtgpu_kumquat (Mesa's default), a VM-less test transport Ika does not use,
 # whose Rust library needs a rustix with Mesa's own futex patches (see
-# gfxstream_workaround.patch); and the license text is Mesa's own
-# docs/license.rst, so the patch adds no LICENSE file.
+# gfxstream_workaround.patch); they also build Venus (virtio), as vulkan.virtio,
+# the name Cuttlefish's venus mode loads (its protocol headers come from
+# external/venus-protocol, see dependencies.patch); and the license text is
+# Mesa's own docs/license.rst, so the patch adds no LICENSE file.
 # Copyright 2026 The Magma GPU Project
 # SPDX-License-Identifier: MIT
 [project]
@@ -22,6 +24,7 @@ license_texts = ["docs/license.rst"]
 [target_renames]
 vulkan_lvp = "vulkan.lvp"
 vulkan_gfxstream = "vulkan.ranchu"
+vulkan_virtio = "vulkan.virtio"
 vulkan_freedreno = "vulkan.freedreno"
 
 [custom_target]
@@ -53,7 +56,7 @@ glx = "disabled"
 zlib = "disabled"
 platforms = "android"
 android-strict = false
-vulkan-drivers = "gfxstream,swrast"
+vulkan-drivers = "gfxstream,swrast,virtio"
 gallium-drivers = ""
 virtgpu_kumquat = false
 opengl = false

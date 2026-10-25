@@ -1,0 +1,57 @@
+Patch summary:
+Number minigbm's virtgpu params as Linux does (from upstream minigbm main).
+
+minigbm's copy of virtgpu_drm.h gave the ChromeOS-only
+VIRTGPU_PARAM_CREATE_GUEST_HANDLE the number 8, which upstream Linux (6.7 and
+later, so the guests' 6.12 GKI) uses for VIRTGPU_PARAM_EXPLICIT_DEBUG_NAME.
+The kernel answers 1, so the cross-domain backend, which minigbm uses when
+the host offers the cross-domain context (Cuttlefish's venus mode), created
+every hardware buffer as a guest blob with VIRTGPU_BLOB_FLAG_CREATE_GUEST_HANDLE
+and a host blob id, which the kernel rejects with EINVAL: no gralloc buffer
+could be allocated and the UI did not draw. Upstream minigbm now has Linux's
+numbering, with CREATE_GUEST_HANDLE at 10 and the unused RESOURCE_SYNC and
+GUEST_VRAM params removed; this takes the same change.
+
+diff --git a/external/virtgpu_drm.h b/external/virtgpu_drm.h
+index 7720900..048a450 100644
+--- a/external/virtgpu_drm.h
++++ b/external/virtgpu_drm.h
+@@ -82,9 +82,10 @@ struct drm_virtgpu_execbuffer {
+ #define VIRTGPU_PARAM_CROSS_DEVICE 5 /* Cross virtio-device resource sharing  */
+ #define VIRTGPU_PARAM_CONTEXT_INIT 6 /* DRM_VIRTGPU_CONTEXT_INIT */
+ #define VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs 7 /* Bitmask of supported capability set ids */
+-#define VIRTGPU_PARAM_CREATE_GUEST_HANDLE 8 /* Host OS handle can be created from guest memory. */
+-#define VIRTGPU_PARAM_RESOURCE_SYNC 9 /* Synchronization resources */
+-#define VIRTGPU_PARAM_GUEST_VRAM 10 /* All guest allocations happen via virtgpu dedicated heap. */
++#define VIRTGPU_PARAM_EXPLICIT_DEBUG_NAME 8 /* Ability to set debug name from userspace */
++
++/* Not upstreamed: used by gfxstream */
++#define VIRTGPU_PARAM_CREATE_GUEST_HANDLE 10  /* Host OS handle can be created from guest memory. */
+ 
+ struct drm_virtgpu_getparam {
+ 	__u64 param;
+diff --git a/virtgpu.c b/virtgpu.c
+index 2f4b8db..255d398 100644
+--- a/virtgpu.c
++++ b/virtgpu.c
+@@ -27,7 +27,6 @@ struct virtgpu_param params[] = {
+ 	PARAM(VIRTGPU_PARAM_RESOURCE_BLOB),	   PARAM(VIRTGPU_PARAM_HOST_VISIBLE),
+ 	PARAM(VIRTGPU_PARAM_CROSS_DEVICE),	   PARAM(VIRTGPU_PARAM_CONTEXT_INIT),
+ 	PARAM(VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs), PARAM(VIRTGPU_PARAM_CREATE_GUEST_HANDLE),
+-	PARAM(VIRTGPU_PARAM_RESOURCE_SYNC),	   PARAM(VIRTGPU_PARAM_GUEST_VRAM),
+ };
+ 
+ extern const struct backend virtgpu_virgl;
+diff --git a/virtgpu.h b/virtgpu.h
+index e74afd2..c35b723 100644
+--- a/virtgpu.h
++++ b/virtgpu.h
+@@ -19,8 +19,6 @@ enum virtgpu_param_id {
+ 	param_context_init,
+ 	param_supported_capset_ids,
+ 	param_create_guest_handle,
+-	param_resource_sync,
+-	param_guest_vram,
+ 	param_max,
+ };
+ 

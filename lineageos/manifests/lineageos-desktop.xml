@@ -29,6 +29,16 @@
     revision="b34c71d9ff2f6514a1f947609d00e49be639edf8"
       groups="pdk-cw-fs,pdk-fs" />
 
+  <!-- Venus protocol headers for Mesa's Venus driver (vulkan.virtio). Mesa
+       26.3 requires exactly this version; external-venus-protocol-android-build.patch
+       adds the Android build. -->
+  <project
+      name="virgl/venus-protocol"
+      path="external/venus-protocol"
+      remote="mesa"
+      revision="ca19b6358d7cc491bc3e4de76f04c6700876a8fa"
+      groups="pdk" />
+
   <!-- Keep both guest architectures and their virtual-device modules on the
        same Android 6.12 KMI release. This advances the guests from 6.12.38 to
        the 6.12.74 android16-6 maintenance build without changing kernel

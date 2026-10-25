@@ -1,0 +1,33 @@
+Patch summary:
+Initialize the return value the reply-size functions measure.
+
+vn_sizeof_<command>_reply() and the renderer's args_temp decoders declare
+the command's return value (VkResult, VkDeviceSize, VkDeviceAddress,
+uint64_t or uint32_t) only to pass its address to vn_sizeof_<type>(), which
+reads nothing but the type's size. clang 22 reports that as
+-Wuninitialized-const-pointer, an error under Soong's -Werror, in every
+Mesa Venus source that includes the generated driver headers. Initialize
+it to 0; the generated sizes do not change.
+
+diff --git a/templates/types_command.h b/templates/types_command.h
+index 7c20641..148f196 100644
+--- a/templates/types_command.h
++++ b/templates/types_command.h
+@@ -40,7 +40,7 @@ static inline void vn_decode_${ty.name}_args_temp(struct vn_cs_decoder *dec, str
+     size_t offset = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+ %   if ty.ret:
+ 
+-    ${ty.ret.to_c()};
++    ${ty.ret.to_c()} = 0;
+     ${GEN.sizeof_command_reply(ty, ty.ret, '', 'offset')}
+ % endif
+ %   for var in ty.variables:
+@@ -64,7 +64,7 @@ static inline size_t vn_sizeof_${ty.name}_reply(${ty.c_func_params()})
+     size_t cmd_size = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+ 
+ % if ty.ret:
+-    ${ty.ret.to_c()};
++    ${ty.ret.to_c()} = 0;
+     ${GEN.sizeof_command_reply(ty, ty.ret, '', 'cmd_size')}
+ % endif
+ % for var in ty.variables:

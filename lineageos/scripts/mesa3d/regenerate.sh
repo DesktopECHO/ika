@@ -74,16 +74,18 @@ hermetic="$work/mesa/src/gfxstream/hermetic/android"
 
 # The config names its handwritten-module file relative to its own directory.
 mkdir "$work/config"
-cp "$config" "$hermetic/gfxstream_workaround.txt" "$work/config/"
+cp "$config" "$hermetic/gfxstream_workaround.txt" "$hermetic/dependencies.toml" "$work/config/"
 patch --quiet --forward -p1 -d "$work/config" < "$script_dir/gfxstream_workaround.patch" ||
   die "gfxstream_workaround.patch no longer applies to this Mesa's gfxstream_workaround.txt"
+patch --quiet --forward -p1 -d "$work/config" < "$script_dir/dependencies.patch" ||
+  die "dependencies.patch no longer applies to this Mesa's dependencies.toml"
 
 git -C "$work/mesa" rm --quiet android/Android.mk
 log "converting Mesa $version (${pin:0:12}) with meson2hermetic ${meson_commit:0:12}"
 python3 -I "$meson_dir/meson.py" convert \
   --config "$work/config/aosp_mesa3d.toml" \
   --platforms "$hermetic/platforms.toml" \
-  --dependencies "$hermetic/dependencies.toml" \
+  --dependencies "$work/config/dependencies.toml" \
   --project-dir "$work/mesa" > "$work/convert.log" 2>&1 || {
   tail -n 40 "$work/convert.log" >&2
   die "meson convert failed"
@@ -187,10 +189,11 @@ The Android.bp files come from Mesa's meson.build files through meson2hermetic
 ${meson_commit:0:12} with lineageos/scripts/mesa3d/aosp_mesa3d.toml, which is
 Mesa's AOSP config without the Freedreno/Turnip build and, on the device,
 without virtgpu_kumquat (with gfxstream_workaround.patch keeping its Rust
-libraries out of the device build); its Android-only ldflags select()s become
-target blocks, as Android 16's Soong cannot select ldflags. Mesa's
-android/Android.mk is removed because Soong rejects Android.mk files under
-external/.
+libraries out of the device build) and with Venus (vulkan.virtio, its protocol
+headers from external/venus-protocol through dependencies.patch); its
+ldflags and Rust flags select()s become target blocks, as Android 16's Soong
+cannot select them. Mesa's android/Android.mk is removed because Soong rejects
+Android.mk files under external/.
 
 EOF
   git -C "$work/mesa" diff --cached --full-index
