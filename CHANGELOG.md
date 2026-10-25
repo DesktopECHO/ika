@@ -269,12 +269,14 @@
   decodes H.264, HEVC, VP8 or VP9.
 - On a GPU that has VA-API decoding but no VA-API driver installed, `ika start`
   says "VA-API Capable device but drivers are not installed".
-- On Fedora, whose own VA-API drivers leave out H.264 and HEVC, `ika start`
-  warns that those need the driver from RPM Fusion and names the package
-  (`mesa-va-drivers-freeworld` for AMD, `intel-media-driver` for Intel).
-  ika-base also recommends both packages, so dnf installs them on hosts where
-  the RPM Fusion repositories are enabled. RPM Fusion's Mesa driver follows
-  Fedora's Mesa version exactly, so it waits until Mesa is up to date.
+- On Fedora, whose Mesa and Intel iHD VA-API drivers leave out H.264 and HEVC
+  (its i965 driver for Haswell and older Intel GPUs decodes H.264), `ika
+  start` warns that those need the driver from RPM Fusion and names the
+  package (`mesa-va-drivers-freeworld` for AMD, `intel-media-driver` for
+  Intel). ika-base also recommends both packages, so dnf installs them on
+  hosts where the RPM Fusion repositories are enabled. RPM Fusion's Mesa
+  driver requires Fedora's exact Mesa version: while RPM Fusion's build lags
+  behind a Fedora Mesa update, dnf holds Mesa back on hosts that have it.
 - `hw_video_decode = off` in ika.ini, `--hw_video_decode=off` or
   `IKA_HW_VIDEO_DECODE=off` leaves the decoder out.
 - ika-base depends on vainfo (libva-utils).
