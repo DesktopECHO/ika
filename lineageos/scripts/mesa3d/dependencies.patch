@@ -1,0 +1,22 @@
+regenerate.sh applies this to its copy of Mesa's
+src/gfxstream/hermetic/android/dependencies.toml, which maps Meson
+dependencies to Android modules.
+
+Mesa 26.3 takes Venus's protocol headers from the venus-protocol Meson
+subproject, which a hermetic build cannot download. Map the dependency to
+venus_protocol_headers, the header library that
+lineageos/patches/external-venus-protocol.patch adds to the ROM's
+external/venus-protocol (v1.1.3, the exact version Mesa requires).
+
+--- a/dependencies.toml	2026-10-25 03:26:25
++++ b/dependencies.toml	2026-10-25 03:26:25
+@@ -98,6 +98,9 @@
+ ]
+ 
+ [header_libraries]
++venus-protocol = [
++    { target_name = "venus_protocol_headers", version = "1.1.3" }
++]
+ android-hwvulkan-headers = [
+     { target_name = "hwvulkan_headers" }
+ ]

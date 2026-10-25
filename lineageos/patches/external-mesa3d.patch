@@ -5,10 +5,11 @@ The Android.bp files come from Mesa's meson.build files through meson2hermetic
 1217e6125d76 with lineageos/scripts/mesa3d/aosp_mesa3d.toml, which is
 Mesa's AOSP config without the Freedreno/Turnip build and, on the device,
 without virtgpu_kumquat (with gfxstream_workaround.patch keeping its Rust
-libraries out of the device build); its Android-only ldflags select()s become
-target blocks, as Android 16's Soong cannot select ldflags. Mesa's
-android/Android.mk is removed because Soong rejects Android.mk files under
-external/.
+libraries out of the device build) and with Venus (vulkan.virtio, its protocol
+headers from external/venus-protocol through dependencies.patch); its
+ldflags and Rust flags select()s become target blocks, as Android 16's Soong
+cannot select them. Mesa's android/Android.mk is removed because Soong rejects
+Android.mk files under external/.
 
 diff --git a/Android.bp b/Android.bp
 new file mode 100644
@@ -4578,7 +4579,7 @@ index 0000000000000000000000000000000000000000..4905ed309baec125999531c0e2def2f1
 +}
 diff --git a/src/gallium/frontends/lavapipe/Android.bp b/src/gallium/frontends/lavapipe/Android.bp
 new file mode 100644
-index 0000000000000000000000000000000000000000..e60035f1a191837d572d2213d1271f7bb84903b5
+index 0000000000000000000000000000000000000000..388c6f559655e3bc7f128c407440c4364c2a23e0
 --- /dev/null
 +++ b/src/gallium/frontends/lavapipe/Android.bp
 @@ -0,0 +1,285 @@
@@ -4599,7 +4600,7 @@ index 0000000000000000000000000000000000000000..e60035f1a191837d572d2213d1271f7b
 +}
 +
 +filegroup {
-+    name: "files_drirc",
++    name: "files_drirc_1",
 +    srcs: [
 +        "00-lavapipe-defaults.conf",
 +    ],
@@ -8609,6 +8610,38 @@ index 0000000000000000000000000000000000000000..9d625f187c23f60fb43be79d31003991
 +        default: [],
 +    }),
 +}
+diff --git a/src/virtio/Android.bp b/src/virtio/Android.bp
+new file mode 100644
+index 0000000000000000000000000000000000000000..39e27f38e8a26662116900b38fa883c9ef710269
+--- /dev/null
++++ b/src/virtio/Android.bp
+@@ -0,0 +1,26 @@
++/*
++ * Copyright (C) 2025-2026 The Magma GPU Project
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * Generated via meson convert.  Submit patches here:
++ *   https://github.com/mesonbuild/meson
++ *
++ * Do not hand-edit.
++ *
++ */
++
++package {
++    // See: http://go/android-license-faq
++    default_applicable_licenses: ["external_mesa3d_license"],
++}
++
++cc_library_headers {
++    name: "inc_virtio",
++    vendor: true,
++    export_include_dirs: select(os(), {
++        "android": [
++            ".",
++        ],
++        default: [],
++    }),
++}
 diff --git a/src/virtio/magma-gpu-rs/ffi/virtgpu_kumquat_ffi/Android.bp b/src/virtio/magma-gpu-rs/ffi/virtgpu_kumquat_ffi/Android.bp
 new file mode 100644
 index 0000000000000000000000000000000000000000..f13d0fe22844c8409e0c8d83724875b4bf647736
@@ -8774,6 +8807,335 @@ index 0000000000000000000000000000000000000000..7e0e8970e22bc1ccf0b169451c872895
 +    proc_macros: [
 +        "libremain",
 +    ],
++}
+diff --git a/src/virtio/vulkan/Android.bp b/src/virtio/vulkan/Android.bp
+new file mode 100644
+index 0000000000000000000000000000000000000000..93f7659749407eebcf475b87d853e89bcc7783b2
+--- /dev/null
++++ b/src/virtio/vulkan/Android.bp
+@@ -0,0 +1,323 @@
++/*
++ * Copyright (C) 2025-2026 The Magma GPU Project
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * Generated via meson convert.  Submit patches here:
++ *   https://github.com/mesonbuild/meson
++ *
++ * Do not hand-edit.
++ *
++ */
++
++package {
++    // See: http://go/android-license-faq
++    default_applicable_licenses: ["external_mesa3d_license"],
++}
++
++filegroup {
++    name: "files_drirc",
++    srcs: [
++        "00-venus-defaults.conf",
++    ],
++}
++
++python_binary_host {
++    name: "vn_drirc_py_binary",
++    main: "vn_drirc_gen.py",
++    srcs: [
++        ":drirc_gen.py",
++        "vn_drirc_gen.py",
++    ],
++    libs: [
++        "mako",
++        "pyyaml",
++    ],
++}
++
++genrule {
++    name: "virtio_devenv_icd",
++    out: [
++        "virtio_devenv_icd.i686.json",
++    ],
++    srcs: [
++        ":vk_api_xml",
++    ],
++    tools: [
++        "vk_icd_py_binary",
++    ],
++    cmd: "$(location vk_icd_py_binary) --api-version 1.4 --xml $(location " +
++        ":vk_api_xml) --sizeof-pointer 4 --icd-lib-path $(genDir) " +
++        "--icd-filename libvulkan_virtio.so --out $(location " +
++        "virtio_devenv_icd.i686.json)",
++}
++
++genrule {
++    name: "vn_drirc_headers",
++    out: [
++        "src/virtio/vulkan/vn_drirc.h",
++    ],
++    srcs: [
++        "00-venus-defaults.conf",
++    ],
++    tools: [
++        "vn_drirc_py_binary",
++    ],
++    export_include_dirs: [
++        "src",
++        "src/virtio",
++        "src/virtio/vulkan",
++    ],
++    cmd: "$(location vn_drirc_py_binary) --import-path $(genDir)/src/util " +
++        "--drirc-src $(genDir)/src/virtio/vulkan/vn_drirc.c --drirc-hdr " +
++        "$(location src/virtio/vulkan/vn_drirc.h) --validate $(location " +
++        "00-venus-defaults.conf)",
++}
++
++genrule {
++    name: "vn_drirc_impl",
++    out: [
++        "src/virtio/vulkan/vn_drirc.c",
++    ],
++    srcs: [
++        "00-venus-defaults.conf",
++    ],
++    tools: [
++        "vn_drirc_py_binary",
++    ],
++    cmd: "$(location vn_drirc_py_binary) --import-path $(genDir)/src/util " +
++        "--drirc-src $(location src/virtio/vulkan/vn_drirc.c) --drirc-hdr " +
++        "$(genDir)/src/virtio/vulkan/vn_drirc.h --validate $(location " +
++        "00-venus-defaults.conf)",
++}
++
++genrule {
++    name: "vn_entrypoints_headers",
++    out: [
++        "src/virtio/vulkan/vn_entrypoints.h",
++    ],
++    srcs: [
++        ":vk_api_xml",
++    ],
++    tools: [
++        "vk_entrypoints_py_binary",
++    ],
++    export_include_dirs: [
++        "src",
++        "src/virtio",
++        "src/virtio/vulkan",
++    ],
++    cmd: "$(location vk_entrypoints_py_binary) --xml $(location :vk_api_xml) " +
++        "--proto --weak --out-h $(location src/virtio/vulkan/vn_entrypoints.h) " +
++        "--out-c $(genDir)/src/virtio/vulkan/vn_entrypoints.c --prefix vn " +
++        "--beta false",
++}
++
++genrule {
++    name: "vn_entrypoints_impl",
++    out: [
++        "src/virtio/vulkan/vn_entrypoints.c",
++    ],
++    srcs: [
++        ":vk_api_xml",
++    ],
++    tools: [
++        "vk_entrypoints_py_binary",
++    ],
++    cmd: "$(location vk_entrypoints_py_binary) --xml $(location :vk_api_xml) " +
++        "--proto --weak --out-h $(genDir)/src/virtio/vulkan/vn_entrypoints.h " +
++        "--out-c $(location src/virtio/vulkan/vn_entrypoints.c) --prefix vn " +
++        "--beta false",
++}
++
++cc_defaults {
++    name: "vn_c_args",
++    vendor: true,
++    cflags: select(os(), {
++        "android": [
++            "-Werror=gnu-pointer-arith",
++            "-Werror=switch",
++        ],
++        default: [],
++    }),
++}
++
++cc_defaults {
++    name: "vulkan_virtio_c_flags",
++    vendor: true,
++    cflags: select(os(), {
++        "android": [
++            "-DXXH_FORCE_ALIGN_CHECK=0",
++            "-DXXH_FORCE_MEMORY_ACCESS=0",
++            "-fvisibility=hidden",
++        ],
++        default: [],
++    }),
++}
++
++cc_defaults {
++    name: "vulkan_virtio_cpp_flags",
++    vendor: true,
++    cppflags: select(os(), {
++        "android": [
++            "-DXXH_FORCE_ALIGN_CHECK=0",
++            "-DXXH_FORCE_MEMORY_ACCESS=0",
++            "-fvisibility=hidden",
++        ],
++        default: [],
++    }),
++}
++
++cc_library_shared {
++    name: "vulkan.virtio",
++    vendor: true,
++    c_std: "c11",
++    cpp_std: "c++17",
++    defaults: [
++        "_trial_soong_c",
++        "aosp_mesa3d_c_link_args",
++        "aosp_mesa3d_c_project_args",
++        "aosp_mesa3d_cpp_link_args",
++        "aosp_mesa3d_cpp_project_args",
++        "ld_args_bsymbolic",
++        "ld_args_gc_sections",
++        "no_override_init_args",
++        "vn_c_args",
++        "vulkan_virtio_c_flags",
++        "vulkan_virtio_cpp_flags",
++        "vulkan_wsi_list",
++    ],
++    header_libs: select(os(), {
++        "android": [
++            "hwvulkan_headers",
++            "inc_compiler",
++            "inc_include",
++            "inc_nir",
++            "inc_src",
++            "inc_src_vulkan_runtime",
++            "inc_src_vulkan_util",
++            "inc_src_vulkan_wsi",
++            "inc_util",
++            "inc_util_c11",
++            "inc_virtio",
++            "venus_protocol_headers",
++        ],
++        default: [],
++    }),
++    generated_headers: [
++        "builtin_types.h",
++        "git_sha1.h",
++        "ir_expression_operation.h",
++        "nir_builder_opcodes.h",
++        "nir_intrinsics.h",
++        "nir_intrinsics_indices.h",
++        "nir_opcodes.h",
++        "shader_stats.h",
++        "spirv_info_headers",
++        "u_format_gen.h",
++        "vk_cmd_enqueue_entrypoints_headers",
++        "vk_cmd_queue_headers",
++        "vk_common_entrypoints_headers",
++        "vk_dispatch_table_headers",
++        "vk_dispatch_trampolines_headers",
++        "vk_enum_to_str_headers",
++        "vk_extensions_headers",
++        "vk_format_info_headers",
++        "vk_physical_device_features_headers",
++        "vk_physical_device_properties_headers",
++        "vk_struct_type_cast",
++        "vn_drirc_headers",
++        "vn_entrypoints_headers",
++        "wsi_entrypoints_headers",
++    ],
++    srcs: select(os(), {
++        "android": [
++            ":vn_drirc_impl",
++            ":vn_entrypoints_impl",
++            "vn_acceleration_structure.c",
++            "vn_android.c",
++            "vn_buffer.c",
++            "vn_command_buffer.c",
++            "vn_common.c",
++            "vn_cs.c",
++            "vn_descriptor_heap.c",
++            "vn_descriptor_set.c",
++            "vn_device.c",
++            "vn_device_memory.c",
++            "vn_feedback.c",
++            "vn_host_copy.c",
++            "vn_icd.c",
++            "vn_image.c",
++            "vn_instance.c",
++            "vn_physical_device.c",
++            "vn_pipeline.c",
++            "vn_query_pool.c",
++            "vn_queue.c",
++            "vn_render_pass.c",
++            "vn_renderer_internal.c",
++            "vn_renderer_sim_syncobj.c",
++            "vn_renderer_util.c",
++            "vn_renderer_virtgpu.c",
++            "vn_renderer_vtest.c",
++            "vn_ring.c",
++            "vn_sync.c",
++        ],
++        default: [],
++    }),
++    static_libs: select((os(), soong_config_variable("aosp_mesa3d", "perfetto")), {
++        ("android", "true"): [
++            "libperfetto_client_experimental",
++        ],
++        (default, default): [],
++    }) + select(os(), {
++        "android": [
++            "_mesa_u_gralloc",
++            "blake3",
++            "mesa_util",
++            "mesa_util_c11",
++            "mesa_util_simd",
++            "vulkan_lite_instance",
++            "vulkan_lite_runtime",
++            "vulkan_util",
++            "vulkan_wsi",
++            "xmlconfig",
++        ],
++        default: [],
++    }) + select((arch(), os()), {
++        ("x86_64", "android"): [
++            "mesa_util_clflush",
++            "mesa_util_clflushopt",
++        ],
++        ("x86", "android"): [
++            "mesa_util_clflush",
++            "mesa_util_clflushopt",
++        ],
++        (default, default): [],
++    }),
++    shared_libs: select(os(), {
++        "android": [
++            "libcutils",
++            "libdrm",
++            "libhardware",
++            "liblog",
++            "libnativewindow",
++            "libsync",
++            "libui",
++            "libz",
++            "libzstd",
++        ],
++        default: [],
++    }),
++    whole_static_libs: select(os(), {
++        "android": [
++            "vulkan_lite_instance",
++            "vulkan_lite_runtime",
++            "vulkan_wsi",
++        ],
++        default: [],
++    }),
++    target: {
++        android: {
++            relative_install_path: "hw",
++        },
++    },
 +}
 diff --git a/src/vulkan/Android.bp b/src/vulkan/Android.bp
 new file mode 100644

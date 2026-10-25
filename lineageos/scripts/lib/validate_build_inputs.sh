@@ -1474,6 +1474,8 @@ manifest = sys.argv[1]
 expected = {
     ("mesa/mesa", "external/mesa3d"):
       "b34c71d9ff2f6514a1f947609d00e49be639edf8",
+    ("virgl/venus-protocol", "external/venus-protocol"):
+        "ca19b6358d7cc491bc3e4de76f04c6700876a8fa",
     ("kernel/prebuilts/6.12/arm64", "kernel/prebuilts/6.12/arm64"):
         "318576752b27af3d328e6deb5e6aa29b08f762c9",
     ("kernel/prebuilts/common-modules/virtual-device/6.12/arm64", "kernel/prebuilts/common-modules/virtual-device/6.12/arm64"):
@@ -1538,6 +1540,7 @@ PY
     fi
   done <<'EOF'
 external/mesa3d b34c71d9ff2f6514a1f947609d00e49be639edf8
+external/venus-protocol ca19b6358d7cc491bc3e4de76f04c6700876a8fa
 kernel/prebuilts/6.12/arm64 318576752b27af3d328e6deb5e6aa29b08f762c9
 kernel/prebuilts/common-modules/virtual-device/6.12/arm64 e6673fcbd05e63e6fcc2c2d2cf33246108b73b0c
 kernel/prebuilts/6.12/x86_64 cb8e8ee3babf4a27b742f59dcb92f59cf186299c

@@ -1,0 +1,53 @@
+Patch summary:
+Venus: skip chained queue family structs it has no cached data for.
+
+vn_fill_queue_family_properties() copies VkQueueFamilyGlobalPriorityProperties,
+VkQueueFamilyOwnershipTransferPropertiesKHR and
+VkQueueFamilyOptimalImageTransferGranularityPropertiesKHR from arrays that
+vn_physical_device_init_queue_family_properties() allocates only when
+globalPriorityQuery, maintenance9 or maintenance11 is supported. On an AMD
+host (RADV, Venus reports Vulkan 1.4.334) Venus lists VK_KHR_maintenance11
+while its maintenance11 feature is off, so vulkaninfo chains
+VkQueueFamilyOptimalImageTransferGranularityPropertiesKHR and crashes in
+vn_GetPhysicalDeviceQueueFamilyProperties2 reading address 0x10 (the NULL
+qfoitgp array). Leave a struct without cached data as the app passed it.
+Mesa main has the same code.
+
+--- a/src/virtio/vulkan/vn_physical_device.c
++++ b/src/virtio/vulkan/vn_physical_device.c
+@@ -2115,19 +2115,29 @@
+    VN_COPY_STRUCT_GUTS(props, &physical_dev->qfp[qfi],
+                        sizeof(*physical_dev->qfp));
+ 
++   /* The cached arrays exist only for supported features; leave a struct
++    * chained without one (vulkaninfo chains the maintenance11 one whenever
++    * the extension is listed) as the app passed it.
++    */
+    vk_foreach_struct(sType, pnext, props->pNext) {
+       switch (sType) {
+       case VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES:
+-         VN_COPY_STRUCT_GUTS(pnext, &physical_dev->qfgpp[qfi],
+-                             sizeof(*physical_dev->qfgpp));
++         if (physical_dev->qfgpp) {
++            VN_COPY_STRUCT_GUTS(pnext, &physical_dev->qfgpp[qfi],
++                                sizeof(*physical_dev->qfgpp));
++         }
+          break;
+       case VK_STRUCTURE_TYPE_QUEUE_FAMILY_OWNERSHIP_TRANSFER_PROPERTIES_KHR:
+-         VN_COPY_STRUCT_GUTS(pnext, &physical_dev->qfotp[qfi],
+-                             sizeof(*physical_dev->qfotp));
++         if (physical_dev->qfotp) {
++            VN_COPY_STRUCT_GUTS(pnext, &physical_dev->qfotp[qfi],
++                                sizeof(*physical_dev->qfotp));
++         }
+          break;
+       case VK_STRUCTURE_TYPE_QUEUE_FAMILY_OPTIMAL_IMAGE_TRANSFER_GRANULARITY_PROPERTIES_KHR:
+-         VN_COPY_STRUCT_GUTS(pnext, &physical_dev->qfoitgp[qfi],
+-                             sizeof(*physical_dev->qfoitgp));
++         if (physical_dev->qfoitgp) {
++            VN_COPY_STRUCT_GUTS(pnext, &physical_dev->qfoitgp[qfi],
++                                sizeof(*physical_dev->qfoitgp));
++         }
+          break;
+       default:
+          break;

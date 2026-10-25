@@ -1,0 +1,23 @@
+Patch summary:
+Venus: do not dereference a NULL base_bo in the device memory report when an
+import fails.
+
+vn_device_memory_emit_report() takes the memory object id from
+mem->base_bo->res_id for imported and exported memory, but base_bo is only
+set when the import succeeds. With VK_EXT_device_memory_report enabled
+(ANGLE enables it), any failed AHardwareBuffer import made SurfaceFlinger
+SIGSEGV at fault address 0x4 in vn_AllocateMemory. Backport of Mesa main
+b9174e097b10 ("venus: fix DMR on import failure", Cc: mesa-stable, not in
+26.3.0-rc2); drop it when the Mesa pin includes it.
+
+--- a/src/virtio/vulkan/vn_device_memory.c
++++ b/src/virtio/vulkan/vn_device_memory.c
+@@ -342,7 +342,7 @@
+    const struct vk_device_memory *mem_vk = &mem->base.vk;
+    const uint64_t mem_obj_id =
+       (mem_vk->import_handle_type | mem_vk->export_handle_types)
+-         ? mem->base_bo->res_id
++         ? (result != VK_SUCCESS ? 0 : mem->base_bo->res_id)
+          : mem->base.id;
+    const VkMemoryType *mem_type = &dev->physical_device->memory_properties
+                                       .memoryTypes[mem_vk->memory_type_index];

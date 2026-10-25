@@ -1,0 +1,58 @@
+Patch summary:
+Venus: import YV12 AHardwareBuffers on hosts that need plane layouts in
+memory order.
+
+YV12 (DRM_FORMAT_YVU420) is imported as the external format
+VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM with its Cb plane as plane 1 and its Cr
+plane as plane 2, so plane 1 lies after plane 2 in memory. Intel's host
+drivers (hasvk, anv) require VkImageDrmFormatModifierExplicitCreateInfoEXT
+plane layouts in memory order and fail vkCreateImage with
+VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT, so every YV12 frame
+SurfaceFlinger imported failed on mb11/mb13 and RenderEngine aborted
+("Failed to create a valid texture"); RADV accepts either order. YV12 is
+what Ika's V4L2 decoder writes in MMAP mode and what software decoders
+write. Bind the planes in memory order (Cr as plane 1) and swap the chroma
+channels back in the Y'CbCr conversion Venus creates for that external
+format, whose components the app does not choose (the spec ignores them
+for external formats). Tested on mb11 (Broadwell, hasvk): H.264 in Chrome
+plays with correct colors and no SurfaceFlinger restart.
+
+--- a/src/virtio/vulkan/vn_android.c
++++ b/src/virtio/vulkan/vn_android.c
+@@ -155,6 +155,20 @@
+    result = vk_android_get_ahb_layout(ahb, &mod_info, layouts, VN_MAX_PLANES);
+    if (result != VK_SUCCESS)
+       return result;
++   /* YV12 (DRM_FORMAT_YVU420) is the external format
++    * VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM, whose Cb plane (plane 1) lies
++    * after its Cr plane (plane 2) in memory. Host drivers that require
++    * explicit plane layouts in memory order (anv, hasvk) reject that, so
++    * bind the planes in memory order; vn_CreateSamplerYcbcrConversion
++    * swaps the chroma channels back for this external format.
++    */
++   if (create_info->format == VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM &&
++       mod_info.drmFormatModifierPlaneCount == 3 &&
++       layouts[2].offset < layouts[1].offset) {
++      const VkSubresourceLayout cb = layouts[1];
++      layouts[1] = layouts[2];
++      layouts[2] = cb;
++   }
+    __vk_append_struct(create_info, &mod_info);
+ 
+    VkExternalMemoryImageCreateInfo external_info = {
+--- a/src/virtio/vulkan/vn_image.c
++++ b/src/virtio/vulkan/vn_image.c
+@@ -927,6 +927,13 @@
+       local_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+       local_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+       local_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
++      /* YV12 images bind their Cr plane as plane 1 and their Cb plane as
++       * plane 2 (see vn_android_ahb_image_init): swap them back.
++       */
++      if (local_info.format == VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM) {
++         local_info.components.r = VK_COMPONENT_SWIZZLE_B;
++         local_info.components.b = VK_COMPONENT_SWIZZLE_R;
++      }
+       pCreateInfo = &local_info;
+ 
+       assert(pCreateInfo->format != VK_FORMAT_UNDEFINED);

@@ -1,0 +1,106 @@
+Patch summary:
+Add an Android build for venus-protocol v1.1.3.
+
+Mesa's Venus Vulkan driver (vulkan.virtio, built by external-mesa3d.patch)
+includes the generated vn_protocol_driver*.h headers, which Mesa normally
+gets from the venus-protocol Meson subproject. Upstream builds only with
+Meson, so add an Android.bp that runs vn_protocol.py the way its
+vn_protocol_driver target does and exports the result as
+venus_protocol_headers, the header library lineageos/scripts/mesa3d/
+dependencies.patch maps Mesa's venus-protocol dependency to.
+
+diff --git a/Android.bp b/Android.bp
+new file mode 100644
+index 0000000000000000000000000000000000000000..d0f63e061e72490a22183a9009ca020cc921df21
+--- /dev/null
++++ b/Android.bp
+@@ -0,0 +1,89 @@
++// SPDX-License-Identifier: MIT
++//
++// Android build for the Venus protocol headers that Mesa's Venus Vulkan
++// driver (vulkan.virtio) is built against. Upstream builds only with Meson;
++// this mirrors its vn_protocol_driver target: vn_protocol.py renders the
++// driver-side headers from xmls/ and templates/ at build time.
++
++package {
++    default_applicable_licenses: ["external_venus-protocol_license"],
++}
++
++// The sources carry SPDX-License-Identifier: MIT; the project has no license
++// file of its own.
++license {
++    name: "external_venus-protocol_license",
++    visibility: [":__subpackages__"],
++    license_kinds: ["SPDX-license-identifier-MIT"],
++}
++
++python_binary_host {
++    name: "venus_protocol_gen",
++    main: "vn_protocol.py",
++    srcs: [
++        "vkxml.py",
++        "vn_protocol.py",
++    ],
++    libs: ["mako"],
++}
++
++genrule {
++    name: "venus_protocol_driver_gen",
++    tools: ["venus_protocol_gen"],
++    srcs: [
++        "templates/*",
++        "xmls/VK_EXT_command_serialization.xml",
++        "xmls/VK_MESA_venus_protocol.xml",
++        "xmls/vk.xml",
++    ],
++    out: [
++        "vn_protocol_driver.h",
++        "vn_protocol_driver_acceleration_structure.h",
++        "vn_protocol_driver_buffer.h",
++        "vn_protocol_driver_buffer_view.h",
++        "vn_protocol_driver_command_buffer.h",
++        "vn_protocol_driver_command_pool.h",
++        "vn_protocol_driver_cs.h",
++        "vn_protocol_driver_defines.h",
++        "vn_protocol_driver_descriptor_heap.h",
++        "vn_protocol_driver_descriptor_pool.h",
++        "vn_protocol_driver_descriptor_set.h",
++        "vn_protocol_driver_descriptor_set_layout.h",
++        "vn_protocol_driver_descriptor_update_template.h",
++        "vn_protocol_driver_device.h",
++        "vn_protocol_driver_device_memory.h",
++        "vn_protocol_driver_event.h",
++        "vn_protocol_driver_fence.h",
++        "vn_protocol_driver_framebuffer.h",
++        "vn_protocol_driver_handles.h",
++        "vn_protocol_driver_host_copy.h",
++        "vn_protocol_driver_image.h",
++        "vn_protocol_driver_image_view.h",
++        "vn_protocol_driver_info.h",
++        "vn_protocol_driver_instance.h",
++        "vn_protocol_driver_pipeline.h",
++        "vn_protocol_driver_pipeline_cache.h",
++        "vn_protocol_driver_pipeline_layout.h",
++        "vn_protocol_driver_private_data_slot.h",
++        "vn_protocol_driver_query_pool.h",
++        "vn_protocol_driver_queue.h",
++        "vn_protocol_driver_render_pass.h",
++        "vn_protocol_driver_sampler.h",
++        "vn_protocol_driver_sampler_ycbcr_conversion.h",
++        "vn_protocol_driver_semaphore.h",
++        "vn_protocol_driver_shader_module.h",
++        "vn_protocol_driver_structs.h",
++        "vn_protocol_driver_transport.h",
++        "vn_protocol_driver_types.h",
++    ],
++    cmd: "$(location venus_protocol_gen) " +
++        "--srcdir $$(dirname $$(dirname $(location xmls/vk.xml))) " +
++        "--outdir $(genDir)",
++}
++
++cc_library_headers {
++    name: "venus_protocol_headers",
++    vendor_available: true,
++    generated_headers: ["venus_protocol_driver_gen"],
++    export_generated_headers: ["venus_protocol_driver_gen"],
++}
