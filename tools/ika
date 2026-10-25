@@ -1776,11 +1776,12 @@ vaapi_decoder_check() {
   return 1
 }
 
-# Fedora's own VA-API drivers leave out H.264 and HEVC, which every GPU they
-# drive decodes; RPM Fusion's builds put them back, installed beside Fedora's
-# in directories libva searches first. Prints a warning naming the RPM Fusion
-# package when the driver for render node NODE decodes CODECS without H.264,
-# and nothing otherwise.
+# Fedora's own Mesa and Intel iHD VA-API drivers leave out H.264 and HEVC,
+# though the GPUs they drive decode H.264 in hardware (its i965 driver, for
+# Haswell and older Intel GPUs, keeps H.264); RPM Fusion's builds put them
+# back, installed beside Fedora's in directories libva searches first. Prints
+# a warning naming the RPM Fusion package when the driver for render node NODE
+# decodes CODECS without H.264, and nothing otherwise.
 vaapi_rpmfusion_warning() {
   local node="$1"
   local codecs="$2"
