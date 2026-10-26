@@ -3,6 +3,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+T="$(mktemp -d)"
+trap 'rm -rf "${T}"' EXIT
+# No ika.ini: the host's own gpu_mode would decide the cases below.
+export HOME="${T}/home"
+export CVD_HOME_DIR="${T}/ika"
+mkdir -p "${HOME}"
 source "${ROOT}/tools/ika"
 
 fail() {
@@ -15,6 +21,33 @@ assert_equal() {
   local actual="$2"
   [[ "${actual}" == "${expected}" ]] || \
     fail "expected '${expected}', got '${actual}'"
+}
+
+# The real ETC2 probe, kept under another name, reads a fake vulkaninfo: GPU0
+# with ETC2 as given by FAKE_ETC2, GPU1 the opposite, then a long tail that
+# would end vulkaninfo with SIGPIPE if the parser stopped reading early.
+eval "real_$(declare -f primary_vulkan_device_has_venus_etc2)"
+mkdir -p "${T}/bin"
+cat >"${T}/bin/vulkaninfo" <<'STUB'
+#!/usr/bin/env bash
+[[ "${vk_require_etc2:-}" == "true" && "${vk_require_astc:-}" == "true" ]] || exit 1
+other=true; [[ "${FAKE_ETC2}" == "true" ]] && other=false
+printf 'Devices:\n========\nGPU0:\nVkPhysicalDeviceFeatures:\n\ttextureCompressionETC2                  = %s\n' "${FAKE_ETC2}"
+printf 'GPU1:\nVkPhysicalDeviceFeatures:\n\ttextureCompressionETC2                  = %s\n' "${other}"
+for i in $(seq 20000); do printf '\tsome feature %d = true\n' "${i}"; done
+STUB
+chmod +x "${T}/bin/vulkaninfo"
+PATH="${T}/bin:${PATH}" FAKE_ETC2=true real_primary_vulkan_device_has_venus_etc2 || \
+  fail "GPU0's ETC2 under vk_require_etc2 was not found"
+if PATH="${T}/bin:${PATH}" FAKE_ETC2=false real_primary_vulkan_device_has_venus_etc2; then
+  fail "GPU1's ETC2 was taken for GPU0's"
+fi
+echo "ok: the ETC2 probe reads GPU0 as Venus's render server runs"
+
+# Elsewhere ETC2 as Venus's guest sees it is what the test says
+# (TEST_VENUS_ETC2=1), never the machine it runs on.
+primary_vulkan_device_has_venus_etc2() {
+  [[ "${TEST_VENUS_ETC2:-0}" == "1" ]]
 }
 
 software_summary=$'GPU0:\n  deviceName = llvmpipe (LLVM 19.1.7, 256 bits)\n  driverID = DRIVER_ID_MESA_LLVMPIPE\n  driverName = llvmpipe'
@@ -102,5 +135,62 @@ vulkaninfo_summary() {
   printf '%s\n' "${radv_summary}"
 }
 assert_equal "gfxstream_guest_angle" "$(default_gpu_mode_for_start)"
+echo "ok: software-only and passed-over Vulkan"
 
-printf 'PASS: software-only and passed-over Vulkan GPU mode selection\n'
+# auto is venus on any GPU with Vulkan 1.3 or newer and ETC2 as Venus sees it
+# (ryzen9's RADV emulates it, mb11's Broadwell and mbp16's M1 have it): the
+# summaries of those hosts, and an NVIDIA GPU's.
+broadwell_summary=$'GPU0:\n\tapiVersion         = 1.3.354\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU\n\tdeviceName         = Intel(R) HD Graphics 6000 (BDW GT3)\n\tdriverID           = DRIVER_ID_INTEL_OPEN_SOURCE_MESA\nGPU1:\n\tapiVersion         = 1.4.354\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_CPU\n\tdeviceName         = llvmpipe (LLVM 22.1.8, 256 bits)\n\tdriverID           = DRIVER_ID_MESA_LLVMPIPE'
+honeykrisp_summary=$'GPU0:\n\tapiVersion         = 1.4.354\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU\n\tdeviceName         = Apple M1 Pro (G13S C0)\n\tdriverName         = Honeykrisp'
+nvidia_summary=$'GPU0:\n\tapiVersion         = 1.4.312\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_DISCRETE_GPU\n\tdeviceName         = NVIDIA GeForce RTX 4070\n\tdriverID           = DRIVER_ID_NVIDIA_PROPRIETARY'
+# (case_summary: default_gpu_mode_for_start has a local "summary" of its own)
+for case_summary in "${radv_summary}" "${broadwell_summary}" "${honeykrisp_summary}" "${nvidia_summary}"; do
+  vulkaninfo_summary() {
+    printf '%s\n' "${case_summary}"
+  }
+  assert_equal "venus" "$(TEST_VENUS_ETC2=1 default_gpu_mode_for_start)"
+  # No ETC2, even emulated: gfxstream_guest_angle, and the reason
+  assert_equal "gfxstream_guest_angle" "$(TEST_VENUS_ETC2=0 default_gpu_mode_for_start)"
+  assert_equal "the GPU has no ETC2 textures, even emulated" "$(TEST_VENUS_ETC2=0 host_suits_venus || true)"
+  # --gpu_mode= still wins
+  assert_equal "gfxstream_guest_angle" \
+    "$(TEST_VENUS_ETC2=1 default_gpu_mode_for_start --gpu_mode=gfxstream_guest_angle)"
+done
+
+# A mode set in ika.ini stands, even the built-in one; "Auto" is auto.
+IKA_INI[gpu.gpu_mode]="gfxstream_guest_angle"
+assert_equal "gfxstream_guest_angle" "$(TEST_VENUS_ETC2=1 default_gpu_mode_for_start)"
+IKA_INI[gpu.gpu_mode]="Auto"
+assert_equal "venus" "$(TEST_VENUS_ETC2=1 default_gpu_mode_for_start)"
+unset 'IKA_INI[gpu.gpu_mode]'
+
+# A GPU below Vulkan 1.3 that gfxstream keeps (the GPU listed first in a tie)
+# stays on gfxstream_guest_angle; so does one whose version is unknown.
+vulkaninfo_summary() {
+  printf '%s\n' "${tie_gpu_first}"
+}
+assert_equal "gfxstream_guest_angle" "$(TEST_VENUS_ETC2=1 default_gpu_mode_for_start)"
+assert_equal "the GPU's Vulkan is 1.2.100, below 1.3" "$(TEST_VENUS_ETC2=1 host_suits_venus || true)"
+vulkaninfo_summary() {
+  printf '%s\n' "${hardware_summary}"
+}
+assert_equal "gfxstream_guest_angle" "$(TEST_VENUS_ETC2=1 default_gpu_mode_for_start)"
+assert_equal "the GPU's Vulkan version is unknown" "$(TEST_VENUS_ETC2=1 host_suits_venus || true)"
+
+# Haswell (mb13) is passed over for llvmpipe before Venus is considered, and a
+# software first device never gets Venus.
+vulkaninfo_summary() {
+  printf '%s\n' "${haswell_summary}"
+}
+assert_equal "gfxstream" "$(TEST_VENUS_ETC2=1 default_gpu_mode_for_start)"
+vulkaninfo_summary() {
+  printf '%s\n' "${tie_llvmpipe_first}"
+}
+assert_equal "the first Vulkan device is a software one" "$(TEST_VENUS_ETC2=1 host_suits_venus || true)"
+vulkaninfo_summary() {
+  return 1
+}
+assert_equal "no Vulkan device found" "$(TEST_VENUS_ETC2=1 host_suits_venus || true)"
+echo "ok: auto is venus on a Vulkan 1.3 GPU with ETC2"
+
+printf 'PASS: software-only, passed-over and Venus GPU mode selection\n'

@@ -246,13 +246,16 @@ enable_sandbox = false
 # ----------------------------------------------------------------------------
 [gpu]
 # auto, gfxstream_guest_angle, gfxstream, guest_swiftshader, venus, ...
-# auto is gfxstream_guest_angle, except on a host with only software Vulkan
-# devices, or whose GPU gfxstream passes over for llvmpipe (an older Vulkan
-# version, such as Haswell's 1.2): that host uses gfxstream, with OpenGL ES
-# only when gfxstream_vulkan is auto, whatever is set here. Command-line
+# auto is venus on a host whose first Vulkan device is a GPU with Vulkan 1.3
+# or newer and ETC2 textures (RADV's emulated ones count, as under Venus);
+# gfxstream on a host with only software Vulkan devices, or whose GPU
+# gfxstream passes over for llvmpipe (an older Vulkan version, such as
+# Haswell's 1.2), with OpenGL ES only when gfxstream_vulkan is auto, whatever
+# is set here; gfxstream_guest_angle otherwise. Command-line
 # equivalent: --gpu_mode=, which wins on every host. venus (Mesa's Venus
-# Vulkan driver in the guest over virglrenderer) needs a ROM built with Venus
-# support, which Ika's does not have; see GRAPHICS.md.
+# Vulkan driver in the guest over virglrenderer) and guest_lavapipe (Mesa's
+# lavapipe on the guest's CPU) need a ROM that ships those drivers; see
+# GRAPHICS.md.
 gpu_mode = auto
 gpu_vhost_user_mode = auto
 enable_gpu_udmabuf = true
@@ -284,7 +287,8 @@ hw_video_decode = auto
 # at half their length; the display's size and density stay as they are. auto,
 # on or off.
 # auto turns it on when vulkaninfo finds no hardware Vulkan device on the
-# host, when the GPU mode is guest_swiftshader, when the guest gets 2 vCPUs
+# host, when the GPU mode is guest_swiftshader or guest_lavapipe, when the
+# guest gets 2 vCPUs
 # or fewer, or when the host has less than 8 GB of memory. Command-line
 # equivalents: --lowcpu, --no-lowcpu. Environment variable: IKA_LOWCPU
 mode = auto
@@ -2071,7 +2075,8 @@ Options:
                          and animations are shorter; the display's size and
                          density stay as they are. By default it is on when
                          the host has no hardware Vulkan driver or the GPU
-                         mode is guest_swiftshader, gives the guest 2 vCPUs
+                         mode is guest_swiftshader or guest_lavapipe, gives
+                         the guest 2 vCPUs
                          or fewer, or has less than 8 GB of memory
                          (--lowcpu=auto|on|off and IKA_LOWCPU=auto|on|off do
                          the same).
@@ -2284,7 +2289,7 @@ Settings:
   (yad), "Startup Options · Ika", for its most used settings, with two tabs.
   Startup Options has the vCPUs and the memory, the console's density on the
   desktop and in TV mode and its refresh rate (0 for auto), the GPU mode
-  (Auto, the default, is gpu_mode = auto; "gfxstream, OpenGL ES only" is
+  (auto, the default, is gpu_mode = auto; "gfxstream, OpenGL ES only" is
   gfxstream with gfxstream_vulkan = off),
   hardware video decoding, low-CPU mode, "Start with the camera"
   (camera.device: ticked, the first usable camera, unless ika.ini names one)
@@ -2707,8 +2712,8 @@ has_display_size_override() {
 }
 
 # Decides whether this start runs low-CPU mode, from IKA_LOWCPU (auto, on
-# or off) and, for auto, the host: no hardware Vulkan driver, guest_swiftshader,
-# 2 vCPUs or fewer, or less than 8 GB of host memory. Sets
+# or off) and, for auto, the host: no hardware Vulkan driver, guest_swiftshader
+# or guest_lavapipe, 2 vCPUs or fewer, or less than 8 GB of host memory. Sets
 # LOWCPU_MODE_ACTIVE and LOWCPU_MODE_REASON.
 resolve_lowcpu_mode() {
   local mode
@@ -2728,7 +2733,7 @@ resolve_lowcpu_mode() {
       cpus="$(start_arg_value "cpus" "${CVD_COMPUTE_DEFAULTS[cpus]}" "$@")"
       mem_mb="$(host_physical_memory_mb || true)"
       summary="$(vulkaninfo_summary || true)"
-      if [[ "${gpu_mode}" == "guest_swiftshader" ]]; then
+      if [[ "${gpu_mode}" == "guest_swiftshader" || "${gpu_mode}" == "guest_lavapipe" ]]; then
         reason="software rendering"
       elif [[ -n "${summary}" ]] && vulkan_summary_has_only_software_devices "${summary}"; then
         reason="no hardware Vulkan driver"
@@ -2961,9 +2966,65 @@ vulkan_summary_has_only_software_devices() {
   ' <<<"${summary}"
 }
 
+# Whether the primary Vulkan device (GPU0) offers ETC2 textures as Venus's
+# guest sees it: crosvm starts Venus's render server with vk_require_etc2 and
+# vk_require_astc, which make drivers that can emulate them (RADV) offer them,
+# so vulkaninfo runs with the same settings. Haswell's hasvk cannot. awk reads
+# the whole report: leaving early would end vulkaninfo with SIGPIPE, which
+# pipefail takes for a failure.
+primary_vulkan_device_has_venus_etc2() {
+  command -v vulkaninfo >/dev/null 2>&1 || return 1
+
+  env -u DISPLAY -u WAYLAND_DISPLAY vk_require_etc2=true vk_require_astc=true \
+    timeout 30 vulkaninfo 2>/dev/null | awk '
+      /^GPU0:/ { in_gpu = 1; next }
+      /^GPU[0-9]+:/ { in_gpu = 0 }
+      in_gpu && !seen && $1 == "textureCompressionETC2" { seen = 1; found = ($3 == "true") }
+      END { exit !found }
+    '
+}
+
+# Whether gpu_mode=auto runs Venus here: the primary Vulkan device is a GPU
+# with Vulkan 1.3 or newer and ETC2 textures as Venus's guest sees them, which
+# Android expects of a Vulkan device and Chromium requires (gfxstream emulates
+# ETC2, Venus does not). Prints why not when it does not suit.
+host_suits_venus() {
+  local primary_device
+  local version
+  local major
+  local minor
+
+  primary_device="$(primary_vulkan_device_summary || true)"
+  if [[ -z "${primary_device}" ]]; then
+    printf '%s\n' "no Vulkan device found"
+    return 1
+  fi
+  if grep -Eiq '(llvmpipe|lavapipe|swiftshader|software rasterizer|software device|PHYSICAL_DEVICE_TYPE_CPU)' \
+      <<<"${primary_device}"; then
+    printf '%s\n' "the first Vulkan device is a software one"
+    return 1
+  fi
+  version="$(awk -F'=' '/apiVersion/ { split($2, v, " "); print v[1]; exit }' <<<"${primary_device}")"
+  IFS=. read -r major minor _ <<<"${version}"
+  if ! [[ "${major}" =~ ^[0-9]+$ && "${minor}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "the GPU's Vulkan version is unknown"
+    return 1
+  fi
+  if (( major < 1 || (major == 1 && minor < 3) )); then
+    printf '%s\n' "the GPU's Vulkan is ${version}, below 1.3"
+    return 1
+  fi
+  if ! primary_vulkan_device_has_venus_etc2; then
+    printf '%s\n' "the GPU has no ETC2 textures, even emulated"
+    return 1
+  fi
+}
+
 default_gpu_mode_for_start() {
   local summary
   local passed_over
+  local ini_mode
+  local venus_blocker
 
   if user_supplied_flag "gpu_mode" "$@"; then
     start_arg_value "gpu_mode" "${CVD_GPU_DEFAULTS[gpu_mode]}" "$@"
@@ -2982,6 +3043,18 @@ default_gpu_mode_for_start() {
     printf '%s\n' "gfxstream"
     return 0
   fi
+  # A mode set in ika.ini stands on a GPU that gfxstream uses.
+  ika_ini_get ini_mode gpu gpu_mode auto
+  if [[ "${ini_mode,,}" != "auto" ]]; then
+    printf '%s\n' "${CVD_GPU_DEFAULTS[gpu_mode]}"
+    return 0
+  fi
+  if venus_blocker="$(host_suits_venus)"; then
+    log "the GPU has Vulkan 1.3 or newer and ETC2 for Venus; defaulting gpu_mode=venus"
+    printf '%s\n' "venus"
+    return 0
+  fi
+  log "gpu_mode=auto keeps ${CVD_GPU_DEFAULTS[gpu_mode]}, not venus: ${venus_blocker}"
 
   printf '%s\n' "${CVD_GPU_DEFAULTS[gpu_mode]}"
 }
@@ -3399,15 +3472,14 @@ primary_vulkan_device_summary() {
   printf '%s\n' "${primary_device}"
 }
 
-# Whether the ROM's android-info.txt declares Venus support, as Cuttlefish's
-# assemble_cvd reads it: venus among gpu_mode_candidates, or
-# vulkan_venus_apex=supported.
+# Whether the ROM's android-info.txt declares Venus support:
+# vulkan_venus_apex=supported, which also makes Cuttlefish's assemble_cvd
+# activate the guest's Venus driver APEX. (venus among gpu_mode_candidates
+# alone is not enough: the host tools then start the mode without the driver.)
 guest_supports_venus() {
   local android_info="$1"
 
   [[ -r "${android_info}" ]] || return 1
-  grep -Eiq '^[[:space:]]*gpu_mode_candidates[[:space:]]*=.*(^|[=,[:space:]])venus([,[:space:]]|$)' \
-    "${android_info}" && return 0
   grep -Eiq '^[[:space:]]*vulkan_venus_apex[[:space:]]*=[[:space:]]*supported' "${android_info}"
 }
 
@@ -3415,24 +3487,22 @@ guest_supports_venus() {
 # on the host, with ANGLE for OpenGL ES, which Cuttlefish 1.58's host tools
 # run (crosvm with the virglrenderer backend and the venus and cross-domain
 # context types). It needs a ROM built with Venus support (Mesa's vulkan.virtio
-# driver, declared in android-info.txt), which Ika's LineageOS ROM does not
-# have yet, and upstream tests it on Intel (ANV) and Qualcomm (Turnip) hosts.
-# Checked here so that the start fails with a reason rather than deep in
-# assemble_cvd.
+# driver, declared in android-info.txt), as Ika's ROM is from Mesa 26.3 on.
+# Upstream tests it on Intel (ANV) and Qualcomm (Turnip) hosts; Ika on AMD
+# (RADV) and Apple Silicon (Honeykrisp), where crosvm maps Venus's GPU memory
+# into the guest with fixed blob mapping. Checked here so that the start fails
+# with a reason rather than deep in assemble_cvd.
 check_venus_gpu_mode() {
   local android_info="${CVD_PRODUCT_OUT}/android-info.txt"
   local primary_device
 
-  if is_apple_silicon_16k_host; then
-    die "gpu_mode=venus is not available on Apple Silicon hosts: Venus shares host memory the Apple GPU cannot; use gfxstream_guest_angle"
-  fi
   if ! guest_supports_venus "${android_info}"; then
-    die "gpu_mode=venus: the ROM under ${CVD_PRODUCT_OUT} does not declare Venus support (android-info.txt with venus among gpu_mode_candidates, or vulkan_venus_apex=supported); it needs a ROM built with Mesa's Venus driver"
+    die "gpu_mode=venus: the ROM under ${CVD_PRODUCT_OUT} does not declare Venus support (vulkan_venus_apex=supported in android-info.txt); it needs a ROM built with Mesa's Venus driver"
   fi
   primary_device="$(primary_vulkan_device_summary || true)"
   if [[ -n "${primary_device}" ]] \
-      && ! grep -Eiq '(driverName[[:space:]]*=.*(anv|turnip)|DRIVER_ID_(INTEL_OPEN_SOURCE_MESA|MESA_TURNIP))' <<<"${primary_device}"; then
-    log "gpu_mode=venus: upstream Cuttlefish tests Venus on Intel (ANV) and Qualcomm (Turnip) hosts; this host's primary Vulkan driver is untested with it"
+      && ! grep -Eiq '(driverName[[:space:]]*=.*(anv|turnip|radv|honeykrisp)|DRIVER_ID_(INTEL_OPEN_SOURCE_MESA|MESA_TURNIP|MESA_RADV|MESA_HONEYKRISP))' <<<"${primary_device}"; then
+    log "gpu_mode=venus: Venus is tested on Intel (ANV), Qualcomm (Turnip), AMD (RADV) and Apple Silicon (Honeykrisp) hosts; this host's primary Vulkan driver is untested with it"
   fi
 }
 
@@ -7290,15 +7360,15 @@ declare -A IKA_OPTIONS_DEFAULTS=(
   [gpu.hw_video_decode]="auto" [lowcpu.mode]="auto" [camera.device]="off"
   [console.tv_keyboard_gamepad]="false"
 )
-# The GPU modes the window offers, two of which are two settings:
-# IKA_OPTIONS_GLES_ONLY is gfxstream with gfxstream_vulkan = off, and
-# gfxstream, or IKA_OPTIONS_AUTO (gpu_mode = auto), chosen from another is that
-# mode with gfxstream_vulkan = auto. ika.ini's own GPU mode, when another, is
-# offered too.
-IKA_OPTIONS_AUTO="Auto"
+# The GPU modes the window offers, as ika.ini spells them, two of which are
+# two settings: IKA_OPTIONS_GLES_ONLY is gfxstream with gfxstream_vulkan = off,
+# and gfxstream, or IKA_OPTIONS_AUTO (gpu_mode = auto), chosen from another is
+# that mode with gfxstream_vulkan = auto. ika.ini's own GPU mode, when
+# another, is offered too.
+IKA_OPTIONS_AUTO="auto"
 IKA_OPTIONS_GLES_ONLY="gfxstream, OpenGL ES only"
 IKA_OPTIONS_GPU_CHOICES=("${IKA_OPTIONS_AUTO}" gfxstream_guest_angle gfxstream
-  "${IKA_OPTIONS_GLES_ONLY}" guest_swiftshader)
+  "${IKA_OPTIONS_GLES_ONLY}" venus guest_swiftshader guest_lavapipe)
 # In the Startup Options window of its own (yad, without ika's window) the
 # number boxes and choices stretch across their column; a margin on their
 # right keeps a number box about as wide as four digits and its buttons, and
@@ -7461,8 +7531,11 @@ ika_options_form_fields() {
   local mode
   local current
   local choices=""
-  local -a modes=("${IKA_OPTIONS_GPU_CHOICES[@]}")
+  local -a modes=()
 
+  for mode in "${IKA_OPTIONS_GPU_CHOICES[@]}"; do
+    modes+=("${mode}")
+  done
   host_cpus="$(nproc 2>/dev/null)" || host_cpus=64
   host_mb="$(awk '/^MemTotal:/ { print int($2 / 1024) }' /proc/meminfo 2>/dev/null)"
   [[ "${host_mb}" =~ ^[0-9]+$ ]] || host_mb=65536

@@ -96,7 +96,7 @@ printf 'config=tablet\ngpu_mode_candidates=gfxstream_guest_angle,venus,guest_swi
 printf 'config=tablet\nvulkan_venus_apex=supported\n' >"${T}/apex.txt"
 printf 'config=tablet\ngpu_mode_candidates=gfxstream_guest_angle,gfxstream\n' \
   >"${T}/none.txt"
-guest_supports_venus "${T}/candidates.txt" || fail "venus among the candidates"
+guest_supports_venus "${T}/candidates.txt" && fail "venus among the candidates alone"
 guest_supports_venus "${T}/apex.txt" || fail "the Venus apex"
 guest_supports_venus "${T}/none.txt" && fail "a ROM without Venus"
 guest_supports_venus "${T}/missing.txt" && fail "a missing android-info.txt"
@@ -111,7 +111,7 @@ output="$( (append_gfxstream_vulkan_args args --gpu_mode=venus) 2>&1 || printf '
 [[ "${output}" == *"does not declare Venus support"*"status=7" ]] \
   || fail "venus on a ROM without it: ${output}"
 
-cp "${T}/candidates.txt" "${CVD_PRODUCT_OUT}/android-info.txt"
+cp "${T}/apex.txt" "${CVD_PRODUCT_OUT}/android-info.txt"
 vulkaninfo_summary() { printf 'GPU0:\n  driverName = radv\n  driverID = DRIVER_ID_MESA_RADV\n'; }
 args=()
 append_gfxstream_vulkan_args args --gpu_mode=venus
@@ -119,8 +119,9 @@ assert_equal "venus (ANGLE over Venus Vulkan)" "${CVD_GRAPHICS_DRIVER_MESSAGE}" 
 assert_equal 0 "${#args[@]}" "venus adds no gfxstream arguments"
 
 is_apple_silicon_16k_host() { return 0; }
-output="$( (append_gfxstream_vulkan_args args --gpu_mode=venus) 2>&1 || printf 'status=%s\n' "$?")"
-[[ "${output}" == *"not available on Apple Silicon"*"status=7" ]] \
-  || fail "venus on Apple Silicon: ${output}"
+vulkaninfo_summary() { printf 'GPU0:\n  driverName = Honeykrisp\n  driverID = DRIVER_ID_MESA_HONEYKRISP\n'; }
+args=()
+output="$(append_gfxstream_vulkan_args args --gpu_mode=venus 2>&1)" || fail "venus on Apple Silicon stopped: ${output}"
+[[ "${output}" != *"untested"* ]] || fail "Honeykrisp counted as untested for venus: ${output}"
 
 printf 'PASS: host cached memory and venus launcher tests\n'

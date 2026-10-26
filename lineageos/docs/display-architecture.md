@@ -16,7 +16,7 @@ experience from a phone emulator in a browser to a native desktop window.
 | Input transport | WebRTC data channel | scrcpy control channel using Android input APIs; UHID in game mode |
 | Audio transport | WebRTC media stream | Cuttlefish virtio-snd → host PipeWire stream |
 | Multi-display / hotplug | `cvd display add/list/remove` CLI | Same CLI is available; Ika does not currently drive add/remove operations |
-| GPU path | Varies (host, gfxstream, virgl) | `gpu_mode=gfxstream_guest_angle` (`gfxstream` with only llvmpipe), `enable_gpu_udmabuf=true`, `gpu_vhost_user_mode=auto`, `use_cvdalloc=true` |
+| GPU path | Varies (host, gfxstream, virgl) | `gpu_mode=venus` or `gfxstream_guest_angle` by the host GPU (`gfxstream` with only llvmpipe), `enable_gpu_udmabuf=true`, `gpu_vhost_user_mode=auto`, `use_cvdalloc=true` |
 | CPU policy | No Ika-specific policy | Guest vCPUs prefer performance cores; the default count is the available/performance-core count minus two, capped at 12 |
 
 ## 1. Frame transport
@@ -146,15 +146,17 @@ scrcpy.
 Ika sets:
 
 ```text
-gpu_mode=gfxstream_guest_angle
+gpu_mode=venus                  # or gfxstream_guest_angle, gfxstream: see below
 gpu_vhost_user_mode=auto
 enable_gpu_udmabuf=true         # zero-copy virtio-gpu path when supported
 use_cvdalloc=true
 enable_bootanimation=false      # skip the dancing-bug splash
 ```
 
-`gfxstream_guest_angle` is the default GPU mode, except on hosts whose only
-Vulkan driver is llvmpipe, which get `gfxstream`. Direct `gfxstream` remains
+`gpu_mode=auto` is `venus` on a host GPU with Vulkan 1.3 or newer and ETC2
+textures, `gfxstream` on hosts whose only Vulkan driver is llvmpipe or whose
+GPU gfxstream passes over for it, and `gfxstream_guest_angle` otherwise (see
+[Graphics](../../GRAPHICS.md#how-ika-chooses)). Direct `gfxstream` remains
 available for testing the native gfxstream GLES translator, while
 `guest_swiftshader` is a diagnostic fallback that removes host GPU acceleration
 from the equation.
