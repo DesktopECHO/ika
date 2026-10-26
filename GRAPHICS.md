@@ -4,7 +4,7 @@
 
 Android draws with the host's GPU. Its OpenGL ES and Vulkan calls are encoded
 in the guest, carried over virtio-gpu by crosvm, and run on the host's
-drivers by gfxstream. This page explains the GPU modes, how Ika chooses one,
+drivers by gfxstream, or by virglrenderer in the `venus` mode. This page explains the GPU modes, how Ika chooses one,
 the switches that tune them, what Apple Silicon needs, and what to do when
 something looks wrong.
 
@@ -12,10 +12,11 @@ something looks wrong.
 
 | Mode | What it does | Use it for |
 | --- | --- | --- |
-| `gfxstream_guest_angle` | The default. ANGLE in the guest turns OpenGL ES into Vulkan, which gfxstream runs on the host's Vulkan driver | Everything: games, Vulkan apps, the desktop |
+| `gfxstream_guest_angle` | The default where `venus` does not suit the host (see [How Ika chooses](#how-ika-chooses)). ANGLE in the guest turns OpenGL ES into Vulkan, which gfxstream runs on the host's Vulkan driver | Everything: games, Vulkan apps, the desktop |
 | `gfxstream` | gfxstream sends OpenGL ES to its own translator on the host's OpenGL driver; Vulkan is optional | Hosts whose only Vulkan driver is a software one, and titles that render wrongly through ANGLE |
 | `guest_swiftshader` | The guest renders on the CPU (ANGLE and SwiftShader) | Ruling out a host GPU problem; turns [low-CPU mode](CONFIGURATION.md#low-cpu-mode) on |
-| `venus` | Mesa's Venus Vulkan driver in the guest, over virglrenderer | Not available: Ika's ROM does not support it (see [Venus](#venus)) |
+| `guest_lavapipe` | The guest renders on the CPU with Mesa's lavapipe (Vulkan 1.4) and ANGLE | The same, with Vulkan 1.4 instead of SwiftShader's 1.3; turns low-CPU mode on |
+| `venus` | The default on a GPU with Vulkan 1.3 or newer and ETC2 textures. Mesa's Venus Vulkan driver in the guest, over virglrenderer on the host's Vulkan driver, with ANGLE for OpenGL ES | Everything, with less of the host's CPU than gfxstream (see [Venus](#venus)) |
 
 The two gfxstream modes differ in where OpenGL ES is translated:
 
@@ -34,22 +35,48 @@ gfxstream:              app GLES -> gfxstream GLES encoder -> host OpenGL transl
 ```
 
 Cuttlefish accepts other modes too (`gfxstream_guest_angle_host_swiftshader`,
-`gfxstream_guest_angle_host_lavapipe`, `guest_lavapipe`, `drm_virgl`); Ika
-passes them through without its own settings and does not test them.
+`gfxstream_guest_angle_host_lavapipe`, `drm_virgl`); Ika passes them through
+without its own settings and does not test them.
+
+### Vulkan version
+
+Android tells apps the Vulkan version its driver offers
+(`android.hardware.vulkan.version`, which Google Play also filters on): 1.4
+with `guest_lavapipe`, 1.3 with `guest_swiftshader`, and with
+`gfxstream_guest_angle`, `venus` and `gfxstream` with [Vulkan
+on](#vulkan-in-gfxstream-mode) the version of the host's first Vulkan device:
+1.4 on current RADV, ANV and Honeykrisp, 1.3 on GPUs such as Broadwell's, and
+1.1 on a Vulkan 1.2 GPU such as Haswell's, as Android has no 1.2 level. With
+OpenGL ES only, Android has no Vulkan driver and declares no Vulkan features.
+Ika's ROM installs each guest Vulkan driver as its own package, and the host
+tools activate the one the guest loads and select the matching version.
 
 ### How Ika chooses
 
-`ika start` uses `gfxstream_guest_angle`, unless every Vulkan device
-`vulkaninfo --summary` lists is a software one (llvmpipe, lavapipe or
-SwiftShader), or gfxstream would pick llvmpipe over the GPU: then it uses
-`gfxstream`, which is much lighter on the CPU there. gfxstream ranks a
-device by its type and its Vulkan version, so a GPU with an older Vulkan
-loses to llvmpipe: a Haswell GPU offers Vulkan 1.2, llvmpipe 1.4. In
-`gfxstream` mode that host renders OpenGL ES on its GPU instead; a 1080p
-video that dropped 62% of its frames with `gfxstream_guest_angle` dropped 1%.
-`--gpu_mode=` on the command line wins over both; `gpu_mode` in the `[gpu]`
-section of `ika.ini` (`auto` unless set, which is `gfxstream_guest_angle`)
-sets the mode for hosts with a hardware Vulkan driver.
+With `gpu_mode` at `auto`, the default, `ika start` looks at the host's
+Vulkan devices:
+
+- `gfxstream` when every Vulkan device `vulkaninfo --summary` lists is a
+  software one (llvmpipe, lavapipe or SwiftShader), or gfxstream would pick
+  llvmpipe over the GPU: it is much lighter on the CPU there. gfxstream ranks
+  a device by its type and its Vulkan version, so a GPU with an older Vulkan
+  loses to llvmpipe: a Haswell GPU offers Vulkan 1.2, llvmpipe 1.4. In
+  `gfxstream` mode that host renders OpenGL ES on its GPU instead; a 1080p
+  video that dropped 62% of its frames with `gfxstream_guest_angle` dropped
+  1%.
+- `venus` when the first Vulkan device is a GPU with Vulkan 1.3 or newer and
+  ETC2 compressed textures, as Venus's guest sees them. Android expects ETC2
+  of a Vulkan device, and Chromium's GPU process quits without it; gfxstream
+  emulates ETC2 itself, Venus does not. crosvm starts Venus's host side with
+  `vk_require_etc2=true` and `vk_require_astc=true`, which make RADV emulate
+  both, so Ika asks `vulkaninfo` with the same settings. Broadwell's and
+  Apple Silicon's drivers have ETC2 of their own; Haswell's cannot offer it
+  at all.
+- `gfxstream_guest_angle` otherwise.
+
+`--gpu_mode=` on the command line wins over all three. A mode named in
+`gpu_mode` in the `[gpu]` section of `ika.ini` replaces the last two: a host
+of the first kind still uses `gfxstream`.
 
 ```bash
 ika restart --gpu_mode=gfxstream
@@ -57,7 +84,8 @@ ika restart --gpu_mode=gfxstream_guest_angle
 ```
 
 The start line says which path Android renders through, and
-`~/ika/ikastart.log` logs each choice Ika made.
+`~/ika/ikastart.log` logs each choice Ika made, with the reason when `auto`
+does not pick `venus`.
 
 ## Vulkan in gfxstream mode
 
@@ -95,12 +123,51 @@ before and after, and keep it if it helps.
 
 ## Venus
 
-`--gpu_mode=venus` runs Android's Vulkan on Mesa's Venus driver over
-virglrenderer, with ANGLE for OpenGL ES. Ika's host tools carry the mode, but
-it needs a ROM that declares Venus support in its `android-info.txt` (`venus`
-in `gpu_mode_candidates`, or `vulkan_venus_apex=supported`), and Ika's ROM does
-not: `ika start --gpu_mode=venus` says so and stops. Venus is not available on
-Apple Silicon. Upstream tests it on Intel (ANV) and Qualcomm (Turnip) hosts.
+`--gpu_mode=venus` runs Android's Vulkan on Mesa's Venus driver, which sends
+the Vulkan calls to virglrenderer on the host and the host's own Vulkan driver,
+with ANGLE for OpenGL ES; buffers are allocated through crosvm's cross-domain
+context. Ika's ROM has it from Mesa 26.3 on.
+
+```bash
+ika restart --gpu_mode=venus
+```
+
+On an AMD host (Radeon 780M, RADV) and on an M1 Pro (Honeykrisp) Android
+draws its desktop and Chromium's pages, with Vulkan 1.4 and OpenGL ES 3.2
+through ANGLE. Apps see every Vulkan device the host has, llvmpipe included,
+each named "Virtio-GPU Venus (...)". Upstream tests it on Intel (ANV) and
+Qualcomm (Turnip) hosts.
+
+It is the default on a host whose GPU suits it (see
+[How Ika chooses](#how-ika-chooses)), Apple Silicon included; Ika has not
+tested it on NVIDIA's GPUs. Against `gfxstream_guest_angle` on a
+Radeon 780M, a WebGL page with 12,800 draw calls a frame ran at 60 fps instead
+of 24, and crosvm and the render server used about 40% less of the host's CPU,
+for WebGL and video alike; a Broadwell MacBook Air was faster with it too. On
+Intel's Broadwell and Haswell GPUs ANGLE over Venus offers OpenGL ES 3.1, not
+3.2, as their drivers cannot sample ASTC textures; gfxstream emulates them.
+
+On an M1 Pro Venus used 20 to 40% less of the host's CPU than
+`gfxstream_guest_angle` and scrolled without dropped frames, but games ran a
+little slower: Asphalt 9 averaged 56.5 fps instead of 59.5, with 6.3% of its
+frames taking 24 ms or longer instead of 1.5%. Honeykrisp compresses the
+textures Venus's guest creates, losslessly, which halves the speed of random
+reads from textures whose content does not compress; gfxstream's end up
+uncompressed. For games there, `--gpu_mode=gfxstream_guest_angle`, or
+`gpu_mode = gfxstream_guest_angle` in `ika.ini`.
+
+What Ika changes for it:
+
+- crosvm maps Venus's GPU memory into the guest within one region it
+  registers at the first mapping (fixed blob mapping), as Asahi's muvm does.
+  On arm64 hosts without stage-2 forced write-back, Apple Silicon among them,
+  KVM refuses a separate memory slot for each such buffer, so every mapping
+  failed there.
+- crosvm loads the `libvirglrenderer` of Ika's package, not the system's:
+  Debian 13's older one made the guest's Venus driver stop at Vulkan 1.3.
+- Where the host driver refuses a raised queue priority, as Honeykrisp does,
+  virglrenderer creates the device at medium priority instead of failing:
+  SurfaceFlinger asks ANGLE for a high-priority context.
 
 ## What Ika adds for some hosts
 
@@ -201,7 +268,8 @@ lists how individual games render in each mode.
 ## Troubleshooting
 
 - **Check what Ika chose:** the start line names the graphics path, and
-  `~/ika/ikastart.log` has the GPU decisions: Vulkan in `gfxstream` mode,
+  `~/ika/ikastart.log` has the GPU decisions: the mode `auto` picked and
+  why, Vulkan in `gfxstream` mode,
   the Apple Silicon setup, the RADV settings, host cached memory and the
   reason for low-CPU mode.
 - **Logs:** `~/ika/cuttlefish/instances/cvd-1/logs/launcher.log` has

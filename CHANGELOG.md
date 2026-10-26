@@ -7,8 +7,8 @@
   30 Hz instead of 60, window blurs are off and animations run at half their
   length, with the display's size and density unchanged. It is on by itself
   when the host has no hardware Vulkan driver or the GPU mode is
-  `guest_swiftshader`, gives the guest 2 vCPUs or fewer, or has less than
-  8 GB of memory; `--lowcpu`, `--no-lowcpu`,
+  `guest_swiftshader` or `guest_lavapipe`, gives the guest 2 vCPUs or fewer,
+  or has less than 8 GB of memory; `--lowcpu`, `--no-lowcpu`,
   `IKA_LOWCPU` and the `[lowcpu]` section of ika.ini (`mode`,
   `refresh_rate_hz`) set it.
 
@@ -35,9 +35,10 @@
 - Ika's own entry in the app menu has a right-click action, "Startup
   options" (`ika options`), which opens "Startup Options · Ika", a window
   like an app's: a Startup Options tab with the CPUs and RAM, the desktop
-  and TV densities, the refresh rate, the GPU mode (Auto, the default, is
-  `gpu_mode = auto` in ika.ini; "gfxstream, OpenGL ES only" is gfxstream with
-  gfxstream_vulkan = off), hardware video decoding,
+  and TV densities, the refresh rate, the GPU mode as ika.ini names it (auto,
+  the default, gfxstream_guest_angle, gfxstream, venus, guest_swiftshader and
+  guest_lavapipe; "gfxstream, OpenGL ES
+  only" is gfxstream with gfxstream_vulkan = off), hardware video decoding,
   low-CPU mode and "Enable gamepad emulation in TV mode", and a Gamepad
   Emulation tab with ika.ini's keyboard gamepad. It writes the settings
   changed in ika.ini, each in place of its line (`ika_ini_set`), and
@@ -199,10 +200,61 @@
   type instead of a write-combined one (a new `VulkanPreferHostCachedMemory`
   renderer feature), which is faster for the guest's uploads on some drivers.
   Off by default until measured on the drivers Ika runs on; see USAGE.md.
-- `ika start --gpu_mode=venus` (Mesa's Venus Vulkan driver in the guest over
-  virglrenderer, which the Cuttlefish 1.58 host tools run) stops with the
-  reason when the ROM was not built with Venus support, as Ika's is not yet,
-  and on Apple Silicon, where Venus has no path; USAGE.md says what it needs.
+- `--gpu_mode=venus` works: Android's Vulkan runs on Mesa's Venus driver,
+  which sends the calls to virglrenderer and the host's own Vulkan driver,
+  with ANGLE for OpenGL ES. On an AMD host (Radeon 780M, RADV) Android draws
+  its desktop and Chromium's window with Vulkan 1.4 and OpenGL ES 3.2. The
+  ROM builds Venus (`vulkan.virtio`) and its protocol headers (venus-protocol
+  1.1.3), and three fixes made it work: crosvm's Vulkan-based gralloc, which
+  hosts without a minigbm driver (AMD) allocate guest buffers through,
+  measured optimal-tiled images and so failed every request; the guest's
+  minigbm read Linux's virtio-gpu param 8 as ChromeOS's
+  `CREATE_GUEST_HANDLE` and asked for buffers the kernel rejects (now
+  numbered as upstream minigbm does); and Venus crashed `vulkaninfo` when it
+  chained a queue-family struct Venus keeps no data for.
+- Venus works on Apple Silicon too: on an M1 Pro Android draws its desktop
+  and Chromium's pages over Honeykrisp with Vulkan 1.4 and OpenGL ES 3.2.
+  crosvm now maps Venus's GPU memory into the guest within one region (fixed
+  blob mapping), as Asahi's muvm does, since KVM there refuses a memory slot
+  per GPU buffer (the M1 lacks stage-2 forced write-back); it loads the
+  package's `libvirglrenderer` instead of the system's (Debian 13's older one
+  capped Venus at Vulkan 1.3); virglrenderer creates the device at medium
+  priority when Honeykrisp refuses SurfaceFlinger's high one; and ANGLE gets
+  the same OpenGL ES 3.2 workaround as with gfxstream. `ika start` no longer
+  refuses `--gpu_mode=venus` there, and the Startup Options offer it.
+- Venus plays video on Intel hosts: hardware-decoded H.264, and any YV12
+  picture such as software decoders write, crashed SurfaceFlinger there.
+  Intel's Vulkan drivers (hasvk, anv) refuse a YV12 picture's chroma planes
+  in the order Venus bound them; Venus now binds them in memory order and
+  swaps the chroma back in its color conversion, and a failed import no
+  longer crashes its memory report (a fix from Mesa main).
+- `gpu_mode = auto`, the default, picks `venus` on a host whose first Vulkan
+  device is a GPU with Vulkan 1.3 or newer and ETC2 compressed textures as
+  Venus's guest sees them, which Android expects of a Vulkan device and
+  Chromium's GPU process requires: Ika asks `vulkaninfo` with the
+  `vk_require_etc2` and `vk_require_astc` settings crosvm starts Venus's host
+  side with, under which RADV emulates both. Other hosts keep
+  `gfxstream_guest_angle`, or `gfxstream` where they had it, and
+  `~/ika/ikastart.log` says why; a mode named in ika.ini or on the command
+  line still wins. On a Radeon 780M a WebGL page with 12,800 draw calls a
+  frame ran at 60 fps instead of 24, with about 40% less of the host's CPU.
+  Haswell, whose driver has no ETC2, stays on `gfxstream`; Broadwell gets
+  OpenGL ES 3.1 instead of 3.2, as its driver cannot sample ASTC textures.
+  On an M1 Pro Venus uses less of the host's CPU but runs games a little
+  slower (Asphalt 9 at 56.5 fps against 59.5 with `gfxstream_guest_angle`),
+  as Honeykrisp compresses the textures Venus's guest creates.
+- `--gpu_mode=guest_lavapipe` works: the guest renders on its CPU with Mesa's
+  lavapipe (Vulkan 1.4) and ANGLE, like `guest_swiftshader` with Vulkan 1.4
+  instead of 1.3, and it turns low-CPU mode on too.
+- Android tells apps the Vulkan version its driver offers instead of always
+  1.3: 1.4 with `guest_lavapipe`, 1.3 with `guest_swiftshader`, and in the
+  gfxstream and Venus modes the host GPU's version, so 1.4 on RADV, ANV and
+  Honeykrisp and 1.1 on a Vulkan 1.2 GPU such as Haswell's (Android has no 1.2
+  level). In the OpenGL ES only mode Android no longer claims Vulkan at all:
+  it has no Vulkan driver there.
+- The ROM now has one Vulkan driver package (APEX) per guest driver,
+  gfxstream, lavapipe, SwiftShader and Venus, and the host tools activate the
+  one with the driver Android loads, or none.
 - gfxstream is updated to upstream main of 2026-10-19. Its renderer allocates
   the transfer buffer of a guest color buffer at the first transfer, and
   trims its heap when a guest app exits: on an Apple Silicon host its heap

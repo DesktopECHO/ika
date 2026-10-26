@@ -20,7 +20,7 @@ as a desktop/PC device and filters some phone/tablet apps before installation.
 One row per app. The four dot columns are architecture × graphics path:
 
 - **ARM** — ARM64 ROM  ·  **X86** — x86-64 ROM (ARM-only apps run translated)
-- **gfx** — `--gpu_mode=gfxstream`  ·  **agl** — `--gpu_mode=gfxstream_guest_angle` (the default)
+- **gfx** — `--gpu_mode=gfxstream`  ·  **agl** — `--gpu_mode=gfxstream_guest_angle`
 
 Results do not carry across either axis, so grade each cell separately. Grade
 graphics from **actual gameplay**: menus and cutscenes frequently render
