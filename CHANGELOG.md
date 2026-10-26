@@ -359,6 +359,16 @@
 - A buffer the host's VA-API decoder fails to decode, such as a stream with a
   level it does not support, is logged by crosvm and fails for the guest
   (EIO); the VM keeps running.
+- On Intel GPUs that share the CPU's cache, the host decodes each picture
+  straight into Android's buffer, in the GPU's own tiled layout, instead of
+  decoding it into its own memory and copying it over, which un-tiled it on
+  the CPU; the HAL un-tiles it as it copies it into its block. Playing 1080p30
+  H.264 on a Broadwell MacBook Air, crosvm's video thread went from 24% of a
+  CPU to 2.5% and crosvm from 99% to 82%, the package drew 6.65 W instead of
+  7.0 W, and the pictures are identical either way. crosvm first decodes a
+  test frame that way, once per start, and copies as before when the driver
+  gets it wrong (i965 on a Haswell MacBook Air) or the GPU is another make.
+  The launcher log says which way it went.
 
 ### Camera
 - `ika start --camera` sets the camera's anti-flicker to the mains frequency

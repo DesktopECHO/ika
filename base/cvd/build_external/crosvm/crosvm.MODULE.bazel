@@ -170,6 +170,12 @@ crosvm_bin.annotation(
         # instead of reaching a todo!() that aborted crosvm. Named to sort
         # after the two patches above, which it is made on top of.
         "@//build_external/crosvm:PATCH.crosvm-media-errors.patch",
+        # On Intel GPUs that share the CPU's cache, VA-API decodes straight into
+        # the guest's CAPTURE buffers, imported with udmabuf in the Y-tiled
+        # layout of its own surfaces, instead of copying every picture into
+        # them; a decode self-test checks the driver first. Elsewhere pictures
+        # are copied as before. Made on top of the three patches above.
+        "@//build_external/crosvm:PATCH.crosvm-media-direct-decode.patch",
         "@//build_external/crosvm:PATCH.crosvm-resize-display-devices.patch",
         # A scanout flush into a dma-buf the compositor still holds is dropped
         # instead of shown into the frame on screen.
