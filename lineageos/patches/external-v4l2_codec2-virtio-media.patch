@@ -13,6 +13,12 @@ those are recycled rather than passed on as work the flush abandoned. A device
 without V4L2 controls (virtio-media) gets the largest H.264 DPB as its minimum
 number of output buffers.
 
+When the device offers to decode straight into the output buffers, in the Y
+tiles of Intel GPUs (IKYT, a format of Ika's own that its crosvm offers when
+the host GPU can), the decoder takes it and un-tiles the visible part of each
+picture into the block with libyuv, which spares crosvm copying the picture
+into the buffer. Blocks keep the visible size either way.
+
 The component store lists a decoder only when a /dev/video device takes its
 codec, so a VM started without the decoder falls back to the software codecs,
 and only once vendor.dlkm.modules.ready says the virtio-media driver has
@@ -365,7 +371,7 @@ index d5b4901..614acac 100644
                          &V4L2ComponentFactory::create);
  
 diff --git a/v4l2/V4L2Decoder.cpp b/v4l2/V4L2Decoder.cpp
-index 09799eb..d99ae52 100644
+index 09799eb..80dfd41 100644
 --- a/v4l2/V4L2Decoder.cpp
 +++ b/v4l2/V4L2Decoder.cpp
 @@ -16,6 +16,7 @@
@@ -619,7 +625,7 @@ index 09799eb..d99ae52 100644
          ALOGE("Failed to start output queue during DRC.");
          return false;
      }
-@@ -761,16 +864,25 @@ bool V4L2Decoder::changeResolution() {
+@@ -761,13 +864,27 @@ bool V4L2Decoder::changeResolution() {
      // exists at the same time.
      mVideoFramePool.reset();
      // Use flexible pixel 420 format YCBCR_420_888 for 8-bit and P010 for 10-bit.
@@ -629,25 +635,42 @@ index 09799eb..d99ae52 100644
      const std::optional<struct v4l2_format> format = getFormatInfo();
      HalPixelFormat outputFormat = format->fmt.pix_mp.pixelformat == V4L2_PIX_FMT_P010 ?
 -            HalPixelFormat::YCBCR_P010 : HalPixelFormat::YCBCR_420_888;
+-    mVideoFramePool = mGetPoolCb.Run(mCodedSize, outputFormat,
+-                                     mOutputQueue->allocatedBuffersCount());
 +            HalPixelFormat::YCBCR_P010 :
 +            (isMmapMode() ? HalPixelFormat::YV12 : HalPixelFormat::YCBCR_420_888);
-     mVideoFramePool = mGetPoolCb.Run(mCodedSize, outputFormat,
--                                     mOutputQueue->allocatedBuffersCount());
++    // Y-tiled pictures come at the size of the host decoder's surfaces, and only their visible
++    // part is copied out: blocks of that size are enough, as with the other formats.
++    const ui::Size blockSize = mOutputFourcc == kNV12YTiledFourcc
++                                       ? ui::Size(mVisibleRect.right, mVisibleRect.bottom)
++                                       : mCodedSize;
++    mVideoFramePool = mGetPoolCb.Run(blockSize, outputFormat,
 +                                     mOutputQueue->allocatedBuffersCount(), isMmapMode());
      if (!mVideoFramePool) {
-         ALOGE("Failed to get block pool with size: %s", toString(mCodedSize).c_str());
-         return false;
-     }
- 
-+    if (isMmapMode() && !queueMmapOutputBuffers()) {
-+        ALOGE("Failed to queue output buffers during DRC.");
+-        ALOGE("Failed to get block pool with size: %s", toString(mCodedSize).c_str());
++        ALOGE("Failed to get block pool with size: %s", toString(blockSize).c_str());
 +        return false;
 +    }
 +
-     tryFetchVideoFrame();
-     return true;
++    if (isMmapMode() && !queueMmapOutputBuffers()) {
++        ALOGE("Failed to queue output buffers during DRC.");
+         return false;
+     }
+ 
+@@ -776,6 +893,12 @@ bool V4L2Decoder::changeResolution() {
  }
-@@ -808,12 +920,24 @@ void V4L2Decoder::tryFetchVideoFrame() {
+ 
+ bool V4L2Decoder::setupOutputFormat(const ui::Size& size, const uint32_t requestedpixfmt) {
++    // A device that decodes straight into MMAP buffers saves copying every picture into them.
++    if (isMmapMode() && deviceOffersYTiledOutput(size) &&
++        mOutputQueue->setFormat(kNV12YTiledFourcc, size, 0) != std::nullopt) {
++        return true;
++    }
++
+     if (requestedpixfmt != 0) {
+         if (std::find(kSupportedOutputFourccs.begin(), kSupportedOutputFourccs.end(), requestedpixfmt) !=
+             kSupportedOutputFourccs.end()) {
+@@ -808,12 +931,24 @@ void V4L2Decoder::tryFetchVideoFrame() {
      ALOGV("%s()", __func__);
      ALOG_ASSERT(mTaskRunner->RunsTasksInCurrentSequence());
  
@@ -672,7 +695,7 @@ index 09799eb..d99ae52 100644
      if (mOutputQueue->freeBuffersCount() == 0) {
          ALOGV("No free V4L2 output buffers, ignore.");
          return;
-@@ -857,6 +981,11 @@ void V4L2Decoder::onVideoFrameReady(
+@@ -857,6 +992,11 @@ void V4L2Decoder::onVideoFrameReady(
      uint32_t blockId;
      std::tie(frame, blockId) = std::move(*frameWithBlockId);
  
@@ -684,7 +707,7 @@ index 09799eb..d99ae52 100644
      std::optional<V4L2WritableBufferRef> outputBuffer;
      // Find the V4L2 buffer that is associated with this block.
      auto iter = mBlockIdToV4L2Id.find(blockId);
-@@ -912,6 +1041,223 @@ void V4L2Decoder::onVideoFrameReady(
+@@ -912,6 +1052,256 @@ void V4L2Decoder::onVideoFrameReady(
      tryFetchVideoFrame();
  }
  
@@ -789,8 +812,9 @@ index 09799eb..d99ae52 100644
 +bool V4L2Decoder::copyMmapPicture(const V4L2ReadableBufferRef& buffer, VideoFrame& frame) {
 +    ATRACE_CALL();
 +
-+    const int width = mCodedSize.width;
-+    const int height = mCodedSize.height;
++    const bool yTiled = mOutputFourcc == kNV12YTiledFourcc;
++    const int width = yTiled ? mVisibleRect.right : mCodedSize.width;
++    const int height = yTiled ? mVisibleRect.bottom : mCodedSize.height;
 +    const int chromaWidth = (width + 1) / 2;
 +    const int chromaHeight = (height + 1) / 2;
 +
@@ -809,6 +833,11 @@ index 09799eb..d99ae52 100644
 +    switch (mOutputFourcc) {
 +    case V4L2_PIX_FMT_NV12:
 +        srcU = srcY + srcStride * height;
++        srcV = srcU + 1;
++        break;
++    case kNV12YTiledFourcc:
++        // After the luma plane's whole rows of 32-row tiles.
++        srcU = srcY + srcStride * ((mCodedSize.height + 31) & ~31);
 +        srcV = srcU + 1;
 +        break;
 +    case V4L2_PIX_FMT_NV21:
@@ -862,6 +891,19 @@ index 09799eb..d99ae52 100644
 +    uint8_t* dstU = dst[C2PlanarLayout::PLANE_U];
 +    uint8_t* dstV = dst[C2PlanarLayout::PLANE_V];
 +
++    if (yTiled) {
++        // Tiles of 16 bytes by 32 rows, side by side in each row of tiles: Y tiles are made of
++        // them. The chroma rows hold U and V interleaved, chromaWidth * 2 bytes.
++        if (uInfo.colInc != 1 || vInfo.colInc != 1 ||
++            libyuv::DetilePlane(srcY, srcStride, dstY, yInfo.rowInc, width, height, 32) != 0) {
++            ALOGE("%s(): Cannot copy Y-tiled pictures into this block", __func__);
++            return false;
++        }
++        libyuv::DetileSplitUVPlane(srcU, srcStride, dstU, uInfo.rowInc, dstV, vInfo.rowInc,
++                                   chromaWidth * 2, chromaHeight, 32);
++        return true;
++    }
++
 +    libyuv::CopyPlane(srcY, srcStride, dstY, yInfo.rowInc, width, height);
 +
 +    if (srcStep == 2 && uInfo.colInc == 2 && vInfo.colInc == 2 && uInfo.rowInc == vInfo.rowInc &&
@@ -897,6 +939,20 @@ index 09799eb..d99ae52 100644
 +    return true;
 +}
 +
++// Whether the device decodes the pictures of the stream straight into MMAP buffers in Intel Y
++// tiles. Asks with TRY_FMT directly, as V4L2Queue::tryFormat() logs an error when it does not.
++bool V4L2Decoder::deviceOffersYTiledOutput(const ui::Size& size) {
++    struct v4l2_format format;
++    memset(&format, 0, sizeof(format));
++    format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
++    format.fmt.pix_mp.pixelformat = kNV12YTiledFourcc;
++    format.fmt.pix_mp.width = size.width;
++    format.fmt.pix_mp.height = size.height;
++    format.fmt.pix_mp.num_planes = 1;
++    return mDevice->ioctl(VIDIOC_TRY_FMT, &format) == 0 &&
++           format.fmt.pix_mp.pixelformat == kNV12YTiledFourcc;
++}
++
 +void V4L2Decoder::finishDrain() {
 +    ALOGV("All buffers are drained.");
 +    ALOG_ASSERT(mDrainCb);
@@ -908,7 +964,7 @@ index 09799eb..d99ae52 100644
  std::optional<size_t> V4L2Decoder::getNumOutputBuffers() {
      ALOGV("%s()", __func__);
      ALOG_ASSERT(mTaskRunner->RunsTasksInCurrentSequence());
-@@ -920,8 +1266,9 @@ std::optional<size_t> V4L2Decoder::getNumOutputBuffers() {
+@@ -920,8 +1310,9 @@ std::optional<size_t> V4L2Decoder::getNumOutputBuffers() {
      memset(&ctrl, 0, sizeof(ctrl));
      ctrl.id = V4L2_CID_MIN_BUFFERS_FOR_CAPTURE;
      if (mDevice->ioctl(VIDIOC_G_CTRL, &ctrl) != 0) {
@@ -1003,10 +1059,23 @@ index 1e7996c..19f6d7e 100644
      // Return true if |name| is a valid component name.
      static bool isValid(const std::string& name);
 diff --git a/v4l2/include/v4l2_codec2/v4l2/V4L2Decoder.h b/v4l2/include/v4l2_codec2/v4l2/V4L2Decoder.h
-index c825f74..404c3a8 100644
+index c825f74..f08ee68 100644
 --- a/v4l2/include/v4l2_codec2/v4l2/V4L2Decoder.h
 +++ b/v4l2/include/v4l2_codec2/v4l2/V4L2Decoder.h
-@@ -93,6 +93,16 @@ private:
+@@ -36,6 +36,12 @@ constexpr std::initializer_list<uint32_t> kSupportedOutputFourccs = {
+         Fourcc::P010,
+ };
+ 
++// NV12 in the Y tiles of Intel GPUs, 128 bytes by 32 rows made of 16-byte columns, in one buffer:
++// crosvm's virtio-media decoder decodes straight into MMAP buffers in it when the host GPU can.
++// The luma plane is padded to whole rows of tiles and the interleaved chroma plane follows it.
++// Ika's own format, shared with its crosvm.
++constexpr uint32_t kNV12YTiledFourcc = v4l2_fourcc('I', 'K', 'Y', 'T');
++
+ class V4L2Decoder : public VideoDecoder {
+ public:
+     static std::unique_ptr<VideoDecoder> Create(
+@@ -93,6 +99,17 @@ private:
      void tryFetchVideoFrame();
      void onVideoFrameReady(std::optional<VideoFramePool::FrameWithBlockId> frameWithBlockId);
  
@@ -1018,12 +1087,13 @@ index c825f74..404c3a8 100644
 +    bool queueMmapOutputBuffers();
 +    void onMmapVideoFrameReady(std::unique_ptr<VideoFrame> frame);
 +    bool copyMmapPicture(const V4L2ReadableBufferRef& buffer, VideoFrame& frame);
++    bool deviceOffersYTiledOutput(const ui::Size& size);
 +    void finishDrain();
 +
      std::optional<size_t> getNumOutputBuffers();
      std::optional<struct v4l2_format> getFormatInfo();
      Rect getVisibleRect(const ui::Size& codedSize);
-@@ -112,6 +122,26 @@ private:
+@@ -112,6 +129,26 @@ private:
  
      // Contains the initial EOS buffer, until DRC event is dequeued.
      sp<GraphicBuffer> mInitialEosBuffer;

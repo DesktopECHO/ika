@@ -173,6 +173,13 @@ V4L2 Codec2 HAL in the ROM, and decodes in software otherwise. `off`, or
 `--hw_video_decode=off`, leaves the decoder out, and a
 `--crosvm_media_decoder=` option of your own wins.
 
+On Intel GPUs that share the CPU's cache, the host decodes each picture
+straight into Android's buffer instead of copying it there, once a test
+decode at the first video shows that the driver can. crosvm logs which way it
+went in `~/ika/cuttlefish/instances/cvd-1/logs/launcher.log`: `VA-API:
+decoding pictures straight into guest memory`, or why pictures are copied.
+Other GPUs copy the pictures.
+
 ## ika.ini
 
 Ika writes `~/ika/ika.ini`, with every default and a comment for each

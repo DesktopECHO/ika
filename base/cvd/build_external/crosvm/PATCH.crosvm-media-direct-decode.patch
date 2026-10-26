@@ -1,0 +1,830 @@
+diff --git a/src/virtio/video/decoder/backend/mod.rs b/src/virtio/video/decoder/backend/mod.rs
+--- a/src/virtio/video/decoder/backend/mod.rs
++++ b/src/virtio/video/decoder/backend/mod.rs
+@@ -5,7 +5,12 @@
+ //! This module implements the interface that actual decoder devices need to
+ //! implement in order to provide video decoding capability to the guest.
+ 
++use anyhow::bail;
++use anyhow::Context;
+ use base::AsRawDescriptor;
++use base::FromRawDescriptor;
++use base::SafeDescriptor;
++use base::SharedMemory;
+ 
+ use crate::virtio::video::decoder::Capability;
+ use crate::virtio::video::error::VideoError;
+@@ -22,6 +27,64 @@
+ pub mod vaapi;
+ #[cfg(feature = "libvda")]
+ pub mod vda;
++
++/// Layout of the pictures of a stream when the backend decodes them straight into CAPTURE buffers
++/// of guest memory instead of copying each one there: NV12 in the Y tiles of Intel GPUs, 128 bytes
++/// by 32 rows made of 16-byte columns, the luma plane padded to whole rows of tiles and the
++/// interleaved chroma plane after it.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct DirectOutputLayout {
++    /// Size of the pictures as decoded, the size of the backend's surfaces.
++    pub width: u32,
++    pub height: u32,
++    /// DRM format modifier the buffers are imported with.
++    pub modifier: u64,
++    /// Bytes per row of both planes, a whole number of tiles.
++    pub stride: u32,
++    /// Offset of the chroma plane, `stride` times `height` rounded up to whole rows of tiles.
++    pub chroma_offset: u32,
++    /// Size of a buffer, a whole number of pages.
++    pub size: u32,
++}
++
++#[repr(C)]
++struct UdmabufCreate {
++    memfd: u32,
++    flags: u32,
++    offset: u64,
++    size: u64,
++}
++
++const UDMABUF_FLAGS_CLOEXEC: u32 = 0x01;
++base::ioctl_iow_nr!(UDMABUF_CREATE, 0x75, 0x42, UdmabufCreate);
++
++/// Makes a DMA-BUF of the whole of `shm` with the kernel's udmabuf driver, so that a device can
++/// write into the memory shared with the guest. udmabuf only takes memfds sealed against
++/// shrinking, so `shm` gets that seal.
++pub fn create_udmabuf(shm: &SharedMemory) -> anyhow::Result<SafeDescriptor> {
++    let memfd = shm.descriptor.as_raw_descriptor();
++    // SAFETY: `memfd` is a valid descriptor, and the return value is checked.
++    if unsafe { libc::fcntl(memfd, libc::F_ADD_SEALS, libc::F_SEAL_SHRINK) } < 0 {
++        bail!("sealing the memfd: {}", std::io::Error::last_os_error());
++    }
++    let udmabuf = std::fs::OpenOptions::new()
++        .read(true)
++        .open("/dev/udmabuf")
++        .context("opening /dev/udmabuf")?;
++    let create = UdmabufCreate {
++        memfd: memfd as u32,
++        flags: UDMABUF_FLAGS_CLOEXEC,
++        offset: 0,
++        size: shm.size,
++    };
++    // SAFETY: the kernel only reads `create`, and the return value is checked.
++    let fd = unsafe { base::ioctl_with_ref(&udmabuf, UDMABUF_CREATE, &create) };
++    if fd < 0 {
++        bail!("UDMABUF_CREATE: {}", std::io::Error::last_os_error());
++    }
++    // SAFETY: the ioctl returned a new descriptor that nothing else owns.
++    Ok(unsafe { SafeDescriptor::from_raw_descriptor(fd) })
++}
+ 
+ /// Contains the device's state for one playback session, i.e. one stream.
+ pub trait DecoderSession {
+@@ -102,6 +165,13 @@
+ 
+     /// Blocking call to read a single event from the event pipe.
+     fn read_event(&mut self) -> VideoResult<DecoderEvent>;
++
++    /// Returns how to lay out output buffers for the pictures of the last `ProvidePictureBuffers`
++    /// event to be decoded into them directly, or `None` if the backend copies its pictures into
++    /// them. Buffers in that layout are passed to `use_output_buffer()` as DMA-BUFs.
++    fn direct_output_layout(&mut self) -> Option<DirectOutputLayout> {
++        None
++    }
+ }
+ 
+ impl<S: AsMut<dyn DecoderSession> + AsRef<dyn DecoderSession> + ?Sized> DecoderSession for S {
+@@ -151,6 +221,10 @@
+ 
+     fn read_event(&mut self) -> VideoResult<DecoderEvent> {
+         self.as_mut().read_event()
++    }
++
++    fn direct_output_layout(&mut self) -> Option<DirectOutputLayout> {
++        self.as_mut().direct_output_layout()
+     }
+ }
+ 
+diff --git a/src/virtio/video/decoder/backend/vaapi.rs b/src/virtio/video/decoder/backend/vaapi.rs
+--- a/src/virtio/video/decoder/backend/vaapi.rs
++++ b/src/virtio/video/decoder/backend/vaapi.rs
+@@ -9,13 +9,19 @@
+ use std::collections::VecDeque;
+ use std::os::fd::FromRawFd;
+ use std::os::fd::OwnedFd;
++use std::os::unix::fs::MetadataExt;
++use std::path::Path;
++use std::path::PathBuf;
+ use std::rc::Rc;
+ 
+ use anyhow::anyhow;
++use anyhow::bail;
+ use anyhow::Result;
+ use base::IntoRawDescriptor;
+ use base::MappedRegion;
+ use base::MemoryMappingArena;
++use base::MemoryMappingBuilder;
++use base::SharedMemory;
+ use cros_codecs::decoder::stateless::h264::H264;
+ use cros_codecs::decoder::stateless::h265::H265;
+ use cros_codecs::decoder::stateless::vp8::Vp8;
+@@ -31,6 +37,8 @@
+ use cros_codecs::FrameLayout;
+ use cros_codecs::PlaneLayout;
+ 
++use crate::virtio::video::decoder::backend::create_udmabuf;
++use crate::virtio::video::decoder::backend::DirectOutputLayout;
+ use crate::virtio::video::decoder::Capability;
+ use crate::virtio::video::decoder::DecoderBackend;
+ use crate::virtio::video::decoder::DecoderEvent;
+@@ -158,6 +166,8 @@
+ pub struct VaapiDecoder {
+     /// The capabilities for the decoder
+     caps: Capability,
++    /// Whether pictures can be decoded straight into guest memory, once checked.
++    direct_decode: Option<bool>,
+ }
+ 
+ // The VA capabilities for the coded side
+@@ -407,6 +417,7 @@
+ 
+         Ok(Self {
+             caps: Capability::new(in_fmts, out_fmts, profiles_map, levels),
++            direct_decode: None,
+         })
+     }
+ }
+@@ -509,6 +520,10 @@
+     event_queue: EventQueue<DecoderEvent>,
+     /// Whether the decoder is currently flushing.
+     flushing: bool,
++    /// The display `codec` decodes on.
++    display: Rc<Display>,
++    /// Whether pictures can be decoded straight into guest memory.
++    direct_decode: bool,
+ }
+ 
+ impl VaapiDecoderSession {
+@@ -522,13 +537,11 @@
+         let buffer_desc = decoded_frame.resource();
+         let picture_buffer_id = buffer_desc.picture_buffer_id;
+ 
+-        // Sync the frame if it is in guest memory, as we are going to map and read it.
+-        // This statement is in its own block so we can drop the `buffer_desc` reference
+-        // before calling `sync`, which does a mutable borrow.
+-        if let BufferDescriptor::GuestMem(_) = &buffer_desc.desc {
+-            drop(buffer_desc);
+-            decoded_frame.sync()?;
+-        }
++        // Sync the frame, as we are going to map and read it, or the guest will as soon as it
++        // learns it is ready when it was decoded into guest memory directly. Drop the
++        // `buffer_desc` reference before calling `sync`, which does a mutable borrow.
++        drop(buffer_desc);
++        decoded_frame.sync()?;
+ 
+         // Copy guest memory buffers into their destination.
+         if let BufferDescriptor::GuestMem(handle) = &decoded_frame.resource().desc {
+@@ -952,7 +965,373 @@
+         self.event_queue
+             .dequeue_event()
+             .map_err(|e| VideoError::BackendFailure(anyhow!("Can't read event {}", e)))
++    }
++
++    fn direct_output_layout(&mut self) -> Option<DirectOutputLayout> {
++        if !self.direct_decode {
++            return None;
++        }
++        // Only 8-bit 4:2:0 streams decode into NV12 surfaces; cros-codecs calls their format
++        // I420.
++        let format = self.codec.stream_info().map(|info| info.format);
++        if !matches!(format, Some(DecodedFormat::I420 | DecodedFormat::NV12)) {
++            base::info!("VA-API: copying {:?} pictures into guest memory", format);
++            return None;
++        }
++        // Frames are imported at the size of the codec's surfaces, which keeps the largest
++        // resolution of the stream so far.
++        let resolution = self.codec.frame_pool().coded_resolution();
++        match direct_output_layout_for(&self.display, resolution.width, resolution.height) {
++            Ok(layout) => Some(layout),
++            Err(e) => {
++                base::info!(
++                    "VA-API: copying {}x{} pictures into guest memory: {:#}",
++                    resolution.width,
++                    resolution.height,
++                    e
++                );
++                None
++            }
++        }
++    }
++}
++
++/// Opens the VA display `Display::open()` would, on the first DRM render node that has one, and
++/// returns the node with it.
++fn open_display() -> Option<(PathBuf, Rc<Display>)> {
++    libva::DrmDeviceIterator::default()
++        .find_map(|node| Display::open_drm_display(&node).ok().map(|display| (node, display)))
++}
++
++/// `I915_FORMAT_MOD_Y_TILED`, the Y tiles of Intel GPUs.
++const I915_FORMAT_MOD_Y_TILED: u64 = (0x01 << 56) | 2;
++const DRM_FORMAT_NV12: u32 = u32::from_le_bytes(*b"NV12");
++
++#[repr(C)]
++struct DrmI915Getparam {
++    param: i32,
++    value: *mut i32,
++}
++
++const I915_PARAM_HAS_LLC: i32 = 17;
++base::ioctl_iowr_nr!(DRM_IOCTL_I915_GETPARAM, 0x64, 0x46, DrmI915Getparam);
++
++/// Checks that the GPU behind DRM node `node` can decode straight into guest memory that the
++/// guest then reads with its CPU: driven by i915, as the pictures of other drivers are laid out
++/// and shared in ways this does not handle, and sharing the CPU's last-level cache, so what the
++/// GPU writes to memory is what the CPU reads, without a cache flush.
++fn check_direct_decode_gpu(node: &Path) -> Result<()> {
++    let file = std::fs::File::options().read(true).write(true).open(node)?;
++    let rdev = file.metadata()?.rdev();
++    let driver = std::fs::read_link(format!(
++        "/sys/dev/char/{}:{}/device/driver",
++        libc::major(rdev),
++        libc::minor(rdev)
++    ))?;
++    let driver = driver.file_name().unwrap_or_default().to_string_lossy();
++    if driver != "i915" {
++        bail!("{} is driven by {}", node.display(), driver);
++    }
++    let mut has_llc = 0;
++    let mut param = DrmI915Getparam {
++        param: I915_PARAM_HAS_LLC,
++        value: &mut has_llc,
++    };
++    // SAFETY: `param` points to memory the kernel can write to, and the return value is checked.
++    if unsafe { base::ioctl_with_mut_ref(&file, DRM_IOCTL_I915_GETPARAM, &mut param) } < 0 {
++        bail!("I915_PARAM_HAS_LLC: {}", std::io::Error::last_os_error());
++    }
++    if has_llc == 0 {
++        bail!("the GPU does not share the CPU's last-level cache");
++    }
++    Ok(())
++}
++
++/// Returns the layout of the NV12 decoder surfaces the driver makes itself at `width`x`height`,
++/// which pictures are decoded into guest memory in, if it is a layout the guest can read. The
++/// format is explicit, as i965 only allocates a surface created without one when it decodes.
++fn direct_output_layout_for(
++    display: &Rc<Display>,
++    width: u32,
++    height: u32,
++) -> Result<DirectOutputLayout> {
++    let surfaces = display.create_surfaces(
++        libva::constants::VA_RT_FORMAT_YUV420,
++        Some(libva::constants::VA_FOURCC_NV12),
++        width,
++        height,
++        Some(libva::UsageHint::USAGE_HINT_DECODER),
++        vec![()],
++    )?;
++    let desc = surfaces[0].export_prime()?;
++    let (Some(object), Some(layer)) = (desc.objects.first(), desc.layers.first()) else {
++        bail!("the driver exported no buffer");
++    };
++    if desc.objects.len() != 1
++        || desc.layers.len() != 1
++        || layer.drm_format != DRM_FORMAT_NV12
++        || layer.num_planes != 2
++    {
++        bail!("its surfaces are not NV12 in one buffer");
++    }
++    let modifier = object.drm_format_modifier;
++    if modifier != I915_FORMAT_MOD_Y_TILED {
++        bail!("its surfaces have modifier {:#x}", modifier);
++    }
++    let stride = layer.pitch[0];
++    let chroma_offset = layer.offset[1];
++    if layer.offset[0] != 0
++        || layer.pitch[1] != stride
++        || stride % 128 != 0
++        || chroma_offset != stride * height.next_multiple_of(32)
++    {
++        bail!(
++            "its surfaces have pitches {}/{} and offsets {}/{}",
++            stride,
++            layer.pitch[1],
++            layer.offset[0],
++            chroma_offset
++        );
++    }
++    // The decoder writes the chroma plane in whole rows of tiles too.
++    let end = u64::from(chroma_offset)
++        + u64::from(stride) * u64::from(height.div_ceil(2).next_multiple_of(32));
++    let size = end
++        .max(u64::from(object.size))
++        .next_multiple_of(base::pagesize() as u64);
++    Ok(DirectOutputLayout {
++        width,
++        height,
++        modifier,
++        stride,
++        chroma_offset,
++        size: u32::try_from(size)?,
++    })
++}
++
++/// A frame in `layout` backed by DMA-BUF `fd`, for the decoder to import.
++fn direct_output_frame(fd: OwnedFd, layout: &DirectOutputLayout) -> DmabufFrame {
++    DmabufFrame {
++        fds: vec![fd],
++        layout: FrameLayout {
++            format: (cros_codecs::Fourcc::from(b"NV12"), layout.modifier),
++            size: cros_codecs::Resolution::from((layout.width, layout.height)),
++            planes: vec![
++                PlaneLayout {
++                    buffer_index: 0,
++                    offset: 0,
++                    stride: layout.stride as usize,
++                },
++                PlaneLayout {
++                    buffer_index: 0,
++                    offset: layout.chroma_offset as usize,
++                    stride: layout.stride as usize,
++                },
++            ],
++        },
++    }
++}
++
++/// One 176x144 H.264 frame: ffmpeg's testsrc2, encoded by x264 at QP 42 without its SEI. The
++/// picture is not a whole number of tiles in either direction, so its surfaces have a stride and
++/// plane heights of their own.
++const DIRECT_TEST_STREAM: [u8; 1476] = [
++    0x00, 0x00, 0x00, 0x01, 0x67, 0x4d, 0x40, 0x0a, 0xec, 0xa1, 0x62, 0x76, 0x02, 0x20, 0x00, 0x00,
++    0x03, 0x00, 0x20, 0x00, 0x00, 0x03, 0x00, 0x41, 0xe2, 0x44, 0xb2, 0xc0, 0x00, 0x00, 0x00, 0x01,
++    0x68, 0xeb, 0xe0, 0x41, 0x2c, 0x80, 0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x00, 0xff, 0x31, 0xce,
++    0xcb, 0xf3, 0xe5, 0x95, 0xe9, 0xaa, 0x1b, 0xbd, 0xca, 0x67, 0x23, 0x9a, 0xe8, 0x0f, 0xc1, 0xfb,
++    0x08, 0x45, 0x8a, 0x40, 0xe7, 0x52, 0x19, 0x49, 0x7f, 0x52, 0xe9, 0xad, 0x2c, 0x62, 0x41, 0xd8,
++    0xbd, 0x7b, 0x30, 0x19, 0xe3, 0xae, 0xeb, 0x95, 0xf9, 0x39, 0x20, 0x63, 0x9a, 0x2e, 0x86, 0x37,
++    0xe8, 0x85, 0x1f, 0x1f, 0x2c, 0x36, 0xfc, 0x9d, 0x3f, 0xf9, 0xe0, 0x77, 0xd1, 0x87, 0x7b, 0xd4,
++    0x3b, 0x63, 0x8d, 0x3c, 0xc7, 0x0f, 0xcf, 0x1d, 0x31, 0x86, 0xdb, 0xee, 0xdd, 0x2e, 0x45, 0x3a,
++    0x09, 0x7c, 0x33, 0xeb, 0xa2, 0x08, 0x61, 0x3f, 0x61, 0xea, 0x5c, 0x09, 0xbc, 0x94, 0xfa, 0x62,
++    0x82, 0xe0, 0x71, 0x3a, 0x00, 0x56, 0x96, 0x27, 0x7c, 0xe1, 0x5e, 0xa1, 0x44, 0x76, 0x48, 0xeb,
++    0xbb, 0x55, 0x88, 0xe9, 0xa5, 0x32, 0xd8, 0x7b, 0x4c, 0xfc, 0x7f, 0x3a, 0x97, 0xbe, 0xff, 0xff,
++    0x65, 0x2c, 0x1f, 0x1b, 0x67, 0x2d, 0xc0, 0x53, 0xa0, 0x21, 0x4e, 0xac, 0xab, 0x53, 0x95, 0x9a,
++    0x8a, 0x63, 0x9d, 0x12, 0x68, 0x47, 0x21, 0xa9, 0x72, 0x22, 0xe3, 0xf9, 0x9d, 0xe4, 0xc0, 0x09,
++    0x5b, 0x29, 0x47, 0xbc, 0x00, 0xe2, 0xd2, 0xc0, 0x46, 0x8d, 0x10, 0xd5, 0xa5, 0xc2, 0x43, 0x84,
++    0x7e, 0xd1, 0xf3, 0x5a, 0x7c, 0xb5, 0x17, 0x12, 0x77, 0x8d, 0xfe, 0xf6, 0x4a, 0xa1, 0x66, 0x85,
++    0xa4, 0x4e, 0xf5, 0x31, 0x0c, 0xf4, 0xa0, 0x3c, 0xdd, 0xc6, 0x3b, 0x08, 0x60, 0x03, 0xe2, 0x4f,
++    0x77, 0x22, 0x63, 0x08, 0xf7, 0xae, 0x3d, 0x32, 0xe6, 0x0d, 0x43, 0x7f, 0x73, 0x2c, 0x25, 0x04,
++    0x4e, 0x9a, 0xdb, 0x98, 0x1d, 0x63, 0x7a, 0x21, 0x11, 0x27, 0xae, 0x39, 0xc0, 0xba, 0xe8, 0xff,
++    0xdf, 0x9c, 0xbf, 0x7b, 0x92, 0xba, 0xad, 0xea, 0x6d, 0x0d, 0x93, 0x2d, 0x2b, 0x14, 0x9f, 0x58,
++    0xe8, 0x83, 0xbe, 0x93, 0x6a, 0xab, 0xc6, 0xc8, 0xe1, 0x4f, 0xc5, 0x5c, 0x06, 0xf1, 0x8e, 0xe4,
++    0xd5, 0x4e, 0x2a, 0x10, 0x28, 0x99, 0x10, 0x22, 0xb0, 0x25, 0x2c, 0x74, 0x7c, 0xc0, 0x64, 0xa1,
++    0xad, 0x3d, 0x3f, 0x44, 0x8b, 0x05, 0x0d, 0x04, 0x40, 0xcd, 0x66, 0x27, 0x58, 0xae, 0xe2, 0x1f,
++    0xa5, 0xeb, 0xae, 0xb7, 0x7d, 0xb0, 0x94, 0x5b, 0x18, 0x51, 0xff, 0x01, 0x66, 0xe8, 0x7a, 0x8f,
++    0x65, 0xff, 0xd7, 0x3f, 0xab, 0x74, 0xc7, 0x41, 0x52, 0xf8, 0xc2, 0x30, 0x67, 0x07, 0xc9, 0xd5,
++    0x2a, 0x84, 0xe7, 0x53, 0xf6, 0x23, 0x1d, 0x95, 0xb4, 0x9c, 0xad, 0x53, 0x32, 0xaf, 0x57, 0xbb,
++    0x08, 0xfe, 0x37, 0xfd, 0x1e, 0xe3, 0x93, 0xfa, 0x31, 0x57, 0xb0, 0x11, 0x88, 0x3e, 0x32, 0x6a,
++    0x76, 0x92, 0x61, 0x2c, 0xac, 0x4e, 0x8a, 0xfc, 0x27, 0xfa, 0x02, 0x3d, 0x02, 0x8d, 0x5a, 0x6d,
++    0x86, 0xd3, 0x25, 0x2c, 0x76, 0x0f, 0xdf, 0x66, 0x6e, 0x42, 0x7f, 0x5b, 0xff, 0xe4, 0xb0, 0x1a,
++    0x82, 0x2f, 0x5a, 0x2f, 0x2a, 0x84, 0x9a, 0xc3, 0xfe, 0xcd, 0xdf, 0x11, 0x76, 0xa9, 0x69, 0x3a,
++    0x60, 0xe4, 0x20, 0x9c, 0xb1, 0x5a, 0x5c, 0xac, 0xe0, 0x3b, 0x87, 0xb0, 0x2d, 0x61, 0x7a, 0x79,
++    0xee, 0xd2, 0xde, 0x07, 0x10, 0xa6, 0x99, 0xd6, 0xa7, 0xdb, 0x8f, 0x65, 0xfe, 0x3e, 0x48, 0x20,
++    0x47, 0x39, 0x3a, 0xf9, 0x40, 0x83, 0x1b, 0xfe, 0x60, 0x2e, 0xf2, 0x40, 0xac, 0x53, 0x9f, 0xb3,
++    0xd8, 0x3b, 0x96, 0x77, 0x5b, 0xbc, 0xd6, 0xed, 0x4d, 0x15, 0xaf, 0xfe, 0xd5, 0x34, 0xba, 0x44,
++    0x32, 0x69, 0xac, 0x79, 0x6a, 0x9f, 0x23, 0x0a, 0x2f, 0x30, 0x78, 0x04, 0x0b, 0x28, 0xda, 0x19,
++    0xd6, 0x43, 0xf7, 0x69, 0x9f, 0x36, 0xbe, 0xc2, 0x8c, 0x00, 0x5a, 0xcf, 0xd2, 0xf1, 0x6d, 0xa2,
++    0x92, 0xf3, 0xdb, 0xef, 0x0b, 0xdb, 0x5a, 0xa8, 0x2d, 0xb6, 0x43, 0xfd, 0x22, 0x3b, 0x69, 0xf5,
++    0x17, 0x06, 0xd2, 0xfe, 0x03, 0xa7, 0xfc, 0x3a, 0x68, 0x6b, 0x5e, 0x42, 0x5c, 0xd5, 0x4d, 0x2b,
++    0xe5, 0xfa, 0xe4, 0x30, 0x53, 0x62, 0xb8, 0x50, 0xa7, 0x94, 0xfb, 0x40, 0xd9, 0x7f, 0xfd, 0xea,
++    0x23, 0xe5, 0x12, 0x85, 0xc1, 0x08, 0x40, 0x86, 0xa4, 0x61, 0xbc, 0xf4, 0x96, 0x77, 0xec, 0x6b,
++    0x84, 0x99, 0x72, 0x48, 0xcf, 0x7f, 0x8e, 0x05, 0x3f, 0xff, 0x21, 0x1f, 0x02, 0xb6, 0x37, 0xca,
++    0xca, 0xa5, 0x53, 0x8e, 0xff, 0xd2, 0x0b, 0x14, 0xfd, 0xaa, 0xa7, 0x72, 0x16, 0x90, 0xb4, 0x34,
++    0xcb, 0x28, 0x78, 0x74, 0x34, 0x50, 0xa9, 0xae, 0xee, 0xa1, 0x07, 0xda, 0x0e, 0x2e, 0x51, 0x0f,
++    0x8a, 0x5d, 0xab, 0x8a, 0xe5, 0xb1, 0x7d, 0xf8, 0xf0, 0x86, 0x1c, 0x95, 0xd2, 0x2d, 0x5f, 0x21,
++    0x71, 0x39, 0x7e, 0xd5, 0xd3, 0xec, 0xe8, 0x9f, 0xb0, 0x70, 0xda, 0x63, 0x49, 0x5d, 0x08, 0x27,
++    0x42, 0xa1, 0xee, 0x70, 0xe5, 0x52, 0x94, 0xc6, 0x4f, 0x32, 0x4b, 0xb3, 0xf3, 0xd4, 0x5e, 0xb1,
++    0xdf, 0x05, 0xa7, 0x30, 0x1e, 0x29, 0x50, 0x96, 0x0c, 0x81, 0xd9, 0x4b, 0xaf, 0x5e, 0x37, 0x61,
++    0xd9, 0x8d, 0xb1, 0x52, 0x6f, 0x56, 0x19, 0x0c, 0xbb, 0xfb, 0x7a, 0x52, 0x1c, 0xf1, 0xf7, 0x08,
++    0x54, 0x60, 0x3a, 0xcd, 0xed, 0x79, 0xc9, 0xe2, 0xd1, 0xb4, 0x2d, 0xcb, 0xc9, 0x3e, 0xfa, 0xe2,
++    0x38, 0xdc, 0x6a, 0x43, 0x97, 0xff, 0xa6, 0x05, 0x56, 0x97, 0xd5, 0x7d, 0x02, 0x52, 0xf7, 0xa4,
++    0x07, 0x49, 0x84, 0x4a, 0x17, 0x33, 0x8e, 0xb8, 0x36, 0xf6, 0x21, 0x04, 0xb4, 0xf4, 0xb6, 0x8f,
++    0x89, 0x8e, 0x58, 0xd6, 0x6c, 0x62, 0x19, 0x20, 0xbc, 0xee, 0x72, 0xef, 0xa1, 0x2e, 0xdc, 0x56,
++    0x49, 0xa6, 0xeb, 0x0e, 0x39, 0xb9, 0xc5, 0xfe, 0xb7, 0xce, 0x50, 0x99, 0xa8, 0x43, 0x80, 0xb3,
++    0x22, 0x40, 0xb7, 0x05, 0xc5, 0x44, 0xf4, 0x31, 0x95, 0x91, 0x31, 0xae, 0x55, 0x75, 0x3d, 0x24,
++    0x57, 0x71, 0x14, 0x82, 0xb7, 0xca, 0x00, 0xfe, 0x30, 0xdb, 0xbe, 0x76, 0x9a, 0x7c, 0x5a, 0xbc,
++    0x17, 0xce, 0x9d, 0xb3, 0x2a, 0xed, 0xba, 0x96, 0x77, 0xe5, 0xbe, 0xae, 0x77, 0xb7, 0x7f, 0xdb,
++    0x3e, 0x1b, 0x07, 0xda, 0x88, 0x18, 0xf5, 0xc5, 0x3f, 0x76, 0x3a, 0x77, 0x0f, 0x1a, 0x48, 0x34,
++    0x0b, 0x90, 0xdc, 0xe1, 0x51, 0x84, 0x57, 0x6d, 0x73, 0xe4, 0x61, 0x4f, 0x74, 0x5c, 0x5e, 0x4d,
++    0x73, 0x05, 0xde, 0x95, 0xe4, 0xf7, 0xdf, 0xdc, 0xad, 0xa1, 0x24, 0x9a, 0x0e, 0x21, 0x8c, 0x72,
++    0x02, 0x96, 0x50, 0x0e, 0x8f, 0xcb, 0x7d, 0xa0, 0xf4, 0x13, 0xcc, 0xe6, 0xcc, 0x86, 0xcc, 0x32,
++    0x2b, 0xb8, 0x2b, 0x33, 0x15, 0x36, 0xe3, 0xc7, 0x36, 0x6b, 0x3b, 0x20, 0x31, 0x95, 0x73, 0x10,
++    0x54, 0xba, 0x67, 0x00, 0xd3, 0x4c, 0xbc, 0x99, 0x1c, 0x1a, 0x09, 0x2c, 0x1b, 0xd4, 0x29, 0x52,
++    0xaf, 0x42, 0x6e, 0xbf, 0x03, 0x40, 0x00, 0x8e, 0x7d, 0x31, 0x5b, 0xd9, 0x55, 0x2d, 0x01, 0x88,
++    0x2b, 0x16, 0xb1, 0x95, 0xc0, 0x5a, 0xd2, 0xd2, 0xf5, 0xc2, 0x95, 0x3f, 0x78, 0x2a, 0x5a, 0x3f,
++    0xb9, 0x3f, 0x27, 0xa2, 0x3f, 0xd2, 0x4d, 0xe2, 0x05, 0x71, 0xde, 0x88, 0xef, 0x51, 0xa0, 0x9f,
++    0x66, 0xb9, 0xd6, 0x5b, 0x2d, 0x82, 0xec, 0xac, 0xa4, 0xc0, 0x98, 0x10, 0xca, 0x84, 0x70, 0x91,
++    0x21, 0x85, 0xa4, 0x7a, 0x80, 0x47, 0xd4, 0x1f, 0xce, 0x7e, 0xd8, 0x46, 0x5f, 0x03, 0x79, 0xe0,
++    0xce, 0x9b, 0xac, 0x44, 0x58, 0x80, 0xf7, 0xd9, 0xbc, 0xf7, 0x47, 0x02, 0xfc, 0x42, 0xd8, 0x91,
++    0x4a, 0xb5, 0xb4, 0xf9, 0xef, 0xe9, 0xa2, 0x9e, 0x3e, 0x88, 0x1e, 0x51, 0xd4, 0x74, 0x8a, 0xca,
++    0xdb, 0x98, 0x81, 0x31, 0x96, 0x26, 0x99, 0x94, 0x0d, 0x1d, 0x93, 0xde, 0x69, 0xae, 0x62, 0x4b,
++    0x88, 0x4c, 0x8b, 0x06, 0x86, 0x28, 0x6f, 0xd0, 0x76, 0xd0, 0x84, 0xf1, 0x5b, 0xf8, 0xeb, 0x3d,
++    0xbf, 0xd9, 0x88, 0x4f, 0x8d, 0xfd, 0x22, 0xe0, 0xac, 0x80, 0x27, 0x0b, 0x12, 0x91, 0x01, 0xa6,
++    0xad, 0x46, 0xda, 0xe5, 0x27, 0xad, 0x1b, 0xe3, 0xa8, 0x20, 0x0a, 0x2e, 0x1d, 0x15, 0x76, 0xcc,
++    0x60, 0x23, 0xe9, 0x1c, 0xc3, 0x15, 0xc9, 0xfd, 0x68, 0x68, 0xfc, 0x23, 0x7f, 0x3c, 0xda, 0x93,
++    0x30, 0x56, 0x11, 0xa4, 0xa7, 0x55, 0x9d, 0x9a, 0x61, 0xa7, 0x98, 0xe7, 0x93, 0xdc, 0x22, 0x5d,
++    0xa3, 0x66, 0xcd, 0x36, 0x0e, 0x3d, 0xaa, 0xfa, 0xf3, 0xd2, 0x04, 0x3e, 0xe2, 0x9a, 0x03, 0x17,
++    0xea, 0xa0, 0xb7, 0x8c, 0x79, 0x28, 0x53, 0x39, 0x7e, 0x7a, 0xd4, 0x04, 0x39, 0xf2, 0xb3, 0xe0,
++    0xa4, 0xf8, 0x83, 0xcf, 0xa3, 0x84, 0x3f, 0xb0, 0xa5, 0xb8, 0xe5, 0x7d, 0xb6, 0x6b, 0x40, 0xfa,
++    0x39, 0xc1, 0x59, 0xb5, 0x1d, 0xe1, 0x21, 0x9d, 0x2e, 0x29, 0xef, 0x72, 0xe9, 0xc7, 0x6a, 0x23,
++    0x64, 0x9a, 0x32, 0xd0, 0x7b, 0xeb, 0x2f, 0x28, 0x7d, 0x0e, 0x7e, 0x10, 0x20, 0xf0, 0x28, 0x7f,
++    0xe4, 0xdf, 0x25, 0xdf, 0xaa, 0x14, 0xf9, 0x48, 0x0b, 0x9c, 0x44, 0x7d, 0x93, 0x7a, 0xc4, 0x62,
++    0xda, 0x7d, 0x04, 0xaa, 0x9f, 0x2c, 0x75, 0xce, 0x13, 0x67, 0x77, 0x02, 0x25, 0x6c, 0xc7, 0x8d,
++    0xb2, 0xe7, 0x61, 0x97, 0xbc, 0xfb, 0x17, 0x3b, 0x19, 0x50, 0xef, 0x16, 0x43, 0xe4, 0xfb, 0xf9,
++    0xaf, 0x83, 0x46, 0x7c, 0xab, 0x8b, 0x1c, 0x99, 0xdc, 0xbb, 0xfe, 0x10, 0xf4, 0x27, 0xd2, 0xd7,
++    0x5e, 0x68, 0x55, 0x5e, 0x13, 0xdc, 0xb7, 0xba, 0xb4, 0x25, 0xfc, 0x0d, 0x91, 0xe0, 0x7d, 0xc8,
++    0x59, 0x4e, 0x40, 0xc4, 0x0a, 0xac, 0xc4, 0x45, 0x9d, 0x5a, 0xca, 0x56, 0x80, 0x73, 0xeb, 0xbb,
++    0xf4, 0x7b, 0x48, 0xce, 0x11, 0x27, 0xcb, 0xab, 0x2a, 0xdb, 0xb3, 0x9b, 0x47, 0x8a, 0x47, 0xe6,
++    0x0e, 0xcb, 0x51, 0x74, 0x3e, 0xa8, 0x82, 0x2d, 0x70, 0x0d, 0x17, 0xa4, 0x7e, 0xb1, 0x2a, 0x5f,
++    0x54, 0x88, 0x96, 0xf2, 0xb6, 0x1d, 0x12, 0x93, 0xe6, 0x17, 0xc7, 0xce, 0xbf, 0xed, 0x59, 0x6c,
++    0xbc, 0x37, 0x80, 0x29, 0xcd, 0xb6, 0xb4, 0x7c, 0x94, 0x53, 0x67, 0x85, 0xd2, 0xbf, 0x77, 0xd2,
++    0xe5, 0xe8, 0x36, 0xbb, 0x32, 0x20, 0x4b, 0xdc, 0x65, 0x19, 0x56, 0x79, 0xbe, 0x4c, 0x56, 0xa8,
++    0x3e, 0x67, 0x7b, 0x8e, 0x2f, 0x3d, 0x1d, 0xa5, 0x4c, 0xe3, 0x60, 0xd7, 0xa2, 0xa0, 0x3c, 0xb3,
++    0x21, 0x85, 0x54, 0x12, 0xdc, 0x57, 0x72, 0x1f, 0x64, 0x19, 0x0e, 0xf6, 0xcc, 0x5b, 0x96, 0x09,
++    0xd9, 0xf1, 0x2f, 0x81,
++];
++/// FNV-1a hash of `DIRECT_TEST_STREAM` decoded, as software decoders decode it: its luma rows,
++/// then its interleaved chroma rows.
++const DIRECT_TEST_PICTURE_HASH: u64 = 0x28a60a2d02247dda;
++
++/// FNV-1a hash of the `width`x`height` picture in `shm`, laid out as `layout`.
++fn hash_direct_picture(
++    shm: &SharedMemory,
++    layout: &DirectOutputLayout,
++    width: usize,
++    height: usize,
++) -> Result<u64> {
++    let mapping = MemoryMappingBuilder::new(layout.size as usize)
++        .from_shared_memory(shm)
++        .build()?;
++    let mut data = vec![0u8; layout.size as usize];
++    mapping.read_slice(&mut data, 0)?;
++    let stride = layout.stride as usize;
++    let tiled = move |x: usize, y: usize| (y / 32) * stride * 32 + (x / 16) * 512 + (y % 32) * 16 + x % 16;
++    let chroma = layout.chroma_offset as usize;
++    let luma_bytes = (0..height).flat_map(|y| (0..width).map(move |x| tiled(x, y)));
++    let chroma_bytes = (0..height.div_ceil(2))
++        .flat_map(|y| (0..width.next_multiple_of(2)).map(move |x| chroma + tiled(x, y)));
++    Ok(luma_bytes
++        .chain(chroma_bytes)
++        .fold(0xcbf29ce484222325, |hash, i| {
++            (hash ^ u64::from(data[i])).wrapping_mul(0x100000001b3)
++        }))
++}
++
++/// Decodes `DIRECT_TEST_STREAM` into buffers of guest-like memory made and imported as a session
++/// imports the guest's when it decodes into them directly, and checks the picture. The layout is
++/// that of the driver's own surfaces, and this proves the driver decodes into an imported buffer
++/// in it too.
++fn direct_decode_self_test(display: &Rc<Display>) -> Result<()> {
++    let mut codec: Box<dyn StatelessVideoDecoder<BufferDescWithPicId>> = Box::new(
++        cros_codecs::decoder::stateless::StatelessDecoder::<H264, _>::new_vaapi(
++            Rc::clone(display),
++            cros_codecs::decoder::BlockingMode::Blocking,
++        ),
++    );
++    let mut buffers = Vec::new();
++    let mut layout = None;
++    let mut hash = None;
++    let mut offset = 0;
++    let mut flushed = false;
++    loop {
++        while let Some(event) = codec.next_event() {
++            match event {
++                cros_codecs::decoder::DecoderEvent::FormatChanged(mut format) => {
++                    let resolution = format.frame_pool().coded_resolution();
++                    let new_layout =
++                        direct_output_layout_for(display, resolution.width, resolution.height)?;
++                    let mut frames = Vec::new();
++                    for id in 0..format.stream_info().min_num_frames {
++                        let shm = SharedMemory::new("direct decode test", new_layout.size.into())?;
++                        let fd = create_udmabuf(&shm)?;
++                        // SAFETY: `fd` is a valid descriptor that nothing else owns.
++                        let fd = unsafe { OwnedFd::from_raw_fd(fd.into_raw_descriptor()) };
++                        frames.push(BufferDescWithPicId {
++                            desc: BufferDescriptor::Dmabuf(direct_output_frame(fd, &new_layout)),
++                            picture_buffer_id: id as i32,
++                        });
++                        buffers.push(shm);
++                    }
++                    format.frame_pool().add_frames(frames)?;
++                    layout = Some(new_layout);
++                }
++                cros_codecs::decoder::DecoderEvent::FrameReady(frame) => {
++                    frame.sync()?;
++                    let id = frame.resource().picture_buffer_id as usize;
++                    let (Some(shm), Some(layout)) = (buffers.get(id), &layout) else {
++                        bail!("the decoder returned an unknown frame");
++                    };
++                    let size = frame.display_resolution();
++                    hash = Some(hash_direct_picture(
++                        shm,
++                        layout,
++                        size.width as usize,
++                        size.height as usize,
++                    )?);
++                }
++            }
++        }
++        if offset < DIRECT_TEST_STREAM.len() {
++            match codec.decode(0, &DIRECT_TEST_STREAM[offset..]) {
++                Ok(0) => bail!("the decoder took no data"),
++                Ok(processed) => offset += processed,
++                Err(DecodeError::CheckEvents) => (),
++                Err(e) => return Err(e.into()),
++            }
++        } else if !flushed {
++            codec.flush()?;
++            flushed = true;
++        } else {
++            break;
++        }
+     }
++    match hash {
++        Some(DIRECT_TEST_PICTURE_HASH) => Ok(()),
++        Some(hash) => bail!("its test picture came out wrong (hash {:#x})", hash),
++        None => bail!("its test picture was not decoded"),
++    }
+ }
+ 
+ impl DecoderBackend for VaapiDecoder {
+@@ -963,31 +1342,46 @@
+     }
+ 
+     fn new_session(&mut self, format: Format) -> VideoResult<Self::Session> {
+-        let display = Display::open()
++        let (node, display) = open_display()
+             .ok_or_else(|| VideoError::BackendFailure(anyhow!("failed to open VA display")))?;
++        // Decoding straight into guest memory saves copying every picture there. Check once
++        // whether the GPU can, before the first stream that would.
++        let direct_decode = *self.direct_decode.get_or_insert_with(|| {
++            match check_direct_decode_gpu(&node).and_then(|()| direct_decode_self_test(&display))
++            {
++                Ok(()) => {
++                    base::info!("VA-API: decoding pictures straight into guest memory");
++                    true
++                }
++                Err(e) => {
++                    base::info!("VA-API: copying decoded pictures into guest memory: {:#}", e);
++                    false
++                }
++            }
++        });
+ 
+         let codec: Box<dyn StatelessVideoDecoder<BufferDescWithPicId>> = match format {
+             Format::VP8 => Box::new(
+                 cros_codecs::decoder::stateless::StatelessDecoder::<Vp8, _>::new_vaapi(
+-                    display,
++                    Rc::clone(&display),
+                     cros_codecs::decoder::BlockingMode::NonBlocking,
+                 ),
+             ),
+             Format::VP9 => Box::new(
+                 cros_codecs::decoder::stateless::StatelessDecoder::<Vp9, _>::new_vaapi(
+-                    display,
++                    Rc::clone(&display),
+                     cros_codecs::decoder::BlockingMode::NonBlocking,
+                 ),
+             ),
+             Format::H264 => Box::new(
+                 cros_codecs::decoder::stateless::StatelessDecoder::<H264, _>::new_vaapi(
+-                    display,
++                    Rc::clone(&display),
+                     cros_codecs::decoder::BlockingMode::NonBlocking,
+                 ),
+             ),
+             Format::Hevc => Box::new(
+                 cros_codecs::decoder::stateless::StatelessDecoder::<H265, _>::new_vaapi(
+-                    display,
++                    Rc::clone(&display),
+                     cros_codecs::decoder::BlockingMode::NonBlocking,
+                 ),
+             ),
+@@ -1001,6 +1395,8 @@
+             submit_queue: Default::default(),
+             event_queue: EventQueue::new().map_err(|e| VideoError::BackendFailure(anyhow!(e)))?,
+             flushing: Default::default(),
++            display,
++            direct_decode,
+         })
+     }
+ }
+diff --git a/src/virtio/media/decoder_adapter.rs b/src/virtio/media/decoder_adapter.rs
+--- a/src/virtio/media/decoder_adapter.rs
++++ b/src/virtio/media/decoder_adapter.rs
+@@ -30,8 +30,10 @@
+ use virtio_media::v4l2r::QueueDirection;
+ use virtio_media::v4l2r::QueueType;
+ 
++use crate::virtio::video::decoder::backend::create_udmabuf;
+ use crate::virtio::video::decoder::backend::DecoderEvent;
+ use crate::virtio::video::decoder::backend::DecoderSession;
++use crate::virtio::video::decoder::backend::DirectOutputLayout;
+ use crate::virtio::video::decoder::capability::Capability;
+ use crate::virtio::video::decoder::DecoderBackend;
+ use crate::virtio::video::format::Format;
+@@ -41,11 +43,42 @@
+ use crate::virtio::video::resource::GuestMemHandle;
+ use crate::virtio::video::resource::GuestResource;
+ use crate::virtio::video::resource::GuestResourceHandle;
++use crate::virtio::video::resource::VirtioObjectHandle;
+ 
+ /// Size of every input buffer. A buffer holds a whole compressed frame, and 1 MB was too
+ /// small for the keyframes of high-bitrate 1080p and of 4K video. Buffers are sparse memfds,
+ /// so only the pages a frame writes take host memory.
+ const INPUT_BUFFER_SIZE: u32 = 8 * 1024 * 1024;
++
++/// V4L2 pixel format of CAPTURE buffers the backend decodes into directly, private to Ika and its
++/// guest: NV12 in Intel Y tiles, laid out as `DirectOutputLayout` says, with `bytesperline` the
++/// stride and the chroma plane at `bytesperline` times the height rounded up to 32 rows.
++const PIX_FMT_NV12_Y_TILED: &[u8; 4] = b"IKYT";
++
++/// The CAPTURE format of buffers in `layout`.
++fn direct_output_format(layout: &DirectOutputLayout) -> V4l2MplaneFormat {
++    let mut plane_fmt: [bindings::v4l2_plane_pix_format; bindings::VIDEO_MAX_PLANES as usize] =
++        Default::default();
++    plane_fmt[0] = bindings::v4l2_plane_pix_format {
++        bytesperline: layout.stride,
++        sizeimage: layout.size,
++        reserved: Default::default(),
++    };
++
++    V4l2MplaneFormat::from((
++        QueueDirection::Capture,
++        bindings::v4l2_pix_format_mplane {
++            width: layout.width,
++            height: layout.height,
++            pixelformat: PixelFormat::from_fourcc(PIX_FMT_NV12_Y_TILED).to_u32(),
++            field: bindings::v4l2_field_V4L2_FIELD_NONE,
++            plane_fmt,
++            num_planes: 1,
++            flags: 0,
++            ..Default::default()
++        },
++    ))
++}
+ 
+ /// Returns the V4L2 `(bytesperline, sizeimage)` for the given `format` and `coded_size`.
+ fn buffer_sizes_for_format(format: Format, coded_size: (u32, u32)) -> (u32, u32) {
+@@ -167,9 +200,20 @@
+     ///
+     /// This is required to call `set_output_parameters` on the virtio-video session.
+     num_output_buffers: usize,
++
++    /// Layout the backend can decode the pictures of the stream into CAPTURE buffers in directly.
++    direct_layout: Option<DirectOutputLayout>,
++    /// Whether the guest set the CAPTURE format to that layout. Otherwise the backend copies its
++    /// pictures into the buffers.
++    direct: bool,
+ }
+ 
+ impl<D: DecoderBackend> VirtioVideoAdapterSession<D> {
++    /// The layout of the CAPTURE buffers when the backend decodes into them directly.
++    fn direct_output(&self) -> Option<&DirectOutputLayout> {
++        self.direct_layout.as_ref().filter(|_| self.direct)
++    }
++
+     /// Get the currently existing backend session if it exists, or create it using the current
+     /// input format if it doesn't.
+     fn get_or_create_session(&mut self) -> IoctlResult<&mut D::Session> {
+@@ -250,6 +294,9 @@
+     type BufferStorage = VirtioVideoAdapterBuffer;
+ 
+     fn current_format(&self, direction: QueueDirection) -> V4l2MplaneFormat {
++        if let (QueueDirection::Capture, Some(layout)) = (direction, self.direct_output()) {
++            return direct_output_format(layout);
++        }
+         let format = match direction {
+             QueueDirection::Output => self.input_format,
+             QueueDirection::Capture => self.output_format,
+@@ -336,6 +383,14 @@
+                     // green band. `stream_params` keeps the coded size for the selection bounds.
+                     let visible = &self.stream_params.visible_rect;
+                     self.coded_size = (visible.width, visible.height);
++                    // Unless the backend can decode straight into the buffers, saving that copy:
++                    // the guest asks for that layout by setting `PIX_FMT_NV12_Y_TILED`, and G_FMT
++                    // reports the copied pictures until it does.
++                    self.direct_layout = self
++                        .backend_session
++                        .as_mut()
++                        .and_then(|session| session.direct_output_layout());
++                    self.direct = false;
+                     self.need_set_output_params = true;
+                     self.initial_drc_received = true;
+ 
+@@ -357,7 +412,10 @@
+                         tv_sec: (timestamp / 1_000_000) as i64,
+                         tv_usec: (timestamp % 1_000_000) as i64,
+                     };
+-                    let bytes_used = buffer_sizes_for_format(self.output_format, self.coded_size).1;
++                    let bytes_used = match self.direct_output() {
++                        Some(layout) => layout.size,
++                        None => buffer_sizes_for_format(self.output_format, self.coded_size).1,
++                    };
+ 
+                     Some(VideoDecoderBackendEvent::FrameCompleted {
+                         buffer_id: picture_buffer_id as u32,
+@@ -468,7 +526,47 @@
+                 Ok(())
+             }
+             EosBuffer::Available(_) => {
+-                let resource = if !backing.registered {
++                let resource = if backing.registered {
++                    None
++                } else if let Some(&layout) = self.direct_output() {
++                    // The backend decodes into the buffer's memory, imported as a DMA-BUF.
++                    let shm = &backing.shm[0];
++                    if shm.size < u64::from(layout.size) {
++                        base::error!("CAPTURE buffer {} is too small to decode into", index);
++                        return Err(libc::EINVAL);
++                    }
++                    let desc = create_udmabuf(shm).map_err(|e| {
++                        base::error!("CAPTURE buffer {}: {:#}", index, e);
++                        libc::EIO
++                    })?;
++                    let chroma_offset = layout.chroma_offset as usize;
++                    let stride = layout.stride as usize;
++
++                    backing.registered = true;
++
++                    Some(GuestResource {
++                        handle: GuestResourceHandle::VirtioObject(VirtioObjectHandle {
++                            desc,
++                            modifier: layout.modifier,
++                        }),
++                        planes: vec![
++                            FramePlane {
++                                offset: 0,
++                                stride,
++                                size: chroma_offset,
++                            },
++                            FramePlane {
++                                offset: chroma_offset,
++                                stride,
++                                size: layout.size as usize - chroma_offset,
++                            },
++                        ],
++                        width: layout.width,
++                        height: layout.height,
++                        format: Format::NV12,
++                        guest_cpu_mappable: true,
++                    })
++                } else {
+                     let resource = GuestResourceHandle::GuestPages(GuestMemHandle {
+                         desc: backing.shm[0]
+                             .descriptor
+@@ -515,8 +613,6 @@
+                     backing.registered = true;
+ 
+                     Some(resource_handle)
+-                } else {
+-                    None
+                 };
+ 
+                 self.pending_output_buffers.push((index, resource));
+@@ -586,6 +682,8 @@
+             pending_output_buffers: Default::default(),
+             num_output_buffers: 0,
+             eos_capture_buffer: EosBuffer::None,
++            direct_layout: None,
++            direct: false,
+         })
+     }
+ 
+@@ -639,6 +737,16 @@
+     ) -> V4l2MplaneFormat {
+         let pix_mp: &bindings::v4l2_pix_format_mplane = format.as_ref();
+ 
++        // The layout to decode into directly, if the backend has one for the stream. Without one,
++        // the format falls back to the first one below, which tells the guest it is not offered.
++        if direction == QueueDirection::Capture
++            && pix_mp.pixelformat == PixelFormat::from_fourcc(PIX_FMT_NV12_Y_TILED).to_u32()
++        {
++            if let Some(layout) = &session.direct_layout {
++                return direct_output_format(layout);
++            }
++        }
++
+         let available_formats = match direction {
+             QueueDirection::Output => self.capability.input_formats(),
+             QueueDirection::Capture => self.capability.output_formats(),
+@@ -738,6 +846,10 @@
+                 }
+             }
+             QueueDirection::Capture => {
++                // The backend still decodes into its first output format, NV12, in that layout.
++                session.direct = session.direct_layout.is_some()
++                    && format.pixelformat().to_u32()
++                        == PixelFormat::from_fourcc(PIX_FMT_NV12_Y_TILED).to_u32();
+                 session.output_format =
+                     Format::try_from(format.pixelformat()).unwrap_or_else(|_| {
+                         self.capability
