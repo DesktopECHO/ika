@@ -65,6 +65,8 @@ expect_equal "$(decide off)" "false||" "--no-lowcpu wins over the host"
 VULKAN_SUMMARY=$'GPU0:\n\tdeviceName = Radeon'
 GPU_MODE="guest_swiftshader"
 expect_equal "$(decide auto)" "true|software rendering|low-CPU mode: on (software rendering)" "guest_swiftshader"
+GPU_MODE="guest_lavapipe"
+expect_equal "$(decide auto)" "true|software rendering|low-CPU mode: on (software rendering)" "guest_lavapipe"
 GPU_MODE="gfxstream_guest_angle"
 expect_equal "$(decide auto --cpus=2)" "true|2 vCPUs|low-CPU mode: on (2 vCPUs)" "two vCPUs"
 CVD_COMPUTE_DEFAULTS[cpus]=1
