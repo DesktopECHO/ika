@@ -45,6 +45,11 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** `VirtioGpuScanout::flush()` drops a flush whose imported dma-buf the compositor still holds (`GpuDisplay::import_in_use()`), as the copy path already drops a frame whose `wl_shm` buffer is in use.
 - **Why:** With the hold, flipping to a held buffer would show the guest's next composition inside the frame the console is sampling. The guest's next flush, into another buffer of its swapchain, gets through; nothing waits.
 
+#### `PATCH.gpu_display-release-import-order.patch`, `PATCH.crosvm-unref-display-imports-devices.patch`
+- **Targets:** `gpu_display` crate (`src/lib.rs`, `src/gpu_display_android.rs`) and `devices` crate (`src/virtio/gpu/virtio_gpu.rs`). A backport of upstream crosvm f1d0ffe ("devices: virtio: gpu: Track import surface_id") without its tests and the stub display's test support. The `devices` patch is named to sort after the other `virtio_gpu.rs` patches.
+- **What it does:** A resource keeps its display import per surface (`surface_id` to `import_id`) instead of a single one, and `unref_resource()` releases them all when the guest frees the resource. `DisplayT::release_import()` and `GpuDisplay::release_import()` take `(surface_id, import_id)`, the order the backends implement; the generic layer had them swapped, which went unnoticed because nothing called it. The Android backend no longer adds an empty map when it releases an import of a surface it has none for.
+- **Why:** Nothing released a display import, so the compositor (`ika_stream`) kept every scanout buffer the guest had ever shown, and its memory, until the VM stopped: three dma-bufs for each app window opened and closed. `display_wl.c` also keeps at most 64 imports (`MAX_BUFFER_COUNT`).
+
 #### `PATCH.crosvm-media-errors.patch`
 - **Targets:** `devices` crate. File: `src/virtio/media/decoder_adapter.rs`. Made on top of `PATCH.crosvm-media-decoder-input-size.patch` and `PATCH.crosvm-media-decoder-visible-size.patch`, and named to sort after them.
 - **What it does:** The virtio-media video decoder logs a `NotifyError` or `ResetCompleted` event from the backend and carries on, where both were `todo!()`. A failed `decode()` logs the backend's error before the guest gets `EIO`.

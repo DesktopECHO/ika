@@ -136,6 +136,10 @@ crosvm_bin.annotation(
         # Whether the compositor still holds an imported dma-buf (ika_stream
         # holds the frame the console shows), for the virtio-gpu device.
         "@//build_external/crosvm:PATCH.gpu_display-dmabuf-in-use.patch",
+        # From upstream crosvm f1d0ffe: release_import takes (surface_id,
+        # import_id) everywhere, as the backends implement it, for
+        # PATCH.crosvm-unref-display-imports-devices.patch.
+        "@//build_external/crosvm:PATCH.gpu_display-release-import-order.patch",
     ],
 )
 
@@ -200,6 +204,12 @@ crosvm_bin.annotation(
         # With fixed blob mapping (Venus), map dma-buf blobs that carry
         # Vulkan info directly instead of through a Vulkan import.
         "@//build_external/crosvm:PATCH.crosvm-fixed-blob-mapping-dmabuf-devices.patch",
+        # From upstream crosvm f1d0ffe, without its tests: a resource keeps
+        # its display import per surface and releases them when the guest
+        # frees it. The Wayland display holds 64 imports and none were ever
+        # released, so after 64 scanout buffers every new one fell back to a
+        # copy. Named to sort after the virtio_gpu.rs patches above.
+        "@//build_external/crosvm:PATCH.crosvm-unref-display-imports-devices.patch",
     ],
 )
 
