@@ -439,6 +439,11 @@
   shaders failed and Chromium's GPU process aborted.
 - In gfxstream mode Android advertises no newer OpenGL ES than the host
   driver, and no Vulkan driver when gfxstream's Vulkan is off.
+- In the gfxstream modes crosvm frees what an Android app made when the
+  app exits: its OpenGL ES contexts, surfaces and textures, and its Vulkan
+  instances. It kept them all (an upstream gfxstream regression); with
+  OpenGL ES only, 60 to 200 MB stayed behind each time Chrome was closed,
+  until the host ran out of memory and killed the VM.
 - ika-base installs on Fedora again (it required the unversioned
   libvirglrenderer.so) and upgrades without file conflicts over
   `etc/cvd_config`.
