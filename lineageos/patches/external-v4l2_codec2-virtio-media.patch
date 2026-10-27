@@ -17,7 +17,10 @@ When the device offers to decode straight into the output buffers, in the Y
 tiles of Intel GPUs (IKYT, a format of Ika's own that its crosvm offers when
 the host GPU can), the decoder takes it and un-tiles the visible part of each
 picture into the block with libyuv, which spares crosvm copying the picture
-into the buffer. Blocks keep the visible size either way.
+into the buffer. In swizzled tiles (IKYS: Haswell and older GPUs with two
+memory channels swap rows y and y ^ 4 of every odd 16-byte column), which
+libyuv does not take, it un-tiles them itself. Blocks keep the visible size
+either way.
 
 The component store lists a decoder only when a /dev/video device takes its
 codec, so a VM started without the decoder falls back to the software codecs,
@@ -371,7 +374,7 @@ index d5b4901..614acac 100644
                          &V4L2ComponentFactory::create);
  
 diff --git a/v4l2/V4L2Decoder.cpp b/v4l2/V4L2Decoder.cpp
-index 09799eb..80dfd41 100644
+index 09799eb..ff31a93 100644
 --- a/v4l2/V4L2Decoder.cpp
 +++ b/v4l2/V4L2Decoder.cpp
 @@ -16,6 +16,7 @@
@@ -382,7 +385,7 @@ index 09799eb..80dfd41 100644
  #include <log/log.h>
  #include <utils/Trace.h>
  
-@@ -31,6 +32,10 @@ namespace {
+@@ -31,6 +32,36 @@ namespace {
  // Extra buffers for transmitting in the whole video pipeline.
  constexpr size_t kNumExtraOutputBuffers = 4;
  
@@ -390,10 +393,36 @@ index 09799eb..80dfd41 100644
 +// reference frames of the largest H.264 DPB, plus the picture being decoded.
 +constexpr int kDefaultMinBuffersForCapture = 17;
 +
++bool isYTiledFourcc(uint32_t fourcc) {
++    return fourcc == kNV12YTiledFourcc || fourcc == kNV12YTiledSwizzledFourcc;
++}
++
++// Copies the first |rows| rows of a plane in swizzled Y tiles into a linear plane, |width| bytes
++// of each. Y tiles are columns of 16 bytes by 32 rows side by side, and swizzling swaps rows y and
++// y ^ 4 of every odd column. libyuv's Detile functions take unswizzled tiles only.
++void detileSwizzledPlane(const uint8_t* src, int srcStride, uint8_t* dst, int dstStride, int width,
++                         int rows) {
++    for (int y = 0; y < rows; ++y) {
++        // Row y of the even columns of this row of tiles, and row y ^ 4 of the odd ones.
++        const uint8_t* tileRow = src + static_cast<size_t>(y / 32) * srcStride * 32;
++        const uint8_t* even = tileRow + (y % 32) * 16;
++        const uint8_t* odd = tileRow + 512 + ((y % 32) ^ 4) * 16;
++        uint8_t* out = dst + static_cast<size_t>(y) * dstStride;
++        int x = 0;
++        // Whole pairs of columns in fixed-size copies, which the compiler inlines.
++        for (; x + 32 <= width; x += 32, even += 1024, odd += 1024) {
++            memcpy(out + x, even, 16);
++            memcpy(out + x + 16, odd, 16);
++        }
++        if (x < width) memcpy(out + x, even, std::min(16, width - x));
++        if (x + 16 < width) memcpy(out + x + 16, odd, width - x - 16);
++    }
++}
++
  bool waitForDRC(const C2ConstLinearBlock& input, std::optional<VideoCodec> codec) {
      C2ReadView view = input.map().get();
      const uint8_t* pos = view.data();
-@@ -94,6 +99,9 @@ V4L2Decoder::~V4L2Decoder() {
+@@ -94,6 +125,9 @@ V4L2Decoder::~V4L2Decoder() {
  
      mWeakThisFactory.InvalidateWeakPtrs();
  
@@ -403,7 +432,7 @@ index 09799eb..80dfd41 100644
      // Streamoff input and output queue.
      if (mOutputQueue) {
          mOutputQueue->streamoff();
-@@ -210,8 +218,14 @@ bool V4L2Decoder::setupInputFormat(const uint32_t inputPixelFormat, const size_t
+@@ -210,8 +244,14 @@ bool V4L2Decoder::setupInputFormat(const uint32_t inputPixelFormat, const size_t
      ALOG_ASSERT(format->fmt.pix_mp.pixelformat == inputPixelFormat);
  
      if (mInputQueue->allocateBuffers(kNumInputBuffers, V4L2_MEMORY_DMABUF) == 0) {
@@ -420,7 +449,7 @@ index 09799eb..80dfd41 100644
      }
      if (!mInputQueue->streamon()) {
          ALOGE("Failed to streamon input queue.");
-@@ -230,11 +244,23 @@ bool V4L2Decoder::setupInitialOutput() {
+@@ -230,11 +270,23 @@ bool V4L2Decoder::setupInitialOutput() {
          return false;
      }
  
@@ -445,7 +474,7 @@ index 09799eb..80dfd41 100644
      std::optional<V4L2WritableBufferRef> eosBuffer = mOutputQueue->getFreeBuffer();
      if (!eosBuffer) {
          ALOGE("Failed to acquire initial EOS buffer");
-@@ -260,6 +286,7 @@ bool V4L2Decoder::setupInitialOutput() {
+@@ -260,6 +312,7 @@ bool V4L2Decoder::setupInitialOutput() {
          return false;
      }
  
@@ -453,7 +482,7 @@ index 09799eb..80dfd41 100644
      return true;
  }
  
-@@ -299,6 +326,8 @@ bool V4L2Decoder::startOutputQueue(size_t minOutputBuffersCount, enum v4l2_memor
+@@ -299,6 +352,8 @@ bool V4L2Decoder::startOutputQueue(size_t minOutputBuffersCount, enum v4l2_memor
      }
      *numOutputBuffers = std::max(*numOutputBuffers, minOutputBuffersCount);
  
@@ -462,7 +491,7 @@ index 09799eb..80dfd41 100644
      if (mOutputQueue->isStreaming()) {
          mOutputQueue->streamoff();
      }
-@@ -317,6 +346,8 @@ bool V4L2Decoder::startOutputQueue(size_t minOutputBuffersCount, enum v4l2_memor
+@@ -317,6 +372,8 @@ bool V4L2Decoder::startOutputQueue(size_t minOutputBuffersCount, enum v4l2_memor
      }
      mCodedSize.set(adjustedFormat->fmt.pix_mp.width, adjustedFormat->fmt.pix_mp.height);
      mVisibleRect = getVisibleRect(mCodedSize);
@@ -471,7 +500,7 @@ index 09799eb..80dfd41 100644
  
      ALOGI("Need %zu output buffers. coded size: %s, visible rect: %s", *numOutputBuffers,
            toString(mCodedSize).c_str(), toString(mVisibleRect).c_str());
-@@ -366,7 +397,7 @@ void V4L2Decoder::decode(std::unique_ptr<ConstBitstreamBuffer> buffer, DecodeCB
+@@ -366,7 +423,7 @@ void V4L2Decoder::decode(std::unique_ptr<ConstBitstreamBuffer> buffer, DecodeCB
      // To determine if the DRC is pending, the access to the frame data is
      // required. It's not possible to access the frame directly for the secure
      // playback, so this check must be skipped. b/279834186
@@ -480,7 +509,7 @@ index 09799eb..80dfd41 100644
          mPendingDRC = waitForDRC(buffer->dmabuf, mCodec);
  
      mDecodeRequests.push(DecodeRequest(std::move(buffer), std::move(decodeCb)));
-@@ -445,7 +476,7 @@ void V4L2Decoder::pumpDecodeRequest() {
+@@ -445,7 +502,7 @@ void V4L2Decoder::pumpDecodeRequest() {
              // may trigger config from host side.
              // Drain can only be finished if we are sure there was no stream = no
              // single frame in the stack.
@@ -489,7 +518,7 @@ index 09799eb..80dfd41 100644
                  ALOGV("Terminate drain, because there was no stream");
                  mTaskRunner->PostTask(FROM_HERE, ::base::BindOnce(std::move(request.decodeCb),
                                                                    VideoDecoder::DecodeStatus::kOk));
-@@ -462,6 +493,21 @@ void V4L2Decoder::pumpDecodeRequest() {
+@@ -462,6 +519,21 @@ void V4L2Decoder::pumpDecodeRequest() {
              return;
          }
  
@@ -511,7 +540,7 @@ index 09799eb..80dfd41 100644
          auto dma_buf_id = getDmabufId(mDecodeRequests.front().buffer->dmabuf.handle()->data[0]);
          if (!dma_buf_id) {
              ALOGE("Failed to get dmabuf id");
-@@ -469,7 +515,6 @@ void V4L2Decoder::pumpDecodeRequest() {
+@@ -469,7 +541,6 @@ void V4L2Decoder::pumpDecodeRequest() {
              return;
          }
  
@@ -519,7 +548,7 @@ index 09799eb..80dfd41 100644
          size_t targetIndex = 0;
  
          // If there's an existing input buffer for this dma buffer, use it.
-@@ -557,6 +602,9 @@ void V4L2Decoder::flush() {
+@@ -557,6 +628,9 @@ void V4L2Decoder::flush() {
      // Streamoff both V4L2 queues to drop input and output buffers.
      const bool isOutputStreaming = mOutputQueue->isStreaming();
      mDevice->stopPolling();
@@ -529,7 +558,7 @@ index 09799eb..80dfd41 100644
      mOutputQueue->streamoff();
  
      // Extract currently enqueued output picture buffers to be queued later first.
-@@ -582,10 +630,29 @@ void V4L2Decoder::flush() {
+@@ -582,10 +656,29 @@ void V4L2Decoder::flush() {
          mOutputQueue->streamon();
      }
  
@@ -563,7 +592,7 @@ index 09799eb..80dfd41 100644
          tryFetchVideoFrame();
      }
  
-@@ -662,6 +729,36 @@ void V4L2Decoder::serviceDeviceTask(bool event) {
+@@ -662,6 +755,36 @@ void V4L2Decoder::serviceDeviceTask(bool event) {
          ALOGV("DQBUF from output queue, bufferId=%zu, bitstreamId=%d, bytesused=%zu, isLast=%d",
                bufferId, bitstreamId, bytesUsed, isLast);
  
@@ -600,7 +629,7 @@ index 09799eb..80dfd41 100644
          // Get the corresponding VideoFrame of the dequeued buffer.
          auto it = mFrameAtDevice.find(bufferId);
          if (it == mFrameAtDevice.end() && isLast) continue;
-@@ -701,7 +798,12 @@ void V4L2Decoder::serviceDeviceTask(bool event) {
+@@ -701,7 +824,12 @@ void V4L2Decoder::serviceDeviceTask(bool event) {
  
      // Handle resolution change event.
      if (event && dequeueResolutionChangeEvent()) {
@@ -614,7 +643,7 @@ index 09799eb..80dfd41 100644
              onError();
              return;
          }
-@@ -743,8 +845,9 @@ bool V4L2Decoder::changeResolution() {
+@@ -743,8 +871,9 @@ bool V4L2Decoder::changeResolution() {
      if (mInitialEosBuffer) {
          mInitialEosBuffer = nullptr;
      }
@@ -625,7 +654,7 @@ index 09799eb..80dfd41 100644
          ALOGE("Failed to start output queue during DRC.");
          return false;
      }
-@@ -761,13 +864,27 @@ bool V4L2Decoder::changeResolution() {
+@@ -761,13 +890,27 @@ bool V4L2Decoder::changeResolution() {
      // exists at the same time.
      mVideoFramePool.reset();
      // Use flexible pixel 420 format YCBCR_420_888 for 8-bit and P010 for 10-bit.
@@ -641,7 +670,7 @@ index 09799eb..80dfd41 100644
 +            (isMmapMode() ? HalPixelFormat::YV12 : HalPixelFormat::YCBCR_420_888);
 +    // Y-tiled pictures come at the size of the host decoder's surfaces, and only their visible
 +    // part is copied out: blocks of that size are enough, as with the other formats.
-+    const ui::Size blockSize = mOutputFourcc == kNV12YTiledFourcc
++    const ui::Size blockSize = isYTiledFourcc(mOutputFourcc)
 +                                       ? ui::Size(mVisibleRect.right, mVisibleRect.bottom)
 +                                       : mCodedSize;
 +    mVideoFramePool = mGetPoolCb.Run(blockSize, outputFormat,
@@ -657,20 +686,22 @@ index 09799eb..80dfd41 100644
          return false;
      }
  
-@@ -776,6 +893,12 @@ bool V4L2Decoder::changeResolution() {
+@@ -776,6 +919,14 @@ bool V4L2Decoder::changeResolution() {
  }
  
  bool V4L2Decoder::setupOutputFormat(const ui::Size& size, const uint32_t requestedpixfmt) {
 +    // A device that decodes straight into MMAP buffers saves copying every picture into them.
-+    if (isMmapMode() && deviceOffersYTiledOutput(size) &&
-+        mOutputQueue->setFormat(kNV12YTiledFourcc, size, 0) != std::nullopt) {
-+        return true;
++    if (isMmapMode()) {
++        const uint32_t yTiledFourcc = yTiledOutputFourcc(size);
++        if (yTiledFourcc != 0 && mOutputQueue->setFormat(yTiledFourcc, size, 0) != std::nullopt) {
++            return true;
++        }
 +    }
 +
      if (requestedpixfmt != 0) {
          if (std::find(kSupportedOutputFourccs.begin(), kSupportedOutputFourccs.end(), requestedpixfmt) !=
              kSupportedOutputFourccs.end()) {
-@@ -808,12 +931,24 @@ void V4L2Decoder::tryFetchVideoFrame() {
+@@ -808,12 +959,24 @@ void V4L2Decoder::tryFetchVideoFrame() {
      ALOGV("%s()", __func__);
      ALOG_ASSERT(mTaskRunner->RunsTasksInCurrentSequence());
  
@@ -695,7 +726,7 @@ index 09799eb..80dfd41 100644
      if (mOutputQueue->freeBuffersCount() == 0) {
          ALOGV("No free V4L2 output buffers, ignore.");
          return;
-@@ -857,6 +992,11 @@ void V4L2Decoder::onVideoFrameReady(
+@@ -857,6 +1020,11 @@ void V4L2Decoder::onVideoFrameReady(
      uint32_t blockId;
      std::tie(frame, blockId) = std::move(*frameWithBlockId);
  
@@ -707,7 +738,7 @@ index 09799eb..80dfd41 100644
      std::optional<V4L2WritableBufferRef> outputBuffer;
      // Find the V4L2 buffer that is associated with this block.
      auto iter = mBlockIdToV4L2Id.find(blockId);
-@@ -912,6 +1052,256 @@ void V4L2Decoder::onVideoFrameReady(
+@@ -912,6 +1080,269 @@ void V4L2Decoder::onVideoFrameReady(
      tryFetchVideoFrame();
  }
  
@@ -812,7 +843,7 @@ index 09799eb..80dfd41 100644
 +bool V4L2Decoder::copyMmapPicture(const V4L2ReadableBufferRef& buffer, VideoFrame& frame) {
 +    ATRACE_CALL();
 +
-+    const bool yTiled = mOutputFourcc == kNV12YTiledFourcc;
++    const bool yTiled = isYTiledFourcc(mOutputFourcc);
 +    const int width = yTiled ? mVisibleRect.right : mCodedSize.width;
 +    const int height = yTiled ? mVisibleRect.bottom : mCodedSize.height;
 +    const int chromaWidth = (width + 1) / 2;
@@ -836,6 +867,7 @@ index 09799eb..80dfd41 100644
 +        srcV = srcU + 1;
 +        break;
 +    case kNV12YTiledFourcc:
++    case kNV12YTiledSwizzledFourcc:
 +        // After the luma plane's whole rows of 32-row tiles.
 +        srcU = srcY + srcStride * ((mCodedSize.height + 31) & ~31);
 +        srcV = srcU + 1;
@@ -892,13 +924,23 @@ index 09799eb..80dfd41 100644
 +    uint8_t* dstV = dst[C2PlanarLayout::PLANE_V];
 +
 +    if (yTiled) {
-+        // Tiles of 16 bytes by 32 rows, side by side in each row of tiles: Y tiles are made of
-+        // them. The chroma rows hold U and V interleaved, chromaWidth * 2 bytes.
-+        if (uInfo.colInc != 1 || vInfo.colInc != 1 ||
-+            libyuv::DetilePlane(srcY, srcStride, dstY, yInfo.rowInc, width, height, 32) != 0) {
++        if (uInfo.colInc != 1 || vInfo.colInc != 1) {
 +            ALOGE("%s(): Cannot copy Y-tiled pictures into this block", __func__);
 +            return false;
 +        }
++        // The chroma rows hold U and V interleaved, chromaWidth * 2 bytes.
++        if (mOutputFourcc == kNV12YTiledSwizzledFourcc) {
++            detileSwizzledPlane(srcY, srcStride, dstY, yInfo.rowInc, width, height);
++            mDetiledChroma.resize(static_cast<size_t>(chromaWidth) * 2 * chromaHeight);
++            detileSwizzledPlane(srcU, srcStride, mDetiledChroma.data(), chromaWidth * 2,
++                                chromaWidth * 2, chromaHeight);
++            libyuv::SplitUVPlane(mDetiledChroma.data(), chromaWidth * 2, dstU, uInfo.rowInc, dstV,
++                                 vInfo.rowInc, chromaWidth, chromaHeight);
++            return true;
++        }
++        // Tiles of 16 bytes by 32 rows, side by side in each row of tiles: Y tiles are made of
++        // them.
++        libyuv::DetilePlane(srcY, srcStride, dstY, yInfo.rowInc, width, height, 32);
 +        libyuv::DetileSplitUVPlane(srcU, srcStride, dstU, uInfo.rowInc, dstV, vInfo.rowInc,
 +                                   chromaWidth * 2, chromaHeight, 32);
 +        return true;
@@ -939,9 +981,10 @@ index 09799eb..80dfd41 100644
 +    return true;
 +}
 +
-+// Whether the device decodes the pictures of the stream straight into MMAP buffers in Intel Y
-+// tiles. Asks with TRY_FMT directly, as V4L2Queue::tryFormat() logs an error when it does not.
-+bool V4L2Decoder::deviceOffersYTiledOutput(const ui::Size& size) {
++// The format in Intel Y tiles, unswizzled or swizzled, that the device decodes the pictures of the
++// stream straight into MMAP buffers in, or 0 when it does not. Asks with TRY_FMT directly, as
++// V4L2Queue::tryFormat() logs an error when the device does not.
++uint32_t V4L2Decoder::yTiledOutputFourcc(const ui::Size& size) {
 +    struct v4l2_format format;
 +    memset(&format, 0, sizeof(format));
 +    format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
@@ -949,8 +992,9 @@ index 09799eb..80dfd41 100644
 +    format.fmt.pix_mp.width = size.width;
 +    format.fmt.pix_mp.height = size.height;
 +    format.fmt.pix_mp.num_planes = 1;
-+    return mDevice->ioctl(VIDIOC_TRY_FMT, &format) == 0 &&
-+           format.fmt.pix_mp.pixelformat == kNV12YTiledFourcc;
++    if (mDevice->ioctl(VIDIOC_TRY_FMT, &format) != 0) return 0;
++    const uint32_t fourcc = format.fmt.pix_mp.pixelformat;
++    return isYTiledFourcc(fourcc) ? fourcc : 0;
 +}
 +
 +void V4L2Decoder::finishDrain() {
@@ -964,7 +1008,7 @@ index 09799eb..80dfd41 100644
  std::optional<size_t> V4L2Decoder::getNumOutputBuffers() {
      ALOGV("%s()", __func__);
      ALOG_ASSERT(mTaskRunner->RunsTasksInCurrentSequence());
-@@ -920,8 +1310,9 @@ std::optional<size_t> V4L2Decoder::getNumOutputBuffers() {
+@@ -920,8 +1351,9 @@ std::optional<size_t> V4L2Decoder::getNumOutputBuffers() {
      memset(&ctrl, 0, sizeof(ctrl));
      ctrl.id = V4L2_CID_MIN_BUFFERS_FOR_CAPTURE;
      if (mDevice->ioctl(VIDIOC_G_CTRL, &ctrl) != 0) {
@@ -977,9 +1021,27 @@ index 09799eb..80dfd41 100644
      ALOGV("%s() V4L2_CID_MIN_BUFFERS_FOR_CAPTURE returns %u", __func__, ctrl.value);
  
 diff --git a/v4l2/V4L2Device.cpp b/v4l2/V4L2Device.cpp
-index bb020ba..bcd8f96 100644
+index bb020ba..1768f37 100644
 --- a/v4l2/V4L2Device.cpp
 +++ b/v4l2/V4L2Device.cpp
+@@ -946,7 +946,7 @@ bool V4L2Queue::queueBuffer(struct v4l2_buffer* v4l2Buffer) {
+ 
+     int ret = mDevice->ioctl(VIDIOC_QBUF, v4l2Buffer);
+     if (ret) {
+-        ALOGEQ("VIDIOC_QBUF failed");
++        ALOGEQ("VIDIOC_QBUF of buffer %u failed: %s", v4l2Buffer->index, strerror(errno));
+         return false;
+     }
+ 
+@@ -1002,7 +1002,7 @@ std::pair<bool, V4L2ReadableBufferRef> V4L2Queue::dequeueBuffer() {
+             mDevice->schedulePoll();
+             return std::make_pair(true, nullptr);
+         default:
+-            ALOGEQ("VIDIOC_DQBUF failed");
++            ALOGEQ("VIDIOC_DQBUF failed: %s", strerror(errno));
+             return std::make_pair(false, nullptr);
+         }
+     }
 @@ -2361,6 +2361,60 @@ C2Config::level_t V4L2Device::getDefaultLevel(VideoCodec codec) {
      return C2Config::LEVEL_UNUSED;
  }
@@ -1059,10 +1121,18 @@ index 1e7996c..19f6d7e 100644
      // Return true if |name| is a valid component name.
      static bool isValid(const std::string& name);
 diff --git a/v4l2/include/v4l2_codec2/v4l2/V4L2Decoder.h b/v4l2/include/v4l2_codec2/v4l2/V4L2Decoder.h
-index c825f74..f08ee68 100644
+index c825f74..4d9c718 100644
 --- a/v4l2/include/v4l2_codec2/v4l2/V4L2Decoder.h
 +++ b/v4l2/include/v4l2_codec2/v4l2/V4L2Decoder.h
-@@ -36,6 +36,12 @@ constexpr std::initializer_list<uint32_t> kSupportedOutputFourccs = {
+@@ -11,6 +11,7 @@
+ #include <memory>
+ #include <optional>
+ #include <utility>
++#include <vector>
+ 
+ #include <base/callback.h>
+ #include <base/memory/weak_ptr.h>
+@@ -36,6 +37,16 @@ constexpr std::initializer_list<uint32_t> kSupportedOutputFourccs = {
          Fourcc::P010,
  };
  
@@ -1071,11 +1141,15 @@ index c825f74..f08ee68 100644
 +// The luma plane is padded to whole rows of tiles and the interleaved chroma plane follows it.
 +// Ika's own format, shared with its crosvm.
 +constexpr uint32_t kNV12YTiledFourcc = v4l2_fourcc('I', 'K', 'Y', 'T');
++// The same in swizzled tiles, as Haswell and older GPUs with two memory channels write them: bit 6
++// of each byte's address is flipped where bit 9 is set, which swaps rows y and y ^ 4 of every odd
++// 16-byte column.
++constexpr uint32_t kNV12YTiledSwizzledFourcc = v4l2_fourcc('I', 'K', 'Y', 'S');
 +
  class V4L2Decoder : public VideoDecoder {
  public:
      static std::unique_ptr<VideoDecoder> Create(
-@@ -93,6 +99,17 @@ private:
+@@ -93,6 +104,17 @@ private:
      void tryFetchVideoFrame();
      void onVideoFrameReady(std::optional<VideoFramePool::FrameWithBlockId> frameWithBlockId);
  
@@ -1087,13 +1161,13 @@ index c825f74..f08ee68 100644
 +    bool queueMmapOutputBuffers();
 +    void onMmapVideoFrameReady(std::unique_ptr<VideoFrame> frame);
 +    bool copyMmapPicture(const V4L2ReadableBufferRef& buffer, VideoFrame& frame);
-+    bool deviceOffersYTiledOutput(const ui::Size& size);
++    uint32_t yTiledOutputFourcc(const ui::Size& size);
 +    void finishDrain();
 +
      std::optional<size_t> getNumOutputBuffers();
      std::optional<struct v4l2_format> getFormatInfo();
      Rect getVisibleRect(const ui::Size& codedSize);
-@@ -112,6 +129,26 @@ private:
+@@ -112,6 +134,28 @@ private:
  
      // Contains the initial EOS buffer, until DRC event is dequeued.
      sp<GraphicBuffer> mInitialEosBuffer;
@@ -1117,6 +1191,8 @@ index c825f74..f08ee68 100644
 +    // MMAP mode: layout of the decoded pictures in the V4L2 output buffers.
 +    uint32_t mOutputFourcc = 0;
 +    size_t mOutputBytesPerLine = 0;
++    // MMAP mode: the chroma rows of a swizzled Y-tiled picture, un-tiled before they are split.
++    std::vector<uint8_t> mDetiledChroma;
  
      std::queue<DecodeRequest> mDecodeRequests;
      std::map<int32_t, DecodeCB> mPendingDecodeCbs;

@@ -1,5 +1,6 @@
 Patch summary:
-Fix the virtio-media guest driver's poll() and buffer queue state.
+Fix the virtio-media guest driver's poll(), buffer queue state and command
+completion.
 
 poll() reported EPOLLOUT whenever an OUTPUT buffer slot was free and EPOLLERR
 whenever no CAPTURE buffer was queued, so it returned at once while nothing
@@ -22,11 +23,48 @@ replaced under that lock too (event processing reads it), CREATE_BUFS relinks
 the pending buffers into the new array, and closing a session waits for event
 processing that may have found it.
 
+The command queue callback set a command's done flag before its response
+length, and the waiter, which tests the flag before it sleeps, could read a
+length of 0 in between: "received response header is too short", and the
+command failed. About once an hour of video, a VIDIOC_QBUF of a decoded
+picture's buffer failed so and stopped playback ("video decode error" in
+Chrome). The length is now stored first and the flag published with release
+semantics, read with acquire. The command virtqueue is used under a spinlock,
+as the callback took buffers from it while the next command was being added,
+and a command's callback parameters are allocated rather than on the waiter's
+stack, so that a response arriving after the 5 s timeout frees them instead
+of writing into a stack frame that is gone.
+diff --git a/driver/virtio_media.h b/driver/virtio_media.h
+index 3d55894..0a0473b 100644
+--- a/driver/virtio_media.h
++++ b/driver/virtio_media.h
+@@ -62,6 +62,12 @@ struct virtio_media {
+ 	/* Used to serialize all virtio commands */
+ 	struct mutex vlock;
+ 
++	/*
++	 * Protects `commandq`: a command is added to it while the callback of
++	 * the previous one may still be taking buffers from it.
++	 */
++	spinlock_t commandq_lock;
++
+ 	/* Waitqueue for host responses on the command queue */
+ 	wait_queue_head_t wq;
+ };
 diff --git a/driver/virtio_media_driver.c b/driver/virtio_media_driver.c
-index 3ab7013..641f5ac 100644
+index 3ab7013..f3c566a 100644
 --- a/driver/virtio_media_driver.c
 +++ b/driver/virtio_media_driver.c
-@@ -118,6 +118,13 @@ static void virtio_media_session_close(struct virtio_media *vv,
+@@ -11,6 +11,8 @@
+ #include <linux/mm.h>
+ #include <linux/mutex.h>
+ #include <linux/scatterlist.h>
++#include <linux/slab.h>
++#include <linux/spinlock.h>
+ #include <linux/types.h>
+ #include <linux/videodev2.h>
+ #include <linux/vmalloc.h>
+@@ -118,6 +120,13 @@ static void virtio_media_session_close(struct virtio_media *vv,
  	list_del(&session->list);
  	mutex_unlock(&vv->sessions_lock);
  
@@ -40,7 +78,141 @@ index 3ab7013..641f5ac 100644
  	v4l2_fh_del(&session->fh);
  	v4l2_fh_exit(&session->fh);
  
-@@ -335,15 +342,31 @@ virtio_media_process_dqbuf_event(struct virtio_media *vv,
+@@ -158,9 +167,10 @@ virtio_media_find_session(struct virtio_media *vv, u32 id)
+  * Callback parameters to the virtio command queue.
+  */
+ struct virtio_media_cmd_callback_param {
+-	struct virtio_media *vv;
+-	/* Flag to switch once the command is completed */
++	/* Set once the command is completed, after resp_len */
+ 	bool done_flag;
++	/* Set when the waiter gave up: the callback frees the parameters */
++	bool abandoned;
+ 	/* Size of the received response */
+ 	size_t resp_len;
+ };
+@@ -168,19 +178,33 @@ struct virtio_media_cmd_callback_param {
+ /**
+  * Callback for the command queue. This just wakes up the thread that was
+  * waiting on the command to complete.
++ *
++ * The waiter may test done_flag without sleeping and read resp_len as soon as
++ * it is set, so resp_len is stored first and done_flag is published with
++ * release semantics. Setting done_flag first let a waiter read a length of 0
++ * and fail the command with "received response header is too short". The
++ * parameters belong to the waiter once done_flag is set.
+  */
+ static void commandq_callback(struct virtqueue *queue)
+ {
+-	unsigned int len;
++	struct virtio_media *vv = queue->vdev->priv;
+ 	struct virtio_media_cmd_callback_param *param;
++	unsigned long flags;
++	unsigned int len;
+ 
++	spin_lock_irqsave(&vv->commandq_lock, flags);
+ 	while ((param = virtqueue_get_buf(queue, &len))) {
+-		param->done_flag = true;
++		if (param->abandoned) {
++			kfree(param);
++			continue;
++		}
+ 		param->resp_len = len;
+-		wake_up(&param->vv->wq);
++		smp_store_release(&param->done_flag, true);
+ 	}
+-
+ 	virtqueue_enable_cb(queue);
++	spin_unlock_irqrestore(&vv->commandq_lock, flags);
++
++	wake_up(&vv->wq);
+ }
+ 
+ /**
+@@ -191,44 +215,69 @@ static int virtio_media_kick_command(struct virtio_media *vv,
+ 				     const size_t out_sgs, const size_t in_sgs,
+ 				     size_t *resp_len)
+ {
+-	struct virtio_media_cmd_callback_param cb_param = {
+-		.vv = vv,
+-		.done_flag = false,
+-		.resp_len = 0,
+-	};
++	/*
++	 * Allocated rather than on the stack: the host may still complete a
++	 * command we gave up waiting for, and the callback then frees it.
++	 */
++	struct virtio_media_cmd_callback_param *cb_param;
+ 	struct virtio_media_resp_header *resp_header;
++	unsigned long flags;
++	size_t len;
++	bool kicked;
++	bool done;
+ 	int ret;
+ 
+-	ret = virtqueue_add_sgs(vv->commandq, sgs, out_sgs, in_sgs, &cb_param,
++	cb_param = kzalloc(sizeof(*cb_param), GFP_KERNEL);
++	if (!cb_param)
++		return -ENOMEM;
++
++	spin_lock_irqsave(&vv->commandq_lock, flags);
++	ret = virtqueue_add_sgs(vv->commandq, sgs, out_sgs, in_sgs, cb_param,
+ 				GFP_ATOMIC);
++	kicked = !ret && virtqueue_kick(vv->commandq);
++	if (!ret && !kicked)
++		cb_param->abandoned = true;
++	spin_unlock_irqrestore(&vv->commandq_lock, flags);
+ 	if (ret) {
++		kfree(cb_param);
+ 		v4l2_err(&vv->v4l2_dev,
+ 			 "failed to add sgs to command virtqueue\n");
+ 		return ret;
+ 	}
+ 
+-	if (!virtqueue_kick(vv->commandq)) {
++	if (!kicked) {
+ 		v4l2_err(&vv->v4l2_dev, "failed to kick command virtqueue\n");
+ 		return -EINVAL;
+ 	}
+ 
+ 	/* Wait for the response. */
+-	ret = wait_event_timeout(vv->wq, cb_param.done_flag, 5 * HZ);
++	ret = wait_event_timeout(vv->wq,
++				 smp_load_acquire(&cb_param->done_flag),
++				 5 * HZ);
+ 	if (ret == 0) {
+-		v4l2_err(&vv->v4l2_dev,
+-			 "timed out waiting for response to command\n");
+-		return -ETIMEDOUT;
++		spin_lock_irqsave(&vv->commandq_lock, flags);
++		done = cb_param->done_flag;
++		if (!done)
++			cb_param->abandoned = true;
++		spin_unlock_irqrestore(&vv->commandq_lock, flags);
++		if (!done) {
++			v4l2_err(&vv->v4l2_dev,
++				 "timed out waiting for response to command\n");
++			return -ETIMEDOUT;
++		}
+ 	}
+ 
++	len = cb_param->resp_len;
++	kfree(cb_param);
+ 	if (resp_len)
+-		*resp_len = cb_param.resp_len;
++		*resp_len = len;
+ 
+ 	if (in_sgs > 0) {
+ 		/* 
+ 		 * If we expect a response, make sure we have at least a response header - anything shorter is
+ 		 * invalid.
+ 		 */
+-		if (cb_param.resp_len < sizeof(*resp_header)) {
++		if (len < sizeof(*resp_header)) {
+ 			v4l2_err(&vv->v4l2_dev,
+ 				 "received response header is too short\n");
+ 			return -EINVAL;
+@@ -335,15 +384,31 @@ virtio_media_process_dqbuf_event(struct virtio_media *vv,
  	}
  	queue = &session->queues[queue_type];
  
@@ -73,7 +245,7 @@ index 3ab7013..641f5ac 100644
  	/*
  	 * Preserve the 'm' union that was passed to us during QBUF so userspace
  	 * gets back the information it submitted.
-@@ -357,7 +380,7 @@ virtio_media_process_dqbuf_event(struct virtio_media *vv,
+@@ -357,7 +422,7 @@ virtio_media_process_dqbuf_event(struct virtio_media *vv,
  				&vv->v4l2_dev,
  				"invalid number of planes received from host for "
  				"a multiplanar buffer\n");
@@ -82,7 +254,7 @@ index 3ab7013..641f5ac 100644
  		}
  		for (i = 0; i < dqbuf->buffer.length; i++) {
  			plane_m = dqbuf->planes[i].m;
-@@ -370,11 +393,14 @@ virtio_media_process_dqbuf_event(struct virtio_media *vv,
+@@ -370,11 +435,14 @@ virtio_media_process_dqbuf_event(struct virtio_media *vv,
  	/* Set the DONE flag as the buffer is waiting for being dequeued. */
  	dqbuf->buffer.flags |= V4L2_BUF_FLAG_DONE;
  
@@ -99,7 +271,7 @@ index 3ab7013..641f5ac 100644
  }
  
  void virtio_media_process_events(struct virtio_media *vv)
-@@ -577,11 +603,17 @@ static __poll_t virtio_media_device_poll(struct file *file, poll_table *wait)
+@@ -577,11 +645,17 @@ static __poll_t virtio_media_device_poll(struct file *file, poll_table *wait)
  	poll_wait(file, &session->dqbufs_wait, wait);
  	poll_wait(file, &session->fh.wait, wait);
  
@@ -120,7 +292,7 @@ index 3ab7013..641f5ac 100644
  			rc |= EPOLLERR;
  		else if (!list_empty(&capture_queue->pending_dqbufs))
  			rc |= EPOLLIN | EPOLLRDNORM;
-@@ -589,8 +621,7 @@ static __poll_t virtio_media_device_poll(struct file *file, poll_table *wait)
+@@ -589,8 +663,7 @@ static __poll_t virtio_media_device_poll(struct file *file, poll_table *wait)
  	if (req_events & (EPOLLOUT | EPOLLWRNORM)) {
  		if (!output_queue->streaming)
  			rc |= EPOLLERR;
@@ -130,6 +302,14 @@ index 3ab7013..641f5ac 100644
  			rc |= EPOLLOUT | EPOLLWRNORM;
  	}
  	mutex_unlock(&session->dqbufs_lock);
+@@ -774,6 +847,7 @@ static int virtio_media_probe(struct virtio_device *virtio_dev)
+ 	mutex_init(&vv->sessions_lock);
+ 	mutex_init(&vv->events_process_lock);
+ 	mutex_init(&vv->vlock);
++	spin_lock_init(&vv->commandq_lock);
+ 
+ 	vv->virtio_dev = virtio_dev;
+ 	virtio_dev->priv = vv;
 diff --git a/driver/virtio_media_ioctls.c b/driver/virtio_media_ioctls.c
 index 2bbcf98..335cd96 100644
 --- a/driver/virtio_media_ioctls.c

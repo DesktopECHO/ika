@@ -352,7 +352,9 @@
   kernel, no longer wakes the decoder in a loop: HEVC 1080p60 played at
   0.5-35 fps on an AMD host and now plays at 60 fps. It also no longer
   crashes Android (a kernel panic) when a video player closes or seeks while
-  crosvm still returns decoded frames.
+  crosvm still returns decoded frames, and no longer stops playback with a
+  decode error about once an hour, when it read a command's reply before the
+  reply's length was stored.
 - Hardware-decoded video no longer shows a green band at the bottom, with the
   colors shifted up, when its coded size differs from its visible size, as it
   does for every 1080p H.264 stream.
@@ -365,10 +367,13 @@
   the CPU; the HAL un-tiles it as it copies it into its block. Playing 1080p30
   H.264 on a Broadwell MacBook Air, crosvm's video thread went from 24% of a
   CPU to 2.5% and crosvm from 99% to 82%, the package drew 6.65 W instead of
-  7.0 W, and the pictures are identical either way. crosvm first decodes a
-  test frame that way, once per start, and copies as before when the driver
-  gets it wrong (i965 on a Haswell MacBook Air) or the GPU is another make.
-  The launcher log says which way it went.
+  7.0 W, and the pictures are identical either way. Haswell's i965 driver
+  does it too, through the older import it takes and in the swizzled tiles
+  Haswell writes: on a Haswell MacBook Air crosvm's video thread went from
+  12% to 2.5% and the package from 10.6 W to 8.9 W. crosvm first decodes a
+  test frame that way, once per start, and copies as before when no import
+  gives the right picture or the GPU is another make. The launcher log says
+  which way it went.
 
 ### Camera
 - `ika start --camera` sets the camera's anti-flicker to the mains frequency

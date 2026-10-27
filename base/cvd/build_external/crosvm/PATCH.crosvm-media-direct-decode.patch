@@ -14,7 +14,7 @@ diff --git a/src/virtio/video/decoder/backend/mod.rs b/src/virtio/video/decoder/
  
  use crate::virtio::video::decoder::Capability;
  use crate::virtio::video::error::VideoError;
-@@ -22,6 +27,64 @@
+@@ -22,6 +27,68 @@
  pub mod vaapi;
  #[cfg(feature = "libvda")]
  pub mod vda;
@@ -22,7 +22,9 @@ diff --git a/src/virtio/video/decoder/backend/mod.rs b/src/virtio/video/decoder/
 +/// Layout of the pictures of a stream when the backend decodes them straight into CAPTURE buffers
 +/// of guest memory instead of copying each one there: NV12 in the Y tiles of Intel GPUs, 128 bytes
 +/// by 32 rows made of 16-byte columns, the luma plane padded to whole rows of tiles and the
-+/// interleaved chroma plane after it.
++/// interleaved chroma plane after it. Haswell and older GPUs with two memory channels swizzle the
++/// tiles: bit 6 of each byte's address is flipped where bit 9 is set, which swaps rows `y` and
++/// `y ^ 4` in every odd column.
 +#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 +pub struct DirectOutputLayout {
 +    /// Size of the pictures as decoded, the size of the backend's surfaces.
@@ -36,6 +38,8 @@ diff --git a/src/virtio/video/decoder/backend/mod.rs b/src/virtio/video/decoder/
 +    pub chroma_offset: u32,
 +    /// Size of a buffer, a whole number of pages.
 +    pub size: u32,
++    /// Whether the tiles are swizzled.
++    pub swizzled: bool,
 +}
 +
 +#[repr(C)]
@@ -79,7 +83,7 @@ diff --git a/src/virtio/video/decoder/backend/mod.rs b/src/virtio/video/decoder/
  
  /// Contains the device's state for one playback session, i.e. one stream.
  pub trait DecoderSession {
-@@ -102,6 +165,13 @@
+@@ -102,6 +169,13 @@
  
      /// Blocking call to read a single event from the event pipe.
      fn read_event(&mut self) -> VideoResult<DecoderEvent>;
@@ -93,7 +97,7 @@ diff --git a/src/virtio/video/decoder/backend/mod.rs b/src/virtio/video/decoder/
  }
  
  impl<S: AsMut<dyn DecoderSession> + AsRef<dyn DecoderSession> + ?Sized> DecoderSession for S {
-@@ -151,6 +221,10 @@
+@@ -151,6 +225,10 @@
  
      fn read_event(&mut self) -> VideoResult<DecoderEvent> {
          self.as_mut().read_event()
@@ -107,8 +111,11 @@ diff --git a/src/virtio/video/decoder/backend/mod.rs b/src/virtio/video/decoder/
 diff --git a/src/virtio/video/decoder/backend/vaapi.rs b/src/virtio/video/decoder/backend/vaapi.rs
 --- a/src/virtio/video/decoder/backend/vaapi.rs
 +++ b/src/virtio/video/decoder/backend/vaapi.rs
-@@ -9,13 +9,19 @@
+@@ -7,15 +7,22 @@
+ use std::collections::btree_map::Entry;
+ use std::collections::BTreeMap;
  use std::collections::VecDeque;
++use std::os::fd::AsRawFd;
  use std::os::fd::FromRawFd;
  use std::os::fd::OwnedFd;
 +use std::os::unix::fs::MetadataExt;
@@ -127,7 +134,7 @@ diff --git a/src/virtio/video/decoder/backend/vaapi.rs b/src/virtio/video/decode
  use cros_codecs::decoder::stateless::h264::H264;
  use cros_codecs::decoder::stateless::h265::H265;
  use cros_codecs::decoder::stateless::vp8::Vp8;
-@@ -31,6 +37,8 @@
+@@ -31,6 +38,8 @@
  use cros_codecs::FrameLayout;
  use cros_codecs::PlaneLayout;
  
@@ -136,16 +143,71 @@ diff --git a/src/virtio/video/decoder/backend/vaapi.rs b/src/virtio/video/decode
  use crate::virtio::video::decoder::Capability;
  use crate::virtio::video::decoder::DecoderBackend;
  use crate::virtio::video::decoder::DecoderEvent;
-@@ -158,6 +166,8 @@
+@@ -68,7 +77,54 @@
+     enum BufferDescriptor {
+         GuestMem(GuestMemDescriptor),
+         Dmabuf(DmabufFrame),
++        DrmPrime(DrmPrimeFrame),
++    }
++}
++
++/// A DMA-BUF in a `DirectOutputLayout`, imported with the older DRM PRIME memory type rather than
++/// DRM PRIME 2 (`DmabufFrame`): i965 takes only that one, and silently decodes into its own memory
++/// when given the other.
++struct DrmPrimeFrame {
++    fd: OwnedFd,
++    layout: DirectOutputLayout,
++}
++
++impl libva::SurfaceMemoryDescriptor for DrmPrimeFrame {
++    fn add_attrs(
++        &mut self,
++        attrs: &mut Vec<libva::VASurfaceAttrib>,
++    ) -> Option<Box<dyn std::any::Any>> {
++        let mut buffers = Box::new([self.fd.as_raw_fd() as usize]);
++        let mut desc = Box::new(libva::VASurfaceAttribExternalBuffers {
++            pixel_format: libva::constants::VA_FOURCC_NV12,
++            width: self.layout.width,
++            height: self.layout.height,
++            data_size: self.layout.size,
++            num_planes: 2,
++            pitches: [self.layout.stride, self.layout.stride, 0, 0],
++            offsets: [0, self.layout.chroma_offset, 0, 0],
++            buffers: buffers.as_mut_ptr(),
++            num_buffers: 1,
++            flags: libva::constants::VA_SURFACE_EXTBUF_DESC_ENABLE_TILING,
++            private_data: std::ptr::null_mut(),
++        });
++        // `MemoryType` has no variant for DRM PRIME; set the value directly.
++        let mut memory_type = libva::VASurfaceAttrib::new_memory_type(libva::MemoryType::DrmPrime2);
++        memory_type.value.value.i = libva::constants::VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME as i32;
++        attrs.push(memory_type);
++        attrs.push(libva::VASurfaceAttrib::new_buffer_descriptor(desc.as_mut()));
++        // Kept alive until the surface is created.
++        Some(Box::new((desc, buffers)))
+     }
++}
++
++/// How the driver decodes straight into guest memory, as the self-test found.
++#[derive(Clone, Copy, Debug)]
++struct DirectDecode {
++    /// Imports buffers with DRM PRIME (`DrmPrimeFrame`) rather than DRM PRIME 2.
++    drm_prime: bool,
++    /// Writes swizzled tiles.
++    swizzled: bool,
+ }
+ 
+ struct BufferDescWithPicId {
+@@ -158,6 +214,8 @@
  pub struct VaapiDecoder {
      /// The capabilities for the decoder
      caps: Capability,
-+    /// Whether pictures can be decoded straight into guest memory, once checked.
-+    direct_decode: Option<bool>,
++    /// How pictures are decoded straight into guest memory, if they can, once checked.
++    direct_decode: Option<Option<DirectDecode>>,
  }
  
  // The VA capabilities for the coded side
-@@ -407,6 +417,7 @@
+@@ -407,6 +465,7 @@
  
          Ok(Self {
              caps: Capability::new(in_fmts, out_fmts, profiles_map, levels),
@@ -153,18 +215,18 @@ diff --git a/src/virtio/video/decoder/backend/vaapi.rs b/src/virtio/video/decode
          })
      }
  }
-@@ -509,6 +520,10 @@
+@@ -509,6 +568,10 @@
      event_queue: EventQueue<DecoderEvent>,
      /// Whether the decoder is currently flushing.
      flushing: bool,
 +    /// The display `codec` decodes on.
 +    display: Rc<Display>,
-+    /// Whether pictures can be decoded straight into guest memory.
-+    direct_decode: bool,
++    /// How pictures are decoded straight into guest memory, if they can.
++    direct_decode: Option<DirectDecode>,
  }
  
  impl VaapiDecoderSession {
-@@ -522,13 +537,11 @@
+@@ -522,13 +585,11 @@
          let buffer_desc = decoded_frame.resource();
          let picture_buffer_id = buffer_desc.picture_buffer_id;
  
@@ -183,16 +245,72 @@ diff --git a/src/virtio/video/decoder/backend/vaapi.rs b/src/virtio/video/decode
  
          // Copy guest memory buffers into their destination.
          if let BufferDescriptor::GuestMem(handle) = &decoded_frame.resource().desc {
-@@ -952,7 +965,373 @@
+@@ -895,24 +956,39 @@
+                 let fd = unsafe { OwnedFd::from_raw_fd(handle.desc.into_raw_descriptor()) };
+                 let modifier = handle.modifier;
+ 
+-                let frame = DmabufFrame {
+-                    fds: vec![fd],
+-                    layout: FrameLayout {
+-                        format: (cros_codecs::Fourcc::from(b"NV12"), modifier),
+-                        size: cros_codecs::Resolution::from((resource.width, resource.height)),
+-                        planes: resource
+-                            .planes
+-                            .iter()
+-                            .map(|p| PlaneLayout {
+-                                buffer_index: 0,
+-                                offset: p.offset,
+-                                stride: p.stride,
+-                            })
+-                            .collect(),
+-                    },
+-                };
+-
+-                BufferDescriptor::Dmabuf(frame)
++                match (self.direct_decode, resource.planes.as_slice()) {
++                    // Guest memory in a direct layout, for a driver that imports it with DRM PRIME.
++                    (Some(DirectDecode { drm_prime: true, swizzled }), [luma, chroma]) => {
++                        BufferDescriptor::DrmPrime(DrmPrimeFrame {
++                            fd,
++                            layout: DirectOutputLayout {
++                                width: resource.width,
++                                height: resource.height,
++                                modifier,
++                                stride: luma.stride as u32,
++                                chroma_offset: chroma.offset as u32,
++                                size: (chroma.offset + chroma.size) as u32,
++                                swizzled,
++                            },
++                        })
++                    }
++                    _ => BufferDescriptor::Dmabuf(DmabufFrame {
++                        fds: vec![fd],
++                        layout: FrameLayout {
++                            format: (cros_codecs::Fourcc::from(b"NV12"), modifier),
++                            size: cros_codecs::Resolution::from((resource.width, resource.height)),
++                            planes: resource
++                                .planes
++                                .iter()
++                                .map(|p| PlaneLayout {
++                                    buffer_index: 0,
++                                    offset: p.offset,
++                                    stride: p.stride,
++                                })
++                                .collect(),
++                        },
++                    }),
++                }
+             }
+         };
+ 
+@@ -952,9 +1028,411 @@
          self.event_queue
              .dequeue_event()
              .map_err(|e| VideoError::BackendFailure(anyhow!("Can't read event {}", e)))
 +    }
 +
 +    fn direct_output_layout(&mut self) -> Option<DirectOutputLayout> {
-+        if !self.direct_decode {
-+            return None;
-+        }
++        let direct_decode = self.direct_decode?;
 +        // Only 8-bit 4:2:0 streams decode into NV12 surfaces; cros-codecs calls their format
 +        // I420.
 +        let format = self.codec.stream_info().map(|info| info.format);
@@ -204,7 +322,10 @@ diff --git a/src/virtio/video/decoder/backend/vaapi.rs b/src/virtio/video/decode
 +        // resolution of the stream so far.
 +        let resolution = self.codec.frame_pool().coded_resolution();
 +        match direct_output_layout_for(&self.display, resolution.width, resolution.height) {
-+            Ok(layout) => Some(layout),
++            Ok(layout) => Some(DirectOutputLayout {
++                swizzled: direct_decode.swizzled,
++                ..layout
++            }),
 +            Err(e) => {
 +                base::info!(
 +                    "VA-API: copying {}x{} pictures into guest memory: {:#}",
@@ -215,9 +336,9 @@ diff --git a/src/virtio/video/decoder/backend/vaapi.rs b/src/virtio/video/decode
 +                None
 +            }
 +        }
-+    }
-+}
-+
+     }
+ }
+ 
 +/// Opens the VA display `Display::open()` would, on the first DRM render node that has one, and
 +/// returns the node with it.
 +fn open_display() -> Option<(PathBuf, Rc<Display>)> {
@@ -328,6 +449,7 @@ diff --git a/src/virtio/video/decoder/backend/vaapi.rs b/src/virtio/video/decode
 +        stride,
 +        chroma_offset,
 +        size: u32::try_from(size)?,
++        swizzled: false,
 +    })
 +}
 +
@@ -469,7 +591,11 @@ diff --git a/src/virtio/video/decoder/backend/vaapi.rs b/src/virtio/video/decode
 +    let mut data = vec![0u8; layout.size as usize];
 +    mapping.read_slice(&mut data, 0)?;
 +    let stride = layout.stride as usize;
-+    let tiled = move |x: usize, y: usize| (y / 32) * stride * 32 + (x / 16) * 512 + (y % 32) * 16 + x % 16;
++    let swizzle = if layout.swizzled { 1 } else { 0 };
++    let tiled = move |x: usize, y: usize| {
++        let at = (y / 32) * stride * 32 + (x / 16) * 512 + (y % 32) * 16 + x % 16;
++        at ^ (((at >> 9) & swizzle) << 6)
++    };
 +    let chroma = layout.chroma_offset as usize;
 +    let luma_bytes = (0..height).flat_map(|y| (0..width).map(move |x| tiled(x, y)));
 +    let chroma_bytes = (0..height.div_ceil(2))
@@ -481,11 +607,34 @@ diff --git a/src/virtio/video/decoder/backend/vaapi.rs b/src/virtio/video/decode
 +        }))
 +}
 +
++/// Finds how the driver decodes straight into guest memory, if it does: decodes
++/// `DIRECT_TEST_STREAM` into guest-like memory imported with DRM PRIME 2, then with DRM PRIME, and
++/// checks the picture in the layout of the driver's own surfaces, unswizzled and swizzled. The first
++/// that comes out right is how sessions decode.
++fn direct_decode_self_test(display: &Rc<Display>) -> Result<DirectDecode> {
++    let mut outcomes = Vec::new();
++    for drm_prime in [false, true] {
++        let import = if drm_prime { "DRM PRIME" } else { "DRM PRIME 2" };
++        match direct_decode_test_hashes(display, drm_prime) {
++            Ok((hash, swizzled_hash)) => {
++                if hash == DIRECT_TEST_PICTURE_HASH || swizzled_hash == DIRECT_TEST_PICTURE_HASH {
++                    return Ok(DirectDecode {
++                        drm_prime,
++                        swizzled: hash != DIRECT_TEST_PICTURE_HASH,
++                    });
++                }
++                outcomes.push(format!("{} picture wrong (hash {:#x})", import, hash));
++            }
++            Err(e) => outcomes.push(format!("{}: {:#}", import, e)),
++        }
++    }
++    bail!("its test picture came out wrong: {}", outcomes.join("; "))
++}
++
 +/// Decodes `DIRECT_TEST_STREAM` into buffers of guest-like memory made and imported as a session
-+/// imports the guest's when it decodes into them directly, and checks the picture. The layout is
-+/// that of the driver's own surfaces, and this proves the driver decodes into an imported buffer
-+/// in it too.
-+fn direct_decode_self_test(display: &Rc<Display>) -> Result<()> {
++/// imports the guest's when it decodes into them directly, with DRM PRIME (`drm_prime`) or DRM
++/// PRIME 2, and returns the picture's hash, read as unswizzled and as swizzled tiles.
++fn direct_decode_test_hashes(display: &Rc<Display>, drm_prime: bool) -> Result<(u64, u64)> {
 +    let mut codec: Box<dyn StatelessVideoDecoder<BufferDescWithPicId>> = Box::new(
 +        cros_codecs::decoder::stateless::StatelessDecoder::<H264, _>::new_vaapi(
 +            Rc::clone(display),
@@ -510,8 +659,16 @@ diff --git a/src/virtio/video/decoder/backend/vaapi.rs b/src/virtio/video/decode
 +                        let fd = create_udmabuf(&shm)?;
 +                        // SAFETY: `fd` is a valid descriptor that nothing else owns.
 +                        let fd = unsafe { OwnedFd::from_raw_fd(fd.into_raw_descriptor()) };
++                        let desc = if drm_prime {
++                            BufferDescriptor::DrmPrime(DrmPrimeFrame {
++                                fd,
++                                layout: new_layout,
++                            })
++                        } else {
++                            BufferDescriptor::Dmabuf(direct_output_frame(fd, &new_layout))
++                        };
 +                        frames.push(BufferDescWithPicId {
-+                            desc: BufferDescriptor::Dmabuf(direct_output_frame(fd, &new_layout)),
++                            desc,
 +                            picture_buffer_id: id as i32,
 +                        });
 +                        buffers.push(shm);
@@ -526,12 +683,15 @@ diff --git a/src/virtio/video/decoder/backend/vaapi.rs b/src/virtio/video/decode
 +                        bail!("the decoder returned an unknown frame");
 +                    };
 +                    let size = frame.display_resolution();
-+                    hash = Some(hash_direct_picture(
-+                        shm,
-+                        layout,
-+                        size.width as usize,
-+                        size.height as usize,
-+                    )?);
++                    let (width, height) = (size.width as usize, size.height as usize);
++                    let swizzled = DirectOutputLayout {
++                        swizzled: true,
++                        ..*layout
++                    };
++                    hash = Some((
++                        hash_direct_picture(shm, layout, width, height)?,
++                        hash_direct_picture(shm, &swizzled, width, height)?,
++                    ));
 +                }
 +            }
 +        }
@@ -548,16 +708,14 @@ diff --git a/src/virtio/video/decoder/backend/vaapi.rs b/src/virtio/video/decode
 +        } else {
 +            break;
 +        }
-     }
-+    match hash {
-+        Some(DIRECT_TEST_PICTURE_HASH) => Ok(()),
-+        Some(hash) => bail!("its test picture came out wrong (hash {:#x})", hash),
-+        None => bail!("its test picture was not decoded"),
 +    }
- }
- 
++    hash.ok_or_else(|| anyhow!("the test picture was not decoded"))
++}
++
  impl DecoderBackend for VaapiDecoder {
-@@ -963,31 +1342,46 @@
+     type Session = VaapiDecoderSession;
+ 
+@@ -963,31 +1441,50 @@
      }
  
      fn new_session(&mut self, format: Format) -> VideoResult<Self::Session> {
@@ -569,13 +727,17 @@ diff --git a/src/virtio/video/decoder/backend/vaapi.rs b/src/virtio/video/decode
 +        let direct_decode = *self.direct_decode.get_or_insert_with(|| {
 +            match check_direct_decode_gpu(&node).and_then(|()| direct_decode_self_test(&display))
 +            {
-+                Ok(()) => {
-+                    base::info!("VA-API: decoding pictures straight into guest memory");
-+                    true
++                Ok(direct_decode) => {
++                    base::info!(
++                        "VA-API: decoding pictures straight into guest memory ({} import{})",
++                        if direct_decode.drm_prime { "DRM PRIME" } else { "DRM PRIME 2" },
++                        if direct_decode.swizzled { ", swizzled tiles" } else { "" }
++                    );
++                    Some(direct_decode)
 +                }
 +                Err(e) => {
 +                    base::info!("VA-API: copying decoded pictures into guest memory: {:#}", e);
-+                    false
++                    None
 +                }
 +            }
 +        });
@@ -609,7 +771,7 @@ diff --git a/src/virtio/video/decoder/backend/vaapi.rs b/src/virtio/video/decode
                      cros_codecs::decoder::BlockingMode::NonBlocking,
                  ),
              ),
-@@ -1001,6 +1395,8 @@
+@@ -1001,6 +1498,8 @@
              submit_queue: Default::default(),
              event_queue: EventQueue::new().map_err(|e| VideoError::BackendFailure(anyhow!(e)))?,
              flushing: Default::default(),
@@ -632,7 +794,7 @@ diff --git a/src/virtio/media/decoder_adapter.rs b/src/virtio/media/decoder_adap
  use crate::virtio::video::decoder::capability::Capability;
  use crate::virtio::video::decoder::DecoderBackend;
  use crate::virtio::video::format::Format;
-@@ -41,11 +43,42 @@
+@@ -41,12 +43,58 @@
  use crate::virtio::video::resource::GuestMemHandle;
  use crate::virtio::video::resource::GuestResource;
  use crate::virtio::video::resource::GuestResourceHandle;
@@ -642,11 +804,21 @@ diff --git a/src/virtio/media/decoder_adapter.rs b/src/virtio/media/decoder_adap
  /// small for the keyframes of high-bitrate 1080p and of 4K video. Buffers are sparse memfds,
  /// so only the pages a frame writes take host memory.
  const INPUT_BUFFER_SIZE: u32 = 8 * 1024 * 1024;
-+
+ 
 +/// V4L2 pixel format of CAPTURE buffers the backend decodes into directly, private to Ika and its
 +/// guest: NV12 in Intel Y tiles, laid out as `DirectOutputLayout` says, with `bytesperline` the
 +/// stride and the chroma plane at `bytesperline` times the height rounded up to 32 rows.
 +const PIX_FMT_NV12_Y_TILED: &[u8; 4] = b"IKYT";
++/// The same in swizzled tiles: rows `y` and `y ^ 4` of every odd 16-byte column swapped.
++const PIX_FMT_NV12_Y_TILED_SWIZZLED: &[u8; 4] = b"IKYS";
++
++/// Whether `pixelformat` is either of the formats above. The guest asks for either, and gets the
++/// one the stream is decoded in.
++fn is_direct_output_format(pixelformat: u32) -> bool {
++    [PIX_FMT_NV12_Y_TILED, PIX_FMT_NV12_Y_TILED_SWIZZLED]
++        .iter()
++        .any(|fourcc| PixelFormat::from_fourcc(fourcc).to_u32() == pixelformat)
++}
 +
 +/// The CAPTURE format of buffers in `layout`.
 +fn direct_output_format(layout: &DirectOutputLayout) -> V4l2MplaneFormat {
@@ -663,7 +835,12 @@ diff --git a/src/virtio/media/decoder_adapter.rs b/src/virtio/media/decoder_adap
 +        bindings::v4l2_pix_format_mplane {
 +            width: layout.width,
 +            height: layout.height,
-+            pixelformat: PixelFormat::from_fourcc(PIX_FMT_NV12_Y_TILED).to_u32(),
++            pixelformat: PixelFormat::from_fourcc(if layout.swizzled {
++                PIX_FMT_NV12_Y_TILED_SWIZZLED
++            } else {
++                PIX_FMT_NV12_Y_TILED
++            })
++            .to_u32(),
 +            field: bindings::v4l2_field_V4L2_FIELD_NONE,
 +            plane_fmt,
 +            num_planes: 1,
@@ -672,10 +849,11 @@ diff --git a/src/virtio/media/decoder_adapter.rs b/src/virtio/media/decoder_adap
 +        },
 +    ))
 +}
- 
++
  /// Returns the V4L2 `(bytesperline, sizeimage)` for the given `format` and `coded_size`.
  fn buffer_sizes_for_format(format: Format, coded_size: (u32, u32)) -> (u32, u32) {
-@@ -167,9 +200,20 @@
+     match PlaneFormat::get_plane_layout(format, coded_size.0, coded_size.1) {
+@@ -167,9 +215,20 @@
      ///
      /// This is required to call `set_output_parameters` on the virtio-video session.
      num_output_buffers: usize,
@@ -696,7 +874,38 @@ diff --git a/src/virtio/media/decoder_adapter.rs b/src/virtio/media/decoder_adap
      /// Get the currently existing backend session if it exists, or create it using the current
      /// input format if it doesn't.
      fn get_or_create_session(&mut self) -> IoctlResult<&mut D::Session> {
-@@ -250,6 +294,9 @@
+@@ -227,19 +286,23 @@
+ 
+             backend_session
+                 .set_output_parameters(self.num_output_buffers, output_format)
+-                .map_err(|_| libc::EIO)?;
++                .map_err(|e| {
++                    base::error!("setting the output parameters failed: {:#}", e);
++                    libc::EIO
++                })?;
+             self.need_set_output_params = false;
+         }
+ 
++        // The backend's error says why; the guest only gets EIO from VIDIOC_QBUF.
+         for (index, resource) in self.pending_output_buffers.drain(..) {
+             match resource {
+-                Some(resource) => backend_session
+-                    .use_output_buffer(index as i32, resource)
+-                    .map_err(|_| libc::EIO)?,
+-                None => backend_session
+-                    .reuse_output_buffer(index as i32)
+-                    .map_err(|_| libc::EIO)?,
++                Some(resource) => backend_session.use_output_buffer(index as i32, resource),
++                None => backend_session.reuse_output_buffer(index as i32),
+             }
++            .map_err(|e| {
++                base::error!("CAPTURE buffer {} failed: {:#}", index, e);
++                libc::EIO
++            })?;
+         }
+ 
+         Ok(())
+@@ -250,6 +313,9 @@
      type BufferStorage = VirtioVideoAdapterBuffer;
  
      fn current_format(&self, direction: QueueDirection) -> V4l2MplaneFormat {
@@ -706,13 +915,13 @@ diff --git a/src/virtio/media/decoder_adapter.rs b/src/virtio/media/decoder_adap
          let format = match direction {
              QueueDirection::Output => self.input_format,
              QueueDirection::Capture => self.output_format,
-@@ -336,6 +383,14 @@
+@@ -336,6 +402,14 @@
                      // green band. `stream_params` keeps the coded size for the selection bounds.
                      let visible = &self.stream_params.visible_rect;
                      self.coded_size = (visible.width, visible.height);
 +                    // Unless the backend can decode straight into the buffers, saving that copy:
-+                    // the guest asks for that layout by setting `PIX_FMT_NV12_Y_TILED`, and G_FMT
-+                    // reports the copied pictures until it does.
++                    // the guest asks for that layout by setting `PIX_FMT_NV12_Y_TILED` (or its
++                    // swizzled variant), and G_FMT reports the copied pictures until it does.
 +                    self.direct_layout = self
 +                        .backend_session
 +                        .as_mut()
@@ -721,7 +930,7 @@ diff --git a/src/virtio/media/decoder_adapter.rs b/src/virtio/media/decoder_adap
                      self.need_set_output_params = true;
                      self.initial_drc_received = true;
  
-@@ -357,7 +412,10 @@
+@@ -357,7 +431,10 @@
                          tv_sec: (timestamp / 1_000_000) as i64,
                          tv_usec: (timestamp % 1_000_000) as i64,
                      };
@@ -733,7 +942,7 @@ diff --git a/src/virtio/media/decoder_adapter.rs b/src/virtio/media/decoder_adap
  
                      Some(VideoDecoderBackendEvent::FrameCompleted {
                          buffer_id: picture_buffer_id as u32,
-@@ -468,7 +526,47 @@
+@@ -468,7 +545,47 @@
                  Ok(())
              }
              EosBuffer::Available(_) => {
@@ -782,7 +991,7 @@ diff --git a/src/virtio/media/decoder_adapter.rs b/src/virtio/media/decoder_adap
                      let resource = GuestResourceHandle::GuestPages(GuestMemHandle {
                          desc: backing.shm[0]
                              .descriptor
-@@ -515,8 +613,6 @@
+@@ -515,8 +632,6 @@
                      backing.registered = true;
  
                      Some(resource_handle)
@@ -791,7 +1000,7 @@ diff --git a/src/virtio/media/decoder_adapter.rs b/src/virtio/media/decoder_adap
                  };
  
                  self.pending_output_buffers.push((index, resource));
-@@ -586,6 +682,8 @@
+@@ -586,6 +701,8 @@
              pending_output_buffers: Default::default(),
              num_output_buffers: 0,
              eos_capture_buffer: EosBuffer::None,
@@ -800,15 +1009,13 @@ diff --git a/src/virtio/media/decoder_adapter.rs b/src/virtio/media/decoder_adap
          })
      }
  
-@@ -639,6 +737,16 @@
+@@ -639,6 +756,14 @@
      ) -> V4l2MplaneFormat {
          let pix_mp: &bindings::v4l2_pix_format_mplane = format.as_ref();
  
 +        // The layout to decode into directly, if the backend has one for the stream. Without one,
 +        // the format falls back to the first one below, which tells the guest it is not offered.
-+        if direction == QueueDirection::Capture
-+            && pix_mp.pixelformat == PixelFormat::from_fourcc(PIX_FMT_NV12_Y_TILED).to_u32()
-+        {
++        if direction == QueueDirection::Capture && is_direct_output_format(pix_mp.pixelformat) {
 +            if let Some(layout) = &session.direct_layout {
 +                return direct_output_format(layout);
 +            }
@@ -817,14 +1024,13 @@ diff --git a/src/virtio/media/decoder_adapter.rs b/src/virtio/media/decoder_adap
          let available_formats = match direction {
              QueueDirection::Output => self.capability.input_formats(),
              QueueDirection::Capture => self.capability.output_formats(),
-@@ -738,6 +846,10 @@
+@@ -738,6 +863,9 @@
                  }
              }
              QueueDirection::Capture => {
 +                // The backend still decodes into its first output format, NV12, in that layout.
 +                session.direct = session.direct_layout.is_some()
-+                    && format.pixelformat().to_u32()
-+                        == PixelFormat::from_fourcc(PIX_FMT_NV12_Y_TILED).to_u32();
++                    && is_direct_output_format(format.pixelformat().to_u32());
                  session.output_format =
                      Format::try_from(format.pixelformat()).unwrap_or_else(|_| {
                          self.capability
