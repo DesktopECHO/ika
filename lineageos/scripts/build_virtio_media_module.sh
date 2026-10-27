@@ -44,8 +44,9 @@ JOBS.
 EOF
 }
 
+# To stderr: functions whose output is captured (fetch_clang) log too.
 log() {
-  printf '[lineage-desktop] virtio-media: %s\n' "$*"
+  printf '[lineage-desktop] virtio-media: %s\n' "$*" >&2
 }
 
 die() {
@@ -78,6 +79,17 @@ fetch_kernel() {
   if [[ ! -d "$work_dir/common/.git" ]]; then
     git init -q "$work_dir/common"
     git -C "$work_dir/common" remote add origin "$kernel_remote"
+  fi
+  if ! git -C "$work_dir/common" cat-file -e "$commit^{commit}" 2>/dev/null; then
+    # The commit alone, by the full hash Gitiles gives for it: deepening a
+    # shallow clone of kernel/common fails on android.googlesource.com (HTTP 500).
+    local full
+    full="$(curl -fsS "$kernel_remote/+/$commit?format=JSON" | sed 1d |
+      python3 -c 'import json, sys; print(json.load(sys.stdin)["commit"])' 2>/dev/null)" || full=""
+    if [[ -n "$full" ]]; then
+      log "fetching $full from $kernel_remote"
+      git -C "$work_dir/common" fetch -q --depth=1 origin "$full" || true
+    fi
   fi
   if ! git -C "$work_dir/common" cat-file -e "$commit^{commit}" 2>/dev/null; then
     log "fetching $branch from $kernel_remote"

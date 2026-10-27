@@ -1,0 +1,69 @@
+diff --git a/src/virtio/media/decoder_adapter.rs b/src/virtio/media/decoder_adapter.rs
+--- a/src/virtio/media/decoder_adapter.rs
++++ b/src/virtio/media/decoder_adapter.rs
+@@ -811,30 +811,43 @@ impl<D: DecoderBackend> VideoDecoderBackend for VirtioVideoAdapter<D> {
+             return V4l2MplaneFormat::from((direction, Default::default()));
+         };
+ 
++        // An OUTPUT width or height of 0, or one larger than any picture, such as the (-1, -1) of
++        // Android's `ui::Size()` that its V4L2 HAL sets the format with, gives no size for the
++        // stream, so the coded size stays the placeholder it is until the stream gives one.
++        // Clamped to the largest supported size, it became the coded size, and the CAPTURE
++        // buffers allocated before the stream's size was known took it: 21 buffers of 16384x16384
++        // with the FFmpeg backend, of 4096x4096 with VA-API.
++        let no_size = |size: u32| size == 0 || size > i32::MAX as u32;
+         // Now check that the requested resolution is within the supported range, or fallback to
+         // an arbitrary one.
+-        let (mut width, mut height) = matching_format
+-            .frame_formats
+-            .iter()
+-            .find(|format| {
+-                let width = pix_mp.width;
+-                let height = pix_mp.height;
+-                (format.width.min..format.width.max).contains(&width)
+-                    && (format.height.min..format.height.max).contains(&height)
+-            })
+-            .map(|_| (pix_mp.width, pix_mp.height))
+-            .unwrap_or_else(|| {
+-                matching_format
+-                    .frame_formats
+-                    .first()
+-                    .map(|format| {
+-                        (
+-                            std::cmp::min(format.width.max, pix_mp.width),
+-                            (std::cmp::min(format.height.max, pix_mp.height)),
+-                        )
+-                    })
+-                    .unwrap_or((0, 0))
+-            });
++        let (mut width, mut height) = if direction == QueueDirection::Output
++            && (no_size(pix_mp.width) || no_size(pix_mp.height))
++        {
++            session.coded_size
++        } else {
++            matching_format
++                .frame_formats
++                .iter()
++                .find(|format| {
++                    let width = pix_mp.width;
++                    let height = pix_mp.height;
++                    (format.width.min..format.width.max).contains(&width)
++                        && (format.height.min..format.height.max).contains(&height)
++                })
++                .map(|_| (pix_mp.width, pix_mp.height))
++                .unwrap_or_else(|| {
++                    matching_format
++                        .frame_formats
++                        .first()
++                        .map(|format| {
++                            (
++                                std::cmp::min(format.width.max, pix_mp.width),
++                                (std::cmp::min(format.height.max, pix_mp.height)),
++                            )
++                        })
++                        .unwrap_or((0, 0))
++                })
++        };
+ 
+         // CAPTURE resolution cannot be lower than OUTPUT one.
+         if direction == QueueDirection::Capture {

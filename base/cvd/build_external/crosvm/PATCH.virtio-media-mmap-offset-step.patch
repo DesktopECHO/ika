@@ -1,0 +1,28 @@
+diff --git a/src/mmap.rs b/src/mmap.rs
+--- a/src/mmap.rs
++++ b/src/mmap.rs
+@@ -107,6 +107,11 @@ pub enum RemoveMappingError {
+ 
+ const PAGE_SIZE: u32 = 0x1000;
+ const PAGE_MASK: u32 = !(PAGE_SIZE - 1);
++/// Step between the offsets `register_buffer` allocates. The guest maps a buffer by passing its
++/// offset to mmap(2), which takes only multiples of the guest's page size: 64 KiB, the largest
++/// page size of arm64, suits every guest, where 4 KiB steps failed three buffers in four on
++/// guests with 16 KiB pages.
++const ALLOCATED_OFFSET_STEP: u32 = 0x10000;
+ 
+ impl<M: VirtioMediaHostMemoryMapper> MmapMappingManager<M> {
+     /// Registers a new buffer at `offset`. If `offset` if `None`, then an offset is allocated and
+@@ -131,9 +136,9 @@ impl<M: VirtioMediaHostMemoryMapper> MmapMappingManager<M> {
+         let offset = offset.unwrap_or_else(|| {
+             self.buffers
+                 .last()
+-                // Align the start offset to the next page, or `register_buffer_by_offset` will
+-                // fail.
+-                .map(|b| (b.offset + 1).next_multiple_of(PAGE_SIZE))
++                // Align the start offset to the next `ALLOCATED_OFFSET_STEP`, which is also a
++                // page, or `register_buffer_by_offset` will fail.
++                .map(|b| (b.offset + 1).next_multiple_of(ALLOCATED_OFFSET_STEP))
+                 .unwrap_or(0)
+         });
+ 
