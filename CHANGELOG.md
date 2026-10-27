@@ -449,6 +449,13 @@
   instances. It kept them all (an upstream gfxstream regression); with
   OpenGL ES only, 60 to 200 MB stayed behind each time Chrome was closed,
   until the host ran out of memory and killed the VM.
+- The ROM's graphics buffer allocator (minigbm) carries nine upstream fixes:
+  it rejects malformed buffer handles passed between processes, no longer
+  leaks a buffer when an import fails or closes a GPU buffer handle that
+  another buffer still uses, and refuses video buffers whose sizes overflow
+  32 bits instead of allocating them too small. In the venus GPU mode,
+  Android's display composer (drm_hwcomposer) no longer risks hanging when
+  an app window's display is removed. Both arrive with the next ROM build.
 - ika-base installs on Fedora again (it required the unversioned
   libvirglrenderer.so) and upgrades without file conflicts over
   `etc/cvd_config`.
