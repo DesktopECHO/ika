@@ -374,6 +374,18 @@
   test frame that way, once per start, and copies as before when no import
   gives the right picture or the GPU is another make. The launcher log says
   which way it went.
+- On Apple Silicon hosts, whose Android kernel has 16 KB pages, Android's
+  hardware video decoder failed on its second buffer and Chrome went back to
+  decoding in software: crosvm numbered the buffers it shares with the guest
+  4 KB apart, and such a kernel maps only multiples of 16 KB. They are 64 KB
+  apart now. Ika attaches the decoder only on hosts with VA-API, which these
+  lack, so it shows with `--crosvm_media_decoder=ffmpeg`, which decodes on
+  the host's CPU.
+- Video that ends and starts over, such as a looping clip, no longer stops
+  the hardware decoder with an error at its second end: crosvm returned the
+  buffer that marks the end of the stream a second time while its decoder
+  held it, and Android put it back. crosvm's FFmpeg decoder refused that in
+  11 of 29 one-minute runs on an M1 Pro MacBook Pro; VA-API did not check.
 
 ### Camera
 - `ika start --camera` sets the camera's anti-flicker to the mains frequency

@@ -1,0 +1,109 @@
+diff --git a/src/virtio/media/decoder_adapter.rs b/src/virtio/media/decoder_adapter.rs
+--- a/src/virtio/media/decoder_adapter.rs
++++ b/src/virtio/media/decoder_adapter.rs
+@@ -12,6 +12,7 @@ use std::os::fd::BorrowedFd;
+ use std::sync::Arc;
+ 
+ use base::AsRawDescriptor;
++use base::Event;
+ use base::SharedMemory;
+ use base::WaitContext;
+ use sync::Mutex;
+@@ -210,6 +211,11 @@ pub struct VirtioVideoAdapterSession<D: DecoderBackend> {
+ 
+     /// Index of the capture buffer we kept in order to signal EOS.
+     eos_capture_buffer: EosBuffer,
++    /// CAPTURE buffer queued while an EOS was awaited, which the next `next_event` returns with
++    /// the LAST flag.
++    pending_eos_buffer: Option<u32>,
++    /// Signaled while `pending_eos_buffer` is set, so that the device polls the session for it.
++    pending_eos_event: Event,
+ 
+     /// Number of output buffers that have been allocated, as reported by the decoder device.
+     ///
+@@ -359,6 +365,8 @@ impl<D: DecoderBackend> VideoDecoderBackendSession for VirtioVideoAdapterSession
+     fn clear_output_buffers(&mut self) -> IoctlResult<()> {
+         self.pending_output_buffers.clear();
+         self.eos_capture_buffer = EosBuffer::None;
++        self.pending_eos_buffer = None;
++        let _ = self.pending_eos_event.reset();
+         if let Some(session) = &mut self.backend_session {
+             session.clear_output_buffers().map_err(|_| libc::EIO)
+         } else {
+@@ -367,6 +375,18 @@ impl<D: DecoderBackend> VideoDecoderBackendSession for VirtioVideoAdapterSession
+     }
+ 
+     fn next_event(&mut self) -> Option<VideoDecoderBackendEvent> {
++        // A buffer queued after a flush completed without one signals that EOS now, before the
++        // backend's events: the backend may have none to read.
++        if let Some(buffer_id) = self.pending_eos_buffer.take() {
++            let _ = self.pending_eos_event.reset();
++            return Some(VideoDecoderBackendEvent::FrameCompleted {
++                buffer_id,
++                timestamp: Default::default(),
++                bytes_used: vec![0],
++                is_last: true,
++            });
++        }
++
+         if let Some(backend_session) = &mut self.backend_session {
+             let event = backend_session.read_event().unwrap();
+ 
+@@ -453,6 +473,12 @@ impl<D: DecoderBackend> VideoDecoderBackendSession for VirtioVideoAdapterSession
+                     // buffer is queued so we can use it for that purpose.
+                     match self.eos_capture_buffer {
+                         EosBuffer::Available(buffer_id) => {
++                            // The guest owns the buffer again, and the next one it queues is
++                            // kept aside for the next EOS. Kept as the EOS buffer, it went to the
++                            // backend when the guest queued it again, and the next flush returned
++                            // it while the backend still had it: queued once more, the backend
++                            // refused it ("already ready for use").
++                            self.eos_capture_buffer = EosBuffer::None;
+                             Some(VideoDecoderBackendEvent::FrameCompleted {
+                                 buffer_id,
+                                 timestamp: Default::default(),
+@@ -535,14 +561,11 @@ impl<D: DecoderBackend> VideoDecoderBackendSession for VirtioVideoAdapterSession
+                 Ok(())
+             }
+             EosBuffer::Awaiting => {
+-                // TODO: mmm how do we do that?
+-                // Answer: we don't! We just return a buffer event with the LAST flag set, and the
+-                // higher-level event handler takes care of sending eos!
+-                //
+-                // ... and how do we trigger the event for that buffer?
+-                //
+-                // self.send_eos(self, v4l2_buffer.index());
+-                Ok(())
++                // A flush completed while no buffer was kept aside: this one signals its EOS,
++                // returned with the LAST flag by `next_event` once the device polls the session.
++                self.eos_capture_buffer = EosBuffer::None;
++                self.pending_eos_buffer = Some(index);
++                self.pending_eos_event.signal().map_err(|_| libc::EIO)
+             }
+             EosBuffer::Available(_) => {
+                 let resource = if backing.registered {
+@@ -678,10 +701,14 @@ impl<D: DecoderBackend> VideoDecoderBackend for VirtioVideoAdapter<D> {
+             .map(|f| (f.width.min, f.height.min))
+             .unwrap_or((0, 0));
+ 
++        let poller = WaitContext::new().map_err(|_| libc::EIO)?;
++        let pending_eos_event = Event::new().map_err(|_| libc::EIO)?;
++        poller.add(&pending_eos_event, id).map_err(|_| libc::EIO)?;
++
+         Ok(VirtioVideoAdapterSession {
+             id,
+             backend_session: None,
+-            poller: WaitContext::new().map_err(|_| libc::EIO)?,
++            poller,
+             backend: Arc::clone(&self.backend),
+             input_format: first_input_format.format,
+             coded_size,
+@@ -701,6 +728,8 @@ impl<D: DecoderBackend> VideoDecoderBackend for VirtioVideoAdapter<D> {
+             pending_output_buffers: Default::default(),
+             num_output_buffers: 0,
+             eos_capture_buffer: EosBuffer::None,
++            pending_eos_buffer: None,
++            pending_eos_event,
+             direct_layout: None,
+             direct: false,
+         })

@@ -155,6 +155,17 @@ crosvm_bin.annotation(
 )
 
 crosvm_bin.annotation(
+    crate = "virtio-media",
+    patch_args = ["-p1"],
+    patches = [
+        # MMAP buffers get offsets 64 KiB apart instead of 4 KiB, so a guest
+        # with 16 KiB pages (Apple Silicon hosts) can mmap() every buffer, not
+        # only every fourth.
+        "@//build_external/crosvm:PATCH.virtio-media-mmap-offset-step.patch",
+    ],
+)
+
+crosvm_bin.annotation(
     crate = "devices",
     patch_args = ["-p1"],
     patches = [
@@ -176,6 +187,12 @@ crosvm_bin.annotation(
         # them; a decode self-test checks the driver first. Elsewhere pictures
         # are copied as before. Made on top of the three patches above.
         "@//build_external/crosvm:PATCH.crosvm-media-direct-decode.patch",
+        # The CAPTURE buffer returned with the LAST flag when a drain completes
+        # is the guest's again: the next one queued is kept aside for the next
+        # drain, so a buffer the backend holds is never returned. A buffer
+        # queued while a drain waits for one is returned at once. Made on top
+        # of the four patches above, and named to sort after them.
+        "@//build_external/crosvm:PATCH.crosvm-media-last-buffer.patch",
         "@//build_external/crosvm:PATCH.crosvm-resize-display-devices.patch",
         # A scanout flush into a dma-buf the compositor still holds is dropped
         # instead of shown into the frame on screen.
