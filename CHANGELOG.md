@@ -288,6 +288,14 @@
   statistics queries. On an M1 Pro, dEQP's GLES 3.1 geometry-shader query
   tests (29) and the tessellation winding, draw, state-query and
   primitive-discard tests (92) pass with it.
+- virglrenderer, Venus's host side, is updated to upstream main of
+  2026-10-21. On GPUs whose first memory type is both device-local and
+  host-visible, such as Apple Silicon's and Intel's, Venus offers the guest
+  a device-local memory type ahead of it, which apps take for their
+  textures, so those are no longer allocated as memory the host must be
+  able to export. Venus also closes the file of each shared-memory buffer
+  it imports, and zeroes its command decoder's scratch memory, which could
+  pass old host data to the guest.
 
 ### Console window
 - The console and app windows are Wayland windows on a Wayland session and
