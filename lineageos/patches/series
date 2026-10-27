@@ -21,10 +21,12 @@ external/vulkan-headers patches/external-vulkan-headers-android-build.patch
 prebuilts/abi-dumps/ndk patches/prebuilts-abi-dumps-vulkan-1.4.341.patch
 prebuilts/abi-dumps/vndk patches/prebuilts-abi-dumps-vulkan-llndk-1.4.360.patch
 external/drm_hwcomposer patches/external-drm-hwcomposer-upstream-stability.patch
+external/drm_hwcomposer patches/external-drm-hwcomposer-atomic-thread-wakeup.patch
 external/minigbm patches/external-minigbm-upstream-stability.patch
 external/minigbm patches/external-minigbm.patch
 external/minigbm patches/external-minigbm-gfxstream-no-forced-linear.patch
 external/minigbm patches/external-minigbm-virtgpu-param-numbers.patch
+external/minigbm patches/external-minigbm-upstream-hardening.patch
 external/deqp-deps/glslang patches/external-deqp-deps-glslang-validator-host.patch
 external/venus-protocol patches/external-venus-protocol-android-build.patch
 external/venus-protocol patches/external-venus-protocol-reply-size-init.patch

@@ -1,0 +1,400 @@
+Patch summary:
+Backport nine upstream minigbm fixes (chromiumos/platform/minigbm main) onto
+the pinned Android 16 QPR2 base, for the guest's gralloc and its virtio-gpu
+backends:
+
+- cros_gralloc rejects imported handles with zero or more than DRV_MAX_PLANES
+  planes (72b58f5), a reserved region smaller than the buffer metadata it
+  holds (d6fd05d) and a layerCount of 0 (f4578b6), and no longer reads a
+  buffer name past its maximum size (d40d201).
+- A failed import destroys the bo it imported instead of leaking it
+  (9ab051f).
+- A failed multi-plane import no longer closes a GEM handle another bo still
+  holds (a2d42f0).
+- The virgl backend computes emulated NV12/YV12 layouts in 64 bits and fails
+  buffers whose sizes would wrap in 32 bits, instead of creating a resource
+  smaller than its strides imply (42d3332). The resource size check uses
+  getpagesize(), as external-minigbm-upstream-stability.patch does for the
+  size itself.
+- The virgl bind flags are unsigned, so they no longer shift into the sign
+  bit (96fcdc4).
+- drv_get_os_option takes a one-character property value (6e6b465).
+
+The upstream unit tests for the virgl changes are left out: this base has no
+virtgpu_virgl_unittest.cc.
+
+diff --git a/cros_gralloc/cros_gralloc_buffer.cc b/cros_gralloc/cros_gralloc_buffer.cc
+index 03ebf61..fc31bc7 100644
+--- a/cros_gralloc/cros_gralloc_buffer.cc
++++ b/cros_gralloc/cros_gralloc_buffer.cc
+@@ -11,6 +11,8 @@
+ 
+ #include <cutils/native_handle.h>
+ 
++#include <cstring>
++
+ #include "cros_gralloc_buffer_metadata.h"
+ 
+ #ifndef HAS_NO_AIDL_METADATA
+@@ -174,7 +176,9 @@ int32_t cros_gralloc_buffer::get_name(std::optional<std::string> *name) const
+ 		return ret;
+ 	}
+ 
+-	*name = metadata->name;
++	*name = std::string(metadata->name,
++			    strnlen(metadata->name, CROS_GRALLOC_BUFFER_METADATA_MAX_NAME_SIZE));
++
+ 	return 0;
+ }
+ 
+@@ -394,9 +398,19 @@ int32_t cros_gralloc_buffer::flush()
+ 
+ int32_t cros_gralloc_buffer::get_reserved_region(void **addr, uint64_t *size) const
+ {
++	if (hnd_->reserved_region_size == 0) {
++		ALOGE("Buffer does not have reserved region.");
++		return -EINVAL;
++	}
++
++	if (hnd_->reserved_region_size < sizeof(struct cros_gralloc_buffer_metadata)) {
++		ALOGE("Buffer has invalid reserved region size.");
++		return -EINVAL;
++	}
++
+ 	int32_t reserved_region_fd = hnd_->fds[hnd_->num_planes];
+ 	if (reserved_region_fd < 0) {
+-		ALOGE("Buffer does not have reserved region.");
++		ALOGE("Buffer does not have reserved region fd.");
+ 		return -EINVAL;
+ 	}
+ 
+diff --git a/cros_gralloc/cros_gralloc_driver.cc b/cros_gralloc/cros_gralloc_driver.cc
+index 68882d9..80768d8 100644
+--- a/cros_gralloc/cros_gralloc_driver.cc
++++ b/cros_gralloc/cros_gralloc_driver.cc
+@@ -382,7 +382,13 @@ int32_t cros_gralloc_driver::retain(buffer_handle_t handle)
+ 
+ 	auto hnd = cros_gralloc_convert_handle(handle);
+ 	if (!hnd) {
+-		ALOGE("Invalid handle.");
++		ALOGE("Failed to import: invalid handle.");
++		return -EINVAL;
++	}
++
++	if (hnd->reserved_region_size > 0 &&
++	    hnd->reserved_region_size < sizeof(struct cros_gralloc_buffer_metadata)) {
++		ALOGE("Failed to import: invalid reserved region size.");
+ 		return -EINVAL;
+ 	}
+ 
+@@ -434,6 +440,7 @@ int32_t cros_gralloc_driver::retain(buffer_handle_t handle)
+ 		auto scoped_buffer = cros_gralloc_buffer::create(bo, hnd);
+ 		if (!scoped_buffer) {
+ 			ALOGE("Failed to import: failed to create cros_gralloc_buffer.");
++			drv_bo_destroy(bo);
+ 			return -1;
+ 		}
+ 		buffer = scoped_buffer.get();
+diff --git a/cros_gralloc/cros_gralloc_helpers.cc b/cros_gralloc/cros_gralloc_helpers.cc
+index 230bb35..541d0b1 100644
+--- a/cros_gralloc/cros_gralloc_helpers.cc
++++ b/cros_gralloc/cros_gralloc_helpers.cc
+@@ -192,6 +192,11 @@ cros_gralloc_handle_t cros_gralloc_convert_handle(buffer_handle_t handle)
+ 	if (!hnd || hnd->magic != cros_gralloc_magic)
+ 		return nullptr;
+ 
++	if (hnd->num_planes == 0 || hnd->num_planes > DRV_MAX_PLANES) {
++		ALOGE("Invalid handle: num_planes = %u", hnd->num_planes);
++		return nullptr;
++	}
++
+ 	// if hnd->reserved_region_size == 0, handle->numFds is hnd->num_planes
+ 	// if hnd->reserved_region_size > 0, handle->numFds is hnd->num_planes + 1
+ 	if ((uint32_t)handle->numFds != hnd->num_planes + (hnd->reserved_region_size > 0))
+diff --git a/cros_gralloc/gralloc4/CrosGralloc4Utils.cc b/cros_gralloc/gralloc4/CrosGralloc4Utils.cc
+index 703e50f..2f22d70 100644
+--- a/cros_gralloc/gralloc4/CrosGralloc4Utils.cc
++++ b/cros_gralloc/gralloc4/CrosGralloc4Utils.cc
+@@ -64,7 +64,7 @@ int convertToCrosDescriptor(const BufferDescriptorInfo& descriptor,
+     outCrosDescriptor->droid_usage = descriptor.usage;
+     outCrosDescriptor->enable_metadata_fd = true;
+     outCrosDescriptor->client_metadata_size = descriptor.reservedSize;
+-    if (descriptor.layerCount > 1) {
++    if (descriptor.layerCount != 1) {
+         ALOGE("Failed to convert descriptor. Unsupported layerCount: %d", descriptor.layerCount);
+         return -EINVAL;
+     }
+diff --git a/drv_helpers.c b/drv_helpers.c
+index b0979d1..ae8b0f3 100644
+--- a/drv_helpers.c
++++ b/drv_helpers.c
+@@ -446,6 +446,29 @@ int drv_gem_bo_destroy(struct bo *bo)
+ 	return drv_gem_close(bo->drv, bo->handle.u32);
+ }
+ 
++/*
++ * Close a GEM handle only if no live bo in this driver still references it.
++ * This is primarily used when cleaning up after a failed import. Because
++ * DRM_IOCTL_PRIME_FD_TO_HANDLE returns the same handle for any fd referencing
++ * the same underlying object on a given DRM file, a handle may already be held
++ * by another bo and tracked in drv->buffer_table. Only handles with no other
++ * live references are closed; the rest are left for their owner to release.
++ */
++void drv_gem_close_if_unreferenced(struct driver *drv, uint32_t gem_handle)
++{
++	void *value;
++
++	if (!gem_handle)
++		return;
++
++	pthread_mutex_lock(&drv->buffer_table_lock);
++	// Only close the handle if it is not in the buffer table
++	if (drmHashLookup(drv->buffer_table, gem_handle, &value)) {
++		drv_gem_close(drv, gem_handle);
++	}
++	pthread_mutex_unlock(&drv->buffer_table_lock);
++}
++
+ int drv_prime_bo_import(struct bo *bo, struct drv_import_fd_data *data)
+ {
+ 	int ret;
+@@ -459,7 +482,7 @@ int drv_prime_bo_import(struct bo *bo, struct drv_import_fd_data *data)
+ 		ret = drmIoctl(bo->drv->fd, DRM_IOCTL_PRIME_FD_TO_HANDLE, &prime_handle);
+ 
+ 		if (plane > 0 && !ret && bo->handle.u32 != prime_handle.handle) {
+-			drv_gem_close(bo->drv, prime_handle.handle);
++			drv_gem_close_if_unreferenced(bo->drv, prime_handle.handle);
+ 			ret = -1;
+ 			errno = EINVAL;
+ 		}
+@@ -467,7 +490,7 @@ int drv_prime_bo_import(struct bo *bo, struct drv_import_fd_data *data)
+ 		if (ret) {
+ 			drv_loge("DRM_IOCTL_PRIME_FD_TO_HANDLE failed (fd=%u)\n", prime_handle.fd);
+ 			if (plane > 0)
+-				drv_gem_close(bo->drv, bo->handle.u32);
++				drv_gem_close_if_unreferenced(bo->drv, bo->handle.u32);
+ 			return -errno;
+ 		}
+ 
+@@ -629,7 +652,7 @@ const char *drv_get_os_option(const char *name)
+ #ifdef __ANDROID__
+ 	if (!ret) {
+ 		static char prop[PROPERTY_VALUE_MAX];
+-		return property_get(name, prop, NULL) > 1 ? prop : NULL;
++		return property_get(name, prop, NULL) > 0 ? prop : NULL;
+ 	}
+ #endif
+ 	return ret;
+diff --git a/drv_helpers.h b/drv_helpers.h
+index fe4cca7..8b2b6cd 100644
+--- a/drv_helpers.h
++++ b/drv_helpers.h
+@@ -33,6 +33,7 @@ int drv_dumb_bo_create_ex(struct bo *bo, uint32_t width, uint32_t height, uint32
+ int drv_dumb_bo_destroy(struct bo *bo);
+ int drv_gem_close(struct driver *drv, uint32_t gem_handle);
+ int drv_gem_bo_destroy(struct bo *bo);
++void drv_gem_close_if_unreferenced(struct driver *drv, uint32_t gem_handle);
+ int drv_prime_bo_import(struct bo *bo, struct drv_import_fd_data *data);
+ void *drv_dumb_bo_map(struct bo *bo, struct vma *vma, uint32_t map_flags);
+ int drv_bo_munmap(struct bo *bo, struct vma *vma);
+diff --git a/external/virgl_hw.h b/external/virgl_hw.h
+index 4527ced..1d6decd 100644
+--- a/external/virgl_hw.h
++++ b/external/virgl_hw.h
+@@ -296,17 +296,17 @@ enum virgl_formats {
+ 
+ #define VIRGL_BIND_LINEAR (1 << 22)
+ 
+-#define VIRGL_BIND_SHARED_SUBFLAGS (0xff << 24)
+-
+-#define VIRGL_BIND_MINIGBM_CAMERA_WRITE (1 << 24)
+-#define VIRGL_BIND_MINIGBM_CAMERA_READ (1 << 25)
+-#define VIRGL_BIND_MINIGBM_HW_VIDEO_DECODER (1 << 26)
+-#define VIRGL_BIND_MINIGBM_HW_VIDEO_ENCODER (1 << 27)
+-#define VIRGL_BIND_MINIGBM_SW_READ_OFTEN (1 << 28)
+-#define VIRGL_BIND_MINIGBM_SW_READ_RARELY (1 << 29)
+-#define VIRGL_BIND_MINIGBM_SW_WRITE_OFTEN (1 << 30)
+-#define VIRGL_BIND_MINIGBM_SW_WRITE_RARELY (1 << 31)
+-#define VIRGL_BIND_MINIGBM_PROTECTED (0xf << 28) // Mutually exclusive with SW_ flags
++#define VIRGL_BIND_SHARED_SUBFLAGS (0xffu << 24)
++
++#define VIRGL_BIND_MINIGBM_CAMERA_WRITE (1u << 24)
++#define VIRGL_BIND_MINIGBM_CAMERA_READ (1u << 25)
++#define VIRGL_BIND_MINIGBM_HW_VIDEO_DECODER (1u << 26)
++#define VIRGL_BIND_MINIGBM_HW_VIDEO_ENCODER (1u << 27)
++#define VIRGL_BIND_MINIGBM_SW_READ_OFTEN (1u << 28)
++#define VIRGL_BIND_MINIGBM_SW_READ_RARELY (1u << 29)
++#define VIRGL_BIND_MINIGBM_SW_WRITE_OFTEN (1u << 30)
++#define VIRGL_BIND_MINIGBM_SW_WRITE_RARELY (1u << 31)
++#define VIRGL_BIND_MINIGBM_PROTECTED (0xfu << 28) // Mutually exclusive with SW_ flags
+ 
+ struct virgl_caps_bool_set1 {
+         unsigned indep_blend_enable:1;
+diff --git a/i915.c b/i915.c
+index d0584f0..c3798c9 100644
+--- a/i915.c
++++ b/i915.c
+@@ -912,7 +912,7 @@ static int i915_bo_import(struct bo *bo, struct drv_import_fd_data *data)
+ 
+ 		ret = drmIoctl(bo->drv->fd, DRM_IOCTL_I915_GEM_GET_TILING, &gem_get_tiling);
+ 		if (ret) {
+-			drv_gem_bo_destroy(bo);
++			drv_gem_close_if_unreferenced(bo->drv, bo->handle.u32);
+ 			drv_loge("DRM_IOCTL_I915_GEM_GET_TILING failed.\n");
+ 			return ret;
+ 		}
+diff --git a/virtgpu_virgl.c b/virtgpu_virgl.c
+index c56f928..e256486 100644
+--- a/virtgpu_virgl.c
++++ b/virtgpu_virgl.c
+@@ -140,7 +140,7 @@ static bool virgl_bitmask_supports_format(struct virgl_supported_format_mask *su
+ 
+ 	uint32_t bitmask_index = virgl_format / 32;
+ 	uint32_t bit_index = virgl_format % 32;
+-	return supported->bitmask[bitmask_index] & (1 << bit_index);
++	return supported->bitmask[bitmask_index] & (1u << bit_index);
+ }
+ 
+ // The metadata generated here for emulated buffers is slightly different than the metadata
+@@ -184,10 +184,13 @@ static bool virgl_bitmask_supports_format(struct virgl_supported_format_mask *su
+ // Additional note: the V-plane is not placed to the right of the U-plane due to some
+ // observed failures in media framework code which assumes the V-plane is not
+ // "row-interlaced" with the U-plane.
+-static void virgl_get_emulated_metadata(const struct bo *bo, struct bo_metadata *metadata)
++static int virgl_get_emulated_metadata(const struct bo *bo, struct bo_metadata *metadata)
+ {
+-	uint32_t y_plane_height;
+-	uint32_t c_plane_height;
++	uint64_t y_plane_height;
++	uint64_t c_plane_height;
++	uint64_t width;
++	uint64_t height;
++	uint64_t total_size;
+ 	uint32_t original_width = bo->meta.width;
+ 	uint32_t original_height = bo->meta.height;
+ 
+@@ -199,22 +202,31 @@ static void virgl_get_emulated_metadata(const struct bo *bo, struct bo_metadata
+ 		metadata->num_planes = 2;
+ 
+ 		y_plane_height = original_height;
+-		c_plane_height = DIV_ROUND_UP(original_height, 2);
++		c_plane_height = DIV_ROUND_UP(y_plane_height, 2);
++
++		width = original_width;
++		height = y_plane_height + c_plane_height;
++		total_size = width * height;
++		if (height > UINT32_MAX || total_size > UINT32_MAX) {
++			drv_loge("emulated layout for %ux%u buffer exceeds 32 bits\n",
++				 original_width, original_height);
++			return -EINVAL;
++		}
+ 
+-		metadata->width = original_width;
+-		metadata->height = y_plane_height + c_plane_height;
++		metadata->width = width;
++		metadata->height = height;
+ 
+ 		// Y-plane (full resolution)
+ 		metadata->strides[0] = metadata->width;
+ 		metadata->offsets[0] = 0;
+-		metadata->sizes[0] = metadata->width * y_plane_height;
++		metadata->sizes[0] = width * y_plane_height;
+ 
+ 		// CbCr-plane  (half resolution, interleaved, placed below Y-plane)
+ 		metadata->strides[1] = metadata->width;
+ 		metadata->offsets[1] = metadata->offsets[0] + metadata->sizes[0];
+-		metadata->sizes[1] = metadata->width * c_plane_height;
++		metadata->sizes[1] = width * c_plane_height;
+ 
+-		metadata->total_size = metadata->width * metadata->height;
++		metadata->total_size = total_size;
+ 		break;
+ 	case DRM_FORMAT_YVU420:
+ 	case DRM_FORMAT_YVU420_ANDROID:
+@@ -222,31 +234,42 @@ static void virgl_get_emulated_metadata(const struct bo *bo, struct bo_metadata
+ 		metadata->num_planes = 3;
+ 
+ 		y_plane_height = original_height;
+-		c_plane_height = DIV_ROUND_UP(original_height, 2);
++		c_plane_height = DIV_ROUND_UP(y_plane_height, 2);
++
++		width = ALIGN((uint64_t)original_width, 32);
++		height = y_plane_height + (2 * c_plane_height);
++		total_size = width * height;
++		if (width > UINT32_MAX || height > UINT32_MAX || total_size > UINT32_MAX) {
++			drv_loge("emulated layout for %ux%u buffer exceeds 32 bits\n",
++				 original_width, original_height);
++			return -EINVAL;
++		}
+ 
+-		metadata->width = ALIGN(original_width, 32);
+-		metadata->height = y_plane_height + (2 * c_plane_height);
++		metadata->width = width;
++		metadata->height = height;
+ 
+ 		// Y-plane (full resolution)
+ 		metadata->strides[0] = metadata->width;
+ 		metadata->offsets[0] = 0;
+-		metadata->sizes[0] = metadata->width * original_height;
++		metadata->sizes[0] = width * y_plane_height;
+ 
+ 		// Cb-plane (half resolution, placed below Y-plane)
+ 		metadata->strides[1] = metadata->width;
+ 		metadata->offsets[1] = metadata->offsets[0] + metadata->sizes[0];
+-		metadata->sizes[1] = metadata->width * c_plane_height;
++		metadata->sizes[1] = width * c_plane_height;
+ 
+ 		// Cr-plane (half resolution, placed below Cb-plane)
+ 		metadata->strides[2] = metadata->width;
+ 		metadata->offsets[2] = metadata->offsets[1] + metadata->sizes[1];
+-		metadata->sizes[2] = metadata->width * c_plane_height;
++		metadata->sizes[2] = width * c_plane_height;
+ 
+-		metadata->total_size = metadata->width * metadata->height;
++		metadata->total_size = total_size;
+ 		break;
+ 	default:
+ 		break;
+ 	}
++
++	return 0;
+ }
+ 
+ struct virtio_transfers_params {
+@@ -263,9 +286,8 @@ static void virgl_get_emulated_transfers_params(const struct bo *bo,
+ 	struct bo_metadata emulated_metadata = { 0 };
+ 
+ 	if (transfer_box->x == 0 && transfer_box->y == 0 && transfer_box->width == bo->meta.width &&
+-	    transfer_box->height == bo->meta.height) {
+-		virgl_get_emulated_metadata(bo, &emulated_metadata);
+-
++	    transfer_box->height == bo->meta.height &&
++	    virgl_get_emulated_metadata(bo, &emulated_metadata) == 0) {
+ 		xfer_params->xfers_needed = 1;
+ 		xfer_params->xfer_boxes[0].x = 0;
+ 		xfer_params->xfer_boxes[0].y = 0;
+@@ -522,7 +544,9 @@ static int virgl_3d_bo_create(struct bo *bo, uint32_t width, uint32_t height, ui
+ 	} else {
+ 		assert(virgl_supports_combination_through_emulation(bo->drv, format, use_flags));
+ 
+-		virgl_get_emulated_metadata(bo, &emulated_metadata);
++		ret = virgl_get_emulated_metadata(bo, &emulated_metadata);
++		if (ret)
++			return ret;
+ 
+ 		format = emulated_metadata.format;
+ 		width = emulated_metadata.width;
+@@ -555,6 +579,13 @@ static int virgl_3d_bo_create(struct bo *bo, uint32_t width, uint32_t height, ui
+ 	res_create.last_level = 0;
+ 	res_create.nr_samples = 0;
+ 
++	/* drm_virtgpu_resource_create::size is 32 bits wide. */
++	if (bo->meta.total_size > UINT32_MAX - ((uint32_t)getpagesize() - 1)) {
++		drv_loge("%ux%u buffer total size %zu is too large\n", width, height,
++			 bo->meta.total_size);
++		return -EINVAL;
++	}
++
+ 	res_create.size = ALIGN(bo->meta.total_size, getpagesize());
+ 	ret = drmIoctl(bo->drv->fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE, &res_create);
+ 	if (ret) {

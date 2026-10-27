@@ -1,0 +1,33 @@
+Patch summary:
+Backport drm_hwcomposer's fix for a lost wakeup in
+DrmAtomicStateManager::ThreadFn (f84c4bf) onto the pinned Android 16 QPR2
+base. The thread waited on its condition variable before checking for a new
+frame or a stop request, so a notify sent while it was outside the wait was
+lost: a display torn down at that moment (Ika removes one whenever an app
+window closes) deadlocked in thread_.join(), and a new frame's buffers were
+released late, by a synchronous cleanup on the next frame. The wait now takes
+a predicate. Cuttlefish
+runs drm_hwcomposer in the venus and drm_virgl GPU modes.
+
+diff --git a/drm/DrmAtomicStateManager.cpp b/drm/DrmAtomicStateManager.cpp
+index 2aad05f..ec58e66 100644
+--- a/drm/DrmAtomicStateManager.cpp
++++ b/drm/DrmAtomicStateManager.cpp
+@@ -495,14 +495,13 @@ void DrmAtomicStateManager::ThreadFn() {
+     {
+       std::unique_lock lk(mutex_);
+       base::ScopedLockAssertion lock_assertion(mutex_);
+-      cv_.wait(lk);
++      cv_.wait(lk, [this, tracking_at_the_moment]() REQUIRES(mutex_) {
++        return exit_thread_ || frames_staged_ > tracking_at_the_moment;
++      });
+ 
+       if (exit_thread_)
+         break;
+ 
+-      if (frames_staged_ <= tracking_at_the_moment)
+-        continue;
+-
+       tracking_at_the_moment = frames_staged_;
+ 
+       present_fence = last_present_fence_;
