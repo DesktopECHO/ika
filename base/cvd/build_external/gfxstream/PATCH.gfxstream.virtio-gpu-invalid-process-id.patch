@@ -1,0 +1,35 @@
+Patch summary:
+The GLProcessPipe service gives virtio-gpu guests the invalid process id
+again, as it did before upstream re-implemented the pipes (44977c960e). The
+guest sends that id back with rcSetPuid(), which ignores only the invalid
+one. With a real id every render thread moved from its virtio-gpu context id
+to the pipe's id, and with it the GL contexts, window surfaces and EGLImages
+it made and the Vulkan context id that instance cleanup and exported syncs
+are registered under. virtio-gpu cleans a dead guest process up by context
+id, so none of that was freed when the app died.
+diff --git a/host/virtio_gpu_pipe.cpp b/host/virtio_gpu_pipe.cpp
+index 67a1e72..9b121fe 100644
+--- a/host/virtio_gpu_pipe.cpp
++++ b/host/virtio_gpu_pipe.cpp
+@@ -16,6 +16,7 @@
+ 
+ #include <atomic>
+ #include <cstring>
++#include <limits>
+ 
+ #include "gfxstream/common/logging.h"
+ #include "gfxstream/system/System.h"
+@@ -90,7 +91,12 @@ int VirtioGpuProcessPipe::TransferFromHost(char* outRequestedData, size_t reques
+         return -EINVAL;
+     }
+ 
+-    std::memcpy(outRequestedData, (const char*)&mUniqueId, sizeof(mUniqueId));
++    // The guest hands this id back with rcSetPuid(), and the render thread would then own its
++    // GL contexts, surfaces and images under it. virtio-gpu cleans a guest process up by its
++    // context id instead, so send the invalid id, which rcSetPuid() ignores, as the
++    // GLProcessPipe this replaced did: otherwise nothing a guest app made was freed when it died.
++    const uint64_t invalidPuid = std::numeric_limits<uint64_t>::max();
++    std::memcpy(outRequestedData, (const char*)&invalidPuid, sizeof(invalidPuid));
+ 
+     mSentUniqueId = true;
+     return 0;
