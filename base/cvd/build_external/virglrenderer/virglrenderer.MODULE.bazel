@@ -3,7 +3,7 @@ git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "g
 git_repository(
     name = "virglrenderer",
     build_file = "@//build_external/virglrenderer:BUILD.virglrenderer.bazel",
-    commit = "32dac0c627fba374709102c114f2896b7c899f46",
+    commit = "e0a1caf3b147bb26dfe524dbb85ded1177e7e49e",
     patch_args = ["-p1"],
     patches = [
         # Retry device creation at medium queue priority when the host driver
