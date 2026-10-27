@@ -394,6 +394,14 @@
   buffer that marks the end of the stream a second time while its decoder
   held it, and Android put it back. crosvm's FFmpeg decoder refused that in
   11 of 29 one-minute runs on an M1 Pro MacBook Pro; VA-API did not check.
+- Before it learns a video's size, Android's hardware video decoder no longer
+  allocates its output buffers at the largest size the host decodes (21 of
+  4096x4096 with VA-API, of 16384x16384 with FFmpeg): crosvm took the
+  placeholder size of -1 x -1 that Android sets for the compressed input as
+  that largest size.
+- With hardware video decoding, crosvm no longer logs three GPU errors at
+  every boot ("hang-up detected: ResourceBridge"): it gave the decoder a
+  resource bridge to the GPU, which the decoder dropped unused.
 
 ### Camera
 - `ika start --camera` sets the camera's anti-flicker to the mains frequency

@@ -81,6 +81,10 @@ crosvm_bin.annotation(
         "@//build_external/crosvm:PATCH.crosvm-flush-held-dmabuf.patch",
         "@//build_external/crosvm:PATCH.crosvm-enable-vulkano-gralloc.patch",
         "@//build_external/crosvm:PATCH.crosvm-fixed-blob-mapping-virglrenderer.patch",
+        # The virtio-media decoder adapter gets no GPU resource bridge, which it
+        # never used: the GPU logged errors at boot when its end closed. Made on
+        # top of the aperfmperf and Vulkano gralloc patches, which sort before it.
+        "@//build_external/crosvm:PATCH.crosvm-media-no-resource-bridge.patch",
         "@//build_external/crosvm:PATCH.minijail-sys_common_mk.patch",
     ],
     deps = [
@@ -201,6 +205,11 @@ crosvm_bin.annotation(
         # queued while a drain waits for one is returned at once. Made on top
         # of the four patches above, and named to sort after them.
         "@//build_external/crosvm:PATCH.crosvm-media-last-buffer.patch",
+        # An OUTPUT format without a real size (Android's HAL sets -1 x -1)
+        # leaves the coded size as it is, instead of the largest supported size
+        # that the CAPTURE buffers allocated before the stream's size then took.
+        # Made on top of the five patches above, and named to sort after them.
+        "@//build_external/crosvm:PATCH.crosvm-media-placeholder-size.patch",
         "@//build_external/crosvm:PATCH.crosvm-resize-display-devices.patch",
         # A scanout flush into a dma-buf the compositor still holds is dropped
         # instead of shown into the frame on screen.

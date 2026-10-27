@@ -65,6 +65,16 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** The adapter keeps one CAPTURE buffer away from the backend, to return empty with `V4L2_BUF_FLAG_LAST` when a drain (`V4L2_DEC_CMD_STOP`) completes. Once it has returned that buffer, the next CAPTURE buffer the guest queues is kept aside for the next drain. A buffer queued while a completed drain waits for one is returned with the LAST flag at once, through an eventfd in the session's poller that has `next_event()` hand it out before reading the backend.
 - **Why:** The adapter went on treating the returned buffer as the one kept aside, so when the guest queued it again it went to the backend, and the next drain returned it while the backend still had it. Android's V4L2 HAL queues the empty LAST buffer straight back, and the FFmpeg backend then refused it as "already ready for use": Chrome's H.264 playback stopped the second time a looping clip ended, in 11 of 29 one-minute runs on an M1 Pro MacBook Pro. The VA-API backend does not check, so there the buffer could be in the backend and in the guest at once. A buffer queued while a drain waited for one was dropped (an upstream `TODO`), which would have stalled the queue for a guest that queues the LAST buffer again only after its next drain.
 
+#### `PATCH.crosvm-media-placeholder-size.patch`
+- **Targets:** `devices` crate. File: `src/virtio/media/decoder_adapter.rs`. Made on top of the five `crosvm-media-*` patches above, and named to sort after them.
+- **What it does:** An OUTPUT format whose width or height is 0, or larger than any picture (above `i32::MAX`), leaves the session's coded size as it is, the placeholder it has until the stream gives its size.
+- **Why:** Android's V4L2 HAL sets the OUTPUT format with `ui::Size()`, which is -1 x -1, and the adapter clamped that to the largest size the backend takes and made it the coded size. The HAL then allocates its CAPTURE buffers for the time before the stream's size is known at the size `G_FMT` reports, which a CAPTURE format cannot make smaller than the coded size: 21 MMAP buffers of 16384x16384 NV12 (402 MB each) with the FFmpeg backend, of 4096x4096 (25 MB) with VA-API. Only the one buffer kept for EOS is queued before the first resolution change, and it comes back empty.
+
+#### `PATCH.crosvm-media-no-resource-bridge.patch`
+- **Targets:** `crosvm` crate. File: `src/crosvm/sys/linux.rs`. Made on top of `PATCH.crosvm-aperfmperf.patch` and `PATCH.crosvm-enable-vulkano-gralloc.patch`, which sort before it.
+- **What it does:** A `--media-decoder` device gets no resource bridge to the GPU device.
+- **Why:** The virtio-media decoder adapter drops its end of the bridge unused (`_gpu_tube`): its backends decode into memory of their own. The GPU device found the bridge closed at every boot and logged three errors (`unhandled virtio-gpu worker event hang-up detected: ResourceBridge`, `tube was disconnected`, `Removing that resource bridge`).
+
 #### `PATCH.crosvm-resize-display.patch`
 - **Targets:** `crosvm_bin` and the source `git_repository`. File: `devices/src/virtio/gpu/virtio_gpu.rs`.
 - **What it does:** Adds `VirtioGpu::resize_display(display_id, DisplayParameters)` that updates an existing scanout's `width`, `height`, and stored `display_params`, then flips `scanouts_updated` so the GPU thread re-syncs.
@@ -168,10 +178,10 @@ See `crosvm.MODULE.bazel`. The relevant blocks:
 
 | Target | Patches |
 |---|---|
-| `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-composite-preserve-spec-fd`, `crosvm-gpu-2d-sandbox`, `crosvm-gpu-unref-shmem-mapping`, `crosvm-resize-display`, `crosvm-flush-held-dmabuf`, `crosvm-enable-vulkano-gralloc`, `minijail-sys_common_mk` |
+| `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-composite-preserve-spec-fd`, `crosvm-gpu-2d-sandbox`, `crosvm-gpu-unref-shmem-mapping`, `crosvm-resize-display`, `crosvm-flush-held-dmabuf`, `crosvm-enable-vulkano-gralloc`, `crosvm-media-no-resource-bridge`, `minijail-sys_common_mk` |
 | `crosvm_bin.annotation(crate = "disk")` | `disk-composite-preserve-spec-fd`, `disk-qcow-zero-clusters` |
 | `crosvm_bin.annotation(crate = "jail")` | `jail-aarch64-block-pread64`, `jail-gpu-host-graphics-libs-optional` |
-| `crosvm_bin.annotation(crate = "devices")` | `crosvm-media-decoder-input-size`, `crosvm-media-decoder-visible-size`, `crosvm-media-errors`, `crosvm-media-direct-decode`, `crosvm-media-last-buffer`, `crosvm-resize-display-devices`, `crosvm-flush-held-dmabuf-devices` |
+| `crosvm_bin.annotation(crate = "devices")` | `crosvm-media-decoder-input-size`, `crosvm-media-decoder-visible-size`, `crosvm-media-errors`, `crosvm-media-direct-decode`, `crosvm-media-last-buffer`, `crosvm-media-placeholder-size`, `crosvm-resize-display-devices`, `crosvm-flush-held-dmabuf-devices` |
 | `crosvm_bin.annotation(crate = "virtio-media")` | `virtio-media-mmap-offset-step` |
 | `crosvm_bin.annotation(crate = "rutabaga_gfx")` | `rutabaga_gfx_build_rs`, `rutabaga_gfx-gralloc-vulkano-fallback`, `rutabaga_gfx-cleanup-on-drop`, `rutabaga_gfx-gfxstream-3d-resource-info`, `rutabaga_gfx-on-demand-export-and-query` |
 | `crosvm_bin.annotation(crate = "minijail-sys")` | `minijail-sys_build_rs` |
