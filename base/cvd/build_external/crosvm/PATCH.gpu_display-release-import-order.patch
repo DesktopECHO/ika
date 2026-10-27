@@ -1,0 +1,47 @@
+diff --git a/src/gpu_display_android.rs b/src/gpu_display_android.rs
+index d7f8172..252f251 100644
+--- a/src/gpu_display_android.rs
++++ b/src/gpu_display_android.rs
+@@ -341,13 +341,11 @@ impl DisplayT for DisplayAndroid {
+     }
+ 
+     fn release_import(&mut self, surface_id: u32, import_id: u32) {
+-        let mut ahbs = self
+-            .surface_ahbs_map
+-            .entry(surface_id)
+-            .or_default()
+-            .write()
+-            .expect("failed to get a lock");
+-        ahbs.remove(&import_id);
++        if let Some(ahbs) = self.surface_ahbs_map.get(&surface_id) {
++            ahbs.write()
++                .expect("failed to get a lock")
++                .remove(&import_id);
++        }
+     }
+ }
+ 
+diff --git a/src/lib.rs b/src/lib.rs
+index 8ff3124..39c719d 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -345,7 +345,7 @@ trait DisplayT: AsRawDescriptor {
+     }
+ 
+     /// Frees a previously imported resource.
+-    fn release_import(&mut self, _import_id: u32, _surface_id: u32) {}
++    fn release_import(&mut self, _surface_id: u32, _import_id: u32) {}
+ 
+     /// Releases a previously created surface.
+     fn release_surface(&mut self, _surface_id: u32) {}
+@@ -682,8 +682,8 @@ impl GpuDisplay {
+     }
+ 
+     /// Releases a previously imported resource identified by the given handle.
+-    pub fn release_import(&mut self, import_id: u32, surface_id: u32) {
+-        self.inner.release_import(import_id, surface_id);
++    pub fn release_import(&mut self, surface_id: u32, import_id: u32) {
++        self.inner.release_import(surface_id, import_id);
+     }
+ 
+     /// Commits any pending state for the identified surface.

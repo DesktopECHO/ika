@@ -1,0 +1,71 @@
+diff --git a/src/virtio/gpu/virtio_gpu.rs b/src/virtio/gpu/virtio_gpu.rs
+index 92af8e5..a71fc22 100644
+--- a/src/virtio/gpu/virtio_gpu.rs
++++ b/src/virtio/gpu/virtio_gpu.rs
+@@ -103,7 +103,8 @@ struct VirtioGpuResource {
+     size: u64,
+     shmem_offset: Option<u64>,
+     scanout_data: Option<VirtioScanoutBlobData>,
+-    display_import: Option<u32>,
++    /// Maps display `surface_id` to `import_id`.
++    display_import: Map<u32, u32>,
+     rutabaga_external_mapping: bool,
+     guest_cpu_mappable: bool,
+ 
+@@ -142,7 +143,7 @@ impl VirtioGpuResource {
+             size,
+             shmem_offset: None,
+             scanout_data: None,
+-            display_import: None,
++            display_import: Map::new(),
+             rutabaga_external_mapping: false,
+             guest_cpu_mappable,
+             backing_iovecs: None,
+@@ -151,7 +152,7 @@ impl VirtioGpuResource {
+ 
+     fn snapshot(&self) -> VirtioGpuResourceSnapshot {
+         // Only the 2D backend is fully supported and it doesn't use these fields. 3D is WIP.
+-        assert!(self.display_import.is_none());
++        assert!(self.display_import.is_empty());
+ 
+         VirtioGpuResourceSnapshot {
+             resource_id: self.resource_id,
+@@ -460,7 +461,7 @@ impl VirtioGpuScanout {
+         resource: &mut VirtioGpuResource,
+         rutabaga: &mut Rutabaga,
+     ) -> Option<u32> {
+-        if let Some(import_id) = resource.display_import {
++        if let Some(&import_id) = resource.display_import.get(&surface_id) {
+             return Some(import_id);
+         }
+         let blob = rutabaga.export_blob(resource.resource_id).ok()?;
+@@ -474,7 +475,7 @@ impl VirtioGpuScanout {
+                         DisplayExternalResourceImport::AHardwareBuffer { info },
+                     )
+                     .ok()?;
+-                resource.display_import = Some(import_id);
++                resource.display_import.insert(surface_id, import_id);
+                 return Some(import_id);
+             }
+             other => RutabagaMagmaHandle::try_from(other).ok()?,
+@@ -518,7 +519,7 @@ impl VirtioGpuScanout {
+                 },
+             )
+             .ok()?;
+-        resource.display_import = Some(import_id);
++        resource.display_import.insert(surface_id, import_id);
+         Some(import_id)
+     }
+ }
+@@ -1082,6 +1083,11 @@ impl VirtioGpu {
+             .remove(&resource_id)
+             .ok_or(ErrInvalidResourceId)?;
+ 
++        let mut display = self.display.borrow_mut();
++        for (surface_id, import_id) in resource.display_import {
++            display.release_import(surface_id, import_id);
++        }
++
+         if let Some(shmem_offset) = resource.shmem_offset {
+             if let Some(mapper) = self.mapper.lock().as_mut() {
+                 if let Err(e) = mapper.remove_mapping(shmem_offset) {
