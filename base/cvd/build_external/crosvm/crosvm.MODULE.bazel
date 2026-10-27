@@ -167,6 +167,10 @@ crosvm_bin.annotation(
         # only every fourth.
         "@//build_external/crosvm:PATCH.virtio-media-mmap-offset-step.patch",
     ],
+    # crosvm's virtio-media only: annotations apply to every crate_universe
+    # hub of the shared extension, and vhost_user_media's virtio-media 0.0.7
+    # does not take this patch.
+    repositories = ["crosvm_bin"],
 )
 
 crosvm_bin.annotation(
