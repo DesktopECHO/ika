@@ -1,7 +1,17 @@
 vhost_user_media_workspace_crates = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+vhost_user_media_workspace_crates.annotation(
+    crate = "v4l2r",
+    build_script_env = {
+        # v4l2r's arch64 feature runs bindgen with --target=x86_64-linux-gnu on
+        # every host, so on Debian arm64 clang misses the libc headers that
+        # /usr/include/linux/videodev2.h includes from the multiarch directory.
+        # It used to get this from crosvm's v4l2r annotation.
+        "BINDGEN_EXTRA_CLANG_ARGS": "-I/usr/include/aarch64-linux-gnu -I/usr/include/x86_64-linux-gnu",
+    },
+    repositories = ["vhost_user_media_workspace_crates"],
+)
 vhost_user_media_workspace_crates.from_cargo(
     name = "vhost_user_media_workspace_crates",
-    cargo_config = "@//build_external/crosvm:crosvm.config.toml",
     manifests = [
         "//cuttlefish/host/commands/vhost_user_media:Cargo.toml",
     ],
