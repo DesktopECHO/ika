@@ -85,6 +85,9 @@ function deb_build_dependency_packages() {
     pkgconf protobuf-compiler
     uuid-dev xxd
 
+    # Ika's WSL2 GPU helpers (tools/wsl)
+    directx-headers-dev
+
     # cuttlefish-frontend Build-Depends (Go + Node.js)
     curl golang-go npm
 

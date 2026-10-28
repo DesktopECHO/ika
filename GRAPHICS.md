@@ -177,6 +177,8 @@ What Ika changes for it:
   Vega and older GPUs, gfxstream also allocates Vulkan memory as device memory
   only (`VulkanAllocateDeviceMemoryOnly`), against host-visible memory
   corruption. Cuttlefish warns when an AMD host's kernel is older than 6.13.
+- **WSL2:** Mesa Dozen's GPU only, a Vulkan layer and a D3D12 shim; see
+  [WSL2](#wsl2).
 - **Every host:** the gfxstream modes run with `EGL_PLATFORM=surfaceless`
   unless you set it, and with gfxstream's renderer features
   `MinimalLogging:disabled` and `VulkanBatchedDescriptorSetUpdate:disabled`
@@ -240,6 +242,73 @@ the count after Android stops: on a leak, it writes a warning to
 `~/ika/ikastart.log`. It needs read access to
 `/sys/kernel/debug/dma_buf/bufinfo`, or `sudo` without a password.
 
+## WSL2
+
+On WSL2 the only way to the GPU is Direct3D 12, through `/dev/dxg` and the
+libraries in `/usr/lib/wsl/lib`. Mesa's Dozen driver (in `mesa-vulkan-drivers`)
+offers it as Vulkan 1.2, and gfxstream renders on that. Venus cannot: Dozen
+cannot export its memory as dma-bufs.
+
+### What the host needs
+
+- KVM in WSL: virtualization on in the firmware, Windows' Virtual Machine
+  Platform, `nestedVirtualization=true` under `[wsl2]` in
+  `%UserProfile%\.wslconfig`, and, on some AMD hosts, Virtualization-based
+  Security off. `ls /dev/kvm` checks it.
+- A Windows GPU driver with WSL support, and `vulkaninfo --summary` listing a
+  `DRIVER_ID_MESA_DOZEN` device named after the GPU.
+- The WSL kernel has no udmabuf: set `enable_gpu_udmabuf = false` in `[gpu]`.
+
+### What Ika does
+
+When `/dev/dxg` exists and `vulkaninfo` lists a Dozen GPU, Ika sets, before
+choosing the GPU mode:
+
+- `MESA_VK_DEVICE_SELECT=<vendor>:<device>!`, which hides every other device.
+  gfxstream would otherwise pick llvmpipe, which supports more of what it
+  looks for. `VK_DRIVER_FILES` would hide it too, but it would also take away
+  the instance extensions llvmpipe's driver adds, and gfxstream then finds no
+  device. A `MESA_VK_DEVICE_SELECT` of your own wins.
+- `IKA_DZN_FIX=1`, which turns on the `VK_LAYER_IKA_dzn_fix` Vulkan layer
+  ([tools/wsl/ika_dzn_fix.c](tools/wsl/ika_dzn_fix.c)). It works around
+  Dozen's gaps:
+  - It works around a crash in Dozen's
+    `vkGetPhysicalDeviceImageFormatProperties2`.
+  - It offers `VK_EXT_provoking_vertex`, without which ANGLE stops at OpenGL
+    ES 2.0. Flat-shaded values come from the first vertex.
+  - For Android's Vulkan, it offers `samplerYcbcrConversion`, which
+    Chromium's Vulkan backend needs. The conversion is skipped, so YCbCr
+    images are sampled as they are.
+  - It keeps gfxstream's ETC2 and ASTC emulation from binding other images
+    into a dedicated allocation, which removes the D3D12 device. Ika's
+    gfxstream has this fix too.
+- The `libd3d12.so` shim ([tools/wsl/d3d12_shim.c](tools/wsl/d3d12_shim.c))
+  first in `LD_LIBRARY_PATH`. It makes every Vulkan instance in crosvm share
+  one D3D12 device. WSL allows about ten D3D12 devices per process, and a
+  released device's GPU address space is not given back, so after about a
+  hundred Android apps a device per instance runs out.
+
+`gpu_mode = auto` then picks `gfxstream_guest_angle`, as Dozen's Vulkan 1.2
+does not suit Venus. The start log has a `WSL2:` line when Ika set this up.
+
+| Variable | Effect |
+| --- | --- |
+| `IKA_WSL_GPU_FIX=0` | Ika sets none of the above |
+| `DISABLE_IKA_DZN_FIX=1` | Turns the layer off |
+| `IKA_DZN_FAKE_YCBCR=0` | The layer does not offer `samplerYcbcrConversion` |
+| `IKA_D3D12_SHIM_DISABLE=1` | The shim creates a device for each instance |
+| `IKA_D3D12_DRED=1` | The shim turns on D3D12's DRED. When the device is removed, it logs why, the GPU work in flight and the D3D12 call that removed it, to crosvm's log and `/tmp/ika-dred.log` |
+| `IKA_DZN_TRACE_REMOVAL=1` | With `IKA_D3D12_DRED=1`, the layer also logs the first Vulkan call after which the device was removed |
+
+### Limits on WSL2
+
+- `adb screencap` comes out black. The console shows the screen.
+- Each D3D12 device has a 4 GB window for shader-visible descriptor heaps,
+  shared by every Android app.
+- The GPU device runs in crosvm's second process, the one that maps
+  `libvulkan_dzn.so`. crosvm installs its own crash handler, so use `prlimit`
+  to get core dumps from it.
+
 ## Known limitations
 
 - **Compressed textures through ANGLE on Apple Silicon:** some titles draw
@@ -297,3 +366,4 @@ lists how individual games render in each mode.
 - crosvm's patches:
   [base/cvd/build_external/crosvm/README.md](base/cvd/build_external/crosvm/README.md).
 - Ika's GPU settings: the GPU functions in [tools/ika](tools/ika).
+- The WSL2 layer and shim: [tools/wsl](tools/wsl).

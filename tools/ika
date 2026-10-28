@@ -14,6 +14,7 @@ PACKAGED_SCRCPY_SERVER="/usr/lib/cuttlefish-common/share/scrcpy/scrcpy-server"
 PACKAGED_GETCHROMIUM_BIN="/usr/lib/cuttlefish-common/bin/getchromium"
 PACKAGED_IKA_ROOT_BIN="/usr/lib/cuttlefish-common/bin/ika-root"
 PACKAGED_MADBFS_BIN="/usr/lib/cuttlefish-common/bin/madbfs"
+PACKAGED_WSL_GPU_DIR="/usr/lib/cuttlefish-common/wsl"
 SCRCPY_ICON_DIR_DEFAULT="/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps"
 IKA_SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 
@@ -2900,6 +2901,50 @@ append_arm64_kernel_page_args() {
       log "arm64 kernel page-size: ${page_size} byte host pages -> boot.img"
       ;;
   esac
+}
+
+# WSL2 reaches the host GPU only through Direct3D 12 (/dev/dxg), which Mesa's
+# Dozen driver offers as Vulkan 1.2. gfxstream runs on it with three settings
+# (GRAPHICS.md, "WSL2"): MESA_VK_DEVICE_SELECT hides every device but the
+# Dozen GPU, which gfxstream would otherwise rank below llvmpipe, and unlike
+# VK_DRIVER_FILES keeps the instance extensions llvmpipe's driver adds;
+# IKA_DZN_FIX turns on the VK_LAYER_IKA_dzn_fix layer, which works around
+# Dozen's gaps; and the libd3d12.so shim first in LD_LIBRARY_PATH makes every
+# Vulkan instance share one D3D12 device, as WSL allows only a few per process
+# and does not give back a released one's address space. Runs before the first
+# vulkaninfo probe, so GPU mode selection sees what crosvm will. Keeps a
+# MESA_VK_DEVICE_SELECT the user set; IKA_WSL_GPU_FIX=0 turns all of it off.
+setup_wsl_gpu_env() {
+  local summary
+  local device
+
+  [[ -e /dev/dxg && -d "${PACKAGED_WSL_GPU_DIR}" ]] || return 0
+  [[ "${IKA_WSL_GPU_FIX:-1}" != "0" ]] || return 0
+  # Already done by the ika that ran this one, as restart does to start.
+  [[ -z "${IKA_WSL_GPU_ENV:-}" ]] || return 0
+  summary="$(probe_vulkaninfo_summary)" || return 0
+
+  # The first Dozen device that is not WARP, Microsoft's software renderer
+  # (vendor 0x1414), as "vendor:device" in MESA_VK_DEVICE_SELECT's hex form.
+  device="$(awk '
+    function finish_device() {
+      if (in_device && !found && driver == "DRIVER_ID_MESA_DOZEN" && vendor != "1414") {
+        found = vendor ":" id
+      }
+    }
+    /^GPU[0-9]+:/ { finish_device(); in_device = 1; vendor = id = driver = ""; next }
+    in_device && $1 == "vendorID" { vendor = tolower($3); sub(/^0x/, "", vendor) }
+    in_device && $1 == "deviceID" { id = tolower($3); sub(/^0x/, "", id) }
+    in_device && $1 == "driverID" { driver = $3 }
+    END { finish_device(); if (found) print found }
+  ' <<<"${summary}")"
+  [[ -n "${device}" ]] || return 0
+
+  export MESA_VK_DEVICE_SELECT="${MESA_VK_DEVICE_SELECT:-${device}!}"
+  export IKA_DZN_FIX=1
+  export LD_LIBRARY_PATH="${PACKAGED_WSL_GPU_DIR}/d3d12${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+  export IKA_WSL_GPU_ENV=1
+  log_start_note "WSL2: GPU through Mesa Dozen, MESA_VK_DEVICE_SELECT=${MESA_VK_DEVICE_SELECT}"
 }
 
 VULKANINFO_SUMMARY=""
@@ -10312,6 +10357,7 @@ main() {
   local -a start_args
 
   ika_ini_warn_unknown
+  setup_wsl_gpu_env
 
   case "${command}" in
     __launch-in-vcpu-scope)
