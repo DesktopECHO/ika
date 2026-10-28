@@ -1,0 +1,427 @@
+#!/usr/bin/bash
+
+# ika-wsl-setup: readies a WSL2 distribution for Ika.
+#
+# Ika's Cuttlefish needs things a fresh WSL2 does not have: KVM (nested
+# virtualization is off by default), the vhost-vsock, vhost-net and udmabuf
+# devices (Microsoft's kernel is built without them), tap devices, nftables
+# NAT, systemd (for the user scope Ika starts Cuttlefish in and for udev) and
+# cgroup v2 with the cpu controller. This script checks each, installs what is
+# missing, and says when to run `wsl --shutdown` from Windows.
+#
+# The kernel is built from Microsoft's WSL2-Linux-Kernel at the running
+# kernel's version, with the missing options built in, and installed on the
+# Windows side (%USERPROFILE%\ika-wsl\), where .wslconfig points at it. The
+# build needs a few GB of disk and takes ten minutes to an hour.
+#
+# Usage: ika-wsl-setup [--check] [--kernel] [--no-kernel]
+#   --check      Report what is missing and change nothing
+#   --kernel     Build and install the kernel even if nothing is missing
+#   --no-kernel  Change the configuration only, never build the kernel
+#
+# Environment: IKA_WSL_BUILD_DIR (default ~/ika/wsl-kernel) is where the
+# kernel is built; IKA_WINDOWS_PROFILE overrides the Windows user profile
+# directory (as a WSL path, such as /mnt/c/Users/NAME) when it cannot be read
+# from Windows.
+
+set -euo pipefail
+
+SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
+KERNEL_REPO="https://github.com/microsoft/WSL2-Linux-Kernel"
+BUILD_DIR="${IKA_WSL_BUILD_DIR:-${HOME}/ika/wsl-kernel}"
+USER="${USER:-$(id -un)}"
+
+# Kernel options Ika needs, built in: KVM for crosvm, vhost-vsock for adb
+# (every Cuttlefish adb mode runs over vsock), vhost-net and tap for the
+# guest's Ethernet, udmabuf for gfxstream's host-visible memory, bridge and
+# nftables NAT for cvdalloc's guest network, and the cgroup cpu controller
+# for the vCPU scope.
+readonly -a KERNEL_OPTIONS=(
+  VIRTUALIZATION KVM KVM_INTEL KVM_AMD
+  VSOCKETS VIRTIO_VSOCKETS VIRTIO_VSOCKETS_COMMON VHOST_MENU VHOST VHOST_NET VHOST_VSOCK
+  TUN TAP BRIDGE VETH
+  DMA_SHARED_BUFFER UDMABUF
+  NETFILTER NF_CONNTRACK NF_NAT NF_NAT_MASQUERADE NF_TABLES NF_TABLES_INET NF_TABLES_IPV4
+  NFT_NAT NFT_MASQ NFT_CT NFT_COMPAT
+  CGROUPS CGROUP_SCHED FAIR_GROUP_SCHED CPUSETS CGROUP_CPUACCT
+  IKCONFIG IKCONFIG_PROC
+)
+
+# The options whose absence calls for a kernel build; the rest are enabled
+# alongside when one is built.
+readonly -a REQUIRED_OPTIONS=(KVM VHOST_VSOCK VHOST_NET TUN UDMABUF BRIDGE NF_TABLES NFT_NAT NFT_MASQ)
+
+log() { printf '[%s] %s\n' "${SCRIPT_NAME}" "$*"; }
+warn() { printf '[%s] warning: %s\n' "${SCRIPT_NAME}" "$*" >&2; }
+die() { printf '[%s] error: %s\n' "${SCRIPT_NAME}" "$*" >&2; exit 1; }
+
+run_as_root() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+# --- ini files ---------------------------------------------------------------
+
+# Sets KEY to VALUE in SECTION of the ini FILE, creating the file, the
+# section or the key as needed and keeping everything else. Lines are written
+# with LF; WSL reads .wslconfig and wsl.conf either way.
+ini_set() {
+  local file="$1" section="$2" key="$3" value="$4"
+  local tmp
+  tmp="$(mktemp)"
+  if [[ -f "${file}" ]]; then
+    tr -d '\r' < "${file}"
+  fi | INI_SECTION="${section}" INI_KEY="${key}" INI_VALUE="${value}" awk '
+    BEGIN { section = ENVIRON["INI_SECTION"]; key = ENVIRON["INI_KEY"]; value = ENVIRON["INI_VALUE"] }
+    function print_key() { print key "=" value; done = 1 }
+    # Blank lines at the end of the section wait, so that an added key goes
+    # before them
+    function flush_blanks() { while (blanks > 0) { print ""; blanks-- } }
+    /^[[:space:]]*\[/ {
+      if (in_section && !done) print_key()
+      flush_blanks()
+      name = $0
+      sub(/^[[:space:]]*\[/, "", name); sub(/\].*$/, "", name)
+      in_section = (tolower(name) == tolower(section))
+      found = found || in_section
+      print; next
+    }
+    in_section && /^[[:space:]]*$/ { blanks++; next }
+    in_section && !done {
+      line = $0
+      sub(/[[:space:]]*[=#;].*$/, "", line); sub(/^[[:space:]]*/, "", line)
+      if (tolower(line) == tolower(key)) { flush_blanks(); print_key(); next }
+    }
+    { flush_blanks(); print }
+    END {
+      if (in_section && !done) print_key()
+      flush_blanks()
+      if (!found) { if (NR > 0) print ""; print "[" section "]" }
+      if (!done) print_key()
+    }' > "${tmp}"
+  if [[ -w "${file}" || ( ! -e "${file}" && -w "$(dirname "${file}")" ) ]]; then
+    cp "${tmp}" "${file}"
+  else
+    run_as_root cp "${tmp}" "${file}"
+  fi
+  rm -f "${tmp}"
+}
+
+# Prints the value of KEY in SECTION of FILE, or nothing
+ini_get() {
+  local file="$1" section="$2" key="$3"
+  [[ -f "${file}" ]] || return 0
+  tr -d '\r' < "${file}" | INI_SECTION="${section}" INI_KEY="${key}" awk '
+    BEGIN { section = ENVIRON["INI_SECTION"]; key = ENVIRON["INI_KEY"] }
+    /^[[:space:]]*\[/ {
+      name = $0
+      sub(/^[[:space:]]*\[/, "", name); sub(/\].*$/, "", name)
+      in_section = (tolower(name) == tolower(section)); next
+    }
+    in_section && /^[[:space:]]*[^#;=[:space:]]/ {
+      line = $0
+      k = line; sub(/[[:space:]]*=.*$/, "", k); sub(/^[[:space:]]*/, "", k)
+      if (tolower(k) == tolower(key)) {
+        v = line; sub(/^[^=]*=[[:space:]]*/, "", v); sub(/[[:space:]]*$/, "", v)
+        print v; exit
+      }
+    }'
+}
+
+# A Windows path for .wslconfig: backslashes doubled
+wslconfig_path() {
+  printf '%s\n' "${1//\\/\\\\}"
+}
+
+# Adds WORD to a kernel command line unless it is there
+command_line_with() {
+  local line="$1" word="$2"
+  if [[ " ${line} " == *" ${word} "* ]]; then
+    printf '%s\n' "${line}"
+  elif [[ -z "${line}" ]]; then
+    printf '%s\n' "${word}"
+  else
+    printf '%s %s\n' "${line}" "${word}"
+  fi
+}
+
+# --- the host ----------------------------------------------------------------
+
+# 6.6.87.2-microsoft-standard-WSL2 -> 6.6.87.2
+wsl_kernel_version() {
+  local release="$1"
+  release="${release%%-*}"
+  [[ "${release}" =~ ^[0-9]+(\.[0-9]+)+$ ]] || return 1
+  printf '%s\n' "${release}"
+}
+
+# 6.6.87.2 -> linux-msft-wsl-6.6.y
+wsl_kernel_branch() {
+  local major minor
+  IFS=. read -r major minor _ <<< "$1"
+  printf 'linux-msft-wsl-%s.%s.y\n' "${major}" "${minor}"
+}
+
+is_wsl2() {
+  [[ -r /proc/version ]] && grep -qi 'microsoft' /proc/version && [[ "$(uname -r)" == *WSL2* ]]
+}
+
+# The Windows user profile directory, as a WSL path
+windows_profile_dir() {
+  local dir=""
+  if [[ -n "${IKA_WINDOWS_PROFILE:-}" ]]; then
+    dir="${IKA_WINDOWS_PROFILE}"
+  elif command -v cmd.exe >/dev/null 2>&1; then
+    dir="$(cd /mnt/c 2>/dev/null && cmd.exe /C 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r\n' || true)"
+    [[ -n "${dir}" ]] && dir="$(wslpath -u "${dir}" 2>/dev/null || true)"
+  fi
+  [[ -d "${dir}" ]] || return 1
+  printf '%s\n' "${dir}"
+}
+
+kernel_config_has() {
+  local option="$1"
+  [[ -r /proc/config.gz ]] || return 2
+  zcat /proc/config.gz | grep -qE "^CONFIG_${option}=(y|m)$"
+}
+
+# One line per missing component: NAME<TAB>what to do
+missing_components() {
+  local option
+  local -a missing_options=()
+
+  if ! grep -qwE 'svm|vmx' /proc/cpuinfo; then
+    printf 'nested-virtualization\tthe CPU has no virtualization extensions: nestedVirtualization is off in .wslconfig (or the host cannot nest)\n'
+  elif [[ ! -e /dev/kvm ]]; then
+    printf 'kvm\t/dev/kvm is missing: the kernel has no KVM\n'
+  fi
+
+  local status
+  for option in "${REQUIRED_OPTIONS[@]}"; do
+    status=0
+    kernel_config_has "${option}" || status=$?
+    if [[ "${status}" -eq 2 ]]; then
+      # No /proc/config.gz: go by the devices (KVM is covered above)
+      case "${option}" in
+        VHOST_VSOCK) [[ -e /dev/vhost-vsock ]] || missing_options+=("${option}") ;;
+        VHOST_NET) [[ -e /dev/vhost-net ]] || missing_options+=("${option}") ;;
+        UDMABUF) [[ -e /dev/udmabuf ]] || missing_options+=("${option}") ;;
+        TUN) [[ -e /dev/net/tun ]] || missing_options+=("${option}") ;;
+      esac
+    elif [[ "${status}" -ne 0 ]]; then
+      missing_options+=("${option}")
+    fi
+  done
+  if [[ "${#missing_options[@]}" -gt 0 ]]; then
+    printf 'kernel\tthe kernel lacks %s: a kernel with them built in is needed\n' "${missing_options[*]}"
+  fi
+
+  if [[ "$(ps -o comm= -p 1 2>/dev/null)" != "systemd" ]]; then
+    printf 'systemd\tsystemd is not running: enable it in /etc/wsl.conf\n'
+  fi
+
+  if [[ ! -f /sys/fs/cgroup/cgroup.controllers ]]; then
+    printf 'cgroup2\tcgroups are not the v2 hierarchy: add cgroup_no_v1=all to the kernel command line\n'
+  elif ! grep -qw cpu /sys/fs/cgroup/cgroup.controllers; then
+    printf 'cgroup-cpu\tthe cgroup cpu controller is missing: the kernel needs CGROUP_SCHED\n'
+  fi
+
+  local group
+  for group in kvm cvdnetwork render video; do
+    if getent group "${group}" >/dev/null 2>&1 && ! id -nG "${USER}" | tr ' ' '\n' | grep -Fxq "${group}"; then
+      printf 'group-%s\t%s is not in the %s group\n' "${group}" "${USER}" "${group}"
+    fi
+  done
+}
+
+# --- the kernel ---------------------------------------------------------------
+
+install_build_dependencies() {
+  if command -v apt-get >/dev/null 2>&1; then
+    run_as_root env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+    run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      build-essential flex bison bc libssl-dev libelf-dev dwarves python3 cpio git pkg-config
+  elif command -v dnf >/dev/null 2>&1; then
+    run_as_root dnf -y install gcc make flex bison bc openssl-devel elfutils-libelf-devel \
+      dwarves python3 cpio git perl
+  elif command -v pacman >/dev/null 2>&1; then
+    run_as_root pacman -S --needed --noconfirm base-devel bc pahole python cpio git
+  else
+    warn "unknown package manager: install the kernel build tools (gcc, make, flex, bison, bc, libssl, libelf, pahole) yourself"
+  fi
+}
+
+# Clones Microsoft's kernel at the running version into DIR
+fetch_kernel_source() {
+  local dir="$1" version="$2"
+  local tag="linux-msft-wsl-${version}"
+  local branch
+  branch="$(wsl_kernel_branch "${version}")"
+
+  if [[ -f "${dir}/Makefile" ]]; then
+    log "using the kernel source in ${dir}"
+    return 0
+  fi
+  mkdir -p "$(dirname "${dir}")"
+  if git ls-remote --tags "${KERNEL_REPO}" "refs/tags/${tag}" 2>/dev/null | grep -q .; then
+    log "cloning ${KERNEL_REPO} at ${tag}..."
+    git clone --depth 1 --branch "${tag}" "${KERNEL_REPO}" "${dir}"
+  else
+    log "no tag ${tag}; cloning branch ${branch}..."
+    git clone --depth 1 --branch "${branch}" "${KERNEL_REPO}" "${dir}"
+  fi
+}
+
+# Builds the kernel in DIR and prints the image's path
+build_kernel() {
+  local dir="$1"
+  local config target image option
+  local -a absent=()
+
+  case "$(uname -m)" in
+    x86_64) config="Microsoft/config-wsl"; target="bzImage"; image="arch/x86/boot/bzImage" ;;
+    aarch64) config="Microsoft/config-wsl-arm64"; target="Image"; image="arch/arm64/boot/Image" ;;
+    *) die "unsupported architecture $(uname -m)" ;;
+  esac
+
+  (
+    cd "${dir}"
+    [[ -f "${config}" ]] || die "${config} is not in the kernel source"
+    cp "${config}" .config
+    for option in "${KERNEL_OPTIONS[@]}"; do
+      scripts/config --file .config --enable "${option}"
+    done
+    # Name the kernel after what it carries
+    scripts/config --file .config --set-str LOCALVERSION "-ika"
+    make olddefconfig >/dev/null
+    for option in "${REQUIRED_OPTIONS[@]}"; do
+      grep -qE "^CONFIG_${option}=y$" .config || absent+=("${option}")
+    done
+    if [[ "${#absent[@]}" -gt 0 ]]; then
+      die "the configuration could not enable ${absent[*]}: check their dependencies in ${dir}/.config"
+    fi
+    log "building the kernel with $(nproc) jobs (this takes a while)..."
+    make -j"$(nproc)" "${target}" >"${dir}.build.log" 2>&1 || die "the kernel build failed; see ${dir}.build.log"
+    [[ -f "${image}" ]] || die "the build produced no ${image}"
+  ) >&2
+  printf '%s/%s\n' "${dir}" "${image}"
+}
+
+# Copies the kernel image to the Windows side and points .wslconfig at it
+install_kernel() {
+  local image="$1" profile="$2" version="$3"
+  local dest_dir="${profile}/ika-wsl"
+  local dest="${dest_dir}/bzImage-${version}-ika"
+  local windows_path
+
+  mkdir -p "${dest_dir}"
+  cp "${image}" "${dest}"
+  windows_path="$(wslpath -w "${dest}")"
+  ini_set "${profile}/.wslconfig" wsl2 kernel "$(wslconfig_path "${windows_path}")"
+  log "kernel installed as ${windows_path}"
+}
+
+# --- main ---------------------------------------------------------------------
+
+usage() {
+  sed -n '3,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' 
+}
+
+main() {
+  local check_only="false" force_kernel="false" no_kernel="false"
+  local arg profile wslconfig version missing name reason
+  local need_kernel="false" restart_wsl="false"
+  local command_line image
+
+  for arg in "$@"; do
+    case "${arg}" in
+      --check) check_only="true" ;;
+      --kernel) force_kernel="true" ;;
+      --no-kernel) no_kernel="true" ;;
+      -h|--help) usage; return 0 ;;
+      *) usage >&2; return 1 ;;
+    esac
+  done
+
+  is_wsl2 || die "this is not a WSL2 distribution ($(uname -r)); Ika needs WSL2 with nested virtualization"
+  version="$(wsl_kernel_version "$(uname -r)")" || die "cannot read the kernel version from $(uname -r)"
+
+  missing="$(missing_components)"
+  if [[ -z "${missing}" && "${force_kernel}" != "true" ]]; then
+    log "nothing is missing: KVM, vhost-vsock, vhost-net, udmabuf, systemd, cgroup v2 and the groups are in place"
+    return 0
+  fi
+  if [[ -n "${missing}" ]]; then
+    log "missing:"
+    while IFS=$'\t' read -r name reason; do
+      printf '  %-22s %s\n' "${name}" "${reason}"
+    done <<< "${missing}"
+  fi
+  [[ "${check_only}" != "true" ]] || return 0
+
+  profile="$(windows_profile_dir)" \
+    || die "cannot find the Windows user profile; set IKA_WINDOWS_PROFILE=/mnt/c/Users/NAME"
+  wslconfig="${profile}/.wslconfig"
+
+  # Groups: the login session picks them up at the next start of WSL
+  while IFS=$'\t' read -r name reason; do
+    case "${name}" in
+      group-*)
+        run_as_root usermod -aG "${name#group-}" "${USER}"
+        log "added ${USER} to ${name#group-}"
+        restart_wsl="true"
+        ;;
+      systemd)
+        ini_set /etc/wsl.conf boot systemd true
+        log "enabled systemd in /etc/wsl.conf"
+        restart_wsl="true"
+        ;;
+      nested-virtualization)
+        ini_set "${wslconfig}" wsl2 nestedVirtualization true
+        log "enabled nested virtualization in ${wslconfig}"
+        restart_wsl="true"
+        ;;
+      cgroup2)
+        command_line="$(ini_get "${wslconfig}" wsl2 kernelCommandLine)"
+        ini_set "${wslconfig}" wsl2 kernelCommandLine "$(command_line_with "${command_line}" "cgroup_no_v1=all")"
+        log "added cgroup_no_v1=all to the kernel command line in ${wslconfig}"
+        restart_wsl="true"
+        ;;
+      kernel|kvm|cgroup-cpu)
+        need_kernel="true"
+        ;;
+    esac
+  done <<< "${missing}"
+
+  if [[ "${force_kernel}" == "true" ]]; then
+    need_kernel="true"
+  fi
+  if [[ "${need_kernel}" == "true" && "${no_kernel}" == "true" ]]; then
+    warn "the kernel is missing options but --no-kernel was given; Ika will not start until a kernel with them is installed"
+    need_kernel="false"
+  fi
+
+  if [[ "${need_kernel}" == "true" ]]; then
+    install_build_dependencies
+    fetch_kernel_source "${BUILD_DIR}/src" "${version}"
+    image="$(build_kernel "${BUILD_DIR}/src")"
+    install_kernel "${image}" "${profile}" "${version}"
+    # Nested virtualization is needed by the new kernel's KVM as well
+    ini_set "${wslconfig}" wsl2 nestedVirtualization true
+    restart_wsl="true"
+  fi
+
+  if [[ "${restart_wsl}" == "true" ]]; then
+    printf '\n'
+    log "done. From Windows (PowerShell or cmd), restart WSL:"
+    printf '    wsl --shutdown\n'
+    log "then open the distribution again and run '${SCRIPT_NAME} --check', then 'ika start'."
+  fi
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

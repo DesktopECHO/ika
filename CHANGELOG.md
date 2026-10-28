@@ -322,6 +322,15 @@
   driver has only one. GLES-only hosts keep SkiaGL;
   `--guest_hwui_renderer=skiagl` returns to it on any host.
 
+### Windows (WSL2)
+- `ika-wsl-setup`, installed with `ika-base`, readies a WSL2 distribution
+  for Ika: it reports what is missing (`--check`) and installs it. It
+  enables nested virtualization and cgroup v2 in `.wslconfig` and systemd in
+  `/etc/wsl.conf`, adds the user to Ika's groups, and when Microsoft's kernel
+  lacks vhost-vsock, vhost-net or udmabuf builds the WSL2 kernel at the
+  running version with them built in and points `.wslconfig` at it. See
+  [Windows (WSL2)](CONFIGURATION.md#windows-wsl2).
+
 ### Hardware video decoding
 - `ika start` gives Android a V4L2 video decoder backed by the host's VA-API
   (crosvm `--media-decoder=vaapi`, through the new cvd flag

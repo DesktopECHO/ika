@@ -387,6 +387,29 @@ These have no setting:
 | `IKA_LATENCY=1` | The console logs its frames' latency to `~/ika/console.log` every 300 frames |
 | `NO_COLOR` | `ika app` marks open windows "(open)" instead of bold |
 
+## Windows (WSL2)
+
+Ika runs in a WSL2 distribution (Fedora, Debian, Ubuntu or Arch, from the
+Requirements) once the parts a fresh WSL2 lacks are in place: nested
+virtualization (off by default, so there is no `/dev/kvm`), the vhost-vsock,
+vhost-net and udmabuf devices (Microsoft's kernel is built without them, and
+Cuttlefish's adb runs over vsock), systemd and cgroup v2. Without them
+`ika start` ends with `process monitor has died` and `Cuttlefish did not
+reach boot completion`, because crosvm exits at once.
+
+`ika-wsl-setup`, installed with `ika-base`, reports what is missing
+(`ika-wsl-setup --check`) and installs it: it enables nested virtualization
+and cgroup v2 in `%USERPROFILE%\.wslconfig`, systemd in `/etc/wsl.conf`,
+adds the user to Ika's groups, and when the kernel lacks the devices builds
+Microsoft's WSL2 kernel at the running version with them built in, installs
+it under `%USERPROFILE%\ika-wsl\` and points `.wslconfig` at it. The
+build takes ten minutes to an hour and a few GB under `~/ika/wsl-kernel`
+(`IKA_WSL_BUILD_DIR`); `--no-kernel` changes the configuration only and
+`--kernel` builds the kernel anyway. Afterwards run `wsl --shutdown` from
+Windows, open the distribution again and start Ika. The GPU is reached
+through WSL's `/dev/dxg` and Mesa's D3D12 drivers; if gfxstream fails on
+them, `ika start --gpu_mode=guest_swiftshader` renders in software.
+
 ## Files and folders
 
 Ika keeps its files in `~/ika`:
