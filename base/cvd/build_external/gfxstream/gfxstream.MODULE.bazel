@@ -84,5 +84,9 @@ git_repository(
         # of giving every ASTC texture a decompressed RGBA8 copy 4-16x its
         # size; the guest still gets linear ASTC through emulation.
         "@//build_external/gfxstream:PATCH.gfxstream.astc-linear-only-emulation.patch",
+        # No dedicated memory for an emulated compressed image: its block images
+        # are bound into the same memory. Mesa's Dozen (WSL) otherwise gives them
+        # the output image's D3D12 resource and the device is removed.
+        "@//build_external/gfxstream:PATCH.gfxstream.compressed-image-no-dedicated-memory.patch",
     ],
 )
