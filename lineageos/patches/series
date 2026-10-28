@@ -37,6 +37,7 @@ external/mesa3d patches/external-mesa3d-trace-hex-table.patch
 external/mesa3d patches/external-mesa3d-venus-queue-family-pnext.patch
 external/mesa3d patches/external-mesa3d-venus-memory-report-import-failure.patch
 external/mesa3d patches/external-mesa3d-venus-yv12-ahb.patch
+external/mesa3d patches/external-mesa3d-gfxstream-unknown-image-view-filter.patch
 external/libavc patches/external-libavc-encoder-max-size.patch
 external/libavc patches/external-libavc-vbr-vbv-floor.patch
 external/v4l2_codec2 patches/external-v4l2_codec2-virtio-media.patch

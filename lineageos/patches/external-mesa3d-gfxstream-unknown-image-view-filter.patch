@@ -1,0 +1,66 @@
+Patch summary:
+Write descriptor image views that are not live image views as
+VK_NULL_HANDLE, as gfxstream already does for samplers. Encoding a
+descriptor reads the host handle through the guest handle, so a stale or
+unset view crashes the app in get_host_u64_VkImageView. ANGLE leaves a
+storage-image descriptor's view unset for an image unit with no texture
+bound (UpdateDescriptorSetsBuilder::updateImages skips it), which native
+drivers never look at: 3DMark Sling Shot Extreme's bloom compute pass
+crashed in vkUpdateDescriptorSets from ContextVk::memoryBarrier.
+
+diff --git a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+index 859781b..c9540f6 100644
+--- a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
++++ b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+@@ -277,6 +277,22 @@ VkDescriptorImageInfo ResourceTracker::filterNonexistentSampler(
+     return res;
+ }
+ 
++// Encoding a descriptor reads the host handle through the guest handle, so a
++// handle that is not a live image view crashes the app. ANGLE leaves a
++// storage-image descriptor's view unset for an image unit with no texture
++// bound, which native drivers never look at. Such views are written as
++// VK_NULL_HANDLE instead.
++VkDescriptorImageInfo ResourceTracker::filterNonexistentImageView(
++    const VkDescriptorImageInfo& inputInfo) {
++    VkDescriptorImageInfo res = inputInfo;
++
++    if (res.imageView && info_VkImageView.find(res.imageView) == info_VkImageView.end()) {
++        res.imageView = VK_NULL_HANDLE;
++    }
++
++    return res;
++}
++
+ void ResourceTracker::emitDeviceMemoryReport(const VkDevice_Info& info,
+                                              VkDeviceMemoryReportEventTypeEXT type,
+                                              uint64_t memoryObjectId, VkDeviceSize size,
+@@ -5619,6 +5635,8 @@ void ResourceTracker::on_vkUpdateDescriptorSets(void* context, VkDevice device,
+                 }
+                 transformedImageInfos[imageInfoIndex] =
+                     filterNonexistentSampler(transformedImageInfos[imageInfoIndex]);
++                transformedImageInfos[imageInfoIndex] =
++                    filterNonexistentImageView(transformedImageInfos[imageInfoIndex]);
+                 ++imageInfoIndex;
+             }
+         }
+@@ -7345,6 +7363,7 @@ void ResourceTracker::sanitizePushDescriptorWrites(
+                     // the pipeline layout.
+                     imgInfo.sampler = VK_NULL_HANDLE;
+                 }
++                imgInfo = filterNonexistentImageView(imgInfo);
+                 dstImageInfos[j] = imgInfo;
+             }
+             write.pImageInfo = dstImageInfos;
+diff --git a/src/gfxstream/guest/vulkan_enc/ResourceTracker.h b/src/gfxstream/guest/vulkan_enc/ResourceTracker.h
+index e67603d..f2c42da 100644
+--- a/src/gfxstream/guest/vulkan_enc/ResourceTracker.h
++++ b/src/gfxstream/guest/vulkan_enc/ResourceTracker.h
+@@ -938,6 +938,7 @@ class ResourceTracker {
+     };
+ 
+     VkDescriptorImageInfo filterNonexistentSampler(const VkDescriptorImageInfo& inputInfo);
++    VkDescriptorImageInfo filterNonexistentImageView(const VkDescriptorImageInfo& inputInfo);
+ 
+     void sanitizePushDescriptorWrites(uint32_t descriptorWriteCount,
+                                       const VkWriteDescriptorSet* pDescriptorWrites,
