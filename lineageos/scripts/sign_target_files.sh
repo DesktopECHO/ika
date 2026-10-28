@@ -130,6 +130,11 @@ allowlisted_presigned_apks=(
   GmsCore.apk
   GsfProxy.apk
 
+  # The Android TV Play Store (MindTheGapps' build) keeps Google's signature.
+  # Its module is declared in every build, so it is listed in apkcerts.txt
+  # even where only MindTheGapps images install it.
+  Tubesky.apk
+
   # AOSP CTS / test fixtures are intentionally presigned, malformed, or signed
   # with specific fixture certs. Re-signing changes the behavior under test.
   AndroidXComposeStartupApp.apk
