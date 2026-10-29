@@ -1444,8 +1444,12 @@ sc_screen_apply_frame(struct sc_screen *screen, bool can_resize) {
     }
 
     // After the flex display has seen the frame: in a raw frame, the part
-    // showing the display depends on the size it shows
-    sc_screen_update_titlebar_color(screen, frame, false);
+    // showing the display depends on the size it shows. While the window is
+    // resized, the frames are not what the window shows (it holds a preview):
+    // the color is read again once the hold ends (SC_EVENT_FLEX_TIMER)
+    if (!screen->flex_display || !sc_flex_is_holding(&screen->flex)) {
+        sc_screen_update_titlebar_color(screen, frame, false);
+    }
 
     if (screen->pixel_mode && !screen->raw) {
         if (sc_screen_get_frame_corner_color(frame, &screen->content_bg)) {
@@ -1745,10 +1749,12 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
                     && screen->window_shown) {
                 if (screen->raw) {
                     sc_screen_update_raw_content_size(screen);
-                    // The shown size changed without a new frame (a still
-                    // app sends none): the title bar color was read from
-                    // where the display used to be
-                    if (screen->frame->data[0]) {
+                    // The hold has ended without a new frame (a still app
+                    // sends none): read the title bar color from the display
+                    // as it is shown now. The timer also animates the hold,
+                    // when the frames are not what the window shows.
+                    if (screen->frame->data[0]
+                            && !sc_flex_is_holding(&screen->flex)) {
                         sc_screen_update_titlebar_color(screen, screen->frame,
                                                         true);
                     }
