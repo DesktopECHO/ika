@@ -16,8 +16,9 @@
  *    then come from the first vertex, which differs only when a primitive's
  *    vertices carry different flat values.
  *
- * 3. Chromium's Vulkan backend (Chrome, WebView) requires samplerYcbcrConversion,
- *    which dzn lacks. For instances other than gfxstream's own ("AEMU"), the
+ * 3. Chromium's Vulkan backends (Chrome, WebView, and Dawn under Chrome's
+ *    Graphite) require samplerYcbcrConversion, which dzn lacks. For instances
+ *    named other than gfxstream's own ("AEMU"), and for Dawn's, the
  *    layer reports the feature, hands out placeholder conversion objects and
  *    drops VkSamplerYcbcrConversionInfo before dzn sees it: sampling then reads
  *    the image as is, without YCbCr-to-RGB conversion. Set IKA_DZN_FAKE_YCBCR=0
@@ -41,6 +42,13 @@
  *    (DXGI_ERROR_INVALID_CALL). For such output images, unless the memory is
  *    imported or exported, the layer drops VkMemoryDedicatedAllocateInfo: dzn
  *    then creates a heap and places each image in it.
+ *
+ * 6. Chrome's Graphite renderer runs on Dawn, whose Vulkan backend requires
+ *    fullDrawIndexUint32. dzn reports it off, with Vulkan's minimum
+ *    maxDrawIndexedIndexValue of 2^24 - 1, although D3D12 takes any 32-bit index
+ *    value; without it Chrome's GPU process fails and Chrome exits ("GPU process
+ *    isn't usable"). The layer reports the feature and the full 32-bit limit,
+ *    and clears the feature before dzn's vkCreateDevice sees it.
  *
  * Diagnostics: with IKA_DZN_TRACE_REMOVAL=1 (and IKA_D3D12_DRED=1 for the
  * libd3d12.so shim), the layer checks after each resource, descriptor and
@@ -69,6 +77,8 @@ struct instance_data {
   PFN_vkGetPhysicalDeviceImageFormatProperties2 get_image_format_props2;
   PFN_vkGetPhysicalDeviceImageFormatProperties2 get_image_format_props2_khr;
   PFN_vkEnumerateDeviceExtensionProperties enumerate_device_extensions;
+  PFN_vkGetPhysicalDeviceFeatures get_features;
+  PFN_vkGetPhysicalDeviceProperties get_properties;
   PFN_vkGetPhysicalDeviceFeatures2 get_features2;
   PFN_vkGetPhysicalDeviceFeatures2 get_features2_khr;
   PFN_vkGetPhysicalDeviceProperties2 get_properties2;
@@ -234,12 +244,19 @@ static VkBool32 *ycbcr_feature(VkBaseOutStructure *s) {
   return NULL;
 }
 
+static VKAPI_ATTR void VKAPI_CALL layer_GetPhysicalDeviceFeatures(VkPhysicalDevice pdev,
+                                                                 VkPhysicalDeviceFeatures *features) {
+  find_instance(pdev)->get_features(pdev, features);
+  features->fullDrawIndexUint32 = VK_TRUE;
+}
+
 static void fixed_features2(struct instance_data *data, PFN_vkGetPhysicalDeviceFeatures2 next,
                             VkPhysicalDevice pdev, VkPhysicalDeviceFeatures2 *features) {
   struct unlinked removed[MAX_UNLINKED];
   int n = unlink_structs(features, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT, removed);
   next(pdev, features);
   restore_chain(removed, n);
+  features->features.fullDrawIndexUint32 = VK_TRUE;
   for (int i = 0; i < n; i++) {
     VkPhysicalDeviceProvokingVertexFeaturesEXT *pv = (VkPhysicalDeviceProvokingVertexFeaturesEXT *)removed[i].removed;
     pv->provokingVertexLast = VK_TRUE;
@@ -265,12 +282,19 @@ static VKAPI_ATTR void VKAPI_CALL layer_GetPhysicalDeviceFeatures2KHR(VkPhysical
   fixed_features2(data, data->get_features2_khr, pdev, features);
 }
 
+static VKAPI_ATTR void VKAPI_CALL layer_GetPhysicalDeviceProperties(VkPhysicalDevice pdev,
+                                                                   VkPhysicalDeviceProperties *props) {
+  find_instance(pdev)->get_properties(pdev, props);
+  props->limits.maxDrawIndexedIndexValue = UINT32_MAX;
+}
+
 static void fixed_properties2(PFN_vkGetPhysicalDeviceProperties2 next, VkPhysicalDevice pdev,
                               VkPhysicalDeviceProperties2 *props) {
   struct unlinked removed[MAX_UNLINKED];
   int n = unlink_structs(props, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_PROPERTIES_EXT, removed);
   next(pdev, props);
   restore_chain(removed, n);
+  props->properties.limits.maxDrawIndexedIndexValue = UINT32_MAX;
   for (int i = 0; i < n; i++) {
     VkPhysicalDeviceProvokingVertexPropertiesEXT *pv =
         (VkPhysicalDeviceProvokingVertexPropertiesEXT *)removed[i].removed;
@@ -318,6 +342,8 @@ static VKAPI_ATTR VkResult VKAPI_CALL layer_CreateInstance(const VkInstanceCreat
   if (!data->get_image_format_props2_khr) data->get_image_format_props2_khr = data->get_image_format_props2;
   data->enumerate_device_extensions =
       (PFN_vkEnumerateDeviceExtensionProperties)gipa(*instance, "vkEnumerateDeviceExtensionProperties");
+  data->get_features = (PFN_vkGetPhysicalDeviceFeatures)gipa(*instance, "vkGetPhysicalDeviceFeatures");
+  data->get_properties = (PFN_vkGetPhysicalDeviceProperties)gipa(*instance, "vkGetPhysicalDeviceProperties");
   data->get_features2 = (PFN_vkGetPhysicalDeviceFeatures2)gipa(*instance, "vkGetPhysicalDeviceFeatures2");
   data->get_features2_khr = (PFN_vkGetPhysicalDeviceFeatures2)gipa(*instance, "vkGetPhysicalDeviceFeatures2KHR");
   if (!data->get_features2_khr) data->get_features2_khr = data->get_features2;
@@ -325,10 +351,14 @@ static VKAPI_ATTR VkResult VKAPI_CALL layer_CreateInstance(const VkInstanceCreat
   data->get_properties2_khr =
       (PFN_vkGetPhysicalDeviceProperties2)gipa(*instance, "vkGetPhysicalDeviceProperties2KHR");
   if (!data->get_properties2_khr) data->get_properties2_khr = data->get_properties2;
-  /* gfxstream's own instance is "AEMU"; Android apps' instances carry the app's name. */
+  /* gfxstream's own instance is "AEMU"; Android apps' instances carry the app's
+   * name. Dawn, Chrome's Graphite backend, leaves the name NULL and sets the
+   * engine to "Dawn". Other unnamed instances, Android's own, are left alone. */
   const VkApplicationInfo *app = info->pApplicationInfo;
   const char *fake = getenv("IKA_DZN_FAKE_YCBCR");
-  data->fake_ycbcr = app && app->pApplicationName && strcmp(app->pApplicationName, "AEMU") &&
+  data->fake_ycbcr = app &&
+                     ((app->pApplicationName && strcmp(app->pApplicationName, "AEMU")) ||
+                      (app->pEngineName && !strcmp(app->pEngineName, "Dawn"))) &&
                      !(fake && !strcmp(fake, "0"));
 
   pthread_mutex_lock(&lock);
@@ -390,7 +420,21 @@ static VKAPI_ATTR VkResult VKAPI_CALL layer_CreateDevice(VkPhysicalDevice pdev, 
       }
     }
   }
+  /* Nor for the reported fullDrawIndexUint32. */
+  VkPhysicalDeviceFeatures enabled;
+  if (info->pEnabledFeatures) {
+    enabled = *info->pEnabledFeatures;
+    enabled.fullDrawIndexUint32 = VK_FALSE;
+    fixed.pEnabledFeatures = &enabled;
+  }
+  VkPhysicalDeviceFeatures2 *features2 = NULL;
+  for (VkBaseOutStructure *s = (VkBaseOutStructure *)fixed.pNext; s; s = s->pNext) {
+    if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2) features2 = (VkPhysicalDeviceFeatures2 *)s;
+  }
+  VkBool32 full_index = features2 ? features2->features.fullDrawIndexUint32 : VK_FALSE;
+  if (features2) features2->features.fullDrawIndexUint32 = VK_FALSE;
   VkResult result = create(pdev, &fixed, alloc, device);
+  if (features2) features2->features.fullDrawIndexUint32 = full_index;
   for (int i = 0; i < ycbcr_count; i++) *ycbcr_enables[i] = VK_TRUE;
   restore_chain(removed, n);
   free(names);
@@ -931,6 +975,8 @@ EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL ika_dzn_fix_GetInstanceProcAddr(
     return (PFN_vkVoidFunction)layer_GetPhysicalDeviceImageFormatProperties2KHR;
   if (!strcmp(name, "vkEnumerateDeviceExtensionProperties"))
     return (PFN_vkVoidFunction)layer_EnumerateDeviceExtensionProperties;
+  if (!strcmp(name, "vkGetPhysicalDeviceFeatures")) return (PFN_vkVoidFunction)layer_GetPhysicalDeviceFeatures;
+  if (!strcmp(name, "vkGetPhysicalDeviceProperties")) return (PFN_vkVoidFunction)layer_GetPhysicalDeviceProperties;
   if (!strcmp(name, "vkGetPhysicalDeviceFeatures2")) return (PFN_vkVoidFunction)layer_GetPhysicalDeviceFeatures2;
   if (!strcmp(name, "vkGetPhysicalDeviceFeatures2KHR"))
     return (PFN_vkVoidFunction)layer_GetPhysicalDeviceFeatures2KHR;

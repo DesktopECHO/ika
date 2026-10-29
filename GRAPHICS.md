@@ -277,8 +277,12 @@ choosing the GPU mode:
   - It offers `VK_EXT_provoking_vertex`, without which ANGLE stops at OpenGL
     ES 2.0. Flat-shaded values come from the first vertex.
   - For Android's Vulkan, it offers `samplerYcbcrConversion`, which
-    Chromium's Vulkan backend needs. The conversion is skipped, so YCbCr
+    Chromium's Vulkan backends need. The conversion is skipped, so YCbCr
     images are sampled as they are.
+  - It offers `fullDrawIndexUint32` and the full 32-bit index range, which
+    D3D12 has but Dozen does not report. Chrome draws with Skia Graphite on
+    Dawn, and Dawn's Vulkan backend requires the feature: without it Chrome
+    exits at start ("GPU process isn't usable").
   - It keeps gfxstream's ETC2 and ASTC emulation from binding other images
     into a dedicated allocation, which removes the D3D12 device. Ika's
     gfxstream has this fix too.
