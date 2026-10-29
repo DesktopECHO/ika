@@ -2180,7 +2180,7 @@ App windows:
   Settings), and need no quotes when they contain spaces.
 
   '${SCRIPT_NAME} app sync' adds each launchable app to the desktop's app
-  menu, as its label or "🎮 ∙ LABEL" for a game, with its own
+  menu, as "∙ LABEL", or "🎮 ∙ LABEL" for a game, with its own
   icon, in an "Android Apps (Ika)" group (a GNOME app-grid folder, or a
   submenu on KDE Plasma, XFCE, Cinnamon and MATE), and removes entries for
   apps that were uninstalled. While the VM runs, a watcher started by 'start'
@@ -5949,9 +5949,10 @@ app_display_name() {
   launcher="$(app_menu_data_dir)/applications/$(app_window_id "${package}").desktop"
   if [[ -f "${launcher}" ]]; then
     name="$(sed -n '/^Name=/{s///p;q}' "${launcher}")"
-    # The game marker, or the app marker of launchers from before it went
+    # The game or app marker, or the app marker of older launchers
     name="${name#🎮 ∙ }"
     name="${name#ᗩ ∙ }"
+    name="${name#∙ }"
     name="${name//\\\\/\\}"
   fi
   if [[ -z "${name}" && -s "${APP_LIST_CACHE}" ]]; then
@@ -8439,7 +8440,7 @@ refresh_app_games_file() {
   grep -v '^ika-games-done' <<<"${output//$'\r'/}" | grep -v '^$' > "${APP_GAMES_FILE}" || true
 }
 
-# Prints the launcher's menu name: the app label, marked as a game.
+# Prints the launcher's menu name: the app label, marked as a game or an app.
 app_launcher_name() {
   local label="$1"
   local package="$2"
@@ -8447,7 +8448,7 @@ app_launcher_name() {
   if is_game_app "${package}"; then
     printf '🎮 ∙ %s\n' "${label}"
   else
-    printf '%s\n' "${label}"
+    printf '∙ %s\n' "${label}"
   fi
 }
 

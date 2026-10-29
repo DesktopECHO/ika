@@ -148,13 +148,13 @@ assert_name com.example.game 'Back\slash Game'
 assert_name com.example.app 'Tom & Jerry'
 assert_name com.example.listed 'Listed App'
 assert_name com.example.titled 'Titled App'
-# An app's launcher is named by its label, a game's marked as one; a label with
+# An app's launcher is named "∙ LABEL", a game's "🎮 ∙ LABEL"; a label with
 # " ∙ " in it is kept whole, and the app marker of an older launcher dropped
-[[ "$(app_launcher_name 'Tom & Jerry' com.example.app)" == 'Tom & Jerry' ]] || fail "an app's launcher name is marked"
+[[ "$(app_launcher_name 'Tom & Jerry' com.example.app)" == '∙ Tom & Jerry' ]] || fail "an app's launcher name is not marked"
 [[ "$(app_launcher_name 'Chess' com.example.game)" == '🎮 ∙ Chess' ]] || fail "a game's launcher name is not marked"
 write_app_launcher "${apps_dir}" 'Rock ∙ Roll' com.example.dot /icons/app.png
 assert_name com.example.dot 'Rock ∙ Roll'
-sed -i 's/^Name=Tom & Jerry$/Name=ᗩ ∙ Tom \& Jerry/' "${apps_dir}/ika-com.example.app.desktop"
+sed -i 's/^Name=∙ Tom & Jerry$/Name=ᗩ ∙ Tom \& Jerry/' "${apps_dir}/ika-com.example.app.desktop"
 assert_name com.example.app 'Tom & Jerry'
 assert_name com.example.unknown com.example.unknown
 echo "ok: app names come from the launcher, the app list, the window title, or the package"
