@@ -1,0 +1,26 @@
+gtk: destroy hidden decoration surfaces
+
+WSLg shows every subsurface as a window of its own and only removes it when
+the surface is destroyed, so the title bar and shadow a fullscreen window
+unmaps stayed on screen. Destroy them instead; they are created again when
+the window leaves fullscreen.
+
+--- a/src/plugins/gtk/libdecor-gtk.c
++++ b/src/plugins/gtk/libdecor-gtk.c
+@@ -702,11 +702,11 @@
+ static void
+ hide_border_component(struct border_component *border_component)
+ {
+-	if (!border_component->wl_surface)
+-		return;
+-
+-	wl_surface_attach(border_component->wl_surface, NULL, 0, 0);
+-	wl_surface_commit(border_component->wl_surface);
++	/* Destroy the surface instead of unmapping it: WSLg shows every
++	 * subsurface as a window of its own and only removes that window when
++	 * the surface is destroyed, so an unmapped title bar or shadow stays on
++	 * screen. ensure_component() creates it again when it is shown. */
++	free_border_component(border_component);
+ }
+ 
+ static void

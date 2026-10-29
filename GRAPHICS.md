@@ -246,8 +246,8 @@ the count after Android stops: on a leak, it writes a warning to
 
 On WSL2 the only way to the GPU is Direct3D 12, through `/dev/dxg` and the
 libraries in `/usr/lib/wsl/lib`. Mesa's Dozen driver offers it as Vulkan, and
-gfxstream renders on that. `ika-base` carries its own Dozen on x86_64: Mesa
-26.3.0-rc2 with the patches in [tools/wsl/mesa](tools/wsl/mesa), built by
+gfxstream renders on that. `ika-base`, in its Debian, RPM and Arch packages,
+carries its own Dozen on x86_64: Mesa 26.3.0-rc2 with the patches in [tools/wsl/mesa](tools/wsl/mesa), built by
 `build-dozen.sh` with only X11 for a window system, and installed under
 `/usr/lib/cuttlefish-common/wsl/dozen`. It offers Vulkan 1.3. Venus cannot run
 on it: Dozen cannot export its memory as dma-bufs.
@@ -305,6 +305,14 @@ choosing the GPU mode:
 `gpu_mode = auto` then picks `gfxstream_guest_angle`, as Venus needs the
 dma-bufs Dozen cannot export. The start log has a `WSL2:` line when Ika set
 this up.
+
+On WSLg the console and app windows also load Ika's build of libdecor's GTK
+plugin, which draws their title bar and shadow
+([tools/wsl/libdecor](tools/wsl/libdecor), set through `LIBDECOR_PLUGIN_DIR`
+unless you set it). WSLg shows each of those as a window of its own and only
+removes it when it is destroyed, while the plugin hides them in fullscreen by
+unmapping them: a fullscreen window kept a translucent title bar and frame on
+top. Ika's build destroys them instead.
 
 | Variable | Effect |
 | --- | --- |

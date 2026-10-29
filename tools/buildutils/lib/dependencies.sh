@@ -85,11 +85,12 @@ function deb_build_dependency_packages() {
     pkgconf protobuf-compiler
     uuid-dev xxd
 
-    # Ika's WSL2 GPU helpers (tools/wsl), Mesa's Dozen driver among them
+    # Ika's WSL2 helpers (tools/wsl): Mesa's Dozen driver and libdecor's GTK
+    # plugin among them
     directx-headers-dev python3-mako python3-packaging python3-yaml
     libx11-xcb-dev libxcb1-dev libxcb-dri3-dev libxcb-keysyms1-dev
     libxcb-present-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-sync-dev
-    libxcb-xfixes0-dev libxshmfence-dev
+    libxcb-xfixes0-dev libxshmfence-dev libgtk-3-dev
 
     # cuttlefish-frontend Build-Depends (Go + Node.js)
     curl golang-go npm
