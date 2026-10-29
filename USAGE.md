@@ -109,7 +109,7 @@ goes to Android's Download folder.
 While Android runs, Ika lists every Android app in your desktop's app menu,
 in an **Android Apps (Ika)** group: a folder in GNOME's app grid, or a submenu
 on KDE Plasma, XFCE, Cinnamon and MATE. Games are named "🎮 ∙ LABEL" and other
-apps "ᗩ ∙ LABEL", with icons Android draws, as its launcher shows them.
+apps "∙ LABEL", with icons Android draws, as its launcher shows them.
 
 - **Open an app** from its menu entry: it opens in a window of its own. This
   works while Ika is stopped too: Android starts without the console, and the
