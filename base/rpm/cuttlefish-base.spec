@@ -410,6 +410,9 @@ install -m 0644 tools/ika-startup-options.desktop %{buildroot}/usr/share/applica
 install -m 0644 \
   %{buildroot}/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps/scrcpy.png \
   %{buildroot}/usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
+# WSLg looks for icons up to 128x128 only.
+install -Dm 0644 tools/ika-scrcpy-128.png \
+  %{buildroot}/usr/share/icons/hicolor/128x128/apps/ika-scrcpy.png
 
 # Bazel package outputs are copied with their original mode bits, which can
 # leave files read-only in BUILDROOT. Keep staging copies writable so any later
@@ -561,6 +564,7 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/share/applications/ika-install.desktop
 /usr/share/applications/ika-startup-options.desktop
 /usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
+/usr/share/icons/hicolor/128x128/apps/ika-scrcpy.png
 %config(noreplace) /etc/firewalld/zones/cuttlefish.xml
 /etc/NetworkManager/conf.d/99-cuttlefish.conf
 %config(noreplace) /etc/sysctl.d/99-cuttlefish.conf

@@ -268,6 +268,9 @@ override_dh_install:
 	install -m 0644 \
 	    ${cuttlefish_common}/share/icons/hicolor/256x256/apps/scrcpy.png \
 	    debian/ika-base/usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
+	# WSLg looks for icons up to 128x128 only.
+	install -Dm 0644 ../tools/ika-scrcpy-128.png \
+	    debian/ika-base/usr/share/icons/hicolor/128x128/apps/ika-scrcpy.png
 
 # Some bundled shared libraries lack standard Debian shlib metadata.
 .PHONY: override_dh_shlibdeps
