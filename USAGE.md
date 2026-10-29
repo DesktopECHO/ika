@@ -173,6 +173,10 @@ Right-click an app in the menu for:
   a Settings window, for its permissions, storage, notifications, force stop
   and uninstall. `ika app --info NAME` from a terminal.
 
+The Windows Start menu and task bar (WSL2) have no such actions: there, hold
+**Shift** while you click an app to open its **Startup options** instead of
+the app, and keep holding it until the window opens.
+
 ### Start options
 
 **Startup options** (`ika app --options NAME`) opens a window,
