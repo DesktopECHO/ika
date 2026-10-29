@@ -102,4 +102,22 @@ report="$(missing_components)"
 unset -f time_sync_in_place clock_offset_ms windows_utc_offset_minutes linux_utc_offset_minutes kernel_config_has
 echo "ok: the time"
 
+# user_allow_other: uncommented where fuse.conf has it commented out, added
+# otherwise, and the file created when there is none
+run_as_root() { "$@"; }
+FUSE_CONF="${T}/fuse.conf"
+printf '# mount_max = 1000\n#user_allow_other\n' >"${FUSE_CONF}"
+fuse_allows_other && fail "a commented-out user_allow_other counts"
+enable_fuse_allow_other >/dev/null
+expect_equal "$(<"${FUSE_CONF}")" $'# mount_max = 1000\nuser_allow_other' "the uncommented line"
+fuse_allows_other || fail "user_allow_other is not seen"
+printf '# mount_max = 1000\n' >"${FUSE_CONF}"
+enable_fuse_allow_other >/dev/null
+expect_equal "$(<"${FUSE_CONF}")" $'# mount_max = 1000\nuser_allow_other' "the added line"
+rm -f "${FUSE_CONF}"
+enable_fuse_allow_other >/dev/null
+expect_equal "$(<"${FUSE_CONF}")" "user_allow_other" "a new fuse.conf"
+unset -f run_as_root
+echo "ok: user_allow_other"
+
 printf 'PASS: ika-wsl-setup tests\n'
