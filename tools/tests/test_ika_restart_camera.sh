@@ -28,7 +28,9 @@ printf '[camera]\ndevice = auto\n' >"${T}/home/ika/ika.ini"
 # then IKA_CAMERA as the next process would get it. A process after it gets
 # the arguments in ARGS_IN and the environment in IKA_CAMERA_IN.
 parse() {
-  env -i PATH="${PATH}" HOME="${T}/home" CVD_HOME_DIR="${T}/home/ika" \
+  # IKA_WSL_GPU_FIX=0: on a WSL2 host the start notes would also have the
+  # WSL2 GPU line.
+  env -i PATH="${PATH}" HOME="${T}/home" CVD_HOME_DIR="${T}/home/ika" IKA_WSL_GPU_FIX=0 \
       CVD_PRODUCT_OUT="${T}/product" ${IKA_CAMERA_IN:+IKA_CAMERA="${IKA_CAMERA_IN}"} \
       CAMERA="${T}/video7" ROOT="${ROOT}" \
     bash -c '
@@ -79,7 +81,7 @@ expect_equal "$(sed -n 2p <<<"${out}")" "IKA_CAMERA=off" "IKA_CAMERA as ika.ini 
 
 # The camera and anti-flicker lines are for the start log, not the console:
 # parsing the options prints nothing, and the notes are written by flush
-out="$(env -i PATH="${PATH}" HOME="${T}/home" CVD_HOME_DIR="${T}/home/ika" \
+out="$(env -i PATH="${PATH}" HOME="${T}/home" CVD_HOME_DIR="${T}/home/ika" IKA_WSL_GPU_FIX=0 \
     CVD_PRODUCT_OUT="${T}/product" CAMERA="${T}/video7" ROOT="${ROOT}" \
   bash -c '
     source "${ROOT}/tools/ika"
@@ -98,7 +100,7 @@ expect_equal "$(sed -n 2,3p <<<"${out}")" "[ika] camera: ${T}/video7
 [ika] camera anti-flicker: test" "and flush writes them"
 
 # restart gives its notes to the start it runs, and prints nothing itself
-console="$(env -i PATH="${PATH}" HOME="${T}/home" CVD_HOME_DIR="${T}/home/ika" \
+console="$(env -i PATH="${PATH}" HOME="${T}/home" CVD_HOME_DIR="${T}/home/ika" IKA_WSL_GPU_FIX=0 \
     CVD_PRODUCT_OUT="${T}/product" CAMERA="${T}/video7" ROOT="${ROOT}" HANDOFF="${T}/handoff" \
   bash -c '
     source "${ROOT}/tools/ika"
@@ -121,7 +123,7 @@ expect_equal "$(<"${T}/handoff")" "camera: ${T}/video7
 camera anti-flicker: test" "restart hands them to start"
 
 # start writes what restart handed it, then its own, once
-out="$(env -i PATH="${PATH}" HOME="${T}/home" CVD_HOME_DIR="${T}/home/ika" \
+out="$(env -i PATH="${PATH}" HOME="${T}/home" CVD_HOME_DIR="${T}/home/ika" IKA_WSL_GPU_FIX=0 \
     CVD_PRODUCT_OUT="${T}/product" ROOT="${ROOT}" \
     IKA_START_LOG_NOTES="camera: handed
 camera anti-flicker: handed" \

@@ -14,6 +14,7 @@ PACKAGED_SCRCPY_SERVER="/usr/lib/cuttlefish-common/share/scrcpy/scrcpy-server"
 PACKAGED_GETCHROMIUM_BIN="/usr/lib/cuttlefish-common/bin/getchromium"
 PACKAGED_IKA_ROOT_BIN="/usr/lib/cuttlefish-common/bin/ika-root"
 PACKAGED_MADBFS_BIN="/usr/lib/cuttlefish-common/bin/madbfs"
+PACKAGED_WSL_GPU_DIR="/usr/lib/cuttlefish-common/wsl"
 SCRCPY_ICON_DIR_DEFAULT="/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps"
 IKA_SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 
@@ -2902,6 +2903,64 @@ append_arm64_kernel_page_args() {
   esac
 }
 
+# WSL2 reaches the host GPU only through Direct3D 12 (/dev/dxg), which Mesa's
+# Dozen driver offers as Vulkan 1.2. gfxstream runs on it with four settings
+# (GRAPHICS.md, "WSL2"): VK_DRIVER_FILES loads Ika's own Dozen build, with
+# Ika's Lavapipe for the instance extensions gfxstream needs and Dozen does
+# not list; MESA_VK_DEVICE_SELECT hides every device but the Dozen GPU, which
+# gfxstream would otherwise rank below Lavapipe; IKA_DZN_FIX turns on the
+# VK_LAYER_IKA_dzn_fix layer, which works around Dozen's gaps; and the
+# libd3d12.so shim first in LD_LIBRARY_PATH makes every Vulkan instance share
+# one D3D12 device, as WSL allows only a few per process and does not give
+# back a released one's address space. Runs before the first vulkaninfo
+# probe, so GPU mode selection sees what crosvm will. Keeps a VK_DRIVER_FILES
+# or MESA_VK_DEVICE_SELECT the user set; IKA_SYSTEM_DOZEN=1 uses the
+# distribution's Dozen instead of Ika's; IKA_WSL_GPU_FIX=0 turns all of it off.
+setup_wsl_gpu_env() {
+  local summary
+  local device
+  local dozen_icd="${PACKAGED_WSL_GPU_DIR}/dozen/dzn_icd.json"
+  local lavapipe_icd="${PACKAGED_CVD_HOST_OUT}/bin/vk_lavapipe_icd.json"
+  local driver_files=""
+  local dozen_name="Mesa Dozen"
+
+  [[ -e /dev/dxg && -d "${PACKAGED_WSL_GPU_DIR}" ]] || return 0
+  [[ "${IKA_WSL_GPU_FIX:-1}" != "0" ]] || return 0
+  # Already done by the ika that ran this one, as restart does to start.
+  [[ -z "${IKA_WSL_GPU_ENV:-}" ]] || return 0
+  if [[ -z "${VK_DRIVER_FILES:-}" && "${IKA_SYSTEM_DOZEN:-0}" != "1" &&
+        -f "${dozen_icd}" && -f "${lavapipe_icd}" ]]; then
+    driver_files="${dozen_icd}:${lavapipe_icd}"
+    dozen_name="Ika's Mesa Dozen"
+    summary="$(VK_DRIVER_FILES="${driver_files}" probe_vulkaninfo_summary)" || return 0
+  else
+    summary="$(probe_vulkaninfo_summary)" || return 0
+  fi
+
+  # The first Dozen device that is not WARP, Microsoft's software renderer
+  # (vendor 0x1414), as "vendor:device" in MESA_VK_DEVICE_SELECT's hex form.
+  device="$(awk '
+    function finish_device() {
+      if (in_device && !found && driver == "DRIVER_ID_MESA_DOZEN" && vendor != "1414") {
+        found = vendor ":" id
+      }
+    }
+    /^GPU[0-9]+:/ { finish_device(); in_device = 1; vendor = id = driver = ""; next }
+    in_device && $1 == "vendorID" { vendor = tolower($3); sub(/^0x/, "", vendor) }
+    in_device && $1 == "deviceID" { id = tolower($3); sub(/^0x/, "", id) }
+    in_device && $1 == "driverID" { driver = $3 }
+    END { finish_device(); if (found) print found }
+  ' <<<"${summary}")"
+  [[ -n "${device}" ]] || return 0
+
+  [[ -z "${driver_files}" ]] || export VK_DRIVER_FILES="${driver_files}"
+  export MESA_VK_DEVICE_SELECT="${MESA_VK_DEVICE_SELECT:-${device}!}"
+  export IKA_DZN_FIX=1
+  export LD_LIBRARY_PATH="${PACKAGED_WSL_GPU_DIR}/d3d12${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+  export IKA_WSL_GPU_ENV=1
+  log_start_note "WSL2: GPU through ${dozen_name}, MESA_VK_DEVICE_SELECT=${MESA_VK_DEVICE_SELECT}"
+}
+
 VULKANINFO_SUMMARY=""
 # Empty until load_vulkaninfo_summary has run; then "ok" or "none".
 VULKANINFO_SUMMARY_STATE=""
@@ -3002,6 +3061,10 @@ host_suits_venus() {
   if grep -Eiq '(llvmpipe|lavapipe|swiftshader|software rasterizer|software device|PHYSICAL_DEVICE_TYPE_CPU)' \
       <<<"${primary_device}"; then
     printf '%s\n' "the first Vulkan device is a software one"
+    return 1
+  fi
+  if grep -q 'DRIVER_ID_MESA_DOZEN' <<<"${primary_device}"; then
+    printf '%s\n' "Dozen cannot export its memory as dma-bufs"
     return 1
   fi
   version="$(awk -F'=' '/apiVersion/ { split($2, v, " "); print v[1]; exit }' <<<"${primary_device}")"
@@ -10312,6 +10375,7 @@ main() {
   local -a start_args
 
   ika_ini_warn_unknown
+  setup_wsl_gpu_env
 
   case "${command}" in
     __launch-in-vcpu-scope)

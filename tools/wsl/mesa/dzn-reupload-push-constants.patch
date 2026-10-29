@@ -1,0 +1,71 @@
+dzn: Re-upload push constants after a root signature change
+
+Push constants stay valid across pipeline layouts with compatible push
+constant ranges, but dzn stores them as root constants, which
+SetGraphicsRootSignature/SetComputeRootSignature reset, and only uploads
+the range pushed since its last upload. A draw after a switch to a
+pipeline with another root signature then reads reset root constants.
+ANGLE pushes its driver uniforms once per render pass, so its draws after
+such a switch rendered nothing.
+
+Mark the new layout's whole push constant range dirty when the root
+signature changes, like the descriptor heaps.
+
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -3199,6 +3199,17 @@
+          /* Changing root signature always requires re-binding descriptor heaps */
+          cmdbuf->state.bindpoint[bindpoint].dirty |= DZN_CMD_BINDPOINT_DIRTY_HEAPS;
+ 
++         /* It also resets root constants: push constants set before the change
++          * stay valid for a layout with a compatible range, so upload all of
++          * the new layout's range again. */
++         struct dzn_cmd_buffer_push_constant_state *push_state =
++            bindpoint == VK_PIPELINE_BIND_POINT_GRAPHICS ?
++            &cmdbuf->state.push_constant.gfx : &cmdbuf->state.push_constant.compute;
++         if (pipeline->root.push_constant_dwords) {
++            push_state->offset = 0;
++            push_state->end = pipeline->root.push_constant_dwords * 4;
++         }
++
+          if (device->bindless) {
+             /* Note: The D3D12 spec for descriptor heap indexing requires that the descriptor heaps
+              * are bound *before* the root signature. */
+--- a/src/microsoft/vulkan/dzn_descriptor_set.c
++++ b/src/microsoft/vulkan/dzn_descriptor_set.c
+@@ -855,6 +855,7 @@
+       root_param->ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+       root_param->Constants.ShaderRegister = 0;
+       root_param->Constants.Num32BitValues = align(push_constant_size, 4) / 4;
++      layout->root.push_constant_dwords = root_param->Constants.Num32BitValues;
+       root_param->Constants.RegisterSpace = DZN_REGISTER_SPACE_PUSH_CONSTANT;
+       root_param->ShaderVisibility = translate_desc_visibility(push_constant_flags);
+       root_dwords += root_param->Constants.Num32BitValues;
+--- a/src/microsoft/vulkan/dzn_pipeline.c
++++ b/src/microsoft/vulkan/dzn_pipeline.c
+@@ -1764,6 +1764,7 @@
+    pipeline->root.sets_param_count = layout->root.sets_param_count;
+    pipeline->root.sysval_cbv_param_idx = layout->root.sysval_cbv_param_idx;
+    pipeline->root.push_constant_cbv_param_idx = layout->root.push_constant_cbv_param_idx;
++   pipeline->root.push_constant_dwords = layout->root.push_constant_dwords;
+    pipeline->root.dynamic_buffer_bindless_param_idx = layout->root.dynamic_buffer_bindless_param_idx;
+    STATIC_ASSERT(sizeof(pipeline->root.type) == sizeof(layout->root.type));
+    memcpy(pipeline->root.type, layout->root.type, sizeof(pipeline->root.type));
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -829,6 +829,7 @@
+       uint32_t sets_param_count;
+       uint32_t sysval_cbv_param_idx;
+       uint32_t push_constant_cbv_param_idx;
++      uint32_t push_constant_dwords;
+       uint32_t dynamic_buffer_bindless_param_idx;
+       D3D12_DESCRIPTOR_HEAP_TYPE type[MAX_SHADER_VISIBILITIES];
+       ID3D12RootSignature *sig;
+@@ -908,6 +909,7 @@
+       uint32_t sets_param_count;
+       uint32_t sysval_cbv_param_idx;
+       uint32_t push_constant_cbv_param_idx;
++      uint32_t push_constant_dwords;
+       uint32_t dynamic_buffer_bindless_param_idx;
+       D3D12_DESCRIPTOR_HEAP_TYPE type[MAX_SHADER_VISIBILITIES];
+       ID3D12RootSignature *sig;
