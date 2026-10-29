@@ -15,6 +15,10 @@ PACKAGED_GETCHROMIUM_BIN="/usr/lib/cuttlefish-common/bin/getchromium"
 PACKAGED_IKA_ROOT_BIN="/usr/lib/cuttlefish-common/bin/ika-root"
 PACKAGED_MADBFS_BIN="/usr/lib/cuttlefish-common/bin/madbfs"
 PACKAGED_WSL_GPU_DIR="/usr/lib/cuttlefish-common/wsl"
+# Whether windows show through WSLg, WSL's display server for the Windows
+# desktop, whose task bar matches windows to desktop entries in its own way.
+IKA_ON_WSLG=false
+[[ ! -d /mnt/wslg ]] || IKA_ON_WSLG=true
 SCRCPY_ICON_DIR_DEFAULT="/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps"
 IKA_SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 
@@ -5850,6 +5854,17 @@ app_window_title() {
   printf '%s\n' "${title:-${package}}"
 }
 
+# Prints an app window's app ID, which its launcher's file name repeats:
+# ika-PACKAGE. WSLg keeps a desktop entry under the last dot-separated part of
+# its name only, and finds no entry, and so no icon, for an app ID with dots;
+# there the dots become dashes, which package names cannot have.
+app_window_id() {
+  local id="ika-$1"
+
+  [[ "${IKA_ON_WSLG}" != true ]] || id="${id//./-}"
+  printf '%s\n' "${id}"
+}
+
 # Prints the app's name as its menu launcher shows it, without the game/app
 # marker (see app_launcher_name), for messages and notifications. It comes from
 # the launcher, the cached app list, or the cached window title, without asking
@@ -5859,7 +5874,7 @@ app_display_name() {
   local launcher
   local name=""
 
-  launcher="$(app_menu_data_dir)/applications/ika-${package}.desktop"
+  launcher="$(app_menu_data_dir)/applications/$(app_window_id "${package}").desktop"
   if [[ -f "${launcher}" ]]; then
     name="$(sed -n '/^Name=/{s///p;q}' "${launcher}")"
     name="${name#* ∙ }"
@@ -6243,7 +6258,7 @@ set_yad_env() {
 # has, and shows the generic Linux icon for their windows; there they take
 # Ika's own class.
 APP_SETTINGS_WINDOW_CLASS="ika-startup-options"
-[[ ! -d /mnt/wslg ]] || APP_SETTINGS_WINDOW_CLASS="ika"
+[[ "${IKA_ON_WSLG}" != true ]] || APP_SETTINGS_WINDOW_CLASS="ika"
 APP_SETTINGS_WINDOW_OPTIONS=(--name="${APP_SETTINGS_WINDOW_CLASS}" --class="${APP_SETTINGS_WINDOW_CLASS}")
 
 # Whether yad has --css, which gives its CSS to every widget of the window.
@@ -8036,7 +8051,7 @@ open_app_window() {
   # A distinct app ID lets the host desktop treat each app as its own window
   # group instead of stacking it under the Ika console.
   append_scrcpy_env scrcpy_env
-  scrcpy_env+=("SDL_APP_ID=ika-${package}")
+  scrcpy_env+=("SDL_APP_ID=$(app_window_id "${package}")")
   # Without the app's own icon, the window would set the generic Ika icon,
   # which taskbars prefer over the launcher's.
   app_icon="$(app_menu_icon "${package}")"
@@ -8383,7 +8398,7 @@ app_launcher_is_current() {
   local label="$2"
   local package="$3"
   local icon="$4"
-  local file="${apps_dir}/ika-${package}.desktop"
+  local file="${apps_dir}/$(app_window_id "${package}").desktop"
 
   [[ -f "${file}" ]] \
     && grep -qxF "Name=$(desktop_entry_escape "$(app_launcher_name "${label}" "${package}")")" "${file}" \
@@ -8417,7 +8432,7 @@ write_app_launcher() {
   local label="$2"
   local package="$3"
   local icon="$4"
-  local file="${apps_dir}/ika-${package}.desktop"
+  local file="${apps_dir}/$(app_window_id "${package}").desktop"
   local name
   local keywords="${label//;/ };${package};Android;Ika;"
   local settings_icon
@@ -8443,7 +8458,7 @@ write_app_launcher() {
       --set-key=Exec --set-value="ika app ${package}" \
       --set-icon="${icon}" \
       --set-key=Terminal --set-value=false \
-      --set-key=StartupWMClass --set-value="ika-${package}" \
+      --set-key=StartupWMClass --set-value="$(app_window_id "${package}")" \
       --set-key=SingleMainWindow --set-value=true \
       --set-key=Keywords --set-value="${keywords}" \
       --set-key=Actions --set-value="${actions}" \
@@ -8459,7 +8474,7 @@ Name=$(desktop_entry_escape "${name}")
 Exec=ika app ${package}
 Icon=${icon}
 Terminal=false
-StartupWMClass=ika-${package}
+StartupWMClass=$(app_window_id "${package}")
 SingleMainWindow=true
 Keywords=$(desktop_entry_escape "${keywords}")
 Actions=${actions}
@@ -8801,7 +8816,7 @@ refresh_changed_launchers() {
 
   while IFS=$'\t' read -r label package; do
     is_app_package_name "${package}" || continue
-    file="${apps_dir}/ika-${package}.desktop"
+    file="${apps_dir}/$(app_window_id "${package}").desktop"
     if [[ -f "${file}" ]] && grep -q '^X-Ika-Version=' "${file}" \
         && ! app_launcher_is_current "${apps_dir}" "${label}" "${package}" \
           "$(app_menu_icon "${package}")"; then
@@ -8817,7 +8832,7 @@ refresh_changed_launchers() {
 
   parked="$(mktemp -d "${CVD_TMP_DIR}/changed-launchers.XXXXXX")"
   for package in "${packages[@]}"; do
-    mv -f "${apps_dir}/ika-${package}.desktop" "${parked}/"
+    mv -f "${apps_dir}/$(app_window_id "${package}").desktop" "${parked}/"
   done
   refresh_app_menu_caches
   # GNOME Shell processes app changes asynchronously and rate-limits them.
@@ -8825,7 +8840,7 @@ refresh_changed_launchers() {
   for i in "${!packages[@]}"; do
     write_app_launcher "${parked}" "${labels[i]}" "${packages[i]}" \
       "$(app_menu_icon "${packages[i]}")" || true
-    mv -f "${parked}/ika-${packages[i]}.desktop" "${apps_dir}/"
+    mv -f "${parked}/$(app_window_id "${packages[i]}").desktop" "${apps_dir}/"
   done
   rmdir "${parked}" 2>/dev/null || true
   printf '%s\n' "${#packages[@]}"
@@ -8872,9 +8887,9 @@ sync_app_menu() {
   # Launchers the user hid stay out of the GNOME folder's explicit list.
   while IFS=$'\t' read -r label package; do
     is_app_package_name "${package}" || continue
-    file="${apps_dir}/ika-${package}.desktop"
+    file="${apps_dir}/$(app_window_id "${package}").desktop"
     if [[ ! -f "${file}" ]] || ! grep -qx 'NoDisplay=true' "${file}"; then
-      desktop_ids+=("ika-${package}.desktop")
+      desktop_ids+=("$(app_window_id "${package}").desktop")
     fi
   done <<<"${list}"
   install_xdg_app_menu
@@ -8886,7 +8901,7 @@ sync_app_menu() {
     current["${package}"]=1
     # A game added to the menu starts with Fullscreen ticked in its start
     # options, unless they were set before.
-    if [[ ! -f "${apps_dir}/ika-${package}.desktop" ]] && is_game_app "${package}" \
+    if [[ ! -f "${apps_dir}/$(app_window_id "${package}").desktop" ]] && is_game_app "${package}" \
         && ! app_options_saved "${package}"; then
       save_app_options "${package}" fullscreen
       log "${label}: a new game, starting fullscreen"
@@ -8900,7 +8915,10 @@ sync_app_menu() {
   while read -r file; do
     [[ -n "${file}" ]] || continue
     package="$(sed -n 's/^X-Ika-Package=//p' "${file}" | head -n1)"
-    if [[ -z "${package}" || -z "${current[${package}]:-}" ]]; then
+    # A launcher under another name than the app's window ID is one from
+    # before a move to or from WSLg, which the launcher above replaces.
+    if [[ -z "${package}" || -z "${current[${package}]:-}" \
+          || "${file##*/}" != "$(app_window_id "${package}").desktop" ]]; then
       rm -f "${file}"
       removed=$((removed + 1))
     fi

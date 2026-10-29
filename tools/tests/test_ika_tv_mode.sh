@@ -14,6 +14,8 @@ export HOME="${T}/home" CVD_HOME_DIR="${T}/ika" CVD_PRODUCT_OUT="${T}/product"
 mkdir -p "${HOME}" "${CVD_PRODUCT_OUT}"
 unset IKADPI IKA_TV_DPI IKA_SCRCPY IKA_APP_INPUT IKA_TOUCH
 source "${ROOT}/tools/ika"
+# App IDs and launcher names as on a Linux desktop, also when run on WSLg.
+IKA_ON_WSLG=false
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
