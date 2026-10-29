@@ -9503,9 +9503,10 @@ run_app_command() {
     return 0
   fi
   # Windows' Start menu and task bar offer no launcher actions: on WSLg, an app
-  # launched from them with Shift held down opens its Startup Options instead,
-  # as the launcher's "Startup options" action does on a Linux desktop.
-  if [[ "${launcher}" == "true" ]] && windows_shift_held; then
+  # launched from them with Shift held down (SHIFT_AT_LAUNCH, set by main)
+  # opens its Startup Options instead, as the launcher's "Startup options"
+  # action does on a Linux desktop.
+  if [[ "${launcher}" == "true" && "${SHIFT_AT_LAUNCH:-}" == "true" ]]; then
     edit_app_settings "${name}" 1
     return 0
   fi
@@ -10506,11 +10507,18 @@ main() {
   local -a reset_args
   local -a start_args
 
-  # As for an app (see run_app_command): on WSLg, Ika started from the Windows
-  # Start menu or task bar with Shift held down opens its Startup Options
-  # instead. Asked first, before the GPU probe below, while Shift is still
-  # held.
-  if [[ "${command}" == "start" && ! -t 0 && ! -t 2 ]] && windows_shift_held; then
+  # On WSLg, Ika or an app started from the Windows Start menu or task bar
+  # with Shift held down opens its Startup Options instead (an app's in
+  # run_app_command). Asked first, before the GPU probe below takes seconds,
+  # while Shift is still held.
+  if [[ ! -t 0 && ! -t 2 ]] \
+      && { [[ "${command}" == "start" ]] \
+           || [[ "${command}" == "app" && -n "${2:-}" && "${2}" != -* \
+                 && "${2}" != "sync" && "${2}" != "close" ]]; } \
+      && windows_shift_held; then
+    SHIFT_AT_LAUNCH="true"
+  fi
+  if [[ "${command}" == "start" && "${SHIFT_AT_LAUNCH:-}" == "true" ]]; then
     edit_ika_settings
     return 0
   fi

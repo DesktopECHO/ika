@@ -258,9 +258,10 @@ chmod +x "${T}/bin/powershell.exe"
 launched_with() (
   IKA_ON_WSLG="$1"
   export SHIFT_KEYS="$2"
+  export IKA_WSL_GPU_FIX=0
   edit_app_settings() { printf 'options %s %s\n' "$1" "$2"; }
   open_app_window() { printf 'window %s\n' "$1"; }
-  run_app_command com.example.app </dev/null 2>/dev/null
+  main app com.example.app </dev/null 2>/dev/null
 )
 expect_equal "$(launched_with true 65536)" "options com.example.app 1" "Shift held at a launch from Windows"
 expect_equal "$(launched_with true 0)" "window com.example.app" "a launch from Windows without Shift"
