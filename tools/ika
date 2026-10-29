@@ -8882,6 +8882,17 @@ sync_app_menu() {
 
   apps_dir="$(app_menu_data_dir)/applications"
   mkdir -p "${apps_dir}"
+  # A launcher named for the other side of WSLg (see app_window_id) goes
+  # before its replacement is written: WSLg names the Windows Start menu
+  # shortcut after the launcher's Name, which both have, and removing the old
+  # launcher afterwards would take the new one's shortcut with it.
+  while read -r file; do
+    package="$(sed -n 's/^X-Ika-Package=//p' "${file}" | head -n1)"
+    if [[ -n "${package}" && "${file##*/}" != "$(app_window_id "${package}").desktop" ]]; then
+      rm -f "${file}"
+      removed=$((removed + 1))
+    fi
+  done < <(list_app_launchers)
   # Set up the group, with every launcher in it, before any launcher is
   # written: an app whose launcher appears first can end up outside it.
   # Launchers the user hid stay out of the GNOME folder's explicit list.
@@ -8915,10 +8926,7 @@ sync_app_menu() {
   while read -r file; do
     [[ -n "${file}" ]] || continue
     package="$(sed -n 's/^X-Ika-Package=//p' "${file}" | head -n1)"
-    # A launcher under another name than the app's window ID is one from
-    # before a move to or from WSLg, which the launcher above replaces.
-    if [[ -z "${package}" || -z "${current[${package}]:-}" \
-          || "${file##*/}" != "$(app_window_id "${package}").desktop" ]]; then
+    if [[ -z "${package}" || -z "${current[${package}]:-}" ]]; then
       rm -f "${file}"
       removed=$((removed + 1))
     fi
@@ -9663,6 +9671,7 @@ start_cvd() {
   local start_epoch
   local scrcpy_dpi
   local -a cvd_env_args=(env)
+  local -a own_session=()
 
   require_executable "${CVD_BIN}" "cvd launcher"
   check_required_groups
@@ -9720,12 +9729,18 @@ start_cvd() {
 
   log_start_context "${launcher_log}" "${args[@]}"
 
+  # Windows runs ika from the Start menu through wslg.exe, which hangs up the
+  # session it started ika in when ika returns, and the launcher stops the
+  # device on a hangup. On WSLg the launcher gets a session of its own, as the
+  # console has. setsid keeps the subshell's process, which leads no process
+  # group.
+  [[ "${IKA_ON_WSLG}" != true ]] || own_session=(setsid)
   (
     cd "${CVD_PRODUCT_OUT}"
     exec 3>&-
     # systemd-run --scope runs the command in this process: launcher_pid stays
     # the launcher's.
-    exec systemd-run --user --scope --quiet --collect -p Delegate=yes \
+    exec "${own_session[@]+"${own_session[@]}"}" systemd-run --user --scope --quiet --collect -p Delegate=yes \
       --unit="ika-android-$(date +%s)" -- \
       "${IKA_SCRIPT_PATH}" __launch-in-vcpu-scope \
       "$(start_arg_value "cpus" "${CVD_COMPUTE_DEFAULTS[cpus]}" "$@")" \
