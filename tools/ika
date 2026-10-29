@@ -4613,12 +4613,74 @@ wait_for_guest_reboot() {
   return 1
 }
 
+# WSLg gives each window the relaunch command C:\Program Files\WSL\\wslg.exe
+# ... without quotes, so a task bar pin made from the window starts
+# "C:\Program" and Windows offers to delete it. This repairs such pins, under
+# the user's "User Pinned" folder: the target becomes wslg.exe, and the pin
+# keeps the window's app ID, which puts the window on the pin's button. It runs
+# in the background, when a window closes (after the user may have pinned it)
+# and at start, and does nothing outside WSLg.
+repair_wslg_taskbar_pins() {
+  local powershell
+
+  [[ "${IKA_ON_WSLG}" == true ]] || return 0
+  powershell="$(command -v powershell.exe || true)"
+  [[ -n "${powershell}" ]] || powershell="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+  [[ -x "${powershell}" ]] || return 0
+  mkdir -p "${CVD_TMP_DIR}"
+  (
+    flock -n 9 || exit 0
+    timeout 60 "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+      -EncodedCommand "$(wslg_pin_repair_script | iconv -t UTF-16LE | base64 -w 0)" \
+      </dev/null 2>/dev/null | tr -d '\r' | while IFS= read -r line; do
+        [[ -n "${line}" ]] && log "repaired the task bar pin ${line}"
+      done
+  ) 9>"${CVD_TMP_DIR}/wslg-pins.lock" &
+  disown "$!" 2>/dev/null || true
+}
+
+# Prints the PowerShell program of repair_wslg_taskbar_pins: one line per pin
+# it repaired.
+wslg_pin_repair_script() {
+  cat <<'EOF'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+Add-Type @"
+using System; using System.Text; using System.Runtime.InteropServices; using System.Runtime.InteropServices.ComTypes;
+[ComImport, Guid("000214F9-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IShellLinkW {
+  void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder f, int n, IntPtr fd, uint fl); void GetIDList(out IntPtr p); void SetIDList(IntPtr p);
+  void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder s, int n); void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string s);
+  void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder s, int n); void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string s);
+  void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder s, int n); void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string s);
+  void GetHotkey(out short h); void SetHotkey(short h); void GetShowCmd(out int c); void SetShowCmd(int c);
+  void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder s, int n, out int i); void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string s, int i);
+  void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string s, uint r); void Resolve(IntPtr h, uint f);
+  void SetPath([MarshalAs(UnmanagedType.LPWStr)] string s); }
+public static class IkaPin {
+  public static bool Repair(string file) {
+    IShellLinkW l = (IShellLinkW)Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046")));
+    IPersistFile pf = (IPersistFile)l; pf.Load(file, 2);
+    StringBuilder p = new StringBuilder(1024), a = new StringBuilder(4096);
+    l.GetPath(p, p.Capacity, IntPtr.Zero, 0x4); l.GetArguments(a, a.Capacity);
+    string cmd = p.ToString() + " " + a.ToString();
+    int i = cmd.IndexOf(@"\wslg.exe ", StringComparison.OrdinalIgnoreCase);
+    if (!p.ToString().Equals(@"C:\Program", StringComparison.OrdinalIgnoreCase) || !a.ToString().StartsWith(@"Files\WSL\") || i < 0) return false;
+    l.SetPath(cmd.Substring(0, i + 9).Replace(@"\\", @"\")); l.SetArguments(cmd.Substring(i + 10)); pf.Save(file, true);
+    return true; }
+}
+"@
+Get-ChildItem "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned" -Recurse -Filter *.lnk -ErrorAction SilentlyContinue |
+  ForEach-Object { try { if ([IkaPin]::Repair($_.FullName)) { $_.BaseName } } catch { } }
+EOF
+}
+
 scrcpy_supervisor_cleanup() {
   if [[ -n "${scrcpy_supervisor_child_pid:-}" ]]; then
     kill "${scrcpy_supervisor_child_pid}" >/dev/null 2>&1 || true
     wait "${scrcpy_supervisor_child_pid}" 2>/dev/null || true
   fi
   remove_app_cuttlefish_display
+  repair_wslg_taskbar_pins
   if [[ -f "${SCRCPY_SUPERVISOR_PID_FILE}" \
       && "$(<"${SCRCPY_SUPERVISOR_PID_FILE}")" == "$$" ]]; then
     rm -f "${SCRCPY_SUPERVISOR_PID_FILE}"
@@ -10431,6 +10493,7 @@ main() {
       fi
       redirect_start_logs
       flush_start_log_notes
+      repair_wslg_taskbar_pins
       run_timed_operation "started" start_cvd "${fullscreen_mode}" "${start_args[@]}"
       ;;
     stop)
