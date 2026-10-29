@@ -35,6 +35,8 @@ chmod +x "${T}/bin/yad"
 export PATH="${T}/bin:${PATH}"
 
 source "${ROOT}/tools/ika"
+# App IDs and launcher names as on a Linux desktop, also when run on WSLg.
+IKA_ON_WSLG=false
 log() { printf '%s\n' "$*" >>"${T}/log"; }
 notify_user() { :; }
 
@@ -278,7 +280,7 @@ save_app_options com.example.game touch
 DIALOG_OUTPUT="$(form_output touch gamekb fullscreen keyboard)" edit_app_options com.example.game >/dev/null
 dialog_args="$(<"${T}/yad.args")"
 expect_contains "${dialog_args}" $'--form\n--title=Startup Options · Some Game\n' "the title names the window and the app"
-expect_contains "${dialog_args}" $'--name=ika-startup-options\n--class=ika-startup-options\n--form\n' "a window class of its own, for the Ika icon"
+expect_contains "${dialog_args}" "--name=${APP_SETTINGS_WINDOW_CLASS}"$'\n'"--class=${APP_SETTINGS_WINDOW_CLASS}"$'\n--form\n' "a window class of its own, for the Ika icon"
 [[ "${dialog_args}" != *"--text="* ]] || fail "the window has a heading again"
 expect_contains "${dialog_args}" $'\n--field=Display density, 0=Auto  :NUM\n0!0..999!8\n--field=<span font_size=\'8pt\'> </span>:LBL\n\n--field=Start Some Game with:\n<span font_size=\'5pt\'> </span>:LBL\n\n' \
   "the density first, at 0 for auto, then the line above the checkboxes, with a half line of space under it"
@@ -509,6 +511,23 @@ rm -f "$(app_menu_data_dir)/applications/ika-com.example.newgame.desktop"
 sync_app_menu >/dev/null 2>&1
 expect_equal "$(saved_app_options com.example.newgame)" "" "a game unticked before comes back without the default"
 echo "ok: a game added to the menu starts with Fullscreen mode ticked"
+
+# On WSLg, app IDs and launcher names have dashes for dots, as WSLg finds no
+# icon for an app ID with dots, and a sync replaces the launchers with dots;
+# back on a Linux desktop, the sync puts them back.
+apps="$(app_menu_data_dir)/applications"
+IKA_ON_WSLG=true
+expect_equal "$(app_window_id com.example.game)" "ika-com-example-game" "WSLg: the app ID has dashes"
+sync_app_menu >/dev/null 2>&1
+[[ -f "${apps}/ika-com-example-game.desktop" ]] || fail "WSLg: no launcher named with dashes"
+[[ ! -e "${apps}/ika-com.example.game.desktop" ]] || fail "WSLg: the launcher named with dots stayed"
+grep -qxF "StartupWMClass=ika-com-example-game" "${apps}/ika-com-example-game.desktop" \
+  || fail "WSLg: the launcher names another window class"
+IKA_ON_WSLG=false
+sync_app_menu >/dev/null 2>&1
+[[ -f "${apps}/ika-com.example.game.desktop" && ! -e "${apps}/ika-com-example-game.desktop" ]] \
+  || fail "the launchers named with dashes stayed after WSLg"
+echo "ok: WSLg launchers and app IDs have dashes for dots"
 
 # "App info" opens the Settings window with App info as its
 # first page, so the Settings home page never shows.

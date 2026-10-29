@@ -16,6 +16,8 @@ export XDG_DATA_HOME="${T}/data"
 mkdir -p "${HOME}" "${CVD_PRODUCT_OUT}"
 
 source "${ROOT}/tools/ika"
+# App IDs and launcher names as on a Linux desktop, also when run on WSLg.
+IKA_ON_WSLG=false
 log() { :; }
 
 fail() {
