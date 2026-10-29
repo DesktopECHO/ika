@@ -3911,11 +3911,34 @@ host_timezone() {
   timedatectl show --property=Timezone --value 2>/dev/null || true
 }
 
+# Prints "dark" or "light" for Windows' app mode (Settings, Personalization,
+# Colors), or fails without Windows interop
+windows_color_scheme() {
+  local reg
+  local value
+
+  reg="$(command -v reg.exe || true)"
+  [[ -n "${reg}" ]] || reg="/mnt/c/Windows/System32/reg.exe"
+  [[ -x "${reg}" ]] || return 1
+  value="$(timeout 5 "${reg}" query 'HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' \
+    /v AppsUseLightTheme 2>/dev/null | tr -d '\r' | awk '$1 == "AppsUseLightTheme" { print $3 }')"
+  case "${value}" in
+    0x0) printf 'dark\n' ;;
+    0x1) printf 'light\n' ;;
+    *) return 1 ;;
+  esac
+}
+
 # Prints "dark" or "light" for the desktop's color scheme, or nothing when it
 # states no preference. Reads the freedesktop Settings portal, which ika-scrcpy
-# window title bars follow too, then GNOME's setting.
+# window title bars follow too, then GNOME's setting. On WSLg, whose windows sit
+# on the Windows desktop, Windows' app mode comes first.
 host_color_scheme() {
   local value=""
+
+  if [[ "${IKA_ON_WSLG}" == true ]] && windows_color_scheme; then
+    return 0
+  fi
 
   if command -v gdbus >/dev/null 2>&1; then
     value="$(timeout 3 gdbus call --session \
