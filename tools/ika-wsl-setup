@@ -185,7 +185,8 @@ windows_profile_dir() {
 kernel_config_has() {
   local option="$1"
   [[ -r /proc/config.gz ]] || return 2
-  zcat /proc/config.gz | grep -qE "^CONFIG_${option}=(y|m)$"
+  # Not grep -q: zcat would die of SIGPIPE, a failure under pipefail
+  zcat /proc/config.gz | grep -E "^CONFIG_${option}=(y|m)$" >/dev/null
 }
 
 # One line per missing component: NAME<TAB>what to do
