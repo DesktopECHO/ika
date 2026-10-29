@@ -43,6 +43,8 @@ virtual machine, with its apps in windows of their own.
   [trixie-backports](https://backports.debian.org/Instructions/), Ubuntu from
   the [Kisak Mesa PPA](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa);
   Fedora 44 and Arch Linux have it.
+- On Windows, WSL2 with one of those distributions, readied by
+  `ika-wsl-setup` (see [Windows (WSL2)](CONFIGURATION.md#windows-wsl2)).
 - A GPU with a Vulkan driver, for the best performance. Without one, Ika
   renders with the CPU's software driver and runs in a lighter
   [low-CPU mode](CONFIGURATION.md#low-cpu-mode).
