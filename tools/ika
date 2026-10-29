@@ -9340,8 +9340,23 @@ close_app_window() {
   respond "Closed ${resolved%%$'\t'*}"
 }
 
+# Whether Shift is held down on the Windows desktop, on WSLg. PowerShell takes
+# about 0.3 s to answer.
+windows_shift_held() {
+  local keys
+
+  [[ "${IKA_ON_WSLG}" == true ]] || return 1
+  command -v powershell.exe >/dev/null 2>&1 || return 1
+  keys="$(timeout 5 powershell.exe -NoProfile -NonInteractive -Command \
+    'Add-Type -AssemblyName System.Windows.Forms; [int][System.Windows.Forms.Control]::ModifierKeys' \
+    2>/dev/null | tr -d '\r')"
+  # Keys.Shift
+  [[ "${keys}" =~ ^[0-9]+$ ]] && (( keys & 0x10000 ))
+}
+
 run_app_command() {
   local name=""
+  local launcher="false"
   local info_mode="false"
   local options_mode="false"
   local controller_mode="false"
@@ -9353,6 +9368,7 @@ run_app_command() {
   # Without a terminal (a menu launcher), report errors as notifications.
   if [[ ! -t 0 && ! -t 2 ]]; then
     IKA_NOTIFY="true"
+    launcher="true"
   fi
 
   case "${1:-}" in
@@ -9484,6 +9500,13 @@ run_app_command() {
   fi
   if [[ "${controller_mode}" == "true" ]]; then
     edit_app_settings "${name}" 2
+    return 0
+  fi
+  # Windows' Start menu and task bar offer no launcher actions: on WSLg, an app
+  # launched from them with Shift held down opens its Startup Options instead,
+  # as the launcher's "Startup options" action does on a Linux desktop.
+  if [[ "${launcher}" == "true" ]] && windows_shift_held; then
+    edit_app_settings "${name}" 1
     return 0
   fi
   open_app_window "${name}" "${fullscreen_mode}" "${title}" "${window_size}" "" "${dpi_given}"

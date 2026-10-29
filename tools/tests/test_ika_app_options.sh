@@ -246,6 +246,31 @@ if (dpi_given_by --dpi=1000) >/dev/null 2>&1; then
 fi
 echo "ok: ika app --dpi"
 
+# On WSLg, an app launched from a menu (no terminal) with Shift held down opens
+# its Startup Options; without Shift, or outside WSLg, its window. A PowerShell
+# stub prints the Windows modifier keys, SHIFT_KEYS (Keys.Shift is 65536).
+cat >"${T}/bin/powershell.exe" <<STUB
+#!/usr/bin/env bash
+printf '%s\r\n' "\${SHIFT_KEYS:-0}"
+printf 'asked\n' >>"${T}/powershell.calls"
+STUB
+chmod +x "${T}/bin/powershell.exe"
+launched_with() (
+  IKA_ON_WSLG="$1"
+  export SHIFT_KEYS="$2"
+  edit_app_settings() { printf 'options %s %s\n' "$1" "$2"; }
+  open_app_window() { printf 'window %s\n' "$1"; }
+  run_app_command com.example.app </dev/null 2>/dev/null
+)
+expect_equal "$(launched_with true 65536)" "options com.example.app 1" "Shift held at a launch from Windows"
+expect_equal "$(launched_with true 0)" "window com.example.app" "a launch from Windows without Shift"
+expect_equal "$(launched_with true 131072)" "window com.example.app" "Ctrl held at a launch from Windows"
+rm -f "${T}/powershell.calls"
+expect_equal "$(launched_with false 65536)" "window com.example.app" "Shift held outside WSLg"
+[[ ! -e "${T}/powershell.calls" ]] || fail "PowerShell was asked outside WSLg"
+rm -f "${T}/bin/powershell.exe"
+echo "ok: Shift at a launch from Windows opens the Startup Options"
+
 # yad's form output for the options given ticked, after dpi=N when given: the
 # density as yad prints it, the two labels' empty values, then TRUE or FALSE
 # for each checkbox, in their order, then the blank label's.
