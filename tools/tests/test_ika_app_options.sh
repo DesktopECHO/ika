@@ -268,6 +268,20 @@ expect_equal "$(launched_with true 131072)" "window com.example.app" "Ctrl held 
 rm -f "${T}/powershell.calls"
 expect_equal "$(launched_with false 65536)" "window com.example.app" "Shift held outside WSLg"
 [[ ! -e "${T}/powershell.calls" ]] || fail "PowerShell was asked outside WSLg"
+# The same for Ika itself: 'ika start' from the Start menu opens Ika's
+started_with() (
+  IKA_ON_WSLG="$1"
+  export SHIFT_KEYS="$2" IKA_WSL_GPU_FIX=0
+  edit_ika_settings() { printf 'ika options\n'; }
+  run_timed_operation() { printf 'ika started\n'; }
+  stop_startup_packaged_scrcpy() { :; }
+  redirect_start_logs() { :; }
+  repair_wslg_taskbar_pins() { :; }
+  main start </dev/null 2>/dev/null
+)
+expect_equal "$(started_with true 65536)" "ika options" "Shift held at Ika's start from Windows"
+expect_equal "$(started_with true 0)" "ika started" "Ika's start from Windows without Shift"
+expect_equal "$(started_with false 65536)" "ika started" "Shift held at Ika's start outside WSLg"
 rm -f "${T}/bin/powershell.exe"
 echo "ok: Shift at a launch from Windows opens the Startup Options"
 

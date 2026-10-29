@@ -10506,6 +10506,15 @@ main() {
   local -a reset_args
   local -a start_args
 
+  # As for an app (see run_app_command): on WSLg, Ika started from the Windows
+  # Start menu or task bar with Shift held down opens its Startup Options
+  # instead. Asked first, before the GPU probe below, while Shift is still
+  # held.
+  if [[ "${command}" == "start" && ! -t 0 && ! -t 2 ]] && windows_shift_held; then
+    edit_ika_settings
+    return 0
+  fi
+
   ika_ini_warn_unknown
   setup_wsl_gpu_env
 
