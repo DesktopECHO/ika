@@ -26,6 +26,7 @@
 struct sc_ika_window {
     sc_tick wslg_refresh_tick;
     SDL_Window *window;
+    bool wslg; // shown by WSLg, see sc_ika_window_is_wslg()
 
     enum sc_ika_window_margin_backend {
         SC_IKA_WINDOW_MARGIN_NONE,

@@ -16,6 +16,9 @@
 // The invisible margin around a borderless window, which holds its resize
 // edges, in window coordinates
 #define SC_WINDOW_MARGIN 4
+// The resize edges inside the content on WSLg, where they are the only ones
+// within reach, in window coordinates
+#define SC_WINDOW_WSLG_EDGE 8
 // How far a corner resize extends along the edges, beyond the margin
 #define SC_WINDOW_CORNER_EXTENT 16
 // The drag area: a fraction of the display size, fixed when the window resizes
@@ -168,7 +171,11 @@ sc_ika_window_hit_test(SDL_Window *window, const SDL_Point *area, void *data) {
     struct sc_ika_window *iw = data;
 
     SDL_WindowFlags flags = SDL_GetWindowFlags(window);
-    if (!(flags & SDL_WINDOW_BORDERLESS)
+    bool borderless = flags & SDL_WINDOW_BORDERLESS;
+    // WSLg shows the shadow of a decorated window, which holds libdecor's
+    // resize edges, as a Windows window of its own and passes its clicks to
+    // the content: there the content has resize edges too
+    if ((!borderless && !iw->wslg)
             || (flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MAXIMIZED))) {
         return SDL_HITTEST_NORMAL;
     }
@@ -179,7 +186,8 @@ sc_ika_window_hit_test(SDL_Window *window, const SDL_Point *area, void *data) {
     }
 
     // Without a margin, the resize edges are inside the content
-    int edge = iw->margin ? iw->margin : SC_WINDOW_MARGIN;
+    int edge = iw->margin ? iw->margin
+             : iw->wslg ? SC_WINDOW_WSLG_EDGE : SC_WINDOW_MARGIN;
     int corner = edge + SC_WINDOW_CORNER_EXTENT;
     bool left = area->x < edge;
     bool right = area->x >= w - edge;
@@ -209,7 +217,7 @@ sc_ika_window_hit_test(SDL_Window *window, const SDL_Point *area, void *data) {
     // Without decorations, the window is moved from the top-left corner of its
     // content (before the top and left edges without a margin, so that a drag
     // starts immediately)
-    if (sc_ika_window_is_in_corner(iw, area->x, area->y)) {
+    if (borderless && sc_ika_window_is_in_corner(iw, area->x, area->y)) {
         return SDL_HITTEST_DRAGGABLE;
     }
 
@@ -383,6 +391,7 @@ sc_ika_window_apply_margin(struct sc_ika_window *iw) {
 void
 sc_ika_window_init(struct sc_ika_window *iw, SDL_Window *window) {
     iw->window = window;
+    iw->wslg = sc_ika_window_is_wslg();
     iw->wslg_refresh_tick = 0;
     iw->corner_press = false;
     for (unsigned i = 0; i < 3; ++i) {
