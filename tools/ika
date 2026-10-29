@@ -4642,6 +4642,16 @@ wait_for_guest_reboot() {
   return 1
 }
 
+# Windows' PowerShell, through WSL's interop; fails without it
+windows_powershell() {
+  local powershell
+
+  powershell="$(command -v powershell.exe || true)"
+  [[ -n "${powershell}" ]] || powershell="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+  [[ -x "${powershell}" ]] || return 1
+  printf '%s\n' "${powershell}"
+}
+
 # WSLg gives each window the relaunch command C:\Program Files\WSL\\wslg.exe
 # ... without quotes, so a task bar pin made from the window starts
 # "C:\Program" and Windows offers to delete it. This repairs such pins, under
@@ -4653,9 +4663,7 @@ repair_wslg_taskbar_pins() {
   local powershell
 
   [[ "${IKA_ON_WSLG}" == true ]] || return 0
-  powershell="$(command -v powershell.exe || true)"
-  [[ -n "${powershell}" ]] || powershell="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
-  [[ -x "${powershell}" ]] || return 0
+  powershell="$(windows_powershell)" || return 0
   mkdir -p "${CVD_TMP_DIR}"
   (
     flock -n 9 || exit 0
@@ -9180,6 +9188,10 @@ guest_is_rooted() {
   [[ "$(guest_adb "${adb_serial}" shell "su -c 'id -u'" 2>/dev/null | tr -d '\r')" == "0" ]]
 }
 
+fuse_allows_other() {
+  grep -qE '^[[:space:]]*user_allow_other[[:space:]]*$' /etc/fuse.conf 2>/dev/null
+}
+
 # Mounts Android's /sdcard on ANDROID_STORAGE_DIR with madbfs, which runs
 # madbfs-server from the ROM and goes on in the background. On a rooted ROM
 # (ika root) it mounts the whole filesystem, /, with the server run as root.
@@ -9190,6 +9202,7 @@ mount_android_storage() {
   local -a root_args=(--root=/sdcard)
   local server_pkill="pkill -x madbfs-server"
   local deadline
+  local mount_options
 
   [[ -x "${PACKAGED_MADBFS_BIN}" ]] || return 0
   android_storage_mounted && return 0
@@ -9217,6 +9230,13 @@ mount_android_storage() {
   rm -f "${XDG_RUNTIME_DIR:-/tmp}/madbfs@${adb_serial}.sock"
   guest_adb "${adb_serial}" shell "${server_pkill}" >/dev/null 2>&1 || true
   trim_log_lines "${MADBFS_LOG_FILE}"
+  mount_options="uid=$(id -u),gid=$(id -g),umask=022"
+  # WSL serves its files to Windows as root, which FUSE keeps out of another
+  # user's mount unless allowed (it needs user_allow_other in /etc/fuse.conf,
+  # which ika-wsl-setup sets)
+  if [[ "${IKA_ON_WSLG}" == true ]] && fuse_allows_other; then
+    mount_options+=",allow_root"
+  fi
   # Files show as the user's, as Android's owners mean nothing on the host and
   # file managers would treat the folders as read-only. File details are
   # re-read after 2 seconds instead of 60, so files Android apps add or change
@@ -9225,7 +9245,7 @@ mount_android_storage() {
   # was 7% of a 4 GB host.
   if PATH="${CVD_HOST_OUT}/bin:${PATH}" "${PACKAGED_MADBFS_BIN}" --serial="${adb_serial}" \
       "${root_args[@]}" --ttl=2 --cache-size=64 --log-file="${MADBFS_LOG_FILE}" \
-      -o "uid=$(id -u),gid=$(id -g),umask=022" "${ANDROID_STORAGE_DIR}" \
+      -o "${mount_options}" "${ANDROID_STORAGE_DIR}" \
       </dev/null >>"${MADBFS_LOG_FILE}" 2>&1 3>&-; then
     log "Android storage mounted on ${ANDROID_STORAGE_DIR} (${root_args[0]#--root=})"
     edit_android_storage_place add
@@ -9256,6 +9276,7 @@ edit_android_storage_place() {
   local kept
   local uri
 
+  edit_windows_android_storage_shortcut "${action}" "${dir}"
   uri="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).as_uri())' \
     "${dir}")" || return 0
   bookmarks="$(gtk_bookmarks_file)"
@@ -9304,6 +9325,59 @@ else:
 with open(path, "w", encoding="utf-8") as f:
     f.write(text)
 PY
+}
+
+# On WSLg, adds ("add") or removes ("remove") "Android (Ika)" under This PC in
+# Windows' Explorer: a network shortcut to $2 as Windows reaches it
+# (\\wsl.localhost\DISTRO\...). Removing takes it out only when it leads to
+# $2. PowerShell runs in the background, as it takes a second or two.
+edit_windows_android_storage_shortcut() {
+  local action="$1"
+  local dir="$2"
+  local powershell
+  local target
+
+  [[ "${IKA_ON_WSLG}" == true ]] || return 0
+  powershell="$(windows_powershell)" || return 0
+  target="$(wslpath -w "${dir}" 2>/dev/null)" || return 0
+  mkdir -p "${CVD_TMP_DIR}"
+  (
+    flock -w 30 9 || exit 0
+    timeout 60 "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+      -EncodedCommand "$(windows_storage_shortcut_script "${action}" "${target}" \
+        | iconv -t UTF-16LE | base64 -w 0)" </dev/null >/dev/null 2>&1
+  ) 9>"${CVD_TMP_DIR}/windows-storage-shortcut.lock" &
+  disown "$!" 2>/dev/null || true
+}
+
+# Prints the PowerShell program of edit_windows_android_storage_shortcut for
+# action $1 and target $2. A network shortcut is a read-only folder holding
+# target.lnk and a desktop.ini that makes Explorer show it as the target.
+windows_storage_shortcut_script() {
+  local action="$1"
+  local target="${2//\'/\'\'}"
+
+  printf "\$action = '%s'\n\$target = '%s'\n" "${action}" "${target}"
+  cat <<'EOF'
+$dir = Join-Path $env:APPDATA 'Microsoft\Windows\Network Shortcuts\Android (Ika)'
+$link = Join-Path $dir 'target.lnk'
+$shell = New-Object -ComObject WScript.Shell
+if ($action -eq 'remove') {
+  if ((Test-Path -LiteralPath $link) -and $shell.CreateShortcut($link).TargetPath -eq $target) {
+    Remove-Item -LiteralPath $dir -Recurse -Force
+  }
+  exit
+}
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+$shortcut = $shell.CreateShortcut($link)
+$shortcut.TargetPath = $target
+$shortcut.Save()
+$ini = Join-Path $dir 'desktop.ini'
+if (Test-Path -LiteralPath $ini) { (Get-Item -LiteralPath $ini -Force).Attributes = 'Normal' }
+Set-Content -LiteralPath $ini -Value "[.ShellClassInfo]`r`nCLSID2={0AFACED1-E828-11D1-9187-B532F1E9575D}`r`nFlags=2"
+(Get-Item -LiteralPath $ini -Force).Attributes = 'Hidden, System'
+(Get-Item -LiteralPath $dir -Force).Attributes = 'ReadOnly, Directory'
+EOF
 }
 
 # Unmounts Android's storage from $1: lazily when a program still has a file

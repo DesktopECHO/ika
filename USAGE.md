@@ -417,6 +417,11 @@ it is left alone by backups and other programs that walk your home folder.
 GNOME's bookmarks, or KDE's Places once that file exists. `ika stop`,
 `ika restart` and `ika reset` unmount it and take it out of the sidebar.
 
+On WSL, Windows' Explorer shows it under **This PC** as **Android (Ika)**
+(`\\wsl.localhost\<distribution>\run\user\<uid>\ika\Android`), there
+while Android runs. Windows reaches WSL's files as root, which the mount lets
+in only when `/etc/fuse.conf` has `user_allow_other`; `ika-wsl-setup` sets it.
+
 Files are read as they are used, over Ika's adb connection, so a large video
 plays without being copied first. Files an app keeps to itself are out of
 reach, as they are for adb. On a rooted Android (`ika root`) the mount is

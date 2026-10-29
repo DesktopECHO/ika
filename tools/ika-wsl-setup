@@ -236,6 +236,10 @@ missing_components() {
       "${SYSTEM_APPLICATIONS_DIR}" "$(user_applications_dir)"
   fi
 
+  if [[ -d /mnt/wslg ]] && ! fuse_allows_other; then
+    printf 'fuse-allow-other\tWindows cannot open Android'"'"'s storage: user_allow_other is off in %s\n' "${FUSE_CONF}"
+  fi
+
   # The time (see setup_time_sync)
   local offset windows_tz linux_tz
   if [[ -e "${HYPERV_PTP_DEVICE}" ]] && ! time_sync_in_place; then
@@ -288,6 +292,25 @@ link_start_menu() {
   run_as_root mkdir -p "$(dirname "${SYSTEM_APPLICATIONS_DIR}")"
   run_as_root ln -s "${user_dir}" "${SYSTEM_APPLICATIONS_DIR}"
   log "linked ${SYSTEM_APPLICATIONS_DIR} to ${user_dir} for the Windows Start menu"
+}
+
+# Ika mounts Android's storage with FUSE as the user, and WSL serves files to
+# Windows as root, which FUSE lets into the mount only with allow_root, which
+# a user may pass only with user_allow_other in fuse.conf.
+FUSE_CONF="/etc/fuse.conf"
+
+fuse_allows_other() {
+  grep -qE '^[[:space:]]*user_allow_other[[:space:]]*$' "${FUSE_CONF}" 2>/dev/null
+}
+
+# Uncomments user_allow_other, or adds it
+enable_fuse_allow_other() {
+  if grep -qE '^[[:space:]]*#[[:space:]]*user_allow_other[[:space:]]*$' "${FUSE_CONF}" 2>/dev/null; then
+    run_as_root sed -i -E 's/^[[:space:]]*#[[:space:]]*(user_allow_other)[[:space:]]*$/\1/' "${FUSE_CONF}"
+  else
+    printf 'user_allow_other\n' | run_as_root tee -a "${FUSE_CONF}" >/dev/null
+  fi
+  log "enabled user_allow_other in ${FUSE_CONF}, so that Windows can open Android's storage once Ika mounts it again"
 }
 
 # --- time ---------------------------------------------------------------------
@@ -548,7 +571,7 @@ main() {
 
   missing="$(missing_components)"
   if [[ -z "${missing}" && "${force_kernel}" != "true" ]]; then
-    log "nothing is missing: KVM, vhost-vsock, vhost-net, udmabuf, systemd, cgroup v2, the groups, the Start menu link and the time are in place"
+    log "nothing is missing: KVM, vhost-vsock, vhost-net, udmabuf, systemd, cgroup v2, the groups, the Start menu link, Windows' access to Android's storage and the time are in place"
     return 0
   fi
   if [[ -n "${missing}" ]]; then
@@ -602,6 +625,9 @@ main() {
         else
           warn "the time zone differs from Windows'; WSL takes Windows' when it starts, so restart WSL, or set it with timedatectl"
         fi
+        ;;
+      fuse-allow-other)
+        enable_fuse_allow_other
         ;;
       start-menu)
         # WSLg looks for the directory when WSL starts
