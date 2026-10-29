@@ -1,33 +1,3 @@
-dzn: Ika fixes for Vulkan 1.3 and enhanced barriers
-
-- A layout transition's barrier waits for all later work (SyncAfter = ALL):
-  D3D12 orders the transition only against SyncAfter, while Vulkan completes
-  it before every destination stage and lets later barriers chain off them.
-  3DMark Wild Life Extreme read a depth buffer in compute before its
-  decompression finished and showed spreading black tiles.
-- Attachments in the GENERAL layout are rendered in the render target and
-  depth/stencil write layouts for the duration of the pass; the common
-  layouts allow no attachment writes.
-- Images with concurrent sharing use the COMMON layout instead of UNDEFINED,
-  which discarded them and dropped their synchronization.
-- A transition from UNDEFINED keeps the wait on its source stages.
-- Application barriers never end in SYNC_NONE/NO_ACCESS, which forbids any
-  later access in the same submission.
-- The attachment stages also wait for render pass resolves, vertex input for
-  vertex shading, draw indirect for the compute pass that rewrites arguments.
-- Multisampled clears on compute queues go through a scratch render target
-  cleared asynchronously and waited for on the GPU at submission; on direct
-  queues the clear is recorded inline.
-- Dynamic state: patch control points for a dynamic topology, FRONT_AND_BACK
-  culling disables rasterization only for polygons, depth writes need the
-  depth test, per-face stencil mask usage from the effective state.
-- Coherent storage buffers are marked per binding instead of shader-wide.
-- VK_EXT_4444_formats, VK_EXT_texel_buffer_alignment, minImageTransferGranularity
-  of one, a checked map of the inline uniform buffer, descriptor heap errors
-  logged with the device removed reason.
-- DZN_DEBUG switches nomediump16, noenhancedbarriers, api12, nodiscard and the
-  DZN_HIDE_EXTS list for testing.
-
 diff --git a/src/microsoft/compiler/dxil_nir.c b/src/microsoft/compiler/dxil_nir.c
 index d71ff9cdf8c..260499ef55a 100644
 --- a/src/microsoft/compiler/dxil_nir.c
@@ -1075,7 +1045,7 @@ index 8ce21a5e480..a75b72cc387 100644
  
     if (!device->bindless)
 diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
-index daecd5bba04..96e33ef3c21 100644
+index daecd5bba04..9bb25b14872 100644
 --- a/src/microsoft/vulkan/dzn_device.c
 +++ b/src/microsoft/vulkan/dzn_device.c
 @@ -149,6 +149,7 @@ dzn_physical_device_get_extensions(struct dzn_physical_device *pdev)
@@ -1132,7 +1102,21 @@ index daecd5bba04..96e33ef3c21 100644
        },
        .desc = {
           .Type = D3D12_COMMAND_LIST_TYPE_COMPUTE,
-@@ -849,6 +857,9 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
+@@ -696,10 +704,9 @@ dzn_physical_device_get_max_array_layers()
+ static bool
+ dzn_physical_device_supports_8bit(const struct dzn_physical_device *pdev)
+ {
+-   struct dzn_instance *instance = container_of(pdev->vk.instance, struct dzn_instance, vk);
+-
+-   return !pdev->options4.Native16BitShaderOpsSupported ||
+-          instance->drirc.debug.enable_8bit_loads_stores;
++   /* 8-bit loads and stores pass the CTS on native 16-bit devices too, and
++    * Ika's packaged driver is built without driconf, so they are always on. */
++   return true;
+ }
+ 
+ static void
+@@ -849,6 +856,9 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
        .maintenance4                       = true,
        .shaderExpectAssume                 = true,
  
@@ -1142,7 +1126,7 @@ index daecd5bba04..96e33ef3c21 100644
        .vertexAttributeInstanceRateDivisor = true,
        .vertexAttributeInstanceRateZeroDivisor = true,
        .shaderReplicatedComposites         = true,
-@@ -863,7 +874,11 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
+@@ -863,7 +873,11 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
  static uint32_t
  dzn_physical_device_get_api_version(const struct dzn_physical_device *pdev)
  {
@@ -1155,7 +1139,7 @@ index daecd5bba04..96e33ef3c21 100644
        return DZN_API_VERSION;
  
     return VK_MAKE_VERSION(1, 2, VK_HEADER_VERSION);
-@@ -1253,6 +1268,19 @@ dzn_physical_device_create(struct vk_instance *instance,
+@@ -1253,6 +1267,19 @@ dzn_physical_device_create(struct vk_instance *instance,
        pdev->vk.supported_extensions.KHR_8bit_storage = true;
     if (dzn_instance->debug_flags & DZN_DEBUG_NO_BINDLESS)
        pdev->vk.supported_extensions.EXT_descriptor_indexing = false;
@@ -1175,7 +1159,7 @@ index daecd5bba04..96e33ef3c21 100644
     dzn_physical_device_get_features(pdev, &pdev->vk.supported_features);
     dzn_physical_device_get_properties(pdev, &pdev->vk.properties);
  
-@@ -1454,7 +1482,8 @@ dzn_physical_device_get_format_properties(struct dzn_physical_device *pdev,
+@@ -1454,7 +1481,8 @@ dzn_physical_device_get_format_properties(struct dzn_physical_device *pdev,
      * which still isn't quite right (it'd be Vulkan R4G4B4A4), but can be
      * swizzled by just swapping R and B, so no border color issues arise.
      */
@@ -1185,7 +1169,7 @@ index daecd5bba04..96e33ef3c21 100644
        VkFormatFeatureFlags bgra4_req_features =
           VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
           VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
-@@ -1583,7 +1612,8 @@ dzn_physical_device_get_image_format_properties(struct dzn_physical_device *pdev
+@@ -1583,7 +1611,8 @@ dzn_physical_device_get_image_format_properties(struct dzn_physical_device *pdev
     if (dfmt_info.Format == DXGI_FORMAT_UNKNOWN)
        return VK_ERROR_FORMAT_NOT_SUPPORTED;
  
@@ -1195,7 +1179,7 @@ index daecd5bba04..96e33ef3c21 100644
        !(info->flags & VK_IMAGE_CREATE_EXTENDED_USAGE_BIT);
  
     if ((info->type == VK_IMAGE_TYPE_1D && !(dfmt_info.Support1 & D3D12_FORMAT_SUPPORT1_TEXTURE1D)) ||
-@@ -1936,6 +1966,7 @@ dzn_instance_create(const VkInstanceCreateInfo *pCreateInfo,
+@@ -1936,6 +1965,7 @@ dzn_instance_create(const VkInstanceCreateInfo *pCreateInfo,
        (sm_major << 4) | sm_minor : UINT32_MAX;
     instance->max_d3d12_options =
        debug_get_num_option("DZN_MAX_D3D12_OPTIONS", UINT32_MAX);
@@ -1203,7 +1187,7 @@ index daecd5bba04..96e33ef3c21 100644
  
  #ifdef _WIN32
     if (instance->debug_flags & DZN_DEBUG_DEBUGGER) {
-@@ -2173,6 +2204,11 @@ dzn_queue_submit(struct vk_queue *q,
+@@ -2173,6 +2203,11 @@ dzn_queue_submit(struct vk_queue *q,
  
        cmdlists[i] = (ID3D12CommandList *)cmd_buffer->cmdlist;
  

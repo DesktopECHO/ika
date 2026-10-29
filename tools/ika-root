@@ -281,7 +281,11 @@ split = sys.argv.index("--")
 members = {f"lib/{abi}/lib{name}.so": name for name in sys.argv[4:split]}
 members.update({f"assets/{name}": name for name in sys.argv[split + 1:]})
 with zipfile.ZipFile(apk) as archive:
+    names = set(archive.namelist())
     for member, name in members.items():
+        # Magisk 31 and later no longer ship stub.apk.
+        if member not in names and name == "stub.apk":
+            continue
         with archive.open(member) as src, open(os.path.join(dest, name), "wb") as out:
             out.write(src.read())
 EOF
@@ -320,6 +324,7 @@ done_file=/data/adb/ika-root.done
 rm -rf "\${bin}"
 mkdir -p "\${bin}"
 for file in ${MAGISK_BINARIES[*]} ${MAGISK_ASSETS[*]}; do
+  [ "\${file}" = stub.apk ] && [ ! -e "\${stage}/\${file}" ] && continue
   cp "\${stage}/\${file}" "\${bin}/\${file}" || exit 1
 done
 chown -R 0:0 "\${bin}"
