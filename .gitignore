@@ -55,3 +55,6 @@ frontend/src/operator/webui/src/environments/version.ts
 *.pyc
 /base/rpm/vendor/__pycache__
 /base/cvd/.bazel_output_base
+*.log
+/base/_build_madbfs/
+/base/_build_wsl/
