@@ -174,8 +174,8 @@ Right-click an app in the menu for:
   and uninstall. `ika app --info NAME` from a terminal.
 
 The Windows Start menu and task bar (WSL2) have no such actions: there, hold
-**Shift** while you click an app to open its **Startup options** instead of
-the app, and keep holding it until the window opens.
+**Shift** while you click an app, or Ika itself, to open its **Startup
+options** instead, and keep holding it until the window opens.
 
 ### Start options
 
