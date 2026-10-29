@@ -85,8 +85,8 @@ function deb_build_dependency_packages() {
     pkgconf protobuf-compiler
     uuid-dev xxd
 
-    # Ika's WSL2 GPU helpers (tools/wsl)
-    directx-headers-dev
+    # Ika's WSL2 GPU helpers (tools/wsl), Mesa's Dozen driver among them
+    directx-headers-dev python3-mako python3-packaging python3-yaml
 
     # cuttlefish-frontend Build-Depends (Go + Node.js)
     curl golang-go npm

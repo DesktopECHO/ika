@@ -2904,25 +2904,38 @@ append_arm64_kernel_page_args() {
 }
 
 # WSL2 reaches the host GPU only through Direct3D 12 (/dev/dxg), which Mesa's
-# Dozen driver offers as Vulkan 1.2. gfxstream runs on it with three settings
-# (GRAPHICS.md, "WSL2"): MESA_VK_DEVICE_SELECT hides every device but the
-# Dozen GPU, which gfxstream would otherwise rank below llvmpipe, and unlike
-# VK_DRIVER_FILES keeps the instance extensions llvmpipe's driver adds;
-# IKA_DZN_FIX turns on the VK_LAYER_IKA_dzn_fix layer, which works around
-# Dozen's gaps; and the libd3d12.so shim first in LD_LIBRARY_PATH makes every
-# Vulkan instance share one D3D12 device, as WSL allows only a few per process
-# and does not give back a released one's address space. Runs before the first
-# vulkaninfo probe, so GPU mode selection sees what crosvm will. Keeps a
-# MESA_VK_DEVICE_SELECT the user set; IKA_WSL_GPU_FIX=0 turns all of it off.
+# Dozen driver offers as Vulkan 1.2. gfxstream runs on it with four settings
+# (GRAPHICS.md, "WSL2"): VK_DRIVER_FILES loads Ika's own Dozen build, with
+# Ika's Lavapipe for the instance extensions gfxstream needs and Dozen does
+# not list; MESA_VK_DEVICE_SELECT hides every device but the Dozen GPU, which
+# gfxstream would otherwise rank below Lavapipe; IKA_DZN_FIX turns on the
+# VK_LAYER_IKA_dzn_fix layer, which works around Dozen's gaps; and the
+# libd3d12.so shim first in LD_LIBRARY_PATH makes every Vulkan instance share
+# one D3D12 device, as WSL allows only a few per process and does not give
+# back a released one's address space. Runs before the first vulkaninfo
+# probe, so GPU mode selection sees what crosvm will. Keeps a VK_DRIVER_FILES
+# or MESA_VK_DEVICE_SELECT the user set; IKA_SYSTEM_DOZEN=1 uses the
+# distribution's Dozen instead of Ika's; IKA_WSL_GPU_FIX=0 turns all of it off.
 setup_wsl_gpu_env() {
   local summary
   local device
+  local dozen_icd="${PACKAGED_WSL_GPU_DIR}/dozen/dzn_icd.json"
+  local lavapipe_icd="${PACKAGED_CVD_HOST_OUT}/bin/vk_lavapipe_icd.json"
+  local driver_files=""
+  local dozen_name="Mesa Dozen"
 
   [[ -e /dev/dxg && -d "${PACKAGED_WSL_GPU_DIR}" ]] || return 0
   [[ "${IKA_WSL_GPU_FIX:-1}" != "0" ]] || return 0
   # Already done by the ika that ran this one, as restart does to start.
   [[ -z "${IKA_WSL_GPU_ENV:-}" ]] || return 0
-  summary="$(probe_vulkaninfo_summary)" || return 0
+  if [[ -z "${VK_DRIVER_FILES:-}" && "${IKA_SYSTEM_DOZEN:-0}" != "1" &&
+        -f "${dozen_icd}" && -f "${lavapipe_icd}" ]]; then
+    driver_files="${dozen_icd}:${lavapipe_icd}"
+    dozen_name="Ika's Mesa Dozen"
+    summary="$(VK_DRIVER_FILES="${driver_files}" probe_vulkaninfo_summary)" || return 0
+  else
+    summary="$(probe_vulkaninfo_summary)" || return 0
+  fi
 
   # The first Dozen device that is not WARP, Microsoft's software renderer
   # (vendor 0x1414), as "vendor:device" in MESA_VK_DEVICE_SELECT's hex form.
@@ -2940,11 +2953,12 @@ setup_wsl_gpu_env() {
   ' <<<"${summary}")"
   [[ -n "${device}" ]] || return 0
 
+  [[ -z "${driver_files}" ]] || export VK_DRIVER_FILES="${driver_files}"
   export MESA_VK_DEVICE_SELECT="${MESA_VK_DEVICE_SELECT:-${device}!}"
   export IKA_DZN_FIX=1
   export LD_LIBRARY_PATH="${PACKAGED_WSL_GPU_DIR}/d3d12${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
   export IKA_WSL_GPU_ENV=1
-  log_start_note "WSL2: GPU through Mesa Dozen, MESA_VK_DEVICE_SELECT=${MESA_VK_DEVICE_SELECT}"
+  log_start_note "WSL2: GPU through ${dozen_name}, MESA_VK_DEVICE_SELECT=${MESA_VK_DEVICE_SELECT}"
 }
 
 VULKANINFO_SUMMARY=""

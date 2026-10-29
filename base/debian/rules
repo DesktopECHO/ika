@@ -70,10 +70,11 @@ scrcpy_static_deps := $(scrcpy_deps_work_dir)/install/linux-native-static
 # built into the ROM. See lineageos/tools/madbfs/README.md.
 madbfs_src := $(CURDIR)/../lineageos/tools/madbfs
 madbfs_build_dir := $(CURDIR)/_build_madbfs
-# Ika's WSL2 GPU helpers: a Vulkan layer and a libd3d12.so shim for Mesa Dozen.
-# See GRAPHICS.md, "WSL2".
+# Ika's WSL2 GPU helpers: a Vulkan layer, a libd3d12.so shim and Mesa's Dozen
+# driver. See GRAPHICS.md, "WSL2".
 wsl_src := $(CURDIR)/../tools/wsl
 wsl_build_dir := $(CURDIR)/_build_wsl
+wsl_make_args := BUILD=$(wsl_build_dir) DOWNLOADS=$(ika_work_root)/wsl-downloads
 crosvm_bin := cvd/bazel-bin/cuttlefish/package/cuttlefish-common/bin/crosvm
 cuttlefish_metrics := debian/ika-metrics/usr/lib/cuttlefish-metrics
 
@@ -213,7 +214,7 @@ override_dh_auto_build:
 	fi
 	cmake -S $(madbfs_src) -B $(madbfs_build_dir) -G Ninja -DCMAKE_BUILD_TYPE=Release
 	cmake --build $(madbfs_build_dir)
-	$(MAKE) -C $(wsl_src) BUILD=$(wsl_build_dir)
+	$(MAKE) -C $(wsl_src) $(wsl_make_args)
 
 # Clean the scrcpy meson build tree alongside the default clean.
 .PHONY: override_dh_auto_clean
@@ -258,7 +259,7 @@ override_dh_install:
 	DESTDIR=$(CURDIR)/debian/ika-base meson install -C $(scrcpy_build_dir)
 	install -m 0755 $(madbfs_build_dir)/upstream/madbfs/madbfs \
 	    $(madbfs_build_dir)/upstream/madbfs-msg/madbfs-msg ${cuttlefish_common}/bin/
-	$(MAKE) -C $(wsl_src) BUILD=$(wsl_build_dir) DESTDIR=$(CURDIR)/debian/ika-base install
+	$(MAKE) -C $(wsl_src) $(wsl_make_args) DESTDIR=$(CURDIR)/debian/ika-base install
 	install -d debian/ika-base/usr/share/applications
 	install -d debian/ika-base/usr/share/icons/hicolor/256x256/apps
 	install -m 0644 ../tools/ika.desktop debian/ika-base/usr/share/applications/ika.desktop
