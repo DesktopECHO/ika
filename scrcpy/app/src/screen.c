@@ -1298,10 +1298,11 @@ sc_screen_set_orientation(struct sc_screen *screen,
 
 // Ika: give the title bar of a decorated window the color along the top edge
 // of the content: the most common of a row of samples, once it has held for a
-// few frames (not in the middle of an animation), at most a few times a second
+// few frames (not in the middle of an animation), at most a few times a second.
+// A frame the display has settled on is taken at once.
 static void
 sc_screen_update_titlebar_color(struct sc_screen *screen,
-                                const AVFrame *frame) {
+                                const AVFrame *frame, bool settled) {
     if (SDL_GetWindowFlags(screen->window)
             & (SDL_WINDOW_BORDERLESS | SDL_WINDOW_FULLSCREEN)) {
         return;
@@ -1357,22 +1358,28 @@ sc_screen_update_titlebar_color(struct sc_screen *screen,
     }
 
     struct sc_screen_bg_color *candidate = &screen->titlebar_candidate;
-    if (screen->titlebar_candidate_frames && candidate->r == color.r
-            && candidate->g == color.g && candidate->b == color.b) {
-        if (screen->titlebar_candidate_frames < SC_TITLEBAR_STABLE_FRAMES) {
-            ++screen->titlebar_candidate_frames;
-        }
-    } else {
+    if (settled) {
         *candidate = color;
-        screen->titlebar_candidate_frames = 1;
-    }
-    if (screen->titlebar_candidate_frames < SC_TITLEBAR_STABLE_FRAMES) {
-        return;
-    }
+        screen->titlebar_candidate_frames = SC_TITLEBAR_STABLE_FRAMES;
+    } else {
+        if (screen->titlebar_candidate_frames && candidate->r == color.r
+                && candidate->g == color.g && candidate->b == color.b) {
+            if (screen->titlebar_candidate_frames
+                    < SC_TITLEBAR_STABLE_FRAMES) {
+                ++screen->titlebar_candidate_frames;
+            }
+        } else {
+            *candidate = color;
+            screen->titlebar_candidate_frames = 1;
+        }
+        if (screen->titlebar_candidate_frames < SC_TITLEBAR_STABLE_FRAMES) {
+            return;
+        }
 
-    if (screen->titlebar_tick
-            && now - screen->titlebar_tick < SC_TITLEBAR_INTERVAL) {
-        return;
+        if (screen->titlebar_tick
+                && now - screen->titlebar_tick < SC_TITLEBAR_INTERVAL) {
+            return;
+        }
     }
     if (!iw->has_titlebar_color || iw->titlebar_color[0] != color.r
             || iw->titlebar_color[1] != color.g
@@ -1429,14 +1436,16 @@ sc_screen_apply_frame(struct sc_screen *screen, bool can_resize) {
         return false;
     }
 
-    sc_screen_update_titlebar_color(screen, frame);
-
     if (screen->flex_display) {
         if (screen->raw) {
             sc_flex_on_raw_frame_pixels(&screen->flex, frame);
         }
         sc_flex_on_frame(&screen->flex, new_frame_size);
     }
+
+    // After the flex display has seen the frame: in a raw frame, the part
+    // showing the display depends on the size it shows
+    sc_screen_update_titlebar_color(screen, frame, false);
 
     if (screen->pixel_mode && !screen->raw) {
         if (sc_screen_get_frame_corner_color(frame, &screen->content_bg)) {
@@ -1736,6 +1745,13 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
                     && screen->window_shown) {
                 if (screen->raw) {
                     sc_screen_update_raw_content_size(screen);
+                    // The shown size changed without a new frame (a still
+                    // app sends none): the title bar color was read from
+                    // where the display used to be
+                    if (screen->frame->data[0]) {
+                        sc_screen_update_titlebar_color(screen, screen->frame,
+                                                        true);
+                    }
                 }
                 sc_screen_render(screen, true);
             }
