@@ -50,6 +50,18 @@
  *    isn't usable"). The layer reports the feature and the full 32-bit limit,
  *    and clears the feature before dzn's vkCreateDevice sees it.
  *
+ * 7. Push constants stay valid across pipeline layouts with compatible push
+ *    constant ranges, and ANGLE pushes its driver uniforms once per render
+ *    pass. dzn keeps push constants as D3D12 root constants, which a root
+ *    signature change resets, but it only uploads the bytes pushed since its
+ *    last upload (dzn_cmd_buffer.c, Mesa 26.2.5 and main). A draw after a
+ *    switch to another pipeline layout then runs with reset driver uniforms
+ *    and draws nothing: SurfaceFlinger lost every texture of a frame whose
+ *    first draw had no texture, such as one under a full-screen layer with a
+ *    border, and the display went black. After vkCmdBindPipeline changes the
+ *    layout, the layer pushes the new layout's ranges again from what the
+ *    command buffer pushed.
+ *
  * Diagnostics: with IKA_DZN_TRACE_REMOVAL=1 (and IKA_D3D12_DRED=1 for the
  * libd3d12.so shim), the layer checks after each resource, descriptor and
  * command call whether D3D12 removed the device, and logs the first call
@@ -100,6 +112,15 @@ struct device_data {
   int fake_ycbcr;
   PFN_vkCreateSampler create_sampler;
   PFN_vkCreateImageView create_image_view;
+  PFN_vkCreatePipelineLayout create_pipeline_layout;
+  PFN_vkDestroyPipelineLayout destroy_pipeline_layout;
+  PFN_vkCreateGraphicsPipelines create_graphics_pipelines;
+  PFN_vkCreateComputePipelines create_compute_pipelines_next;
+  PFN_vkDestroyPipeline destroy_pipeline;
+  PFN_vkBeginCommandBuffer begin_command_buffer;
+  PFN_vkFreeCommandBuffers free_command_buffers;
+  PFN_vkCmdPushConstants cmd_push_constants;
+  PFN_vkCmdBindPipeline cmd_bind_pipeline;
   /* IKA_DZN_TRACE_REMOVAL */
   PFN_vkCreateImage create_image;
   PFN_vkCreateBufferView create_buffer_view;
@@ -447,6 +468,15 @@ static VKAPI_ATTR VkResult VKAPI_CALL layer_CreateDevice(VkPhysicalDevice pdev, 
   data->fake_ycbcr = instance->fake_ycbcr;
   data->create_sampler = (PFN_vkCreateSampler)gdpa(*device, "vkCreateSampler");
   data->create_image_view = (PFN_vkCreateImageView)gdpa(*device, "vkCreateImageView");
+  data->create_pipeline_layout = (PFN_vkCreatePipelineLayout)gdpa(*device, "vkCreatePipelineLayout");
+  data->destroy_pipeline_layout = (PFN_vkDestroyPipelineLayout)gdpa(*device, "vkDestroyPipelineLayout");
+  data->create_graphics_pipelines = (PFN_vkCreateGraphicsPipelines)gdpa(*device, "vkCreateGraphicsPipelines");
+  data->create_compute_pipelines_next = (PFN_vkCreateComputePipelines)gdpa(*device, "vkCreateComputePipelines");
+  data->destroy_pipeline = (PFN_vkDestroyPipeline)gdpa(*device, "vkDestroyPipeline");
+  data->begin_command_buffer = (PFN_vkBeginCommandBuffer)gdpa(*device, "vkBeginCommandBuffer");
+  data->free_command_buffers = (PFN_vkFreeCommandBuffers)gdpa(*device, "vkFreeCommandBuffers");
+  data->cmd_push_constants = (PFN_vkCmdPushConstants)gdpa(*device, "vkCmdPushConstants");
+  data->cmd_bind_pipeline = (PFN_vkCmdBindPipeline)gdpa(*device, "vkCmdBindPipeline");
   data->create_image = (PFN_vkCreateImage)gdpa(*device, "vkCreateImage");
   data->create_image_next = data->create_image;
   data->destroy_image_next = (PFN_vkDestroyImage)gdpa(*device, "vkDestroyImage");
@@ -741,6 +771,188 @@ static VKAPI_ATTR VkResult VKAPI_CALL trace_QueueSubmit(VkQueue queue, uint32_t 
   return result;
 }
 
+/* Push constant ranges of pipeline layouts, the layout of each pipeline, and
+ * each command buffer's pushed bytes and bound layouts (item 7). Open
+ * addressing on the handle; 0 is empty, 1 is a removed entry. */
+#define PC_RANGES 4
+#define PC_BYTES 256
+#define PC_LAYOUTS 4096u
+#define PC_PIPELINES 16384u
+#define PC_CMDBUFS 4096u
+struct pc_layout {
+  uint64_t key;
+  uint32_t count;
+  VkPushConstantRange ranges[PC_RANGES];
+};
+struct pc_pipeline {
+  uint64_t key;
+  uint64_t layout;
+};
+struct pc_cmdbuf {
+  uint64_t key;
+  uint64_t bound[2]; /* graphics, compute */
+  uint32_t end;
+  uint8_t bytes[PC_BYTES];
+};
+static struct pc_layout pc_layouts[PC_LAYOUTS];
+static struct pc_pipeline pc_pipelines[PC_PIPELINES];
+static struct pc_cmdbuf pc_cmdbufs[PC_CMDBUFS];
+static pthread_mutex_t pc_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* The entry for key (each entry starts with its key), or with add a free one
+ * for the caller to fill; NULL when absent or the table is full. */
+static void *pc_slot(void *table, size_t stride, uint32_t size, uint64_t key, int add) {
+  uint64_t *removed = NULL;
+  for (uint32_t i = 0; i < size; i++) {
+    uint64_t *slot = (uint64_t *)((char *)table + ((key / 8 + i) % size) * stride);
+    if (*slot == key) return slot;
+    if (*slot == 1 && !removed) removed = slot;
+    if (!*slot) return add ? (removed ? removed : slot) : NULL;
+  }
+  return add ? removed : NULL;
+}
+
+static void pc_remove(void *table, size_t stride, uint32_t size, uint64_t key) {
+  pthread_mutex_lock(&pc_lock);
+  uint64_t *slot = pc_slot(table, stride, size, key, 0);
+  if (slot) *slot = 1;
+  pthread_mutex_unlock(&pc_lock);
+}
+
+static void pc_add_pipelines(uint32_t count, const VkPipeline *pipelines, const VkPipelineLayout *layouts,
+                             size_t layout_stride) {
+  pthread_mutex_lock(&pc_lock);
+  for (uint32_t i = 0; i < count; i++) {
+    VkPipelineLayout layout = *(const VkPipelineLayout *)((const char *)layouts + i * layout_stride);
+    if (!pipelines[i] || !layout) continue;
+    struct pc_pipeline *p = pc_slot(pc_pipelines, sizeof(*p), PC_PIPELINES, (uint64_t)pipelines[i], 1);
+    if (p) *p = (struct pc_pipeline){(uint64_t)pipelines[i], (uint64_t)layout};
+  }
+  pthread_mutex_unlock(&pc_lock);
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL layer_CreatePipelineLayout(VkDevice device,
+                                                                 const VkPipelineLayoutCreateInfo *info,
+                                                                 const VkAllocationCallbacks *alloc,
+                                                                 VkPipelineLayout *layout) {
+  VkResult result = find_device(device)->create_pipeline_layout(device, info, alloc, layout);
+  if (result != VK_SUCCESS || !info->pushConstantRangeCount || info->pushConstantRangeCount > PC_RANGES)
+    return result;
+  for (uint32_t i = 0; i < info->pushConstantRangeCount; i++) {
+    if (info->pPushConstantRanges[i].offset + info->pPushConstantRanges[i].size > PC_BYTES) return result;
+  }
+  pthread_mutex_lock(&pc_lock);
+  struct pc_layout *l = pc_slot(pc_layouts, sizeof(*l), PC_LAYOUTS, (uint64_t)*layout, 1);
+  if (l) {
+    l->key = (uint64_t)*layout;
+    l->count = info->pushConstantRangeCount;
+    memcpy(l->ranges, info->pPushConstantRanges, l->count * sizeof(*l->ranges));
+  }
+  pthread_mutex_unlock(&pc_lock);
+  return result;
+}
+
+static VKAPI_ATTR void VKAPI_CALL layer_DestroyPipelineLayout(VkDevice device, VkPipelineLayout layout,
+                                                              const VkAllocationCallbacks *alloc) {
+  if (layout) pc_remove(pc_layouts, sizeof(*pc_layouts), PC_LAYOUTS, (uint64_t)layout);
+  find_device(device)->destroy_pipeline_layout(device, layout, alloc);
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL layer_CreateGraphicsPipelines(VkDevice device, VkPipelineCache cache,
+                                                                    uint32_t count,
+                                                                    const VkGraphicsPipelineCreateInfo *infos,
+                                                                    const VkAllocationCallbacks *alloc,
+                                                                    VkPipeline *pipelines) {
+  VkResult result = find_device(device)->create_graphics_pipelines(device, cache, count, infos, alloc, pipelines);
+  if (result >= 0) pc_add_pipelines(count, pipelines, &infos[0].layout, sizeof(*infos));
+  return result;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL layer_CreateComputePipelines(VkDevice device, VkPipelineCache cache,
+                                                                   uint32_t count,
+                                                                   const VkComputePipelineCreateInfo *infos,
+                                                                   const VkAllocationCallbacks *alloc,
+                                                                   VkPipeline *pipelines) {
+  VkResult result =
+      find_device(device)->create_compute_pipelines_next(device, cache, count, infos, alloc, pipelines);
+  if (tracing()) newly_removed("vkCreateComputePipelines");
+  if (result >= 0) pc_add_pipelines(count, pipelines, &infos[0].layout, sizeof(*infos));
+  return result;
+}
+
+static VKAPI_ATTR void VKAPI_CALL layer_DestroyPipeline(VkDevice device, VkPipeline pipeline,
+                                                       const VkAllocationCallbacks *alloc) {
+  if (pipeline) pc_remove(pc_pipelines, sizeof(*pc_pipelines), PC_PIPELINES, (uint64_t)pipeline);
+  find_device(device)->destroy_pipeline(device, pipeline, alloc);
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL layer_BeginCommandBuffer(VkCommandBuffer cb,
+                                                              const VkCommandBufferBeginInfo *info) {
+  pthread_mutex_lock(&pc_lock);
+  struct pc_cmdbuf *c = pc_slot(pc_cmdbufs, sizeof(*c), PC_CMDBUFS, (uint64_t)(uintptr_t)cb, 1);
+  if (c) {
+    c->key = (uint64_t)(uintptr_t)cb;
+    c->bound[0] = c->bound[1] = 0;
+    c->end = 0;
+  }
+  pthread_mutex_unlock(&pc_lock);
+  return find_device(cb)->begin_command_buffer(cb, info);
+}
+
+static VKAPI_ATTR void VKAPI_CALL layer_FreeCommandBuffers(VkDevice device, VkCommandPool pool, uint32_t count,
+                                                          const VkCommandBuffer *cbs) {
+  for (uint32_t i = 0; i < count; i++) {
+    if (cbs[i]) pc_remove(pc_cmdbufs, sizeof(*pc_cmdbufs), PC_CMDBUFS, (uint64_t)(uintptr_t)cbs[i]);
+  }
+  find_device(device)->free_command_buffers(device, pool, count, cbs);
+}
+
+static VKAPI_ATTR void VKAPI_CALL layer_CmdPushConstants(VkCommandBuffer cb, VkPipelineLayout layout,
+                                                        VkShaderStageFlags stages, uint32_t offset, uint32_t size,
+                                                        const void *values) {
+  if (offset + size <= PC_BYTES) {
+    pthread_mutex_lock(&pc_lock);
+    struct pc_cmdbuf *c = pc_slot(pc_cmdbufs, sizeof(*c), PC_CMDBUFS, (uint64_t)(uintptr_t)cb, 0);
+    if (c) {
+      memcpy(c->bytes + offset, values, size);
+      if (offset + size > c->end) c->end = offset + size;
+    }
+    pthread_mutex_unlock(&pc_lock);
+  }
+  find_device(cb)->cmd_push_constants(cb, layout, stages, offset, size, values);
+}
+
+static VKAPI_ATTR void VKAPI_CALL layer_CmdBindPipeline(VkCommandBuffer cb, VkPipelineBindPoint bind_point,
+                                                       VkPipeline pipeline) {
+  struct device_data *data = find_device(cb);
+  data->cmd_bind_pipeline(cb, bind_point, pipeline);
+  const int bp = bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS ? 0 : bind_point == VK_PIPELINE_BIND_POINT_COMPUTE ? 1 : -1;
+  if (bp < 0) return;
+
+  struct pc_layout ranges = {0};
+  uint8_t bytes[PC_BYTES];
+  pthread_mutex_lock(&pc_lock);
+  struct pc_pipeline *p = pc_slot(pc_pipelines, sizeof(*p), PC_PIPELINES, (uint64_t)pipeline, 0);
+  struct pc_cmdbuf *c = pc_slot(pc_cmdbufs, sizeof(*c), PC_CMDBUFS, (uint64_t)(uintptr_t)cb, 0);
+  if (p && c && c->bound[bp] != p->layout) {
+    /* Only a change from another layout resets dzn's root constants. */
+    if (c->bound[bp] && c->end) {
+      struct pc_layout *l = pc_slot(pc_layouts, sizeof(*l), PC_LAYOUTS, p->layout, 0);
+      if (l) {
+        ranges = *l;
+        memcpy(bytes, c->bytes, sizeof(bytes));
+      }
+    }
+    c->bound[bp] = p->layout;
+  }
+  pthread_mutex_unlock(&pc_lock);
+
+  for (uint32_t i = 0; i < ranges.count; i++) {
+    const VkPushConstantRange *r = &ranges.ranges[i];
+    data->cmd_push_constants(cb, (VkPipelineLayout)ranges.key, r->stageFlags, r->offset, r->size, bytes + r->offset);
+  }
+}
+
 /* Images gfxstream decompresses into (MUTABLE_FORMAT | EXTENDED_USAGE), whose
  * memory it shares with its own block images. Open addressing; 0 is empty,
  * 1 is a deleted slot. */
@@ -926,6 +1138,15 @@ EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL ika_dzn_fix_GetDeviceProcAddr(Vk
   if (!strcmp(name, "vkDestroyDevice")) return (PFN_vkVoidFunction)layer_DestroyDevice;
   struct device_data *data = find_device(device);
   if (!data) return NULL;
+  if (!strcmp(name, "vkCreatePipelineLayout")) return (PFN_vkVoidFunction)layer_CreatePipelineLayout;
+  if (!strcmp(name, "vkDestroyPipelineLayout")) return (PFN_vkVoidFunction)layer_DestroyPipelineLayout;
+  if (!strcmp(name, "vkCreateGraphicsPipelines")) return (PFN_vkVoidFunction)layer_CreateGraphicsPipelines;
+  if (!strcmp(name, "vkCreateComputePipelines")) return (PFN_vkVoidFunction)layer_CreateComputePipelines;
+  if (!strcmp(name, "vkDestroyPipeline")) return (PFN_vkVoidFunction)layer_DestroyPipeline;
+  if (!strcmp(name, "vkBeginCommandBuffer")) return (PFN_vkVoidFunction)layer_BeginCommandBuffer;
+  if (!strcmp(name, "vkFreeCommandBuffers")) return (PFN_vkVoidFunction)layer_FreeCommandBuffers;
+  if (!strcmp(name, "vkCmdPushConstants")) return (PFN_vkVoidFunction)layer_CmdPushConstants;
+  if (!strcmp(name, "vkCmdBindPipeline")) return (PFN_vkVoidFunction)layer_CmdBindPipeline;
   if (tracing()) {
     static const struct {
       const char *name;

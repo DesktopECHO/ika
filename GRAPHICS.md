@@ -283,6 +283,10 @@ choosing the GPU mode:
     D3D12 has but Dozen does not report. Chrome draws with Skia Graphite on
     Dawn, and Dawn's Vulkan backend requires the feature: without it Chrome
     exits at start ("GPU process isn't usable").
+  - It pushes push constants again after a switch to another pipeline
+    layout. Dozen loses them on that switch, and ANGLE pushes them once per
+    render pass, so SurfaceFlinger drew no textures in a frame that began
+    with an untextured draw, and the display went black.
   - It keeps gfxstream's ETC2 and ASTC emulation from binding other images
     into a dedicated allocation, which removes the D3D12 device. Ika's
     gfxstream has this fix too.
