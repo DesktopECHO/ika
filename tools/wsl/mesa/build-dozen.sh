@@ -1,8 +1,9 @@
 #!/bin/bash
 # Builds Mesa's Dozen Vulkan driver (libvulkan_dzn.so) from the Mesa release
 # below, with the patches in series, for Ika on WSL2. Only the driver is
-# built: no OpenGL, no window systems, no LLVM. With DirectX-Headers older
-# than Mesa wants (Debian 13's), meson fetches the version it pins.
+# built: no OpenGL, no LLVM, and of the window systems only X11, for the
+# VK_KHR_xcb_surface gfxstream's swapchain asks for. With DirectX-Headers
+# older than Mesa wants (Debian 13's), meson fetches the version it pins.
 #
 # Usage: build-dozen.sh BUILD_DIR DOWNLOAD_DIR INSTALL_DIR
 #   BUILD_DIR     gets the patched source and the meson build; the driver and
@@ -43,7 +44,7 @@ meson setup "${src}" "${build_dir}/build" \
   -Db_ndebug=true \
   -Dvulkan-drivers=microsoft-experimental \
   -Dgallium-drivers= \
-  -Dplatforms= \
+  -Dplatforms=x11 \
   -Dopengl=false \
   -Dgles1=disabled \
   -Dgles2=disabled \

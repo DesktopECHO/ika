@@ -177,8 +177,8 @@ What Ika changes for it:
   Vega and older GPUs, gfxstream also allocates Vulkan memory as device memory
   only (`VulkanAllocateDeviceMemoryOnly`), against host-visible memory
   corruption. Cuttlefish warns when an AMD host's kernel is older than 6.13.
-- **WSL2:** Mesa Dozen's GPU only, a Vulkan layer and a D3D12 shim; see
-  [WSL2](#wsl2).
+- **WSL2:** the GPU through Ika's own build of Mesa Dozen, a Vulkan layer and
+  a D3D12 shim; see [WSL2](#wsl2).
 - **Every host:** the gfxstream modes run with `EGL_PLATFORM=surfaceless`
   unless you set it, and with gfxstream's renderer features
   `MinimalLogging:disabled` and `VulkanBatchedDescriptorSetUpdate:disabled`
@@ -245,9 +245,12 @@ the count after Android stops: on a leak, it writes a warning to
 ## WSL2
 
 On WSL2 the only way to the GPU is Direct3D 12, through `/dev/dxg` and the
-libraries in `/usr/lib/wsl/lib`. Mesa's Dozen driver (in `mesa-vulkan-drivers`)
-offers it as Vulkan 1.2, and gfxstream renders on that. Venus cannot: Dozen
-cannot export its memory as dma-bufs.
+libraries in `/usr/lib/wsl/lib`. Mesa's Dozen driver offers it as Vulkan, and
+gfxstream renders on that. `ika-base` carries its own Dozen on x86_64: Mesa
+26.3.0-rc2 with the patches in [tools/wsl/mesa](tools/wsl/mesa), built by
+`build-dozen.sh` with only X11 for a window system, and installed under
+`/usr/lib/cuttlefish-common/wsl/dozen`. It offers Vulkan 1.3. Venus cannot run
+on it: Dozen cannot export its memory as dma-bufs.
 
 ### What the host needs
 
@@ -255,8 +258,8 @@ cannot export its memory as dma-bufs.
   Platform, `nestedVirtualization=true` under `[wsl2]` in
   `%UserProfile%\.wslconfig`, and, on some AMD hosts, Virtualization-based
   Security off. `ls /dev/kvm` checks it.
-- A Windows GPU driver with WSL support, and `vulkaninfo --summary` listing a
-  `DRIVER_ID_MESA_DOZEN` device named after the GPU.
+- A Windows GPU driver with WSL support. `VK_DRIVER_FILES=/usr/lib/cuttlefish-common/wsl/dozen/dzn_icd.json vulkaninfo --summary`
+  lists a `DRIVER_ID_MESA_DOZEN` device named after the GPU.
 - The WSL kernel has no udmabuf: set `enable_gpu_udmabuf = false` in `[gpu]`.
 
 ### What Ika does
@@ -264,11 +267,13 @@ cannot export its memory as dma-bufs.
 When `/dev/dxg` exists and `vulkaninfo` lists a Dozen GPU, Ika sets, before
 choosing the GPU mode:
 
+- `VK_DRIVER_FILES` to Ika's Dozen and Ika's Lavapipe. Lavapipe is there for
+  the instance extensions gfxstream needs and Dozen does not list
+  (`VK_KHR_external_memory_capabilities` and the like). A `VK_DRIVER_FILES`
+  of your own wins.
 - `MESA_VK_DEVICE_SELECT=<vendor>:<device>!`, which hides every other device.
-  gfxstream would otherwise pick llvmpipe, which supports more of what it
-  looks for. `VK_DRIVER_FILES` would hide it too, but it would also take away
-  the instance extensions llvmpipe's driver adds, and gfxstream then finds no
-  device. A `MESA_VK_DEVICE_SELECT` of your own wins.
+  gfxstream would otherwise pick Lavapipe, which supports more of what it
+  looks for. A `MESA_VK_DEVICE_SELECT` of your own wins.
 - `IKA_DZN_FIX=1`, which turns on the `VK_LAYER_IKA_dzn_fix` Vulkan layer
   ([tools/wsl/ika_dzn_fix.c](tools/wsl/ika_dzn_fix.c)). It works around
   Dozen's gaps:
@@ -286,7 +291,8 @@ choosing the GPU mode:
   - It pushes push constants again after a switch to another pipeline
     layout. Dozen loses them on that switch, and ANGLE pushes them once per
     render pass, so SurfaceFlinger drew no textures in a frame that began
-    with an untextured draw, and the display went black.
+    with an untextured draw, and the display went black. Ika's Dozen has
+    this fix too; the layer keeps it for the distribution's.
   - It keeps gfxstream's ETC2 and ASTC emulation from binding other images
     into a dedicated allocation, which removes the D3D12 device. Ika's
     gfxstream has this fix too.
@@ -296,12 +302,14 @@ choosing the GPU mode:
   released device's GPU address space is not given back, so after about a
   hundred Android apps a device per instance runs out.
 
-`gpu_mode = auto` then picks `gfxstream_guest_angle`, as Dozen's Vulkan 1.2
-does not suit Venus. The start log has a `WSL2:` line when Ika set this up.
+`gpu_mode = auto` then picks `gfxstream_guest_angle`, as Venus needs the
+dma-bufs Dozen cannot export. The start log has a `WSL2:` line when Ika set
+this up.
 
 | Variable | Effect |
 | --- | --- |
 | `IKA_WSL_GPU_FIX=0` | Ika sets none of the above |
+| `IKA_SYSTEM_DOZEN=1` | Uses the distribution's Dozen instead of Ika's |
 | `DISABLE_IKA_DZN_FIX=1` | Turns the layer off |
 | `IKA_DZN_FAKE_YCBCR=0` | The layer does not offer `samplerYcbcrConversion` |
 | `IKA_D3D12_SHIM_DISABLE=1` | The shim creates a device for each instance |

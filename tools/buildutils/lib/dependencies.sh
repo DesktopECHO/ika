@@ -87,6 +87,9 @@ function deb_build_dependency_packages() {
 
     # Ika's WSL2 GPU helpers (tools/wsl), Mesa's Dozen driver among them
     directx-headers-dev python3-mako python3-packaging python3-yaml
+    libx11-xcb-dev libxcb1-dev libxcb-dri3-dev libxcb-keysyms1-dev
+    libxcb-present-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-sync-dev
+    libxcb-xfixes0-dev libxshmfence-dev
 
     # cuttlefish-frontend Build-Depends (Go + Node.js)
     curl golang-go npm

@@ -3063,6 +3063,10 @@ host_suits_venus() {
     printf '%s\n' "the first Vulkan device is a software one"
     return 1
   fi
+  if grep -q 'DRIVER_ID_MESA_DOZEN' <<<"${primary_device}"; then
+    printf '%s\n' "Dozen cannot export its memory as dma-bufs"
+    return 1
+  fi
   version="$(awk -F'=' '/apiVersion/ { split($2, v, " "); print v[1]; exit }' <<<"${primary_device}")"
   IFS=. read -r major minor _ <<<"${version}"
   if ! [[ "${major}" =~ ^[0-9]+$ && "${minor}" =~ ^[0-9]+$ ]]; then
