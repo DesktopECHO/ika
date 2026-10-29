@@ -391,9 +391,11 @@ These have no setting:
 
 Ika runs in a WSL2 distribution (Fedora, Debian, Ubuntu or Arch, from the
 Requirements) once the parts a fresh WSL2 lacks are in place: nested
-virtualization (off by default, so there is no `/dev/kvm`), the vhost-vsock,
-vhost-net and udmabuf devices (Microsoft's kernel is built without them, and
-Cuttlefish's adb runs over vsock), systemd and cgroup v2. Without them
+virtualization (off by default, so there is no `/dev/kvm`), the vhost-vsock
+and vhost-net devices (older Microsoft kernels are built without them, and
+Cuttlefish's adb runs over vsock), systemd and cgroup v2. Microsoft's kernel
+has no udmabuf, which Ika does without: it then starts with
+`enable_gpu_udmabuf=false`. Without them
 `ika start` ends with `process monitor has died` and `Cuttlefish did not
 reach boot completion`, because crosvm exits at once.
 
