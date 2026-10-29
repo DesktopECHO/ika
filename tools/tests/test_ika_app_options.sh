@@ -278,7 +278,7 @@ save_app_options com.example.game touch
 DIALOG_OUTPUT="$(form_output touch gamekb fullscreen keyboard)" edit_app_options com.example.game >/dev/null
 dialog_args="$(<"${T}/yad.args")"
 expect_contains "${dialog_args}" $'--form\n--title=Startup Options · Some Game\n' "the title names the window and the app"
-expect_contains "${dialog_args}" $'--name=ika-startup-options\n--class=ika-startup-options\n--form\n' "a window class of its own, for the Ika icon"
+expect_contains "${dialog_args}" "--name=${APP_SETTINGS_WINDOW_CLASS}"$'\n'"--class=${APP_SETTINGS_WINDOW_CLASS}"$'\n--form\n' "a window class of its own, for the Ika icon"
 [[ "${dialog_args}" != *"--text="* ]] || fail "the window has a heading again"
 expect_contains "${dialog_args}" $'\n--field=Display density, 0=Auto  :NUM\n0!0..999!8\n--field=<span font_size=\'8pt\'> </span>:LBL\n\n--field=Start Some Game with:\n<span font_size=\'5pt\'> </span>:LBL\n\n' \
   "the density first, at 0 for auto, then the line above the checkboxes, with a half line of space under it"

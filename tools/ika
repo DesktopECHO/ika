@@ -6239,7 +6239,11 @@ set_yad_env() {
 # on Wayland an app ID), which ika-startup-options.desktop names, so that the
 # dock and the task bar show them with the Ika icon: GNOME goes by the
 # desktop entry a window's class names, and yad's own, "yad", names none.
+# WSLg skips desktop entries with NoDisplay, as ika-startup-options.desktop
+# has, and shows the generic Linux icon for their windows; there they take
+# Ika's own class.
 APP_SETTINGS_WINDOW_CLASS="ika-startup-options"
+[[ ! -d /mnt/wslg ]] || APP_SETTINGS_WINDOW_CLASS="ika"
 APP_SETTINGS_WINDOW_OPTIONS=(--name="${APP_SETTINGS_WINDOW_CLASS}" --class="${APP_SETTINGS_WINDOW_CLASS}")
 
 # Whether yad has --css, which gives its CSS to every widget of the window.

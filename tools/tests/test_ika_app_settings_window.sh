@@ -202,10 +202,10 @@ expect_contains "${window}" $'\n--active-tab=1\n' "on the first tab"
 expect_contains "${window}" $'--button=Reset to default:4\n--button=Apply settings:2\n--button=Apply and start:0\n--button=Cancel:1\n' \
   "the buttons, in order"
 [[ "${window}" != *"GDK_BACKEND"* ]] || fail "a GDK backend set, not the session's own: ${window}"
-expect_contains "${window}" $'\n--icon='"${IKA_MENU_ICON}"$'\n--app-id=ika-startup-options\n' "an app ID of its own, for the Ika icon"
+expect_contains "${window}" $'\n--icon='"${IKA_MENU_ICON}"$'\n--app-id='"${APP_SETTINGS_WINDOW_CLASS}"$'\n' "an app ID of its own, for the Ika icon"
 # ika-startup-options.desktop names that class, with the Ika icon, hidden
 desktop_file="${ROOT}/tools/ika-startup-options.desktop"
-grep -qxF "StartupWMClass=${APP_SETTINGS_WINDOW_CLASS}" "${desktop_file}" || fail "the desktop entry names another class"
+grep -qxF "StartupWMClass=ika-startup-options" "${desktop_file}" || fail "the desktop entry names another class"
 grep -qxF "Icon=${IKA_MENU_ICON}" "${desktop_file}" || fail "the desktop entry has another icon"
 grep -qxF "NoDisplay=true" "${desktop_file}" || fail "the desktop entry is in the app menu"
 if command -v desktop-file-validate >/dev/null 2>&1; then
@@ -268,7 +268,7 @@ DIALOG_TAB1="$(options_output dpi=0.000000 touch)" DIALOG_TAB2="$(mapping_output
   edit_app_settings com.example.game 2
 expect_equal "$(wc -l <"${T}/yad.calls")" 3 "the window, the confirmation and the window again"
 expect_contains "$(<"${T}/yad.confirm.args")" "Apply defaults to Some Game</span>" "the confirmation names the game"
-expect_contains "$(<"${T}/yad.confirm.args")" $'--name=ika-startup-options\n--class=ika-startup-options\n' "the confirmation's class"
+expect_contains "$(<"${T}/yad.confirm.args")" "--name=${APP_SETTINGS_WINDOW_CLASS}"$'\n'"--class=${APP_SETTINGS_WINDOW_CLASS}"$'\n' "the confirmation's class"
 expect_contains "$(<"${T}/window.args")" $'\n--active-tab=1\n' "the window comes back on the Startup Options tab, opened on the other"
 expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=Display density, 0=Auto  :NUM\n0!0..999!8\n' "with the console's density"
 expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=  Fullscreen mode (F11, Cmd+F or Left-Alt+F exits):CHK\nTRUE\n' "and a game's default start options"

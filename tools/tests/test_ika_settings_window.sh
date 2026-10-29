@@ -240,7 +240,7 @@ DIALOG_TAB1="${shown_tab1}" DIALOG_TAB2="$(mapping_output ini_keys)" edit_ika_se
 window="$(<"${T}/window.args")"
 tab1="$(<"${T}/window.tab1.args")"
 tab2="$(<"${T}/window.tab2.args")"
-expect_contains "${window}" $'\n--icon='"${IKA_MENU_ICON}"$'\n--app-id=ika-startup-options\n' "the Ika icon's app ID"
+expect_contains "${window}" $'\n--icon='"${IKA_MENU_ICON}"$'\n--app-id='"${APP_SETTINGS_WINDOW_CLASS}"$'\n' "the Ika icon's app ID"
 expect_contains "${window}" $'\n--active-tab=1\n' "on the first tab"
 expect_contains "${tab1}" $'--tab=Startup Options\n' "the Startup Options tab"
 expect_contains "${tab2}" $'--tab=Gamepad Emulation\n' "then the Gamepad Emulation tab"
