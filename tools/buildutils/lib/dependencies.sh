@@ -55,6 +55,15 @@ function rpm_build_dependency_packages() {
     # madbfs (mounts Android's storage on the host)
     boost-devel fuse3-devel
 
+    # Ika's WSL2 helpers (tools/wsl): Mesa's Dozen driver and libdecor's GTK
+    # plugin among them
+    "pkgconfig(DirectX-Headers)" python3-mako python3-packaging python3-pyyaml
+    "pkgconfig(gtk+-3.0)" "pkgconfig(xcb)" "pkgconfig(x11-xcb)" "pkgconfig(xcb-dri3)"
+    "pkgconfig(xcb-present)" "pkgconfig(xcb-sync)" "pkgconfig(xcb-xfixes)"
+    "pkgconfig(xcb-randr)" "pkgconfig(xcb-shm)" "pkgconfig(xcb-keysyms)"
+    "pkgconfig(xshmfence)" "pkgconfig(dbus-1)" "pkgconfig(zlib)" "pkgconfig(libudev)"
+    "pkgconfig(wayland-cursor)"
+
     # Runtime tools needed during rpmbuild
     rsync pigz
 
@@ -148,6 +157,8 @@ function arch_build_dependency_packages() {
     cmake
     coreutils
     curl
+    dbus
+    directx-headers
     e2fsprogs
     erofs-utils
     file
@@ -161,6 +172,7 @@ function arch_build_dependency_packages() {
     git-lfs
     google-glog
     gtest
+    gtk3
     icu
     imagemagick
     inetutils
@@ -174,12 +186,14 @@ function arch_build_dependency_packages() {
     libsrtp
     libva
     libx11
+    libxcb
     libxcursor
     libxext
     libxfixes
     libxi
     libxkbcommon
     libxrandr
+    libxshmfence
     libxss
     libxml2
     # The Bazel-downloaded LLVM toolchain's ld.lld links against libxml2.so.2;
@@ -203,8 +217,12 @@ function arch_build_dependency_packages() {
     protobuf
     protobuf-c
     python
+    python-mako
+    python-packaging
+    python-yaml
     go
     rsync
+    systemd
     tar
     unzip
     util-linux
@@ -216,6 +234,7 @@ function arch_build_dependency_packages() {
     wayland-protocols
     wget
     which
+    xcb-util-keysyms
     xz
     z3
     zstd

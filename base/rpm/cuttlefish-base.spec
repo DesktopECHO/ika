@@ -85,6 +85,27 @@ BuildRequires:  wget
 BuildRequires:  pkgconfig(gl)
 BuildRequires:  alsa-lib-devel
 BuildRequires:  pipewire-devel
+# Ika's WSL2 helpers (tools/wsl): a Vulkan layer, a libd3d12.so shim, Mesa's
+# Dozen driver and libdecor's GTK plugin. See GRAPHICS.md, "WSL2".
+BuildRequires:  pkgconfig(DirectX-Headers)
+BuildRequires:  python3-mako
+BuildRequires:  python3-packaging
+BuildRequires:  python3-pyyaml
+BuildRequires:  pkgconfig(gtk+-3.0)
+BuildRequires:  pkgconfig(xcb)
+BuildRequires:  pkgconfig(x11-xcb)
+BuildRequires:  pkgconfig(xcb-dri3)
+BuildRequires:  pkgconfig(xcb-present)
+BuildRequires:  pkgconfig(xcb-sync)
+BuildRequires:  pkgconfig(xcb-xfixes)
+BuildRequires:  pkgconfig(xcb-randr)
+BuildRequires:  pkgconfig(xcb-shm)
+BuildRequires:  pkgconfig(xcb-keysyms)
+BuildRequires:  pkgconfig(xshmfence)
+BuildRequires:  pkgconfig(dbus-1)
+BuildRequires:  pkgconfig(zlib)
+BuildRequires:  pkgconfig(libudev)
+BuildRequires:  pkgconfig(wayland-cursor)
 
 Requires:       bsdtar
 Requires:       curl
@@ -372,6 +393,9 @@ fi
 cmake -S lineageos/tools/madbfs -B _build_madbfs -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build _build_madbfs
 
+# Ika's WSL2 helpers. See GRAPHICS.md, "WSL2".
+make -C tools/wsl BUILD="$PWD/_build_wsl" DOWNLOADS="$WORK_ROOT/wsl-downloads"
+
 %install
 rm -rf %{buildroot}
 
@@ -398,6 +422,7 @@ cp -a base/cvd/bazel-out/${bazel_arch}-opt/bin/cuttlefish/package/cuttlefish-met
 # Install the scrcpy viewer (folded in from the former ika-scrcpy package) into
 # the shared cuttlefish-common tree, then expose the "Ika" desktop launcher.
 DESTDIR=%{buildroot} meson install -C _build_scrcpy
+make -C tools/wsl BUILD="$PWD/_build_wsl" DESTDIR=%{buildroot} install
 install -m 0755 _build_madbfs/upstream/madbfs/madbfs _build_madbfs/upstream/madbfs-msg/madbfs-msg \
   %{buildroot}/usr/lib/cuttlefish-common/bin/
 
@@ -565,6 +590,7 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/share/applications/ika-startup-options.desktop
 /usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
 /usr/share/icons/hicolor/128x128/apps/ika-scrcpy.png
+/usr/share/vulkan/implicit_layer.d/VK_LAYER_IKA_dzn_fix.json
 %config(noreplace) /etc/firewalld/zones/cuttlefish.xml
 /etc/NetworkManager/conf.d/99-cuttlefish.conf
 %config(noreplace) /etc/sysctl.d/99-cuttlefish.conf
