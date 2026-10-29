@@ -3,8 +3,8 @@
 # ika-wsl-setup: readies a WSL2 distribution for Ika.
 #
 # Ika's Cuttlefish needs things a fresh WSL2 does not have: KVM (nested
-# virtualization is off by default), the vhost-vsock, vhost-net and udmabuf
-# devices (Microsoft's kernel is built without them), tap devices, nftables
+# virtualization is off by default), the vhost-vsock and vhost-net devices
+# (older Microsoft kernels are built without them), tap devices, nftables
 # NAT, systemd (for the user scope Ika starts Cuttlefish in and for udev),
 # cgroup v2 with the cpu controller, and a clock that keeps Windows' time and
 # time zone. This script checks each, installs what is missing, and says when
@@ -50,7 +50,9 @@ readonly -a KERNEL_OPTIONS=(
 
 # The options whose absence calls for a kernel build; the rest are enabled
 # alongside when one is built.
-readonly -a REQUIRED_OPTIONS=(KVM VHOST_VSOCK VHOST_NET TUN UDMABUF BRIDGE NF_TABLES NFT_NAT NFT_MASQ)
+# udmabuf is built into a kernel this script builds, but its lack alone is no
+# reason to build one: Ika starts without it.
+readonly -a REQUIRED_OPTIONS=(KVM VHOST_VSOCK VHOST_NET TUN BRIDGE NF_TABLES NFT_NAT NFT_MASQ)
 
 log() { printf '[%s] %s\n' "${SCRIPT_NAME}" "$*"; }
 warn() { printf '[%s] warning: %s\n' "${SCRIPT_NAME}" "$*" >&2; }
@@ -210,7 +212,6 @@ missing_components() {
       case "${option}" in
         VHOST_VSOCK) [[ -e /dev/vhost-vsock ]] || missing_options+=("${option}") ;;
         VHOST_NET) [[ -e /dev/vhost-net ]] || missing_options+=("${option}") ;;
-        UDMABUF) [[ -e /dev/udmabuf ]] || missing_options+=("${option}") ;;
         TUN) [[ -e /dev/net/tun ]] || missing_options+=("${option}") ;;
       esac
     elif [[ "${status}" -ne 0 ]]; then
@@ -571,7 +572,7 @@ main() {
 
   missing="$(missing_components)"
   if [[ -z "${missing}" && "${force_kernel}" != "true" ]]; then
-    log "nothing is missing: KVM, vhost-vsock, vhost-net, udmabuf, systemd, cgroup v2, the groups, the Start menu link, Windows' access to Android's storage and the time are in place"
+    log "nothing is missing: KVM, vhost-vsock, vhost-net, systemd, cgroup v2, the groups, the Start menu link, Windows' access to Android's storage and the time are in place"
     return 0
   fi
   if [[ -n "${missing}" ]]; then

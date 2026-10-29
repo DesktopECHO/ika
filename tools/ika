@@ -3588,6 +3588,19 @@ append_apple_16k_gfxstream_vulkan_args() {
   log "Apple Silicon 16K host: using udmabuf-backed ExternalBlob with Vulkano gralloc; disabling SystemBlob"
 }
 
+UDMABUF_DEVICE="/dev/udmabuf"
+
+# crosvm does not start with enable_gpu_udmabuf on a kernel without udmabuf,
+# such as Microsoft's WSL2 kernel; gfxstream then uses other memory.
+drop_udmabuf_without_device() {
+  local -n udmabuf_args_array="$1"
+
+  [[ ! -e "${UDMABUF_DEVICE}" ]] || return 0
+  [[ "$(start_arg_value enable_gpu_udmabuf false "${udmabuf_args_array[@]}")" == true ]] || return 0
+  set_or_append_start_arg udmabuf_args_array enable_gpu_udmabuf false
+  log "this kernel has no ${UDMABUF_DEVICE}: starting with enable_gpu_udmabuf=false"
+}
+
 append_radv_gfxstream_vulkan_args() {
   local -n radv_args_array="$1"
 
@@ -9928,6 +9941,7 @@ start_cvd() {
   append_serial_number_args args "$@"
   append_arm64_kernel_page_args args "$@"
   append_gfxstream_vulkan_args args "$@"
+  drop_udmabuf_without_device args
   append_hw_video_decode_args args "$@"
   append_default_display_arg args "${scrcpy_dpi}" "$@"
   prepare_user_adb_key || return 1

@@ -66,7 +66,7 @@ clock_offset_ms() { return 1; }
 windows_utc_offset_minutes() { return 1; }
 report="$(missing_components)"
 [[ "${report}" == *$'nested-virtualization\t'* ]] || fail "nested virtualization is not reported: ${report}"
-[[ "${report}" == *$'kernel\tthe kernel lacks KVM VHOST_VSOCK VHOST_NET TUN UDMABUF BRIDGE NF_TABLES NFT_NAT NFT_MASQ'* ]] \
+[[ "${report}" == *$'kernel\tthe kernel lacks KVM VHOST_VSOCK VHOST_NET TUN BRIDGE NF_TABLES NFT_NAT NFT_MASQ'* ]] \
   || fail "the kernel options are not reported: ${report}"
 [[ "${report}" == *$'systemd\t'* ]] || fail "systemd is not reported: ${report}"
 [[ "${report}" != *$'time-sync\t'* && "${report}" != *$'clock\t'* && "${report}" != *$'timezone\t'* ]] \
