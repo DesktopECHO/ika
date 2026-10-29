@@ -9212,9 +9212,11 @@ mount_android_storage() {
   # Files show as the user's, as Android's owners mean nothing on the host and
   # file managers would treat the folders as read-only. File details are
   # re-read after 2 seconds instead of 60, so files Android apps add or change
-  # show up promptly.
+  # show up promptly. madbfs's cache of file pages holds 64 MiB instead of 256
+  # (72 MiB of memory with its dirty maps, taken as files are read): 288 MiB
+  # was 7% of a 4 GB host.
   if PATH="${CVD_HOST_OUT}/bin:${PATH}" "${PACKAGED_MADBFS_BIN}" --serial="${adb_serial}" \
-      "${root_args[@]}" --ttl=2 --log-file="${MADBFS_LOG_FILE}" \
+      "${root_args[@]}" --ttl=2 --cache-size=64 --log-file="${MADBFS_LOG_FILE}" \
       -o "uid=$(id -u),gid=$(id -g),umask=022" "${ANDROID_STORAGE_DIR}" \
       </dev/null >>"${MADBFS_LOG_FILE}" 2>&1 3>&-; then
     log "Android storage mounted on ${ANDROID_STORAGE_DIR} (${root_args[0]#--root=})"

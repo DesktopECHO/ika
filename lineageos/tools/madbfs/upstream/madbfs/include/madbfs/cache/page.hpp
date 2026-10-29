@@ -3,6 +3,9 @@
 #include "madbfs/cache/dirty_map.hpp"
 #include "madbfs/stat.hpp"
 
+#include <cstdlib>
+#include <memory>
+
 namespace madbfs::cache
 {
     class PageStore;
@@ -289,6 +292,11 @@ namespace madbfs::cache
             usize prev;
         };
 
+        struct FreeData
+        {
+            void operator()(u8* data) const { std::free(data); }
+        };
+
         /**
          * @brief Move `Page` at specified index to front.
          *
@@ -303,8 +311,8 @@ namespace madbfs::cache
 
         u32 m_store_id = 0;
 
-        Vec<u8>       m_data;     // the bytes storage for the pages
-        Vec<PageNode> m_pages;    // LRU
+        std::unique_ptr<u8[], FreeData> m_data;     // the bytes storage for the pages
+        Vec<PageNode>                   m_pages;    // LRU
 
         usize m_front = 0;
         usize m_back  = 0;

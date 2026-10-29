@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cassert>
 #include <limits>
+#include <new>
 
 namespace
 {
@@ -85,12 +86,17 @@ namespace madbfs::cache
         assert(page_size % 8 == 0);
         assert(max_pages != 0);
 
-        m_data.resize(max_pages * page_stride());
+        // calloc rather than a zero-filled vector: memory fresh from the system is zero already, so a page
+        // of the store takes memory only once the cache uses it, not all of them at once.
+        m_data.reset(static_cast<u8*>(std::calloc(max_pages, page_stride())));
+        if (m_data == nullptr) {
+            throw std::bad_alloc{};
+        }
         m_pages.reserve(max_pages);
 
         for (auto i : sv::iota(0uz, max_pages)) {
             auto offset = i * page_stride();
-            auto page   = Page{ m_data.data() + offset, page_size };
+            auto page   = Page{ m_data.get() + offset, page_size };
             m_pages.emplace_back(page, std::nullopt, i + 1, i - 1);
         }
 
