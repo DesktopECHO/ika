@@ -9663,6 +9663,7 @@ start_cvd() {
   local start_epoch
   local scrcpy_dpi
   local -a cvd_env_args=(env)
+  local -a own_session=()
 
   require_executable "${CVD_BIN}" "cvd launcher"
   check_required_groups
@@ -9720,12 +9721,18 @@ start_cvd() {
 
   log_start_context "${launcher_log}" "${args[@]}"
 
+  # Windows runs ika from the Start menu through wslg.exe, which hangs up the
+  # session it started ika in when ika returns, and the launcher stops the
+  # device on a hangup. On WSLg the launcher gets a session of its own, as the
+  # console has. setsid keeps the subshell's process, which leads no process
+  # group.
+  [[ "${IKA_ON_WSLG}" != true ]] || own_session=(setsid)
   (
     cd "${CVD_PRODUCT_OUT}"
     exec 3>&-
     # systemd-run --scope runs the command in this process: launcher_pid stays
     # the launcher's.
-    exec systemd-run --user --scope --quiet --collect -p Delegate=yes \
+    exec "${own_session[@]+"${own_session[@]}"}" systemd-run --user --scope --quiet --collect -p Delegate=yes \
       --unit="ika-android-$(date +%s)" -- \
       "${IKA_SCRIPT_PATH}" __launch-in-vcpu-scope \
       "$(start_arg_value "cpus" "${CVD_COMPUTE_DEFAULTS[cpus]}" "$@")" \
