@@ -77,6 +77,15 @@ struct sc_screen {
     // color from the rendered frame
     bool content_bg_from_render;
     bool content_bg_read; // read from a render at least once
+    // Ika: the color along the top edge of the content, which the title bar
+    // takes once it has held for a few frames
+    struct sc_screen_bg_color titlebar_candidate;
+    unsigned titlebar_candidate_frames;
+    sc_tick titlebar_tick;
+    // The app has drawn (its display is no longer blank), and until when a
+    // blank display keeps the color the title bar had last time
+    bool titlebar_content_seen;
+    sc_tick titlebar_blank_deadline;
 
     struct sc_texture tex;
     struct sc_input_manager im;

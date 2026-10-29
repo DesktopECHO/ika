@@ -16,6 +16,9 @@
 // The invisible margin around a borderless window, which holds its resize
 // edges, in window coordinates
 #define SC_WINDOW_MARGIN 4
+// The resize edges inside the content on WSLg, where they are the only ones
+// within reach, in window coordinates
+#define SC_WINDOW_WSLG_EDGE 8
 // How far a corner resize extends along the edges, beyond the margin
 #define SC_WINDOW_CORNER_EXTENT 16
 // The drag area: a fraction of the display size, fixed when the window resizes
@@ -52,6 +55,73 @@ sc_ika_window_is_constrained(SDL_Window *window) {
                                        | SDL_WINDOW_MAXIMIZED);
 }
 
+
+// WSLg draws the shadow and the title bar of a decorated Wayland window as
+// surfaces of its own. When the window is maximized, it unmaps the shadow
+// but leaves it on screen, at the old size and position, over the window
+// (microsoft/wslg#914, #1521). Switching the decorations off and on again
+// makes it destroy them and draw fresh ones. It builds the frame for the
+// state of the moment (a maximized window gets no resize borders), so this
+// runs on restore too, and the state is put back if the switch changes it.
+//
+// The switch destroys the title bar surface. If the pointer is on it (as
+// after a click on maximize), the compositor's leave event names no surface,
+// which libdecor's GTK plugin ignores: the new title bar keeps the button
+// highlighted until the pointer crosses it again. So the refresh waits until
+// the pointer is in the content; libdecor has had a proper leave by then.
+void
+sc_ika_window_refresh_wslg_decorations(struct sc_ika_window *iw) {
+    SDL_WindowFlags flags = SDL_GetWindowFlags(iw->window);
+    if ((flags & (SDL_WINDOW_BORDERLESS | SDL_WINDOW_FULLSCREEN))
+            || !sc_ika_window_is_wslg()) {
+        iw->wslg_refresh_pending = false;
+        return;
+    }
+    const char *driver = SDL_GetCurrentVideoDriver();
+    if (!driver || strcmp(driver, "wayland")) {
+        iw->wslg_refresh_pending = false;
+        return;
+    }
+    if (SDL_GetMouseFocus() != iw->window) {
+        // On the decorations (or outside the window): see
+        // sc_ika_window_handle_event()
+        iw->wslg_refresh_pending = true;
+        return;
+    }
+    iw->wslg_refresh_pending = false;
+    // The compositor may answer with another state change: once is enough
+    sc_tick now = sc_tick_now();
+    if (iw->wslg_refresh_tick
+            && now - iw->wslg_refresh_tick < SC_TICK_FROM_SEC(1)) {
+        return;
+    }
+    iw->wslg_refresh_tick = now;
+    bool maximized = flags & SDL_WINDOW_MAXIMIZED;
+    if (!SDL_SetWindowBordered(iw->window, false)
+            || !SDL_SetWindowBordered(iw->window, true)) {
+        LOGW("Could not refresh the window decorations: %s", SDL_GetError());
+        return;
+    }
+    if (flags & SDL_WINDOW_RESIZABLE) {
+        SDL_SetWindowResizable(iw->window, true);
+    }
+    SDL_SyncWindow(iw->window);
+    bool now_maximized = SDL_GetWindowFlags(iw->window) & SDL_WINDOW_MAXIMIZED;
+    if (maximized && !now_maximized) {
+        LOGD("WSLg restored the window on decoration refresh, maximizing again");
+        SDL_MaximizeWindow(iw->window);
+    } else if (!maximized && now_maximized) {
+        LOGD("WSLg maximized the window on decoration refresh, restoring");
+        SDL_RestoreWindow(iw->window);
+    }
+}
+
+// Whether the windows are shown by WSLg (RAIL on a Windows desktop)
+bool
+sc_ika_window_is_wslg(void) {
+    return getenv("WSL_DISTRO_NAME") || !access("/mnt/wslg", F_OK);
+}
+
 static enum sc_ika_window_margin_backend
 sc_ika_window_get_margin_backend(bool borderless) {
     const char *driver = SDL_GetCurrentVideoDriver();
@@ -59,7 +129,11 @@ sc_ika_window_get_margin_backend(bool borderless) {
         return SC_IKA_WINDOW_MARGIN_NONE;
     }
     if (!strcmp(driver, "wayland")) {
-        return SC_IKA_WINDOW_MARGIN_WAYLAND;
+        // WSLg shows a window as a Windows window covering only its xdg
+        // window geometry: a margin outside it gets no pointer events, so the
+        // resize edges would be out of reach. Keep them inside the content.
+        return sc_ika_window_is_wslg() ? SC_IKA_WINDOW_MARGIN_NONE
+                                       : SC_IKA_WINDOW_MARGIN_WAYLAND;
     }
     if (!strcmp(driver, "x11")) {
         return SC_IKA_WINDOW_MARGIN_X11;
@@ -112,7 +186,11 @@ sc_ika_window_hit_test(SDL_Window *window, const SDL_Point *area, void *data) {
     struct sc_ika_window *iw = data;
 
     SDL_WindowFlags flags = SDL_GetWindowFlags(window);
-    if (!(flags & SDL_WINDOW_BORDERLESS)
+    bool borderless = flags & SDL_WINDOW_BORDERLESS;
+    // WSLg shows the shadow of a decorated window, which holds libdecor's
+    // resize edges, as a Windows window of its own and passes its clicks to
+    // the content: there the content has resize edges too
+    if ((!borderless && !iw->wslg)
             || (flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MAXIMIZED))) {
         return SDL_HITTEST_NORMAL;
     }
@@ -123,7 +201,8 @@ sc_ika_window_hit_test(SDL_Window *window, const SDL_Point *area, void *data) {
     }
 
     // Without a margin, the resize edges are inside the content
-    int edge = iw->margin ? iw->margin : SC_WINDOW_MARGIN;
+    int edge = iw->margin ? iw->margin
+             : iw->wslg ? SC_WINDOW_WSLG_EDGE : SC_WINDOW_MARGIN;
     int corner = edge + SC_WINDOW_CORNER_EXTENT;
     bool left = area->x < edge;
     bool right = area->x >= w - edge;
@@ -153,7 +232,7 @@ sc_ika_window_hit_test(SDL_Window *window, const SDL_Point *area, void *data) {
     // Without decorations, the window is moved from the top-left corner of its
     // content (before the top and left edges without a margin, so that a drag
     // starts immediately)
-    if (sc_ika_window_is_in_corner(iw, area->x, area->y)) {
+    if (borderless && sc_ika_window_is_in_corner(iw, area->x, area->y)) {
         return SDL_HITTEST_DRAGGABLE;
     }
 
@@ -324,9 +403,177 @@ sc_ika_window_apply_margin(struct sc_ika_window *iw) {
     }
 }
 
+// GTK_STYLE_PROVIDER_PRIORITY_USER, above the theme and gtk.css
+#define SC_GTK_STYLE_PROVIDER_PRIORITY_USER 800
+
+// Load the style provider into the GTK that libdecor's GTK plugin loaded, once.
+// Return false where there is none.
+static bool
+sc_ika_window_init_titlebar(struct sc_ika_window *iw) {
+    if (iw->titlebar_tried) {
+        return iw->titlebar_provider;
+    }
+    iw->titlebar_tried = true;
+
+    void *gtk = dlopen("libgtk-3.so.0", RTLD_LAZY | RTLD_NOLOAD);
+    if (!gtk) {
+        return false;
+    }
+    void *(*css_provider_new)(void) = (void *(*)(void))
+        dlsym(gtk, "gtk_css_provider_new");
+    void (*add_provider_for_screen)(void *, void *, unsigned) =
+        (void (*)(void *, void *, unsigned))
+        dlsym(gtk, "gtk_style_context_add_provider_for_screen");
+    void *(*screen_get_default)(void) = (void *(*)(void))
+        dlsym(gtk, "gdk_screen_get_default");
+    iw->gtk_css_provider_load_from_data =
+        (bool (*)(void *, const char *, long, void **))
+        dlsym(gtk, "gtk_css_provider_load_from_data");
+    void *screen = screen_get_default ? screen_get_default() : NULL;
+    if (!css_provider_new || !add_provider_for_screen || !screen
+            || !iw->gtk_css_provider_load_from_data) {
+        // GTK stays loaded by the plugin
+        dlclose(gtk);
+        return false;
+    }
+
+    iw->titlebar_provider = css_provider_new();
+    if (iw->titlebar_provider) {
+        add_provider_for_screen(screen, iw->titlebar_provider,
+                                SC_GTK_STYLE_PROVIDER_PRIORITY_USER);
+    }
+    dlclose(gtk);
+    return iw->titlebar_provider;
+}
+
+// Read "#rrggbb" from path
+static bool
+sc_ika_window_load_titlebar_color(const char *path, uint8_t color[3]) {
+    FILE *file = fopen(path, "r");
+    if (!file) {
+        return false;
+    }
+    unsigned r, g, b;
+    bool ok = fscanf(file, "#%2x%2x%2x", &r, &g, &b) == 3;
+    fclose(file);
+    if (ok) {
+        color[0] = r;
+        color[1] = g;
+        color[2] = b;
+    }
+    return ok;
+}
+
+// Write "#rrggbb" to path (atomically)
+static void
+sc_ika_window_save_titlebar_color(const char *path, const uint8_t color[3]) {
+    char *tmp_path;
+    if (asprintf(&tmp_path, "%s.tmp.%ld", path, (long) getpid()) == -1) {
+        LOG_OOM();
+        return;
+    }
+    FILE *file = fopen(tmp_path, "w");
+    if (!file) {
+        LOGW("Could not open %s: %s", tmp_path, strerror(errno));
+        free(tmp_path);
+        return;
+    }
+    bool ok = fprintf(file, "#%02x%02x%02x\n", color[0], color[1],
+                      color[2]) > 0;
+    ok &= fclose(file) == 0;
+    ok = ok && rename(tmp_path, path) == 0;
+    if (!ok) {
+        LOGW("Could not save the title bar color to %s: %s", path,
+             strerror(errno));
+        unlink(tmp_path);
+    }
+    free(tmp_path);
+}
+
+void
+sc_ika_window_set_titlebar_color(struct sc_ika_window *iw, uint8_t r,
+                                 uint8_t g, uint8_t b) {
+    if (iw->has_titlebar_color && iw->titlebar_color[0] == r
+            && iw->titlebar_color[1] == g && iw->titlebar_color[2] == b) {
+        return;
+    }
+    SDL_WindowFlags flags = SDL_GetWindowFlags(iw->window);
+    if ((flags & (SDL_WINDOW_BORDERLESS | SDL_WINDOW_FULLSCREEN))
+            || !sc_ika_window_init_titlebar(iw)) {
+        return;
+    }
+
+    // Relative luminance, in thousandths
+    bool light = 2126 * r + 7152 * g + 722 * b > 500 * 255 * 10;
+    const char *text = light ? "#000000" : "#ffffff";
+    char css[512];
+    snprintf(css, sizeof(css),
+             "headerbar.default-decoration, "
+             "headerbar.default-decoration:backdrop {"
+             " background: #%02x%02x%02x; background-image: none;"
+             " border-color: #%02x%02x%02x; box-shadow: none; }\n"
+             "headerbar.default-decoration .title, "
+             "headerbar.default-decoration:backdrop .title, "
+             "headerbar.default-decoration button, "
+             "headerbar.default-decoration:backdrop button {"
+             " color: %s; }\n",
+             r, g, b, r, g, b, text);
+    if (!iw->gtk_css_provider_load_from_data(iw->titlebar_provider, css, -1,
+                                             NULL)) {
+        return;
+    }
+    iw->titlebar_color[0] = r;
+    iw->titlebar_color[1] = g;
+    iw->titlebar_color[2] = b;
+    iw->has_titlebar_color = true;
+    if (iw->titlebar_color_file) {
+        sc_ika_window_save_titlebar_color(iw->titlebar_color_file,
+                                          iw->titlebar_color);
+    }
+
+    // The plugin redraws its title bar when the title changes: change it and
+    // back (a zero-width space)
+    const char *title = SDL_GetWindowTitle(iw->window);
+    char *saved = strdup(title ? title : "");
+    if (!saved) {
+        return;
+    }
+    size_t len = strlen(saved);
+    char *changed = malloc(len + 4);
+    if (changed) {
+        memcpy(changed, saved, len);
+        memcpy(changed + len, "\xe2\x80\x8b", 4);
+        SDL_SetWindowTitle(iw->window, changed);
+        free(changed);
+    }
+    SDL_SetWindowTitle(iw->window, saved);
+    free(saved);
+}
+
 void
 sc_ika_window_init(struct sc_ika_window *iw, SDL_Window *window) {
     iw->window = window;
+    iw->titlebar_tried = false;
+    iw->titlebar_provider = NULL;
+    iw->has_titlebar_color = false;
+    // The color the app's title bar had last time, until the content shows
+    // its own
+    const char *titlebar_color_file = getenv("IKA_TITLEBAR_COLOR_FILE");
+    if (titlebar_color_file && !*titlebar_color_file) {
+        titlebar_color_file = NULL;
+    }
+    iw->titlebar_color_file = NULL;
+    uint8_t saved_color[3];
+    if (titlebar_color_file
+            && sc_ika_window_load_titlebar_color(titlebar_color_file,
+                                                 saved_color)) {
+        sc_ika_window_set_titlebar_color(iw, saved_color[0], saved_color[1],
+                                         saved_color[2]);
+    }
+    iw->titlebar_color_file = titlebar_color_file;
+    iw->wslg = sc_ika_window_is_wslg();
+    iw->wslg_refresh_tick = 0;
+    iw->wslg_refresh_pending = false;
     iw->corner_press = false;
     for (unsigned i = 0; i < 3; ++i) {
         iw->border_color[i] = SC_WINDOW_BORDER_GRAY;
@@ -533,6 +780,11 @@ sc_ika_window_update_min_size(struct sc_ika_window *iw) {
 bool
 sc_ika_window_handle_event(struct sc_ika_window *iw, const SDL_Event *event) {
     switch (event->type) {
+        case SDL_EVENT_WINDOW_MOUSE_ENTER:
+            if (iw->wslg_refresh_pending) {
+                sc_ika_window_refresh_wslg_decorations(iw);
+            }
+            return false;
         case SDL_EVENT_MOUSE_BUTTON_DOWN: {
             iw->corner_press = false;
             if (!sc_ika_window_is_in_content(iw, event->button.x,
