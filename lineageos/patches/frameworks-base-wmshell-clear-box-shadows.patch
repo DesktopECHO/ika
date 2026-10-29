@@ -1,0 +1,49 @@
+Patch summary:
+Clear a task's border and box shadows when its window decoration stops having
+them. With enable_freeform_box_shadows, DesktopModeWindowDecoration sets both on
+the task surface for a desktop window and asks for none once the task leaves the
+desktop (fullscreen, split), but WindowDecoration only ever set non-empty ones,
+so the task surface kept the desktop window's. SurfaceFlinger then drew that
+shadow and border around the fullscreen task's unclipped bounds every frame. On
+Ika on WSL2 the whole display went black whenever a translucent app such as
+Chrome was dragged from the desktop to fullscreen. Set an empty border and empty
+box shadows instead.
+
+--- a/libs/WindowManager/Shell/src/com/android/wm/shell/windowdecor/WindowDecoration.java
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/windowdecor/WindowDecoration.java
+@@ -564,16 +564,27 @@
+             return;
+         }
+ 
+-        if (outResult.mBorderSettings != null
+-                && outResult.mBorderSettings.strokeWidth > 0) {
+-            startT.setBorderSettings(mTaskSurface, outResult.mBorderSettings);
+-            finishT.setBorderSettings(mTaskSurface, outResult.mBorderSettings);
++        final boolean hasBorder = outResult.mBorderSettings != null
++                && outResult.mBorderSettings.strokeWidth > 0;
++        final boolean hasBoxShadows = outResult.mBoxShadowSettings != null
++                && outResult.mBoxShadowSettings.boxShadows.length > 0;
++        // A decoration without them (a task that left the desktop) clears the border and box
++        // shadows its desktop window set: the task surface keeps them otherwise, and
++        // SurfaceFlinger draws them around the task's unclipped bounds under any translucent
++        // fullscreen app.
++        final boolean clearOutline = DesktopExperienceFlags.ENABLE_FREEFORM_BOX_SHADOWS.isTrue();
++        if (hasBorder || clearOutline) {
++            final BorderSettings border =
++                    hasBorder ? outResult.mBorderSettings : new BorderSettings();
++            startT.setBorderSettings(mTaskSurface, border);
++            finishT.setBorderSettings(mTaskSurface, border);
+         }
+ 
+-        if (outResult.mBoxShadowSettings != null
+-                && outResult.mBoxShadowSettings.boxShadows.length > 0) {
+-            startT.setBoxShadowSettings(mTaskSurface, outResult.mBoxShadowSettings);
+-            finishT.setBoxShadowSettings(mTaskSurface, outResult.mBoxShadowSettings);
++        if (hasBoxShadows || clearOutline) {
++            final BoxShadowSettings boxShadows =
++                    hasBoxShadows ? outResult.mBoxShadowSettings : new BoxShadowSettings();
++            startT.setBoxShadowSettings(mTaskSurface, boxShadows);
++            finishT.setBoxShadowSettings(mTaskSurface, boxShadows);
+         }
+ 
+         if (DesktopExperienceFlags.ENABLE_DYNAMIC_RADIUS_COMPUTATION_BUGFIX.isTrue()) {

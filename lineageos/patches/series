@@ -102,6 +102,7 @@ frameworks/base patches/frameworks-base-systemui-shade-header-padding.patch
 frameworks/base patches/frameworks-base-ika-mode.patch
 frameworks/base patches/frameworks-base-default-home-role.patch
 frameworks/base patches/frameworks-base-tv-advanced-protection.patch
+frameworks/base patches/frameworks-base-wmshell-clear-box-shadows.patch
 frameworks/opt/tv/tvsystem patches/frameworks-opt-tv-tvsystem-ika-tv-mode.patch
 system/core patches/system-core.patch
 system/sepolicy patches/system-sepolicy.patch
