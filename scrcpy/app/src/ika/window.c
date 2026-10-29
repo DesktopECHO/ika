@@ -388,9 +388,174 @@ sc_ika_window_apply_margin(struct sc_ika_window *iw) {
     }
 }
 
+// GTK_STYLE_PROVIDER_PRIORITY_USER, above the theme and gtk.css
+#define SC_GTK_STYLE_PROVIDER_PRIORITY_USER 800
+
+// Load the style provider into the GTK that libdecor's GTK plugin loaded, once.
+// Return false where there is none.
+static bool
+sc_ika_window_init_titlebar(struct sc_ika_window *iw) {
+    if (iw->titlebar_tried) {
+        return iw->titlebar_provider;
+    }
+    iw->titlebar_tried = true;
+
+    void *gtk = dlopen("libgtk-3.so.0", RTLD_LAZY | RTLD_NOLOAD);
+    if (!gtk) {
+        return false;
+    }
+    void *(*css_provider_new)(void) = (void *(*)(void))
+        dlsym(gtk, "gtk_css_provider_new");
+    void (*add_provider_for_screen)(void *, void *, unsigned) =
+        (void (*)(void *, void *, unsigned))
+        dlsym(gtk, "gtk_style_context_add_provider_for_screen");
+    void *(*screen_get_default)(void) = (void *(*)(void))
+        dlsym(gtk, "gdk_screen_get_default");
+    iw->gtk_css_provider_load_from_data =
+        (bool (*)(void *, const char *, long, void **))
+        dlsym(gtk, "gtk_css_provider_load_from_data");
+    void *screen = screen_get_default ? screen_get_default() : NULL;
+    if (!css_provider_new || !add_provider_for_screen || !screen
+            || !iw->gtk_css_provider_load_from_data) {
+        // GTK stays loaded by the plugin
+        dlclose(gtk);
+        return false;
+    }
+
+    iw->titlebar_provider = css_provider_new();
+    if (iw->titlebar_provider) {
+        add_provider_for_screen(screen, iw->titlebar_provider,
+                                SC_GTK_STYLE_PROVIDER_PRIORITY_USER);
+    }
+    dlclose(gtk);
+    return iw->titlebar_provider;
+}
+
+// Read "#rrggbb" from path
+static bool
+sc_ika_window_load_titlebar_color(const char *path, uint8_t color[3]) {
+    FILE *file = fopen(path, "r");
+    if (!file) {
+        return false;
+    }
+    unsigned r, g, b;
+    bool ok = fscanf(file, "#%2x%2x%2x", &r, &g, &b) == 3;
+    fclose(file);
+    if (ok) {
+        color[0] = r;
+        color[1] = g;
+        color[2] = b;
+    }
+    return ok;
+}
+
+// Write "#rrggbb" to path (atomically)
+static void
+sc_ika_window_save_titlebar_color(const char *path, const uint8_t color[3]) {
+    char *tmp_path;
+    if (asprintf(&tmp_path, "%s.tmp.%ld", path, (long) getpid()) == -1) {
+        LOG_OOM();
+        return;
+    }
+    FILE *file = fopen(tmp_path, "w");
+    if (!file) {
+        LOGW("Could not open %s: %s", tmp_path, strerror(errno));
+        free(tmp_path);
+        return;
+    }
+    bool ok = fprintf(file, "#%02x%02x%02x\n", color[0], color[1],
+                      color[2]) > 0;
+    ok &= fclose(file) == 0;
+    ok = ok && rename(tmp_path, path) == 0;
+    if (!ok) {
+        LOGW("Could not save the title bar color to %s: %s", path,
+             strerror(errno));
+        unlink(tmp_path);
+    }
+    free(tmp_path);
+}
+
+void
+sc_ika_window_set_titlebar_color(struct sc_ika_window *iw, uint8_t r,
+                                 uint8_t g, uint8_t b) {
+    if (iw->has_titlebar_color && iw->titlebar_color[0] == r
+            && iw->titlebar_color[1] == g && iw->titlebar_color[2] == b) {
+        return;
+    }
+    SDL_WindowFlags flags = SDL_GetWindowFlags(iw->window);
+    if ((flags & (SDL_WINDOW_BORDERLESS | SDL_WINDOW_FULLSCREEN))
+            || !sc_ika_window_init_titlebar(iw)) {
+        return;
+    }
+
+    // Relative luminance, in thousandths
+    bool light = 2126 * r + 7152 * g + 722 * b > 500 * 255 * 10;
+    const char *text = light ? "#000000" : "#ffffff";
+    char css[512];
+    snprintf(css, sizeof(css),
+             "headerbar.default-decoration, "
+             "headerbar.default-decoration:backdrop {"
+             " background: #%02x%02x%02x; background-image: none;"
+             " border-color: #%02x%02x%02x; box-shadow: none; }\n"
+             "headerbar.default-decoration .title, "
+             "headerbar.default-decoration:backdrop .title, "
+             "headerbar.default-decoration button, "
+             "headerbar.default-decoration:backdrop button {"
+             " color: %s; }\n",
+             r, g, b, r, g, b, text);
+    if (!iw->gtk_css_provider_load_from_data(iw->titlebar_provider, css, -1,
+                                             NULL)) {
+        return;
+    }
+    iw->titlebar_color[0] = r;
+    iw->titlebar_color[1] = g;
+    iw->titlebar_color[2] = b;
+    iw->has_titlebar_color = true;
+    if (iw->titlebar_color_file) {
+        sc_ika_window_save_titlebar_color(iw->titlebar_color_file,
+                                          iw->titlebar_color);
+    }
+
+    // The plugin redraws its title bar when the title changes: change it and
+    // back (a zero-width space)
+    const char *title = SDL_GetWindowTitle(iw->window);
+    char *saved = strdup(title ? title : "");
+    if (!saved) {
+        return;
+    }
+    size_t len = strlen(saved);
+    char *changed = malloc(len + 4);
+    if (changed) {
+        memcpy(changed, saved, len);
+        memcpy(changed + len, "\xe2\x80\x8b", 4);
+        SDL_SetWindowTitle(iw->window, changed);
+        free(changed);
+    }
+    SDL_SetWindowTitle(iw->window, saved);
+    free(saved);
+}
+
 void
 sc_ika_window_init(struct sc_ika_window *iw, SDL_Window *window) {
     iw->window = window;
+    iw->titlebar_tried = false;
+    iw->titlebar_provider = NULL;
+    iw->has_titlebar_color = false;
+    // The color the app's title bar had last time, until the content shows
+    // its own
+    const char *titlebar_color_file = getenv("IKA_TITLEBAR_COLOR_FILE");
+    if (titlebar_color_file && !*titlebar_color_file) {
+        titlebar_color_file = NULL;
+    }
+    iw->titlebar_color_file = NULL;
+    uint8_t saved_color[3];
+    if (titlebar_color_file
+            && sc_ika_window_load_titlebar_color(titlebar_color_file,
+                                                 saved_color)) {
+        sc_ika_window_set_titlebar_color(iw, saved_color[0], saved_color[1],
+                                         saved_color[2]);
+    }
+    iw->titlebar_color_file = titlebar_color_file;
     iw->wslg = sc_ika_window_is_wslg();
     iw->wslg_refresh_tick = 0;
     iw->corner_press = false;

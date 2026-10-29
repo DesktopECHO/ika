@@ -8156,6 +8156,8 @@ open_app_window() {
   if [[ -f "${app_icon}" ]]; then
     scrcpy_env+=("IKA_WINDOW_ICON=${app_icon}")
   fi
+  # The title bar starts in the color the app's content gave it last time.
+  scrcpy_env+=("IKA_TITLEBAR_COLOR_FILE=${IKA_APPS_DIR}/${package}/titlebar-color")
   scrcpy_cmd=(env "${scrcpy_env[@]}" "${scrcpy_cmd[@]}")
 
   : > "${SCRCPY_LOG_FILE}"

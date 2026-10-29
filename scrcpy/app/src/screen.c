@@ -128,24 +128,47 @@ sc_screen_flex_on_window_size(struct sc_screen *screen) {
     sc_flex_on_window_size(&screen->flex, size, live, live ? &src : NULL);
 }
 
-// Read the color of the top-right pixel of a decoded (YUV 4:2:0) frame
+// Read the color of the pixel (x, y) of a frame: decoded (YUV 4:2:0), or raw
+// (packed RGB)
 static bool
-sc_screen_get_frame_corner_color(const AVFrame *frame,
-                                 struct sc_screen_bg_color *color) {
+sc_screen_get_frame_pixel_color(const AVFrame *frame, int x, int row,
+                                struct sc_screen_bg_color *color) {
+    if (x < 0 || row < 0 || x >= frame->width || row >= frame->height
+            || !frame->data[0]) {
+        return false;
+    }
+    const uint8_t *p = frame->data[0] + row * frame->linesize[0] + x * 4;
+    switch (frame->format) {
+        case AV_PIX_FMT_RGBA:
+        case AV_PIX_FMT_RGB0:
+            *color = (struct sc_screen_bg_color) {p[0], p[1], p[2]};
+            return true;
+        case AV_PIX_FMT_BGRA:
+        case AV_PIX_FMT_BGR0:
+            *color = (struct sc_screen_bg_color) {p[2], p[1], p[0]};
+            return true;
+        case AV_PIX_FMT_ARGB:
+        case AV_PIX_FMT_0RGB:
+            *color = (struct sc_screen_bg_color) {p[1], p[2], p[3]};
+            return true;
+        case AV_PIX_FMT_ABGR:
+        case AV_PIX_FMT_0BGR:
+            *color = (struct sc_screen_bg_color) {p[3], p[2], p[1]};
+            return true;
+        default:
+            break;
+    }
+
     bool full_range = frame->color_range == AVCOL_RANGE_JPEG;
     if (frame->format == AV_PIX_FMT_YUVJ420P) {
         full_range = true;
     } else if (frame->format != AV_PIX_FMT_YUV420P) {
         return false;
     }
-    if (frame->width <= 0 || frame->height <= 0) {
-        return false;
-    }
 
-    int x = frame->width - 1;
-    float y = frame->data[0][x];
-    float cb = frame->data[1][x / 2] - 128.f;
-    float cr = frame->data[2][x / 2] - 128.f;
+    float y = frame->data[0][row * frame->linesize[0] + x];
+    float cb = frame->data[1][row / 2 * frame->linesize[1] + x / 2] - 128.f;
+    float cr = frame->data[2][row / 2 * frame->linesize[2] + x / 2] - 128.f;
     if (full_range) {
         y /= 255.f;
         cb /= 255.f;
@@ -171,6 +194,17 @@ sc_screen_get_frame_corner_color(const AVFrame *frame,
     color->b = SC_TO_U8(b);
 #undef SC_TO_U8
     return true;
+}
+
+// Read the color of the top-right pixel of a decoded (YUV 4:2:0) frame
+static bool
+sc_screen_get_frame_corner_color(const AVFrame *frame,
+                                 struct sc_screen_bg_color *color) {
+    if (frame->format != AV_PIX_FMT_YUV420P
+            && frame->format != AV_PIX_FMT_YUVJ420P) {
+        return false;
+    }
+    return sc_screen_get_frame_pixel_color(frame, frame->width - 1, 0, color);
 }
 
 // get the preferred display bounds (i.e. the screen bounds with some margins)
@@ -807,6 +841,10 @@ sc_screen_init(struct sc_screen *screen,
     screen->has_content_bg = false;
     screen->content_bg_from_render = false;
     screen->content_bg_read = false;
+    screen->titlebar_candidate_frames = 0;
+    screen->titlebar_tick = 0;
+    screen->titlebar_content_seen = false;
+    screen->titlebar_blank_deadline = 0;
 
     screen->req.x = params->window_x;
     screen->req.y = params->window_y;
@@ -1253,6 +1291,97 @@ sc_screen_set_orientation(struct sc_screen *screen,
     sc_screen_render(screen, true);
 }
 
+#define SC_TITLEBAR_SAMPLES 15
+#define SC_TITLEBAR_STABLE_FRAMES 3
+#define SC_TITLEBAR_INTERVAL SC_TICK_FROM_MS(150)
+#define SC_TITLEBAR_BLANK_HOLD SC_TICK_FROM_SEC(5)
+
+// Ika: give the title bar of a decorated window the color along the top edge
+// of the content: the most common of a row of samples, once it has held for a
+// few frames (not in the middle of an animation), at most a few times a second
+static void
+sc_screen_update_titlebar_color(struct sc_screen *screen,
+                                const AVFrame *frame) {
+    if (SDL_GetWindowFlags(screen->window)
+            & (SDL_WINDOW_BORDERLESS | SDL_WINDOW_FULLSCREEN)) {
+        return;
+    }
+
+    SDL_FRect src = {0, 0, frame->width, frame->height};
+    if (screen->raw) {
+        src = sc_screen_get_raw_source_rect(screen);
+    }
+    int row = src.y;
+    struct sc_screen_bg_color samples[SC_TITLEBAR_SAMPLES];
+    unsigned count = 0;
+    for (unsigned i = 0; i < SC_TITLEBAR_SAMPLES; ++i) {
+        int x = src.x + (i + 0.5f) * src.w / SC_TITLEBAR_SAMPLES;
+        if (sc_screen_get_frame_pixel_color(frame, x, row, &samples[count])) {
+            ++count;
+        }
+    }
+
+    unsigned best = 0;
+    unsigned best_count = 0;
+    for (unsigned i = 0; i < count; ++i) {
+        unsigned same = 0;
+        for (unsigned j = 0; j < count; ++j) {
+            same += samples[j].r == samples[i].r && samples[j].g == samples[i].g
+                 && samples[j].b == samples[i].b;
+        }
+        if (same > best_count) {
+            best = i;
+            best_count = same;
+        }
+    }
+    // No majority: an image or text along the edge
+    if (best_count * 2 <= count) {
+        return;
+    }
+
+    struct sc_screen_bg_color color = samples[best];
+    struct sc_ika_window *iw = &screen->ika_window;
+    sc_tick now = sc_tick_now();
+    // Until the app draws, its display is black: keep the color from last
+    // time rather than turn the title bar black at every start
+    if (!screen->titlebar_content_seen) {
+        if (!color.r && !color.g && !color.b && iw->has_titlebar_color) {
+            if (!screen->titlebar_blank_deadline) {
+                screen->titlebar_blank_deadline = now + SC_TITLEBAR_BLANK_HOLD;
+            }
+            if (now < screen->titlebar_blank_deadline) {
+                return;
+            }
+        }
+        screen->titlebar_content_seen = true;
+    }
+
+    struct sc_screen_bg_color *candidate = &screen->titlebar_candidate;
+    if (screen->titlebar_candidate_frames && candidate->r == color.r
+            && candidate->g == color.g && candidate->b == color.b) {
+        if (screen->titlebar_candidate_frames < SC_TITLEBAR_STABLE_FRAMES) {
+            ++screen->titlebar_candidate_frames;
+        }
+    } else {
+        *candidate = color;
+        screen->titlebar_candidate_frames = 1;
+    }
+    if (screen->titlebar_candidate_frames < SC_TITLEBAR_STABLE_FRAMES) {
+        return;
+    }
+
+    if (screen->titlebar_tick
+            && now - screen->titlebar_tick < SC_TITLEBAR_INTERVAL) {
+        return;
+    }
+    if (!iw->has_titlebar_color || iw->titlebar_color[0] != color.r
+            || iw->titlebar_color[1] != color.g
+            || iw->titlebar_color[2] != color.b) {
+        sc_ika_window_set_titlebar_color(iw, color.r, color.g, color.b);
+        screen->titlebar_tick = now;
+    }
+}
+
 static bool
 sc_screen_apply_frame(struct sc_screen *screen, bool can_resize) {
     assert(screen->video);
@@ -1299,6 +1428,8 @@ sc_screen_apply_frame(struct sc_screen *screen, bool can_resize) {
     if (!ok) {
         return false;
     }
+
+    sc_screen_update_titlebar_color(screen, frame);
 
     if (screen->flex_display) {
         if (screen->raw) {

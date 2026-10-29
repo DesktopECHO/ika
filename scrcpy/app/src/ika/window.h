@@ -53,6 +53,19 @@ struct sc_ika_window {
     // The border of a borderless window
     uint8_t border_color[3];
 
+    // The title bar libdecor's GTK plugin draws in the color of the content
+    // (see sc_ika_window_set_titlebar_color()): GTK, already loaded by the
+    // plugin, and the style provider holding the color
+    bool titlebar_tried;
+    void *titlebar_provider;
+    bool (*gtk_css_provider_load_from_data)(void *provider, const char *data,
+                                            long length, void **error);
+    bool has_titlebar_color;
+    uint8_t titlebar_color[3];
+    // Where the title bar color is kept for the next start of the app
+    // (IKA_TITLEBAR_COLOR_FILE), or NULL
+    const char *titlebar_color_file;
+
     // A left click started in the corner of a fullscreen/maximized window
     bool corner_press;
     sc_tick corner_press_tick;
@@ -128,6 +141,14 @@ sc_ika_window_render_border(struct sc_ika_window *iw, SDL_Renderer *renderer);
 void
 sc_ika_window_set_border_from_background(struct sc_ika_window *iw, uint8_t r,
                                          uint8_t g, uint8_t b);
+
+// Give the title bar libdecor's GTK plugin draws the color (r, g, b), with
+// white or black text and buttons, whichever reads on it. Nothing happens where
+// GTK draws no title bar (a borderless window, X11, or server-side
+// decorations).
+void
+sc_ika_window_set_titlebar_color(struct sc_ika_window *iw, uint8_t r,
+                                 uint8_t g, uint8_t b);
 
 // The size to restore the window content to: its current size if windowed
 struct sc_size
