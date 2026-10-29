@@ -246,6 +246,46 @@ if (dpi_given_by --dpi=1000) >/dev/null 2>&1; then
 fi
 echo "ok: ika app --dpi"
 
+# On WSLg, an app launched from a menu (no terminal) with Shift held down opens
+# its Startup Options; without Shift, or outside WSLg, its window. A PowerShell
+# stub prints the Windows modifier keys, SHIFT_KEYS (Keys.Shift is 65536).
+cat >"${T}/bin/powershell.exe" <<STUB
+#!/usr/bin/env bash
+printf '%s\r\n' "\${SHIFT_KEYS:-0}"
+printf 'asked\n' >>"${T}/powershell.calls"
+STUB
+chmod +x "${T}/bin/powershell.exe"
+launched_with() (
+  IKA_ON_WSLG="$1"
+  export SHIFT_KEYS="$2"
+  export IKA_WSL_GPU_FIX=0
+  edit_app_settings() { printf 'options %s %s\n' "$1" "$2"; }
+  open_app_window() { printf 'window %s\n' "$1"; }
+  main app com.example.app </dev/null 2>/dev/null
+)
+expect_equal "$(launched_with true 65536)" "options com.example.app 1" "Shift held at a launch from Windows"
+expect_equal "$(launched_with true 0)" "window com.example.app" "a launch from Windows without Shift"
+expect_equal "$(launched_with true 131072)" "window com.example.app" "Ctrl held at a launch from Windows"
+rm -f "${T}/powershell.calls"
+expect_equal "$(launched_with false 65536)" "window com.example.app" "Shift held outside WSLg"
+[[ ! -e "${T}/powershell.calls" ]] || fail "PowerShell was asked outside WSLg"
+# The same for Ika itself: 'ika start' from the Start menu opens Ika's
+started_with() (
+  IKA_ON_WSLG="$1"
+  export SHIFT_KEYS="$2" IKA_WSL_GPU_FIX=0
+  edit_ika_settings() { printf 'ika options\n'; }
+  run_timed_operation() { printf 'ika started\n'; }
+  stop_startup_packaged_scrcpy() { :; }
+  redirect_start_logs() { :; }
+  repair_wslg_taskbar_pins() { :; }
+  main start </dev/null 2>/dev/null
+)
+expect_equal "$(started_with true 65536)" "ika options" "Shift held at Ika's start from Windows"
+expect_equal "$(started_with true 0)" "ika started" "Ika's start from Windows without Shift"
+expect_equal "$(started_with false 65536)" "ika started" "Shift held at Ika's start outside WSLg"
+rm -f "${T}/bin/powershell.exe"
+echo "ok: Shift at a launch from Windows opens the Startup Options"
+
 # yad's form output for the options given ticked, after dpi=N when given: the
 # density as yad prints it, the two labels' empty values, then TRUE or FALSE
 # for each checkbox, in their order, then the blank label's.
