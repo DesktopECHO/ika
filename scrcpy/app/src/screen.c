@@ -1627,6 +1627,7 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
             screen->window_minimized = false;
             sc_screen_update_window_hidden(screen);
             sc_ika_window_on_changed(&screen->ika_window);
+            sc_ika_window_refresh_wslg_decorations(&screen->ika_window);
             if (screen->flex_display) {
                 sc_flex_on_window_state_changed(&screen->flex);
             }
@@ -1642,6 +1643,7 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
             screen->window_minimized = false;
             sc_screen_update_window_hidden(screen);
             sc_ika_window_on_changed(&screen->ika_window);
+            sc_ika_window_refresh_wslg_decorations(&screen->ika_window);
             if (screen->flex_display) {
                 sc_flex_on_window_state_changed(&screen->flex);
             }

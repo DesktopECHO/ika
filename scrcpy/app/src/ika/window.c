@@ -52,6 +52,58 @@ sc_ika_window_is_constrained(SDL_Window *window) {
                                        | SDL_WINDOW_MAXIMIZED);
 }
 
+
+// WSLg draws the shadow and the title bar of a decorated Wayland window as
+// surfaces of its own. When the window is maximized, it unmaps the shadow
+// but leaves it on screen, at the old size and position, over the window
+// (microsoft/wslg#914, #1521). Switching the decorations off and on again
+// makes it destroy them and draw fresh ones. It builds the frame for the
+// state of the moment (a maximized window gets no resize borders), so this
+// runs on restore too, and the state is put back if the switch changes it.
+void
+sc_ika_window_refresh_wslg_decorations(struct sc_ika_window *iw) {
+    SDL_WindowFlags flags = SDL_GetWindowFlags(iw->window);
+    if ((flags & (SDL_WINDOW_BORDERLESS | SDL_WINDOW_FULLSCREEN))
+            || !sc_ika_window_is_wslg()) {
+        return;
+    }
+    const char *driver = SDL_GetCurrentVideoDriver();
+    if (!driver || strcmp(driver, "wayland")) {
+        return;
+    }
+    // The compositor may answer with another state change: once is enough
+    sc_tick now = sc_tick_now();
+    if (iw->wslg_refresh_tick
+            && now - iw->wslg_refresh_tick < SC_TICK_FROM_SEC(1)) {
+        return;
+    }
+    iw->wslg_refresh_tick = now;
+    bool maximized = flags & SDL_WINDOW_MAXIMIZED;
+    if (!SDL_SetWindowBordered(iw->window, false)
+            || !SDL_SetWindowBordered(iw->window, true)) {
+        LOGW("Could not refresh the window decorations: %s", SDL_GetError());
+        return;
+    }
+    if (flags & SDL_WINDOW_RESIZABLE) {
+        SDL_SetWindowResizable(iw->window, true);
+    }
+    SDL_SyncWindow(iw->window);
+    bool now_maximized = SDL_GetWindowFlags(iw->window) & SDL_WINDOW_MAXIMIZED;
+    if (maximized && !now_maximized) {
+        LOGD("WSLg restored the window on decoration refresh, maximizing again");
+        SDL_MaximizeWindow(iw->window);
+    } else if (!maximized && now_maximized) {
+        LOGD("WSLg maximized the window on decoration refresh, restoring");
+        SDL_RestoreWindow(iw->window);
+    }
+}
+
+// Whether the windows are shown by WSLg (RAIL on a Windows desktop)
+bool
+sc_ika_window_is_wslg(void) {
+    return getenv("WSL_DISTRO_NAME") || !access("/mnt/wslg", F_OK);
+}
+
 static enum sc_ika_window_margin_backend
 sc_ika_window_get_margin_backend(bool borderless) {
     const char *driver = SDL_GetCurrentVideoDriver();
@@ -59,7 +111,11 @@ sc_ika_window_get_margin_backend(bool borderless) {
         return SC_IKA_WINDOW_MARGIN_NONE;
     }
     if (!strcmp(driver, "wayland")) {
-        return SC_IKA_WINDOW_MARGIN_WAYLAND;
+        // WSLg shows a window as a Windows window covering only its xdg
+        // window geometry: a margin outside it gets no pointer events, so the
+        // resize edges would be out of reach. Keep them inside the content.
+        return sc_ika_window_is_wslg() ? SC_IKA_WINDOW_MARGIN_NONE
+                                       : SC_IKA_WINDOW_MARGIN_WAYLAND;
     }
     if (!strcmp(driver, "x11")) {
         return SC_IKA_WINDOW_MARGIN_X11;
@@ -327,6 +383,7 @@ sc_ika_window_apply_margin(struct sc_ika_window *iw) {
 void
 sc_ika_window_init(struct sc_ika_window *iw, SDL_Window *window) {
     iw->window = window;
+    iw->wslg_refresh_tick = 0;
     iw->corner_press = false;
     for (unsigned i = 0; i < 3; ++i) {
         iw->border_color[i] = SC_WINDOW_BORDER_GRAY;

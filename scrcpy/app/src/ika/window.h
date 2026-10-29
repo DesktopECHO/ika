@@ -24,6 +24,7 @@
  * In fullscreen or maximized, a click in the top-left corner leaves it.
  */
 struct sc_ika_window {
+    sc_tick wslg_refresh_tick;
     SDL_Window *window;
 
     enum sc_ika_window_margin_backend {
@@ -57,6 +58,15 @@ struct sc_ika_window {
     float corner_press_x;
     float corner_press_y;
 };
+
+// Whether the windows are shown by WSLg (RAIL on a Windows desktop)
+bool
+sc_ika_window_is_wslg(void);
+
+// Work around WSLg leaving the shadow of the previous window state on screen
+// after the window is maximized or restored
+void
+sc_ika_window_refresh_wslg_decorations(struct sc_ika_window *iw);
 
 // Window flags to create a window with (before sc_ika_window_init()). A
 // window that starts fullscreen is opaque: it has no margin, and the
