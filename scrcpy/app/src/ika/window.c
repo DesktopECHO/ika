@@ -2,10 +2,12 @@
 
 #include <dlfcn.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "util/log.h"
@@ -490,6 +492,27 @@ sc_ika_window_save_titlebar_color(const char *path, const uint8_t color[3]) {
     free(tmp_path);
 }
 
+// The plugin redraws its title bar when the title changes: change it and back
+// (a zero-width space)
+static void
+sc_ika_window_redraw_titlebar(struct sc_ika_window *iw) {
+    const char *title = SDL_GetWindowTitle(iw->window);
+    char *saved = strdup(title ? title : "");
+    if (!saved) {
+        return;
+    }
+    size_t len = strlen(saved);
+    char *changed = malloc(len + 4);
+    if (changed) {
+        memcpy(changed, saved, len);
+        memcpy(changed + len, "\xe2\x80\x8b", 4);
+        SDL_SetWindowTitle(iw->window, changed);
+        free(changed);
+    }
+    SDL_SetWindowTitle(iw->window, saved);
+    free(saved);
+}
+
 void
 sc_ika_window_set_titlebar_color(struct sc_ika_window *iw, uint8_t r,
                                  uint8_t g, uint8_t b) {
@@ -530,24 +553,334 @@ sc_ika_window_set_titlebar_color(struct sc_ika_window *iw, uint8_t r,
         sc_ika_window_save_titlebar_color(iw->titlebar_color_file,
                                           iw->titlebar_color);
     }
+    sc_ika_window_redraw_titlebar(iw);
+}
 
-    // The plugin redraws its title bar when the title changes: change it and
-    // back (a zero-width space)
-    const char *title = SDL_GetWindowTitle(iw->window);
-    char *saved = strdup(title ? title : "");
-    if (!saved) {
+// The title bar on WSLg looks like Windows 11's, sized for Windows' display
+// scale (IKA_WINDOWS_SCALE, in percent, which ika reads from WSLg): its height,
+// its buttons and their glyphs, and its title in Segoe UI Variable
+// (IKA_CAPTION_FONT, ika's copy of the font Windows has).
+//
+// libdecor's GTK plugin draws the buttons' icons at 16 px whatever the button
+// size, so the icons are shrunk away and the glyphs are drawn as the buttons'
+// backgrounds, symbolic icons written for the pixel size (1-pixel lines, as
+// Windows draws them) and colored like the button's text.
+
+// Windows 11's caption metrics at 100%
+#define SC_CAPTION_HEIGHT 32
+#define SC_CAPTION_BUTTON_WIDTH 46
+#define SC_CAPTION_GLYPH 10
+#define SC_CAPTION_FONT_SIZE 12
+#define SC_CAPTION_TITLE_PADDING 12
+#define SC_CAPTION_RADIUS 8
+
+// Append to buf the path of a rounded rectangle outline t thick (even-odd)
+static void
+sc_caption_append_ring(char *buf, size_t size, double x, double y, double w,
+                       double h, double r, double t) {
+    for (unsigned i = 0; i < 2; ++i) {
+        double rr = r < 0 ? 0 : r;
+        if (rr > w / 2) {
+            rr = w / 2;
+        }
+        if (rr > h / 2) {
+            rr = h / 2;
+        }
+        size_t len = strlen(buf);
+        snprintf(buf + len, size - len,
+                 "M%.3f %.3fh%.3fa%.3f %.3f 0 0 1 %.3f %.3fv%.3f"
+                 "a%.3f %.3f 0 0 1 %.3f %.3fh%.3fa%.3f %.3f 0 0 1 %.3f %.3f"
+                 "v%.3fa%.3f %.3f 0 0 1 %.3f %.3fz",
+                 x + rr, y, w - 2 * rr, rr, rr, rr, rr, h - 2 * rr,
+                 rr, rr, -rr, rr, -(w - 2 * rr), rr, rr, -rr, -rr,
+                 -(h - 2 * rr), rr, rr, rr, -rr);
+        // Then the inside, which the even-odd rule cuts out
+        x += t;
+        y += t;
+        w -= 2 * t;
+        h -= 2 * t;
+        r -= t;
+    }
+}
+
+// Write a file atomically (another window may read it meanwhile)
+static bool
+sc_caption_write_file(const char *path, const char *data) {
+    char *tmp_path;
+    if (asprintf(&tmp_path, "%s.tmp.%ld", path, (long) getpid()) == -1) {
+        LOG_OOM();
+        return false;
+    }
+    FILE *file = fopen(tmp_path, "w");
+    bool ok = file && fputs(data, file) >= 0;
+    if (file) {
+        ok &= fclose(file) == 0;
+    }
+    ok = ok && rename(tmp_path, path) == 0;
+    if (!ok) {
+        LOGW("Could not write %s: %s", path, strerror(errno));
+        unlink(tmp_path);
+    }
+    free(tmp_path);
+    return ok;
+}
+
+// Write the caption glyphs, g x g pixels, as symbolic icons into dir
+static bool
+sc_caption_write_glyphs(const char *dir, int g) {
+    static const char *const names[] = {
+        "minimize", "maximize", "restore", "close",
+    };
+    double r = g * 0.15 < 1 ? 1 : g * 0.15;
+    int front = (int) (g * 0.8 + 0.5);
+    int off = g - front;
+    double d = 0.70710678; // half the width of a 1-pixel diagonal, projected
+    for (unsigned i = 0; i < 4; ++i) {
+        char path_data[2048] = "";
+        char clipped[1024] = "";
+        switch (i) {
+            case 0:
+                // A whole pixel row, so that the line stays sharp
+                snprintf(path_data, sizeof(path_data), "M0 %dh%dv1H0z",
+                         g / 2, g);
+                break;
+            case 1:
+                sc_caption_append_ring(path_data, sizeof(path_data), 0, 0, g,
+                                       g, r, 1);
+                break;
+            case 2: {
+                // The front window bottom left, the back one's outline
+                // clipped where the front one covers it (and a pixel apart)
+                sc_caption_append_ring(path_data, sizeof(path_data), 0, off,
+                                       front, front, r * 0.8, 1);
+                char back[1024] = "";
+                sc_caption_append_ring(back, sizeof(back), off, 0, front,
+                                       front, r * 0.8, 1);
+                snprintf(clipped, sizeof(clipped),
+                         "<clipPath id=\"c\"><path clip-rule=\"evenodd\" "
+                         "d=\"M0 0H%dV%dH0zM0 %dH%dV%dH0z\"/></clipPath>"
+                         "<path fill=\"#222\" fill-rule=\"evenodd\" "
+                         "clip-path=\"url(#c)\" d=\"%s\"/>",
+                         g, g, g - front - 1, front + 1, g, back);
+                break;
+            }
+            default:
+                snprintf(path_data, sizeof(path_data),
+                         "M0 %.3fL%.3f 0L%d %.3fL%.3f %dz"
+                         "M%.3f 0L%d %.3fL%.3f %dL0 %.3fz",
+                         d, d, g, g - d, g - d, g,
+                         g - d, g, d, d, g, g - d);
+                break;
+        }
+        char svg[4096];
+        snprintf(svg, sizeof(svg),
+                 "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" "
+                 "height=\"%d\" viewBox=\"0 0 %d %d\">%s<path fill=\"#222\" "
+                 "fill-rule=\"evenodd\" d=\"%s\"/></svg>\n",
+                 g, g, g, g, clipped, path_data);
+        char path[PATH_MAX];
+        snprintf(path, sizeof(path), "%s/ika-caption-%s-symbolic.svg", dir,
+                 names[i]);
+        if (!sc_caption_write_file(path, svg)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The directory for the glyphs of size g, created; NULL on error
+static char *
+sc_caption_glyph_dir(int g) {
+    const char *runtime = getenv("XDG_RUNTIME_DIR");
+    char *base;
+    int ret = runtime && *runtime
+            ? asprintf(&base, "%s/ika-caption", runtime)
+            : asprintf(&base, "/tmp/ika-caption-%ld", (long) getuid());
+    if (ret == -1) {
+        LOG_OOM();
+        return NULL;
+    }
+    char *dir;
+    if (asprintf(&dir, "%s/%dpx", base, g) == -1) {
+        LOG_OOM();
+        free(base);
+        return NULL;
+    }
+    bool ok = (!mkdir(base, 0700) || errno == EEXIST)
+           && (!mkdir(dir, 0700) || errno == EEXIST);
+    if (!ok) {
+        LOGW("Could not create %s: %s", dir, strerror(errno));
+        free(dir);
+        dir = NULL;
+    }
+    free(base);
+    return dir;
+}
+
+// Make the font at path available to the GTK that libdecor's plugin loaded:
+// add it to fontconfig, and have Pango reread fontconfig if it already did
+static void
+sc_caption_add_font(const char *path) {
+    void *fc = dlopen("libfontconfig.so.1", RTLD_LAZY | RTLD_NOLOAD);
+    if (!fc) {
         return;
     }
-    size_t len = strlen(saved);
-    char *changed = malloc(len + 4);
-    if (changed) {
-        memcpy(changed, saved, len);
-        memcpy(changed + len, "\xe2\x80\x8b", 4);
-        SDL_SetWindowTitle(iw->window, changed);
-        free(changed);
+    int (*app_font_add_file)(void *, const char *) =
+        (int (*)(void *, const char *)) dlsym(fc, "FcConfigAppFontAddFile");
+    bool added = app_font_add_file && app_font_add_file(NULL, path);
+    dlclose(fc);
+    if (!added) {
+        LOGW("Could not add the title bar font %s", path);
+        return;
     }
-    SDL_SetWindowTitle(iw->window, saved);
-    free(saved);
+
+    void *pango = dlopen("libpangoft2-1.0.so.0", RTLD_LAZY | RTLD_NOLOAD);
+    void *pango_cairo =
+        dlopen("libpangocairo-1.0.so.0", RTLD_LAZY | RTLD_NOLOAD);
+    if (pango && pango_cairo) {
+        void *(*font_map_get_default)(void) = (void *(*)(void))
+            dlsym(pango_cairo, "pango_cairo_font_map_get_default");
+        void (*config_changed)(void *) = (void (*)(void *))
+            dlsym(pango, "pango_fc_font_map_config_changed");
+        if (font_map_get_default && config_changed) {
+            config_changed(font_map_get_default());
+        }
+    }
+    if (pango) {
+        dlclose(pango);
+    }
+    if (pango_cairo) {
+        dlclose(pango_cairo);
+    }
+}
+
+// Give the title bar Windows 11's look (see above), on WSLg, once
+static void
+sc_ika_window_init_caption(struct sc_ika_window *iw) {
+    const char *scale_env = getenv("IKA_WINDOWS_SCALE");
+    if (!iw->wslg || !scale_env || !*scale_env
+            || (SDL_GetWindowFlags(iw->window) & SDL_WINDOW_BORDERLESS)) {
+        return;
+    }
+    long pct = strtol(scale_env, NULL, 10);
+    if (pct < 100 || pct > 500) {
+        pct = 100;
+    }
+#define SC_CAPTION_PX(v) ((int) ((v) * pct / 100.0 + 0.5))
+    int glyph = SC_CAPTION_PX(SC_CAPTION_GLYPH);
+
+    void *gtk = dlopen("libgtk-3.so.0", RTLD_LAZY | RTLD_NOLOAD);
+    if (!gtk) {
+        return;
+    }
+    void *(*css_provider_new)(void) = (void *(*)(void))
+        dlsym(gtk, "gtk_css_provider_new");
+    bool (*css_provider_load)(void *, const char *, long, void **) =
+        (bool (*)(void *, const char *, long, void **))
+        dlsym(gtk, "gtk_css_provider_load_from_data");
+    void (*add_provider_for_screen)(void *, void *, unsigned) =
+        (void (*)(void *, void *, unsigned))
+        dlsym(gtk, "gtk_style_context_add_provider_for_screen");
+    void *(*screen_get_default)(void) = (void *(*)(void))
+        dlsym(gtk, "gdk_screen_get_default");
+    void *(*icon_theme_get_default)(void) = (void *(*)(void))
+        dlsym(gtk, "gtk_icon_theme_get_default");
+    void (*icon_theme_append_search_path)(void *, const char *) =
+        (void (*)(void *, const char *))
+        dlsym(gtk, "gtk_icon_theme_append_search_path");
+    void *(*settings_get_default)(void) = (void *(*)(void))
+        dlsym(gtk, "gtk_settings_get_default");
+    void (*object_set)(void *, const char *, ...) =
+        (void (*)(void *, const char *, ...)) dlsym(gtk, "g_object_set");
+    void *screen = screen_get_default ? screen_get_default() : NULL;
+    if (!css_provider_new || !css_provider_load || !add_provider_for_screen
+            || !screen || !icon_theme_get_default
+            || !icon_theme_append_search_path || !settings_get_default
+            || !object_set) {
+        // GTK stays loaded by the plugin
+        dlclose(gtk);
+        return;
+    }
+
+    char *dir = sc_caption_glyph_dir(glyph);
+    if (!dir || !sc_caption_write_glyphs(dir, glyph)) {
+        free(dir);
+        dlclose(gtk);
+        return;
+    }
+    icon_theme_append_search_path(icon_theme_get_default(), dir);
+    free(dir);
+
+    // Windows windows have the three buttons (GNOME's default, without
+    // Ubuntu's desktop settings, is the close button only)
+    void *settings = settings_get_default();
+    if (settings) {
+        object_set(settings, "gtk-decoration-layout",
+                   ":minimize,maximize,close", NULL);
+    }
+
+    const char *font = getenv("IKA_CAPTION_FONT");
+    if (font && *font) {
+        sc_caption_add_font(font);
+    }
+
+    char css[4096];
+    snprintf(css, sizeof(css),
+        "headerbar.default-decoration {"
+        " min-height: %dpx; padding: 0 0 0 %dpx; margin: 0;"
+        " border-radius: %dpx %dpx 0 0;"
+        " font-family: \"Segoe UI Variable Text\", \"Segoe UI Variable\","
+        " \"Segoe UI\", sans-serif; font-size: %dpx; }\n"
+        "window.maximized headerbar.default-decoration { border-radius: 0; }\n"
+        "headerbar.default-decoration .title {"
+        " font-weight: normal; font-size: %dpx; }\n"
+        "headerbar.default-decoration:backdrop .title,"
+        " headerbar.default-decoration:backdrop button.titlebutton {"
+        " opacity: 0.55; }\n"
+        "headerbar.default-decoration button.titlebutton {"
+        " min-width: %dpx; min-height: %dpx; padding: 0;"
+        // Cancel the header bar's spacing: the buttons touch
+        " margin: 0 -3px;"
+        " border: none; border-radius: 0; box-shadow: none; outline: none;"
+        " background-color: transparent; background-repeat: no-repeat;"
+        " background-position: center; background-size: %dpx %dpx; }\n"
+        // The plugin's own 16 px icon
+        "headerbar.default-decoration button.titlebutton image {"
+        " -gtk-icon-transform: scale(0.01); }\n"
+        "headerbar.default-decoration button.titlebutton.minimize {"
+        " background-image: -gtk-icontheme(\"ika-caption-minimize-symbolic\"); }\n"
+        "headerbar.default-decoration button.titlebutton.maximize {"
+        " background-image: -gtk-icontheme(\"ika-caption-maximize-symbolic\"); }\n"
+        "window.maximized headerbar.default-decoration"
+        " button.titlebutton.maximize {"
+        " background-image: -gtk-icontheme(\"ika-caption-restore-symbolic\"); }\n"
+        "headerbar.default-decoration button.titlebutton.close {"
+        " background-image: -gtk-icontheme(\"ika-caption-close-symbolic\"); }\n"
+        "headerbar.default-decoration button.titlebutton:hover {"
+        " background-color: alpha(currentColor, 0.06); }\n"
+        "headerbar.default-decoration button.titlebutton:active {"
+        " background-color: alpha(currentColor, 0.04); }\n"
+        "headerbar.default-decoration button.titlebutton.close:hover {"
+        " background-color: #c42b1c; color: #ffffff; }\n"
+        "headerbar.default-decoration button.titlebutton.close:active {"
+        " background-color: rgba(196, 43, 28, 0.9); color: #ffffff; }\n",
+        SC_CAPTION_PX(SC_CAPTION_HEIGHT),
+        SC_CAPTION_PX(SC_CAPTION_TITLE_PADDING),
+        SC_CAPTION_PX(SC_CAPTION_RADIUS), SC_CAPTION_PX(SC_CAPTION_RADIUS),
+        SC_CAPTION_PX(SC_CAPTION_FONT_SIZE),
+        SC_CAPTION_PX(SC_CAPTION_FONT_SIZE),
+        SC_CAPTION_PX(SC_CAPTION_BUTTON_WIDTH),
+        SC_CAPTION_PX(SC_CAPTION_HEIGHT), glyph, glyph);
+#undef SC_CAPTION_PX
+
+    void *provider = css_provider_new();
+    if (provider && css_provider_load(provider, css, -1, NULL)) {
+        // Next to the color provider: that one sets the colors only
+        add_provider_for_screen(screen, provider,
+                                SC_GTK_STYLE_PROVIDER_PRIORITY_USER);
+        sc_ika_window_redraw_titlebar(iw);
+    }
+    dlclose(gtk);
 }
 
 void
@@ -556,6 +889,8 @@ sc_ika_window_init(struct sc_ika_window *iw, SDL_Window *window) {
     iw->titlebar_tried = false;
     iw->titlebar_provider = NULL;
     iw->has_titlebar_color = false;
+    iw->wslg = sc_ika_window_is_wslg();
+    sc_ika_window_init_caption(iw);
     // The color the app's title bar had last time, until the content shows
     // its own
     const char *titlebar_color_file = getenv("IKA_TITLEBAR_COLOR_FILE");
@@ -571,7 +906,6 @@ sc_ika_window_init(struct sc_ika_window *iw, SDL_Window *window) {
                                          saved_color[2]);
     }
     iw->titlebar_color_file = titlebar_color_file;
-    iw->wslg = sc_ika_window_is_wslg();
     iw->wslg_refresh_tick = 0;
     iw->wslg_refresh_pending = false;
     iw->corner_press = false;

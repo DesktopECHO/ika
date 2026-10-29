@@ -330,6 +330,11 @@
   lacks vhost-vsock, vhost-net or udmabuf builds the WSL2 kernel at the
   running version with them built in and points `.wslconfig` at it. See
   [Windows (WSL2)](CONFIGURATION.md#windows-wsl2).
+- Ika's windows on Windows have Windows 11's title bar: its height, flat
+  minimize, maximize and close buttons with Windows' glyphs (close turns red),
+  and the title in Segoe UI Variable, which Ika copies from Windows to
+  `~/ika/fonts`. The title bar is sized for Windows' display scale when the
+  window opens. It still takes the color of the app's content.
 
 ### Hardware video decoding
 - `ika start` gives Android a V4L2 video decoder backed by the host's VA-API

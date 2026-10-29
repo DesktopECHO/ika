@@ -146,6 +146,11 @@ An app window has a title bar, the app's label and icon, and a display of its
 own, sized to the window, so the app has the window's room. The app is
 restarted on that display if it was running elsewhere.
 
+On Windows (WSL2), the title bar looks like Windows 11's, with minimize,
+maximize and close buttons, in the color of the app's content. It is sized
+for Windows' display scale as the window opens: after changing the scale,
+close the window and open it again.
+
 - **Naming apps:** by package name or by label, without regard to case,
   exactly or by a part only one app has (`ika app setti` opens Settings),
   without quotes. A name that matches several apps lists them.

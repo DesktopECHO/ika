@@ -5313,8 +5313,52 @@ append_scrcpy_extra_args() {
   fi
 }
 
+# Windows' display scale, in percent, as WSLg last saw it for the primary
+# monitor: weston.log records every monitor layout Windows sends it (at
+# start and when the displays or their scale change). 100 when unknown.
+wslg_windows_scale() {
+  local weston_log="${IKA_WSLG_WESTON_LOG:-/mnt/wslg/weston.log}"
+  local scale=""
+
+  if [[ -r "${weston_log}" ]]; then
+    scale="$(awk '
+      /rdpMonitor\[[0-9]+\]: x:.*is_primary:/ {
+        primary = ($0 ~ /is_primary:1/)
+      }
+      primary && match($0, /desktopScaleFactor:[0-9]+/) {
+        value = substr($0, RSTART + 19, RLENGTH - 19) + 0
+        if (value > 0) {
+          scale = value
+        }
+      }
+      END { print scale }
+    ' "${weston_log}" 2>/dev/null || true)"
+  fi
+  [[ "${scale}" =~ ^[0-9]+$ ]] || scale=100
+  printf '%s\n' "${scale}"
+}
+
+# Ika's copy of Windows' Segoe UI Variable, for the title bars of its windows
+# on WSLg, made once (and again when Windows' changes); nothing when Windows
+# has none.
+wslg_caption_font() {
+  local source="${IKA_WINDOWS_FONTS_DIR:-/mnt/c/Windows/Fonts}/SegUIVar.ttf"
+  local copy="${CVD_HOME_DIR}/fonts/SegUIVar.ttf"
+
+  [[ -f "${source}" ]] || return 0
+  if [[ ! -f "${copy}" ]] \
+      || [[ "$(stat -c %s "${source}")" != "$(stat -c %s "${copy}")" ]]; then
+    mkdir -p "${copy%/*}" \
+      && cp -f "${source}" "${copy}.tmp.$$" \
+      && mv -f "${copy}.tmp.$$" "${copy}" \
+      || { rm -f "${copy}.tmp.$$"; return 0; }
+  fi
+  printf '%s\n' "${copy}"
+}
+
 append_scrcpy_env() {
   local -n scrcpy_env_ref="$1"
+  local caption_font
 
   if [[ -d "${SCRCPY_ICON_DIR_DEFAULT}" ]]; then
     scrcpy_env_ref+=("SCRCPY_ICON_DIR=${SCRCPY_ICON_DIR_DEFAULT}")
@@ -5332,6 +5376,17 @@ append_scrcpy_env() {
   if [[ "${IKA_ON_WSLG}" == true && -z "${LIBDECOR_PLUGIN_DIR:-}" \
         && -f "${PACKAGED_WSL_GPU_DIR}/libdecor/libdecor-gtk.so" ]]; then
     scrcpy_env_ref+=("LIBDECOR_PLUGIN_DIR=${PACKAGED_WSL_GPU_DIR}/libdecor")
+  fi
+
+  # On WSLg the title bars look like Windows': scrcpy sizes them for Windows'
+  # display scale, read when the window opens, and sets their title in
+  # Windows' font.
+  if [[ "${IKA_ON_WSLG}" == true ]]; then
+    scrcpy_env_ref+=("IKA_WINDOWS_SCALE=$(wslg_windows_scale)")
+    caption_font="$(wslg_caption_font)"
+    if [[ -n "${caption_font}" ]]; then
+      scrcpy_env_ref+=("IKA_CAPTION_FONT=${caption_font}")
+    fi
   fi
 
   # scrcpy spawns `adb` to push the server jar and open the shell. Point it
