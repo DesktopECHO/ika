@@ -93,7 +93,7 @@ These add to the app's start options: an option that is ticked there stays on.
 
 | What | Default | Set with |
 | --- | --- | --- |
-| Virtual CPUs | Half the host's performance cores, counting hardware threads, at most 12 | `--cpus=`, `cpus` and `cpu_cap` in `[compute]` |
+| Virtual CPUs | Half the host's performance cores, counting hardware threads, at most 12; under WSL, all the CPUs WSL has (`processors` in `.wslconfig`) | `--cpus=`, `cpus` and `cpu_cap` in `[compute]` |
 | Memory | A quarter of the host's memory, rounded up to a multiple of 2 GB, at most 32 GB | `--memory_mb=`, `memory_mb`, `memory_step_mb` and `memory_cap_mb` in `[compute]` |
 | Data partition | 64 GB (decimal), thin-provisioned | `ika reset --data_gb=GB`, `data_gb` in `[storage]` |
 | GPU mode | `auto`: `venus` on a GPU with Vulkan 1.3 or newer and ETC2 textures; `gfxstream` when the host's only Vulkan drivers are software ones or gfxstream would pick llvmpipe over the GPU; `gfxstream_guest_angle` otherwise | `--gpu_mode=`, `gpu_mode` in `[gpu]` (see [Graphics](GRAPHICS.md#how-ika-chooses)) |
@@ -211,7 +211,7 @@ game_apps = com.example.game
 | --- | --- | --- |
 | `cpus` | `auto` | Virtual CPUs. `--cpus=` |
 | `memory_mb` | `auto` | Memory in MB. `--memory_mb=` |
-| `cpu_cap` | `12` | The most virtual CPUs `auto` gives |
+| `cpu_cap` | `12` | The most virtual CPUs `auto` gives (not under WSL) |
 | `memory_step_mb` | `2048` | `auto` memory is rounded up to a multiple of this |
 | `memory_cap_mb` | `32768` | The most memory `auto` gives |
 | `memory_fallback_mb` | `4096` | Memory when the host's cannot be read |

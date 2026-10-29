@@ -233,8 +233,8 @@ ika_ini_write_default() {
 # ----------------------------------------------------------------------------
 [compute]
 # Virtual CPUs and guest memory. "auto" sizes them from the host: half the
-# performance cores, counting each hardware thread (at most cpu_cap), and a
-# quarter of the host's memory rounded up to a multiple of memory_step_mb (at
+# performance cores, counting each hardware thread (at most cpu_cap; under WSL,
+# all the CPUs WSL has), and a quarter of the host's memory rounded up to a multiple of memory_step_mb (at
 # most memory_cap_mb). Each vCPU is pinned to a host CPU, from the highest CPU
 # number down. Command-line equivalents: --cpus=, --memory_mb=
 cpus = auto
@@ -836,6 +836,12 @@ readonly DEFAULT_GUEST_CPU_CAP DEFAULT_GUEST_MEMORY_STEP_MB \
 default_guest_cpus() {
   local guest_cpus
 
+  # Under WSL the CPUs are already the share Windows gives Linux (processors=
+  # in .wslconfig): all of them.
+  if [[ "${IKA_ON_WSLG}" == true ]]; then
+    nproc
+    return
+  fi
   # Half the performance cores (counting each hardware thread), the rest for
   # the host; at least 1, at most cpu_cap. --cpus= bypasses this.
   guest_cpus=$(( $(count_performance_cores) / 2 ))
