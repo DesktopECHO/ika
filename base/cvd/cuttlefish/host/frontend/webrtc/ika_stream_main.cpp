@@ -28,6 +28,8 @@
 #include "cuttlefish/host/frontend/webrtc/ika_stream.h"
 #include "cuttlefish/host/frontend/webrtc/pipewire_audio_sink.h"
 #include "cuttlefish/host/frontend/webrtc/pipewire_audio_source.h"
+#include "cuttlefish/host/frontend/webrtc/pulse_audio_sink.h"
+#include "cuttlefish/host/frontend/webrtc/pulse_audio_source.h"
 #include "cuttlefish/host/libs/audio_connector/server.h"
 #include "cuttlefish/host/libs/config/cuttlefish_config.h"
 #include "cuttlefish/host/libs/config/logging.h"
@@ -63,10 +65,23 @@ std::shared_ptr<AudioHandler> SetupAudio() {
   }
 
   auto stream_config = ParseAudioStreamConfig(instance);
-  std::shared_ptr<webrtc_streaming::AudioSink> audio_sink =
-      std::make_shared<PipeWireAudioSink>("ika", stream_config.mixer_settings);
-  std::shared_ptr<webrtc_streaming::AudioSource> audio_source =
-      std::make_shared<PipeWireAudioSource>("ika.microphone");
+  std::shared_ptr<webrtc_streaming::AudioSink> audio_sink;
+  std::shared_ptr<webrtc_streaming::AudioSource> audio_source;
+  // WSLg plays on Windows from its own PulseAudio server, whose RDP client
+  // holds ~250 ms; PipeWire's tunnel to it resamples trying to get below that
+  if (const char* server = WslgPulseServer()) {
+    audio_sink = PulseAudioSink::Create(server, stream_config.mixer_settings);
+    if (audio_sink) {
+      audio_source = std::make_shared<PulseAudioSource>(server);
+      LOG(INFO) << "Playing Cuttlefish audio on PulseAudio server " << server;
+    }
+  }
+  if (!audio_sink) {
+    audio_sink = std::make_shared<PipeWireAudioSink>(
+        "ika", stream_config.mixer_settings);
+    audio_source = std::make_shared<PipeWireAudioSource>("ika.microphone");
+    LOG(INFO) << "Playing Cuttlefish audio on PipeWire";
+  }
   auto audio_handler = std::make_shared<AudioHandler>(
       CreateAudioServer(FLAGS_audio_server_fd), std::move(audio_sink),
       std::move(audio_source), stream_config.streams,
@@ -93,9 +108,6 @@ int RawFrameStreamerMain(int argc, char** argv) {
   LOG(INFO) << "Starting raw frame streamer on " << FLAGS_raw_frame_socket_path;
 
   auto audio_handler = SetupAudio();
-  if (audio_handler) {
-    LOG(INFO) << "Started PipeWire-backed Cuttlefish audio";
-  }
 
   RawFrameStreamer ika_stream(FLAGS_raw_frame_socket_path);
   WaylandScreenConnector screen_connector(FLAGS_frame_server_fd,
