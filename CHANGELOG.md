@@ -440,6 +440,9 @@
   each run under a dated header line, instead of only the latest run.
 - `~/ika/madbfs.log` keeps its last 1,000 lines across mounts of Android's
   storage. madbfs emptied it each time `ika start` mounted the storage.
+- madbfs, which mounts Android's storage, caches at most 64 MiB of files
+  (72 MiB of memory), and takes that memory only as files are read. It took
+  288 MiB as soon as it mounted the storage, whether or not a file was read.
 - The console opens at Android's first frame instead of after boot
   completes: 0.4 s sooner on a 2011 MacBook Pro, 1.5 s on a 2015 MacBook Air.
 - `ika start` keeps the results of its host probes (GPU detection, the

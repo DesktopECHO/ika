@@ -93,6 +93,10 @@ up by the ROM build).
   (through `BOOST_ASIO_VERSIONED_NAME`) where 1.90 and earlier call it
   `boost_asio_handler_cont_helpers`, so the client builds with Boost 1.88
   through 1.92.
+- The page cache's storage comes from `calloc` instead of a zero-filled
+  `std::vector`, so a page takes memory only once the cache uses it. Upstream
+  wrote zeros over the whole store at mount: 288 MiB resident at once with
+  the default 256 MiB cache, whether or not a file was ever read.
 
 ## Compilers
 
