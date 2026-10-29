@@ -229,12 +229,48 @@ missing_components() {
     printf 'cgroup-cpu\tthe cgroup cpu controller is missing: the kernel needs CGROUP_SCHED\n'
   fi
 
+  if [[ -d /mnt/wslg ]] && ! start_menu_linked; then
+    printf 'start-menu\tthe Windows Start menu cannot show Ika'"'"'s Android apps: %s is not a link to %s\n' \
+      "${SYSTEM_APPLICATIONS_DIR}" "$(user_applications_dir)"
+  fi
+
   local group
   for group in kvm cvdnetwork render video; do
     if getent group "${group}" >/dev/null 2>&1 && ! id -nG "${USER}" | tr ' ' '\n' | grep -Fxq "${group}"; then
       printf 'group-%s\t%s is not in the %s group\n' "${group}" "${USER}" "${group}"
     fi
   done
+}
+
+# WSLg puts Linux apps in the Windows Start menu, and finds their icons for
+# the task bar, from the system's applications directories only, never from
+# ~/.local/share/applications, where Ika writes its Android apps' launchers.
+# /usr/local/share/applications, which WSLg reads, becomes a link to it.
+SYSTEM_APPLICATIONS_DIR="/usr/local/share/applications"
+
+user_applications_dir() {
+  printf '%s/applications\n' "${XDG_DATA_HOME:-${HOME}/.local/share}"
+}
+
+start_menu_linked() {
+  [[ "$(readlink -f "${SYSTEM_APPLICATIONS_DIR}")" == "$(readlink -f "$(user_applications_dir)")" ]]
+}
+
+# Links the directory, if it is not there or empty; leaves anything else
+link_start_menu() {
+  local user_dir
+
+  user_dir="$(user_applications_dir)"
+  mkdir -p "${user_dir}"
+  if [[ -L "${SYSTEM_APPLICATIONS_DIR}" ]] \
+      || { [[ -d "${SYSTEM_APPLICATIONS_DIR}" ]] && [[ -n "$(ls -A "${SYSTEM_APPLICATIONS_DIR}")" ]]; }; then
+    warn "${SYSTEM_APPLICATIONS_DIR} is in use, so Ika's Android apps stay out of the Windows Start menu; link their launchers from ${user_dir} into it to add them"
+    return 1
+  fi
+  [[ ! -d "${SYSTEM_APPLICATIONS_DIR}" ]] || run_as_root rmdir "${SYSTEM_APPLICATIONS_DIR}"
+  run_as_root mkdir -p "$(dirname "${SYSTEM_APPLICATIONS_DIR}")"
+  run_as_root ln -s "${user_dir}" "${SYSTEM_APPLICATIONS_DIR}"
+  log "linked ${SYSTEM_APPLICATIONS_DIR} to ${user_dir} for the Windows Start menu"
 }
 
 # --- the kernel ---------------------------------------------------------------
@@ -351,7 +387,7 @@ main() {
 
   missing="$(missing_components)"
   if [[ -z "${missing}" && "${force_kernel}" != "true" ]]; then
-    log "nothing is missing: KVM, vhost-vsock, vhost-net, udmabuf, systemd, cgroup v2 and the groups are in place"
+    log "nothing is missing: KVM, vhost-vsock, vhost-net, udmabuf, systemd, cgroup v2, the groups and the Start menu link are in place"
     return 0
   fi
   if [[ -n "${missing}" ]]; then
@@ -389,6 +425,10 @@ main() {
         ini_set "${wslconfig}" wsl2 kernelCommandLine "$(command_line_with "${command_line}" "cgroup_no_v1=all")"
         log "added cgroup_no_v1=all to the kernel command line in ${wslconfig}"
         restart_wsl="true"
+        ;;
+      start-menu)
+        # WSLg looks for the directory when WSL starts
+        link_start_menu && restart_wsl="true"
         ;;
       kernel|kvm|cgroup-cpu)
         need_kernel="true"
