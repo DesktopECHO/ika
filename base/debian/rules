@@ -273,9 +273,13 @@ override_dh_install:
 	    debian/ika-base/usr/share/icons/hicolor/128x128/apps/ika-scrcpy.png
 
 # Some bundled shared libraries lack standard Debian shlib metadata.
+# The libdecor GTK plugin for WSLg uses libdecor's plugin interface, whose
+# symbols Debian ties to libdecor's exact version: left to dh_shlibdeps,
+# ika-base would depend on that one libdecor-0-0. It needs what
+# libdecor-0-plugin-1-gtk, a dependency of ika-base, needs.
 .PHONY: override_dh_shlibdeps
 override_dh_shlibdeps:
-	dh_shlibdeps --dpkg-shlibdeps-params=--ignore-missing-info
+	dh_shlibdeps -Xlibdecor-gtk.so --dpkg-shlibdeps-params=--ignore-missing-info
 
 # Repair output files bazel actions made executable
 .PHONY: override_dh_fixperms
