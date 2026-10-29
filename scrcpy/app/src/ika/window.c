@@ -855,7 +855,12 @@ sc_ika_window_init_caption(struct sc_ika_window *iw) {
         " button.titlebutton.maximize {"
         " background-image: -gtk-icontheme(\"ika-caption-restore-symbolic\"); }\n"
         "headerbar.default-decoration button.titlebutton.close {"
-        " background-image: -gtk-icontheme(\"ika-caption-close-symbolic\"); }\n"
+        " background-image: -gtk-icontheme(\"ika-caption-close-symbolic\");"
+        // Flush with the bar's edge, its hover fill following the bar's
+        // rounded corner (the plugin draws the buttons unclipped)
+        " margin-right: 0; border-radius: 0 %dpx 0 0; }\n"
+        "window.maximized headerbar.default-decoration"
+        " button.titlebutton.close { border-radius: 0; }\n"
         "headerbar.default-decoration button.titlebutton:hover {"
         " background-color: alpha(currentColor, 0.06); }\n"
         "headerbar.default-decoration button.titlebutton:active {"
@@ -870,7 +875,8 @@ sc_ika_window_init_caption(struct sc_ika_window *iw) {
         SC_CAPTION_PX(SC_CAPTION_FONT_SIZE),
         SC_CAPTION_PX(SC_CAPTION_FONT_SIZE),
         SC_CAPTION_PX(SC_CAPTION_BUTTON_WIDTH),
-        SC_CAPTION_PX(SC_CAPTION_HEIGHT), glyph, glyph);
+        SC_CAPTION_PX(SC_CAPTION_HEIGHT), glyph, glyph,
+        SC_CAPTION_PX(SC_CAPTION_RADIUS));
 #undef SC_CAPTION_PX
 
     void *provider = css_provider_new();
