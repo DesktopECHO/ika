@@ -1,0 +1,326 @@
+<#
+.SYNOPSIS
+Deploys Ika on Windows: a WSL2 Debian 13 (trixie) distribution named Ika,
+readied for Ika, with Ika's latest release installed, then starts Android.
+
+.DESCRIPTION
+Installs Debian's WSL image, the latest from salsa.debian.org, under the name
+Ika, with Ika's icon for its Start menu entry and Terminal profile, and in it:
+  1. creates a user (named after the Windows user) with passwordless sudo,
+     the default user of the distribution, with systemd on;
+  2. installs Mesa from trixie-backports (Ika needs 26.1 or newer) and the
+     ika-base and ika-lineageos packages of Ika's latest GitHub release;
+  3. runs ika-wsl-setup, from the package, which readies WSL for Ika: nested
+     virtualization, cgroup v2, the groups, the Start menu, the clock;
+  4. restarts the distribution, or all of WSL when ika-wsl-setup changed
+     .wslconfig (asked first, as that stops every running distribution);
+  5. starts Ika, whose console opens in a window.
+
+Run it from PowerShell, in one line:
+  irm https://raw.githubusercontent.com/DesktopECHO/ika/main/tools/ika-wsl-install.ps1 | iex
+or, with options:
+  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/DesktopECHO/ika/main/tools/ika-wsl-install.ps1))) -Force
+
+.PARAMETER Name
+The distribution's name. Default: Ika.
+
+.PARAMETER UserName
+The Linux user. Default: the Windows user name, lowercased.
+
+.PARAMETER Location
+Where WSL keeps the distribution's disk. Default: WSL's own choice.
+
+.PARAMETER Force
+Replaces a distribution of the same name, deleting its files, and restarts
+WSL without asking when that is needed.
+
+.PARAMETER NoStart
+Installs everything but does not start Ika.
+#>
+[CmdletBinding()]
+param(
+    [string]$Name = 'Ika',
+    [string]$UserName,
+    [string]$Location,
+    [switch]$Force,
+    [switch]$NoStart
+)
+
+$ErrorActionPreference = 'Stop'
+# Invoke-WebRequest's progress bar slows downloads to a crawl
+$ProgressPreference = 'SilentlyContinue'
+# wsl.exe writes UTF-16 to a pipe unless told otherwise
+$env:WSL_UTF8 = '1'
+
+function Write-Step([string]$Text) {
+    Write-Host "==> $Text" -ForegroundColor Cyan
+}
+
+function Invoke-Wsl {
+    & wsl.exe @args
+    if ($LASTEXITCODE -ne 0) {
+        throw "wsl.exe $($args -join ' ') failed (exit code $LASTEXITCODE)"
+    }
+}
+
+# The Linux half of the work, run by phase (see Invoke-Provision)
+$Provision = @'
+set -euo pipefail
+
+phase="$1"
+user="$2"
+export DEBIAN_FRONTEND=noninteractive
+
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+case "${phase}" in
+  user)
+    # Debian's first-run prompt (/usr/lib/wsl/oobe.sh) skips itself once a
+    # user with UID 1000 exists
+    if ! getent passwd "${user}" >/dev/null; then
+      if getent passwd 1000 >/dev/null; then
+        die "UID 1000 is taken by $(getent passwd 1000 | cut -d: -f1)"
+      fi
+      useradd --create-home --uid 1000 --shell /bin/bash \
+        --groups adm,cdrom,sudo,dip,plugdev "${user}"
+    fi
+    printf '%s ALL=(ALL:ALL) NOPASSWD: ALL\n' "${user}" >/etc/sudoers.d/90-ika-user
+    chmod 0440 /etc/sudoers.d/90-ika-user
+    printf '[boot]\nsystemd=true\n\n[user]\ndefault=%s\n' "${user}" >/etc/wsl.conf
+    ;;
+
+  install)
+    . /etc/os-release
+    [[ "${VERSION_CODENAME:-}" == trixie ]] \
+      || die "the distribution is ${PRETTY_NAME:-unknown}, not Debian 13 (trixie)"
+    # Debian's WSL image lists trixie-backports already
+    if ! grep -qs 'trixie-backports' /etc/apt/sources.list /etc/apt/sources.list.d/*; then
+      keyring=/usr/share/keyrings/debian-archive-keyring.pgp
+      [[ -e "${keyring}" ]] || keyring=/usr/share/keyrings/debian-archive-keyring.gpg
+      printf 'Types: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie-backports\nComponents: main\nSigned-By: %s\n' \
+        "${keyring}" >/etc/apt/sources.list.d/trixie-backports.sources
+    fi
+    apt-get update
+    apt-get -y full-upgrade
+    apt-get install -y curl ca-certificates
+    # Ika needs Mesa 26.1 or newer, which trixie has only in backports
+    apt-get install -y --no-install-recommends -t trixie-backports \
+      libegl-mesa0 libgbm1 libgl1-mesa-dri libglx-mesa0 mesa-vulkan-drivers
+
+    arch="$(dpkg --print-architecture)"
+    release="$(curl -fsSL https://api.github.com/repos/DesktopECHO/ika/releases/latest)"
+    dir="$(mktemp -d /var/tmp/ika-install.XXXXXX)"
+    trap 'rm -rf "${dir}"' EXIT
+    for package in ika-base ika-lineageos; do
+      url="$(grep -oE '"browser_download_url": *"[^"]*/'"${package}"'_[^"/]*_'"${arch}"'\.deb"' <<<"${release}" \
+        | sed -E 's/.*"(https:[^"]*)"$/\1/' | head -n 1)"
+      [[ -n "${url}" ]] || die "Ika's latest release has no ${package} package for ${arch}"
+      printf 'Downloading %s\n' "${url##*/}"
+      curl -fL --retry 3 -o "${dir}/${url##*/}" "${url}"
+    done
+    # SUDO_USER tells the package whom to add to Ika's groups
+    SUDO_USER="${user}" apt-get install -y "${dir}"/*.deb
+    usermod -aG kvm,cvdnetwork,render,video "${user}"
+    ;;
+
+  setup)
+    if command -v ika-wsl-setup >/dev/null; then
+      # Never builds a kernel; its report says when one is needed
+      ika-wsl-setup --no-kernel
+    else
+      printf 'This Ika release has no ika-wsl-setup; skipping it\n'
+    fi
+    ;;
+
+  *)
+    die "unknown phase ${phase}"
+    ;;
+esac
+'@
+
+# Runs a phase of $Provision in the distribution, as root or as the user,
+# showing its output and returning it; a failure throws unless -NoThrow
+function Invoke-Provision([string]$Phase, [string]$As, [switch]$NoThrow) {
+    # Windows PowerShell turns a native command's stderr into errors, which
+    # would stop the script at apt's first progress line
+    $ErrorActionPreference = 'Continue'
+    $script = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Provision.Replace("`r`n", "`n")))
+    & wsl.exe -d $Name -u $As --exec bash -c "echo $script | base64 -d | bash -s -- $Phase $UserName" 2>&1 |
+        ForEach-Object { Write-Host $_; "$_" }
+    if ($LASTEXITCODE -ne 0) {
+        if (-not $NoThrow) { throw "Setting up $Name failed in its '$Phase' step (exit code $LASTEXITCODE)" }
+        Write-Warning "The '$Phase' step reported a problem; see its output above."
+    }
+}
+
+# Downloads the newest Debian WSL image for this machine from Debian's
+# releases on salsa.debian.org; returns its path
+function Get-DebianImage([string]$Directory) {
+    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'ARM64' } else { 'AMD64' }
+    # Windows' curl.exe: salsa.debian.org answers PowerShell's web client with
+    # a bot challenge. The releases come newest first.
+    $json = & curl.exe -fsSL 'https://salsa.debian.org/api/v4/projects/debian%2FWSL/releases?per_page=1'
+    if ($LASTEXITCODE -ne 0) { throw "Could not read Debian's WSL releases (curl exit code $LASTEXITCODE)" }
+    $release = @(($json -join "`n") | ConvertFrom-Json)[0]
+    $asset = $release.assets.links | Where-Object { $_.name -like "Debian_WSL_${arch}_*.wsl" } | Select-Object -First 1
+    if (-not $asset) { throw "Debian's WSL release $($release.tag_name) has no image for $arch" }
+    $path = Join-Path $Directory $asset.name
+    Write-Host "Downloading $($asset.name)"
+    & curl.exe -fL --retry 3 -o $path $asset.url
+    if ($LASTEXITCODE -ne 0) { throw "Could not download $($asset.url) (curl exit code $LASTEXITCODE)" }
+    return $path
+}
+
+# Gives the distribution's Start menu entry and Terminal profile Ika's icon:
+# WSL copied the image's to shortcut.ico beside its disk, where both point
+function Set-DistributionIcon {
+    $key = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss' |
+        Where-Object { (Get-ItemProperty $_.PSPath).DistributionName -eq $Name } | Select-Object -First 1
+    if (-not $key) { return }
+    $target = Join-Path (Get-ItemProperty $key.PSPath).BasePath 'shortcut.ico'
+    # A checkout's own copy; none when run as a one-liner (irm ... | iex)
+    $local = if ($PSScriptRoot) { Join-Path $PSScriptRoot '..\scrcpy\app\data\icon.ico' }
+    if ($local -and (Test-Path -LiteralPath $local)) {
+        Copy-Item -LiteralPath $local -Destination $target -Force
+    } else {
+        Invoke-WebRequest -UseBasicParsing -OutFile $target `
+            -Uri 'https://raw.githubusercontent.com/DesktopECHO/ika/main/scrcpy/app/data/icon.ico'
+    }
+}
+
+# Sets nestedVirtualization=true in .wslconfig's [wsl2]; true when it changed
+function Enable-NestedVirtualization {
+    $path = Join-Path $env:USERPROFILE '.wslconfig'
+    $lines = @()
+    if (Test-Path -LiteralPath $path) { $lines = @(Get-Content -LiteralPath $path) }
+    $out = New-Object System.Collections.Generic.List[string]
+    $section = ''
+    $done = $false
+    foreach ($line in $lines) {
+        if ($line -match '^\s*\[(.+?)\]\s*$') {
+            if ($section -eq 'wsl2' -and -not $done) { $out.Add('nestedVirtualization=true'); $done = $true }
+            $section = $Matches[1].ToLower()
+        } elseif ($section -eq 'wsl2' -and $line -match '^\s*nestedVirtualization\s*=') {
+            if ($line -match '=\s*true\s*$') { return $false }
+            $line = 'nestedVirtualization=true'
+            $done = $true
+        }
+        $out.Add($line)
+    }
+    if (-not $done) {
+        if ($section -ne 'wsl2') { $out.Add('[wsl2]') }
+        $out.Add('nestedVirtualization=true')
+    }
+    Set-Content -LiteralPath $path -Value $out
+    return $true
+}
+
+# --- Checks ---------------------------------------------------------------
+
+# Windows' own wsl.exe, without WSL installed, knows no --version
+$versionText = ''
+if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
+    $versionText = (& wsl.exe --version 2>$null) -join "`n"
+}
+if ($versionText -notmatch 'WSL[^:\n]*:\s*(\d+)\.(\d+)\.(\d+)') {
+    Write-Step 'Installing WSL (Windows asks for permission)'
+    & wsl.exe --install --no-distribution
+    Write-Host 'Restart Windows to finish installing WSL, then run this again.'
+    return
+}
+$wslVersion = [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])"
+if ($wslVersion -lt [version]'2.4.4') {
+    # 2.4.4 installs a distribution under a name of its own
+    Write-Step "Updating WSL $wslVersion"
+    Invoke-Wsl --update
+    if (((& wsl.exe --version 2>$null) -join "`n") -notmatch 'WSL[^:\n]*:\s*(\d+)\.(\d+)\.(\d+)' -or
+            [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])" -lt [version]'2.4.4') {
+        throw 'WSL is still older than 2.4.4 after "wsl --update"; update it from the Microsoft Store and run this again.'
+    }
+}
+
+if (-not $UserName) {
+    $UserName = $env:USERNAME.ToLower() -replace '[^a-z0-9_-]', ''
+    if ($UserName -notmatch '^[a-z_]') { $UserName = "ika$UserName" }
+}
+if ($UserName -notmatch '^[a-z_][a-z0-9_-]{0,31}$' -or $UserName -eq 'root') {
+    throw "'$UserName' cannot be a Linux user name; pass one with -UserName"
+}
+
+$existing = @(& wsl.exe --list --quiet 2>$null | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($existing -contains $Name) {
+    if (-not $Force) {
+        throw "A distribution named $Name exists. Pass -Force to replace it (its files are deleted), or -Name for another name."
+    }
+    Write-Step "Removing the existing $Name"
+    Invoke-Wsl --unregister $Name
+}
+
+# --- Install --------------------------------------------------------------
+
+Write-Step "Installing Debian as $Name"
+$download = Join-Path $env:TEMP "ika-wsl-install-$PID"
+New-Item -ItemType Directory -Force -Path $download | Out-Null
+try {
+    $image = Get-DebianImage $download
+    $install = @('--install', '--from-file', $image, '--name', $Name, '--no-launch')
+    if ($Location) { $install += @('--location', $Location) }
+    Invoke-Wsl @install
+} finally {
+    Remove-Item -LiteralPath $download -Recurse -Force -ErrorAction SilentlyContinue
+}
+try {
+    Set-DistributionIcon
+} catch {
+    Write-Warning "Could not give $Name Ika's icon: $_"
+}
+
+Write-Step "Creating the user $UserName (passwordless sudo) and turning on systemd"
+Invoke-Provision user root | Out-Null
+Invoke-Wsl --terminate $Name
+
+Write-Step 'Installing Mesa from trixie-backports and Ika''s latest release'
+Invoke-Provision install root | Out-Null
+
+$restartWsl = $false
+& wsl.exe -d $Name -u root --exec test -e /dev/kvm
+if ($LASTEXITCODE -ne 0) {
+    # No /dev/kvm: WSL runs without nested virtualization
+    if (Enable-NestedVirtualization) {
+        Write-Host "Turned on nested virtualization in $env:USERPROFILE\.wslconfig"
+        $restartWsl = $true
+    } else {
+        Write-Warning 'There is no /dev/kvm although nested virtualization is on: the CPU or Windows may not support it.'
+    }
+}
+
+Write-Step 'Readying WSL for Ika (ika-wsl-setup)'
+$setupOutput = Invoke-Provision setup $UserName -NoThrow
+if (($setupOutput -join "`n") -match 'wsl --shutdown') { $restartWsl = $true }
+
+if ($restartWsl) {
+    Write-Step 'WSL must restart for its new settings, which stops every running distribution'
+    if (-not $Force) {
+        $answer = Read-Host 'Restart WSL now? [Y/n]'
+        if ($answer -and $answer -notmatch '^[Yy]') {
+            Write-Host "Run ""wsl --shutdown"" when you can, then ""wsl -d $Name -- ika start""."
+            return
+        }
+    }
+    Invoke-Wsl --shutdown
+} else {
+    # The groups and services take effect at the distribution's next start
+    Invoke-Wsl --terminate $Name
+}
+
+if ($NoStart) {
+    Write-Step "Done. Start Ika with: wsl -d $Name -- ika start"
+    return
+}
+
+Write-Step 'Starting Ika (the first start takes a few minutes)'
+& wsl.exe -d $Name --cd '~' -- ika start
+if ($LASTEXITCODE -ne 0) {
+    throw "Ika did not start; its log is ~/ika/ikastart.log in $Name"
+}
+Write-Step "Done. Ika runs in $Name; your Android apps are in the Start menu under ""Android Apps (Ika)""."
