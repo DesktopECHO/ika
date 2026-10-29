@@ -2180,7 +2180,7 @@ App windows:
   Settings), and need no quotes when they contain spaces.
 
   '${SCRIPT_NAME} app sync' adds each launchable app to the desktop's app
-  menu, as "🎮 ∙ LABEL" for games or "ᗩ ∙ LABEL" for other apps, with its own
+  menu, as its label or "🎮 ∙ LABEL" for a game, with its own
   icon, in an "Android Apps (Ika)" group (a GNOME app-grid folder, or a
   submenu on KDE Plasma, XFCE, Cinnamon and MATE), and removes entries for
   apps that were uninstalled. While the VM runs, a watcher started by 'start'
@@ -5949,7 +5949,9 @@ app_display_name() {
   launcher="$(app_menu_data_dir)/applications/$(app_window_id "${package}").desktop"
   if [[ -f "${launcher}" ]]; then
     name="$(sed -n '/^Name=/{s///p;q}' "${launcher}")"
-    name="${name#* ∙ }"
+    # The game marker, or the app marker of launchers from before it went
+    name="${name#🎮 ∙ }"
+    name="${name#ᗩ ∙ }"
     name="${name//\\\\/\\}"
   fi
   if [[ -z "${name}" && -s "${APP_LIST_CACHE}" ]]; then
@@ -8437,7 +8439,7 @@ refresh_app_games_file() {
   grep -v '^ika-games-done' <<<"${output//$'\r'/}" | grep -v '^$' > "${APP_GAMES_FILE}" || true
 }
 
-# Prints the launcher's menu name: the app label, marked as a game or an app.
+# Prints the launcher's menu name: the app label, marked as a game.
 app_launcher_name() {
   local label="$1"
   local package="$2"
@@ -8445,7 +8447,7 @@ app_launcher_name() {
   if is_game_app "${package}"; then
     printf '🎮 ∙ %s\n' "${label}"
   else
-    printf 'ᗩ ∙ %s\n' "${label}"
+    printf '%s\n' "${label}"
   fi
 }
 
@@ -8868,8 +8870,9 @@ refresh_app_menu_caches() {
 # command or icon changes, so a launcher updated in place would keep showing
 # its old name, or its old right-click actions. Launchers that change are
 # therefore moved out of the applications directory until GNOME Shell has
-# dropped them, updated there, and moved back as new apps. Prints the number
-# of launchers updated.
+# dropped them, updated there, and moved back as new apps. WSLg likewise
+# names a Windows Start menu shortcut once, when the launcher appears, and
+# updates it in place. Prints the number of launchers updated.
 refresh_changed_launchers() {
   local apps_dir="$1"
   local list="$2"
@@ -8881,7 +8884,7 @@ refresh_changed_launchers() {
   local -a packages=()
   local i
 
-  if ! pgrep -u "${UID}" -x gnome-shell >/dev/null 2>&1; then
+  if [[ "${IKA_ON_WSLG}" != true ]] && ! pgrep -u "${UID}" -x gnome-shell >/dev/null 2>&1; then
     printf '0\n'
     return 0
   fi
