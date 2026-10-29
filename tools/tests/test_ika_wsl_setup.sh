@@ -60,12 +60,46 @@ flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov
 EOF
 grep() { if [[ "${*: -1}" == /proc/cpuinfo ]]; then command grep "${@:1:$#-1}" "${T}/cpuinfo"; else command grep "$@"; fi; }
 ps() { printf 'init\n'; }
+# No Hyper-V clock device and no Windows interop: no time checks
+HYPERV_PTP_DEVICE="${T}/no-ptp"
+clock_offset_ms() { return 1; }
+windows_utc_offset_minutes() { return 1; }
 report="$(missing_components)"
 [[ "${report}" == *$'nested-virtualization\t'* ]] || fail "nested virtualization is not reported: ${report}"
 [[ "${report}" == *$'kernel\tthe kernel lacks KVM VHOST_VSOCK VHOST_NET TUN UDMABUF BRIDGE NF_TABLES NFT_NAT NFT_MASQ'* ]] \
   || fail "the kernel options are not reported: ${report}"
 [[ "${report}" == *$'systemd\t'* ]] || fail "systemd is not reported: ${report}"
+[[ "${report}" != *$'time-sync\t'* && "${report}" != *$'clock\t'* && "${report}" != *$'timezone\t'* ]] \
+  || fail "time is reported without the Hyper-V clock or Windows interop: ${report}"
 unset -f grep ps kernel_config_has
 echo "ok: the report of what is missing"
+
+# This system's UTC offset, in minutes
+expect_equal "$(TZ=UTC0 linux_utc_offset_minutes)" "0" "UTC's offset"
+expect_equal "$(TZ='<-0330>3:30' linux_utc_offset_minutes)" "-210" "a half-hour offset west of UTC"
+expect_equal "$(TZ='<+0545>-5:45' linux_utc_offset_minutes)" "345" "a quarter-hour offset east of UTC"
+
+# The time: chrony not following the Hyper-V clock, a clock 5 s off Windows'
+# and another time zone are reported; a clock 0.4 s off is not
+kernel_config_has() { return 0; }
+: >"${T}/ptp_hyperv"
+HYPERV_PTP_DEVICE="${T}/ptp_hyperv"
+time_sync_in_place() { return 1; }
+clock_offset_ms() { printf '5000\n'; }
+windows_utc_offset_minutes() { printf -- '-180\n'; }
+linux_utc_offset_minutes() { printf '0\n'; }
+report="$(missing_components)"
+[[ "${report}" == *$'time-sync\t'* ]] || fail "chrony not following the Hyper-V clock is not reported: ${report}"
+[[ "${report}" == *$'clock\tthe clock is +5.0 s off Windows\''* ]] || fail "the clock offset is not reported: ${report}"
+[[ "${report}" == *$'timezone\tthe time zone is UTC+0 min, Windows\' UTC-180 min'* ]] \
+  || fail "the time zone is not reported: ${report}"
+time_sync_in_place() { return 0; }
+clock_offset_ms() { printf -- '-400\n'; }
+linux_utc_offset_minutes() { printf -- '-180\n'; }
+report="$(missing_components)"
+[[ "${report}" != *$'time-sync\t'* && "${report}" != *$'clock\t'* && "${report}" != *$'timezone\t'* ]] \
+  || fail "a clock that keeps Windows' time is reported: ${report}"
+unset -f time_sync_in_place clock_offset_ms windows_utc_offset_minutes linux_utc_offset_minutes kernel_config_has
+echo "ok: the time"
 
 printf 'PASS: ika-wsl-setup tests\n'

@@ -406,7 +406,21 @@ it under `%USERPROFILE%\ika-wsl\` and points `.wslconfig` at it. The
 build takes ten minutes to an hour and a few GB under `~/ika/wsl-kernel`
 (`IKA_WSL_BUILD_DIR`); `--no-kernel` changes the configuration only and
 `--kernel` builds the kernel anyway. Afterwards run `wsl --shutdown` from
-Windows, open the distribution again and start Ika. The GPU is reached
+Windows, open the distribution again and start Ika.
+
+It also keeps the clock on Windows' time. WSL sets the clock from Windows
+when it starts but nothing keeps it there, and a clock that is off makes
+programs that pace themselves by it run fast or slow (WSLg's audio crackles
+and plays slow). `ika-wsl-setup` installs chrony if it is missing and points
+it at the Windows clock through Hyper-V's `/dev/ptp_hyperv`
+(`/etc/chrony/conf.d/ika-wsl-hyperv.conf`, or `ika-wsl-hyperv.conf` beside
+`chrony.conf` where chrony has no `confdir`), steps the clock whenever it is
+more than a second off, lets Debian's and Ubuntu's chrony steer the clock in
+WSL (`SYNC_IN_CONTAINER="yes"` in `/etc/default/chrony`) and stops
+`systemd-timesyncd`. `--check` also reports a clock more than a second off
+Windows' and a time zone other than Windows'; WSL takes the time zone from
+Windows when it starts unless `useWindowsTimezone=false` is set in
+`/etc/wsl.conf`. The GPU is reached
 through WSL's `/dev/dxg` and Mesa's D3D12 drivers; if gfxstream fails on
 them, `ika start --gpu_mode=guest_swiftshader` renders in software.
 

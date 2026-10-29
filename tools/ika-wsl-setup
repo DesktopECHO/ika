@@ -5,9 +5,10 @@
 # Ika's Cuttlefish needs things a fresh WSL2 does not have: KVM (nested
 # virtualization is off by default), the vhost-vsock, vhost-net and udmabuf
 # devices (Microsoft's kernel is built without them), tap devices, nftables
-# NAT, systemd (for the user scope Ika starts Cuttlefish in and for udev) and
-# cgroup v2 with the cpu controller. This script checks each, installs what is
-# missing, and says when to run `wsl --shutdown` from Windows.
+# NAT, systemd (for the user scope Ika starts Cuttlefish in and for udev),
+# cgroup v2 with the cpu controller, and a clock that keeps Windows' time and
+# time zone. This script checks each, installs what is missing, and says when
+# to run `wsl --shutdown` from Windows.
 #
 # The kernel is built from Microsoft's WSL2-Linux-Kernel at the running
 # kernel's version, with the missing options built in, and installed on the
@@ -235,6 +236,21 @@ missing_components() {
       "${SYSTEM_APPLICATIONS_DIR}" "$(user_applications_dir)"
   fi
 
+  # The time (see setup_time_sync)
+  local offset windows_tz linux_tz
+  if [[ -e "${HYPERV_PTP_DEVICE}" ]] && ! time_sync_in_place; then
+    printf 'time-sync\tthe clock does not follow Windows'"'"': chrony is missing, leaves the clock alone or does not use %s\n' "${HYPERV_PTP_DEVICE}"
+  fi
+  if offset="$(clock_offset_ms)" && (( offset > 1000 || offset < -1000 )); then
+    printf 'clock\tthe clock is %s s off Windows'"'"'\n' "$(awk -v ms="${offset}" 'BEGIN { printf "%+.1f", ms / 1000 }')"
+  fi
+  if windows_tz="$(windows_utc_offset_minutes)" && [[ "${windows_tz}" =~ ^-?[0-9]+$ ]]; then
+    linux_tz="$(linux_utc_offset_minutes)"
+    if [[ "${linux_tz}" != "${windows_tz}" ]]; then
+      printf 'timezone\tthe time zone is UTC%+d min, Windows'"'"' UTC%+d min\n' "${linux_tz}" "${windows_tz}"
+    fi
+  fi
+
   local group
   for group in kvm cvdnetwork render video; do
     if getent group "${group}" >/dev/null 2>&1 && ! id -nG "${USER}" | tr ' ' '\n' | grep -Fxq "${group}"; then
@@ -272,6 +288,150 @@ link_start_menu() {
   run_as_root mkdir -p "$(dirname "${SYSTEM_APPLICATIONS_DIR}")"
   run_as_root ln -s "${user_dir}" "${SYSTEM_APPLICATIONS_DIR}"
   log "linked ${SYSTEM_APPLICATIONS_DIR} to ${user_dir} for the Windows Start menu"
+}
+
+# --- time ---------------------------------------------------------------------
+
+# WSL sets its clock from Windows when it starts, and nothing keeps it there:
+# on one boot it came up 7 hours off, and the slewing that followed ran every
+# program that paces itself by the clock 8% slow (WSLg's audio crackled).
+# chrony instead follows the Windows host's clock through Hyper-V's PTP
+# device, and steps the clock whenever it is more than a second off.
+HYPERV_PTP_DEVICE="/dev/ptp_hyperv"
+CHRONY_IKA_CONF_NAME="ika-wsl-hyperv.conf"
+
+# The Windows clock as Unix milliseconds, or nothing without Windows interop
+windows_utc_ms() {
+  command -v powershell.exe >/dev/null 2>&1 || return 1
+  powershell.exe -NoProfile -NonInteractive -Command \
+    '[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()' 2>/dev/null | tr -d '\r'
+}
+
+# Windows' UTC offset in minutes, or nothing without Windows interop
+windows_utc_offset_minutes() {
+  command -v powershell.exe >/dev/null 2>&1 || return 1
+  powershell.exe -NoProfile -NonInteractive -Command \
+    '[int][TimeZoneInfo]::Local.GetUtcOffset([DateTime]::UtcNow).TotalMinutes' 2>/dev/null | tr -d '\r'
+}
+
+# This clock minus Windows', in milliseconds, or nothing without interop
+clock_offset_ms() {
+  local before after windows
+  # In microseconds; uutils' date, Ubuntu's, ignores the 3 of %3N
+  before="${EPOCHREALTIME/./}"
+  windows="$(windows_utc_ms)" || return 1
+  after="${EPOCHREALTIME/./}"
+  [[ "${windows}" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$(( (before + after) / 2000 - windows ))"
+}
+
+# This system's UTC offset in minutes
+linux_utc_offset_minutes() {
+  local z
+  z="$(date +%z)"
+  printf '%s\n' "$(( ${z:0:1}1 * (10#${z:1:2} * 60 + 10#${z:3:2}) ))"
+}
+
+chrony_main_conf() {
+  local file
+  for file in /etc/chrony/chrony.conf /etc/chrony.conf; do
+    [[ -f "${file}" ]] && { printf '%s\n' "${file}"; return 0; }
+  done
+  return 1
+}
+
+# chrony.service on Debian and Ubuntu, where chronyd.service is an alias of it;
+# chronyd.service elsewhere
+chrony_unit() {
+  local unit
+  unit="$(systemctl show -P Id chronyd.service 2>/dev/null)"
+  printf '%s\n' "${unit:-chronyd.service}"
+}
+
+# Whether chronyd runs, steers the clock (no -x) and has the Hyper-V clock
+# among its sources; selecting it takes a few polls after chronyd starts, and
+# the clock check catches a clock it does not keep right
+time_sync_in_place() {
+  local pid
+  pid="$(pgrep -x chronyd | head -n 1)"
+  [[ -n "${pid}" ]] || return 1
+  ! tr '\0' ' ' < "/proc/${pid}/cmdline" | grep -qE '(^| )-[a-zA-Z0-9]*x' || return 1
+  chronyc -n sources 2>/dev/null | grep -qE '^#. +PHC'
+}
+
+# Installs chrony, points it at the Hyper-V clock and lets it steer the clock
+setup_time_sync() {
+  local conf dir file unit
+
+  if ! command -v chronyd >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+      run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y chrony
+    elif command -v dnf >/dev/null 2>&1; then
+      run_as_root dnf -y install chrony
+    elif command -v pacman >/dev/null 2>&1; then
+      run_as_root pacman -S --needed --noconfirm chrony
+    else
+      warn "unknown package manager: install chrony yourself, then run ${SCRIPT_NAME} again"
+      return 1
+    fi
+  fi
+  # Two clients would both steer the clock
+  if systemctl is-active --quiet systemd-timesyncd 2>/dev/null; then
+    run_as_root systemctl disable --now systemd-timesyncd
+  fi
+
+  conf="$(chrony_main_conf)" || { warn "chrony's configuration file is missing"; return 1; }
+  dir="$(awk '$1 == "confdir" { print $2; exit }' "${conf}")"
+  if [[ -n "${dir}" ]]; then
+    file="${dir}/${CHRONY_IKA_CONF_NAME}"
+  else
+    file="$(dirname "${conf}")/${CHRONY_IKA_CONF_NAME}"
+    if ! grep -qxF "include ${file}" "${conf}"; then
+      printf '\n# Ika on WSL2 (ika-wsl-setup)\ninclude %s\n' "${file}" | run_as_root tee -a "${conf}" >/dev/null
+    fi
+  fi
+  run_as_root mkdir -p "$(dirname "${file}")"
+  run_as_root tee "${file}" >/dev/null <<EOF
+# Ika on WSL2 (ika-wsl-setup): follow the Windows host's clock through
+# Hyper-V's PTP device, even where network time servers disagree with it, and
+# step the clock whenever it is more than a second off.
+refclock PHC ${HYPERV_PTP_DEVICE} poll 3 dpoll -2 offset 0 stratum 2 prefer trust
+makestep 1 -1
+EOF
+
+  # Debian's and Ubuntu's chronyd starter adds -x, leaving the clock alone, in
+  # a container, which it takes WSL for
+  if [[ -f /etc/default/chrony ]]; then
+    if grep -q '^SYNC_IN_CONTAINER=' /etc/default/chrony; then
+      run_as_root sed -i 's/^SYNC_IN_CONTAINER=.*/SYNC_IN_CONTAINER="yes"/' /etc/default/chrony
+    else
+      printf 'SYNC_IN_CONTAINER="yes"\n' | run_as_root tee -a /etc/default/chrony >/dev/null
+    fi
+  fi
+
+  # The Hyper-V PTP device can appear after chronyd starts, which then exits
+  unit="$(chrony_unit)"
+  run_as_root mkdir -p "/etc/systemd/system/${unit}.d"
+  run_as_root tee "/etc/systemd/system/${unit}.d/ika-wsl.conf" >/dev/null <<EOF
+# Ika on WSL2 (ika-wsl-setup): ${HYPERV_PTP_DEVICE} can appear after chronyd
+# starts, which then exits.
+[Service]
+Restart=on-failure
+RestartSec=2
+EOF
+  run_as_root systemctl daemon-reload
+  run_as_root systemctl enable "${unit}" >/dev/null 2>&1 || true
+  run_as_root systemctl restart "${unit}"
+  log "chrony follows the Windows clock through ${HYPERV_PTP_DEVICE} and steps it when it is a second off"
+}
+
+# Sets this clock to Windows'
+step_clock_to_windows() {
+  local ms
+  ms="$(windows_utc_ms)" || return 1
+  [[ "${ms}" =~ ^[0-9]+$ ]] || return 1
+  run_as_root date -u -s "@$(( ms / 1000 )).$(printf '%03d' $(( ms % 1000 )))" >/dev/null
+  log "set the clock to Windows' time"
 }
 
 # --- the kernel ---------------------------------------------------------------
@@ -388,7 +548,7 @@ main() {
 
   missing="$(missing_components)"
   if [[ -z "${missing}" && "${force_kernel}" != "true" ]]; then
-    log "nothing is missing: KVM, vhost-vsock, vhost-net, udmabuf, systemd, cgroup v2, the groups and the Start menu link are in place"
+    log "nothing is missing: KVM, vhost-vsock, vhost-net, udmabuf, systemd, cgroup v2, the groups, the Start menu link and the time are in place"
     return 0
   fi
   if [[ -n "${missing}" ]]; then
@@ -426,6 +586,22 @@ main() {
         ini_set "${wslconfig}" wsl2 kernelCommandLine "$(command_line_with "${command_line}" "cgroup_no_v1=all")"
         log "added cgroup_no_v1=all to the kernel command line in ${wslconfig}"
         restart_wsl="true"
+        ;;
+      time-sync)
+        setup_time_sync || true
+        ;;
+      clock)
+        step_clock_to_windows || warn "could not set the clock to Windows' time"
+        ;;
+      timezone)
+        # WSL takes the time zone from Windows when it starts, unless told not to
+        if [[ "$(ini_get /etc/wsl.conf time useWindowsTimezone)" == "false" ]]; then
+          ini_set /etc/wsl.conf time useWindowsTimezone true
+          log "set useWindowsTimezone=true in /etc/wsl.conf"
+          restart_wsl="true"
+        else
+          warn "the time zone differs from Windows'; WSL takes Windows' when it starts, so restart WSL, or set it with timedatectl"
+        fi
         ;;
       start-menu)
         # WSLg looks for the directory when WSL starts
