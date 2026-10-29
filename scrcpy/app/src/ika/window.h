@@ -25,6 +25,8 @@
  */
 struct sc_ika_window {
     sc_tick wslg_refresh_tick;
+    // A decoration refresh waits for the pointer to enter the content
+    bool wslg_refresh_pending;
     SDL_Window *window;
     bool wslg; // shown by WSLg, see sc_ika_window_is_wslg()
 

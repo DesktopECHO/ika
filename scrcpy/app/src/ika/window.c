@@ -63,17 +63,32 @@ sc_ika_window_is_constrained(SDL_Window *window) {
 // makes it destroy them and draw fresh ones. It builds the frame for the
 // state of the moment (a maximized window gets no resize borders), so this
 // runs on restore too, and the state is put back if the switch changes it.
+//
+// The switch destroys the title bar surface. If the pointer is on it (as
+// after a click on maximize), the compositor's leave event names no surface,
+// which libdecor's GTK plugin ignores: the new title bar keeps the button
+// highlighted until the pointer crosses it again. So the refresh waits until
+// the pointer is in the content; libdecor has had a proper leave by then.
 void
 sc_ika_window_refresh_wslg_decorations(struct sc_ika_window *iw) {
     SDL_WindowFlags flags = SDL_GetWindowFlags(iw->window);
     if ((flags & (SDL_WINDOW_BORDERLESS | SDL_WINDOW_FULLSCREEN))
             || !sc_ika_window_is_wslg()) {
+        iw->wslg_refresh_pending = false;
         return;
     }
     const char *driver = SDL_GetCurrentVideoDriver();
     if (!driver || strcmp(driver, "wayland")) {
+        iw->wslg_refresh_pending = false;
         return;
     }
+    if (SDL_GetMouseFocus() != iw->window) {
+        // On the decorations (or outside the window): see
+        // sc_ika_window_handle_event()
+        iw->wslg_refresh_pending = true;
+        return;
+    }
+    iw->wslg_refresh_pending = false;
     // The compositor may answer with another state change: once is enough
     sc_tick now = sc_tick_now();
     if (iw->wslg_refresh_tick
@@ -558,6 +573,7 @@ sc_ika_window_init(struct sc_ika_window *iw, SDL_Window *window) {
     iw->titlebar_color_file = titlebar_color_file;
     iw->wslg = sc_ika_window_is_wslg();
     iw->wslg_refresh_tick = 0;
+    iw->wslg_refresh_pending = false;
     iw->corner_press = false;
     for (unsigned i = 0; i < 3; ++i) {
         iw->border_color[i] = SC_WINDOW_BORDER_GRAY;
@@ -764,6 +780,11 @@ sc_ika_window_update_min_size(struct sc_ika_window *iw) {
 bool
 sc_ika_window_handle_event(struct sc_ika_window *iw, const SDL_Event *event) {
     switch (event->type) {
+        case SDL_EVENT_WINDOW_MOUSE_ENTER:
+            if (iw->wslg_refresh_pending) {
+                sc_ika_window_refresh_wslg_decorations(iw);
+            }
+            return false;
         case SDL_EVENT_MOUSE_BUTTON_DOWN: {
             iw->corner_press = false;
             if (!sc_ika_window_is_in_content(iw, event->button.x,
