@@ -1,0 +1,3165 @@
+dzn: Report Vulkan 1.3 on shader model 6.6 devices with wave operations
+
+Adds the Vulkan 1.3 core features to Dozen: VK_KHR_vulkan_memory_model,
+VK_KHR_maintenance4, VK_EXT_inline_uniform_block, VK_EXT_extended_dynamic_state
+and extended_dynamic_state2, VK_EXT_image_robustness, pipeline creation cache
+control and feedback, VK_KHR_format_feature_flags2, shader terminate
+invocation and demote to helper invocation, zero-initialized workgroup memory,
+8-bit and 16-bit integers and storage without native 16-bit operations, and
+the extensions that were already implemented but not exposed. Devices below
+shader model 6.6 or without wave operations keep reporting 1.2.
+
+diff --git a/src/compiler/nir/nir_lower_mem_access_bit_sizes.c b/src/compiler/nir/nir_lower_mem_access_bit_sizes.c
+index a29f404b8e7..d62bc5619cb 100644
+--- a/src/compiler/nir/nir_lower_mem_access_bit_sizes.c
++++ b/src/compiler/nir/nir_lower_mem_access_bit_sizes.c
+@@ -232,7 +232,27 @@ lower_mem_load(nir_builder *b, nir_intrinsic_instr *intrin,
+             nir_intrinsic_set_base(load, base_aligned);
+          }
+ 
+-         if (nir_intrinsic_has_range(load)) {
++         if (nir_intrinsic_has_range_base(load)) {
++            const uint64_t orig_range_base = nir_intrinsic_range_base(load);
++            const uint64_t orig_range = nir_intrinsic_range(load);
++            if (orig_range_base != 0 || orig_range != UINT32_MAX) {
++               const uint64_t requested_bytes_read =
++                  requested.num_components * (requested.bit_size / 8);
++               const uint64_t align_mask_u64 = align_mask;
++               const uint64_t max_orig_offset =
++                  orig_range_base + orig_range - bytes_read;
++               const uint64_t max_new_offset =
++                  (max_orig_offset + chunk_start) & ~align_mask_u64;
++               const uint64_t new_range_base = orig_range_base & ~align_mask_u64;
++
++               uint64_t new_range =
++                  max_new_offset + requested_bytes_read - new_range_base;
++               if (orig_range == 0 || new_range > UINT32_MAX)
++                  new_range = 0;
++               nir_intrinsic_set_range_base(load, new_range_base);
++               nir_intrinsic_set_range(load, new_range);
++            }
++         } else if (nir_intrinsic_has_range(load)) {
+             assert(nir_intrinsic_has_base(load));
+             const uint64_t orig_range = nir_intrinsic_range(load);
+             const uint32_t requested_bytes_read =
+diff --git a/src/microsoft/compiler/dxil_function.c b/src/microsoft/compiler/dxil_function.c
+index f5296a78997..da54ec3c4a8 100644
+--- a/src/microsoft/compiler/dxil_function.c
++++ b/src/microsoft/compiler/dxil_function.c
+@@ -34,7 +34,7 @@ struct predefined_func_descr {
+ };
+ 
+ static struct  predefined_func_descr predefined_funcs[] = {
+-{"dx.op.atomicBinOp", "O", "i@iiiii", DXIL_ATTR_KIND_READ_NONE},
++{"dx.op.atomicBinOp", "O", "i@iiiii", DXIL_ATTR_KIND_NO_UNWIND},
+ {"dx.op.cbufferLoad", "O", "i@ii", DXIL_ATTR_KIND_READ_ONLY},
+ {"dx.op.cbufferLoadLegacy", "B", "i@i", DXIL_ATTR_KIND_READ_ONLY},
+ {"dx.op.createHandle", "@", "iciib", DXIL_ATTR_KIND_READ_ONLY},
+@@ -74,7 +74,7 @@ static struct  predefined_func_descr predefined_funcs[] = {
+ {"dx.op.getDimensions", "D", "i@i", DXIL_ATTR_KIND_READ_ONLY},
+ {"dx.op.calculateLOD", "f", "i@@fffb", DXIL_ATTR_KIND_READ_ONLY},
+ {"dx.op.barrier", "v", "ii", DXIL_ATTR_KIND_NO_DUPLICATE},
+-{"dx.op.atomicCompareExchange", "O", "i@iiiii", DXIL_ATTR_KIND_READ_NONE},
++{"dx.op.atomicCompareExchange", "O", "i@iiiii", DXIL_ATTR_KIND_NO_UNWIND},
+ {"dx.op.textureStore", "v", "i@iiiOOOOc", DXIL_ATTR_KIND_NONE},
+ {"dx.op.primitiveID", "i", "i", DXIL_ATTR_KIND_READ_NONE},
+ {"dx.op.outputControlPointID", "i", "i", DXIL_ATTR_KIND_READ_NONE},
+diff --git a/src/microsoft/compiler/dxil_module.c b/src/microsoft/compiler/dxil_module.c
+index c70c67c4210..2ec4459450b 100644
+--- a/src/microsoft/compiler/dxil_module.c
++++ b/src/microsoft/compiler/dxil_module.c
+@@ -2179,7 +2179,8 @@ dxil_module_get_uav_res_props_const(struct dxil_module *m,
+ const struct dxil_value *
+ dxil_module_get_buffer_res_props_const(struct dxil_module *m,
+                                        enum dxil_resource_class class,
+-                                       enum dxil_resource_kind kind)
++                                       enum dxil_resource_kind kind,
++                                       bool globally_coherent)
+ {
+    const struct dxil_type *type = dxil_module_get_res_props_type(m);
+    if (!type)
+@@ -2191,8 +2192,9 @@ dxil_module_get_buffer_res_props_const(struct dxil_module *m,
+       dwords[1] = 4096 /* vec4s */ * 4 /* components */ * 4 /* bytes */;
+    } else {
+       dwords[0] = get_basic_srv_uav_res_props_dword(class == DXIL_RESOURCE_CLASS_UAV,
+-                                                    false, false /*TODO*/, false,
+-                                                    kind);
++                                                    false,
++                                                    class == DXIL_RESOURCE_CLASS_UAV && globally_coherent,
++                                                    false, kind);
+       dwords[1] = 0;
+    }
+ 
+diff --git a/src/microsoft/compiler/dxil_module.h b/src/microsoft/compiler/dxil_module.h
+index 08ba263a17f..397b38ee95d 100644
+--- a/src/microsoft/compiler/dxil_module.h
++++ b/src/microsoft/compiler/dxil_module.h
+@@ -454,7 +454,8 @@ dxil_module_get_uav_res_props_const(struct dxil_module *m,
+ const struct dxil_value *
+ dxil_module_get_buffer_res_props_const(struct dxil_module *m,
+                                        enum dxil_resource_class class,
+-                                       enum dxil_resource_kind kind);
++                                       enum dxil_resource_kind kind,
++                                       bool globally_coherent);
+ 
+ const struct dxil_mdnode *
+ dxil_get_metadata_string(struct dxil_module *m, const char *str);
+diff --git a/src/microsoft/compiler/dxil_nir.c b/src/microsoft/compiler/dxil_nir.c
+index 3bad5a48d3d..d71ff9cdf8c 100644
+--- a/src/microsoft/compiler/dxil_nir.c
++++ b/src/microsoft/compiler/dxil_nir.c
+@@ -2582,10 +2582,10 @@ set_deref_variables_coherent(nir_shader *s, nir_deref_instr *deref)
+       return;
+    }
+ 
+-   /* For derefs with casts, we only support pre-lowered Vulkan accesses */
+    assert(deref->deref_type == nir_deref_type_cast);
+-   nir_intrinsic_instr *cast_src = nir_def_as_intrinsic(deref->parent.ssa);
+-   assert(cast_src->intrinsic == nir_intrinsic_load_vulkan_descriptor);
++   nir_intrinsic_instr *cast_src = nir_src_as_intrinsic(deref->parent);
++   if (!cast_src || cast_src->intrinsic != nir_intrinsic_load_vulkan_descriptor)
++      return;
+    nir_binding binding = nir_chase_binding(cast_src->src[0]);
+    set_binding_variables_coherent(s, binding, nir_var_mem_ssbo);
+ }
+@@ -2629,7 +2629,7 @@ lower_coherent_load_store(nir_builder *b, nir_intrinsic_instr *intr, void *conte
+    case nir_intrinsic_load_ssbo:
+    case nir_intrinsic_image_deref_load:
+    case nir_intrinsic_image_load: {
+-      if (intr->def.bit_size < 32 || intr->def.num_components > 1) {
++      if (intr->def.bit_size != 32 || intr->def.num_components > 1) {
+          if (intr->intrinsic == nir_intrinsic_load_deref)
+             set_deref_variables_coherent(b->shader, nir_src_as_deref(intr->src[0]));
+          else {
+@@ -2655,7 +2655,7 @@ lower_coherent_load_store(nir_builder *b, nir_intrinsic_instr *intr, void *conte
+          intr->intrinsic == nir_intrinsic_store_deref ? 1 : 3;
+       unsigned num_components = nir_intrinsic_has_write_mask(intr) ?
+          util_bitcount(nir_intrinsic_write_mask(intr)) : intr->src[value_idx].ssa->num_components;
+-      if (intr->src[value_idx].ssa->bit_size < 32 || num_components > 1) {
++      if (intr->src[value_idx].ssa->bit_size != 32 || num_components > 1) {
+          if (intr->intrinsic == nir_intrinsic_store_deref)
+             set_deref_variables_coherent(b->shader, nir_src_as_deref(intr->src[resource_idx]));
+          else {
+diff --git a/src/microsoft/compiler/dxil_nir_algebraic.py b/src/microsoft/compiler/dxil_nir_algebraic.py
+index ef4ffe0c214..7d0010d76a9 100644
+--- a/src/microsoft/compiler/dxil_nir_algebraic.py
++++ b/src/microsoft/compiler/dxil_nir_algebraic.py
+@@ -62,7 +62,10 @@ def remove_unsupported_casts(arr, bit_size, mask, max_unsigned_float, min_signed
+                         new_seq = ('ishr', ('ishl', a, shift), shift)
+                     # Make sure the destination is the right type/size
+                     if outer_op_sz != src_sz or outer_op[2] != inner_op[0]:
+-                        new_seq = (outer_op, new_seq)
++                        if outer_op_type == 'i2i' and outer_op_sz < src_sz:
++                            new_seq = ('u2u' + str(int(outer_op_sz)), new_seq)
++                        else:
++                            new_seq = (outer_op, new_seq)
+                     arr += [(orig_seq, new_seq)]
+             for inner_op_type in ('f2u', 'f2i'):
+                 inner_op = inner_op_type + str(int(bit_size))
+diff --git a/src/microsoft/compiler/nir_to_dxil.c b/src/microsoft/compiler/nir_to_dxil.c
+index 8dd8f774895..5aea30a6af2 100644
+--- a/src/microsoft/compiler/nir_to_dxil.c
++++ b/src/microsoft/compiler/nir_to_dxil.c
+@@ -183,6 +183,8 @@ dxil_get_nir_compiler_options(nir_shader_compiler_options *options,
+       options->lower_doubles_options = ~0;
+       options->float_mul_add64 = 0;
+    }
++   if (!(supported_int_sizes & 16) || !(supported_float_sizes & 16))
++      options->support_16bit_alu = false;
+    if (shader_model_max >= SHADER_MODEL_6_4) {
+       options->has_sdot_4x8 = true;
+       options->has_udot_4x8 = true;
+@@ -492,6 +494,34 @@ emit_srv_metadata(struct dxil_module *m, const struct dxil_type *elem_type,
+    return dxil_get_metadata_node(m, fields, ARRAY_SIZE(fields));
+ }
+ 
++static bool
++shader_has_coherent_ssbo_access(nir_shader *s)
++{
++   nir_foreach_function_impl(impl, s) {
++      nir_foreach_block(block, impl) {
++         nir_foreach_instr(instr, block) {
++            if (instr->type != nir_instr_type_intrinsic)
++               continue;
++
++            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
++            switch (intr->intrinsic) {
++            case nir_intrinsic_load_ssbo:
++            case nir_intrinsic_store_ssbo:
++            case nir_intrinsic_ssbo_atomic:
++            case nir_intrinsic_ssbo_atomic_swap:
++               if (nir_intrinsic_access(intr) & ACCESS_COHERENT)
++                  return true;
++               break;
++            default:
++               break;
++            }
++         }
++      }
++   }
++
++   return false;
++}
++
+ static const struct dxil_mdnode *
+ emit_uav_metadata(struct dxil_module *m, const struct dxil_type *struct_type,
+                   const char *name, const resource_array_layout *layout,
+@@ -573,6 +603,7 @@ struct ntd_context {
+ 
+    struct util_dynarray uav_metadata_nodes;
+    const struct dxil_value *ssbo_handles[MAX_UAVS];
++   bool coherent_ssbos;
+    const struct dxil_value *image_handles[MAX_UAVS];
+    uint32_t num_uavs;
+ 
+@@ -4510,7 +4541,9 @@ emit_load_vulkan_descriptor(struct ntd_context *ctx, nir_intrinsic_instr *intr)
+       if (!heap_index_value)
+          return false;
+       const struct dxil_value *unannotated_handle = emit_createhandle_heap(ctx, heap_index_value, false, true);
+-      const struct dxil_value *res_props = dxil_module_get_buffer_res_props_const(&ctx->mod, resource_class, resource_kind);
++      const struct dxil_value *res_props =
++         dxil_module_get_buffer_res_props_const(&ctx->mod, resource_class, resource_kind,
++                                                ctx->coherent_ssbos);
+       if (!unannotated_handle || !res_props)
+          return false;
+       handle = emit_annotate_handle(ctx, unannotated_handle, res_props);
+@@ -6071,6 +6104,8 @@ emit_module(struct ntd_context *ctx, const struct nir_to_dxil_options *opts)
+          return false;
+ 
+    } else if (ctx->opts->environment == DXIL_ENVIRONMENT_VULKAN) {
++      ctx->coherent_ssbos = shader_has_coherent_ssbo_access(ctx->shader);
++
+       /* Handle read/write SSBOs as UAVs */
+       nir_foreach_variable_with_modes(var, ctx->shader, nir_var_mem_ssbo) {
+          if ((var->data.access & ACCESS_NON_WRITEABLE) == 0) {
+@@ -6079,7 +6114,9 @@ emit_module(struct ntd_context *ctx, const struct nir_to_dxil_options *opts)
+                count = glsl_get_length(var->type);
+             if (!emit_uav(ctx, var->data.binding, var->data.descriptor_set,
+                         count, DXIL_COMP_TYPE_INVALID, 1,
+-                        DXIL_RESOURCE_KIND_RAW_BUFFER, var->data.access, var->name))
++                        DXIL_RESOURCE_KIND_RAW_BUFFER,
++                        var->data.access | (ctx->coherent_ssbos ? ACCESS_COHERENT : 0),
++                        var->name))
+                return false;
+             
+          }
+@@ -6203,6 +6240,35 @@ get_dxil_shader_kind(struct nir_shader *s)
+ static unsigned
+ lower_bit_size_callback(const nir_instr* instr, void *data)
+ {
++   const struct nir_to_dxil_options *opts = (const struct nir_to_dxil_options*)data;
++   unsigned min_bit_size = opts->lower_int16 ? 32 : 16;
++
++   if (instr->type == nir_instr_type_intrinsic) {
++      nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
++      switch (intr->intrinsic) {
++      case nir_intrinsic_read_invocation:
++      case nir_intrinsic_read_first_invocation:
++      case nir_intrinsic_shuffle:
++      case nir_intrinsic_shuffle_xor:
++      case nir_intrinsic_shuffle_up:
++      case nir_intrinsic_shuffle_down:
++      case nir_intrinsic_quad_broadcast:
++      case nir_intrinsic_quad_swap_horizontal:
++      case nir_intrinsic_quad_swap_vertical:
++      case nir_intrinsic_quad_swap_diagonal:
++      case nir_intrinsic_reduce:
++      case nir_intrinsic_inclusive_scan:
++      case nir_intrinsic_exclusive_scan:
++      case nir_intrinsic_vote_ieq:
++      case nir_intrinsic_vote_feq: {
++         unsigned bit_size = nir_src_bit_size(intr->src[0]);
++         return bit_size != 1 && bit_size < min_bit_size ? min_bit_size : 0;
++      }
++      default:
++         return 0;
++      }
++   }
++
+    if (instr->type != nir_instr_type_alu)
+       return 0;
+    nir_alu_instr *alu = nir_instr_as_alu(instr);
+@@ -6214,8 +6280,6 @@ lower_bit_size_callback(const nir_instr* instr, void *data)
+       return 0;
+ 
+    unsigned num_inputs = nir_op_infos[alu->op].num_inputs;
+-   const struct nir_to_dxil_options *opts = (const struct nir_to_dxil_options*)data;
+-   unsigned min_bit_size = opts->lower_int16 ? 32 : 16;
+ 
+    unsigned ret = 0;
+    for (unsigned i = 0; i < num_inputs; i++) {
+@@ -6394,7 +6458,8 @@ void dxil_fill_validation_state(struct ntd_context *ctx,
+       psv2->num_threads_x = MAX2(ctx->shader->info.workgroup_size[0], 1);
+       psv2->num_threads_y = MAX2(ctx->shader->info.workgroup_size[1], 1);
+       psv2->num_threads_z = MAX2(ctx->shader->info.workgroup_size[2], 1);
+-      if (ctx->shader->info.min_subgroup_size == ctx->shader->info.max_subgroup_size &&
++      if (ctx->mod.minor_version >= 6 &&
++          ctx->shader->info.min_subgroup_size == ctx->shader->info.max_subgroup_size &&
+           ctx->shader->info.min_subgroup_size == ctx->shader->info.api_subgroup_size &&
+           ctx->shader->info.min_subgroup_size > 1) {
+          psv0->max_expected_wave_lane_count = ctx->shader->info.min_subgroup_size;
+diff --git a/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c b/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
+index 4763c346a58..cdfcc228624 100644
+--- a/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
++++ b/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
+@@ -56,6 +56,7 @@ spirv_caps = {
+    .RoundingModeRTE = true,
+    .RoundingModeRTZ = true,
+    .Float16 = true,
++   .Int8 = true,
+    .Int16 = true,
+    .StorageBuffer8BitAccess = true,
+    .UniformAndStorageBuffer8BitAccess = true,
+@@ -198,6 +199,47 @@ temp_var_info(const struct glsl_type* type, unsigned* size, unsigned* align)
+    }
+ }
+ 
++static uint64_t
++descriptor_key(uint32_t desc_set, uint32_t binding)
++{
++   return ((uint64_t)desc_set << 32) | binding;
++}
++
++static void
++gather_resource_index_bindings(nir_shader *nir, struct util_dynarray *bindings)
++{
++   nir_foreach_function_impl(impl, nir) {
++      nir_foreach_block(block, impl) {
++         nir_foreach_instr(instr, block) {
++            if (instr->type != nir_instr_type_intrinsic)
++               continue;
++
++            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
++            if (intr->intrinsic != nir_intrinsic_vulkan_resource_index)
++               continue;
++
++            uint64_t key = descriptor_key(nir_intrinsic_desc_set(intr),
++                                          nir_intrinsic_binding(intr));
++            util_dynarray_append(bindings, key);
++         }
++      }
++   }
++}
++
++static bool
++can_remove_unused_ssbo(nir_variable *var, void *data)
++{
++   const struct util_dynarray *bindings = data;
++   uint64_t key = descriptor_key(var->data.descriptor_set, var->data.binding);
++
++   util_dynarray_foreach(bindings, uint64_t, used) {
++      if (*used == key)
++         return false;
++   }
++
++   return true;
++}
++
+ static nir_variable *
+ add_runtime_data_var(nir_shader *nir, unsigned desc_set, unsigned binding)
+ {
+@@ -1008,6 +1050,17 @@ dxil_spirv_nir_passes(nir_shader *nir,
+               nir_var_system_value | nir_var_mem_shared,
+               NULL);
+ 
++   struct util_dynarray used_bindings;
++   util_dynarray_init(&used_bindings, NULL);
++   gather_resource_index_bindings(nir, &used_bindings);
++   const nir_remove_dead_variables_options unused_ssbo_options = {
++      .can_remove_var = can_remove_unused_ssbo,
++      .can_remove_var_data = &used_bindings,
++   };
++   NIR_PASS(_, nir, nir_remove_dead_variables, nir_var_mem_ssbo,
++            &unused_ssbo_options);
++   util_dynarray_fini(&used_bindings);
++
+    uint32_t push_constant_size = 0;
+    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_push_const,
+               nir_address_format_32bit_offset);
+@@ -1023,11 +1076,16 @@ dxil_spirv_nir_passes(nir_shader *nir,
+    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_global,
+               nir_address_format_32bit_index_offset_pack64);
+ 
+-   if (nir->info.shared_memory_explicit_layout) {
++   if (nir->info.shared_memory_explicit_layout ||
++       nir->info.zero_initialize_shared_memory) {
+       NIR_PASS(_, nir, nir_lower_vars_to_explicit_types, nir_var_mem_shared,
+                  shared_var_info);
+       NIR_PASS(_, nir, dxil_nir_split_unaligned_loads_stores, nir_var_mem_shared);
+       NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_shared, nir_address_format_32bit_offset);
++      if (nir->info.zero_initialize_shared_memory && nir->info.shared_size > 0) {
++         nir->info.shared_size = ALIGN_POT(nir->info.shared_size, 4);
++         NIR_PASS(_, nir, nir_zero_initialize_shared_memory, nir->info.shared_size, 4);
++      }
+       NIR_PASS(_, nir, dxil_nir_scratch_and_shared_to_dxil);
+    } else {
+       NIR_PASS(_, nir, nir_split_struct_vars, nir_var_mem_shared);
+diff --git a/src/microsoft/spirv_to_dxil/dxil_spirv_nir_lower_bindless.c b/src/microsoft/spirv_to_dxil/dxil_spirv_nir_lower_bindless.c
+index 31f8e47ea77..d83cd5296ea 100644
+--- a/src/microsoft/spirv_to_dxil/dxil_spirv_nir_lower_bindless.c
++++ b/src/microsoft/spirv_to_dxil/dxil_spirv_nir_lower_bindless.c
+@@ -244,14 +244,12 @@ dxil_spirv_nir_lower_bindless(nir_shader *nir, struct dxil_spirv_nir_lower_bindl
+    };
+    ret |= nir_remove_dead_variables(nir, modes, &dead_var_options);
+ 
+-   if (!descriptor_sets)
+-      return ret;
+-
+    while (descriptor_sets) {
+       int index = u_bit_scan(&descriptor_sets);
+       add_bindless_data_var(nir, index);
++      ret = true;
+    }
+-   return true;
++   return ret;
+ }
+ 
+ /* Given a global deref chain that starts as a pointer value and ends with a load/store/atomic,
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index 211e0e448ac..84d8f10b49e 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -130,10 +130,11 @@ dzn_cmd_buffer_queue_transition_barriers(struct dzn_cmd_buffer *cmdbuf,
+             },
+          };
+       } else {
+-	 if (flags & DZN_QUEUE_TRANSITION_BEFORE_IS_UNDEFINED)
+-            before = barriers[subres].Transition.StateAfter;
++         ASSERTED D3D12_RESOURCE_STATES subres_before =
++            (flags & DZN_QUEUE_TRANSITION_BEFORE_IS_UNDEFINED) ?
++            barriers[subres].Transition.StateAfter : before;
+ 
+-         assert(barriers[subres].Transition.StateAfter == before ||
++         assert(barriers[subres].Transition.StateAfter == subres_before ||
+                 barriers[subres].Transition.StateAfter == after);
+          barriers[subres].Transition.StateAfter = after;
+       }
+@@ -162,22 +163,21 @@ dzn_cmd_buffer_queue_image_range_state_transition(struct dzn_cmd_buffer *cmdbuf,
+       uint32_t level_count = dzn_get_level_count(image, range);
+       for (uint32_t layer = 0; layer < layer_count; layer++) {
+          uint32_t subres = dzn_image_range_get_subresource_index(image, range, aspect, 0, layer);
+-         if (!barrier_count) {
+-            first_barrier = subres;
+-            barrier_count = level_count;
+-            continue;
+-         } else if (first_barrier + barrier_count == subres) {
++         if (barrier_count && first_barrier + barrier_count == subres) {
+             barrier_count += level_count;
+             continue;
+          }
+ 
+-         ret = dzn_cmd_buffer_queue_transition_barriers(cmdbuf, image->res,
+-                                                        first_barrier, barrier_count,
+-                                                        before, after, flags);
+-         if (ret != VK_SUCCESS)
+-            return ret;
++         if (barrier_count) {
++            ret = dzn_cmd_buffer_queue_transition_barriers(cmdbuf, image->res,
++                                                           first_barrier, barrier_count,
++                                                           before, after, flags);
++            if (ret != VK_SUCCESS)
++               return ret;
++         }
+ 
+-         barrier_count = 0;
++         first_barrier = subres;
++         barrier_count = level_count;
+       }
+ 
+       if (barrier_count) {
+@@ -186,6 +186,8 @@ dzn_cmd_buffer_queue_image_range_state_transition(struct dzn_cmd_buffer *cmdbuf,
+                                                         before, after, flags);
+          if (ret != VK_SUCCESS)
+             return ret;
++
++         barrier_count = 0;
+       }
+    }
+ 
+@@ -220,22 +222,21 @@ dzn_cmd_buffer_queue_image_range_layout_transition(struct dzn_cmd_buffer *cmdbuf
+       uint32_t level_count = dzn_get_level_count(image, range);
+       for (uint32_t layer = 0; layer < layer_count; layer++) {
+          uint32_t subres = dzn_image_range_get_subresource_index(image, range, aspect, 0, layer);
+-         if (!barrier_count) {
+-            first_barrier = subres;
+-            barrier_count = level_count;
+-            continue;
+-         } else if (first_barrier + barrier_count == subres) {
++         if (barrier_count && first_barrier + barrier_count == subres) {
+             barrier_count += level_count;
+             continue;
+          }
+ 
+-         ret = dzn_cmd_buffer_queue_transition_barriers(cmdbuf, image->res,
+-                                                        first_barrier, barrier_count,
+-                                                        before, after, flags);
+-         if (ret != VK_SUCCESS)
+-            return ret;
++         if (barrier_count) {
++            ret = dzn_cmd_buffer_queue_transition_barriers(cmdbuf, image->res,
++                                                           first_barrier, barrier_count,
++                                                           before, after, flags);
++            if (ret != VK_SUCCESS)
++               return ret;
++         }
+ 
+-         barrier_count = 0;
++         first_barrier = subres;
++         barrier_count = level_count;
+       }
+ 
+       if (barrier_count) {
+@@ -244,6 +245,8 @@ dzn_cmd_buffer_queue_image_range_layout_transition(struct dzn_cmd_buffer *cmdbuf
+                                                         before, after, flags);
+          if (ret != VK_SUCCESS)
+             return ret;
++
++         barrier_count = 0;
+       }
+    }
+ 
+@@ -326,6 +329,9 @@ dzn_cmd_buffer_image_barrier(struct dzn_cmd_buffer *cmdbuf,
+       .Subresources.FirstPlane = first_plane,
+       .Subresources.NumPlanes = plane_count,
+       .pResource = image->res,
++      .Flags = layout_before == D3D12_BARRIER_LAYOUT_UNDEFINED &&
++               layout_after != D3D12_BARRIER_LAYOUT_UNDEFINED ?
++               D3D12_TEXTURE_BARRIER_FLAG_DISCARD : D3D12_TEXTURE_BARRIER_FLAG_NONE,
+    };
+    D3D12_BARRIER_GROUP group = {
+       .Type = D3D12_BARRIER_TYPE_TEXTURE,
+@@ -668,8 +674,12 @@ dzn_cmd_buffer_create(const VkCommandBufferAllocateInfo *info,
+          goto out;
+       }
+ 
+-      (void)ID3D12GraphicsCommandList_QueryInterface(cmdbuf->cmdlist, &IID_ID3D12GraphicsCommandList8, (void **)&cmdbuf->cmdlist8);
+-      (void)ID3D12GraphicsCommandList_QueryInterface(cmdbuf->cmdlist, &IID_ID3D12GraphicsCommandList9, (void **)&cmdbuf->cmdlist9);
++      const struct dzn_instance *instance =
++         container_of(pdev->vk.instance, struct dzn_instance, vk);
++      if (instance->max_d3d12_options >= 12) {
++         (void)ID3D12GraphicsCommandList_QueryInterface(cmdbuf->cmdlist, &IID_ID3D12GraphicsCommandList8, (void **)&cmdbuf->cmdlist8);
++         (void)ID3D12GraphicsCommandList_QueryInterface(cmdbuf->cmdlist, &IID_ID3D12GraphicsCommandList9, (void **)&cmdbuf->cmdlist9);
++      }
+    }
+ 
+    cmdbuf->type = type;
+@@ -3162,7 +3172,7 @@ dzn_cmd_buffer_resolve_region(struct dzn_cmd_buffer *cmdbuf,
+          }
+          if (aspect == VK_IMAGE_ASPECT_STENCIL_BIT && !support_stencil_blit) {
+             cmdbuf->state.dirty |= DZN_CMD_DIRTY_STENCIL_REF;
+-            ID3D12GraphicsCommandList1_OMSetStencilRef(cmdbuf->cmdlist8, 0xff);
++            ID3D12GraphicsCommandList1_OMSetStencilRef(cmdbuf->cmdlist, 0xff);
+             for (stencil_bit = 0; stencil_bit < 8; ++stencil_bit) {
+                dzn_cmd_buffer_blit_set_pipeline(cmdbuf, src, dst, aspect, VK_FILTER_NEAREST, resolve_mode, stencil_bit);
+                ID3D12GraphicsCommandList1_SetGraphicsRoot32BitConstant(cmdbuf->cmdlist, stencil_bit_root_param_slot, (1 << stencil_bit), 0);
+@@ -3180,6 +3190,44 @@ dzn_cmd_buffer_resolve_region(struct dzn_cmd_buffer *cmdbuf,
+    }
+ }
+ 
++static bool
++dzn_cmd_buffer_triangle_fan(const struct dzn_cmd_buffer *cmdbuf,
++                            const struct dzn_graphics_pipeline *pipeline)
++{
++   if (!(pipeline->dynamic & DZN_DYNAMIC_PRIMITIVE_TOPOLOGY))
++      return pipeline->ia.triangle_fan;
++
++   struct dzn_physical_device *pdev =
++      container_of(cmdbuf->vk.base.device->physical, struct dzn_physical_device, vk);
++   bool triangle_fan;
++   dzn_translate_primitive_topology(pdev, cmdbuf->state.dyn.topology, &triangle_fan);
++   return triangle_fan;
++}
++
++static bool
++dzn_cmd_buffer_primitive_restart(const struct dzn_cmd_buffer *cmdbuf,
++                                 const struct dzn_graphics_pipeline *pipeline)
++{
++   if (!dzn_graphics_pipeline_get_desc_template(pipeline, ib_strip_cut))
++      return false;
++
++   return (pipeline->dynamic & DZN_DYNAMIC_PRIMITIVE_RESTART_ENABLE) ?
++          cmdbuf->state.pipeline_variant.primitive_restart_enable :
++          pipeline->statics.primitive_restart;
++}
++
++static bool
++dzn_cmd_buffer_rasterization_disabled(const struct dzn_cmd_buffer *cmdbuf,
++                                      const struct dzn_graphics_pipeline *pipeline)
++{
++   if ((pipeline->dynamic & DZN_DYNAMIC_RASTERIZER_DISCARD_ENABLE) &&
++       cmdbuf->state.dyn.rasterizer_discard)
++      return true;
++
++   return (pipeline->dynamic & DZN_DYNAMIC_CULL_MODE) &&
++          cmdbuf->state.pipeline_variant.cull_mode == VK_CULL_MODE_FRONT_AND_BACK;
++}
++
+ static void
+ dzn_cmd_buffer_update_pipeline(struct dzn_cmd_buffer *cmdbuf, uint32_t bindpoint)
+ {
+@@ -3236,11 +3284,21 @@ dzn_cmd_buffer_update_pipeline(struct dzn_cmd_buffer *cmdbuf, uint32_t bindpoint
+       if (bindpoint == VK_PIPELINE_BIND_POINT_GRAPHICS) {
+          struct dzn_graphics_pipeline *gfx =
+             (struct dzn_graphics_pipeline *)pipeline;
+-         ID3D12GraphicsCommandList1_IASetPrimitiveTopology(cmdbuf->cmdlist, gfx->ia.topology);
++         D3D12_PRIMITIVE_TOPOLOGY topology = gfx->ia.topology;
++         if (gfx->dynamic & DZN_DYNAMIC_PRIMITIVE_TOPOLOGY) {
++            struct dzn_physical_device *pdev =
++               container_of(device->vk.physical, struct dzn_physical_device, vk);
++            bool triangle_fan;
++            topology = dzn_translate_primitive_topology(pdev, cmdbuf->state.dyn.topology,
++                                                        &triangle_fan);
++         }
++         ID3D12GraphicsCommandList1_IASetPrimitiveTopology(cmdbuf->cmdlist, topology);
+          dzn_graphics_pipeline_get_state(gfx, &cmdbuf->state.pipeline_variant);
++         struct dzn_physical_device *pdev =
++            container_of(device->vk.physical, struct dzn_physical_device, vk);
+          if (gfx->multiview.native_view_instancing)
+             view_instance_mask = gfx->multiview.view_mask;
+-         else
++         else if (pdev->options3.ViewInstancingTier > D3D12_VIEW_INSTANCING_TIER_NOT_SUPPORTED)
+             view_instance_mask = 1;
+ 
+          if (gfx->zsa.dynamic_depth_bias && gfx->use_gs_for_polygon_mode_point)
+@@ -3471,11 +3529,13 @@ dzn_cmd_buffer_update_viewports(struct dzn_cmd_buffer *cmdbuf)
+    const struct dzn_graphics_pipeline *pipeline =
+       (const struct dzn_graphics_pipeline *)cmdbuf->state.pipeline;
+ 
+-   if (!(cmdbuf->state.dirty & DZN_CMD_DIRTY_VIEWPORTS) ||
+-       !pipeline->vp.count)
++   uint32_t count = (pipeline->dynamic & DZN_DYNAMIC_VIEWPORT_WITH_COUNT) ?
++      cmdbuf->state.dyn.viewport_count : pipeline->vp.count;
++
++   if (!(cmdbuf->state.dirty & DZN_CMD_DIRTY_VIEWPORTS) || !count)
+       return;
+ 
+-   ID3D12GraphicsCommandList1_RSSetViewports(cmdbuf->cmdlist, pipeline->vp.count, cmdbuf->state.viewports);
++   ID3D12GraphicsCommandList1_RSSetViewports(cmdbuf->cmdlist, count, cmdbuf->state.viewports);
+ }
+ 
+ static void
+@@ -3487,7 +3547,24 @@ dzn_cmd_buffer_update_scissors(struct dzn_cmd_buffer *cmdbuf)
+    if (!(cmdbuf->state.dirty & DZN_CMD_DIRTY_SCISSORS))
+       return;
+ 
+-   if (!pipeline->scissor.count) {
++   uint32_t count = (pipeline->dynamic & DZN_DYNAMIC_SCISSOR_WITH_COUNT) ?
++      cmdbuf->state.dyn.scissor_count : pipeline->scissor.count;
++
++   if (dzn_cmd_buffer_rasterization_disabled(cmdbuf, pipeline)) {
++      D3D12_RECT empty[MAX_SCISSOR];
++      for (uint32_t i = 0; i < ARRAY_SIZE(empty); i++) {
++         empty[i] = (D3D12_RECT) {
++            .left = D3D12_VIEWPORT_BOUNDS_MAX - 1,
++            .top = D3D12_VIEWPORT_BOUNDS_MAX - 1,
++            .right = D3D12_VIEWPORT_BOUNDS_MAX,
++            .bottom = D3D12_VIEWPORT_BOUNDS_MAX,
++         };
++      }
++      ID3D12GraphicsCommandList1_RSSetScissorRects(cmdbuf->cmdlist, MAX2(count, 1), empty);
++      return;
++   }
++
++   if (!count) {
+       /* Apply a scissor delimiting the render area. */
+       ID3D12GraphicsCommandList1_RSSetScissorRects(cmdbuf->cmdlist, 1, &cmdbuf->state.render.area);
+       return;
+@@ -3495,15 +3572,15 @@ dzn_cmd_buffer_update_scissors(struct dzn_cmd_buffer *cmdbuf)
+ 
+    D3D12_RECT scissors[MAX_SCISSOR];
+ 
+-   memcpy(scissors, cmdbuf->state.scissors, sizeof(D3D12_RECT) * pipeline->scissor.count);
+-   for (uint32_t i = 0; i < pipeline->scissor.count; i++) {
++   memcpy(scissors, cmdbuf->state.scissors, sizeof(D3D12_RECT) * count);
++   for (uint32_t i = 0; i < count; i++) {
+       scissors[i].left = MAX2(scissors[i].left, cmdbuf->state.render.area.left);
+       scissors[i].top = MAX2(scissors[i].top, cmdbuf->state.render.area.top);
+       scissors[i].right = MIN2(scissors[i].right, cmdbuf->state.render.area.right);
+       scissors[i].bottom = MIN2(scissors[i].bottom, cmdbuf->state.render.area.bottom);
+    }
+ 
+-   ID3D12GraphicsCommandList1_RSSetScissorRects(cmdbuf->cmdlist, pipeline->scissor.count, scissors);
++   ID3D12GraphicsCommandList1_RSSetScissorRects(cmdbuf->cmdlist, count, scissors);
+ }
+ 
+ static void
+@@ -3578,9 +3655,16 @@ dzn_cmd_buffer_update_zsa(struct dzn_cmd_buffer *cmdbuf)
+ static void
+ dzn_cmd_buffer_update_blend_constants(struct dzn_cmd_buffer *cmdbuf)
+ {
+-   if (cmdbuf->state.dirty & DZN_CMD_DIRTY_BLEND_CONSTANTS)
+-      ID3D12GraphicsCommandList1_OMSetBlendFactor(cmdbuf->cmdlist,
+-                                                  cmdbuf->state.blend.constants);
++   if (!(cmdbuf->state.dirty & DZN_CMD_DIRTY_BLEND_CONSTANTS))
++      return;
++
++   const struct dzn_graphics_pipeline *gfx = (const struct dzn_graphics_pipeline *)
++      cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].pipeline;
++   const float *constants = cmdbuf->state.blend.constants;
++   float alpha[4] = { constants[3], constants[3], constants[3], constants[3] };
++
++   ID3D12GraphicsCommandList1_OMSetBlendFactor(cmdbuf->cmdlist,
++                                               gfx->blend.splat_constant_alpha ? alpha : constants);
+ }
+ 
+ static void
+@@ -3596,12 +3680,17 @@ dzn_cmd_buffer_update_depth_bounds(struct dzn_cmd_buffer *cmdbuf)
+ static void
+ dzn_cmd_buffer_update_depth_bias(struct dzn_cmd_buffer *cmdbuf)
+ {
+-   if (cmdbuf->state.dirty & DZN_CMD_DIRTY_DEPTH_BIAS) {
++   const struct dzn_graphics_pipeline *gfx = (const struct dzn_graphics_pipeline *)
++      cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].pipeline;
++
++   if ((cmdbuf->state.dirty & DZN_CMD_DIRTY_DEPTH_BIAS) &&
++       (gfx->zsa.dynamic_depth_bias || (gfx->dynamic & DZN_DYNAMIC_DEPTH_BIAS_ENABLE))) {
+       assert(cmdbuf->cmdlist9);
++      bool enable = cmdbuf->state.pipeline_variant.depth_bias_enable;
+       ID3D12GraphicsCommandList9_RSSetDepthBias(cmdbuf->cmdlist9,
+-                                                cmdbuf->state.pipeline_variant.depth_bias.constant_factor,
+-                                                cmdbuf->state.pipeline_variant.depth_bias.clamp,
+-                                                cmdbuf->state.pipeline_variant.depth_bias.slope_factor);
++                                                enable ? cmdbuf->state.pipeline_variant.depth_bias.constant_factor : 0,
++                                                enable ? cmdbuf->state.pipeline_variant.depth_bias.clamp : 0,
++                                                enable ? cmdbuf->state.pipeline_variant.depth_bias.slope_factor : 0);
+    }
+ }
+ 
+@@ -3687,7 +3776,7 @@ dzn_cmd_buffer_triangle_fan_rewrite_index(struct dzn_cmd_buffer *cmdbuf,
+    ASSERTED const struct dzn_graphics_pipeline *gfx_pipeline = (const struct dzn_graphics_pipeline *)
+       cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].pipeline;
+    ASSERTED bool prim_restart =
+-      dzn_graphics_pipeline_get_desc_template(gfx_pipeline, ib_strip_cut) != NULL;
++      dzn_cmd_buffer_primitive_restart(cmdbuf, gfx_pipeline);
+ 
+    assert(!prim_restart);
+ 
+@@ -3768,7 +3857,7 @@ dzn_cmd_buffer_triangle_fan_get_max_index_buf_size(struct dzn_cmd_buffer *cmdbuf
+    struct dzn_graphics_pipeline *pipeline = (struct dzn_graphics_pipeline *)
+       cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].pipeline;
+ 
+-   if (!pipeline->ia.triangle_fan)
++   if (!dzn_cmd_buffer_triangle_fan(cmdbuf, pipeline))
+       return 0;
+ 
+    uint32_t max_triangles;
+@@ -4045,7 +4134,7 @@ dzn_cmd_buffer_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
+       sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) :
+       sizeof(D3D12_DRAW_ARGUMENTS);
+    bool prim_restart =
+-      dzn_graphics_pipeline_get_desc_template(pipeline, ib_strip_cut) != NULL;
++      dzn_cmd_buffer_primitive_restart(cmdbuf, pipeline);
+ 
+    draw_buf_stride = draw_buf_stride ? draw_buf_stride : min_draw_buf_stride;
+    assert(draw_buf_stride >= min_draw_buf_stride);
+@@ -4059,7 +4148,7 @@ dzn_cmd_buffer_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
+    draw_type.indirect_count = count_buf != NULL;
+    draw_type.draw_params = pipeline->needs_draw_sysvals && !pdev->options21.ExtendedCommandInfoSupported;
+    draw_type.draw_id = max_draw_count > 1 && pdev->options21.ExecuteIndirectTier < D3D12_EXECUTE_INDIRECT_TIER_1_1;
+-   draw_type.triangle_fan = pipeline->ia.triangle_fan;
++   draw_type.triangle_fan = dzn_cmd_buffer_triangle_fan(cmdbuf, pipeline);
+    draw_type.triangle_fan_primitive_restart = draw_type.triangle_fan && prim_restart;
+ 
+    if (draw_type.draw_params || draw_type.draw_id || draw_type.triangle_fan) {
+@@ -5062,16 +5151,26 @@ dzn_CmdBeginRendering(VkCommandBuffer commandBuffer,
+          layout = s_att->imageLayout;
+       }
+ 
+-      if (aspects != 0) {
++      VkImageAspectFlags clear_aspects[2] = { aspects, 0 };
++      VkImageLayout clear_layouts[2] = { layout, layout };
++      if (aspects == (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT) &&
++          z_att->imageLayout != s_att->imageLayout) {
++         clear_aspects[0] = VK_IMAGE_ASPECT_DEPTH_BIT;
++         clear_layouts[0] = z_att->imageLayout;
++         clear_aspects[1] = VK_IMAGE_ASPECT_STENCIL_BIT;
++         clear_layouts[1] = s_att->imageLayout;
++      }
++
++      for (uint32_t i = 0; i < ARRAY_SIZE(clear_aspects) && clear_aspects[i]; i++) {
+          if (pRenderingInfo->viewMask != 0) {
+             u_foreach_bit(layer, pRenderingInfo->viewMask) {
+-               dzn_cmd_buffer_clear_attachment(cmdbuf, iview, layout,
+-                                               &clear_val, aspects, layer,
++               dzn_cmd_buffer_clear_attachment(cmdbuf, iview, clear_layouts[i],
++                                               &clear_val, clear_aspects[i], layer,
+                                                1, 1, &cmdbuf->state.render.area);
+             }
+          } else {
+-            dzn_cmd_buffer_clear_attachment(cmdbuf, iview, layout,
+-                                            &clear_val, aspects, 0,
++            dzn_cmd_buffer_clear_attachment(cmdbuf, iview, clear_layouts[i],
++                                            &clear_val, clear_aspects[i], 0,
+                                             VK_REMAINING_ARRAY_LAYERS, 1,
+                                             &cmdbuf->state.render.area);
+          }
+@@ -5153,14 +5252,33 @@ dzn_CmdBindPipeline(VkCommandBuffer commandBuffer,
+       if (!gfx->blend.dynamic_constants) {
+          memcpy(cmdbuf->state.blend.constants, gfx->blend.constants,
+                 sizeof(cmdbuf->state.blend.constants));
+-         cmdbuf->state.dirty |= DZN_CMD_DIRTY_BLEND_CONSTANTS;
+       }
++      cmdbuf->state.dirty |= DZN_CMD_DIRTY_BLEND_CONSTANTS;
+ 
+-      for (uint32_t vb = 0; vb < gfx->vb.count; vb++)
+-         cmdbuf->state.vb.views[vb].StrideInBytes = gfx->vb.strides[vb];
++      if (!(gfx->dynamic & DZN_DYNAMIC_VERTEX_INPUT_BINDING_STRIDE)) {
++         for (uint32_t vb = 0; vb < gfx->vb.count; vb++)
++            cmdbuf->state.vb.views[vb].StrideInBytes = gfx->vb.strides[vb];
++      }
+ 
+       if (gfx->vb.count > 0)
+          BITSET_SET_COUNT(cmdbuf->state.vb.dirty, 0, gfx->vb.count);
++
++      cmdbuf->state.dirty |= DZN_CMD_DIRTY_SCISSORS;
++
++      if (gfx->zsa.dynamic_depth_bias || (gfx->dynamic & DZN_DYNAMIC_DEPTH_BIAS_ENABLE)) {
++         struct dzn_physical_device *pdev =
++            container_of(cmdbuf->vk.base.device->physical, struct dzn_physical_device, vk);
++
++         if (!gfx->zsa.dynamic_depth_bias) {
++            cmdbuf->state.pipeline_variant.depth_bias.constant_factor = gfx->statics.depth_bias_constant;
++            cmdbuf->state.pipeline_variant.depth_bias.clamp = gfx->statics.depth_bias_clamp;
++            cmdbuf->state.pipeline_variant.depth_bias.slope_factor = gfx->statics.depth_bias_slope;
++         }
++         if (!(gfx->dynamic & DZN_DYNAMIC_DEPTH_BIAS_ENABLE))
++            cmdbuf->state.pipeline_variant.depth_bias_enable = gfx->statics.depth_bias_enable;
++         if (pdev->options16.DynamicDepthBiasSupported)
++            cmdbuf->state.dirty |= DZN_CMD_DIRTY_DEPTH_BIAS;
++      }
+    }
+ }
+ 
+@@ -5298,7 +5416,7 @@ dzn_CmdDraw(VkCommandBuffer commandBuffer,
+    uint32_t view_mask = pipeline->multiview.native_view_instancing ?
+       1 : pipeline->multiview.view_mask;
+ 
+-   if (pipeline->ia.triangle_fan) {
++   if (dzn_cmd_buffer_triangle_fan(cmdbuf, pipeline)) {
+       D3D12_INDEX_BUFFER_VIEW ib_view = cmdbuf->state.ib.view;
+ 
+       VkResult result =
+@@ -5347,8 +5465,8 @@ dzn_CmdDrawIndexed(VkCommandBuffer commandBuffer,
+    const struct dzn_graphics_pipeline *pipeline = (const struct dzn_graphics_pipeline *)
+       cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].pipeline;
+ 
+-   if (pipeline->ia.triangle_fan &&
+-       dzn_graphics_pipeline_get_desc_template(pipeline, ib_strip_cut)) {
++   if (dzn_cmd_buffer_triangle_fan(cmdbuf, pipeline) &&
++       dzn_cmd_buffer_primitive_restart(cmdbuf, pipeline)) {
+       /* The indexed+primitive-restart+triangle-fan combination is a mess,
+        * since we have to walk the index buffer, skip entries with the
+        * special 0xffff/0xffffffff values, and push triangle list indices
+@@ -5391,7 +5509,7 @@ dzn_CmdDrawIndexed(VkCommandBuffer commandBuffer,
+ 
+    D3D12_INDEX_BUFFER_VIEW ib_view = cmdbuf->state.ib.view;
+ 
+-   if (pipeline->ia.triangle_fan) {
++   if (dzn_cmd_buffer_triangle_fan(cmdbuf, pipeline)) {
+       VkResult result =
+          dzn_cmd_buffer_triangle_fan_rewrite_index(cmdbuf, &indexCount, &firstIndex);
+       if (result != VK_SUCCESS || !indexCount)
+@@ -5411,7 +5529,7 @@ dzn_CmdDrawIndexed(VkCommandBuffer commandBuffer,
+    }
+ 
+    /* Restore the IB view if we modified it when lowering triangle fans. */
+-   if (pipeline->ia.triangle_fan && ib_view.SizeInBytes) {
++   if (dzn_cmd_buffer_triangle_fan(cmdbuf, pipeline) && ib_view.SizeInBytes) {
+       cmdbuf->state.ib.view = ib_view;
+       cmdbuf->state.dirty |= DZN_CMD_DIRTY_IB;
+    }
+@@ -5503,6 +5621,35 @@ dzn_CmdBindVertexBuffers(VkCommandBuffer commandBuffer,
+    BITSET_SET_COUNT(cmdbuf->state.vb.dirty, firstBinding, bindingCount);
+ }
+ 
++VKAPI_ATTR void VKAPI_CALL
++dzn_CmdBindVertexBuffers2(VkCommandBuffer commandBuffer,
++                          uint32_t firstBinding,
++                          uint32_t bindingCount,
++                          const VkBuffer *pBuffers,
++                          const VkDeviceSize *pOffsets,
++                          const VkDeviceSize *pSizes,
++                          const VkDeviceSize *pStrides)
++{
++   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
++
++   if (!bindingCount)
++      return;
++
++   D3D12_VERTEX_BUFFER_VIEW *vbviews = cmdbuf->state.vb.views;
++
++   for (uint32_t i = 0; i < bindingCount; i++) {
++      VK_FROM_HANDLE(dzn_buffer, buf, pBuffers[i]);
++
++      vbviews[firstBinding + i].BufferLocation = buf->gpuva + pOffsets[i];
++      vbviews[firstBinding + i].SizeInBytes =
++         pSizes && pSizes[i] != VK_WHOLE_SIZE ? pSizes[i] : buf->size - pOffsets[i];
++      if (pStrides)
++         vbviews[firstBinding + i].StrideInBytes = pStrides[i];
++   }
++
++   BITSET_SET_COUNT(cmdbuf->state.vb.dirty, firstBinding, bindingCount);
++}
++
+ VKAPI_ATTR void VKAPI_CALL
+ dzn_CmdBindIndexBuffer(VkCommandBuffer commandBuffer,
+                        VkBuffer buffer,
+@@ -6015,6 +6162,170 @@ dzn_CmdSetStencilWriteMask(VkCommandBuffer commandBuffer,
+    cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].dirty |= DZN_CMD_BINDPOINT_DIRTY_PIPELINE;
+ }
+ 
++static void
++dzn_cmd_buffer_dirty_pipeline(struct dzn_cmd_buffer *cmdbuf)
++{
++   cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].dirty |= DZN_CMD_BINDPOINT_DIRTY_PIPELINE;
++}
++
++VKAPI_ATTR void VKAPI_CALL
++dzn_CmdSetCullMode(VkCommandBuffer commandBuffer,
++                   VkCullModeFlags cullMode)
++{
++   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
++
++   cmdbuf->state.pipeline_variant.cull_mode = cullMode;
++   cmdbuf->state.dirty |= DZN_CMD_DIRTY_SCISSORS;
++   dzn_cmd_buffer_dirty_pipeline(cmdbuf);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++dzn_CmdSetFrontFace(VkCommandBuffer commandBuffer,
++                    VkFrontFace frontFace)
++{
++   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
++
++   cmdbuf->state.pipeline_variant.front_ccw = frontFace == VK_FRONT_FACE_COUNTER_CLOCKWISE;
++   dzn_cmd_buffer_dirty_pipeline(cmdbuf);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++dzn_CmdSetPrimitiveTopology(VkCommandBuffer commandBuffer,
++                            VkPrimitiveTopology primitiveTopology)
++{
++   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
++
++   cmdbuf->state.dyn.topology = primitiveTopology;
++   dzn_cmd_buffer_dirty_pipeline(cmdbuf);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++dzn_CmdSetViewportWithCount(VkCommandBuffer commandBuffer,
++                            uint32_t viewportCount,
++                            const VkViewport *pViewports)
++{
++   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
++
++   cmdbuf->state.dyn.viewport_count = viewportCount;
++   dzn_CmdSetViewport(commandBuffer, 0, viewportCount, pViewports);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++dzn_CmdSetScissorWithCount(VkCommandBuffer commandBuffer,
++                           uint32_t scissorCount,
++                           const VkRect2D *pScissors)
++{
++   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
++
++   cmdbuf->state.dyn.scissor_count = scissorCount;
++   dzn_CmdSetScissor(commandBuffer, 0, scissorCount, pScissors);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++dzn_CmdSetDepthTestEnable(VkCommandBuffer commandBuffer,
++                          VkBool32 depthTestEnable)
++{
++   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
++
++   cmdbuf->state.pipeline_variant.zs.depth_test_enable = depthTestEnable;
++   dzn_cmd_buffer_dirty_pipeline(cmdbuf);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++dzn_CmdSetDepthWriteEnable(VkCommandBuffer commandBuffer,
++                           VkBool32 depthWriteEnable)
++{
++   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
++
++   cmdbuf->state.pipeline_variant.zs.depth_write_enable = depthWriteEnable;
++   dzn_cmd_buffer_dirty_pipeline(cmdbuf);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++dzn_CmdSetDepthCompareOp(VkCommandBuffer commandBuffer,
++                         VkCompareOp depthCompareOp)
++{
++   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
++
++   cmdbuf->state.pipeline_variant.zs.depth_compare_op = depthCompareOp;
++   dzn_cmd_buffer_dirty_pipeline(cmdbuf);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++dzn_CmdSetDepthBoundsTestEnable(VkCommandBuffer commandBuffer,
++                                VkBool32 depthBoundsTestEnable)
++{
++   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
++
++   cmdbuf->state.pipeline_variant.zs.depth_bounds_test_enable = depthBoundsTestEnable;
++   dzn_cmd_buffer_dirty_pipeline(cmdbuf);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++dzn_CmdSetStencilTestEnable(VkCommandBuffer commandBuffer,
++                            VkBool32 stencilTestEnable)
++{
++   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
++
++   cmdbuf->state.pipeline_variant.zs.stencil_test_enable = stencilTestEnable;
++   dzn_cmd_buffer_dirty_pipeline(cmdbuf);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++dzn_CmdSetStencilOp(VkCommandBuffer commandBuffer,
++                    VkStencilFaceFlags faceMask,
++                    VkStencilOp failOp,
++                    VkStencilOp passOp,
++                    VkStencilOp depthFailOp,
++                    VkCompareOp compareOp)
++{
++   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
++   const struct dzn_stencil_op_state op = { failOp, passOp, depthFailOp, compareOp };
++
++   if (faceMask & VK_STENCIL_FACE_FRONT_BIT)
++      cmdbuf->state.pipeline_variant.zs.front = op;
++
++   if (faceMask & VK_STENCIL_FACE_BACK_BIT)
++      cmdbuf->state.pipeline_variant.zs.back = op;
++
++   dzn_cmd_buffer_dirty_pipeline(cmdbuf);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++dzn_CmdSetRasterizerDiscardEnable(VkCommandBuffer commandBuffer,
++                                  VkBool32 rasterizerDiscardEnable)
++{
++   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
++
++   cmdbuf->state.dyn.rasterizer_discard = rasterizerDiscardEnable;
++   cmdbuf->state.dirty |= DZN_CMD_DIRTY_SCISSORS;
++}
++
++VKAPI_ATTR void VKAPI_CALL
++dzn_CmdSetDepthBiasEnable(VkCommandBuffer commandBuffer,
++                          VkBool32 depthBiasEnable)
++{
++   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
++   struct dzn_physical_device *pdev =
++      container_of(cmdbuf->vk.base.device->physical, struct dzn_physical_device, vk);
++
++   cmdbuf->state.pipeline_variant.depth_bias_enable = depthBiasEnable;
++   if (pdev->options16.DynamicDepthBiasSupported)
++      cmdbuf->state.dirty |= DZN_CMD_DIRTY_DEPTH_BIAS;
++   else
++      dzn_cmd_buffer_dirty_pipeline(cmdbuf);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++dzn_CmdSetPrimitiveRestartEnable(VkCommandBuffer commandBuffer,
++                                 VkBool32 primitiveRestartEnable)
++{
++   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
++
++   cmdbuf->state.pipeline_variant.primitive_restart_enable = primitiveRestartEnable;
++   dzn_cmd_buffer_dirty_pipeline(cmdbuf);
++}
++
+ VKAPI_ATTR void VKAPI_CALL
+ dzn_CmdSetStencilReference(VkCommandBuffer commandBuffer,
+                            VkStencilFaceFlags faceMask,
+diff --git a/src/microsoft/vulkan/dzn_descriptor_set.c b/src/microsoft/vulkan/dzn_descriptor_set.c
+index fe289ec7a99..8ce21a5e480 100644
+--- a/src/microsoft/vulkan/dzn_descriptor_set.c
++++ b/src/microsoft/vulkan/dzn_descriptor_set.c
+@@ -72,6 +72,7 @@ desc_type_to_range_type(VkDescriptorType in, bool writeable)
+ 
+    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
++   case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK:
+       return D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
+ 
+    case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+@@ -109,6 +110,13 @@ dzn_desc_type_has_sampler(VkDescriptorType type)
+           type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+ }
+ 
++static uint32_t
++dzn_binding_desc_count(const VkDescriptorSetLayoutBinding *binding)
++{
++   return binding->descriptorType == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK ?
++          1 : binding->descriptorCount;
++}
++
+ static uint32_t
+ num_descs_for_type(VkDescriptorType type, bool static_sampler, bool bindless)
+ {
+@@ -212,9 +220,9 @@ dzn_descriptor_set_layout_create(struct dzn_device *device,
+          uint32_t factor =
+             dzn_descriptor_type_depends_on_shader_usage(desc_type, device->bindless) ? 2 : 1;
+          if (vk_descriptor_type_is_dynamic(desc_type))
+-            dynamic_buffer_count += bindings[i].descriptorCount * factor;
++            dynamic_buffer_count += dzn_binding_desc_count(&bindings[i]) * factor;
+          else
+-            dynamic_ranges_offset += bindings[i].descriptorCount * factor;
++            dynamic_ranges_offset += dzn_binding_desc_count(&bindings[i]) * factor;
+       }
+ 
+       if (binding_flags && binding_flags->bindingCount &&
+@@ -290,7 +298,7 @@ dzn_descriptor_set_layout_create(struct dzn_device *device,
+    for (uint32_t i = 0; i < pCreateInfo->bindingCount; i++) {
+       VkDescriptorType desc_type = ordered_bindings[i].descriptorType;
+       uint32_t binding = ordered_bindings[i].binding;
+-      uint32_t desc_count = ordered_bindings[i].descriptorCount;
++      uint32_t desc_count = dzn_binding_desc_count(&ordered_bindings[i]);
+       bool has_sampler = dzn_desc_type_has_sampler(desc_type);
+       bool has_immutable_samplers =
+          has_sampler &&
+@@ -353,6 +361,14 @@ dzn_descriptor_set_layout_create(struct dzn_device *device,
+          }
+       }
+ 
++      if (desc_type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK) {
++         binfos[binding].inline_offset = set_layout->inline_data_size;
++         binfos[binding].inline_size = ordered_bindings[i].descriptorCount;
++         set_layout->inline_data_size +=
++            ALIGN_POT(ordered_bindings[i].descriptorCount,
++                      D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT);
++      }
++
+       if (has_static_sampler) {
+          binfos[binding].immutable_sampler_idx = STATIC_SAMPLER_TAG;
+       } else if (has_immutable_samplers) {
+@@ -516,6 +532,7 @@ dzn_GetDescriptorSetLayoutSupport(VkDevice _device,
+    VK_FROM_HANDLE(dzn_device, device, _device);
+    const VkDescriptorSetLayoutBinding *bindings = pCreateInfo->pBindings;
+    uint32_t sampler_count = 0, other_desc_count = 0;
++   bool inline_size_supported = true;
+ 
+    const VkDescriptorSetLayoutBindingFlagsCreateInfo *binding_flags =
+       vk_find_struct_const(pCreateInfo->pNext, DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO);
+@@ -537,19 +554,26 @@ dzn_GetDescriptorSetLayoutSupport(VkDevice _device,
+ 
+       if (binding_flags && binding_flags->bindingCount &&
+           (binding_flags->pBindingFlags[i] & VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT))
+-         variable_count->maxVariableDescriptorCount = device->bindless ? INT32_MAX : upper_bound;
++         variable_count->maxVariableDescriptorCount =
++            desc_type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK ? DZN_INLINE_UNIFORM_BLOCK_MAX_SIZE :
++            device->bindless ? INT32_MAX : upper_bound;
++
++      if (desc_type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK &&
++          bindings[i].descriptorCount > DZN_INLINE_UNIFORM_BLOCK_MAX_SIZE)
++         inline_size_supported = false;
+ 
+       if (has_sampler)
+          sampler_count += bindings[i].descriptorCount;
+       if (!is_sampler)
+-         other_desc_count += bindings[i].descriptorCount;
++         other_desc_count += dzn_binding_desc_count(&bindings[i]);
+       if (dzn_descriptor_type_depends_on_shader_usage(desc_type, device->bindless))
+          other_desc_count += bindings[i].descriptorCount;
+    }
+ 
+-   pSupport->supported = device->bindless ||
+-      (sampler_count <= MAX_DESCS_PER_SAMPLER_HEAP &&
+-       other_desc_count <= MAX_DESCS_PER_CBV_SRV_UAV_HEAP);
++   pSupport->supported = inline_size_supported &&
++      (device->bindless ||
++       (sampler_count <= MAX_DESCS_PER_SAMPLER_HEAP &&
++        other_desc_count <= MAX_DESCS_PER_CBV_SRV_UAV_HEAP));
+ }
+ 
+ static void
+@@ -1664,6 +1688,102 @@ dzn_descriptor_set_ptr_write_buffer_desc(struct dzn_device *device,
+    dzn_descriptor_set_write_buffer_desc(device, desc_type, set, heap_offset, alt_heap_offset, bdesc);
+ }
+ 
++static void
++dzn_descriptor_set_init_inline_descs(struct dzn_descriptor_set *set,
++                                     struct dzn_device *device)
++{
++   const struct dzn_descriptor_set_layout *layout = set->layout;
++   struct dzn_descriptor_pool *pool = set->pool;
++
++   for (uint32_t b = 0; b < layout->binding_count; b++) {
++      if (layout->bindings[b].type != VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
++         continue;
++
++      uint32_t heap_offset =
++         dzn_descriptor_set_layout_get_heap_offset(layout, b, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
++                                                   false, device->bindless);
++      if (heap_offset == ~0)
++         continue;
++
++      uint32_t data_offset = set->inline_offset + layout->bindings[b].inline_offset;
++      if (device->bindless) {
++         uint32_t w = data_offset / DZN_INLINE_UNIFORM_WINDOW_STRIDE;
++         volatile struct dxil_spirv_bindless_entry *entry =
++            &pool->bindless.map[set->heap_offsets[0] + heap_offset];
++         entry->buffer_idx = pool->inline_data.window_slots[w];
++         entry->buffer_offset = data_offset - w * DZN_INLINE_UNIFORM_WINDOW_STRIDE;
++      } else {
++         D3D12_CONSTANT_BUFFER_VIEW_DESC cbv_desc = {
++            .BufferLocation = pool->inline_data.gpuva + data_offset,
++            .SizeInBytes = ALIGN_POT(layout->bindings[b].inline_size,
++                                     D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT),
++         };
++         D3D12_CPU_DESCRIPTOR_HANDLE handle =
++            dzn_descriptor_heap_get_cpu_handle(&pool->heaps[D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV],
++                                               set->heap_offsets[D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV] +
++                                               heap_offset);
++         ID3D12Device1_CreateConstantBufferView(device->dev, &cbv_desc, handle);
++      }
++   }
++}
++
++static void
++dzn_descriptor_set_write_inline_data(struct dzn_descriptor_set *set,
++                                     uint32_t binding, uint32_t offset,
++                                     const void *data, uint32_t size)
++{
++   const struct dzn_descriptor_set_layout *layout = set->layout;
++   const uint8_t *src = data;
++
++   for (; size && binding < layout->binding_count; binding++, offset = 0) {
++      const struct dzn_descriptor_set_layout_binding *binfo = &layout->bindings[binding];
++      if (binfo->type != VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK || offset >= binfo->inline_size)
++         continue;
++
++      uint32_t n = MIN2(size, binfo->inline_size - offset);
++      memcpy(set->pool->inline_data.map + set->inline_offset + binfo->inline_offset + offset,
++             src, n);
++      src += n;
++      size -= n;
++   }
++}
++
++static void
++dzn_descriptor_set_copy_inline_data(struct dzn_descriptor_set *dst_set,
++                                    uint32_t dst_binding, uint32_t dst_offset,
++                                    const struct dzn_descriptor_set *src_set,
++                                    uint32_t src_binding, uint32_t src_offset,
++                                    uint32_t size)
++{
++   const struct dzn_descriptor_set_layout *dst_layout = dst_set->layout;
++   const struct dzn_descriptor_set_layout *src_layout = src_set->layout;
++
++   while (size && dst_binding < dst_layout->binding_count &&
++          src_binding < src_layout->binding_count) {
++      const struct dzn_descriptor_set_layout_binding *dst = &dst_layout->bindings[dst_binding];
++      const struct dzn_descriptor_set_layout_binding *src = &src_layout->bindings[src_binding];
++
++      if (dst_offset >= dst->inline_size) {
++         dst_binding++;
++         dst_offset = 0;
++         continue;
++      }
++      if (src_offset >= src->inline_size) {
++         src_binding++;
++         src_offset = 0;
++         continue;
++      }
++
++      uint32_t n = MIN3(size, dst->inline_size - dst_offset, src->inline_size - src_offset);
++      memmove(dst_set->pool->inline_data.map + dst_set->inline_offset + dst->inline_offset + dst_offset,
++              src_set->pool->inline_data.map + src_set->inline_offset + src->inline_offset + src_offset,
++              n);
++      dst_offset += n;
++      src_offset += n;
++      size -= n;
++   }
++}
++
+ static VkResult
+ dzn_descriptor_set_init(struct dzn_descriptor_set *set,
+                         struct dzn_device *device,
+@@ -1685,8 +1805,14 @@ dzn_descriptor_set_init(struct dzn_descriptor_set *set,
+          set->heap_sizes[type] = layout->range_desc_count[type] + variable_descriptor_count[type];
+          set->pool->free_offset[type] = set->heap_offsets[type] + set->heap_sizes[type];
+       }
++      set->inline_offset = pool->inline_data.free_offset;
++      set->inline_size = layout->inline_data_size;
++      pool->inline_data.free_offset += set->inline_size;
+    }
+ 
++   if (layout->inline_data_size)
++      dzn_descriptor_set_init_inline_descs(set, device);
++
+    /* Pre-fill the immutable samplers */
+    if (layout->immutable_sampler_count) {
+       for (uint32_t b = 0; b < layout->binding_count; b++) {
+@@ -1729,6 +1855,18 @@ dzn_descriptor_pool_destroy(struct dzn_descriptor_pool *pool,
+ 
+    struct dzn_device *device = container_of(pool->base.device, struct dzn_device, vk);
+ 
++   if (pool->inline_data.window_slots) {
++      for (uint32_t w = 0; w < pool->inline_data.window_count; w++) {
++         if (pool->inline_data.window_slots[w] >= 0)
++            dzn_device_descriptor_heap_free_slot(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
++                                                 pool->inline_data.window_slots[w]);
++      }
++      vk_free2(&device->vk.alloc, pAllocator, pool->inline_data.window_slots);
++   }
++
++   if (pool->inline_data.buf)
++      ID3D12Resource_Release(pool->inline_data.buf);
++
+    if (device->bindless) {
+       if (pool->bindless.buf)
+          ID3D12Resource_Release(pool->bindless.buf);
+@@ -1743,6 +1881,62 @@ dzn_descriptor_pool_destroy(struct dzn_descriptor_pool *pool,
+    vk_free2(&device->vk.alloc, pAllocator, pool);
+ }
+ 
++static VkResult
++dzn_descriptor_pool_init_inline_data(struct dzn_device *device,
++                                     struct dzn_descriptor_pool *pool,
++                                     const VkAllocationCallbacks *pAllocator)
++{
++   D3D12_RESOURCE_DESC buf_desc = {
++      .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
++      .Width = pool->inline_data.size,
++      .Height = 1, .DepthOrArraySize = 1,
++      .MipLevels = 1, .SampleDesc = {.Count = 1},
++      .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR
++   };
++   D3D12_HEAP_PROPERTIES heap_props = { .Type = D3D12_HEAP_TYPE_UPLOAD };
++   if (FAILED(ID3D12Device_CreateCommittedResource(device->dev, &heap_props, 0, &buf_desc,
++                                                   D3D12_RESOURCE_STATE_GENERIC_READ, NULL,
++                                                   &IID_ID3D12Resource,
++                                                   (void **)&pool->inline_data.buf)))
++      return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
++
++   pool->inline_data.gpuva = ID3D12Resource_GetGPUVirtualAddress(pool->inline_data.buf);
++   ID3D12Resource_Map(pool->inline_data.buf, 0, NULL, (void **)&pool->inline_data.map);
++   memset(pool->inline_data.map, 0, pool->inline_data.size);
++
++   if (!device->bindless)
++      return VK_SUCCESS;
++
++   pool->inline_data.window_count =
++      DIV_ROUND_UP(pool->inline_data.size, DZN_INLINE_UNIFORM_WINDOW_STRIDE);
++   pool->inline_data.window_slots =
++      vk_alloc2(&device->vk.alloc, pAllocator,
++                pool->inline_data.window_count * sizeof(*pool->inline_data.window_slots), 8,
++                VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
++   if (!pool->inline_data.window_slots)
++      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
++
++   for (uint32_t w = 0; w < pool->inline_data.window_count; w++)
++      pool->inline_data.window_slots[w] = -1;
++
++   for (uint32_t w = 0; w < pool->inline_data.window_count; w++) {
++      int slot = dzn_device_descriptor_heap_alloc_slot(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
++      if (slot < 0)
++         return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
++
++      uint32_t start = w * DZN_INLINE_UNIFORM_WINDOW_STRIDE;
++      D3D12_CONSTANT_BUFFER_VIEW_DESC cbv_desc = {
++         .BufferLocation = pool->inline_data.gpuva + start,
++         .SizeInBytes = MIN2(DZN_INLINE_UNIFORM_WINDOW_SIZE, pool->inline_data.size - start),
++      };
++      ID3D12Device1_CreateConstantBufferView(device->dev, &cbv_desc,
++                                             dzn_descriptor_heap_get_cpu_handle(&device->device_heaps[D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV].heap, slot));
++      pool->inline_data.window_slots[w] = slot;
++   }
++
++   return VK_SUCCESS;
++}
++
+ static VkResult
+ dzn_descriptor_pool_create(struct dzn_device *device,
+                            const VkDescriptorPoolCreateInfo *pCreateInfo,
+@@ -1763,10 +1957,16 @@ dzn_descriptor_pool_create(struct dzn_device *device,
+ 
+    vk_object_base_init(&device->vk, &pool->base, VK_OBJECT_TYPE_DESCRIPTOR_POOL);
+ 
++   uint32_t inline_bytes = 0;
+    for (uint32_t p = 0; p < pCreateInfo->poolSizeCount; p++) {
+       VkDescriptorType type = pCreateInfo->pPoolSizes[p].type;
+       uint32_t num_desc = pCreateInfo->pPoolSizes[p].descriptorCount;
+ 
++      if (type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK) {
++         inline_bytes += num_desc;
++         continue;
++      }
++
+       if (device->bindless) {
+          if (!vk_descriptor_type_is_dynamic(type))
+             pool->desc_count[0] += num_desc;
+@@ -1800,6 +2000,18 @@ dzn_descriptor_pool_create(struct dzn_device *device,
+       }
+    }
+ 
++   if (inline_bytes) {
++      const VkDescriptorPoolInlineUniformBlockCreateInfo *inline_info =
++         vk_find_struct_const(pCreateInfo->pNext, DESCRIPTOR_POOL_INLINE_UNIFORM_BLOCK_CREATE_INFO);
++      uint32_t inline_bindings = inline_info && inline_info->maxInlineUniformBlockBindings ?
++         inline_info->maxInlineUniformBlockBindings : DIV_ROUND_UP(inline_bytes, 4);
++
++      pool->desc_count[D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV] += inline_bindings;
++      pool->inline_data.size =
++         ALIGN_POT(inline_bytes, D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT) +
++         inline_bindings * D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT;
++   }
++
+    if (device->bindless) {
+       if (pool->desc_count[0]) {
+          /* Include extra descriptors so that we can align each allocated descriptor set to a 16-byte boundary */
+@@ -1839,6 +2051,14 @@ dzn_descriptor_pool_create(struct dzn_device *device,
+       }
+    }
+ 
++   if (pool->inline_data.size) {
++      VkResult result = dzn_descriptor_pool_init_inline_data(device, pool, pAllocator);
++      if (result != VK_SUCCESS) {
++         dzn_descriptor_pool_destroy(pool, pAllocator);
++         return result;
++      }
++   }
++
+    *out = dzn_descriptor_pool_to_handle(pool);
+    return VK_SUCCESS;
+ }
+@@ -1876,6 +2096,8 @@ dzn_ResetDescriptorPool(VkDevice device,
+       pool->free_offset[type] = 0;
+       pool->used_desc_count[type] = 0;
+    }
++   pool->inline_data.free_offset = 0;
++   pool->inline_data.used = 0;
+    pool->used_set_count = 0;
+ 
+    return VK_SUCCESS;
+@@ -2003,6 +2225,9 @@ dzn_AllocateDescriptorSets(VkDevice dev,
+       additional_desc_counts[D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV] =
+          variable_counts && variable_counts->descriptorSetCount ?
+          variable_counts->pDescriptorCounts[i] : 0;
++      if (additional_desc_counts[D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV] && layout->binding_count &&
++          layout->bindings[layout->binding_count - 1].type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
++         additional_desc_counts[D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV] = 1;
+       additional_desc_counts[D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER] = 0;
+       uint32_t total_desc_count[NUM_POOL_TYPES];
+ 
+@@ -2014,6 +2239,11 @@ dzn_AllocateDescriptorSets(VkDevice dev,
+          }
+       }
+ 
++      if (pool->inline_data.used + layout->inline_data_size > pool->inline_data.size) {
++         dzn_FreeDescriptorSets(dev, pAllocateInfo->descriptorPool, i, pDescriptorSets);
++         return vk_error(device, VK_ERROR_OUT_OF_POOL_MEMORY);
++      }
++
+       struct dzn_descriptor_set *set = NULL;
+       bool is_reuse = false;
+       bool found_any_unused = false;
+@@ -2031,6 +2261,8 @@ dzn_AllocateDescriptorSets(VkDevice dev,
+                      break;
+                   }
+                }
++               if (pool->sets[set_idx].inline_size < layout->inline_data_size)
++                  is_reuse = false;
+                if (!is_reuse)
+                   continue;
+             }
+@@ -2053,6 +2285,10 @@ dzn_AllocateDescriptorSets(VkDevice dev,
+                return vk_error(device, VK_ERROR_FRAGMENTED_POOL);
+             }
+          }
++         if (pool->inline_data.free_offset + layout->inline_data_size > pool->inline_data.size) {
++            dzn_FreeDescriptorSets(dev, pAllocateInfo->descriptorPool, i, pDescriptorSets);
++            return vk_error(device, VK_ERROR_FRAGMENTED_POOL);
++         }
+       }
+ 
+       VkResult result = dzn_descriptor_set_init(set, device, pool, layout, is_reuse, additional_desc_counts);
+@@ -2064,6 +2300,7 @@ dzn_AllocateDescriptorSets(VkDevice dev,
+       pool->used_set_count = MAX2(pool->used_set_count, set_idx + 1);
+       dzn_foreach_pool_type(type)
+          pool->used_desc_count[type] += total_desc_count[type];
++      pool->inline_data.used += set->inline_size;
+       pDescriptorSets[i] = dzn_descriptor_set_to_handle(set);
+    }
+ 
+@@ -2087,6 +2324,7 @@ dzn_FreeDescriptorSets(VkDevice dev,
+       assert(set->pool == pool);
+       dzn_foreach_pool_type(type)
+          pool->used_desc_count[type] -= set->heap_sizes[type];
++      pool->inline_data.used -= set->inline_size;
+ 
+       dzn_descriptor_set_finish(set);
+    }
+@@ -2094,12 +2332,15 @@ dzn_FreeDescriptorSets(VkDevice dev,
+    pool->used_set_count = 0;
+    dzn_foreach_pool_type(type)
+       pool->free_offset[type] = 0;
++   pool->inline_data.free_offset = 0;
+ 
+    for (uint32_t s = 0; s < pool->set_count; s++) {
+       const struct dzn_descriptor_set *set = &pool->sets[s];
+ 
+       if (set->layout) {
+          pool->used_set_count = MAX2(pool->used_set_count, s + 1);
++         pool->inline_data.free_offset =
++            MAX2(pool->inline_data.free_offset, set->inline_offset + set->inline_size);
+          dzn_foreach_pool_type (type) {
+             pool->free_offset[type] =
+                MAX2(pool->free_offset[type],
+@@ -2129,6 +2370,15 @@ dzn_descriptor_set_write(struct dzn_device *device,
+    bool cube_as_2darray =
+       pDescriptorWrite->descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+ 
++   if (pDescriptorWrite->descriptorType == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK) {
++      const VkWriteDescriptorSetInlineUniformBlock *inline_write =
++         vk_find_struct_const(pDescriptorWrite->pNext, WRITE_DESCRIPTOR_SET_INLINE_UNIFORM_BLOCK);
++      dzn_descriptor_set_write_inline_data(set, pDescriptorWrite->dstBinding,
++                                           pDescriptorWrite->dstArrayElement,
++                                           inline_write->pData, inline_write->dataSize);
++      return;
++   }
++
+    switch (pDescriptorWrite->descriptorType) {
+    case VK_DESCRIPTOR_TYPE_SAMPLER:
+       for (; dzn_descriptor_set_ptr_is_valid(&ptr) && d < desc_count;
+@@ -2247,6 +2497,17 @@ dzn_descriptor_set_copy(struct dzn_device *device,
+    VK_FROM_HANDLE(dzn_descriptor_set, dst_set, pDescriptorCopy->dstSet);
+    struct dzn_descriptor_set_ptr src_ptr, dst_ptr;
+ 
++   if (pDescriptorCopy->srcBinding < src_set->layout->binding_count &&
++       src_set->layout->bindings[pDescriptorCopy->srcBinding].type ==
++       VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK) {
++      dzn_descriptor_set_copy_inline_data(dst_set, pDescriptorCopy->dstBinding,
++                                          pDescriptorCopy->dstArrayElement,
++                                          src_set, pDescriptorCopy->srcBinding,
++                                          pDescriptorCopy->srcArrayElement,
++                                          pDescriptorCopy->descriptorCount);
++      return;
++   }
++
+    dzn_descriptor_set_ptr_init(src_set->layout, &src_ptr,
+                                pDescriptorCopy->srcBinding,
+                                pDescriptorCopy->srcArrayElement);
+@@ -2382,6 +2643,11 @@ dzn_descriptor_update_template_create(struct dzn_device *device,
+       ASSERTED VkDescriptorType type = info->pDescriptorUpdateEntries[e].descriptorType;
+       uint32_t d = 0;
+ 
++      if (type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK) {
++         entry_count++;
++         continue;
++      }
++
+       while (dzn_descriptor_set_ptr_is_valid(&ptr) && d < desc_count) {
+          uint32_t ndescs = dzn_descriptor_set_remaining_descs_in_binding(set_layout, &ptr);
+ 
+@@ -2419,6 +2685,16 @@ dzn_descriptor_update_template_create(struct dzn_device *device,
+       size_t user_data_stride = info->pDescriptorUpdateEntries[e].stride;
+       uint32_t d = 0;
+ 
++      if (type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK) {
++         entry->type = type;
++         entry->desc_count = desc_count;
++         entry->user_data.offset = user_data_offset;
++         entry->inline_binding = info->pDescriptorUpdateEntries[e].dstBinding;
++         entry->inline_offset = info->pDescriptorUpdateEntries[e].dstArrayElement;
++         ++entry;
++         continue;
++      }
++
+       while (dzn_descriptor_set_ptr_is_valid(&ptr) && d < desc_count) {
+          uint32_t ndescs = dzn_descriptor_set_remaining_descs_in_binding(set_layout, &ptr);
+ 
+@@ -2597,6 +2873,12 @@ dzn_UpdateDescriptorSetWithTemplate(VkDevice _device,
+          }
+          break;
+ 
++      case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK:
++         dzn_descriptor_set_write_inline_data(set, entry->inline_binding, entry->inline_offset,
++                                              (const uint8_t *)pData + entry->user_data.offset,
++                                              entry->desc_count);
++         break;
++
+       case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+       case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+          for (uint32_t d = 0; d < entry->desc_count; d++) {
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index ac1ca26b6d3..daecd5bba04 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -58,7 +58,7 @@
+ #include "dzn_dxgi.h"
+ #endif
+ 
+-#define DZN_API_VERSION VK_MAKE_VERSION(1, 2, VK_HEADER_VERSION)
++#define DZN_API_VERSION VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION)
+ 
+ #define MAX_TIER2_MEMORY_TYPES 4
+ 
+@@ -99,9 +99,10 @@ static void
+ dzn_physical_device_get_extensions(struct dzn_physical_device *pdev)
+ {
+    pdev->vk.supported_extensions = (struct vk_device_extension_table) {
+-      .KHR_16bit_storage                     = pdev->options4.Native16BitShaderOpsSupported,
++      .KHR_16bit_storage                     = true,
+       .KHR_bind_memory2                      = true,
+       .KHR_buffer_device_address             = pdev->shader_model >= D3D_SHADER_MODEL_6_6,
++      .KHR_copy_commands2                    = true,
+       .KHR_create_renderpass2                = true,
+       .KHR_dedicated_allocation              = true,
+       .KHR_depth_stencil_resolve             = true,
+@@ -119,21 +120,25 @@ dzn_physical_device_get_extensions(struct dzn_physical_device *pdev)
+       .KHR_external_memory_fd                = true,
+       .KHR_external_semaphore_fd             = true,
+ #endif
++      .KHR_format_feature_flags2             = true,
+       .KHR_image_format_list                 = true,
+       .KHR_imageless_framebuffer             = true,
+       .KHR_get_memory_requirements2          = true,
+       .KHR_maintenance1                      = true,
+       .KHR_maintenance2                      = true,
+       .KHR_maintenance3                      = true,
++      .KHR_maintenance4                      = true,
+       .KHR_multiview                         = true,
+       .KHR_relaxed_block_layout              = true,
+       .KHR_sampler_mirror_clamp_to_edge      = true,
+       .KHR_separate_depth_stencil_layouts    = true,
+       .KHR_shader_draw_parameters            = true,
+       .KHR_shader_expect_assume              = true,
+-      .KHR_shader_float16_int8               = pdev->options4.Native16BitShaderOpsSupported,
++      .KHR_shader_float16_int8               = true,
+       .KHR_shader_float_controls             = true,
+       .KHR_shader_integer_dot_product        = true,
++      .KHR_shader_non_semantic_info          = true,
++      .KHR_shader_terminate_invocation       = true,
+       .KHR_spirv_1_4                         = true,
+       .KHR_storage_buffer_storage_class      = true,
+ #ifdef DZN_USE_WSI_PLATFORM
+@@ -142,20 +147,31 @@ dzn_physical_device_get_extensions(struct dzn_physical_device *pdev)
+       .KHR_synchronization2                  = true,
+       .KHR_timeline_semaphore                = true,
+       .KHR_uniform_buffer_standard_layout    = true,
++      .KHR_vulkan_memory_model               = true,
++      .KHR_zero_initialize_workgroup_memory  = true,
+       .EXT_buffer_device_address             = pdev->shader_model >= D3D_SHADER_MODEL_6_6,
+       .EXT_debug_marker                      = true,
+       .EXT_descriptor_indexing               = pdev->shader_model >= D3D_SHADER_MODEL_6_6,
+ #if defined(_WIN32)
+       .EXT_external_memory_host              = pdev->dev13,
+ #endif
++      .EXT_extended_dynamic_state            = true,
++      .EXT_extended_dynamic_state2           = true,
++      .EXT_image_robustness                  = true,
++      .EXT_inline_uniform_block              = true,
+       .EXT_scalar_block_layout               = true,
+       .EXT_separate_stencil_usage            = true,
++      .EXT_shader_demote_to_helper_invocation = pdev->shader_model >= D3D_SHADER_MODEL_6_6,
+       .EXT_shader_replicated_composites      = true,
+       .EXT_shader_subgroup_ballot            = true,
+       .EXT_shader_subgroup_vote              = true,
+       .EXT_subgroup_size_control             = true,
+       .EXT_vertex_attribute_divisor          = true,
+       .EXT_memory_budget                     = true,
++      .EXT_pipeline_creation_cache_control   = true,
++      .EXT_pipeline_creation_feedback        = true,
++      .EXT_private_data                      = true,
++      .EXT_tooling_info                      = true,
+       .MSFT_layered_driver                   = true,
+    };
+ }
+@@ -188,6 +204,8 @@ static const struct debug_control dzn_debug_options[] = {
+    { "nobindless", DZN_DEBUG_NO_BINDLESS },
+    { "experimental", DZN_DEBUG_EXPERIMENTAL },
+    { "multiview", DZN_DEBUG_MULTIVIEW },
++   { "no16bit", DZN_DEBUG_NO_16BIT },
++   { "nostencilref", DZN_DEBUG_NO_STENCIL_REF },
+    { NULL, 0 }
+ };
+ 
+@@ -362,9 +380,9 @@ dzn_physical_device_init_uuids(struct dzn_physical_device *pdev)
+    _mesa_blake3_init(&blake3_ctx);
+    _mesa_blake3_update(&blake3_ctx,  mesa_version, strlen(mesa_version));
+    disk_cache_get_function_identifier(dzn_physical_device_init_uuids, &blake3_ctx);
+-   _mesa_blake3_update(&blake3_ctx, &pdev->options,
++   _mesa_blake3_update(&blake3_ctx, &pdev->shader_model,
+       offsetof(struct dzn_physical_device, options21) + sizeof(pdev->options21) -
+-                     offsetof(struct dzn_physical_device, options));
++                     offsetof(struct dzn_physical_device, shader_model));
+    _mesa_blake3_final(&blake3_ctx, blake3);
+    memcpy(pdev->pipeline_cache_uuid, blake3, VK_UUID_SIZE);
+ 
+@@ -391,9 +409,24 @@ const struct vk_pipeline_cache_object_ops *const dzn_pipeline_cache_import_ops[]
+    NULL,
+ };
+ 
++static bool
++dzn_physical_device_get_options(struct dzn_physical_device *pdev,
++                                uint32_t index,
++                                D3D12_FEATURE feature,
++                                void *data, uint32_t size)
++{
++   const struct dzn_instance *instance =
++      container_of(pdev->vk.instance, struct dzn_instance, vk);
++
++   return index <= instance->max_d3d12_options &&
++          SUCCEEDED(ID3D12Device1_CheckFeatureSupport(pdev->dev, feature, data, size));
++}
++
+ static void
+ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
+ {
++   const struct dzn_instance *instance =
++      container_of(pdev->vk.instance, struct dzn_instance, vk);
+    D3D_FEATURE_LEVEL checklist[] = {
+       D3D_FEATURE_LEVEL_11_0,
+       D3D_FEATURE_LEVEL_11_1,
+@@ -415,6 +448,9 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
+       D3D_SHADER_MODEL_6_4, D3D_SHADER_MODEL_6_3, D3D_SHADER_MODEL_6_2, D3D_SHADER_MODEL_6_1,
+    };
+    for (UINT i = 0; i < ARRAY_SIZE(valid_shader_models); ++i) {
++      if ((uint32_t)valid_shader_models[i] > instance->max_shader_model)
++         continue;
++
+       D3D12_FEATURE_DATA_SHADER_MODEL shader_model = { valid_shader_models[i] };
+       if (SUCCEEDED(ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_SHADER_MODEL, &shader_model, sizeof(shader_model)))) {
+          pdev->shader_model = shader_model.HighestShaderModel;
+@@ -435,23 +471,23 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
+    }
+ 
+    ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_ARCHITECTURE1, &pdev->architecture, sizeof(pdev->architecture));
+-   ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS, &pdev->options, sizeof(pdev->options));
+-   ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS1, &pdev->options1, sizeof(pdev->options1));
+-   ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS2, &pdev->options2, sizeof(pdev->options2));
+-   ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS3, &pdev->options3, sizeof(pdev->options3));
+-   ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS4, &pdev->options4, sizeof(pdev->options4));
+-   ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS12, &pdev->options12, sizeof(pdev->options12));
+-   ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS13, &pdev->options13, sizeof(pdev->options13));
+-   ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS14, &pdev->options14, sizeof(pdev->options14));
+-   ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS15, &pdev->options15, sizeof(pdev->options15));
+-   ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS16, &pdev->options16, sizeof(pdev->options16));
+-   ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS17, &pdev->options17, sizeof(pdev->options17));
+-   if (FAILED(ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS19, &pdev->options19, sizeof(pdev->options19)))) {
++   dzn_physical_device_get_options(pdev, 0, D3D12_FEATURE_D3D12_OPTIONS, &pdev->options, sizeof(pdev->options));
++   dzn_physical_device_get_options(pdev, 1, D3D12_FEATURE_D3D12_OPTIONS1, &pdev->options1, sizeof(pdev->options1));
++   dzn_physical_device_get_options(pdev, 2, D3D12_FEATURE_D3D12_OPTIONS2, &pdev->options2, sizeof(pdev->options2));
++   dzn_physical_device_get_options(pdev, 3, D3D12_FEATURE_D3D12_OPTIONS3, &pdev->options3, sizeof(pdev->options3));
++   dzn_physical_device_get_options(pdev, 4, D3D12_FEATURE_D3D12_OPTIONS4, &pdev->options4, sizeof(pdev->options4));
++   dzn_physical_device_get_options(pdev, 12, D3D12_FEATURE_D3D12_OPTIONS12, &pdev->options12, sizeof(pdev->options12));
++   dzn_physical_device_get_options(pdev, 13, D3D12_FEATURE_D3D12_OPTIONS13, &pdev->options13, sizeof(pdev->options13));
++   dzn_physical_device_get_options(pdev, 14, D3D12_FEATURE_D3D12_OPTIONS14, &pdev->options14, sizeof(pdev->options14));
++   dzn_physical_device_get_options(pdev, 15, D3D12_FEATURE_D3D12_OPTIONS15, &pdev->options15, sizeof(pdev->options15));
++   dzn_physical_device_get_options(pdev, 16, D3D12_FEATURE_D3D12_OPTIONS16, &pdev->options16, sizeof(pdev->options16));
++   dzn_physical_device_get_options(pdev, 17, D3D12_FEATURE_D3D12_OPTIONS17, &pdev->options17, sizeof(pdev->options17));
++   if (!dzn_physical_device_get_options(pdev, 19, D3D12_FEATURE_D3D12_OPTIONS19, &pdev->options19, sizeof(pdev->options19))) {
+       pdev->options19.MaxSamplerDescriptorHeapSize = D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE;
+       pdev->options19.MaxSamplerDescriptorHeapSizeWithStaticSamplers = pdev->options19.MaxSamplerDescriptorHeapSize;
+       pdev->options19.MaxViewDescriptorHeapSize = D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_1;
+    }
+-   if (FAILED(ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS21, &pdev->options21, sizeof(pdev->options21)))) {
++   if (!dzn_physical_device_get_options(pdev, 21, D3D12_FEATURE_D3D12_OPTIONS21, &pdev->options21, sizeof(pdev->options21))) {
+       pdev->options21.ExecuteIndirectTier = D3D12_EXECUTE_INDIRECT_TIER_1_0;
+    }
+    {
+@@ -657,6 +693,15 @@ dzn_physical_device_get_max_array_layers()
+    return dzn_physical_device_get_max_extent(false);
+ }
+ 
++static bool
++dzn_physical_device_supports_8bit(const struct dzn_physical_device *pdev)
++{
++   struct dzn_instance *instance = container_of(pdev->vk.instance, struct dzn_instance, vk);
++
++   return !pdev->options4.Native16BitShaderOpsSupported ||
++          instance->drirc.debug.enable_8bit_loads_stores;
++}
++
+ static void
+ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
+                                  struct vk_features *features)
+@@ -665,8 +710,7 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
+ 
+    bool support_descriptor_indexing = pdev->shader_model >= D3D_SHADER_MODEL_6_6 &&
+       !(instance->debug_flags & DZN_DEBUG_NO_BINDLESS);
+-   bool support_8bit = instance->drirc.debug.enable_8bit_loads_stores &&
+-      pdev->options4.Native16BitShaderOpsSupported;
++   bool support_8bit = dzn_physical_device_supports_8bit(pdev);
+ 
+    *features = (struct vk_features) {
+       .robustBufferAccess = true, /* This feature is mandatory */
+@@ -710,7 +754,7 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
+       .shaderCullDistance = true,
+       .shaderFloat64 = pdev->options.DoublePrecisionFloatShaderOps,
+       .shaderInt64 = pdev->options1.Int64ShaderOps,
+-      .shaderInt16 = pdev->options4.Native16BitShaderOpsSupported,
++      .shaderInt16 = true,
+       .shaderResourceResidency = false,
+       .shaderResourceMinLod = false,
+       .sparseBinding = false,
+@@ -725,8 +769,8 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
+       .variableMultisampleRate = false,
+       .inheritedQueries = false,
+ 
+-      .storageBuffer16BitAccess           = pdev->options4.Native16BitShaderOpsSupported,
+-      .uniformAndStorageBuffer16BitAccess = pdev->options4.Native16BitShaderOpsSupported,
++      .storageBuffer16BitAccess           = true,
++      .uniformAndStorageBuffer16BitAccess = true,
+       .storagePushConstant16              = false,
+       .storageInputOutput16               = false,
+       .multiview                          = true,
+@@ -781,36 +825,50 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
+       .bufferDeviceAddress                = pdev->shader_model >= D3D_SHADER_MODEL_6_6,
+       .bufferDeviceAddressCaptureReplay   = false,
+       .bufferDeviceAddressMultiDevice     = false,
+-      .vulkanMemoryModel                  = false,
+-      .vulkanMemoryModelDeviceScope       = false,
++      .vulkanMemoryModel                  = true,
++      .vulkanMemoryModelDeviceScope       = true,
+       .vulkanMemoryModelAvailabilityVisibilityChains = false,
+       .shaderOutputViewportIndex          = false,
+       .shaderOutputLayer                  = false,
+       .subgroupBroadcastDynamicId         = true,
+ 
+-      .robustImageAccess                  = false,
+-      .inlineUniformBlock                 = false,
+-      .descriptorBindingInlineUniformBlockUpdateAfterBind = false,
+-      .pipelineCreationCacheControl       = false,
++      .robustImageAccess                  = true,
++      .inlineUniformBlock                 = true,
++      .descriptorBindingInlineUniformBlockUpdateAfterBind = support_descriptor_indexing,
++      .pipelineCreationCacheControl       = true,
+       .privateData                        = true,
+-      .shaderDemoteToHelperInvocation     = false,
+-      .shaderTerminateInvocation          = false,
++      .shaderDemoteToHelperInvocation     = pdev->shader_model >= D3D_SHADER_MODEL_6_6,
++      .shaderTerminateInvocation          = true,
+       .subgroupSizeControl                = pdev->options1.WaveOps && pdev->shader_model >= D3D_SHADER_MODEL_6_6,
+       .computeFullSubgroups               = true,
+       .synchronization2                   = true,
+       .textureCompressionASTC_HDR         = false,
+-      .shaderZeroInitializeWorkgroupMemory = false,
++      .shaderZeroInitializeWorkgroupMemory = true,
+       .dynamicRendering                   = true,
+       .shaderIntegerDotProduct            = true,
+-      .maintenance4                       = false,
++      .maintenance4                       = true,
+       .shaderExpectAssume                 = true,
+ 
+       .vertexAttributeInstanceRateDivisor = true,
+       .vertexAttributeInstanceRateZeroDivisor = true,
+       .shaderReplicatedComposites         = true,
++
++      .extendedDynamicState               = true,
++      .extendedDynamicState2              = true,
++      .extendedDynamicState2LogicOp       = false,
++      .extendedDynamicState2PatchControlPoints = false,
+    };
+ }
+ 
++static uint32_t
++dzn_physical_device_get_api_version(const struct dzn_physical_device *pdev)
++{
++   if (pdev->shader_model >= D3D_SHADER_MODEL_6_6 && pdev->options1.WaveOps)
++      return DZN_API_VERSION;
++
++   return VK_MAKE_VERSION(1, 2, VK_HEADER_VERSION);
++}
++
+ static void
+ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
+                                    struct vk_properties *properties)
+@@ -827,7 +885,7 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
+    }
+ 
+    *properties = (struct vk_properties){
+-      .apiVersion = DZN_API_VERSION,
++      .apiVersion = dzn_physical_device_get_api_version(pdev),
+       .driverVersion = vk_get_driver_version(),
+ 
+       .vendorID = pdev->desc.vendor_id,
+@@ -1064,6 +1122,17 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
+       .integerDotProduct4x8BitPackedUnsignedAccelerated = pdev->shader_model >= D3D_SHADER_MODEL_6_4,
+       .integerDotProductAccumulatingSaturating4x8BitPackedSignedAccelerated = pdev->shader_model >= D3D_SHADER_MODEL_6_4,
+       .integerDotProductAccumulatingSaturating4x8BitPackedUnsignedAccelerated = pdev->shader_model >= D3D_SHADER_MODEL_6_4,
++      .maxInlineUniformBlockSize = DZN_INLINE_UNIFORM_BLOCK_MAX_SIZE,
++      .maxPerStageDescriptorInlineUniformBlocks =
++         pdev->options.ResourceBindingTier <= D3D12_RESOURCE_BINDING_TIER_2 ? 4 : 32,
++      .maxPerStageDescriptorUpdateAfterBindInlineUniformBlocks = 32,
++      .maxDescriptorSetInlineUniformBlocks = 32,
++      .maxDescriptorSetUpdateAfterBindInlineUniformBlocks = 32,
++      .maxInlineUniformTotalSize = 32 * DZN_INLINE_UNIFORM_BLOCK_MAX_SIZE,
++      .storageTexelBufferOffsetAlignmentBytes = 32,
++      .storageTexelBufferOffsetSingleTexelAlignment = false,
++      .uniformTexelBufferOffsetAlignmentBytes = 32,
++      .uniformTexelBufferOffsetSingleTexelAlignment = false,
+ 
+       /* VkPhysicalDeviceVertexAttributeDivisorPropertiesEXT */
+       .maxVertexAttribDivisor = UINT32_MAX,
+@@ -1075,6 +1144,8 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
+       .underlyingAPI = VK_LAYERED_DRIVER_UNDERLYING_API_D3D12_MSFT,
+    };
+ 
++   properties->maxBufferSize = MAX2(properties->maxMemoryAllocationSize, 1ull << 30);
++
+    if (strlen(instance->drirc.debug.force_vk_devicename) > 0) {
+       snprintf(properties->deviceName,
+                sizeof(properties->deviceName),
+@@ -1155,24 +1226,30 @@ dzn_physical_device_create(struct vk_instance *instance,
+       return vk_error(instance, VK_ERROR_INITIALIZATION_FAILED);
+    }
+ 
+-   if (FAILED(ID3D12Device1_QueryInterface(pdev->dev, &IID_ID3D12Device10, (void **)&pdev->dev10)))
+-      pdev->dev10 = NULL;
+-   if (FAILED(ID3D12Device1_QueryInterface(pdev->dev, &IID_ID3D12Device11, (void **)&pdev->dev11)))
+-      pdev->dev11 = NULL;
+-   if (FAILED(ID3D12Device1_QueryInterface(pdev->dev, &IID_ID3D12Device12, (void **)&pdev->dev12)))
+-      pdev->dev12 = NULL;
+-   if (FAILED(ID3D12Device1_QueryInterface(pdev->dev, &IID_ID3D12Device13, (void **)&pdev->dev13)))
+-      pdev->dev13 = NULL;
++   if (dzn_instance->max_d3d12_options >= 12) {
++      if (FAILED(ID3D12Device1_QueryInterface(pdev->dev, &IID_ID3D12Device10, (void **)&pdev->dev10)))
++         pdev->dev10 = NULL;
++      if (FAILED(ID3D12Device1_QueryInterface(pdev->dev, &IID_ID3D12Device11, (void **)&pdev->dev11)))
++         pdev->dev11 = NULL;
++      if (FAILED(ID3D12Device1_QueryInterface(pdev->dev, &IID_ID3D12Device12, (void **)&pdev->dev12)))
++         pdev->dev12 = NULL;
++      if (FAILED(ID3D12Device1_QueryInterface(pdev->dev, &IID_ID3D12Device13, (void **)&pdev->dev13)))
++         pdev->dev13 = NULL;
++   }
+    dzn_physical_device_cache_caps(pdev);
+-   dzn_physical_device_init_memory(pdev);
+-   dzn_physical_device_init_uuids(pdev);
+ 
+    if (dzn_instance->debug_flags & DZN_DEBUG_MULTIVIEW)
+       pdev->options3.ViewInstancingTier = D3D12_VIEW_INSTANCING_TIER_NOT_SUPPORTED;
++   if (dzn_instance->debug_flags & DZN_DEBUG_NO_16BIT)
++      pdev->options4.Native16BitShaderOpsSupported = false;
++   if (dzn_instance->debug_flags & DZN_DEBUG_NO_STENCIL_REF)
++      pdev->options.PSSpecifiedStencilRefSupported = false;
++
++   dzn_physical_device_init_memory(pdev);
++   dzn_physical_device_init_uuids(pdev);
+ 
+    dzn_physical_device_get_extensions(pdev);
+-   if (dzn_instance->drirc.debug.enable_8bit_loads_stores &&
+-       pdev->options4.Native16BitShaderOpsSupported)
++   if (dzn_physical_device_supports_8bit(pdev))
+       pdev->vk.supported_extensions.KHR_8bit_storage = true;
+    if (dzn_instance->debug_flags & DZN_DEBUG_NO_BINDLESS)
+       pdev->vk.supported_extensions.EXT_descriptor_indexing = false;
+@@ -1621,6 +1698,30 @@ dzn_physical_device_get_image_format_properties(struct dzn_physical_device *pdev
+    return VK_SUCCESS;
+ }
+ 
++static VkFormatFeatureFlags2
++dzn_physical_device_get_format_features2(struct dzn_physical_device *pdev,
++                                         VkFormat format,
++                                         VkFormatFeatureFlags features)
++{
++   VkFormatFeatureFlags2 features2 = features;
++
++   if (features & (VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
++                   VK_FORMAT_FEATURE_STORAGE_TEXEL_BUFFER_BIT)) {
++      D3D12_FEATURE_DATA_FORMAT_SUPPORT dfmt_info =
++         dzn_physical_device_get_format_support(pdev, format, 0);
++
++      features2 |= VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
++      if (dfmt_info.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD)
++         features2 |= VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT;
++   }
++
++   if ((features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) &&
++       vk_format_has_depth(format))
++      features2 |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_DEPTH_COMPARISON_BIT;
++
++   return features2;
++}
++
+ VKAPI_ATTR void VKAPI_CALL
+ dzn_GetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice,
+                                        VkFormat format,
+@@ -1629,6 +1730,19 @@ dzn_GetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice,
+    VK_FROM_HANDLE(dzn_physical_device, pdev, physicalDevice);
+ 
+    dzn_physical_device_get_format_properties(pdev, format, pFormatProperties);
++
++   VkFormatProperties3 *props3 =
++      vk_find_struct(pFormatProperties->pNext, FORMAT_PROPERTIES_3);
++   if (props3) {
++      const VkFormatProperties *props = &pFormatProperties->formatProperties;
++
++      props3->linearTilingFeatures =
++         dzn_physical_device_get_format_features2(pdev, format, props->linearTilingFeatures);
++      props3->optimalTilingFeatures =
++         dzn_physical_device_get_format_features2(pdev, format, props->optimalTilingFeatures);
++      props3->bufferFeatures =
++         dzn_physical_device_get_format_features2(pdev, format, props->bufferFeatures);
++   }
+ }
+ 
+ VKAPI_ATTR VkResult VKAPI_CALL
+@@ -1815,6 +1929,14 @@ dzn_instance_create(const VkInstanceCreateInfo *pCreateInfo,
+    instance->debug_flags =
+       parse_debug_string(os_get_option("DZN_DEBUG"), dzn_debug_options);
+ 
++   const char *max_shader_model = os_get_option("DZN_MAX_SHADER_MODEL");
++   unsigned sm_major, sm_minor;
++   instance->max_shader_model =
++      max_shader_model && sscanf(max_shader_model, "%u.%u", &sm_major, &sm_minor) == 2 ?
++      (sm_major << 4) | sm_minor : UINT32_MAX;
++   instance->max_d3d12_options =
++      debug_get_num_option("DZN_MAX_D3D12_OPTIONS", UINT32_MAX);
++
+ #ifdef _WIN32
+    if (instance->debug_flags & DZN_DEBUG_DEBUGGER) {
+       /* wait for debugger to attach... */
+@@ -2255,6 +2377,17 @@ dzn_device_check_status(struct vk_device *dev)
+    return VK_SUCCESS;
+ }
+ 
++static void __stdcall
++dzn_d3d12_message(D3D12_MESSAGE_CATEGORY category,
++                  D3D12_MESSAGE_SEVERITY severity,
++                  D3D12_MESSAGE_ID id,
++                  LPCSTR description,
++                  void *context)
++{
++   if (severity <= D3D12_MESSAGE_SEVERITY_ERROR)
++      mesa_loge("D3D12: %s\n", description);
++}
++
+ static VkResult
+ dzn_device_create(struct dzn_physical_device *pdev,
+                   const VkDeviceCreateInfo *pCreateInfo,
+@@ -2368,6 +2501,16 @@ dzn_device_create(struct dzn_physical_device *pdev,
+       ID3D12InfoQueue_Release(info_queue);
+    }
+ 
++   ID3D12InfoQueue1 *info_queue1;
++   if ((instance->debug_flags & DZN_DEBUG_D3D12) &&
++       SUCCEEDED(ID3D12Device1_QueryInterface(device->dev, &IID_ID3D12InfoQueue1,
++                                              (void **)&info_queue1))) {
++      DWORD cookie;
++      ID3D12InfoQueue1_RegisterMessageCallback(info_queue1, dzn_d3d12_message,
++                                               D3D12_MESSAGE_CALLBACK_FLAG_NONE, NULL, &cookie);
++      ID3D12InfoQueue1_Release(info_queue1);
++   }
++
+    IUnknown_QueryInterface(device->dev, &IID_ID3D12DeviceConfiguration, (void **)&device->dev_config);
+ 
+    result = dzn_meta_init(device);
+@@ -3186,9 +3329,11 @@ dzn_buffer_get_copy_loc(const struct dzn_buffer *buf,
+      },
+    };
+ 
++   uint32_t buffer_image_height =
++      region->bufferImageHeight ? region->bufferImageHeight : region->imageExtent.height;
+    uint32_t buffer_layer_stride =
+       loc.PlacedFootprint.Footprint.RowPitch *
+-      DIV_ROUND_UP(loc.PlacedFootprint.Footprint.Height, blkh);
++      DIV_ROUND_UP(buffer_image_height, blkh);
+ 
+    loc.PlacedFootprint.Offset =
+       region->bufferOffset + (layer * buffer_layer_stride);
+@@ -3309,6 +3454,25 @@ dzn_GetBufferMemoryRequirements2(VkDevice dev,
+    }
+ }
+ 
++VKAPI_ATTR void VKAPI_CALL
++dzn_GetDeviceBufferMemoryRequirements(VkDevice device,
++                                      const VkDeviceBufferMemoryRequirements *pInfo,
++                                      VkMemoryRequirements2 *pMemoryRequirements)
++{
++   VkBuffer buffer;
++   if (dzn_CreateBuffer(device, pInfo->pCreateInfo, NULL, &buffer) != VK_SUCCESS) {
++      pMemoryRequirements->memoryRequirements = (VkMemoryRequirements) { 0 };
++      return;
++   }
++
++   const VkBufferMemoryRequirementsInfo2 info = {
++      .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_REQUIREMENTS_INFO_2,
++      .buffer = buffer,
++   };
++   dzn_GetBufferMemoryRequirements2(device, &info, pMemoryRequirements);
++   dzn_DestroyBuffer(device, buffer, NULL);
++}
++
+ VKAPI_ATTR VkResult VKAPI_CALL
+ dzn_BindBufferMemory2(VkDevice _device,
+                       uint32_t bindInfoCount,
+@@ -3700,6 +3864,15 @@ dzn_GetImageSparseMemoryRequirements2(VkDevice device,
+    *pSparseMemoryRequirementCount = 0;
+ }
+ 
++VKAPI_ATTR void VKAPI_CALL
++dzn_GetDeviceImageSparseMemoryRequirements(VkDevice device,
++                                           const VkDeviceImageMemoryRequirements *pInfo,
++                                           uint32_t *pSparseMemoryRequirementCount,
++                                           VkSparseImageMemoryRequirements2 *pSparseMemoryRequirements)
++{
++   *pSparseMemoryRequirementCount = 0;
++}
++
+ VKAPI_ATTR VkResult VKAPI_CALL
+ dzn_CreateSamplerYcbcrConversion(VkDevice device,
+                                  const VkSamplerYcbcrConversionCreateInfo *pCreateInfo,
+diff --git a/src/microsoft/vulkan/dzn_image.c b/src/microsoft/vulkan/dzn_image.c
+index f5d93c4df09..a846881c97f 100644
+--- a/src/microsoft/vulkan/dzn_image.c
++++ b/src/microsoft/vulkan/dzn_image.c
+@@ -925,6 +925,25 @@ dzn_GetImageMemoryRequirements2(VkDevice _device,
+       pMemoryRequirements->memoryRequirements.size = D3D12_DEFAULT_MSAA_RESOURCE_PLACEMENT_ALIGNMENT;
+ }
+ 
++VKAPI_ATTR void VKAPI_CALL
++dzn_GetDeviceImageMemoryRequirements(VkDevice device,
++                                     const VkDeviceImageMemoryRequirements *pInfo,
++                                     VkMemoryRequirements2 *pMemoryRequirements)
++{
++   VkImage image;
++   if (dzn_CreateImage(device, pInfo->pCreateInfo, NULL, &image) != VK_SUCCESS) {
++      pMemoryRequirements->memoryRequirements = (VkMemoryRequirements) { 0 };
++      return;
++   }
++
++   const VkImageMemoryRequirementsInfo2 info = {
++      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2,
++      .image = image,
++   };
++   dzn_GetImageMemoryRequirements2(device, &info, pMemoryRequirements);
++   dzn_DestroyImage(device, image, NULL);
++}
++
+ VKAPI_ATTR void VKAPI_CALL
+ dzn_GetImageSubresourceLayout(VkDevice _device,
+                               VkImage _image,
+diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
+index bbc05a0122f..8a209744e2d 100644
+--- a/src/microsoft/vulkan/dzn_pipeline.c
++++ b/src/microsoft/vulkan/dzn_pipeline.c
+@@ -38,6 +38,7 @@
+ #include "vk_pipeline.h"
+ #include "vk_pipeline_cache.h"
+ 
++#include "util/os_time.h"
+ #include "util/u_debug.h"
+ 
+ #define d3d12_pipeline_state_stream_new_desc(__stream, __maxstreamsz, __id, __type, __desc) \
+@@ -187,6 +188,22 @@ dzn_graphics_pipeline_prepare_for_variants(struct dzn_device *device,
+    return VK_SUCCESS;
+ }
+ 
++static bool
++dzn_graphics_pipeline_static_rast_discard(const struct dzn_graphics_pipeline *pipeline,
++                                          const VkGraphicsPipelineCreateInfo *info)
++{
++   return info->pRasterizationState->rasterizerDiscardEnable &&
++          !(pipeline->dynamic & DZN_DYNAMIC_RASTERIZER_DISCARD_ENABLE);
++}
++
++static bool
++dzn_graphics_pipeline_static_cull_all(const struct dzn_graphics_pipeline *pipeline,
++                                      const VkGraphicsPipelineCreateInfo *info)
++{
++   return info->pRasterizationState->cullMode == VK_CULL_MODE_FRONT_AND_BACK &&
++          !(pipeline->dynamic & DZN_DYNAMIC_CULL_MODE);
++}
++
+ static dxil_spirv_shader_stage
+ to_dxil_shader_stage(VkShaderStageFlagBits in)
+ {
+@@ -211,6 +228,26 @@ struct dzn_nir_options {
+    const nir_shader_compiler_options *nir_opts;
+ };
+ 
++static bool
++dzn_device_lowers_16bit(const struct dzn_device *device)
++{
++   const struct dzn_physical_device *pdev =
++      container_of(device->vk.physical, struct dzn_physical_device, vk);
++
++   return !pdev->options4.Native16BitShaderOpsSupported &&
++          (device->vk.enabled_extensions.KHR_shader_float16_int8 ||
++           device->vk.enabled_extensions.KHR_8bit_storage ||
++           device->vk.enabled_extensions.KHR_16bit_storage ||
++           device->vk.enabled_features.shaderFloat16 ||
++           device->vk.enabled_features.shaderInt16 ||
++           device->vk.enabled_features.shaderInt8 ||
++           device->vk.enabled_features.storageBuffer8BitAccess ||
++           device->vk.enabled_features.uniformAndStorageBuffer8BitAccess ||
++           device->vk.enabled_features.storagePushConstant8 ||
++           device->vk.enabled_features.storageBuffer16BitAccess ||
++           device->vk.enabled_features.uniformAndStorageBuffer16BitAccess);
++}
++
+ static VkResult
+ dzn_pipeline_get_nir_shader(struct dzn_device *device,
+                             const struct dzn_pipeline_layout *layout,
+@@ -238,11 +275,15 @@ dzn_pipeline_get_nir_shader(struct dzn_device *device,
+ 
+    struct dzn_physical_device *pdev =
+       container_of(device->vk.physical, struct dzn_physical_device, vk);
+-   const struct spirv_to_nir_options *spirv_opts = dxil_spirv_nir_get_spirv_options();
++   struct spirv_to_nir_options spirv_opts = *dxil_spirv_nir_get_spirv_options();
++   if (dzn_device_lowers_16bit(device)) {
++      spirv_opts.mediump_16bit_alu = false;
++      spirv_opts.mediump_16bit_derivatives = false;
++   }
+ 
+    VkResult result =
+       vk_pipeline_shader_stage_to_nir(&device->vk, pipeline_flags, stage_info,
+-                                      spirv_opts, options->nir_opts, NULL, nir);
++                                      &spirv_opts, options->nir_opts, NULL, nir);
+    if (result != VK_SUCCESS)
+       return result;
+ 
+@@ -420,11 +461,8 @@ dzn_pipeline_compile_shader(struct dzn_device *device,
+       container_of(device->vk.physical, struct dzn_physical_device, vk);
+    struct nir_to_dxil_options opts = {
+       .environment = DXIL_ENVIRONMENT_VULKAN,
+-      .lower_int16 = !pdev->options4.Native16BitShaderOpsSupported &&
+       /* Don't lower 16-bit types if they can only come from min-precision */
+-         (device->vk.enabled_extensions.KHR_shader_float16_int8 ||
+-          device->vk.enabled_features.shaderFloat16 ||
+-          device->vk.enabled_features.shaderInt16),
++      .lower_int16 = dzn_device_lowers_16bit(device),
+       .shader_model_max = dzn_get_shader_model(pdev),
+       .input_clip_size = input_clip_size,
+       .advanced_texture_ops = pdev->options14.AdvancedTextureOpsSupported,
+@@ -759,7 +797,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+    struct dzn_physical_device *pdev =
+       container_of(device->vk.physical, struct dzn_physical_device, vk);
+    const VkPipelineViewportStateCreateInfo *vp_info =
+-      info->pRasterizationState->rasterizerDiscardEnable ?
++      dzn_graphics_pipeline_static_rast_discard(pipeline, info) ?
+       NULL : info->pViewportState;
+    struct {
+       const VkPipelineShaderStageCreateInfo *info;
+@@ -793,8 +831,8 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+ 
+       if (stage == MESA_SHADER_FRAGMENT &&
+           info->pRasterizationState &&
+-          (info->pRasterizationState->rasterizerDiscardEnable ||
+-           info->pRasterizationState->cullMode == VK_CULL_MODE_FRONT_AND_BACK)) {
++          (dzn_graphics_pipeline_static_rast_discard(pipeline, info) ||
++           dzn_graphics_pipeline_static_cull_all(pipeline, info))) {
+          /* Disable rasterization (AKA leave fragment shader NULL) when
+           * front+back culling or discard is set.
+           */
+@@ -838,7 +876,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+    }
+ 
+    bool force_sample_rate_shading =
+-      !info->pRasterizationState->rasterizerDiscardEnable &&
++      !dzn_graphics_pipeline_static_rast_discard(pipeline, info) &&
+       info->pMultisampleState &&
+       info->pMultisampleState->sampleShadingEnable;
+ 
+@@ -876,10 +914,15 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+       if (ret != VK_SUCCESS)
+          return ret;
+ 
+-      if (cache_hit)
++      if (cache_hit) {
++         pipeline->base.cache_hit = true;
+          return VK_SUCCESS;
++      }
+    }
+ 
++   if (pipeline->base.flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT_KHR)
++      return VK_PIPELINE_COMPILE_REQUIRED;
++
+    /* Second step: get NIR shaders for all stages. */
+    nir_shader_compiler_options nir_opts;
+    unsigned supported_bit_sizes = (pdev->options4.Native16BitShaderOpsSupported ? 16 : 0) | 32 | 64;
+@@ -891,6 +934,8 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+       if (cache) {
+          _mesa_blake3_init(&nir_hash_ctx);
+          _mesa_blake3_update(&nir_hash_ctx, &device->bindless, sizeof(device->bindless));
++         bool lowers_16bit = dzn_device_lowers_16bit(device);
++         _mesa_blake3_update(&nir_hash_ctx, &lowers_16bit, sizeof(lowers_16bit));
+          if (stage != MESA_SHADER_FRAGMENT) {
+             _mesa_blake3_update(&nir_hash_ctx, &lower_view_index, sizeof(lower_view_index));
+             _mesa_blake3_update(&nir_hash_ctx, &force_sample_rate_shading, sizeof(force_sample_rate_shading));
+@@ -1243,6 +1288,16 @@ to_prim_topology(VkPrimitiveTopology in, unsigned patch_control_points, bool sup
+    }
+ }
+ 
++D3D12_PRIMITIVE_TOPOLOGY
++dzn_translate_primitive_topology(const struct dzn_physical_device *pdev,
++                                 VkPrimitiveTopology topology,
++                                 bool *triangle_fan)
++{
++   *triangle_fan = topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN &&
++                   !pdev->options15.TriangleFanSupported;
++   return to_prim_topology(topology, 0, pdev->options15.TriangleFanSupported);
++}
++
+ static VkResult
+ dzn_graphics_pipeline_translate_ia(struct dzn_device *device,
+                                    struct dzn_graphics_pipeline *pipeline,
+@@ -1271,8 +1326,11 @@ dzn_graphics_pipeline_translate_ia(struct dzn_device *device,
+    pipeline->ia.topology =
+       to_prim_topology(in_ia->topology, in_tes ? in_tes->patchControlPoints : 0,
+                        pdev->options15.TriangleFanSupported);
++   pipeline->statics.topology = in_ia->topology;
++   pipeline->statics.primitive_restart = in_ia->primitiveRestartEnable;
+ 
+-   if (in_ia->primitiveRestartEnable) {
++   if (in_ia->primitiveRestartEnable ||
++       (pipeline->dynamic & DZN_DYNAMIC_PRIMITIVE_RESTART_ENABLE)) {
+       d3d12_gfx_pipeline_state_stream_new_desc(out, IB_STRIP_CUT_VALUE, D3D12_INDEX_BUFFER_STRIP_CUT_VALUE, ib_strip_cut);
+       pipeline->templates.desc_offsets.ib_strip_cut =
+          (uintptr_t)ib_strip_cut - (uintptr_t)out->pPipelineStateSubobjectStream;
+@@ -1330,9 +1388,16 @@ dzn_graphics_pipeline_translate_rast(struct dzn_device *device,
+    const VkPipelineRasterizationStateCreateInfo *in_rast =
+       in->pRasterizationState;
+    const VkPipelineViewportStateCreateInfo *in_vp =
+-      in_rast->rasterizerDiscardEnable ? NULL : in->pViewportState;
++      dzn_graphics_pipeline_static_rast_discard(pipeline, in) ? NULL : in->pViewportState;
+    const VkPipelineMultisampleStateCreateInfo *in_ms =
+-      in_rast->rasterizerDiscardEnable ? NULL : in->pMultisampleState;
++      dzn_graphics_pipeline_static_rast_discard(pipeline, in) ? NULL : in->pMultisampleState;
++
++   pipeline->statics.cull_mode = in_rast->cullMode;
++   pipeline->statics.front_ccw = in_rast->frontFace == VK_FRONT_FACE_COUNTER_CLOCKWISE;
++   pipeline->statics.depth_bias_enable = in_rast->depthBiasEnable;
++   pipeline->statics.depth_bias_constant = in_rast->depthBiasConstantFactor;
++   pipeline->statics.depth_bias_clamp = in_rast->depthBiasClamp;
++   pipeline->statics.depth_bias_slope = in_rast->depthBiasSlopeFactor;
+ 
+    if (in_vp) {
+       pipeline->vp.count = in_vp->viewportCount;
+@@ -1404,10 +1469,8 @@ dzn_graphics_pipeline_translate_ms(struct dzn_graphics_pipeline *pipeline,
+                                    D3D12_PIPELINE_STATE_STREAM_DESC *out,
+                                    const VkGraphicsPipelineCreateInfo *in)
+ {
+-   const VkPipelineRasterizationStateCreateInfo *in_rast =
+-      in->pRasterizationState;
+    const VkPipelineMultisampleStateCreateInfo *in_ms =
+-      in_rast->rasterizerDiscardEnable ? NULL : in->pMultisampleState;
++      dzn_graphics_pipeline_static_rast_discard(pipeline, in) ? NULL : in->pMultisampleState;
+ 
+    if (!in_ms)
+       return;
+@@ -1447,19 +1510,24 @@ translate_stencil_test(struct dzn_graphics_pipeline *pipeline,
+ {
+    const VkPipelineDepthStencilStateCreateInfo *in_zsa =
+       in->pDepthStencilState;
+-
+-   bool front_test_uses_ref =
+-      !(in->pRasterizationState->cullMode & VK_CULL_MODE_FRONT_BIT) &&
++   VkCullModeFlags cull_mode =
++      (pipeline->dynamic & DZN_DYNAMIC_CULL_MODE) ? VK_CULL_MODE_NONE : in->pRasterizationState->cullMode;
++   bool dynamic_stencil =
++      pipeline->dynamic & (DZN_DYNAMIC_STENCIL_TEST_ENABLE | DZN_DYNAMIC_STENCIL_OP |
++                           DZN_DYNAMIC_DEPTH_TEST_ENABLE | DZN_DYNAMIC_DEPTH_COMPARE_OP);
++
++   bool front_test_uses_ref = dynamic_stencil ||
++      (!(cull_mode & VK_CULL_MODE_FRONT_BIT) &&
+       in_zsa->front.compareOp != VK_COMPARE_OP_NEVER &&
+       in_zsa->front.compareOp != VK_COMPARE_OP_ALWAYS &&
+       (pipeline->zsa.stencil_test.dynamic_compare_mask ||
+-       in_zsa->front.compareMask != 0);
+-   bool back_test_uses_ref =
+-      !(in->pRasterizationState->cullMode & VK_CULL_MODE_BACK_BIT) &&
++       in_zsa->front.compareMask != 0));
++   bool back_test_uses_ref = dynamic_stencil ||
++      (!(cull_mode & VK_CULL_MODE_BACK_BIT) &&
+       in_zsa->back.compareOp != VK_COMPARE_OP_NEVER &&
+       in_zsa->back.compareOp != VK_COMPARE_OP_ALWAYS &&
+       (pipeline->zsa.stencil_test.dynamic_compare_mask ||
+-       in_zsa->back.compareMask != 0);
++       in_zsa->back.compareMask != 0));
+ 
+    if (front_test_uses_ref && pipeline->zsa.stencil_test.dynamic_compare_mask)
+       pipeline->zsa.stencil_test.front.compare_mask = UINT32_MAX;
+@@ -1475,8 +1543,8 @@ translate_stencil_test(struct dzn_graphics_pipeline *pipeline,
+    else
+       pipeline->zsa.stencil_test.back.compare_mask = 0;
+ 
+-   bool back_wr_uses_ref =
+-      !(in->pRasterizationState->cullMode & VK_CULL_MODE_BACK_BIT) &&
++   bool back_wr_uses_ref = dynamic_stencil ||
++      (!(cull_mode & VK_CULL_MODE_BACK_BIT) &&
+       ((in_zsa->back.compareOp != VK_COMPARE_OP_ALWAYS &&
+         in_zsa->back.failOp == VK_STENCIL_OP_REPLACE) ||
+        (in_zsa->back.compareOp != VK_COMPARE_OP_NEVER &&
+@@ -1484,9 +1552,9 @@ translate_stencil_test(struct dzn_graphics_pipeline *pipeline,
+         in_zsa->back.passOp == VK_STENCIL_OP_REPLACE) ||
+        (in_zsa->depthTestEnable &&
+         in_zsa->depthCompareOp != VK_COMPARE_OP_ALWAYS &&
+-        in_zsa->back.depthFailOp == VK_STENCIL_OP_REPLACE));
+-   bool front_wr_uses_ref =
+-      !(in->pRasterizationState->cullMode & VK_CULL_MODE_FRONT_BIT) &&
++        in_zsa->back.depthFailOp == VK_STENCIL_OP_REPLACE)));
++   bool front_wr_uses_ref = dynamic_stencil ||
++      (!(cull_mode & VK_CULL_MODE_FRONT_BIT) &&
+       ((in_zsa->front.compareOp != VK_COMPARE_OP_ALWAYS &&
+         in_zsa->front.failOp == VK_STENCIL_OP_REPLACE) ||
+        (in_zsa->front.compareOp != VK_COMPARE_OP_NEVER &&
+@@ -1494,15 +1562,15 @@ translate_stencil_test(struct dzn_graphics_pipeline *pipeline,
+         in_zsa->front.passOp == VK_STENCIL_OP_REPLACE) ||
+        (in_zsa->depthTestEnable &&
+         in_zsa->depthCompareOp != VK_COMPARE_OP_ALWAYS &&
+-        in_zsa->front.depthFailOp == VK_STENCIL_OP_REPLACE));
++        in_zsa->front.depthFailOp == VK_STENCIL_OP_REPLACE)));
+ 
+    pipeline->zsa.stencil_test.front.write_mask =
+       (pipeline->zsa.stencil_test.dynamic_write_mask ||
+-       (in->pRasterizationState->cullMode & VK_CULL_MODE_FRONT_BIT)) ?
++       (cull_mode & VK_CULL_MODE_FRONT_BIT)) ?
+       0 : in_zsa->front.writeMask;
+    pipeline->zsa.stencil_test.back.write_mask =
+       (pipeline->zsa.stencil_test.dynamic_write_mask ||
+-       (in->pRasterizationState->cullMode & VK_CULL_MODE_BACK_BIT)) ?
++       (cull_mode & VK_CULL_MODE_BACK_BIT)) ?
+       0 : in_zsa->back.writeMask;
+ 
+    pipeline->zsa.stencil_test.front.uses_ref = front_test_uses_ref || front_wr_uses_ref;
+@@ -1528,14 +1596,29 @@ dzn_graphics_pipeline_translate_zsa(struct dzn_device *device,
+    struct dzn_physical_device *pdev =
+       container_of(device->vk.physical, struct dzn_physical_device, vk);
+ 
+-   const VkPipelineRasterizationStateCreateInfo *in_rast =
+-      in->pRasterizationState;
+    const VkPipelineDepthStencilStateCreateInfo *in_zsa =
+-      in_rast->rasterizerDiscardEnable ? NULL : in->pDepthStencilState;
++      dzn_graphics_pipeline_static_rast_discard(pipeline, in) ? NULL : in->pDepthStencilState;
+    const VkPipelineRenderingCreateInfo *ri = vk_find_struct_const(in, PIPELINE_RENDERING_CREATE_INFO);
+ 
++   if (in_zsa) {
++      pipeline->statics.has_depth_stencil_state = true;
++      pipeline->statics.has_depth = !ri || ri->depthAttachmentFormat != VK_FORMAT_UNDEFINED;
++      pipeline->statics.has_stencil = !ri || ri->stencilAttachmentFormat != VK_FORMAT_UNDEFINED;
++      pipeline->statics.depth_test_enable = in_zsa->depthTestEnable;
++      pipeline->statics.depth_write_enable = in_zsa->depthWriteEnable;
++      pipeline->statics.depth_compare_op = in_zsa->depthCompareOp;
++      pipeline->statics.depth_bounds_test_enable = in_zsa->depthBoundsTestEnable;
++      pipeline->statics.stencil_test_enable = in_zsa->stencilTestEnable;
++      pipeline->statics.front = (struct dzn_stencil_op_state) {
++         in_zsa->front.failOp, in_zsa->front.passOp, in_zsa->front.depthFailOp, in_zsa->front.compareOp,
++      };
++      pipeline->statics.back = (struct dzn_stencil_op_state) {
++         in_zsa->back.failOp, in_zsa->back.passOp, in_zsa->back.depthFailOp, in_zsa->back.compareOp,
++      };
++   }
++
+    if (!in_zsa ||
+-       in_rast->cullMode == VK_CULL_MODE_FRONT_AND_BACK) {
++       dzn_graphics_pipeline_static_cull_all(pipeline, in)) {
+       /* Ensure depth is disabled if the rasterizer should be disabled / everything culled */
+       if (pdev->options14.IndependentFrontAndBackStencilRefMaskSupported) {
+          d3d12_gfx_pipeline_state_stream_new_desc(out, DEPTH_STENCIL2, D3D12_DEPTH_STENCIL_DESC2, stream_desc);
+@@ -1566,11 +1649,18 @@ dzn_graphics_pipeline_translate_zsa(struct dzn_device *device,
+          dzn_translate_compare_op(in_zsa->depthCompareOp) :
+          D3D12_COMPARISON_FUNC_ALWAYS;
+    }
+-   pipeline->zsa.depth_bounds.enable = in_zsa->depthBoundsTestEnable;
++   pipeline->zsa.depth_bounds.enable =
++      in_zsa->depthBoundsTestEnable ||
++      (pipeline->dynamic & DZN_DYNAMIC_DEPTH_BOUNDS_TEST_ENABLE);
+    pipeline->zsa.depth_bounds.min = in_zsa->minDepthBounds;
+    pipeline->zsa.depth_bounds.max = in_zsa->maxDepthBounds;
+    desc.DepthBoundsTestEnable = in_zsa->depthBoundsTestEnable;
+    desc.StencilEnable = in_zsa->stencilTestEnable && !has_no_stencil;
++   if (!desc.StencilEnable && !has_no_stencil &&
++       (pipeline->dynamic & (DZN_DYNAMIC_STENCIL_TEST_ENABLE | DZN_DYNAMIC_STENCIL_OP))) {
++      pipeline->zsa.stencil_test.enable = true;
++      translate_stencil_test(pipeline, &desc, in);
++   }
+    if (desc.StencilEnable) {
+       desc.FrontFace.StencilFailOp = translate_stencil_op(in_zsa->front.failOp);
+       desc.FrontFace.StencilDepthFailOp = translate_stencil_op(in_zsa->front.depthFailOp);
+@@ -1616,6 +1706,20 @@ dzn_graphics_pipeline_translate_zsa(struct dzn_device *device,
+    }
+ }
+ 
++static bool
++is_constant_alpha_blend_factor(VkBlendFactor factor)
++{
++   return factor == VK_BLEND_FACTOR_CONSTANT_ALPHA ||
++          factor == VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
++}
++
++static bool
++is_constant_color_blend_factor(VkBlendFactor factor)
++{
++   return factor == VK_BLEND_FACTOR_CONSTANT_COLOR ||
++          factor == VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;
++}
++
+ static D3D12_BLEND
+ translate_blend_factor(VkBlendFactor in, bool is_alpha, bool support_alpha_blend_factor)
+ {
+@@ -1695,12 +1799,10 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
+                                       D3D12_PIPELINE_STATE_STREAM_DESC *out,
+                                       const VkGraphicsPipelineCreateInfo *in)
+ {
+-   const VkPipelineRasterizationStateCreateInfo *in_rast =
+-      in->pRasterizationState;
+    const VkPipelineColorBlendStateCreateInfo *in_blend =
+-      in_rast->rasterizerDiscardEnable ? NULL : in->pColorBlendState;
++      dzn_graphics_pipeline_static_rast_discard(pipeline, in) ? NULL : in->pColorBlendState;
+    const VkPipelineMultisampleStateCreateInfo *in_ms =
+-      in_rast->rasterizerDiscardEnable ? NULL : in->pMultisampleState;
++      dzn_graphics_pipeline_static_rast_discard(pipeline, in) ? NULL : in->pMultisampleState;
+ 
+    if (!in_blend || !in_ms)
+       return;
+@@ -1710,6 +1812,7 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
+    struct dzn_physical_device *pdev =
+       container_of(device->vk.physical, struct dzn_physical_device, vk);
+    bool support_alpha_blend_factor = pdev->options13.AlphaBlendFactorSupported;
++   bool constant_alpha = false, constant_color = false;
+ 
+    d3d12_gfx_pipeline_state_stream_new_desc(out, BLEND, D3D12_BLEND_DESC, desc);
+    D3D12_LOGIC_OP logicop =
+@@ -1746,8 +1849,19 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
+             translate_blend_factor(in_blend->pAttachments[i].dstAlphaBlendFactor, true, support_alpha_blend_factor);
+          desc->RenderTarget[i].BlendOpAlpha =
+             translate_blend_op(in_blend->pAttachments[i].alphaBlendOp);
++
++         const VkPipelineColorBlendAttachmentState *att = &in_blend->pAttachments[i];
++         if (att->blendEnable) {
++            constant_alpha |= is_constant_alpha_blend_factor(att->srcColorBlendFactor) ||
++                              is_constant_alpha_blend_factor(att->dstColorBlendFactor);
++            constant_color |= is_constant_color_blend_factor(att->srcColorBlendFactor) ||
++                              is_constant_color_blend_factor(att->dstColorBlendFactor);
++         }
+       }
+    }
++
++   pipeline->blend.splat_constant_alpha =
++      !support_alpha_blend_factor && constant_alpha && !constant_color;
+ }
+ 
+ 
+@@ -1834,6 +1948,29 @@ dzn_graphics_pipeline_cleanup_dxil_shaders(struct dzn_graphics_pipeline *pipelin
+    }
+ }
+ 
++static void
++dzn_pipeline_set_creation_feedback(const void *create_info_next,
++                                   const struct dzn_pipeline *pipeline,
++                                   int64_t start_ns)
++{
++   const VkPipelineCreationFeedbackCreateInfo *info =
++      vk_find_struct_const(create_info_next, PIPELINE_CREATION_FEEDBACK_CREATE_INFO);
++   if (!info)
++      return;
++
++   VkPipelineCreationFeedbackFlags flags = VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT;
++   if (pipeline->cache_hit)
++      flags |= VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT;
++
++   info->pPipelineCreationFeedback->flags = flags;
++   info->pPipelineCreationFeedback->duration = os_time_get_nano() - start_ns;
++
++   for (uint32_t i = 0; i < info->pipelineStageCreationFeedbackCount; i++) {
++      info->pPipelineStageCreationFeedbacks[i].flags = flags;
++      info->pPipelineStageCreationFeedbacks[i].duration = 0;
++   }
++}
++
+ static void
+ dzn_graphics_pipeline_destroy(struct dzn_graphics_pipeline *pipeline,
+                               const VkAllocationCallbacks *alloc)
+@@ -1878,6 +2015,7 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
+    VkResult ret;
+    HRESULT hres = 0;
+    D3D12_VIEW_INSTANCE_LOCATION vi_locs[D3D12_MAX_VIEW_INSTANCE_COUNT];
++   int64_t start_ns = os_time_get_nano();
+ 
+    struct dzn_graphics_pipeline *pipeline =
+       vk_zalloc2(&device->vk.alloc, pAllocator, sizeof(*pipeline), 8,
+@@ -1946,6 +2084,58 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
+          case VK_DYNAMIC_STATE_LINE_WIDTH:
+             /* Nothing to do since we just support lineWidth = 1. */
+             break;
++         case VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY:
++            pipeline->dynamic |= DZN_DYNAMIC_PRIMITIVE_TOPOLOGY;
++            break;
++         case VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT:
++            pipeline->dynamic |= DZN_DYNAMIC_VIEWPORT_WITH_COUNT;
++            pipeline->vp.dynamic = true;
++            break;
++         case VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT:
++            pipeline->dynamic |= DZN_DYNAMIC_SCISSOR_WITH_COUNT;
++            pipeline->scissor.dynamic = true;
++            break;
++         case VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE:
++            pipeline->dynamic |= DZN_DYNAMIC_VERTEX_INPUT_BINDING_STRIDE;
++            break;
++         case VK_DYNAMIC_STATE_RASTERIZER_DISCARD_ENABLE:
++            pipeline->dynamic |= DZN_DYNAMIC_RASTERIZER_DISCARD_ENABLE;
++            break;
++         case VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE:
++            pipeline->dynamic |= DZN_DYNAMIC_PRIMITIVE_RESTART_ENABLE;
++            break;
++         case VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE:
++            pipeline->dynamic |= DZN_DYNAMIC_DEPTH_BIAS_ENABLE;
++            if (pdev->options16.DynamicDepthBiasSupported) {
++               *flags |= D3D12_PIPELINE_STATE_FLAG_DYNAMIC_DEPTH_BIAS;
++            } else {
++               ret = dzn_graphics_pipeline_prepare_for_variants(device, pipeline);
++               if (ret)
++                  goto out;
++            }
++            break;
++         case VK_DYNAMIC_STATE_CULL_MODE:
++         case VK_DYNAMIC_STATE_FRONT_FACE:
++         case VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE:
++         case VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE:
++         case VK_DYNAMIC_STATE_DEPTH_COMPARE_OP:
++         case VK_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE:
++         case VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE:
++         case VK_DYNAMIC_STATE_STENCIL_OP:
++            switch (pCreateInfo->pDynamicState->pDynamicStates[i]) {
++            case VK_DYNAMIC_STATE_CULL_MODE: pipeline->dynamic |= DZN_DYNAMIC_CULL_MODE; break;
++            case VK_DYNAMIC_STATE_FRONT_FACE: pipeline->dynamic |= DZN_DYNAMIC_FRONT_FACE; break;
++            case VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE: pipeline->dynamic |= DZN_DYNAMIC_DEPTH_TEST_ENABLE; break;
++            case VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE: pipeline->dynamic |= DZN_DYNAMIC_DEPTH_WRITE_ENABLE; break;
++            case VK_DYNAMIC_STATE_DEPTH_COMPARE_OP: pipeline->dynamic |= DZN_DYNAMIC_DEPTH_COMPARE_OP; break;
++            case VK_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE: pipeline->dynamic |= DZN_DYNAMIC_DEPTH_BOUNDS_TEST_ENABLE; break;
++            case VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE: pipeline->dynamic |= DZN_DYNAMIC_STENCIL_TEST_ENABLE; break;
++            default: pipeline->dynamic |= DZN_DYNAMIC_STENCIL_OP; break;
++            }
++            ret = dzn_graphics_pipeline_prepare_for_variants(device, pipeline);
++            if (ret)
++               goto out;
++            break;
+          default: UNREACHABLE("Unsupported dynamic state");
+          }
+       }
+@@ -1996,6 +2186,9 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
+       view_mask = ri->viewMask;
+    }
+ 
++   while (color_count && color_fmts[color_count - 1] == VK_FORMAT_UNDEFINED)
++      color_count--;
++
+    if (color_count > 0) {
+       d3d12_gfx_pipeline_state_stream_new_desc(stream_desc, RENDER_TARGET_FORMATS, struct D3D12_RT_FORMAT_ARRAY, rts);
+       rts->NumRenderTargets = color_count;
+@@ -2073,10 +2266,12 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
+    ret = VK_SUCCESS;
+ 
+ out:
+-   if (ret != VK_SUCCESS)
++   if (ret != VK_SUCCESS) {
+       dzn_graphics_pipeline_destroy(pipeline, pAllocator);
+-   else
++   } else {
++      dzn_pipeline_set_creation_feedback(pCreateInfo->pNext, &pipeline->base, start_ns);
+       *out = dzn_graphics_pipeline_to_handle(pipeline);
++   }
+ 
+    return ret;
+ }
+@@ -2087,6 +2282,18 @@ mask_key_for_stencil_state(struct dzn_physical_device *pdev,
+                            const struct dzn_graphics_pipeline_variant_key *key,
+                            struct dzn_graphics_pipeline_variant_key *masked_key)
+ {
++   if (pipeline->dynamic & (DZN_DYNAMIC_STENCIL_TEST_ENABLE | DZN_DYNAMIC_STENCIL_OP)) {
++      if (pipeline->zsa.stencil_test.dynamic_compare_mask) {
++         masked_key->stencil_test.front.compare_mask = key->stencil_test.front.compare_mask;
++         masked_key->stencil_test.back.compare_mask = key->stencil_test.back.compare_mask;
++      }
++      if (pipeline->zsa.stencil_test.dynamic_write_mask) {
++         masked_key->stencil_test.front.write_mask = key->stencil_test.front.write_mask;
++         masked_key->stencil_test.back.write_mask = key->stencil_test.back.write_mask;
++      }
++      return;
++   }
++
+    if (pdev->options14.IndependentFrontAndBackStencilRefMaskSupported) {
+       const D3D12_DEPTH_STENCIL_DESC2 *ds_templ =
+          dzn_graphics_pipeline_get_desc_template(pipeline, ds);
+@@ -2181,6 +2388,94 @@ update_stencil_state(struct dzn_physical_device *pdev,
+    }
+ }
+ 
++static void
++mask_key_for_dynamic_state(struct dzn_graphics_pipeline *pipeline,
++                           const struct dzn_graphics_pipeline_variant_key *key,
++                           struct dzn_graphics_pipeline_variant_key *masked_key)
++{
++   uint32_t dyn = pipeline->dynamic;
++
++   if (dyn & (DZN_DYNAMIC_CULL_MODE | DZN_DYNAMIC_FRONT_FACE)) {
++      masked_key->cull_mode = (dyn & DZN_DYNAMIC_CULL_MODE) ?
++         key->cull_mode : pipeline->statics.cull_mode;
++      masked_key->front_ccw = (dyn & DZN_DYNAMIC_FRONT_FACE) ?
++         key->front_ccw : pipeline->statics.front_ccw;
++   }
++
++   if ((dyn & DZN_DYNAMIC_DEPTH_STENCIL_MASK) && pipeline->statics.has_depth_stencil_state) {
++      masked_key->zs.depth_test_enable = (dyn & DZN_DYNAMIC_DEPTH_TEST_ENABLE) ?
++         key->zs.depth_test_enable : pipeline->statics.depth_test_enable;
++      masked_key->zs.depth_write_enable = (dyn & DZN_DYNAMIC_DEPTH_WRITE_ENABLE) ?
++         key->zs.depth_write_enable : pipeline->statics.depth_write_enable;
++      masked_key->zs.depth_compare_op = (dyn & DZN_DYNAMIC_DEPTH_COMPARE_OP) ?
++         key->zs.depth_compare_op : pipeline->statics.depth_compare_op;
++      masked_key->zs.depth_bounds_test_enable = (dyn & DZN_DYNAMIC_DEPTH_BOUNDS_TEST_ENABLE) ?
++         key->zs.depth_bounds_test_enable : pipeline->statics.depth_bounds_test_enable;
++      masked_key->zs.stencil_test_enable = (dyn & DZN_DYNAMIC_STENCIL_TEST_ENABLE) ?
++         key->zs.stencil_test_enable : pipeline->statics.stencil_test_enable;
++      masked_key->zs.front = (dyn & DZN_DYNAMIC_STENCIL_OP) ?
++         key->zs.front : pipeline->statics.front;
++      masked_key->zs.back = (dyn & DZN_DYNAMIC_STENCIL_OP) ?
++         key->zs.back : pipeline->statics.back;
++   }
++}
++
++static void
++update_depth_stencil_state(struct dzn_physical_device *pdev,
++                           struct dzn_graphics_pipeline *pipeline,
++                           uintptr_t *stream_buf,
++                           const struct dzn_graphics_pipeline_variant_key *masked_key)
++{
++   if (!(pipeline->dynamic & DZN_DYNAMIC_DEPTH_STENCIL_MASK) ||
++       !pipeline->statics.has_depth_stencil_state)
++      return;
++
++   bool depth_enable = pipeline->statics.has_depth &&
++      (masked_key->zs.depth_test_enable || masked_key->zs.depth_bounds_test_enable);
++   D3D12_DEPTH_WRITE_MASK write_mask = depth_enable && masked_key->zs.depth_write_enable ?
++      D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO;
++   D3D12_COMPARISON_FUNC depth_func = masked_key->zs.depth_test_enable ?
++      dzn_translate_compare_op(masked_key->zs.depth_compare_op) :
++      D3D12_COMPARISON_FUNC_ALWAYS;
++   bool stencil_enable = pipeline->statics.has_stencil && masked_key->zs.stencil_test_enable;
++
++   if (pdev->options14.IndependentFrontAndBackStencilRefMaskSupported) {
++      D3D12_DEPTH_STENCIL_DESC2 *ds = dzn_graphics_pipeline_get_desc(pipeline, stream_buf, ds);
++      if (!ds)
++         return;
++      ds->DepthEnable = depth_enable;
++      ds->DepthWriteMask = write_mask;
++      ds->DepthFunc = depth_func;
++      ds->DepthBoundsTestEnable = masked_key->zs.depth_bounds_test_enable;
++      ds->StencilEnable = stencil_enable;
++      ds->FrontFace.StencilFailOp = translate_stencil_op(masked_key->zs.front.fail_op);
++      ds->FrontFace.StencilPassOp = translate_stencil_op(masked_key->zs.front.pass_op);
++      ds->FrontFace.StencilDepthFailOp = translate_stencil_op(masked_key->zs.front.depth_fail_op);
++      ds->FrontFace.StencilFunc = dzn_translate_compare_op(masked_key->zs.front.compare_op);
++      ds->BackFace.StencilFailOp = translate_stencil_op(masked_key->zs.back.fail_op);
++      ds->BackFace.StencilPassOp = translate_stencil_op(masked_key->zs.back.pass_op);
++      ds->BackFace.StencilDepthFailOp = translate_stencil_op(masked_key->zs.back.depth_fail_op);
++      ds->BackFace.StencilFunc = dzn_translate_compare_op(masked_key->zs.back.compare_op);
++   } else {
++      D3D12_DEPTH_STENCIL_DESC1 *ds = dzn_graphics_pipeline_get_desc(pipeline, stream_buf, ds);
++      if (!ds)
++         return;
++      ds->DepthEnable = depth_enable;
++      ds->DepthWriteMask = write_mask;
++      ds->DepthFunc = depth_func;
++      ds->DepthBoundsTestEnable = masked_key->zs.depth_bounds_test_enable;
++      ds->StencilEnable = stencil_enable;
++      ds->FrontFace.StencilFailOp = translate_stencil_op(masked_key->zs.front.fail_op);
++      ds->FrontFace.StencilPassOp = translate_stencil_op(masked_key->zs.front.pass_op);
++      ds->FrontFace.StencilDepthFailOp = translate_stencil_op(masked_key->zs.front.depth_fail_op);
++      ds->FrontFace.StencilFunc = dzn_translate_compare_op(masked_key->zs.front.compare_op);
++      ds->BackFace.StencilFailOp = translate_stencil_op(masked_key->zs.back.fail_op);
++      ds->BackFace.StencilPassOp = translate_stencil_op(masked_key->zs.back.pass_op);
++      ds->BackFace.StencilDepthFailOp = translate_stencil_op(masked_key->zs.back.depth_fail_op);
++      ds->BackFace.StencilFunc = dzn_translate_compare_op(masked_key->zs.back.compare_op);
++   }
++}
++
+ ID3D12PipelineState *
+ dzn_graphics_pipeline_get_state(struct dzn_graphics_pipeline *pipeline,
+                                 const struct dzn_graphics_pipeline_variant_key *key)
+@@ -2195,15 +2490,30 @@ dzn_graphics_pipeline_get_state(struct dzn_graphics_pipeline *pipeline,
+ 
+    struct dzn_graphics_pipeline_variant_key masked_key = { 0 };
+ 
+-   if (dzn_graphics_pipeline_get_desc_template(pipeline, ib_strip_cut))
+-      masked_key.ib_strip_cut = key->ib_strip_cut;
++   if (dzn_graphics_pipeline_get_desc_template(pipeline, ib_strip_cut)) {
++      bool restart = (pipeline->dynamic & DZN_DYNAMIC_PRIMITIVE_RESTART_ENABLE) ?
++         key->primitive_restart_enable : pipeline->statics.primitive_restart;
++      masked_key.ib_strip_cut = restart ?
++         key->ib_strip_cut : D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED;
++   }
+ 
+    if (!pdev->options16.DynamicDepthBiasSupported &&
+        dzn_graphics_pipeline_get_desc_template(pipeline, rast) &&
+-       pipeline->zsa.dynamic_depth_bias)
+-      masked_key.depth_bias = key->depth_bias;
++       (pipeline->zsa.dynamic_depth_bias ||
++        (pipeline->dynamic & DZN_DYNAMIC_DEPTH_BIAS_ENABLE))) {
++      bool enable = (pipeline->dynamic & DZN_DYNAMIC_DEPTH_BIAS_ENABLE) ?
++         key->depth_bias_enable : pipeline->statics.depth_bias_enable;
++      if (enable && pipeline->zsa.dynamic_depth_bias) {
++         masked_key.depth_bias = key->depth_bias;
++      } else if (enable) {
++         masked_key.depth_bias.constant_factor = pipeline->statics.depth_bias_constant;
++         masked_key.depth_bias.clamp = pipeline->statics.depth_bias_clamp;
++         masked_key.depth_bias.slope_factor = pipeline->statics.depth_bias_slope;
++      }
++   }
+ 
+    mask_key_for_stencil_state(pdev, pipeline, key, &masked_key);
++   mask_key_for_dynamic_state(pipeline, key, &masked_key);
+ 
+    struct hash_entry *he =
+       _mesa_hash_table_search(pipeline->variants, &masked_key);
+@@ -2229,12 +2539,20 @@ dzn_graphics_pipeline_get_state(struct dzn_graphics_pipeline *pipeline,
+ 
+       D3D12_RASTERIZER_DESC *rast =
+          dzn_graphics_pipeline_get_desc(pipeline, stream_buf, rast);
+-      if (!pdev->options16.DynamicDepthBiasSupported && rast && pipeline->zsa.dynamic_depth_bias) {
++      if (!pdev->options16.DynamicDepthBiasSupported && rast &&
++          (pipeline->zsa.dynamic_depth_bias ||
++           (pipeline->dynamic & DZN_DYNAMIC_DEPTH_BIAS_ENABLE))) {
+          rast->DepthBias = translate_depth_bias(masked_key.depth_bias.constant_factor);
+          rast->DepthBiasClamp = masked_key.depth_bias.clamp;
+          rast->SlopeScaledDepthBias = masked_key.depth_bias.slope_factor;
+       }
+ 
++      if (rast && (pipeline->dynamic & (DZN_DYNAMIC_CULL_MODE | DZN_DYNAMIC_FRONT_FACE))) {
++         rast->CullMode = translate_cull_mode(masked_key.cull_mode);
++         rast->FrontCounterClockwise = masked_key.front_ccw;
++      }
++
++      update_depth_stencil_state(pdev, pipeline, stream_buf, &masked_key);
+       update_stencil_state(pdev, pipeline, stream_buf, &masked_key);
+ 
+       ASSERTED HRESULT hres = ID3D12Device4_CreatePipelineState(device->dev, &stream_desc,
+@@ -2377,12 +2695,13 @@ dzn_CreateGraphicsPipelines(VkDevice dev,
+ 
+    unsigned i;
+    for (i = 0; i < count; i++) {
+-      result = dzn_graphics_pipeline_create(device,
+-                                            pipelineCache,
+-                                            &pCreateInfos[i],
+-                                            pAllocator,
+-                                            &pPipelines[i]);
+-      if (result != VK_SUCCESS) {
++      VkResult res = dzn_graphics_pipeline_create(device,
++                                                  pipelineCache,
++                                                  &pCreateInfos[i],
++                                                  pAllocator,
++                                                  &pPipelines[i]);
++      if (res != VK_SUCCESS) {
++         result = res;
+          pPipelines[i] = VK_NULL_HANDLE;
+ 
+          /* Bail out on the first error != VK_PIPELINE_COMPILE_REQUIRED_EX as it
+@@ -2511,19 +2830,27 @@ dzn_compute_pipeline_compile_shader(struct dzn_device *device,
+       ret = dzn_pipeline_cache_lookup_compute_pipeline(cache, pipeline_hash,
+                                                        stream_desc, shader,
+                                                        &cache_hit);
++      pipeline->base.cache_hit = cache_hit;
+       if (ret != VK_SUCCESS || cache_hit)
+          goto out;
+    }
+ 
++   if (pipeline->base.flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT_KHR) {
++      ret = VK_PIPELINE_COMPILE_REQUIRED;
++      goto out;
++   }
++
+    if (cache) {
+       blake3_hasher nir_hash_ctx;
+       _mesa_blake3_init(&nir_hash_ctx);
+       _mesa_blake3_update(&nir_hash_ctx, &device->bindless, sizeof(device->bindless));
++      bool lowers_16bit = dzn_device_lowers_16bit(device);
++      _mesa_blake3_update(&nir_hash_ctx, &lowers_16bit, sizeof(lowers_16bit));
+       _mesa_blake3_update(&nir_hash_ctx, spirv_hash, sizeof(spirv_hash));
+       _mesa_blake3_final(&nir_hash_ctx, nir_hash);
+    }
+    nir_shader_compiler_options nir_opts;
+-   const unsigned supported_bit_sizes = 16 | 32 | 64;
++   const unsigned supported_bit_sizes = (pdev->options4.Native16BitShaderOpsSupported ? 16 : 0) | 32 | 64;
+    dxil_get_nir_compiler_options(&nir_opts, dzn_get_shader_model(pdev), supported_bit_sizes, supported_bit_sizes);
+    struct dzn_nir_options options = {
+       .nir_opts = &nir_opts,
+@@ -2590,6 +2917,7 @@ dzn_compute_pipeline_create(struct dzn_device *device,
+ {
+    VK_FROM_HANDLE(dzn_pipeline_layout, layout, pCreateInfo->layout);
+    VK_FROM_HANDLE(vk_pipeline_cache, pcache, cache);
++   int64_t start_ns = os_time_get_nano();
+ 
+    struct dzn_compute_pipeline *pipeline =
+       vk_zalloc2(&device->vk.alloc, pAllocator, sizeof(*pipeline), 8,
+@@ -2621,10 +2949,12 @@ dzn_compute_pipeline_create(struct dzn_device *device,
+ 
+ out:
+    free((void *)shader.pShaderBytecode);
+-   if (ret != VK_SUCCESS)
++   if (ret != VK_SUCCESS) {
+       dzn_compute_pipeline_destroy(pipeline, pAllocator);
+-   else
++   } else {
++      dzn_pipeline_set_creation_feedback(pCreateInfo->pNext, &pipeline->base, start_ns);
+       *out = dzn_compute_pipeline_to_handle(pipeline);
++   }
+ 
+    return ret;
+ }
+@@ -2682,12 +3012,13 @@ dzn_CreateComputePipelines(VkDevice dev,
+ 
+    unsigned i;
+    for (i = 0; i < count; i++) {
+-      result = dzn_compute_pipeline_create(device,
+-                                           pipelineCache,
+-                                           &pCreateInfos[i],
+-                                           pAllocator,
+-                                           &pPipelines[i]);
+-      if (result != VK_SUCCESS) {
++      VkResult res = dzn_compute_pipeline_create(device,
++                                                 pipelineCache,
++                                                 &pCreateInfos[i],
++                                                 pAllocator,
++                                                 &pPipelines[i]);
++      if (res != VK_SUCCESS) {
++         result = res;
+          pPipelines[i] = VK_NULL_HANDLE;
+ 
+          /* Bail out on the first error != VK_PIPELINE_COMPILE_REQUIRED_EX as it
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index 9db280ca3f4..bb54e7bf293 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -389,6 +389,36 @@ enum dzn_cmd_dirty {
+    DZN_CMD_DIRTY_DEPTH_BIAS = 1 << 8,
+ };
+ 
++enum dzn_dynamic_state {
++   DZN_DYNAMIC_CULL_MODE = 1 << 0,
++   DZN_DYNAMIC_FRONT_FACE = 1 << 1,
++   DZN_DYNAMIC_PRIMITIVE_TOPOLOGY = 1 << 2,
++   DZN_DYNAMIC_VIEWPORT_WITH_COUNT = 1 << 3,
++   DZN_DYNAMIC_SCISSOR_WITH_COUNT = 1 << 4,
++   DZN_DYNAMIC_VERTEX_INPUT_BINDING_STRIDE = 1 << 5,
++   DZN_DYNAMIC_DEPTH_TEST_ENABLE = 1 << 6,
++   DZN_DYNAMIC_DEPTH_WRITE_ENABLE = 1 << 7,
++   DZN_DYNAMIC_DEPTH_COMPARE_OP = 1 << 8,
++   DZN_DYNAMIC_DEPTH_BOUNDS_TEST_ENABLE = 1 << 9,
++   DZN_DYNAMIC_STENCIL_TEST_ENABLE = 1 << 10,
++   DZN_DYNAMIC_STENCIL_OP = 1 << 11,
++   DZN_DYNAMIC_RASTERIZER_DISCARD_ENABLE = 1 << 12,
++   DZN_DYNAMIC_DEPTH_BIAS_ENABLE = 1 << 13,
++   DZN_DYNAMIC_PRIMITIVE_RESTART_ENABLE = 1 << 14,
++};
++
++#define DZN_DYNAMIC_DEPTH_STENCIL_MASK \
++   (DZN_DYNAMIC_DEPTH_TEST_ENABLE | DZN_DYNAMIC_DEPTH_WRITE_ENABLE | \
++    DZN_DYNAMIC_DEPTH_COMPARE_OP | DZN_DYNAMIC_DEPTH_BOUNDS_TEST_ENABLE | \
++    DZN_DYNAMIC_STENCIL_TEST_ENABLE | DZN_DYNAMIC_STENCIL_OP)
++
++struct dzn_stencil_op_state {
++   uint32_t fail_op;
++   uint32_t pass_op;
++   uint32_t depth_fail_op;
++   uint32_t compare_op;
++};
++
+ #define MAX_VBS D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT
+ #define MAX_VP D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE
+ #define MAX_SCISSOR D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE
+@@ -577,6 +607,18 @@ struct dzn_graphics_pipeline_variant_key {
+          uint32_t ref, compare_mask, write_mask;
+       } front, back;
+    } stencil_test;
++   uint32_t cull_mode;
++   uint32_t front_ccw;
++   uint32_t depth_bias_enable;
++   uint32_t primitive_restart_enable;
++   struct {
++      uint32_t depth_test_enable;
++      uint32_t depth_write_enable;
++      uint32_t depth_compare_op;
++      uint32_t depth_bounds_test_enable;
++      uint32_t stencil_test_enable;
++      struct dzn_stencil_op_state front, back;
++   } zs;
+ };
+ 
+ struct dzn_graphics_pipeline_variant {
+@@ -605,6 +647,12 @@ struct dzn_cmd_buffer_state {
+       BITSET_DECLARE(dirty, MAX_VBS);
+       D3D12_VERTEX_BUFFER_VIEW views[MAX_VBS];
+    } vb;
++   struct {
++      VkPrimitiveTopology topology;
++      uint32_t viewport_count;
++      uint32_t scissor_count;
++      bool rasterizer_discard;
++   } dyn;
+    struct {
+       D3D12_INDEX_BUFFER_VIEW view;
+    } ib;
+@@ -728,8 +776,22 @@ struct dzn_descriptor_pool {
+    uint32_t desc_count[NUM_POOL_TYPES];
+    uint32_t used_desc_count[NUM_POOL_TYPES];
+    uint32_t free_offset[NUM_POOL_TYPES];
++   struct {
++      ID3D12Resource *buf;
++      uint8_t *map;
++      uint64_t gpuva;
++      uint32_t size;
++      uint32_t used;
++      uint32_t free_offset;
++      uint32_t window_count;
++      int *window_slots;
++   } inline_data;
+ };
+ 
++#define DZN_INLINE_UNIFORM_BLOCK_MAX_SIZE 4096
++#define DZN_INLINE_UNIFORM_WINDOW_STRIDE (32 * 1024)
++#define DZN_INLINE_UNIFORM_WINDOW_SIZE (64 * 1024)
++
+ #define MAX_SHADER_VISIBILITIES (D3D12_SHADER_VISIBILITY_PIXEL + 1)
+ #define STATIC_SAMPLER_TAG (~0u - 1)
+ 
+@@ -748,6 +810,8 @@ struct dzn_descriptor_set_layout_binding {
+       uint32_t buffer_idx;
+    };
+    bool variable_size;
++   uint32_t inline_offset;
++   uint32_t inline_size;
+ };
+ 
+ struct dzn_descriptor_set_layout {
+@@ -779,6 +843,7 @@ struct dzn_descriptor_set_layout {
+ 
+    uint32_t binding_count;
+    const struct dzn_descriptor_set_layout_binding *bindings;
++   uint32_t inline_data_size;
+ };
+ 
+ struct dzn_descriptor_set {
+@@ -789,6 +854,8 @@ struct dzn_descriptor_set {
+    uint32_t heap_offsets[NUM_POOL_TYPES];
+    /* The number of descriptors needed for this set */
+    uint32_t heap_sizes[NUM_POOL_TYPES];
++   uint32_t inline_offset;
++   uint32_t inline_size;
+    /* Layout (and pool) is null for a freed descriptor set */
+    const struct dzn_descriptor_set_layout *layout;
+ };
+@@ -853,6 +920,8 @@ struct dzn_descriptor_update_template_entry {
+       size_t offset;
+       size_t stride;
+    } user_data;
++   uint32_t inline_binding;
++   uint32_t inline_offset;
+ };
+ 
+ struct dzn_descriptor_update_template {
+@@ -919,6 +988,7 @@ struct dzn_pipeline {
+    uint32_t desc_count[NUM_POOL_TYPES];
+    uint32_t dynamic_buffer_count;
+    ID3D12PipelineState *state;
++   bool cache_hit;
+ };
+ 
+ extern const struct vk_pipeline_cache_object_ops dzn_cached_blob_ops;
+@@ -987,6 +1057,7 @@ struct dzn_graphics_pipeline {
+ 
+    struct {
+       bool dynamic_constants;
++      bool splat_constant_alpha;
+       float constants[4];
+    } blend;
+ 
+@@ -994,6 +1065,27 @@ struct dzn_graphics_pipeline {
+    bool use_gs_for_polygon_mode_point;
+    bool needs_draw_sysvals;
+ 
++   uint32_t dynamic;
++   struct {
++      VkPrimitiveTopology topology;
++      bool primitive_restart;
++      VkCullModeFlags cull_mode;
++      bool front_ccw;
++      bool depth_bias_enable;
++      float depth_bias_constant;
++      float depth_bias_clamp;
++      float depth_bias_slope;
++      bool has_depth_stencil_state;
++      bool has_depth;
++      bool has_stencil;
++      bool depth_test_enable;
++      bool depth_write_enable;
++      VkCompareOp depth_compare_op;
++      bool depth_bounds_test_enable;
++      bool stencil_test_enable;
++      struct dzn_stencil_op_state front, back;
++   } statics;
++
+    struct {
+       uint32_t view_mask;
+       bool native_view_instancing;
+@@ -1037,6 +1129,11 @@ dzn_graphics_pipeline_get_indirect_cmd_sig(struct dzn_graphics_pipeline *pipelin
+ 
+ VkFormat dzn_graphics_pipeline_patch_vi_format(VkFormat format);
+ 
++D3D12_PRIMITIVE_TOPOLOGY
++dzn_translate_primitive_topology(const struct dzn_physical_device *pdev,
++                                 VkPrimitiveTopology topology,
++                                 bool *triangle_fan);
++
+ struct dzn_compute_pipeline {
+    struct dzn_pipeline base;
+    struct {
+@@ -1259,6 +1356,8 @@ enum dzn_debug_flags {
+    DZN_DEBUG_NO_BINDLESS = 1 << 11,
+    DZN_DEBUG_EXPERIMENTAL = 1 << 12,
+    DZN_DEBUG_MULTIVIEW = 1 << 13,
++   DZN_DEBUG_NO_16BIT = 1 << 14,
++   DZN_DEBUG_NO_STENCIL_REF = 1 << 15,
+ };
+ 
+ struct dzn_instance {
+@@ -1271,6 +1370,8 @@ struct dzn_instance {
+       PFN_D3D12_SERIALIZE_VERSIONED_ROOT_SIGNATURE serialize_root_sig;
+    } d3d12;
+    uint32_t debug_flags;
++   uint32_t max_shader_model;
++   uint32_t max_d3d12_options;
+ 
+    struct vk_sync_binary_type sync_binary_type;
+ 
+diff --git a/src/microsoft/vulkan/meson.build b/src/microsoft/vulkan/meson.build
+index 800fdc28608..198a0382607 100644
+--- a/src/microsoft/vulkan/meson.build
++++ b/src/microsoft/vulkan/meson.build
+@@ -91,7 +91,7 @@ icd_file_name = libname_prefix + 'vulkan_dzn.' + libname_suffix
+ 
+ icd_command = [
+    prog_python, '@INPUT0@',
+-   '--api-version', '1.1', '--xml', '@INPUT1@',
++   '--api-version', '1.3', '--xml', '@INPUT1@',
+    '--sizeof-pointer', sizeof_pointer,
+    '--icd-lib-path', vulkan_icd_lib_path,
+    '--icd-filename', icd_file_name,
+@@ -100,7 +100,7 @@ icd_command = [
+ 
+ icd_dev_command = [
+    prog_python, '@INPUT0@',
+-   '--api-version', '1.1', '--xml', '@INPUT1@',
++   '--api-version', '1.3', '--xml', '@INPUT1@',
+    '--sizeof-pointer', sizeof_pointer,
+    '--icd-lib-path', meson.current_build_dir(),
+    '--icd-filename', icd_file_name,
+diff --git a/src/vulkan/runtime/vk_frame_pacer.c b/src/vulkan/runtime/vk_frame_pacer.c
+index f116e85eafb..003099aaa57 100644
+--- a/src/vulkan/runtime/vk_frame_pacer.c
++++ b/src/vulkan/runtime/vk_frame_pacer.c
+@@ -129,7 +129,7 @@ evaluate_frame(struct vk_frame_pacer *frame_pacer, struct vk_frame_time_info *fr
+ 
+       while (num_timestamps > 0) {
+          /* Retrieve timestamp results from this queue. */
+-         VkResult res = device->dispatch_table.GetQueryPoolResults(
++         ASSERTED VkResult res = device->dispatch_table.GetQueryPoolResults(
+             _device, queue_ctx->queryPool, query_idx, num_timestamps,
+             sizeof(struct query) * num_timestamps, &query_begin->gpu_ts, sizeof(struct query),
+             VK_QUERY_RESULT_64_BIT);
