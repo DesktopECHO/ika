@@ -229,8 +229,8 @@ function Get-DebianImage([string]$Directory) {
     return $path
 }
 
-# Gives the distribution's Start menu entry and Terminal profile Ika's icon:
-# WSL copied the image's to shortcut.ico beside its disk, where both point
+# Gives the distribution's Terminal profile Ika's icon: WSL copied the image's
+# to shortcut.ico beside its disk, where the profile points
 function Set-DistributionIcon {
     $key = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss' |
         Where-Object { (Get-ItemProperty $_.PSPath).DistributionName -eq $Name } | Select-Object -First 1
@@ -244,6 +244,22 @@ function Set-DistributionIcon {
         Invoke-WebRequest -UseBasicParsing -OutFile $target `
             -Uri 'https://raw.githubusercontent.com/DesktopECHO/ika/main/scrcpy/app/data/icon.ico'
     }
+}
+
+# Removes the Start menu shortcut WSL made for the distribution, which opens a
+# shell in it: with Ika's icon it looked like a second Ika beside WSLg's entry
+# for Ika itself. It runs wsl.exe --distribution-id {ID}.
+function Remove-DistributionShortcut {
+    $key = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss' |
+        Where-Object { (Get-ItemProperty $_.PSPath).DistributionName -eq $Name } | Select-Object -First 1
+    if (-not $key) { return }
+    $id = $key.PSChildName
+    $shell = New-Object -ComObject WScript.Shell
+    Get-ChildItem (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu') -Recurse -Filter *.lnk |
+        Where-Object {
+            $link = $shell.CreateShortcut($_.FullName)
+            $link.TargetPath -like '*\wsl.exe' -and $link.Arguments -like "*--distribution-id $id*"
+        } | Remove-Item -Force
 }
 
 # Sets nestedVirtualization=true in .wslconfig's [wsl2]; true when it changed
@@ -348,6 +364,11 @@ try {
     Set-DistributionIcon
 } catch {
     Write-Warning "Could not give $Name Ika's icon: $_"
+}
+try {
+    Remove-DistributionShortcut
+} catch {
+    Write-Warning "Could not remove $Name's shell shortcut from the Start menu: $_"
 }
 
 Write-Step "Creating the user $UserName and turning on systemd"
