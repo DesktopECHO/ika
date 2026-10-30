@@ -1,0 +1,251 @@
+Patch summary:
+Store a 4:2:0 YUV ColorBuffer (YV12, YV21, NV12, NV21) as RGBA8 when the
+device cannot create its format, converting the guest's YUV bytes on upload
+with the GL YUVConverter's BT.601 limited-range matrix. Direct3D 12 has no
+three-plane YUV format, so on WSL2 (Mesa's Dozen) the ColorBuffer of a YV12
+frame from a software video decoder was not created ("Format
+VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM is not supported"), and SurfaceFlinger
+aborted on the buffer ("Failed to create a valid texture ... format:842094169"),
+restarting Android's framework: a Play Store trailer froze every app window.
+The device's support comes from the queried support list, as image creation
+uses it: ImageSupport::IsFormatSupported() reports every color format
+supported. The format is reported supported to the guest; the compositor and
+display sample such a ColorBuffer as RGBA8 (with its YV12 format the
+compositor found no pipeline, a fatal error that ended crosvm); the guest's
+images bound to it, and its image format queries for them, take RGBA8 too;
+and reading it back fails, leaving the guest's own YUV bytes in place.
+diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operations.cpp
+index 4c54e07..be91141 100644
+--- a/host/vulkan/vk_common_operations.cpp
++++ b/host/vulkan/vk_common_operations.cpp
+@@ -3004,6 +3004,14 @@ uint32_t VkEmulation::getValidMemoryTypeIndex(uint32_t requiredMemoryTypeBits,
+ std::unique_ptr<VkImageCreateInfo> VkEmulation::generateColorBufferVkImageCreateInfoLocked(
+         VkFormat format, uint32_t width, uint32_t height, VkImageTiling tiling,
+         uint32_t mipLevels) {
++    // A ColorBuffer of a YUV format the device cannot create is RGBA8
++    // (usesYuvRgbaFallback()), and so are the guest's images bound to it.
++    if ((format == VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM &&
++         usesYuvRgbaFallback(GfxstreamFormat::YV12)) ||
++        (format == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM &&
++         usesYuvRgbaFallback(GfxstreamFormat::NV12))) {
++        format = VK_FORMAT_R8G8B8A8_UNORM;
++    }
+     const ImageSupportInfo* maybeImageSupportInfo = mImageSupportInfo.GetSupportedInfo(format);
+     if (!maybeImageSupportInfo) {
+         GFXSTREAM_ERROR("Format %s [%d] is not supported.", string_VkFormat(format), format);
+@@ -3096,9 +3104,38 @@ VkEmulation::GetInternalFormatLocked(GfxstreamFormat format) {
+         }
+     }
+ 
++    if (usesYuvRgbaFallback(format)) {
++        // Note: updateColorBufferFromBytesLocked() converts the YUV bytes for this case.
++        return GfxstreamFormat::R8G8B8A8_UNORM;
++    }
++
+     return format;
+ }
+ 
++// Direct3D 12, under Mesa's Dozen on WSL2, has no three-plane YUV format, so
++// the ColorBuffer of a YV12 frame from a software video decoder could not be
++// created, and SurfaceFlinger aborted on the guest buffer it could not sample.
++// Such ColorBuffers are RGBA8 instead, written from the guest's YUV bytes;
++// sampling them needs no Y'CbCr conversion.
++bool VkEmulation::usesYuvRgbaFallback(GfxstreamFormat format) const {
++    if (format != GfxstreamFormat::YV12 && format != GfxstreamFormat::YV21 &&
++        format != GfxstreamFormat::NV12 && format != GfxstreamFormat::NV21) {
++        return false;
++    }
++    auto vkFormatOpt = ToVkFormat(format);
++    if (!vkFormatOpt) {
++        return false;
++    }
++    // ImageSupport::IsFormatSupported() assumes every color format is, and
++    // GetSupportedInfo() warns at each miss: this runs at each upload.
++    for (const ImageSupportInfo& supportInfo : mImageSupportInfo.mSupportInfos) {
++        if (supportInfo.format == *vkFormatOpt && supportInfo.supported) {
++            return false;
++        }
++    }
++    return true;
++}
++
+ // TODO(liyl): Currently we can only specify required memoryProperty
+ // and initial layout for a color buffer.
+ //
+@@ -3334,6 +3371,9 @@ bool VkEmulation::createVkColorBufferLocked(uint32_t width, uint32_t height,
+ }
+ 
+ bool VkEmulation::isFormatSupported(GfxstreamFormat format) {
++    if (usesYuvRgbaFallback(format)) {
++        format = GfxstreamFormat::R8G8B8A8_UNORM;
++    }
+     auto vkFormatOpt = ToVkFormat(format);
+     if (!vkFormatOpt) {
+         return false;
+@@ -3993,6 +4033,13 @@ bool VkEmulation::readColorBufferToBytesLocked(uint32_t colorBufferHandle, uint3
+         return false;
+     }
+ 
++    // The RGBA8 image of a YUV ColorBuffer cannot give its YUV bytes back. The
++    // guest's copy already holds them: nothing on the host renders into it.
++    if (colorBufferInfo->format != colorBufferInfo->internalFormat &&
++        usesYuvRgbaFallback(colorBufferInfo->format)) {
++        return false;
++    }
++
+     if (x != 0 || y != 0 || w != colorBufferInfo->imageCreateInfoShallow.extent.width ||
+         h != colorBufferInfo->imageCreateInfoShallow.extent.height) {
+         GFXSTREAM_ERROR(
+@@ -4840,6 +4887,73 @@ static void convertRgbToRgbaPixels(void* dst, const void* src, uint32_t w, uint3
+     }
+ }
+ 
++static uint8_t clampToByte(int value) {
++    return static_cast<uint8_t>(value < 0 ? 0 : (value > 255 ? 255 : value));
++}
++
++// Converts the guest's bytes of a 4:2:0 YUV ColorBuffer, laid out as
++// getFormatTransferInfo() gives its format (a Y plane, then one interleaved
++// chroma plane or two separate ones), to RGBA8, with the BT.601 limited-range
++// matrix of the GL YUVConverter. YV12 has its V plane before its U plane, YV21
++// the reverse; NV12 interleaves U then V, NV21 V then U. Returns false when the
++// input is smaller than that layout.
++static bool convertYuv420ToRgbaPixels(void* dst, const void* src, size_t srcSize,
++                                      GfxstreamFormat format, uint32_t w, uint32_t h) {
++    auto vkFormatOpt = ToVkFormat(format);
++    TransferInfo transferInfo;
++    if (!vkFormatOpt || !getFormatTransferInfo(*vkFormatOpt, VkExtent3D{w, h, 1}, &transferInfo)) {
++        return false;
++    }
++    const std::vector<VkBufferImageCopy>& planes = transferInfo.bufferImageCopies;
++    if (planes.size() < 2 || (srcSize != 0 && srcSize < transferInfo.stagingBufferCopySize)) {
++        return false;
++    }
++
++    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(src);
++    const uint8_t* yPlane = bytes + planes[0].bufferOffset;
++    const size_t yStride = planes[0].bufferRowLength;
++    const uint32_t chromaRows = planes[1].imageExtent.height;
++    const uint8_t* uPlane;
++    const uint8_t* vPlane;
++    size_t chromaStride;
++    size_t chromaStep;
++    if (planes.size() == 2) {
++        const uint8_t* uv = bytes + planes[1].bufferOffset;
++        chromaStride = static_cast<size_t>(planes[1].bufferRowLength) * 2;
++        chromaStep = 2;
++        uPlane = format == GfxstreamFormat::NV21 ? uv + 1 : uv;
++        vPlane = format == GfxstreamFormat::NV21 ? uv : uv + 1;
++    } else {
++        const uint8_t* first = bytes + planes[1].bufferOffset;
++        const uint8_t* second = bytes + planes[2].bufferOffset;
++        chromaStride = planes[1].bufferRowLength;
++        chromaStep = 1;
++        uPlane = format == GfxstreamFormat::YV12 ? second : first;
++        vPlane = format == GfxstreamFormat::YV12 ? first : second;
++    }
++    if (chromaRows == 0) {
++        return false;
++    }
++
++    uint32_t* dstPixels = reinterpret_cast<uint32_t*>(dst);
++    for (uint32_t y = 0; y < h; ++y) {
++        const uint8_t* yRow = yPlane + y * yStride;
++        const size_t chromaRow = std::min(y / 2, chromaRows - 1) * chromaStride;
++        const uint8_t* uRow = uPlane + chromaRow;
++        const uint8_t* vRow = vPlane + chromaRow;
++        for (uint32_t x = 0; x < w; ++x) {
++            const int c = 298 * (yRow[x] - 16) + 128;
++            const int d = uRow[(x / 2) * chromaStep] - 128;
++            const int e = vRow[(x / 2) * chromaStep] - 128;
++            const uint8_t r = clampToByte((c + 409 * e) >> 8);
++            const uint8_t g = clampToByte((c - 100 * d - 208 * e) >> 8);
++            const uint8_t b = clampToByte((c + 516 * d) >> 8);
++            *(dstPixels++) = 0xff000000 | (b << 16) | (g << 8) | r;
++        }
++    }
++    return true;
++}
++
+ static void convertRgba4ToBGRA4Pixels(void* dst, const void* src, uint32_t w, uint32_t h) {
+     const size_t pixelCount = w * h;
+     const uint16_t* srcPixels = reinterpret_cast<const uint16_t*>(src);
+@@ -4921,6 +5035,16 @@ bool VkEmulation::updateColorBufferFromBytesLocked(uint32_t colorBufferHandle, u
+                 return false;
+             }
+             convertRgbToRgbaPixels(stagingBufferPtr, pixels, w, h);
++        } else if (usesYuvRgbaFallback(colorBufferInfo->format) &&
++                   colorBufferInfo->internalFormat == GfxstreamFormat::R8G8B8A8_UNORM) {
++            if (!convertYuv420ToRgbaPixels(stagingBufferPtr, pixels, inputPixelsSize,
++                                           colorBufferInfo->format, w, h)) {
++                GFXSTREAM_ERROR(
++                    "Unexpected contents size when trying to update ColorBuffer:%d, "
++                    "provided:%zu",
++                    colorBufferHandle, inputPixelsSize);
++                return false;
++            }
+         } else {
+             const std::string formatString = ToString(colorBufferInfo->format);
+             const std::string internalFormatString = ToString(colorBufferInfo->internalFormat);
+@@ -5939,7 +6063,10 @@ std::unique_ptr<ColorBufferVkImageInfo> VkEmulation::prepareColorBufferForCompos
+     compositorInfo->image = colorBufferInfo->image;
+     compositorInfo->imageView = colorBufferInfo->imageView;
+     compositorInfo->imageCreateInfoShallow = colorBufferInfo->imageCreateInfoShallow;
+-    compositorInfo->imageFormat = colorBufferInfo->format;
++    // A YUV ColorBuffer kept as RGBA8 (usesYuvRgbaFallback()) is sampled as RGBA8.
++    compositorInfo->imageFormat = usesYuvRgbaFallback(colorBufferInfo->format)
++                                      ? colorBufferInfo->internalFormat
++                                      : colorBufferInfo->format;
+     compositorInfo->preBorrowLayout = colorBufferInfo->currentLayout;
+     compositorInfo->preBorrowQueueFamilyIndex = colorBufferInfo->currentQueueFamilyIndex;
+     if (colorBufferIsTarget && mDisplayVk) {
+@@ -5981,7 +6108,10 @@ std::unique_ptr<ColorBufferVkImageInfo> VkEmulation::prepareColorBufferForDispla
+     compositorInfo->image = colorBufferInfo->image;
+     compositorInfo->imageView = colorBufferInfo->imageView;
+     compositorInfo->imageCreateInfoShallow = colorBufferInfo->imageCreateInfoShallow;
+-    compositorInfo->imageFormat = colorBufferInfo->format;
++    // A YUV ColorBuffer kept as RGBA8 (usesYuvRgbaFallback()) is sampled as RGBA8.
++    compositorInfo->imageFormat = usesYuvRgbaFallback(colorBufferInfo->format)
++                                      ? colorBufferInfo->internalFormat
++                                      : colorBufferInfo->format;
+     compositorInfo->preBorrowLayout = colorBufferInfo->currentLayout;
+     compositorInfo->preBorrowQueueFamilyIndex = mQueueFamilyIndex;
+ 
+diff --git a/host/vulkan/vk_common_operations.h b/host/vulkan/vk_common_operations.h
+index 3faa625..90e87c3 100644
+--- a/host/vulkan/vk_common_operations.h
++++ b/host/vulkan/vk_common_operations.h
+@@ -620,6 +620,9 @@ class VkEmulation {
+     std::optional<GfxstreamFormat> GetInternalFormatLocked(GfxstreamFormat format)
+         REQUIRES(mMutex);
+ 
++    // Whether ColorBuffers of a 4:2:0 YUV format the device cannot create are RGBA8.
++    bool usesYuvRgbaFallback(GfxstreamFormat format) const;
++
+     bool createVkColorBufferLocked(uint32_t width, uint32_t height, GfxstreamFormat format,
+                                    uint32_t colorBufferHandle,
+                                    bool vulkanOnly, uint32_t memoryProperty, uint32_t mipLevels)
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index 453621c..88db6d1 100644
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -1959,7 +1959,8 @@ class VkDecoderGlobalState::Impl {
+                         imageFormatInfo = *pImageFormatInfo;
+                         pImageFormatInfo = &imageFormatInfo;
+                     }
+-                    imageFormatInfo.format = resolvedFormat;
++                    // A YUV format the device cannot create is RGBA8 there.
++                    imageFormatInfo.format = colorBufferVkImageCi->format;
+                     imageFormatInfo.flags |= colorBufferVkImageCi->flags;
+                     imageFormatInfo.usage |= colorBufferVkImageCi->usage;
+                 }
+@@ -10639,7 +10640,8 @@ class VkDecoderGlobalState::Impl {
+             if (!colorBufferVkImageCi) {
+                 continue;
+             }
+-            imageCreateInfo.format = resolvedFormat;
++            // The ColorBuffer's format: RGBA8 for a YUV format the device cannot create.
++            imageCreateInfo.format = colorBufferVkImageCi->format;
+             if (imageCreateInfo.flags & (~colorBufferVkImageCi->flags)) {
+                 GFXSTREAM_ERROR(
+                     "The VkImageCreateInfo to import %s contains unsupported VkImageCreateFlags. "

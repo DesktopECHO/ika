@@ -88,5 +88,9 @@ git_repository(
         # are bound into the same memory. Mesa's Dozen (WSL) otherwise gives them
         # the output image's D3D12 resource and the device is removed.
         "@//build_external/gfxstream:PATCH.gfxstream.compressed-image-no-dedicated-memory.patch",
+        # A YUV ColorBuffer whose format the device cannot create is RGBA8,
+        # converted on upload: Mesa's Dozen (WSL) has no three-plane YUV, and
+        # SurfaceFlinger aborted on a software decoder's YV12 frames.
+        "@//build_external/gfxstream:PATCH.gfxstream.yuv-rgba-fallback.patch",
     ],
 )

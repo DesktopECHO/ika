@@ -62,6 +62,13 @@
  *    layout, the layer pushes the new layout's ranges again from what the
  *    command buffer pushed.
  *
+ * 8. D3D12 has no three-plane YUV format, so dzn cannot create the
+ *    G8_B8_R8_3PLANE_420_UNORM image an Android app's Vulkan makes for a YV12
+ *    buffer, a software video decoder's frame. gfxstream keeps such a buffer
+ *    as RGBA8, converted from the guest's YUV bytes. Where item 3 applies and
+ *    dzn cannot sample a 4:2:0 YUV format, the layer creates its images and
+ *    views as RGBA8, which the conversion item 3 skips reads as it is.
+ *
  * Diagnostics: with IKA_DZN_TRACE_REMOVAL=1 (and IKA_D3D12_DRED=1 for the
  * libd3d12.so shim), the layer checks after each resource, descriptor and
  * command call whether D3D12 removed the device, and logs the first call
@@ -102,6 +109,9 @@ struct instance_data {
 static const VkExtensionProperties provoking_vertex_ext = {VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME,
                                                            VK_EXT_PROVOKING_VERTEX_SPEC_VERSION};
 
+/* The 4:2:0 YUV formats gfxstream gives Android's YUV buffers (item 8). */
+static const VkFormat yuv_formats[] = {VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM};
+
 struct device_data {
   dispatch_key key;
   PFN_vkGetDeviceProcAddr gdpa;
@@ -110,6 +120,8 @@ struct device_data {
   PFN_vkDestroyImage destroy_image_next;
   PFN_vkAllocateMemory allocate_memory_next;
   int fake_ycbcr;
+  /* The 4:2:0 YUV formats dzn cannot sample, made RGBA8 (item 8): bits of yuv_formats. */
+  unsigned yuv_as_rgba;
   PFN_vkCreateSampler create_sampler;
   PFN_vkCreateImageView create_image_view;
   PFN_vkCreatePipelineLayout create_pipeline_layout;
@@ -155,6 +167,13 @@ static struct device_data *find_device(const void *object) {
   while (data && data->key != key) data = data->next;
   pthread_mutex_unlock(&lock);
   return data;
+}
+
+/* Whether the device's images of a format are RGBA8 (item 8). */
+static int yuv_as_rgba(const struct device_data *data, VkFormat format) {
+  for (unsigned i = 0; i < sizeof(yuv_formats) / sizeof(yuv_formats[0]); i++)
+    if (format == yuv_formats[i]) return (data->yuv_as_rgba >> i) & 1;
+  return 0;
 }
 
 static VkResult fixed_image_format_props2(PFN_vkGetPhysicalDeviceImageFormatProperties2 next,
@@ -466,6 +485,15 @@ static VKAPI_ATTR VkResult VKAPI_CALL layer_CreateDevice(VkPhysicalDevice pdev, 
   data->gdpa = gdpa;
   data->destroy_device = (PFN_vkDestroyDevice)gdpa(*device, "vkDestroyDevice");
   data->fake_ycbcr = instance->fake_ycbcr;
+  if (data->fake_ycbcr) {
+    PFN_vkGetPhysicalDeviceFormatProperties format_props =
+        (PFN_vkGetPhysicalDeviceFormatProperties)gipa(instance->instance, "vkGetPhysicalDeviceFormatProperties");
+    for (unsigned i = 0; format_props && i < sizeof(yuv_formats) / sizeof(yuv_formats[0]); i++) {
+      VkFormatProperties props = {0};
+      format_props(pdev, yuv_formats[i], &props);
+      if (!(props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) data->yuv_as_rgba |= 1u << i;
+    }
+  }
   data->create_sampler = (PFN_vkCreateSampler)gdpa(*device, "vkCreateSampler");
   data->create_image_view = (PFN_vkCreateImageView)gdpa(*device, "vkCreateImageView");
   data->create_pipeline_layout = (PFN_vkCreatePipelineLayout)gdpa(*device, "vkCreatePipelineLayout");
@@ -1049,6 +1077,13 @@ static VKAPI_ATTR VkResult VKAPI_CALL layer_CreateImage(VkDevice device, const V
 static VKAPI_ATTR VkResult VKAPI_CALL layer_CreateImageInner(VkDevice device, const VkImageCreateInfo *info,
                                                              const VkAllocationCallbacks *alloc, VkImage *image) {
   struct device_data *data = find_device(device);
+  VkImageCreateInfo rgba;
+  if (yuv_as_rgba(data, info->format)) {
+    rgba = *info;
+    rgba.format = VK_FORMAT_R8G8B8A8_UNORM;
+    rgba.flags &= ~VK_IMAGE_CREATE_DISJOINT_BIT;
+    info = &rgba;
+  }
   if (!(info->flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT))
     return data->create_image_next(device, info, alloc, image);
 
@@ -1111,6 +1146,10 @@ static VKAPI_ATTR VkResult VKAPI_CALL layer_CreateImageView(VkDevice device, con
   VkImageViewCreateInfo fixed = *info;
   struct unlinked removed[MAX_UNLINKED];
   int n = unlink_structs(&fixed, VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO, removed);
+  if (yuv_as_rgba(data, fixed.format)) {
+    fixed.format = VK_FORMAT_R8G8B8A8_UNORM;
+    fixed.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  }
   VkResult result = data->create_image_view(device, &fixed, alloc, view);
   restore_chain(removed, n);
   if (tracing() && result == VK_SUCCESS) remember_view(*view, info);

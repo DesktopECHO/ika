@@ -522,6 +522,14 @@
   are in the ROM too.
 
 ### Fixes
+- On WSL2, video from a software decoder no longer restarts Android's
+  framework, freezing every app window: a Play Store trailer, or any H.264
+  video an app played without a hardware decoder. Its YV12 frames need a
+  three-plane YUV format, which Direct3D 12 does not have, so gfxstream could
+  not create their buffers and SurfaceFlinger aborted ("Failed to create a
+  valid texture"). gfxstream now keeps a YUV buffer whose format the GPU
+  cannot create as RGBA8, converted from the guest's YUV bytes, and Ika's
+  Dozen layer creates Android's images of it as RGBA8.
 - Android no longer fails to start where PipeWire cannot make a stream:
   ika_stream freed the stream's properties a second time after PipeWire had,
   aborted, and took the device down with it. Its audio is then dropped.
