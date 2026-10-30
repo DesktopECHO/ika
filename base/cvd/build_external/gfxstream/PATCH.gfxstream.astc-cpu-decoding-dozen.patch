@@ -28,7 +28,11 @@ on a Radeon 780M).
   image-to-image copy, a source buffer the host has not mapped) is decoded on
   the GPU, from its compressed mipmaps, the next time it becomes readable,
   with a warning in the log.
-- OpenGL ES keeps advertising ASTC only where the host's GL has it natively.
+- OpenGL ES offers GL_KHR_texture_compression_astc_ldr wherever the CPU
+  decoder is available, as upstream intends, and its translator decodes
+  ASTC uploads on the CPU. The no-op decoder kept ASTC out of the gfxstream
+  mode on every host whose GL has no ASTC: Asphalt 8, whose textures are
+  ASTC only, fell back to placeholders and drew its 3D world black.
 - Unit tests of the CPU path's regions, bounds and staging buffers, with a
   fake driver and decoder, and of decoding with astc-encoder.
 diff --git a/host/compressed_textures/BUILD.bazel b/host/compressed_textures/BUILD.bazel
@@ -117,21 +121,6 @@ index f93640c..b9c9f69 100644
      astcenc_error error;
      // Try getting an arbitrary context. If it works, the decoder is available.
      auto context = makeDecoderContext(5, 5, &error);
-diff --git a/host/render_control.cpp b/host/render_control.cpp
-index 50646e6..a1303c1 100644
---- a/host/render_control.cpp
-+++ b/host/render_control.cpp
-@@ -654,7 +654,9 @@ static EGLint rcGetGLString(EGLenum name, void* buffer, EGLint bufferSize) {
-             const std::string& glExtensions = fb->getGlesExtensionsString();
-             const bool hasNativeAstc =
-                 glExtensions.find("GL_KHR_texture_compression_astc_ldr") != std::string::npos;
--            const bool hasAstcDecompressor = vk::AstcCpuDecompressor::get().available();
-+            // The CPU decoder is built for the Vulkan emulation on Mesa's Dozen. OpenGL ES keeps
-+            // what it had with the no-op decoder: ASTC only where the host's GL has it natively.
-+            const bool hasAstcDecompressor = false;
-             if (hasNativeAstc || hasAstcDecompressor) {
-                 glStr += "GL_KHR_texture_compression_astc_ldr ";
-             } else {
 diff --git a/host/vulkan/emulated_textures/BUILD.bazel b/host/vulkan/emulated_textures/BUILD.bazel
 index c6fc036..2886c77 100644
 --- a/host/vulkan/emulated_textures/BUILD.bazel

@@ -4231,6 +4231,24 @@ append_cvd_env_args() {
     env_args_ref+=("EGL_PLATFORM=${EGL_PLATFORM:-surfaceless}")
   fi
 
+  # On WSL2, the gfxstream mode runs the guest's OpenGL ES on the host's
+  # OpenGL, which Mesa otherwise gives llvmpipe, on the CPU: the GPU is
+  # reached only through Direct3D 12 (/dev/dxg). Use Mesa's d3d12 driver, as
+  # the console does (see append_scrcpy_env): Ika's build where
+  # setup_wsl_gpu_env found the D3D12 GPU, else the distribution's. Unless
+  # the user set a GALLIUM_DRIVER or an EGL vendor.
+  if [[ "${CVD_GPU_MODE}" == "gfxstream" && -e /dev/dxg && -z "${GALLIUM_DRIVER:-}" \
+        && "${IKA_WSL_GPU_FIX:-1}" != "0" ]]; then
+    if [[ -n "${IKA_WSL_GPU_ENV:-}" && -z "${__EGL_VENDOR_LIBRARY_FILENAMES:-}" \
+          && -f "${PACKAGED_WSL_GPU_DIR}/mesa-gl/egl_vendor.json" ]]; then
+      env_args_ref+=("GALLIUM_DRIVER=d3d12"
+                     "__EGL_VENDOR_LIBRARY_FILENAMES=${PACKAGED_WSL_GPU_DIR}/mesa-gl/egl_vendor.json")
+    elif compgen -G '/usr/lib*/dri/d3d12_dri.so' >/dev/null \
+        || compgen -G '/usr/lib/*/dri/d3d12_dri.so' >/dev/null; then
+      env_args_ref+=("GALLIUM_DRIVER=d3d12")
+    fi
+  fi
+
   # RADV's default asynchronous shader compilation can report fence completion
   # before a transform-feedback pipeline has finished compiling. Gfxstream can
   # then execute an incomplete pipeline, producing intermittent missing

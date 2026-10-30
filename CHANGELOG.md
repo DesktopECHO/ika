@@ -584,6 +584,16 @@
   once the upload has run. It is built for AVX2, which hosts that run Dozen
   have; without it gfxstream decodes on the GPU. `IKA_ASTC_DECODE=gpu` or
   `cpu` chooses on any host.
+- In the `gfxstream` mode, games whose textures are ASTC draw their 3D world:
+  Android's OpenGL ES offers ASTC wherever the CPU decoder runs, and the
+  translator decodes the textures as they are uploaded. Without ASTC,
+  Asphalt 8 drew with placeholder textures and its world was black, its HUD
+  alone showing.
+- On WSL2, the `gfxstream` mode runs Android's OpenGL ES on the GPU, through
+  Mesa's D3D12 driver as the console does, instead of llvmpipe on the CPU.
+  Ika's build of that driver no longer deadlocks when creating a buffer
+  releases buffers of the slab allocator creating it: a `glBufferData` froze
+  every display of Android.
 - Android no longer fails to start where PipeWire cannot make a stream:
   ika_stream freed the stream's properties a second time after PipeWire had,
   aborted, and took the device down with it. Its audio is then dropped.

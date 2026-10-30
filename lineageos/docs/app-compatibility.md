@@ -31,7 +31,7 @@ correctly while the same title is corrupt in-world.
 | App | ARM gfx | ARM agl | X86 gfx | X86 agl | Detail |
 | --- | :---: | :---: | :---: | :---: | --- |
 | [Angry Birds 2](#angry-birds-2) | ⚪ | 🟢 | ⚪ | ⚪ | ARM agl verified in a live level; X86 gfx not gradable, no level entry point found |
-| [Asphalt 8](#asphalt-8) | ⚪ | 🟢 | 🟡 | 🟢 | X86 agl: clean through a live race once gfxstream restores push constants after ASTC decompression. X86 gfx: HUD live, 3D world black (not re-graded with that fix). ARM agl: confirmed clean mid-race |
+| [Asphalt 8](#asphalt-8) | ⚪ | 🟢 | 🟢 | 🟢 | X86 agl: clean through a live race once gfxstream restores push constants after ASTC decompression. X86 gfx: clean in a live race once the GLES translator offers ASTC (WSL2, D3D12). ARM agl: confirmed clean mid-race |
 | [CarX Drift Racing 3](#carx-drift-racing-3) | 🟢 | 🟢 | 🟢 | 🟢 | Clean on all eight cells graded; the Unity/ANGLE counterexample on both hosts |
 | [CarX Highway Racing](#carx-highway-racing) | 🟢 | 🟡 | 🟢 | 🟢 | ANGLE corruption is Honeykrisp-specific: clean on X86 (RADV) under both paths |
 | [Chromium](#chromium) | 🟡 | 🟡 | 🟡 | 🟡 | Magenta window title bar under gfxstream |
@@ -289,6 +289,16 @@ The failure shape — HUD renders, 3D world does not — mirrors Destiny Rising
 under `gfxstream` on ARM64. Worth checking whether `gfxstream_guest_angle`
 clears it here the same way it does there before concluding this is
 `gfxstream`-wide rather than title-specific.
+
+**x86-64, `gfxstream`: fixed in gfxstream.** Asphalt 8's textures are ASTC
+(the mini-game's `.tga` files are PVR3 containers of ASTC 8x8 and 6x6), and
+Ika's gfxstream built the no-op CPU ASTC decoder, so the GLES translator never
+offered `GL_KHR_texture_compression_astc_ldr` on a host GL without ASTC. The
+game drew with 64x64 placeholder textures: the lightmap sampled as zero, and
+the static-object shader (`DF * (LM + ...) * overbright`) wrote black, alpha
+from the diffuse map intact, with no GL error. With the CPU decoder built and
+ASTC offered, the translator decodes uploads on the CPU, and a race renders
+in full on WSL2 through Mesa's D3D12 driver (Radeon 780M).
 
 **ARM64, `gfxstream_guest_angle`: confirmed.** A clean boot (no conflicting
 cloud save this time) reached a live race directly. Mid-race capture at 208

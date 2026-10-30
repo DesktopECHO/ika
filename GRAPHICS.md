@@ -336,6 +336,13 @@ memory on a Radeon 780M, so each frame of a 1080p video took the window 25 ms
 of CPU to upload, 70% of a core in all. Ika's build stages them in
 write-back memory on integrated GPUs, where the window takes 14%.
 
+In the `gfxstream` mode, crosvm's own OpenGL, which runs Android's OpenGL ES,
+uses the same driver, set up the same way. Ika's build also carries
+[d3d12-reclaim-keep-suballocated.patch](tools/wsl/mesa/d3d12-reclaim-keep-suballocated.patch):
+creating a buffer released buffers whose GPU work had completed, among them
+buffers of the slab allocator whose lock it held, and the render thread waited
+on itself; a `glBufferData` froze every display of Android that way.
+
 `gpu_mode = auto` then picks `gfxstream_guest_angle`, as Venus needs the
 dma-bufs Dozen cannot export. The start log has a `WSL2:` line when Ika set
 this up.
