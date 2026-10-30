@@ -6,8 +6,13 @@ and gfxstream aborted on VK_ERROR_DEVICE_LOST, ending the VM (Asphalt 8 and 9
 on a Radeon 780M).
 
 - Build the CPU decoder: the Bazel build compiled the no-op one. A Bazel
-  target for the bundled astc-encoder, decoder only, for the compiler's
-  baseline ISA, so it runs on any x86-64 or ARM64 CPU. Eight worker threads.
+  target for the bundled astc-encoder, decoder only: for AVX2, F16C, POPCNT
+  and SSE4.1 on x86-64, which WSL2's Dozen hosts have, and NEON on ARM64.
+  Before calling into it, gfxstream checks the CPU with
+  __builtin_cpu_supports, which also checks that the OS saves AVX state (it
+  read the AVX2 CPUID bit alone); without them it decodes on the GPU. On
+  ARM64, where the check always failed, NEON now passes. Eight worker
+  threads.
 - VkEmulation picks CPU decoding when the device's driver is Dozen
   (VK_DRIVER_ID_MESA_DOZEN), GPU decoding otherwise. IKA_ASTC_DECODE=cpu or
   gpu overrides it on any device.
@@ -48,7 +53,7 @@ index a2d2955..8252802 100644
  )
  
 diff --git a/host/compressed_textures/astc_cpu_decompressor_impl.cpp b/host/compressed_textures/astc_cpu_decompressor_impl.cpp
-index f93640c..73f7934 100644
+index f93640c..b9c9f69 100644
 --- a/host/compressed_textures/astc_cpu_decompressor_impl.cpp
 +++ b/host/compressed_textures/astc_cpu_decompressor_impl.cpp
 @@ -24,7 +24,8 @@ namespace host {
@@ -61,6 +66,57 @@ index f93640c..73f7934 100644
  
  const astcenc_swizzle kSwizzle = {ASTCENC_SWZ_R, ASTCENC_SWZ_G, ASTCENC_SWZ_B, ASTCENC_SWZ_A};
  
+@@ -63,7 +64,7 @@ AstcencContextUniquePtr makeDecoderContext(uint32_t blockWidth, uint32_t blockHe
+ #if !defined(__clang__) && defined(_MSC_VER)
+ // AVX2 support detection for Visual Studio
+ #include <intrin.h>
+-bool cpuSupportsAvx2()
++bool cpuSupportsDecoderIsa()
+ {
+     int data[4];
+     __cpuid(data, 0);
+@@ -74,28 +75,27 @@ bool cpuSupportsAvx2()
+     return false;
+ }
+ #elif defined(__aarch64__)
+-bool cpuSupportsAvx2()
++// astc-encoder is built for NEON, which every ARM64 CPU has.
++bool cpuSupportsDecoderIsa()
+ {
+-    return false;
++    return true;
+ }
+ #else
+-// AVX2 support detection for GCC and Clang
+-#include <cpuid.h>
+-bool cpuSupportsAvx2()
++// astc-encoder is built for AVX2 with F16C, POPCNT and SSE4.1. This file is not, so the check
++// runs on any x86-64 CPU; __builtin_cpu_supports also checks that the OS saves AVX state.
++bool cpuSupportsDecoderIsa()
+ {
+-    unsigned int data[4];
+-    if (__get_cpuid_count(7, 0, &data[0], &data[1], &data[2], &data[3])) {
+-        return data[1] & (1 << 5);  // AVX2 = Bank 7, EBX, bit 5
+-    }
+-    return false;
++    __builtin_cpu_init();
++    return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("f16c") &&
++           __builtin_cpu_supports("popcnt") && __builtin_cpu_supports("sse4.1");
+ }
+ #endif
+ 
+-// Returns whether the ASTC decoder can be used on this machine. It might not be available if the
+-// CPU doesn't support AVX2 instructions for example. Since this call is a bit expensive and never
+-// changes, the result should be cached.
++// Returns whether the ASTC decoder can be used on this machine. It is not available on an x86-64
++// CPU without AVX2, F16C, POPCNT and SSE4.1, which astc-encoder is built for. Since this call is a
++// bit expensive and never changes, the result should be cached.
+ bool isAstcDecoderAvailable() {
+-    if (!cpuSupportsAvx2()) return false;
++    if (!cpuSupportsDecoderIsa()) return false;
+     astcenc_error error;
+     // Try getting an arbitrary context. If it works, the decoder is available.
+     auto context = makeDecoderContext(5, 5, &error);
 diff --git a/host/render_control.cpp b/host/render_control.cpp
 index 50646e6..a1303c1 100644
 --- a/host/render_control.cpp
@@ -699,7 +755,7 @@ index 18f6d13..41807d4 100644
  
 diff --git a/host/vulkan/emulated_textures/astc_texture_unittest.cpp b/host/vulkan/emulated_textures/astc_texture_unittest.cpp
 new file mode 100644
-index 0000000..e528cdf
+index 0000000..daeeca6
 --- /dev/null
 +++ b/host/vulkan/emulated_textures/astc_texture_unittest.cpp
 @@ -0,0 +1,329 @@
@@ -1007,7 +1063,7 @@ index 0000000..e528cdf
 +// decoded by astc-encoder, in rows padded to 3 blocks.
 +TEST_F(AstcTextureTest, DecodesWithAstcEncoder) {
 +    auto& decoder = AstcCpuDecompressor::get();
-+    ASSERT_TRUE(decoder.available());
++    if (!decoder.available()) GTEST_SKIP() << "This CPU lacks the ISA astc-encoder is built for";
 +    const uint8_t block[] = {0x44, 0x05, 0x00, 0xfe, 0x01, 0x00, 0x00, 0x00,
 +                             0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa};
 +    std::vector<uint8_t> src;
@@ -1453,19 +1509,22 @@ index c6a64c7..4f3de9b 100644
          descriptorLayout = VK_NULL_HANDLE;
 diff --git a/third_party/astc-encoder/BUILD.bazel b/third_party/astc-encoder/BUILD.bazel
 new file mode 100644
-index 0000000..629627e
+index 0000000..5bec939
 --- /dev/null
 +++ b/third_party/astc-encoder/BUILD.bazel
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,47 @@
 +load("@rules_cc//cc:defs.bzl", "cc_library")
 +
 +package(
 +    default_visibility = ["//:gfxstream"],
 +)
 +
-+# The decompressor only, for gfxstream's ASTC CPU decoding. No ISA is forced:
-+# astcenc_mathlib.h picks it from the compiler's target (SSE2 on the x86-64
-+# baseline, NEON on aarch64), so the library runs wherever gfxstream does.
++# The decompressor only, for gfxstream's ASTC CPU decoding, the default on
++# Mesa's Dozen (WSL2), whose hosts have AVX2. On x86-64 it is built for AVX2,
++# F16C, POPCNT and SSE4.1, as astc-encoder's own AVX2 build is; gfxstream
++# checks that the CPU has them before calling into it, and on older CPUs
++# decodes on the GPU instead. On aarch64 it uses NEON, which every ARM64 CPU
++# has.
 +cc_library(
 +    name = "gfxstream_astcenc",
 +    srcs = glob(["Source/astcenc_*.cpp"]),
@@ -1479,8 +1538,25 @@ index 0000000..629627e
 +        "-Wno-unused-parameter",
 +        "-Wno-unused-function",
 +        "-Wno-unused-variable",
-+    ],
++    ] + select({
++        "@platforms//cpu:x86_64": [
++            "-mavx2",
++            "-mf16c",
++            "-mpopcnt",
++            "-msse4.1",
++        ],
++        "//conditions:default": [],
++    }),
 +    linkopts = ["-pthread"],
-+    local_defines = ["ASTCENC_DECOMPRESS_ONLY"],
++    local_defines = ["ASTCENC_DECOMPRESS_ONLY"] + select({
++        "@platforms//cpu:x86_64": [
++            "ASTCENC_AVX=2",
++            "ASTCENC_F16C=1",
++            "ASTCENC_NEON=0",
++            "ASTCENC_POPCNT=1",
++            "ASTCENC_SSE=41",
++        ],
++        "//conditions:default": [],
++    }),
 +    strip_include_prefix = "Source",
 +)

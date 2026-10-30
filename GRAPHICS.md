@@ -310,7 +310,10 @@ ASTC data reaches it some way the CPU cannot decode, such as an image-to-image
 copy, is still decoded on the GPU, with an "ASTC image ... decoding it on the
 GPU" warning in crosvm's log. The start of the log says which: "ASTC textures
 decoded on the CPU (Mesa Dozen)", and each Vulkan device's line has "CPU
-decoding:on".
+decoding:on". The CPU decoder is built for AVX2 (with F16C, POPCNT and
+SSE4.1), which the processors of hosts that run Dozen have; on an x86-64 CPU
+without them, gfxstream decodes on the GPU and logs "ASTC CPU decoding is
+unavailable".
 - The `libd3d12.so` shim ([tools/wsl/d3d12_shim.c](tools/wsl/d3d12_shim.c))
   first in `LD_LIBRARY_PATH`. It makes every Vulkan instance in crosvm share
   one D3D12 device. WSL allows about ten D3D12 devices per process, and a

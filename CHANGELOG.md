@@ -569,7 +569,9 @@
   Asphalt 8 and 9 on a Radeon 780M. The CPU decoder, which Ika's build of
   gfxstream left out, now decodes any number of uploads to an image, with
   padded rows, array layers and partial regions, and frees its staging memory
-  once the upload has run. `IKA_ASTC_DECODE=gpu` or `cpu` chooses on any host.
+  once the upload has run. It is built for AVX2, which hosts that run Dozen
+  have; without it gfxstream decodes on the GPU. `IKA_ASTC_DECODE=gpu` or
+  `cpu` chooses on any host.
 - Android no longer fails to start where PipeWire cannot make a stream:
   ika_stream freed the stream's properties a second time after PipeWire had,
   aborted, and took the device down with it. Its audio is then dropped.
