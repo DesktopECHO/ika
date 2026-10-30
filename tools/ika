@@ -299,9 +299,10 @@ ika_ini_write_default() {
 [compute]
 # Virtual CPUs and guest memory. "auto" sizes them from the host: half the
 # performance cores, counting each hardware thread (at most cpu_cap; under WSL,
-# all the CPUs WSL has), and a quarter of the host's memory rounded up to a multiple of memory_step_mb (at
-# most memory_cap_mb). Each vCPU is pinned to a host CPU, from the highest CPU
-# number down. Command-line equivalents: --cpus=, --memory_mb=
+# all the CPUs WSL has), and a quarter of the host's memory rounded up to a
+# multiple of memory_step_mb (at most memory_cap_mb; under WSL, all the memory
+# WSL has less 1 GB for Linux). Each vCPU is pinned to a host CPU, from the
+# highest CPU number down. Command-line equivalents: --cpus=, --memory_mb=
 cpus = auto
 memory_mb = auto
 cpu_cap = 12
@@ -954,6 +955,13 @@ default_guest_memory_mb() {
   mem_mb="${mem_mb//[!0-9]/}"
   if [[ -z "${mem_mb}" ]] || (( mem_mb <= 0 )); then
     echo "${DEFAULT_GUEST_MEMORY_FALLBACK_MB}"
+    return 0
+  fi
+
+  # Under WSL the memory is already the share Windows gives Linux (memory= in
+  # .wslconfig): all of it, less 1 GB for Linux.
+  if [[ "${IKA_ON_WSLG}" == true ]] && (( mem_mb > 1024 )); then
+    echo $((mem_mb - 1024))
     return 0
   fi
 

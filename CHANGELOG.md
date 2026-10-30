@@ -375,6 +375,10 @@
   a second at its start and a stall at each hover. The plugin's own button
   icons, hidden under the glyphs, come from an empty stand-in theme for the
   same reason. The close button's glyph turns white on its red.
+- Under WSL, `memory_mb = auto` gives Android all the memory WSL has
+  (`memory` in `.wslconfig`) less 1 GB for Linux, instead of a quarter of it
+  rounded up to 2 GB: WSL's memory is already the share Windows gives Linux,
+  as `cpus = auto` takes all of WSL's CPUs.
 
 ### Hardware video decoding
 - `ika start` gives Android a V4L2 video decoder backed by the host's VA-API
