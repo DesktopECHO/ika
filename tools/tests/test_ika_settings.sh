@@ -47,7 +47,7 @@ settings() {
           DEFAULT_DATA_GB CVD_BOOT_TIMEOUT_SEC IKA_STOP_GRACE_SEC \
           IKA_SCRCPY_REBOOT_TIMEOUT_SEC IKA_MIN_OPEN_FILES \
           IKA_KERNEL_PAGE_SIZE IKADPI IKA_SCRCPY IKA_INSTALL_TIMEOUT_SEC \
-          IKA_APP_MENU_POLL_SEC IKA_GSF_ID_TIMEOUT_SEC GFXSTREAM_VULKAN \
+          IKA_APP_MENU_POLL_SEC IKA_BACKGROUND_GAMES IKA_GSF_ID_TIMEOUT_SEC GFXSTREAM_VULKAN \
           IKA_CAMERA_POWER_LINE_FREQUENCY IKA_LOWCPU IKA_LOWCPU_REFRESH_RATE_HZ \
           IKA_HOST_CACHED_MEMORY \
           BACKUP_LIST_ADB_TIMEOUT_SEC BACKUP_COPY_ADB_TIMEOUT_SEC; do
@@ -84,6 +84,7 @@ settings "${T}/generated" >/dev/null
 expect_line "${builtin_settings}" "CVD_GPU_DEFAULTS.gpu_mode=gfxstream_guest_angle" "built-in gpu_mode"
 expect_line "${builtin_settings}" "IKA_CAMERA_POWER_LINE_FREQUENCY=auto" "built-in camera anti-flicker"
 expect_line "${builtin_settings}" "IKA_HOST_CACHED_MEMORY=off" "built-in host cached memory"
+expect_line "${builtin_settings}" "IKA_BACKGROUND_GAMES=true" "built-in background games"
 
 # Edits override the defaults; "auto" keeps the calculated value.
 cat >"${T}/edited/ika.ini" <<'EOF'
@@ -113,6 +114,7 @@ bit_rate = 40M
 codec_options =
 hidden_apps = com.example.one, com.example.two
 game_apps = com.example.game
+background_games = false
 
 [timeouts]
 install_timeout_sec = 90
@@ -147,6 +149,7 @@ reject_line "${edited}" "[ika] ${T}/edited/ika.ini: unknown setting 'apps.bit_ra
 reject_line "${edited}" "[ika] ${T}/edited/ika.ini: unknown setting 'apps.codec_options'; ignored" "former codec options"
 expect_line "${edited}" "IKA_HIDDEN_APPS=com.example.one com.example.two" "hidden apps"
 expect_line "${edited}" "IKA_GAME_APPS=com.example.game" "game apps"
+expect_line "${edited}" "IKA_BACKGROUND_GAMES=false" "background games"
 expect_line "${edited}" "IKA_INSTALL_TIMEOUT_SEC=90" "install timeout"
 expect_line "${edited}" "IKA_STOP_GRACE_SEC=10" "stop grace"
 expect_line "${edited}" "IKA_CAMERA_POWER_LINE_FREQUENCY=60" "camera anti-flicker"
@@ -169,8 +172,9 @@ expect_line "${mistakes}" "$(grep '^CVD_COMPUTE_DEFAULTS.cpus=' <<<"${builtin_se
 
 # An environment variable wins over the file.
 printf '[apps]\nmenu_poll_sec = 9\n[system]\nstop_grace_sec = 10\n' >"${T}/edited/ika.ini"
-from_env="$(settings "${T}/edited" IKA_APP_MENU_POLL_SEC=3 IKA_STOP_GRACE_SEC=5)"
+from_env="$(settings "${T}/edited" IKA_APP_MENU_POLL_SEC=3 IKA_STOP_GRACE_SEC=5 IKA_BACKGROUND_GAMES=false)"
 expect_line "${from_env}" "IKA_APP_MENU_POLL_SEC=3" "env menu poll"
+expect_line "${from_env}" "IKA_BACKGROUND_GAMES=false" "env background games"
 expect_line "${from_env}" "IKA_STOP_GRACE_SEC=5" "env stop grace"
 reject_line "${from_env}" "IKA_APP_MENU_POLL_SEC=9" "env beats file"
 

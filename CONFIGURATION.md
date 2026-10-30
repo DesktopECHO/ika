@@ -22,13 +22,13 @@ A setting is taken from the first of these that gives it:
 | `ika restart [OPTIONS]` | Stops the VM and starts it again with the options given, or starts it if it is stopped. |
 | `ika status` | Says whether the VM is running, and how the console's frames reach it (`DMA-BUFs`, or `pixels read back by crosvm`, the slow path). |
 | `ika reset [--data_gb=GB]` | Factory-resets Android, after you type `y`. See [Factory reset](#factory-reset). |
-| `ika app` | Lists the apps that can be opened, with open app windows in bold. |
+| `ika app` | Lists the apps that can be opened, with open app windows in bold and games in the background marked "(background)". |
 | `ika app NAME [OPTIONS]` | Opens an app in its own window. See [App windows](USAGE.md#app-windows). |
 | `ika app --options NAME` | Opens the app's start options window. |
 | `ika app --controller NAME` | Opens the start options window on its Gamepad Emulation tab. |
 | `ika app NAME --dpi=N` | Opens an app window at a display density of 96 to 999 for this start (`auto`: the console's). |
 | `ika app --info NAME` | Opens Android's App info page for the app. |
-| `ika app close NAME` / `--all` | Closes an app window, or all of them. |
+| `ika app close NAME` / `--all` | Closes an app window, or all of them, and ends games in the background. |
 | `ika app sync [--remove]` | Adds the Android apps to the desktop's app menu at once, or removes them and turns the automatic sync off. |
 | `ika install FILE.apk...` | Installs APK files, replacing an installed version of the same app and keeping its data. |
 | `ika remove NAME` | Uninstalls an app and deletes its data, its window state and its controller mapping. |
@@ -340,6 +340,7 @@ file can be written by hand for any app.
 | `menu_poll_sec` | `5` | Seconds between the app menu watcher's checks for installed or removed apps. `IKA_APP_MENU_POLL_SEC` |
 | `hidden_apps` | Android Switch, Google search, Calculator, Calendar, Clock, Contacts, Recorder, AudioFX | Package names kept out of `ika app`, name matching and the desktop menu. They still open by package name |
 | `game_apps` | (empty) | Package names treated as games, besides the apps that declare themselves games |
+| `background_games` | `true` | Opening a game sends the other games with open windows to the background, on their own displays turned off, instead of leaving their windows open (see [Games in the background](USAGE.md#games-in-the-background)). `IKA_BACKGROUND_GAMES` |
 
 ### [timeouts]
 
@@ -374,6 +375,7 @@ Each of these overrides its setting in `ika.ini`:
 | `IKA_SCRCPY` | `[console] scrcpy_args` |
 | `IKA_SCRCPY_REBOOT_TIMEOUT_SEC` | `[console] reboot_timeout_sec` |
 | `IKA_APP_MENU_POLL_SEC` | `[apps] menu_poll_sec` |
+| `IKA_BACKGROUND_GAMES` | `[apps] background_games` |
 | `IKA_INSTALL_TIMEOUT_SEC`, `IKA_GSF_ID_TIMEOUT_SEC` | `[timeouts] install_timeout_sec`, `gsf_id_timeout_sec` |
 | `IKA_STOP_GRACE_SEC`, `IKA_MIN_OPEN_FILES`, `IKA_KERNEL_PAGE_SIZE` | `[system] stop_grace_sec`, `min_open_files`, `kernel_page_size` |
 

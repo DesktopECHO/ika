@@ -165,6 +165,26 @@ close the window and open it again.
   mouse's buttons all go to the app, except Shift + right click, which is
   Back.
 
+### Games in the background
+
+Opening a game sends the other games with open windows to the background,
+so that one game runs at a time:
+
+- Their windows close, but each game stays on its own display, out of the
+  console's way. The display is turned off, so Android stops the game, as
+  when a phone's screen goes off, without ending it.
+- Opening the game again, from the menu or with `ika app`, turns its display
+  back on in a new window, and the game goes on where it left off instead of
+  starting anew.
+- `ika app` marks games in the background "(background)". `ika app close
+  NAME` ends one, `ika app close --all` ends them with the windows, and
+  `ika stop`, `ika restart`, `ika reset` and a switch to TV mode end them all.
+- Apps that are not games keep their windows, and opening one does not touch
+  the games. Android can still end a game in the background when it needs the
+  memory; it then starts anew when opened.
+- `background_games = false` in the `[apps]` section of `ika.ini`, or
+  `IKA_BACKGROUND_GAMES=false`, leaves the other games' windows open.
+
 ### Right-click actions
 
 Right-click an app in the menu for:
