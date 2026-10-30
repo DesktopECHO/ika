@@ -522,6 +522,15 @@
   are in the ROM too.
 
 ### Fixes
+- Android no longer fails to start where PipeWire cannot make a stream:
+  ika_stream freed the stream's properties a second time after PipeWire had,
+  aborted, and took the device down with it. Its audio is then dropped.
+- On WSLg Cuttlefish's audio goes to WSLg's PulseAudio server only. When
+  ika_stream cannot play there it logs an error and drops the audio, the
+  microphone silent, instead of trying PipeWire, which WSL distributions do
+  not run: a distribution without `libpulse0`, which only a recommended
+  package brought in, did, and without PipeWire's `client.conf` hit the
+  abort above. ika-base now depends on `libpulse0` (`pulseaudio-libs`).
 - Input events and status feedback no longer sit in crosvm's virtio input
   queues until the next event (vhost-user input with EVENT_IDX).
 - On hosts whose GL driver has only non-coherent framebuffer fetch, such as

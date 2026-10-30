@@ -26,6 +26,9 @@
 #include "cuttlefish/host/frontend/webrtc/audio_handler.h"
 #include "cuttlefish/host/frontend/webrtc/audio_stream_config.h"
 #include "cuttlefish/host/frontend/webrtc/ika_stream.h"
+#include "cuttlefish/host/frontend/webrtc/libcommon/audio_source.h"
+#include "cuttlefish/host/frontend/webrtc/libdevice/audio_frame_buffer.h"
+#include "cuttlefish/host/frontend/webrtc/libdevice/audio_sink.h"
 #include "cuttlefish/host/frontend/webrtc/pipewire_audio_sink.h"
 #include "cuttlefish/host/frontend/webrtc/pipewire_audio_source.h"
 #include "cuttlefish/host/frontend/webrtc/pulse_audio_sink.h"
@@ -52,6 +55,22 @@ std::unique_ptr<AudioServer> CreateAudioServer(int audio_server_fd) {
   return std::make_unique<AudioServer>(server_fd);
 }
 
+// Drops the guest's audio, keeping its sound device working.
+class SilentAudioSink : public webrtc_streaming::AudioSink {
+ public:
+  void OnFrame(const webrtc_streaming::AudioFrameBuffer&, int64_t) override {}
+};
+
+// Gives the guest's microphone silence, as PulseAudioSource does without a
+// stream.
+class SilentAudioSource : public webrtc_streaming::AudioSource {
+ public:
+  int GetMoreAudioData(void*, int, int, int, int, bool& muted) override {
+    muted = true;
+    return 0;
+  }
+};
+
 std::shared_ptr<AudioHandler> SetupAudio() {
   if (FLAGS_audio_server_fd < 0) {
     return nullptr;
@@ -68,15 +87,20 @@ std::shared_ptr<AudioHandler> SetupAudio() {
   std::shared_ptr<webrtc_streaming::AudioSink> audio_sink;
   std::shared_ptr<webrtc_streaming::AudioSource> audio_source;
   // WSLg plays on Windows from its own PulseAudio server, whose RDP client
-  // holds ~250 ms; PipeWire's tunnel to it resamples trying to get below that
+  // holds ~250 ms; PipeWire's tunnel to it resamples trying to get below that.
+  // There it is the only way out: without it the guest's audio is dropped.
   if (const char* server = WslgPulseServer()) {
     audio_sink = PulseAudioSink::Create(server, stream_config.mixer_settings);
     if (audio_sink) {
       audio_source = std::make_shared<PulseAudioSource>(server);
       LOG(INFO) << "Playing Cuttlefish audio on PulseAudio server " << server;
+    } else {
+      audio_sink = std::make_shared<SilentAudioSink>();
+      audio_source = std::make_shared<SilentAudioSource>();
+      LOG(ERROR) << "Cannot play on WSLg's PulseAudio server " << server
+                 << "; Cuttlefish audio will be dropped";
     }
-  }
-  if (!audio_sink) {
+  } else {
     audio_sink = std::make_shared<PipeWireAudioSink>(
         "ika", stream_config.mixer_settings);
     audio_source = std::make_shared<PipeWireAudioSource>("ika.microphone");

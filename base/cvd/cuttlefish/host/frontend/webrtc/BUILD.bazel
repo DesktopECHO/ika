@@ -321,6 +321,8 @@ cf_cc_binary(
         ":libcuttlefish_webrtc_pulse_audio_source",
         "//cuttlefish/common/libs/fs",
         "//cuttlefish/host/frontend/webrtc/libcommon:audio_source",
+        "//cuttlefish/host/frontend/webrtc/libdevice:audio_frame_buffer",
+        "//cuttlefish/host/frontend/webrtc/libdevice:audio_sink",
         "//cuttlefish/host/libs/audio_connector",
         "//cuttlefish/host/libs/config:cuttlefish_config",
         "//cuttlefish/host/libs/config:logging",

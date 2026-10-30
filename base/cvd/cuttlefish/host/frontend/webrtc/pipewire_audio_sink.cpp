@@ -109,11 +109,12 @@ bool PipeWireAudioSink::InitPipeWire(const std::string& node_name) {
       .process = &PipeWireAudioSink::OnProcess,
   };
 
+  // Takes properties, and frees them itself when it fails (as without
+  // PipeWire's client.conf).
   stream_ =
       pw_stream_new_simple(pw_thread_loop_get_loop(thread_loop_),
                            node_name.c_str(), properties, &kStreamEvents, this);
   if (stream_ == nullptr) {
-    pw_properties_free(properties);
     pw_thread_loop_unlock(thread_loop_);
     return false;
   }

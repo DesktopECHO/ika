@@ -155,11 +155,12 @@ bool PipeWireAudioSource::InitPipeWire(int num_channels, int sample_rate) {
       .state_changed = &PipeWireAudioSource::OnStateChanged,
       .process = &PipeWireAudioSource::OnProcess,
   };
+  // Takes properties, and frees them itself when it fails (as without
+  // PipeWire's client.conf).
   stream_ = pw_stream_new_simple(pw_thread_loop_get_loop(thread_loop_),
                                  node_name_.c_str(), properties, &kStreamEvents,
                                  this);
   if (stream_ == nullptr) {
-    pw_properties_free(properties);
     pw_thread_loop_unlock(thread_loop_);
     return false;
   }
