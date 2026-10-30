@@ -298,6 +298,13 @@
   pass old host data to the guest.
 
 ### Console window
+- An app window opens about a second sooner, and the console a little: `ika`
+  asks the guest for what it needs in one adb round trip, keeps
+  `vulkaninfo`'s answer for the host boot, reads `wayland-info` once, and on
+  WSLg asks Windows whether Shift is held in the background. Where `timeout`
+  is uutils' (Ubuntu 25.10 and later), which polls for its command's end
+  every 0.1 s, perl's alarm times commands out instead. scrcpy polls for its
+  server every 20 ms instead of 100.
 - The console and app windows are Wayland windows on a Wayland session and
   X11 windows on an X11 session. scrcpy's SDL used to open an X11 window
   through Xwayland on a Wayland compositor without the fifo-v1 protocol

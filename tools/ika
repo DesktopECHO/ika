@@ -2578,18 +2578,33 @@ drm_display_size() {
   printf '%s\n' "${best}"
 }
 
+# wayland-info's output, read at most once per run: spawning it costs some
+# 30 ms, and the three host display probes below each want it, some from
+# subshells, which share the output read before them but not one of their own.
+_wayland_info_probed=""
+_wayland_info_output=""
+wayland_info_output() {
+  if [[ -z "${_wayland_info_probed}" ]]; then
+    _wayland_info_probed="yes"
+    if command -v wayland-info >/dev/null 2>&1; then
+      _wayland_info_output="$(wayland-info 2>/dev/null || true)"
+    fi
+  fi
+  [[ -n "${_wayland_info_output}" ]] || return 1
+  printf '%s\n' "${_wayland_info_output}"
+}
+
 # Largest "current" Wayland output mode as WxH, falling back to the DRM
 # connectors in sysfs. Probed at most once per run and cached: a single start
-# queries it more than once (DPI heuristic + display ceiling) and spawning
-# wayland-info is comparatively expensive.
+# queries it more than once (DPI heuristic + display ceiling).
 _host_display_size_probed=""
 _host_display_size_value=""
 host_display_size() {
   if [[ -z "${_host_display_size_probed}" ]]; then
     _host_display_size_probed="yes"
-    if command -v wayland-info >/dev/null 2>&1; then
+    if wayland_info_output >/dev/null; then
       _host_display_size_value="$(
-        wayland-info 2>/dev/null | awk '
+        wayland_info_output | awk '
           /mode:/ { in_mode = 1; width = 0; height = 0; next }
           in_mode && /width:/ {
             w = $0; sub(/.*width:[[:space:]]*/, "", w);  width  = int(w)
@@ -2624,9 +2639,9 @@ _host_display_refresh_hz_value=""
 host_display_refresh_hz() {
   if [[ -z "${_host_display_refresh_hz_probed}" ]]; then
     _host_display_refresh_hz_probed="yes"
-    if command -v wayland-info >/dev/null 2>&1; then
+    if wayland_info_output >/dev/null; then
       _host_display_refresh_hz_value="$(
-        wayland-info 2>/dev/null | awk '
+        wayland_info_output | awk '
           /mode:/ { in_mode = 1; width = 0; height = 0; refresh = 0; next }
           in_mode && /width:/ {
             w = $0; sub(/.*width:[[:space:]]*/, "", w);  width  = int(w)
@@ -2678,9 +2693,9 @@ _host_display_logical_size_value=""
 host_display_logical_size() {
   if [[ -z "${_host_display_logical_size_probed}" ]]; then
     _host_display_logical_size_probed="yes"
-    if command -v wayland-info >/dev/null 2>&1; then
+    if wayland_info_output >/dev/null; then
       _host_display_logical_size_value="$(
-        wayland-info 2>/dev/null | awk '
+        wayland_info_output | awk '
           /logical_width:/ {
             line = $0
             sub(/.*logical_width:[[:space:]]*/, "", line)
@@ -2999,13 +3014,53 @@ VULKANINFO_SUMMARY=""
 # Empty until load_vulkaninfo_summary has run; then "ok" or "none".
 VULKANINFO_SUMMARY_STATE=""
 
+# What the summary depends on, as one line: the host boot and the drivers
+# Vulkan loads, the ICD files the environment names or those in the loader's
+# directories, by their modification times.
+vulkaninfo_cache_key() {
+  local boot_id
+  local -a paths=()
+  local stamps
+
+  read -r boot_id < /proc/sys/kernel/random/boot_id || return 1
+  IFS=: read -r -a paths <<<"${VK_DRIVER_FILES:-}:${VK_ICD_FILENAMES:-}:${VK_ADD_DRIVER_FILES:-}"
+  paths+=(/usr/share/vulkan/icd.d /usr/local/share/vulkan/icd.d /etc/vulkan/icd.d
+          "${XDG_DATA_HOME:-${HOME}/.local/share}/vulkan/icd.d")
+  stamps="$(stat -c '%n=%Y' "${paths[@]}" 2>/dev/null | tr '\n' ' ' || true)"
+  printf '%s %s %s\n' "${boot_id}" \
+    "${VK_DRIVER_FILES:-}|${VK_ICD_FILENAMES:-}|${VK_ADD_DRIVER_FILES:-}" "${stamps% }"
+}
+
+# Prints vulkaninfo's summary, kept for the host boot in a cache file (a key
+# line, then the summary): the devices do not change within one, and the
+# probe takes 0.2 s in every command on WSL (setup_wsl_gpu_env), twice for an
+# app window with its supervisor.
 probe_vulkaninfo_summary() {
+  local cache_file="${CVD_TMP_DIR}/vulkaninfo-summary"
+  local key=""
+  local cached_key
+  local summary
+
   command -v vulkaninfo >/dev/null 2>&1 || return 1
+
+  if [[ -d "${CVD_TMP_DIR}" ]] && key="$(vulkaninfo_cache_key)"; then
+    if { IFS= read -r cached_key && [[ "${cached_key}" == "${key}" ]] && cat; } \
+        2>/dev/null < "${cache_file}"; then
+      return 0
+    fi
+  fi
 
   # GPU classification does not need a presentation surface. Keep the probe
   # independent of X11/Wayland authentication, especially for SSH launches
   # that inherit DISPLAY without a usable authorization cookie.
-  env -u DISPLAY -u WAYLAND_DISPLAY vulkaninfo --summary 2>/dev/null
+  summary="$(env -u DISPLAY -u WAYLAND_DISPLAY vulkaninfo --summary 2>/dev/null)" \
+    || return 1
+  printf '%s\n' "${summary}"
+  if [[ -n "${key}" ]]; then
+    { (umask 077 && printf '%s\n%s\n' "${key}" "${summary}" > "${cache_file}.$$") \
+        && mv -f "${cache_file}.$$" "${cache_file}"; } 2>/dev/null \
+      || rm -f "${cache_file}.$$"
+  fi
 }
 
 # Runs vulkaninfo once and keeps its summary for the GPU checks that follow,
@@ -4577,8 +4632,7 @@ guest_ui_mode() {
   local adb_serial="$1"
   local leanback
 
-  leanback="$(host_adb 10 -s "${adb_serial}" shell cmd package has-feature \
-    android.software.leanback 2>/dev/null | tr -d '\r' || true)"
+  leanback="$(guest_shell_query "${adb_serial}" "${GUEST_QUERY_LEANBACK}")"
   case "${leanback}" in
     true) printf 'tv\n' ;;
     false) printf 'desktop\n' ;;
@@ -4855,7 +4909,12 @@ run_scrcpy_supervisor() {
     fi
   fi
 
-  previous_boot_id="$(adb_guest_boot_id "${adb_serial}" || true)"
+  # The boot id tells a reboot from a stop once the console is gone; an app
+  # window does not reopen after either, so it skips the round trip.
+  previous_boot_id=""
+  if [[ "${APP_WINDOW_SUPERVISOR:-false}" != "true" ]]; then
+    previous_boot_id="$(adb_guest_boot_id "${adb_serial}" || true)"
+  fi
   local saved_fullscreen
   if read_scrcpy_window_state "${SCRCPY_WINDOW_STATE_FILE}" \
       window_width window_height saved_fullscreen; then
@@ -5638,12 +5697,75 @@ guest_adb() {
   host_adb "${GUEST_ADB_TIMEOUT:-10}" -s "${adb_serial}" "$@"
 }
 
+# Guest shell queries an app window needs, which ensure_guest_ready runs
+# along with its boot check when given them, each adb round trip taking a
+# tenth of a second on its own. Their answers stay in GUEST_QUERY_CACHE, keyed
+# "SERIAL<TAB>QUERY", for guest_shell_query for the rest of the command.
+readonly GUEST_QUERY_LEANBACK="cmd package has-feature android.software.leanback"
+readonly GUEST_QUERY_DENSITY="wm density"
+declare -A GUEST_QUERY_CACHE=()
+
+guest_query_package_path() {
+  printf 'pm path %s\n' "$1"
+}
+
+# Prints the output of QUERY in the guest's shell, cached or over adb now.
+guest_shell_query() {
+  local adb_serial="$1"
+  local query="$2"
+  local key="${adb_serial}"$'\t'"${query}"
+
+  if [[ -n "${GUEST_QUERY_CACHE[${key}]+set}" ]]; then
+    printf '%s\n' "${GUEST_QUERY_CACHE[${key}]}"
+    return 0
+  fi
+  guest_adb "${adb_serial}" shell "${query}" 2>/dev/null | tr -d '\r' || true
+}
+
+# One adb round trip for the boot check and QUERY...: true once the guest has
+# booted, with the queries' answers in GUEST_QUERY_CACHE.
+guest_booted_with_queries() {
+  local adb_serial="$1"
+  shift
+  local separator="--ika-query-end--"
+  local command="getprop sys.boot_completed"
+  local query
+  local output
+  local line
+  local answer=""
+  local -a answers=()
+
+  for query in "$@"; do
+    command+="; echo ${separator}; ${query}"
+  done
+  output="$(host_adb 10 -s "${adb_serial}" shell "${command}" 2>/dev/null \
+    | tr -d '\r' || true)"
+  while IFS= read -r line; do
+    if [[ "${line}" == "${separator}" ]]; then
+      answers+=("${answer}")
+      answer=""
+    else
+      answer+="${line}"$'\n'
+    fi
+  done <<<"${output}"
+  answers+=("${answer}")
+  [[ "${answers[0]}" == 1$'\n' ]] || return 1
+  for query in "$@"; do
+    answer="${answers[1]-}"
+    answers=("${answers[@]:1}")
+    while [[ "${answer}" == *$'\n' ]]; do
+      answer="${answer%$'\n'}"
+    done
+    GUEST_QUERY_CACHE["${adb_serial}"$'\t'"${query}"]="${answer}"
+  done
+}
+
 app_is_installed() {
   local package="$1"
   local adb_serial="$2"
   local package_path
 
-  package_path="$(guest_adb "${adb_serial}" shell pm path "${package}" 2>/dev/null | tr -d '\r' || true)"
+  package_path="$(guest_shell_query "${adb_serial}" "$(guest_query_package_path "${package}")")"
   [[ "${package_path}" == package:* ]]
 }
 
@@ -5753,7 +5875,7 @@ guest_display_density() {
   local override
   local physical
 
-  output="$(guest_adb "${adb_serial}" shell wm density 2>/dev/null | tr -d '\r' || true)"
+  output="$(guest_shell_query "${adb_serial}" "${GUEST_QUERY_DENSITY}")"
   override="$(sed -n 's/^Override density: *\([0-9][0-9]*\).*/\1/p' <<<"${output}")"
   physical="$(sed -n 's/^Physical density: *\([0-9][0-9]*\).*/\1/p' <<<"${output}")"
   printf '%s\n' "${override:-${physical}}"
@@ -6153,7 +6275,10 @@ mode_app_window_size() {
 
 # Starts the VM without its console when it is not running, so that menu
 # launchers work while Ika is stopped, then waits for the guest to boot.
+# QUERY... are guest shell commands the caller needs next, answered in the boot
+# check's adb round trip when the guest has booted (see guest_shell_query).
 ensure_guest_ready() {
+  local -a queries=("$@")
   local adb_serial
   local deadline
   local autostart_lock_fd
@@ -6174,6 +6299,9 @@ ensure_guest_ready() {
   exec {autostart_lock_fd}>&-
 
   adb_serial="$(resolve_adb_serial)"
+  if (( ${#queries[@]} )) && guest_booted_with_queries "${adb_serial}" "${queries[@]}"; then
+    return 0
+  fi
   deadline="$(make_deadline "${CVD_BOOT_MAX_SEC}")"
   until adb_boot_completed "${adb_serial}"; do
     has_live_cvd_processes || die "the Android virtual device stopped while booting"
@@ -8148,9 +8276,27 @@ open_app_window() {
   local attempt
   local -a scrcpy_env=()
   local -a scrcpy_cmd=()
+  local -a guest_queries=()
 
   require_executable "${SCRCPY_BIN}" "console client"
-  ensure_guest_ready
+  # Shift held at a menu launch opens the app's Startup Options instead
+  # (APP_SHIFT_CHECK): answered now when Ika would first have to start, else
+  # below, once the guest queries have run alongside the probe.
+  if [[ "${APP_SHIFT_CHECK:-}" == "true" ]] && ! has_live_cvd_processes \
+      && windows_shift_held; then
+    edit_app_settings "${name}" 1
+    return 0
+  fi
+  # The guest answers the queries below along with the boot check, in the one
+  # adb round trip, instead of one of a tenth of a second each.
+  if is_app_package_name "${name}"; then
+    guest_queries+=("$(guest_query_package_path "${name}")")
+  fi
+  guest_queries+=("${GUEST_QUERY_LEANBACK}" "${GUEST_QUERY_DENSITY}")
+  # wayland-info, read once here for the host display probes below, which run
+  # in subshells that could not share it.
+  wayland_info_output >/dev/null 2>&1 || true
+  ensure_guest_ready "${guest_queries[@]}"
   adb_serial="$(resolve_adb_serial)"
 
   # A package name is used as given (menu launchers pass one); anything else is
@@ -8169,6 +8315,10 @@ open_app_window() {
     title="${label}"
   fi
   validate_app_package "${package}"
+  if [[ "${APP_SHIFT_CHECK:-}" == "true" ]] && windows_shift_held; then
+    edit_app_settings "${name}" 1
+    return 0
+  fi
   apply_saved_app_options "${package}" fullscreen_mode
   scrcpy_env=("IKA_APP_PACKAGE=${package}")
 
@@ -9544,17 +9694,47 @@ close_app_window() {
 }
 
 # Whether Shift is held down on the Windows desktop, on WSLg. PowerShell takes
-# about 0.3 s to answer.
-windows_shift_held() {
-  local keys
+# about 0.3 s to answer: start_windows_shift_probe asks in the background, so
+# that the work until the answer is needed runs meanwhile, and
+# windows_shift_held reads it then, or asks on the spot when no probe runs.
+# The answer is kept: Shift at the launch is what counts.
+WINDOWS_SHIFT_PROBE_FD=""
+WINDOWS_SHIFT_HELD=""
 
-  [[ "${IKA_ON_WSLG}" == true ]] || return 1
-  command -v powershell.exe >/dev/null 2>&1 || return 1
-  keys="$(with_timeout 5 powershell.exe -NoProfile -NonInteractive -Command \
+windows_shift_probe_command() {
+  with_timeout 5 powershell.exe -NoProfile -NonInteractive -Command \
     'Add-Type -AssemblyName System.Windows.Forms; [int][System.Windows.Forms.Control]::ModifierKeys' \
-    2>/dev/null | tr -d '\r')"
+    2>/dev/null | tr -d '\r'
+}
+
+start_windows_shift_probe() {
+  [[ "${IKA_ON_WSLG}" == true ]] || return 0
+  command -v powershell.exe >/dev/null 2>&1 || return 0
+  exec {WINDOWS_SHIFT_PROBE_FD}< <(windows_shift_probe_command)
+}
+
+windows_shift_held() {
+  local keys=""
+
+  if [[ -n "${WINDOWS_SHIFT_HELD}" ]]; then
+    [[ "${WINDOWS_SHIFT_HELD}" == true ]]
+    return
+  fi
+  [[ "${IKA_ON_WSLG}" == true ]] || return 1
+  if [[ -n "${WINDOWS_SHIFT_PROBE_FD}" ]]; then
+    read -r keys <&"${WINDOWS_SHIFT_PROBE_FD}" || true
+    exec {WINDOWS_SHIFT_PROBE_FD}<&-
+    WINDOWS_SHIFT_PROBE_FD=""
+  else
+    command -v powershell.exe >/dev/null 2>&1 || return 1
+    keys="$(windows_shift_probe_command)"
+  fi
+  WINDOWS_SHIFT_HELD="false"
   # Keys.Shift
-  [[ "${keys}" =~ ^[0-9]+$ ]] && (( keys & 0x10000 ))
+  if [[ "${keys}" =~ ^[0-9]+$ ]] && (( keys & 0x10000 )); then
+    WINDOWS_SHIFT_HELD="true"
+  fi
+  [[ "${WINDOWS_SHIFT_HELD}" == true ]]
 }
 
 run_app_command() {
@@ -9706,12 +9886,11 @@ run_app_command() {
     return 0
   fi
   # Windows' Start menu and task bar offer no launcher actions: on WSLg, an app
-  # launched from them with Shift held down (SHIFT_AT_LAUNCH, set by main)
-  # opens its Startup Options instead, as the launcher's "Startup options"
-  # action does on a Linux desktop.
-  if [[ "${launcher}" == "true" && "${SHIFT_AT_LAUNCH:-}" == "true" ]]; then
-    edit_app_settings "${name}" 1
-    return 0
+  # launched from them with Shift held down opens its Startup Options instead,
+  # as the launcher's "Startup options" action does on a Linux desktop. main
+  # asked Windows in the background; open_app_window reads the answer.
+  if [[ "${launcher}" == "true" && -n "${WINDOWS_SHIFT_PROBE_FD}" ]]; then
+    APP_SHIFT_CHECK="true"
   fi
   open_app_window "${name}" "${fullscreen_mode}" "${title}" "${window_size}" "" "${dpi_given}"
 }
@@ -10712,19 +10891,19 @@ main() {
   local -a start_args
 
   # On WSLg, Ika or an app started from the Windows Start menu or task bar
-  # with Shift held down opens its Startup Options instead (an app's in
-  # run_app_command). Asked first, before the GPU probe below takes seconds,
-  # while Shift is still held.
-  if [[ ! -t 0 && ! -t 2 ]] \
-      && { [[ "${command}" == "start" ]] \
-           || [[ "${command}" == "app" && -n "${2:-}" && "${2}" != -* \
-                 && "${2}" != "sync" && "${2}" != "close" ]]; } \
-      && windows_shift_held; then
-    SHIFT_AT_LAUNCH="true"
-  fi
-  if [[ "${command}" == "start" && "${SHIFT_AT_LAUNCH:-}" == "true" ]]; then
-    edit_ika_settings
-    return 0
+  # with Shift held down opens its Startup Options instead. Asked first, while
+  # Shift is still held: Ika's before the GPU probe below takes seconds, an
+  # app's in the background, answered in open_app_window once the guest
+  # queries have run alongside it.
+  if [[ ! -t 0 && ! -t 2 ]]; then
+    if [[ "${command}" == "start" ]] && windows_shift_held; then
+      edit_ika_settings
+      return 0
+    fi
+    if [[ "${command}" == "app" && -n "${2:-}" && "${2}" != -* \
+          && "${2}" != "sync" && "${2}" != "close" ]]; then
+      start_windows_shift_probe
+    fi
   fi
 
   ika_ini_warn_unknown
