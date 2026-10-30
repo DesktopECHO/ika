@@ -114,6 +114,9 @@ Requires:       curl
 Requires:       desktop-file-utils
 # ika app reports progress and errors from menu launchers with notify-send.
 Requires:       libnotify
+# ika_stream plays audio on WSLg's PulseAudio server through a dlopen()ed
+# libpulse-simple, which the automatic requirements miss.
+Requires:       pulseaudio-libs
 Requires:       dnsmasq
 Requires:       iproute
 Requires:       libX11

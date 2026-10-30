@@ -221,11 +221,15 @@ void AudioMixer::OnPlayback(uint32_t stream_id, uint32_t stream_sample_rate,
 void AudioMixer::MixerLoop() {
   static constexpr auto kInterval = std::chrono::milliseconds(10);  // milliseconds
 
-  auto next_frame_time = std::chrono::system_clock::now();
+  // Paced by the monotonic clock, which the wall clock's steps and slews do
+  // not move; frames are stamped with wall time
+  auto next_frame_time = std::chrono::steady_clock::now();
+  auto wall_offset = std::chrono::system_clock::now().time_since_epoch() -
+                     next_frame_time.time_since_epoch();
 
   while (!stop_mixer_.load()) {
     std::unique_lock<std::mutex> lock(mutex_);
-    if (next_frame_time > std::chrono::system_clock::now() &&
+    if (next_frame_time > std::chrono::steady_clock::now() &&
         mixer_cv_.wait_until(lock, next_frame_time) ==
             std::cv_status::no_timeout) {
       continue;
@@ -238,7 +242,9 @@ void AudioMixer::MixerLoop() {
       if (stop_mixer_.load()) {
         return;
       }
-      next_frame_time = std::chrono::system_clock::now();
+      next_frame_time = std::chrono::steady_clock::now();
+      wall_offset = std::chrono::system_clock::now().time_since_epoch() -
+                    next_frame_time.time_since_epoch();
     }
 
     if (last_active_frame_ < chunk_frames_count_) {
@@ -254,7 +260,7 @@ void AudioMixer::MixerLoop() {
 
     const int64_t timestamp_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(
-            next_frame_time.time_since_epoch())
+            next_frame_time.time_since_epoch() + wall_offset)
             .count();
     audio_sink_->OnFrame(audio_frame_buffer, timestamp_ms);
     next_frame_time += kInterval;
