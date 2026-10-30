@@ -233,7 +233,7 @@ missing_components() {
   fi
 
   if [[ -d /mnt/wslg ]] && ! start_menu_linked; then
-    printf 'start-menu\tthe Windows Start menu cannot show Ika'"'"'s Android apps: %s is not a link to %s\n' \
+    printf 'start-menu\tthe Windows Start menu cannot show Ika'"'"'s Android apps, and Ika'"'"'s windows share their task bar button with other distributions'"'"': %s is not a link to %s\n' \
       "${SYSTEM_APPLICATIONS_DIR}" "$(user_applications_dir)"
   fi
 
