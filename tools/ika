@@ -19,6 +19,47 @@ PACKAGED_WSL_GPU_DIR="/usr/lib/cuttlefish-common/wsl"
 # desktop, whose task bar matches windows to desktop entries in its own way.
 IKA_ON_WSLG=false
 [[ ! -d /mnt/wslg ]] || IKA_ON_WSLG=true
+
+# Windows makes a WSLg window's task bar identity from its app ID alone, so
+# the windows of an app ID in different WSL distributions share one task bar
+# button, with the name, icon and command of whichever Windows met first. On
+# WSLg, Ika's app IDs carry the distribution's name, as this prints it: in
+# lower case, with dashes for anything else than letters and digits (WSLg
+# keeps a desktop entry under the last dot-separated part of its name only).
+# Prints nothing outside WSLg.
+wslg_distro_id() {
+  local name="${WSL_DISTRO_NAME:-}"
+
+  [[ "${IKA_ON_WSLG}" == true ]] || return 0
+  name="${name,,}"
+  printf '%s\n' "${name//[^a-z0-9]/-}"
+}
+
+# WSLg reads the desktop entries of the system's applications directories
+# only; ika-wsl-setup links this one of them to the user's.
+WSLG_LINKED_APPLICATIONS_DIR="/usr/local/share/applications"
+IKA_DESKTOP_ENTRY="/usr/share/applications/ika.desktop"
+
+wslg_reads_user_applications() {
+  [[ "$(readlink -f "${WSLG_LINKED_APPLICATIONS_DIR}")" \
+    == "$(readlink -f "${XDG_DATA_HOME:-${HOME}/.local/share}/applications")" ]]
+}
+
+# The app ID of Ika's own windows, the console's and Startup Options': on
+# WSLg ika-DISTRIBUTION, once write_wslg_console_entry has written its desktop
+# entry where WSLg reads it; otherwise ika.desktop's, ika.
+console_app_id() {
+  local distro
+
+  distro="$(wslg_distro_id)"
+  if [[ -n "${distro}" \
+      && -f "${XDG_DATA_HOME:-${HOME}/.local/share}/applications/ika-${distro}.desktop" ]] \
+      && wslg_reads_user_applications; then
+    printf 'ika-%s\n' "${distro}"
+  else
+    printf 'ika\n'
+  fi
+}
 SCRCPY_ICON_DIR_DEFAULT="/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps"
 IKA_SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 
@@ -5650,9 +5691,11 @@ start_scrcpy_with_retries() {
 
   append_scrcpy_extra_args scrcpy_cmd console
   append_scrcpy_env scrcpy_env
-  # ika.desktop's ID. Otherwise SDL uses the executable name, scrcpy, which
-  # KDE's taskbar also derives for app windows and would match to the console.
-  scrcpy_env+=("SDL_APP_ID=ika")
+  # ika.desktop's ID, or on WSLg the distribution's (see console_app_id).
+  # Otherwise SDL uses the executable name, scrcpy, which KDE's taskbar also
+  # derives for app windows and would match to the console.
+  write_wslg_console_entry
+  scrcpy_env+=("SDL_APP_ID=$(console_app_id)")
 
   if [[ "${#scrcpy_env[@]}" -gt 0 ]]; then
     scrcpy_cmd=(
@@ -6242,11 +6285,17 @@ app_window_title() {
 # Prints an app window's app ID, which its launcher's file name repeats:
 # ika-PACKAGE. WSLg keeps a desktop entry under the last dot-separated part of
 # its name only, and finds no entry, and so no icon, for an app ID with dots;
-# there the dots become dashes, which package names cannot have.
+# there the dots become dashes, which package names cannot have, and the
+# distribution's name comes first (see wslg_distro_id): ika-DISTRIBUTION-PACKAGE.
 app_window_id() {
   local id="ika-$1"
+  local distro
 
-  [[ "${IKA_ON_WSLG}" != true ]] || id="${id//./-}"
+  if [[ "${IKA_ON_WSLG}" == true ]]; then
+    distro="$(wslg_distro_id)"
+    id="ika-${distro:+${distro}-}$1"
+    id="${id//./-}"
+  fi
   printf '%s\n' "${id}"
 }
 
@@ -6650,9 +6699,9 @@ set_yad_env() {
 # desktop entry a window's class names, and yad's own, "yad", names none.
 # WSLg skips desktop entries with NoDisplay, as ika-startup-options.desktop
 # has, and shows the generic Linux icon for their windows; there they take
-# Ika's own class.
+# the console's (see console_app_id).
 APP_SETTINGS_WINDOW_CLASS="ika-startup-options"
-[[ "${IKA_ON_WSLG}" != true ]] || APP_SETTINGS_WINDOW_CLASS="ika"
+[[ "${IKA_ON_WSLG}" != true ]] || APP_SETTINGS_WINDOW_CLASS="$(console_app_id)"
 APP_SETTINGS_WINDOW_OPTIONS=(--name="${APP_SETTINGS_WINDOW_CLASS}" --class="${APP_SETTINGS_WINDOW_CLASS}")
 
 # Whether yad has --css, which gives its CSS to every widget of the window.
@@ -8758,6 +8807,48 @@ write_file_if_changed() {
   fi
   mkdir -p "$(dirname "${path}")"
   printf '%s\n' "${content}" > "${path}"
+}
+
+# On WSLg, gives the console the desktop entry of its app ID (see
+# console_app_id), ika-DISTRIBUTION.desktop, a copy of ika.desktop, in the
+# user's applications directory, where WSLg reads it once ika-wsl-setup has
+# linked it. An ika.desktop there with Hidden=true takes ika.desktop's own out
+# of the Windows Start menu, which WSLg reads first; both are named Ika, and
+# WSLg names a Start menu shortcut after the entry's Name. When ika-base is
+# installed again, WSLg reads ika.desktop anew, and its shortcut takes the
+# console entry's place: hiding it again removes that shortcut, so the console
+# entry is written again after it. An entry for another name of the
+# distribution, since renamed, goes first. Does nothing outside WSLg, or when
+# WSLg does not read the user's entries.
+write_wslg_console_entry() {
+  local system_entry="${IKA_DESKTOP_ENTRY}"
+  local dir="${XDG_DATA_HOME:-${HOME}/.local/share}/applications"
+  local distro
+  local entry
+  local hidden
+  local file
+
+  distro="$(wslg_distro_id)"
+  [[ -n "${distro}" && -f "${system_entry}" ]] || return 0
+  wslg_reads_user_applications || return 0
+  entry="${dir}/ika-${distro}.desktop"
+  hidden="${dir}/ika.desktop"
+  mkdir -p "${dir}"
+
+  for file in "${dir}"/ika-*.desktop; do
+    if [[ "${file}" != "${entry}" ]] && grep -qx 'X-Ika-Console=true' "${file}" 2>/dev/null; then
+      rm -f "${file}"
+    fi
+  done
+  # dpkg gives an installed file the time it has in the package; the time of
+  # its last change of status is that of its installation.
+  if [[ ! -f "${hidden}" ]] \
+      || (( $(stat -c %Z "${system_entry}") > $(stat -c %Y "${hidden}") )); then
+    printf '[Desktop Entry]\nType=Application\nName=Ika\nHidden=true\n' > "${hidden}"
+    rm -f "${entry}"
+  fi
+  sed "s/^StartupWMClass=.*/StartupWMClass=ika-${distro}\nX-Ika-Console=true/" "${system_entry}" \
+    | write_file_if_changed "${entry}" || true
 }
 
 # Rewrites APP_GAMES_FILE from the guest's game mode service, for the apps in

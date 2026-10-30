@@ -354,6 +354,16 @@
   a blank icon and a right-click entry starting that distribution. Ika
   removes such shortcuts, those of distributions no longer registered, when
   it starts and when a window closes.
+- Ika's windows in different WSL distributions no longer share a task bar
+  button, whose name, icon and right-click entry were those of whichever
+  distribution Windows met first: on WSLg their app IDs carry the
+  distribution's name. The console's is `ika-DISTRIBUTION`, whose desktop
+  entry, a copy of `ika.desktop`, Ika writes to `~/.local/share/applications`,
+  with an `ika.desktop` there that hides the package's own from WSLg, so that
+  the Start menu keeps one Ika; app windows' are `ika-DISTRIBUTION-PACKAGE`,
+  and their launchers are renamed at the next app menu sync. It needs the
+  link from `/usr/local/share/applications` that `ika-wsl-setup` makes;
+  without it the console keeps `ika`.
 - Ika's windows on Windows have Windows 11's title bar: its height, flat
   minimize, maximize and close buttons with Windows' glyphs (close turns red),
   and the title in Segoe UI Variable, which Ika copies from Windows to
