@@ -2504,7 +2504,7 @@ respond_console_frame_path() {
       respond "Console frames: DMA-BUFs (${line##*"frames arrive as DMA-BUFs: "})"
       ;;
     *"frames arrive as pixels"*)
-      respond "Console frames: pixels read back by crosvm (${line##*"read back by crosvm: "}), the slow path"
+      respond "Console frames: pixels read back by crosvm (${line##*"read back by crosvm: "})"
       ;;
   esac
 }

@@ -19,7 +19,7 @@
   of ika.ini, or `IKA_REFRESH_RATE_HZ`, sets a number instead; app windows'
   displays use the same rate.
 - `ika status` says how the console's frames travel: `Console frames:
-  DMA-BUFs (...)` or `pixels read back by crosvm (...), the slow path`, and
+  DMA-BUFs (...)` or `pixels read back by crosvm (...)`, and
   ika_stream logs each change of path.
 - With a window open on the Apple Silicon desktop every frame was read back
   by crosvm and copied to the console: hwc3 flushed SurfaceFlinger's client
@@ -625,8 +625,8 @@
   three for each app window opened and closed until Ika stopped. Crosvm
   holds at most 64: after about 17 app windows every new buffer failed to
   import, the console fell back to crosvm reading every frame back (`ika
-  status` said "the slow path"), and each failed frame left one more buffer
-  behind. A fix from upstream crosvm.
+  status` said "pixels read back by crosvm"), and each failed frame left one
+  more buffer behind. A fix from upstream crosvm.
 - The ROM's graphics buffer allocator (minigbm) carries nine upstream fixes:
   it rejects malformed buffer handles passed between processes, no longer
   leaks a buffer when an import fails or closes a GPU buffer handle that
