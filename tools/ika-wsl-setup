@@ -36,11 +36,14 @@ USER="${USER:-$(id -un)}"
 # (every Cuttlefish adb mode runs over vsock), vhost-net and tap for the
 # guest's Ethernet, udmabuf for gfxstream's host-visible memory, bridge and
 # nftables NAT for cvdalloc's guest network, and the cgroup cpu controller
-# for the vCPU scope.
+# for the vCPU scope. TAP has no prompt of its own: it is what MACVTAP (or
+# IPVTAP) selects, and Microsoft's configuration builds MACVTAP as a module,
+# which makes TAP one and so holds VHOST_NET, which depends on it, to a
+# module. MACVTAP, and MACVLAN under it, are built in for that.
 readonly -a KERNEL_OPTIONS=(
   VIRTUALIZATION KVM KVM_INTEL KVM_AMD
   VSOCKETS VIRTIO_VSOCKETS VIRTIO_VSOCKETS_COMMON VHOST_MENU VHOST VHOST_NET VHOST_VSOCK
-  TUN TAP BRIDGE VETH
+  TUN TAP MACVLAN MACVTAP BRIDGE VETH
   DMA_SHARED_BUFFER UDMABUF
   NETFILTER NF_CONNTRACK NF_NAT NF_NAT_MASQUERADE NF_TABLES NF_TABLES_INET NF_TABLES_IPV4
   NFT_NAT NFT_MASQ NFT_CT NFT_COMPAT
@@ -532,7 +535,7 @@ build_kernel() {
   esac
 
   (
-    cd "${dir}"
+    cd "${dir}" || exit 1
     [[ -f "${config}" ]] || die "${config} is not in the kernel source"
     cp "${config}" .config
     for option in "${KERNEL_OPTIONS[@]}"; do
@@ -550,7 +553,7 @@ build_kernel() {
     log "building the kernel with $(nproc) jobs (this takes a while)..."
     make -j"$(nproc)" "${target}" >"${dir}.build.log" 2>&1 || die "the kernel build failed; see ${dir}.build.log"
     [[ -f "${image}" ]] || die "the build produced no ${image}"
-  ) >&2
+  ) >&2 || exit 1
   printf '%s/%s\n' "${dir}" "${image}"
 }
 
