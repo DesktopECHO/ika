@@ -8424,9 +8424,12 @@ open_app_window() {
   require_executable "${SCRCPY_BIN}" "console client"
   # Shift held at a menu launch opens the app's Startup Options instead
   # (APP_SHIFT_CHECK): answered now when Ika would first have to start, else
-  # below, once the guest queries have run alongside the probe.
+  # below, once the guest queries have run alongside the probe. The check is
+  # used up there: "Apply and start" opens the app in this same process, where
+  # Shift's kept answer would otherwise bring the window back.
   if [[ "${APP_SHIFT_CHECK:-}" == "true" ]] && ! has_live_cvd_processes \
       && windows_shift_held; then
+    APP_SHIFT_CHECK=""
     edit_app_settings "${name}" 1
     return 0
   fi
@@ -8459,6 +8462,7 @@ open_app_window() {
   fi
   validate_app_package "${package}"
   if [[ "${APP_SHIFT_CHECK:-}" == "true" ]] && windows_shift_held; then
+    APP_SHIFT_CHECK=""
     edit_app_settings "${name}" 1
     return 0
   fi
