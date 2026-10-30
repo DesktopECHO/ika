@@ -110,13 +110,6 @@ case "${phase}" in
       printf 'Types: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie-backports\nComponents: main\nSigned-By: %s\n' \
         "${keyring}" >/etc/apt/sources.list.d/trixie-backports.sources
     fi
-    apt-get update
-    apt-get -y full-upgrade
-    apt-get install -y --no-install-recommends curl ca-certificates
-    # Ika needs Mesa 26.1 or newer, which trixie has only in backports
-    apt-get install -y --no-install-recommends -t trixie-backports \
-      libegl-mesa0 libgbm1 libgl1-mesa-dri libglx-mesa0 mesa-vulkan-drivers
-
     arch="$(dpkg --print-architecture)"
     # -PackageDirectory, as a Linux path (WSLENV's /p)
     dir="${IKA_PACKAGE_DIR:-}"
@@ -128,8 +121,21 @@ case "${phase}" in
       printf 'Installing %s\n' "${deb##*/}"
       debs+=("${deb}")
     done
-    # SUDO_USER tells the package whom to add to Ika's groups
-    SUDO_USER="${user}" apt-get install -y --no-install-recommends "${debs[@]}"
+
+    apt-get update
+    # One fetch and one transaction: the distribution's updates, Mesa from
+    # trixie-backports, Ika's packages and chrony for the clock (below). Ika needs Mesa 26.1 or newer, which
+    # trixie has only in backports. NAME/trixie-backports takes these from
+    # there alone, where -t would move every installed package that has a
+    # backports version; of the rest, Mesa needs only mesa-libgallium from
+    # there, at its exact version. SUDO_USER tells ika-base whom to add to
+    # Ika's groups.
+    SUDO_USER="${user}" apt-get -y --no-install-recommends full-upgrade \
+      curl ca-certificates chrony \
+      libegl-mesa0/trixie-backports libgbm1/trixie-backports libgl1-mesa-dri/trixie-backports \
+      libglx-mesa0/trixie-backports mesa-vulkan-drivers/trixie-backports \
+      mesa-libgallium/trixie-backports \
+      "${debs[@]}"
     usermod -aG kvm,cvdnetwork,render,video "${user}"
 
     # The Windows Start menu reads Linux apps from the system's applications
@@ -142,6 +148,18 @@ case "${phase}" in
     if [[ ! -e "${system_apps}" && ! -L "${system_apps}" ]] || rmdir "${system_apps}" 2>/dev/null; then
       mkdir -p "${system_apps%/*}"
       ln -s "${apps}" "${system_apps}"
+    fi
+
+    # Two more of ika-wsl-setup's fixes need nothing from Windows: make them
+    # with its own code, so that the next step does not report them missing.
+    # FUSE's user_allow_other lets Windows open Android's storage; chrony
+    # keeps the clock on Windows' through Hyper-V's PTP device.
+    if setup="$(command -v ika-wsl-setup)"; then
+      (
+        . "${setup}"
+        fuse_allows_other || enable_fuse_allow_other
+        [[ ! -e "${HYPERV_PTP_DEVICE}" ]] || time_sync_in_place || setup_time_sync
+      )
     fi
     ;;
 
