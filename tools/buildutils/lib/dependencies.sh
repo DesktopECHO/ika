@@ -55,9 +55,10 @@ function rpm_build_dependency_packages() {
     # madbfs (mounts Android's storage on the host)
     boost-devel fuse3-devel
 
-    # Ika's WSL2 helpers (tools/wsl): Mesa's Dozen driver and libdecor's GTK
-    # plugin among them
+    # Ika's WSL2 helpers (tools/wsl): Mesa's Dozen and D3D12 OpenGL drivers
+    # and libdecor's GTK plugin among them
     "pkgconfig(DirectX-Headers)" python3-mako python3-packaging python3-pyyaml
+    bison flex "pkgconfig(wayland-egl-backend)"
     "pkgconfig(gtk+-3.0)" "pkgconfig(xcb)" "pkgconfig(x11-xcb)" "pkgconfig(xcb-dri3)"
     "pkgconfig(xcb-present)" "pkgconfig(xcb-sync)" "pkgconfig(xcb-xfixes)"
     "pkgconfig(xcb-randr)" "pkgconfig(xcb-shm)" "pkgconfig(xcb-keysyms)"
@@ -94,9 +95,10 @@ function deb_build_dependency_packages() {
     pkgconf protobuf-compiler
     uuid-dev xxd
 
-    # Ika's WSL2 helpers (tools/wsl): Mesa's Dozen driver and libdecor's GTK
-    # plugin among them
+    # Ika's WSL2 helpers (tools/wsl): Mesa's Dozen and D3D12 OpenGL drivers
+    # and libdecor's GTK plugin among them
     directx-headers-dev python3-mako python3-packaging python3-yaml
+    bison flex libglvnd-dev libwayland-egl-backend-dev
     libx11-xcb-dev libxcb1-dev libxcb-dri3-dev libxcb-keysyms1-dev
     libxcb-present-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-sync-dev
     libxcb-xfixes0-dev libxshmfence-dev libgtk-3-dev
@@ -159,6 +161,7 @@ function arch_build_dependency_packages() {
     curl
     dbus
     directx-headers
+    libglvnd
     e2fsprogs
     erofs-utils
     file
