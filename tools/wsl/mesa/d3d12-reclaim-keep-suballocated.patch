@@ -1,0 +1,135 @@
+d3d12: Do not release suballocated BOs while creating a BO
+
+d3d12_bo_new releases the BOs whose last use the GPU has completed, before
+and while retrying CreateCommittedResource. A pipebuffer slab manager
+creates its slabs with its lock held (pb_slab_manager_create_buffer, then
+pb_slab_create), through the cache manager to d3d12_bo_new, and releasing
+a suballocated BO, one of that manager's buffers, takes the same lock
+(pb_slab_buffer_destroy): the thread waited on itself. Under gfxstream's
+OpenGL ES translator, a glBufferData hung that way, and with it every
+display of the Android guest.
+
+d3d12_bo_new now keeps suballocated BOs queued, at the head of the list,
+for the next reclaim, which batch completion and resource destruction run
+without that lock; it waits only for BOs it may release.
+
+--- a/src/gallium/drivers/d3d12/d3d12_bufmgr.cpp	2026-10-30 16:54:42.802209577 -0300
++++ b/src/gallium/drivers/d3d12/d3d12_bufmgr.cpp	2026-10-30 16:55:00.882635382 -0300
+@@ -113,6 +113,11 @@
+    return bo;
+ }
+ 
++static bool
++reclaim_completed(struct d3d12_screen *screen, bool keep_suballocated);
++static bool
++reclaim_one(struct d3d12_screen *screen, bool keep_suballocated);
++
+ struct d3d12_bo *
+ d3d12_bo_new(struct d3d12_screen *screen, uint64_t size, const pb_desc *pb_desc)
+ {
+@@ -156,7 +161,10 @@
+       heap_pris.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+       heap_pris.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+    }
+-   d3d12_screen_reclaim_completed(screen);
++   /* A pipebuffer slab manager creates its slabs here with its lock held,
++    * and releasing a suballocated BO takes that lock: keep those queued.
++    */
++   reclaim_completed(screen, true);
+    HRESULT hres;
+    do {
+       hres = dev->CreateCommittedResource(&heap_pris,
+@@ -165,7 +173,7 @@
+                                           D3D12_RESOURCE_STATE_COMMON,
+                                           NULL,
+                                           IID_PPV_ARGS(&res));
+-   } while (hres == E_OUTOFMEMORY && d3d12_screen_reclaim_one(screen));
++   } while (hres == E_OUTOFMEMORY && reclaim_one(screen, true));
+ 
+    if (FAILED(hres))
+       return NULL;
+@@ -237,12 +245,18 @@
+    }
+ }
+ 
+-bool
+-d3d12_screen_reclaim_completed(struct d3d12_screen *screen)
++/* Releases the BOs whose last use the GPU has completed. A suballocated
++ * BO holds a buffer of a pipebuffer slab manager, and releasing it takes
++ * the manager's lock; with keep_suballocated they stay queued, at the head
++ * of the list, for the next reclaim.
++ */
++static bool
++reclaim_completed(struct d3d12_screen *screen, bool keep_suballocated)
+ {
+    uint64_t completed = screen->fence->GetCompletedValue();
+-   struct list_head retired;
++   struct list_head retired, kept;
+    list_inithead(&retired);
++   list_inithead(&kept);
+ 
+    mtx_lock(&screen->pending_free_lock);
+    list_for_each_entry_safe(struct d3d12_pending_free_entry, entry,
+@@ -250,8 +264,10 @@
+       if (entry->fence_value > completed)
+          break;
+       list_del(&entry->link);
+-      list_addtail(&entry->link, &retired);
++      list_addtail(&entry->link,
++                   keep_suballocated && entry->bo->buffer ? &kept : &retired);
+    }
++   list_splice(&kept, &screen->pending_free_list);
+    mtx_unlock(&screen->pending_free_lock);
+ 
+    bool dropped = !list_is_empty(&retired);
+@@ -263,18 +279,28 @@
+ }
+ 
+ bool
+-d3d12_screen_reclaim_one(struct d3d12_screen *screen)
++d3d12_screen_reclaim_completed(struct d3d12_screen *screen)
++{
++   return reclaim_completed(screen, false);
++}
++
++/* Waits for the oldest queued BO it may release, then releases the completed
++ * ones. Returns whether it released any.
++ */
++static bool
++reclaim_one(struct d3d12_screen *screen, bool keep_suballocated)
+ {
+    uint64_t target = 0;
+    bool have_target = false;
+ 
+    mtx_lock(&screen->pending_free_lock);
+-   if (!list_is_empty(&screen->pending_free_list)) {
+-      struct d3d12_pending_free_entry *head =
+-         list_first_entry(&screen->pending_free_list,
+-                          struct d3d12_pending_free_entry, link);
+-      target = head->fence_value;
++   list_for_each_entry(struct d3d12_pending_free_entry, entry,
++                       &screen->pending_free_list, link) {
++      if (keep_suballocated && entry->bo->buffer)
++         continue;
++      target = entry->fence_value;
+       have_target = true;
++      break;
+    }
+    mtx_unlock(&screen->pending_free_lock);
+ 
+@@ -284,8 +310,13 @@
+    if (screen->fence->GetCompletedValue() < target)
+       screen->fence->SetEventOnCompletion(target, nullptr);
+ 
+-   d3d12_screen_reclaim_completed(screen);
+-   return true;
++   return reclaim_completed(screen, keep_suballocated);
++}
++
++bool
++d3d12_screen_reclaim_one(struct d3d12_screen *screen)
++{
++   return reclaim_one(screen, false);
+ }
+ 
+ void *

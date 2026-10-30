@@ -301,6 +301,19 @@ choosing the GPU mode:
   - It keeps gfxstream's ETC2 and ASTC emulation from binding other images
     into a dedicated allocation, which removes the D3D12 device. Ika's
     gfxstream has this fix too.
+
+Ika's gfxstream decodes ASTC textures on the CPU on Dozen, which has no ASTC,
+as they are uploaded, instead of with its compute shaders. Those are the main
+suspect in GPU hangs on WSL2 (a Radeon 780M, with Asphalt 8 and 9): Windows
+reset the GPU, D3D12 removed the device and the whole VM ended. An image whose
+ASTC data reaches it some way the CPU cannot decode, such as an image-to-image
+copy, is still decoded on the GPU, with an "ASTC image ... decoding it on the
+GPU" warning in crosvm's log. The start of the log says which: "ASTC textures
+decoded on the CPU (Mesa Dozen)", and each Vulkan device's line has "CPU
+decoding:on". The CPU decoder is built for AVX2 (with F16C, POPCNT and
+SSE4.1), which the processors of hosts that run Dozen have; on an x86-64 CPU
+without them, gfxstream decodes on the GPU and logs "ASTC CPU decoding is
+unavailable".
 - The `libd3d12.so` shim ([tools/wsl/d3d12_shim.c](tools/wsl/d3d12_shim.c))
   first in `LD_LIBRARY_PATH`. It makes every Vulkan instance in crosvm share
   one D3D12 device. WSL allows about ten D3D12 devices per process, and a
@@ -323,6 +336,13 @@ memory on a Radeon 780M, so each frame of a 1080p video took the window 25 ms
 of CPU to upload, 70% of a core in all. Ika's build stages them in
 write-back memory on integrated GPUs, where the window takes 14%.
 
+In the `gfxstream` mode, crosvm's own OpenGL, which runs Android's OpenGL ES,
+uses the same driver, set up the same way. Ika's build also carries
+[d3d12-reclaim-keep-suballocated.patch](tools/wsl/mesa/d3d12-reclaim-keep-suballocated.patch):
+creating a buffer released buffers whose GPU work had completed, among them
+buffers of the slab allocator whose lock it held, and the render thread waited
+on itself; a `glBufferData` froze every display of Android that way.
+
 `gpu_mode = auto` then picks `gfxstream_guest_angle`, as Venus needs the
 dma-bufs Dozen cannot export. The start log has a `WSL2:` line when Ika set
 this up.
@@ -344,6 +364,7 @@ top. Ika's build destroys them instead.
 | `IKA_D3D12_SHIM_DISABLE=1` | The shim creates a device for each instance |
 | `IKA_D3D12_DRED=1` | The shim turns on D3D12's DRED. When the device is removed, it logs why, the GPU work in flight and the D3D12 call that removed it, to crosvm's log and `/tmp/ika-dred.log` |
 | `IKA_DZN_TRACE_REMOVAL=1` | With `IKA_D3D12_DRED=1`, the layer also logs the first Vulkan call after which the device was removed |
+| `IKA_ASTC_DECODE=gpu` or `cpu` | gfxstream decodes ASTC textures on the GPU or on the CPU, on any host. Without it, the CPU on Dozen and the GPU elsewhere |
 
 ### Limits on WSL2
 
