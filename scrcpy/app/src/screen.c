@@ -1295,10 +1295,14 @@ sc_screen_set_orientation(struct sc_screen *screen,
 #define SC_TITLEBAR_STABLE_FRAMES 3
 #define SC_TITLEBAR_INTERVAL SC_TICK_FROM_MS(150)
 #define SC_TITLEBAR_BLANK_HOLD SC_TICK_FROM_SEC(5)
+// How far below the top edge of the content the color is read, in pixels:
+// below a thin strip along the edge, such as the blue progress bar of Google's
+// sign-in, whose moving segments made the title bar flicker
+#define SC_TITLEBAR_ROW_OFFSET 30
 
-// Ika: give the title bar of a decorated window the color along the top edge
-// of the content: the most common of a row of samples, once it has held for a
-// few frames (not in the middle of an animation), at most a few times a second.
+// Ika: give the title bar of a decorated window the color along the top of the
+// content: the most common of a row of samples, once it has held for a few
+// frames (not in the middle of an animation), at most a few times a second.
 // A frame the display has settled on is taken at once.
 static void
 sc_screen_update_titlebar_color(struct sc_screen *screen,
@@ -1312,7 +1316,7 @@ sc_screen_update_titlebar_color(struct sc_screen *screen,
     if (screen->raw) {
         src = sc_screen_get_raw_source_rect(screen);
     }
-    int row = src.y;
+    int row = src.y + MIN(SC_TITLEBAR_ROW_OFFSET, (int) src.h - 1);
     struct sc_screen_bg_color samples[SC_TITLEBAR_SAMPLES];
     unsigned count = 0;
     for (unsigned i = 0; i < SC_TITLEBAR_SAMPLES; ++i) {

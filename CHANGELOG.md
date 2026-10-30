@@ -522,6 +522,9 @@
   are in the ROM too.
 
 ### Fixes
+- An app window's title bar takes the color 30 pixels below the top of the
+  content instead of the topmost row, so a thin strip along the top no longer
+  sets it: the blue progress bar of Google's sign-in made it flicker.
 - On WSL2, video from a software decoder no longer restarts Android's
   framework, freezing every app window: a Play Store trailer, or any H.264
   video an app played without a hardware decoder. Its YV12 frames need a
