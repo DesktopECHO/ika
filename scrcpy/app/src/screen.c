@@ -1297,8 +1297,10 @@ sc_screen_set_orientation(struct sc_screen *screen,
 #define SC_TITLEBAR_BLANK_HOLD SC_TICK_FROM_SEC(5)
 // How far below the top edge of the content the color is read, in pixels:
 // below a thin strip along the edge, such as the blue progress bar of Google's
-// sign-in, whose moving segments made the title bar flicker
-#define SC_TITLEBAR_ROW_OFFSET 30
+// sign-in (rows 0-3 in an app window), whose moving segments made the title bar
+// flicker, and above it in the console, where it lies under the status bar
+// (rows 29-32 at 168 dpi)
+#define SC_TITLEBAR_ROW_OFFSET 15
 
 // Ika: give the title bar of a decorated window the color along the top of the
 // content: the most common of a row of samples, once it has held for a few
