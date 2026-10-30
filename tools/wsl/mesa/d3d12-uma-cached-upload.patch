@@ -1,0 +1,33 @@
+d3d12: Stage CPU-written buffers in write-back memory on UMA
+
+On a UMA device, buffers the CPU writes, texture upload staging among
+them, went in D3D12_HEAP_TYPE_UPLOAD, write-combined memory. WSL2's GPU
+paravirtualization maps that memory uncached: writing it ran at 383 MB/s
+against 13049 MB/s for write-back memory on a Radeon 780M, which does not
+report CacheCoherentUMA, so a 1080p glTexSubImage2D took 25 ms and a
+video's frames kept a core three quarters busy.
+
+Give them a custom heap with write-back CPU pages in L0, as readback
+buffers have and as Dozen's host-cached memory type does.
+
+--- a/src/gallium/drivers/d3d12/d3d12_bufmgr.cpp
++++ b/src/gallium/drivers/d3d12/d3d12_bufmgr.cpp
+@@ -144,6 +144,18 @@
+       d3d12_evicted : d3d12_resident;
+ 
+    D3D12_HEAP_PROPERTIES heap_pris = GetCustomHeapProperties(dev, heap_type);
++   /* On a UMA device, CPU-written buffers, texture upload staging among
++    * them, live in write-back memory as readback ones do, and as Dozen's
++    * host-cached memory type does. Write-combined memory is mapped uncached
++    * under WSL2's GPU paravirtualization, where writing it ran 34 times slower
++    * (383 against 13049 MB/s on a Radeon 780M, which does not report
++    * CacheCoherentUMA), and a 1080p glTexSubImage2D took 25 ms.
++    */
++   if (heap_type == D3D12_HEAP_TYPE_UPLOAD && screen->architecture.UMA) {
++      heap_pris.Type = D3D12_HEAP_TYPE_CUSTOM;
++      heap_pris.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
++      heap_pris.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
++   }
+    d3d12_screen_reclaim_completed(screen);
+    HRESULT hres;
+    do {
