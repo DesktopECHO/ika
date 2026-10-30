@@ -284,6 +284,11 @@ choosing the GPU mode:
   - For Android's Vulkan, it offers `samplerYcbcrConversion`, which
     Chromium's Vulkan backends need. The conversion is skipped, so YCbCr
     images are sampled as they are.
+  - For Android's Vulkan, it creates images and views of the 4:2:0 YUV formats
+    Dozen cannot sample, such as YV12's three-plane one (D3D12 has none), as
+    RGBA8. Ika's gfxstream keeps such a buffer as RGBA8 too, converted from the
+    guest's YUV bytes, so a software video decoder's frames show with their
+    colors; SurfaceFlinger aborted on them before, restarting Android.
   - It offers `fullDrawIndexUint32` and the full 32-bit index range, which
     D3D12 has but Dozen does not report. Chrome draws with Skia Graphite on
     Dawn, and Dawn's Vulkan backend requires the feature: without it Chrome

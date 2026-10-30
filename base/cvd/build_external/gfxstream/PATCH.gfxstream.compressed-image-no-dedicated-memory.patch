@@ -1,0 +1,31 @@
+Patch summary:
+Allocate the memory of an emulated compressed image without
+VkMemoryDedicatedAllocateInfo: gfxstream binds its block images into the same
+memory, which a dedicated allocation forbids. Dozen (D3D12) gave the block
+images the output image's committed resource, and their storage views removed
+the D3D12 device (DXGI_ERROR_INVALID_CALL); 3DMark Sling Shot Extreme crashed.
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index f8c9a509..453621cb 100644
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -7175,6 +7175,20 @@ class VkDecoderGlobalState::Impl {
+             virtioGpuContextId = *virtioGpuContextIdOpt;
+         }
+ 
++        // An emulated compressed image is an uncompressed output image plus block
++        // images, and bindCompressedMipmapsMemory() binds the block images into the
++        // output image's memory. Binding other images to a dedicated allocation is
++        // invalid: a driver that implements one as a resource shaped like its image
++        // (Mesa's Dozen, a D3D12 committed resource) gives the block images the output
++        // image's resource, and their storage views then remove the D3D12 device.
++        if (shouldUseDedicatedAllocInfo && localDedicatedAllocInfo.image != VK_NULL_HANDLE) {
++            std::lock_guard<std::mutex> lock(mMutex);
++            auto* imageInfo = gfxstream::base::find(mImageInfo, localDedicatedAllocInfo.image);
++            if (imageInfo && imageInfo->compressInfo) {
++                shouldUseDedicatedAllocInfo = false;
++            }
++        }
++
+         if (shouldUseDedicatedAllocInfo) {
+             vk_append_struct(&structChainIter, &localDedicatedAllocInfo);
+         }

@@ -31,4 +31,5 @@ exports_files([
     "PATCH.gfxstream.trim-heap-after-process-cleanup.patch",
     "PATCH.gfxstream.virtio-gpu-invalid-process-id.patch",
     "PATCH.gfxstream.astc-linear-only-emulation.patch",
+    "PATCH.gfxstream.compressed-image-no-dedicated-memory.patch",
 ])
