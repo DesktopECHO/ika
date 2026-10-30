@@ -671,8 +671,11 @@ sc_server_connect_to(struct sc_server *server, struct sc_server_info *info) {
             tunnel_port = tunnel->local_port;
         }
 
-        unsigned attempts = 100;
-        sc_tick delay = SC_TICK_FROM_MS(100);
+        // Ika: the server listens some 0.4 s after app_process starts; a
+        // short interval catches it without waiting out the rest of a
+        // longer one (upstream polls every 100 ms)
+        unsigned attempts = 500;
+        sc_tick delay = SC_TICK_FROM_MS(20);
         sc_socket first_socket = connect_to_server(server, attempts, delay,
                                                    tunnel_host, tunnel_port);
         if (first_socket == SC_SOCKET_NONE) {
