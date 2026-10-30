@@ -321,6 +321,12 @@ if ($existing -contains $Name) {
     if (-not $Force) {
         throw "A distribution named $Name exists. Pass -Force to replace it (its files are deleted), or -Name for another name."
     }
+    # Unregistering ends Ika's processes without their cleanup. The network
+    # bridge of its Android lives on in the network stack WSL's distributions
+    # share, without the DHCP server that went with the distribution, and the
+    # next Ika, finding the bridge, starts none: its Android got no address.
+    Write-Step "Stopping Ika in the existing $Name"
+    & wsl.exe -d $Name --exec sh -c 'command -v ika >/dev/null 2>&1 && ika stop >/dev/null 2>&1; true'
     Write-Step "Removing the existing $Name"
     Invoke-Wsl --unregister $Name
 }
