@@ -94,7 +94,7 @@ These add to the app's start options: an option that is ticked there stays on.
 | What | Default | Set with |
 | --- | --- | --- |
 | Virtual CPUs | Half the host's performance cores, counting hardware threads, at most 12; under WSL, all the CPUs WSL has (`processors` in `.wslconfig`) | `--cpus=`, `cpus` and `cpu_cap` in `[compute]` |
-| Memory | A quarter of the host's memory, rounded up to a multiple of 2 GB, at most 32 GB; under WSL, all the memory WSL has (`memory` in `.wslconfig`) less 1 GB for Linux | `--memory_mb=`, `memory_mb`, `memory_step_mb` and `memory_cap_mb` in `[compute]` |
+| Memory | A quarter of the host's memory, rounded up to a multiple of 2 GB, at most 32 GB; under WSL, all the memory WSL has (`memory` in `.wslconfig`) less 1.5 GB for Linux | `--memory_mb=`, `memory_mb`, `memory_step_mb` and `memory_cap_mb` in `[compute]` |
 | Data partition | 64 GB (decimal), thin-provisioned | `ika reset --data_gb=GB`, `data_gb` in `[storage]` |
 | GPU mode | `auto`: `venus` on a GPU with Vulkan 1.3 or newer and ETC2 textures; `gfxstream` when the host's only Vulkan drivers are software ones or gfxstream would pick llvmpipe over the GPU; `gfxstream_guest_angle` otherwise | `--gpu_mode=`, `gpu_mode` in `[gpu]` (see [Graphics](GRAPHICS.md#how-ika-chooses)) |
 | Density | From the host display's width; 1.5 times that in TV mode | `--dpi=`, `dpi` and `tv_dpi` in `[console]` |

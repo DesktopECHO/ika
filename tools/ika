@@ -301,7 +301,7 @@ ika_ini_write_default() {
 # performance cores, counting each hardware thread (at most cpu_cap; under WSL,
 # all the CPUs WSL has), and a quarter of the host's memory rounded up to a
 # multiple of memory_step_mb (at most memory_cap_mb; under WSL, all the memory
-# WSL has less 1 GB for Linux). Each vCPU is pinned to a host CPU, from the
+# WSL has less 1.5 GB for Linux). Each vCPU is pinned to a host CPU, from the
 # highest CPU number down. Command-line equivalents: --cpus=, --memory_mb=
 cpus = auto
 memory_mb = auto
@@ -959,9 +959,11 @@ default_guest_memory_mb() {
   fi
 
   # Under WSL the memory is already the share Windows gives Linux (memory= in
-  # .wslconfig): all of it, less 1 GB for Linux.
-  if [[ "${IKA_ON_WSLG}" == true ]] && (( mem_mb > 1024 )); then
-    echo $((mem_mb - 1024))
+  # .wslconfig): all of it, less 1.5 GB for Linux. That covers what the kernel
+  # keeps of the VM's memory and crosvm's own, about 0.5 GB together, and
+  # leaves Linux about 1 GB.
+  if [[ "${IKA_ON_WSLG}" == true ]] && (( mem_mb > 1536 )); then
+    echo $((mem_mb - 1536))
     return 0
   fi
 
