@@ -392,7 +392,7 @@
 - On WSL2, Android's memory gets transparent huge pages: crosvm asks for them,
   but WSL's kernel gives shared memory none. `cuttlefish-host-resources` sets
   `shmem_enabled` to `advise` at boot. With a 1080p VP9 video playing, Ika
-  took 246% of a core instead of 256%, Android's vCPUs 7% less.
+  took 246% of a core instead of 256%, and Android itself was 7% less busy.
 
 ### Hardware video decoding
 - `ika start` gives Android a V4L2 video decoder backed by the host's VA-API
