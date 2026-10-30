@@ -1,2 +1,8 @@
 ACTION=="add", KERNEL=="vhost-net", SUBSYSTEM=="misc", MODE="0660", GROUP="cvdnetwork"
 ACTION=="add", KERNEL=="vhost-vsock", SUBSYSTEM=="misc", MODE="0660", GROUP="cvdnetwork"
+
+# WSL2's distributions share one /dev, and each one's udev gives these devices
+# to its own groups, whose IDs mean other groups, or none, in the others. An ACL
+# entry for this distribution's group outlasts their chown and chmod.
+ACTION=="add", KERNEL=="kvm", SUBSYSTEM=="misc", RUN+="/usr/bin/setfacl -m g:kvm:rw $devnode"
+ACTION=="add", KERNEL=="vhost-net|vhost-vsock", SUBSYSTEM=="misc", RUN+="/usr/bin/setfacl -m g:cvdnetwork:rw $devnode"
