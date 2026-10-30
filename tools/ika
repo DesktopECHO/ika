@@ -10050,6 +10050,12 @@ background_app_window() {
   : > "$(app_keep_display_file "${package}")"
   stop_supervisor_from_file "${pid_file}" __app_supervisor
   rm -f "$(app_keep_display_file "${package}")"
+  # A window whose supervisor does not know the mark (one opened before an
+  # update) removes its display, and the game with it.
+  if ! guest_app_task_displays "${package}" "${adb_serial}" | grep -qxF "${display}"; then
+    log "${label} did not stay on its display; it was closed"
+    return 0
+  fi
   if guest_adb "${adb_serial}" shell cmd display power-off "${display}" </dev/null >/dev/null 2>&1; then
     printf '%s %s %s\n' "${boot_id}" "${port}" "${display}" > "$(app_background_file "${package}")"
     log "sent ${label} to the background (Cuttlefish display ${port}, Android display ${display}, off)"
