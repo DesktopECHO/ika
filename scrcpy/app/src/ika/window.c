@@ -625,12 +625,169 @@ sc_caption_write_file(const char *path, const char *data) {
     return ok;
 }
 
-// Write the caption glyphs, g x g pixels, as symbolic icons into dir
+// librsvg and cairo, which GTK's SVG icon loader is built on, found at run
+// time: they rasterize the glyphs into symbolic PNGs (black on transparent,
+// which GTK colors like the text in memory). GTK loads an SVG icon through
+// gdk-pixbuf, once per color, which on Ubuntu 26.04 goes to a sandboxed
+// loader process: 25 ms per load, half a second per window and a stall at
+// each hover. A host without librsvg keeps the SVGs.
+struct sc_caption_raster {
+    void *rsvg;
+    void *cairo;
+    void *(*handle_new)(const unsigned char *, unsigned long, void **);
+    int (*render)(void *, void *, const double *, void **);
+    void (*unref)(void *);
+    void *(*surface_create)(int, int, int);
+    void *(*cr_create)(void *);
+    void (*cr_destroy)(void *);
+    int (*write_png)(void *, const char *);
+    void (*surface_destroy)(void *);
+};
+
 static bool
-sc_caption_write_glyphs(const char *dir, int g) {
+sc_caption_raster_open(struct sc_caption_raster *r) {
+    memset(r, 0, sizeof(*r));
+    r->rsvg = dlopen("librsvg-2.so.2", RTLD_LAZY);
+    r->cairo = dlopen("libcairo.so.2", RTLD_LAZY);
+    void *gobject = dlopen("libgobject-2.0.so.0", RTLD_LAZY | RTLD_NOLOAD);
+    if (r->rsvg && r->cairo && gobject) {
+        r->handle_new = (void *(*)(const unsigned char *, unsigned long,
+                                   void **))
+            dlsym(r->rsvg, "rsvg_handle_new_from_data");
+        r->render = (int (*)(void *, void *, const double *, void **))
+            dlsym(r->rsvg, "rsvg_handle_render_document");
+        r->unref = (void (*)(void *)) dlsym(gobject, "g_object_unref");
+        r->surface_create = (void *(*)(int, int, int))
+            dlsym(r->cairo, "cairo_image_surface_create");
+        r->cr_create = (void *(*)(void *)) dlsym(r->cairo, "cairo_create");
+        r->cr_destroy = (void (*)(void *)) dlsym(r->cairo, "cairo_destroy");
+        r->write_png = (int (*)(void *, const char *))
+            dlsym(r->cairo, "cairo_surface_write_to_png");
+        r->surface_destroy = (void (*)(void *))
+            dlsym(r->cairo, "cairo_surface_destroy");
+    }
+    if (gobject) {
+        dlclose(gobject);
+    }
+    if (r->handle_new && r->render && r->unref && r->surface_create
+            && r->cr_create && r->cr_destroy && r->write_png
+            && r->surface_destroy) {
+        return true;
+    }
+    if (r->rsvg) {
+        dlclose(r->rsvg);
+    }
+    if (r->cairo) {
+        dlclose(r->cairo);
+    }
+    memset(r, 0, sizeof(*r));
+    return false;
+}
+
+static void
+sc_caption_raster_close(struct sc_caption_raster *r) {
+    if (r->rsvg) {
+        dlclose(r->rsvg);
+    }
+    if (r->cairo) {
+        dlclose(r->cairo);
+    }
+    memset(r, 0, sizeof(*r));
+}
+
+// Rasterize svg, drawn in black, into the size x size PNG at path
+static bool
+sc_caption_rasterize(struct sc_caption_raster *r, const char *svg, int size,
+                     const char *path) {
+    void *handle = r->handle_new((const unsigned char *) svg, strlen(svg),
+                                 NULL);
+    if (!handle) {
+        return false;
+    }
+    void *surface = r->surface_create(0 /* CAIRO_FORMAT_ARGB32 */, size,
+                                      size);
+    void *cr = r->cr_create(surface);
+    const double viewport[4] = {0, 0, size, size};
+    bool ok = r->render(handle, cr, viewport, NULL);
+    r->cr_destroy(cr);
+    r->unref(handle);
+    char *tmp_path = NULL;
+    if (ok && asprintf(&tmp_path, "%s.tmp.%ld", path, (long) getpid()) == -1) {
+        LOG_OOM();
+        ok = false;
+    }
+    if (ok) {
+        ok = r->write_png(surface, tmp_path) == 0 /* CAIRO_STATUS_SUCCESS */
+          && rename(tmp_path, path) == 0;
+        if (!ok) {
+            unlink(tmp_path);
+        }
+    }
+    free(tmp_path);
+    r->surface_destroy(surface);
+    if (!ok) {
+        LOGW("Could not rasterize %s", path);
+    }
+    return ok;
+}
+
+// The plugin's buttons carry GTK images of the theme's window-*-symbolic
+// icons, shrunk away by the CSS but loaded all the same, six loads each at
+// the start. An icon theme of empty stand-ins in dir, made the GTK's theme by
+// the caller, takes their place; the glyphs, and all else, fall through to
+// hicolor and to dir itself. Returns false when it could not be written.
+static bool
+sc_caption_write_stub_theme(struct sc_caption_raster *r, const char *dir) {
     static const char *const names[] = {
         "minimize", "maximize", "restore", "close",
     };
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/ika-caption", dir);
+    if (mkdir(path, 0700) && errno != EEXIST) {
+        return false;
+    }
+    snprintf(path, sizeof(path), "%s/ika-caption/16x16", dir);
+    if (mkdir(path, 0700) && errno != EEXIST) {
+        return false;
+    }
+    snprintf(path, sizeof(path), "%s/ika-caption/16x16/ui", dir);
+    if (mkdir(path, 0700) && errno != EEXIST) {
+        return false;
+    }
+    for (unsigned i = 0; i < 4; ++i) {
+        snprintf(path, sizeof(path),
+                 "%s/ika-caption/16x16/ui/window-%s-symbolic.symbolic.png",
+                 dir, names[i]);
+        if (!sc_caption_rasterize(r, "<svg xmlns=\"http://www.w3.org/2000/svg\""
+                                  " width=\"16\" height=\"16\"/>", 16, path)) {
+            return false;
+        }
+    }
+    snprintf(path, sizeof(path), "%s/ika-caption/index.theme", dir);
+    return sc_caption_write_file(path,
+        "[Icon Theme]\n"
+        "Name=Ika caption\n"
+        "Comment=Stand-ins for the title bar buttons' icons, which ika draws"
+        " as the buttons' backgrounds\n"
+        "Directories=16x16/ui\n"
+        "\n"
+        "[16x16/ui]\n"
+        "Size=16\n"
+        "Type=Fixed\n"
+        "Context=Actions\n");
+}
+
+// Write the caption glyphs, g x g pixels, as symbolic icons into dir: SVGs,
+// and PNGs of them where librsvg is there (which GTK prefers). *stub_theme
+// tells whether the stand-in theme (sc_caption_write_stub_theme) is in dir.
+static bool
+sc_caption_write_glyphs(const char *dir, int g, bool *stub_theme) {
+    static const char *const names[] = {
+        "minimize", "maximize", "restore", "close",
+    };
+    struct sc_caption_raster raster;
+    bool rasterize = sc_caption_raster_open(&raster);
+    *stub_theme = rasterize && sc_caption_write_stub_theme(&raster, dir);
     double r = g * 0.15 < 1 ? 1 : g * 0.15;
     int front = (int) (g * 0.8 + 0.5);
     int off = g - front;
@@ -659,7 +816,7 @@ sc_caption_write_glyphs(const char *dir, int g) {
                 snprintf(clipped, sizeof(clipped),
                          "<clipPath id=\"c\"><path clip-rule=\"evenodd\" "
                          "d=\"M0 0H%dV%dH0zM0 %dH%dV%dH0z\"/></clipPath>"
-                         "<path fill=\"#222\" fill-rule=\"evenodd\" "
+                         "<path fill=\"#000\" fill-rule=\"evenodd\" "
                          "clip-path=\"url(#c)\" d=\"%s\"/>",
                          g, g, g - front - 1, front + 1, g, back);
                 break;
@@ -672,19 +829,29 @@ sc_caption_write_glyphs(const char *dir, int g) {
                          g - d, g, d, d, g, g - d);
                 break;
         }
+        // Black: a symbolic PNG's black is the text color to GTK (an SVG's
+        // fill it overrides)
         char svg[4096];
         snprintf(svg, sizeof(svg),
                  "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" "
-                 "height=\"%d\" viewBox=\"0 0 %d %d\">%s<path fill=\"#222\" "
+                 "height=\"%d\" viewBox=\"0 0 %d %d\">%s<path fill=\"#000\" "
                  "fill-rule=\"evenodd\" d=\"%s\"/></svg>\n",
                  g, g, g, g, clipped, path_data);
         char path[PATH_MAX];
         snprintf(path, sizeof(path), "%s/ika-caption-%s-symbolic.svg", dir,
                  names[i]);
         if (!sc_caption_write_file(path, svg)) {
+            sc_caption_raster_close(&raster);
             return false;
         }
+        // A stale PNG would be preferred to the SVG
+        snprintf(path, sizeof(path),
+                 "%s/ika-caption-%s-symbolic.symbolic.png", dir, names[i]);
+        if (!rasterize || !sc_caption_rasterize(&raster, svg, g, path)) {
+            unlink(path);
+        }
     }
+    sc_caption_raster_close(&raster);
     return true;
 }
 
@@ -803,7 +970,8 @@ sc_ika_window_init_caption(struct sc_ika_window *iw) {
     }
 
     char *dir = sc_caption_glyph_dir(glyph);
-    if (!dir || !sc_caption_write_glyphs(dir, glyph)) {
+    bool stub_theme = false;
+    if (!dir || !sc_caption_write_glyphs(dir, glyph, &stub_theme)) {
         free(dir);
         dlclose(gtk);
         return;
@@ -817,6 +985,9 @@ sc_ika_window_init_caption(struct sc_ika_window *iw) {
     if (settings) {
         object_set(settings, "gtk-decoration-layout",
                    ":minimize,maximize,close", NULL);
+        if (stub_theme) {
+            object_set(settings, "gtk-icon-theme-name", "ika-caption", NULL);
+        }
     }
 
     const char *font = getenv("IKA_CAPTION_FONT");

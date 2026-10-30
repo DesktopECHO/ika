@@ -342,6 +342,12 @@
   and the title in Segoe UI Variable, which Ika copies from Windows to
   `~/ika/fonts`. The title bar is sized for Windows' display scale when the
   window opens. It still takes the color of the app's content.
+- The title bar's glyphs are PNGs, which GTK colors in memory (their SVGs
+  stay where librsvg is missing): on Ubuntu 26.04 gdk-pixbuf loads every
+  image through a sandboxed process, 25 ms apiece, which cost a window half
+  a second at its start and a stall at each hover. The plugin's own button
+  icons, hidden under the glyphs, come from an empty stand-in theme for the
+  same reason. The close button's glyph turns white on its red.
 
 ### Hardware video decoding
 - `ika start` gives Android a V4L2 video decoder backed by the host's VA-API
