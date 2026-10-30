@@ -389,6 +389,10 @@
   installed under a name of its own, and a failed build stops the script.
   `ika-wsl-setup` and `ika-base` also tell WSL2 by `WSL_ROOT_INIT=1` on the
   kernel command line, so a kernel of another name is still WSL2.
+- On WSL2, Android's memory gets transparent huge pages: crosvm asks for them,
+  but WSL's kernel gives shared memory none. `cuttlefish-host-resources` sets
+  `shmem_enabled` to `advise` at boot. With a 1080p VP9 video playing, Ika
+  took 246% of a core instead of 256%, Android's vCPUs 7% less.
 
 ### Hardware video decoding
 - `ika start` gives Android a V4L2 video decoder backed by the host's VA-API

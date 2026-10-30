@@ -36,8 +36,25 @@ tune_udmabuf() {
     fi
 }
 
+# On WSL2, gives Android's memory transparent huge pages: crosvm asks for them
+# (MADV_HUGEPAGE) on its guest memory, which is shared memory, and WSL's kernel
+# gives shared memory none (shmem_enabled never). Android runs under KVM under
+# Hyper-V, where translating its addresses costs the most, and 2 MB pages need
+# far fewer translations. advise gives them only to memory that asks; a value
+# set by hand stays. WSL boots its kernels, Microsoft's and those
+# ika-wsl-setup builds, with WSL_ROOT_INIT=1.
+tune_thp() {
+    thp_shmem=/sys/kernel/mm/transparent_hugepage/shmem_enabled
+    if { grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null \
+        || grep -qw WSL_ROOT_INIT=1 /proc/cmdline 2>/dev/null; } \
+        && [ -w "$thp_shmem" ] && grep -q '\[never\]' "$thp_shmem"; then
+        echo advise > "$thp_shmem" || true
+    fi
+}
+
 start() {
     tune_udmabuf
+    tune_thp
 
     # When running inside a privileged container, set the ownership and access
     # of these device nodes.
