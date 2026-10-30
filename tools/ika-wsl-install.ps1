@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
 Deploys Ika on Windows: a WSL2 Debian 13 (trixie) distribution named Ika,
-readied for Ika, with Ika's latest release installed, then starts Android.
+readied for Ika, with the Ika packages in your Windows home folder installed,
+then starts Android.
 
 .DESCRIPTION
 Installs Debian's WSL image, the latest from salsa.debian.org, under the name
@@ -9,7 +10,8 @@ Ika, with Ika's icon for its Start menu entry and Terminal profile, and in it:
   1. creates a user (named after the Windows user) with passwordless sudo,
      the default user of the distribution, with systemd on;
   2. installs Mesa from trixie-backports (Ika needs 26.1 or newer) and the
-     ika-base and ika-lineageos packages of Ika's latest GitHub release;
+     ika-base and ika-lineageos packages (.deb) in -PackageDirectory, the
+     newest version of each for the distribution's architecture;
   3. runs ika-wsl-setup, from the package, which readies WSL for Ika: nested
      virtualization, cgroup v2, the groups, the Start menu, the clock;
   4. restarts the distribution, or all of WSL when ika-wsl-setup changed
@@ -30,6 +32,11 @@ The Linux user. Default: the Windows user name, lowercased.
 .PARAMETER Location
 Where WSL keeps the distribution's disk. Default: WSL's own choice.
 
+.PARAMETER PackageDirectory
+The folder holding the ika-base and ika-lineageos packages
+(ika-base_VERSION_ARCH.deb, ika-lineageos_VERSION_ARCH.deb). Default: your
+Windows home folder (%USERPROFILE%).
+
 .PARAMETER Force
 Replaces a distribution of the same name, deleting its files, and restarts
 WSL without asking when that is needed.
@@ -42,6 +49,7 @@ param(
     [string]$Name = 'Ika',
     [string]$UserName,
     [string]$Location,
+    [string]$PackageDirectory = $env:USERPROFILE,
     [switch]$Force,
     [switch]$NoStart
 )
@@ -52,8 +60,10 @@ $ProgressPreference = 'SilentlyContinue'
 # wsl.exe writes UTF-16 to a pipe unless told otherwise
 $env:WSL_UTF8 = '1'
 
-function Write-Step([string]$Text) {
-    Write-Host "==> $Text" -ForegroundColor Cyan
+function Write-Step([string]$Text, [switch]$NoNewline) {
+    # A middle dot, written as a code point: Windows PowerShell reads a script
+    # without a byte order mark as Windows-1252
+    Write-Host "$([char]0x00B7) $Text" -ForegroundColor Cyan -NoNewline:$NoNewline
 }
 
 function Invoke-Wsl {
@@ -102,24 +112,24 @@ case "${phase}" in
     fi
     apt-get update
     apt-get -y full-upgrade
-    apt-get install -y curl ca-certificates
+    apt-get install -y --no-install-recommends curl ca-certificates
     # Ika needs Mesa 26.1 or newer, which trixie has only in backports
     apt-get install -y --no-install-recommends -t trixie-backports \
       libegl-mesa0 libgbm1 libgl1-mesa-dri libglx-mesa0 mesa-vulkan-drivers
 
     arch="$(dpkg --print-architecture)"
-    release="$(curl -fsSL https://api.github.com/repos/DesktopECHO/ika/releases/latest)"
-    dir="$(mktemp -d /var/tmp/ika-install.XXXXXX)"
-    trap 'rm -rf "${dir}"' EXIT
+    # -PackageDirectory, as a Linux path (WSLENV's /p)
+    dir="${IKA_PACKAGE_DIR:-}"
+    [[ -d "${dir}" ]] || die "the package folder ${dir:-(not given)} cannot be reached from WSL"
+    debs=()
     for package in ika-base ika-lineageos; do
-      url="$(grep -oE '"browser_download_url": *"[^"]*/'"${package}"'_[^"/]*_'"${arch}"'\.deb"' <<<"${release}" \
-        | sed -E 's/.*"(https:[^"]*)"$/\1/' | head -n 1)"
-      [[ -n "${url}" ]] || die "Ika's latest release has no ${package} package for ${arch}"
-      printf 'Downloading %s\n' "${url##*/}"
-      curl -fL --retry 3 -o "${dir}/${url##*/}" "${url}"
+      deb="$(find "${dir}" -maxdepth 1 -name "${package}_*_${arch}.deb" | sort -V | tail -n 1)"
+      [[ -n "${deb}" ]] || die "${dir} has no ${package} package for ${arch}"
+      printf 'Installing %s\n' "${deb##*/}"
+      debs+=("${deb}")
     done
     # SUDO_USER tells the package whom to add to Ika's groups
-    SUDO_USER="${user}" apt-get install -y "${dir}"/*.deb
+    SUDO_USER="${user}" apt-get install -y --no-install-recommends "${debs[@]}"
     usermod -aG kvm,cvdnetwork,render,video "${user}"
     ;;
 
@@ -139,18 +149,36 @@ esac
 '@
 
 # Runs a phase of $Provision in the distribution, as root or as the user,
-# showing its output and returning it; a failure throws unless -NoThrow
-function Invoke-Provision([string]$Phase, [string]$As, [switch]$NoThrow) {
+# showing its output and returning it; a failure throws unless -NoThrow.
+# With -Dots the output is shown as a dot for every 100 lines, and its last
+# lines only if the phase fails.
+function Invoke-Provision([string]$Phase, [string]$As, [switch]$NoThrow, [switch]$Dots) {
     # Windows PowerShell turns a native command's stderr into errors, which
     # would stop the script at apt's first progress line
     $ErrorActionPreference = 'Continue'
     $script = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Provision.Replace("`r`n", "`n")))
+    $lines = New-Object System.Collections.Generic.List[string]
     & wsl.exe -d $Name -u $As --exec bash -c "echo $script | base64 -d | bash -s -- $Phase $UserName" 2>&1 |
-        ForEach-Object { Write-Host $_; "$_" }
-    if ($LASTEXITCODE -ne 0) {
-        if (-not $NoThrow) { throw "Setting up $Name failed in its '$Phase' step (exit code $LASTEXITCODE)" }
+        ForEach-Object {
+            $lines.Add("$_")
+            if (-not $Dots) {
+                Write-Host $_
+            } elseif ($lines.Count % 100 -eq 0) {
+                Write-Host '.' -NoNewline
+            }
+        }
+    $exitCode = $LASTEXITCODE
+    if ($Dots) {
+        Write-Host ''
+        if ($exitCode -ne 0) {
+            $lines | Select-Object -Last 40 | ForEach-Object { Write-Host $_ }
+        }
+    }
+    if ($exitCode -ne 0) {
+        if (-not $NoThrow) { throw "Setting up $Name failed in its '$Phase' step (exit code $exitCode)" }
         Write-Warning "The '$Phase' step reported a problem; see its output above."
     }
+    $lines
 }
 
 # Downloads the newest Debian WSL image for this machine from Debian's
@@ -247,6 +275,17 @@ if ($UserName -notmatch '^[a-z_][a-z0-9_-]{0,31}$' -or $UserName -eq 'root') {
     throw "'$UserName' cannot be a Linux user name; pass one with -UserName"
 }
 
+# The packages, checked before anything is installed
+$PackageDirectory = (Resolve-Path -LiteralPath $PackageDirectory).ProviderPath
+foreach ($package in 'ika-base', 'ika-lineageos') {
+    if (-not (Get-ChildItem -LiteralPath $PackageDirectory -Filter "${package}_*.deb" -File)) {
+        throw "$PackageDirectory has no $package package (${package}_VERSION_ARCH.deb); pass the folder with -PackageDirectory"
+    }
+}
+# The install step reads them from there, as a Linux path (WSLENV's /p)
+$env:IKA_PACKAGE_DIR = $PackageDirectory
+$env:WSLENV = (@($env:WSLENV, 'IKA_PACKAGE_DIR/p') | Where-Object { $_ }) -join ':'
+
 $existing = @(& wsl.exe --list --quiet 2>$null | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($existing -contains $Name) {
     if (-not $Force) {
@@ -258,7 +297,7 @@ if ($existing -contains $Name) {
 
 # --- Install --------------------------------------------------------------
 
-Write-Step "Installing Debian as $Name"
+Write-Step 'Installing Debian base'
 $download = Join-Path $env:TEMP "ika-wsl-install-$PID"
 New-Item -ItemType Directory -Force -Path $download | Out-Null
 try {
@@ -275,12 +314,13 @@ try {
     Write-Warning "Could not give $Name Ika's icon: $_"
 }
 
-Write-Step "Creating the user $UserName (passwordless sudo) and turning on systemd"
+Write-Step "Creating the user $UserName and turning on systemd"
 Invoke-Provision user root | Out-Null
 Invoke-Wsl --terminate $Name
 
-Write-Step 'Installing Mesa from trixie-backports and Ika''s latest release'
-Invoke-Provision install root | Out-Null
+# The dots of the install step follow on the same line
+Write-Step 'Installing Debian packages, this will take a few minutes...' -NoNewline
+Invoke-Provision install root -Dots | Out-Null
 
 $restartWsl = $false
 & wsl.exe -d $Name -u root --exec test -e /dev/kvm
@@ -307,6 +347,7 @@ if ($restartWsl) {
             return
         }
     }
+    Write-Host 'Restarting WSL...'
     Invoke-Wsl --shutdown
 } else {
     # The groups and services take effect at the distribution's next start
