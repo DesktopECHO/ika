@@ -307,6 +307,11 @@ choosing the GPU mode:
   released device's GPU address space is not given back, so after about a
   hundred Android apps a device per instance runs out.
 
+For the console and app windows, Ika sets `GALLIUM_DRIVER=d3d12` where Mesa
+has its D3D12 driver, unless you set one. Mesa's OpenGL otherwise falls back
+to llvmpipe on WSL2, drawing every frame of the window on the CPU: Zink,
+OpenGL on Dozen, refuses for lack of robustness2's `nullDescriptor`.
+
 `gpu_mode = auto` then picks `gfxstream_guest_angle`, as Venus needs the
 dma-bufs Dozen cannot export. The start log has a `WSL2:` line when Ika set
 this up.

@@ -5564,6 +5564,17 @@ append_scrcpy_env() {
     scrcpy_env_ref+=("LIBDECOR_PLUGIN_DIR=${PACKAGED_WSL_GPU_DIR}/libdecor")
   fi
 
+  # On WSL2 the GPU is reached only through Direct3D 12 (/dev/dxg). Mesa's
+  # OpenGL then falls back to llvmpipe, drawing every frame of the window on
+  # the CPU (Zink, OpenGL on Dozen, refuses without robustness2's
+  # nullDescriptor); its d3d12 driver draws on the GPU. Only where the
+  # distribution's Mesa has it, and unless the user set a GALLIUM_DRIVER.
+  if [[ -e /dev/dxg && -z "${GALLIUM_DRIVER:-}" && "${IKA_WSL_GPU_FIX:-1}" != "0" ]] \
+      && { compgen -G '/usr/lib*/dri/d3d12_dri.so' >/dev/null \
+           || compgen -G '/usr/lib/*/dri/d3d12_dri.so' >/dev/null; }; then
+    scrcpy_env_ref+=("GALLIUM_DRIVER=d3d12")
+  fi
+
   # On WSLg the title bars look like Windows': scrcpy sizes them for Windows'
   # display scale, read when the window opens, and sets their title in
   # Windows' font.
