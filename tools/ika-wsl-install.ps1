@@ -325,7 +325,7 @@ if ($existing -contains $Name) {
     # bridge of its Android lives on in the network stack WSL's distributions
     # share, without the DHCP server that went with the distribution, and the
     # next Ika, finding the bridge, starts none: its Android got no address.
-    Write-Step 'Stopping old instance'
+    Write-Step 'Stopping old Ika instance'
     & wsl.exe -d $Name --exec sh -c 'command -v ika >/dev/null 2>&1 && ika stop >/dev/null 2>&1; true'
     Write-Step 'Removing old Ika instance'
     Invoke-Wsl --unregister $Name
