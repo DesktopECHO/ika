@@ -562,6 +562,14 @@
   valid texture"). gfxstream now keeps a YUV buffer whose format the GPU
   cannot create as RGBA8, converted from the guest's YUV bytes, and Ika's
   Dozen layer creates Android's images of it as RGBA8.
+- On WSL2, gfxstream decodes ASTC textures on the CPU as they are uploaded,
+  instead of with its compute shaders, the main suspect in GPU hangs through
+  Dozen: Windows reset the GPU, D3D12 removed the device, and gfxstream's
+  abort on `VK_ERROR_DEVICE_LOST` ended the whole VM a few seconds into
+  Asphalt 8 and 9 on a Radeon 780M. The CPU decoder, which Ika's build of
+  gfxstream left out, now decodes any number of uploads to an image, with
+  padded rows, array layers and partial regions, and frees its staging memory
+  once the upload has run. `IKA_ASTC_DECODE=gpu` or `cpu` chooses on any host.
 - Android no longer fails to start where PipeWire cannot make a stream:
   ika_stream freed the stream's properties a second time after PipeWire had,
   aborted, and took the device down with it. Its audio is then dropped.

@@ -92,5 +92,10 @@ git_repository(
         # converted on upload: Mesa's Dozen (WSL) has no three-plane YUV, and
         # SurfaceFlinger aborted on a software decoder's YV12 frames.
         "@//build_external/gfxstream:PATCH.gfxstream.yuv-rgba-fallback.patch",
+        # Decode ASTC textures on the CPU on Mesa's Dozen (WSL): the GPU decoder
+        # is the main suspect in GPU hangs there, which removed the D3D12
+        # device and ended the VM.
+        # IKA_ASTC_DECODE=cpu or gpu overrides the choice on any device.
+        "@//build_external/gfxstream:PATCH.gfxstream.astc-cpu-decoding-dozen.patch",
     ],
 )

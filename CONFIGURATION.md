@@ -385,6 +385,7 @@ These have no setting:
 | `IKA_ROOT_BOOT_TIMEOUT_SEC` | Seconds `ika root` waits for each boot (default 900) |
 | `IKA_NOTIFY=true` | Reports progress and errors as desktop notifications. The menu entries set it |
 | `IKA_LATENCY=1` | The console logs its frames' latency to `~/ika/console.log` every 300 frames |
+| `IKA_ASTC_DECODE=gpu` or `cpu` | Where gfxstream decodes ASTC textures for hosts without them: the CPU on WSL2's Dozen and the GPU elsewhere by default (see [WSL2](GRAPHICS.md#wsl2)) |
 | `NO_COLOR` | `ika app` marks open windows "(open)" instead of bold |
 
 ## Windows (WSL2)

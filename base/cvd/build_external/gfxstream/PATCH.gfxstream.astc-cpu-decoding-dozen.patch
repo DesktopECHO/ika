@@ -1,0 +1,1486 @@
+Patch summary:
+Decode ASTC textures on the CPU on Mesa's Dozen (WSL2). gfxstream's GPU ASTC
+decoder, compute shaders run through Dozen's D3D12 translation, is the main
+suspect in GPU hangs there: Windows reset the GPU, D3D12 removed the device,
+and gfxstream aborted on VK_ERROR_DEVICE_LOST, ending the VM (Asphalt 8 and 9
+on a Radeon 780M).
+
+- Build the CPU decoder: the Bazel build compiled the no-op one. A Bazel
+  target for the bundled astc-encoder, decoder only, for the compiler's
+  baseline ISA, so it runs on any x86-64 or ARM64 CPU. Eight worker threads.
+- VkEmulation picks CPU decoding when the device's driver is Dozen
+  (VK_DRIVER_ID_MESA_DOZEN), GPU decoding otherwise. IKA_ASTC_DECODE=cpu or
+  gpu overrides it on any device.
+- The CPU path decodes every region of a buffer-to-image copy: any number of
+  copies per image, padded rows (bufferRowLength), layer pitch
+  (bufferImageHeight), array layers and partial, block-aligned regions, with
+  overflow-checked bounds on the guest's offsets. It used to decode one full,
+  packed mip level per image and skip the rest, leaving them blank.
+- The decoded texels' staging buffer belongs to the command buffer that
+  copies from it, and goes when the command buffer is reset or freed; it used
+  to stay for the image's lifetime, several times the size of its texture.
+- An image whose ASTC data arrives some way the CPU cannot decode (an
+  image-to-image copy, a source buffer the host has not mapped) is decoded on
+  the GPU, from its compressed mipmaps, the next time it becomes readable,
+  with a warning in the log.
+- OpenGL ES keeps advertising ASTC only where the host's GL has it natively.
+- Unit tests of the CPU path's regions, bounds and staging buffers, with a
+  fake driver and decoder, and of decoding with astc-encoder.
+diff --git a/host/compressed_textures/BUILD.bazel b/host/compressed_textures/BUILD.bazel
+index a2d2955..8252802 100644
+--- a/host/compressed_textures/BUILD.bazel
++++ b/host/compressed_textures/BUILD.bazel
+@@ -9,7 +9,7 @@ package(
+ cc_library(
+     name = "gfxstream_host_compressed_textures",
+     srcs = [
+-        "astc_cpu_decompressor_noop.cpp",
++        "astc_cpu_decompressor_impl.cpp",
+     ],
+     hdrs = glob(["include/**/*.h"]),
+     copts = GFXSTREAM_HOST_COPTS,
+@@ -18,6 +18,7 @@ cc_library(
+     strip_include_prefix = "include",
+     deps = [
+         "//common/etc:gfxstream_etc",
++        "//third_party/astc-encoder:gfxstream_astcenc",
+     ],
+ )
+ 
+diff --git a/host/compressed_textures/astc_cpu_decompressor_impl.cpp b/host/compressed_textures/astc_cpu_decompressor_impl.cpp
+index f93640c..73f7934 100644
+--- a/host/compressed_textures/astc_cpu_decompressor_impl.cpp
++++ b/host/compressed_textures/astc_cpu_decompressor_impl.cpp
+@@ -24,7 +24,8 @@ namespace host {
+ namespace vk {
+ namespace {
+ 
+-constexpr uint32_t kNumThreads = 2;
++// Decoding runs while gfxstream holds its Vulkan decoder lock, so use several cores.
++constexpr uint32_t kNumThreads = 8;
+ 
+ const astcenc_swizzle kSwizzle = {ASTCENC_SWZ_R, ASTCENC_SWZ_G, ASTCENC_SWZ_B, ASTCENC_SWZ_A};
+ 
+diff --git a/host/render_control.cpp b/host/render_control.cpp
+index 50646e6..a1303c1 100644
+--- a/host/render_control.cpp
++++ b/host/render_control.cpp
+@@ -654,7 +654,9 @@ static EGLint rcGetGLString(EGLenum name, void* buffer, EGLint bufferSize) {
+             const std::string& glExtensions = fb->getGlesExtensionsString();
+             const bool hasNativeAstc =
+                 glExtensions.find("GL_KHR_texture_compression_astc_ldr") != std::string::npos;
+-            const bool hasAstcDecompressor = vk::AstcCpuDecompressor::get().available();
++            // The CPU decoder is built for the Vulkan emulation on Mesa's Dozen. OpenGL ES keeps
++            // what it had with the no-op decoder: ASTC only where the host's GL has it natively.
++            const bool hasAstcDecompressor = false;
+             if (hasNativeAstc || hasAstcDecompressor) {
+                 glStr += "GL_KHR_texture_compression_astc_ldr ";
+             } else {
+diff --git a/host/vulkan/emulated_textures/BUILD.bazel b/host/vulkan/emulated_textures/BUILD.bazel
+index c6fc036..2886c77 100644
+--- a/host/vulkan/emulated_textures/BUILD.bazel
++++ b/host/vulkan/emulated_textures/BUILD.bazel
+@@ -1,4 +1,4 @@
+-load("@rules_cc//cc:defs.bzl", "cc_library")
++load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+ load("//:build_variables.bzl", "GFXSTREAM_HOST_COPTS", "GFXSTREAM_HOST_DEFINES", "GFXSTREAM_HOST_LINKOPTS")
+ 
+ package(
+@@ -35,3 +35,20 @@ cc_library(
+         "//third_party/vulkan:gfxstream_vulkan_headers",
+     ],
+ )
++
++cc_test(
++    name = "gfxstream_host_vulkan_emulated_textures_unittests",
++    srcs = [
++        "astc_texture_unittest.cpp",
++    ],
++    copts = GFXSTREAM_HOST_COPTS,
++    defines = GFXSTREAM_HOST_DEFINES,
++    linkopts = GFXSTREAM_HOST_LINKOPTS,
++    deps = [
++        ":gfxstream_host_vulkan_emulated_textures",
++        "//host:gfxstream_backend_static",
++        "//host/vulkan:gfxstream_vulkan_server",
++        "@googletest//:gtest",
++        "@googletest//:gtest_main",
++    ],
++)
+diff --git a/host/vulkan/emulated_textures/astc_texture.cpp b/host/vulkan/emulated_textures/astc_texture.cpp
+index 41bbbf4..94fcb97 100644
+--- a/host/vulkan/emulated_textures/astc_texture.cpp
++++ b/host/vulkan/emulated_textures/astc_texture.cpp
+@@ -14,9 +14,11 @@
+ 
+ #include "astc_texture.h"
+ 
++#include <algorithm>
+ #include <atomic>
+ #include <chrono>
+ #include <cstring>
++#include <limits>
+ #include <optional>
+ #include <vector>
+ 
+@@ -30,274 +32,293 @@ namespace {
+ 
+ using std::chrono::milliseconds;
+ 
++constexpr VkDeviceSize kAstcBlockBytes = 16;
++constexpr VkDeviceSize kDecodedTexelBytes = 4;
++
+ // Print stats each time we decompress this many pixels:
+ constexpr uint64_t kProcessedPixelsLogInterval = 10'000'000;
+ 
+ std::atomic<uint64_t> pixels_processed = 0;
+ std::atomic<uint64_t> ms_elapsed = 0;
+-std::atomic<int64_t> bytes_used = 0;
+ 
+ uint32_t mipmapSize(uint32_t size, uint32_t mipLevel) {
+     return std::max<uint32_t>(size >> mipLevel, 1);
+ }
+ 
+-bool isRegionValid(const VkBufferImageCopy& region, uint32_t width, uint32_t height) {
+-    // TODO(gregschlom) deal with those cases. See details at:
+-    // https://registry.khronos.org/vulkan/specs/1.0-extensions/html/chap20.html#copies-buffers-images-addressing
+-    // https://stackoverflow.com/questions/46501832/vulkan-vkbufferimagecopy-for-partial-transfer
++uint64_t ceilDiv(uint64_t x, uint64_t y) { return (x + y - 1) / y; }
+ 
+-    if (region.bufferRowLength != 0 || region.bufferImageHeight != 0) {
+-        GFXSTREAM_WARNING("ASTC CPU decompression skipped: non-packed buffer");
+-        return false;
+-    }
+-    if (region.imageOffset.x != 0 || region.imageOffset.y != 0) {
+-        GFXSTREAM_WARNING("ASTC CPU decompression skipped: imageOffset is non-zero");
+-        return false;
+-    }
+-    if (region.imageExtent.width != width || region.imageExtent.height != height) {
+-        GFXSTREAM_WARNING(
+-            "ASTC CPU decompression skipped: imageExtent is less than the entire image");
+-        return false;
+-    }
+-    return true;
++VkBufferImageCopy toBufferImageCopy(const VkBufferImageCopy& r) { return r; }
++VkBufferImageCopy toBufferImageCopy(const VkBufferImageCopy2& r) {
++    return {r.bufferOffset, r.bufferRowLength, r.bufferImageHeight, r.imageSubresource,
++            r.imageOffset, r.imageExtent};
+ }
+ 
++// Where one region's ASTC blocks are in the source buffer, and where its texels go in the
++// staging buffer.
++struct RegionLayout {
++    VkBufferImageCopy region;  // The guest's region
++    uint32_t width;            // Texels decoded per layer
++    uint32_t height;
++    uint32_t layerCount;
++    uint64_t blocksX;          // Blocks per row and rows per layer the region covers
++    uint64_t blocksY;
++    uint64_t rowPitch;         // Bytes between block rows and between layers in the source
++    uint64_t layerPitch;
++    VkDeviceSize stagingOffset;
++};
++
+ }  // namespace
+ 
++AstcStagingBuffer::~AstcStagingBuffer() {
++    if (!vk || !device) return;
++    if (buffer != VK_NULL_HANDLE) vk->vkDestroyBuffer(device, buffer, nullptr);
++    if (memory != VK_NULL_HANDLE) vk->vkFreeMemory(device, memory, nullptr);
++}
++
+ AstcTexture::AstcTexture(VulkanDispatch* vk, VkDevice device, VkPhysicalDevice physicalDevice,
+-                         VkExtent3D imgSize, uint32_t blockWidth, uint32_t blockHeight,
++                         VkExtent3D imgSize, uint32_t mipLevels, uint32_t layerCount,
++                         uint32_t blockWidth, uint32_t blockHeight,
+                          AstcCpuDecompressor* decompressor)
+     : mVk(vk),
+       mDevice(device),
+       mPhysicalDevice(physicalDevice),
+       mImgSize(imgSize),
++      mMipLevels(mipLevels),
++      mLayerCount(layerCount),
+       mBlockWidth(blockWidth),
+       mBlockHeight(blockHeight),
+       mDecompressor(decompressor) {}
+ 
+-AstcTexture::~AstcTexture() { destroyVkBuffer(); }
+-
+ bool AstcTexture::canDecompressOnCpu() const { return mDecompressor->available(); }
+ 
+-uint8_t* AstcTexture::createVkBufferAndMapMemory(size_t bufferSize) {
+-    VkResult res;
+-    mBufferSize = bufferSize;  // Save the buffer size, for statistics purpose only
+-    bytes_used += bufferSize;
+-
+-    if (mDecompBuffer || mDecompBufferMemory) {
+-        GFXSTREAM_WARNING(
+-            "ASTC CPU decompression failed: tried to decompress same image more than once.");
+-        return nullptr;
+-    }
++std::shared_ptr<AstcStagingBuffer> AstcTexture::createStagingBuffer(VkDeviceSize size,
++                                                                    uint8_t** mapped) {
++    auto staging = std::make_shared<AstcStagingBuffer>(mVk, mDevice);
++    staging->size = size;
+ 
+     VkBufferCreateInfo bufferInfo = {
+         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+-        .pNext = nullptr,
+-        .flags = 0,
+-        .size = bufferSize,
++        .size = size,
+         .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+-        .queueFamilyIndexCount = 0,
+-        .pQueueFamilyIndices = nullptr,
+     };
+-    res = mVk->vkCreateBuffer(mDevice, &bufferInfo, nullptr, &mDecompBuffer);
++    VkResult res = mVk->vkCreateBuffer(mDevice, &bufferInfo, nullptr, &staging->buffer);
+     if (res != VK_SUCCESS) {
+-        GFXSTREAM_WARNING("ASTC CPU decompression: vkCreateBuffer failed: %d", res);
+-        mDecompBuffer = VK_NULL_HANDLE;
++        GFXSTREAM_WARNING("ASTC CPU decoding: vkCreateBuffer failed: %d", res);
++        staging->buffer = VK_NULL_HANDLE;
+         return nullptr;
+     }
+ 
+     VkMemoryRequirements memRequirements;
+-    mVk->vkGetBufferMemoryRequirements(mDevice, mDecompBuffer, &memRequirements);
++    mVk->vkGetBufferMemoryRequirements(mDevice, staging->buffer, &memRequirements);
+ 
+     std::optional<uint32_t> memIndex = vk_util::findMemoryType(
+         mVk, mPhysicalDevice, memRequirements.memoryTypeBits,
+         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+             VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+     if (!memIndex) {
+-        // Do it again, but without VK_MEMORY_PROPERTY_HOST_CACHED_BIT this time
+         memIndex = vk_util::findMemoryType(
+             mVk, mPhysicalDevice, memRequirements.memoryTypeBits,
+             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+     }
+     if (!memIndex) {
+-        GFXSTREAM_WARNING(
+-            "ASTC CPU decompression: no suitable memory type to decompress the image");
++        GFXSTREAM_WARNING("ASTC CPU decoding: no host-visible memory type for the decoded texels");
+         return nullptr;
+     }
+ 
+     VkMemoryAllocateInfo allocInfo = {
+         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+-        .pNext = nullptr,
+         .allocationSize = memRequirements.size,
+         .memoryTypeIndex = *memIndex,
+     };
+-    res = mVk->vkAllocateMemory(mDevice, &allocInfo, nullptr, &mDecompBufferMemory);
++    res = mVk->vkAllocateMemory(mDevice, &allocInfo, nullptr, &staging->memory);
+     if (res != VK_SUCCESS) {
+-        GFXSTREAM_WARNING("ASTC CPU decompression: vkAllocateMemory failed: %d", res);
+-        mDecompBufferMemory = VK_NULL_HANDLE;
++        GFXSTREAM_WARNING("ASTC CPU decoding: vkAllocateMemory of %llu bytes failed: %d",
++                          (unsigned long long)allocInfo.allocationSize, res);
++        staging->memory = VK_NULL_HANDLE;
+         return nullptr;
+     }
+ 
+-    res = mVk->vkBindBufferMemory(mDevice, mDecompBuffer, mDecompBufferMemory, 0);
++    res = mVk->vkBindBufferMemory(mDevice, staging->buffer, staging->memory, 0);
+     if (res != VK_SUCCESS) {
+-        GFXSTREAM_WARNING("ASTC CPU decompression: vkBindBufferMemory failed: %d", res);
++        GFXSTREAM_WARNING("ASTC CPU decoding: vkBindBufferMemory failed: %d", res);
+         return nullptr;
+     }
+ 
+-    uint8_t* decompData;
+-    res = mVk->vkMapMemory(mDevice, mDecompBufferMemory, 0, bufferSize, 0, (void**)&decompData);
++    res = mVk->vkMapMemory(mDevice, staging->memory, 0, size, 0, (void**)mapped);
+     if (res != VK_SUCCESS) {
+-        GFXSTREAM_WARNING("ASTC CPU decompression: vkMapMemory failed: %d", res);
++        GFXSTREAM_WARNING("ASTC CPU decoding: vkMapMemory failed: %d", res);
+         return nullptr;
+     }
+-
+-    return decompData;
+-}
+-
+-void AstcTexture::destroyVkBuffer() {
+-    bytes_used -= mBufferSize;
+-    if (mVk && mDevice) {
+-        mVk->vkDestroyBuffer(mDevice, mDecompBuffer, nullptr);
+-        mVk->vkFreeMemory(mDevice, mDecompBufferMemory, nullptr);
+-        mDecompBuffer = VK_NULL_HANDLE;
+-        mDecompBufferMemory = VK_NULL_HANDLE;
+-    }
++    return staging;
+ }
+ 
+ template <typename T>
+-void AstcTexture::on_vkCmdCopyBufferToImageImpl(VkCommandBuffer commandBuffer, uint8_t* srcAstcData,
+-                                                size_t astcDataSize, VkImage dstImage,
+-                                                VkImageLayout dstImageLayout, uint32_t regionCount,
+-                                                const T* pRegions,
+-                                                const VkDecoderContext& context) {
++std::shared_ptr<AstcStagingBuffer> AstcTexture::copyBufferToImageImpl(
++    VkCommandBuffer commandBuffer, const uint8_t* srcAstcData, size_t astcDataSize,
++    VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount, const T* pRegions) {
+     auto start_time = std::chrono::steady_clock::now();
+-    mSuccess = false;
+-    size_t decompSize = 0;  // How many bytes we need to hold the decompressed data
+-
+-    // Holds extra data about the region
+-    struct RegionInfo {
+-        uint32_t width;           // actual width (ie: mipmap width)
+-        uint32_t height;          // actual height (ie: mipmap height)
+-        uint32_t compressedSize;  // size of ASTC data for that region
+-    };
+ 
+-    std::vector<RegionInfo> regionInfos;
+-    regionInfos.reserve(regionCount);
+-
+-    // Make a copy of the regions and update the buffer offset of each to reflect the
+-    // correct location of the decompressed data
+-    std::vector<VkBufferImageCopy> decompRegions(regionCount);
+-    for (size_t i = 0; i < regionCount; ++i) {
+-        decompRegions[i] = VkBufferImageCopy {
+-            pRegions[i].bufferOffset,
+-            pRegions[i].bufferRowLength,
+-            pRegions[i].bufferImageHeight,
+-            pRegions[i].imageSubresource,
+-            pRegions[i].imageOffset,
+-            pRegions[i].imageExtent
+-        };
+-    }
+-    for (auto& decompRegion : decompRegions) {
+-        const uint32_t mipLevel = decompRegion.imageSubresource.mipLevel;
+-        const uint32_t width = mipmapSize(mImgSize.width, mipLevel);
+-        const uint32_t height = mipmapSize(mImgSize.height, mipLevel);
+-        const uint32_t numAstcBlocks = ((width + mBlockWidth - 1) / mBlockWidth) *
+-                                       ((height + mBlockHeight - 1) / mBlockHeight);
+-        const uint32_t compressedSize = numAstcBlocks * 16;
+-        // We haven't updated decompRegion.bufferOffset yet, so it's still the _compressed_ offset.
+-        // Keep the full 64-bit width: bufferOffset is guest-controlled and the read below uses the
+-        // untruncated value, so truncating to uint32_t here would let a large offset (e.g.
+-        // 0x1'0000'0000) pass the bounds check and then read out of bounds.
+-        const VkDeviceSize compressedDataOffset = decompRegion.bufferOffset;
+-
+-        // Do all the precondition checks
+-        if (!isRegionValid(decompRegion, width, height)) return;
+-        if (compressedDataOffset > astcDataSize || compressedSize > astcDataSize - compressedDataOffset) {
+-            GFXSTREAM_WARNING(
+-                "ASTC CPU decompression: data out of bounds. Offset: %llu, Size: %llu, Total %llu",
+-                (unsigned long long)compressedDataOffset, (unsigned long long)compressedSize,
+-                (unsigned long long)astcDataSize);
+-            return;
++    // Check every region before decoding any: the guest controls all of these values, and a
++    // region the CPU cannot decode makes the caller decode the whole image on the GPU instead.
++    std::vector<RegionLayout> layouts;
++    layouts.reserve(regionCount);
++    VkDeviceSize stagingSize = 0;
++    for (uint32_t i = 0; i < regionCount; ++i) {
++        RegionLayout l = {};
++        l.region = toBufferImageCopy(pRegions[i]);
++        const VkBufferImageCopy& r = l.region;
++        const uint32_t mipLevel = r.imageSubresource.mipLevel;
++        if (mipLevel >= mMipLevels) {
++            GFXSTREAM_WARNING("ASTC CPU decoding: mip level %u out of range", mipLevel);
++            return nullptr;
++        }
++        const uint32_t mipWidth = mipmapSize(mImgSize.width, mipLevel);
++        const uint32_t mipHeight = mipmapSize(mImgSize.height, mipLevel);
++        l.width = r.imageExtent.width;
++        l.height = r.imageExtent.height;
++        l.layerCount = r.imageSubresource.layerCount;
++        if (l.layerCount == VK_REMAINING_ARRAY_LAYERS &&
++            r.imageSubresource.baseArrayLayer < mLayerCount) {
++            l.layerCount = mLayerCount - r.imageSubresource.baseArrayLayer;
++        }
++        if (l.width == 0 || l.height == 0 || l.layerCount == 0 || r.imageExtent.depth != 1 ||
++            r.imageOffset.z != 0 || r.imageOffset.x < 0 || r.imageOffset.y < 0 ||
++            r.imageSubresource.baseArrayLayer >= mLayerCount ||
++            l.layerCount > mLayerCount - r.imageSubresource.baseArrayLayer) {
++            GFXSTREAM_WARNING("ASTC CPU decoding: unsupported region extent or layers");
++            return nullptr;
++        }
++        const uint64_t x = static_cast<uint64_t>(r.imageOffset.x);
++        const uint64_t y = static_cast<uint64_t>(r.imageOffset.y);
++        // Vulkan requires block-aligned offsets, and extents that are block multiples unless they
++        // reach the edge of the mip level.
++        if (x % mBlockWidth || y % mBlockHeight || x + l.width > mipWidth ||
++            y + l.height > mipHeight ||
++            (l.width % mBlockWidth && x + l.width != mipWidth) ||
++            (l.height % mBlockHeight && y + l.height != mipHeight)) {
++            GFXSTREAM_WARNING("ASTC CPU decoding: region not block-aligned or outside mip level %u",
++                              mipLevel);
++            return nullptr;
+         }
+ 
+-        decompRegion.bufferOffset = decompSize;
+-        decompSize += width * height * 4;
+-        regionInfos.push_back({width, height, compressedSize});
+-    }
++        l.blocksX = ceilDiv(l.width, mBlockWidth);
++        l.blocksY = ceilDiv(l.height, mBlockHeight);
++        const uint64_t rowLength = r.bufferRowLength ? r.bufferRowLength : l.width;
++        const uint64_t imageHeight = r.bufferImageHeight ? r.bufferImageHeight : l.height;
++        if (rowLength < l.width || imageHeight < l.height) {
++            GFXSTREAM_WARNING("ASTC CPU decoding: buffer row length or image height too small");
++            return nullptr;
++        }
++        // bufferRowLength and bufferImageHeight are any 32-bit values the guest likes, so the
++        // pitches and the end of the region are computed with overflow checks.
++        uint64_t lastByte = 0;
++        uint64_t layersSpan = 0;
++        uint64_t rowsSpan = 0;
++        l.rowPitch = ceilDiv(rowLength, mBlockWidth) * kAstcBlockBytes;
++        if (__builtin_mul_overflow(ceilDiv(imageHeight, mBlockHeight), l.rowPitch,
++                                   &l.layerPitch) ||
++            __builtin_mul_overflow(static_cast<uint64_t>(l.layerCount - 1), l.layerPitch,
++                                   &layersSpan) ||
++            __builtin_mul_overflow(l.blocksY - 1, l.rowPitch, &rowsSpan) ||
++            __builtin_add_overflow(static_cast<uint64_t>(r.bufferOffset), layersSpan,
++                                   &lastByte) ||
++            __builtin_add_overflow(lastByte, rowsSpan, &lastByte) ||
++            __builtin_add_overflow(lastByte, l.blocksX * kAstcBlockBytes, &lastByte) ||
++            lastByte > astcDataSize) {
++            GFXSTREAM_WARNING(
++                "ASTC CPU decoding: region reads past the source buffer (offset %llu, buffer size "
++                "%llu)",
++                (unsigned long long)r.bufferOffset, (unsigned long long)astcDataSize);
++            return nullptr;
++        }
+ 
+-    // Create a new VkBuffer to hold the decompressed data
+-    uint8_t* decompData = createVkBufferAndMapMemory(decompSize);
+-    if (!decompData) {
+-        destroyVkBuffer();  // The destructor would have done it anyway, but may as well do it early
+-        return;
++        l.stagingOffset = stagingSize;
++        const uint64_t decodedBytes =
++            static_cast<uint64_t>(l.width) * l.height * l.layerCount * kDecodedTexelBytes;
++        if (decodedBytes > std::numeric_limits<VkDeviceSize>::max() - stagingSize) {
++            return nullptr;
++        }
++        stagingSize += decodedBytes;
++        layouts.push_back(l);
+     }
+-
+-    // Decompress each region
+-    for (uint32_t i = 0; i < regionCount; i++) {
+-        const auto& compRegion = pRegions[i];
+-        const auto& decompRegion = decompRegions[i];
+-        const auto& regionInfo = regionInfos[i];
+-
+-        int32_t status = mDecompressor->decompress(
+-            regionInfo.width, regionInfo.height, mBlockWidth, mBlockHeight,
+-            srcAstcData + compRegion.bufferOffset, regionInfo.compressedSize,
+-            decompData + decompRegion.bufferOffset);
+-
+-        if (status != 0) {
+-            GFXSTREAM_WARNING("ASTC CPU decompression failed: %s.",
+-                              mDecompressor->getStatusString(status));
+-            mVk->vkUnmapMemory(mDevice, mDecompBufferMemory);
+-            destroyVkBuffer();
+-            return;
++    if (layouts.empty()) return nullptr;
++
++    uint8_t* staged = nullptr;
++    std::shared_ptr<AstcStagingBuffer> staging = createStagingBuffer(stagingSize, &staged);
++    if (!staging) return nullptr;
++
++    std::vector<uint8_t> packed;
++    std::vector<VkBufferImageCopy> copies;
++    copies.reserve(layouts.size());
++    for (const RegionLayout& l : layouts) {
++        const uint64_t packedRow = l.blocksX * kAstcBlockBytes;
++        const uint64_t packedLayer = packedRow * l.blocksY;
++        const VkDeviceSize decodedLayer =
++            static_cast<VkDeviceSize>(l.width) * l.height * kDecodedTexelBytes;
++        for (uint32_t layer = 0; layer < l.layerCount; ++layer) {
++            const uint8_t* src = srcAstcData + l.region.bufferOffset + layer * l.layerPitch;
++            // The decoder takes the blocks of an image packed row after row.
++            if (l.rowPitch != packedRow) {
++                packed.resize(packedLayer);
++                for (uint64_t row = 0; row < l.blocksY; ++row) {
++                    memcpy(packed.data() + row * packedRow, src + row * l.rowPitch, packedRow);
++                }
++                src = packed.data();
++            }
++            int32_t status = mDecompressor->decompress(
++                l.width, l.height, mBlockWidth, mBlockHeight, src, packedLayer,
++                staged + l.stagingOffset + layer * decodedLayer);
++            if (status != 0) {
++                GFXSTREAM_WARNING("ASTC CPU decoding failed: %s",
++                                  mDecompressor->getStatusString(status));
++                mVk->vkUnmapMemory(mDevice, staging->memory);
++                return nullptr;
++            }
+         }
++        VkBufferImageCopy copy = l.region;
++        copy.bufferOffset = l.stagingOffset;
++        copy.bufferRowLength = 0;
++        copy.bufferImageHeight = 0;
++        copy.imageSubresource.layerCount = l.layerCount;
++        copies.push_back(copy);
+     }
++    mVk->vkUnmapMemory(mDevice, staging->memory);
+ 
+-    mVk->vkUnmapMemory(mDevice, mDecompBufferMemory);
+-
+-    // Finally, actually copy the buffer to the image
+-    mVk->vkCmdCopyBufferToImage(commandBuffer, mDecompBuffer, dstImage, dstImageLayout,
+-                                decompRegions.size(), decompRegions.data());
++    mVk->vkCmdCopyBufferToImage(commandBuffer, staging->buffer, dstImage, dstImageLayout,
++                                copies.size(), copies.data());
+ 
+-    mSuccess = true;
+     auto end_time = std::chrono::steady_clock::now();
+-
+-    // Compute stats
+-    pixels_processed += decompSize / 4;
++    pixels_processed += stagingSize / kDecodedTexelBytes;
+     ms_elapsed += std::chrono::duration_cast<milliseconds>(end_time - start_time).count();
+-
+     uint64_t total_pixels = pixels_processed.load();
+     uint64_t total_time = ms_elapsed.load();
+-
+     if (total_pixels >= kProcessedPixelsLogInterval && total_time > 0) {
+         pixels_processed.store(0);
+         ms_elapsed.store(0);
+-        GFXSTREAM_INFO(
+-            "ASTC CPU decompression: %.2f Mpix in %.2f seconds (%.2f Mpix/s). Total mem: %.2f MB",
+-            total_pixels / 1'000'000.0, total_time / 1000.0,
+-            (float)total_pixels / total_time / 1000.0, bytes_used / 1000000.0);
++        GFXSTREAM_INFO("ASTC CPU decoding: %.2f Mpix in %.2f seconds (%.2f Mpix/s)",
++                       total_pixels / 1'000'000.0, total_time / 1000.0,
++                       (float)total_pixels / total_time / 1000.0);
+     }
++    return staging;
+ }
+ 
+-void AstcTexture::on_vkCmdCopyBufferToImage(VkCommandBuffer commandBuffer, uint8_t* srcAstcData,
+-                                size_t astcDataSize, VkImage dstImage,
+-                                VkImageLayout dstImageLayout, uint32_t regionCount,
+-                                const VkBufferImageCopy* pRegions,
+-                                const VkDecoderContext& context) {
+-    on_vkCmdCopyBufferToImageImpl(commandBuffer, srcAstcData, astcDataSize, dstImage, dstImageLayout, regionCount, pRegions, context);
++std::shared_ptr<AstcStagingBuffer> AstcTexture::on_vkCmdCopyBufferToImage(
++    VkCommandBuffer commandBuffer, const uint8_t* srcAstcData, size_t astcDataSize,
++    VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount,
++    const VkBufferImageCopy* pRegions, const VkDecoderContext& context) {
++    return copyBufferToImageImpl(commandBuffer, srcAstcData, astcDataSize, dstImage,
++                                 dstImageLayout, regionCount, pRegions);
+ }
+ 
+-void AstcTexture::on_vkCmdCopyBufferToImage2(VkCommandBuffer commandBuffer, uint8_t* srcAstcData,
+-                                size_t astcDataSize, const VkCopyBufferToImageInfo2* pCopyBufferToImageInfo,
+-                                const VkDecoderContext& context) {
+-    on_vkCmdCopyBufferToImageImpl(commandBuffer,
+-                                  srcAstcData,
+-                                  astcDataSize,
+-                                  pCopyBufferToImageInfo->dstImage,
+-                                  pCopyBufferToImageInfo->dstImageLayout,
+-                                  pCopyBufferToImageInfo->regionCount,
+-                                  pCopyBufferToImageInfo->pRegions,
+-                                  context);
++std::shared_ptr<AstcStagingBuffer> AstcTexture::on_vkCmdCopyBufferToImage2(
++    VkCommandBuffer commandBuffer, const uint8_t* srcAstcData, size_t astcDataSize,
++    const VkCopyBufferToImageInfo2* pCopyBufferToImageInfo, const VkDecoderContext& context) {
++    return copyBufferToImageImpl(commandBuffer, srcAstcData, astcDataSize,
++                                 pCopyBufferToImageInfo->dstImage,
++                                 pCopyBufferToImageInfo->dstImageLayout,
++                                 pCopyBufferToImageInfo->regionCount,
++                                 pCopyBufferToImageInfo->pRegions);
+ }
+ 
+ }  // namespace vk
+diff --git a/host/vulkan/emulated_textures/astc_texture.h b/host/vulkan/emulated_textures/astc_texture.h
+index 18f6d13..41807d4 100644
+--- a/host/vulkan/emulated_textures/astc_texture.h
++++ b/host/vulkan/emulated_textures/astc_texture.h
+@@ -15,6 +15,8 @@
+ 
+ #include <vulkan/vulkan.h>
+ 
++#include <memory>
++
+ #include "gfxstream/host/astc_cpu_decompressor.h"
+ #include "goldfish_vk_dispatch.h"
+ #include "vk_decoder_context.h"
+@@ -23,52 +25,62 @@ namespace gfxstream {
+ namespace host {
+ namespace vk {
+ 
+-// Holds the resources necessary to perform CPU ASTC decompression of a single texture.
++// A host-visible buffer holding texels decoded on the CPU, the source of a copy recorded into a
++// command buffer. It must live until that command buffer has executed: the command buffer's
++// CommandBufferInfo holds it, and releases it when the command buffer is reset or freed, which
++// Vulkan only allows once the command buffer is no longer pending.
++struct AstcStagingBuffer {
++    AstcStagingBuffer(VulkanDispatch* vk, VkDevice device) : vk(vk), device(device) {}
++    ~AstcStagingBuffer();
++    AstcStagingBuffer(const AstcStagingBuffer&) = delete;
++    AstcStagingBuffer& operator=(const AstcStagingBuffer&) = delete;
++
++    VulkanDispatch* vk;
++    VkDevice device;
++    VkBuffer buffer = VK_NULL_HANDLE;
++    VkDeviceMemory memory = VK_NULL_HANDLE;
++    VkDeviceSize size = 0;
++};
++
++// Decodes the ASTC data the guest copies into an emulated ASTC image on the CPU, and records a
++// copy of the decoded texels into the image's uncompressed output image.
+ class AstcTexture {
+    public:
+     AstcTexture(VulkanDispatch* vk, VkDevice device, VkPhysicalDevice physicalDevice,
+-                VkExtent3D imgSize, uint32_t blockWidth, uint32_t blockHeight,
+-                AstcCpuDecompressor* decompressor);
+-
+-    ~AstcTexture();
++                VkExtent3D imgSize, uint32_t mipLevels, uint32_t layerCount, uint32_t blockWidth,
++                uint32_t blockHeight, AstcCpuDecompressor* decompressor);
+ 
+     // Whether we're able to decompress ASTC textures on the CPU
+     bool canDecompressOnCpu() const;
+ 
+-    // Whether this texture was successfully decompressed on the CPU
+-    bool successfullyDecompressed() const { return mSuccess; }
+-
+-    void on_vkCmdCopyBufferToImage(VkCommandBuffer commandBuffer, uint8_t* srcAstcData,
+-                                   size_t astcDataSize, VkImage dstImage,
+-                                   VkImageLayout dstImageLayout, uint32_t regionCount,
+-                                   const VkBufferImageCopy* pRegions,
+-                                   const VkDecoderContext& context);
+-    void on_vkCmdCopyBufferToImage2(VkCommandBuffer commandBuffer, uint8_t* srcAstcData,
+-                                   size_t astcDataSize, const VkCopyBufferToImageInfo2* pCopyBufferToImageInfo,
+-                                   const VkDecoderContext& context);
++    // Decodes the regions of a buffer-to-image copy into dstImage, the output image, and records
++    // the copy of the decoded texels. srcAstcData points to the start of the guest's source buffer,
++    // astcDataSize bytes long. Returns the staging buffer the recorded copy reads from, or nullptr,
++    // having recorded nothing, if any region cannot be decoded on the CPU.
++    std::shared_ptr<AstcStagingBuffer> on_vkCmdCopyBufferToImage(
++        VkCommandBuffer commandBuffer, const uint8_t* srcAstcData, size_t astcDataSize,
++        VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount,
++        const VkBufferImageCopy* pRegions, const VkDecoderContext& context);
++    std::shared_ptr<AstcStagingBuffer> on_vkCmdCopyBufferToImage2(
++        VkCommandBuffer commandBuffer, const uint8_t* srcAstcData, size_t astcDataSize,
++        const VkCopyBufferToImageInfo2* pCopyBufferToImageInfo, const VkDecoderContext& context);
+ 
+    private:
++    template <typename T>
++    std::shared_ptr<AstcStagingBuffer> copyBufferToImageImpl(
++        VkCommandBuffer commandBuffer, const uint8_t* srcAstcData, size_t astcDataSize,
++        VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount, const T* pRegions);
+ 
+-    template<typename T>
+-    void on_vkCmdCopyBufferToImageImpl(VkCommandBuffer commandBuffer, uint8_t* srcAstcData,
+-                                   size_t astcDataSize, VkImage dstImage,
+-                                   VkImageLayout dstImageLayout, uint32_t regionCount,
+-                                   const T* pRegions,
+-                                   const VkDecoderContext& context);
+-
+-    uint8_t* createVkBufferAndMapMemory(size_t bufferSize);
+-    void destroyVkBuffer();
++    std::shared_ptr<AstcStagingBuffer> createStagingBuffer(VkDeviceSize size, uint8_t** mapped);
+ 
+-    bool mSuccess = false;  // true if the image was successfully decompressed
+     VulkanDispatch* mVk;
+     VkDevice mDevice;
+     VkPhysicalDevice mPhysicalDevice;
+     VkExtent3D mImgSize;
++    uint32_t mMipLevels;
++    uint32_t mLayerCount;
+     uint32_t mBlockWidth;
+     uint32_t mBlockHeight;
+-    VkBuffer mDecompBuffer = VK_NULL_HANDLE;              // VkBuffer of the decompressed image
+-    VkDeviceMemory mDecompBufferMemory = VK_NULL_HANDLE;  // Memory of the decompressed image
+-    uint64_t mBufferSize = 0;                             // Size of the decompressed image
+     AstcCpuDecompressor* mDecompressor;
+ };
+ 
+diff --git a/host/vulkan/emulated_textures/astc_texture_unittest.cpp b/host/vulkan/emulated_textures/astc_texture_unittest.cpp
+new file mode 100644
+index 0000000..e528cdf
+--- /dev/null
++++ b/host/vulkan/emulated_textures/astc_texture_unittest.cpp
+@@ -0,0 +1,329 @@
++// Copyright 2026 The Android Open Source Project
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++// http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#include "astc_texture.h"
++
++#include <gtest/gtest.h>
++
++#include <map>
++#include <vector>
++
++namespace gfxstream {
++namespace host {
++namespace vk {
++namespace {
++
++// A Vulkan driver of host memory: buffers and their memory are heap blocks, and recorded copies
++// are kept for the test to check.
++struct FakeDriver {
++    std::map<VkDeviceMemory, std::vector<uint8_t>> memories;
++    std::map<VkBuffer, VkDeviceSize> buffers;
++    std::vector<std::vector<VkBufferImageCopy>> copies;
++    VkBuffer lastCopySource = VK_NULL_HANDLE;
++    int buffersDestroyed = 0;
++    int memoriesFreed = 0;
++    uint64_t nextHandle = 1;
++};
++FakeDriver* gDriver = nullptr;
++
++template <typename T>
++T fakeHandle() {
++    return reinterpret_cast<T>(static_cast<uintptr_t>(gDriver->nextHandle++));
++}
++
++VKAPI_ATTR VkResult VKAPI_CALL fakeCreateBuffer(VkDevice, const VkBufferCreateInfo* info,
++                                               const VkAllocationCallbacks*, VkBuffer* buffer) {
++    *buffer = fakeHandle<VkBuffer>();
++    gDriver->buffers[*buffer] = info->size;
++    return VK_SUCCESS;
++}
++VKAPI_ATTR void VKAPI_CALL fakeDestroyBuffer(VkDevice, VkBuffer buffer,
++                                             const VkAllocationCallbacks*) {
++    gDriver->buffers.erase(buffer);
++    gDriver->buffersDestroyed++;
++}
++VKAPI_ATTR void VKAPI_CALL fakeGetBufferMemoryRequirements(VkDevice, VkBuffer buffer,
++                                                           VkMemoryRequirements* reqs) {
++    *reqs = {gDriver->buffers[buffer], 4, 1};
++}
++VKAPI_ATTR void VKAPI_CALL fakeGetPhysicalDeviceMemoryProperties(
++    VkPhysicalDevice, VkPhysicalDeviceMemoryProperties* props) {
++    *props = {};
++    props->memoryTypeCount = 1;
++    props->memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
++                                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
++                                          VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
++}
++VKAPI_ATTR VkResult VKAPI_CALL fakeAllocateMemory(VkDevice, const VkMemoryAllocateInfo* info,
++                                                 const VkAllocationCallbacks*,
++                                                 VkDeviceMemory* memory) {
++    *memory = fakeHandle<VkDeviceMemory>();
++    gDriver->memories[*memory].assign(info->allocationSize, 0xCD);
++    return VK_SUCCESS;
++}
++VKAPI_ATTR void VKAPI_CALL fakeFreeMemory(VkDevice, VkDeviceMemory memory,
++                                          const VkAllocationCallbacks*) {
++    gDriver->memories.erase(memory);
++    gDriver->memoriesFreed++;
++}
++VKAPI_ATTR VkResult VKAPI_CALL fakeBindBufferMemory(VkDevice, VkBuffer, VkDeviceMemory,
++                                                   VkDeviceSize) {
++    return VK_SUCCESS;
++}
++VKAPI_ATTR VkResult VKAPI_CALL fakeMapMemory(VkDevice, VkDeviceMemory memory, VkDeviceSize offset,
++                                            VkDeviceSize, VkMemoryMapFlags, void** data) {
++    *data = gDriver->memories[memory].data() + offset;
++    return VK_SUCCESS;
++}
++VKAPI_ATTR void VKAPI_CALL fakeUnmapMemory(VkDevice, VkDeviceMemory) {}
++VKAPI_ATTR void VKAPI_CALL fakeCmdCopyBufferToImage(VkCommandBuffer, VkBuffer src, VkImage,
++                                                    VkImageLayout, uint32_t count,
++                                                    const VkBufferImageCopy* regions) {
++    gDriver->lastCopySource = src;
++    gDriver->copies.emplace_back(regions, regions + count);
++}
++
++// Writes, for each texel, the 16-bit tag at the start of the block it is in, so that the test
++// can tell which source block each decoded texel came from.
++class TaggingDecompressor : public AstcCpuDecompressor {
++   public:
++    bool available() const override { return true; }
++    int32_t decompress(uint32_t width, uint32_t height, uint32_t blockWidth, uint32_t blockHeight,
++                       const uint8_t* data, size_t dataLength, uint8_t* output) override {
++        const uint32_t blocksX = (width + blockWidth - 1) / blockWidth;
++        const uint32_t blocksY = (height + blockHeight - 1) / blockHeight;
++        if (dataLength != size_t(blocksX) * blocksY * 16) return 1;
++        for (uint32_t y = 0; y < height; ++y) {
++            for (uint32_t x = 0; x < width; ++x) {
++                const uint8_t* block = data + ((y / blockHeight) * blocksX + x / blockWidth) * 16;
++                uint8_t* texel = output + (size_t(y) * width + x) * 4;
++                texel[0] = block[0];
++                texel[1] = block[1];
++                texel[2] = 0;
++                texel[3] = 0xFF;
++            }
++        }
++        return 0;
++    }
++    const char* getStatusString(int32_t) const override { return "bad length"; }
++};
++
++uint16_t tagAt(const std::vector<uint8_t>& texels, size_t texel) {
++    return texels[texel * 4] | (texels[texel * 4 + 1] << 8);
++}
++
++class AstcTextureTest : public ::testing::Test {
++   protected:
++    void SetUp() override {
++        gDriver = &mDriver;
++        mVk.vkCreateBuffer = fakeCreateBuffer;
++        mVk.vkDestroyBuffer = fakeDestroyBuffer;
++        mVk.vkGetBufferMemoryRequirements = fakeGetBufferMemoryRequirements;
++        mVk.vkGetPhysicalDeviceMemoryProperties = fakeGetPhysicalDeviceMemoryProperties;
++        mVk.vkAllocateMemory = fakeAllocateMemory;
++        mVk.vkFreeMemory = fakeFreeMemory;
++        mVk.vkBindBufferMemory = fakeBindBufferMemory;
++        mVk.vkMapMemory = fakeMapMemory;
++        mVk.vkUnmapMemory = fakeUnmapMemory;
++        mVk.vkCmdCopyBufferToImage = fakeCmdCopyBufferToImage;
++    }
++    void TearDown() override { gDriver = nullptr; }
++
++    std::unique_ptr<AstcTexture> texture(uint32_t width, uint32_t height, uint32_t mipLevels,
++                                         uint32_t layers, uint32_t block = 4,
++                                         AstcCpuDecompressor* decompressor = nullptr) {
++        return std::make_unique<AstcTexture>(
++            &mVk, reinterpret_cast<VkDevice>(uintptr_t{0x1000}),
++            reinterpret_cast<VkPhysicalDevice>(uintptr_t{0x2000}), VkExtent3D{width, height, 1},
++            mipLevels, layers, block, block, decompressor ? decompressor : &mDecompressor);
++    }
++
++    // A source buffer of `blocks` 16-byte blocks, each tagged with its index.
++    static std::vector<uint8_t> taggedBlocks(size_t blocks) {
++        std::vector<uint8_t> data(blocks * 16, 0);
++        for (size_t i = 0; i < blocks; ++i) {
++            data[i * 16] = i & 0xFF;
++            data[i * 16 + 1] = (i >> 8) & 0xFF;
++        }
++        return data;
++    }
++
++    static VkBufferImageCopy region(VkDeviceSize offset, uint32_t rowLength, uint32_t imageHeight,
++                                    uint32_t mip, uint32_t baseLayer, uint32_t layers, int32_t x,
++                                    int32_t y, uint32_t w, uint32_t h) {
++        return {offset,
++                rowLength,
++                imageHeight,
++                {VK_IMAGE_ASPECT_COLOR_BIT, mip, baseLayer, layers},
++                {x, y, 0},
++                {w, h, 1}};
++    }
++
++    std::shared_ptr<AstcStagingBuffer> copy(AstcTexture& tex, const std::vector<uint8_t>& src,
++                                            std::vector<VkBufferImageCopy> regions) {
++        return tex.on_vkCmdCopyBufferToImage(
++            reinterpret_cast<VkCommandBuffer>(uintptr_t{0x3000}), src.data(), src.size(),
++            reinterpret_cast<VkImage>(uintptr_t{0x4000}), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
++            regions.size(), regions.data(), mContext);
++    }
++
++    const std::vector<uint8_t>& staged(const std::shared_ptr<AstcStagingBuffer>& staging) {
++        return mDriver.memories.at(staging->memory);
++    }
++
++    FakeDriver mDriver;
++    VulkanDispatch mVk = {};
++    TaggingDecompressor mDecompressor;
++    VkDecoderContext mContext = {};
++};
++
++TEST_F(AstcTextureTest, PackedMipLevel) {
++    auto tex = texture(8, 8, 1, 1);
++    auto src = taggedBlocks(4);
++    auto staging = copy(*tex, src, {region(0, 0, 0, 0, 0, 1, 0, 0, 8, 8)});
++    ASSERT_NE(staging, nullptr);
++    const auto& texels = staged(staging);
++    EXPECT_EQ(tagAt(texels, 0), 0);
++    EXPECT_EQ(tagAt(texels, 4), 1);
++    EXPECT_EQ(tagAt(texels, 4 * 8), 2);
++    EXPECT_EQ(tagAt(texels, 7 * 8 + 7), 3);
++    ASSERT_EQ(mDriver.copies.size(), 1u);
++    const VkBufferImageCopy& c = mDriver.copies[0][0];
++    EXPECT_EQ(c.bufferOffset, 0u);
++    EXPECT_EQ(c.bufferRowLength, 0u);
++    EXPECT_EQ(c.imageExtent.width, 8u);
++    EXPECT_EQ(mDriver.lastCopySource, staging->buffer);
++}
++
++TEST_F(AstcTextureTest, PaddedRowsAreRepacked) {
++    // 8x8 texels, 2x2 blocks, in rows of 12 texels (3 blocks): every third block is padding.
++    auto tex = texture(8, 8, 1, 1);
++    auto src = taggedBlocks(6);
++    auto staging = copy(*tex, src, {region(0, 12, 0, 0, 0, 1, 0, 0, 8, 8)});
++    ASSERT_NE(staging, nullptr);
++    const auto& texels = staged(staging);
++    EXPECT_EQ(tagAt(texels, 0), 0);
++    EXPECT_EQ(tagAt(texels, 4), 1);
++    EXPECT_EQ(tagAt(texels, 4 * 8), 3);
++    EXPECT_EQ(tagAt(texels, 7 * 8 + 7), 4);
++}
++
++TEST_F(AstcTextureTest, LayersUseBufferImageHeight) {
++    // Two layers of 2x2 blocks, 3 block rows apart (bufferImageHeight 12), from block 2 on.
++    auto tex = texture(8, 8, 1, 2);
++    auto src = taggedBlocks(2 + 6 + 4);
++    auto staging = copy(*tex, src, {region(32, 0, 12, 0, 0, 2, 0, 0, 8, 8)});
++    ASSERT_NE(staging, nullptr);
++    const auto& texels = staged(staging);
++    EXPECT_EQ(tagAt(texels, 0), 2);
++    EXPECT_EQ(tagAt(texels, 7 * 8 + 7), 5);
++    EXPECT_EQ(tagAt(texels, 64), 2 + 6);
++    EXPECT_EQ(tagAt(texels, 64 + 7 * 8 + 7), 2 + 6 + 3);
++    EXPECT_EQ(mDriver.copies[0][0].imageSubresource.layerCount, 2u);
++}
++
++TEST_F(AstcTextureTest, PartialRegionsAndSeveralCopiesPerImage) {
++    auto tex = texture(8, 8, 2, 1);
++    auto src = taggedBlocks(8);
++    // The right half of mip 0, then mip 1 (4x4, one block) in a second copy.
++    auto first = copy(*tex, src, {region(0, 0, 0, 0, 0, 1, 4, 0, 4, 8)});
++    auto second = copy(*tex, src, {region(7 * 16, 0, 0, 1, 0, 1, 0, 0, 4, 4)});
++    ASSERT_NE(first, nullptr);
++    ASSERT_NE(second, nullptr);
++    EXPECT_EQ(tagAt(staged(first), 0), 0);
++    EXPECT_EQ(tagAt(staged(first), 4 * 4), 1);
++    EXPECT_EQ(tagAt(staged(second), 0), 7);
++    EXPECT_EQ(mDriver.copies[0][0].imageOffset.x, 4);
++    EXPECT_EQ(mDriver.copies[1][0].imageSubresource.mipLevel, 1u);
++}
++
++TEST_F(AstcTextureTest, EdgeBlocksOfAnUnalignedImage) {
++    // 10x10 texels in 3x3 blocks; mip 1 is 5x5 in 2x2 blocks.
++    auto tex = texture(10, 10, 2, 1);
++    auto src = taggedBlocks(9 + 4);
++    auto staging = copy(*tex, src,
++                        {region(0, 0, 0, 0, 0, 1, 0, 0, 10, 10),
++                         region(9 * 16, 0, 0, 1, 0, 1, 0, 0, 5, 5)});
++    ASSERT_NE(staging, nullptr);
++    const auto& texels = staged(staging);
++    EXPECT_EQ(tagAt(texels, 9 * 10 + 9), 8);
++    EXPECT_EQ(tagAt(texels, 100 + 4 * 5 + 4), 9 + 3);
++    EXPECT_EQ(mDriver.copies[0][1].bufferOffset, 100u * 4);
++}
++
++TEST_F(AstcTextureTest, RejectsRegionsItCannotDecode) {
++    auto tex = texture(8, 8, 1, 2);
++    auto src = taggedBlocks(4);
++    // Reads past the end of the buffer.
++    EXPECT_EQ(copy(*tex, src, {region(16, 0, 0, 0, 0, 1, 0, 0, 8, 8)}), nullptr);
++    // A layer pitch so large that the end of the region wraps 64 bits.
++    EXPECT_EQ(copy(*tex, src, {region(0, 0xFFFFFFFF, 0xFFFFFFFF, 0, 0, 2, 0, 0, 8, 8)}), nullptr);
++    // An offset that is not block-aligned, a region outside the mip level, layers past the image,
++    // a mip level the image does not have.
++    EXPECT_EQ(copy(*tex, src, {region(0, 0, 0, 0, 0, 1, 2, 0, 4, 4)}), nullptr);
++    EXPECT_EQ(copy(*tex, src, {region(0, 0, 0, 0, 0, 1, 4, 0, 8, 8)}), nullptr);
++    EXPECT_EQ(copy(*tex, src, {region(0, 0, 0, 0, 1, 2, 0, 0, 8, 8)}), nullptr);
++    EXPECT_EQ(copy(*tex, src, {region(0, 0, 0, 1, 0, 1, 0, 0, 4, 4)}), nullptr);
++    // A row length shorter than the region.
++    EXPECT_EQ(copy(*tex, src, {region(0, 4, 0, 0, 0, 1, 0, 0, 8, 8)}), nullptr);
++    // A valid region beside an invalid one records nothing either.
++    EXPECT_EQ(copy(*tex, src,
++                   {region(0, 0, 0, 0, 0, 1, 0, 0, 8, 8), region(0, 0, 0, 0, 0, 1, 2, 0, 4, 4)}),
++              nullptr);
++    EXPECT_TRUE(mDriver.copies.empty());
++    EXPECT_TRUE(mDriver.memories.empty());
++}
++
++TEST_F(AstcTextureTest, StagingBufferIsFreedWithItsLastOwner) {
++    auto tex = texture(8, 8, 1, 1);
++    auto src = taggedBlocks(4);
++    auto staging = copy(*tex, src, {region(0, 0, 0, 0, 0, 1, 0, 0, 8, 8)});
++    ASSERT_NE(staging, nullptr);
++    tex.reset();
++    EXPECT_EQ(mDriver.buffersDestroyed, 0);
++    staging.reset();
++    EXPECT_EQ(mDriver.buffersDestroyed, 1);
++    EXPECT_EQ(mDriver.memoriesFreed, 1);
++    EXPECT_TRUE(mDriver.memories.empty());
++}
++
++// gfxstream's checkerboard from astc_cpu_decompressor_unittest.cpp: 16x16 texels in 8x8 blocks,
++// decoded by astc-encoder, in rows padded to 3 blocks.
++TEST_F(AstcTextureTest, DecodesWithAstcEncoder) {
++    auto& decoder = AstcCpuDecompressor::get();
++    ASSERT_TRUE(decoder.available());
++    const uint8_t block[] = {0x44, 0x05, 0x00, 0xfe, 0x01, 0x00, 0x00, 0x00,
++                             0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa};
++    std::vector<uint8_t> src;
++    for (int i = 0; i < 6; ++i) src.insert(src.end(), block, block + sizeof(block));
++    auto tex = texture(16, 16, 1, 1, 8, &decoder);
++    auto staging = copy(*tex, src, {region(0, 24, 0, 0, 0, 1, 0, 0, 16, 16)});
++    ASSERT_NE(staging, nullptr);
++    const auto& texels = staged(staging);
++    for (uint32_t y = 0; y < 16; ++y) {
++        for (uint32_t x = 0; x < 16; ++x) {
++            const uint8_t expected = (x + y) % 2 ? 0 : 0xFF;
++            const uint8_t* t = &texels[(y * 16 + x) * 4];
++            ASSERT_EQ(t[0], expected) << x << "," << y;
++            ASSERT_EQ(t[1], expected) << x << "," << y;
++            ASSERT_EQ(t[2], expected) << x << "," << y;
++            ASSERT_EQ(t[3], 0xFF) << x << "," << y;
++        }
++    }
++}
++
++}  // namespace
++}  // namespace vk
++}  // namespace host
++}  // namespace gfxstream
+diff --git a/host/vulkan/emulated_textures/compressed_image_info.cpp b/host/vulkan/emulated_textures/compressed_image_info.cpp
+index cbca0b5..32289af 100644
+--- a/host/vulkan/emulated_textures/compressed_image_info.cpp
++++ b/host/vulkan/emulated_textures/compressed_image_info.cpp
+@@ -446,8 +446,9 @@ void CompressedImageInfo::createCompressedMipmapImages(VulkanDispatch* vk,
+ 
+ void CompressedImageInfo::initAstcCpuDecompression(VulkanDispatch* vk,
+                                                    VkPhysicalDevice physicalDevice) {
+-    mAstcTexture = std::make_unique<AstcTexture>(vk, mDevice, physicalDevice, mExtent, mBlock.width,
+-                                                 mBlock.height, &AstcCpuDecompressor::get());
++    mAstcTexture = std::make_unique<AstcTexture>(vk, mDevice, physicalDevice, mExtent, mMipLevels,
++                                                 mLayerCount, mBlock.width, mBlock.height,
++                                                 &AstcCpuDecompressor::get());
+ }
+ 
+ bool CompressedImageInfo::decompressIfNeeded(VulkanDispatch* vk, VkCommandBuffer commandBuffer,
+@@ -506,18 +507,32 @@ bool CompressedImageInfo::decompressIfNeeded(VulkanDispatch* vk, VkCommandBuffer
+     return true;
+ }
+ 
+-void CompressedImageInfo::decompressOnCpu(VkCommandBuffer commandBuffer, uint8_t* srcAstcData,
+-                                          size_t astcDataSize, VkImage dstImage,
+-                                          VkImageLayout dstImageLayout, uint32_t regionCount,
+-                                          const VkBufferImageCopy* pRegions,
+-                                          const VkDecoderContext& context) {
+-    mAstcTexture->on_vkCmdCopyBufferToImage(commandBuffer, srcAstcData, astcDataSize, dstImage,
+-                                            dstImageLayout, regionCount, pRegions, context);
+-}
+-
+-void CompressedImageInfo::decompressOnCpu(VkCommandBuffer commandBuffer, uint8_t* srcAstcData, size_t astcDataSize,
+-                         const VkCopyBufferToImageInfo2* pCopyBufferToImageInfo, const VkDecoderContext& context) {
+-    mAstcTexture->on_vkCmdCopyBufferToImage2(commandBuffer, srcAstcData, astcDataSize, pCopyBufferToImageInfo, context);
++std::shared_ptr<AstcStagingBuffer> CompressedImageInfo::decompressOnCpu(
++    VkCommandBuffer commandBuffer, const uint8_t* srcAstcData, size_t astcDataSize,
++    VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount,
++    const VkBufferImageCopy* pRegions, const VkDecoderContext& context) {
++    auto staging = mAstcTexture->on_vkCmdCopyBufferToImage(
++        commandBuffer, srcAstcData, astcDataSize, dstImage, dstImageLayout, regionCount, pRegions,
++        context);
++    if (!staging) requireGpuAstcDecode("a buffer copy the CPU decoder could not handle");
++    return staging;
++}
++
++std::shared_ptr<AstcStagingBuffer> CompressedImageInfo::decompressOnCpu(
++    VkCommandBuffer commandBuffer, const uint8_t* srcAstcData, size_t astcDataSize,
++    const VkCopyBufferToImageInfo2* pCopyBufferToImageInfo, const VkDecoderContext& context) {
++    auto staging = mAstcTexture->on_vkCmdCopyBufferToImage2(commandBuffer, srcAstcData,
++                                                            astcDataSize, pCopyBufferToImageInfo,
++                                                            context);
++    if (!staging) requireGpuAstcDecode("a buffer copy the CPU decoder could not handle");
++    return staging;
++}
++
++void CompressedImageInfo::requireGpuAstcDecode(const char* reason) {
++    if (mNeedsGpuAstcDecode) return;
++    mNeedsGpuAstcDecode = true;
++    GFXSTREAM_WARNING("ASTC image %p: %s; decoding it on the GPU instead of the CPU.",
++                      mOutputImage, reason);
+ }
+ 
+ VkMemoryRequirements CompressedImageInfo::getMemoryRequirements() const {
+diff --git a/host/vulkan/emulated_textures/compressed_image_info.h b/host/vulkan/emulated_textures/compressed_image_info.h
+index 9db6cab..18ab01b 100644
+--- a/host/vulkan/emulated_textures/compressed_image_info.h
++++ b/host/vulkan/emulated_textures/compressed_image_info.h
+@@ -87,12 +87,20 @@ class CompressedImageInfo {
+                             const VkImageMemoryBarrier& targetBarrier,
+                             std::vector<VkImageMemoryBarrier>& outputBarriers);
+ 
+-    void decompressOnCpu(VkCommandBuffer commandBuffer, uint8_t* srcAstcData, size_t astcDataSize,
+-                         VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount,
+-                         const VkBufferImageCopy* pRegions, const VkDecoderContext& context);
+-
+-    void decompressOnCpu(VkCommandBuffer commandBuffer, uint8_t* srcAstcData, size_t astcDataSize,
+-                         const VkCopyBufferToImageInfo2* pCopyBufferToImageInfo, const VkDecoderContext& context);
++    // Decodes on the CPU the ASTC data a buffer-to-image copy writes into this image, and
++    // records the copy of the decoded texels into the output image. Returns the staging buffer
++    // that copy reads from, which must outlive the command buffer's execution, or nullptr if the
++    // CPU could not decode the copy: the image is then decoded on the GPU (needsGpuAstcDecode()).
++    std::shared_ptr<AstcStagingBuffer> decompressOnCpu(VkCommandBuffer commandBuffer,
++                                                       const uint8_t* srcAstcData,
++                                                       size_t astcDataSize, VkImage dstImage,
++                                                       VkImageLayout dstImageLayout,
++                                                       uint32_t regionCount,
++                                                       const VkBufferImageCopy* pRegions,
++                                                       const VkDecoderContext& context);
++    std::shared_ptr<AstcStagingBuffer> decompressOnCpu(
++        VkCommandBuffer commandBuffer, const uint8_t* srcAstcData, size_t astcDataSize,
++        const VkCopyBufferToImageInfo2* pCopyBufferToImageInfo, const VkDecoderContext& context);
+ 
+     VkMemoryRequirements getMemoryRequirements() const;
+ 
+@@ -116,9 +124,12 @@ class CompressedImageInfo {
+     VkImage outputImage() { return mOutputImage; }
+     void setOutputImage(VkImage image) { mOutputImage = image; }
+     bool canDecompressOnCpu() { return mAstcTexture != nullptr; }
+-    bool successfullyDecompressedOnCpu() const {
+-        return mAstcTexture && mAstcTexture->successfullyDecompressed();
+-    }
++
++    // Whether ASTC data reached this image some way the CPU decoder did not handle, such as an
++    // image-to-image copy or a buffer the host cannot read. The image is then decoded on the GPU,
++    // from its compressed mipmaps, the next time it becomes readable.
++    bool needsGpuAstcDecode() const { return mNeedsGpuAstcDecode; }
++    void requireGpuAstcDecode(const char* reason);
+ 
+    private:
+     // Returns a vector of image barriers for the compressed mipmap images and the decompressed
+@@ -174,6 +185,7 @@ class CompressedImageInfo {
+ 
+     // Used to perform CPU decompression of ASTC textures. Null for non-ASTC images.
+     std::unique_ptr<AstcTexture> mAstcTexture = nullptr;
++    bool mNeedsGpuAstcDecode = false;
+ 
+     // Vulkan resources used by the decompression pipeline
+     GpuDecompressionPipelineManager* mPipelineManager = nullptr;
+diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operations.cpp
+index be91141..2ec3279 100644
+--- a/host/vulkan/vk_common_operations.cpp
++++ b/host/vulkan/vk_common_operations.cpp
+@@ -31,6 +31,7 @@
+ #include "gfxstream/common/logging.h"
+ #include "gfxstream/containers/Lookup.h"
+ #include "gfxstream/containers/StaticMap.h"
++#include "gfxstream/host/astc_cpu_decompressor.h"
+ #include "gfxstream/host/display_operations.h"
+ #include "gfxstream/host/gfxstream_format.h"
+ #include "gfxstream/host/vm_operations.h"
+@@ -1177,6 +1178,8 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
+             deviceInfos[i].driverVendor = driverVendor;
+             deviceInfos[i].driverVersion = driverVersion;
+             deviceInfos[i].driverInfo = driverProps.driverInfo;
++            deviceInfos[i].isDozen = deviceInfos[i].supportsDriverProperties &&
++                                     driverProps.driverID == VK_DRIVER_ID_MESA_DOZEN;
+         }
+ 
+ // TODO(aruby@qnx.com): Remove once dmabuf extension support has been flushed out on QNX
+@@ -1330,6 +1333,35 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
+     emulation->mDeviceInfo = deviceInfos[selectedGpuIndex];
+     // Postcondition: emulation has valid device support info
+ 
++    // Mesa's Dozen runs Vulkan on D3D12, which has no ASTC. gfxstream's ASTC
++    // compute decoder, translated by Dozen, is the main suspect in GPU hangs on
++    // WSL2: Windows reset the GPU, D3D12 removed the device and gfxstream aborted
++    // on VK_ERROR_DEVICE_LOST, ending the VM. On Dozen, ASTC textures are decoded
++    // on the CPU when they are uploaded. IKA_ASTC_DECODE=gpu or cpu overrides the
++    // choice on any device.
++    if (emulation->mAstcLdrEmulationMode != AstcEmulationMode::Disabled) {
++        const char* astcDecode = getenv("IKA_ASTC_DECODE");
++        const std::string astcDecodeChoice = astcDecode ? astcDecode : "";
++        AstcEmulationMode mode = emulation->mDeviceInfo.isDozen ? AstcEmulationMode::Cpu
++                                                                : AstcEmulationMode::Gpu;
++        if (astcDecodeChoice == "cpu") {
++            mode = AstcEmulationMode::Cpu;
++        } else if (astcDecodeChoice == "gpu") {
++            mode = AstcEmulationMode::Gpu;
++        } else if (!astcDecodeChoice.empty()) {
++            GFXSTREAM_WARNING("IKA_ASTC_DECODE=%s is neither cpu nor gpu; ignored.",
++                              astcDecodeChoice.c_str());
++        }
++        if (mode == AstcEmulationMode::Cpu && !AstcCpuDecompressor::get().available()) {
++            GFXSTREAM_WARNING("ASTC CPU decoding is unavailable; decoding ASTC on the GPU.");
++            mode = AstcEmulationMode::Gpu;
++        }
++        emulation->mAstcLdrEmulationMode = mode;
++        GFXSTREAM_INFO("ASTC textures decoded on the %s%s.",
++                       mode == AstcEmulationMode::Cpu ? "CPU" : "GPU",
++                       emulation->mDeviceInfo.isDozen ? " (Mesa Dozen)" : "");
++    }
++
+     // Collect image support info of the selected device
+     for (size_t i = 0; i < emulation->mImageSupportInfo.mSupportInfos.size(); ++i) {
+         emulation->populateImageFormatExternalMemorySupportInfo(ivk, emulation->mPhysicalDevice,
+diff --git a/host/vulkan/vk_common_operations.h b/host/vulkan/vk_common_operations.h
+index 90e87c3..ca5fdf7 100644
+--- a/host/vulkan/vk_common_operations.h
++++ b/host/vulkan/vk_common_operations.h
+@@ -576,6 +576,7 @@ class VkEmulation {
+         bool supportsExternalMemoryHostProps = false;
+         bool supportsSwapchain = false;
+         bool isLavapipe = false;
++        bool isDozen = false;
+         bool hasSamplerYcbcrConversionExtension = false;
+         bool supportsSamplerYcbcrConversion = false;
+         bool glInteropSupported = false;
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index 88db6d1..ec4b23e 100644
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -5719,6 +5719,10 @@ class VkDecoderGlobalState::Impl {
+                                regionCount, pRegions);
+             return;
+         }
++        if (dstImg->compressInfo && dstImg->compressInfo->isAstc() &&
++            dstImg->compressInfo->canDecompressOnCpu()) {
++            dstImg->compressInfo->requireGpuAstcDecode("an image-to-image copy wrote it");
++        }
+         VkImage srcImageMip = srcImage;
+         VkImage dstImageMip = dstImage;
+         for (uint32_t r = 0; r < regionCount; r++) {
+@@ -5782,6 +5786,10 @@ class VkDecoderGlobalState::Impl {
+             vk->vkCmdCopyImage2(commandBuffer, pCopyImageInfo);
+             return;
+         }
++        if (dstImg->compressInfo && dstImg->compressInfo->isAstc() &&
++            dstImg->compressInfo->canDecompressOnCpu()) {
++            dstImg->compressInfo->requireGpuAstcDecode("an image-to-image copy wrote it");
++        }
+         VkImage srcImageMip = pCopyImageInfo->srcImage;
+         VkImage dstImageMip = pCopyImageInfo->dstImage;
+         for (uint32_t r = 0; r < pCopyImageInfo->regionCount; r++) {
+@@ -5854,6 +5862,10 @@ class VkDecoderGlobalState::Impl {
+             vk->vkCmdCopyImage2KHR(commandBuffer, pCopyImageInfo);
+             return;
+         }
++        if (dstImg->compressInfo && dstImg->compressInfo->isAstc() &&
++            dstImg->compressInfo->canDecompressOnCpu()) {
++            dstImg->compressInfo->requireGpuAstcDecode("an image-to-image copy wrote it");
++        }
+         VkImage srcImageMip = pCopyImageInfo->srcImage;
+         VkImage dstImageMip = pCopyImageInfo->dstImage;
+         for (uint32_t r = 0; r < pCopyImageInfo->regionCount; r++) {
+@@ -6071,6 +6083,33 @@ class VkDecoderGlobalState::Impl {
+             &pMemoryRequirements->memoryRequirements);
+     }
+ 
++    // Where the device decodes ASTC on the CPU, decodes the ASTC data a buffer-to-image copy
++    // writes into an emulated image, after the copy into its compressed mipmaps was recorded.
++    // decode(astcData, astcDataSize) decodes from the start of the copy's source buffer. The
++    // command buffer holds the staging buffer of the decoded texels until it is reset or freed.
++    template <typename DecodeFn>
++    void decodeAstcCopyOnCpuLocked(CompressedImageInfo& cmpInfo, CommandBufferInfo& cmdBufferInfo,
++                                   const BufferInfo& bufferInfo, DecodeFn decode)
++        REQUIRES(mMutex) {
++        if (!cmpInfo.canDecompressOnCpu()) return;
++        const MemoryInfo* memoryInfo = gfxstream::base::find(mMemoryInfo, bufferInfo.memory);
++        if (!memoryInfo || !memoryInfo->ptr) {
++            cmpInfo.requireGpuAstcDecode("its source buffer is not mapped on the host");
++            return;
++        }
++        // memoryOffset and the buffer size are guest-controlled; make sure the buffer's range
++        // lies within the mapped allocation before the CPU decoder reads from it.
++        if (bufferInfo.memoryOffset > memoryInfo->size ||
++            bufferInfo.size > memoryInfo->size - bufferInfo.memoryOffset) {
++            cmpInfo.requireGpuAstcDecode("its source buffer lies outside its memory");
++            return;
++        }
++        auto staging = decode(static_cast<const uint8_t*>(memoryInfo->ptr) +
++                                  bufferInfo.memoryOffset,
++                              static_cast<size_t>(bufferInfo.size));
++        if (staging) cmdBufferInfo.astcStagingBuffers.push_back(std::move(staging));
++    }
++
+     void on_vkCmdCopyBufferToImage(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
+                                    VkCommandBuffer boxed_commandBuffer, VkBuffer srcBuffer,
+                                    VkImage dstImage, VkImageLayout dstImageLayout,
+@@ -6104,32 +6143,12 @@ class VkDecoderGlobalState::Impl {
+                                        dstImageLayout, 1, &region);
+         }
+ 
+-        if (cmpInfo.canDecompressOnCpu()) {
+-            // Get a pointer to the compressed image memory
+-            const MemoryInfo* memoryInfo = gfxstream::base::find(mMemoryInfo, bufferInfo->memory);
+-            if (!memoryInfo) {
+-                GFXSTREAM_WARNING("ASTC CPU decompression: couldn't find mapped memory info");
+-                return;
+-            }
+-            if (!memoryInfo->ptr) {
+-                GFXSTREAM_WARNING("ASTC CPU decompression: VkBuffer memory isn't host-visible");
+-                return;
+-            }
+-            // memoryOffset and the buffer size are guest-controlled; make sure the buffer's range
+-            // actually lies within the mapped allocation before the CPU decompressor reads from it.
+-            if (bufferInfo->memoryOffset > memoryInfo->size ||
+-                bufferInfo->size > memoryInfo->size - bufferInfo->memoryOffset) {
+-                GFXSTREAM_WARNING(
+-                    "ASTC CPU decompression: buffer range [offset %llu, size %llu] out of bounds of "
+-                    "mapped memory size %llu.",
+-                    (unsigned long long)bufferInfo->memoryOffset,
+-                    (unsigned long long)bufferInfo->size, (unsigned long long)memoryInfo->size);
+-                return;
+-            }
+-            uint8_t* astcData = (uint8_t*)(memoryInfo->ptr) + bufferInfo->memoryOffset;
+-            cmpInfo.decompressOnCpu(commandBuffer, astcData, bufferInfo->size, dstImage,
+-                                    dstImageLayout, regionCount, pRegions, context);
+-        }
++        decodeAstcCopyOnCpuLocked(cmpInfo, *cmdBufferInfo, *bufferInfo,
++                                  [&](const uint8_t* astcData, size_t astcDataSize) {
++                                      return cmpInfo.decompressOnCpu(
++                                          commandBuffer, astcData, astcDataSize, dstImage,
++                                          dstImageLayout, regionCount, pRegions, context);
++                                  });
+     }
+ 
+     void on_vkCmdCopyBufferToImage2(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
+@@ -6174,21 +6193,13 @@ class VkDecoderGlobalState::Impl {
+             vk->vkCmdCopyBufferToImage2(commandBuffer, &inf);
+         }
+ 
+-        if (cmpInfo.canDecompressOnCpu()) {
+-            // Get a pointer to the compressed image memory
+-            const MemoryInfo* memoryInfo = gfxstream::base::find(mMemoryInfo, bufferInfo->memory);
+-            if (!memoryInfo) {
+-                GFXSTREAM_WARNING("ASTC CPU decompression: couldn't find mapped memory info");
+-                return;
+-            }
+-            if (!memoryInfo->ptr) {
+-                GFXSTREAM_WARNING("ASTC CPU decompression: VkBuffer memory isn't host-visible");
+-                return;
+-            }
+-            uint8_t* astcData = (uint8_t*)(memoryInfo->ptr) + bufferInfo->memoryOffset;
+-
+-            cmpInfo.decompressOnCpu(commandBuffer, astcData, bufferInfo->size, pCopyBufferToImageInfo, context);
+-        }
++        decodeAstcCopyOnCpuLocked(cmpInfo, *cmdBufferInfo, *bufferInfo,
++                                  [&](const uint8_t* astcData, size_t astcDataSize) {
++                                      return cmpInfo.decompressOnCpu(commandBuffer, astcData,
++                                                                     astcDataSize,
++                                                                     pCopyBufferToImageInfo,
++                                                                     context);
++                                  });
+     }
+ 
+     void on_vkCmdCopyBufferToImage2KHR(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
+@@ -6233,21 +6244,13 @@ class VkDecoderGlobalState::Impl {
+             vk->vkCmdCopyBufferToImage2KHR(commandBuffer, &inf);
+         }
+ 
+-        if (cmpInfo.canDecompressOnCpu()) {
+-            // Get a pointer to the compressed image memory
+-            const MemoryInfo* memoryInfo = gfxstream::base::find(mMemoryInfo, bufferInfo->memory);
+-            if (!memoryInfo) {
+-                GFXSTREAM_WARNING("ASTC CPU decompression: couldn't find mapped memory info");
+-                return;
+-            }
+-            if (!memoryInfo->ptr) {
+-                GFXSTREAM_WARNING("ASTC CPU decompression: VkBuffer memory isn't host-visible");
+-                return;
+-            }
+-            uint8_t* astcData = (uint8_t*)(memoryInfo->ptr) + bufferInfo->memoryOffset;
+-
+-            cmpInfo.decompressOnCpu(commandBuffer, astcData, bufferInfo->size, pCopyBufferToImageInfo, context);
+-        }
++        decodeAstcCopyOnCpuLocked(cmpInfo, *cmdBufferInfo, *bufferInfo,
++                                  [&](const uint8_t* astcData, size_t astcDataSize) {
++                                      return cmpInfo.decompressOnCpu(commandBuffer, astcData,
++                                                                     astcDataSize,
++                                                                     pCopyBufferToImageInfo,
++                                                                     context);
++                                  });
+     }
+ 
+     void ConvertQueueFamilyForeignToExternal(uint32_t* queue_family_index_ptr) {
+@@ -6423,8 +6426,9 @@ class VkDecoderGlobalState::Impl {
+             // If the image doesn't need GPU decompression, nothing to do.
+             bool needGpuDecompression = false;
+             if (imageInfo && imageInfo->compressInfo) {
+-                needGpuDecompression =
+-                    !imageInfo->compressInfo->isAstc() || !deviceInfo->useAstcCpuDecompression;
++                needGpuDecompression = !imageInfo->compressInfo->isAstc() ||
++                                       !deviceInfo->useAstcCpuDecompression ||
++                                       imageInfo->compressInfo->needsGpuAstcDecode();
+             }
+             // If the image doesn't need GPU decompression, nothing to do.
+             if (!needGpuDecompression) {
+@@ -6571,8 +6575,9 @@ class VkDecoderGlobalState::Impl {
+             auto* imageInfo = gfxstream::base::find(mImageInfo, srcBarrier.image);
+             bool needGpuDecompression = false;
+             if (imageInfo && imageInfo->compressInfo) {
+-                needGpuDecompression =
+-                    !imageInfo->compressInfo->isAstc() || !deviceInfo->useAstcCpuDecompression;
++                needGpuDecompression = !imageInfo->compressInfo->isAstc() ||
++                                       !deviceInfo->useAstcCpuDecompression ||
++                                       imageInfo->compressInfo->needsGpuAstcDecode();
+             }
+             if (!needGpuDecompression) {
+                 imageBarriers.push_back(srcBarrier);
+@@ -8152,6 +8157,14 @@ class VkDecoderGlobalState::Impl {
+         if (result != VK_SUCCESS) {
+             return result;
+         }
++        std::lock_guard<std::mutex> lock(mMutex);
++        if (auto* commandPoolInfo = gfxstream::base::find(mCommandPoolInfo, commandPool)) {
++            for (VkCommandBuffer commandBuffer : commandPoolInfo->cmdBuffers) {
++                if (auto* info = gfxstream::base::find(mCommandBufferInfo, commandBuffer)) {
++                    info->astcStagingBuffers.clear();
++                }
++            }
++        }
+         return result;
+     }
+ 
+@@ -8747,6 +8760,7 @@ class VkDecoderGlobalState::Impl {
+         VkDevice device, VulkanDispatch* deviceDispatch, VkCommandBuffer commandBuffer,
+         CommandBufferInfo& commandBufferInfo,
+         std::unordered_map<VkCommandPool, CommandPoolInfo>& commandPoolInfos) {
++        commandBufferInfo.astcStagingBuffers.clear();
+         auto commandPool = commandBufferInfo.cmdPool;
+ 
+         auto commandPoolInfoIt = commandPoolInfos.find(commandPool);
+diff --git a/host/vulkan/vk_decoder_internal_structs.h b/host/vulkan/vk_decoder_internal_structs.h
+index c6a64c7..4f3de9b 100644
+--- a/host/vulkan/vk_decoder_internal_structs.h
++++ b/host/vulkan/vk_decoder_internal_structs.h
+@@ -650,8 +650,14 @@ struct CommandBufferInfo {
+     std::unordered_set<VkEvent> eventsSet;
+     std::unordered_set<VkEvent> eventsReset;
+ 
++    // Texels decoded on the CPU that copies recorded in this command buffer read from. Vulkan
++    // only lets a command buffer be reset or freed once it is no longer pending, so they are
++    // released then.
++    std::vector<std::shared_ptr<AstcStagingBuffer>> astcStagingBuffers;
++
+     void reset() {
+         subCmds.clear();
++        astcStagingBuffers.clear();
+         computePipeline = VK_NULL_HANDLE;
+         firstSet = 0;
+         descriptorLayout = VK_NULL_HANDLE;
+diff --git a/third_party/astc-encoder/BUILD.bazel b/third_party/astc-encoder/BUILD.bazel
+new file mode 100644
+index 0000000..629627e
+--- /dev/null
++++ b/third_party/astc-encoder/BUILD.bazel
+@@ -0,0 +1,27 @@
++load("@rules_cc//cc:defs.bzl", "cc_library")
++
++package(
++    default_visibility = ["//:gfxstream"],
++)
++
++# The decompressor only, for gfxstream's ASTC CPU decoding. No ISA is forced:
++# astcenc_mathlib.h picks it from the compiler's target (SSE2 on the x86-64
++# baseline, NEON on aarch64), so the library runs wherever gfxstream does.
++cc_library(
++    name = "gfxstream_astcenc",
++    srcs = glob(["Source/astcenc_*.cpp"]),
++    hdrs = ["Source/astcenc.h"],
++    # The library's own headers only compile included from its sources, in order.
++    textual_hdrs = glob(
++        ["Source/astcenc_*.h"],
++        exclude = ["Source/astcenc.h"],
++    ),
++    copts = [
++        "-Wno-unused-parameter",
++        "-Wno-unused-function",
++        "-Wno-unused-variable",
++    ],
++    linkopts = ["-pthread"],
++    local_defines = ["ASTCENC_DECOMPRESS_ONLY"],
++    strip_include_prefix = "Source",
++)
