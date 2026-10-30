@@ -161,6 +161,10 @@ Requires:       wayland-utils
 # SDL loads libdecor at runtime; its GTK plugin (in the libdecor package) draws
 # GNOME Wayland title bars in the system light/dark theme.
 Requires:       libdecor
+# The title bar's glyphs are rasterized with librsvg, or loaded as SVGs through
+# its gdk-pixbuf loader; without it the minimize, maximize and close buttons
+# are blank.
+Requires:       librsvg2
 
 Requires(post): /usr/sbin/groupadd
 Requires(post): /usr/sbin/usermod
