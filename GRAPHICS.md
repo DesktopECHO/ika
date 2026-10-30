@@ -307,10 +307,21 @@ choosing the GPU mode:
   released device's GPU address space is not given back, so after about a
   hundred Android apps a device per instance runs out.
 
-For the console and app windows, Ika sets `GALLIUM_DRIVER=d3d12` where Mesa
-has its D3D12 driver, unless you set one. Mesa's OpenGL otherwise falls back
-to llvmpipe on WSL2, drawing every frame of the window on the CPU: Zink,
-OpenGL on Dozen, refuses for lack of robustness2's `nullDescriptor`.
+The console and app windows draw with OpenGL through Mesa's D3D12 driver
+(`GALLIUM_DRIVER=d3d12`), unless you set a `GALLIUM_DRIVER`. Mesa's OpenGL
+otherwise falls back to llvmpipe on WSL2, drawing every frame of the window
+on the CPU: Zink, OpenGL on Dozen, refuses for lack of robustness2's
+`nullDescriptor`. Where Ika found a Dozen GPU, the windows use Ika's own build
+of that driver, from the same Mesa release with
+[d3d12-uma-cached-upload.patch](tools/wsl/mesa/d3d12-uma-cached-upload.patch),
+built by `build-d3d12-gl.sh` and installed with its EGL (`libEGL_mesa` and
+`libgallium`) under `/usr/lib/cuttlefish-common/wsl/mesa-gl`, which they load
+through `__EGL_VENDOR_LIBRARY_FILENAMES`; an EGL vendor file of your own wins.
+Distributions' Mesa stages texture uploads in write-combined memory, which
+WSL2 maps uncached: writing it ran at 383 MB/s against 13 GB/s for write-back
+memory on a Radeon 780M, so each frame of a 1080p video took the window 25 ms
+of CPU to upload, 70% of a core in all. Ika's build stages them in
+write-back memory on integrated GPUs, where the window takes 14%.
 
 `gpu_mode = auto` then picks `gfxstream_guest_angle`, as Venus needs the
 dma-bufs Dozen cannot export. The start log has a `WSL2:` line when Ika set

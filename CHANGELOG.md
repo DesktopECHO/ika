@@ -523,8 +523,12 @@
 
 ### Fixes
 - On WSL2 the console and app windows draw with the GPU, through Mesa's D3D12
-  driver (`GALLIUM_DRIVER=d3d12`), instead of llvmpipe on the CPU: with a
-  YouTube video playing, the console's scrcpy took 133% of a core.
+  driver (`GALLIUM_DRIVER=d3d12`), instead of llvmpipe on the CPU. Where Ika
+  found a Direct3D 12 GPU they use Ika's own build of the driver, installed
+  with its EGL under `/usr/lib/cuttlefish-common/wsl/mesa-gl`, which stages
+  texture uploads in write-back memory on integrated GPUs: distributions' Mesa
+  stages them in write-combined memory, which WSL2 maps uncached. With a 1080p
+  video playing, an app window's scrcpy takes 14% of a core instead of 70%.
 - An app window's title bar takes the color 15 pixels below the top of the
   content instead of the topmost row, so a thin strip along the top no longer
   sets it: the blue progress bar of Google's sign-in made it flicker.

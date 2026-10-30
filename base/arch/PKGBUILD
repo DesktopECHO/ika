@@ -20,7 +20,7 @@ makedepends=(alsa-lib aom boost clang cmake curl fmt gcc gflags git google-glog 
              wget xxd util-linux-libs v4l-utils virglrenderer vulkan-headers wayland
              wayland-protocols which xz z3
              # Ika's WSL2 helpers (tools/wsl)
-             dbus directx-headers gtk3 libxcb libxshmfence python-mako python-packaging
+             dbus directx-headers gtk3 libglvnd libxcb libxshmfence python-mako python-packaging
              python-yaml systemd xcb-util-keysyms)
 # objcopy/nm cannot parse the Bazel/Clang-built binaries; skip strip/debug.
 # makepkg's LTO would make the static FFmpeg (and SDL, libusb) GCC LTO

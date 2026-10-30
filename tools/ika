@@ -5567,12 +5567,23 @@ append_scrcpy_env() {
   # On WSL2 the GPU is reached only through Direct3D 12 (/dev/dxg). Mesa's
   # OpenGL then falls back to llvmpipe, drawing every frame of the window on
   # the CPU (Zink, OpenGL on Dozen, refuses without robustness2's
-  # nullDescriptor); its d3d12 driver draws on the GPU. Only where the
-  # distribution's Mesa has it, and unless the user set a GALLIUM_DRIVER.
-  if [[ -e /dev/dxg && -z "${GALLIUM_DRIVER:-}" && "${IKA_WSL_GPU_FIX:-1}" != "0" ]] \
-      && { compgen -G '/usr/lib*/dri/d3d12_dri.so' >/dev/null \
-           || compgen -G '/usr/lib/*/dri/d3d12_dri.so' >/dev/null; }; then
-    scrcpy_env_ref+=("GALLIUM_DRIVER=d3d12")
+  # nullDescriptor); its d3d12 driver draws on the GPU. Ika's own build of it
+  # (tools/wsl/mesa/build-d3d12-gl.sh) stages texture uploads in write-back
+  # memory: the distribution's stages them in write-combined memory, which
+  # WSL2 maps uncached, and uploading a video's frames took scrcpy 70% of a
+  # core instead of 14%. Ika's build has no software renderer to fall back to,
+  # so only with the D3D12 GPU setup_wsl_gpu_env found; else the
+  # distribution's d3d12 driver where it has one. Unless the user set a
+  # GALLIUM_DRIVER or an EGL vendor.
+  if [[ -e /dev/dxg && -z "${GALLIUM_DRIVER:-}" && "${IKA_WSL_GPU_FIX:-1}" != "0" ]]; then
+    if [[ -n "${IKA_WSL_GPU_ENV:-}" && -z "${__EGL_VENDOR_LIBRARY_FILENAMES:-}" \
+          && -f "${PACKAGED_WSL_GPU_DIR}/mesa-gl/egl_vendor.json" ]]; then
+      scrcpy_env_ref+=("GALLIUM_DRIVER=d3d12"
+                       "__EGL_VENDOR_LIBRARY_FILENAMES=${PACKAGED_WSL_GPU_DIR}/mesa-gl/egl_vendor.json")
+    elif compgen -G '/usr/lib*/dri/d3d12_dri.so' >/dev/null \
+        || compgen -G '/usr/lib/*/dri/d3d12_dri.so' >/dev/null; then
+      scrcpy_env_ref+=("GALLIUM_DRIVER=d3d12")
+    fi
   fi
 
   # On WSLg the title bars look like Windows': scrcpy sizes them for Windows'

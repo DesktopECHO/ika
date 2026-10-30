@@ -86,8 +86,13 @@ BuildRequires:  pkgconfig(gl)
 BuildRequires:  alsa-lib-devel
 BuildRequires:  pipewire-devel
 # Ika's WSL2 helpers (tools/wsl): a Vulkan layer, a libd3d12.so shim, Mesa's
-# Dozen driver and libdecor's GTK plugin. See GRAPHICS.md, "WSL2".
+# Dozen driver, Mesa's D3D12 OpenGL driver and libdecor's GTK plugin. See
+# GRAPHICS.md, "WSL2".
 BuildRequires:  pkgconfig(DirectX-Headers)
+BuildRequires:  bison
+BuildRequires:  flex
+BuildRequires:  libglvnd-devel
+BuildRequires:  pkgconfig(wayland-egl-backend)
 BuildRequires:  python3-mako
 BuildRequires:  python3-packaging
 BuildRequires:  python3-pyyaml
