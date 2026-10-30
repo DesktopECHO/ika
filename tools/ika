@@ -4785,9 +4785,12 @@ windows_powershell() {
 # ... without quotes, so a task bar pin made from the window starts
 # "C:\Program" and Windows offers to delete it. This repairs such pins, under
 # the user's "User Pinned" folder: the target becomes wslg.exe, and the pin
-# keeps the window's app ID, which puts the window on the pin's button. It runs
-# in the background, when a window closes (after the user may have pinned it)
-# and at start, and does nothing outside WSLg.
+# keeps the window's app ID, which puts the window on the pin's button. It also
+# removes the shortcuts Windows made for WSLg windows of a distribution that is
+# no longer registered: the app ID leaves the distribution out, so Ika's window
+# in another one would show that distribution's name, missing icon and command.
+# It runs in the background, when a window closes (after the user may have
+# pinned it) and at start, and does nothing outside WSLg.
 repair_wslg_taskbar_pins() {
   local powershell
 
@@ -4799,7 +4802,7 @@ repair_wslg_taskbar_pins() {
     with_timeout 60 "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass \
       -EncodedCommand "$(wslg_pin_repair_script | iconv -t UTF-16LE | base64 -w 0)" \
       </dev/null 2>/dev/null | tr -d '\r' | while IFS= read -r line; do
-        [[ -n "${line}" ]] && log "repaired the task bar pin ${line}"
+        [[ -n "${line}" ]] && log "${line}"
       done
   ) 9>"${CVD_TMP_DIR}/wslg-pins.lock" &
   disown "$!" 2>/dev/null || true
@@ -4833,10 +4836,31 @@ public static class IkaPin {
     if (!p.ToString().Equals(@"C:\Program", StringComparison.OrdinalIgnoreCase) || !a.ToString().StartsWith(@"Files\WSL\") || i < 0) return false;
     l.SetPath(cmd.Substring(0, i + 9).Replace(@"\\", @"\")); l.SetArguments(cmd.Substring(i + 10)); pf.Save(file, true);
     return true; }
+  // The distribution a wslg.exe shortcut starts, or null
+  public static string Distro(string file) {
+    IShellLinkW l = (IShellLinkW)Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046")));
+    ((IPersistFile)l).Load(file, 0);
+    StringBuilder p = new StringBuilder(1024), a = new StringBuilder(4096);
+    l.GetPath(p, p.Capacity, IntPtr.Zero, 0x4); l.GetArguments(a, a.Capacity);
+    if (!p.ToString().EndsWith(@"\wslg.exe", StringComparison.OrdinalIgnoreCase)) return null;
+    var m = System.Text.RegularExpressions.Regex.Match(a.ToString(), "^(?:-d|--distribution) +(?:\"([^\"]+)\"|(\\S+))");
+    return m.Success ? m.Groups[1].Value + m.Groups[2].Value : null; }
 }
 "@
+$distros = @(Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss' -ErrorAction SilentlyContinue |
+  ForEach-Object { $_.GetValue('DistributionName') } | Where-Object { $_ })
 Get-ChildItem "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned" -Recurse -Filter *.lnk -ErrorAction SilentlyContinue |
-  ForEach-Object { try { if ([IkaPin]::Repair($_.FullName)) { $_.BaseName } } catch { } }
+  ForEach-Object { try {
+    if ([IkaPin]::Repair($_.FullName)) { "repaired the task bar pin $($_.BaseName)" }
+    # Windows keeps the shortcut it made for a WSLg window's app ID after the
+    # distribution is gone, and the task bar takes the name, icon and command
+    # of another distribution's window with the same app ID from it.
+    $distro = [IkaPin]::Distro($_.FullName)
+    if ($distros.Count -gt 0 -and $distro -and $distros -notcontains $distro -and
+        $_.FullName -like '*\ImplicitAppShortcuts\*') {
+      Remove-Item -LiteralPath $_.FullName
+      "removed the task bar shortcut $($_.BaseName) of the removed WSL distribution $distro"
+    } } catch { } }
 EOF
 }
 

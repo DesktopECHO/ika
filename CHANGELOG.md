@@ -348,6 +348,12 @@
   open the devices, and otherwise says which it cannot and the `udevadm
   trigger` command that gives them back; `ika-wsl-setup` reports and fixes
   devices without the ACL entry.
+- Windows keeps the task bar shortcuts it made for WSLg windows after their
+  distribution is gone, and the app ID it gives a WSLg window leaves the
+  distribution out: Ika's console in one distribution showed another's name,
+  a blank icon and a right-click entry starting that distribution. Ika
+  removes such shortcuts, those of distributions no longer registered, when
+  it starts and when a window closes.
 - Ika's windows on Windows have Windows 11's title bar: its height, flat
   minimize, maximize and close buttons with Windows' glyphs (close turns red),
   and the title in Segoe UI Variable, which Ika copies from Windows to

@@ -14,11 +14,13 @@ export CVD_HOME_DIR="${T}/ika"
 export CVD_PRODUCT_OUT="${T}/product"
 mkdir -p "${HOME}" "${CVD_PRODUCT_OUT}" "${T}/bin"
 
-# A powershell.exe stub: it records its arguments and reports one repaired pin.
+# A powershell.exe stub: it records its arguments, and reports one repaired pin
+# and one removed shortcut.
 cat >"${T}/bin/powershell.exe" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$@" >"${T}/powershell.args"
-printf 'Files (Ubuntu)\r\n'
+printf 'repaired the task bar pin Files (Ubuntu)\r\n'
+printf 'removed the task bar shortcut Ika (Ubuntu) of the removed WSL distribution Ubuntu\r\n'
 STUB
 chmod +x "${T}/bin/powershell.exe"
 export PATH="${T}/bin:${PATH}"
@@ -48,6 +50,14 @@ encoded="$(grep -A1 -x -- '-EncodedCommand' "${T}/powershell.args" | tail -n 1)"
 script="$(base64 -d <<<"${encoded}" | iconv -f UTF-16LE)"
 [[ "${script}" == *'IkaPin'* && "${script}" == *'User Pinned'* ]] \
   || fail "PowerShell got another program: ${script:0:200}"
+[[ "${script}" == *'\Lxss'* && "${script}" == *'\ImplicitAppShortcuts\'* ]] \
+  || fail "the program does not remove shortcuts of removed distributions"
+for _ in $(seq 1 50); do
+  [[ "$(wc -l <"${T}/log")" -ge 2 ]] && break
+  sleep 0.1
+done
 grep -qxF "repaired the task bar pin Files (Ubuntu)" "${T}/log" \
   || fail "the repaired pin was not logged: $(cat "${T}/log")"
-echo "ok: on WSLg PowerShell gets the repair program, and repaired pins are logged"
+grep -qxF "removed the task bar shortcut Ika (Ubuntu) of the removed WSL distribution Ubuntu" "${T}/log" \
+  || fail "the removed shortcut was not logged: $(cat "${T}/log")"
+echo "ok: on WSLg PowerShell gets the repair program, and repaired pins and removed shortcuts are logged"
