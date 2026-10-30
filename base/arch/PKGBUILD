@@ -280,6 +280,10 @@ package_ika-base() {
   # WSLg looks for icons up to 128x128 only.
   install -Dm 0644 "${root}/tools/ika-scrcpy-128.png" \
     "${pkgdir}/usr/share/icons/hicolor/128x128/apps/ika-scrcpy.png"
+  # Hide yad's icon browser from the application menu (see the hooks)
+  install -Dm 0644 -t "${pkgdir}/usr/share/libalpm/hooks" \
+    "${root}/base/arch/ika-hide-yad-icon-browser.hook" \
+    "${root}/base/arch/ika-remove-yad-icon-browser.hook"
 
   install -Dpm0644 "${root}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
   install -Dpm0644 "${root}/scrcpy/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.scrcpy"

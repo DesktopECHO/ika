@@ -529,6 +529,11 @@
   texture uploads in write-back memory on integrated GPUs: distributions' Mesa
   stages them in write-combined memory, which WSL2 maps uncached. With a 1080p
   video playing, an app window's scrcpy takes 14% of a core instead of 70%.
+- yad's Icon Browser no longer shows in the application menu, nor on WSL2 in
+  the Windows Start menu, beside Ika: `ika-base` sets its desktop entry aside
+  while both are installed, with a dpkg diversion on Debian and Ubuntu, RPM
+  triggers on Fedora and pacman hooks on Arch. Ika still uses yad for its
+  Startup Options windows.
 - An app window's title bar takes the color 15 pixels below the top of the
   content instead of the topmost row, so a thin strip along the top no longer
   sets it: the blue progress bar of Google's sign-in made it flicker.

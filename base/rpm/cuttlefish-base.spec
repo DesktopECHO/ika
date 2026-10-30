@@ -598,6 +598,24 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 %postun -n ika-defaults
 systemctl daemon-reload >/dev/null 2>&1 || :
 
+# yad installs an icon browser with a desktop entry, which the application
+# menu, and on WSL2 the Windows Start menu, shows beside Ika: it is set aside
+# while yad and ika-base are both installed. When one of them is removed, $2
+# is 0 for yad and $1 for ika-base.
+%triggerin -- yad
+if [ -f /usr/share/applications/yad-icon-browser.desktop ]; then
+  mv -f /usr/share/applications/yad-icon-browser.desktop \
+    /usr/share/applications/yad-icon-browser.desktop.ika-hidden || :
+fi
+
+%triggerun -- yad
+if [ $2 -eq 0 ]; then
+  rm -f /usr/share/applications/yad-icon-browser.desktop.ika-hidden
+elif [ $1 -eq 0 ] && [ -f /usr/share/applications/yad-icon-browser.desktop.ika-hidden ]; then
+  mv -f /usr/share/applications/yad-icon-browser.desktop.ika-hidden \
+    /usr/share/applications/yad-icon-browser.desktop || :
+fi
+
 %files
 %license LICENSE
 /bin/ika

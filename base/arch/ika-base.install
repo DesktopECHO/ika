@@ -11,6 +11,18 @@ _ensure_var_empty() {
   mkdir -p /var/empty
 }
 
+# yad installs an icon browser with a desktop entry, which the application
+# menu, and on WSL2 the Windows Start menu, shows beside Ika. While ika-base is
+# installed it is set aside, by ika-hide-yad-icon-browser.hook whenever yad
+# installs it and here when yad was installed first.
+_yad_icon_browser=/usr/share/applications/yad-icon-browser.desktop
+
+_hide_yad_icon_browser() {
+  if [ -f "$_yad_icon_browser" ]; then
+    mv -f "$_yad_icon_browser" "$_yad_icon_browser.ika-hidden" || :
+  fi
+}
+
 _configure() {
   if ! getent group cvdnetwork >/dev/null 2>&1; then
     groupadd -r cvdnetwork >/dev/null 2>&1 || :
@@ -19,6 +31,7 @@ _configure() {
     groupadd -r kvm >/dev/null 2>&1 || :
   fi
   _ensure_var_empty
+  _hide_yad_icon_browser
   systemd-tmpfiles --create /usr/lib/tmpfiles.d/cuttlefish.conf >/dev/null 2>&1 || :
   setcap cap_net_admin,cap_net_bind_service,cap_net_raw=+ep /usr/lib/cuttlefish-common/bin/cvdalloc >/dev/null 2>&1 || :
   sysctl --system >/dev/null 2>&1 || :
@@ -83,4 +96,7 @@ pre_remove() {
 
 post_remove() {
   systemctl daemon-reload >/dev/null 2>&1 || :
+  if [ -f "$_yad_icon_browser.ika-hidden" ]; then
+    mv -f "$_yad_icon_browser.ika-hidden" "$_yad_icon_browser" || :
+  fi
 }
