@@ -40,15 +40,23 @@ USER="${USER:-$(id -un)}"
 # IPVTAP) selects, and Microsoft's configuration builds MACVTAP as a module,
 # which makes TAP one and so holds VHOST_NET, which depends on it, to a
 # module. MACVTAP, and MACVLAN under it, are built in for that.
+# VIRTIO_VSOCKETS, the guest side of virtio vsock, stays the module it is in
+# Microsoft's configuration: built in, it registers as the guest-to-host vsock
+# transport before hv_sock, which then cannot, and WSL's init, which reaches
+# Windows over Hyper-V sockets, never does (wsl: CreateVm/E_ABORT).
+# MGLRU (LRU_GEN) picks what to evict better when Android's memory leaves
+# Linux little, and zswap compresses pages on their way to swap, when WSL has
+# swap; neither is in Microsoft's configuration.
 readonly -a KERNEL_OPTIONS=(
   VIRTUALIZATION KVM KVM_INTEL KVM_AMD
-  VSOCKETS VIRTIO_VSOCKETS VIRTIO_VSOCKETS_COMMON VHOST_MENU VHOST VHOST_NET VHOST_VSOCK
+  VSOCKETS VIRTIO_VSOCKETS_COMMON VHOST_MENU VHOST VHOST_NET VHOST_VSOCK
   TUN TAP MACVLAN MACVTAP BRIDGE VETH
   DMA_SHARED_BUFFER UDMABUF
   NETFILTER NF_CONNTRACK NF_NAT NF_NAT_MASQUERADE NF_TABLES NF_TABLES_INET NF_TABLES_IPV4
   NFT_NAT NFT_MASQ NFT_CT NFT_COMPAT
   CGROUPS CGROUP_SCHED FAIR_GROUP_SCHED CPUSETS CGROUP_CPUACCT
   IKCONFIG IKCONFIG_PROC
+  LRU_GEN LRU_GEN_ENABLED ZSWAP ZSWAP_DEFAULT_ON ZSWAP_SHRINKER_DEFAULT_ON
 )
 
 # The options whose absence calls for a kernel build; the rest are enabled
@@ -171,8 +179,11 @@ wsl_kernel_branch() {
   printf 'linux-msft-wsl-%s.%s.y\n' "${major}" "${minor}"
 }
 
+# Microsoft's kernels are named for WSL2; WSL boots any kernel, one built
+# here among them, with WSL_ROOT_INIT=1 on its command line.
 is_wsl2() {
-  [[ -r /proc/version ]] && grep -qi 'microsoft' /proc/version && [[ "$(uname -r)" == *WSL2* ]]
+  { [[ -r /proc/version ]] && grep -qi 'microsoft' /proc/version && [[ "$(uname -r)" == *WSL2* ]]; } \
+    || grep -qw 'WSL_ROOT_INIT=1' /proc/cmdline 2>/dev/null
 }
 
 # The Windows user profile directory, as a WSL path
@@ -542,7 +553,8 @@ build_kernel() {
       scripts/config --file .config --enable "${option}"
     done
     # Name the kernel after what it carries
-    scripts/config --file .config --set-str LOCALVERSION "-ika"
+    scripts/config --file .config --set-str LOCALVERSION \
+      "$(sed -n 's/^CONFIG_LOCALVERSION="\(.*\)"$/\1/p' .config)-ika"
     make olddefconfig >/dev/null
     for option in "${REQUIRED_OPTIONS[@]}"; do
       grep -qE "^CONFIG_${option}=y$" .config || absent+=("${option}")
@@ -551,24 +563,31 @@ build_kernel() {
       die "the configuration could not enable ${absent[*]}: check their dependencies in ${dir}/.config"
     fi
     log "building the kernel with $(nproc) jobs (this takes a while)..."
-    make -j"$(nproc)" "${target}" >"${dir}.build.log" 2>&1 || die "the kernel build failed; see ${dir}.build.log"
+    # An empty LOCALVERSION keeps make from adding a + for a tree not at a tag
+    make -j"$(nproc)" LOCALVERSION= "${target}" >"${dir}.build.log" 2>&1 || die "the kernel build failed; see ${dir}.build.log"
     [[ -f "${image}" ]] || die "the build produced no ${image}"
   ) >&2 || exit 1
   printf '%s/%s\n' "${dir}" "${image}"
 }
 
-# Copies the kernel image to the Windows side and points .wslconfig at it
+# Copies the kernel image to the Windows side and points .wslconfig at it.
+# Each build gets a file of its own, so that installing one never writes over
+# the kernel WSL is running (copying over it was refused once). Older builds
+# are removed where Windows lets them be.
 install_kernel() {
   local image="$1" profile="$2" version="$3"
   local dest_dir="${profile}/ika-wsl"
-  local dest="${dest_dir}/bzImage-${version}-ika"
-  local windows_path
+  local dest="${dest_dir}/bzImage-${version}-ika-$(date +%Y%m%d-%H%M%S)"
+  local windows_path old
 
   mkdir -p "${dest_dir}"
   cp "${image}" "${dest}"
   windows_path="$(wslpath -w "${dest}")"
   ini_set "${profile}/.wslconfig" wsl2 kernel "$(wslconfig_path "${windows_path}")"
   log "kernel installed as ${windows_path}"
+  for old in "${dest_dir}"/bzImage-*-ika*; do
+    [[ "${old}" == "${dest}" ]] || rm -f "${old}" 2>/dev/null || true
+  done
 }
 
 # --- main ---------------------------------------------------------------------

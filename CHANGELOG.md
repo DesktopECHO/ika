@@ -380,6 +380,15 @@
   it rounded up to 2 GB: WSL's memory is already the share Windows gives
   Linux, as `cpus = auto` takes all of WSL's CPUs. Of the 1.5 GB, about
   0.5 GB goes to what the kernel keeps and to crosvm itself.
+- The kernel `ika-wsl-setup --kernel` builds boots: it built in the guest side
+  of virtio vsock, which then took the place of Hyper-V's, through which WSL's
+  init reaches Windows, and WSL failed to start (`CreateVm/E_ABORT`).
+  `VHOST_NET` is built in (it stopped at "could not enable VHOST_NET"), and
+  udmabuf, MGLRU and zswap come with it. The kernel keeps Microsoft's name,
+  `-microsoft-standard-WSL2-ika`, which tools look for WSL in, each build is
+  installed under a name of its own, and a failed build stops the script.
+  `ika-wsl-setup` and `ika-base` also tell WSL2 by `WSL_ROOT_INIT=1` on the
+  kernel command line, so a kernel of another name is still WSL2.
 
 ### Hardware video decoding
 - `ika start` gives Android a V4L2 video decoder backed by the host's VA-API
