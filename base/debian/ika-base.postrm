@@ -1,0 +1,16 @@
+#!/bin/sh
+
+set -e
+
+case "$1" in
+    (remove|purge)
+    # Puts back yad's icon browser, which ika-base.postinst diverted on WSL2
+    if dpkg-divert --list /usr/share/applications/yad-icon-browser.desktop \
+            | grep -q 'by ika-base$'; then
+        dpkg-divert --package ika-base --rename \
+            --remove /usr/share/applications/yad-icon-browser.desktop > /dev/null
+    fi
+    ;;
+esac
+
+#DEBHELPER#

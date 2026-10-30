@@ -158,10 +158,9 @@ Depends: acl,
 Pre-Depends: ${misc:Pre-Depends}
 Breaks: ika-common (<= 0.9.24)
 # The scrcpy viewer is now shipped inside ika-base. Take over and remove the
-# standalone ika-scrcpy package on upgrade. ${diverted-files} names the files
-# ika-base.hide diverts.
-Provides: ika-scrcpy, ${diverted-files}
-Conflicts: ika-scrcpy, ${diverted-files}
+# standalone ika-scrcpy package on upgrade.
+Provides: ika-scrcpy
+Conflicts: ika-scrcpy
 Replaces: ika-scrcpy
 Description: Cuttlefish Android Virtual Device companion package
  Contains set of tools and binaries required to boot up and manage

@@ -45,6 +45,15 @@ case "$1" in
     systemctl enable --now cuttlefish-host-resources.service > /dev/null 2>&1 || true
 
     /usr/libexec/cuttlefish/cuttlefish-add-user-to-groups || true
+
+    # On WSL2, WSLg puts every desktop entry in the Windows Start menu, yad's
+    # icon browser among them, beside Ika: divert it aside there.
+    # ika-base.postrm takes the diversion back.
+    if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
+        dpkg-divert --package ika-base --rename \
+            --divert /usr/share/applications/yad-icon-browser.desktop.ika-hidden \
+            --add /usr/share/applications/yad-icon-browser.desktop > /dev/null
+    fi
     ;;
     triggered)
     setcap cap_net_admin,cap_net_bind_service,cap_net_raw=+ep \
