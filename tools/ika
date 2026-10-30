@@ -555,6 +555,12 @@ hidden_apps = com.google.android.apps.restore com.google.android.googlequicksear
 # their menu entries are marked as games, and they start with fullscreen
 # ticked in their start options. Package names separated by spaces.
 game_apps =
+# Opening a game sends the other open games to the background: their windows
+# close, and each game stays on a display of its own, turned off, so that
+# Android stops it until its window opens again, where it left off. false
+# leaves the other games' windows open. Environment variable:
+# IKA_BACKGROUND_GAMES
+background_games = true
 
 
 # ----------------------------------------------------------------------------
@@ -646,10 +652,15 @@ stop_scrcpy_supervisor() {
 
 stop_app_supervisors() {
   local pid_file
+  local file
 
   for pid_file in "${CVD_TMP_DIR}"/app-supervisor-*.pid; do
     [[ -f "${pid_file}" ]] || continue
     stop_supervisor_from_file "${pid_file}" __app_supervisor
+  done
+  for file in "${CVD_TMP_DIR}"/app-background-*; do
+    [[ -f "${file}" ]] || continue
+    discard_background_app "${file##*/app-background-}"
   done
 }
 
@@ -1122,6 +1133,15 @@ ADB_SERVER_LOG="${ANDROID_ADB_LOG_PATH:-${CVD_TMP_DIR}/adb.${UID}.log}"
 app_supervisor_file() {
   printf '%s\n' "${CVD_TMP_DIR}/app-supervisor-$1.$2"
 }
+# The record of a game in the background, "BOOT_ID CUTTLEFISH_DISPLAY
+# ANDROID_DISPLAY", and the mark that tells its window's supervisor to leave
+# the display when the window closes (see background_app_window).
+app_background_file() {
+  printf '%s\n' "${CVD_TMP_DIR}/app-background-$1"
+}
+app_keep_display_file() {
+  printf '%s\n' "${CVD_TMP_DIR}/app-keep-display-$1"
+}
 DATA_GB_CONFIG_FILE="${CVD_HOME_DIR}/data-gb"
 SERIAL_NUMBER_FILE="${CVD_HOME_DIR}/serial-number"
 START_LOG_FILE="${CVD_HOME_DIR}/ikastart.log"
@@ -1159,6 +1179,7 @@ APP_OPTIONS_FILE="${CVD_HOME_DIR}/app-options.ini"
 TV_CONSOLE_WINDOW_STATE_FILE="${CVD_HOME_DIR}/tv-console-window-state"
 APP_GAMES_FILE="${IKA_APPS_DIR}/games"
 ika_ini_default IKA_APP_MENU_POLL_SEC apps menu_poll_sec 5 uint
+ika_ini_default IKA_BACKGROUND_GAMES apps background_games true
 CVD_BIN="${CVD_HOST_OUT}/bin/cvd_internal_start"
 CVD_CLI_BIN="${CVD_HOST_OUT}/bin/cvd"
 CVD_STOP_BIN="${CVD_HOST_OUT}/bin/cvd_internal_stop"
@@ -2252,9 +2273,17 @@ App windows:
   entries are marked as games, and a game added to the menu starts
   fullscreen (see the start options below).
 
+  Opening a game sends the other games with open windows to the background:
+  their windows close, and each stays on its own display, turned off, so that
+  Android stops it without ending it. Opening it again brings it back where
+  it left off. '${SCRIPT_NAME} app close' ends a game in the background, and
+  'stop', 'reset', 'restart' and a switch between desktop and TV mode end
+  them all. background_games = false under [apps] in ika.ini turns this off.
+
   '${SCRIPT_NAME} app' alone lists the apps that can be launched, with apps
   already open in their own window in bold (marked "(open)" when the output
-  is not a terminal or NO_COLOR is set).
+  is not a terminal or NO_COLOR is set), and games in the background marked
+  "(background)".
 
   NAME is a package name or an app label from that list. Labels match
   case-insensitively, exactly or by a unique part ('app setti' opens
@@ -2424,6 +2453,9 @@ Environment variables:
                          (example: --keyboard=uhid --no-clipboard-autosync)
   IKA_APP_MENU_POLL_SEC  Seconds between checks for installed or removed
                          apps while the app menu watcher runs (default: 5).
+  IKA_BACKGROUND_GAMES   false: opening a game leaves the other games' windows
+                         open, instead of sending them to the background
+                         (default: true).
   IKA_INSTALL_TIMEOUT_SEC
                          Seconds 'install' allows for each APK (default: 1800).
   IKA_GSF_ID_TIMEOUT_SEC Seconds 'gsf' waits for Google Play Services to
@@ -8416,7 +8448,9 @@ open_app_window() {
   local saved_height=""
   local saved_fullscreen=""
   local window_size_is_default="false"
+  local resumed_display=""
   local attempt
+  local -a start_app_args=()
   local -a scrcpy_env=()
   local -a scrcpy_cmd=()
   local -a guest_queries=()
@@ -8481,6 +8515,11 @@ open_app_window() {
     return 0
   fi
 
+  background_other_games "${package}" "${adb_serial}"
+  if app_is_in_background "${package}"; then
+    resume_background_app "${package}" "${adb_serial}" resumed_display || resumed_display=""
+  fi
+
   if [[ -z "${title}" ]]; then
     title="$(app_window_title "${package}" "${adb_serial}")"
   fi
@@ -8527,16 +8566,25 @@ open_app_window() {
   # display instead of resurfacing an existing task on the desktop. The
   # supervisor removes the display when the window closes. START_APP replaces
   # the app's own start (Settings' "+info:PACKAGE" opens an App info page).
-  cuttlefish_display="$(add_cuttlefish_display \
-    "$(app_cuttlefish_display_size "${display_size}")" "${dpi}")" \
-    || die "could not add a Cuttlefish display for ${label:-${package}}"
+  # A game back from the background keeps its display, where it still runs,
+  # and is not started again.
+  if [[ -n "${resumed_display}" ]]; then
+    cuttlefish_display="${resumed_display}"
+  else
+    cuttlefish_display="$(add_cuttlefish_display \
+      "$(app_cuttlefish_display_size "${display_size}")" "${dpi}")" \
+      || die "could not add a Cuttlefish display for ${label:-${package}}"
+  fi
+  if [[ -z "${resumed_display}" || -n "${start_app}" ]]; then
+    start_app_args=(--start-app="${start_app:-+${package}}")
+  fi
   scrcpy_cmd=(
     "${SCRCPY_BIN}"
     -s "${adb_serial}"
     --cuttlefish-frames-socket="$(resolve_cuttlefish_frames_socket)"
     --cuttlefish-display="${cuttlefish_display}"
     --dpi="${dpi}"
-    --start-app="${start_app:-+${package}}"
+    "${start_app_args[@]}"
     --window-title="${title}"
     --window-state-file="${SCRCPY_WINDOW_STATE_FILE}"
     --window-width="${window_size%x*}"
@@ -8564,7 +8612,7 @@ open_app_window() {
   scrcpy_cmd=(env "${scrcpy_env[@]}" "${scrcpy_cmd[@]}")
 
   : > "${SCRCPY_LOG_FILE}"
-  log "opening ${package} (${window_size}/${dpi}) on Cuttlefish display ${cuttlefish_display} as \"${title}\""
+  log "opening ${package} (${window_size}/${dpi}) on Cuttlefish display ${cuttlefish_display}${resumed_display:+, back from the background,} as \"${title}\""
   setsid --fork "${IKA_SCRIPT_PATH}" __app_supervisor "${package}" \
     "${adb_serial}" "${fullscreen_mode}" -- "${scrcpy_cmd[@]}" \
     </dev/null >>"${SCRCPY_LOG_FILE}" 2>&1 3>&- &
@@ -8648,6 +8696,7 @@ run_app_supervisor() {
   validate_app_package "${package}"
   use_app_window_paths "${package}"
   APP_WINDOW_SUPERVISOR="true"
+  APP_WINDOW_PACKAGE="${package}"
   for arg in "$@"; do
     if [[ "${arg}" =~ ^--cuttlefish-display=([0-9]+)$ ]]; then
       APP_CUTTLEFISH_DISPLAY="${BASH_REMATCH[1]}"
@@ -8659,9 +8708,17 @@ run_app_supervisor() {
 }
 
 # Removes the Cuttlefish display of the app window this supervisor runs, once.
+# A game sent to the background keeps it, with the game on it.
 remove_app_cuttlefish_display() {
+  local keep_file
+
   if [[ -n "${APP_CUTTLEFISH_DISPLAY:-}" ]]; then
-    remove_cuttlefish_display "${APP_CUTTLEFISH_DISPLAY}" || true
+    keep_file="$(app_keep_display_file "${APP_WINDOW_PACKAGE:-}")"
+    if [[ -n "${APP_WINDOW_PACKAGE:-}" && -f "${keep_file}" ]]; then
+      rm -f "${keep_file}"
+    else
+      remove_cuttlefish_display "${APP_CUTTLEFISH_DISPLAY}" || true
+    fi
     APP_CUTTLEFISH_DISPLAY=""
   fi
 }
@@ -8672,7 +8729,8 @@ app_window_is_open() {
 
 # Lists launchable apps sorted by label. Apps already open in their own window
 # are shown in bold on a terminal, or marked "(open)" when the output is not a
-# terminal or NO_COLOR is set.
+# terminal or NO_COLOR is set; games in the background are marked
+# "(background)".
 list_launchable_apps() {
   local adb_serial
   local -a labels=()
@@ -8720,6 +8778,8 @@ list_launchable_apps() {
       else
         printf '%-*s  %s  (open)\n' "${width}" "${label}" "${package}"
       fi
+    elif app_is_in_background "${package}"; then
+      printf '%-*s  %s  (background)\n' "${width}" "${label}" "${package}"
     else
       printf '%-*s  %s\n' "${width}" "${label}" "${package}"
     fi
@@ -9863,13 +9923,203 @@ list_open_app_windows() {
   done
 }
 
+# Prints "LABEL<TAB>PACKAGE" for each game in the background.
+list_background_apps() {
+  local file
+  local package
+  local title
+
+  for file in "${CVD_TMP_DIR}"/app-background-*; do
+    [[ -f "${file}" ]] || continue
+    package="${file##*/app-background-}"
+    title="${package}"
+    if [[ -s "${IKA_APPS_DIR}/${package}/title" ]]; then
+      title="$(<"${IKA_APPS_DIR}/${package}/title")"
+    fi
+    printf '%s\t%s\n' "${title}" "${package}"
+  done
+}
+
+app_is_in_background() {
+  [[ -f "$(app_background_file "$1")" ]]
+}
+
+# Whether opening a game sends the other games to the background
+# (apps.background_games in ika.ini, IKA_BACKGROUND_GAMES).
+background_games_enabled() {
+  case "${IKA_BACKGROUND_GAMES:-true}" in
+    [Ff][Aa][Ll][Ss][Ee]|[Nn][Oo]|[Oo][Ff][Ff]|0) return 1 ;;
+  esac
+  return 0
+}
+
+# Prints the Android displays, other than the console's, that hold a task of
+# PACKAGE: a task whose first activity is the package's.
+guest_app_task_displays() {
+  local package="$1"
+  local adb_serial="$2"
+
+  guest_adb "${adb_serial}" shell am stack list </dev/null 2>/dev/null | tr -d '\r' \
+    | awk -v pkg="${package}" '
+      /^RootTask id=/ {
+        display = ""
+        for (i = 1; i <= NF; i++) if ($i ~ /^displayId=/) display = substr($i, 11)
+      }
+      $1 ~ /^taskId=[0-9]+:$/ {
+        split($2, component, "/")
+        if (component[1] == pkg && display != "" && display != "0") print display
+      }' | sort -un
+}
+
+# Whether an open app window, or another game in the background, shows the
+# Cuttlefish display NUMBER: after a restart, a stale record's number can be
+# another window's.
+cuttlefish_display_in_use() {
+  local number="$1"
+  local except_package="$2"
+  local pid_file
+  local pid
+  local file
+  local boot_id
+  local port
+  local display
+
+  for pid_file in "${CVD_TMP_DIR}"/app-supervisor-*.pid; do
+    [[ -f "${pid_file}" ]] || continue
+    pid="$(supervisor_pid_from_file "${pid_file}" __app_supervisor)" || continue
+    tr '\0' '\n' <"/proc/${pid}/cmdline" 2>/dev/null \
+      | grep -qxF -- "--cuttlefish-display=${number}" && return 0
+  done
+  for file in "${CVD_TMP_DIR}"/app-background-*; do
+    [[ -f "${file}" && "${file##*/app-background-}" != "${except_package}" ]] || continue
+    read -r boot_id port display <"${file}" || true
+    [[ "${port}" == "${number}" ]] && return 0
+  done
+  return 1
+}
+
+# Ends a game in the background: its display goes, and the game with it.
+discard_background_app() {
+  local package="$1"
+  local file
+  local boot_id=""
+  local port=""
+  local display=""
+
+  file="$(app_background_file "${package}")"
+  [[ -f "${file}" ]] || return 0
+  read -r boot_id port display <"${file}" || true
+  if [[ "${port}" =~ ^[1-9][0-9]*$ ]] && ! cuttlefish_display_in_use "${port}" "${package}"; then
+    remove_cuttlefish_display "${port}" || true
+  fi
+  rm -f "${file}"
+}
+
+# Sends the game in an app window to the background: the window closes, but
+# the game stays on its Cuttlefish display, which is turned off, so that
+# Android stops the game (as when the screen goes off) without ending it, and
+# out of the console's way. Opening the game again turns the display back on
+# in a new window (resume_background_app). A game that cannot be kept so is
+# closed as the window would be.
+background_app_window() {
+  local package="$1"
+  local adb_serial="$2"
+  local pid_file
+  local pid
+  local port=""
+  local display=""
+  local boot_id=""
+  local label
+
+  pid_file="$(app_supervisor_file "${package}" pid)"
+  pid="$(supervisor_pid_from_file "${pid_file}" __app_supervisor)" || return 0
+  label="${package}"
+  if [[ -s "${IKA_APPS_DIR}/${package}/title" ]]; then
+    label="$(<"${IKA_APPS_DIR}/${package}/title")"
+  fi
+  port="$(tr '\0' '\n' <"/proc/${pid}/cmdline" 2>/dev/null \
+    | sed -n 's/^--cuttlefish-display=\([1-9][0-9]*\)$/\1/p' | head -n 1)"
+  display="$(guest_app_task_displays "${package}" "${adb_serial}" | head -n 1)"
+  boot_id="$(adb_guest_boot_id "${adb_serial}" || true)"
+  if [[ -z "${port}" || -z "${display}" || -z "${boot_id}" ]]; then
+    log "could not keep ${label} in the background; closing its window"
+    stop_supervisor_from_file "${pid_file}" __app_supervisor
+    return 0
+  fi
+
+  : > "$(app_keep_display_file "${package}")"
+  stop_supervisor_from_file "${pid_file}" __app_supervisor
+  rm -f "$(app_keep_display_file "${package}")"
+  if guest_adb "${adb_serial}" shell cmd display power-off "${display}" </dev/null >/dev/null 2>&1; then
+    printf '%s %s %s\n' "${boot_id}" "${port}" "${display}" > "$(app_background_file "${package}")"
+    log "sent ${label} to the background (Cuttlefish display ${port}, Android display ${display}, off)"
+  else
+    log "could not turn off the display of ${label}; closing it"
+    remove_cuttlefish_display "${port}" || true
+  fi
+}
+
+# Before PACKAGE opens: when it is a game, sends the other games with open
+# windows to the background.
+background_other_games() {
+  local package="$1"
+  local adb_serial="$2"
+  local title
+  local other
+  local -a games=()
+
+  background_games_enabled || return 0
+  while IFS=$'\t' read -r title other; do
+    [[ -n "${other}" && "${other}" != "${package}" ]] || continue
+    if is_game_app "${other}"; then
+      games+=("${other}")
+    fi
+  done < <(list_open_app_windows)
+  (( ${#games[@]} > 0 )) || return 0
+  is_game_app "${package}" "${adb_serial}" || return 0
+  for other in "${games[@]}"; do
+    background_app_window "${other}" "${adb_serial}"
+  done
+}
+
+# Brings PACKAGE back from the background: turns its display back on and sets
+# the variable named by $3 to the display's number, for a new window to show
+# it. Fails, dropping the record, when the game is no longer there (Android
+# restarted, or ended the game): the app then opens as usual.
+resume_background_app() {
+  local package="$1"
+  local adb_serial="$2"
+  local -n _resume_port="$3"
+  local file
+  local boot_id=""
+  local port=""
+  local display=""
+  local current_boot_id
+
+  file="$(app_background_file "${package}")"
+  [[ -f "${file}" ]] || return 1
+  read -r boot_id port display <"${file}" || true
+  rm -f "${file}"
+  [[ "${port}" =~ ^[1-9][0-9]*$ && "${display}" =~ ^[1-9][0-9]*$ ]] || return 1
+  current_boot_id="$(adb_guest_boot_id "${adb_serial}" || true)"
+  [[ -n "${current_boot_id}" && "${current_boot_id}" == "${boot_id}" ]] || return 1
+  if ! guest_app_task_displays "${package}" "${adb_serial}" | grep -qxF "${display}"; then
+    if ! cuttlefish_display_in_use "${port}" "${package}"; then
+      remove_cuttlefish_display "${port}" || true
+    fi
+    return 1
+  fi
+  guest_adb "${adb_serial}" shell cmd display power-reset "${display}" </dev/null >/dev/null 2>&1 || true
+  _resume_port="${port}"
+}
+
 close_app_window() {
   local name="$1"
   local open_windows
   local resolved
   local package
 
-  open_windows="$(list_open_app_windows)"
+  open_windows="$(list_open_app_windows; list_background_apps)"
   if [[ -z "${open_windows}" ]]; then
     respond "No app windows are open"
     return 0
@@ -9878,7 +10128,10 @@ close_app_window() {
   package="${resolved#*$'\t'}"
   validate_app_package "${package}"
 
-  stop_supervisor_from_file "$(app_supervisor_file "${package}" pid)" __app_supervisor
+  if app_window_is_open "${package}"; then
+    stop_supervisor_from_file "$(app_supervisor_file "${package}" pid)" __app_supervisor
+  fi
+  discard_background_app "${package}"
   respond "Closed ${resolved%%$'\t'*}"
 }
 

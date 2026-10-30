@@ -31,6 +31,18 @@
   (crosvm's commit to the console's present) as percentiles every 300 frames;
   the console's INFO lines now reach `~/ika/console.log` as they are written.
 
+### Games in the background
+- Opening a game sends the other games with open windows to the
+  background: their windows close, but each game stays on its own display,
+  out of the console's way, and the display is turned off, so that Android
+  stops the game as when a screen goes off, without ending it. Opening the
+  game again turns its display back on in a new window, where it left off,
+  instead of starting it anew. `ika app` marks such games "(background)";
+  `ika app close` ends one, and `ika stop`, `ika restart`, `ika reset` and a
+  switch between desktop and TV mode end them all. Other apps' windows stay
+  open. `background_games = false` in the `[apps]` section of ika.ini, or
+  `IKA_BACKGROUND_GAMES=false`, turns this off.
+
 ### App start options and input
 - Ika's own entry in the app menu has a right-click action, "Startup
   options" (`ika options`), which opens "Startup Options · Ika", a window
