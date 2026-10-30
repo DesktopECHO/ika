@@ -48,8 +48,10 @@ case "$1" in
 
     # On WSL2, WSLg puts every desktop entry in the Windows Start menu, yad's
     # icon browser among them, beside Ika: divert it aside there.
-    # ika-base.postrm takes the diversion back.
-    if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
+    # ika-base.postrm takes the diversion back. WSL boots its kernels,
+    # Microsoft's and those ika-wsl-setup builds, with WSL_ROOT_INIT=1.
+    if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null \
+        || grep -qw WSL_ROOT_INIT=1 /proc/cmdline 2>/dev/null; then
         dpkg-divert --package ika-base --rename \
             --divert /usr/share/applications/yad-icon-browser.desktop.ika-hidden \
             --add /usr/share/applications/yad-icon-browser.desktop > /dev/null
