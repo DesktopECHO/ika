@@ -131,6 +131,18 @@ case "${phase}" in
     # SUDO_USER tells the package whom to add to Ika's groups
     SUDO_USER="${user}" apt-get install -y --no-install-recommends "${debs[@]}"
     usermod -aG kvm,cvdnetwork,render,video "${user}"
+
+    # The Windows Start menu reads Linux apps from the system's applications
+    # directories only, and Ika writes its Android apps' launchers to the
+    # user's: link this one to it, as ika-wsl-setup would, unless it is in use
+    home="$(getent passwd "${user}" | cut -d: -f6)"
+    apps="${home}/.local/share/applications"
+    install -d -o "${user}" -g "${user}" "${home}/.local" "${home}/.local/share" "${apps}"
+    system_apps=/usr/local/share/applications
+    if [[ ! -e "${system_apps}" && ! -L "${system_apps}" ]] || rmdir "${system_apps}" 2>/dev/null; then
+      mkdir -p "${system_apps%/*}"
+      ln -s "${apps}" "${system_apps}"
+    fi
     ;;
 
   setup)
@@ -355,13 +367,13 @@ if ($restartWsl) {
 }
 
 if ($NoStart) {
-    Write-Step "Done. Start Ika with: wsl -d $Name -- ika start"
+    Write-Step "Install complete, start Ika with: wsl -d $Name -- ika start"
     return
 }
 
-Write-Step 'Starting Ika (the first start takes a few minutes)'
+Write-Step 'Starting Ika, first run takes a moment'
 & wsl.exe -d $Name --cd '~' -- ika start
 if ($LASTEXITCODE -ne 0) {
     throw "Ika did not start; its log is ~/ika/ikastart.log in $Name"
 }
-Write-Step "Done. Ika runs in $Name; your Android apps are in the Start menu under ""Android Apps (Ika)""."
+Write-Step 'Install complete, start menu updated'
