@@ -563,6 +563,11 @@
   Ika: there `ika-base` diverts its desktop entry aside while it is installed.
   Elsewhere it stays in the application menu. Ika still uses yad for its
   Startup Options windows.
+- On WSLg, Android apps whose names hold a character Windows file names cannot,
+  such as Destiny: Rising and Desktop/TV, show in the Start menu: WSLg names
+  each shortcut after its app and skipped those. In their menu names `\ / : *
+  ? " < > |` take look-alike characters ("Destiny꞉ Rising"); Linux desktops
+  keep the names as they are.
 - An app window's title bar takes the color 15 pixels below the top of the
   content instead of the topmost row, so a thin strip along the top no longer
   sets it: the blue progress bar of Google's sign-in made it flicker.
