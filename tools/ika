@@ -3680,6 +3680,44 @@ drop_udmabuf_without_device() {
   log "this kernel has no ${UDMABUF_DEVICE}: starting with enable_gpu_udmabuf=false"
 }
 
+# Fails start before the launcher when this user cannot open a device crosvm
+# opens, which crosvm would otherwise report as "Permission denied" seconds
+# into the boot, seen only in the start log. WSL2's distributions share one
+# kernel and so one /dev: another distribution's udev gives the devices to its
+# own kvm or cvdnetwork group, whose ID is another group, or none, here.
+# Running this distribution's udev rules for them again gives them back.
+check_vm_device_access() {
+  local -n device_args_array="$1"
+  local -a devices=(/dev/kvm /dev/vhost-vsock)
+  local -a denied=()
+  local -a sysnames=()
+  local device
+  local group
+
+  [[ "$(start_arg_value vhost_net false "${device_args_array[@]}")" != true ]] \
+    || devices+=(/dev/vhost-net)
+  for device in "${devices[@]}"; do
+    [[ -e "${device}" ]] || continue
+    [[ ! -r "${device}" || ! -w "${device}" ]] || continue
+    group="$(stat -c %G "${device}" 2>/dev/null || true)"
+    [[ -n "${group}" && "${group}" != UNKNOWN ]] \
+      || group="$(stat -c %g "${device}" 2>/dev/null || true), which has no name here"
+    log "cannot open ${device}: it belongs to group ${group}, mode $(stat -c %a "${device}" 2>/dev/null || true)"
+    denied+=("${device}")
+    sysnames+=("--sysname-match=${device#/dev/}")
+  done
+  [[ "${#denied[@]}" -gt 0 ]] || return 0
+
+  CONSOLE_FAILURE_MESSAGE="Startup Failed: cannot open ${denied[*]}"
+  if [[ -d /proc/sys/fs/binfmt_misc/WSLInterop || -n "${WSL_DISTRO_NAME:-}" ]]; then
+    CONSOLE_FAILURE_MESSAGE+=" (another WSL distribution's udev likely changed their group)"
+  fi
+  CONSOLE_FAILURE_MESSAGE+=". To give them back to this distribution's groups, run:
+  sudo udevadm trigger --action=add --subsystem-match=misc ${sysnames[*]}"
+  die_with_notification "Ika cannot open ${denied[*]}" \
+    "cannot open ${denied[*]}; run: sudo udevadm trigger --action=add --subsystem-match=misc ${sysnames[*]}"
+}
+
 append_radv_gfxstream_vulkan_args() {
   local -n radv_args_array="$1"
 
@@ -10200,6 +10238,7 @@ start_cvd() {
   append_arm64_kernel_page_args args "$@"
   append_gfxstream_vulkan_args args "$@"
   drop_udmabuf_without_device args
+  check_vm_device_access args
   append_hw_video_decode_args args "$@"
   append_default_display_arg args "${scrcpy_dpi}" "$@"
   prepare_user_adb_key || return 1

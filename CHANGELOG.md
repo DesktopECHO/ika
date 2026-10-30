@@ -337,6 +337,17 @@
   lacks vhost-vsock, vhost-net or udmabuf builds the WSL2 kernel at the
   running version with them built in and points `.wslconfig` at it. See
   [Windows (WSL2)](CONFIGURATION.md#windows-wsl2).
+- WSL2's distributions share one `/dev`, and another distribution's udev can
+  give `/dev/kvm`, `/dev/vhost-vsock` and `/dev/vhost-net` to its own groups,
+  whose IDs mean other groups, or none, in Ika's, so that crosvm could not
+  open them and `ika start` failed with only "Startup Failed." on the
+  terminal. ika-base's udev rules now also give each device an ACL entry for
+  its group (`kvm`, `cvdnetwork`), which the other distributions' udev leaves
+  in place, and installing or upgrading ika-base runs the rules again (ika-base
+  depends on `acl` for it). `ika start` checks before starting that it can
+  open the devices, and otherwise says which it cannot and the `udevadm
+  trigger` command that gives them back; `ika-wsl-setup` reports and fixes
+  devices without the ACL entry.
 - Ika's windows on Windows have Windows 11's title bar: its height, flat
   minimize, maximize and close buttons with Windows' glyphs (close turns red),
   and the title in Segoe UI Variable, which Ika copies from Windows to

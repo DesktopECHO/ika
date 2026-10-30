@@ -99,7 +99,8 @@ Rules-Requires-Root: no
 
 Package: ika-base
 Architecture: any
-Depends: adduser,
+Depends: acl,
+         adduser,
          curl,
          desktop-file-utils,
          dnsmasq-base,

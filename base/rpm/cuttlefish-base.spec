@@ -107,6 +107,7 @@ BuildRequires:  pkgconfig(zlib)
 BuildRequires:  pkgconfig(libudev)
 BuildRequires:  pkgconfig(wayland-cursor)
 
+Requires:       acl
 Requires:       bsdtar
 Requires:       curl
 # ika app sync edits desktop menu launchers.
@@ -517,6 +518,12 @@ setcap cap_net_admin,cap_net_bind_service,cap_net_raw=+ep /usr/lib/cuttlefish-co
 /usr/sbin/sysctl --system >/dev/null 2>&1 || :
 /usr/libexec/cuttlefish/cuttlefish-add-user-to-groups || :
 udevadm control --reload >/dev/null 2>&1 || :
+# The rules for these devices ran when they appeared, before this package (or
+# this version of it) was installed, or in another WSL2 distribution: run them
+# again for its groups and ACL entries.
+udevadm trigger --action=add --subsystem-match=misc --sysname-match=kvm \
+  --sysname-match=vhost-net --sysname-match=vhost-vsock >/dev/null 2>&1 || :
+udevadm settle >/dev/null 2>&1 || :
 systemctl daemon-reload >/dev/null 2>&1 || :
 # Enable host-resources so host setup runs on every boot -- notably tune_udmabuf,
 # which raises the udmabuf caps the gfxstream Vulkan host-visible path needs (the

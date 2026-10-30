@@ -262,6 +262,29 @@ missing_components() {
       printf 'group-%s\t%s is not in the %s group\n' "${group}" "${USER}" "${group}"
     fi
   done
+
+  # WSL2's distributions share /dev: another one's udev gives these devices to
+  # its own groups, whose IDs mean other groups here, and crosvm cannot open
+  # them. ika-base's udev rules give them to these, and an ACL entry for them
+  # that the other distributions' udev leaves in place.
+  local device group actual
+  local -A device_groups=([kvm]=kvm [vhost-vsock]=cvdnetwork [vhost-net]=cvdnetwork)
+  for device in "${!device_groups[@]}"; do
+    group="${device_groups[${device}]}"
+    [[ -e "/dev/${device}" ]] || continue
+    getent group "${group}" >/dev/null 2>&1 || continue
+    actual="$(stat -c %G "/dev/${device}" 2>/dev/null || true)"
+    [[ "${actual}" == UNKNOWN ]] && actual="$(stat -c %g "/dev/${device}" 2>/dev/null || true)"
+    if command -v getfacl >/dev/null 2>&1; then
+      if ! getfacl -p "/dev/${device}" 2>/dev/null | grep -Eq "^group:${group}:rw"; then
+        printf 'device-%s\t/dev/%s has no ACL entry for %s (it belongs to group %s): another WSL distribution'"'"'s udev can lock Ika out\n' \
+          "${device}" "${device}" "${group}" "${actual}"
+      fi
+    elif [[ "${actual}" != "${group}" ]]; then
+      printf 'device-%s\t/dev/%s belongs to group %s, not %s: another WSL distribution'"'"'s udev likely set it\n' \
+        "${device}" "${device}" "${actual}" "${group}"
+    fi
+  done
 }
 
 # WSLg puts Linux apps in the Windows Start menu, and finds their icons for
@@ -629,6 +652,11 @@ main() {
         ;;
       fuse-allow-other)
         enable_fuse_allow_other
+        ;;
+      device-*)
+        run_as_root udevadm trigger --action=add --subsystem-match=misc --sysname-match="${name#device-}"
+        run_as_root udevadm settle || true
+        log "ran udev's rules for /dev/${name#device-} again: it belongs to $(stat -c %G "/dev/${name#device-}")"
         ;;
       start-menu)
         # WSLg looks for the directory when WSL starts
