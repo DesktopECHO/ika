@@ -22,6 +22,30 @@ IKA_ON_WSLG=false
 SCRCPY_ICON_DIR_DEFAULT="/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps"
 IKA_SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 
+# Runs COMMAND with a time limit of SECONDS, as coreutils' timeout does. The
+# uutils timeout Ubuntu ships since 25.10 polls for the command's end every
+# 0.1 s, a tenth of a second on each of the adb and crosvm calls behind an app
+# window; perl, which perl-base makes always available, stands in for it then.
+if [[ "$(timeout --version 2>/dev/null)" == *"GNU coreutils"* ]] \
+    || ! command -v perl >/dev/null 2>&1; then
+  with_timeout() {
+    timeout "$@"
+  }
+else
+  with_timeout() {
+    perl -e '
+      my $limit = shift @ARGV;
+      my $pid = fork;
+      defined $pid or exit 125;
+      if (!$pid) { exec {$ARGV[0]} @ARGV or exit 127 }
+      $SIG{ALRM} = sub { kill "TERM", $pid; waitpid $pid, 0; exit 124 };
+      alarm $limit;
+      waitpid $pid, 0;
+      exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
+    ' "$@"
+  }
+fi
+
 # ============================================================================
 # Settings file (~/ika/ika.ini)
 # ============================================================================
@@ -1766,7 +1790,7 @@ vaapi_decoder_check() {
       vaapi_driver_names "${node}" | vaapi_driver_installed && driver_installed="true"
     fi
     [[ "${have_vainfo}" == "true" ]] || continue
-    profiles="$(timeout 10 vainfo --display drm --device "${node}" 2>/dev/null)" || continue
+    profiles="$(with_timeout 10 vainfo --display drm --device "${node}" 2>/dev/null)" || continue
     node_ref="${node}"
     codecs_ref="$(sed -n 's/^[[:space:]]*VAProfile\([A-Za-z0-9_]*\)[[:space:]]*:[[:space:]]*VAEntrypointVLD.*/\1/p' \
         <<<"${profiles}" \
@@ -3045,7 +3069,7 @@ primary_vulkan_device_has_venus_etc2() {
   command -v vulkaninfo >/dev/null 2>&1 || return 1
 
   env -u DISPLAY -u WAYLAND_DISPLAY vk_require_etc2=true vk_require_astc=true \
-    timeout 30 vulkaninfo 2>/dev/null | awk '
+    with_timeout 30 vulkaninfo 2>/dev/null | awk '
       /^GPU0:/ { in_gpu = 1; next }
       /^GPU[0-9]+:/ { in_gpu = 0 }
       in_gpu && !seen && $1 == "textureCompressionETC2" { seen = 1; found = ($3 == "true") }
@@ -3939,7 +3963,7 @@ windows_color_scheme() {
   reg="$(command -v reg.exe || true)"
   [[ -n "${reg}" ]] || reg="/mnt/c/Windows/System32/reg.exe"
   [[ -x "${reg}" ]] || return 1
-  value="$(timeout 5 "${reg}" query 'HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' \
+  value="$(with_timeout 5 "${reg}" query 'HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' \
     /v AppsUseLightTheme 2>/dev/null | tr -d '\r' | awk '$1 == "AppsUseLightTheme" { print $3 }')"
   case "${value}" in
     0x0) printf 'dark\n' ;;
@@ -3960,7 +3984,7 @@ host_color_scheme() {
   fi
 
   if command -v gdbus >/dev/null 2>&1; then
-    value="$(timeout 3 gdbus call --session \
+    value="$(with_timeout 3 gdbus call --session \
         --dest org.freedesktop.portal.Desktop \
         --object-path /org/freedesktop/portal/desktop \
         --method org.freedesktop.portal.Settings.Read \
@@ -4446,7 +4470,7 @@ host_adb() {
 
   adb_bin="$(resolve_adb_bin)"
   [[ -n "${adb_bin}" ]] || return 1
-  timeout "${timeout_seconds}" "${adb_bin}" "$@"
+  with_timeout "${timeout_seconds}" "${adb_bin}" "$@"
 }
 
 # Drops the guest's adb transport once the VM has stopped. Otherwise the adb
@@ -4680,7 +4704,7 @@ repair_wslg_taskbar_pins() {
   mkdir -p "${CVD_TMP_DIR}"
   (
     flock -n 9 || exit 0
-    timeout 60 "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+    with_timeout 60 "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass \
       -EncodedCommand "$(wslg_pin_repair_script | iconv -t UTF-16LE | base64 -w 0)" \
       </dev/null 2>/dev/null | tr -d '\r' | while IFS= read -r line; do
         [[ -n "${line}" ]] && log "repaired the task bar pin ${line}"
@@ -5791,7 +5815,7 @@ cuttlefish_gpu_control_socket() {
 
 # Prints the numbers of the Cuttlefish displays, one per line.
 cuttlefish_display_numbers() {
-  timeout 10 "${CVD_HOST_OUT}/bin/crosvm" gpu list-displays "$1" 2>/dev/null \
+  with_timeout 10 "${CVD_HOST_OUT}/bin/crosvm" gpu list-displays "$1" 2>/dev/null \
     | tr -d ' \n' | grep -o '"[0-9][0-9]*":{' | tr -dc '0-9\n'
 }
 
@@ -5816,7 +5840,7 @@ add_cuttlefish_display() {
     else
       read -r app_refresh_hz _ < <(resolve_display_refresh_hz)
     fi
-    if timeout 10 "${CVD_HOST_OUT}/bin/crosvm" gpu add-displays \
+    if with_timeout 10 "${CVD_HOST_OUT}/bin/crosvm" gpu add-displays \
         "--gpu-display=mode=windowed[${size/x/,}],dpi=[${dpi},${dpi}],refresh-rate=${app_refresh_hz}" \
         "${socket}" >/dev/null 2>&1; then
       while read -r number; do
@@ -5833,7 +5857,7 @@ add_cuttlefish_display() {
 }
 
 remove_cuttlefish_display() {
-  timeout 10 "${CVD_HOST_OUT}/bin/crosvm" gpu remove-displays --display-id="$1" \
+  with_timeout 10 "${CVD_HOST_OUT}/bin/crosvm" gpu remove-displays --display-id="$1" \
     "$(cuttlefish_gpu_control_socket)" >/dev/null 2>&1
 }
 
@@ -5959,7 +5983,7 @@ query_guest_apps() {
   append_scrcpy_env scrcpy_env
   # Nothing unless the query succeeded: a partial list would make the menu sync
   # remove the launchers of the apps missing from it.
-  output="$(timeout 30 env "${scrcpy_env[@]}" "${SCRCPY_BIN}" -s "${adb_serial}" --list-apps 2>&1)" \
+  output="$(with_timeout 30 env "${scrcpy_env[@]}" "${SCRCPY_BIN}" -s "${adb_serial}" --list-apps 2>&1)" \
     || return 0
   printf '%s\n' "${output}" \
     | tr -d '\r' \
@@ -9411,7 +9435,7 @@ edit_windows_android_storage_shortcut() {
   mkdir -p "${CVD_TMP_DIR}"
   (
     flock -w 30 9 || exit 0
-    timeout 60 "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+    with_timeout 60 "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass \
       -EncodedCommand "$(windows_storage_shortcut_script "${action}" "${target}" \
         | iconv -t UTF-16LE | base64 -w 0)" </dev/null >/dev/null 2>&1
   ) 9>"${CVD_TMP_DIR}/windows-storage-shortcut.lock" &
@@ -9526,7 +9550,7 @@ windows_shift_held() {
 
   [[ "${IKA_ON_WSLG}" == true ]] || return 1
   command -v powershell.exe >/dev/null 2>&1 || return 1
-  keys="$(timeout 5 powershell.exe -NoProfile -NonInteractive -Command \
+  keys="$(with_timeout 5 powershell.exe -NoProfile -NonInteractive -Command \
     'Add-Type -AssemblyName System.Windows.Forms; [int][System.Windows.Forms.Control]::ModifierKeys' \
     2>/dev/null | tr -d '\r')"
   # Keys.Shift
