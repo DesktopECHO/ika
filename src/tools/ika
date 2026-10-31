@@ -9544,10 +9544,25 @@ sync_app_menu() {
   install_xdg_app_menu
   install_gnome_app_folder "${desktop_ids[@]+"${desktop_ids[@]}"}"
 
+  # The launchers of apps no longer listed go before any is written, for the
+  # same reason: an app gone from the list can share its Name, and so its
+  # Start menu shortcut, with one still there (Android TV's Settings and
+  # Android's are both "Settings").
+  while IFS=$'\t' read -r label package; do
+    is_app_package_name "${package}" && current["${package}"]=1
+  done <<<"${list}"
+  while read -r file; do
+    [[ -n "${file}" ]] || continue
+    package="$(sed -n 's/^X-Ika-Package=//p' "${file}" | head -n1)"
+    if [[ -z "${package}" || -z "${current[${package}]:-}" ]]; then
+      rm -f "${file}"
+      removed=$((removed + 1))
+    fi
+  done < <(list_app_launchers)
+
   updated="$(refresh_changed_launchers "${apps_dir}" "${list}")"
   while IFS=$'\t' read -r label package; do
     is_app_package_name "${package}" || continue
-    current["${package}"]=1
     # A game added to the menu starts with Fullscreen ticked in its start
     # options, unless they were set before.
     if [[ ! -f "${apps_dir}/$(app_window_id "${package}").desktop" ]] && is_game_app "${package}" \
@@ -9560,15 +9575,6 @@ sync_app_menu() {
       updated=$((updated + 1))
     fi
   done <<<"${list}"
-
-  while read -r file; do
-    [[ -n "${file}" ]] || continue
-    package="$(sed -n 's/^X-Ika-Package=//p' "${file}" | head -n1)"
-    if [[ -z "${package}" || -z "${current[${package}]:-}" ]]; then
-      rm -f "${file}"
-      removed=$((removed + 1))
-    fi
-  done < <(list_app_launchers)
 
   refresh_app_menu_caches
   # Release the lock now: a watcher started after this would inherit the
