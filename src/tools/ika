@@ -5780,6 +5780,37 @@ wslg_caption_font() {
   printf '%s\n' "${copy}"
 }
 
+# On WSLg, a fontconfig file of Ika's for its windows (FONTCONFIG_FILE): the
+# system's configuration, with Segoe UI Variable, Windows' own font
+# (wslg_caption_font's copy), as the sans-serif font, so that the text of the
+# Startup Options windows and Ika's dialogs matches Windows' (scrcpy's title
+# bars load the font themselves). Prints
+# its path; nothing when Windows has no such font, or the user set
+# FONTCONFIG_FILE.
+wslg_fontconfig_file() {
+  local font
+  local file="${CVD_HOME_DIR}/fonts/fonts.conf"
+
+  [[ "${IKA_ON_WSLG}" == true && -z "${FONTCONFIG_FILE:-}" ]] || return 0
+  font="$(wslg_caption_font)"
+  [[ -n "${font}" ]] || return 0
+  write_file_if_changed "${file}" <<EOF || true
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<!-- Written by ika: Windows' Segoe UI Variable as the sans-serif font of
+     Ika's windows on WSLg -->
+<fontconfig>
+  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
+  <dir>${font%/*}</dir>
+  <alias binding="strong">
+    <family>sans-serif</family>
+    <prefer><family>Segoe UI Variable</family></prefer>
+  </alias>
+</fontconfig>
+EOF
+  [[ -f "${file}" ]] && printf '%s\n' "${file}"
+}
+
 append_scrcpy_env() {
   local -n scrcpy_env_ref="$1"
   local caption_font
@@ -6947,9 +6978,27 @@ resolve_settings_app() {
 set_yad_env() {
   local -n yad_env_ref="$1"
 
+  local fontconfig_file
+
   yad_env_ref=()
   if [[ -z "${GTK_THEME:-}" && "$(host_color_scheme)" == "dark" ]]; then
     yad_env_ref=(GTK_THEME=Adwaita:dark)
+  fi
+  fontconfig_file="$(wslg_fontconfig_file)"
+  if [[ -n "${fontconfig_file}" ]]; then
+    yad_env_ref+=("FONTCONFIG_FILE=${fontconfig_file}")
+  fi
+  # On WSLg, where no desktop sets GTK's font, the text is two points larger
+  # than GTK's default (Sans 10), the Gamepad Emulation tab's too (not smaller,
+  # as elsewhere, its fields without the padding the text no longer leaves
+  # room for), and ika's window (ika_window_py) gives its title
+  # bar Windows 11's look and behavior, as scrcpy's title bars have them, for
+  # Windows' display scale
+  if [[ "${IKA_ON_WSLG}" == true ]]; then
+    yad_env_ref+=("IKA_WINDOW_CSS=window { font-size: 12pt; } .ika-compact { font-size: 100%; }
+.ika-compact entry, .ika-compact spinbutton, .ika-compact combobox button {
+ min-height: 0; padding-top: 0; padding-bottom: 0; }"
+                  "IKA_WINDOWS_SCALE=$(wslg_windows_scale)")
   fi
 }
 
@@ -7790,6 +7839,161 @@ CSS = b"""
 """
 
 
+# On WSLg (IKA_WINDOWS_SCALE, Windows' display scale in percent), the title bar
+# looks and behaves like Windows 11's, as scrcpy's title bars do on WSLg
+# (scrcpy/app/src/ika/window.c, sc_ika_window_init_caption, whose metrics,
+# glyphs and CSS these mirror: a change to one goes to the other): its height,
+# its three buttons with their glyphs and their hover, the title in Segoe UI
+# Variable, faded with the buttons while the window is inactive. Where an app
+# window's title bar takes the color of the top of the app, this one has the
+# window's own background. The glyphs are symbolic icons in scrcpy's glyph
+# directory, written when missing.
+CAPTION_HEIGHT = 32
+CAPTION_BUTTON_WIDTH = 46
+CAPTION_GLYPH = 10
+CAPTION_FONT_SIZE = 12
+CAPTION_TITLE_PADDING = 12
+CAPTION_RADIUS = 8
+
+
+def caption_ring(x, y, w, h, r, t):
+    """The path of a rounded rectangle outline T thick (even-odd)"""
+    path = ""
+    for _ in range(2):
+        rr = min(max(r, 0), w / 2, h / 2)
+        path += ("M%.3f %.3fh%.3fa%.3f %.3f 0 0 1 %.3f %.3fv%.3f"
+                 "a%.3f %.3f 0 0 1 %.3f %.3fh%.3fa%.3f %.3f 0 0 1 %.3f %.3f"
+                 "v%.3fa%.3f %.3f 0 0 1 %.3f %.3fz") % (
+                     x + rr, y, w - 2 * rr, rr, rr, rr, rr, h - 2 * rr,
+                     rr, rr, -rr, rr, -(w - 2 * rr), rr, rr, -rr, -rr,
+                     -(h - 2 * rr), rr, rr, rr, -rr)
+        x += t
+        y += t
+        w -= 2 * t
+        h -= 2 * t
+        r -= t
+    return path
+
+
+def caption_glyphs(g):
+    """The SVGs of the caption glyphs, G x G pixels, by name"""
+    r = max(1, g * 0.15)
+    front = int(g * 0.8 + 0.5)
+    off = g - front
+    d = 0.70710678  # half the width of a 1-pixel diagonal, projected
+    back = caption_ring(off, 0, front, front, r * 0.8, 1)
+    shapes = {
+        # A whole pixel row, so that the line stays sharp
+        "minimize": ("", "M0 %dh%dv1H0z" % (g // 2, g)),
+        "maximize": ("", caption_ring(0, 0, g, g, r, 1)),
+        # The front window bottom left, the back one's outline clipped where
+        # the front one covers it (and a pixel apart)
+        "restore": (
+            '<clipPath id="c"><path clip-rule="evenodd" '
+            'd="M0 0H%dV%dH0zM0 %dH%dV%dH0z"/></clipPath>'
+            '<path fill="#000" fill-rule="evenodd" clip-path="url(#c)" d="%s"/>'
+            % (g, g, g - front - 1, front + 1, g, back),
+            caption_ring(0, off, front, front, r * 0.8, 1)),
+        "close": ("", "M0 %.3fL%.3f 0L%d %.3fL%.3f %dzM%.3f 0L%d %.3fL%.3f %dL0 %.3fz"
+                  % (d, d, g, g - d, g - d, g, g - d, g, d, d, g, g - d)),
+    }
+    return {
+        name: '<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" '
+              'viewBox="0 0 %d %d">%s<path fill="#000" fill-rule="evenodd" '
+              'd="%s"/></svg>\n' % (g, g, g, g, clipped, path)
+        for name, (clipped, path) in shapes.items()
+    }
+
+
+def caption_glyph_dir(g):
+    """scrcpy's directory for the glyphs of size G, created"""
+    import os
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    base = (os.path.join(runtime, "ika-caption") if runtime
+            else "/tmp/ika-caption-%d" % os.getuid())
+    path = os.path.join(base, "%dpx" % g)
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    return path
+
+
+def wslg_caption(Gtk, Gdk):
+    import os
+    try:
+        pct = int(os.environ.get("IKA_WINDOWS_SCALE", ""))
+    except ValueError:
+        return
+    if not 100 <= pct <= 500:
+        pct = 100
+
+    def px(v):
+        return int(v * pct / 100 + 0.5)
+
+    glyph = px(CAPTION_GLYPH)
+    try:
+        directory = caption_glyph_dir(glyph)
+        for name, svg in caption_glyphs(glyph).items():
+            path = os.path.join(directory, "ika-caption-%s-symbolic.svg" % name)
+            if not os.path.exists(path):
+                tmp = "%s.tmp.%d" % (path, os.getpid())
+                with open(tmp, "w") as f:
+                    f.write(svg)
+                os.replace(tmp, path)
+    except OSError:
+        return
+    Gtk.IconTheme.get_default().append_search_path(directory)
+    # Windows windows have the three buttons (GNOME's default, without
+    # Ubuntu's desktop settings, is the close button only)
+    Gtk.Settings.get_default().set_property("gtk-decoration-layout", ":minimize,maximize,close")
+
+    css = """
+headerbar.default-decoration {
+ min-height: %(height)dpx; padding: 0 0 0 %(padding)dpx; margin: 0;
+ border-radius: %(radius)dpx %(radius)dpx 0 0;
+ font-family: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", sans-serif;
+ font-size: %(font)dpx; }
+window.maximized headerbar.default-decoration { border-radius: 0; }
+headerbar.default-decoration .title { font-weight: normal; font-size: %(font)dpx; }
+headerbar.default-decoration:backdrop .title,
+ headerbar.default-decoration:backdrop button.titlebutton { opacity: 0.55; }
+headerbar.default-decoration button.titlebutton {
+ min-width: %(button)dpx; min-height: %(height)dpx; padding: 0;
+ margin: 0 -3px;
+ border: none; border-radius: 0; box-shadow: none; outline: none;
+ background-color: transparent; background-repeat: no-repeat;
+ background-position: center; background-size: %(glyph)dpx %(glyph)dpx; }
+headerbar.default-decoration button.titlebutton image { -gtk-icon-transform: scale(0.01); }
+headerbar.default-decoration button.titlebutton.minimize {
+ background-image: -gtk-icontheme("ika-caption-minimize-symbolic"); }
+headerbar.default-decoration button.titlebutton.maximize {
+ background-image: -gtk-icontheme("ika-caption-maximize-symbolic"); }
+window.maximized headerbar.default-decoration button.titlebutton.maximize {
+ background-image: -gtk-icontheme("ika-caption-restore-symbolic"); }
+headerbar.default-decoration button.titlebutton.close {
+ background-image: -gtk-icontheme("ika-caption-close-symbolic");
+ margin-right: 0; border-radius: 0 %(radius)dpx 0 0; }
+window.maximized headerbar.default-decoration button.titlebutton.close { border-radius: 0; }
+headerbar.default-decoration button.titlebutton:hover { background-color: alpha(currentColor, 0.06); }
+headerbar.default-decoration button.titlebutton:active { background-color: alpha(currentColor, 0.04); }
+headerbar.default-decoration button.titlebutton.close:hover { background-color: #c42b1c; color: #ffffff; }
+headerbar.default-decoration button.titlebutton.close:active {
+ background-color: rgba(196, 43, 28, 0.9); color: #ffffff; }
+headerbar.default-decoration, headerbar.default-decoration:backdrop {
+ background: @theme_bg_color; background-image: none;
+ border-color: @theme_bg_color; box-shadow: none; }
+headerbar.default-decoration .title, headerbar.default-decoration:backdrop .title,
+ headerbar.default-decoration button, headerbar.default-decoration:backdrop button {
+ color: @theme_fg_color; }
+""" % {
+        "height": px(CAPTION_HEIGHT), "padding": px(CAPTION_TITLE_PADDING),
+        "radius": px(CAPTION_RADIUS), "font": px(CAPTION_FONT_SIZE),
+        "button": px(CAPTION_BUTTON_WIDTH), "glyph": glyph,
+    }
+    provider = Gtk.CssProvider()
+    provider.load_from_data(css.encode())
+    Gtk.StyleContext.add_provider_for_screen(
+        Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+
+
 def run(window):
     from gi.repository import GLib
     if window["app_id"]:
@@ -7803,10 +8007,14 @@ def run(window):
     if window["app_id"]:
         Gdk.set_program_class(window["app_id"])
 
-    provider = Gtk.CssProvider()
-    provider.load_from_data(CSS)
-    Gtk.StyleContext.add_provider_for_screen(
-        Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    import os
+    for css in (CSS, os.environ.get("IKA_WINDOW_CSS", "")):
+        if css:
+            provider = Gtk.CssProvider()
+            provider.load_from_data(css.encode() if isinstance(css, str) else css)
+            Gtk.StyleContext.add_provider_for_screen(
+                Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    wslg_caption(Gtk, Gdk)
 
     readers = []
     result = {"code": 252}
