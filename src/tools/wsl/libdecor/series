@@ -1,1 +1,2 @@
 gtk-destroy-hidden-surfaces.patch
+gtk-desync-subsurfaces.patch

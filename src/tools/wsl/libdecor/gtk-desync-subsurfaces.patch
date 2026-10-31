@@ -1,0 +1,20 @@
+gtk: desynchronize the decoration subsurfaces
+
+WSLg shows every subsurface as a window of its own, and did not show the
+title bar redrawn while it was synchronized with the window: the highlight
+of a title bar button under the pointer never appeared. Desynchronized,
+each redraw shows at once.
+
+--- a/src/plugins/gtk/libdecor-gtk.c
++++ b/src/plugins/gtk/libdecor-gtk.c
+@@ -858,6 +858,10 @@
+ 	wl_subsurface = wl_subcompositor_get_subsurface(wl_subcompositor,
+ 							wl_surface,
+ 							parent);
++	/* WSLg shows every subsurface as a window of its own, and did not
++	 * show a title bar redrawn while it was synchronized with the window
++	 * (such as the highlight of the button under the pointer). */
++	wl_subsurface_set_desync(wl_subsurface);
+ 
+ 	*out_wl_surface = wl_surface;
+ 	*out_wl_subsurface = wl_subsurface;

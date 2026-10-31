@@ -1291,7 +1291,6 @@ sc_screen_set_orientation(struct sc_screen *screen,
     sc_screen_render(screen, true);
 }
 
-#define SC_TITLEBAR_SAMPLES 15
 #define SC_TITLEBAR_STABLE_FRAMES 3
 #define SC_TITLEBAR_INTERVAL SC_TICK_FROM_MS(150)
 #define SC_TITLEBAR_BLANK_HOLD SC_TICK_FROM_SEC(5)
@@ -1299,12 +1298,22 @@ sc_screen_set_orientation(struct sc_screen *screen,
 // below a thin strip along the edge, such as the blue progress bar of Google's
 // sign-in (rows 0-3 in an app window), whose moving segments made the title bar
 // flicker, and above it in the console, where it lies under the status bar
-// (rows 29-32 at 168 dpi)
-#define SC_TITLEBAR_ROW_OFFSET 15
+// (rows 29-32 at 168 dpi); close to the edge, where the left and right of the
+// content still show the app's background above images with rounded corners,
+// such as the Play Store's banner (rows 0-12 at 4 pixels from the sides)
+#define SC_TITLEBAR_ROW_OFFSET 8
+// How far in from the left and right edges of the content the color is read
+#define SC_TITLEBAR_EDGE_INSET 4
+
+static bool
+sc_screen_same_color(struct sc_screen_bg_color a, struct sc_screen_bg_color b) {
+    return a.r == b.r && a.g == b.g && a.b == b.b;
+}
 
 // Ika: give the title bar of a decorated window the color along the top of the
-// content: the most common of a row of samples, once it has held for a few
-// frames (not in the middle of an animation), at most a few times a second.
+// content, read at its left, middle and right: the color two of them agree on,
+// else the right one, once it has held for a few frames (not in the middle of an
+// animation), at most a few times a second.
 // A frame the display has settled on is taken at once.
 static void
 sc_screen_update_titlebar_color(struct sc_screen *screen,
@@ -1319,34 +1328,21 @@ sc_screen_update_titlebar_color(struct sc_screen *screen,
         src = sc_screen_get_raw_source_rect(screen);
     }
     int row = src.y + MIN(SC_TITLEBAR_ROW_OFFSET, (int) src.h - 1);
-    struct sc_screen_bg_color samples[SC_TITLEBAR_SAMPLES];
-    unsigned count = 0;
-    for (unsigned i = 0; i < SC_TITLEBAR_SAMPLES; ++i) {
-        int x = src.x + (i + 0.5f) * src.w / SC_TITLEBAR_SAMPLES;
-        if (sc_screen_get_frame_pixel_color(frame, x, row, &samples[count])) {
-            ++count;
-        }
-    }
-
-    unsigned best = 0;
-    unsigned best_count = 0;
-    for (unsigned i = 0; i < count; ++i) {
-        unsigned same = 0;
-        for (unsigned j = 0; j < count; ++j) {
-            same += samples[j].r == samples[i].r && samples[j].g == samples[i].g
-                 && samples[j].b == samples[i].b;
-        }
-        if (same > best_count) {
-            best = i;
-            best_count = same;
-        }
-    }
-    // No majority: an image or text along the edge
-    if (best_count * 2 <= count) {
+    struct sc_screen_bg_color left, middle, right;
+    if (!sc_screen_get_frame_pixel_color(frame,
+                                         src.x + SC_TITLEBAR_EDGE_INSET, row,
+                                         &left)
+            || !sc_screen_get_frame_pixel_color(frame, src.x + src.w / 2, row,
+                                                &middle)
+            || !sc_screen_get_frame_pixel_color(frame,
+                                                src.x + src.w - 1
+                                                    - SC_TITLEBAR_EDGE_INSET,
+                                                row, &right)) {
         return;
     }
-
-    struct sc_screen_bg_color color = samples[best];
+    struct sc_screen_bg_color color =
+        sc_screen_same_color(left, middle) || sc_screen_same_color(left, right)
+            ? left : right;
     struct sc_ika_window *iw = &screen->ika_window;
     sc_tick now = sc_tick_now();
     // Until the app draws, its display is black: keep the color from last

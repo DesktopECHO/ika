@@ -353,7 +353,9 @@ plugin, which draws their title bar and shadow
 unless you set it). WSLg shows each of those as a window of its own and only
 removes it when it is destroyed, while the plugin hides them in fullscreen by
 unmapping them: a fullscreen window kept a translucent title bar and frame on
-top. Ika's build destroys them instead.
+top. Ika's build destroys them instead. It also desynchronizes them from the
+window: WSLg did not show a title bar redrawn while it waited for the window's
+next frame, so its buttons did not highlight under the pointer.
 
 | Variable | Effect |
 | --- | --- |
