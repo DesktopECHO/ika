@@ -433,7 +433,8 @@ mkdir -p %{buildroot}/usr/lib/cuttlefish-metrics/bin
 cp -a base/cvd/bazel-out/${bazel_arch}-opt/bin/cuttlefish/package/cuttlefish-metrics/bin/metrics_transmitter %{buildroot}/usr/lib/cuttlefish-metrics/bin/
 
 # Install the scrcpy viewer (folded in from the former ika-scrcpy package) into
-# the shared cuttlefish-common tree, then expose the "Ika" desktop launcher.
+# the shared cuttlefish-common tree, then expose the "Ika Console"
+# desktop launcher.
 DESTDIR=%{buildroot} meson install -C _build_scrcpy
 make -C tools/wsl BUILD="$PWD/_build_wsl" DESTDIR=%{buildroot} install
 install -m 0755 _build_madbfs/upstream/madbfs/madbfs _build_madbfs/upstream/madbfs-msg/madbfs-msg \

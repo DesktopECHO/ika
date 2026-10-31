@@ -8958,15 +8958,15 @@ write_file_if_changed() {
 # console_app_id), ika-DISTRIBUTION.desktop, a copy of ika.desktop, in the
 # user's applications directory, where WSLg reads it once ika-wsl-setup has
 # linked it. An ika.desktop there with Hidden=true takes ika.desktop's own out
-# of the Windows Start menu, which WSLg reads first; both are named Ika, and
-# WSLg names a Start menu shortcut after the entry's Name. When ika-base is
-# installed again, WSLg reads ika.desktop anew, and its shortcut takes the
-# console entry's place: hiding it again removes that shortcut, so the console
-# entry is written again after it. An entry for another name of the
-# distribution, since renamed, goes first. WSLg looks an icon given by name up
-# at 128 pixels at most, so the entry names the console's icon by the path of
-# its 256-pixel one. Does nothing outside WSLg, or when WSLg does not read the
-# user's entries.
+# of the Windows Start menu, which WSLg reads first; both are named Ika
+# Console, and WSLg names a Start menu shortcut after the entry's Name. When
+# ika-base is installed again, WSLg reads ika.desktop anew, and its shortcut
+# takes the console entry's place: hiding it again removes that shortcut, so
+# the console entry is written again after it. An entry for another name of
+# the distribution, since renamed, goes first. WSLg looks an icon given by name
+# up at 128 pixels at most, so the entry names the console's icon by the path
+# of its 256-pixel one. Does nothing outside WSLg, or when WSLg does not read
+# the user's entries.
 IKA_WSLG_CONSOLE_ICON="/usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png"
 
 write_wslg_console_entry() {
@@ -8994,7 +8994,7 @@ write_wslg_console_entry() {
   # its last change of status is that of its installation.
   if [[ ! -f "${hidden}" ]] \
       || (( $(stat -c %Z "${system_entry}") > $(stat -c %Y "${hidden}") )); then
-    printf '[Desktop Entry]\nType=Application\nName=Ika\nHidden=true\n' > "${hidden}"
+    printf '[Desktop Entry]\nType=Application\nName=Ika Console\nHidden=true\n' > "${hidden}"
     rm -f "${entry}"
   fi
   if [[ -f "${IKA_WSLG_CONSOLE_ICON}" ]]; then

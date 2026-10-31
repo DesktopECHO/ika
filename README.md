@@ -71,7 +71,8 @@ virtual machine, with its apps in windows of their own.
    `cvdnetwork`, `render` and `video` groups and set up the host's devices and
    limits, which take effect at the next boot; logging out is not enough.
    Updates need no reboot.
-4. Start Ika from your desktop's app menu, or with `ika start`.
+4. Start Ika with **Ika Console** in your desktop's app menu, or with
+   `ika start`.
 
 ## First steps
 

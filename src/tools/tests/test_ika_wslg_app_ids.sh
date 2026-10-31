@@ -54,7 +54,7 @@ entry="${apps}/ika-ubuntu-24-04.desktop"
 [[ -f "${entry}" ]] || fail "no console entry"
 [[ "$(console_app_id)" == ika-ubuntu-24-04 ]] || fail "console app ID: $(console_app_id)"
 grep -qx 'StartupWMClass=ika-ubuntu-24-04' "${entry}" || fail "the entry names another class"
-grep -qx 'Name=Ika' "${entry}" || fail "the entry lost ika.desktop's name"
+grep -qx 'Name=Ika Console' "${entry}" || fail "the entry lost ika.desktop's name"
 [[ "$(sed -n '/^\[Desktop Entry\]/,/^\[/p' "${entry}" | grep -cx 'X-Ika-Console=true')" == 1 ]] \
   || fail "the marker is not in the entry's [Desktop Entry] group"
 grep -qx 'Hidden=true' "${apps}/ika.desktop" || fail "ika.desktop is not hidden from WSLg"

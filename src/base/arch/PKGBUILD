@@ -260,7 +260,7 @@ package_ika-base() {
   ln -sfn ../lib/cuttlefish-common/bin/cvd "${pkgdir}/usr/bin/cvd"
 
   # Install the scrcpy viewer (folded in from the former ika-scrcpy package)
-  # and expose the "Ika" desktop launcher.
+  # and expose the "Ika Console" desktop launcher.
   cd "${root}"
   DESTDIR="${pkgdir}" meson install -C _build_scrcpy
   install -m 0755 _build_madbfs/upstream/madbfs/madbfs _build_madbfs/upstream/madbfs-msg/madbfs-msg \

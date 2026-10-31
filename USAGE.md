@@ -15,8 +15,9 @@ ika stop       # stop Android
 ika restart    # stop and start again, with new options if given
 ```
 
-The **Ika** icon in your desktop's app menu runs `ika start`. Right-click it
-for **Start Ika**, **Stop Ika**, **Restart Ika** and **Startup options**.
+The **Ika Console** icon in your desktop's app menu runs `ika start`.
+Right-click it for **Start Ika**, **Stop Ika**, **Restart Ika** and **Startup
+options**.
 Started from the menu, Ika reports its progress and errors as desktop
 notifications.
 

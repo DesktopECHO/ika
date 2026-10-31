@@ -1,6 +1,6 @@
 # Without a terminal, IKA_NOTIFY reports progress and errors as notifications.
 [Desktop Entry]
-Name=Ika
+Name=Ika Console
 GenericName=Android Virtual Desktop
 Comment=Open the Ika desktop window
 Exec=env IKA_NOTIFY=true ika start
