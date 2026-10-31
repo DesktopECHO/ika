@@ -4894,11 +4894,21 @@ windows_powershell() {
 # pinned it) and at start, and does nothing outside WSLg.
 repair_wslg_taskbar_pins() {
   local powershell
+  local fd
 
   [[ "${IKA_ON_WSLG}" == true ]] || return 0
   powershell="$(windows_powershell)" || return 0
   mkdir -p "${CVD_TMP_DIR}"
   (
+    # Running on after its caller, the job must not keep the files the caller
+    # had open: a console supervisor's lock, held on after it exits, made the
+    # next console find another supervisor active and not open.
+    for fd in /proc/"${BASHPID}"/fd/*; do
+      fd="${fd##*/}"
+      if (( fd > 2 && fd != 9 )); then
+        { exec {fd}>&-; } 2>/dev/null || true
+      fi
+    done
     flock -n 9 || exit 0
     with_timeout 60 "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass \
       -EncodedCommand "$(wslg_pin_repair_script | iconv -t UTF-16LE | base64 -w 0)" \
