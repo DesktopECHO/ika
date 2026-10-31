@@ -402,7 +402,7 @@ has no udmabuf, which Ika does without: it then starts with
 `ika start` ends with `process monitor has died` and `Cuttlefish did not
 reach boot completion`, because crosvm exits at once.
 
-`tools/ika-wsl-install.ps1` does all of it on a Windows with WSL 2.4.4 or
+`ika-wsl.ps1` does all of it on a Windows with WSL 2.4.4 or
 newer: it installs Debian 13 (trixie), the latest WSL image from
 [salsa.debian.org](https://salsa.debian.org/debian/WSL/-/releases), as a
 distribution named Ika, with Ika's icon in the Start menu and Windows
@@ -413,7 +413,7 @@ restarts WSL when its settings changed (it asks first, as that stops every
 distribution); and starts Ika. It is one line in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/DesktopECHO/ika/main/tools/ika-wsl-install.ps1 | iex
+irm https://raw.githubusercontent.com/DesktopECHO/ika/main/ika-wsl.ps1 | iex
 ```
 
 Without WSL it installs WSL first and asks for a restart of Windows, after
@@ -421,7 +421,7 @@ which the same line goes on; an older WSL it updates. Options go after the
 script block:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/DesktopECHO/ika/main/tools/ika-wsl-install.ps1))) -Force
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/DesktopECHO/ika/main/ika-wsl.ps1))) -Force
 ```
 
 `-Name` and `-UserName` choose other names, `-Location` where the

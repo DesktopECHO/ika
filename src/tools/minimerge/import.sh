@@ -3,7 +3,8 @@
 set -euo pipefail
 
 DIR="$(realpath "$(dirname "$0")")"
-REPO_DIR="$(git rev-parse --show-toplevel)"
+# The source tree, src/ in the repository: where the upstream project is imported
+REPO_DIR="$(realpath "${DIR}/../..")"
 TOOL="${DIR}/minimerge_tool"
 METADATA_FILE="${DIR}/cuttlefish_import_metadata.txt"
 CUTTLEFISH_REPO_URL="https://github.com/google/android-cuttlefish.git"

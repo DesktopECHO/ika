@@ -130,15 +130,15 @@ with your package manager:
 
 - **Everything:** run `./ika-build` again, with the same `--microg` or
   `--mtg`.
-- **The ROM only**, after changing patches or overlays under `lineageos/`:
-  `./lineageos/scripts/build_lineageos_desktop.sh [all|arm64|x86_64]
+- **The ROM only**, after changing patches or overlays under `src/lineageos/`:
+  `./src/lineageos/scripts/build_lineageos_desktop.sh [all|arm64|x86_64]
   [--microg|--mtg]`, then the host packages below to package it.
-  `./lineageos/scripts/rebuild_cf_desktop_arm64.sh` and
+  `./src/lineageos/scripts/rebuild_cf_desktop_arm64.sh` and
   `rebuild_cf_desktop_x86_64.sh` rebuild without syncing or patching the
   source. The Google integration is not remembered: pass the same flag every
   time, or the ROM is built de-Googled.
-- **The host packages only**, after changing `base/`, `frontend/` or the
-  packaging, or to package a new ROM: `./tools/buildutils/build_packages.sh`.
+- **The host packages only**, after changing `src/base/`, `src/frontend/` or the
+  packaging, or to package a new ROM: `./src/tools/buildutils/build_packages.sh`.
 
 These scripts expect the build dependencies to be installed already, as
 `./ika-build` leaves them.
@@ -149,13 +149,13 @@ left alone. `RESET_PATCHED_PROJECTS=0` turns that off, `=1` also does it in a
 custom `WORKSPACE`, and `RESET_PATCHED_PROJECTS_FORCE=1` resets projects with
 commits too.
 
-See [lineageos/README.md](lineageos/README.md) for the ROM's products, source
-layout and build options, and `lineageos/docs/build-cli-help.txt` for every
+See [src/lineageos/README.md](src/lineageos/README.md) for the ROM's products, source
+layout and build options, and `src/lineageos/docs/build-cli-help.txt` for every
 variable the ROM build reads. The ones used most:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `WORKSPACE` | `lineageos/src` | The LineageOS source checkout |
+| `WORKSPACE` | `src/lineageos/src` | The LineageOS source checkout |
 | `IKA_WORK_ROOT` | `ika-work/` | Build state: Bazel's output, the compiler cache, temporary files |
 | `JOBS` | CPU threads − 2 | Parallel build jobs |
 | `BUILD_VARIANT` | `userdebug` | `user`, `userdebug` or `eng` |
@@ -214,8 +214,8 @@ Android's build system expects a `linux-x86` build host, and LineageOS 23.2
 has no ARM64 host toolchain. The ARM64 build works with two parts that depend
 on each other:
 
-- **Patches** in [lineageos/patches/](lineageos/patches/) make `linux-arm64`
-  a host architecture, in the [series](lineageos/patches/series) order:
+- **Patches** in [src/lineageos/patches/](src/lineageos/patches/) make `linux-arm64`
+  a host architecture, in the [series](src/lineageos/patches/series) order:
 
   | Patch | Project | Purpose |
   | --- | --- | --- |
@@ -238,10 +238,10 @@ on each other:
   Adoptium, cached in `ika-work/arm64-prebuilts`. They set the variables the
   patches read, and stop when a toolchain is missing or an x86 one stands in
   for an ARM64 one (`configure_arm64_host_build` in
-  [build_exec.sh](lineageos/scripts/lib/build_exec.sh)).
+  [build_exec.sh](src/lineageos/scripts/lib/build_exec.sh)).
 
 Every build, on either architecture, uses Clang 22 (`clang-r584948b`, from
-`mirror-goog-llvm-r596125-release`): [clang22.patch](lineageos/patches/clang22.patch)
+`mirror-goog-llvm-r596125-release`): [clang22.patch](src/lineageos/patches/clang22.patch)
 makes the source compile with it. `CLANG_PREBUILT_GIT_REF` and
 `CLANG_PREBUILT_VERSION`, or their `ARM64_` and `X86_` forms, choose another
 Clang, and that patch may then need updating. On ARM64, an overlay of

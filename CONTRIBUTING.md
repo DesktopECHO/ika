@@ -12,16 +12,16 @@ repository.
 
 ```bash
 # Shell syntax of the build and launch scripts
-bash -n ika-build tools/ika
+bash -n ika-build src/tools/ika
 
 # The launcher's tests
-for t in tools/tests/test_ika_*.sh; do LANG=C.UTF-8 bash "$t" || break; done
+for t in src/tools/tests/test_ika_*.sh; do LANG=C.UTF-8 bash "$t" || break; done
 
 # The ROM's build inputs (needs a synced LineageOS source)
-./lineageos/scripts/lib/validate_build_inputs.sh ./lineageos/src
+./src/lineageos/scripts/lib/validate_build_inputs.sh ./src/lineageos/src
 
 # The host packages
-./tools/buildutils/build_packages.sh
+./src/tools/buildutils/build_packages.sh
 ```
 
 scrcpy's unit tests run in a debug build of the client, which needs SDL 3:
@@ -46,8 +46,8 @@ user sees or sets, update the page that covers it:
 | [CONFIGURATION.md](CONFIGURATION.md) | Commands, options, `ika.ini`, environment variables, files |
 | [GRAPHICS.md](GRAPHICS.md) | GPU modes and graphics settings |
 | [BUILDING.md](BUILDING.md) | Building from source |
-| [scrcpy/IKA.md](scrcpy/IKA.md) | Ika's changes to scrcpy |
+| [src/scrcpy/IKA.md](src/scrcpy/IKA.md) | Ika's changes to scrcpy |
 | [CHANGELOG.md](CHANGELOG.md) | What changed, per release |
 
-`ika help` and the comments of the `ika.ini` template in `tools/ika` describe
+`ika help` and the comments of the `ika.ini` template in `src/tools/ika` describe
 the same settings, and should agree with the pages.

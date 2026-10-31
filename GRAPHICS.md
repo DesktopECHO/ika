@@ -247,7 +247,7 @@ the count after Android stops: on a leak, it writes a warning to
 On WSL2 the only way to the GPU is Direct3D 12, through `/dev/dxg` and the
 libraries in `/usr/lib/wsl/lib`. Mesa's Dozen driver offers it as Vulkan, and
 gfxstream renders on that. `ika-base`, in its Debian, RPM and Arch packages,
-carries its own Dozen on x86_64: Mesa 26.3.0-rc2 with the patches in [tools/wsl/mesa](tools/wsl/mesa), built by
+carries its own Dozen on x86_64: Mesa 26.3.0-rc2 with the patches in [src/tools/wsl/mesa](src/tools/wsl/mesa), built by
 `build-dozen.sh` with only X11 for a window system, and installed under
 `/usr/lib/cuttlefish-common/wsl/dozen`. It offers Vulkan 1.3. Venus cannot run
 on it: Dozen cannot export its memory as dma-bufs.
@@ -275,7 +275,7 @@ choosing the GPU mode:
   gfxstream would otherwise pick Lavapipe, which supports more of what it
   looks for. A `MESA_VK_DEVICE_SELECT` of your own wins.
 - `IKA_DZN_FIX=1`, which turns on the `VK_LAYER_IKA_dzn_fix` Vulkan layer
-  ([tools/wsl/ika_dzn_fix.c](tools/wsl/ika_dzn_fix.c)). It works around
+  ([src/tools/wsl/ika_dzn_fix.c](src/tools/wsl/ika_dzn_fix.c)). It works around
   Dozen's gaps:
   - It works around a crash in Dozen's
     `vkGetPhysicalDeviceImageFormatProperties2`.
@@ -314,7 +314,7 @@ decoding:on". The CPU decoder is built for AVX2 (with F16C, POPCNT and
 SSE4.1), which the processors of hosts that run Dozen have; on an x86-64 CPU
 without them, gfxstream decodes on the GPU and logs "ASTC CPU decoding is
 unavailable".
-- The `libd3d12.so` shim ([tools/wsl/d3d12_shim.c](tools/wsl/d3d12_shim.c))
+- The `libd3d12.so` shim ([src/tools/wsl/d3d12_shim.c](src/tools/wsl/d3d12_shim.c))
   first in `LD_LIBRARY_PATH`. It makes every Vulkan instance in crosvm share
   one D3D12 device. WSL allows about ten D3D12 devices per process, and a
   released device's GPU address space is not given back, so after about a
@@ -326,7 +326,7 @@ otherwise falls back to llvmpipe on WSL2, drawing every frame of the window
 on the CPU: Zink, OpenGL on Dozen, refuses for lack of robustness2's
 `nullDescriptor`. Where Ika found a Dozen GPU, the windows use Ika's own build
 of that driver, from the same Mesa release with
-[d3d12-uma-cached-upload.patch](tools/wsl/mesa/d3d12-uma-cached-upload.patch),
+[d3d12-uma-cached-upload.patch](src/tools/wsl/mesa/d3d12-uma-cached-upload.patch),
 built by `build-d3d12-gl.sh` and installed with its EGL (`libEGL_mesa` and
 `libgallium`) under `/usr/lib/cuttlefish-common/wsl/mesa-gl`, which they load
 through `__EGL_VENDOR_LIBRARY_FILENAMES`; an EGL vendor file of your own wins.
@@ -338,7 +338,7 @@ write-back memory on integrated GPUs, where the window takes 14%.
 
 In the `gfxstream` mode, crosvm's own OpenGL, which runs Android's OpenGL ES,
 uses the same driver, set up the same way. Ika's build also carries
-[d3d12-reclaim-keep-suballocated.patch](tools/wsl/mesa/d3d12-reclaim-keep-suballocated.patch):
+[d3d12-reclaim-keep-suballocated.patch](src/tools/wsl/mesa/d3d12-reclaim-keep-suballocated.patch):
 creating a buffer released buffers whose GPU work had completed, among them
 buffers of the slab allocator whose lock it held, and the render thread waited
 on itself; a `glBufferData` froze every display of Android that way.
@@ -349,7 +349,7 @@ this up.
 
 On WSLg the console and app windows also load Ika's build of libdecor's GTK
 plugin, which draws their title bar and shadow
-([tools/wsl/libdecor](tools/wsl/libdecor), set through `LIBDECOR_PLUGIN_DIR`
+([src/tools/wsl/libdecor](src/tools/wsl/libdecor), set through `LIBDECOR_PLUGIN_DIR`
 unless you set it). WSLg shows each of those as a window of its own and only
 removes it when it is destroyed, while the plugin hides them in fullscreen by
 unmapping them: a fullscreen window kept a translucent title bar and frame on
@@ -397,7 +397,7 @@ top. Ika's build destroys them instead.
   `vulkaninfo`'s first device, so on a host with several GPUs the two can
   differ.
 
-[lineageos/docs/app-compatibility.md](lineageos/docs/app-compatibility.md)
+[src/lineageos/docs/app-compatibility.md](src/lineageos/docs/app-compatibility.md)
 lists how individual games render in each mode.
 
 ## Troubleshooting
@@ -425,11 +425,11 @@ lists how individual games render in each mode.
 ## Where the changes are
 
 - The ROM's patches, guest Mesa included:
-  [lineageos/patches/README.md](lineageos/patches/README.md).
+  [src/lineageos/patches/README.md](src/lineageos/patches/README.md).
 - gfxstream's host patches:
-  [base/cvd/build_external/gfxstream/gfxstream.MODULE.bazel](base/cvd/build_external/gfxstream/gfxstream.MODULE.bazel),
+  [src/base/cvd/build_external/gfxstream/gfxstream.MODULE.bazel](src/base/cvd/build_external/gfxstream/gfxstream.MODULE.bazel),
   with a comment for each.
 - crosvm's patches:
-  [base/cvd/build_external/crosvm/README.md](base/cvd/build_external/crosvm/README.md).
-- Ika's GPU settings: the GPU functions in [tools/ika](tools/ika).
-- The WSL2 layer and shim: [tools/wsl](tools/wsl).
+  [src/base/cvd/build_external/crosvm/README.md](src/base/cvd/build_external/crosvm/README.md).
+- Ika's GPU settings: the GPU functions in [src/tools/ika](src/tools/ika).
+- The WSL2 layer and shim: [src/tools/wsl](src/tools/wsl).

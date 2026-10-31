@@ -19,9 +19,9 @@ Ika, with Ika's icon for its Start menu entry and Terminal profile, and in it:
   5. starts Ika, whose console opens in a window.
 
 Run it from PowerShell, in one line:
-  irm https://raw.githubusercontent.com/DesktopECHO/ika/main/tools/ika-wsl-install.ps1 | iex
+  irm https://raw.githubusercontent.com/DesktopECHO/ika/main/ika-wsl.ps1 | iex
 or, with options:
-  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/DesktopECHO/ika/main/tools/ika-wsl-install.ps1))) -Force
+  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/DesktopECHO/ika/main/ika-wsl.ps1))) -Force
 
 .PARAMETER Name
 The distribution's name. Default: Ika.
@@ -237,12 +237,12 @@ function Set-DistributionIcon {
     if (-not $key) { return }
     $target = Join-Path (Get-ItemProperty $key.PSPath).BasePath 'shortcut.ico'
     # A checkout's own copy; none when run as a one-liner (irm ... | iex)
-    $local = if ($PSScriptRoot) { Join-Path $PSScriptRoot '..\scrcpy\app\data\icon.ico' }
+    $local = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'src\scrcpy\app\data\icon.ico' }
     if ($local -and (Test-Path -LiteralPath $local)) {
         Copy-Item -LiteralPath $local -Destination $target -Force
     } else {
         Invoke-WebRequest -UseBasicParsing -OutFile $target `
-            -Uri 'https://raw.githubusercontent.com/DesktopECHO/ika/main/scrcpy/app/data/icon.ico'
+            -Uri 'https://raw.githubusercontent.com/DesktopECHO/ika/main/src/scrcpy/app/data/icon.ico'
     }
 }
 
@@ -350,7 +350,7 @@ if ($existing -contains $Name) {
 # --- Install --------------------------------------------------------------
 
 Write-Step 'Installing Debian base'
-$download = Join-Path $env:TEMP "ika-wsl-install-$PID"
+$download = Join-Path $env:TEMP "ika-wsl-$PID"
 New-Item -ItemType Directory -Force -Path $download | Out-Null
 try {
     $image = Get-DebianImage $download

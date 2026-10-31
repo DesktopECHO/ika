@@ -6,7 +6,7 @@ through a local manifest.
 
 This document covers the first phase of the Ika build: producing the LineageOS
 Desktop ROM. The second phase creates host packages, including `ika-lineageos`,
-and is documented in the project [README.md](../README.md). For the complete
+and is documented in the project [README.md](../../README.md). For the complete
 workflow, start there or run `../ika-build` from the repository root.
 
 This directory contains the product profile, overlays, manifests, validation
@@ -413,9 +413,9 @@ checkout is equivalent to:
 repo init -u https://github.com/LineageOS/android.git -b lineage-23.2
 mkdir -p .repo/local_manifests
 curl -L -o .repo/local_manifests/lineageos-desktop.xml \
-  https://raw.githubusercontent.com/DesktopECHO/ika/main/lineageos/manifests/lineageos-desktop.xml
+  https://raw.githubusercontent.com/DesktopECHO/ika/main/src/lineageos/manifests/lineageos-desktop.xml
 curl -L -o .repo/local_manifests/lineageos4microg.xml \
-  https://raw.githubusercontent.com/DesktopECHO/ika/main/lineageos/manifests/lineageos4microg.xml
+  https://raw.githubusercontent.com/DesktopECHO/ika/main/src/lineageos/manifests/lineageos4microg.xml
 repo sync -c -j"$(nproc)"
 vendor/lineage_desktop/scripts/apply_source_patches.sh
 vendor/lineage_desktop/scripts/update_microg_prebuilts.py

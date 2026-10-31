@@ -45,7 +45,7 @@ virtual machine, with its apps in windows of their own.
   Fedora 44 and Arch Linux have it.
 - On Windows, WSL2 with one of those distributions, readied by
   `ika-wsl-setup`, or a Debian 13 distribution named Ika that
-  `tools/ika-wsl-install.ps1` deploys with Ika installed (see
+  `ika-wsl.ps1` deploys with Ika installed (see
   [Windows (WSL2)](CONFIGURATION.md#windows-wsl2)).
 - A GPU with a Vulkan driver, for the best performance. Without one, Ika
   renders with the CPU's software driver and runs in a lighter
@@ -95,8 +95,8 @@ TV mode and the everyday commands.
 | [Building](BUILDING.md) | Building the ROM and the packages from source, on x86-64 and ARM64 |
 | [Downloads](DOWNLOADS.md) | Prebuilt packages |
 | [Changelog](CHANGELOG.md) | Changes in each release |
-| [lineageos/README.md](lineageos/README.md) | The LineageOS Desktop ROM: its products, source layout and build |
-| [scrcpy/IKA.md](scrcpy/IKA.md) | Ika's changes to scrcpy, the console's client |
+| [src/lineageos/README.md](src/lineageos/README.md) | The LineageOS Desktop ROM: its products, source layout and build |
+| [src/scrcpy/IKA.md](src/scrcpy/IKA.md) | Ika's changes to scrcpy, the console's client |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 
 <img width="1920" height="1080" alt="Ika screenshot" src="https://github.com/user-attachments/assets/c63c8d08-d11b-4ec0-956a-d2c0220b963a" />

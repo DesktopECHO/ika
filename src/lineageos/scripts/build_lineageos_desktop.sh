@@ -31,7 +31,7 @@ export IKA_SOURCE_COMMIT="$ika_source_commit"
 
 android_manifest_url="${ANDROID_MANIFEST_URL:-https://github.com/LineageOS/android.git}"
 lineage_branch="${LINEAGE_BRANCH:-lineage-23.2}"
-manifest_url="${MANIFEST_URL:-https://raw.githubusercontent.com/DesktopECHO/ika/main/lineageos/manifests/lineageos-desktop.xml}"
+manifest_url="${MANIFEST_URL:-https://raw.githubusercontent.com/DesktopECHO/ika/main/src/lineageos/manifests/lineageos-desktop.xml}"
 gms_provider="none"
 include_microg=0
 update_microg_prebuilts="${UPDATE_MICROG_PREBUILTS:-1}"

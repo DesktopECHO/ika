@@ -156,7 +156,7 @@ enable_bootanimation=false      # skip the dancing-bug splash
 `gpu_mode=auto` is `venus` on a host GPU with Vulkan 1.3 or newer and ETC2
 textures, `gfxstream` on hosts whose only Vulkan driver is llvmpipe or whose
 GPU gfxstream passes over for it, and `gfxstream_guest_angle` otherwise (see
-[Graphics](../../GRAPHICS.md#how-ika-chooses)). Direct `gfxstream` remains
+[Graphics](../../../GRAPHICS.md#how-ika-chooses)). Direct `gfxstream` remains
 available for testing the native gfxstream GLES translator, while
 `guest_swiftshader` is a diagnostic fallback that removes host GPU acceleration
 from the equation.
