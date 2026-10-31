@@ -10,6 +10,7 @@ import android.content.pm.ResolveInfo;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Looper;
 import android.util.DisplayMetrics;
@@ -127,6 +128,14 @@ public final class IkaAppIcons {
     }
 
     private static Bitmap render(Drawable drawable, int size) {
+        // A bitmap icon smaller than SIZE keeps its own size: enlarged, it would
+        // only blur. Adaptive and vector icons are drawn from larger artwork.
+        if (drawable instanceof BitmapDrawable) {
+            int own = Math.min(drawable.getIntrinsicWidth(), drawable.getIntrinsicHeight());
+            if (own > 0 && own < size) {
+                size = own;
+            }
+        }
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
         drawable.setBounds(0, 0, size, size);

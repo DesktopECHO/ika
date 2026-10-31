@@ -8819,7 +8819,9 @@ IKA_MENU_NAME="Android Apps (Ika)"
 IKA_MENU_ID="ika-android-apps"
 IKA_MENU_CATEGORY="X-Ika-Android"
 IKA_MENU_ICON="ika-scrcpy"
-IKA_MENU_ICON_SIZE="192"
+# 256 pixels, the largest image a Windows icon holds: WSLg gives the Start menu
+# an app's icon at the size of its file, and Windows scales it down from there
+IKA_MENU_ICON_SIZE="256"
 IKA_MENU_VERSION="5"
 
 app_menu_icon_dir() {
@@ -8932,8 +8934,12 @@ write_file_if_changed() {
 # installed again, WSLg reads ika.desktop anew, and its shortcut takes the
 # console entry's place: hiding it again removes that shortcut, so the console
 # entry is written again after it. An entry for another name of the
-# distribution, since renamed, goes first. Does nothing outside WSLg, or when
-# WSLg does not read the user's entries.
+# distribution, since renamed, goes first. WSLg looks an icon given by name up
+# at 128 pixels at most, so the entry names the console's icon by the path of
+# its 256-pixel one. Does nothing outside WSLg, or when WSLg does not read the
+# user's entries.
+IKA_WSLG_CONSOLE_ICON="/usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png"
+
 write_wslg_console_entry() {
   local system_entry="${IKA_DESKTOP_ENTRY}"
   local dir="${XDG_DATA_HOME:-${HOME}/.local/share}/applications"
@@ -8941,6 +8947,7 @@ write_wslg_console_entry() {
   local entry
   local hidden
   local file
+  local -a icon_edit=()
 
   distro="$(wslg_distro_id)"
   [[ -n "${distro}" && -f "${system_entry}" ]] || return 0
@@ -8961,7 +8968,11 @@ write_wslg_console_entry() {
     printf '[Desktop Entry]\nType=Application\nName=Ika\nHidden=true\n' > "${hidden}"
     rm -f "${entry}"
   fi
-  sed "s/^StartupWMClass=.*/StartupWMClass=ika-${distro}\nX-Ika-Console=true/" "${system_entry}" \
+  if [[ -f "${IKA_WSLG_CONSOLE_ICON}" ]]; then
+    icon_edit=(-e "s|^Icon=ika-scrcpy\$|Icon=${IKA_WSLG_CONSOLE_ICON}|")
+  fi
+  sed -e "s/^StartupWMClass=.*/StartupWMClass=ika-${distro}\nX-Ika-Console=true/" \
+      ${icon_edit[@]+"${icon_edit[@]}"} "${system_entry}" \
     | write_file_if_changed "${entry}" || true
 }
 
