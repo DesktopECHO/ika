@@ -17,7 +17,7 @@ ika restart    # stop and start again, with new options if given
 
 The **Ika Console** icon in your desktop's app menu runs `ika start`.
 Right-click it for **Start Ika**, **Stop Ika**, **Restart Ika** and **Startup
-options**.
+options**; on WSL2, right-click its button on the Windows task bar.
 Started from the menu, Ika reports its progress and errors as desktop
 notifications.
 
@@ -199,9 +199,11 @@ Right-click an app in the menu for:
   a Settings window, for its permissions, storage, notifications, force stop
   and uninstall. `ika app --info NAME` from a terminal.
 
-The Windows Start menu and task bar (WSL2) have no such actions: there, hold
-**Shift** while you click an app, or Ika itself, to open its **Startup
-options** instead, and keep holding it until the window opens.
+On WSL2 the Windows Start menu has no such actions: right-click the app's
+button on the task bar, once its window has opened (a button pinned from it
+keeps them), or hold **Shift** while you click an app in the Start menu, or
+Ika itself, to open its **Startup options** instead, and keep holding it
+until the window opens.
 
 ### Start options
 
