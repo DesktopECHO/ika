@@ -7853,6 +7853,14 @@ edit_app_settings() {
   local -A app_settings=()
 
   resolve_settings_app "${name}" package label
+  # One window per app: another request for it leaves the open one as it is.
+  # The lock goes with this process, or before it opens the app.
+  mkdir -p "${CVD_TMP_DIR}"
+  exec {APP_SETTINGS_LOCK_FD}>"${CVD_TMP_DIR}/app-settings-${package}.lock"
+  if ! flock -n "${APP_SETTINGS_LOCK_FD}"; then
+    respond "The Startup Options of ${label} are already open"
+    return 0
+  fi
   if ! ika_window_available; then
     log "python3's GTK 3 bindings are missing (python3-gobject, or python3-gi and gir1.2-gtk-3.0); opening the tab as a window of its own"
     if [[ "${tab}" == "1" ]]; then
@@ -8455,6 +8463,15 @@ edit_ika_settings() {
 
 # open_app_window NAME FULLSCREEN TITLE SIZE [START_APP [DPI]]: DPI is the
 # display density 'ika app --dpi' gives, as app_dpi_value prints it, or auto.
+# Releases the lock of an app's Startup Options window (see edit_app_settings),
+# so that the window can open again while the app it started runs
+release_app_settings_lock() {
+  if [[ -n "${APP_SETTINGS_LOCK_FD:-}" ]]; then
+    exec {APP_SETTINGS_LOCK_FD}>&-
+    APP_SETTINGS_LOCK_FD=""
+  fi
+}
+
 open_app_window() {
   local name="$1"
   local fullscreen_mode="$2"
@@ -8482,6 +8499,8 @@ open_app_window() {
   local -a scrcpy_env=()
   local -a scrcpy_cmd=()
   local -a guest_queries=()
+
+  release_app_settings_lock
 
   require_executable "${SCRCPY_BIN}" "console client"
   # Shift held at a menu launch opens the app's Startup Options instead
