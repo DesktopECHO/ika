@@ -70,6 +70,22 @@ public final class SurfaceControl {
         }
     }
 
+    // Ika: sets the layer stack and the projection of a display in a transaction of its own, applied at once
+    public static boolean applyDisplayState(IBinder displayToken, int layerStack, int orientation, Rect layerStackRect, Rect displayRect) {
+        try {
+            Class<?> cls = android.view.SurfaceControl.Transaction.class;
+            android.view.SurfaceControl.Transaction transaction = new android.view.SurfaceControl.Transaction();
+            cls.getMethod("setDisplayLayerStack", IBinder.class, int.class).invoke(transaction, displayToken, layerStack);
+            cls.getMethod("setDisplayProjection", IBinder.class, int.class, Rect.class, Rect.class)
+                    .invoke(transaction, displayToken, orientation, layerStackRect, displayRect);
+            transaction.apply();
+            return true;
+        } catch (ReflectiveOperationException e) {
+            Ln.e("Could not set the display state", e);
+            return false;
+        }
+    }
+
     public static void setDisplaySurface(IBinder displayToken, Surface surface) {
         try {
             CLASS.getMethod("setDisplaySurface", IBinder.class, Surface.class).invoke(null, displayToken, surface);

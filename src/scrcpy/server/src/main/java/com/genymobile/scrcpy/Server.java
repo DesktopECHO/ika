@@ -100,6 +100,10 @@ public final class Server {
 
         Workarounds.apply();
 
+        if (options.getCuttlefishDisplay() > 0) {
+            Device.guardDisplayState(options.getDisplayId());
+        }
+
         List<AsyncProcessor> asyncProcessors = new ArrayList<>();
 
         DesktopConnection connection = DesktopConnection.open(scid, tunnelForward, video, audio, control, sendDummyByte);

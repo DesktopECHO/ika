@@ -4,6 +4,7 @@ import com.genymobile.scrcpy.AndroidVersions;
 import com.genymobile.scrcpy.FakeContext;
 import com.genymobile.scrcpy.display.DisplayInfo;
 import com.genymobile.scrcpy.model.DeviceApp;
+import com.genymobile.scrcpy.util.Command;
 import com.genymobile.scrcpy.util.Ln;
 import com.genymobile.scrcpy.wrappers.ActivityManager;
 import com.genymobile.scrcpy.wrappers.ClipboardManager;
@@ -19,6 +20,7 @@ import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -29,9 +31,12 @@ import android.view.InputEvent;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public final class Device {
 
@@ -185,6 +190,74 @@ public final class Device {
             return false;
         }
         return SurfaceControl.setDisplayPowerMode(d, mode);
+    }
+
+    // Ika: a Cuttlefish display added while Android boots can be left with stale state in SurfaceFlinger: no layer stack, so that it
+    // composes nothing for it, or the projection of the display before the window size. The display manager turns a new display off
+    // and on again, and while Android boots SurfaceFlinger can get the state of the display turned off last; the display manager does
+    // not set its own again, as it has not changed. So, while Android may still be booting, its state (as "dumpsys display" shows it)
+    // is set again in SurfaceFlinger: a display that has it is left as it is.
+    private static final long DISPLAY_STATE_GUARD_UPTIME_MS = 120000;
+    private static final long DISPLAY_STATE_GUARD_MS = 20000;
+    private static final long DISPLAY_STATE_GUARD_INTERVAL_MS = 500;
+    private static final Pattern DISPLAY_STATE_PATTERN = Pattern.compile("mCurrentLayerStack=(-?\\d+)\\s+(?:mCurrentFlags=\\d+\\s+)?"
+            + "mCurrentOrientation=(\\d+)\\s+mCurrentLayerStackRect=Rect\\((-?\\d+), (-?\\d+) - (-?\\d+), (-?\\d+)\\)\\s+"
+            + "mCurrentDisplayRect=Rect\\((-?\\d+), (-?\\d+) - (-?\\d+), (-?\\d+)\\)");
+
+    public static void guardDisplayState(int displayId) {
+        if (SystemClock.uptimeMillis() > DISPLAY_STATE_GUARD_UPTIME_MS) {
+            return;
+        }
+        DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(displayId);
+        String uniqueId = info != null ? info.getUniqueId() : null;
+        if (uniqueId == null || !uniqueId.startsWith("local:")) {
+            return;
+        }
+        long physicalDisplayId = Long.parseLong(uniqueId.substring("local:".length()));
+        // On Android 14, these internal methods have been moved to DisplayControl
+        boolean useDisplayControl =
+                Build.VERSION.SDK_INT >= AndroidVersions.API_34_ANDROID_14 && !SurfaceControl.hasGetPhysicalDisplayIdsMethod();
+        IBinder token = useDisplayControl ? DisplayControl.getPhysicalDisplayToken(physicalDisplayId)
+                : SurfaceControl.getPhysicalDisplayToken(physicalDisplayId);
+        if (token == null) {
+            Ln.w("Could not get the token of display " + displayId);
+            return;
+        }
+
+        Thread thread = new Thread(() -> {
+            long deadline = SystemClock.uptimeMillis() + DISPLAY_STATE_GUARD_MS;
+            while (SystemClock.uptimeMillis() < deadline && resendDisplayState(token, uniqueId)) {
+                SystemClock.sleep(DISPLAY_STATE_GUARD_INTERVAL_MS);
+            }
+        }, "display-state-guard");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    // Returns false when the state cannot be read or set
+    private static boolean resendDisplayState(IBinder token, String uniqueId) {
+        String output;
+        try {
+            output = Command.execReadOutput("dumpsys", "display");
+        } catch (IOException | InterruptedException e) {
+            Ln.w("Could not read the display state: " + e.getMessage());
+            return false;
+        }
+        int start = output.indexOf("mUniqueId=" + uniqueId + "\n");
+        Matcher m = start >= 0 ? DISPLAY_STATE_PATTERN.matcher(output) : null;
+        if (m == null || !m.find(start)) {
+            Ln.w("Could not find the state of display " + uniqueId);
+            return false;
+        }
+        int layerStack = Integer.parseInt(m.group(1));
+        if (layerStack < 0) {
+            return true; // The display is off: wait for it to be on
+        }
+        Rect layerStackRect = new Rect(Integer.parseInt(m.group(3)), Integer.parseInt(m.group(4)), Integer.parseInt(m.group(5)),
+                Integer.parseInt(m.group(6)));
+        Rect displayRect = new Rect(Integer.parseInt(m.group(7)), Integer.parseInt(m.group(8)), Integer.parseInt(m.group(9)),
+                Integer.parseInt(m.group(10)));
+        return SurfaceControl.applyDisplayState(token, layerStack, Integer.parseInt(m.group(2)), layerStackRect, displayRect);
     }
 
     public static boolean powerOffScreen(int displayId) {
