@@ -1960,7 +1960,9 @@ parse_start_options() {
         fullscreen_mode_ref="true"
         shift
         ;;
-      --no-console)
+      # --noconsole too: Cuttlefish would take it as its --console (the serial
+      # console, off already), and it would do nothing
+      --no-console|--noconsole)
         START_CONSOLE="false"
         shift
         ;;
@@ -3855,7 +3857,9 @@ append_gfxstream_vulkan_args() {
   fi
 
   if [[ "${gpu_mode}" != "gfxstream" ]]; then
-    CVD_GRAPHICS_DRIVER_MESSAGE="GPU: ${gpu_mode} (gfxstream-vulkan=${mode} ignored)"
+    # auto, the default, goes unmentioned: only a setting of the user's is noted
+    CVD_GRAPHICS_DRIVER_MESSAGE="GPU: ${gpu_mode}"
+    [[ "${mode}" == "auto" ]] || CVD_GRAPHICS_DRIVER_MESSAGE+=" (gfxstream-vulkan=${mode} ignored)"
     log "gfxstream-vulkan=${mode} has no effect with gpu_mode=${gpu_mode}"
     return 0
   fi
