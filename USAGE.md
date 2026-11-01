@@ -380,8 +380,9 @@ mode**, **Catapult** (LineageOS's TV launcher) first:
   at once.
 - Changing the mode asks first. **Restart** switches Android's Settings,
   on-screen keyboard, launcher and Google Play Store to the other mode's, and
-  restarts Android in it; **Cancel** keeps the mode. If the Play Store cannot
-  be switched, the mode stays as it was.
+  restarts Android in it, with only a spinning circle in the window
+  meanwhile; **Cancel** keeps the mode. If the Play Store cannot be switched,
+  the mode stays as it was.
 - When Android has restarted, the console reopens in the new mode, and app
   windows close.
 

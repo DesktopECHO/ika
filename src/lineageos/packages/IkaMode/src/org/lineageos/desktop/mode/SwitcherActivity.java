@@ -2,20 +2,24 @@ package org.lineageos.desktop.mode;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Dialog;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.content.res.TypedArray;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.BaseAdapter;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import java.util.ArrayList;
@@ -39,6 +43,10 @@ public class SwitcherActivity extends Activity {
     // Set from a choice that needs a restart until the question about it is answered: the list
     // takes no other choice meanwhile.
     private boolean mAsking;
+
+    // Set once the restart is confirmed: the list goes, but the activity stays for the window
+    // that shows Android getting ready to restart.
+    private boolean mSwitching;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -94,7 +102,11 @@ public class SwitcherActivity extends Activity {
                     }
                 })
                 .setNegativeButton(android.R.string.cancel, null)
-                .setOnDismissListener(dialog -> finish())
+                .setOnDismissListener(dialog -> {
+                    if (!mSwitching) {
+                        finish();
+                    }
+                })
                 .show();
     }
 
@@ -118,9 +130,15 @@ public class SwitcherActivity extends Activity {
                 .setMessage(tv ? R.string.tv_mode_text : R.string.desktop_mode_text)
                 .setPositiveButton(R.string.switch_mode, (dialog, which) -> {
                     switching[0] = true;
+                    mSwitching = true;
+                    Dialog restarting = showRestarting(list);
                     list.dismiss();
                     ModeController.EXECUTOR.execute(() -> ModeController.switchTo(
-                            getApplicationContext(), tv, home));
+                            getApplicationContext(), tv, home, () -> runOnUiThread(() -> {
+                                if (!isDestroyed()) {
+                                    restarting.dismiss();
+                                }
+                            })));
                 })
                 .setNegativeButton(android.R.string.cancel, null)
                 .setOnDismissListener(dialog -> {
@@ -154,6 +172,33 @@ public class SwitcherActivity extends Activity {
         question.show();
     }
 
+    /**
+     * Shows, over LIST and at its size, nothing but a spinning circle while Android gets ready
+     * for the other mode and restarts. It cannot be cancelled, and it goes, with the activity,
+     * only if Android stays in this mode.
+     */
+    private Dialog showRestarting(AlertDialog list) {
+        // The alert dialogs' theme, so that its background and corners are the list's.
+        TypedValue theme = new TypedValue();
+        getTheme().resolveAttribute(android.R.attr.alertDialogTheme, theme, true);
+        Dialog restarting = new Dialog(this, theme.resourceId);
+        // Without a title, which would be an empty line above the circle.
+        restarting.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        FrameLayout content = new FrameLayout(restarting.getContext());
+        ProgressBar spinner = new ProgressBar(restarting.getContext(), null,
+                android.R.attr.progressBarStyleLarge);
+        spinner.setIndeterminate(true);
+        content.addView(spinner, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER));
+        restarting.setContentView(content);
+        restarting.setCancelable(false);
+        restarting.setOnDismissListener(dialog -> finish());
+        coverList(restarting, list);
+        restarting.show();
+        return restarting;
+    }
+
     private static void setTextSize(TextView view, float sp) {
         if (view != null) {
             view.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
@@ -161,22 +206,23 @@ public class SwitcherActivity extends Activity {
     }
 
     /**
-     * Gives QUESTION the size and place of LIST, which it covers: a dialog of its own size would
-     * leave the list showing around it. The window is created first, as a floating window is
-     * made wrap its content when it is, and a list that has not been laid out yet is left alone.
-     * The dialog's own layout is stretched to the window, so that the buttons stay at the bottom
-     * of it, as the list's Cancel does, instead of sitting under the text.
+     * Gives COVER, the restart question or the window after it, the size and place of LIST,
+     * which it covers: a dialog of its own size would leave the list showing around it. The
+     * window is created first, as a floating window is made wrap its content when it is, and a
+     * list that has not been laid out yet is left alone. The dialog's own layout is stretched to
+     * the window, so that the question's buttons stay at the bottom of it, as the list's Cancel
+     * does, instead of sitting under the text.
      */
-    private static void coverList(AlertDialog question, AlertDialog list) {
+    private static void coverList(Dialog cover, AlertDialog list) {
         View decor = list.getWindow().getDecorView();
         int width = decor.getWidth();
         int height = decor.getHeight();
         if (width <= 0 || height <= 0) {
             return;
         }
-        question.create();
+        cover.create();
         WindowManager.LayoutParams listParams = list.getWindow().getAttributes();
-        Window window = question.getWindow();
+        Window window = cover.getWindow();
         WindowManager.LayoutParams params = window.getAttributes();
         params.width = width;
         params.height = height;

@@ -158,20 +158,23 @@ final class ModeController {
     /**
      * Switches to TV mode, or back to desktop mode, and restarts Android in it, as Desktop/TV
      * does once the user confirms. HOME becomes the Home app; without it, the mode's Home app
-     * comes back: the one it had last time, or its own launcher.
+     * comes back: the one it had last time, or its own launcher. STAYED runs, on this executor,
+     * when Android stays in this mode instead.
      */
-    static void switchTo(Context context, boolean tv, String home) {
+    static void switchTo(Context context, boolean tv, String home, Runnable stayed) {
         // First, as the other mode's Play Store must not start with this mode's update or data.
         // The TV Play Store goes in before the reboot, so that Android starts it as arm64 from the
         // first moment in TV mode.
         if (!PlayStoreUpdates.leave(context, !tv)) {
             switchFailed(context);
+            stayed.run();
             return;
         }
         if (!PlayStoreUpdates.clearData(context)
                 || (tv && !PlayStoreUpdates.restore(context, true))) {
             PlayStoreUpdates.restore(context, !tv);
             switchFailed(context);
+            stayed.run();
             return;
         }
         PackageManager pm = context.getPackageManager();
@@ -195,10 +198,10 @@ final class ModeController {
         String newHome = home;
         setHome(context, newHome, success -> {
             if (!success && !newHome.equals(launcher)) {
-                setHome(context, launcher, fallback -> restartIn(context, tv, fallback));
+                setHome(context, launcher, fallback -> restartIn(context, tv, fallback, stayed));
                 return;
             }
-            restartIn(context, tv, success);
+            restartIn(context, tv, success, stayed);
         });
     }
 
@@ -324,7 +327,8 @@ final class ModeController {
         }
     }
 
-    private static void restartIn(Context context, boolean tv, boolean homeSet) {
+    private static void restartIn(Context context, boolean tv, boolean homeSet,
+            Runnable stayed) {
         if (!homeSet) {
             // Staying in this mode: the TV Play Store, already in for the switch, goes, and this
             // mode's update comes back.
@@ -332,6 +336,7 @@ final class ModeController {
                 PlayStoreUpdates.leave(context, true);
             }
             PlayStoreUpdates.restore(context, !tv);
+            stayed.run();
             return;
         }
         Log.i(TAG, "Switching to " + (tv ? MODE_TV : MODE_DESKTOP) + " mode");
