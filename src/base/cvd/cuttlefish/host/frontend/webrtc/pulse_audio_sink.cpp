@@ -45,10 +45,10 @@ std::unique_ptr<PulseAudioSink> PulseAudioSink::Create(
   }
   std::unique_ptr<PulseAudioSink> sink(
       new PulseAudioSink(api, std::move(server), mixer_settings));
-  sink->stream_ = sink->Connect();
-  if (sink->stream_ == nullptr) {
-    return nullptr;
-  }
+  // The writer connects as audio arrives, and again after losing the server:
+  // WSLg's can be away for a while, as when its RDP client hangs. Connecting
+  // here would hold up the start for the client library's timeout then, and
+  // giving up would drop the guest's audio for good.
   sink->writer_ = std::thread([sink = sink.get()]() { sink->WriterLoop(); });
   return sink;
 }

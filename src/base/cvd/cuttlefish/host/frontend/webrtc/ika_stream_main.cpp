@@ -98,7 +98,8 @@ std::shared_ptr<AudioHandler> SetupAudio() {
       audio_sink = std::make_shared<SilentAudioSink>();
       audio_source = std::make_shared<SilentAudioSource>();
       LOG(ERROR) << "Cannot play on WSLg's PulseAudio server " << server
-                 << "; Cuttlefish audio will be dropped";
+                 << " without PulseAudio's library; Cuttlefish audio will be "
+                    "dropped";
     }
   } else {
     audio_sink = std::make_shared<PipeWireAudioSink>(

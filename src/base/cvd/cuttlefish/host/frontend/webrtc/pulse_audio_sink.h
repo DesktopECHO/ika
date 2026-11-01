@@ -37,7 +37,8 @@ namespace cuttlefish {
 // the RDP client already holds.
 class PulseAudioSink : public webrtc_streaming::AudioSink {
  public:
-  // Returns nullptr when PulseAudio or the server is unavailable
+  // Returns nullptr when PulseAudio's library is unavailable; a server that
+  // is not is connected to as audio arrives, and again after it is lost
   static std::unique_ptr<PulseAudioSink> Create(
       std::string server, const AudioMixerSettings& mixer_settings);
   ~PulseAudioSink() override;
