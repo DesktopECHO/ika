@@ -1,0 +1,32 @@
+Patch summary:
+lavapipe: lay out aliased ANB images as gralloc allocated them.
+
+With VK_SWAPCHAIN_CREATE_DEFERRED_MEMORY_ALLOCATION_BIT_EXT, which ANGLE sets
+whenever swapchainMaintenance1 is supported, Android's loader creates the
+swapchain's images with VkImageSwapchainCreateInfoKHR (ANB aliases) and binds
+each gralloc buffer later through vkBindImageMemory2 with a
+VkNativeBufferANDROID. lvp_bind_anb_memory() then runs lvp_image_init() with
+that struct chained, but lvp_image_init() took gralloc's plane layout only for
+ANDROID_BUFFER_NATIVE images, so an alias got lavapipe's own tightly packed
+layout over a buffer gralloc had padded. Every OpenGL ES app (ANGLE) whose
+window was not a multiple of 64 pixels wide rendered sheared: a 1632-pixel
+window has rows of 1664 pixels, and each row was drawn 32 pixels short
+(Asphalt 8, and HWUI with skiagl). HWUI's Vulkan renderer imports window
+buffers as AHardwareBuffers, a path that reads the layout, and was right.
+Mesa main has the same code.
+
+--- a/src/gallium/frontends/lavapipe/lvp_image.c
++++ b/src/gallium/frontends/lavapipe/lvp_image.c
+@@ -203,7 +203,11 @@
+    /* This section is removed by the optimizer for non-ANDROID builds */
+    VkImageDrmFormatModifierExplicitCreateInfoEXT eci;
+    VkSubresourceLayout a_plane_layouts[LVP_MAX_PLANE_COUNT];
+-   if (vk_image_is_android_native_buffer(&image->vk)) {
++   /* An aliased ANB image is initialized here too, when bound: with the
++    * VkNativeBufferANDROID lvp_bind_anb_memory chains, as gralloc laid it out.
++    */
++   if (vk_image_is_android_native_buffer(&image->vk) ||
++       vk_image_is_android_native_buffer_alias(&image->vk)) {
+       VkResult result = vk_android_get_anb_layout(
+          pCreateInfo, &eci, a_plane_layouts, LVP_MAX_PLANE_COUNT);
+       if (result != VK_SUCCESS)

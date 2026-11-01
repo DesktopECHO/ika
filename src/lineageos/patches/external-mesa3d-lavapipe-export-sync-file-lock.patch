@@ -1,0 +1,33 @@
+Patch summary:
+lavapipe: flush the queue's context under its submit mutex when exporting a sync file.
+
+Without a native fence fd (no /dev/udmabuf, which Android's sepolicy denies
+apps), lvp_pipe_export_sync_file() flushes device->queue[0].ctx on the
+calling thread to wait for the rendering. lavapipe's timelines are emulated,
+so its queue runs in deferred mode, where submits run in vk_queue_flush()
+under queue->submit.mutex, from whichever thread submits or waits. The
+export flushed the same pipe_context without that mutex, so an app exporting
+a semaphore on one thread while another submitted raced on llvmpipe's setup
+state: Chrome's GPU process crashed in set_scene_state (called from
+llvmpipe_flush, lvp_pipe_export_sync_file, vkGetSemaphoreFdKHR) on its
+CompositorGpuThread. The export is reached only from vkGetSemaphoreFdKHR and
+vkGetFenceFdKHR, never with the mutex held. Mesa main has the same code.
+
+--- a/src/gallium/frontends/lavapipe/lvp_pipe_sync.c
++++ b/src/gallium/frontends/lavapipe/lvp_pipe_sync.c
+@@ -284,8 +284,14 @@
+       *sync_file = device->pscreen->fence_get_fd(device->pscreen, sync->fence);
+       return *sync_file != -1 ? VK_SUCCESS : VK_ERROR_OUT_OF_HOST_MEMORY;
+    } else {
++      struct lvp_queue *queue = &device->queue[0];
+       struct pipe_fence_handle *handle = NULL;
+-      device->queue[0].ctx->flush(device->queue[0].ctx, &handle, 0);
++      /* The queue's context is not thread-safe: flush it under the mutex its
++       * submits run under, as another thread may be submitting to it.
++       */
++      mtx_lock(&queue->vk.submit.mutex);
++      queue->ctx->flush(queue->ctx, &handle, 0);
++      mtx_unlock(&queue->vk.submit.mutex);
+       device->pscreen->fence_finish(device->pscreen, NULL,
+                                     handle, OS_TIMEOUT_INFINITE);
+       device->pscreen->fence_reference(device->pscreen, &handle, NULL);

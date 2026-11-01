@@ -1,0 +1,2426 @@
+Patch summary:
+lavapipe: backport CPU-based ETC2/EAC and ASTC LDR texture emulation.
+
+Backport of Mesa main merge request 38621 (all but its BC commit, as lavapipe
+samples BC natively):
+
+- 8ff175f0 util: Move ETC2 decompression to src/util
+- f34e4061 lavapipe: Refactor image plane allocation into helper function
+- afa87d9c lavapipe: Add CPU-based ASTC/ETC2 texture decompression emulation
+- c579a989 lavapipe: Decompress zero-initialized emulated images on layout
+  transition
+
+llvmpipe cannot sample ETC2 or ASTC, so lavapipe reported
+textureCompressionETC2 and textureCompressionASTC_LDR as off. Chromium's
+Graphite renderer (Dawn) requires ETC2 on Android, so with guest_lavapipe
+Chromium's GPU process failed ("Requested feature
+FeatureName::TextureCompressionETC2 is not supported") and the browser quit
+("GPU process isn't usable. Goodbye."); ANGLE also stopped at OpenGL ES 3.1
+for want of ASTC. Compressed images now keep a second, uncompressed plane that
+uploads and host copies decompress into on the CPU, and that views sample.
+
+The upstream commits apply unchanged (less the CI file); the one addition is
+texcompress_etc.c in src/util/Android.bp, which external-mesa3d.patch
+generates without it. Drop this patch, and regenerate external-mesa3d.patch,
+when the Mesa pin includes the merge request.
+
+diff --git a/src/gallium/frontends/lavapipe/lvp_device.c b/src/gallium/frontends/lavapipe/lvp_device.c
+index d40223f94d7..b02996794af 100644
+--- a/src/gallium/frontends/lavapipe/lvp_device.c
++++ b/src/gallium/frontends/lavapipe/lvp_device.c
+@@ -461,8 +461,8 @@ lvp_get_features(const struct lvp_physical_device *pdevice,
+       .alphaToOne                               = true,
+       .multiViewport                            = true,
+       .samplerAnisotropy                        = true,
+-      .textureCompressionETC2                   = false,
+-      .textureCompressionASTC_LDR               = false,
++      .textureCompressionETC2                   = true,
++      .textureCompressionASTC_LDR               = true,
+       .textureCompressionBC                     = true,
+       .occlusionQueryPrecise                    = true,
+       .pipelineStatisticsQuery                  = true,
+diff --git a/src/gallium/frontends/lavapipe/lvp_execute.c b/src/gallium/frontends/lavapipe/lvp_execute.c
+index 6a3b3cc86ce..398aa67e123 100644
+--- a/src/gallium/frontends/lavapipe/lvp_execute.c
++++ b/src/gallium/frontends/lavapipe/lvp_execute.c
+@@ -44,6 +44,8 @@
+ #include "util/u_prim.h"
+ #include "util/u_prim_restart.h"
+ #include "util/ptralloc.h"
++#include "util/texcompress_astc.h"
++#include "util/texcompress_etc.h"
+ 
+ #include "vk_blend.h"
+ #include "vk_cmd_enqueue_entrypoints.h"
+@@ -2025,12 +2027,43 @@ handle_begin_rendering(struct vk_cmd_queue_entry *cmd,
+       render_clear_fast(state);
+ }
+ 
++static void
++lvp_image_decompress(struct rendering_state *state,
++                     const struct lvp_image *image,
++                     unsigned level, const struct pipe_box *box);
++
+ static void handle_end_rendering(struct vk_cmd_queue_entry *cmd,
+                                  struct rendering_state *state)
+ {
+    if (state->suspending)
+       return;
+    render_resolve(state);
++
++   for (unsigned i = 0; i < state->color_att_count; i++) {
++      struct lvp_image_view *imgv = state->color_att[i].imgv;
++      if (!imgv)
++         continue;
++      const struct lvp_image *image = (struct lvp_image *)imgv->vk.image;
++      if (image->emu_plane_format == VK_FORMAT_UNDEFINED)
++         continue;
++
++      enum pipe_format format = vk_format_to_pipe_format(image->vk.format);
++      unsigned bw = util_format_get_blockwidth(format);
++      unsigned bh = util_format_get_blockheight(format);
++      unsigned level = imgv->vk.base_mip_level;
++      VkExtent3D level_extent = vk_image_mip_level_extent(&image->vk, level);
++
++      struct pipe_box box;
++      box.x = state->render_area.offset.x * bw;
++      box.y = state->render_area.offset.y * bh;
++      box.z = imgv->surface.first_layer;
++      box.width = MIN2(state->render_area.extent.width * bw, level_extent.width - box.x);
++      box.height = MIN2(state->render_area.extent.height * bh, level_extent.height - box.y);
++      box.depth = imgv->surface.last_layer - imgv->surface.first_layer + 1;
++
++      lvp_image_decompress(state, image, level, &box);
++   }
++
+    if (!state->poison_mem)
+       return;
+ 
+@@ -2476,7 +2509,7 @@ handle_copy_memory_to_image(struct vk_cmd_queue_entry *cmd,
+                             struct rendering_state *state)
+ {
+    const struct VkCopyDeviceMemoryImageInfoKHR *copycmd = cmd->u.copy_memory_to_image_khr.copy_memory_info;
+- 
++
+    for (uint32_t i = 0; i < copycmd->regionCount; i++) {
+       const VkDeviceMemoryImageCopyKHR *region = &copycmd->pRegions[i];
+       VkMemoryToImageCopy copyregion = {
+@@ -2500,7 +2533,77 @@ handle_copy_memory_to_image(struct vk_cmd_queue_entry *cmd,
+       };
+       state->device->vk.dispatch_table.CopyMemoryToImage(lvp_device_to_handle(state->device), &copy);
+    }
+-} 
++}
++
++void
++lvp_unpack_texcompress(uint8_t *dst_row,
++                       unsigned dst_stride,
++                       const uint8_t *src_row,
++                       unsigned src_stride,
++                       const VkExtent3D *extent,
++                       enum pipe_format format)
++{
++   const struct util_format_description *desc =
++      util_format_description(format);
++
++   switch (desc->layout) {
++   case UTIL_FORMAT_LAYOUT_ASTC:
++      _mesa_unpack_astc_2d_ldr(dst_row,
++                               dst_stride,
++                               src_row,
++                               src_stride,
++                               extent->width,
++                               extent->height,
++                               format);
++      break;
++   case UTIL_FORMAT_LAYOUT_ETC:
++      _mesa_unpack_etc2_format(dst_row,
++                               dst_stride,
++                               src_row,
++                               src_stride,
++                               extent->width,
++                               extent->height,
++                               format,
++                               false);
++      break;
++   default:
++      UNREACHABLE("Unsupported compressed texture format");
++   }
++}
++
++static void
++lvp_image_decompress(struct rendering_state *state,
++                     const struct lvp_image *image,
++                     unsigned level, const struct pipe_box *box)
++{
++   struct pipe_transfer *src_t, *emu_t;
++   const VkExtent3D extent = {
++      .width = box->width,
++      .height = box->height,
++      .depth = 1,
++   };
++
++   uint8_t *src_data = state->pctx->texture_map(state->pctx,
++                                                image->planes[0].bo,
++                                                level, PIPE_MAP_READ,
++                                                box, &src_t);
++   uint8_t *emu_data = state->pctx->texture_map(state->pctx,
++                                                image->emu_plane.bo,
++                                                level, PIPE_MAP_WRITE,
++                                                box, &emu_t);
++
++   for (unsigned z = 0; z < box->depth; z++) {
++      lvp_unpack_texcompress(emu_data + emu_t->layer_stride * z,
++                             emu_t->stride,
++                             src_data + src_t->layer_stride * z,
++                             src_t->stride,
++                             &extent,
++                             vk_format_to_pipe_format(image->vk.format));
++   }
++
++   state->pctx->texture_unmap(state->pctx, emu_t);
++   state->pctx->texture_unmap(state->pctx, src_t);
++}
+ 
+ static void handle_copy_buffer_to_image(struct vk_cmd_queue_entry *cmd,
+                                         struct rendering_state *state)
+@@ -2511,7 +2614,7 @@ static void handle_copy_buffer_to_image(struct vk_cmd_queue_entry *cmd,
+    for (uint32_t i = 0; i < copycmd->regionCount; i++) {
+       const VkBufferImageCopy2 *region = &copycmd->pRegions[i];
+       struct pipe_box box, sbox;
+-      struct pipe_transfer *src_t, *dst_t;
++      struct pipe_transfer *src_t, *dst_t, *emu_t;
+       void *src_data, *dst_data;
+       const VkImageAspectFlagBits aspects = copycmd->pRegions[i].imageSubresource.aspectMask;
+       uint8_t plane = lvp_image_aspects_to_plane(dst_image, aspects);
+@@ -2540,7 +2643,7 @@ static void handle_copy_buffer_to_image(struct vk_cmd_queue_entry *cmd,
+       dst_data = state->pctx->texture_map(state->pctx,
+                                            dst_image->planes[plane].bo,
+                                            region->imageSubresource.mipLevel,
+-                                           PIPE_MAP_WRITE,
++                                           PIPE_MAP_WRITE | PIPE_MAP_READ,
+                                            &box,
+                                            &dst_t);
+ 
+@@ -2579,6 +2682,35 @@ static void handle_copy_buffer_to_image(struct vk_cmd_queue_entry *cmd,
+                        buffer_layout.image_stride_B,
+                        0, 0, 0);
+       }
++
++      if (dst_image->emu_plane_format != VK_FORMAT_UNDEFINED) {
++         struct pipe_box ebox;
++         ebox.x = region->imageOffset.x;
++         ebox.y = region->imageOffset.y;
++         ebox.z = dst_image->vk.image_type == VK_IMAGE_TYPE_3D ? region->imageOffset.z : region->imageSubresource.baseArrayLayer;
++         ebox.width = region->imageExtent.width;
++         ebox.height = region->imageExtent.height;
++         ebox.depth = dst_image->vk.image_type == VK_IMAGE_TYPE_3D ? region->imageExtent.depth : subresource_layercount(dst_image, &region->imageSubresource);
++
++         void *emu_data =
++            state->pctx->texture_map(state->pctx,
++                                     dst_image->emu_plane.bo,
++                                     region->imageSubresource.mipLevel,
++                                     PIPE_MAP_WRITE,
++                                     &ebox,
++                                     &emu_t);
++         for (uint16_t z = 0; z < ebox.depth; z++) {
++            lvp_unpack_texcompress((uint8_t*)emu_data + emu_t->layer_stride * z,
++                                   emu_t->stride,
++                                   (uint8_t*)dst_data + dst_t->layer_stride * z,
++                                   dst_t->stride,
++                                   &region->imageExtent,
++                                   vk_format_to_pipe_format(dst_image->vk.format));
++         }
++
++         state->pctx->texture_unmap(state->pctx, emu_t);
++      }
++
+       state->pctx->buffer_unmap(state->pctx, src_t);
+       state->pctx->texture_unmap(state->pctx, dst_t);
+    }
+@@ -2697,6 +2829,31 @@ static void handle_copy_image(struct vk_cmd_queue_entry *cmd,
+                                           region->srcSubresource.mipLevel,
+                                           &src_box);
+       }
++
++      /* Decompress to emu_plane if destination is an emulated compressed format */
++      if (dst_image->emu_plane_format != VK_FORMAT_UNDEFINED) {
++         enum pipe_format dst_pipe_format = vk_format_to_pipe_format(dst_image->vk.format);
++
++         VkExtent3D pixel_extent = region->extent;
++         if (!util_format_is_compressed(src_format)) {
++            const VkExtent3D level_extent =
++               vk_image_mip_level_extent(&dst_image->vk, region->dstSubresource.mipLevel);
++            pixel_extent.width = MIN2(pixel_extent.width * util_format_get_blockwidth(dst_pipe_format),
++                                      level_extent.width - region->dstOffset.x);
++            pixel_extent.height = MIN2(pixel_extent.height * util_format_get_blockheight(dst_pipe_format),
++                                       level_extent.height - region->dstOffset.y);
++         }
++
++         struct pipe_box ebox;
++         ebox.x = region->dstOffset.x;
++         ebox.y = region->dstOffset.y;
++         ebox.z = dst_image->vk.image_type == VK_IMAGE_TYPE_3D ? region->dstOffset.z : region->dstSubresource.baseArrayLayer;
++         ebox.width = pixel_extent.width;
++         ebox.height = pixel_extent.height;
++         ebox.depth = dst_image->vk.image_type == VK_IMAGE_TYPE_3D ? region->extent.depth : subresource_layercount(dst_image, &region->dstSubresource);
++
++         lvp_image_decompress(state, dst_image, region->dstSubresource.mipLevel, &ebox);
++      }
+    }
+ }
+ 
+@@ -2784,10 +2941,15 @@ static void handle_blit_image(struct vk_cmd_queue_entry *cmd,
+    VK_FROM_HANDLE(lvp_image, src_image, blitcmd->srcImage);
+    VK_FROM_HANDLE(lvp_image, dst_image, blitcmd->dstImage);
+ 
++   bool is_src_emu = src_image->emu_plane_format != VK_FORMAT_UNDEFINED;
++   struct lvp_image_plane *src_plane = is_src_emu ?
++                                       &src_image->emu_plane :
++                                       &src_image->planes[0];
++
+    struct pipe_blit_info info = {
+-      .src.resource = src_image->planes[0].bo,
++      .src.resource = src_plane->bo,
+       .dst.resource = dst_image->planes[0].bo,
+-      .src.format = src_image->planes[0].bo->format,
++      .src.format = src_plane->bo->format,
+       .dst.format = dst_image->planes[0].bo->format,
+       .filter = blitcmd->filter == VK_FILTER_NEAREST ? PIPE_TEX_FILTER_NEAREST : PIPE_TEX_FILTER_LINEAR,
+    };
+@@ -3225,6 +3387,73 @@ static void handle_pipeline_barrier(struct vk_cmd_queue_entry *cmd,
+                                     struct rendering_state *state)
+ {
+    finish_fence(state);
++
++   /* Handle emulated compressed images transitioning from ZERO_INITIALIZED.
++    * When memory is zero-initialized, the emu_plane contains raw zeros,
++    * but we need the decompressed values of zeroed compressed blocks.
++    */
++   const VkDependencyInfo *dep_info = cmd->u.pipeline_barrier2.dependency_info;
++   for (uint32_t i = 0; i < dep_info->imageMemoryBarrierCount; i++) {
++      const VkImageMemoryBarrier2 *barrier = &dep_info->pImageMemoryBarriers[i];
++
++      if (barrier->oldLayout != VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT)
++         continue;
++
++      VK_FROM_HANDLE(lvp_image, image, barrier->image);
++      if (image->emu_plane_format == VK_FORMAT_UNDEFINED)
++         continue;
++
++      /* Decompress zeroed compressed data into emu_plane for each mip level */
++      uint32_t base_level = barrier->subresourceRange.baseMipLevel;
++      uint32_t level_count = vk_image_subresource_level_count(&image->vk,
++                                                              &barrier->subresourceRange);
++      uint32_t base_layer = barrier->subresourceRange.baseArrayLayer;
++      uint32_t layer_count = vk_image_subresource_layer_count(&image->vk,
++                                                              &barrier->subresourceRange);
++
++      for (uint32_t level = base_level; level < base_level + level_count; level++) {
++         VkExtent3D extent = vk_image_mip_level_extent(&image->vk, level);
++
++         struct pipe_box box;
++         box.x = 0;
++         box.y = 0;
++         box.width = extent.width;
++         box.height = extent.height;
++         box.depth = 1;
++
++         for (uint32_t layer = base_layer; layer < base_layer + layer_count; layer++) {
++            box.z = layer;
++
++            /* Map the compressed plane to read zeroed data */
++            struct pipe_transfer *src_t;
++            void *src_data = state->pctx->texture_map(state->pctx,
++                                                      image->planes[0].bo,
++                                                      level,
++                                                      PIPE_MAP_READ,
++                                                      &box,
++                                                      &src_t);
++
++            /* Map the emu_plane to write decompressed data */
++            struct pipe_transfer *emu_t;
++            void *emu_data = state->pctx->texture_map(state->pctx,
++                                                      image->emu_plane.bo,
++                                                      level,
++                                                      PIPE_MAP_WRITE,
++                                                      &box,
++                                                      &emu_t);
++
++            lvp_unpack_texcompress((uint8_t *)emu_data,
++                                   emu_t->stride,
++                                   (uint8_t *)src_data,
++                                   src_t->stride,
++                                   &extent,
++                                   vk_format_to_pipe_format(image->vk.format));
++
++            state->pctx->texture_unmap(state->pctx, emu_t);
++            state->pctx->texture_unmap(state->pctx, src_t);
++         }
++      }
++   }
+ }
+ 
+ static void handle_begin_query(struct vk_cmd_queue_entry *cmd,
+diff --git a/src/gallium/frontends/lavapipe/lvp_formats.c b/src/gallium/frontends/lavapipe/lvp_formats.c
+index 8c335b66f32..d3d514f3d40 100644
+--- a/src/gallium/frontends/lavapipe/lvp_formats.c
++++ b/src/gallium/frontends/lavapipe/lvp_formats.c
+@@ -77,6 +77,19 @@ lvp_physical_device_get_format_properties(struct lvp_physical_device *physical_d
+      return;
+    }
+ 
++   if (lvp_is_compressed_format_emulated(format)) {
++      features |= (VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT |
++                   VK_FORMAT_FEATURE_2_BLIT_SRC_BIT |
++                   VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT |
++                   VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT |
++                   VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
++                   VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT_EXT);
++      out_properties->linearTilingFeatures = features;
++      out_properties->optimalTilingFeatures = features;
++      out_properties->bufferFeatures = buffer_features;
++      return;
++   }
++
+    if (pscreen->is_format_supported(pscreen, pformat, PIPE_TEXTURE_2D, 0, 0,
+                                     PIPE_BIND_DEPTH_STENCIL)) {
+       out_properties->linearTilingFeatures = 0;
+@@ -362,6 +375,19 @@ static VkResult lvp_get_image_format_properties(struct lvp_physical_device *phys
+       break;
+    }
+ 
++   /* We don't want emulated formats to gain unexpected usage (storage in
++    * particular) from its compatible view formats.
++    */
++   bool storage_not_supported =
++      ((info->usage & VK_IMAGE_USAGE_STORAGE_BIT) &&
++       !(format_feature_flags & VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT));
++
++   if (((info->flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) ||
++        (info->flags & VK_IMAGE_CREATE_EXTENDED_USAGE_BIT)) &&
++       storage_not_supported &&
++       (lvp_is_compressed_format_emulated(info->format)))
++      goto unsupported;
++
+    if (info->flags & VK_IMAGE_CREATE_EXTENDED_USAGE_BIT)
+       goto skip_checks;
+ 
+diff --git a/src/gallium/frontends/lavapipe/lvp_image.c b/src/gallium/frontends/lavapipe/lvp_image.c
+index 6347c719027..4d4107b4e51 100644
+--- a/src/gallium/frontends/lavapipe/lvp_image.c
++++ b/src/gallium/frontends/lavapipe/lvp_image.c
+@@ -31,6 +31,139 @@
+ #include "frontend/winsys_handle.h"
+ #include "vk_android.h"
+ 
++static VkResult
++lvp_alloc_plane(struct lvp_device *device,
++                struct lvp_image *image,
++                const VkImageCreateInfo *pCreateInfo,
++                const VkImageDrmFormatModifierExplicitCreateInfoEXT *modinfo,
++                const VkSubresourceLayout *layouts,
++                uint64_t modifier,
++                VkFormat format,
++                uint8_t width_scale, uint8_t height_scale,
++                bool android_surface,
++                bool backed,
++                size_t plane_idx,
++                struct lvp_image_plane *plane)
++{
++   struct pipe_resource template;
++
++   memset(&template, 0, sizeof(template));
++
++   template.screen = device->pscreen;
++   switch (pCreateInfo->imageType) {
++   case VK_IMAGE_TYPE_1D:
++      template.target = pCreateInfo->arrayLayers > 1 ? PIPE_TEXTURE_1D_ARRAY : PIPE_TEXTURE_1D;
++      break;
++   default:
++   case VK_IMAGE_TYPE_2D:
++      template.target = pCreateInfo->arrayLayers > 1 ? PIPE_TEXTURE_2D_ARRAY : PIPE_TEXTURE_2D;
++      break;
++   case VK_IMAGE_TYPE_3D:
++      template.target = PIPE_TEXTURE_3D;
++      break;
++   }
++
++   template.format = lvp_vk_format_to_pipe_format(format);
++
++   bool is_ds = util_format_is_depth_or_stencil(template.format);
++
++   if (pCreateInfo->usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) {
++      template.bind |= PIPE_BIND_RENDER_TARGET;
++      /* sampler view is needed for resolve blits */
++      if (pCreateInfo->samples > 1)
++         template.bind |= PIPE_BIND_SAMPLER_VIEW;
++   }
++
++   if (pCreateInfo->usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT) {
++      if (!is_ds)
++         template.bind |= PIPE_BIND_RENDER_TARGET;
++      else
++         template.bind |= PIPE_BIND_DEPTH_STENCIL;
++   }
++
++   if (pCreateInfo->usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
++      template.bind |= PIPE_BIND_DEPTH_STENCIL;
++
++   if (pCreateInfo->usage & (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
++                             VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT))
++      template.bind |= PIPE_BIND_SAMPLER_VIEW;
++
++   if (pCreateInfo->usage & (VK_IMAGE_USAGE_STORAGE_BIT |
++                             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
++                             VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT))
++      template.bind |= PIPE_BIND_SHADER_IMAGE;
++
++   if (pCreateInfo->flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT)
++      template.flags |= PIPE_RESOURCE_FLAG_SPARSE;
++
++   template.width0 = pCreateInfo->extent.width / width_scale;
++   template.height0 = pCreateInfo->extent.height / height_scale;
++   template.depth0 = pCreateInfo->extent.depth;
++   template.array_size = pCreateInfo->arrayLayers;
++   template.last_level = pCreateInfo->mipLevels - 1;
++   template.nr_samples = pCreateInfo->samples;
++   template.nr_storage_samples = pCreateInfo->samples;
++
++   if (backed) {
++      /* Driver-internal allocation: not bound to the image's VkDeviceMemory
++       * and not part of its memory requirements.
++       */
++      template.flags &= ~PIPE_RESOURCE_FLAG_SPARSE;
++      struct pipe_resource *pres =
++         device->pscreen->resource_create(device->pscreen, &template);
++      if (!pres)
++         return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
++
++      *plane = (struct lvp_image_plane){
++         .bo = pres,
++      };
++
++      return VK_SUCCESS;
++   }
++
++#ifdef HAVE_LIBDRM
++   if (android_surface || (modinfo && pCreateInfo->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT)) {
++      struct winsys_handle whandle = {
++         .type = WINSYS_HANDLE_TYPE_UNBACKED,
++         .plane = plane_idx,
++         .stride = layouts[plane_idx].rowPitch,
++         .array_stride = layouts[plane_idx].arrayPitch,
++         .image_stride = layouts[plane_idx].depthPitch,
++         .format = pCreateInfo->format,
++         .modifier = modifier,
++      };
++      struct pipe_resource *pres = device->pscreen->resource_from_handle(
++         device->pscreen, &template, &whandle,
++         PIPE_HANDLE_USAGE_EXPLICIT_FLUSH);
++      if (!pres)
++         return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
++
++      *plane = (struct lvp_image_plane){
++         .bo = pres,
++         .offset = layouts[plane_idx].offset,
++         .size = whandle.size,
++      };
++   } else
++#endif
++   {
++      uint64_t size_req;
++      struct pipe_resource *pres = device->pscreen->resource_create_unbacked(
++         device->pscreen, &template, &size_req);
++      if (!pres)
++         return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
++
++      *plane = (struct lvp_image_plane){
++         .bo = pres,
++         .offset = image->disjoint ? 0 : image->size,
++         .size = align64(size_req, image->alignment),
++      };
++   }
++
++   image->size += plane->size;
++
++   return VK_SUCCESS;
++}
++
+ VkResult
+ lvp_image_init(struct lvp_device *device, struct lvp_image *image,
+                const VkImageCreateInfo *pCreateInfo)
+@@ -51,6 +184,11 @@ lvp_image_init(struct lvp_device *device, struct lvp_image *image,
+    }
+ 
+    modifier = DRM_FORMAT_MOD_LINEAR;
++#else
++   const bool android_surface = false;
++   const VkSubresourceLayout *layouts = NULL;
++   const uint64_t modifier = 0;
++   const VkImageDrmFormatModifierExplicitCreateInfoEXT *modinfo = NULL;
+ #endif
+ 
+    image->alignment = 64;
+@@ -80,109 +218,19 @@ lvp_image_init(struct lvp_device *device, struct lvp_image *image,
+    const struct vk_format_ycbcr_info *ycbcr_info =
+       vk_format_get_ycbcr_info(pCreateInfo->format);
+    for (unsigned p = 0; p < image->plane_count; p++) {
+-      struct pipe_resource template;
+       VkFormat format = ycbcr_info ?
+          ycbcr_info->planes[p].format : pCreateInfo->format;
+       const uint8_t width_scale = ycbcr_info ?
+          ycbcr_info->planes[p].denominator_scales[0] : 1;
+       const uint8_t height_scale = ycbcr_info ?
+          ycbcr_info->planes[p].denominator_scales[1] : 1;
+-      memset(&template, 0, sizeof(template));
+-
+-      template.screen = device->pscreen;
+-      switch (pCreateInfo->imageType) {
+-      case VK_IMAGE_TYPE_1D:
+-         template.target = pCreateInfo->arrayLayers > 1 ? PIPE_TEXTURE_1D_ARRAY : PIPE_TEXTURE_1D;
+-         break;
+-      default:
+-      case VK_IMAGE_TYPE_2D:
+-         template.target = pCreateInfo->arrayLayers > 1 ? PIPE_TEXTURE_2D_ARRAY : PIPE_TEXTURE_2D;
+-         break;
+-      case VK_IMAGE_TYPE_3D:
+-         template.target = PIPE_TEXTURE_3D;
+-         break;
+-      }
+-
+-      template.format = lvp_vk_format_to_pipe_format(format);
+-
+-      bool is_ds = util_format_is_depth_or_stencil(template.format);
+-
+-      if (pCreateInfo->usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) {
+-         template.bind |= PIPE_BIND_RENDER_TARGET;
+-         /* sampler view is needed for resolve blits */
+-         if (pCreateInfo->samples > 1)
+-            template.bind |= PIPE_BIND_SAMPLER_VIEW;
+-      }
+-
+-      if (pCreateInfo->usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT) {
+-         if (!is_ds)
+-            template.bind |= PIPE_BIND_RENDER_TARGET;
+-         else
+-            template.bind |= PIPE_BIND_DEPTH_STENCIL;
+-      }
+-
+-      if (pCreateInfo->usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
+-         template.bind |= PIPE_BIND_DEPTH_STENCIL;
+-
+-      if (pCreateInfo->usage & (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+-                                VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT))
+-         template.bind |= PIPE_BIND_SAMPLER_VIEW;
+-
+-      if (pCreateInfo->usage & (VK_IMAGE_USAGE_STORAGE_BIT |
+-                                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+-                                VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT))
+-         template.bind |= PIPE_BIND_SHADER_IMAGE;
+-
+-      if (pCreateInfo->flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT)
+-         template.flags |= PIPE_RESOURCE_FLAG_SPARSE;
+-
+-      template.width0 = pCreateInfo->extent.width / width_scale;
+-      template.height0 = pCreateInfo->extent.height / height_scale;
+-      template.depth0 = pCreateInfo->extent.depth;
+-      template.array_size = pCreateInfo->arrayLayers;
+-      template.last_level = pCreateInfo->mipLevels - 1;
+-      template.nr_samples = pCreateInfo->samples;
+-      template.nr_storage_samples = pCreateInfo->samples;
+-
+-#ifdef HAVE_LIBDRM
+-      if (android_surface || (modinfo && pCreateInfo->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT)) {
+-         struct winsys_handle whandle = {
+-            .type = WINSYS_HANDLE_TYPE_UNBACKED,
+-            .plane = p,
+-            .stride = layouts[p].rowPitch,
+-            .array_stride = layouts[p].arrayPitch,
+-            .image_stride = layouts[p].depthPitch,
+-            .format = pCreateInfo->format,
+-            .modifier = modifier,
+-         };
+-         struct pipe_resource *pres = device->pscreen->resource_from_handle(
+-            device->pscreen, &template, &whandle,
+-            PIPE_HANDLE_USAGE_EXPLICIT_FLUSH);
+-         if (!pres)
+-            return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+-
+-         image->planes[p] = (struct lvp_image_plane){
+-            .bo = pres,
+-            .offset = layouts[p].offset,
+-            .size = whandle.size,
+-         };
+-      } else
+-#endif
+-      {
+-         uint64_t size_req;
+-         struct pipe_resource *pres = device->pscreen->resource_create_unbacked(
+-            device->pscreen, &template, &size_req);
+-         if (!pres)
+-            return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+-
+-         image->planes[p] = (struct lvp_image_plane){
+-            .bo = pres,
+-            .offset = image->disjoint ? 0 : image->size,
+-            .size = align64(size_req, image->alignment),
+-         };
+-      }
+-
+-      image->size += image->planes[p].size;
++      VkResult result = lvp_alloc_plane(device, image, pCreateInfo,
++                                        modinfo, layouts, modifier,
++                                        format,
++                                        width_scale, height_scale, android_surface,
++                                        false, p, &image->planes[p]);
++      if (result != VK_SUCCESS)
++         return result;
+    }
+ 
+    return VK_SUCCESS;
+@@ -225,6 +273,20 @@ lvp_image_create(VkDevice _device,
+       }
+    }
+ 
++   if (lvp_is_compressed_format_emulated(pCreateInfo->format)) {
++      image->emu_plane_format =
++         lvp_texcompress_vk_format_to_emu_plane_format(pCreateInfo->format);
++
++      result = lvp_alloc_plane(device, image, pCreateInfo,
++                               NULL, NULL, 0,
++                               image->emu_plane_format,
++                               1, 1, false, true,
++                               0, &image->emu_plane);
++
++      if (result != VK_SUCCESS)
++         goto fail;
++   }
++
+ out_success:
+    *pImage = lvp_image_to_handle(image);
+ 
+@@ -263,6 +325,8 @@ lvp_DestroyImage(VkDevice _device, VkImage _image,
+      return;
+    for (unsigned p = 0; p < image->plane_count; p++)
+       pipe_resource_reference(&image->planes[p].bo, NULL);
++   if (image->emu_plane_format != VK_FORMAT_UNDEFINED)
++      pipe_resource_reference(&image->emu_plane.bo, NULL);
+    vk_image_destroy(&device->vk, pAllocator, &image->vk);
+ }
+ 
+@@ -283,20 +347,19 @@ static inline char conv_depth_swiz(char swiz) {
+ }
+ 
+ static struct pipe_sampler_view
+-lvp_create_samplerview(struct lvp_image_view *iv, VkFormat plane_format, unsigned image_plane)
++lvp_create_samplerview(struct lvp_image_view *iv, enum pipe_format pformat,
++                       unsigned image_plane, bool is_emulated)
+ {
+    struct pipe_sampler_view templ = {0};
+    if (!iv)
+       return templ;
+ 
+    const struct lvp_image *image = (struct lvp_image *)iv->vk.image;
+-   enum pipe_format pformat;
+-   if (iv->vk.aspects == VK_IMAGE_ASPECT_DEPTH_BIT)
+-      pformat = lvp_vk_format_to_pipe_format(plane_format);
+-   else if (iv->vk.aspects == VK_IMAGE_ASPECT_STENCIL_BIT)
+-      pformat = util_format_stencil_only(lvp_vk_format_to_pipe_format(plane_format));
+-   else
+-      pformat = lvp_vk_format_to_pipe_format(plane_format);
++   if (iv->vk.aspects == VK_IMAGE_ASPECT_STENCIL_BIT)
++      pformat = util_format_stencil_only(pformat);
++
++   struct pipe_resource *bo = is_emulated ? image->emu_plane.bo :
++                                            image->planes[image_plane].bo;
+    u_sampler_view_default_template(&templ,
+                                    image->planes[image_plane].bo,
+                                    pformat);
+@@ -332,26 +395,28 @@ lvp_create_samplerview(struct lvp_image_view *iv, VkFormat plane_format, unsigne
+       templ.swizzle_a = conv_depth_swiz(templ.swizzle_a);
+    }
+ 
+-   pipe_resource_reference(&templ.texture, image->planes[image_plane].bo);
++   pipe_resource_reference(&templ.texture, bo);
+ 
+    return templ;
+ }
+ 
+ static struct pipe_image_view
+-lvp_create_imageview(const struct lvp_image_view *iv, VkFormat plane_format, unsigned image_plane)
++lvp_create_imageview(const struct lvp_image_view *iv,
++                     enum pipe_format plane_format,
++                     unsigned image_plane, bool is_emulated)
+ {
+    struct pipe_image_view view = {0};
+    if (!iv)
+       return view;
+ 
+    const struct lvp_image *image = (struct lvp_image *)iv->vk.image;
+-   view.resource = image->planes[image_plane].bo;
+-   if (iv->vk.aspects == VK_IMAGE_ASPECT_DEPTH_BIT)
+-      view.format = lvp_vk_format_to_pipe_format(plane_format);
+-   else if (iv->vk.aspects == VK_IMAGE_ASPECT_STENCIL_BIT)
+-      view.format = util_format_stencil_only(lvp_vk_format_to_pipe_format(plane_format));
++
++   view.resource = is_emulated ? image->emu_plane.bo :
++                                 image->planes[image_plane].bo;
++   if (iv->vk.aspects == VK_IMAGE_ASPECT_STENCIL_BIT)
++      view.format = util_format_stencil_only(plane_format);
+    else
+-      view.format = lvp_vk_format_to_pipe_format(plane_format);
++      view.format = plane_format;
+ 
+    if (iv->vk.view_type == VK_IMAGE_VIEW_TYPE_3D) {
+       view.u.tex.first_layer = iv->vk.storage.z_slice_offset;
+@@ -402,7 +467,22 @@ lvp_CreateImageView(VkDevice _device,
+    if (view == NULL)
+       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+ 
+-   view->pformat = lvp_vk_format_to_pipe_format(view->vk.format);
++   bool is_emulated = lvp_is_compressed_format_emulated(view->vk.format);
++   if (is_emulated) {
++      /* The emulation plane holds raw texel values, so derive the sampling
++       * format from the view format to keep UNORM<->SRGB view casts working.
++       */
++      if (view->vk.format == VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK)
++         view->pformat = PIPE_FORMAT_R8G8B8X8_UNORM;
++      else if(view->vk.format == VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK)
++         view->pformat = PIPE_FORMAT_R8G8B8X8_SRGB;
++      else
++         view->pformat = lvp_vk_format_to_pipe_format(
++            lvp_texcompress_vk_format_to_emu_plane_format(view->vk.format));
++   } else
++      view->pformat = lvp_vk_format_to_pipe_format(view->vk.format);
++   VkFormat view_format = is_emulated ? image->emu_plane_format :
++                                        view->vk.format;
+    view->surface.texture = NULL;
+ 
+    if (image->vk.aspects & (VK_IMAGE_ASPECT_DEPTH_BIT |
+@@ -417,7 +497,7 @@ lvp_CreateImageView(VkDevice _device,
+        * to its corresponding view plane
+        */
+       assert(util_bitcount(view->vk.aspects) ==
+-             vk_format_get_plane_count(view->vk.format));
++             vk_format_get_plane_count(view_format));
+       view->plane_count = 0;
+       u_foreach_bit(aspect_bit, view->vk.aspects) {
+          uint8_t image_plane = lvp_image_aspects_to_plane(image, 1u << aspect_bit);
+@@ -428,18 +508,21 @@ lvp_CreateImageView(VkDevice _device,
+    for (unsigned view_plane = 0; view_plane < view->plane_count; view_plane++) {
+       const uint8_t image_plane = view->planes[view_plane].image_plane;
+       const struct vk_format_ycbcr_info *ycbcr_info =
+-         vk_format_get_ycbcr_info(view->vk.format);
++         vk_format_get_ycbcr_info(view_format);
+       assert(ycbcr_info || view_plane == 0);
+-      VkFormat plane_format = ycbcr_info ?
+-         ycbcr_info->planes[view_plane].format : view->vk.format;
++      enum pipe_format plane_format = ycbcr_info ?
++         lvp_vk_format_to_pipe_format(ycbcr_info->planes[view_plane].format) :
++         view->pformat;
+ 
+       if (image->planes[image_plane].bo->bind & PIPE_BIND_SHADER_IMAGE) {
+-         view->planes[view_plane].iv = lvp_create_imageview(view, plane_format, image_plane);
++         view->planes[view_plane].iv =
++            lvp_create_imageview(view, plane_format, image_plane, is_emulated);
+          view->planes[view_plane].image_handle = llvmpipe_create_image_handle(device->drv_pscreen, &view->planes[view_plane].iv);
+       }
+ 
+       if (image->planes[image_plane].bo->bind & PIPE_BIND_SAMPLER_VIEW) {
+-         view->planes[view_plane].sv = lvp_create_samplerview(view, plane_format, image_plane);
++         view->planes[view_plane].sv =
++            lvp_create_samplerview(view, plane_format, image_plane, is_emulated);
+          view->planes[view_plane].texture_handle = llvmpipe_create_texture_handle(device->drv_pscreen, &view->planes[view_plane].sv, NULL);
+       }
+    }
+@@ -813,6 +896,39 @@ lvp_CopyMemoryToImageEXT(VkDevice _device, const VkCopyMemoryToImageInfoEXT *pCo
+          device->queue[0].ctx->texture_subdata(device->queue[0].ctx, image->planes[plane].bo, copy->imageSubresource.mipLevel, 0,
+                                           &box, copy->pHostPointer, stride, layer_stride);
+       }
++
++      if (image->emu_plane_format != VK_FORMAT_UNDEFINED) {
++         struct pipe_transfer *emu_t;
++
++         void *emu_data = device->queue[0].ctx->texture_map(
++            device->queue[0].ctx,
++            image->emu_plane.bo,
++            copy->imageSubresource.mipLevel,
++            PIPE_MAP_WRITE,
++            &box,
++            &emu_t);
++
++         if (!emu_data)
++            return VK_ERROR_MEMORY_MAP_FAILED;
++
++         /* Decompress each layer */
++         for (unsigned z = 0; z < box.depth; z++) {
++            const uint8_t *src_layer = (const uint8_t *)copy->pHostPointer +
++                                       z * layer_stride;
++            uint8_t *dst_layer = (uint8_t *)emu_data +
++                                z * emu_t->layer_stride;
++
++            lvp_unpack_texcompress(
++               dst_layer,
++               emu_t->stride,
++               src_layer,
++               stride,
++               &copy->imageExtent,
++               vk_format_to_pipe_format(image->vk.format));
++         }
++
++         pipe_texture_unmap(device->queue[0].ctx, emu_t);
++      }
+    }
+    return VK_SUCCESS;
+ }
+@@ -900,14 +1016,51 @@ lvp_CopyImageToImageEXT(VkDevice _device, const VkCopyImageToImageInfoEXT *pCopy
+       unsigned dstz = dst_image->planes[dst_plane].bo->target == PIPE_TEXTURE_3D ?
+                       pCopyImageToImageInfo->pRegions[i].dstOffset.z :
+                       pCopyImageToImageInfo->pRegions[i].dstSubresource.baseArrayLayer;
+-      device->queue[0].ctx->resource_copy_region(device->queue[0].ctx, dst_image->planes[dst_plane].bo,
+-                                              pCopyImageToImageInfo->pRegions[i].dstSubresource.mipLevel,
+-                                              pCopyImageToImageInfo->pRegions[i].dstOffset.x,
+-                                              pCopyImageToImageInfo->pRegions[i].dstOffset.y,
+-                                              dstz,
+-                                              src_image->planes[src_plane].bo,
+-                                              pCopyImageToImageInfo->pRegions[i].srcSubresource.mipLevel,
+-                                              &src_box);
++      const bool src_emulated = src_image->emu_plane_format != VK_FORMAT_UNDEFINED;
++      const bool dst_emulated = dst_image->emu_plane_format != VK_FORMAT_UNDEFINED;
++
++      if (src_emulated && dst_emulated) {
++         if (src_image->vk.format != dst_image->vk.format)
++            return VK_ERROR_FORMAT_NOT_SUPPORTED;
++
++         /* Copy compressed blocks */
++         device->queue[0].ctx->resource_copy_region(
++            device->queue[0].ctx,
++            dst_image->planes[dst_plane].bo,
++            pCopyImageToImageInfo->pRegions[i].dstSubresource.mipLevel,
++            pCopyImageToImageInfo->pRegions[i].dstOffset.x,
++            pCopyImageToImageInfo->pRegions[i].dstOffset.y,
++            dstz,
++            src_image->planes[src_plane].bo,
++            pCopyImageToImageInfo->pRegions[i].srcSubresource.mipLevel,
++            &src_box);
++
++         /* Copy decompressed pixels - dimensions work out because both
++         * emu_plane resources are in pixel space with the same dimensions */
++         device->queue[0].ctx->resource_copy_region(
++            device->queue[0].ctx,
++            dst_image->emu_plane.bo,
++            pCopyImageToImageInfo->pRegions[i].dstSubresource.mipLevel,
++            pCopyImageToImageInfo->pRegions[i].dstOffset.x,
++            pCopyImageToImageInfo->pRegions[i].dstOffset.y,
++            dstz,
++            src_image->emu_plane.bo,
++            pCopyImageToImageInfo->pRegions[i].srcSubresource.mipLevel,
++            &src_box);
++      } else if (src_emulated || dst_emulated) {
++         /* Mixed emulated/non-emulated: Not supported for host copy */
++         /* This would require format conversion which is complex */
++         return VK_ERROR_FORMAT_NOT_SUPPORTED;
++      } else {
++         device->queue[0].ctx->resource_copy_region(device->queue[0].ctx, dst_image->planes[dst_plane].bo,
++                                                pCopyImageToImageInfo->pRegions[i].dstSubresource.mipLevel,
++                                                pCopyImageToImageInfo->pRegions[i].dstOffset.x,
++                                                pCopyImageToImageInfo->pRegions[i].dstOffset.y,
++                                                dstz,
++                                                src_image->planes[src_plane].bo,
++                                                pCopyImageToImageInfo->pRegions[i].srcSubresource.mipLevel,
++                                                &src_box);
++      }
+    }
+    return VK_SUCCESS;
+ }
+diff --git a/src/gallium/frontends/lavapipe/lvp_private.h b/src/gallium/frontends/lavapipe/lvp_private.h
+index 2eb279dad1a..55620b87892 100644
+--- a/src/gallium/frontends/lavapipe/lvp_private.h
++++ b/src/gallium/frontends/lavapipe/lvp_private.h
+@@ -38,6 +38,8 @@
+ #include "util/simple_mtx.h"
+ #include "util/u_queue.h"
+ #include "util/u_upload_mgr.h"
++#include "vk_texcompress_astc.h"
++#include "vk_texcompress_etc2.h"
+ 
+ #include "compiler/shader_enums.h"
+ #include "pipe/p_screen.h"
+@@ -303,8 +305,25 @@ struct lvp_image {
+    bool disjoint;
+    uint8_t plane_count;
+    struct lvp_image_plane planes[3];
++   VkFormat emu_plane_format;
++   struct lvp_image_plane emu_plane;
+ };
+ 
++static inline bool
++lvp_is_compressed_format_emulated(VkFormat format) {
++   const struct util_format_description *desc =
++      vk_format_description(format);
++
++   switch (desc->layout) {
++   case UTIL_FORMAT_LAYOUT_ASTC:
++      return vk_texcompress_astc_emulation_format(format) != VK_FORMAT_UNDEFINED;
++   case UTIL_FORMAT_LAYOUT_ETC:
++      return true;
++   default:
++      return false;
++   }
++}
++
+ struct lvp_image_view {
+    struct vk_image_view vk;
+ 
+@@ -778,6 +797,23 @@ lvp_vk_format_to_pipe_format(VkFormat format)
+    }
+ }
+ 
++static inline VkFormat
++lvp_texcompress_vk_format_to_emu_plane_format(VkFormat format)
++{
++   const struct util_format_description *desc =
++      vk_format_description(format);
++
++   switch (desc->layout) {
++   case UTIL_FORMAT_LAYOUT_ASTC:
++      return vk_texcompress_astc_emulation_format(format);
++   case UTIL_FORMAT_LAYOUT_ETC:
++      return vk_texcompress_etc2_emulation_format(format);
++   default:
++      UNREACHABLE("Unsupported compressed texture format");
++      return VK_FORMAT_UNDEFINED;
++   }
++}
++
+ void
+ lvp_nir_lower_blend(nir_shader *nir, const nir_lower_blend_options *opts);
+ 
+@@ -903,6 +939,14 @@ lvp_image_copy_depth_box(uint8_t *dst,
+                int src_stride, uint64_t src_slice_stride,
+                unsigned src_x, unsigned src_y, unsigned src_z);
+ 
++void
++lvp_unpack_texcompress(uint8_t *dst_row,
++                       unsigned dst_stride,
++                       const uint8_t *src_row,
++                       unsigned src_stride,
++                       const VkExtent3D *extent,
++                       enum pipe_format format);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/src/mesa/main/texcompress_etc.c b/src/mesa/main/texcompress_etc.c
+index 95d5822ed37..190b93d78a3 100644
+--- a/src/mesa/main/texcompress_etc.c
++++ b/src/mesa/main/texcompress_etc.c
+@@ -114,39 +114,6 @@ _mesa_texstore_etc1_rgb8(UNUSED_TEXSTORE_PARAMS)
+    return GL_FALSE;
+ }
+ 
+-
+-/**
+- * Decode texture data in format `MESA_FORMAT_ETC1_RGB8` to
+- * `MESA_FORMAT_ABGR8888`.
+- *
+- * The size of the source data must be a multiple of the ETC1 block size,
+- * which is 8, even if the texture image's dimensions are not aligned to 4.
+- * From the GL_OES_compressed_ETC1_RGB8_texture spec:
+- *   The texture is described as a number of 4x4 pixel blocks. If the
+- *   texture (or a particular mip-level) is smaller than 4 pixels in
+- *   any dimension (such as a 2x2 or a 8x1 texture), the texture is
+- *   found in the upper left part of the block(s), and the rest of the
+- *   pixels are not used. For instance, a texture of size 4x2 will be
+- *   placed in the upper half of a 4x4 block, and the lower half of the
+- *   pixels in the block will not be accessed.
+- *
+- * \param src_width in pixels
+- * \param src_height in pixels
+- * \param dst_stride in bytes
+- */
+-void
+-_mesa_etc1_unpack_rgba8888(uint8_t *dst_row,
+-                           unsigned dst_stride,
+-                           const uint8_t *src_row,
+-                           unsigned src_stride,
+-                           unsigned src_width,
+-                           unsigned src_height)
+-{
+-   etc1_unpack_rgba8888(dst_row, dst_stride,
+-                        src_row, src_stride,
+-                        src_width, src_height);
+-}
+-
+ static uint8_t
+ etc2_base_color1_t_mode(const uint8_t *in, GLuint index)
+ {
+@@ -1190,82 +1157,6 @@ _mesa_texstore_etc2_srgb8_punchthrough_alpha1(UNUSED_TEXSTORE_PARAMS)
+    return GL_FALSE;
+ }
+ 
+-
+-/**
+- * Decode texture data in any one of following formats:
+- * `MESA_FORMAT_ETC2_RGB8`
+- * `MESA_FORMAT_ETC2_SRGB8`
+- * `MESA_FORMAT_ETC2_RGBA8_EAC`
+- * `MESA_FORMAT_ETC2_SRGB8_ALPHA8_EAC`
+- * `MESA_FORMAT_ETC2_R11_EAC`
+- * `MESA_FORMAT_ETC2_RG11_EAC`
+- * `MESA_FORMAT_ETC2_SIGNED_R11_EAC`
+- * `MESA_FORMAT_ETC2_SIGNED_RG11_EAC`
+- * `MESA_FORMAT_ETC2_RGB8_PUNCHTHROUGH_ALPHA1`
+- * `MESA_FORMAT_ETC2_SRGB8_PUNCHTHROUGH_ALPHA1`
+- *
+- * The size of the source data must be a multiple of the ETC2 block size
+- * even if the texture image's dimensions are not aligned to 4.
+- *
+- * \param src_width in pixels
+- * \param src_height in pixels
+- * \param dst_stride in bytes
+- */
+-
+-void
+-_mesa_unpack_etc2_format(uint8_t *dst_row,
+-                         unsigned dst_stride,
+-                         const uint8_t *src_row,
+-                         unsigned src_stride,
+-                         unsigned src_width,
+-                         unsigned src_height,
+-			 mesa_format format,
+-			 bool bgra)
+-{
+-   if (format == MESA_FORMAT_ETC2_RGB8)
+-      etc2_unpack_rgb8(dst_row, dst_stride,
+-                       src_row, src_stride,
+-                       src_width, src_height);
+-   else if (format == MESA_FORMAT_ETC2_SRGB8)
+-      etc2_unpack_srgb8(dst_row, dst_stride,
+-                        src_row, src_stride,
+-			src_width, src_height, bgra);
+-   else if (format == MESA_FORMAT_ETC2_RGBA8_EAC)
+-      etc2_unpack_rgba8(dst_row, dst_stride,
+-                        src_row, src_stride,
+-                        src_width, src_height);
+-   else if (format == MESA_FORMAT_ETC2_SRGB8_ALPHA8_EAC)
+-      etc2_unpack_srgb8_alpha8(dst_row, dst_stride,
+-                               src_row, src_stride,
+-			       src_width, src_height, bgra);
+-   else if (format == MESA_FORMAT_ETC2_R11_EAC)
+-      etc2_unpack_r11(dst_row, dst_stride,
+-                      src_row, src_stride,
+-                      src_width, src_height);
+-   else if (format == MESA_FORMAT_ETC2_RG11_EAC)
+-      etc2_unpack_rg11(dst_row, dst_stride,
+-                       src_row, src_stride,
+-                       src_width, src_height);
+-   else if (format == MESA_FORMAT_ETC2_SIGNED_R11_EAC)
+-      etc2_unpack_signed_r11(dst_row, dst_stride,
+-                             src_row, src_stride,
+-                             src_width, src_height);
+-   else if (format == MESA_FORMAT_ETC2_SIGNED_RG11_EAC)
+-      etc2_unpack_signed_rg11(dst_row, dst_stride,
+-                              src_row, src_stride,
+-                              src_width, src_height);
+-   else if (format == MESA_FORMAT_ETC2_RGB8_PUNCHTHROUGH_ALPHA1)
+-      etc2_unpack_rgb8_punchthrough_alpha1(dst_row, dst_stride,
+-                                           src_row, src_stride,
+-                                           src_width, src_height);
+-   else if (format == MESA_FORMAT_ETC2_SRGB8_PUNCHTHROUGH_ALPHA1)
+-      etc2_unpack_srgb8_punchthrough_alpha1(dst_row, dst_stride,
+-                                            src_row, src_stride,
+-					    src_width, src_height, bgra);
+-}
+-
+-
+-
+ static void
+ fetch_etc1_rgb8(const GLubyte *map,
+                 GLint rowStride, GLint i, GLint j,
+diff --git a/src/mesa/main/texcompress_etc.h b/src/mesa/main/texcompress_etc.h
+index 24075f5111f..27cf4a7b323 100644
+--- a/src/mesa/main/texcompress_etc.h
++++ b/src/mesa/main/texcompress_etc.h
+@@ -26,6 +26,7 @@
+ 
+ #include <inttypes.h>
+ #include "util/glheader.h"
++#include "util/texcompress_etc.h"
+ #include "texcompress.h"
+ #include "texstore.h"
+ 
+@@ -63,23 +64,6 @@ _mesa_texstore_etc2_rgb8_punchthrough_alpha1(TEXSTORE_PARAMS);
+ GLboolean
+ _mesa_texstore_etc2_srgb8_punchthrough_alpha1(TEXSTORE_PARAMS);
+ 
+-void
+-_mesa_etc1_unpack_rgba8888(uint8_t *dst_row,
+-                           unsigned dst_stride,
+-                           const uint8_t *src_row,
+-                           unsigned src_stride,
+-                           unsigned src_width,
+-                           unsigned src_height);
+-void
+-_mesa_unpack_etc2_format(uint8_t *dst_row,
+-                         unsigned dst_stride,
+-                         const uint8_t *src_row,
+-                         unsigned src_stride,
+-                         unsigned src_width,
+-                         unsigned src_height,
+-			 mesa_format format,
+-			 bool bgra);
+-
+ compressed_fetch_func
+ _mesa_get_etc_fetch_func(mesa_format format);
+ 
+diff --git a/src/util/meson.build b/src/util/meson.build
+index 72d866026a7..cf4dc51ba48 100644
+--- a/src/util/meson.build
++++ b/src/util/meson.build
+@@ -129,6 +129,8 @@ files_mesa_util = files(
+   'texcompress_astc_luts_wrap.h',
+   'texcompress_astc.cpp',
+   'texcompress_astc.h',
++  'texcompress_etc.c',
++  'texcompress_etc.h',
+   'timespec.h',
+   'u_atomic.c',
+   'u_atomic.h',
+diff --git a/src/util/texcompress_etc.c b/src/util/texcompress_etc.c
+new file mode 100644
+index 00000000000..4149b2efb3b
+--- /dev/null
++++ b/src/util/texcompress_etc.c
+@@ -0,0 +1,1167 @@
++/*
++ * Copyright (C) 2011 LunarG, Inc.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice (including the next
++ * paragraph) shall be included in all copies or substantial portions of the
++ * Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ */
++
++/**
++ * \file texcompress_etc.c
++ * GL_OES_compressed_ETC1_RGB8_texture support.
++ * Supported ETC2 texture formats are:
++ * GL_COMPRESSED_RGB8_ETC2
++ * GL_COMPRESSED_SRGB8_ETC2
++ * GL_COMPRESSED_RGBA8_ETC2_EAC
++ * GL_COMPRESSED_SRGB8_ALPHA8_ETC2_EAC
++ * GL_COMPRESSED_R11_EAC
++ * GL_COMPRESSED_RG11_EAC
++ * GL_COMPRESSED_SIGNED_R11_EAC
++ * GL_COMPRESSED_SIGNED_RG11_EAC
++ * PIPE_FORMAT_ETC2_RGB8A1
++ * PIPE_FORMAT_ETC2_SRGB8A1
++ */
++
++#include <stdbool.h>
++#include "texcompress_etc.h"
++#include "macros.h"
++#include "util/format_srgb.h"
++
++struct etc2_block {
++   int distance;
++   uint64_t pixel_indices[2];
++   const int *modifier_tables[2];
++   bool flipped;
++   bool opaque;
++   bool is_ind_mode;
++   bool is_diff_mode;
++   bool is_t_mode;
++   bool is_h_mode;
++   bool is_planar_mode;
++   uint8_t base_colors[3][3];
++   uint8_t paint_colors[4][3];
++   uint8_t base_codeword;
++   uint8_t multiplier;
++   uint8_t table_index;
++};
++
++static const int etc2_distance_table[8] = {
++   3, 6, 11, 16, 23, 32, 41, 64 };
++
++static const int etc2_modifier_tables[16][8] = {
++   {  -3,   -6,   -9,  -15,   2,   5,   8,   14},
++   {  -3,   -7,  -10,  -13,   2,   6,   9,   12},
++   {  -2,   -5,   -8,  -13,   1,   4,   7,   12},
++   {  -2,   -4,   -6,  -13,   1,   3,   5,   12},
++   {  -3,   -6,   -8,  -12,   2,   5,   7,   11},
++   {  -3,   -7,   -9,  -11,   2,   6,   8,   10},
++   {  -4,   -7,   -8,  -11,   3,   6,   7,   10},
++   {  -3,   -5,   -8,  -11,   2,   4,   7,   10},
++   {  -2,   -6,   -8,  -10,   1,   5,   7,    9},
++   {  -2,   -5,   -8,  -10,   1,   4,   7,    9},
++   {  -2,   -4,   -8,  -10,   1,   3,   7,    9},
++   {  -2,   -5,   -7,  -10,   1,   4,   6,    9},
++   {  -3,   -4,   -7,  -10,   2,   3,   6,    9},
++   {  -1,   -2,   -3,  -10,   0,   1,   2,    9},
++   {  -4,   -6,   -8,   -9,   3,   5,   7,    8},
++   {  -3,   -5,   -7,   -9,   2,   4,   6,    8},
++};
++
++static const int etc2_modifier_tables_non_opaque[8][4] = {
++   { 0,   8,   0,    -8},
++   { 0,   17,  0,   -17},
++   { 0,   29,  0,   -29},
++   { 0,   42,  0,   -42},
++   { 0,   60,  0,   -60},
++   { 0,   80,  0,   -80},
++   { 0,   106, 0,  -106},
++   { 0,   183, 0,  -183}
++};
++
++/* define etc1_parse_block and etc. */
++#define UINT8_TYPE uint8_t
++#define TAG(x) x
++#include "util/format/texcompress_etc_tmp.h"
++#undef TAG
++#undef UINT8_TYPE
++
++/**
++ * Decode texture data in format `PIPE_FORMAT_ETC1_RGB8` to
++ * `PIPE_FORMAT_ABGR8888`.
++ *
++ * The size of the source data must be a multiple of the ETC1 block size,
++ * which is 8, even if the texture image's dimensions are not aligned to 4.
++ * From the GL_OES_compressed_ETC1_RGB8_texture spec:
++ *   The texture is described as a number of 4x4 pixel blocks. If the
++ *   texture (or a particular mip-level) is smaller than 4 pixels in
++ *   any dimension (such as a 2x2 or a 8x1 texture), the texture is
++ *   found in the upper left part of the block(s), and the rest of the
++ *   pixels are not used. For instance, a texture of size 4x2 will be
++ *   placed in the upper half of a 4x4 block, and the lower half of the
++ *   pixels in the block will not be accessed.
++ *
++ * \param src_width in pixels
++ * \param src_height in pixels
++ * \param dst_stride in bytes
++ */
++void
++_mesa_etc1_unpack_rgba8888(uint8_t *dst_row,
++                           unsigned dst_stride,
++                           const uint8_t *src_row,
++                           unsigned src_stride,
++                           unsigned src_width,
++                           unsigned src_height)
++{
++   etc1_unpack_rgba8888(dst_row, dst_stride,
++                        src_row, src_stride,
++                        src_width, src_height);
++}
++
++static uint8_t
++etc2_base_color1_t_mode(const uint8_t *in, unsigned index)
++{
++   uint8_t R1a = 0, x = 0;
++   /* base col 1 = extend_4to8bits( (R1a << 2) | R1b, G1, B1) */
++   switch(index) {
++   case 0:
++      R1a = (in[0] >> 3) & 0x3;
++      x = ((R1a << 2) | (in[0] & 0x3));
++      break;
++   case 1:
++      x = ((in[1] >> 4) & 0xf);
++      break;
++   case 2:
++      x = (in[1] & 0xf);
++      break;
++   default:
++      /* invalid index */
++      break;
++   }
++   return ((x << 4) | (x & 0xf));
++}
++
++static uint8_t
++etc2_base_color2_t_mode(const uint8_t *in, unsigned index)
++{
++   uint8_t x = 0;
++   /*extend 4to8bits(R2, G2, B2)*/
++   switch(index) {
++   case 0:
++      x = ((in[2] >> 4) & 0xf );
++      break;
++   case 1:
++      x = (in[2] & 0xf);
++      break;
++   case 2:
++      x = ((in[3] >> 4) & 0xf);
++      break;
++   default:
++      /* invalid index */
++      break;
++   }
++   return ((x << 4) | (x & 0xf));
++}
++
++static uint8_t
++etc2_base_color1_h_mode(const uint8_t *in, unsigned index)
++{
++   uint8_t x = 0;
++   /* base col 1 = extend 4to8bits(R1, (G1a << 1) | G1b, (B1a << 3) | B1b) */
++   switch(index) {
++   case 0:
++      x = ((in[0] >> 3) & 0xf);
++      break;
++   case 1:
++      x = (((in[0] & 0x7) << 1) | ((in[1] >> 4) & 0x1));
++      break;
++   case 2:
++      x = ((in[1] & 0x8) |
++           (((in[1] & 0x3) << 1) | ((in[2] >> 7) & 0x1)));
++      break;
++   default:
++      /* invalid index */
++      break;
++   }
++   return ((x << 4) | (x & 0xf));
++}
++
++static uint8_t
++etc2_base_color2_h_mode(const uint8_t *in, unsigned index)
++{
++   uint8_t x = 0;
++   /* base col 2 = extend 4to8bits(R2, G2, B2) */
++   switch(index) {
++   case 0:
++      x = ((in[2] >> 3) & 0xf );
++      break;
++   case 1:
++      x = (((in[2] & 0x7) << 1) | ((in[3] >> 7) & 0x1));
++      break;
++   case 2:
++      x = ((in[3] >> 3) & 0xf);
++      break;
++   default:
++      /* invalid index */
++      break;
++   }
++   return ((x << 4) | (x & 0xf));
++}
++
++static uint8_t
++etc2_base_color_o_planar(const uint8_t *in, unsigned index)
++{
++   unsigned tmp;
++   switch(index) {
++   case 0:
++      tmp = ((in[0] >> 1) & 0x3f); /* RO */
++      return ((tmp << 2) | (tmp >> 4));
++   case 1:
++      tmp = (((in[0] & 0x1) << 6) | /* GO1 */
++             ((in[1] >> 1) & 0x3f)); /* GO2 */
++      return ((tmp << 1) | (tmp >> 6));
++   case 2:
++      tmp = (((in[1] & 0x1) << 5) | /* BO1 */
++             (in[2] & 0x18) | /* BO2 */
++             (((in[2] & 0x3) << 1) | ((in[3] >> 7) & 0x1))); /* BO3 */
++      return ((tmp << 2) | (tmp >> 4));
++    default:
++      /* invalid index */
++      return 0;
++   }
++}
++
++static uint8_t
++etc2_base_color_h_planar(const uint8_t *in, unsigned index)
++{
++   unsigned tmp;
++   switch(index) {
++   case 0:
++      tmp = (((in[3] & 0x7c) >> 1) | /* RH1 */
++             (in[3] & 0x1));         /* RH2 */
++      return ((tmp << 2) | (tmp >> 4));
++   case 1:
++      tmp = (in[4] >> 1) & 0x7f; /* GH */
++      return ((tmp << 1) | (tmp >> 6));
++   case 2:
++      tmp = (((in[4] & 0x1) << 5) |
++             ((in[5] >> 3) & 0x1f)); /* BH */
++      return ((tmp << 2) | (tmp >> 4));
++   default:
++      /* invalid index */
++      return 0;
++   }
++}
++
++static uint8_t
++etc2_base_color_v_planar(const uint8_t *in, unsigned index)
++{
++   unsigned tmp;
++   switch(index) {
++   case 0:
++      tmp = (((in[5] & 0x7) << 0x3) |
++             ((in[6] >> 5) & 0x7)); /* RV */
++      return ((tmp << 2) | (tmp >> 4));
++   case 1:
++      tmp = (((in[6] & 0x1f) << 2) |
++             ((in[7] >> 6) & 0x3)); /* GV */
++      return ((tmp << 1) | (tmp >> 6));
++   case 2:
++      tmp = in[7] & 0x3f; /* BV */
++      return ((tmp << 2) | (tmp >> 4));
++   default:
++      /* invalid index */
++      return 0;
++   }
++}
++
++static int
++etc2_get_pixel_index(const struct etc2_block *block, int x, int y)
++{
++   int bit = ((3 - y) + (3 - x) * 4) * 3;
++   int idx = (block->pixel_indices[1] >> bit) & 0x7;
++   return idx;
++}
++
++static uint8_t
++etc2_clamp(int color)
++{
++   /* CLAMP(color, 0, 255) */
++   return (uint8_t) CLAMP(color, 0, 255);
++}
++
++static uint16_t
++etc2_clamp2(int color)
++{
++   /* CLAMP(color, 0, 2047) */
++   return (uint16_t) CLAMP(color, 0, 2047);
++}
++
++static int16_t
++etc2_clamp3(int color)
++{
++   /* CLAMP(color, -1023, 1023) */
++   return (int16_t) CLAMP(color, -1023, 1023);
++}
++
++static void
++etc2_rgb8_parse_block(struct etc2_block *block,
++                      const uint8_t *src,
++                      bool punchthrough_alpha)
++{
++   unsigned i;
++   bool diffbit = false;
++   static const int lookup[8] = { 0, 1, 2, 3, -4, -3, -2, -1 };
++
++   const int R_plus_dR = (src[0] >> 3) + lookup[src[0] & 0x7];
++   const int G_plus_dG = (src[1] >> 3) + lookup[src[1] & 0x7];
++   const int B_plus_dB = (src[2] >> 3) + lookup[src[2] & 0x7];
++
++   /* Reset the mode flags */
++   block->is_ind_mode = false;
++   block->is_diff_mode = false;
++   block->is_t_mode = false;
++   block->is_h_mode = false;
++   block->is_planar_mode = false;
++
++   if (punchthrough_alpha)
++      block->opaque = src[3] & 0x2;
++   else
++      diffbit = src[3] & 0x2;
++
++   if (!diffbit && !punchthrough_alpha) {
++      /* individual mode */
++      block->is_ind_mode = true;
++
++      for (i = 0; i < 3; i++) {
++         /* Texture decode algorithm is same for individual mode in etc1
++          * & etc2.
++          */
++         block->base_colors[0][i] = etc1_base_color_ind_hi(src[i]);
++         block->base_colors[1][i] = etc1_base_color_ind_lo(src[i]);
++      }
++   }
++   else if (R_plus_dR < 0 || R_plus_dR > 31){
++      /* T mode */
++      block->is_t_mode = true;
++
++      for(i = 0; i < 3; i++) {
++         block->base_colors[0][i] = etc2_base_color1_t_mode(src, i);
++         block->base_colors[1][i] = etc2_base_color2_t_mode(src, i);
++      }
++      /* pick distance */
++      block->distance =
++         etc2_distance_table[(((src[3] >> 2) & 0x3) << 1) |
++                             (src[3] & 0x1)];
++
++      for (i = 0; i < 3; i++) {
++         block->paint_colors[0][i] = etc2_clamp(block->base_colors[0][i]);
++         block->paint_colors[1][i] = etc2_clamp(block->base_colors[1][i] +
++                                                block->distance);
++         block->paint_colors[2][i] = etc2_clamp(block->base_colors[1][i]);
++         block->paint_colors[3][i] = etc2_clamp(block->base_colors[1][i] -
++                                                block->distance);
++      }
++   }
++   else if (G_plus_dG < 0 || G_plus_dG > 31){
++      int base_color_1_value, base_color_2_value;
++
++      /* H mode */
++      block->is_h_mode = true;
++
++      for(i = 0; i < 3; i++) {
++         block->base_colors[0][i] = etc2_base_color1_h_mode(src, i);
++         block->base_colors[1][i] = etc2_base_color2_h_mode(src, i);
++      }
++
++      base_color_1_value = (block->base_colors[0][0] << 16) +
++                           (block->base_colors[0][1] << 8) +
++                           block->base_colors[0][2];
++      base_color_2_value = (block->base_colors[1][0] << 16) +
++                           (block->base_colors[1][1] << 8) +
++                           block->base_colors[1][2];
++      /* pick distance */
++      block->distance =
++         etc2_distance_table[(src[3] & 0x4) |
++                             ((src[3] & 0x1) << 1) |
++                             (base_color_1_value >= base_color_2_value)];
++
++      for (i = 0; i < 3; i++) {
++         block->paint_colors[0][i] = etc2_clamp(block->base_colors[0][i] +
++                                                block->distance);
++         block->paint_colors[1][i] = etc2_clamp(block->base_colors[0][i] -
++                                                block->distance);
++         block->paint_colors[2][i] = etc2_clamp(block->base_colors[1][i] +
++                                                block->distance);
++         block->paint_colors[3][i] = etc2_clamp(block->base_colors[1][i] -
++                                                block->distance);
++      }
++   }
++   else if (B_plus_dB < 0 || B_plus_dB > 31) {
++      /* Planar mode */
++      block->is_planar_mode = true;
++
++      /* opaque bit must be set in planar mode */
++      block->opaque = true;
++
++      for (i = 0; i < 3; i++) {
++         block->base_colors[0][i] = etc2_base_color_o_planar(src, i);
++         block->base_colors[1][i] = etc2_base_color_h_planar(src, i);
++         block->base_colors[2][i] = etc2_base_color_v_planar(src, i);
++      }
++   }
++   else if (diffbit || punchthrough_alpha) {
++      /* differential mode */
++      block->is_diff_mode = true;
++
++      for (i = 0; i < 3; i++) {
++         /* Texture decode algorithm is same for differential mode in etc1
++          * & etc2.
++          */
++         block->base_colors[0][i] = etc1_base_color_diff_hi(src[i]);
++         block->base_colors[1][i] = etc1_base_color_diff_lo(src[i]);
++      }
++   }
++
++   if (block->is_ind_mode || block->is_diff_mode) {
++      int table1_idx = (src[3] >> 5) & 0x7;
++      int table2_idx = (src[3] >> 2) & 0x7;
++
++      /* Use same modifier tables as for etc1 textures if opaque bit is set
++       * or if non punchthrough texture format
++       */
++      block->modifier_tables[0] = (!punchthrough_alpha || block->opaque) ?
++                                  etc1_modifier_tables[table1_idx] :
++                                  etc2_modifier_tables_non_opaque[table1_idx];
++      block->modifier_tables[1] = (!punchthrough_alpha || block->opaque) ?
++                                  etc1_modifier_tables[table2_idx] :
++                                  etc2_modifier_tables_non_opaque[table2_idx];
++
++      block->flipped = (src[3] & 0x1);
++   }
++
++   block->pixel_indices[0] =
++      (src[4] << 24) | (src[5] << 16) | (src[6] << 8) | src[7];
++}
++
++static void
++etc2_rgb8_fetch_texel(const struct etc2_block *block,
++                      int x, int y, uint8_t *dst,
++                      bool punchthrough_alpha)
++{
++   const uint8_t *base_color;
++   int modifier, bit, idx, blk;
++
++   /* get pixel index */
++   bit = y + x * 4;
++   idx = ((block->pixel_indices[0] >> (15 + bit)) & 0x2) |
++         ((block->pixel_indices[0] >>      (bit)) & 0x1);
++
++   if (block->is_ind_mode || block->is_diff_mode) {
++      /* check for punchthrough_alpha format */
++      if (punchthrough_alpha) {
++         if (!block->opaque && idx == 2) {
++            dst[0] = dst[1] = dst[2] = dst[3] = 0;
++            return;
++         }
++         else
++            dst[3] = 255;
++      }
++
++      /* Use pixel index and subblock to get the modifier */
++      blk = (block->flipped) ? (y >= 2) : (x >= 2);
++      base_color = block->base_colors[blk];
++      modifier = block->modifier_tables[blk][idx];
++
++      dst[0] = etc2_clamp(base_color[0] + modifier);
++      dst[1] = etc2_clamp(base_color[1] + modifier);
++      dst[2] = etc2_clamp(base_color[2] + modifier);
++   }
++   else if (block->is_t_mode || block->is_h_mode) {
++      /* check for punchthrough_alpha format */
++      if (punchthrough_alpha) {
++         if (!block->opaque && idx == 2) {
++            dst[0] = dst[1] = dst[2] = dst[3] = 0;
++            return;
++         }
++         else
++            dst[3] = 255;
++      }
++
++      /* Use pixel index to pick one of the paint colors */
++      dst[0] = block->paint_colors[idx][0];
++      dst[1] = block->paint_colors[idx][1];
++      dst[2] = block->paint_colors[idx][2];
++   }
++   else if (block->is_planar_mode) {
++      /* {R(x, y) = clamp255((x × (RH − RO) + y × (RV − RO) + 4 × RO + 2) >> 2)
++       * {G(x, y) = clamp255((x × (GH − GO) + y × (GV − GO) + 4 × GO + 2) >> 2)
++       * {B(x, y) = clamp255((x × (BH − BO) + y × (BV − BO) + 4 × BO + 2) >> 2)
++       */
++      int red, green, blue;
++      red = (x * (block->base_colors[1][0] - block->base_colors[0][0]) +
++             y * (block->base_colors[2][0] - block->base_colors[0][0]) +
++             4 * block->base_colors[0][0] + 2) >> 2;
++
++      green = (x * (block->base_colors[1][1] - block->base_colors[0][1]) +
++               y * (block->base_colors[2][1] - block->base_colors[0][1]) +
++               4 * block->base_colors[0][1] + 2) >> 2;
++
++      blue = (x * (block->base_colors[1][2] - block->base_colors[0][2]) +
++              y * (block->base_colors[2][2] - block->base_colors[0][2]) +
++              4 * block->base_colors[0][2] + 2) >> 2;
++
++      dst[0] = etc2_clamp(red);
++      dst[1] = etc2_clamp(green);
++      dst[2] = etc2_clamp(blue);
++
++      /* check for punchthrough_alpha format */
++      if (punchthrough_alpha)
++         dst[3] = 255;
++   }
++   else
++      UNREACHABLE("unhandled block mode");
++}
++
++static void
++etc2_alpha8_fetch_texel(const struct etc2_block *block,
++      int x, int y, uint8_t *dst)
++{
++   int modifier, alpha, idx;
++   /* get pixel index */
++   idx = etc2_get_pixel_index(block, x, y);
++   modifier = etc2_modifier_tables[block->table_index][idx];
++   alpha = block->base_codeword + modifier * block->multiplier;
++   dst[3] = etc2_clamp(alpha);
++}
++
++static void
++etc2_r11_fetch_texel(const struct etc2_block *block,
++                     int x, int y, uint8_t *dst)
++{
++   int modifier, idx;
++   int16_t color;
++   /* Get pixel index */
++   idx = etc2_get_pixel_index(block, x, y);
++   modifier = etc2_modifier_tables[block->table_index][idx];
++
++   if (block->multiplier != 0)
++      /* clamp2(base codeword × 8 + 4 + modifier × multiplier × 8) */
++      color = etc2_clamp2(((block->base_codeword << 3) | 0x4)  +
++                          ((modifier * block->multiplier) << 3));
++   else
++      color = etc2_clamp2(((block->base_codeword << 3) | 0x4)  + modifier);
++
++   /* Extend 11 bits color value to 16 bits. OpenGL ES 3.0 specification
++    * allows extending the color value to any number of bits. But, an
++    * implementation is not allowed to truncate the 11-bit value to less than
++    * 11 bits."
++    */
++   color = (color << 5) | (color >> 6);
++   ((uint16_t *)dst)[0] = color;
++}
++
++static void
++etc2_signed_r11_fetch_texel(const struct etc2_block *block,
++                            int x, int y, uint8_t *dst)
++{
++   int modifier, idx;
++   int16_t color;
++   int8_t base_codeword = (int8_t) block->base_codeword;
++
++   if (base_codeword == -128)
++      base_codeword = -127;
++
++   /* Get pixel index */
++   idx = etc2_get_pixel_index(block, x, y);
++   modifier = etc2_modifier_tables[block->table_index][idx];
++
++   if (block->multiplier != 0)
++      /* clamp3(base codeword × 8 + modifier × multiplier × 8) */
++      color = etc2_clamp3((base_codeword << 3)  +
++                         ((modifier * block->multiplier) << 3));
++   else
++      color = etc2_clamp3((base_codeword << 3)  + modifier);
++
++   /* Extend 11 bits color value to 16 bits. OpenGL ES 3.0 specification
++    * allows extending the color value to any number of bits. But, an
++    * implementation is not allowed to truncate the 11-bit value to less than
++    * 11 bits. A negative 11-bit value must first be made positive before bit
++    * replication, and then made negative again
++    */
++   if (color >= 0)
++      color = (color << 5) | (color >> 5);
++   else {
++      color = -color;
++      color = (color << 5) | (color >> 5);
++      color = -color;
++   }
++   ((int16_t *)dst)[0] = color;
++}
++
++static void
++etc2_alpha8_parse_block(struct etc2_block *block, const uint8_t *src)
++{
++   block->base_codeword = src[0];
++   block->multiplier = (src[1] >> 4) & 0xf;
++   block->table_index = src[1] & 0xf;
++   block->pixel_indices[1] = (((uint64_t)src[2] << 40) |
++                              ((uint64_t)src[3] << 32) |
++                              ((uint64_t)src[4] << 24) |
++                              ((uint64_t)src[5] << 16) |
++                              ((uint64_t)src[6] << 8)  |
++                              ((uint64_t)src[7]));
++}
++
++static void
++etc2_r11_parse_block(struct etc2_block *block, const uint8_t *src)
++{
++   /* Parsing logic remains same as for etc2_alpha8_parse_block */
++    etc2_alpha8_parse_block(block, src);
++}
++
++static void
++etc2_rgba8_parse_block(struct etc2_block *block, const uint8_t *src)
++{
++   /* RGB component is parsed the same way as for PIPE_FORMAT_ETC2_RGB8 */
++   etc2_rgb8_parse_block(block, src + 8,
++                         false /* punchthrough_alpha */);
++   /* Parse Alpha component */
++   etc2_alpha8_parse_block(block, src);
++}
++
++static void
++etc2_rgba8_fetch_texel(const struct etc2_block *block,
++      int x, int y, uint8_t *dst)
++{
++   etc2_rgb8_fetch_texel(block, x, y, dst,
++                         false /* punchthrough_alpha */);
++   etc2_alpha8_fetch_texel(block, x, y, dst);
++}
++
++static void
++etc2_unpack_rgb8(uint8_t *dst_row,
++                 unsigned dst_stride,
++                 const uint8_t *src_row,
++                 unsigned src_stride,
++                 unsigned width,
++                 unsigned height)
++{
++   const unsigned bw = 4, bh = 4, bs = 8, comps = 4;
++   struct etc2_block block;
++   unsigned x, y, i, j;
++
++   for (y = 0; y < height; y += bh) {
++      const uint8_t *src = src_row;
++      /*
++       * Destination texture may not be a multiple of four texels in
++       * height. Compute a safe height to avoid writing outside the texture.
++       */
++      const unsigned h = MIN2(bh, height - y);
++
++      for (x = 0; x < width; x+= bw) {
++         /*
++          * Destination texture may not be a multiple of four texels in
++          * width. Compute a safe width to avoid writing outside the texture.
++          */
++         const unsigned w = MIN2(bw, width - x);
++
++         etc2_rgb8_parse_block(&block, src,
++                               false /* punchthrough_alpha */);
++
++         for (j = 0; j < h; j++) {
++            uint8_t *dst = dst_row + (y + j) * dst_stride + x * comps;
++            for (i = 0; i < w; i++) {
++               etc2_rgb8_fetch_texel(&block, i, j, dst,
++                                     false /* punchthrough_alpha */);
++               dst[3] = 255;
++               dst += comps;
++            }
++         }
++
++         src += bs;
++      }
++
++      src_row += src_stride;
++   }
++}
++
++static void
++etc2_unpack_srgb8(uint8_t *dst_row,
++                  unsigned dst_stride,
++                  const uint8_t *src_row,
++                  unsigned src_stride,
++                  unsigned width,
++                  unsigned height,
++                  bool bgra)
++{
++   const unsigned bw = 4, bh = 4, bs = 8, comps = 4;
++   struct etc2_block block;
++   unsigned x, y, i, j;
++   uint8_t tmp;
++
++   for (y = 0; y < height; y += bh) {
++      const uint8_t *src = src_row;
++      const unsigned h = MIN2(bh, height - y);
++
++      for (x = 0; x < width; x+= bw) {
++         const unsigned w = MIN2(bw, width - x);
++         etc2_rgb8_parse_block(&block, src,
++                               false /* punchthrough_alpha */);
++
++
++         for (j = 0; j < h; j++) {
++            uint8_t *dst = dst_row + (y + j) * dst_stride + x * comps;
++            for (i = 0; i < w; i++) {
++               etc2_rgb8_fetch_texel(&block, i, j, dst,
++                                     false /* punchthrough_alpha */);
++
++               if (bgra) {
++                  /* Convert to MESA_FORMAT_B8G8R8A8_SRGB */
++                  tmp = dst[0];
++                  dst[0] = dst[2];
++                  dst[2] = tmp;
++               }
++               dst[3] = 255;
++
++               dst += comps;
++            }
++         }
++         src += bs;
++      }
++
++      src_row += src_stride;
++   }
++}
++
++static void
++etc2_unpack_rgba8(uint8_t *dst_row,
++                  unsigned dst_stride,
++                  const uint8_t *src_row,
++                  unsigned src_stride,
++                  unsigned width,
++                  unsigned height)
++{
++   /* If internalformat is COMPRESSED_RGBA8_ETC2_EAC, each 4 × 4 block of
++    * RGBA8888 information is compressed to 128 bits. To decode a block, the
++    * two 64-bit integers int64bitAlpha and int64bitColor are calculated.
++   */
++   const unsigned bw = 4, bh = 4, bs = 16, comps = 4;
++   struct etc2_block block;
++   unsigned x, y, i, j;
++
++   for (y = 0; y < height; y += bh) {
++      const uint8_t *src = src_row;
++      const unsigned h = MIN2(bh, height - y);
++
++      for (x = 0; x < width; x+= bw) {
++         const unsigned w = MIN2(bw, width - x);
++         etc2_rgba8_parse_block(&block, src);
++
++         for (j = 0; j < h; j++) {
++            uint8_t *dst = dst_row + (y + j) * dst_stride + x * comps;
++            for (i = 0; i < w; i++) {
++               etc2_rgba8_fetch_texel(&block, i, j, dst);
++               dst += comps;
++            }
++         }
++         src += bs;
++      }
++
++      src_row += src_stride;
++   }
++}
++
++static void
++etc2_unpack_srgb8_alpha8(uint8_t *dst_row,
++                         unsigned dst_stride,
++                         const uint8_t *src_row,
++                         unsigned src_stride,
++                         unsigned width,
++                         unsigned height,
++                         bool bgra)
++{
++   /* If internalformat is COMPRESSED_SRGB8_ALPHA8_ETC2_EAC, each 4 × 4 block
++    * of RGBA8888 information is compressed to 128 bits. To decode a block, the
++    * two 64-bit integers int64bitAlpha and int64bitColor are calculated.
++    */
++   const unsigned bw = 4, bh = 4, bs = 16, comps = 4;
++   struct etc2_block block;
++   unsigned x, y, i, j;
++   uint8_t tmp;
++
++   for (y = 0; y < height; y += bh) {
++      const unsigned h = MIN2(bh, height - y);
++      const uint8_t *src = src_row;
++
++      for (x = 0; x < width; x+= bw) {
++         const unsigned w = MIN2(bw, width - x);
++         etc2_rgba8_parse_block(&block, src);
++
++         for (j = 0; j < h; j++) {
++            uint8_t *dst = dst_row + (y + j) * dst_stride + x * comps;
++            for (i = 0; i < w; i++) {
++               etc2_rgba8_fetch_texel(&block, i, j, dst);
++
++               if (bgra) {
++                  /* Convert to MESA_FORMAT_B8G8R8A8_SRGB */
++                  tmp = dst[0];
++                  dst[0] = dst[2];
++                  dst[2] = tmp;
++                  dst[3] = dst[3];
++               }
++
++               dst += comps;
++            }
++         }
++         src += bs;
++      }
++
++      src_row += src_stride;
++   }
++}
++
++static void
++etc2_unpack_r11(uint8_t *dst_row,
++                unsigned dst_stride,
++                const uint8_t *src_row,
++                unsigned src_stride,
++                unsigned width,
++                unsigned height)
++{
++   /* If internalformat is COMPRESSED_R11_EAC, each 4 × 4 block of
++      color information is compressed to 64 bits.
++   */
++   const unsigned bw = 4, bh = 4, bs = 8, comps = 1, comp_size = 2;
++   struct etc2_block block;
++   unsigned x, y, i, j;
++
++   for (y = 0; y < height; y += bh) {
++      const unsigned h = MIN2(bh, height - y);
++      const uint8_t *src = src_row;
++
++      for (x = 0; x < width; x+= bw) {
++         const unsigned w = MIN2(bw, width - x);
++         etc2_r11_parse_block(&block, src);
++
++         for (j = 0; j < h; j++) {
++            uint8_t *dst = dst_row + (y + j) * dst_stride + x * comps * comp_size;
++            for (i = 0; i < w; i++) {
++               etc2_r11_fetch_texel(&block, i, j, dst);
++               dst += comps * comp_size;
++            }
++         }
++         src += bs;
++      }
++
++      src_row += src_stride;
++   }
++}
++
++static void
++etc2_unpack_rg11(uint8_t *dst_row,
++                 unsigned dst_stride,
++                 const uint8_t *src_row,
++                 unsigned src_stride,
++                 unsigned width,
++                 unsigned height)
++{
++   /* If internalformat is COMPRESSED_RG11_EAC, each 4 × 4 block of
++      RG color information is compressed to 128 bits.
++   */
++   const unsigned bw = 4, bh = 4, bs = 16, comps = 2, comp_size = 2;
++   struct etc2_block block;
++   unsigned x, y, i, j;
++
++   for (y = 0; y < height; y += bh) {
++      const unsigned h = MIN2(bh, height - y);
++      const uint8_t *src = src_row;
++
++      for (x = 0; x < width; x+= bw) {
++         const unsigned w = MIN2(bw, width - x);
++         /* red component */
++         etc2_r11_parse_block(&block, src);
++
++         for (j = 0; j < h; j++) {
++            uint8_t *dst = dst_row + (y + j) * dst_stride +
++                           x * comps * comp_size;
++            for (i = 0; i < w; i++) {
++               etc2_r11_fetch_texel(&block, i, j, dst);
++               dst += comps * comp_size;
++            }
++         }
++         /* green component */
++         etc2_r11_parse_block(&block, src + 8);
++
++         for (j = 0; j < h; j++) {
++            uint8_t *dst = dst_row + (y + j) * dst_stride +
++                           x * comps * comp_size;
++            for (i = 0; i < w; i++) {
++               etc2_r11_fetch_texel(&block, i, j, dst + comp_size);
++               dst += comps * comp_size;
++            }
++         }
++         src += bs;
++      }
++
++      src_row += src_stride;
++   }
++}
++
++static void
++etc2_unpack_signed_r11(uint8_t *dst_row,
++                       unsigned dst_stride,
++                       const uint8_t *src_row,
++                       unsigned src_stride,
++                       unsigned width,
++                       unsigned height)
++{
++   /* If internalformat is COMPRESSED_SIGNED_R11_EAC, each 4 × 4 block of
++      red color information is compressed to 64 bits.
++   */
++   const unsigned bw = 4, bh = 4, bs = 8, comps = 1, comp_size = 2;
++   struct etc2_block block;
++   unsigned x, y, i, j;
++
++   for (y = 0; y < height; y += bh) {
++      const unsigned h = MIN2(bh, height - y);
++      const uint8_t *src = src_row;
++
++      for (x = 0; x < width; x+= bw) {
++         const unsigned w = MIN2(bw, width - x);
++         etc2_r11_parse_block(&block, src);
++
++         for (j = 0; j < h; j++) {
++            uint8_t *dst = dst_row + (y + j) * dst_stride +
++                           x * comps * comp_size;
++            for (i = 0; i < w; i++) {
++               etc2_signed_r11_fetch_texel(&block, i, j, dst);
++               dst += comps * comp_size;
++            }
++         }
++         src += bs;
++      }
++
++      src_row += src_stride;
++   }
++}
++
++static void
++etc2_unpack_signed_rg11(uint8_t *dst_row,
++                        unsigned dst_stride,
++                        const uint8_t *src_row,
++                        unsigned src_stride,
++                        unsigned width,
++                        unsigned height)
++{
++   /* If internalformat is COMPRESSED_SIGNED_RG11_EAC, each 4 × 4 block of
++      RG color information is compressed to 128 bits.
++   */
++   const unsigned bw = 4, bh = 4, bs = 16, comps = 2, comp_size = 2;
++   struct etc2_block block;
++   unsigned x, y, i, j;
++
++   for (y = 0; y < height; y += bh) {
++      const unsigned h = MIN2(bh, height - y);
++      const uint8_t *src = src_row;
++
++      for (x = 0; x < width; x+= bw) {
++         const unsigned w = MIN2(bw, width - x);
++         /* red component */
++         etc2_r11_parse_block(&block, src);
++
++         for (j = 0; j < h; j++) {
++            uint8_t *dst = dst_row + (y + j) * dst_stride +
++                          x * comps * comp_size;
++            for (i = 0; i < w; i++) {
++               etc2_signed_r11_fetch_texel(&block, i, j, dst);
++               dst += comps * comp_size;
++            }
++         }
++         /* green component */
++         etc2_r11_parse_block(&block, src + 8);
++
++         for (j = 0; j < h; j++) {
++            uint8_t *dst = dst_row + (y + j) * dst_stride +
++                           x * comps * comp_size;
++            for (i = 0; i < w; i++) {
++               etc2_signed_r11_fetch_texel(&block, i, j, dst + comp_size);
++               dst += comps * comp_size;
++            }
++         }
++         src += bs;
++      }
++
++      src_row += src_stride;
++   }
++}
++
++static void
++etc2_unpack_rgb8_punchthrough_alpha1(uint8_t *dst_row,
++                                     unsigned dst_stride,
++                                     const uint8_t *src_row,
++                                     unsigned src_stride,
++                                     unsigned width,
++                                     unsigned height)
++{
++   const unsigned bw = 4, bh = 4, bs = 8, comps = 4;
++   struct etc2_block block;
++   unsigned x, y, i, j;
++
++   for (y = 0; y < height; y += bh) {
++      const unsigned h = MIN2(bh, height - y);
++      const uint8_t *src = src_row;
++
++      for (x = 0; x < width; x+= bw) {
++         const unsigned w = MIN2(bw, width - x);
++         etc2_rgb8_parse_block(&block, src,
++                               true /* punchthrough_alpha */);
++         for (j = 0; j < h; j++) {
++            uint8_t *dst = dst_row + (y + j) * dst_stride + x * comps;
++            for (i = 0; i < w; i++) {
++               etc2_rgb8_fetch_texel(&block, i, j, dst,
++                                     true /* punchthrough_alpha */);
++               dst += comps;
++            }
++         }
++
++         src += bs;
++      }
++
++      src_row += src_stride;
++   }
++}
++
++static void
++etc2_unpack_srgb8_punchthrough_alpha1(uint8_t *dst_row,
++                                     unsigned dst_stride,
++                                     const uint8_t *src_row,
++                                     unsigned src_stride,
++                                     unsigned width,
++                                     unsigned height,
++                                     bool bgra)
++{
++   const unsigned bw = 4, bh = 4, bs = 8, comps = 4;
++   struct etc2_block block;
++   unsigned x, y, i, j;
++   uint8_t tmp;
++
++   for (y = 0; y < height; y += bh) {
++      const unsigned h = MIN2(bh, height - y);
++      const uint8_t *src = src_row;
++
++      for (x = 0; x < width; x+= bw) {
++         const unsigned w = MIN2(bw, width - x);
++         etc2_rgb8_parse_block(&block, src,
++                               true /* punchthrough_alpha */);
++         for (j = 0; j < h; j++) {
++            uint8_t *dst = dst_row + (y + j) * dst_stride + x * comps;
++            for (i = 0; i < w; i++) {
++               etc2_rgb8_fetch_texel(&block, i, j, dst,
++                                     true /* punchthrough_alpha */);
++
++               if (bgra) {
++                  /* Convert to MESA_FORMAT_B8G8R8A8_SRGB */
++                  tmp = dst[0];
++                  dst[0] = dst[2];
++                  dst[2] = tmp;
++                  dst[3] = dst[3];
++               }
++
++               dst += comps;
++            }
++         }
++
++         src += bs;
++      }
++
++      src_row += src_stride;
++   }
++}
++
++/**
++ * Decode texture data in any one of following formats:
++ * `PIPE_FORMAT_ETC2_RGB8`
++ * `PIPE_FORMAT_ETC2_SRGB8`
++ * `PIPE_FORMAT_ETC2_RGBA8`
++ * `PIPE_FORMAT_ETC2_SRGBA8`
++ * `PIPE_FORMAT_ETC2_R11_UNORM`
++ * `PIPE_FORMAT_ETC2_RG11_UNORM`
++ * `PIPE_FORMAT_ETC2_R11_SNORM`
++ * `PIPE_FORMAT_ETC2_RG11_SNORM`
++ * `PIPE_FORMAT_ETC2_RGB8A1`
++ * `PIPE_FORMAT_ETC2_SRGB8A1`
++ *
++ * The size of the source data must be a multiple of the ETC2 block size
++ * even if the texture image's dimensions are not aligned to 4.
++ *
++ * \param src_width in pixels
++ * \param src_height in pixels
++ * \param dst_stride in bytes
++ */
++
++void
++_mesa_unpack_etc2_format(uint8_t *dst_row,
++                         unsigned dst_stride,
++                         const uint8_t *src_row,
++                         unsigned src_stride,
++                         unsigned src_width,
++                         unsigned src_height,
++                         enum pipe_format format,
++                         bool bgra)
++{
++   if (format == PIPE_FORMAT_ETC2_RGB8)
++      etc2_unpack_rgb8(dst_row, dst_stride,
++                       src_row, src_stride,
++                       src_width, src_height);
++   else if (format == PIPE_FORMAT_ETC2_SRGB8)
++      etc2_unpack_srgb8(dst_row, dst_stride,
++                        src_row, src_stride,
++                        src_width, src_height, bgra);
++   else if (format == PIPE_FORMAT_ETC2_RGBA8)
++      etc2_unpack_rgba8(dst_row, dst_stride,
++                        src_row, src_stride,
++                        src_width, src_height);
++   else if (format == PIPE_FORMAT_ETC2_SRGBA8)
++      etc2_unpack_srgb8_alpha8(dst_row, dst_stride,
++                               src_row, src_stride,
++                               src_width, src_height, bgra);
++   else if (format == PIPE_FORMAT_ETC2_R11_UNORM)
++      etc2_unpack_r11(dst_row, dst_stride,
++                      src_row, src_stride,
++                      src_width, src_height);
++   else if (format == PIPE_FORMAT_ETC2_RG11_UNORM)
++      etc2_unpack_rg11(dst_row, dst_stride,
++                       src_row, src_stride,
++                       src_width, src_height);
++   else if (format == PIPE_FORMAT_ETC2_R11_SNORM)
++      etc2_unpack_signed_r11(dst_row, dst_stride,
++                             src_row, src_stride,
++                             src_width, src_height);
++   else if (format == PIPE_FORMAT_ETC2_RG11_SNORM)
++      etc2_unpack_signed_rg11(dst_row, dst_stride,
++                              src_row, src_stride,
++                              src_width, src_height);
++   else if (format == PIPE_FORMAT_ETC2_RGB8A1)
++      etc2_unpack_rgb8_punchthrough_alpha1(dst_row, dst_stride,
++                                           src_row, src_stride,
++                                           src_width, src_height);
++   else if (format == PIPE_FORMAT_ETC2_SRGB8A1)
++      etc2_unpack_srgb8_punchthrough_alpha1(dst_row, dst_stride,
++                                            src_row, src_stride,
++                                            src_width, src_height, bgra);
++}
+diff --git a/src/util/texcompress_etc.h b/src/util/texcompress_etc.h
+new file mode 100644
+index 00000000000..d5106cf711d
+--- /dev/null
++++ b/src/util/texcompress_etc.h
+@@ -0,0 +1,46 @@
++/*
++ * Copyright (C) 2011 LunarG, Inc.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice (including the next
++ * paragraph) shall be included in all copies or substantial portions of the
++ * Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ */
++
++#ifndef UTIL_TEXCOMPRESS_ETC1_H
++#define UTIL_TEXCOMPRESS_ETC1_H
++
++#include <inttypes.h>
++#include "util/format/u_format.h"
++
++void
++_mesa_etc1_unpack_rgba8888(uint8_t *dst_row,
++                           unsigned dst_stride,
++                           const uint8_t *src_row,
++                           unsigned src_stride,
++                           unsigned src_width,
++                           unsigned src_height);
++void
++_mesa_unpack_etc2_format(uint8_t *dst_row,
++                         unsigned dst_stride,
++                         const uint8_t *src_row,
++                         unsigned src_stride,
++                         unsigned src_width,
++                         unsigned src_height,
++                         enum pipe_format format,
++                         bool bgra);
++#endif
+diff --git a/src/util/Android.bp b/src/util/Android.bp
+--- a/src/util/Android.bp
++++ b/src/util/Android.bp
+@@ -302,6 +302,7 @@
+         "texcompress_astc.cpp",
+         "texcompress_astc_luts.cpp",
+         "texcompress_astc_luts_wrap.cpp",
++        "texcompress_etc.c",
+         "thread_sched.c",
+         "u_atomic.c",
+         "u_call_once.c",
