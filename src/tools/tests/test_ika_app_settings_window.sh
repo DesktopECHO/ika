@@ -272,6 +272,8 @@ expect_contains "$(<"${T}/yad.confirm.args")" "--name=${APP_SETTINGS_WINDOW_CLAS
 expect_contains "$(<"${T}/window.args")" $'\n--active-tab=1\n' "the window comes back on the Startup Options tab, opened on the other"
 expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=Display density, 0=Auto  :NUM\n0!0..999!8\n' "with the console's density"
 expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=  Fullscreen mode (F11, Cmd+F or Left-Alt+F exits):CHK\nTRUE\n' "and a game's default start options"
+expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=  Send the keyboard straight to Android (many games need this):CHK\nTRUE\n' \
+  "the keyboard straight to Android among them"
 expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=  Mouse as touch: clicks tap, drags swipe:CHK\nFALSE\n' \
   "the edited ones reset"
 expect_contains "$(<"${T}/window.tab2.args")" $'\n--field=\xe2\x80\x87\xe2\x80\x87A'$'\xc2\xa0'$':\xc2\xa0\n'"${KEYBOARD_GAMEPAD_KEYS[a]}"$'\n' \

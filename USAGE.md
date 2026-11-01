@@ -122,8 +122,9 @@ apps "∙ LABEL", with icons Android draws, as its launcher shows them.
   the entries and the group, and keeps them off until `ika app sync` runs
   again. `ika reset` removes them too; the next `ika start` puts them back.
 - **Games** are the apps that declare themselves games, and the ones listed in
-  `game_apps` in `ika.ini`. A game starts with **Fullscreen mode** ticked in
-  its start options the first time it is added to the menu.
+  `game_apps` in `ika.ini`. A game starts with **Fullscreen mode** and
+  **Send the keyboard straight to Android** ticked in its start options the
+  first time it is added to the menu.
 - **Hidden apps:** Android Switch, the Google search app, Calculator,
   Calendar, Clock, Contacts, Recorder and AudioFX stay out of the menu and of
   `ika app` (`hidden_apps` in `ika.ini`). They still open by package name.
@@ -344,7 +345,8 @@ shoulder and trigger, Start), then Guide and the mouse's settings.
 - **Apply and start** saves them and starts the game.
 - **Reset to default** asks first (**Apply defaults to APP**, **Ok** or
   **Cancel**), then resets the app's start options, a game's to **Fullscreen
-  mode** at the console's density, and deletes the game's mapping, so the
+  mode** and **Send the keyboard straight to Android** at the console's
+  density, and deletes the game's mapping, so the
   game uses `[keyboard_gamepad]` again; the window comes back on the
   **Startup Options** tab with both.
 - **Cancel** leaves everything as it was.

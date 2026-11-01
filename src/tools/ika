@@ -552,8 +552,9 @@ menu_poll_sec = 5
 # names separated by spaces. They can still be opened by their package name.
 hidden_apps = com.google.android.apps.restore com.google.android.googlequicksearchbox com.android.calculator2 org.lineageos.etar com.android.deskclock com.android.contacts org.lineageos.recorder org.lineageos.audiofx
 # Apps treated as games, even though they do not declare themselves as games:
-# their menu entries are marked as games, and they start with fullscreen
-# ticked in their start options. Package names separated by spaces.
+# their menu entries are marked as games, and they start with fullscreen and
+# the keyboard sent straight to Android ticked in their start options.
+# Package names separated by spaces.
 game_apps =
 # Opening a game sends the other open games to the background: their windows
 # close, and each game stays on a display of its own, turned off, so that
@@ -2274,7 +2275,8 @@ App windows:
   Games (apps declaring android:appCategory="game", or listed in game_apps
   under [apps] in ika.ini) open in their own windows too. Their menu
   entries are marked as games, and a game added to the menu starts
-  fullscreen (see the start options below).
+  fullscreen, with the keyboard sent straight to Android (see the start
+  options below).
 
   Opening a game sends the other games with open windows to the background:
   their windows close, and each stays on its own display, turned off, so that
@@ -2321,7 +2323,8 @@ App windows:
   them to the options it is given, from the menu or a terminal ('--dpi' goes
   over the saved density). Without them, an app or game gets the console's
   density, the desktop's keyboard and mouse, and no gamepad. A game starts
-  with "Fullscreen mode" ticked the first time it is added to the menu.
+  with "Fullscreen mode" and "Send the keyboard straight to Android" ticked
+  the first time it is added to the menu.
 
   The window has those as its "Startup Options" tab, for games and other
   apps alike, and a "Gamepad Emulation" tab with the keyboard gamepad's keys
@@ -6903,8 +6906,8 @@ save_app_options_with_dpi() {
 # them ('ika app --options NAME' from a terminal), and they apply whenever the
 # app starts, from the menu or 'ika app': fullscreen, keyboard, mouse, gamepad,
 # gamekb and touch, separated by spaces. A game added to the menu starts with
-# fullscreen. dpi, 96 to 999, gives the app's window a display density of its
-# own; without it, the window has the console's.
+# fullscreen and keyboard. dpi, 96 to 999, gives the app's window a display
+# density of its own; without it, the window has the console's.
 EOF
     fi
     printf '\n[%s]\noptions =%s\n' "${package}" "${*:+ $*}"
@@ -7328,11 +7331,12 @@ EOF
   mv -f "${file}.tmp" "${file}"
 }
 
-# Prints the start options PACKAGE has by default: fullscreen for a game, as
-# a game added to the menu gets, none for another app.
+# Prints the start options PACKAGE has by default, on one line: fullscreen
+# and the keyboard straight to Android for a game, as a game added to the
+# menu gets, none for another app.
 default_app_options() {
   if is_game_app "$1"; then
-    printf 'fullscreen\n'
+    printf 'fullscreen keyboard\n'
   fi
 }
 
@@ -10010,12 +10014,14 @@ sync_app_menu() {
   updated="$(refresh_changed_launchers "${apps_dir}" "${list}")"
   while IFS=$'\t' read -r label package; do
     is_app_package_name "${package}" || continue
-    # A game added to the menu starts with Fullscreen ticked in its start
-    # options, unless they were set before.
+    # A game added to the menu starts with its default start options
+    # ticked, fullscreen and the keyboard straight to Android, unless they
+    # were set before.
     if [[ ! -f "${apps_dir}/$(app_window_id "${package}").desktop" ]] && is_game_app "${package}" \
         && ! app_options_saved "${package}"; then
-      save_app_options "${package}" fullscreen
-      log "${label}: a new game, starting fullscreen"
+      # shellcheck disable=SC2046 # one word per option
+      save_app_options "${package}" $(default_app_options "${package}")
+      log "${label}: a new game, starting fullscreen with the keyboard straight to Android"
     fi
     if write_app_launcher "${apps_dir}" "${label}" "${package}" \
         "$(app_menu_icon "${package}")"; then

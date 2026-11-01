@@ -525,8 +525,9 @@ updated="$(refresh_changed_launchers "${apps_dir}" $'Some Game\tcom.example.game
 expect_equal "${updated}:$(<"${T}/refresh")" "0:" "a current launcher stays"
 echo "ok: GNOME Shell gets launchers whose actions changed as new apps"
 
-# A game added to the menu starts with Fullscreen mode ticked, unless its options
-# were set before; other apps and games already in the menu are left alone.
+# A game added to the menu starts with Fullscreen mode and the keyboard straight
+# to Android ticked, unless its options were set before; other apps and games
+# already in the menu are left alone.
 require_executable() { :; }
 has_live_cvd_processes() { return 0; }
 adb_boot_completed() { return 0; }
@@ -538,7 +539,7 @@ printf 'com.example.game\ncom.example.newgame\ncom.example.setgame\n' > "${APP_G
 save_app_options com.example.setgame
 GUEST_APPS=$'Some Game\tcom.example.game\nNew Game\tcom.example.newgame\nSet Game\tcom.example.setgame\nNew App\tcom.example.newapp\n'
 sync_app_menu >/dev/null 2>&1
-expect_equal "$(saved_app_options com.example.newgame)" "fullscreen" "a new game starts fullscreen"
+expect_equal "$(saved_app_options com.example.newgame)" "fullscreen keyboard" "a new game starts fullscreen, the keyboard straight to Android"
 expect_equal "$(saved_app_options com.example.setgame)" "" "a new game whose options were set keeps them"
 if app_options_saved com.example.newapp; then
   fail "a new app that is not a game got options"
@@ -550,7 +551,7 @@ save_app_options com.example.newgame
 rm -f "$(app_menu_data_dir)/applications/ika-com.example.newgame.desktop"
 sync_app_menu >/dev/null 2>&1
 expect_equal "$(saved_app_options com.example.newgame)" "" "a game unticked before comes back without the default"
-echo "ok: a game added to the menu starts with Fullscreen mode ticked"
+echo "ok: a game added to the menu starts with Fullscreen mode and the keyboard straight to Android ticked"
 
 # On WSLg, app IDs and launcher names have dashes for dots, as WSLg finds no
 # icon for an app ID with dots, and a sync replaces the launchers with dots;
