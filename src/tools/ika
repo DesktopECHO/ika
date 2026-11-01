@@ -2135,6 +2135,7 @@ Usage:
   ${SCRIPT_NAME} restart [-f|--fullscreen|--no-console] [--lowcpu|--no-lowcpu] [--camera[=videoN]|--no-camera] [--gfxstream_vulkan=auto|on|off] [--ika_scrcpy=ARGS] ...
   ${SCRIPT_NAME} reset [--data_gb=GB]
   ${SCRIPT_NAME} root
+  ${SCRIPT_NAME} shell [COMMAND...]
   ${SCRIPT_NAME} gsf
   ${SCRIPT_NAME} backup [FILE]
   ${SCRIPT_NAME} restore [FILE]
@@ -2357,6 +2358,12 @@ Root:
   release and enables developer options. Rooting a VM the first time unlocks
   and wipes it, after asking to confirm; later runs update Magisk and keep the
   data. 'reset' undoes it.
+
+Android shell:
+
+  '${SCRIPT_NAME} shell' opens a shell in Android (adb shell); '${SCRIPT_NAME} shell
+  COMMAND' runs COMMAND there. If the VM is not running, it is started
+  without the console first. On WSL, Windows Terminal's Ika profile opens it.
 
 GSF ID:
 
@@ -4611,6 +4618,19 @@ resolve_adb_bin() {
   else
     command -v adb || true
   fi
+}
+
+# 'ika shell': adb shell in Android, starting the VM without the console first
+# when it is not running; COMMAND, when given, runs there instead
+open_android_shell() {
+  local adb_bin
+  local adb_serial
+
+  adb_bin="$(resolve_adb_bin)"
+  [[ -n "${adb_bin}" ]] || die "adb not found"
+  ensure_guest_ready
+  adb_serial="$(resolve_adb_serial)"
+  exec "${adb_bin}" -s "${adb_serial}" shell "$@"
 }
 
 is_user_build() {
@@ -11911,6 +11931,10 @@ main() {
     app)
       shift
       run_app_command "$@"
+      ;;
+    shell)
+      shift
+      open_android_shell "$@"
       ;;
     gsf)
       run_gsf_id_command

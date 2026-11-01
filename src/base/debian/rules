@@ -271,6 +271,9 @@ override_dh_install:
 	# WSLg looks for icons up to 128x128 only.
 	install -Dm 0644 ../tools/ika-scrcpy-128.png \
 	    debian/ika-base/usr/share/icons/hicolor/128x128/apps/ika-scrcpy.png
+	# For ika-wsl.ps1, which gives the distribution's Windows Terminal profile
+	# Ika's icon from it.
+	install -Dm 0644 ../scrcpy/app/data/icon.ico ${cuttlefish_common}/share/icons/ika.ico
 
 # Some bundled shared libraries lack standard Debian shlib metadata.
 # The libdecor GTK plugin for WSLg uses libdecor's plugin interface, whose

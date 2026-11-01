@@ -230,19 +230,64 @@ function Get-DebianImage([string]$Directory) {
 }
 
 # Gives the distribution's Terminal profile Ika's icon: WSL copied the image's
-# to shortcut.ico beside its disk, where the profile points
+# to shortcut.ico beside its disk, where the profile points. The icon comes
+# from ika-base, once installed, else from a checkout or from GitHub.
 function Set-DistributionIcon {
     $key = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss' |
         Where-Object { (Get-ItemProperty $_.PSPath).DistributionName -eq $Name } | Select-Object -First 1
     if (-not $key) { return }
     $target = Join-Path (Get-ItemProperty $key.PSPath).BasePath 'shortcut.ico'
+    $sources = @("\\wsl.localhost\$Name\usr\lib\cuttlefish-common\share\icons\ika.ico")
     # A checkout's own copy; none when run as a one-liner (irm ... | iex)
-    $local = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'src\scrcpy\app\data\icon.ico' }
-    if ($local -and (Test-Path -LiteralPath $local)) {
+    if ($PSScriptRoot) { $sources += Join-Path $PSScriptRoot 'src\scrcpy\app\data\icon.ico' }
+    $local = $sources | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if ($local) {
         Copy-Item -LiteralPath $local -Destination $target -Force
     } else {
         Invoke-WebRequest -UseBasicParsing -OutFile $target `
             -Uri 'https://raw.githubusercontent.com/DesktopECHO/ika/main/src/scrcpy/app/data/icon.ico'
+    }
+}
+
+# Makes the distribution's Terminal profile open Android's shell (ika shell),
+# not the distribution's, named for it: "Android (Ika)". WSL writes the profile
+# as a fragment of its own, which another fragment cannot change: the command
+# line and the name go in Terminal's settings, in the entry of the profile's
+# GUID, as a user's own would (the file
+# kept as settings.json.ika-backup). A settings file with comments, which this
+# would drop, is left as it is.
+function Set-TerminalProfile {
+    $fragments = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\Fragments'
+    $wslProfile = Get-ChildItem (Join-Path $fragments 'Microsoft.WSL') -Filter *.json -ErrorAction SilentlyContinue |
+        ForEach-Object { (Get-Content -Raw -LiteralPath $_.FullName | ConvertFrom-Json).profiles } |
+        Where-Object { $_.name -eq $Name -and $_.guid -and $_.commandline } | Select-Object -First 1
+    if (-not $wslProfile) { return }
+    $commandline = "$($wslProfile.commandline) -- ika shell"
+    $profileName = "Android ($Name)"
+    $files = @(
+        'Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json',
+        'Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json',
+        'Microsoft\Windows Terminal\settings.json'
+    ) | ForEach-Object { Join-Path $env:LOCALAPPDATA $_ } | Where-Object { Test-Path -LiteralPath $_ }
+    foreach ($file in $files) {
+        $text = Get-Content -Raw -LiteralPath $file
+        if ($text -match '(?m)^\s*//') {
+            Write-Warning "Not changing $file, which has comments: set the Ika profile's command line to $commandline"
+            continue
+        }
+        $settings = $text | ConvertFrom-Json
+        if (-not $settings.profiles -or $settings.profiles -is [array]) { continue }
+        $list = @($settings.profiles.list)
+        $entry = $list | Where-Object { $_.guid -eq $wslProfile.guid } | Select-Object -First 1
+        if ($entry -and $entry.commandline -eq $commandline -and $entry.name -eq $profileName) { continue }
+        if (-not $entry) {
+            $entry = [pscustomobject]@{ guid = $wslProfile.guid }
+            $settings.profiles | Add-Member -NotePropertyName list -NotePropertyValue (@($entry) + $list) -Force
+        }
+        $entry | Add-Member -NotePropertyName commandline -NotePropertyValue $commandline -Force
+        $entry | Add-Member -NotePropertyName name -NotePropertyValue $profileName -Force
+        Copy-Item -LiteralPath $file -Destination "$file.ika-backup" -Force
+        [IO.File]::WriteAllText($file, ($settings | ConvertTo-Json -Depth 32))
     }
 }
 
@@ -361,9 +406,9 @@ try {
     Remove-Item -LiteralPath $download -Recurse -Force -ErrorAction SilentlyContinue
 }
 try {
-    Set-DistributionIcon
+    Set-TerminalProfile
 } catch {
-    Write-Warning "Could not give $Name Ika's icon: $_"
+    Write-Warning "Could not make $Name's Terminal profile open Android's shell: $_"
 }
 try {
     Remove-DistributionShortcut
@@ -378,6 +423,12 @@ Invoke-Wsl --terminate $Name
 # The dots of the install step follow on the same line
 Write-Step 'Installing Debian packages, this will take a few minutes...' -NoNewline
 Invoke-Provision install root -Dots | Out-Null
+# After the install: the icon comes from ika-base
+try {
+    Set-DistributionIcon
+} catch {
+    Write-Warning "Could not give $Name Ika's icon: $_"
+}
 
 $restartWsl = $false
 & wsl.exe -d $Name -u root --exec test -e /dev/kvm
