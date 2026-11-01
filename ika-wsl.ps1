@@ -5,8 +5,12 @@ readied for Ika, with the Ika packages in your Windows home folder installed,
 then starts Android.
 
 .DESCRIPTION
-Installs Debian's WSL image, the latest from salsa.debian.org, under the name
-Ika, with Ika's icon for its Start menu entry and Terminal profile, and in it:
+Sets up what WSL2 needs of Windows and is missing (the WSL package, the
+Virtual Machine Platform, Windows' hypervisor) behind one permission prompt,
+asking for a restart when one is needed, a single one; WSL 1 stays off.
+Then installs Debian's WSL image, the latest from salsa.debian.org, under the
+name Ika, with Ika's icon for its Start menu entry and Terminal profile, and
+in it:
   1. creates a user (named after the Windows user) with passwordless sudo,
      the default user of the distribution, with systemd on;
   2. installs Mesa from trixie-backports (Ika needs 26.1 or newer) and the
@@ -16,7 +20,9 @@ Ika, with Ika's icon for its Start menu entry and Terminal profile, and in it:
      virtualization, cgroup v2, the groups, the Start menu, the clock;
   4. restarts the distribution, or all of WSL when ika-wsl-setup changed
      .wslconfig (asked first, as that stops every running distribution);
-  5. starts Ika, whose console opens in a window.
+  5. starts Ika, whose console opens in a window. Run outside the desktop
+     (Windows' session 0, over SSH for one), it stops WSL instead, unless
+     WSLg already runs on a desktop, and leaves Ika to start there.
 
 Run it from PowerShell, in one line:
   irm https://raw.githubusercontent.com/DesktopECHO/ika/main/ika-wsl.ps1 | iex
@@ -229,6 +235,32 @@ function Get-DebianImage([string]$Directory) {
     return $path
 }
 
+# The version of the WSL package, or $null without it: Windows' own wsl.exe,
+# which stands in for it until it is installed, knows no --version
+function Get-WslVersion {
+    if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { return $null }
+    $text = (& wsl.exe --version 2>$null) -join "`n"
+    if ($text -notmatch 'WSL[^:\n]*:\s*(\d+)\.(\d+)\.(\d+)') { return $null }
+    return [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])"
+}
+
+# Downloads the newest WSL package (.msi) for this machine from WSL's
+# releases on GitHub; returns its path. The Microsoft Store's is the same
+# package; the .msi installs without the Store, and without WSL 1.
+function Get-WslPackage([string]$Directory) {
+    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+    $json = & curl.exe -fsSL 'https://api.github.com/repos/microsoft/WSL/releases/latest'
+    if ($LASTEXITCODE -ne 0) { throw "Could not read WSL's releases (curl exit code $LASTEXITCODE)" }
+    $release = ($json -join "`n") | ConvertFrom-Json
+    $asset = $release.assets | Where-Object { $_.name -like "wsl.*.$arch.msi" } | Select-Object -First 1
+    if (-not $asset) { throw "WSL's release $($release.tag_name) has no package for $arch" }
+    $path = Join-Path $Directory $asset.name
+    Write-Host "Downloading $($asset.name)"
+    & curl.exe -fL --retry 3 -o $path $asset.browser_download_url
+    if ($LASTEXITCODE -ne 0) { throw "Could not download $($asset.browser_download_url) (curl exit code $LASTEXITCODE)" }
+    return $path
+}
+
 # Gives the distribution's Terminal profile Ika's icon: WSL copied the image's
 # to shortcut.ico beside its disk, where the profile points. The icon comes
 # from ika-base, once installed, else from a checkout or from GitHub.
@@ -334,27 +366,98 @@ function Enable-NestedVirtualization {
     return $true
 }
 
-# --- Checks ---------------------------------------------------------------
+# --- Prerequisites --------------------------------------------------------
 
-# Windows' own wsl.exe, without WSL installed, knows no --version
-$versionText = ''
-if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
-    $versionText = (& wsl.exe --version 2>$null) -join "`n"
+# WSL2 needs three things of Windows: the WSL package, 2.4.4 or newer (it
+# installs a distribution under a name of its own); the Virtual Machine
+# Platform; and Windows' hypervisor, which runs once the firmware's
+# virtualization is on. Whatever is missing is set up at once, behind one
+# permission prompt, so that a single restart finishes it all. WSL 1's
+# optional component (Windows Subsystem for Linux) stays off: Ika runs on
+# WSL2 only, and Windows' own wsl.exe --install, which would turn it on, is
+# not used. Reading all this needs no elevation.
+$wslVersion = Get-WslVersion
+$needWsl = -not $wslVersion -or $wslVersion -lt [version]'2.4.4'
+# InstallState 1 is enabled
+$vmPlatform = Get-CimInstance Win32_OptionalFeature -Filter "Name='VirtualMachinePlatform'" -ErrorAction SilentlyContinue
+$needVmPlatform = -not $vmPlatform -or $vmPlatform.InstallState -ne 1
+$needHypervisor = -not (Get-CimInstance Win32_ComputerSystem).HypervisorPresent
+# The firmware's setting reads true only while no hypervisor runs
+$firmwareOff = $needHypervisor -and
+    -not (Get-CimInstance Win32_Processor | Select-Object -First 1).VirtualizationFirmwareEnabled
+
+if ($needWsl -or $needVmPlatform -or $needHypervisor) {
+    $prerequisites = Join-Path $env:TEMP "ika-wsl-$PID-prerequisites"
+    New-Item -ItemType Directory -Force -Path $prerequisites | Out-Null
+    try {
+        # One script, run elevated, does it all; its result file says what is
+        # left: a line "restart" when Windows must restart, or the error
+        $result = Join-Path $prerequisites 'result.txt'
+        $steps = @()
+        if ($needWsl) {
+            $msi = Get-WslPackage $prerequisites
+            $steps += "Install-Step msiexec.exe '/i ""$($msi -replace "'", "''")"" /qn /norestart' 'Installing WSL'"
+        }
+        if ($needVmPlatform) {
+            $steps += "Install-Step dism.exe '/online /enable-feature /featurename:VirtualMachinePlatform /all /norestart /quiet' 'Turning on the Virtual Machine Platform'"
+            $steps += "Add-Content -LiteralPath `$result 'restart'"
+        }
+        if ($needHypervisor) {
+            # Windows starts its hypervisor with the Virtual Machine Platform
+            # on, unless told not to
+            $steps += "Install-Step bcdedit.exe '/set hypervisorlaunchtype auto' 'Starting Windows'' hypervisor at boot'"
+            $steps += "Add-Content -LiteralPath `$result 'restart'"
+        }
+        $script = @"
+`$ErrorActionPreference = 'Stop'
+`$result = '$($result -replace "'", "''")'
+function Install-Step([string]`$File, [string]`$Arguments, [string]`$Text) {
+    Write-Host `$Text
+    `$process = Start-Process `$File -ArgumentList `$Arguments -Wait -PassThru -NoNewWindow
+    # 3010 and 1641: done, once Windows restarts
+    if (`$process.ExitCode -in 3010, 1641) {
+        Add-Content -LiteralPath `$result 'restart'
+    } elseif (`$process.ExitCode -ne 0) {
+        throw "`$Text failed: `$File `$Arguments (exit code `$(`$process.ExitCode))"
+    }
 }
-if ($versionText -notmatch 'WSL[^:\n]*:\s*(\d+)\.(\d+)\.(\d+)') {
-    Write-Step 'Installing WSL (Windows asks for permission)'
-    & wsl.exe --install --no-distribution
-    Write-Host 'Restart Windows to finish installing WSL, then run this again.'
-    return
+try {
+    $($steps -join "`n    ")
+} catch {
+    Add-Content -LiteralPath `$result "error: `$_"
+    exit 1
 }
-$wslVersion = [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])"
-if ($wslVersion -lt [version]'2.4.4') {
-    # 2.4.4 installs a distribution under a name of its own
-    Write-Step "Updating WSL $wslVersion"
-    Invoke-Wsl --update
-    if (((& wsl.exe --version 2>$null) -join "`n") -notmatch 'WSL[^:\n]*:\s*(\d+)\.(\d+)\.(\d+)' -or
-            [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])" -lt [version]'2.4.4') {
-        throw 'WSL is still older than 2.4.4 after "wsl --update"; update it from the Microsoft Store and run this again.'
+"@
+        Write-Step 'Setting up WSL2 (Windows asks for permission)'
+        if ($needWsl) { Write-Host '  the WSL package' }
+        if ($needVmPlatform) { Write-Host '  the Virtual Machine Platform' }
+        if ($needHypervisor) { Write-Host "  Windows' hypervisor" }
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+        $elevated = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList `
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded
+        $lines = @(Get-Content -LiteralPath $result -ErrorAction SilentlyContinue)
+        $failure = $lines | Where-Object { $_ -like 'error: *' } | Select-Object -First 1
+        if ($failure) { throw $failure.Substring(7) }
+        if ($elevated.ExitCode -ne 0) { throw "Setting up WSL2 failed (exit code $($elevated.ExitCode))" }
+        $restart = $lines -contains 'restart'
+    } finally {
+        Remove-Item -LiteralPath $prerequisites -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($needWsl) {
+        $wslVersion = Get-WslVersion
+        if (-not $wslVersion -or $wslVersion -lt [version]'2.4.4') {
+            throw 'WSL is not 2.4.4 or newer after installing it; install it from the Microsoft Store and run this again.'
+        }
+    }
+    if ($firmwareOff) {
+        Write-Step "Virtualization is off in the PC's firmware"
+        Write-Host 'Restart Windows into its UEFI/BIOS settings, turn on SVM Mode (AMD) or Intel'
+        Write-Host 'Virtualization Technology (VT-x), then run this again.'
+        return
+    }
+    if ($restart) {
+        Write-Step 'Restart Windows to finish setting up WSL2, then run this again.'
+        return
     }
 }
 
@@ -399,7 +502,8 @@ $download = Join-Path $env:TEMP "ika-wsl-$PID"
 New-Item -ItemType Directory -Force -Path $download | Out-Null
 try {
     $image = Get-DebianImage $download
-    $install = @('--install', '--from-file', $image, '--name', $Name, '--no-launch')
+    # --version 2: where WSL 1 is on, it may be the default
+    $install = @('--install', '--from-file', $image, '--name', $Name, '--version', '2', '--no-launch')
     if ($Location) { $install += @('--location', $Location) }
     Invoke-Wsl @install
 } finally {
@@ -460,6 +564,36 @@ if ($restartWsl) {
 } else {
     # The groups and services take effect at the distribution's next start
     Invoke-Wsl --terminate $Name
+}
+
+# Run in Windows' session 0, which has no desktop (over SSH, for one), this
+# booted WSL's VM there, and with it WSLg's client (msrdc.exe), which shows
+# Linux windows and adds their Start menu entries: neither would reach the
+# desktop, and Ika's console would not open. Unless WSLg already runs in a
+# desktop's session, WSL stops, so that Ika's start from the desktop boots it
+# there.
+if ((Get-Process -Id $PID).SessionId -eq 0) {
+    # Windows hides the path of WSLg's msrdc.exe at times: the name will do
+    $desktopWslg = Get-Process msrdc -ErrorAction SilentlyContinue |
+        Where-Object { $_.SessionId -ne 0 }
+    if (-not $desktopWslg) {
+        # A restart above stopped WSL already
+        if (-not $restartWsl) {
+            Write-Step "This ran outside the desktop (Windows' session 0, over SSH for one): WSL must stop, which stops every running distribution, for Ika's windows to open on the desktop"
+            $stopWsl = $true
+            if (-not $Force) {
+                $answer = Read-Host 'Stop WSL now? [Y/n]'
+                if ($answer -and $answer -notmatch '^[Yy]') { $stopWsl = $false }
+            }
+            if ($stopWsl) {
+                Invoke-Wsl --shutdown
+            } else {
+                Write-Host 'Run "wsl --shutdown" on the desktop before starting Ika.'
+            }
+        }
+        Write-Step "Install complete, start Ika on the desktop with: wsl -d $Name -- ika start"
+        return
+    }
 }
 
 if ($NoStart) {

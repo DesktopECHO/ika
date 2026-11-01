@@ -402,22 +402,32 @@ has no udmabuf, which Ika does without: it then starts with
 `ika start` ends with `process monitor has died` and `Cuttlefish did not
 reach boot completion`, because crosvm exits at once.
 
-`ika-wsl.ps1` does all of it on a Windows with WSL 2.4.4 or
-newer: it installs Debian 13 (trixie), the latest WSL image from
+`ika-wsl.ps1` does all of it: it sets up what WSL2 needs of Windows and
+is missing, then installs Debian 13 (trixie), the latest WSL image from
 [salsa.debian.org](https://salsa.debian.org/debian/WSL/-/releases), as a
 distribution named Ika, with Ika's icon in the Start menu and Windows
 Terminal, a user named after the Windows user, with passwordless sudo, and
 systemd; installs Mesa from trixie-backports and the `ika-base` and
 `ika-lineageos` packages of Ika's latest release; runs `ika-wsl-setup`;
 restarts WSL when its settings changed (it asks first, as that stops every
-distribution); and starts Ika. It is one line in PowerShell:
+distribution); and starts Ika. Run outside the desktop, in Windows' session
+0 (over SSH, for one), it would have booted WSL there, WSLg with it, and
+Ika's windows and Start menu entries would reach no desktop: unless WSLg
+already runs on a desktop, it stops WSL instead (asking first) and leaves
+Ika to start on the desktop. It is one line in PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/DesktopECHO/ika/main/ika-wsl.ps1 | iex
 ```
 
-Without WSL it installs WSL first and asks for a restart of Windows, after
-which the same line goes on; an older WSL it updates. Options go after the
+What WSL2 needs of Windows it sets up at once, behind one permission
+prompt: the WSL package (from WSL's GitHub releases, when WSL is missing or
+older than 2.4.4), the Virtual Machine Platform, and Windows' hypervisor at
+boot. When any of those needs a restart of Windows, it asks for one, a
+single one, after which the same line goes on. WSL 1 stays off, and the
+distribution is WSL2 even where WSL 1 is the default. When virtualization
+is off in the PC's firmware it says so: turn on SVM Mode (AMD) or Intel
+VT-x in the UEFI/BIOS settings during that restart. Options go after the
 script block:
 
 ```powershell
