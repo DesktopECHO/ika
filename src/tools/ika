@@ -4882,14 +4882,19 @@ windows_powershell() {
   printf '%s\n' "${powershell}"
 }
 
-# In a job left running in the background: closes the files it inherited, but
-# standard input, output and error and the descriptors given. Running on after
-# its caller, it must not keep the files the caller had open: a console
-# supervisor's lock, held on after it exits, made the next console find
-# another supervisor active and not open.
-close_inherited_files() {
+# Readies a job left running in the background, which outlives its caller. It
+# ignores the hangup that ends the processes of a command started from Windows
+# (from the Start menu or the task bar, by wslg.exe, or in a Windows terminal)
+# when the command ends: "ika stop" from there ended before PowerShell had
+# removed Android's storage from Explorer, and "ika start" before Android's
+# storage was mounted. And it closes the files it
+# inherited, but standard input, output and error and the descriptors given:
+# a console supervisor's lock, held on after it exits, made the next console
+# find another supervisor active and not open.
+detach_background_job() {
   local fd
 
+  trap '' HUP
   for fd in /proc/"${BASHPID}"/fd/*; do
     fd="${fd##*/}"
     if (( fd > 2 )) && [[ " $* " != *" ${fd} "* ]]; then
@@ -4915,7 +4920,7 @@ repair_wslg_taskbar_pins() {
   powershell="$(windows_powershell)" || return 0
   mkdir -p "${CVD_TMP_DIR}"
   (
-    close_inherited_files 9
+    detach_background_job 9
     flock -n 9 || exit 0
     with_timeout 60 "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass \
       -EncodedCommand "$(wslg_pin_repair_script | iconv -t UTF-16LE | base64 -w 0)" \
@@ -5023,7 +5028,7 @@ set_wslg_jump_list() {
   data="$(printf '%s\n%s\n%s\n' "${WSL_DISTRO_NAME}" "${exec}" "$(desktop_entry_actions "${file}")" \
     | base64 -w 0)"
   (
-    close_inherited_files
+    detach_background_job
     with_timeout 60 "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass \
       -EncodedCommand "$( { printf "\$data = '%s'\n" "${data}"; wslg_jump_list_script; } \
         | iconv -t UTF-16LE | base64 -w 0)" \
@@ -6024,6 +6029,7 @@ schedule_scrcpy_when_launcher_ready() {
   local fullscreen_mode="${2:-false}"
 
   (
+    detach_background_job
     while has_live_cvd_processes; do
       if adb_first_frame_shown "${adb_serial}"; then
         break
@@ -10287,6 +10293,7 @@ edit_windows_android_storage_shortcut() {
   target="$(wslpath -w "${dir}" 2>/dev/null)" || return 0
   mkdir -p "${CVD_TMP_DIR}"
   (
+    detach_background_job 9
     flock -w 30 9 || exit 0
     with_timeout 60 "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass \
       -EncodedCommand "$(windows_storage_shortcut_script "${action}" "${target}" \
@@ -11144,6 +11151,7 @@ start_cvd() {
   log "Ika console ready"
   # Alongside the console, which they would otherwise hold up.
   {
+    detach_background_job
     disable_guest_bluetooth "${adb_serial}" "$@"
     seed_guest_theme "${adb_serial}"
     apply_lowcpu_mode_guest_settings "${adb_serial}"
@@ -11155,7 +11163,10 @@ start_cvd() {
     ensure_chromium "${adb_serial}"
   fi
   # In the background, as it waits for Android to mount /sdcard.
-  mount_android_storage "${adb_serial}" 3>&- &
+  (
+    detach_background_job
+    mount_android_storage "${adb_serial}"
+  ) &
   start_app_menu_watcher
   close_progress_notifications
 }
