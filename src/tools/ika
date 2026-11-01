@@ -5136,6 +5136,7 @@ while ((Get-Date) -lt $deadline) {
   }
   Start-Sleep -Milliseconds 500
 }
+"no task bar jump list: no window of '$exec' in 30 seconds"
 EOF
 }
 
