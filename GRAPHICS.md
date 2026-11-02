@@ -249,8 +249,10 @@ libraries in `/usr/lib/wsl/lib`. Mesa's Dozen driver offers it as Vulkan, and
 gfxstream renders on that. `ika-base`, in its Debian, RPM and Arch packages,
 carries its own Dozen on x86_64: Mesa 26.3.0-rc2 with the patches in [src/tools/wsl/mesa](src/tools/wsl/mesa), built by
 `build-dozen.sh` with only X11 for a window system, and installed under
-`/usr/lib/cuttlefish-common/wsl/dozen`. It offers Vulkan 1.3. Venus cannot run
-on it: Dozen cannot export its memory as dma-bufs.
+`/usr/lib/cuttlefish-common/wsl/dozen`. It offers Vulkan 1.3 where the GPU's
+D3D12 driver has shader model 6.6 and wave operations, and 1.2 on older GPUs
+such as Kaby Lake's Iris Plus 650. Venus cannot run on it: Dozen cannot export
+its memory as dma-bufs.
 
 ### What the host needs
 

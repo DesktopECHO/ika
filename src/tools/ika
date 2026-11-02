@@ -3048,11 +3048,13 @@ append_arm64_kernel_page_args() {
 }
 
 # WSL2 reaches the host GPU only through Direct3D 12 (/dev/dxg), which Mesa's
-# Dozen driver offers as Vulkan 1.2. gfxstream runs on it with four settings
-# (GRAPHICS.md, "WSL2"): VK_DRIVER_FILES loads Ika's own Dozen build, with
-# Ika's Lavapipe for the instance extensions gfxstream needs and Dozen does
-# not list; MESA_VK_DEVICE_SELECT hides every device but the Dozen GPU, which
-# gfxstream would otherwise rank below Lavapipe; IKA_DZN_FIX turns on the
+# Dozen driver offers as Vulkan: 1.3 in Ika's build on a GPU with shader model
+# 6.6 and wave operations, 1.2 on others, such as Kaby Lake's Iris Plus 650.
+# gfxstream runs on it with four settings (GRAPHICS.md, "WSL2"):
+# VK_DRIVER_FILES loads Ika's own Dozen build, with Ika's Lavapipe for the
+# instance extensions gfxstream needs and Dozen does not list;
+# MESA_VK_DEVICE_SELECT hides every device but the Dozen GPU, which gfxstream
+# would otherwise rank below Lavapipe; IKA_DZN_FIX turns on the
 # VK_LAYER_IKA_dzn_fix layer, which works around Dozen's gaps; and the
 # libd3d12.so shim first in LD_LIBRARY_PATH makes every Vulkan instance share
 # one D3D12 device, as WSL allows only a few per process and does not give
@@ -3109,9 +3111,13 @@ VULKANINFO_SUMMARY=""
 # Empty until load_vulkaninfo_summary has run; then "ok" or "none".
 VULKANINFO_SUMMARY_STATE=""
 
-# What the summary depends on, as one line: the host boot and the drivers
+# What the summary depends on, as one line: the host boot, the drivers
 # Vulkan loads, the ICD files the environment names or those in the loader's
-# directories, by their modification times.
+# directories, by their modification times, and the environment that picks
+# among the devices or changes what they report: Mesa's device selection, and
+# the Dozen layer and D3D12 shim. setup_wsl_gpu_env probes before it sets
+# those, and a summary from then lists Lavapipe beside Dozen, ranked above a
+# Dozen GPU of Vulkan 1.2 where gfxstream would not see it.
 vulkaninfo_cache_key() {
   local boot_id
   local -a paths=()
@@ -3122,8 +3128,10 @@ vulkaninfo_cache_key() {
   paths+=(/usr/share/vulkan/icd.d /usr/local/share/vulkan/icd.d /etc/vulkan/icd.d
           "${XDG_DATA_HOME:-${HOME}/.local/share}/vulkan/icd.d")
   stamps="$(stat -c '%n=%Y' "${paths[@]}" 2>/dev/null | tr '\n' ' ' || true)"
-  printf '%s %s %s\n' "${boot_id}" \
-    "${VK_DRIVER_FILES:-}|${VK_ICD_FILENAMES:-}|${VK_ADD_DRIVER_FILES:-}" "${stamps% }"
+  printf '%s %s %s %s\n' "${boot_id}" \
+    "${VK_DRIVER_FILES:-}|${VK_ICD_FILENAMES:-}|${VK_ADD_DRIVER_FILES:-}" \
+    "${MESA_VK_DEVICE_SELECT:-}|${MESA_VK_DEVICE_SELECT_FORCE_DEFAULT_DEVICE:-}|${DRI_PRIME:-}|${IKA_DZN_FIX:-}|${LD_LIBRARY_PATH:-}" \
+    "${stamps% }"
 }
 
 # Prints vulkaninfo's summary, kept for the host boot in a cache file (a key
