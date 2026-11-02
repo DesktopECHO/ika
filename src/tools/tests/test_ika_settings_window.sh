@@ -251,7 +251,7 @@ expect_contains "${tab1}" $'\n--field=Desktop display density, 0=Auto  :NUM\n160
 expect_contains "${tab1}" $'\n--field=TV display density, 0=Auto  :NUM\n0!0..999!8\n' "auto as 0"
 expect_contains "${tab1}" $'\n--border='"${APP_OPTIONS_TAB_BORDER_PX}"$'\n--field=CPUs, 0=Auto  :NUM\n3!0..' "the vCPUs first"
 expect_contains "${tab1}" $'!1\n--field=RAM, MB, 0=Auto  :NUM\n0!0..' "then the memory"
-expect_contains "${tab1}" $'\n--field=GPU mode  :CB\n^auto!gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES only!venus!guest_swiftshader!guest_lavapipe\n' \
+expect_contains "${tab1}" $'\n--field=GPU mode  :CB\n^Auto!gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES!venus!guest_swiftshader!guest_lavapipe\n' \
   "the GPU modes, auto first"
 expect_contains "${tab1}" $'\n--field=Hardware video decoding  :CB\n^Auto!Off\n' "video decoding"
 expect_contains "${tab1}" $'\n--field=Low-CPU mode  :CB\n^Auto!On!Off\n' "low-CPU mode"
@@ -285,7 +285,7 @@ expect_contains "$(<"${T}/respond")" "they apply the next time Ika starts" "and 
 [[ ! -s "${T}/setsid" ]] || fail "Apply settings restarted Ika"
 echo "ok: Apply settings writes the changes in place"
 
-# "gfxstream, OpenGL ES only" is gfxstream with gfxstream_vulkan = off;
+# "gfxstream, OpenGL ES" is gfxstream with gfxstream_vulkan = off;
 # gfxstream chosen from it writes gfxstream_vulkan = auto; a gfxstream_vulkan
 # of ika.ini's stays as it is while the GPU mode is not changed
 tab1_with() {
@@ -293,14 +293,14 @@ tab1_with() {
 }
 reset_calls
 cp "${ini}" "${T}/before.ini"
-DIALOG_TAB1="$(tab1_with "gfxstream, OpenGL ES only")" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" \
+DIALOG_TAB1="$(tab1_with "gfxstream, OpenGL ES")" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" \
   edit_ika_settings
 expect_equal "$( { diff "${T}/before.ini" "${ini}" || true; } | grep '^>')" "> gfxstream_vulkan = off" "OpenGL ES only"
-expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=GPU mode  :CB\nauto!gfxstream_guest_angle!^gfxstream!' "shown as gfxstream before"
+expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=GPU mode  :CB\nAuto!gfxstream_guest_angle!^gfxstream!' "shown as gfxstream before"
 reset_calls
-DIALOG_TAB1="$(tab1_with "gfxstream, OpenGL ES only")" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" \
+DIALOG_TAB1="$(tab1_with "gfxstream, OpenGL ES")" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" \
   edit_ika_settings
-expect_contains "$(<"${T}/window.tab1.args")" $'!^gfxstream, OpenGL ES only!' "and as OpenGL ES only after"
+expect_contains "$(<"${T}/window.tab1.args")" $'!^gfxstream, OpenGL ES!' "and as OpenGL ES only after"
 reset_calls
 cp "${ini}" "${T}/before.ini"
 DIALOG_TAB1="$(tab1_with gfxstream)" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" edit_ika_settings
@@ -312,14 +312,14 @@ DIALOG_TAB1="$(tab1_with gfxstream)" DIALOG_TAB2="$(mapping_output ini_keys a=J 
 cmp -s "${T}/before.ini" "${ini}" || fail "gfxstream_vulkan = on was changed by an untouched GPU mode"
 echo "ok: gfxstream, OpenGL ES only"
 
-# auto is gpu_mode = auto, and with gfxstream_vulkan = auto, whatever the
+# Auto is gpu_mode = auto, and with gfxstream_vulkan = auto, whatever the
 # choice before it; the gfxstream_guest_angle of an ika.ini from before auto is
 # shown selected, and stays while the GPU mode is not changed
 ika_ini_set gpu gpu_mode gfxstream
 ika_ini_set gpu gfxstream_vulkan off
 reset_calls
 cp "${ini}" "${T}/before.ini"
-DIALOG_TAB1="$(tab1_with auto)" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" edit_ika_settings
+DIALOG_TAB1="$(tab1_with Auto)" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" edit_ika_settings
 expect_equal "$( { diff "${T}/before.ini" "${ini}" || true; } | grep '^>' | sort)" "> gfxstream_vulkan = auto
 > gpu_mode = auto" "auto from OpenGL ES only"
 ika_ini_set gpu gpu_mode gfxstream_guest_angle
@@ -327,7 +327,7 @@ reset_calls
 cp "${ini}" "${T}/before.ini"
 DIALOG_TAB1="$(tab1_with gfxstream_guest_angle)" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" edit_ika_settings
 expect_contains "$(<"${T}/window.tab1.args")" \
-  $'\n--field=GPU mode  :CB\nauto!^gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES only!venus!guest_swiftshader!guest_lavapipe\n' \
+  $'\n--field=GPU mode  :CB\nAuto!^gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES!venus!guest_swiftshader!guest_lavapipe\n' \
   "gfxstream_guest_angle shown selected"
 cmp -s "${T}/before.ini" "${ini}" || fail "an untouched gfxstream_guest_angle was changed"
 echo "ok: auto"
@@ -346,17 +346,17 @@ for mode in venus guest_lavapipe; do
 done
 ika_ini_set gpu gpu_mode auto
 reset_calls
-DIALOG_TAB1="$(tab1_with auto)" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" TEST_APPLE_SILICON=true \
+DIALOG_TAB1="$(tab1_with Auto)" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" TEST_APPLE_SILICON=true \
   edit_ika_settings
 expect_contains "$(<"${T}/window.tab1.args")" \
-  $'\n--field=GPU mode  :CB\n^auto!gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES only!venus!guest_swiftshader!guest_lavapipe\n' \
+  $'\n--field=GPU mode  :CB\n^Auto!gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES!venus!guest_swiftshader!guest_lavapipe\n' \
   "venus on Apple Silicon too"
 ika_ini_set gpu gpu_mode venus
 reset_calls
 DIALOG_TAB1="$(tab1_with venus)" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" TEST_APPLE_SILICON=true \
   edit_ika_settings
 expect_contains "$(<"${T}/window.tab1.args")" \
-  $'\n--field=GPU mode  :CB\nauto!gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES only!^venus!guest_swiftshader!guest_lavapipe\n' \
+  $'\n--field=GPU mode  :CB\nAuto!gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES!^venus!guest_swiftshader!guest_lavapipe\n' \
   "ika.ini's venus selected on Apple Silicon"
 ika_ini_set gpu gpu_mode gfxstream_guest_angle
 echo "ok: venus and guest_lavapipe"

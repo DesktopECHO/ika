@@ -2416,7 +2416,7 @@ Settings:
   (yad), "Startup Options · Ika", for its most used settings, with two tabs.
   Startup Options has the vCPUs and the memory, the console's density on the
   desktop and in TV mode and its refresh rate (0 for auto), the GPU mode
-  (auto, the default, is gpu_mode = auto; "gfxstream, OpenGL ES only" is
+  (Auto, the default, is gpu_mode = auto; "gfxstream, OpenGL ES" is
   gfxstream with gfxstream_vulkan = off),
   hardware video decoding, low-CPU mode, "Start with the camera"
   (camera.device: ticked, the first usable camera, unless ika.ini names one)
@@ -8396,13 +8396,14 @@ declare -A IKA_OPTIONS_DEFAULTS=(
   [gpu.hw_video_decode]="auto" [lowcpu.mode]="auto" [camera.device]="off"
   [console.tv_keyboard_gamepad]="false"
 )
-# The GPU modes the window offers, as ika.ini spells them, two of which are
-# two settings: IKA_OPTIONS_GLES_ONLY is gfxstream with gfxstream_vulkan = off,
-# and gfxstream, or IKA_OPTIONS_AUTO (gpu_mode = auto), chosen from another is
-# that mode with gfxstream_vulkan = auto. ika.ini's own GPU mode, when
-# another, is offered too.
-IKA_OPTIONS_AUTO="auto"
-IKA_OPTIONS_GLES_ONLY="gfxstream, OpenGL ES only"
+# The GPU modes the window offers, as ika.ini spells them but for
+# IKA_OPTIONS_AUTO, Auto as the window's other choices have it (gpu_mode =
+# auto). Two of them are two settings: IKA_OPTIONS_GLES_ONLY is gfxstream with
+# gfxstream_vulkan = off, and gfxstream, or Auto, chosen from another is that
+# mode with gfxstream_vulkan = auto. ika.ini's own GPU mode, when another, is
+# offered too.
+IKA_OPTIONS_AUTO="Auto"
+IKA_OPTIONS_GLES_ONLY="gfxstream, OpenGL ES"
 IKA_OPTIONS_GPU_CHOICES=("${IKA_OPTIONS_AUTO}" gfxstream_guest_angle gfxstream
   "${IKA_OPTIONS_GLES_ONLY}" venus guest_swiftshader guest_lavapipe)
 # In the Startup Options window of its own (yad, without ika's window) the
