@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-cd tools/baseimage
+cd src/tools/baseimage
 gcloud auth application-default login
 ```
 
@@ -34,7 +34,7 @@ go run ./cmd/create_gce_base_image \
 
 ## Step 3: Create an Image with Ika RPM Packages
 
-Run these `go run ./cmd/...` commands from the `tools/baseimage` directory.
+Run these `go run ./cmd/...` commands from the `src/tools/baseimage` directory.
 
 ```bash
 go run ./cmd/gce_install_cuttlefish_packages \

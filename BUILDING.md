@@ -36,7 +36,7 @@ unzip ika-main.zip && rm ika-main.zip && cd ika-main
 ./ika-build
 
 # 3. Install: run the command ika-build prints at the end, for example
-sudo apt install ./deb/ika-base_261023-1_amd64.deb ./deb/ika-lineageos_261023-1_amd64.deb
+sudo apt install ./src/deb/ika-base_261023-1_amd64.deb ./src/deb/ika-lineageos_261023-1_amd64.deb
 
 # 4. On a first install, reboot:
 sudo reboot
@@ -90,8 +90,8 @@ says how to fix them if one is missing. An update needs no reboot.
 | `--mtg` | MindTheGapps, with Google Play |
 
 Only the ROM of the host's own architecture is packaged as `ika-lineageos`. A
-ROM for the other architecture stays in `lineageos-arm64/` or
-`lineageos-x86_64/`.
+ROM for the other architecture stays in `src/lineageos-arm64/` or
+`src/lineageos-x86_64/`.
 
 ```bash
 ./ika-build --mtg            # this host's ROM, with Google Play
@@ -156,10 +156,10 @@ variable the ROM build reads. The ones used most:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `WORKSPACE` | `src/lineageos/src` | The LineageOS source checkout |
-| `IKA_WORK_ROOT` | `ika-work/` | Build state: Bazel's output, the compiler cache, temporary files |
+| `IKA_WORK_ROOT` | `src/ika-work/` | Build state: Bazel's output, the compiler cache, temporary files |
 | `JOBS` | CPU threads − 2 | Parallel build jobs |
 | `BUILD_VARIANT` | `userdebug` | `user`, `userdebug` or `eng` |
-| `CCACHE_ENABLED`, `CCACHE_MAX_SIZE` | on, `50G` | The compiler cache, in `ika-work/.ccache` |
+| `CCACHE_ENABLED`, `CCACHE_MAX_SIZE` | on, `50G` | The compiler cache, in `src/ika-work/.ccache` |
 | `NOFILE_LIMIT` | `4194304` | The open-file limit the build raises itself to; empty leaves it |
 | `SKIP_BUILD_DEPENDENCIES` | `false` | `true` skips installing the build dependencies |
 | `ANDROID_CERTS_DIR` | `~/.android-certs` | The signing keys |
@@ -168,11 +168,11 @@ variable the ROM build reads. The ones used most:
 
 | What | Where |
 | --- | --- |
-| ROMs | `lineageos-x86_64/`, `lineageos-arm64/` |
-| Fedora packages | `rpmbuild/RPMS/x86_64/` or `rpmbuild/RPMS/aarch64/` |
-| Debian and Ubuntu packages | `deb/` |
-| Arch Linux packages | `archbuild/packages/` |
-| Build times | `buildtimes.log`: a line per ROM build, with its download and build times |
+| ROMs | `src/lineageos-x86_64/`, `src/lineageos-arm64/` |
+| Fedora packages | `src/rpmbuild/RPMS/x86_64/` or `src/rpmbuild/RPMS/aarch64/` |
+| Debian and Ubuntu packages | `src/deb/` |
+| Arch Linux packages | `src/archbuild/packages/` |
+| Build times | `src/buildtimes.log`: a line per ROM build, with its download and build times |
 
 The packages other than `ika-base` and `ika-lineageos` go into an `extras/`
 folder next to them.
@@ -235,7 +235,7 @@ on each other:
 - **The build scripts** download the ARM64 host toolchains the patches
   expect: Go, CMake and the Clang tools from AOSP, Clang
   (`clang-r584948b`), Rust from `static.rust-lang.org`, and JDK 21 and 8 from
-  Adoptium, cached in `ika-work/arm64-prebuilts`. They set the variables the
+  Adoptium, cached in `src/ika-work/arm64-prebuilts`. They set the variables the
   patches read, and stop when a toolchain is missing or an x86 one stands in
   for an ARM64 one (`configure_arm64_host_build` in
   [build_exec.sh](src/lineageos/scripts/lib/build_exec.sh)).
@@ -254,7 +254,7 @@ toolchain is mapped to `aarch64-unknown-linux-gnu`. The Soong and Make
 patches must agree on this for Rust's proc-macros to load.
 
 On 16 KB-page hosts the build uses the system's `ninja`, so the `ninja`
-package must be installed. Temporary files go to `ika-work/tmp`, as Fedora
+package must be installed. Temporary files go to `src/ika-work/tmp`, as Fedora
 Asahi Remix's `/tmp` is small, and on Fedora the source and the work folder
 get the SELinux type `src_t`.
 

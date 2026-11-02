@@ -124,11 +124,14 @@ function built_package_name() {
   esac
 }
 
+# A package's path from the checkout, where ika-build is run: REPO_DIR is its
+# src/.
 function package_display_path() {
   local package_path="$1"
+  local checkout_dir="${REPO_DIR%/*}"
 
-  if [[ "${package_path}" == "${REPO_DIR}/"* ]]; then
-    printf '%s\n' "${package_path#"${REPO_DIR}/"}"
+  if [[ "${package_path}" == "${checkout_dir}/"* ]]; then
+    printf '%s\n' "${package_path#"${checkout_dir}/"}"
   else
     printf '%s\n' "${package_path}"
   fi

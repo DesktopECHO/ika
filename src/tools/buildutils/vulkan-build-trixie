@@ -34,7 +34,7 @@ Options:
   --repo-url <url>       Vulkan loader packaging git URL (default: ${DEFAULT_VULKAN_REPO_URL})
   --commit <sha>         Vulkan loader packaging commit (default: ${DEFAULT_VULKAN_COMMIT})
   --install              Install built libvulkan packages after building
-  --no-stage             Do not copy built packages to the repository root
+  --no-stage             Do not copy built packages to the checkout's src/
   -y, --yes              Non-interactive apt operations when sudo is available
   -h, --help             Show this help
 

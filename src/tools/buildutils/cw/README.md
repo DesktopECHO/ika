@@ -4,7 +4,7 @@ The build container is also compatible with [Podman](https://podman.io).
 
 ## Build the image
 
-The build image command must be run at the root of this repository checkout.
+The build image command must be run in the checkout's `src/` directory.
 
 Docker versions earlier than 23.0 require
 [BuildKit](https://docs.docker.com/build/buildkit/) to build this image.
@@ -18,9 +18,9 @@ docker build \
 
 ## Build the package
 
-The run container command must be run at the root of this repository checkout.
+The run container command must be run in the checkout's `src/` directory.
 
-Built RPMs are written under `rpmbuild/RPMS/`.
+Built RPMs are written under `src/rpmbuild/RPMS/`.
 The container entrypoint builds as the UID/GID that owns the mounted checkout,
 so generated files are not left owned by root on the host.
 

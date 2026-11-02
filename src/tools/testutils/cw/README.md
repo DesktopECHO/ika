@@ -16,7 +16,7 @@ sudo setfacl -m "u:$(whoami):rw" /dev/vhost-vsock
 
 ## Build the image
 
-Run the image-build command from the root of the Ika repository.
+Run the image-build command in the Ika checkout's `src/` directory.
 
 Image creation expects ika RPM packages: `ika-base-*.rpm`,
 `ika-metrics-*.rpm`, `ika-user-*.rpm`, and `ika-orchestration-*.rpm` in the
@@ -31,7 +31,7 @@ podman build \
 
 ## Run the container
 
-Run the container command from the root of the Ika repository.
+Run the container command in the Ika checkout's `src/` directory.
 
 ```bash
 mkdir -p /tmp/cw_bazel && \

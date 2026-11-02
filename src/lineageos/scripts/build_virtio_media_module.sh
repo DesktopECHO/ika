@@ -213,7 +213,7 @@ write_patch() {
   {
     echo "Patch summary: replaces virtio-media.ko with the driver of"
     echo "external-virtio-media-driver-queue-state.patch, rebuilt for the same GKI"
-    echo "by lineageos/scripts/build_virtio_media_module.sh."
+    echo "by src/lineageos/scripts/build_virtio_media_module.sh."
     echo
     GIT_INDEX_FILE="$index" git -C "$workspace/$project" diff --cached --binary --full-index HEAD
   } >"$patch_dir/$name"

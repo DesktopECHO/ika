@@ -18,6 +18,8 @@ set -euo pipefail
 # The source tree, src/ beside this script: the root the build scripts know as
 # the repository's. Their outputs (deb/, ika-work/, the ROM) land in it too.
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/src" && pwd)"
+# The checkout itself, where ika-build is run from and its messages start.
+checkout_dir="$(dirname "${repo_dir}")"
 cd "${repo_dir}"
 
 # Reuse the canonical distro detection used by the build scripts, and the
@@ -111,6 +113,8 @@ print_manual_install() {
   local -a installed_base=()
   local -a install_paths=()
   local install_command=""
+  # The command is given from the checkout, as ika-build is run.
+  cd "${checkout_dir}"
   install_package_paths install_paths
   mapfile -t installed_base < <(installed_target_packages ika-base)
 
@@ -121,7 +125,7 @@ print_manual_install() {
   cat <<EOF
 
 ============================================================================
-  INSTALLATION (Run this from ${repo_dir})
+  INSTALLATION (Run this from ${checkout_dir})
 ============================================================================
 
   ${cmd}
@@ -155,6 +159,8 @@ host_rpm_arch() {
   fi
 }
 
+# The built packages' paths from the checkout: collect_packages finds them
+# in src/.
 install_package_paths() {
   local -n paths_ref="$1"
   local pkg_path
@@ -162,8 +168,8 @@ install_package_paths() {
   paths_ref=()
   for pkg_path in "${pkg_files[@]}"; do
     case "${pkg_path}" in
-      /*|./*|../*) paths_ref+=("${pkg_path}") ;;
-      *)           paths_ref+=("./${pkg_path}") ;;
+      /*) paths_ref+=("${pkg_path}") ;;
+      *)  paths_ref+=("./src/${pkg_path#./}") ;;
     esac
   done
 }

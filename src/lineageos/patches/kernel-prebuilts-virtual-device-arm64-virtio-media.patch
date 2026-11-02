@@ -1,6 +1,6 @@
 Patch summary: replaces virtio-media.ko with the driver of
 external-virtio-media-driver-queue-state.patch, rebuilt for the same GKI
-by lineageos/scripts/build_virtio_media_module.sh.
+by src/lineageos/scripts/build_virtio_media_module.sh.
 
 diff --git a/16k/virtio-media.ko b/16k/virtio-media.ko
 index fd1dba40fa13fe49bd60c9f0934f6a71bcf8dea9..be55e7a21268162e99dff22f2058613d2cb3ebb7 100644

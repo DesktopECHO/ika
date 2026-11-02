@@ -7,7 +7,7 @@ through a local manifest.
 This document covers the first phase of the Ika build: producing the LineageOS
 Desktop ROM. The second phase creates host packages, including `ika-lineageos`,
 and is documented in the project [README.md](../../README.md). For the complete
-workflow, start there or run `../ika-build` from the repository root.
+workflow, start there or run `./ika-build` from the top of the checkout.
 
 This directory contains the product profile, overlays, manifests, validation
 scripts, and source-level patches that this phase applies to a LineageOS 23.2
@@ -180,7 +180,7 @@ unzip ika-main.zip
 rm ika-main.zip
 cd ika-main
 
-./lineageos/scripts/build_lineageos_desktop.sh
+./src/lineageos/scripts/build_lineageos_desktop.sh
 ```
 
 By default, the script builds the ROM for the host CPU architecture. On an
@@ -191,7 +191,7 @@ debug-friendly behavior such as `adb root`. For release-style images, pass
 `BUILD_VARIANT=user`:
 
 ```bash
-BUILD_VARIANT=user ./lineageos/scripts/build_lineageos_desktop.sh x86_64
+BUILD_VARIANT=user ./src/lineageos/scripts/build_lineageos_desktop.sh x86_64
 ```
 
 `eng` is accepted for experiments, but release bundles should use `user` and the
@@ -203,8 +203,8 @@ the guest's ADB key list on each boot.
 Cuttlefish exposes guest TCP ADB on port `5555` through the host proxy at
 `127.0.0.1:6520` for the first instance.
 
-The resulting `lineageos-arm64/` and/or `lineageos-x86_64/` directories at the
-Ika repository root are picked up by the `ika-lineageos` package in the second
+The resulting `src/lineageos-arm64/` and/or `src/lineageos-x86_64/` directories
+of the Ika checkout are picked up by the `ika-lineageos` package in the second
 phase.
 
 ## How the Build Works
@@ -226,7 +226,7 @@ The build signs target-files and extracted images before packaging the final
 Cuttlefish bundles. Signing keys live in `ANDROID_CERTS_DIR` (default:
 `~/.android-certs`). In a new checkout, `./ika-build` prepares them immediately
 after installing build dependencies. Direct ROM builds use `signing_common.sh`
-to run `tools/buildutils/setup_keys.sh` before compiling. That setup prompts
+to run `src/tools/buildutils/setup_keys.sh` before compiling. That setup prompts
 once for a certificate identity, writes it to `~/.config/ika/signing.conf`, and
 generates any missing APK/APEX keys.
 
@@ -244,7 +244,7 @@ If `repo` is not installed, `./ika-build` downloads it during dependency setup
 and installs it to `$HOME/.local/bin/repo`. Missing host tools such as `git`,
 `git-lfs`, `python3`, `rsync`, `curl`, and `tar` cause direct ROM builds to
 stop; `./ika-build` installs them with the rest of the build dependencies
-(`tools/buildutils/lib/dependencies.sh`).
+(`src/tools/buildutils/lib/dependencies.sh`).
 
 Git network operations run with a build-local git config that enables repo
 color output, sets a local builder identity, and rewrites common GitHub SSH/git
@@ -257,15 +257,15 @@ missing file blobs are fetched lazily during checkout. Set `REPO_CLONE_FILTER=`
 to force full clones, or lower `REPO_SYNC_CHECKOUT_JOBS` if a network/proxy still
 has trouble with lazy blob fetches.
 
-Final Cuttlefish-ready bundles are written as directories at the Ika repository
-root:
+Final Cuttlefish-ready bundles are written as directories in the Ika checkout's
+`src/`:
 
 ```text
-ika/lineageos-arm64/
-ika/lineageos-x86_64/
+ika/src/lineageos-arm64/
+ika/src/lineageos-x86_64/
 ```
 
-The `ika-lineageos` package built by `tools/buildutils/build_packages.sh`
+The `ika-lineageos` package built by `src/tools/buildutils/build_packages.sh`
 picks up the bundle matching the build host's architecture from that
 location. Each bundle includes `build-info.json`, `build-info.txt`, and, when
 `repo` can produce it, `source-manifest.xml`. These files record image
@@ -274,30 +274,30 @@ overlay commit state, microG APK checksums, WebView APK checksums, and x86-64
 native bridge metadata.
 
 Override the destination with `OUTPUT_DIR=/some/other/dir` if you want the
-bundles somewhere other than the Ika repository root. Signed target-files
+bundles somewhere other than the checkout's `src/`. Signed target-files
 staging also uses `OUTPUT_DIR`, so point it at a filesystem with enough free
 space for the final signing and bundle extraction steps.
 
 To build only one architecture:
 
 ```bash
-./lineageos/scripts/build_lineageos_desktop.sh arm64
-./lineageos/scripts/build_lineageos_desktop.sh x86_64
+./src/lineageos/scripts/build_lineageos_desktop.sh arm64
+./src/lineageos/scripts/build_lineageos_desktop.sh x86_64
 ```
 
 Use `--microg` or `--mtg` to include that provider:
 
 ```bash
-./lineageos/scripts/build_lineageos_desktop.sh --microg arm64
-./lineageos/scripts/build_lineageos_desktop.sh --mtg x86_64
+./src/lineageos/scripts/build_lineageos_desktop.sh --microg arm64
+./src/lineageos/scripts/build_lineageos_desktop.sh --mtg x86_64
 ```
 
 Useful environment overrides:
 
 ```text
 WORKSPACE=/path/to/android/source
-IKA_WORK_ROOT=/path/to/ika/ika-work  # default: ika repository root/ika-work
-OUTPUT_DIR=/path/to/final/images     # default: ika repository root
+IKA_WORK_ROOT=/path/to/ika/src/ika-work  # default: ika/src/ika-work
+OUTPUT_DIR=/path/to/final/images         # default: ika/src
 BUILD_VARIANT=userdebug             # userdebug, user, or eng
 JOBS=16
 LINEAGE_BRANCH=lineage-23.2
@@ -312,7 +312,7 @@ MICROG_GMSCORE_RELEASE=latest
 MICROG_GSFPROXY_RELEASE=latest
 MICROG_FDROID_RELEASE=latest
 MICROG_FDROID_PRIVILEGED_RELEASE=latest
-MICROG_PREBUILT_CACHE_DIR=/path/to/ika/ika-work/microg-prebuilts
+MICROG_PREBUILT_CACHE_DIR=/path/to/ika/src/ika-work/microg-prebuilts
 INCLUDE_X86_ARM_NATIVE_BRIDGE=1
 UPDATE_NATIVE_BRIDGE_PREBUILTS=1
 NATIVE_BRIDGE_SOURCE_DIR=/path/to/extracted/android/system
@@ -323,7 +323,7 @@ VALIDATE_BUILD_INPUTS=1
 ```
 
 The `WORKSPACE` directory is created if needed and reused on later runs. The
-default workspace is `ika/lineageos/src` and is treated as script-managed, so
+default workspace is `ika/src/lineageos/src` and is treated as script-managed, so
 patched source projects are reset before each `repo sync` and then patched
 again. For a custom workspace, set `RESET_PATCHED_PROJECTS=1` if you want the
 same cleanup behavior.
@@ -349,7 +349,7 @@ Google-signed GSF from that same upstream package-set commit so its required
 `com.google.android.gsf.gservices` provider remains available.
 
 Downloaded APKs are cached under `MICROG_PREBUILT_CACHE_DIR` (default
-`ika-work/microg-prebuilts` at the Ika repository root, alongside the ccache and
+`src/ika-work/microg-prebuilts` in the Ika checkout, alongside the ccache and
 ARM64 prebuilt caches).
 The cache is keyed by the upstream, version-stamped file name, so a rebuild
 whose resolved versions are already cached copies them into `vendor/partner_gms`
@@ -440,11 +440,11 @@ vendor/lineage_desktop/scripts/rebuild_cf_desktop_x86_64.sh
 ```
 
 From the Ika checkout, those helpers also use the default source tree at
-`lineageos/src`:
+`src/lineageos/src`:
 
 ```bash
-lineageos/scripts/rebuild_cf_desktop_arm64.sh
-lineageos/scripts/rebuild_cf_desktop_x86_64.sh
+src/lineageos/scripts/rebuild_cf_desktop_arm64.sh
+src/lineageos/scripts/rebuild_cf_desktop_x86_64.sh
 ```
 
 These are thin wrappers around `build_lineageos_desktop.sh` run with `REBUILD=1`,
@@ -459,8 +459,8 @@ They write the Cuttlefish bundle into the same per-architecture directories as
 a full build:
 
 ```text
-lineageos-arm64/
-lineageos-x86_64/
+src/lineageos-arm64/
+src/lineageos-x86_64/
 ```
 
 ## Validation
@@ -487,7 +487,7 @@ bundle the ARM64 static and dynamic native-bridge regression suites. Run them
 against a launched bundle with:
 
 ```bash
-lineageos-x86_64/testcases/native_bridge/run-tests.sh -s 127.0.0.1:6520
+src/lineageos-x86_64/testcases/native_bridge/run-tests.sh -s 127.0.0.1:6520
 ```
 
 The static suite isolates ARM64 instruction and syscall translation. The

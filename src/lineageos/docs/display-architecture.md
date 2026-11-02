@@ -1,7 +1,7 @@
 # Display Architecture: Upstream Cuttlefish vs. Ika
 
 This document compares upstream Cuttlefish's Android virtual-display path with
-the path used by [tools/ika](../../tools/ika). The differences change the user
+the path used by [src/tools/ika](../../tools/ika). The differences change the user
 experience from a phone emulator in a browser to a native desktop window.
 
 ## TL;DR
@@ -28,7 +28,7 @@ them over a WebRTC peer connection to a browser tab. The viewer is a generic
 remote-desktop client with no knowledge of the Android device that produced the
 frames.
 
-**Ika:** The scrcpy client in this repository (`scrcpy/`) reads frames directly
+**Ika:** The scrcpy client in this repository (`src/scrcpy/`) reads frames directly
 from a Cuttlefish-internal Unix-domain socket. Ika passes that socket path to
 scrcpy with `--cuttlefish-frames-socket=...`. The socket is normally
 `…/cvd-1/internal/ika_frames.sock`, derived from the `frame_sock_path` field in
@@ -59,7 +59,7 @@ following:
 
 **Ika:** The scrcpy client has a flex display mode (`--dpi=N`) that:
 1. Follows the window size in pixels, debounced while the window is being
-   resized, in [`scrcpy/app/src/ika/flex.c`](../../scrcpy/app/src/ika/flex.c).
+   resized, in [`src/scrcpy/app/src/ika/flex.c`](../../scrcpy/app/src/ika/flex.c).
 2. Sends `TYPE_RESIZE_DISPLAY` to the scrcpy server. For the main display, the
    server forces the logical size (as `wm size`, and `wm density N` once)
    through IWindowManager, with scaling off when it fits the physical display,
@@ -71,7 +71,7 @@ following:
 4. The framework propagates the display change through DisplayManager listeners
    and normal configuration updates.
 
-See [`scrcpy/IKA.md`](../../scrcpy/IKA.md).
+See [`src/scrcpy/IKA.md`](../../scrcpy/IKA.md).
 
 The Android-side request updates the logical display configuration. Launcher3's
 `DisplayController` sees the change, and
