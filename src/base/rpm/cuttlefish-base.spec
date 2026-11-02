@@ -1,6 +1,6 @@
 # The version comes from packaging/VERSION; tools/buildutils/build_package.sh
 # passes it as ika_version.
-%{!?ika_version:%{error:ika_version is not defined; build with tools/buildutils/build_package.sh}}
+%{!?ika_version:%{error:ika_version is not defined; build with src/tools/buildutils/build_package.sh}}
 Name:           ika-base
 Version:        %{ika_version}
 Release:        1%{?dist}
@@ -260,7 +260,7 @@ if [[ ! -f base/cvd/adb/BUILD.bazel || ! -x base/cvd/tools/ensure_bazel_git_mirr
     "ika-base-%{version}/base/cvd"
   if [[ ! -x "${tmp_cvd_extract}/ika-base-%{version}/base/cvd/tools/ensure_bazel_git_mirrors.sh" ]]; then
     echo "Source tarball ${SOURCE_TARBALL} does not contain base/cvd/tools/ensure_bazel_git_mirrors.sh." >&2
-    echo "Regenerate ${SOURCE_TARBALL} with tools/buildutils/build_package.sh." >&2
+    echo "Regenerate ${SOURCE_TARBALL} with src/tools/buildutils/build_package.sh." >&2
     exit 1
   fi
   mkdir -p base
@@ -269,7 +269,7 @@ if [[ ! -f base/cvd/adb/BUILD.bazel || ! -x base/cvd/tools/ensure_bazel_git_mirr
 fi
 if [[ ! -x base/cvd/tools/ensure_bazel_git_mirrors.sh ]]; then
   echo "Missing base/cvd/tools/ensure_bazel_git_mirrors.sh after source repair." >&2
-  echo "Regenerate ${SOURCE_TARBALL} with tools/buildutils/build_package.sh." >&2
+  echo "Regenerate ${SOURCE_TARBALL} with src/tools/buildutils/build_package.sh." >&2
   exit 1
 fi
 

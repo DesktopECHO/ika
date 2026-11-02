@@ -36,10 +36,10 @@ Usage: build_virtio_media_module.sh [x86_64|arm64|arm64-16k|all]...
 
 Builds virtio-media.ko from WORKSPACE/external/virtio-media/driver (with the
 patch series applied) for each GKI variant, default all, and rewrites
-lineageos/patches/kernel-prebuilts-virtual-device-{x86-64,arm64}-virtio-media.patch.
+src/lineageos/patches/kernel-prebuilts-virtual-device-{x86-64,arm64}-virtio-media.patch.
 
-Environment: WORKSPACE (ROM source tree, default lineageos/src), WORK_DIR
-(kernel source, toolchain and builds, default ika-work/virtio-media-module),
+Environment: WORKSPACE (ROM source tree, default src/lineageos/src), WORK_DIR
+(kernel source, toolchain and builds, default src/ika-work/virtio-media-module),
 JOBS.
 EOF
 }

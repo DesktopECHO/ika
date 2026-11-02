@@ -603,7 +603,7 @@ def parse_args():
         help="Persistent directory for downloaded APKs; a version already present "
              "is reused instead of refetched. "
              "Default: $MICROG_PREBUILT_CACHE_DIR or "
-             "<repo>/ika-work/microg-prebuilts.",
+             "<repo>/src/ika-work/microg-prebuilts.",
     )
     return parser.parse_args()
 

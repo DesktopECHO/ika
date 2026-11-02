@@ -1,6 +1,6 @@
 # The version comes from packaging/VERSION; tools/buildutils/build_package.sh
 # passes it as ika_version.
-%{!?ika_version:%{error:ika_version is not defined; build with tools/buildutils/build_package.sh}}
+%{!?ika_version:%{error:ika_version is not defined; build with src/tools/buildutils/build_package.sh}}
 Name:           ika-lineageos
 Version:        %{ika_version}
 Release:        1%{?dist}

@@ -173,7 +173,7 @@ function print_built_packages() {
 # absent.
 if ! command -v bazel >/dev/null 2>&1; then
   >&2 echo "bazel not found. Run ./ika-build to install all build dependencies first,"
-  >&2 echo "or install Bazel manually with: tools/buildutils/installbazel.sh"
+  >&2 echo "or install Bazel manually with: src/tools/buildutils/installbazel.sh"
   exit 1
 fi
 

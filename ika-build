@@ -68,9 +68,9 @@ print_lineageos_build_next_steps() {
   cat <<'EOF'
 
 Next steps:
-  ./lineageos/scripts/build_lineageos_desktop.sh           # starting now
-  ./lineageos/scripts/rebuild_cf_desktop_arm64.sh          # fast rebuild after source edits
-  ./lineageos/scripts/rebuild_cf_desktop_x86_64.sh
+  ./src/lineageos/scripts/build_lineageos_desktop.sh       # starting now
+  ./src/lineageos/scripts/rebuild_cf_desktop_arm64.sh      # fast rebuild after source edits
+  ./src/lineageos/scripts/rebuild_cf_desktop_x86_64.sh
 
 EOF
 }

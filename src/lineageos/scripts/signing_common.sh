@@ -49,8 +49,8 @@ require_signing_keys() {
     return 0
   fi
   printf '[lineage-desktop] error: signing keys not found at %s/releasekey.pk8\n' "$ANDROID_CERTS_DIR" >&2
-  printf '[lineage-desktop] first-time setup: tools/buildutils/setup_keys.sh\n' >&2
-  printf '[lineage-desktop] (or regenerate manually with lineageos/scripts/generate_signing_keys.sh;\n' >&2
+  printf '[lineage-desktop] first-time setup: src/tools/buildutils/setup_keys.sh\n' >&2
+  printf '[lineage-desktop] (or regenerate manually with src/lineageos/scripts/generate_signing_keys.sh;\n' >&2
   printf '[lineage-desktop]  override key location by exporting ANDROID_CERTS_DIR before running)\n' >&2
   exit 1
 }

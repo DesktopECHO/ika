@@ -1567,7 +1567,7 @@ check_graphics_stack_versions() {
     fail "external/mesa3d VERSION is not 26.3.0-rc2: $mesa_version_file"
   fi
   if [[ -f "$mesa_android_bp" ]] && ! grep -Fq -- '-DPACKAGE_VERSION=\"26.3.0-rc2\"' "$mesa_android_bp"; then
-    fail "external/mesa3d generated Android.bp does not identify Mesa 26.3.0-rc2; rerun scripts/mesa3d/regenerate.sh: $mesa_android_bp"
+    fail "external/mesa3d generated Android.bp does not identify Mesa 26.3.0-rc2; rerun src/lineageos/scripts/mesa3d/regenerate.sh: $mesa_android_bp"
   fi
 
   if target_enabled arm64; then

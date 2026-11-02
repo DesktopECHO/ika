@@ -30,7 +30,7 @@ Builds Vulkan loader packages from the Debian Salsa packaging commit:
   ${DEFAULT_VULKAN_COMMIT}
 
 Options:
-  --workdir <path>       Working directory (default: ./deb/libvulkan1-salsa)
+  --workdir <path>       Working directory (default: ./src/deb/libvulkan1-salsa)
   --repo-url <url>       Vulkan loader packaging git URL (default: ${DEFAULT_VULKAN_REPO_URL})
   --commit <sha>         Vulkan loader packaging commit (default: ${DEFAULT_VULKAN_COMMIT})
   --install              Install built libvulkan packages after building
@@ -39,8 +39,8 @@ Options:
   -h, --help             Show this help
 
 Examples:
-  ./tools/buildutils/vulkan-build-trixie
-  ./tools/buildutils/vulkan-build-trixie --workdir ~/build/libvulkan
+  ./src/tools/buildutils/vulkan-build-trixie
+  ./src/tools/buildutils/vulkan-build-trixie --workdir ~/build/libvulkan
 
 Notes:
   - Designed for Debian trixie hosts only.

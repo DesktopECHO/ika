@@ -1377,7 +1377,7 @@ ensure_git_lfs_files() {
   done
   (( ${#pointers[@]} > 0 )) || return 0
 
-  log "fetching ${#pointers[@]} Git LFS file(s) missing from ${dir#$ika_root/}"
+  log "fetching ${#pointers[@]} Git LFS file(s) missing from ${dir#"${ika_root%/*}"/}"
   top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || true)"
   if [[ -n "$top" ]] && git lfs version >/dev/null 2>&1; then
     rel="$(realpath --relative-to="$top" "$dir")"
@@ -1393,7 +1393,7 @@ ensure_git_lfs_files() {
 
   git_network_retry "Git LFS download from GitHub" \
     fetch_git_lfs_objects "${pointers[@]}" || \
-    die "could not download Git LFS files for ${dir#$ika_root/}; clone ika with git-lfs installed and run 'git lfs pull'"
+    die "could not download Git LFS files for ${dir#"${ika_root%/*}"/}; clone ika with git-lfs installed and run 'git lfs pull'"
 }
 
 # Android 16 GSF delegates its providers to modern GMS. The old x86-64 GMS
