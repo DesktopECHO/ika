@@ -1,0 +1,73 @@
+Patch summary:
+gfxstream guest: create the process-wide singletons under a lock.
+
+ResourceTracker::get() and VirtGpuDevice::getInstance() tested a static
+pointer and allocated when it was null, with nothing keeping two threads from
+doing so at once, so an app starting Vulkan on several threads could end up
+with two trackers or two devices. Backport of Mesa main c2dcbcb9f13
+("gfxstream/guest: create the process wide singletons under a lock", not in
+26.3.0-rc3); drop it when the Mesa pin includes it.
+
+diff --git a/src/gfxstream/guest/platform/VirtGpu.cpp b/src/gfxstream/guest/platform/VirtGpu.cpp
+index 754215f9fd5..ef5eee0d999 100644
+--- a/src/gfxstream/guest/platform/VirtGpu.cpp
++++ b/src/gfxstream/guest/platform/VirtGpu.cpp
+@@ -6,6 +6,7 @@
+ #include "VirtGpu.h"
+ 
+ #include <cstdlib>
++#include <mutex>
+ 
+ #include "Sync.h"
+ #include "util/log.h"
+@@ -13,6 +14,8 @@
+ 
+ namespace {
+ 
++// Guards sDevice: threads can make their first call into the driver at once.
++static std::mutex sDeviceMutex;
+ static VirtGpuDevice* sDevice = nullptr;
+ 
+ }  // namespace
+@@ -26,6 +29,7 @@ VirtGpuDevice* createPlatformVirtGpuDevice(enum VirtGpuCapset capset, int32_t de
+ }
+ 
+ VirtGpuDevice* VirtGpuDevice::getInstance(enum VirtGpuCapset capset, int32_t descriptor) {
++    std::lock_guard<std::mutex> lock(sDeviceMutex);
+     // If kCapsetNone is passed, we return a device that was created with any capset.
+     // Otherwise, the created device's capset must match the requested capset.
+     // We could support multiple capsets with a map of devices but that case isn't needed
+@@ -42,6 +46,7 @@ VirtGpuDevice* VirtGpuDevice::getInstance(enum VirtGpuCapset capset, int32_t des
+ }
+ 
+ void VirtGpuDevice::resetInstance() {
++    std::lock_guard<std::mutex> lock(sDeviceMutex);
+     if (sDevice) {
+         delete sDevice;
+         sDevice = nullptr;
+diff --git a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+index c9540f6db3c..13b86dafffa 100644
+--- a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
++++ b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+@@ -8584,7 +8584,6 @@ const VkPhysicalDeviceMemoryProperties& ResourceTracker::getPhysicalDeviceMemory
+     return *mCachedPhysicalDeviceMemoryProps;
+ }
+ 
+-static ResourceTracker* sTracker = nullptr;
+ 
+ ResourceTracker::ResourceTracker() {}
+ 
+@@ -8592,10 +8591,9 @@ ResourceTracker::~ResourceTracker() {}
+ 
+ // static
+ ResourceTracker* ResourceTracker::get() {
+-    if (!sTracker) {
+-        // To be initialized once on vulkan device open.
+-        sTracker = new ResourceTracker;
+-    }
++    // Made on first use and never freed. A function local static is initialized
++    // once even when several threads arrive at the same time.
++    static ResourceTracker* const sTracker = new ResourceTracker;
+     return sTracker;
+ }
+ 

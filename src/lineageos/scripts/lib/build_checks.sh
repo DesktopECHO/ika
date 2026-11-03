@@ -17,7 +17,7 @@ validate_build_inputs_for_targets() {
   build_validation_zipalign "$@"
 
   log "validating build inputs"
-  "$validate_script" "$workspace" "$@"
+  IKA_MESA_RELEASE="$ika_root/tools/mesa/release.env" "$validate_script" "$workspace" "$@"
 }
 
 build_validation_zipalign() {

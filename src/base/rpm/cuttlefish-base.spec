@@ -24,7 +24,8 @@ Source0:        ika-base-%{version}.tar.gz
 # because crosvm links Fedora's virglrenderer; the unversioned
 # libvirglrenderer.so comes from the bundled, SONAME-less copy that upstream
 # packages for Venus, and only virglrenderer-devel would provide it.
-%global __requires_exclude ^((libgfxstream_backend|libvk_swiftshader|libvk_lavapipe|libmem_overrides)\\.so|libvirglrenderer\\.so\\(\\))
+# libgallium-<version>.so is the one beside WSL's libEGL_mesa (tools/mesa).
+%global __requires_exclude ^((libgfxstream_backend|libvk_swiftshader|libmem_overrides)\\.so|libvirglrenderer\\.so\\(\\)|libgallium-[^(]+\\.so)
 
 BuildRequires:  libaom-devel
 BuildRequires:  clang-devel
@@ -85,9 +86,13 @@ BuildRequires:  wget
 BuildRequires:  pkgconfig(gl)
 BuildRequires:  alsa-lib-devel
 BuildRequires:  pipewire-devel
-# Ika's WSL2 helpers (tools/wsl): a Vulkan layer, a libd3d12.so shim, Mesa's
-# Dozen driver, Mesa's D3D12 OpenGL driver and libdecor's GTK plugin. See
-# GRAPHICS.md, "WSL2".
+# Ika's own Mesa (tools/mesa): Lavapipe, and on x86_64 Dozen and D3D12 OpenGL
+# for WSL2, with LLVM linked statically into Lavapipe. Ika's WSL2 helpers
+# (tools/wsl): a Vulkan layer, a libd3d12.so shim and libdecor's GTK plugin.
+# See GRAPHICS.md.
+BuildRequires:  glslang
+BuildRequires:  llvm-devel
+BuildRequires:  llvm-static
 BuildRequires:  pkgconfig(DirectX-Headers)
 BuildRequires:  bison
 BuildRequires:  flex
@@ -406,8 +411,9 @@ fi
 cmake -S lineageos/tools/madbfs -B _build_madbfs -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build _build_madbfs
 
-# Ika's WSL2 helpers. See GRAPHICS.md, "WSL2".
+# Ika's WSL2 helpers and Ika's own Mesa. See GRAPHICS.md.
 make -C tools/wsl BUILD="$PWD/_build_wsl" DOWNLOADS="$WORK_ROOT/wsl-downloads"
+make -C tools/mesa BUILD="$PWD/_build_mesa" DOWNLOADS="$WORK_ROOT/mesa-downloads"
 
 %install
 rm -rf %{buildroot}
@@ -437,6 +443,7 @@ cp -a base/cvd/bazel-out/${bazel_arch}-opt/bin/cuttlefish/package/cuttlefish-met
 # desktop launcher.
 DESTDIR=%{buildroot} meson install -C _build_scrcpy
 make -C tools/wsl BUILD="$PWD/_build_wsl" DESTDIR=%{buildroot} install
+make -C tools/mesa BUILD="$PWD/_build_mesa" DESTDIR=%{buildroot} install
 install -m 0755 _build_madbfs/upstream/madbfs/madbfs _build_madbfs/upstream/madbfs-msg/madbfs-msg \
   %{buildroot}/usr/lib/cuttlefish-common/bin/
 

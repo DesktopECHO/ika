@@ -187,7 +187,7 @@ function source_tree_exclude_paths() {
   # recreate. Staging trees are named per package so tracked debian/ files such
   # as ika-base.install stay in.
   printf '%s\n' \
-    deb base/_build_scrcpy base/_build_madbfs \
+    deb base/_build_scrcpy base/_build_madbfs base/_build_mesa \
     base/debian/.debhelper base/debian/ika-base base/debian/ika-common \
     base/debian/ika-integration base/debian/ika-defaults base/debian/ika-metrics \
     frontend/debian/.debhelper frontend/debian/ika-user \
@@ -294,7 +294,7 @@ function build_tree_manifest() {
     # Cache key embedded as the manifest's first line. Bump it whenever the
     # record format or the exclude set changes in a way that affects tarball
     # contents, to invalidate any tarball cached by an older run.
-    printf 'manifest-cache-version\t18\n'
+    printf 'manifest-cache-version\t19\n'
 
     cd "${REPO_DIR}"
     if [[ -n "${prune_name}" ]]; then

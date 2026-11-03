@@ -4,7 +4,6 @@ load("@rules_python//python:defs.bzl", "py_binary")
 package(
     default_visibility = [
         "@//:android_cuttlefish",
-        "@mesa//:__subpackages__",
         "@virglrenderer//:__subpackages__",
     ],
 )

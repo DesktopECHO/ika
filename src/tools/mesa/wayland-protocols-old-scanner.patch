@@ -1,0 +1,40 @@
+wayland-protocols: Build the fallback's enum headers with an older wayland-scanner
+
+Mesa 26.3.0-rc3 needs wayland-protocols 1.49 (347b5c45fd2). Where the
+system's is older, as Debian 13's 1.44, meson builds Mesa's
+wayland-protocols subproject, which makes its enum headers with
+"wayland-scanner --strict". The 1.49 protocols use the "frozen" attribute
+of wayland-scanner 1.24's DTD, so the strict validation of Debian 13's
+1.23.1 fails the D3D12 OpenGL build; Mesa does not use those headers.
+Drop --strict from them, through the wrap's diff_files. Systems with
+wayland-protocols 1.49 (Fedora 44, Arch) do not use the subproject. Drop it
+when the hosts' wayland-scanner is 1.24 or newer.
+
+diff --git a/subprojects/packagefiles/wayland-protocols-scanner-1.23.patch b/subprojects/packagefiles/wayland-protocols-scanner-1.23.patch
+new file mode 100644
+index 0000000..0d635f2
+--- /dev/null
++++ b/subprojects/packagefiles/wayland-protocols-scanner-1.23.patch
+@@ -0,0 +1,10 @@
++--- a/include/wayland-protocols/meson.build
+++++ b/include/wayland-protocols/meson.build
++@@ -7,7 +7,6 @@
++ 		input: '../..' / protocol_file,
++ 		command: [
++ 			prog_scanner,
++-			'--strict',
++ 			'enum-header',
++ 			'@INPUT@',
++ 			'@OUTPUT@',
+diff --git a/subprojects/wayland-protocols.wrap b/subprojects/wayland-protocols.wrap
+index 9ccac39..12aba79 100644
+--- a/subprojects/wayland-protocols.wrap
++++ b/subprojects/wayland-protocols.wrap
+@@ -3,6 +3,7 @@ directory = wayland-protocols-1.49
+ source_url = https://gitlab.freedesktop.org/wayland/wayland-protocols/-/releases/1.49/downloads/wayland-protocols-1.49.tar.xz
+ source_filename = wayland-protocols-1.49.tar.xz
+ source_hash = ec4c8f74942d6dff7ace8b4ce4764f0ef9ff618a935d974ea77edee2ad240b14
++diff_files = wayland-protocols-scanner-1.23.patch
+ 
+ [provide]
+ wayland-protocols = wayland_protocols

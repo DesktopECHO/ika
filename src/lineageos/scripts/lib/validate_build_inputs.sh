@@ -5,6 +5,10 @@ set -euo pipefail
 # (not sourced). script_dir is .../scripts/lib; the overlay root is two levels up.
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 overlay_dir="$(cd "$script_dir/../.." && pwd)"
+# The Mesa release every Ika Mesa build uses. The build engine runs this
+# validator from the overlay's copy in the workspace and names the file in the
+# ika checkout; run from the checkout, it is beside the overlay.
+mesa_release="${IKA_MESA_RELEASE:-$overlay_dir/../tools/mesa/release.env}"
 
 source "$script_dir/common.sh"
 source "$script_dir/patch_series.sh"
@@ -1466,14 +1470,18 @@ check_cuttlefish_runtime_pins() {
   require_file "$manifest"
   [[ -f "$manifest" ]] || return 0
 
-  if ! checker_output="$(python3 - "$manifest" <<'PY' 2>&1
+  local MESA_VERSION MESA_COMMIT MESA_SHA256
+  # shellcheck source=../../../tools/mesa/release.env
+  source "$mesa_release"
+
+  if ! checker_output="$(python3 - "$manifest" "$MESA_COMMIT" <<'PY' 2>&1
 import sys
 import xml.etree.ElementTree as ET
 
 manifest = sys.argv[1]
 expected = {
     ("mesa/mesa", "external/mesa3d"):
-      "b34c71d9ff2f6514a1f947609d00e49be639edf8",
+        sys.argv[2],
     ("virgl/venus-protocol", "external/venus-protocol"):
         "ca19b6358d7cc491bc3e4de76f04c6700876a8fa",
     ("kernel/prebuilts/6.12/arm64", "kernel/prebuilts/6.12/arm64"):
@@ -1538,8 +1546,8 @@ PY
     if [[ "$head" != "$expected" ]]; then
       fail "$project is not synced to the pinned Cuttlefish runtime/graphics revision $expected (found ${head:-unknown}); rerun with SKIP_SYNC=0"
     fi
-  done <<'EOF'
-external/mesa3d b34c71d9ff2f6514a1f947609d00e49be639edf8
+  done <<EOF
+external/mesa3d $MESA_COMMIT
 external/venus-protocol ca19b6358d7cc491bc3e4de76f04c6700876a8fa
 kernel/prebuilts/6.12/arm64 318576752b27af3d328e6deb5e6aa29b08f762c9
 kernel/prebuilts/common-modules/virtual-device/6.12/arm64 e6673fcbd05e63e6fcc2c2d2cf33246108b73b0c
@@ -1561,13 +1569,16 @@ check_graphics_stack_versions() {
   local mesa_android_bp="$android_root/external/mesa3d/Android.bp"
   local arm_product="$android_root/device/google/cuttlefish/ika_arm64/desktop/aosp_cf.mk"
   local x86_product="$android_root/device/google/cuttlefish/ika_x86_64/desktop/aosp_cf.mk"
+  local MESA_VERSION MESA_COMMIT MESA_SHA256
+  # shellcheck source=../../../tools/mesa/release.env
+  source "$mesa_release"
   require_file "$mesa_version_file"
   require_file "$mesa_android_bp"
-  if [[ -f "$mesa_version_file" && "$(tr -d '[:space:]' < "$mesa_version_file")" != "26.3.0-rc2" ]]; then
-    fail "external/mesa3d VERSION is not 26.3.0-rc2: $mesa_version_file"
+  if [[ -f "$mesa_version_file" && "$(tr -d '[:space:]' < "$mesa_version_file")" != "$MESA_VERSION" ]]; then
+    fail "external/mesa3d VERSION is not $MESA_VERSION: $mesa_version_file"
   fi
-  if [[ -f "$mesa_android_bp" ]] && ! grep -Fq -- '-DPACKAGE_VERSION=\"26.3.0-rc2\"' "$mesa_android_bp"; then
-    fail "external/mesa3d generated Android.bp does not identify Mesa 26.3.0-rc2; rerun src/lineageos/scripts/mesa3d/regenerate.sh: $mesa_android_bp"
+  if [[ -f "$mesa_android_bp" ]] && ! grep -Fq -- "-DPACKAGE_VERSION=\\\"$MESA_VERSION\\\"" "$mesa_android_bp"; then
+    fail "external/mesa3d generated Android.bp does not identify Mesa $MESA_VERSION; rerun src/lineageos/scripts/mesa3d/regenerate.sh: $mesa_android_bp"
   fi
 
   if target_enabled arm64; then

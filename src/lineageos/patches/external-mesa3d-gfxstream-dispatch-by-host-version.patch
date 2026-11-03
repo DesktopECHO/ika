@@ -1,0 +1,219 @@
+Patch summary:
+gfxstream guest: dispatch the KHR entrypoints of maintenance5, maintenance6
+and line_rasterization when the host's Vulkan is older than 1.4.
+
+Mesa's device dispatch table gives an aliased command one slot, filled with
+the core function, so with VK_KHR_maintenance5 enabled (26.3's 8cd04815beb)
+vkCmdBindIndexBuffer2KHR reached gfxstream_vk_CmdBindIndexBuffer2, which
+encodes the Vulkan 1.4 command. Ika's host gfxstream gives the guest Vulkan
+1.3, so its renderer has no vkCmdBindIndexBuffer2 to call. The device now
+points those slots at the KHR entrypoints when the instance or the device is
+below 1.4, using the API versions the guest now records. Backport of Mesa main
+d95407dc5e7 ("gfxstream: update some instance tracking") and c85006fa71e
+("gfxstream: update device dispatch based on version"), both not in
+26.3.0-rc3; d95407dc5e7 rebased onto rc3's gfxstream_vk_physical_device_init.
+Drop it when the Mesa pin includes them.
+
+diff --git a/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp b/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp
+index 7abcf97e5d1..9608c5fbe70 100644
+--- a/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp
++++ b/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp
+@@ -228,7 +228,6 @@ static VkResult gfxstream_vk_physical_device_init(
+                                               &supported_extensions, NULL, NULL, &dispatch_table);
+ 
+     if (result == VK_SUCCESS) {
+-        physical_device->instance = instance;
+         // Note: Must use dummy_sync for correct sync object path in WSI operations
+         physical_device->sync_types[0] = &vk_sync_dummy_type;
+         physical_device->sync_types[1] = NULL;
+@@ -540,6 +539,49 @@ static inline void gfxstream_vk_device_queue_family_fini(struct gfxstream_vk_dev
+     vk_free(&dev->base.alloc, dev->queue_families);
+ }
+ 
++// Mesa's device table has a single slot for core and non-core versions of
++// functions with the core versions having precedence (e.g.
++// vkCmdBindIndexBuffer2 and vkCmdBindIndexBuffer2KHR). When the host instance
++// or physical device API version is below 1.4, adjust the dispatch table to
++// route to the extension entrypoints so the guest does not send 1.4 core
++// opcodes to a 1.3 host.
++static void adjust_entrypoints_by_api_version(struct gfxstream_vk_device* gfxstream_device) {
++    auto* gfxstream_instance = reinterpret_cast<gfxstream_vk_instance*>(
++        gfxstream_device->physical_device->base.instance);
++    const uint32_t instance_api_version = gfxstream_instance->api_version;
++    const uint32_t device_api_version = gfxstream_device->api_version;
++
++    if (instance_api_version < VK_API_VERSION_1_4 || device_api_version < VK_API_VERSION_1_4) {
++        if (gfxstream_device->base.enabled_extensions.KHR_maintenance5) {
++            gfxstream_device->base.dispatch_table.CmdBindIndexBuffer2KHR =
++                gfxstream_vk_device_entrypoints.CmdBindIndexBuffer2KHR;
++            gfxstream_device->base.dispatch_table.GetRenderingAreaGranularityKHR =
++                gfxstream_vk_device_entrypoints.GetRenderingAreaGranularityKHR;
++            gfxstream_device->base.dispatch_table.GetDeviceImageSubresourceLayoutKHR =
++                gfxstream_vk_device_entrypoints.GetDeviceImageSubresourceLayoutKHR;
++            gfxstream_device->base.dispatch_table.GetImageSubresourceLayout2KHR =
++                gfxstream_vk_device_entrypoints.GetImageSubresourceLayout2KHR;
++        }
++        if (gfxstream_device->base.enabled_extensions.KHR_maintenance6) {
++            gfxstream_device->base.dispatch_table.CmdBindDescriptorSets2KHR =
++                gfxstream_vk_device_entrypoints.CmdBindDescriptorSets2KHR;
++            gfxstream_device->base.dispatch_table.CmdPushConstants2KHR =
++                gfxstream_vk_device_entrypoints.CmdPushConstants2KHR;
++            gfxstream_device->base.dispatch_table.CmdPushDescriptorSet2KHR =
++                gfxstream_vk_device_entrypoints.CmdPushDescriptorSet2KHR;
++            gfxstream_device->base.dispatch_table.CmdPushDescriptorSetWithTemplate2KHR =
++                gfxstream_vk_device_entrypoints.CmdPushDescriptorSetWithTemplate2KHR;
++        }
++        if (gfxstream_device->base.enabled_extensions.KHR_line_rasterization) {
++            gfxstream_device->base.dispatch_table.CmdSetLineStippleKHR =
++                gfxstream_vk_device_entrypoints.CmdSetLineStippleKHR;
++        } else if (gfxstream_device->base.enabled_extensions.EXT_line_rasterization) {
++            gfxstream_device->base.dispatch_table.CmdSetLineStippleEXT =
++                gfxstream_vk_device_entrypoints.CmdSetLineStippleEXT;
++        }
++    }
++}
++
+ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
+                                    const VkDeviceCreateInfo* pCreateInfo,
+                                    const VkAllocationCallbacks* pAllocator, VkDevice* pDevice) {
+@@ -564,7 +606,7 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
+     }
+ 
+     const VkAllocationCallbacks* pMesaAllocator =
+-        pAllocator ?: &gfxstream_physicalDevice->instance->base.alloc;
++        pAllocator ?: &gfxstream_physicalDevice->base.instance->alloc;
+ 
+ 
+     // Full local copy of pCreateInfo
+@@ -605,6 +647,8 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
+     gfxstream_device->physical_device = gfxstream_physicalDevice;
+     gfxstream_device->base.command_dispatch_table = &gfxstream_device->cmd_dispatch;
+ 
++    adjust_entrypoints_by_api_version(gfxstream_device);
++
+     result = gfxstream_vk_device_queue_family_init(gfxstream_device, pCreateInfo);
+     if (result != VK_SUCCESS) {
+         vkEnc->vkDestroyDevice(*pDevice, pAllocator, true /* do lock */);
+diff --git a/src/gfxstream/guest/vulkan/gfxstream_vk_wsi.cpp b/src/gfxstream/guest/vulkan/gfxstream_vk_wsi.cpp
+index 9160854356d..f45a199d848 100644
+--- a/src/gfxstream/guest/vulkan/gfxstream_vk_wsi.cpp
++++ b/src/gfxstream/guest/vulkan/gfxstream_vk_wsi.cpp
+@@ -10,7 +10,7 @@
+ static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
+ gfxstream_vk_wsi_proc_addr(VkPhysicalDevice physicalDevice, const char* pName) {
+     VK_FROM_HANDLE(gfxstream_vk_physical_device, pdevice, physicalDevice);
+-    return vk_instance_get_proc_addr_unchecked(&pdevice->instance->base, pName);
++    return vk_instance_get_proc_addr_unchecked(pdevice->base.instance, pName);
+ }
+ 
+ VkResult gfxstream_vk_wsi_init(struct gfxstream_vk_physical_device* physical_device) {
+@@ -26,7 +26,7 @@ VkResult gfxstream_vk_wsi_init(struct gfxstream_vk_physical_device* physical_dev
+     };
+     result = wsi_device_init(
+         &physical_device->wsi_device, gfxstream_vk_physical_device_to_handle(physical_device),
+-        gfxstream_vk_wsi_proc_addr, &physical_device->instance->base.alloc, -1, NULL, &options);
++        gfxstream_vk_wsi_proc_addr, &physical_device->base.instance->alloc, -1, NULL, &options);
+     if (result != VK_SUCCESS) return result;
+ 
+     // Allow guest-side modifier code paths
+@@ -41,5 +41,5 @@ VkResult gfxstream_vk_wsi_init(struct gfxstream_vk_physical_device* physical_dev
+ 
+ void gfxstream_vk_wsi_finish(struct gfxstream_vk_physical_device* physical_device) {
+     physical_device->base.wsi_device = NULL;
+-    wsi_device_finish(&physical_device->wsi_device, &physical_device->instance->base.alloc);
++    wsi_device_finish(&physical_device->wsi_device, &physical_device->base.instance->alloc);
+ }
+diff --git a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+index 13b86dafffa..ee4f3fc6f6e 100644
+--- a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
++++ b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+@@ -1422,6 +1422,10 @@ void ResourceTracker::transformImpl_VkExternalMemoryProperties_fromhost(
+ void ResourceTracker::setInstanceInfo(VkInstance instance, uint32_t enabledExtensionCount,
+                                       const char* const* ppEnabledExtensionNames,
+                                       uint32_t apiVersion) {
++    VK_FROM_HANDLE(gfxstream_vk_instance, gfxstream_instance, instance);
++    if (gfxstream_instance) {
++        gfxstream_instance->api_version = apiVersion;
++    }
+     std::lock_guard<std::recursive_mutex> lock(mLock);
+     auto& info = info_VkInstance[instance];
+     info.highestApiVersion = apiVersion;
+@@ -1432,6 +1436,11 @@ void ResourceTracker::setDeviceInfo(VkDevice device, VkPhysicalDevice physdev,
+                                     const VkPhysicalDeviceMemoryProperties& memProps,
+                                     uint32_t enabledExtensionCount,
+                                     const char* const* ppEnabledExtensionNames, const void* pNext) {
++    VK_FROM_HANDLE(gfxstream_vk_device, gfxstream_device, device);
++    if (gfxstream_device) {
++        gfxstream_device->api_version = props.apiVersion;
++    }
++
+     std::lock_guard<std::recursive_mutex> lock(mLock);
+     auto& info = info_VkDevice[device];
+     info.physdev = physdev;
+@@ -7427,7 +7436,16 @@ void ResourceTracker::on_vkCmdPushDescriptorSet2(
+ void ResourceTracker::on_vkCmdPushDescriptorSet2KHR(
+     void* context, VkCommandBuffer commandBuffer,
+     const VkPushDescriptorSetInfo* pPushDescriptorSetInfo) {
+-    on_vkCmdPushDescriptorSet2(context, commandBuffer, pPushDescriptorSetInfo);
++    if (!pPushDescriptorSetInfo) return;
++    VkEncoder* enc = (VkEncoder*)context;
++    std::vector<VkDescriptorImageInfo> transformedImageInfos;
++    std::vector<VkWriteDescriptorSet> transformedWrites;
++    sanitizePushDescriptorWrites(pPushDescriptorSetInfo->descriptorWriteCount,
++                                 pPushDescriptorSetInfo->pDescriptorWrites, transformedWrites,
++                                 transformedImageInfos);
++    VkPushDescriptorSetInfo modifiedInfo = *pPushDescriptorSetInfo;
++    modifiedInfo.pDescriptorWrites = transformedWrites.data();
++    enc->vkCmdPushDescriptorSet2KHR(commandBuffer, &modifiedInfo, true);
+ }
+ 
+ // VkPushDescriptorSetWithTemplateInfo has an opaque `const void* pData` field
+@@ -8084,7 +8102,15 @@ void ResourceTracker::on_vkCmdBindDescriptorSets2(
+ void ResourceTracker::on_vkCmdBindDescriptorSets2KHR(
+     void* context, VkCommandBuffer commandBuffer,
+     const VkBindDescriptorSetsInfo* pBindDescriptorSetsInfo) {
+-    on_vkCmdBindDescriptorSets2(context, commandBuffer, pBindDescriptorSetsInfo);
++    if (!pBindDescriptorSetsInfo) return;
++    VkEncoder* enc = (VkEncoder*)context;
++
++    if (mFeatureInfo.hasVulkanBatchedDescriptorSetUpdate) {
++        addPendingDescriptorSets(commandBuffer, pBindDescriptorSetsInfo->descriptorSetCount,
++                                 pBindDescriptorSetsInfo->pDescriptorSets);
++    }
++
++    enc->vkCmdBindDescriptorSets2KHR(commandBuffer, pBindDescriptorSetsInfo, true);
+ }
+ 
+ void ResourceTracker::on_vkCmdPipelineBarrier(
+diff --git a/src/gfxstream/guest/vulkan_enc/gfxstream_vk_private.h b/src/gfxstream/guest/vulkan_enc/gfxstream_vk_private.h
+index 48343b47a8a..016ed41e998 100644
+--- a/src/gfxstream/guest/vulkan_enc/gfxstream_vk_private.h
++++ b/src/gfxstream/guest/vulkan_enc/gfxstream_vk_private.h
+@@ -88,8 +88,8 @@ struct gfxstream_vk_instance {
+ 
+     struct gfxstream_vk_object_common common;
+ 
+-    uint32_t api_version;
+-    bool init_failed;
++    uint32_t api_version = 0;
++    bool init_failed = false;
+ };
+ VK_DEFINE_HANDLE_CASTS(gfxstream_vk_instance, base.base, VkInstance, VK_OBJECT_TYPE_INSTANCE)
+ GFXSTREAM_DECLARE_VK_OBJECT(gfxstream_vk_instance, VkInstance)
+@@ -102,7 +102,6 @@ struct gfxstream_vk_physical_device {
+ 
+     struct wsi_device wsi_device;
+     const struct vk_sync_type* sync_types[2];
+-    struct gfxstream_vk_instance* instance;
+     bool doImageDrmFormatModifierEmulation;
+ };
+ VK_DEFINE_HANDLE_CASTS(gfxstream_vk_physical_device, base.base, VkPhysicalDevice,
+@@ -121,6 +120,8 @@ struct gfxstream_vk_device {
+     /* unique queue family indices in which to create the device queues */
+     uint32_t* queue_families;
+     uint32_t queue_family_count;
++
++    uint32_t api_version = 0;
+ };
+ VK_DEFINE_HANDLE_CASTS(gfxstream_vk_device, base.base, VkDevice, VK_OBJECT_TYPE_DEVICE)
+ GFXSTREAM_DECLARE_VK_OBJECT(gfxstream_vk_device, VkDevice)

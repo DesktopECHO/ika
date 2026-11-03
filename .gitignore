@@ -58,3 +58,4 @@ src/frontend/src/operator/webui/src/environments/version.ts
 *.log
 /src/base/_build_madbfs/
 /src/base/_build_wsl/
+/src/base/_build_mesa/

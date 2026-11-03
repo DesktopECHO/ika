@@ -247,9 +247,8 @@ the count after Android stops: on a leak, it writes a warning to
 On WSL2 the only way to the GPU is Direct3D 12, through `/dev/dxg` and the
 libraries in `/usr/lib/wsl/lib`. Mesa's Dozen driver offers it as Vulkan, and
 gfxstream renders on that. `ika-base`, in its Debian, RPM and Arch packages,
-carries its own Dozen on x86_64: Mesa 26.3.0-rc2 with the patches in [src/tools/wsl/mesa](src/tools/wsl/mesa), built by
-`build-dozen.sh` with only X11 for a window system, and installed under
-`/usr/lib/cuttlefish-common/wsl/dozen`. It offers Vulkan 1.3 where the GPU's
+carries its own Dozen on x86_64, from [Ika's Mesa](#ikas-mesa) with only X11
+for a window system, installed under `/usr/lib/cuttlefish-common/wsl/dozen`. It offers Vulkan 1.3 where the GPU's
 D3D12 driver has shader model 6.6 and wave operations, and 1.2 on older GPUs
 such as Kaby Lake's Iris Plus 650. Venus cannot run on it: Dozen cannot export
 its memory as dma-bufs.
@@ -327,10 +326,9 @@ The console and app windows draw with OpenGL through Mesa's D3D12 driver
 otherwise falls back to llvmpipe on WSL2, drawing every frame of the window
 on the CPU: Zink, OpenGL on Dozen, refuses for lack of robustness2's
 `nullDescriptor`. Where Ika found a Dozen GPU, the windows use Ika's own build
-of that driver, from the same Mesa release with
-[d3d12-uma-cached-upload.patch](src/tools/wsl/mesa/d3d12-uma-cached-upload.patch),
-built by `build-d3d12-gl.sh` and installed with its EGL (`libEGL_mesa` and
-`libgallium`) under `/usr/lib/cuttlefish-common/wsl/mesa-gl`, which they load
+of that driver, from Ika's Mesa with
+[d3d12-uma-cached-upload.patch](src/tools/mesa/d3d12-uma-cached-upload.patch),
+installed with its EGL (`libEGL_mesa` and `libgallium`) under `/usr/lib/cuttlefish-common/wsl/mesa-gl`, which they load
 through `__EGL_VENDOR_LIBRARY_FILENAMES`; an EGL vendor file of your own wins.
 Distributions' Mesa stages texture uploads in write-combined memory, which
 WSL2 maps uncached: writing it ran at 383 MB/s against 13 GB/s for write-back
@@ -339,11 +337,7 @@ of CPU to upload, 70% of a core in all. Ika's build stages them in
 write-back memory on integrated GPUs, where the window takes 14%.
 
 In the `gfxstream` mode, crosvm's own OpenGL, which runs Android's OpenGL ES,
-uses the same driver, set up the same way. Ika's build also carries
-[d3d12-reclaim-keep-suballocated.patch](src/tools/wsl/mesa/d3d12-reclaim-keep-suballocated.patch):
-creating a buffer released buffers whose GPU work had completed, among them
-buffers of the slab allocator whose lock it held, and the render thread waited
-on itself; a `glBufferData` froze every display of Android that way.
+uses the same driver, set up the same way.
 
 `gpu_mode = auto` then picks `gfxstream_guest_angle`, as Venus needs the
 dma-bufs Dozen cannot export. The start log has a `WSL2:` line when Ika set
@@ -378,6 +372,24 @@ next frame, so its buttons did not highlight under the pointer.
 - The GPU device runs in crosvm's second process, the one that maps
   `libvulkan_dzn.so`. crosvm installs its own crash handler, so use `prlimit`
   to get core dumps from it.
+
+## Ika's Mesa
+
+Every Mesa Ika builds comes from the release in
+[src/tools/mesa/release.env](src/tools/mesa/release.env), Mesa 26.3.0-rc3 for
+now: the ROM's guest drivers (gfxstream's Vulkan, Venus and Lavapipe), and in
+`ika-base` the host's Lavapipe and, on x86_64, the Dozen and D3D12 OpenGL
+drivers for WSL2. The host's GPU drivers stay the distribution's.
+
+The host's Lavapipe is `/usr/lib/cuttlefish-common/bin/libvk_lavapipe.so`,
+with `lib64/vulkan.lvp.so` linked to it and its manifest beside it:
+`VK_DRIVER_FILES=/usr/lib/cuttlefish-common/bin/vk_lavapipe_icd.json vulkaninfo --summary`
+lists it alone. It links LLVM statically, so `ika-base` depends on no LLVM,
+except on Arch, which has no static LLVM: there it needs `llvm19-libs`.
+The ROM's patches to Mesa are in
+[src/lineageos/patches/series](src/lineageos/patches/series), the host's in
+[src/tools/mesa/series](src/tools/mesa/series);
+[BUILDING.md](BUILDING.md#ikas-mesa) says how to move to another release.
 
 ## Known limitations
 
@@ -436,4 +448,6 @@ lists how individual games render in each mode.
 - crosvm's patches:
   [src/base/cvd/build_external/crosvm/README.md](src/base/cvd/build_external/crosvm/README.md).
 - Ika's GPU settings: the GPU functions in [src/tools/ika](src/tools/ika).
+- Ika's Mesa on the host (Lavapipe, Dozen, D3D12 OpenGL) and the Mesa release
+  every Mesa build uses: [src/tools/mesa](src/tools/mesa).
 - The WSL2 layer and shim: [src/tools/wsl](src/tools/wsl).

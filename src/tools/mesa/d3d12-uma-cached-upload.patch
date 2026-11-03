@@ -12,7 +12,7 @@ buffers have and as Dozen's host-cached memory type does.
 
 --- a/src/gallium/drivers/d3d12/d3d12_bufmgr.cpp
 +++ b/src/gallium/drivers/d3d12/d3d12_bufmgr.cpp
-@@ -144,6 +144,18 @@
+@@ -144,6 +144,18 @@ d3d12_bo_new(struct d3d12_screen *screen, uint64_t size, const pb_desc *pb_desc)
        d3d12_evicted : d3d12_resident;
  
     D3D12_HEAP_PROPERTIES heap_pris = GetCustomHeapProperties(dev, heap_type);
@@ -28,6 +28,6 @@ buffers have and as Dozen's host-cached memory type does.
 +      heap_pris.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
 +      heap_pris.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
 +   }
-    d3d12_screen_reclaim_completed(screen);
-    HRESULT hres;
-    do {
+    HRESULT hres = dev->CreateCommittedResource(&heap_pris,
+                                               heap_flags,
+                                               &res_desc,

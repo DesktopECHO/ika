@@ -55,8 +55,10 @@ function rpm_build_dependency_packages() {
     # madbfs (mounts Android's storage on the host)
     boost-devel fuse3-devel
 
-    # Ika's WSL2 helpers (tools/wsl): Mesa's Dozen and D3D12 OpenGL drivers
-    # and libdecor's GTK plugin among them
+    # Ika's own Mesa (tools/mesa): Lavapipe, with LLVM linked statically, and
+    # the Dozen and D3D12 OpenGL drivers; Ika's WSL2 helpers (tools/wsl),
+    # libdecor's GTK plugin among them
+    glslang llvm-devel llvm-static
     "pkgconfig(DirectX-Headers)" python3-mako python3-packaging python3-pyyaml
     bison byacc flex "pkgconfig(wayland-egl-backend)"
     "pkgconfig(gtk+-3.0)" "pkgconfig(xcb)" "pkgconfig(x11-xcb)" "pkgconfig(xcb-dri3)"
@@ -95,8 +97,10 @@ function deb_build_dependency_packages() {
     pkgconf protobuf-compiler
     uuid-dev xxd
 
-    # Ika's WSL2 helpers (tools/wsl): Mesa's Dozen and D3D12 OpenGL drivers
-    # and libdecor's GTK plugin among them
+    # Ika's own Mesa (tools/mesa): Lavapipe, with LLVM linked statically, and
+    # the Dozen and D3D12 OpenGL drivers; Ika's WSL2 helpers (tools/wsl),
+    # libdecor's GTK plugin among them
+    glslang-tools libpolly-19-dev llvm-19-dev
     directx-headers-dev python3-mako python3-packaging python3-yaml
     bison byacc flex libglvnd-dev libwayland-egl-backend-dev
     libx11-xcb-dev libxcb1-dev libxcb-dri3-dev libxcb-keysyms1-dev
@@ -176,6 +180,7 @@ function arch_build_dependency_packages() {
     gflags
     git
     git-lfs
+    glslang
     google-glog
     gtest
     gtk3
@@ -208,6 +213,7 @@ function arch_build_dependency_packages() {
     # The Bazel-downloaded rules_perl perl links against libcrypt.so.1, which
     # Arch's libxcrypt only provides through this compat package.
     libxcrypt-compat
+    llvm19
     lz4
     mesa
     meson

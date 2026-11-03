@@ -1,0 +1,8 @@
+# Applied in this order to the Mesa release in release.env, for every build
+# in the Makefile.
+dzn-reupload-push-constants.patch
+dzn-vulkan-1.3.patch
+dzn-ika-fixes.patch
+d3d12-uma-cached-upload.patch
+llvmpipe-memfd-punch-hole.patch
+wayland-protocols-old-scanner.patch

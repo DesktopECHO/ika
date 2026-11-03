@@ -6,20 +6,22 @@ overlay_dir="$(cd "$script_dir/../.." && pwd)"
 manifest="$overlay_dir/manifests/lineageos-desktop.xml"
 output="$overlay_dir/patches/external-mesa3d.patch"
 config="$script_dir/aosp_mesa3d.toml"
+release="$overlay_dir/../tools/mesa/release.env"
 
 usage() {
   cat <<'EOF'
 Usage: regenerate.sh MESA_REPO MESON2HERMETIC_CHECKOUT
 
-Regenerate src/lineageos/patches/external-mesa3d.patch, the Android build
-integration for the Mesa commit pinned in
-src/lineageos/manifests/lineageos-desktop.xml. The patch removes Mesa's
-android/Android.mk, which Soong's Android.mk denylist rejects under external/,
-and adds the Android.bp files meson2hermetic generates from Mesa's meson.build
-files with aosp_mesa3d.toml (next to this script).
+Pin external/mesa3d in src/lineageos/manifests/lineageos-desktop.xml to the
+Mesa release in src/tools/mesa/release.env, and regenerate
+src/lineageos/patches/external-mesa3d.patch, the Android build integration for
+it. The patch removes Mesa's android/Android.mk, which Soong's Android.mk
+denylist rejects under external/, and adds the Android.bp files meson2hermetic
+generates from Mesa's meson.build files with aosp_mesa3d.toml (next to this
+script).
 
-MESA_REPO is any Mesa git repository that has the pinned commit; the script
-works in a temporary worktree of it. MESON2HERMETIC_CHECKOUT is a checkout of
+MESA_REPO is any Mesa git repository that has the release's tag
+(mesa-MESA_VERSION); the script works in a temporary worktree of it. MESON2HERMETIC_CHECKOUT is a checkout of
 https://github.com/mesonbuild/meson/pull/15462 (Python 3.11 or newer).
 
 Ika's own Mesa fixes are separate patches in src/lineageos/patches/series and
@@ -47,19 +49,27 @@ meson_dir="$(cd "$2" && pwd)"
 [[ -f "$meson_dir/meson.py" ]] || die "no meson.py in $meson_dir"
 [[ -f "$config" ]] || die "missing $config"
 
-pin="$(python3 -I - "$manifest" <<'PY'
-import sys
-import xml.etree.ElementTree as ET
+# shellcheck source=../../../tools/mesa/release.env
+source "$release"
+[[ "$MESA_COMMIT" =~ ^[0-9a-f]{40}$ ]] || die "no MESA_COMMIT in $release"
+tag_commit="$(git -C "$mesa_repo" rev-parse --verify --quiet "refs/tags/mesa-$MESA_VERSION^{commit}")" ||
+  die "$mesa_repo does not have the tag mesa-$MESA_VERSION; fetch it first"
+[[ "$tag_commit" == "$MESA_COMMIT" ]] ||
+  die "mesa-$MESA_VERSION is $tag_commit, not MESA_COMMIT $MESA_COMMIT in $release"
+pin="$MESA_COMMIT"
 
-for project in ET.parse(sys.argv[1]).getroot().iter("project"):
-    if project.get("path") == "external/mesa3d":
-        print(project.get("revision", ""))
-        break
+python3 -I - "$manifest" "$pin" <<'PY' || die "no external/mesa3d project in $manifest"
+import re
+import sys
+
+path, pin = sys.argv[1:]
+text = open(path).read()
+project = re.compile(r'(<project\b[^>]*\bpath="external/mesa3d"[^>]*\brevision=")[^"]*(")')
+text, count = project.subn(lambda m: m.group(1) + pin + m.group(2), text)
+if count != 1:
+    sys.exit(1)
+open(path, "w").write(text)
 PY
-)"
-[[ "$pin" =~ ^[0-9a-f]{40}$ ]] || die "no external/mesa3d revision in $manifest"
-git -C "$mesa_repo" cat-file -e "$pin^{commit}" 2>/dev/null ||
-  die "$mesa_repo does not have the pinned Mesa commit $pin; fetch it first"
 meson_commit="$(git -C "$meson_dir" rev-parse HEAD)"
 
 work="$(mktemp -d)"
@@ -71,6 +81,8 @@ trap cleanup EXIT
 
 git -C "$mesa_repo" worktree add --quiet --detach "$work/mesa" "$pin"
 version="$(tr -d '[:space:]' < "$work/mesa/VERSION")"
+[[ "$version" == "$MESA_VERSION" ]] ||
+  die "mesa-$MESA_VERSION's VERSION file says $version"
 hermetic="$work/mesa/src/gfxstream/hermetic/android"
 
 # The config names its handwritten-module file relative to its own directory.

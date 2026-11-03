@@ -123,6 +123,31 @@ Linux have it. On Debian and Ubuntu, `ika-build` gets it:
   asking, `false` never does. On ARM64 the PPA must carry Mesa 26.1 for
   `arm64`.
 
+### Ika's Mesa
+
+The ROM's guest drivers and the host packages' Lavapipe, Dozen and D3D12
+OpenGL drivers all come from the Mesa release in
+[src/tools/mesa/release.env](src/tools/mesa/release.env) (see
+[Graphics](GRAPHICS.md#ikas-mesa)). The host packages build theirs with
+[src/tools/mesa/Makefile](src/tools/mesa/Makefile), which downloads the
+release's tarball into `src/ika-work/mesa-downloads` and links LLVM statically
+into Lavapipe (LLVM 19 on Debian and Ubuntu, with `libpolly-19-dev`, as their
+static LLVM needs Polly). Arch has no static LLVM: there Lavapipe links the
+shared library of `llvm19-libs`, a versioned package that keeps its soname
+when Arch's LLVM moves on. To move to another release:
+
+1. Set `MESA_VERSION`, `MESA_COMMIT` (the commit of its `mesa-MESA_VERSION`
+   tag) and `MESA_SHA256` (of its tarball on archive.mesa3d.org) in
+   `release.env`.
+2. Run `src/lineageos/scripts/mesa3d/regenerate.sh MESA_REPO MESON2HERMETIC_CHECKOUT`,
+   which pins the ROM's `external/mesa3d` to the commit and writes the
+   Android build files for it (its `--help` names the checkouts it needs).
+3. Drop the patches in `src/lineageos/patches/series` and
+   `src/tools/mesa/series` that the release has, and refresh the others.
+
+`src/tools/tests/test_ika_mesa_release.sh` fails while the ROM's pin and its
+Android build files are for another release than `release.env`'s.
+
 ## Rebuilding
 
 Use the narrowest step that covers your change, then install the packages

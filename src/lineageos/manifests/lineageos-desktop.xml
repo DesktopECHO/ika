@@ -14,19 +14,21 @@
   <remove-project name="platform/external/vulkan-headers" />
   <remove-project name="platform/external/mesa3d" />
 
-    <!-- Mesa 26.3.0-rc2 is paired with the generated Android build glue in
-       external-mesa3d.patch: after moving this pin, rerun
-       scripts/mesa3d/regenerate.sh. ANGLE and guest SwiftShader follow Android 17
-       release heads, while drm_hwcomposer and minigbm remain on Android 16 QPR2
-       with focused upstream backports. This mixed stack depends on the
-       compatibility patches in this repository. Do not move any graphics pin
-       without a boot, vulkaninfo, and Chromium/ANGLE screenshot verification
-       pass on Apple Silicon. -->
+    <!-- The Mesa release in src/tools/mesa/release.env, which the host's
+       Mesa builds use too: scripts/mesa3d/regenerate.sh writes this revision
+       from it, with the generated Android build glue in external-mesa3d.patch,
+       and src/tools/tests/test_ika_mesa_release.sh checks that they agree.
+       ANGLE and guest SwiftShader follow Android 17 release heads, while
+       drm_hwcomposer and minigbm remain on Android 16 QPR2 with focused
+       upstream backports. This mixed stack depends on the compatibility
+       patches in this repository. Do not move any graphics pin without a
+       boot, vulkaninfo, and Chromium/ANGLE screenshot verification pass on
+       Apple Silicon. -->
   <project
       name="mesa/mesa"
       path="external/mesa3d"
       remote="mesa"
-    revision="b34c71d9ff2f6514a1f947609d00e49be639edf8"
+    revision="90a959ebba9dbb36f2ea5176091c15d6ebdd0af0"
       groups="pdk-cw-fs,pdk-fs" />
 
   <!-- Venus protocol headers for Mesa's Venus driver (vulkan.virtio). Mesa

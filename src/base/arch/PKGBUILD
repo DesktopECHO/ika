@@ -19,9 +19,9 @@ makedepends=(alsa-lib aom boost clang cmake curl fmt gcc gflags git google-glog 
              pipewire pkgconf protobuf protobuf-c python
              wget xxd util-linux-libs v4l-utils virglrenderer vulkan-headers wayland
              wayland-protocols which xz z3
-             # Ika's WSL2 helpers (tools/wsl)
-             dbus directx-headers gtk3 libglvnd libxcb libxshmfence python-mako python-packaging
-             python-yaml systemd xcb-util-keysyms)
+             # Ika's own Mesa (tools/mesa) and Ika's WSL2 helpers (tools/wsl)
+             dbus directx-headers glslang gtk3 libglvnd libxcb libxshmfence llvm19 python-mako
+             python-packaging python-yaml systemd xcb-util-keysyms)
 # objcopy/nm cannot parse the Bazel/Clang-built binaries; skip strip/debug.
 # makepkg's LTO would make the static FFmpeg (and SDL, libusb) GCC LTO
 # objects, which Bazel's ld.lld cannot link into crosvm.
@@ -177,8 +177,12 @@ build() {
   cmake -S lineageos/tools/madbfs -B _build_madbfs -G Ninja -DCMAKE_BUILD_TYPE=Release
   cmake --build _build_madbfs
 
-  # Ika's WSL2 helpers. See GRAPHICS.md, "WSL2".
+  # Ika's WSL2 helpers and Ika's own Mesa. See GRAPHICS.md.
   make -C tools/wsl BUILD="${PWD}/_build_wsl" DOWNLOADS="${work_root}/wsl-downloads"
+  # Arch has no static LLVM: Lavapipe links LLVM 19's shared library, whose
+  # versioned package keeps its soname when Arch's LLVM moves on.
+  make -C tools/mesa BUILD="${PWD}/_build_mesa" DOWNLOADS="${work_root}/mesa-downloads" \
+    LLVM_CONFIG=llvm-config-19 SHARED_LLVM=1
 }
 
 _package_output_root() {
@@ -196,8 +200,8 @@ package_ika-base() {
            vulkan-swrast vulkan-tools wayland wayland-utils xdg-utils xz yad
            # Loaded at runtime by the static SDL in the scrcpy viewer
            libxcursor libxfixes libxi libxkbcommon libxrandr libxss
-           # Ika's WSL2 helpers: Mesa's Dozen driver and libdecor's GTK plugin
-           dbus libxcb libxshmfence xcb-util-keysyms)
+           # Ika's own Mesa (Lavapipe, Dozen) and libdecor's GTK plugin
+           dbus libxcb libxshmfence llvm19-libs spirv-tools xcb-util-keysyms zstd)
   # ika-base now ships the scrcpy viewer; retire the standalone ika-scrcpy.
   provides=(cuttlefish-base ika-scrcpy)
   conflicts=(cuttlefish-base ika-scrcpy)
@@ -266,6 +270,7 @@ package_ika-base() {
   install -m 0755 _build_madbfs/upstream/madbfs/madbfs _build_madbfs/upstream/madbfs-msg/madbfs-msg \
     "${pkgdir}/usr/lib/cuttlefish-common/bin/"
   make -C tools/wsl BUILD="${root}/_build_wsl" DESTDIR="${pkgdir}" install
+  make -C tools/mesa BUILD="${root}/_build_mesa" DESTDIR="${pkgdir}" install
 
   install -d "${pkgdir}/usr/share/applications"
   install -d "${pkgdir}/usr/share/icons/hicolor/256x256/apps"

@@ -161,8 +161,10 @@ available for testing the native gfxstream GLES translator, while
 `guest_swiftshader` is a diagnostic fallback that removes host GPU acceleration
 from the equation.
 
-The production guest Vulkan stack pins Mesa 26.3.0-rc2 at `b34c71d9ff2f`,
-with two gfxstream patches on top. Verify it together with the pinned ANGLE,
+The production guest Vulkan stack pins Mesa to the release in
+`src/tools/mesa/release.env` (26.3.0-rc3, `90a959ebba9d`), the one the host's
+Lavapipe, Dozen and D3D12 OpenGL drivers are built from, with Ika's patches in
+`patches/series` on top. Verify it together with the pinned ANGLE,
 guest SwiftShader, drm_hwcomposer, gfxstream, rutabaga_gfx, crosvm, minigbm,
 and Vulkan-Headers revisions in `manifests/lineageos-desktop.xml` whenever one
 of them moves. Both guest

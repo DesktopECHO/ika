@@ -70,11 +70,19 @@ scrcpy_static_deps := $(scrcpy_deps_work_dir)/install/linux-native-static
 # built into the ROM. See lineageos/tools/madbfs/README.md.
 madbfs_src := $(CURDIR)/../lineageos/tools/madbfs
 madbfs_build_dir := $(CURDIR)/_build_madbfs
-# Ika's WSL2 GPU helpers: a Vulkan layer, a libd3d12.so shim and Mesa's Dozen
-# driver. See GRAPHICS.md, "WSL2".
+# Ika's WSL2 GPU helpers: a Vulkan layer for Dozen and a libd3d12.so shim.
+# See GRAPHICS.md, "WSL2".
 wsl_src := $(CURDIR)/../tools/wsl
 wsl_build_dir := $(CURDIR)/_build_wsl
 wsl_make_args := BUILD=$(wsl_build_dir) DOWNLOADS=$(ika_work_root)/wsl-downloads
+# Ika's own Mesa, from the release the ROM's guest drivers use: Lavapipe and,
+# on amd64, Dozen and D3D12 OpenGL for WSL2. See GRAPHICS.md. Lavapipe links
+# LLVM 19 statically, which Debian 13 and Ubuntu 26.04 both have; Debian's
+# static LLVM also needs its Polly libraries.
+mesa_src := $(CURDIR)/../tools/mesa
+mesa_build_dir := $(CURDIR)/_build_mesa
+mesa_make_args := BUILD=$(mesa_build_dir) DOWNLOADS=$(ika_work_root)/mesa-downloads \
+  LLVM_CONFIG=llvm-config-19
 crosvm_bin := cvd/bazel-bin/cuttlefish/package/cuttlefish-common/bin/crosvm
 cuttlefish_metrics := debian/ika-metrics/usr/lib/cuttlefish-metrics
 
@@ -215,12 +223,13 @@ override_dh_auto_build:
 	cmake -S $(madbfs_src) -B $(madbfs_build_dir) -G Ninja -DCMAKE_BUILD_TYPE=Release
 	cmake --build $(madbfs_build_dir)
 	$(MAKE) -C $(wsl_src) $(wsl_make_args)
+	$(MAKE) -C $(mesa_src) $(mesa_make_args)
 
 # Clean the scrcpy meson build tree alongside the default clean.
 .PHONY: override_dh_auto_clean
 override_dh_auto_clean:
 	dh_auto_clean
-	rm -rf $(scrcpy_build_dir) $(madbfs_build_dir) $(wsl_build_dir)
+	rm -rf $(scrcpy_build_dir) $(madbfs_build_dir) $(wsl_build_dir) $(mesa_build_dir)
 
 # Only generate optimized DWARF if debug is enabled
 .PHONY: override_dh_dwz
@@ -260,6 +269,7 @@ override_dh_install:
 	install -m 0755 $(madbfs_build_dir)/upstream/madbfs/madbfs \
 	    $(madbfs_build_dir)/upstream/madbfs-msg/madbfs-msg ${cuttlefish_common}/bin/
 	$(MAKE) -C $(wsl_src) $(wsl_make_args) DESTDIR=$(CURDIR)/debian/ika-base install
+	$(MAKE) -C $(mesa_src) $(mesa_make_args) DESTDIR=$(CURDIR)/debian/ika-base install
 	install -d debian/ika-base/usr/share/applications
 	install -d debian/ika-base/usr/share/icons/hicolor/256x256/apps
 	install -m 0644 ../tools/ika.desktop debian/ika-base/usr/share/applications/ika.desktop

@@ -1,8 +1,0 @@
-git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
-
-git_repository(
-    name = "mesa",
-    build_file = "@//build_external/mesa:BUILD.mesa.bazel",
-    commit = "0fadfea4f394211946f308458f614839ef253ee8",
-    remote = "https://gitlab.freedesktop.org/mesa/mesa.git",
-)

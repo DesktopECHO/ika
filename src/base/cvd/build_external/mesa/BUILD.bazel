@@ -1,1 +1,0 @@
-exports_files(["patches/rename_nv.patch"])

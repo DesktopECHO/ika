@@ -5878,7 +5878,7 @@ append_scrcpy_env() {
   # OpenGL then falls back to llvmpipe, drawing every frame of the window on
   # the CPU (Zink, OpenGL on Dozen, refuses without robustness2's
   # nullDescriptor); its d3d12 driver draws on the GPU. Ika's own build of it
-  # (tools/wsl/mesa/build-d3d12-gl.sh) stages texture uploads in write-back
+  # (tools/mesa) stages texture uploads in write-back
   # memory: the distribution's stages them in write-combined memory, which
   # WSL2 maps uncached, and uploading a video's frames took scrcpy 70% of a
   # core instead of 14%. Ika's build has no software renderer to fall back to,
