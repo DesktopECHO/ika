@@ -158,10 +158,10 @@ run at half their length. The display keeps its size and density.
 
 `ika start` turns it on when `vulkaninfo` finds no hardware Vulkan device on
 the host, when the GPU mode is `guest_swiftshader` or `guest_lavapipe`, when
-Android gets 2 virtual CPUs or fewer, or when the host has less than 8 GB of
-memory; the start log
-says why. `--lowcpu` and `--no-lowcpu` decide it for one start, and `mode` in
-`[lowcpu]` (`auto`, `on` or `off`) or `IKA_LOWCPU` by default.
+Android gets 2 virtual CPUs or fewer (4 or fewer under WSL, where Android
+gets all the CPUs WSL has), or when the host has less than 8 GB of memory; the
+start log says why. `--lowcpu` and `--no-lowcpu` decide it for one start, and
+`mode` in `[lowcpu]` (`auto`, `on` or `off`) or `IKA_LOWCPU` by default.
 
 ### Hardware video decoding
 

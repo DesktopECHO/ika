@@ -359,9 +359,9 @@ hw_video_decode = auto
 # on or off.
 # auto turns it on when vulkaninfo finds no hardware Vulkan device on the
 # host, when the GPU mode is guest_swiftshader or guest_lavapipe, when the
-# guest gets 2 vCPUs
-# or fewer, or when the host has less than 8 GB of memory. Command-line
-# equivalents: --lowcpu, --no-lowcpu. Environment variable: IKA_LOWCPU
+# guest gets 2 vCPUs or fewer (4 or fewer under WSL), or when the host has
+# less than 8 GB of memory. Command-line equivalents: --lowcpu, --no-lowcpu.
+# Environment variable: IKA_LOWCPU
 mode = auto
 # Display refresh rate in low-CPU mode, in Hz. A --display= option wins.
 refresh_rate_hz = 30
@@ -2189,8 +2189,8 @@ Options:
                          density stay as they are. By default it is on when
                          the host has no hardware Vulkan driver or the GPU
                          mode is guest_swiftshader or guest_lavapipe, gives
-                         the guest 2 vCPUs
-                         or fewer, or has less than 8 GB of memory
+                         the guest 2 vCPUs or fewer (4 or fewer under WSL),
+                         or has less than 8 GB of memory
                          (--lowcpu=auto|on|off and IKA_LOWCPU=auto|on|off do
                          the same).
   --hw_video_decode=auto|off
@@ -2883,16 +2883,18 @@ has_display_size_override() {
 
 # Decides whether this start runs low-CPU mode, from IKA_LOWCPU (auto, on
 # or off) and, for auto, the host: no hardware Vulkan driver, guest_swiftshader
-# or guest_lavapipe, 2 vCPUs or fewer, or less than 8 GB of host memory. Sets
-# LOWCPU_MODE_ACTIVE and LOWCPU_MODE_REASON.
+# or guest_lavapipe, 2 vCPUs or fewer (4 or fewer under WSL), or less than
+# 8 GB of host memory. Sets LOWCPU_MODE_ACTIVE and LOWCPU_MODE_REASON.
 resolve_lowcpu_mode() {
   local mode
   local gpu_mode
   local cpus
+  local cpu_limit=2
   local mem_mb
   local summary
   local reason=""
 
+  [[ "${IKA_ON_WSLG}" != true ]] || cpu_limit=4
   mode="$(normalize_lowcpu_mode "${IKA_LOWCPU:-auto}")"
   case "${mode}" in
     on)
@@ -2907,7 +2909,7 @@ resolve_lowcpu_mode() {
         reason="software rendering"
       elif [[ -n "${summary}" ]] && vulkan_summary_has_only_software_devices "${summary}"; then
         reason="no hardware Vulkan driver"
-      elif [[ "${cpus}" =~ ^[0-9]+$ ]] && (( cpus <= 2 )); then
+      elif [[ "${cpus}" =~ ^[0-9]+$ ]] && (( cpus <= cpu_limit )); then
         reason="$(count_noun "${cpus}" vCPU vCPUs)"
       elif [[ "${mem_mb}" =~ ^[0-9]+$ ]] && (( mem_mb > 0 && mem_mb < 8192 )); then
         reason="${mem_mb} MB of host memory"

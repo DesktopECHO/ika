@@ -1,7 +1,8 @@
 #!/usr/bin/bash
 
 # Low-CPU mode: on by hand, or by itself on a host without a hardware
-# Vulkan driver, with 2 vCPUs or fewer, or with little memory; the display
+# Vulkan driver, with 2 vCPUs or fewer (4 under WSL), or with little memory;
+# the display
 # keeps its size and density but refreshes at the mode's rate; the guest's
 # blurs and animations are set when it is on and put back when it is off.
 
@@ -45,6 +46,7 @@ host_physical_memory_mb() { printf '%s\n' "${HOST_MEMORY_MB}"; }
 vulkaninfo_summary() { [[ -n "${VULKAN_SUMMARY}" ]] && printf '%s\n' "${VULKAN_SUMMARY}"; }
 start_gpu_mode_value() { printf '%s\n' "${GPU_MODE}"; }
 CVD_COMPUTE_DEFAULTS[cpus]=4
+IKA_ON_WSLG=false
 
 expect_equal "$(normalize_lowcpu_mode "")" "auto" "empty mode"
 expect_equal "$(normalize_lowcpu_mode ON)" "on" "on"
@@ -72,6 +74,17 @@ expect_equal "$(decide auto --cpus=2)" "true|2 vCPUs|low-CPU mode: on (2 vCPUs)"
 CVD_COMPUTE_DEFAULTS[cpus]=1
 expect_equal "$(decide auto)" "true|1 vCPU|low-CPU mode: on (1 vCPU)" "one vCPU by default"
 CVD_COMPUTE_DEFAULTS[cpus]=4
+expect_equal "$(decide auto --cpus=3)" "false||" "three vCPUs are enough off WSL"
+expect_equal "$(decide auto --cpus=4)" "false||" "four vCPUs are enough off WSL"
+# Under WSL, 4 vCPUs or fewer
+IKA_ON_WSLG=true
+expect_equal "$(decide auto)" "true|4 vCPUs|low-CPU mode: on (4 vCPUs)" "four vCPUs under WSL"
+expect_equal "$(decide auto --cpus=3)" "true|3 vCPUs|low-CPU mode: on (3 vCPUs)" "three vCPUs under WSL"
+expect_equal "$(decide auto --cpus=2)" "true|2 vCPUs|low-CPU mode: on (2 vCPUs)" "two vCPUs under WSL"
+expect_equal "$(decide auto --cpus=5)" "false||" "five vCPUs are enough under WSL"
+expect_equal "$(decide auto --cpus=16)" "false||" "sixteen vCPUs under WSL"
+expect_equal "$(decide off)" "false||" "--no-lowcpu wins under WSL"
+IKA_ON_WSLG=false
 HOST_MEMORY_MB=4000
 expect_equal "$(decide auto)" "true|4000 MB of host memory|low-CPU mode: on (4000 MB of host memory)" "little memory"
 HOST_MEMORY_MB=16000
