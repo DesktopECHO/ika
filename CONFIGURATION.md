@@ -392,8 +392,8 @@ These have no setting:
 
 ## Windows (WSL2)
 
-Ika runs in a WSL2 distribution (Fedora, Debian, Ubuntu or Arch, from the
-Requirements) once the parts a fresh WSL2 lacks are in place: nested
+On an x86-64 PC, Ika runs in a WSL2 distribution (Fedora, Debian, Ubuntu or
+Arch, from the Requirements) once the parts a fresh WSL2 lacks are in place: nested
 virtualization (off by default, so there is no `/dev/kvm`), the vhost-vsock
 and vhost-net devices (older Microsoft kernels are built without them, and
 Cuttlefish's adb runs over vsock), systemd and cgroup v2. Microsoft's kernel
@@ -408,7 +408,8 @@ is missing, then installs Debian 13 (trixie), the latest WSL image from
 distribution named Ika, with Ika's icon in the Start menu and Windows
 Terminal, a user named after the Windows user, with passwordless sudo, and
 systemd; installs Mesa from trixie-backports and the `ika-base` and
-`ika-lineageos` packages of Ika's latest release; runs `ika-wsl-setup`
+`ika-lineageos` packages of Ika's latest release, which it downloads to
+`%TEMP%` unless they are there already; runs `ika-wsl-setup`
 without showing its report, then warns of anything it still finds missing
 that a restart of WSL does not bring; restarts WSL when its settings changed (it asks first, as that stops every
 distribution); and starts Ika. Run outside the desktop, in Windows' session
@@ -436,9 +437,13 @@ script block:
 ```
 
 `-Name` and `-UserName` choose other names, `-Location` where the
-distribution's disk goes, `-Force` replaces a distribution of the same name
+distribution's disk goes, `-PackageDirectory` a folder with the `ika-base`
+and `ika-lineageos` packages to install instead of the release's, such as
+ones you built, `-Force` replaces a distribution of the same name
 (deleting its files) and restarts WSL without asking, and `-NoStart` leaves
-Ika stopped. Every WSL distribution runs in the same virtual machine, so run
+Ika stopped. The packages it downloads stay in `%TEMP%`, and the next run
+uses those that are the release's, by name and size, instead of downloading
+them again. Every WSL distribution runs in the same virtual machine, so run
 one Ika at a time: stop Ika in any other distribution first.
 
 `ika-wsl-setup`, installed with `ika-base`, reports what is missing

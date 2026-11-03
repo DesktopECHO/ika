@@ -1,21 +1,23 @@
 <#
 .SYNOPSIS
 Deploys Ika on Windows: a WSL2 Debian 13 (trixie) distribution named Ika,
-readied for Ika, with the Ika packages in your Windows home folder installed,
-then starts Android.
+readied for Ika, with the packages of Ika's latest release installed, then
+starts Android.
 
 .DESCRIPTION
-Sets up what WSL2 needs of Windows and is missing (the WSL package, the
-Virtual Machine Platform, Windows' hypervisor) behind one permission prompt,
-asking for a restart when one is needed, a single one; WSL 1 stays off.
+For x86-64 PCs only: it stops at once on any other. Sets up what WSL2 needs
+of Windows and is missing (the WSL package, the Virtual Machine Platform,
+Windows' hypervisor) behind one permission prompt, asking for a restart when
+one is needed, a single one; WSL 1 stays off.
 Then installs Debian's WSL image, the latest from salsa.debian.org, under the
 name Ika, with Ika's icon for its Start menu entry and Terminal profile, and
 in it:
   1. creates a user (named after the Windows user) with passwordless sudo,
      the default user of the distribution, with systemd on;
   2. installs Mesa from trixie-backports (Ika needs 26.1 or newer) and the
-     ika-base and ika-lineageos packages (.deb) in -PackageDirectory, the
-     newest version of each for the distribution's architecture;
+     ika-base and ika-lineageos packages (.deb) of Ika's latest release on
+     GitHub, which it downloads to %TEMP% first unless they are there
+     already, or those in -PackageDirectory;
   3. runs ika-wsl-setup, from the package, which readies WSL for Ika: nested
      virtualization, cgroup v2, the groups, the Start menu, the clock, the
      devices' groups; then asks it what is still missing, and warns of
@@ -41,9 +43,11 @@ The Linux user. Default: the Windows user name, lowercased.
 Where WSL keeps the distribution's disk. Default: WSL's own choice.
 
 .PARAMETER PackageDirectory
-The folder holding the ika-base and ika-lineageos packages
-(ika-base_VERSION_ARCH.deb, ika-lineageos_VERSION_ARCH.deb). Default: your
-Windows home folder (%USERPROFILE%).
+The folder holding the ika-base and ika-lineageos packages to install
+(ika-base_VERSION_ARCH.deb, ika-lineageos_VERSION_ARCH.deb; the newest
+version of each), such as ones you built. Default: the packages of Ika's
+latest release, in %TEMP%: those there already, of the release's name and
+size, are used, and the rest downloaded.
 
 .PARAMETER Force
 Replaces a distribution of the same name, deleting its files, and restarts
@@ -57,7 +61,7 @@ param(
     [string]$Name = 'Ika',
     [string]$UserName,
     [string]$Location,
-    [string]$PackageDirectory = $env:USERPROFILE,
+    [string]$PackageDirectory,
     [switch]$Force,
     [switch]$NoStart
 )
@@ -67,6 +71,14 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 # wsl.exe writes UTF-16 to a pipe unless told otherwise
 $env:WSL_UTF8 = '1'
+
+# Ika's Windows packages are for x86-64: stop before anything is changed. The
+# operating system's architecture, not this process's: a 32-bit PowerShell on
+# a 64-bit Windows reports x86 in PROCESSOR_ARCHITECTURE.
+$architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+if ($architecture -ne 'X64') {
+    throw "Ika on Windows is for x86-64 PCs only; this one is $architecture."
+}
 
 function Write-Step([string]$Text, [switch]$NoNewline) {
     # A middle dot, written as a code point: Windows PowerShell reads a script
@@ -238,14 +250,13 @@ function Invoke-Provision([string]$Phase, [string]$As, [switch]$NoThrow, [switch
 # Downloads the newest Debian WSL image for this machine from Debian's
 # releases on salsa.debian.org; returns its path
 function Get-DebianImage([string]$Directory) {
-    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'ARM64' } else { 'AMD64' }
     # Windows' curl.exe: salsa.debian.org answers PowerShell's web client with
     # a bot challenge. The releases come newest first.
     $json = & curl.exe -fsSL 'https://salsa.debian.org/api/v4/projects/debian%2FWSL/releases?per_page=1'
     if ($LASTEXITCODE -ne 0) { throw "Could not read Debian's WSL releases (curl exit code $LASTEXITCODE)" }
     $release = @(($json -join "`n") | ConvertFrom-Json)[0]
-    $asset = $release.assets.links | Where-Object { $_.name -like "Debian_WSL_${arch}_*.wsl" } | Select-Object -First 1
-    if (-not $asset) { throw "Debian's WSL release $($release.tag_name) has no image for $arch" }
+    $asset = $release.assets.links | Where-Object { $_.name -like 'Debian_WSL_AMD64_*.wsl' } | Select-Object -First 1
+    if (-not $asset) { throw "Debian's WSL release $($release.tag_name) has no image for AMD64" }
     $path = Join-Path $Directory $asset.name
     Write-Host "Downloading $($asset.name)"
     & curl.exe -fL --retry 3 -o $path $asset.url
@@ -266,17 +277,43 @@ function Get-WslVersion {
 # releases on GitHub; returns its path. The Microsoft Store's is the same
 # package; the .msi installs without the Store, and without WSL 1.
 function Get-WslPackage([string]$Directory) {
-    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
     $json = & curl.exe -fsSL 'https://api.github.com/repos/microsoft/WSL/releases/latest'
     if ($LASTEXITCODE -ne 0) { throw "Could not read WSL's releases (curl exit code $LASTEXITCODE)" }
     $release = ($json -join "`n") | ConvertFrom-Json
-    $asset = $release.assets | Where-Object { $_.name -like "wsl.*.$arch.msi" } | Select-Object -First 1
-    if (-not $asset) { throw "WSL's release $($release.tag_name) has no package for $arch" }
+    $asset = $release.assets | Where-Object { $_.name -like 'wsl.*.x64.msi' } | Select-Object -First 1
+    if (-not $asset) { throw "WSL's release $($release.tag_name) has no package for x64" }
     $path = Join-Path $Directory $asset.name
     Write-Host "Downloading $($asset.name)"
     & curl.exe -fL --retry 3 -o $path $asset.browser_download_url
     if ($LASTEXITCODE -ne 0) { throw "Could not download $($asset.browser_download_url) (curl exit code $LASTEXITCODE)" }
     return $path
+}
+
+# Puts the packages of Ika's latest release (ika-base and ika-lineageos, .deb,
+# for amd64) in $Directory, from Ika's releases on GitHub: one already
+# there with the release's name and size is used as it is, so that another run
+# does not download it again; the other versions of them are removed.
+function Get-IkaPackages([string]$Directory) {
+    $json = & curl.exe -fsSL 'https://api.github.com/repos/DesktopECHO/ika/releases/latest'
+    if ($LASTEXITCODE -ne 0) { throw "Could not read Ika's releases (curl exit code $LASTEXITCODE)" }
+    $release = ($json -join "`n") | ConvertFrom-Json
+    foreach ($package in 'ika-base', 'ika-lineageos') {
+        $asset = $release.assets | Where-Object { $_.name -like "${package}_*_amd64.deb" } | Select-Object -First 1
+        if (-not $asset) { throw "Ika's release $($release.tag_name) has no $package package for amd64" }
+        $path = Join-Path $Directory $asset.name
+        if ((Test-Path -LiteralPath $path) -and (Get-Item -LiteralPath $path).Length -eq $asset.size) {
+            Write-Host "Using $($asset.name) in $Directory"
+        } else {
+            Write-Host "Downloading $($asset.name)"
+            # Under another name until it is whole: a download that stops must
+            # not be taken for the package next time
+            & curl.exe -fL --retry 3 -o "$path.part" $asset.browser_download_url
+            if ($LASTEXITCODE -ne 0) { throw "Could not download $($asset.browser_download_url) (curl exit code $LASTEXITCODE)" }
+            Move-Item -LiteralPath "$path.part" -Destination $path -Force
+        }
+        Get-ChildItem -LiteralPath $Directory -Filter "${package}_*_amd64.deb" -File |
+            Where-Object { $_.Name -ne $asset.name } | Remove-Item -Force
+    }
 }
 
 # Gives the distribution's Terminal profile Ika's icon: WSL copied the image's
@@ -487,12 +524,19 @@ if ($UserName -notmatch '^[a-z_][a-z0-9_-]{0,31}$' -or $UserName -eq 'root') {
     throw "'$UserName' cannot be a Linux user name; pass one with -UserName"
 }
 
-# The packages, checked before anything is installed
-$PackageDirectory = (Resolve-Path -LiteralPath $PackageDirectory).ProviderPath
-foreach ($package in 'ika-base', 'ika-lineageos') {
-    if (-not (Get-ChildItem -LiteralPath $PackageDirectory -Filter "${package}_*.deb" -File)) {
-        throw "$PackageDirectory has no $package package (${package}_VERSION_ARCH.deb); pass the folder with -PackageDirectory"
+# The packages, in hand before anything is installed: those of
+# -PackageDirectory, else the latest release's, kept in %TEMP% for another run
+if ($PackageDirectory) {
+    $PackageDirectory = (Resolve-Path -LiteralPath $PackageDirectory).ProviderPath
+    foreach ($package in 'ika-base', 'ika-lineageos') {
+        if (-not (Get-ChildItem -LiteralPath $PackageDirectory -Filter "${package}_*.deb" -File)) {
+            throw "$PackageDirectory has no $package package (${package}_VERSION_ARCH.deb)"
+        }
     }
+} else {
+    $PackageDirectory = $env:TEMP
+    Write-Step 'Getting the Ika packages'
+    Get-IkaPackages $PackageDirectory
 }
 # The install step reads them from there, as a Linux path (WSLENV's /p)
 $env:IKA_PACKAGE_DIR = $PackageDirectory

@@ -43,7 +43,7 @@ virtual machine, with its apps in windows of their own.
   [trixie-backports](https://backports.debian.org/Instructions/), Ubuntu from
   the [Kisak Mesa PPA](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa);
   Fedora 44 and Arch Linux have it.
-- On Windows, WSL2 with one of those distributions, readied by
+- On an x86-64 Windows PC, WSL2 with one of those distributions, readied by
   `ika-wsl-setup`, or a Debian 13 distribution named Ika that
   `ika-wsl.ps1` deploys with Ika installed (see
   [Windows (WSL2)](CONFIGURATION.md#windows-wsl2)).
