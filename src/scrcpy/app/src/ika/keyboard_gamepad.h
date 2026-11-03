@@ -214,4 +214,12 @@ sc_keyboard_gamepad_handle_mouse_wheel(struct sc_keyboard_gamepad *kg,
 void
 sc_keyboard_gamepad_release_all(struct sc_keyboard_gamepad *kg);
 
+// Releases the held mouse buttons and wheel notches, and brings the mouse's
+// stick back to its center, at now_ms, for when the window lets the pointer
+// go: the mouse is no longer the gamepad's, and the release of a button held
+// meanwhile would not reach it
+void
+sc_keyboard_gamepad_release_mouse(struct sc_keyboard_gamepad *kg,
+                                  uint64_t now_ms);
+
 #endif

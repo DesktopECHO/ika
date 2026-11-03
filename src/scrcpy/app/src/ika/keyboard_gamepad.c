@@ -537,9 +537,6 @@ kg_axis_value(int8_t direction, int32_t magnitude) {
     return (int16_t) magnitude;
 }
 
-// Sends a stick's position, in one report when the processor takes stick
-// events, else as the two axis events, the axis that comes back toward the
-// center first, so that the stick never leaves its round gate between them
 // The stick the mouse moves, or -1
 static int
 kg_mouse_pad(const struct sc_keyboard_gamepad *kg) {
@@ -553,6 +550,9 @@ kg_mouse_pad(const struct sc_keyboard_gamepad *kg) {
     }
 }
 
+// Sends a stick's position, in one report when the processor takes stick
+// events, else as the two axis events, the axis that comes back toward the
+// center first, so that the stick never leaves its round gate between them
 static void
 kg_send_stick(struct sc_keyboard_gamepad *kg, enum kg_pad pad) {
     assert(pad == KG_LEFT_STICK || pad == KG_RIGHT_STICK);
@@ -929,5 +929,26 @@ sc_keyboard_gamepad_release_all(struct sc_keyboard_gamepad *kg) {
         if (kg->keys[i].pressed) {
             kg_apply_key(kg, &kg->keys[i], false, kg->tick_ms);
         }
+    }
+}
+
+void
+sc_keyboard_gamepad_release_mouse(struct sc_keyboard_gamepad *kg,
+                                  uint64_t now_ms) {
+    for (size_t i = 0; i < kg->key_count; ++i) {
+        struct sc_keyboard_gamepad_key *key = &kg->keys[i];
+        if (key->pressed && key->input != SC_KEYBOARD_GAMEPAD_INPUT_KEY) {
+            kg_apply_key(kg, key, false, now_ms);
+        }
+    }
+
+    // The motion not sent yet is dropped, and the stick comes back at once
+    kg->mouse_dx = 0;
+    kg->mouse_dy = 0;
+    kg->mouse_x = 0;
+    kg->mouse_y = 0;
+    int mouse_pad = kg_mouse_pad(kg);
+    if (mouse_pad >= 0) {
+        kg_send_stick(kg, mouse_pad);
     }
 }

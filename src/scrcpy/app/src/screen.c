@@ -352,6 +352,23 @@ sc_screen_is_relative_mode(struct sc_screen *screen) {
     return screen->im.mp && screen->im.mp->relative_mode;
 }
 
+// Ika: the mouse capture handler; when it lets the pointer go, the keyboard
+// gamepad lets go of the mouse: the release of a button held meanwhile would
+// reach the SDK mouse (or nothing, in relative mode) and leave the gamepad's
+// control pressed on the device
+static bool
+sc_screen_handle_mouse_capture_event(struct sc_screen *screen,
+                                     const SDL_Event *event) {
+    bool gamepad_had_mouse = sc_screen_gamepad_takes_mouse(screen)
+                          && sc_mouse_capture_is_active(&screen->mc);
+    bool consumed = sc_mouse_capture_handle_event(&screen->mc, event);
+    if (gamepad_had_mouse && !sc_mouse_capture_is_active(&screen->mc)) {
+        sc_keyboard_gamepad_release_mouse(screen->im.kg,
+                                          event->common.timestamp / 1000000);
+    }
+    return consumed;
+}
+
 static void
 compute_content_rect(struct sc_size window_size, struct sc_size content_size,
                      bool is_icon, enum sc_render_fit render_fit,
@@ -1880,7 +1897,7 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
     }
 
     if (sc_screen_is_relative_mode(screen)
-            && sc_mouse_capture_handle_event(&screen->mc, event)) {
+            && sc_screen_handle_mouse_capture_event(screen, event)) {
         // The mouse capture handler consumed the event
         return;
     }
@@ -1895,7 +1912,7 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
             case SDL_EVENT_WINDOW_FOCUS_LOST:
             case SDL_EVENT_KEY_DOWN:
             case SDL_EVENT_KEY_UP:
-                if (sc_mouse_capture_handle_event(&screen->mc, event)) {
+                if (sc_screen_handle_mouse_capture_event(screen, event)) {
                     return;
                 }
                 break;

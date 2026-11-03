@@ -623,6 +623,58 @@ static void test_mouse_buttons_and_wheel(void) {
     assert(!tick(400));
 }
 
+// The window lets the pointer go (the capture key) while mouse buttons hold
+// controls: the gamepad lets go of the mouse's controls, not the keyboard's,
+// and the buttons' later release is not the gamepad's
+static void test_release_mouse(void) {
+    setup("a=Space,left_trigger=Mouse_Right,right_trigger=Z/Mouse_Left,"
+          "left_shoulder=Wheel_Up,mouse_stick=right");
+
+    press(SDL_SCANCODE_SPACE);
+    assert(sc_keyboard_gamepad_handle_mouse_button(&kg, SC_MOUSE_BUTTON_RIGHT,
+                                                   true, 0));
+    assert(r.axes[SC_GAMEPAD_AXIS_LEFT_TRIGGER] == INT16_MAX);
+    press(SDL_SCANCODE_Z);
+    assert(sc_keyboard_gamepad_handle_mouse_button(&kg, SC_MOUSE_BUTTON_LEFT,
+                                                   true, 0));
+    assert(r.axes[SC_GAMEPAD_AXIS_RIGHT_TRIGGER] == INT16_MAX);
+    sc_keyboard_gamepad_handle_mouse_wheel(&kg, 0, 1, 0);
+    assert(button_down(&r, SC_GAMEPAD_BUTTON_LEFT_SHOULDER));
+    sc_keyboard_gamepad_handle_mouse_motion(&kg, 32, 0, 0);
+    assert(tick(8));
+    assert(r.axes[SC_GAMEPAD_AXIS_RIGHTX] == INT16_MAX);
+    // Motion the next tick would send
+    sc_keyboard_gamepad_handle_mouse_motion(&kg, 32, 0, 10);
+
+    sc_keyboard_gamepad_release_mouse(&kg, 12);
+    assert(!r.axes[SC_GAMEPAD_AXIS_LEFT_TRIGGER]);
+    assert(!button_down(&r, SC_GAMEPAD_BUTTON_LEFT_SHOULDER));
+    assert(!r.axes[SC_GAMEPAD_AXIS_RIGHTX]);
+    // The keyboard's keys stay held, Z holding the right trigger
+    assert(button_down(&r, SC_GAMEPAD_BUTTON_SOUTH));
+    assert(r.axes[SC_GAMEPAD_AXIS_RIGHT_TRIGGER] == INT16_MAX);
+    // The motion not sent is dropped
+    assert(!tick(16));
+    assert(!r.axes[SC_GAMEPAD_AXIS_RIGHTX]);
+
+    // The buttons' release reaches the usual mouse
+    assert(!sc_keyboard_gamepad_handle_mouse_button(&kg, SC_MOUSE_BUTTON_RIGHT,
+                                                    false, 20));
+    assert(!sc_keyboard_gamepad_handle_mouse_button(&kg, SC_MOUSE_BUTTON_LEFT,
+                                                    false, 20));
+    release(SDL_SCANCODE_Z);
+    release(SDL_SCANCODE_SPACE);
+    assert_neutral();
+
+    // Captured again, the buttons are the gamepad's as before
+    assert(sc_keyboard_gamepad_handle_mouse_button(&kg, SC_MOUSE_BUTTON_RIGHT,
+                                                   true, 30));
+    assert(r.axes[SC_GAMEPAD_AXIS_LEFT_TRIGGER] == INT16_MAX);
+    assert(sc_keyboard_gamepad_handle_mouse_button(&kg, SC_MOUSE_BUTTON_RIGHT,
+                                                   false, 40));
+    assert_neutral();
+}
+
 static void test_mouse_stick(void) {
     // Off by default: motion does nothing
     setup(NULL);
@@ -773,6 +825,7 @@ int main(int argc, char *argv[]) {
     test_release_all();
     test_mouse_buttons_and_wheel();
     test_mouse_stick();
+    test_release_mouse();
     test_spec();
     return 0;
 }

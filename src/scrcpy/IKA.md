@@ -198,11 +198,14 @@ gamepad of the device too; other keys still type
   - `socd=last|neutral` is what two opposite directions held together do,
     the last pressed or nothing, for every pad; `socd_dpad`,
     `socd_left_stick` and `socd_right_stick` set one pad.
-- **The mouse:** with `mouse_stick`, or a mouse button or the wheel mapped,
-  the gamepad takes the mouse: the window captures the pointer, and while it
-  is captured the mouse's motion, buttons and wheel reach the gamepad in the
-  input manager, unmapped buttons dropped, a button pressed before the capture
-  released where it was pressed. A HID mouse then gets nothing.
+- **The mouse:** with `mouse_stick` set, the gamepad takes the mouse: the
+  window captures the pointer, and while it is captured the mouse's motion,
+  buttons and wheel reach the gamepad in the input manager, unmapped buttons
+  dropped, a button pressed before the capture released where it was
+  pressed. A HID mouse then gets nothing. When the window lets the pointer go
+  (the capture key, the focus loss), the gamepad releases the mouse's buttons
+  and wheel and centers the mouse's stick. With `mouse_stick=off`, mapped
+  mouse buttons and wheel do nothing, and the mouse works as usual.
 - **The timer:** an SDL timer (`SC_EVENT_GAMEKB_TIMER`) sends one report every
   8 ms while a stick ramps, while the mouse moves a stick, and while a wheel
   notch is held.
@@ -218,8 +221,10 @@ gamepad of the device too; other keys still type
   device.
 
 `ika` passes its own SPEC: the keys and settings of `[keyboard_gamepad]` in
-`ika.ini`, or of a game's `controller.ini`, whose defaults map the mouse to the
-right stick, the triggers, a stick click and the shoulders, with a 100 ms ramp.
+`ika.ini`, or of a game's `controller.ini`, whose defaults have a 100 ms ramp
+and map the mouse's buttons to the triggers and a stick click and its wheel to
+the shoulders, with `mouse_stick=off`: those mouse keys work only once a game's
+mapping sets a stick for the mouse.
 
 ## Server
 

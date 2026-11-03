@@ -915,8 +915,9 @@ sc_input_manager_process_mouse_button(struct sc_input_manager *im,
     }
 
     // Ika: captured, the mouse's buttons are the keyboard gamepad's; a
-    // button it does not hold is released where it was pressed
-    if (!paused && sc_input_manager_gamepad_has_mouse(im)
+    // button it does not hold is released where it was pressed, and one it
+    // holds is released on the gamepad even while the display is paused
+    if ((!paused || !down) && sc_input_manager_gamepad_has_mouse(im)
             && sc_keyboard_gamepad_handle_mouse_button(
                    im->kg, button, down, event->timestamp / 1000000)) {
         return;
