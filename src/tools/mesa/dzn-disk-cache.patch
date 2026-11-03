@@ -1,0 +1,48 @@
+dzn: Give the physical device a disk cache
+
+Dozen never created a disk cache, so the NIR and DXIL its pipeline caches
+hold were only kept for as long as the application kept its
+VkPipelineCache, and every new process compiled every shader again.
+
+Create one keyed by the pipeline cache UUID, which already covers the
+build and the D3D12 capabilities the compile depends on, so that
+vk_pipeline_cache keeps those objects on disk.
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index bf20449..043ad02 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -35,6 +35,7 @@
+ 
+ #include "util/u_debug.h"
+ #include "util/disk_cache.h"
++#include "util/hex.h"
+ #include "util/macros.h"
+ #include "util/mesa-blake3.h"
+ #include "util/u_dl.h"
+@@ -248,6 +249,10 @@ dzn_physical_device_destroy(struct vk_physical_device *physical)
+ 
+    dzn_physical_device_release(pdev);
+    dzn_wsi_finish(pdev);
++#ifdef ENABLE_SHADER_CACHE
++   if (pdev->vk.disk_cache)
++      disk_cache_destroy(pdev->vk.disk_cache);
++#endif
+    vk_physical_device_finish(&pdev->vk);
+    vk_free(&instance->vk.alloc, pdev);
+ }
+@@ -1262,6 +1267,15 @@ dzn_physical_device_create(struct vk_instance *instance,
+    dzn_physical_device_init_memory(pdev);
+    dzn_physical_device_init_uuids(pdev);
+ 
++#ifdef ENABLE_SHADER_CACHE
++   /* Keeps the NIR and DXIL that pipeline caches hold across processes and
++    * runs. The pipeline cache UUID covers the build and the D3D12 caps the
++    * compile depends on. */
++   char cache_id[VK_UUID_SIZE * 2 + 1];
++   mesa_bytes_to_hex(cache_id, pdev->pipeline_cache_uuid, VK_UUID_SIZE);
++   pdev->vk.disk_cache = disk_cache_create("dzn", cache_id, 0);
++#endif
++
+    dzn_physical_device_get_extensions(pdev);
+    if (dzn_physical_device_supports_8bit(pdev))
+       pdev->vk.supported_extensions.KHR_8bit_storage = true;

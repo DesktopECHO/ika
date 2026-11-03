@@ -1,0 +1,50 @@
+dzn: Use write-back CPU pages for host-visible memory on all UMA GPUs
+
+Host-visible memory types and the command buffers' upload buffers used
+write-combined pages unless the GPU reported CacheCoherentUMA, which
+integrated AMD GPUs do not. WSL2's GPU paravirtualization maps
+write-combined memory uncached: writing it ran at 383 MB/s against
+13049 MB/s for write-back memory on a Radeon 780M, so every CPU upload
+through Dozen ran 34 times slower than it could.
+
+On UMA, give the host-visible memory types and the upload buffers
+write-back pages in L0, as the host-cached memory type and cache-coherent
+UMA GPUs already have.
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index 9b0d83d..31e3e8a 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -1892,6 +1892,15 @@ dzn_cmd_buffer_alloc_internal_buf(struct dzn_cmd_buffer *cmdbuf,
+    }
+ 
+    D3D12_HEAP_PROPERTIES hprops = dzn_ID3D12Device4_GetCustomHeapProperties(device->dev, 0, heap_type);
++   /* On UMA, upload buffers are write-back like the host-visible memory
++    * types: see deduce_heap_properties_from_memory(). */
++   struct dzn_physical_device *pdev =
++      container_of(device->vk.physical, struct dzn_physical_device, vk);
++   if (bucket == DZN_INTERNAL_BUF_UPLOAD && pdev->architecture.UMA) {
++      hprops.Type = D3D12_HEAP_TYPE_CUSTOM;
++      hprops.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
++      hprops.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
++   }
+    D3D12_RESOURCE_DESC rdesc = {
+       .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
+       .Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index 1e64055..03132da 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -2764,8 +2764,12 @@ deduce_heap_properties_from_memory(struct dzn_physical_device *pdevice,
+       ((mem_type->propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) &&
+        !pdevice->architecture.UMA) ?
+       D3D12_MEMORY_POOL_L1 : D3D12_MEMORY_POOL_L0;
++   /* Host-visible memory is write-back on UMA, not only cache-coherent UMA:
++    * WSL2's GPU paravirtualization maps write-combined memory uncached, and
++    * writing it ran 34 times slower (383 against 13049 MB/s on a Radeon 780M,
++    * which does not report CacheCoherentUMA). */
+    if ((mem_type->propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) ||
+-       ((mem_type->propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && pdevice->architecture.CacheCoherentUMA)) {
++       ((mem_type->propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && pdevice->architecture.UMA)) {
+       properties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+    } else if (mem_type->propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+       properties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE;

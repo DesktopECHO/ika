@@ -1,0 +1,57 @@
+dzn: Fail physical device creation when no command queue can be created
+
+dzn_physical_device_cache_caps() created a command queue to read the
+timestamp frequency and did not check that it got one: when
+CreateCommandQueue failed, it called GetTimestampFrequency through a NULL
+pointer. Under WSL2 this happens to processes that probe the GPU while
+others use it, such as Cuttlefish's graphics_detect, which crashed in
+vkEnumeratePhysicalDevices.
+
+Return an error instead, and leave the adapter out, as when the D3D12
+device cannot be created.
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index 043ad02..d8c8fb7 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -433,7 +433,7 @@ dzn_physical_device_get_options(struct dzn_physical_device *pdev,
+           SUCCEEDED(ID3D12Device1_CheckFeatureSupport(pdev->dev, feature, data, size));
+ }
+ 
+-static void
++static VkResult
+ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
+ {
+    const struct dzn_instance *instance =
+@@ -548,14 +548,16 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
+    };
+ 
+    ID3D12CommandQueue *cmdqueue;
+-   ID3D12Device1_CreateCommandQueue(pdev->dev, &queue_desc,
+-                                    &IID_ID3D12CommandQueue,
+-                                    (void **)&cmdqueue);
++   if (FAILED(ID3D12Device1_CreateCommandQueue(pdev->dev, &queue_desc,
++                                               &IID_ID3D12CommandQueue,
++                                               (void **)&cmdqueue)))
++      return VK_ERROR_INITIALIZATION_FAILED;
+ 
+    uint64_t ts_freq;
+    ID3D12CommandQueue_GetTimestampFrequency(cmdqueue, &ts_freq);
+    pdev->timestamp_period = 1000000000.0f / ts_freq;
+    ID3D12CommandQueue_Release(cmdqueue);
++   return VK_SUCCESS;
+ }
+ 
+ static void
+@@ -1255,7 +1257,11 @@ dzn_physical_device_create(struct vk_instance *instance,
+       if (FAILED(ID3D12Device1_QueryInterface(pdev->dev, &IID_ID3D12Device13, (void **)&pdev->dev13)))
+          pdev->dev13 = NULL;
+    }
+-   dzn_physical_device_cache_caps(pdev);
++   if (dzn_physical_device_cache_caps(pdev) != VK_SUCCESS) {
++      list_del(&pdev->vk.link);
++      dzn_physical_device_destroy(&pdev->vk);
++      return vk_error(instance, VK_ERROR_INITIALIZATION_FAILED);
++   }
+ 
+    if (dzn_instance->debug_flags & DZN_DEBUG_MULTIVIEW)
+       pdev->options3.ViewInstancingTier = D3D12_VIEW_INSTANCING_TIER_NOT_SUPPORTED;

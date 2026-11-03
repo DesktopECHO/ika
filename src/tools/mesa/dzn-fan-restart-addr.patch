@@ -1,0 +1,16 @@
+dzn: Fix the high half of the primitive-restart index count address
+
+Generated-by: LLM
+diff --git a/src/microsoft/vulkan/dzn_nir.c b/src/microsoft/vulkan/dzn_nir.c
+index 4bd3737..d6d3f17 100644
+--- a/src/microsoft/vulkan/dzn_nir.c
++++ b/src/microsoft/vulkan/dzn_nir.c
+@@ -230,7 +230,7 @@ dzn_nir_indirect_draw_shader(struct dzn_indirect_draw_type type)
+                                  nir_imul(&b, exec_stride, index)));
+             addr_lo_overflow = nir_ult(&b, exec_buf_start_lo, nir_channel(&b, exec_buf_start, 0));
+             nir_def *exec_buf_start_hi =
+-               nir_iadd(&b, nir_channel(&b, exec_buf_start, 0),
++               nir_iadd(&b, nir_channel(&b, exec_buf_start, 1),
+                         nir_bcsel(&b, addr_lo_overflow, nir_imm_int(&b, 1), nir_imm_int(&b, 0)));
+             triangle_fan_exec_vals[triangle_fan_exec_param_count++] = exec_buf_start_lo;
+             triangle_fan_exec_vals[triangle_fan_exec_param_count++] = exec_buf_start_hi;

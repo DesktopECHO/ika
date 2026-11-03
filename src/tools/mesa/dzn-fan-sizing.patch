@@ -1,0 +1,420 @@
+dzn: Size the indirect triangle-fan lowering for non-indexed draws
+
+Generated-by: LLM
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index 31e3e8a..f3d57d5 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -4190,33 +4190,28 @@ dzn_cmd_buffer_prepare_draw(struct dzn_cmd_buffer *cmdbuf, bool indexed)
+ }
+ 
+ static uint32_t
+-dzn_cmd_buffer_triangle_fan_get_max_index_buf_size(struct dzn_cmd_buffer *cmdbuf, bool indexed)
++dzn_cmd_buffer_triangle_fan_get_max_triangle_count(struct dzn_cmd_buffer *cmdbuf, bool indexed)
+ {
+    struct dzn_graphics_pipeline *pipeline = (struct dzn_graphics_pipeline *)
+       cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].pipeline;
+-
+-   if (!dzn_cmd_buffer_triangle_fan(cmdbuf, pipeline))
+-      return 0;
+-
+-   uint32_t max_triangles;
++   uint32_t max_vertices = 0;
+ 
+    if (indexed) {
+       uint32_t index_size = cmdbuf->state.ib.view.Format == DXGI_FORMAT_R32_UINT ? 4 : 2;
+-      uint32_t max_indices = cmdbuf->state.ib.view.SizeInBytes / index_size;
+ 
+-      max_triangles = MAX2(max_indices, 2) - 2;
++      max_vertices = cmdbuf->state.ib.view.SizeInBytes / index_size;
+    } else {
+-      uint32_t max_vertex = 0;
+       for (uint32_t i = 0; i < pipeline->vb.count; i++) {
+-         max_vertex =
+-            MAX2(max_vertex,
++         if (!cmdbuf->state.vb.views[i].StrideInBytes)
++            continue;
++
++         max_vertices =
++            MAX2(max_vertices,
+                  cmdbuf->state.vb.views[i].SizeInBytes / cmdbuf->state.vb.views[i].StrideInBytes);
+       }
+-
+-      max_triangles = MAX2(max_vertex, 2) - 2;
+    }
+ 
+-   return max_triangles * 3;
++   return MAX2(max_vertices, 3) - 2;
+ }
+ 
+ static void
+@@ -4231,11 +4226,30 @@ dzn_cmd_buffer_patch_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
+                                    bool *inout_indexed)
+ {
+    struct dzn_device *device = container_of(cmdbuf->vk.base.device, struct dzn_device, vk);
+-   uint32_t triangle_fan_index_buf_stride =
+-      dzn_cmd_buffer_triangle_fan_get_max_index_buf_size(cmdbuf, *inout_indexed) *
+-      sizeof(uint32_t);
++   uint32_t triangle_fan_index_buf_stride = 0;
++   ID3D12Resource *triangle_fan_index_buf = NULL;
++   ID3D12Resource *triangle_fan_exec_buf = NULL;
++   VkResult result;
++
++   if (draw_type.triangle_fan) {
++      uint32_t max_triangle_count =
++         dzn_cmd_buffer_triangle_fan_get_max_triangle_count(cmdbuf, *inout_indexed);
++
++      if (!*inout_indexed) {
++         triangle_fan_index_buf =
++            dzn_meta_get_triangle_fan_index_buf(device, max_triangle_count, &max_triangle_count);
++         if (!triangle_fan_index_buf) {
++            vk_command_buffer_set_error(&cmdbuf->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
++            return;
++         }
++      }
+ 
+-   uint32_t min_draw_buf_stride = *inout_indexed ? sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) : sizeof(D3D12_DRAW_ARGUMENTS);
++      triangle_fan_index_buf_stride = max_triangle_count * 3 * sizeof(uint32_t);
++   }
++
++   uint32_t min_draw_buf_stride =
++      *inout_indexed || draw_type.triangle_fan ?
++      sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) : sizeof(D3D12_DRAW_ARGUMENTS);
+ 
+    uint32_t exec_buf_stride =
+       (draw_type.triangle_fan ? sizeof(D3D12_INDEX_BUFFER_VIEW) : 0) +
+@@ -4255,7 +4269,7 @@ dzn_cmd_buffer_patch_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
+    }
+ 
+    ID3D12Resource *exec_buf;
+-   VkResult result =
++   result =
+       dzn_cmd_buffer_alloc_internal_buf(cmdbuf, exec_buf_size,
+                                         DZN_INTERNAL_BUF_DEFAULT,
+                                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+@@ -4266,10 +4280,8 @@ dzn_cmd_buffer_patch_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
+ 
+    D3D12_GPU_VIRTUAL_ADDRESS draw_buf_gpu =
+       ID3D12Resource_GetGPUVirtualAddress(*inout_draw_buf) + *inout_draw_buf_offset;
+-   ID3D12Resource *triangle_fan_index_buf = NULL;
+-   ID3D12Resource *triangle_fan_exec_buf = NULL;
+ 
+-   if (triangle_fan_index_buf_stride) {
++   if (draw_type.triangle_fan && *inout_indexed) {
+       result =
+          dzn_cmd_buffer_alloc_internal_buf(cmdbuf,
+                                            max_draw_count * triangle_fan_index_buf_stride,
+@@ -4416,7 +4428,9 @@ dzn_cmd_buffer_patch_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
+                                                   D3D12_RESOURCE_STATE_INDEX_BUFFER,
+                                                   DZN_QUEUE_TRANSITION_FLUSH);
+       }
++   }
+ 
++   if (draw_type.triangle_fan) {
+       /* After our triangle-fan lowering the draw is indexed */
+       *inout_indexed = true;
+       cmdbuf->state.ib.view.BufferLocation = ID3D12Resource_GetGPUVirtualAddress(triangle_fan_index_buf);
+@@ -4496,7 +4510,7 @@ dzn_cmd_buffer_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
+    draw_type.draw_params = pipeline->needs_draw_sysvals && !pdev->options21.ExtendedCommandInfoSupported;
+    draw_type.draw_id = max_draw_count > 1 && pdev->options21.ExecuteIndirectTier < D3D12_EXECUTE_INDIRECT_TIER_1_1;
+    draw_type.triangle_fan = dzn_cmd_buffer_triangle_fan(cmdbuf, pipeline);
+-   draw_type.triangle_fan_primitive_restart = draw_type.triangle_fan && prim_restart;
++   draw_type.triangle_fan_primitive_restart = draw_type.triangle_fan && indexed && prim_restart;
+ 
+    if (draw_type.draw_params || draw_type.draw_id || draw_type.triangle_fan) {
+       dzn_cmd_buffer_patch_indirect_draw(cmdbuf, draw_type,
+diff --git a/src/microsoft/vulkan/dzn_meta.c b/src/microsoft/vulkan/dzn_meta.c
+index e4d4865..cb36663 100644
+--- a/src/microsoft/vulkan/dzn_meta.c
++++ b/src/microsoft/vulkan/dzn_meta.c
+@@ -179,7 +179,7 @@ dzn_meta_indirect_draw_init(struct dzn_device *device,
+    }
+ 
+ 
+-   if (type.triangle_fan) {
++   if (type.triangle_fan && type.indexed) {
+       root_params[root_param_count++] = (D3D12_ROOT_PARAMETER1) {
+          .ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV,
+          .Descriptor = {
+@@ -813,6 +813,12 @@ dzn_meta_finish(struct dzn_device *device)
+    for (uint32_t i = 0; i < ARRAY_SIZE(device->indirect_draws); i++)
+       dzn_meta_indirect_draw_finish(device, (struct dzn_indirect_draw_type) { .value = i });
+ 
++   if (device->triangle_fan_index_buf.res)
++      ID3D12Resource_Release(device->triangle_fan_index_buf.res);
++   util_dynarray_foreach(&device->triangle_fan_index_buf.retired, ID3D12Resource *, res)
++      ID3D12Resource_Release(*res);
++   util_dynarray_fini(&device->triangle_fan_index_buf.retired);
++
+    dzn_meta_blits_finish(device);
+    mtx_destroy(&device->meta_lock);
+ }
+@@ -848,10 +854,90 @@ dzn_meta_get_triangle_fan_rewrite_index(struct dzn_device *device, enum dzn_inde
+    return meta->pipeline_state ? meta : NULL;
+ }
+ 
++#define DZN_META_TRIANGLE_FAN_MIN_TRIANGLES (64 * 1024)
++#define DZN_META_TRIANGLE_FAN_MAX_TRIANGLES (4 * 1024 * 1024)
++
++static ID3D12Resource *
++dzn_meta_triangle_fan_index_buf_create(struct dzn_device *device, uint32_t triangle_count)
++{
++   D3D12_HEAP_PROPERTIES hprops =
++      dzn_ID3D12Device4_GetCustomHeapProperties(device->dev, 0, D3D12_HEAP_TYPE_UPLOAD);
++   D3D12_RESOURCE_DESC rdesc = {
++      .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
++      .Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
++      .Width = (uint64_t)triangle_count * 3 * sizeof(uint32_t),
++      .Height = 1,
++      .DepthOrArraySize = 1,
++      .MipLevels = 1,
++      .Format = DXGI_FORMAT_UNKNOWN,
++      .SampleDesc = { .Count = 1, .Quality = 0 },
++      .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
++      .Flags = D3D12_RESOURCE_FLAG_NONE,
++   };
++
++   ID3D12Resource *res;
++   if (FAILED(ID3D12Device1_CreateCommittedResource(device->dev, &hprops,
++                                                   D3D12_HEAP_FLAG_NONE,
++                                                   &rdesc,
++                                                   D3D12_RESOURCE_STATE_COMMON,
++                                                   NULL,
++                                                   &IID_ID3D12Resource,
++                                                   (void **)&res)))
++      return NULL;
++
++   uint32_t *indices;
++   if (FAILED(ID3D12Resource_Map(res, 0, NULL, (void **)&indices))) {
++      ID3D12Resource_Release(res);
++      return NULL;
++   }
++
++   for (uint32_t t = 0; t < triangle_count; t++) {
++      indices[t * 3] = t + 1;
++      indices[(t * 3) + 1] = t + 2;
++      indices[(t * 3) + 2] = 0;
++   }
++   ID3D12Resource_Unmap(res, 0, NULL);
++
++   return res;
++}
++
++ID3D12Resource *
++dzn_meta_get_triangle_fan_index_buf(struct dzn_device *device, uint32_t min_triangle_count,
++                                    uint32_t *triangle_count)
++{
++   min_triangle_count = MIN2(min_triangle_count, DZN_META_TRIANGLE_FAN_MAX_TRIANGLES);
++
++   mtx_lock(&device->meta_lock);
++   if (device->triangle_fan_index_buf.triangle_count < min_triangle_count ||
++       !device->triangle_fan_index_buf.res) {
++      uint32_t new_count =
++         MAX3(min_triangle_count, device->triangle_fan_index_buf.triangle_count * 2,
++              DZN_META_TRIANGLE_FAN_MIN_TRIANGLES);
++      new_count = MIN2(new_count, DZN_META_TRIANGLE_FAN_MAX_TRIANGLES);
++
++      ID3D12Resource *res = dzn_meta_triangle_fan_index_buf_create(device, new_count);
++      if (res) {
++         if (device->triangle_fan_index_buf.res) {
++            util_dynarray_append_typed(&device->triangle_fan_index_buf.retired,
++                                       ID3D12Resource *, device->triangle_fan_index_buf.res);
++         }
++         device->triangle_fan_index_buf.res = res;
++         device->triangle_fan_index_buf.triangle_count = new_count;
++      }
++   }
++
++   ID3D12Resource *res = device->triangle_fan_index_buf.res;
++   *triangle_count = device->triangle_fan_index_buf.triangle_count;
++   mtx_unlock(&device->meta_lock);
++
++   return res;
++}
++
+ VkResult
+ dzn_meta_init(struct dzn_device *device)
+ {
+    mtx_init(&device->meta_lock, mtx_plain);
++   util_dynarray_init(&device->triangle_fan_index_buf.retired, NULL);
+ 
+    /* On failure, dzn_device_destroy() calls dzn_meta_finish(). */
+    return dzn_meta_blits_init(device);
+diff --git a/src/microsoft/vulkan/dzn_nir.c b/src/microsoft/vulkan/dzn_nir.c
+index 247d2ef..4bd3737 100644
+--- a/src/microsoft/vulkan/dzn_nir.c
++++ b/src/microsoft/vulkan/dzn_nir.c
+@@ -180,81 +180,88 @@ dzn_nir_indirect_draw_shader(struct dzn_indirect_draw_type type)
+       exec_vals[exec_val_idx++] = index;
+ 
+    if (type.triangle_fan) {
++      nir_def *triangle_fan_index_buf_stride = nir_channel(&b, params, 1);
++
+       /* Patch {vertex,index}_count and first_index */
+       nir_def *triangle_count =
+-         nir_usub_sat(&b, nir_channel(&b, draw_info1, 0), nir_imm_int(&b, 2));
++         nir_umin(&b,
++                  nir_usub_sat(&b, nir_channel(&b, draw_info1, 0), nir_imm_int(&b, 2)),
++                  nir_udiv_imm(&b, triangle_fan_index_buf_stride, 3 * sizeof(uint32_t)));
+       exec_vals[exec_val_idx++] = nir_imul_imm(&b, triangle_count, 3);
+       exec_vals[exec_val_idx++] = nir_channel(&b, draw_info1, 1);
+       exec_vals[exec_val_idx++] = nir_imm_int(&b, 0);
+       exec_vals[exec_val_idx++] = first_vertex;
+       exec_vals[exec_val_idx++] = base_instance;
+ 
+-      nir_def *triangle_fan_exec_buf_desc =
+-         dzn_nir_create_bo_desc(&b, nir_var_mem_ssbo, 0, 4,
+-                                "triangle_fan_exec_buf",
+-                                ACCESS_NON_READABLE);
+-      nir_def *triangle_fan_index_buf_stride = nir_channel(&b, params, 1);
+       nir_def *triangle_fan_index_buf_addr_lo =
++         type.indexed ?
+          nir_iadd(&b, nir_channel(&b, params, 2),
+-                  nir_imul(&b, triangle_fan_index_buf_stride, index));
+-
+-      nir_def *triangle_fan_exec_vals[9] = { 0 };
+-      uint32_t triangle_fan_exec_param_count = 0;
++                  nir_imul(&b, triangle_fan_index_buf_stride, index)) :
++         nir_channel(&b, params, 2);
+       nir_def *addr_lo_overflow =
+          nir_ult(&b, triangle_fan_index_buf_addr_lo, nir_channel(&b, params, 2));
+       nir_def *triangle_fan_index_buf_addr_hi =
+          nir_iadd(&b, nir_channel(&b, params, 3),
+                   nir_bcsel(&b, addr_lo_overflow, nir_imm_int(&b, 1), nir_imm_int(&b, 0)));
+ 
+-      triangle_fan_exec_vals[triangle_fan_exec_param_count++] = triangle_fan_index_buf_addr_lo;
+-      triangle_fan_exec_vals[triangle_fan_exec_param_count++] = triangle_fan_index_buf_addr_hi;
+-
+-      if (type.triangle_fan_primitive_restart) {
+-         triangle_fan_exec_vals[triangle_fan_exec_param_count++] = nir_channel(&b, draw_info1, 2);
+-         triangle_fan_exec_vals[triangle_fan_exec_param_count++] = nir_channel(&b, draw_info1, 0);
+-         uint32_t index_count_offset = draw_args_offset +
+-            offsetof(D3D12_DRAW_INDEXED_ARGUMENTS, IndexCountPerInstance);
+-         nir_def *exec_buf_start =
+-            nir_load_ubo(&b, 2, 32,
+-                         params_desc, nir_imm_int(&b, 16),
+-                         .align_mul = 4, .align_offset = 0, .range_base = 0, .range = ~0);
+-         nir_def *exec_buf_start_lo =
+-            nir_iadd(&b, nir_imm_int(&b, index_count_offset),
+-                     nir_iadd(&b, nir_channel(&b, exec_buf_start, 0),
+-                              nir_imul(&b, exec_stride, index)));
+-         addr_lo_overflow = nir_ult(&b, exec_buf_start_lo, nir_channel(&b, exec_buf_start, 0));
+-         nir_def *exec_buf_start_hi =
+-            nir_iadd(&b, nir_channel(&b, exec_buf_start, 0),
+-                     nir_bcsel(&b, addr_lo_overflow, nir_imm_int(&b, 1), nir_imm_int(&b, 0)));
+-         triangle_fan_exec_vals[triangle_fan_exec_param_count++] = exec_buf_start_lo;
+-         triangle_fan_exec_vals[triangle_fan_exec_param_count++] = exec_buf_start_hi;
++      if (type.indexed) {
++         nir_def *triangle_fan_exec_buf_desc =
++            dzn_nir_create_bo_desc(&b, nir_var_mem_ssbo, 0, 4,
++                                   "triangle_fan_exec_buf",
++                                   ACCESS_NON_READABLE);
++         nir_def *triangle_fan_exec_vals[9] = { 0 };
++         uint32_t triangle_fan_exec_param_count = 0;
++
++         triangle_fan_exec_vals[triangle_fan_exec_param_count++] = triangle_fan_index_buf_addr_lo;
++         triangle_fan_exec_vals[triangle_fan_exec_param_count++] = triangle_fan_index_buf_addr_hi;
++
++         if (type.triangle_fan_primitive_restart) {
++            triangle_fan_exec_vals[triangle_fan_exec_param_count++] = nir_channel(&b, draw_info1, 2);
++            triangle_fan_exec_vals[triangle_fan_exec_param_count++] = nir_channel(&b, draw_info1, 0);
++            uint32_t index_count_offset = draw_args_offset +
++               offsetof(D3D12_DRAW_INDEXED_ARGUMENTS, IndexCountPerInstance);
++            nir_def *exec_buf_start =
++               nir_load_ubo(&b, 2, 32,
++                            params_desc, nir_imm_int(&b, 16),
++                            .align_mul = 4, .align_offset = 0, .range_base = 0, .range = ~0);
++            nir_def *exec_buf_start_lo =
++               nir_iadd(&b, nir_imm_int(&b, index_count_offset),
++                        nir_iadd(&b, nir_channel(&b, exec_buf_start, 0),
++                                 nir_imul(&b, exec_stride, index)));
++            addr_lo_overflow = nir_ult(&b, exec_buf_start_lo, nir_channel(&b, exec_buf_start, 0));
++            nir_def *exec_buf_start_hi =
++               nir_iadd(&b, nir_channel(&b, exec_buf_start, 0),
++                        nir_bcsel(&b, addr_lo_overflow, nir_imm_int(&b, 1), nir_imm_int(&b, 0)));
++            triangle_fan_exec_vals[triangle_fan_exec_param_count++] = exec_buf_start_lo;
++            triangle_fan_exec_vals[triangle_fan_exec_param_count++] = exec_buf_start_hi;
++            triangle_fan_exec_vals[triangle_fan_exec_param_count++] = nir_imm_int(&b, 1);
++         } else {
++            triangle_fan_exec_vals[triangle_fan_exec_param_count++] =
++               nir_channel(&b, draw_info1, 2);
++            triangle_fan_exec_vals[triangle_fan_exec_param_count++] =
++               triangle_count;
++         }
+          triangle_fan_exec_vals[triangle_fan_exec_param_count++] = nir_imm_int(&b, 1);
+-      } else {
+-         triangle_fan_exec_vals[triangle_fan_exec_param_count++] =
+-            type.indexed ? nir_channel(&b, draw_info1, 2) : nir_imm_int(&b, 0);
+-         triangle_fan_exec_vals[triangle_fan_exec_param_count++] =
+-            triangle_count;
+-      }
+-      triangle_fan_exec_vals[triangle_fan_exec_param_count++] = nir_imm_int(&b, 1);
+-      triangle_fan_exec_vals[triangle_fan_exec_param_count++] = nir_imm_int(&b, 1);
+-
+-      unsigned rewrite_index_exec_params =
+-         type.triangle_fan_primitive_restart ?
+-         sizeof(struct dzn_indirect_triangle_fan_prim_restart_rewrite_index_exec_params) :
+-         sizeof(struct dzn_indirect_triangle_fan_rewrite_index_exec_params);
+-      nir_def *triangle_fan_exec_stride =
+-         nir_imm_int(&b, rewrite_index_exec_params);
+-      nir_def *triangle_fan_exec_offset =
+-         nir_imul(&b, triangle_fan_exec_stride, index);
+-
+-      for (uint32_t i = 0; i < triangle_fan_exec_param_count; i += 4) {
+-         unsigned comps = MIN2(triangle_fan_exec_param_count - i, 4);
+-         uint32_t mask = (1 << comps) - 1;
+-
+-         nir_store_ssbo(&b, nir_vec(&b, &triangle_fan_exec_vals[i], comps),
+-                        triangle_fan_exec_buf_desc,
+-                        nir_iadd_imm(&b, triangle_fan_exec_offset, i * 4),
+-                        .write_mask = mask, .access = ACCESS_NON_READABLE, .align_mul = 4);
++         triangle_fan_exec_vals[triangle_fan_exec_param_count++] = nir_imm_int(&b, 1);
++
++         unsigned rewrite_index_exec_params =
++            type.triangle_fan_primitive_restart ?
++            sizeof(struct dzn_indirect_triangle_fan_prim_restart_rewrite_index_exec_params) :
++            sizeof(struct dzn_indirect_triangle_fan_rewrite_index_exec_params);
++         nir_def *triangle_fan_exec_stride =
++            nir_imm_int(&b, rewrite_index_exec_params);
++         nir_def *triangle_fan_exec_offset =
++            nir_imul(&b, triangle_fan_exec_stride, index);
++
++         for (uint32_t i = 0; i < triangle_fan_exec_param_count; i += 4) {
++            unsigned comps = MIN2(triangle_fan_exec_param_count - i, 4);
++            uint32_t mask = (1 << comps) - 1;
++
++            nir_store_ssbo(&b, nir_vec(&b, &triangle_fan_exec_vals[i], comps),
++                           triangle_fan_exec_buf_desc,
++                           nir_iadd_imm(&b, triangle_fan_exec_offset, i * 4),
++                           .write_mask = mask, .access = ACCESS_NON_READABLE, .align_mul = 4);
++         }
+       }
+ 
+       nir_def *ibview_vals[] = {
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index 1491b8b..a598c6c 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -293,6 +293,11 @@ struct dzn_device {
+    mtx_t meta_lock;
+    struct dzn_meta_indirect_draw indirect_draws[DZN_NUM_INDIRECT_DRAW_TYPES];
+    struct dzn_meta_triangle_fan_rewrite_index triangle_fan[DZN_NUM_INDEX_TYPE];
++   struct {
++      ID3D12Resource *res;
++      uint32_t triangle_count;
++      struct util_dynarray retired;
++   } triangle_fan_index_buf;
+    struct dzn_meta_blits blits;
+ 
+    /* Shared with the other devices on the same ID3D12Device. */
+@@ -339,6 +344,10 @@ dzn_meta_get_indirect_draw(struct dzn_device *device, struct dzn_indirect_draw_t
+ const struct dzn_meta_triangle_fan_rewrite_index *
+ dzn_meta_get_triangle_fan_rewrite_index(struct dzn_device *device, enum dzn_index_type index_type);
+ 
++ID3D12Resource *
++dzn_meta_get_triangle_fan_index_buf(struct dzn_device *device, uint32_t min_triangle_count,
++                                    uint32_t *triangle_count);
++
+ const struct dzn_meta_blit *
+ dzn_meta_blits_get_context(struct dzn_device *device,
+                            const struct dzn_meta_blit_key *key);

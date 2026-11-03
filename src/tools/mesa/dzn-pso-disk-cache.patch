@@ -1,0 +1,197 @@
+dzn: Keep the driver's compiled pipeline state objects in the disk cache
+
+The disk cache keeps the NIR and DXIL of pipelines, but creating each PSO
+still ran the GPU driver's compiler in every new process: about 25 PSOs and
+700 ms of compiling while Android started on an Intel Iris Plus 650 under
+WSL2, where D3D12 reports D3D12_SHADER_CACHE_SUPPORT_SINGLE_PSO and no
+automatic cache.
+
+After compiling a PSO, store its GetCachedBlob() in the disk cache, keyed
+by its pipeline state stream as the in-process PSO cache keys it, with the
+root signature identified by a hash of its serialized form, which Dozen now
+attaches to the root signatures it creates. Before compiling one, look the
+key up and pass a stored blob as the stream's CACHED_PSO; if the driver
+does not accept it, compile as before.
+
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index d8c8fb7..159b4ed 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -2697,6 +2697,13 @@ dzn_device_create_root_sig(struct dzn_device *device,
+                                      ID3D10Blob_GetBufferSize(sig),
+                                      &IID_ID3D12RootSignature,
+                                      (void **)&root_sig);
++   if (root_sig) {
++      uint8_t hash[BLAKE3_KEY_LEN];
++      _mesa_blake3_compute(ID3D10Blob_GetBufferPointer(sig),
++                           ID3D10Blob_GetBufferSize(sig), hash);
++      ID3D12RootSignature_SetPrivateData(root_sig, &dzn_root_sig_hash_guid,
++                                         sizeof(hash), hash);
++   }
+    ID3D10Blob_Release(sig);
+    return root_sig;
+ }
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index 5f7f59b..1491b8b 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -323,6 +323,10 @@ VkResult dzn_meta_init(struct dzn_device *device);
+ 
+ extern const struct vk_command_buffer_ops dzn_cmd_buffer_ops;
+ 
++/* Private data of the root signatures Dozen creates: the BLAKE3 hash of the
++ * serialized root signature, which identifies it across processes. */
++extern const GUID dzn_root_sig_hash_guid;
++
+ struct dzn_pso_cache *dzn_pso_cache_ref(ID3D12Device4 *dev);
+ void dzn_pso_cache_unref(struct dzn_pso_cache *cache);
+ HRESULT dzn_pso_cache_create_pipeline_state(struct dzn_device *device,
+diff --git a/src/microsoft/vulkan/dzn_pso_cache.c b/src/microsoft/vulkan/dzn_pso_cache.c
+index 6a3ce56..12deda9 100644
+--- a/src/microsoft/vulkan/dzn_pso_cache.c
++++ b/src/microsoft/vulkan/dzn_pso_cache.c
+@@ -30,13 +30,24 @@
+  * can use each other's PSOs, so each one is created once, keyed by the
+  * contents of its pipeline state stream, and kept while a device on that
+  * ID3D12Device exists.
++ *
++ * With a disk cache, the driver's compiled form of each PSO (GetCachedBlob)
++ * is also kept there, keyed by the same contents with root signatures by
++ * their serialized form, and given back to later processes as a cached PSO.
+  */
+ 
+ #include "dzn_private.h"
+ 
++#include "util/disk_cache.h"
++#include "util/mesa-blake3.h"
+ #include "util/simple_mtx.h"
+ #include "util/u_dynarray.h"
+ 
++/* {d5e0b8a2-6f0c-4e47-9c1d-7a3f2b8e5c10} */
++const GUID dzn_root_sig_hash_guid = {
++   0xd5e0b8a2, 0x6f0c, 0x4e47, { 0x9c, 0x1d, 0x7a, 0x3f, 0x2b, 0x8e, 0x5c, 0x10 }
++};
++
+ /* Bounds the GPU memory the cache keeps. */
+ #define DZN_PSO_CACHE_MAX_ENTRIES 4096
+ 
+@@ -151,7 +162,8 @@ dzn_pso_cache_unref(struct dzn_pso_cache *cache)
+ static bool
+ dzn_pso_cache_serialize(const D3D12_PIPELINE_STATE_STREAM_DESC *desc,
+                         struct util_dynarray *key,
+-                        ID3D12RootSignature **root_sig)
++                        ID3D12RootSignature **root_sig,
++                        bool for_disk)
+ {
+    *root_sig = NULL;
+    const uint8_t *stream = desc->pPipelineStateSubobjectStream;
+@@ -241,6 +253,20 @@ dzn_pso_cache_serialize(const D3D12_PIPELINE_STATE_STREAM_DESC *desc,
+                                     vi->pViewInstanceLocations, vi->ViewInstanceCount);
+          break;
+       }
++      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE:
++         if (for_disk) {
++            /* Another process has another object for the same root signature. */
++            uint8_t hash[BLAKE3_KEY_LEN];
++            UINT size = sizeof(hash);
++            if (FAILED(ID3D12RootSignature_GetPrivateData(*root_sig, &dzn_root_sig_hash_guid,
++                                                          &size, hash)) ||
++                size != sizeof(hash))
++               return false;
++            util_dynarray_append_array(key, uint8_t, hash, sizeof(hash));
++         } else {
++            util_dynarray_append_array(key, uint8_t, d, subobj_size - desc_offset);
++         }
++         break;
+       default:
+          /* Plain values. A root signature is compared as the object. */
+          util_dynarray_append_array(key, uint8_t, d, subobj_size - desc_offset);
+@@ -253,6 +279,70 @@ dzn_pso_cache_serialize(const D3D12_PIPELINE_STATE_STREAM_DESC *desc,
+    return true;
+ }
+ 
++/* Creates the PSO from the driver's compiled form in the disk cache when it
++ * has one the driver accepts, and otherwise compiles it and stores that. */
++static HRESULT
++dzn_pso_cache_create_from_disk(struct dzn_device *device,
++                               const D3D12_PIPELINE_STATE_STREAM_DESC *desc,
++                               ID3D12PipelineState **out)
++{
++   struct disk_cache *disk_cache = device->vk.physical->disk_cache;
++   ID3D12RootSignature *root_sig;
++   struct util_dynarray data;
++   cache_key disk_key;
++
++   util_dynarray_init(&data, NULL);
++   if (!disk_cache || !dzn_pso_cache_serialize(desc, &data, &root_sig, true)) {
++      util_dynarray_fini(&data);
++      return ID3D12Device4_CreatePipelineState(device->dev, desc, &IID_ID3D12PipelineState, (void **)out);
++   }
++   disk_cache_compute_key(disk_cache, data.data, data.size, disk_key);
++   util_dynarray_fini(&data);
++
++   size_t blob_size = 0;
++   void *blob = disk_cache_get(disk_cache, disk_key, &blob_size);
++   if (blob) {
++      struct cached_pso_subobj {
++         D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type;
++         D3D12_CACHED_PIPELINE_STATE desc;
++      };
++      size_t offset = ALIGN_POT(desc->SizeInBytes, alignof(void *));
++      uint8_t *stream = malloc(offset + sizeof(struct cached_pso_subobj));
++      HRESULT hres = E_OUTOFMEMORY;
++      if (stream) {
++         memcpy(stream, desc->pPipelineStateSubobjectStream, desc->SizeInBytes);
++         memset(stream + desc->SizeInBytes, 0, offset - desc->SizeInBytes);
++         struct cached_pso_subobj *cached = (void *)(stream + offset);
++         cached->type = D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CACHED_PSO;
++         cached->desc.pCachedBlob = blob;
++         cached->desc.CachedBlobSizeInBytes = blob_size;
++         D3D12_PIPELINE_STATE_STREAM_DESC cached_desc = {
++            .SizeInBytes = offset + sizeof(*cached),
++            .pPipelineStateSubobjectStream = stream,
++         };
++         hres = ID3D12Device4_CreatePipelineState(device->dev, &cached_desc,
++                                                  &IID_ID3D12PipelineState, (void **)out);
++         free(stream);
++      }
++      free(blob);
++      if (SUCCEEDED(hres))
++         return hres;
++      /* Another driver or GPU, or a blob the driver no longer accepts. */
++   }
++
++   HRESULT hres = ID3D12Device4_CreatePipelineState(device->dev, desc, &IID_ID3D12PipelineState, (void **)out);
++   if (FAILED(hres))
++      return hres;
++
++   ID3DBlob *compiled = NULL;
++   if (SUCCEEDED(ID3D12PipelineState_GetCachedBlob(*out, &compiled))) {
++      disk_cache_put(disk_cache, disk_key, ID3D10Blob_GetBufferPointer(compiled),
++                     ID3D10Blob_GetBufferSize(compiled), NULL);
++      ID3D10Blob_Release(compiled);
++   }
++   return hres;
++}
++
+ HRESULT
+ dzn_pso_cache_create_pipeline_state(struct dzn_device *device,
+                                     const D3D12_PIPELINE_STATE_STREAM_DESC *desc,
+@@ -263,7 +353,7 @@ dzn_pso_cache_create_pipeline_state(struct dzn_device *device,
+    struct util_dynarray data;
+    util_dynarray_init(&data, NULL);
+ 
+-   if (!cache || !dzn_pso_cache_serialize(desc, &data, &root_sig)) {
++   if (!cache || !dzn_pso_cache_serialize(desc, &data, &root_sig, false)) {
+       util_dynarray_fini(&data);
+       return ID3D12Device4_CreatePipelineState(device->dev, desc, &IID_ID3D12PipelineState, (void **)out);
+    }
+@@ -291,7 +381,7 @@ dzn_pso_cache_create_pipeline_state(struct dzn_device *device,
+    }
+ 
+    /* Compiled outside the lock; another thread may store the same one first. */
+-   HRESULT hres = ID3D12Device4_CreatePipelineState(device->dev, desc, &IID_ID3D12PipelineState, (void **)out);
++   HRESULT hres = dzn_pso_cache_create_from_disk(device, desc, out);
+    if (FAILED(hres)) {
+       free(key);
+       return hres;

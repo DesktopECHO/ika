@@ -1,0 +1,59 @@
+dzn: Keep device memory mapped until it is freed
+
+vkUnmapMemory unmapped the memory's resource and the next vkMapMemory
+mapped it again. Under WSL2 the first Map and the last Unmap of a resource
+are each a synchronous call into the host's graphics kernel, and
+applications and translation layers map and unmap per frame.
+
+Every host-visible memory type Dozen offers is coherent, so map the whole
+resource the first time and keep the mapping until vkFreeMemory, which
+already unmaps it.
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index 128f900..bf20449 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -3160,7 +3160,10 @@ dzn_MapMemory(VkDevice _device,
+       return VK_SUCCESS;
+    }
+ 
+-   if (mem->map && !mem->map_res) {
++   /* Memory stays mapped from its first vkMapMemory until vkFreeMemory:
++    * every host-visible type is coherent, and under WSL2 each Map and Unmap
++    * is a call into the host's graphics kernel. */
++   if (mem->map) {
+       *ppData = ((uint8_t *)mem->map) + offset;
+       return VK_SUCCESS;
+    }
+@@ -3179,15 +3182,12 @@ dzn_MapMemory(VkDevice _device,
+    assert(offset + size <= mem->size);
+ 
+    assert(mem->map_res);
+-   D3D12_RANGE range = { 0 };
+-   range.Begin = offset;
+-   range.End = offset + size;
+    void *map = NULL;
+-   if (FAILED(ID3D12Resource_Map(mem->map_res, 0, &range, &map)))
++   if (FAILED(ID3D12Resource_Map(mem->map_res, 0, NULL, &map)))
+       return vk_error(device, VK_ERROR_MEMORY_MAP_FAILED);
+ 
+    mem->map = map;
+-   mem->map_size = size;
++   mem->map_size = mem->size;
+ 
+    *ppData = ((uint8_t *) map) + offset;
+ 
+@@ -3203,13 +3203,7 @@ dzn_UnmapMemory(VkDevice _device,
+    if (mem == NULL)
+       return;
+ 
+-   if (!mem->map_res)
+-      return;
+-
+-   ID3D12Resource_Unmap(mem->map_res, 0, NULL);
+-
+-   mem->map = NULL;
+-   mem->map_size = 0;
++   /* The mapping is kept for the next vkMapMemory: see dzn_MapMemory(). */
+ }
+ 
+ VKAPI_ATTR VkResult VKAPI_CALL

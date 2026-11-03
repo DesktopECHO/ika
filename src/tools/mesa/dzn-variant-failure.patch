@@ -1,0 +1,56 @@
+dzn: Fail the draw when its pipeline variant does not compile
+
+A graphics pipeline with dynamic state D3D12 cannot set compiles a PSO
+variant for each state combination a draw uses. When that compile failed,
+only an assert caught it, which release builds leave out: the variant was
+kept with a NULL PSO, which the command list was then given for that draw
+and every later one with the same state.
+
+Keep nothing on failure and put the command buffer in the error state, so
+that the draw is skipped and vkEndCommandBuffer reports the error. A later
+command buffer tries the compile again.
+
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index d740b90..77f5582 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -3592,7 +3592,10 @@ dzn_cmd_buffer_update_pipeline(struct dzn_cmd_buffer *cmdbuf, uint32_t bindpoint
+                                                         &triangle_fan);
+          }
+          ID3D12GraphicsCommandList1_IASetPrimitiveTopology(cmdbuf->cmdlist, topology);
+-         dzn_graphics_pipeline_get_state(gfx, &cmdbuf->state.pipeline_variant);
++         if (!dzn_graphics_pipeline_get_state(gfx, &cmdbuf->state.pipeline_variant)) {
++            vk_command_buffer_set_error(&cmdbuf->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
++            return;
++         }
+          struct dzn_physical_device *pdev =
+             container_of(device->vk.physical, struct dzn_physical_device, vk);
+          if (gfx->multiview.native_view_instancing)
+diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
+index 3cd07ed..c7db05f 100644
+--- a/src/microsoft/vulkan/dzn_pipeline.c
++++ b/src/microsoft/vulkan/dzn_pipeline.c
+@@ -2615,11 +2615,19 @@ dzn_graphics_pipeline_get_state(struct dzn_graphics_pipeline *pipeline,
+       update_depth_stencil_state(pdev, pipeline, stream_buf, &masked_key);
+       update_stencil_state(pdev, pipeline, stream_buf, &masked_key);
+ 
+-      ASSERTED HRESULT hres = dzn_pso_cache_create_pipeline_state(device, &stream_desc,
+-                                                                  &variant->state);
+-      assert(!FAILED(hres));
++      HRESULT hres = dzn_pso_cache_create_pipeline_state(device, &stream_desc,
++                                                         &variant->state);
++      if (FAILED(hres)) {
++         /* Not kept: a later draw with this state tries again. */
++         ralloc_free(variant);
++         return NULL;
++      }
+       he = _mesa_hash_table_insert(pipeline->variants, &variant->key, variant);
+-      assert(he);
++      if (!he) {
++         ID3D12PipelineState_Release(variant->state);
++         ralloc_free(variant);
++         return NULL;
++      }
+    } else {
+       variant = he->data;
+    }

@@ -1,0 +1,449 @@
+dzn: Share pipeline state objects between devices on one ID3D12Device
+
+Creating a PSO runs the GPU driver's shader compiler, and a VkPipelineCache
+hit only skips the NIR and DXIL steps before it. A Vulkan device is
+created per instance, and when D3D12 returns an existing ID3D12Device
+(D3D12_DEVICE_FACTORY_FLAG_ALLOW_RETURNING_EXISTING_DEVICE) several
+instances end up on the same one: gfxstream, for example, creates an
+instance for each Android process that draws, and those processes use
+the same shaders for their UI.
+
+Keep the PSOs created on an ID3D12Device in a table keyed by the contents
+of the pipeline state stream, with the shader bytecode, input layout and
+view instancing locations in place of their pointers and the root
+signature as the object, which each entry holds a reference to. A
+pipeline with the same stream then gets the existing PSO. The table is
+released with the last device on that ID3D12Device and holds at most 4096
+PSOs.
+
+On an Intel Iris Plus 650 under WSL2, the third cold start of an Android
+app found 7 of its 8 PSOs in the table, each one a 13-30 ms compile
+skipped.
+
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index 9bb25b1..e4824e5 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -2382,6 +2382,8 @@ dzn_device_destroy(struct dzn_device *device, const VkAllocationCallbacks *pAllo
+    if (device->dev_config)
+       ID3D12DeviceConfiguration_Release(device->dev_config);
+ 
++   dzn_pso_cache_unref(device->pso_cache);
++
+    if (device->dev)
+       ID3D12Device1_Release(device->dev);
+ 
+@@ -2493,6 +2495,7 @@ dzn_device_create(struct dzn_physical_device *pdev,
+    device->dev = pdev->dev;
+ 
+    ID3D12Device1_AddRef(device->dev);
++   device->pso_cache = dzn_pso_cache_ref(device->dev);
+ 
+    if (pdev->dev10) {
+       device->dev10 = pdev->dev10;
+diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
+index 9788dc1..3cd07ed 100644
+--- a/src/microsoft/vulkan/dzn_pipeline.c
++++ b/src/microsoft/vulkan/dzn_pipeline.c
+@@ -2312,9 +2312,8 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
+    }
+ 
+    if (!pipeline->variants) {
+-      hres = ID3D12Device4_CreatePipelineState(device->dev, stream_desc,
+-                                               &IID_ID3D12PipelineState,
+-                                               (void **)&pipeline->base.state);
++      hres = dzn_pso_cache_create_pipeline_state(device, stream_desc,
++                                                 &pipeline->base.state);
+       if (FAILED(hres)) {
+          ret = vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+          goto out;
+@@ -2616,9 +2615,8 @@ dzn_graphics_pipeline_get_state(struct dzn_graphics_pipeline *pipeline,
+       update_depth_stencil_state(pdev, pipeline, stream_buf, &masked_key);
+       update_stencil_state(pdev, pipeline, stream_buf, &masked_key);
+ 
+-      ASSERTED HRESULT hres = ID3D12Device4_CreatePipelineState(device->dev, &stream_desc,
+-                                                                &IID_ID3D12PipelineState,
+-                                                                (void**)(&variant->state));
++      ASSERTED HRESULT hres = dzn_pso_cache_create_pipeline_state(device, &stream_desc,
++                                                                  &variant->state);
+       assert(!FAILED(hres));
+       he = _mesa_hash_table_insert(pipeline->variants, &variant->key, variant);
+       assert(he);
+@@ -3005,9 +3003,8 @@ dzn_compute_pipeline_create(struct dzn_device *device,
+    if (ret != VK_SUCCESS)
+       goto out;
+ 
+-   if (FAILED(ID3D12Device4_CreatePipelineState(device->dev, &stream_desc,
+-                                                &IID_ID3D12PipelineState,
+-                                                (void **)&pipeline->base.state)))
++   if (FAILED(dzn_pso_cache_create_pipeline_state(device, &stream_desc,
++                                                  &pipeline->base.state)))
+       ret = vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+ 
+ out:
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index 93cd9e5..acfd66b 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -295,6 +295,9 @@ struct dzn_device {
+    struct dzn_meta_triangle_fan_rewrite_index triangle_fan[DZN_NUM_INDEX_TYPE];
+    struct dzn_meta_blits blits;
+ 
++   /* Shared with the other devices on the same ID3D12Device. */
++   struct dzn_pso_cache *pso_cache;
++
+    struct {
+ #define DZN_QUERY_REFS_SECTION_SIZE 4096
+ #define DZN_QUERY_REFS_ALL_ONES_OFFSET 0
+@@ -318,6 +321,12 @@ void dzn_meta_finish(struct dzn_device *device);
+ 
+ VkResult dzn_meta_init(struct dzn_device *device);
+ 
++struct dzn_pso_cache *dzn_pso_cache_ref(ID3D12Device4 *dev);
++void dzn_pso_cache_unref(struct dzn_pso_cache *cache);
++HRESULT dzn_pso_cache_create_pipeline_state(struct dzn_device *device,
++                                            const D3D12_PIPELINE_STATE_STREAM_DESC *desc,
++                                            ID3D12PipelineState **out);
++
+ const struct dzn_meta_indirect_draw *
+ dzn_meta_get_indirect_draw(struct dzn_device *device, struct dzn_indirect_draw_type type);
+ 
+diff --git a/src/microsoft/vulkan/dzn_pso_cache.c b/src/microsoft/vulkan/dzn_pso_cache.c
+new file mode 100644
+index 0000000..6a3ce56
+--- /dev/null
++++ b/src/microsoft/vulkan/dzn_pso_cache.c
+@@ -0,0 +1,321 @@
++/*
++ * Copyright © Microsoft Corporation
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice (including the next
++ * paragraph) shall be included in all copies or substantial portions of the
++ * Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
++ * IN THE SOFTWARE.
++ */
++
++/*
++ * Pipeline state objects shared by every VkDevice on the same ID3D12Device.
++ *
++ * Creating a PSO runs the GPU driver's compiler, and a VkPipelineCache hit
++ * only skips the NIR and DXIL steps before it. Devices on one ID3D12Device
++ * (one VkPhysicalDevice, or several when D3D12 returns an existing device)
++ * can use each other's PSOs, so each one is created once, keyed by the
++ * contents of its pipeline state stream, and kept while a device on that
++ * ID3D12Device exists.
++ */
++
++#include "dzn_private.h"
++
++#include "util/simple_mtx.h"
++#include "util/u_dynarray.h"
++
++/* Bounds the GPU memory the cache keeps. */
++#define DZN_PSO_CACHE_MAX_ENTRIES 4096
++
++struct dzn_pso_cache_key {
++   uint32_t size;
++   uint32_t hash;
++   uint8_t data[];
++};
++
++struct dzn_pso_cache_entry {
++   ID3D12PipelineState *pso;
++   /* Held so that no other root signature gets its address, which the key has. */
++   ID3D12RootSignature *root_sig;
++};
++
++struct dzn_pso_cache {
++   ID3D12Device4 *dev;
++   unsigned users;
++   simple_mtx_t lock;
++   struct hash_table *entries;
++};
++
++static simple_mtx_t dzn_pso_caches_lock = SIMPLE_MTX_INITIALIZER;
++static struct dzn_pso_cache *dzn_pso_caches[16];
++
++static uint32_t
++dzn_pso_cache_key_hash(const void *key)
++{
++   return ((const struct dzn_pso_cache_key *)key)->hash;
++}
++
++static bool
++dzn_pso_cache_key_equal(const void *a, const void *b)
++{
++   const struct dzn_pso_cache_key *ka = a, *kb = b;
++   return ka->size == kb->size && !memcmp(ka->data, kb->data, ka->size);
++}
++
++struct dzn_pso_cache *
++dzn_pso_cache_ref(ID3D12Device4 *dev)
++{
++   struct dzn_pso_cache *cache = NULL;
++
++   simple_mtx_lock(&dzn_pso_caches_lock);
++   for (unsigned i = 0; i < ARRAY_SIZE(dzn_pso_caches); i++) {
++      if (dzn_pso_caches[i] && dzn_pso_caches[i]->dev == dev) {
++         cache = dzn_pso_caches[i];
++         cache->users++;
++         goto out;
++      }
++   }
++
++   for (unsigned i = 0; i < ARRAY_SIZE(dzn_pso_caches); i++) {
++      if (dzn_pso_caches[i])
++         continue;
++      cache = calloc(1, sizeof(*cache));
++      if (!cache)
++         goto out;
++      cache->entries = _mesa_hash_table_create(NULL, dzn_pso_cache_key_hash,
++                                               dzn_pso_cache_key_equal);
++      if (!cache->entries) {
++         free(cache);
++         cache = NULL;
++         goto out;
++      }
++      cache->dev = dev;
++      cache->users = 1;
++      simple_mtx_init(&cache->lock, mtx_plain);
++      dzn_pso_caches[i] = cache;
++      break;
++   }
++
++out:
++   simple_mtx_unlock(&dzn_pso_caches_lock);
++   return cache;
++}
++
++static void
++dzn_pso_cache_delete_entry(struct hash_entry *he)
++{
++   struct dzn_pso_cache_entry *entry = he->data;
++
++   ID3D12PipelineState_Release(entry->pso);
++   if (entry->root_sig)
++      ID3D12RootSignature_Release(entry->root_sig);
++   free(entry);
++   free((void *)he->key);
++}
++
++void
++dzn_pso_cache_unref(struct dzn_pso_cache *cache)
++{
++   if (!cache)
++      return;
++
++   simple_mtx_lock(&dzn_pso_caches_lock);
++   if (--cache->users == 0) {
++      for (unsigned i = 0; i < ARRAY_SIZE(dzn_pso_caches); i++) {
++         if (dzn_pso_caches[i] == cache)
++            dzn_pso_caches[i] = NULL;
++      }
++      /* The PSOs hold references to the device: release them so it can go. */
++      _mesa_hash_table_destroy(cache->entries, dzn_pso_cache_delete_entry);
++      simple_mtx_destroy(&cache->lock);
++      free(cache);
++   }
++   simple_mtx_unlock(&dzn_pso_caches_lock);
++}
++
++/* Appends the pipeline state stream to key with what its pointers point at
++ * in place of the pointers. Returns false for a subobject it does not know. */
++static bool
++dzn_pso_cache_serialize(const D3D12_PIPELINE_STATE_STREAM_DESC *desc,
++                        struct util_dynarray *key,
++                        ID3D12RootSignature **root_sig)
++{
++   *root_sig = NULL;
++   const uint8_t *stream = desc->pPipelineStateSubobjectStream;
++   size_t offset = 0;
++
++   while (offset < desc->SizeInBytes) {
++      offset = ALIGN_POT(offset, alignof(void *));
++      const uint8_t *subobj = stream + offset;
++      D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type =
++         *(const D3D12_PIPELINE_STATE_SUBOBJECT_TYPE *)subobj;
++      size_t desc_offset, subobj_size;
++
++      switch (type) {
++#define SUBOBJ(id, T) \
++      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ ## id: { \
++         struct wrapper { D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type; T desc; }; \
++         desc_offset = offsetof(struct wrapper, desc); \
++         subobj_size = sizeof(struct wrapper); \
++         break; \
++      }
++      SUBOBJ(ROOT_SIGNATURE, ID3D12RootSignature *)
++      SUBOBJ(VS, D3D12_SHADER_BYTECODE)
++      SUBOBJ(PS, D3D12_SHADER_BYTECODE)
++      SUBOBJ(DS, D3D12_SHADER_BYTECODE)
++      SUBOBJ(HS, D3D12_SHADER_BYTECODE)
++      SUBOBJ(GS, D3D12_SHADER_BYTECODE)
++      SUBOBJ(CS, D3D12_SHADER_BYTECODE)
++      SUBOBJ(BLEND, D3D12_BLEND_DESC)
++      SUBOBJ(SAMPLE_MASK, UINT)
++      SUBOBJ(RASTERIZER, D3D12_RASTERIZER_DESC)
++      SUBOBJ(RASTERIZER1, D3D12_RASTERIZER_DESC1)
++      SUBOBJ(RASTERIZER2, D3D12_RASTERIZER_DESC2)
++      SUBOBJ(DEPTH_STENCIL, D3D12_DEPTH_STENCIL_DESC)
++      SUBOBJ(DEPTH_STENCIL1, D3D12_DEPTH_STENCIL_DESC1)
++      SUBOBJ(DEPTH_STENCIL2, D3D12_DEPTH_STENCIL_DESC2)
++      SUBOBJ(INPUT_LAYOUT, D3D12_INPUT_LAYOUT_DESC)
++      SUBOBJ(IB_STRIP_CUT_VALUE, D3D12_INDEX_BUFFER_STRIP_CUT_VALUE)
++      SUBOBJ(PRIMITIVE_TOPOLOGY, D3D12_PRIMITIVE_TOPOLOGY_TYPE)
++      SUBOBJ(RENDER_TARGET_FORMATS, struct D3D12_RT_FORMAT_ARRAY)
++      SUBOBJ(DEPTH_STENCIL_FORMAT, DXGI_FORMAT)
++      SUBOBJ(SAMPLE_DESC, DXGI_SAMPLE_DESC)
++      SUBOBJ(NODE_MASK, UINT)
++      SUBOBJ(FLAGS, D3D12_PIPELINE_STATE_FLAGS)
++      SUBOBJ(VIEW_INSTANCING, D3D12_VIEW_INSTANCING_DESC)
++#undef SUBOBJ
++      default:
++         return false;
++      }
++
++      const void *d = subobj + desc_offset;
++      util_dynarray_append_typed(key, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE, type);
++      if (type == D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE)
++         *root_sig = *(ID3D12RootSignature *const *)d;
++
++      switch (type) {
++      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS:
++      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS:
++      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DS:
++      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_HS:
++      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_GS:
++      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CS: {
++         const D3D12_SHADER_BYTECODE *bc = d;
++         util_dynarray_append_typed(key, uint64_t, bc->BytecodeLength);
++         util_dynarray_append_array(key, uint8_t, bc->pShaderBytecode, bc->BytecodeLength);
++         break;
++      }
++      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_INPUT_LAYOUT: {
++         const D3D12_INPUT_LAYOUT_DESC *il = d;
++         util_dynarray_append_typed(key, UINT, il->NumElements);
++         for (UINT i = 0; i < il->NumElements; i++) {
++            const D3D12_INPUT_ELEMENT_DESC *e = &il->pInputElementDescs[i];
++            util_dynarray_append_array(key, char, e->SemanticName, strlen(e->SemanticName) + 1);
++            util_dynarray_append_typed(key, UINT, e->SemanticIndex);
++            util_dynarray_append_typed(key, DXGI_FORMAT, e->Format);
++            util_dynarray_append_typed(key, UINT, e->InputSlot);
++            util_dynarray_append_typed(key, UINT, e->AlignedByteOffset);
++            util_dynarray_append_typed(key, D3D12_INPUT_CLASSIFICATION, e->InputSlotClass);
++            util_dynarray_append_typed(key, UINT, e->InstanceDataStepRate);
++         }
++         break;
++      }
++      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VIEW_INSTANCING: {
++         const D3D12_VIEW_INSTANCING_DESC *vi = d;
++         util_dynarray_append_typed(key, UINT, vi->ViewInstanceCount);
++         util_dynarray_append_typed(key, D3D12_VIEW_INSTANCING_FLAGS, vi->Flags);
++         util_dynarray_append_array(key, D3D12_VIEW_INSTANCE_LOCATION,
++                                    vi->pViewInstanceLocations, vi->ViewInstanceCount);
++         break;
++      }
++      default:
++         /* Plain values. A root signature is compared as the object. */
++         util_dynarray_append_array(key, uint8_t, d, subobj_size - desc_offset);
++         break;
++      }
++
++      offset += subobj_size;
++   }
++
++   return true;
++}
++
++HRESULT
++dzn_pso_cache_create_pipeline_state(struct dzn_device *device,
++                                    const D3D12_PIPELINE_STATE_STREAM_DESC *desc,
++                                    ID3D12PipelineState **out)
++{
++   struct dzn_pso_cache *cache = device->pso_cache;
++   ID3D12RootSignature *root_sig;
++   struct util_dynarray data;
++   util_dynarray_init(&data, NULL);
++
++   if (!cache || !dzn_pso_cache_serialize(desc, &data, &root_sig)) {
++      util_dynarray_fini(&data);
++      return ID3D12Device4_CreatePipelineState(device->dev, desc, &IID_ID3D12PipelineState, (void **)out);
++   }
++
++   struct dzn_pso_cache_key *key = malloc(sizeof(*key) + data.size);
++   if (!key) {
++      util_dynarray_fini(&data);
++      return ID3D12Device4_CreatePipelineState(device->dev, desc, &IID_ID3D12PipelineState, (void **)out);
++   }
++   key->size = data.size;
++   memcpy(key->data, data.data, data.size);
++   key->hash = _mesa_hash_data(key->data, key->size);
++   util_dynarray_fini(&data);
++
++   simple_mtx_lock(&cache->lock);
++   struct hash_entry *he = _mesa_hash_table_search_pre_hashed(cache->entries, key->hash, key);
++   if (he) {
++      *out = ((struct dzn_pso_cache_entry *)he->data)->pso;
++      ID3D12PipelineState_AddRef(*out);
++   }
++   simple_mtx_unlock(&cache->lock);
++   if (he) {
++      free(key);
++      return S_OK;
++   }
++
++   /* Compiled outside the lock; another thread may store the same one first. */
++   HRESULT hres = ID3D12Device4_CreatePipelineState(device->dev, desc, &IID_ID3D12PipelineState, (void **)out);
++   if (FAILED(hres)) {
++      free(key);
++      return hres;
++   }
++
++   simple_mtx_lock(&cache->lock);
++   he = _mesa_hash_table_search_pre_hashed(cache->entries, key->hash, key);
++   struct dzn_pso_cache_entry *entry = NULL;
++   if (he) {
++      ID3D12PipelineState_Release(*out);
++      *out = ((struct dzn_pso_cache_entry *)he->data)->pso;
++      ID3D12PipelineState_AddRef(*out);
++   } else if (cache->entries->entries < DZN_PSO_CACHE_MAX_ENTRIES &&
++              (entry = malloc(sizeof(*entry)))) {
++      entry->pso = *out;
++      ID3D12PipelineState_AddRef(entry->pso);
++      entry->root_sig = root_sig;
++      if (root_sig)
++         ID3D12RootSignature_AddRef(root_sig);
++      _mesa_hash_table_insert_pre_hashed(cache->entries, key->hash, key, entry);
++      key = NULL;
++   }
++   free(key);
++   simple_mtx_unlock(&cache->lock);
++
++   return S_OK;
++}
+diff --git a/src/microsoft/vulkan/meson.build b/src/microsoft/vulkan/meson.build
+index 198a038..4ca34a1 100644
+--- a/src/microsoft/vulkan/meson.build
++++ b/src/microsoft/vulkan/meson.build
+@@ -35,6 +35,7 @@ libdzn_files = files(
+   'dzn_meta.c',
+   'dzn_nir.c',
+   'dzn_pipeline.c',
++  'dzn_pso_cache.c',
+   'dzn_query.c',
+   'dzn_sync.c',
+   'dzn_util.c',

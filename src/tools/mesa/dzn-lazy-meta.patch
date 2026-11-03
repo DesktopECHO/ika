@@ -1,0 +1,188 @@
+dzn: Compile the indirect-draw and triangle-fan pipelines on first use
+
+dzn_meta_init() compiled a compute pipeline for every indirect-draw
+variant and triangle-fan index rewrite the GPU cannot do natively when the
+device was created. On a GPU without triangle fans or ExecuteIndirect tier
+1.1, such as Intel's Kaby Lake under WSL2, that is 53 pipelines: NIR,
+DXIL and a full driver compile each, about a second per vkCreateDevice.
+gfxstream creates a Vulkan device for every Android process that draws, so
+each app start waited for it, and a boot spent 34 s of CPU on it. Few apps
+ever record a draw that needs one of them.
+
+Create each one the first time a command buffer needs it, under a device
+lock. A Settings cold start on that GPU went from 2.4 s to 1.5 s.
+
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index 516353f..d740b90 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -4087,7 +4087,9 @@ dzn_cmd_buffer_triangle_fan_rewrite_index(struct dzn_cmd_buffer *cmdbuf,
+    enum dzn_index_type index_type =
+       dzn_index_type_from_dxgi_format(cmdbuf->state.ib.view.Format, false);
+    const struct dzn_meta_triangle_fan_rewrite_index *rewrite_index =
+-      &device->triangle_fan[index_type];
++      dzn_meta_get_triangle_fan_rewrite_index(device, index_type);
++   if (!rewrite_index)
++      return vk_command_buffer_set_error(&cmdbuf->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
+ 
+    struct dzn_triangle_fan_rewrite_index_params params = {
+       .first_index = *first_index,
+@@ -4278,7 +4280,12 @@ dzn_cmd_buffer_patch_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
+    else
+       params_size = sizeof(struct dzn_indirect_draw_rewrite_params);
+ 
+-   struct dzn_meta_indirect_draw *indirect_draw = &device->indirect_draws[draw_type.value];
++   const struct dzn_meta_indirect_draw *indirect_draw =
++      dzn_meta_get_indirect_draw(device, draw_type);
++   if (!indirect_draw) {
++      vk_command_buffer_set_error(&cmdbuf->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
++      return;
++   }
+    uint32_t root_param_idx = 0;
+ 
+    cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_COMPUTE].dirty |= DZN_CMD_BINDPOINT_DIRTY_PIPELINE;
+@@ -4318,8 +4325,12 @@ dzn_cmd_buffer_patch_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
+          *inout_indexed ?
+          dzn_index_type_from_dxgi_format(cmdbuf->state.ib.view.Format, draw_type.triangle_fan_primitive_restart) :
+          DZN_NO_INDEX;
+-      struct dzn_meta_triangle_fan_rewrite_index *rewrite_index =
+-         &device->triangle_fan[index_type];
++      const struct dzn_meta_triangle_fan_rewrite_index *rewrite_index =
++         dzn_meta_get_triangle_fan_rewrite_index(device, index_type);
++      if (!rewrite_index) {
++         vk_command_buffer_set_error(&cmdbuf->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
++         return;
++      }
+ 
+       struct dzn_triangle_fan_rewrite_index_params rewrite_index_params = { 0 };
+ 
+diff --git a/src/microsoft/vulkan/dzn_meta.c b/src/microsoft/vulkan/dzn_meta.c
+index 8c50b59..e4d4865 100644
+--- a/src/microsoft/vulkan/dzn_meta.c
++++ b/src/microsoft/vulkan/dzn_meta.c
+@@ -109,6 +109,9 @@ dzn_meta_indirect_draw_finish(struct dzn_device *device, struct dzn_indirect_dra
+ 
+    if (meta->pipeline_state)
+       ID3D12PipelineState_Release(meta->pipeline_state);
++
++   meta->root_sig = NULL;
++   meta->pipeline_state = NULL;
+ }
+ 
+ static VkResult
+@@ -245,6 +248,10 @@ dzn_meta_triangle_fan_rewrite_index_finish(struct dzn_device *device,
+       ID3D12PipelineState_Release(meta->pipeline_state);
+    if (meta->cmd_sig)
+       ID3D12CommandSignature_Release(meta->cmd_sig);
++
++   meta->root_sig = NULL;
++   meta->pipeline_state = NULL;
++   meta->cmd_sig = NULL;
+ }
+ 
+ static VkResult
+@@ -807,44 +814,45 @@ dzn_meta_finish(struct dzn_device *device)
+       dzn_meta_indirect_draw_finish(device, (struct dzn_indirect_draw_type) { .value = i });
+ 
+    dzn_meta_blits_finish(device);
++   mtx_destroy(&device->meta_lock);
+ }
+ 
+-VkResult
+-dzn_meta_init(struct dzn_device *device)
++/* The indirect-draw and triangle-fan pipelines are only needed by draws
++ * D3D12 cannot do directly, so they are compiled the first time a command
++ * buffer records such a draw, not with every device: up to 53 compute
++ * pipelines on GPUs without triangle fans or extended ExecuteIndirect, which
++ * took about a second per vkCreateDevice. */
++const struct dzn_meta_indirect_draw *
++dzn_meta_get_indirect_draw(struct dzn_device *device, struct dzn_indirect_draw_type type)
+ {
+-   struct dzn_physical_device *pdev = container_of(device->vk.physical, struct dzn_physical_device, vk);
+-   VkResult result = dzn_meta_blits_init(device);
+-   if (result != VK_SUCCESS)
+-      goto out;
++   struct dzn_meta_indirect_draw *meta = &device->indirect_draws[type.value];
+ 
+-   for (uint32_t i = 0; i < ARRAY_SIZE(device->indirect_draws); i++) {
+-      struct dzn_indirect_draw_type type = { .value = i };
+-      if (type.triangle_fan_primitive_restart && !type.triangle_fan)
+-         continue;
+-      if (type.triangle_fan && pdev->options15.TriangleFanSupported)
+-         continue;
+-      if (type.draw_params && pdev->options21.ExtendedCommandInfoSupported)
+-         continue;
+-      if (type.draw_id && pdev->options21.ExecuteIndirectTier >= D3D12_EXECUTE_INDIRECT_TIER_1_1)
+-         continue;
+-      result = dzn_meta_indirect_draw_init(device, type);
+-      if (result != VK_SUCCESS)
+-         goto out;
+-   }
++   mtx_lock(&device->meta_lock);
++   if (!meta->pipeline_state)
++      dzn_meta_indirect_draw_init(device, type);
++   mtx_unlock(&device->meta_lock);
+ 
+-   if (!pdev->options15.TriangleFanSupported) {
+-      for (uint32_t i = 0; i < ARRAY_SIZE(device->triangle_fan); i++) {
+-         result = dzn_meta_triangle_fan_rewrite_index_init(device, i);
+-         if (result != VK_SUCCESS)
+-            goto out;
+-      }
+-   }
++   return meta->pipeline_state ? meta : NULL;
++}
+ 
+-out:
+-   if (result != VK_SUCCESS) {
+-      dzn_meta_finish(device);
+-      return result;
+-   }
++const struct dzn_meta_triangle_fan_rewrite_index *
++dzn_meta_get_triangle_fan_rewrite_index(struct dzn_device *device, enum dzn_index_type index_type)
++{
++   struct dzn_meta_triangle_fan_rewrite_index *meta = &device->triangle_fan[index_type];
+ 
+-   return VK_SUCCESS;
++   mtx_lock(&device->meta_lock);
++   if (!meta->pipeline_state)
++      dzn_meta_triangle_fan_rewrite_index_init(device, index_type);
++   mtx_unlock(&device->meta_lock);
++
++   return meta->pipeline_state ? meta : NULL;
++}
++
++VkResult
++dzn_meta_init(struct dzn_device *device)
++{
++   mtx_init(&device->meta_lock, mtx_plain);
++
++   /* On failure, dzn_device_destroy() calls dzn_meta_finish(). */
++   return dzn_meta_blits_init(device);
+ }
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index 576445b..93cd9e5 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -289,6 +289,8 @@ struct dzn_device {
+    ID3D12Device13 *dev13;
+    ID3D12DeviceConfiguration *dev_config;
+ 
++   /* Created on first use, under meta_lock. */
++   mtx_t meta_lock;
+    struct dzn_meta_indirect_draw indirect_draws[DZN_NUM_INDIRECT_DRAW_TYPES];
+    struct dzn_meta_triangle_fan_rewrite_index triangle_fan[DZN_NUM_INDEX_TYPE];
+    struct dzn_meta_blits blits;
+@@ -316,6 +318,12 @@ void dzn_meta_finish(struct dzn_device *device);
+ 
+ VkResult dzn_meta_init(struct dzn_device *device);
+ 
++const struct dzn_meta_indirect_draw *
++dzn_meta_get_indirect_draw(struct dzn_device *device, struct dzn_indirect_draw_type type);
++
++const struct dzn_meta_triangle_fan_rewrite_index *
++dzn_meta_get_triangle_fan_rewrite_index(struct dzn_device *device, enum dzn_index_type index_type);
++
+ const struct dzn_meta_blit *
+ dzn_meta_blits_get_context(struct dzn_device *device,
+                            const struct dzn_meta_blit_key *key);

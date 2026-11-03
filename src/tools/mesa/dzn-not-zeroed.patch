@@ -1,0 +1,62 @@
+dzn: Do not have D3D12 zero new memory allocations
+
+Vulkan leaves the contents of new device memory undefined, but Dozen
+created every heap and dedicated resource without
+D3D12_HEAP_FLAG_CREATE_NOT_ZEROED, so the runtime cleared each one on the
+CPU. Memory that comes from another process is zeroed by the OS either
+way.
+
+Set the flag on the heaps and committed resources vkAllocateMemory creates.
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index 03132da..128f900 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -2929,6 +2929,11 @@ dzn_device_memory_create(struct dzn_device *device,
+ 
+    VkResult error = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+ 
++   /* Vulkan leaves new memory's contents undefined, and memory that comes from
++    * another process is still zeroed by the OS: let D3D12 skip clearing the
++    * rest, which it otherwise does on the CPU for every allocation. */
++   D3D12_HEAP_FLAGS create_flags = heap_desc.Flags | D3D12_HEAP_FLAG_CREATE_NOT_ZEROED;
++
+ #ifdef _WIN32
+    HANDLE handle_from_name = NULL;
+    if (import_name) {
+@@ -3031,7 +3036,7 @@ dzn_device_memory_create(struct dzn_device *device,
+             .Flags = image->desc.Flags,
+          };
+          if (FAILED(ID3D12Device10_CreateCommittedResource3(device->dev10, &heap_desc.Properties,
+-                                                            heap_desc.Flags, &desc,
++                                                            create_flags, &desc,
+                                                             D3D12_BARRIER_LAYOUT_COMMON,
+                                                             NULL, NULL,
+                                                             image->castable_format_count,
+@@ -3040,7 +3045,7 @@ dzn_device_memory_create(struct dzn_device *device,
+                                                             (void **)&mem->dedicated_res)))
+             goto cleanup;
+       } else if (FAILED(ID3D12Device1_CreateCommittedResource(device->dev, &heap_desc.Properties,
+-                                                              heap_desc.Flags, &image->desc,
++                                                              create_flags, &image->desc,
+                                                               D3D12_RESOURCE_STATE_COMMON,
+                                                               NULL,
+                                                               &IID_ID3D12Resource,
+@@ -3048,14 +3053,16 @@ dzn_device_memory_create(struct dzn_device *device,
+          goto cleanup;
+    } else if (buffer) {
+       if (FAILED(ID3D12Device1_CreateCommittedResource(device->dev, &heap_desc.Properties,
+-                                                       heap_desc.Flags, &buffer->desc,
++                                                       create_flags, &buffer->desc,
+                                                        D3D12_RESOURCE_STATE_COMMON,
+                                                        NULL,
+                                                        &IID_ID3D12Resource,
+                                                        (void **)&mem->dedicated_res)))
+          goto cleanup;
+    } else {
+-      if (FAILED(ID3D12Device1_CreateHeap(device->dev, &heap_desc,
++      D3D12_HEAP_DESC create_desc = heap_desc;
++      create_desc.Flags = create_flags;
++      if (FAILED(ID3D12Device1_CreateHeap(device->dev, &create_desc,
+                                           &IID_ID3D12Heap,
+                                           (void **)&mem->heap)))
+          goto cleanup;

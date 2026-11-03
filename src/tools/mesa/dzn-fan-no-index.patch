@@ -1,0 +1,229 @@
+dzn: Remove the non-indexed triangle-fan index rewrite
+
+Generated-by: LLM
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index f3d57d5..00e77af 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -4363,9 +4363,8 @@ dzn_cmd_buffer_patch_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
+ 
+    if (triangle_fan_exec_buf) {
+       enum dzn_index_type index_type =
+-         *inout_indexed ?
+-         dzn_index_type_from_dxgi_format(cmdbuf->state.ib.view.Format, draw_type.triangle_fan_primitive_restart) :
+-         DZN_NO_INDEX;
++         dzn_index_type_from_dxgi_format(cmdbuf->state.ib.view.Format,
++                                         draw_type.triangle_fan_primitive_restart);
+       const struct dzn_meta_triangle_fan_rewrite_index *rewrite_index =
+          dzn_meta_get_triangle_fan_rewrite_index(device, index_type);
+       if (!rewrite_index) {
+@@ -4402,11 +4401,9 @@ dzn_cmd_buffer_patch_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
+                                                               sizeof(rewrite_index_params) / 4,
+                                                               (const void *)&rewrite_index_params, 0);
+ 
+-      if (*inout_indexed) {
+-         ID3D12GraphicsCommandList1_SetComputeRootShaderResourceView(cmdbuf->cmdlist,
+-                                                                     root_param_idx++,
+-                                                                     cmdbuf->state.ib.view.BufferLocation);
+-      }
++      ID3D12GraphicsCommandList1_SetComputeRootShaderResourceView(cmdbuf->cmdlist,
++                                                                  root_param_idx++,
++                                                                  cmdbuf->state.ib.view.BufferLocation);
+ 
+       ID3D12GraphicsCommandList1_ExecuteIndirect(cmdbuf->cmdlist, rewrite_index->cmd_sig,
+                                                  max_draw_count, triangle_fan_exec_buf, 0,
+diff --git a/src/microsoft/vulkan/dzn_meta.c b/src/microsoft/vulkan/dzn_meta.c
+index cb36663..f74803b 100644
+--- a/src/microsoft/vulkan/dzn_meta.c
++++ b/src/microsoft/vulkan/dzn_meta.c
+@@ -304,17 +304,15 @@ dzn_meta_triangle_fan_rewrite_index_init(struct dzn_device *device,
+       .ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL,
+    };
+ 
+-   if (old_index_type != DZN_NO_INDEX) {
+-      root_params[root_param_count++] = (D3D12_ROOT_PARAMETER1) {
+-         .ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV,
+-         .Descriptor = {
+-            .ShaderRegister = 2,
+-            .RegisterSpace = 0,
+-            .Flags = D3D12_ROOT_DESCRIPTOR_FLAG_NONE,
+-         },
+-         .ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL,
+-      };
+-   }
++   root_params[root_param_count++] = (D3D12_ROOT_PARAMETER1) {
++      .ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV,
++      .Descriptor = {
++         .ShaderRegister = 2,
++         .RegisterSpace = 0,
++         .Flags = D3D12_ROOT_DESCRIPTOR_FLAG_NONE,
++      },
++      .ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL,
++   };
+ 
+    if (prim_restart) {
+       root_params[root_param_count++] = (D3D12_ROOT_PARAMETER1) {
+diff --git a/src/microsoft/vulkan/dzn_nir.c b/src/microsoft/vulkan/dzn_nir.c
+index d6d3f17..b803a9c 100644
+--- a/src/microsoft/vulkan/dzn_nir.c
++++ b/src/microsoft/vulkan/dzn_nir.c
+@@ -465,7 +465,7 @@ dzn_nir_triangle_fan_prim_restart_rewrite_index_shader(uint8_t old_index_size)
+ nir_shader *
+ dzn_nir_triangle_fan_rewrite_index_shader(uint8_t old_index_size)
+ {
+-   assert(old_index_size == 0 || old_index_size == 2 || old_index_size == 4);
++   assert(old_index_size == 2 || old_index_size == 4);
+ 
+    nir_builder b =
+       nir_builder_init_simple_shader(MESA_SHADER_COMPUTE,
+@@ -479,12 +479,9 @@ dzn_nir_triangle_fan_rewrite_index_shader(uint8_t old_index_size)
+       dzn_nir_create_bo_desc(&b, nir_var_mem_ssbo, 0, 1,
+                              "new_index_buf", ACCESS_NON_READABLE);
+ 
+-   nir_def *old_index_buf_desc = NULL;
+-   if (old_index_size > 0) {
+-      old_index_buf_desc =
+-         dzn_nir_create_bo_desc(&b, nir_var_mem_ssbo, 0, 2,
+-                                "old_index_buf", ACCESS_NON_WRITEABLE);
+-   }
++   nir_def *old_index_buf_desc =
++      dzn_nir_create_bo_desc(&b, nir_var_mem_ssbo, 0, 2,
++                             "old_index_buf", ACCESS_NON_WRITEABLE);
+ 
+    nir_def *params =
+       nir_load_ubo(&b, sizeof(struct dzn_triangle_fan_rewrite_index_params) / 4, 32,
+@@ -492,55 +489,45 @@ dzn_nir_triangle_fan_rewrite_index_shader(uint8_t old_index_size)
+                    .align_mul = 4, .align_offset = 0, .range_base = 0, .range = ~0);
+ 
+    nir_def *triangle = nir_channel(&b, nir_load_global_invocation_id(&b, 32), 0);
+-   nir_def *new_indices;
+-
+-   if (old_index_size > 0) {
+-      nir_def *old_first_index = nir_channel(&b, params, 0);
+-      nir_def *old_index0_offset =
+-         nir_imul_imm(&b, old_first_index, old_index_size);
+-      nir_def *old_index1_offset =
+-         nir_imul_imm(&b, nir_iadd(&b, nir_iadd_imm(&b, triangle, 1), old_first_index),
+-                      old_index_size);
+-
+-      nir_def *old_index0 =
+-         nir_load_ssbo(&b, 1, 32, old_index_buf_desc,
+-                       old_index_size == 2 ? nir_iand_imm(&b, old_index0_offset, ~3ULL) : old_index0_offset,
+-                       .align_mul = 4);
+-
+-      if (old_index_size == 2) {
+-        old_index0 = nir_bcsel(&b, nir_test_mask(&b, old_index0_offset, 0x2),
+-                               nir_ushr_imm(&b, old_index0, 16),
+-                               nir_iand_imm(&b, old_index0, 0xffff));
+-      }
++   nir_def *old_first_index = nir_channel(&b, params, 0);
++   nir_def *old_index0_offset =
++      nir_imul_imm(&b, old_first_index, old_index_size);
++   nir_def *old_index1_offset =
++      nir_imul_imm(&b, nir_iadd(&b, nir_iadd_imm(&b, triangle, 1), old_first_index),
++                   old_index_size);
++
++   nir_def *old_index0 =
++      nir_load_ssbo(&b, 1, 32, old_index_buf_desc,
++                    old_index_size == 2 ? nir_iand_imm(&b, old_index0_offset, ~3ULL) : old_index0_offset,
++                    .align_mul = 4);
+ 
+-      nir_def *old_index12 =
+-         nir_load_ssbo(&b, 2, 32, old_index_buf_desc,
+-                       old_index_size == 2 ? nir_iand_imm(&b, old_index1_offset, ~3ULL) : old_index1_offset,
+-                       .align_mul = 4);
+-      if (old_index_size == 2) {
+-         nir_def *indices[] = {
+-            nir_iand_imm(&b, nir_channel(&b, old_index12, 0), 0xffff),
+-            nir_ushr_imm(&b, nir_channel(&b, old_index12, 0), 16),
+-            nir_iand_imm(&b, nir_channel(&b, old_index12, 1), 0xffff),
+-         };
+-
+-         old_index12 = nir_bcsel(&b, nir_test_mask(&b, old_index1_offset, 0x2),
+-                                 nir_vec2(&b, indices[1], indices[2]),
+-                                 nir_vec2(&b, indices[0], indices[1]));
+-      }
++   if (old_index_size == 2) {
++      old_index0 = nir_bcsel(&b, nir_test_mask(&b, old_index0_offset, 0x2),
++                             nir_ushr_imm(&b, old_index0, 16),
++                             nir_iand_imm(&b, old_index0, 0xffff));
++   }
+ 
+-      /* TODO: VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT */
+-      new_indices =
+-         nir_vec3(&b, nir_channel(&b, old_index12, 0),
+-                  nir_channel(&b, old_index12, 1), old_index0);
+-   } else {
+-      new_indices =
+-         nir_vec3(&b,
+-                  nir_iadd_imm(&b, triangle, 1),
+-                  nir_iadd_imm(&b, triangle, 2),
+-                  nir_imm_int(&b, 0));
++   nir_def *old_index12 =
++      nir_load_ssbo(&b, 2, 32, old_index_buf_desc,
++                    old_index_size == 2 ? nir_iand_imm(&b, old_index1_offset, ~3ULL) : old_index1_offset,
++                    .align_mul = 4);
++   if (old_index_size == 2) {
++      nir_def *indices[] = {
++         nir_iand_imm(&b, nir_channel(&b, old_index12, 0), 0xffff),
++         nir_ushr_imm(&b, nir_channel(&b, old_index12, 0), 16),
++         nir_iand_imm(&b, nir_channel(&b, old_index12, 1), 0xffff),
++      };
++
++      old_index12 = nir_bcsel(&b, nir_test_mask(&b, old_index1_offset, 0x2),
++                              nir_vec2(&b, indices[1], indices[2]),
++                              nir_vec2(&b, indices[0], indices[1]));
+    }
+ 
++   /* TODO: VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT */
++   nir_def *new_indices =
++      nir_vec3(&b, nir_channel(&b, old_index12, 0),
++               nir_channel(&b, old_index12, 1), old_index0);
++
+    nir_def *new_index_offset =
+       nir_imul_imm(&b, triangle, 4 * 3);
+ 
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index a598c6c..a6d8703 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -86,7 +86,6 @@ struct dzn_meta_indirect_draw {
+ };
+ 
+ enum dzn_index_type {
+-   DZN_NO_INDEX,
+    DZN_INDEX_2B,
+    DZN_INDEX_4B,
+    DZN_INDEX_2B_WITH_PRIM_RESTART,
+@@ -94,22 +93,10 @@ enum dzn_index_type {
+    DZN_NUM_INDEX_TYPE,
+ };
+ 
+-static inline enum dzn_index_type
+-dzn_index_type_from_size(uint8_t index_size)
+-{
+-   switch (index_size) {
+-   case 0: return DZN_NO_INDEX;
+-   case 2: return DZN_INDEX_2B;
+-   case 4: return DZN_INDEX_4B;
+-   default: UNREACHABLE("Invalid index size");
+-   }
+-}
+-
+ static inline enum dzn_index_type
+ dzn_index_type_from_dxgi_format(DXGI_FORMAT format, bool prim_restart)
+ {
+    switch (format) {
+-   case DXGI_FORMAT_UNKNOWN: return DZN_NO_INDEX;
+    case DXGI_FORMAT_R16_UINT:
+       return prim_restart ? DZN_INDEX_2B_WITH_PRIM_RESTART : DZN_INDEX_2B;
+    case DXGI_FORMAT_R32_UINT:
+@@ -122,8 +109,6 @@ static inline uint8_t
+ dzn_index_size(enum dzn_index_type type)
+ {
+    switch (type) {
+-   case DZN_NO_INDEX:
+-      return 0;
+    case DZN_INDEX_2B_WITH_PRIM_RESTART:
+    case DZN_INDEX_2B:
+       return 2;

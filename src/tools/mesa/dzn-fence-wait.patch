@@ -1,0 +1,45 @@
+dzn: Answer satisfied or expired fence waits without a kernel call
+
+Every vk_sync wait created an event and called
+SetEventOnMultipleFenceCompletion, even when the fences had already
+reached the values asked for or the timeout had passed. Under WSL2 that is
+a call into the host's graphics kernel, while a fence's completed value
+can be read without one, and gfxstream polls fences with a zero timeout.
+
+Check the completed values first: return when they already satisfy the
+wait, and time out at once when the timeout has passed.
+
+diff --git a/src/microsoft/vulkan/dzn_sync.c b/src/microsoft/vulkan/dzn_sync.c
+index 48dff7b..78938ca 100644
+--- a/src/microsoft/vulkan/dzn_sync.c
++++ b/src/microsoft/vulkan/dzn_sync.c
+@@ -139,6 +139,29 @@ dzn_sync_wait(struct vk_device *device,
+ {
+    struct dzn_device *ddev = container_of(device, struct dzn_device, vk);
+ 
++   /* Waiting is a call into the graphics kernel, reading a fence's completed
++    * value is not: answer a wait the fences already satisfy, or a poll they
++    * do not, without one. */
++   bool any = wait_flags & VK_SYNC_WAIT_ANY;
++   bool satisfied = !any;
++   for (uint32_t i = 0; i < wait_count; i++) {
++      struct dzn_sync *sync = container_of(waits[i].sync, struct dzn_sync, vk);
++      uint64_t value = (sync->vk.flags & VK_SYNC_IS_TIMELINE) ? waits[i].wait_value : 1;
++      bool done = ID3D12Fence_GetCompletedValue(sync->fence) >= value;
++      if (any && done) {
++         satisfied = true;
++         break;
++      }
++      if (!any && !done) {
++         satisfied = false;
++         break;
++      }
++   }
++   if (satisfied)
++      return VK_SUCCESS;
++   if (abs_timeout_ns != OS_TIMEOUT_INFINITE && abs_timeout_ns <= os_time_get_nano())
++      return VK_TIMEOUT;
++
+ #ifdef _WIN32
+    HANDLE event = CreateEventA(NULL, false, false, NULL);
+    if (event == NULL)

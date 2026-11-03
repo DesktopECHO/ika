@@ -1,0 +1,128 @@
+dzn: Let the common command pool recycle command buffers
+
+dzn_AllocateCommandBuffers created every command buffer from scratch, so
+vk_command_pool never recycled freed ones: each vkFreeCommandBuffers
+destroyed a D3D12 command allocator, command list and the shader-visible
+descriptor heaps of the command buffer's heap pools, and the next
+vkAllocateCommandBuffers created them again. Under WSL2 each of those is a
+call into the host's graphics kernel. gfxstream allocates and frees a
+command buffer for most frames an Android app draws: while scrolling a
+list, Dozen created 130 command allocators and lists and 262 descriptor
+heaps in 13 seconds.
+
+Give the command buffer ops a create callback and use
+vk_common_AllocateCommandBuffers, which then resets a freed command
+buffer and keeps it in the pool for the next allocation. Scrolling the
+same list then created one command allocator and 4 descriptor heaps, and
+the CPU time of gfxstream's render thread for that app fell from about
+800 ms to 270 ms.
+
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index b5c0bf9..9b0d83d 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -595,7 +595,16 @@ dzn_cmd_buffer_dsv_key_equals_function(const void *a, const void *b)
+    return memcmp(a, b, sizeof(struct dzn_cmd_buffer_dsv_key)) == 0;
+ }
+ 
+-static const struct vk_command_buffer_ops cmd_buffer_ops = {
++static VkResult
++dzn_cmd_buffer_create(struct vk_command_pool *pool,
++                      VkCommandBufferLevel level,
++                      struct vk_command_buffer **out);
++
++/* With a create op, vk_common_AllocateCommandBuffers recycles freed command
++ * buffers, with their command allocator, command list and descriptor heaps,
++ * instead of destroying them. */
++const struct vk_command_buffer_ops dzn_cmd_buffer_ops = {
++   .create = dzn_cmd_buffer_create,
+    .destroy = dzn_cmd_buffer_destroy,
+    .reset = dzn_cmd_buffer_reset,
+ };
+@@ -638,10 +647,10 @@ static const D3D12_BARRIER_ACCESS cmd_buffer_valid_access[] = {
+ };
+ 
+ static VkResult
+-dzn_cmd_buffer_create(const VkCommandBufferAllocateInfo *info,
+-                      VkCommandBuffer *out)
++dzn_cmd_buffer_create(struct vk_command_pool *pool,
++                      VkCommandBufferLevel level,
++                      struct vk_command_buffer **out)
+ {
+-   VK_FROM_HANDLE(vk_command_pool, pool, info->commandPool);
+    struct dzn_device *device = container_of(pool->base.device, struct dzn_device, vk);
+    struct dzn_physical_device *pdev =
+       container_of(device->vk.physical, struct dzn_physical_device, vk);
+@@ -660,9 +669,9 @@ dzn_cmd_buffer_create(const VkCommandBufferAllocateInfo *info,
+       vk_command_buffer_init_with_params(&cmdbuf->vk,
+                                          &(struct vk_command_buffer_init_params) {
+                                             .pool = pool,
+-                                            .ops = &cmd_buffer_ops,
+-                                            .level = info->level,
+-                                            .needs_cmd_queue = info->level == VK_COMMAND_BUFFER_LEVEL_SECONDARY,
++                                            .ops = &dzn_cmd_buffer_ops,
++                                            .level = level,
++                                            .needs_cmd_queue = level == VK_COMMAND_BUFFER_LEVEL_SECONDARY,
+                                          });
+    if (result != VK_SUCCESS) {
+       vk_free(&pool->alloc, cmdbuf);
+@@ -746,33 +755,7 @@ out:
+    if (result != VK_SUCCESS)
+       dzn_cmd_buffer_destroy(&cmdbuf->vk);
+    else
+-      *out = dzn_cmd_buffer_to_handle(cmdbuf);
+-
+-   return result;
+-}
+-
+-VKAPI_ATTR VkResult VKAPI_CALL
+-dzn_AllocateCommandBuffers(VkDevice device,
+-                           const VkCommandBufferAllocateInfo *pAllocateInfo,
+-                           VkCommandBuffer *pCommandBuffers)
+-{
+-   VK_FROM_HANDLE(dzn_device, dev, device);
+-   VkResult result = VK_SUCCESS;
+-   uint32_t i;
+-
+-   for (i = 0; i < pAllocateInfo->commandBufferCount; i++) {
+-      result = dzn_cmd_buffer_create(pAllocateInfo,
+-                                     &pCommandBuffers[i]);
+-      if (result != VK_SUCCESS)
+-         break;
+-   }
+-
+-   if (result != VK_SUCCESS) {
+-      dev->vk.dispatch_table.FreeCommandBuffers(device, pAllocateInfo->commandPool,
+-                                                i, pCommandBuffers);
+-      for (i = 0; i < pAllocateInfo->commandBufferCount; i++)
+-         pCommandBuffers[i] = VK_NULL_HANDLE;
+-   }
++      *out = &cmdbuf->vk;
+ 
+    return result;
+ }
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index e4824e5..1e64055 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -2490,6 +2490,7 @@ dzn_device_create(struct dzn_physical_device *pdev,
+     * whole struct.
+     */
+    device->vk.command_dispatch_table = &device->cmd_dispatch;
++   device->vk.command_buffer_ops = &dzn_cmd_buffer_ops;
+    device->vk.check_status = dzn_device_check_status;
+ 
+    device->dev = pdev->dev;
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index dfd7547..5f7f59b 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -321,6 +321,8 @@ void dzn_meta_finish(struct dzn_device *device);
+ 
+ VkResult dzn_meta_init(struct dzn_device *device);
+ 
++extern const struct vk_command_buffer_ops dzn_cmd_buffer_ops;
++
+ struct dzn_pso_cache *dzn_pso_cache_ref(ID3D12Device4 *dev);
+ void dzn_pso_cache_unref(struct dzn_pso_cache *cache);
+ HRESULT dzn_pso_cache_create_pipeline_state(struct dzn_device *device,

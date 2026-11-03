@@ -1,0 +1,67 @@
+dzn: Compile a pipeline's static-state variant when it is created
+
+A graphics pipeline whose dynamic state D3D12 cannot set got no PSO when
+it was created: the first draw compiled one for the state it used, while
+the command buffer was being recorded, and so did each later draw with
+other state. Most draws use the state the create info gives, which with
+extended dynamic state is the state the application last set.
+
+Compile the variant for that state when the pipeline is created, so that
+the compile happens where applications expect it and a failure is
+reported by vkCreateGraphicsPipelines. In Android's UI on an Intel Iris
+Plus 650 under WSL2, it covered 8 of the 10 variants draws used.
+
+diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
+index c7db05f..d494a85 100644
+--- a/src/microsoft/vulkan/dzn_pipeline.c
++++ b/src/microsoft/vulkan/dzn_pipeline.c
+@@ -2311,7 +2311,48 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
+       }
+    }
+ 
+-   if (!pipeline->variants) {
++   if (pipeline->variants) {
++      /* Compile the variant for the state the create info gives now, which
++       * is usually the state draws use, rather than while recording one. */
++      struct dzn_graphics_pipeline_variant_key key = {
++         .ib_strip_cut = D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_0xFFFF,
++         .depth_bias = {
++            .constant_factor = pipeline->statics.depth_bias_constant,
++            .slope_factor = pipeline->statics.depth_bias_slope,
++            .clamp = pipeline->statics.depth_bias_clamp,
++         },
++         .stencil_test = {
++            .front = {
++               .ref = pipeline->zsa.stencil_test.front.ref,
++               .compare_mask = pipeline->zsa.stencil_test.front.compare_mask,
++               .write_mask = pipeline->zsa.stencil_test.front.write_mask,
++            },
++            .back = {
++               .ref = pipeline->zsa.stencil_test.back.ref,
++               .compare_mask = pipeline->zsa.stencil_test.back.compare_mask,
++               .write_mask = pipeline->zsa.stencil_test.back.write_mask,
++            },
++         },
++         .cull_mode = pipeline->statics.cull_mode,
++         .front_ccw = pipeline->statics.front_ccw,
++         .depth_bias_enable = pipeline->statics.depth_bias_enable,
++         .primitive_restart_enable = pipeline->statics.primitive_restart,
++         .zs = {
++            .depth_test_enable = pipeline->statics.depth_test_enable,
++            .depth_write_enable = pipeline->statics.depth_write_enable,
++            .depth_compare_op = pipeline->statics.depth_compare_op,
++            .depth_bounds_test_enable = pipeline->statics.depth_bounds_test_enable,
++            .stencil_test_enable = pipeline->statics.stencil_test_enable,
++            .front = pipeline->statics.front,
++            .back = pipeline->statics.back,
++         },
++      };
++
++      if (!dzn_graphics_pipeline_get_state(pipeline, &key)) {
++         ret = vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
++         goto out;
++      }
++   } else {
+       hres = dzn_pso_cache_create_pipeline_state(device, stream_desc,
+                                                  &pipeline->base.state);
+       if (FAILED(hres)) {
