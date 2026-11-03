@@ -120,8 +120,17 @@ the size of the Cuttlefish display through IWindowManager (as `wm size`, and
 `wm density N` once), with Android's scaling off when the size fits the
 physical display: the content is drawn 1:1, centered in the physical frame,
 and the client crops it. When the display has the requested size and its
-configuration was dispatched, the server sends `DISPLAY_READY`. The original
-size and density are restored on exit.
+configuration was dispatched, the server sends `DISPLAY_READY`.
+
+The size, density and scaling stay on exit, and Android keeps them across
+reboots, so that the next session and the next boot start at the window's
+size. A server that finds a size already forced forces its density when it
+starts, before the capture, so that the window never shows the content
+relaid out from another density. On a display at its physical size it forces
+the density right after the first size instead: SystemUI only inflates its
+views again on a density change, so a density forced first would leave it
+with the dimensions of the physical size (on a display wider than 1500 dp, a
+status bar clock half again as large) once the size changes.
 
 `app/src/ika/flex.c` debounces the requests while the window is resized. The
 window holds a blurred preview of the last content until the guest has drawn

@@ -319,20 +319,6 @@ public final class WindowManager {
     }
 
     /**
-     * Return the density forced on a display (as by "wm density"), or 0 if it has its initial density.
-     */
-    public int getForcedDisplayDensity(int displayId) {
-        try {
-            int initial = (int) manager.getClass().getMethod("getInitialDisplayDensity", int.class).invoke(manager, displayId);
-            int base = (int) manager.getClass().getMethod("getBaseDisplayDensity", int.class).invoke(manager, displayId);
-            return base == initial ? 0 : base;
-        } catch (ReflectiveOperationException e) {
-            Ln.e("Could not read the display density", e);
-            return 0;
-        }
-    }
-
-    /**
      * Force the density of a display (as "wm density"), or restore its initial density if {@code density} is 0.
      */
     public boolean setForcedDisplayDensity(int displayId, int density) {

@@ -1193,6 +1193,8 @@ CVD_CONFIG_PATH="${CVD_INSTANCE_DIR}/cuttlefish_config.json"
 CHROMIUM_INSTALL_STAMP="${CVD_HOME_DIR}/chromium-installed-cvd-1"
 CHROMIUM_APK="${IKA_APPS_DIR}/Chromium.apk"
 UDMABUF_BASELINE_FILE="${CVD_HOME_DIR}/udmabuf-baseline"
+# The host display's size as last found, for a start that finds none.
+HOST_DISPLAY_SIZE_FILE="${CVD_HOME_DIR}/host-display-size"
 SCRCPY_BIN="${PACKAGED_SCRCPY_BIN}"
 SCRCPY_SERVER_PATH_OVERRIDE=""
 if [[ -f "${PACKAGED_SCRCPY_SERVER}" ]]; then
@@ -2676,13 +2678,22 @@ drm_display_size() {
 # wayland-info's output, read at most once per run: spawning it costs some
 # 30 ms, and the three host display probes below each want it, some from
 # subshells, which share the output read before them but not one of their own.
+# In a Wayland session it is read again, for up to 2 seconds, until an output
+# has a current mode: a compositor still starting has none yet.
 _wayland_info_probed=""
 _wayland_info_output=""
 wayland_info_output() {
+  local attempt
+
   if [[ -z "${_wayland_info_probed}" ]]; then
     _wayland_info_probed="yes"
     if command -v wayland-info >/dev/null 2>&1; then
-      _wayland_info_output="$(wayland-info 2>/dev/null || true)"
+      for (( attempt = 0; attempt < 8; ++attempt )); do
+        _wayland_info_output="$(wayland-info 2>/dev/null || true)"
+        [[ -n "${WAYLAND_DISPLAY:-}" ]] || break
+        grep -q 'flags:.*current' <<<"${_wayland_info_output}" && break
+        sleep 0.25
+      done
     fi
   fi
   [[ -n "${_wayland_info_output}" ]] || return 1
@@ -2690,8 +2701,10 @@ wayland_info_output() {
 }
 
 # Largest "current" Wayland output mode as WxH, falling back to the DRM
-# connectors in sysfs. Probed at most once per run and cached: a single start
-# queries it more than once (DPI heuristic + display ceiling).
+# connectors in sysfs, then to the size found last in HOST_DISPLAY_SIZE_FILE
+# (monitors asleep report none, and some hosts' DRM connectors are not the
+# outputs). Probed at most once per run and cached: a single start queries it
+# more than once (DPI heuristic + display ceiling).
 _host_display_size_probed=""
 _host_display_size_value=""
 host_display_size() {
@@ -2720,6 +2733,18 @@ host_display_size() {
     fi
     if [[ -z "${_host_display_size_value}" ]]; then
       _host_display_size_value="$(drm_display_size)"
+    fi
+    if [[ -n "${_host_display_size_value}" ]]; then
+      if [[ "$(cat "${HOST_DISPLAY_SIZE_FILE}" 2>/dev/null)" != "${_host_display_size_value}" ]]; then
+        printf '%s\n' "${_host_display_size_value}" >"${HOST_DISPLAY_SIZE_FILE}" 2>/dev/null || true
+      fi
+    else
+      _host_display_size_value="$(cat "${HOST_DISPLAY_SIZE_FILE}" 2>/dev/null || true)"
+      if [[ "${_host_display_size_value}" =~ ^[0-9]+x[0-9]+$ ]]; then
+        log "no host display found; using the size it had last, ${_host_display_size_value}"
+      else
+        _host_display_size_value=""
+      fi
     fi
   fi
 
@@ -11106,6 +11131,9 @@ start_cvd() {
   launcher_log="${CVD_LAUNCHER_LOG}"
   adb_serial="$(resolve_adb_serial)"
   start_epoch="$(date +%s)"
+  # Probed here, once, for the DPI heuristic and the display ceiling, which
+  # read it in subshells that could not share it.
+  host_display_size >/dev/null || true
   split_start_args args scrcpy_dpi "$@"
   SCRCPY_DPI="${scrcpy_dpi}"
 

@@ -10,7 +10,8 @@ import com.genymobile.scrcpy.wrappers.WindowManager;
  * virtual display).
  * <p/>
  * The physical display keeps its size: the requested size is forced on it (as "wm size"), and when it fits, Android's scaling is turned off
- * so that it is drawn 1:1 in the physical frame instead of stretched to fill it. The client then shows that region unscaled.
+ * so that it is drawn 1:1 in the physical frame instead of stretched to fill it. The client then shows that region unscaled. The size,
+ * density and scaling stay when the client goes, so that the next session, and the next boot, start at them.
  * <p/>
  * The listener is notified once the display has reached a requested size and its new configuration has been dispatched.
  */
@@ -31,7 +32,8 @@ public final class PrimaryDisplayResizer {
 
     private Size physicalSize;
     private Boolean scalingDisabled;
-    private boolean densityApplied;
+    // The density to force once the display has its first size
+    private boolean densityPending;
 
     // The size the client waits for, null if none
     private Size pendingSize;
@@ -43,6 +45,19 @@ public final class PrimaryDisplayResizer {
     }
 
     public void start() {
+        if (dpi > 0) {
+            WindowManager wm = ServiceManager.getWindowManager();
+            if (wm.getForcedDisplaySize(displayId) != null) {
+                // The display has the size of the last session: the density is forced before the capture starts, so that the window
+                // never shows the content at the density it had before, relaid out at this one once revealed
+                wm.setForcedDisplayDensity(displayId, dpi);
+            } else {
+                // At the physical size, SystemUI would take the sizes of the screen that large (a status bar clock half again as
+                // large), and keep them at the window size: a size change alone does not inflate it again, a density change does
+                densityPending = true;
+            }
+        }
+
         DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(displayId);
         if (info != null) {
             displayMonitor.setSessionDisplayProperties(new DisplayProperties(info.getSize(), info.getRotation()));
@@ -73,14 +88,10 @@ public final class PrimaryDisplayResizer {
             }
         }
 
-        if (!densityApplied && dpi > 0) {
-            wm.setForcedDisplayDensity(displayId, dpi);
-            densityApplied = true;
-        }
-
         DisplayInfo info = ServiceManager.getDisplayManager().getDisplayInfo(displayId);
         if (info != null && size.equals(info.getSize())) {
             // Nothing will change, the display is already ready
+            applyPendingDensity(wm);
             synchronized (this) {
                 pendingSize = null;
             }
@@ -96,6 +107,14 @@ public final class PrimaryDisplayResizer {
             synchronized (this) {
                 pendingSize = null;
             }
+        }
+        applyPendingDensity(wm);
+    }
+
+    private void applyPendingDensity(WindowManager wm) {
+        if (densityPending) {
+            wm.setForcedDisplayDensity(displayId, dpi);
+            densityPending = false;
         }
     }
 

@@ -486,6 +486,7 @@ Ika keeps its files in `~/ika`:
 | `madbfs.log` | The log of the Android files mount |
 | `cuttlefish/instances/cvd-1/` | The VM: its disk overlay and Cuttlefish's logs (`logs/launcher.log`, `kernel.log`, `logcat`) |
 | `data-gb`, `serial-number` | The data partition size and the device's serial number |
+| `host-display-size` | The host display's size as last found, for a start that finds no display |
 | `tmp/` | Locks, process IDs and working folders |
 
 Android's files are mounted on `$XDG_RUNTIME_DIR/ika/Android` while Android
