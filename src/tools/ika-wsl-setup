@@ -192,7 +192,7 @@ windows_profile_dir() {
   if [[ -n "${IKA_WINDOWS_PROFILE:-}" ]]; then
     dir="${IKA_WINDOWS_PROFILE}"
   elif command -v cmd.exe >/dev/null 2>&1; then
-    dir="$(cd /mnt/c 2>/dev/null && cmd.exe /C 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r\n' || true)"
+    dir="$(cd /mnt/c 2>/dev/null && cmd.exe /C 'echo %USERPROFILE%' </dev/null 2>/dev/null | tr -d '\r\n' || true)"
     [[ -n "${dir}" ]] && dir="$(wslpath -u "${dir}" 2>/dev/null || true)"
   fi
   [[ -d "${dir}" ]] || return 1
@@ -361,18 +361,20 @@ enable_fuse_allow_other() {
 HYPERV_PTP_DEVICE="/dev/ptp_hyperv"
 CHRONY_IKA_CONF_NAME="ika-wsl-hyperv.conf"
 
-# The Windows clock as Unix milliseconds, or nothing without Windows interop
+# The Windows clock as Unix milliseconds, or nothing without Windows interop.
+# A Windows program reads all of its standard input even when it needs none,
+# so these get /dev/null rather than the caller's.
 windows_utc_ms() {
   command -v powershell.exe >/dev/null 2>&1 || return 1
   powershell.exe -NoProfile -NonInteractive -Command \
-    '[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()' 2>/dev/null | tr -d '\r'
+    '[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()' </dev/null 2>/dev/null | tr -d '\r'
 }
 
 # Windows' UTC offset in minutes, or nothing without Windows interop
 windows_utc_offset_minutes() {
   command -v powershell.exe >/dev/null 2>&1 || return 1
   powershell.exe -NoProfile -NonInteractive -Command \
-    '[int][TimeZoneInfo]::Local.GetUtcOffset([DateTime]::UtcNow).TotalMinutes' 2>/dev/null | tr -d '\r'
+    '[int][TimeZoneInfo]::Local.GetUtcOffset([DateTime]::UtcNow).TotalMinutes' </dev/null 2>/dev/null | tr -d '\r'
 }
 
 # This clock minus Windows', in milliseconds, or nothing without interop
@@ -632,8 +634,11 @@ main() {
     || die "cannot find the Windows user profile; set IKA_WINDOWS_PROFILE=/mnt/c/Users/NAME"
   wslconfig="${profile}/.wslconfig"
 
-  # Groups: the login session picks them up at the next start of WSL
-  while IFS=$'\t' read -r name reason; do
+  # Groups: the login session picks them up at the next start of WSL. The list
+  # comes in on fd 3: a fix that ran a program reading standard input, such
+  # as Windows' powershell.exe for the clock, took the rest of it, and the
+  # fixes after it never ran.
+  while IFS=$'\t' read -r -u 3 name reason; do
     case "${name}" in
       group-*)
         run_as_root usermod -aG "${name#group-}" "${USER}"
@@ -688,7 +693,7 @@ main() {
         need_kernel="true"
         ;;
     esac
-  done <<< "${missing}"
+  done 3<<< "${missing}"
 
   if [[ "${force_kernel}" == "true" ]]; then
     need_kernel="true"

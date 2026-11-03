@@ -17,7 +17,9 @@ in it:
      ika-base and ika-lineageos packages (.deb) in -PackageDirectory, the
      newest version of each for the distribution's architecture;
   3. runs ika-wsl-setup, from the package, which readies WSL for Ika: nested
-     virtualization, cgroup v2, the groups, the Start menu, the clock;
+     virtualization, cgroup v2, the groups, the Start menu, the clock, the
+     devices' groups; then asks it what is still missing, and warns of
+     anything a restart of WSL does not bring;
   4. restarts the distribution, or all of WSL when ika-wsl-setup changed
      .wslconfig (asked first, as that stops every running distribution);
   5. starts Ika, whose console opens in a window. Run outside the desktop
@@ -72,9 +74,15 @@ function Write-Step([string]$Text, [switch]$NoNewline) {
     Write-Host "$([char]0x00B7) $Text" -ForegroundColor Cyan -NoNewline:$NoNewline
 }
 
+# Runs one of wsl.exe's own commands (--install, --terminate, --shutdown...),
+# showing what it says ("The operation completed successfully.") only when it
+# fails
 function Invoke-Wsl {
-    & wsl.exe @args
+    # Windows PowerShell turns a native command's stderr into errors
+    $ErrorActionPreference = 'Continue'
+    $output = & wsl.exe @args 2>&1
     if ($LASTEXITCODE -ne 0) {
+        $output | ForEach-Object { Write-Host "$_" }
         throw "wsl.exe $($args -join ' ') failed (exit code $LASTEXITCODE)"
     }
 }
@@ -91,8 +99,6 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 case "${phase}" in
   user)
-    # Debian's first-run prompt (/usr/lib/wsl/oobe.sh) skips itself once a
-    # user with UID 1000 exists
     if ! getent passwd "${user}" >/dev/null; then
       if getent passwd 1000 >/dev/null; then
         die "UID 1000 is taken by $(getent passwd 1000 | cut -d: -f1)"
@@ -103,6 +109,13 @@ case "${phase}" in
     printf '%s ALL=(ALL:ALL) NOPASSWD: ALL\n' "${user}" >/etc/sudoers.d/90-ika-user
     chmod 0440 /etc/sudoers.d/90-ika-user
     printf '[boot]\nsystemd=true\n\n[user]\ndefault=%s\n' "${user}" >/etc/wsl.conf
+    # WSL runs Debian's first-run prompt (/usr/lib/wsl/oobe.sh) at the first
+    # shell started without a command. With a user of UID 1000 it creates
+    # none, but says "User account already exists, skipping creation". Without
+    # the command WSL marks its first run done in silence.
+    if [[ -f /etc/wsl-distribution.conf ]]; then
+      sed -i '/^\[oobe\]/,/^\[/{/^[[:space:]]*command[[:space:]]*=/d}' /etc/wsl-distribution.conf
+    fi
     ;;
 
   install)
@@ -178,6 +191,13 @@ case "${phase}" in
     fi
     ;;
 
+  check)
+    # What ika-wsl-setup finds missing, a NAME<TAB>reason line each
+    if setup="$(command -v ika-wsl-setup)"; then
+      ( . "${setup}"; missing_components )
+    fi
+    ;;
+
   *)
     die "unknown phase ${phase}"
     ;;
@@ -186,9 +206,9 @@ esac
 
 # Runs a phase of $Provision in the distribution, as root or as the user,
 # showing its output and returning it; a failure throws unless -NoThrow.
-# With -Dots the output is shown as a dot for every 100 lines, and its last
-# lines only if the phase fails.
-function Invoke-Provision([string]$Phase, [string]$As, [switch]$NoThrow, [switch]$Dots) {
+# With -Dots the output is shown as a dot for every 100 lines, with -Quiet
+# not at all, and either way its last lines if the phase fails.
+function Invoke-Provision([string]$Phase, [string]$As, [switch]$NoThrow, [switch]$Dots, [switch]$Quiet) {
     # Windows PowerShell turns a native command's stderr into errors, which
     # would stop the script at apt's first progress line
     $ErrorActionPreference = 'Continue'
@@ -197,18 +217,16 @@ function Invoke-Provision([string]$Phase, [string]$As, [switch]$NoThrow, [switch
     & wsl.exe -d $Name -u $As --exec bash -c "echo $script | base64 -d | bash -s -- $Phase $UserName" 2>&1 |
         ForEach-Object {
             $lines.Add("$_")
-            if (-not $Dots) {
+            if ($Dots) {
+                if ($lines.Count % 100 -eq 0) { Write-Host '.' -NoNewline }
+            } elseif (-not $Quiet) {
                 Write-Host $_
-            } elseif ($lines.Count % 100 -eq 0) {
-                Write-Host '.' -NoNewline
             }
         }
     $exitCode = $LASTEXITCODE
-    if ($Dots) {
-        Write-Host ''
-        if ($exitCode -ne 0) {
-            $lines | Select-Object -Last 40 | ForEach-Object { Write-Host $_ }
-        }
+    if ($Dots) { Write-Host '' }
+    if (($Dots -or $Quiet) -and $exitCode -ne 0) {
+        $lines | Select-Object -Last 40 | ForEach-Object { Write-Host $_ }
     }
     if ($exitCode -ne 0) {
         if (-not $NoThrow) { throw "Setting up $Name failed in its '$Phase' step (exit code $exitCode)" }
@@ -547,8 +565,21 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Step 'Readying WSL for Ika (ika-wsl-setup)'
-$setupOutput = Invoke-Provision setup $UserName -NoThrow
+# Its report of what it fixes wraps badly in the console; what it leaves
+# missing is asked for below instead
+$setupOutput = Invoke-Provision setup $UserName -NoThrow -Quiet
 if (($setupOutput -join "`n") -match 'wsl --shutdown') { $restartWsl = $true }
+
+# What a restart of WSL brings: the kernel's settings, systemd, the time zone.
+# Anything else still missing is a fix that did not take.
+$byRestart = @('nested-virtualization', 'kvm', 'cgroup2', 'cgroup-cpu', 'systemd', 'timezone')
+foreach ($line in Invoke-Provision check $UserName -NoThrow -Quiet) {
+    if ($line -notmatch '^([^\t]+)\t(.+)$') { continue }
+    if ($restartWsl -and $byRestart -contains $Matches[1]) { continue }
+    $reason = $Matches[2]
+    if ($Matches[1] -eq 'kernel') { $reason += "; ""wsl -d $Name -- ika-wsl-setup"" builds it" }
+    Write-Warning "Not set up: $reason"
+}
 
 if ($restartWsl) {
     Write-Step 'WSL must restart for its new settings, which stops every running distribution'

@@ -408,8 +408,9 @@ is missing, then installs Debian 13 (trixie), the latest WSL image from
 distribution named Ika, with Ika's icon in the Start menu and Windows
 Terminal, a user named after the Windows user, with passwordless sudo, and
 systemd; installs Mesa from trixie-backports and the `ika-base` and
-`ika-lineageos` packages of Ika's latest release; runs `ika-wsl-setup`;
-restarts WSL when its settings changed (it asks first, as that stops every
+`ika-lineageos` packages of Ika's latest release; runs `ika-wsl-setup`
+without showing its report, then warns of anything it still finds missing
+that a restart of WSL does not bring; restarts WSL when its settings changed (it asks first, as that stops every
 distribution); and starts Ika. Run outside the desktop, in Windows' session
 0 (over SSH, for one), it would have booted WSL there, WSLg with it, and
 Ika's windows and Start menu entries would reach no desktop: unless WSLg

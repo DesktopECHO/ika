@@ -120,4 +120,22 @@ expect_equal "$(<"${FUSE_CONF}")" "user_allow_other" "a new fuse.conf"
 unset -f run_as_root
 echo "ok: user_allow_other"
 
+# Every fix runs, also after one that reads standard input as powershell.exe
+# does: the clock's once took the rest of the list, and the devices' never ran
+missing_components() {
+  printf 'clock\tthe clock is +8.8 s off Windows\n'
+  printf 'device-vhost-net\t/dev/vhost-net has no ACL entry for cvdnetwork\n'
+  printf 'device-vhost-vsock\t/dev/vhost-vsock has no ACL entry for cvdnetwork\n'
+}
+is_wsl2() { return 0; }
+wsl_kernel_version() { printf '6.6.87.2\n'; }
+windows_profile_dir() { printf '%s\n' "${T}"; }
+step_clock_to_windows() { cat >/dev/null; log "set the clock to Windows' time"; }
+run_as_root() { printf '%s\n' "$*" >>"${T}/ran"; }
+stat() { printf 'cvdnetwork\n'; }
+main --no-kernel </dev/null >/dev/null
+expect_equal "$(command grep -c '^udevadm trigger' "${T}/ran")" 2 "udev's rules run again for both devices"
+unset -f missing_components is_wsl2 wsl_kernel_version windows_profile_dir step_clock_to_windows run_as_root stat
+echo "ok: every fix runs"
+
 printf 'PASS: ika-wsl-setup tests\n'
