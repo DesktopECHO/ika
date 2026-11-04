@@ -37,6 +37,7 @@ external/mesa3d patches/external-mesa3d-trace-hex-table.patch
 external/mesa3d patches/external-mesa3d-venus-queue-family-pnext.patch
 external/mesa3d patches/external-mesa3d-venus-yv12-ahb.patch
 external/mesa3d patches/external-mesa3d-gfxstream-unknown-image-view-filter.patch
+external/angle patches/external-angle-unbound-image-unit-handles.patch
 external/mesa3d patches/external-mesa3d-lavapipe-export-sync-file-lock.patch
 external/mesa3d patches/external-mesa3d-lavapipe-etc2-astc-emulation.patch
 external/mesa3d patches/external-mesa3d-lavapipe-anb-alias-layout.patch
