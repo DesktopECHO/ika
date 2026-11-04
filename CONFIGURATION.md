@@ -1,4 +1,4 @@
-[README](README.md) | [Using Ika](USAGE.md) | **Configuration** | [Graphics](GRAPHICS.md) | [Building](BUILDING.md) | [Downloads](DOWNLOADS.md) | [Changelog](CHANGELOG.md)
+[README](README.md) | [Using Ika](USAGE.md) | **Configuration** | [Graphics](GRAPHICS.md) | [Building](BUILDING.md) | [Downloads](DOWNLOADS.md)
 
 # Configuration
 
@@ -441,9 +441,12 @@ distribution's disk goes, `-PackageDirectory` a folder with the `ika-base`
 and `ika-lineageos` packages to install instead of the release's, such as
 ones you built, `-Force` replaces a distribution of the same name
 (deleting its files) and restarts WSL without asking, and `-NoStart` leaves
-Ika stopped. The packages it downloads stay in `%TEMP%`, and the next run
-uses those that are the release's, by name and size, instead of downloading
-them again. Every WSL distribution runs in the same virtual machine, so run
+Ika stopped. Without `-Force`, a distribution of the same name stops the
+installer before it downloads anything, and it prints the command that
+uninstalls that distribution. The packages it downloads stay in `%TEMP%`,
+and the next run uses those that are the release's, by name and size,
+instead of downloading them again, and carries on with a download that was
+stopped. Every WSL distribution runs in the same virtual machine, so run
 one Ika at a time: stop Ika in any other distribution first.
 
 `ika-wsl-setup`, installed with `ika-base`, reports what is missing

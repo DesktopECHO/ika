@@ -1,4 +1,4 @@
-**README** | [Using Ika](USAGE.md) | [Configuration](CONFIGURATION.md) | [Graphics](GRAPHICS.md) | [Building](BUILDING.md) | [Downloads](DOWNLOADS.md) | [Changelog](CHANGELOG.md)
+**README** | [Using Ika](USAGE.md) | [Configuration](CONFIGURATION.md) | [Graphics](GRAPHICS.md) | [Building](BUILDING.md) | [Downloads](DOWNLOADS.md)
 
 <img width="1920" height="1080" alt="Ika Virtual Desktop" src="https://github.com/user-attachments/assets/ad0213c3-6a9d-45bc-9468-dcdd82abca26" />
 
@@ -95,7 +95,6 @@ TV mode and the everyday commands.
 | [Graphics](GRAPHICS.md) | GPU modes, Vulkan, Apple Silicon, graphics troubleshooting |
 | [Building](BUILDING.md) | Building the ROM and the packages from source, on x86-64 and ARM64 |
 | [Downloads](DOWNLOADS.md) | Prebuilt packages |
-| [Changelog](CHANGELOG.md) | Changes in each release |
 | [src/lineageos/README.md](src/lineageos/README.md) | The LineageOS Desktop ROM: its products, source layout and build |
 | [src/scrcpy/IKA.md](src/scrcpy/IKA.md) | Ika's changes to scrcpy, the console's client |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |

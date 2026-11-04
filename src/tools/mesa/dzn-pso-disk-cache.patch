@@ -13,11 +13,27 @@ attaches to the root signatures it creates. Before compiling one, look the
 key up and pass a stored blob as the stream's CACHED_PSO; if the driver
 does not accept it, compile as before.
 
+Drivers that report D3D12_SHADER_CACHE_SUPPORT_DRIVER_MANAGED_CACHE, a
+shader cache of their own, are left to it: under WSL2 NVIDIA's and AMD's
+do (an RTX 4080 Laptop GPU and a Radeon 780M), Intel's UHD Graphics does
+not. NVIDIA's GetCachedBlob there (driver 32.0.15.9579) frees memory it
+did not allocate, and glibc aborts the process ("double free or
+corruption"): crosvm's GPU process died as gfxstream created its first
+pipeline, and Android never started.
+
 diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
-index d8c8fb7..159b4ed 100644
+index d8c8fb7..ec12902 100644
 --- a/src/microsoft/vulkan/dzn_device.c
 +++ b/src/microsoft/vulkan/dzn_device.c
-@@ -2697,6 +2697,13 @@ dzn_device_create_root_sig(struct dzn_device *device,
+@@ -482,6 +482,7 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
+    }
+ 
+    ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_ARCHITECTURE1, &pdev->architecture, sizeof(pdev->architecture));
++   ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_SHADER_CACHE, &pdev->shader_cache, sizeof(pdev->shader_cache));
+    dzn_physical_device_get_options(pdev, 0, D3D12_FEATURE_D3D12_OPTIONS, &pdev->options, sizeof(pdev->options));
+    dzn_physical_device_get_options(pdev, 1, D3D12_FEATURE_D3D12_OPTIONS1, &pdev->options1, sizeof(pdev->options1));
+    dzn_physical_device_get_options(pdev, 2, D3D12_FEATURE_D3D12_OPTIONS2, &pdev->options2, sizeof(pdev->options2));
+@@ -2697,6 +2698,13 @@ dzn_device_create_root_sig(struct dzn_device *device,
                                       ID3D10Blob_GetBufferSize(sig),
                                       &IID_ID3D12RootSignature,
                                       (void **)&root_sig);
@@ -32,10 +48,18 @@ index d8c8fb7..159b4ed 100644
     return root_sig;
  }
 diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
-index 5f7f59b..1491b8b 100644
+index 5f7f59b..a0ddefd 100644
 --- a/src/microsoft/vulkan/dzn_private.h
 +++ b/src/microsoft/vulkan/dzn_private.h
-@@ -323,6 +323,10 @@ VkResult dzn_meta_init(struct dzn_device *device);
+@@ -220,6 +220,7 @@ struct dzn_physical_device {
+    D3D12_FEATURE_DATA_D3D12_OPTIONS17 options17;
+    D3D12_FEATURE_DATA_D3D12_OPTIONS19 options19;
+    D3D12_FEATURE_DATA_D3D12_OPTIONS21 options21;
++   D3D12_FEATURE_DATA_SHADER_CACHE shader_cache;
+    VkPhysicalDeviceMemoryProperties memory;
+    D3D12_HEAP_FLAGS heap_flags_for_mem_type[VK_MAX_MEMORY_TYPES];
+    const struct vk_sync_type *sync_types[MAX_SYNC_TYPES + 1];
+@@ -323,6 +324,10 @@ VkResult dzn_meta_init(struct dzn_device *device);
  
  extern const struct vk_command_buffer_ops dzn_cmd_buffer_ops;
  
@@ -47,7 +71,7 @@ index 5f7f59b..1491b8b 100644
  void dzn_pso_cache_unref(struct dzn_pso_cache *cache);
  HRESULT dzn_pso_cache_create_pipeline_state(struct dzn_device *device,
 diff --git a/src/microsoft/vulkan/dzn_pso_cache.c b/src/microsoft/vulkan/dzn_pso_cache.c
-index 6a3ce56..12deda9 100644
+index 6a3ce56..12cd1f1 100644
 --- a/src/microsoft/vulkan/dzn_pso_cache.c
 +++ b/src/microsoft/vulkan/dzn_pso_cache.c
 @@ -30,13 +30,24 @@
@@ -106,7 +130,7 @@ index 6a3ce56..12deda9 100644
        default:
           /* Plain values. A root signature is compared as the object. */
           util_dynarray_append_array(key, uint8_t, d, subobj_size - desc_offset);
-@@ -253,6 +279,70 @@ dzn_pso_cache_serialize(const D3D12_PIPELINE_STATE_STREAM_DESC *desc,
+@@ -253,6 +279,75 @@ dzn_pso_cache_serialize(const D3D12_PIPELINE_STATE_STREAM_DESC *desc,
     return true;
  }
  
@@ -117,13 +141,18 @@ index 6a3ce56..12deda9 100644
 +                               const D3D12_PIPELINE_STATE_STREAM_DESC *desc,
 +                               ID3D12PipelineState **out)
 +{
++   struct dzn_physical_device *pdev = container_of(device->vk.physical, struct dzn_physical_device, vk);
 +   struct disk_cache *disk_cache = device->vk.physical->disk_cache;
 +   ID3D12RootSignature *root_sig;
 +   struct util_dynarray data;
 +   cache_key disk_key;
 +
++   /* A driver with a cache of its own is left to it: under WSL2, NVIDIA's
++    * GetCachedBlob frees memory it did not allocate and aborts the process. */
 +   util_dynarray_init(&data, NULL);
-+   if (!disk_cache || !dzn_pso_cache_serialize(desc, &data, &root_sig, true)) {
++   if (!disk_cache ||
++       (pdev->shader_cache.SupportFlags & D3D12_SHADER_CACHE_SUPPORT_DRIVER_MANAGED_CACHE) ||
++       !dzn_pso_cache_serialize(desc, &data, &root_sig, true)) {
 +      util_dynarray_fini(&data);
 +      return ID3D12Device4_CreatePipelineState(device->dev, desc, &IID_ID3D12PipelineState, (void **)out);
 +   }
@@ -177,7 +206,7 @@ index 6a3ce56..12deda9 100644
  HRESULT
  dzn_pso_cache_create_pipeline_state(struct dzn_device *device,
                                      const D3D12_PIPELINE_STATE_STREAM_DESC *desc,
-@@ -263,7 +353,7 @@ dzn_pso_cache_create_pipeline_state(struct dzn_device *device,
+@@ -263,7 +358,7 @@ dzn_pso_cache_create_pipeline_state(struct dzn_device *device,
     struct util_dynarray data;
     util_dynarray_init(&data, NULL);
  
@@ -186,7 +215,7 @@ index 6a3ce56..12deda9 100644
        util_dynarray_fini(&data);
        return ID3D12Device4_CreatePipelineState(device->dev, desc, &IID_ID3D12PipelineState, (void **)out);
     }
-@@ -291,7 +381,7 @@ dzn_pso_cache_create_pipeline_state(struct dzn_device *device,
+@@ -291,7 +386,7 @@ dzn_pso_cache_create_pipeline_state(struct dzn_device *device,
     }
  
     /* Compiled outside the lock; another thread may store the same one first. */

@@ -47,7 +47,6 @@ user sees or sets, update the page that covers it:
 | [GRAPHICS.md](GRAPHICS.md) | GPU modes and graphics settings |
 | [BUILDING.md](BUILDING.md) | Building from source |
 | [src/scrcpy/IKA.md](src/scrcpy/IKA.md) | Ika's changes to scrcpy |
-| [CHANGELOG.md](CHANGELOG.md) | What changed, per release |
 
 `ika help` and the comments of the `ika.ini` template in `src/tools/ika` describe
 the same settings, and should agree with the pages.

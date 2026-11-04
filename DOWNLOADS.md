@@ -1,6 +1,6 @@
-[README](README.md) | [Using Ika](USAGE.md) | [Configuration](CONFIGURATION.md) | [Graphics](GRAPHICS.md) | [Building](BUILDING.md) | **Downloads** | [Changelog](CHANGELOG.md)
+[README](README.md) | [Using Ika](USAGE.md) | [Configuration](CONFIGURATION.md) | [Graphics](GRAPHICS.md) | [Building](BUILDING.md) | **Downloads**
 
-# Downloads (Updated 2026-10-13)
+# Downloads (Updated 2026-11-04)
 
 Ika is two packages: `ika-base`, the application, and `ika-lineageos`, the
 Android disk image. Download both for your distribution and architecture,
@@ -14,20 +14,20 @@ below.
 | **Distribution • Architecture** | **Application** | **Disk Image** |
 | --- | --- | --- |
 |  |  |  |
-| Fedora 44 • x86_64 | [ika-base (160 MB)](https://github.com/DesktopECHO/ika/releases/download/261012/ika-base-261012-1.fc44.x86_64.rpm) | [ika-lineageos (1.37 GB)](https://github.com/DesktopECHO/ika/releases/download/261012/ika-lineageos-261012-1.fc44.x86_64.rpm) |
+| Fedora 44 • x86_64 | [ika-base (184 MB)](https://github.com/DesktopECHO/ika/releases/download/261101/ika-base-261101-1.fc44.x86_64.rpm) | [ika-lineageos (1.47 GB)](https://github.com/DesktopECHO/ika/releases/download/261101/ika-lineageos-261101-1.fc44.x86_64.rpm) |
 |  |  |  |
-| Fedora 44 • ARM64 | [ika-base (155 MB)](https://github.com/DesktopECHO/ika/releases/download/261012/ika-base-261012-1.fc44.aarch64.rpm) | [ika-lineageos (1.36 GB)](https://github.com/DesktopECHO/ika/releases/download/261012/ika-lineageos-261012-1.fc44.aarch64.rpm) |
+| Fedora 44 • ARM64 | [ika-base (174 MB)](https://github.com/DesktopECHO/ika/releases/download/261101/ika-base-261101-1.fc44.aarch64.rpm) | [ika-lineageos (1.46 GB)](https://github.com/DesktopECHO/ika/releases/download/261101/ika-lineageos-261101-1.fc44.aarch64.rpm) |
 |  |  |  |
-| Debian 13 / Ubuntu 26.04  •  x86_64 | [ika-base (122 MB)](https://github.com/DesktopECHO/ika/releases/download/261012/ika-base_261012-1_amd64.deb) | [ika-lineageos (1.32 GB)](https://github.com/DesktopECHO/ika/releases/download/261012/ika-lineageos_261012-1_amd64.deb) |
+| Debian 13 / Ubuntu 26.04  •  x86_64 | [ika-base (129 MB)](https://github.com/DesktopECHO/ika/releases/download/261101/ika-base_261101-1_amd64.deb) | [ika-lineageos (1.41 GB)](https://github.com/DesktopECHO/ika/releases/download/261101/ika-lineageos_261101-1_amd64.deb) |
 |  |  |  |
-| Debian 13 / Ubuntu 26.04 • ARM64 | [ika-base (107 MB)](https://github.com/DesktopECHO/ika/releases/download/261012/ika-base_261012-1_arm64.deb) | [ika-lineageos (1.29 GB)](https://github.com/DesktopECHO/ika/releases/download/261012/ika-lineageos_261012-1_arm64.deb) |
+| Debian 13 / Ubuntu 26.04 • ARM64 | [ika-base (109 MB)](https://github.com/DesktopECHO/ika/releases/download/261101/ika-base_261101-1_arm64.deb) | [ika-lineageos (1.38 GB)](https://github.com/DesktopECHO/ika/releases/download/261101/ika-lineageos_261101-1_arm64.deb) |
 |  |  |  |
-| Arch Linux • x86_64 | [ika-base (220 MB)](https://github.com/DesktopECHO/ika/releases/download/261012/ika-base-261012-1-x86_64.pkg.tar.zst) | [ika-lineageos (1.56 GB)](https://github.com/DesktopECHO/ika/releases/download/261012/ika-lineageos-261012-1-x86_64.pkg.tar.zst) |
+| Arch Linux • x86_64 | [ika-base (213 MB)](https://github.com/DesktopECHO/ika/releases/download/261101/ika-base-261101-1-x86_64.pkg.tar.zst) | [ika-lineageos (1.67 GB)](https://github.com/DesktopECHO/ika/releases/download/261101/ika-lineageos-261101-1-x86_64.pkg.tar.zst) |
 |  |  |  |
-| Arch Linux • ARM64 | [`./ika-build`](BUILDING.md) | [`./ika-build`](BUILDING.md) |
+| Arch Linux • ARM64 | [ika-base (129 MB)](https://github.com/DesktopECHO/ika/releases/download/261101/ika-base-261101-1-aarch64.pkg.tar.xz) | [ika-lineageos (1.38 GB)](https://github.com/DesktopECHO/ika/releases/download/261101/ika-lineageos-261101-1-aarch64.pkg.tar.xz) |
 
-To choose the ROM's Google integration, or for Arch Linux ARM, build from
-source: see [Building](BUILDING.md).
+To choose the ROM's Google integration, build from source: see
+[Building](BUILDING.md).
 
 ## Windows (WSL2)
 

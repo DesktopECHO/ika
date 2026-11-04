@@ -1,4 +1,4 @@
-[README](README.md) | [Using Ika](USAGE.md) | [Configuration](CONFIGURATION.md) | **Graphics** | [Building](BUILDING.md) | [Downloads](DOWNLOADS.md) | [Changelog](CHANGELOG.md)
+[README](README.md) | [Using Ika](USAGE.md) | [Configuration](CONFIGURATION.md) | **Graphics** | [Building](BUILDING.md) | [Downloads](DOWNLOADS.md)
 
 # Graphics
 

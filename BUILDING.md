@@ -1,12 +1,11 @@
-[README](README.md) | [Using Ika](USAGE.md) | [Configuration](CONFIGURATION.md) | [Graphics](GRAPHICS.md) | **Building** | [Downloads](DOWNLOADS.md) | [Changelog](CHANGELOG.md)
+[README](README.md) | [Using Ika](USAGE.md) | [Configuration](CONFIGURATION.md) | [Graphics](GRAPHICS.md) | **Building** | [Downloads](DOWNLOADS.md)
 
 # Building Ika from source
 
 `./ika-build` builds the LineageOS ROM and Ika's host packages for your
 distribution, then prints the command that installs them. Prebuilt packages
-are on the [Downloads](DOWNLOADS.md) page; build from source to change Ika,
-to choose the ROM's Google integration, or on Arch Linux ARM, which has no
-prebuilt packages.
+are on the [Downloads](DOWNLOADS.md) page; build from source to change Ika
+or to choose the ROM's Google integration.
 
 ## Requirements
 

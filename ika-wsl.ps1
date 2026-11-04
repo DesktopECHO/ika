@@ -74,10 +74,20 @@ $env:WSL_UTF8 = '1'
 
 # Ika's Windows packages are for x86-64: stop before anything is changed. The
 # operating system's architecture, not this process's: a 32-bit PowerShell on
-# a 64-bit Windows reports x86 in PROCESSOR_ARCHITECTURE.
-$architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture
-if ($architecture -ne 'X64') {
+# a 64-bit Windows reports x86 in PROCESSOR_ARCHITECTURE and the system's in
+# PROCESSOR_ARCHITEW6432. .NET's RuntimeInformation.OSArchitecture came back
+# empty in a Windows PowerShell console on an x86-64 PC.
+$architecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+if ($architecture -ne 'AMD64') {
     throw "Ika on Windows is for x86-64 PCs only; this one is $architecture."
+}
+
+# Android runs on /dev/kvm, which WSL2 gives its VM through nested
+# virtualization, and only on Windows 11 (Microsoft's .wslconfig page): stop
+# before anything is changed. Windows Server is left to try.
+$os = Get-CimInstance Win32_OperatingSystem
+if ($os.ProductType -eq 1 -and [int]$os.BuildNumber -lt 22000) {
+    throw "Ika on Windows needs Windows 11: WSL2 has nested virtualization, which Ika's Android runs on, only there; this is Windows 10 (build $($os.BuildNumber))."
 }
 
 function Write-Step([string]$Text, [switch]$NoNewline) {
@@ -94,7 +104,7 @@ function Invoke-Wsl {
     $ErrorActionPreference = 'Continue'
     $output = & wsl.exe @args 2>&1
     if ($LASTEXITCODE -ne 0) {
-        $output | ForEach-Object { Write-Host "$_" }
+        $output | ForEach-Object { Write-Host "  $_" }
         throw "wsl.exe $($args -join ' ') failed (exit code $LASTEXITCODE)"
     }
 }
@@ -232,13 +242,13 @@ function Invoke-Provision([string]$Phase, [string]$As, [switch]$NoThrow, [switch
             if ($Dots) {
                 if ($lines.Count % 100 -eq 0) { Write-Host '.' -NoNewline }
             } elseif (-not $Quiet) {
-                Write-Host $_
+                Write-Host "  $_"
             }
         }
     $exitCode = $LASTEXITCODE
     if ($Dots) { Write-Host '' }
     if (($Dots -or $Quiet) -and $exitCode -ne 0) {
-        $lines | Select-Object -Last 40 | ForEach-Object { Write-Host $_ }
+        $lines | Select-Object -Last 40 | ForEach-Object { Write-Host "  $_" }
     }
     if ($exitCode -ne 0) {
         if (-not $NoThrow) { throw "Setting up $Name failed in its '$Phase' step (exit code $exitCode)" }
@@ -247,20 +257,151 @@ function Invoke-Provision([string]$Phase, [string]$As, [switch]$NoThrow, [switch
     $lines
 }
 
+# Reads a release listing as JSON with Windows' curl.exe, retrying failures
+function Get-ReleaseJson([string]$Url, [string]$What) {
+    $json = & curl.exe -fsSL --retry 5 --retry-all-errors --retry-delay 3 $Url
+    if ($LASTEXITCODE -ne 0) { throw "Could not read $What (curl exit code $LASTEXITCODE)" }
+    return ($json -join "`n") | ConvertFrom-Json
+}
+
+# The SHA-256 GitHub gives a release asset ("sha256:..."), or '' without one
+function Get-AssetSha256($Asset) {
+    if ("$($Asset.digest)" -match '^sha256:([0-9a-fA-F]{64})$') { return $Matches[1] }
+    return ''
+}
+
+# The size of what $Url leads to, from the last Content-Length of the
+# redirects curl follows (GitHub's and salsa's links lead to their storage);
+# 0 when the server does not say
+function Get-DownloadSize([string]$Url) {
+    $length = 0
+    foreach ($line in (& curl.exe -fsSLI --retry 5 --retry-all-errors --retry-delay 3 $Url 2>$null)) {
+        if ($line -match '^content-length:\s*(\d+)') { $length = [long]$Matches[1] }
+    }
+    return $length
+}
+
+# Downloads $Url to $Path, which appears only once the file is whole. A big
+# file comes in byte ranges over $Connections connections at once: from
+# GitHub's release storage one connection gave 0.5 MB/s where four gave
+# 1.1 MB/s. A range resumes where it stopped after a dropped or stalled
+# connection, for up to $Attempts rounds with a growing pause between them,
+# and the ranges are kept as $Path.SIZE.partN, so a run that was stopped
+# carries on from them. With $Size and $Sha256 (from the release's listing)
+# the file is checked against them.
+function Save-Download([string]$Url, [string]$Path, [long]$Size = 0, [string]$Sha256 = '',
+                       [int]$Connections = 8, [int]$Attempts = 8) {
+    $curl = (Get-Command curl.exe).Source
+    if (-not $Size) { $Size = Get-DownloadSize $Url }
+    $count = 1
+    if ($Size -gt 64MB) { $count = [Math]::Min($Connections, [int][Math]::Ceiling($Size / 32MB)) }
+    $base = "$Path.$Size"
+    # Ranges of another download to this path (another size) are of no use
+    Get-ChildItem -LiteralPath (Split-Path $Path) -Filter "$(Split-Path $Path -Leaf).*.part*" -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notlike "$base.part*" } | Remove-Item -Force
+    $ranges = @()
+    $step = [long][Math]::Ceiling($Size / $count)
+    for ($i = 0; $i -lt $count; $i++) {
+        # To = -1: the whole file, of a size the server does not tell
+        $from = $i * $step
+        $to = if ($Size) { [Math]::Min($Size, $from + $step) - 1 } else { -1 }
+        $ranges += [pscustomobject]@{ Part = "$base.part$i"; From = $from; To = $to; Done = $false }
+    }
+    $length = { param($p) if (Test-Path -LiteralPath $p) { (Get-Item -LiteralPath $p).Length } else { 0 } }
+    # What a connection brought is a correct start of the rest of its range, a
+    # connection of a run that was stopped included: it joins the range
+    $merge = {
+        param($r)
+        $chunk = "$($r.Part).chunk"
+        $got = & $length $chunk
+        if ($r.To -ge 0 -and $got -gt $r.To - $r.From + 1 - (& $length $r.Part)) {
+            # More than was asked for: the server ignored the range
+            Remove-Item -LiteralPath $chunk, $r.Part -Force -ErrorAction SilentlyContinue
+        } elseif ($got) {
+            $out = [IO.File]::Open($r.Part, [IO.FileMode]::Append, [IO.FileAccess]::Write)
+            $in = [IO.File]::OpenRead($chunk)
+            try { $in.CopyTo($out) } finally { $in.Dispose(); $out.Dispose() }
+        }
+        Remove-Item -LiteralPath $chunk -Force -ErrorAction SilentlyContinue
+    }
+    $pause = 5
+    for ($round = 1; ; $round++) {
+        foreach ($r in $ranges) {
+            & $merge $r
+            if ($r.To -ge 0 -and (& $length $r.Part) -eq $r.To - $r.From + 1) { $r.Done = $true }
+        }
+        $pending = @($ranges | Where-Object { -not $_.Done })
+        if (-not $pending) { break }
+        if ($round -gt $Attempts) { throw "Could not download $Url after $Attempts attempts; run the line again to carry on" }
+        if ($round -gt 1) {
+            Write-Host "  The download stopped; resuming $($pending.Count) of $($ranges.Count) parts in $pause s"
+            Start-Sleep -Seconds $pause
+            $pause = [Math]::Min($pause * 2, 60)
+        }
+        $jobs = foreach ($r in $pending) {
+            $have = & $length $r.Part
+            $chunk = "$($r.Part).chunk"
+            # A connection slower than 4 KB/s for a minute counts as dropped
+            $arguments = '-fsSL --connect-timeout 30 --speed-limit 4096 --speed-time 60'
+            if ($r.To -ge 0) { $arguments += " -r $($r.From + $have)-$($r.To)" } elseif ($have) { $arguments += " -C $have" }
+            $arguments += " -o ""$chunk"" ""$Url"""
+            $start = New-Object Diagnostics.ProcessStartInfo $curl, $arguments
+            $start.UseShellExecute = $false
+            $start.CreateNoWindow = $true
+            [pscustomobject]@{ Range = $r; Process = [Diagnostics.Process]::Start($start) }
+        }
+        # Progress, on one line
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        $before = ($ranges | ForEach-Object { & $length $_.Part } | Measure-Object -Sum).Sum
+        while (@($jobs | Where-Object { -not $_.Process.HasExited }).Count) {
+            Start-Sleep -Seconds 2
+            $now = ($ranges | ForEach-Object { (& $length $_.Part) + (& $length "$($_.Part).chunk") } | Measure-Object -Sum).Sum
+            $rate = ($now - $before) / [Math]::Max(1, $clock.Elapsed.TotalSeconds) / 1MB
+            $done = if ($Size) { " $([Math]::Floor(100 * $now / $Size))% of $([Math]::Round($Size / 1MB)) MB," } else { " $([Math]::Round($now / 1MB)) MB," }
+            Write-Host -NoNewline ("`r ${done} {0:N1} MB/s   " -f $rate)
+        }
+        Write-Host
+        foreach ($j in $jobs) {
+            $j.Process.WaitForExit()
+            & $merge $j.Range
+            if ($j.Range.To -lt 0 -and $j.Process.ExitCode -eq 0) { $j.Range.Done = $true }
+        }
+    }
+    # The other ranges onto the first, each removed once copied, so the disk
+    # holds little more than one copy
+    $whole = $ranges[0].Part
+    if ($ranges.Count -gt 1) {
+        $out = [IO.File]::Open($whole, [IO.FileMode]::Append, [IO.FileAccess]::Write)
+        try {
+            foreach ($r in $ranges[1..($ranges.Count - 1)]) {
+                $in = [IO.File]::OpenRead($r.Part)
+                try { $in.CopyTo($out) } finally { $in.Dispose() }
+                Remove-Item -LiteralPath $r.Part -Force
+            }
+        } finally { $out.Dispose() }
+    }
+    if ($Size -and (& $length $whole) -ne $Size) {
+        Remove-Item -LiteralPath $whole -Force
+        throw "The download of $Url came to $(& $length $whole) bytes, not $Size; run the line again"
+    }
+    if ($Sha256 -and (Get-FileHash -Algorithm SHA256 -LiteralPath $whole).Hash -ne $Sha256) {
+        Remove-Item -LiteralPath $whole -Force
+        throw "The download of $Url does not match its SHA-256; run the line again"
+    }
+    Move-Item -LiteralPath $whole -Destination $Path -Force
+}
+
 # Downloads the newest Debian WSL image for this machine from Debian's
 # releases on salsa.debian.org; returns its path
 function Get-DebianImage([string]$Directory) {
     # Windows' curl.exe: salsa.debian.org answers PowerShell's web client with
     # a bot challenge. The releases come newest first.
-    $json = & curl.exe -fsSL 'https://salsa.debian.org/api/v4/projects/debian%2FWSL/releases?per_page=1'
-    if ($LASTEXITCODE -ne 0) { throw "Could not read Debian's WSL releases (curl exit code $LASTEXITCODE)" }
-    $release = @(($json -join "`n") | ConvertFrom-Json)[0]
+    $release = @(Get-ReleaseJson 'https://salsa.debian.org/api/v4/projects/debian%2FWSL/releases?per_page=1' "Debian's WSL releases")[0]
     $asset = $release.assets.links | Where-Object { $_.name -like 'Debian_WSL_AMD64_*.wsl' } | Select-Object -First 1
     if (-not $asset) { throw "Debian's WSL release $($release.tag_name) has no image for AMD64" }
     $path = Join-Path $Directory $asset.name
-    Write-Host "Downloading $($asset.name)"
-    & curl.exe -fL --retry 3 -o $path $asset.url
-    if ($LASTEXITCODE -ne 0) { throw "Could not download $($asset.url) (curl exit code $LASTEXITCODE)" }
+    Write-Host "  Downloading $($asset.name)"
+    Save-Download -Url $asset.url -Path $path
     return $path
 }
 
@@ -277,15 +418,12 @@ function Get-WslVersion {
 # releases on GitHub; returns its path. The Microsoft Store's is the same
 # package; the .msi installs without the Store, and without WSL 1.
 function Get-WslPackage([string]$Directory) {
-    $json = & curl.exe -fsSL 'https://api.github.com/repos/microsoft/WSL/releases/latest'
-    if ($LASTEXITCODE -ne 0) { throw "Could not read WSL's releases (curl exit code $LASTEXITCODE)" }
-    $release = ($json -join "`n") | ConvertFrom-Json
+    $release = Get-ReleaseJson 'https://api.github.com/repos/microsoft/WSL/releases/latest' "WSL's releases"
     $asset = $release.assets | Where-Object { $_.name -like 'wsl.*.x64.msi' } | Select-Object -First 1
     if (-not $asset) { throw "WSL's release $($release.tag_name) has no package for x64" }
     $path = Join-Path $Directory $asset.name
-    Write-Host "Downloading $($asset.name)"
-    & curl.exe -fL --retry 3 -o $path $asset.browser_download_url
-    if ($LASTEXITCODE -ne 0) { throw "Could not download $($asset.browser_download_url) (curl exit code $LASTEXITCODE)" }
+    Write-Host "  Downloading $($asset.name)"
+    Save-Download -Url $asset.browser_download_url -Path $path -Size $asset.size -Sha256 (Get-AssetSha256 $asset)
     return $path
 }
 
@@ -294,25 +432,20 @@ function Get-WslPackage([string]$Directory) {
 # there with the release's name and size is used as it is, so that another run
 # does not download it again; the other versions of them are removed.
 function Get-IkaPackages([string]$Directory) {
-    $json = & curl.exe -fsSL 'https://api.github.com/repos/DesktopECHO/ika/releases/latest'
-    if ($LASTEXITCODE -ne 0) { throw "Could not read Ika's releases (curl exit code $LASTEXITCODE)" }
-    $release = ($json -join "`n") | ConvertFrom-Json
+    $release = Get-ReleaseJson 'https://api.github.com/repos/DesktopECHO/ika/releases/latest' "Ika's releases"
     foreach ($package in 'ika-base', 'ika-lineageos') {
         $asset = $release.assets | Where-Object { $_.name -like "${package}_*_amd64.deb" } | Select-Object -First 1
         if (-not $asset) { throw "Ika's release $($release.tag_name) has no $package package for amd64" }
         $path = Join-Path $Directory $asset.name
         if ((Test-Path -LiteralPath $path) -and (Get-Item -LiteralPath $path).Length -eq $asset.size) {
-            Write-Host "Using $($asset.name) in $Directory"
+            Write-Host "  Using $($asset.name) in $Directory"
         } else {
-            Write-Host "Downloading $($asset.name)"
-            # Under another name until it is whole: a download that stops must
-            # not be taken for the package next time
-            & curl.exe -fL --retry 3 -o "$path.part" $asset.browser_download_url
-            if ($LASTEXITCODE -ne 0) { throw "Could not download $($asset.browser_download_url) (curl exit code $LASTEXITCODE)" }
-            Move-Item -LiteralPath "$path.part" -Destination $path -Force
+            Write-Host "  Downloading $($asset.name)"
+            Save-Download -Url $asset.browser_download_url -Path $path -Size $asset.size -Sha256 (Get-AssetSha256 $asset)
         }
-        Get-ChildItem -LiteralPath $Directory -Filter "${package}_*_amd64.deb" -File |
-            Where-Object { $_.Name -ne $asset.name } | Remove-Item -Force
+        # Other versions, and what is left of their downloads
+        Get-ChildItem -LiteralPath $Directory -Filter "${package}_*_amd64.deb*" -File |
+            Where-Object { $_.Name -ne $asset.name -and $_.Name -notlike "$($asset.name).*" } | Remove-Item -Force
     }
 }
 
@@ -483,7 +616,7 @@ if ($needWsl -or $needVmPlatform -or $needHypervisor) {
 `$ErrorActionPreference = 'Stop'
 `$result = '$($result -replace "'", "''")'
 function Install-Step([string]`$File, [string]`$Arguments, [string]`$Text) {
-    Write-Host `$Text
+    Write-Host "  `$Text"
     `$process = Start-Process `$File -ArgumentList `$Arguments -Wait -PassThru -NoNewWindow
     # 3010 and 1641: done, once Windows restarts
     if (`$process.ExitCode -in 3010, 1641) {
@@ -522,14 +655,25 @@ try {
     }
     if ($firmwareOff) {
         Write-Step "Virtualization is off in the PC's firmware"
-        Write-Host 'Restart Windows into its UEFI/BIOS settings, turn on SVM Mode (AMD) or Intel'
-        Write-Host 'Virtualization Technology (VT-x), then run this again.'
+        Write-Host '  Restart Windows into its UEFI/BIOS settings, turn on SVM Mode (AMD) or Intel'
+        Write-Host '  Virtualization Technology (VT-x), then run this again.'
         return
     }
     if ($restart) {
         Write-Step 'Restart Windows to finish setting up WSL2, then run this again.'
         return
     }
+}
+
+# A distribution of the same name stays unless -Force replaces it: say so
+# before anything is downloaded. Ika stops before it goes: unregistering a
+# running one leaves its Android's network bridge behind.
+$existing = @(& wsl.exe --list --quiet 2>$null | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($existing -contains $Name -and -not $Force) {
+    Write-Step "A WSL distribution named $Name already exists"
+    Write-Host "  To uninstall it, which deletes its files: wsl -d $Name -- ika stop; wsl --unregister $Name"
+    Write-Host '  Then run this again, or run it with -Force to replace the distribution in one go.'
+    return
 }
 
 if (-not $UserName) {
@@ -558,12 +702,8 @@ if ($PackageDirectory) {
 $env:IKA_PACKAGE_DIR = $PackageDirectory
 $env:WSLENV = (@($env:WSLENV, 'IKA_PACKAGE_DIR/p') | Where-Object { $_ }) -join ':'
 
-$existing = @(& wsl.exe --list --quiet 2>$null | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($existing -contains $Name) {
-    if (-not $Force) {
-        throw "A distribution named $Name exists. Pass -Force to replace it (its files are deleted), or -Name for another name."
-    }
-    # Unregistering ends Ika's processes without their cleanup. The network
+    # -Force. Unregistering ends Ika's processes without their cleanup. The network
     # bridge of its Android lives on in the network stack WSL's distributions
     # share, without the DHCP server that went with the distribution, and the
     # next Ika, finding the bridge, starts none: its Android got no address.
@@ -617,7 +757,7 @@ $restartWsl = $false
 if ($LASTEXITCODE -ne 0) {
     # No /dev/kvm: WSL runs without nested virtualization
     if (Enable-NestedVirtualization) {
-        Write-Host "Turned on nested virtualization in $env:USERPROFILE\.wslconfig"
+        Write-Host "  Turned on nested virtualization in $env:USERPROFILE\.wslconfig"
         $restartWsl = $true
     } else {
         Write-Warning 'There is no /dev/kvm although nested virtualization is on: the CPU or Windows may not support it.'
@@ -644,13 +784,13 @@ foreach ($line in Invoke-Provision check $UserName -NoThrow -Quiet) {
 if ($restartWsl) {
     Write-Step 'WSL must restart for its new settings, which stops every running distribution'
     if (-not $Force) {
-        $answer = Read-Host 'Restart WSL now? [Y/n]'
+        $answer = Read-Host '  Restart WSL now? [Y/n]'
         if ($answer -and $answer -notmatch '^[Yy]') {
-            Write-Host "Run ""wsl --shutdown"" when you can, then ""wsl -d $Name -- ika start""."
+            Write-Host "  Run ""wsl --shutdown"" when you can, then ""wsl -d $Name -- ika start""."
             return
         }
     }
-    Write-Host 'Restarting WSL...'
+    Write-Host '  Restarting WSL...'
     Invoke-Wsl --shutdown
 } else {
     # The groups and services take effect at the distribution's next start
@@ -673,13 +813,13 @@ if ((Get-Process -Id $PID).SessionId -eq 0) {
             Write-Step "This ran outside the desktop (Windows' session 0, over SSH for one): WSL must stop, which stops every running distribution, for Ika's windows to open on the desktop"
             $stopWsl = $true
             if (-not $Force) {
-                $answer = Read-Host 'Stop WSL now? [Y/n]'
+                $answer = Read-Host '  Stop WSL now? [Y/n]'
                 if ($answer -and $answer -notmatch '^[Yy]') { $stopWsl = $false }
             }
             if ($stopWsl) {
                 Invoke-Wsl --shutdown
             } else {
-                Write-Host 'Run "wsl --shutdown" on the desktop before starting Ika.'
+                Write-Host '  Run "wsl --shutdown" on the desktop before starting Ika.'
             }
         }
         Write-Step "Install complete, start Ika on the desktop with: wsl -d $Name -- ika start"
@@ -689,6 +829,19 @@ if ((Get-Process -Id $PID).SessionId -eq 0) {
 
 if ($NoStart) {
     Write-Step "Install complete, start Ika with: wsl -d $Name -- ika start"
+    return
+}
+
+# After the restart, WSL has /dev/kvm where it could give its VM nested
+# virtualization, and has none where it could not: a CPU without it, a virtual
+# machine whose host does not pass virtualization through. Android cannot
+# start without it.
+& wsl.exe -d $Name -u root --exec test -e /dev/kvm
+if ($LASTEXITCODE -ne 0) {
+    Write-Step 'WSL has no /dev/kvm: nested virtualization is not available on this PC'
+    Write-Host "  Ika's Android cannot start without it. In a virtual machine, its host must pass"
+    Write-Host '  virtualization through to it (Hyper-V: Set-VMProcessor -VMName NAME -ExposeVirtualizationExtensions $true).'
+    Write-Host "  $Name is installed; once the PC can, start Ika with: wsl -d $Name -- ika start"
     return
 }
 
