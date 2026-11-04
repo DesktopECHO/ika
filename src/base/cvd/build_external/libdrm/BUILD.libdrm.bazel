@@ -23,6 +23,7 @@ cc_import(
     name = "libdrm_shared",
     shared_library = (
         glob(["lib64/libdrm.so"], allow_empty = True) +
+        glob(["lib/libdrm.so"], allow_empty = True) +
         glob(["lib/x86_64-linux-gnu/libdrm.so"], allow_empty = True) +
         glob(["lib/aarch64-linux-gnu/libdrm.so"], allow_empty = True)
     )[0],
