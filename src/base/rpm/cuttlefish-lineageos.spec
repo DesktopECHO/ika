@@ -89,6 +89,20 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Sun Nov 01 2026 DesktopECHO <build@desktopecho.com> - 261101-1
+- Update Mesa to 26.3.0-rc3, and ship Venus and lavapipe as guest Vulkan
+  driver APEXes beside gfxstream and SwiftShader.
+- Let lavapipe emulate ETC2 and ASTC textures, flush under its queue's lock to
+  export a sync file, and lay out window buffers as gralloc does.
+- Write gfxstream's unknown descriptor image views as null.
+- Use the KHR entrypoints of maintenance5, maintenance6 and line
+  rasterization in gfxstream on hosts below Vulkan 1.4, and give
+  llvmpipe's freed memory back.
+- Decode VA-API video straight into guest buffers on Intel hosts.
+- Carry upstream minigbm and drm_hwcomposer fixes.
+- Clear a task's box shadows and border when it leaves the desktop.
+- Allow Tubesky's Google signature when signing.
+
 * Fri Oct 23 2026 DesktopECHO <build@desktopecho.com> - 261023-1
 - Compose hwc3's client target into its swapchain, so that the console gets
   DMA-BUFs with a window open.

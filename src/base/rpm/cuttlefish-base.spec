@@ -654,6 +654,45 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/lib/cuttlefish-metrics
 
 %changelog
+* Sun Nov 01 2026 DesktopECHO <build@desktopecho.com> - 261101-1
+- Send the other games to the background when a game opens, and bring one back
+  where it left off when it opens again (background_games in ika.ini).
+- Run Android's Vulkan on Mesa's Venus (gpu_mode venus) on AMD, Intel and
+  Apple silicon hosts, and pick it with gpu_mode = auto on a GPU with Vulkan
+  1.3 and ETC2; add the guest_lavapipe mode.
+- Activate the ROM's Vulkan driver APEX of the GPU mode, and tell apps the
+  Vulkan version that driver offers.
+- Give Apple silicon hosts OpenGL ES 3.2 with gfxstream_guest_angle through
+  ANGLE's pipeline-statistics fallback.
+- Update virglrenderer to upstream main of 2026-10-21.
+- Decode VA-API video straight into Android's buffers on Intel GPUs that share
+  the CPU's cache, Haswell's i965 included.
+- Keep crosvm's virtio-media decoder from losing replies, failing on 16 KB
+  pages, stopping looping video and sizing buffers before it knows the video's
+  size.
+- Free a guest app's OpenGL ES and Vulkan objects in gfxstream when it exits,
+  and a display's buffers when its app window closes.
+- Offer ASTC to OpenGL ES in the gfxstream mode.
+- Draw the Startup Options windows with GTK 3, native on Wayland, one at a
+  time per app, and start games with the keyboard sent straight to Android.
+- Cap madbfs's cache at 64 MiB, taken as files are read.
+- Open app windows about a second sooner.
+- Build the host Lavapipe, and WSL2's Dozen and D3D12 OpenGL, with meson from
+  Mesa 26.3.0-rc3, the ROM's Mesa release, with LLVM linked statically.
+- Add ika-wsl-setup and ika-wsl.ps1, which ready WSL2 and Windows for Ika.
+- On WSL2, run Vulkan on Mesa's Dozen and draw the windows and the gfxstream
+  mode's OpenGL ES with Mesa's D3D12 driver; decode ASTC on the CPU and keep
+  YUV buffers Dozen cannot create as RGBA8.
+- On WSLg, give Ika's windows Windows 11's title bar and font, a task bar
+  button per distribution with its right-click actions, and Start menu entries
+  for every app; name the launcher Ika Console.
+- On WSL2, keep other distributions from locking Ika out of /dev/kvm and the
+  vhost devices, give Android huge pages, all of WSL's CPUs and its memory
+  less 1.5 GB, and open Android's shell (ika shell) from Windows Terminal.
+- Play audio on WSLg's PulseAudio only, retrying while it is away, and survive
+  PipeWire failing to make a stream.
+- Accept --noconsole for --no-console.
+
 * Fri Oct 23 2026 DesktopECHO <build@desktopecho.com> - 261023-1
 - Add a low-CPU mode for weak hosts (30 Hz display, no window blurs,
   half-length animations), and let the display follow the host's refresh rate
