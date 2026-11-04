@@ -340,15 +340,21 @@ function Set-DistributionIcon {
 # not the distribution's, named for it: "Android (Ika)". WSL writes the profile
 # as a fragment of its own, which another fragment cannot change: the command
 # line and the name go in Terminal's settings, in the entry of the profile's
-# GUID, as a user's own would (the file
-# kept as settings.json.ika-backup). A settings file with comments, which this
-# would drop, is left as it is.
+# GUID, as a user's own would (the file kept as settings.json.ika-backup). A
+# new distribution has an id of its own, so a profile GUID of its own, and its
+# entry outlives the distribution: the entries of earlier installs, which run
+# "ika shell" in a distribution WSL no longer has, are removed, so that a
+# reinstall leaves one. A settings file with comments, which this would drop,
+# is left as it is.
 function Set-TerminalProfile {
     $fragments = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\Fragments'
     $wslProfile = Get-ChildItem (Join-Path $fragments 'Microsoft.WSL') -Filter *.json -ErrorAction SilentlyContinue |
         ForEach-Object { (Get-Content -Raw -LiteralPath $_.FullName | ConvertFrom-Json).profiles } |
         Where-Object { $_.name -eq $Name -and $_.guid -and $_.commandline } | Select-Object -First 1
     if (-not $wslProfile) { return }
+    # The ids WSL has registered, as {guid}
+    $registered = @(Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss' |
+        ForEach-Object { $_.PSChildName.ToLower() })
     $commandline = "$($wslProfile.commandline) -- ika shell"
     $profileName = "Android ($Name)"
     $files = @(
@@ -365,14 +371,24 @@ function Set-TerminalProfile {
         $settings = $text | ConvertFrom-Json
         if (-not $settings.profiles -or $settings.profiles -is [array]) { continue }
         $list = @($settings.profiles.list)
+        $stale = @()
+        if ($registered) {
+            $stale = @($list | Where-Object {
+                $_.guid -ne $wslProfile.guid -and
+                    $_.commandline -match '--distribution-id (\{[0-9A-Fa-f-]+\}) -- ika shell$' -and
+                    $registered -notcontains $Matches[1].ToLower()
+            })
+        }
+        $list = @($list | Where-Object { $stale -notcontains $_ })
         $entry = $list | Where-Object { $_.guid -eq $wslProfile.guid } | Select-Object -First 1
-        if ($entry -and $entry.commandline -eq $commandline -and $entry.name -eq $profileName) { continue }
+        if ($entry -and $entry.commandline -eq $commandline -and $entry.name -eq $profileName -and $stale.Count -eq 0) { continue }
         if (-not $entry) {
             $entry = [pscustomobject]@{ guid = $wslProfile.guid }
-            $settings.profiles | Add-Member -NotePropertyName list -NotePropertyValue (@($entry) + $list) -Force
+            $list = @($entry) + $list
         }
         $entry | Add-Member -NotePropertyName commandline -NotePropertyValue $commandline -Force
         $entry | Add-Member -NotePropertyName name -NotePropertyValue $profileName -Force
+        $settings.profiles | Add-Member -NotePropertyName list -NotePropertyValue $list -Force
         Copy-Item -LiteralPath $file -Destination "$file.ika-backup" -Force
         [IO.File]::WriteAllText($file, ($settings | ConvertTo-Json -Depth 32))
     }
