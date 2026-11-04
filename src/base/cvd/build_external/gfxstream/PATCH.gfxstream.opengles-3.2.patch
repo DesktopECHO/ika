@@ -5,7 +5,7 @@ create an ES 3.2 context; cube-map-array textures, sRGB decode parameters, and
 valid ES 3.2 sampler units are tracked through the guest encoder. Desktop
 OpenGL 4.6 maps to ES 3.2, while native EGL probes ES 3.2 before falling back.
 diff --git a/guest/GLESv2_enc/GL2Encoder.cpp b/guest/GLESv2_enc/GL2Encoder.cpp
-index 786bff3a..900b1fcb 100644
+index 786bff3ad..900b1fcb0 100644
 --- a/guest/GLESv2_enc/GL2Encoder.cpp
 +++ b/guest/GLESv2_enc/GL2Encoder.cpp
 @@ -51,7 +51,9 @@ using gfxstream::guest::gles2::ProgramBinaryInfo;
@@ -152,7 +152,7 @@ index 786bff3a..900b1fcb 100644
                   GL_INVALID_ENUM);
      GLint max_texture_size;
 diff --git a/guest/GLESv2_enc/GLESv2Validation.cpp b/guest/GLESv2_enc/GLESv2Validation.cpp
-index e9c78267..512d357e 100644
+index e9c782674..512d357ef 100644
 --- a/guest/GLESv2_enc/GLESv2Validation.cpp
 +++ b/guest/GLESv2_enc/GLESv2Validation.cpp
 @@ -677,6 +677,8 @@ bool textureTarget(GL2Encoder* ctx, GLenum target) {
@@ -192,7 +192,7 @@ index e9c78267..512d357e 100644
      case GL_TEXTURE_IMMUTABLE_LEVELS:
      case GL_DEPTH_STENCIL_TEXTURE_MODE:
 diff --git a/guest/OpenglCodecCommon/GLClientState.cpp b/guest/OpenglCodecCommon/GLClientState.cpp
-index 931c9b47..43fea836 100644
+index 931c9b479..43fea836d 100644
 --- a/guest/OpenglCodecCommon/GLClientState.cpp
 +++ b/guest/OpenglCodecCommon/GLClientState.cpp
 @@ -1449,6 +1449,9 @@ GLenum GLClientState::bindTexture(GLenum target, GLuint texture,
@@ -215,7 +215,7 @@ index 931c9b47..43fea836 100644
          return 0;
      }
 diff --git a/guest/OpenglCodecCommon/include/gfxstream/guest/GLClientState.h b/guest/OpenglCodecCommon/include/gfxstream/guest/GLClientState.h
-index d0ec8252..2c4cf2a4 100644
+index d0ec82525..2c4cf2a49 100644
 --- a/guest/OpenglCodecCommon/include/gfxstream/guest/GLClientState.h
 +++ b/guest/OpenglCodecCommon/include/gfxstream/guest/GLClientState.h
 @@ -660,6 +660,7 @@ private:
@@ -227,7 +227,7 @@ index d0ec8252..2c4cf2a4 100644
      };
      struct TextureUnit {
 diff --git a/host/gl/gles_version_detector.cpp b/host/gl/gles_version_detector.cpp
-index 34415eb0..9305721d 100644
+index 34415eb02..9305721d1 100644
 --- a/host/gl/gles_version_detector.cpp
 +++ b/host/gl/gles_version_detector.cpp
 @@ -41,6 +41,10 @@ static const EGLint gles3ConfigAttribs[] =
@@ -282,7 +282,7 @@ index 34415eb0..9305721d 100644
          }
      }
 diff --git a/host/gl/glestranslator/common/include/common/gl_utils.h b/host/gl/glestranslator/common/include/common/gl_utils.h
-index 606b701e..c97cdd96 100644
+index 606b701e9..c97cdd964 100644
 --- a/host/gl/glestranslator/common/include/common/gl_utils.h
 +++ b/host/gl/glestranslator/common/include/common/gl_utils.h
 @@ -37,6 +37,7 @@ typedef enum {
@@ -294,7 +294,7 @@ index 606b701e..c97cdd96 100644
  } GLESVersion;
  
 diff --git a/host/gl/glestranslator/egl/egl_display.cpp b/host/gl/glestranslator/egl/egl_display.cpp
-index 7804a005..e2b78ea2 100644
+index 7804a005a..e2b78ea22 100644
 --- a/host/gl/glestranslator/egl/egl_display.cpp
 +++ b/host/gl/glestranslator/egl/egl_display.cpp
 @@ -33,6 +33,7 @@ EglDisplay::EglDisplay(EGLNativeDisplayType dpy,
@@ -306,7 +306,7 @@ index 7804a005..e2b78ea2 100644
  
  EglDisplay::~EglDisplay() {
 diff --git a/host/gl/glestranslator/egl/egl_imp.cpp b/host/gl/glestranslator/egl/egl_imp.cpp
-index 5d590558..700d128d 100644
+index 2f3969504..f4a0912c5 100644
 --- a/host/gl/glestranslator/egl/egl_imp.cpp
 +++ b/host/gl/glestranslator/egl/egl_imp.cpp
 @@ -388,6 +388,17 @@ EGLAPI EGLBoolean EGLAPIENTRY eglInitialize(EGLDisplay display, EGLint *major, E
@@ -327,7 +327,7 @@ index 5d590558..700d128d 100644
      dpy->initialize(renderableType);
      return EGL_TRUE;
  }
-@@ -983,6 +994,9 @@ static EGLContext eglCreateOrLoadContext(EGLDisplay display, EGLConfig config,
+@@ -985,6 +996,9 @@ static EGLContext eglCreateOrLoadContext(EGLDisplay display, EGLConfig config,
           case 1:
               glesVersion = GLES_3_1;
               break;
@@ -337,7 +337,7 @@ index 5d590558..700d128d 100644
           default:
               RETURN_ERROR(EGL_NO_CONTEXT, EGL_BAD_ATTRIBUTE);
               break;
-@@ -1759,9 +1773,11 @@ EGLAPI void EGLAPIENTRY eglSetMaxGLESVersion(EGLint version) {
+@@ -1761,9 +1775,11 @@ EGLAPI void EGLAPIENTRY eglSetMaxGLESVersion(EGLint version) {
          glesVersion = GLES_3_0;
          break;
      case 2:
@@ -351,7 +351,7 @@ index 5d590558..700d128d 100644
  
      if (g_eglInfo->getIface(GLES_1_1)) {
 diff --git a/host/gl/glestranslator/egl/egl_os_api.h b/host/gl/glestranslator/egl/egl_os_api.h
-index 3c137a22..de60c1c2 100644
+index 3c137a227..de60c1c23 100644
 --- a/host/gl/glestranslator/egl/egl_os_api.h
 +++ b/host/gl/glestranslator/egl/egl_os_api.h
 @@ -151,6 +151,11 @@ inline GlesVersion calcMaxESVersionFromCoreVersion(int coreMajor, int coreMinor)
@@ -367,7 +367,7 @@ index 3c137a22..de60c1c2 100644
          default:
              return EglOS::GlesVersion::ES2;
 diff --git a/host/gl/glestranslator/egl/egl_os_api_egl.cpp b/host/gl/glestranslator/egl/egl_os_api_egl.cpp
-index 9a9038da..f137fd1f 100644
+index 9a9038dae..f137fd1fb 100644
 --- a/host/gl/glestranslator/egl/egl_os_api_egl.cpp
 +++ b/host/gl/glestranslator/egl/egl_os_api_egl.cpp
 @@ -421,6 +421,10 @@ EglOsEglDisplay::EglOsEglDisplay(bool nullEgl) {
@@ -417,7 +417,7 @@ index 9a9038da..f137fd1f 100644
  }
  
 diff --git a/host/gl/glestranslator/gles_v2/gles_v2_imp.cpp b/host/gl/glestranslator/gles_v2/gles_v2_imp.cpp
-index b22bf1a9..c2e80bb1 100644
+index b22bf1a98..c2e80bb1d 100644
 --- a/host/gl/glestranslator/gles_v2/gles_v2_imp.cpp
 +++ b/host/gl/glestranslator/gles_v2/gles_v2_imp.cpp
 @@ -903,6 +903,9 @@ GL_APICALL void  GL_APIENTRY glCompileShader(GLuint shader){
@@ -442,7 +442,7 @@ index b22bf1a9..c2e80bb1 100644
          if (cLog > 0) {
              programData->setInfoLog(log.release());
 diff --git a/host/gl/glestranslator/gles_v2/gles_v2_validate.cpp b/host/gl/glestranslator/gles_v2/gles_v2_validate.cpp
-index bfcc6600..7a5d3e22 100644
+index bfcc66000..7a5d3e22b 100644
 --- a/host/gl/glestranslator/gles_v2/gles_v2_validate.cpp
 +++ b/host/gl/glestranslator/gles_v2/gles_v2_validate.cpp
 @@ -353,6 +353,9 @@ bool GLESv2Validate::textureTarget(GLEScontext* ctx, GLenum target) {
@@ -469,7 +469,7 @@ index bfcc6600..7a5d3e22 100644
  }
 -
 diff --git a/host/render_control.cpp b/host/render_control.cpp
-index 9b958926..50646e6e 100644
+index 9b9589260..50646e6ee 100644
 --- a/host/render_control.cpp
 +++ b/host/render_control.cpp
 @@ -57,6 +57,7 @@ using gl::EmulatedEglFenceSync;

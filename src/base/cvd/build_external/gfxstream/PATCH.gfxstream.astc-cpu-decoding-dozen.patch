@@ -36,7 +36,7 @@ on a Radeon 780M).
 - Unit tests of the CPU path's regions, bounds and staging buffers, with a
   fake driver and decoder, and of decoding with astc-encoder.
 diff --git a/host/compressed_textures/BUILD.bazel b/host/compressed_textures/BUILD.bazel
-index a2d2955..8252802 100644
+index a2d295519..8252802d6 100644
 --- a/host/compressed_textures/BUILD.bazel
 +++ b/host/compressed_textures/BUILD.bazel
 @@ -9,7 +9,7 @@ package(
@@ -57,7 +57,7 @@ index a2d2955..8252802 100644
  )
  
 diff --git a/host/compressed_textures/astc_cpu_decompressor_impl.cpp b/host/compressed_textures/astc_cpu_decompressor_impl.cpp
-index f93640c..b9c9f69 100644
+index f93640cb6..b9c9f69aa 100644
 --- a/host/compressed_textures/astc_cpu_decompressor_impl.cpp
 +++ b/host/compressed_textures/astc_cpu_decompressor_impl.cpp
 @@ -24,7 +24,8 @@ namespace host {
@@ -122,7 +122,7 @@ index f93640c..b9c9f69 100644
      // Try getting an arbitrary context. If it works, the decoder is available.
      auto context = makeDecoderContext(5, 5, &error);
 diff --git a/host/vulkan/emulated_textures/BUILD.bazel b/host/vulkan/emulated_textures/BUILD.bazel
-index c6fc036..2886c77 100644
+index c6fc03635..2886c7717 100644
 --- a/host/vulkan/emulated_textures/BUILD.bazel
 +++ b/host/vulkan/emulated_textures/BUILD.bazel
 @@ -1,4 +1,4 @@
@@ -153,7 +153,7 @@ index c6fc036..2886c77 100644
 +    ],
 +)
 diff --git a/host/vulkan/emulated_textures/astc_texture.cpp b/host/vulkan/emulated_textures/astc_texture.cpp
-index 41bbbf4..94fcb97 100644
+index 41bbbf47a..94fcb9701 100644
 --- a/host/vulkan/emulated_textures/astc_texture.cpp
 +++ b/host/vulkan/emulated_textures/astc_texture.cpp
 @@ -14,9 +14,11 @@
@@ -638,7 +638,7 @@ index 41bbbf4..94fcb97 100644
  
  }  // namespace vk
 diff --git a/host/vulkan/emulated_textures/astc_texture.h b/host/vulkan/emulated_textures/astc_texture.h
-index 18f6d13..41807d4 100644
+index 18f6d136a..41807d4ce 100644
 --- a/host/vulkan/emulated_textures/astc_texture.h
 +++ b/host/vulkan/emulated_textures/astc_texture.h
 @@ -15,6 +15,8 @@
@@ -744,7 +744,7 @@ index 18f6d13..41807d4 100644
  
 diff --git a/host/vulkan/emulated_textures/astc_texture_unittest.cpp b/host/vulkan/emulated_textures/astc_texture_unittest.cpp
 new file mode 100644
-index 0000000..daeeca6
+index 000000000..daeeca63e
 --- /dev/null
 +++ b/host/vulkan/emulated_textures/astc_texture_unittest.cpp
 @@ -0,0 +1,329 @@
@@ -1078,7 +1078,7 @@ index 0000000..daeeca6
 +}  // namespace host
 +}  // namespace gfxstream
 diff --git a/host/vulkan/emulated_textures/compressed_image_info.cpp b/host/vulkan/emulated_textures/compressed_image_info.cpp
-index cbca0b5..32289af 100644
+index cbca0b551..32289af1b 100644
 --- a/host/vulkan/emulated_textures/compressed_image_info.cpp
 +++ b/host/vulkan/emulated_textures/compressed_image_info.cpp
 @@ -446,8 +446,9 @@ void CompressedImageInfo::createCompressedMipmapImages(VulkanDispatch* vk,
@@ -1139,7 +1139,7 @@ index cbca0b5..32289af 100644
  
  VkMemoryRequirements CompressedImageInfo::getMemoryRequirements() const {
 diff --git a/host/vulkan/emulated_textures/compressed_image_info.h b/host/vulkan/emulated_textures/compressed_image_info.h
-index 9db6cab..18ab01b 100644
+index 9db6cab36..18ab01b6c 100644
 --- a/host/vulkan/emulated_textures/compressed_image_info.h
 +++ b/host/vulkan/emulated_textures/compressed_image_info.h
 @@ -87,12 +87,20 @@ class CompressedImageInfo {
@@ -1194,7 +1194,7 @@ index 9db6cab..18ab01b 100644
      // Vulkan resources used by the decompression pipeline
      GpuDecompressionPipelineManager* mPipelineManager = nullptr;
 diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operations.cpp
-index be91141..2ec3279 100644
+index 32fdae805..c1c5f7691 100644
 --- a/host/vulkan/vk_common_operations.cpp
 +++ b/host/vulkan/vk_common_operations.cpp
 @@ -31,6 +31,7 @@
@@ -1205,7 +1205,7 @@ index be91141..2ec3279 100644
  #include "gfxstream/host/display_operations.h"
  #include "gfxstream/host/gfxstream_format.h"
  #include "gfxstream/host/vm_operations.h"
-@@ -1177,6 +1178,8 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
+@@ -1157,6 +1158,8 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
              deviceInfos[i].driverVendor = driverVendor;
              deviceInfos[i].driverVersion = driverVersion;
              deviceInfos[i].driverInfo = driverProps.driverInfo;
@@ -1214,7 +1214,7 @@ index be91141..2ec3279 100644
          }
  
  // TODO(aruby@qnx.com): Remove once dmabuf extension support has been flushed out on QNX
-@@ -1330,6 +1333,35 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
+@@ -1310,6 +1313,35 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
      emulation->mDeviceInfo = deviceInfos[selectedGpuIndex];
      // Postcondition: emulation has valid device support info
  
@@ -1251,10 +1251,10 @@ index be91141..2ec3279 100644
      for (size_t i = 0; i < emulation->mImageSupportInfo.mSupportInfos.size(); ++i) {
          emulation->populateImageFormatExternalMemorySupportInfo(ivk, emulation->mPhysicalDevice,
 diff --git a/host/vulkan/vk_common_operations.h b/host/vulkan/vk_common_operations.h
-index 90e87c3..ca5fdf7 100644
+index 6a4fe9f8e..a65557e30 100644
 --- a/host/vulkan/vk_common_operations.h
 +++ b/host/vulkan/vk_common_operations.h
-@@ -576,6 +576,7 @@ class VkEmulation {
+@@ -569,6 +569,7 @@ class VkEmulation {
          bool supportsExternalMemoryHostProps = false;
          bool supportsSwapchain = false;
          bool isLavapipe = false;
@@ -1263,10 +1263,10 @@ index 90e87c3..ca5fdf7 100644
          bool supportsSamplerYcbcrConversion = false;
          bool glInteropSupported = false;
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
-index 88db6d1..ec4b23e 100644
+index 8b918a342..e3a7c5c8b 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -5719,6 +5719,10 @@ class VkDecoderGlobalState::Impl {
+@@ -5886,6 +5886,10 @@ class VkDecoderGlobalState::Impl {
                                 regionCount, pRegions);
              return;
          }
@@ -1277,7 +1277,7 @@ index 88db6d1..ec4b23e 100644
          VkImage srcImageMip = srcImage;
          VkImage dstImageMip = dstImage;
          for (uint32_t r = 0; r < regionCount; r++) {
-@@ -5782,6 +5786,10 @@ class VkDecoderGlobalState::Impl {
+@@ -5949,6 +5953,10 @@ class VkDecoderGlobalState::Impl {
              vk->vkCmdCopyImage2(commandBuffer, pCopyImageInfo);
              return;
          }
@@ -1288,7 +1288,7 @@ index 88db6d1..ec4b23e 100644
          VkImage srcImageMip = pCopyImageInfo->srcImage;
          VkImage dstImageMip = pCopyImageInfo->dstImage;
          for (uint32_t r = 0; r < pCopyImageInfo->regionCount; r++) {
-@@ -5854,6 +5862,10 @@ class VkDecoderGlobalState::Impl {
+@@ -6021,6 +6029,10 @@ class VkDecoderGlobalState::Impl {
              vk->vkCmdCopyImage2KHR(commandBuffer, pCopyImageInfo);
              return;
          }
@@ -1299,7 +1299,7 @@ index 88db6d1..ec4b23e 100644
          VkImage srcImageMip = pCopyImageInfo->srcImage;
          VkImage dstImageMip = pCopyImageInfo->dstImage;
          for (uint32_t r = 0; r < pCopyImageInfo->regionCount; r++) {
-@@ -6071,6 +6083,33 @@ class VkDecoderGlobalState::Impl {
+@@ -6251,6 +6263,33 @@ class VkDecoderGlobalState::Impl {
              &pMemoryRequirements->memoryRequirements);
      }
  
@@ -1333,7 +1333,7 @@ index 88db6d1..ec4b23e 100644
      void on_vkCmdCopyBufferToImage(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
                                     VkCommandBuffer boxed_commandBuffer, VkBuffer srcBuffer,
                                     VkImage dstImage, VkImageLayout dstImageLayout,
-@@ -6104,32 +6143,12 @@ class VkDecoderGlobalState::Impl {
+@@ -6284,32 +6323,12 @@ class VkDecoderGlobalState::Impl {
                                         dstImageLayout, 1, &region);
          }
  
@@ -1372,7 +1372,7 @@ index 88db6d1..ec4b23e 100644
      }
  
      void on_vkCmdCopyBufferToImage2(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
-@@ -6174,21 +6193,13 @@ class VkDecoderGlobalState::Impl {
+@@ -6354,21 +6373,13 @@ class VkDecoderGlobalState::Impl {
              vk->vkCmdCopyBufferToImage2(commandBuffer, &inf);
          }
  
@@ -1401,7 +1401,7 @@ index 88db6d1..ec4b23e 100644
      }
  
      void on_vkCmdCopyBufferToImage2KHR(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
-@@ -6233,21 +6244,13 @@ class VkDecoderGlobalState::Impl {
+@@ -6413,21 +6424,13 @@ class VkDecoderGlobalState::Impl {
              vk->vkCmdCopyBufferToImage2KHR(commandBuffer, &inf);
          }
  
@@ -1430,7 +1430,7 @@ index 88db6d1..ec4b23e 100644
      }
  
      void ConvertQueueFamilyForeignToExternal(uint32_t* queue_family_index_ptr) {
-@@ -6423,8 +6426,9 @@ class VkDecoderGlobalState::Impl {
+@@ -6603,8 +6606,9 @@ class VkDecoderGlobalState::Impl {
              // If the image doesn't need GPU decompression, nothing to do.
              bool needGpuDecompression = false;
              if (imageInfo && imageInfo->compressInfo) {
@@ -1442,7 +1442,7 @@ index 88db6d1..ec4b23e 100644
              }
              // If the image doesn't need GPU decompression, nothing to do.
              if (!needGpuDecompression) {
-@@ -6571,8 +6575,9 @@ class VkDecoderGlobalState::Impl {
+@@ -6751,8 +6755,9 @@ class VkDecoderGlobalState::Impl {
              auto* imageInfo = gfxstream::base::find(mImageInfo, srcBarrier.image);
              bool needGpuDecompression = false;
              if (imageInfo && imageInfo->compressInfo) {
@@ -1454,7 +1454,7 @@ index 88db6d1..ec4b23e 100644
              }
              if (!needGpuDecompression) {
                  imageBarriers.push_back(srcBarrier);
-@@ -8152,6 +8157,14 @@ class VkDecoderGlobalState::Impl {
+@@ -7847,6 +7852,14 @@ class VkDecoderGlobalState::Impl {
          if (result != VK_SUCCESS) {
              return result;
          }
@@ -1469,7 +1469,7 @@ index 88db6d1..ec4b23e 100644
          return result;
      }
  
-@@ -8747,6 +8760,7 @@ class VkDecoderGlobalState::Impl {
+@@ -8442,6 +8455,7 @@ class VkDecoderGlobalState::Impl {
          VkDevice device, VulkanDispatch* deviceDispatch, VkCommandBuffer commandBuffer,
          CommandBufferInfo& commandBufferInfo,
          std::unordered_map<VkCommandPool, CommandPoolInfo>& commandPoolInfos) {
@@ -1478,10 +1478,10 @@ index 88db6d1..ec4b23e 100644
  
          auto commandPoolInfoIt = commandPoolInfos.find(commandPool);
 diff --git a/host/vulkan/vk_decoder_internal_structs.h b/host/vulkan/vk_decoder_internal_structs.h
-index c6a64c7..4f3de9b 100644
+index 6a5e0d502..3ecff1c87 100644
 --- a/host/vulkan/vk_decoder_internal_structs.h
 +++ b/host/vulkan/vk_decoder_internal_structs.h
-@@ -650,8 +650,14 @@ struct CommandBufferInfo {
+@@ -635,8 +635,14 @@ struct CommandBufferInfo {
      std::unordered_set<VkEvent> eventsSet;
      std::unordered_set<VkEvent> eventsReset;
  
@@ -1498,7 +1498,7 @@ index c6a64c7..4f3de9b 100644
          descriptorLayout = VK_NULL_HANDLE;
 diff --git a/third_party/astc-encoder/BUILD.bazel b/third_party/astc-encoder/BUILD.bazel
 new file mode 100644
-index 0000000..5bec939
+index 000000000..5bec93988
 --- /dev/null
 +++ b/third_party/astc-encoder/BUILD.bazel
 @@ -0,0 +1,47 @@

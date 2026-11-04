@@ -12,13 +12,13 @@ keeps its ASTC feature enabled. Hosts without native ASTC emulate every
 ASTC image as before; hosts with full support do not emulate.
 
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
-index 9ec2f452..f8c9a509 100644
+index 7ff46868c..90ee20659 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -1891,8 +1891,9 @@ class VkDecoderGlobalState::Impl {
-         VkImageFormatProperties* pImageFormatProperties) {
-         auto physicalDevice = unbox_VkPhysicalDevice(boxed_physicalDevice);
-         auto vk = dispatch_VkPhysicalDevice(boxed_physicalDevice);
+@@ -1978,8 +1978,9 @@ class VkDecoderGlobalState::Impl {
+         if (checkRes != VK_SUCCESS) {
+             return checkRes;
+         }
 -        const bool emulatedTexture = !usesSparseImageBinding(flags) &&
 -                                     isEmulatedCompressedTexture(format, physicalDevice, vk);
 +        const bool emulatedTexture =
@@ -27,10 +27,10 @@ index 9ec2f452..f8c9a509 100644
          if (emulatedTexture) {
              if (!supportEmulatedCompressedImageFormatProperty(format, type, tiling, usage, flags)) {
                  memset(pImageFormatProperties, 0, sizeof(VkImageFormatProperties));
-@@ -1924,8 +1925,9 @@ class VkDecoderGlobalState::Impl {
-         auto vk = dispatch_VkPhysicalDevice(boxed_physicalDevice);
-         VkPhysicalDeviceImageFormatInfo2 imageFormatInfo;
-         VkFormat format = pImageFormatInfo->format;
+@@ -2017,8 +2018,9 @@ class VkDecoderGlobalState::Impl {
+         if (checkRes != VK_SUCCESS) {
+             return checkRes;
+         }
 -        const bool emulatedTexture = !usesSparseImageBinding(pImageFormatInfo->flags) &&
 -                                     isEmulatedCompressedTexture(format, physicalDevice, vk);
 +        const bool emulatedTexture =
@@ -39,7 +39,7 @@ index 9ec2f452..f8c9a509 100644
          if (emulatedTexture) {
              if (!supportEmulatedCompressedImageFormatProperty(
                      pImageFormatInfo->format, pImageFormatInfo->type, pImageFormatInfo->tiling,
-@@ -2456,6 +2458,7 @@ class VkDecoderGlobalState::Impl {
+@@ -2558,6 +2560,7 @@ class VkDecoderGlobalState::Impl {
          // used to check for supported properties of individual formats as normal.
          const bool emulateTextureEtc2 = needEmulatedEtc2(physicalDevice, vk);
          const bool emulateTextureAstc = needEmulatedAstc(physicalDevice, vk);
@@ -47,7 +47,7 @@ index 9ec2f452..f8c9a509 100644
          const bool emulateProtectedMemory = needEmulatedProtectedMemory(physicalDevice, vk);
          const bool disableSparseBindingSupport =
              shouldDisableSparseBindingSupport(physicalDevice, vk);
-@@ -2586,7 +2589,8 @@ class VkDecoderGlobalState::Impl {
+@@ -2700,7 +2703,8 @@ class VkDecoderGlobalState::Impl {
              if (emulateTextureEtc2) {
                  feature->textureCompressionETC2 = VK_FALSE;
              }
@@ -57,7 +57,7 @@ index 9ec2f452..f8c9a509 100644
                  feature->textureCompressionASTC_LDR = VK_FALSE;
              }
  
-@@ -2758,6 +2762,7 @@ class VkDecoderGlobalState::Impl {
+@@ -2872,6 +2876,7 @@ class VkDecoderGlobalState::Impl {
          deviceInfo.maxImageDimension2D = physicalDeviceInfo.props.limits.maxImageDimension2D;
          deviceInfo.emulateTextureEtc2 = emulateTextureEtc2;
          deviceInfo.emulateTextureAstc = emulateTextureAstc;
@@ -65,7 +65,7 @@ index 9ec2f452..f8c9a509 100644
          deviceInfo.emulateProtectedMemory = emulateProtectedMemory;
          deviceInfo.useAstcCpuDecompression =
              m_vkEmulation->getAstcLdrEmulationMode() == AstcEmulationMode::Cpu &&
-@@ -2776,7 +2781,9 @@ class VkDecoderGlobalState::Impl {
+@@ -2890,7 +2895,9 @@ class VkDecoderGlobalState::Impl {
              "Created VkDevice:%p for application:'%s' instance:%p. ASTC emulation:%s CPU "
              "decoding:%s. Protected memory:%s",
              *pDevice, instanceInfo.applicationName.c_str(), physicalDeviceInfo.instance,
@@ -76,7 +76,7 @@ index 9ec2f452..f8c9a509 100644
              deviceInfo.useAstcCpuDecompression ? "on" : "off",
              deviceInfo.emulateProtectedMemory ? "on" : "off");
  
-@@ -3143,9 +3150,10 @@ class VkDecoderGlobalState::Impl {
+@@ -3257,9 +3264,10 @@ class VkDecoderGlobalState::Impl {
          auto& physicalDeviceMemHelper = physicalDeviceInfo->memoryPropertiesHelper;
  
          const VkFormat format = pInfo->pCreateInfo->format;
@@ -90,7 +90,7 @@ index 9ec2f452..f8c9a509 100644
          if (!needDecompression) {
              physicalDeviceMemHelper->transformToGuestImageMemoryRequirements(
                  pInfo->pCreateInfo->tiling, &pMemoryRequirements->memoryRequirements);
-@@ -3469,8 +3477,9 @@ class VkDecoderGlobalState::Impl {
+@@ -3583,8 +3591,9 @@ class VkDecoderGlobalState::Impl {
  
          // Change creation parameters before the validation checks below as the
          // creation format and its device properties may change
@@ -102,7 +102,7 @@ index 9ec2f452..f8c9a509 100644
          std::unique_ptr<CompressedImageInfo> cmpInfo = nullptr;
          VkImageCreateInfo decompInfo;
          if (needDecompression) {
-@@ -11016,16 +11025,18 @@ class VkDecoderGlobalState::Impl {
+@@ -10706,16 +10715,18 @@ class VkDecoderGlobalState::Impl {
          return !feature.textureCompressionETC2;
      }
  
@@ -127,7 +127,7 @@ index 9ec2f452..f8c9a509 100644
          }
  
          // If the feature is present, check if it supports required features
-@@ -11036,17 +11047,35 @@ class VkDecoderGlobalState::Impl {
+@@ -10726,17 +10737,35 @@ class VkDecoderGlobalState::Impl {
              VK_FORMAT_ASTC_8x8_UNORM_BLOCK, VK_FORMAT_ASTC_8x8_SRGB_BLOCK};
          const VkFormatFeatureFlags requiredTilingFeatures =
              VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
@@ -169,7 +169,7 @@ index 9ec2f452..f8c9a509 100644
      }
  
      bool needEmulatedProtectedMemory(VkPhysicalDevice /*physicalDevice*/, VulkanDispatch* /*vk*/) EXCLUDES(mMutex) {
-@@ -11281,6 +11310,18 @@ class VkDecoderGlobalState::Impl {
+@@ -10975,6 +11004,18 @@ class VkDecoderGlobalState::Impl {
                 (isAstc(format) && needEmulatedAstc(physicalDevice, vk));
      }
  
@@ -188,7 +188,7 @@ index 9ec2f452..f8c9a509 100644
      static const VkFormatFeatureFlags kEmulatedTextureBufferFeatureMask =
          VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
          VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
-@@ -11290,6 +11331,18 @@ class VkDecoderGlobalState::Impl {
+@@ -10984,6 +11025,18 @@ class VkDecoderGlobalState::Impl {
          VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
          VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
  
@@ -207,7 +207,7 @@ index 9ec2f452..f8c9a509 100644
      void maskFormatPropertiesForEmulatedTextures(VkFormatProperties* pFormatProp) {
          pFormatProp->linearTilingFeatures &= kEmulatedTextureBufferFeatureMask;
          pFormatProp->optimalTilingFeatures &= kEmulatedTextureOptimalTilingMask;
-@@ -11346,6 +11399,17 @@ class VkDecoderGlobalState::Impl {
+@@ -11112,6 +11165,17 @@ class VkDecoderGlobalState::Impl {
              getPhysicalDeviceFormatPropertiesFunc,
          VulkanDispatch* vk, VkPhysicalDevice physicalDevice, VkFormat format,
          VkFormatProperties1or2* pFormatProperties) EXCLUDES(mMutex) {
@@ -226,10 +226,10 @@ index 9ec2f452..f8c9a509 100644
              getPhysicalDeviceFormatPropertiesFunc(
                  physicalDevice, CompressedImageInfo::getOutputFormat(format),
 diff --git a/host/vulkan/vk_decoder_internal_structs.h b/host/vulkan/vk_decoder_internal_structs.h
-index b1e847c3..c6a64c72 100644
+index 7c6eaf601..6a5e0d502 100644
 --- a/host/vulkan/vk_decoder_internal_structs.h
 +++ b/host/vulkan/vk_decoder_internal_structs.h
-@@ -240,6 +240,9 @@ struct DeviceInfo {
+@@ -216,6 +216,9 @@ struct DeviceInfo {
      std::vector<std::string> enabledExtensionNames;
      bool emulateTextureEtc2 = false;
      bool emulateTextureAstc = false;
@@ -239,7 +239,7 @@ index b1e847c3..c6a64c72 100644
      bool useAstcCpuDecompression = false;
      bool emulateProtectedMemory = false;
  
-@@ -253,10 +256,21 @@ struct DeviceInfo {
+@@ -229,10 +232,21 @@ struct DeviceInfo {
      std::optional<uint32_t> virtioGpuContextId;
      uint32_t maxImageDimension2D = 0;  // Physical device limit cached for efficient validation
  

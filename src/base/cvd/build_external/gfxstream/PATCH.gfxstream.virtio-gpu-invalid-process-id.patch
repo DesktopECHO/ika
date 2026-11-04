@@ -8,7 +8,7 @@ it made and the Vulkan context id that instance cleanup and exported syncs
 are registered under. virtio-gpu cleans a dead guest process up by context
 id, so none of that was freed when the app died.
 diff --git a/host/virtio_gpu_pipe.cpp b/host/virtio_gpu_pipe.cpp
-index 67a1e72..9b121fe 100644
+index 67a1e72d7..9b121fea6 100644
 --- a/host/virtio_gpu_pipe.cpp
 +++ b/host/virtio_gpu_pipe.cpp
 @@ -16,6 +16,7 @@

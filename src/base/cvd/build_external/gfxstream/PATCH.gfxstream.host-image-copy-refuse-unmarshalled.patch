@@ -1,5 +1,13 @@
+Patch summary:
+Refuse vkCopyMemoryToImage and vkCopyImageToMemory in the decoder. Their
+VkMemoryToImageCopy/VkImageToMemoryCopy::pHostPointer payload is not
+marshalled (cereal falls back to a single byte), so the host driver would write
+a whole image through a 1-byte allocation. Upstream no longer decodes the EXT
+aliases and hides host image copy from guests unless
+BypassVulkanDeviceFeatureOverrides is on, but the core Vulkan 1.4 commands
+still reach the driver.
 diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
-index 736f1ab8..195b2f3c 100644
+index 1bf659bae..c55c5623d 100644
 --- a/host/vulkan/vk_decoder.cpp
 +++ b/host/vulkan/vk_decoder.cpp
 @@ -13192,8 +13192,20 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
@@ -47,50 +55,4 @@ index 736f1ab8..195b2f3c 100644
 +                    // vkCopyImageToMemory_VkResult_return stays VK_ERROR_OUT_OF_HOST_MEMORY.
                  }
                  if ((vkCopyImageToMemory_VkResult_return) == VK_ERROR_DEVICE_LOST)
-                     m_state->on_DeviceLost();
-@@ -20717,8 +20741,20 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
-                 }
-                 VkResult vkCopyMemoryToImageEXT_VkResult_return = VK_ERROR_OUT_OF_HOST_MEMORY;
-                 if (CC_LIKELY(vk)) {
--                    vkCopyMemoryToImageEXT_VkResult_return =
--                        vk->vkCopyMemoryToImageEXT(unboxed_device, pCopyMemoryToImageInfo);
-+                    // gfxstream does not marshal VkImageToMemoryCopy/VkMemoryToImageCopy
-+                    // ::pHostPointer. The Vulkan XML declares it as a bare void* with no
-+                    // length (its size is computed from the image format and the region's
-+                    // extents), so cereal falls back to a single byte: the host allocates
-+                    // 1 byte and hands it to the driver as the copy target. The driver then
-+                    // writes the entire image through it, corrupting the renderer heap and
-+                    // taking down the VMM (observed as SIGSEGV inside the Apple driver's
-+                    // memcpy_small, and as "corrupted double-linked list" aborts).
-+                    //
-+                    // The pixel payload never crosses the virtio-gpu boundary either, so the
-+                    // call cannot succeed as marshalled. Fail it cleanly instead of letting
-+                    // the driver scribble past the stub allocation. Re-enable once the
-+                    // payload is marshalled with a real per-region size.
-+                    // vkCopyMemoryToImageEXT_VkResult_return stays VK_ERROR_OUT_OF_HOST_MEMORY.
-                 }
-                 if ((vkCopyMemoryToImageEXT_VkResult_return) == VK_ERROR_DEVICE_LOST)
-                     m_state->on_DeviceLost();
-@@ -20764,8 +20800,20 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
-                 }
-                 VkResult vkCopyImageToMemoryEXT_VkResult_return = VK_ERROR_OUT_OF_HOST_MEMORY;
-                 if (CC_LIKELY(vk)) {
--                    vkCopyImageToMemoryEXT_VkResult_return =
--                        vk->vkCopyImageToMemoryEXT(unboxed_device, pCopyImageToMemoryInfo);
-+                    // gfxstream does not marshal VkImageToMemoryCopy/VkMemoryToImageCopy
-+                    // ::pHostPointer. The Vulkan XML declares it as a bare void* with no
-+                    // length (its size is computed from the image format and the region's
-+                    // extents), so cereal falls back to a single byte: the host allocates
-+                    // 1 byte and hands it to the driver as the copy target. The driver then
-+                    // writes the entire image through it, corrupting the renderer heap and
-+                    // taking down the VMM (observed as SIGSEGV inside the Apple driver's
-+                    // memcpy_small, and as "corrupted double-linked list" aborts).
-+                    //
-+                    // The pixel payload never crosses the virtio-gpu boundary either, so the
-+                    // call cannot succeed as marshalled. Fail it cleanly instead of letting
-+                    // the driver scribble past the stub allocation. Re-enable once the
-+                    // payload is marshalled with a real per-region size.
-+                    // vkCopyImageToMemoryEXT_VkResult_return stays VK_ERROR_OUT_OF_HOST_MEMORY.
-                 }
-                 if ((vkCopyImageToMemoryEXT_VkResult_return) == VK_ERROR_DEVICE_LOST)
                      m_state->on_DeviceLost();
