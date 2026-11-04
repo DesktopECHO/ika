@@ -1,0 +1,20 @@
+Patch summary:
+Give games no default frame rate (0 instead of 60): Android caps games that
+ask for none at 60 to save a phone's battery; on Ika they run at the display's
+refresh rate, which Ika sets from the host display (refresh_rate_hz).
+
+--- a/shared/device.mk
++++ b/shared/device.mk
+@@ -570,8 +570,11 @@
+ 
+ # Set Game Default Frame Rate
+ # See b/286084594
++# Ika: none. A phone caps games that ask for no frame rate at 60 to save
++# its battery; on a desktop they run at the display's rate, 120 Hz where
++# the host's display has it.
+ PRODUCT_DEFAULT_PROPERTY_OVERRIDES += \
+-    ro.surface_flinger.game_default_frame_rate_override=60
++    ro.surface_flinger.game_default_frame_rate_override=0
+ 
+ # Disable GPU-intensive background blur for widget picker
+ PRODUCT_SYSTEM_EXT_PROPERTIES += \
