@@ -5,18 +5,18 @@ only for a device that reports 1.4. The codegen list left them out and 3DMark
 Steel Nomad refused to run.
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -173,6 +173,51 @@
+@@ -173,6 +173,56 @@
      VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME,
  };
- 
-+// Extensions Vulkan promoted to core that have no commands of their own, only structs the core
-+// versions carry. The codegen list of this gfxstream revision leaves them out (Mesa's later
-+// list names them), so the host's allow-list hid them from the guest, yet apps look for the
-+// names: 3DMark's Steel Nomad needs VK_KHR_spirv_1_4 and VK_KHR_shader_float_controls. A host
-+// driver's listing says whether it has them, and each is passed on only when the device reports
-+// the core version that promoted it, so a Vulkan 1.4 feature is never offered by a device that
-+// reports less. Names with commands (map_memory2, draw_indirect_count...) stay out: this
-+// revision's decoder has none of their calls.
+
++// Extensions Vulkan promoted to core that have no commands of their own, only structs or enum
++// values the core versions carry, all of which this revision marshals. Its codegen list leaves
++// them out, so the host's allow-list hid them from the guest, yet apps look for the names:
++// 3DMark's Steel Nomad needs VK_KHR_spirv_1_4 and VK_KHR_shader_float_controls. A host driver's
++// listing says whether it has them, and each is passed on only when the device reports the core
++// version that promoted it, so a Vulkan 1.4 feature is never offered by a device that reports
++// less. Names with commands (map_memory2, draw_indirect_count...) stay out: this revision's
++// decoder has none of their calls.
 +struct PromotedCoreExtension {
 +    const char* name;
 +    uint32_t version;  // the core version that promoted it
@@ -30,6 +30,7 @@ Steel Nomad refused to run.
 +    {"VK_KHR_variable_pointers", VK_MAKE_VERSION(1, 1, 0)},
 +    // Vulkan 1.2
 +    {"VK_KHR_8bit_storage", VK_MAKE_VERSION(1, 2, 0)},
++    {"VK_KHR_depth_stencil_resolve", VK_MAKE_VERSION(1, 2, 0)},
 +    {"VK_KHR_driver_properties", VK_MAKE_VERSION(1, 2, 0)},
 +    {"VK_KHR_sampler_mirror_clamp_to_edge", VK_MAKE_VERSION(1, 2, 0)},
 +    {"VK_KHR_separate_depth_stencil_layouts", VK_MAKE_VERSION(1, 2, 0)},
@@ -42,9 +43,13 @@ Steel Nomad refused to run.
 +    {"VK_EXT_separate_stencil_usage", VK_MAKE_VERSION(1, 2, 0)},
 +    {"VK_EXT_shader_viewport_index_layer", VK_MAKE_VERSION(1, 2, 0)},
 +    // Vulkan 1.4
++    {"VK_KHR_index_type_uint8", VK_MAKE_VERSION(1, 4, 0)},
++    {"VK_KHR_load_store_op_none", VK_MAKE_VERSION(1, 4, 0)},
 +    {"VK_KHR_shader_expect_assume", VK_MAKE_VERSION(1, 4, 0)},
 +    {"VK_KHR_shader_float_controls2", VK_MAKE_VERSION(1, 4, 0)},
 +    {"VK_KHR_shader_subgroup_rotate", VK_MAKE_VERSION(1, 4, 0)},
++    {"VK_KHR_vertex_attribute_divisor", VK_MAKE_VERSION(1, 4, 0)},
++    {"VK_EXT_pipeline_robustness", VK_MAKE_VERSION(1, 4, 0)},
 +};
 +
 +static bool isPromotedCoreExtension(const char* name, uint32_t deviceApiVersion) {
@@ -57,7 +62,7 @@ Steel Nomad refused to run.
  // ika: derive the blob page size from the host page size so the SystemBlob/
  // udmabuf host-visible path aligns correctly on 16K-page hosts (Apple Silicon
  // under Asahi). A hardcoded 4096 under-aligns udmabuf imports and blob sizes,
-@@ -2335,16 +2380,28 @@
+@@ -2335,16 +2385,28 @@
          if (result != VK_SUCCESS) {
              GFXSTREAM_ERROR("Failed to query host device extensions.");
              return result;
