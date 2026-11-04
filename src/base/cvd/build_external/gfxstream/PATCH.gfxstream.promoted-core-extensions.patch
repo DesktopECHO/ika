@@ -1,0 +1,90 @@
+Patch summary:
+Advertise the Vulkan 1.1/1.2 core-promoted extensions that have no commands of
+their own (VK_KHR_spirv_1_4, VK_KHR_shader_float_controls, ...), and the 1.4 ones
+only for a device that reports 1.4. The codegen list left them out and 3DMark
+Steel Nomad refused to run.
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -173,6 +173,51 @@
+     VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME,
+ };
+ 
++// Extensions Vulkan promoted to core that have no commands of their own, only structs the core
++// versions carry. The codegen list of this gfxstream revision leaves them out (Mesa's later
++// list names them), so the host's allow-list hid them from the guest, yet apps look for the
++// names: 3DMark's Steel Nomad needs VK_KHR_spirv_1_4 and VK_KHR_shader_float_controls. A host
++// driver's listing says whether it has them, and each is passed on only when the device reports
++// the core version that promoted it, so a Vulkan 1.4 feature is never offered by a device that
++// reports less. Names with commands (map_memory2, draw_indirect_count...) stay out: this
++// revision's decoder has none of their calls.
++struct PromotedCoreExtension {
++    const char* name;
++    uint32_t version;  // the core version that promoted it
++};
++
++static constexpr PromotedCoreExtension kPromotedCoreExtensions[] = {
++    // Vulkan 1.1
++    {"VK_KHR_16bit_storage", VK_MAKE_VERSION(1, 1, 0)},
++    {"VK_KHR_relaxed_block_layout", VK_MAKE_VERSION(1, 1, 0)},
++    {"VK_KHR_shader_draw_parameters", VK_MAKE_VERSION(1, 1, 0)},
++    {"VK_KHR_variable_pointers", VK_MAKE_VERSION(1, 1, 0)},
++    // Vulkan 1.2
++    {"VK_KHR_8bit_storage", VK_MAKE_VERSION(1, 2, 0)},
++    {"VK_KHR_driver_properties", VK_MAKE_VERSION(1, 2, 0)},
++    {"VK_KHR_sampler_mirror_clamp_to_edge", VK_MAKE_VERSION(1, 2, 0)},
++    {"VK_KHR_separate_depth_stencil_layouts", VK_MAKE_VERSION(1, 2, 0)},
++    {"VK_KHR_shader_atomic_int64", VK_MAKE_VERSION(1, 2, 0)},
++    {"VK_KHR_shader_float_controls", VK_MAKE_VERSION(1, 2, 0)},
++    {"VK_KHR_spirv_1_4", VK_MAKE_VERSION(1, 2, 0)},
++    {"VK_KHR_uniform_buffer_standard_layout", VK_MAKE_VERSION(1, 2, 0)},
++    {"VK_EXT_descriptor_indexing", VK_MAKE_VERSION(1, 2, 0)},
++    {"VK_EXT_sampler_filter_minmax", VK_MAKE_VERSION(1, 2, 0)},
++    {"VK_EXT_separate_stencil_usage", VK_MAKE_VERSION(1, 2, 0)},
++    {"VK_EXT_shader_viewport_index_layer", VK_MAKE_VERSION(1, 2, 0)},
++    // Vulkan 1.4
++    {"VK_KHR_shader_expect_assume", VK_MAKE_VERSION(1, 4, 0)},
++    {"VK_KHR_shader_float_controls2", VK_MAKE_VERSION(1, 4, 0)},
++    {"VK_KHR_shader_subgroup_rotate", VK_MAKE_VERSION(1, 4, 0)},
++};
++
++static bool isPromotedCoreExtension(const char* name, uint32_t deviceApiVersion) {
++    for (const auto& promoted : kPromotedCoreExtensions) {
++        if (!strcmp(promoted.name, name)) return deviceApiVersion >= promoted.version;
++    }
++    return false;
++}
++
+ // ika: derive the blob page size from the host page size so the SystemBlob/
+ // udmabuf host-visible path aligns correctly on 16K-page hosts (Apple Silicon
+ // under Asahi). A hardcoded 4096 under-aligns udmabuf imports and blob sizes,
+@@ -2335,16 +2380,28 @@
+         if (result != VK_SUCCESS) {
+             GFXSTREAM_ERROR("Failed to query host device extensions.");
+             return result;
++        }
++
++        // The version the guest sees for this device, which gates the promoted extensions below:
++        uint32_t deviceApiVersion = VK_MAKE_VERSION(1, 0, 0);
++        {
++            std::lock_guard<std::mutex> lock(mMutex);
++            if (auto* physicalDeviceInfo = gfxstream::base::find(mPhysdevInfo, physicalDevice)) {
++                deviceApiVersion = physicalDeviceInfo->props.apiVersion;
++            }
+         }
+ 
+         // Remove all extensions that are not supported by the host codegen to prevent
+-        // guest to host compatibility issues:
++        // guest to host compatibility issues, except the promoted ones that need none of its
++        // commands and that the device's version covers:
+         const auto& supportedDeviceExtensions = GetDeviceExtensionsSupportedByCodegen();
+         properties.erase(
+             std::remove_if(properties.begin(), properties.end(),
+                            [&](const VkExtensionProperties& extension) {
+                                return supportedDeviceExtensions.find(extension.extensionName) ==
+-                                      supportedDeviceExtensions.end();
++                                          supportedDeviceExtensions.end() &&
++                                      !isPromotedCoreExtension(extension.extensionName,
++                                                               deviceApiVersion);
+                            }),
+             properties.end());
+ 
