@@ -6,14 +6,15 @@ was present and readable. Selecting UdmabufCreator_linux.cpp on Linux keeps the
 stub for other hosts while allowing gfxstream to create udmabuf-backed dma-buf
 handles for host-visible Vulkan memory.
 diff --git a/common/base/BUILD.bazel b/common/base/BUILD.bazel
-index dde59b33..43a5a735 100644
+index d404d4cc6..26778f01f 100644
 --- a/common/base/BUILD.bazel
 +++ b/common/base/BUILD.bazel
-@@ -63,8 +63,14 @@ cc_library(
+@@ -63,9 +63,15 @@ cc_library(
          "StringFormat.cpp",
          "System.cpp",
          "Tracing.cpp",
 -        "UdmabufCreator_stub.cpp",
+         "heap_memory.cpp",
      ] + select({
 +        "@platforms//os:linux": [
 +            "UdmabufCreator_linux.cpp",

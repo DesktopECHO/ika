@@ -1,5 +1,5 @@
 diff --git a/build_variables.bzl b/build_variables.bzl
-index b567c66e..024e06a3 100644
+index b567c66e8..024e06a3e 100644
 --- a/build_variables.bzl
 +++ b/build_variables.bzl
 @@ -29,6 +29,7 @@ GFXSTREAM_COMMON_COPTS = [

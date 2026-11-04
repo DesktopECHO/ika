@@ -5,7 +5,7 @@ in its arenas, so the memory a closed app (a 3D game) used stayed resident in
 the renderer; trimming handed over 100 MB back in a test on an Apple Silicon
 host. Linux/glibc only.
 diff --git a/host/frame_buffer.cpp b/host/frame_buffer.cpp
-index 919474e6..1d0a0c3d 100644
+index c4f1f6c74..7cb799b8b 100644
 --- a/host/frame_buffer.cpp
 +++ b/host/frame_buffer.cpp
 @@ -20,6 +20,9 @@
@@ -18,20 +18,20 @@ index 919474e6..1d0a0c3d 100644
  #endif
  #include <time.h>
  
-@@ -2435,8 +2438,15 @@ std::unique_ptr<ProcessResources> FrameBuffer::Impl::removeGraphicsProcessResour
- void FrameBuffer::Impl::signalGuestProcessDead(uint64_t puid) {
-     std::shared_ptr<GuestProcessResources> processResources = removeGraphicsProcessResources(puid);
-     m_processCleanupThread.enqueueCleanup(
--        [this, puid, processResources = std::move(processResources)]() {
-+        [this, puid, processResources = std::move(processResources)]() mutable {
-             this->cleanupGuestProcess(puid);
-+            processResources.reset();
+@@ -2437,8 +2440,15 @@ void FrameBuffer::Impl::signalGuestProcessDead(uint64_t puid) {
+         processResources->setGuestProcessDead(true);
+     }
+ 
+-    enqueueAsyncCleanup([this, puid, processResources = std::move(processResources)]() {
++    enqueueAsyncCleanup([this, puid, processResources = std::move(processResources)]() mutable {
+         this->cleanupGuestProcess(puid, processResources.get());
++        processResources.reset();
 +#if defined(__linux__) && defined(__GLIBC__)
-+            // A guest app that exits frees what the host held for it, but glibc keeps the
-+            // freed pages in its arenas: after a 3D game closed, over 100 MB stayed resident
-+            // in the renderer. Hand them back to the kernel, off the render threads.
-+            malloc_trim(0);
++        // A guest app that exits frees what the host held for it, but glibc keeps the
++        // freed pages in its arenas: after a 3D game closed, over 100 MB stayed resident
++        // in the renderer. Hand them back to the kernel, off the render threads.
++        malloc_trim(0);
 +#endif
-         });
+     });
  }
  

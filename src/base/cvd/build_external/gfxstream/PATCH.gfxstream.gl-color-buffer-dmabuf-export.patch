@@ -8,7 +8,7 @@ ColorBuffer's blob export falls back to it when there is no Vulkan image, and
 the row pitch reported by stream_renderer_resource_get_info takes the pitch
 of the last GL export when there is no Vulkan layout to ask.
 diff --git a/host/color_buffer.cpp b/host/color_buffer.cpp
-index e64172b2..f3770948 100644
+index e64172b20..f37709481 100644
 --- a/host/color_buffer.cpp
 +++ b/host/color_buffer.cpp
 @@ -19,6 +19,7 @@
@@ -82,7 +82,7 @@ index e64172b2..f3770948 100644
  }  // namespace host
  }  // namespace gfxstream
 diff --git a/host/color_buffer.h b/host/color_buffer.h
-index 17d305c0..5f43dbf1 100644
+index 17d305c03..5f43dbf16 100644
 --- a/host/color_buffer.h
 +++ b/host/color_buffer.h
 @@ -94,6 +94,9 @@ class ColorBuffer : public IColorBuffer, public LazySnapshotObj<ColorBuffer> {
@@ -96,7 +96,7 @@ index 17d305c0..5f43dbf1 100644
     private:
      ColorBuffer() = default;
 diff --git a/host/common/include/gfxstream/host/color_buffer_interface.h b/host/common/include/gfxstream/host/color_buffer_interface.h
-index 2b13a7b1..e9a2e279 100644
+index 2b13a7b16..e9a2e279f 100644
 --- a/host/common/include/gfxstream/host/color_buffer_interface.h
 +++ b/host/common/include/gfxstream/host/color_buffer_interface.h
 @@ -68,6 +68,8 @@ class IColorBuffer {
@@ -109,10 +109,10 @@ index 2b13a7b1..e9a2e279 100644
  
  // A (mostly) generic shared owning reference  to a `ColorBuffer` so that the
 diff --git a/host/frame_buffer.cpp b/host/frame_buffer.cpp
-index 5a01e15b..c8ccf583 100644
+index 155be9338..7f928ad04 100644
 --- a/host/frame_buffer.cpp
 +++ b/host/frame_buffer.cpp
-@@ -612,7 +612,7 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
+@@ -610,7 +610,7 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
  
      std::optional<BlobDescriptorInfo> exportColorBuffer(HandleType colorBufferHandle);
      std::optional<BlobDescriptorInfo> exportBuffer(HandleType bufferHandle);
@@ -121,7 +121,7 @@ index 5a01e15b..c8ccf583 100644
  
  #if GFXSTREAM_ENABLE_HOST_GLES
      // Retrieves the color buffer handle associated with |p_surface|.
-@@ -4058,11 +4058,15 @@ std::optional<BlobDescriptorInfo> FrameBuffer::Impl::exportColorBuffer(
+@@ -4093,11 +4093,15 @@ std::optional<BlobDescriptorInfo> FrameBuffer::Impl::exportColorBuffer(
      return colorBuffer->exportBlob();
  }
  
@@ -140,7 +140,7 @@ index 5a01e15b..c8ccf583 100644
  }
  
  std::optional<BlobDescriptorInfo> FrameBuffer::Impl::exportBuffer(HandleType bufferHandle) {
-@@ -5050,8 +5054,8 @@ std::optional<BlobDescriptorInfo> FrameBuffer::exportBuffer(HandleType bufferHan
+@@ -5089,8 +5093,8 @@ std::optional<BlobDescriptorInfo> FrameBuffer::exportBuffer(HandleType bufferHan
      return mImpl->exportBuffer(bufferHandle);
  }
  
@@ -152,10 +152,10 @@ index 5a01e15b..c8ccf583 100644
  
  bool FrameBuffer::hasEmulationGl() const { return mImpl->hasEmulationGl(); }
 diff --git a/host/frame_buffer.h b/host/frame_buffer.h
-index c84788ec..33cb622b 100644
+index 85a0a73fa..688103d45 100644
 --- a/host/frame_buffer.h
 +++ b/host/frame_buffer.h
-@@ -435,8 +435,8 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
+@@ -436,8 +436,8 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
  
      std::optional<BlobDescriptorInfo> exportColorBuffer(HandleType colorBufferHandle);
      std::optional<BlobDescriptorInfo> exportBuffer(HandleType bufferHandle);
@@ -167,10 +167,10 @@ index c84788ec..33cb622b 100644
      bool hasEmulationGl() const;
      bool hasEmulationVk() const;
 diff --git a/host/gl/color_buffer_gl.cpp b/host/gl/color_buffer_gl.cpp
-index 7a4be59e..0ba0f17f 100644
+index 62669ea2a..ca817e931 100644
 --- a/host/gl/color_buffer_gl.cpp
 +++ b/host/gl/color_buffer_gl.cpp
-@@ -1328,6 +1328,39 @@ bool ColorBufferGl::importMemory(ManagedDescriptor externalDescriptor, uint64_t
+@@ -1339,6 +1339,39 @@ bool ColorBufferGl::importMemory(ManagedDescriptor externalDescriptor, uint64_t
      return true;
  }
  
@@ -211,7 +211,7 @@ index 7a4be59e..0ba0f17f 100644
      EGLImageKHR image = s_egl.eglCreateImageKHR(m_display, EGL_NO_CONTEXT, EGL_NATIVE_PIXMAP_KHR, pixmap, nullptr);
  
 diff --git a/host/gl/color_buffer_gl.h b/host/gl/color_buffer_gl.h
-index ac20fac9..b12bcfac 100644
+index ac20fac96..b12bcfac6 100644
 --- a/host/gl/color_buffer_gl.h
 +++ b/host/gl/color_buffer_gl.h
 @@ -198,6 +198,19 @@ class ColorBufferGl {
@@ -243,7 +243,7 @@ index ac20fac9..b12bcfac 100644
      // This is helpful for bindFbo which may skip too many steps after the egl
      // image is replaced.
 diff --git a/host/gl/glestranslator/egl/egl_display.h b/host/gl/glestranslator/egl/egl_display.h
-index 26244476..15d2f616 100644
+index 26244476f..15d2f6167 100644
 --- a/host/gl/glestranslator/egl/egl_display.h
 +++ b/host/gl/glestranslator/egl/egl_display.h
 @@ -87,6 +87,12 @@ public:
@@ -260,7 +260,7 @@ index 26244476..15d2f616 100644
          auto dispContext = getContext(ctx);
          if (!dispContext) return nullptr;
 diff --git a/host/gl/glestranslator/egl/egl_imp.cpp b/host/gl/glestranslator/egl/egl_imp.cpp
-index 700d128d..9e980bf5 100644
+index f4a0912c5..631aab370 100644
 --- a/host/gl/glestranslator/egl/egl_imp.cpp
 +++ b/host/gl/glestranslator/egl/egl_imp.cpp
 @@ -124,6 +124,9 @@ EGLAPI void EGLAPIENTRY eglBlitFromCurrentReadBufferANDROID(EGLDisplay display,
@@ -282,7 +282,7 @@ index 700d128d..9e980bf5 100644
          {"eglGetSyncAttribKHR",
                  (__eglMustCastToProperFunctionPointerType)eglGetSyncAttribKHR },
          {"eglSetNativeTextureDecompressionEnabledANDROID",
-@@ -1467,6 +1472,58 @@ EGLAPI EGLImageKHR EGLAPIENTRY eglCreateImageKHR(EGLDisplay display, EGLContext
+@@ -1469,6 +1474,58 @@ EGLAPI EGLImageKHR EGLAPIENTRY eglCreateImageKHR(EGLDisplay display, EGLContext
  }
  
  
@@ -342,7 +342,7 @@ index 700d128d..9e980bf5 100644
  {
      VALIDATE_DISPLAY(display);
 diff --git a/host/gl/glestranslator/egl/egl_os_api.h b/host/gl/glestranslator/egl/egl_os_api.h
-index de60c1c2..7889093a 100644
+index de60c1c23..7889093a2 100644
 --- a/host/gl/glestranslator/egl/egl_os_api.h
 +++ b/host/gl/glestranslator/egl/egl_os_api.h
 @@ -206,6 +206,16 @@ public:
@@ -363,7 +363,7 @@ index de60c1c2..7889093a 100644
  
      virtual bool releasePbuffer(Surface* pb) = 0;
 diff --git a/host/gl/glestranslator/egl/egl_os_api_egl.cpp b/host/gl/glestranslator/egl/egl_os_api_egl.cpp
-index f137fd1f..3870a5f5 100644
+index f137fd1fb..3870a5f5a 100644
 --- a/host/gl/glestranslator/egl/egl_os_api_egl.cpp
 +++ b/host/gl/glestranslator/egl/egl_os_api_egl.cpp
 @@ -297,6 +297,9 @@ public:
@@ -416,7 +416,7 @@ index f137fd1f..3870a5f5 100644
          EGLDisplay dpy,
          EGLImage image) {
 diff --git a/host/virtio_gpu_resource.cpp b/host/virtio_gpu_resource.cpp
-index 46be30de..b58bc286 100644
+index 46be30de1..b58bc286f 100644
 --- a/host/virtio_gpu_resource.cpp
 +++ b/host/virtio_gpu_resource.cpp
 @@ -446,9 +446,9 @@ int VirtioGpuResource::GetInfo(struct stream_renderer_resource_info* outInfo) co
@@ -433,7 +433,7 @@ index 46be30de..b58bc286 100644
              outInfo->stride = *pitch;
          }
 diff --git a/host/vulkan/color_buffer_vk.cpp b/host/vulkan/color_buffer_vk.cpp
-index b0c4b041..b8621ae7 100644
+index b0c4b041a..b8621ae71 100644
 --- a/host/vulkan/color_buffer_vk.cpp
 +++ b/host/vulkan/color_buffer_vk.cpp
 @@ -164,6 +164,10 @@ std::unique_ptr<ColorBufferVkImageInfo> ColorBufferVk::prepareForDisplay() {
@@ -448,7 +448,7 @@ index b0c4b041..b8621ae7 100644
      auto info = mVkEmulation.exportColorBufferMemory(mHandle);
      if (info) {
 diff --git a/host/vulkan/color_buffer_vk.h b/host/vulkan/color_buffer_vk.h
-index 1edbbb15..7910c36e 100644
+index 1edbbb15a..7910c36e7 100644
 --- a/host/vulkan/color_buffer_vk.h
 +++ b/host/vulkan/color_buffer_vk.h
 @@ -80,6 +80,8 @@ class ColorBufferVk {

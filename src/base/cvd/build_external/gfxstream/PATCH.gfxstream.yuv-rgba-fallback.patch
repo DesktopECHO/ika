@@ -15,10 +15,10 @@ compositor found no pipeline, a fatal error that ended crosvm); the guest's
 images bound to it, and its image format queries for them, take RGBA8 too;
 and reading it back fails, leaving the guest's own YUV bytes in place.
 diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operations.cpp
-index 4c54e07..be91141 100644
+index 33b3d01a8..32fdae805 100644
 --- a/host/vulkan/vk_common_operations.cpp
 +++ b/host/vulkan/vk_common_operations.cpp
-@@ -3004,6 +3004,14 @@ uint32_t VkEmulation::getValidMemoryTypeIndex(uint32_t requiredMemoryTypeBits,
+@@ -3025,6 +3025,14 @@ uint32_t VkEmulation::getValidMemoryTypeIndex(uint32_t requiredMemoryTypeBits,
  std::unique_ptr<VkImageCreateInfo> VkEmulation::generateColorBufferVkImageCreateInfoLocked(
          VkFormat format, uint32_t width, uint32_t height, VkImageTiling tiling,
          uint32_t mipLevels) {
@@ -30,10 +30,10 @@ index 4c54e07..be91141 100644
 +         usesYuvRgbaFallback(GfxstreamFormat::NV12))) {
 +        format = VK_FORMAT_R8G8B8A8_UNORM;
 +    }
-     const ImageSupportInfo* maybeImageSupportInfo = mImageSupportInfo.GetSupportedInfo(format);
-     if (!maybeImageSupportInfo) {
-         GFXSTREAM_ERROR("Format %s [%d] is not supported.", string_VkFormat(format), format);
-@@ -3096,9 +3104,38 @@ VkEmulation::GetInternalFormatLocked(GfxstreamFormat format) {
+     const VkFormat resolvedFormat = resolveAhbFormat(format);
+     const ImageSupportInfo* maybeImageSupportInfo =
+         mImageSupportInfo.GetSupportedInfo(resolvedFormat, tiling);
+@@ -3109,9 +3117,38 @@ VkEmulation::GetInternalFormatLocked(GfxstreamFormat format) {
          }
      }
  
@@ -72,7 +72,7 @@ index 4c54e07..be91141 100644
  // TODO(liyl): Currently we can only specify required memoryProperty
  // and initial layout for a color buffer.
  //
-@@ -3334,6 +3371,9 @@ bool VkEmulation::createVkColorBufferLocked(uint32_t width, uint32_t height,
+@@ -3351,6 +3388,9 @@ bool VkEmulation::createVkColorBufferLocked(uint32_t width, uint32_t height,
  }
  
  bool VkEmulation::isFormatSupported(GfxstreamFormat format) {
@@ -82,7 +82,7 @@ index 4c54e07..be91141 100644
      auto vkFormatOpt = ToVkFormat(format);
      if (!vkFormatOpt) {
          return false;
-@@ -3993,6 +4033,13 @@ bool VkEmulation::readColorBufferToBytesLocked(uint32_t colorBufferHandle, uint3
+@@ -4010,6 +4050,13 @@ bool VkEmulation::readColorBufferToBytesLocked(uint32_t colorBufferHandle, uint3
          return false;
      }
  
@@ -96,7 +96,7 @@ index 4c54e07..be91141 100644
      if (x != 0 || y != 0 || w != colorBufferInfo->imageCreateInfoShallow.extent.width ||
          h != colorBufferInfo->imageCreateInfoShallow.extent.height) {
          GFXSTREAM_ERROR(
-@@ -4840,6 +4887,73 @@ static void convertRgbToRgbaPixels(void* dst, const void* src, uint32_t w, uint3
+@@ -4857,6 +4904,73 @@ static void convertRgbToRgbaPixels(void* dst, const void* src, uint32_t w, uint3
      }
  }
  
@@ -170,7 +170,7 @@ index 4c54e07..be91141 100644
  static void convertRgba4ToBGRA4Pixels(void* dst, const void* src, uint32_t w, uint32_t h) {
      const size_t pixelCount = w * h;
      const uint16_t* srcPixels = reinterpret_cast<const uint16_t*>(src);
-@@ -4921,6 +5035,16 @@ bool VkEmulation::updateColorBufferFromBytesLocked(uint32_t colorBufferHandle, u
+@@ -4938,6 +5052,16 @@ bool VkEmulation::updateColorBufferFromBytesLocked(uint32_t colorBufferHandle, u
                  return false;
              }
              convertRgbToRgbaPixels(stagingBufferPtr, pixels, w, h);
@@ -187,7 +187,7 @@ index 4c54e07..be91141 100644
          } else {
              const std::string formatString = ToString(colorBufferInfo->format);
              const std::string internalFormatString = ToString(colorBufferInfo->internalFormat);
-@@ -5939,7 +6063,10 @@ std::unique_ptr<ColorBufferVkImageInfo> VkEmulation::prepareColorBufferForCompos
+@@ -5956,7 +6080,10 @@ std::unique_ptr<ColorBufferVkImageInfo> VkEmulation::prepareColorBufferForCompos
      compositorInfo->image = colorBufferInfo->image;
      compositorInfo->imageView = colorBufferInfo->imageView;
      compositorInfo->imageCreateInfoShallow = colorBufferInfo->imageCreateInfoShallow;
@@ -199,7 +199,7 @@ index 4c54e07..be91141 100644
      compositorInfo->preBorrowLayout = colorBufferInfo->currentLayout;
      compositorInfo->preBorrowQueueFamilyIndex = colorBufferInfo->currentQueueFamilyIndex;
      if (colorBufferIsTarget && mDisplayVk) {
-@@ -5981,7 +6108,10 @@ std::unique_ptr<ColorBufferVkImageInfo> VkEmulation::prepareColorBufferForDispla
+@@ -5998,7 +6125,10 @@ std::unique_ptr<ColorBufferVkImageInfo> VkEmulation::prepareColorBufferForDispla
      compositorInfo->image = colorBufferInfo->image;
      compositorInfo->imageView = colorBufferInfo->imageView;
      compositorInfo->imageCreateInfoShallow = colorBufferInfo->imageCreateInfoShallow;
@@ -212,10 +212,10 @@ index 4c54e07..be91141 100644
      compositorInfo->preBorrowQueueFamilyIndex = mQueueFamilyIndex;
  
 diff --git a/host/vulkan/vk_common_operations.h b/host/vulkan/vk_common_operations.h
-index 3faa625..90e87c3 100644
+index 6dccbedba..6a4fe9f8e 100644
 --- a/host/vulkan/vk_common_operations.h
 +++ b/host/vulkan/vk_common_operations.h
-@@ -620,6 +620,9 @@ class VkEmulation {
+@@ -613,6 +613,9 @@ class VkEmulation {
      std::optional<GfxstreamFormat> GetInternalFormatLocked(GfxstreamFormat format)
          REQUIRES(mMutex);
  
@@ -226,20 +226,10 @@ index 3faa625..90e87c3 100644
                                     uint32_t colorBufferHandle,
                                     bool vulkanOnly, uint32_t memoryProperty, uint32_t mipLevels)
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
-index 453621c..88db6d1 100644
+index 68104a522..8b918a342 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -1959,7 +1959,8 @@ class VkDecoderGlobalState::Impl {
-                         imageFormatInfo = *pImageFormatInfo;
-                         pImageFormatInfo = &imageFormatInfo;
-                     }
--                    imageFormatInfo.format = resolvedFormat;
-+                    // A YUV format the device cannot create is RGBA8 there.
-+                    imageFormatInfo.format = colorBufferVkImageCi->format;
-                     imageFormatInfo.flags |= colorBufferVkImageCi->flags;
-                     imageFormatInfo.usage |= colorBufferVkImageCi->usage;
-                 }
-@@ -10639,7 +10640,8 @@ class VkDecoderGlobalState::Impl {
+@@ -10328,7 +10328,8 @@ class VkDecoderGlobalState::Impl {
              if (!colorBufferVkImageCi) {
                  continue;
              }

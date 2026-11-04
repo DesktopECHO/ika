@@ -9,7 +9,7 @@ glAlphaFunc can segfault the entire crosvm process.
 Keep alpha-function updates on the compatibility-profile path and avoid the
 unavailable host function on the two shader-emulated paths.
 diff --git a/host/gl/glestranslator/gles_cm/gles_cm_imp.cpp b/host/gl/glestranslator/gles_cm/gles_cm_imp.cpp
-index 887e6454..d38b7290 100644
+index 887e64549..d38b72903 100644
 --- a/host/gl/glestranslator/gles_cm/gles_cm_imp.cpp
 +++ b/host/gl/glestranslator/gles_cm/gles_cm_imp.cpp
 @@ -444,6 +444,11 @@ GL_API void GL_APIENTRY  glAlphaFunc( GLenum func, GLclampf ref) {

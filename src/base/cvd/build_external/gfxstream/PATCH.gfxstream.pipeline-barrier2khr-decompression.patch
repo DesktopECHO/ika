@@ -8,10 +8,10 @@ tracks image layouts. Guests such as ANGLE record image barriers with the KHR
 alias, so those transitions skipped decompression. VkDependencyInfoKHR is an
 alias of VkDependencyInfo, so reuse on_vkCmdPipelineBarrier2.
 diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
-index 3b54b6bd..dd6a637c 100644
+index 4f6f39a80..10e5054ad 100644
 --- a/host/vulkan/vk_decoder.cpp
 +++ b/host/vulkan/vk_decoder.cpp
-@@ -17323,7 +17323,11 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
+@@ -18126,7 +18126,11 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                                     (unsigned long long)pDependencyInfo);
                  }
                  if (CC_LIKELY(vk)) {
@@ -25,10 +25,10 @@ index 3b54b6bd..dd6a637c 100644
                  vkStream->unsetHandleMapping();
                  if (m_snapshotsEnabled) {
 diff --git a/host/vulkan/vk_sub_decoder.cpp b/host/vulkan/vk_sub_decoder.cpp
-index 85d19b21..f549eccd 100644
+index 366fc6fca..18a94aa0e 100644
 --- a/host/vulkan/vk_sub_decoder.cpp
 +++ b/host/vulkan/vk_sub_decoder.cpp
-@@ -3266,7 +3266,11 @@ size_t subDecode(VulkanMemReadingStream* readStream, VulkanDispatch* vk,
+@@ -3500,7 +3500,11 @@ size_t subDecode(VulkanMemReadingStream* readStream, VulkanDispatch* vk,
                                                        (VkDependencyInfo*)(pDependencyInfo));
                  }
                  if (CC_LIKELY(vk)) {

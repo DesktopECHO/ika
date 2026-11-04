@@ -1,28 +1,42 @@
 Patch summary:
-Derive the gfxstream host blob page size from the host page size instead of a
-hardcoded 4096. On 16K-page hosts (Apple Silicon under Asahi) the udmabuf-backed
-host-visible blob path aligns its shared-memory size to kPageSizeforBlob before
-calling UDMABUF_CREATE; a 4096 value under-aligns the region (the kernel requires
-the system page size, 16384) and the import/map fails. kPageMaskForBlob is the
-matching host-VA alignment mask used by the blob mapping guard. All uses are
-runtime (size alignment, pointer-alignment checks, comparisons), so switching
-from constexpr 4096 to getpagesize() is safe; <unistd.h> is already included.
+Align gfxstream's host blobs to the host page size, not a hardcoded 4096. On
+16K-page hosts (Apple Silicon under Asahi) the udmabuf-backed host-visible path
+aligns its shared-memory size to the blob alignment before UDMABUF_CREATE; 4096
+under-aligns the region (the kernel requires the system page size, 16384) and
+the import or mapping fails. The blob alignment starts at the allocation
+helper's host page size (upstream raises it further to the driver's
+minImportedHostPointerAlignment where it imports host pointers), and the
+mapping guard checks the mapped address against the real page size.
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
-index 90e58ae3..c869081a 100644
+index e6036f52d..31fdac5a2 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -171,8 +171,12 @@ static constexpr const char* const kEmulatedInstanceExtensions[] = {
-     VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME,
- };
+@@ -7613,8 +7613,10 @@ class VkDecoderGlobalState::Impl {
+         }
  
--static constexpr uint64_t kPageSizeforBlob = 4096;
--static constexpr uint64_t kPageMaskForBlob = ~(0xfff);
-+// ika: derive the blob page size from the host page size so the SystemBlob/
-+// udmabuf host-visible path aligns correctly on 16K-page hosts (Apple Silicon
-+// under Asahi). A hardcoded 4096 under-aligns udmabuf imports and blob sizes,
-+// causing UDMABUF_CREATE / mapping failures on 16K pages.
-+static const uint64_t kPageSizeforBlob = static_cast<uint64_t>(getpagesize());
-+static const uint64_t kPageMaskForBlob = ~(static_cast<uint64_t>(getpagesize()) - 1);
+         if (info->needUnmap) {
+-            constexpr uint64_t kPageSizeforBlob = 4096;
+-            constexpr uint64_t kPageMaskForBlob = ~(0xfff);
++            // ika: the host page size, not 4096: on 16K-page hosts (Apple Silicon
++            // under Asahi) a 4K-aligned mapping cannot be mapped into the guest.
++            const uint64_t kPageSizeforBlob = static_cast<uint64_t>(getpagesize());
++            const uint64_t kPageMaskForBlob = ~(kPageSizeforBlob - 1);
+             uint64_t hva = (uint64_t)(uintptr_t)(info->ptr);
+             uint64_t alignedHva = hva & kPageMaskForBlob;
  
- static std::atomic<uint64_t> sUniqueShmemId = 0;
- 
+diff --git a/host/vulkan/vk_memory_allocation_helper.cpp b/host/vulkan/vk_memory_allocation_helper.cpp
+index ebfff45fd..fe3afd663 100644
+--- a/host/vulkan/vk_memory_allocation_helper.cpp
++++ b/host/vulkan/vk_memory_allocation_helper.cpp
+@@ -192,7 +192,10 @@ VkResult selectHostVisibleSharedMemoryStrategy(const VkMemoryAllocationHelper& h
+                                                VkMemoryAllocationPlan* outPlan) {
+     // A system blob is imported as a host pointer, and a driver can ask for a
+     // coarser alignment than a page: Apple silicon pages are 16KB.
+-    uint64_t blobAlignment = kPageSizeforBlob;
++    // ika: never align below the host page size either; udmabuf (16K-page hosts
++    // under Asahi) rejects a size that is not a multiple of it.
++    uint64_t blobAlignment =
++        std::max<uint64_t>(kPageSizeforBlob, static_cast<uint64_t>(helper.hostPageSize));
+     if (helper.supportsExternalMemoryHostProperties) {
+         blobAlignment = std::max<uint64_t>(blobAlignment, helper.minImportedHostPointerAlignment);
+     }

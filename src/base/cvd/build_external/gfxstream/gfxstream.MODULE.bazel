@@ -2,7 +2,7 @@ git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "g
 
 git_repository(
     name = "gfxstream",
-    commit = "0884d2d224bfe2e46cbb13b71d68d7c66e2f7dc9",
+    commit = "94240f814c0097a63027ae680ea4bec7b0cb25f7",
     remote = "https://github.com/google/gfxstream.git",
     patch_args = ["-p1"],
     patches = [
@@ -29,9 +29,10 @@ git_repository(
         # single byte, so the host would hand the driver a 1-byte buffer to write a
         # whole image through. Refuse the call instead of corrupting the heap.
         "@//build_external/gfxstream:PATCH.gfxstream.host-image-copy-refuse-unmarshalled.patch",
-        # The calls above are refused, so stop advertising host image copy as well;
-        # ANGLE otherwise uploads textures through it and they stay empty
-        # (Fruit Ninja black fruit and missing menu art).
+        # The calls above are refused and upstream hides host image copy, but its
+        # format-feature allow-list still passes HOST_IMAGE_TRANSFER_BIT: drop it
+        # (ANGLE's uploads through host image copy stayed empty, Fruit Ninja's
+        # black fruit and missing menu art).
         "@//build_external/gfxstream:PATCH.gfxstream.hide-host-image-copy.patch",
         "@//build_external/gfxstream:PATCH.gfxstream.opengles-3.2.patch",
         # Last-resort cleanup for Vulkan instances which survive normal
@@ -97,10 +98,9 @@ git_repository(
         # device and ended the VM.
         # IKA_ASTC_DECODE=cpu or gpu overrides the choice on any device.
         "@//build_external/gfxstream:PATCH.gfxstream.astc-cpu-decoding-dozen.patch",
-        # Extensions promoted to core without commands of their own
-        # (VK_KHR_spirv_1_4, VK_KHR_shader_float_controls, ...) are no longer
-        # dropped from the guest's list: 3DMark's Steel Nomad checks the names.
-        # Those of Vulkan 1.4 are offered only by a device that reports 1.4.
+        # Extensions promoted to core (VK_KHR_spirv_1_4, VK_KHR_push_descriptor,
+        # ...) are offered only by a device that reports the core version that
+        # promoted them: those of Vulkan 1.4 only by a device that reports 1.4.
         "@//build_external/gfxstream:PATCH.gfxstream.promoted-core-extensions.patch",
     ],
 )

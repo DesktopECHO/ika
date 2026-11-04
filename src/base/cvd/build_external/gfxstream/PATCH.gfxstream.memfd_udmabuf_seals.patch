@@ -6,7 +6,7 @@ Apply the required shrink/grow/seal seals to Linux shared-memory memfds
 regardless of whether libc or the syscall created them. Keep upstream's macOS
 shm_open path out of Linux's memfd sealing flow.
 diff --git a/common/base/SharedMemory_posix.cpp b/common/base/SharedMemory_posix.cpp
-index 40cf525f..c7eabb22 100644
+index 40cf525f3..c7eabb229 100644
 --- a/common/base/SharedMemory_posix.cpp
 +++ b/common/base/SharedMemory_posix.cpp
 @@ -43,6 +43,23 @@
