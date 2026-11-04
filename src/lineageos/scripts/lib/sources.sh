@@ -1196,9 +1196,9 @@ apply_local_overlay() {
   if [[ -L "$dest" ]]; then
     dest="$(readlink -f "$dest")"
   elif [[ -d "$workspace/vendor/ika" && ! -e "$dest" ]]; then
-    dest="$workspace/vendor/ika/lineageos"
+    dest="$workspace/vendor/ika/src/lineageos"
     mkdir -p "$workspace/vendor"
-    ln -sfn ika/lineageos "$workspace/vendor/lineage_desktop"
+    ln -sfn ika/src/lineageos "$workspace/vendor/lineage_desktop"
   fi
 
   mkdir -p "$dest"
@@ -1232,7 +1232,7 @@ local_overlay_dest_path() {
   if [[ -L "$dest" ]]; then
     readlink -f "$dest"
   elif [[ -d "$workspace/vendor/ika" && ! -e "$dest" ]]; then
-    printf '%s\n' "$workspace/vendor/ika/lineageos"
+    printf '%s\n' "$workspace/vendor/ika/src/lineageos"
   else
     printf '%s\n' "$dest"
   fi
@@ -1259,7 +1259,7 @@ local_overlay_rsync_differs() {
 }
 
 ensure_vendor_ika_soong_pruning() {
-  local marker="$workspace/vendor/ika/base/cvd/.find-ignore"
+  local marker="$workspace/vendor/ika/src/base/cvd/.find-ignore"
 
   [[ -d "$(dirname "$marker")" ]] || return 0
 

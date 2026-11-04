@@ -1,4 +1,4 @@
-# Left out of this image by Ika (vendor/ika/lineageos/packages/IkaRemovedPackages).
+# Left out of this image by Ika (vendor/ika/src/lineageos/packages/IkaRemovedPackages).
 #
 # The phone stack: Ika has no modem, SIM or cell network.
 TeleService

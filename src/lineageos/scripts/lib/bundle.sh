@@ -303,24 +303,14 @@ PY
 }
 
 vulkan_test_apk() {
-  local product_out="$1"
-  local apk
-
-  # Older trees staged the CTS APK beside the product testcases. Android 16
-  # stages the architecture-independent APK in the host CTS directory while
-  # keeping deqp-binary in the product output. Accept the legacy location, but
-  # prefer the host directory. This is always the build machine's own Soong
-  # host-output tag (host_out_tag), never a target/cross tag like the
-  # linux_musl-arm64 tag cvd-host_package.tar.gz uses: host-side CTS tooling
-  # runs on the machine doing the compiling, regardless of ROM target arch.
-  apk="$(find "$product_out/testcases/com.drawelements.deqp" -type f \
-    -name 'com.drawelements.deqp.apk' -print -quit 2>/dev/null || true)"
-  if [[ -z "$apk" ]]; then
-    apk="$(find "$workspace/out/host/$(host_out_tag)/testcases/CtsDeqpTestCases" \
-      -type f -name 'com.drawelements.deqp.apk' -print -quit \
-      2>/dev/null || true)"
-  fi
-  printf '%s\n' "$apk"
+  # The architecture-independent CTS APK is staged in the host CTS directory,
+  # while deqp-binary stays in the product output. This is always the build
+  # machine's own Soong host-output tag (host_out_tag), never a target/cross
+  # tag like the linux_musl-arm64 tag cvd-host_package.tar.gz uses: host-side
+  # CTS tooling runs on the machine doing the compiling, regardless of ROM
+  # target arch.
+  find "$workspace/out/host/$(host_out_tag)/testcases/CtsDeqpTestCases" \
+    -type f -name 'com.drawelements.deqp.apk' -print -quit 2>/dev/null || true
 }
 
 vulkan_test_resources() {
@@ -334,7 +324,7 @@ vulkan_test_outputs_complete() {
   local product_out="$1"
   local apk binary resources
 
-  apk="$(vulkan_test_apk "$product_out")"
+  apk="$(vulkan_test_apk)"
   binary="$(find "$product_out/data/nativetest64/deqp-binary" -type f \
     -name 'deqp-binary*' -print -quit 2>/dev/null || true)"
   resources="$(vulkan_test_resources 2>/dev/null || true)"
@@ -701,7 +691,7 @@ copy_vulkan_test_outputs() {
   vulkan_test_outputs_complete "$product_out" || \
     die "missing Vulkan CTS outputs for $product_out"
 
-  apk="$(vulkan_test_apk "$product_out")"
+  apk="$(vulkan_test_apk)"
   binary="$(find "$product_out/data/nativetest64/deqp-binary" -type f \
     -name 'deqp-binary*' -print -quit)"
   resources="$(vulkan_test_resources)"
