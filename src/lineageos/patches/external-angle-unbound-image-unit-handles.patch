@@ -1,0 +1,74 @@
+Patch summary:
+Image units with no texture bound pass VK_NULL_HANDLE to the driver as their
+descriptor's view (or buffer view), not an undefined value. ANGLE keeps the
+handles of a descriptor set in an angle::FastVector, whose resize leaves new
+elements undefined, and DescriptorSetDescBuilder::updateImages skips an image
+unit without a texture, so its handle was never written; the descriptor
+update then handed the driver whatever lay there. Native drivers never look
+at it, but Mesa's Venus (and gfxstream's guest) read the object behind every
+handle they encode: 3DMark Sling Shot Extreme's bloom compute pass crashed in
+vn_async_vkUpdateDescriptorSets from ContextVk::memoryBarrier. The handles
+now start null, and the skipped units write null explicitly, as the stale
+values of a reused builder would otherwise remain.
+
+--- a/src/libANGLE/renderer/vulkan/vk_cache_utils.cpp
++++ b/src/libANGLE/renderer/vulkan/vk_cache_utils.cpp
+@@ -6749,13 +6749,16 @@
+             {
+                 GLuint imageUnit     = imageBinding.boundImageUnits[arrayElement];
+                 TextureVk *textureVk = activeImages[imageUnit];
++
++                uint32_t infoIndex = writeDescriptorDescs[info.binding].descriptorInfoIndex +
++                                     arrayElement + imageUniform.getOuterArrayOffset();
++
+                 if (!textureVk)
+                 {
++                    // The handle is still passed to the driver: leave it null, not stale.
++                    mHandles[infoIndex].bufferView = VK_NULL_HANDLE;
+                     continue;
+                 }
+-
+-                uint32_t infoIndex = writeDescriptorDescs[info.binding].descriptorInfoIndex +
+-                                     arrayElement + imageUniform.getOuterArrayOffset();
+ 
+                 const vk::BufferView *view = nullptr;
+                 VkFormat viewFormat;
+@@ -6781,8 +6784,14 @@
+                 GLuint imageUnit             = imageBinding.boundImageUnits[arrayElement];
+                 const gl::ImageUnit &binding = imageUnits[imageUnit];
+                 TextureVk *textureVk         = activeImages[imageUnit];
++
++                uint32_t infoIndex = writeDescriptorDescs[info.binding].descriptorInfoIndex +
++                                     arrayElement + imageUniform.getOuterArrayOffset();
++
+                 if (!textureVk)
+                 {
++                    // The handle is still passed to the driver: leave it null, not stale.
++                    mHandles[infoIndex].imageView = VK_NULL_HANDLE;
+                     continue;
+                 }
+ 
+@@ -6793,9 +6802,6 @@
+                     textureVk->getStorageImageViewSerial(binding);
+ 
+                 ANGLE_TRY(textureVk->getStorageImageView(contextVk, binding, &imageView));
+-
+-                uint32_t infoIndex = writeDescriptorDescs[info.binding].descriptorInfoIndex +
+-                                     arrayElement + imageUniform.getOuterArrayOffset();
+ 
+                 // Note: binding.access is unused because it is implied by the shader.
+ 
+--- a/src/libANGLE/renderer/vulkan/vk_cache_utils.h
++++ b/src/libANGLE/renderer/vulkan/vk_cache_utils.h
+@@ -2040,7 +2040,10 @@
+     void resize(size_t descriptorCount)
+     {
+         mDesc.resize(descriptorCount);
+-        mHandles.resize(descriptorCount);
++        // FastVector::resize leaves new elements undefined, and the handle of an image unit
++        // without a texture is never written (updateImages skips it) yet is passed to the driver
++        // all the same: start the handles as VK_NULL_HANDLE.
++        mHandles.resize(descriptorCount, DescriptorDescHandles{});
+         mDynamicOffsets.resize(descriptorCount);
+     }
+ 
