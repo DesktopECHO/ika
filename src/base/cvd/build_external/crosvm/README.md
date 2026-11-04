@@ -25,10 +25,10 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** Includes the composite disk specification file descriptor in `CompositeDiskFile::as_raw_descriptors()`.
 - **Why:** The file is intentionally kept open to retain its lock. In crosvm multiprocess sandbox mode, unreported descriptors are closed by minijail; Rust then traps when `_disk_spec_file` is dropped because the owned fd was already closed.
 
-#### `PATCH.disk-qcow-zero-clusters.patch`
-- **Targets:** `disk` crate. Files: `src/qcow/mod.rs`, `src/qcow/qcow_raw_file.rs`.
-- **What it does:** Supports qcow2 version 3 zero clusters (L2 entry bit 0). Discarding or write-zeroing a full cluster of a qcow2 image that has a backing file now frees the cluster's storage and marks it zero, instead of allocating a cluster and writing zeroes into it. Zero clusters read as zeroes rather than from the backing file, and a later write into one starts from zeroes.
-- **Why:** Cuttlefish's `overlay.img` is a qcow2 over `os_composite.img`, so every guest discard took that allocate-and-zero path. A factory reset (Settings, recovery, RescueParty) discards the whole userdata partition, which grew `overlay.img` by the partition size (64 GB by default) and filled the host disk; an `fstrim` of `/data` did the same for its free space.
+#### `PATCH.disk-qcow-legacy-backing-format-magic.patch`
+- **Targets:** `disk` crate. File: `src/qcow/mod.rs`.
+- **What it does:** Reads a qcow2 header extension of type `0xe279_268f` as the backing format, as well as the standard `0xe279_2aca`; only the standard type is written. The tests cover both types and an unknown one, and open an overlay that carries the old type.
+- **Why:** crosvm wrote the backing format under `0xe279_268f` until upstream `a615111b7`, and since `69abc2703` it refuses an image that has a backing file but no recognised format (`MissingBackingFileFormat`). Every `overlay.img` kept across an update was made that way, so without this patch Ika's VM would not start after the update.
 
 #### `PATCH.gpu_display-nonblocking-dispatch.patch`
 - **Targets:** `gpu_display` crate. File: `src/display_wl.c`.
@@ -44,11 +44,6 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **Targets:** `crosvm_bin` (source tree, `devices/src/virtio/gpu/virtio_gpu.rs`) and the `devices` crate (`src/virtio/gpu/virtio_gpu.rs`), the same change with the two path prefixes.
 - **What it does:** `VirtioGpuScanout::flush()` drops a flush whose imported dma-buf the compositor still holds (`GpuDisplay::import_in_use()`), as the copy path already drops a frame whose `wl_shm` buffer is in use.
 - **Why:** With the hold, flipping to a held buffer would show the guest's next composition inside the frame the console is sampling. The guest's next flush, into another buffer of its swapchain, gets through; nothing waits.
-
-#### `PATCH.gpu_display-release-import-order.patch`, `PATCH.crosvm-unref-display-imports-devices.patch`
-- **Targets:** `gpu_display` crate (`src/lib.rs`, `src/gpu_display_android.rs`) and `devices` crate (`src/virtio/gpu/virtio_gpu.rs`). A backport of upstream crosvm f1d0ffe ("devices: virtio: gpu: Track import surface_id") without its tests and the stub display's test support. The `devices` patch is named to sort after the other `virtio_gpu.rs` patches.
-- **What it does:** A resource keeps its display import per surface (`surface_id` to `import_id`) instead of a single one, and `unref_resource()` releases them all when the guest frees the resource. `DisplayT::release_import()` and `GpuDisplay::release_import()` take `(surface_id, import_id)`, the order the backends implement; the generic layer had them swapped, which went unnoticed because nothing called it. The Android backend no longer adds an empty map when it releases an import of a surface it has none for.
-- **Why:** Nothing released a display import, so the compositor (`ika_stream`) kept every scanout buffer the guest had ever shown, and its memory, until the VM stopped: three dma-bufs for each app window opened and closed. `display_wl.c` also keeps at most 64 imports (`MAX_BUFFER_COUNT`).
 
 #### `PATCH.crosvm-media-errors.patch`
 - **Targets:** `devices` crate. File: `src/virtio/media/decoder_adapter.rs`. Made on top of `PATCH.crosvm-media-decoder-input-size.patch` and `PATCH.crosvm-media-decoder-visible-size.patch`, and named to sort after them.
@@ -179,7 +174,7 @@ See `crosvm.MODULE.bazel`. The relevant blocks:
 | Target | Patches |
 |---|---|
 | `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-composite-preserve-spec-fd`, `crosvm-gpu-2d-sandbox`, `crosvm-gpu-unref-shmem-mapping`, `crosvm-resize-display`, `crosvm-flush-held-dmabuf`, `crosvm-enable-vulkano-gralloc`, `crosvm-media-no-resource-bridge`, `minijail-sys_common_mk` |
-| `crosvm_bin.annotation(crate = "disk")` | `disk-composite-preserve-spec-fd`, `disk-qcow-zero-clusters` |
+| `crosvm_bin.annotation(crate = "disk")` | `disk-composite-preserve-spec-fd`, `disk-qcow-legacy-backing-format-magic` |
 | `crosvm_bin.annotation(crate = "jail")` | `jail-aarch64-block-pread64`, `jail-gpu-host-graphics-libs-optional` |
 | `crosvm_bin.annotation(crate = "devices")` | `crosvm-media-decoder-input-size`, `crosvm-media-decoder-visible-size`, `crosvm-media-errors`, `crosvm-media-direct-decode`, `crosvm-media-last-buffer`, `crosvm-media-placeholder-size`, `crosvm-resize-display-devices`, `crosvm-flush-held-dmabuf-devices` |
 | `crosvm_bin.annotation(crate = "virtio-media")` | `virtio-media-mmap-offset-step` |
