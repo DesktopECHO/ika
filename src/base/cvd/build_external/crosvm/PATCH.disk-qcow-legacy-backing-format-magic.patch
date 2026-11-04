@@ -1,0 +1,106 @@
+diff --git a/src/qcow/mod.rs b/src/qcow/mod.rs
+index 86331d3ef..e9076eb6f 100644
+--- a/src/qcow/mod.rs
++++ b/src/qcow/mod.rs
+@@ -175,6 +175,10 @@ const COMPATIBLE_FEATURES_LAZY_REFCOUNTS: u64 = 1 << 0;
+ 
+ // The format supports a "header extension area".
+ const QCOW2_EXT_MAGIC_BACKING_FORMAT: u32 = 0xe279_2aca;
++// The backing format extension type crosvm wrote before it used the standard one: the qcow2
++// overlays it made keep it, and they open only if it reads as the backing format too. No
++// qcow2 extension type uses this value. Only the standard type is written.
++const QCOW2_EXT_MAGIC_BACKING_FORMAT_CROSVM_LEGACY: u32 = 0xe279_268f;
+ 
+ // Defined by the specification
+ const MAX_BACKING_FILE_SIZE: u32 = 1023;
+@@ -363,7 +367,9 @@ impl QcowHeader {
+                 return Err(Error::InvalidHeaderExtension);
+             }
+ 
+-            if ext_type == QCOW2_EXT_MAGIC_BACKING_FORMAT {
++            if ext_type == QCOW2_EXT_MAGIC_BACKING_FORMAT
++                || ext_type == QCOW2_EXT_MAGIC_BACKING_FORMAT_CROSVM_LEGACY
++            {
+                 let mut backing_format_bytes = vec![0u8; ext_len as usize];
+                 f.read_exact(&mut backing_format_bytes)
+                     .map_err(Error::ReadingHeader)?;
+@@ -2983,12 +2989,26 @@ mod tests {
+         let read_header = QcowHeader::new(&mut disk_file).expect("Failed to parse header.");
+         assert_eq!(read_header.backing_file_format, Some(crate::ImageType::Raw));
+ 
++        // The type earlier crosvm wrote still reads as the backing format, so the overlays it
++        // made open.
++        disk_file
++            .seek(SeekFrom::Start(V3_BARE_HEADER_SIZE as u64))
++            .unwrap();
++        disk_file.write_all(&[0xe2, 0x79, 0x26, 0x8f]).unwrap();
++        disk_file.seek(SeekFrom::Start(0)).unwrap();
++        let header_with_legacy_ext =
++            QcowHeader::new(&mut disk_file).expect("Failed to parse header.");
++        assert_eq!(
++            header_with_legacy_ext.backing_file_format,
++            Some(crate::ImageType::Raw)
++        );
++
+         // Overwrite the magic bytes with an unrecognized extension type to ensure
+         // QcowHeader::new does not recognize unknown extensions as backing format.
+         disk_file
+             .seek(SeekFrom::Start(V3_BARE_HEADER_SIZE as u64))
+             .unwrap();
+-        disk_file.write_all(&[0xe2, 0x79, 0x26, 0x8f]).unwrap();
++        disk_file.write_all(&[0x12, 0x34, 0x56, 0x78]).unwrap();
+         disk_file.seek(SeekFrom::Start(0)).unwrap();
+         let header_with_unknown_ext =
+             QcowHeader::new(&mut disk_file).expect("Failed to parse header.");
+@@ -3073,6 +3093,51 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn test_legacy_backing_format_extension_opens() {
++        let temp_dir = TempDir::new().expect("failed to create temp dir");
++        let backing_path = temp_dir.path().join("backing.raw");
++        let overlay_path = temp_dir.path().join("overlay.qcow2");
++
++        // A backing file that would be probed as qcow2: it must be opened as the raw image the
++        // overlay names.
++        let mut backing_file = File::create(&backing_path).unwrap();
++        backing_file.write_all(&QCOW_MAGIC.to_be_bytes()).unwrap();
++        backing_file.set_len(1024 * 1024).unwrap();
++        drop(backing_file);
++
++        // An overlay as earlier crosvm wrote it: the backing format extension under its old
++        // type.
++        let header = QcowHeader::create_for_size_and_path(
++            1024 * 1024 * 10,
++            Some((backing_path.to_str().unwrap(), crate::ImageType::Raw)),
++        )
++        .expect("Failed to create header.");
++        let mut overlay_file = File::create(&overlay_path).unwrap();
++        header.write_to(&mut overlay_file).unwrap();
++        overlay_file
++            .seek(SeekFrom::Start(V3_BARE_HEADER_SIZE as u64))
++            .unwrap();
++        overlay_file
++            .write_all(&QCOW2_EXT_MAGIC_BACKING_FORMAT_CROSVM_LEGACY.to_be_bytes())
++            .unwrap();
++        drop(overlay_file);
++
++        let overlay_file = OpenOptions::new()
++            .read(true)
++            .write(true)
++            .open(&overlay_path)
++            .unwrap();
++        let mut params = test_params();
++        params.path = overlay_path.clone();
++        let qcow = QcowFile::from(overlay_file, params);
++        assert!(
++            qcow.is_ok(),
++            "Failed to open an overlay with the legacy backing format type: {:?}",
++            qcow.err()
++        );
++    }
++
+     #[test]
+     fn test_unsupported_backing_format() {
+         // 1. Creation time rejection of AndroidSparse

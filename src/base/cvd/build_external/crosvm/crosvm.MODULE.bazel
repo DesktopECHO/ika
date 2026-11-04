@@ -1,6 +1,6 @@
 # this needs to be at parity with with build_external/crosvm/crosvm.config.toml
 CROSVM_REMOTE = "https://chromium.googlesource.com/crosvm/crosvm"
-CROSVM_REV = "22f6be24c5ef49f99c164bb3bd063ace509fb96a"
+CROSVM_REV = "cc8f3df618349b5e62318b927dcacf2687359c5d"
 MINIGBM_REMOTE = "https://chromium.googlesource.com/chromiumos/platform/minigbm"
 MINIGBM_REV = "a2d42f09d696b04e6ded5ad38596d8554ffd8988"
 
@@ -132,9 +132,11 @@ crosvm_bin.annotation(
     patch_args = ["-p1"],
     patches = [
         "@//build_external/crosvm:PATCH.disk-composite-preserve-spec-fd.patch",
-        # Guest discards on the qcow2 overlay (a factory reset discards all of
-        # userdata) become zero clusters instead of allocated zeroed clusters.
-        "@//build_external/crosvm:PATCH.disk-qcow-zero-clusters.patch",
+        # The overlays crosvm made before upstream a615111b7 mark their backing
+        # format with the extension type 0xe279_268f, not the standard
+        # 0xe279_2aca. Read both, or every overlay kept across the update
+        # fails to open (MissingBackingFileFormat).
+        "@//build_external/crosvm:PATCH.disk-qcow-legacy-backing-format-magic.patch",
     ],
     repositories = ["crosvm_bin"],
 )
@@ -151,10 +153,6 @@ crosvm_bin.annotation(
         # Whether the compositor still holds an imported dma-buf (ika_stream
         # holds the frame the console shows), for the virtio-gpu device.
         "@//build_external/crosvm:PATCH.gpu_display-dmabuf-in-use.patch",
-        # From upstream crosvm f1d0ffe: release_import takes (surface_id,
-        # import_id) everywhere, as the backends implement it, for
-        # PATCH.crosvm-unref-display-imports-devices.patch.
-        "@//build_external/crosvm:PATCH.gpu_display-release-import-order.patch",
     ],
     repositories = ["crosvm_bin"],
 )
@@ -227,12 +225,6 @@ crosvm_bin.annotation(
         # With fixed blob mapping (Venus), map dma-buf blobs that carry
         # Vulkan info directly instead of through a Vulkan import.
         "@//build_external/crosvm:PATCH.crosvm-fixed-blob-mapping-dmabuf-devices.patch",
-        # From upstream crosvm f1d0ffe, without its tests: a resource keeps
-        # its display import per surface and releases them when the guest
-        # frees it. The Wayland display holds 64 imports and none were ever
-        # released, so after 64 scanout buffers every new one fell back to a
-        # copy. Named to sort after the virtio_gpu.rs patches above.
-        "@//build_external/crosvm:PATCH.crosvm-unref-display-imports-devices.patch",
     ],
     repositories = ["crosvm_bin"],
 )
