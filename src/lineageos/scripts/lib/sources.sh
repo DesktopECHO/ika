@@ -1190,15 +1190,45 @@ repair_webview_intermediates() {
   find "$workspace/out/target/product" -path '*/obj/APPS/webview_intermediates' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 }
 
+# The path under vendor/ that vendor/lineage_desktop links to: the Ika
+# repository's overlay, at src/lineageos since the repository's src/ layout.
+vendor_ika_overlay_link() {
+  if [[ -d "$workspace/vendor/ika/src/lineageos" ]]; then
+    printf '%s\n' ika/src/lineageos
+  else
+    printf '%s\n' ika/lineageos
+  fi
+}
+
+# A vendor/lineage_desktop link from before the src/ layout leads to
+# vendor/ika/lineageos, an untracked copy of the overlay beside the
+# repository's own src/lineageos, and Soong finds every product twice
+# ("Product name must be unique"). Moves the link and removes that copy.
+migrate_vendor_ika_overlay_link() {
+  local link="$workspace/vendor/lineage_desktop"
+  local want
+  want="$(vendor_ika_overlay_link)"
+  [[ -L "$link" && "$(readlink "$link")" == ika/lineageos && "$want" == ika/src/lineageos ]] || return 0
+
+  log "moving vendor/lineage_desktop from ika/lineageos to $want"
+  ln -sfn "$want" "$link"
+  if [[ -d "$workspace/vendor/ika/lineageos" \
+        && -z "$(git -C "$workspace/vendor/ika" ls-files -- lineageos | head -n 1)" ]]; then
+    log "removing vendor/ika/lineageos, the untracked overlay copy the old link led to"
+    rm -rf "$workspace/vendor/ika/lineageos"
+  fi
+}
+
 apply_local_overlay() {
   local dest="$workspace/vendor/lineage_desktop"
 
+  migrate_vendor_ika_overlay_link
   if [[ -L "$dest" ]]; then
     dest="$(readlink -f "$dest")"
   elif [[ -d "$workspace/vendor/ika" && ! -e "$dest" ]]; then
-    dest="$workspace/vendor/ika/lineageos"
+    dest="$workspace/vendor/$(vendor_ika_overlay_link)"
     mkdir -p "$workspace/vendor"
-    ln -sfn ika/lineageos "$workspace/vendor/lineage_desktop"
+    ln -sfn "$(vendor_ika_overlay_link)" "$workspace/vendor/lineage_desktop"
   fi
 
   mkdir -p "$dest"
@@ -1232,7 +1262,7 @@ local_overlay_dest_path() {
   if [[ -L "$dest" ]]; then
     readlink -f "$dest"
   elif [[ -d "$workspace/vendor/ika" && ! -e "$dest" ]]; then
-    printf '%s\n' "$workspace/vendor/ika/lineageos"
+    printf '%s\n' "$workspace/vendor/$(vendor_ika_overlay_link)"
   else
     printf '%s\n' "$dest"
   fi
