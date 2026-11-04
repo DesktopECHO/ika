@@ -194,6 +194,9 @@ function arch_build_dependency_packages() {
     libdecor
     libdrm
     libpipewire
+    # The PKGBUILD's makedepends names it too, and makepkg runs without
+    # --syncdeps; on Arch Linux ARM no other package here pulls it in.
+    pipewire
     libsrtp
     libva
     libx11
