@@ -1,0 +1,15 @@
+Patch summary:
+Map androidboot.hardware.guest_renderengine_backend, which the host sets but
+nothing in this tree read, to debug.renderengine.backend, so SurfaceFlinger's
+RenderEngine uses Vulkan where the host asks for it, as upstream intends:
+Venus and guest Lavapipe (skiavkthreaded). Other modes set no value and keep
+the default, SkiaGL.
+
+--- a/shared/config/graphics/init_graphics.vendor.rc
++++ b/shared/config/graphics/init_graphics.vendor.rc
+@@ -15,4 +15,5 @@
+     setprop debug.angle.feature_overrides_enabled ${ro.boot.hardware.angle_feature_overrides_enabled}
+     setprop debug.angle.feature_overrides_disabled ${ro.boot.hardware.angle_feature_overrides_disabled}
+     setprop debug.hwui.renderer ${ro.boot.hardware.guest_hwui_renderer}
++    setprop debug.renderengine.backend ${ro.boot.hardware.guest_renderengine_backend}
+     setprop ro.zygote.disable_gl_preload ${ro.boot.hardware.guest_disable_renderer_preload}

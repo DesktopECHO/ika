@@ -82,6 +82,7 @@ device/google/cuttlefish patches/device-google-cuttlefish-camcorder-profiles.pat
 device/google/cuttlefish patches/device-google-cuttlefish-zram-at-boot.patch
 device/google/cuttlefish patches/device-google-cuttlefish-vulkan-driver-apexes.patch
 device/google/cuttlefish patches/device-google-cuttlefish-game-frame-rate.patch
+device/google/cuttlefish patches/device-google-cuttlefish-renderengine-backend.patch
 device/google/atv patches/device-google-atv-ika-tv-mode.patch
 frameworks/av patches/frameworks-av.patch
 frameworks/native patches/frameworks-native-logspam.patch
