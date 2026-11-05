@@ -65,6 +65,7 @@ hardware/interfaces patches/hardware-interfaces-audio-input-pacing.patch
 hardware/interfaces patches/hardware-interfaces-camera-external-nv12.patch
 libcore patches/libcore-writable-dex.patch
 art patches/art.patch
+art patches/art-cmc-stw-compaction.patch
 device/generic/goldfish patches/device-generic-goldfish.patch
 device/generic/goldfish patches/device-generic-goldfish-sensors-transport-compat.patch
 device/generic/goldfish patches/device-generic-goldfish-hwc3-guest-composer-rgba.patch
