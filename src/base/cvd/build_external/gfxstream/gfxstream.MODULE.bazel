@@ -98,6 +98,11 @@ git_repository(
         # device and ended the VM.
         # IKA_ASTC_DECODE=cpu or gpu overrides the choice on any device.
         "@//build_external/gfxstream:PATCH.gfxstream.astc-cpu-decoding-dozen.patch",
+        # The CPU decoder encodes the texels into BC3 blocks, a quarter of
+        # RGBA8: Steel Nomad Light's 6.1 GB of decoded textures ran a 32 GB
+        # WSL host out of memory, and Windows' GPU watchdog ended the VM.
+        # IKA_ASTC_DECODE=cpu-rgba8 keeps RGBA8 output.
+        "@//build_external/gfxstream:PATCH.gfxstream.astc-cpu-decoding-bc3.patch",
         # Extensions promoted to core (VK_KHR_spirv_1_4, VK_KHR_push_descriptor,
         # ...) are offered only by a device that reports the core version that
         # promoted them: those of Vulkan 1.4 only by a device that reports 1.4.
