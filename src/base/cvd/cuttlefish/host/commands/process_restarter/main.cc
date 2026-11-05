@@ -15,6 +15,7 @@
  */
 
 #include <sys/wait.h>
+#include <unistd.h>
 
 #include <cstdlib>
 #include <optional>
@@ -52,6 +53,21 @@ static bool ShouldRestartProcess(siginfo_t const& info, const Parser& parsed) {
     return true;
   }
   return false;
+}
+
+// A process restarted after it ended without cleaning up, such as crosvm when its GPU device
+// lost the host GPU and exited with the reset code, leaves its control socket behind, and the
+// new process cannot create its own there. Removes the "--socket=" path before a restart.
+static void RemoveStaleControlSocket(const std::vector<std::string>& args) {
+  static constexpr std::string_view kSocketFlag = "--socket=";
+  for (const auto& arg : args) {
+    if (arg.rfind(kSocketFlag, 0) == 0) {
+      const std::string path = arg.substr(kSocketFlag.size());
+      if (unlink(path.c_str()) == 0) {
+        LOG(INFO) << "Removed the stale control socket " << path;
+      }
+    }
+  }
 }
 
 std::string_view ExecutableShortName(std::string_view short_name) {
@@ -102,6 +118,7 @@ Result<int> RunProcessRestarter(std::vector<std::string> args) {
     }
 
     if (ShouldRestartProcess(info, parsed)) {
+      RemoveStaleControlSocket(exec_args);
       continue;
     }
     if (info.si_code == CLD_EXITED) {
