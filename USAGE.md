@@ -96,7 +96,6 @@ Shortcuts, with MOD held:
 | MOD+Up, MOD+Down, MOD+P | Volume up, down, power |
 | MOD+C, MOD+X, MOD+V | Copy, cut, paste through Android's clipboard |
 | MOD+Shift+V | Type the clipboard's text |
-| MOD+R | Rotate |
 | MOD+O, MOD+Shift+O | Turn Android's screen off, on |
 
 Ctrl+drag pinches and rotates, Shift+drag and Ctrl+Shift+drag drag with two

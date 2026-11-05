@@ -143,16 +143,12 @@ is explicitly requested (e.g. `--hwdec=d3d11va`).
 
 ## Orientation
 
-The orientation may be applied at 3 different levels:
- - The [shortcut](shortcuts.md) <kbd>MOD</kbd>+<kbd>r</kbd> requests the
-   device to switch between portrait and landscape (the current running app may
-   refuse, if it does not support the requested orientation).
+The orientation may be applied at 2 different levels:
  - `--capture-orientation` changes the mirroring orientation (the orientation
    of the video sent from the device to the computer). This affects the
    recording.
  - `--orientation` is applied on the client side, and affects display and
-   recording. For the display, it can be changed dynamically using
-   [shortcuts](shortcuts.md).
+   recording.
 
 To capture the video with a specific orientation:
 
