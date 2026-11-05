@@ -9,6 +9,8 @@ invocation and demote to helper invocation, zero-initialized workgroup memory,
 the extensions that were already implemented but not exposed. Devices below
 shader model 6.6 or without wave operations keep reporting 1.2.
 
+Parts of this patch are the work of Cosmo (https://github.com/Cosmo/).
+
 diff --git a/src/compiler/nir/nir_lower_mem_access_bit_sizes.c b/src/compiler/nir/nir_lower_mem_access_bit_sizes.c
 index a29f404b8e7..d62bc5619cb 100644
 --- a/src/compiler/nir/nir_lower_mem_access_bit_sizes.c
