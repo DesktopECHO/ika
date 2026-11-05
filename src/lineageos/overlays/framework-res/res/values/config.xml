@@ -46,4 +46,8 @@
          available. Do not silently enable it when a guest or user is created. -->
     <bool name="config_showUserSwitcherByDefault">false</bool>
     <bool name="config_enableUserSwitcherUponUserCreation">false</bool>
+
+    <!-- Android 17 (f1e1a9ba6e5) skips recreating an activity on a dock or
+         undock for all devices, unless the app has desk-mode resources. -->
+    <bool name="config_skipActivityRelaunchWhenDocking">true</bool>
 </resources>

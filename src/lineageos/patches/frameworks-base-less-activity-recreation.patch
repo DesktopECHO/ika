@@ -1,0 +1,357 @@
+Patch summary:
+Android 17's fewer activity restarts on configuration changes (9dd80009749,
+4909d835bd1, 5efa43fb82f), without its flag and change ID: keyboard, keyboard
+hidden, navigation, touchscreen and color mode changes no longer recreate an
+activity by default (the app gets onConfigurationChanged), unless its manifest
+asks for it in recreateOnConfigChanges or the package has resources qualified
+for that configuration. Ika's console attaches its virtual gamepad while its
+window has focus, which used to restart games that did not declare those
+changes. Adds the hidden Resources#getResourceConfigurations().
+
+diff --git a/core/java/android/content/pm/PackageParser.java b/core/java/android/content/pm/PackageParser.java
+--- a/core/java/android/content/pm/PackageParser.java
++++ b/core/java/android/content/pm/PackageParser.java
+@@ -229,7 +229,9 @@
+      * @hide
+      */
+     private static final int RECREATE_ON_CONFIG_CHANGES_MASK =
+-            ActivityInfo.CONFIG_MCC | ActivityInfo.CONFIG_MNC;
++            ActivityInfo.CONFIG_MCC | ActivityInfo.CONFIG_MNC | ActivityInfo.CONFIG_KEYBOARD
++                    | ActivityInfo.CONFIG_KEYBOARD_HIDDEN | ActivityInfo.CONFIG_NAVIGATION
++                    | ActivityInfo.CONFIG_TOUCHSCREEN | ActivityInfo.CONFIG_COLOR_MODE;
+ 
+     // These are the tags supported by child packages
+     public static final Set<String> CHILD_PACKAGE_TAGS = new ArraySet<>();
+diff --git a/core/java/android/content/res/AssetManager.java b/core/java/android/content/res/AssetManager.java
+--- a/core/java/android/content/res/AssetManager.java
++++ b/core/java/android/content/res/AssetManager.java
+@@ -1577,6 +1577,21 @@
+     /**
+      * @hide
+      */
++    /**
++     * Return a subset of the fields of the resource configurations, including
++     * smallestScreenWidthDp, screenWidthDp, screenHeightDp, screenLayout, uiMode, keyboard,
++     * navigation, touchscreen and colorMode.
++     * Please note that this does not return all resource configurations.
++     *
++     * @hide
++     */
++    Configuration[] getResourceConfigurations() {
++        synchronized (this) {
++            ensureValidLocked();
++            return nativeGetResourceConfigurations(mObject);
++        }
++    }
++
+     Configuration[] getSizeAndUiModeConfigurations() {
+         synchronized (this) {
+             ensureValidLocked();
+@@ -1781,6 +1796,7 @@
+     private static native @Nullable String[] nativeGetLocales(long ptr, boolean excludeSystem);
+     private static native @Nullable Configuration[] nativeGetSizeConfigurations(long ptr);
+     private static native @Nullable Configuration[] nativeGetSizeAndUiModeConfigurations(long ptr);
++    private static native @Nullable Configuration[] nativeGetResourceConfigurations(long ptr);
+     private static native void nativeSetResourceResolutionLoggingEnabled(long ptr, boolean enabled);
+     private static native @Nullable String nativeGetLastResourceResolution(long ptr);
+ 
+diff --git a/core/java/android/content/res/ResourcesImpl.java b/core/java/android/content/res/ResourcesImpl.java
+--- a/core/java/android/content/res/ResourcesImpl.java
++++ b/core/java/android/content/res/ResourcesImpl.java
+@@ -280,6 +280,10 @@
+         return mAssets.getSizeAndUiModeConfigurations();
+     }
+ 
++    Configuration[] getResourceConfigurations() {
++        return mAssets.getResourceConfigurations();
++    }
++
+     CompatibilityInfo getCompatibilityInfo() {
+         return mDisplayAdjustments.getCompatibilityInfo();
+     }
+diff --git a/core/java/android/content/res/Resources.java b/core/java/android/content/res/Resources.java
+--- a/core/java/android/content/res/Resources.java
++++ b/core/java/android/content/res/Resources.java
+@@ -2277,6 +2277,18 @@
+     }
+ 
+     /**
++     * Return a subset of the fields of the resource configurations, including
++     * smallestScreenWidthDp, screenWidthDp, screenHeightDp, screenLayout, uiMode, keyboard,
++     * navigation, touchscreen and colorMode.
++     * Please note that this does not return all resource configurations.
++     *
++     * @hide
++     */
++    public Configuration[] getResourceConfigurations() {
++        return mResourcesImpl.getResourceConfigurations();
++    }
++
++    /**
+      * Return the compatibility mode information for the application.
+      * The returned object should be treated as read-only.
+      *
+diff --git a/core/java/com/android/internal/pm/pkg/component/ParsedActivityUtils.java b/core/java/com/android/internal/pm/pkg/component/ParsedActivityUtils.java
+--- a/core/java/com/android/internal/pm/pkg/component/ParsedActivityUtils.java
++++ b/core/java/com/android/internal/pm/pkg/component/ParsedActivityUtils.java
+@@ -80,8 +80,12 @@
+     /**
+      * Bit mask of all the valid bits that can be set in recreateOnConfigChanges.
+      */
++    // Android 17 9dd80009749: keyboard, navigation, touchscreen and color mode changes no
++    // longer recreate an activity by default; see AppCompatRecreateOnConfigChangePolicy.
+     private static final int RECREATE_ON_CONFIG_CHANGES_MASK =
+-            ActivityInfo.CONFIG_MCC | ActivityInfo.CONFIG_MNC;
++            ActivityInfo.CONFIG_MCC | ActivityInfo.CONFIG_MNC | ActivityInfo.CONFIG_KEYBOARD
++                    | ActivityInfo.CONFIG_KEYBOARD_HIDDEN | ActivityInfo.CONFIG_NAVIGATION
++                    | ActivityInfo.CONFIG_TOUCHSCREEN | ActivityInfo.CONFIG_COLOR_MODE;
+ 
+     @NonNull
+     @VisibleForTesting(visibility = VisibleForTesting.Visibility.PACKAGE)
+diff --git a/core/jni/android_util_AssetManager.cpp b/core/jni/android_util_AssetManager.cpp
+--- a/core/jni/android_util_AssetManager.cpp
++++ b/core/jni/android_util_AssetManager.cpp
+@@ -85,6 +85,10 @@
+   jfieldID mScreenHeightDpOffset;
+   jfieldID mScreenLayoutOffset;
+   jfieldID mUiMode;
++  jfieldID mKeyboard;
++  jfieldID mNavigation;
++  jfieldID mTouchscreen;
++  jfieldID mColorMode;
+ } gConfigurationOffsets;
+ 
+ static struct arraymap_offsets_t {
+@@ -1101,6 +1105,10 @@
+   env->SetIntField(result, gConfigurationOffsets.mScreenHeightDpOffset, config.screenHeightDp);
+   env->SetIntField(result, gConfigurationOffsets.mScreenLayoutOffset, config.screenLayout);
+   env->SetIntField(result, gConfigurationOffsets.mUiMode, config.uiMode);
++  env->SetIntField(result, gConfigurationOffsets.mKeyboard, config.keyboard);
++  env->SetIntField(result, gConfigurationOffsets.mNavigation, config.navigation);
++  env->SetIntField(result, gConfigurationOffsets.mTouchscreen, config.touchscreen);
++  env->SetIntField(result, gConfigurationOffsets.mColorMode, config.colorMode);
+   return result;
+ }
+ 
+@@ -1139,6 +1147,10 @@
+   return GetSizeAndUiModeConfigurations(env, ptr);
+ }
+ 
++static jobjectArray NativeGetResourceConfigurations(JNIEnv* env, jclass /*clazz*/, jlong ptr) {
++  return GetSizeAndUiModeConfigurations(env, ptr);
++}
++
+ static jintArray NativeAttributeResolutionStack(JNIEnv* env, jclass /*clazz*/, jlong ptr,
+                                                 jlong theme_ptr, jint xml_style_res,
+                                                 jint def_style_attr, jint def_style_resid) {
+@@ -1603,6 +1615,8 @@
+          (void*)NativeGetSizeConfigurations},
+         {"nativeGetSizeAndUiModeConfigurations", "(J)[Landroid/content/res/Configuration;",
+          (void*)NativeGetSizeAndUiModeConfigurations},
++        {"nativeGetResourceConfigurations", "(J)[Landroid/content/res/Configuration;",
++         (void*)NativeGetResourceConfigurations},
+ 
+         // Style attribute related methods.
+         {"nativeAttributeResolutionStack", "(JJIII)[I", (void*)NativeAttributeResolutionStack},
+@@ -1678,6 +1692,11 @@
+   gConfigurationOffsets.mScreenLayoutOffset =
+           GetFieldIDOrDie(env, configurationClass, "screenLayout", "I");
+   gConfigurationOffsets.mUiMode = GetFieldIDOrDie(env, configurationClass, "uiMode", "I");
++  gConfigurationOffsets.mKeyboard = GetFieldIDOrDie(env, configurationClass, "keyboard", "I");
++  gConfigurationOffsets.mNavigation = GetFieldIDOrDie(env, configurationClass, "navigation", "I");
++  gConfigurationOffsets.mTouchscreen =
++      GetFieldIDOrDie(env, configurationClass, "touchscreen", "I");
++  gConfigurationOffsets.mColorMode = GetFieldIDOrDie(env, configurationClass, "colorMode", "I");
+ 
+   jclass arrayMapClass = FindClassOrDie(env, "android/util/ArrayMap");
+   gArrayMapOffsets.classObject = MakeGlobalRefOrDie(env, arrayMapClass);
+diff --git a/services/core/java/com/android/server/wm/ActivityRecord.java b/services/core/java/com/android/server/wm/ActivityRecord.java
+--- a/services/core/java/com/android/server/wm/ActivityRecord.java
++++ b/services/core/java/com/android/server/wm/ActivityRecord.java
+@@ -8701,6 +8701,11 @@
+         configChanged |= mAppCompatController.getDisplayCompatModePolicy()
+                 .getDisplayCompatModeConfigMask();
+ 
++        // If the app has resources for a specific config, relaunch the activity
++        // (Android 17 5efa43fb82f).
++        configChanged &= (~mAppCompatController.getRecreateOnConfigChangePolicy()
++                .getRecreateConfigMask());
++
+         return (changes & (~configChanged)) != 0;
+     }
+ 
+diff --git a/services/core/java/com/android/server/wm/AppCompatController.java b/services/core/java/com/android/server/wm/AppCompatController.java
+--- a/services/core/java/com/android/server/wm/AppCompatController.java
++++ b/services/core/java/com/android/server/wm/AppCompatController.java
+@@ -51,6 +51,8 @@
+     private final AppCompatSandboxingPolicy mSandboxingPolicy;
+     @NonNull
+     private final AppCompatDisplayCompatModePolicy mDisplayCompatModePolicy;
++    @NonNull
++    private final AppCompatRecreateOnConfigChangePolicy mRecreateOnConfigChangePolicy;
+ 
+     AppCompatController(@NonNull WindowManagerService wmService,
+                         @NonNull ActivityRecord activityRecord) {
+@@ -76,6 +78,7 @@
+                 mAppCompatOverrides);
+         mSandboxingPolicy = new AppCompatSandboxingPolicy(activityRecord);
+         mDisplayCompatModePolicy = new AppCompatDisplayCompatModePolicy(activityRecord);
++        mRecreateOnConfigChangePolicy = new AppCompatRecreateOnConfigChangePolicy(activityRecord);
+     }
+ 
+     @NonNull
+@@ -169,6 +172,11 @@
+     }
+ 
+     @NonNull
++    AppCompatRecreateOnConfigChangePolicy getRecreateOnConfigChangePolicy() {
++        return mRecreateOnConfigChangePolicy;
++    }
++
++    @NonNull
+     AppCompatDisplayOverrides getDisplayOverrides() {
+         return mAppCompatOverrides.getDisplayOverrides();
+     }
+@@ -179,6 +187,7 @@
+         getSizeCompatModePolicy().dump(pw, prefix);
+         getDisplayCompatModePolicy().dump(pw, prefix);
+         getSafeRegionPolicy().dump(pw, prefix);
++        getRecreateOnConfigChangePolicy().dump(pw, prefix);
+     }
+ 
+     void dumpDebug(@NonNull ProtoOutputStream proto) {
+diff --git a/services/core/java/com/android/server/wm/AppCompatRecreateOnConfigChangePolicy.java b/services/core/java/com/android/server/wm/AppCompatRecreateOnConfigChangePolicy.java
+new file mode 100644
+--- /dev/null
++++ b/services/core/java/com/android/server/wm/AppCompatRecreateOnConfigChangePolicy.java
+@@ -0,0 +1,130 @@
++/*
++ * Copyright (C) 2025 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.wm;
++
++import static android.content.pm.ActivityInfo.CONFIG_COLOR_MODE;
++import static android.content.pm.ActivityInfo.CONFIG_KEYBOARD;
++import static android.content.pm.ActivityInfo.CONFIG_KEYBOARD_HIDDEN;
++import static android.content.pm.ActivityInfo.CONFIG_NAVIGATION;
++import static android.content.pm.ActivityInfo.CONFIG_TOUCHSCREEN;
++
++import android.annotation.NonNull;
++import android.content.pm.PackageManager;
++import android.content.res.Configuration;
++import android.content.res.Resources;
++import android.os.UserHandle;
++import android.util.Slog;
++
++import com.android.internal.annotations.VisibleForTesting;
++
++import java.io.PrintWriter;
++
++/**
++ * Policy to determine whether the activity should be recreated on configuration changes, based on
++ * whether they contain resources for that specific configuration.
++ *
++ * Backported from Android 17 (5efa43fb82f), without its flag and change ID.
++ */
++public class AppCompatRecreateOnConfigChangePolicy {
++    private static final String TAG = "AppCompatRecreateOnConfigChangePolicy";
++
++    @NonNull
++    final ActivityRecord mActivityRecord;
++
++    /**
++     * Bitmask to store whether the package has resources for a specific configuration type.
++     * If a configuration change occurs that is covered by this mask, recreate the activity.
++     */
++    private int mRecreateConfigMask;
++
++    /**
++     * Indicates whether the configurations of the package resources has been checked.
++     */
++    private boolean mResourcesChecked;
++
++    AppCompatRecreateOnConfigChangePolicy(@NonNull ActivityRecord activityRecord) {
++        mActivityRecord = activityRecord;
++    }
++
++    /**
++     * Check whether the package has resources for each specific type of configuration.
++     *
++     * @return A bit mask of configuration change kinds that should cause the activity to be
++     * recreated by the system to ensure the activity uses the correct resources.
++     **/
++    @VisibleForTesting
++    int getRecreateConfigMask() {
++        if (mResourcesChecked) {
++            return mRecreateConfigMask;
++        }
++
++        checkConfigResources();
++        return mRecreateConfigMask;
++    }
++
++    /**
++     * Check whether the package has resources for {@link CONFIG_KEYBOARD},
++     * {@link CONFIG_KEYBOARD_HIDDEN}, {@link CONFIG_NAVIGATION}, {@link CONFIG_TOUCHSCREEN} and
++     * {@link CONFIG_COLOR_MODE}.
++     */
++    private void checkConfigResources() {
++        mResourcesChecked = true;
++
++        Resources packageResources = null;
++        try {
++            packageResources = mActivityRecord.mAtmService.mContext
++                    .createPackageContextAsUser(mActivityRecord.packageName,
++                            /*flags=*/ 0, UserHandle.of(mActivityRecord.mUserId)).getResources();
++        } catch (PackageManager.NameNotFoundException e) {
++            Slog.w(TAG, "Failed to find the package: " + mActivityRecord.packageName, e);
++        }
++
++        if (packageResources == null) {
++            return;
++        }
++
++        final Configuration[] configs = packageResources.getResourceConfigurations();
++
++        if (configs == null) {
++            return;
++        }
++
++        for (Configuration config : configs) {
++            if (config.keyboard != Configuration.KEYBOARD_UNDEFINED) {
++                mRecreateConfigMask |= CONFIG_KEYBOARD;
++            }
++            if (config.keyboardHidden != Configuration.KEYBOARDHIDDEN_UNDEFINED) {
++                mRecreateConfigMask |= CONFIG_KEYBOARD_HIDDEN;
++            }
++            if (config.navigation != Configuration.NAVIGATION_UNDEFINED) {
++                mRecreateConfigMask |= CONFIG_NAVIGATION;
++            }
++            if (config.touchscreen != Configuration.TOUCHSCREEN_UNDEFINED) {
++                mRecreateConfigMask |= CONFIG_TOUCHSCREEN;
++            }
++            if (config.colorMode != Configuration.COLOR_MODE_UNDEFINED) {
++                mRecreateConfigMask |= CONFIG_COLOR_MODE;
++            }
++        }
++    }
++
++    void dump(@NonNull PrintWriter pw, @NonNull String prefix) {
++        if (mResourcesChecked) {
++            pw.println(prefix + "mRecreateConfigMask=" + mRecreateConfigMask);
++        }
++    }
++}
