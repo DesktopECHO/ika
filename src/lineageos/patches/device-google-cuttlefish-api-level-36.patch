@@ -1,0 +1,24 @@
+Patch summary:
+Ship at API level 36. Ika's platform is Android 16 under this Android 17
+device tree, which set 37, so the guest reported ro.product.first_api_level
+37 on SDK 36.
+
+diff --git a/shared/device.mk b/shared/device.mk
+--- a/shared/device.mk
++++ b/shared/device.mk
+@@ -205,11 +205,13 @@
+ # Common manifest for all targets
+ #
+ 
++# Ika's platform is Android 16 (API 36) under this Android 17 device tree, so it
++# ships at 36: a first API level above the platform's SDK made no sense.
+ ifeq ($(RELEASE_AIDL_USE_UNFROZEN),true)
+-PRODUCT_SHIPPING_API_LEVEL := 37
++PRODUCT_SHIPPING_API_LEVEL := 36
+ LOCAL_DEVICE_FCM_MANIFEST_FILE ?= device/google/cuttlefish/shared/config/manifest.xml
+ else
+-PRODUCT_SHIPPING_API_LEVEL := 37
++PRODUCT_SHIPPING_API_LEVEL := 36
+ LOCAL_DEVICE_FCM_MANIFEST_FILE ?= device/google/cuttlefish/shared/config/previous_manifest.xml
+ endif
+ DEVICE_MANIFEST_FILE += $(LOCAL_DEVICE_FCM_MANIFEST_FILE)
