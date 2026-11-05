@@ -110,5 +110,8 @@ git_repository(
         # A host GPU reset ends the guest application whose VkDevice was lost,
         # not the VM; losing gfxstream's own device restarts the VM.
         "@//build_external/gfxstream:PATCH.gfxstream.survive-guest-device-loss.patch",
+        # A driver that cannot export dma-bufs (lavapipe under WSL2, no
+        # /dev/udmabuf) gets exportable allocations with opaque handles only.
+        "@//build_external/gfxstream:PATCH.gfxstream.dma-buf-export-fallback.patch",
     ],
 )
