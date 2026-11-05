@@ -1,0 +1,43 @@
+Patch summary:
+When allocating exportable memory with dma-buf export among the handle
+types fails, allocate again with the opaque handle type alone. Mesa's
+lavapipe exports dma-bufs through /dev/udmabuf, which WSL2's kernel does
+not have, so every exportable allocation failed there
+(VK_ERROR_OUT_OF_DEVICE_MEMORY, logged at debug level only) and gfxstream
+could not start on lavapipe: "Failed to find memory type for ColorBuffers".
+Opaque file descriptors are what gfxstream shares ColorBuffers with.
+diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operations.cpp
+index 8925f1cf8..ee3a2765c 100644
+--- a/host/vulkan/vk_common_operations.cpp
++++ b/host/vulkan/vk_common_operations.cpp
+@@ -13,6 +13,7 @@
+ // limitations under the License.
+ #include "vk_common_operations.h"
+ 
++#include <atomic>
+ #include <inttypes.h>
+ #include <stdio.h>
+ #include <string.h>
+@@ -2663,6 +2664,22 @@ bool VkEmulation::allocExternalMemory(VulkanDispatch* vk, VkEmulation::ExternalM
+     while (!memoryAllocated) {
+         VkResult allocRes = vk->vkAllocateMemory(mDevice, &allocInfo, nullptr, &info->memory);
+ 
++        // A driver that exports dma-bufs through a kernel exporter it lacks fails the whole
++        // allocation when dma-buf export is requested: lavapipe under WSL2, which has no
++        // /dev/udmabuf. Allocate again with the opaque handle type alone.
++        if (allocRes != VK_SUCCESS &&
++            (exportAi.handleTypes & VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) &&
++            exportAi.handleTypes != VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
++            static std::atomic<bool> reported{false};
++            if (!reported.exchange(true)) {
++                GFXSTREAM_WARNING("Allocating exportable memory with dma-buf export failed (%s); "
++                                  "exporting opaque handles only.",
++                                  string_VkResult(allocRes));
++            }
++            exportAi.handleTypes &= ~VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
++            allocRes = vk->vkAllocateMemory(mDevice, &allocInfo, nullptr, &info->memory);
++        }
++
+         if (allocRes != VK_SUCCESS) {
+             GFXSTREAM_DEBUG("allocExternalMemory: failed in vkAllocateMemory: %s",
+                             string_VkResult(allocRes));
