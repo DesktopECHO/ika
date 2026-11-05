@@ -9051,6 +9051,13 @@ open_app_window() {
     if read_scrcpy_window_state "${SCRCPY_WINDOW_STATE_FILE}" \
         saved_width saved_height saved_fullscreen; then
       window_size="${saved_width}x${saved_height}"
+      # The window comes back as it closed: at its size, and fullscreen when it
+      # was. That size is the windowed one, which leaving fullscreen returns to.
+      # A size given with --size asks for a window, so it skips this.
+      if [[ "${saved_fullscreen}" == "true" ]]; then
+        fullscreen_mode="true"
+        log "${package} was fullscreen when its window closed; opening it fullscreen"
+      fi
     else
       window_size="$(default_app_window_size)"
       window_size_is_default="true"

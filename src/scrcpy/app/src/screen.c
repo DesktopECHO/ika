@@ -1159,6 +1159,14 @@ sc_screen_show_initial_window(struct sc_screen *screen) {
 
     screen->window_shown = true;
     sc_sdl_show_window(screen->window);
+    if (screen->req.fullscreen) {
+        // SDL asks for fullscreen once the window is shown, and the compositor
+        // answers with events that are only read when the event loop runs,
+        // after the first frame: the window was drawn first as a window, with
+        // its titlebar, and the display size an app starts at was the windowed
+        // one. Wait for the answer here.
+        SDL_SyncWindow(screen->window);
+    }
     if (screen->pixel_mode) {
         sc_screen_flex_on_window_size(screen);
     }
