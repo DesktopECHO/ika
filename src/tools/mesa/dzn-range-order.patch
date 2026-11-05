@@ -1,0 +1,58 @@
+dzn: Order a descriptor table's ranges by descending register
+
+A root signature descriptor table listed its ranges in binding order,
+with the SRV alias of each storage image after the image's UAV range.
+AMD's D3D12 user-mode driver for WSL2 (amdxc64.so, driver
+32.0.32015.7029, Radeon 780M) crashes with a segmentation fault in
+ID3D12Device::CreatePipelineState when a shader's UAV array occupies one
+range (u1-u8) and a later range of the same table starts at the register
+where it ends (u9). 3DMark Steel Nomad Light's FidelityFX Single Pass
+Downsampler compute shader binds its eight mip levels that way, so the
+test took the whole Android VM down on its first frame; the same
+pipeline state is created without trouble when the u9 range comes
+before the u1-u8 range, or when both are one range.
+
+Every range carries its own OffsetInDescriptorsFromTableStart, so the
+order of the entries does not change what the table maps. Sort each
+table's ranges by type, register space and descending register before
+the root signature is serialized.
+
+diff --git a/src/microsoft/vulkan/dzn_descriptor_set.c b/src/microsoft/vulkan/dzn_descriptor_set.c
+index a75b72c..7803c86 100644
+--- a/src/microsoft/vulkan/dzn_descriptor_set.c
++++ b/src/microsoft/vulkan/dzn_descriptor_set.c
+@@ -637,6 +637,19 @@ dzn_pipeline_layout_hash_stages(struct dzn_pipeline_layout *layout,
+    }
+ }
+ 
++static int
++dzn_range_order(const void *a, const void *b)
++{
++   const D3D12_DESCRIPTOR_RANGE1 *ra = a, *rb = b;
++   if (ra->RangeType != rb->RangeType)
++      return (int)ra->RangeType - (int)rb->RangeType;
++   if (ra->RegisterSpace != rb->RegisterSpace)
++      return ra->RegisterSpace < rb->RegisterSpace ? -1 : 1;
++   if (ra->BaseShaderRegister != rb->BaseShaderRegister)
++      return ra->BaseShaderRegister > rb->BaseShaderRegister ? -1 : 1;
++   return 0;
++}
++
+ static VkResult
+ dzn_pipeline_layout_create(struct dzn_device *device,
+                            const VkPipelineLayoutCreateInfo *pCreateInfo,
+@@ -803,6 +816,14 @@ dzn_pipeline_layout_create(struct dzn_device *device,
+             }
+ 
+             if (root_param->DescriptorTable.NumDescriptorRanges) {
++               /* Every range carries its table offset, so their order is free:
++                * sort them by type, space and descending register. AMD's WSL
++                * DXIL compiler crashes on a shader whose UAV array range (u1-u8)
++                * is followed in the table by a range starting where it ends
++                * (u9); with the ranges the other way round it compiles. */
++               qsort((void *)root_param->DescriptorTable.pDescriptorRanges,
++                     root_param->DescriptorTable.NumDescriptorRanges,
++                     sizeof(D3D12_DESCRIPTOR_RANGE1), dzn_range_order);
+                layout->root.type[layout->root.param_count++] = (D3D12_DESCRIPTOR_HEAP_TYPE)type;
+                root_dwords++;
+             }
