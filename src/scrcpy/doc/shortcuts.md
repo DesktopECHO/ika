@@ -25,10 +25,6 @@ _<kbd>[Super]</kbd> is typically the <kbd>Windows</kbd> or <kbd>Cmd</kbd> key._
  | ------------------------------------------- |:-----------------------------
  | Quit                                        | <kbd>MOD</kbd>+<kbd>q</kbd>
  | Switch fullscreen mode                      | <kbd>MOD</kbd>+<kbd>f</kbd> \| <kbd>F11</kbd>
- | Rotate display left                         | <kbd>MOD</kbd>+<kbd>←</kbd> _(left)_
- | Rotate display right                        | <kbd>MOD</kbd>+<kbd>→</kbd> _(right)_
- | Flip display horizontally                   | <kbd>MOD</kbd>+<kbd>Shift</kbd>+<kbd>←</kbd> _(left)_ \| <kbd>MOD</kbd>+<kbd>Shift</kbd>+<kbd>→</kbd> _(right)_
- | Flip display vertically                     | <kbd>MOD</kbd>+<kbd>Shift</kbd>+<kbd>↑</kbd> _(up)_ \| <kbd>MOD</kbd>+<kbd>Shift</kbd>+<kbd>↓</kbd> _(down)_
  | Pause or re-pause display                   | <kbd>MOD</kbd>+<kbd>z</kbd>
  | Unpause display                             | <kbd>MOD</kbd>+<kbd>Shift</kbd>+<kbd>z</kbd>
  | Reset video capture/encoding                | <kbd>MOD</kbd>+<kbd>Shift</kbd>+<kbd>r</kbd>
@@ -44,7 +40,6 @@ _<kbd>[Super]</kbd> is typically the <kbd>Windows</kbd> or <kbd>Cmd</kbd> key._
  | Power on                                    | _Right-click²_
  | Turn device screen off (keep mirroring)     | <kbd>MOD</kbd>+<kbd>o</kbd>
  | Turn device screen on                       | <kbd>MOD</kbd>+<kbd>Shift</kbd>+<kbd>o</kbd>
- | Rotate device screen                        | <kbd>MOD</kbd>+<kbd>r</kbd>
  | Expand notification panel                   | <kbd>MOD</kbd>+<kbd>n</kbd> \| _5th-click³_
  | Expand settings panel                       | <kbd>MOD</kbd>+<kbd>n</kbd>+<kbd>n</kbd> \| _Double-5th-click³_
  | Collapse panels                             | <kbd>MOD</kbd>+<kbd>Shift</kbd>+<kbd>n</kbd>
