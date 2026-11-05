@@ -869,7 +869,16 @@ Result<GuestHwuiRenderer> SelectGuestHwuiRenderer(
     return GuestHwuiRenderer::kSkiaVk;
   }
 
-  if (gpu_mode == GpuMode::GuestLavapipe || gpu_mode == GpuMode::Venus) {
+  // HWUI's Vulkan backend crashes in the guest lavapipe's JIT-compiled code
+  // (SystemUI's RenderThread dies on every frame and the screen stays
+  // black), while HWUI on GL through ANGLE over the same lavapipe works.
+  if (gpu_mode == GpuMode::GuestLavapipe) {
+    VLOG(0) << "Selecting SkiaGL as the HWUI renderer for "
+            << GpuModeString(gpu_mode) << " GPU mode.";
+    return GuestHwuiRenderer::kSkiaGl;
+  }
+
+  if (gpu_mode == GpuMode::Venus) {
     VLOG(0) << "Selecting SkiaVk as the HWUI renderer for "
             << GpuModeString(gpu_mode) << " GPU mode.";
     return GuestHwuiRenderer::kSkiaVk;
