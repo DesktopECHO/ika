@@ -116,6 +116,7 @@ frameworks/base patches/frameworks-base-wmshell-a17-desk-fixes.patch
 frameworks/base patches/frameworks-base-less-activity-recreation.patch
 frameworks/opt/tv/tvsystem patches/frameworks-opt-tv-tvsystem-ika-tv-mode.patch
 system/core patches/system-core.patch
+system/memory/lmkd patches/system-memory-lmkd-high-watermark.patch
 system/sepolicy patches/system-sepolicy.patch
 system/sepolicy patches/system-sepolicy-checkfc-arm64-getopt.patch
 packages/modules/Permission patches/packages-modules-Permission-default-home-role.patch
