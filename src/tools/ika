@@ -3249,12 +3249,13 @@ vulkan_summary_has_only_software_devices() {
 # vk_require_astc, which make drivers that can emulate them (RADV) offer them,
 # so vulkaninfo runs with the same settings. Haswell's hasvk cannot. awk reads
 # the whole report: leaving early would end vulkaninfo with SIGPIPE, which
-# pipefail takes for a failure.
+# pipefail takes for a failure. with_timeout is a shell function, which env
+# cannot run: it goes first, and runs env.
 primary_vulkan_device_has_venus_etc2() {
   command -v vulkaninfo >/dev/null 2>&1 || return 1
 
-  env -u DISPLAY -u WAYLAND_DISPLAY vk_require_etc2=true vk_require_astc=true \
-    with_timeout 30 vulkaninfo 2>/dev/null | awk '
+  with_timeout 30 env -u DISPLAY -u WAYLAND_DISPLAY vk_require_etc2=true vk_require_astc=true \
+    vulkaninfo 2>/dev/null | awk '
       /^GPU0:/ { in_gpu = 1; next }
       /^GPU[0-9]+:/ { in_gpu = 0 }
       in_gpu && !seen && $1 == "textureCompressionETC2" { seen = 1; found = ($3 == "true") }
@@ -3262,16 +3263,27 @@ primary_vulkan_device_has_venus_etc2() {
     '
 }
 
+# Whether this is a WSL2 distribution: Microsoft's kernel names itself in its
+# release string (5.15.167.4-microsoft-standard-WSL2).
+host_is_wsl2() {
+  grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null
+}
+
 # Whether gpu_mode=auto runs Venus here: the primary Vulkan device is a GPU
 # with Vulkan 1.3 or newer and ETC2 textures as Venus's guest sees them, which
 # Android expects of a Vulkan device and Chromium requires (gfxstream emulates
-# ETC2, Venus does not). Prints why not when it does not suit.
+# ETC2, Venus does not), and this is not WSL2. Prints why not when it does not
+# suit.
 host_suits_venus() {
   local primary_device
   local version
   local major
   local minor
 
+  if host_is_wsl2; then
+    printf '%s\n' "this is WSL2, whose GPU memory cannot be exported as dma-bufs"
+    return 1
+  fi
   primary_device="$(primary_vulkan_device_summary || true)"
   if [[ -z "${primary_device}" ]]; then
     printf '%s\n' "no Vulkan device found"
