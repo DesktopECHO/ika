@@ -26,3 +26,4 @@ dzn-wait-poll.patch
 dzn-adapter-select.patch
 dzn-wsl-write-back.patch
 dzn-range-order.patch
+dzn-internal-heaps.patch
