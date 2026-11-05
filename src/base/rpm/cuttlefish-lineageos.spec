@@ -89,6 +89,9 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Thu Nov 05 2026 DesktopECHO <build@desktopecho.com> - 261105-1
+- Update Ika LineageOS package metadata to 261105-1.
+
 * Sun Nov 01 2026 DesktopECHO <build@desktopecho.com> - 261101-1
 - Update Mesa to 26.3.0-rc3, and ship Venus and lavapipe as guest Vulkan
   driver APEXes beside gfxstream and SwiftShader.

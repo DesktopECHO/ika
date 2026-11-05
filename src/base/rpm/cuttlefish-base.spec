@@ -654,6 +654,9 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/lib/cuttlefish-metrics
 
 %changelog
+* Thu Nov 05 2026 DesktopECHO <build@desktopecho.com> - 261105-1
+- Update Ika base package metadata to 261105-1.
+
 * Sun Nov 01 2026 DesktopECHO <build@desktopecho.com> - 261101-1
 - Send the other games to the background when a game opens, and bring one back
   where it left off when it opens again (background_games in ika.ini).
