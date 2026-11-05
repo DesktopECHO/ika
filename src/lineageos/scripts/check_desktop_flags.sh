@@ -6,7 +6,8 @@ set -euo pipefail
 # selected release config's inheritance chain.
 #
 # Output classifies failures so callers can fix them appropriately:
-#   undefined: <pkg>/<flag>    — flag is not declared in this AOSP rev. Action:
+#   undefined: <pkg>/<flag>    — flag is not declared in this AOSP rev (and the
+#                                 entry is not marked removed-in-a17). Action:
 #                                 remove from desktop_required_aconfig_flags.txt
 #                                 (or pick the renamed flag). Regression class
 #                                 from `respect_orientation_request_for_freeform_dialogs`.
@@ -111,10 +112,22 @@ done
 
 undefined=()
 disabled=()
-while IFS= read -r entry; do
-  [[ -z "$entry" || "$entry" == \#* ]] && continue
-  if [[ -z "${declared_flags[$entry]:-}" ]]; then
-    undefined+=("$entry")
+while IFS= read -r line; do
+  [[ -z "$line" || "$line" == \#* ]] && continue
+  # "<pkg>/<flag>[|<pkg>/<flag>...] [removed-in-a17]": alternatives are renamed
+  # forms of one flag, and the first declared one is checked; the marker accepts
+  # a flag that Android 17 no longer declares.
+  read -r spec marker _ <<<"$line"
+  entry=""
+  IFS='|' read -r -a alternatives <<<"$spec"
+  for alternative in "${alternatives[@]}"; do
+    if [[ -n "${declared_flags[$alternative]:-}" ]]; then
+      entry="$alternative"
+      break
+    fi
+  done
+  if [[ -z "$entry" ]]; then
+    [[ "${marker:-}" == "removed-in-a17" ]] || undefined+=("$spec")
     continue
   fi
   package="${entry%%/*}"
