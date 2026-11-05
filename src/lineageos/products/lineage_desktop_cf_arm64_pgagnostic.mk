@@ -27,7 +27,7 @@ PRODUCT_PRODUCT_PROPERTIES += \
 # userfaultfd. CMC is pinned on so that dexpreopt and odrefresh agree with the
 # runtime instead of recompiling the boot image on every boot.
 PRODUCT_ENABLE_UFFD_GC := true
-PRODUCT_SYSTEM_PROPERTIES += \
+PRODUCT_PRODUCT_PROPERTIES += \
     ro.dalvik.vm.force_cmc_stw_compaction=true
 
 PRODUCT_NAME := lineage_desktop_cf_arm64_pgagnostic
