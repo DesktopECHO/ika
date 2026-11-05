@@ -1,0 +1,15 @@
+Patch summary:
+zram at 150% of RAM, as Android 17's desktop devices use (was 75%).
+
+diff --git a/shared/config/fstab.in b/shared/config/fstab.in
+--- a/shared/config/fstab.in
++++ b/shared/config/fstab.in
+@@ -27,7 +27,7 @@
+ system_dlkm /system_dlkm erofs ro wait,logical,first_stage_mount,slotselect,avb=vbmeta_system_dlkm,avb_keys=/avb
+ system_dlkm /system_dlkm ext4 noatime,ro,errors=panic wait,logical,first_stage_mount,slotselect,avb=vbmeta_system_dlkm,avb_keys=/avb
+ # ZRAM, SD-Card and virtiofs shares
+-/dev/block/zram0 none swap defaults zramsize=75%
++/dev/block/zram0 none swap defaults zramsize=150%
+ /dev/block/vdc1 /sdcard vfat defaults recoveryonly
+ /devices/*/block/vdc auto auto defaults voldmanaged=sdcard1:auto,encryptable=userdata
+ shared /mnt/vendor/shared virtiofs nosuid,nodev,noatime nofail
