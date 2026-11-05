@@ -171,6 +171,24 @@ grep -q "Opened Desktop/TV in its own window" "${T}/open.out" \
 [[ "$(open_mode_window "900x700")" == *" --window-width=900 --window-height=700 "* ]] \
   || fail "--size did not win for Desktop/TV"
 
+# An app window comes back as it closed: the window state its scrcpy saved sets
+# the size and, when the window was fullscreen, the fullscreen flag, the third
+# argument of __app_supervisor. A window that closed windowed, a size given with
+# --size and an app never opened leave it false.
+app_window_state="${IKA_APPS_DIR}/${IKA_MODE_PACKAGE}/window-state"
+mkdir -p "$(dirname "${app_window_state}")"
+supervisor_fullscreen() { sed -n 's/.* __app_supervisor [^ ]* [^ ]* \([a-z]*\) -- .*/\1/p' <<<"$1"; }
+assert_equal "false" "$(supervisor_fullscreen "${mode_window}")" "an app window never opened"
+printf 'version=1\nwidth=640\nheight=700\nfullscreen=true\n' >"${app_window_state}"
+saved_window="$(open_mode_window "")"
+assert_equal "true" "$(supervisor_fullscreen "${saved_window}")" "an app window that closed fullscreen"
+[[ "${saved_window}" == *" --window-width=640 --window-height=700 "* ]] \
+  || fail "the fullscreen window lost the windowed size it had: ${saved_window}"
+assert_equal "false" "$(supervisor_fullscreen "$(open_mode_window "900x700")")" "a size given with --size"
+printf 'version=1\nwidth=640\nheight=700\nfullscreen=false\n' >"${app_window_state}"
+assert_equal "false" "$(supervisor_fullscreen "$(open_mode_window "")")" "an app window that closed windowed"
+rm -f "${app_window_state}"
+
 # A mode switch brings each console back as it was last used in its mode:
 # the console that opens after Android restarted in the other mode takes
 # --fullscreen from that mode's own saved window state.
