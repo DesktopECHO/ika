@@ -1,0 +1,23 @@
+# Memory and boot I/O settings from Android 17's desktop devices
+# (device/google/cuttlefish shared/desktop/init.common.rc).
+
+on init
+    # Prefer zram over evicting the page cache: refaulting a file page is the
+    # latency-sensitive path, while swapping to zram happens in the background.
+    write /proc/sys/vm/swappiness 150
+
+# Boot prefetch: record which files boot reads, and read them ahead on the
+# following boots. /system/bin/prefetch defines the services.
+on early-init && property:ro.prefetch_boot.enabled=true
+    start prefetch_replay
+
+on init && property:ro.prefetch_boot.enabled=true
+    start prefetch_record
+
+# Start apex prefetching once the /apex directory is mounted.
+on post-fs-data && property:ro.prefetch_boot.enabled=true
+    start prefetch_apex_replay
+    start prefetch_apex_record
+
+on property:sys.boot_completed=1 && property:ro.prefetch_boot.enabled=true
+    setprop prefetch_boot.record_stop 1

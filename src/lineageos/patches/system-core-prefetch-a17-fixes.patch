@@ -1,0 +1,167 @@
+Patch summary:
+Android 17's boot prefetch fixes: no record or replay on the first boot after
+an update or rollback (7c26e64), recovery when the fingerprint file is missing
+(4093179), and a separate build fingerprint for APEX prefetching (43f6a48).
+
+diff --git a/init/libprefetch/prefetch/prefetch.rc b/init/libprefetch/prefetch/prefetch.rc
+--- a/init/libprefetch/prefetch/prefetch.rc
++++ b/init/libprefetch/prefetch/prefetch.rc
+@@ -36,13 +36,13 @@
+     disabled
+     oneshot
+ 
+-service prefetch_apex_record /system/bin/prefetch record --duration ${ro.prefetch_boot.duration_s:-0} --include-mount-prefix /apex --tracing-instance prefetch_apex
++service prefetch_apex_record /system/bin/prefetch record --duration ${ro.prefetch_boot.duration_s:-0} --include-mount-prefix /apex --tracing-instance prefetch_apex --build-fingerprint-path /metadata/prefetch/apex_build_fingerprint
+     user root
+     group root system
+     disabled
+     oneshot
+ 
+-service prefetch_apex_replay /system/bin/prefetch replay --io-depth ${ro.prefetch_boot.io_depth:-2} --max-fds ${ro.prefetch_boot.max_fds:-1024} --path /metadata/prefetch/prefetch_apex.pack
++service prefetch_apex_replay /system/bin/prefetch replay --io-depth ${ro.prefetch_boot.io_depth:-2} --max-fds ${ro.prefetch_boot.max_fds:-1024} --path /metadata/prefetch/prefetch_apex.pack --build-fingerprint-path /metadata/prefetch/apex_build_fingerprint
+     user root
+     group root system
+     disabled
+diff --git a/init/libprefetch/prefetch/src/arch/android.rs b/init/libprefetch/prefetch/src/arch/android.rs
+--- a/init/libprefetch/prefetch/src/arch/android.rs
++++ b/init/libprefetch/prefetch/src/arch/android.rs
+@@ -1,5 +1,4 @@
+ use crate::Error;
+-use crate::RecordArgs;
+ use log::warn;
+ use std::fs::File;
+ use std::fs::OpenOptions;
+@@ -27,6 +26,35 @@
+     Ok(())
+ }
+ 
++fn ensure_metadata_files(ready_path: &Path, fingerprint_path: &Path) -> Result<bool, Error> {
++    let mut metadata_files_exist = true;
++
++    // If metadata is wiped, need to create ready file and fingerprint file.
++    if !ready_path.exists() {
++        File::create(ready_path)
++            .map_err(|_| Error::Custom { error: "File Creation failed".to_string() })?;
++        metadata_files_exist = false;
++    }
++
++    if !fingerprint_path.exists() {
++        write_build_fingerprint(fingerprint_path)?;
++        metadata_files_exist = false;
++    }
++    Ok(metadata_files_exist)
++}
++
++fn is_saved_fingerprint_current(fingerprint_path: &Path) -> Result<bool, Error> {
++    // Read the fingerprint from the file, or return empty string if the file does not exist.
++    let saved_fingerprint = std::fs::read_to_string(fingerprint_path).unwrap_or_default();
++
++    let current_device_fingerprint = rustutils::system_properties::read("ro.build.fingerprint")
++        .map_err(|e| Error::Custom {
++            error: format!("Failed to read ro.build.fingerprint: {e}"),
++        })?;
++
++    Ok(current_device_fingerprint.is_some_and(|fp| fp == saved_fingerprint.trim()))
++}
++
+ /// Wait for record to stop
+ pub fn wait_for_record_stop() {
+     wait_for_property_true(PREFETCH_RECORD_PROPERTY_STOP, None).unwrap_or_else(|e| {
+@@ -55,11 +83,20 @@
+     Ok(current_device_fingerprint.is_some_and(|fp| fp == saved_fingerprint.trim()))
+ }
+ 
+-/// Checks if we can perform record phase.
++/// Checks if we can perform record phase or if we should prepare device to record in the next boot.
++///
+ /// Ensure that following conditions hold:
+ ///   - File specified in ready_path exists. otherwise, create a new file and return false.
+-///   - can_perform_replay is false.
+-pub fn ensure_record_is_ready(
++///   - fingerprint contents are different from the current device fingerprint.
++///   - pack file does not exist.
++///
++/// If pack file exists but the fingerprint is different, it means we are in a new version
++/// first boot (either OTA update or rollback) so we should not record in this boot, but
++/// instead prepare the device to record from the next boot. So we delete both pack and
++/// fingerprint files and create a new fingerprint, then return false.
++///
++/// Android 17 7c26e64 and 4093179.
++pub fn can_perform_record(
+     ready_path: &Path,
+     pack_path: &Path,
+     fingerprint_path: &Path,
+@@ -68,28 +105,36 @@
+         return Ok(false);
+     }
+ 
+-    if !ready_path.exists() {
+-        File::create(ready_path)
+-            .map_err(|_| Error::Custom { error: "File Creation failed".to_string() })?;
+-
++    if !ensure_metadata_files(ready_path, fingerprint_path)? {
+         return Ok(false);
+     }
+ 
+-    let can_replay = can_perform_replay(pack_path, fingerprint_path)?;
+-    Ok(!can_replay)
++    if is_saved_fingerprint_current(fingerprint_path)? {
++        // Not a new version and pack file already exists, do nothing.
++        if pack_path.exists() {
++            Ok(false)
++        // It's a second reboot after an update, or the pack file went missing, so we should record
++        } else {
++            Ok(true)
++        }
++    } else {
++        // It is a first boot of a new update or rollback, ensure pack file is deleted.
++        if pack_path.exists() {
++            std::fs::remove_file(pack_path)
++                .map_err(|_| Error::Custom { error: "Failed to remove pack file".to_string() })?;
++        }
++        // Update fingerprint value so we can issue a record in the next reboot.
++        write_build_fingerprint(fingerprint_path)?;
++        Ok(false)
++    }
+ }
+ 
+ /// Write build finger print to associate prefetch pack file
+-pub fn write_build_fingerprint(args: &RecordArgs) -> Result<(), Error> {
+-    let mut build_fingerprint_file = OpenOptions::new()
+-        .write(true)
+-        .create(true)
+-        .truncate(true)
+-        .open(&args.build_fingerprint_path)
+-        .map_err(|source| Error::Create {
+-            source,
+-            path: args.build_fingerprint_path.to_str().unwrap().to_owned(),
+-        })?;
++pub fn write_build_fingerprint(fingerprint_path: &Path) -> Result<(), Error> {
++    let mut build_fingerprint_file =
++        OpenOptions::new().write(true).create(true).truncate(true).open(fingerprint_path).map_err(
++            |source| Error::Create { source, path: fingerprint_path.to_str().unwrap().to_owned() },
++        )?;
+ 
+     let device_build_fingerprint =
+         rustutils::system_properties::read("ro.build.fingerprint").unwrap_or_default();
+diff --git a/init/libprefetch/prefetch/src/lib.rs b/init/libprefetch/prefetch/src/lib.rs
+--- a/init/libprefetch/prefetch/src/lib.rs
++++ b/init/libprefetch/prefetch/src/lib.rs
+@@ -58,7 +58,7 @@
+ /// Records prefetch data for the given configuration
+ pub fn record(args: &RecordArgs) -> Result<(), Error> {
+     #[cfg(target_os = "android")]
+-    if !ensure_record_is_ready(
++    if !can_perform_record(
+         &args.get_ready_path(),
+         &args.get_pack_path(),
+         &args.build_fingerprint_path,
+@@ -123,7 +123,7 @@
+ 
+     // Write build-finger-print file
+     #[cfg(target_os = "android")]
+-    write_build_fingerprint(args)?;
++    write_build_fingerprint(&args.build_fingerprint_path)?;
+ 
+     Ok(())
+ }
