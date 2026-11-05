@@ -276,18 +276,6 @@ clipboard_paste(struct sc_input_manager *im) {
 }
 
 static void
-rotate_device(struct sc_input_manager *im) {
-    assert(im->controller && !im->camera);
-
-    struct sc_control_msg msg;
-    msg.type = SC_CONTROL_MSG_TYPE_ROTATE_DEVICE;
-
-    if (!sc_controller_push_msg(im->controller, &msg)) {
-        LOGW("Could not request device rotation");
-    }
-}
-
-static void
 open_hard_keyboard_settings(struct sc_input_manager *im) {
     assert(im->controller && !im->camera);
 
@@ -346,15 +334,6 @@ camera_zoom_out(struct sc_input_manager *im) {
     if (!sc_controller_push_msg(im->controller, &msg)) {
         LOGW("Could not request camera zoom out");
     }
-}
-
-static void
-apply_orientation_transform(struct sc_input_manager *im,
-                            enum sc_orientation transform) {
-    struct sc_screen *screen = im->screen;
-    enum sc_orientation new_orientation =
-        sc_orientation_apply(screen->orientation, transform);
-    sc_screen_set_orientation(screen, new_orientation);
 }
 
 static void
@@ -493,43 +472,6 @@ sc_input_manager_process_key(struct sc_input_manager *im,
                     sc_screen_set_paused(im->screen, !shift);
                 }
                 return;
-            case SDLK_DOWN:
-                // Only capture if shift is set
-                if (shift) {
-                    if (video && !repeat && down) {
-                        apply_orientation_transform(im,
-                                                    SC_ORIENTATION_FLIP_180);
-                    }
-                    return;
-                }
-                break;
-            case SDLK_UP:
-                // Only capture if shift is set
-                if (shift) {
-                    if (video && !repeat && down) {
-                        apply_orientation_transform(im, SC_ORIENTATION_FLIP_180);
-                    }
-                    return;
-                }
-                break;
-            case SDLK_LEFT:
-                if (video && !repeat && down) {
-                    if (shift) {
-                        apply_orientation_transform(im, SC_ORIENTATION_FLIP_0);
-                    } else {
-                        apply_orientation_transform(im, SC_ORIENTATION_270);
-                    }
-                }
-                return;
-            case SDLK_RIGHT:
-                if (video && !repeat && down) {
-                    if (shift) {
-                        apply_orientation_transform(im, SC_ORIENTATION_FLIP_0);
-                    } else {
-                        apply_orientation_transform(im, SC_ORIENTATION_90);
-                    }
-                }
-                return;
             case SDLK_F:
                 if (video && !shift && !repeat && down) {
                     sc_screen_toggle_fullscreen(im->screen);
@@ -654,11 +596,6 @@ sc_input_manager_process_key(struct sc_input_manager *im,
                         } else {
                             expand_settings_panel(im);
                         }
-                    }
-                    return;
-                case SDLK_R:
-                    if (!repeat && !shift && down && !paused) {
-                        rotate_device(im);
                     }
                     return;
                 case SDLK_K:

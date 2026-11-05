@@ -1174,22 +1174,6 @@ static const struct sc_shortcut shortcuts[] = {
         .text = "Switch fullscreen mode",
     },
     {
-        .shortcuts = { "MOD+Left" },
-        .text = "Rotate display left",
-    },
-    {
-        .shortcuts = { "MOD+Right" },
-        .text = "Rotate display right",
-    },
-    {
-        .shortcuts = { "MOD+Shift+Left", "MOD+Shift+Right" },
-        .text = "Flip display horizontally",
-    },
-    {
-        .shortcuts = { "MOD+Shift+Up", "MOD+Shift+Down" },
-        .text = "Flip display vertically",
-    },
-    {
         .shortcuts = { "MOD+z" },
         .text = "Pause or re-pause display",
     },
@@ -1252,10 +1236,6 @@ static const struct sc_shortcut shortcuts[] = {
     {
         .shortcuts = { "MOD+Shift+o" },
         .text = "Turn device screen on",
-    },
-    {
-        .shortcuts = { "MOD+r" },
-        .text = "Rotate device screen",
     },
     {
         .shortcuts = { "MOD+n", "5th-click" },
