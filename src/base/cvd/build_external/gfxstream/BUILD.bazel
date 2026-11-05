@@ -33,6 +33,4 @@ exports_files([
     "PATCH.gfxstream.astc-linear-only-emulation.patch",
     "PATCH.gfxstream.compressed-image-no-dedicated-memory.patch",
     "PATCH.gfxstream.promoted-core-extensions.patch",
-    "PATCH.gfxstream.astc-cpu-decoding-bc3.patch",
-    "PATCH.gfxstream.survive-guest-device-loss.patch",
 ])
