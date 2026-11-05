@@ -1,0 +1,85 @@
+dzn: Use write-back CPU pages for host-visible memory on WSL2
+
+dzn-uma-write-back made host-visible memory and the command buffers'
+upload buffers write-back on UMA adapters. WSL2's GPU paravirtualization
+maps write-combined memory uncached on a discrete adapter too: on an RTX
+4080 Laptop GPU the host-visible coherent memory type wrote at 750 MB/s
+and was read at 245 MB/s, against 8,700 and 22,600 MB/s for the
+host-cached type that Dozen also offers, and reading a frame that the GPU
+had copied into it took 678 ms, 0.74 ms from the cached type. Every
+Dozen build that is not for Windows runs on WSL2.
+
+Give the host-visible types and the upload buffers write-back pages on
+every adapter when not building for Windows, as the host-cached type
+already has. On the RTX 4080 the host-visible type now writes at 8,710 and
+reads at 22,630 MB/s, vkCmdFillBuffer's upload buffer path ran in 7.4
+instead of 17.1 us, and nothing changed on an Intel UHD Graphics, where
+the memory was write-back already.
+
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index 00e77af..4dc1f82 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -1892,11 +1892,11 @@ dzn_cmd_buffer_alloc_internal_buf(struct dzn_cmd_buffer *cmdbuf,
+    }
+ 
+    D3D12_HEAP_PROPERTIES hprops = dzn_ID3D12Device4_GetCustomHeapProperties(device->dev, 0, heap_type);
+-   /* On UMA, upload buffers are write-back like the host-visible memory
+-    * types: see deduce_heap_properties_from_memory(). */
++   /* Upload buffers are write-back like the host-visible memory types: see
++    * deduce_heap_properties_from_memory(). */
+    struct dzn_physical_device *pdev =
+       container_of(device->vk.physical, struct dzn_physical_device, vk);
+-   if (bucket == DZN_INTERNAL_BUF_UPLOAD && pdev->architecture.UMA) {
++   if (bucket == DZN_INTERNAL_BUF_UPLOAD && dzn_host_memory_write_back(pdev)) {
+       hprops.Type = D3D12_HEAP_TYPE_CUSTOM;
+       hprops.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+       hprops.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index c75e838..8855034 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -2821,12 +2821,14 @@ deduce_heap_properties_from_memory(struct dzn_physical_device *pdevice,
+       ((mem_type->propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) &&
+        !pdevice->architecture.UMA) ?
+       D3D12_MEMORY_POOL_L1 : D3D12_MEMORY_POOL_L0;
+-   /* Host-visible memory is write-back on UMA, not only cache-coherent UMA:
+-    * WSL2's GPU paravirtualization maps write-combined memory uncached, and
+-    * writing it ran 34 times slower (383 against 13049 MB/s on a Radeon 780M,
+-    * which does not report CacheCoherentUMA). */
++   /* Host-visible memory is write-back on UMA, not only cache-coherent UMA,
++    * and on WSL2 on every adapter: WSL2's GPU paravirtualization maps
++    * write-combined memory uncached, and writing it ran 34 times slower (383
++    * against 13049 MB/s on a Radeon 780M, which does not report
++    * CacheCoherentUMA), and 11 times slower on a discrete RTX 4080 (750
++    * against 8700 MB/s), where reading it ran at 245 against 21700 MB/s. */
+    if ((mem_type->propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) ||
+-       ((mem_type->propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && pdevice->architecture.UMA)) {
++       ((mem_type->propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && dzn_host_memory_write_back(pdevice))) {
+       properties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+    } else if (mem_type->propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+       properties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE;
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index a26c8a4..555a649 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -1414,6 +1414,19 @@ enum dzn_debug_flags {
+    DZN_DEBUG_NO_DISCARD = 1 << 19,
+ };
+ 
++/* Whether host-visible memory and upload buffers use write-back CPU pages.
++ * WSL2's GPU paravirtualization maps write-combined memory uncached; an
++ * adapter that is not UMA gets the same treatment there as one that is. */
++static inline bool
++dzn_host_memory_write_back(const struct dzn_physical_device *pdev)
++{
++#ifdef _WIN32
++   return pdev->architecture.UMA;
++#else
++   return true;
++#endif
++}
++
+ struct dzn_instance {
+    struct vk_instance vk;
+ 

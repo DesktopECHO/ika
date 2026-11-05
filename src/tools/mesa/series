@@ -22,3 +22,6 @@ dzn-pso-disk-cache.patch
 dzn-fan-sizing.patch
 dzn-fan-restart-addr.patch
 dzn-fan-no-index.patch
+dzn-wait-poll.patch
+dzn-adapter-select.patch
+dzn-wsl-write-back.patch
