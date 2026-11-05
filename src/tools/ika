@@ -3074,6 +3074,168 @@ append_arm64_kernel_page_args() {
   esac
 }
 
+# Prints the GPU Ika renders with, from a vulkaninfo summary, as tab-separated
+# fields: "vendor:device" in MESA_VK_DEVICE_SELECT's hex form, its name, its
+# type, its driver ID and how many other hardware GPUs rank below it. A
+# discrete GPU goes before an integrated one, which goes before a virtual or
+# other one, whatever their Vulkan versions; among equals the first listed. A
+# software device (llvmpipe, Lavapipe, SwiftShader, Microsoft's WARP) never
+# counts. With a driver ID, only that driver's devices count; with a
+# "vendor:device" too, prints that device instead (any spelling Mesa's device
+# selection takes: 0x prefixes, leading zeros, a trailing "!"). Fails when
+# there is none.
+vulkan_summary_preferred_gpu() {
+  local summary="$1"
+  local driver_filter="${2:-}"
+  local want="${3:-}"
+
+  awk -v driver_filter="${driver_filter}" -v want="${want}" '
+    function hex_id(value) {
+      value = tolower(value)
+      sub(/^0x/, "", value)
+      sub(/^0+/, "", value)
+      return value == "" ? "0" : value
+    }
+    function field(value) {
+      return value == "" ? "-" : value
+    }
+    function finish_device(    rank, key) {
+      if (!in_device) {
+        return
+      }
+      in_device = 0
+      if (driver_filter != "" && driver != driver_filter) {
+        return
+      }
+      key = hex_id(vendor) ":" hex_id(id)
+      if (want != "") {
+        if (!found && key == want_key) {
+          found = 1
+          best_line = key "\t" field(name) "\t" field(type) "\t" field(driver)
+        }
+        return
+      }
+      if (software || type == "PHYSICAL_DEVICE_TYPE_CPU" || hex_id(vendor) == "1414") {
+        return
+      }
+      rank = 1
+      if (type == "PHYSICAL_DEVICE_TYPE_DISCRETE_GPU") {
+        rank = 3
+      } else if (type == "PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU") {
+        rank = 2
+      }
+      hardware++
+      if (rank > best_rank) {
+        best_rank = rank
+        best_line = key "\t" field(name) "\t" field(type) "\t" field(driver)
+      }
+      ranks[hardware] = rank
+    }
+    BEGIN {
+      if (want != "") {
+        sub(/!$/, "", want)
+        split(want, parts, ":")
+        want_key = hex_id(parts[1]) ":" hex_id(parts[2])
+      }
+    }
+    /^GPU[0-9]+:/ {
+      finish_device()
+      in_device = 1
+      software = 0
+      vendor = id = type = driver = name = ""
+      next
+    }
+    in_device && $1 == "vendorID" { vendor = $3 }
+    in_device && $1 == "deviceID" { id = $3 }
+    in_device && $1 == "deviceType" { type = $3 }
+    in_device && $1 == "driverID" { driver = $3 }
+    in_device && $1 == "deviceName" {
+      name = $0
+      sub(/^[^=]*=[[:space:]]*/, "", name)
+      sub(/[[:space:]]+$/, "", name)
+    }
+    in_device && tolower($0) ~ /(llvmpipe|lavapipe|swiftshader|software rasterizer|software device)/ {
+      software = 1
+    }
+    END {
+      finish_device()
+      if (best_line == "") {
+        exit 1
+      }
+      below = 0
+      for (i = 1; i <= hardware; i++) {
+        if (ranks[i] < best_rank) {
+          below++
+        }
+      }
+      if (want != "") {
+        print best_line
+      } else {
+        print best_line "\t" below
+      }
+    }
+  ' <<<"${summary}"
+}
+
+# The PCI slot ("0000:03:00.0") of the display controller with the given
+# "vendor:device" (hex, as vulkan_summary_preferred_gpu prints it).
+pci_slot_of_gpu() {
+  local want_vendor="0x${1%%:*}"
+  local want_device="0x${1#*:}"
+  local dev
+  local class
+  local vendor
+  local device
+
+  for dev in /sys/bus/pci/devices/*; do
+    read -r class < "${dev}/class" 2>/dev/null || continue
+    [[ "${class}" == 0x03* ]] || continue
+    read -r vendor < "${dev}/vendor" 2>/dev/null || continue
+    read -r device < "${dev}/device" 2>/dev/null || continue
+    if (( vendor == want_vendor && device == want_device )); then
+      printf '%s\n' "${dev##*/}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# On a host with a discrete GPU beside an integrated one, Ika renders on the
+# discrete GPU, as setup_wsl_gpu_env does on WSL2: Mesa's device selection
+# layer lists the GPU that drives the display first, the integrated one on
+# most laptops, and gfxstream (getSelectedGpuIndex) can rank an integrated
+# GPU first for a newer Vulkan version. MESA_VK_DEVICE_SELECT=<vendor>:<device>!
+# hides every other Vulkan device from gfxstream, Venus and the probes that
+# choose the GPU mode. DRI_PRIME names the GPU's PCI slot for Mesa's OpenGL
+# (the console, gpu_mode=gfxstream) where Mesa drives it: under NVIDIA's own
+# driver it would leave Mesa's OpenGL without a driver. Runs before the first
+# vulkaninfo probe of the GPU mode selection. A MESA_VK_DEVICE_SELECT or
+# DRI_PRIME the user set keeps all of it off, as does one exported by the ika
+# that ran this one.
+setup_discrete_gpu_env() {
+  local summary
+  local gpu
+  local device
+  local type
+  local driver
+  local below
+  local slot
+
+  [[ ! -e /dev/dxg ]] || return 0
+  [[ -z "${MESA_VK_DEVICE_SELECT:-}" && -z "${DRI_PRIME:-}" ]] || return 0
+  summary="$(probe_vulkaninfo_summary)" || return 0
+  gpu="$(vulkan_summary_preferred_gpu "${summary}")" || return 0
+  IFS=$'\t' read -r device _ type driver below <<<"${gpu}"
+  [[ "${type}" == "PHYSICAL_DEVICE_TYPE_DISCRETE_GPU" && "${below}" -gt 0 ]] || return 0
+
+  export MESA_VK_DEVICE_SELECT="${device}!"
+  if [[ "${driver}" == DRIVER_ID_MESA_* ]] && slot="$(pci_slot_of_gpu "${device}")"; then
+    slot="${slot//:/_}"
+    export DRI_PRIME="pci-${slot//./_}"
+  fi
+  log_start_note "discrete GPU: $(cut -f2 <<<"${gpu}"), MESA_VK_DEVICE_SELECT=${MESA_VK_DEVICE_SELECT}${DRI_PRIME:+, DRI_PRIME=${DRI_PRIME}}"
+}
+
 # WSL2 reaches the host GPU only through Direct3D 12 (/dev/dxg), which Mesa's
 # Dozen driver offers as Vulkan: 1.3 in Ika's build on a GPU with shader model
 # 6.6 and wave operations, 1.2 on others, such as Kaby Lake's Iris Plus 650.
@@ -3081,17 +3243,24 @@ append_arm64_kernel_page_args() {
 # VK_DRIVER_FILES loads Ika's own Dozen build, with Ika's Lavapipe for the
 # instance extensions gfxstream needs and Dozen does not list;
 # MESA_VK_DEVICE_SELECT hides every device but the Dozen GPU, which gfxstream
-# would otherwise rank below Lavapipe; IKA_DZN_FIX turns on the
-# VK_LAYER_IKA_dzn_fix layer, which works around Dozen's gaps; and the
+# would otherwise rank below Lavapipe: the discrete GPU where there is one
+# (vulkan_summary_preferred_gpu), and MESA_D3D12_DEFAULT_ADAPTER_NAME gives
+# Mesa's d3d12 OpenGL driver the same one, as it picks an integrated GPU
+# first; IKA_DZN_FIX turns on the VK_LAYER_IKA_dzn_fix layer, which works
+# around Dozen's gaps; and the
 # libd3d12.so shim first in LD_LIBRARY_PATH makes every Vulkan instance share
 # one D3D12 device, as WSL allows only a few per process and does not give
 # back a released one's address space. Runs before the first vulkaninfo
-# probe, so GPU mode selection sees what crosvm will. Keeps a VK_DRIVER_FILES
-# or MESA_VK_DEVICE_SELECT the user set; IKA_SYSTEM_DOZEN=1 uses the
-# distribution's Dozen instead of Ika's; IKA_WSL_GPU_FIX=0 turns all of it off.
+# probe, so GPU mode selection sees what crosvm will. Keeps a VK_DRIVER_FILES,
+# MESA_VK_DEVICE_SELECT or MESA_D3D12_DEFAULT_ADAPTER_NAME the user set (the
+# OpenGL driver then follows their MESA_VK_DEVICE_SELECT); IKA_SYSTEM_DOZEN=1
+# uses the distribution's Dozen instead of Ika's; IKA_WSL_GPU_FIX=0 turns all
+# of it off.
 setup_wsl_gpu_env() {
   local summary
+  local gpu
   local device
+  local adapter
   local dozen_icd="${PACKAGED_WSL_GPU_DIR}/dozen/dzn_icd.json"
   local lavapipe_icd="${PACKAGED_CVD_HOST_OUT}/bin/vk_lavapipe_icd.json"
   local driver_files=""
@@ -3110,28 +3279,29 @@ setup_wsl_gpu_env() {
     summary="$(probe_vulkaninfo_summary)" || return 0
   fi
 
-  # The first Dozen device that is not WARP, Microsoft's software renderer
-  # (vendor 0x1414), as "vendor:device" in MESA_VK_DEVICE_SELECT's hex form.
-  device="$(awk '
-    function finish_device() {
-      if (in_device && !found && driver == "DRIVER_ID_MESA_DOZEN" && vendor != "1414") {
-        found = vendor ":" id
-      }
-    }
-    /^GPU[0-9]+:/ { finish_device(); in_device = 1; vendor = id = driver = ""; next }
-    in_device && $1 == "vendorID" { vendor = tolower($3); sub(/^0x/, "", vendor) }
-    in_device && $1 == "deviceID" { id = tolower($3); sub(/^0x/, "", id) }
-    in_device && $1 == "driverID" { driver = $3 }
-    END { finish_device(); if (found) print found }
-  ' <<<"${summary}")"
-  [[ -n "${device}" ]] || return 0
+  # The Dozen GPU to render with, as "vendor:device" in MESA_VK_DEVICE_SELECT's
+  # hex form: a discrete one before an integrated one, never WARP,
+  # Microsoft's software renderer.
+  gpu="$(vulkan_summary_preferred_gpu "${summary}" DRIVER_ID_MESA_DOZEN)" || return 0
+  device="${gpu%%$'\t'*}"
 
   [[ -z "${driver_files}" ]] || export VK_DRIVER_FILES="${driver_files}"
   export MESA_VK_DEVICE_SELECT="${MESA_VK_DEVICE_SELECT:-${device}!}"
+  # Dozen names a device "Microsoft Direct3D12 (<adapter>)"; the d3d12 driver
+  # takes the adapter whose description contains the name given.
+  if [[ -z "${MESA_D3D12_DEFAULT_ADAPTER_NAME:-}" ]]; then
+    gpu="$(vulkan_summary_preferred_gpu "${summary}" DRIVER_ID_MESA_DOZEN \
+             "${MESA_VK_DEVICE_SELECT%!}")" || gpu=""
+    adapter="$(cut -f2 <<<"${gpu}")"
+    adapter="${adapter#Microsoft Direct3D12 (}"
+    adapter="${adapter%)}"
+    [[ -z "${adapter}" || "${adapter}" == "-" ]] \
+      || export MESA_D3D12_DEFAULT_ADAPTER_NAME="${adapter}"
+  fi
   export IKA_DZN_FIX=1
   export LD_LIBRARY_PATH="${PACKAGED_WSL_GPU_DIR}/d3d12${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
   export IKA_WSL_GPU_ENV=1
-  log_start_note "WSL2: GPU through ${dozen_name}, MESA_VK_DEVICE_SELECT=${MESA_VK_DEVICE_SELECT}"
+  log_start_note "WSL2: GPU through ${dozen_name}, MESA_VK_DEVICE_SELECT=${MESA_VK_DEVICE_SELECT}${MESA_D3D12_DEFAULT_ADAPTER_NAME:+, MESA_D3D12_DEFAULT_ADAPTER_NAME=${MESA_D3D12_DEFAULT_ADAPTER_NAME}}"
 }
 
 VULKANINFO_SUMMARY=""
@@ -11933,6 +12103,7 @@ main() {
 
   ika_ini_warn_unknown
   setup_wsl_gpu_env
+  setup_discrete_gpu_env
 
   case "${command}" in
     __launch-in-vcpu-scope)
