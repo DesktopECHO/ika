@@ -1,0 +1,78 @@
+dzn: Make only the adapter MESA_VK_DEVICE_SELECT names
+
+Every Vulkan instance made a physical device for every D3D12 adapter, and
+making one queries all that the adapter's D3D12 driver reports and wakes the
+adapter. Ika's gfxstream makes an instance for each Android process that
+draws, with MESA_VK_DEVICE_SELECT=<vendor>:<device>! naming the one GPU it
+uses, and the device-select layer hides the others only after they were made.
+On a laptop with an RTX 4080 and an Intel UHD Graphics, with both idle,
+vkEnumeratePhysicalDevices took 860 ms, 360 ms once only the named adapter
+was made.
+
+When MESA_VK_DEVICE_SELECT is a vendor ID, a device ID and a "!", make only
+the adapter with those IDs. If no adapter has them, make all of them and
+leave the choice to the layer.
+
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index ec12902..c75e838 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -1918,13 +1918,42 @@ dzn_instance_add_physical_device(struct vk_instance *instance,
+        !desc->is_warp)
+       return VK_SUCCESS;
+ 
++   if (dzn_instance->adapter_filter &&
++       (desc->vendor_id != dzn_instance->adapter_filter_vendor ||
++        desc->device_id != dzn_instance->adapter_filter_device))
++      return VK_SUCCESS;
++
+    return dzn_physical_device_create(instance, adapter, desc);
+ }
+ 
+ static VkResult
+ dzn_enumerate_physical_devices(struct vk_instance *instance)
+ {
++   struct dzn_instance *dzn_instance = container_of(instance, struct dzn_instance, vk);
++
++   /* Making a physical device queries everything the adapter's D3D12 driver
++    * reports, and wakes the adapter. When MESA_VK_DEVICE_SELECT names an
++    * adapter by vendor and device ID with the "!" that hides the others, make
++    * only that one: the device-select layer would hide the others afterwards.
++    * If no adapter has the ID, make them all and leave the choice to the
++    * layer. */
++   const char *select = os_get_option("MESA_VK_DEVICE_SELECT");
++   unsigned vendor, device;
++   char bang = 0;
++   dzn_instance->adapter_filter =
++      select && sscanf(select, "%x:%x%c", &vendor, &device, &bang) == 3 &&
++      bang == '!';
++   if (dzn_instance->adapter_filter) {
++      dzn_instance->adapter_filter_vendor = vendor;
++      dzn_instance->adapter_filter_device = device;
++   }
++
+    VkResult result = dzn_enumerate_physical_devices_dxcore(instance);
++   if (dzn_instance->adapter_filter && result == VK_SUCCESS &&
++       list_is_empty(&instance->physical_devices.list)) {
++      dzn_instance->adapter_filter = false;
++      result = dzn_enumerate_physical_devices_dxcore(instance);
++   }
+ #ifdef _WIN32
+    if (result != VK_SUCCESS)
+       result = dzn_enumerate_physical_devices_dxgi(instance);
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index 0fa4dc5..a26c8a4 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -1427,6 +1427,11 @@ struct dzn_instance {
+    uint32_t max_shader_model;
+    uint32_t max_d3d12_options;
+    const char *hide_exts;
++   /* MESA_VK_DEVICE_SELECT=<vendor>:<device>!, while only that adapter is
++    * enumerated */
++   bool adapter_filter;
++   uint32_t adapter_filter_vendor;
++   uint32_t adapter_filter_device;
+ 
+    struct vk_sync_binary_type sync_binary_type;
+ 

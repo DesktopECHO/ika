@@ -1,0 +1,152 @@
+dzn: Poll a fence for a while before blocking on it
+
+Under WSL2 a wait that blocks in dzn_sync_wait() is an RPC to the Windows
+host: SetEventOnMultipleFenceCompletion becomes the graphics kernel's
+wait-for-synchronization-object ioctl (dxgkio 0x3a), and with GPU work in
+flight it took 6 to 15 ms to return (8 ms on average), long after the
+fence's completed value, which is readable without a kernel call, showed
+the work done: 0.15 ms after an empty submission on an RTX 4080 Laptop GPU
+and on an Intel UHD Graphics, where vkQueueWaitIdle took 6.6 ms. While
+Chrome drew at 10 frames a second in Android 16, crosvm made 70 such calls
+a second. The calls also hold up the other graphics-kernel calls of the
+process, which took 1-2 ms each instead of 0.1 ms.
+
+Poll the completed values before creating the event and blocking: yield for
+the first 300 us, then sleep 50 us between polls, for up to 50 ms. A wait on
+longer work still blocks, after that much polling. DZN_SPIN_US sets the 50
+ms in microseconds (0 turns the poll off), DZN_SPIN_YIELD_US the 300 us and
+DZN_SPIN_SLEEP_US the 50 us. Native Windows does not poll.
+
+An empty submission followed by a wait took a median 0.15 ms instead of 6.2
+ms (90th percentile 0.24 instead of 9.6 ms). In Android 16 on the RTX 4080
+under WSL2, with two runs each: scrolling the Settings app's list had a
+median frame of 35 ms instead of 115 ms and 33% of frames janky instead of
+99%, 538 frames rendered in the run instead of 223; a WebGL page drew 17.5
+to 19 frames a second instead of 9.5; the Settings app started in 2.78 s
+instead of 3.38 s. The host used 0.17 core more while scrolling. A poll of
+1 ms gave a median frame of 99 ms, one of 20 ms 36 ms, and 200 ms nothing
+more than 50 ms.
+
+diff --git a/src/microsoft/vulkan/dzn_sync.c b/src/microsoft/vulkan/dzn_sync.c
+index 78938ca..f91d0c7 100644
+--- a/src/microsoft/vulkan/dzn_sync.c
++++ b/src/microsoft/vulkan/dzn_sync.c
+@@ -23,6 +23,12 @@
+ 
+ #include "dzn_private.h"
+ 
++#ifndef _WIN32
++#include <sched.h>
++#endif
++
++#include "util/u_debug.h"
++
+ #include "vk_alloc.h"
+ #include "vk_debug_report.h"
+ #include "vk_util.h"
+@@ -130,6 +136,53 @@ dzn_sync_move(struct vk_device *device,
+    return VK_SUCCESS;
+ }
+ 
++/* Whether the fences already satisfy a wait. */
++static bool
++dzn_sync_waits_satisfied(const struct vk_sync_wait *waits, uint32_t wait_count,
++                         bool any)
++{
++   for (uint32_t i = 0; i < wait_count; i++) {
++      struct dzn_sync *sync = container_of(waits[i].sync, struct dzn_sync, vk);
++      uint64_t value = (sync->vk.flags & VK_SYNC_IS_TIMELINE) ? waits[i].wait_value : 1;
++      bool done = ID3D12Fence_GetCompletedValue(sync->fence) >= value;
++      if (any && done)
++         return true;
++      if (!any && !done)
++         return false;
++   }
++   return !any;
++}
++
++#ifndef _WIN32
++/* How long dzn_sync_wait() polls before it blocks, in nanoseconds, and how it
++ * polls: yielding for the first DZN_SPIN_YIELD_US, then sleeping
++ * DZN_SPIN_SLEEP_US between polls. Under WSL2 a blocked wait is an RPC to the
++ * Windows host (the graphics kernel's wait-for-synchronization-object ioctl)
++ * that took 6 to 10 ms to return, 8 ms on average, with GPU work in flight,
++ * while the fence's completed value showed the completion within 0.15 ms of
++ * it. DZN_SPIN_US sets the time, 0 never polls; native Windows does not
++ * poll. */
++struct dzn_sync_spin {
++   uint64_t total_ns;
++   uint64_t yield_ns;
++   uint64_t sleep_ns;
++};
++
++static const struct dzn_sync_spin *
++dzn_sync_spin_config(void)
++{
++   static struct dzn_sync_spin cfg;
++   static bool init;
++   if (!init) {
++      cfg.total_ns = (uint64_t)debug_get_num_option("DZN_SPIN_US", 50000) * 1000;
++      cfg.yield_ns = (uint64_t)debug_get_num_option("DZN_SPIN_YIELD_US", 300) * 1000;
++      cfg.sleep_ns = (uint64_t)debug_get_num_option("DZN_SPIN_SLEEP_US", 50) * 1000;
++      init = true;
++   }
++   return &cfg;
++}
++#endif
++
+ static VkResult
+ dzn_sync_wait(struct vk_device *device,
+               uint32_t wait_count,
+@@ -143,25 +196,36 @@ dzn_sync_wait(struct vk_device *device,
+     * value is not: answer a wait the fences already satisfy, or a poll they
+     * do not, without one. */
+    bool any = wait_flags & VK_SYNC_WAIT_ANY;
+-   bool satisfied = !any;
+-   for (uint32_t i = 0; i < wait_count; i++) {
+-      struct dzn_sync *sync = container_of(waits[i].sync, struct dzn_sync, vk);
+-      uint64_t value = (sync->vk.flags & VK_SYNC_IS_TIMELINE) ? waits[i].wait_value : 1;
+-      bool done = ID3D12Fence_GetCompletedValue(sync->fence) >= value;
+-      if (any && done) {
+-         satisfied = true;
+-         break;
+-      }
+-      if (!any && !done) {
+-         satisfied = false;
+-         break;
+-      }
+-   }
+-   if (satisfied)
++   if (dzn_sync_waits_satisfied(waits, wait_count, any))
+       return VK_SUCCESS;
+    if (abs_timeout_ns != OS_TIMEOUT_INFINITE && abs_timeout_ns <= os_time_get_nano())
+       return VK_TIMEOUT;
+ 
++#ifndef _WIN32
++   /* A wait that blocks in the kernel returns long after the fence completed
++    * (see dzn_sync_spin_config()), so poll the completed values for a while
++    * first. */
++   const struct dzn_sync_spin *spin = dzn_sync_spin_config();
++   if (spin->total_ns) {
++      uint64_t start = os_time_get_nano();
++      uint64_t now = start;
++      uint64_t spin_end = start + spin->total_ns;
++      if (abs_timeout_ns != OS_TIMEOUT_INFINITE && abs_timeout_ns < spin_end)
++         spin_end = abs_timeout_ns;
++      while (now < spin_end) {
++         if (now - start < spin->yield_ns)
++            sched_yield();
++         else
++            os_time_sleep(spin->sleep_ns / 1000);
++         if (dzn_sync_waits_satisfied(waits, wait_count, any))
++            return VK_SUCCESS;
++         now = os_time_get_nano();
++      }
++      if (abs_timeout_ns != OS_TIMEOUT_INFINITE && abs_timeout_ns <= now)
++         return VK_TIMEOUT;
++   }
++#endif
++
+ #ifdef _WIN32
+    HANDLE event = CreateEventA(NULL, false, false, NULL);
+    if (event == NULL)
