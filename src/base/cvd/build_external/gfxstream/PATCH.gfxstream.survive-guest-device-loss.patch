@@ -1,0 +1,158 @@
+Patch summary:
+A GPU reset an application causes ends that application, not the VM. When
+the host GPU was reset and a guest application's VkDevice was lost,
+gfxstream aborted (GFXSTREAM_FATAL "Encountered device lost"), and with it
+crosvm and the whole VM: 3DMark Steel Nomad Light on an Intel UHD 770 under
+WSL2 faults the GPU in the driver's own memory, and every run took Ika down.
+
+- on_DeviceLost(), called for every guest call that returned
+  VK_ERROR_DEVICE_LOST, logs once (with the DeviceLostHelper's diagnosis)
+  instead of aborting; the application gets VK_ERROR_DEVICE_LOST from its
+  own calls.
+- The VK_CHECKs on guest devices (the Android native buffer queue
+  submissions and the QSRI fence wait, the fence pool's reset and create)
+  become VK_CHECK_GUEST_DEVICE, which treats VK_ERROR_DEVICE_LOST as the
+  application's and stays fatal for any other failure.
+- When gfxstream's own VkDevice is lost (a VK_CHECK of its own work fails
+  with VK_ERROR_DEVICE_LOST), its ColorBuffers and display are gone: it
+  exits with the code crosvm uses for a guest reboot, 32, so that the VM
+  manager restarts the VM instead of it ending.
+diff --git a/host/virtio_gpu_gfxstream_renderer.cpp b/host/virtio_gpu_gfxstream_renderer.cpp
+index 019b8e6ef..c5c9da54d 100644
+--- a/host/virtio_gpu_gfxstream_renderer.cpp
++++ b/host/virtio_gpu_gfxstream_renderer.cpp
+@@ -17,6 +17,8 @@ extern "C" {
+ #include "gfxstream/virtio-gpu-gfxstream-renderer.h"
+ }  // extern "C"
+ 
++#include <unistd.h>
++
+ #include <cstdint>
+ #include <optional>
+ #include <string_view>
+@@ -870,6 +872,12 @@ VG_EXPORT int stream_renderer_init(struct stream_renderer_param* stream_renderer
+                             return;
+                         }
+                         fb->logVulkanDeviceLost();
++                        // gfxstream's own device is gone with the GPU reset, and with it every
++                        // ColorBuffer and the display. Exit with the code crosvm uses for a guest
++                        // reboot, so that the VM manager restarts the VM instead of it ending.
++                        GFXSTREAM_ERROR("gfxstream's VkDevice was lost; exiting with code 32 so "
++                                        "that the VM restarts.");
++                        _exit(32);
+                     },
+             }));
+ 
+diff --git a/host/vulkan/vk_android_native_buffer_operations.cpp b/host/vulkan/vk_android_native_buffer_operations.cpp
+index ad99fc20a..e70b34e25 100644
+--- a/host/vulkan/vk_android_native_buffer_operations.cpp
++++ b/host/vulkan/vk_android_native_buffer_operations.cpp
+@@ -596,7 +596,7 @@ VkResult AndroidNativeBufferInfo::on_vkAcquireImageANDROID(VkEmulation* emu, Vul
+             semaphore == VK_NULL_HANDLE ? nullptr : &semaphore,
+         };
+         std::lock_guard<std::mutex> qlock(*defaultQueueMutex);
+-        VK_CHECK(vk->vkQueueSubmit(defaultQueue, 1, &submitInfo, fence));
++        VK_CHECK_GUEST_DEVICE(vk->vkQueueSubmit(defaultQueue, 1, &submitInfo, fence));
+         return VK_SUCCESS;
+     }
+ 
+@@ -671,7 +671,7 @@ VkResult AndroidNativeBufferInfo::on_vkAcquireImageANDROID(VkEmulation* emu, Vul
+ 
+         std::lock_guard<std::mutex> queueLock(*queueState.queueMutex);
+         // TODO(kaiyili): initiate ownership transfer from DisplayVk here
+-        VK_CHECK(vk->vkQueueSubmit(queueState.queue, 1, &submitInfo, fence));
++        VK_CHECK_GUEST_DEVICE(vk->vkQueueSubmit(queueState.queue, 1, &submitInfo, fence));
+     } else {
+         const VkSubmitInfo submitInfo = {
+             VK_STRUCTURE_TYPE_SUBMIT_INFO,
+@@ -685,7 +685,7 @@ VkResult AndroidNativeBufferInfo::on_vkAcquireImageANDROID(VkEmulation* emu, Vul
+             semaphore == VK_NULL_HANDLE ? nullptr : &semaphore,
+         };
+         std::lock_guard<std::mutex> queueLock(*queueState.queueMutex);
+-        VK_CHECK(vk->vkQueueSubmit(queueState.queue, 1, &submitInfo, fence));
++        VK_CHECK_GUEST_DEVICE(vk->vkQueueSubmit(queueState.queue, 1, &submitInfo, fence));
+     }
+ 
+     return VK_SUCCESS;
+@@ -853,7 +853,7 @@ VkResult AndroidNativeBufferInfo::on_vkQueueSignalReleaseImageANDROID(
+     // TODO(kaiyili): initiate ownership transfer to DisplayVk here.
+     VkFence qsriFence = mQsriWaitFencePool->getFenceFromPool();
+     std::lock_guard<std::mutex> qLock(*queueMutex);
+-    VK_CHECK(vk->vkQueueSubmit(queueState.queue, 1, &submitInfo, qsriFence));
++    VK_CHECK_GUEST_DEVICE(vk->vkQueueSubmit(queueState.queue, 1, &submitInfo, qsriFence));
+     auto waitForQsriFenceTask = [this, vk, device = mDevice, qsriFence, traceId] {
+         (void)traceId;
+         GFXSTREAM_TRACE_EVENT(GFXSTREAM_TRACE_DEFAULT_CATEGORY, "Wait for QSRI fence",
+@@ -868,6 +868,9 @@ VkResult AndroidNativeBufferInfo::on_vkQueueSignalReleaseImageANDROID(
+             case VK_TIMEOUT:
+                 VK_ANB_ERR("Timeout when waiting for the Qsri fence.");
+                 break;
++            case VK_ERROR_DEVICE_LOST:
++                GFXSTREAM_ERROR("QSRI fence of a lost guest device; the image is released.");
++                break;
+             default:
+                 GFXSTREAM_ERROR("Failed to wait for QSRI fence: %s\n", string_VkResult(res));
+                 VK_CHECK(res);
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index 77dd140df..ef4773626 100644
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -4564,7 +4564,7 @@ class VkDecoderGlobalState::Impl {
+         }
+ 
+         if (!cleanedFences.empty()) {
+-            VK_CHECK(vk->vkResetFences(device, (uint32_t)cleanedFences.size(),
++            VK_CHECK_GUEST_DEVICE(vk->vkResetFences(device, (uint32_t)cleanedFences.size(),
+                                        cleanedFences.data()));
+         }
+ 
+@@ -4583,7 +4583,7 @@ class VkDecoderGlobalState::Impl {
+         for (auto fence : externalFences) {
+             VkFence replacement = deviceInfo->externalFencePool->pop(&createInfo);
+             if (replacement == VK_NULL_HANDLE) {
+-                VK_CHECK(vk->vkCreateFence(device, &createInfo, 0, &replacement));
++                VK_CHECK_GUEST_DEVICE(vk->vkCreateFence(device, &createInfo, 0, &replacement));
+             }
+             deviceInfo->externalFencePool->add(fence);
+ 
+@@ -10221,9 +10221,15 @@ class VkDecoderGlobalState::Impl {
+         return VK_SUCCESS;
+     }
+ 
++    // A guest application's call returned VK_ERROR_DEVICE_LOST: the host GPU was reset, and the
++    // application gets the error from its own calls. gfxstream goes on; if its own device was
++    // lost too, its next VK_CHECK ends the VM through the VkCheckCallbacks.
+     void on_DeviceLost() {
++        static std::atomic<bool> reported{false};
++        if (reported.exchange(true)) return;
+         m_vkEmulation->getDeviceLostHelper().onDeviceLost();
+-        GFXSTREAM_FATAL("Encountered device lost.");
++        GFXSTREAM_ERROR("A guest VkDevice was lost (host GPU reset); its application gets "
++                        "VK_ERROR_DEVICE_LOST.");
+     }
+ 
+     VkResult waitForFences(VkDevice unboxed_device, VulkanDispatch* vk, uint32_t fenceCount,
+diff --git a/host/vulkan/vk_utils.h b/host/vulkan/vk_utils.h
+index 1ac4554d0..824cf92e6 100644
+--- a/host/vulkan/vk_utils.h
++++ b/host/vulkan/vk_utils.h
+@@ -159,6 +159,19 @@ void vk_struct_chain_filter(H* head) {
+         }                                                                             \
+     } while (0)
+ 
++// For a Vulkan call on a guest application's device: when the host GPU was reset and that device
++// was lost, the application gets VK_ERROR_DEVICE_LOST from its own calls and goes on or ends; it
++// must not end the VM. Any other failure stays fatal.
++#define VK_CHECK_GUEST_DEVICE(x)                                                              \
++    do {                                                                                      \
++        VkResult err = x;                                                                     \
++        if (err == VK_ERROR_DEVICE_LOST) {                                                    \
++            GFXSTREAM_ERROR("%s on a guest device: VK_ERROR_DEVICE_LOST", #x);               \
++        } else if (err != VK_SUCCESS) {                                                       \
++            GFXSTREAM_FATAL("VK_CHECK_GUEST_DEVICE(" #x ") failed with %s", string_VkResult(err)); \
++        }                                                                                     \
++    } while (0)
++
+ #define VK_CHECK_MEMALLOC(x, allocateInfo)                                                     \
+     do {                                                                                       \
+         VkResult err = x;                                                                      \

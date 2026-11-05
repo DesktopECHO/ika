@@ -107,5 +107,8 @@ git_repository(
         # ...) are offered only by a device that reports the core version that
         # promoted them: those of Vulkan 1.4 only by a device that reports 1.4.
         "@//build_external/gfxstream:PATCH.gfxstream.promoted-core-extensions.patch",
+        # A host GPU reset ends the guest application whose VkDevice was lost,
+        # not the VM; losing gfxstream's own device restarts the VM.
+        "@//build_external/gfxstream:PATCH.gfxstream.survive-guest-device-loss.patch",
     ],
 )
