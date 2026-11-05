@@ -1,0 +1,162 @@
+dzn: Place default-heap internal buffers in shared heaps
+
+Every indirect draw, triangle-fan rewrite and query copy had Dozen create
+a committed resource of at least 64 KiB for its scratch buffer, and the
+command buffer's reset destroyed them all: 3DMark Steel Nomad Light, a
+GPU-driven renderer, made about 3000 of them a second. Each one is a GPU
+allocation the graphics kernel creates, maps, makes resident and destroys,
+and under WSL2 every one of those is a round trip to Windows. On a Radeon
+780M the host spent the frame in that churn while the GPU sat idle 86% of
+the time: 209 points, 1.55 frames a second.
+
+Place the buffers in 4 MB heaps instead, one heap after another, with the
+heaps released when the command buffer is reset or destroyed. Callers
+still get a resource of their own at offset 0, so none of them changes. A
+buffer larger than a heap keeps its committed resource. Vulkan leaves new
+memory undefined, so the heaps and the remaining committed resources are
+created with CREATE_NOT_ZEROED, like the memory vkAllocateMemory returns.
+
+Steel Nomad Light on the 780M through WSL2: 1473 points, 10.9 frames a
+second, the GPU busy 44 of every 60 seconds instead of 8.
+
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index 4dc1f82..f612397 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -458,6 +458,11 @@ dzn_cmd_buffer_destroy(struct vk_command_buffer *cbuf)
+       ID3D12Resource_Release(res->res);
+       vk_free(&cbuf->pool->alloc, res);
+    }
++   list_for_each_entry_safe(struct dzn_internal_heap, h, &cmdbuf->internal_heaps, link) {
++      list_del(&h->link);
++      ID3D12Heap_Release(h->heap);
++      vk_free(&cbuf->pool->alloc, h);
++   }
+ 
+    dzn_descriptor_heap_pool_finish(&cmdbuf->cbv_srv_uav_pool);
+    dzn_descriptor_heap_pool_finish(&cmdbuf->sampler_pool);
+@@ -531,6 +536,13 @@ dzn_cmd_buffer_reset(struct vk_command_buffer *cbuf, VkCommandBufferResetFlags f
+          vk_free(&cmdbuf->vk.pool->alloc, res);
+       }
+    }
++   list_for_each_entry_safe(struct dzn_internal_heap, h, &cmdbuf->internal_heaps, link) {
++      list_del(&h->link);
++      ID3D12Heap_Release(h->heap);
++      vk_free(&cmdbuf->vk.pool->alloc, h);
++   }
++   cmdbuf->cur_default_heap = NULL;
++   cmdbuf->cur_default_heap_offset = 0;
+    cmdbuf->cur_upload_buf = NULL;
+ 
+    util_dynarray_clear(&cmdbuf->events.signal);
+@@ -684,6 +696,7 @@ dzn_cmd_buffer_create(struct vk_command_pool *pool,
+    for (uint32_t bucket = 0; bucket < DZN_INTERNAL_BUF_BUCKET_COUNT; ++bucket)
+       list_inithead(&cmdbuf->internal_bufs[bucket]);
+    list_inithead(&cmdbuf->free_upload_bufs);
++   list_inithead(&cmdbuf->internal_heaps);
+    list_inithead(&cmdbuf->gpu_work);
+    cmdbuf->events.signal = UTIL_DYNARRAY_INIT;
+    cmdbuf->queries.reset = UTIL_DYNARRAY_INIT;
+@@ -1829,6 +1842,9 @@ dzn_cmd_buffer_get_null_rtv(struct dzn_cmd_buffer *cmdbuf)
+    return cmdbuf->null_rtv;
+ }
+ 
++/* Default-heap internal buffers are placed in heaps of this size. */
++#define DZN_INTERNAL_HEAP_SIZE (4 * 1024 * 1024)
++
+ static D3D12_HEAP_TYPE
+ heap_type_for_bucket(enum dzn_internal_buf_bucket bucket)
+ {
+@@ -1914,12 +1930,55 @@ dzn_cmd_buffer_alloc_internal_buf(struct dzn_cmd_buffer *cmdbuf,
+       .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+    };
+ 
+-   HRESULT hres =
+-      ID3D12Device1_CreateCommittedResource(device->dev, &hprops,
+-                                            D3D12_HEAP_FLAG_NONE, &rdesc,
+-                                            init_state, NULL,
+-                                            &IID_ID3D12Resource,
+-                                            (void **)&res);
++   /* Default-heap buffers are placed in shared heaps: a committed resource
++    * each made a frame of indirect draws thousands of GPU allocations, every
++    * one created, mapped, made resident and destroyed through the graphics
++    * kernel, which on WSL2 is a round trip to Windows each. Vulkan leaves
++    * new memory undefined, so neither the heap nor the buffers need D3D12 to
++    * zero them. */
++   HRESULT hres = E_FAIL;
++   res = NULL;
++   if (bucket == DZN_INTERNAL_BUF_DEFAULT && alloc_size <= DZN_INTERNAL_HEAP_SIZE) {
++      if (cmdbuf->cur_default_heap &&
++          cmdbuf->cur_default_heap_offset + alloc_size > cmdbuf->cur_default_heap->size)
++         cmdbuf->cur_default_heap = NULL;
++      if (!cmdbuf->cur_default_heap) {
++         D3D12_HEAP_DESC hd = {
++            .SizeInBytes = DZN_INTERNAL_HEAP_SIZE,
++            .Properties = hprops,
++            .Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
++            .Flags = D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS | D3D12_HEAP_FLAG_CREATE_NOT_ZEROED,
++         };
++         struct dzn_internal_heap *h =
++            vk_alloc(&cmdbuf->vk.pool->alloc, sizeof(*h), 8, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
++         ID3D12Heap *heap = NULL;
++         if (h && SUCCEEDED(ID3D12Device1_CreateHeap(device->dev, &hd, &IID_ID3D12Heap, (void **)&heap))) {
++            h->heap = heap;
++            h->size = hd.SizeInBytes;
++            list_addtail(&h->link, &cmdbuf->internal_heaps);
++            cmdbuf->cur_default_heap = h;
++            cmdbuf->cur_default_heap_offset = 0;
++         } else if (h) {
++            vk_free(&cmdbuf->vk.pool->alloc, h);
++         }
++      }
++      if (cmdbuf->cur_default_heap) {
++         hres = ID3D12Device1_CreatePlacedResource(device->dev, cmdbuf->cur_default_heap->heap,
++                                                   cmdbuf->cur_default_heap_offset, &rdesc,
++                                                   init_state, NULL, &IID_ID3D12Resource,
++                                                   (void **)&res);
++         if (SUCCEEDED(hres))
++            cmdbuf->cur_default_heap_offset += alloc_size;
++         else
++            res = NULL;
++      }
++   }
++   if (!res)
++      hres = ID3D12Device1_CreateCommittedResource(device->dev, &hprops,
++                                                   D3D12_HEAP_FLAG_CREATE_NOT_ZEROED, &rdesc,
++                                                   init_state, NULL,
++                                                   &IID_ID3D12Resource,
++                                                   (void **)&res);
+    if (FAILED(hres)) {
+       return vk_command_buffer_set_error(&cmdbuf->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+    }
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index 555a649..3ef79cf 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -602,6 +602,14 @@ struct dzn_internal_resource {
+    void *map;
+ };
+ 
++/* A heap that default-heap internal buffers are placed in: see
++ * dzn_cmd_buffer_alloc_internal_buf(). */
++struct dzn_internal_heap {
++   struct list_head link;
++   ID3D12Heap *heap;
++   uint64_t size;
++};
++
+ struct dzn_cmd_buffer_gpu_work {
+    struct list_head link;
+    ID3D12Fence *fence;
+@@ -785,6 +793,11 @@ struct dzn_cmd_buffer {
+ 
+    struct list_head internal_bufs[DZN_INTERNAL_BUF_BUCKET_COUNT];
+    struct list_head gpu_work;
++   /* The heaps the default-heap internal buffers are placed in, and the one
++    * being filled. */
++   struct list_head internal_heaps;
++   struct dzn_internal_heap *cur_default_heap;
++   uint64_t cur_default_heap_offset;
+    struct dzn_internal_resource *cur_upload_buf;
+    uint64_t cur_upload_buf_offset;
+    /* Upload buffers kept from before the last reset, for the next recording. */
