@@ -144,6 +144,9 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/libexec/cuttlefish/cuttlefish-host_orchestrator-prepare
 
 %changelog
+* Thu Nov 05 2026 DesktopECHO <build@desktopecho.com> - 261105-1
+- Update Ika frontend package metadata to 261105-1.
+
 * Sun Nov 01 2026 DesktopECHO <build@desktopecho.com> - 261101-1
 - Update Ika frontend package metadata to 261101-1.
 
