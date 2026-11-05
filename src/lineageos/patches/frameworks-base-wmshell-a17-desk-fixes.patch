@@ -1,0 +1,534 @@
+Patch summary:
+Android 17 desktop-windowing fixes, ported to Android 16 QPR2's WM Shell:
+- eb4e95ba6: re-lay out desk tasks when the display size changes at the same
+  density (a host window resize), not only when the density changes.
+- 31c539246: bring an active but empty desk to the front when a desktop task
+  opens in it, so the task is not left invisible behind the desktop wallpaper
+  activity or Home.
+- dd40361930: FreeformFallbackTransitionObserver moves freeform tasks that
+  launched outside any desk into the display's default desk, activating it if
+  needed, with a holding transition that keeps them visible. It uses Android
+  16's desk creation in DesktopTasksController, and skips displays without a
+  desktop (Ika's app-window displays).
+- f81f04d0b and bde4b0aee: when the desktop wallpaper goes to back, the desk
+  stays active if a task in it went full-immersive, and stays active in the
+  repository when the keyguard appears so that unlocking returns to it.
+- db552a3d6, in part: a recents transition deactivates the desk on the desk's
+  own display instead of the default display. The delay until Overview hides
+  needs Overview-visibility tracking that Android 16's Shell does not have.
+
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java b/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java
+--- a/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java
+@@ -138,6 +138,8 @@
+ import com.android.wm.shell.desktopmode.DragToDesktopTransitionHandler;
+ import com.android.wm.shell.desktopmode.EnterDesktopTaskTransitionHandler;
+ import com.android.wm.shell.desktopmode.ExitDesktopTaskTransitionHandler;
++import com.android.wm.shell.desktopmode.FreeformFallbackTransitionHandler;
++import com.android.wm.shell.desktopmode.FreeformFallbackTransitionObserver;
+ import com.android.wm.shell.desktopmode.OverviewToDesktopTransitionObserver;
+ import com.android.wm.shell.desktopmode.ReturnToDragStartAnimator;
+ import com.android.wm.shell.desktopmode.ShellDesktopState;
+@@ -613,7 +615,8 @@
+             Optional<DesktopImeHandler> desktopImeHandler,
+             Optional<DesktopBackNavTransitionObserver> desktopBackNavTransitionObserver,
+             Optional<DesktopInOrderTransitionObserver> desktopInOrderTransitionObserver,
+-            DesktopModeLoggerTransitionObserver desktopModeLoggerTransitionObserver) {
++            DesktopModeLoggerTransitionObserver desktopModeLoggerTransitionObserver,
++            Optional<FreeformFallbackTransitionObserver> freeformFallbackTransitionObserver) {
+         return new FreeformTaskTransitionObserver(
+                 shellInit,
+                 transitions,
+@@ -627,7 +630,34 @@
+                 desktopImeHandler,
+                 desktopBackNavTransitionObserver,
+                 desktopInOrderTransitionObserver,
+-                desktopModeLoggerTransitionObserver);
++                desktopModeLoggerTransitionObserver,
++                freeformFallbackTransitionObserver);
++    }
++
++    @WMSingleton
++    @Provides
++    static Optional<FreeformFallbackTransitionObserver> provideFreeformFallbackTransitionObserver(
++            Transitions transitions,
++            @ShellMainThread CoroutineScope mainScope,
++            dagger.Lazy<Optional<DesktopTasksController>> desktopTasksControllerLazy,
++            @DynamicOverride DesktopUserRepositories desktopUserRepositories,
++            DesksOrganizer desksOrganizer,
++            DesktopConfig desktopConfig,
++            DesktopState desktopState) {
++        // Android 17 dd40361930: move freeform tasks that launched outside any desk into one.
++        if (!desktopState.canEnterDesktopMode()) {
++            return Optional.empty();
++        }
++        return Optional.of(
++                new FreeformFallbackTransitionObserver(
++                        transitions,
++                        mainScope,
++                        desktopTasksControllerLazy,
++                        desktopUserRepositories,
++                        desksOrganizer,
++                        desktopConfig,
++                        desktopState,
++                        new FreeformFallbackTransitionHandler(desktopUserRepositories)));
+     }
+ 
+     @WMSingleton
+@@ -1647,13 +1677,14 @@
+             @NonNull DesktopWallpaperActivityTokenProvider desktopWallpaperActivityTokenProvider,
+             @NonNull @ShellMainThread CoroutineScope mainScope,
+             DesktopState desktopState,
+-            @NonNull DesktopModeEventLogger desktopModeEventLogger
++            @NonNull DesktopModeEventLogger desktopModeEventLogger,
++            @NonNull DisplayController displayController
+     ) {
+         if (desktopState.canEnterDesktopModeOrShowAppHandle()) {
+             return Optional.of(
+                     new DesksTransitionObserver(desktopUserRepositories, desksOrganizer,
+                             transitions, shellController, desktopWallpaperActivityTokenProvider,
+-                            mainScope, desktopModeEventLogger));
++                            mainScope, desktopModeEventLogger, displayController));
+         }
+         return Optional.empty();
+     }
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopDisplayEventHandler.kt b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopDisplayEventHandler.kt
+--- a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopDisplayEventHandler.kt
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopDisplayEventHandler.kt
+@@ -139,7 +139,11 @@
+         val oldDisplayLayout = oldDpiLayoutByDisplayId[displayId] ?: oldLayout
+         if (oldDisplayLayout == null || newDisplayLayout == null) return
+         newConfig?.let { displayConfigById.put(displayId, it) }
+-        if (newDisplayLayout.densityDpi() == oldDisplayLayout.densityDpi()) {
++        if (
++            newDisplayLayout.densityDpi() == oldDisplayLayout.densityDpi() &&
++                newDisplayLayout.width() == oldDisplayLayout.width() &&
++                newDisplayLayout.height() == oldDisplayLayout.height()
++        ) {
+             return
+         }
+         oldDpiLayoutByDisplayId.put(displayId, oldDisplayLayout)
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopTasksController.kt b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopTasksController.kt
+--- a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopTasksController.kt
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopTasksController.kt
+@@ -652,11 +652,13 @@
+         // At this point the recents transition is either finishing to home, to another non-desktop
+         // task or to a different desk than the one that was active when recents started. For all
+         // of those the desk that was active needs to be deactivated.
++        // The desk's own display, not always the default one (Android 17 db552a3d6).
++        val displayId = repository.getDisplayForDesk(activeDeskIdOnRecentsStart)
+         val runOnTransitStart =
+             performDesktopExitCleanUp(
+                 wct = finishWct,
+                 deskId = activeDeskIdOnRecentsStart,
+-                displayId = DEFAULT_DISPLAY,
++                displayId = displayId,
+                 userId = userId,
+                 willExitDesktop = true,
+                 removingLastTaskId = null,
+@@ -4329,6 +4331,11 @@
+                 )
+             runOnTransitStart?.invoke(transition)
+             wct.reorder(task.token, true)
++        } else if (bringTaskToFront && repository.isDeskActive(targetDeskId)) {
++            // Empty desks may sometimes be considered active despite not being in front
++            // because WM Core brings to front the DesktopWallpaperActivity or Home task.
++            // (Android 17 31c539246)
++            desksOrganizer.activateDesk(wct, targetDeskId)
+         }
+ 
+         if (desktopConfig.useDesktopOverrideDensity) {
+@@ -5746,7 +5753,7 @@
+         return immediateDeskId
+     }
+ 
+-    private suspend fun getOrCreateDefaultDeskIdSuspending(displayId: Int, userId: Int): Int {
++    internal suspend fun getOrCreateDefaultDeskIdSuspending(displayId: Int, userId: Int): Int {
+         val repository = userRepositories.getProfile(userId)
+         return repository.getDefaultDeskId(displayId)
+             ?: createDeskSuspending(displayId, userId, enforceDeskLimit = false)
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/FreeformFallbackTransitionHandler.kt b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/FreeformFallbackTransitionHandler.kt
+new file mode 100644
+--- /dev/null
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/FreeformFallbackTransitionHandler.kt
+@@ -0,0 +1,61 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.wm.shell.desktopmode
++
++import android.os.IBinder
++import android.view.SurfaceControl
++import android.window.TransitionInfo
++import android.window.TransitionRequestInfo
++import android.window.WindowContainerTransaction
++import com.android.wm.shell.transition.Transitions
++
++/** Handles transitions related to recovering freeform tasks launched outside of a desk. */
++class FreeformFallbackTransitionHandler(
++    private val desktopUserRepositories: DesktopUserRepositories
++) : Transitions.TransitionHandler {
++
++    override fun startAnimation(
++        transition: IBinder,
++        info: TransitionInfo,
++        startTransaction: SurfaceControl.Transaction,
++        finishTransaction: SurfaceControl.Transaction,
++        finishCallback: Transitions.TransitionFinishCallback,
++    ): Boolean {
++        for (change in info.changes) {
++            val taskInfo = change.taskInfo ?: continue
++            val repository = desktopUserRepositories.getProfile(taskInfo.userId)
++            if (!repository.isActiveTask(taskInfo.taskId)) continue
++            val leash = change.leash
++            // Ensure leash remain visible throughout animation.
++            startTransaction.setAlpha(leash, 1.0f)
++            finishTransaction.setAlpha(leash, 1.0f)
++        }
++
++        startTransaction.apply()
++
++        finishCallback.onTransitionFinished(null)
++
++        return true
++    }
++
++    override fun handleRequest(
++        transition: IBinder,
++        request: TransitionRequestInfo,
++    ): WindowContainerTransaction? {
++        return null
++    }
++}
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/FreeformFallbackTransitionObserver.kt b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/FreeformFallbackTransitionObserver.kt
+new file mode 100644
+--- /dev/null
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/FreeformFallbackTransitionObserver.kt
+@@ -0,0 +1,155 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.wm.shell.desktopmode
++
++import android.app.TaskInfo
++import android.view.WindowManager.TRANSIT_CHANGE
++import android.view.WindowManager.TRANSIT_TO_FRONT
++import android.window.TransitionInfo
++import android.window.TransitionInfo.FLAG_MOVED_TO_TOP
++import android.window.WindowContainerTransaction
++import com.android.internal.protolog.ProtoLog
++import com.android.wm.shell.desktopmode.DesktopModeEventLogger.Companion.EnterReason
++import com.android.wm.shell.desktopmode.multidesks.DesksOrganizer
++import com.android.wm.shell.protolog.ShellProtoLogGroup
++import com.android.wm.shell.shared.TransitionUtil
++import com.android.wm.shell.shared.desktopmode.DesktopConfig
++import com.android.wm.shell.shared.desktopmode.DesktopState
++import com.android.wm.shell.transition.Transitions
++import java.util.Optional
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.launch
++
++/**
++ * Transition observer for recovering freeform tasks launching outside a desk. Tracks pending
++ * freeform transitions and moves the associated task to a desk if required.
++ *
++ * Backported from Android 17 (dd40361930), using Android 16's desk creation in
++ * [DesktopTasksController] instead of Android 17's DesksController.
++ */
++class FreeformFallbackTransitionObserver(
++    private val transitions: Transitions,
++    private val mainScope: CoroutineScope,
++    private val desktopTasksControllerLazy: dagger.Lazy<Optional<DesktopTasksController>>,
++    private val desktopUserRepositories: DesktopUserRepositories,
++    private val desksOrganizer: DesksOrganizer,
++    private val desktopConfig: DesktopConfig,
++    private val desktopState: DesktopState,
++    private val freeformFallbackTransitionHandler: FreeformFallbackTransitionHandler,
++) {
++
++    /**
++     * Called when any transition is ready, which may include transitions not tracked by this
++     * observer.
++     */
++    fun onTransitionReady(info: TransitionInfo) {
++        val deskTasksController = desktopTasksControllerLazy.get().orElse(null) ?: return
++        val potentialOrphanFreeformChanges = info.potentialOrphanFreeformTasks()
++
++        if (potentialOrphanFreeformChanges.isEmpty()) return
++
++        val pendingMoveToDeskTasks: MutableList<TaskInfo> = mutableListOf()
++        for (change in potentialOrphanFreeformChanges) {
++            val taskInfo = change.taskInfo ?: continue
++            val repository = desktopUserRepositories.getProfile(taskInfo.userId)
++            // Ignore change if task is associated with a desk already, or if its display has no
++            // desktop (such as Ika's app-window displays, which have no system decorations).
++            if (
++                repository.isActiveTask(taskInfo.taskId) ||
++                    !desktopState.isDesktopModeSupportedOnDisplay(taskInfo.displayId)
++            ) {
++                continue
++            }
++            pendingMoveToDeskTasks.add(taskInfo)
++        }
++
++        if (pendingMoveToDeskTasks.isEmpty()) return
++
++        ProtoLog.w(
++            ShellProtoLogGroup.WM_SHELL_DESKTOP_MODE,
++            "FreeformFallbackTransitionObserver: A freeform task(s)=%s launched outside a desk, " +
++                "forcing them into desktop.",
++            pendingMoveToDeskTasks.map { it.taskId },
++        )
++
++        transitions.runOnIdle {
++            mainScope.launch {
++                val wct = WindowContainerTransaction()
++                val runAllOnTransitStart: MutableList<RunOnTransitStart> = mutableListOf()
++                val pendingDeskActivations: MutableSet<Int> = mutableSetOf()
++                for (task in pendingMoveToDeskTasks) {
++                    val repository = desktopUserRepositories.getProfile(task.userId)
++                    // The task may have joined a desk while this waited for idle.
++                    if (repository.isActiveTask(task.taskId)) continue
++                    // Create a desk if none exists for the display.
++                    val targetDeskId =
++                        deskTasksController.getOrCreateDefaultDeskIdSuspending(
++                            displayId = task.displayId,
++                            userId = task.userId,
++                        )
++
++                    if (
++                        !repository.isDeskActive(targetDeskId) &&
++                            !pendingDeskActivations.contains(targetDeskId)
++                    ) {
++                        // Activate desk if not already active or pending activation.
++                        runAllOnTransitStart.add(
++                            deskTasksController.addDeskActivationChanges(
++                                deskId = targetDeskId,
++                                wct = wct,
++                                newTask = task,
++                                userId = task.userId,
++                                displayId = task.displayId,
++                                enterReason = EnterReason.TASK_LAUNCH,
++                            )
++                        )
++                        pendingDeskActivations.add(targetDeskId)
++                    }
++
++                    desksOrganizer.moveTaskToDesk(wct, targetDeskId, task)
++
++                    wct.reorder(task.token, /* onTop= */ true, /* includingParents= */ true)
++
++                    if (desktopConfig.useDesktopOverrideDensity) {
++                        wct.setDensityDpi(task.token, desktopConfig.desktopDensityOverride)
++                    }
++                }
++                if (wct.isEmpty) return@launch
++                val transition =
++                    transitions.startTransition(
++                        TRANSIT_CHANGE,
++                        wct,
++                        freeformFallbackTransitionHandler,
++                    )
++                runAllOnTransitStart.forEach { onTransitStart -> onTransitStart.invoke(transition) }
++            }
++        }
++    }
++
++    private fun TransitionInfo.potentialOrphanFreeformTasks(): List<TransitionInfo.Change> =
++        changes.filter { c ->
++            c.taskInfo?.takeIf { it.isFreeform } != null &&
++                !desksOrganizer.isDeskChange(c) &&
++                c.isOpeningOrToTop()
++        }
++
++    private fun TransitionInfo.Change.isToTop(): Boolean =
++        (mode == TRANSIT_TO_FRONT) || hasFlags(FLAG_MOVED_TO_TOP)
++
++    private fun TransitionInfo.Change.isOpeningOrToTop(): Boolean =
++        TransitionUtil.isOpeningMode(mode) || isToTop()
++}
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/multidesks/DesksTransitionObserver.kt b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/multidesks/DesksTransitionObserver.kt
+--- a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/multidesks/DesksTransitionObserver.kt
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/multidesks/DesksTransitionObserver.kt
+@@ -16,10 +16,13 @@
+ package com.android.wm.shell.desktopmode.multidesks
+ 
+ import android.app.ActivityTaskManager.INVALID_TASK_ID
++import android.graphics.Rect
+ import android.os.IBinder
+ import android.os.Trace
+ import android.view.Display.INVALID_DISPLAY
+ import android.view.WindowManager.TRANSIT_CHANGE
++import android.view.WindowManager.TRANSIT_FLAG_AOD_APPEARING
++import android.view.WindowManager.TRANSIT_FLAG_KEYGUARD_APPEARING
+ import android.view.WindowManager.TRANSIT_TO_BACK
+ import android.view.WindowManager.TRANSIT_TO_FRONT
+ import android.window.DesktopExperienceFlags
+@@ -28,6 +31,7 @@
+ import android.window.WindowContainerTransaction
+ import com.android.app.tracing.traceSection
+ import com.android.internal.protolog.ProtoLog
++import com.android.wm.shell.common.DisplayController
+ import com.android.wm.shell.desktopmode.DesktopModeEventLogger
+ import com.android.wm.shell.desktopmode.DesktopModeEventLogger.Companion.EnterReason
+ import com.android.wm.shell.desktopmode.DesktopModeEventLogger.Companion.ExitReason
+@@ -55,6 +59,7 @@
+     private val desktopWallpaperActivityTokenProvider: DesktopWallpaperActivityTokenProvider,
+     @ShellMainThread private val mainScope: CoroutineScope,
+     private val desktopModeEventLogger: DesktopModeEventLogger,
++    private val displayController: DisplayController,
+ ) {
+     // Tracks the desk transitions used to keep track of the desk state. This is usually removed
+     // when the transition is ready. This map represents what a single shell transition is causing
+@@ -311,6 +316,7 @@
+     private fun handleIndependentDeskTransitionIfNeeded(info: TransitionInfo) {
+         val deskChanges = info.deskChanges()
+         val desktopWallpaperChanges = info.desktopWallpaperChanges()
++        val fullImmersiveDesktopTaskChanges = info.desktopTaskInFullImmersiveChanges()
+         if (deskChanges.isEmpty() && desktopWallpaperChanges.isEmpty()) return
+         logD(
+             "handleIndependentDeskTransitionIfNeeded %d desk related change(s) found with " +
+@@ -398,20 +404,37 @@
+                                     .isTrue
+                         val activeDeskId = repository.getActiveDeskId(change.endDisplayId)
+                         if (activeDeskId != null) {
++                            // Android 17 bde4b0aee and f81f04d0b: the desk stays active when a
++                            // task in it goes full-immersive (it only occludes the desk), and in
++                            // the repository when the keyguard appears, so that unlocking returns
++                            // to it. The organizer still deactivates it for the keyguard so that
++                            // nothing launches into it behind the lock screen.
++                            val hasFullImmersiveTask =
++                                fullImmersiveDesktopTaskChanges.any { c ->
++                                    desksOrganizer.getDeskAtEnd(c) == activeDeskId
++                                }
++                            val keyguardAppearing = info.isKeyguardAppearing()
++                            val deactivateDeskInOrganizer = keyguardAppearing || !hasFullImmersiveTask
++                            val deactivateDeskInRepo =
++                                !keepActiveInRepository && !keyguardAppearing && !hasFullImmersiveTask
+                             logD(
+                                 "Desktop wallpaper of user=%d moved to back without visible desk" +
+-                                    ", will let the organizer deactivate " +
+-                                    "and the repository will %s",
++                                    " (hasFullImmersiveTask=%b keyguardAppearing=%b)," +
++                                    " deactivateDeskInOrganizer=%b deactivateDeskInRepo=%b",
+                                 userId,
+-                                if (keepActiveInRepository) "keep active" else "deactivate",
+-                            )
+-                            // Always let the organizer deactivate to clear the launch root.
+-                            desksOrganizer.deactivateDesk(wct, activeDeskId, skipReorder = true)
+-                            desktopModeEventLogger.logPendingSessionExit(
+-                                activeDeskId,
+-                                ExitReason.UNKNOWN_EXIT,
++                                hasFullImmersiveTask,
++                                keyguardAppearing,
++                                deactivateDeskInOrganizer,
++                                deactivateDeskInRepo,
+                             )
+-                            if (!keepActiveInRepository) {
++                            if (deactivateDeskInOrganizer) {
++                                desksOrganizer.deactivateDesk(wct, activeDeskId, skipReorder = true)
++                            }
++                            if (deactivateDeskInRepo) {
++                                desktopModeEventLogger.logPendingSessionExit(
++                                    activeDeskId,
++                                    ExitReason.UNKNOWN_EXIT,
++                                )
+                                 repository.setDeskInactive(activeDeskId)
+                             }
+                         } else {
+@@ -696,6 +719,24 @@
+             taskId != null && taskId != INVALID_TASK_ID
+         }
+ 
++    private fun TransitionInfo.isKeyguardAppearing(): Boolean =
++        (flags and TRANSIT_FLAG_KEYGUARD_APPEARING) != 0 ||
++            (flags and TRANSIT_FLAG_AOD_APPEARING) != 0
++
++    private fun TransitionInfo.desktopTaskInFullImmersiveChanges(): List<TransitionInfo.Change> {
++        return changes
++            .filter { c -> c.taskInfo != null }
++            .filter { c -> desksOrganizer.getDeskAtEnd(c) != null }
++            .filter { c -> c.mode == TRANSIT_CHANGE }
++            .filter { c ->
++                val displayBounds =
++                    displayController.getDisplayLayout(c.endDisplayId)?.let {
++                        Rect(0, 0, it.width(), it.height())
++                    }
++                return@filter displayBounds != null && c.endAbsBounds == displayBounds
++            }
++    }
++
+     private fun TransitionInfo.deskChanges(): List<TransitionInfo.Change> =
+         changes.filter { c -> desksOrganizer.isDeskChange(c) }
+ 
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/freeform/FreeformTaskTransitionObserver.java b/libs/WindowManager/Shell/src/com/android/wm/shell/freeform/FreeformTaskTransitionObserver.java
+--- a/libs/WindowManager/Shell/src/com/android/wm/shell/freeform/FreeformTaskTransitionObserver.java
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/freeform/FreeformTaskTransitionObserver.java
+@@ -35,6 +35,7 @@
+ import com.android.wm.shell.desktopmode.DesktopImmersiveController;
+ import com.android.wm.shell.desktopmode.DesktopInOrderTransitionObserver;
+ import com.android.wm.shell.desktopmode.DesktopModeLoggerTransitionObserver;
++import com.android.wm.shell.desktopmode.FreeformFallbackTransitionObserver;
+ import com.android.wm.shell.desktopmode.multidesks.DesksOrganizer;
+ import com.android.wm.shell.desktopmode.multidesks.DesksTransitionObserver;
+ import com.android.wm.shell.shared.desktopmode.DesktopState;
+@@ -65,6 +66,7 @@
+     private final Optional<DesksTransitionObserver> mDesksTransitionObserver;
+     private final Optional<DesktopImeHandler> mDesktopImeHandler;
+     private final Optional<DesktopBackNavTransitionObserver> mDesktopBackNavTransitionObserver;
++    private final Optional<FreeformFallbackTransitionObserver> mFreeformFallbackTransitionObserver;
+     private final Optional<DesktopInOrderTransitionObserver> mDesktopInOrderTransitionObserver;
+     private final DesktopModeLoggerTransitionObserver mDesktopModeLoggerTransitionObserver;
+ 
+@@ -87,7 +89,8 @@
+             Optional<DesktopImeHandler> desktopImeHandler,
+             Optional<DesktopBackNavTransitionObserver> desktopBackNavTransitionObserver,
+             Optional<DesktopInOrderTransitionObserver> desktopInOrderTransitionObserver,
+-            DesktopModeLoggerTransitionObserver desktopModeLoggerTransitionObserver) {
++            DesktopModeLoggerTransitionObserver desktopModeLoggerTransitionObserver,
++            Optional<FreeformFallbackTransitionObserver> freeformFallbackTransitionObserver) {
+         mTransitions = transitions;
+         mDesktopImmersiveController = desktopImmersiveController;
+         mWindowDecorViewModel = windowDecorViewModel;
+@@ -99,6 +102,7 @@
+         mDesktopBackNavTransitionObserver = desktopBackNavTransitionObserver;
+         mDesktopInOrderTransitionObserver = desktopInOrderTransitionObserver;
+         mDesktopModeLoggerTransitionObserver = desktopModeLoggerTransitionObserver;
++        mFreeformFallbackTransitionObserver = freeformFallbackTransitionObserver;
+         if (FreeformComponents.requiresFreeformComponents(desktopState)) {
+             shellInit.addInitCallback(this::onInit, this);
+         }
+@@ -162,6 +166,7 @@
+                 notifyChange(transition, info, startT, finishT, change, taskInfoList);
+             }
+         }
++        mFreeformFallbackTransitionObserver.ifPresent(observer -> observer.onTransitionReady(info));
+ 
+         mTransitionToTaskInfo.put(transition, taskInfoList);
+     }
