@@ -95,6 +95,13 @@ PRODUCT_COPY_FILES += \
     vendor/lineage_desktop/prebuilts/cvd_display_resize/cvd_display_resize.sh:$(TARGET_COPY_OUT_SYSTEM_EXT)/bin/cvd_display_resize.sh \
     vendor/lineage_desktop/prebuilts/cvd_display_resize/cvd_display_resize.rc:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/init/cvd_display_resize.rc
 
+# Swappiness and boot prefetch as Android 17's desktop devices set them.
+PRODUCT_COPY_FILES += \
+    vendor/lineage_desktop/prebuilts/memory/ika_memory.rc:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/init/ika_memory.rc
+# A vendor configuration property (prefetch_boot_prop), so set from vendor.
+PRODUCT_VENDOR_PROPERTIES += \
+    ro.prefetch_boot.enabled=true
+
 # Publishes the GMS Android ID in decimal as sys.ika.gsf_android_id once device
 # check-in has assigned it. A platform-signed app, so it works in user builds.
 PRODUCT_PACKAGES += IkaGsfId
