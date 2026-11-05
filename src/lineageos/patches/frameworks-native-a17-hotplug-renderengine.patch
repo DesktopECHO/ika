@@ -1,0 +1,451 @@
+Patch summary:
+Android 17 SurfaceFlinger and RenderEngine fixes:
+- fc64768935: commit() holds the pacesetter FrameTarget by pointer and reloads
+  it after display transactions and mode changes, which can destroy it (a
+  use-after-free on a hotplug reconnect or a resolution change).
+- 5b950c67dc: a commit retries after propagating a hotplug disconnect when any
+  display in it is gone, not only the pacesetter, and regardless of
+  pacesetter_selection.
+- ddba2662d5: demotePacesetterDisplay checks the pacesetter ID before use.
+- d8bf49da92 (without its flag): RenderEngine skips waiting on a fence that has
+  already signaled, which saves a driver fence and a host round trip on a
+  virtual GPU.
+- b5ee9e8ab6: RenderEngine enables only the Vulkan extensions and features it
+  uses (Venus and guest_lavapipe run it on Vulkan).
+
+diff --git a/libs/renderengine/skia/SkiaRenderEngine.cpp b/libs/renderengine/skia/SkiaRenderEngine.cpp
+--- a/libs/renderengine/skia/SkiaRenderEngine.cpp
++++ b/libs/renderengine/skia/SkiaRenderEngine.cpp
+@@ -780,6 +780,15 @@
+     AutoBackendTexture::CleanupManager& mMgr;
+ };
+ 
++// Android 17 d8bf49da92: a fence that has already signaled needs no driver fence or wait, which
++// costs a host round trip on a virtual GPU.
++void SkiaRenderEngine::waitFenceIfPending(SkiaGpuContext* context, base::borrowed_fd fenceFd) {
++    if (fenceFd.get() >= 0 && sync_wait(fenceFd.get(), 0) >= 0) {
++        return;
++    }
++    waitFence(context, fenceFd);
++}
++
+ void SkiaRenderEngine::drawLayersInternal(
+         const std::shared_ptr<std::promise<FenceResult>>&& resultPromise,
+         const DisplaySettings& display, const std::vector<LayerSettings>& layers,
+@@ -806,7 +815,7 @@
+     auto surfaceTextureRef = getOrCreateBackendTexture(buffer->getBuffer(), true);
+ 
+     // wait on the buffer to be ready to use prior to using it
+-    waitFence(context, bufferFence);
++    waitFenceIfPending(context, bufferFence);
+ 
+     sk_sp<SkSurface> dstSurface = surfaceTextureRef->getOrCreateSurface(display.outputDataspace);
+ 
+@@ -1160,7 +1169,7 @@
+             // if the layer's buffer has a fence, then we must respect the fence prior to using
+             // the buffer.
+             if (layer.source.buffer.fence != nullptr) {
+-                waitFence(context, layer.source.buffer.fence->get());
++                waitFenceIfPending(context, layer.source.buffer.fence->get());
+             }
+ 
+             // isOpaque means we need to ignore the alpha in the image,
+@@ -1395,7 +1404,7 @@
+     auto sdrTextureRef = getOrCreateBackendTexture(sdr->getBuffer(), true);
+     sk_sp<SkSurface> sdrSurface = sdrTextureRef->getOrCreateSurface(dataspace);
+ 
+-    waitFence(context, hdrFence);
++    waitFenceIfPending(context, hdrFence);
+     const auto hdrTextureRef = getOrCreateBackendTexture(hdr->getBuffer(), false);
+     const auto hdrImage = hdrTextureRef->makeImage(dataspace, kPremul_SkAlphaType);
+     const auto hdrShader =
+diff --git a/libs/renderengine/skia/SkiaRenderEngine.h b/libs/renderengine/skia/SkiaRenderEngine.h
+--- a/libs/renderengine/skia/SkiaRenderEngine.h
++++ b/libs/renderengine/skia/SkiaRenderEngine.h
+@@ -167,6 +167,8 @@
+             float hdrSdrRatio, ui::Dataspace dataspace, const std::shared_ptr<ExternalTexture>& sdr,
+             const std::shared_ptr<ExternalTexture>& gainmap) override final;
+ 
++    void waitFenceIfPending(SkiaGpuContext* context, base::borrowed_fd fenceFd);
++
+     void dump(std::string& result) override final;
+ 
+     // If requiresLinearEffect is true or the layer has a stretchEffect a new shader is returned.
+diff --git a/libs/renderengine/skia/VulkanInterface.cpp b/libs/renderengine/skia/VulkanInterface.cpp
+--- a/libs/renderengine/skia/VulkanInterface.cpp
++++ b/libs/renderengine/skia/VulkanInterface.cpp
+@@ -239,30 +239,24 @@
+             VK_STRUCTURE_TYPE_APPLICATION_INFO, nullptr, "surfaceflinger", 0, "android platform", 0,
+             VK_API_VERSION_1_1,
+     };
++    // Initialize Skia's VulkanPreferredFeatures.
++    mVulkanFeatures.init(appInfo.apiVersion);
+ 
++    // Query available instance extensions
+     VK_GET_PROC(EnumerateInstanceExtensionProperties);
+-
+-    uint32_t extensionCount = 0;
+-    VK_CHECK(vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr));
+-    std::vector<VkExtensionProperties> instanceExtensions(extensionCount);
+-    VK_CHECK(vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount,
+-                                                    instanceExtensions.data()));
++    uint32_t extCount = 0;
++    VK_CHECK(vkEnumerateInstanceExtensionProperties(nullptr, &extCount, nullptr));
++    std::vector<VkExtensionProperties> availInstanceExts(extCount);
++    VK_CHECK(vkEnumerateInstanceExtensionProperties(nullptr, &extCount, availInstanceExts.data()));
++
++    // Let Skia add to the list of enabled instance extensions. RenderEngine does not use any, so
++    // just pass in the empty enabledInstanceExtensionNames (but with ample space reserved for any
++    // extensions Skia might add).
+     std::vector<const char*> enabledInstanceExtensionNames;
+-    enabledInstanceExtensionNames.reserve(instanceExtensions.size());
+-    for (const auto& instExt : instanceExtensions) {
+-        enabledInstanceExtensionNames.push_back(instExt.extensionName);
+-    }
+-
+-    // Let Skia enable instance extensions.
+-    mVulkanFeatures.init(appInfo.apiVersion);
+-    mVulkanFeatures.addToInstanceExtensions(instanceExtensions.data(), instanceExtensions.size(),
++    enabledInstanceExtensionNames.reserve(availInstanceExts.size());
++    mVulkanFeatures.addToInstanceExtensions(availInstanceExts.data(), availInstanceExts.size(),
+                                             enabledInstanceExtensionNames);
+ 
+-    mInstanceExtensionNames.reserve(enabledInstanceExtensionNames.size());
+-    for (const char* instExt : enabledInstanceExtensionNames) {
+-        mInstanceExtensionNames.push_back(instExt);
+-    }
+-
+     const VkInstanceCreateInfo instanceCreateInfo = {
+             VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+             nullptr,
+@@ -408,19 +402,6 @@
+         BAIL("Could not find a graphics queue family");
+     }
+ 
+-    uint32_t deviceExtensionCount;
+-    VK_CHECK(vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &deviceExtensionCount,
+-                                                  nullptr));
+-    std::vector<VkExtensionProperties> deviceExtensions(deviceExtensionCount);
+-    VK_CHECK(vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &deviceExtensionCount,
+-                                                  deviceExtensions.data()));
+-
+-    std::vector<const char*> enabledDeviceExtensionNames;
+-    enabledDeviceExtensionNames.reserve(deviceExtensions.size());
+-    for (const auto& devExt : deviceExtensions) {
+-        enabledDeviceExtensionNames.push_back(devExt.extensionName);
+-    }
+-
+     mPhysicalDeviceFeatures2 = {};
+     mPhysicalDeviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+     void** tailPnext = &mPhysicalDeviceFeatures2.pNext;
+@@ -433,19 +414,49 @@
+         tailPnext = &mProtectedMemoryFeatures.pNext;
+     }
+ 
+-    for (const VkExtensionProperties& ext : deviceExtensions) {
+-        if (strcmp(ext.extensionName, VK_EXT_DEVICE_FAULT_EXTENSION_NAME) == 0) {
+-            mDeviceFaultFeatures = {};
+-            mDeviceFaultFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT;
+-            *tailPnext = &mDeviceFaultFeatures;
+-            tailPnext = &mDeviceFaultFeatures.pNext;
+-
+-            break;
++    // Query available device extensions
++    uint32_t deviceExtCount;
++    VK_CHECK(vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &deviceExtCount,
++                                                  nullptr));
++    std::vector<VkExtensionProperties> availDeviceExts(deviceExtCount);
++    VK_CHECK(vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &deviceExtCount,
++                                                  availDeviceExts.data()));
++
++    // Helper to check whether an extension should be enabled
++    auto shouldEnableExtension = [&](const char* extensionName) {
++        // Device extensions that RenderEngine utilizes
++        static const char* renderEngineDevExtNames[] = {
++            VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME,
++            VK_EXT_DEVICE_FAULT_EXTENSION_NAME,
++            VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME
++        };
++
++        for (const auto& renderEngineDevExtName : renderEngineDevExtNames) {
++            if (!strcmp(renderEngineDevExtName, extensionName)) {
++                return true;
++            }
++        }
++        return false;
++    };
++    // Add any requested and available extensions to the list of enabled extensions
++    std::vector<const char*> enabledDeviceExtensionNames;
++    enabledDeviceExtensionNames.reserve(availDeviceExts.size());
++    for (const auto& devExt : availDeviceExts) {
++        if (shouldEnableExtension(devExt.extensionName)) {
++            enabledDeviceExtensionNames.push_back(devExt.extensionName);
++
++            // Initialize device fault extension attributes if VK_EXT_DEVICE_FAULT is found
++            if (!strcmp(VK_EXT_DEVICE_FAULT_EXTENSION_NAME, devExt.extensionName)) {
++                mDeviceFaultFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT;
++                *tailPnext = &mDeviceFaultFeatures;
++                tailPnext = &mDeviceFaultFeatures.pNext;
++            }
+         }
+     }
+ 
+-    // Let Skia add features to be queried.
+-    mVulkanFeatures.addFeaturesToQuery(deviceExtensions.data(), deviceExtensions.size(),
++    // After RenderEngine has added its own, allow Skia to add features + device extension
++    // availabilities to be queried.
++    mVulkanFeatures.addFeaturesToQuery(availDeviceExts.data(), availDeviceExts.size(),
+                                        mPhysicalDeviceFeatures2);
+ 
+     vkGetPhysicalDeviceFeatures2(physicalDevice, &mPhysicalDeviceFeatures2);
+@@ -453,22 +464,27 @@
+     // RenderEngine.
+     mPhysicalDeviceFeatures2.features.robustBufferAccess = VK_FALSE;
+ 
+-    // Let Skia enable extensions and features.
++    // Let Skia enable extensions and features. Any enabled features will be appended on to
++    // enabledDeviceExtensionNames.
+     mVulkanFeatures.addFeaturesToEnable(enabledDeviceExtensionNames, mPhysicalDeviceFeatures2);
+ 
+-    mDeviceExtensionNames.reserve(enabledDeviceExtensionNames.size());
+-    for (const char* devExt : enabledDeviceExtensionNames) {
+-        mDeviceExtensionNames.push_back(devExt);
+-    }
+-
+     mVulkanExtensions.init(sGetProc, instance, physicalDevice, enabledInstanceExtensionNames.size(),
+                            enabledInstanceExtensionNames.data(), enabledDeviceExtensionNames.size(),
+                            enabledDeviceExtensionNames.data());
+ 
++    // Copy extension names to locally-stored list whose lifetime matches that of this class
++    mEnabledDeviceExtNames.reserve(enabledDeviceExtensionNames.size());
++    for (const char* devExt : enabledDeviceExtensionNames) {
++        mEnabledDeviceExtNames.push_back(devExt);
++    }
++    mEnabledInstanceExtNames.reserve(enabledInstanceExtensionNames.size());
++    for (const char* instExt : enabledInstanceExtensionNames) {
++        mEnabledInstanceExtNames.push_back(instExt);
++    }
++
+     if (!mVulkanExtensions.hasExtension(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME, 1)) {
+         BAIL("Vulkan driver doesn't support external semaphore fd");
+     }
+-
+     if (protectedContent && !mProtectedMemoryFeatures.protectedMemory) {
+         BAIL("Protected memory not supported");
+     }
+@@ -596,8 +612,8 @@
+ 
+     mFuncs = VulkanFuncs();
+ 
+-    mInstanceExtensionNames.clear();
+-    mDeviceExtensionNames.clear();
++    mEnabledInstanceExtNames.clear();
++    mEnabledDeviceExtNames.clear();
+ }
+ 
+ void VulkanInterface::appendVulkanInfoToDump(std::string& result) const {
+@@ -612,14 +628,14 @@
+                   VK_VERSION_PATCH(mPhysicalDeviceProperties.apiVersion));
+     StringAppendF(&result, "]\n");
+ 
+-    StringAppendF(&result, "Instance extensions: [\n");
+-    for (const auto& name : mInstanceExtensionNames) {
++    StringAppendF(&result, "Enabled instance extensions: [\n");
++    for (const auto& name : mEnabledInstanceExtNames) {
+         StringAppendF(&result, "  %s\n", name.c_str());
+     }
+     StringAppendF(&result, "]\n");
+ 
+-    StringAppendF(&result, "Device extensions: [\n");
+-    for (const auto& name : mDeviceExtensionNames) {
++    StringAppendF(&result, "Enabled device extensions: [\n");
++    for (const auto& name : mEnabledDeviceExtNames) {
+         StringAppendF(&result, "  %s\n", name.c_str());
+     }
+     StringAppendF(&result, "]\n");
+diff --git a/libs/renderengine/skia/VulkanInterface.h b/libs/renderengine/skia/VulkanInterface.h
+--- a/libs/renderengine/skia/VulkanInterface.h
++++ b/libs/renderengine/skia/VulkanInterface.h
+@@ -96,8 +96,8 @@
+ 
+     VulkanFuncs mFuncs;
+ 
+-    std::vector<std::string> mInstanceExtensionNames;
+-    std::vector<std::string> mDeviceExtensionNames;
++    std::vector<std::string> mEnabledInstanceExtNames;
++    std::vector<std::string> mEnabledDeviceExtNames;
+ };
+ 
+ } // namespace skia
+diff --git a/services/surfaceflinger/Scheduler/Scheduler.cpp b/services/surfaceflinger/Scheduler/Scheduler.cpp
+--- a/services/surfaceflinger/Scheduler/Scheduler.cpp
++++ b/services/surfaceflinger/Scheduler/Scheduler.cpp
+@@ -1428,8 +1428,10 @@
+     }
+ 
+     if (FlagManager::getInstance().pacesetter_selection()) {
+-        const PhysicalDisplayId pacesetterId = FTL_FAKE_GUARD(mDisplayLock, *mPacesetterDisplayId);
+-        mSchedulerCallback.enableLayerCachingTexturePool(pacesetterId, false);
++        // mPacesetterDisplayId may be empty (Android 17 ddba2662d5).
++        if (const auto pacesetterIdOpt = FTL_FAKE_GUARD(mDisplayLock, mPacesetterDisplayId)) {
++            mSchedulerCallback.enableLayerCachingTexturePool(*pacesetterIdOpt, false);
++        }
+     }
+ 
+     // Clear state that depends on the pacesetter's RefreshRateSelector.
+diff --git a/services/surfaceflinger/Scheduler/Scheduler.h b/services/surfaceflinger/Scheduler/Scheduler.h
+--- a/services/surfaceflinger/Scheduler/Scheduler.h
++++ b/services/surfaceflinger/Scheduler/Scheduler.h
+@@ -295,6 +295,13 @@
+         return std::const_pointer_cast<VsyncSchedule>(std::as_const(*this).getVsyncSchedule(idOpt));
+     }
+ 
++    const FrameTarget* pacesetterFrameTarget() const EXCLUDES(mDisplayLock) {
++        std::scoped_lock lock(mDisplayLock);
++        return pacesetterDisplayLocked()
++                .transform([](const Display& display) { return &display.targeterPtr->target(); })
++                .value_or(nullptr);
++    }
++
+     TimePoint expectedPresentTimeForPacesetter() const EXCLUDES(mDisplayLock) {
+         std::scoped_lock lock(mDisplayLock);
+         return pacesetterDisplayLocked()
+diff --git a/services/surfaceflinger/SurfaceFlinger.cpp b/services/surfaceflinger/SurfaceFlinger.cpp
+--- a/services/surfaceflinger/SurfaceFlinger.cpp
++++ b/services/surfaceflinger/SurfaceFlinger.cpp
+@@ -2857,26 +2857,31 @@
+ 
+ bool SurfaceFlinger::commit(PhysicalDisplayId pacesetterId,
+                             const scheduler::FrameTargets& frameTargets) EXCLUDES(mStateLock) {
+-    const scheduler::FrameTarget& pacesetterFrameTarget = *frameTargets.get(pacesetterId)->get();
++    // A pointer, not a reference: a hotplug reconnect or a resolution change can destroy the
++    // FrameTarget during the commit (Android 17 fc64768935).
++    const scheduler::FrameTarget* pacesetterFrameTargetPtr = frameTargets.get(pacesetterId)->get();
+ 
+-    const VsyncId vsyncId = pacesetterFrameTarget.vsyncId();
++    const VsyncId vsyncId = pacesetterFrameTargetPtr->vsyncId();
+     SFTRACE_NAME(ftl::Concat(__func__, ' ', ftl::to_underlying(vsyncId)).c_str());
+ 
+-    if (pacesetterFrameTarget.didMissFrame()) {
++    if (pacesetterFrameTargetPtr->didMissFrame()) {
+         mTimeStats->incrementMissedFrames();
+     }
+ 
+     // SF::processHotplugDisconnect() does not immediately propagate the display removal to the
+     // Scheduler and CompositionEngine, but instead requires a call to processDisplayChangesLocked()
+-    // to process the rest in the next commit. We should retry the commit with the new pacesetter
+-    // after display transactions have been propagated.
++    // to process the rest in the next commit. We should retry the commit with the new set of
++    // displays after display transactions have been propagated. Every display, not only the
++    // pacesetter (Android 17 5b950c67dc).
+     {
+-        const bool hasPacesetterDisplay =
+-                FTL_FAKE_GUARD(mStateLock, mPhysicalDisplays.contains(pacesetterId));
+-        if (FlagManager::getInstance().pacesetter_selection() && !hasPacesetterDisplay) {
+-            FTL_FAKE_GUARD(mStateLock, processDisplayChangesLocked());
+-            mScheduler->scheduleFrame();
+-            return false;
++        for (const auto [displayId, _] : frameTargets) {
++            const bool hasDisplay =
++                    FTL_FAKE_GUARD(mStateLock, mPhysicalDisplays.contains(displayId));
++            if (!hasDisplay) {
++                FTL_FAKE_GUARD(mStateLock, processDisplayChangesLocked());
++                mScheduler->scheduleFrame();
++                return false;
++            }
+         }
+     }
+ 
+@@ -2904,11 +2909,11 @@
+         }
+     }
+ 
+-    if (pacesetterFrameTarget.wouldBackpressureHwc()) {
+-        if (mBackpressureGpuComposition || pacesetterFrameTarget.didMissHwcFrame()) {
++    if (pacesetterFrameTargetPtr->wouldBackpressureHwc()) {
++        if (mBackpressureGpuComposition || pacesetterFrameTargetPtr->didMissHwcFrame()) {
+             mScheduler->getVsyncSchedule()->getTracker().onFrameMissed(
+-                    pacesetterFrameTarget.expectedPresentTime());
+-            const Duration slack = TimePoint::now() - pacesetterFrameTarget.frameBeginTime();
++                    pacesetterFrameTargetPtr->expectedPresentTime());
++            const Duration slack = TimePoint::now() - pacesetterFrameTargetPtr->frameBeginTime();
+             scheduleCommit(FrameHint::kNone, slack);
+             return false;
+         }
+@@ -2922,14 +2927,14 @@
+     mPowerHintSessionEnabled = mPowerAdvisor->usePowerHintSession() && frontInternalDisplay &&
+             frontInternalDisplay->getPowerMode() == hal::PowerMode::ON;
+     if (mPowerHintSessionEnabled) {
+-        mPowerAdvisor->setCommitStart(pacesetterFrameTarget.frameBeginTime());
+-        mPowerAdvisor->setExpectedPresentTime(pacesetterFrameTarget.expectedPresentTime());
++        mPowerAdvisor->setCommitStart(pacesetterFrameTargetPtr->frameBeginTime());
++        mPowerAdvisor->setExpectedPresentTime(pacesetterFrameTargetPtr->expectedPresentTime());
+ 
+         // Frame delay is how long we should have minus how long we actually have.
+         const Duration idealSfWorkDuration =
+                 mScheduler->vsyncModulator().getVsyncConfig().sfWorkDuration;
+         const Duration frameDelay =
+-                idealSfWorkDuration - pacesetterFrameTarget.expectedFrameDuration();
++                idealSfWorkDuration - pacesetterFrameTargetPtr->expectedFrameDuration();
+ 
+         mPowerAdvisor->setFrameDelay(frameDelay);
+         mPowerAdvisor->setTotalFrameTargetWorkDuration(idealSfWorkDuration);
+@@ -2956,24 +2961,29 @@
+     bool mustComposite = mMustComposite.exchange(false);
+     {
+         mFrameTimeline->setSfWakeUp(ftl::to_underlying(vsyncId),
+-                                    pacesetterFrameTarget.frameBeginTime().ns(),
++                                    pacesetterFrameTargetPtr->frameBeginTime().ns(),
+                                     Fps::fromPeriodNsecs(vsyncPeriod.ns()),
+                                     mScheduler->getPacesetterRefreshRate());
+ 
+         const bool flushTransactions = clearTransactionFlags(eTransactionFlushNeeded);
+         bool transactionsAreEmpty = false;
+-        mustComposite |= updateLayerSnapshots(vsyncId, pacesetterFrameTarget.frameBeginTime().ns(),
+-                                              pacesetterFrameTarget.expectedPresentTime().ns(),
++        mustComposite |= updateLayerSnapshots(vsyncId, pacesetterFrameTargetPtr->frameBeginTime().ns(),
++                                              pacesetterFrameTargetPtr->expectedPresentTime().ns(),
+                                               flushTransactions, transactionsAreEmpty);
+ 
++        // A display transaction for hotplug reconnect may have just destroyed the original.
++        if (const auto* target = mScheduler->pacesetterFrameTarget()) {
++            pacesetterFrameTargetPtr = target;
++        }
++
+         // Tell VsyncTracker that we are going to present this frame before scheduling
+         // setTransactionFlags which will schedule another SF frame. This was if the tracker
+         // needs to adjust the vsync timeline, it will be done before the next frame.
+         if (mustComposite) {
+             mScheduler->getVsyncSchedule()
+                     ->getTracker()
+-                    .onFrameBegin(pacesetterFrameTarget.expectedPresentTime(),
+-                                  pacesetterFrameTarget.lastSignaledFrameTime());
++                    .onFrameBegin(pacesetterFrameTargetPtr->expectedPresentTime(),
++                                  pacesetterFrameTargetPtr->lastSignaledFrameTime());
+         }
+         if (transactionFlushNeeded()) {
+             setTransactionFlags(eTransactionFlushNeeded);
+@@ -3004,14 +3014,21 @@
+                                                 updateAttachedChoreographer);
+ 
+         initiateDisplayModeChanges();
++
++        // A resolution change without refresh required may have just destroyed the original.
++        if (!FlagManager::getInstance().synced_resolution_switch()) {
++            if (const auto* target = mScheduler->pacesetterFrameTarget()) {
++                pacesetterFrameTargetPtr = target;
++            }
++        }
+     }
+ 
+     updateCursorAsync();
+     if (!mustComposite) {
+-        updateInputFlinger(vsyncId, pacesetterFrameTarget.frameBeginTime());
++        updateInputFlinger(vsyncId, pacesetterFrameTargetPtr->frameBeginTime());
+     }
+     doActiveLayersTracingIfNeeded(false, mVisibleRegionsDirty,
+-                                  pacesetterFrameTarget.frameBeginTime(), vsyncId);
++                                  pacesetterFrameTargetPtr->frameBeginTime(), vsyncId);
+ 
+     mLastCommittedVsyncId = vsyncId;
+ 
