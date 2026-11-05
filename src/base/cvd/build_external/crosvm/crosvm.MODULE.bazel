@@ -79,6 +79,11 @@ crosvm_bin.annotation(
         # see their vCPUs' effective frequency (needs the hypervisor and x86_64
         # crate patches below).
         "@//build_external/crosvm:PATCH.crosvm-aperfmperf.patch",
+        # On an Apple CPU the vCPUs run with its TSO memory model (Asahi's
+        # PR_SET_MEM_MODEL), so guest code that relies on x86-like memory
+        # ordering works (3DMark's Sling Shot Extreme livelocked without it).
+        # Made on top of the aperfmperf patch, which sorts before it.
+        "@//build_external/crosvm:PATCH.crosvm-apple-tso.patch",
         "@//build_external/crosvm:PATCH.crosvm-composite-duplicate-components.patch",
         # Sandbox fixes also need crate-specific variants below because
         # crates_universe checks out each published crate with its own root.
