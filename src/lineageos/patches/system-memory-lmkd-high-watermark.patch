@@ -1,0 +1,27 @@
+Patch summary:
+Android 17's lmkd fixes da50062 and 1cabea0: no kill on a full PSI stall, or
+on a small file cache, while free memory is still above the high watermark.
+A VM guest sees such stalls from host contention and memory-cgroup limits
+while it has plenty of free RAM.
+
+diff --git a/lmkd.cpp b/lmkd.cpp
+--- a/lmkd.cpp
++++ b/lmkd.cpp
+@@ -2988,7 +2988,7 @@
+         kill_reason = PRESSURE_AFTER_KILL;
+         strncpy(kill_desc, "min watermark is breached even after kill", sizeof(kill_desc));
+         kill_desc[sizeof(kill_desc) - 1] = '\0';
+-    } else if (level == VMPRESS_LEVEL_CRITICAL && events != 0) {
++    } else if (level == VMPRESS_LEVEL_CRITICAL && events != 0 && wmark <= WMARK_HIGH) {
+         /*
+          * Device is too busy reclaiming memory which might lead to ANR.
+          * Critical level is triggered when PSI complete stall (all tasks are blocked because
+@@ -3055,7 +3055,7 @@
+         kill_reason = DIRECT_RECL_STUCK;
+         snprintf(kill_desc, sizeof(kill_desc), "device is stuck in direct reclaim (%ldms > %dms)",
+                  direct_reclaim_duration_ms, direct_reclaim_threshold_ms);
+-    } else if (check_filecache) {
++    } else if (check_filecache && wmark <= WMARK_HIGH) {
+         int64_t file_lru_kb = (vs.field.nr_inactive_file + vs.field.nr_active_file) * page_k;
+ 
+         if (file_lru_kb < filecache_min_kb) {
