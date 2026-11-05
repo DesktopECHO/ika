@@ -851,6 +851,12 @@ Result<std::vector<MonitorCommand>> CrosvmManager::StartCommands(
 
   if (!instance.crosvm_use_balloon()) {
     crosvm_cmd.Cmd().AddParameter("--no-balloon");
+  } else {
+    // Free page reporting, as Android 17's virtualization stack uses: the
+    // guest hands memory it frees back to the host. The guest reports in
+    // pageblock-sized chunks (2 MiB with 4 KiB pages), so --hugepages backing
+    // is released and refaulted a whole huge page at a time.
+    crosvm_cmd.Cmd().AddParameter("--balloon-page-reporting");
   }
 
   if (!instance.crosvm_use_rng()) {

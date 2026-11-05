@@ -1,0 +1,20 @@
+Patch summary:
+Load virtio_balloon from the vendor ramdisk. GKI ships it in system_dlkm,
+whose modules.load is empty, so the guest never bound crosvm's balloon device
+and could not report freed pages to the host (crosvm --balloon-page-reporting,
+as Android 17's virtualization stack uses).
+
+diff --git a/shared/BoardConfig.mk b/shared/BoardConfig.mk
+--- a/shared/BoardConfig.mk
++++ b/shared/BoardConfig.mk
+@@ -122,6 +122,10 @@
+ BOARD_VENDOR_RAMDISK_KERNEL_MODULES += $(SYSTEM_VIRTIO_PREBUILTS_PATH)/virtio_console.ko
+ BOARD_VENDOR_RAMDISK_KERNEL_MODULES += $(SYSTEM_VIRTIO_PREBUILTS_PATH)/virtio_pci.ko
+ BOARD_VENDOR_RAMDISK_KERNEL_MODULES += $(SYSTEM_VIRTIO_PREBUILTS_PATH)/vmw_vsock_virtio_transport.ko
++# The balloon driver, so that the guest reports freed pages to the host (crosvm
++# --balloon-page-reporting). GKI ships it in system_dlkm, whose modules.load is
++# empty, so nothing loaded it.
++BOARD_VENDOR_RAMDISK_KERNEL_MODULES += $(wildcard $(SYSTEM_VIRTIO_PREBUILTS_PATH)/virtio_balloon.ko)
+ 
+ ifneq (,$(findstring auto, $(PRODUCT_NAME))$(findstring sdv, $(PRODUCT_NAME)))
+ # Support arm64 Cuttlefish on-device deployment
