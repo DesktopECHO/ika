@@ -31,6 +31,14 @@ D3D12 device samples BC formats natively.
   as plain BC3 images and data the CPU cannot decode stays undecoded, with
   a warning naming the image. Steel Nomad Light's uploads are all decoded
   on the CPU.
+- An image-to-image copy from another ASTC image the CPU decodes copies the
+  two output images as well, with the same regions, when the source's output
+  is decoded, the output formats match and, for BC3, the regions are aligned
+  to its 4x4 blocks in both images; the destination then stays decoded
+  without the GPU decoder, which a host without the fallback does not have.
+  Other copies still fall back to the GPU decoder.
+- IKA_ASTC_DECODE=cpu-rgba8 decodes on the CPU into RGBA8 images, as before
+  BC3, for comparisons; the GPU fallback then needs no probe.
 - The decoding log line adds the staged bytes ("... MB of BC3 blocks").
 - stb_dxt.h v1.12 (public domain) joins the bundled stb library.
 - Unit tests of the BC3 staging layout, of the rejected unaligned regions,
@@ -298,10 +306,14 @@ index 41807d4ce..0242224dc 100644
  };
  
 diff --git a/host/vulkan/emulated_textures/astc_texture_unittest.cpp b/host/vulkan/emulated_textures/astc_texture_unittest.cpp
-index daeeca63e..72b46969a 100644
+index daeeca63e..1b66ffcb3 100644
 --- a/host/vulkan/emulated_textures/astc_texture_unittest.cpp
 +++ b/host/vulkan/emulated_textures/astc_texture_unittest.cpp
-@@ -16,6 +16,8 @@
+@@ -13,9 +13,12 @@
+ // limitations under the License.
+ 
+ #include "astc_texture.h"
++#include "compressed_image_info.h"
  
  #include <gtest/gtest.h>
  
@@ -310,7 +322,7 @@ index daeeca63e..72b46969a 100644
  #include <map>
  #include <vector>
  
-@@ -123,6 +125,81 @@ uint16_t tagAt(const std::vector<uint8_t>& texels, size_t texel) {
+@@ -123,6 +126,81 @@ uint16_t tagAt(const std::vector<uint8_t>& texels, size_t texel) {
      return texels[texel * 4] | (texels[texel * 4 + 1] << 8);
  }
  
@@ -392,7 +404,7 @@ index daeeca63e..72b46969a 100644
  class AstcTextureTest : public ::testing::Test {
     protected:
      void SetUp() override {
-@@ -142,11 +219,13 @@ class AstcTextureTest : public ::testing::Test {
+@@ -142,11 +220,13 @@ class AstcTextureTest : public ::testing::Test {
  
      std::unique_ptr<AstcTexture> texture(uint32_t width, uint32_t height, uint32_t mipLevels,
                                           uint32_t layers, uint32_t block = 4,
@@ -408,7 +420,7 @@ index daeeca63e..72b46969a 100644
      }
  
      // A source buffer of `blocks` 16-byte blocks, each tagged with its index.
-@@ -323,6 +402,84 @@ TEST_F(AstcTextureTest, DecodesWithAstcEncoder) {
+@@ -323,6 +403,136 @@ TEST_F(AstcTextureTest, DecodesWithAstcEncoder) {
      }
  }
  
@@ -465,6 +477,58 @@ index daeeca63e..72b46969a 100644
 +    }
 +}
 +
++// An image-to-image copy between two ASTC images the CPU decodes copies their output images
++// when the source's output is decoded, the output formats match and, for BC3 output, the region
++// is aligned to its 4x4 blocks in both images.
++TEST_F(AstcTextureTest, OutputImagesCopyWhenAlignedAndDecoded) {
++    auto image = [&](VkFormat format, uint32_t size, uint32_t mips) {
++        VkImageCreateInfo ci = {
++            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
++            .imageType = VK_IMAGE_TYPE_2D,
++            .format = format,
++            .extent = {size, size, 1},
++            .mipLevels = mips,
++            .arrayLayers = 1,
++        };
++        auto info = std::make_unique<CompressedImageInfo>(
++            reinterpret_cast<VkDevice>(uintptr_t{0x1000}), ci, nullptr);
++        info->initAstcCpuDecompression(&mVk, reinterpret_cast<VkPhysicalDevice>(uintptr_t{0x2000}));
++        return info;
++    };
++    auto region = [](int32_t sx, int32_t sy, uint32_t sMip, int32_t dx, int32_t dy, uint32_t dMip,
++                     uint32_t w, uint32_t h) {
++        return VkImageCopy{{VK_IMAGE_ASPECT_COLOR_BIT, sMip, 0, 1},
++                           {sx, sy, 0},
++                           {VK_IMAGE_ASPECT_COLOR_BIT, dMip, 0, 1},
++                           {dx, dy, 0},
++                           {w, h, 1}};
++    };
++    // 6x6 ASTC in 24x24 images, 3 mip levels (24, 12, 6), with BC3 output as on a CPU-decoding
++    // device.
++    GpuDecompressionPipelineManager::setAstcDecoder(AstcDecoder::NewBc3);
++    auto src = image(VK_FORMAT_ASTC_6x6_UNORM_BLOCK, 24, 3);
++    auto dst = image(VK_FORMAT_ASTC_6x6_UNORM_BLOCK, 24, 3);
++    ASSERT_EQ(CompressedImageInfo::getOutputFormat(VK_FORMAT_ASTC_6x6_UNORM_BLOCK),
++              VK_FORMAT_BC3_UNORM_BLOCK);
++    EXPECT_TRUE(dst->canCopyOutputFrom(*src, region(0, 0, 0, 0, 0, 0, 24, 24)));
++    EXPECT_TRUE(dst->canCopyOutputFrom(*src, region(12, 0, 0, 12, 12, 0, 12, 12)));
++    EXPECT_TRUE(dst->canCopyOutputFrom(*src, region(0, 0, 2, 0, 0, 2, 6, 6)));  // 6x6: the edge
++    EXPECT_FALSE(dst->canCopyOutputFrom(*src, region(6, 0, 0, 0, 0, 0, 6, 24)));  // from x = 6
++    EXPECT_FALSE(dst->canCopyOutputFrom(*src, region(0, 0, 0, 6, 0, 0, 6, 24)));  // to x = 6
++    EXPECT_FALSE(dst->canCopyOutputFrom(*src, region(0, 0, 0, 0, 0, 0, 6, 24)));  // 6 wide inside
++    EXPECT_FALSE(dst->canCopyOutputFrom(*src, region(0, 0, 3, 0, 0, 0, 6, 6)));   // no such mip
++    // A source whose output is not decoded, or of another output format.
++    src->requireGpuAstcDecode("test");
++    EXPECT_FALSE(dst->canCopyOutputFrom(*src, region(0, 0, 0, 0, 0, 0, 24, 24)));
++    auto srgb = image(VK_FORMAT_ASTC_6x6_SRGB_BLOCK, 24, 3);
++    EXPECT_FALSE(dst->canCopyOutputFrom(*srgb, region(0, 0, 0, 0, 0, 0, 24, 24)));
++    // With RGBA8 output, any ASTC block-aligned region can be copied.
++    GpuDecompressionPipelineManager::setAstcDecoder(AstcDecoder::NewRgb);
++    auto src8 = image(VK_FORMAT_ASTC_6x6_UNORM_BLOCK, 24, 3);
++    auto dst8 = image(VK_FORMAT_ASTC_6x6_UNORM_BLOCK, 24, 3);
++    EXPECT_TRUE(dst8->canCopyOutputFrom(*src8, region(6, 0, 0, 6, 0, 0, 6, 24)));
++}
++
 +TEST_F(AstcTextureTest, DecodesWithAstcEncoderIntoBc3) {
 +    // The checkerboard of DecodesWithAstcEncoder: two colors per block, which BC3 holds exactly.
 +    auto& decoder = AstcCpuDecompressor::get();
@@ -494,7 +558,7 @@ index daeeca63e..72b46969a 100644
  }  // namespace vk
  }  // namespace host
 diff --git a/host/vulkan/emulated_textures/compressed_image_info.cpp b/host/vulkan/emulated_textures/compressed_image_info.cpp
-index 32289af1b..59fbc2b3c 100644
+index 32289af1b..063b81f08 100644
 --- a/host/vulkan/emulated_textures/compressed_image_info.cpp
 +++ b/host/vulkan/emulated_textures/compressed_image_info.cpp
 @@ -370,6 +370,15 @@ VkImageCreateInfo CompressedImageInfo::getOutputCreateInfo(
@@ -522,8 +586,36 @@ index 32289af1b..59fbc2b3c 100644
  }
  
  bool CompressedImageInfo::decompressIfNeeded(VulkanDispatch* vk, VkCommandBuffer commandBuffer,
-@@ -530,6 +539,15 @@ std::shared_ptr<AstcStagingBuffer> CompressedImageInfo::decompressOnCpu(
+@@ -528,8 +537,43 @@ std::shared_ptr<AstcStagingBuffer> CompressedImageInfo::decompressOnCpu(
+     return staging;
+ }
  
++// Whether a copy region of a BC3 image is aligned to its 4x4 blocks: offsets are multiples of 4,
++// and so are the extents unless they reach the edge of the mip level.
++static bool isBc3Aligned(const VkOffset3D& offset, const VkExtent3D& extent,
++                         const VkExtent3D& mip) {
++    const uint32_t x = static_cast<uint32_t>(offset.x);
++    const uint32_t y = static_cast<uint32_t>(offset.y);
++    return offset.x >= 0 && offset.y >= 0 && x % 4 == 0 && y % 4 == 0 &&
++           (extent.width % 4 == 0 || x + extent.width == mip.width) &&
++           (extent.height % 4 == 0 || y + extent.height == mip.height);
++}
++
++bool CompressedImageInfo::canCopyOutputFrom(const CompressedImageInfo& src,
++                                            const VkImageCopy& region) const {
++    if (!src.isAstc() || !src.mAstcTexture || !mAstcTexture || src.mNeedsGpuAstcDecode ||
++        src.mOutputFormat != mOutputFormat || region.extent.depth != 1 ||
++        region.srcSubresource.mipLevel >= src.mMipLevels ||
++        region.dstSubresource.mipLevel >= mMipLevels) {
++        return false;
++    }
++    if (!isCompressedFormat(mOutputFormat)) return true;
++    return isBc3Aligned(region.srcOffset, region.extent,
++                        src.mipmapExtent(region.srcSubresource.mipLevel)) &&
++           isBc3Aligned(region.dstOffset, region.extent,
++                        mipmapExtent(region.dstSubresource.mipLevel));
++}
++
  void CompressedImageInfo::requireGpuAstcDecode(const char* reason) {
      if (mNeedsGpuAstcDecode) return;
 +    if (!mGpuDecodeAvailable) {
@@ -539,7 +631,7 @@ index 32289af1b..59fbc2b3c 100644
      GFXSTREAM_WARNING("ASTC image %p: %s; decoding it on the GPU instead of the CPU.",
                        mOutputImage, reason);
 diff --git a/host/vulkan/emulated_textures/compressed_image_info.h b/host/vulkan/emulated_textures/compressed_image_info.h
-index 18ab01b6c..8cea1e435 100644
+index 18ab01b6c..9206ac7ce 100644
 --- a/host/vulkan/emulated_textures/compressed_image_info.h
 +++ b/host/vulkan/emulated_textures/compressed_image_info.h
 @@ -73,6 +73,12 @@ class CompressedImageInfo {
@@ -555,7 +647,21 @@ index 18ab01b6c..8cea1e435 100644
      // Should be called when the guest calls vkCmdPipelineBarrier.
      // This function checks if the image barrier transitions the compressed image to a layout where
      // it will be read from, and if so, it decompresses the image.
-@@ -186,6 +192,7 @@ class CompressedImageInfo {
+@@ -131,6 +137,13 @@ class CompressedImageInfo {
+     bool needsGpuAstcDecode() const { return mNeedsGpuAstcDecode; }
+     void requireGpuAstcDecode(const char* reason);
+ 
++    // Whether an image-to-image copy from src, another ASTC image the CPU decodes, can be done
++    // on the two output images as well, so that this image's output stays decoded without the
++    // GPU decoder: src's output is decoded, the output formats are the same, and with BC3
++    // output the region is aligned to its 4x4 blocks in both images, as a copy between BC3
++    // images must be.
++    bool canCopyOutputFrom(const CompressedImageInfo& src, const VkImageCopy& region) const;
++
+    private:
+     // Returns a vector of image barriers for the compressed mipmap images and the decompressed
+     // image.
+@@ -186,6 +199,7 @@ class CompressedImageInfo {
      // Used to perform CPU decompression of ASTC textures. Null for non-ASTC images.
      std::unique_ptr<AstcTexture> mAstcTexture = nullptr;
      bool mNeedsGpuAstcDecode = false;
@@ -564,7 +670,7 @@ index 18ab01b6c..8cea1e435 100644
      // Vulkan resources used by the decompression pipeline
      GpuDecompressionPipelineManager* mPipelineManager = nullptr;
 diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operations.cpp
-index c1c5f7691..01643f886 100644
+index c1c5f7691..8925f1cf8 100644
 --- a/host/vulkan/vk_common_operations.cpp
 +++ b/host/vulkan/vk_common_operations.cpp
 @@ -25,6 +25,8 @@
@@ -666,7 +772,30 @@ index c1c5f7691..01643f886 100644
  std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
                                                   gfxstream::host::GlobalState* globalState,
                                                   const gfxstream::host::FeatureSet& features) {
-@@ -1337,9 +1422,17 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
+@@ -1318,18 +1403,19 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
+     // WSL2: Windows reset the GPU, D3D12 removed the device and gfxstream aborted
+     // on VK_ERROR_DEVICE_LOST, ending the VM. On Dozen, ASTC textures are decoded
+     // on the CPU when they are uploaded. IKA_ASTC_DECODE=gpu or cpu overrides the
+-    // choice on any device.
++    // choice on any device; cpu-rgba8 decodes on the CPU into RGBA8 images, not BC3.
+     if (emulation->mAstcLdrEmulationMode != AstcEmulationMode::Disabled) {
+         const char* astcDecode = getenv("IKA_ASTC_DECODE");
+         const std::string astcDecodeChoice = astcDecode ? astcDecode : "";
+         AstcEmulationMode mode = emulation->mDeviceInfo.isDozen ? AstcEmulationMode::Cpu
+                                                                 : AstcEmulationMode::Gpu;
+-        if (astcDecodeChoice == "cpu") {
++        const bool cpuRgba8 = astcDecodeChoice == "cpu-rgba8";
++        if (astcDecodeChoice == "cpu" || cpuRgba8) {
+             mode = AstcEmulationMode::Cpu;
+         } else if (astcDecodeChoice == "gpu") {
+             mode = AstcEmulationMode::Gpu;
+         } else if (!astcDecodeChoice.empty()) {
+-            GFXSTREAM_WARNING("IKA_ASTC_DECODE=%s is neither cpu nor gpu; ignored.",
++            GFXSTREAM_WARNING("IKA_ASTC_DECODE=%s is none of cpu, cpu-rgba8 and gpu; ignored.",
+                               astcDecodeChoice.c_str());
+         }
+         if (mode == AstcEmulationMode::Cpu && !AstcCpuDecompressor::get().available()) {
+@@ -1337,9 +1423,18 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
              mode = AstcEmulationMode::Gpu;
          }
          emulation->mAstcLdrEmulationMode = mode;
@@ -675,22 +804,26 @@ index c1c5f7691..01643f886 100644
 +        // size as RGBA8: an emulated ASTC texture's output image is BC3, which every desktop
 +        // GPU and D3D12 samples natively. The GPU decoder of the same process, which decodes
 +        // what the CPU cannot, then transcodes into BC3 too, so that both write one format.
-+        if (mode == AstcEmulationMode::Cpu) {
++        const bool bc3 = mode == AstcEmulationMode::Cpu && !cpuRgba8;
++        if (bc3) {
 +            GpuDecompressionPipelineManager::setAstcDecoder(AstcDecoder::NewBc3);
 +        }
 +        GFXSTREAM_INFO("ASTC textures decoded on the %s%s%s.",
                         mode == AstcEmulationMode::Cpu ? "CPU" : "GPU",
 -                       emulation->mDeviceInfo.isDozen ? " (Mesa Dozen)" : "");
 +                       emulation->mDeviceInfo.isDozen ? " (Mesa Dozen)" : "",
-+                       mode == AstcEmulationMode::Cpu ? " into BC3 images" : "");
++                       bc3 ? " into BC3 images" : "");
      }
  
      // Collect image support info of the selected device
-@@ -1685,6 +1778,16 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
+@@ -1685,6 +1780,19 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
  
      emulation->mTransferQueueCommandBufferPool.resize(0);
  
-+    if (emulation->mAstcLdrEmulationMode == AstcEmulationMode::Cpu) {
++    // With RGBA8 output (IKA_ASTC_DECODE=cpu-rgba8) the GPU decoder writes a plain storage
++    // image, which every device has.
++    if (emulation->mAstcLdrEmulationMode == AstcEmulationMode::Cpu &&
++        GpuDecompressionPipelineManager::astcDecoder() == AstcDecoder::NewBc3) {
 +        emulation->mAstcCpuDecodeGpuFallback =
 +            probeAstcGpuDecodeOutputImage(ivk, dvk, emulation->mPhysicalDevice, emulation->mDevice);
 +        GFXSTREAM_INFO(
@@ -727,10 +860,30 @@ index a65557e30..481fc32da 100644
      // Whether to use ETC2 emulation.
      bool mEnableEtc2Emulation = false;
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
-index 1dde4d13e..f031cc8e7 100644
+index 1dde4d13e..77dd140df 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -3665,6 +3665,10 @@ class VkDecoderGlobalState::Impl {
+@@ -230,6 +230,19 @@ static bool usesSparseImageBinding(VkImageCreateFlags flags) {
+     return (flags & kSparseImageCreateFlags) != 0;
+ }
+ 
++// The regions of a vkCmdCopyImage2 as VkImageCopy, for the Vulkan 1.0 vkCmdCopyImage.
++template <typename VkCopyImageInfo2OrKHR>
++static std::vector<VkImageCopy> toImageCopies(const VkCopyImageInfo2OrKHR* info) {
++    std::vector<VkImageCopy> regions;
++    regions.reserve(info->regionCount);
++    for (uint32_t r = 0; r < info->regionCount; r++) {
++        const auto& region = info->pRegions[r];
++        regions.push_back({region.srcSubresource, region.srcOffset, region.dstSubresource,
++                           region.dstOffset, region.extent});
++    }
++    return regions;
++}
++
+ static bool isDescriptorTypeImageInfo(VkDescriptorType descType) {
+     return (descType == VK_DESCRIPTOR_TYPE_SAMPLER) ||
+            (descType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) ||
+@@ -3665,6 +3678,10 @@ class VkDecoderGlobalState::Impl {
          if (needDecompression) {
              cmpInfo = std::make_unique<CompressedImageInfo>(device, *pCreateInfo,
                                                              deviceInfo->decompPipelines.get());
@@ -741,6 +894,71 @@ index 1dde4d13e..f031cc8e7 100644
              decompInfo = cmpInfo->getOutputCreateInfo(*pCreateInfo);
              pCreateInfo = &decompInfo;
          }
+@@ -5930,6 +5947,30 @@ class VkDecoderGlobalState::Impl {
+         destroyPipelineLocked(device, deviceDispatch, pipeline);
+     }
+ 
++    // Where the destination of an image-to-image copy is an ASTC image the CPU decodes, keeps
++    // its output image decoded: a copy from another such image copies the output images too,
++    // with the same regions (the output formats match, and the regions are block-aligned in both
++    // images); any other source leaves the image to the GPU decoder. Returns whether the output
++    // images were copied.
++    bool copyAstcOutputImagesLocked(VulkanDispatch* vk, VkCommandBuffer commandBuffer,
++                                    const ImageInfo& srcImg, VkImageLayout srcImageLayout,
++                                    const ImageInfo& dstImg, VkImageLayout dstImageLayout,
++                                    uint32_t regionCount, const VkImageCopy* pRegions)
++        REQUIRES(mMutex) {
++        CompressedImageInfo& dst = *dstImg.compressInfo;
++        bool copyOutputs = srcImg.compressInfo != nullptr;
++        for (uint32_t r = 0; copyOutputs && r < regionCount; r++) {
++            copyOutputs = dst.canCopyOutputFrom(*srcImg.compressInfo, pRegions[r]);
++        }
++        if (!copyOutputs) {
++            dst.requireGpuAstcDecode("an image-to-image copy wrote it");
++            return false;
++        }
++        vk->vkCmdCopyImage(commandBuffer, srcImg.compressInfo->outputImage(), srcImageLayout,
++                           dst.outputImage(), dstImageLayout, regionCount, pRegions);
++        return true;
++    }
++
+     void on_vkCmdCopyImage(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
+                            VkCommandBuffer boxed_commandBuffer, VkImage srcImage,
+                            VkImageLayout srcImageLayout, VkImage dstImage,
+@@ -5954,7 +5995,8 @@ class VkDecoderGlobalState::Impl {
+         }
+         if (dstImg->compressInfo && dstImg->compressInfo->isAstc() &&
+             dstImg->compressInfo->canDecompressOnCpu()) {
+-            dstImg->compressInfo->requireGpuAstcDecode("an image-to-image copy wrote it");
++            copyAstcOutputImagesLocked(vk, commandBuffer, *srcImg, srcImageLayout, *dstImg,
++                                       dstImageLayout, regionCount, pRegions);
+         }
+         VkImage srcImageMip = srcImage;
+         VkImage dstImageMip = dstImage;
+@@ -6021,7 +6063,10 @@ class VkDecoderGlobalState::Impl {
+         }
+         if (dstImg->compressInfo && dstImg->compressInfo->isAstc() &&
+             dstImg->compressInfo->canDecompressOnCpu()) {
+-            dstImg->compressInfo->requireGpuAstcDecode("an image-to-image copy wrote it");
++            std::vector<VkImageCopy> regions = toImageCopies(pCopyImageInfo);
++            copyAstcOutputImagesLocked(vk, commandBuffer, *srcImg, pCopyImageInfo->srcImageLayout,
++                                       *dstImg, pCopyImageInfo->dstImageLayout, regions.size(),
++                                       regions.data());
+         }
+         VkImage srcImageMip = pCopyImageInfo->srcImage;
+         VkImage dstImageMip = pCopyImageInfo->dstImage;
+@@ -6097,7 +6142,10 @@ class VkDecoderGlobalState::Impl {
+         }
+         if (dstImg->compressInfo && dstImg->compressInfo->isAstc() &&
+             dstImg->compressInfo->canDecompressOnCpu()) {
+-            dstImg->compressInfo->requireGpuAstcDecode("an image-to-image copy wrote it");
++            std::vector<VkImageCopy> regions = toImageCopies(pCopyImageInfo);
++            copyAstcOutputImagesLocked(vk, commandBuffer, *srcImg, pCopyImageInfo->srcImageLayout,
++                                       *dstImg, pCopyImageInfo->dstImageLayout, regions.size(),
++                                       regions.data());
+         }
+         VkImage srcImageMip = pCopyImageInfo->srcImage;
+         VkImage dstImageMip = pCopyImageInfo->dstImage;
 diff --git a/third_party/stb/BUILD.bazel b/third_party/stb/BUILD.bazel
 index e4326c0f0..a2152c4ab 100644
 --- a/third_party/stb/BUILD.bazel
