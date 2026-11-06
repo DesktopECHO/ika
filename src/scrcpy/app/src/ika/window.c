@@ -1252,11 +1252,18 @@ sc_ika_window_on_changed(struct sc_ika_window *iw) {
             // Unless the compositor insists on the size it gave just before
             if (w != iw->compositor_width || h != iw->compositor_height) {
                 // The compositor sized the window geometry, which is the
-                // content: add the margin
+                // content: add the margin, on the sides it sized. A side
+                // still at the size asked for already holds it: SDL fits a
+                // new window into the configure bounds, and on a work area
+                // as tall as the window only the height changes. The
+                // margin added around the width too made the window wider
+                // at each start.
                 iw->compositor_width = w;
                 iw->compositor_height = h;
-                iw->expected_width = w + 2 * margin;
-                iw->expected_height = h + 2 * margin;
+                iw->expected_width =
+                    w == iw->expected_width ? w : w + 2 * margin;
+                iw->expected_height =
+                    h == iw->expected_height ? h : h + 2 * margin;
                 if (!SDL_SetWindowSize(iw->window, iw->expected_width,
                                        iw->expected_height)) {
                     LOGW("Could not set window size: %s", SDL_GetError());
