@@ -2809,6 +2809,115 @@ resolve_display_refresh_hz() {
   fi
 }
 
+# WSLg presents to Windows at a rate of its own, 60 Hz unless its
+# configuration says otherwise, and its Weston output reports that rate, so
+# with refresh_rate_hz = auto Android ran at 60 Hz on a 144 Hz panel.
+# sync_wslg_refresh_rate keeps WESTON_RDP_MONITOR_REFRESH_RATE in the Windows
+# user's .wslgconfig at Ika's rate: refresh_rate_hz as set, or with auto the
+# slowest refresh rate among Windows' displays (Microsoft's advice: the
+# Windows compositor's clock), at most WSLg's ceiling of 144. WSLg reads the
+# file when WSL starts, so a new rate shows after "wsl --shutdown"; until then
+# Android follows the rate WSLg presents at. It runs in the background at
+# start, and does nothing outside WSLg or when Windows cannot be asked.
+WSLG_MAX_REFRESH_HZ=144
+WSLG_DEFAULT_REFRESH_HZ=60
+
+# The rate for WSLg from refresh_rate_hz and the Windows displays' slowest rate
+# (empty when unknown), or nothing when neither gives one.
+wslg_wanted_refresh_hz() {
+  local setting="$1"
+  local windows_hz="$2"
+  local hz
+
+  if [[ "${setting}" =~ ^[1-9][0-9]*$ ]]; then
+    hz="${setting}"
+  elif [[ "${windows_hz}" =~ ^[1-9][0-9]*$ ]]; then
+    hz="${windows_hz}"
+  else
+    return 1
+  fi
+  (( hz <= WSLG_MAX_REFRESH_HZ )) || hz="${WSLG_MAX_REFRESH_HZ}"
+  printf '%s\n' "${hz}"
+}
+
+# Prints the .wslgconfig on standard input with WESTON_RDP_MONITOR_REFRESH_RATE
+# in [system-distro-env] set to the rate given, adding the section or the key
+# where missing and leaving every other line as it was. Lines end in CRLF, as
+# a file Windows' editors write.
+wslgconfig_with_refresh_rate() {
+  local hz="$1"
+
+  awk -v key="WESTON_RDP_MONITOR_REFRESH_RATE" -v hz="${hz}" '
+    { sub(/\r$/, "") }
+    /^[ \t]*\[/ {
+      if (in_section && !done) { print key "=" hz; done = 1 }
+      in_section = (tolower($0) ~ /^[ \t]*\[system-distro-env\][ \t]*$/)
+      print; next
+    }
+    in_section && $0 ~ ("^[ \t]*" key "[ \t]*=") {
+      if (!done) { print key "=" hz; done = 1 }
+      next
+    }
+    { print }
+    END {
+      if (!done) {
+        if (!in_section) { if (NR > 0) print ""; print "[system-distro-env]" }
+        print key "=" hz
+      }
+    }' | sed 's/$/\r/'
+}
+
+# Prints the Windows user's profile folder and the slowest refresh rate among
+# Windows' displays, one a line, the rate empty when Windows gives none.
+wslg_refresh_probe_script() {
+  cat <<'EOF'
+$rate = (Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
+  Where-Object { $_.CurrentRefreshRate -gt 1 } |
+  Measure-Object -Property CurrentRefreshRate -Minimum).Minimum
+$env:USERPROFILE
+"$rate"
+EOF
+}
+
+sync_wslg_refresh_rate() {
+  local powershell
+
+  [[ "${IKA_ON_WSLG}" == true ]] || return 0
+  powershell="$(windows_powershell)" || return 0
+  mkdir -p "${CVD_TMP_DIR}"
+  (
+    detach_background_job 9
+    flock -n 9 || exit 0
+    local probe profile windows_hz wanted file current new presented
+    probe="$(with_timeout 30 "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+      -EncodedCommand "$(wslg_refresh_probe_script | iconv -t UTF-16LE | base64 -w 0)" \
+      </dev/null 2>/dev/null | tr -d '\r')" || exit 0
+    profile="$(sed -n 1p <<<"${probe}")"
+    windows_hz="$(sed -n 2p <<<"${probe}")"
+    wanted="$(wslg_wanted_refresh_hz "${IKA_REFRESH_RATE_HZ:-auto}" "${windows_hz}")" || exit 0
+    [[ -n "${profile}" ]] || exit 0
+    file="$(wslpath -u "${profile}" 2>/dev/null)/.wslgconfig" || exit 0
+    [[ -d "${file%/*}" ]] || exit 0
+    if [[ -f "${file}" ]]; then
+      current="$(cat "${file}")"
+    elif (( wanted == WSLG_DEFAULT_REFRESH_HZ )); then
+      exit 0
+    else
+      current=""
+    fi
+    new="$(printf '%s' "${current}" | wslgconfig_with_refresh_rate "${wanted}")"
+    if [[ "${new}" != "${current}" ]]; then
+      printf '%s\n' "${new}" > "${file}.ika-tmp" && mv -f "${file}.ika-tmp" "${file}" || exit 0
+      log "WSLg: WESTON_RDP_MONITOR_REFRESH_RATE=${wanted} in ${profile}\\.wslgconfig"
+    fi
+    presented="$(host_display_refresh_hz || true)"
+    if [[ -n "${presented}" && "${presented}" != "${wanted}" ]]; then
+      log "WSLg presents at ${presented} Hz until WSL restarts (wsl --shutdown), then at ${wanted} Hz"
+    fi
+  ) 9>"${CVD_TMP_DIR}/wslg-refresh.lock" &
+  disown "$!" 2>/dev/null || true
+}
+
 _host_display_logical_size_probed=""
 _host_display_logical_size_value=""
 host_display_logical_size() {
@@ -12268,6 +12377,7 @@ main() {
       redirect_start_logs
       flush_start_log_notes
       repair_wslg_taskbar_pins
+      sync_wslg_refresh_rate
       run_timed_operation "started" start_cvd "${fullscreen_mode}" "${start_args[@]}"
       ;;
     stop)
