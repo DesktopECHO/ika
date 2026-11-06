@@ -1,0 +1,173 @@
+dzn: Create constant buffer views for shader-visible heaps through a copy
+
+NVIDIA's D3D12 driver under WSL2 takes 4.1 us to create a constant buffer
+view in a shader-visible descriptor heap, against 0.015 us in a CPU-only
+heap; copying one descriptor from a CPU-only heap into a shader-visible one
+takes 0.15 us (RTX 4080 Laptop GPU, driver 595.79, 20000 views each). On
+the same laptop's Intel UHD Graphics every one of these takes under 0.01 us.
+Without bindless descriptors Dozen creates such a view for each dynamic
+uniform buffer on every draw that follows new dynamic offsets, which is how
+ANGLE passes uniforms: a WebGL page making 6000 draws a frame spent 80% of
+a host core in the driver's view creation and drew 12 frames a second.
+
+Create constant buffer views meant for a shader-visible heap in a one-slot
+CPU-only heap and copy them across, under a lock. Views for CPU-only heaps
+are created in place as before.
+
+Android 16 on the RTX 4080 under WSL2, two runs each: the WebGL page at
+6000 draws a frame 42.9 frames a second instead of 12.0, at 12000 draws
+28.6 instead of 7.1, at 1500 and 3000 draws 54 instead of 38 and 24.
+
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -252,6 +252,7 @@
+    uint64_t gpu_base;
+    uint32_t desc_count;
+    uint32_t desc_sz;
++   bool shader_visible;
+ };
+ 
+ struct dzn_device_descriptor_heap {
+@@ -306,6 +307,15 @@
+    bool bindless;
+    bool support_static_samplers;
+    struct dzn_device_descriptor_heap device_heaps[NUM_POOL_TYPES];
++
++   /* A CPU-only descriptor that constant buffer views are created in before
++    * they are copied into a shader-visible heap, see
++    * dzn_descriptor_heap_create_cbv().
++    */
++   struct {
++      struct dzn_descriptor_heap heap;
++      mtx_t lock;
++   } cbv_staging;
+ };
+ 
+ void dzn_meta_finish(struct dzn_device *device);
+@@ -521,6 +531,12 @@
+                                            const struct dzn_buffer_view *bview);
+ 
+ void
++dzn_descriptor_heap_create_cbv(struct dzn_device *device,
++                               const struct dzn_descriptor_heap *heap,
++                               uint32_t desc_offset,
++                               const D3D12_CONSTANT_BUFFER_VIEW_DESC *desc);
++
++void
+ dzn_descriptor_heap_write_buffer_desc(struct dzn_device *device,
+                                       struct dzn_descriptor_heap *heap,
+                                       uint32_t heap_offset,
+diff --git a/src/microsoft/vulkan/dzn_descriptor_set.c b/src/microsoft/vulkan/dzn_descriptor_set.c
+--- a/src/microsoft/vulkan/dzn_descriptor_set.c
++++ b/src/microsoft/vulkan/dzn_descriptor_set.c
+@@ -975,6 +975,7 @@
+ {
+    heap->desc_count = desc_count;
+    heap->desc_sz = ID3D12Device1_GetDescriptorHandleIncrementSize(device->dev, type);
++   heap->shader_visible = shader_visible;
+ 
+    D3D12_DESCRIPTOR_HEAP_DESC desc = {
+       .Type = type,
+@@ -1097,6 +1098,35 @@
+       ID3D12Device1_CreateShaderResourceView(device->dev, bview->buffer->res, &bview->srv_desc, view_handle);
+ }
+ 
++/* Creates a constant buffer view at desc_offset in heap. A view meant for a
++ * shader-visible heap is created in a CPU-only descriptor first and copied
++ * there: NVIDIA's D3D12 driver under WSL2 takes 4 us to create a constant
++ * buffer view in a shader-visible heap, against 0.015 us in a CPU-only one
++ * and 0.15 us for the copy (an RTX 4080 Laptop GPU, driver 595.79), and
++ * Dozen creates one per dynamic uniform buffer for every draw that follows
++ * new dynamic offsets. Other drivers create and copy in a few nanoseconds.
++ */
++void
++dzn_descriptor_heap_create_cbv(struct dzn_device *device,
++                               const struct dzn_descriptor_heap *heap,
++                               uint32_t desc_offset,
++                               const D3D12_CONSTANT_BUFFER_VIEW_DESC *desc)
++{
++   D3D12_CPU_DESCRIPTOR_HANDLE dst = dzn_descriptor_heap_get_cpu_handle(heap, desc_offset);
++
++   if (!heap->shader_visible || !device->cbv_staging.heap.heap) {
++      ID3D12Device1_CreateConstantBufferView(device->dev, desc, dst);
++      return;
++   }
++
++   D3D12_CPU_DESCRIPTOR_HANDLE src = dzn_descriptor_heap_get_cpu_handle(&device->cbv_staging.heap, 0);
++   mtx_lock(&device->cbv_staging.lock);
++   ID3D12Device1_CreateConstantBufferView(device->dev, desc, src);
++   ID3D12Device1_CopyDescriptorsSimple(device->dev, 1, dst, src,
++                                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
++   mtx_unlock(&device->cbv_staging.lock);
++}
++
+ void
+ dzn_descriptor_heap_write_buffer_desc(struct dzn_device *device,
+                                       struct dzn_descriptor_heap *heap,
+@@ -1119,7 +1149,7 @@
+          .BufferLocation = info->buffer->gpuva + info->offset,
+          .SizeInBytes = MIN2(ALIGN_POT(size, 256), D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 4 * sizeof(float)),
+       };
+-      ID3D12Device1_CreateConstantBufferView(device->dev, &cbv_desc, view_handle);
++      dzn_descriptor_heap_create_cbv(device, heap, desc_offset, &cbv_desc);
+    } else if (writeable) {
+       D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {
+          .Format = DXGI_FORMAT_R32_TYPELESS,
+@@ -1743,11 +1773,10 @@
+             .SizeInBytes = ALIGN_POT(layout->bindings[b].inline_size,
+                                      D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT),
+          };
+-         D3D12_CPU_DESCRIPTOR_HANDLE handle =
+-            dzn_descriptor_heap_get_cpu_handle(&pool->heaps[D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV],
+-                                               set->heap_offsets[D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV] +
+-                                               heap_offset);
+-         ID3D12Device1_CreateConstantBufferView(device->dev, &cbv_desc, handle);
++         dzn_descriptor_heap_create_cbv(device, &pool->heaps[D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV],
++                                        set->heap_offsets[D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV] +
++                                        heap_offset,
++                                        &cbv_desc);
+       }
+    }
+ }
+@@ -1956,8 +1985,8 @@
+          .BufferLocation = pool->inline_data.gpuva + start,
+          .SizeInBytes = MIN2(DZN_INLINE_UNIFORM_WINDOW_SIZE, pool->inline_data.size - start),
+       };
+-      ID3D12Device1_CreateConstantBufferView(device->dev, &cbv_desc,
+-                                             dzn_descriptor_heap_get_cpu_handle(&device->device_heaps[D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV].heap, slot));
++      dzn_descriptor_heap_create_cbv(device, &device->device_heaps[D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV].heap,
++                                     slot, &cbv_desc);
+       pool->inline_data.window_slots[w] = slot;
+    }
+ 
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -2429,6 +2429,11 @@
+       mtx_destroy(&device->device_heaps[type].lock);
+    }
+ 
++   if (device->cbv_staging.heap.heap) {
++      dzn_descriptor_heap_finish(&device->cbv_staging.heap);
++      mtx_destroy(&device->cbv_staging.lock);
++   }
++
+    if (device->dev_config)
+       ID3D12DeviceConfiguration_Release(device->dev_config);
+ 
+@@ -2654,6 +2659,14 @@
+       device->need_swapchain_blits = true;
+    }
+ 
++   result = dzn_descriptor_heap_init(&device->cbv_staging.heap, device,
++                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1, false);
++   if (result != VK_SUCCESS) {
++      dzn_device_destroy(device, pAllocator);
++      return result;
++   }
++   mtx_init(&device->cbv_staging.lock, mtx_plain);
++
+    device->support_static_samplers = true;
+    device->bindless = (instance->debug_flags & DZN_DEBUG_BINDLESS) != 0 ||
+       device->vk.enabled_features.descriptorIndexing ||
