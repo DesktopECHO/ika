@@ -2142,6 +2142,7 @@ Usage:
   ${SCRIPT_NAME} reset [--data_gb=GB]
   ${SCRIPT_NAME} root
   ${SCRIPT_NAME} shell [COMMAND...]
+  ${SCRIPT_NAME} adb [ARGS...]
   ${SCRIPT_NAME} gsf
   ${SCRIPT_NAME} backup [FILE]
   ${SCRIPT_NAME} restore [FILE]
@@ -2372,6 +2373,12 @@ Android shell:
   '${SCRIPT_NAME} shell' opens a shell in Android (adb shell); '${SCRIPT_NAME} shell
   COMMAND' runs COMMAND there. If the VM is not running, it is started
   without the console first. On WSL, Windows Terminal's Ika profile opens it.
+
+adb:
+
+  '${SCRIPT_NAME} adb ARGS' runs Ika's adb (${CVD_ADB_BIN})
+  with ARGS as given, such as '${SCRIPT_NAME} adb devices' or
+  '${SCRIPT_NAME} adb logcat'. It starts nothing.
 
 GSF ID:
 
@@ -12353,6 +12360,13 @@ main() {
           && "${2}" != "sync" && "${2}" != "close" ]]; then
       start_windows_shift_probe
     fi
+  fi
+
+  # Before the GPU probe, which adb has no use for
+  if [[ "${command}" == "adb" ]]; then
+    shift
+    require_executable "${CVD_ADB_BIN}" "adb"
+    exec "${CVD_ADB_BIN}" "$@"
   fi
 
   ika_ini_warn_unknown
