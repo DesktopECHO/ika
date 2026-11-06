@@ -1,0 +1,18 @@
+Patch summary:
+Android 17's Launcher3 3a329b6: release the animation surfaces after a desktop
+app launch. "Transition Root" layers otherwise piled up in SurfaceFlinger with
+every app open and close.
+
+diff --git a/quickstep/src/com/android/launcher3/desktop/DesktopAppLaunchTransition.kt b/quickstep/src/com/android/launcher3/desktop/DesktopAppLaunchTransition.kt
+--- a/quickstep/src/com/android/launcher3/desktop/DesktopAppLaunchTransition.kt
++++ b/quickstep/src/com/android/launcher3/desktop/DesktopAppLaunchTransition.kt
+@@ -95,6 +95,9 @@
+         val animatorFinishedCallback: (Animator) -> Unit = { animator ->
+             animators -= animator
+             if (animators.isEmpty()) {
++                // Releases temporary-for-animation surfaces referenced by us to
++                // potentially free up memory.
++                info.releaseAnimSurfaces()
+                 RemoteRunnable.executeSafely(finishedCallback)
+             }
+         }
