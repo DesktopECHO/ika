@@ -93,6 +93,20 @@ desktop_console="$(console_of desktop false)"
 [[ "${desktop_console}" == *" --window-state-file=${SCRCPY_WINDOW_STATE_FILE} "* ]] \
   || fail "desktop console window state: ${desktop_console}"
 
+# The desktop console comes back as it closed, as app windows do: fullscreen
+# when its saved state says it was, windowed when it was not, and fullscreen
+# with -f either way.
+mkdir -p "$(dirname "${DESKTOP_CONSOLE_WINDOW_STATE_FILE}")"
+printf 'version=1\nwidth=1000\nheight=600\nfullscreen=true\n' >"${DESKTOP_CONSOLE_WINDOW_STATE_FILE}"
+[[ "$(console_of desktop false)" == fullscreen=true* ]] \
+  || fail "a desktop console that closed fullscreen opened windowed"
+printf 'version=1\nwidth=1000\nheight=600\nfullscreen=false\n' >"${DESKTOP_CONSOLE_WINDOW_STATE_FILE}"
+[[ "$(console_of desktop false)" == fullscreen=false* ]] \
+  || fail "a desktop console that closed windowed opened fullscreen"
+[[ "$(console_of desktop true)" == fullscreen=true* ]] \
+  || fail "-f did not open the desktop console fullscreen"
+rm -f "${DESKTOP_CONSOLE_WINDOW_STATE_FILE}"
+
 # tv_dpi sets the TV console's density only.
 IKA_TV_DPI="240"
 [[ "$(console_of tv false)" == *" --dpi=240 "* ]] || fail "tv_dpi in TV mode"

@@ -5528,9 +5528,10 @@ run_scrcpy_supervisor() {
     set_wslg_jump_list \
       "${XDG_DATA_HOME:-${HOME}/.local/share}/applications/ika-$(wslg_distro_id).desktop"
   fi
-  # A normal launch obeys the requested windowed/fullscreen mode. The saved
-  # fullscreen value is used only below when recovering the same console from
-  # a confirmed guest reboot.
+  # A normal launch obeys the requested windowed/fullscreen mode, which for
+  # the console start_scrcpy_with_retries took from the saved state when -f
+  # did not ask for fullscreen. The saved value is read again below when
+  # recovering the same console from a confirmed guest reboot.
   while has_live_cvd_processes; do
     command=("${base_command[@]}")
     if [[ -n "${window_width}" && -n "${window_height}" ]]; then
@@ -6184,6 +6185,9 @@ start_scrcpy_with_retries() {
   local scrcpy_window_width
   local console_dpi="${SCRCPY_DPI}"
   local scrcpy_window_height
+  local saved_width
+  local saved_height
+  local saved_fullscreen
   local -a scrcpy_env=()
   local -a scrcpy_cmd=(
     "${SCRCPY_BIN}"
@@ -6199,6 +6203,15 @@ start_scrcpy_with_retries() {
     if [[ "${SCRCPY_DPI_GIVEN}" != "true" ]]; then
       console_dpi="$(resolve_tv_dpi)"
     fi
+  elif [[ "${fullscreen_mode}" != "true" ]] \
+      && read_scrcpy_window_state "${SCRCPY_WINDOW_STATE_FILE}" \
+        saved_width saved_height saved_fullscreen \
+      && [[ "${saved_fullscreen}" == "true" ]]; then
+    # The console comes back as it closed, with MOD+Q or its close button:
+    # fullscreen when it was. The supervisor restores its size from the same
+    # file, the windowed one that leaving fullscreen returns to.
+    fullscreen_mode="true"
+    log "the console was fullscreen when it closed; opening it fullscreen"
   fi
   exec {scrcpy_lock_fd}>"${scrcpy_lock_file}"
   if ! flock "${scrcpy_lock_fd}"; then
