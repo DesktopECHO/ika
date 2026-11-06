@@ -1188,6 +1188,7 @@ CVD_ADB_BIN="${CVD_HOST_OUT}/bin/adb"
 CVD_ASSEMBLY_DIR="${CVD_HOME_DIR}/cuttlefish/assembly"
 CVD_ASSEMBLY_CONFIG_PATH="${CVD_ASSEMBLY_DIR}/cuttlefish_config.json"
 CVD_INSTANCE_DIR="${CVD_HOME_DIR}/cuttlefish/instances/cvd-1"
+CVD_INSTANCE_LOCK_DIR="${CVD_INSTANCE_LOCK_DIR:-/var/tmp/cvd/lock}"
 CVD_LAUNCHER_LOG="${CVD_INSTANCE_DIR}/logs/launcher.log"
 CVD_CONFIG_PATH="${CVD_INSTANCE_DIR}/cuttlefish_config.json"
 CHROMIUM_INSTALL_STAMP="${CVD_HOME_DIR}/chromium-installed-cvd-1"
@@ -11405,6 +11406,35 @@ clear_stale_cvd_group() {
     || log "warning: cvd stop could not clear the state of the stopped VM"
 }
 
+# Ika runs its VM as Cuttlefish instance 1: its instance directory (cvd-1),
+# adb address and frame socket all follow from that. cvd hands a new group the
+# first instance whose lock file is not marked in use, and a lock file outlives
+# a group that left cvd's database without 'cvd remove' or 'cvd clear', so
+# instance 1 can stay taken by no one. The next group is then instance 2, ika
+# waits for a guest at instance 1's address, the start fails and the console
+# never opens; 'cvd create --reuse' keeps that group on instance 2 from then on.
+# Clears a recorded group on another instance and releases instance 1's lock
+# when no recorded group holds it. Only with no VM running.
+claim_cvd_instance_one() {
+  local ids other_ids lock="${CVD_INSTANCE_LOCK_DIR}/local-instance-1.lock"
+
+  has_live_cvd_processes && return 0
+  ids="$(run_with_cvd_env timeout 30 "${CVD_CLI_BIN}" ps 2>/dev/null \
+    | awk 'NR > 1 && $3 ~ /^[0-9]+$/ { print $3 }' || true)"
+  other_ids="$(grep -vx 1 <<<"${ids}" | grep -v '^$' || true)"
+  if [[ -n "${other_ids}" ]]; then
+    log "the VM was recorded as Cuttlefish instance $(tr '\n' ' ' <<<"${other_ids}" | sed 's/ $//') instead of 1; clearing that record so it starts as instance 1 (its old data stays in $(dirname "${CVD_INSTANCE_DIR}"))"
+    run_with_cvd_env timeout 60 "${CVD_CLI_BIN}" clear >/dev/null 2>&1 \
+      || log "warning: cvd clear could not remove the record of instance ${other_ids}"
+    ids=""
+  fi
+  if ! grep -qx 1 <<<"${ids}" && [[ -f "${lock}" ]]; then
+    log_file_only "releasing Cuttlefish instance 1, whose lock no recorded VM holds"
+    rm -f "${lock}" 2>/dev/null \
+      || log "warning: could not release ${lock}; the VM may start as another instance"
+  fi
+}
+
 # Whether a cuttlefish_config.json holds a JSON object. An empty file, or one
 # cut short, does not.
 cvd_config_is_readable() {
@@ -11487,6 +11517,7 @@ start_cvd() {
   wait_for_cvdalloc_teardown
   remove_unreadable_cvd_config
   clear_stale_cvd_group
+  claim_cvd_instance_one
   record_udmabuf_baseline
   protect_overlay_resume
   trim_adb_server_log
