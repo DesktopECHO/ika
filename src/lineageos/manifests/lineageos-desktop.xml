@@ -129,6 +129,6 @@
       name="ika"
       remote="desktopecho"
       revision="main">
-    <linkfile src="lineageos" dest="vendor/lineage_desktop" />
+    <linkfile src="src/lineageos" dest="vendor/lineage_desktop" />
   </project>
 </manifest>
