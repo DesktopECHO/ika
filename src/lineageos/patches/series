@@ -87,6 +87,7 @@ device/google/atv patches/device-google-atv-ika-tv-mode.patch
 frameworks/av patches/frameworks-av.patch
 frameworks/native patches/frameworks-native-logspam.patch
 frameworks/native patches/frameworks-native-vulkan-profile-timestamps.patch
+frameworks/native patches/frameworks-native-a17-hotplug-renderengine.patch
 # frameworks/base is patched twice on purpose: the first patch is the generic
 # desktop framework changes (DesktopExperienceFlags, SettingsProvider seed, QS
 # changes); the second is the native-bridge-only changes (NativeLibraryHelper,
