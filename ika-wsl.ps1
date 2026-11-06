@@ -17,7 +17,9 @@ in it:
   2. installs Mesa from trixie-backports (Ika needs 26.1 or newer) and the
      ika-base and ika-lineageos packages (.deb) of Ika's latest release on
      GitHub, which it downloads to %TEMP% first unless they are there
-     already, or those in -PackageDirectory;
+     already, or those in -PackageDirectory; and writes ika.cmd to
+     %LOCALAPPDATA%\Microsoft\WindowsApps, on the Path, which runs ika in
+     the distribution, so that "ika start" works in cmd and PowerShell;
   3. runs ika-wsl-setup, from the package, which readies WSL for Ika: nested
      virtualization, cgroup v2, the groups, the Start menu, the clock, the
      devices' groups; then asks it what is still missing, and warns of
@@ -449,24 +451,30 @@ function Get-IkaPackages([string]$Directory) {
     }
 }
 
-# Gives the distribution's Terminal profile Ika's icon: WSL copied the image's
-# to shortcut.ico beside its disk, where the profile points. The icon comes
-# from ika-base, once installed, else from a checkout or from GitHub.
-function Set-DistributionIcon {
-    $key = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss' |
-        Where-Object { (Get-ItemProperty $_.PSPath).DistributionName -eq $Name } | Select-Object -First 1
-    if (-not $key) { return }
-    $target = Join-Path (Get-ItemProperty $key.PSPath).BasePath 'shortcut.ico'
+# Copies Ika's icon to $Target: ika-base's, once installed, else a checkout's
+# or GitHub's
+function Copy-IkaIcon([string]$Target) {
     $sources = @("\\wsl.localhost\$Name\usr\lib\cuttlefish-common\share\icons\ika.ico")
     # A checkout's own copy; none when run as a one-liner (irm ... | iex)
     if ($PSScriptRoot) { $sources += Join-Path $PSScriptRoot 'src\scrcpy\app\data\icon.ico' }
-    $local = $sources | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    # \\wsl.localhost refuses a session without a desktop (over SSH): the next
+    $local = $sources | Where-Object { Test-Path -LiteralPath $_ -ErrorAction SilentlyContinue } |
+        Select-Object -First 1
     if ($local) {
         Copy-Item -LiteralPath $local -Destination $target -Force
     } else {
         Invoke-WebRequest -UseBasicParsing -OutFile $target `
             -Uri 'https://raw.githubusercontent.com/DesktopECHO/ika/main/src/scrcpy/app/data/icon.ico'
     }
+}
+
+# Gives the distribution's Terminal profile Ika's icon: WSL copied the image's
+# to shortcut.ico beside its disk, where the profile points.
+function Set-DistributionIcon {
+    $key = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss' |
+        Where-Object { (Get-ItemProperty $_.PSPath).DistributionName -eq $Name } | Select-Object -First 1
+    if (-not $key) { return }
+    Copy-IkaIcon (Join-Path (Get-ItemProperty $key.PSPath).BasePath 'shortcut.ico')
 }
 
 # Makes the distribution's Terminal profile open Android's shell (ika shell),
@@ -541,6 +549,39 @@ function Remove-DistributionShortcut {
             $link = $shell.CreateShortcut($_.FullName)
             $link.TargetPath -like '*\wsl.exe' -and $link.Arguments -like "*--distribution-id $id*"
         } | Remove-Item -Force
+}
+
+# Writes ika.cmd, which runs Ika's ika command in the distribution with the
+# arguments as given and returns its exit code, to the user's WindowsApps
+# folder, which Windows puts on every user's Path: "ika start" works in cmd and
+# PowerShell. wsl.exe takes -d's value as written, quotes and all, so the name
+# goes in bare (WSL's names have no spaces). The current folder carries over,
+# as /mnt/c/...: relative paths work. Ika's icon goes beside it, as ika.ico,
+# for Explorer's "Android (Ika)" under This PC. Returns ika.cmd's path.
+function Install-IkaCommand {
+    $dir = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $path = Join-Path $dir 'ika.cmd'
+    $lines = @(
+        '@echo off',
+        "rem Runs Ika's ika command in the WSL distribution $Name, passing on the",
+        'rem arguments as given, and returns its exit code. Written by ika-wsl.ps1.',
+        "wsl.exe -d $Name --exec ika %*",
+        'exit /b %ERRORLEVEL%'
+    )
+    [IO.File]::WriteAllText($path, ($lines -join "`r`n") + "`r`n", [Text.Encoding]::ASCII)
+    Copy-IkaIcon (Join-Path $dir 'ika.ico')
+    if (@($env:Path -split ';' | ForEach-Object { $_.TrimEnd('\') }) -notcontains $dir) {
+        Write-Warning "$dir is not on the Path: run ika as $path"
+    } else {
+        # An ika.com or ika.exe, which Windows prefers to ika.cmd, or an ika
+        # earlier on the Path, runs instead
+        $found = Get-Command ika -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($found -and $found.Source -ne $path) {
+            Write-Warning "$($found.Source) runs as ika instead of $path`: remove or rename it"
+        }
+    }
+    return $path
 }
 
 # Sets nestedVirtualization=true in .wslconfig's [wsl2]; true when it changed
@@ -751,6 +792,12 @@ try {
 } catch {
     Write-Warning "Could not give $Name Ika's icon: $_"
 }
+try {
+    $ikaCommand = Install-IkaCommand
+    Write-Host "  The ika command runs from cmd and PowerShell: $ikaCommand"
+} catch {
+    Write-Warning "Could not install ika.cmd, which runs ika from Windows: $_"
+}
 
 $restartWsl = $false
 & wsl.exe -d $Name -u root --exec test -e /dev/kvm
@@ -786,7 +833,7 @@ if ($restartWsl) {
     if (-not $Force) {
         $answer = Read-Host '  Restart WSL now? [Y/n]'
         if ($answer -and $answer -notmatch '^[Yy]') {
-            Write-Host "  Run ""wsl --shutdown"" when you can, then ""wsl -d $Name -- ika start""."
+            Write-Host "  Run ""wsl --shutdown"" when you can, then ""ika start""."
             return
         }
     }
@@ -828,7 +875,7 @@ if ((Get-Process -Id $PID).SessionId -eq 0) {
 }
 
 if ($NoStart) {
-    Write-Step "Install complete, start Ika with: wsl -d $Name -- ika start"
+    Write-Step "Install complete, start Ika with: ika start"
     return
 }
 
@@ -841,7 +888,7 @@ if ($LASTEXITCODE -ne 0) {
     Write-Step 'WSL has no /dev/kvm: nested virtualization is not available on this PC'
     Write-Host "  Ika's Android cannot start without it. In a virtual machine, its host must pass"
     Write-Host '  virtualization through to it (Hyper-V: Set-VMProcessor -VMName NAME -ExposeVirtualizationExtensions $true).'
-    Write-Host "  $Name is installed; once the PC can, start Ika with: wsl -d $Name -- ika start"
+    Write-Host "  $Name is installed; once the PC can, start Ika with: ika start"
     return
 }
 
