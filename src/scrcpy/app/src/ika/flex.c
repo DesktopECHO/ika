@@ -462,46 +462,40 @@ sc_flex_is_black(const struct sc_flex_pixels *px, int x, int y) {
     return !(p[0] | p[1] | p[2]);
 }
 
-// Whether the frame has the content of a display of this size: everything
-// around it (to the frame edges) is black, and its edge is not all black.
-// The bands are checked on their first pixels and halfway to the frame edge,
-// so that a band only a pixel wide in the window is recognized too.
+// Whether the frame has the content of a display of this size in its top-left
+// corner: everything right of and below it (to the frame edges) is black, and
+// its edge is not all black. The bands are checked on their first pixels and
+// halfway to the frame edge, so that a band only a pixel wide in the window is
+// recognized too.
 static bool
 sc_flex_has_content_of_size(const struct sc_flex_pixels *px,
                             struct sc_size size) {
-    // LogicalDisplay rounds the offsets down
-    int x0 = (px->width - size.width) / 2;
-    int y0 = (px->height - size.height) / 2;
-    int x1 = x0 + size.width; // exclusive
-    int y1 = y0 + size.height;
-    if (!x0 && !y0) {
+    int x1 = size.width; // exclusive
+    int y1 = size.height;
+    bool right_band = x1 < px->width;
+    bool bottom_band = y1 < px->height;
+    if (!right_band && !bottom_band) {
         return false; // no band: the size of the whole frame
     }
 
     bool edge_has_content = false;
     for (int i = 0; i < SC_FLEX_LATE_SAMPLES; ++i) {
-        int x = x0 + (int) ((i + 0.5f) * size.width / SC_FLEX_LATE_SAMPLES);
-        int y = y0 + (int) ((i + 0.5f) * size.height / SC_FLEX_LATE_SAMPLES);
-        if (y0) {
-            // Top and bottom bands
-            if (!sc_flex_is_black(px, x, y0 - 1)
-                    || !sc_flex_is_black(px, x, (y0 - 1) / 2)
-                    || !sc_flex_is_black(px, x, y1)
+        int x = (int) ((i + 0.5f) * size.width / SC_FLEX_LATE_SAMPLES);
+        int y = (int) ((i + 0.5f) * size.height / SC_FLEX_LATE_SAMPLES);
+        if (bottom_band) {
+            if (!sc_flex_is_black(px, x, y1)
                     || !sc_flex_is_black(px, x, (y1 + px->height - 1) / 2)) {
                 return false;
             }
-            edge_has_content |= !sc_flex_is_black(px, x, y0)
+            edge_has_content |= !sc_flex_is_black(px, x, 0)
                              || !sc_flex_is_black(px, x, y1 - 1);
         }
-        if (x0) {
-            // Left and right bands
-            if (!sc_flex_is_black(px, x0 - 1, y)
-                    || !sc_flex_is_black(px, (x0 - 1) / 2, y)
-                    || !sc_flex_is_black(px, x1, y)
+        if (right_band) {
+            if (!sc_flex_is_black(px, x1, y)
                     || !sc_flex_is_black(px, (x1 + px->width - 1) / 2, y)) {
                 return false;
             }
-            edge_has_content |= !sc_flex_is_black(px, x0, y)
+            edge_has_content |= !sc_flex_is_black(px, 0, y)
                              || !sc_flex_is_black(px, x1 - 1, y);
         }
     }
@@ -539,8 +533,8 @@ sc_flex_on_raw_frame_pixels(struct sc_flex *flex, const AVFrame *frame) {
             continue;
         }
         if (sc_flex_has_content_of_size(&px, size)) {
-            flex->late_content.x = (px.width - size.width) / 2;
-            flex->late_content.y = (px.height - size.height) / 2;
+            flex->late_content.x = 0;
+            flex->late_content.y = 0;
             flex->late_content.w = size.width;
             flex->late_content.h = size.height;
             flex->has_late_content = true;
