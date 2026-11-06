@@ -1,0 +1,20 @@
+Patch summary:
+SystemUI keeps a launcher connection that arrives after its 5 s check gave up on it,
+instead of unbinding it with the stale retry (taskbar gone for a moment after boot).
+
+diff --git a/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java b/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java
+--- a/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java
++++ b/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java
+@@ -662,6 +662,12 @@
+             Log.d(TAG_OPS, "Launcher proxy service connected");
+             mConnectionBackoffAttempts = 0;
+             mHandler.removeCallbacks(mDeferredConnectionCallback);
++            // Ika: a connection that comes after mDeferredConnectionCallback gave up on it
++            // (a launcher slow to start, on a slow host) makes the retry it scheduled moot.
++            // Run late, that retry unbinds this connection: the launcher destroys its
++            // TouchInteractionService and the taskbar with it, which comes back once bound
++            // again, so the taskbar vanished for a moment after boot.
++            mHandler.removeCallbacks(mConnectionRunnable);
+             try {
+                 service.linkToDeath(mLauncherServiceDeathRcpt, 0);
+             } catch (RemoteException e) {
