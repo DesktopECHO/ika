@@ -1,0 +1,45 @@
+Patch summary:
+Android 17's ro.dalvik.vm.force_cmc_stw_compaction (9b032556, f44ba066,
+2741febb): the concurrent mark-compact collector compacts with the world
+stopped instead of through userfaultfd. The ARM64 product sets it, since its
+16 KB kernel's UFFDIO_MOVE stalls.
+
+diff --git a/runtime/gc/collector/mark_compact.cc b/runtime/gc/collector/mark_compact.cc
+--- a/runtime/gc/collector/mark_compact.cc
++++ b/runtime/gc/collector/mark_compact.cc
+@@ -111,12 +111,25 @@
+ // A region which is more than kBlackDenseRegionThreshold percent live doesn't
+ // need to be compacted as it is too densely packed.
+ static constexpr uint kBlackDenseRegionThreshold = 95U;
++
++// Flag to force stop-the-world compaction so that we don't use userfaultfd.
++#ifdef ART_FORCE_CMC_STW_COMPACTION
++static constexpr bool kForceSTWCompaction = true;
++#elif defined(ART_TARGET_ANDROID)
++static const bool kForceSTWCompaction =
++    GetBoolProperty("ro.dalvik.vm.force_cmc_stw_compaction", false);
++#else
++static constexpr bool kForceSTWCompaction = false;
++#endif
++
+ // We consider SIGBUS feature necessary to enable this GC as it's superior than
+ // threading-based implementation for janks. We may want minor-fault in future
+ // to be available for making jit-code-cache updation concurrent, which uses shmem.
+ bool KernelSupportsUffd() {
+ #ifdef __linux__
+-  if (gHaveMremapDontunmap) {
++  if (kForceSTWCompaction) {
++    return true;
++  } else if (gHaveMremapDontunmap) {
+     int fd = syscall(__NR_userfaultfd, O_CLOEXEC | UFFD_USER_MODE_ONLY);
+     // On non-android devices we may not have the kernel patches that restrict
+     // userfaultfd to user mode. But that is not a security concern as we are
+@@ -384,7 +397,7 @@
+     // 'ART_USE_READ_BARRIER=false' is used. Additionally, this check ensures
+     // that userfaultfd isn't used on old kernels, which cause random ioctl
+     // failures.
+-    if (gHaveMremapDontunmap) {
++    if (!kForceSTWCompaction && gHaveMremapDontunmap) {
+       // Don't use O_NONBLOCK as we rely on read waiting on uffd_ if there isn't
+       // any read event available. We don't use poll.
+       uffd_ = syscall(__NR_userfaultfd, O_CLOEXEC | UFFD_USER_MODE_ONLY);

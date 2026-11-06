@@ -1,0 +1,40 @@
+Patch summary:
+ART's fallback-mode fixes from AOSP ccf9a1a75c ("Fix issues when compacting
+in fallback mode (stop-the-world)", Android 17), which the
+ro.dalvik.vm.force_cmc_stw_compaction backport needs. In the compaction pause,
+fallback mode updates every linear-alloc arena, pre-zygote-fork ones included,
+so visiting the native roots of dirty dex-caches in immune spaces as well
+updated them twice and turned them into garbage pointers: every process forked
+from zygote crashed after its first collection. Two rare page cases no longer
+call a userfaultfd ioctl without a userfaultfd. With userfaultfd nothing
+changes.
+
+--- a/runtime/gc/collector/mark_compact.cc
++++ b/runtime/gc/collector/mark_compact.cc
+@@ -2088,7 +2088,7 @@
+         } else {
+           // We read correct vtable length. Proceed with that.
+         }
+-      } else {
++      } else if (IsValidFd(uffd_)) {
+         // This is the rare case in which the page preceding the one being updated started after
+         // num_reference_static_fields_ and ended before the class-end and contains embedded
+         // vtable-length. It may also contain the static references on it. But it will not cause
+@@ -2256,7 +2256,7 @@
+           DCHECK_LT(state, static_cast<uint8_t>(PageState::kProcessedAndMapping));
+           DCHECK_NE(state, static_cast<uint8_t>(PageState::kProcessed));
+           DCHECK_NE(state, static_cast<uint8_t>(PageState::kUnprocessed));
+-        } else {
++        } else if (IsValidFd(uffd_)) {
+           // This case is probably never going to happen, where there is at
+           // least one non-overlapping page between reference_instance_offsets_
+           // and last word of overflow-bitmap. Such page(s) can have static
+@@ -4254,7 +4254,7 @@
+       // place and that the classes/dex-caches in immune-spaces may have allocations
+       // (ArtMethod/ArtField arrays, dex-cache array, etc.) in the
+       // non-userfaultfd visited private-anonymous mappings. Visit them here.
+-      ImmuneSpaceUpdateObjVisitor visitor(this, has_zygote_space);
++      ImmuneSpaceUpdateObjVisitor visitor(this, has_zygote_space && IsValidFd(uffd_));
+       if (table != nullptr) {
+         table->ProcessCards();
+         table->VisitObjects(ImmuneSpaceUpdateObjVisitor::Callback, &visitor);
