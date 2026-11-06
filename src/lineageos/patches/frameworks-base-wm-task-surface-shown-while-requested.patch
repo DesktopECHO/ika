@@ -1,0 +1,30 @@
+Patch summary:
+A task's surface stays shown while a child activity is requested visible but
+not yet committed so. When an app's first activity finishes as its next one
+starts (3DMark's splash hands over to its main activity while the task's open
+animation still plays), the finishing activity is committed invisible as the
+transitions that animate the task finish, but the starting one is committed
+visible only once its own, later transition is ready. The frame between the
+two found no visible child in the task and hid the task surface, and the later
+transition shows only the activity, never the task again: the window stayed
+black and took no input although WM reported it drawn and visible. The task's
+surface visibility now also follows the requested visibility of its children.
+
+diff --git a/services/core/java/com/android/server/wm/Task.java b/services/core/java/com/android/server/wm/Task.java
+--- a/services/core/java/com/android/server/wm/Task.java
++++ b/services/core/java/com/android/server/wm/Task.java
+@@ -3385,7 +3385,13 @@ class Task extends TaskFragment {
+ 
+     @Override
+     void updateSurfaceVisibility(SurfaceControl.Transaction t) {
+-        t.setVisibility(mSurfaceControl, isVisible());
++        // Ika: a task stays shown while a child is requested visible but not yet committed so.
++        // When an activity finishes as the next one of the task starts, the finishing one is
++        // committed invisible as the transitions that still animate the task finish, while the
++        // starting one is committed visible only once its own transition is ready; the frame in
++        // between found no visible child, hid the task surface, and the later transition shows
++        // only the activity, so the window stayed black (3DMark's splash on an app-window display).
++        t.setVisibility(mSurfaceControl, isVisible() || isVisibleRequested());
+     }
+ 
+     @Override
