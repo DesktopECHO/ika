@@ -26,6 +26,9 @@
 // The drag area: a fraction of the display size, fixed when the window resizes
 #define SC_WINDOW_CORNER_WIDTH_RATIO 0.05f
 #define SC_WINDOW_CORNER_HEIGHT_RATIO 0.025f
+// In fullscreen, where a click there leaves fullscreen, a strip along the top
+// edge that leaves the status bar to the device
+#define SC_WINDOW_CORNER_FULLSCREEN_HEIGHT_RATIO 0.01f
 #define SC_WINDOW_CLICK_DELAY SC_TICK_FROM_MS(220)
 #define SC_WINDOW_CLICK_MOVE_TOLERANCE 8.0f
 #define SC_WINDOW_BORDER 2
@@ -168,7 +171,9 @@ sc_ika_window_is_in_corner(struct sc_ika_window *iw, float x, float y) {
     x -= iw->margin;
     y -= iw->margin;
     float w = bounds.w * SC_WINDOW_CORNER_WIDTH_RATIO;
-    float h = bounds.h * SC_WINDOW_CORNER_HEIGHT_RATIO;
+    bool fullscreen = SDL_GetWindowFlags(iw->window) & SDL_WINDOW_FULLSCREEN;
+    float h = bounds.h * (fullscreen ? SC_WINDOW_CORNER_FULLSCREEN_HEIGHT_RATIO
+                                     : SC_WINDOW_CORNER_HEIGHT_RATIO);
     // Not the outermost content pixel, next to the resize edges
     return x >= 1 && y >= 1 && x < 1 + w && y < 1 + h;
 }
