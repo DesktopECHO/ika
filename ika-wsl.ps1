@@ -451,24 +451,30 @@ function Get-IkaPackages([string]$Directory) {
     }
 }
 
-# Gives the distribution's Terminal profile Ika's icon: WSL copied the image's
-# to shortcut.ico beside its disk, where the profile points. The icon comes
-# from ika-base, once installed, else from a checkout or from GitHub.
-function Set-DistributionIcon {
-    $key = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss' |
-        Where-Object { (Get-ItemProperty $_.PSPath).DistributionName -eq $Name } | Select-Object -First 1
-    if (-not $key) { return }
-    $target = Join-Path (Get-ItemProperty $key.PSPath).BasePath 'shortcut.ico'
+# Copies Ika's icon to $Target: ika-base's, once installed, else a checkout's
+# or GitHub's
+function Copy-IkaIcon([string]$Target) {
     $sources = @("\\wsl.localhost\$Name\usr\lib\cuttlefish-common\share\icons\ika.ico")
     # A checkout's own copy; none when run as a one-liner (irm ... | iex)
     if ($PSScriptRoot) { $sources += Join-Path $PSScriptRoot 'src\scrcpy\app\data\icon.ico' }
-    $local = $sources | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    # \\wsl.localhost refuses a session without a desktop (over SSH): the next
+    $local = $sources | Where-Object { Test-Path -LiteralPath $_ -ErrorAction SilentlyContinue } |
+        Select-Object -First 1
     if ($local) {
         Copy-Item -LiteralPath $local -Destination $target -Force
     } else {
         Invoke-WebRequest -UseBasicParsing -OutFile $target `
             -Uri 'https://raw.githubusercontent.com/DesktopECHO/ika/main/src/scrcpy/app/data/icon.ico'
     }
+}
+
+# Gives the distribution's Terminal profile Ika's icon: WSL copied the image's
+# to shortcut.ico beside its disk, where the profile points.
+function Set-DistributionIcon {
+    $key = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss' |
+        Where-Object { (Get-ItemProperty $_.PSPath).DistributionName -eq $Name } | Select-Object -First 1
+    if (-not $key) { return }
+    Copy-IkaIcon (Join-Path (Get-ItemProperty $key.PSPath).BasePath 'shortcut.ico')
 }
 
 # Makes the distribution's Terminal profile open Android's shell (ika shell),
@@ -550,7 +556,8 @@ function Remove-DistributionShortcut {
 # folder, which Windows puts on every user's Path: "ika start" works in cmd and
 # PowerShell. wsl.exe takes -d's value as written, quotes and all, so the name
 # goes in bare (WSL's names have no spaces). The current folder carries over,
-# as /mnt/c/...: relative paths work. Returns the file's path.
+# as /mnt/c/...: relative paths work. Ika's icon goes beside it, as ika.ico,
+# for Explorer's "Android (Ika)" under This PC. Returns ika.cmd's path.
 function Install-IkaCommand {
     $dir = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -563,6 +570,7 @@ function Install-IkaCommand {
         'exit /b %ERRORLEVEL%'
     )
     [IO.File]::WriteAllText($path, ($lines -join "`r`n") + "`r`n", [Text.Encoding]::ASCII)
+    Copy-IkaIcon (Join-Path $dir 'ika.ico')
     if (@($env:Path -split ';' | ForEach-Object { $_.TrimEnd('\') }) -notcontains $dir) {
         Write-Warning "$dir is not on the Path: run ika as $path"
     } else {

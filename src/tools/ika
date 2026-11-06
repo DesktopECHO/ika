@@ -10789,8 +10789,9 @@ PY
 
 # On WSLg, adds ("add") or removes ("remove") "Android (Ika)" under This PC in
 # Windows' Explorer: a network shortcut to $2 as Windows reaches it
-# (\\wsl.localhost\DISTRO\...). Removing takes it out only when it leads to
-# $2. PowerShell runs in the background, as it takes a second or two.
+# (\\wsl.localhost\DISTRO\...), with Ika's icon. Removing takes it out only
+# when it leads to $2. PowerShell runs in the background, as it takes a second
+# or two.
 edit_windows_android_storage_shortcut() {
   local action="$1"
   local dir="$2"
@@ -10813,7 +10814,8 @@ edit_windows_android_storage_shortcut() {
 
 # Prints the PowerShell program of edit_windows_android_storage_shortcut for
 # action $1 and target $2. A network shortcut is a read-only folder holding
-# target.lnk and a desktop.ini that makes Explorer show it as the target.
+# target.lnk and a desktop.ini that makes Explorer show it as the target. Its
+# icon is Ika's, which ika-wsl.ps1 puts beside ika.cmd, when it is there.
 windows_storage_shortcut_script() {
   local action="$1"
   local target="${2//\'/\'\'}"
@@ -10830,12 +10832,18 @@ if ($action -eq 'remove') {
   exit
 }
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
+$icon = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\ika.ico'
+$iconLines = ''
+if (Test-Path -LiteralPath $icon) {
+  $iconLines = "`r`nIconResource=$icon,0`r`nIconFile=$icon`r`nIconIndex=0"
+}
 $shortcut = $shell.CreateShortcut($link)
 $shortcut.TargetPath = $target
+if ($iconLines) { $shortcut.IconLocation = "$icon,0" }
 $shortcut.Save()
 $ini = Join-Path $dir 'desktop.ini'
 if (Test-Path -LiteralPath $ini) { (Get-Item -LiteralPath $ini -Force).Attributes = 'Normal' }
-Set-Content -LiteralPath $ini -Value "[.ShellClassInfo]`r`nCLSID2={0AFACED1-E828-11D1-9187-B532F1E9575D}`r`nFlags=2"
+Set-Content -LiteralPath $ini -Value "[.ShellClassInfo]`r`nCLSID2={0AFACED1-E828-11D1-9187-B532F1E9575D}`r`nFlags=2$iconLines"
 (Get-Item -LiteralPath $ini -Force).Attributes = 'Hidden, System'
 (Get-Item -LiteralPath $dir -Force).Attributes = 'ReadOnly, Directory'
 EOF

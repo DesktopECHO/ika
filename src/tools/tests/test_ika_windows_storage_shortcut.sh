@@ -56,6 +56,8 @@ echo "ok: nothing runs outside WSLg"
 IKA_ON_WSLG=true
 edit_windows_android_storage_shortcut add "/run/user/1000/it's/Android"
 script="$(powershell_program)"
+[[ "${script}" == *'Microsoft\WindowsApps\ika.ico'* && "${script}" == *'IconResource=$icon,0'* ]] \
+  || fail "the shortcut does not get the icon beside ika.cmd: ${script:0:300}"
 [[ "${script}" == *"\$action = 'add'"* ]] || fail "the action is missing: ${script:0:200}"
 [[ "${script}" == *"\$target = '\\\\wsl.localhost\\Ubuntu\\run\\user\\1000\\it''s\\Android'"* ]] \
   || fail "the target is not Windows' path, quoted: ${script:0:200}"
@@ -64,4 +66,4 @@ script="$(powershell_program)"
 rm -f "${T}/powershell.args"
 edit_windows_android_storage_shortcut remove /run/user/1000/ika/Android
 [[ "$(powershell_program)" == *"\$action = 'remove'"* ]] || fail "the removal is not asked for"
-echo "ok: on WSLg PowerShell gets the shortcut program for the action and target"
+echo "ok: on WSLg PowerShell gets the shortcut program for the action and target, with the icon beside ika.cmd"
