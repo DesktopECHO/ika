@@ -8,6 +8,14 @@ Only changes are sent, so DisplayFoldController's use of the same setting is
 not overridden. Ika's scrcpy turns scaling off for its windowed console so the
 guest draws the window size 1:1 instead of resampling it.
 
+LogicalDisplay places such a display in the top-left corner of the physical
+display instead of its center, and scrcpy reads it there. SurfaceFlinger can
+lose the projection of a display hot-plugged for an app window, while
+DisplayManager believes it was applied and does not send it again until the
+size changes; the content then fell back to the top-left corner of the frame
+and showed up and to the left of the window. In the corner, a lost projection
+looks the same as an applied one.
+
 diff --git a/services/core/java/com/android/server/wm/DisplayContent.java b/services/core/java/com/android/server/wm/DisplayContent.java
 index 27427724f0c3..e26ad2ef58d9 100644
 --- a/services/core/java/com/android/server/wm/DisplayContent.java
@@ -38,4 +46,33 @@ index 27427724f0c3..e26ad2ef58d9 100644
 +        }
          mWmService.mDisplayManagerInternal.setDisplayInfoOverrideFromWindowManager(mDisplayId,
                  mDisplayInfo);
+ 
+diff --git a/services/core/java/com/android/server/display/LogicalDisplay.java b/services/core/java/com/android/server/display/LogicalDisplay.java
+--- a/services/core/java/com/android/server/display/LogicalDisplay.java
++++ b/services/core/java/com/android/server/display/LogicalDisplay.java
+@@ -869,8 +869,9 @@
+         // comparing them.
+ 
+         int displayRectWidth, displayRectHeight;
+-        if ((displayInfo.flags & Display.FLAG_SCALING_DISABLED) != 0
+-                || mDisplayScalingDisabled) {
++        final boolean scalingDisabled = (displayInfo.flags & Display.FLAG_SCALING_DISABLED) != 0
++                || mDisplayScalingDisabled;
++        if (scalingDisabled) {
+             displayRectWidth = displayLogicalWidth;
+             displayRectHeight = displayLogicalHeight;
+         } else if (physWidth * displayLogicalHeight
+@@ -885,6 +886,13 @@
+         }
+         int displayRectTop = (physHeight - displayRectHeight) / 2;
+         int displayRectLeft = (physWidth - displayRectWidth) / 2;
++        // Ika: a display drawn 1:1 into a larger physical display sits in its top-left corner,
++        // where Ika's scrcpy reads it. Centered, a projection that SurfaceFlinger loses after a
++        // display hotplug (its full-size default) showed the content shifted up and to the left.
++        if (scalingDisabled && displayRectWidth <= physWidth && displayRectHeight <= physHeight) {
++            displayRectTop = 0;
++            displayRectLeft = 0;
++        }
+         mTempDisplayRect.set(displayRectLeft, displayRectTop,
+                 displayRectLeft + displayRectWidth, displayRectTop + displayRectHeight);
  
