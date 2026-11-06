@@ -899,7 +899,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         }
 
         Ln.i("Starting app \"" + app.getName() + "\" [" + app.getPackageName() + "] on display " + startAppDisplayId + "...");
-        Device.startApp(app.getPackageName(), startAppDisplayId, forceStopBeforeStart);
+        Device.startApp(app.getPackageName(), startAppDisplayId, forceStopBeforeStart, deskTaskMover != null);
         sendHeldDisplayReady();
     }
 
@@ -915,7 +915,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         }
 
         Ln.i("Starting app info [" + packageName + "] on display " + startAppDisplayId + "...");
-        Device.startAppInfo(packageName, startAppDisplayId, forceStopBeforeStart);
+        Device.startAppInfo(packageName, startAppDisplayId, forceStopBeforeStart, deskTaskMover != null);
         sendHeldDisplayReady();
     }
 

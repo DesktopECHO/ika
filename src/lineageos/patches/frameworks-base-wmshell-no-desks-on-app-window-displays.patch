@@ -1,0 +1,57 @@
+Patch summary:
+No desks on the displays that are app windows on the host. The WM Shell took
+every Cuttlefish display for a desktop-first display (the guest reports them all
+as internal), changed each new one to freeform, created and activated a desk on
+it, and placed the app started there into the desk as a scaled freeform window
+with a caption; the host's scrcpy server then moved the task out to fullscreen,
+a race that left the window black and deaf when the move reached the Shell
+before the task had appeared to it, and a caption buffer of such a desk once
+aborted SurfaceFlinger. Now the Shell's per-display desktop eligibility, which
+gates the windowing-mode switch, the default desk, the launch handling and the
+task listener, is false for every display but the default one, and a task on an
+app-window display gets no app handle or header: the app is fullscreen from the
+start, and the console's Desktop mode on the default display is unchanged.
+
+diff --git a/libs/WindowManager/Shell/shared/src/com/android/wm/shell/shared/desktopmode/DesktopModeStatus.java b/libs/WindowManager/Shell/shared/src/com/android/wm/shell/shared/desktopmode/DesktopModeStatus.java
+--- a/libs/WindowManager/Shell/shared/src/com/android/wm/shell/shared/desktopmode/DesktopModeStatus.java
++++ b/libs/WindowManager/Shell/shared/src/com/android/wm/shell/shared/desktopmode/DesktopModeStatus.java
+@@ -156,6 +156,11 @@ public class DesktopModeStatus {
+         if (!canEnterDesktopMode(context)) {
+             return false;
+         }
++        // Ika: only the default display hosts desks; the other displays are app windows on the
++        // host (see DesktopStateImpl).
++        if (display.getDisplayId() != Display.DEFAULT_DISPLAY) {
++            return false;
++        }
+         if (!enforceDeviceRestrictions()) {
+             return true;
+         }
+diff --git a/libs/WindowManager/Shell/shared/src/com/android/wm/shell/shared/desktopmode/DesktopStateImpl.kt b/libs/WindowManager/Shell/shared/src/com/android/wm/shell/shared/desktopmode/DesktopStateImpl.kt
+--- a/libs/WindowManager/Shell/shared/src/com/android/wm/shell/shared/desktopmode/DesktopStateImpl.kt
++++ b/libs/WindowManager/Shell/shared/src/com/android/wm/shell/shared/desktopmode/DesktopStateImpl.kt
+@@ -118,6 +118,10 @@ class DesktopStateImpl(context: Context) : DesktopState {
+ 
+     override fun isDesktopModeSupportedOnDisplay(display: Display): Boolean {
+         if (!canEnterDesktopMode) return false
++        // Ika: only the default display, the console in its Desktop mode, hosts desks. Every
++        // other display is an app window on the host, where the app runs fullscreen from the
++        // start. The guest reports those displays as internal too, so they are told apart by id.
++        if (display.displayId != Display.DEFAULT_DISPLAY) return false
+         if (!enforceDeviceRestrictions) return true
+         if (display.type == Display.TYPE_INTERNAL) return canInternalDisplayHostDesktops
+         if (!DesktopExperienceFlags.ENABLE_DISPLAY_CONTENT_MODE_MANAGEMENT.isTrue) return false
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/windowdecor/common/AppHandleAndHeaderVisibilityHelper.kt b/libs/WindowManager/Shell/src/com/android/wm/shell/windowdecor/common/AppHandleAndHeaderVisibilityHelper.kt
+--- a/libs/WindowManager/Shell/src/com/android/wm/shell/windowdecor/common/AppHandleAndHeaderVisibilityHelper.kt
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/windowdecor/common/AppHandleAndHeaderVisibilityHelper.kt
+@@ -53,6 +53,10 @@ class AppHandleAndHeaderVisibilityHelper(
+         // return false if display is null
+         val display = displayController.getDisplay(taskInfo.displayId) ?: return false
+ 
++        // Ika: a task on an app-window display gets neither an app handle nor a header; the
++        // host's window frame is its caption, and the display never hosts a desk.
++        if (display.displayId != Display.DEFAULT_DISPLAY) return false
++
+         if (!ENABLE_PROJECTED_DISPLAY_DESKTOP_MODE.isTrue) {
+             return allowedForTask(taskInfo, display)
+         }

@@ -370,7 +370,9 @@ public final class Device {
         return result;
     }
 
-    public static void startApp(String packageName, int displayId, boolean forceStop) {
+    // Ika: fullscreen starts the app filling a Cuttlefish app-window display, instead of in a desk as a freeform window that is
+    // then moved out of it (two animations, and the app laid out twice)
+    public static void startApp(String packageName, int displayId, boolean forceStop, boolean fullscreen) {
         PackageManager pm = FakeContext.get().getPackageManager();
 
         Intent launchIntent = getLaunchIntent(pm, packageName);
@@ -385,12 +387,12 @@ public final class Device {
         if (forceStop) {
             am.forceStopPackage(packageName);
         }
-        am.startActivity(launchIntent, launchOptions(displayId));
+        am.startActivity(launchIntent, launchOptions(displayId, fullscreen));
     }
 
     // Ika: opens the App info page of an app on the display, alone: it is the first page of its task (FLAG_ACTIVITY_CLEAR_TASK), and a
     // Settings subpage, which Settings does not reopen as a two-pane deep link, with its list of settings beside it, on a large screen
-    public static void startAppInfo(String packageName, int displayId, boolean forceStop) {
+    public static void startAppInfo(String packageName, int displayId, boolean forceStop, boolean fullscreen) {
         Intent intent = new Intent("android.settings.APPLICATION_DETAILS_SETTINGS", Uri.fromParts("package", packageName, null));
         intent.putExtra(":settings:show_fragment_as_subsetting", true);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
@@ -403,16 +405,31 @@ public final class Device {
                 am.forceStopPackage(component.getPackageName());
             }
         }
-        am.startActivity(intent, launchOptions(displayId));
+        am.startActivity(intent, launchOptions(displayId, fullscreen));
     }
 
-    private static Bundle launchOptions(int displayId) {
+    private static Bundle launchOptions(int displayId, boolean fullscreen) {
         if (Build.VERSION.SDK_INT < AndroidVersions.API_26_ANDROID_8_0) {
             return null;
         }
         ActivityOptions launchOptions = ActivityOptions.makeBasic();
         launchOptions.setLaunchDisplayId(displayId);
+        if (fullscreen) {
+            setLaunchWindowingMode(launchOptions, WINDOWING_MODE_FULLSCREEN);
+        }
         return launchOptions.toBundle();
+    }
+
+    // WindowConfiguration.WINDOWING_MODE_FULLSCREEN
+    private static final int WINDOWING_MODE_FULLSCREEN = 1;
+
+    @SuppressLint("BlockedPrivateApi")
+    private static void setLaunchWindowingMode(ActivityOptions options, int windowingMode) {
+        try {
+            ActivityOptions.class.getMethod("setLaunchWindowingMode", int.class).invoke(options, windowingMode);
+        } catch (ReflectiveOperationException e) {
+            Ln.w("Cannot set the launch windowing mode", e);
+        }
     }
 
     public static void sendBroadcast(Intent intent) {
