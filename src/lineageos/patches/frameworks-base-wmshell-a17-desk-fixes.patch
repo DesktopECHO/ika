@@ -1,9 +1,14 @@
 Patch summary:
 Android 17 desktop-windowing fixes, ported to Android 16 QPR2's WM Shell:
 - eb4e95ba6: re-lay out desk tasks when the display size changes at the same
-  density (a host window resize), not only when the density changes. Android
-  16 sends no display-change transition for such a resize, which the handler
-  waited for, so the stable insets of the new size trigger the re-layout.
+  density (a host window resize), not only when the density changes. A forced
+  size, which is how the console resizes the display, reaches the Shell as a
+  display-change transition first, and DisplayController resizes its display
+  layout in place for it, so the configuration change that follows passes an
+  old layout that already has the new size. The handler keeps its own copy of
+  each display's layout to compare against and re-lays out the desk at the
+  configuration change. As in Android 17, a stable-insets change no longer
+  records the old layout.
 - 31c539246: bring an active but empty desk to the front when a desktop task
   opens in it, so the task is not left invisible behind the desktop wallpaper
   activity or Home.
@@ -97,9 +102,27 @@ diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellMod
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopDisplayEventHandler.kt b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopDisplayEventHandler.kt
 --- a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopDisplayEventHandler.kt
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopDisplayEventHandler.kt
-@@ -139,7 +139,11 @@
-         val oldDisplayLayout = oldDpiLayoutByDisplayId[displayId] ?: oldLayout
+@@ -104,6 +104,11 @@
+     private val boundsChangedByDisplayId = mutableSetOf<Int>()
+     private val stableBoundsChangedByDisplayId = mutableSetOf<Int>()
+     private val displayConfigById = mutableMapOf<Int, Configuration>()
++    // A copy of each display's layout as of its last configuration change. DisplayController
++    // resizes its own layout in place as soon as a display-change transition is requested, which
++    // comes before the configuration change for a forced size ("wm size", a resized Ika console),
++    // so the layout it passes as the old one already has the new size.
++    private val lastLayoutByDisplayId = mutableMapOf<Int, DisplayLayout>()
+ 
+     init {
+         shellInit.addInitCallback({ onInit() }, this)
+@@ -136,10 +141,16 @@
+         oldLayout: DisplayLayout?,
+     ) {
+         val newDisplayLayout = displayController.getDisplayLayout(displayId)
+-        val oldDisplayLayout = oldDpiLayoutByDisplayId[displayId] ?: oldLayout
++        val oldDisplayLayout =
++            oldDpiLayoutByDisplayId[displayId] ?: lastLayoutByDisplayId[displayId] ?: oldLayout
          if (oldDisplayLayout == null || newDisplayLayout == null) return
++        lastLayoutByDisplayId[displayId] = DisplayLayout(newDisplayLayout)
          newConfig?.let { displayConfigById.put(displayId, it) }
 -        if (newDisplayLayout.densityDpi() == oldDisplayLayout.densityDpi()) {
 +        if (
@@ -110,32 +133,65 @@ diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/Deskt
              return
          }
          oldDpiLayoutByDisplayId.put(displayId, oldDisplayLayout)
-@@ -187,6 +191,7 @@
-         oldDpiLayoutByDisplayId.put(displayId, oldestLayout)
-         oldestLayout.getStableBounds(oldStableBounds)
-         newLayout.getStableBounds(newStableBounds)
+@@ -147,6 +158,7 @@
+         val newStableBounds = Rect()
+         oldDisplayLayout.getStableBounds(oldStableBounds)
+         newDisplayLayout.getStableBounds(newStableBounds)
 +        var resolutionChanged = false
          when {
-             oldStableBounds == newStableBounds -> {
-                 // No change in stable bounds.
-@@ -194,13 +199,16 @@
-             // Width or height updates mean the resolution has changed.
-             displayResolutionChanged(oldestLayout, newLayout) -> {
+             oldStableBounds == newStableBounds -> {}
+             // Width update means resolution is updated, and we should wait for TRANSIT_CHANGE
+@@ -154,12 +166,20 @@
+             displayResolutionChanged(oldDisplayLayout, newDisplayLayout) -> {
+                 transitions.registerObserver(this)
                  boundsChangedByDisplayId.add(displayId)
 +                resolutionChanged = true
              }
- 
              taskbarInsetsUpdated(oldStableBounds, newStableBounds) -> {
                  stableBoundsChangedByDisplayId.add(displayId)
              }
          }
--        resizeTasksIfPreconditionsSatisfied(displayId, config)
-+        // Android 16 sends no display-change transition for a resize at the same density (a
-+        // host window resize), so the insets of the new size are the sign that it is ready.
-+        resizeTasksIfPreconditionsSatisfied(displayId, config, boundsChangeReady = resolutionChanged)
+-        resizeTasksIfPreconditionsSatisfied(displayId, newConfig)
++        // On Android 16 the display-change transition of a size change can be ready before this
++        // callback registers the observer, which then never runs. The display layout already has
++        // the new size here, so re-lay out the desk now.
++        resizeTasksIfPreconditionsSatisfied(
++            displayId,
++            newConfig,
++            boundsChangeReady = resolutionChanged,
++        )
      }
  
-     private fun displayResolutionChanged(
+     override fun onTransitionReady(
+@@ -184,7 +204,9 @@
+         val newLayout = displayController.getDisplayLayout(displayId)
+         val config = displayConfigById[displayId]
+         if (oldestLayout == null || newLayout == null) return
+-        oldDpiLayoutByDisplayId.put(displayId, oldestLayout)
++        // Android 17 no longer records the old layout here: when the insets arrive before the
++        // configuration change, that record made the DPI path run early with the unchanged size
++        // and discard the pending change.
+         oldestLayout.getStableBounds(oldStableBounds)
+         newLayout.getStableBounds(newStableBounds)
+         when {
+@@ -257,6 +279,9 @@
+             Trace.TRACE_TAG_WINDOW_MANAGER,
+             "DesktopDisplayEventHandler#onDisplayAdded: $displayId",
+         ) {
++            displayController.getDisplayLayout(displayId)?.let {
++                lastLayoutByDisplayId[displayId] = DisplayLayout(it)
++            }
+             if (DesktopExperienceFlags.ENABLE_MULTIPLE_DESKTOPS_BACKEND.isTrue) {
+                 rootTaskDisplayAreaOrganizer.registerListener(
+                     displayId,
+@@ -282,6 +307,7 @@
+             Trace.TRACE_TAG_WINDOW_MANAGER,
+             "DesktopDisplayEventHandler#onDisplayRemoved: $displayId",
+         ) {
++            lastLayoutByDisplayId.remove(displayId)
+             if (DesktopExperienceFlags.ENABLE_MULTIPLE_DESKTOPS_BACKEND.isTrue) {
+                 rootTaskDisplayAreaOrganizer.unregisterListener(
+                     displayId,
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopTasksController.kt b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopTasksController.kt
 --- a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopTasksController.kt
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopTasksController.kt
