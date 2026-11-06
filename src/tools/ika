@@ -7447,13 +7447,37 @@ save_app_options_form() {
   fi
 }
 
+# Whether PACKAGE runs, as far as ika can tell without asking Android: in a
+# window of its own, or, a game, in the background.
+app_is_running() {
+  app_window_is_open "$1" || app_is_in_background "$1"
+}
+
+# "Apply and start" of a Startup Options window, "Apply and restart" while
+# the app runs: opens PACKAGE's window, which starts it with the options just
+# saved. One that runs is closed first, a game in the background ended, so
+# that it starts again with them.
+start_app_with_options() {
+  local package="$1"
+
+  if app_is_running "${package}"; then
+    log "restarting ${package} with its start options"
+    if app_window_is_open "${package}"; then
+      stop_supervisor_from_file "$(app_supervisor_file "${package}" pid)" __app_supervisor
+    fi
+    discard_background_app "${package}"
+  fi
+  open_app_window "${package}" false "" ""
+}
+
 # The start options window for the app NAME, drawn by yad: a form, which is as
 # high as its fields need on any theme, titled "Startup Options · LABEL" (the
 # app's package when its label is unknown). "Apply settings" saves the ticked
 # options and the display density, "Apply and start" saves them and starts the
-# app with them, and Cancel, or closing the window, leaves the saved ones as
-# they are. edit_app_settings' window has it as a tab; this one is for hosts
-# without python3's GTK 3 bindings.
+# app with them, "Apply and restart" when the app ran as the window opened,
+# and Cancel, or closing the window, leaves the saved ones as they are.
+# edit_app_settings' window has it as a tab; this one is for hosts without
+# python3's GTK 3 bindings.
 edit_app_options() {
   local name="$1"
   local package
@@ -7469,10 +7493,14 @@ edit_app_options() {
   local -A ticked=()
   local -a density_env=()
   local -a density_options=()
+  local start_label="Apply and start"
 
   resolve_settings_app "${name}" package label
   command -v yad >/dev/null 2>&1 \
     || die "the start options window needs yad; install it"
+  if app_is_running "${package}"; then
+    start_label="Apply and restart"
+  fi
 
   read -r -a saved <<<"$(saved_app_options "${package}")"
   for option in "${saved[@]}"; do
@@ -7491,7 +7519,7 @@ edit_app_options() {
     --center --borders=12 --separator="|" "${density_options[@]}" \
     "${fields[@]}" \
     --buttons-layout=spread --button="Apply settings:2" \
-    --button="        Apply and start        :0" --button=Cancel:1)" \
+    --button="        ${start_label}        :0" --button=Cancel:1)" \
     || status=$?
   case "${status}" in
     0|2)
@@ -7508,7 +7536,7 @@ edit_app_options() {
   read_app_options_form "${output}" options dpi
   save_app_options_form "${package}" "${label}" "${dpi}" "${options[@]}"
   if [[ "${status}" -eq 0 ]]; then
-    open_app_window "${package}" false "" ""
+    start_app_with_options "${package}"
   fi
 }
 
@@ -7909,10 +7937,11 @@ read_controller_mapping_form() {
 # gamepad's keys and settings for the game, from its mapping, else from
 # ika.ini. "Apply settings" saves them in the game's mapping and ticks "Use the
 # keyboard to emulate a gamepad" in the game's start options if it is not,
-# "Apply and start" does that and starts the game, "Reset to default" asks
-# whether to reset the app's start options and remove the game's mapping
-# (reset_app_to_default) and, if so, shows ika.ini's in the window, and
-# Cancel leaves the rest as it was.
+# "Apply and start" does that and starts the game ("Apply and restart" when
+# it ran as the window opened, see start_app_with_options), "Reset to
+# default" asks whether to reset the app's start options and remove the
+# game's mapping (reset_app_to_default) and, if so, shows ika.ini's in the
+# window, and Cancel leaves the rest as it was.
 edit_controller_mapping() {
   local name="$1"
   local package
@@ -7929,10 +7958,14 @@ edit_controller_mapping() {
   local -A app_settings=()
   local -a mapping_env=()
   local -a mapping_options=()
+  local start_label="Apply and start"
 
   resolve_settings_app "${name}" package label
   command -v yad >/dev/null 2>&1 \
     || die "the controller mapping window needs yad; install it"
+  if app_is_running "${package}"; then
+    start_label="Apply and restart"
+  fi
   set_yad_env yad_env
   yad_css mapping_env mapping_options yad_env gamepad "${CONTROLLER_MAPPING_FORM_CSS}"
 
@@ -7949,7 +7982,7 @@ edit_controller_mapping() {
       --text-align=center --separator="|" --columns=2 "${mapping_options[@]}" \
       --align=right "${fields[@]}" \
       --buttons-layout=spread --button="Reset to default:4" \
-      --button="Apply settings:2" --button="        Apply and start        :0" \
+      --button="Apply settings:2" --button="        ${start_label}        :0" \
       --button=Cancel:1)" \
       || status=$?
     # yad prints the fields for even exit codes only: "Reset to default" is 4
@@ -7989,7 +8022,7 @@ edit_controller_mapping() {
     respond "Controller mapping of ${label} saved"
   fi
   if [[ "${status}" -eq 0 ]]; then
-    open_app_window "${package}" false "" ""
+    start_app_with_options "${package}"
   fi
 }
 
@@ -8016,14 +8049,21 @@ import sys
 # columns in turn, the first ceil(n / N) the first column. A button, or
 # closing the window (252, as Escape), writes each tab's values to its
 # output as yad prints them, each followed by "|", and exits with its code.
-# --parse-only prints what was parsed, as JSON, and --print-defaults writes
-# the outputs as the window would show them, then exits with
-# --test-status=CODE: neither needs a display.
+# --running-label=CODE:LABEL is button CODE's label while an app runs, as
+# --running-pid=FILE:MARKER and --running-file=FILE tell: FILE holds the pid
+# of a live process of this user with the argument MARKER, or FILE is there.
+# The window looks again every half second, and the button is as wide as the
+# longer of its two labels.
+# --parse-only prints what was parsed, as JSON, --print-labels the buttons'
+# labels as the window would show them now, one a line, and --print-defaults
+# writes the outputs as the window would show them, then exits with
+# --test-status=CODE: none needs a display.
 
 
 def parse(argv):
     window = {"title": "", "icon": "", "app_id": "", "active_tab": 1,
-              "buttons": [], "tabs": [], "mode": "", "test_status": 0}
+              "buttons": [], "tabs": [], "mode": "", "test_status": 0,
+              "running_labels": {}, "running_pids": [], "running_files": []}
     tab = None
     i = 0
     while i < len(argv):
@@ -8053,13 +8093,21 @@ def parse(argv):
         elif name == "--button":
             label, _, code = value.rpartition(":")
             window["buttons"].append({"label": label.strip(), "code": int(code)})
+        elif name == "--running-label":
+            code, _, label = value.partition(":")
+            window["running_labels"][int(code)] = label.strip()
+        elif name == "--running-pid":
+            path, _, marker = value.rpartition(":")
+            window["running_pids"].append([path, marker])
+        elif name == "--running-file":
+            window["running_files"].append(value)
         elif name == "--active-tab":
             window["active_tab"] = int(value or 1)
         elif name == "--test-status":
             window["test_status"] = int(value or 0)
         elif name in ("--title", "--icon", "--app-id"):
             window[name[2:].replace("-", "_")] = value
-        elif name in ("--parse-only", "--print-defaults"):
+        elif name in ("--parse-only", "--print-defaults", "--print-labels"):
             window["mode"] = name[2:]
         else:
             raise SystemExit("ika window: unknown argument " + arg)
@@ -8104,6 +8152,29 @@ def default_value(field):
     if ftype == "CHK":
         return "TRUE" if field["value"].upper() == "TRUE" else "FALSE"
     return field["value"]
+
+
+def app_running(window):
+    """Whether the app of --running-pid and --running-file runs"""
+    import os
+    for path, marker in window["running_pids"]:
+        try:
+            with open(path, encoding="utf-8") as pid_file:
+                pid = pid_file.read().strip()
+            if not pid.isdigit() or os.stat("/proc/" + pid).st_uid != os.getuid():
+                continue
+            with open("/proc/%s/cmdline" % pid, "rb") as cmdline:
+                if marker.encode() in cmdline.read().split(b"\0"):
+                    return True
+        except OSError:
+            continue
+    return any(os.path.exists(path) for path in window["running_files"])
+
+
+def button_label(window, button, running):
+    if running:
+        return window["running_labels"].get(button["code"], button["label"])
+    return button["label"]
 
 
 def write_outputs(window, values):
@@ -8410,12 +8481,29 @@ def run(window):
         readers.append(tab_readers)
         notebook.append_page(page, Gtk.Label(label=tab["name"]))
 
-    # The buttons as wide as each other, across the window's width
+    # The buttons as wide as each other, across the window's width. One with
+    # a label for while the app runs has both in a stack, which is as wide as
+    # the wider, and shows the one of the app's state.
     buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, homogeneous=True)
+    stacks = []
     for button in window["buttons"]:
-        widget = Gtk.Button(label=button["label"])
+        if button["code"] in window["running_labels"]:
+            widget = Gtk.Button()
+            stack = Gtk.Stack()
+            stack.add_named(Gtk.Label(label=button["label"]), "stopped")
+            stack.add_named(Gtk.Label(label=button_label(window, button, True)), "running")
+            widget.add(stack)
+            stacks.append(stack)
+        else:
+            widget = Gtk.Button(label=button["label"])
         widget.connect("clicked", lambda _, code=button["code"]: finish(code))
         buttons.pack_start(widget, True, True, 0)
+
+    def show_app_state():
+        state = "running" if app_running(window) else "stopped"
+        for stack in stacks:
+            stack.set_visible_child_name(state)
+        return True
 
     content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
     content.set_border_width(12)
@@ -8424,6 +8512,9 @@ def run(window):
     gtk_window.add(content)
     gtk_window.show_all()
     notebook.set_current_page(max(window["active_tab"], 1) - 1)
+    if stacks:
+        show_app_state()
+        GLib.timeout_add(500, show_app_state)
     Gtk.main()
     return result["code"]
 
@@ -8432,6 +8523,11 @@ def main(argv):
     window = parse(argv)
     if window["mode"] == "parse-only":
         print(json.dumps(window, indent=1, ensure_ascii=False))
+        return 0
+    if window["mode"] == "print-labels":
+        running = app_running(window)
+        for button in window["buttons"]:
+            print(button_label(window, button, running))
         return 0
     if window["mode"] == "print-defaults":
         write_outputs(window, [[default_value(field) for field in tab["fields"]]
@@ -8479,7 +8575,9 @@ ika_window() {
 # mapping when it was edited or the app has one of its own: an untouched
 # mapping would become the app's own copy of ika.ini's. An edited mapping
 # ticks "Keyboard as a gamepad", unless the window unticked
-# it. "Apply and start" also starts the app. "Reset to default" asks whether
+# it. "Apply and start" also starts the app; while the app runs
+# (app_is_running) it reads "Apply and restart", and closes the app first, so
+# that it starts again with them. "Reset to default" asks whether
 # to reset the app's start options and remove the app's mapping
 # (reset_app_to_default) and, if so, shows the default start options and
 # ika.ini's mapping, on the Startup Options tab. Cancel, or closing the
@@ -8552,6 +8650,9 @@ edit_app_settings() {
       --icon="${IKA_MENU_ICON}" --app-id="${APP_SETTINGS_WINDOW_CLASS}" \
       --active-tab="${tab}" --button="Reset to default:4" \
       --button="Apply settings:2" --button="Apply and start:0" --button="Cancel:1" \
+      --running-label="0:Apply and restart" \
+      --running-pid="$(app_supervisor_file "${package}" pid):__app_supervisor" \
+      --running-file="$(app_background_file "${package}")" \
       --tab="Startup Options" --output="${tab_dir}/1" \
       --border="${APP_OPTIONS_TAB_BORDER_PX}" "${fields1[@]}" \
       --tab="Gamepad Emulation" --output="${tab_dir}/2" --compact --columns=2 \
@@ -8622,7 +8723,7 @@ edit_app_settings() {
     respond "${label} uses the controller mapping of ika.ini again"
   fi
   if [[ "${status}" -eq 0 ]]; then
-    open_app_window "${package}" false "" ""
+    start_app_with_options "${package}"
   fi
 }
 
