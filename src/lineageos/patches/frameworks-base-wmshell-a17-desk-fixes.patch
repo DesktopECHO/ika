@@ -1,7 +1,9 @@
 Patch summary:
 Android 17 desktop-windowing fixes, ported to Android 16 QPR2's WM Shell:
 - eb4e95ba6: re-lay out desk tasks when the display size changes at the same
-  density (a host window resize), not only when the density changes.
+  density (a host window resize), not only when the density changes. Android
+  16 sends no display-change transition for such a resize, which the handler
+  waited for, so the stable insets of the new size trigger the re-layout.
 - 31c539246: bring an active but empty desk to the front when a desktop task
   opens in it, so the task is not left invisible behind the desktop wallpaper
   activity or Home.
@@ -108,6 +110,32 @@ diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/Deskt
              return
          }
          oldDpiLayoutByDisplayId.put(displayId, oldDisplayLayout)
+@@ -187,6 +191,7 @@
+         oldDpiLayoutByDisplayId.put(displayId, oldestLayout)
+         oldestLayout.getStableBounds(oldStableBounds)
+         newLayout.getStableBounds(newStableBounds)
++        var resolutionChanged = false
+         when {
+             oldStableBounds == newStableBounds -> {
+                 // No change in stable bounds.
+@@ -194,13 +199,16 @@
+             // Width or height updates mean the resolution has changed.
+             displayResolutionChanged(oldestLayout, newLayout) -> {
+                 boundsChangedByDisplayId.add(displayId)
++                resolutionChanged = true
+             }
+ 
+             taskbarInsetsUpdated(oldStableBounds, newStableBounds) -> {
+                 stableBoundsChangedByDisplayId.add(displayId)
+             }
+         }
+-        resizeTasksIfPreconditionsSatisfied(displayId, config)
++        // Android 16 sends no display-change transition for a resize at the same density (a
++        // host window resize), so the insets of the new size are the sign that it is ready.
++        resizeTasksIfPreconditionsSatisfied(displayId, config, boundsChangeReady = resolutionChanged)
+     }
+ 
+     private fun displayResolutionChanged(
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopTasksController.kt b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopTasksController.kt
 --- a/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopTasksController.kt
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/DesktopTasksController.kt
