@@ -14,12 +14,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 T="$(mktemp -d)"
-trap 'rm -rf "${T}"' EXIT
+# The stand-ins for app window supervisors (fake_supervisor) go with it
+trap 'xargs -r kill 2>/dev/null <"${T}/fake-supervisors" || true; rm -rf "${T}"' EXIT
 
 export HOME="${T}/home"
 export CVD_HOME_DIR="${T}/ika"
 export CVD_PRODUCT_OUT="${T}/product"
 mkdir -p "${HOME}" "${CVD_PRODUCT_OUT}" "${T}/bin"
+: >"${T}/fake-supervisors"
 unset GTK_THEME
 
 # A yad stub, which has --css unless YAD_HELP says otherwise. A form of its
@@ -182,7 +184,10 @@ mapping_output() {
   printf '%s\n' "${output}"
 }
 
+# Each window as if from an ika of its own: the last one's lock goes, as it
+# does with its process
 reset_calls() {
+  release_app_settings_lock
   : >"${T}/yad.calls"
   : >"${T}/respond"
   : >"${T}/started"
@@ -302,11 +307,71 @@ if (DIALOG_STATUS=70 edit_app_settings com.example.game 1) >/dev/null 2>&1; then
 fi
 echo "ok: Cancel, Apply and start, a failed window"
 
+# A stand-in for PACKAGE's window supervisor, recorded in its pid file:
+# a process of this user with the argument __app_supervisor, reaped by init
+# once killed, as the supervisor is (a zombie would still answer kill -0).
+# With "other", a process without that argument.
+fake_supervisor() {
+  local package="$1"
+  local pid_file
+  local marker="__app_supervisor"
+  local i
+
+  [[ "${2:-}" != "other" ]] || marker="__console_supervisor"
+  pid_file="$(app_supervisor_file "${package}" pid)"
+  mkdir -p "${CVD_TMP_DIR}"
+  # Without the lock of the window before, as open_app_window gives it up
+  (release_app_settings_lock
+    python3 -c 'import time; time.sleep(60)' "${marker}" "${package}" \
+    </dev/null >/dev/null 2>&1 & printf '%s\n' "$!" >"${pid_file}")
+  cat "${pid_file}" >>"${T}/fake-supervisors"
+  # Until python3 has replaced the subshell's command line
+  for i in {1..100}; do
+    tr '\0' ' ' <"/proc/$(<"${pid_file}")/cmdline" | grep -q -- " ${marker} " && return 0
+    sleep 0.02
+  done
+  fail "the stand-in supervisor did not start"
+}
+
+# While the game runs, in a window of its own or, sent there, in the
+# background, "Apply and start" reads "Apply and restart": ika's program is
+# given the label and what tells it the game runs, the supervisor's pid file
+# and the background record. Clicking it closes the game's window, or ends
+# the game in the background, before the game starts again with the options.
+reset_calls
+DIALOG_TAB1="$(options_output fullscreen)" DIALOG_TAB2="$(mapping_output)" DIALOG_STATUS=1 \
+  edit_app_settings com.example.game 1
+supervisor_pid_file="$(app_supervisor_file com.example.game pid)"
+background_file="$(app_background_file com.example.game)"
+expect_contains "$(<"${T}/window.args")" $'\n--button=Apply and start:0\n--button=Cancel:1\n--running-label=0:Apply and restart\n--running-pid='"${supervisor_pid_file}"$':__app_supervisor\n--running-file='"${background_file}"$'\n' \
+  "the label while the game runs, and how to tell"
+mapfile -t state_args < <(grep -E -- '^--(button|running-)' "${T}/window.args")
+reset_calls
+save_app_options com.example.game fullscreen
+fake_supervisor com.example.game
+supervisor_pid="$(<"${supervisor_pid_file}")"
+DIALOG_TAB1="$(options_output touch)" DIALOG_TAB2="$(mapping_output)" DIALOG_STATUS=0 \
+  edit_app_settings com.example.game 1
+! kill -0 "${supervisor_pid}" 2>/dev/null || fail "the game's window was left open"
+[[ ! -e "${supervisor_pid_file}" ]] || fail "the supervisor's pid file was left"
+expect_equal "$(<"${T}/started")" "started com.example.game" "Apply and restart starts the game again"
+expect_equal "$(saved_app_options com.example.game)" "touch" "with the new options, saved first"
+expect_contains "$(<"${T}/log")" "restarting com.example.game with its start options" "and said so"
+reset_calls
+printf 'boot-id 0 0\n' >"${background_file}"
+DIALOG_TAB1="$(options_output fullscreen)" DIALOG_TAB2="$(mapping_output)" DIALOG_STATUS=0 \
+  edit_app_settings com.example.game 1
+[[ ! -e "${background_file}" ]] || fail "the game in the background was kept"
+expect_equal "$(<"${T}/started")" "started com.example.game" "a game in the background starts again"
+echo "ok: Apply and restart while the game runs"
+
 # An app that is not a game gets the same window as a game, from its launcher
 # and from --controller: the same window, tabs and fields, with the same
-# saved options (the stub's app_display_name names both "Some Game")
+# saved options (the stub's app_display_name names both "Some Game"), and
+# each its own pid file and background record
 window_args() {
   sed -e 's/^--output=.*/--output=FILE/' \
+    -e 's/^\(--running-[a-z]*=.*\)com\.example\.[a-z]*/\1PACKAGE/' \
     "${T}/window.args" "${T}/window.tab1.args" "${T}/window.tab2.args"
 }
 save_app_options com.example.game fullscreen
@@ -349,6 +414,30 @@ if real_ika_window no_env --print-defaults --tab=One --bogus >/dev/null 2>&1; th
 fi
 echo "ok: ika's program"
 
+# ika's program shows "Apply and restart" while the game runs, and follows it:
+# a live supervisor in the pid file, not another process nor a pid file left
+# by one that ended, or a record of the game in the background
+shown_label() {
+  real_ika_window no_env --print-labels "${state_args[@]}" | sed -n 3p
+}
+expect_equal "$(real_ika_window no_env --print-labels "${state_args[@]}" | tr '\n' ,)" \
+  "Reset to default,Apply settings,Apply and start,Cancel," "the buttons while the game does not run"
+fake_supervisor com.example.game
+expect_equal "$(shown_label)" "Apply and restart" "the game in its window"
+supervisor_pid="$(<"${supervisor_pid_file}")"
+kill "${supervisor_pid}"
+while kill -0 "${supervisor_pid}" 2>/dev/null; do sleep 0.02; done
+expect_equal "$(shown_label)" "Apply and start" "its window closed, the pid file left"
+fake_supervisor com.example.game other
+expect_equal "$(shown_label)" "Apply and start" "another process in the pid file"
+kill "$(<"${supervisor_pid_file}")"
+rm -f "${supervisor_pid_file}"
+printf 'boot-id 0 0\n' >"${background_file}"
+expect_equal "$(shown_label)" "Apply and restart" "the game in the background"
+rm -f "${background_file}"
+expect_equal "$(shown_label)" "Apply and start" "the game ended"
+echo "ok: ika's program follows whether the game runs"
+
 # ika's own program shows what it is given: applied untouched, the window
 # changes nothing, the density, the start options and ika.ini's mapping
 # included (it prints whole numbers, where yad has decimals)
@@ -375,6 +464,21 @@ reset_calls
 DIALOG_FORM="$(printf '%s|' W)" DIALOG_STATUS=1 edit_app_settings com.example.game 2
 expect_contains "$(<"${T}/yad.form.args")" $'\n--title=Gamepad Emulation · Some Game\n' "the gamepad window of its own"
 expect_contains "$(<"${T}/log")" "python3's GTK 3 bindings are missing" "and why"
+# A window of its own reads "Apply and restart" when the game runs as it
+# opens, and restarts it
+fake_supervisor com.example.game
+supervisor_pid="$(<"${supervisor_pid_file}")"
+reset_calls
+DIALOG_FORM="$(printf '%s|' W)" DIALOG_STATUS=1 edit_app_settings com.example.game 2
+expect_contains "$(<"${T}/yad.form.args")" $'\n--button=        Apply and restart        :0\n' "the gamepad window's label"
+reset_calls
+DIALOG_FORM="$(options_output fullscreen)" DIALOG_STATUS=0 edit_app_settings com.example.game 1
+expect_contains "$(<"${T}/yad.form.args")" $'\n--button=        Apply and restart        :0\n' "the start options window's label"
+! kill -0 "${supervisor_pid}" 2>/dev/null || fail "the game's window was left open, without GTK's bindings"
+expect_equal "$(<"${T}/started")" "started com.example.game" "and the game starts again"
+reset_calls
+DIALOG_FORM="$(options_output fullscreen)" DIALOG_STATUS=1 edit_app_settings com.example.game 1
+expect_contains "$(<"${T}/yad.form.args")" $'\n--button=        Apply and start        :0\n' "Apply and start once it does not run"
 echo "ok: without python3's GTK bindings"
 
 # A yad without --css (Debian's 0.40, whose --gtkrc styles the window alone)
