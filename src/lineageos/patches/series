@@ -118,6 +118,8 @@ frameworks/base patches/frameworks-base-tv-advanced-protection.patch
 frameworks/base patches/frameworks-base-wmshell-clear-box-shadows.patch
 frameworks/base patches/frameworks-base-wmshell-a17-desk-fixes.patch
 frameworks/base patches/frameworks-base-less-activity-recreation.patch
+frameworks/base patches/frameworks-base-wmshell-no-desks-on-app-window-displays.patch
+frameworks/base patches/frameworks-base-wm-task-surface-shown-while-requested.patch
 frameworks/opt/tv/tvsystem patches/frameworks-opt-tv-tvsystem-ika-tv-mode.patch
 system/core patches/system-core.patch
 system/core patches/system-core-prefetch-a17-fixes.patch
