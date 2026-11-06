@@ -76,8 +76,8 @@ sc_screen_is_raw_flex(struct sc_screen *screen) {
 }
 
 // The part of a raw frame showing the display content: when the display size
-// fits, Android draws it 1:1, centered (scaling off), otherwise scaled down to
-// fit, centered
+// fits, Android draws it 1:1 in the top-left corner (scaling off, Ika's
+// LogicalDisplay), otherwise scaled down to fit, centered
 static SDL_FRect
 sc_screen_get_raw_source_rect(struct sc_screen *screen) {
     struct sc_size frame = screen->frame_size;
@@ -88,9 +88,6 @@ sc_screen_get_raw_source_rect(struct sc_screen *screen) {
     }
 
     if (display.width <= frame.width && display.height <= frame.height) {
-        // LogicalDisplay rounds the offsets down
-        rect.x = (frame.width - display.width) / 2;
-        rect.y = (frame.height - display.height) / 2;
         rect.w = display.width;
         rect.h = display.height;
     } else if ((uint32_t) display.width * frame.height
