@@ -1,0 +1,13 @@
+# ika_tso_apps.sh (arm64): writes the UIDs of the apps that need Apple's TSO
+# memory model to ika_tso.ko, at boot and whenever packages.list changes.
+type ika_tso_apps, domain, coredomain;
+type ika_tso_apps_exec, system_file_type, exec_type, file_type;
+init_daemon_domain(ika_tso_apps)
+
+type sysfs_ika_tso, fs_type, sysfs_type;
+
+allow ika_tso_apps shell_exec:file rx_file_perms;
+allow ika_tso_apps toolbox_exec:file rx_file_perms;
+allow ika_tso_apps system_data_file:dir r_dir_perms;
+allow ika_tso_apps packages_list_file:file r_file_perms;
+allow ika_tso_apps sysfs_ika_tso:file w_file_perms;

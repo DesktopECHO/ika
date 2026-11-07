@@ -54,6 +54,8 @@ external/v4l2_codec2 patches/external-v4l2_codec2-virtio-media.patch
 external/virtio-media patches/external-virtio-media-driver-queue-state.patch
 kernel/prebuilts/common-modules/virtual-device/6.12/x86-64 patches/kernel-prebuilts-virtual-device-x86-64-virtio-media.patch
 kernel/prebuilts/common-modules/virtual-device/6.12/arm64 patches/kernel-prebuilts-virtual-device-arm64-virtio-media.patch
+# ika_tso.ko is built from kernel/ika_tso by scripts/build_ika_tso_module.sh.
+kernel/prebuilts/common-modules/virtual-device/6.12/arm64 patches/kernel-prebuilts-virtual-device-arm64-ika-tso.patch
 hardware/google/gfxstream patches/hardware-google-gfxstream-descriptor-deepcopy-filter.patch
 hardware/google/gfxstream patches/hardware-google-gfxstream-opengles-3.2.patch
 hardware/google/gfxstream patches/hardware-google-gfxstream-guest-egl-attrib-safety.patch
