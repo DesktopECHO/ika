@@ -1,0 +1,85 @@
+Patch summary:
+gfxstream's guest pings the host after writing commands only when the host's
+render thread has announced that it is going to sleep, not whenever it is not
+rendering at that moment. A render thread still polling the ring sees the
+write by itself, and every ping is an exit to the VMM (a nested one under
+WSL2). Needs the host's PATCH.gfxstream.asg-poll-before-sleep.patch, which
+looks at the ring again after announcing that it is going to sleep.
+
+diff --git a/src/gfxstream/guest/GoldfishAddressSpace/AddressSpaceStream.cpp b/src/gfxstream/guest/GoldfishAddressSpace/AddressSpaceStream.cpp
+--- a/src/gfxstream/guest/GoldfishAddressSpace/AddressSpaceStream.cpp
++++ b/src/gfxstream/guest/GoldfishAddressSpace/AddressSpaceStream.cpp
+@@ -253,12 +253,7 @@
+         }
+     }
+ 
+-    bool isRenderingAfter =
+-        ASG_HOST_STATE_RENDERING == __atomic_load_n(m_context.host_state, __ATOMIC_ACQUIRE);
+-
+-    if (!isRenderingAfter) {
+-        notifyAvailable();
+-    }
++    notifyIfHostSleeping();
+ 
+     ensureType3Finished();
+ 
+@@ -319,12 +314,7 @@
+         }
+     }
+ 
+-    bool isRenderingAfter =
+-        ASG_HOST_STATE_RENDERING == __atomic_load_n(m_context.host_state, __ATOMIC_ACQUIRE);
+-
+-    if (!isRenderingAfter) {
+-        notifyAvailable();
+-    }
++    notifyIfHostSleeping();
+ 
+     resetBackoff();
+     m_context.ring_config->transfer_mode = 1;
+@@ -388,6 +378,20 @@
+     return actuallyRead;
+ }
+ 
++// Ping the host after writing only if its render thread announced that it is
++// going to sleep (NEED_NOTIFY). While it is rendering or still polling the ring
++// (CAN_CONSUME) it will see the write by itself, and every ping is an exit to
++// the VMM. The host stores NEED_NOTIFY and then looks at the ring once more,
++// and this fence orders the write above before the state read below, so one
++// side always sees the other.
++void AddressSpaceStream::notifyIfHostSleeping() {
++    __atomic_thread_fence(__ATOMIC_SEQ_CST);
++    uint32_t hostState = __atomic_load_n(m_context.host_state, __ATOMIC_SEQ_CST);
++    if (hostState != ASG_HOST_STATE_RENDERING && hostState != ASG_HOST_STATE_CAN_CONSUME) {
++        notifyAvailable();
++    }
++}
++
+ void AddressSpaceStream::notifyAvailable() {
+     MESA_TRACE_SCOPE("PING");
+     struct address_space_ping request;
+@@ -511,12 +515,7 @@
+         }
+     }
+ 
+-    bool isRenderingAfter =
+-        ASG_HOST_STATE_RENDERING == __atomic_load_n(m_context.host_state, __ATOMIC_ACQUIRE);
+-
+-    if (!isRenderingAfter) {
+-        notifyAvailable();
+-    }
++    notifyIfHostSleeping();
+ 
+     m_written += size;
+ 
+diff --git a/src/gfxstream/guest/GoldfishAddressSpace/include/AddressSpaceStream.h b/src/gfxstream/guest/GoldfishAddressSpace/include/AddressSpaceStream.h
+--- a/src/gfxstream/guest/GoldfishAddressSpace/include/AddressSpaceStream.h
++++ b/src/gfxstream/guest/GoldfishAddressSpace/include/AddressSpaceStream.h
+@@ -37,6 +37,7 @@
+     bool isInError() const;
+     ssize_t speculativeRead(unsigned char* readBuffer, size_t trySize);
+     void notifyAvailable();
++    void notifyIfHostSleeping();
+     uint32_t getRelativeBufferPos(uint32_t pos);
+     void advanceWrite();
+     void ensureConsumerFinishing();
