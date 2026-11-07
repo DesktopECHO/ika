@@ -45,6 +45,8 @@ external/mesa3d patches/external-mesa3d-gfxstream-singleton-lock.patch
 external/mesa3d patches/external-mesa3d-gfxstream-dispatch-by-host-version.patch
 external/mesa3d patches/external-mesa3d-gfxstream-buffer-info-by-type.patch
 external/mesa3d patches/external-mesa3d-gfxstream-asg-notify-when-sleeping.patch
+external/mesa3d patches/external-mesa3d-gfxstream-command-buffer-ring-chunks.patch
+external/mesa3d patches/external-mesa3d-gfxstream-async-resets.patch
 external/mesa3d patches/external-mesa3d-llvmpipe-memfd-punch-hole.patch
 external/libavc patches/external-libavc-encoder-max-size.patch
 external/libavc patches/external-libavc-vbr-vbv-floor.patch
