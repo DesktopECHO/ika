@@ -1,0 +1,31 @@
+Patch summary:
+vkResetCommandPool and vkResetFences no longer send their result back to the
+guest, whose encoder no longer waits for it (lineageos patch
+external-mesa3d-gfxstream-async-resets.patch). Both can only fail for lack
+of memory, and 3DMark Wild Life Extreme resets about 40 pools and fences per
+frame, each a synchronous round trip through the guest's command ring.
+diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
+--- a/host/vulkan/vk_decoder.cpp
++++ b/host/vulkan/vk_decoder.cpp
+@@ -2772,8 +2772,8 @@
+                 if ((vkResetFences_VkResult_return) == VK_ERROR_DEVICE_LOST)
+                     m_state->on_DeviceLost();
+                 vkStream->unsetHandleMapping();
+-                vkStream->write(&vkResetFences_VkResult_return, sizeof(VkResult));
+-                vkStream->commitWrite();
++                // The guest does not wait for vkResetFences's result (it can only fail
++                // for lack of memory), so no reply is written.
+                 if (m_snapshotsEnabled) {
+                     m_state->snapshot()->vkResetFences(&m_pool, snapshotApiCallHandle, packet,
+                                                        packetLen, vkResetFences_VkResult_return,
+@@ -3853,8 +3853,8 @@
+                 if ((vkResetCommandPool_VkResult_return) == VK_ERROR_DEVICE_LOST)
+                     m_state->on_DeviceLost();
+                 vkStream->unsetHandleMapping();
+-                vkStream->write(&vkResetCommandPool_VkResult_return, sizeof(VkResult));
+-                vkStream->commitWrite();
++                // The guest does not wait for vkResetCommandPool's result (it can only fail
++                // for lack of memory), so no reply is written.
+                 if (m_snapshotsEnabled) {
+                     m_state->snapshot()->vkResetCommandPool(
+                         &m_pool, snapshotApiCallHandle, packet, packetLen,

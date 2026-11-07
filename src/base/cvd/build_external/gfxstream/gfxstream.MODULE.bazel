@@ -119,5 +119,8 @@ git_repository(
         # A render thread polls an empty command ring for a while before it
         # sleeps, so guest calls that wait for a reply rarely wake it.
         "@//build_external/gfxstream:PATCH.gfxstream.asg-poll-before-sleep.patch",
+        # vkResetCommandPool and vkResetFences send no result: the guest no longer
+        # waits for one (lineageos external-mesa3d-gfxstream-async-resets.patch).
+        "@//build_external/gfxstream:PATCH.gfxstream.async-reset-command-pool-fences.patch",
     ],
 )

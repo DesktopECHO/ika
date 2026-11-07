@@ -1,0 +1,89 @@
+Patch summary:
+gfxstream's guest sends a command buffer's recorded commands
+(vkQueueFlushCommandsGOOGLE) through the command ring in write-step chunks,
+like any other command, instead of as a large transfer. A large transfer
+first waits until the host has read everything sent before it, which is the
+previous command buffer still being decoded and recorded, so the guest could
+never record ahead of the host: under WSL2 3DMark Wild Life Extreme's render
+thread spent 58% of its time in that wait. In the ring the guest only waits
+for a free write step. Takes effect together with
+external-mesa3d-gfxstream-async-resets.patch, whose round trips otherwise wait
+for the host to catch up just the same.
+
+diff --git a/src/gfxstream/guest/GoldfishAddressSpace/AddressSpaceStream.cpp b/src/gfxstream/guest/GoldfishAddressSpace/AddressSpaceStream.cpp
+--- a/src/gfxstream/guest/GoldfishAddressSpace/AddressSpaceStream.cpp
++++ b/src/gfxstream/guest/GoldfishAddressSpace/AddressSpaceStream.cpp
+@@ -273,59 +273,25 @@
+ 
+ int AddressSpaceStream::writeFullyAsync(const void* buf, size_t size) {
+     MESA_TRACE_SCOPE("writeFullyAsync");
++    // Send the data through the type 1 ring in write-step chunks, like
++    // ordinary commands. A type 3 transfer first waits until the host has read
++    // everything sent before, which is the whole previous command buffer still
++    // being decoded: the guest could then never record ahead of the host. In
++    // type 1 the guest only waits for a free write step.
++    flush();
++    rewind();
+     ensureType3Finished();
+-    ensureType1Finished();
+ 
+-    __atomic_store_n(&m_context.ring_config->transfer_size, size, __ATOMIC_RELEASE);
+-    m_context.ring_config->transfer_mode = 3;
+-
+-    size_t sent = 0;
+-    size_t preferredChunkSize = m_writeBufferSize / 2;
+-    size_t chunkSize = size < preferredChunkSize ? size : preferredChunkSize;
+     const uint8_t* bufferBytes = (const uint8_t*)buf;
+-
+-    bool pingedHost = false;
+-
++    size_t sent = 0;
+     while (sent < size) {
+         size_t remaining = size - sent;
+-        size_t sendThisTime = remaining < chunkSize ? remaining : chunkSize;
+-
+-        long sentChunks = ring_buffer_view_write(m_context.to_host_large_xfer.ring,
+-                                                 &m_context.to_host_large_xfer.view,
+-                                                 bufferBytes + sent, sendThisTime, 1);
+-
+-        uint32_t hostState = __atomic_load_n(m_context.host_state, __ATOMIC_ACQUIRE);
+-
+-        if (!pingedHost && hostState != ASG_HOST_STATE_CAN_CONSUME &&
+-            hostState != ASG_HOST_STATE_RENDERING) {
+-            pingedHost = true;
+-            notifyAvailable();
+-        }
+-
+-        if (sentChunks == 0) {
+-            ring_buffer_yield();
+-            backoff();
+-        }
+-
+-        sent += sentChunks * sendThisTime;
+-
+-        if (isInError()) {
+-            return -1;
+-        }
+-    }
+-
+-    notifyIfHostSleeping();
+-
+-    resetBackoff();
+-    m_context.ring_config->transfer_mode = 1;
+-    m_written += size;
+-
+-    float mb = (float)m_written / 1048576.0f;
+-    if (mb > 100.0f) {
+-        mesa_logd("%s: %f mb in %d notifs. %f mb/notif\n", __func__, mb, m_notifs,
+-                  m_notifs ? mb / (float)m_notifs : 0.0f);
+-        m_notifs = 0;
+-        m_written = 0;
++        size_t sendThisTime = remaining < m_writeStep ? remaining : m_writeStep;
++        memcpy(m_writeStart, bufferBytes + sent, sendThisTime);
++        int res = type1Write(m_writeStart - m_buf, sendThisTime);
++        advanceWrite();
++        if (res) return res;
++        sent += sendThisTime;
+     }
+     return 0;
+ }
