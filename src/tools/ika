@@ -3559,8 +3559,8 @@ host_is_wsl2() {
 # Whether gpu_mode=auto runs Venus here: the primary Vulkan device is a GPU
 # with Vulkan 1.3 or newer and ETC2 textures as Venus's guest sees them, which
 # Android expects of a Vulkan device and Chromium requires (gfxstream emulates
-# ETC2, Venus does not), and this is not WSL2. Prints why not when it does not
-# suit.
+# ETC2, Venus does not), and this is not WSL2 or Apple Silicon. Prints why not
+# when it does not suit.
 host_suits_venus() {
   local primary_device
   local version
@@ -3569,6 +3569,12 @@ host_suits_venus() {
 
   if host_is_wsl2; then
     printf '%s\n' "this is WSL2, whose GPU memory cannot be exported as dma-bufs"
+    return 1
+  fi
+  # On the M1 Pro, 3DMark Wild Life Extreme scored 27%, Steel Nomad Light 14%
+  # and Geekbench GPU 9% higher with gfxstream_guest_angle than with Venus.
+  if host_is_apple_silicon; then
+    printf '%s\n' "games run faster with gfxstream on the Apple GPU"
     return 1
   fi
   primary_device="$(primary_vulkan_device_summary || true)"
