@@ -30,6 +30,13 @@ PRODUCT_ENABLE_UFFD_GC := true
 PRODUCT_PRODUCT_PROPERTIES += \
     ro.dalvik.vm.force_cmc_stw_compaction=true
 
+# Apple CPUs: ika_tso.ko (kernel/prebuilts, patches/kernel-prebuilts-virtual-
+# device-arm64-ika-tso.patch) runs the apps listed in ika_tso_apps.sh with the
+# TSO memory model, and only those. Its SELinux domain is in sepolicy/private.
+PRODUCT_COPY_FILES += \
+    vendor/lineage_desktop/prebuilts/tso_apps/ika_tso_apps.sh:$(TARGET_COPY_OUT_SYSTEM_EXT)/bin/ika_tso_apps.sh \
+    vendor/lineage_desktop/prebuilts/tso_apps/ika_tso_apps.rc:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/init/ika_tso_apps.rc
+
 PRODUCT_NAME := lineage_desktop_cf_arm64_pgagnostic
 PRODUCT_BRAND := LineageOS
 PRODUCT_MANUFACTURER := DesktopECHO

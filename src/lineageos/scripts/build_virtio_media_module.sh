@@ -144,8 +144,12 @@ sys.exit(1 if bad else 0)
 EOF
 }
 
-build_variant() {
-  local variant="$1" arch kernel_image project path release localversion clang_bin out module stock
+# Builds the GKI of a variant far enough to build modules for it. Sets
+# gki_stock (the stock virtio-media.ko, whose CRCs a module must match),
+# gki_release, gki_clang (the toolchain's bin directory) and gki_make (the make
+# command line for M=<module> builds).
+prepare_gki() {
+  local variant="$1" arch kernel_image project path release localversion clang_bin out stock
   read -r arch kernel_image project path < <(variant_paths "$variant") || die "unknown variant: $variant"
   # The module the project ships, before the patch series replaced it.
   stock="$work_dir/stock-$variant.ko"
@@ -184,36 +188,51 @@ build_variant() {
   [[ "$(PATH="$clang_bin:$PATH" make "${make_args[@]}" -s kernelrelease)" == "$release" ]] ||
     die "$variant: kernel release does not match $release"
   cp "$out/vmlinux.symvers" "$out/Module.symvers"
+  gki_stock="$stock" gki_release="$release" gki_clang="$clang_bin"
+  gki_make=(env PATH="$clang_bin:$PATH" make "${make_args[@]}")
+}
 
+build_variant() {
+  local variant="$1" module
+  prepare_gki "$variant"
   module="$work_dir/module-$variant"
   rm -rf "$module"
   cp -r "$workspace/external/virtio-media/driver" "$module"
-  PATH="$clang_bin:$PATH" make "${make_args[@]}" -s M="$module" modules
-  "$clang_bin/llvm-strip" --strip-debug "$module/virtio-media.ko"
+  "${gki_make[@]}" -s M="$module" modules
+  "$gki_clang/llvm-strip" --strip-debug "$module/virtio-media.ko"
 
-  check_crcs "$clang_bin/llvm-objcopy" "$stock" "$module/virtio-media.ko" ||
+  check_crcs "$gki_clang/llvm-objcopy" "$gki_stock" "$module/virtio-media.ko" ||
     die "$variant: symbol CRCs differ from the stock module's: wrong toolchain or config?"
-  [[ "$(module_release "$module/virtio-media.ko")" == "$release" ]] || die "$variant: vermagic differs"
+  [[ "$(module_release "$module/virtio-media.ko")" == "$gki_release" ]] || die "$variant: vermagic differs"
   log "$variant: $module/virtio-media.ko"
 }
 
 # Writes the binary patch replacing virtio-media.ko in one prebuilt project.
 write_patch() {
-  local project="$1" name="$2" index blob
+  local project="$1" name="$2"
   shift 2
+  write_binary_patch "$project" "$name" \
+    "Patch summary: replaces virtio-media.ko with the driver of
+external-virtio-media-driver-queue-state.patch, rebuilt for the same GKI
+by src/lineageos/scripts/build_virtio_media_module.sh." "$@"
+}
+
+# write_binary_patch PROJECT NAME SUMMARY PATH=FILE...: writes patches/NAME,
+# which puts each FILE at PATH in PROJECT.
+write_binary_patch() {
+  local project="$1" name="$2" summary="$3" index blob
+  shift 3
   index="$(mktemp)"
   rm -f "$index"
   GIT_INDEX_FILE="$index" git -C "$workspace/$project" read-tree HEAD
   local entry
   for entry in "$@"; do
     blob="$(git -C "$workspace/$project" hash-object -w "${entry#*=}")"
-    GIT_INDEX_FILE="$index" git -C "$workspace/$project" update-index \
+    GIT_INDEX_FILE="$index" git -C "$workspace/$project" update-index --add \
       --cacheinfo "100644,$blob,${entry%%=*}"
   done
   {
-    echo "Patch summary: replaces virtio-media.ko with the driver of"
-    echo "external-virtio-media-driver-queue-state.patch, rebuilt for the same GKI"
-    echo "by src/lineageos/scripts/build_virtio_media_module.sh."
+    echo "$summary"
     echo
     GIT_INDEX_FILE="$index" git -C "$workspace/$project" diff --cached --binary --full-index HEAD
   } >"$patch_dir/$name"
@@ -253,4 +272,5 @@ main() {
   fi
 }
 
-main "$@"
+# Run unless sourced (build_ika_tso_module.sh uses the functions above).
+[[ "${BASH_SOURCE[0]}" != "$0" ]] || main "$@"

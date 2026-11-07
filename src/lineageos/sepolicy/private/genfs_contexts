@@ -1,0 +1,1 @@
+genfscon sysfs /module/ika_tso/parameters/uids u:object_r:sysfs_ika_tso:s0

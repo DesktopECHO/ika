@@ -1,0 +1,9 @@
+# ika_tso_apps.sh: the UIDs of the apps ika_tso.ko runs with TSO on Apple CPUs.
+service ika_tso_apps /system_ext/bin/ika_tso_apps.sh
+    user root
+    group package_info
+    disabled
+    oneshot
+
+on property:sys.boot_completed=1
+    start ika_tso_apps
