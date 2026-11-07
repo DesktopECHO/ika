@@ -7,4 +7,4 @@
 # host-visible path). Uncomment to override.
 
 #udmabuf_list_limit=8192
-#udmabuf_size_limit_mb=256
+#udmabuf_size_limit_mb=16384

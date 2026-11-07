@@ -15,7 +15,7 @@ if [ -f /etc/sysconfig/cuttlefish-host-resources ]; then
 fi
 
 udmabuf_list_limit=${udmabuf_list_limit:-8192}
-udmabuf_size_limit_mb=${udmabuf_size_limit_mb:-256}
+udmabuf_size_limit_mb=${udmabuf_size_limit_mb:-16384}
 
 tune_udmabuf() {
   if [ -w /sys/module/udmabuf/parameters/list_limit ]; then
