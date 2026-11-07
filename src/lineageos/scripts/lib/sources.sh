@@ -53,6 +53,24 @@ run_anonymous_git_network() {
     "$@"
 }
 
+# The build writes build-manifest.xml with `repo manifest` inside a sandbox
+# whose $HOME is read-only. repo caches the user's git config in a
+# .repo_*.json beside it and rewrites that cache when the config is missing
+# or newer, which fails there. Make sure a user config exists, then let repo
+# refresh its cache here, where it can write.
+ensure_repo_user_git_config() {
+  local xdg_config="${XDG_CONFIG_HOME:-$HOME/.config}/git/config"
+
+  if [[ ! -e "$HOME/.gitconfig" && ! -e "$xdg_config" ]]; then
+    log "creating an empty $HOME/.gitconfig for repo"
+    touch "$HOME/.gitconfig"
+  fi
+
+  [[ -f "$workspace/.repo/repo/repo" ]] || return 0
+  (cd "$workspace" && REPO_TRACE=0 python3 .repo/repo/repo manifest -r -o /dev/null) >/dev/null 2>&1 || \
+    log "warning: could not refresh repo's cache of the git user config"
+}
+
 canonical_workspace_path() {
   mkdir -p "$workspace"
   (cd "$workspace" && pwd -P)
