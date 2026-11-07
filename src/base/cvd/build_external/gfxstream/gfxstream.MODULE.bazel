@@ -113,5 +113,8 @@ git_repository(
         # A driver that cannot export dma-bufs (lavapipe under WSL2, no
         # /dev/udmabuf) gets exportable allocations with opaque handles only.
         "@//build_external/gfxstream:PATCH.gfxstream.dma-buf-export-fallback.patch",
+        # A decoder thread waiting for its turn in the guest's command order
+        # sleeps instead of spinning a host core.
+        "@//build_external/gfxstream:PATCH.gfxstream.seqno-futex-wait.patch",
     ],
 )

@@ -1,0 +1,125 @@
+Patch summary:
+A Vulkan decoder thread whose next command is not yet due in the guest-wide
+sequence spins briefly and then sleeps on a futex that the thread advancing
+the sequence wakes, instead of spinning with pause until its turn (a whole
+host core for as long as another guest thread is slow to send the command
+before it).
+diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
+--- a/host/vulkan/vk_decoder.cpp
++++ b/host/vulkan/vk_decoder.cpp
+@@ -34,6 +34,74 @@
+ #include <functional>
+ #include <optional>
+ #include <unordered_map>
++#include <atomic>
++#include <thread>
++
++#if defined(__linux__)
++#include <climits>
++#include <linux/futex.h>
++#include <sys/syscall.h>
++#include <time.h>
++#include <unistd.h>
++#endif
++
++namespace {
++
++// Decoder threads take the guest's Vulkan commands in sequence-number order.
++// A thread whose command is not next used to spin with `pause` until it was,
++// which burned a host core for as long as another guest thread took to send
++// the command before it (a whole core in games). It now spins briefly, then
++// sleeps on a futex that the thread advancing the number wakes.
++std::atomic<uint32_t> sSeqnoSleepers{0};
++
++constexpr uint32_t kSeqnoSpinIterations = 4096;
++
++inline void seqnoSleep(std::atomic<uint32_t>* counter, uint32_t seen) {
++#if defined(__linux__)
++    // Bounded, so the caller still notices a dying guest process.
++    struct timespec timeout = {0, 2 * 1000 * 1000};
++    syscall(SYS_futex, reinterpret_cast<uint32_t*>(counter), FUTEX_WAIT_PRIVATE, seen, &timeout,
++            nullptr, 0);
++#else
++    (void)counter;
++    (void)seen;
++    std::this_thread::yield();
++#endif
++}
++
++inline void seqnoWake(std::atomic<uint32_t>* counter) {
++#if defined(__linux__)
++    syscall(SYS_futex, reinterpret_cast<uint32_t*>(counter), FUTEX_WAKE_PRIVATE, INT_MAX, nullptr,
++            nullptr, 0);
++#else
++    (void)counter;
++#endif
++}
++
++// Stands in for the std::atomic<uint32_t>* every decoder case advances, so
++// that advancing it wakes sleeping decoder threads.
++class SeqnoCounter {
++  public:
++    explicit SeqnoCounter(std::atomic<uint32_t>* counter) : mCounter(counter) {}
++    explicit operator bool() const { return mCounter != nullptr; }
++    SeqnoCounter* operator->() { return this; }
++    uint32_t load(std::memory_order order) const { return mCounter->load(order); }
++    uint32_t fetch_add(uint32_t value, std::memory_order order) {
++        uint32_t previous = mCounter->fetch_add(value, order);
++        if (sSeqnoSleepers.load(std::memory_order_seq_cst) != 0) seqnoWake(mCounter);
++        return previous;
++    }
++    void sleepUntilChangedFrom(uint32_t seen) {
++        sSeqnoSleepers.fetch_add(1, std::memory_order_seq_cst);
++        if (mCounter->load(std::memory_order_seq_cst) == seen) seqnoSleep(mCounter, seen);
++        sSeqnoSleepers.fetch_sub(1, std::memory_order_seq_cst);
++    }
++
++  private:
++    std::atomic<uint32_t>* mCounter;
++};
++
++}  // namespace
+ 
+ #include "common/goldfish_vk_marshaling.h"
+ #include "common/goldfish_vk_reserved_marshaling.h"
+@@ -145,8 +213,8 @@
+         uint8_t** readStreamPtrPtr = &readStreamPtr;
+         vkReadStream->setHandleMapping(&m_boxedHandleUnwrapMapping);
+ 
+-        std::atomic<uint32_t>* seqnoPtr =
+-            processResources ? processResources->getSequenceNumberPtr() : nullptr;
++        SeqnoCounter seqnoPtr(processResources ? processResources->getSequenceNumberPtr()
++                                               : nullptr);
+ 
+         if (m_queueSubmitWithCommandsEnabled &&
+             ((opcode >= OP_vkFirst && opcode < OP_vkLast) ||
+@@ -162,7 +230,9 @@
+             }
+             if (seqnoPtr && !m_forSnapshotLoad) {
+                 {
+-                    while ((seqno - seqnoPtr->load(std::memory_order_seq_cst) != 1)) {
++                    uint32_t spins = 0;
++                    uint32_t current;
++                    while ((seqno - (current = seqnoPtr->load(std::memory_order_seq_cst)) != 1)) {
+                         if (shouldExit.load(std::memory_order_relaxed) ||
+                             (processResources && processResources->isGuestProcessDead())) {
+                             GFXSTREAM_WARNING(
+@@ -171,11 +241,16 @@
+                                 gfxstream::base::getCurrentThreadId());
+                             return 0;
+                         }
++                        if (spins < kSeqnoSpinIterations) {
++                            ++spins;
+ #if (defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64)))
+-                        _mm_pause();
++                            _mm_pause();
+ #elif (defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__)))
+-                        __asm__ __volatile__("pause;");
++                            __asm__ __volatile__("pause;");
+ #endif
++                            continue;
++                        }
++                        seqnoPtr->sleepUntilChangedFrom(current);
+                     }
+                     m_prevSeqno = seqno;
+                 }
