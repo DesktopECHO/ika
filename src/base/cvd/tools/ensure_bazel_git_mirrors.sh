@@ -94,6 +94,26 @@ fetch_mirror() {
     --format='%(refname)' refs/heads)
 }
 
+# cargo fetches a git dependency's "+HEAD:refs/remotes/origin/HEAD". A bare
+# mirror made by `git init` has HEAD -> master, which most of these
+# repositories lack, so point HEAD at a branch the mirror has.
+ensure_mirror_head() {
+  local repo_path="$1"
+  local branch
+  local first_head
+
+  git_clean -C "${repo_path}" rev-parse --verify --quiet HEAD >/dev/null && return 0
+  for branch in main master; do
+    if git_clean -C "${repo_path}" show-ref --verify --quiet "refs/heads/${branch}"; then
+      git_clean -C "${repo_path}" symbolic-ref HEAD "refs/heads/${branch}"
+      return 0
+    fi
+  done
+  first_head="$(git_clean -C "${repo_path}" for-each-ref --count=1 \
+    --format='%(refname)' refs/heads)"
+  [[ -z "${first_head}" ]] || git_clean -C "${repo_path}" symbolic-ref HEAD "${first_head}"
+}
+
 clone_mirror() {
   local remote_url="$1"
   local tmp_path="$2"
@@ -172,6 +192,7 @@ ensure_mirror() {
     mv "${tmp_path}" "${mirror_path}"
   fi
 
+  ensure_mirror_head "${mirror_path}"
   configure_rewrite "${mirror_path}" "${primary_remote}" "${fallback_remote}"
 }
 
@@ -202,6 +223,7 @@ ensure_minijail_mirror() {
   fi
 
   git_clean -C "${mirror_path}" update-ref "${local_branch}" "${MINIJAIL_REV}"
+  ensure_mirror_head "${mirror_path}"
   configure_rewrite "${mirror_path}" \
     "${MINIJAIL_REMOTE_PRIMARY}" \
     "${MINIJAIL_REMOTE_PRIMARY}/"
