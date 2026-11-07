@@ -1,0 +1,33 @@
+Patch summary:
+Read a VkWriteDescriptorSet's pBufferInfo only for the buffer descriptor types.
+Vulkan ignores pBufferInfo for image, sampler and texel-buffer writes, so apps
+may leave it unset or pointing anywhere; transformDescriptorSetList copied it
+for every write and crashed on such a pointer. Geekbench 7's GPU benchmark
+crashed this way in vkUpdateDescriptorSets (SIGSEGV, fault address 0x58).
+
+diff --git a/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp b/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp
+--- a/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp
++++ b/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp
+@@ -778,15 +778,16 @@
+ 
+         std::vector<VkDescriptorBufferInfo>& bufferInfo = bufferInfos[i];
+         bufferInfo.resize(descriptorCount);
++        // pBufferInfo is only defined for the buffer descriptor types. For image, sampler and
++        // texel-buffer writes Vulkan ignores it, so apps may leave it unset or point it
++        // anywhere; it is not read for those types.
++        const auto* srcBufferInfo =
++            vk_descriptor_type_has_descriptor_buffer(srcDescriptorSet.descriptorType)
++                ? srcDescriptorSet.pBufferInfo
++                : nullptr;
+         for (uint32_t j = 0; j < descriptorCount; ++j) {
+-            const auto* srcBufferInfo = srcDescriptorSet.pBufferInfo;
+             if (srcBufferInfo) {
+                 bufferInfo[j] = srcBufferInfo[j];
+-                bufferInfo[j].buffer = VK_NULL_HANDLE;
+-                if (vk_descriptor_type_has_descriptor_buffer(srcDescriptorSet.descriptorType) &&
+-                    srcBufferInfo[j].buffer) {
+-                    bufferInfo[j].buffer = srcBufferInfo[j].buffer;
+-                }
+             } else {
+                 memset(&bufferInfo[j], 0, sizeof(VkDescriptorBufferInfo));
+             }
