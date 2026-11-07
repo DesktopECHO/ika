@@ -122,5 +122,8 @@ git_repository(
         # vkResetCommandPool and vkResetFences send no result: the guest no longer
         # waits for one (lineageos external-mesa3d-gfxstream-async-resets.patch).
         "@//build_external/gfxstream:PATCH.gfxstream.async-reset-command-pool-fences.patch",
+        # Command buffers are recorded on worker threads while the render thread
+        # decodes the next one.
+        "@//build_external/gfxstream:PATCH.gfxstream.parallel-record.patch",
     ],
 )
