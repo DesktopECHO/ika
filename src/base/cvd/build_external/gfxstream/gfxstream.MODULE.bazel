@@ -116,5 +116,8 @@ git_repository(
         # A decoder thread waiting for its turn in the guest's command order
         # sleeps instead of spinning a host core.
         "@//build_external/gfxstream:PATCH.gfxstream.seqno-futex-wait.patch",
+        # A render thread polls an empty command ring for a while before it
+        # sleeps, so guest calls that wait for a reply rarely wake it.
+        "@//build_external/gfxstream:PATCH.gfxstream.asg-poll-before-sleep.patch",
     ],
 )

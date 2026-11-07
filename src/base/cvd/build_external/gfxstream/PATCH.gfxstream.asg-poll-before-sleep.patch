@@ -1,0 +1,116 @@
+Patch summary:
+A render thread that finds the guest's command ring empty polls it for a
+while (200 us, GFXSTREAM_ASG_POLL_US) before sleeping until the guest pings
+it, instead of 30 yields: the count of empty reads that was meant to allow
+several rounds first was never reset. It also looks at the ring once more
+after announcing that it needs a ping, so a command the guest wrote just
+before it could see that is not left waiting.
+diff --git a/host/ring_stream.cpp b/host/ring_stream.cpp
+--- a/host/ring_stream.cpp
++++ b/host/ring_stream.cpp
+@@ -16,6 +16,9 @@
+ 
+ #include <assert.h>
+ #include <memory.h>
++#include <stdlib.h>
++
++#include <chrono>
+ 
+ #include "gfxstream/host/dma_device.h"
+ #include "gfxstream/common/logging.h"
+@@ -27,6 +30,27 @@
+ namespace gfxstream {
+ namespace {
+ 
++// How long a render thread keeps polling an empty ring before it sleeps until
++// the guest pings it. Waking a sleeping thread costs tens of microseconds,
++// more under nested virtualization (WSL2), and the guest waits on the ring
++// for every command that returns a value, so poll for a while first.
++// GFXSTREAM_ASG_POLL_US overrides it; 0 sleeps at once.
++uint64_t asgPollMicros() {
++    static const uint64_t micros = [] {
++        const char* value = getenv("GFXSTREAM_ASG_POLL_US");
++        if (value && *value) return static_cast<uint64_t>(strtoull(value, nullptr, 10));
++        return static_cast<uint64_t>(200);
++    }();
++    return micros;
++}
++
++uint64_t asgNowMicros() {
++    return std::chrono::duration_cast<std::chrono::microseconds>(
++               std::chrono::steady_clock::now().time_since_epoch())
++        .count();
++}
++
++
+ struct asg_context CreateContext(const AsgConsumerCreateInfo& info) {
+     struct asg_context context = asg_context_create(info.ring_storage, info.buffer, info.buffer_size);
+ 
+@@ -154,8 +178,8 @@
+     uint32_t ringAvailable = 0;
+     uint32_t ringLargeXferAvailable = 0;
+ 
+-    const uint32_t maxSpins = 30;
+-    uint32_t spins = 0;
++    const uint64_t pollMicros = asgPollMicros();
++    uint64_t idleSince = 0;
+     bool inLargeXfer = true;
+ 
+     *(mContext.host_state) = ASG_HOST_STATE_CAN_CONSUME;
+@@ -196,6 +220,7 @@
+         auto ptrEnd = dst + wanted;
+ 
+         if (ringAvailable) {
++            idleSince = 0;
+             inLargeXfer = false;
+             uint32_t transferMode =
+                 mContext.ring_config->transfer_mode;
+@@ -217,6 +242,7 @@
+                     break;
+             }
+         } else if (ringLargeXferAvailable) {
++            idleSince = 0;
+             type3Read(ringLargeXferAvailable,
+                       &count, &current, ptrEnd);
+             inLargeXfer = true;
+@@ -232,12 +258,16 @@
+                 inLargeXfer = false;
+             }
+ 
+-            if (++spins < maxSpins) {
++            // Poll for a while before sleeping. (This used to be 30 yields,
++            // and the count of empty reads that should have allowed a few
++            // rounds of them first was never reset.)
++            const uint64_t now = asgNowMicros();
++            if (!idleSince) idleSince = now;
++            if (now - idleSince < pollMicros) {
+                 ring_buffer_yield();
+                 continue;
+-            } else {
+-                spins = 0;
+             }
++            idleSince = 0;
+ 
+             if (mShouldExit) {
+                 return nullptr;
+@@ -248,8 +278,18 @@
+             }
+ 
+             ++mUnavailableReadCount;
+-            if (mUnavailableReadCount >= kMaxUnavailableReads) {
+-                *(mContext.host_state) = ASG_HOST_STATE_NEED_NOTIFY;
++            {
++                __atomic_store_n(mContext.host_state, ASG_HOST_STATE_NEED_NOTIFY,
++                                 __ATOMIC_SEQ_CST);
++                __atomic_thread_fence(__ATOMIC_SEQ_CST);
++                // The guest may have written just before it could see
++                // NEED_NOTIFY, and then it does not ping: look once more.
++                if (ring_buffer_available_read(mContext.to_host, 0) ||
++                    ring_buffer_available_read(mContext.to_host_large_xfer.ring,
++                                               &mContext.to_host_large_xfer.view)) {
++                    *(mContext.host_state) = ASG_HOST_STATE_CAN_CONSUME;
++                    continue;
++                }
+ 
+                 bool sleeping = false;
+                 do {
