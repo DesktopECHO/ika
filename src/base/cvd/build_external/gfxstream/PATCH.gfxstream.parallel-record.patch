@@ -1,0 +1,444 @@
+Patch summary:
+Command buffers the guest flushes (vkQueueFlushCommandsGOOGLE) are recorded
+on worker threads, two unless GFXSTREAM_PARALLEL_RECORD says otherwise (0
+records on the render thread as before). Asynchronous submits and
+vkQueueSignalReleaseImageANDROIDAsyncGOOGLE run in order on a thread per
+queue once the command buffers they submit are recorded, so the render
+thread goes on decoding the guest's next command buffer. Recording took half
+of the render thread's time in 3DMark under WSL2. Vulkan commands that are
+not known to be independent of pending work wait for all of it first;
+vkResetCommandPool waits for its pool's recordings. vkQueueSubmit marks its
+fence waitable before it takes the fence's mutex instead of while holding
+the global lock, since waitForFences takes the two in the other order and a
+submit on a queue thread can now meet the SyncThread waiting on its fence.
+diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
+--- a/host/vulkan/vk_decoder.cpp
++++ b/host/vulkan/vk_decoder.cpp
+@@ -36,6 +36,12 @@
+ #include <unordered_map>
+ #include <atomic>
+ #include <thread>
++#include <condition_variable>
++#include <deque>
++#include <future>
++#include <memory>
++#include <mutex>
++#include <vector>
+ 
+ #if defined(__linux__)
+ #include <climits>
+@@ -103,6 +109,7 @@
+ 
+ }  // namespace
+ 
++#include "common/goldfish_vk_deepcopy.h"
+ #include "common/goldfish_vk_marshaling.h"
+ #include "common/goldfish_vk_reserved_marshaling.h"
+ #include "common/goldfish_vk_transform.h"
+@@ -127,6 +134,179 @@
+ namespace host {
+ namespace vk {
+ 
++
++namespace {
++
++// Command buffers are recorded on worker threads (GFXSTREAM_PARALLEL_RECORD:
++// how many, 2 by default, 0 to record on the render thread as before).
++//
++// A guest thread's command buffers arrive whole (vkQueueFlushCommandsGOOGLE)
++// and each is followed by its submit. Recording one into the host driver
++// took half of the render thread's time in 3DMark under WSL2, while the
++// guest waited for ring space. Here a flushed command buffer is recorded on a
++// worker thread, after the previous one from the same command pool, and
++// asynchronous queue operations run in order on a thread per queue once the
++// command buffers they submit are recorded, so the render thread goes on
++// decoding the next command buffer. A command that is not known to be
++// independent of pending work first waits for all of it.
++class SerialExecutor {
++   public:
++    SerialExecutor() : mThread([this] { run(); }) {}
++    ~SerialExecutor() {
++        {
++            std::lock_guard<std::mutex> lock(mMutex);
++            mStop = true;
++        }
++        mWake.notify_all();
++        mThread.join();
++    }
++    void post(std::function<void()> task) {
++        {
++            std::lock_guard<std::mutex> lock(mMutex);
++            mTasks.push_back(std::move(task));
++        }
++        mWake.notify_one();
++    }
++    void drain() {
++        std::unique_lock<std::mutex> lock(mMutex);
++        mIdle.wait(lock, [this] { return mTasks.empty() && !mBusy; });
++    }
++
++   private:
++    void run() {
++        std::unique_lock<std::mutex> lock(mMutex);
++        for (;;) {
++            mWake.wait(lock, [this] { return mStop || !mTasks.empty(); });
++            if (mTasks.empty()) return;
++            std::function<void()> task = std::move(mTasks.front());
++            mTasks.pop_front();
++            mBusy = true;
++            lock.unlock();
++            task();
++            lock.lock();
++            mBusy = false;
++            if (mTasks.empty()) mIdle.notify_all();
++        }
++    }
++
++    std::mutex mMutex;
++    std::condition_variable mWake;
++    std::condition_variable mIdle;
++    std::deque<std::function<void()>> mTasks;
++    bool mBusy = false;
++    bool mStop = false;
++    std::thread mThread;
++};
++
++class ParallelRecorder {
++   public:
++    static ParallelRecorder* get() {
++        static ParallelRecorder* sInstance = []() -> ParallelRecorder* {
++            const char* env = getenv("GFXSTREAM_PARALLEL_RECORD");
++            int threads = (env && *env) ? atoi(env) : 2;
++            if (threads <= 0) return nullptr;
++            return new ParallelRecorder(threads);
++        }();
++        return sInstance;
++    }
++
++    void record(uint64_t pool, uint64_t commandBuffer, std::function<void()> task) {
++        auto promise = std::make_shared<std::promise<void>>();
++        std::shared_future<void> done = promise->get_future().share();
++        std::shared_future<void> previous;
++        size_t worker;
++        {
++            std::lock_guard<std::mutex> lock(mMutex);
++            auto it = mByPool.find(pool);
++            if (it != mByPool.end()) previous = it->second;
++            mByPool[pool] = done;
++            mByCommandBuffer[commandBuffer] = done;
++            worker = mNextWorker++ % mWorkers.size();
++        }
++        mWorkers[worker]->post([task = std::move(task), promise, previous] {
++            if (previous.valid()) previous.wait();
++            task();
++            promise->set_value();
++        });
++    }
++
++    std::shared_future<void> pendingCommandBuffer(uint64_t commandBuffer) {
++        std::lock_guard<std::mutex> lock(mMutex);
++        auto it = mByCommandBuffer.find(commandBuffer);
++        return it == mByCommandBuffer.end() ? std::shared_future<void>() : it->second;
++    }
++
++    void waitPool(uint64_t pool) {
++        std::shared_future<void> pending;
++        {
++            std::lock_guard<std::mutex> lock(mMutex);
++            auto it = mByPool.find(pool);
++            if (it != mByPool.end()) pending = it->second;
++        }
++        if (pending.valid()) pending.wait();
++    }
++
++    void waitCommandBuffer(uint64_t commandBuffer) {
++        std::shared_future<void> pending = pendingCommandBuffer(commandBuffer);
++        if (pending.valid()) pending.wait();
++    }
++
++    SerialExecutor* queue(uint64_t queue) {
++        std::lock_guard<std::mutex> lock(mMutex);
++        std::unique_ptr<SerialExecutor>& executor = mQueues[queue];
++        if (!executor) executor = std::make_unique<SerialExecutor>();
++        return executor.get();
++    }
++
++    // Waits for every queued operation and recording started so far.
++    void drainAll() {
++        std::vector<SerialExecutor*> queues;
++        {
++            std::lock_guard<std::mutex> lock(mMutex);
++            for (auto& [handle, executor] : mQueues) queues.push_back(executor.get());
++        }
++        for (SerialExecutor* executor : queues) executor->drain();
++        for (auto& worker : mWorkers) worker->drain();
++    }
++
++   private:
++    explicit ParallelRecorder(int threads) {
++        for (int i = 0; i < threads; ++i) mWorkers.push_back(std::make_unique<SerialExecutor>());
++    }
++
++    std::mutex mMutex;
++    std::vector<std::unique_ptr<SerialExecutor>> mWorkers;
++    size_t mNextWorker = 0;
++    std::unordered_map<uint64_t, std::shared_future<void>> mByPool;
++    std::unordered_map<uint64_t, std::shared_future<void>> mByCommandBuffer;
++    std::unordered_map<uint64_t, std::unique_ptr<SerialExecutor>> mQueues;
++};
++
++// Commands that may run while earlier command buffers are still being recorded
++// or submitted: they touch no command buffer or queue, or wait for exactly the
++// work they depend on.
++bool runsAlongsidePendingWork(uint32_t opcode) {
++    switch (opcode) {
++        case OP_vkQueueFlushCommandsGOOGLE:
++        case OP_vkQueueSubmitAsyncGOOGLE:
++        case OP_vkQueueSubmitAsync2GOOGLE:
++        case OP_vkQueueSignalReleaseImageANDROIDAsyncGOOGLE:
++        case OP_vkResetCommandPool:
++        case OP_vkResetFences:
++        case OP_vkGetFenceStatus:
++        case OP_vkWaitForFences:
++        case OP_vkUpdateDescriptorSets:
++        case OP_vkAllocateDescriptorSets:
++        case OP_vkFreeDescriptorSets:
++        case OP_vkQueueCommitDescriptorSetUpdatesGOOGLE:
++            return true;
++        default:
++            return false;
++    }
++}
++
++}  // namespace
++
+ class VkDecoder::Impl {
+    public:
+     Impl()
+@@ -166,7 +346,9 @@
+ 
+ VkDecoder::VkDecoder() : mImpl(new VkDecoder::Impl()) {}
+ 
+-VkDecoder::~VkDecoder() = default;
++VkDecoder::~VkDecoder() {
++    if (ParallelRecorder* parallel = ParallelRecorder::get()) parallel->drainAll();
++}
+ 
+ void VkDecoder::setForSnapshotLoad(bool forSnapshotLoad) {
+     mImpl->setForSnapshotLoad(forSnapshotLoad);
+@@ -264,6 +446,15 @@
+ 
+         gfx_logger.recordCommandExecution();
+ 
++        ParallelRecorder* parallel =
++            (m_snapshotsEnabled || m_forSnapshotLoad) ? nullptr : ParallelRecorder::get();
++        // Packets for other decoders (renderControl's) pass through here first.
++        const bool isVulkanCommand = (opcode >= OP_vkFirst && opcode < OP_vkLast) ||
++                                     (opcode >= OP_vkFirst_old && opcode < OP_vkLast_old);
++        if (parallel && isVulkanCommand && !runsAlongsidePendingWork(opcode)) {
++            parallel->drainAll();
++        }
++
+         switch (opcode) {
+ #ifdef VK_BASE_VERSION_1_0
+             case OP_vkCreateInstance: {
+@@ -3846,6 +4037,7 @@
+                                    (unsigned long long)commandPool, (unsigned long long)flags);
+                 }
+                 VkResult vkResetCommandPool_VkResult_return = VK_ERROR_OUT_OF_HOST_MEMORY;
++                if (parallel) parallel->waitPool((uint64_t)commandPool);
+                 if (CC_LIKELY(vk)) {
+                     vkResetCommandPool_VkResult_return = m_state->on_vkResetCommandPool(
+                         &m_pool, snapshotApiCallHandle, device, commandPool, flags);
+@@ -23048,7 +23240,31 @@
+                         ioStream, (unsigned long long)queue, (unsigned long long)submitCount,
+                         (unsigned long long)pSubmits, (unsigned long long)fence);
+                 }
+-                if (CC_LIKELY(vk)) {
++                if (CC_LIKELY(vk) && parallel) {
++                    auto pool = std::make_shared<gfxstream::base::BumpPool>();
++                    VkSubmitInfo* copies =
++                        (VkSubmitInfo*)pool->alloc(submitCount * sizeof(VkSubmitInfo));
++                    std::vector<std::shared_future<void>> recordings;
++                    for (uint32_t i = 0; i < submitCount; ++i) {
++                        deepcopy_VkSubmitInfo(pool.get(), VK_STRUCTURE_TYPE_MAX_ENUM, pSubmits + i,
++                                              copies + i);
++                        for (uint32_t j = 0; j < copies[i].commandBufferCount; ++j) {
++                            recordings.push_back(parallel->pendingCommandBuffer(
++                                (uint64_t)copies[i].pCommandBuffers[j]));
++                        }
++                    }
++                    VkDecoderGlobalState* state = m_state;
++                    parallel->queue((uint64_t)queue)->post(
++                        [state, pool, queue, submitCount, copies, fence,
++                         recordings = std::move(recordings)] {
++                            for (const auto& recording : recordings) {
++                                if (recording.valid()) recording.wait();
++                            }
++                            state->on_vkQueueSubmitAsyncGOOGLE(pool.get(),
++                                                               kInvalidSnapshotApiCallHandle, queue,
++                                                               submitCount, copies, fence);
++                        });
++                } else if (CC_LIKELY(vk)) {
+                     m_state->on_vkQueueSubmitAsyncGOOGLE(&m_pool, snapshotApiCallHandle, queue,
+                                                          submitCount, pSubmits, fence);
+                 }
+@@ -23283,7 +23499,21 @@
+                 }
+                 if (m_queueSubmitWithCommandsEnabled)
+                     seqnoPtr->fetch_add(1, std::memory_order_seq_cst);
+-                if (CC_LIKELY(vk)) {
++                if (CC_LIKELY(vk) && parallel) {
++                    uint64_t unboxed = (uint64_t)unbox_VkCommandBuffer(commandBuffer);
++                    auto data = std::make_shared<std::vector<uint8_t>>(
++                        (const uint8_t*)pData, (const uint8_t*)pData + dataSize);
++                    VkDecoderGlobalState* state = m_state;
++                    VkDecoderContext taskContext = context;
++                    parallel->record(state->commandPoolOf((VkCommandBuffer)unboxed), unboxed,
++                                     [state, queue, commandBuffer, data, taskContext] {
++                                         gfxstream::base::BumpPool pool;
++                                         state->on_vkQueueFlushCommandsGOOGLE(
++                                             &pool, kInvalidSnapshotApiCallHandle, queue,
++                                             commandBuffer, data->size(), data->data(),
++                                             taskContext);
++                                     });
++                } else if (CC_LIKELY(vk)) {
+                     m_state->on_vkQueueFlushCommandsGOOGLE(&m_pool, snapshotApiCallHandle, queue,
+                                                            commandBuffer, dataSize, pData, context);
+                 }
+@@ -23543,7 +23773,22 @@
+                         ioStream, (unsigned long long)queue, (unsigned long long)waitSemaphoreCount,
+                         (unsigned long long)pWaitSemaphores, (unsigned long long)image);
+                 }
+-                if (CC_LIKELY(vk)) {
++                if (CC_LIKELY(vk) && parallel) {
++                    std::vector<VkSemaphore> semaphores;
++                    if (pWaitSemaphores) {
++                        semaphores.assign(pWaitSemaphores, pWaitSemaphores + waitSemaphoreCount);
++                    }
++                    bool hasSemaphores = pWaitSemaphores != nullptr;
++                    VkDecoderGlobalState* state = m_state;
++                    parallel->queue((uint64_t)queue)->post(
++                        [state, queue, semaphores = std::move(semaphores), hasSemaphores, image] {
++                            gfxstream::base::BumpPool pool;
++                            state->on_vkQueueSignalReleaseImageANDROIDAsyncGOOGLE(
++                                &pool, kInvalidSnapshotApiCallHandle, queue,
++                                (uint32_t)semaphores.size(),
++                                hasSemaphores ? semaphores.data() : nullptr, image);
++                        });
++                } else if (CC_LIKELY(vk)) {
+                     m_state->on_vkQueueSignalReleaseImageANDROIDAsyncGOOGLE(
+                         &m_pool, snapshotApiCallHandle, queue, waitSemaphoreCount, pWaitSemaphores,
+                         image);
+@@ -23878,7 +24123,31 @@
+                         ioStream, (unsigned long long)queue, (unsigned long long)submitCount,
+                         (unsigned long long)pSubmits, (unsigned long long)fence);
+                 }
+-                if (CC_LIKELY(vk)) {
++                if (CC_LIKELY(vk) && parallel) {
++                    auto pool = std::make_shared<gfxstream::base::BumpPool>();
++                    VkSubmitInfo2* copies =
++                        (VkSubmitInfo2*)pool->alloc(submitCount * sizeof(VkSubmitInfo2));
++                    std::vector<std::shared_future<void>> recordings;
++                    for (uint32_t i = 0; i < submitCount; ++i) {
++                        deepcopy_VkSubmitInfo2(pool.get(), VK_STRUCTURE_TYPE_MAX_ENUM, pSubmits + i,
++                                               copies + i);
++                        for (uint32_t j = 0; j < copies[i].commandBufferInfoCount; ++j) {
++                            recordings.push_back(parallel->pendingCommandBuffer(
++                                (uint64_t)copies[i].pCommandBufferInfos[j].commandBuffer));
++                        }
++                    }
++                    VkDecoderGlobalState* state = m_state;
++                    parallel->queue((uint64_t)queue)->post(
++                        [state, pool, queue, submitCount, copies, fence,
++                         recordings = std::move(recordings)] {
++                            for (const auto& recording : recordings) {
++                                if (recording.valid()) recording.wait();
++                            }
++                            state->on_vkQueueSubmitAsync2GOOGLE(pool.get(),
++                                                                kInvalidSnapshotApiCallHandle,
++                                                                queue, submitCount, copies, fence);
++                        });
++                } else if (CC_LIKELY(vk)) {
+                     m_state->on_vkQueueSubmitAsync2GOOGLE(&m_pool, snapshotApiCallHandle, queue,
+                                                           submitCount, pSubmits, fence);
+                 }
+diff --git a/host/vulkan/vk_decoder_global_state.h b/host/vulkan/vk_decoder_global_state.h
+--- a/host/vulkan/vk_decoder_global_state.h
++++ b/host/vulkan/vk_decoder_global_state.h
+@@ -1011,6 +1011,9 @@
+ 
+     void on_DeviceLost();
+ 
++    // The command pool of an unboxed command buffer, 0 if unknown.
++    uint64_t commandPoolOf(VkCommandBuffer commandBuffer);
++
+     // Fence waits
+     VkResult waitForFence(VkFence boxed_fence, uint64_t timeout);
+ 
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -8392,6 +8392,8 @@
+ 
+         DeviceOpWaitable queueCompletedWaitable = builder.OnQueueSubmittedWithFence(usedFence);
+ 
++        std::mutex* fenceMutex = nullptr;
++        std::condition_variable* fenceCv = nullptr;
+         {
+             std::lock_guard<std::mutex> lock(mMutex);
+             // Update image layouts
+@@ -8437,17 +8439,24 @@
+             // waitForFence() on this fence.
+             auto* fenceInfo = gfxstream::base::find(mFenceInfo, fence);
+             if (fenceInfo) {
+-                {
+-                    std::unique_lock<std::mutex> fenceLock(fenceInfo->mutex);
+-                    fenceInfo->state = FenceInfo::State::kWaitable;
+-                }
+-                fenceInfo->cv.notify_all();
++                // waitForFences takes the fence's mutex before mMutex, so the
++                // fence's mutex is taken only after mMutex is released below.
++                // The state is read under mMutex.
++                fenceInfo->state = FenceInfo::State::kWaitable;
++                fenceMutex = &fenceInfo->mutex;
++                fenceCv = &fenceInfo->cv;
+                 // Also update the latestUse waitable for this fence, to ensure
+                 // it is not asynchronously destroyed before all the waitables
+                 // referencing it
+                 fenceInfo->latestUse = queueCompletedWaitable;
+             }
+         }
++        if (fenceMutex) {
++            // A waiter checks the state holding the fence's mutex, so taking it
++            // here means the waiter either sees kWaitable or is already waiting.
++            { std::lock_guard<std::mutex> fenceLock(*fenceMutex); }
++            fenceCv->notify_all();
++        }
+ 
+         if (!releasedColorBuffers.empty()) {
+             // Presentation images are not expected to use timeline semaphores. In case of this
+@@ -10305,6 +10314,12 @@
+         });
+     }
+ 
++    uint64_t commandPoolOf(VkCommandBuffer commandBuffer) {
++        std::lock_guard<std::mutex> lock(mMutex);
++        auto* cmdBufferInfo = gfxstream::base::find(mCommandBufferInfo, commandBuffer);
++        return cmdBufferInfo ? (uint64_t)cmdBufferInfo->cmdPool : 0;
++    }
++
+     VkResult waitForFence(VkFence fence, uint64_t timeout) {
+         VkDevice device;
+         VulkanDispatch* vk;
+@@ -13439,6 +13454,10 @@
+ 
+ void VkDecoderGlobalState::on_DeviceLost() { mImpl->on_DeviceLost(); }
+ 
++uint64_t VkDecoderGlobalState::commandPoolOf(VkCommandBuffer commandBuffer) {
++    return mImpl->commandPoolOf(commandBuffer);
++}
++
+ VkResult VkDecoderGlobalState::waitForFence(VkFence boxed_fence, uint64_t timeout) {
+     VkFence fence = unbox_VkFence(boxed_fence);
+     return mImpl->waitForFence(fence, timeout);
