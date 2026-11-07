@@ -353,6 +353,7 @@ while true; do
     --repo_env=CARGO_BAZEL_TIMEOUT="$CARGO_BAZEL_TIMEOUT" \
     --repo_env=GIT_CONFIG_GLOBAL="$BAZEL_GIT_CONFIG" \
     --repo_env=GIT_CONFIG_NOSYSTEM=1 \
+    --repo_env=CARGO_NET_GIT_FETCH_WITH_CLI=true \
     --action_env=PKG_CONFIG_PATH="$SCRCPY_STATIC_DEPS/lib/pkgconfig" \
     --action_env=LIBAVCODEC_STATIC=1 \
     --action_env=LIBAVUTIL_STATIC=1 \

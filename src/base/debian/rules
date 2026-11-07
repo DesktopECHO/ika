@@ -166,6 +166,7 @@ override_dh_auto_build:
 	         --repo_env=CARGO_BAZEL_TIMEOUT="$$CARGO_BAZEL_TIMEOUT" \
 	         --repo_env=GIT_CONFIG_GLOBAL="$$BAZEL_GIT_CONFIG" \
 	         --repo_env=GIT_CONFIG_NOSYSTEM=1 \
+	         --repo_env=CARGO_NET_GIT_FETCH_WITH_CLI=true \
 	         ${bindgen_clang_args} \
 	         ${static_ffmpeg_action_env} \
 	         --cxxopt=-Wno-deprecated-declarations \
