@@ -541,6 +541,7 @@ main() {
   configure_arm64_host_build
   update_microg_prebuilts
   cleanup_arm64_prebuilt_download_caches
+  ensure_repo_user_git_config
 
   local target
   for target in "${targets[@]}"; do
