@@ -13,10 +13,19 @@ physical_memory_total_kib() {
 }
 
 default_job_count() {
-  # JOBS = (number of logical CPU cores) - 2, floored at 1
-  # (build hosts assumed >= 4 cores).
-  local jobs
+  # JOBS = (number of logical CPU cores) - 2, capped at one job per 2 GiB of
+  # RAM, floored at 1 (build hosts assumed >= 4 cores). The Java steps (R8,
+  # D8) take about 2 GiB each: 22 jobs in 24 GiB ran out of memory and hung
+  # WSL, where 12 ran without swapping.
+  local jobs memory_kib memory_jobs
+  local kib_per_job=$((2 * 1024 * 1024))
+
   jobs=$(( $(logical_cpu_count) - 2 ))
+  memory_kib="$(physical_memory_total_kib)"
+  if [[ "$memory_kib" =~ ^[0-9]+$ && "$memory_kib" -gt 0 ]]; then
+    memory_jobs=$((memory_kib / kib_per_job))
+    (( jobs <= memory_jobs )) || jobs="$memory_jobs"
+  fi
   (( jobs > 0 )) || jobs=1
   printf '%s\n' "$jobs"
 }
