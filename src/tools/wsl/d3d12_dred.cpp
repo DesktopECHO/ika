@@ -423,3 +423,38 @@ extern "C" void ika_dred_hook_device(void *device) {
   }
   report("hooked D3D12 device vtable %p", (void *)vtable);
 }
+
+/* ---- Cross-device sharing self-test for the shim's device pool ----
+ * With more than one device, gfxstream's display buffers are created on one
+ * device and opened by apps on others through D3D12 shared handles. Returns 1
+ * when a shared render-target texture created on a opens on b, 0 when it does
+ * not, -1 when the test itself could not run. */
+extern "C" int ika_d3d12_sharing_works(void *dev_a, void *dev_b) {
+  auto *a = static_cast<ID3D12Device *>(dev_a);
+  auto *b = static_cast<ID3D12Device *>(dev_b);
+  D3D12_HEAP_PROPERTIES heap = {};
+  heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+  D3D12_RESOURCE_DESC desc = {};
+  desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+  desc.Width = 64;
+  desc.Height = 64;
+  desc.DepthOrArraySize = 1;
+  desc.MipLevels = 1;
+  desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  desc.SampleDesc.Count = 1;
+  desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+  ID3D12Resource *resource = nullptr;
+  if (FAILED(a->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_SHARED, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr,
+                                        IID_PPV_ARGS(&resource))))
+    return -1;
+  HANDLE handle = nullptr;
+  int works = -1;
+  if (SUCCEEDED(a->CreateSharedHandle(resource, nullptr, 0x10000000L /* GENERIC_ALL */, nullptr, &handle))) {
+    ID3D12Resource *opened = nullptr;
+    works = SUCCEEDED(b->OpenSharedHandle(handle, IID_PPV_ARGS(&opened))) ? 1 : 0;
+    if (opened) opened->Release();
+    close((int)(intptr_t)handle);
+  }
+  resource->Release();
+  return works;
+}
