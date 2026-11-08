@@ -1,0 +1,55 @@
+Patch summary:
+vkAcquireImageANDROID sends the guest no result and, with parallel
+recording, runs on the submit thread after the queue work decoded before it
+instead of first waiting for all pending recordings and submits. The acquire
+submits to the device's queue, so it keeps its place among queue operations.
+3DMark Wild Life Extreme's render thread spent half its time waiting for
+that result under WSL2. Needs lineageos
+external-mesa3d-gfxstream-async-acquire-image.patch, which stops reading it.
+diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
+--- a/host/vulkan/vk_decoder.cpp
++++ b/host/vulkan/vk_decoder.cpp
+@@ -284,6 +284,7 @@
+         case OP_vkQueueSubmitAsyncGOOGLE:
+         case OP_vkQueueSubmitAsync2GOOGLE:
+         case OP_vkQueueSignalReleaseImageANDROIDAsyncGOOGLE:
++        case OP_vkAcquireImageANDROID:
+         case OP_vkResetCommandPool:
+         case OP_vkResetFences:
+         case OP_vkGetFenceStatus:
+@@ -19673,8 +19674,22 @@
+                         (unsigned long long)nativeFenceFd, (unsigned long long)semaphore,
+                         (unsigned long long)fence);
+                 }
+-                VkResult vkAcquireImageANDROID_VkResult_return = VK_ERROR_OUT_OF_HOST_MEMORY;
+-                if (CC_LIKELY(vk)) {
++                VkResult vkAcquireImageANDROID_VkResult_return = VK_SUCCESS;
++                if (CC_LIKELY(vk) && parallel) {
++                    // The acquire submits to the device's queue, so it runs on the
++                    // submit thread after the queue work decoded before it.
++                    VkDecoderGlobalState* state = m_state;
++                    parallel->submits()->post([state, device, image, nativeFenceFd, semaphore,
++                                               fence] {
++                        gfxstream::base::BumpPool pool;
++                        if (state->on_vkAcquireImageANDROID(&pool, kInvalidSnapshotApiCallHandle,
++                                                            device, image, nativeFenceFd,
++                                                            semaphore, fence) ==
++                            VK_ERROR_DEVICE_LOST) {
++                            state->on_DeviceLost();
++                        }
++                    });
++                } else if (CC_LIKELY(vk)) {
+                     vkAcquireImageANDROID_VkResult_return =
+                         m_state->on_vkAcquireImageANDROID(&m_pool, snapshotApiCallHandle, device,
+                                                           image, nativeFenceFd, semaphore, fence);
+@@ -19682,8 +19697,8 @@
+                 if ((vkAcquireImageANDROID_VkResult_return) == VK_ERROR_DEVICE_LOST)
+                     m_state->on_DeviceLost();
+                 vkStream->unsetHandleMapping();
+-                vkStream->write(&vkAcquireImageANDROID_VkResult_return, sizeof(VkResult));
+-                vkStream->commitWrite();
++                // The guest reads no result: waiting for the queue work before the
++                // acquire cost it a round trip per frame.
+                 if (m_snapshotsEnabled) {
+                     m_state->snapshot()->vkAcquireImageANDROID(
+                         &m_pool, snapshotApiCallHandle, packet, packetLen,

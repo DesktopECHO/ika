@@ -125,5 +125,8 @@ git_repository(
         # Command buffers are recorded on worker threads while the render thread
         # decodes the next one.
         "@//build_external/gfxstream:PATCH.gfxstream.parallel-record.patch",
+        # vkAcquireImageANDROID sends no result and runs on the submit thread
+        # (lineageos external-mesa3d-gfxstream-async-acquire-image.patch).
+        "@//build_external/gfxstream:PATCH.gfxstream.async-acquire-image.patch",
     ],
 )
