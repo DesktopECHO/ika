@@ -1,0 +1,66 @@
+dzn: Build a 3D view of a 2D image as a 2D view
+
+Vulkan only allows a VK_IMAGE_VIEW_TYPE_3D view of a 3D image. Dozen turns
+any 3D view into a D3D12 Texture3D shader resource or unordered access view,
+and for a 2D resource that view is an invalid call: D3D12 removes the device
+(DXGI_ERROR_INVALID_CALL). Under WSL2 every Vulkan device in the process
+shares that ID3D12Device, so gfxstream loses its own device and the Android
+VM restarts. 3DMark Wild Life Extreme makes such a view of a 32x32 sRGB
+texture each time it starts a second run in one process (RTX 4080 Laptop GPU
+and Intel UHD under WSL2); native drivers take it.
+
+Give a 3D view of a 1D or 2D image the 1D or 2D array view the image allows,
+and log it once.
+
+--- a/src/microsoft/vulkan/dzn_image.c
++++ b/src/microsoft/vulkan/dzn_image.c
+@@ -1003,7 +1003,31 @@
+    case VK_COMPONENT_SWIZZLE_A:
+       return D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_3;
+    default: UNREACHABLE("Invalid swizzle");
++   }
++}
++
++/* The view type D3D12 can build for the view's image. Vulkan only allows a
++ * 3D view of a 3D image, but an application that asks for one of a 2D image
++ * still works on native drivers, while a D3D12 Texture3D view of a 2D
++ * resource is an invalid call that removes the device, and with it every
++ * other Vulkan device on that ID3D12Device: such a view gets the 2D view the
++ * image does allow.
++ */
++static VkImageViewType
++dzn_image_view_type(const struct dzn_image_view *iview)
++{
++   if (iview->vk.view_type != VK_IMAGE_VIEW_TYPE_3D ||
++       iview->vk.image->image_type == VK_IMAGE_TYPE_3D)
++      return iview->vk.view_type;
++
++   static bool warned;
++   if (!warned) {
++      warned = true;
++      mesa_logw("dzn: a 3D view of a %dD image is created as a 2D view",
++                iview->vk.image->image_type + 1);
+    }
++   return iview->vk.image->image_type == VK_IMAGE_TYPE_1D ?
++          VK_IMAGE_VIEW_TYPE_1D_ARRAY : VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+ }
+ 
+ static void
+@@ -1085,7 +1109,7 @@
+    iview->srv_desc.Shader4ComponentMapping =
+       D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(swz[0], swz[1], swz[2], swz[3]);
+ 
+-   switch (iview->vk.view_type) {
++   switch (dzn_image_view_type(iview)) {
+    case VK_IMAGE_VIEW_TYPE_1D_ARRAY:
+    case VK_IMAGE_VIEW_TYPE_1D:
+       if (use_array) {
+@@ -1177,7 +1201,7 @@
+                                    iview->vk.aspects),
+    };
+ 
+-   switch (iview->vk.view_type) {
++   switch (dzn_image_view_type(iview)) {
+    case VK_IMAGE_VIEW_TYPE_1D:
+    case VK_IMAGE_VIEW_TYPE_1D_ARRAY:
+       if (use_array) {
