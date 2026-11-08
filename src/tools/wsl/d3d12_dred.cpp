@@ -2,7 +2,8 @@
 // IKA_D3D12_DRED=1, turns on auto-breadcrumbs and page-fault tracking before
 // the shared device is created, and reports why a device was removed, which
 // GPU commands were in flight and the faulting address, to stderr (crosvm's
-// log) and /tmp/ika-dred.log.
+// log) and /tmp/ika-dred.log. When a view creation removes the device, it
+// also says whether the view's resource had been released, and where.
 #define INITGUID
 #include <pthread.h>
 #include <stdint.h>
@@ -227,6 +228,98 @@ static void log_resource(void *resource) {
          d.SampleDesc.Count, d.Layout, d.Flags);
 }
 
+/* Resources whose last reference went away: the address, what it was and a
+ * backtrace of that final Release. When a view creation removes the device,
+ * the resource it named is looked up here, which tells a released resource
+ * from a bad argument. The ring keeps the most recent releases. */
+struct released_resource {
+  void *resource;
+  D3D12_RESOURCE_DESC desc;
+  void *frames[20];
+  int frame_count;
+};
+static released_resource released[4096];
+static unsigned released_next;
+static pthread_mutex_t released_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* ID3D12Resource vtables seen so far and their own Release (slot 2). */
+static void **resource_vtables[8];
+static void *resource_release[8];
+static int resource_vtable_count;
+static pthread_mutex_t resource_vtable_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void resource_desc(void *resource, D3D12_RESOURCE_DESC *desc);
+
+static ULONG hook_resource_release(void *self) {
+  void **vtable = *(void ***)self;
+  void *next = nullptr;
+  for (int i = 0; i < resource_vtable_count; i++)
+    if (resource_vtables[i] == vtable) next = resource_release[i];
+  D3D12_RESOURCE_DESC desc;
+  resource_desc(self, &desc);
+  ULONG left = ((ULONG (*)(void *))next)(self);
+  if (left == 0) {
+    pthread_mutex_lock(&released_lock);
+    released_resource &r = released[released_next++ % (sizeof(released) / sizeof(released[0]))];
+    r.resource = self;
+    r.desc = desc;
+    r.frame_count = backtrace(r.frames, 20);
+    pthread_mutex_unlock(&released_lock);
+  }
+  return left;
+}
+
+/* Wraps Release in this resource's vtable, once per vtable. */
+static void track_resource_class(void *resource) {
+  if (!resource) return;
+  void **vtable = *(void ***)resource;
+  pthread_mutex_lock(&resource_vtable_lock);
+  bool known = false;
+  for (int i = 0; i < resource_vtable_count; i++)
+    if (resource_vtables[i] == vtable) known = true;
+  if (!known && resource_vtable_count < (int)(sizeof(resource_vtables) / sizeof(resource_vtables[0]))) {
+    long page = sysconf(_SC_PAGESIZE);
+    uintptr_t start = (uintptr_t)&vtable[2] & ~(uintptr_t)(page - 1);
+    if (mprotect((void *)start, page, PROT_READ | PROT_WRITE) == 0) {
+      resource_vtables[resource_vtable_count] = vtable;
+      resource_release[resource_vtable_count] = vtable[2];
+      resource_vtable_count++;
+      vtable[2] = (void *)hook_resource_release;
+      report("tracking releases of ID3D12Resource vtable %p", (void *)vtable);
+    }
+  }
+  pthread_mutex_unlock(&resource_vtable_lock);
+}
+
+/* Reports the most recent final Release of resource, if the ring has one. */
+static void report_released(void *resource) {
+  pthread_mutex_lock(&released_lock);
+  unsigned count = sizeof(released) / sizeof(released[0]);
+  unsigned n = released_next < count ? released_next : count;
+  const released_resource *found = nullptr;
+  for (unsigned i = 1; i <= n && !found; i++) {
+    const released_resource &r = released[(released_next - i) % count];
+    if (r.resource == resource) found = &r;
+  }
+  if (!found) {
+    pthread_mutex_unlock(&released_lock);
+    report("  resource %p: no final Release recorded (of the last %u)", resource, n);
+    return;
+  }
+  report("  resource %p WAS RELEASED before this call: it was dimension %d format %d %llux%u mips %u flags %#x",
+         resource, found->desc.Dimension, found->desc.Format, (unsigned long long)found->desc.Width,
+         found->desc.Height, found->desc.MipLevels, found->desc.Flags);
+  char **names = backtrace_symbols(found->frames, found->frame_count);
+  for (int i = 1; i < found->frame_count; i++) {
+    Dl_info info;
+    if (dladdr(found->frames[i], &info) && info.dli_fname)
+      report("    released #%d %s+%#lx (%s)", i, info.dli_fname,
+             (unsigned long)((char *)found->frames[i] - (char *)info.dli_fbase), names ? names[i] : "?");
+  }
+  free(names);
+  pthread_mutex_unlock(&released_lock);
+}
+
 static int check_removed(void *device, const char *call) {
   if (call_reported) return 0;
   HRESULT reason = static_cast<ID3D12Device *>(device)->GetDeviceRemovedReason();
@@ -263,6 +356,7 @@ static void hook_uav(void *self, void *resource, void *counter, const D3D12_UNOR
 
 static void hook_srv(void *self, void *resource, const D3D12_SHADER_RESOURCE_VIEW_DESC *desc,
                      D3D12_CPU_DESCRIPTOR_HANDLE dest) {
+  track_resource_class(resource);
   ((void (*)(void *, void *, const D3D12_SHADER_RESOURCE_VIEW_DESC *, D3D12_CPU_DESCRIPTOR_HANDLE))
        original[SLOT_CREATE_SRV])(self, resource, desc, dest);
   if (check_removed(self, "CreateShaderResourceView")) {
@@ -271,6 +365,7 @@ static void hook_srv(void *self, void *resource, const D3D12_SHADER_RESOURCE_VIE
              desc->ViewDimension, desc->Shader4ComponentMapping, desc->Texture2DArray.MostDetailedMip,
              desc->Texture2DArray.MipLevels, desc->Texture2DArray.FirstArraySlice, desc->Texture2DArray.ArraySize);
     log_resource(resource);
+    report_released(resource);
     report("  dest %#lx", (unsigned long)dest.ptr);
   }
 }
