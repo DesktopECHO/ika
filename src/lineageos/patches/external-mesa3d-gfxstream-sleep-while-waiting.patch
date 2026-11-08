@@ -1,0 +1,129 @@
+Patch summary:
+gfxstream's guest stops spinning through long waits for the host. A thread
+waiting for a reply, for the host to drain the command ring or for room in it
+yielded the CPU in a loop and only began to sleep after 50 million passes, so
+it kept a vCPU busy for the whole wait: the composer, which waits for the host
+to compose every frame, used 33-44% of a vCPU during 3DMark Sling Shot
+Extreme. Now a wait spins for its first 200 us, as fast replies come back in
+microseconds, then sleeps between polls in steps doubling up to 200 us. The
+loop in type1Write that waits for room in the ring, which did not even yield,
+uses the same backoff, and every wait starts its own spin window.
+
+diff --git a/src/gfxstream/guest/GoldfishAddressSpace/AddressSpaceStream.cpp b/src/gfxstream/guest/GoldfishAddressSpace/AddressSpaceStream.cpp
+--- a/src/gfxstream/guest/GoldfishAddressSpace/AddressSpaceStream.cpp
++++ b/src/gfxstream/guest/GoldfishAddressSpace/AddressSpaceStream.cpp
+@@ -8,6 +8,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <time.h>
+ #include <unistd.h>
+ 
+ #include "VirtGpu.h"
+@@ -43,6 +44,7 @@
+       m_written(0),
+       m_backoffIters(0),
+       m_backoffFactor(1),
++      m_backoffStartNs(0),
+       m_ringStorageSize(sizeof(struct asg_ring_storage) + m_writeBufferSize) {
+     // We'll use this in the future, but at the moment,
+     // it's a potential compile Werror.
+@@ -341,6 +343,7 @@
+         }
+     }
+ 
++    resetBackoff();
+     return actuallyRead;
+ }
+ 
+@@ -396,6 +399,7 @@
+ 
+         backoff();
+     }
++    resetBackoff();
+ }
+ 
+ void AddressSpaceStream::ensureType1Finished() {
+@@ -411,6 +415,7 @@
+             return;
+         }
+     }
++    resetBackoff();
+ }
+ 
+ void AddressSpaceStream::ensureType3Finished() {
+@@ -430,6 +435,7 @@
+             return;
+         }
+     }
++    resetBackoff();
+ }
+ 
+ int AddressSpaceStream::type1Write(uint32_t bufferOffset, size_t size) {
+@@ -455,8 +461,11 @@
+     uint32_t ringAvailReadNow = ring_buffer_available_read(m_context.to_host, 0);
+ 
+     while (ringAvailReadNow >= maxOutstanding * sizeForRing) {
++        ring_buffer_yield();
++        backoff();
+         ringAvailReadNow = ring_buffer_available_read(m_context.to_host, 0);
+     }
++    resetBackoff();
+ 
+     bool hostPinged = false;
+     while (sent < sizeForRing) {
+@@ -497,19 +506,31 @@
+     return 0;
+ }
+ 
++// Called on every pass of a loop that waits for the host: for a reply, for the
++// host to drain the ring, or for room in it. The host cannot wake the guest, so
++// a waiting thread polls. For the first kSpinNs of a wait it only yields, as a
++// fast reply comes back in microseconds; after that it sleeps between polls, in
++// steps doubling up to kMaxSleepUs. Spinning through a whole slow wait, such as
++// the composer's compose call every frame, kept a vCPU busy, and on the host the
++// core under it, for as long as the host took.
+ void AddressSpaceStream::backoff() {
+-    static const uint32_t kBackoffItersThreshold = 50000000;
+-    static const uint32_t kBackoffFactorDoublingIncrement = 50000000;
+-    ++m_backoffIters;
+-
+-    if (m_backoffIters > kBackoffItersThreshold) {
+-        usleep(m_backoffFactor);
+-        uint32_t itersSoFarAfterThreshold = m_backoffIters - kBackoffItersThreshold;
+-        if (itersSoFarAfterThreshold > kBackoffFactorDoublingIncrement) {
+-            m_backoffFactor = m_backoffFactor << 1;
+-            if (m_backoffFactor > 1000) m_backoffFactor = 1000;
+-            m_backoffIters = kBackoffItersThreshold;
+-        }
++    static const uint64_t kSpinNs = 200000;
++    static const uint64_t kMaxSleepUs = 200;
++
++    struct timespec ts;
++    clock_gettime(CLOCK_MONOTONIC, &ts);
++    const uint64_t nowNs = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
++
++    if (m_backoffIters++ == 0) {
++        m_backoffStartNs = nowNs;
++        return;
++    }
++    if (nowNs - m_backoffStartNs < kSpinNs) {
++        return;
++    }
++    usleep(m_backoffFactor);
++    if (m_backoffFactor < kMaxSleepUs) {
++        m_backoffFactor = m_backoffFactor * 2 < kMaxSleepUs ? m_backoffFactor * 2 : kMaxSleepUs;
+     }
+ }
+ 
+diff --git a/src/gfxstream/guest/GoldfishAddressSpace/include/AddressSpaceStream.h b/src/gfxstream/guest/GoldfishAddressSpace/include/AddressSpaceStream.h
+--- a/src/gfxstream/guest/GoldfishAddressSpace/include/AddressSpaceStream.h
++++ b/src/gfxstream/guest/GoldfishAddressSpace/include/AddressSpaceStream.h
+@@ -78,6 +78,7 @@
+ 
+     uint64_t m_backoffIters;
+     uint64_t m_backoffFactor;
++    uint64_t m_backoffStartNs;
+ 
+     size_t m_ringStorageSize;
+     uint32_t m_resourceId = 0;
