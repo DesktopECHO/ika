@@ -422,6 +422,18 @@ static VKAPI_ATTR void VKAPI_CALL layer_DestroyInstance(VkInstance instance, con
   free(data);
 }
 
+/* IKA_DZN_TRACE_DEVICES=1 logs every VkDevice created and destroyed, with the
+ * number still alive: under WSL2 they all share one D3D12 device, so one an
+ * exited app left behind keeps its D3D12 objects there. */
+static int tracing_devices(void) {
+  static int value = -1;
+  if (value < 0) {
+    const char *v = getenv("IKA_DZN_TRACE_DEVICES");
+    value = v && v[0] == '1';
+  }
+  return value;
+}
+
 static VKAPI_ATTR VkResult VKAPI_CALL layer_CreateDevice(VkPhysicalDevice pdev, const VkDeviceCreateInfo *info,
                                                          const VkAllocationCallbacks *alloc, VkDevice *device) {
   VkLayerDeviceCreateInfo *chain = (VkLayerDeviceCreateInfo *)info->pNext;
@@ -524,7 +536,10 @@ static VKAPI_ATTR VkResult VKAPI_CALL layer_CreateDevice(VkPhysicalDevice pdev, 
   pthread_mutex_lock(&lock);
   data->next = devices;
   devices = data;
+  int live = 0;
+  for (struct device_data *d = devices; d; d = d->next) live++;
   pthread_mutex_unlock(&lock);
+  if (tracing_devices()) fprintf(stderr, "ika trace: VkDevice %p created, %d live\n", (void *)*device, live);
   return VK_SUCCESS;
 }
 
@@ -534,10 +549,13 @@ static VKAPI_ATTR void VKAPI_CALL layer_DestroyDevice(VkDevice device, const VkA
   struct device_data **link = &devices, *data;
   while ((data = *link) && data->key != key) link = &data->next;
   if (data) *link = data->next;
+  int live = 0;
+  for (struct device_data *d = devices; d; d = d->next) live++;
   pthread_mutex_unlock(&lock);
   if (!data) return;
   data->destroy_device(device, alloc);
   free(data);
+  if (tracing_devices()) fprintf(stderr, "ika trace: VkDevice %p destroyed, %d live\n", (void *)device, live);
 }
 
 /* ---- IKA_DZN_TRACE_REMOVAL ---- */
