@@ -1,0 +1,51 @@
+dzn: Close a file descriptor once its memory import succeeds
+
+Importing memory from a file descriptor transfers the descriptor's ownership
+to the Vulkan implementation, but Dozen never closed it. gfxstream hands
+each guest app's import of a display buffer a duplicate of the buffer's
+exported descriptor, so every import left one open, and each open
+descriptor keeps its D3D12 shared allocation alive after every Vulkan object
+using it is gone. Under WSL2 crosvm gained about 27 of them a minute while
+3DMark ran (RTX 4080 Laptop GPU); with this change the count stays flat.
+
+Close the descriptor after a successful import; a failed import leaves it
+with the caller, as Vulkan says.
+
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -2865,6 +2865,10 @@
+ 
+    VkExternalMemoryHandleTypeFlags export_flags = 0;
+    HANDLE import_handle = NULL;
++#ifndef _WIN32
++   /* An imported file descriptor, which a successful import owns. */
++   int import_fd = -1;
++#endif
+    bool imported_from_d3d11 = false;
+    void *host_pointer = NULL;
+ #ifdef _WIN32
+@@ -2921,6 +2925,7 @@
+             return vk_error(device, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+          }
+          import_handle = (HANDLE)(intptr_t)imp->fd;
++         import_fd = imp->fd;
+          break;
+       }
+ #endif
+@@ -3186,6 +3191,16 @@
+          goto cleanup;
+    }
+ 
++#ifndef _WIN32
++   /* Importing a file descriptor transfers its ownership to the
++    * implementation: the D3D12 object opened from it holds the memory now, and
++    * an fd left open keeps the shared allocation alive after every Vulkan
++    * object using it is gone.
++    */
++   if (import_fd >= 0)
++      close(import_fd);
++#endif
++
+    *out = dzn_device_memory_to_handle(mem);
+    return VK_SUCCESS;
+ 
