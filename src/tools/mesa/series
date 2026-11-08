@@ -28,3 +28,4 @@ dzn-wsl-write-back.patch
 dzn-range-order.patch
 dzn-internal-heaps.patch
 dzn-cbv-staging.patch
+dzn-view-type-from-image.patch
