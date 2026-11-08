@@ -72,9 +72,11 @@
  * Diagnostics: with IKA_DZN_TRACE_REMOVAL=1 (and IKA_D3D12_DRED=1 for the
  * libd3d12.so shim), the layer checks after each resource, descriptor and
  * command call whether D3D12 removed the device, and logs the first call
- * after which it had, with its parameters.
+ * after which it had, with its parameters. It also logs every 3D view of an
+ * image that is not 3D, with a backtrace (see dzn-view-type-from-image.patch).
  */
 #include <dlfcn.h>
+#include <execinfo.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1149,6 +1151,18 @@ static VKAPI_ATTR VkResult VKAPI_CALL layer_CreateImageView(VkDevice device, con
   if (yuv_as_rgba(data, fixed.format)) {
     fixed.format = VK_FORMAT_R8G8B8A8_UNORM;
     fixed.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  }
+  if (tracing() && info->viewType == VK_IMAGE_VIEW_TYPE_3D) {
+    const VkImageCreateInfo *image = find_image(info->image);
+    if (image && image->imageType != VK_IMAGE_TYPE_3D) {
+      fprintf(stderr, "ika trace: 3D view of a type %d image: format %d mips %u+%u layers %u+%u\n",
+              image->imageType, info->format, info->subresourceRange.baseMipLevel,
+              info->subresourceRange.levelCount, info->subresourceRange.baseArrayLayer,
+              info->subresourceRange.layerCount);
+      describe_image("image", info->image);
+      void *frames[16];
+      backtrace_symbols_fd(frames, backtrace(frames, 16), 2);
+    }
   }
   VkResult result = data->create_image_view(device, &fixed, alloc, view);
   restore_chain(removed, n);
