@@ -21,6 +21,9 @@ readonly GIT_CONFIG_PATH="${CUTTLEFISH_BAZEL_GIT_CONFIG:-${CUTTLEFISH_BAZEL_CACH
 readonly MAX_RETRIES="${CUTTLEFISH_BAZEL_GIT_MIRROR_RETRIES:-3}"
 readonly RETRY_DELAY="${CUTTLEFISH_BAZEL_GIT_MIRROR_RETRY_DELAY:-10}"
 
+# Mirrors are always named with --git-dir, never -C: the cache usually sits in
+# src/ika-work inside the Ika checkout, and with -C git looks upward from a
+# broken mirror and finds the checkout's own repository.
 git_clean() {
   GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c safe.bareRepository=all "$@"
 }
@@ -60,10 +63,10 @@ ensure_remote_origin() {
   local repo_path="$1"
   local remote_url="$2"
 
-  if git_clean -C "${repo_path}" remote get-url origin >/dev/null 2>&1; then
-    git_clean -C "${repo_path}" remote set-url origin "${remote_url}"
+  if git_clean --git-dir="${repo_path}" remote get-url origin >/dev/null 2>&1; then
+    git_clean --git-dir="${repo_path}" remote set-url origin "${remote_url}"
   else
-    git_clean -C "${repo_path}" remote add origin "${remote_url}"
+    git_clean --git-dir="${repo_path}" remote add origin "${remote_url}"
   fi
 }
 
@@ -73,24 +76,24 @@ fetch_mirror() {
   local branch
   local commit
 
-  git_clean -C "${repo_path}" fetch --prune origin \
+  git_clean --git-dir="${repo_path}" fetch --prune origin \
     '+refs/heads/*:refs/mirror/heads/*' \
     '+refs/tags/*:refs/tags/*'
 
   while IFS= read -r staged_ref; do
     branch="${staged_ref#refs/mirror/heads/}"
-    commit="$(git_clean -C "${repo_path}" rev-parse "${staged_ref}^{commit}")"
-    git_clean -C "${repo_path}" update-ref "refs/heads/${branch}" "${commit}"
-  done < <(git_clean -C "${repo_path}" for-each-ref \
+    commit="$(git_clean --git-dir="${repo_path}" rev-parse "${staged_ref}^{commit}")"
+    git_clean --git-dir="${repo_path}" update-ref "refs/heads/${branch}" "${commit}"
+  done < <(git_clean --git-dir="${repo_path}" for-each-ref \
     --format='%(refname)' refs/mirror/heads)
 
   while IFS= read -r staged_ref; do
     branch="${staged_ref#refs/heads/}"
-    if ! git_clean -C "${repo_path}" show-ref --verify --quiet \
+    if ! git_clean --git-dir="${repo_path}" show-ref --verify --quiet \
       "refs/mirror/heads/${branch}"; then
-      git_clean -C "${repo_path}" update-ref -d "${staged_ref}"
+      git_clean --git-dir="${repo_path}" update-ref -d "${staged_ref}"
     fi
-  done < <(git_clean -C "${repo_path}" for-each-ref \
+  done < <(git_clean --git-dir="${repo_path}" for-each-ref \
     --format='%(refname)' refs/heads)
 }
 
@@ -102,16 +105,16 @@ ensure_mirror_head() {
   local branch
   local first_head
 
-  git_clean -C "${repo_path}" rev-parse --verify --quiet HEAD >/dev/null && return 0
+  git_clean --git-dir="${repo_path}" rev-parse --verify --quiet HEAD >/dev/null && return 0
   for branch in main master; do
-    if git_clean -C "${repo_path}" show-ref --verify --quiet "refs/heads/${branch}"; then
-      git_clean -C "${repo_path}" symbolic-ref HEAD "refs/heads/${branch}"
+    if git_clean --git-dir="${repo_path}" show-ref --verify --quiet "refs/heads/${branch}"; then
+      git_clean --git-dir="${repo_path}" symbolic-ref HEAD "refs/heads/${branch}"
       return 0
     fi
   done
-  first_head="$(git_clean -C "${repo_path}" for-each-ref --count=1 \
+  first_head="$(git_clean --git-dir="${repo_path}" for-each-ref --count=1 \
     --format='%(refname)' refs/heads)"
-  [[ -z "${first_head}" ]] || git_clean -C "${repo_path}" symbolic-ref HEAD "${first_head}"
+  [[ -z "${first_head}" ]] || git_clean --git-dir="${repo_path}" symbolic-ref HEAD "${first_head}"
 }
 
 clone_mirror() {
@@ -145,7 +148,7 @@ ensure_mirror() {
 
   mkdir -p "${MIRROR_ROOT}"
 
-  if git_clean -C "${mirror_path}" rev-parse --git-dir >/dev/null 2>&1; then
+  if git_clean --git-dir="${mirror_path}" rev-parse --git-dir >/dev/null 2>&1; then
     echo "Refreshing local ${mirror_name} git mirror at ${mirror_path}" >&2
     ensure_remote_origin "${mirror_path}" "${primary_remote}"
     if ! retry_command "refresh ${mirror_name} mirror from ${primary_remote}" fetch_mirror "${mirror_path}"; then
@@ -202,7 +205,7 @@ ensure_minijail_mirror() {
 
   mkdir -p "${MIRROR_ROOT}"
 
-  if ! git_clean -C "${mirror_path}" rev-parse --git-dir >/dev/null 2>&1; then
+  if ! git_clean --git-dir="${mirror_path}" rev-parse --git-dir >/dev/null 2>&1; then
     if [[ -e "${mirror_path}" ]]; then
       local broken_path="${mirror_path}.broken.$(date +%s)"
       echo "Moving invalid minijail mirror aside: ${mirror_path} -> ${broken_path}" >&2
@@ -215,14 +218,14 @@ ensure_minijail_mirror() {
 
   ensure_remote_origin "${mirror_path}" "${MINIJAIL_REMOTE_PRIMARY}"
 
-  if ! git_clean -C "${mirror_path}" cat-file -e "${MINIJAIL_REV}^{commit}" >/dev/null 2>&1; then
+  if ! git_clean --git-dir="${mirror_path}" cat-file -e "${MINIJAIL_REV}^{commit}" >/dev/null 2>&1; then
     echo "Fetching pinned minijail revision ${MINIJAIL_REV} into ${mirror_path}" >&2
     retry_command "fetch pinned minijail revision from ${MINIJAIL_REMOTE_PRIMARY}" \
-      git_clean -C "${mirror_path}" fetch origin \
+      git_clean --git-dir="${mirror_path}" fetch origin \
         "${MINIJAIL_REF}:${MINIJAIL_REF}"
   fi
 
-  git_clean -C "${mirror_path}" update-ref "${local_branch}" "${MINIJAIL_REV}"
+  git_clean --git-dir="${mirror_path}" update-ref "${local_branch}" "${MINIJAIL_REV}"
   ensure_mirror_head "${mirror_path}"
   configure_rewrite "${mirror_path}" \
     "${MINIJAIL_REMOTE_PRIMARY}" \
