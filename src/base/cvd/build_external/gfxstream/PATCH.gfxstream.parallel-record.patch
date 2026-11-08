@@ -2,15 +2,17 @@ Patch summary:
 Command buffers the guest flushes (vkQueueFlushCommandsGOOGLE) are recorded
 on worker threads, two unless GFXSTREAM_PARALLEL_RECORD says otherwise (0
 records on the render thread as before). Asynchronous submits and
-vkQueueSignalReleaseImageANDROIDAsyncGOOGLE run in order on a thread per
-queue once the command buffers they submit are recorded, so the render
-thread goes on decoding the guest's next command buffer. Recording took half
-of the render thread's time in 3DMark under WSL2. Vulkan commands that are
-not known to be independent of pending work wait for all of it first;
+vkQueueSignalReleaseImageANDROIDAsyncGOOGLE run on one thread in the order
+they were decoded, each once the command buffers it submits are recorded,
+so the render thread goes on decoding the guest's next command buffer; one
+thread for all queues keeps a submit that waits for a semaphore from
+blocking the driver ahead of the submit that signals it. Recording took
+half of the render thread's time in 3DMark under WSL2. Vulkan commands that
+are not known to be independent of pending work wait for all of it first;
 vkResetCommandPool waits for its pool's recordings. vkQueueSubmit marks its
 fence waitable before it takes the fence's mutex instead of while holding
 the global lock, since waitForFences takes the two in the other order and a
-submit on a queue thread can now meet the SyncThread waiting on its fence.
+submit on the submit thread can now meet the SyncThread waiting on its fence.
 diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
 --- a/host/vulkan/vk_decoder.cpp
 +++ b/host/vulkan/vk_decoder.cpp
@@ -35,7 +37,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
  #include "common/goldfish_vk_marshaling.h"
  #include "common/goldfish_vk_reserved_marshaling.h"
  #include "common/goldfish_vk_transform.h"
-@@ -127,6 +134,179 @@
+@@ -127,6 +134,172 @@
  namespace host {
  namespace vk {
  
@@ -50,10 +52,10 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
 +// took half of the render thread's time in 3DMark under WSL2, while the
 +// guest waited for ring space. Here a flushed command buffer is recorded on a
 +// worker thread, after the previous one from the same command pool, and
-+// asynchronous queue operations run in order on a thread per queue once the
-+// command buffers they submit are recorded, so the render thread goes on
-+// decoding the next command buffer. A command that is not known to be
-+// independent of pending work first waits for all of it.
++// asynchronous queue operations run on one thread in the order they were
++// decoded, each once the command buffers it submits are recorded, so the
++// render thread goes on decoding the next command buffer. A command that is
++// not known to be independent of pending work first waits for all of it.
 +class SerialExecutor {
 +   public:
 +    SerialExecutor() : mThread([this] { run(); }) {}
@@ -156,21 +158,14 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
 +        if (pending.valid()) pending.wait();
 +    }
 +
-+    SerialExecutor* queue(uint64_t queue) {
-+        std::lock_guard<std::mutex> lock(mMutex);
-+        std::unique_ptr<SerialExecutor>& executor = mQueues[queue];
-+        if (!executor) executor = std::make_unique<SerialExecutor>();
-+        return executor.get();
-+    }
++    // Queue operations of every queue run on one thread in the order they were
++    // decoded: a submit may wait in the driver for a semaphore that an earlier
++    // submit to another queue signals, so no queue may overtake another.
++    SerialExecutor* submits() { return &mSubmits; }
 +
 +    // Waits for every queued operation and recording started so far.
 +    void drainAll() {
-+        std::vector<SerialExecutor*> queues;
-+        {
-+            std::lock_guard<std::mutex> lock(mMutex);
-+            for (auto& [handle, executor] : mQueues) queues.push_back(executor.get());
-+        }
-+        for (SerialExecutor* executor : queues) executor->drain();
++        mSubmits.drain();
 +        for (auto& worker : mWorkers) worker->drain();
 +    }
 +
@@ -184,7 +179,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
 +    size_t mNextWorker = 0;
 +    std::unordered_map<uint64_t, std::shared_future<void>> mByPool;
 +    std::unordered_map<uint64_t, std::shared_future<void>> mByCommandBuffer;
-+    std::unordered_map<uint64_t, std::unique_ptr<SerialExecutor>> mQueues;
++    SerialExecutor mSubmits;
 +};
 +
 +// Commands that may run while earlier command buffers are still being recorded
@@ -215,7 +210,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
  class VkDecoder::Impl {
     public:
      Impl()
-@@ -166,7 +346,9 @@
+@@ -166,7 +339,9 @@
  
  VkDecoder::VkDecoder() : mImpl(new VkDecoder::Impl()) {}
  
@@ -226,7 +221,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
  
  void VkDecoder::setForSnapshotLoad(bool forSnapshotLoad) {
      mImpl->setForSnapshotLoad(forSnapshotLoad);
-@@ -264,6 +446,15 @@
+@@ -264,6 +439,15 @@
  
          gfx_logger.recordCommandExecution();
  
@@ -242,7 +237,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
          switch (opcode) {
  #ifdef VK_BASE_VERSION_1_0
              case OP_vkCreateInstance: {
-@@ -3846,6 +4037,7 @@
+@@ -3846,6 +4030,7 @@
                                     (unsigned long long)commandPool, (unsigned long long)flags);
                  }
                  VkResult vkResetCommandPool_VkResult_return = VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -250,7 +245,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
                  if (CC_LIKELY(vk)) {
                      vkResetCommandPool_VkResult_return = m_state->on_vkResetCommandPool(
                          &m_pool, snapshotApiCallHandle, device, commandPool, flags);
-@@ -23048,7 +23240,31 @@
+@@ -23048,7 +23233,31 @@
                          ioStream, (unsigned long long)queue, (unsigned long long)submitCount,
                          (unsigned long long)pSubmits, (unsigned long long)fence);
                  }
@@ -269,7 +264,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
 +                        }
 +                    }
 +                    VkDecoderGlobalState* state = m_state;
-+                    parallel->queue((uint64_t)queue)->post(
++                    parallel->submits()->post(
 +                        [state, pool, queue, submitCount, copies, fence,
 +                         recordings = std::move(recordings)] {
 +                            for (const auto& recording : recordings) {
@@ -283,7 +278,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
                      m_state->on_vkQueueSubmitAsyncGOOGLE(&m_pool, snapshotApiCallHandle, queue,
                                                           submitCount, pSubmits, fence);
                  }
-@@ -23283,7 +23499,21 @@
+@@ -23283,7 +23492,21 @@
                  }
                  if (m_queueSubmitWithCommandsEnabled)
                      seqnoPtr->fetch_add(1, std::memory_order_seq_cst);
@@ -306,7 +301,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
                      m_state->on_vkQueueFlushCommandsGOOGLE(&m_pool, snapshotApiCallHandle, queue,
                                                             commandBuffer, dataSize, pData, context);
                  }
-@@ -23543,7 +23773,22 @@
+@@ -23543,7 +23766,22 @@
                          ioStream, (unsigned long long)queue, (unsigned long long)waitSemaphoreCount,
                          (unsigned long long)pWaitSemaphores, (unsigned long long)image);
                  }
@@ -318,7 +313,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
 +                    }
 +                    bool hasSemaphores = pWaitSemaphores != nullptr;
 +                    VkDecoderGlobalState* state = m_state;
-+                    parallel->queue((uint64_t)queue)->post(
++                    parallel->submits()->post(
 +                        [state, queue, semaphores = std::move(semaphores), hasSemaphores, image] {
 +                            gfxstream::base::BumpPool pool;
 +                            state->on_vkQueueSignalReleaseImageANDROIDAsyncGOOGLE(
@@ -330,7 +325,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
                      m_state->on_vkQueueSignalReleaseImageANDROIDAsyncGOOGLE(
                          &m_pool, snapshotApiCallHandle, queue, waitSemaphoreCount, pWaitSemaphores,
                          image);
-@@ -23878,7 +24123,31 @@
+@@ -23878,7 +24116,31 @@
                          ioStream, (unsigned long long)queue, (unsigned long long)submitCount,
                          (unsigned long long)pSubmits, (unsigned long long)fence);
                  }
@@ -349,7 +344,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
 +                        }
 +                    }
 +                    VkDecoderGlobalState* state = m_state;
-+                    parallel->queue((uint64_t)queue)->post(
++                    parallel->submits()->post(
 +                        [state, pool, queue, submitCount, copies, fence,
 +                         recordings = std::move(recordings)] {
 +                            for (const auto& recording : recordings) {
