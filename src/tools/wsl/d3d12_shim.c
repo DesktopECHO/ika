@@ -1,18 +1,32 @@
 /*
- * libd3d12.so shim for Ika on WSL2: makes Mesa Dozen share one D3D12 device.
+ * libd3d12.so shim for Ika on WSL2: hands Mesa Dozen D3D12 devices from a
+ * process-wide pool.
  *
  * Dozen creates an ID3D12DeviceFactory per VkInstance, and each factory creates
  * its own ID3D12Device. WSL's D3D12 runtime does not give back all of a released
  * device's GPU virtual address space (dmesg: "dxgkio_reserve_gpu_va: Ioctl
  * failed: -75"), so a long-lived process that keeps creating instances, as
  * gfxstream does for every Android app, runs out after about 100 of them:
- * ID3D12DeviceFactory::CreateDevice fails and Vulkan reports no GPU.
+ * ID3D12DeviceFactory::CreateDevice fails and Vulkan reports no GPU. WSL also
+ * allows only about ten live devices per process.
  *
- * This shim hands out one process-wide device factory, wrapped so that it keeps
- * a reference to every device it creates. Dozen sets
- * D3D12_DEVICE_FACTORY_FLAG_ALLOW_RETURNING_EXISTING_DEVICE on it, so every
- * instance then gets the same, never-released D3D12 device. All other exports
- * are forwarded to the real library.
+ * One device for every instance avoided that, but a device keeps the cost of
+ * everything that ever ran on it: after 3DMark Wild Life Extreme had shared it
+ * with Geekbench's GPU benchmark, which creates thousands of D3D12 resources,
+ * the NVIDIA driver spent half the render threads' time walking a list it keeps
+ * per device, and 3DMark ran 30% slower until Ika restarted (RTX 4080 Laptop
+ * GPU). So the shim hands out one process-wide device factory, wrapped so that
+ * it keeps a reference to every device it creates, and gives each CreateDevice:
+ *
+ *  - a pooled device no instance is using any more, if one has created fewer
+ *    than IKA_D3D12_DEVICE_CHURN (4096) resources and heaps;
+ *  - else a new device, while fewer than IKA_D3D12_DEVICES (8) are alive;
+ *  - else the live device that has created the fewest, shared.
+ *
+ * A device no instance uses that has gone over the churn limit is released.
+ * Devices are only created for instances running at the same time and after a
+ * heavy app, so far fewer than the ~100 WSL allows. IKA_D3D12_SHIM_DEBUG=1 logs
+ * each decision. All other exports are forwarded to the real library.
  */
 #include <dlfcn.h>
 #include <pthread.h>
@@ -20,6 +34,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #define REAL_LIB "/usr/lib/wsl/lib/libd3d12.so"
 #define EXPORT __attribute__((visibility("default")))
@@ -102,11 +118,14 @@ struct wrapped_factory {
 };
 
 static struct wrapped_factory wrapper;
-static struct {
+#define MAX_POOLED 12
+static struct pooled_device {
   uint64_t luid;
   void *device;
-} held_devices[8];
-static int held_count;
+  /* Resources, heaps and descriptor heaps created on this device. */
+  volatile uint64_t churn;
+} pool[MAX_POOLED];
+static int pool_count;
 static int experimental_enabled;
 
 /* IDXCoreAdapter::GetProperty(DXCoreAdapterProperty::InstanceLuid, ...), vtable slot 6. */
@@ -138,7 +157,15 @@ static uint32_t w_release(void *self) { (void)self; return 1; }
 
 WRAP(SLOT_INITIALIZE_FROM_GLOBAL_STATE, w_initialize_from_global_state)
 WRAP(SLOT_APPLY_TO_GLOBAL_STATE, w_apply_to_global_state)
-WRAP(SLOT_SET_FLAGS, w_set_flags)
+
+/* D3D12_DEVICE_FACTORY_FLAG_ALLOW_RETURNING_EXISTING_DEVICE and
+ * ..._INCOMPATIBLE_EXISTING_DEVICE, which Dozen sets: they would hand the
+ * factory's existing device back for every CreateDevice. The pool decides. */
+static uintptr_t w_set_flags(void *self, uintptr_t flags, uintptr_t b, uintptr_t c, uintptr_t d, uintptr_t e) {
+  (void)self;
+  return ((uintptr_t (*)(void *, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t))real_method(
+      SLOT_SET_FLAGS))(wrapper.real, flags & ~(uintptr_t)0x3, b, c, d, e);
+}
 WRAP(SLOT_GET_FLAGS, w_get_flags)
 WRAP(SLOT_GET_CONFIGURATION_INTERFACE, w_get_configuration_interface)
 
@@ -158,13 +185,97 @@ static int32_t w_enable_experimental_features(void *self, uint32_t count, const 
   return hr;
 }
 
-/*
- * One D3D12 device per adapter for the whole process: the first CreateDevice for
- * an adapter creates it and the shim keeps a reference; later calls for the same
- * adapter LUID get that device through QueryInterface. WSL allows only about ten
- * live D3D12 devices per process and does not return a released device's GPU
- * address space, so creating one per VkInstance fails either way.
- */
+/* ---- Churn: count what each pooled device creates ---- */
+
+/* ID3D12Device vtable slots counted, and the next functions. */
+enum { SLOT_CREATE_DESCRIPTOR_HEAP = 14, SLOT_CREATE_COMMITTED = 27, SLOT_CREATE_HEAP = 28, SLOT_CREATE_PLACED = 29,
+       SLOT_CREATE_COMMITTED1 = 53, CHURN_SLOTS = 54 };
+static void *churn_next[CHURN_SLOTS];
+
+static void count_churn(void *device) {
+  for (int i = 0; i < pool_count; i++)
+    if (pool[i].device == device) {
+      __atomic_add_fetch(&pool[i].churn, 1, __ATOMIC_RELAXED);
+      return;
+    }
+}
+
+static int32_t churn_descriptor_heap(void *self, const void *desc, const guid *iid, void **out) {
+  count_churn(self);
+  return ((int32_t (*)(void *, const void *, const guid *, void **))churn_next[SLOT_CREATE_DESCRIPTOR_HEAP])(self, desc, iid, out);
+}
+static int32_t churn_committed(void *self, const void *props, int32_t flags, const void *desc, int32_t state,
+                               const void *clear, const guid *iid, void **out) {
+  count_churn(self);
+  return ((int32_t (*)(void *, const void *, int32_t, const void *, int32_t, const void *, const guid *, void **))
+              churn_next[SLOT_CREATE_COMMITTED])(self, props, flags, desc, state, clear, iid, out);
+}
+static int32_t churn_heap(void *self, const void *desc, const guid *iid, void **out) {
+  count_churn(self);
+  return ((int32_t (*)(void *, const void *, const guid *, void **))churn_next[SLOT_CREATE_HEAP])(self, desc, iid, out);
+}
+static int32_t churn_placed(void *self, void *heap, uint64_t offset, const void *desc, int32_t state, const void *clear,
+                            const guid *iid, void **out) {
+  count_churn(self);
+  return ((int32_t (*)(void *, void *, uint64_t, const void *, int32_t, const void *, const guid *, void **))
+              churn_next[SLOT_CREATE_PLACED])(self, heap, offset, desc, state, clear, iid, out);
+}
+static int32_t churn_committed1(void *self, const void *props, int32_t flags, const void *desc, int32_t state,
+                                const void *clear, void *session, const guid *iid, void **out) {
+  count_churn(self);
+  return ((int32_t (*)(void *, const void *, int32_t, const void *, int32_t, const void *, void *, const guid *,
+                       void **))churn_next[SLOT_CREATE_COMMITTED1])(self, props, flags, desc, state, clear, session, iid, out);
+}
+
+/* Every device of a class shares one vtable: wrap its creation methods once. */
+static void hook_churn(void *device) {
+  void **vtable = *(void ***)device;
+  if (churn_next[SLOT_CREATE_HEAP]) return;
+  long page = sysconf(_SC_PAGESIZE);
+  uintptr_t start = (uintptr_t)vtable & ~(uintptr_t)(page - 1);
+  uintptr_t end = ((uintptr_t)(vtable + CHURN_SLOTS) + page - 1) & ~(uintptr_t)(page - 1);
+  if (mprotect((void *)start, end - start, PROT_READ | PROT_WRITE)) return;
+  static const struct { int slot; void *hook; } hooks[] = {
+      {SLOT_CREATE_DESCRIPTOR_HEAP, (void *)churn_descriptor_heap}, {SLOT_CREATE_COMMITTED, (void *)churn_committed},
+      {SLOT_CREATE_HEAP, (void *)churn_heap}, {SLOT_CREATE_PLACED, (void *)churn_placed},
+      {SLOT_CREATE_COMMITTED1, (void *)churn_committed1}};
+  for (unsigned i = 0; i < sizeof(hooks) / sizeof(hooks[0]); i++) {
+    churn_next[hooks[i].slot] = vtable[hooks[i].slot];
+    vtable[hooks[i].slot] = hooks[i].hook;
+  }
+}
+
+/* ---- The pool ---- */
+
+static uint64_t env_number(const char *name, uint64_t fallback) {
+  const char *v = getenv(name);
+  return v && *v ? strtoull(v, NULL, 10) : fallback;
+}
+
+/* The device's references besides the pool's own. */
+static uint32_t other_refs(void *device) {
+  ((add_ref_fn)(*(void ***)device)[SLOT_ADD_REF])(device);
+  uint32_t left = ((uint32_t (*)(void *))(*(void ***)device)[SLOT_RELEASE])(device);
+  return left - 1;
+}
+
+/* Releases the pooled devices no instance uses that are over the churn limit.
+ * Not with IKA_D3D12_DRED=1, whose threads keep polling every device. */
+static void release_spent(uint64_t churn_limit, int debug) {
+  const char *dred = getenv("IKA_D3D12_DRED");
+  if (dred && dred[0] == '1') return;
+  for (int i = 0; i < pool_count;) {
+    if (pool[i].churn >= churn_limit && other_refs(pool[i].device) == 0) {
+      if (debug) fprintf(stderr, "ika d3d12 shim: released device %p after %llu creations\n", pool[i].device,
+                         (unsigned long long)pool[i].churn);
+      ((uint32_t (*)(void *))(*(void ***)pool[i].device)[SLOT_RELEASE])(pool[i].device);
+      pool[i] = pool[--pool_count];
+      continue;
+    }
+    i++;
+  }
+}
+
 static int32_t w_create_device(void *self, void *adapter, int32_t feature_level, const guid *iid, void **out) {
   typedef int32_t (*create_device_fn)(void *, void *, int32_t, const guid *, void **);
   typedef int32_t (*query_interface_fn)(void *, const guid *, void **);
@@ -173,28 +284,61 @@ static int32_t w_create_device(void *self, void *adapter, int32_t feature_level,
   if (!out || !iid || !adapter_luid(adapter, &luid))
     return ((create_device_fn)real_method(SLOT_CREATE_DEVICE))(wrapper.real, adapter, feature_level, iid, out);
 
+  const uint64_t churn_limit = env_number("IKA_D3D12_DEVICE_CHURN", 4096);
+  uint64_t max_devices = env_number("IKA_D3D12_DEVICES", 8);
+  if (max_devices < 1) max_devices = 1;
+  if (max_devices > MAX_POOLED) max_devices = MAX_POOLED;
+  const int debug = getenv("IKA_D3D12_SHIM_DEBUG") != NULL;
+
   pthread_mutex_lock(&factory_lock);
+  release_spent(churn_limit, debug);
+
   int32_t hr;
+  const char *how;
   void *device = NULL;
-  for (int i = 0; i < held_count; i++) {
-    if (held_devices[i].luid == luid) device = held_devices[i].device;
+  /* A device no instance uses any more, under the churn limit. */
+  for (int i = 0; i < pool_count && !device; i++)
+    if (pool[i].luid == luid && pool[i].churn < churn_limit && other_refs(pool[i].device) == 0) device = pool[i].device;
+  how = "reused";
+  int live = 0;
+  for (int i = 0; i < pool_count; i++) live += pool[i].luid == luid;
+  if (!device && (uint64_t)live < max_devices && pool_count < MAX_POOLED) {
+    hr = ((create_device_fn)real_method(SLOT_CREATE_DEVICE))(wrapper.real, adapter, feature_level, iid, out);
+    if (hr >= 0 && *out) {
+      ((add_ref_fn)(*(void ***)*out)[SLOT_ADD_REF])(*out);
+      pool[pool_count].luid = luid;
+      pool[pool_count].device = *out;
+      pool[pool_count].churn = 0;
+      pool_count++;
+      hook_churn(*out);
+      ika_dred_watch(*out);
+      ika_dred_hook_device(*out);
+    }
+    if (debug)
+      fprintf(stderr, "ika d3d12 shim: CreateDevice(luid=%#llx) = %#x -> %p (new, %d of %llu)\n",
+              (unsigned long long)luid, (unsigned)hr, *out, live + 1, (unsigned long long)max_devices);
+    pthread_mutex_unlock(&factory_lock);
+    return hr;
+  }
+  if (!device) {
+    /* At the limit: share the live device that has created the fewest. */
+    uint64_t least = UINT64_MAX;
+    for (int i = 0; i < pool_count; i++)
+      if (pool[i].luid == luid && pool[i].churn < least) {
+        least = pool[i].churn;
+        device = pool[i].device;
+      }
+    how = "shared";
   }
   if (device) {
     hr = ((query_interface_fn)(*(void ***)device)[SLOT_QUERY_INTERFACE])(device, iid, out);
   } else {
     hr = ((create_device_fn)real_method(SLOT_CREATE_DEVICE))(wrapper.real, adapter, feature_level, iid, out);
-    if (hr >= 0 && *out && held_count < (int)(sizeof(held_devices) / sizeof(held_devices[0]))) {
-      ((add_ref_fn)(*(void ***)*out)[SLOT_ADD_REF])(*out);
-      held_devices[held_count].luid = luid;
-      held_devices[held_count].device = *out;
-      held_count++;
-      ika_dred_watch(*out);
-      ika_dred_hook_device(*out);
-    }
+    how = "unpooled";
   }
-  if (getenv("IKA_D3D12_SHIM_DEBUG"))
+  if (debug)
     fprintf(stderr, "ika d3d12 shim: CreateDevice(luid=%#llx) = %#x -> %p (%s)\n", (unsigned long long)luid,
-            (unsigned)hr, *out, device ? "shared" : "new");
+            (unsigned)hr, *out, how);
   pthread_mutex_unlock(&factory_lock);
   return hr;
 }
@@ -203,7 +347,7 @@ static void reset_in_child(void) {
   pthread_mutex_init(&factory_lock, NULL);
   shared_factory = NULL;
   wrapper.real = NULL;
-  held_count = 0;
+  pool_count = 0;
   experimental_enabled = 0;
 }
 
