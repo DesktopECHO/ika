@@ -20,10 +20,15 @@
  *
  *  - a pooled device no instance is using any more, if one has created fewer
  *    than IKA_D3D12_DEVICE_CHURN (4096) resources and heaps;
- *  - else a new device, while fewer than IKA_D3D12_DEVICES (8) are alive;
+ *  - else a new device, while fewer than IKA_D3D12_DEVICES (8) are alive and
+ *    the driver gives more (when CreateDevice fails, the devices alive then
+ *    are the most for that adapter);
  *  - else the live device that has created the fewest, shared.
  *
- * A device no instance uses that has gone over the churn limit is released.
+ * crosvm learns how many devices the driver gives it by creating them on its
+ * first request, before any app runs, and keeps them idle in the pool
+ * (IKA_D3D12_NO_PROBE=1 turns that off). A device no instance uses that has
+ * gone over the churn limit is released.
  * Devices are only created for instances running at the same time and after a
  * heavy app, so far fewer than the ~100 WSL allows. IKA_D3D12_SHIM_DEBUG=1 logs
  * each decision. All other exports are forwarded to the real library.
@@ -53,6 +58,7 @@ static const guid IID_ID3D12DeviceFactory = {0x61f307d3, 0xd34e, 0x4e7c, {0x83, 
 void ika_dred_enable(void *factory);
 void ika_dred_watch(void *device);
 void ika_dred_hook_device(void *device);
+int ika_d3d12_sharing_works(void *dev_a, void *dev_b);
 
 typedef uintptr_t (*fn6)(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 typedef int32_t (*get_interface_fn)(const guid *, const guid *, void **);
@@ -126,6 +132,13 @@ static struct pooled_device {
   volatile uint64_t churn;
 } pool[MAX_POOLED];
 static int pool_count;
+/* Adapters on which CreateDevice failed, and how many of their devices were
+ * alive then: the most the driver gives this process. */
+static struct {
+  uint64_t luid;
+  int most;
+} device_limits[4];
+static int device_limit_count;
 static int experimental_enabled;
 
 /* IDXCoreAdapter::GetProperty(DXCoreAdapterProperty::InstanceLuid, ...), vtable slot 6. */
@@ -276,6 +289,91 @@ static void release_spent(uint64_t churn_limit, int debug) {
   }
 }
 
+/* Records that the driver gives this process at most `most` devices on luid. */
+static void set_device_limit(uint64_t luid, int most) {
+  int i = 0;
+  while (i < device_limit_count && device_limits[i].luid != luid) i++;
+  if (i >= (int)(sizeof(device_limits) / sizeof(device_limits[0]))) return;
+  device_limits[i].luid = luid;
+  device_limits[i].most = most;
+  if (i == device_limit_count) device_limit_count++;
+}
+
+/* Whether this process is crosvm, the long-lived one that runs gfxstream. */
+static int is_crosvm(void) {
+  char comm[32] = "";
+  FILE *f = fopen("/proc/self/comm", "r");
+  if (f) {
+    if (!fgets(comm, sizeof(comm), f)) comm[0] = 0;
+    fclose(f);
+  }
+  return !strncmp(comm, "crosvm", 6);
+}
+
+/* Adds a device to the pool (holding a reference) and wraps its methods. */
+static void pool_add(uint64_t luid, void *device) {
+  ((add_ref_fn)(*(void ***)device)[SLOT_ADD_REF])(device);
+  pool[pool_count].luid = luid;
+  pool[pool_count].device = device;
+  pool[pool_count].churn = 0;
+  pool_count++;
+  hook_churn(device);
+  ika_dred_watch(device);
+  ika_dred_hook_device(device);
+}
+
+/* No D3D12 call reports how many devices a process may have: it depends on the
+ * driver (an Intel Iris Plus 650 under WSL2 gives one, an RTX 4080 at least
+ * eight). On crosvm's first request for an adapter, before any app runs,
+ * create devices until the driver refuses or max_devices exist, and keep them
+ * all idle in the pool for the instances to come. Other processes that load
+ * the shim are short-lived probes, which need one device. */
+static void probe_devices(void *adapter, int32_t feature_level, uint64_t luid, uint64_t max_devices, int debug) {
+  typedef int32_t (*create_device_fn)(void *, void *, int32_t, const guid *, void **);
+  static const guid IID_ID3D12Device = {0x189819f1, 0x1db6, 0x4b57, {0xbe, 0x54, 0x18, 0x21, 0x33, 0x9b, 0x85, 0xf7}};
+  int made = 0;
+  int32_t hr = 0;
+  while ((uint64_t)made < max_devices && pool_count < MAX_POOLED) {
+    void *device = NULL;
+    hr = ((create_device_fn)real_method(SLOT_CREATE_DEVICE))(wrapper.real, adapter, feature_level, &IID_ID3D12Device,
+                                                             &device);
+    if (hr < 0 || !device) break;
+    pool_add(luid, device);
+    /* The pool's reference is the only one until an instance takes it. */
+    ((uint32_t (*)(void *))(*(void ***)device)[SLOT_RELEASE])(device);
+    made++;
+  }
+  if ((uint64_t)made < max_devices && made > 0) set_device_limit(luid, made);
+  /* Apps open gfxstream's display buffers from other devices through shared
+   * handles: where that fails, keep one device for everything. */
+  if (made > 1) {
+    void *first = NULL, *second = NULL;
+    for (int i = 0; i < pool_count; i++)
+      if (pool[i].luid == luid) {
+        if (!first) first = pool[i].device;
+        else if (!second) second = pool[i].device;
+      }
+    int works = ika_d3d12_sharing_works(first, second);
+    if (works == 0) {
+      for (int i = 0; i < pool_count;) {
+        if (pool[i].luid == luid && pool[i].device != first) {
+          ((uint32_t (*)(void *))(*(void ***)pool[i].device)[SLOT_RELEASE])(pool[i].device);
+          pool[i] = pool[--pool_count];
+          continue;
+        }
+        i++;
+      }
+      set_device_limit(luid, 1);
+      made = 1;
+    }
+    fprintf(stderr, "ika d3d12 shim: sharing between devices %s\n",
+            works == 1 ? "works" : works == 0 ? "fails: one device for everything" : "untested (the test could not run)");
+  }
+  fprintf(stderr, "ika d3d12 shim: adapter %#llx: %d device%s for this process%s (%#x)\n", (unsigned long long)luid,
+          made, made == 1 ? "" : "s", (uint64_t)made < max_devices ? "" : ", the most asked for", (unsigned)hr);
+  (void)debug;
+}
+
 static int32_t w_create_device(void *self, void *adapter, int32_t feature_level, const guid *iid, void **out) {
   typedef int32_t (*create_device_fn)(void *, void *, int32_t, const guid *, void **);
   typedef int32_t (*query_interface_fn)(void *, const guid *, void **);
@@ -293,6 +391,15 @@ static int32_t w_create_device(void *self, void *adapter, int32_t feature_level,
   pthread_mutex_lock(&factory_lock);
   release_spent(churn_limit, debug);
 
+  static uint64_t probed[4];
+  static int probed_count;
+  int seen = 0;
+  for (int i = 0; i < probed_count; i++) seen |= probed[i] == luid;
+  if (!seen && probed_count < 4) {
+    probed[probed_count++] = luid;
+    if (is_crosvm() && !getenv("IKA_D3D12_NO_PROBE")) probe_devices(adapter, feature_level, luid, max_devices, debug);
+  }
+
   int32_t hr;
   const char *how;
   void *device = NULL;
@@ -302,23 +409,25 @@ static int32_t w_create_device(void *self, void *adapter, int32_t feature_level,
   how = "reused";
   int live = 0;
   for (int i = 0; i < pool_count; i++) live += pool[i].luid == luid;
+  for (int i = 0; i < device_limit_count; i++)
+    if (device_limits[i].luid == luid && (uint64_t)device_limits[i].most < max_devices) max_devices = device_limits[i].most;
   if (!device && (uint64_t)live < max_devices && pool_count < MAX_POOLED) {
     hr = ((create_device_fn)real_method(SLOT_CREATE_DEVICE))(wrapper.real, adapter, feature_level, iid, out);
-    if (hr >= 0 && *out) {
-      ((add_ref_fn)(*(void ***)*out)[SLOT_ADD_REF])(*out);
-      pool[pool_count].luid = luid;
-      pool[pool_count].device = *out;
-      pool[pool_count].churn = 0;
-      pool_count++;
-      hook_churn(*out);
-      ika_dred_watch(*out);
-      ika_dred_hook_device(*out);
+    if (hr < 0 && live > 0) {
+      /* The driver gives this process no more devices (an Intel Iris Plus 650
+       * under WSL2 stopped short of 8): share from now on. */
+      set_device_limit(luid, live);
+      fprintf(stderr, "ika d3d12 shim: CreateDevice(luid=%#llx) failed (%#x) with %d devices alive; sharing them\n",
+              (unsigned long long)luid, (unsigned)hr, live);
     }
-    if (debug)
-      fprintf(stderr, "ika d3d12 shim: CreateDevice(luid=%#llx) = %#x -> %p (new, %d of %llu)\n",
-              (unsigned long long)luid, (unsigned)hr, *out, live + 1, (unsigned long long)max_devices);
-    pthread_mutex_unlock(&factory_lock);
-    return hr;
+    if (hr >= 0 && *out) pool_add(luid, *out);
+    if (hr >= 0 || live == 0) {
+      if (debug)
+        fprintf(stderr, "ika d3d12 shim: CreateDevice(luid=%#llx) = %#x -> %p (new, %d of %llu)\n",
+                (unsigned long long)luid, (unsigned)hr, *out, live + 1, (unsigned long long)max_devices);
+      pthread_mutex_unlock(&factory_lock);
+      return hr;
+    }
   }
   if (!device) {
     /* At the limit: share the live device that has created the fewest. */
@@ -348,6 +457,7 @@ static void reset_in_child(void) {
   shared_factory = NULL;
   wrapper.real = NULL;
   pool_count = 0;
+  device_limit_count = 0;
   experimental_enabled = 0;
 }
 
