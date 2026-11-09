@@ -7,30 +7,29 @@
 **Ika** _/ee-kah/_, Japanese for squid or cuttlefish, runs Android on your
 Linux desktop: LineageOS 23.2 (Android 16), built as a desktop operating
 system, in a [Cuttlefish](https://source.android.com/setup/create/cuttlefish)
-virtual machine, with its apps in windows of their own.
+virtual machine.
 
 ## Features
 
-- **A desktop Android:** LineageOS 23.2 with resizable app windows, a taskbar
+- **Desktop Android:** LineageOS 23.2 with resizable app windows, a taskbar
   and split screen, and a TV mode with Android TV's interface.
 - **The console:** Android's desktop in a window of your Linux desktop. Its
   display follows the window's size at the host's density, pixel for pixel.
-- **App windows:** each Android app can open in a window of its own, from your
-  desktop's app menu, where Ika lists every Android app.
-- **Start options per app:** the window's display density, fullscreen, the
+- **App windows:** each Android app can also open in a window of its own from your
+  desktop's app menu, where Ika lists all your Android apps.
+- **Start options per app:** Configure app display density, fullscreen, the
   keyboard, the mouse and gamepads passed through to Android, the keyboard as
   a gamepad, and touch input.
 - **GPU acceleration:** OpenGL ES 3.2 and Vulkan on the host's GPU, through
   gfxstream.
-- **Your files:** Android's storage is mounted on the host, in the file
-  manager's sidebar, while Ika runs.
+- **Filesystem auto-mount:** Android's storage is mounted on the host, in the file manager's sidebar.
 - **Camera:** a webcam, or a Mac's FaceTime camera, as Android's camera.
 - **Backups:** your apps, files and settings, saved and restored with one
   command.
 - **Root:** `ika root` roots Android with Magisk.
 - **Your choice of Google:** builds with microG, with MindTheGapps (Google
   Play), or with no Google services at all.
-- **Many hosts:** x86-64 and ARM64, Apple Silicon included, on Fedora,
+- **Broad support:** x86-64 and ARM64, Apple Silicon included, on Fedora,
   Debian, Ubuntu and Arch Linux, in X11 and Wayland sessions.
 
 ## Requirements
@@ -43,20 +42,16 @@ virtual machine, with its apps in windows of their own.
   [trixie-backports](https://backports.debian.org/Instructions/), Ubuntu from
   the [Kisak Mesa PPA](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa);
   Fedora 44 and Arch Linux have it.
-- On an x86-64 Windows PC, WSL2 with one of those distributions, readied by
-  `ika-wsl-setup`, or a Debian 13 distribution named Ika that
-  `ika-wsl.ps1` deploys with Ika installed (see
-  [Windows (WSL2)](CONFIGURATION.md#windows-wsl2)).
-- A GPU with a Vulkan driver, for the best performance. Without one, Ika
-  renders with the CPU's software driver and runs in a lighter
+- A GPU with a Vulkan driver for best performance. Without one, Ika renders with the CPU's software driver and runs in a lighter
   [low-CPU mode](CONFIGURATION.md#low-cpu-mode).
+- On x86-64 Windows PCs, WSL2 and a CPU with nested virtualization support (see [Windows (WSL2)](CONFIGURATION.md#windows-wsl2)).
 
 ## Install
 
 1. Download `ika-base` and `ika-lineageos` for your distribution and
    architecture from the [Downloads](DOWNLOADS.md) page, or
    [build them from source](BUILDING.md).
-2. Install both:
+2. Install `ika-base` and `ika-lineageos` packages:
 
    ```bash
    # Fedora
@@ -67,11 +62,11 @@ virtual machine, with its apps in windows of their own.
    sudo pacman -U ./ika-base-*.pkg.tar.* ./ika-lineageos-*.pkg.tar.*
    ```
 
-3. Reboot after the first install. The packages add you to the `kvm`,
+3. **You MUST Reboot after the initial install** The packages add you to the `kvm`,
    `cvdnetwork`, `render` and `video` groups and set up the host's devices and
    limits, which take effect at the next boot; logging out is not enough.
    Updates need no reboot.
-4. Start Ika with **Ika Console** in your desktop's app menu, or with
+4. Start Ika with **Ika Console** located in your desktop's app menu, or with
    `ika start`.
 
 ## First steps
@@ -79,9 +74,8 @@ virtual machine, with its apps in windows of their own.
 - `ika start` boots Android and opens the console, Android's desktop in a
   window. The first start takes longer, as Android sets itself up.
 - Your Android apps appear in your desktop's app menu under
-  **Android Apps (Ika)**. Each opens in a window of its own; right-click one
-  for its **Startup options**.
-- `ika stop` stops Android, and `ika help` lists every command.
+  **Android Apps (Ika)**. Each opens in a window of its own; right-click an app to see its **Startup options**.
+- `ika stop` stops Android, and `ika help` lists commands.
 
 [Using Ika](USAGE.md) explains the console, app windows, input and gamepads,
 TV mode and the everyday commands.
