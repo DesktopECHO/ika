@@ -8705,6 +8705,10 @@ import sys
 # of a live process of this user with the argument MARKER, or FILE is there.
 # The window looks again every half second, and the button is as wide as the
 # longer of its two labels.
+# --yellow-choice=TEXT shows the CB choice TEXT in yellow, in every CB.
+# --same-width=LABEL!LABEL... makes the fields of those labels (spaces around
+# each aside) as wide as each other, the widest of them; each --same-width is
+# a group of its own.
 # --parse-only prints what was parsed, as JSON, --print-labels the buttons'
 # labels as the window would show them now, one a line, and --print-defaults
 # writes the outputs as the window would show them, then exits with
@@ -8714,7 +8718,8 @@ import sys
 def parse(argv):
     window = {"title": "", "icon": "", "app_id": "", "active_tab": 1,
               "buttons": [], "tabs": [], "mode": "", "test_status": 0,
-              "running_labels": {}, "running_pids": [], "running_files": []}
+              "running_labels": {}, "running_pids": [], "running_files": [],
+              "yellow_choices": [], "same_width": []}
     tab = None
     i = 0
     while i < len(argv):
@@ -8752,6 +8757,10 @@ def parse(argv):
             window["running_pids"].append([path, marker])
         elif name == "--running-file":
             window["running_files"].append(value)
+        elif name == "--yellow-choice":
+            window["yellow_choices"].append(value)
+        elif name == "--same-width":
+            window["same_width"].append([item.strip() for item in value.split("!")])
         elif name == "--active-tab":
             window["active_tab"] = int(value or 1)
         elif name == "--test-status":
@@ -8840,6 +8849,7 @@ CSS = b"""
 .ika-compact entry, .ika-compact spinbutton, .ika-compact combobox button {
   min-height: 20px; padding-top: 1px; padding-bottom: 1px; }
 .ika-compact spinbutton button { min-height: 0; padding-top: 0; padding-bottom: 0; }
+combobox button arrow { margin-left: 10px; }
 """
 
 
@@ -8998,6 +9008,41 @@ headerbar.default-decoration .title, headerbar.default-decoration:backdrop .titl
         Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_USER)
 
 
+def yellow_choices(combo, yellow, Gdk, Gtk):
+    """Shows COMBO's choices in YELLOW in yellow, in the list and when chosen,
+    a shade that reads on light and dark themes alike; the row the list
+    highlights keeps the theme's color, which reads on the highlight."""
+    cell = combo.get_cells()[0]
+    color = Gdk.RGBA()
+    color.parse("#a98000")
+    highlighted = [None]
+
+    def paint(layout, cell, model, row, data):
+        if (model.get_value(row, 0) in yellow
+                and model.get_path(row).get_indices()[0] != highlighted[0]):
+            cell.set_property("foreground-rgba", color)
+        else:
+            cell.set_property("foreground-set", False)
+
+    def highlight(item, index):
+        highlighted[0] = index
+        item.queue_draw()
+
+    # The list is a menu of the rows, made when it first opens
+    def popup_shown(combo, _):
+        menu = combo.get_popup_accessible().get_widget()
+        if not combo.get_property("popup-shown") or not isinstance(menu, Gtk.Menu):
+            return
+        for index, item in enumerate(menu.get_children()):
+            if not getattr(item, "ika_yellow", False):
+                item.ika_yellow = True
+                item.connect("select", highlight, index)
+                item.connect("deselect", highlight, None)
+
+    combo.set_cell_data_func(cell, paint, None)
+    combo.connect("notify::popup-shown", popup_shown)
+
+
 def run(window):
     from gi.repository import GLib
     if window["app_id"]:
@@ -9038,6 +9083,8 @@ def run(window):
         "key-press-event",
         lambda _, event: (finish(252) or True) if event.keyval == Gdk.KEY_Escape else False)
 
+    same_width = [Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+                  for _ in window["same_width"]]
     notebook = Gtk.Notebook()
     if len(window["tabs"]) < 2:
         notebook.set_show_tabs(False)
@@ -9113,6 +9160,8 @@ def run(window):
                 widget = Gtk.ComboBoxText()
                 for item in items:
                     widget.append_text(item)
+                if set(items) & set(window["yellow_choices"]):
+                    yellow_choices(widget, window["yellow_choices"], Gdk, Gtk)
                 widget.set_active(active)
                 tab_readers.append(lambda w=widget: w.get_active_text() or "")
             else:
@@ -9121,6 +9170,9 @@ def run(window):
                 widget.set_width_chars(18)
                 widget.set_activates_default(True)
                 tab_readers.append(lambda w=widget: w.get_text())
+            for group, labels in zip(same_width, window["same_width"]):
+                if label.strip() in labels:
+                    group.add_widget(widget)
             if stretch or ftype not in ("NUM", "CB"):
                 widget.set_hexpand(True)
             else:
@@ -9405,6 +9457,13 @@ IKA_OPTIONS_AUTO="Auto"
 IKA_OPTIONS_GLES_ONLY="gfxstream, OpenGL ES"
 IKA_OPTIONS_GPU_CHOICES=("${IKA_OPTIONS_AUTO}" gfxstream_guest_angle gfxstream
   "${IKA_OPTIONS_GLES_ONLY}" venus guest_swiftshader guest_lavapipe)
+# The number boxes and short choices of the Startup Options, which ika's
+# window makes as wide as each other
+IKA_OPTIONS_EVEN_FIELDS=("CPUs, 0=Auto" "RAM, MB, 0=Auto" "Desktop display density, 0=Auto"
+  "TV display density, 0=Auto" "Refresh rate, Hz, 0=Auto" "Hardware video decoding"
+  "Low-CPU mode")
+# The GPU modes that render with the CPU, which ika's window shows in yellow
+IKA_OPTIONS_SOFTWARE_CHOICES=(guest_swiftshader guest_lavapipe)
 # In the Startup Options window of its own (yad, without ika's window) the
 # number boxes and choices stretch across their column; a margin on their
 # right keeps a number box about as wide as four digits and its buttons, and
@@ -9652,7 +9711,7 @@ ika_options_form_fields() {
   done
 
   ika_fields_ref=(--field="GPU Hardware  :CB" "${gpu_choices%!}")
-  ika_fields_ref+=(--field="GPU mode  :CB" "${choices%!}")
+  ika_fields_ref+=(--field="GPU Mode  :CB" "${choices%!}")
   ika_fields_ref+=(--field="CPUs, 0=Auto  :NUM" "$(ika_option_number form_values_ref compute.cpus)!0..${host_cpus}!1")
   ika_fields_ref+=(--field="RAM, MB, 0=Auto  :NUM" "$(ika_option_number form_values_ref compute.memory_mb)!0..${host_mb}!1024")
   ika_fields_ref+=(--field="Desktop display density, 0=Auto  :NUM" "$(ika_option_number form_values_ref console.dpi)!0..999!8")
@@ -9869,9 +9928,12 @@ edit_ika_settings() {
     if [[ "${tabs}" == "true" ]]; then
       ika_window yad_env --title="Startup Options · Ika" \
         --icon="${IKA_MENU_ICON}" --app-id="${APP_SETTINGS_WINDOW_CLASS}" \
+        "${IKA_OPTIONS_SOFTWARE_CHOICES[@]/#/--yellow-choice=}" \
+        --same-width="GPU Hardware!GPU Mode" \
+        --same-width="$(IFS='!'; printf '%s' "${IKA_OPTIONS_EVEN_FIELDS[*]}")" \
         --active-tab=1 --button="Reset to default:4" \
         --button="Apply settings:2" --button="Apply and restart:0" --button="Cancel:1" \
-        --tab="Startup Options" --output="${tab_dir}/1" \
+        --tab="Startup Options" --output="${tab_dir}/1" --align=right \
         --border="${APP_OPTIONS_TAB_BORDER_PX}" "${fields1[@]}" \
         --tab="Gamepad Emulation" --output="${tab_dir}/2" --compact --columns=2 \
         --border="${CONTROLLER_MAPPING_TAB_BORDER_PX}" --align=right \

@@ -260,10 +260,10 @@ expect_contains "${tab1}" $'\n--field=Desktop display density, 0=Auto  :NUM\n160
 expect_contains "${tab1}" $'\n--field=TV display density, 0=Auto  :NUM\n0!0..999!8\n' "auto as 0"
 expect_contains "${tab1}" $'\n--border='"${APP_OPTIONS_TAB_BORDER_PX}"$'\n--field=GPU Hardware  :CB\n^'"${AUTO_GPU}"$'!AMD Radeon 780M Graphics (RADV PHOENIX)!AMD Radeon RX 6800 XT (RADV NAVI21)\n' \
   "the GPUs first, auto naming the discrete one"
-expect_contains "${tab1}" $'(RADV NAVI21)\n--field=GPU mode  :CB\n^Auto!gfxstream_guest_angle!' "then the GPU mode"
+expect_contains "${tab1}" $'(RADV NAVI21)\n--field=GPU Mode  :CB\n^Auto!gfxstream_guest_angle!' "then the GPU mode"
 expect_contains "${tab1}" $'!guest_lavapipe\n--field=CPUs, 0=Auto  :NUM\n3!0..' "then the vCPUs"
 expect_contains "${tab1}" $'!1\n--field=RAM, MB, 0=Auto  :NUM\n0!0..' "then the memory"
-expect_contains "${tab1}" $'\n--field=GPU mode  :CB\n^Auto!gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES!venus!guest_swiftshader!guest_lavapipe\n' \
+expect_contains "${tab1}" $'\n--field=GPU Mode  :CB\n^Auto!gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES!venus!guest_swiftshader!guest_lavapipe\n' \
   "the GPU modes, auto first"
 expect_contains "${tab1}" $'\n--field=Hardware video decoding  :CB\n^Auto!Off\n' "video decoding"
 expect_contains "${tab1}" $'\n--field=Low-CPU mode  :CB\n^Auto!On!Off\n' "low-CPU mode"
@@ -340,7 +340,7 @@ cp "${ini}" "${T}/before.ini"
 DIALOG_TAB1="$(tab1_with "gfxstream, OpenGL ES")" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" \
   edit_ika_settings
 expect_equal "$( { diff "${T}/before.ini" "${ini}" || true; } | grep '^>')" "> gfxstream_vulkan = off" "OpenGL ES only"
-expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=GPU mode  :CB\nAuto!gfxstream_guest_angle!^gfxstream!' "shown as gfxstream before"
+expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=GPU Mode  :CB\nAuto!gfxstream_guest_angle!^gfxstream!' "shown as gfxstream before"
 reset_calls
 DIALOG_TAB1="$(tab1_with "gfxstream, OpenGL ES")" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" \
   edit_ika_settings
@@ -371,7 +371,7 @@ reset_calls
 cp "${ini}" "${T}/before.ini"
 DIALOG_TAB1="$(tab1_with gfxstream_guest_angle)" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" edit_ika_settings
 expect_contains "$(<"${T}/window.tab1.args")" \
-  $'\n--field=GPU mode  :CB\nAuto!^gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES!venus!guest_swiftshader!guest_lavapipe\n' \
+  $'\n--field=GPU Mode  :CB\nAuto!^gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES!venus!guest_swiftshader!guest_lavapipe\n' \
   "gfxstream_guest_angle shown selected"
 cmp -s "${T}/before.ini" "${ini}" || fail "an untouched gfxstream_guest_angle was changed"
 echo "ok: auto"
@@ -393,14 +393,14 @@ reset_calls
 DIALOG_TAB1="$(tab1_with Auto)" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" TEST_APPLE_SILICON=true \
   edit_ika_settings
 expect_contains "$(<"${T}/window.tab1.args")" \
-  $'\n--field=GPU mode  :CB\n^Auto!gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES!venus!guest_swiftshader!guest_lavapipe\n' \
+  $'\n--field=GPU Mode  :CB\n^Auto!gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES!venus!guest_swiftshader!guest_lavapipe\n' \
   "venus on Apple Silicon too"
 ika_ini_set gpu gpu_mode venus
 reset_calls
 DIALOG_TAB1="$(tab1_with venus)" DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" TEST_APPLE_SILICON=true \
   edit_ika_settings
 expect_contains "$(<"${T}/window.tab1.args")" \
-  $'\n--field=GPU mode  :CB\nAuto!gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES!^venus!guest_swiftshader!guest_lavapipe\n' \
+  $'\n--field=GPU Mode  :CB\nAuto!gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES!^venus!guest_swiftshader!guest_lavapipe\n' \
   "ika.ini's venus selected on Apple Silicon"
 ika_ini_set gpu gpu_mode gfxstream_guest_angle
 echo "ok: venus and guest_lavapipe"
