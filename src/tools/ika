@@ -878,18 +878,39 @@ write_vcpu_config() {
   } > "${out}"
 }
 
+# Whether each host CPU a vCPU can be pinned to has the cpufreq files that
+# crosvm's Virtual Cpufreq reads. Linux in a virtual machine has none, as on
+# an Apple M3 or later, where Linux runs only in one.
+host_cpus_have_cpufreq() {
+  local cpu
+  local path
+
+  for cpu in $(host_cpus_for_vcpus); do
+    path="/sys/devices/system/cpu/cpu${cpu}/cpufreq"
+    [[ -r "${path}/cpuinfo_max_freq" && -r "${path}/cpuinfo_min_freq" \
+       && -r "${path}/scaling_governor" ]] || return 1
+  done
+}
+
 # Runs in the systemd scope that start_cvd launches Cuttlefish in, with the
 # cgroup delegated to the user: moves itself to a leaf, so that the scope can
 # give the cpu controller to "android", where the launcher and crosvm run.
 # "android" is a threaded domain: crosvm adds a threaded vcpu-domainN for each
 # frequency domain, and the launcher moves the other threads to "workers" once
 # Android has booted. Then writes the configuration and runs the launcher.
+# On arm64 without cpufreq, where Cuttlefish's Virtual Cpufreq would make
+# crosvm panic, runs the launcher without the configuration: the vCPUs are
+# then not pinned.
 launch_in_vcpu_scope() {
   local cpus="$1"
   shift
   local scope
   local cgroup
   local config="${CVD_TMP_DIR}/vcpu-config.json"
+
+  if host_is_arm64 && ! host_cpus_have_cpufreq; then
+    exec "$@"
+  fi
 
   scope="/sys/fs/cgroup$(sed -n 's/^0:://p' /proc/self/cgroup)"
   cgroup="${scope}/android"
