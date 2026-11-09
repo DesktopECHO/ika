@@ -79,6 +79,13 @@ respond() { printf '%s\n' "$*" >>"${T}/respond"; }
 host_color_scheme() { :; }
 # A host other than Apple Silicon, unless TEST_APPLE_SILICON is true
 is_apple_silicon_16k_host() { [[ "${TEST_APPLE_SILICON:-false}" == "true" ]]; }
+# A host with an integrated and a discrete GPU, as vulkaninfo lists them
+host_gpus() {
+  printf '%s\t%s\t%s\t%s\n' \
+    1002:1900 'AMD Radeon 780M Graphics (RADV PHOENIX)' PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU DRIVER_ID_MESA_RADV \
+    1002:73bf 'AMD Radeon RX 6800 XT (RADV NAVI21)' PHYSICAL_DEVICE_TYPE_DISCRETE_GPU DRIVER_ID_MESA_RADV
+}
+AUTO_GPU="Auto ⋅ AMD Radeon RX 6800 XT (RADV NAVI21)"
 
 # ika's window, stubbed as in test_ika_app_settings_window.sh: its own
 # arguments in window.args, each tab's in window.tabN.args, DIALOG_TABN
@@ -173,11 +180,13 @@ reset_calls() {
   rm -f "${T}"/yad.*.args "${T}"/window*.args
 }
 
-# The Startup Options tab's output: the vCPUs, the memory, the densities and
-# the refresh rate as yad prints numbers, the three choices, the spacer, the
-# camera's box and the TV gamepad's, the spacer
+# The Startup Options tab's output for CPUS MEMORY DPI TV_DPI REFRESH
+# GPU_MODE VIDEO_DECODING LOWCPU CAMERA TV_GAMEPAD: the GPU (OPTIONS_GPU, else
+# Auto) and the GPU mode, the numbers as yad prints them, the two other
+# choices, the spacer, the camera's box and the TV gamepad's, the spacer
 options_output() {
-  printf '%s|%s|%s|%s|%s|%s|%s|%s||%s|%s||\n' "${@}"
+  printf '%s|%s|%s|%s|%s|%s|%s|%s|%s||%s|%s||\n' "${OPTIONS_GPU:-${AUTO_GPU}}" "$6" "$1" "$2" "$3" "$4" "$5" \
+    "$7" "$8" "$9" "${10}"
 }
 
 # The Gamepad Emulation tab's output, as test_ika_app_settings_window.sh's:
@@ -249,7 +258,10 @@ expect_contains "${window}" $'--button=Reset to default:4\n--button=Apply settin
   "the buttons, in order"
 expect_contains "${tab1}" $'\n--field=Desktop display density, 0=Auto  :NUM\n160!0..999!8\n' "ika.ini's desktop density"
 expect_contains "${tab1}" $'\n--field=TV display density, 0=Auto  :NUM\n0!0..999!8\n' "auto as 0"
-expect_contains "${tab1}" $'\n--border='"${APP_OPTIONS_TAB_BORDER_PX}"$'\n--field=CPUs, 0=Auto  :NUM\n3!0..' "the vCPUs first"
+expect_contains "${tab1}" $'\n--border='"${APP_OPTIONS_TAB_BORDER_PX}"$'\n--field=GPU Hardware  :CB\n^'"${AUTO_GPU}"$'!AMD Radeon 780M Graphics (RADV PHOENIX)!AMD Radeon RX 6800 XT (RADV NAVI21)\n' \
+  "the GPUs first, auto naming the discrete one"
+expect_contains "${tab1}" $'(RADV NAVI21)\n--field=GPU mode  :CB\n^Auto!gfxstream_guest_angle!' "then the GPU mode"
+expect_contains "${tab1}" $'!guest_lavapipe\n--field=CPUs, 0=Auto  :NUM\n3!0..' "then the vCPUs"
 expect_contains "${tab1}" $'!1\n--field=RAM, MB, 0=Auto  :NUM\n0!0..' "then the memory"
 expect_contains "${tab1}" $'\n--field=GPU mode  :CB\n^Auto!gfxstream_guest_angle!gfxstream!gfxstream, OpenGL ES!venus!guest_swiftshader!guest_lavapipe\n' \
   "the GPU modes, auto first"
@@ -284,6 +296,38 @@ expect_equal "$( { diff "${T}/before.ini" "${ini}" || true; } | grep -c '^<')" 8
 expect_contains "$(<"${T}/respond")" "they apply the next time Ika starts" "and said so"
 [[ ! -s "${T}/setsid" ]] || fail "Apply settings restarted Ika"
 echo "ok: Apply settings writes the changes in place"
+
+# "GPU Hardware": a GPU chosen is written as its ID, and shown selected the next
+# time; Auto writes auto; an ID of ika.ini's the host lacks is shown as not
+# found, and stays while it is not changed
+reset_calls
+cp "${ini}" "${T}/before.ini"
+OPTIONS_GPU="AMD Radeon 780M Graphics (RADV PHOENIX)" \
+  DIALOG_TAB1="$(options_output 3.000000 0.000000 200.000000 0.000000 60.000000 gfxstream Off On FALSE TRUE)" \
+  DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" edit_ika_settings
+expect_equal "$( { diff "${T}/before.ini" "${ini}" || true; } | grep '^>')" "> use_gpu = 1002:1900" "the integrated GPU chosen"
+expect_contains "$(<"${T}/respond")" "use_gpu = 1002:1900" "and said so"
+reset_calls
+OPTIONS_GPU="AMD Radeon 780M Graphics (RADV PHOENIX)" \
+  DIALOG_TAB1="$(options_output 3.000000 0.000000 200.000000 0.000000 60.000000 gfxstream Off On FALSE TRUE)" \
+  DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" edit_ika_settings
+expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=GPU Hardware  :CB\n'"${AUTO_GPU}"$'!^AMD Radeon 780M Graphics (RADV PHOENIX)!' \
+  "shown selected"
+reset_calls
+DIALOG_TAB1="$(options_output 3.000000 0.000000 200.000000 0.000000 60.000000 gfxstream Off On FALSE TRUE)" \
+  DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" edit_ika_settings
+grep -qx "use_gpu = auto" "${ini}" || fail "Auto did not write use_gpu = auto"
+ika_ini_set gpu use_gpu 0x10DE:0x2704
+reset_calls
+cp "${ini}" "${T}/before.ini"
+OPTIONS_GPU="10de:2704 (not found)" \
+  DIALOG_TAB1="$(options_output 3.000000 0.000000 200.000000 0.000000 60.000000 gfxstream Off On FALSE TRUE)" \
+  DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" edit_ika_settings
+expect_contains "$(<"${T}/window.tab1.args")" $'!AMD Radeon RX 6800 XT (RADV NAVI21)!^10de:2704 (not found)\n' \
+  "a GPU the host lacks"
+cmp -s "${T}/before.ini" "${ini}" || fail "an untouched GPU the host lacks was changed"
+ika_ini_set gpu use_gpu auto
+echo "ok: GPU Hardware"
 
 # "gfxstream, OpenGL ES" is gfxstream with gfxstream_vulkan = off;
 # gfxstream chosen from it writes gfxstream_vulkan = auto; a gfxstream_vulkan
@@ -399,7 +443,7 @@ DIALOG_TAB1="$(options_output 3.000000 0.000000 200.000000 0.000000 60.000000 gf
   DIALOG_TAB2="$(mapping_output ini_keys a=J right_stick_left=)" DIALOG_STATUS="4 0 1" edit_ika_settings
 expect_contains "$(<"${T}/yad.confirm.args")" "Apply defaults to Ika</span>" "the confirmation"
 expect_contains "$(<"${T}/yad.confirm.args")" "This will reset Ika's startup options and gamepad emulation mappings." "and what it resets"
-for line in "dpi = auto" "cpus = auto" "gpu_mode = auto" "gfxstream_vulkan = auto" "hw_video_decode = auto" \
+for line in "use_gpu = auto" "dpi = auto" "cpus = auto" "gpu_mode = auto" "gfxstream_vulkan = auto" "hw_video_decode = auto" \
     "mode = auto" "device = off" "tv_keyboard_gamepad = false" "a = Space" "right_stick_left = J"; do
   grep -qxF "${line}" "${ini}" || fail "Reset to default did not write '${line}'"
 done

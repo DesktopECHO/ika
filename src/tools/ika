@@ -328,6 +328,15 @@ enable_sandbox = false
 # lavapipe on the guest's CPU) need a ROM that ships those drivers; see
 # GRAPHICS.md.
 gpu_mode = auto
+# The GPU Ika uses, and no other: auto, or a GPU's Vulkan vendor and device
+# ID in hex, as vulkaninfo --summary lists them (10de:27a0); "GPU Hardware" in
+# Ika's Startup Options sets it. crosvm, gfxstream, Venus, the console and
+# hardware video decoding all run on it. auto takes a discrete GPU beside an
+# integrated one, else the only GPU; so does a GPU the host does not have.
+# Under WSL2 it is the Windows adapter Mesa's Dozen lists. Environment
+# variable: IKA_GPU. A MESA_VK_DEVICE_SELECT or DRI_PRIME of the environment
+# wins.
+use_gpu = auto
 gpu_vhost_user_mode = auto
 enable_gpu_udmabuf = true
 use_cvdalloc = true
@@ -1237,6 +1246,7 @@ SCRCPY_DPI_GIVEN="false"
 ika_ini_default GFXSTREAM_VULKAN gpu gfxstream_vulkan auto
 ika_ini_default IKA_HOST_CACHED_MEMORY gpu host_cached_memory off
 ika_ini_default IKA_HW_VIDEO_DECODE gpu hw_video_decode auto
+ika_ini_default IKA_GPU gpu use_gpu auto
 ika_ini_default IKA_LOWCPU lowcpu mode auto
 ika_ini_get IKA_LOWCPU_REFRESH_RATE_HZ lowcpu refresh_rate_hz 30 uint
 # Whether the VM runs low-CPU mode, decided at start (resolve_lowcpu_mode).
@@ -1874,7 +1884,8 @@ vaapi_driver_installed() {
 # CODECS_REF to the codecs it would decode (H.264, HEVC, VP8, VP9) that the
 # host's VA-API driver also decodes. Otherwise sets REASON_REF to why not and
 # fails. Like crosvm's libva, uses the first render node whose VA driver
-# loads, and sets NODE_REF to it.
+# loads, and sets NODE_REF to it; that must be the GPU Ika uses, when
+# setup_gpu_selection named its render node (IKA_GPU_RENDER_NODE).
 vaapi_decoder_check() {
   local -n codecs_ref="$1"
   local -n reason_ref="$2"
@@ -1898,6 +1909,10 @@ vaapi_decoder_check() {
     [[ "${have_vainfo}" == "true" ]] || continue
     profiles="$(with_timeout 10 vainfo --display drm --device "${node}" 2>/dev/null)" || continue
     node_ref="${node}"
+    if [[ -n "${IKA_GPU_RENDER_NODE:-}" && "${node}" != "${IKA_GPU_RENDER_NODE}" ]]; then
+      reason_ref="crosvm would decode on ${node}, another GPU than the one Ika uses (${IKA_GPU_RENDER_NODE})"
+      return 1
+    fi
     codecs_ref="$(sed -n 's/^[[:space:]]*VAProfile\([A-Za-z0-9_]*\)[[:space:]]*:[[:space:]]*VAEntrypointVLD.*/\1/p' \
         <<<"${profiles}" \
       | sed -n -e 's/^H264\(Baseline\|Main\|High\|StereoHigh\|MultiviewHigh\)$/H.264/p' \
@@ -2454,11 +2469,12 @@ Settings:
 
   "Startup options" on Ika's launcher ('${SCRIPT_NAME} options') opens a window
   (yad), "Startup Options · Ika", for its most used settings, with two tabs.
-  Startup Options has the vCPUs and the memory, the console's density on the
-  desktop and in TV mode and its refresh rate (0 for auto), the GPU mode
-  (Auto, the default, is gpu_mode = auto; "gfxstream, OpenGL ES" is
-  gfxstream with gfxstream_vulkan = off),
-  hardware video decoding, low-CPU mode, "Start with the camera"
+  Startup Options has "GPU Hardware" first (gpu.use_gpu: Auto, or one of the
+  host's GPUs, which Ika then uses alone), then the GPU mode (Auto, the
+  default, is gpu_mode = auto; "gfxstream, OpenGL ES" is gfxstream with
+  gfxstream_vulkan = off), the vCPUs and the memory, the console's density on
+  the desktop and in TV mode and its refresh rate (0 for auto), hardware
+  video decoding, low-CPU mode, "Start with the camera"
   (camera.device: ticked, the first usable camera, unless ika.ini names one)
   and "Enable gamepad emulation in TV mode" (tv_keyboard_gamepad). Gamepad
   Emulation has the keyboard gamepad of
@@ -3256,7 +3272,8 @@ vulkan_summary_preferred_gpu() {
       }
       key = hex_id(vendor) ":" hex_id(id)
       if (want != "") {
-        if (!found && key == want_key) {
+        # A software device can have the ID of a GPU: llvmpipe that of the Apple GPU
+        if (!found && key == want_key && !software && type != "PHYSICAL_DEVICE_TYPE_CPU") {
           found = 1
           best_line = key "\t" field(name) "\t" field(type) "\t" field(driver)
         }
@@ -3347,67 +3364,559 @@ pci_slot_of_gpu() {
   return 1
 }
 
-# On a host with a discrete GPU beside an integrated one, Ika renders on the
-# discrete GPU, as setup_wsl_gpu_env does on WSL2: Mesa's device selection
-# layer lists the GPU that drives the display first, the integrated one on
-# most laptops, and gfxstream (getSelectedGpuIndex) can rank an integrated
-# GPU first for a newer Vulkan version. MESA_VK_DEVICE_SELECT=<vendor>:<device>!
-# hides every other Vulkan device from gfxstream, Venus and the probes that
-# choose the GPU mode. DRI_PRIME names the GPU's PCI slot for Mesa's OpenGL
-# (the console, gpu_mode=gfxstream) where Mesa drives it: under NVIDIA's own
-# driver it would leave Mesa's OpenGL without a driver. Runs before the first
-# vulkaninfo probe of the GPU mode selection. A MESA_VK_DEVICE_SELECT or
-# DRI_PRIME the user set keeps all of it off, as does one exported by the ika
-# that ran this one.
-setup_discrete_gpu_env() {
-  local summary
-  local gpu
+# Whether the host GPU is reached through WSL2's Direct3D 12 device.
+host_has_dxg() {
+  [[ -e /dev/dxg ]]
+}
+
+# Prints the hardware GPUs of a vulkaninfo summary, one a line, in the order
+# it lists them, as tab-separated fields: "vendor:device" as
+# vulkan_summary_preferred_gpu prints it, the name, the type and the driver
+# ID. Each ID once; never a software device or Microsoft's WARP. With a
+# driver ID, only that driver's devices.
+vulkan_summary_gpus() {
+  local summary="$1"
+  local driver_filter="${2:-}"
+
+  awk -v driver_filter="${driver_filter}" '
+    function hex_id(value) {
+      value = tolower(value)
+      sub(/^0x/, "", value)
+      sub(/^0+/, "", value)
+      return value == "" ? "0" : value
+    }
+    function field(value) {
+      return value == "" ? "-" : value
+    }
+    function finish_device(    key) {
+      if (!in_device) {
+        return
+      }
+      in_device = 0
+      if (driver_filter != "" && driver != driver_filter) {
+        return
+      }
+      if (software || type == "PHYSICAL_DEVICE_TYPE_CPU" || hex_id(vendor) == "1414") {
+        return
+      }
+      key = hex_id(vendor) ":" hex_id(id)
+      if (key in seen) {
+        return
+      }
+      seen[key] = 1
+      print key "\t" field(name) "\t" field(type) "\t" field(driver)
+    }
+    /^GPU[0-9]+:/ {
+      finish_device()
+      in_device = 1
+      software = 0
+      vendor = id = type = driver = name = ""
+      next
+    }
+    in_device && $1 == "vendorID" { vendor = $3 }
+    in_device && $1 == "deviceID" { id = $3 }
+    in_device && $1 == "deviceType" { type = $3 }
+    in_device && $1 == "driverID" { driver = $3 }
+    in_device && $1 == "deviceName" {
+      name = $0
+      sub(/^[^=]*=[[:space:]]*/, "", name)
+      sub(/[[:space:]]+$/, "", name)
+    }
+    in_device && tolower($0) ~ /(llvmpipe|lavapipe|swiftshader|software rasterizer|software device)/ {
+      software = 1
+    }
+    END {
+      finish_device()
+    }
+  ' <<<"${summary}"
+}
+
+# The name of a GPU as a person knows it, from its Vulkan device name: Dozen's
+# "Microsoft Direct3D12 (NVIDIA GeForce RTX 4080 Laptop GPU)" is the adapter
+# inside the brackets.
+gpu_display_name() {
+  local name="$1"
+
+  if [[ "${name}" == "Microsoft Direct3D12 ("*")" ]]; then
+    name="${name#Microsoft Direct3D12 (}"
+    name="${name%)}"
+  fi
+  printf '%s\n' "${name}"
+}
+
+# Prints "GPU Hardware" (ika.ini's [gpu] use_gpu, IKA_GPU) as Ika takes it: auto, or
+# a GPU's "vendor:device" in lowercase hex without 0x or leading zeros, as
+# vulkan_summary_preferred_gpu prints it (10de:27a0). Fails on anything else.
+normalize_gpu_device() {
+  local value="${1,,}"
+
+  value="${value%!}"
+  case "${value}" in
+    ""|auto)
+      printf 'auto\n'
+      return 0
+      ;;
+  esac
+  [[ "${value}" =~ ^(0x)?([0-9a-f]{1,8}):(0x)?([0-9a-f]{1,8})$ ]] || return 1
+  printf '%x:%x\n' "$((16#${BASH_REMATCH[2]}))" "$((16#${BASH_REMATCH[4]}))"
+}
+
+# The GPU the running VM was started on, so that a console or app window
+# opened while it runs renders on the same GPU, whatever ika.ini says by
+# then.
+GPU_IN_USE_FILE="${CVD_TMP_DIR}/gpu-device"
+# The GPU this ika selected (setup_gpu_selection), auto or "vendor:device".
+GPU_SELECTED="auto"
+
+# Prints the GPU to use for COMMAND, as normalize_gpu_device prints it: the
+# running VM's, except for restart, which starts a new one; else IKA_GPU,
+# ika.ini's [gpu] use_gpu. A value that is not a GPU ID is reported and taken
+# for auto.
+gpu_device_setting() {
+  local command="${1:-}"
+  local value
+
+  if [[ "${command}" != "restart" && -r "${GPU_IN_USE_FILE}" ]] \
+      && has_live_cvd_processes; then
+    read -r value < "${GPU_IN_USE_FILE}" || value=""
+    normalize_gpu_device "${value}" 2>/dev/null && return 0
+  fi
+  if ! normalize_gpu_device "${IKA_GPU}"; then
+    ika_ini_warn "${IKA_INI_FILE}: gpu.use_gpu must be auto or a GPU's vendor:device ID, such as 10de:27a0, not '${IKA_GPU}'; using auto"
+    printf 'auto\n'
+  fi
+}
+
+# Records, at start, the GPU the VM renders on (see GPU_IN_USE_FILE).
+record_gpu_in_use() {
+  mkdir -p "${CVD_TMP_DIR}" 2>/dev/null || return 0
+  printf '%s\n' "${GPU_SELECTED}" > "${GPU_IN_USE_FILE}" 2>/dev/null || true
+}
+
+# The environment setup_gpu_selection sets, a line per variable it set:
+# "+NAME=VALUE" for one that had VALUE before, "-NAME" for one that was unset.
+# Exported, so that an ika this one runs (restart, "Apply and restart" in the
+# Startup Options) puts all of it back before it selects again, from ika.ini
+# as it is then; a variable it did not set is the user's.
+IKA_GPU_ENV="${IKA_GPU_ENV:-}"
+
+# gpu_env_export NAME VALUE: exports NAME=VALUE, recording it in IKA_GPU_ENV.
+gpu_env_export() {
+  local name="$1"
+
+  if [[ -n "${!name+set}" ]]; then
+    IKA_GPU_ENV+="+${name}=${!name}"$'\n'
+  else
+    IKA_GPU_ENV+="-${name}"$'\n'
+  fi
+  export IKA_GPU_ENV
+  export "${name}=$2"
+}
+
+# gpu_env_default NAME VALUE: the same, unless the environment sets NAME.
+gpu_env_default() {
+  [[ -n "${!1:-}" ]] || gpu_env_export "$1" "$2"
+}
+
+# Puts back what IKA_GPU_ENV records, the latest first.
+restore_gpu_env() {
+  local -a lines=()
+  local line
+  local i
+
+  if [[ -n "${IKA_GPU_ENV:-}" ]]; then
+    mapfile -t lines <<<"${IKA_GPU_ENV%$'\n'}"
+    for (( i = ${#lines[@]} - 1; i >= 0; i-- )); do
+      line="${lines[i]}"
+      case "${line}" in
+        +?*=*)
+          line="${line#+}"
+          export "${line%%=*}=${line#*=}"
+          ;;
+        -?*)
+          unset "${line#-}"
+          ;;
+      esac
+    done
+  fi
+  IKA_GPU_ENV=""
+  unset IKA_GPU_ENV
+}
+
+# Prints a vulkaninfo summary with only the device with "vendor:device"
+# DEVICE and the software ones: what gfxstream would rank if no other GPU
+# were there.
+vulkan_summary_device_and_software() {
+  local summary="$1"
+  local want="$2"
+
+  awk -v want="${want}" '
+    function hex_id(value) {
+      value = tolower(value)
+      sub(/^0x/, "", value)
+      sub(/^0+/, "", value)
+      return value == "" ? "0" : value
+    }
+    function finish_device() {
+      if (block != "" && (software || type == "PHYSICAL_DEVICE_TYPE_CPU" ||
+          hex_id(vendor) ":" hex_id(id) == want)) {
+        printf "%s", block
+      }
+      block = ""
+    }
+    /^GPU[0-9]+:/ {
+      finish_device()
+      in_device = 1
+      software = 0
+      vendor = id = type = ""
+    }
+    !in_device { print; next }
+    $1 == "vendorID" { vendor = $3 }
+    $1 == "deviceID" { id = $3 }
+    $1 == "deviceType" { type = $3 }
+    tolower($0) ~ /(llvmpipe|lavapipe|swiftshader|software rasterizer|software device)/ { software = 1 }
+    { block = block $0 "\n" }
+    END { finish_device() }
+  ' <<<"${summary}"
+}
+
+# Whether DRIVER_ID is one of Mesa's drivers, which DRI_PRIME steers.
+is_mesa_vulkan_driver() {
+  [[ "$1" == DRIVER_ID_MESA_* || "$1" == DRIVER_ID_INTEL_OPEN_SOURCE_MESA ]]
+}
+
+# Prints, colon-separated, the Vulkan driver manifests (ICD files) of the
+# driver with DRIVER_ID, from the directories the Vulkan loader reads, by the
+# library each loads. Fails for a driver it does not know, or when none is
+# found.
+vulkan_icd_files_for_driver() {
+  local driver="$1"
+  local -a libraries=()
+  local -a dirs=()
+  local -a data_dirs=()
+  local -a config_dirs=()
+  local dir
+  local file
+  local library
+  local want
+  local files=""
+
+  case "${driver}" in
+    DRIVER_ID_MESA_RADV) libraries=(libvulkan_radeon.so) ;;
+    DRIVER_ID_INTEL_OPEN_SOURCE_MESA) libraries=(libvulkan_intel.so libvulkan_intel_hasvk.so) ;;
+    DRIVER_ID_MESA_NVK) libraries=(libvulkan_nouveau.so) ;;
+    DRIVER_ID_MESA_HONEYKRISP) libraries=(libvulkan_asahi.so) ;;
+    DRIVER_ID_MESA_TURNIP) libraries=(libvulkan_freedreno.so) ;;
+    DRIVER_ID_MESA_PANVK) libraries=(libvulkan_panfrost.so) ;;
+    DRIVER_ID_MESA_V3DV) libraries=(libvulkan_broadcom.so) ;;
+    DRIVER_ID_MESA_IMAGINATION_OPEN_SOURCE_MESA) libraries=(libvulkan_powervr_mesa.so) ;;
+    DRIVER_ID_NVIDIA_PROPRIETARY) libraries=(libGLX_nvidia.so.0 libGLX_nvidia.so) ;;
+    DRIVER_ID_AMD_OPEN_SOURCE) libraries=(amdvlk64.so amdvlk32.so) ;;
+    *) return 1 ;;
+  esac
+
+  IFS=: read -r -a config_dirs <<<"${XDG_CONFIG_DIRS:-/etc/xdg}"
+  IFS=: read -r -a data_dirs <<<"${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+  dirs=("${XDG_CONFIG_HOME:-${HOME}/.config}" "${config_dirs[@]}" /etc
+        "${XDG_DATA_HOME:-${HOME}/.local/share}" "${data_dirs[@]}" /usr/local/share /usr/share)
+  for dir in "${dirs[@]}"; do
+    [[ -n "${dir}" ]] || continue
+    for file in "${dir%/}"/vulkan/icd.d/*.json; do
+      [[ -f "${file}" ]] || continue
+      [[ ":${files}:" != *":${file}:"* ]] || continue
+      library="$(sed -n 's/.*"library_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${file}" 2>/dev/null | head -n 1)"
+      library="${library##*/}"
+      for want in "${libraries[@]}"; do
+        if [[ "${library}" == "${want}" ]]; then
+          files+="${files:+:}${file}"
+          break
+        fi
+      done
+    done
+  done
+  [[ -n "${files}" ]] || return 1
+  printf '%s\n' "${files}"
+}
+
+# Prints the glvnd EGL vendor file (egl_vendor.d) whose library is
+# libEGL_<VENDOR>.so.0: mesa or nvidia.
+egl_vendor_file() {
+  local vendor="$1"
+  local dir
+  local file
+
+  for dir in /etc/glvnd/egl_vendor.d /usr/local/share/glvnd/egl_vendor.d /usr/share/glvnd/egl_vendor.d; do
+    for file in "${dir}"/*.json; do
+      [[ -f "${file}" ]] || continue
+      if grep -q "\"libEGL_${vendor}\.so" "${file}" 2>/dev/null; then
+        printf '%s\n' "${file}"
+        return 0
+      fi
+    done
+  done
+  return 1
+}
+
+# Prints how many GPUs the kernel drives, by their render nodes, with or
+# without a Vulkan driver: a PCI display controller's, or a GPU's that is no
+# PCI device (Apple's, many ARM boards'); not the virtual vgem's or vkms's.
+host_render_gpu_count() {
+  local node
   local device
+  local class
+  local driver
+  local count=0
+
+  for node in /sys/class/drm/renderD*; do
+    device="$(readlink -f "${node}/device" 2>/dev/null)" || continue
+    [[ -n "${device}" && -d "${device}" ]] || continue
+    driver="$(readlink -f "${device}/driver" 2>/dev/null)" || driver=""
+    case "${driver##*/}" in
+      vgem|vkms) continue ;;
+    esac
+    if [[ -r "${device}/class" ]]; then
+      read -r class < "${device}/class" 2>/dev/null || continue
+      [[ "${class}" == 0x03* ]] || continue
+    fi
+    count=$((count + 1))
+  done
+  printf '%s\n' "${count}"
+}
+
+# The render node (/dev/dri/renderDN) of the GPU at PCI slot SLOT.
+render_node_of_pci_slot() {
+  local node
+
+  for node in "/sys/bus/pci/devices/$1/drm/"renderD*; do
+    [[ -e "${node}" ]] || continue
+    printf '/dev/dri/%s\n' "${node##*/}"
+    return 0
+  done
+  return 1
+}
+
+# Makes everything Ika runs render on the GPU of SUMMARY with "vendor:device"
+# DEVICE, named NAME, of driver DRIVER, and nothing else on a host GPU:
+# - Vulkan (gfxstream, Venus's render server, the GPU mode probes):
+#   MESA_VK_DEVICE_SELECT=<vendor>:<device>! hides every other device, and
+#   VK_DRIVER_FILES loads only that GPU's driver, so that no other driver
+#   opens its GPU to list it, unless the device then goes missing (a GPU's
+#   ID is no longer unique once a software device has it too: the Apple GPU
+#   and llvmpipe are both 10005:0). On WSL2 Ika's Dozen makes a D3D12 device
+#   on that adapter alone (dzn-adapter-select.patch).
+# - OpenGL (the console, app windows, gpu_mode=gfxstream): on WSL2 Mesa's
+#   d3d12 driver takes the adapter MESA_D3D12_DEFAULT_ADAPTER_NAME names;
+#   elsewhere DRI_PRIME names the GPU's PCI slot for Mesa, and glvnd is
+#   pointed at NVIDIA's EGL and GLX for NVIDIA's own driver, at Mesa's when
+#   NVIDIA's are installed beside it.
+# - Video decoding: IKA_GPU_RENDER_NODE names the GPU's render node, which
+#   append_hw_video_decode_args holds crosvm's VA-API decoder to.
+# - The GPU mode: on bare metal, a GPU gfxstream would rank below llvmpipe,
+#   which it no longer sees, keeps the GPU mode auto chose for it before,
+#   gfxstream with OpenGL ES (IKA_GPU_PASSED_OVER). On WSL2 Dozen's GPU of
+#   Vulkan 1.2 runs gfxstream_guest_angle, as it did.
+# A variable the environment sets is kept. WSL is true on WSL2.
+apply_gpu_selection() {
+  local summary="$1"
+  local device="$2"
+  local name="$3"
+  local driver="$4"
+  local wsl="$5"
+  local slot=""
+  local node
+  local files
+  local check
+  local nvidia_egl=""
+  local mesa_egl=""
+  local passed_over
+
+  gpu_env_export MESA_VK_DEVICE_SELECT "${device}!"
+  if [[ "${wsl}" == "true" ]]; then
+    name="$(gpu_display_name "${name}")"
+    [[ -z "${name}" || "${name}" == "-" ]] \
+      || gpu_env_default MESA_D3D12_DEFAULT_ADAPTER_NAME "${name}"
+    return 0
+  fi
+
+  # Hidden from gfxstream now, llvmpipe would still have won over this GPU
+  # (an older Vulkan, such as Haswell's 1.2): the GPU mode and Vulkan in
+  # gfxstream are chosen as they were without the selection, OpenGL ES on
+  # this GPU (see gfxstream_passes_over_hardware_vulkan)
+  if passed_over="$(vulkan_summary_gfxstream_passes_over_hardware \
+                      "$(vulkan_summary_device_and_software "${summary}" "${device}")")"; then
+    gpu_env_export IKA_GPU_PASSED_OVER "${passed_over}"
+  fi
+
+  if slot="$(pci_slot_of_gpu "${device}")"; then
+    if is_mesa_vulkan_driver "${driver}"; then
+      gpu_env_export DRI_PRIME "pci-${slot//[:.]/_}"
+    fi
+    if node="$(render_node_of_pci_slot "${slot}")"; then
+      gpu_env_export IKA_GPU_RENDER_NODE "${node}"
+    fi
+  fi
+
+  nvidia_egl="$(egl_vendor_file nvidia)" || nvidia_egl=""
+  if [[ "${driver}" == "DRIVER_ID_NVIDIA_PROPRIETARY" ]]; then
+    gpu_env_default __NV_PRIME_RENDER_OFFLOAD 1
+    gpu_env_default __GLX_VENDOR_LIBRARY_NAME nvidia
+    gpu_env_default __VK_LAYER_NV_optimus NVIDIA_only
+    [[ -z "${nvidia_egl}" ]] || gpu_env_default __EGL_VENDOR_LIBRARY_FILENAMES "${nvidia_egl}"
+  elif [[ -n "${nvidia_egl}" ]] && is_mesa_vulkan_driver "${driver}"; then
+    gpu_env_default __GLX_VENDOR_LIBRARY_NAME mesa
+    gpu_env_default __VK_LAYER_NV_optimus non_NVIDIA_only
+    mesa_egl="$(egl_vendor_file mesa)" || mesa_egl=""
+    [[ -z "${mesa_egl}" ]] || gpu_env_default __EGL_VENDOR_LIBRARY_FILENAMES "${mesa_egl}"
+  fi
+
+  # Only the GPU's own Vulkan driver, if it still lists the GPU on its own
+  if [[ -z "${VK_DRIVER_FILES:-}${VK_ICD_FILENAMES:-}" ]] \
+      && files="$(vulkan_icd_files_for_driver "${driver}")" \
+      && check="$(VK_DRIVER_FILES="${files}" probe_vulkaninfo_summary)" \
+      && vulkan_summary_preferred_gpu "${check}" "" "${device}" >/dev/null; then
+    gpu_env_export VK_DRIVER_FILES "${files}"
+  fi
+}
+
+# Selects the GPU Ika uses ("GPU Hardware" in the Startup Options; ika.ini's [gpu]
+# use_gpu, IKA_GPU), for COMMAND: everything Ika runs renders on it alone (see
+# apply_gpu_selection). auto, or a GPU the host no longer has, renders on the
+# discrete GPU beside another GPU (one without a Vulkan driver too, counted
+# by its render node: Sandy Bridge's), as on WSL2, where it also picks the
+# GPU of a host with one (Dozen lists WARP, Microsoft's software renderer,
+# too): Mesa's device selection lists the GPU that drives the display first,
+# the integrated one on most laptops, and gfxstream (getSelectedGpuIndex) can
+# rank an integrated GPU first for a newer Vulkan version; on bare metal with
+# one GPU it leaves the environment as it is. On WSL2 the GPU is one of
+# Dozen's, and nothing is selected without Ika's WSL2 GPU setup
+# (setup_wsl_gpu_env). Runs before the first vulkaninfo probe of the GPU mode
+# selection, so that it sees what crosvm will. What an earlier ika selected
+# (IKA_GPU_ENV) is undone first. A MESA_VK_DEVICE_SELECT or DRI_PRIME the
+# user set keeps all of it off; on WSL2 the OpenGL driver then follows their
+# MESA_VK_DEVICE_SELECT.
+setup_gpu_selection() {
+  local command="${1:-}"
+  local setting
+  local summary
+  local gpu=""
+  local device
+  local name
   local type
   local driver
   local below
-  local slot
+  local filter=""
+  local wsl=false
+  local drivers
 
-  [[ ! -e /dev/dxg ]] || return 0
-  [[ -z "${MESA_VK_DEVICE_SELECT:-}" && -z "${DRI_PRIME:-}" ]] || return 0
-  summary="$(probe_vulkaninfo_summary)" || return 0
-  gpu="$(vulkan_summary_preferred_gpu "${summary}")" || return 0
-  IFS=$'\t' read -r device _ type driver below <<<"${gpu}"
-  [[ "${type}" == "PHYSICAL_DEVICE_TYPE_DISCRETE_GPU" && "${below}" -gt 0 ]] || return 0
-
-  export MESA_VK_DEVICE_SELECT="${device}!"
-  if [[ "${driver}" == DRIVER_ID_MESA_* ]] && slot="$(pci_slot_of_gpu "${device}")"; then
-    slot="${slot//:/_}"
-    export DRI_PRIME="pci-${slot//./_}"
+  restore_gpu_env
+  GPU_SELECTED="auto"
+  if host_has_dxg; then
+    [[ -n "${IKA_WSL_GPU_ENV:-}" ]] || return 0
+    wsl=true
+    filter="DRIVER_ID_MESA_DOZEN"
   fi
-  log_start_note "discrete GPU: $(cut -f2 <<<"${gpu}"), MESA_VK_DEVICE_SELECT=${MESA_VK_DEVICE_SELECT}${DRI_PRIME:+, DRI_PRIME=${DRI_PRIME}}"
+  setting="$(gpu_device_setting "${command}")"
+
+  if [[ -n "${MESA_VK_DEVICE_SELECT:-}" || -n "${DRI_PRIME:-}" ]]; then
+    [[ "${setting}" == "auto" ]] \
+      || log_start_note "GPU Hardware ${setting} left aside: the environment sets MESA_VK_DEVICE_SELECT or DRI_PRIME"
+    if [[ "${wsl}" == "true" && -n "${MESA_VK_DEVICE_SELECT:-}" && -z "${MESA_D3D12_DEFAULT_ADAPTER_NAME:-}" ]] \
+        && summary="$(probe_vulkaninfo_summary)" \
+        && gpu="$(vulkan_summary_preferred_gpu "${summary}" "${filter}" "${MESA_VK_DEVICE_SELECT}")"; then
+      name="$(gpu_display_name "$(cut -f2 <<<"${gpu}")")"
+      [[ -z "${name}" || "${name}" == "-" ]] || gpu_env_export MESA_D3D12_DEFAULT_ADAPTER_NAME "${name}"
+    fi
+    return 0
+  fi
+
+  summary="$(probe_vulkaninfo_summary)" || return 0
+  if [[ "${setting}" != "auto" ]]; then
+    if gpu="$(vulkan_summary_preferred_gpu "${summary}" "${filter}" "${setting}")"; then
+      GPU_SELECTED="${setting}"
+    else
+      log_start_note "GPU Hardware ${setting}: no such GPU on this host; choosing one as auto does"
+      gpu=""
+    fi
+  fi
+  if [[ -z "${gpu}" ]]; then
+    gpu="$(vulkan_summary_preferred_gpu "${summary}" "${filter}")" || return 0
+    IFS=$'\t' read -r device name type driver below <<<"${gpu}"
+    # Beside another GPU, Vulkan or not: an integrated GPU without a Vulkan
+    # driver would keep OpenGL, the console and video decoding
+    [[ "${wsl}" == "true" || ( "${type}" == "PHYSICAL_DEVICE_TYPE_DISCRETE_GPU" &&
+         ( "${below}" -gt 0 || "$(host_render_gpu_count)" -gt 1 ) ) ]] \
+      || return 0
+  fi
+  IFS=$'\t' read -r device name type driver _ <<<"${gpu}"
+
+  apply_gpu_selection "${summary}" "${device}" "${name}" "${driver}" "${wsl}"
+  # restart's start selects again, and says so
+  [[ "${command}" != "restart" ]] || return 0
+  drivers=""
+  [[ "${wsl}" == "true" || $'\n'"${IKA_GPU_ENV:-}" != *$'\n'[-+]VK_DRIVER_FILES* ]] \
+    || drivers=", VK_DRIVER_FILES=${VK_DRIVER_FILES}"
+  log_start_note "GPU (${GPU_SELECTED}): $(gpu_display_name "${name}"), MESA_VK_DEVICE_SELECT=${MESA_VK_DEVICE_SELECT}${DRI_PRIME:+, DRI_PRIME=${DRI_PRIME}}${MESA_D3D12_DEFAULT_ADAPTER_NAME:+, MESA_D3D12_DEFAULT_ADAPTER_NAME=${MESA_D3D12_DEFAULT_ADAPTER_NAME}}${drivers}"
+}
+
+# Prints the GPUs "GPU Hardware" offers, as vulkan_summary_gpus does, from a
+# vulkaninfo summary of all of them, without what an earlier ika or the user
+# selected: on WSL2 Dozen's, with Ika's WSL2 GPU setup.
+host_gpus() {
+  (
+    local summary
+    local filter=""
+
+    restore_gpu_env
+    unset MESA_VK_DEVICE_SELECT DRI_PRIME
+    if host_has_dxg; then
+      setup_wsl_gpu_env
+      filter="DRIVER_ID_MESA_DOZEN"
+    fi
+    summary="$(probe_vulkaninfo_summary)" || exit 1
+    vulkan_summary_gpus "${summary}" "${filter}"
+  ) 2>/dev/null
+}
+
+# Prints the GPU auto renders on, of host_gpus' GPUS, as vulkan_summary_gpus
+# prints it: the discrete one before an integrated one, else the first.
+host_gpus_auto_choice() {
+  local gpus="$1"
+  local line
+
+  [[ -n "${gpus}" ]] || return 1
+  while IFS= read -r line; do
+    if [[ "$(cut -f3 <<<"${line}")" == "PHYSICAL_DEVICE_TYPE_DISCRETE_GPU" ]]; then
+      printf '%s\n' "${line}"
+      return 0
+    fi
+  done <<<"${gpus}"
+  while IFS= read -r line; do
+    if [[ "$(cut -f3 <<<"${line}")" == "PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU" ]]; then
+      printf '%s\n' "${line}"
+      return 0
+    fi
+  done <<<"${gpus}"
+  head -n 1 <<<"${gpus}"
 }
 
 # WSL2 reaches the host GPU only through Direct3D 12 (/dev/dxg), which Mesa's
 # Dozen driver offers as Vulkan: 1.3 in Ika's build on a GPU with shader model
 # 6.6 and wave operations, 1.2 on others, such as Kaby Lake's Iris Plus 650.
-# gfxstream runs on it with four settings (GRAPHICS.md, "WSL2"):
+# gfxstream runs on it with these settings (GRAPHICS.md, "WSL2"):
 # VK_DRIVER_FILES loads Ika's own Dozen build, with Ika's Lavapipe for the
 # instance extensions gfxstream needs and Dozen does not list;
-# MESA_VK_DEVICE_SELECT hides every device but the Dozen GPU, which gfxstream
-# would otherwise rank below Lavapipe: the discrete GPU where there is one
-# (vulkan_summary_preferred_gpu), and MESA_D3D12_DEFAULT_ADAPTER_NAME gives
-# Mesa's d3d12 OpenGL driver the same one, as it picks an integrated GPU
-# first; IKA_DZN_FIX turns on the VK_LAYER_IKA_dzn_fix layer, which works
+# IKA_DZN_FIX turns on the VK_LAYER_IKA_dzn_fix layer, which works
 # around Dozen's gaps; and the
 # libd3d12.so shim first in LD_LIBRARY_PATH makes every Vulkan instance share
 # one D3D12 device, as WSL allows only a few per process and does not give
-# back a released one's address space. Runs before the first vulkaninfo
-# probe, so GPU mode selection sees what crosvm will. Keeps a VK_DRIVER_FILES,
-# MESA_VK_DEVICE_SELECT or MESA_D3D12_DEFAULT_ADAPTER_NAME the user set (the
-# OpenGL driver then follows their MESA_VK_DEVICE_SELECT); IKA_SYSTEM_DOZEN=1
-# uses the distribution's Dozen instead of Ika's; IKA_WSL_GPU_FIX=0 turns all
-# of it off.
+# back a released one's address space. setup_gpu_selection then picks the
+# Dozen GPU (MESA_VK_DEVICE_SELECT), which gfxstream would otherwise rank
+# below Lavapipe, and the adapter of Mesa's d3d12 OpenGL driver. Done only
+# where Dozen finds a GPU. Keeps a VK_DRIVER_FILES the user set;
+# IKA_SYSTEM_DOZEN=1 uses the distribution's Dozen instead of Ika's;
+# IKA_WSL_GPU_FIX=0 turns all of it off.
 setup_wsl_gpu_env() {
   local summary
-  local gpu
-  local device
-  local adapter
   local dozen_icd="${PACKAGED_WSL_GPU_DIR}/dozen/dzn_icd.json"
   local lavapipe_icd="${PACKAGED_CVD_HOST_OUT}/bin/vk_lavapipe_icd.json"
   local driver_files=""
@@ -3425,30 +3934,14 @@ setup_wsl_gpu_env() {
   else
     summary="$(probe_vulkaninfo_summary)" || return 0
   fi
-
-  # The Dozen GPU to render with, as "vendor:device" in MESA_VK_DEVICE_SELECT's
-  # hex form: a discrete one before an integrated one, never WARP,
-  # Microsoft's software renderer.
-  gpu="$(vulkan_summary_preferred_gpu "${summary}" DRIVER_ID_MESA_DOZEN)" || return 0
-  device="${gpu%%$'\t'*}"
+  # A Dozen GPU, never WARP, Microsoft's software renderer
+  vulkan_summary_preferred_gpu "${summary}" DRIVER_ID_MESA_DOZEN >/dev/null || return 0
 
   [[ -z "${driver_files}" ]] || export VK_DRIVER_FILES="${driver_files}"
-  export MESA_VK_DEVICE_SELECT="${MESA_VK_DEVICE_SELECT:-${device}!}"
-  # Dozen names a device "Microsoft Direct3D12 (<adapter>)"; the d3d12 driver
-  # takes the adapter whose description contains the name given.
-  if [[ -z "${MESA_D3D12_DEFAULT_ADAPTER_NAME:-}" ]]; then
-    gpu="$(vulkan_summary_preferred_gpu "${summary}" DRIVER_ID_MESA_DOZEN \
-             "${MESA_VK_DEVICE_SELECT%!}")" || gpu=""
-    adapter="$(cut -f2 <<<"${gpu}")"
-    adapter="${adapter#Microsoft Direct3D12 (}"
-    adapter="${adapter%)}"
-    [[ -z "${adapter}" || "${adapter}" == "-" ]] \
-      || export MESA_D3D12_DEFAULT_ADAPTER_NAME="${adapter}"
-  fi
   export IKA_DZN_FIX=1
   export LD_LIBRARY_PATH="${PACKAGED_WSL_GPU_DIR}/d3d12${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
   export IKA_WSL_GPU_ENV=1
-  log_start_note "WSL2: GPU through ${dozen_name}, MESA_VK_DEVICE_SELECT=${MESA_VK_DEVICE_SELECT}${MESA_D3D12_DEFAULT_ADAPTER_NAME:+, MESA_D3D12_DEFAULT_ADAPTER_NAME=${MESA_D3D12_DEFAULT_ADAPTER_NAME}}"
+  log_start_note "WSL2: GPU through ${dozen_name}"
 }
 
 VULKANINFO_SUMMARY=""
@@ -3474,7 +3967,7 @@ vulkaninfo_cache_key() {
   stamps="$(stat -c '%n=%Y' "${paths[@]}" 2>/dev/null | tr '\n' ' ' || true)"
   printf '%s %s %s %s\n' "${boot_id}" \
     "${VK_DRIVER_FILES:-}|${VK_ICD_FILENAMES:-}|${VK_ADD_DRIVER_FILES:-}" \
-    "${MESA_VK_DEVICE_SELECT:-}|${MESA_VK_DEVICE_SELECT_FORCE_DEFAULT_DEVICE:-}|${DRI_PRIME:-}|${IKA_DZN_FIX:-}|${LD_LIBRARY_PATH:-}" \
+    "${MESA_VK_DEVICE_SELECT:-}|${MESA_VK_DEVICE_SELECT_FORCE_DEFAULT_DEVICE:-}|${DRI_PRIME:-}|${__VK_LAYER_NV_optimus:-}|${IKA_DZN_FIX:-}|${LD_LIBRARY_PATH:-}" \
     "${stamps% }"
 }
 
@@ -3793,11 +4286,16 @@ vulkan_summary_gfxstream_passes_over_hardware() {
 }
 
 # The same for this host, unless ANDROID_EMU_VK_GPU_SELECT tells gfxstream which
-# device to use.
+# device to use. With a GPU selected on bare metal, which hides llvmpipe, what
+# was found for that GPU before (IKA_GPU_PASSED_OVER, apply_gpu_selection).
 gfxstream_passes_over_hardware_vulkan() {
   local summary
 
   [[ -z "${ANDROID_EMU_VK_GPU_SELECT:-}" ]] || return 1
+  if [[ -n "${IKA_GPU_PASSED_OVER:-}" ]]; then
+    printf '%s\n' "${IKA_GPU_PASSED_OVER}"
+    return 0
+  fi
   summary="$(vulkaninfo_summary || true)"
   [[ -n "${summary}" ]] || return 1
   vulkan_summary_gfxstream_passes_over_hardware "${summary}"
@@ -8887,13 +9385,13 @@ edit_app_settings() {
 # The ika.ini settings of the Startup Options tab of Ika's window, as
 # SECTION.KEY, in its order, and their built-in values, as ika.ini's template
 # has them.
-IKA_OPTIONS_SETTINGS=(compute.cpus compute.memory_mb console.dpi console.tv_dpi
-  console.refresh_rate_hz gpu.gpu_mode gpu.gfxstream_vulkan gpu.hw_video_decode
+IKA_OPTIONS_SETTINGS=(gpu.use_gpu gpu.gpu_mode gpu.gfxstream_vulkan compute.cpus compute.memory_mb
+  console.dpi console.tv_dpi console.refresh_rate_hz gpu.hw_video_decode
   lowcpu.mode camera.device console.tv_keyboard_gamepad)
 declare -A IKA_OPTIONS_DEFAULTS=(
   [console.dpi]="auto" [console.tv_dpi]="auto" [console.refresh_rate_hz]="auto"
   [compute.cpus]="auto" [compute.memory_mb]="auto"
-  [gpu.gpu_mode]="auto" [gpu.gfxstream_vulkan]="auto"
+  [gpu.use_gpu]="auto" [gpu.gpu_mode]="auto" [gpu.gfxstream_vulkan]="auto"
   [gpu.hw_video_decode]="auto" [lowcpu.mode]="auto" [camera.device]="off"
   [console.tv_keyboard_gamepad]="false"
 )
@@ -8933,6 +9431,9 @@ ika_option_value() {
       else
         printf 'auto\n'
       fi
+      ;;
+    gpu.use_gpu)
+      normalize_gpu_device "${value}" 2>/dev/null || printf '%s\n' "${value}"
       ;;
     gpu.gpu_mode)
       printf '%s\n' "${value:-${IKA_OPTIONS_DEFAULTS[${setting}]}}"
@@ -9045,6 +9546,57 @@ ika_gpu_choice() {
   fi
 }
 
+# The choices of "GPU Hardware" the window shows, and the gpu.use_gpu value of each
+# (set by ika_options_form_fields for read_ika_options_form).
+declare -A IKA_OPTIONS_GPU_IDS=()
+
+# Sets the array named CHOICES_VAR to the choices of "GPU Hardware" for gpu.use_gpu
+# value CURRENT, ^ marking CURRENT's: "Auto ⋅ <the GPU auto takes>", then each
+# GPU of the host by name, an ID ika.ini has that the host lacks as
+# "<ID> (not found)". Fills IKA_OPTIONS_GPU_IDS.
+ika_gpu_device_choices() {
+  local current="$1"
+  local -n gpu_choices_ref="$2"
+  local gpu_lines
+  local auto
+  local line
+  local id
+  local name
+  local label
+  local found=false
+  local -A labels_seen=()
+
+  IKA_OPTIONS_GPU_IDS=()
+  gpu_choices_ref=()
+  gpu_lines="$(host_gpus)" || gpu_lines=""
+  label="${IKA_OPTIONS_AUTO}"
+  if auto="$(host_gpus_auto_choice "${gpu_lines}")"; then
+    label+=" ⋅ $(gpu_display_name "$(cut -f2 <<<"${auto}")")"
+  fi
+  IKA_OPTIONS_GPU_IDS[${label}]="auto"
+  [[ "${current}" != "auto" ]] || label="^${label}"
+  gpu_choices_ref+=("${label}")
+  while IFS=$'\t' read -r id name _; do
+    [[ -n "${id}" ]] || continue
+    label="$(gpu_display_name "${name}")"
+    [[ -n "${label}" && "${label}" != "-" ]] || label="${id}"
+    # Two GPUs of one name, told apart by their IDs
+    [[ -z "${labels_seen[${label}]+set}" ]] || label+=" (${id})"
+    labels_seen[${label}]=1
+    IKA_OPTIONS_GPU_IDS[${label}]="${id}"
+    if [[ "${id}" == "${current}" ]]; then
+      found=true
+      label="^${label}"
+    fi
+    gpu_choices_ref+=("${label}")
+  done <<<"${gpu_lines}"
+  if [[ "${current}" != "auto" && "${found}" != "true" ]]; then
+    label="${current} (not found)"
+    IKA_OPTIONS_GPU_IDS[${label}]="${current}"
+    gpu_choices_ref+=("^${label}")
+  fi
+}
+
 # Prints the number box value of SETTING in the associative array named
 # VALUES_VAR: its number, or 0 for auto.
 ika_option_number() {
@@ -9056,10 +9608,10 @@ ika_option_number() {
 }
 
 # Sets the array named FIELDS_VAR to the Startup Options tab of Ika's window
-# for the associative array named VALUES_VAR, for yad: the vCPUs and the
-# memory, the densities and the refresh rate, 0 for auto; the GPU mode, hardware
-# video decoding and low-CPU mode; then the camera at every start and the
-# keyboard gamepad in TV mode.
+# for the associative array named VALUES_VAR, for yad: the GPU Ika uses and
+# the GPU mode; the vCPUs and the memory, the densities and the refresh rate,
+# 0 for auto; hardware video decoding and low-CPU mode; then the camera at
+# every start and the keyboard gamepad in TV mode.
 ika_options_form_fields() {
   local -n form_values_ref="$1"
   local -n ika_fields_ref="$2"
@@ -9069,8 +9621,14 @@ ika_options_form_fields() {
   local mode
   local current
   local choices=""
+  local gpu_choices=""
   local -a modes=()
+  local -a gpu_labels=()
 
+  ika_gpu_device_choices "${form_values_ref[gpu.use_gpu]}" gpu_labels
+  for mode in "${gpu_labels[@]}"; do
+    gpu_choices+="${mode//!/ }!"
+  done
   for mode in "${IKA_OPTIONS_GPU_CHOICES[@]}"; do
     modes+=("${mode}")
   done
@@ -9093,12 +9651,13 @@ ika_options_form_fields() {
     choices+="${mode}!"
   done
 
-  ika_fields_ref=(--field="CPUs, 0=Auto  :NUM" "$(ika_option_number form_values_ref compute.cpus)!0..${host_cpus}!1")
+  ika_fields_ref=(--field="GPU Hardware  :CB" "${gpu_choices%!}")
+  ika_fields_ref+=(--field="GPU mode  :CB" "${choices%!}")
+  ika_fields_ref+=(--field="CPUs, 0=Auto  :NUM" "$(ika_option_number form_values_ref compute.cpus)!0..${host_cpus}!1")
   ika_fields_ref+=(--field="RAM, MB, 0=Auto  :NUM" "$(ika_option_number form_values_ref compute.memory_mb)!0..${host_mb}!1024")
   ika_fields_ref+=(--field="Desktop display density, 0=Auto  :NUM" "$(ika_option_number form_values_ref console.dpi)!0..999!8")
   ika_fields_ref+=(--field="TV display density, 0=Auto  :NUM" "$(ika_option_number form_values_ref console.tv_dpi)!0..999!8")
   ika_fields_ref+=(--field="Refresh rate, Hz, 0=Auto  :NUM" "$(ika_option_number form_values_ref console.refresh_rate_hz)!0..360!1")
-  ika_fields_ref+=(--field="GPU mode  :CB" "${choices%!}")
   case "${form_values_ref[gpu.hw_video_decode]}" in
     off) ika_fields_ref+=(--field="Hardware video decoding  :CB" "Auto!^Off") ;;
     *) ika_fields_ref+=(--field="Hardware video decoding  :CB" "^Auto!Off") ;;
@@ -9137,15 +9696,14 @@ read_ika_options_form() {
   local setting
 
   IFS='|' read -r -a words <<<"${output}"
-  for setting in compute.cpus compute.memory_mb console.dpi console.tv_dpi console.refresh_rate_hz; do
-    value="${words[i]%%[.,]*}"
-    [[ "${value}" =~ ^[1-9][0-9]*$ ]] || value="auto"
-    read_values_ref[${setting}]="$(ika_option_value "${setting}" "${value}")"
-    i=$((i + 1))
-  done
-  # The GPU mode choice, read only when it changed, so that a gfxstream_vulkan
-  # of ika.ini's stays as it is otherwise
-  choice="${words[5]:-}"
+  # "GPU Hardware" first
+  choice="${words[0]:-}"
+  if [[ -n "${choice}" && -n "${IKA_OPTIONS_GPU_IDS[${choice}]+set}" ]]; then
+    read_values_ref[gpu.use_gpu]="${IKA_OPTIONS_GPU_IDS[${choice}]}"
+  fi
+  # Then the GPU mode choice, read only when it changed, so that a
+  # gfxstream_vulkan of ika.ini's stays as it is otherwise
+  choice="${words[1]:-}"
   if [[ -n "${choice}" && "${choice}" != "$(ika_gpu_choice read_values_ref)" ]]; then
     case "${choice}" in
       "${IKA_OPTIONS_GLES_ONLY}")
@@ -9165,15 +9723,22 @@ read_ika_options_form() {
         ;;
     esac
   fi
-  read_values_ref[gpu.hw_video_decode]="$(ika_option_value gpu.hw_video_decode "${words[6]:-}")"
-  read_values_ref[lowcpu.mode]="$(ika_option_value lowcpu.mode "${words[7]:-}")"
+  i=2
+  for setting in compute.cpus compute.memory_mb console.dpi console.tv_dpi console.refresh_rate_hz; do
+    value="${words[i]%%[.,]*}"
+    [[ "${value}" =~ ^[1-9][0-9]*$ ]] || value="auto"
+    read_values_ref[${setting}]="$(ika_option_value "${setting}" "${value}")"
+    i=$((i + 1))
+  done
+  read_values_ref[gpu.hw_video_decode]="$(ika_option_value gpu.hw_video_decode "${words[7]:-}")"
+  read_values_ref[lowcpu.mode]="$(ika_option_value lowcpu.mode "${words[8]:-}")"
   # Ticked, the camera is the first usable one, unless ika.ini names one
-  if [[ "${words[9]:-}" != "TRUE" ]]; then
+  if [[ "${words[10]:-}" != "TRUE" ]]; then
     read_values_ref[camera.device]="off"
   elif [[ "${read_values_ref[camera.device]}" == "off" ]]; then
     read_values_ref[camera.device]="auto"
   fi
-  if [[ "${words[10]:-}" == "TRUE" ]]; then
+  if [[ "${words[11]:-}" == "TRUE" ]]; then
     read_values_ref[console.tv_keyboard_gamepad]="true"
   else
     read_values_ref[console.tv_keyboard_gamepad]="false"
@@ -9242,7 +9807,8 @@ reset_ika_settings_to_default() {
 
 # ika options, and "Startup options" on Ika's launcher: Ika's window, as an
 # app's ("Startup Options · Ika", the same size and buttons), with two tabs:
-# Startup Options, the common settings of ika.ini (the vCPUs and memory, the
+# Startup Options, the common settings of ika.ini (the GPU Ika uses, the
+# vCPUs and memory, the
 # densities, the refresh rate, the GPU mode, hardware video decoding, low-CPU
 # mode, the camera, and the keyboard gamepad in TV mode), and Gamepad
 # Emulation,
@@ -11671,6 +12237,7 @@ start_cvd() {
   fi
 
   notify_progress "Starting Android, one moment..."
+  record_gpu_in_use
   # A mount left from a VM that stopped by itself points at a device that is
   # gone.
   unmount_android_storage
@@ -12415,7 +12982,7 @@ main() {
 
   ika_ini_warn_unknown
   setup_wsl_gpu_env
-  setup_discrete_gpu_env
+  setup_gpu_selection "${command}"
 
   case "${command}" in
     __launch-in-vcpu-scope)
