@@ -241,19 +241,38 @@ printf '%s\r\n' "\${SHIFT_KEYS:-0}"
 printf 'asked\n' >>"${T}/powershell.calls"
 STUB
 chmod +x "${T}/bin/powershell.exe"
+# main asks Windows in the background, and open_app_window reads the answer:
+# before the guest queries when Ika does not run yet (VM_RUNNING false), else
+# after them, so that Shift opens the Startup Options without starting Ika
+# first ("Ika started" is ensure_guest_ready starting it). The real
+# open_app_window runs, up to where it would start the app
+# (apply_saved_app_options).
 launched_with() (
   IKA_ON_WSLG="$1"
   export SHIFT_KEYS="$2"
   export IKA_WSL_GPU_FIX=0
   edit_app_settings() { printf 'options %s %s\n' "$1" "$2"; }
-  open_app_window() { printf 'window %s\n' "$1"; }
+  release_app_settings_lock() { :; }
+  require_executable() { :; }
+  has_live_cvd_processes() { [[ "${VM_RUNNING:-false}" == true ]]; }
+  wayland_info_output() { :; }
+  ensure_guest_ready() { [[ "${VM_RUNNING:-false}" == true ]] || printf 'Ika started\n'; }
+  resolve_adb_serial() { printf '127.0.0.1:6520\n'; }
+  app_is_installed() { return 0; }
+  app_display_name() { printf 'Some App\n'; }
+  validate_app_package() { :; }
+  apply_saved_app_options() { printf 'window %s\n' "${package}"; exit 0; }
   main app com.example.app </dev/null 2>/dev/null
 )
 expect_equal "$(launched_with true 65536)" "options com.example.app 1" "Shift held at a launch from Windows"
-expect_equal "$(launched_with true 0)" "window com.example.app" "a launch from Windows without Shift"
-expect_equal "$(launched_with true 131072)" "window com.example.app" "Ctrl held at a launch from Windows"
+expect_equal "$(VM_RUNNING=true launched_with true 65536)" "options com.example.app 1" \
+  "Shift held at a launch from Windows while Ika runs"
+expect_equal "$(launched_with true 0)" $'Ika started\nwindow com.example.app' "a launch from Windows without Shift"
+expect_equal "$(VM_RUNNING=true launched_with true 0)" "window com.example.app" \
+  "a launch from Windows without Shift while Ika runs"
+expect_equal "$(VM_RUNNING=true launched_with true 131072)" "window com.example.app" "Ctrl held at a launch from Windows"
 rm -f "${T}/powershell.calls"
-expect_equal "$(launched_with false 65536)" "window com.example.app" "Shift held outside WSLg"
+expect_equal "$(VM_RUNNING=true launched_with false 65536)" "window com.example.app" "Shift held outside WSLg"
 [[ ! -e "${T}/powershell.calls" ]] || fail "PowerShell was asked outside WSLg"
 # The same for Ika itself: 'ika start' from the Start menu opens Ika's
 started_with() (
