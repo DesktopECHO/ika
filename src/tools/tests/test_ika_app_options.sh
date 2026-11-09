@@ -1,7 +1,8 @@
 #!/usr/bin/bash
 
 # App start options ("Startup options" on a launcher, ika app --options):
-# the window ticks the saved options and saves the ticked ones, yad draws it,
+# the window ticks the saved options and saves the ticked ones (tested in
+# test_ika_app_settings_window.sh),
 # ~/ika/app-options.ini keeps one section per app, and
 # 'ika app' adds the saved options to those it is given.
 
@@ -17,21 +18,6 @@ export CVD_PRODUCT_OUT="${T}/product"
 export XDG_DATA_HOME="${T}/data"
 mkdir -p "${HOME}" "${CVD_PRODUCT_OUT}" "${T}/bin"
 
-# A yad stub: it records its arguments, one per line, and GTK_THEME, and
-# prints DIALOG_OUTPUT, exiting with DIALOG_STATUS: 2 for "Apply settings", 0
-# for "Apply and start", 1 for Cancel.
-cat >"${T}/bin/yad" <<STUB
-#!/usr/bin/env bash
-if [[ "\$1" == "--help-all" ]]; then
-  printf '%s\n' "\${YAD_HELP:-  --css=STRING}"
-  exit 0
-fi
-printf '%s\n' "\$@" > "${T}/yad.args"
-printf '%s\n' "\${GTK_THEME:-}" > "${T}/yad.theme"
-printf '%s' "\${DIALOG_OUTPUT:-}"
-exit "\${DIALOG_STATUS:-2}"
-STUB
-chmod +x "${T}/bin/yad"
 export PATH="${T}/bin:${PATH}"
 
 source "${ROOT}/tools/ika"
@@ -255,19 +241,38 @@ printf '%s\r\n' "\${SHIFT_KEYS:-0}"
 printf 'asked\n' >>"${T}/powershell.calls"
 STUB
 chmod +x "${T}/bin/powershell.exe"
+# main asks Windows in the background, and open_app_window reads the answer:
+# before the guest queries when Ika does not run yet (VM_RUNNING false), else
+# after them, so that Shift opens the Startup Options without starting Ika
+# first ("Ika started" is ensure_guest_ready starting it). The real
+# open_app_window runs, up to where it would start the app
+# (apply_saved_app_options).
 launched_with() (
   IKA_ON_WSLG="$1"
   export SHIFT_KEYS="$2"
   export IKA_WSL_GPU_FIX=0
   edit_app_settings() { printf 'options %s %s\n' "$1" "$2"; }
-  open_app_window() { printf 'window %s\n' "$1"; }
+  release_app_settings_lock() { :; }
+  require_executable() { :; }
+  has_live_cvd_processes() { [[ "${VM_RUNNING:-false}" == true ]]; }
+  wayland_info_output() { :; }
+  ensure_guest_ready() { [[ "${VM_RUNNING:-false}" == true ]] || printf 'Ika started\n'; }
+  resolve_adb_serial() { printf '127.0.0.1:6520\n'; }
+  app_is_installed() { return 0; }
+  app_display_name() { printf 'Some App\n'; }
+  validate_app_package() { :; }
+  apply_saved_app_options() { printf 'window %s\n' "${package}"; exit 0; }
   main app com.example.app </dev/null 2>/dev/null
 )
 expect_equal "$(launched_with true 65536)" "options com.example.app 1" "Shift held at a launch from Windows"
-expect_equal "$(launched_with true 0)" "window com.example.app" "a launch from Windows without Shift"
-expect_equal "$(launched_with true 131072)" "window com.example.app" "Ctrl held at a launch from Windows"
+expect_equal "$(VM_RUNNING=true launched_with true 65536)" "options com.example.app 1" \
+  "Shift held at a launch from Windows while Ika runs"
+expect_equal "$(launched_with true 0)" $'Ika started\nwindow com.example.app' "a launch from Windows without Shift"
+expect_equal "$(VM_RUNNING=true launched_with true 0)" "window com.example.app" \
+  "a launch from Windows without Shift while Ika runs"
+expect_equal "$(VM_RUNNING=true launched_with true 131072)" "window com.example.app" "Ctrl held at a launch from Windows"
 rm -f "${T}/powershell.calls"
-expect_equal "$(launched_with false 65536)" "window com.example.app" "Shift held outside WSLg"
+expect_equal "$(VM_RUNNING=true launched_with false 65536)" "window com.example.app" "Shift held outside WSLg"
 [[ ! -e "${T}/powershell.calls" ]] || fail "PowerShell was asked outside WSLg"
 # The same for Ika itself: 'ika start' from the Start menu opens Ika's
 started_with() (
@@ -286,125 +291,6 @@ expect_equal "$(started_with false 65536)" "ika started" "Shift held at Ika's st
 rm -f "${T}/bin/powershell.exe"
 echo "ok: Shift at a launch from Windows opens the Startup Options"
 
-# yad's form output for the options given ticked, after dpi=N when given: the
-# density as yad prints it, the two labels' empty values, then TRUE or FALSE
-# for each checkbox, in their order, then the blank label's.
-form_output() {
-  local option
-  local dpi="0.000000"
-  if [[ "${1:-}" == dpi=* ]]; then
-    dpi="${1#dpi=}"
-    shift
-  fi
-  local output="${dpi}|||"
-
-  for option in fullscreen keyboard mouse gamepad gamekb touch; do
-    if [[ " $* " == *" ${option} "* ]]; then
-      output+="TRUE|"
-    else
-      output+="FALSE|"
-    fi
-  done
-  printf '%s\n' "${output}|"
-}
-
-# open_app_window as "Apply and start" calls it.
-open_app_window() { printf 'started %s %s\n' "$1" "$2" >>"${T}/started"; }
-host_color_scheme() { :; }
-
-# The window: "Startup Options" and the app in its title bar, the display
-# density (0 for auto), then the options, ticked as saved, and "Apply
-# settings" saves the ticked ones in their usual order.
-save_app_options com.example.game touch
-: >"${T}/started"
-DIALOG_OUTPUT="$(form_output touch gamekb fullscreen keyboard)" edit_app_options com.example.game >/dev/null
-dialog_args="$(<"${T}/yad.args")"
-expect_contains "${dialog_args}" $'--form\n--title=Startup Options · Some Game\n' "the title names the window and the app"
-expect_contains "${dialog_args}" "--name=${APP_SETTINGS_WINDOW_CLASS}"$'\n'"--class=${APP_SETTINGS_WINDOW_CLASS}"$'\n--form\n' "a window class of its own, for the Ika icon"
-[[ "${dialog_args}" != *"--text="* ]] || fail "the window has a heading again"
-expect_contains "${dialog_args}" $'\n--field=Display density, 0=Auto  :NUM\n0!0..999!8\n--field=<span font_size=\'8pt\'> </span>:LBL\n\n--field=Start Some Game with:\n<span font_size=\'5pt\'> </span>:LBL\n\n' \
-  "the density first, at 0 for auto, then the line above the checkboxes, with a half line of space under it"
-expect_equal "$(<"${CVD_TMP_DIR}/yad-css/density-window.css")" "spinbutton { margin-right: ${APP_DPI_FIELD_MARGIN_PX}px; }" \
-  "the density's margin"
-expect_contains "${dialog_args}" $'\n--css='"${CVD_TMP_DIR}"$'/yad-css/density-window.css\n' \
-  "the density's box is kept narrow"
-expect_contains "${dialog_args}" $'--field=  Fullscreen mode (F11, Cmd+F or Left-Alt+F exits):CHK\nFALSE\n--field=  Send the keyboard straight to Android (many games need this):CHK\nFALSE\n--field=  Send the mouse straight to Android (Cmd or Left-Alt releases pointer):CHK\nFALSE\n--field=  Use gamepads, including ones plugged in later:CHK\nFALSE\n--field=  Keyboard as a gamepad (keys on the Gamepad Emulation tab):CHK\nFALSE\n--field=  Mouse as touch: clicks tap, drags swipe:CHK\nTRUE\n--field=<span font_size=\'8pt\'> </span>:LBL\n\n' \
-  "the options, saved touch ticked, then space above the buttons"
-expect_contains "${dialog_args}" $'--button=Apply settings:2\n--button=        Apply and start        :0\n--button=Cancel:1' \
-  "Apply settings, Apply and start and Cancel, in that order"
-[[ "${dialog_args}" != *$'\n--undecorated\n'* ]] || fail "the window has no title bar"
-expect_equal "$(saved_app_options com.example.game)" "fullscreen keyboard gamekb touch" "the ticked options are saved in order"
-expect_equal "$(<"${T}/started")" "" "Apply settings does not start the app"
-DIALOG_OUTPUT="$(form_output)" edit_app_options com.example.game >/dev/null
-expect_equal "$(saved_app_options com.example.game)" "" "nothing ticked leaves no options"
-app_options_saved com.example.game || fail "an app with nothing ticked lost its section"
-
-# "Apply and start" saves the ticked options and starts the app with them.
-DIALOG_OUTPUT="$(form_output fullscreen mouse)" DIALOG_STATUS=0 edit_app_options com.example.app >/dev/null
-expect_equal "$(saved_app_options com.example.app)" "fullscreen mouse" "Apply and start saves the options"
-expect_equal "$(<"${T}/started")" "started com.example.app false" "Apply and start starts the app"
-
-# Cancel and closing the window keep the saved options; a window that fails
-# to open is an error.
-: >"${T}/started"
-output="$(DIALOG_STATUS=1 DIALOG_OUTPUT="$(form_output touch)" edit_app_options com.example.app)"
-expect_equal "${output}" "Start options of Some App left as they were" "cancel is reported"
-expect_equal "$(saved_app_options com.example.app)" "fullscreen mouse" "cancel keeps the options"
-DIALOG_STATUS=252 edit_app_options com.example.app >/dev/null
-expect_equal "$(saved_app_options com.example.app)" "fullscreen mouse" "closing the window keeps the options"
-if (DIALOG_STATUS=70 edit_app_options com.example.app) >/dev/null 2>&1; then
-  fail "a window that failed to open was not an error"
-fi
-expect_equal "$(saved_app_options com.example.app)" "fullscreen mouse" "a failed window keeps the options"
-expect_equal "$(<"${T}/started")" "" "no app starts without Apply and start"
-
-# The density: shown as saved, 1 to 95 saved as 96, 0 saved as auto.
-DIALOG_OUTPUT="$(form_output dpi=50.000000 touch)" edit_app_options com.example.app >/dev/null
-expect_equal "$(saved_app_dpi com.example.app):$(saved_app_options com.example.app)" "96:touch" "a density under 96 is saved as 96"
-output="$(DIALOG_OUTPUT="$(form_output dpi=96.000000 touch)" edit_app_options com.example.app)"
-expect_equal "${output}" "Some App starts with touch at 96 DPI" "the density is reported"
-expect_contains "$(<"${T}/yad.args")" $'\n--field=Display density, 0=Auto  :NUM\n96!0..999!8\n' "the saved density is shown"
-DIALOG_OUTPUT="$(form_output dpi=0.000000 fullscreen mouse)" edit_app_options com.example.app >/dev/null
-expect_equal "$(saved_app_dpi com.example.app):$(saved_app_options com.example.app)" ":fullscreen mouse" "0 is auto"
-
-# A label is looked up among the apps.
-DIALOG_OUTPUT="$(form_output touch)" edit_app_options "some app" >/dev/null
-expect_equal "$(saved_app_options com.example.app)" "touch" "the window opened by label"
-
-# yad reads the labels as markup with backslash escapes, so a label is
-# escaped there, and the title as plain text; an app without a known label is
-# named by its package.
-printf 'Tom & <b>Jerry</b> C:\\new\tcom.example.tricky\n' >> "${APP_LIST_CACHE}"
-DIALOG_OUTPUT="$(form_output)" edit_app_options com.example.tricky >/dev/null
-expect_contains "$(<"${T}/yad.args")" $'\n--title=Startup Options · Tom & <b>Jerry</b> C:\\new\n' \
-  "a title with markup characters and a backslash"
-expect_contains "$(<"${T}/yad.args")" $'\n--field=Start Tom &amp; &lt;b&gt;Jerry&lt;/b&gt; C:\\\\new with:\n' \
-  "a label with markup characters and a backslash"
-DIALOG_OUTPUT="$(form_output)" edit_app_options com.example.unknown >/dev/null
-expect_contains "$(<"${T}/yad.args")" $'\n--title=Startup Options · com.example.unknown\n' "an app without a label"
-
-# The window follows a dark desktop, unless GTK_THEME is set.
-expect_equal "$(<"${T}/yad.theme")" "" "a light desktop keeps the GTK theme"
-host_color_scheme() { echo dark; }
-DIALOG_OUTPUT="$(form_output)" edit_app_options com.example.app >/dev/null
-expect_equal "$(<"${T}/yad.theme")" "Adwaita:dark" "a dark desktop"
-DIALOG_OUTPUT="$(form_output)" GTK_THEME=Breeze edit_app_options com.example.app >/dev/null
-expect_equal "$(<"${T}/yad.theme")" "Breeze" "GTK_THEME wins"
-host_color_scheme() { :; }
-echo "ok: yad draws the window; Apply settings saves, Apply and start also starts the app"
-
-# A host without yad is told so.
-command() {
-  [[ "$*" != "-v yad" ]] || return 1
-  builtin command "$@"
-}
-: >"${T}/log"
-if (edit_app_options com.example.game) >/dev/null 2>&1; then
-  fail "the window opened without yad"
-fi
-expect_contains "$(<"${T}/log")" "the start options window needs yad" "a missing yad is reported"
-unset -f command
-echo "ok: a host without yad is told so"
 
 # The launcher offers the window, for games and other apps alike.
 apps_dir="$(app_menu_data_dir)/applications"
