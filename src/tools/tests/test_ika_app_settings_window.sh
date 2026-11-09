@@ -412,6 +412,9 @@ expect_contains "$(tr -d ' \n' <"${T}/parsed")" '"label":"Mode:x","type":"CB","v
 real_ika_window no_env --parse-only --yellow-choice=a --yellow-choice="b c" --tab=One \
   --field="Mode:CB" "a!^b c" >"${T}/parsed"
 expect_contains "$(tr -d '\n' <"${T}/parsed" | tr -s ' ')" '"yellow_choices": [ "a", "b c" ]' "the yellow choices"
+real_ika_window no_env --parse-only --same-width="Mode  !Size" --same-width="Name, 0=x" --tab=One \
+  --field="Mode  :CB" "a!^b" --field="Size:NUM" "1" >"${T}/parsed"
+expect_contains "$(tr -d '\n' <"${T}/parsed" | tr -s ' ')" '"same_width": [ [ "Mode", "Size" ], [ "Name, 0=x" ] ]' "the groups of fields of one width"
 if real_ika_window no_env --print-defaults --tab=One --bogus >/dev/null 2>&1; then
   fail "an unknown argument was taken"
 fi

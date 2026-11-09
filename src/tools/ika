@@ -8700,6 +8700,9 @@ import sys
 # The window looks again every half second, and the button is as wide as the
 # longer of its two labels.
 # --yellow-choice=TEXT shows the CB choice TEXT in yellow, in every CB.
+# --same-width=LABEL!LABEL... makes the fields of those labels (spaces around
+# each aside) as wide as each other, the widest of them; each --same-width is
+# a group of its own.
 # --parse-only prints what was parsed, as JSON, --print-labels the buttons'
 # labels as the window would show them now, one a line, and --print-defaults
 # writes the outputs as the window would show them, then exits with
@@ -8710,7 +8713,7 @@ def parse(argv):
     window = {"title": "", "icon": "", "app_id": "", "active_tab": 1,
               "buttons": [], "tabs": [], "mode": "", "test_status": 0,
               "running_labels": {}, "running_pids": [], "running_files": [],
-              "yellow_choices": []}
+              "yellow_choices": [], "same_width": []}
     tab = None
     i = 0
     while i < len(argv):
@@ -8750,6 +8753,8 @@ def parse(argv):
             window["running_files"].append(value)
         elif name == "--yellow-choice":
             window["yellow_choices"].append(value)
+        elif name == "--same-width":
+            window["same_width"].append([item.strip() for item in value.split("!")])
         elif name == "--active-tab":
             window["active_tab"] = int(value or 1)
         elif name == "--test-status":
@@ -9071,6 +9076,8 @@ def run(window):
         "key-press-event",
         lambda _, event: (finish(252) or True) if event.keyval == Gdk.KEY_Escape else False)
 
+    same_width = [Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+                  for _ in window["same_width"]]
     notebook = Gtk.Notebook()
     if len(window["tabs"]) < 2:
         notebook.set_show_tabs(False)
@@ -9156,6 +9163,9 @@ def run(window):
                 widget.set_width_chars(18)
                 widget.set_activates_default(True)
                 tab_readers.append(lambda w=widget: w.get_text())
+            for group, labels in zip(same_width, window["same_width"]):
+                if label.strip() in labels:
+                    group.add_widget(widget)
             if stretch or ftype not in ("NUM", "CB"):
                 widget.set_hexpand(True)
             else:
@@ -9440,6 +9450,11 @@ IKA_OPTIONS_AUTO="Auto"
 IKA_OPTIONS_GLES_ONLY="gfxstream, OpenGL ES"
 IKA_OPTIONS_GPU_CHOICES=("${IKA_OPTIONS_AUTO}" gfxstream_guest_angle gfxstream
   "${IKA_OPTIONS_GLES_ONLY}" venus guest_swiftshader guest_lavapipe)
+# The number boxes and short choices of the Startup Options, which ika's
+# window makes as wide as each other
+IKA_OPTIONS_EVEN_FIELDS=("CPUs, 0=Auto" "RAM, MB, 0=Auto" "Desktop display density, 0=Auto"
+  "TV display density, 0=Auto" "Refresh rate, Hz, 0=Auto" "Hardware video decoding"
+  "Low-CPU mode")
 # The GPU modes that render with the CPU, which ika's window shows in yellow
 IKA_OPTIONS_SOFTWARE_CHOICES=(guest_swiftshader guest_lavapipe)
 # In the Startup Options window of its own (yad, without ika's window) the
@@ -9689,7 +9704,7 @@ ika_options_form_fields() {
   done
 
   ika_fields_ref=(--field="GPU Hardware  :CB" "${gpu_choices%!}")
-  ika_fields_ref+=(--field="GPU mode  :CB" "${choices%!}")
+  ika_fields_ref+=(--field="GPU Mode  :CB" "${choices%!}")
   ika_fields_ref+=(--field="CPUs, 0=Auto  :NUM" "$(ika_option_number form_values_ref compute.cpus)!0..${host_cpus}!1")
   ika_fields_ref+=(--field="RAM, MB, 0=Auto  :NUM" "$(ika_option_number form_values_ref compute.memory_mb)!0..${host_mb}!1024")
   ika_fields_ref+=(--field="Desktop display density, 0=Auto  :NUM" "$(ika_option_number form_values_ref console.dpi)!0..999!8")
@@ -9907,9 +9922,11 @@ edit_ika_settings() {
       ika_window yad_env --title="Startup Options · Ika" \
         --icon="${IKA_MENU_ICON}" --app-id="${APP_SETTINGS_WINDOW_CLASS}" \
         "${IKA_OPTIONS_SOFTWARE_CHOICES[@]/#/--yellow-choice=}" \
+        --same-width="GPU Hardware!GPU Mode" \
+        --same-width="$(IFS='!'; printf '%s' "${IKA_OPTIONS_EVEN_FIELDS[*]}")" \
         --active-tab=1 --button="Reset to default:4" \
         --button="Apply settings:2" --button="Apply and restart:0" --button="Cancel:1" \
-        --tab="Startup Options" --output="${tab_dir}/1" \
+        --tab="Startup Options" --output="${tab_dir}/1" --align=right \
         --border="${APP_OPTIONS_TAB_BORDER_PX}" "${fields1[@]}" \
         --tab="Gamepad Emulation" --output="${tab_dir}/2" --compact --columns=2 \
         --border="${CONTROLLER_MAPPING_TAB_BORDER_PX}" --align=right \
