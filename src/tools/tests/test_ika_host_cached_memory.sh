@@ -5,6 +5,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+T="$(mktemp -d)"
+trap 'rm -rf -- "${T}"' EXIT
+export HOME="${T}/home"
+export CVD_HOME_DIR="${T}/ika"
+mkdir -p "${HOME}"
 source "${ROOT}/tools/ika"
 
 fail() {
@@ -39,9 +44,6 @@ assert_arg_omits() {
       fail "arguments unexpectedly contain '${unexpected}': $*"
   done
 }
-
-T="$(mktemp -d)"
-trap 'rm -rf -- "${T}"' EXIT
 
 log() { :; }
 
