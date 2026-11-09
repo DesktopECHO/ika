@@ -64,7 +64,7 @@ virtual machine, with its apps in windows of their own.
    # Debian, Ubuntu
    sudo apt install ./ika-base_*.deb ./ika-lineageos_*.deb
    # Arch Linux
-   sudo pacman -U ./ika-base-*.pkg.tar.zst ./ika-lineageos-*.pkg.tar.zst
+   sudo pacman -U ./ika-base-*.pkg.tar.xz ./ika-lineageos-*.pkg.tar.xz
    ```
 
 3. Reboot after the first install. The packages add you to the `kvm`,
