@@ -857,7 +857,9 @@ write_vcpu_config() {
         policy="$(readlink -f "${path}/cpufreq")"
         [[ -n "${domains[${policy}]:-}" ]] || domains["${policy}"]="${#domains[@]}"
         domain="${domains[${policy}]}"
-        freqs="$(tr ' ' '\n' < "${path}/cpufreq/scaling_available_frequencies" | grep . | sort -n | paste -sd,)"
+        # Boost frequencies too: crosvm throttles a vCPU whose top frequency
+        # is below cpuinfo_max_freq, and its throttle thread can panic.
+        freqs="$({ cat "${path}/cpufreq/scaling_available_frequencies" "${path}/cpufreq/scaling_boost_frequencies" 2>/dev/null || true; } | tr ' ' '\n' | grep . | sort -nu | paste -sd,)"
         # crosvm's capacity is per MHz (capacity-dmips-mhz), which the guest
         # scales by the frequencies: take them out of the kernel's capacity.
         capacity="$(( ($(<"${path}/cpu_capacity") * max_khz + khz / 2) / khz ))"
