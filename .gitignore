@@ -59,3 +59,5 @@ src/frontend/src/operator/webui/src/environments/version.ts
 /src/base/_build_madbfs/
 /src/base/_build_wsl/
 /src/base/_build_mesa/
+/src/archbuild
+/src/tools/mesa/build
