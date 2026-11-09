@@ -9010,7 +9010,26 @@ require_ika_window() {
 ika_window() {
   local -n ika_window_env_ref="$1"
   shift
+  wait_for_wslg_client
   ika_window_py | env "${ika_window_env_ref[@]}" python3 -I - "$@"
+}
+
+# On WSLg, a window made before Windows' Remote Desktop client has connected to
+# WSLg's compositor (weston.log: "CreateWndow(): rdp_peer is not initalized")
+# is shown once it connects, but takes no input. WSL started by the window's
+# own launch, as the Startup Options from the Start menu after wsl --shutdown,
+# opened it a second before the client: waits for the client's handshake in
+# weston.log, which a WSL start begins anew, up to 30 seconds.
+wait_for_wslg_client() {
+  local weston_log="${IKA_WSLG_WESTON_LOG:-/mnt/wslg/weston.log}"
+  local attempt
+
+  [[ "${IKA_ON_WSLG}" == true && -r "${weston_log}" ]] || return 0
+  for (( attempt = 0; attempt < 150; ++attempt )); do
+    grep -q 'Client HandShake' "${weston_log}" 2>/dev/null && return 0
+    sleep 0.2
+  done
+  log "WSLg's Remote Desktop client did not connect within 30 seconds; opening the window anyway"
 }
 
 # "Startup options" on a launcher (ika app --options NAME: TAB 1) and ika
