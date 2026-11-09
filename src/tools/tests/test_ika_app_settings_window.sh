@@ -409,6 +409,9 @@ expect_equal "$(<"${T}/one")" "240|b c|TRUE||Q Wheel_Up|Right stick|" "the first
 expect_equal "$(<"${T}/two")" "FALSE|" "the second tab's"
 real_ika_window no_env --parse-only --tab=One --field="Mode: x:CB" "a!^b" >"${T}/parsed"
 expect_contains "$(tr -d ' \n' <"${T}/parsed")" '"label":"Mode:x","type":"CB","value":"a!^b"' "split at the last colon"
+real_ika_window no_env --parse-only --yellow-choice=a --yellow-choice="b c" --tab=One \
+  --field="Mode:CB" "a!^b c" >"${T}/parsed"
+expect_contains "$(tr -d '\n' <"${T}/parsed" | tr -s ' ')" '"yellow_choices": [ "a", "b c" ]' "the yellow choices"
 if real_ika_window no_env --print-defaults --tab=One --bogus >/dev/null 2>&1; then
   fail "an unknown argument was taken"
 fi
