@@ -3,6 +3,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+T="$(mktemp -d)"
+trap 'rm -rf "${T}"' EXIT
+export HOME="${T}/home"
+export CVD_HOME_DIR="${T}/ika"
+mkdir -p "${HOME}"
 source "${ROOT}/tools/ika"
 
 fail() {
@@ -67,9 +72,9 @@ assert_failure() {
   fi
 }
 
-fake_vulkaninfo_dir="$(mktemp -d)"
+fake_vulkaninfo_dir="${T}/bin"
 fake_vulkaninfo="${fake_vulkaninfo_dir}/vulkaninfo"
-trap 'rm -f -- "${fake_vulkaninfo}"; rmdir -- "${fake_vulkaninfo_dir}"' EXIT
+mkdir -p "${fake_vulkaninfo_dir}"
 cat >"${fake_vulkaninfo}" <<'EOF'
 #!/usr/bin/bash
 [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]] || exit 9
