@@ -7,8 +7,8 @@
 # and the display density, and the controller mapping only when it was edited
 # or the app has one of its own; an edited mapping ticks the keyboard as a
 # gamepad unless the window unticked it. "Reset to default" brings the window
-# back on the Startup Options tab. Without python3's GTK bindings, yad's
-# windows of their own open instead.
+# back on the Startup Options tab, once its confirmation (ika's window too)
+# says so. Without python3's GTK bindings ika says what to install.
 
 set -euo pipefail
 
@@ -24,41 +24,13 @@ mkdir -p "${HOME}" "${CVD_PRODUCT_OUT}" "${T}/bin"
 : >"${T}/fake-supervisors"
 unset GTK_THEME
 
-# A yad stub, which has --css unless YAD_HELP says otherwise. A form of its
-# own records its arguments, and GTK_THEME and XDG_DATA_DIRS, in
-# yad.form.args and prints DIALOG_FORM; the confirmation records its
-# arguments in yad.confirm.args. Both exit with the next of DIALOG_STATUS,
-# counted in yad.calls with ika's windows; the last one stays.
-cat >"${T}/bin/yad" <<STUB
-#!/usr/bin/bash
-if [[ "\$1" == "--help-all" ]]; then
-  printf '%s\n' "\${YAD_HELP:-  --css=STRING}"
-  exit 0
-fi
-args=" \$* "
-echo >>"${T}/yad.calls"
-read -r -a statuses <<<"\${DIALOG_STATUS:-2}"
-n="\$(wc -l <"${T}/yad.calls")"
-if (( n > \${#statuses[@]} )); then
-  n=\${#statuses[@]}
-fi
-if [[ "\${args}" == *" --form "* ]]; then
-  { printf '%s\n' "\$@"; printf 'GTK_THEME=%s\nXDG_DATA_DIRS=%s\n' "\${GTK_THEME:-}" "\${XDG_DATA_DIRS:-}"; } > "${T}/yad.form.args"
-  printf '%s' "\${DIALOG_FORM:-}"
-else
-  printf '%s\n' "\$@" > "${T}/yad.confirm.args"
-fi
-exit "\${statuses[n - 1]}"
-STUB
-chmod +x "${T}/bin/yad"
-export PATH="${T}/bin:${PATH}"
-
 source "${ROOT}/tools/ika"
 
 # ika's window, stubbed: it records its own arguments, and its environment,
 # in window.args and each tab's (from its --tab on) in window.tabN.args,
 # writes DIALOG_TABN to that tab's --output and exits with the next of
-# DIALOG_STATUS, counted in yad.calls. With WINDOW_DEFAULTS set, the real
+# DIALOG_STATUS, counted in window.calls; a confirmation's arguments go in
+# window.confirm.args. With WINDOW_DEFAULTS set, the real
 # program writes the outputs instead, as the window shows them untouched.
 eval "real_$(declare -f ika_window)"
 ika_window() {
@@ -68,7 +40,13 @@ ika_window() {
   local tab=0
   local -a statuses=()
 
-  : >"${T}/window.args"
+  # The confirmation, undecorated, is recorded apart
+  if [[ " $* " == *" --undecorated "* ]]; then
+    printf '%s\n' "$@" >"${T}/window.confirm.args"
+    set --
+  else
+    : >"${T}/window.args"
+  fi
   for arg in "$@"; do
     if [[ "${arg}" == --tab=* ]]; then
       tab=$((tab + 1))
@@ -84,10 +62,10 @@ ika_window() {
       printf '%s' "${!name:-}" >"${arg#--output=}"
     fi
   done
-  printf 'ENV=%s\n' "${stub_env_ref[*]}" >>"${T}/window.args"
-  echo >>"${T}/yad.calls"
+  [[ $# -eq 0 ]] || printf 'ENV=%s\n' "${stub_env_ref[*]}" >>"${T}/window.args"
+  echo >>"${T}/window.calls"
   read -r -a statuses <<<"${DIALOG_STATUS:-2}"
-  n="$(wc -l <"${T}/yad.calls")"
+  n="$(wc -l <"${T}/window.calls")"
   (( n <= ${#statuses[@]} )) || n=${#statuses[@]}
   if [[ -n "${WINDOW_DEFAULTS:-}" ]]; then
     real_ika_window stub_env_ref --print-defaults --test-status="${statuses[n - 1]}" "$@"
@@ -188,10 +166,10 @@ mapping_output() {
 # does with its process
 reset_calls() {
   release_app_settings_lock
-  : >"${T}/yad.calls"
+  : >"${T}/window.calls"
   : >"${T}/respond"
   : >"${T}/started"
-  rm -f "${T}"/yad.*.args "${T}"/window*.args
+  rm -f "${T}"/window*.args
 }
 
 # A game's window: the two tabs, on the first, under "Startup Options · Some
@@ -220,7 +198,7 @@ tab1="$(<"${T}/window.tab1.args")"
 tab2="$(<"${T}/window.tab2.args")"
 expect_contains "${tab1}" $'--tab=Startup Options\n--output=' "the first tab"
 expect_contains "${tab2}" $'--tab=Gamepad Emulation\n--output=' "the second tab"
-[[ "${window}${tab1}${tab2}" != *"--css="* ]] || fail "yad's CSS for ika's window"
+[[ "${window}${tab1}${tab2}" != *"--css="* ]] || fail "CSS options for ika's window"
 expect_contains "${tab1}" $'\n--border='"${APP_OPTIONS_TAB_BORDER_PX}"$'\n' "the tab's fields start in from its frame"
 expect_contains "${tab1}" $'\n--field=Display density, 0=Auto  :NUM\n0!0..999!8\n' "the density, auto"
 expect_contains "${tab1}" $'\n--field=  Fullscreen mode (F11, Cmd+F or Left-Alt+F exits):CHK\nTRUE\n' "the saved options"
@@ -271,9 +249,11 @@ echo "ok: a game's own mapping is kept, and an unticked option stays unticked"
 reset_calls
 DIALOG_TAB1="$(options_output dpi=0.000000 touch)" DIALOG_TAB2="$(mapping_output)" DIALOG_STATUS="4 0 2" \
   edit_app_settings com.example.game 2
-expect_equal "$(wc -l <"${T}/yad.calls")" 3 "the window, the confirmation and the window again"
-expect_contains "$(<"${T}/yad.confirm.args")" "Apply defaults to Some Game</span>" "the confirmation names the game"
-expect_contains "$(<"${T}/yad.confirm.args")" "--name=${APP_SETTINGS_WINDOW_CLASS}"$'\n'"--class=${APP_SETTINGS_WINDOW_CLASS}"$'\n' "the confirmation's class"
+expect_equal "$(wc -l <"${T}/window.calls")" 3 "the window, the confirmation and the window again"
+expect_contains "$(<"${T}/window.confirm.args")" "Apply defaults to Some Game</span>" "the confirmation names the game"
+expect_contains "$(<"${T}/window.confirm.args")" $'--title=\n--undecorated\n--icon='"${IKA_MENU_ICON}"$'\n--app-id='"${APP_SETTINGS_WINDOW_CLASS}"$'\n' \
+  "the confirmation: ika's window, without a title bar, with the windows' app ID"
+expect_contains "$(<"${T}/window.confirm.args")" $'--button=Ok:0\n--button=Cancel:1\n' "and its buttons"
 expect_contains "$(<"${T}/window.args")" $'\n--active-tab=1\n' "the window comes back on the Startup Options tab, opened on the other"
 expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=Display density, 0=Auto  :NUM\n0!0..999!8\n' "with the console's density"
 expect_contains "$(<"${T}/window.tab1.args")" $'\n--field=  Fullscreen mode (F11, Cmd+F or Left-Alt+F exits):CHK\nTRUE\n' "and a game's default start options"
@@ -384,7 +364,6 @@ reset_calls
 DIALOG_TAB1="$(options_output fullscreen touch)" DIALOG_TAB2="$(mapping_output)" \
   edit_app_settings com.example.app 1
 [[ -e "${T}/window.args" ]] || fail "an app that is not a game did not get the tabbed window"
-[[ ! -e "${T}/yad.form.args" ]] || fail "an app that is not a game got a window of its own"
 expect_equal "$(window_args)" "${game_window}" "the same window as a game's"
 expect_equal "$(saved_app_options com.example.app)" "fullscreen touch" "and it saves"
 reset_calls
@@ -415,6 +394,8 @@ expect_contains "$(tr -d '\n' <"${T}/parsed" | tr -s ' ')" '"yellow_choices": [ 
 real_ika_window no_env --parse-only --same-width="Mode  !Size" --same-width="Name, 0=x" --tab=One \
   --field="Mode  :CB" "a!^b" --field="Size:NUM" "1" >"${T}/parsed"
 expect_contains "$(tr -d '\n' <"${T}/parsed" | tr -s ' ')" '"same_width": [ [ "Mode", "Size" ], [ "Name, 0=x" ] ]' "the groups of fields of one width"
+real_ika_window no_env --parse-only --undecorated --tab=One --text="<b>x</b>" >"${T}/parsed"
+expect_contains "$(tr -d ' \n' <"${T}/parsed")" '"undecorated":true' "a window without a title bar"
 if real_ika_window no_env --print-defaults --tab=One --bogus >/dev/null 2>&1; then
   fail "an unknown argument was taken"
 fi
@@ -460,58 +441,16 @@ WINDOW_DEFAULTS=1 DIALOG_STATUS=1 edit_app_settings com.example.game 2
 expect_equal "$(saved_app_options com.example.game)" "fullscreen touch" "Cancel, through ika's program"
 echo "ok: ika's program, applied untouched"
 
-# Without python3's GTK bindings, each tab is a window of its own
-reset_calls
-IKA_WINDOW_AVAILABLE=no
-DIALOG_FORM="$(options_output fullscreen)" edit_app_settings com.example.game 1
-[[ ! -e "${T}/window.args" ]] || fail "the tabbed window opened without GTK's bindings"
-expect_contains "$(<"${T}/yad.form.args")" $'\n--title=Startup Options · Some Game\n' "the start options window of its own"
-reset_calls
-DIALOG_FORM="$(printf '%s|' W)" DIALOG_STATUS=1 edit_app_settings com.example.game 2
-expect_contains "$(<"${T}/yad.form.args")" $'\n--title=Gamepad Emulation · Some Game\n' "the gamepad window of its own"
-expect_contains "$(<"${T}/log")" "python3's GTK 3 bindings are missing" "and why"
-# A window of its own reads "Apply and restart" when the game runs as it
-# opens, and restarts it
-fake_supervisor com.example.game
-supervisor_pid="$(<"${supervisor_pid_file}")"
-reset_calls
-DIALOG_FORM="$(printf '%s|' W)" DIALOG_STATUS=1 edit_app_settings com.example.game 2
-expect_contains "$(<"${T}/yad.form.args")" $'\n--button=        Apply and restart        :0\n' "the gamepad window's label"
-reset_calls
-DIALOG_FORM="$(options_output fullscreen)" DIALOG_STATUS=0 edit_app_settings com.example.game 1
-expect_contains "$(<"${T}/yad.form.args")" $'\n--button=        Apply and restart        :0\n' "the start options window's label"
-! kill -0 "${supervisor_pid}" 2>/dev/null || fail "the game's window was left open, without GTK's bindings"
-expect_equal "$(<"${T}/started")" "started com.example.game" "and the game starts again"
-reset_calls
-DIALOG_FORM="$(options_output fullscreen)" DIALOG_STATUS=1 edit_app_settings com.example.game 1
-expect_contains "$(<"${T}/yad.form.args")" $'\n--button=        Apply and start        :0\n' "Apply and start once it does not run"
-echo "ok: without python3's GTK bindings"
 
-# A yad without --css (Debian's 0.40, whose --gtkrc styles the window alone)
-# gives such a window its CSS in a theme of its own: Adwaita, dark as the
-# desktop is, then the CSS, found ahead of the system's themes. A GTK_THEME
-# of the user's stays, with the CSS given to the window alone.
-unset YAD_CSS_OPTION
-export YAD_HELP="  --gtkrc=FILENAME"
-host_color_scheme() { printf 'dark\n'; }
+# Without python3's GTK bindings ika says what to install, and opens nothing
 reset_calls
-DIALOG_FORM="$(printf '%s|' W)" DIALOG_STATUS=1 edit_app_settings com.example.game 2
-form="$(<"${T}/yad.form.args")"
-[[ "${form}" != *"--css="* ]] || fail "--css for a yad without it"
-expect_contains "${form}" $'\nGTK_THEME=ika-gamepad:dark\n' "the gamepad's theme, dark"
-expect_contains "${form}" $'\nXDG_DATA_DIRS='"${CVD_TMP_DIR}/yad-css:" "found first"
-theme_dir="${CVD_TMP_DIR}/yad-css/themes/ika-gamepad/gtk-3.0"
-expect_equal "$(<"${theme_dir}/gtk-dark.css")" \
-  '@import url("resource:///org/gtk/libgtk/theme/Adwaita/gtk-contained-dark.css");'$'\n'"${CONTROLLER_MAPPING_FORM_CSS}" \
-  "Adwaita's dark theme, then the CSS"
-expect_contains "$(<"${theme_dir}/gtk.css")" '/Adwaita/gtk-contained.css");' "and the light one"
-reset_calls
-GTK_THEME=Breeze DIALOG_FORM="$(printf '%s|' W)" DIALOG_STATUS=1 edit_app_settings com.example.game 2
-expect_contains "$(<"${T}/yad.form.args")" $'\n--gtkrc='"${CVD_TMP_DIR}"$'/yad-css/gamepad.css\n' "the user's theme, with --gtkrc"
-expect_contains "$(<"${T}/yad.form.args")" $'\nGTK_THEME=Breeze\n' "the user's theme stays"
-unset YAD_HELP YAD_CSS_OPTION
-host_color_scheme() { :; }
-IKA_WINDOW_AVAILABLE=yes
-echo "ok: a yad without --css"
+if (IKA_WINDOW_AVAILABLE=no
+    die() { printf 'die: %s\n' "$*" >>"${T}/log"; exit 7; }
+    edit_app_settings com.example.game 1) >/dev/null 2>&1; then
+  fail "the window opened without python3's GTK bindings"
+fi
+[[ ! -e "${T}/window.args" ]] || fail "a window without python3's GTK bindings"
+expect_contains "$(<"${T}/log")" "ika's windows need python3's GTK 3 bindings (python3-gobject, or python3-gi and gir1.2-gtk-3.0); install them" "what to install"
+echo "ok: without python3's GTK bindings"
 
 printf 'PASS: tabbed app settings window\n'

@@ -159,12 +159,10 @@ Requires:       libva-utils
 Recommends:     (mesa-va-drivers-freeworld if mesa-dri-drivers)
 Recommends:     (intel-media-driver if libva-intel-media-driver)
 Requires:       xdg-utils
-# The Startup Options windows (ika app --options, ika options): python3's GTK 3
-# bindings draw them, native on Wayland and X11; yad draws its dialogs and a tab
-# as a window of its own when the bindings are missing.
+# ika's windows (ika app --options, ika options and their confirmations):
+# python3's GTK 3 bindings draw them, native on Wayland and X11.
 Requires:       python3-gobject
 Requires:       gtk3
-Requires:       yad
 # Linked library dependencies are generated from ELF SONAMEs. Keep only the
 # scrcpy runtime tools that RPM cannot discover from the packaged binaries.
 Requires:       wayland-utils

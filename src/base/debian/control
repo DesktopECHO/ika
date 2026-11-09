@@ -155,7 +155,6 @@ Depends: acl,
          vulkan-tools,
          wayland-utils,
          xdg-utils,
-         yad,
          ${misc:Depends},
          ${shlibs:Depends}
 Pre-Depends: ${misc:Pre-Depends}
