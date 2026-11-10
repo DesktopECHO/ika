@@ -20,6 +20,7 @@ src = [
     'src/file_pusher.c',
     'src/fps_counter.c',
     'src/frame_buffer.c',
+    'src/gl_external_copy.c',
     'src/hwdec.c',
     'src/icon.c',
     'src/input_manager.c',

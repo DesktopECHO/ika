@@ -70,6 +70,11 @@ sc_interop_raw_release_dma_buf(struct sc_interop_raw *raw,
         // The entry on screen is dropped
         raw->interop.texture = NULL;
     }
+    if (entry->external_texture) {
+        sc_gl_external_copy_destroy_texture(&raw->external_copy,
+                                            entry->external_texture);
+        entry->external_texture = 0;
+    }
     sc_egl_destroy_image(&raw->egl, entry->image);
     entry->image = EGL_NO_IMAGE_KHR;
     SDL_DestroyTexture(entry->texture);
@@ -100,6 +105,8 @@ sc_interop_raw_reset(struct sc_interop *interop) {
 static void
 sc_interop_raw_destroy(struct sc_interop *interop) {
     sc_interop_raw_reset(interop);
+    struct sc_interop_raw *raw = DOWNCAST(interop);
+    sc_gl_external_copy_destroy(&raw->external_copy);
 }
 
 static void
@@ -231,7 +238,21 @@ sc_interop_raw_create_dma_buf(struct sc_interop_raw *raw,
     raw->egl.EGLImageTargetTexture2DOES(GL_TEXTURE_2D, image);
     gl->BindTexture(GL_TEXTURE_2D, 0);
     GLenum gl_error = gl->GetError();
-    if (gl_error) {
+    unsigned external_texture = 0;
+    if (gl_error == GL_INVALID_OPERATION) {
+        // The driver accepts this DMA-BUF only as an external texture, as
+        // NVIDIA's EGL does for linear ones (the guest's buffers in Venus
+        // mode): draw it into the texture on every frame instead
+        external_texture =
+            sc_gl_external_copy_create_texture(&raw->external_copy, gl,
+                                               &raw->egl, image);
+        if (external_texture && !raw->external_copy_logged) {
+            LOGI("DMA-BUF frames are external-only here, copying each one "
+                 "into a texture");
+            raw->external_copy_logged = true;
+        }
+    }
+    if (gl_error && !external_texture) {
         LOGE("Could not attach the EGLImage to the texture (GL error %#x)",
              gl_error);
         goto error_destroy_image;
@@ -250,6 +271,7 @@ sc_interop_raw_create_dma_buf(struct sc_interop_raw *raw,
     entry->modifier = plane->modifier;
     entry->texture = texture;
     entry->image = image;
+    entry->external_texture = external_texture;
     return true;
 
 error_destroy_image:
@@ -343,6 +365,26 @@ sc_interop_raw_import_dma_buf(struct sc_interop_raw *raw,
              raw->dma_buf_misses);
     }
 
+    if (entry->external_texture) {
+        // The guest has drawn a new frame into the buffer: copy it
+        SDL_PropertiesID props = SDL_GetTextureProperties(entry->texture);
+        const char *key = raw->gl->is_opengles
+                        ? SDL_PROP_TEXTURE_OPENGLES2_TEXTURE_NUMBER
+                        : SDL_PROP_TEXTURE_OPENGL_TEXTURE_NUMBER;
+        int64_t texture_id = props ? SDL_GetNumberProperty(props, key, 0) : 0;
+        if (!SDL_FlushRenderer(raw->renderer)) {
+            LOGD("Could not flush renderer before the DMA-BUF copy: %s",
+                 SDL_GetError());
+        }
+        if (!texture_id
+                || !sc_gl_external_copy_run(&raw->external_copy, raw->gl,
+                                            entry->external_texture,
+                                            (unsigned) texture_id,
+                                            frame->width, frame->height)) {
+            return false;
+        }
+    }
+
     entry->last_use = ++raw->dma_buf_clock;
     sc_interop_raw_show_texture(raw, entry->texture, size, true);
 
@@ -423,6 +465,8 @@ sc_interop_raw_new(SDL_Renderer *renderer, struct sc_opengl *gl) {
     raw->gl = gl;
     raw->texture_is_dma_buf = false;
     raw->texture_format = SDL_PIXELFORMAT_UNKNOWN;
+    sc_gl_external_copy_init(&raw->external_copy);
+    raw->external_copy_logged = false;
     memset(raw->dma_bufs, 0, sizeof(raw->dma_bufs));
     for (size_t i = 0; i < ARRAY_LEN(raw->dma_bufs); ++i) {
         raw->dma_bufs[i].image = EGL_NO_IMAGE_KHR;
