@@ -1,0 +1,105 @@
+dzn: Keep barriers on a 3D image to its mip levels
+
+A D3D12 3D texture has no array slices: its subresources are its mip
+levels. A Vulkan range from a 2D array view of a 3D image, as a render pass
+or attachment clear on one depth slice of a 3D render target makes, names
+depth slices as array layers, and Dozen put them into its barriers as
+array slices and into subresource indices as layers. Such a barrier names
+subresources the texture does not have: D3D12 refuses the command list,
+and under WSL2, where every Vulkan device in the process shares one
+ID3D12Device, the device removal takes gfxstream and every Android app's
+Vulkan with it.
+
+Barriers and subresource indices on a 3D image now cover array slice 0
+only, which is every depth slice of the levels named. Views, clears and
+copies still address depth slices as before.
+
+Adapted from the Dozen patch of PokeZ-ARecomp
+(https://github.com/Hexveil404/PokeZ-ARecomp, tools/dx12/dozen-za.patch,
+MIT licensed), which found it with a layered pass over a 64x64x6 3D target;
+there it also changed the layer count Dozen uses for views and clears.
+
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index f612397..9523f34 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -159,7 +159,7 @@ dzn_cmd_buffer_queue_image_range_state_transition(struct dzn_cmd_buffer *cmdbuf,
+    VkResult ret = VK_SUCCESS;
+ 
+    dzn_foreach_aspect(aspect, range->aspectMask) {
+-      uint32_t layer_count = dzn_get_layer_count(image, range);
++      uint32_t layer_count = dzn_get_barrier_layer_count(image, range);
+       uint32_t level_count = dzn_get_level_count(image, range);
+       for (uint32_t layer = 0; layer < layer_count; layer++) {
+          uint32_t subres = dzn_image_range_get_subresource_index(image, range, aspect, 0, layer);
+@@ -218,7 +218,7 @@ dzn_cmd_buffer_queue_image_range_layout_transition(struct dzn_cmd_buffer *cmdbuf
+          D3D12_RESOURCE_STATE_COMMON :
+          dzn_image_layout_to_state(image, old_layout, aspect, cmdbuf->type);
+ 
+-      uint32_t layer_count = dzn_get_layer_count(image, range);
++      uint32_t layer_count = dzn_get_barrier_layer_count(image, range);
+       uint32_t level_count = dzn_get_level_count(image, range);
+       for (uint32_t layer = 0; layer < layer_count; layer++) {
+          uint32_t subres = dzn_image_range_get_subresource_index(image, range, aspect, 0, layer);
+@@ -326,8 +326,8 @@ dzn_cmd_buffer_image_barrier(struct dzn_cmd_buffer *cmdbuf,
+       .AccessAfter = access_after,
+       .LayoutBefore = layout_before,
+       .LayoutAfter = layout_after,
+-      .Subresources.FirstArraySlice = range->baseArrayLayer,
+-      .Subresources.NumArraySlices = dzn_get_layer_count(image, range),
++      .Subresources.FirstArraySlice = dzn_get_barrier_base_layer(image, range),
++      .Subresources.NumArraySlices = dzn_get_barrier_layer_count(image, range),
+       .Subresources.IndexOrFirstMipLevel = range->baseMipLevel,
+       .Subresources.NumMipLevels = dzn_get_level_count(image, range),
+       .Subresources.FirstPlane = first_plane,
+@@ -1739,8 +1739,8 @@ dzn_CmdPipelineBarrier2_enhanced(VkCommandBuffer commandBuffer,
+          if (texture_barriers[tbar].LayoutBefore != texture_barriers[tbar].LayoutAfter &&
+              texture_barriers[tbar].AccessAfter != D3D12_BARRIER_ACCESS_NO_ACCESS)
+             texture_barriers[tbar].SyncAfter = D3D12_BARRIER_SYNC_ALL;
+-         texture_barriers[tbar].Subresources.FirstArraySlice = range->baseArrayLayer;
+-         texture_barriers[tbar].Subresources.NumArraySlices = dzn_get_layer_count(image, range);
++         texture_barriers[tbar].Subresources.FirstArraySlice = dzn_get_barrier_base_layer(image, range);
++         texture_barriers[tbar].Subresources.NumArraySlices = dzn_get_barrier_layer_count(image, range);
+          texture_barriers[tbar].Subresources.IndexOrFirstMipLevel = range->baseMipLevel;
+          texture_barriers[tbar].Subresources.NumMipLevels = dzn_get_level_count(image, range);
+          texture_barriers[tbar].Subresources.FirstPlane = aspect_idx;
+diff --git a/src/microsoft/vulkan/dzn_image.c b/src/microsoft/vulkan/dzn_image.c
+index d766686..982adf8 100644
+--- a/src/microsoft/vulkan/dzn_image.c
++++ b/src/microsoft/vulkan/dzn_image.c
+@@ -395,6 +395,12 @@ dzn_image_range_get_subresource_index(const struct dzn_image *image,
+    int planeSlice =
+       aspect == VK_IMAGE_ASPECT_STENCIL_BIT ? 1 : 0;
+ 
++   /* A 3D texture's subresources are its mip levels: its depth slices are
++    * not array slices.
++    */
++   if (image->vk.image_type == VK_IMAGE_TYPE_3D)
++      return subres->baseMipLevel + level;
++
+    return subres->baseMipLevel + level +
+           ((subres->baseArrayLayer + layer) * image->desc.MipLevels) +
+           (planeSlice * image->desc.MipLevels * image->desc.DepthOrArraySize);
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index aa68bf7..aeecda1 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -1397,6 +1397,18 @@ struct dzn_sampler {
+    ((_range)->layerCount == VK_REMAINING_ARRAY_LAYERS ? \
+     (_image)->vk.array_layers - (_range)->baseArrayLayer : (_range)->layerCount)
+ 
++/* The array slices a barrier names. A D3D12 3D texture has no array slices,
++ * its subresources are its mip levels, but a range that comes from a 2D
++ * array view of a 3D image names depth slices as layers: a barrier over
++ * them names subresources that do not exist.
++ */
++#define dzn_get_barrier_base_layer(_image, _range) \
++   ((_image)->vk.image_type == VK_IMAGE_TYPE_3D ? 0 : (_range)->baseArrayLayer)
++
++#define dzn_get_barrier_layer_count(_image, _range) \
++   ((_image)->vk.image_type == VK_IMAGE_TYPE_3D ? 1 : \
++    dzn_get_layer_count(_image, _range))
++
+ #define dzn_get_level_count(_image, _range) \
+    ((_range)->levelCount == VK_REMAINING_MIP_LEVELS ? \
+     (_image)->vk.mip_levels - (_range)->baseMipLevel : (_range)->levelCount)
