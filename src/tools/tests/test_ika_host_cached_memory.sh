@@ -73,6 +73,29 @@ append_host_cached_memory_args args
 assert_equal "--gpu_renderer_features=VulkanPreferHostCachedMemory:enabled" \
   "${args[0]}" "on adds the renderer features when there were none"
 
+# NVIDIA's proprietary driver gets it with the setting off; Mesa drivers do not
+IKA_HOST_CACHED_MEMORY="off"
+vulkaninfo_summary() {
+  printf 'GPU0:\n  deviceName = NVIDIA GeForce RTX 4080 Laptop GPU\n  driverID = DRIVER_ID_NVIDIA_PROPRIETARY\n'
+}
+args=("--gpu_renderer_features=MinimalLogging:disabled")
+append_host_cached_memory_args args
+assert_equal "--gpu_renderer_features=MinimalLogging:disabled;VulkanPreferHostCachedMemory:enabled" \
+  "${args[0]}" "the NVIDIA proprietary driver gets cached memory with the setting off"
+vulkaninfo_summary() {
+  printf 'GPU0:\n  deviceName = Intel(R) UHD Graphics\n  driverID = DRIVER_ID_INTEL_OPEN_SOURCE_MESA\nGPU1:\n  deviceName = NVIDIA GeForce RTX 4080 Laptop GPU\n  driverID = DRIVER_ID_NVIDIA_PROPRIETARY\n'
+}
+args=()
+append_host_cached_memory_args args
+assert_equal 0 "${#args[@]}" "an NVIDIA GPU that is not the primary device changes nothing"
+vulkaninfo_summary() {
+  printf 'GPU0:\n  deviceName = NVIDIA GeForce RTX 4080 (Dozen)\n  driverID = DRIVER_ID_MESA_DOZEN\n'
+}
+args=()
+append_host_cached_memory_args args
+assert_equal 0 "${#args[@]}" "Dozen on an NVIDIA GPU (WSL2) changes nothing"
+IKA_HOST_CACHED_MEMORY="on"
+
 # Through the GPU mode paths: the Vulkan-only mode and gfxstream with Vulkan
 # get it, GLES-only gfxstream does not
 primary_vulkan_device_is_radv_vega_or_older() { return 1; }

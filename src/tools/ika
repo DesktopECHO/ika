@@ -349,9 +349,10 @@ gfxstream_vulkan = auto
 # on takes the guest's host-visible Vulkan memory from a cached coherent host
 # memory type instead of a write-combined one (gfxstream's
 # VulkanPreferHostCachedMemory), which is faster for the guest's uploads on
-# some drivers; off, the default, leaves the driver's choice. Command-line
-# equivalent: --host_cached_memory=. Environment variable:
-# IKA_HOST_CACHED_MEMORY
+# some drivers; off, the default, leaves the driver's choice. NVIDIA's
+# proprietary driver always gets cached memory, which it needs to draw
+# correctly. Command-line equivalent: --host_cached_memory=. Environment
+# variable: IKA_HOST_CACHED_MEMORY
 host_cached_memory = off
 # auto or off. auto gives Android a video decoder backed by the host's VA-API
 # (H.264, HEVC, VP8 and VP9, as far as the host decodes them) when vainfo
@@ -2251,7 +2252,9 @@ Options:
                          Vulkan memory from a cached coherent host memory type
                          instead of a write-combined one, which is faster for
                          the guest's uploads on some drivers; off, the
-                         default, leaves the driver's choice. Applies to the
+                         default, leaves the driver's choice. NVIDIA's
+                         proprietary driver always gets cached memory, which
+                         it needs to draw correctly. Applies to the
                          gfxstream modes with Vulkan. IKA_HOST_CACHED_MEMORY
                          and host_cached_memory in ika.ini do the same.
   --camera[=videoN]      With start or restart, pass a host camera to Android
@@ -4551,13 +4554,32 @@ host_cached_memory_mode() {
 # writes its uploads through its mapping of that memory, and write-combined
 # memory is slow for them on some drivers. Off by default until measured on
 # the host drivers Ika runs on.
+#
+# NVIDIA's proprietary driver gets it whatever the setting says. KVM maps the
+# guest's view of host memory write-back, and the NVIDIA GPU reads its
+# write-combined memory without snooping the CPU caches, so it read uploads
+# the guest had not yet written back: text drawn as noise and every launcher
+# icon the same.
 append_host_cached_memory_args() {
   local -n cached_args_array="$1"
 
-  [[ "$(host_cached_memory_mode)" == "on" ]] || return 0
+  if [[ "$(host_cached_memory_mode)" == "on" ]]; then
+    log "host cached memory: on (VulkanPreferHostCachedMemory, guest host-visible Vulkan memory from cached coherent host memory types)"
+  elif primary_vulkan_device_is_nvidia_proprietary; then
+    log "NVIDIA proprietary driver: guest host-visible Vulkan memory from cached coherent host memory types (VulkanPreferHostCachedMemory), as its GPU does not snoop write-combined memory"
+  else
+    return 0
+  fi
   append_or_merge_gpu_renderer_features \
     cached_args_array "VulkanPreferHostCachedMemory:enabled"
-  log "host cached memory: on (VulkanPreferHostCachedMemory, guest host-visible Vulkan memory from cached coherent host memory types)"
+}
+
+primary_vulkan_device_is_nvidia_proprietary() {
+  local primary_device
+
+  primary_device="$(primary_vulkan_device_summary)" || return 1
+  grep -Eq '^[[:space:]]*driverID[[:space:]]*=[[:space:]]*DRIVER_ID_NVIDIA_PROPRIETARY([[:space:]]|$)' \
+    <<<"${primary_device}"
 }
 
 # Prints the primary Vulkan device's block of the vulkaninfo summary.
