@@ -1,0 +1,72 @@
+diff --git a/src/venus/vkr_physical_device.c b/src/venus/vkr_physical_device.c
+index 0d63a0b..6e64920 100644
+--- a/src/venus/vkr_physical_device.c
++++ b/src/venus/vkr_physical_device.c
+@@ -165,6 +165,32 @@ vkr_physical_device_init_id_properties(struct vkr_physical_device *physical_dev)
+    vk->GetPhysicalDeviceProperties2(handle, &props2);
+ }
+ 
++/* Whether the VMM cannot map the dma-bufs of this device's host visible video
++ * memory. NVIDIA's proprietary driver (seen with 620.70.06) maps the pages of
++ * such a dma-buf in the wrong order once the allocation is not contiguous: in
++ * a 16 MiB block every page from the 592nd on was 16 pages off, while
++ * vkMapMemory of the same memory, and dma-bufs of its system memory types, map
++ * correctly. Ika's tools/testutils/vk_dmabuf_map_check.c shows it without a VM.
++ */
++static bool
++vkr_physical_device_has_unmappable_video_memory(struct vkr_physical_device *physical_dev)
++{
++   struct vn_physical_device_proc_table *vk = &physical_dev->proc_table;
++
++   if (physical_dev->properties.vendorID != 0x10de)
++      return false;
++
++   VkPhysicalDeviceDriverProperties driver_props = {
++      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES,
++   };
++   VkPhysicalDeviceProperties2 props2 = {
++      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
++      .pNext = &driver_props,
++   };
++   vk->GetPhysicalDeviceProperties2(physical_dev->base.handle.physical_device, &props2);
++   return driver_props.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY;
++}
++
+ static void
+ vkr_physical_device_init_memory_properties(struct vkr_physical_device *physical_dev)
+ {
+@@ -188,6 +214,34 @@ vkr_physical_device_init_memory_properties(struct vkr_physical_device *physical_
+       }
+    }
+ 
++   /* Every allocation of a host visible memory type is exported for the VMM to
++    * map into the guest (see vkr_dispatch_vkAllocateMemory). Where the VMM's
++    * mapping of host visible video memory does not show the memory the device
++    * uses, an app that picked such a type had the device read other data than
++    * it wrote: vertices, indices and uniforms from the wrong pages, which
++    * faulted the GPU and lost the device of every context. Offer those types
++    * without their host properties, so apps map system memory, as long as the
++    * device has a host visible type there.
++    */
++   if (vkr_physical_device_has_unmappable_video_memory(physical_dev)) {
++      VkPhysicalDeviceMemoryProperties *p = &physical_dev->memory_properties;
++      const VkMemoryPropertyFlags host_flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
++                                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
++                                               VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
++      bool has_host_visible_system_memory = false;
++      for (uint32_t i = 0; i < p->memoryTypeCount; i++) {
++         const VkMemoryType *type = &p->memoryTypes[i];
++         if ((type->propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
++             !(p->memoryHeaps[type->heapIndex].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT))
++            has_host_visible_system_memory = true;
++      }
++      for (uint32_t i = 0; has_host_visible_system_memory && i < p->memoryTypeCount; i++) {
++         VkMemoryType *type = &p->memoryTypes[i];
++         if (p->memoryHeaps[type->heapIndex].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
++            type->propertyFlags &= ~host_flags;
++      }
++   }
++
+    /* VKR_HEAP_MEMORY_PERCENT controls the Vulkan memory heap capacity exposed to the
+     * driver side. To be noted, it doesn't enforce the maximium device memory alloc,
+     * but serves as a hint to steer the system and app default behavior. To actually

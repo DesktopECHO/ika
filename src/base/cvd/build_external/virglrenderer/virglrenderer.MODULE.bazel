@@ -9,6 +9,10 @@ git_repository(
         # Retry device creation at medium queue priority when the host driver
         # refuses a raised one (Honeykrisp), so ANGLE gets a device.
         "@//build_external/virglrenderer:PATCH.venus-global-priority-fallback.patch",
+        # Offer NVIDIA's host visible video memory types without their host
+        # properties: the proprietary driver maps the dma-bufs crosvm maps
+        # them through in the wrong page order, and the GPU faulted.
+        "@//build_external/virglrenderer:PATCH.venus-hide-unmappable-video-memory.patch",
     ],
     remote = "https://gitlab.freedesktop.org/virgl/virglrenderer",
 )
