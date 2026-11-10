@@ -1,0 +1,106 @@
+--- a/src/rutabaga_gralloc/vulkano_gralloc.rs
++++ b/src/rutabaga_gralloc/vulkano_gralloc.rs
+@@ -31,7 +31,9 @@
+ use vulkano::image;
+ use vulkano::image::ImageDimensions;
+ use vulkano::image::ImageError;
+-use vulkano::image::ImageTiling;
++use vulkano::image::ImageFormatInfo;
++use vulkano::image::ImageTiling;
++use vulkano::image::ImageType;
+ use vulkano::image::ImageUsage;
+ use vulkano::image::SampleCount;
+ use vulkano::instance::Instance;
+@@ -261,27 +263,53 @@
+         }
+ 
+         let vulkan_format = info.drm_format.vulkan_format()?;
+-        let raw_image = Arc::new(image::sys::RawImage::new(
+-            device.clone(),
+-            image::sys::ImageCreateInfo {
+-                dimensions: ImageDimensions::Dim2d {
+-                    width: info.width,
+-                    height: info.height,
+-                    array_layers: 1,
+-                },
+-                format: Some(vulkan_format),
+-                samples: SampleCount::Sample1,
+-                // ika: get_image_memory_requirements() reads each plane's
+-                // stride and offset with vkGetImageSubresourceLayout, which
+-                // Vulkan allows only for linear (or DRM-modifier) images;
+-                // vulkano's default optimal tiling made every query fail.
+-                tiling: ImageTiling::Linear,
+-                usage,
+-                mip_levels: 1,
+-                sharing: Sharing::Exclusive,
+-                ..Default::default()
+-            },
+-        )?);
++        let create_info = image::sys::ImageCreateInfo {
++            dimensions: ImageDimensions::Dim2d {
++                width: info.width,
++                height: info.height,
++                array_layers: 1,
++            },
++            format: Some(vulkan_format),
++            samples: SampleCount::Sample1,
++            // ika: get_image_memory_requirements() reads each plane's
++            // stride and offset with vkGetImageSubresourceLayout, which
++            // Vulkan allows only for linear (or DRM-modifier) images;
++            // vulkano's default optimal tiling made every query fail.
++            tiling: ImageTiling::Linear,
++            usage,
++            mip_levels: 1,
++            sharing: Sharing::Exclusive,
++            ..Default::default()
++        };
++        let raw_image = match image::sys::RawImage::new(device.clone(), create_info.clone()) {
++            Ok(raw_image) => raw_image,
++            // ika: vulkano checks the usage against the format's linear tiling
++            // features alone. NVIDIA's proprietary driver lists no color
++            // attachment there for any format, yet its
++            // vkGetPhysicalDeviceImageFormatProperties, which decides whether
++            // such an image is valid, allows it, and it renders the guest's
++            // linear buffers at the pitch this image reports (rows aligned to
++            // 128 bytes). Every renderable cross-domain buffer failed, so in
++            // Venus mode SurfaceFlinger had no buffers and the console no
++            // frames. Create the image when the driver's own query allows it.
++            Err(ImageError::FormatUsageNotSupported { usage: usage_name }) => {
++                let allowed = device
++                    .physical_device()
++                    .image_format_properties_unchecked(ImageFormatInfo {
++                        format: Some(vulkan_format),
++                        image_type: ImageType::Dim2d,
++                        tiling: ImageTiling::Linear,
++                        usage,
++                        ..Default::default()
++                    })?;
++                if allowed.is_none() {
++                    return Err(ImageError::FormatUsageNotSupported { usage: usage_name }.into());
++                }
++                image::sys::RawImage::new_unchecked(device.clone(), create_info)?
++            }
++            Err(e) => return Err(e.into()),
++        };
++        let raw_image = Arc::new(raw_image);
+ 
+         // Won't panic since this not a swapchain image.
+         let memory_requirements = raw_image.memory_requirements()[0];
+@@ -479,7 +507,16 @@
+ 
+         let dedicated_allocation = match device.enabled_extensions().khr_dedicated_allocation {
+             true => {
+-                if memory_requirements.prefers_dedicated_allocation {
++                // ika: a dedicated allocation must be exactly the image's size,
++                // while the guest asks for the size rounded up to its page size.
++                // NVIDIA's proprietary driver prefers dedicated memory for linear
++                // color attachments whose size is not a page multiple, and every
++                // such blob failed (DedicatedAllocationSizeMismatch). Take the
++                // driver's preference only when the sizes agree.
++                if memory_requirements.requires_dedicated_allocation
++                    || (memory_requirements.prefers_dedicated_allocation
++                        && memory_requirements.layout.size() == reqs.size)
++                {
+                     Some(DedicatedAllocation::Image(&raw_image))
+                 } else {
+                     None

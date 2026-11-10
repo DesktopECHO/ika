@@ -259,6 +259,12 @@ crosvm_bin.annotation(
         # Create Vulkano's layout-query images linear, so the cross-domain
         # context (Venus mode's gralloc) can read their strides.
         "@//build_external/crosvm:PATCH.rutabaga_gfx-vulkano-linear-images.patch",
+        # Create them where the driver's image format query allows the usage
+        # although the format's linear features do not list it, and give them
+        # dedicated memory only when that matches the blob's size (NVIDIA's
+        # proprietary driver and color attachments). Its name sorts after the
+        # patch above: the patches are applied in the order of their names.
+        "@//build_external/crosvm:PATCH.rutabaga_gfx-vulkano-renderable-linear-images.patch",
         # Drain renderer resources and contexts while the component is alive,
         # so clean VMM shutdown reaches gfxstream's normal unbind paths.
         "@//build_external/crosvm:PATCH.rutabaga_gfx-cleanup-on-drop.patch",

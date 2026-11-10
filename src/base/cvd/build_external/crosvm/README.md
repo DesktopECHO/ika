@@ -115,6 +115,11 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** Creates the images Vulkano gralloc measures and allocates with linear tiling.
 - **Why:** `get_image_memory_requirements` reads each plane's stride and offset with `vkGetImageSubresourceLayout`, which Vulkan allows only for linear or DRM-modifier images, and vulkano 0.33 defaults to optimal tiling, so every query failed with `OptimalTilingNotSupported`. The cross-domain context, which the guest's minigbm allocates through in `--gpu_mode=venus`, uses this backend on hosts whose GPU the bundled minigbm has no driver for (AMD, Apple Silicon); every guest buffer allocation failed there. Upstream has the same code but disables Vulkano gralloc on Linux.
 
+#### `PATCH.rutabaga_gfx-vulkano-renderable-linear-images.patch`
+- **Targets:** `rutabaga_gfx` crate. File: `src/rutabaga_gralloc/vulkano_gralloc.rs`. Applied after `PATCH.rutabaga_gfx-vulkano-linear-images.patch`.
+- **What it does:** When vulkano refuses a Vulkano gralloc image with `FormatUsageNotSupported`, asks `vkGetPhysicalDeviceImageFormatProperties` for the same linear image and creates it unchecked if the driver allows it. Allocates a blob's memory dedicated to its image only when the driver requires that, or prefers it and the blob is exactly the image's size.
+- **Why:** vulkano 0.33 checks the usage against the format's linear tiling features only. NVIDIA's proprietary driver lists no color attachment there for any format, while its image format query allows linear color attachments and it renders linear buffers at the pitch such an image reports (rows aligned to 128 bytes). Every renderable cross-domain buffer failed, so in `--gpu_mode=venus` SurfaceFlinger got no buffers and the console no frames. The same driver then prefers dedicated memory for those images, which must be exactly the image's size, while the guest asks for it rounded up to a page, so every such blob failed with `DedicatedAllocationSizeMismatch`.
+
 #### `PATCH.rutabaga_gfx-cleanup-on-drop.patch`
 - **Targets:** `rutabaga_gfx` crate. File: `src/rutabaga_core.rs`.
 - **What it does:** Releases gfxstream contexts and resources before the renderer component is destroyed.
