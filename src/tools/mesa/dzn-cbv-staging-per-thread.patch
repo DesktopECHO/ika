@@ -1,0 +1,104 @@
+dzn: Give each thread a staging descriptor of its own for constant buffer views
+
+Constant buffer views meant for a shader-visible heap are created in a
+CPU-only descriptor and copied across (dzn-cbv-staging.patch). There was one
+such descriptor per device, under a lock, and gfxstream records a guest's
+command buffers on two host threads at once: both took that lock for every
+draw that follows new dynamic offsets and waited for each other.
+
+Keep 16 staging descriptors with a lock each, and let each thread take the
+next one the first time it creates such a view.
+diff --git a/src/microsoft/vulkan/dzn_descriptor_set.c b/src/microsoft/vulkan/dzn_descriptor_set.c
+index 432207e..2a8f023 100644
+--- a/src/microsoft/vulkan/dzn_descriptor_set.c
++++ b/src/microsoft/vulkan/dzn_descriptor_set.c
+@@ -23,6 +23,8 @@
+ 
+ #include "dzn_private.h"
+ 
++#include "util/u_atomic.h"
++
+ #include "vk_alloc.h"
+ #include "vk_descriptors.h"
+ #include "vk_util.h"
+@@ -1119,12 +1121,20 @@ dzn_descriptor_heap_create_cbv(struct dzn_device *device,
+       return;
+    }
+ 
+-   D3D12_CPU_DESCRIPTOR_HANDLE src = dzn_descriptor_heap_get_cpu_handle(&device->cbv_staging.heap, 0);
+-   mtx_lock(&device->cbv_staging.lock);
++   /* Each thread takes the next slot the first time it gets here, so up to
++    * DZN_CBV_STAGING_SLOTS threads never share one. */
++   static uint32_t next_slot;
++   static thread_local int thread_slot = -1;
++   if (thread_slot < 0)
++      thread_slot = p_atomic_inc_return(&next_slot) % DZN_CBV_STAGING_SLOTS;
++   const uint32_t slot = thread_slot;
++
++   D3D12_CPU_DESCRIPTOR_HANDLE src = dzn_descriptor_heap_get_cpu_handle(&device->cbv_staging.heap, slot);
++   mtx_lock(&device->cbv_staging.lock[slot]);
+    ID3D12Device1_CreateConstantBufferView(device->dev, desc, src);
+    ID3D12Device1_CopyDescriptorsSimple(device->dev, 1, dst, src,
+                                        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+-   mtx_unlock(&device->cbv_staging.lock);
++   mtx_unlock(&device->cbv_staging.lock[slot]);
+ }
+ 
+ void
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index 8136450..ebbb1f9 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -2431,7 +2431,8 @@ dzn_device_destroy(struct dzn_device *device, const VkAllocationCallbacks *pAllo
+ 
+    if (device->cbv_staging.heap.heap) {
+       dzn_descriptor_heap_finish(&device->cbv_staging.heap);
+-      mtx_destroy(&device->cbv_staging.lock);
++      for (unsigned i = 0; i < DZN_CBV_STAGING_SLOTS; i++)
++         mtx_destroy(&device->cbv_staging.lock[i]);
+    }
+ 
+    if (device->dev_config)
+@@ -2660,12 +2661,14 @@ dzn_device_create(struct dzn_physical_device *pdev,
+    }
+ 
+    result = dzn_descriptor_heap_init(&device->cbv_staging.heap, device,
+-                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1, false);
++                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
++                                     DZN_CBV_STAGING_SLOTS, false);
+    if (result != VK_SUCCESS) {
+       dzn_device_destroy(device, pAllocator);
+       return result;
+    }
+-   mtx_init(&device->cbv_staging.lock, mtx_plain);
++   for (unsigned i = 0; i < DZN_CBV_STAGING_SLOTS; i++)
++      mtx_init(&device->cbv_staging.lock[i], mtx_plain);
+ 
+    device->support_static_samplers = true;
+    device->bindless = (instance->debug_flags & DZN_DEBUG_BINDLESS) != 0 ||
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index e773248..aa68bf7 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -255,6 +255,12 @@ struct dzn_descriptor_heap {
+    bool shader_visible;
+ };
+ 
++/* CPU-only descriptors that constant buffer views for shader-visible heaps are
++ * created in, see dzn_descriptor_heap_create_cbv(). Each thread uses one of
++ * them, so that threads recording command buffers at once do not wait for
++ * each other. */
++#define DZN_CBV_STAGING_SLOTS 16
++
+ struct dzn_device_descriptor_heap {
+    struct dzn_descriptor_heap heap;
+    mtx_t lock;
+@@ -314,7 +320,7 @@ struct dzn_device {
+     */
+    struct {
+       struct dzn_descriptor_heap heap;
+-      mtx_t lock;
++      mtx_t lock[DZN_CBV_STAGING_SLOTS];
+    } cbv_staging;
+ };
+ 
