@@ -30,3 +30,4 @@ dzn-internal-heaps.patch
 dzn-cbv-staging.patch
 dzn-view-type-from-image.patch
 dzn-import-fd-close.patch
+dzn-cache-evicted-stage.patch

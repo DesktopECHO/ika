@@ -1,0 +1,93 @@
+dzn: Take a cached graphics pipeline whose stage DXIL is gone as a miss
+
+The disk cache keeps a graphics pipeline's entry (its input layout and the
+hashes of its stages' DXIL) apart from each stage's DXIL, and evicts
+entries one by one once it is over its size limit. A pipeline entry that
+outlived one of its stages' DXIL counted as a hit with that stage's shader
+slot left empty, so D3D12 refused the pipeline state, and the application
+got VK_ERROR_OUT_OF_HOST_MEMORY from vkCreateGraphicsPipelines every time
+it made that pipeline. Under WSL2 the cache of an RTX 4080 Laptop GPU grew
+past 1 GB in a week of 3DMark runs, and from then on Wild Life Extreme and
+Steel Nomad Light failed to start until the cache was deleted.
+
+Fetch every stage's DXIL before changing the pipeline, and compile the
+pipeline again when one is missing.
+diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
+index d494a85..d9194aa 100644
+--- a/src/microsoft/vulkan/dzn_pipeline.c
++++ b/src/microsoft/vulkan/dzn_pipeline.c
+@@ -699,38 +699,52 @@ dzn_pipeline_cache_lookup_gfx_pipeline(struct dzn_graphics_pipeline *pipeline,
+ 
+    assert(cached_blob->size >= sizeof(*info));
+ 
+-   if (info->input_count > 0) {
+-      const D3D12_INPUT_ELEMENT_DESC *inputs =
+-         (const D3D12_INPUT_ELEMENT_DESC *)((uint8_t *)cached_blob->data + offset);
+-
+-      assert(cached_blob->size >= offset + sizeof(*inputs) * info->input_count);
+-
+-      memcpy(pipeline->templates.inputs, inputs,
+-             sizeof(*inputs) * info->input_count);
+-      d3d12_gfx_pipeline_state_stream_new_desc(stream_desc, INPUT_LAYOUT, D3D12_INPUT_LAYOUT_DESC, desc);
+-      desc->pInputElementDescs = pipeline->templates.inputs;
+-      desc->NumElements = info->input_count;
+-      offset += sizeof(*inputs) * info->input_count;
+-   }
++   const D3D12_INPUT_ELEMENT_DESC *inputs =
++      (const D3D12_INPUT_ELEMENT_DESC *)((uint8_t *)cached_blob->data + offset);
++   offset += sizeof(*inputs) * info->input_count;
+ 
+    assert(cached_blob->size == offset + util_bitcount(info->stages) * BLAKE3_KEY_LEN);
+ 
++   /* The disk cache evicts entries one by one, so a pipeline entry can
++    * outlive the DXIL of one of its stages. Fetch every stage before
++    * touching the pipeline, and take a missing one as a cache miss: a hit
++    * with an empty shader slot made CreatePipelineState fail, and the
++    * application got VK_ERROR_OUT_OF_HOST_MEMORY from every pipeline that
++    * used the evicted shader. */
++   D3D12_SHADER_BYTECODE bcs[MESA_VULKAN_SHADER_STAGES] = { 0 };
++   VkResult ret = VK_SUCCESS;
++   bool complete = true;
+    u_foreach_bit(s, info->stages) {
+-      uint8_t *dxil_hash = (uint8_t *)cached_blob->data + offset;
++      const uint8_t *dxil_hash = (uint8_t *)cached_blob->data + offset;
+       mesa_shader_stage stage;
+ 
+-      D3D12_SHADER_BYTECODE *slot =
+-         dzn_pipeline_get_gfx_shader_slot(stream_desc, s);
+-
+-      VkResult ret =
+-         dzn_pipeline_cache_lookup_dxil_shader(cache, dxil_hash, &stage, slot);
+-      if (ret != VK_SUCCESS)
+-         return ret;
++      ret = dzn_pipeline_cache_lookup_dxil_shader(cache, dxil_hash, &stage, &bcs[s]);
++      if (ret != VK_SUCCESS || stage != s) {
++         complete = false;
++         break;
++      }
+ 
+-      assert(stage == s);
+       offset += BLAKE3_KEY_LEN;
+    }
+ 
++   if (!complete) {
++      for (unsigned s = 0; s < ARRAY_SIZE(bcs); s++)
++         free((void *)bcs[s].pShaderBytecode);
++      vk_pipeline_cache_object_unref(cache->base.device, cache_obj);
++      return ret;
++   }
++
++   if (info->input_count > 0) {
++      memcpy(pipeline->templates.inputs, inputs,
++             sizeof(*inputs) * info->input_count);
++      d3d12_gfx_pipeline_state_stream_new_desc(stream_desc, INPUT_LAYOUT, D3D12_INPUT_LAYOUT_DESC, desc);
++      desc->pInputElementDescs = pipeline->templates.inputs;
++      desc->NumElements = info->input_count;
++   }
++
++   u_foreach_bit(s, info->stages)
++      *dzn_pipeline_get_gfx_shader_slot(stream_desc, s) = bcs[s];
++
+    pipeline->rast_disabled_from_missing_position = info->rast_disabled_from_missing_position;
+    pipeline->needs_draw_sysvals = info->needs_draw_sysvals;
+    pipeline->ia.prim_class = info->prim_class;
