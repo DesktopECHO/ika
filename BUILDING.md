@@ -1,10 +1,10 @@
-[README](README.md) | [Using Ika](USAGE.md) | [Configuration](CONFIGURATION.md) | [Graphics](GRAPHICS.md) | **Building** | [Downloads](DOWNLOADS.md)
+[README](README.md)&nbsp; • &nbsp;[Download](DOWNLOAD.md)&nbsp; • &nbsp;[Using Ika](USAGE.md)&nbsp; • &nbsp;[Configuration](CONFIGURATION.md)&nbsp; • &nbsp;[Graphics](GRAPHICS.md)&nbsp; • &nbsp;**Building**
 
 # Building Ika from source
 
 `./ika-build` builds the LineageOS ROM and Ika's host packages for your
 distribution, then prints the command that installs them. Prebuilt packages
-are on the [Downloads](DOWNLOADS.md) page; build from source to change Ika
+are on the [Download](DOWNLOAD.md) page; build from source to change Ika
 or to choose the ROM's Google integration.
 
 ## Requirements
@@ -22,14 +22,14 @@ or to choose the ROM's Google integration.
 - **Network:** for downloading the source and the toolchains, which all
   happens before the first compile.
 - **Account:** a normal user with `sudo`; `ika-build` refuses to run as root
-  and asks for the password once.
+  and asks for the password once to install prequisites using the package manager.
 
 ## Build and install
 
 ```bash
-# 1. Download the source and enter it:
-curl -L https://github.com/DesktopECHO/ika/archive/refs/heads/main.zip -o ika-main.zip
-unzip ika-main.zip && rm ika-main.zip && cd ika-main
+# 1. Clone the source and enter it:
+git clone https://github.com/DesktopECHO/ika.git
+cd ika
 
 # 2. Build:
 ./ika-build
@@ -46,13 +46,7 @@ ika start
 
 `ika-build` installs the build dependencies, sets up the signing keys,
 downloads the LineageOS 23.2 source, applies Ika's overlays and patches,
-builds the ROM for the host's architecture and builds the host packages. A
-git checkout works as well as the zip.
-
-The install command matches what is installed: `install`, `upgrade`,
-`reinstall` or `downgrade` with `dnf`, `apt install` with `--only-upgrade`,
-`--reinstall` or `--allow-downgrades`, or `pacman -U`. Run it from the
-source folder.
+builds the ROM for the host's architecture and builds the host packages.
 
 A first install needs a reboot, not only a new login: the packages add you to
 the `kvm`, `cvdnetwork`, `render` and `video` groups, raise the `cvdnetwork`

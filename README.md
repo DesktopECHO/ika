@@ -1,11 +1,11 @@
-**README** | [Using Ika](USAGE.md) | [Configuration](CONFIGURATION.md) | [Graphics](GRAPHICS.md) | [Building](BUILDING.md) | [Downloads](DOWNLOADS.md)
+**README**&nbsp; • &nbsp;[Download](DOWNLOAD.md)&nbsp; • &nbsp;[Using Ika](USAGE.md)&nbsp; • &nbsp;[Configuration](CONFIGURATION.md)&nbsp; • &nbsp;[Graphics](GRAPHICS.md)&nbsp; • &nbsp;[Building](BUILDING.md)
 
-<img width="1920" height="1080" alt="Ika Virtual Desktop" src="https://github.com/user-attachments/assets/ad0213c3-6a9d-45bc-9468-dcdd82abca26" />
+<img width="45%" alt="Ika Virtual Desktop" src="https://github.com/user-attachments/assets/ad0213c3-6a9d-45bc-9468-dcdd82abca26" />&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<img width="45%" alt="Ika on Windows (WSL2)" src="src/docs/ika-on-windows.png" />
 
 # イカ · Ika Virtual Desktop
 
-**Ika** _/ee-kah/_, Japanese for squid or cuttlefish, runs Android on your
-Linux desktop: LineageOS 23.2 (Android 16), built as a desktop operating
+**Ika** _/ee-kah/_, Japanese for squid or cuttlefish, lets you run Android on your
+Linux or Windows desktop: LineageOS 23.2 (Android 16), built as a desktop operating
 system, in a [Cuttlefish](https://source.android.com/setup/create/cuttlefish)
 virtual machine.
 
@@ -49,7 +49,7 @@ virtual machine.
 ## Install
 
 1. Download `ika-base` and `ika-lineageos` for your distribution and
-   architecture from the [Downloads](DOWNLOADS.md) page, or
+   architecture from the [Download](DOWNLOAD.md) page, or
    [build them from source](BUILDING.md).
 2. Install `ika-base` and `ika-lineageos` packages:
 
@@ -88,7 +88,7 @@ TV mode and the everyday commands.
 | [Configuration](CONFIGURATION.md) | Every command and option, `ika.ini`, environment variables, defaults, files |
 | [Graphics](GRAPHICS.md) | GPU modes, Vulkan, Apple Silicon, graphics troubleshooting |
 | [Building](BUILDING.md) | Building the ROM and the packages from source, on x86-64 and ARM64 |
-| [Downloads](DOWNLOADS.md) | Prebuilt packages |
+| [Download](DOWNLOAD.md) | Prebuilt packages |
 | [src/lineageos/README.md](src/lineageos/README.md) | The LineageOS Desktop ROM: its products, source layout and build |
 | [src/scrcpy/IKA.md](src/scrcpy/IKA.md) | Ika's changes to scrcpy, the console's client |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |

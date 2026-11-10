@@ -1,4 +1,4 @@
-[README](README.md) | [Using Ika](USAGE.md) | **Configuration** | [Graphics](GRAPHICS.md) | [Building](BUILDING.md) | [Downloads](DOWNLOADS.md)
+[README](README.md)&nbsp; • &nbsp;[Download](DOWNLOAD.md)&nbsp; • &nbsp;[Using Ika](USAGE.md)&nbsp; • &nbsp;**Configuration**&nbsp; • &nbsp;[Graphics](GRAPHICS.md)&nbsp; • &nbsp;[Building](BUILDING.md)
 
 # Configuration
 
@@ -211,11 +211,10 @@ game_apps = com.example.game
 | --- | --- | --- |
 | `cpus` | `auto` | Virtual CPUs. `--cpus=` |
 | `memory_mb` | `auto` | Memory in MB. `--memory_mb=` |
-| `cpu_cap` | `12` | The most virtual CPUs `auto` gives (not under WSL) |
+| `cpu_cap` | `12` | The most virtual CPUs `auto` gives (.wslconfig overrides this) |
 | `memory_step_mb` | `2048` | `auto` memory is rounded up to a multiple of this (not under WSL) |
 | `memory_cap_mb` | `32768` | The most memory `auto` gives (not under WSL) |
 | `memory_fallback_mb` | `4096` | Memory when the host's cannot be read |
-| `enable_bootanimation`, `enable_sandbox` | `false` | Cuttlefish options |
 
 ### [gpu]
 
@@ -392,56 +391,50 @@ These have no setting:
 
 ## Windows (WSL2)
 
-On an x86-64 PC, Ika runs in a WSL2 distribution (Fedora, Debian, Ubuntu or
-Arch, from the Requirements) once the parts a fresh WSL2 lacks are in place: nested
-virtualization (off by default, so there is no `/dev/kvm`), the vhost-vsock
-and vhost-net devices (older Microsoft kernels are built without them, and
-Cuttlefish's adb runs over vsock), systemd and cgroup v2. Microsoft's kernel
-has no udmabuf, which Ika does without: it then starts with
-`enable_gpu_udmabuf=false`. Without them
-`ika start` ends with `process monitor has died` and `Cuttlefish did not
-reach boot completion`, because crosvm exits at once.
+On an x86-64 PC with Windows 11, Ika runs in a minimal Debian 13 instance
+under WSL2. `ika-wsl.ps1` sets it all up:
 
-`ika-wsl.ps1` does all of it: it sets up what WSL2 needs of Windows and
-is missing, then installs Debian 13 (trixie), the latest WSL image from
-[salsa.debian.org](https://salsa.debian.org/debian/WSL/-/releases), as a
-distribution named Ika, with Ika's icon in the Start menu and Windows
-Terminal, a user named after the Windows user, with passwordless sudo, and
-systemd; installs Mesa from trixie-backports and the `ika-base` and
-`ika-lineageos` packages of Ika's latest release, which it downloads to
-`%TEMP%` unless they are there already; runs `ika-wsl-setup`
-without showing its report, then warns of anything it still finds missing
-that a restart of WSL does not bring; restarts WSL when its settings changed (it asks first, as that stops every
-distribution); and starts Ika. Run outside the desktop, in Windows' session
-0 (over SSH, for one), it would have booted WSL there, WSLg with it, and
-Ika's windows and Start menu entries would reach no desktop: unless WSLg
-already runs on a desktop, it stops WSL instead (asking first) and leaves
-Ika to start on the desktop. It is one line in PowerShell:
+1. Turns on what WSL2 needs in Windows, if it's missing.
+2. Installs the latest Debian WSL image from
+   [salsa.debian.org](https://salsa.debian.org/debian/WSL/-/releases) as a
+   distribution named Ika, with systemd and a user named after yours.
+3. Installs Mesa from trixie-backports, and the `ika-base` and
+   `ika-lineageos` packages of Ika's latest release. It downloads the
+   packages to `%TEMP%` unless they are already there.
+4. Runs `ika-wsl-setup`, and warns you about anything still missing.
+5. Starts Ika on the desktop.
+
+In PowerShell, download the install script:
 
 ```powershell
-irm https://raw.githubusercontent.com/DesktopECHO/ika/main/ika-wsl.ps1 | iex
+irm https://raw.githubusercontent.com/DesktopECHO/ika/main/ika-wsl.ps1 -OutFile ika-wsl.ps1
 ```
 
-What WSL2 needs of Windows it sets up at once, behind one permission
-prompt: the WSL package (from WSL's GitHub releases, when WSL is missing or
-older than 2.4.4), the Virtual Machine Platform, and Windows' hypervisor at
-boot. When any of those needs a restart of Windows, it asks for one, a
-single one, after which the same line goes on. WSL 1 stays off, and the
-distribution is WSL2 even where WSL 1 is the default. When virtualization
-is off in the PC's firmware it says so: turn on SVM Mode (AMD) or Intel
-VT-x in the UEFI/BIOS settings during that restart. Options go after the
-script block:
+Then run it:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/DesktopECHO/ika/main/ika-wsl.ps1))) -Force
+.\ika-wsl.ps1
 ```
 
-`-Name` and `-UserName` choose other names, `-Location` where the
-distribution's disk goes, `-PackageDirectory` a folder with the `ika-base`
-and `ika-lineageos` packages to install instead of the release's, such as
-ones you built, `-Force` replaces a distribution of the same name
-(deleting its files) and restarts WSL without asking, and `-NoStart` leaves
-Ika stopped. Without `-Force`, a distribution of the same name stops the
+Windows may refuse to run the saved file because of the execution policy.
+If it does, start it like this, with any options after it:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\ika-wsl.ps1 -Force
+```
+
+Install options:
+
+| Option | Effect |
+| --- | --- |
+| `-Name NAME` | The distribution's name (default: Ika). |
+| `-UserName NAME` | The Linux user (default: your Windows user name, lowercased). |
+| `-Location PATH` | Where the distribution's disk goes (default: WSL's own choice). |
+| `-PackageDirectory PATH` | A folder with staged `ika-base` and `ika-lineageos` packages to install instead of the release's. |
+| `-Force` | Replaces a distribution of the same name, deleting its files, and restarts WSL without asking. |
+| `-NoStart` | Leaves Ika stopped. |
+
+Without `-Force`, a distribution of the same name stops the
 installer before it downloads anything, and it prints the command that
 uninstalls that distribution. The packages it downloads stay in `%TEMP%`,
 and the next run uses those that are the release's, by name and size,

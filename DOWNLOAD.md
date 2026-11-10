@@ -1,15 +1,14 @@
-[README](README.md) | [Using Ika](USAGE.md) | [Configuration](CONFIGURATION.md) | [Graphics](GRAPHICS.md) | [Building](BUILDING.md) | **Downloads**
+[README](README.md)&nbsp; • &nbsp;**Download**&nbsp; • &nbsp;[Using Ika](USAGE.md)&nbsp; • &nbsp;[Configuration](CONFIGURATION.md)&nbsp; • &nbsp;[Graphics](GRAPHICS.md)&nbsp; • &nbsp;[Building](BUILDING.md)
 
-# Downloads (Updated 2026-11-09)
+# Download (Updated 2026-11-09)
 
-Ika is two packages: `ika-base`, the application, and `ika-lineageos`, the
-Android disk image. Download both for your distribution and architecture,
-then install them as the [README](README.md#install) shows. On Windows, the
-installer downloads and installs them: see [Windows (WSL2)](#windows-wsl2)
-below.
+Ika installs two packages: `ika-base` is the emulator app, and `ika-lineageos` is the
+Android disk image (also known as "The ROM"). Download both for your distribution and architecture. and install them with your package manager. 
+
+On Windows, the install script downloads and installs Ika automatically, see [Windows (WSL2)](#windows-wsl2) below.
 
 > [!NOTE]
-> Debian and Ubuntu need Mesa 26.1 or newer, from [Debian trixie-backports](https://backports.debian.org/Instructions/) or the [Kisak Mesa PPA](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa), before the Ika packages are installed.
+> Debian and Ubuntu require Mesa 26.1 or newer, from [Debian trixie-backports](https://backports.debian.org/Instructions/) or the [Kisak Mesa PPA](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa), before the Ika packages can be installed.
 
 | **Distribution • Architecture** | **Application** | **Disk Image** |
 | --- | --- | --- |
@@ -32,25 +31,23 @@ To choose the ROM's Google integration, build from source: see
 ## Windows (WSL2)
 
 On an x86-64 Windows PC, Ika runs in a WSL2 distribution, and `ika-wsl.ps1`
-sets it up. Open PowerShell and run:
+sets it up. In PowerShell, download the install script:
 
 ```powershell
-irm https://raw.githubusercontent.com/DesktopECHO/ika/main/ika-wsl.ps1 | iex
+irm https://raw.githubusercontent.com/DesktopECHO/ika/main/ika-wsl.ps1 -OutFile ika-wsl.ps1
 ```
 
-The installer handles the rest, with no download of yours: the Debian 13
-packages, `ika-base` and `ika-lineageos`, come from the latest release (over
-a gigabyte) into `%TEMP%`, and a run that finds them there already uses
-them. On any other kind of PC it stops before it changes anything. It adds what WSL2 needs of Windows and is missing (the WSL
-package, the Virtual Machine Platform and Windows' hypervisor) behind one
-permission prompt; if Windows must restart, it says so: restart, then run the
-same line again. If virtualization is off in the PC's firmware, it tells you
-to turn on SVM Mode (AMD) or Intel Virtualization Technology in the UEFI/BIOS
-settings. It then installs Debian 13 as a distribution named Ika, with a user
-named after your Windows user, installs Mesa 26.1 or newer and the two
-packages in it, readies WSL for Ika, and starts Ika, whose console opens in a
-window. Allow a few minutes. Later, start Ika from the Start menu, or from
-PowerShell with `wsl -d Ika -- ika start`.
+Then run it:
 
-[Windows (WSL2)](CONFIGURATION.md#windows-wsl2) in the Configuration guide
-describes what the installer changes and its options.
+```powershell
+.\ika-wsl.ps1
+```
+
+Windows may refuse to run the saved file because of the execution policy.
+If it does, start it like this, with any options after it:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\ika-wsl.ps1
+```
+
+The installer handles the rest.  It readies WSL for Ika, installs Debian 13, `ika-base` and `ika-lineageos`, Mesa 26.1, and starts Ika.  [Windows (WSL2)](CONFIGURATION.md#windows-wsl2) in the Configuration guide describes what the installer changes and its options.
