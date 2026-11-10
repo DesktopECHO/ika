@@ -150,3 +150,13 @@ sc_texture_reset(struct sc_texture *tex) {
         interop->ops->reset(interop);
     }
 }
+
+bool
+sc_texture_imports_dma_buf(struct sc_texture *tex) {
+    if (!tex->interop || strcmp(tex->interop->name, "raw")) {
+        return false;
+    }
+    struct sc_interop_raw *raw =
+        container_of(tex->interop, struct sc_interop_raw, interop);
+    return raw->has_egl;
+}

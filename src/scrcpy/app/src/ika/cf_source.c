@@ -38,6 +38,9 @@
 #define SC_CF_HELLO_RELEASES_SLOTS 1u
 #define SC_CF_HELLO_RELEASES_DMA_BUFS 2u
 #define SC_CF_HELLO_WANTS_TIMESTAMPS 4u
+// The slots hold XRGB/ARGB8888 frames (B, G, R, X bytes): the server
+// converts XBGR/ABGR ones as it copies them in
+#define SC_CF_HELLO_WANTS_XRGB 8u
 
 #define SC_CF_MAX_PAYLOAD (256u * 1024 * 1024)
 #define SC_CF_MAX_SLOTS 16
@@ -108,9 +111,10 @@ struct sc_cf_shm {
     uint32_t slot_size;
     uint32_t generation; // 0 if the slots are not released (copied instead)
     int fd; // the socket (dup) to send releases, -1 if none
+    int memfd; // the slots' memory, to share them with the compositor
 };
 
-// A frame pointing into a slot
+// A frame pointing into a slot (its AVFrame.opaque)
 struct sc_cf_slot {
     AVBufferRef *shm;
     uint32_t index;
@@ -297,6 +301,9 @@ sc_cf_free_shm(void *opaque, uint8_t *data) {
     if (shm->fd != -1) {
         close(shm->fd);
     }
+    if (shm->memfd != -1) {
+        close(shm->memfd);
+    }
     free(shm);
 }
 
@@ -452,6 +459,8 @@ sc_cf_make_slot_frame(struct sc_cf_source *source,
     frame->buf[0] = buf;
     frame->data[0] = data;
     frame->linesize[0] = h->stride;
+    // Valid as long as the frame references buf
+    frame->opaque = slot;
     frame->format = sc_cf_get_pix_fmt(h->fourcc);
     frame->width = h->width;
     frame->height = h->height;
@@ -601,11 +610,12 @@ sc_cf_process_msg(struct sc_cf_source *source, int fd) {
             shm->size = (size_t) h.slot_count * h.slot_size;
             shm->data = mmap(NULL, shm->size, PROT_READ, MAP_SHARED,
                              attached_fd, 0);
-            close(attached_fd);
+            shm->memfd = attached_fd;
             attached_fd = -1;
             if (shm->data == MAP_FAILED) {
                 LOGE("Could not map Cuttlefish frame slots: %s",
                      strerror(errno));
+                close(shm->memfd);
                 free(shm);
                 goto error;
             }
@@ -804,6 +814,9 @@ run_cf_source(void *data) {
                                                | SC_CF_HELLO_RELEASES_DMA_BUFS
                                                | (source->want_stamps
                                                   ? SC_CF_HELLO_WANTS_TIMESTAMPS
+                                                  : 0)
+                                               | (source->want_xrgb
+                                                  ? SC_CF_HELLO_WANTS_XRGB
                                                   : 0),
                                            source->display_number)) {
             LOGW("Could not send Cuttlefish frame socket hello");
@@ -879,6 +892,7 @@ sc_cf_source_init(struct sc_cf_source *source, const char *socket_path,
     source->shm = NULL;
     source->conn = NULL;
     source->want_stamps = want_stamps;
+    source->want_xrgb = false;
     source->stamps_pending = false;
     source->pool = NULL;
     source->pool_size = 0;
@@ -936,4 +950,21 @@ sc_cf_source_destroy(struct sc_cf_source *source) {
     av_frame_free(&source->frame);
     sc_mutex_destroy(&source->mutex);
     free(source->socket_path);
+}
+
+bool
+sc_cf_frame_get_slot(const AVFrame *frame, struct sc_cf_frame_slot *out) {
+    const struct sc_cf_slot *slot = frame->opaque;
+    if (!slot || !frame->buf[0]) {
+        return false;
+    }
+    const struct sc_cf_shm *shm = (const struct sc_cf_shm *) slot->shm->data;
+    if (shm->memfd == -1) {
+        return false;
+    }
+    out->slots = slot->shm;
+    out->memfd = shm->memfd;
+    out->size = shm->size;
+    out->offset = (size_t) slot->index * shm->slot_size;
+    return true;
 }

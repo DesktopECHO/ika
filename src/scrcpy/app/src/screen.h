@@ -18,6 +18,7 @@
 #include "frame_buffer.h"
 #include "ika/flex.h"
 #include "ika/window.h"
+#include "ika/wl_direct.h"
 #include "input_manager.h"
 #include "mouse_capture.h"
 #include "options.h"
@@ -88,6 +89,11 @@ struct sc_screen {
     sc_tick titlebar_blank_deadline;
 
     struct sc_texture tex;
+    // Raw frames shown without OpenGL where the compositor takes the
+    // window's pixels from shared memory anyway (WSLg)
+    struct sc_wl_direct wl_direct;
+    // The texture does not hold the latest frame (shown directly)
+    bool tex_stale;
     struct sc_input_manager im;
     struct sc_mouse_capture mc; // only used in mouse relative mode
     struct sc_fps_counter fps_counter;

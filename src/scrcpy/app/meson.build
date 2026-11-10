@@ -104,6 +104,7 @@ else
         'src/ika/cf_source.c',
         'src/ika/latency.c',
         'src/ika/window.c',
+        'src/ika/wl_direct.c',
     ]
     if host_machine.system() == 'darwin'
         feature_test_macros += '-D_DARWIN_C_SOURCE'

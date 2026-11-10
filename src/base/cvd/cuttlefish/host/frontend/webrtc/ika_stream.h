@@ -133,6 +133,9 @@ class RawFrameStreamer {
     bool client_releases_dmabufs = false;
     // The client wants IKAT before each frame notice (IKA_LATENCY=1)
     bool wants_timestamps = false;
+    // The client wants XRGB/ARGB8888 frames in its slots (it hands them to a
+    // Wayland compositor as they are): XBGR/ABGR ones are converted
+    bool wants_xrgb = false;
     std::vector<uint32_t> held_dmabufs;
     // The display the client shows, from its hello (0 without one)
     uint32_t display_number = 0;
@@ -194,7 +197,9 @@ class RawFrameStreamer {
                               size_t payload_size);
   FrameSendResult SendShmFrame(int fd, const Frame& frame,
                                DisplayStream& display);
-  bool SendShmNotify(int fd, const Frame& frame, uint32_t slot_index);
+  // fourcc: the frame's format in the slot
+  bool SendShmNotify(int fd, const Frame& frame, uint32_t slot_index,
+                     uint32_t fourcc);
   bool ReadClientMessages(int fd, ClientShm& shm);
   bool AcquireShmSlot(int fd, ClientShm& shm, uint32_t* slot_index);
   void CloseClientShm(ClientShm& shm) const;

@@ -64,6 +64,9 @@ constexpr uint32_t kHelloReleasesSlots = 1u << 0;
 constexpr uint32_t kHelloReleasesDmabufs = 1u << 1;
 // The client wants the frames' timestamps (IKAT) for its latency statistics
 constexpr uint32_t kHelloWantsTimestamps = 1u << 2;
+// The client wants the frames in its slots as XRGB8888/ARGB8888 (B, G, R, X
+// bytes), the formats every Wayland compositor takes in shared memory
+constexpr uint32_t kHelloWantsXrgb = 1u << 3;
 constexpr uint32_t kTimestampsMagic = 0x54414b49;  // "IKAT", little-endian.
 constexpr uint32_t kTimestampsVersion = 1;
 constexpr int kClientHelloTimeoutMs = 100;
@@ -159,6 +162,42 @@ int MemfdCreate(const char* name) {
   errno = ENOSYS;
   return -1;
 #endif
+}
+
+constexpr uint32_t kFourccXrgb8888 = 0x34325258;  // "XR24"
+constexpr uint32_t kFourccArgb8888 = 0x34325241;  // "AR24"
+constexpr uint32_t kFourccXbgr8888 = 0x34324258;  // "XB24"
+constexpr uint32_t kFourccAbgr8888 = 0x34324241;  // "AB24"
+
+// The format of a frame in a client's slots
+uint32_t SlotFourcc(bool wants_xrgb, uint32_t fourcc) {
+  if (wants_xrgb) {
+    if (fourcc == kFourccXbgr8888) {
+      return kFourccXrgb8888;
+    }
+    if (fourcc == kFourccAbgr8888) {
+      return kFourccArgb8888;
+    }
+  }
+  return fourcc;
+}
+
+// Copy a frame into a slot, swapping its red and blue bytes if the slot's
+// format says so: as fast as memcpy, both are bound by memory bandwidth
+void CopyToSlot(uint8_t* slot, const uint8_t* pixels, size_t size,
+                bool swap_red_blue) {
+  if (!swap_red_blue) {
+    memcpy(slot, pixels, size);
+    return;
+  }
+  const size_t pixel_count = size / 4;
+  for (size_t i = 0; i < pixel_count; ++i) {
+    uint32_t v;
+    memcpy(&v, pixels + i * 4, 4);
+    v = (v & 0xff00ff00u) | ((v >> 16) & 0xffu) | ((v & 0xffu) << 16);
+    memcpy(slot + i * 4, &v, 4);
+  }
+  memcpy(slot + pixel_count * 4, pixels + pixel_count * 4, size % 4);
 }
 
 uint64_t MonotonicNs() {
@@ -319,6 +358,7 @@ void RawFrameStreamer::OnFrame(uint32_t display_number, uint32_t width,
   std::shared_ptr<ShmMapping> mapping;
   uint8_t* slot_data = nullptr;
   uint32_t slot_index = 0;
+  uint32_t slot_fourcc = fourcc;
   DisplayStream* display;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -336,6 +376,7 @@ void RawFrameStreamer::OnFrame(uint32_t display_number, uint32_t width,
                 << "x" << height << " stride " << stride_bytes;
     }
     if (ReserveSlotLocked(*display, header.payload_size, &slot_index)) {
+      slot_fourcc = SlotFourcc(display->shm.wants_xrgb, fourcc);
       mapping = display->shm.mapping;
       slot_data = mapping->data +
                   static_cast<size_t>(slot_index) * display->shm.slot_size;
@@ -350,7 +391,8 @@ void RawFrameStreamer::OnFrame(uint32_t display_number, uint32_t width,
   frame.arrival_ns = arrival_ns;
 
   if (mapping) {
-    memcpy(slot_data, pixels, payload_size);
+    CopyToSlot(slot_data, pixels, payload_size, slot_fourcc != fourcc);
+    frame.header.fourcc = slot_fourcc;
     frame.slot = static_cast<int>(slot_index);
 
     std::lock_guard<std::mutex> lock(mutex_);
@@ -861,7 +903,7 @@ void RawFrameStreamer::StreamToClient(int client_fd, DisplayStream& display) {
       return;
     }
     if (frame.type == FrameType::kRaw && frame.slot >= 0) {
-      ok = SendShmNotify(client_fd, frame, frame.slot);
+      ok = SendShmNotify(client_fd, frame, frame.slot, frame.header.fourcc);
     } else if (frame.type == FrameType::kRaw) {
       ok = SendRawFrame(client_fd, frame, display);
     } else {
@@ -1068,10 +1110,14 @@ RawFrameStreamer::FrameSendResult RawFrameStreamer::SendShmFrame(
   // Only this thread remaps the slots: the mapping outlives the copy
   uint8_t* slot =
       shm.mapping->data + static_cast<size_t>(slot_index) * shm.slot_size;
-  memcpy(slot, frame.pixels->data(), payload_size);
+  const uint32_t slot_fourcc =
+      SlotFourcc(shm.wants_xrgb, frame.header.fourcc);
+  CopyToSlot(slot, frame.pixels->data(), payload_size,
+             slot_fourcc != frame.header.fourcc);
 
-  return SendShmNotify(fd, frame, slot_index) ? FrameSendResult::kSent
-                                              : FrameSendResult::kFailed;
+  return SendShmNotify(fd, frame, slot_index, slot_fourcc)
+             ? FrameSendResult::kSent
+             : FrameSendResult::kFailed;
 }
 
 // Tell the client when the frame came from crosvm and when it is sent, for
@@ -1090,14 +1136,14 @@ bool RawFrameStreamer::SendTimestamps(int fd, const Frame& frame) {
 
 // Tell the client that a slot holds the frame
 bool RawFrameStreamer::SendShmNotify(int fd, const Frame& frame,
-                                     uint32_t slot_index) {
+                                     uint32_t slot_index, uint32_t fourcc) {
   ShmFrameHeader header = {
       .magic = kShmNotifyMagic,
       .version = kShmFrameVersion,
       .display_number = frame.header.display_number,
       .width = frame.header.width,
       .height = frame.header.height,
-      .fourcc = frame.header.fourcc,
+      .fourcc = fourcc,
       .stride_bytes = frame.header.stride_bytes,
       .payload_size = frame.header.payload_size,
       .slot_index = slot_index,
@@ -1140,6 +1186,7 @@ bool RawFrameStreamer::ReadClientMessages(int fd, ClientShm& shm) {
       shm.client_releases_dmabufs =
           (message.arg0 & kHelloReleasesDmabufs) != 0;
       shm.wants_timestamps = (message.arg0 & kHelloWantsTimestamps) != 0;
+      shm.wants_xrgb = (message.arg0 & kHelloWantsXrgb) != 0;
       shm.display_number = message.arg1;
     } else if (message.magic == kClientHelloMagic) {
       shm.client_releases_slots = message.arg0 == 1;
