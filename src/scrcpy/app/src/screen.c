@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <string.h>
+#include <stdlib.h>
 #include <SDL3/SDL.h>
 
 #include "events.h"
@@ -101,6 +102,19 @@ sc_screen_get_raw_source_rect(struct sc_screen *screen) {
     return rect;
 }
 
+// Upload the latest frame if it was shown directly
+static void
+sc_screen_ensure_texture(struct sc_screen *screen) {
+    if (!screen->tex_stale) {
+        return;
+    }
+    screen->tex_stale = false;
+    if (screen->frame->buf[0]
+            && !sc_texture_update(&screen->tex, screen->frame)) {
+        LOGW("Could not update texture");
+    }
+}
+
 // Notify flex display of the window size, in pixels in device orientation
 static void
 sc_screen_flex_on_window_size(struct sc_screen *screen) {
@@ -119,6 +133,7 @@ sc_screen_flex_on_window_size(struct sc_screen *screen) {
     SDL_Texture *live = NULL;
     SDL_FRect src;
     if (screen->raw && !screen->is_icon_active) {
+        sc_screen_ensure_texture(screen);
         live = sc_texture_get(&screen->tex);
         src = sc_screen_get_raw_source_rect(screen);
     }
@@ -498,6 +513,48 @@ sc_screen_update_raw_content_size(struct sc_screen *screen) {
     }
 }
 
+// Show the latest frame by attaching its slot to the window, if the window
+// shows exactly the frame: the whole window is the frame's content, 1:1, with
+// nothing drawn over it
+static bool
+sc_screen_present_direct(struct sc_screen *screen) {
+    if (!screen->wl_direct.enabled || !screen->tex_stale) {
+        // The texture holds the frame (OpenGL showed it last)
+        return false;
+    }
+
+    AVFrame *frame = screen->frame;
+    if (!frame->buf[0] || screen->is_icon_active
+            || !sc_screen_is_raw_flex(screen)
+            || !sc_flex_shows_live_only(&screen->flex)
+            || screen->orientation != SC_ORIENTATION_0
+            || sc_ika_window_get_margin(&screen->ika_window)) {
+        return false;
+    }
+
+    SDL_WindowFlags flags = SDL_GetWindowFlags(screen->window);
+    if ((flags & SDL_WINDOW_BORDERLESS) && !(flags & SDL_WINDOW_FULLSCREEN)) {
+        // A border is drawn around the content
+        return false;
+    }
+
+    int w;
+    int h;
+    if (!SDL_GetWindowSizeInPixels(screen->window, &w, &h)
+            || w != frame->width || h != frame->height) {
+        return false;
+    }
+    SDL_Rect content =
+        sc_ika_window_get_content_pixel_rect(&screen->ika_window);
+    SDL_FRect src = sc_screen_get_raw_source_rect(screen);
+    if (content.x || content.y || content.w != w || content.h != h
+            || src.x || src.y || src.w != w || src.h != h) {
+        return false;
+    }
+
+    return sc_wl_direct_present(&screen->wl_direct, frame);
+}
+
 // render the texture to the renderer
 //
 // Set the update_content_rect flag if the window or content size may have
@@ -510,6 +567,11 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
     if (update_content_rect || screen->pixel_mode) {
         sc_screen_update_content_rect(screen);
     }
+
+    if (sc_screen_present_direct(screen)) {
+        return;
+    }
+    sc_screen_ensure_texture(screen);
 
     SDL_Renderer *renderer = screen->renderer;
     // Around the content of an app window (while it is resized), extend the
@@ -979,6 +1041,19 @@ sc_screen_init(struct sc_screen *screen,
     }
 
     sc_ika_window_init(&screen->ika_window, screen->window);
+    screen->tex_stale = false;
+    // Where OpenGL cannot import DMA-BUFs, it presents the window through
+    // shared memory, as WSLg does: the frame slots are attached instead
+    // (IKA_DIRECT_PRESENT=0 draws them with OpenGL)
+    const char *direct_env = getenv("IKA_DIRECT_PRESENT");
+    bool direct = !direct_env || strcmp(direct_env, "0");
+    if (direct && params->raw && params->flex_display
+            && !sc_texture_imports_dma_buf(&screen->tex)
+            && sc_wl_direct_init(&screen->wl_direct, screen->window)) {
+        LOGI("Frames shown directly, without OpenGL");
+    } else {
+        memset(&screen->wl_direct, 0, sizeof(screen->wl_direct));
+    }
     if (screen->flex_display) {
         sc_flex_init(&screen->flex, params->controller, screen->renderer,
                      params->raw, params->app_window);
@@ -1086,6 +1161,7 @@ sc_screen_init(struct sc_screen *screen,
     return true;
 
 error_destroy_texture:
+    sc_wl_direct_destroy(&screen->wl_direct);
     sc_ika_window_destroy(&screen->ika_window);
     sc_texture_destroy(&screen->tex);
 error_destroy_renderer:
@@ -1207,6 +1283,7 @@ sc_screen_destroy(struct sc_screen *screen) {
     if (screen->flex_display) {
         sc_flex_destroy(&screen->flex);
     }
+    sc_wl_direct_destroy(&screen->wl_direct);
     sc_ika_window_destroy(&screen->ika_window);
     sc_texture_destroy(&screen->tex);
     av_frame_free(&screen->frame);
@@ -1455,9 +1532,14 @@ sc_screen_apply_frame(struct sc_screen *screen, bool can_resize) {
         sc_screen_update_content_rect(screen);
     }
 
-    bool ok = sc_texture_update(&screen->tex, frame);
-    if (!ok) {
-        return false;
+    // A frame that may be shown directly is uploaded only if OpenGL draws it
+    if (screen->wl_direct.enabled) {
+        screen->tex_stale = true;
+    } else {
+        bool ok = sc_texture_update(&screen->tex, frame);
+        if (!ok) {
+            return false;
+        }
     }
 
     if (screen->flex_display) {
@@ -1706,6 +1788,9 @@ sc_screen_set_theme_background(struct sc_screen *screen, uint32_t color) {
 
 void
 sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
+    // The compositor's releases of the frames shown directly
+    sc_wl_direct_dispatch(&screen->wl_direct);
+
     switch (event->type) {
         case SC_EVENT_OPEN_WINDOW: {
             struct sc_size *size = event->user.data1;

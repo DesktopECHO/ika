@@ -140,6 +140,13 @@ sc_flex_is_holding(struct sc_flex *flex) {
     return flex->holding;
 }
 
+// Rendering a raw frame draws the live frame alone, as it is: no hold, no
+// release effect, no late content
+static inline bool
+sc_flex_shows_live_only(struct sc_flex *flex) {
+    return !flex->holding && !flex->release_tick && !flex->has_late_content;
+}
+
 // The display size of the shown content (raw only), 0x0 if none yet
 static inline struct sc_size
 sc_flex_get_shown_size(struct sc_flex *flex) {

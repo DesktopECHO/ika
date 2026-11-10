@@ -45,6 +45,10 @@ sc_texture_update(struct sc_texture *tex, const AVFrame *frame);
 void
 sc_texture_reset(struct sc_texture *tex);
 
+// Whether DMA-BUF frames are imported (raw textures only)
+bool
+sc_texture_imports_dma_buf(struct sc_texture *tex);
+
 enum AVHWDeviceType
 sc_texture_get_hw_type(struct sc_texture *tex);
 

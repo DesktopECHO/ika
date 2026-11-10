@@ -58,6 +58,9 @@ struct sc_cf_source {
     // and the ones received for the next frame, attached to it as its
     // opaque_ref (a struct sc_latency_stamps)
     bool want_stamps;
+    // Ask for the frames in the slots in XRGB/ARGB8888 order, the one a
+    // Wayland compositor must take in shared memory (set before start)
+    bool want_xrgb;
     bool stamps_pending;
     struct sc_latency_stamps stamps;
 
@@ -89,5 +92,18 @@ sc_cf_source_join(struct sc_cf_source *source);
 
 void
 sc_cf_source_destroy(struct sc_cf_source *source);
+
+/**
+ * The frame slot a frame of a cf_source is in, if any
+ */
+struct sc_cf_frame_slot {
+    AVBufferRef *slots; // the slots' mapping (borrowed from the frame)
+    int memfd; // the slots' memory (owned by the slots)
+    size_t size; // of all the slots
+    size_t offset; // of the frame's slot
+};
+
+bool
+sc_cf_frame_get_slot(const AVFrame *frame, struct sc_cf_frame_slot *slot);
 
 #endif

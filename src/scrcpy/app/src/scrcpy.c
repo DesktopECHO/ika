@@ -974,6 +974,9 @@ aoa_complete:
             goto end;
         }
         cf_source_initialized = true;
+        // Frames shown directly are attached as they are in their slots
+        s->cf_source.want_xrgb = screen_initialized
+                              && s->screen.wl_direct.enabled;
         sc_frame_source_add_sink(&s->cf_source.frame_source,
                                  &s->screen.frame_sink);
         if (!sc_cf_source_start(&s->cf_source)) {
