@@ -128,5 +128,7 @@ git_repository(
         # vkAcquireImageANDROID sends no result and runs on the submit thread
         # (lineageos external-mesa3d-gfxstream-async-acquire-image.patch).
         "@//build_external/gfxstream:PATCH.gfxstream.async-acquire-image.patch",
+        # The display reads each frame it shows straight into its own buffer.
+        "@//build_external/gfxstream:PATCH.gfxstream.display-read-direct.patch",
     ],
 )
