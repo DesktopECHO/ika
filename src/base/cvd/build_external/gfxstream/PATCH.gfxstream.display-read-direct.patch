@@ -1,0 +1,76 @@
+Patch summary:
+A whole-ColorBuffer read into a single buffer of the reader's, which crosvm's
+display does for every frame it shows when it cannot share a dma-buf (WSL2),
+goes straight into that buffer instead of through the resource's linear
+copy: each frame was copied once more on the virtio-gpu thread. A later
+partial write of the resource first refreshes the linear copy from the
+ColorBuffer, so it does not send stale pixels back.
+diff --git a/host/virtio_gpu_resource.cpp b/host/virtio_gpu_resource.cpp
+index e4011df..046e4d0 100644
+--- a/host/virtio_gpu_resource.cpp
++++ b/host/virtio_gpu_resource.cpp
+@@ -537,6 +537,27 @@ int VirtioGpuResource::TransferRead(uint64_t offset, stream_renderer_box* box,
+         return -EINVAL;
+     }
+ 
++    // crosvm's display reads a whole ColorBuffer into its framebuffer for every
++    // frame it shows when it cannot share a dma-buf (WSL2). Read it there
++    // directly: through mLinear each frame was copied once more on the GPU
++    // thread, and the frames' memory traffic slows the GPU of an APU.
++    if (mResourceType == VirtioGpuResourceType::COLOR_BUFFER && iovs && iovs->size() == 1 &&
++        mCreateArgs && box->x == 0 && box->y == 0 && box->w == mCreateArgs->width &&
++        box->h == mCreateArgs->height) {
++        auto formatOpt = ToGfxstreamFormat(mCreateArgs->format);
++        const size_t size = GetTransferSize(mCreateArgs->format, mCreateArgs->width,
++                                            mCreateArgs->height, 0, 0, mCreateArgs->width,
++                                            mCreateArgs->height);
++        if (formatOpt && !IsYuvFormat(*formatOpt) && size > 0 && (*iovs)[0].iov_base &&
++            (*iovs)[0].iov_len >= size) {
++            FrameBuffer::getFB()->readColorBuffer(mCreateArgs->handle, 0, 0, mCreateArgs->width,
++                                                  mCreateArgs->height, *formatOpt,
++                                                  (*iovs)[0].iov_base, (*iovs)[0].iov_len);
++            mLinearStale = true;
++            return 0;
++        }
++    }
++
+     EnsureLinear();
+ 
+     // First, copy from the underlying backend resource to this resource's linear buffer:
+@@ -581,6 +602,14 @@ int VirtioGpuResource::TransferWrite(uint64_t offset, stream_renderer_box* box,
+ 
+     EnsureLinear();
+ 
++    // A partial write must not send back the rest of a stale mLinear.
++    if (mLinearStale && mResourceType == VirtioGpuResourceType::COLOR_BUFFER) {
++        const bool whole = mCreateArgs && box->x == 0 && box->y == 0 &&
++                           box->w == mCreateArgs->width && box->h == mCreateArgs->height;
++        if (!whole) ReadFromColorBufferToLinear(offset, box);
++        mLinearStale = false;
++    }
++
+     // First, copy from the desired iov to this resource's linear buffer:
+     int ret = 0;
+     if (iovs) {
+@@ -752,6 +781,7 @@ int VirtioGpuResource::ReadFromColorBufferToLinear(uint64_t offset, stream_rende
+                                               mLinear.size());
+     }
+ 
++    mLinearStale = false;
+     return 0;
+ }
+ 
+diff --git a/host/virtio_gpu_resource.h b/host/virtio_gpu_resource.h
+index 8f91eb0..a5235f0 100644
+--- a/host/virtio_gpu_resource.h
++++ b/host/virtio_gpu_resource.h
+@@ -150,6 +150,9 @@ class VirtioGpuResource {
+     std::optional<struct stream_renderer_create_blob> mCreateBlobArgs;
+     std::vector<struct iovec> mIovs;
+     std::vector<char> mLinear;
++    // Set when a read went straight into the reader's buffer and left mLinear
++    // behind the ColorBuffer; a partial write then refreshes mLinear first.
++    bool mLinearStale = false;
+     std::shared_ptr<VirtioGpuPipe> mHostPipe; // Snapshot/restore handled by context
+     std::optional<VirtioGpuContextId> mLatestAttachedContext;
+     std::unordered_set<VirtioGpuContextId> mAttachedToContexts;
