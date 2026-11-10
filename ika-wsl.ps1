@@ -818,10 +818,12 @@ $setupOutput = Invoke-Provision setup $UserName -NoThrow -Quiet
 if (($setupOutput -join "`n") -match 'wsl --shutdown') { $restartWsl = $true }
 
 # What a restart of WSL brings: the kernel's settings, systemd, the time zone.
-# Anything else still missing is a fix that did not take.
+# Anything else still missing is a fix that did not take. The devices' ACL
+# entries come from udev at the distribution's restart, which follows anyway.
 $byRestart = @('nested-virtualization', 'kvm', 'cgroup2', 'cgroup-cpu', 'systemd', 'timezone')
 foreach ($line in Invoke-Provision check $UserName -NoThrow -Quiet) {
     if ($line -notmatch '^([^\t]+)\t(.+)$') { continue }
+    if ($Matches[1] -like 'device-*') { continue }
     if ($restartWsl -and $byRestart -contains $Matches[1]) { continue }
     $reason = $Matches[2]
     if ($Matches[1] -eq 'kernel') { $reason += "; ""wsl -d $Name -- ika-wsl-setup"" builds it" }
