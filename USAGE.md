@@ -1,28 +1,73 @@
-[README](README.md) | **Using Ika** | [Configuration](CONFIGURATION.md) | [Graphics](GRAPHICS.md) | [Building](BUILDING.md) | [Downloads](DOWNLOADS.md)
+[README](README.md)&nbsp; • &nbsp;[Download](DOWNLOAD.md)&nbsp; • &nbsp;**Using Ika**&nbsp; • &nbsp;[Configuration](CONFIGURATION.md)&nbsp; • &nbsp;[Graphics](GRAPHICS.md)&nbsp; • &nbsp;[Building](BUILDING.md)
 
 # Using Ika
 
 This guide covers the console, Android apps on your desktop, the keyboard,
-mouse and gamepads, TV mode and the everyday commands. Every command and
-setting is listed in [Configuration](CONFIGURATION.md).
+mouse and gamepads, TV mode and the everyday commands. Each part starts with
+what you do on the desktop, then gives the commands that do the same from a
+terminal. Every command and setting is listed in
+[Configuration](CONFIGURATION.md).
+
+## The console
+
+The console is your Android 16 virtual desktop.  It can be windowed or full-screen.  Its display follows the window size without changing the desktop's density, so resizing the window gives Android more room rather than stretching it.
+
+<img width="60%" alt="The console in a window on Windows: drag its top-left corner to move it, tap its top-right corner for Quick Settings" src="src/docs/console-corners.png" />
+
+- **Move it:** drag the top-left corner of the window, where Android shows
+  the clock.
+- **Drag It** Drag the window corners to resize.  On Linux, drag it to an edge of the screen to fill half of it, or to the
+  top to maximize it.  This needs fixing in WSL. 
+- **Quick Settings:** click on the cuttlefish at the top-right corner to open QuickSettings and view notifications.
+- **Enter/Exit Fullscreen:** MOD+F or F11.
+- In fullscreen mode, another way to **exit fullscreen** is to single-click the top-left hot corner. 
+
+
+MOD is Left Alt or Left Super (Command on a Mac keyboard). The console
+remembers its size and whether it was fullscreen.
+
+The mouse works a little differently in Desktop vs. TV mode:
+
+| Button | Desktop mode | TV mode |
+| --- | --- | --- |
+| Right | Right click | Back |
+| Shift + right | Back | Right click |
+| Middle | Home | Home |
+| 4th, 5th | Recent apps, notifications (twice: quick settings) | The same |
+
+Shortcuts, with MOD held:
+
+| Keys | Action |
+| --- | --- |
+| MOD+F | Fullscreen on and off |
+| MOD+Q | Close the window |
+| MOD+H, MOD+B (or MOD+Backspace), MOD+S | Home, Back, recent apps |
+| MOD+N, MOD+Shift+N | Open (twice: quick settings), close the notification panel |
+| MOD+Up, MOD+Down, MOD+P | Volume up, down, power |
+| MOD+C, MOD+X, MOD+V | Copy, cut, paste through Android's clipboard |
+| MOD+Shift+V | Type the clipboard's text |
+| MOD+O, MOD+Shift+O | Turn Android's screen off, on |
+
+Holding Ctrl or Shift as you press the left button adds a second finger,
+which mirrors the pointer until you let go:
+
+- **Ctrl+drag:** pinches and rotates about the center of the screen.
+- **Shift+drag:** slides two fingers up and down together.
+- **Ctrl+Shift+drag:** slides two fingers left and right together.
+
+Drop an APK on the window to install it; any other file dropped there goes to
+Android's Download folder. This is not supported on WSL: Windows cannot drag
+files into WSL's windows, so install APKs there with `ika install` (see
+[Installing and removing apps](#installing-and-removing-apps)).
 
 ## Starting and stopping
 
-```bash
-ika start      # boot Android and open the console
-ika status     # is it running?
-ika stop       # stop Android
-ika restart    # stop and start again, with new options if given
-```
+The **Ika Console** icon in your desktop's app menu starts Android and opens
+the console.  Right-click the icon for **Start Ika**, **Stop Ika**, **Restart Ika** and
+**Startup options**; on WSL, right-click its button on the Windows task bar.
 
-The **Ika Console** icon in your desktop's app menu runs `ika start`.
-Right-click it for **Start Ika**, **Stop Ika**, **Restart Ika** and **Startup
-options**; on WSL2, right-click its button on the Windows task bar.
-Started from the menu, Ika reports its progress and errors as desktop
-notifications.
-
-**Startup options** (`ika options`) opens **Startup Options · Ika**, a window
-like an app's, for the settings of `ika.ini` you change most, in two tabs:
+**Startup options** (`ika options` in a terminal) opens **Startup Options ·
+Ika**, a window like an app's, for the settings of `ika.ini` you change most, in two tabs:
 
 - **Startup Options**: **CPUs** and **RAM** (`cpus`, `memory_mb`), the
   console's **Desktop display density** and **TV display density** (`dpi`,
@@ -47,69 +92,30 @@ time Ika starts. **Apply and restart** also restarts Ika. **Reset to default**
 asks first, then writes the built-in value of each, and **Cancel** leaves the
 file as it was.
 
+From a terminal:
+
+```bash
+ika start      # boot Android and open the console, as the icon does
+ika status     # is it running?
+ika stop       # stop Android
+ika restart    # stop and start again, with new options if given
+```
+
 - `ika start -f` opens the console fullscreen, and `ika start --no-console`
   starts Android without it; app windows open either way.
-- `ika start` while Android runs reopens the console. The console also
-  reopens by itself when Android restarts, but not after you close it.
+- `ika start` while Android runs reopens the console.
 - **Updating the ROM:** a new `ika-lineageos` would make Cuttlefish rebuild
   Android's disk and discard its data, so `ika start` refuses to start after
   one and says so. Run `ika backup` before installing it, then `ika reset` and
   `ika restore` after (see [Factory reset](CONFIGURATION.md#factory-reset)).
-
-## The console
-
-The console is Android's desktop in a window. Its display follows the
-window's size at your desktop's density, so resizing the window gives Android
-more room rather than stretching it.
-
-- **Move it:** drag the top-left corner of the window. Drag it to an edge of
-  the screen to fill half of it, or to the top to maximize it.
-- **Leave fullscreen or maximized:** click the top-left corner once. This
-  works in every Ika window.
-- **Resize it:** drag just outside its edges. The window has no title bar,
-  and keeps an invisible margin of 4 pixels for this, so the edge of Android's
-  desktop stays clickable. While you resize, the last picture is stretched and
-  blurred until Android has drawn the new size.
-- **Fullscreen:** MOD+F or F11.
-
-MOD is Left Alt or Left Super (Command on a Mac keyboard). The console
-remembers its size and whether it was fullscreen.
-
-The keyboard types into Android as text. The mouse works as on the desktop,
-with these buttons:
-
-| Button | Desktop mode | TV mode |
-| --- | --- | --- |
-| Right | Right click | Back |
-| Shift + right | Back | Right click |
-| Middle | Home | Home |
-| 4th, 5th | Recent apps, notifications (twice: quick settings) | The same |
-
-Shortcuts, with MOD held:
-
-| Keys | Action |
-| --- | --- |
-| MOD+F | Fullscreen on and off |
-| MOD+Q | Close the window |
-| MOD+H, MOD+B (or MOD+Backspace), MOD+S | Home, Back, recent apps |
-| MOD+N, MOD+Shift+N | Open (twice: quick settings), close the notification panel |
-| MOD+Up, MOD+Down, MOD+P | Volume up, down, power |
-| MOD+C, MOD+X, MOD+V | Copy, cut, paste through Android's clipboard |
-| MOD+Shift+V | Type the clipboard's text |
-| MOD+O, MOD+Shift+O | Turn Android's screen off, on |
-
-Ctrl+drag pinches and rotates, Shift+drag and Ctrl+Shift+drag drag with two
-fingers. Drop an APK on the window to install it; any other file dropped there
-goes to Android's Download folder.
 
 ## Android apps on your desktop
 
 ### The app menu
 
 While Android runs, Ika lists every Android app in your desktop's app menu,
-in an **Android Apps (Ika)** group: a folder in GNOME's app grid, or a submenu
-on KDE Plasma, XFCE, Cinnamon and MATE. Games are named "🎮 ∙ LABEL" and other
-apps "∙ LABEL", with icons Android draws, as its launcher shows them.
+in an **Android Apps (Ika)** group: a folder in GNOME's app grid, a submenu
+on KDE Plasma, XFCE, Cinnamon and MATE, or a Start Menu entry on Windows. Games are prefixed with a joystick icon and "🎮 ∙ MyGame" and apps have a dotted prefix "∙ MyApp" to better separate them from Windows icons, like "Settings".
 
 - **Open an app** from its menu entry: it opens in a window of its own. This
   works while Ika is stopped too: Android starts without the console, and the
@@ -117,9 +123,6 @@ apps "∙ LABEL", with icons Android draws, as its launcher shows them.
 - **The menu follows Android:** a watcher adds, updates and removes entries as
   apps are installed, updated, removed, enabled or disabled, checking every
   5 seconds (`menu_poll_sec` in `ika.ini`). Its log is `~/ika/app-menu.log`.
-- `ika app sync` updates the menu at once. `ika app sync --remove` removes
-  the entries and the group, and keeps them off until `ika app sync` runs
-  again. `ika reset` removes them too; the next `ika start` puts them back.
 - **Games** are the apps that declare themselves games, and the ones listed in
   `game_apps` in `ika.ini`. A game starts with **Fullscreen mode** and
   **Send the keyboard straight to Android** ticked in its start options the
@@ -127,6 +130,9 @@ apps "∙ LABEL", with icons Android draws, as its launcher shows them.
 - **Hidden apps:** Android Switch, the Google search app, Calculator,
   Calendar, Clock, Contacts, Recorder and AudioFX stay out of the menu and of
   `ika app` (`hidden_apps` in `ika.ini`). They still open by package name.
+- `ika app sync` updates the menu at once. `ika app sync --remove` removes
+  the entries and the group, and keeps them off until `ika app sync` runs
+  again. `ika reset` removes them too; the next `ika start` puts them back.
 
 The entries are `~/.local/share/applications/ika-PACKAGE.desktop` files. Each
 sync rewrites the parts Ika manages, such as the name, the icon and the
@@ -134,6 +140,28 @@ actions; lines you add yourself, such as `NoDisplay=true`, stay when
 `desktop-file-edit` is installed.
 
 ### App windows
+
+An app opened from the app menu gets a window of its own, with a title bar,
+the app's label and icon, and a display of its own, sized to the window, so
+the app has the window's room. The app is restarted on that display if it was
+running elsewhere.
+
+On Windows (WSL), the title bar has Windows 11 native appearance with minimize,
+maximize, and close buttons in the color of the app's content. It is sized
+for Windows' display scale as the window opens: after changing the scale,
+close the window and open it again.
+
+- **Size:** 60% of the screen's width at 16:9 the first time, then the size
+  you left it at.
+- **Closing:** closing the window, MOD+Q or `ika app close` closes the app,
+  and so does the app ending. App windows also close when Android restarts or
+  stops (`ika stop`, `ika restart`, `ika reset`, a switch to TV mode);
+  `ika start` leaves them open.
+- MOD+F and a click in the top-left corner work as in the console. The
+  mouse's buttons all go to the app, except Shift + right click, which is
+  Back.
+
+From a terminal:
 
 ```bash
 ika app                  # list the apps; open windows are in bold
@@ -143,28 +171,11 @@ ika app close Asphalt 8  # close one window
 ika app close --all
 ```
 
-An app window has a title bar, the app's label and icon, and a display of its
-own, sized to the window, so the app has the window's room. The app is
-restarted on that display if it was running elsewhere.
-
-On Windows (WSL2), the title bar looks like Windows 11's, with minimize,
-maximize and close buttons, in the color of the app's content. It is sized
-for Windows' display scale as the window opens: after changing the scale,
-close the window and open it again.
-
 - **Naming apps:** by package name or by label, without regard to case,
   exactly or by a part only one app has (`ika app setti` opens Settings),
   without quotes. A name that matches several apps lists them.
-- **Size:** 60% of the screen's width at 16:9 the first time, then the size
-  you left it at. `--size=WxH` and `--title=TEXT` set them, and `-f` opens it
-  fullscreen.
-- **Closing:** closing the window, MOD+Q or `ika app close` closes the app,
-  and so does the app ending. App windows also close when Android restarts or
-  stops (`ika stop`, `ika restart`, `ika reset`, a switch to TV mode);
-  `ika start` leaves them open.
-- MOD+F and a click in the top-left corner work as in the console. The
-  mouse's buttons all go to the app, except Shift + right click, which is
-  Back.
+- **Size and title:** `--size=WxH` and `--title=TEXT` set them, and `-f`
+  opens the window fullscreen.
 
 ### Games in the background
 
@@ -199,11 +210,7 @@ Right-click an app in the menu for:
   a Settings window, for its permissions, storage, notifications, force stop
   and uninstall. `ika app --info NAME` from a terminal.
 
-On WSL2 the Windows Start menu has no such actions: right-click the app's
-button on the task bar, once its window has opened (a button pinned from it
-keeps them), or hold **Shift** while you click an app in the Start menu, or
-Ika itself, to open its **Startup options** instead, and keep holding it
-until the window opens.
+WSL right-click actions won't appear unil you open the app once.  Pin the icon to your taskbar and the right-click menu will be available.  Alternativly, hold **Shift** while double-clicking a console or app and its **Startup options** will appear instead.
 
 ### Start options
 
@@ -227,16 +234,7 @@ start** saves them and opens the app, and **Cancel** (or Escape) leaves them
 as they were. They apply every time the app opens, from the menu or with
 `ika app NAME`, which adds the options you type to them; `ika app NAME
 --dpi=N` opens it at another density once (`--dpi=auto` at the console's).
-They are saved in `~/ika/app-options.ini`. Without them, an app gets the
-console's density, the desktop's keyboard and mouse and no gamepad.
-
-The window has these as its **Startup Options** tab, beside a
-**Gamepad Emulation** tab (see
-[Controller mapping per game](#controller-mapping-per-game)), the same
-window for games and other apps. It is a GTK 3 window, native on Wayland
-(GNOME's and KDE's, no XWayland needed) as on X11; it needs python3's GTK
-bindings (python3-gobject, or python3-gi and gir1.2-gtk-3.0 on Debian), which
-the packages install, and without them each tab opens as a window of its own.
+They are saved in `~/ika/app-options.ini`. 
 
 ## Keyboard, mouse and gamepads
 
@@ -256,7 +254,7 @@ vendor and product IDs of an Xbox 360 controller (045e:028e), which gives
 Android its key layout and games the mapping they know. A window's gamepads,
 the keyboard gamepad and the host's real ones, each a gamepad of its own,
 are connected only while the window has the focus: a game in the background
-has none, and they connect again when you click back into its window.
+has none, and they connect again when you click back into its window.  **Note, Ika on WSL does not support physical game contollers**
 
 ### Touch input
 
@@ -419,15 +417,23 @@ mode**, **Catapult** (LineageOS's TV launcher) first:
 
 ## Installing and removing apps
 
+- **Install:** drop APK files on the console, or open them with **Ika APK
+  installer** from your file manager's Open With menu, which reports the
+  result as a notification. Neither is supported on WSL; use `ika install`
+  there. An installed app is replaced and keeps its data.
+- **Remove:** **App info** (right-click the app in the app menu) has
+  Android's Uninstall button.
+
+From a terminal:
+
 ```bash
 ika install ~/Downloads/some-app.apk
 ika remove Some App
 ika remove com.example.someapp
 ```
 
-`ika install FILE.apk...` installs APK files; an installed app is replaced and
-keeps its data. Your file manager offers it as **Ika APK installer** in the
-Open With menu of APK files, and reports the result as a notification.
+`ika install FILE.apk...` installs APK files, as the file manager's
+**Ika APK installer** does.
 
 `ika remove NAME` uninstalls an app and deletes its data, closes its window
 and deletes its window state and controller mapping. NAME is matched as
@@ -438,19 +444,20 @@ Both commands start Android without the console when it is not running.
 ## Android files
 
 While Android runs, its shared storage (`/sdcard`: DCIM, Download, Pictures
-and the rest) is mounted on `/run/user/<uid>/ika/Android` (in
-`$XDG_RUNTIME_DIR`, or `~/ika/Android` without one), so any program on the
-host can open, copy, change and delete files there. Outside your home folder,
-it is left alone by backups and other programs that walk your home folder.
-
-`ika start` mounts it and adds it to the file manager's sidebar as **Android**:
-GNOME's bookmarks, or KDE's Places once that file exists. `ika stop`,
-`ika restart` and `ika reset` unmount it and take it out of the sidebar.
+and the rest) is in your file manager's sidebar as **Android**: GNOME's
+bookmarks, or KDE's Places once that file exists. Any program on the host can
+open, copy, change and delete files there.
 
 On WSL, Windows' Explorer shows it under **This PC** as **Android (Ika)**
 (`\\wsl.localhost\<distribution>\run\user\<uid>\ika\Android`), there
 while Android runs. Windows reaches WSL's files as root, which the mount lets
 in only when `/etc/fuse.conf` has `user_allow_other`; `ika-wsl-setup` sets it.
+
+From a terminal, the folder is `/run/user/<uid>/ika/Android` (in
+`$XDG_RUNTIME_DIR`, or `~/ika/Android` without one). Outside your home
+folder, it is left alone by backups and other programs that walk your home
+folder. `ika start` mounts it and adds it to the sidebar; `ika stop`,
+`ika restart` and `ika reset` unmount it and take it out of the sidebar.
 
 Files are read as they are used, over Ika's adb connection, so a large video
 plays without being copied first. Files an app keeps to itself are out of
@@ -461,7 +468,13 @@ show up too, and changes there are made as root, so take care. The mount uses
 
 ## Camera
 
-`--camera` passes a host camera to Android as its front camera:
+Ika can pass a host camera to Android as its front camera. Tick **Start with
+the camera** in **Startup options** on Ika's icon to attach one at every start
+(`device = auto` in `[camera]` of `ika.ini`, or `videoN` for one camera). A
+camera that is missing then is logged and left out, and Ika starts without
+one.
+
+From a terminal, `--camera` attaches one for that start:
 
 ```bash
 ika restart --camera          # the first suitable camera
@@ -476,11 +489,8 @@ ika restart --camera=video2   # a given one (or --camera=/dev/video2)
   devices.
 - The camera is attached when Android starts: `ika start --camera` refuses
   while Android runs, so use `ika restart --camera` then. It stays while that
-  Android runs; the next start or restart without `--camera` has none.
-- **At every start:** tick **Start with the camera** in **Startup options** on
-  Ika's icon (`device = auto` in `[camera]` of `ika.ini`, or `videoN` for one
-  camera). A camera that is missing then is logged and left out, and Ika
-  starts without one; `--no-camera` starts without it once.
+  Android runs; the next start or restart without `--camera` has none, unless
+  **Start with the camera** is ticked. `--no-camera` starts without it once.
 - It needs the `video` group, and while Android streams from it, other
   programs on the host cannot use it.
 - **Anti-flicker:** Ika sets the camera to the mains frequency of the country
