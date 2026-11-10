@@ -9,6 +9,7 @@
 #include <SDL3/SDL.h>
 
 #include "egl.h"
+#include "gl_external_copy.h"
 #include "interop.h"
 #include "opengl.h"
 
@@ -38,6 +39,10 @@ struct sc_interop_raw_dma_buf {
 
     SDL_Texture *texture; // its storage is the EGLImage
     EGLImageKHR image;
+    // Non-zero if the driver accepts the EGLImage only as an external texture
+    // (NVIDIA, for linear DMA-BUFs): the EGLImage is attached to this texture
+    // instead, and copied into `texture` on every frame
+    unsigned external_texture;
 
     uint64_t last_use; // for LRU eviction
 };
@@ -59,6 +64,8 @@ struct sc_interop_raw {
 
     bool has_egl; // DMA-BUF import is available
     struct sc_egl egl;
+    struct sc_gl_external_copy external_copy;
+    bool external_copy_logged;
 
     struct sc_interop_raw_dma_buf dma_bufs[SC_INTEROP_RAW_DMA_BUF_CACHE_SIZE];
     uint64_t dma_buf_clock; // incremented on every use of an entry
