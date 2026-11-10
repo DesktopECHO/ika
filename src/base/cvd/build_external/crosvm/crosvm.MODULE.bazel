@@ -324,6 +324,11 @@ crosvm_bin.annotation(
     patch_args = ["-p1"],
     patches = [
         "@//build_external/crosvm:PATCH.hypervisor-aperfmperf.patch",
+        # On Intel CPUs with self-snoop, KVM honors the guest's PAT, so host
+        # GPU memory the guest maps write-combined is not cached in the guest
+        # (NVIDIA and discrete AMD GPUs read it without snooping). Applied after
+        # the patch above: the patches are applied in the order of their names.
+        "@//build_external/crosvm:PATCH.hypervisor-honor-guest-pat.patch",
     ],
     repositories = ["crosvm_bin"],
 )

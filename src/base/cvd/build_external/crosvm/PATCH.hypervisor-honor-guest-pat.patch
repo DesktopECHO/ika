@@ -1,0 +1,61 @@
+--- a/src/kvm/x86_64.rs
++++ b/src/kvm/x86_64.rs
+@@ -207,10 +207,58 @@
+     }
+ }
+ 
++// ika: KVM_X86_QUIRK_IGNORE_GUEST_PAT, from the kernel's uapi kvm.h (not in kvm_sys)
++const KVM_X86_QUIRK_IGNORE_GUEST_PAT: u64 = 1 << 9;
++
+ impl KvmVm {
+     /// Does platform specific initialization for the KvmVm.
+     pub fn init_arch(&self, _cfg: &Config) -> Result<()> {
++        self.honor_guest_pat();
+         Ok(())
++    }
++
++    // ika: On Intel CPUs, KVM ignores the guest's PAT by default and maps all
++    // guest memory write-back. Host GPU memory mapped into the guest (the
++    // virtio-gpu host-visible blobs of gfxstream and Venus) is then cached in
++    // the guest even where the host maps it write-combined, and a GPU that
++    // does not snoop the CPU caches for such memory (NVIDIA, discrete AMD)
++    // reads stale data: text and icons drawn from old uploads. Disabling the
++    // quirk lets the guest's write-combined mappings of that memory take
++    // effect, as QEMU's honor-guest-pat does. KVM offers it only where it is
++    // safe (Intel CPUs with self-snoop); AMD always honors guest PAT. The
++    // quirk exists for old guests that map video RAM uncached (the bochs
++    // display driver); crosvm has no such device.
++    fn honor_guest_pat(&self) {
++        // SAFETY:
++        // Safe because we know that our file is a VM fd, KVM_CHECK_EXTENSION takes its argument by
++        // value, and we check the return value.
++        let quirks = unsafe {
++            ioctl_with_val(
++                self,
++                KVM_CHECK_EXTENSION,
++                KVM_CAP_DISABLE_QUIRKS2 as libc::c_ulong,
++            )
++        };
++        if quirks <= 0 || (quirks as u64) & KVM_X86_QUIRK_IGNORE_GUEST_PAT == 0 {
++            return;
++        }
++        let cap = kvm_enable_cap {
++            cap: KVM_CAP_DISABLE_QUIRKS2,
++            args: [KVM_X86_QUIRK_IGNORE_GUEST_PAT, 0, 0, 0],
++            ..Default::default()
++        };
++        // SAFETY:
++        // Safe because we allocated the struct, the kernel only reads it, and none of its args are
++        // pointers.
++        let ret = unsafe { ioctl_with_ref(self, KVM_ENABLE_CAP, &cap) };
++        if ret == 0 {
++            base::info!("KVM honors the guest's PAT (KVM_X86_QUIRK_IGNORE_GUEST_PAT disabled)");
++        } else {
++            base::warn!(
++                "could not disable KVM_X86_QUIRK_IGNORE_GUEST_PAT: {}",
++                Error::last()
++            );
++        }
+     }
+ 
+     /// Checks if a particular `VmCap` is available, or returns None if arch-independent
