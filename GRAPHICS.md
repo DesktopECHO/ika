@@ -24,7 +24,7 @@ The two gfxstream modes differ in where OpenGL ES is translated:
 | --- | --- | --- |
 | OpenGL ES in the guest | ANGLE | gfxstream's GLES encoder |
 | On the host | Vulkan only | OpenGL, and Vulkan when it is on |
-| OpenGL ES version | 3.2 | 3.2, or the highest the host's OpenGL ES offers |
+| OpenGL ES version | 3.2 | The highest the host's OpenGL ES offers |
 | Vulkan in Android | Yes | Only with [Vulkan on](#vulkan-in-gfxstream-mode) |
 | Game compatibility | Better | Some games render incorrectly |
 | `--gfxstream_vulkan` | Ignored: Vulkan is required | Controls Vulkan |
@@ -69,10 +69,51 @@ Vulkan devices:
   of a Vulkan device, and Chromium's GPU process quits without it; gfxstream
   emulates ETC2 itself, Venus does not. crosvm starts Venus's host side with
   `vk_require_etc2=true` and `vk_require_astc=true`, which make RADV emulate
-  both, so Ika asks `vulkaninfo` with the same settings. Broadwell's and
-  Apple Silicon's drivers have ETC2 of their own; Haswell's cannot offer it
-  at all.
+  both, so Ika asks `vulkaninfo` with the same settings. Broadwell's driver
+  has ETC2 of its own; Haswell's cannot offer it at all. Never on WSL2, whose
+  GPU memory cannot be shared as dma-bufs, or on Apple Silicon, where games
+  run faster with `gfxstream_guest_angle` (see [Venus](#venus)).
 - `gfxstream_guest_angle` otherwise.
+
+The checks run in this order, on the GPU Ika uses ("GPU Hardware" in Startup
+Options), and the first that answers decides:
+
+```mermaid
+flowchart TD
+    start["gpu_mode = auto<br/>Checks the GPU Ika uses"]
+    q1["Only software Vulkan?<br/>llvmpipe, lavapipe, SwiftShader"]
+    q2["Would gfxstream skip the GPU?<br/>Old Vulkan ranks below llvmpipe"]
+    q3["Running under WSL2?<br/>Any Windows host"]
+    q4["Apple Silicon?<br/>Asahi Linux"]
+    q5["GPU has Vulkan 1.3 or newer?<br/>From vulkaninfo"]
+    q6["ETC2 textures, even emulated?<br/>Probed as Venus would see it"]
+    r1("gfxstream, OpenGL ES only<br/>GPU pipeline is 100% software")
+    r2("gfxstream, OpenGL ES only<br/>Haswell (2013) and older")
+    r3("gfxstream_guest_angle<br/>AMD 780M, RTX 4080, Intel UHD/Xe in WSL")
+    r4("gfxstream_guest_angle")
+    r5("gfxstream_guest_angle<br/>Discrete GPUs on Vulkan 1.2")
+    r6("gfxstream_guest_angle<br/>NVIDIA")
+    venus("venus<br/>AMD, Intel Broadwell and newer")
+
+    start --> q1
+    q1 -- yes --> r1
+    q1 -- no --> q2
+    q2 -- yes --> r2
+    q2 -- no --> q3
+    q3 -- yes --> r3
+    q3 -- no --> q4
+    q4 -- yes --> r4
+    q4 -- no --> q5
+    q5 -- no --> r5
+    q5 -- yes --> q6
+    q6 -- no --> r6
+    q6 -- yes --> venus
+
+    classDef gfx fill:#E1F5EE,stroke:#0F6E56,color:#085041
+    classDef ven fill:#EEEDFE,stroke:#534AB7,color:#3C3489
+    class r1,r2,r3,r4,r5,r6 gfx
+    class venus ven
+```
 
 `--gpu_mode=` on the command line wins over all three. A mode named in
 `gpu_mode` in the `[gpu]` section of `ika.ini` replaces the last two: a host
@@ -111,7 +152,8 @@ write-combined type, which is slow for those writes on some drivers, gfxstream
 takes a cached coherent type of the same heap instead (its
 `VulkanPreferHostCachedMemory` feature).
 
-It applies to the modes with Vulkan, and only where the driver's type is
+It applies to the gfxstream modes, `gfxstream_guest_angle` and `gfxstream`
+with Vulkan on; Venus ignores it. It changes a type only where the driver's is
 host-visible, uncached and not device-local, and a cached coherent type exists
 in the same heap. It changes nothing where every type is device-local, as on
 Apple Silicon. Memory shared with a color buffer or a buffer, and dedicated
@@ -120,6 +162,12 @@ allocations, keep their type.
 It is off by default, as its effect on the Mesa drivers Ika runs on is not
 known: try it on yours, for example with GFXBench's offscreen tests in Android
 before and after, and keep it if it helps.
+
+On NVIDIA's proprietary Linux driver Ika always turns it on, whatever the
+setting says. It began as the fix for text drawn as noise and launcher icons
+all alike there; the cause turned out to be KVM ignoring the guest's page
+attributes, which crosvm now has KVM honor, and gfxstream draws correctly
+without it since. Dozen on an NVIDIA GPU under WSL2 is left as it is.
 
 ## Venus
 
@@ -139,8 +187,13 @@ each named "Virtio-GPU Venus (...)". Upstream tests it on Intel (ANV) and
 Qualcomm (Turnip) hosts.
 
 It is the default on a host whose GPU suits it (see
-[How Ika chooses](#how-ika-chooses)), Apple Silicon included; Ika has not
-tested it on NVIDIA's GPUs. Against `gfxstream_guest_angle` on a
+[How Ika chooses](#how-ika-chooses)), but not on Apple Silicon, where games
+run faster with `gfxstream_guest_angle`, or on NVIDIA's GPUs, which have no
+ETC2. Started with `--gpu_mode=venus` on NVIDIA's own Linux driver (an RTX
+4080 Laptop GPU), Android draws its desktop and apps, but apps that render
+OpenGL ES through ANGLE get no window, as the driver refuses the swapchain
+images ANGLE asks for, and 3DMark stops for want of ASTC textures, which
+gfxstream emulates. Against `gfxstream_guest_angle` on a
 Radeon 780M, a WebGL page with 12,800 draw calls a frame ran at 60 fps instead
 of 24, and crosvm and the render server used about 40% less of the host's CPU,
 for WebGL and video alike; a Broadwell MacBook Air was faster with it too. On
@@ -247,10 +300,10 @@ the count after Android stops: on a leak, it writes a warning to
 On WSL2 the only way to the GPU is Direct3D 12, through `/dev/dxg` and the
 libraries in `/usr/lib/wsl/lib`. Mesa's Dozen driver offers it as Vulkan, and
 gfxstream renders on that. `ika-base`, in its Debian, RPM and Arch packages,
-carries its own Dozen on x86_64, from [Ika's Mesa](#ikas-mesa) with only X11
-for a window system, installed under `/usr/lib/cuttlefish-common/wsl/dozen`. It offers Vulkan 1.3 where the GPU's
-D3D12 driver has shader model 6.6 and wave operations, and 1.2 on older GPUs
-such as Kaby Lake's Iris Plus 650. Venus cannot run on it: Dozen cannot export
+carries its own Dozen on x86_64, from [Ika's Mesa](#ikas-mesa), installed
+under `/usr/lib/cuttlefish-common/wsl/dozen`. It offers Vulkan 1.3 where the
+GPU's D3D12 driver has shader model 6.6 and wave operations, and 1.2 on older
+GPUs such as Kaby Lake's Iris Plus 650. Venus cannot run on it: Dozen cannot export
 its memory as dma-bufs.
 
 ### What the host needs
