@@ -5728,6 +5728,24 @@ disconnect_guest_adb() {
   host_adb 5 disconnect "${adb_serial}" >/dev/null 2>&1 || true
 }
 
+# Seconds a stop waits for Android to answer over adb before it goes on
+# without the sync below: a hung guest must not hold the stop up.
+readonly GUEST_SYNC_PROBE_SEC=3
+
+# Has Android write the data it still holds in memory to its disks, before a
+# stop: the stop ends the VM at once, as pulling the plug would, and Android
+# gets no shutdown. /data (F2FS) keeps a new or renamed file that was not
+# synced only from its next checkpoint, which can be a minute away, so without
+# this an app installed or a download finished shortly before the stop is gone
+# at the next start.
+sync_guest_disks() {
+  local adb_serial="$1"
+
+  host_adb "${GUEST_SYNC_PROBE_SEC}" -s "${adb_serial}" shell : >/dev/null 2>&1 || return 0
+  host_adb "${IKA_STOP_GRACE_SEC}" -s "${adb_serial}" shell sync >/dev/null 2>&1 \
+    || log "Android did not write its data to disk within ${IKA_STOP_GRACE_SEC}s; stopping anyway"
+}
+
 # Prints an epoch time in a date(1) format, with GNU or BSD date.
 format_epoch() {
   date -d "@$1" "+$2" 2>/dev/null || date -r "$1" "+$2"
@@ -12289,6 +12307,8 @@ stop_cvd_internal() {
 
   if [[ "${clear_instance_dirs}" == "true" ]]; then
     stop_args+=("--clear_instance_dirs")
+  else
+    sync_guest_disks "${adb_serial}"
   fi
   if ! user_supplied_flag "wait_for_launcher" "$@"; then
     stop_args+=("--wait_for_launcher=${IKA_STOP_GRACE_SEC}")

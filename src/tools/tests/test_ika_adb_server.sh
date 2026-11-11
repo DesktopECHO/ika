@@ -90,4 +90,39 @@ pgrep() { return 0; }
 disconnect_guest_adb "vsock:3:5555"
 assert_equal "disconnect vsock:3:5555" "$(<"${ADB_TEST_LOG}")"
 
-printf 'PASS: adb server log trim and guest disconnect\n'
+# Before a stop, Android is asked to write its data to disk once it answers.
+: > "${ADB_TEST_LOG}"
+sync_guest_disks "vsock:3:5555"
+assert_equal $'-s vsock:3:5555 shell :\n-s vsock:3:5555 shell sync' "$(<"${ADB_TEST_LOG}")"
+
+# A guest that does not answer is not asked, and does not fail the stop.
+printf '%s\n' '#!/bin/bash' 'printf "%s\n" "$*" >> "$ADB_TEST_LOG"' 'exit 1' > "${fake_adb}"
+: > "${ADB_TEST_LOG}"
+sync_guest_disks "vsock:3:5555" || fail "an unreachable guest failed the sync"
+assert_equal "-s vsock:3:5555 shell :" "$(<"${ADB_TEST_LOG}")"
+
+# A sync that fails or runs out of time is logged, and the stop goes on.
+printf '%s\n' '#!/bin/bash' 'printf "%s\n" "$*" >> "$ADB_TEST_LOG"' \
+  '[[ "$*" != *sync ]]' > "${fake_adb}"
+: > "${ADB_TEST_LOG}"
+sync_log="$(sync_guest_disks "vsock:3:5555" 2>&1)" || fail "a failed sync failed the stop"
+[[ "${sync_log}" == *"stopping anyway"* ]] || fail "a failed sync was not logged: ${sync_log}"
+
+# A stop syncs first; a factory reset, which discards the data, does not.
+calls=()
+sync_guest_disks() { calls+=("sync"); }
+run_stop_helper() { calls+=("stop"); }
+require_executable() { :; }
+run_with_cvd_env() { :; }
+stop_dnsmasq() { :; }
+cleanup_user_processes() { :; }
+report_udmabuf_leaks() { :; }
+has_live_cvd_processes() { return 1; }
+clear_stale_cvd_group() { :; }
+stop_cvd_internal false
+assert_equal "sync stop" "${calls[*]}"
+calls=()
+stop_cvd_internal true
+assert_equal "stop" "${calls[*]}"
+
+printf 'PASS: adb server log trim, guest disconnect and sync before a stop\n'
