@@ -152,7 +152,8 @@ write-combined type, which is slow for those writes on some drivers, gfxstream
 takes a cached coherent type of the same heap instead (its
 `VulkanPreferHostCachedMemory` feature).
 
-It applies to the modes with Vulkan, and only where the driver's type is
+It applies to the gfxstream modes, `gfxstream_guest_angle` and `gfxstream`
+with Vulkan on; Venus ignores it. It changes a type only where the driver's is
 host-visible, uncached and not device-local, and a cached coherent type exists
 in the same heap. It changes nothing where every type is device-local, as on
 Apple Silicon. Memory shared with a color buffer or a buffer, and dedicated
@@ -161,6 +162,12 @@ allocations, keep their type.
 It is off by default, as its effect on the Mesa drivers Ika runs on is not
 known: try it on yours, for example with GFXBench's offscreen tests in Android
 before and after, and keep it if it helps.
+
+On NVIDIA's proprietary Linux driver Ika always turns it on, whatever the
+setting says. It began as the fix for text drawn as noise and launcher icons
+all alike there; the cause turned out to be KVM ignoring the guest's page
+attributes, which crosvm now has KVM honor, and gfxstream draws correctly
+without it since. Dozen on an NVIDIA GPU under WSL2 is left as it is.
 
 ## Venus
 
