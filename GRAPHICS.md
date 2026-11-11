@@ -74,6 +74,46 @@ Vulkan devices:
   at all.
 - `gfxstream_guest_angle` otherwise.
 
+The checks run in this order, on the GPU Ika uses ("GPU Hardware" in Startup
+Options), and the first that answers decides:
+
+```mermaid
+flowchart TD
+    start["gpu_mode = auto<br/>Checks the GPU Ika uses"]
+    q1["Only software Vulkan?<br/>llvmpipe, lavapipe, SwiftShader"]
+    q2["Would gfxstream skip the GPU?<br/>Old Vulkan ranks below llvmpipe"]
+    q3["Running under WSL2?<br/>Any Windows host"]
+    q4["Apple Silicon?<br/>Asahi Linux"]
+    q5["GPU has Vulkan 1.3 or newer?<br/>From vulkaninfo"]
+    q6["ETC2 textures, even emulated?<br/>Probed as Venus would see it"]
+    r1("gfxstream, OpenGL ES only<br/>GPU pipeline is 100% software")
+    r2("gfxstream, OpenGL ES only<br/>Haswell (2013) and older")
+    r3("gfxstream_guest_angle<br/>AMD 780M, RTX 4080, Intel UHD/Xe in WSL")
+    r4("gfxstream_guest_angle")
+    r5("gfxstream_guest_angle<br/>Discrete GPUs on Vulkan 1.2")
+    r6("gfxstream_guest_angle<br/>NVIDIA")
+    venus("venus<br/>AMD, Intel Broadwell and newer")
+
+    start --> q1
+    q1 -- yes --> r1
+    q1 -- no --> q2
+    q2 -- yes --> r2
+    q2 -- no --> q3
+    q3 -- yes --> r3
+    q3 -- no --> q4
+    q4 -- yes --> r4
+    q4 -- no --> q5
+    q5 -- no --> r5
+    q5 -- yes --> q6
+    q6 -- no --> r6
+    q6 -- yes --> venus
+
+    classDef gfx fill:#E1F5EE,stroke:#0F6E56,color:#085041
+    classDef ven fill:#EEEDFE,stroke:#534AB7,color:#3C3489
+    class r1,r2,r3,r4,r5,r6 gfx
+    class venus ven
+```
+
 `--gpu_mode=` on the command line wins over all three. A mode named in
 `gpu_mode` in the `[gpu]` section of `ika.ini` replaces the last two: a host
 of the first kind still uses `gfxstream`.
