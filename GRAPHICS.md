@@ -69,9 +69,10 @@ Vulkan devices:
   of a Vulkan device, and Chromium's GPU process quits without it; gfxstream
   emulates ETC2 itself, Venus does not. crosvm starts Venus's host side with
   `vk_require_etc2=true` and `vk_require_astc=true`, which make RADV emulate
-  both, so Ika asks `vulkaninfo` with the same settings. Broadwell's and
-  Apple Silicon's drivers have ETC2 of their own; Haswell's cannot offer it
-  at all.
+  both, so Ika asks `vulkaninfo` with the same settings. Broadwell's driver
+  has ETC2 of its own; Haswell's cannot offer it at all. Never on WSL2, whose
+  GPU memory cannot be shared as dma-bufs, or on Apple Silicon, where games
+  run faster with `gfxstream_guest_angle` (see [Venus](#venus)).
 - `gfxstream_guest_angle` otherwise.
 
 The checks run in this order, on the GPU Ika uses ("GPU Hardware" in Startup
@@ -179,8 +180,9 @@ each named "Virtio-GPU Venus (...)". Upstream tests it on Intel (ANV) and
 Qualcomm (Turnip) hosts.
 
 It is the default on a host whose GPU suits it (see
-[How Ika chooses](#how-ika-chooses)), Apple Silicon included; Ika has not
-tested it on NVIDIA's GPUs. Against `gfxstream_guest_angle` on a
+[How Ika chooses](#how-ika-chooses)), but not on Apple Silicon, where games
+run faster with `gfxstream_guest_angle`; Ika has not tested it on NVIDIA's
+GPUs. Against `gfxstream_guest_angle` on a
 Radeon 780M, a WebGL page with 12,800 draw calls a frame ran at 60 fps instead
 of 24, and crosvm and the render server used about 40% less of the host's CPU,
 for WebGL and video alike; a Broadwell MacBook Air was faster with it too. On
