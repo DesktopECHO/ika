@@ -70,6 +70,12 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** A `--media-decoder` device gets no resource bridge to the GPU device.
 - **Why:** The virtio-media decoder adapter drops its end of the bridge unused (`_gpu_tube`): its backends decode into memory of their own. The GPU device found the bridge closed at every boot and logged three errors (`unhandled virtio-gpu worker event hang-up detected: ResourceBridge`, `tube was disconnected`, `Removing that resource bridge`).
 
+
+#### `PATCH.crosvm-vcpu-retry-fault.patch`
+- **Targets:** `crosvm` crate. File: `src/crosvm/sys/linux/vcpu.rs`.
+- **What it does:** A vCPU whose `KVM_RUN` fails with `EFAULT` enters the guest again every millisecond, for up to 10 s, before it ends the VM. A failure more than a second after the last one starts a new count.
+- **Why:** gfxstream maps host GPU memory into the guest. NVIDIA's proprietary driver takes the mappings of its device away while the GPU is suspended at run time (laptops suspend it after about 10 s without work), and its fault handler only starts the wake-up and has the access tried again. A host thread tries again without noticing; KVM reports the page missing and `KVM_RUN` returns `EFAULT`, which crosvm took as fatal: with Ika idle on its desktop the VM ended at the next redraw, the clock's at the minute change. The guest instruction has not run when `KVM_RUN` fails this way, so entering the vCPU again repeats it, and the mapping is back once the GPU is awake (0.65 s on an RTX 4080 Laptop GPU).
+
 #### `PATCH.crosvm-resize-display.patch`
 - **Targets:** `crosvm_bin` and the source `git_repository`. File: `devices/src/virtio/gpu/virtio_gpu.rs`.
 - **What it does:** Adds `VirtioGpu::resize_display(display_id, DisplayParameters)` that updates an existing scanout's `width`, `height`, and stored `display_params`, then flips `scanouts_updated` so the GPU thread re-syncs.
@@ -178,7 +184,7 @@ See `crosvm.MODULE.bazel`. The relevant blocks:
 
 | Target | Patches |
 |---|---|
-| `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-composite-preserve-spec-fd`, `crosvm-gpu-2d-sandbox`, `crosvm-gpu-unref-shmem-mapping`, `crosvm-resize-display`, `crosvm-flush-held-dmabuf`, `crosvm-enable-vulkano-gralloc`, `crosvm-media-no-resource-bridge`, `minijail-sys_common_mk` |
+| `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-composite-preserve-spec-fd`, `crosvm-gpu-2d-sandbox`, `crosvm-gpu-unref-shmem-mapping`, `crosvm-resize-display`, `crosvm-flush-held-dmabuf`, `crosvm-enable-vulkano-gralloc`, `crosvm-media-no-resource-bridge`, `crosvm-vcpu-retry-fault`, `minijail-sys_common_mk` |
 | `crosvm_bin.annotation(crate = "disk")` | `disk-composite-preserve-spec-fd`, `disk-qcow-legacy-backing-format-magic` |
 | `crosvm_bin.annotation(crate = "jail")` | `jail-aarch64-block-pread64`, `jail-gpu-host-graphics-libs-optional` |
 | `crosvm_bin.annotation(crate = "devices")` | `crosvm-media-decoder-input-size`, `crosvm-media-decoder-visible-size`, `crosvm-media-errors`, `crosvm-media-direct-decode`, `crosvm-media-last-buffer`, `crosvm-media-placeholder-size`, `crosvm-resize-display-devices`, `crosvm-flush-held-dmabuf-devices` |

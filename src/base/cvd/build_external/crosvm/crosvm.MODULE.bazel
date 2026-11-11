@@ -93,6 +93,11 @@ crosvm_bin.annotation(
         # never used: the GPU logged errors at boot when its end closed. Made on
         # top of the aperfmperf and Vulkano gralloc patches, which sort before it.
         "@//build_external/crosvm:PATCH.crosvm-media-no-resource-bridge.patch",
+        # A vCPU whose KVM_RUN fails with EFAULT enters the guest again for up
+        # to 10 s before it ends the VM. NVIDIA's driver takes the mappings of
+        # its device away while the GPU is suspended at run time, and KVM
+        # reports guest GPU memory as missing until the GPU is awake again.
+        "@//build_external/crosvm:PATCH.crosvm-vcpu-retry-fault.patch",
         "@//build_external/crosvm:PATCH.minijail-sys_common_mk.patch",
     ],
     deps = [

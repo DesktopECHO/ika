@@ -1,0 +1,66 @@
+--- a/src/crosvm/sys/linux/vcpu.rs
++++ b/src/crosvm/sys/linux/vcpu.rs
+@@ -207,6 +207,12 @@
+ pub fn remove_vcpu_signal_handler() -> Result<()> {
+     clear_signal_handler(SIGRTMIN() + 0).context("error unregistering signal handler")
+ }
++
++// ika: how long a vCPU keeps entering the guest again while KVM_RUN fails with EFAULT (a GPU
++// resuming from runtime suspend takes under a second), and how far apart two such failures
++// are at most while they count as one run of them (the vCPU tries again every millisecond).
++const VCPU_FAULT_RETRY_TIME: std::time::Duration = std::time::Duration::from_secs(10);
++const VCPU_FAULT_RETRY_GAP: std::time::Duration = std::time::Duration::from_secs(1);
+ 
+ fn vcpu_loop(
+     mut run_mode: VmRunMode,
+@@ -224,6 +230,9 @@
+     #[cfg(target_arch = "x86_64")] bus_lock_ratelimit_ctrl: Arc<Mutex<Ratelimit>>,
+ ) -> ExitState {
+     let mut interrupted_by_signal = false;
++    // ika: when KVM_RUN first and last failed with EFAULT in the current run of such failures
++    // (see below).
++    let mut fault_retry: Option<(std::time::Instant, std::time::Instant)> = None;
+ 
+     loop {
+         // Start by checking for messages to process and the run state of the CPU.
+@@ -487,6 +496,40 @@
+                 Err(e) => match e.errno() {
+                     libc::EINTR => interrupted_by_signal = true,
+                     libc::EAGAIN => {}
++                    // ika: KVM_RUN fails with EFAULT when the host cannot give KVM the page
++                    // behind guest memory at that moment. For host GPU memory mapped into
++                    // the guest that can pass: NVIDIA's driver takes the mappings of its
++                    // device away when the GPU suspends at run time, and its fault handler
++                    // only starts the wake-up and has the access tried again, which a
++                    // host thread does without noticing while KVM reports the page
++                    // missing. The guest instruction has not run, so entering the vCPU
++                    // again tries it again; do that until the mapping is back, and give up
++                    // only when it stays away. A failure long after the last one starts a
++                    // new count: the vCPU ran in between, and an idle one may not leave
++                    // KVM_RUN with anything else for minutes.
++                    libc::EFAULT
++                        if {
++                            let now = std::time::Instant::now();
++                            let first = match fault_retry {
++                                Some((first, last))
++                                    if now.duration_since(last) < VCPU_FAULT_RETRY_GAP =>
++                                {
++                                    first
++                                }
++                                _ => {
++                                    warn!(
++                                        "vcpu {}: KVM could not map guest memory ({}), trying again",
++                                        cpu_id, e
++                                    );
++                                    now
++                                }
++                            };
++                            fault_retry = Some((first, now));
++                            now.duration_since(first) < VCPU_FAULT_RETRY_TIME
++                        } =>
++                    {
++                        thread::sleep(std::time::Duration::from_millis(1));
++                    }
+                     _ => {
+                         error!("vcpu hit unknown error: {}", e);
+                         return ExitState::Crash;
