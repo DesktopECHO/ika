@@ -35,7 +35,7 @@ cd ika
 ./ika-build
 
 # 3. Install: run the command ika-build prints at the end, for example
-sudo apt install ./src/deb/ika-base_261105-1_amd64.deb ./src/deb/ika-lineageos_261105-1_amd64.deb
+sudo apt install ./src/deb/ika-base_261111-1_amd64.deb ./src/deb/ika-lineageos_261111-1_amd64.deb
 
 # 4. On a first install, reboot:
 sudo reboot
