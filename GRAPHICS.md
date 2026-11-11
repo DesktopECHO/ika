@@ -24,7 +24,7 @@ The two gfxstream modes differ in where OpenGL ES is translated:
 | --- | --- | --- |
 | OpenGL ES in the guest | ANGLE | gfxstream's GLES encoder |
 | On the host | Vulkan only | OpenGL, and Vulkan when it is on |
-| OpenGL ES version | 3.2 | 3.2, or the highest the host's OpenGL ES offers |
+| OpenGL ES version | 3.2 | The highest the host's OpenGL ES offers |
 | Vulkan in Android | Yes | Only with [Vulkan on](#vulkan-in-gfxstream-mode) |
 | Game compatibility | Better | Some games render incorrectly |
 | `--gfxstream_vulkan` | Ignored: Vulkan is required | Controls Vulkan |
