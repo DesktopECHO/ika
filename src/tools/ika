@@ -780,17 +780,79 @@ stop_startup_packaged_scrcpy() {
 # The host's CPUs in sysfs (a test's own tree in the tests)
 HOST_CPU_SYSFS="/sys/devices/system/cpu"
 
-# Prints "<cpu> <cpu_capacity>" for each online host CPU: the kernel's own
-# measure of each CPU's performance, which its scheduler uses, with the
-# difference in work per cycle as well as in frequency (Apple, Intel P and E
-# cores, AMD Zen 5 and 5c).
+# Where Linux lists the efficiency cores of an Intel hybrid CPU (a test's own
+# file in the tests)
+HOST_CPU_ATOM_LIST="/sys/devices/cpu_atom/cpus"
+
+# Prints the CPU numbers of a sysfs CPU list such as "0-3,8,10-11".
+expand_cpu_list() {
+  local part
+  local -a parts
+  IFS=',' read -r -a parts <<<"$1"
+  for part in "${parts[@]}"; do
+    if [[ "${part}" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+      seq "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    elif [[ "${part}" =~ ^[0-9]+$ ]]; then
+      echo "${part}"
+    fi
+  done
+}
+
+# Prints "<cpu> <performance>" for each online host CPU. The performance is
+# the kernel's cpu_capacity, its own measure of each CPU, which its scheduler
+# uses, with the difference in work per cycle as well as in frequency (Apple,
+# Intel P and E cores without Hyper-Threading, AMD Zen 5 and 5c). An Intel
+# hybrid CPU with Hyper-Threading gets the same capacity on every CPU, as the
+# kernel ranks its cores another way: where the capacities do not differ, the
+# CPUs Linux lists as efficiency cores count half, and without such a list
+# each CPU's highest frequency stands in, which an efficiency core's is well
+# below.
 host_cpu_performance() {
   local path
+  local value
+  local i
+  local same_capacity=true
+  local every_khz=true
+  local -a cpus=()
+  local -a capacities=()
+  local -a khzs=()
+  local -A atom=()
+
   for path in "${HOST_CPU_SYSFS}"/cpu[0-9]*; do
     if [[ -r "${path}/online" && "$(<"${path}/online")" != 1 ]]; then
       continue
     fi
-    printf '%s %s\n' "${path##*/cpu}" "$(<"${path}/cpu_capacity")"
+    cpus+=("${path##*/cpu}")
+    value=0
+    [[ ! -r "${path}/cpu_capacity" ]] || value="$(<"${path}/cpu_capacity")"
+    [[ "${value}" =~ ^[0-9]+$ ]] || value=0
+    capacities+=("${value}")
+    value=0
+    [[ ! -r "${path}/cpufreq/cpuinfo_max_freq" ]] || value="$(<"${path}/cpufreq/cpuinfo_max_freq")"
+    [[ "${value}" =~ ^[0-9]+$ ]] || value=0
+    khzs+=("${value}")
+  done
+  for i in "${!cpus[@]}"; do
+    [[ "${capacities[i]}" == "${capacities[0]}" ]] || same_capacity=false
+    (( khzs[i] > 0 )) || every_khz=false
+  done
+  if [[ "${same_capacity}" == true && -r "${HOST_CPU_ATOM_LIST}" ]]; then
+    for value in $(expand_cpu_list "$(<"${HOST_CPU_ATOM_LIST}")"); do
+      atom["${value}"]=1
+    done
+  fi
+  for i in "${!cpus[@]}"; do
+    if [[ "${same_capacity}" != true ]]; then
+      value="${capacities[i]}"
+    elif (( ${#atom[@]} > 0 )); then
+      value=1024
+      [[ -z "${atom[${cpus[i]}]:-}" ]] || value=512
+    elif [[ "${every_khz}" == true ]]; then
+      value="${khzs[i]}"
+    else
+      value="${capacities[i]}"
+    fi
+    printf '%s %s\n' "${cpus[i]}" "${value}"
   done
 }
 
@@ -807,27 +869,56 @@ count_performance_cores() {
   performance_core_ids | wc -l
 }
 
+# Prints what names the core of host CPU $1: the list of its hardware threads.
+host_cpu_core() {
+  local list="${HOST_CPU_SYSFS}/cpu$1/topology/thread_siblings_list"
+
+  if [[ -r "${list}" ]]; then
+    printf '%s\n' "$(<"${list}")"
+  else
+    printf 'cpu%s\n' "$1"
+  fi
+}
+
 # The host CPUs the vCPUs are pinned to, in vCPU order: the performance cores
-# from the highest CPU number down, then any other CPUs the same way. Linux
-# numbers a core's second hardware thread after every core's first, so the
-# top half of the performance CPUs is one thread on each of the upper cores,
-# and the lower ones are left to the host.
+# from the highest CPU number down, then any other CPUs the same way. Of each
+# kind, one hardware thread of every core comes before any core's second, so
+# vCPUs share a core only once every such core has one, however Linux numbers
+# the threads: a core's two next to each other (Intel's hybrid CPUs), or the
+# second threads after every core's first. The threads left are the host's.
 host_cpus_for_vcpus() {
   local -A performance=()
+  local -A seen
+  local -a rest
+  local -a all
   local cpu
+  local core
+  local kind
 
   for cpu in $(performance_core_ids); do
     performance["${cpu}"]=1
   done
-  for cpu in $(host_cpu_performance | awk '{ print $1 }' | sort -nr); do
-    if [[ -n "${performance[${cpu}]:-}" ]]; then
+  mapfile -t all < <(host_cpu_performance | awk '{ print $1 }' | sort -nr)
+  for kind in performance other; do
+    seen=()
+    rest=()
+    for cpu in "${all[@]}"; do
+      if [[ "${kind}" == performance ]]; then
+        [[ -n "${performance[${cpu}]:-}" ]] || continue
+      else
+        [[ -z "${performance[${cpu}]:-}" ]] || continue
+      fi
+      core="$(host_cpu_core "${cpu}")"
+      if [[ -z "${seen[${core}]:-}" ]]; then
+        seen["${core}"]=1
+        echo "${cpu}"
+      else
+        rest+=("${cpu}")
+      fi
+    done
+    for cpu in "${rest[@]+"${rest[@]}"}"; do
       echo "${cpu}"
-    fi
-  done
-  for cpu in $(host_cpu_performance | awk '{ print $1 }' | sort -nr); do
-    if [[ -z "${performance[${cpu}]:-}" ]]; then
-      echo "${cpu}"
-    fi
+    done
   done
 }
 

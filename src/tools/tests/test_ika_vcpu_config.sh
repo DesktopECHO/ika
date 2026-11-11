@@ -5,7 +5,10 @@
 # empty or whose top differs from its host CPU's cpuinfo_max_freq, so every
 # list ends at that maximum, with boost on or off, and a driver that lists no
 # frequencies (cppc_cpufreq) still gives its minimum and maximum. Without
-# cpufreq, the launcher runs without the configuration.
+# cpufreq, the launcher runs without the configuration. The vCPUs go to the
+# performance cores, one hardware thread of each core first, also where the
+# kernel gives every CPU the same capacity (Intel hybrid CPUs with
+# Hyper-Threading).
 
 set -euo pipefail
 
@@ -24,6 +27,8 @@ fail() {
 }
 
 FAKE_ARCH=arm64
+# No list of efficiency cores unless a tree brings one, whatever this host has
+HOST_CPU_ATOM_LIST="${T}/no-cpu-atom"
 host_is_arm64() { [[ "${FAKE_ARCH}" == arm64 ]]; }
 
 # add_cpu TREE CPU CAPACITY [POLICY MIN MAX AVAILABLE [BOOST]]: a CPU in TREE,
@@ -144,4 +149,74 @@ write_vcpu_config 2 /sys/fs/cgroup/test "${T}/x86.json"
 [[ "$(vcpu_field "${T}/x86.json" cpu0 frequencies)" == 0 ]] \
   || fail "x86: $(vcpu_field "${T}/x86.json" cpu0 frequencies)"
 
-printf 'PASS: every vCPU frequency list ends at its host CPU'"'"'s cpuinfo_max_freq\n'
+# set_siblings TREE LIST CPU...: the CPUs are the hardware threads of one core
+set_siblings() {
+  local tree="$1" list="$2" cpu
+  shift 2
+
+  for cpu in "$@"; do
+    mkdir -p "${tree}/cpu${cpu}/topology"
+    echo "${list}" >"${tree}/cpu${cpu}/topology/thread_siblings_list"
+  done
+}
+
+# order_is TREE EXPECTED: the host CPUs in vCPU order
+order_is() {
+  local got
+
+  HOST_CPU_SYSFS="$1"
+  got="$(host_cpus_for_vcpus | paste -sd' ')"
+  [[ "${got}" == "$2" ]] || fail "${1##*/}: vCPU order is ${got}, not $2"
+}
+
+# Intel Core i9-12900HX-like: 8 P-cores with their two threads numbered next
+# to each other (0-15), 8 E-cores (16-23), the same cpu_capacity on all, a
+# lower top frequency on the E-cores. One thread of each P-core first, then
+# their second threads, the E-cores last; auto takes half the P-core threads.
+alder="${T}/alder"
+for cpu in $(seq 0 15); do
+  add_cpu "${alder}" "${cpu}" 1024 "policy${cpu}" 800000 4900000 ""
+  set_siblings "${alder}" "$(( cpu / 2 * 2 ))-$(( cpu / 2 * 2 + 1 ))" "${cpu}"
+done
+for cpu in $(seq 16 23); do
+  add_cpu "${alder}" "${cpu}" 1024 "policy${cpu}" 800000 3600000 ""
+  set_siblings "${alder}" "${cpu}" "${cpu}"
+done
+ALDER_ORDER="15 13 11 9 7 5 3 1 14 12 10 8 6 4 2 0 23 22 21 20 19 18 17 16"
+order_is "${alder}" "${ALDER_ORDER}"
+[[ "$(count_performance_cores)" == 16 ]] || fail "alder: $(count_performance_cores) performance CPUs, not 16"
+IKA_ON_WSLG=false
+[[ "$(default_guest_cpus)" == 8 ]] || fail "alder: auto gives $(default_guest_cpus) vCPUs, not 8"
+
+# The same with every top frequency alike and Linux's list of the efficiency
+# cores
+for cpu in $(seq 16 23); do
+  echo 4900000 >"${alder}/cpufreq/policy${cpu}/cpuinfo_max_freq"
+done
+order_is "${alder}" "23 22 21 20 19 18 17 16 15 13 11 9 7 5 3 1 14 12 10 8 6 4 2 0"
+echo "16-23" >"${T}/cpu-atom"
+HOST_CPU_ATOM_LIST="${T}/cpu-atom"
+order_is "${alder}" "${ALDER_ORDER}"
+HOST_CPU_ATOM_LIST="${T}/no-cpu-atom"
+
+# AMD Ryzen-like: 8 cores, the second threads numbered after every core's
+# first, preferred cores a few percent apart in frequency: all performance
+# cores, from the highest CPU number down
+amd="${T}/amd"
+for cpu in $(seq 0 15); do
+  add_cpu "${amd}" "${cpu}" 1024 "policy${cpu}" 400000 "$(( 5263000 - (cpu % 8) * 20000 ))" ""
+  set_siblings "${amd}" "$(( cpu % 8 )),$(( cpu % 8 + 8 ))" "${cpu}"
+done
+order_is "${amd}" "15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0"
+
+# Without cpu_capacity, frequencies or a topology, every CPU counts the same
+bare="${T}/bare"
+for cpu in 0 1 2 3; do
+  mkdir -p "${bare}/cpu${cpu}"
+done
+order_is "${bare}" "3 2 1 0"
+
+# The Apple tree keeps its order: the performance cores by capacity
+order_is "${apple}" "3 2 1 0"
+
+printf 'PASS: every vCPU frequency list ends at its host CPU'"'"'s cpuinfo_max_freq, and the vCPUs take the performance cores\n'
