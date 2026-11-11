@@ -1128,6 +1128,11 @@ CVD_DEFAULT_ARG_MAPS=(
   CVD_LAUNCHER_DEFAULTS
 )
 
+# The mode gpu_mode = auto starts from, before ika.ini puts its own in.
+CVD_GPU_MODE_AUTO_BASE="${CVD_GPU_DEFAULTS[gpu_mode]}"
+# Whether this start was given --gpu_mode=auto.
+GPU_MODE_AUTO_REQUESTED="false"
+
 ika_ini_apply_map CVD_COMPUTE_DEFAULTS compute
 ika_ini_apply_map CVD_GPU_DEFAULTS gpu
 ika_ini_apply_map CVD_NETWORK_DEFAULTS network
@@ -4155,8 +4160,10 @@ default_gpu_mode_for_start() {
     printf '%s\n' "gfxstream"
     return 0
   fi
-  # A mode set in ika.ini stands on a GPU that gfxstream uses.
+  # A mode set in ika.ini stands on a GPU that gfxstream uses, unless this
+  # start asked for auto.
   ika_ini_get ini_mode gpu gpu_mode auto
+  [[ "${GPU_MODE_AUTO_REQUESTED}" != "true" ]] || ini_mode="auto"
   if [[ "${ini_mode,,}" != "auto" ]]; then
     printf '%s\n' "${CVD_GPU_DEFAULTS[gpu_mode]}"
     return 0
@@ -4402,6 +4409,40 @@ start_arg_value() {
   done
 
   printf '%s\n' "${value:-${default_value}}"
+}
+
+# Takes --gpu_mode=auto out of a start's arguments: it asks for what
+# gpu_mode = auto in ika.ini does, the mode chosen from the host's GPU,
+# whatever mode ika.ini sets. Cuttlefish, which the option would otherwise
+# reach, has an auto of its own that knows nothing of Venus and takes
+# SwiftShader on an NVIDIA GPU. As Cuttlefish does, the last --gpu_mode of
+# several counts.
+take_gpu_mode_auto() {
+  local -n kept_args_ref="$1"
+  shift
+  local mode
+
+  mode="$(start_arg_value "gpu_mode" "" "$@")"
+  if [[ "${mode,,}" != "auto" ]]; then
+    kept_args_ref=("$@")
+    return 0
+  fi
+  GPU_MODE_AUTO_REQUESTED="true"
+  CVD_GPU_DEFAULTS[gpu_mode]="${CVD_GPU_MODE_AUTO_BASE}"
+  kept_args_ref=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --gpu_mode=*|-gpu_mode=*)
+        ;;
+      --gpu_mode|-gpu_mode)
+        shift
+        ;;
+      *)
+        kept_args_ref+=("$1")
+        ;;
+    esac
+    shift
+  done
 }
 
 start_gpu_mode_value() {
@@ -12019,6 +12060,10 @@ start_cvd() {
   local scrcpy_dpi
   local -a cvd_env_args=(env)
   local -a own_session=()
+  local -a start_args=()
+
+  take_gpu_mode_auto start_args "$@"
+  set -- "${start_args[@]}"
 
   require_executable "${CVD_BIN}" "cvd launcher"
   check_required_groups
