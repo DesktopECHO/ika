@@ -301,8 +301,10 @@ ika_ini_write_default() {
 # performance cores, counting each hardware thread (at most cpu_cap; under WSL,
 # all the CPUs WSL has), and a quarter of the host's memory rounded up to a
 # multiple of memory_step_mb (at most memory_cap_mb; under WSL, all the memory
-# WSL has less 1.5 GB for Linux). Each vCPU is pinned to a host CPU, from the
-# highest CPU number down. Command-line equivalents: --cpus=, --memory_mb=
+# WSL has less 1.5 GB for Linux). Each vCPU is pinned to a host CPU: the
+# performance cores first (an Intel hybrid CPU's P-cores), one hardware thread
+# of each core before any core's second, from the highest CPU number down.
+# Command-line equivalents: --cpus=, --memory_mb=
 cpus = auto
 memory_mb = auto
 cpu_cap = 12
@@ -323,7 +325,8 @@ enable_sandbox = false
 # gfxstream passes over for llvmpipe (an older Vulkan version, such as
 # Haswell's 1.2), with OpenGL ES only when gfxstream_vulkan is auto, whatever
 # is set here; gfxstream_guest_angle otherwise. Command-line
-# equivalent: --gpu_mode=, which wins on every host. venus (Mesa's Venus
+# equivalent: --gpu_mode=, which wins on every host; --gpu_mode=auto gives
+# auto's choice for that start, whatever is set here. venus (Mesa's Venus
 # Vulkan driver in the guest over virglrenderer) and guest_lavapipe (Mesa's
 # lavapipe on the guest's CPU) need a ROM that ships those drivers; see
 # GRAPHICS.md.

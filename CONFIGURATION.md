@@ -102,7 +102,9 @@ These add to the app's start options: an option that is ticked there stays on.
 | Network | Ethernet only: no Wi-Fi, Bluetooth, NFC, UWB, GNSS or modem | `[network]` |
 | Browser | Chromium, installed on a new device as the default browser | — |
 
-Each virtual CPU is pinned to a host CPU, from the highest-numbered CPU down.
+Each virtual CPU is pinned to a host CPU: the performance cores first (the
+P-cores of an Intel hybrid CPU), one hardware thread of each core before any
+core's second, from the highest-numbered CPU down.
 
 ### Data partition size
 
@@ -220,7 +222,7 @@ game_apps = com.example.game
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `gpu_mode` | `auto` | The GPU mode: `auto` (`venus` or `gfxstream_guest_angle`, by the host's GPU), `gfxstream_guest_angle`, `gfxstream`, `venus`, `guest_swiftshader` and others. `--gpu_mode=`, which wins on every host. Hosts with only software Vulkan drivers, or whose GPU gfxstream passes over for llvmpipe, use `gfxstream` whatever this says, `auto` included. See [Graphics](GRAPHICS.md#how-ika-chooses) |
+| `gpu_mode` | `auto` | The GPU mode: `auto` (`venus` or `gfxstream_guest_angle`, by the host's GPU), `gfxstream_guest_angle`, `gfxstream`, `venus`, `guest_swiftshader` and others. `--gpu_mode=`, which wins on every host; `--gpu_mode=auto` gives `auto`'s choice for that start, whatever this says. Hosts with only software Vulkan drivers, or whose GPU gfxstream passes over for llvmpipe, use `gfxstream` whatever this says, `auto` included. See [Graphics](GRAPHICS.md#how-ika-chooses) |
 | `gfxstream_vulkan` | `auto` | Vulkan in the `gfxstream` mode. `--gfxstream_vulkan=`, `GFXSTREAM_VULKAN` |
 | `host_cached_memory` | `off` | Cached host memory for Vulkan uploads. `--host_cached_memory=`, `IKA_HOST_CACHED_MEMORY` |
 | `hw_video_decode` | `auto` | VA-API video decoding. `--hw_video_decode=`, `IKA_HW_VIDEO_DECODE` |

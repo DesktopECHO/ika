@@ -117,11 +117,13 @@ flowchart TD
 
 `--gpu_mode=` on the command line wins over all three. A mode named in
 `gpu_mode` in the `[gpu]` section of `ika.ini` replaces the last two: a host
-of the first kind still uses `gfxstream`.
+of the first kind still uses `gfxstream`. `--gpu_mode=auto` makes the choice
+above for that start, whatever `ika.ini` names.
 
 ```bash
 ika restart --gpu_mode=gfxstream
 ika restart --gpu_mode=gfxstream_guest_angle
+ika restart --gpu_mode=auto
 ```
 
 The start line says which path Android renders through, and

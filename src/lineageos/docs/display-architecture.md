@@ -17,7 +17,7 @@ experience from a phone emulator in a browser to a native desktop window.
 | Audio transport | WebRTC media stream | Cuttlefish virtio-snd → host PipeWire stream |
 | Multi-display / hotplug | `cvd display add/list/remove` CLI | Same CLI is available; Ika does not currently drive add/remove operations |
 | GPU path | Varies (host, gfxstream, virgl) | `gpu_mode=venus` or `gfxstream_guest_angle` by the host GPU (`gfxstream` with only llvmpipe), `enable_gpu_udmabuf=true`, `gpu_vhost_user_mode=auto`, `use_cvdalloc=true` |
-| CPU policy | No Ika-specific policy | Guest vCPUs prefer performance cores; the default count is the available/performance-core count minus two, capped at 12 |
+| CPU policy | No Ika-specific policy | Guest vCPUs are pinned to the host's performance cores, one hardware thread of each core first; the default count is half the performance cores' hardware threads, capped at 12 (under WSL, all the CPUs WSL has) |
 
 ## 1. Frame transport
 
