@@ -181,8 +181,12 @@ Qualcomm (Turnip) hosts.
 
 It is the default on a host whose GPU suits it (see
 [How Ika chooses](#how-ika-chooses)), but not on Apple Silicon, where games
-run faster with `gfxstream_guest_angle`; Ika has not tested it on NVIDIA's
-GPUs. Against `gfxstream_guest_angle` on a
+run faster with `gfxstream_guest_angle`, or on NVIDIA's GPUs, which have no
+ETC2. Started with `--gpu_mode=venus` on NVIDIA's own Linux driver (an RTX
+4080 Laptop GPU), Android draws its desktop and apps, but apps that render
+OpenGL ES through ANGLE get no window, as the driver refuses the swapchain
+images ANGLE asks for, and 3DMark stops for want of ASTC textures, which
+gfxstream emulates. Against `gfxstream_guest_angle` on a
 Radeon 780M, a WebGL page with 12,800 draw calls a frame ran at 60 fps instead
 of 24, and crosvm and the render server used about 40% less of the host's CPU,
 for WebGL and video alike; a Broadwell MacBook Air was faster with it too. On
