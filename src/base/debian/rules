@@ -256,6 +256,9 @@ override_dh_install:
 	install -Dpm0755 ../tools/ika-root ${cuttlefish_common}/bin/ika-root
 	install -Dpm0755 ../tools/ika-wsl-setup debian/ika-base/usr/bin/ika-wsl-setup
 	install -Dpm0755 ../tools/getchromium ${cuttlefish_common}/bin/getchromium
+	$(CC) $(shell dpkg-buildflags --get CPPFLAGS) $(shell dpkg-buildflags --get CFLAGS) \
+	    $(shell dpkg-buildflags --get LDFLAGS) -o ${cuttlefish_common}/bin/ika-shift-held \
+	    ../tools/ika-shift-held.c
 	install -Dpm0755 rpm/cuttlefish-add-user-to-groups.sh debian/ika-base/usr/libexec/cuttlefish/cuttlefish-add-user-to-groups
 	install -Dpm0644 rpm/99-cuttlefish.conf debian/ika-base/etc/sysctl.d/99-cuttlefish.conf
 	install -Dpm0644 rpm/cuttlefish-tmpfiles.conf debian/ika-base/usr/lib/tmpfiles.d/cuttlefish.conf

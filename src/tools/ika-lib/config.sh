@@ -8,6 +8,7 @@ PACKAGED_SCRCPY_BIN="/usr/lib/cuttlefish-common/bin/scrcpy"
 PACKAGED_SCRCPY_SERVER="/usr/lib/cuttlefish-common/share/scrcpy/scrcpy-server"
 PACKAGED_GETCHROMIUM_BIN="/usr/lib/cuttlefish-common/bin/getchromium"
 PACKAGED_IKA_ROOT_BIN="/usr/lib/cuttlefish-common/bin/ika-root"
+PACKAGED_SHIFT_HELD_BIN="/usr/lib/cuttlefish-common/bin/ika-shift-held"
 PACKAGED_MADBFS_BIN="/usr/lib/cuttlefish-common/bin/madbfs"
 PACKAGED_WSL_GPU_DIR="/usr/lib/cuttlefish-common/wsl"
 # Whether windows show through WSLg, WSL's display server for the Windows

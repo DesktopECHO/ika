@@ -240,13 +240,17 @@ close_app_window() {
   respond "Closed ${resolved%%$'\t'*}"
 }
 
-# Whether Shift is held down on the Windows desktop, on WSLg. PowerShell takes
-# about 0.3 s to answer: start_windows_shift_probe asks in the background, so
-# that the work until the answer is needed runs meanwhile, and
-# windows_shift_held reads it then, or asks on the spot when no probe runs.
-# The answer is kept: Shift at the launch is what counts.
-WINDOWS_SHIFT_PROBE_FD=""
-WINDOWS_SHIFT_HELD=""
+# Whether Shift is held down as Ika or an app is launched from a menu, a dock or
+# a task bar, which opens its Startup Options instead. On Linux the keyboards
+# answer, through ika-shift-held, at once: start_shift_probe asks then, while
+# Shift is still held. On WSLg, whose distributions have no keyboard devices,
+# Windows answers: PowerShell takes about 0.3 s, so start_shift_probe asks in
+# the background, the work until the answer is needed runs meanwhile, and
+# shift_held reads it then. shift_held asks on the spot when no probe ran. The
+# answer is kept: Shift at the launch is what counts.
+SHIFT_PROBE_STARTED=""
+SHIFT_PROBE_FD=""
+SHIFT_HELD=""
 
 windows_shift_probe_command() {
   with_timeout 5 powershell.exe -NoProfile -NonInteractive -Command \
@@ -254,34 +258,42 @@ windows_shift_probe_command() {
     2>/dev/null | tr -d '\r'
 }
 
-start_windows_shift_probe() {
-  [[ "${IKA_ON_WSLG}" == true ]] || return 0
+start_shift_probe() {
+  SHIFT_PROBE_STARTED="true"
+  if [[ "${IKA_ON_WSLG}" != true ]]; then
+    shift_held || true
+    return 0
+  fi
   command -v powershell.exe >/dev/null 2>&1 || return 0
-  exec {WINDOWS_SHIFT_PROBE_FD}< <(windows_shift_probe_command)
+  exec {SHIFT_PROBE_FD}< <(windows_shift_probe_command)
 }
 
-windows_shift_held() {
+shift_held() {
   local keys=""
 
-  if [[ -n "${WINDOWS_SHIFT_HELD}" ]]; then
-    [[ "${WINDOWS_SHIFT_HELD}" == true ]]
+  if [[ -n "${SHIFT_HELD}" ]]; then
+    [[ "${SHIFT_HELD}" == true ]]
     return
   fi
-  [[ "${IKA_ON_WSLG}" == true ]] || return 1
-  if [[ -n "${WINDOWS_SHIFT_PROBE_FD}" ]]; then
-    read -r keys <&"${WINDOWS_SHIFT_PROBE_FD}" || true
-    exec {WINDOWS_SHIFT_PROBE_FD}<&-
-    WINDOWS_SHIFT_PROBE_FD=""
+  SHIFT_HELD="false"
+  if [[ "${IKA_ON_WSLG}" != true ]]; then
+    if [[ -x "${PACKAGED_SHIFT_HELD_BIN}" ]] && "${PACKAGED_SHIFT_HELD_BIN}"; then
+      SHIFT_HELD="true"
+    fi
   else
-    command -v powershell.exe >/dev/null 2>&1 || return 1
-    keys="$(windows_shift_probe_command)"
+    if [[ -n "${SHIFT_PROBE_FD}" ]]; then
+      read -r keys <&"${SHIFT_PROBE_FD}" || true
+      exec {SHIFT_PROBE_FD}<&-
+      SHIFT_PROBE_FD=""
+    elif command -v powershell.exe >/dev/null 2>&1; then
+      keys="$(windows_shift_probe_command)"
+    fi
+    # Keys.Shift
+    if [[ "${keys}" =~ ^[0-9]+$ ]] && (( keys & 0x10000 )); then
+      SHIFT_HELD="true"
+    fi
   fi
-  WINDOWS_SHIFT_HELD="false"
-  # Keys.Shift
-  if [[ "${keys}" =~ ^[0-9]+$ ]] && (( keys & 0x10000 )); then
-    WINDOWS_SHIFT_HELD="true"
-  fi
-  [[ "${WINDOWS_SHIFT_HELD}" == true ]]
+  [[ "${SHIFT_HELD}" == true ]]
 }
 
 run_app_command() {
@@ -432,11 +444,11 @@ run_app_command() {
     edit_app_settings "${name}" 2
     return 0
   fi
-  # Windows' Start menu and task bar offer no launcher actions: on WSLg, an app
-  # launched from them with Shift held down opens its Startup Options instead,
-  # as the launcher's "Startup options" action does on a Linux desktop. main
-  # asked Windows in the background; open_app_window reads the answer.
-  if [[ "${launcher}" == "true" && -n "${WINDOWS_SHIFT_PROBE_FD}" ]]; then
+  # An app launched from a menu, a dock or a task bar with Shift held down
+  # opens its Startup Options instead, as the launcher's "Startup options"
+  # action does (Windows' Start menu and task bar offer no such actions). main
+  # asked as the launch began; open_app_window reads the answer.
+  if [[ "${launcher}" == "true" && -n "${SHIFT_PROBE_STARTED}" ]]; then
     APP_SHIFT_CHECK="true"
   fi
   open_app_window "${name}" "${fullscreen_mode}" "${title}" "${window_size}" "" "${dpi_given}"

@@ -26,6 +26,8 @@ case "$1" in
 
     setcap cap_net_admin,cap_net_bind_service,cap_net_raw=+ep \
         /usr/lib/cuttlefish-common/bin/cvdalloc
+    # ika-shift-held reads whether Shift is held on the keyboards (ika app)
+    setcap cap_dac_read_search=+ep /usr/lib/cuttlefish-common/bin/ika-shift-held || true
 
     sysctl --system > /dev/null 2>&1 || true
     systemd-tmpfiles --create /usr/lib/tmpfiles.d/cuttlefish.conf > /dev/null 2>&1 || true
@@ -49,6 +51,8 @@ case "$1" in
     triggered)
     setcap cap_net_admin,cap_net_bind_service,cap_net_raw=+ep \
         /usr/lib/cuttlefish-common/bin/cvdalloc
+    # ika-shift-held reads whether Shift is held on the keyboards (ika app)
+    setcap cap_dac_read_search=+ep /usr/lib/cuttlefish-common/bin/ika-shift-held || true
     ;;
 esac
 

@@ -42,19 +42,20 @@ main() {
   local -a reset_args
   local -a start_args
 
-  # On WSLg, Ika or an app started from the Windows Start menu or task bar
-  # with Shift held down opens its Startup Options instead. Asked first, while
+  # Ika or an app started from a menu, a dock or a task bar (no terminal) with
+  # Shift held down opens its Startup Options instead; not in the login session
+  # that runs only Ika, whose start is no launch from a menu. Asked first, while
   # Shift is still held: Ika's before the GPU probe below takes seconds, an
-  # app's in the background, answered in open_app_window once the guest
-  # queries have run alongside it.
-  if [[ ! -t 0 && ! -t 2 ]]; then
-    if [[ "${command}" == "start" ]] && windows_shift_held; then
+  # app's now, answered in open_app_window (on WSLg once the guest queries have
+  # run alongside Windows' answer).
+  if [[ ! -t 0 && ! -t 2 && "${IKA_SESSION_IN_CAGE:-}" != true ]]; then
+    if [[ "${command}" == "start" ]] && shift_held; then
       edit_ika_settings
       return 0
     fi
     if [[ "${command}" == "app" && -n "${2:-}" && "${2}" != -* \
           && "${2}" != "sync" && "${2}" != "close" ]]; then
-      start_windows_shift_probe
+      start_shift_probe
     fi
   fi
 

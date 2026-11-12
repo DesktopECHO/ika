@@ -14,12 +14,11 @@ The console is your Android 16 virtual desktop.  It can be windowed or full-scre
 
 <img width="60%" alt="The console in a window on Windows: drag its top-left corner to move it, tap its top-right corner for Quick Settings" src="src/docs/console-corners.png" />
 
-- **Move it:** drag the top-left corner of the window, where Android shows
-  the clock.
-- **Drag It** Drag the window corners to resize.  On Linux, drag it to an edge of the screen to fill half of it, or to the
+- **Window Movement:** drag the top-left corner of the window, where Android shows the clock.
+- **Window Resizing:** Drag the window corners to resize.  On Linux, drag it to an edge of the screen to fill half of it, or to the
   top to maximize it.  This needs fixing in WSL. 
 - **Quick Settings:** click on the cuttlefish at the top-right corner to open QuickSettings and view notifications.
-- **Enter/Exit Fullscreen:** MOD+F or F11.
+- **Toggle Fullscreen On/Off:** MOD+F or F11.
 - In fullscreen mode, another way to **exit fullscreen** is to single-click the top-left hot corner. 
 
 
@@ -194,18 +193,7 @@ running elsewhere.
 
 On Windows (WSL), the title bar has Windows 11 native appearance with minimize,
 maximize, and close buttons in the color of the app's content. It is sized
-for Windows' display scale as the window opens: after changing the scale,
-close the window and open it again.
-
-- **Size:** 60% of the screen's width at 16:9 the first time, then the size
-  you left it at.
-- **Closing:** closing the window, MOD+Q or `ika app close` closes the app,
-  and so does the app ending. App windows also close when Android restarts or
-  stops (`ika stop`, `ika restart`, `ika reset`, a switch to TV mode);
-  `ika start` leaves them open.
-- MOD+F and a click in the top-left corner work as in the console. The
-  mouse's buttons all go to the app, except Shift + right click, which is
-  Back.
+for Windows' display scale when the window opens.
 
 From a terminal:
 
@@ -256,7 +244,10 @@ Right-click an app in the menu for:
   a Settings window, for its permissions, storage, notifications, force stop
   and uninstall. `ika app --info NAME` from a terminal.
 
-WSL right-click actions won't appear unil you open the app once.  Pin the icon to your taskbar and the right-click menu will be available.  Alternativly, hold **Shift** while double-clicking a console or app and its **Startup options** will appear instead.
+Hold **Shift** as you open Ika or an app from the app menu, a dock or the
+task bar, on Linux or on Windows, and its **Startup options** open instead.
+On Windows, the right-click actions appear only once you have opened the app,
+and on its task bar icon once you pin it, so Shift is the quicker way there.
 
 ### Start options
 

@@ -38,7 +38,7 @@ open_app_window() {
   # used up there: "Apply and start" opens the app in this same process, where
   # Shift's kept answer would otherwise bring the window back.
   if [[ "${APP_SHIFT_CHECK:-}" == "true" ]] && ! has_live_cvd_processes \
-      && windows_shift_held; then
+      && shift_held; then
     APP_SHIFT_CHECK=""
     edit_app_settings "${name}" 1
     return 0
@@ -71,7 +71,7 @@ open_app_window() {
     title="${label}"
   fi
   validate_app_package "${package}"
-  if [[ "${APP_SHIFT_CHECK:-}" == "true" ]] && windows_shift_held; then
+  if [[ "${APP_SHIFT_CHECK:-}" == "true" ]] && shift_held; then
     APP_SHIFT_CHECK=""
     edit_app_settings "${name}" 1
     return 0

@@ -236,6 +236,8 @@ package_ika-base() {
 
   install -Dpm0755 "${root}/base/host/deploy/capability_query.py" "${pkgdir}/usr/lib/cuttlefish-common/bin/capability_query.py"
   install -Dpm0755 "${root}/tools/getchromium" "${pkgdir}/usr/lib/cuttlefish-common/bin/getchromium"
+  ${CC:-cc} ${CPPFLAGS} ${CFLAGS} ${LDFLAGS} -o "${pkgdir}/usr/lib/cuttlefish-common/bin/ika-shift-held" \
+    "${root}/tools/ika-shift-held.c"
   # /bin is a symlink to /usr/bin on Arch; the RPM's /bin/ika lands here.
   install -Dpm0755 "${root}/tools/ika" "${pkgdir}/usr/bin/ika"
   install -Dpm0644 -t "${pkgdir}/usr/lib/cuttlefish-common/ika" "${root}"/tools/ika-lib/*.sh

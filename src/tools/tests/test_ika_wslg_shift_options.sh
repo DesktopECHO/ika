@@ -29,7 +29,7 @@ expect_equal() {
 
 require_executable() { :; }
 wayland_info_output() { :; }
-windows_shift_held() { true; }
+shift_held() { true; }
 # "Apply and start", a few times at most: before the fix, each one came back
 # to the window.
 edit_app_settings() {

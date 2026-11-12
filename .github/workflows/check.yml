@@ -26,7 +26,7 @@ jobs:
       - name: Install the tools the checks use
         run: |
           apt-get update -qq
-          apt-get install -y -qq --no-install-recommends ca-certificates git python3 pigz
+          apt-get install -y -qq --no-install-recommends ca-certificates git python3 pigz gcc libc6-dev
 
       - uses: actions/checkout@v4
 

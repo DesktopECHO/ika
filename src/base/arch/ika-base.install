@@ -21,6 +21,8 @@ _configure() {
   _ensure_var_empty
   systemd-tmpfiles --create /usr/lib/tmpfiles.d/cuttlefish.conf >/dev/null 2>&1 || :
   setcap cap_net_admin,cap_net_bind_service,cap_net_raw=+ep /usr/lib/cuttlefish-common/bin/cvdalloc >/dev/null 2>&1 || :
+  # ika-shift-held reads whether Shift is held on the keyboards (ika app)
+  setcap cap_dac_read_search=+ep /usr/lib/cuttlefish-common/bin/ika-shift-held >/dev/null 2>&1 || :
   sysctl --system >/dev/null 2>&1 || :
   /usr/libexec/cuttlefish/cuttlefish-add-user-to-groups || :
   udevadm control --reload >/dev/null 2>&1 || :

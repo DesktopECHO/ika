@@ -486,6 +486,7 @@ find %{buildroot}/usr/lib/cuttlefish-common/usr/share/webrtc/assets -type f -exe
 
 install -Dpm0755 base/host/deploy/capability_query.py %{buildroot}/usr/lib/cuttlefish-common/bin/capability_query.py
 install -Dpm0755 tools/getchromium %{buildroot}/usr/lib/cuttlefish-common/bin/getchromium
+%{__cc} %{optflags} %{build_ldflags} -o %{buildroot}/usr/lib/cuttlefish-common/bin/ika-shift-held tools/ika-shift-held.c
 install -Dpm0755 tools/ika %{buildroot}/bin/ika
 install -Dpm0644 -t %{buildroot}/usr/lib/cuttlefish-common/ika tools/ika-lib/*.sh
 install -Dpm0755 tools/ika-root %{buildroot}/usr/lib/cuttlefish-common/bin/ika-root
@@ -538,6 +539,8 @@ fi
 mkdir -p /var/empty
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cuttlefish.conf >/dev/null 2>&1 || :
 setcap cap_net_admin,cap_net_bind_service,cap_net_raw=+ep /usr/lib/cuttlefish-common/bin/cvdalloc >/dev/null 2>&1 || :
+# ika-shift-held reads whether Shift is held on the keyboards (ika app)
+setcap cap_dac_read_search=+ep /usr/lib/cuttlefish-common/bin/ika-shift-held >/dev/null 2>&1 || :
 /usr/sbin/sysctl --system >/dev/null 2>&1 || :
 /usr/libexec/cuttlefish/cuttlefish-add-user-to-groups || :
 udevadm control --reload >/dev/null 2>&1 || :
@@ -585,6 +588,8 @@ fi
 
 %posttrans
 setcap cap_net_admin,cap_net_bind_service,cap_net_raw=+ep /usr/lib/cuttlefish-common/bin/cvdalloc >/dev/null 2>&1 || :
+# ika-shift-held reads whether Shift is held on the keyboards (ika app)
+setcap cap_dac_read_search=+ep /usr/lib/cuttlefish-common/bin/ika-shift-held >/dev/null 2>&1 || :
 
 %post -n ika-defaults
 systemctl daemon-reload >/dev/null 2>&1 || :
