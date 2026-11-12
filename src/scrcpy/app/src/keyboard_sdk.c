@@ -29,7 +29,8 @@ convert_keycode_action(enum sc_action action) {
 static bool
 convert_keycode(enum sc_keycode from, enum android_keycode *to, uint16_t mod,
                 enum sc_key_inject_mode key_inject_mode) {
-    // Navigation keys and ENTER.
+    // Navigation, modifier, function, lock, volume, media, browser and power
+    // keys, and ENTER.
     // Used in all modes.
     static const struct sc_intmap_entry special_keys[] = {
         {SC_KEYCODE_RETURN,    AKEYCODE_ENTER},
@@ -54,6 +55,63 @@ convert_keycode(enum sc_keycode from, enum android_keycode *to, uint16_t mod,
         {SC_KEYCODE_RALT,      AKEYCODE_ALT_RIGHT},
         {SC_KEYCODE_LGUI,      AKEYCODE_META_LEFT},
         {SC_KEYCODE_RGUI,      AKEYCODE_META_RIGHT},
+        // A keyboard's volume and media keys. SDL's MUTE is the speaker's,
+        // Android's VOLUME_MUTE (its MUTE is the microphone's).
+        {SC_KEYCODE_MUTE,                 AKEYCODE_VOLUME_MUTE},
+        {SC_KEYCODE_VOLUMEUP,             AKEYCODE_VOLUME_UP},
+        {SC_KEYCODE_VOLUMEDOWN,           AKEYCODE_VOLUME_DOWN},
+        {SC_KEYCODE_MEDIA_PLAY,           AKEYCODE_MEDIA_PLAY},
+        {SC_KEYCODE_MEDIA_PAUSE,          AKEYCODE_MEDIA_PAUSE},
+        {SC_KEYCODE_MEDIA_RECORD,         AKEYCODE_MEDIA_RECORD},
+        {SC_KEYCODE_MEDIA_FAST_FORWARD,   AKEYCODE_MEDIA_FAST_FORWARD},
+        {SC_KEYCODE_MEDIA_REWIND,         AKEYCODE_MEDIA_REWIND},
+        {SC_KEYCODE_MEDIA_NEXT_TRACK,     AKEYCODE_MEDIA_NEXT},
+        {SC_KEYCODE_MEDIA_PREVIOUS_TRACK, AKEYCODE_MEDIA_PREVIOUS},
+        {SC_KEYCODE_MEDIA_STOP,           AKEYCODE_MEDIA_STOP},
+        {SC_KEYCODE_MEDIA_PLAY_PAUSE,     AKEYCODE_MEDIA_PLAY_PAUSE},
+        {SC_KEYCODE_MEDIA_EJECT,          AKEYCODE_MEDIA_EJECT},
+        // Function keys. F11 never comes here: the window takes it, for
+        // fullscreen.
+        {SC_KEYCODE_F1,                   AKEYCODE_F1},
+        {SC_KEYCODE_F2,                   AKEYCODE_F2},
+        {SC_KEYCODE_F3,                   AKEYCODE_F3},
+        {SC_KEYCODE_F4,                   AKEYCODE_F4},
+        {SC_KEYCODE_F5,                   AKEYCODE_F5},
+        {SC_KEYCODE_F6,                   AKEYCODE_F6},
+        {SC_KEYCODE_F7,                   AKEYCODE_F7},
+        {SC_KEYCODE_F8,                   AKEYCODE_F8},
+        {SC_KEYCODE_F9,                   AKEYCODE_F9},
+        {SC_KEYCODE_F10,                  AKEYCODE_F10},
+        {SC_KEYCODE_F11,                  AKEYCODE_F11},
+        {SC_KEYCODE_F12,                  AKEYCODE_F12},
+        // Editing and lock keys. The lock keys' state already reaches
+        // Android with every key (convert_meta_state); these are the keys.
+        // Print Screen is Android's SYSRQ, a screenshot.
+        {SC_KEYCODE_INSERT,               AKEYCODE_INSERT},
+        {SC_KEYCODE_PRINTSCREEN,          AKEYCODE_SYSRQ},
+        {SC_KEYCODE_PAUSE,                AKEYCODE_BREAK},
+        {SC_KEYCODE_CAPSLOCK,             AKEYCODE_CAPS_LOCK},
+        {SC_KEYCODE_NUMLOCKCLEAR,         AKEYCODE_NUM_LOCK},
+        {SC_KEYCODE_SCROLLLOCK,           AKEYCODE_SCROLL_LOCK},
+        {SC_KEYCODE_CUT,                  AKEYCODE_CUT},
+        {SC_KEYCODE_COPY,                 AKEYCODE_COPY},
+        {SC_KEYCODE_PASTE,                AKEYCODE_PASTE},
+        {SC_KEYCODE_HELP,                 AKEYCODE_HELP},
+        // The context menu key: SDL's APPLICATION on PC keyboards.
+        {SC_KEYCODE_APPLICATION,          AKEYCODE_MENU},
+        {SC_KEYCODE_MENU,                 AKEYCODE_MENU},
+        // Browser keys
+        {SC_KEYCODE_AC_BACK,              AKEYCODE_BACK},
+        {SC_KEYCODE_AC_FORWARD,           AKEYCODE_FORWARD},
+        {SC_KEYCODE_AC_HOME,              AKEYCODE_HOME},
+        {SC_KEYCODE_AC_REFRESH,           AKEYCODE_REFRESH},
+        {SC_KEYCODE_AC_SEARCH,            AKEYCODE_SEARCH},
+        {SC_KEYCODE_AC_BOOKMARKS,         AKEYCODE_BOOKMARK},
+        // Power keys, where nothing on the host takes them first (`ika
+        // session` holds them back from logind)
+        {SC_KEYCODE_POWER,                AKEYCODE_POWER},
+        {SC_KEYCODE_SLEEP,                AKEYCODE_SLEEP},
+        {SC_KEYCODE_WAKE,                 AKEYCODE_WAKEUP},
     };
 
     // Numpad navigation keys.

@@ -159,6 +159,8 @@ Requires:       libva-utils
 Recommends:     (mesa-va-drivers-freeworld if mesa-dri-drivers)
 Recommends:     (intel-media-driver if libva-intel-media-driver)
 Requires:       xdg-utils
+# The Android login session (ika session)
+Requires:       cage
 # ika's windows (ika app --options, ika options and their confirmations):
 # python3's GTK 3 bindings draw them, native on Wayland and X11.
 Requires:       python3-gobject
@@ -452,6 +454,7 @@ install -d %{buildroot}/usr/share/icons/hicolor/256x256/apps
 install -m 0644 tools/ika.desktop %{buildroot}/usr/share/applications/ika.desktop
 install -m 0644 tools/ika-install.desktop %{buildroot}/usr/share/applications/ika-install.desktop
 install -m 0644 tools/ika-startup-options.desktop %{buildroot}/usr/share/applications/ika-startup-options.desktop
+install -Dm 0644 tools/ika-session.desktop %{buildroot}/usr/share/wayland-sessions/ika.desktop
 install -m 0644 \
   %{buildroot}/usr/lib/cuttlefish-common/share/icons/hicolor/256x256/apps/scrcpy.png \
   %{buildroot}/usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
@@ -614,6 +617,7 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/share/applications/ika.desktop
 /usr/share/applications/ika-install.desktop
 /usr/share/applications/ika-startup-options.desktop
+/usr/share/wayland-sessions/ika.desktop
 /usr/share/icons/hicolor/256x256/apps/ika-scrcpy.png
 /usr/share/icons/hicolor/128x128/apps/ika-scrcpy.png
 /usr/share/vulkan/implicit_layer.d/VK_LAYER_IKA_dzn_fix.json

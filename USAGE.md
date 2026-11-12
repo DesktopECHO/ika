@@ -48,6 +48,25 @@ Shortcuts, with MOD held:
 | MOD+Shift+V | Type the clipboard's text |
 | MOD+O, MOD+Shift+O | Turn Android's screen off, on |
 
+A keyboard's special keys go to Android too, when the console or an app
+window gets them:
+
+- Volume Up, Volume Down, Mute and the media keys (Play/Pause, Next, Previous,
+  Stop, Fast Forward, Rewind, Record, Eject)
+- F1 to F10 and F12 (F11 is the console's fullscreen key)
+- Print Screen, which takes an Android screenshot, the Menu key, Insert,
+  Pause, Caps Lock, Num Lock, Scroll Lock, Cut, Copy, Paste and Help
+- the browser keys: Back, Forward, Home, Refresh, Search and Bookmarks
+- Power, Sleep and Wake, which turn Android's screen off and on
+
+GNOME and KDE Plasma keep many of them for the computer (its volume, players,
+screenshots and power), so those reach Android where no desktop takes them,
+such as [a session that runs only Ika](#a-session-with-only-ika). Keys the
+console has no name for, such as brightness, the keyboard backlight, Mail and
+Calculator, do not reach Android. A window with **Send the keyboard straight
+to Android** ticked passes a standard keyboard's keys only, without the
+volume, media, browser and power keys.
+
 Holding Ctrl or Shift as you press the left button adds a second finger,
 which mirrors the pointer until you let go:
 
@@ -108,6 +127,33 @@ ika restart    # stop and start again, with new options if given
   Android's disk and discard its data, so `ika start` refuses to start after
   one and says so. Run `ika backup` before installing it, then `ika reset` and
   `ika restore` after (see [Factory reset](CONFIGURATION.md#factory-reset)).
+
+### A session with only Ika
+
+The login screen (GDM, SDDM and others) lists **Android** next to your desktops.
+The session runs in [Cage](https://github.com/cage-kiosk/cage), which `ika-base`
+requires, so the package manager installs it with Ika. Log in with **Android** and
+Android fills the screen, with no desktop around it: the keyboard's special
+keys (see [The console](#the-console)) reach Android, and no desktop shortcut
+takes one first.
+
+- Closing the console (MOD+Q), or turning Android off from its power menu,
+  logs out and stops Android. An Android already running, from a desktop
+  session, keeps running, and its console moves to the Android session.
+- The Power and Sleep keys turn Android's screen off and on, not the
+  computer: the session holds them back from the system while it runs.
+  Closing a laptop's lid still does what the system is set to do.
+- Ctrl+Alt+F1 to F12 still switch to other virtual terminals, a way out to
+  another session or a text login.
+- If Ika cannot start, a window says why before you are logged out;
+  `~/ika/ikastart.log` and `~/ika/session.log` have the details.
+- To make the PC start straight into Android, log in automatically with the
+  **Android** session. GDM logs in with the session you chose last, so log in
+  with **Android** once, then turn on automatic login (GNOME's Settings, Users).
+  SDDM takes `User=` and `Session=ika` under `[Autologin]` in a file in
+  `/etc/sddm.conf.d/`.
+- App windows belong to a desktop: the Android session shows the console only.
+- WSL has no login screen; on Windows, start Ika as usual.
 
 ## Android apps on your desktop
 

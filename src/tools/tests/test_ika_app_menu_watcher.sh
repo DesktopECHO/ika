@@ -25,6 +25,8 @@ printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\n' "${T}/notifications" > "${T}/
 chmod +x "${T}/bin/notify-send"
 export PATH="${T}/bin:${PATH}"
 export IKA_NOTIFY=true
+# A desktop's notification server runs (test_ika_notifications.sh covers none)
+notification_server_running() { true; }
 
 notify_user "control"
 grep -q ' Ika control$' "${T}/notifications" || fail "the notify-send stub was not called"

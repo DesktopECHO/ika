@@ -1,0 +1,10 @@
+# The login session that runs only Ika, installed as
+# /usr/share/wayland-sessions/ika.desktop: the login screen lists it as
+# "Android" once Cage is installed (TryExec). See `ika session`.
+[Desktop Entry]
+Name=Android
+Comment=Ika Android Session
+TryExec=cage
+Exec=ika session
+Type=Application
+DesktopNames=Ika

@@ -21,6 +21,7 @@ A setting is taken from the first of these that gives it:
 | `ika stop` | Closes the console and app windows, unmounts Android's files and stops the VM. |
 | `ika restart [OPTIONS]` | Stops the VM and starts it again with the options given, or starts it if it is stopped. |
 | `ika status` | Says whether the VM is running, and how the console's frames reach it (`DMA-BUFs`, or `pixels read back by crosvm`). |
+| `ika session` | Runs the login session that has only Ika in it, from the login screen's **Android** entry. See [A session with only Ika](USAGE.md#a-session-with-only-ika). |
 | `ika reset [--data_gb=GB]` | Factory-resets Android, after you type `y`. See [Factory reset](#factory-reset). |
 | `ika app` | Lists the apps that can be opened, with open app windows in bold and games in the background marked "(background)". |
 | `ika app NAME [OPTIONS]` | Opens an app in its own window. See [App windows](USAGE.md#app-windows). |

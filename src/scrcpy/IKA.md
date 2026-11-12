@@ -175,6 +175,15 @@ Flex-display windows are shown 1:1, so their textures have no mipmaps.
   controller's IDs, 045e:028e (`app/src/uhid/gamepad_uhid.c`). A stick moves
   in one HID report: the gamepad processor has an optional
   `process_gamepad_stick` op, which the UHID and AOA gamepads implement.
+- **Special keys:** with `--keyboard=sdk`, these are injected as Android's
+  keycodes (`app/src/keyboard_sdk.c`): Mute, Volume Up and Down (`VOLUME_*`),
+  the media keys (`MEDIA_*`, Eject included), F1 to F12 (F11 stays the
+  fullscreen shortcut), Insert, Print Screen (`SYSRQ`, a screenshot), Pause
+  (`BREAK`), the lock keys, Cut, Copy, Paste, Help, the context menu key
+  (`MENU`), the browser keys (`BACK`, `FORWARD`, `HOME`, `REFRESH`, `SEARCH`,
+  `BOOKMARK`) and Power, Sleep and Wake (`POWER`, `SLEEP`, `WAKEUP`).
+  `AKEYCODE_REFRESH` (285) joins `android/keycodes.h`. `--keyboard=uhid` passes
+  a standard keyboard's keys only: the HID keyboard has no usages past 0x65.
 
 ### Keyboard gamepad
 
