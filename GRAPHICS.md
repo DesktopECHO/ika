@@ -523,7 +523,10 @@ lists how individual games render in each mode.
   with a comment for each.
 - crosvm's patches:
   [src/base/cvd/build_external/crosvm/README.md](src/base/cvd/build_external/crosvm/README.md).
-- Ika's GPU settings: the GPU functions in [src/tools/ika](src/tools/ika).
+- Ika's GPU settings: [src/tools/ika-lib/gpu.sh](src/tools/ika-lib/gpu.sh),
+  which chooses the GPU mode, and
+  [src/tools/ika-lib/gpu-args.sh](src/tools/ika-lib/gpu-args.sh), which passes
+  it on to Cuttlefish.
 - Ika's Mesa on the host (Lavapipe, Dozen, D3D12 OpenGL), and the Mesa
   version the ROM and the host both build from:
   [src/tools/mesa](src/tools/mesa).

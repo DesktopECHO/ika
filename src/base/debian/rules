@@ -252,6 +252,7 @@ override_dh_install:
 	# claim those files.
 	rm -rf ${cuttlefish_common}/etc/cvd_config
 	install -Dpm0755 ../tools/ika debian/ika-base/usr/bin/ika
+	install -Dpm0644 -t ${cuttlefish_common}/ika ../tools/ika-lib/*.sh
 	install -Dpm0755 ../tools/ika-root ${cuttlefish_common}/bin/ika-root
 	install -Dpm0755 ../tools/ika-wsl-setup debian/ika-base/usr/bin/ika-wsl-setup
 	install -Dpm0755 ../tools/getchromium ${cuttlefish_common}/bin/getchromium

@@ -50,5 +50,6 @@ user sees or sets, update the page that covers it:
 | [BUILDING.md](BUILDING.md) | Building from source |
 | [src/scrcpy/IKA.md](src/scrcpy/IKA.md) | Ika's changes to scrcpy |
 
-`ika help` and the comments of the `ika.ini` template in `src/tools/ika` describe
-the same settings, and should agree with the pages.
+`ika help` (`src/tools/ika-lib/cli.sh`) and the comments of the `ika.ini`
+template (`src/tools/ika-lib/config.sh`) describe the same settings, and
+should agree with the pages.

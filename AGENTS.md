@@ -15,7 +15,8 @@ tree is upstream code; change it only when the task is about it.
 
 | Path | What it is |
 | --- | --- |
-| `src/tools/ika` | The launcher: every `ika` command, the `ika.ini` template, the GPU mode choice, app windows, the app menu, WSL. One Bash script |
+| `src/tools/ika` | The launcher, a Bash script: `main`, which dispatches every `ika` command, after it sources the pieces in `ika-lib/` |
+| `src/tools/ika-lib/*.sh` | The launcher's code, by subject: `config.sh` (`ika.ini` and its template), `gpu.sh` (the GPU mode choice), `console.sh`, `apps.sh`, `app-menu.sh`, `storage.sh`, `lifecycle.sh` (starting and stopping the VM), `session.sh` and others. Installed in `/usr/lib/cuttlefish-common/ika/` |
 | `src/tools/tests/test_ika_*.sh` | The launcher's tests. Each sources `src/tools/ika` with stubbed commands; none needs a VM |
 | `src/tools/*.desktop`, `src/tools/ika-*` | Desktop entries, the login session, `ika-root`, the WSL setup |
 | `ika-build` | The full build: the ROM, then the host packages |
@@ -37,9 +38,15 @@ tree is upstream code; change it only when the task is about it.
   A fix for one machine, or a setting the user has to find, is not a fix.
 - **Update the documentation with the code.** When a change alters what a
   user sees or sets, update the page that covers it; the table in
-  [CONTRIBUTING.md](CONTRIBUTING.md#documentation) says which. `ika help` and
-  the `ika.ini` template in `src/tools/ika` must agree with the pages. The
-  pages describe how Ika works now, not its history.
+  [CONTRIBUTING.md](CONTRIBUTING.md#documentation) says which. `ika help`
+  (`src/tools/ika-lib/cli.sh`) and the `ika.ini` template
+  (`src/tools/ika-lib/config.sh`) must agree with the pages. The pages
+  describe how Ika works now, not its history.
+- **The launcher's pieces run in order**, the order `src/tools/ika` sources
+  them in, and each piece's top-level code runs as it is sourced: it can use
+  only what the pieces before it define. A new piece gets a place in that
+  list, and in the packages' install lines it needs none, as they install
+  every `ika-lib/*.sh`.
 - **ROM patches** are applied in the order of `src/lineageos/patches/series`.
   A new patch gets a line there and a row at the same place in
   `src/lineageos/patches/README.md`, saying what it does.

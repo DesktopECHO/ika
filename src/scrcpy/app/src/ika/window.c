@@ -571,7 +571,7 @@ sc_ika_window_set_titlebar_color(struct sc_ika_window *iw, uint8_t r,
 // backgrounds, symbolic icons written for the pixel size (1-pixel lines, as
 // Windows draws them) and colored like the button's text.
 
-// ika's own window (wslg_caption in tools/ika) mirrors these metrics, the
+// ika's own window (wslg_caption in tools/ika-lib/window.sh) mirrors these metrics, the
 // glyphs and the CSS for its title bar: a change here goes there too.
 
 // Windows 11's caption metrics at 100%

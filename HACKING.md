@@ -32,20 +32,31 @@ checks.
 
 ## The launcher
 
-`src/tools/ika` is the installed `/usr/bin/ika` as it is, so trying a change
-is copying it:
+`src/tools/ika` and its pieces in `src/tools/ika-lib/` are installed as they
+are, as `/usr/bin/ika` and `/usr/lib/cuttlefish-common/ika/`. A copy runs from
+anywhere with its `ika-lib` folder beside it:
 
 ```bash
 ./check.sh
-scp src/tools/ika HOST:/tmp/ika-test
-ssh HOST 'sudo cp -p /usr/bin/ika /usr/bin/ika.pre-CHANGE && sudo install -m 0755 /tmp/ika-test /usr/bin/ika'
+rsync -a src/tools/ika src/tools/ika-lib HOST:/tmp/ika-test/
+ssh HOST bash /tmp/ika-test/ika status
+```
+
+To make the copy the host's `ika`, which the app menu, the login session and
+Ika's own helpers run, install both, with backups:
+
+```bash
+ssh HOST 'sudo cp -a /usr/bin/ika /usr/bin/ika.pre-CHANGE \
+  && sudo cp -a /usr/lib/cuttlefish-common/ika /usr/lib/cuttlefish-common/ika.pre-CHANGE \
+  && sudo install -m 0755 /tmp/ika-test/ika /usr/bin/ika \
+  && sudo install -m 0644 -t /usr/lib/cuttlefish-common/ika /tmp/ika-test/ika-lib/*.sh'
 ```
 
 - `ika start -f` while Android runs only reopens the console; `ika restart -f`
   restarts Android too.
 - A window of `ika`'s own (Startup Options, Settings) can be opened straight
   from the copy: `systemd-run --user --unit=ika-gtk-test --collect bash
-  /tmp/ika-test app --options NAME`.
+  /tmp/ika-test/ika app --options NAME`.
 - `bash -c 'source /usr/bin/ika; FUNCTION'` runs one function, but cannot open
   app windows: the launcher then thinks it is `bash`.
 - The logs are in `~/ika` ([AGENTS.md](AGENTS.md#logs) lists them).
