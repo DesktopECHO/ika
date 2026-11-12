@@ -1,50 +1,44 @@
 **README**&nbsp; • &nbsp;[Download](DOWNLOAD.md)&nbsp; • &nbsp;[Using Ika](USAGE.md)&nbsp; • &nbsp;[Configuration](CONFIGURATION.md)&nbsp; • &nbsp;[Graphics](GRAPHICS.md)&nbsp; • &nbsp;[Building](BUILDING.md)
 
-<img width="45%" alt="Ika Virtual Desktop" src="https://github.com/user-attachments/assets/ad0213c3-6a9d-45bc-9468-dcdd82abca26" />&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<img width="45%" alt="Ika on Windows (WSL2)" src="src/docs/ika-on-windows.png" />
+<img width="45%" alt="Ika Virtual Desktop" src="src/docs/ika-desktop.png" />&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<img width="45%" alt="Ika on Windows (WSL2)" src="src/docs/ika-on-windows.png" />
 
 # イカ · Ika Virtual Desktop
 
-**Ika** _/ee-kah/_, Japanese for squid or cuttlefish, lets you run Android on your
-Linux or Windows desktop: LineageOS 23.2 (Android 16), built as a desktop operating
+**Ika** _/ee-kah/_, Japanese for squid or cuttlefish, is an Android emulator origianlly made for Asahi Linux on Apple Silicon.  Later, support was added for x86-64 and Windows (via WSL).  It's LineageOS 23.2 (Android 16), built as a desktop operating
 system, in a [Cuttlefish](https://source.android.com/setup/create/cuttlefish)
 virtual machine.
 
 ## Features
 
-- **Desktop Android:** LineageOS 23.2 with resizable app windows, a taskbar
-  and split screen, and a TV mode with Android TV's interface.
-- **The console:** Android's desktop in a window of your Linux desktop. Its
-  display follows the window's size at the host's density, pixel for pixel.
-- **App windows:** each Android app can also open in a window of its own from your
-  desktop's app menu, where Ika lists all your Android apps.
-- **Start options per app:** Configure app display density, fullscreen, the
-  keyboard, the mouse and gamepads passed through to Android, the keyboard as
-  a gamepad, and touch input.
+- **Hybrid Desktop/TV ROM:** Start Android with resizable app windows and a taskbar like GoogleBook OS, or in big-screen TV mode like Google TV.  A guest restart is required to switch between Desktop and TV mode.  Third-party TV launchers are supported.
 - **GPU acceleration:** OpenGL ES 3.2 and Vulkan on the host's GPU, through
   gfxstream.
-- **Filesystem auto-mount:** Android's storage is mounted on the host, in the file manager's sidebar.
-- **Camera:** a webcam, or a Mac's FaceTime camera, as Android's camera.
+- **The console:** Android's desktop appears in windowed or fullscreen mode on your desktop.  The display follows the window's size at the host's density, pixel for pixel.
+- **App windows:** Android apps can open in a window on your desktop, and are automatically added to your desktop's app menu.  They run side-by-side with your native apps.
+- **Startup options per app:** Configure app display density, fullscreen mode, the
+  keyboard, mouse, gamepad pass-through, gamepad emulation and touch input simulation. Hardware gamepads not supported in WSL 
+- **Filesystem auto-mount:** Android's storage is mounted on the host, in the file manager's sidebar on GNOME, KDE, or WSL
+- **Camera:** a webcam, or a Mac's FaceTime camera, as Android's camera. Not supported in WSL
 - **Backups:** your apps, files and settings, saved and restored with one
   command.
 - **Root:** `ika root` roots Android with Magisk.
 - **Your choice of Google:** builds with microG, with MindTheGapps (Google
   Play), or with no Google services at all.
 - **Broad support:** x86-64 and ARM64, Apple Silicon included, on Fedora,
-  Debian, Ubuntu and Arch Linux, in X11 and Wayland sessions.
+  Debian, Ubuntu and Arch Linux, in X11 or Wayland sessions.
 
-## Requirements
+## Runtime Requirements
 
-- An x86-64 or ARM64 computer with hardware virtualization (KVM), and 4 GB of
+- A x86-64 (Sandy Bridge, 2011+) or Apple Silicon (M1/M2, 2020+) computer with hardware virtualization (KVM), and 4 GB of
   memory or more.
-- Fedora 44, Debian 13, Ubuntu 26.04 or Arch Linux. On Apple Silicon, Fedora
-  Asahi Remix with its 16 KB-page kernel.
+- Fedora 44, Debian 13, Ubuntu 26.04 or Arch Linux.  Apple Silicon uses Asahi's 16 KB-page kernel.
 - Mesa 26.1 or newer. Debian 13 gets it from
   [trixie-backports](https://backports.debian.org/Instructions/), Ubuntu from
   the [Kisak Mesa PPA](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa);
-  Fedora 44 and Arch Linux have it.
+  Fedora and Arch Linux already have this or newer in their base distro packages.
 - A GPU with a Vulkan driver for best performance. Without one, Ika renders with the CPU's software driver and runs in a lighter
   [low-CPU mode](CONFIGURATION.md#low-cpu-mode).
-- On x86-64 Windows PCs, WSL2 and a CPU with nested virtualization support (see [Windows (WSL2)](CONFIGURATION.md#windows-wsl2)).
+- On **x86-64 Windows PCs**, WSL2 and a CPU with nested virtualization support (see [Windows (WSL2)](CONFIGURATION.md#windows-wsl2)).
 
 ## Install
 

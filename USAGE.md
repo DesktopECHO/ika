@@ -249,7 +249,7 @@ Alt or Left Super) to release it; a click in the window captures it again, as
 does tapping MOD. MOD never reaches Android; Right Alt does.
 
 Every gamepad Android sees, physical or the keyboard's, is a device named
-**Ika Emulated GamePad** (`adb shell dumpsys input` lists them), with the
+**Ika Emulated GamePad** (`ika adb shell dumpsys input` lists them), with the
 vendor and product IDs of an Xbox 360 controller (045e:028e), which gives
 Android its key layout and games the mapping they know. A window's gamepads,
 the keyboard gamepad and the host's real ones, each a gamepad of its own,
@@ -558,7 +558,7 @@ starts Android when it is not running.
   patches Android's `init_boot` image with Magisk's own patcher, flashes it
   from the bootloader and finishes Magisk's setup. Android restarts a few
   times along the way.
-- Then `adb shell su` works without a prompt, the Magisk app is installed and
+- Then `ika adb shell su` works without a prompt, the Magisk app is installed and
   Android's developer options are on.
 - `ika root` on a rooted Android keeps its data and updates Magisk.
 - `ika reset` undoes it: it relocks the bootloader and returns Android to

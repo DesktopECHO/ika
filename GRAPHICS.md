@@ -2,11 +2,7 @@
 
 # Graphics
 
-Android draws with the host's GPU. Its OpenGL ES and Vulkan calls are encoded
-in the guest, carried over virtio-gpu by crosvm, and run on the host's
-drivers by gfxstream, or by virglrenderer in the `venus` mode. This page explains the GPU modes, how Ika chooses one,
-the switches that tune them, what Apple Silicon needs, and what to do when
-something looks wrong.
+Android draws with the host's GPU. Its OpenGL ES and Vulkan calls are encoded in the guest, carried over virtio-gpu by crosvm, and run on the host's drivers by gfxstream, or by virglrenderer in the `venus` mode. This page explains the GPU modes, how Ika chooses one, the switches that tune them, what Apple Silicon needs, and what to do when something looks wrong.
 
 ## GPU modes
 
@@ -419,9 +415,34 @@ next frame, so its buttons did not highlight under the pointer.
 | `IKA_DZN_TRACE_REMOVAL=1` | With `IKA_D3D12_DRED=1`, the layer also logs the first Vulkan call after which the device was removed |
 | `IKA_ASTC_DECODE=gpu` or `cpu` | gfxstream decodes ASTC textures on the GPU or on the CPU, on any host. Without it, the CPU on Dozen and the GPU elsewhere |
 
+### Linux and WSL2 compared
+
+Geekbench 7.1 and 3DMark in Ika 261111, on hosts started once on Linux and
+once on Windows with WSL2, each with `gpu_mode = auto`. On Linux `auto` ran
+Venus on the Radeon and the Intel GPU and `gfxstream_guest_angle` on the
+NVIDIA one; on WSL2 it is `gfxstream_guest_angle` on Dozen everywhere. The
+Intel 12th-gen laptop has the RTX 4080 and the UHD 770, measured one at a time.
+The Apple M1 Pro runs Linux only, on `gfxstream_guest_angle`.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="src/docs/linux-vs-wsl-dark.svg">
+  <img alt="Bar charts of Geekbench 7.1 GPU scores and of 3DMark Wild Life Extreme, Steel Nomad Light and Sling Shot Extreme results, on Linux and under WSL2, per GPU" src="src/docs/linux-vs-wsl-light.svg" />
+</picture>
+
+In 3DMark the integrated GPUs keep 79% to 110% of their Linux results under
+WSL2 and the RTX 4080 31% to 59%; Geekbench's GPU test runs at about half on
+the RTX 4080 and the Radeon 780M alike. Sling Shot Extreme on Linux is held
+at the display's refresh rate on those two GPUs, 144 and 60 frames per
+second, so its share understates the difference. The RTX 4080, the fastest of them, loses the
+most in 3DMark: WSL2 adds a cost per draw and per frame, in Dozen's
+translation to Direct3D 12 and the trip to the Windows driver.
+
+The UHD 770 has two results missing. Under WSL2, Windows resets the GPU
+partway through Geekbench's GPU test and through Steel Nomad Light. On Linux,
+3DMark does not support Steel Nomad Light on this GPU.
+
 ### Limits on WSL2
 
-- `adb screencap` comes out black. The console shows the screen.
 - Each D3D12 device has a 4 GB window for shader-visible descriptor heaps,
   shared by every Android app.
 - The GPU device runs in crosvm's second process, the one that maps
@@ -483,7 +504,7 @@ lists how individual games render in each mode.
   `kernel.log` beside it; `cuttlefish_config.json` in the instance folder has
   the settings Android ran with.
 - **Vulkan devices:** `vulkaninfo --summary` on the host, and
-  `adb shell vulkaninfo --summary` in Android.
+  `ika adb shell vulkaninfo --summary` in Android.
 - **Rule out the host GPU:** `ika restart --gpu_mode=guest_swiftshader`
   renders on the CPU. If the problem goes away, it is in the host's driver or
   in gfxstream.
@@ -503,6 +524,7 @@ lists how individual games render in each mode.
 - crosvm's patches:
   [src/base/cvd/build_external/crosvm/README.md](src/base/cvd/build_external/crosvm/README.md).
 - Ika's GPU settings: the GPU functions in [src/tools/ika](src/tools/ika).
-- Ika's Mesa on the host (Lavapipe, Dozen, D3D12 OpenGL) and the Mesa release
-  every Mesa build uses: [src/tools/mesa](src/tools/mesa).
+- Ika's Mesa on the host (Lavapipe, Dozen, D3D12 OpenGL), and the Mesa
+  version the ROM and the host both build from:
+  [src/tools/mesa](src/tools/mesa).
 - The WSL2 layer and shim: [src/tools/wsl](src/tools/wsl).
