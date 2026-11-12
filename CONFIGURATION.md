@@ -395,7 +395,10 @@ These have no setting:
 ## Windows (WSL2)
 
 On an x86-64 PC with Windows 11, Ika runs in a minimal Debian 13 instance
-under WSL2. `ika-wsl.ps1` sets it all up:
+under WSL2. WSL on ARM64 is not supported due to a lack of hardware available
+for testing.
+
+`ika-wsl.ps1` sets it all up:
 
 1. Turns on what WSL2 needs in Windows, if it's missing.
 2. Installs the latest Debian WSL image from

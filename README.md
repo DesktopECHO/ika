@@ -38,7 +38,7 @@ virtual machine.
   Fedora and Arch Linux already have this or newer in their base distro packages.
 - A GPU with a Vulkan driver for best performance. Without one, Ika renders with the CPU's software driver and runs in a lighter
   [low-CPU mode](CONFIGURATION.md#low-cpu-mode).
-- On **x86-64 Windows PCs**, WSL2 and a CPU with nested virtualization support (see [Windows (WSL2)](CONFIGURATION.md#windows-wsl2)).
+- On **x86-64 Windows PCs**, WSL2 and a CPU with nested virtualization support (see [Windows (WSL2)](CONFIGURATION.md#windows-wsl2)). WSL on ARM64 is not supported due to a lack of hardware available for testing.
 
 ## Install
 

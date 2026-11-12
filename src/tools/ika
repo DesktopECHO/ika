@@ -1311,6 +1311,10 @@ else
   ANDROID_STORAGE_DIR="${LEGACY_ANDROID_STORAGE_DIR}"
 fi
 MADBFS_LOG_FILE="${CVD_HOME_DIR}/madbfs.log"
+# The storage watcher, which unmounts it once the VM has stopped by itself
+STORAGE_WATCHER_PID_FILE="${CVD_TMP_DIR}/storage-watcher.pid"
+STORAGE_WATCHER_LOCK_FILE="${CVD_TMP_DIR}/storage-watcher.lock"
+STORAGE_WATCHER_POLL_SEC=2
 APP_LIST_CACHE="${IKA_APPS_DIR}/app-list"
 # Start options saved for each app: see saved_app_options.
 APP_OPTIONS_FILE="${CVD_HOME_DIR}/app-options.ini"
@@ -2568,7 +2572,8 @@ Android files:
   \$XDG_RUNTIME_DIR/ika/Android (~/ika/Android without one), where host
   programs can open, change and delete its files; the file manager's sidebar
   lists it as Android. 'start' mounts it; 'stop', 'restart' and 'reset'
-  unmount it. Its log is ~/ika/madbfs.log.
+  unmount it, as does Android turning off by itself. Its log is
+  ~/ika/madbfs.log.
 
 Backup:
 
@@ -11258,6 +11263,7 @@ mount_android_storage() {
     # A start that finds Android running: the shortcut in Explorer is added
     # again, as the one that mounted the storage may have failed to add it.
     edit_windows_android_storage_shortcut add "${ANDROID_STORAGE_DIR}"
+    start_storage_watcher
     return 0
   fi
   if [[ "${LEGACY_ANDROID_STORAGE_DIR}" != "${ANDROID_STORAGE_DIR}" ]]; then
@@ -11303,6 +11309,7 @@ mount_android_storage() {
       </dev/null >>"${MADBFS_LOG_FILE}" 2>&1 3>&-; then
     log "Android storage mounted on ${ANDROID_STORAGE_DIR} (${root_args[0]#--root=})"
     edit_android_storage_place add
+    start_storage_watcher
   else
     log "warning: could not mount Android storage on ${ANDROID_STORAGE_DIR}; see ${MADBFS_LOG_FILE}"
   fi
@@ -11465,8 +11472,48 @@ unmount_android_storage_at() {
   edit_android_storage_place remove "${dir}"
 }
 
+# Unmounts Android's storage once the VM has stopped by itself, as when Android
+# is turned off from its own menu: otherwise it stays mounted, on a device that
+# is gone, until the next ika start or stop. Started with the mount; stop,
+# restart and reset end it before they unmount.
+run_storage_watcher() {
+  local lock_fd
+
+  exec {lock_fd}>"${STORAGE_WATCHER_LOCK_FILE}"
+  flock -n "${lock_fd}" || return 0
+  printf '%s\n' "$$" >"${STORAGE_WATCHER_PID_FILE}"
+  trap 'exit 0' INT TERM HUP
+  trap storage_watcher_cleanup EXIT
+  while has_live_cvd_processes; do
+    sleep "${STORAGE_WATCHER_POLL_SEC}" &
+    wait "$!"
+  done
+  log "the Android virtual device stopped; unmounting Android's files"
+  unmount_android_storage_at "${ANDROID_STORAGE_DIR}"
+}
+
+storage_watcher_cleanup() {
+  if [[ -f "${STORAGE_WATCHER_PID_FILE}" \
+      && "$(<"${STORAGE_WATCHER_PID_FILE}")" == "$$" ]]; then
+    rm -f "${STORAGE_WATCHER_PID_FILE}"
+  fi
+}
+
+start_storage_watcher() {
+  supervisor_pid_from_file "${STORAGE_WATCHER_PID_FILE}" __storage_watcher >/dev/null && return 0
+  mkdir -p "${CVD_TMP_DIR}"
+  setsid --fork "${IKA_SCRIPT_PATH}" __storage_watcher \
+    </dev/null >>"${MADBFS_LOG_FILE}" 2>&1 3>&- &
+  disown || true
+}
+
+stop_storage_watcher() {
+  stop_supervisor_from_file "${STORAGE_WATCHER_PID_FILE}" __storage_watcher
+}
+
 # Also from where an older Ika mounted it, and removes that folder once empty.
 unmount_android_storage() {
+  stop_storage_watcher
   unmount_android_storage_at "${ANDROID_STORAGE_DIR}"
   if [[ "${LEGACY_ANDROID_STORAGE_DIR}" != "${ANDROID_STORAGE_DIR}" ]]; then
     unmount_android_storage_at "${LEGACY_ANDROID_STORAGE_DIR}"
@@ -13281,6 +13328,9 @@ main() {
       ;;
     __app_menu_watcher)
       run_app_menu_watcher
+      ;;
+    __storage_watcher)
+      run_storage_watcher
       ;;
     options)
       edit_ika_settings

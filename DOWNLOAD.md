@@ -31,7 +31,8 @@ To choose the ROM's Google integration, build from source: see
 ## Windows (WSL2)
 
 On an x86-64 Windows PC, Ika runs in a WSL2 distribution, and `ika-wsl.ps1`
-sets it up. In PowerShell, download the install script:
+sets it up. WSL on ARM64 is not supported due to a lack of hardware available
+for testing. In PowerShell, download the install script:
 
 ```powershell
 irm https://raw.githubusercontent.com/DesktopECHO/ika/main/ika-wsl.ps1 -OutFile ika-wsl.ps1

@@ -503,7 +503,9 @@ From a terminal, the folder is `/run/user/<uid>/ika/Android` (in
 `$XDG_RUNTIME_DIR`, or `~/ika/Android` without one). Outside your home
 folder, it is left alone by backups and other programs that walk your home
 folder. `ika start` mounts it and adds it to the sidebar; `ika stop`,
-`ika restart` and `ika reset` unmount it and take it out of the sidebar.
+`ika restart` and `ika reset` unmount it and take it out of the sidebar, and
+so does Android turning off by itself, from its power menu, within a few
+seconds.
 
 Files are read as they are used, over Ika's adb connection, so a large video
 plays without being copied first. Files an app keeps to itself are out of

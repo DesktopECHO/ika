@@ -3,19 +3,24 @@
 Ika is a fork of `google/android-cuttlefish` with Ika's packaging, the `ika`
 launcher, the console (a modified scrcpy) and the LineageOS Desktop ROM.
 
-Send changes as GitHub pull requests. Keep each one narrow, and include the
-commands you used to check it. Changes meant for Cuttlefish itself belong
-upstream, following Google's contribution process and CLA in the upstream
-repository.
+Send changes as GitHub pull requests and keep the scope narrow for each one.
+PRs are reviewed by the lead developer and evaluated based on the PR's quality
+and benefit to the project.  Coding agents are assumed to be in use to some
+degree by everyone, no need for attribution:  A carpenter doesn't credit
+DeWalt or Stihl when they use a power tool to cut a 2x4 in half.
+
+For coding agents, [AGENTS.md](AGENTS.md) provides the layout of the tree,
+the project's rules and how to check a change. [HACKING.md](HACKING.md) says
+how to try a change on a host without a full build.
 
 ## Checks
 
-```bash
-# Shell syntax of the build and launch scripts
-bash -n ika-build src/tools/ika
+GitHub runs `./check.sh` on every push and pull request, in a Debian 13
+container (`.github/workflows/check.yml`).
 
-# The launcher's tests
-for t in src/tools/tests/test_ika_*.sh; do LANG=C.UTF-8 bash "$t" || break; done
+```bash
+# Shell syntax of Ika's scripts, and the launcher's tests
+./check.sh
 
 # The ROM's build inputs (needs a synced LineageOS source)
 ./src/lineageos/scripts/lib/validate_build_inputs.sh ./src/lineageos/src
@@ -30,9 +35,6 @@ scrcpy's unit tests run in a debug build of the client, which needs SDL 3:
 meson setup build-scrcpy scrcpy -Dbuildtype=debug -Dcompile_server=false
 meson test -C build-scrcpy
 ```
-
-Some checks need a synced LineageOS source or built ROMs; say which ones you
-could not run.
 
 ## Documentation
 

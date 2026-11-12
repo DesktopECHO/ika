@@ -1,0 +1,37 @@
+# Runs ./check.sh, the shell syntax of Ika's scripts and the launcher's tests,
+# on every push and pull request. They need no KVM or GPU. See AGENTS.md.
+name: Check
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # --init: an init as PID 1 that reaps orphaned processes, as on a host
+    # (the tests' stand-in app supervisors must vanish once killed). Without
+    # it PID 1 is the runner's tail -f /dev/null, which reaps none.
+    container:
+      image: debian:trixie
+      options: --init
+    timeout-minutes: 15
+    steps:
+      # git before the checkout, so that it is a repository the Mesa test can
+      # search; pigz for the backup test.
+      - name: Install the tools the checks use
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends ca-certificates git python3 pigz
+
+      - uses: actions/checkout@v4
+
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
+      - name: Check
+        run: ./check.sh
