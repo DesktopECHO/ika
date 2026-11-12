@@ -1,6 +1,6 @@
 [README](README.md)&nbsp; • &nbsp;**Download**&nbsp; • &nbsp;[Using Ika](USAGE.md)&nbsp; • &nbsp;[Configuration](CONFIGURATION.md)&nbsp; • &nbsp;[Graphics](GRAPHICS.md)&nbsp; • &nbsp;[Building](BUILDING.md)
 
-# Download (Updated 2026-11-09)
+# Download (Updated 2026-11-12)
 
 Ika installs two packages: `ika-base` is the emulator app, and `ika-lineageos` is the
 Android disk image (also known as "The ROM"). Download both for your distribution and architecture. and install them with your package manager. 
@@ -13,17 +13,17 @@ On Windows, the install script downloads and installs Ika automatically, see [Wi
 | **Distribution • Architecture** | **Application** | **Disk Image** |
 | --- | --- | --- |
 |  |  |  |
-| Fedora 44 • x86_64 | [ika-base (184 MB)](https://github.com/DesktopECHO/ika/releases/download/261105/ika-base-261105-1.fc44.x86_64.rpm) | [ika-lineageos (1.47 GB)](https://github.com/DesktopECHO/ika/releases/download/261105/ika-lineageos-261105-1.fc44.x86_64.rpm) |
+| Fedora 44 • x86_64 | [ika-base (183 MB)](https://github.com/DesktopECHO/ika/releases/download/261111/ika-base-261111-1.fc44.x86_64.rpm) | [ika-lineageos (1.47 GB)](https://github.com/DesktopECHO/ika/releases/download/261111/ika-lineageos-261111-1.fc44.x86_64.rpm) |
 |  |  |  |
-| Fedora 44 • ARM64 | [ika-base (174 MB)](https://github.com/DesktopECHO/ika/releases/download/261105/ika-base-261105-1.fc44.aarch64.rpm) | [ika-lineageos (1.44 GB)](https://github.com/DesktopECHO/ika/releases/download/261105/ika-lineageos-261105-1.fc44.aarch64.rpm) |
+| Fedora 44 • ARM64 | [ika-base (174 MB)](https://github.com/DesktopECHO/ika/releases/download/261111/ika-base-261111-1.fc44.aarch64.rpm) | [ika-lineageos (1.44 GB)](https://github.com/DesktopECHO/ika/releases/download/261111/ika-lineageos-261111-1.fc44.aarch64.rpm) |
 |  |  |  |
-| Debian 13 / Ubuntu 26.04  •  x86_64 | [ika-base (129 MB)](https://github.com/DesktopECHO/ika/releases/download/261105/ika-base_261105-1_amd64.deb) | [ika-lineageos (1.41 GB)](https://github.com/DesktopECHO/ika/releases/download/261105/ika-lineageos_261105-1_amd64.deb) |
+| Debian 13 / Ubuntu 26.04  •  x86_64 | [ika-base (129 MB)](https://github.com/DesktopECHO/ika/releases/download/261111/ika-base_261111-1_amd64.deb) | [ika-lineageos (1.41 GB)](https://github.com/DesktopECHO/ika/releases/download/261111/ika-lineageos_261111-1_amd64.deb) |
 |  |  |  |
-| Debian 13 / Ubuntu 26.04 • ARM64 | [ika-base (109 MB)](https://github.com/DesktopECHO/ika/releases/download/261105/ika-base_261105-1_arm64.deb) | [ika-lineageos (1.37 GB)](https://github.com/DesktopECHO/ika/releases/download/261105/ika-lineageos_261105-1_arm64.deb) |
+| Debian 13 / Ubuntu 26.04 • ARM64 | [ika-base (109 MB)](https://github.com/DesktopECHO/ika/releases/download/261111/ika-base_261111-1_arm64.deb) | [ika-lineageos (1.37 GB)](https://github.com/DesktopECHO/ika/releases/download/261111/ika-lineageos_261111-1_arm64.deb) |
 |  |  |  |
-| Arch Linux • x86_64 | [ika-base (213 MB)](https://github.com/DesktopECHO/ika/releases/download/261105/ika-base-261105-1-x86_64.pkg.tar.zst) | [ika-lineageos (1.67 GB)](https://github.com/DesktopECHO/ika/releases/download/261105/ika-lineageos-261105-1-x86_64.pkg.tar.zst) |
+| Arch Linux • x86_64 | [ika-base (213 MB)](https://github.com/DesktopECHO/ika/releases/download/261111/ika-base-261111-1-x86_64.pkg.tar.zst) | [ika-lineageos (1.67 GB)](https://github.com/DesktopECHO/ika/releases/download/261111/ika-lineageos-261111-1-x86_64.pkg.tar.zst) |
 |  |  |  |
-| Arch Linux • ARM64 | [ika-base (129 MB)](https://github.com/DesktopECHO/ika/releases/download/261105/ika-base-261105-1-aarch64.pkg.tar.xz) | [ika-lineageos (1.37 GB)](https://github.com/DesktopECHO/ika/releases/download/261105/ika-lineageos-261105-1-aarch64.pkg.tar.xz) |
+| Arch Linux • ARM64 | [ika-base (129 MB)](https://github.com/DesktopECHO/ika/releases/download/261111/ika-base-261111-1-aarch64.pkg.tar.xz) | [ika-lineageos (1.37 GB)](https://github.com/DesktopECHO/ika/releases/download/261111/ika-lineageos-261111-1-aarch64.pkg.tar.xz) |
 
 To choose the ROM's Google integration, build from source: see
 [Building](BUILDING.md).
