@@ -307,6 +307,10 @@ normally uses to share host memory with the guest. On Apple Silicon hosts with
   Honeykrisp does, the host tools turn on ANGLE's
   `allowPipelineStatisticsForPrimitivesGeneratedQuery`, which counts them with
   a pipeline statistics query instead.
+- ANGLE in the ROM tells Honeykrisp from Lavapipe, Mesa's software renderer,
+  which reports the same vendor and device IDs. Taken for a software renderer,
+  the Apple GPU got no `EGL_ANDROID_native_fence_sync` and no multisampled
+  render to texture from ANGLE, and none of its tuning for tile-based GPUs.
 - gfxstream runs with glibc's `arena_max=4` and `trim_threshold=131072`, to
   keep its memory use down.
 

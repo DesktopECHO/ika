@@ -1,0 +1,59 @@
+Patch summary:
+ANGLE tells Honeykrisp, Mesa's Vulkan driver for Apple GPUs, from Lavapipe.
+Both report Mesa's vendor id and device id 0, which is all ANGLE looked at, so
+on an Apple host the guest's ANGLE took the GPU for a software renderer: it
+offered no EGL_ANDROID_native_fence_sync and no multisampled render to
+texture, kept no descriptor set cache, and tuned itself for an
+immediate-mode GPU. Honeykrisp is recognized by its driver id, or behind
+Venus and gfxstream, which report their own, by the Apple GPU in the device
+name, and counts as a tile-based GPU.
+diff --git a/src/libANGLE/renderer/vulkan/vk_renderer.cpp b/src/libANGLE/renderer/vulkan/vk_renderer.cpp
+--- a/src/libANGLE/renderer/vulkan/vk_renderer.cpp
++++ b/src/libANGLE/renderer/vulkan/vk_renderer.cpp
+@@ -204,6 +204,20 @@
+     return IsAMD(vendorId) && strstr(deviceName, "RADV") != nullptr;
+ }
+ 
++bool IsHoneykrisp(uint32_t vendorId, uint32_t driverId, const char *deviceName)
++{
++    // Check against the Honeykrisp driver id first.
++    if (driverId == VK_DRIVER_ID_MESA_HONEYKRISP)
++    {
++        return true;
++    }
++
++    // Otherwise, look for an Apple GPU in the device name.  This works for Honeykrisp behind
++    // Venus or gfxstream, which report their own driver id with Honeykrisp's vendor id and
++    // device name.
++    return IsMesa(vendorId) && strstr(deviceName, "Apple") != nullptr;
++}
++
+ bool IsMesaPanVK(uint32_t driverId)
+ {
+     // rely on VkDriverId alone to identify MESA PanVK driver
+@@ -5373,8 +5387,14 @@
+     const bool isSamsung  = IsSamsung(mPhysicalDeviceProperties.vendorID);
+     const bool isSwiftShader =
+         IsSwiftshader(mPhysicalDeviceProperties.vendorID, mPhysicalDeviceProperties.deviceID);
++    // Honeykrisp, Mesa's driver for Apple GPUs, reports Mesa's vendor id and device id 0 as
++    // Lavapipe does, but is a tile-based GPU.
++    const bool isHoneykrisp =
++        IsHoneykrisp(mPhysicalDeviceProperties.vendorID, mDriverProperties.driverID,
++                     mPhysicalDeviceProperties.deviceName);
+     const bool isLavapipe =
+-        IsLavapipe(mPhysicalDeviceProperties.vendorID, mPhysicalDeviceProperties.deviceID);
++        IsLavapipe(mPhysicalDeviceProperties.vendorID, mPhysicalDeviceProperties.deviceID) &&
++        !isHoneykrisp;
+     const bool isSoftwareRenderer = isSwiftShader || isLavapipe;
+ 
+     const bool isGalaxyS23 =
+@@ -5447,7 +5467,8 @@
+     // the device architecture for optimal performance on both.
+     const bool isImmediateModeRenderer =
+         isNvidia || isAMD || isIntel || isSamsung || isSoftwareRenderer;
+-    const bool isTileBasedRenderer = isARM || isPowerVR || isQualcomm || isBroadcom || isApple;
++    const bool isTileBasedRenderer =
++        isARM || isPowerVR || isQualcomm || isBroadcom || isApple || isHoneykrisp;
+ 
+     // Make sure all known architectures are accounted for.
+     if (!isImmediateModeRenderer && !isTileBasedRenderer && !isMockICDEnabled())
