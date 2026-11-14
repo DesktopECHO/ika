@@ -13,6 +13,12 @@ git_repository(
         # properties: the proprietary driver maps the dma-bufs crosvm maps
         # them through in the wrong page order, and the GPU faulted.
         "@//build_external/virglrenderer:PATCH.venus-hide-unmappable-video-memory.patch",
+        # With Honeykrisp, work submitted behind a fence waits until the work
+        # before it has finished: Asahi's kernel driver reports a queue's
+        # finished work only once the queue has drained, so a frame's fence
+        # signaled with the next frame's, and Android's apps drew in pairs of
+        # frames with the GPU idle between.
+        "@//build_external/virglrenderer:PATCH.venus-gate-submits-behind-fences.patch",
     ],
     remote = "https://gitlab.freedesktop.org/virgl/virglrenderer",
 )

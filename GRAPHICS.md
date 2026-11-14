@@ -217,14 +217,10 @@ the reason in `~/ika/ikastart.log`. A Radeon RX 570 is such a GPU with RADV from
 DRM format modifiers for Radeons older than Vega; with RADV from Mesa 26.3 it
 draws Android's desktop, Settings and Chromium.
 
-On an M1 Pro Venus used 20 to 40% less of the host's CPU than
-`gfxstream_guest_angle` and scrolled without dropped frames, but games ran a
-little slower: Asphalt 9 averaged 56.5 fps instead of 59.5, with 6.3% of its
-frames taking 24 ms or longer instead of 1.5%. Honeykrisp compresses the
-textures Venus's guest creates, losslessly, which halves the speed of random
-reads from textures whose content does not compress; gfxstream's end up
-uncompressed. For games there, `--gpu_mode=gfxstream_guest_angle`, or
-`gpu_mode = gfxstream_guest_angle` in `ika.ini`.
+On an M1 Pro Venus is within 5% of `gfxstream_guest_angle` in 3DMark: Wild
+Life Extreme scores 5,551 to 5,580 against 5,809 to 5,845, Steel Nomad Light
+1,982 against 2,020, and Sling Shot Extreme's second graphics test runs at
+100 fps with either. Both keep the GPU busy for the whole test.
 
 What Ika changes for it:
 
@@ -238,6 +234,13 @@ What Ika changes for it:
 - Where the host driver refuses a raised queue priority, as Honeykrisp does,
   virglrenderer creates the device at medium priority instead of failing:
   SurfaceFlinger asks ANGLE for a high-priority context.
+- On Honeykrisp, virglrenderer makes the work an app submits behind a fence
+  wait until the work before it has finished. Asahi's kernel driver reports a
+  queue's finished work only once the queue has drained, so a frame's fence
+  signaled only with the next frame's work, which the app had already
+  submitted. Android lets an app draw one frame ahead of that fence, so apps
+  drew their frames in pairs with the GPU idle between: Wild Life Extreme
+  scored 4,516 instead of 5,551.
 
 ## What Ika adds for some hosts
 
