@@ -1,0 +1,48 @@
+Patch summary:
+The guest's Vulkan driver now sends an image's list of view formats
+(VkImageFormatListCreateInfo; lineageos
+external-mesa3d-gfxstream-image-format-list.patch), with which the host
+driver can keep a mutable-format image compressed, as ANGLE's 8-bit RGBA
+images are. Two kinds of image must not get the guest's list. An emulated
+compressed image is created in another format, of which the listed formats
+are no views. An image the guest binds to a ColorBuffer's memory must be laid
+out as the ColorBuffer's own image, which has no list: with one, Honeykrisp
+compresses the image and the two would read the memory differently.
+diff --git a/host/vulkan/cereal/common/vk_struct_id.h b/host/vulkan/cereal/common/vk_struct_id.h
+index 6c05fbc..8565360 100644
+--- a/host/vulkan/cereal/common/vk_struct_id.h
++++ b/host/vulkan/cereal/common/vk_struct_id.h
+@@ -39,6 +39,8 @@ REGISTER_VK_STRUCT_ID(VkDebugUtilsMessengerCreateInfoEXT,
+                       VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT);
+ REGISTER_VK_STRUCT_ID(VkBufferCreateInfo, VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
+ REGISTER_VK_STRUCT_ID(VkImageCreateInfo, VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO);
++REGISTER_VK_STRUCT_ID(VkImageFormatListCreateInfo,
++                      VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO);
+ REGISTER_VK_STRUCT_ID(VkImageFormatProperties2, VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2);
+ REGISTER_VK_STRUCT_ID(VkNativeBufferANDROID, VK_STRUCTURE_TYPE_NATIVE_BUFFER_ANDROID);
+ REGISTER_VK_STRUCT_ID(VkExternalMemoryBufferCreateInfo,
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index 5db692f..a591e31 100644
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -3683,6 +3683,9 @@ class VkDecoderGlobalState::Impl {
+                 cmpInfo->setGpuDecodeUnavailable();
+             }
+             decompInfo = cmpInfo->getOutputCreateInfo(*pCreateInfo);
++            // The guest's view formats are those of the format it asked for, not of the
++            // format that stands in for it.
++            vk_struct_chain_filter<VkImageFormatListCreateInfo>(&decompInfo);
+             pCreateInfo = &decompInfo;
+         }
+ 
+@@ -10477,6 +10480,10 @@ class VkDecoderGlobalState::Impl {
+             if (!colorBufferVkImageCi) {
+                 continue;
+             }
++            // The ColorBuffer's image has no list of view formats, and a driver may lay out an
++            // image with one differently (Honeykrisp and RADV only compress a mutable-format image
++            // that has one).
++            vk_struct_chain_filter<VkImageFormatListCreateInfo>(&imageCreateInfo);
+             // The ColorBuffer's format: RGBA8 for a YUV format the device cannot create.
+             imageCreateInfo.format = colorBufferVkImageCi->format;
+             if (imageCreateInfo.flags & (~colorBufferVkImageCi->flags)) {

@@ -1,0 +1,21 @@
+gfxstream: Forward VkImageFormatListCreateInfo in vkCreateImage
+
+Generated-by: LLM
+diff --git a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+--- a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
++++ b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+@@ -4565,6 +4565,14 @@
+         vk_append_struct(&structChainIter, &localExtImgCi);
+     }
+ 
++    VkImageFormatListCreateInfo localFormatList;
++    const VkImageFormatListCreateInfo* formatListPtr =
++        vk_find_struct_const(pCreateInfo, IMAGE_FORMAT_LIST_CREATE_INFO);
++    if (formatListPtr) {
++        localFormatList = vk_make_orphan_copy(*formatListPtr);
++        vk_append_struct(&structChainIter, &localFormatList);
++    }
++
+ #if defined(LINUX_GUEST_BUILD)
+     VkImageDrmFormatModifierExplicitCreateInfoEXT localDrmFormatModifierInfo;
+     VkImageDrmFormatModifierListCreateInfoEXT localDrmFormatModifierList;

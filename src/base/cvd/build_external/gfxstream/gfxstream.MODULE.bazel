@@ -130,5 +130,9 @@ git_repository(
         "@//build_external/gfxstream:PATCH.gfxstream.async-acquire-image.patch",
         # The display reads each frame it shows straight into its own buffer.
         "@//build_external/gfxstream:PATCH.gfxstream.display-read-direct.patch",
+        # The guest sends an image's list of view formats (lineageos
+        # external-mesa3d-gfxstream-image-format-list.patch): not for emulated
+        # compressed images or images over a ColorBuffer's memory.
+        "@//build_external/gfxstream:PATCH.gfxstream.guest-image-format-list.patch",
     ],
 )
