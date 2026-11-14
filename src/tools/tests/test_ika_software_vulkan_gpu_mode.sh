@@ -23,17 +23,25 @@ assert_equal() {
     fail "expected '${expected}', got '${actual}'"
 }
 
-# The real ETC2 probe, kept under another name, reads a fake vulkaninfo: GPU0
-# with ETC2 as given by FAKE_ETC2, GPU1 the opposite, then a long tail that
-# would end vulkaninfo with SIGPIPE if the parser stopped reading early.
+# The real ETC2 and extension probes, kept under other names, read a fake
+# vulkaninfo: GPU0 with ETC2 as given by FAKE_ETC2 and the device extensions
+# in FAKE_EXTENSIONS, GPU1 with the opposite ETC2 and every extension Venus
+# needs, then a long tail that would end vulkaninfo with SIGPIPE if the parser
+# stopped reading early.
 eval "real_$(declare -f primary_vulkan_device_has_venus_etc2)"
+eval "real_$(declare -f primary_vulkan_device_missing_venus_extensions)"
 mkdir -p "${T}/bin"
 cat >"${T}/bin/vulkaninfo" <<'STUB'
 #!/usr/bin/env bash
 [[ "${vk_require_etc2:-}" == "true" && "${vk_require_astc:-}" == "true" ]] || exit 1
-other=true; [[ "${FAKE_ETC2}" == "true" ]] && other=false
-printf 'Devices:\n========\nGPU0:\nVkPhysicalDeviceFeatures:\n\ttextureCompressionETC2                  = %s\n' "${FAKE_ETC2}"
+[[ -z "${FAKE_NO_DEVICE:-}" ]] || exit 1
+other=true; [[ "${FAKE_ETC2:-true}" == "true" ]] && other=false
+printf 'Instance Extensions: count = 1\n\tVK_EXT_image_drm_format_modifier : extension revision 2\n'
+printf 'Devices:\n========\nGPU0:\nVkPhysicalDeviceFeatures:\n\ttextureCompressionETC2                  = %s\n' "${FAKE_ETC2:-true}"
+printf 'Device Extensions: count = 3\n'
+for extension in ${FAKE_EXTENSIONS:-}; do printf '\t%-46s : extension revision 1\n' "${extension}"; done
 printf 'GPU1:\nVkPhysicalDeviceFeatures:\n\ttextureCompressionETC2                  = %s\n' "${other}"
+printf '\tVK_EXT_external_memory_dma_buf : extension revision 1\n\tVK_EXT_image_drm_format_modifier : extension revision 2\n\tVK_EXT_queue_family_foreign : extension revision 1\n'
 for i in $(seq 20000); do printf '\tsome feature %d = true\n' "${i}"; done
 STUB
 chmod +x "${T}/bin/vulkaninfo"
@@ -44,10 +52,29 @@ if PATH="${T}/bin:${PATH}" FAKE_ETC2=false real_primary_vulkan_device_has_venus_
 fi
 echo "ok: the ETC2 probe reads GPU0 as Venus's render server runs"
 
+# The extensions Venus's guest shares Android's buffers through: an RX 570's
+# RADV of Mesa 26.2 has no format modifiers, and GPU1's (llvmpipe's there) and
+# the instance's do not count for GPU0.
+assert_equal "" "$(PATH="${T}/bin:${PATH}" \
+  FAKE_EXTENSIONS="VK_KHR_swapchain VK_EXT_external_memory_dma_buf VK_EXT_image_drm_format_modifier VK_EXT_queue_family_foreign" \
+  real_primary_vulkan_device_missing_venus_extensions)"
+assert_equal "VK_EXT_image_drm_format_modifier" "$(PATH="${T}/bin:${PATH}" \
+  FAKE_EXTENSIONS="VK_KHR_swapchain VK_EXT_external_memory_dma_buf VK_EXT_queue_family_foreign" \
+  real_primary_vulkan_device_missing_venus_extensions)"
+assert_equal "VK_EXT_external_memory_dma_buf VK_EXT_image_drm_format_modifier VK_EXT_queue_family_foreign" \
+  "$(PATH="${T}/bin:${PATH}" FAKE_EXTENSIONS="VK_KHR_swapchain" real_primary_vulkan_device_missing_venus_extensions)"
+# No device listed: nothing is known to be missing
+assert_equal "" "$(PATH="${T}/bin:${PATH}" FAKE_NO_DEVICE=1 real_primary_vulkan_device_missing_venus_extensions)"
+echo "ok: the extension probe reads GPU0's device extensions"
+
 # Elsewhere ETC2 as Venus's guest sees it is what the test says
-# (TEST_VENUS_ETC2=1), never the machine it runs on.
+# (TEST_VENUS_ETC2=1), and so are the extensions the GPU's driver lacks
+# (TEST_VENUS_MISSING), never the machine it runs on.
 primary_vulkan_device_has_venus_etc2() {
   [[ "${TEST_VENUS_ETC2:-0}" == "1" ]]
+}
+primary_vulkan_device_missing_venus_extensions() {
+  printf '%s' "${TEST_VENUS_MISSING:-}"
 }
 
 software_summary=$'GPU0:\n  deviceName = llvmpipe (LLVM 19.1.7, 256 bits)\n  driverID = DRIVER_ID_MESA_LLVMPIPE\n  driverName = llvmpipe'
@@ -152,6 +179,12 @@ for case_summary in "${radv_summary}" "${broadwell_summary}" "${honeykrisp_summa
   # No ETC2, even emulated: gfxstream_guest_angle, and the reason
   assert_equal "gfxstream_guest_angle" "$(TEST_VENUS_ETC2=0 default_gpu_mode_for_start)"
   assert_equal "the GPU has no ETC2 textures, even emulated" "$(TEST_VENUS_ETC2=0 host_suits_venus || true)"
+  # A driver without the extensions Venus shares Android's buffers through
+  # (RADV of Mesa 26.2 on an RX 570): gfxstream_guest_angle, and the reason
+  assert_equal "gfxstream_guest_angle" \
+    "$(TEST_VENUS_ETC2=1 TEST_VENUS_MISSING=VK_EXT_image_drm_format_modifier default_gpu_mode_for_start)"
+  assert_equal "the GPU's driver lacks VK_EXT_external_memory_dma_buf, VK_EXT_image_drm_format_modifier, without which Android has no windows under Venus" \
+    "$(TEST_VENUS_ETC2=1 TEST_VENUS_MISSING="VK_EXT_external_memory_dma_buf VK_EXT_image_drm_format_modifier" host_suits_venus || true)"
   # --gpu_mode= still wins
   assert_equal "gfxstream_guest_angle" \
     "$(TEST_VENUS_ETC2=1 default_gpu_mode_for_start --gpu_mode=gfxstream_guest_angle)"
@@ -162,6 +195,21 @@ IKA_INI[gpu.gpu_mode]="gfxstream_guest_angle"
 assert_equal "gfxstream_guest_angle" "$(TEST_VENUS_ETC2=1 default_gpu_mode_for_start)"
 IKA_INI[gpu.gpu_mode]="Auto"
 assert_equal "venus" "$(TEST_VENUS_ETC2=1 default_gpu_mode_for_start)"
+# venus in ika.ini stands where the driver can run it, without ETC2 too, and
+# gives way to the built-in mode where the driver cannot (an ika.ini that came
+# to an RX 570 with its drive), with the reason; --gpu_mode=venus is not
+# changed here.
+IKA_INI[gpu.gpu_mode]="venus"
+CVD_GPU_DEFAULTS[gpu_mode]="venus"
+assert_equal "venus" "$(TEST_VENUS_ETC2=0 default_gpu_mode_for_start)"
+assert_equal "gfxstream_guest_angle" \
+  "$(TEST_VENUS_MISSING=VK_EXT_image_drm_format_modifier default_gpu_mode_for_start 2>/dev/null)"
+[[ "$(TEST_VENUS_MISSING=VK_EXT_image_drm_format_modifier default_gpu_mode_for_start 2>&1 >/dev/null)" \
+    == *"gpu_mode=venus in ika.ini: the GPU's driver lacks VK_EXT_image_drm_format_modifier"*"using gfxstream_guest_angle" ]] \
+  || fail "no reason logged for leaving ika.ini's venus"
+assert_equal "venus" \
+  "$(TEST_VENUS_MISSING=VK_EXT_image_drm_format_modifier default_gpu_mode_for_start --gpu_mode=venus)"
+CVD_GPU_DEFAULTS[gpu_mode]="${CVD_GPU_MODE_AUTO_BASE}"
 unset 'IKA_INI[gpu.gpu_mode]'
 
 # A GPU below Vulkan 1.3 that gfxstream keeps (the GPU listed first in a tie)

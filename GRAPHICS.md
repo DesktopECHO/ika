@@ -12,7 +12,7 @@ Android draws with the host's GPU. Its OpenGL ES and Vulkan calls are encoded in
 | `gfxstream` | gfxstream sends OpenGL ES to its own translator on the host's OpenGL driver; Vulkan is optional | Hosts whose only Vulkan driver is a software one, and titles that render wrongly through ANGLE |
 | `guest_swiftshader` | The guest renders on the CPU (ANGLE and SwiftShader) | Ruling out a host GPU problem; turns [low-CPU mode](CONFIGURATION.md#low-cpu-mode) on |
 | `guest_lavapipe` | The guest renders on the CPU with Mesa's lavapipe (Vulkan 1.4) and ANGLE | The same, with Vulkan 1.4 instead of SwiftShader's 1.3; turns low-CPU mode on |
-| `venus` | The default on a GPU with Vulkan 1.3 or newer and ETC2 textures. Mesa's Venus Vulkan driver in the guest, over virglrenderer on the host's Vulkan driver, with ANGLE for OpenGL ES | Everything, with less of the host's CPU than gfxstream (see [Venus](#venus)) |
+| `venus` | The default on a GPU with Vulkan 1.3 or newer and ETC2 textures, whose driver can share images with Android. Mesa's Venus Vulkan driver in the guest, over virglrenderer on the host's Vulkan driver, with ANGLE for OpenGL ES | Everything, with less of the host's CPU than gfxstream (see [Venus](#venus)) |
 
 The two gfxstream modes differ in where OpenGL ES is translated:
 
@@ -66,9 +66,14 @@ Vulkan devices:
   emulates ETC2 itself, Venus does not. crosvm starts Venus's host side with
   `vk_require_etc2=true` and `vk_require_astc=true`, which make RADV emulate
   both, so Ika asks `vulkaninfo` with the same settings. Broadwell's driver
-  has ETC2 of its own; Haswell's cannot offer it at all. Never on WSL2, whose
-  GPU memory cannot be shared as dma-bufs, or on Apple Silicon, where games
-  run faster with `gfxstream_guest_angle` (see [Venus](#venus)).
+  has ETC2 of its own; Haswell's cannot offer it at all. The GPU's driver
+  must also have `VK_EXT_external_memory_dma_buf`,
+  `VK_EXT_image_drm_format_modifier` and `VK_EXT_queue_family_foreign`,
+  through which Venus shares Android's buffers with the host: without them
+  Android's Vulkan has no windows, and every app stops as it starts. RADV has
+  the second on Radeons older than Vega (an RX 570) from Mesa 26.3 on. Never
+  on WSL2, whose GPU memory cannot be shared as dma-bufs, or on Apple Silicon,
+  where games run faster with `gfxstream_guest_angle` (see [Venus](#venus)).
 - `gfxstream_guest_angle` otherwise.
 
 The checks run in this order, on the GPU Ika uses ("GPU Hardware" in Startup
@@ -83,12 +88,14 @@ flowchart TD
     q4["Apple Silicon?<br/>Asahi Linux"]
     q5["GPU has Vulkan 1.3 or newer?<br/>From vulkaninfo"]
     q6["ETC2 textures, even emulated?<br/>Probed as Venus would see it"]
+    q7["Driver shares images with Android?<br/>dma-bufs, format modifiers, foreign queues"]
     r1("gfxstream, OpenGL ES only<br/>GPU pipeline is 100% software")
     r2("gfxstream, OpenGL ES only<br/>Haswell (2013) and older")
     r3("gfxstream_guest_angle<br/>AMD 780M, RTX 4080, Intel UHD/Xe in WSL")
     r4("gfxstream_guest_angle")
     r5("gfxstream_guest_angle<br/>Discrete GPUs on Vulkan 1.2")
     r6("gfxstream_guest_angle<br/>NVIDIA")
+    r7("gfxstream_guest_angle<br/>Radeons older than Vega before Mesa 26.3")
     venus("venus<br/>AMD, Intel Broadwell and newer")
 
     start --> q1
@@ -103,18 +110,23 @@ flowchart TD
     q5 -- no --> r5
     q5 -- yes --> q6
     q6 -- no --> r6
-    q6 -- yes --> venus
+    q6 -- yes --> q7
+    q7 -- no --> r7
+    q7 -- yes --> venus
 
     classDef gfx fill:#E1F5EE,stroke:#0F6E56,color:#085041
     classDef ven fill:#EEEDFE,stroke:#534AB7,color:#3C3489
-    class r1,r2,r3,r4,r5,r6 gfx
+    class r1,r2,r3,r4,r5,r6,r7 gfx
     class venus ven
 ```
 
 `--gpu_mode=` on the command line wins over all three. A mode named in
 `gpu_mode` in the `[gpu]` section of `ika.ini` replaces the last two: a host
-of the first kind still uses `gfxstream`. `--gpu_mode=auto` makes the choice
-above for that start, whatever `ika.ini` names.
+of the first kind still uses `gfxstream`, and `venus` named there gives way to
+`gfxstream_guest_angle` on a host whose driver lacks one of the extensions
+above, so an `ika.ini` that moves to another computer with its drive still
+starts. `--gpu_mode=auto` makes the choice above for that start, whatever
+`ika.ini` names.
 
 ```bash
 ika restart --gpu_mode=gfxstream
@@ -197,6 +209,13 @@ of 24, and crosvm and the render server used about 40% less of the host's CPU,
 for WebGL and video alike; a Broadwell MacBook Air was faster with it too. On
 Intel's Broadwell and Haswell GPUs ANGLE over Venus offers OpenGL ES 3.1, not
 3.2, as their drivers cannot sample ASTC textures; gfxstream emulates them.
+
+A driver without the extensions Venus shares Android's buffers through cannot
+run it at all: `--gpu_mode=venus` stops there with the extension it lacks, and
+`gpu_mode = venus` in `ika.ini` starts `gfxstream_guest_angle` instead, with
+the reason in `~/ika/ikastart.log`. A Radeon RX 570 is such a GPU with RADV from Mesa 26.2, which has no
+DRM format modifiers for Radeons older than Vega; with RADV from Mesa 26.3 it
+draws Android's desktop, Settings and Chromium.
 
 On an M1 Pro Venus used 20 to 40% less of the host's CPU than
 `gfxstream_guest_angle` and scrolled without dropped frames, but games ran a

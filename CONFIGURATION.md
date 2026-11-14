@@ -97,7 +97,7 @@ These add to the app's start options: an option that is ticked there stays on.
 | Virtual CPUs | Half the host's performance cores, counting hardware threads, at most 12; under WSL, all the CPUs WSL has (`processors` in `.wslconfig`) | `--cpus=`, `cpus` and `cpu_cap` in `[compute]` |
 | Memory | A quarter of the host's memory, rounded up to a multiple of 2 GB, at most 32 GB; under WSL, all the memory WSL has (`memory` in `.wslconfig`) less 1.5 GB for Linux | `--memory_mb=`, `memory_mb`, `memory_step_mb` and `memory_cap_mb` in `[compute]` |
 | Data partition | 64 GB (decimal), thin-provisioned | `ika reset --data_gb=GB`, `data_gb` in `[storage]` |
-| GPU mode | `auto`: `venus` on a GPU with Vulkan 1.3 or newer and ETC2 textures; `gfxstream` when the host's only Vulkan drivers are software ones or gfxstream would pick llvmpipe over the GPU; `gfxstream_guest_angle` otherwise | `--gpu_mode=`, `gpu_mode` in `[gpu]` (see [Graphics](GRAPHICS.md#how-ika-chooses)) |
+| GPU mode | `auto`: `venus` on a GPU with Vulkan 1.3 or newer and ETC2 textures, whose driver can share images with Android; `gfxstream` when the host's only Vulkan drivers are software ones or gfxstream would pick llvmpipe over the GPU; `gfxstream_guest_angle` otherwise | `--gpu_mode=`, `gpu_mode` in `[gpu]` (see [Graphics](GRAPHICS.md#how-ika-chooses)) |
 | Density | From the host display's width; 1.5 times that in TV mode | `--dpi=`, `dpi` and `tv_dpi` in `[console]` |
 | Refresh rate | The host display's | `refresh_rate_hz` in `[console]` |
 | Network | Ethernet only: no Wi-Fi, Bluetooth, NFC, UWB, GNSS or modem | `[network]` |
@@ -223,7 +223,7 @@ game_apps = com.example.game
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `gpu_mode` | `auto` | The GPU mode: `auto` (`venus` or `gfxstream_guest_angle`, by the host's GPU), `gfxstream_guest_angle`, `gfxstream`, `venus`, `guest_swiftshader` and others. `--gpu_mode=`, which wins on every host; `--gpu_mode=auto` gives `auto`'s choice for that start, whatever this says. Hosts with only software Vulkan drivers, or whose GPU gfxstream passes over for llvmpipe, use `gfxstream` whatever this says, `auto` included. See [Graphics](GRAPHICS.md#how-ika-chooses) |
+| `gpu_mode` | `auto` | The GPU mode: `auto` (`venus` or `gfxstream_guest_angle`, by the host's GPU), `gfxstream_guest_angle`, `gfxstream`, `venus`, `guest_swiftshader` and others. `--gpu_mode=`, which wins on every host; `--gpu_mode=auto` gives `auto`'s choice for that start, whatever this says. Hosts with only software Vulkan drivers, or whose GPU gfxstream passes over for llvmpipe, use `gfxstream` whatever this says, `auto` included, and `venus` here starts `gfxstream_guest_angle` on a host whose driver cannot run Venus. See [Graphics](GRAPHICS.md#how-ika-chooses) |
 | `gfxstream_vulkan` | `auto` | Vulkan in the `gfxstream` mode. `--gfxstream_vulkan=`, `GFXSTREAM_VULKAN` |
 | `host_cached_memory` | `off` | Cached host memory for Vulkan uploads. `--host_cached_memory=`, `IKA_HOST_CACHED_MEMORY` |
 | `hw_video_decode` | `auto` | VA-API video decoding. `--hw_video_decode=`, `IKA_HW_VIDEO_DECODE` |

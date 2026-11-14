@@ -298,13 +298,21 @@ guest_supports_venus() {
 # Upstream tests it on Intel (ANV) and Qualcomm (Turnip) hosts; Ika on AMD
 # (RADV) and Apple Silicon (Honeykrisp), where crosvm maps Venus's GPU memory
 # into the guest with fixed blob mapping. Checked here so that the start fails
-# with a reason rather than deep in assemble_cvd.
+# with a reason rather than deep in assemble_cvd, or with an Android whose
+# every app stops as it starts to draw: --gpu_mode=venus reaches the driver
+# check, as venus in ika.ini has given way to another mode on such a host
+# (default_gpu_mode_for_start).
 check_venus_gpu_mode() {
   local android_info="${CVD_PRODUCT_OUT}/android-info.txt"
   local primary_device
+  local missing_extensions
 
   if ! guest_supports_venus "${android_info}"; then
     die "gpu_mode=venus: the ROM under ${CVD_PRODUCT_OUT} does not declare Venus support (vulkan_venus_apex=supported in android-info.txt); it needs a ROM built with Mesa's Venus driver"
+  fi
+  missing_extensions="$(primary_vulkan_device_missing_venus_extensions)"
+  if [[ -n "${missing_extensions}" ]]; then
+    die "--gpu_mode=venus: this host's Vulkan driver lacks ${missing_extensions// /, }, without which Android has no windows under Venus; start with --gpu_mode=auto"
   fi
   primary_device="$(primary_vulkan_device_summary || true)"
   if [[ -n "${primary_device}" ]] \

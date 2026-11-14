@@ -316,16 +316,18 @@ enable_sandbox = false
 [gpu]
 # auto, gfxstream_guest_angle, gfxstream, guest_swiftshader, venus, ...
 # auto is venus on a host whose first Vulkan device is a GPU with Vulkan 1.3
-# or newer and ETC2 textures (RADV's emulated ones count, as under Venus);
-# gfxstream on a host with only software Vulkan devices, or whose GPU
-# gfxstream passes over for llvmpipe (an older Vulkan version, such as
-# Haswell's 1.2), with OpenGL ES only when gfxstream_vulkan is auto, whatever
-# is set here; gfxstream_guest_angle otherwise. Command-line
+# or newer and ETC2 textures (RADV's emulated ones count, as under Venus),
+# and whose driver can share images with Android (not RADV before Mesa 26.3
+# on a Radeon older than Vega); gfxstream on a host with only software Vulkan
+# devices, or whose GPU gfxstream passes over for llvmpipe (an older Vulkan
+# version, such as Haswell's 1.2), with OpenGL ES only when gfxstream_vulkan
+# is auto, whatever is set here; gfxstream_guest_angle otherwise. Command-line
 # equivalent: --gpu_mode=, which wins on every host; --gpu_mode=auto gives
 # auto's choice for that start, whatever is set here. venus (Mesa's Venus
 # Vulkan driver in the guest over virglrenderer) and guest_lavapipe (Mesa's
-# lavapipe on the guest's CPU) need a ROM that ships those drivers; see
-# GRAPHICS.md.
+# lavapipe on the guest's CPU) need a ROM that ships those drivers; venus set
+# here starts gfxstream_guest_angle on a host whose driver cannot run Venus.
+# See GRAPHICS.md.
 gpu_mode = auto
 # The GPU Ika uses, and no other: auto, or a GPU's Vulkan vendor and device
 # ID in hex, as vulkaninfo --summary lists them (10de:27a0); "GPU Hardware" in

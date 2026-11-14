@@ -837,6 +837,32 @@ primary_vulkan_device_has_venus_etc2() {
     '
 }
 
+# The extensions the primary Vulkan device (GPU0) lacks of those Venus's guest
+# driver needs before it offers Android's hardware buffers and windows
+# (VK_ANDROID_native_buffer): dma-buf memory, DRM format modifiers and the
+# foreign queue family. Without one of them Android's Vulkan has no swapchain,
+# and every app stops as it starts to draw. RADV has no format modifiers on
+# Radeons older than Vega before Mesa 26.3. vulkaninfo runs as for the ETC2
+# probe. Prints nothing when the device has them all, or when vulkaninfo lists
+# no device.
+primary_vulkan_device_missing_venus_extensions() {
+  command -v vulkaninfo >/dev/null 2>&1 || return 0
+
+  with_timeout 30 env -u DISPLAY -u WAYLAND_DISPLAY vk_require_etc2=true vk_require_astc=true \
+    vulkaninfo 2>/dev/null | awk '
+      /^GPU0:/ { in_gpu = 1; seen = 1; next }
+      /^GPU[0-9]+:/ { in_gpu = 0 }
+      in_gpu && $1 ~ /^VK_/ { has[$1] = 1 }
+      END {
+        if (!seen) exit
+        count = split("VK_EXT_external_memory_dma_buf VK_EXT_image_drm_format_modifier VK_EXT_queue_family_foreign", needed, " ")
+        for (i = 1; i <= count; i++)
+          if (!(needed[i] in has)) missing = missing (missing ? " " : "") needed[i]
+        if (missing) print missing
+      }
+    ' || true
+}
+
 # Whether this is a WSL2 distribution: Microsoft's kernel names itself in its
 # release string (5.15.167.4-microsoft-standard-WSL2).
 host_is_wsl2() {
@@ -846,10 +872,12 @@ host_is_wsl2() {
 # Whether gpu_mode=auto runs Venus here: the primary Vulkan device is a GPU
 # with Vulkan 1.3 or newer and ETC2 textures as Venus's guest sees them, which
 # Android expects of a Vulkan device and Chromium requires (gfxstream emulates
-# ETC2, Venus does not), and this is not WSL2 or Apple Silicon. Prints why not
-# when it does not suit.
+# ETC2, Venus does not), its driver has the extensions Venus shares Android's
+# buffers through, and this is not WSL2 or Apple Silicon. Prints why not when
+# it does not suit.
 host_suits_venus() {
   local primary_device
+  local missing_extensions
   local version
   local major
   local minor
@@ -892,6 +920,11 @@ host_suits_venus() {
     printf '%s\n' "the GPU has no ETC2 textures, even emulated"
     return 1
   fi
+  missing_extensions="$(primary_vulkan_device_missing_venus_extensions)"
+  if [[ -n "${missing_extensions}" ]]; then
+    printf '%s\n' "the GPU's driver lacks ${missing_extensions// /, }, without which Android has no windows under Venus"
+    return 1
+  fi
 }
 
 default_gpu_mode_for_start() {
@@ -899,6 +932,7 @@ default_gpu_mode_for_start() {
   local passed_over
   local ini_mode
   local venus_blocker
+  local missing_extensions
 
   if user_supplied_flag "gpu_mode" "$@"; then
     start_arg_value "gpu_mode" "${CVD_GPU_DEFAULTS[gpu_mode]}" "$@"
@@ -922,6 +956,17 @@ default_gpu_mode_for_start() {
   ika_ini_get ini_mode gpu gpu_mode auto
   [[ "${GPU_MODE_AUTO_REQUESTED}" != "true" ]] || ini_mode="auto"
   if [[ "${ini_mode,,}" != "auto" ]]; then
+    # venus stands only where the GPU's driver can run it: an ika.ini that
+    # moves to another host with its drive, or outlives a change of GPU or
+    # driver, would otherwise start an Android that cannot draw.
+    if [[ "${ini_mode,,}" == "venus" ]]; then
+      missing_extensions="$(primary_vulkan_device_missing_venus_extensions)"
+      if [[ -n "${missing_extensions}" ]]; then
+        log "gpu_mode=venus in ika.ini: the GPU's driver lacks ${missing_extensions// /, }, without which Android has no windows under Venus; using ${CVD_GPU_MODE_AUTO_BASE}"
+        printf '%s\n' "${CVD_GPU_MODE_AUTO_BASE}"
+        return 0
+      fi
+    fi
     printf '%s\n' "${CVD_GPU_DEFAULTS[gpu_mode]}"
     return 0
   fi

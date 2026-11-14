@@ -126,9 +126,12 @@ guest_supports_venus "${T}/apex.txt" || fail "the Venus apex"
 guest_supports_venus "${T}/none.txt" && fail "a ROM without Venus"
 guest_supports_venus "${T}/missing.txt" && fail "a missing android-info.txt"
 
-# gpu_mode=venus fails with a reason on a ROM without Venus, and passes the
-# checks on one with it (the host driver only gets a log line)
+# --gpu_mode=venus fails with a reason on a ROM without Venus, and on a host
+# whose driver lacks an extension Venus shares Android's buffers through (what
+# the test says, TEST_VENUS_MISSING, never the machine it runs on); it passes
+# the checks otherwise (an untested host driver only gets a log line)
 die() { printf 'die: %s\n' "$*"; exit 7; }
+primary_vulkan_device_missing_venus_extensions() { printf '%s' "${TEST_VENUS_MISSING:-}"; }
 CVD_PRODUCT_OUT="${T}/rom"
 mkdir -p "${CVD_PRODUCT_OUT}"
 cp "${T}/none.txt" "${CVD_PRODUCT_OUT}/android-info.txt"
@@ -142,6 +145,10 @@ args=()
 append_gfxstream_vulkan_args args --gpu_mode=venus
 assert_equal "venus (ANGLE over Venus Vulkan)" "${CVD_GRAPHICS_DRIVER_MESSAGE}" "the venus message"
 assert_equal 0 "${#args[@]}" "venus adds no gfxstream arguments"
+output="$( (TEST_VENUS_MISSING=VK_EXT_image_drm_format_modifier append_gfxstream_vulkan_args args --gpu_mode=venus) 2>&1 \
+  || printf 'status=%s\n' "$?")"
+[[ "${output}" == *"lacks VK_EXT_image_drm_format_modifier, without which Android has no windows"*"status=7" ]] \
+  || fail "venus on a driver without format modifiers: ${output}"
 
 is_apple_silicon_16k_host() { return 0; }
 vulkaninfo_summary() { printf 'GPU0:\n  driverName = Honeykrisp\n  driverID = DRIVER_ID_MESA_HONEYKRISP\n'; }
