@@ -33,3 +33,5 @@ dzn-import-fd-close.patch
 dzn-cache-evicted-stage.patch
 dzn-cbv-staging-per-thread.patch
 dzn-3d-image-barriers.patch
+dzn-import-own-export.patch
+dzn-discard-placed-targets.patch

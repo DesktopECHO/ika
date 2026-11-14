@@ -1,0 +1,176 @@
+dzn: Import memory this process exported without opening its shared handle
+
+Importing memory from a file descriptor opened the D3D12 shared handle
+behind it, which makes a second heap or resource for the same memory. Under
+WSL2 the Windows host keeps the memory of a heap or resource opened that
+way after every reference to it is released and every descriptor closed,
+until the process exits. gfxstream exports each guest display buffer and
+imports it once for every guest device that draws to it or shows it, so
+crosvm's GPU memory grew by a buffer's size with each one freed, 9 MiB for
+a 1080p buffer: by 2.2 GB between two races of Asphalt 9 with an
+advertisement shown (Radeon RX 570). Each import also counted the buffer's
+size against the GPU's memory once more while the buffer lived.
+
+The memory keeps the descriptor of its shared handle, vkGetMemoryFdKHR
+returns a duplicate, and the exported memory of the process is listed. An
+import of a descriptor of the same file description, into a Vulkan device
+on the same D3D12 device, takes a reference to the heap or resource the
+memory was made from. Descriptors from elsewhere, and imports into another
+D3D12 device, open the shared handle as before.
+vkGetMemoryFdPropertiesKHR looks its descriptor up the same way.
+
+With every Vulkan device of crosvm on one D3D12 device, 40 screenshots
+leave crosvm's GPU memory where it was, where they took 274 MiB, and an
+idle Android takes 165 MiB of it, down from 327.
+
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index ebbb1f9..cd2dc35 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -38,6 +38,8 @@
+ #include "util/hex.h"
+ #include "util/macros.h"
+ #include "util/mesa-blake3.h"
++#include "util/os_file.h"
++#include "util/simple_mtx.h"
+ #include "util/u_dl.h"
+ 
+ #include "dzn_drirc.h"
+@@ -2795,6 +2797,47 @@ dzn_DestroyDevice(VkDevice dev,
+    dzn_device_destroy(device, pAllocator);
+ }
+ 
++#ifndef _WIN32
++/* Memory exported as a file descriptor, by any device of the process */
++static simple_mtx_t exported_memory_lock = SIMPLE_MTX_INITIALIZER;
++static struct list_head exported_memory = { &exported_memory, &exported_memory };
++#endif
++
++/* A file descriptor of memory this process exported from the same D3D12
++ * device gives the heap or resource it was made from, not a second one
++ * opened from the shared handle.
++ */
++static HRESULT
++dzn_device_open_shared_handle(struct dzn_device *device, HANDLE handle,
++                              REFIID riid, void **object)
++{
++#ifndef _WIN32
++   IUnknown *exported = NULL;
++
++   simple_mtx_lock(&exported_memory_lock);
++   list_for_each_entry(struct dzn_device_memory, mem, &exported_memory, export_link) {
++      struct dzn_device *exporter = container_of(mem->base.device, struct dzn_device, vk);
++
++      if (exporter->dev != device->dev ||
++          os_same_file_description((int)(intptr_t)handle, (int)(intptr_t)mem->export_handle) != 0)
++         continue;
++
++      exported = mem->heap ? (IUnknown *)mem->heap : (IUnknown *)mem->dedicated_res;
++      IUnknown_AddRef(exported);
++      break;
++   }
++   simple_mtx_unlock(&exported_memory_lock);
++
++   if (exported) {
++      HRESULT hr = IUnknown_QueryInterface(exported, riid, object);
++      IUnknown_Release(exported);
++      return hr;
++   }
++#endif
++
++   return ID3D12Device_OpenSharedHandle(device->dev, handle, riid, object);
++}
++
+ static void
+ dzn_device_memory_destroy(struct dzn_device_memory *mem,
+                           const VkAllocationCallbacks *pAllocator)
+@@ -2804,6 +2847,14 @@ dzn_device_memory_destroy(struct dzn_device_memory *mem,
+ 
+    struct dzn_device *device = container_of(mem->base.device, struct dzn_device, vk);
+ 
++#ifndef _WIN32
++   if (mem->export_link.next) {
++      simple_mtx_lock(&exported_memory_lock);
++      list_del(&mem->export_link);
++      simple_mtx_unlock(&exported_memory_lock);
++   }
++#endif
++
+    if (mem->map && mem->map_res)
+       ID3D12Resource_Unmap(mem->map_res, 0, NULL);
+ 
+@@ -3052,7 +3103,7 @@ dzn_device_memory_create(struct dzn_device *device,
+    } else if (import_handle) {
+       error = VK_ERROR_INVALID_EXTERNAL_HANDLE;
+       if (image || buffer) {
+-         if (FAILED(ID3D12Device_OpenSharedHandle(device->dev, import_handle, &IID_ID3D12Resource, (void **)&mem->dedicated_res)))
++         if (FAILED(dzn_device_open_shared_handle(device, import_handle, &IID_ID3D12Resource, (void **)&mem->dedicated_res)))
+             goto cleanup;
+ 
+          /* Verify compatibility */
+@@ -3087,7 +3138,7 @@ dzn_device_memory_create(struct dzn_device *device,
+          else if ((heap_desc.Flags & D3D12_HEAP_FLAG_DENY_NON_RT_DS_TEXTURES) && !(desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET))
+             goto cleanup;
+       } else {
+-         if (FAILED(ID3D12Device_OpenSharedHandle(device->dev, import_handle, &IID_ID3D12Heap, (void **)&mem->heap)))
++         if (FAILED(dzn_device_open_shared_handle(device, import_handle, &IID_ID3D12Heap, (void **)&mem->heap)))
+             goto cleanup;
+ 
+          D3D12_HEAP_DESC desc = dzn_ID3D12Heap_GetDesc(mem->heap);
+@@ -3192,6 +3243,12 @@ dzn_device_memory_create(struct dzn_device *device,
+       if (FAILED(ID3D12Device_CreateSharedHandle(device->dev, shareable, pAttributes,
+                                                  dwAccess, name, &mem->export_handle)))
+          goto cleanup;
++
++#ifndef _WIN32
++      simple_mtx_lock(&exported_memory_lock);
++      list_addtail(&mem->export_link, &exported_memory);
++      simple_mtx_unlock(&exported_memory_lock);
++#endif
+    }
+ 
+ #ifndef _WIN32
+@@ -4079,15 +4136,17 @@ dzn_GetMemoryFdKHR(VkDevice device,
+                    int *pFd)
+ {
+    VK_FROM_HANDLE(dzn_device_memory, mem, pGetFdInfo->memory);
+-   if (!mem->export_handle)
++   if (!mem->export_link.next)
+       return vk_error(device, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+ 
+    switch (pGetFdInfo->handleType) {
+    case VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT:
+    case VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT:
+    case VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_HEAP_BIT:
+-      *pFd = (int)(intptr_t)mem->export_handle;
+-      mem->export_handle = (HANDLE)(intptr_t)-1;
++      /* The memory keeps its descriptor, which imports are compared with. */
++      *pFd = os_dupfd_cloexec((int)(intptr_t)mem->export_handle);
++      if (*pFd < 0)
++         return vk_error(device, VK_ERROR_TOO_MANY_OBJECTS);
+       return VK_SUCCESS;
+    default:
+       return vk_error(device, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+@@ -4113,7 +4172,7 @@ dzn_GetMemoryFdPropertiesKHR(VkDevice _device,
+ #endif
+    VK_FROM_HANDLE(dzn_device, device, _device);
+    IUnknown *opened_object;
+-   if (FAILED(ID3D12Device_OpenSharedHandle(device->dev, handle, &IID_IUnknown, (void **)&opened_object)))
++   if (FAILED(dzn_device_open_shared_handle(device, handle, &IID_IUnknown, (void **)&opened_object)))
+       return vk_error(device, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+ 
+    VkResult result = VK_ERROR_INVALID_EXTERNAL_HANDLE;
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index aeecda1..01eb1c9 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -380,6 +380,9 @@ struct dzn_device_memory {
+    /* If the resource is exportable, this is the pre-created handle for that */
+    HANDLE export_handle;
+ 
++   /* Entry in the list of memory exported as a file descriptor */
++   struct list_head export_link;
++
+    /* These flags need to be added into all resources created on this heap */
+    D3D12_RESOURCE_FLAGS res_flags;
+ };

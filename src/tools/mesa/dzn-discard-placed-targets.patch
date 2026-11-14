@@ -1,0 +1,126 @@
+dzn: Discard placed RT and DS images that leave UNDEFINED without enhanced barriers
+
+Generated-by: LLM
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index 9523f34..9d1f306 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -146,6 +146,42 @@ dzn_cmd_buffer_queue_transition_barriers(struct dzn_cmd_buffer *cmdbuf,
+    return VK_SUCCESS;
+ }
+ 
++static VkResult
++dzn_cmd_buffer_queue_image_subres_transition(struct dzn_cmd_buffer *cmdbuf,
++                                             const struct dzn_image *image,
++                                             uint32_t first_subres,
++                                             uint32_t subres_count,
++                                             D3D12_RESOURCE_STATES before,
++                                             D3D12_RESOURCE_STATES after,
++                                             uint32_t flags,
++                                             bool discard)
++{
++   if (discard) {
++      D3D12_RESOURCE_STATES discard_state =
++         (image->desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) ?
++         D3D12_RESOURCE_STATE_DEPTH_WRITE : D3D12_RESOURCE_STATE_RENDER_TARGET;
++      VkResult ret =
++         dzn_cmd_buffer_queue_transition_barriers(cmdbuf, image->res,
++                                                  first_subres, subres_count,
++                                                  before, discard_state,
++                                                  flags | DZN_QUEUE_TRANSITION_FLUSH);
++      if (ret != VK_SUCCESS)
++         return ret;
++
++      D3D12_DISCARD_REGION region = {
++         .FirstSubresource = first_subres,
++         .NumSubresources = subres_count,
++      };
++      ID3D12GraphicsCommandList1_DiscardResource(cmdbuf->cmdlist, image->res, &region);
++      before = discard_state;
++      flags &= ~DZN_QUEUE_TRANSITION_BEFORE_IS_UNDEFINED;
++   }
++
++   return dzn_cmd_buffer_queue_transition_barriers(cmdbuf, image->res,
++                                                   first_subres, subres_count,
++                                                   before, after, flags);
++}
++
+ static VkResult
+ dzn_cmd_buffer_queue_image_range_state_transition(struct dzn_cmd_buffer *cmdbuf,
+                                                   const struct dzn_image *image,
+@@ -209,6 +245,17 @@ dzn_cmd_buffer_queue_image_range_layout_transition(struct dzn_cmd_buffer *cmdbuf
+    if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED)
+       flags |= DZN_QUEUE_TRANSITION_BEFORE_IS_UNDEFINED;
+ 
++   const struct dzn_instance *instance =
++      container_of(cmdbuf->vk.base.device->physical->instance, struct dzn_instance, vk);
++   bool discard =
++      old_layout == VK_IMAGE_LAYOUT_UNDEFINED &&
++      new_layout != VK_IMAGE_LAYOUT_UNDEFINED &&
++      image->placed &&
++      cmdbuf->type == D3D12_COMMAND_LIST_TYPE_DIRECT &&
++      (image->desc.Flags & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET |
++                            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)) &&
++      !(instance->debug_flags & DZN_DEBUG_NO_DISCARD);
++
+    dzn_foreach_aspect(aspect, range->aspectMask) {
+       D3D12_RESOURCE_STATES after =
+          dzn_image_layout_to_state(image, new_layout, aspect, cmdbuf->type);
+@@ -228,9 +275,9 @@ dzn_cmd_buffer_queue_image_range_layout_transition(struct dzn_cmd_buffer *cmdbuf
+          }
+ 
+          if (barrier_count) {
+-            ret = dzn_cmd_buffer_queue_transition_barriers(cmdbuf, image->res,
+-                                                           first_barrier, barrier_count,
+-                                                           before, after, flags);
++            ret = dzn_cmd_buffer_queue_image_subres_transition(cmdbuf, image,
++                                                               first_barrier, barrier_count,
++                                                               before, after, flags, discard);
+             if (ret != VK_SUCCESS)
+                return ret;
+          }
+@@ -240,9 +287,9 @@ dzn_cmd_buffer_queue_image_range_layout_transition(struct dzn_cmd_buffer *cmdbuf
+       }
+ 
+       if (barrier_count) {
+-         ret = dzn_cmd_buffer_queue_transition_barriers(cmdbuf, image->res,
+-                                                        first_barrier, barrier_count,
+-                                                        before, after, flags);
++         ret = dzn_cmd_buffer_queue_image_subres_transition(cmdbuf, image,
++                                                            first_barrier, barrier_count,
++                                                            before, after, flags, discard);
+          if (ret != VK_SUCCESS)
+             return ret;
+ 
+diff --git a/src/microsoft/vulkan/dzn_image.c b/src/microsoft/vulkan/dzn_image.c
+index 982adf8..5b14cff 100644
+--- a/src/microsoft/vulkan/dzn_image.c
++++ b/src/microsoft/vulkan/dzn_image.c
+@@ -826,6 +826,7 @@ dzn_BindImageMemory2(VkDevice dev,
+          image->res = mem->dedicated_res;
+          ID3D12Resource_AddRef(image->res);
+       } else if (device->dev10 && image->castable_format_count > 0) {
++         image->placed = true;
+          D3D12_RESOURCE_DESC1 desc = {
+             .Dimension = image->desc.Dimension,
+             .Alignment = image->desc.Alignment,
+@@ -849,6 +850,7 @@ dzn_BindImageMemory2(VkDevice dev,
+                                                      &IID_ID3D12Resource,
+                                                      (void **)&image->res);
+       } else {
++         image->placed = true;
+          D3D12_RESOURCE_DESC desc = image->desc;
+          desc.Flags |= mem->res_flags;
+          hres = ID3D12Device1_CreatePlacedResource(device->dev, mem->heap,
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index 01eb1c9..b7a9cfa 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -1245,6 +1245,7 @@ struct dzn_image {
+    } linear;
+    D3D12_RESOURCE_DESC desc;
+    ID3D12Resource *res;
++   bool placed;
+    uint32_t castable_format_count;
+    const DXGI_FORMAT *castable_formats;
+ 

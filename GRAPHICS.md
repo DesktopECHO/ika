@@ -372,6 +372,18 @@ unavailable".
   released device's GPU address space is not given back, so after about a
   hundred Android apps a device per instance runs out.
 
+Ika's Dozen discards a render-target or depth-stencil texture that is placed
+in a heap as its Vulkan layout leaves `UNDEFINED`, on Windows drivers without
+D3D12's enhanced barriers, such as the Radeon RX 570's
+([dzn-discard-placed-targets.patch](src/tools/mesa/dzn-discard-placed-targets.patch)).
+Direct3D 12 leaves such a texture uninitialized until it is cleared, discarded
+or copied to as a whole, and Dozen makes every texture an app uploads to one
+of them. On the RX 570 a copy to a part of it was lost: Asphalt 9 uploads its
+particles' color curves a row at a time, so from the second race on its
+particles drew with what the texture's memory held before, as black shapes,
+white flashes and blocks of solid color. Drivers with enhanced barriers
+discard through those.
+
 The console and app windows draw with OpenGL through Mesa's D3D12 driver
 (`GALLIUM_DRIVER=d3d12`), unless you set a `GALLIUM_DRIVER`. Mesa's OpenGL
 otherwise falls back to llvmpipe on WSL2, drawing every frame of the window
