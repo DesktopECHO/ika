@@ -1,0 +1,44 @@
+Patch summary:
+A thread that has made Vulkan calls gives up its connection to the host when
+it exits. gfxstream's guest keeps a connection manager per thread, with the
+thread's stream to the host and its encoders, and deletes it as the thread
+exits; but the manager's destructor never dropped its reference to the
+stream, so the stream stayed open until the process ended: 4 MB in the
+application and a render thread on the host for every such thread (five
+after each run of 3DMark Wild Life Extreme). The destructor now drops the
+connections and the reference. The Vulkan connection deleted its encoder
+outright although the encoder is reference-counted and command buffers and
+queues it was the last to use still point to it; it now drops its reference.
+
+diff --git a/src/gfxstream/guest/connection-manager/GfxStreamConnectionManager.cpp b/src/gfxstream/guest/connection-manager/GfxStreamConnectionManager.cpp
+--- a/src/gfxstream/guest/connection-manager/GfxStreamConnectionManager.cpp
++++ b/src/gfxstream/guest/connection-manager/GfxStreamConnectionManager.cpp
+@@ -87,7 +87,12 @@ GfxStreamConnectionManager::GfxStreamConnectionManager(GfxStreamTransportType ty
+                                                        VirtGpuCapset capset)
+     : mTransportType(type), mCapset(capset) {}
+ 
+-GfxStreamConnectionManager::~GfxStreamConnectionManager() {}
++GfxStreamConnectionManager::~GfxStreamConnectionManager() {
++    mConnections.clear();
++    if (mStream) {
++        mStream->decRef();
++    }
++}
+ 
+ bool GfxStreamConnectionManager::initialize() {
+     switch (mTransportType) {
+diff --git a/src/gfxstream/guest/vulkan_enc/GfxStreamVulkanConnection.cpp b/src/gfxstream/guest/vulkan_enc/GfxStreamVulkanConnection.cpp
+--- a/src/gfxstream/guest/vulkan_enc/GfxStreamVulkanConnection.cpp
++++ b/src/gfxstream/guest/vulkan_enc/GfxStreamVulkanConnection.cpp
+@@ -95,6 +95,10 @@ GfxStreamVulkanConnection::GfxStreamVulkanConnection(gfxstream::guest::IOStream*
+     }
+ }
+ 
+-GfxStreamVulkanConnection::~GfxStreamVulkanConnection() {}
++GfxStreamVulkanConnection::~GfxStreamVulkanConnection() {
++    // Command buffers and queues this encoder was the last to use hold
++    // references to it.
++    mVkEnc.release()->decRef();
++}
+ 
+ void* GfxStreamVulkanConnection::getEncoder() { return mVkEnc.get(); }
