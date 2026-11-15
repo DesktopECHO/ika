@@ -933,6 +933,7 @@ default_gpu_mode_for_start() {
   local ini_mode
   local venus_blocker
   local missing_extensions
+  local honeykrisp_reason
 
   if user_supplied_flag "gpu_mode" "$@"; then
     start_arg_value "gpu_mode" "${CVD_GPU_DEFAULTS[gpu_mode]}" "$@"
@@ -966,6 +967,12 @@ default_gpu_mode_for_start() {
         printf '%s\n' "${CVD_GPU_MODE_AUTO_BASE}"
         return 0
       fi
+    fi
+    # honeykrisp stands only on an Apple GPU, with a ROM that has its driver.
+    if [[ "${ini_mode,,}" == "honeykrisp" ]] && honeykrisp_reason="$(honeykrisp_blocker)"; then
+      log "gpu_mode=honeykrisp in ika.ini: ${honeykrisp_reason}; using ${CVD_GPU_MODE_AUTO_BASE}"
+      printf '%s\n' "${CVD_GPU_MODE_AUTO_BASE}"
+      return 0
     fi
     printf '%s\n' "${CVD_GPU_DEFAULTS[gpu_mode]}"
     return 0

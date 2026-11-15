@@ -13,6 +13,7 @@ Android draws with the host's GPU. Its OpenGL ES and Vulkan calls are encoded in
 | `guest_swiftshader` | The guest renders on the CPU (ANGLE and SwiftShader) | Ruling out a host GPU problem; turns [low-CPU mode](CONFIGURATION.md#low-cpu-mode) on |
 | `guest_lavapipe` | The guest renders on the CPU with Mesa's lavapipe (Vulkan 1.4) and ANGLE | The same, with Vulkan 1.4 instead of SwiftShader's 1.3; turns low-CPU mode on |
 | `venus` | The default on a GPU with Vulkan 1.3 or newer and ETC2 textures, whose driver can share images with Android. Mesa's Venus Vulkan driver in the guest, over virglrenderer on the host's Vulkan driver, with ANGLE for OpenGL ES | Everything, with less of the host's CPU than gfxstream (see [Venus](#venus)) |
+| `honeykrisp` | Apple Silicon only, and never the default. Mesa's Apple Vulkan driver runs in the guest itself and drives the host's GPU through the asahi kernel driver's virtio-gpu native context, with ANGLE for OpenGL ES | Trying the native context; for now a little slower than `gfxstream_guest_angle` (see [Honeykrisp in the guest](#honeykrisp-in-the-guest)) |
 
 The two gfxstream modes differ in where OpenGL ES is translated:
 
@@ -39,7 +40,7 @@ without its own settings and does not test them.
 Android tells apps the Vulkan version its driver offers
 (`android.hardware.vulkan.version`, which Google Play also filters on): 1.4
 with `guest_lavapipe`, 1.3 with `guest_swiftshader`, and with
-`gfxstream_guest_angle`, `venus` and `gfxstream` with [Vulkan
+`gfxstream_guest_angle`, `venus`, `honeykrisp` and `gfxstream` with [Vulkan
 on](#vulkan-in-gfxstream-mode) the version of the host's first Vulkan device:
 1.4 on current RADV, ANV and Honeykrisp, 1.3 on GPUs such as Broadwell's, and
 1.1 on a Vulkan 1.2 GPU such as Haswell's, as Android has no 1.2 level. With
@@ -319,6 +320,57 @@ the count after Android stops: on a leak, it writes a warning to
 `~/ika/ikastart.log`. It needs read access to
 `/sys/kernel/debug/dma_buf/bufinfo`, or `sudo` without a password.
 
+### Honeykrisp in the guest
+
+`--gpu_mode=honeykrisp` runs Mesa's Apple Vulkan driver, Honeykrisp, inside
+Android. Instead of sending Vulkan calls to the host, as gfxstream and Venus
+do, the driver itself builds the GPU's command buffers in the guest and sends
+only the asahi kernel driver's calls to the host, over a virtio-gpu native
+context, the way Asahi Linux's own virtual machines (muvm) work. OpenGL ES
+runs through ANGLE on that driver.
+
+```bash
+ika restart --gpu_mode=honeykrisp
+```
+
+It needs the arm64 ROM, which ships the driver, and an Apple GPU under the
+asahi kernel driver. Elsewhere `--gpu_mode=honeykrisp` stops with the reason,
+and `gpu_mode = honeykrisp` in `ika.ini` starts `gfxstream_guest_angle`
+instead. `gpu_mode = auto` never picks it.
+
+On an M1 Pro Android draws its desktop and apps, and 3DMark runs, a little
+behind `gfxstream_guest_angle`: Sling Shot Extreme's graphics tests at 115.5
+and 96.2 fps against 117.8 and 99.7, Wild Life Extreme 5,543 against 5,800 to
+5,845.
+
+How it works:
+
+- crosvm offers the guest a `drm` context beside cross-domain, which still
+  allocates Android's buffers. virglrenderer's renderer for Apple GPUs,
+  built into `ika-base`'s virglrenderer, runs it in crosvm's GPU process; it
+  needs no render server. The GPU's memory maps into the guest as Venus's
+  does (fixed blob mapping).
+- Honeykrisp has no Android support upstream. Ika's ROM adds it: it takes
+  Android's window buffers and hardware buffers, accepts the virtio-gpu
+  device crosvm puts on the PCI bus, lists only the queue priorities it
+  grants (SurfaceFlinger asks for the highest listed), and gives the graphics
+  queue family the second queue Android's UI renderer needs.
+- Ika also makes it fast over a native context. Upstream's driver lists every
+  shared buffer with every submission, for Linux guests that synchronize
+  through the buffers; Android passes fences instead, and the list made each
+  submission wait for the one before. Asahi's kernel driver reports a queue's
+  finished work only once the queue has drained, so a frame's fence signaled
+  only with later frames: the driver now waits, in the guest, for the last
+  fence it handed out before it submits more work. And a submission's
+  commands go to the host in one virtio request instead of one each.
+
+Limits: it is tried on an M1 Pro only. Hardware buffers with more than one
+plane, as cameras and video decoders use, are probably laid out wrongly, as
+the driver places the planes itself. These changes to Mesa's Apple driver
+were written with an AI assistant; Mesa and Asahi Linux do not take such
+changes to that driver, so they stay in Ika's ROM
+(`external-mesa3d-honeykrisp-android.patch`).
+
 ## WSL2
 
 On WSL2 the only way to the GPU is Direct3D 12, through `/dev/dxg` and the
@@ -561,6 +613,8 @@ lists how individual games render in each mode.
   with a comment for each.
 - crosvm's patches:
   [src/base/cvd/build_external/crosvm/README.md](src/base/cvd/build_external/crosvm/README.md).
+- virglrenderer's patches and build, Venus and the Apple native context:
+  [src/base/cvd/build_external/virglrenderer](src/base/cvd/build_external/virglrenderer).
 - Ika's GPU settings: [src/tools/ika-lib/gpu.sh](src/tools/ika-lib/gpu.sh),
   which chooses the GPU mode, and
   [src/tools/ika-lib/gpu-args.sh](src/tools/ika-lib/gpu-args.sh), which passes

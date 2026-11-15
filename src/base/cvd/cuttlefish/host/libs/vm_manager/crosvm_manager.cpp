@@ -273,9 +273,10 @@ CrosvmManager::ConfigureGraphics(
         {"androidboot.hardware.gltransport", "virtio-gpu-asg"},
         {"androidboot.opengles.version", "196609"},  // OpenGL ES 3.1
     };
-  } else if (instance.gpu_mode() == GpuMode::Venus) {
-    // ANGLE over Venus gives OpenGL ES 3.2 where the host GPU allows it
-    // (assemble_cvd caps it at 3.1 elsewhere).
+  } else if (instance.gpu_mode() == GpuMode::Venus ||
+             instance.gpu_mode() == GpuMode::Honeykrisp) {
+    // ANGLE over Venus or Honeykrisp gives OpenGL ES 3.2 where the host GPU
+    // allows it (assemble_cvd caps it at 3.1 elsewhere).
     int gles_version = (3 << 16) | 2;  // OpenGL ES 3.2
     if (const int host_gles_version = instance.gpu_host_gles_version();
         host_gles_version > 0) {
@@ -288,7 +289,8 @@ CrosvmManager::ConfigureGraphics(
         {"androidboot.hardware.hwcomposer.mode", "client"},
         {"androidboot.hardware.hwcomposer.display_finder_mode", "drm"},
         {"androidboot.hardware.egl", "angle"},
-        {"androidboot.hardware.vulkan", "virtio"},
+        {"androidboot.hardware.vulkan",
+         instance.gpu_mode() == GpuMode::Venus ? "virtio" : "asahi"},
         {"androidboot.opengles.version", std::to_string(gles_version)},
     };
   } else if (instance.gpu_mode() == GpuMode::None) {
@@ -742,6 +744,16 @@ Result<void> ConfigureGpu(const CuttlefishConfig& config, Command* crosvm_cmd) {
         gpu_renderer_features_param);
     crosvm_cmd->AddParameter("--gpu-render-server=path=",
                              HostBinaryPath("virgl_render_server"));
+  } else if (gpu_mode == GpuMode::Honeykrisp) {
+    // The guest's Apple Vulkan driver sends the asahi kernel driver's calls
+    // to virglrenderer's native context renderer, which runs in crosvm's GPU
+    // process and needs no render server. Its buffers map into the guest
+    // as Venus's do (fixed blob mapping).
+    crosvm_cmd->AddParameter(
+        "--gpu=", gpu_displays_string, "fixed-blob-mapping=true,",
+        "backend=virglrenderer,context-types=drm:cross-domain",
+        gpu_common_string, ",egl=false,gles=false,glx=false",
+        gpu_renderer_features_param);
   }
 
   CF_EXPECT(MaybeConfigureVulkanIcd(config, crosvm_cmd));

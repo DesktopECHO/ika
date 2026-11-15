@@ -233,6 +233,26 @@ bool IsAppleSiliconHost() {
   return false;
 }
 
+// Whether a render node of the host belongs to the asahi kernel driver, which
+// virglrenderer's native context renderer for Apple GPUs drives.
+bool HostHasAsahiRenderNode() {
+  for (int minor = 128; minor < 192; minor++) {
+    const std::string driver_link =
+        absl::StrCat("/sys/class/drm/renderD", minor, "/device/driver");
+    char target[256];
+    const ssize_t length =
+        readlink(driver_link.c_str(), target, sizeof(target) - 1);
+    if (length <= 0) {
+      continue;
+    }
+    const std::string_view driver(target, length);
+    if (driver.substr(driver.rfind('/') + 1) == "asahi") {
+      return true;
+    }
+  }
+  return false;
+}
+
 using MeetsRequirementFunc = std::function<bool(const CommonState& common)>;
 
 struct RequirementWithReason {
@@ -289,6 +309,25 @@ GetGpuModeRequirementsMap() {
           "The guest does not claim support for Venus. This is "
           "configured in the `android-info.txt` file associated with the guest "
           "target build.",
+  };
+  const RequirementWithReason kGuestSupportsHoneykrisp{
+      .func =
+          [](const CommonState& common) {
+            return common.guest_config.has_vulkan_asahi_apex;
+          },
+      .success_explanation = "The guest has Mesa's Apple Vulkan driver.",
+      .failure_explanation =
+          "The guest does not claim to have Mesa's Apple Vulkan driver "
+          "(vulkan_asahi_apex in the `android-info.txt` file associated with "
+          "the guest target build).",
+  };
+  const RequirementWithReason kHostHasAsahiGpu{
+      .func = [](const CommonState&) { return HostHasAsahiRenderNode(); },
+      .success_explanation =
+          "The host has an Apple GPU driven by the asahi kernel driver.",
+      .failure_explanation =
+          "The host has no render node of the asahi kernel driver: the guest's "
+          "Apple Vulkan driver runs only over an Apple GPU's native context.",
   };
   const RequirementWithReason kGuestSupportsLavapipe{
       .func =
@@ -458,6 +497,14 @@ GetGpuModeRequirementsMap() {
                   kHostVulkanLoaderAvailable,
                   kHostVulkanDriverAvailable,
                   kHostVulkanIsNonSoftwareRenderer,
+                  kNotUsingHostQemu,
+              },
+          },
+          {
+              GpuMode::Honeykrisp,
+              {
+                  kGuestSupportsHoneykrisp,
+                  kHostHasAsahiGpu,
                   kNotUsingHostQemu,
               },
           },
@@ -638,7 +685,8 @@ Result<bool> SelectGpuVhostUserMode(const GpuMode gpu_mode,
             gpu_vhost_user_mode_arg == kGpuVhostUserModeOn ||
             gpu_vhost_user_mode_arg == kGpuVhostUserModeOff);
   if (gpu_vhost_user_mode_arg == kGpuVhostUserModeAuto) {
-    if (IsGuestRenderingMode(gpu_mode) || gpu_mode == GpuMode::Venus) {
+    if (IsGuestRenderingMode(gpu_mode) || gpu_mode == GpuMode::Venus ||
+        gpu_mode == GpuMode::Honeykrisp) {
       VLOG(0) << "GPU vhost user auto mode: not needed for --gpu_mode="
               << GpuModeString(gpu_mode) << ". Not enabling vhost user gpu.";
       return false;
@@ -789,9 +837,11 @@ Result<AngleFeatures> GetNeededAngleFeaturesBasedOnQuirks(
   }
 
   // The guest's ANGLE runs on the host GPU's Vulkan through gfxstream or
-  // Venus: without VK_EXT_primitives_generated_query (Apple's Honeykrisp) it
-  // needs the pipeline-statistics fallback for OpenGL ES 3.2.
-  if ((mode == GpuMode::GfxstreamGuestAngle || mode == GpuMode::Venus) &&
+  // Venus, or on the same driver in the guest with Honeykrisp: without
+  // VK_EXT_primitives_generated_query (Apple's Honeykrisp) it needs the
+  // pipeline-statistics fallback for OpenGL ES 3.2.
+  if ((mode == GpuMode::GfxstreamGuestAngle || mode == GpuMode::Venus ||
+       mode == GpuMode::Honeykrisp) &&
       availability.has_vulkan() &&
       !availability.vulkan().physical_devices().empty()) {
     const auto& physical_device = availability.vulkan().physical_devices(0);
@@ -878,7 +928,7 @@ Result<GuestHwuiRenderer> SelectGuestHwuiRenderer(
     return GuestHwuiRenderer::kSkiaGl;
   }
 
-  if (gpu_mode == GpuMode::Venus) {
+  if (gpu_mode == GpuMode::Venus || gpu_mode == GpuMode::Honeykrisp) {
     VLOG(0) << "Selecting SkiaVk as the HWUI renderer for "
             << GpuModeString(gpu_mode) << " GPU mode.";
     return GuestHwuiRenderer::kSkiaVk;
@@ -1279,11 +1329,12 @@ Result<GraphicsSettings> GetGraphicsSettings(
       CF_EXPECT(SelectGuestRendererPreload(
           gpu_mode, graphics_settings.hwui_renderer, guest_renderer_preload));
   if (gpu_mode == GpuMode::Gfxstream ||
-      gpu_mode == GpuMode::GfxstreamGuestAngle || gpu_mode == GpuMode::Venus) {
+      gpu_mode == GpuMode::GfxstreamGuestAngle || gpu_mode == GpuMode::Venus ||
+      gpu_mode == GpuMode::Honeykrisp) {
     graphics_settings.gpu_host_vulkan_version =
         HostVulkanVersion(graphics_availability);
   }
-  if (gpu_mode == GpuMode::Venus) {
+  if (gpu_mode == GpuMode::Venus || gpu_mode == GpuMode::Honeykrisp) {
     graphics_settings.gpu_host_gles_version =
         AngleGles32OnHostVulkan(graphics_availability) ? 0 : ((3 << 16) | 1);
   }

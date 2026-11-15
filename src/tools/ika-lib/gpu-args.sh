@@ -321,6 +321,60 @@ check_venus_gpu_mode() {
   fi
 }
 
+# Whether the ROM's android-info.txt declares Mesa's Apple Vulkan driver:
+# vulkan_asahi_apex=supported, which the arm64 ROM has and with which
+# Cuttlefish's assemble_cvd activates the driver's APEX.
+guest_supports_honeykrisp() {
+  local android_info="$1"
+
+  [[ -r "${android_info}" ]] || return 1
+  grep -Eiq '^[[:space:]]*vulkan_asahi_apex[[:space:]]*=[[:space:]]*supported' "${android_info}"
+}
+
+# Whether a render node of the host belongs to the asahi kernel driver: an
+# Apple GPU under Asahi Linux, the one host the honeykrisp mode runs on.
+host_has_asahi_render_node() {
+  local driver
+
+  for driver in /sys/class/drm/renderD*/device/driver; do
+    [[ -e "${driver}" ]] || continue
+    [[ "$(basename "$(readlink -f "${driver}")")" == "asahi" ]] && return 0
+  done
+  return 1
+}
+
+# Why the honeykrisp mode cannot run here, if it cannot: it needs the arm64
+# ROM, which ships Mesa's Apple Vulkan driver, and an Apple GPU driven by the
+# asahi kernel driver, whose native context the driver uses.
+honeykrisp_blocker() {
+  local android_info="${CVD_PRODUCT_OUT}/android-info.txt"
+
+  if ! host_has_asahi_render_node; then
+    printf '%s
+' "the host has no Apple GPU under the asahi kernel driver"
+    return 0
+  fi
+  if ! guest_supports_honeykrisp "${android_info}"; then
+    printf '%s
+' "the ROM under ${CVD_PRODUCT_OUT} does not ship Mesa's Apple Vulkan driver (vulkan_asahi_apex=supported in android-info.txt)"
+    return 0
+  fi
+  return 1
+}
+
+# gpu_mode=honeykrisp: the guest's Vulkan is Mesa's Apple Vulkan driver
+# (Honeykrisp) itself, which sends the asahi kernel driver's calls through a
+# virtio-gpu native context to virglrenderer in crosvm, with ANGLE for OpenGL
+# ES. Checked here so that the start fails with a reason rather than with an
+# Android that cannot draw.
+check_honeykrisp_gpu_mode() {
+  local blocker
+
+  if blocker="$(honeykrisp_blocker)"; then
+    die "gpu_mode=honeykrisp: ${blocker}; start with --gpu_mode=auto"
+  fi
+}
+
 append_apple_16k_gfxstream_vulkan_args() {
   local -n apple_args_array="$1"
 
@@ -424,6 +478,13 @@ append_gfxstream_vulkan_args() {
     check_venus_gpu_mode
     CVD_GRAPHICS_DRIVER_MESSAGE="venus (ANGLE over Venus Vulkan)"
     log "gfxstream-vulkan=${mode} has no effect with gpu_mode=venus"
+    return 0
+  fi
+
+  if [[ "${gpu_mode}" == "honeykrisp" ]]; then
+    check_honeykrisp_gpu_mode
+    CVD_GRAPHICS_DRIVER_MESSAGE="honeykrisp (ANGLE over Mesa's Apple Vulkan driver in the guest)"
+    log "gfxstream-vulkan=${mode} has no effect with gpu_mode=honeykrisp"
     return 0
   fi
 

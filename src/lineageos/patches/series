@@ -99,6 +99,7 @@ device/google/cuttlefish patches/device-google-cuttlefish-renderengine-backend.p
 device/google/cuttlefish patches/device-google-cuttlefish-balloon-module.patch
 device/google/cuttlefish patches/device-google-cuttlefish-api-level-36.patch
 device/google/cuttlefish patches/device-google-cuttlefish-zram-150.patch
+device/google/cuttlefish patches/device-google-cuttlefish-vulkan-asahi-apex.patch
 device/google/atv patches/device-google-atv-ika-tv-mode.patch
 frameworks/av patches/frameworks-av.patch
 frameworks/native patches/frameworks-native-logspam.patch

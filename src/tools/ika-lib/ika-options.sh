@@ -256,6 +256,8 @@ ika_options_form_fields() {
   for mode in "${IKA_OPTIONS_GPU_CHOICES[@]}"; do
     modes+=("${mode}")
   done
+  # Mesa's Apple Vulkan driver in the guest runs only on an Apple GPU
+  ! host_is_apple_silicon || modes+=(honeykrisp)
   host_cpus="$(nproc 2>/dev/null)" || host_cpus=64
   host_mb="$(awk '/^MemTotal:/ { print int($2 / 1024) }' /proc/meminfo 2>/dev/null)"
   [[ "${host_mb}" =~ ^[0-9]+$ ]] || host_mb=65536

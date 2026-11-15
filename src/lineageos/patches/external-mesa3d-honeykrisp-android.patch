@@ -226,7 +226,26 @@ diff --git a/src/asahi/vulkan/hk_image.c b/src/asahi/vulkan/hk_image.c
  }
  
  static void
-@@ -1369,6 +1400,18 @@ hk_BindImageMemory2(VkDevice device, uint32_t bindInfoCount,
+@@ -1324,7 +1355,8 @@ hk_GetDeviceImageSubresourceLayoutKHR(
+ 
+ static void
+ hk_image_plane_bind(struct hk_device *dev, struct hk_image_plane *plane,
+-                    struct hk_device_memory *mem, uint64_t *offset_B)
++                    struct hk_device_memory *mem, bool host_transfer,
++                    uint64_t *offset_B)
+ {
+    *offset_B = align64(*offset_B, HK_PLANE_ALIGN_B);
+ 
+@@ -1340,7 +1372,7 @@ hk_image_plane_bind(struct hk_device *dev, struct hk_image_plane *plane,
+       UNREACHABLE("todo");
+    } else {
+       plane->addr = mem->bo->va->addr + *offset_B;
+-      plane->map = agx_bo_map(mem->bo) + *offset_B;
++      plane->map = host_transfer ? agx_bo_map(mem->bo) + *offset_B : NULL;
+       plane->rem = mem->bo->size - (*offset_B);
+    }
+ 
+@@ -1369,17 +1401,33 @@ hk_BindImageMemory2(VkDevice device, uint32_t bindInfoCount,
        }
  #endif
  
@@ -243,8 +262,25 @@ diff --git a/src/asahi/vulkan/hk_image.c b/src/asahi/vulkan/hk_image.c
 +#endif
 +
        assert(mem);
++      const bool host_transfer =
++         image->vk.usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT;
        uint64_t offset_B = pBindInfos[i].memoryOffset;
        if (image->disjoint) {
+          const VkBindImagePlaneMemoryInfo *plane_info = vk_find_struct_const(
+             pBindInfos[i].pNext, BIND_IMAGE_PLANE_MEMORY_INFO);
+          uint8_t plane =
+             hk_image_aspects_to_plane(image, plane_info->planeAspect);
+-         hk_image_plane_bind(dev, &image->planes[plane], mem, &offset_B);
++         hk_image_plane_bind(dev, &image->planes[plane], mem, host_transfer,
++                             &offset_B);
+       } else {
+          for (unsigned plane = 0; plane < image->plane_count; plane++) {
+-            hk_image_plane_bind(dev, &image->planes[plane], mem, &offset_B);
++            hk_image_plane_bind(dev, &image->planes[plane], mem,
++                                host_transfer, &offset_B);
+          }
+       }
+ 
 diff --git a/src/asahi/vulkan/hk_image.h b/src/asahi/vulkan/hk_image.h
 --- a/src/asahi/vulkan/hk_image.h
 +++ b/src/asahi/vulkan/hk_image.h

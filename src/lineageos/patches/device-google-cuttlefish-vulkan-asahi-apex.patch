@@ -1,0 +1,59 @@
+Patch summary:
+Ship Mesa's Apple Vulkan driver (Honeykrisp, vulkan.asahi) in its own Vulkan
+APEX, com.google.cf.vulkan.asahi, in the arm64 desktop product only, and
+declare it with vulkan_asahi_apex=supported in that product's android-info.txt,
+which ika_arm64/BoardConfig.mk now combines from the desktop's file and
+shared/desktop/android-info-asahi.txt. The host tools activate the APEX in
+the honeykrisp GPU mode, where the guest's Vulkan runs over the asahi kernel
+driver's virtio-gpu native context on an Apple Silicon host.
+
+diff --git a/guest/hals/vulkan/Android.bp b/guest/hals/vulkan/Android.bp
+--- a/guest/hals/vulkan/Android.bp
++++ b/guest/hals/vulkan/Android.bp
+@@ -134,3 +134,12 @@
+     defaults: ["com.google.cf.vulkan-driver-defaults"],
+     native_shared_libs: ["vulkan.virtio"],
+ }
++
++// Mesa's Apple Vulkan driver (Honeykrisp), for Apple Silicon hosts: it drives
++// the host's GPU through the asahi kernel driver's virtio-gpu native context.
++// Products that declare vulkan_asahi_apex=supported install it.
++apex {
++    name: "com.google.cf.vulkan.asahi",
++    defaults: ["com.google.cf.vulkan-driver-defaults"],
++    native_shared_libs: ["vulkan.asahi"],
++}
+diff --git a/ika_arm64/BoardConfig.mk b/ika_arm64/BoardConfig.mk
+--- a/ika_arm64/BoardConfig.mk
++++ b/ika_arm64/BoardConfig.mk
+@@ -87,3 +87,10 @@
+ # registers, virtual-cpufreq cannot, so --vcpu_config_path guests report the
+ # dummy 1/2 kHz table.
+ BOARD_KERNEL_MODULES_16K := $(filter-out %/dummy-cpufreq.ko,$(BOARD_KERNEL_MODULES_16K))
++
++# The desktop's android-info.txt, and the Apple Vulkan driver's APEX, which
++# only this arm64 product installs (ika_arm64/desktop/aosp_cf.mk).
++TARGET_BOARD_INFO_FILE :=
++TARGET_BOARD_INFO_FILES := \
++    device/google/cuttlefish/shared/desktop/android-info.txt \
++    device/google/cuttlefish/shared/desktop/android-info-asahi.txt
+diff --git a/ika_arm64/desktop/aosp_cf.mk b/ika_arm64/desktop/aosp_cf.mk
+--- a/ika_arm64/desktop/aosp_cf.mk
++++ b/ika_arm64/desktop/aosp_cf.mk
+@@ -66,6 +66,10 @@
+ LOCAL_ENABLE_LIGHT := false
+ $(call inherit-product, device/google/cuttlefish/shared/desktop/device_vendor.mk)
+ 
++# Mesa's Apple Vulkan driver for the honeykrisp GPU mode on Apple Silicon hosts,
++# declared in android-info.txt through ika_arm64/BoardConfig.mk.
++PRODUCT_PACKAGES += com.google.cf.vulkan.asahi
++
+ #
+ # Special settings for the target
+ #
+diff --git a/shared/desktop/android-info-asahi.txt b/shared/desktop/android-info-asahi.txt
+new file mode 100644
+--- /dev/null
++++ b/shared/desktop/android-info-asahi.txt
+@@ -0,0 +1 @@
++vulkan_asahi_apex=supported

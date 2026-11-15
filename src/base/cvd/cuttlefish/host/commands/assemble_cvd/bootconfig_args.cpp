@@ -377,6 +377,11 @@ Result<std::unordered_map<std::string, std::string>> BootconfigArgsFromConfig(
         bootconfig_args["androidboot.vendor.apex.com.google.cf.vulkan"] =
             "com.google.cf.vulkan.venus";
       }
+    } else if (gpu_mode == GpuMode::Honeykrisp) {
+      if (instance.has_vulkan_asahi_apex()) {
+        bootconfig_args["androidboot.vendor.apex.com.google.cf.vulkan"] =
+            "com.google.cf.vulkan.asahi";
+      }
     }
   }
 
@@ -394,8 +399,9 @@ Result<std::unordered_map<std::string, std::string>> BootconfigArgsFromConfig(
   if (instance.has_vulkan_gfxstream_apex() ||
       instance.has_vulkan_lavapipe_apex() ||
       instance.has_vulkan_swiftshader_apex() ||
-      instance.has_vulkan_venus_apex()) {
+      instance.has_vulkan_venus_apex() || instance.has_vulkan_asahi_apex()) {
     static const std::map<std::string, std::string> kVulkanDriverApexes = {
+        {"asahi", "com.google.cf.vulkan.asahi"},
         {"lvp", "com.google.cf.vulkan.lavapipe"},
         {"pastel", "com.google.cf.vulkan.swiftshader"},
         {"ranchu", "com.google.cf.vulkan.gfxstream"},
@@ -409,8 +415,8 @@ Result<std::unordered_map<std::string, std::string>> BootconfigArgsFromConfig(
   // Ika's desktop ROM declares android.hardware.vulkan.version through vendor
   // SKUs (/vendor/etc/permissions/sku_vulkan_1_1, _1_3 and _1_4): select the
   // one for the Vulkan version the guest's driver offers. Lavapipe offers 1.4,
-  // SwiftShader 1.3, gfxstream and Venus the host GPU's version (1.3 when it
-  // is unknown). Android has no feature file for 1.2, so 1.2 gets 1.1.
+  // SwiftShader 1.3, gfxstream, Venus and Honeykrisp the host GPU's version
+  // (1.3 when it is unknown). Android has no feature file for 1.2, so 1.2 gets 1.1.
   if (!vulkan_driver.empty()) {
     constexpr int kVulkan1_3 = (1 << 16) | 3;
     constexpr int kVulkan1_4 = (1 << 16) | 4;
@@ -429,7 +435,8 @@ Result<std::unordered_map<std::string, std::string>> BootconfigArgsFromConfig(
                                        : "vulkan_1_1";
   }
 
-  if (gpu_mode == GpuMode::GuestLavapipe || gpu_mode == GpuMode::Venus) {
+  if (gpu_mode == GpuMode::GuestLavapipe || gpu_mode == GpuMode::Venus ||
+      gpu_mode == GpuMode::Honeykrisp) {
     bootconfig_args["androidboot.hardware.guest_renderengine_backend"] =
         "skiavkthreaded";
   }

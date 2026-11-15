@@ -72,6 +72,7 @@ class ScreenConnector : public ScreenConnectorFrameRenderer {
         GpuMode::GfxstreamGuestAngleHostSwiftshader,
         GpuMode::GfxstreamGuestAngleHostLavapipe,
         GpuMode::Venus,
+        GpuMode::Honeykrisp,
         GpuMode::GuestLavapipe,
         GpuMode::GuestSwiftshader,
     };

@@ -92,7 +92,8 @@ Ika**, a window like an app's, for the settings of `ika.ini` you change most, in
   `tv_dpi`) and its **Refresh rate** (`refresh_rate_hz`), each 0 for auto;
   the **GPU mode**, named as in `ika.ini` (**Auto**, `auto`, the default,
   which Ika resolves for the host, `gfxstream_guest_angle`, `gfxstream`,
-  `venus`, `guest_swiftshader` and `guest_lavapipe`; **gfxstream, OpenGL ES**
+  `venus`, `guest_swiftshader` and `guest_lavapipe`, and on Apple Silicon
+  `honeykrisp`; **gfxstream, OpenGL ES**
   is `gpu_mode = gfxstream` with `gfxstream_vulkan = off`, and **Auto** or
   **gfxstream** chosen from another mode sets `gfxstream_vulkan = auto`),
   **Hardware video decoding** and **Low-CPU

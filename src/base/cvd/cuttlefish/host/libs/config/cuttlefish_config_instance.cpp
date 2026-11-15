@@ -939,6 +939,14 @@ void CuttlefishConfig::MutableInstanceSpecific::set_has_vulkan_venus_apex(
 bool CuttlefishConfig::InstanceSpecific::has_vulkan_venus_apex() const {
   return (*Dictionary())[kHasVulkanVenusApex].asBool();
 }
+static constexpr char kHasVulkanAsahiApex[] = "has_vulkan_asahi_apex";
+void CuttlefishConfig::MutableInstanceSpecific::set_has_vulkan_asahi_apex(
+    const bool has_apex) {
+  (*Dictionary())[kHasVulkanAsahiApex] = has_apex;
+}
+bool CuttlefishConfig::InstanceSpecific::has_vulkan_asahi_apex() const {
+  return (*Dictionary())[kHasVulkanAsahiApex].asBool();
+}
 
 static constexpr char kEnableAudio[] = "enable_audio";
 void CuttlefishConfig::MutableInstanceSpecific::set_enable_audio(bool enable) {

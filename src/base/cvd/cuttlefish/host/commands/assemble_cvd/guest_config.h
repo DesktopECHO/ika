@@ -60,6 +60,7 @@ struct GuestConfig {
   bool has_vulkan_gfxstream_apex = false;
   bool has_vulkan_swiftshader_apex = false;
   bool has_vulkan_venus_apex = false;
+  bool has_vulkan_asahi_apex = false;
 };
 
 PrettyStruct Pretty(const GuestConfig&,

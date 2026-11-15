@@ -84,6 +84,9 @@ CuttlefishFlags_GpuMode ConvertGpuMode(GpuMode mode) {
     case GpuMode::Venus:
       return CuttlefishFlags_GpuMode::
           CuttlefishFlags_GpuMode_CUTTLEFISH_FLAGS_GPU_MODE_VENUS;
+    case GpuMode::Honeykrisp:
+      return CuttlefishFlags_GpuMode::
+          CuttlefishFlags_GpuMode_CUTTLEFISH_FLAGS_GPU_MODE_HONEYKRISP;
     case GpuMode::GuestSwiftshader:
       return CuttlefishFlags_GpuMode::
           CuttlefishFlags_GpuMode_CUTTLEFISH_FLAGS_GPU_MODE_GUEST_SWIFTSHADER;

@@ -1185,6 +1185,8 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
         guest_configs[instance_index].has_vulkan_swiftshader_apex);
     instance.set_has_vulkan_venus_apex(
         guest_configs[instance_index].has_vulkan_venus_apex);
+    instance.set_has_vulkan_asahi_apex(
+        guest_configs[instance_index].has_vulkan_asahi_apex);
 
     const GpuMode gpu_mode = CF_EXPECT(SelectGpuMode(
         gpu_mode_values.ForIndex(instance_index), vm_manager_flag.Mode(),
@@ -1247,7 +1249,8 @@ Result<CuttlefishConfig> InitializeCuttlefishConfiguration(
     }
 
     if (hwcomposer_vec[instance_index] == kHwComposerAuto) {
-      if (gpu_mode == GpuMode::DrmVirgl || gpu_mode == GpuMode::Venus) {
+      if (gpu_mode == GpuMode::DrmVirgl || gpu_mode == GpuMode::Venus ||
+          gpu_mode == GpuMode::Honeykrisp) {
         instance.set_hwcomposer(kHwComposerDrm);
       } else if (gpu_mode == GpuMode::None) {
         instance.set_hwcomposer(kHwComposerNone);

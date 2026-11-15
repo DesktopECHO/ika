@@ -327,6 +327,9 @@ enable_sandbox = false
 # Vulkan driver in the guest over virglrenderer) and guest_lavapipe (Mesa's
 # lavapipe on the guest's CPU) need a ROM that ships those drivers; venus set
 # here starts gfxstream_guest_angle on a host whose driver cannot run Venus.
+# honeykrisp (Mesa's Apple Vulkan driver in the guest, over the Apple GPU's
+# virtio-gpu native context) runs on Apple Silicon hosts only, with the arm64
+# ROM; set here elsewhere, it starts gfxstream_guest_angle.
 # See GRAPHICS.md.
 gpu_mode = auto
 # The GPU Ika uses, and no other: auto, or a GPU's Vulkan vendor and device

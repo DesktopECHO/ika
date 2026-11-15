@@ -60,6 +60,10 @@ message Graphics {
 
   // Whether the guest has a separate apex for the Venus Vulkan driver.
   bool vulkan_venus_apex_supported = 9;
+
+  // Whether the guest has com.google.cf.vulkan.asahi, Mesa's Apple Vulkan
+  // driver (Honeykrisp) for a virtio-gpu native context.
+  bool vulkan_asahi_apex_supported = 10;
 }
 
 message Audio {

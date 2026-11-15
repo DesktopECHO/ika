@@ -32,6 +32,7 @@ enum class GpuMode {
   GfxstreamGuestAngleHostLavapipe,
   GfxstreamGuestAngleHostSwiftshader,
   Venus,
+  Honeykrisp,
   GuestLavapipe,
   GuestSwiftshader,
   None,
@@ -48,6 +49,7 @@ inline constexpr std::string_view kGpuModeGfxstreamGuestAngleHostLavapipe =
 inline constexpr std::string_view kGpuModeGfxstreamGuestAngleHostSwiftshader =
     "gfxstream_guest_angle_host_swiftshader";
 inline constexpr std::string_view kGpuModeVenus = "venus";
+inline constexpr std::string_view kGpuModeHoneykrisp = "honeykrisp";
 inline constexpr std::string_view kGpuModeGuestLavapipe = "guest_lavapipe";
 inline constexpr std::string_view kGpuModeGuestSwiftshader =
     "guest_swiftshader";
@@ -79,6 +81,9 @@ void AbslStringify(Sink& sink, GpuMode mode) {
       break;
     case GpuMode::Venus:
       sink.Append(kGpuModeVenus);
+      break;
+    case GpuMode::Honeykrisp:
+      sink.Append(kGpuModeHoneykrisp);
       break;
     case GpuMode::GuestLavapipe:
       sink.Append(kGpuModeGuestLavapipe);
