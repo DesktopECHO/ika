@@ -11,7 +11,7 @@ points those slots at the KHR entrypoints when the instance or the device is
 below 1.4, using the API versions the guest now records. Backport of Mesa main
 d95407dc5e7 ("gfxstream: update some instance tracking") and c85006fa71e
 ("gfxstream: update device dispatch based on version"), both not in
-26.3.0-rc3; d95407dc5e7 rebased onto rc3's gfxstream_vk_physical_device_init.
+26.3.0; d95407dc5e7 rebased onto its gfxstream_vk_physical_device_init.
 Drop it when the Mesa pin includes them.
 
 diff --git a/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp b/src/gfxstream/guest/vulkan/gfxstream_vk_device.cpp

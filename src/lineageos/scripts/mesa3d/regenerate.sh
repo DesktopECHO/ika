@@ -5,6 +5,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 overlay_dir="$(cd "$script_dir/../.." && pwd)"
 manifest="$overlay_dir/manifests/lineageos-desktop.xml"
 output="$overlay_dir/patches/external-mesa3d.patch"
+honeykrisp_patch="$overlay_dir/patches/external-mesa3d-honeykrisp-android.patch"
 config="$script_dir/aosp_mesa3d.toml"
 release="$overlay_dir/../tools/mesa/release.env"
 
@@ -24,8 +25,17 @@ MESA_REPO is any Mesa git repository that has the release's tag
 (mesa-MESA_VERSION); the script works in a temporary worktree of it. MESON2HERMETIC_CHECKOUT is a checkout of
 https://github.com/mesonbuild/meson/pull/15462 (Python 3.11 or newer).
 
+The Apple Vulkan driver (Honeykrisp, vulkan.asahi) needs shader kernels that
+Mesa compiles from OpenCL with its own tools, which the Android build cannot
+run. The script builds them here with a native Mesa build and adds the
+results to the patch, so this host needs what that build needs: meson 1.5 or
+newer, ninja, a C and C++ compiler, and the development files of LLVM and
+Clang, the SPIRV-LLVM translator, SPIRV-Tools and libclc.
+
 Ika's own Mesa fixes are separate patches in src/lineageos/patches/series and
-are not touched; they do not change the generated build files.
+are not touched. external-mesa3d-honeykrisp-android.patch adds a source file,
+so the script applies it before converting and leaves it out of the patch it
+writes; the others do not change which build files are generated.
 EOF
 }
 
@@ -48,6 +58,7 @@ mesa_repo="$(cd "$1" && pwd)"
 meson_dir="$(cd "$2" && pwd)"
 [[ -f "$meson_dir/meson.py" ]] || die "no meson.py in $meson_dir"
 [[ -f "$config" ]] || die "missing $config"
+[[ -f "$honeykrisp_patch" ]] || die "missing $honeykrisp_patch"
 
 # shellcheck source=../../../tools/mesa/release.env
 source "$release"
@@ -85,6 +96,109 @@ version="$(tr -d '[:space:]' < "$work/mesa/VERSION")"
   die "mesa-$MESA_VERSION's VERSION file says $version"
 hermetic="$work/mesa/src/gfxstream/hermetic/android"
 
+# Honeykrisp's Android support adds hk_android.c, which the generated build
+# files name. The patch written below is the difference from this tree, so it
+# does not repeat the series patch.
+git -C "$work/mesa" apply "$honeykrisp_patch" ||
+  die "$(basename "$honeykrisp_patch") no longer applies to Mesa $version"
+git -C "$work/mesa" add --all
+base_tree="$(git -C "$work/mesa" write-tree)"
+
+# The Apple driver's shader kernels: libpoly and libagx are OpenCL compiled by
+# mesa_clc and bound by vtn_bindgen2, libagx_shaders is made by asahi_clc, and
+# the disassembler's table by a script that reads AGX2.xml from beside itself,
+# which Soong's packed Python cannot. Build them natively and use the results
+# as sources.
+log "building the Apple driver's shader kernels for Mesa $version"
+kernels=(
+  src/poly/cl/libpoly.cpp src/poly/cl/libpoly.h
+  src/asahi/libagx/libagx.cpp src/asahi/libagx/libagx.h
+  src/asahi/lib/libagx_shaders.c src/asahi/lib/libagx_shaders.h
+  src/asahi/isa/agx2_disasm.c
+)
+{
+  meson setup "$work/native" "$work/mesa" -Dbuildtype=release \
+    -Dvulkan-drivers=asahi -Dgallium-drivers= -Dplatforms= -Dglx=disabled \
+    -Degl=disabled -Dopengl=false -Dgles1=disabled -Dgles2=disabled \
+    -Dllvm=enabled -Dshared-llvm=enabled -Dvideo-codecs= -Dtools= &&
+    ninja -C "$work/native" "${kernels[@]}"
+} > "$work/native.log" 2>&1 || {
+  tail -n 40 "$work/native.log" >&2
+  die "could not build the Apple driver's shader kernels"
+}
+[[ -z "$(git -C "$work/mesa" status --porcelain=v1 --untracked-files=all | grep -v '^[AM]  ')" ]] ||
+  die "the native Mesa build changed the source tree"
+for kernel in "${kernels[@]}"; do
+  cp "$work/native/$kernel" "$work/mesa/$kernel"
+done
+
+python3 -I - "$work/mesa" <<'PY' || die "could not point the Apple driver's build at the built kernels"
+import pathlib
+import sys
+
+mesa = pathlib.Path(sys.argv[1])
+
+def edit(path, edits):
+    text = (mesa / path).read_text()
+    for old, new in edits:
+        if text.count(old) != 1:
+            sys.exit(f"{path}: expected one {old!r}")
+        text = text.replace(old, new)
+    (mesa / path).write_text(text)
+
+def cut(path, start, end, new):
+    text = (mesa / path).read_text()
+    if text.count(start) != 1:
+        sys.exit(f"{path}: expected one {start!r}")
+    a = text.index(start)
+    b = text.find(end, a)
+    if b < 0:
+        sys.exit(f"{path}: no {end!r} after {start!r}")
+    (mesa / path).write_text(text[:a] + new + text[b + len(end):])
+
+# The rules that run the tools become the files they made.
+cut("src/poly/cl/meson.build", "libpoly_shaders_spv = custom_target(",
+    "  command : [prog_vtn_bindgen2, libpoly_shaders_spv, '@OUTPUT0@', '@OUTPUT1@'],\n)\n",
+    "libpoly_shaders = files('libpoly.cpp', 'libpoly.h')\n")
+cut("src/asahi/libagx/meson.build", "libagx_spv = custom_target(",
+    "  command : [prog_vtn_bindgen2, libagx_spv, '@OUTPUT0@', '@OUTPUT1@'],\n)\n",
+    "libagx = files('libagx.cpp', 'libagx.h')\n")
+cut("src/asahi/lib/meson.build", "libagx_shaders = custom_target(",
+    "  command : [prog_asahi_clc, libagx_spv, '@OUTPUT0@', '@OUTPUT1@'],\n)\n",
+    "libagx_shaders = files('libagx_shaders.h', 'libagx_shaders.c')\n")
+cut("src/asahi/isa/meson.build", "agx2_disasm_c = custom_target(",
+    "  depend_files : files('isa.py'),\n)\n",
+    "agx2_disasm_c = files('agx2_disasm.c')\n")
+
+# Soong takes a Python source's path as a module path, where a dot is not
+# allowed before the extension.
+compiler = mesa / "src/asahi/compiler"
+renames = [("agx_opcodes.h.py", "agx_opcodes_h.py"),
+           ("agx_opcodes.c.py", "agx_opcodes_c.py"),
+           ("agx_builder.h.py", "agx_builder_h.py")]
+for old, new in renames:
+    (compiler / old).rename(compiler / new)
+edit("src/asahi/compiler/meson.build",
+     [(f"'{old}'", f"'{new}'") for old, new in renames])
+
+# Android's build makes arithmetic on void pointers an error; the driver uses
+# it.
+for path in ("src/asahi/compiler/meson.build", "src/asahi/lib/meson.build",
+             "src/asahi/vulkan/meson.build"):
+    text = (mesa / path).read_text()
+    if "'-Wno-c2x-extensions'" not in text:
+        sys.exit(f"{path}: no '-Wno-c2x-extensions' to extend")
+    (mesa / path).write_text(text.replace(
+        "'-Wno-c2x-extensions'",
+        "'-Wno-c2x-extensions', '-Wno-gnu-pointer-arith'"))
+
+# The Vulkan driver includes the compiler's generated headers without naming
+# them as a dependency; Soong needs them named.
+edit("src/asahi/vulkan/meson.build",
+     [("  idep_libagx_shaders_h,\n]",
+       "  idep_libagx_shaders_h,\n  idep_agx_opcodes_h,\n  idep_agx_builder_h,\n]")])
+PY
+
 # The config names its handwritten-module file relative to its own directory.
 mkdir "$work/config"
 cp "$config" "$hermetic/gfxstream_workaround.txt" "$hermetic/dependencies.toml" "$work/config/"
@@ -92,6 +206,12 @@ patch --quiet --forward -p1 -d "$work/config" < "$script_dir/gfxstream_workaroun
   die "gfxstream_workaround.patch no longer applies to this Mesa's gfxstream_workaround.txt"
 patch --quiet --forward -p1 -d "$work/config" < "$script_dir/dependencies.patch" ||
   die "dependencies.patch no longer applies to this Mesa's dependencies.toml"
+# With mesa-clc and precomp-compiler set to "system" in the config, Mesa looks
+# its kernel tools up as programs; the build files this makes never run them.
+[[ "$(grep '^\[' "$work/config/dependencies.toml" | tail -n 1)" == "[programs]" ]] ||
+  die "dependencies.toml no longer ends with its [programs] table"
+printf '%s = { version = "%s" }\n' mesa_clc "$MESA_VERSION" vtn_bindgen2 "$MESA_VERSION" \
+  asahi_clc "$MESA_VERSION" >> "$work/config/dependencies.toml"
 
 git -C "$work/mesa" rm --quiet android/Android.mk
 log "converting Mesa $version (${pin:0:12}) with meson2hermetic ${meson_commit:0:12}"
@@ -203,13 +323,18 @@ ${meson_commit:0:12} with src/lineageos/scripts/mesa3d/aosp_mesa3d.toml, which i
 Mesa's AOSP config without the Freedreno/Turnip build and, on the device,
 without virtgpu_kumquat (with gfxstream_workaround.patch keeping its Rust
 libraries out of the device build) and with Venus (vulkan.virtio, its protocol
-headers from external/venus-protocol through dependencies.patch); its
+headers from external/venus-protocol through dependencies.patch) and with
+the Apple driver, Honeykrisp (vulkan.asahi), whose shader kernels
+(libpoly, libagx, libagx_shaders, agx2_disasm.c) regenerate.sh built with a
+native Mesa build, as the Android build cannot run Mesa's OpenCL tools; its
 ldflags and Rust flags select()s become target blocks, as Android 16's Soong
 cannot select them. Mesa's android/Android.mk is removed because Soong rejects
-Android.mk files under external/.
+Android.mk files under external/. The patch is the difference from the release
+with external-mesa3d-honeykrisp-android.patch applied, which adds a source
+file the build files name.
 
 EOF
-  git -C "$work/mesa" diff --cached --full-index
+  git -C "$work/mesa" diff --cached --full-index "$base_tree"
 } > "$output"
 
-log "wrote $output ($(git -C "$work/mesa" diff --cached --name-only | wc -l | tr -d ' ') files)"
+log "wrote $output ($(git -C "$work/mesa" diff --cached --name-only "$base_tree" | wc -l | tr -d ' ') files)"

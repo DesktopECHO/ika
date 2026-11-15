@@ -135,6 +135,10 @@ when Arch's LLVM moves on. To move to another release:
 2. Run `src/lineageos/scripts/mesa3d/regenerate.sh MESA_REPO MESON2HERMETIC_CHECKOUT`,
    which pins the ROM's `external/mesa3d` to the commit and writes the
    Android build files for it (its `--help` names the checkouts it needs).
+   It also compiles the Apple driver's shader kernels with a native Mesa
+   build, as Android's build cannot, so the host needs meson, ninja and the
+   development files of LLVM, Clang, the SPIRV-LLVM translator, SPIRV-Tools
+   and libclc.
 3. Drop the patches in `src/lineageos/patches/series` and
    `src/tools/mesa/series` that the release has, and refresh the others.
 
