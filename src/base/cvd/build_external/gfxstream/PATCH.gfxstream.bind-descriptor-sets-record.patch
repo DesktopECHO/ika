@@ -1,0 +1,54 @@
+Patch summary:
+vkCmdBindDescriptorSets no longer takes the decoder's global lock and adds
+to a hash set for every bind. Each bind recorded its sets in the command
+buffer's info under that lock: all of them in a set that only a submit
+reads, to find the ColorBuffers they hold, and not at all when the guest is
+Vulkan only; and the last ones bound, which only the texture decompression's
+compute pass reads, to bind the compute sets again. Graphics binds of a
+Vulkan-only guest now record nothing, and the last sets are recorded for the
+compute bind point alone, which is also the only one they were ever bound
+back to. 3DMark Wild Life Extreme binds 2850 times a frame: under WSL2 on an
+RTX 4080 Laptop GPU its binds took 5.6 ms of recording thread time per frame
+and now take 0.4 ms, and recording a frame takes 6.5 ms instead of 12.7 ms.
+The frame rate did not change: recording was not what the frame waited for.
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -9068,19 +9068,28 @@
+         vk->vkCmdBindDescriptorSets(commandBuffer, pipelineBindPoint, layout, firstSet,
+                                     descriptorSetCount, pDescriptorSets, dynamicOffsetCount,
+                                     pDynamicOffsets);
+-        if (descriptorSetCount) {
++        // The command buffer's record of its bound sets has two readers. A
++        // submit collects the ColorBuffers that the sets of its command
++        // buffers hold, unless the guest is Vulkan only. The compute pass that
++        // decompresses a texture binds the compute sets again afterwards.
++        const bool recordAllSets = !m_vkEmulation->getFeatures().GuestVulkanOnly.enabled();
++        const bool recordCurrentSets = pipelineBindPoint == VK_PIPELINE_BIND_POINT_COMPUTE;
++        if (descriptorSetCount && (recordAllSets || recordCurrentSets)) {
+             std::lock_guard<std::mutex> lock(mMutex);
+             auto* cmdBufferInfo = gfxstream::base::find(mCommandBufferInfo, commandBuffer);
+             if (cmdBufferInfo) {
+-                cmdBufferInfo->descriptorLayout = layout;
+-
+-                cmdBufferInfo->allDescriptorSets.insert(pDescriptorSets,
+-                                                        pDescriptorSets + descriptorSetCount);
+-                cmdBufferInfo->firstSet = firstSet;
+-                cmdBufferInfo->currentDescriptorSets.assign(pDescriptorSets,
++                if (recordAllSets) {
++                    cmdBufferInfo->allDescriptorSets.insert(pDescriptorSets,
+                                                             pDescriptorSets + descriptorSetCount);
+-                cmdBufferInfo->dynamicOffsets.assign(pDynamicOffsets,
+-                                                     pDynamicOffsets + dynamicOffsetCount);
++                }
++                if (recordCurrentSets) {
++                    cmdBufferInfo->descriptorLayout = layout;
++                    cmdBufferInfo->firstSet = firstSet;
++                    cmdBufferInfo->currentDescriptorSets.assign(
++                        pDescriptorSets, pDescriptorSets + descriptorSetCount);
++                    cmdBufferInfo->dynamicOffsets.assign(pDynamicOffsets,
++                                                         pDynamicOffsets + dynamicOffsetCount);
++                }
+             }
+         }
+     }
