@@ -254,9 +254,8 @@ What Ika changes for it:
 - **WSL2:** the GPU through Ika's own build of Mesa Dozen, a Vulkan layer and
   a D3D12 shim; see [WSL2](#wsl2).
 - **Every host:** the gfxstream modes run with `EGL_PLATFORM=surfaceless`
-  unless you set it, and with gfxstream's renderer features
-  `MinimalLogging:disabled` and `VulkanBatchedDescriptorSetUpdate:disabled`
-  (`gpu_renderer_features` in `[gpu]`).
+  unless you set it. `gpu_renderer_features` in `[gpu]` turns gfxstream's
+  renderer features on or off; it is empty by default.
 
 ## Apple Silicon
 

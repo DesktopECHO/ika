@@ -344,8 +344,9 @@ use_gpu = auto
 gpu_vhost_user_mode = auto
 enable_gpu_udmabuf = true
 use_cvdalloc = true
-# Features of gfxstream's renderer, separated by semicolons.
-gpu_renderer_features = MinimalLogging:disabled;VulkanBatchedDescriptorSetUpdate:disabled
+# Features of gfxstream's renderer to turn on or off, as Name:enabled or
+# Name:disabled separated by semicolons; empty keeps gfxstream's own choice.
+gpu_renderer_features =
 # auto, on or off. With gfxstream_guest_angle this is ignored.
 # Command-line equivalent: --gfxstream_vulkan=. Environment variable:
 # GFXSTREAM_VULKAN

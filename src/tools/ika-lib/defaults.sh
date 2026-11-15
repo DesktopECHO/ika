@@ -21,10 +21,7 @@ declare -A CVD_GPU_DEFAULTS=(
   [gpu_vhost_user_mode]="auto"
   [enable_gpu_udmabuf]="true"
   [use_cvdalloc]="true"
-  # gfxstream's batched descriptor path masks inlineUniformBlock even though
-  # Vulkan 1.3 makes that feature mandatory. Keep the fully compliant
-  # non-batched path until gfxstream can batch inline-uniform descriptors.
-  [gpu_renderer_features]="MinimalLogging:disabled;VulkanBatchedDescriptorSetUpdate:disabled"
+  [gpu_renderer_features]=""
 )
 
 # ============================================================================

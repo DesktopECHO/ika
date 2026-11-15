@@ -227,7 +227,7 @@ game_apps = com.example.game
 | `gfxstream_vulkan` | `auto` | Vulkan in the `gfxstream` mode. `--gfxstream_vulkan=`, `GFXSTREAM_VULKAN` |
 | `host_cached_memory` | `off` | Cached host memory for Vulkan uploads. `--host_cached_memory=`, `IKA_HOST_CACHED_MEMORY` |
 | `hw_video_decode` | `auto` | VA-API video decoding. `--hw_video_decode=`, `IKA_HW_VIDEO_DECODE` |
-| `gpu_renderer_features` | `MinimalLogging:disabled;VulkanBatchedDescriptorSetUpdate:disabled` | gfxstream renderer features, separated by semicolons |
+| `gpu_renderer_features` | empty | gfxstream renderer features to turn on or off, as `Name:enabled` or `Name:disabled` separated by semicolons |
 | `gpu_vhost_user_mode`, `enable_gpu_udmabuf`, `use_cvdalloc` | `auto`, `true`, `true` | Cuttlefish options |
 
 ### [lowcpu]
