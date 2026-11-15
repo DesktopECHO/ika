@@ -27,6 +27,7 @@ external/minigbm patches/external-minigbm.patch
 external/minigbm patches/external-minigbm-gfxstream-no-forced-linear.patch
 external/minigbm patches/external-minigbm-virtgpu-param-numbers.patch
 external/minigbm patches/external-minigbm-upstream-hardening.patch
+external/minigbm patches/external-minigbm-cross-domain-guest-copy.patch
 external/deqp-deps/glslang patches/external-deqp-deps-glslang-validator-host.patch
 external/venus-protocol patches/external-venus-protocol-android-build.patch
 external/venus-protocol patches/external-venus-protocol-reply-size-init.patch
@@ -36,6 +37,7 @@ external/mesa3d patches/external-mesa3d-gfxstream-descriptor-deepcopy-filter.pat
 external/mesa3d patches/external-mesa3d-trace-hex-table.patch
 external/mesa3d patches/external-mesa3d-venus-queue-family-pnext.patch
 external/mesa3d patches/external-mesa3d-venus-yv12-ahb.patch
+external/mesa3d patches/external-mesa3d-venus-opaque-android-buffers.patch
 external/mesa3d patches/external-mesa3d-gfxstream-unknown-image-view-filter.patch
 external/angle patches/external-angle-unbound-image-unit-handles.patch
 external/angle patches/external-angle-honeykrisp-not-lavapipe.patch

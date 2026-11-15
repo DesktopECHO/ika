@@ -1,0 +1,163 @@
+venus: share Android buffers as optimal images on an opaque-fd renderer
+
+Generated-by: LLM
+
+--- a/src/virtio/vulkan/vn_android.c
++++ b/src/virtio/vulkan/vn_android.c
+@@ -20,9 +20,17 @@
+ #include "vn_device.h"
+ #include "vn_device_memory.h"
+ #include "vn_image.h"
++#include "vn_physical_device.h"
+ 
+ #define VN_MAX_PLANES 4
+ 
++static bool
++vn_android_opaque_buffers(const struct vn_device *dev)
++{
++   return dev->physical_device->external_memory.renderer_handle_type ==
++          VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
++}
++
+ static int
+ vn_android_gralloc_get_dma_buf_fd(const native_handle_t *handle)
+ {
+@@ -55,6 +63,19 @@
+ {
+    assert(vk_find_struct_const(create_info->pNext, NATIVE_BUFFER_ANDROID));
+ 
++   if (vn_android_opaque_buffers(dev)) {
++      VkExternalMemoryImageCreateInfo external_info = {
++         .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
++         .pNext = create_info->pNext,
++         .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
++      };
++      create_info->tiling = VK_IMAGE_TILING_OPTIMAL;
++      create_info->pNext = &external_info;
++      if (*out_img)
++         return vn_image_init_deferred(dev, create_info, *out_img);
++      return vn_image_create(dev, create_info, alloc, out_img);
++   }
++
+    VkImageDrmFormatModifierExplicitCreateInfoEXT mod_info;
+    VkSubresourceLayout layouts[VN_MAX_PLANES];
+    VkResult result = vk_android_get_anb_layout(create_info, &mod_info,
+@@ -150,6 +171,16 @@
+ 
+    assert(create_info);
+ 
++   if (vn_android_opaque_buffers(dev)) {
++      VkExternalMemoryImageCreateInfo external_info = {
++         .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
++         .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
++      };
++      create_info->tiling = VK_IMAGE_TILING_OPTIMAL;
++      __vk_append_struct(create_info, &external_info);
++      return vn_image_init_deferred(dev, create_info, img);
++   }
++
+    VkImageDrmFormatModifierExplicitCreateInfoEXT mod_info;
+    VkSubresourceLayout layouts[VN_MAX_PLANES];
+    result = vk_android_get_ahb_layout(ahb, &mod_info, layouts, VN_MAX_PLANES);
+--- a/src/virtio/vulkan/vn_command_buffer.c
++++ b/src/virtio/vulkan/vn_command_buffer.c
+@@ -199,6 +199,16 @@
+  * we are only interested in the ownership release or acquire respectively and
+  * should be careful to avoid double releases/acquires.
+  */
++static uint32_t
++vn_cmd_foreign_qfi(const struct vn_image *img)
++{
++   const struct vn_device *dev =
++      container_of(img->base.vk.base.device, struct vn_device, base.vk);
++   return dev->physical_device->renderer_extensions.EXT_queue_family_foreign
++             ? VK_QUEUE_FAMILY_FOREIGN_EXT
++             : VK_QUEUE_FAMILY_EXTERNAL;
++}
++
+ static struct vn_cmd_fix_image_memory_barrier_result
+ vn_cmd_fix_image_memory_barrier_common(const struct vn_image *img,
+                                        uint32_t cmd_pool_qfi,
+@@ -235,10 +245,10 @@
+       result.external_acquire_unmodified = true;
+ 
+       if (img->base.vk.sharing_mode == VK_SHARING_MODE_CONCURRENT) {
+-         *src_qfi = VK_QUEUE_FAMILY_FOREIGN_EXT;
++         *src_qfi = vn_cmd_foreign_qfi(img);
+          *dst_qfi = VK_QUEUE_FAMILY_IGNORED;
+       } else if (*dst_qfi == *src_qfi || *dst_qfi == cmd_pool_qfi) {
+-         *src_qfi = VK_QUEUE_FAMILY_FOREIGN_EXT;
++         *src_qfi = vn_cmd_foreign_qfi(img);
+          *dst_qfi = cmd_pool_qfi;
+       } else {
+          /* The barrier also defines a queue family ownership transfer, and
+@@ -256,10 +266,10 @@
+ 
+       if (img->base.vk.sharing_mode == VK_SHARING_MODE_CONCURRENT) {
+          *src_qfi = VK_QUEUE_FAMILY_IGNORED;
+-         *dst_qfi = VK_QUEUE_FAMILY_FOREIGN_EXT;
++         *dst_qfi = vn_cmd_foreign_qfi(img);
+       } else if (*src_qfi == *dst_qfi || *src_qfi == cmd_pool_qfi) {
+          *src_qfi = cmd_pool_qfi;
+-         *dst_qfi = VK_QUEUE_FAMILY_FOREIGN_EXT;
++         *dst_qfi = vn_cmd_foreign_qfi(img);
+       } else {
+          /* The barrier also defines a queue family ownership transfer, and
+           * this is the one that gets submitted to the destination queue
+--- a/src/virtio/vulkan/vn_physical_device.c
++++ b/src/virtio/vulkan/vn_physical_device.c
+@@ -1100,6 +1100,14 @@
+          VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+ #endif
+    }
++#ifdef VK_USE_PLATFORM_ANDROID_KHR
++   else if (physical_dev->renderer_extensions.KHR_external_memory_fd) {
++      physical_dev->external_memory.renderer_handle_type =
++         VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
++      physical_dev->external_memory.supported_handle_types |=
++         VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
++   }
++#endif
+ }
+ 
+ static void
+@@ -1170,9 +1178,12 @@
+       exts->KHR_external_semaphore_fd = true;
+ 
+ #ifdef VK_USE_PLATFORM_ANDROID_KHR
+-   if (physical_dev->external_memory.renderer_handle_type &&
+-       renderer_exts->EXT_image_drm_format_modifier &&
+-       renderer_exts->EXT_queue_family_foreign) {
++   if ((physical_dev->external_memory.renderer_handle_type ==
++           VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT &&
++        renderer_exts->EXT_image_drm_format_modifier &&
++        renderer_exts->EXT_queue_family_foreign) ||
++       physical_dev->external_memory.renderer_handle_type ==
++          VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT) {
+       exts->ANDROID_external_memory_android_hardware_buffer = true;
+       exts->ANDROID_native_buffer = true;
+    }
+--- a/src/virtio/vulkan/vn_renderer_virtgpu.c
++++ b/src/virtio/vulkan/vn_renderer_virtgpu.c
+@@ -570,7 +570,10 @@
+    size_t mmap_size = 0;
+    if (info.blob_mem) {
+       /* must be VIRTGPU_BLOB_MEM_HOST3D or VIRTGPU_BLOB_MEM_GUEST_VRAM */
+-      if (info.blob_mem != gpu->bo_blob_mem) {
++      const bool host3d_guest =
++         info.blob_mem == VIRTGPU_BLOB_MEM_HOST3D_GUEST &&
++         gpu->bo_blob_mem == VIRTGPU_BLOB_MEM_HOST3D;
++      if (info.blob_mem != gpu->bo_blob_mem && !host3d_guest) {
+          vn_log(gpu->instance,
+                 "dma-buf import failed: info.blob_mem(%u) != "
+                 "gpu->bo_blob_mem(%u)",
+@@ -578,7 +581,8 @@
+          goto fail;
+       }
+ 
+-      blob_flags |= virtgpu_bo_blob_flags(gpu, flags, 0);
++      if (!host3d_guest)
++         blob_flags |= virtgpu_bo_blob_flags(gpu, flags, 0);
+ 
+       /* mmap_size is only used when mappable */
+       mmap_size = 0;

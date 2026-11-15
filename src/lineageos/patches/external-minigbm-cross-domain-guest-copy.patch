@@ -1,0 +1,133 @@
+Patch summary:
+On the cross-domain backend, a buffer used by both the GPU and the CPU whose
+host memory the guest cannot map (map_info without a caching mode: an optimal
+image under WSL2's Direct3D 12) is created as VIRTGPU_BLOB_MEM_HOST3D_GUEST
+and marked in its tiling. Locking it copies the locked rectangle from the host
+into the guest pages, and unlocking it after a write copies it back, each
+waiting for the copy. Screenshots and task snapshots then work on Venus under
+WSL2, where system_server died locking such a buffer.
+
+--- a/virtgpu_cross_domain.c
++++ b/virtgpu_cross_domain.c
+@@ -366,6 +366,22 @@
+ 	cross_domain_release_private(drv);
+ }
+ 
++/*
++ * Set in a buffer's tiling, which its handle carries to every process that
++ * imports it, when the host keeps the buffer in memory the guest cannot map
++ * (an optimal image under WSL2's Direct3D 12, whose map_info has no caching
++ * mode). The guest then keeps a copy of a buffer it reads or writes in guest
++ * pages (VIRTGPU_BLOB_MEM_HOST3D_GUEST), copied from the host when it is
++ * locked and to the host when it is unlocked.
++ */
++#define CROSS_DOMAIN_TILING_GUEST_COPY (1u << 0)
++
++static bool cross_domain_bo_needs_guest_copy(struct bo *bo)
++{
++	return !params[param_create_guest_handle].value && (bo->meta.use_flags & BO_USE_SW_MASK) &&
++	       (bo->meta.use_flags & BO_USE_HW_MASK) && !(bo->meta.map_info & 0x0f);
++}
++
+ static int cross_domain_bo_create_locked(struct bo *bo, uint32_t width, uint32_t height,
+ 					 uint32_t format, uint64_t use_flags)
+ {
+@@ -394,7 +410,10 @@
+ 		/// other.  For now, just prefer guest memory since adding that feature is more
+ 		/// involved (requires --udmabuf flag to crosvm), so developers would likely test
+ 		/// that.
+-		if (params[param_create_guest_handle].value) {
++		if (cross_domain_bo_needs_guest_copy(bo)) {
++			drm_rc_blob.blob_mem = VIRTGPU_BLOB_MEM_HOST3D_GUEST;
++			bo->meta.tiling |= CROSS_DOMAIN_TILING_GUEST_COPY;
++		} else if (params[param_create_guest_handle].value) {
+ 			drm_rc_blob.blob_mem = VIRTGPU_BLOB_MEM_GUEST;
+ 			blob_flags |= VIRTGPU_BLOB_FLAG_CREATE_GUEST_HANDLE;
+ 		} else if (params[param_host_visible].value) {
+@@ -457,6 +476,73 @@
+ 		    gem_map.offset);
+ }
+ 
++static int cross_domain_bo_import(struct bo *bo, struct drv_import_fd_data *data)
++{
++	int ret = drv_prime_bo_import(bo, data);
++	if (!ret)
++		bo->meta.tiling = data->tiling;
++	return ret;
++}
++
++static int cross_domain_bo_invalidate(struct bo *bo, struct mapping *mapping)
++{
++	struct drm_virtgpu_3d_transfer_from_host xfer = { 0 };
++	struct drm_virtgpu_3d_wait waitcmd = { 0 };
++
++	if (!(bo->meta.tiling & CROSS_DOMAIN_TILING_GUEST_COPY))
++		return 0;
++
++	xfer.bo_handle = mapping->vma->handle;
++	xfer.box.x = mapping->rect.x;
++	xfer.box.y = mapping->rect.y;
++	xfer.box.w = mapping->rect.width;
++	xfer.box.h = mapping->rect.height;
++	xfer.box.d = 1;
++	if (drmIoctl(bo->drv->fd, DRM_IOCTL_VIRTGPU_TRANSFER_FROM_HOST, &xfer)) {
++		drv_loge("DRM_IOCTL_VIRTGPU_TRANSFER_FROM_HOST failed with %s\n", strerror(errno));
++		return -errno;
++	}
++
++	/* The copy must be in the guest pages before the caller reads them. */
++	waitcmd.handle = mapping->vma->handle;
++	if (drmIoctl(bo->drv->fd, DRM_IOCTL_VIRTGPU_WAIT, &waitcmd)) {
++		drv_loge("DRM_IOCTL_VIRTGPU_WAIT failed with %s\n", strerror(errno));
++		return -errno;
++	}
++
++	return 0;
++}
++
++static int cross_domain_bo_flush(struct bo *bo, struct mapping *mapping)
++{
++	struct drm_virtgpu_3d_transfer_to_host xfer = { 0 };
++	struct drm_virtgpu_3d_wait waitcmd = { 0 };
++
++	if (!(bo->meta.tiling & CROSS_DOMAIN_TILING_GUEST_COPY) ||
++	    !(mapping->vma->map_flags & BO_MAP_WRITE))
++		return 0;
++
++	xfer.bo_handle = mapping->vma->handle;
++	xfer.box.x = mapping->rect.x;
++	xfer.box.y = mapping->rect.y;
++	xfer.box.w = mapping->rect.width;
++	xfer.box.h = mapping->rect.height;
++	xfer.box.d = 1;
++	if (drmIoctl(bo->drv->fd, DRM_IOCTL_VIRTGPU_TRANSFER_TO_HOST, &xfer)) {
++		drv_loge("DRM_IOCTL_VIRTGPU_TRANSFER_TO_HOST failed with %s\n", strerror(errno));
++		return -errno;
++	}
++
++	/* The host GPU reads the image as soon as the buffer is queued. */
++	waitcmd.handle = mapping->vma->handle;
++	if (drmIoctl(bo->drv->fd, DRM_IOCTL_VIRTGPU_WAIT, &waitcmd)) {
++		drv_loge("DRM_IOCTL_VIRTGPU_WAIT failed with %s\n", strerror(errno));
++		return -errno;
++	}
++
++	return 0;
++}
++
+ static void cross_domain_resolve_format_and_use_flags(struct driver *drv, uint32_t format,
+ 						      uint64_t use_flags, uint32_t *out_format,
+ 						      uint64_t *out_use_flags)
+@@ -498,9 +584,11 @@
+ 	.init = cross_domain_init,
+ 	.close = cross_domain_close,
+ 	.bo_create = cross_domain_bo_create,
+-	.bo_import = drv_prime_bo_import,
++	.bo_import = cross_domain_bo_import,
+ 	.bo_destroy = drv_gem_bo_destroy,
+ 	.bo_map = cross_domain_bo_map,
+ 	.bo_unmap = drv_bo_munmap,
++	.bo_invalidate = cross_domain_bo_invalidate,
++	.bo_flush = cross_domain_bo_flush,
+ 	.resolve_format_and_use_flags = cross_domain_resolve_format_and_use_flags,
+ };
