@@ -1,0 +1,1266 @@
+dzn: Emulate ETC2 and ASTC textures with the common decoders
+
+Generated-by: LLM
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index 9d1f306..28c88f4 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -4702,6 +4702,12 @@ dzn_CmdCopyBufferToImage2(VkCommandBuffer commandBuffer,
+                           const VkCopyBufferToImageInfo2 *info)
+ {
+    VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
++   VK_FROM_HANDLE(dzn_image, dst_image, info->dstImage);
++
++   if (dst_image->texcompress) {
++      dzn_cmd_buffer_texcompress_copy_buf2img(cmdbuf, info);
++      return;
++   }
+ 
+    for (int i = 0; i < info->regionCount; i++) {
+       const VkBufferImageCopy2 *region = info->pRegions + i;
+@@ -4718,6 +4724,12 @@ dzn_CmdCopyImageToBuffer2(VkCommandBuffer commandBuffer,
+                           const VkCopyImageToBufferInfo2 *info)
+ {
+    VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
++   VK_FROM_HANDLE(dzn_image, src_image, info->srcImage);
++
++   if (src_image->texcompress) {
++      dzn_cmd_buffer_texcompress_copy_img2buf(cmdbuf, info);
++      return;
++   }
+ 
+    for (int i = 0; i < info->regionCount; i++) {
+       const VkBufferImageCopy2 *region = info->pRegions + i;
+@@ -4739,6 +4751,11 @@ dzn_CmdCopyImage2(VkCommandBuffer commandBuffer,
+    VK_FROM_HANDLE(dzn_image, src, info->srcImage);
+    VK_FROM_HANDLE(dzn_image, dst, info->dstImage);
+ 
++   if (src->texcompress || dst->texcompress) {
++      dzn_cmd_buffer_texcompress_copy_img(cmdbuf, info);
++      return;
++   }
++
+    assert(src->vk.samples == dst->vk.samples);
+ 
+    bool requires_temp_res = false;
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index cd2dc35..ba01c9d 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -750,8 +750,8 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
+       .alphaToOne = false,
+       .multiViewport = false,
+       .samplerAnisotropy = true,
+-      .textureCompressionETC2 = false,
+-      .textureCompressionASTC_LDR = false,
++      .textureCompressionETC2 = pdev->emulate_etc2,
++      .textureCompressionASTC_LDR = pdev->emulate_astc,
+       .textureCompressionBC = true,
+       .occlusionQueryPrecise = true,
+       .pipelineStatisticsQuery = true,
+@@ -1303,6 +1303,10 @@ dzn_physical_device_create(struct vk_instance *instance,
+          }
+       }
+    }
++   pdev->emulate_etc2 = dzn_instance->drirc.features.require_etc2;
++#ifdef DZN_HAVE_ASTC_DECODER
++   pdev->emulate_astc = dzn_instance->drirc.features.require_astc;
++#endif
+    dzn_physical_device_get_features(pdev, &pdev->vk.supported_features);
+    dzn_physical_device_get_properties(pdev, &pdev->vk.properties);
+ 
+@@ -1419,6 +1423,17 @@ dzn_physical_device_get_format_properties(struct dzn_physical_device *pdev,
+       vk_debug_ignored_stype(sType);
+    }
+ 
++   if (dzn_format_is_emulated(pdev, format)) {
++      *base_props = (VkFormatProperties) {
++         .optimalTilingFeatures = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
++                                  VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
++                                  VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
++                                  VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
++                                  VK_FORMAT_FEATURE_BLIT_SRC_BIT,
++      };
++      return;
++   }
++
+    if (dfmt_info.Format == DXGI_FORMAT_UNKNOWN) {
+       if (dzn_graphics_pipeline_patch_vi_format(format) != format)
+          *base_props = (VkFormatProperties){
+@@ -1564,6 +1579,17 @@ dzn_physical_device_get_image_format_properties(struct dzn_physical_device *pdev
+       }
+    }
+ 
++   if (dzn_format_is_emulated(pdev, info->format) &&
++       (info->type != VK_IMAGE_TYPE_2D ||
++        info->tiling != VK_IMAGE_TILING_OPTIMAL ||
++        (usage & ~(VK_IMAGE_USAGE_SAMPLED_BIT |
++                   VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
++                   VK_IMAGE_USAGE_TRANSFER_DST_BIT)) ||
++        (info->flags & (VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT |
++                        VK_IMAGE_CREATE_SPARSE_BINDING_BIT)) ||
++        (external_info && external_info->handleType != 0)))
++      return VK_ERROR_FORMAT_NOT_SUPPORTED;
++
+    if (external_info && external_info->handleType != 0) {
+       const VkExternalMemoryHandleTypeFlags d3d12_resource_handle_types =
+          VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT | opaque_external_flag;
+@@ -2423,6 +2449,7 @@ dzn_device_destroy(struct dzn_device *device, const VkAllocationCallbacks *pAllo
+    }
+ 
+    dzn_device_query_finish(device);
++   dzn_device_texcompress_finish(device);
+    dzn_meta_finish(device);
+ 
+    dzn_foreach_pool_type(type) {
+@@ -2610,6 +2637,8 @@ dzn_device_create(struct dzn_physical_device *pdev,
+ 
+    IUnknown_QueryInterface(device->dev, &IID_ID3D12DeviceConfiguration, (void **)&device->dev_config);
+ 
++   dzn_device_texcompress_init(device);
++
+    result = dzn_meta_init(device);
+    if (result != VK_SUCCESS) {
+       dzn_device_destroy(device, pAllocator);
+diff --git a/src/microsoft/vulkan/dzn_drirc_gen.py b/src/microsoft/vulkan/dzn_drirc_gen.py
+index 2155684..e261f52 100644
+--- a/src/microsoft/vulkan/dzn_drirc_gen.py
++++ b/src/microsoft/vulkan/dzn_drirc_gen.py
+@@ -7,6 +7,8 @@ import sys
+ 
+ VALID_COMMON_VK_OPTIONS = {
+     "force_vk_devicename",
++    "vk_require_etc2",
++    "vk_require_astc",
+ }
+ 
+ 
+@@ -27,9 +29,14 @@ def declare_options():
+           c_name="disable"),
+     ]
+ 
+-    drirc_gen.add_common_vk_options(debug_options, [], [], valid_options=VALID_COMMON_VK_OPTIONS)
++    features_options = []
+ 
+-    return [drirc_gen.DrircSection("Debugging", debug_options, c_name="debug")]
++    drirc_gen.add_common_vk_options(debug_options, features_options, [], valid_options=VALID_COMMON_VK_OPTIONS)
++
++    return [
++        drirc_gen.DrircSection("Debugging", debug_options, c_name="debug"),
++        drirc_gen.DrircSection("Features", features_options, c_name="features"),
++    ]
+ 
+ 
+ def main():
+diff --git a/src/microsoft/vulkan/dzn_image.c b/src/microsoft/vulkan/dzn_image.c
+index 5b14cff..821f8a7 100644
+--- a/src/microsoft/vulkan/dzn_image.c
++++ b/src/microsoft/vulkan/dzn_image.c
+@@ -55,6 +55,8 @@ dzn_image_destroy(struct dzn_image *image,
+ 
+    struct dzn_device *device = container_of(image->vk.base.device, struct dzn_device, vk);
+ 
++   dzn_image_texcompress_finish(device, image);
++
+    if (image->res)
+       ID3D12Resource_Release(image->res);
+ 
+@@ -115,6 +117,10 @@ dzn_image_create(struct dzn_device *device,
+    vk_image_init(&device->vk, &image->vk, pCreateInfo);
+    enum pipe_format pfmt = vk_format_to_pipe_format(image->vk.format);
+ 
++   const bool emulated = dzn_format_is_emulated(pdev, image->vk.format);
++   if (emulated)
++      image->vk.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
++
+    VkImageUsageFlags usage = image->vk.usage | image->vk.stencil_usage;
+ 
+    image->castable_formats = castable_formats;
+@@ -203,10 +209,14 @@ dzn_image_create(struct dzn_device *device,
+          (pCreateInfo->samples > 1 ? D3D12_BARRIER_ACCESS_RESOLVE_SOURCE : 0);
+    }
+ 
+-   if ((image->vk.create_flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) &&
+-       !pdev->options12.RelaxedFormatCastingSupported)
++   if (((image->vk.create_flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) &&
++        !pdev->options12.RelaxedFormatCastingSupported) ||
++       emulated)
+       image->desc.Format = dzn_get_typeless_dxgi_format(image->desc.Format);
+ 
++   if (emulated)
++      image->castable_format_count = 0;
++
+    if (image->desc.SampleDesc.Count > 1)
+       image->desc.Alignment = D3D12_DEFAULT_MSAA_RESOURCE_PLACEMENT_ALIGNMENT;
+    else
+@@ -265,6 +275,14 @@ dzn_image_create(struct dzn_device *device,
+        image->desc.SampleDesc.Count == 1)
+       image->desc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
+ 
++   if (emulated) {
++      VkResult result = dzn_image_texcompress_init(device, image);
++      if (result != VK_SUCCESS) {
++         dzn_image_destroy(image, pAllocator);
++         return vk_error(device, result);
++      }
++   }
++
+    *out = dzn_image_to_handle(image);
+    return VK_SUCCESS;
+ }
+@@ -275,6 +293,9 @@ dzn_image_get_dxgi_format(const struct dzn_physical_device *pdev,
+                           VkImageUsageFlags usage,
+                           VkImageAspectFlags aspects)
+ {
++   if (pdev && dzn_format_is_emulated(pdev, format))
++      format = dzn_format_get_emulation_format(format);
++
+    enum pipe_format pfmt = vk_format_to_pipe_format(format);
+ 
+    if (pdev && !pdev->support_a4b4g4r4) {
+@@ -863,6 +884,12 @@ dzn_BindImageMemory2(VkDevice dev,
+       }
+       if (FAILED(hres))
+          return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
++
++      if (image->texcompress) {
++         VkResult result = dzn_image_texcompress_bind(device, image);
++         if (result != VK_SUCCESS)
++            return vk_error(device, result);
++      }
+    }
+ 
+    return VK_SUCCESS;
+diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
+index d9194aa..c6c53e6 100644
+--- a/src/microsoft/vulkan/dzn_pipeline.c
++++ b/src/microsoft/vulkan/dzn_pipeline.c
+@@ -239,6 +239,7 @@ struct dzn_nir_options {
+    bool lower_view_index_to_rt_layer;
+    enum pipe_format *vi_conversions;
+    const nir_shader_compiler_options *nir_opts;
++   bool drop_3d_image_access;
+ };
+ 
+ static bool
+@@ -310,6 +311,9 @@ dzn_pipeline_get_nir_shader(struct dzn_device *device,
+    if (result != VK_SUCCESS)
+       return result;
+ 
++   if (options->drop_3d_image_access)
++      NIR_PASS(_, *nir, dzn_nir_drop_3d_image_access);
++
+    struct dxil_spirv_runtime_conf conf = {
+       .runtime_data_cbv = {
+          .register_space = DZN_REGISTER_SPACE_SYSVALS,
+@@ -2936,6 +2940,7 @@ dzn_compute_pipeline_compile_shader(struct dzn_device *device,
+    uint8_t spirv_hash[BLAKE3_KEY_LEN], pipeline_hash[BLAKE3_KEY_LEN], nir_hash[BLAKE3_KEY_LEN];
+    VkResult ret = VK_SUCCESS;
+    nir_shader *nir = NULL;
++   const bool drop_3d_image_access = dzn_device_is_texcompress_layout(device, info->layout);
+ 
+    if (cache) {
+       blake3_hasher pipeline_hash_ctx;
+@@ -2943,6 +2948,7 @@ dzn_compute_pipeline_compile_shader(struct dzn_device *device,
+       _mesa_blake3_init(&pipeline_hash_ctx);
+       vk_pipeline_hash_shader_stage(pipeline->base.flags, &info->stage, NULL, spirv_hash);
+       _mesa_blake3_update(&pipeline_hash_ctx, &device->bindless, sizeof(device->bindless));
++      _mesa_blake3_update(&pipeline_hash_ctx, &drop_3d_image_access, sizeof(drop_3d_image_access));
+       _mesa_blake3_update(&pipeline_hash_ctx, spirv_hash, sizeof(spirv_hash));
+       _mesa_blake3_update(&pipeline_hash_ctx, layout->stages[MESA_SHADER_COMPUTE].hash,
+                         sizeof(layout->stages[MESA_SHADER_COMPUTE].hash));
+@@ -2970,6 +2976,7 @@ dzn_compute_pipeline_compile_shader(struct dzn_device *device,
+       _mesa_blake3_update(&nir_hash_ctx, &lowers_16bit, sizeof(lowers_16bit));
+       bool no_mediump16 = dzn_device_disables_mediump16(device);
+       _mesa_blake3_update(&nir_hash_ctx, &no_mediump16, sizeof(no_mediump16));
++      _mesa_blake3_update(&nir_hash_ctx, &drop_3d_image_access, sizeof(drop_3d_image_access));
+       _mesa_blake3_update(&nir_hash_ctx, spirv_hash, sizeof(spirv_hash));
+       _mesa_blake3_final(&nir_hash_ctx, nir_hash);
+    }
+@@ -2978,6 +2985,7 @@ dzn_compute_pipeline_compile_shader(struct dzn_device *device,
+    dxil_get_nir_compiler_options(&nir_opts, dzn_get_shader_model(pdev), supported_bit_sizes, supported_bit_sizes);
+    struct dzn_nir_options options = {
+       .nir_opts = &nir_opts,
++      .drop_3d_image_access = drop_3d_image_access,
+    };
+    struct dxil_spirv_metadata metadata = { 0 };
+    ret = dzn_pipeline_get_nir_shader(device, layout, cache, nir_hash,
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index b7a9cfa..1dcce86 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -41,6 +41,7 @@
+ #include "vk_sync_binary.h"
+ #include "vk_queue.h"
+ #include "vk_shader_module.h"
++#include "vk_texcompress_etc2.h"
+ #include "wsi_common.h"
+ 
+ #include "util/bitset.h"
+@@ -171,6 +172,9 @@ struct dzn_physical_device {
+    IUnknown *adapter;
+    struct dzn_physical_device_desc desc;
+ 
++   bool emulate_etc2;
++   bool emulate_astc;
++
+    uint32_t queue_family_count;
+    struct dzn_queue_family {
+       VkQueueFamilyProperties props;
+@@ -293,6 +297,13 @@ struct dzn_device {
+    } triangle_fan_index_buf;
+    struct dzn_meta_blits blits;
+ 
++   struct {
++      mtx_t lock;
++      struct vk_texcompress_etc2_state etc2;
++      struct vk_texcompress_astc_state *astc;
++      struct util_dynarray pools;
++   } texcompress;
++
+    /* Shared with the other devices on the same ID3D12Device. */
+    struct dzn_pso_cache *pso_cache;
+ 
+@@ -748,7 +759,7 @@ struct dzn_cmd_buffer_state {
+       struct dzn_cmd_buffer_push_constant_state gfx, compute;
+    } push_constant;
+    uint32_t dirty;
+-   struct {
++   struct dzn_cmd_buffer_bindpoint_state {
+       struct dzn_pipeline *pipeline;
+       ID3D12RootSignature *root_sig;
+       struct dzn_descriptor_state desc_state;
+@@ -1250,8 +1261,64 @@ struct dzn_image {
+    const DXGI_FORMAT *castable_formats;
+ 
+    D3D12_BARRIER_ACCESS valid_access;
++
++   struct dzn_image_texcompress *texcompress;
+ };
+ 
++struct dzn_image_texcompress_level {
++   VkImage blocks;
++   VkDeviceSize offset;
++   VkImageView src_view;
++   VkImageView dst_view;
++   VkDescriptorPool pool;
++   VkDescriptorSet set;
++};
++
++struct dzn_image_texcompress {
++   VkDeviceMemory mem;
++   uint32_t level_count;
++   struct dzn_image_texcompress_level levels[];
++};
++
++bool
++dzn_format_is_emulated(const struct dzn_physical_device *pdev, VkFormat format);
++
++VkFormat
++dzn_format_get_emulation_format(VkFormat format);
++
++bool
++dzn_device_is_texcompress_layout(const struct dzn_device *device, VkPipelineLayout layout);
++
++bool
++dzn_nir_drop_3d_image_access(nir_shader *nir);
++
++void
++dzn_device_texcompress_init(struct dzn_device *device);
++
++void
++dzn_device_texcompress_finish(struct dzn_device *device);
++
++VkResult
++dzn_image_texcompress_init(struct dzn_device *device, struct dzn_image *image);
++
++void
++dzn_image_texcompress_finish(struct dzn_device *device, struct dzn_image *image);
++
++VkResult
++dzn_image_texcompress_bind(struct dzn_device *device, struct dzn_image *image);
++
++void
++dzn_cmd_buffer_texcompress_copy_buf2img(struct dzn_cmd_buffer *cmdbuf,
++                                        const VkCopyBufferToImageInfo2 *info);
++
++void
++dzn_cmd_buffer_texcompress_copy_img2buf(struct dzn_cmd_buffer *cmdbuf,
++                                        const VkCopyImageToBufferInfo2 *info);
++
++void
++dzn_cmd_buffer_texcompress_copy_img(struct dzn_cmd_buffer *cmdbuf,
++                                    const VkCopyImageInfo2 *info);
++
+ bool
+ dzn_image_formats_are_compatible(const struct dzn_device *device,
+                                  VkFormat orig_fmt, VkFormat new_fmt,
+diff --git a/src/microsoft/vulkan/dzn_texcompress.c b/src/microsoft/vulkan/dzn_texcompress.c
+new file mode 100644
+index 0000000..b1cf51f
+--- /dev/null
++++ b/src/microsoft/vulkan/dzn_texcompress.c
+@@ -0,0 +1,840 @@
++/*
++ * SPDX-License-Identifier: MIT
++ */
++
++#include "dzn_private.h"
++
++#include "nir_builder.h"
++#include "nir_to_dxil.h"
++#include "vk_format.h"
++#include "vk_texcompress_astc.h"
++#include "vk_texcompress_etc2.h"
++
++#include "util/u_math.h"
++
++static bool
++dzn_format_is_astc(VkFormat format)
++{
++   return vk_texcompress_astc_emulation_format(format) != VK_FORMAT_UNDEFINED;
++}
++
++bool
++dzn_format_is_emulated(const struct dzn_physical_device *pdev, VkFormat format)
++{
++   if (pdev->emulate_etc2 && vk_texcompress_etc2_emulation_format(format) != VK_FORMAT_UNDEFINED)
++      return true;
++
++   return pdev->emulate_astc && dzn_format_is_astc(format);
++}
++
++VkFormat
++dzn_format_get_emulation_format(VkFormat format)
++{
++   if (dzn_format_is_astc(format))
++      return vk_texcompress_astc_emulation_format(format);
++
++   return vk_texcompress_etc2_emulation_format(format);
++}
++
++bool
++dzn_device_is_texcompress_layout(const struct dzn_device *device, VkPipelineLayout layout)
++{
++   if (layout == VK_NULL_HANDLE)
++      return false;
++
++   if (layout == device->texcompress.etc2.pipeline_layout)
++      return true;
++
++#ifdef DZN_HAVE_ASTC_DECODER
++   if (device->texcompress.astc && layout == device->texcompress.astc->p_layout)
++      return true;
++#endif
++
++   return false;
++}
++
++static bool
++dzn_drop_3d_image_access(nir_builder *b, nir_instr *instr, void *data)
++{
++   if (instr->type == nir_instr_type_tex) {
++      nir_tex_instr *tex = nir_instr_as_tex(instr);
++
++      if (tex->sampler_dim != GLSL_SAMPLER_DIM_3D)
++         return false;
++
++      b->cursor = nir_before_instr(instr);
++      nir_def_replace(&tex->def, nir_undef(b, tex->def.num_components, tex->def.bit_size));
++      return true;
++   }
++
++   if (instr->type != nir_instr_type_intrinsic)
++      return false;
++
++   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
++
++   if (!nir_intrinsic_has_image_dim(intr) ||
++       nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_3D)
++      return false;
++
++   if (nir_intrinsic_infos[intr->intrinsic].has_dest) {
++      b->cursor = nir_before_instr(instr);
++      nir_def_replace(&intr->def, nir_undef(b, intr->def.num_components, intr->def.bit_size));
++   } else {
++      nir_instr_remove(instr);
++   }
++
++   return true;
++}
++
++bool
++dzn_nir_drop_3d_image_access(nir_shader *nir)
++{
++   bool progress = nir_shader_instructions_pass(nir, dzn_drop_3d_image_access,
++                                                nir_metadata_control_flow, NULL);
++
++   if (progress) {
++      NIR_PASS(_, nir, nir_opt_dce);
++      NIR_PASS(_, nir, nir_remove_dead_variables, nir_var_uniform | nir_var_image, NULL);
++   }
++
++   return progress;
++}
++
++static VkFormat
++dzn_texcompress_store_format(VkFormat format)
++{
++   if (dzn_format_is_astc(format))
++      return VK_FORMAT_R8G8B8A8_UINT;
++
++   return vk_texcompress_etc2_store_format(format);
++}
++
++void
++dzn_device_texcompress_init(struct dzn_device *device)
++{
++   mtx_init(&device->texcompress.lock, mtx_plain);
++   util_dynarray_init(&device->texcompress.pools, NULL);
++   device->texcompress.etc2.allocator = &device->vk.alloc;
++   device->texcompress.etc2.nir_options = dxil_get_base_nir_compiler_options();
++   device->texcompress.etc2.pipeline_cache = VK_NULL_HANDLE;
++   vk_texcompress_etc2_init(&device->vk, &device->texcompress.etc2);
++}
++
++void
++dzn_device_texcompress_finish(struct dzn_device *device)
++{
++   const struct vk_device_dispatch_table *disp = &device->vk.dispatch_table;
++   VkDevice dev = dzn_device_to_handle(device);
++
++   util_dynarray_foreach(&device->texcompress.pools, VkDescriptorPool, pool)
++      disp->DestroyDescriptorPool(dev, *pool, NULL);
++   util_dynarray_fini(&device->texcompress.pools);
++
++#ifdef DZN_HAVE_ASTC_DECODER
++   if (device->texcompress.astc)
++      vk_texcompress_astc_finish(&device->vk, &device->vk.alloc, device->texcompress.astc);
++#endif
++
++   vk_texcompress_etc2_finish(&device->vk, &device->texcompress.etc2);
++   mtx_destroy(&device->texcompress.lock);
++}
++
++static VkResult
++dzn_texcompress_prepare_locked(struct dzn_device *device, VkFormat format)
++{
++   if (!dzn_format_is_astc(format))
++      return vk_texcompress_etc2_late_init(&device->vk, false, &device->texcompress.etc2);
++
++#ifdef DZN_HAVE_ASTC_DECODER
++   if (!device->texcompress.astc) {
++      VkResult result =
++         vk_texcompress_astc_init(&device->vk, &device->vk.alloc, VK_NULL_HANDLE,
++                                  &device->texcompress.astc,
++                                  vk_texcompress_astc_default_params(&device->vk));
++      if (result != VK_SUCCESS) {
++         if (device->texcompress.astc)
++            vk_texcompress_astc_finish(&device->vk, &device->vk.alloc, device->texcompress.astc);
++         device->texcompress.astc = NULL;
++         return result;
++      }
++   }
++
++   if (!vk_texcompress_astc_get_decode_pipeline(&device->vk, &device->vk.alloc,
++                                                device->texcompress.astc,
++                                                VK_NULL_HANDLE, format))
++      return VK_ERROR_INITIALIZATION_FAILED;
++
++   return VK_SUCCESS;
++#else
++   return VK_ERROR_FORMAT_NOT_SUPPORTED;
++#endif
++}
++
++static VkResult
++dzn_texcompress_alloc_set_locked(struct dzn_device *device,
++                                 VkDescriptorSetLayout layout,
++                                 VkDescriptorPool *out_pool,
++                                 VkDescriptorSet *out_set)
++{
++   const struct vk_device_dispatch_table *disp = &device->vk.dispatch_table;
++   VkDevice dev = dzn_device_to_handle(device);
++   VkDescriptorSetAllocateInfo info = {
++      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
++      .descriptorSetCount = 1,
++      .pSetLayouts = &layout,
++   };
++
++   util_dynarray_foreach(&device->texcompress.pools, VkDescriptorPool, pool) {
++      info.descriptorPool = *pool;
++      if (disp->AllocateDescriptorSets(dev, &info, out_set) == VK_SUCCESS) {
++         *out_pool = *pool;
++         return VK_SUCCESS;
++      }
++   }
++
++   const uint32_t max_sets = 256;
++   const VkDescriptorPoolSize sizes[] = {
++      { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, max_sets },
++      { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, max_sets },
++      { VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, max_sets * 6 },
++   };
++   const VkDescriptorPoolCreateInfo pool_info = {
++      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
++      .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
++      .maxSets = max_sets,
++      .poolSizeCount = ARRAY_SIZE(sizes),
++      .pPoolSizes = sizes,
++   };
++   VkDescriptorPool pool;
++   VkResult result = disp->CreateDescriptorPool(dev, &pool_info, NULL, &pool);
++   if (result != VK_SUCCESS)
++      return result;
++
++   util_dynarray_append_typed(&device->texcompress.pools, VkDescriptorPool, pool);
++
++   info.descriptorPool = pool;
++   result = disp->AllocateDescriptorSets(dev, &info, out_set);
++   if (result == VK_SUCCESS)
++      *out_pool = pool;
++
++   return result;
++}
++
++VkResult
++dzn_image_texcompress_init(struct dzn_device *device, struct dzn_image *image)
++{
++   const struct dzn_physical_device *pdev =
++      container_of(device->vk.physical, struct dzn_physical_device, vk);
++   const struct vk_device_dispatch_table *disp = &device->vk.dispatch_table;
++   VkDevice dev = dzn_device_to_handle(device);
++   const VkFormat format = image->vk.format;
++   const VkFormat block_format = vk_texcompress_etc2_load_format(format);
++   const uint32_t bw = vk_format_get_blockwidth(format);
++   const uint32_t bh = vk_format_get_blockheight(format);
++
++   mtx_lock(&device->texcompress.lock);
++   VkResult result = dzn_texcompress_prepare_locked(device, format);
++   mtx_unlock(&device->texcompress.lock);
++   if (result != VK_SUCCESS)
++      return result;
++
++   struct dzn_image_texcompress *tc =
++      vk_zalloc(&device->vk.alloc,
++                sizeof(*tc) + image->vk.mip_levels * sizeof(tc->levels[0]), 8,
++                VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
++   if (!tc)
++      return VK_ERROR_OUT_OF_HOST_MEMORY;
++
++   image->texcompress = tc;
++   tc->level_count = image->vk.mip_levels;
++
++   VkDeviceSize size = 0;
++   uint32_t type_bits = UINT32_MAX;
++
++   for (uint32_t l = 0; l < tc->level_count; l++) {
++      struct dzn_image_texcompress_level *lvl = &tc->levels[l];
++      const VkImageCreateInfo info = {
++         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
++         .imageType = VK_IMAGE_TYPE_2D,
++         .format = block_format,
++         .extent = {
++            .width = DIV_ROUND_UP(u_minify(image->vk.extent.width, l), bw),
++            .height = DIV_ROUND_UP(u_minify(image->vk.extent.height, l), bh),
++            .depth = 1,
++         },
++         .mipLevels = 1,
++         .arrayLayers = image->vk.array_layers,
++         .samples = VK_SAMPLE_COUNT_1_BIT,
++         .tiling = VK_IMAGE_TILING_OPTIMAL,
++         .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
++                  VK_IMAGE_USAGE_TRANSFER_DST_BIT |
++                  VK_IMAGE_USAGE_SAMPLED_BIT,
++         .sharingMode = VK_SHARING_MODE_CONCURRENT,
++         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
++      };
++
++      result = disp->CreateImage(dev, &info, NULL, &lvl->blocks);
++      if (result != VK_SUCCESS)
++         return result;
++
++      VkMemoryRequirements2 reqs = {
++         .sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2,
++      };
++      disp->GetImageMemoryRequirements2(dev,
++                                        &(VkImageMemoryRequirementsInfo2) {
++                                           .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2,
++                                           .image = lvl->blocks,
++                                        },
++                                        &reqs);
++
++      lvl->offset = align64(size, reqs.memoryRequirements.alignment);
++      size = lvl->offset + reqs.memoryRequirements.size;
++      type_bits &= reqs.memoryRequirements.memoryTypeBits;
++   }
++
++   uint32_t type_index = UINT32_MAX;
++   for (uint32_t i = 0; i < pdev->memory.memoryTypeCount; i++) {
++      if (!(type_bits & BITFIELD_BIT(i)))
++         continue;
++      if (type_index == UINT32_MAX)
++         type_index = i;
++      if (pdev->memory.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
++         type_index = i;
++         break;
++      }
++   }
++   if (type_index == UINT32_MAX)
++      return VK_ERROR_OUT_OF_DEVICE_MEMORY;
++
++   const VkMemoryAllocateInfo alloc_info = {
++      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
++      .allocationSize = size,
++      .memoryTypeIndex = type_index,
++   };
++   result = disp->AllocateMemory(dev, &alloc_info, NULL, &tc->mem);
++   if (result != VK_SUCCESS)
++      return result;
++
++   for (uint32_t l = 0; l < tc->level_count; l++) {
++      struct dzn_image_texcompress_level *lvl = &tc->levels[l];
++      const VkBindImageMemoryInfo bind_info = {
++         .sType = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO,
++         .image = lvl->blocks,
++         .memory = tc->mem,
++         .memoryOffset = lvl->offset,
++      };
++
++      result = disp->BindImageMemory2(dev, 1, &bind_info);
++      if (result != VK_SUCCESS)
++         return result;
++
++      const VkImageViewCreateInfo view_info = {
++         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
++         .image = lvl->blocks,
++         .viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY,
++         .format = block_format,
++         .subresourceRange = {
++            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
++            .levelCount = 1,
++            .layerCount = image->vk.array_layers,
++         },
++      };
++
++      result = disp->CreateImageView(dev, &view_info, NULL, &lvl->src_view);
++      if (result != VK_SUCCESS)
++         return result;
++   }
++
++   return VK_SUCCESS;
++}
++
++VkResult
++dzn_image_texcompress_bind(struct dzn_device *device, struct dzn_image *image)
++{
++   const struct vk_device_dispatch_table *disp = &device->vk.dispatch_table;
++   VkDevice dev = dzn_device_to_handle(device);
++   struct dzn_image_texcompress *tc = image->texcompress;
++   const VkFormat format = image->vk.format;
++   VkDescriptorSetLayout layout = device->texcompress.etc2.ds_layout;
++
++#ifdef DZN_HAVE_ASTC_DECODER
++   if (dzn_format_is_astc(format))
++      layout = device->texcompress.astc->ds_layout;
++#endif
++
++   for (uint32_t l = 0; l < tc->level_count; l++) {
++      struct dzn_image_texcompress_level *lvl = &tc->levels[l];
++
++      if (lvl->dst_view)
++         continue;
++
++      const VkImageViewUsageCreateInfo usage_info = {
++         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO,
++         .usage = VK_IMAGE_USAGE_STORAGE_BIT,
++      };
++      const VkImageViewCreateInfo view_info = {
++         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
++         .pNext = &usage_info,
++         .image = dzn_image_to_handle(image),
++         .viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY,
++         .format = dzn_texcompress_store_format(format),
++         .subresourceRange = {
++            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
++            .baseMipLevel = l,
++            .levelCount = 1,
++            .layerCount = image->vk.array_layers,
++         },
++      };
++
++      VkResult result = disp->CreateImageView(dev, &view_info, NULL, &lvl->dst_view);
++      if (result != VK_SUCCESS)
++         return result;
++
++      mtx_lock(&device->texcompress.lock);
++      result = dzn_texcompress_alloc_set_locked(device, layout, &lvl->pool, &lvl->set);
++      mtx_unlock(&device->texcompress.lock);
++      if (result != VK_SUCCESS)
++         return result;
++
++#ifdef DZN_HAVE_ASTC_DECODER
++      if (dzn_format_is_astc(format)) {
++         struct vk_texcompress_astc_write_descriptor_set writes;
++
++         vk_texcompress_astc_fill_write_descriptor_sets(device->texcompress.astc, &writes,
++                                                        lvl->src_view,
++                                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
++                                                        lvl->dst_view, format);
++         for (uint32_t i = 0; i < ARRAY_SIZE(writes.descriptor_set); i++)
++            writes.descriptor_set[i].dstSet = lvl->set;
++
++         disp->UpdateDescriptorSets(dev, ARRAY_SIZE(writes.descriptor_set),
++                                    writes.descriptor_set, 0, NULL);
++         continue;
++      }
++#endif
++
++      const VkDescriptorImageInfo src_info = {
++         .imageView = lvl->src_view,
++         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
++      };
++      const VkDescriptorImageInfo dst_info = {
++         .imageView = lvl->dst_view,
++         .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
++      };
++      const VkWriteDescriptorSet writes[] = {
++         {
++            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
++            .dstSet = lvl->set,
++            .dstBinding = 0,
++            .descriptorCount = 1,
++            .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
++            .pImageInfo = &src_info,
++         },
++         {
++            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
++            .dstSet = lvl->set,
++            .dstBinding = 1,
++            .descriptorCount = 1,
++            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
++            .pImageInfo = &dst_info,
++         },
++      };
++
++      disp->UpdateDescriptorSets(dev, ARRAY_SIZE(writes), writes, 0, NULL);
++   }
++
++   return VK_SUCCESS;
++}
++
++void
++dzn_image_texcompress_finish(struct dzn_device *device, struct dzn_image *image)
++{
++   struct dzn_image_texcompress *tc = image->texcompress;
++
++   if (!tc)
++      return;
++
++   const struct vk_device_dispatch_table *disp = &device->vk.dispatch_table;
++   VkDevice dev = dzn_device_to_handle(device);
++
++   for (uint32_t l = 0; l < tc->level_count; l++) {
++      struct dzn_image_texcompress_level *lvl = &tc->levels[l];
++
++      if (lvl->set) {
++         mtx_lock(&device->texcompress.lock);
++         disp->FreeDescriptorSets(dev, lvl->pool, 1, &lvl->set);
++         mtx_unlock(&device->texcompress.lock);
++      }
++
++      disp->DestroyImageView(dev, lvl->dst_view, NULL);
++      disp->DestroyImageView(dev, lvl->src_view, NULL);
++      disp->DestroyImage(dev, lvl->blocks, NULL);
++   }
++
++   if (tc->mem)
++      disp->FreeMemory(dev, tc->mem, NULL);
++
++   vk_free(&device->vk.alloc, tc);
++   image->texcompress = NULL;
++}
++
++static VkImageMemoryBarrier2
++dzn_texcompress_barrier(VkImage image, uint32_t level,
++                        uint32_t base_layer, uint32_t layer_count,
++                        VkPipelineStageFlags2 src_stage, VkAccessFlags2 src_access,
++                        VkImageLayout old_layout,
++                        VkPipelineStageFlags2 dst_stage, VkAccessFlags2 dst_access,
++                        VkImageLayout new_layout)
++{
++   return (VkImageMemoryBarrier2) {
++      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
++      .srcStageMask = src_stage,
++      .srcAccessMask = src_access,
++      .dstStageMask = dst_stage,
++      .dstAccessMask = dst_access,
++      .oldLayout = old_layout,
++      .newLayout = new_layout,
++      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++      .image = image,
++      .subresourceRange = {
++         .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
++         .baseMipLevel = level,
++         .levelCount = 1,
++         .baseArrayLayer = base_layer,
++         .layerCount = layer_count,
++      },
++   };
++}
++
++static void
++dzn_texcompress_barriers(struct dzn_cmd_buffer *cmdbuf, uint32_t count,
++                         const VkImageMemoryBarrier2 *barriers)
++{
++   const VkDependencyInfo dep = {
++      .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
++      .imageMemoryBarrierCount = count,
++      .pImageMemoryBarriers = barriers,
++   };
++
++   cmdbuf->vk.base.device->dispatch_table.CmdPipelineBarrier2(dzn_cmd_buffer_to_handle(cmdbuf), &dep);
++}
++
++static void
++dzn_texcompress_blocks_region(const struct dzn_image *image,
++                              const VkBufferImageCopy2 *region,
++                              VkBufferImageCopy2 *out)
++{
++   const uint32_t bw = vk_format_get_blockwidth(image->vk.format);
++   const uint32_t bh = vk_format_get_blockheight(image->vk.format);
++
++   *out = *region;
++   out->pNext = NULL;
++   out->bufferRowLength = DIV_ROUND_UP(region->bufferRowLength, bw);
++   out->bufferImageHeight = DIV_ROUND_UP(region->bufferImageHeight, bh);
++   out->imageSubresource.mipLevel = 0;
++   out->imageOffset.x = region->imageOffset.x / bw;
++   out->imageOffset.y = region->imageOffset.y / bh;
++   out->imageExtent.width = DIV_ROUND_UP(region->imageExtent.width, bw);
++   out->imageExtent.height = DIV_ROUND_UP(region->imageExtent.height, bh);
++}
++
++static void
++dzn_texcompress_decode(struct dzn_cmd_buffer *cmdbuf, struct dzn_image *image,
++                       uint32_t level, VkImageLayout layout,
++                       VkOffset3D offset, VkExtent3D extent,
++                       uint32_t base_layer, uint32_t layer_count)
++{
++   struct dzn_device *device = container_of(cmdbuf->vk.base.device, struct dzn_device, vk);
++   const struct vk_device_dispatch_table *disp = &device->vk.dispatch_table;
++   VkCommandBuffer cmd = dzn_cmd_buffer_to_handle(cmdbuf);
++   struct dzn_image_texcompress_level *lvl = &image->texcompress->levels[level];
++   const VkFormat format = image->vk.format;
++   const uint32_t width = u_minify(image->vk.extent.width, level);
++   const uint32_t height = u_minify(image->vk.extent.height, level);
++
++   if (offset.x >= width || offset.y >= height || !lvl->set)
++      return;
++
++   extent.width = MIN2(extent.width, width - offset.x);
++   extent.height = MIN2(extent.height, height - offset.y);
++
++   const VkImageMemoryBarrier2 before[] = {
++      dzn_texcompress_barrier(lvl->blocks, 0, base_layer, layer_count,
++                              VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
++                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
++                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
++                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
++      dzn_texcompress_barrier(dzn_image_to_handle(image), level, base_layer, layer_count,
++                              VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
++                              VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
++                              layout,
++                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
++                              VK_IMAGE_LAYOUT_GENERAL),
++   };
++   dzn_texcompress_barriers(cmdbuf, ARRAY_SIZE(before), before);
++
++   const struct dzn_cmd_buffer_bindpoint_state saved_bindpoint =
++      cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_COMPUTE];
++   const struct dzn_cmd_buffer_push_constant_state saved_push = cmdbuf->state.push_constant.compute;
++   const struct dxil_spirv_compute_runtime_data saved_sysvals = cmdbuf->state.sysvals.compute;
++
++#ifdef DZN_HAVE_ASTC_DECODER
++   if (dzn_format_is_astc(format)) {
++      struct vk_texcompress_astc_state *astc = device->texcompress.astc;
++      const uint32_t bw = vk_format_get_blockwidth(format);
++      const uint32_t bh = vk_format_get_blockheight(format);
++      VkPipeline pipeline =
++         vk_texcompress_astc_get_decode_pipeline(&device->vk, &device->vk.alloc, astc,
++                                                 VK_NULL_HANDLE, format);
++      const int32_t push[] = {
++         offset.x / bw,
++         offset.y / bh,
++         extent.width + offset.x,
++         extent.height + offset.y,
++         0,
++      };
++
++      disp->CmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
++      disp->CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, astc->p_layout,
++                                  0, 1, &lvl->set, 0, NULL);
++      disp->CmdPushConstants(cmd, astc->p_layout, VK_SHADER_STAGE_COMPUTE_BIT,
++                             0, sizeof(push), push);
++      disp->CmdDispatchBase(cmd, 0, 0, base_layer,
++                            DIV_ROUND_UP(extent.width, bw * 2),
++                            DIV_ROUND_UP(extent.height, bh * 2),
++                            layer_count);
++   } else
++#endif
++   {
++      struct vk_texcompress_etc2_state *etc2 = &device->texcompress.etc2;
++      const uint32_t push[] = {
++         offset.x,
++         offset.y,
++         base_layer,
++         format,
++         VK_IMAGE_TYPE_2D,
++      };
++
++      disp->CmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, etc2->pipeline);
++      disp->CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, etc2->pipeline_layout,
++                                  0, 1, &lvl->set, 0, NULL);
++      disp->CmdPushConstants(cmd, etc2->pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT,
++                             0, sizeof(push), push);
++      disp->CmdDispatchBase(cmd, 0, 0, 0,
++                            DIV_ROUND_UP(extent.width, 8),
++                            DIV_ROUND_UP(extent.height, 8),
++                            layer_count);
++   }
++
++   cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_COMPUTE] = saved_bindpoint;
++   cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_COMPUTE].root_sig = NULL;
++   cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_COMPUTE].dirty |=
++      DZN_CMD_BINDPOINT_DIRTY_PIPELINE | DZN_CMD_BINDPOINT_DIRTY_HEAPS;
++   cmdbuf->state.push_constant.compute = saved_push;
++   cmdbuf->state.sysvals.compute = saved_sysvals;
++
++   const VkImageMemoryBarrier2 after[] = {
++      dzn_texcompress_barrier(dzn_image_to_handle(image), level, base_layer, layer_count,
++                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
++                              VK_IMAGE_LAYOUT_GENERAL,
++                              VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
++                              VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
++                              layout),
++      dzn_texcompress_barrier(lvl->blocks, 0, base_layer, layer_count,
++                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_NONE,
++                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
++                              VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_NONE,
++                              VK_IMAGE_LAYOUT_GENERAL),
++   };
++   dzn_texcompress_barriers(cmdbuf, ARRAY_SIZE(after), after);
++}
++
++void
++dzn_cmd_buffer_texcompress_copy_buf2img(struct dzn_cmd_buffer *cmdbuf,
++                                        const VkCopyBufferToImageInfo2 *info)
++{
++   VK_FROM_HANDLE(dzn_image, image, info->dstImage);
++   const struct vk_device_dispatch_table *disp = &cmdbuf->vk.base.device->dispatch_table;
++   VkCommandBuffer cmd = dzn_cmd_buffer_to_handle(cmdbuf);
++
++   for (uint32_t r = 0; r < info->regionCount; r++) {
++      const VkBufferImageCopy2 *region = &info->pRegions[r];
++      const uint32_t level = region->imageSubresource.mipLevel;
++      const uint32_t base_layer = region->imageSubresource.baseArrayLayer;
++      const uint32_t layer_count =
++         vk_image_subresource_layer_count(&image->vk, &region->imageSubresource);
++      struct dzn_image_texcompress_level *lvl = &image->texcompress->levels[level];
++      VkBufferImageCopy2 blocks_region;
++
++      dzn_texcompress_blocks_region(image, region, &blocks_region);
++
++      const VkImageMemoryBarrier2 before =
++         dzn_texcompress_barrier(lvl->blocks, 0, base_layer, layer_count,
++                                 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
++                                 VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
++                                 VK_IMAGE_LAYOUT_GENERAL,
++                                 VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
++                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
++      dzn_texcompress_barriers(cmdbuf, 1, &before);
++
++      const VkCopyBufferToImageInfo2 blocks_info = {
++         .sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2,
++         .srcBuffer = info->srcBuffer,
++         .dstImage = lvl->blocks,
++         .dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
++         .regionCount = 1,
++         .pRegions = &blocks_region,
++      };
++      disp->CmdCopyBufferToImage2(cmd, &blocks_info);
++
++      dzn_texcompress_decode(cmdbuf, image, level, info->dstImageLayout,
++                             region->imageOffset, region->imageExtent,
++                             base_layer, layer_count);
++   }
++}
++
++void
++dzn_cmd_buffer_texcompress_copy_img2buf(struct dzn_cmd_buffer *cmdbuf,
++                                        const VkCopyImageToBufferInfo2 *info)
++{
++   VK_FROM_HANDLE(dzn_image, image, info->srcImage);
++   const struct vk_device_dispatch_table *disp = &cmdbuf->vk.base.device->dispatch_table;
++   VkCommandBuffer cmd = dzn_cmd_buffer_to_handle(cmdbuf);
++
++   for (uint32_t r = 0; r < info->regionCount; r++) {
++      const VkBufferImageCopy2 *region = &info->pRegions[r];
++      const uint32_t base_layer = region->imageSubresource.baseArrayLayer;
++      const uint32_t layer_count =
++         vk_image_subresource_layer_count(&image->vk, &region->imageSubresource);
++      struct dzn_image_texcompress_level *lvl =
++         &image->texcompress->levels[region->imageSubresource.mipLevel];
++      VkBufferImageCopy2 blocks_region;
++
++      dzn_texcompress_blocks_region(image, region, &blocks_region);
++
++      const VkImageMemoryBarrier2 before =
++         dzn_texcompress_barrier(lvl->blocks, 0, base_layer, layer_count,
++                                 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
++                                 VK_IMAGE_LAYOUT_GENERAL,
++                                 VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
++                                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
++      dzn_texcompress_barriers(cmdbuf, 1, &before);
++
++      const VkCopyImageToBufferInfo2 blocks_info = {
++         .sType = VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2,
++         .srcImage = lvl->blocks,
++         .srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++         .dstBuffer = info->dstBuffer,
++         .regionCount = 1,
++         .pRegions = &blocks_region,
++      };
++      disp->CmdCopyImageToBuffer2(cmd, &blocks_info);
++
++      const VkImageMemoryBarrier2 after =
++         dzn_texcompress_barrier(lvl->blocks, 0, base_layer, layer_count,
++                                 VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_NONE,
++                                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++                                 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_NONE,
++                                 VK_IMAGE_LAYOUT_GENERAL);
++      dzn_texcompress_barriers(cmdbuf, 1, &after);
++   }
++}
++
++void
++dzn_cmd_buffer_texcompress_copy_img(struct dzn_cmd_buffer *cmdbuf,
++                                    const VkCopyImageInfo2 *info)
++{
++   VK_FROM_HANDLE(dzn_image, src, info->srcImage);
++   VK_FROM_HANDLE(dzn_image, dst, info->dstImage);
++   const struct vk_device_dispatch_table *disp = &cmdbuf->vk.base.device->dispatch_table;
++   VkCommandBuffer cmd = dzn_cmd_buffer_to_handle(cmdbuf);
++   const uint32_t sbw = vk_format_get_blockwidth(src->vk.format);
++   const uint32_t sbh = vk_format_get_blockheight(src->vk.format);
++   const uint32_t dbw = vk_format_get_blockwidth(dst->vk.format);
++   const uint32_t dbh = vk_format_get_blockheight(dst->vk.format);
++
++   for (uint32_t r = 0; r < info->regionCount; r++) {
++      const VkImageCopy2 *region = &info->pRegions[r];
++      const uint32_t src_base_layer = region->srcSubresource.baseArrayLayer;
++      const uint32_t src_layer_count =
++         vk_image_subresource_layer_count(&src->vk, &region->srcSubresource);
++      const uint32_t dst_base_layer = region->dstSubresource.baseArrayLayer;
++      const uint32_t dst_layer_count =
++         vk_image_subresource_layer_count(&dst->vk, &region->dstSubresource);
++      VkImageCopy2 copy = *region;
++      VkImage src_image = info->srcImage;
++      VkImage dst_image = info->dstImage;
++      VkImageLayout src_layout = info->srcImageLayout;
++      VkImageLayout dst_layout = info->dstImageLayout;
++      VkImageMemoryBarrier2 barriers[2];
++      uint32_t barrier_count = 0;
++
++      copy.pNext = NULL;
++
++      if (src->texcompress) {
++         src_image = src->texcompress->levels[region->srcSubresource.mipLevel].blocks;
++         src_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
++         copy.srcSubresource.mipLevel = 0;
++         copy.srcOffset.x = region->srcOffset.x / sbw;
++         copy.srcOffset.y = region->srcOffset.y / sbh;
++         copy.extent.width = DIV_ROUND_UP(region->extent.width, sbw);
++         copy.extent.height = DIV_ROUND_UP(region->extent.height, sbh);
++         barriers[barrier_count++] =
++            dzn_texcompress_barrier(src_image, 0, src_base_layer, src_layer_count,
++                                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
++                                    VK_IMAGE_LAYOUT_GENERAL,
++                                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
++                                    src_layout);
++      }
++
++      if (dst->texcompress) {
++         dst_image = dst->texcompress->levels[region->dstSubresource.mipLevel].blocks;
++         dst_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
++         copy.dstSubresource.mipLevel = 0;
++         copy.dstOffset.x = region->dstOffset.x / dbw;
++         copy.dstOffset.y = region->dstOffset.y / dbh;
++         barriers[barrier_count++] =
++            dzn_texcompress_barrier(dst_image, 0, dst_base_layer, dst_layer_count,
++                                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
++                                    VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
++                                    VK_IMAGE_LAYOUT_GENERAL,
++                                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
++                                    dst_layout);
++      }
++
++      dzn_texcompress_barriers(cmdbuf, barrier_count, barriers);
++
++      const VkCopyImageInfo2 blocks_info = {
++         .sType = VK_STRUCTURE_TYPE_COPY_IMAGE_INFO_2,
++         .srcImage = src_image,
++         .srcImageLayout = src_layout,
++         .dstImage = dst_image,
++         .dstImageLayout = dst_layout,
++         .regionCount = 1,
++         .pRegions = &copy,
++      };
++      disp->CmdCopyImage2(cmd, &blocks_info);
++
++      if (src->texcompress) {
++         const VkImageMemoryBarrier2 after =
++            dzn_texcompress_barrier(src_image, 0, src_base_layer, src_layer_count,
++                                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_NONE,
++                                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++                                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_NONE,
++                                    VK_IMAGE_LAYOUT_GENERAL);
++         dzn_texcompress_barriers(cmdbuf, 1, &after);
++      }
++
++      if (dst->texcompress) {
++         const VkExtent3D extent = {
++            .width = DIV_ROUND_UP(region->extent.width, sbw) * dbw,
++            .height = DIV_ROUND_UP(region->extent.height, sbh) * dbh,
++            .depth = 1,
++         };
++
++         dzn_texcompress_decode(cmdbuf, dst, region->dstSubresource.mipLevel, info->dstImageLayout,
++                                region->dstOffset, extent, dst_base_layer, dst_layer_count);
++      }
++   }
++}
+diff --git a/src/microsoft/vulkan/meson.build b/src/microsoft/vulkan/meson.build
+index 4ca34a1..c528887 100644
+--- a/src/microsoft/vulkan/meson.build
++++ b/src/microsoft/vulkan/meson.build
+@@ -38,6 +38,7 @@ libdzn_files = files(
+   'dzn_pso_cache.c',
+   'dzn_query.c',
+   'dzn_sync.c',
++  'dzn_texcompress.c',
+   'dzn_util.c',
+   'dzn_wsi.c',
+ )
+@@ -57,6 +58,10 @@ dzn_deps = [
+ dzn_flags = [ ]
+ dzn_cpp_flags = [ ]
+ 
++if prog_glslang.found()
++  dzn_flags += '-DDZN_HAVE_ASTC_DECODER'
++endif
++
+ if with_platform_windows
+   libdzn_files += files('dzn_dxgi.c')
+ endif
