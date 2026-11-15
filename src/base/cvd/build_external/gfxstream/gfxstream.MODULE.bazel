@@ -136,5 +136,7 @@ git_repository(
         "@//build_external/gfxstream:PATCH.gfxstream.guest-image-format-list.patch",
         # Handle lookups take no mutex once more than 16000 handles are alive.
         "@//build_external/gfxstream:PATCH.gfxstream.boxed-handle-table.patch",
+        # Tearing down a device or instance removes its objects' handles too.
+        "@//build_external/gfxstream:PATCH.gfxstream.teardown-boxed-handles.patch",
     ],
 )
