@@ -5,6 +5,12 @@ on init
     # Prefer zram over evicting the page cache: refaulting a file page is the
     # latency-sensitive path, while swapping to zram happens in the background.
     write /proc/sys/vm/swappiness 150
+    # Games compile thousands of pipelines, and a Vulkan driver can hold a
+    # mapping or more for each: Honeykrisp's shader objects are large enough
+    # for Scudo to mmap each one, and Asphalt 9 passes 90,000 mappings while it
+    # loads. The kernel's 65,530 makes mmap fail there; Fedora, Arch and
+    # SteamOS ship this value for the same reason.
+    write /proc/sys/vm/max_map_count 1048576
 
 # Boot prefetch: record which files boot reads, and read them ahead on the
 # following boots. /system/bin/prefetch defines the services.
