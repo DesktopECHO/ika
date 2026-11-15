@@ -338,10 +338,11 @@ asahi kernel driver. Elsewhere `--gpu_mode=honeykrisp` stops with the reason,
 and `gpu_mode = honeykrisp` in `ika.ini` starts `gfxstream_guest_angle`
 instead. `gpu_mode = auto` never picks it.
 
-On an M1 Pro Android draws its desktop and apps, and 3DMark runs, a little
-behind `gfxstream_guest_angle`: Sling Shot Extreme's graphics tests at 115.5
-and 96.2 fps against 117.8 and 99.7, Wild Life Extreme 5,543 against 5,800 to
-5,845.
+On an M1 Pro Android draws its desktop and apps, Chromium plays VP9 video,
+the camera shows its picture, and Asphalt 8 races at its 30 fps. 3DMark runs a
+little behind `gfxstream_guest_angle`: Sling Shot Extreme's graphics tests at
+115.5 and 96.2 fps against 117.8 and 99.7, Wild Life Extreme 5,543 against
+5,800 to 5,845.
 
 How it works:
 
@@ -364,9 +365,10 @@ How it works:
   fence it handed out before it submits more work. And a submission's
   commands go to the host in one virtio request instead of one each.
 
-Limits: it is tried on an M1 Pro only. Hardware buffers with more than one
-plane, as cameras and video decoders use, are probably laid out wrongly, as
-the driver places the planes itself. These changes to Mesa's Apple driver
+Limits: it is tried on an M1 Pro only. The driver lays out a hardware buffer's
+planes itself rather than as gralloc reports them; the YUV buffers of Android's
+video decoders and of the camera match its layout, but other formats may
+not. These changes to Mesa's Apple driver
 were written with an AI assistant; Mesa and Asahi Linux do not take such
 changes to that driver, so they stay in Ika's ROM
 (`external-mesa3d-honeykrisp-android.patch`).
