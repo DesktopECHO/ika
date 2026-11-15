@@ -23,6 +23,7 @@ genrule(
 #define VIRGL_RENDERER_UNSTABLE_APIS 1
 #define ENABLE_VENUS 1
 #define ENABLE_DRM 1
+#define ENABLE_DRM_ASAHI 1
 #define ENABLE_LIBDRM 1
 #define ENABLE_RENDER_SERVER 1
 #define ENABLE_RENDER_SERVER_WORKER_THREAD 1
@@ -158,6 +159,7 @@ cc_library(
 cc_library(
     name = "virglrenderer_internal",
     srcs = [
+        "src/drm/asahi/asahi_renderer.c",
         "src/drm/drm_context.c",
         "src/drm/drm_fence.c",
         "src/drm/drm_renderer.c",
