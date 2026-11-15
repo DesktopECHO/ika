@@ -134,5 +134,7 @@ git_repository(
         # external-mesa3d-gfxstream-image-format-list.patch): not for emulated
         # compressed images or images over a ColorBuffer's memory.
         "@//build_external/gfxstream:PATCH.gfxstream.guest-image-format-list.patch",
+        # Handle lookups take no mutex once more than 16000 handles are alive.
+        "@//build_external/gfxstream:PATCH.gfxstream.boxed-handle-table.patch",
     ],
 )

@@ -1,0 +1,126 @@
+Patch summary:
+Looking up a Vulkan handle no longer takes a mutex once more than 16000 are
+alive. The boxed handle table keeps its first handles in an array read
+without a lock and every handle past that in a map behind one mutex, which
+each lookup of such a handle took: every decoded command looks up its
+command buffer, so the threads decoding and recording for a guest queued on
+that mutex. The array now holds 65536 handles (4 MB), and the map past it is
+read under a read-write lock, which lookups share.
+diff --git a/common/base/include/gfxstream/containers/HybridEntityManager.h b/common/base/include/gfxstream/containers/HybridEntityManager.h
+--- a/common/base/include/gfxstream/containers/HybridEntityManager.h
++++ b/common/base/include/gfxstream/containers/HybridEntityManager.h
+@@ -54,7 +54,7 @@
+             }
+         }
+ 
+-        AutoLock lock(mMapLock);
++        AutoWriteLock lock(mMapLock);
+         if (mIndexForMap == 0) {
+             mIndexForMap = maxIndex;
+         }
+@@ -75,7 +75,7 @@
+             SeqLock::ScopedWrite sw(&mEntityManagerLock);
+             return mEntityManager.addFixed(index, data, type);
+         } else {
+-            AutoLock lock(mMapLock);
++            AutoWriteLock lock(mMapLock);
+             // Fixed allocations require us to update mIndexForMap to catch up with it.
+             mIndexForMap = std::max(index_u64 + 1, mIndexForMap);
+             auto emplaced = mMap.emplace(index_u64, data);
+@@ -94,7 +94,7 @@
+             mEntityManager.clear();
+         }
+         {
+-            AutoLock lock(mMapLock);
++            AutoWriteLock lock(mMapLock);
+             mMap.clear();
+             mIndexForMap = 0;
+         }
+@@ -106,7 +106,7 @@
+             SeqLock::ScopedWrite sw(&mEntityManagerLock);
+             mEntityManager.remove(index);
+         } else {
+-            AutoLock lock(mMapLock);
++            AutoWriteLock lock(mMapLock);
+             mMap.erase(index_u64);
+         }
+     }
+@@ -117,7 +117,7 @@
+             SeqLock::ScopedWrite sw(&mEntityManagerLock);
+             return mEntityManager.get(index);
+         } else {
+-            AutoLock lock(mMapLock);
++            AutoReadLock lock(mMapLock);
+             auto res = gfxstream::base::find(mMap, index_u64);
+             return res;
+         }
+@@ -131,7 +131,7 @@
+                 res = mEntityManager.get_const(index));
+             return res;
+         } else {
+-            AutoLock lock(mMapLock);
++            AutoReadLock lock(mMapLock);
+             auto res = gfxstream::base::find(mMap, index_u64);
+             return res;
+         }
+@@ -157,7 +157,7 @@
+             mEntityManager.forEach(func);
+         }
+ 
+-        AutoLock lock(mMapLock);
++        AutoReadLock lock(mMapLock);
+         for (auto it : mMap) {
+             auto handle = index2Handle(it.first);
+             func(true /* live */, handle, handle, it.second);
+@@ -170,7 +170,7 @@
+             mEntityManager.forEachLiveEntry(func);
+         }
+ 
+-        AutoLock lock(mMapLock);
++        AutoReadLock lock(mMapLock);
+         for (auto it : mMap) {
+             auto handle = index2Handle(it.first);
+             func(true /* live */, handle, it.second);
+@@ -184,7 +184,7 @@
+                 func(live, h, d));
+         });
+ 
+-        AutoLock lock(mMapLock);
++        AutoReadLock lock(mMapLock);
+         for (const auto it : mMap) {
+             auto handle = index2Handle(it.first);
+             func(true /* live */, handle, it.second);
+@@ -200,7 +200,7 @@
+     std::unordered_map<IndexType, Data> mMap;
+     uint64_t mIndexForMap = 0;
+     mutable SeqLock mEntityManagerLock;
+-    mutable Lock mMapLock;
++    mutable ReadWriteLock mMapLock;
+ };
+ 
+ } // namespace gfxstream
+diff --git a/host/vulkan/vulkan_boxed_handles.h b/host/vulkan/vulkan_boxed_handles.h
+--- a/host/vulkan/vulkan_boxed_handles.h
++++ b/host/vulkan/vulkan_boxed_handles.h
+@@ -83,14 +83,14 @@
+ class BoxedHandleManager {
+    public:
+     // The hybrid entity manager uses a sequence lock to protect access to
+-    // a working set of 16000 handles, allowing us to avoid using a regular
+-    // lock for those. Performance is degraded when going over this number,
+-    // as it will then fall back to a std::map.
++    // a working set of 65536 handles, allowing us to avoid using a regular
++    // lock for those. Handles over this number go to a std::unordered_map
++    // behind a read-write lock.
+     //
+-    // We use 16000 as the max number of live handles to track; we don't
+-    // expect the system to go over 16000 total live handles, outside some
+-    // dEQP object management tests.
+-    using Store = gfxstream::base::HybridEntityManager<16000, BoxedHandle, BoxedHandleInfo>;
++    // Every descriptor set is a handle: one application with some thousands
++    // of them comes close to 16000 on its own, and the handles of every
++    // running application share this table.
++    using Store = gfxstream::base::HybridEntityManager<65536, BoxedHandle, BoxedHandleInfo>;
+ 
+     BoxedHandle add(const BoxedHandleInfo& item, BoxedHandleTypeTag tag);
+ 
