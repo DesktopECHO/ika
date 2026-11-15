@@ -27,6 +27,7 @@ genrule(
 #define ENABLE_LIBDRM 1
 #define ENABLE_RENDER_SERVER 1
 #define ENABLE_RENDER_SERVER_WORKER_THREAD 1
+#define ENABLE_SAME_PROCESS_RENDER_SERVER 1
 #define ENABLE_VULKAN_DLOAD 1
 #define RENDER_SERVER_EXEC_PATH "virgl_render_server"
 #define HAVE_PTHREAD 1
@@ -170,6 +171,15 @@ cc_library(
         "src/proxy/proxy_renderer.c",
         "src/proxy/proxy_server.c",
         "src/proxy/proxy_socket.c",
+        # The render server runs in a thread of the client when the client
+        # starts none (see PATCH.venus-same-process-render-server.patch).
+        "server/render_client.c",
+        "server/render_common.c",
+        "server/render_context.c",
+        "server/render_server.c",
+        "server/render_socket.c",
+        "server/render_state.c",
+        "server/render_worker.c",
         "src/venus/vkr_acceleration_structure.c",
         "src/venus/vkr_allocator.c",
         "src/venus/vkr_buffer.c",
@@ -215,6 +225,7 @@ cc_library(
     includes = [
         ".",
         "include",
+        "server",
         "src",
         "src/drm",
         "src/drm/drm-uapi",
@@ -242,13 +253,6 @@ cc_binary(
     name = "virgl_render_server",
     srcs = [
         "server/main.c",
-        "server/render_client.c",
-        "server/render_common.c",
-        "server/render_context.c",
-        "server/render_server.c",
-        "server/render_socket.c",
-        "server/render_state.c",
-        "server/render_worker.c",
         ":config_h",
     ] + glob([
         "server/*.h",

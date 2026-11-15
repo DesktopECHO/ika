@@ -1,0 +1,14 @@
+--- a/devices/src/virtio/gpu/virtio_gpu.rs	2026-11-15 13:41:18.685943951 -0400
++++ b/devices/src/virtio/gpu/virtio_gpu.rs	2026-11-15 13:41:18.711984363 -0400
+@@ -474,6 +474,11 @@
+             }
+             other => RutabagaMagmaHandle::try_from(other).ok()?,
+         };
++        // ika: only a dma-buf reaches the compositor. Anything else, such as
++        // an opaque fd of an optimal image under WSL2, is read back below.
++        if handle.handle_type != RUTABAGA_HANDLE_TYPE_MEM_DMABUF {
++            return None;
++        }
+         let dmabuf = to_safe_descriptor(handle.os_handle);
+ 
+         let (width, height, format, stride, offset, modifier) = match resource.scanout_data {

@@ -1,0 +1,1149 @@
+diff --git a/src/cross_domain/component.rs b/src/cross_domain/component.rs
+index c080c82..b0b02f0 100644
+--- a/src/cross_domain/component.rs
++++ b/src/cross_domain/component.rs
+@@ -2,6 +2,8 @@
+ // SPDX-License-Identifier: MIT
+ 
+ use std::collections::BTreeMap as Map;
++use std::io::IoSlice;
++use std::io::IoSliceMut;
+ use std::mem::size_of;
+ use std::sync::Arc;
+ use std::sync::Mutex;
+@@ -23,9 +25,14 @@ use crate::rutabaga_utils::RutabagaComponentType;
+ use crate::rutabaga_utils::RutabagaFence;
+ use crate::rutabaga_utils::RutabagaFenceHandler;
+ use crate::rutabaga_utils::RutabagaIovec;
++use crate::rutabaga_utils::RutabagaError;
+ use crate::rutabaga_utils::RutabagaPath;
+ use crate::rutabaga_utils::RutabagaResult;
++use crate::rutabaga_utils::Transfer3D;
+ use crate::rutabaga_utils::RUTABAGA_BLOB_FLAG_USE_MAPPABLE;
++use crate::DrmFormat;
++use crate::ImageAllocationInfo;
++use crate::RutabagaGrallocFlags;
+ use crate::rutabaga_utils::RUTABAGA_BLOB_MEM_GUEST;
+ use crate::RutabagaGralloc;
+ use crate::RutabagaGrallocBackendFlags;
+@@ -59,6 +66,69 @@ impl CrossDomain {
+     }
+ }
+ 
++// ika: what a transfer of an optimal image the gralloc shares by opaque fd
++// needs (see transfer_read).
++fn optimal_image(
++    resource: &RutabagaResource,
++) -> RutabagaResult<(&magma_gpu::util::Handle, crate::rutabaga_utils::VulkanInfo, ImageAllocationInfo, usize)>
++{
++    let handle = resource
++        .handle
++        .as_ref()
++        .and_then(|handle| handle.as_mesa_handle())
++        .ok_or(MagmaGpuError::Unsupported)?;
++    let vulkan_info = resource.vulkan_info.ok_or(MagmaGpuError::Unsupported)?;
++    let info_3d = resource.info_3d.ok_or(MagmaGpuError::Unsupported)?;
++    let info = ImageAllocationInfo {
++        width: info_3d.width,
++        height: info_3d.height,
++        drm_format: DrmFormat::from(info_3d.drm_fourcc),
++        flags: RutabagaGrallocFlags::empty(),
++    };
++    Ok((handle, vulkan_info, info, info_3d.strides[0] as usize))
++}
++
++// ika: copies between a buffer and the guest pages backing a resource, from
++// `offset` in the guest's layout.
++fn copy_to_iovecs(iovecs: &[RutabagaIovec], mut offset: usize, mut data: &[u8]) {
++    for iovec in iovecs {
++        if data.is_empty() {
++            break;
++        }
++        if offset >= iovec.len {
++            offset -= iovec.len;
++            continue;
++        }
++        let n = (iovec.len - offset).min(data.len());
++        // SAFETY: the iovecs are the guest memory crosvm checked and attached
++        // to the resource, and n stays within this one.
++        unsafe {
++            std::ptr::copy_nonoverlapping(data.as_ptr(), (iovec.base as *mut u8).add(offset), n)
++        };
++        data = &data[n..];
++        offset = 0;
++    }
++}
++
++fn copy_from_iovecs(iovecs: &[RutabagaIovec], mut offset: usize, mut out: &mut [u8]) {
++    for iovec in iovecs {
++        if out.is_empty() {
++            break;
++        }
++        if offset >= iovec.len {
++            offset -= iovec.len;
++            continue;
++        }
++        let n = (iovec.len - offset).min(out.len());
++        // SAFETY: as in copy_to_iovecs.
++        unsafe {
++            std::ptr::copy_nonoverlapping((iovec.base as *const u8).add(offset), out.as_mut_ptr(), n)
++        };
++        out = &mut out[n..];
++        offset = 0;
++    }
++}
++
+ impl RutabagaComponent for CrossDomain {
+     fn get_capset_info(&self, _capset_id: u32) -> (u32, u32) {
+         (0u32, size_of::<CrossDomainCapabilities>() as u32)
+@@ -85,6 +155,106 @@ impl RutabagaComponent for CrossDomain {
+         caps.as_bytes().to_vec()
+     }
+ 
++    // ika: an optimal image the gralloc shared by opaque fd (Dozen, under
++    // WSL2) has no memory the CPU can map: the display reads it back.
++    // A display flush reads into `buf`; a guest's lock of a buffer it cannot
++    // map (VIRTIO_GPU_BLOB_MEM_HOST3D_GUEST) reads into the guest pages backing
++    // it, in the layout the guest was given.
++    fn transfer_read(
++        &self,
++        _ctx_id: u32,
++        resource: &mut RutabagaResource,
++        transfer: Transfer3D,
++        buf: Option<IoSliceMut>,
++    ) -> RutabagaResult<()> {
++        let (handle, vulkan_info, info, stride) = optimal_image(resource)?;
++        let mut gralloc = self.gralloc.lock().unwrap();
++        if let Some(mut buf) = buf {
++            return gralloc.read_image(
++                resource.resource_id,
++                handle,
++                vulkan_info,
++                info,
++                resource.size,
++                transfer,
++                &mut buf,
++            );
++        }
++
++        let iovecs = resource
++            .backing_iovecs
++            .as_ref()
++            .ok_or(RutabagaError::InvalidIovec)?;
++        let mut pixels = vec![0u8; stride * info.height as usize];
++        let mut whole = transfer;
++        whole.stride = stride as u32;
++        whole.offset = 0;
++        gralloc.read_image(
++            resource.resource_id,
++            handle,
++            vulkan_info,
++            info,
++            resource.size,
++            whole,
++            &mut pixels,
++        )?;
++
++        let bpp = stride / info.width as usize;
++        let x = (transfer.x as usize).min(info.width as usize);
++        let w = (transfer.w as usize).min(info.width as usize - x);
++        let y = (transfer.y as usize).min(info.height as usize);
++        let h = (transfer.h as usize).min(info.height as usize - y);
++        for row in y..y + h {
++            let start = row * stride + x * bpp;
++            copy_to_iovecs(iovecs, start, &pixels[start..start + w * bpp]);
++        }
++        Ok(())
++    }
++
++    // A guest's unlock of a buffer it cannot map writes the guest pages back.
++    fn transfer_write(
++        &self,
++        _ctx_id: u32,
++        resource: &mut RutabagaResource,
++        transfer: Transfer3D,
++        buf: Option<IoSlice>,
++    ) -> RutabagaResult<()> {
++        if buf.is_some() {
++            return Err(MagmaGpuError::Unsupported.into());
++        }
++        let (handle, vulkan_info, info, stride) = optimal_image(resource)?;
++        let iovecs = resource
++            .backing_iovecs
++            .as_ref()
++            .ok_or(RutabagaError::InvalidIovec)?;
++
++        let bpp = stride / info.width as usize;
++        let x = (transfer.x as usize).min(info.width as usize);
++        let w = (transfer.w as usize).min(info.width as usize - x);
++        let y = (transfer.y as usize).min(info.height as usize);
++        let h = (transfer.h as usize).min(info.height as usize - y);
++        let mut pixels = vec![0u8; stride * info.height as usize];
++        for row in y..y + h {
++            let start = row * stride + x * bpp;
++            copy_from_iovecs(iovecs, start, &mut pixels[start..start + w * bpp]);
++        }
++
++        self.gralloc.lock().unwrap().write_image(
++            resource.resource_id,
++            handle,
++            vulkan_info,
++            info,
++            resource.size,
++            transfer,
++            &pixels,
++            stride,
++        )
++    }
++
++    fn unref_resource(&self, resource_id: u32) {
++        self.gralloc.lock().unwrap().forget_image(resource_id);
++    }
++
+     fn create_blob(
+         &mut self,
+         _ctx_id: u32,
+diff --git a/src/cross_domain/context.rs b/src/cross_domain/context.rs
+index 41e266e..bcb79c6 100644
+--- a/src/cross_domain/context.rs
++++ b/src/cross_domain/context.rs
+@@ -80,6 +80,7 @@ use crate::rutabaga_utils::RutabagaPath;
+ use crate::rutabaga_utils::RutabagaResult;
+ use crate::rutabaga_utils::RUTABAGA_BLOB_MEM_GUEST;
+ use crate::rutabaga_utils::RUTABAGA_MAP_ACCESS_RW;
++use crate::rutabaga_utils::RUTABAGA_MAP_CACHE_MASK;
+ use crate::rutabaga_utils::RUTABAGA_MAP_CACHE_CACHED;
+ use crate::DrmFormat;
+ use crate::ImageAllocationInfo;
+@@ -575,7 +576,13 @@ impl RutabagaContext for CrossDomainContext {
+                 blob: true,
+                 blob_mem: resource_create_blob.blob_mem,
+                 blob_flags: resource_create_blob.blob_flags,
+-                map_info: Some(reqs.map_info | RUTABAGA_MAP_ACCESS_RW),
++                // ika: memory with no caching mode is not host visible (an
++                // optimal image under WSL2): refuse to map it.
++                map_info: if reqs.map_info & RUTABAGA_MAP_CACHE_MASK != 0 {
++                    Some(reqs.map_info | RUTABAGA_MAP_ACCESS_RW)
++                } else {
++                    None
++                },
+                 info_2d: None,
+                 info_3d: Some(info_3d),
+                 vulkan_info: reqs.vulkan_info,
+diff --git a/src/generated/virgl_renderer_bindings.rs b/src/generated/virgl_renderer_bindings.rs
+index 066bd0c..43536d9 100644
+--- a/src/generated/virgl_renderer_bindings.rs
++++ b/src/generated/virgl_renderer_bindings.rs
+@@ -474,6 +474,21 @@ extern "C" {
+         args: *const virgl_renderer_resource_import_blob_args,
+     ) -> ::std::os::raw::c_int;
+ }
++// ika: from Ika's PATCH.venus-import-opaque-images.patch (virglrenderer.h).
++// crosvm links against the build host's virglrenderer, which lacks the
++// function: virgl_renderer.rs looks it up at run time.
++#[repr(C)]
++#[derive(Debug, Default, Copy, Clone)]
++pub struct virgl_renderer_resource_import_vulkan_blob_args {
++    pub blob: virgl_renderer_resource_import_blob_args,
++    pub device_uuid: [u8; 16usize],
++    pub driver_uuid: [u8; 16usize],
++    pub allocation_size: u64,
++    pub memory_type_index: u32,
++}
++pub type virgl_renderer_resource_import_vulkan_blob_fn = unsafe extern "C" fn(
++    args: *const virgl_renderer_resource_import_vulkan_blob_args,
++) -> ::std::os::raw::c_int;
+ extern "C" {
+     pub fn virgl_renderer_context_create_fence(
+         ctx_id: u32,
+diff --git a/src/rutabaga_core.rs b/src/rutabaga_core.rs
+index 3057d0b..a2b7213 100644
+--- a/src/rutabaga_core.rs
++++ b/src/rutabaga_core.rs
+@@ -15,6 +15,7 @@ use magma_gpu::util::Handle as MagmaGpuHandle;
+ use magma_gpu::util::MemoryMapping;
+ use magma_gpu::util::MesaMapping;
+ use magma_gpu::util::OwnedDescriptor;
++use magma_gpu::util::MAGMA_GPU_HANDLE_TYPE_MEM_OPAQUE_FD;
+ use magma_gpu::util::MAGMA_GPU_HANDLE_TYPE_MEM_SHM;
+ use serde::Deserialize;
+ use serde::Serialize;
+@@ -865,11 +866,22 @@ impl Rutabaga {
+             .get_mut(&self.default_component)
+             .ok_or(RutabagaError::InvalidComponent)?;
+ 
+-        self.resources
++        let resource = self
++            .resources
+             .remove(&resource_id)
+             .ok_or(RutabagaError::InvalidResourceId)?;
+ 
+         component.unref_resource(resource_id);
++
++        // ika: the cross-domain component keeps what it read its images back
++        // with (see transfer_read).
++        if self.default_component != RutabagaComponentType::CrossDomain
++            && resource.component_mask & (1 << (RutabagaComponentType::CrossDomain as u8)) != 0
++        {
++            if let Some(cross_domain) = self.components.get(&RutabagaComponentType::CrossDomain) {
++                cross_domain.unref_resource(resource_id);
++            }
++        }
+         Ok(())
+     }
+ 
+@@ -882,16 +894,29 @@ impl Rutabaga {
+         transfer: Transfer3D,
+         buf: Option<IoSlice>,
+     ) -> RutabagaResult<()> {
+-        let component = self
+-            .components
+-            .get(&self.default_component)
+-            .ok_or(RutabagaError::InvalidComponent)?;
+-
+         let resource = self
+             .resources
+             .get_mut(&resource_id)
+             .ok_or(RutabagaError::InvalidResourceId)?;
+ 
++        // ika: see transfer_read.
++        let opaque = resource
++            .handle
++            .as_ref()
++            .and_then(|handle| handle.as_mesa_handle())
++            .is_some_and(|handle| handle.handle_type == MAGMA_GPU_HANDLE_TYPE_MEM_OPAQUE_FD);
++        let component_type = if opaque
++            && resource.component_mask & (1 << (RutabagaComponentType::CrossDomain as u8)) != 0
++        {
++            RutabagaComponentType::CrossDomain
++        } else {
++            self.default_component
++        };
++        let component = self
++            .components
++            .get(&component_type)
++            .ok_or(RutabagaError::InvalidComponent)?;
++
+         component.transfer_write(ctx_id, resource, transfer, buf)
+     }
+ 
+@@ -906,16 +931,30 @@ impl Rutabaga {
+         transfer: Transfer3D,
+         buf: Option<IoSliceMut>,
+     ) -> RutabagaResult<()> {
+-        let component = self
+-            .components
+-            .get(&self.default_component)
+-            .ok_or(RutabagaError::InvalidComponent)?;
+-
+         let resource = self
+             .resources
+             .get_mut(&resource_id)
+             .ok_or(RutabagaError::InvalidResourceId)?;
+ 
++        // ika: an image the cross-domain component's gralloc shares by opaque
++        // fd is read back by that component, whichever is the default.
++        let opaque = resource
++            .handle
++            .as_ref()
++            .and_then(|handle| handle.as_mesa_handle())
++            .is_some_and(|handle| handle.handle_type == MAGMA_GPU_HANDLE_TYPE_MEM_OPAQUE_FD);
++        let component_type = if opaque
++            && resource.component_mask & (1 << (RutabagaComponentType::CrossDomain as u8)) != 0
++        {
++            RutabagaComponentType::CrossDomain
++        } else {
++            self.default_component
++        };
++        let component = self
++            .components
++            .get(&component_type)
++            .ok_or(RutabagaError::InvalidComponent)?;
++
+         component.transfer_read(ctx_id, resource, transfer, buf)
+     }
+ 
+@@ -992,7 +1031,16 @@ impl Rutabaga {
+         }
+ 
+         let resource = match context {
+-            Some(ctx) => ctx.context_create_blob(resource_id, resource_create_blob, handle)?,
++            Some(ctx) => {
++                let mut resource =
++                    ctx.context_create_blob(resource_id, resource_create_blob, handle)?;
++                // ika: the guest's copy of a buffer whose host memory it cannot map
++                // (VIRTIO_GPU_BLOB_MEM_HOST3D_GUEST), for transfers.
++                if resource.backing_iovecs.is_none() {
++                    resource.backing_iovecs = iovecs;
++                }
++                resource
++            }
+             None => {
+                 component.create_blob(ctx_id, resource_id, resource_create_blob, iovecs, handle)?
+             }
+diff --git a/src/rutabaga_gralloc/gralloc.rs b/src/rutabaga_gralloc/gralloc.rs
+index cd77bc0..2dd1e63 100644
+--- a/src/rutabaga_gralloc/gralloc.rs
++++ b/src/rutabaga_gralloc/gralloc.rs
+@@ -22,6 +22,7 @@ use crate::rutabaga_gralloc::system_gralloc::SystemGralloc;
+ use crate::rutabaga_gralloc::vulkano_gralloc::VulkanoGralloc;
+ use crate::rutabaga_utils::RutabagaError;
+ use crate::rutabaga_utils::RutabagaResult;
++use crate::rutabaga_utils::Transfer3D;
+ use crate::rutabaga_utils::VulkanInfo;
+ 
+ const RUTABAGA_GRALLOC_BACKEND_SYSTEM: u32 = 1 << 0;
+@@ -240,6 +241,42 @@ pub trait Gralloc: Send {
+     ) -> RutabagaResult<Box<dyn MappedRegion>> {
+         Err(MagmaGpuError::Unsupported.into())
+     }
++
++    /// ika: copies the `transfer` rectangle of an optimal image shared by
++    /// `handle` into `dst`, for the CPU. `id` names the image across calls.
++    #[allow(clippy::too_many_arguments)]
++    fn read_image(
++        &mut self,
++        _id: u32,
++        _handle: &MagmaGpuHandle,
++        _vulkan_info: VulkanInfo,
++        _info: ImageAllocationInfo,
++        _size: u64,
++        _transfer: Transfer3D,
++        _dst: &mut [u8],
++    ) -> RutabagaResult<()> {
++        Err(MagmaGpuError::Unsupported.into())
++    }
++
++    /// ika: copies the `transfer` rectangle of `src`, laid out with
++    /// `src_stride`, into an optimal image shared by `handle`.
++    #[allow(clippy::too_many_arguments)]
++    fn write_image(
++        &mut self,
++        _id: u32,
++        _handle: &MagmaGpuHandle,
++        _vulkan_info: VulkanInfo,
++        _info: ImageAllocationInfo,
++        _size: u64,
++        _transfer: Transfer3D,
++        _src: &[u8],
++        _src_stride: usize,
++    ) -> RutabagaResult<()> {
++        Err(MagmaGpuError::Unsupported.into())
++    }
++
++    /// ika: drops what `read_image` and `write_image` kept for `id`.
++    fn forget_image(&mut self, _id: u32) {}
+ }
+ 
+ /// Enumeration of possible allocation backends.
+@@ -403,6 +440,54 @@ impl RutabagaGralloc {
+ 
+         gralloc.import_and_map(handle, vulkan_info, size)
+     }
++
++    /// ika: see `Gralloc::read_image`. Vulkano's images only.
++    #[allow(clippy::too_many_arguments)]
++    pub fn read_image(
++        &mut self,
++        id: u32,
++        handle: &MagmaGpuHandle,
++        vulkan_info: VulkanInfo,
++        info: ImageAllocationInfo,
++        size: u64,
++        transfer: Transfer3D,
++        dst: &mut [u8],
++    ) -> RutabagaResult<()> {
++        let gralloc = self
++            .grallocs
++            .get_mut(&GrallocBackend::Vulkano)
++            .ok_or(RutabagaError::InvalidGrallocBackend)?;
++
++        gralloc.read_image(id, handle, vulkan_info, info, size, transfer, dst)
++    }
++
++    /// ika: see `Gralloc::write_image`. Vulkano's images only.
++    #[allow(clippy::too_many_arguments)]
++    pub fn write_image(
++        &mut self,
++        id: u32,
++        handle: &MagmaGpuHandle,
++        vulkan_info: VulkanInfo,
++        info: ImageAllocationInfo,
++        size: u64,
++        transfer: Transfer3D,
++        src: &[u8],
++        src_stride: usize,
++    ) -> RutabagaResult<()> {
++        let gralloc = self
++            .grallocs
++            .get_mut(&GrallocBackend::Vulkano)
++            .ok_or(RutabagaError::InvalidGrallocBackend)?;
++
++        gralloc.write_image(id, handle, vulkan_info, info, size, transfer, src, src_stride)
++    }
++
++    /// ika: see `Gralloc::forget_image`.
++    pub fn forget_image(&mut self, id: u32) {
++        if let Some(gralloc) = self.grallocs.get_mut(&GrallocBackend::Vulkano) {
++            gralloc.forget_image(id);
++        }
++    }
+ }
+ 
+ #[cfg(test)]
+diff --git a/src/rutabaga_gralloc/vulkano_gralloc.rs b/src/rutabaga_gralloc/vulkano_gralloc.rs
+index ac8ebb4..137e102 100644
+--- a/src/rutabaga_gralloc/vulkano_gralloc.rs
++++ b/src/rutabaga_gralloc/vulkano_gralloc.rs
+@@ -22,20 +22,42 @@ use magma_gpu::util::MappedRegion;
+ use magma_gpu::util::MesaMapping;
+ use magma_gpu::util::MAGMA_GPU_HANDLE_TYPE_MEM_DMABUF;
+ use magma_gpu::util::MAGMA_GPU_HANDLE_TYPE_MEM_OPAQUE_FD;
++use vulkano::buffer::Buffer;
++use vulkano::buffer::BufferCreateInfo;
++use vulkano::buffer::BufferUsage;
++use vulkano::buffer::Subbuffer;
++use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
++use vulkano::command_buffer::AutoCommandBufferBuilder;
++use vulkano::command_buffer::BufferImageCopy;
++use vulkano::command_buffer::CommandBufferUsage;
++use vulkano::command_buffer::CopyBufferToImageInfo;
++use vulkano::command_buffer::CopyImageToBufferInfo;
++use vulkano::command_buffer::PrimaryCommandBufferAbstract;
+ use vulkano::device::physical::PhysicalDeviceType;
+ use vulkano::device::Device;
+ use vulkano::device::DeviceCreateInfo;
+ use vulkano::device::DeviceCreationError;
++use vulkano::device::DeviceOwned;
++use vulkano::device::Queue;
+ use vulkano::device::QueueCreateInfo;
+ use vulkano::device::QueueFlags;
+ use vulkano::image;
++use vulkano::image::ImageAccess;
++use vulkano::image::ImageDescriptorLayouts;
+ use vulkano::image::ImageDimensions;
+ use vulkano::image::ImageError;
+ use vulkano::image::ImageFormatInfo;
++use vulkano::image::ImageInner;
++use vulkano::image::ImageLayout;
+ use vulkano::image::ImageTiling;
+ use vulkano::image::ImageType;
+ use vulkano::image::ImageUsage;
+ use vulkano::image::SampleCount;
++use vulkano::memory::allocator::AllocationCreateInfo;
++use vulkano::memory::allocator::MemoryAlloc;
++use vulkano::memory::allocator::MemoryUsage;
++use vulkano::memory::allocator::StandardMemoryAllocator;
++use vulkano::sync::GpuFuture;
+ use vulkano::instance::Instance;
+ use vulkano::instance::InstanceCreateInfo;
+ use vulkano::instance::InstanceCreationError;
+@@ -57,12 +79,14 @@ use vulkano::LoadingError;
+ use vulkano::VulkanError;
+ use vulkano::VulkanLibrary;
+ 
++use crate::rutabaga_gralloc::formats::canonical_image_requirements;
+ use crate::rutabaga_gralloc::gralloc::Gralloc;
+ use crate::rutabaga_gralloc::gralloc::ImageAllocationInfo;
+ use crate::rutabaga_gralloc::gralloc::ImageMemoryRequirements;
+ use crate::rutabaga_utils::DeviceId;
+ use crate::rutabaga_utils::RutabagaError;
+ use crate::rutabaga_utils::RutabagaResult;
++use crate::rutabaga_utils::Transfer3D;
+ use crate::rutabaga_utils::VulkanInfo;
+ use crate::rutabaga_utils::RUTABAGA_MAP_CACHE_CACHED;
+ use crate::rutabaga_utils::RUTABAGA_MAP_CACHE_WC;
+@@ -80,6 +104,59 @@ pub struct VulkanoGralloc {
+     devices: Map<PhysicalDeviceType, Arc<Device>>,
+     device_by_id: Map<DeviceId, Arc<Device>>,
+     has_integrated_gpu: bool,
++    // ika: what reads optimal images back for the CPU (see read_image)
++    queues: Map<PhysicalDeviceType, Arc<Queue>>,
++    readback_memory_allocator: Option<Arc<StandardMemoryAllocator>>,
++    readback_command_allocator: Option<StandardCommandBufferAllocator>,
++    readbacks: Map<u32, Readback>,
++}
++
++// ika: an optimal image some other device rendered into, imported for
++// copies to the CPU. Its layout is GENERAL whenever it changes hands, which
++// Dozen gives the D3D12 state COMMON that resources shared between devices
++// must have.
++struct ExternalImage {
++    image: Arc<image::sys::Image>,
++}
++
++unsafe impl DeviceOwned for ExternalImage {
++    fn device(&self) -> &Arc<Device> {
++        self.image.device()
++    }
++}
++
++unsafe impl ImageAccess for ExternalImage {
++    fn inner(&self) -> ImageInner<'_> {
++        ImageInner {
++            image: &self.image,
++            first_layer: 0,
++            num_layers: 1,
++            first_mipmap_level: 0,
++            num_mipmap_levels: 1,
++        }
++    }
++
++    fn initial_layout_requirement(&self) -> ImageLayout {
++        ImageLayout::General
++    }
++
++    fn final_layout_requirement(&self) -> ImageLayout {
++        ImageLayout::General
++    }
++
++    fn is_layout_initialized(&self) -> bool {
++        true
++    }
++
++    fn descriptor_layouts(&self) -> Option<ImageDescriptorLayouts> {
++        None
++    }
++}
++
++struct Readback {
++    image: Arc<ExternalImage>,
++    buffer: Subbuffer<[u8]>,
++    bytes_per_pixel: u32,
+ }
+ 
+ struct VulkanoMapping {
+@@ -168,6 +245,7 @@ impl VulkanoGralloc {
+         let mut devices: Map<PhysicalDeviceType, Arc<Device>> = Default::default();
+         let mut device_by_id: Map<DeviceId, Arc<Device>> = Default::default();
+         let mut has_integrated_gpu = false;
++        let mut device_queues: Map<PhysicalDeviceType, Arc<Queue>> = Default::default();
+ 
+         for physical in instance.enumerate_physical_devices()? {
+             let queue_family_index = match physical.queue_family_properties().iter().position(|q| {
+@@ -190,7 +268,7 @@ impl VulkanoGralloc {
+ 
+             let intersection = supported_extensions.intersection(&desired_extensions);
+ 
+-            if let Ok((device, mut _queues)) = Device::new(
++            if let Ok((device, mut queues)) = Device::new(
+                 physical.clone(),
+                 DeviceCreateInfo {
+                     enabled_extensions: intersection,
+@@ -211,6 +289,9 @@ impl VulkanoGralloc {
+                 // be used, but the need for such complexity does not seem to exist now.
+                 devices.insert(device_type, device.clone());
+                 device_by_id.insert(device.get_id(), device);
++                if let Some(queue) = queues.next() {
++                    device_queues.insert(device_type, queue);
++                }
+             };
+         }
+ 
+@@ -222,9 +303,157 @@ impl VulkanoGralloc {
+             devices,
+             device_by_id,
+             has_integrated_gpu,
++            queues: device_queues,
++            readback_memory_allocator: None,
++            readback_command_allocator: None,
++            readbacks: Default::default(),
+         }))
+     }
+ 
++    // ika: images are optimal (tiled) and shared by opaque fd where the driver
++    // exports no dma-bufs: Dozen under WSL2, whose D3D12 neither draws into
++    // nor samples linear images (its linear tiling allows copies only).
++    fn uses_optimal_images(device: &Device) -> bool {
++        !device.enabled_extensions().ext_external_memory_dma_buf
++    }
++
++    // ika: one create info for an optimal image of this size and format,
++    // whoever creates it: the allocation, a readback here, and the guest's
++    // Venus driver importing it must agree. The usage is everything Android
++    // asks of a buffer that the format allows.
++    fn optimal_image_create_info(
++        device: &Device,
++        width: u32,
++        height: u32,
++        format: vulkano::format::Format,
++    ) -> RutabagaResult<image::sys::ImageCreateInfo> {
++        let candidates = [
++            ImageUsage::COLOR_ATTACHMENT
++                | ImageUsage::SAMPLED
++                | ImageUsage::TRANSFER_SRC
++                | ImageUsage::TRANSFER_DST,
++            ImageUsage::SAMPLED | ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST,
++        ];
++        let mut chosen = None;
++        for usage in candidates {
++            // SAFETY: the format info is complete and valid for this device.
++            let allowed = unsafe {
++                device
++                    .physical_device()
++                    .image_format_properties_unchecked(ImageFormatInfo {
++                        format: Some(format),
++                        image_type: ImageType::Dim2d,
++                        tiling: ImageTiling::Optimal,
++                        usage,
++                        external_memory_handle_type: Some(ExternalMemoryHandleType::OpaqueFd),
++                        ..Default::default()
++                    })?
++            };
++            if allowed.is_some() {
++                chosen = Some(usage);
++                break;
++            }
++        }
++        let usage = chosen.ok_or(ImageError::FormatUsageNotSupported {
++            usage: "sampled",
++        })?;
++
++        Ok(image::sys::ImageCreateInfo {
++            dimensions: ImageDimensions::Dim2d {
++                width,
++                height,
++                array_layers: 1,
++            },
++            format: Some(format),
++            samples: SampleCount::Sample1,
++            tiling: ImageTiling::Optimal,
++            usage,
++            mip_levels: 1,
++            sharing: Sharing::Exclusive,
++            external_memory_handle_types: ExternalMemoryHandleTypes::OPAQUE_FD,
++            ..Default::default()
++        })
++    }
++
++    // ika: imports an optimal image another device shares by opaque fd, with
++    // a buffer the CPU reads its pixels from and writes them to.
++    fn import_for_readback(
++        &mut self,
++        handle: &MagmaGpuHandle,
++        vulkan_info: VulkanInfo,
++        info: ImageAllocationInfo,
++        size: u64,
++    ) -> RutabagaResult<Readback> {
++        let device = self
++            .device_by_id
++            .get(&vulkan_info.device_id)
++            .ok_or(RutabagaError::InvalidVulkanInfo)?
++            .clone();
++        if info.drm_format.planar_layout()?.num_planes != 1 {
++            return Err(MagmaGpuError::Unsupported.into());
++        }
++
++        let format = info.drm_format.vulkan_format()?;
++        let create_info = Self::optimal_image_create_info(&device, info.width, info.height, format)?;
++        let raw_image = image::sys::RawImage::new(device.clone(), create_info)?;
++
++        let handle = MagmaGpuHandle {
++            os_handle: handle
++                .os_handle
++                .try_clone()
++                .map_err(MagmaGpuError::IoError)?,
++            handle_type: handle.handle_type,
++        };
++        // SAFETY: the handle is a dup we own, of memory allocated for an
++        // image created with the same create info.
++        let device_memory = unsafe {
++            VulkanoGralloc::import_memory(
++                device.clone(),
++                MemoryAllocateInfo {
++                    allocation_size: size,
++                    memory_type_index: vulkan_info.memory_idx,
++                    dedicated_allocation: Some(DedicatedAllocation::Image(&raw_image)),
++                    ..Default::default()
++                },
++                handle,
++            )?
++        };
++        let allocation = MemoryAlloc::new(device_memory)
++            .map_err(|_| MagmaGpuError::WithContext("readback: memory allocation object"))?;
++        let image = raw_image.bind_memory([allocation]).map_err(|(e, _, _)| e)?;
++
++        let stride = canonical_image_requirements(info)?.strides[0];
++        let bytes_per_pixel = stride / info.width;
++        let allocator = self
++            .readback_memory_allocator
++            .get_or_insert_with(|| Arc::new(StandardMemoryAllocator::new_default(device.clone())))
++            .clone();
++        let buffer = Buffer::new_slice::<u8>(
++            allocator.as_ref(),
++            BufferCreateInfo {
++                usage: BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
++                ..Default::default()
++            },
++            AllocationCreateInfo {
++                usage: MemoryUsage::Download,
++                ..Default::default()
++            },
++            stride as u64 * info.height as u64,
++        )
++        .map_err(|e| {
++            warn!("readback buffer: {}", e);
++            MagmaGpuError::WithContext("readback: buffer")
++        })?;
++
++        Ok(Readback {
++            image: Arc::new(ExternalImage {
++                image: Arc::new(image),
++            }),
++            buffer,
++            bytes_per_pixel,
++        })
++    }
++
+     // This function is used safely in this module because gralloc does not:
+     //
+     //  (1) bind images to any memory.
+@@ -263,6 +492,14 @@ impl VulkanoGralloc {
+         }
+ 
+         let vulkan_format = info.drm_format.vulkan_format()?;
++        if Self::uses_optimal_images(device) {
++            let create_info =
++                Self::optimal_image_create_info(device, info.width, info.height, vulkan_format)?;
++            let raw_image = Arc::new(image::sys::RawImage::new(device.clone(), create_info)?);
++            let memory_requirements = raw_image.memory_requirements()[0];
++            return Ok((raw_image, memory_requirements));
++        }
++
+         let create_info = image::sys::ImageCreateInfo {
+             dimensions: ImageDimensions::Dim2d {
+                 width: info.width,
+@@ -357,19 +594,31 @@ impl Gralloc for VulkanoGralloc {
+             .get(device_type)
+             .ok_or(RutabagaError::InvalidGrallocGpuType)?;
+ 
+-        let planar_layout = info.drm_format.planar_layout()?;
+-
+-        // Safe because we created the image with the linear bit set and verified the format is
+-        // not a depth or stencil format.  We are also using the correct image aspect.  Vulkano
+-        // will panic if we are not.
+-        for plane in 0..planar_layout.num_planes {
+-            let aspect = info.drm_format.vulkan_image_aspect(plane)?;
+-            let layout = raw_image.subresource_layout(aspect, 0, 0)?;
+-            reqs.strides[plane] = layout.row_pitch as u32;
+-            reqs.offsets[plane] = layout.offset as u32;
++        let optimal = Self::uses_optimal_images(device);
++        if optimal {
++            // ika: an optimal image has no layout to query. The guest keeps
++            // its CPU copy of the buffer in the layout the system gralloc
++            // would give it.
++            let canonical = canonical_image_requirements(info)?;
++            reqs.strides = canonical.strides;
++            reqs.offsets = canonical.offsets;
++        } else {
++            let planar_layout = info.drm_format.planar_layout()?;
++
++            // Safe because we created the image with the linear bit set and verified the format
++            // is not a depth or stencil format.  We are also using the correct image aspect.
++            // Vulkano will panic if we are not.
++            for plane in 0..planar_layout.num_planes {
++                let aspect = info.drm_format.vulkan_image_aspect(plane)?;
++                let layout = raw_image.subresource_layout(aspect, 0, 0)?;
++                reqs.strides[plane] = layout.row_pitch as u32;
++                reqs.offsets[plane] = layout.offset as u32;
++            }
+         }
+ 
+-        let need_visible = info.flags.host_visible();
++        // ika: D3D12 cannot share memory the CPU sees, so an optimal image's
++        // memory is device local and the guest never maps it.
++        let need_visible = info.flags.host_visible() && !optimal;
+         let want_cached = info.flags.host_cached();
+ 
+         let (memory_type_index, memory_type) = {
+@@ -440,6 +689,11 @@ impl Gralloc for VulkanoGralloc {
+ 
+         reqs.info = info;
+         reqs.size = memory_requirements.layout.size() as u64;
++        // ika: the guest's copy of an optimal image (see above) lives in the
++        // blob, which is the image's size.
++        if optimal && canonical_image_requirements(info)?.size > reqs.size {
++            return Err(MagmaGpuError::WithContext("optimal image smaller than its linear copy").into());
++        }
+ 
+         if memory_type
+             .property_flags
+@@ -506,6 +760,9 @@ impl Gralloc for VulkanoGralloc {
+             };
+ 
+         let dedicated_allocation = match device.enabled_extensions().khr_dedicated_allocation {
++            // ika: an optimal image is shared as the image itself, which an
++            // import opens as its own (a D3D12 resource, under Dozen).
++            true if Self::uses_optimal_images(device) => Some(DedicatedAllocation::Image(&raw_image)),
+             true => {
+                 // ika: a dedicated allocation must be exactly the image's size,
+                 // while the guest asks for the size rounded up to its page size.
+@@ -575,6 +832,187 @@ impl Gralloc for VulkanoGralloc {
+             size.try_into().map_err(MagmaGpuError::TryFromIntError)?,
+         )))
+     }
++
++    fn read_image(
++        &mut self,
++        id: u32,
++        handle: &MagmaGpuHandle,
++        vulkan_info: VulkanInfo,
++        info: ImageAllocationInfo,
++        size: u64,
++        transfer: Transfer3D,
++        dst: &mut [u8],
++    ) -> RutabagaResult<()> {
++        if !self.readbacks.contains_key(&id) {
++            let readback = self.import_for_readback(handle, vulkan_info, info, size)?;
++            self.readbacks.insert(id, readback);
++        }
++
++        let device = self
++            .device_by_id
++            .get(&vulkan_info.device_id)
++            .ok_or(RutabagaError::InvalidVulkanInfo)?
++            .clone();
++        let queue = self
++            .queues
++            .get(&device.physical_device().properties().device_type)
++            .ok_or(RutabagaError::InvalidGrallocGpuType)?
++            .clone();
++        let command_allocator = self
++            .readback_command_allocator
++            .get_or_insert_with(|| StandardCommandBufferAllocator::new(device, Default::default()));
++        let readback = &self.readbacks[&id];
++
++        let fail = |what: &'static str| {
++            move |e: &dyn std::fmt::Display| {
++                warn!("readback {}: {}", what, e);
++                RutabagaError::from(MagmaGpuError::WithContext(what))
++            }
++        };
++        let mut builder = AutoCommandBufferBuilder::primary(
++            command_allocator,
++            queue.queue_family_index(),
++            CommandBufferUsage::OneTimeSubmit,
++        )
++        .map_err(|e| fail("command buffer")(&e))?;
++        builder
++            .copy_image_to_buffer(CopyImageToBufferInfo::image_buffer(
++                readback.image.clone(),
++                readback.buffer.clone(),
++            ))
++            .map_err(|e| fail("copy")(&e))?;
++        let command_buffer = builder.build().map_err(|e| fail("build")(&e))?;
++        command_buffer
++            .execute(queue)
++            .map_err(|e| fail("execute")(&e))?
++            .then_signal_fence_and_flush()
++            .map_err(|e| fail("flush")(&e))?
++            .wait(None)
++            .map_err(|e| fail("wait")(&e))?;
++
++        let src = readback.buffer.read().map_err(|e| fail("read")(&e))?;
++        let bpp = readback.bytes_per_pixel as usize;
++        let src_stride = info.width as usize * bpp;
++        let dst_stride = if transfer.stride != 0 {
++            transfer.stride as usize
++        } else {
++            src_stride
++        };
++        let x = (transfer.x as usize).min(info.width as usize);
++        let w = (transfer.w as usize).min(info.width as usize - x);
++        let y = (transfer.y as usize).min(info.height as usize);
++        let h = (transfer.h as usize).min(info.height as usize - y);
++        for row in y..y + h {
++            let src_start = row * src_stride + x * bpp;
++            let dst_start = transfer.offset as usize + row * dst_stride + x * bpp;
++            if dst_start + w * bpp > dst.len() {
++                break;
++            }
++            dst[dst_start..dst_start + w * bpp]
++                .copy_from_slice(&src[src_start..src_start + w * bpp]);
++        }
++
++        Ok(())
++    }
++
++    fn write_image(
++        &mut self,
++        id: u32,
++        handle: &MagmaGpuHandle,
++        vulkan_info: VulkanInfo,
++        info: ImageAllocationInfo,
++        size: u64,
++        transfer: Transfer3D,
++        src: &[u8],
++        src_stride: usize,
++    ) -> RutabagaResult<()> {
++        if !self.readbacks.contains_key(&id) {
++            let readback = self.import_for_readback(handle, vulkan_info, info, size)?;
++            self.readbacks.insert(id, readback);
++        }
++
++        let device = self
++            .device_by_id
++            .get(&vulkan_info.device_id)
++            .ok_or(RutabagaError::InvalidVulkanInfo)?
++            .clone();
++        let queue = self
++            .queues
++            .get(&device.physical_device().properties().device_type)
++            .ok_or(RutabagaError::InvalidGrallocGpuType)?
++            .clone();
++        let command_allocator = self
++            .readback_command_allocator
++            .get_or_insert_with(|| StandardCommandBufferAllocator::new(device, Default::default()));
++        let readback = &self.readbacks[&id];
++
++        let fail = |what: &'static str| {
++            move |e: &dyn std::fmt::Display| {
++                warn!("upload {}: {}", what, e);
++                RutabagaError::from(MagmaGpuError::WithContext(what))
++            }
++        };
++        let bpp = readback.bytes_per_pixel as usize;
++        let stride = info.width as usize * bpp;
++        let x = (transfer.x as usize).min(info.width as usize);
++        let w = (transfer.w as usize).min(info.width as usize - x);
++        let y = (transfer.y as usize).min(info.height as usize);
++        let h = (transfer.h as usize).min(info.height as usize - y);
++        if w == 0 || h == 0 {
++            return Ok(());
++        }
++        {
++            let mut dst = readback.buffer.write().map_err(|e| fail("map")(&e))?;
++            for row in y..y + h {
++                let src_start = row * src_stride + x * bpp;
++                let dst_start = row * stride + x * bpp;
++                if src_start + w * bpp > src.len() {
++                    break;
++                }
++                dst[dst_start..dst_start + w * bpp]
++                    .copy_from_slice(&src[src_start..src_start + w * bpp]);
++            }
++        }
++
++        let mut builder = AutoCommandBufferBuilder::primary(
++            command_allocator,
++            queue.queue_family_index(),
++            CommandBufferUsage::OneTimeSubmit,
++        )
++        .map_err(|e| fail("command buffer")(&e))?;
++        builder
++            .copy_buffer_to_image(CopyBufferToImageInfo {
++                regions: [BufferImageCopy {
++                    buffer_offset: (y * stride + x * bpp) as u64,
++                    buffer_row_length: info.width,
++                    buffer_image_height: info.height,
++                    image_subresource: readback.image.subresource_layers(),
++                    image_offset: [x as u32, y as u32, 0],
++                    image_extent: [w as u32, h as u32, 1],
++                    ..Default::default()
++                }]
++                .into(),
++                ..CopyBufferToImageInfo::buffer_image(
++                    readback.buffer.clone(),
++                    readback.image.clone(),
++                )
++            })
++            .map_err(|e| fail("copy")(&e))?;
++        let command_buffer = builder.build().map_err(|e| fail("build")(&e))?;
++        command_buffer
++            .execute(queue)
++            .map_err(|e| fail("execute")(&e))?
++            .then_signal_fence_and_flush()
++            .map_err(|e| fail("flush")(&e))?
++            .wait(None)
++            .map_err(|e| fail("wait")(&e))?;
++
++        Ok(())
++    }
++
++    fn forget_image(&mut self, id: u32) {
++        self.readbacks.remove(&id);
++    }
+ }
+ 
+ // We should really use a universal error kind for all these errors, say
+diff --git a/src/virgl_renderer.rs b/src/virgl_renderer.rs
+index acf7eb9..4927b36 100644
+--- a/src/virgl_renderer.rs
++++ b/src/virgl_renderer.rs
+@@ -115,6 +115,28 @@ struct VirglRendererContext {
+     ctx_id: u32,
+ }
+ 
++// ika: virglrenderer's import of opaque Vulkan memory, where the loaded
++// virglrenderer has it (Ika's PATCH.venus-import-opaque-images.patch).
++fn import_vulkan_blob_fn() -> Option<virgl_renderer_resource_import_vulkan_blob_fn> {
++    static FN: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
++    let addr = *FN.get_or_init(|| {
++        // SAFETY: the name is a valid C string; dlsym only looks it up.
++        unsafe {
++            libc::dlsym(
++                libc::RTLD_DEFAULT,
++                c"virgl_renderer_resource_import_vulkan_blob".as_ptr(),
++            ) as usize
++        }
++    });
++    if addr == 0 {
++        return None;
++    }
++    // SAFETY: the symbol has this signature in virglrenderer.h.
++    Some(unsafe {
++        std::mem::transmute::<usize, virgl_renderer_resource_import_vulkan_blob_fn>(addr)
++    })
++}
++
+ fn import_resource(resource: &mut RutabagaResource) -> RutabagaResult<()> {
+     if (resource.component_mask & (1 << (RutabagaComponentType::VirglRenderer as u8))) != 0 {
+         return Ok(());
+@@ -156,6 +178,47 @@ fn import_resource(resource: &mut RutabagaResource) -> RutabagaResult<()> {
+                 resource.component_mask |= 1 << (RutabagaComponentType::VirglRenderer as u8);
+             }
+         }
++
++        // ika: an opaque fd of Vulkan memory (an optimal image of the Vulkano
++        // gralloc, under WSL2), with what Venus's import of it must match.
++        #[cfg(target_os = "linux")]
++        if mesa_handle.handle_type == MAGMA_GPU_HANDLE_TYPE_MEM_OPAQUE_FD {
++            if let (Some(vulkan_info), Some(import_vulkan_blob)) =
++                (resource.vulkan_info, import_vulkan_blob_fn())
++            {
++                let fd = mesa_handle
++                    .os_handle
++                    .try_clone()
++                    .map_err(MagmaGpuError::IoError)?
++                    .into_raw_descriptor();
++                let args = virgl_renderer_resource_import_vulkan_blob_args {
++                    blob: virgl_renderer_resource_import_blob_args {
++                        res_handle: resource.resource_id,
++                        // a guest copy (HOST3D_GUEST) is the gralloc's own;
++                        // Venus imports the host image
++                        blob_mem: VIRGL_RENDERER_BLOB_MEM_HOST3D,
++                        fd_type: VIRGL_RENDERER_BLOB_FD_TYPE_OPAQUE,
++                        fd,
++                        size: resource.size,
++                    },
++                    device_uuid: vulkan_info.device_id.device_uuid,
++                    driver_uuid: vulkan_info.device_id.driver_uuid,
++                    allocation_size: resource.size,
++                    memory_type_index: vulkan_info.memory_idx,
++                };
++                // SAFETY:
++                // Safe because we are being passed a valid fd, which
++                // virglrenderer owns only when the import succeeds.
++                let ret = unsafe { import_vulkan_blob(&args) };
++                if ret != 0 {
++                    // SAFETY: the fd is still ours.
++                    unsafe { libc::close(fd) };
++                    return Ok(());
++                }
++
++                resource.component_mask |= 1 << (RutabagaComponentType::VirglRenderer as u8);
++            }
++        }
+     }
+ 
+     Ok(())

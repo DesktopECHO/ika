@@ -87,6 +87,9 @@ crosvm_bin.annotation(
         "@//build_external/crosvm:PATCH.crosvm-gpu-unref-shmem-mapping.patch",
         "@//build_external/crosvm:PATCH.crosvm-resize-display.patch",
         "@//build_external/crosvm:PATCH.crosvm-flush-held-dmabuf.patch",
+        # Only a dma-buf scanout goes to the compositor; an opaque fd (an
+        # optimal image under WSL2) is read back instead.
+        "@//build_external/crosvm:PATCH.crosvm-display-dmabuf-only.patch",
         "@//build_external/crosvm:PATCH.crosvm-enable-vulkano-gralloc.patch",
         "@//build_external/crosvm:PATCH.crosvm-fixed-blob-mapping-virglrenderer.patch",
         # The virtio-media decoder adapter gets no GPU resource bridge, which it
@@ -227,6 +230,9 @@ crosvm_bin.annotation(
         # A scanout flush into a dma-buf the compositor still holds is dropped
         # instead of shown into the frame on screen.
         "@//build_external/crosvm:PATCH.crosvm-flush-held-dmabuf-devices.patch",
+        # Only a dma-buf scanout goes to the compositor; an opaque fd (an
+        # optimal image under WSL2) is read back instead.
+        "@//build_external/crosvm:PATCH.crosvm-display-dmabuf-only-devices.patch",
         # With fixed blob mapping (Venus), map dma-buf blobs that carry
         # Vulkan info directly instead of through a Vulkan import.
         "@//build_external/crosvm:PATCH.crosvm-fixed-blob-mapping-dmabuf-devices.patch",
@@ -279,6 +285,11 @@ crosvm_bin.annotation(
         # Export gfxstream resources on demand and read their layout lazily,
         # after gfxstream gave the scanout its explicit DRM modifier.
         "@//build_external/crosvm:PATCH.rutabaga_gfx-on-demand-export-and-query.patch",
+        # Where the driver exports no dma-bufs (Dozen, under WSL2), Venus
+        # mode's gralloc allocates optimal images shared by opaque fd, hands
+        # them to virglrenderer with their Vulkan info, and reads them back
+        # for the display.
+        "@//build_external/crosvm:PATCH.rutabaga_gfx-wsl-optimal-images.patch",
     ],
     repositories = ["crosvm_bin"],
 )

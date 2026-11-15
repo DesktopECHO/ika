@@ -1,0 +1,321 @@
+diff --git a/server/render_context.c b/server/render_context.c
+index 848758b..7011dff 100644
+--- a/server/render_context.c
++++ b/server/render_context.c
+@@ -94,7 +94,10 @@ render_context_dispatch_import_resource(struct render_context *ctx,
+    const struct render_context_op_import_resource_request *req =
+       &request->import_resource;
+    return render_state_import_resource(ctx->ctx_id, req->res_id, req->fd_type, fds[0],
+-                                       req->size);
++                                       req->size,
++                                       req->fd_type == VIRGL_RESOURCE_FD_OPAQUE
++                                          ? &req->vulkan_info
++                                          : NULL);
+ }
+ 
+ static bool
+diff --git a/server/render_protocol.h b/server/render_protocol.h
+index c4bb332..df95b3b 100644
+--- a/server/render_protocol.h
++++ b/server/render_protocol.h
+@@ -176,6 +176,8 @@ struct render_context_op_import_resource_request {
+    uint32_t res_id;
+    enum virgl_resource_fd_type fd_type;
+    uint64_t size;
++   /* set if the fd_type is VIRGL_RESOURCE_FD_OPAQUE */
++   struct virgl_resource_vulkan_info vulkan_info;
+    /* followed by 1 fd */
+ };
+ 
+diff --git a/server/render_state.c b/server/render_state.c
+index e80ee8f..ea1e3e1 100644
+--- a/server/render_state.c
++++ b/server/render_state.c
+@@ -241,10 +241,11 @@ render_state_import_resource(uint32_t ctx_id,
+                              uint32_t res_id,
+                              enum virgl_resource_fd_type fd_type,
+                              int fd,
+-                             uint64_t size)
++                             uint64_t size,
++                             const struct virgl_resource_vulkan_info *vulkan_info)
+ {
+    SCOPE_LOCK_RENDERER();
+-   return vkr_renderer_import_resource(ctx_id, res_id, fd_type, fd, size);
++   return vkr_renderer_import_resource(ctx_id, res_id, fd_type, fd, size, vulkan_info);
+ }
+ 
+ void
+diff --git a/server/render_state.h b/server/render_state.h
+index 72b6dff..1282afd 100644
+--- a/server/render_state.h
++++ b/server/render_state.h
+@@ -49,7 +49,8 @@ render_state_import_resource(uint32_t ctx_id,
+                              uint32_t res_id,
+                              enum virgl_resource_fd_type fd_type,
+                              int fd,
+-                             uint64_t size);
++                             uint64_t size,
++                             const struct virgl_resource_vulkan_info *vulkan_info);
+ 
+ void
+ render_state_destroy_resource(uint32_t ctx_id, uint32_t res_id);
+diff --git a/src/proxy/proxy_context.c b/src/proxy/proxy_context.c
+index a834abb..e4c34d6 100644
+--- a/src/proxy/proxy_context.c
++++ b/src/proxy/proxy_context.c
+@@ -470,13 +470,19 @@ proxy_context_attach_resource(struct virgl_context *base, struct virgl_resource
+    if (proxy_context_resource_find(ctx, res_id))
+       return;
+ 
+-   /* The current render protocol only supports importing dma-buf, shm or pipe resource
+-    * that can be exported to dma-buf. A protocol change is needed when there exists use
+-    * case for importing external Vulkan opaque resource.
++   /* The render protocol imports dma-buf, shm or pipe resource that can be
++    * exported to dma-buf, and opaque Vulkan memory when the server runs in this
++    * process, where the opaque fd (a D3D12 shared handle, under WSL2) means
++    * the same to its driver.
+     */
++   bool opaque_ok = false;
++#ifdef ENABLE_SAME_PROCESS_RENDER_SERVER
++   opaque_ok = proxy_renderer.server->in_process;
++#endif
+    if (res->fd_type != VIRGL_RESOURCE_FD_INVALID &&
+        res->fd_type != VIRGL_RESOURCE_FD_DMABUF &&
+-       res->fd_type != VIRGL_RESOURCE_FD_SHM) {
++       res->fd_type != VIRGL_RESOURCE_FD_SHM &&
++       !(res->fd_type == VIRGL_RESOURCE_FD_OPAQUE && opaque_ok)) {
+       proxy_log("failed to attach res %d with fd_type %d", res_id, res->fd_type);
+       return;
+    }
+@@ -511,6 +517,7 @@ proxy_context_attach_resource(struct virgl_context *base, struct virgl_resource
+       .res_id = res_id,
+       .fd_type = res_fd_type,
+       .size = res_size,
++      .vulkan_info = res->vulkan_info,
+    };
+    if (!proxy_socket_send_request_with_fds(&ctx->socket, &req, sizeof(req), &res_fd, 1))
+       proxy_log("failed to attach res %d", res_id);
+diff --git a/src/venus/vkr_context.c b/src/venus/vkr_context.c
+index cc82c42..3b45e6b 100644
+--- a/src/venus/vkr_context.c
++++ b/src/venus/vkr_context.c
+@@ -237,6 +237,7 @@ vkr_context_import_resource_internal(struct vkr_context *ctx,
+    res->res_id = res_id;
+    res->fd_type = fd_type;
+    res->size = blob_size;
++   res->has_vulkan_info = false;
+ 
+    /* fd and mmap_ptr cannot be valid at the same time, but allowed to be -1 and NULL */
+    assert(fd < 0 || !mmap_ptr);
+@@ -382,12 +383,22 @@ vkr_context_import_resource(struct vkr_context *ctx,
+                             uint32_t res_id,
+                             enum virgl_resource_fd_type fd_type,
+                             int fd,
+-                            uint64_t size)
++                            uint64_t size,
++                            const struct virgl_resource_vulkan_info *vulkan_info)
+ {
+    if (fd_type == VIRGL_RESOURCE_FD_SHM)
+       return vkr_context_import_resource_from_shm(ctx, res_id, size, fd);
+ 
+-   return vkr_context_import_resource_internal(ctx, res_id, size, fd_type, fd, NULL);
++   if (!vkr_context_import_resource_internal(ctx, res_id, size, fd_type, fd, NULL))
++      return false;
++
++   if (vulkan_info) {
++      struct vkr_resource *res = vkr_context_get_resource(ctx, res_id);
++      res->has_vulkan_info = true;
++      res->vulkan_info = *vulkan_info;
++   }
++
++   return true;
+ }
+ 
+ void
+diff --git a/src/venus/vkr_context.h b/src/venus/vkr_context.h
+index 3867f13..3d65b44 100644
+--- a/src/venus/vkr_context.h
++++ b/src/venus/vkr_context.h
+@@ -32,6 +32,10 @@ struct vkr_resource {
+    } u;
+ 
+    size_t size;
++
++   /* what an import of an opaque fd must match, if known */
++   bool has_vulkan_info;
++   struct virgl_resource_vulkan_info vulkan_info;
+ };
+ 
+ enum vkr_context_validate_level {
+@@ -139,7 +143,8 @@ vkr_context_import_resource(struct vkr_context *ctx,
+                             uint32_t res_id,
+                             enum virgl_resource_fd_type fd_type,
+                             int fd,
+-                            uint64_t size);
++                            uint64_t size,
++                            const struct virgl_resource_vulkan_info *vulkan_info);
+ 
+ void
+ vkr_context_destroy_resource(struct vkr_context *ctx, uint32_t res_id);
+diff --git a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
+index 0bac5a8..f78df76 100644
+--- a/src/venus/vkr_device_memory.c
++++ b/src/venus/vkr_device_memory.c
+@@ -272,6 +272,11 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+          return;
+       }
+ 
++      /* an opaque fd is imported at the size it was exported at */
++      const struct vkr_resource *res = vkr_context_get_resource(ctx, res_info->resourceId);
++      if (res->fd_type == VIRGL_RESOURCE_FD_OPAQUE && res->has_vulkan_info)
++         alloc_info->allocationSize = res->vulkan_info.allocation_size;
++
+       vkr_pnext_set_next(prev_of_res_info, &local_import_info);
+    }
+ 
+@@ -487,6 +492,23 @@ vkr_dispatch_vkGetMemoryResourcePropertiesMESA(
+       return;
+    }
+ 
++   if (res->fd_type == VIRGL_RESOURCE_FD_OPAQUE && res->has_vulkan_info) {
++      /* An opaque fd has no properties to query: an import must use the
++       * exporter's memory type and allocation size.
++       */
++      uint32_t memory_type_bits = 1u << res->vulkan_info.memory_type_index;
++      vkr_physical_device_mem_type_spoof(dev->physical_device, &memory_type_bits);
++      args->pMemoryResourceProperties->memoryTypeBits = memory_type_bits;
++      args->ret = VK_SUCCESS;
++
++      VkMemoryResourceAllocationSizePropertiesMESA *alloc_size_props =
++         vkr_find_struct(args->pMemoryResourceProperties->pNext,
++                         VK_STRUCTURE_TYPE_MEMORY_RESOURCE_ALLOCATION_SIZE_PROPERTIES_MESA);
++      if (alloc_size_props)
++         alloc_size_props->allocationSize = res->vulkan_info.allocation_size;
++      return;
++   }
++
+    if (res->fd_type != VIRGL_RESOURCE_FD_DMABUF) {
+       args->ret = VK_ERROR_INVALID_EXTERNAL_HANDLE;
+       return;
+diff --git a/src/venus/vkr_renderer.c b/src/venus/vkr_renderer.c
+index 0597575..2455c47 100644
+--- a/src/venus/vkr_renderer.c
++++ b/src/venus/vkr_renderer.c
+@@ -220,7 +220,8 @@ vkr_renderer_import_resource(uint32_t ctx_id,
+                              uint32_t res_id,
+                              enum virgl_resource_fd_type fd_type,
+                              int fd,
+-                             uint64_t size)
++                             uint64_t size,
++                             const struct virgl_resource_vulkan_info *vulkan_info)
+ {
+    TRACE_FUNC();
+ 
+@@ -234,7 +235,7 @@ vkr_renderer_import_resource(uint32_t ctx_id,
+    if (!ctx)
+       return false;
+ 
+-   return vkr_context_import_resource(ctx, res_id, fd_type, fd, size);
++   return vkr_context_import_resource(ctx, res_id, fd_type, fd, size, vulkan_info);
+ }
+ 
+ void
+diff --git a/src/venus/vkr_renderer.h b/src/venus/vkr_renderer.h
+index ea77163..aa4a6a5 100644
+--- a/src/venus/vkr_renderer.h
++++ b/src/venus/vkr_renderer.h
+@@ -73,7 +73,8 @@ vkr_renderer_import_resource(uint32_t ctx_id,
+                              uint32_t res_id,
+                              enum virgl_resource_fd_type fd_type,
+                              int fd,
+-                             uint64_t size);
++                             uint64_t size,
++                             const struct virgl_resource_vulkan_info *vulkan_info);
+ 
+ void
+ vkr_renderer_destroy_resource(uint32_t ctx_id, uint32_t res_id);
+diff --git a/src/virglrenderer.c b/src/virglrenderer.c
+index efe5bed..220ecd0 100644
+--- a/src/virglrenderer.c
++++ b/src/virglrenderer.c
+@@ -1549,10 +1549,10 @@ virgl_renderer_resource_export_blob(uint32_t res_id, uint32_t *fd_type, int *fd)
+    return 0;
+ }
+ 
+-int
+-virgl_renderer_resource_import_blob(const struct virgl_renderer_resource_import_blob_args *args)
++static int
++resource_import_blob(const struct virgl_renderer_resource_import_blob_args *args,
++                     const struct virgl_resource_vulkan_info *vulkan_info)
+ {
+-   TRACE_FUNC();
+    struct virgl_resource *res;
+ 
+    /* user resource id must be greater than 0 */
+@@ -1596,7 +1596,7 @@ virgl_renderer_resource_import_blob(const struct virgl_renderer_resource_import_
+                                        args->fd,
+                                        NULL,
+                                        0,
+-                                       NULL);
++                                       vulkan_info);
+    if (!res)
+       return -ENOMEM;
+ 
+@@ -1606,6 +1606,30 @@ virgl_renderer_resource_import_blob(const struct virgl_renderer_resource_import_
+    return 0;
+ }
+ 
++int
++virgl_renderer_resource_import_blob(const struct virgl_renderer_resource_import_blob_args *args)
++{
++   TRACE_FUNC();
++   return resource_import_blob(args, NULL);
++}
++
++int
++virgl_renderer_resource_import_vulkan_blob(
++   const struct virgl_renderer_resource_import_vulkan_blob_args *args)
++{
++   TRACE_FUNC();
++   if (args->blob.fd_type != VIRGL_RENDERER_BLOB_FD_TYPE_OPAQUE)
++      return -EINVAL;
++
++   struct virgl_resource_vulkan_info vulkan_info = {
++      .allocation_size = args->allocation_size,
++      .memory_type_index = args->memory_type_index,
++   };
++   memcpy(vulkan_info.device_uuid, args->device_uuid, sizeof(vulkan_info.device_uuid));
++   memcpy(vulkan_info.driver_uuid, args->driver_uuid, sizeof(vulkan_info.driver_uuid));
++   return resource_import_blob(&args->blob, &vulkan_info);
++}
++
+ int
+ virgl_renderer_export_fence(uint64_t client_fence_id, int *fd)
+ {
+diff --git a/src/virglrenderer.h b/src/virglrenderer.h
+index 0bcafef..4342e97 100644
+--- a/src/virglrenderer.h
++++ b/src/virglrenderer.h
+@@ -451,6 +451,22 @@ struct virgl_renderer_resource_import_blob_args
+ VIRGL_EXPORT int
+ virgl_renderer_resource_import_blob(const struct virgl_renderer_resource_import_blob_args *args);
+ 
++/* An opaque fd (VIRGL_RENDERER_BLOB_FD_TYPE_OPAQUE) of Vulkan memory, with what
++ * a Vulkan import of it must match.
++ */
++struct virgl_renderer_resource_import_vulkan_blob_args
++{
++   struct virgl_renderer_resource_import_blob_args blob;
++   uint8_t device_uuid[16];
++   uint8_t driver_uuid[16];
++   uint64_t allocation_size;
++   uint32_t memory_type_index;
++};
++
++VIRGL_EXPORT int
++virgl_renderer_resource_import_vulkan_blob(
++   const struct virgl_renderer_resource_import_vulkan_blob_args *args);
++
+ #define VIRGL_RENDERER_FENCE_FLAG_MERGEABLE      (1 << 0)
+ VIRGL_EXPORT int virgl_renderer_context_create_fence(uint32_t ctx_id,
+                                                      uint32_t flags,

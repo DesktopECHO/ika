@@ -1,0 +1,180 @@
+diff --git a/src/venus/vkr_context.c b/src/venus/vkr_context.c
+index 3b45e6b..37a7ee9 100644
+--- a/src/venus/vkr_context.c
++++ b/src/venus/vkr_context.c
+@@ -238,6 +238,7 @@ vkr_context_import_resource_internal(struct vkr_context *ctx,
+    res->fd_type = fd_type;
+    res->size = blob_size;
+    res->has_vulkan_info = false;
++   res->map_mem = NULL;
+ 
+    /* fd and mmap_ptr cannot be valid at the same time, but allowed to be -1 and NULL */
+    assert(fd < 0 || !mmap_ptr);
+@@ -351,10 +352,17 @@ vkr_context_create_resource_from_device_memory(struct vkr_context *ctx,
+                                              NULL)) {
+       if (res_fd >= 0)
+          close(res_fd);
+-      close(blob.u.fd);
++      if (blob.type != VIRGL_RESOURCE_OPAQUE_HANDLE)
++         close(blob.u.fd);
+       return false;
+    }
+ 
++   if (blob.type == VIRGL_RESOURCE_OPAQUE_HANDLE) {
++      struct vkr_resource *res = vkr_context_get_resource(ctx, res_id);
++      res->map_mem = mem;
++      mem->map_res_id = res_id;
++   }
++
+    *out_blob = blob;
+ 
+    return true;
+@@ -408,6 +416,19 @@ vkr_context_destroy_resource(struct vkr_context *ctx, uint32_t res_id)
+    if (!res)
+       return;
+ 
++   /* The VMM unmapped the memory before it destroyed the resource: free the
++    * memory now if the guest already did.
++    */
++   mtx_lock(&ctx->resource_mutex);
++   struct vkr_device_memory *map_mem = res->map_mem;
++   const bool free_map_mem = map_mem && map_mem->freed_by_guest;
++   res->map_mem = NULL;
++   if (map_mem)
++      map_mem->map_res_id = 0;
++   mtx_unlock(&ctx->resource_mutex);
++   if (free_map_mem)
++      vkr_device_memory_free_deferred(ctx, map_mem);
++
+    if (!vkr_cs_encoder_check_stream(&ctx->encoder, res))
+       vkr_context_set_fatal(ctx);
+ 
+diff --git a/src/venus/vkr_context.h b/src/venus/vkr_context.h
+index 3d65b44..9f307f0 100644
+--- a/src/venus/vkr_context.h
++++ b/src/venus/vkr_context.h
+@@ -36,6 +36,11 @@ struct vkr_resource {
+    /* what an import of an opaque fd must match, if known */
+    bool has_vulkan_info;
+    struct virgl_resource_vulkan_info vulkan_info;
++
++   /* device memory the VMM maps through vkMapMemory's pointer, freed only
++    * with this resource (VKR_RENDERER_MAP_IN_PROCESS)
++    */
++   struct vkr_device_memory *map_mem;
+ };
+ 
+ enum vkr_context_validate_level {
+diff --git a/src/venus/vkr_device.c b/src/venus/vkr_device.c
+index 25471e7..48b289d 100644
+--- a/src/venus/vkr_device.c
++++ b/src/venus/vkr_device.c
+@@ -339,9 +339,20 @@ vkr_device_object_destroy(struct vkr_context *ctx,
+ 
+    /* always cleanup vkr allocs */
+    switch (obj->type) {
+-   case VK_OBJECT_TYPE_DEVICE_MEMORY:
+-      vkr_device_memory_release((struct vkr_device_memory *)obj);
++   case VK_OBJECT_TYPE_DEVICE_MEMORY: {
++      /* the resource the VMM maps the memory through outlives it here */
++      struct vkr_device_memory *mem = (struct vkr_device_memory *)obj;
++      if (mem->map_res_id) {
++         mtx_lock(&ctx->resource_mutex);
++         struct hash_entry *entry =
++            _mesa_hash_table_search(ctx->resource_table, &mem->map_res_id);
++         if (entry && ((struct vkr_resource *)entry->data)->map_mem == mem)
++            ((struct vkr_resource *)entry->data)->map_mem = NULL;
++         mtx_unlock(&ctx->resource_mutex);
++      }
++      vkr_device_memory_release(mem);
+       break;
++   }
+    case VK_OBJECT_TYPE_DESCRIPTOR_POOL:
+       /* Destroying VkDescriptorPool frees all VkDescriptorSet allocated inside. */
+       vkr_descriptor_pool_release(ctx, (struct vkr_descriptor_pool *)obj);
+diff --git a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
+index f78df76..8bd48da 100644
+--- a/src/venus/vkr_device_memory.c
++++ b/src/venus/vkr_device_memory.c
+@@ -447,10 +447,41 @@ vkr_dispatch_vkFreeMemory(struct vn_dispatch_context *dispatch,
+    if (!mem)
+       return;
+ 
++   /* Memory the VMM maps by pointer is freed with its resource, after the VMM
++    * unmapped it: the guest frees memory and unmaps its blob in either order,
++    * and a range the VMM still maps could otherwise be reused.
++    */
++   struct vkr_context *ctx = dispatch->data;
++   bool deferred = false;
++   mtx_lock(&ctx->resource_mutex);
++   if (mem->map_res_id) {
++      const struct hash_entry *entry =
++         _mesa_hash_table_search(ctx->resource_table, &mem->map_res_id);
++      const struct vkr_resource *res = entry ? entry->data : NULL;
++      if (res && res->map_mem == mem) {
++         mem->freed_by_guest = true;
++         deferred = true;
++      }
++   }
++   mtx_unlock(&ctx->resource_mutex);
++   if (deferred)
++      return;
++
+    vkr_device_memory_release(mem);
+    vkr_device_memory_destroy_and_remove(dispatch->data, args);
+ }
+ 
++void
++vkr_device_memory_free_deferred(struct vkr_context *ctx, struct vkr_device_memory *mem)
++{
++   struct vkr_device *dev = mem->device;
++
++   vkr_device_memory_release(mem);
++   dev->proc_table.FreeMemory(dev->base.handle.device, mem->base.handle.device_memory,
++                              NULL);
++   vkr_device_remove_object(ctx, dev, &mem->base);
++}
++
+ static void
+ vkr_dispatch_vkGetDeviceMemoryCommitment(
+    UNUSED struct vn_dispatch_context *dispatch,
+@@ -560,10 +591,6 @@ vkr_context_init_device_memory_dispatch(struct vkr_context *ctx)
+ void
+ vkr_device_memory_release(struct vkr_device_memory *mem)
+ {
+-   if (mem->map_ptr) {
+-      struct vn_device_proc_table *vk = &mem->device->proc_table;
+-      vk->UnmapMemory(mem->device->base.handle.device, mem->base.handle.device_memory);
+-   }
+    vkr_mtl_shm_free(mem->mtl_shm);
+    if (mem->gbm_bo)
+       vkr_gbm_bo_destroy(mem->gbm_bo);
+diff --git a/src/venus/vkr_device_memory.h b/src/venus/vkr_device_memory.h
+index 0171b0c..568155d 100644
+--- a/src/venus/vkr_device_memory.h
++++ b/src/venus/vkr_device_memory.h
+@@ -33,8 +33,13 @@ struct vkr_device_memory {
+    uint64_t allocation_size;
+    uint32_t memory_type_index;
+ 
+-   /* vkMapMemory's pointer, handed to an in-process VMM */
++   /* vkMapMemory's pointer, handed to an in-process VMM, and the resource
++    * the VMM maps it through
++    */
+    void *map_ptr;
++   uint32_t map_res_id;
++   /* vkFreeMemory came while the VMM could still map the memory */
++   bool freed_by_guest;
+ 
+    bool exported;
+ };
+@@ -46,6 +51,9 @@ vkr_context_init_device_memory_dispatch(struct vkr_context *ctx);
+ void
+ vkr_device_memory_release(struct vkr_device_memory *mem);
+ 
++void
++vkr_device_memory_free_deferred(struct vkr_context *ctx, struct vkr_device_memory *mem);
++
+ bool
+ vkr_device_memory_export_blob(struct vkr_device_memory *mem,
+                               uint64_t blob_size,

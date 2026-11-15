@@ -19,6 +19,26 @@ git_repository(
         # signaled with the next frame's, and Android's apps drew in pairs of
         # frames with the GPU idle between.
         "@//build_external/virglrenderer:PATCH.venus-gate-submits-behind-fences.patch",
+        # Run the render server in a thread of crosvm when crosvm starts
+        # none, and hand crosvm Venus's mappable memory as vkMapMemory's
+        # pointer there: under WSL2, D3D12 (Dozen) cannot share memory the
+        # CPU sees, as a dma-buf, an opaque fd or an imported host pointer.
+        "@//build_external/virglrenderer:PATCH.venus-same-process-render-server.patch",
+        # Leave out the device groups of devices vkEnumeratePhysicalDevices
+        # did not list, as Mesa's device-select layer does not narrow them
+        # (MESA_VK_DEVICE_SELECT=vid:did!, Ika's WSL2 setup): Venus's guest
+        # driver found no device at all.
+        "@//build_external/virglrenderer:PATCH.venus-device-groups-of-listed-devices.patch",
+        # Import opaque-fd Vulkan memory (the optimal images crosvm's gralloc
+        # shares under WSL2) into the in-process render server, with the
+        # memory type and size a Vulkan import of it must use.
+        "@//build_external/virglrenderer:PATCH.venus-import-opaque-images.patch",
+        # Free device memory crosvm maps by pointer only with its resource,
+        # after crosvm unmapped it: the guest frees memory and unmaps its blob
+        # in either order, so a range crosvm still mapped could be reused.
+        # Also stops unmapping memory after a device freed it. Without both,
+        # crosvm's GPU thread aborted with a corrupted stack within seconds.
+        "@//build_external/virglrenderer:PATCH.venus-free-mapped-memory-with-resource.patch",
     ],
     remote = "https://gitlab.freedesktop.org/virgl/virglrenderer",
 )
