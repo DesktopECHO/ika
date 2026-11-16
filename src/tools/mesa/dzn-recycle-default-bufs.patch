@@ -1,0 +1,160 @@
+dzn: Keep the default-heap internal buffers of a command buffer for its next recording
+
+Generated-by: LLM
+diff -ru a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -471,6 +471,18 @@
+    }
+ }
+ 
++static int
++dzn_internal_buf_class(const struct dzn_internal_resource *res)
++{
++   const uint64_t step = 64 * 1024;
++
++   if (res->init_state != D3D12_RESOURCE_STATE_UNORDERED_ACCESS ||
++       res->size % step || res->size > step * DZN_FREE_DEFAULT_BUF_CLASSES)
++      return -1;
++
++   return res->size / step - 1;
++}
++
+ static void
+ dzn_cmd_buffer_destroy(struct vk_command_buffer *cbuf)
+ {
+@@ -505,6 +517,13 @@
+       ID3D12Resource_Release(res->res);
+       vk_free(&cbuf->pool->alloc, res);
+    }
++   for (uint32_t c = 0; c < DZN_FREE_DEFAULT_BUF_CLASSES; c++) {
++      list_for_each_entry_safe(struct dzn_internal_resource, res, &cmdbuf->free_default_bufs[c], link) {
++         list_del(&res->link);
++         ID3D12Resource_Release(res->res);
++         vk_free(&cbuf->pool->alloc, res);
++      }
++   }
+    list_for_each_entry_safe(struct dzn_internal_heap, h, &cmdbuf->internal_heaps, link) {
+       list_del(&h->link);
+       ID3D12Heap_Release(h->heap);
+@@ -570,6 +589,14 @@
+ 
+    /* Keep a few upload buffers, mapped, for the next recording: creating
+     * and mapping one costs more than recording with it. */
++   uint64_t default_bytes = cmdbuf->free_default_bytes;
++   list_for_each_entry(struct dzn_internal_resource, res,
++                       &cmdbuf->internal_bufs[DZN_INTERNAL_BUF_DEFAULT], link) {
++      if (dzn_internal_buf_class(res) >= 0)
++         default_bytes += res->size;
++   }
++   const bool keep_default = default_bytes <= DZN_MAX_FREE_DEFAULT_BYTES;
++
+    for (uint32_t bucket = 0; bucket < DZN_INTERNAL_BUF_BUCKET_COUNT; ++bucket) {
+       list_for_each_entry_safe(struct dzn_internal_resource, res, &cmdbuf->internal_bufs[bucket], link) {
+          list_del(&res->link);
+@@ -579,14 +606,32 @@
+             cmdbuf->free_upload_buf_count++;
+             continue;
+          }
++         int c = bucket == DZN_INTERNAL_BUF_DEFAULT ? dzn_internal_buf_class(res) : -1;
++         if (keep_default && c >= 0) {
++            list_addtail(&res->link, &cmdbuf->free_default_bufs[c]);
++            cmdbuf->free_default_bytes += res->size;
++            continue;
++         }
+          ID3D12Resource_Release(res->res);
+          vk_free(&cmdbuf->vk.pool->alloc, res);
+       }
+    }
+-   list_for_each_entry_safe(struct dzn_internal_heap, h, &cmdbuf->internal_heaps, link) {
+-      list_del(&h->link);
+-      ID3D12Heap_Release(h->heap);
+-      vk_free(&cmdbuf->vk.pool->alloc, h);
++   if (!keep_default) {
++      for (uint32_t c = 0; c < DZN_FREE_DEFAULT_BUF_CLASSES; c++) {
++         list_for_each_entry_safe(struct dzn_internal_resource, res, &cmdbuf->free_default_bufs[c], link) {
++            list_del(&res->link);
++            ID3D12Resource_Release(res->res);
++            vk_free(&cmdbuf->vk.pool->alloc, res);
++         }
++      }
++      cmdbuf->free_default_bytes = 0;
++   }
++   if (!cmdbuf->free_default_bytes) {
++      list_for_each_entry_safe(struct dzn_internal_heap, h, &cmdbuf->internal_heaps, link) {
++         list_del(&h->link);
++         ID3D12Heap_Release(h->heap);
++         vk_free(&cmdbuf->vk.pool->alloc, h);
++      }
+    }
+    cmdbuf->cur_default_heap = NULL;
+    cmdbuf->cur_default_heap_offset = 0;
+@@ -743,6 +788,8 @@
+    for (uint32_t bucket = 0; bucket < DZN_INTERNAL_BUF_BUCKET_COUNT; ++bucket)
+       list_inithead(&cmdbuf->internal_bufs[bucket]);
+    list_inithead(&cmdbuf->free_upload_bufs);
++   for (uint32_t c = 0; c < DZN_FREE_DEFAULT_BUF_CLASSES; c++)
++      list_inithead(&cmdbuf->free_default_bufs[c]);
+    list_inithead(&cmdbuf->internal_heaps);
+    list_inithead(&cmdbuf->gpu_work);
+    cmdbuf->events.signal = UTIL_DYNARRAY_INIT;
+@@ -1938,6 +1985,23 @@
+       /* Align size on 64k (the default alignment) */
+       alloc_size = ALIGN_POT(size, 64 * 1024);
+ 
++   if (bucket == DZN_INTERNAL_BUF_DEFAULT) {
++      const struct dzn_internal_resource key = {
++         .size = alloc_size,
++         .init_state = init_state,
++      };
++      int c = dzn_internal_buf_class(&key);
++      if (c >= 0 && !list_is_empty(&cmdbuf->free_default_bufs[c])) {
++         struct dzn_internal_resource *entry =
++            list_first_entry(&cmdbuf->free_default_bufs[c], struct dzn_internal_resource, link);
++         list_del(&entry->link);
++         cmdbuf->free_default_bytes -= entry->size;
++         list_addtail(&entry->link, &cmdbuf->internal_bufs[bucket]);
++         *out = entry->res;
++         return VK_SUCCESS;
++      }
++   }
++
+    if (bucket == DZN_INTERNAL_BUF_UPLOAD) {
+       list_for_each_entry(struct dzn_internal_resource, entry, &cmdbuf->free_upload_bufs, link) {
+          if (entry->size < alloc_size)
+@@ -2040,6 +2104,7 @@
+ 
+    entry->res = res;
+    entry->size = alloc_size;
++   entry->init_state = init_state;
+    entry->map = NULL;
+    if (bucket == DZN_INTERNAL_BUF_UPLOAD &&
+        FAILED(ID3D12Resource_Map(res, 0, NULL, &entry->map))) {
+diff -ru a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -629,11 +629,14 @@
+ 
+ /* Upload buffers a reset command buffer keeps for its next recording. */
+ #define DZN_MAX_FREE_UPLOAD_BUFS 4
++#define DZN_FREE_DEFAULT_BUF_CLASSES 16
++#define DZN_MAX_FREE_DEFAULT_BYTES (64ull * 1024 * 1024)
+ 
+ struct dzn_internal_resource {
+    struct list_head link;
+    ID3D12Resource *res;
+    uint64_t size;
++   D3D12_RESOURCE_STATES init_state;
+    /* Upload buffers stay mapped for as long as they exist. */
+    void *map;
+ };
+@@ -839,6 +842,8 @@
+    /* Upload buffers kept from before the last reset, for the next recording. */
+    struct list_head free_upload_bufs;
+    uint32_t free_upload_buf_count;
++   struct list_head free_default_bufs[DZN_FREE_DEFAULT_BUF_CLASSES];
++   uint64_t free_default_bytes;
+ 
+    ID3D12CommandAllocator *cmdalloc;
+    ID3D12GraphicsCommandList1 *cmdlist;
+Only in a/src/microsoft/vulkan: dzn_texcompress.c

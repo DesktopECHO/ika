@@ -35,3 +35,4 @@ dzn-3d-image-barriers.patch
 dzn-import-own-export.patch
 dzn-discard-placed-targets.patch
 dzn-texcompress-emulation.patch
+dzn-recycle-default-bufs.patch
