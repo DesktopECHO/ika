@@ -1,0 +1,242 @@
+hk: Place shader code in shared executable buffers
+
+Generated-by: LLM
+diff --git a/src/asahi/lib/agx_device.c b/src/asahi/lib/agx_device.c
+--- a/src/asahi/lib/agx_device.c
++++ b/src/asahi/lib/agx_device.c
+@@ -649,6 +649,10 @@
+    util_vma_heap_init(&dev->main_heap, user_start, user_size);
+    util_vma_heap_init(&dev->usc_heap, dev->shader_base, shader_size);
+ 
++   simple_mtx_init(&dev->exec.lock, mtx_plain);
++   util_vma_heap_init(&dev->exec.heap, 0, 0);
++   util_dynarray_init(&dev->exec.bos, NULL);
++
+    dev->vm_id = vm_create.vm_id;
+ 
+    glsl_type_singleton_init_or_ref();
+@@ -718,12 +722,65 @@
+    return true;
+ }
+ 
++#define AGX_EXEC_ALIGN 128
++#define AGX_EXEC_BO_SIZE (2 * 1024 * 1024)
++
++uint64_t
++agx_exec_alloc(struct agx_device *dev, size_t size, void **map)
++{
++   size = align64(size, AGX_EXEC_ALIGN);
++
++   simple_mtx_lock(&dev->exec.lock);
++   uint64_t addr = util_vma_heap_alloc(&dev->exec.heap, size, AGX_EXEC_ALIGN);
++
++   if (!addr) {
++      size_t bo_size = MAX2(AGX_EXEC_BO_SIZE, size + AGX_EXEC_ALIGN);
++      struct agx_bo *bo = agx_bo_create(dev, bo_size, 0,
++                                        AGX_BO_EXEC | AGX_BO_LOW_VA,
++                                        "Executable heap");
++      if (!bo) {
++         simple_mtx_unlock(&dev->exec.lock);
++         return 0;
++      }
++
++      util_dynarray_append(&dev->exec.bos, bo);
++      util_vma_heap_free(&dev->exec.heap, bo->va->addr,
++                         bo->size - AGX_EXEC_ALIGN);
++      addr = util_vma_heap_alloc(&dev->exec.heap, size, AGX_EXEC_ALIGN);
++   }
++
++   *map = NULL;
++   util_dynarray_foreach(&dev->exec.bos, struct agx_bo *, bo) {
++      if (addr >= (*bo)->va->addr && addr < (*bo)->va->addr + (*bo)->size) {
++         *map = (uint8_t *)agx_bo_map(*bo) + (addr - (*bo)->va->addr);
++         break;
++      }
++   }
++
++   simple_mtx_unlock(&dev->exec.lock);
++   assert(*map != NULL);
++   return addr;
++}
++
++void
++agx_exec_free(struct agx_device *dev, uint64_t addr, size_t size)
++{
++   simple_mtx_lock(&dev->exec.lock);
++   util_vma_heap_free(&dev->exec.heap, addr, align64(size, AGX_EXEC_ALIGN));
++   simple_mtx_unlock(&dev->exec.lock);
++}
++
+ void
+ agx_close_device(struct agx_device *dev)
+ {
+    agx_bo_unreference(dev, dev->printf.bo);
+    agx_bo_unreference(dev, dev->zero_bo);
+    agx_bo_unreference(dev, dev->scratch_bo);
++   util_dynarray_foreach(&dev->exec.bos, struct agx_bo *, bo)
++      agx_bo_unreference(dev, *bo);
++   util_dynarray_fini(&dev->exec.bos);
++   util_vma_heap_finish(&dev->exec.heap);
++   simple_mtx_destroy(&dev->exec.lock);
+    u_printf_destroy(&dev->printf);
+    agx_bo_cache_evict_all(dev);
+    util_sparse_array_finish(&dev->bo_map);
+diff --git a/src/asahi/lib/agx_device.h b/src/asahi/lib/agx_device.h
+--- a/src/asahi/lib/agx_device.h
++++ b/src/asahi/lib/agx_device.h
+@@ -12,6 +12,7 @@
+ #include "util/simple_mtx.h"
+ #include "util/sparse_array.h"
+ #include "util/timespec.h"
++#include "util/u_dynarray.h"
+ #include "util/u_printf.h"
+ #include "util/vma.h"
+ #include "agx_bo.h"
+@@ -122,6 +123,13 @@
+    struct util_vma_heap usc_heap;
+    uint64_t guard_size;
+ 
++   struct {
++      bool enabled;
++      simple_mtx_t lock;
++      struct util_vma_heap heap;
++      struct util_dynarray bos;
++   } exec;
++
+    /* To emulate sparse-resident buffers, we map buffers in both the bottom half
+     * and top half of the address space. sparse_ro_offset controls the
+     * partitioning. This is a power-of-two that &'s zero in bottom (read-write)
+@@ -235,6 +243,9 @@
+ 
+ bool agx_open_device(void *memctx, struct agx_device *dev);
+ 
++uint64_t agx_exec_alloc(struct agx_device *dev, size_t size, void **map);
++void agx_exec_free(struct agx_device *dev, uint64_t addr, size_t size);
++
+ void agx_close_device(struct agx_device *dev);
+ 
+ static inline struct agx_bo *
+diff --git a/src/asahi/lib/agx_linker.c b/src/asahi/lib/agx_linker.c
+--- a/src/asahi/lib/agx_linker.c
++++ b/src/asahi/lib/agx_linker.c
+@@ -120,9 +120,18 @@
+ 
+    assert(size > 0 && "must stop");
+ 
+-   linked->bo = agx_bo_create(dev, size, 0, AGX_BO_EXEC | AGX_BO_LOW_VA,
+-                              "Linked executable");
+-   uint8_t *linked_map = agx_bo_map(linked->bo);
++   uint8_t *linked_map;
++   linked->size = size;
++
++   if (dev->exec.enabled) {
++      linked->bo = NULL;
++      linked->addr = agx_exec_alloc(dev, size, (void **)&linked_map);
++   } else {
++      linked->bo = agx_bo_create(dev, size, 0, AGX_BO_EXEC | AGX_BO_LOW_VA,
++                                 "Linked executable");
++      linked->addr = linked->bo->va->addr;
++      linked_map = agx_bo_map(linked->bo);
++   }
+ 
+    size_t offset = 0;
+ 
+@@ -182,7 +191,7 @@
+    assert(offset == size);
+ 
+    agx_pack(&linked->shader, USC_SHADER, cfg) {
+-      cfg.code = agx_usc_addr(dev, linked->bo->va->addr);
++      cfg.code = agx_usc_addr(dev, linked->addr);
+       cfg.unk_2 = fragment ? 2 : 3;
+ 
+       if (fragment)
+diff --git a/src/asahi/lib/agx_linker.h b/src/asahi/lib/agx_linker.h
+--- a/src/asahi/lib/agx_linker.h
++++ b/src/asahi/lib/agx_linker.h
+@@ -15,6 +15,8 @@
+ struct agx_linked_shader {
+    /* Mapped executable memory */
+    struct agx_bo *bo;
++   uint64_t addr;
++   size_t size;
+ 
+    /* Set if the linked SW vertex shader reads base vertex/instance. The VS
+     * prolog can read base instance even when the API VS does not, which is why
+diff --git a/src/asahi/vulkan/hk_device.c b/src/asahi/vulkan/hk_device.c
+--- a/src/asahi/vulkan/hk_device.c
++++ b/src/asahi/vulkan/hk_device.c
+@@ -346,6 +346,7 @@
+       goto fail_fd;
+    }
+ 
++   dev->dev.exec.enabled = true;
+    vk_device_set_drm_fd(&dev->vk, dev->dev.fd);
+    dev->vk.command_buffer_ops = &hk_cmd_buffer_ops;
+    dev->vk.check_status = hk_check_status;
+diff --git a/src/asahi/vulkan/hk_shader.c b/src/asahi/vulkan/hk_shader.c
+--- a/src/asahi/vulkan/hk_shader.c
++++ b/src/asahi/vulkan/hk_shader.c
+@@ -948,11 +948,12 @@
+       size_t size = shader->b.info.binary_size;
+       assert(size > 0);
+ 
+-      shader->bo = agx_bo_create(&dev->dev, size, 0,
+-                                 AGX_BO_EXEC | AGX_BO_LOW_VA, "Preamble");
+-      memcpy(agx_bo_map(shader->bo), shader->b.binary, size);
++      void *map;
++      shader->upload_addr = agx_exec_alloc(&dev->dev, size, &map);
++      shader->upload_size = size;
++      memcpy(map, shader->b.binary, size);
+       shader->preamble_addr =
+-         shader->bo->va->addr + shader->b.info.preamble_offset;
++         shader->upload_addr + shader->b.info.preamble_offset;
+    }
+ 
+    if (!shader->linked.ht) {
+@@ -1247,7 +1248,11 @@
+ static void
+ hk_destroy_linked_shader(struct hk_device *dev, struct hk_linked_shader *linked)
+ {
+-   agx_bo_unreference(&dev->dev, linked->b.bo);
++   if (linked->b.bo)
++      agx_bo_unreference(&dev->dev, linked->b.bo);
++   else
++      agx_exec_free(&dev->dev, linked->b.addr, linked->b.size);
++
+    ralloc_free(linked);
+ }
+ 
+@@ -1256,7 +1261,8 @@
+ {
+    free((void *)s->code_ptr);
+    free((void *)s->data_ptr);
+-   agx_bo_unreference(&dev->dev, s->bo);
++   if (s->upload_size)
++      agx_exec_free(&dev->dev, s->upload_addr, s->upload_size);
+ 
+    simple_mtx_destroy(&s->linked.lock);
+ 
+@@ -1950,7 +1956,7 @@
+    struct agx_usc_builder b = agx_usc_builder(s->usc.data, sizeof(s->usc.data));
+ 
+    if (main && main->b.info.rodata.size_16) {
+-      agx_usc_immediates(&b, &main->b.info.rodata, main->bo->va->addr);
++      agx_usc_immediates(&b, &main->b.info.rodata, main->upload_addr);
+    }
+ 
+    if (s->b.uses_txf)
+diff --git a/src/asahi/vulkan/hk_shader.h b/src/asahi/vulkan/hk_shader.h
+--- a/src/asahi/vulkan/hk_shader.h
++++ b/src/asahi/vulkan/hk_shader.h
+@@ -144,8 +144,9 @@
+    const void *data_ptr;
+    uint32_t data_size;
+ 
+-   /* BO for any uploaded shader part */
+-   struct agx_bo *bo;
++   /* Executable memory for any uploaded shader part */
++   uint64_t upload_addr;
++   size_t upload_size;
+ 
+    /* Cache of fast linked variants */
+    struct {

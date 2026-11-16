@@ -55,6 +55,8 @@ external/mesa3d patches/external-mesa3d-gfxstream-async-acquire-image.patch
 external/mesa3d patches/external-mesa3d-gfxstream-image-format-list.patch
 external/mesa3d patches/external-mesa3d-gfxstream-release-thread-stream.patch
 external/mesa3d patches/external-mesa3d-honeykrisp-android.patch
+external/mesa3d patches/external-mesa3d-honeykrisp-vs-nir-leak.patch
+external/mesa3d patches/external-mesa3d-honeykrisp-exec-heap.patch
 external/libavc patches/external-libavc-encoder-max-size.patch
 external/libavc patches/external-libavc-vbr-vbv-floor.patch
 external/v4l2_codec2 patches/external-v4l2_codec2-virtio-media.patch
