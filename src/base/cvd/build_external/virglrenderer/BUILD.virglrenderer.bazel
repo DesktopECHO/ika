@@ -199,6 +199,7 @@ cc_library(
         "src/venus/vkr_pipeline.c",
         "src/venus/vkr_query_pool.c",
         "src/venus/vkr_queue.c",
+        "src/venus/vkr_record.c",
         "src/venus/vkr_render_pass.c",
         "src/venus/vkr_renderer.c",
         "src/venus/vkr_ring.c",

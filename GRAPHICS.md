@@ -542,9 +542,11 @@ an fd, so Venus runs differently from Linux:
 
 On an RTX 4080 Laptop GPU, with Ika's console open, Wild Life Extreme scores
 17,650 and 16,107 against 14,253 and 13,667 with `gfxstream_guest_angle`.
-Steel Nomad Light is slower, 5,822 and 5,907 against 7,593 and 7,061: Venus
-replays an app's Vulkan calls on one host thread, which spends most of its
-time in the D3D12 driver recording the draws, where gfxstream records on two.
+Steel Nomad Light scores 7,261 and 7,143 against 7,885 and 7,629. Recording an
+app's draws takes most of the host's time there, in the D3D12 driver, so
+virglrenderer records the command buffers the guest sends on two worker
+threads (`VKR_RECORD_THREADS`), as gfxstream does, and submits on a thread of
+their own while the next ones are decoded.
 On an Intel UHD 770 Wild Life Extreme is 5% slower than with
 `gfxstream_guest_angle` (1,548 against 1,621). Kaby Lake's Iris Plus 650, with
 Vulkan 1.2, runs it when asked for (`--gpu_mode=venus`), slowly. When Windows removes the GPU's D3D12 device, as on the

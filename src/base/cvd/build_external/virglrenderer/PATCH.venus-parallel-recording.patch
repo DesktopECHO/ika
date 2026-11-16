@@ -1,0 +1,1335 @@
+diff --git a/src/meson.build b/src/meson.build
+index 6fc7f7d..bed290d 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -89,6 +89,7 @@ venus_sources = [
+    'venus/vkr_pipeline.c',
+    'venus/vkr_query_pool.c',
+    'venus/vkr_queue.c',
++   'venus/vkr_record.c',
+    'venus/vkr_render_pass.c',
+    'venus/vkr_renderer.c',
+    'venus/vkr_ring.c',
+diff --git a/src/venus/vkr_command_buffer.c b/src/venus/vkr_command_buffer.c
+index 766c5c7..18da1c8 100644
+--- a/src/venus/vkr_command_buffer.c
++++ b/src/venus/vkr_command_buffer.c
+@@ -6,6 +6,7 @@
+ #include "vkr_command_buffer.h"
+ 
+ #include "vkr_command_buffer_gen.h"
++#include "vkr_record.h"
+ 
+ #ifdef __clang__
+ #pragma clang diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
+@@ -86,6 +87,11 @@ vkr_dispatch_vkAllocateCommandBuffers(struct vn_dispatch_context *dispatch,
+    if (vkr_command_buffer_create_array(ctx, args, &arr) != VK_SUCCESS)
+       return;
+ 
++   for (uint32_t i = 0; i < arr.count; i++) {
++      struct vkr_command_buffer *cmd = arr.objects[i];
++      cmd->pool = pool;
++   }
++
+    vkr_command_buffer_add_array(ctx, dev, pool, &arr);
+ }
+ 
+@@ -519,9 +525,12 @@ vkr_dispatch_vkCmdEndRenderPass(UNUSED struct vn_dispatch_context *dispatch,
+ }
+ 
+ static void
+-vkr_dispatch_vkCmdExecuteCommands(UNUSED struct vn_dispatch_context *dispatch,
++vkr_dispatch_vkCmdExecuteCommands(struct vn_dispatch_context *dispatch,
+                                   struct vn_command_vkCmdExecuteCommands *args)
+ {
++   for (uint32_t i = 0; i < args->commandBufferCount; i++)
++      vkr_record_wait_command_buffer(dispatch->data, dispatch, args->pCommandBuffers[i]);
++
+    VKR_CMD_CALL(CmdExecuteCommands, args, args->commandBufferCount,
+                 args->pCommandBuffers);
+ }
+diff --git a/src/venus/vkr_command_buffer.h b/src/venus/vkr_command_buffer.h
+index 90b6d38..96c3df4 100644
+--- a/src/venus/vkr_command_buffer.h
++++ b/src/venus/vkr_command_buffer.h
+@@ -14,6 +14,14 @@ struct vkr_command_pool {
+    struct vkr_object base;
+ 
+    struct list_head command_buffers;
++
++   /* the sequence numbers of the pool's last queued and last completed
++    * recordings, and whether one is being recorded (see vkr_record.h, under
++    * its mutex)
++    */
++   uint64_t record_queued;
++   uint64_t record_done;
++   bool record_busy;
+ };
+ VKR_DEFINE_OBJECT_CAST(command_pool, VK_OBJECT_TYPE_COMMAND_POOL, VkCommandPool)
+ 
+@@ -21,6 +29,9 @@ struct vkr_command_buffer {
+    struct vkr_object base;
+ 
+    struct vkr_device *device;
++   struct vkr_command_pool *pool;
++   /* the sequence number of its last queued recording (see vkr_record.h) */
++   uint64_t record_seq;
+ };
+ VKR_DEFINE_OBJECT_CAST(command_buffer, VK_OBJECT_TYPE_COMMAND_BUFFER, VkCommandBuffer)
+ 
+diff --git a/src/venus/vkr_context.c b/src/venus/vkr_context.c
+index 37a7ee9..fa00042 100644
+--- a/src/venus/vkr_context.c
++++ b/src/venus/vkr_context.c
+@@ -31,6 +31,7 @@
+ #include "vkr_pipeline.h"
+ #include "vkr_query_pool.h"
+ #include "vkr_queue.h"
++#include "vkr_record.h"
+ #include "vkr_render_pass.h"
+ #include "vkr_ring.h"
+ #include "vkr_transport.h"
+@@ -155,6 +156,12 @@ vkr_context_submit_fence(struct vkr_context *ctx,
+    /* always merge fences */
+    assert(!(flags & ~VIRGL_RENDERER_FENCE_FLAG_MERGEABLE));
+    flags = VIRGL_RENDERER_FENCE_FLAG_MERGEABLE;
++
++   /* the fence signals after the submits queued before it */
++   if (ctx->record && vkr_record_defer_fence(ctx->record, ctx->sync_queues[ring_idx], flags,
++                                             ring_idx, fence_id))
++      return true;
++
+    bool ok = vkr_queue_sync_submit(ctx->sync_queues[ring_idx], flags, ring_idx, fence_id);
+ 
+    return ok;
+@@ -172,6 +179,7 @@ vkr_context_submit_cmd(struct vkr_context *ctx, const void *buffer, size_t size)
+    vkr_cs_decoder_set_buffer_stream(&ctx->decoder, buffer, size);
+ 
+    while (vkr_cs_decoder_has_command(&ctx->decoder)) {
++      vkr_record_before_command(ctx, ctx->record, &ctx->decoder);
+       vn_dispatch_command(&ctx->dispatch);
+       if (vkr_context_get_fatal(ctx)) {
+          vkr_log("submit_cmd: vn_dispatch_command failed");
+@@ -657,6 +665,9 @@ vkr_context_destroy(struct vkr_context *ctx)
+    }
+    mtx_destroy(&ctx->ring_mutex);
+ 
++   if (ctx->record)
++      vkr_record_destroy(ctx->record);
++
+    vkr_context_wait_ring_fini(ctx);
+ 
+    if (ctx->ring_monitor.started)
+@@ -766,6 +777,9 @@ vkr_context_create(uint32_t ctx_id,
+    vkr_context_init_dispatch(ctx);
+    vkr_context_init_proc_table(ctx);
+ 
++   /* recording on the ring threads instead when the workers fail to start */
++   ctx->record = vkr_record_create(ctx);
++
+    if (mtx_init(&ctx->ring_mutex, mtx_plain) != thrd_success)
+       goto err_ctx_ring_mutex;
+ 
+diff --git a/src/venus/vkr_context.h b/src/venus/vkr_context.h
+index 9f307f0..46e8cdb 100644
+--- a/src/venus/vkr_context.h
++++ b/src/venus/vkr_context.h
+@@ -97,6 +97,9 @@ struct vkr_context {
+    mtx_t resource_mutex;
+    struct hash_table *resource_table;
+ 
++   /* command buffers recorded on worker threads (see vkr_record.h), or NULL */
++   struct vkr_record *record;
++
+    bool cs_fatal_error;
+    struct vkr_cs_encoder encoder;
+    struct vkr_cs_decoder decoder;
+diff --git a/src/venus/vkr_cs.h b/src/venus/vkr_cs.h
+index 5e7d4b1..1cf758b 100644
+--- a/src/venus/vkr_cs.h
++++ b/src/venus/vkr_cs.h
+@@ -80,6 +80,9 @@ struct vkr_cs_decoder {
+ 
+    const uint8_t *cur;
+    const uint8_t *end;
++
++   /* the command being dispatched, set by vkr_record_before_command */
++   const uint8_t *command_start;
+ };
+ 
+ static inline int
+diff --git a/src/venus/vkr_queue.c b/src/venus/vkr_queue.c
+index 0ba250b..5857a2a 100644
+--- a/src/venus/vkr_queue.c
++++ b/src/venus/vkr_queue.c
+@@ -5,6 +5,8 @@
+ 
+ #include "vkr_queue.h"
+ 
++#include "vkr_record.h"
++
+ #include "vn_protocol_renderer_queue.h"
+ 
+ #include "vkr_context.h"
+@@ -492,13 +494,23 @@ vkr_queue_gate_submits2(struct vkr_queue *queue, uint32_t count, VkSubmitInfo2 *
+ }
+ 
+ static void
+-vkr_dispatch_vkQueueSubmit(UNUSED struct vn_dispatch_context *dispatch,
++vkr_dispatch_vkQueueSubmit(struct vn_dispatch_context *dispatch,
+                            struct vn_command_vkQueueSubmit *args)
+ {
+    TRACE_FUNC();
+    struct vkr_queue *queue = vkr_queue_from_handle(args->queue);
+    struct vn_device_proc_table *vk = &queue->device->proc_table;
+ 
++   if (vkr_record_defer_submit(dispatch->data, dispatch))
++      return;
++
++   for (uint32_t i = 0; i < args->submitCount; i++) {
++      const VkSubmitInfo *submit = &args->pSubmits[i];
++      for (uint32_t j = 0; j < submit->commandBufferCount; j++)
++         vkr_record_wait_command_buffer(dispatch->data, dispatch,
++                                        submit->pCommandBuffers[j]);
++   }
++
+    vn_replace_vkQueueSubmit_args_handle(args);
+ 
+    mtx_lock(&queue->vk_mutex);
+@@ -538,13 +550,23 @@ vkr_dispatch_vkQueueWaitIdle(struct vn_dispatch_context *dispatch,
+ }
+ 
+ static void
+-vkr_dispatch_vkQueueSubmit2(UNUSED struct vn_dispatch_context *dispatch,
++vkr_dispatch_vkQueueSubmit2(struct vn_dispatch_context *dispatch,
+                             struct vn_command_vkQueueSubmit2 *args)
+ {
+    TRACE_FUNC();
+    struct vkr_queue *queue = vkr_queue_from_handle(args->queue);
+    struct vn_device_proc_table *vk = &queue->device->proc_table;
+ 
++   if (vkr_record_defer_submit(dispatch->data, dispatch))
++      return;
++
++   for (uint32_t i = 0; i < args->submitCount; i++) {
++      const VkSubmitInfo2 *submit = &args->pSubmits[i];
++      for (uint32_t j = 0; j < submit->commandBufferInfoCount; j++)
++         vkr_record_wait_command_buffer(dispatch->data, dispatch,
++                                        submit->pCommandBufferInfos[j].commandBuffer);
++   }
++
+    vn_replace_vkQueueSubmit2_args_handle(args);
+ 
+    mtx_lock(&queue->vk_mutex);
+diff --git a/src/venus/vkr_record.c b/src/venus/vkr_record.c
+new file mode 100644
+index 0000000..f4f38ee
+--- /dev/null
++++ b/src/venus/vkr_record.c
+@@ -0,0 +1,932 @@
++/*
++ * Copyright 2026 Google LLC
++ * SPDX-License-Identifier: MIT
++ */
++
++#include "vkr_record.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <time.h>
++
++#include "util/u_thread.h"
++#include "vn_protocol_renderer_dispatches.h"
++
++#include "vkr_command_buffer.h"
++#include "vkr_context.h"
++#include "vkr_cs.h"
++#include "vkr_queue.h"
++
++#define VKR_RECORD_DEFAULT_THREADS 2
++#define VKR_RECORD_MAX_THREADS 8
++
++enum vkr_record_command_kind {
++   /* waits for all pending recordings and submits first */
++   VKR_RECORD_COMMAND_DRAIN = 0,
++   /* runs alongside pending recordings and submits */
++   VKR_RECORD_COMMAND_ALONGSIDE,
++   /* waits for the recordings of its command buffer's pool first */
++   VKR_RECORD_COMMAND_COMMAND_BUFFER,
++   /* waits for the recordings of its command pool first: the guest resets a
++    * pool, or frees its command buffers, once their submits have completed
++    */
++   VKR_RECORD_COMMAND_POOL,
++};
++
++struct vkr_record_job {
++   struct list_head head;
++   /* the submit thread's sequence number of a submit or fence */
++   uint64_t seq;
++   /* a recording's command pool and sequence number */
++   struct vkr_command_pool *pool;
++   uint64_t record_seq;
++   /* a job only ever waits for recordings with a lower sequence number: those
++    * queued before it
++    */
++   uint64_t record_limit;
++
++   /* a virtio-gpu fence to submit after the submits queued before it, when
++    * queue is set, instead of commands
++    */
++   struct {
++      struct vkr_queue *queue;
++      uint32_t flags;
++      uint32_t ring_idx;
++      uint64_t fence_id;
++   } fence;
++
++   /* when the job was queued, with VKR_RECORD_STATS */
++   uint64_t queued_ns;
++
++   size_t size;
++   uint8_t data[];
++};
++
++/* A thread that decodes jobs of commands: a recorder records command buffers,
++ * taking the first queued one whose pool no other recorder is recording, and
++ * the submitter runs queue submits in the order they were queued.
++ */
++struct vkr_record_worker {
++   struct vkr_context *ctx;
++   struct vkr_record *rec;
++   uint32_t index;
++   const char *name;
++
++   /* the submitter's queue */
++   mtx_t mutex;
++   cnd_t work_cond;
++   cnd_t done_cond;
++   struct list_head jobs;
++   uint64_t queued_seq;
++   uint64_t completed_seq;
++   bool stop;
++
++   bool started;
++   thrd_t thread;
++
++   /* the job the worker runs, used by its thread only */
++   const struct vkr_record_job *current;
++
++   struct vkr_cs_decoder decoder;
++   struct vkr_cs_encoder encoder;
++   struct vn_dispatch_context dispatch;
++};
++
++struct vkr_record {
++   struct vkr_context *ctx;
++
++   /* jobs queued and not completed, on all workers */
++   atomic_uint pending;
++
++   /* the recorders' queue, and the recording state of every command pool and
++    * command buffer
++    */
++   mtx_t record_mutex;
++   cnd_t record_work_cond;
++   cnd_t record_done_cond;
++   struct list_head record_jobs;
++   uint64_t record_seq;
++   uint32_t record_outstanding;
++   bool record_stop;
++
++   /* VKR_RECORD_STATS: the ring threads' waits, logged every 10 seconds */
++   bool stats;
++   mtx_t stats_mutex;
++   uint64_t stats_start_ns;
++   uint64_t stats_wait_ns[4];
++   uint32_t stats_waits[4];
++   uint32_t stats_drains_by_type[ARRAY_SIZE(vn_dispatch_table)];
++   uint32_t stats_recordings;
++   uint32_t stats_submits;
++   /* per kind of job (0 recordings, 1 submits and fences): how many ran, how
++    * long they waited in their queue and how long they ran, in total and at
++    * most
++    */
++   uint32_t stats_jobs[2];
++   uint64_t stats_job_queue_ns[2];
++   uint64_t stats_job_run_ns[2];
++   uint64_t stats_job_run_max_ns[2];
++
++   uint32_t recorder_count;
++   struct vkr_record_worker submitter;
++   struct vkr_record_worker recorders[];
++};
++
++/* Commands that may run while command buffers are being recorded and
++ * submitted: they create objects, touch no command buffer, pool or queue, or
++ * wait for exactly the work they depend on.  Descriptor set updates may run
++ * as the guest does not update a set that a command buffer it has recorded
++ * and not yet submitted uses, unless the set is updatable after binding, and
++ * then the update is to be seen.  A fence or semaphore waited for on the host
++ * is signaled by a submit queued before the wait.
++ */
++static const char *const vkr_record_alongside_commands[] = {
++   "vkAllocateDescriptorSets",
++   "vkAllocateMemory",
++   "vkBindBufferMemory",
++   "vkBindBufferMemory2",
++   "vkBindImageMemory",
++   "vkBindImageMemory2",
++   "vkCreateBuffer",
++   "vkCreateBufferView",
++   "vkCreateComputePipelines",
++   "vkCreateDescriptorSetLayout",
++   "vkCreateEvent",
++   "vkCreateFence",
++   "vkCreateFramebuffer",
++   "vkCreateGraphicsPipelines",
++   "vkCreateImage",
++   "vkCreateImageView",
++   "vkCreatePipelineLayout",
++   "vkCreateQueryPool",
++   "vkCreateRenderPass",
++   "vkCreateRenderPass2",
++   "vkCreateSampler",
++   "vkCreateSemaphore",
++   "vkCreateShaderModule",
++   "vkExecuteCommandStreamsMESA",
++   "vkFlushMappedMemoryRanges",
++   "vkGetBufferMemoryRequirements",
++   "vkGetBufferMemoryRequirements2",
++   "vkGetEventStatus",
++   "vkGetFenceStatus",
++   "vkGetImageMemoryRequirements",
++   "vkGetImageMemoryRequirements2",
++   "vkGetQueryPoolResults",
++   "vkGetSemaphoreCounterValue",
++   "vkInvalidateMappedMemoryRanges",
++   "vkNotifyRingMESA",
++   "vkQueueSubmit",
++   "vkQueueSubmit2",
++   "vkResetEvent",
++   "vkResetFences",
++   "vkResetQueryPool",
++   "vkSeekReplyCommandStreamMESA",
++   "vkSetEvent",
++   "vkSetReplyCommandStreamMESA",
++   "vkSignalSemaphore",
++   "vkSubmitVirtqueueSeqnoMESA",
++   "vkUpdateDescriptorSetWithTemplate",
++   "vkUpdateDescriptorSets",
++   "vkWaitForFences",
++   "vkWaitRingSeqnoMESA",
++   "vkWaitSemaphores",
++   "vkWaitVirtqueueSeqnoMESA",
++   "vkWriteRingExtraMESA",
++};
++
++static uint8_t vkr_record_command_kinds[ARRAY_SIZE(vn_dispatch_table)];
++static once_flag vkr_record_command_kinds_once = ONCE_FLAG_INIT;
++
++static void
++vkr_record_init_command_kinds(void)
++{
++   for (uint32_t type = 0; type < ARRAY_SIZE(vkr_record_command_kinds); type++) {
++      const char *name = vn_dispatch_command_name(type);
++      uint8_t kind = VKR_RECORD_COMMAND_DRAIN;
++
++      if (!strncmp(name, "vkCmd", 5) || !strcmp(name, "vkBeginCommandBuffer") ||
++          !strcmp(name, "vkEndCommandBuffer") || !strcmp(name, "vkResetCommandBuffer")) {
++         kind = VKR_RECORD_COMMAND_COMMAND_BUFFER;
++      } else if (!strcmp(name, "vkResetCommandPool") || !strcmp(name, "vkTrimCommandPool") ||
++                 !strcmp(name, "vkFreeCommandBuffers")) {
++         kind = VKR_RECORD_COMMAND_POOL;
++      } else {
++         for (uint32_t i = 0; i < ARRAY_SIZE(vkr_record_alongside_commands); i++) {
++            if (!strcmp(name, vkr_record_alongside_commands[i])) {
++               kind = VKR_RECORD_COMMAND_ALONGSIDE;
++               break;
++            }
++         }
++      }
++
++      vkr_record_command_kinds[type] = kind;
++   }
++}
++
++static uint64_t
++vkr_record_now_ns(void)
++{
++   struct timespec now;
++   clock_gettime(CLOCK_MONOTONIC, &now);
++   return (uint64_t)now.tv_sec * 1000000000ull + now.tv_nsec;
++}
++
++static void
++vkr_record_stats_log_locked(struct vkr_record *rec, uint64_t now)
++{
++   const double secs = (now - rec->stats_start_ns) / 1e9;
++   vkr_log("record stats over %.1f s: %u recordings, %u submits on the submit thread; "
++           "waits: drain %u (%.1f ms), command buffer %u (%.1f ms), "
++           "pool %u (%.1f ms), submit-side %u (%.1f ms)",
++           secs, rec->stats_recordings, rec->stats_submits,
++           rec->stats_waits[VKR_RECORD_COMMAND_DRAIN],
++           rec->stats_wait_ns[VKR_RECORD_COMMAND_DRAIN] / 1e6,
++           rec->stats_waits[VKR_RECORD_COMMAND_COMMAND_BUFFER],
++           rec->stats_wait_ns[VKR_RECORD_COMMAND_COMMAND_BUFFER] / 1e6,
++           rec->stats_waits[VKR_RECORD_COMMAND_POOL],
++           rec->stats_wait_ns[VKR_RECORD_COMMAND_POOL] / 1e6,
++           rec->stats_waits[VKR_RECORD_COMMAND_ALONGSIDE],
++           rec->stats_wait_ns[VKR_RECORD_COMMAND_ALONGSIDE] / 1e6);
++   static const char *const job_names[2] = { "recordings", "submits" };
++   for (uint32_t k = 0; k < 2; k++) {
++      if (!rec->stats_jobs[k])
++         continue;
++      vkr_log("record stats:   %s: %u, queued %.2f ms and ran %.2f ms on average, "
++              "%.2f ms at most",
++              job_names[k], rec->stats_jobs[k],
++              rec->stats_job_queue_ns[k] / 1e6 / rec->stats_jobs[k],
++              rec->stats_job_run_ns[k] / 1e6 / rec->stats_jobs[k],
++              rec->stats_job_run_max_ns[k] / 1e6);
++   }
++   memset(rec->stats_jobs, 0, sizeof(rec->stats_jobs));
++   memset(rec->stats_job_queue_ns, 0, sizeof(rec->stats_job_queue_ns));
++   memset(rec->stats_job_run_ns, 0, sizeof(rec->stats_job_run_ns));
++   memset(rec->stats_job_run_max_ns, 0, sizeof(rec->stats_job_run_max_ns));
++   for (uint32_t type = 0; type < ARRAY_SIZE(rec->stats_drains_by_type); type++) {
++      if (rec->stats_drains_by_type[type])
++         vkr_log("record stats:   drained for %s %u times",
++                 vn_dispatch_command_name(type), rec->stats_drains_by_type[type]);
++   }
++
++   memset(rec->stats_wait_ns, 0, sizeof(rec->stats_wait_ns));
++   memset(rec->stats_waits, 0, sizeof(rec->stats_waits));
++   memset(rec->stats_drains_by_type, 0, sizeof(rec->stats_drains_by_type));
++   rec->stats_recordings = 0;
++   rec->stats_submits = 0;
++   rec->stats_start_ns = now;
++}
++
++/* kind: what the wait was for; type: the command that drained, or -1 */
++static void
++vkr_record_stats_add(struct vkr_record *rec, uint8_t kind, int32_t type, uint64_t start)
++{
++   const uint64_t now = vkr_record_now_ns();
++
++   mtx_lock(&rec->stats_mutex);
++   rec->stats_waits[kind]++;
++   rec->stats_wait_ns[kind] += now - start;
++   if (type >= 0 && (uint32_t)type < ARRAY_SIZE(rec->stats_drains_by_type))
++      rec->stats_drains_by_type[type]++;
++   if (now - rec->stats_start_ns >= 10000000000ull)
++      vkr_record_stats_log_locked(rec, now);
++   mtx_unlock(&rec->stats_mutex);
++}
++
++static void
++vkr_record_run_job(struct vkr_record_worker *worker, struct vkr_record_job *job)
++{
++   struct vkr_record *rec = worker->rec;
++
++   worker->current = job;
++   const uint64_t start_ns = rec->stats ? vkr_record_now_ns() : 0;
++
++   TRACE_SCOPE("record or submit");
++   if (job->fence.queue) {
++      vkr_queue_sync_submit(job->fence.queue, job->fence.flags, job->fence.ring_idx,
++                            job->fence.fence_id);
++   } else {
++      struct vkr_cs_decoder *dec = &worker->decoder;
++      vkr_cs_decoder_set_buffer_stream(dec, job->data, job->size);
++      while (vkr_cs_decoder_has_command(dec)) {
++         vn_dispatch_command(&worker->dispatch);
++         if (vkr_cs_decoder_get_fatal(dec)) {
++            vkr_log("%s: vn_dispatch_command failed", worker->name);
++            break;
++         }
++      }
++      vkr_cs_decoder_reset(dec);
++   }
++
++   if (rec->stats) {
++      const uint64_t run_ns = vkr_record_now_ns() - start_ns;
++      const uint32_t k = worker == &rec->submitter;
++      mtx_lock(&rec->stats_mutex);
++      rec->stats_jobs[k]++;
++      rec->stats_job_queue_ns[k] += start_ns - job->queued_ns;
++      rec->stats_job_run_ns[k] += run_ns;
++      rec->stats_job_run_max_ns[k] = MAX2(rec->stats_job_run_max_ns[k], run_ns);
++      mtx_unlock(&rec->stats_mutex);
++   }
++
++   worker->current = NULL;
++}
++
++static void
++vkr_record_set_thread_name(struct vkr_record_worker *worker)
++{
++   char thread_name[16];
++
++   snprintf(thread_name, ARRAY_SIZE(thread_name), "vkr-%s-%d-%u", worker->name,
++            worker->ctx->ctx_id, worker->index);
++   u_thread_setname(thread_name);
++}
++
++static int
++vkr_record_recorder_thread(void *arg)
++{
++   struct vkr_record_worker *worker = arg;
++   struct vkr_record *rec = worker->rec;
++
++   vkr_record_set_thread_name(worker);
++
++   mtx_lock(&rec->record_mutex);
++   for (;;) {
++      struct vkr_record_job *job = NULL;
++      list_for_each_entry (struct vkr_record_job, j, &rec->record_jobs, head) {
++         if (!j->pool->record_busy) {
++            job = j;
++            break;
++         }
++      }
++      if (!job) {
++         if (rec->record_stop && list_is_empty(&rec->record_jobs))
++            break;
++         cnd_wait(&rec->record_work_cond, &rec->record_mutex);
++         continue;
++      }
++
++      list_del(&job->head);
++      struct vkr_command_pool *pool = job->pool;
++      pool->record_busy = true;
++      mtx_unlock(&rec->record_mutex);
++
++      vkr_record_run_job(worker, job);
++
++      mtx_lock(&rec->record_mutex);
++      pool->record_busy = false;
++      pool->record_done = job->record_seq;
++      rec->record_outstanding--;
++      atomic_fetch_sub(&rec->pending, 1);
++      cnd_broadcast(&rec->record_done_cond);
++      /* the pool's next recording may wait in the queue */
++      cnd_broadcast(&rec->record_work_cond);
++      free(job);
++   }
++   mtx_unlock(&rec->record_mutex);
++
++   return 0;
++}
++
++static int
++vkr_record_submitter_thread(void *arg)
++{
++   struct vkr_record_worker *worker = arg;
++   struct vkr_record *rec = worker->rec;
++
++   vkr_record_set_thread_name(worker);
++
++   mtx_lock(&worker->mutex);
++   for (;;) {
++      while (!worker->stop && list_is_empty(&worker->jobs))
++         cnd_wait(&worker->work_cond, &worker->mutex);
++      if (list_is_empty(&worker->jobs))
++         break;
++
++      struct vkr_record_job *job =
++         list_first_entry(&worker->jobs, struct vkr_record_job, head);
++      list_del(&job->head);
++      mtx_unlock(&worker->mutex);
++
++      vkr_record_run_job(worker, job);
++
++      const uint64_t seq = job->seq;
++      free(job);
++
++      mtx_lock(&worker->mutex);
++      worker->completed_seq = seq;
++      cnd_broadcast(&worker->done_cond);
++      atomic_fetch_sub(&rec->pending, 1);
++   }
++   mtx_unlock(&worker->mutex);
++
++   return 0;
++}
++
++static bool
++vkr_record_worker_init(struct vkr_record_worker *worker,
++                       struct vkr_record *rec,
++                       uint32_t index,
++                       const char *name)
++{
++   struct vkr_context *ctx = rec->ctx;
++
++   worker->ctx = ctx;
++   worker->rec = rec;
++   worker->index = index;
++   worker->name = name;
++   list_inithead(&worker->jobs);
++
++   if (mtx_init(&worker->mutex, mtx_plain) != thrd_success)
++      return false;
++   if (cnd_init(&worker->work_cond) != thrd_success)
++      goto err_work_cond;
++   if (cnd_init(&worker->done_cond) != thrd_success)
++      goto err_done_cond;
++   if (vkr_cs_decoder_init(&worker->decoder, ctx))
++      goto err_decoder;
++   /* jobs send no replies: a command that asks for one finds no reply stream
++    * and fails
++    */
++   if (vkr_cs_encoder_init(&worker->encoder, &ctx->cs_fatal_error))
++      goto err_encoder;
++
++   worker->dispatch = ctx->dispatch;
++   worker->dispatch.encoder = (struct vn_cs_encoder *)&worker->encoder;
++   worker->dispatch.decoder = (struct vn_cs_decoder *)&worker->decoder;
++
++   return true;
++
++err_encoder:
++   vkr_cs_decoder_fini(&worker->decoder);
++err_decoder:
++   cnd_destroy(&worker->done_cond);
++err_done_cond:
++   cnd_destroy(&worker->work_cond);
++err_work_cond:
++   mtx_destroy(&worker->mutex);
++   return false;
++}
++
++static void
++vkr_record_worker_fini(struct vkr_record_worker *worker)
++{
++   if (worker->started)
++      thrd_join(worker->thread, NULL);
++
++   vkr_cs_encoder_fini(&worker->encoder);
++   vkr_cs_decoder_fini(&worker->decoder);
++   cnd_destroy(&worker->done_cond);
++   cnd_destroy(&worker->work_cond);
++   mtx_destroy(&worker->mutex);
++}
++
++struct vkr_record *
++vkr_record_create(struct vkr_context *ctx)
++{
++   uint32_t count = VKR_RECORD_DEFAULT_THREADS;
++   const char *env = getenv("VKR_RECORD_THREADS");
++   if (env && *env)
++      count = MIN2((uint32_t)strtoul(env, NULL, 10), VKR_RECORD_MAX_THREADS);
++   if (!count)
++      return NULL;
++
++   call_once(&vkr_record_command_kinds_once, vkr_record_init_command_kinds);
++
++   struct vkr_record *rec =
++      calloc(1, sizeof(*rec) + sizeof(rec->recorders[0]) * count);
++   if (!rec)
++      return NULL;
++
++   rec->ctx = ctx;
++   list_inithead(&rec->record_jobs);
++   if (mtx_init(&rec->record_mutex, mtx_plain) != thrd_success)
++      goto err_record_mutex;
++   if (cnd_init(&rec->record_work_cond) != thrd_success)
++      goto err_record_work_cond;
++   if (cnd_init(&rec->record_done_cond) != thrd_success)
++      goto err_record_done_cond;
++   if (mtx_init(&rec->stats_mutex, mtx_plain) != thrd_success)
++      goto err_stats_mutex;
++   env = getenv("VKR_RECORD_STATS");
++   rec->stats = env && *env && strcmp(env, "0");
++   rec->stats_start_ns = vkr_record_now_ns();
++
++   if (!vkr_record_worker_init(&rec->submitter, rec, 0, "sub"))
++      goto err_submitter;
++   for (uint32_t i = 0; i < count; i++) {
++      if (!vkr_record_worker_init(&rec->recorders[i], rec, i, "rec")) {
++         rec->recorder_count = i;
++         vkr_record_destroy(rec);
++         return NULL;
++      }
++   }
++   rec->recorder_count = count;
++
++   return rec;
++
++err_submitter:
++   mtx_destroy(&rec->stats_mutex);
++err_stats_mutex:
++   cnd_destroy(&rec->record_done_cond);
++err_record_done_cond:
++   cnd_destroy(&rec->record_work_cond);
++err_record_work_cond:
++   mtx_destroy(&rec->record_mutex);
++err_record_mutex:
++   free(rec);
++   return NULL;
++}
++
++void
++vkr_record_destroy(struct vkr_record *rec)
++{
++   /* workers finish their queued jobs before they stop, recordings before the
++    * submits that wait for them
++    */
++   mtx_lock(&rec->record_mutex);
++   rec->record_stop = true;
++   cnd_broadcast(&rec->record_work_cond);
++   mtx_unlock(&rec->record_mutex);
++   for (uint32_t i = 0; i < rec->recorder_count; i++)
++      vkr_record_worker_fini(&rec->recorders[i]);
++
++   mtx_lock(&rec->submitter.mutex);
++   rec->submitter.stop = true;
++   cnd_signal(&rec->submitter.work_cond);
++   mtx_unlock(&rec->submitter.mutex);
++   vkr_record_worker_fini(&rec->submitter);
++
++   mtx_destroy(&rec->stats_mutex);
++   cnd_destroy(&rec->record_done_cond);
++   cnd_destroy(&rec->record_work_cond);
++   mtx_destroy(&rec->record_mutex);
++   free(rec);
++}
++
++bool
++vkr_record_has_pending(const struct vkr_record *rec)
++{
++   return atomic_load(&((struct vkr_record *)rec)->pending);
++}
++
++static void
++vkr_record_worker_wait_all(struct vkr_record_worker *worker)
++{
++   mtx_lock(&worker->mutex);
++   while (worker->completed_seq < worker->queued_seq)
++      cnd_wait(&worker->done_cond, &worker->mutex);
++   mtx_unlock(&worker->mutex);
++}
++
++static void
++vkr_record_wait_all(struct vkr_record *rec)
++{
++   TRACE_FUNC();
++   mtx_lock(&rec->record_mutex);
++   while (rec->record_outstanding)
++      cnd_wait(&rec->record_done_cond, &rec->record_mutex);
++   mtx_unlock(&rec->record_mutex);
++   vkr_record_worker_wait_all(&rec->submitter);
++}
++
++void
++vkr_record_wait_submits(struct vkr_record *rec)
++{
++   vkr_record_worker_wait_all(&rec->submitter);
++}
++
++void
++vkr_record_wait_pool(struct vkr_record *rec, const struct vkr_command_pool *pool)
++{
++   if (!rec)
++      return;
++
++   mtx_lock(&rec->record_mutex);
++   while (pool->record_done < pool->record_queued)
++      cnd_wait(&rec->record_done_cond, &rec->record_mutex);
++   mtx_unlock(&rec->record_mutex);
++}
++
++static struct vkr_record_worker *
++vkr_record_worker_from_dispatch(struct vkr_record *rec,
++                                const struct vn_dispatch_context *dispatch)
++{
++   if (dispatch == &rec->submitter.dispatch)
++      return &rec->submitter;
++   for (uint32_t i = 0; i < rec->recorder_count; i++) {
++      if (dispatch == &rec->recorders[i].dispatch)
++         return &rec->recorders[i];
++   }
++   return NULL;
++}
++
++void
++vkr_record_wait_command_buffer(struct vkr_context *ctx,
++                               const struct vn_dispatch_context *dispatch,
++                               VkCommandBuffer handle)
++{
++   struct vkr_record *rec = ctx->record;
++   const struct vkr_command_buffer *cmd = vkr_command_buffer_from_handle(handle);
++   if (!rec || !cmd || !cmd->pool)
++      return;
++
++   const struct vkr_command_pool *pool = cmd->pool;
++   const struct vkr_record_worker *worker = vkr_record_worker_from_dispatch(rec, dispatch);
++
++   mtx_lock(&rec->record_mutex);
++   /* a pool's recordings complete in the order they were queued */
++   const uint64_t seq = cmd->record_seq;
++   if (!worker || seq < worker->current->record_limit) {
++      while (pool->record_done < seq)
++         cnd_wait(&rec->record_done_cond, &rec->record_mutex);
++   }
++   mtx_unlock(&rec->record_mutex);
++}
++
++void
++vkr_record_before_command_slow(struct vkr_context *ctx, const struct vkr_cs_decoder *dec)
++{
++   struct vkr_record *rec = ctx->record;
++   const uint8_t *cur = dec->cur;
++
++   int32_t type;
++   if ((size_t)(dec->end - cur) < sizeof(type))
++      return;
++   memcpy(&type, cur, sizeof(type));
++
++   const uint8_t kind = type >= 0 && (uint32_t)type < ARRAY_SIZE(vkr_record_command_kinds)
++                           ? vkr_record_command_kinds[type]
++                           : VKR_RECORD_COMMAND_DRAIN;
++   const uint64_t start = rec->stats ? vkr_record_now_ns() : 0;
++   switch (kind) {
++   case VKR_RECORD_COMMAND_ALONGSIDE:
++      return;
++   case VKR_RECORD_COMMAND_COMMAND_BUFFER: {
++      /* the command type and flags, then the command buffer */
++      uint64_t id;
++      if ((size_t)(dec->end - cur) < sizeof(int32_t) + sizeof(uint32_t) + sizeof(id))
++         return;
++      memcpy(&id, cur + sizeof(int32_t) + sizeof(uint32_t), sizeof(id));
++
++      struct vkr_command_buffer *cmd = vkr_context_get_object(ctx, id);
++      if (cmd && cmd->base.type == VK_OBJECT_TYPE_COMMAND_BUFFER && cmd->pool)
++         vkr_record_wait_pool(rec, cmd->pool);
++      if (rec->stats)
++         vkr_record_stats_add(rec, kind, -1, start);
++      return;
++   }
++   case VKR_RECORD_COMMAND_POOL: {
++      /* the command type and flags, the device, then the command pool */
++      uint64_t id;
++      const size_t offset = sizeof(int32_t) + sizeof(uint32_t) + sizeof(uint64_t);
++      if ((size_t)(dec->end - cur) < offset + sizeof(id))
++         return;
++      memcpy(&id, cur + offset, sizeof(id));
++
++      struct vkr_command_pool *pool = vkr_context_get_object(ctx, id);
++      if (pool && pool->base.type == VK_OBJECT_TYPE_COMMAND_POOL)
++         vkr_record_wait_pool(rec, pool);
++      if (rec->stats)
++         vkr_record_stats_add(rec, kind, -1, start);
++      return;
++   }
++   default:
++      vkr_record_wait_all(rec);
++      if (rec->stats)
++         vkr_record_stats_add(rec, kind, type, start);
++      return;
++   }
++}
++
++/* A job of size bytes; the caller copies the commands into it. */
++static struct vkr_record_job *
++vkr_record_job_alloc(size_t size)
++{
++   struct vkr_record_job *job = malloc(sizeof(*job) + size);
++   if (!job)
++      return NULL;
++   job->pool = NULL;
++   job->record_seq = 0;
++   job->fence.queue = NULL;
++   job->size = size;
++   return job;
++}
++
++static bool
++vkr_record_start_recorders(struct vkr_record *rec)
++{
++   for (uint32_t i = 0; i < rec->recorder_count; i++) {
++      struct vkr_record_worker *worker = &rec->recorders[i];
++      if (worker->started)
++         continue;
++      if (thrd_create(&worker->thread, vkr_record_recorder_thread, worker) != thrd_success)
++         return i > 0;
++      worker->started = true;
++   }
++   return true;
++}
++
++/* Queues a recording of cmd. */
++static bool
++vkr_record_queue_recording(struct vkr_record *rec,
++                           struct vkr_command_buffer *cmd,
++                           struct vkr_record_job *job)
++{
++   mtx_lock(&rec->record_mutex);
++   if (!vkr_record_start_recorders(rec)) {
++      mtx_unlock(&rec->record_mutex);
++      free(job);
++      return false;
++   }
++   job->pool = cmd->pool;
++   job->record_seq = ++rec->record_seq;
++   job->record_limit = job->record_seq;
++   job->queued_ns = rec->stats ? vkr_record_now_ns() : 0;
++   cmd->record_seq = job->record_seq;
++   cmd->pool->record_queued = job->record_seq;
++   rec->record_outstanding++;
++   list_addtail(&job->head, &rec->record_jobs);
++   atomic_fetch_add(&rec->pending, 1);
++   cnd_signal(&rec->record_work_cond);
++   mtx_unlock(&rec->record_mutex);
++
++   return true;
++}
++
++/* Queues a submit or a fence on the submit thread. */
++static bool
++vkr_record_queue_submit(struct vkr_record *rec, struct vkr_record_job *job)
++{
++   struct vkr_record_worker *worker = &rec->submitter;
++
++   mtx_lock(&rec->record_mutex);
++   job->record_limit = rec->record_seq + 1;
++   mtx_unlock(&rec->record_mutex);
++
++   mtx_lock(&worker->mutex);
++   if (!worker->started) {
++      if (thrd_create(&worker->thread, vkr_record_submitter_thread, worker) !=
++          thrd_success) {
++         mtx_unlock(&worker->mutex);
++         free(job);
++         return false;
++      }
++      worker->started = true;
++   }
++   job->seq = ++worker->queued_seq;
++   job->queued_ns = rec->stats ? vkr_record_now_ns() : 0;
++   list_addtail(&job->head, &worker->jobs);
++   atomic_fetch_add(&rec->pending, 1);
++   cnd_signal(&worker->work_cond);
++   mtx_unlock(&worker->mutex);
++
++   return true;
++}
++
++bool
++vkr_record_defer_streams(struct vkr_context *ctx,
++                         struct vkr_cs_decoder *dec,
++                         const VkCommandStreamDescriptionMESA *streams,
++                         uint32_t stream_count)
++{
++   struct vkr_record *rec = ctx->record;
++   if (!rec || !stream_count)
++      return false;
++
++   size_t total_size = 0;
++   for (uint32_t i = 0; i < stream_count; i++) {
++      if (streams[i].size > SIZE_MAX - total_size)
++         return false;
++      total_size += streams[i].size;
++   }
++
++   /* the first command must begin a command buffer and ask for no reply */
++   int32_t type;
++   uint32_t flags;
++   uint64_t id;
++   const size_t header_size = sizeof(type) + sizeof(flags) + sizeof(id);
++   if (streams[0].size < header_size ||
++       !vkr_cs_decoder_set_resource_stream(dec, ctx, streams[0].resourceId,
++                                           streams[0].offset, streams[0].size))
++      return false;
++   memcpy(&type, dec->cur, sizeof(type));
++   memcpy(&flags, dec->cur + sizeof(type), sizeof(flags));
++   memcpy(&id, dec->cur + sizeof(type) + sizeof(flags), sizeof(id));
++   if (type != VK_COMMAND_TYPE_vkBeginCommandBuffer_EXT ||
++       (flags & VK_COMMAND_GENERATE_REPLY_BIT_EXT))
++      return false;
++
++   struct vkr_command_buffer *cmd = vkr_context_get_object(ctx, id);
++   if (!cmd || cmd->base.type != VK_OBJECT_TYPE_COMMAND_BUFFER || !cmd->pool)
++      return false;
++
++   struct vkr_record_job *job = vkr_record_job_alloc(total_size);
++   if (!job)
++      return false;
++
++   uint8_t *dst = job->data;
++   for (uint32_t i = 0; i < stream_count; i++) {
++      if (!streams[i].size)
++         continue;
++      if (!vkr_cs_decoder_set_resource_stream(dec, ctx, streams[i].resourceId,
++                                              streams[i].offset, streams[i].size)) {
++         free(job);
++         return false;
++      }
++      memcpy(dst, dec->cur, streams[i].size);
++      dst += streams[i].size;
++   }
++
++   if (!vkr_record_queue_recording(rec, cmd, job))
++      return false;
++
++   if (rec->stats) {
++      mtx_lock(&rec->stats_mutex);
++      rec->stats_recordings++;
++      mtx_unlock(&rec->stats_mutex);
++   }
++   return true;
++}
++
++bool
++vkr_record_defer_submit(struct vkr_context *ctx, struct vn_dispatch_context *dispatch)
++{
++   struct vkr_record *rec = ctx->record;
++   if (!rec || vkr_record_worker_from_dispatch(rec, dispatch))
++      return false;
++
++   /* the submit is the command being dispatched: its arguments are decoded */
++   const struct vkr_cs_decoder *dec = (const struct vkr_cs_decoder *)dispatch->decoder;
++   const uint8_t *start = dec->command_start;
++   if (!start || start >= dec->cur)
++      return false;
++
++   /* a submit that waits for no recording or earlier submit runs here */
++   if (!vkr_record_has_pending(rec))
++      return false;
++
++   uint32_t flags;
++   memcpy(&flags, start + sizeof(int32_t), sizeof(flags));
++   if (flags & VK_COMMAND_GENERATE_REPLY_BIT_EXT) {
++      /* the guest waits for the result: run it here, after the submits
++       * queued before it
++       */
++      const uint64_t wait_start = rec->stats ? vkr_record_now_ns() : 0;
++      vkr_record_wait_submits(rec);
++      if (rec->stats)
++         vkr_record_stats_add(rec, VKR_RECORD_COMMAND_ALONGSIDE, -1, wait_start);
++      return false;
++   }
++
++   const size_t size = dec->cur - start;
++   struct vkr_record_job *job = vkr_record_job_alloc(size);
++   if (!job)
++      return false;
++   memcpy(job->data, start, size);
++
++   if (!vkr_record_queue_submit(rec, job)) {
++      vkr_record_wait_submits(rec);
++      return false;
++   }
++
++   if (rec->stats) {
++      mtx_lock(&rec->stats_mutex);
++      rec->stats_submits++;
++      mtx_unlock(&rec->stats_mutex);
++   }
++   return true;
++}
++
++bool
++vkr_record_defer_fence(struct vkr_record *rec,
++                       struct vkr_queue *queue,
++                       uint32_t flags,
++                       uint32_t ring_idx,
++                       uint64_t fence_id)
++{
++   struct vkr_record_worker *submitter = &rec->submitter;
++
++   /* the submits the fence follows are queued before it arrives */
++   mtx_lock(&submitter->mutex);
++   const bool pending = submitter->completed_seq < submitter->queued_seq;
++   mtx_unlock(&submitter->mutex);
++   if (!pending)
++      return false;
++
++   struct vkr_record_job *job = vkr_record_job_alloc(0);
++   if (!job) {
++      vkr_record_wait_submits(rec);
++      return false;
++   }
++   job->fence.queue = queue;
++   job->fence.flags = flags;
++   job->fence.ring_idx = ring_idx;
++   job->fence.fence_id = fence_id;
++
++   if (!vkr_record_queue_submit(rec, job)) {
++      vkr_record_wait_submits(rec);
++      return false;
++   }
++   return true;
++}
+diff --git a/src/venus/vkr_record.h b/src/venus/vkr_record.h
+new file mode 100644
+index 0000000..d139b17
+--- /dev/null
++++ b/src/venus/vkr_record.h
+@@ -0,0 +1,113 @@
++/*
++ * Copyright 2026 Google LLC
++ * SPDX-License-Identifier: MIT
++ */
++
++#ifndef VKR_RECORD_H
++#define VKR_RECORD_H
++
++#include "vkr_common.h"
++
++#include "vn_protocol_renderer_defines.h"
++
++/*
++ * Command buffers recorded on worker threads.
++ *
++ * The guest sends a command buffer whole, from vkBeginCommandBuffer to
++ * vkEndCommandBuffer, when it ends it, and a large one in streams of its own
++ * (vkExecuteCommandStreamsMESA).  Recording it into the driver can take most
++ * of a ring thread's time (under Dozen, most of it in the D3D12 driver), so
++ * such a command buffer is copied and recorded on a worker thread while the
++ * ring thread decodes on.  A worker takes the oldest queued command buffer
++ * whose pool no other worker is recording, so a pool's command buffers are
++ * recorded one at a time, in the order they arrived.
++ *
++ * A command that uses a command buffer or a command pool waits for the
++ * recordings of the pool, vkQueueSubmit and vkCmdExecuteCommands for the
++ * recordings of the command buffers they name.  A submit that would wait runs
++ * on a submit thread instead, as do the submits after it while it is pending,
++ * so that the ring thread goes on to the next command buffers.  A command not
++ * known to be independent of pending recordings and submits (one that
++ * destroys or frees an object, among others) waits for all of them.  A
++ * virtio-gpu fence is submitted on the submit thread too while submits are
++ * pending there, so that the virtio-gpu thread, which serves all contexts,
++ * does not wait.
++ *
++ * VKR_RECORD_THREADS sets the number of recording workers (2 by default, 0
++ * to record and submit on the ring threads), and VKR_RECORD_STATS logs every
++ * 10 seconds how long the ring threads waited and how long jobs queued and
++ * ran.
++ */
++
++struct vkr_command_pool;
++struct vkr_cs_decoder;
++struct vkr_queue;
++struct vkr_record;
++struct vn_dispatch_context;
++
++struct vkr_record *
++vkr_record_create(struct vkr_context *ctx);
++
++void
++vkr_record_destroy(struct vkr_record *rec);
++
++/* Hands a command buffer sent in streams of its own to a worker.  Returns
++ * false, having changed nothing, when the streams are not one.
++ */
++bool
++vkr_record_defer_streams(struct vkr_context *ctx,
++                         struct vkr_cs_decoder *dec,
++                         const VkCommandStreamDescriptionMESA *streams,
++                         uint32_t stream_count);
++
++void
++vkr_record_wait_pool(struct vkr_record *rec, const struct vkr_command_pool *pool);
++
++/* Waits for the recording of a command buffer the command being dispatched
++ * names (vkQueueSubmit's, vkCmdExecuteCommands' secondaries).
++ */
++void
++vkr_record_wait_command_buffer(struct vkr_context *ctx,
++                               const struct vn_dispatch_context *dispatch,
++                               VkCommandBuffer cmd);
++
++/* Runs the queue submit being dispatched on the submit thread, when it would
++ * wait.  Returns false when the caller is to run it.
++ */
++bool
++vkr_record_defer_submit(struct vkr_context *ctx, struct vn_dispatch_context *dispatch);
++
++void
++vkr_record_wait_submits(struct vkr_record *rec);
++
++/* Submits a virtio-gpu fence on the submit thread, after the submits queued
++ * before it, when there are any.  Returns false when the caller is to submit
++ * it.
++ */
++bool
++vkr_record_defer_fence(struct vkr_record *rec,
++                       struct vkr_queue *queue,
++                       uint32_t flags,
++                       uint32_t ring_idx,
++                       uint64_t fence_id);
++
++void
++vkr_record_before_command_slow(struct vkr_context *ctx, const struct vkr_cs_decoder *dec);
++
++bool
++vkr_record_has_pending(const struct vkr_record *rec);
++
++/* Called by the ring and context threads before they dispatch the next
++ * command of a stream.
++ */
++static inline void
++vkr_record_before_command(struct vkr_context *ctx,
++                          struct vkr_record *rec,
++                          struct vkr_cs_decoder *dec)
++{
++   dec->command_start = dec->cur;
++   if (rec && vkr_record_has_pending(rec))
++      vkr_record_before_command_slow(ctx, dec);
++}
++
++#endif /* VKR_RECORD_H */
+diff --git a/src/venus/vkr_ring.c b/src/venus/vkr_ring.c
+index 0d4899e..df42d37 100644
+--- a/src/venus/vkr_ring.c
++++ b/src/venus/vkr_ring.c
+@@ -12,6 +12,7 @@
+ #include "vn_protocol_renderer_dispatches.h"
+ 
+ #include "vkr_context.h"
++#include "vkr_record.h"
+ 
+ static inline void *
+ get_resource_pointer(const struct vkr_resource *res, size_t offset)
+@@ -227,6 +228,8 @@ vkr_ring_submit_cmd(struct vkr_ring *ring,
+    vkr_cs_decoder_set_buffer_stream(dec, buffer, size);
+ 
+    while (vkr_cs_decoder_has_command(dec)) {
++      struct vkr_context *ctx = ring->dispatch.data;
++      vkr_record_before_command(ctx, ctx->record, dec);
+       vn_dispatch_command(&ring->dispatch);
+       if (vkr_cs_decoder_get_fatal(dec)) {
+          vkr_log("ring_submit_cmd: vn_dispatch_command failed");
+diff --git a/src/venus/vkr_transport.c b/src/venus/vkr_transport.c
+index a8daba4..885e2e0 100644
+--- a/src/venus/vkr_transport.c
++++ b/src/venus/vkr_transport.c
+@@ -9,6 +9,7 @@
+ #include "vn_protocol_renderer_transport.h"
+ 
+ #include "vkr_context.h"
++#include "vkr_record.h"
+ #include "vkr_ring.h"
+ 
+ static void
+@@ -62,6 +63,13 @@ vkr_dispatch_vkExecuteCommandStreamsMESA(
+ 
+    vkr_cs_decoder_save_state(dec);
+ 
++   /* a command buffer in streams of its own is recorded on a worker */
++   if (!args->pReplyPositions &&
++       vkr_record_defer_streams(ctx, dec, args->pStreams, args->streamCount)) {
++      vkr_cs_decoder_restore_state(dec);
++      return;
++   }
++
+    for (uint32_t i = 0; i < args->streamCount; i++) {
+       const VkCommandStreamDescriptionMESA *stream = &args->pStreams[i];
+ 
+@@ -80,6 +88,7 @@ vkr_dispatch_vkExecuteCommandStreamsMESA(
+       }
+ 
+       while (vkr_cs_decoder_has_command(dec)) {
++         vkr_record_before_command(ctx, ctx->record, dec);
+          vn_dispatch_command(dispatch);
+          if (vkr_context_get_fatal(ctx))
+             break;

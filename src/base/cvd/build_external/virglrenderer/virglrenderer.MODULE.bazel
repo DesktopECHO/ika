@@ -45,6 +45,14 @@ git_repository(
         # Also stops unmapping memory after a device freed it. Without both,
         # crosvm's GPU thread aborted with a corrupted stack within seconds.
         "@//build_external/virglrenderer:PATCH.venus-free-mapped-memory-with-resource.patch",
+        # Record the command buffers the guest sends whole on worker threads
+        # and run submits that would wait for them on a submit thread, so a
+        # ring thread goes on decoding: recording into Dozen took most of the
+        # ring thread's time under WSL2, and 3DMark Steel Nomad Light ran at
+        # about 40 fps with the GPU half idle (about 53 fps with this, on an
+        # RTX 4080 Laptop GPU). VKR_RECORD_THREADS sets the number of
+        # workers (2, 0 for none), VKR_RECORD_STATS logs the waits.
+        "@//build_external/virglrenderer:PATCH.venus-parallel-recording.patch",
     ],
     remote = "https://gitlab.freedesktop.org/virgl/virglrenderer",
 )
