@@ -23,6 +23,12 @@ git_repository(
         # none, and hand crosvm Venus's mappable memory as vkMapMemory's
         # pointer there: under WSL2, D3D12 (Dozen) cannot share memory the
         # CPU sees, as a dma-buf, an opaque fd or an imported host pointer.
+        # A reply without fds made the proxy copy from a NULL pointer
+        # (memcpy(fds, NULL, 0)), from which clang concludes the pointer is
+        # never NULL and drops get_received_fds's checks: the fd count came
+        # from an empty control message and the copy ran over crosvm's stack.
+        # The render server's side already copies only when fds came.
+        "@//build_external/virglrenderer:PATCH.proxy-copy-received-fds-only.patch",
         "@//build_external/virglrenderer:PATCH.venus-same-process-render-server.patch",
         # Leave out the device groups of devices vkEnumeratePhysicalDevices
         # did not list, as Mesa's device-select layer does not narrow them

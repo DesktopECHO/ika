@@ -1,0 +1,14 @@
+diff --git a/src/proxy/proxy_socket.c b/src/proxy/proxy_socket.c
+index dd30b11..12113d7 100644
+--- a/src/proxy/proxy_socket.c
++++ b/src/proxy/proxy_socket.c
+@@ -256,7 +256,8 @@ proxy_socket_receive_reply_internal(struct proxy_socket *socket,
+       const int *received_fds = get_received_fds(&msg, &received_fd_count);
+       assert(received_fd_count <= max_fd_count);
+ 
+-      memcpy(fds, received_fds, sizeof(*fds) * received_fd_count);
++      if (received_fd_count)
++         memcpy(fds, received_fds, sizeof(*fds) * received_fd_count);
+       *out_fd_count = received_fd_count;
+    } else if (out_fd_count) {
+       *out_fd_count = 0;
