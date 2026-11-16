@@ -737,13 +737,29 @@ Result<void> ConfigureGpu(const CuttlefishConfig& config, Command* crosvm_cmd) {
                              "context-types=" + instance.gpu_context_types(),
                              gpu_common_string);
   } else if (gpu_mode == GpuMode::Venus) {
+    // Under WSL2 (/dev/dxg) the host's Vulkan is Mesa's Dozen over D3D12,
+    // which shares no memory the CPU sees with another process, as a dma-buf
+    // or as an fd: Venus's render server runs as a thread of crosvm
+    // (implicit-render-server), which maps Venus's memory by pointer, where
+    // fixed blob mapping cannot. crosvm sets the driconf options that make the
+    // driver emulate ETC2 and ASTC only for a render server it starts, so
+    // crosvm gets them here.
+    const bool in_process_render_server = FileExists("/dev/dxg");
     crosvm_cmd->AddParameter(
-        "--gpu=", gpu_displays_string, "fixed-blob-mapping=true,",
+        "--gpu=", gpu_displays_string,
+        in_process_render_server
+            ? "fixed-blob-mapping=false,implicit-render-server=true,"
+            : "fixed-blob-mapping=true,",
         "backend=virglrenderer,vulkan=true,context-types=venus:cross-domain",
         gpu_common_string, ",egl=false,gles=false,glx=false",
         gpu_renderer_features_param);
-    crosvm_cmd->AddParameter("--gpu-render-server=path=",
-                             HostBinaryPath("virgl_render_server"));
+    if (in_process_render_server) {
+      crosvm_cmd->AddEnvironmentVariable("vk_require_etc2", "true");
+      crosvm_cmd->AddEnvironmentVariable("vk_require_astc", "true");
+    } else {
+      crosvm_cmd->AddParameter("--gpu-render-server=path=",
+                               HostBinaryPath("virgl_render_server"));
+    }
   } else if (gpu_mode == GpuMode::Honeykrisp) {
     // The guest's Apple Vulkan driver sends the asahi kernel driver's calls
     // to virglrenderer's native context renderer, which runs in crosvm's GPU

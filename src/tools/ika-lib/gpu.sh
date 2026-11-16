@@ -843,10 +843,12 @@ primary_vulkan_device_has_venus_etc2() {
 # foreign queue family. Without one of them Android's Vulkan has no swapchain,
 # and every app stops as it starts to draw. RADV has no format modifiers on
 # Radeons older than Vega before Mesa 26.3. vulkaninfo runs as for the ETC2
-# probe. Prints nothing when the device has them all, or when vulkaninfo lists
-# no device.
+# probe. Prints nothing when the device has them all, when vulkaninfo lists
+# no device, or under WSL2, where Venus shares Android's buffers as Dozen's
+# opaque fds instead (see GRAPHICS.md, "Venus on WSL2").
 primary_vulkan_device_missing_venus_extensions() {
   command -v vulkaninfo >/dev/null 2>&1 || return 0
+  host_is_wsl2 && return 0
 
   with_timeout 30 env -u DISPLAY -u WAYLAND_DISPLAY vk_require_etc2=true vk_require_astc=true \
     vulkaninfo 2>/dev/null | awk '
@@ -882,8 +884,10 @@ host_suits_venus() {
   local major
   local minor
 
+  # Under WSL2 Venus runs when asked for, but gfxstream renders 3DMark Steel
+  # Nomad Light faster (see GRAPHICS.md, "Venus on WSL2").
   if host_is_wsl2; then
-    printf '%s\n' "this is WSL2, whose GPU memory cannot be exported as dma-bufs"
+    printf '%s\n' "this is WSL2, where gfxstream_guest_angle stays the default; --gpu_mode=venus runs Venus"
     return 1
   fi
   # On the M1 Pro, 3DMark Wild Life Extreme scored 27%, Steel Nomad Light 14%

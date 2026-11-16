@@ -316,8 +316,8 @@ check_venus_gpu_mode() {
   fi
   primary_device="$(primary_vulkan_device_summary || true)"
   if [[ -n "${primary_device}" ]] \
-      && ! grep -Eiq '(driverName[[:space:]]*=.*(anv|turnip|radv|honeykrisp)|DRIVER_ID_(INTEL_OPEN_SOURCE_MESA|MESA_TURNIP|MESA_RADV|MESA_HONEYKRISP))' <<<"${primary_device}"; then
-    log "gpu_mode=venus: Venus is tested on Intel (ANV), Qualcomm (Turnip), AMD (RADV) and Apple Silicon (Honeykrisp) hosts; this host's primary Vulkan driver is untested with it"
+      && ! grep -Eiq '(driverName[[:space:]]*=.*(anv|turnip|radv|honeykrisp|dozen)|DRIVER_ID_(INTEL_OPEN_SOURCE_MESA|MESA_TURNIP|MESA_RADV|MESA_HONEYKRISP|MESA_DOZEN))' <<<"${primary_device}"; then
+    log "gpu_mode=venus: Venus is tested on Intel (ANV), Qualcomm (Turnip), AMD (RADV), Apple Silicon (Honeykrisp) and WSL2 (Dozen) hosts; this host's primary Vulkan driver is untested with it"
   fi
 }
 

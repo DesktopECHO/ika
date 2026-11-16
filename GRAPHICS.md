@@ -72,9 +72,10 @@ Vulkan devices:
   `VK_EXT_image_drm_format_modifier` and `VK_EXT_queue_family_foreign`,
   through which Venus shares Android's buffers with the host: without them
   Android's Vulkan has no windows, and every app stops as it starts. RADV has
-  the second on Radeons older than Vega (an RX 570) from Mesa 26.3 on. Never
-  on WSL2, whose GPU memory cannot be shared as dma-bufs, or on Apple Silicon,
-  where games run faster with `gfxstream_guest_angle` (see [Venus](#venus)).
+  the second on Radeons older than Vega (an RX 570) from Mesa 26.3 on. Not on
+  WSL2, where `gfxstream_guest_angle` runs Steel Nomad Light faster (see
+  [Venus on WSL2](#venus-on-wsl2)), or on Apple Silicon, where games run
+  faster with `gfxstream_guest_angle` (see [Venus](#venus)).
 - `gfxstream_guest_angle` otherwise.
 
 The checks run in this order, on the GPU Ika uses ("GPU Hardware" in Startup
@@ -195,7 +196,8 @@ On an AMD host (Radeon 780M, RADV) and on an M1 Pro (Honeykrisp) Android
 draws its desktop and Chromium's pages, with Vulkan 1.4 and OpenGL ES 3.2
 through ANGLE. Apps see every Vulkan device the host has, llvmpipe included,
 each named "Virtio-GPU Venus (...)". Upstream tests it on Intel (ANV) and
-Qualcomm (Turnip) hosts.
+Qualcomm (Turnip) hosts. Under WSL2 it runs on Dozen; see
+[Venus on WSL2](#venus-on-wsl2).
 
 It is the default on a host whose GPU suits it (see
 [How Ika chooses](#how-ika-chooses)), but not on Apple Silicon, where games
@@ -363,6 +365,14 @@ How it works:
   only with later frames: the driver now waits, in the guest, for the last
   fence it handed out before it submits more work. And a submission's
   commands go to the host in one virtio request instead of one each.
+- Games compile thousands of shaders, and Ika keeps that cheap. Upstream's
+  driver keeps every vertex shader's intermediate form (NIR) once it is
+  compiled, unless a geometry or tessellation shader follows it, and gives each
+  shader's code a GPU buffer of its own: Asphalt 9 held 1.4 GB of NIR and
+  10,559 buffers after loading, passed Android's limit of 65,530 memory
+  mappings per process and crashed. Ika's driver frees the NIR and places
+  shader code in shared 2 MB buffers; the game loads with 1.5 GB and 4,700
+  mappings.
 
 Limits: it is tried on an M1 Pro only. The driver lays out a hardware buffer's
 planes itself rather than as gralloc reports them; the YUV buffers of Android's
@@ -370,7 +380,8 @@ video decoders and of the camera match its layout, but other formats may
 not. These changes to Mesa's Apple driver
 were written with an AI assistant; Mesa and Asahi Linux do not take such
 changes to that driver, so they stay in Ika's ROM
-(`external-mesa3d-honeykrisp-android.patch`).
+(`external-mesa3d-honeykrisp-android.patch` and the two patches after it in
+the series).
 
 ## WSL2
 
@@ -380,8 +391,8 @@ gfxstream renders on that. `ika-base`, in its Debian, RPM and Arch packages,
 carries its own Dozen on x86_64, from [Ika's Mesa](#ikas-mesa), installed
 under `/usr/lib/cuttlefish-common/wsl/dozen`. It offers Vulkan 1.3 where the
 GPU's D3D12 driver has shader model 6.6 and wave operations, and 1.2 on older
-GPUs such as Kaby Lake's Iris Plus 650. Venus cannot run on it: Dozen cannot export
-its memory as dma-bufs.
+GPUs such as Kaby Lake's Iris Plus 650. Venus runs on it too when asked for;
+see [Venus on WSL2](#venus-on-wsl2).
 
 ### What the host needs
 
@@ -505,6 +516,36 @@ next frame, so its buttons did not highlight under the pointer.
 | `IKA_D3D12_DRED=1` | The shim turns on D3D12's DRED. When the device is removed, it logs why, the GPU work in flight and the D3D12 call that removed it, to crosvm's log and `/tmp/ika-dred.log` |
 | `IKA_DZN_TRACE_REMOVAL=1` | With `IKA_D3D12_DRED=1`, the layer also logs the first Vulkan call after which the device was removed |
 | `IKA_ASTC_DECODE=gpu` or `cpu` | gfxstream decodes ASTC textures on the GPU or on the CPU, on any host. Without it, the CPU on Dozen and the GPU elsewhere |
+
+### Venus on WSL2
+
+`--gpu_mode=venus` runs Venus on Dozen; `auto` keeps `gfxstream_guest_angle`.
+Dozen shares no memory the CPU sees with another process, as a dma-buf or as
+an fd, so Venus runs differently from Linux:
+
+- Cuttlefish starts crosvm without a render server: virglrenderer runs
+  Venus's render server as a thread of crosvm (`implicit-render-server`), and
+  crosvm maps the memory an app maps into the guest at the address Dozen maps
+  it at, without fixed blob mapping.
+- Android's buffers are optimal Dozen images, which crosvm's gralloc allocates
+  and shares with virglrenderer by opaque fd. The guest cannot map them: the
+  display reads each frame back, and minigbm keeps a guest copy of a buffer an
+  app also reads or writes with the CPU (screenshots, task snapshots), copied
+  from the host when it is locked and back when it is unlocked.
+- Dozen decodes ETC2 and ASTC textures with Mesa's compute decoders, which
+  Cuttlefish turns on for crosvm (`vk_require_etc2`, `vk_require_astc`):
+  Android expects both, and 3DMark draws with ASTC.
+
+On an RTX 4080 Laptop GPU, with Ika's console open, Wild Life Extreme scores
+17,650 and 16,107 against 14,253 and 13,667 with `gfxstream_guest_angle`.
+Steel Nomad Light is slower, 5,822 and 5,907 against 7,593 and 7,061: Venus
+replays an app's Vulkan calls on one host thread, which spends most of its
+time in the D3D12 driver recording the draws, where gfxstream records on two.
+On an Intel UHD 770 Wild Life Extreme is 5% slower than with
+`gfxstream_guest_angle` (1,548 against 1,621). Kaby Lake's Iris Plus 650, with
+Vulkan 1.2, runs it. When Windows removes the GPU's D3D12 device, as on the
+UHD 770 in Steel Nomad Light in either mode, the app drawing then stops and
+Android carries on.
 
 ### Linux and WSL2 compared
 
