@@ -89,6 +89,9 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Mon Nov 16 2026 DesktopECHO <build@desktopecho.com> - 261116-1
+- Update Ika LineageOS package metadata to 261116-1.
+
 * Wed Nov 11 2026 DesktopECHO <build@desktopecho.com> - 261111-1
 - Update Ika LineageOS package metadata to 261111-1.
 
