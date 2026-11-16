@@ -1,0 +1,49 @@
+diff --git a/src/virgl_renderer.rs b/src/virgl_renderer.rs
+index 410ce66..1374110 100644
+--- a/src/virgl_renderer.rs
++++ b/src/virgl_renderer.rs
+@@ -113,6 +113,7 @@ pub struct VirglRenderer {
+     // ika: false when virglrenderer runs without its OpenGL renderer, with only
+     // Venus or drm native contexts.
+     virgl: bool,
++    fence_handler: RutabagaFenceHandler,
+ }
+ 
+ struct VirglRendererContext {
+@@ -488,7 +489,7 @@ impl VirglRenderer {
+         // library.
+         let cookie = Box::into_raw(Box::new(RutabagaCookie {
+             render_server_fd,
+-            fence_handler: Some(fence_handler),
++            fence_handler: Some(fence_handler.clone()),
+             debug_handler: None,
+             rutabaga_paths,
+         }));
+@@ -508,6 +509,7 @@ impl VirglRenderer {
+         ret_to_res(ret)?;
+         Ok(Box::new(VirglRenderer {
+             virgl: u32::from(virglrenderer_flags) & VIRGL_RENDERER_NO_VIRGL == 0,
++            fence_handler,
+         }))
+     }
+ 
+@@ -619,6 +621,19 @@ impl RutabagaComponent for VirglRenderer {
+     }
+ 
+     fn create_fence(&mut self, fence: RutabagaFence) -> RutabagaResult<()> {
++        // ika: virglrenderer keeps the global timeline in its OpenGL renderer.
++        // Without it, the commands before the fence have all been carried out
++        // by the time the fence is created, so it is signaled at once.
++        if !self.virgl {
++            self.fence_handler.call(RutabagaFence {
++                flags: RUTABAGA_FLAG_FENCE,
++                fence_id: fence.fence_id,
++                ctx_id: 0,
++                ring_idx: 0,
++            });
++            return Ok(());
++        }
++
+         // TODO(b/315870313): Add safety comment
+         #[allow(clippy::undocumented_unsafe_blocks)]
+         let ret = unsafe { virgl_renderer_create_fence(fence.fence_id as i32, fence.ctx_id) };

@@ -285,6 +285,15 @@ crosvm_bin.annotation(
         # Export gfxstream resources on demand and read their layout lazily,
         # after gfxstream gave the scanout its explicit DRM modifier.
         "@//build_external/crosvm:PATCH.rutabaga_gfx-on-demand-export-and-query.patch",
+        # Without virglrenderer's OpenGL renderer (Venus and Honeykrisp modes),
+        # accept the default-type context Linux 6.12 creates for the composer
+        # as one that holds nothing, instead of failing it and every buffer
+        # the composer attaches to it after.
+        "@//build_external/crosvm:PATCH.rutabaga_gfx-virgl-default-context.patch",
+        # And signal global fences at once, which virglrenderer keeps only in
+        # its OpenGL renderer, instead of failing them and leaving the command
+        # they came with unanswered.
+        "@//build_external/crosvm:PATCH.rutabaga_gfx-virgl-global-fences.patch",
         # Where the driver exports no dma-bufs (Dozen, under WSL2), Venus
         # mode's gralloc allocates optimal images shared by opaque fd, hands
         # them to virglrenderer with their Vulkan info, and reads them back

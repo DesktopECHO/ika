@@ -1,0 +1,72 @@
+diff --git a/src/virgl_renderer.rs b/src/virgl_renderer.rs
+index acf7eb9..410ce66 100644
+--- a/src/virgl_renderer.rs
++++ b/src/virgl_renderer.rs
+@@ -109,7 +109,11 @@ fn dup(rd: RawDescriptor) -> RutabagaResult<OwnedDescriptor> {
+ }
+ 
+ /// The virtio-gpu backend state tracker which supports accelerated rendering.
+-pub struct VirglRenderer {}
++pub struct VirglRenderer {
++    // ika: false when virglrenderer runs without its OpenGL renderer, with only
++    // Venus or drm native contexts.
++    virgl: bool,
++}
+ 
+ struct VirglRendererContext {
+     ctx_id: u32,
+@@ -264,6 +268,29 @@ impl Drop for VirglRendererContext {
+     }
+ }
+ 
++// ika: a context of the default (virgl) type, where virglrenderer runs without
++// its OpenGL renderer and so cannot create one. It holds nothing.
++struct VirglDisabledContext {}
++
++impl RutabagaContext for VirglDisabledContext {
++    fn submit_cmd(
++        &mut self,
++        _commands: &mut [u8],
++        _fence_ids: &[u64],
++        _shareable_fences: Vec<MagmaGpuHandle>,
++    ) -> RutabagaResult<()> {
++        Err(MagmaGpuError::Unsupported.into())
++    }
++
++    fn attach(&mut self, _resource: &mut RutabagaResource) {}
++
++    fn detach(&mut self, _resource: &RutabagaResource) {}
++
++    fn component_type(&self) -> RutabagaComponentType {
++        RutabagaComponentType::VirglRenderer
++    }
++}
++
+ extern "C" fn log_callback(
+     log_level: virgl_log_level_flags,
+     message: *const ::std::os::raw::c_char,
+@@ -479,7 +506,9 @@ impl VirglRenderer {
+         };
+ 
+         ret_to_res(ret)?;
+-        Ok(Box::new(VirglRenderer {}))
++        Ok(Box::new(VirglRenderer {
++            virgl: u32::from(virglrenderer_flags) & VIRGL_RENDERER_NO_VIRGL == 0,
++        }))
+     }
+ 
+     fn map_info(&self, resource_id: u32) -> RutabagaResult<u32> {
+@@ -963,6 +992,13 @@ impl RutabagaComponent for VirglRenderer {
+         context_name: Option<&str>,
+         _fence_handler: RutabagaFenceHandler,
+     ) -> RutabagaResult<Box<dyn RutabagaContext>> {
++        // ika: Linux before 6.14 creates a context of the default type for each
++        // process that opens a buffer, also where the host offers context types,
++        // and attaches every buffer the process opens to it.
++        if context_init == 0 && !self.virgl {
++            return Ok(Box::new(VirglDisabledContext {}));
++        }
++
+         let mut name: &str = "gpu_renderer";
+         if let Some(name_string) = context_name.filter(|s| !s.is_empty()) {
+             name = name_string;
