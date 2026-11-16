@@ -492,10 +492,10 @@ index cd77bc0..2dd1e63 100644
  
  #[cfg(test)]
 diff --git a/src/rutabaga_gralloc/vulkano_gralloc.rs b/src/rutabaga_gralloc/vulkano_gralloc.rs
-index ac8ebb4..137e102 100644
+index ac8ebb4..4072313 100644
 --- a/src/rutabaga_gralloc/vulkano_gralloc.rs
 +++ b/src/rutabaga_gralloc/vulkano_gralloc.rs
-@@ -22,20 +22,42 @@ use magma_gpu::util::MappedRegion;
+@@ -22,20 +22,45 @@ use magma_gpu::util::MappedRegion;
  use magma_gpu::util::MesaMapping;
  use magma_gpu::util::MAGMA_GPU_HANDLE_TYPE_MEM_DMABUF;
  use magma_gpu::util::MAGMA_GPU_HANDLE_TYPE_MEM_OPAQUE_FD;
@@ -534,11 +534,14 @@ index ac8ebb4..137e102 100644
 +use vulkano::memory::allocator::MemoryAlloc;
 +use vulkano::memory::allocator::MemoryUsage;
 +use vulkano::memory::allocator::StandardMemoryAllocator;
-+use vulkano::sync::GpuFuture;
++use vulkano::command_buffer::SubmitInfo;
++use vulkano::sync::fence::Fence;
++use vulkano::sync::fence::FenceCreateInfo;
++use vulkano::sync::fence::FenceError;
  use vulkano::instance::Instance;
  use vulkano::instance::InstanceCreateInfo;
  use vulkano::instance::InstanceCreationError;
-@@ -57,12 +79,14 @@ use vulkano::LoadingError;
+@@ -57,12 +82,14 @@ use vulkano::LoadingError;
  use vulkano::VulkanError;
  use vulkano::VulkanLibrary;
  
@@ -553,7 +556,7 @@ index ac8ebb4..137e102 100644
  use crate::rutabaga_utils::VulkanInfo;
  use crate::rutabaga_utils::RUTABAGA_MAP_CACHE_CACHED;
  use crate::rutabaga_utils::RUTABAGA_MAP_CACHE_WC;
-@@ -80,6 +104,59 @@ pub struct VulkanoGralloc {
+@@ -80,6 +107,102 @@ pub struct VulkanoGralloc {
      devices: Map<PhysicalDeviceType, Arc<Device>>,
      device_by_id: Map<DeviceId, Arc<Device>>,
      has_integrated_gpu: bool,
@@ -562,6 +565,49 @@ index ac8ebb4..137e102 100644
 +    readback_memory_allocator: Option<Arc<StandardMemoryAllocator>>,
 +    readback_command_allocator: Option<StandardCommandBufferAllocator>,
 +    readbacks: Map<u32, Readback>,
++    // ika: set once a readback or upload finds the device lost, after which
++    // neither touches Vulkan again
++    device_lost: bool,
++}
++
++// ika: submits a readback or upload and waits for it on a fence of its own.
++// vulkano 0.33's futures unwrap the errors of a submission they drop
++// unfinished, so a lost device (a D3D12 device removed under WSL2) would
++// panic crosvm's GPU thread; here it is an error, and device_lost is set.
++fn submit_and_wait(
++    queue: &Arc<Queue>,
++    command_buffer: Arc<dyn PrimaryCommandBufferAbstract>,
++    device_lost: &mut bool,
++    what: &'static str,
++) -> RutabagaResult<()> {
++    let error = |stage: &str, e: &dyn std::fmt::Display| {
++        warn!("{} {}: {}", what, stage, e);
++        RutabagaError::from(MagmaGpuError::WithContext(what))
++    };
++    let fence = Arc::new(
++        Fence::new(queue.device().clone(), FenceCreateInfo::default())
++            .map_err(|e| error("fence", &e))?,
++    );
++    let submitted = unsafe {
++        queue.with(|mut q| {
++            q.submit_unchecked(
++                [SubmitInfo {
++                    command_buffers: vec![command_buffer],
++                    ..Default::default()
++                }],
++                Some(fence.clone()),
++            )
++        })
++    };
++    if let Err(e) = submitted {
++        *device_lost |= matches!(e, VulkanError::DeviceLost);
++        return Err(error("submit", &e));
++    }
++    if let Err(e) = fence.wait(None) {
++        *device_lost |= matches!(e, FenceError::DeviceLost);
++        return Err(error("wait", &e));
++    }
++    Ok(())
 +}
 +
 +// ika: an optimal image some other device rendered into, imported for
@@ -613,7 +659,7 @@ index ac8ebb4..137e102 100644
  }
  
  struct VulkanoMapping {
-@@ -168,6 +245,7 @@ impl VulkanoGralloc {
+@@ -168,6 +291,7 @@ impl VulkanoGralloc {
          let mut devices: Map<PhysicalDeviceType, Arc<Device>> = Default::default();
          let mut device_by_id: Map<DeviceId, Arc<Device>> = Default::default();
          let mut has_integrated_gpu = false;
@@ -621,7 +667,7 @@ index ac8ebb4..137e102 100644
  
          for physical in instance.enumerate_physical_devices()? {
              let queue_family_index = match physical.queue_family_properties().iter().position(|q| {
-@@ -190,7 +268,7 @@ impl VulkanoGralloc {
+@@ -190,7 +314,7 @@ impl VulkanoGralloc {
  
              let intersection = supported_extensions.intersection(&desired_extensions);
  
@@ -630,7 +676,7 @@ index ac8ebb4..137e102 100644
                  physical.clone(),
                  DeviceCreateInfo {
                      enabled_extensions: intersection,
-@@ -211,6 +289,9 @@ impl VulkanoGralloc {
+@@ -211,6 +335,9 @@ impl VulkanoGralloc {
                  // be used, but the need for such complexity does not seem to exist now.
                  devices.insert(device_type, device.clone());
                  device_by_id.insert(device.get_id(), device);
@@ -640,7 +686,7 @@ index ac8ebb4..137e102 100644
              };
          }
  
-@@ -222,9 +303,157 @@ impl VulkanoGralloc {
+@@ -222,9 +349,158 @@ impl VulkanoGralloc {
              devices,
              device_by_id,
              has_integrated_gpu,
@@ -648,6 +694,7 @@ index ac8ebb4..137e102 100644
 +            readback_memory_allocator: None,
 +            readback_command_allocator: None,
 +            readbacks: Default::default(),
++            device_lost: false,
          }))
      }
  
@@ -798,7 +845,7 @@ index ac8ebb4..137e102 100644
      // This function is used safely in this module because gralloc does not:
      //
      //  (1) bind images to any memory.
-@@ -263,6 +492,14 @@ impl VulkanoGralloc {
+@@ -263,6 +539,14 @@ impl VulkanoGralloc {
          }
  
          let vulkan_format = info.drm_format.vulkan_format()?;
@@ -813,7 +860,7 @@ index ac8ebb4..137e102 100644
          let create_info = image::sys::ImageCreateInfo {
              dimensions: ImageDimensions::Dim2d {
                  width: info.width,
-@@ -357,19 +594,31 @@ impl Gralloc for VulkanoGralloc {
+@@ -357,19 +641,31 @@ impl Gralloc for VulkanoGralloc {
              .get(device_type)
              .ok_or(RutabagaError::InvalidGrallocGpuType)?;
  
@@ -856,7 +903,7 @@ index ac8ebb4..137e102 100644
          let want_cached = info.flags.host_cached();
  
          let (memory_type_index, memory_type) = {
-@@ -440,6 +689,11 @@ impl Gralloc for VulkanoGralloc {
+@@ -440,6 +736,11 @@ impl Gralloc for VulkanoGralloc {
  
          reqs.info = info;
          reqs.size = memory_requirements.layout.size() as u64;
@@ -868,7 +915,7 @@ index ac8ebb4..137e102 100644
  
          if memory_type
              .property_flags
-@@ -506,6 +760,9 @@ impl Gralloc for VulkanoGralloc {
+@@ -506,6 +807,9 @@ impl Gralloc for VulkanoGralloc {
              };
  
          let dedicated_allocation = match device.enabled_extensions().khr_dedicated_allocation {
@@ -878,7 +925,7 @@ index ac8ebb4..137e102 100644
              true => {
                  // ika: a dedicated allocation must be exactly the image's size,
                  // while the guest asks for the size rounded up to its page size.
-@@ -575,6 +832,187 @@ impl Gralloc for VulkanoGralloc {
+@@ -575,6 +879,181 @@ impl Gralloc for VulkanoGralloc {
              size.try_into().map_err(MagmaGpuError::TryFromIntError)?,
          )))
      }
@@ -893,6 +940,9 @@ index ac8ebb4..137e102 100644
 +        transfer: Transfer3D,
 +        dst: &mut [u8],
 +    ) -> RutabagaResult<()> {
++        if self.device_lost {
++            return Err(MagmaGpuError::WithContext("device lost").into());
++        }
 +        if !self.readbacks.contains_key(&id) {
 +            let readback = self.import_for_readback(handle, vulkan_info, info, size)?;
 +            self.readbacks.insert(id, readback);
@@ -932,13 +982,7 @@ index ac8ebb4..137e102 100644
 +            ))
 +            .map_err(|e| fail("copy")(&e))?;
 +        let command_buffer = builder.build().map_err(|e| fail("build")(&e))?;
-+        command_buffer
-+            .execute(queue)
-+            .map_err(|e| fail("execute")(&e))?
-+            .then_signal_fence_and_flush()
-+            .map_err(|e| fail("flush")(&e))?
-+            .wait(None)
-+            .map_err(|e| fail("wait")(&e))?;
++        submit_and_wait(&queue, Arc::new(command_buffer), &mut self.device_lost, "readback")?;
 +
 +        let src = readback.buffer.read().map_err(|e| fail("read")(&e))?;
 +        let bpp = readback.bytes_per_pixel as usize;
@@ -976,6 +1020,9 @@ index ac8ebb4..137e102 100644
 +        src: &[u8],
 +        src_stride: usize,
 +    ) -> RutabagaResult<()> {
++        if self.device_lost {
++            return Err(MagmaGpuError::WithContext("device lost").into());
++        }
 +        if !self.readbacks.contains_key(&id) {
 +            let readback = self.import_for_readback(handle, vulkan_info, info, size)?;
 +            self.readbacks.insert(id, readback);
@@ -1049,13 +1096,7 @@ index ac8ebb4..137e102 100644
 +            })
 +            .map_err(|e| fail("copy")(&e))?;
 +        let command_buffer = builder.build().map_err(|e| fail("build")(&e))?;
-+        command_buffer
-+            .execute(queue)
-+            .map_err(|e| fail("execute")(&e))?
-+            .then_signal_fence_and_flush()
-+            .map_err(|e| fail("flush")(&e))?
-+            .wait(None)
-+            .map_err(|e| fail("wait")(&e))?;
++        submit_and_wait(&queue, Arc::new(command_buffer), &mut self.device_lost, "upload")?;
 +
 +        Ok(())
 +    }

@@ -141,6 +141,16 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** Adds `export_blob` and `query` to the `RutabagaComponent` trait; `Rutabaga::export_blob` asks the component when no handle was cached and `Rutabaga::resource3d_info` asks it when the resource has no 3D info; gfxstream's `create_3d` no longer exports and queries eagerly; the query carries the offset and DRM modifier gfxstream reports.
 - **Why:** gfxstream re-creates a color buffer with an explicit DRM format modifier when the VMM first exports it for scanout, so the layout must be read after that export, and exporting every 3D resource at creation would freeze the wrong layout and hold an fd per resource.
 
+#### `PATCH.rutabaga_gfx-wsl-optimal-images.patch`
+- **Targets:** `rutabaga_gfx` crate. Files: `src/rutabaga_gralloc/vulkano_gralloc.rs`, `src/rutabaga_gralloc/gralloc.rs`, `src/cross_domain/component.rs`, `src/rutabaga_core.rs`, `src/virgl_renderer.rs`, the virglrenderer bindings.
+- **What it does:** Where the Vulkan driver exports no dma-bufs (Mesa's Dozen under WSL2), Vulkano's gralloc allocates Android's buffers as optimal images with dedicated memory shared by opaque fd and reports a linear layout for them. rutabaga imports those into virglrenderer with their Vulkan info (`virgl_renderer_resource_import_vulkan_blob`, looked up at run time, as crosvm can link an older virglrenderer), reads them back for the display and for the guest's `TRANSFER_FROM_HOST`, and writes the guest's copy back on `TRANSFER_TO_HOST`. The readback and the upload wait on a fence of their own: a lost device (a D3D12 device removed) returns an error, after which they no longer touch the device.
+- **Why:** Venus under WSL2 cannot share Android's buffers as dma-bufs, and the guest cannot map Dozen's optimal images. vulkano 0.33 unwraps the error of a submission it drops unfinished, so with its futures a lost device panicked crosvm's GPU thread and took the VM down.
+
+#### `PATCH.crosvm-display-dmabuf-only.patch`, `PATCH.crosvm-display-dmabuf-only-devices.patch`
+- **Targets:** `crosvm` and `devices` crates. File: `devices/src/virtio/gpu/virtio_gpu.rs`.
+- **What it does:** Only a scanout backed by a dma-buf goes to the compositor; any other handle, such as the opaque fd of an optimal image under WSL2, is read back instead. The `-devices` patch is the same change with the path layout of `devices` as a published crate.
+- **Why:** The compositor imports dma-bufs only. An opaque fd passed to it as one showed nothing.
+
 #### `PATCH.v4l2r-poller-no-epollin-probe.patch`
 - **Targets:** `v4l2r` crate. File: `src/device/poller.rs`.
 - **What it does:** `Poller::new` registers the device with no events, instead of registering `EPOLLIN`, doing a dummy `epoll_wait` and clearing the events again.
@@ -184,12 +194,12 @@ See `crosvm.MODULE.bazel`. The relevant blocks:
 
 | Target | Patches |
 |---|---|
-| `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-composite-preserve-spec-fd`, `crosvm-gpu-2d-sandbox`, `crosvm-gpu-unref-shmem-mapping`, `crosvm-resize-display`, `crosvm-flush-held-dmabuf`, `crosvm-enable-vulkano-gralloc`, `crosvm-media-no-resource-bridge`, `crosvm-vcpu-retry-fault`, `minijail-sys_common_mk` |
+| `crosvm_bin.annotation(crate = "crosvm")` | `crosvm-composite-duplicate-components`, `crosvm-composite-preserve-spec-fd`, `crosvm-gpu-2d-sandbox`, `crosvm-gpu-unref-shmem-mapping`, `crosvm-resize-display`, `crosvm-flush-held-dmabuf`, `crosvm-display-dmabuf-only`, `crosvm-enable-vulkano-gralloc`, `crosvm-media-no-resource-bridge`, `crosvm-vcpu-retry-fault`, `minijail-sys_common_mk` |
 | `crosvm_bin.annotation(crate = "disk")` | `disk-composite-preserve-spec-fd`, `disk-qcow-legacy-backing-format-magic` |
 | `crosvm_bin.annotation(crate = "jail")` | `jail-aarch64-block-pread64`, `jail-gpu-host-graphics-libs-optional` |
-| `crosvm_bin.annotation(crate = "devices")` | `crosvm-media-decoder-input-size`, `crosvm-media-decoder-visible-size`, `crosvm-media-errors`, `crosvm-media-direct-decode`, `crosvm-media-last-buffer`, `crosvm-media-placeholder-size`, `crosvm-resize-display-devices`, `crosvm-flush-held-dmabuf-devices` |
+| `crosvm_bin.annotation(crate = "devices")` | `crosvm-media-decoder-input-size`, `crosvm-media-decoder-visible-size`, `crosvm-media-errors`, `crosvm-media-direct-decode`, `crosvm-media-last-buffer`, `crosvm-media-placeholder-size`, `crosvm-resize-display-devices`, `crosvm-flush-held-dmabuf-devices`, `crosvm-display-dmabuf-only-devices` |
 | `crosvm_bin.annotation(crate = "virtio-media")` | `virtio-media-mmap-offset-step` |
-| `crosvm_bin.annotation(crate = "rutabaga_gfx")` | `rutabaga_gfx_build_rs`, `rutabaga_gfx-gralloc-vulkano-fallback`, `rutabaga_gfx-cleanup-on-drop`, `rutabaga_gfx-gfxstream-3d-resource-info`, `rutabaga_gfx-on-demand-export-and-query` |
+| `crosvm_bin.annotation(crate = "rutabaga_gfx")` | `rutabaga_gfx_build_rs`, `rutabaga_gfx-gralloc-vulkano-fallback`, `rutabaga_gfx-cleanup-on-drop`, `rutabaga_gfx-gfxstream-3d-resource-info`, `rutabaga_gfx-on-demand-export-and-query`, `rutabaga_gfx-wsl-optimal-images` |
 | `crosvm_bin.annotation(crate = "minijail-sys")` | `minijail-sys_build_rs` |
 | `crosvm_bin.annotation(crate = "proto_build_tools")` | `proto_build_tools` |
 | `crosvm_bin.annotation(crate = "vm_control")` | `crosvm-resize-display-vm-control` |
